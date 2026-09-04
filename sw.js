@@ -3,7 +3,7 @@
 const CACHE_NAME = "forex-backtest-lab-v1";
 const ASSETS = [
   "./",
-  "./forex_backtest.html",
+  "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
