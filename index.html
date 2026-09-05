@@ -324,27 +324,20 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
       Scarica candele FX direttamente dall'API gratuita di Alpha Vantage e le aggiunge alla
       stessa libreria CSV usata per i file caricati manualmente. La API Key viene digitata
       dall'utente e salvata solo in localStorage del suo browser: non è mai scritta nel codice. -->
- <div class="panel" style="display:grid;grid-template-columns:1.2fr .6fr .6fr .9fr .9fr auto;gap:10px;align-items:end;margin-top:10px">
-  <div><div class="label">Alpha Vantage API Key</div><input id="avApiKey" type="password" placeholder="La tua chiave Alpha Vantage"></div>
-  <div><div class="label">Da valuta</div><input id="avFromSymbol" placeholder="EUR"></div>
-  <div><div class="label">A valuta</div><input id="avToSymbol" placeholder="USD"></div>
-  <div><div class="label">Intervallo</div>
-   <select id="avInterval">
-    <option value="1min">1 minuto</option>
-    <option value="5min" selected>5 minuti</option>
-    <option value="15min">15 minuti</option>
-    <option value="30min">30 minuti</option>
-    <option value="60min">60 minuti</option>
-    <option value="daily">Giornaliero</option>
-   </select>
+ <!-- ===== Storico CSV per asset: fonte gratuita + libreria dedicata =====
+      Alpha Vantage FX_INTRADAY è diventato un endpoint premium (non più utilizzabile col piano
+      gratuito): lo storico ora si scarica manualmente da HistData.com e si gestisce nella
+      pagina separata "asset-library.html", per non appesantire questo file principale.
+      Cambiando ASSET qui sopra, i file già presenti in libreria per quell'asset vengono
+      caricati automaticamente sul grafico (vedi autoLoadAssetLibrary più sotto nel JS). -->
+ <div class="panel" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px">
+  <div style="font-size:13px;color:#c6ceda;max-width:640px">
+   📥 Scarica gratis i CSV storici (candele a 1 minuto) da <strong>HistData.com</strong>, poi caricali nella libreria dedicata per asset: verranno riconosciuti automaticamente dal nome del file e mostrati sul grafico ogni volta che selezioni quell'ASSET qui sopra.
   </div>
-  <div><div class="label">Quantità dati</div>
-   <select id="avOutputsize" title="Compact: ultimi ~100 punti, sempre incluso nel piano gratuito. Full: storico completo, su alcuni endpoint richiede un piano a pagamento Alpha Vantage.">
-    <option value="compact" selected>Compact (ultimi ~100)</option>
-    <option value="full">Full (storico completo)</option>
-   </select>
+  <div style="display:flex;gap:8px;flex-wrap:wrap">
+   <a href="https://www.histdata.com/download-free-forex-data/?/metatrader/1-minute-bar-quotes" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;padding:9px 14px;border-radius:8px;border:1px solid #2b3541;background:#0b1117;color:#e8edf3;font-weight:700;font-size:12.5px">🌐 HistData.com</a>
+   <a href="asset-library.html" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;padding:9px 14px;border-radius:8px;border:1px solid #1f4a6e;background:#16324a;color:#bfe0ff;font-weight:700;font-size:12.5px">📚 Libreria storici CSV per asset</a>
   </div>
-  <button type="button" class="primary" id="avLoadBtn" title="Scarica lo storico da Alpha Vantage con questi parametri">⬇️ Scarica storico</button>
  </div>
  <!-- Libreria dei CSV caricati: elenca ogni file aggiunto (nome, candele, range date) con la
       possibilità di rimuoverlo singolarmente. baseRows è sempre la fusione ordinata e senza
@@ -1698,70 +1691,70 @@ function removeCsvFromLibrary(id){
  saveCsvNow();
  saveLightStateNow();
 }
-// ===================== IMPORT STORICO DA ALPHA VANTAGE (STEP 1) =====================
-// Scarica candele FX (intraday o daily) dall'API gratuita di Alpha Vantage e le aggiunge
-// alla libreria CSV esistente, riusando la stessa pipeline di addFilesToLibrary() sopra.
-async function fetchAlphaVantageFX(fromSymbol, toSymbol, interval, apiKey, outputsize){
- const isDaily = interval === 'daily';
- const fn = isDaily ? 'FX_DAILY' : 'FX_INTRADAY';
- let url = `https://www.alphavantage.co/query?function=${fn}&from_symbol=${fromSymbol}&to_symbol=${toSymbol}&apikey=${encodeURIComponent(apiKey)}&outputsize=${outputsize||'compact'}`;
- if(!isDaily) url += `&interval=${interval}`;
- const resp = await fetch(url);
- const data = await resp.json();
- // Mostriamo il messaggio ESATTO restituito da Alpha Vantage invece di indovinare la causa:
- // "Error Message" = parametri sbagliati; "Note"/"Information" possono indicare sia il vero
- // rate limit (5/min, 25/giorno) sia, sempre più spesso di recente, che l'endpoint o il
- // parametro richiesto (es. outputsize=full) è riservato ai piani a pagamento.
- if(data['Error Message']) throw new Error('Alpha Vantage: '+data['Error Message']);
- if(data['Note']) throw new Error('Alpha Vantage: '+data['Note']);
- if(data['Information']) throw new Error('Alpha Vantage: '+data['Information']);
- const seriesKey = Object.keys(data).find(k => /time series/i.test(k));
- if(!seriesKey) throw new Error('Alpha Vantage: risposta inattesa: '+JSON.stringify(data).slice(0,300));
- const series = data[seriesKey];
- const out = Object.keys(series).map(ts => {
-   const bar = series[ts];
-   return {
-     date: ts,
-     open: parseFloat(bar['1. open']),
-     high: parseFloat(bar['2. high']),
-     low: parseFloat(bar['3. low']),
-     close: parseFloat(bar['4. close']),
-     volume: 0
+// ===================== LIBRERIA STORICI PER ASSET (condivisa con asset-library.html) =====================
+// La pagina separata "asset-library.html" salva i CSV caricati dall'utente (tipicamente
+// scaricati da HistData.com) in una IndexedDB dedicata, raggruppati per asset riconosciuto
+// automaticamente dal nome del file. Qui leggiamo SOLO in lettura quella stessa IndexedDB
+// (stesso nome DB/store, stessa origine GitHub Pages) per caricare in automatico sul grafico
+// i file pertinenti ogni volta che cambia l'ASSET selezionato, senza appesantire questo file
+// con la UI di gestione/caricamento (che vive nell'altra pagina).
+const ASSET_LIB_DB_NAME='FxbtAssetLibraryDB', ASSET_LIB_STORE='csvFiles';
+let assetLibDbPromise=null;
+function openAssetLibDB(){
+ if(assetLibDbPromise)return assetLibDbPromise;
+ assetLibDbPromise=new Promise((resolve,reject)=>{
+   const req=indexedDB.open(ASSET_LIB_DB_NAME,1);
+   req.onupgradeneeded=()=>{
+     const db=req.result;
+     if(!db.objectStoreNames.contains(ASSET_LIB_STORE)){
+       const store=db.createObjectStore(ASSET_LIB_STORE,{keyPath:'id'});
+       store.createIndex('by_asset','asset',{unique:false});
+     }
    };
- }).filter(r => [r.open,r.high,r.low,r.close].every(Number.isFinite));
- out.sort((a,b) => parseDateTime(a.date) - parseDateTime(b.date));
- return out;
+   req.onsuccess=()=>resolve(req.result);
+   req.onerror=()=>reject(req.error);
+ });
+ return assetLibDbPromise;
 }
-async function loadAlphaVantageHistory(){
- const apiKey = $('avApiKey').value.trim();
- const from = $('avFromSymbol').value.trim().toUpperCase();
- const to = $('avToSymbol').value.trim().toUpperCase();
- const interval = $('avInterval').value;
- const outputsize = $('avOutputsize').value;
- if(!apiKey){ alert('Inserisci la tua Alpha Vantage API Key.'); return; }
- if(!from || !to){ alert('Inserisci entrambe le valute (es. EUR / USD).'); return; }
- localStorage.setItem('fxbt_av_apikey', apiKey); // ricordata solo su questo browser
- $('status').textContent = `Scaricamento ${from}/${to} da Alpha Vantage...`;
+async function getAssetLibraryFiles(asset){
  try{
-   const avRows = await fetchAlphaVantageFX(from, to, interval, apiKey, outputsize);
-   if(!avRows.length){ $('status').textContent = 'Nessuna candela ricevuta da Alpha Vantage.'; return; }
-   csvLibrary.push({id:'av_'+Date.now(), name:`AlphaVantage ${from}/${to} (${interval})`, addedAt:Date.now(), rows:avRows});
-   rebuildBaseRowsFromLibrary();
-   renderCsvLibraryList();
-   updateFileBtnLabel();
-   currentTF=1; $('tf').value='1'; if($('tfChart'))$('tfChart').value='1';
-   rows=baseRows.slice();
-   $('fileName').textContent=csvLibrary.length+' file • '+rows.length.toLocaleString('it-IT')+' candele';
-   drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
-   historyUndo=[];historyRedo=[];
-   reset();
-   saveCsvNow();
-   saveLightStateNow();
-   $('status').textContent = `Importate ${avRows.length.toLocaleString('it-IT')} candele da Alpha Vantage (${from}/${to}).`;
- }catch(e){
-   console.error(e);
-   $('status').textContent = e.message || 'Errore durante il download da Alpha Vantage.';
+   const db=await openAssetLibDB();
+   return await new Promise((resolve,reject)=>{
+     const tx=db.transaction(ASSET_LIB_STORE,'readonly');
+     const store=tx.objectStore(ASSET_LIB_STORE);
+     const idx=store.index('by_asset');
+     const req=idx.getAll(IDBKeyRange.only(asset));
+     req.onsuccess=()=>resolve(req.result||[]);
+     req.onerror=()=>reject(req.error);
+   });
+ }catch(e){ console.warn('Lettura libreria storici per asset fallita:',e); return []; }
+}
+// Chiamata al cambio di ASSET: se in libreria ci sono CSV per quell'asset, li carica subito
+// sul grafico (sostituendo la libreria CSV corrente, dato che un altro asset ha candele non
+// confrontabili). Se non ce ne sono, lascia tutto com'è e lo segnala nello status.
+async function autoLoadAssetLibrary(asset){
+ if(!asset)return;
+ const files=await getAssetLibraryFiles(asset);
+ if(!files.length){
+   $('status').textContent = `Nessun CSV in libreria per ${asset}. Aggiungine da "📚 Libreria storici CSV per asset".`;
+   return;
  }
+ csvLibrary = files.map(f=>({
+   id:f.id, name:f.fileName, addedAt:f.addedAt,
+   rows: f.rows.map(a=>({date:a[0],open:a[1],high:a[2],low:a[3],close:a[4],volume:a[5]}))
+ }));
+ rebuildBaseRowsFromLibrary();
+ renderCsvLibraryList();
+ updateFileBtnLabel();
+ currentTF=1; $('tf').value='1'; if($('tfChart'))$('tfChart').value='1';
+ rows=baseRows.slice();
+ $('fileName').textContent=csvLibrary.length+' file • '+rows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
+ drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+ historyUndo=[];historyRedo=[];
+ reset();
+ saveCsvNow();
+ saveLightStateNow();
+ $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici.`;
 }
 // ============== SALVATAGGIO DEI CSV DIRETTAMENTE NEL FILE .HTML ==============
 // Oltre al salvataggio in IndexedDB (che copre solo lo stesso browser/profilo), i CSV caricati
@@ -4833,15 +4826,12 @@ $('file').onchange=e=>{
  addFilesToLibrary(files);
  e.target.value=''; // permette di riselezionare/aggiungere in seguito anche lo stesso nome file
 };
-// Import storico Alpha Vantage: stesso controllo "ASSET selezionato" già usato per i CSV
-// manuali, e ripristino della API Key eventualmente salvata in localStorage da una sessione precedente.
-if($('avApiKey')){
- const savedAvKey=localStorage.getItem('fxbt_av_apikey');
- if(savedAvKey)$('avApiKey').value=savedAvKey;
-}
-$('avLoadBtn')?.addEventListener('click',()=>{
- if(!$('market').value){ marketMissingAlert(); return; }
- loadAlphaVantageHistory();
+// Auto-caricamento della libreria storici per asset: ogni volta che l'utente cambia ASSET
+// (e non è "Personalizzato"), controlliamo se in asset-library.html sono già stati caricati
+// dei CSV per quell'asset e, se sì, li portiamo subito sul grafico.
+$('market')?.addEventListener('change',()=>{
+ const v=$('market').value;
+ if(v && v!=='custom') autoLoadAssetLibrary(v);
 });
 $('saveCsvToFileBtn')?.addEventListener('click',async()=>{
  const statusEl=$('csvLibraryStatus');

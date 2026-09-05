@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forex Backtest Lab — Libreria Storici CSV</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0f14;color:#e8edf3;font-family:Inter,Arial,sans-serif}
+header{padding:16px 22px;border-bottom:1px solid #202832;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+h1{font-size:20px;margin:0}.sub{color:#84909f;font-size:12px;margin-top:3px}
+main{max-width:1100px;margin:auto;padding:18px}
+.panel{background:#111720;border:1px solid #202832;border-radius:12px;padding:16px;margin-bottom:14px}
+a.linkBtn,button{display:inline-block;padding:9px 14px;border-radius:8px;border:1px solid #2b3541;background:#0b1117;color:#e8edf3;text-decoration:none;cursor:pointer;font-weight:700;font-size:12.5px}
+a.linkBtn:hover,button:hover{background:#1a222c}
+.primary{background:#277d5a!important;border-color:#277d5a!important}
+.label{font-size:10px;color:#8290a0;text-transform:uppercase;margin-bottom:5px}
+input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;background:#0b1117;color:#e8edf3}
+.uploadRow{display:grid;grid-template-columns:1fr 220px auto;gap:10px;align-items:end}
+@media(max-width:760px){.uploadRow{grid-template-columns:1fr}}
+.assetGroup{border:1px solid #202832;border-radius:10px;margin-top:12px;overflow:hidden}
+.assetGroupHead{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#0d131c;cursor:pointer;gap:10px}
+.assetGroupHead h3{margin:0;font-size:14px}
+.assetGroupBody{padding:10px 14px;display:none}
+.assetGroupBody.open{display:block}
+.fileRow{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#0b1117;border:1px solid #202832;border-radius:6px;padding:7px 10px;margin-bottom:6px;font-size:12.5px}
+.miniBtn{padding:5px 9px;font-size:11px;border-radius:6px;background:#3a1c22;border-color:#5a2a33;color:#e8edf3;border:1px solid #5a2a33;cursor:pointer;font-weight:600}
+.miniBtn:hover{background:#4a2228}
+.status{padding:9px;background:#0b1117;border:1px solid #202832;border-radius:8px;margin-top:10px;font-size:13px;color:#c6ceda}
+.badge{display:inline-block;background:#16324a;color:#8fc7ff;border-radius:5px;padding:2px 7px;font-size:11px;margin-left:6px;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+ <div><h1>📚 Libreria Storici CSV</h1><div class="sub">Forex Backtest Lab — gestione file storici per asset</div></div>
+ <a class="linkBtn" href="index.html">⬅ Torna all'app</a>
+</header>
+<main>
+
+ <div class="panel">
+  <div class="label">Fonte dati storica consigliata (gratuita)</div>
+  <p style="margin:4px 0 12px;font-size:13px;color:#c6ceda;line-height:1.5">
+   Scarica i CSV storici (candele a 1 minuto, formato MetaTrader: data, ora, open, high, low, close, volume)
+   direttamente da <strong>HistData.com</strong>. Ogni pacchetto scaricato è uno ZIP: estrailo e carica qui
+   sotto il file <code>.csv</code> contenuto — verrà riconosciuto automaticamente in base al nome del file
+   (es. <code>DAT_MT_EURUSD_M1_2024.csv</code> → asset <strong>EURUSD</strong>) e reso disponibile nell'app
+   principale non appena selezioni quell'ASSET.
+  </p>
+  <a class="linkBtn primary" href="https://www.histdata.com/download-free-forex-data/?/metatrader/1-minute-bar-quotes" target="_blank" rel="noopener">🌐 HistData.com — Scarica CSV storici gratuiti</a>
+ </div>
+
+ <div class="panel">
+  <div class="label">Carica CSV nella libreria</div>
+  <div class="uploadRow">
+   <div>
+    <div class="label">File CSV (puoi selezionarne più di uno insieme)</div>
+    <input id="libFileInput" type="file" accept=".csv" multiple>
+   </div>
+   <div>
+    <div class="label">Asset (solo se non viene rilevato dal nome file)</div>
+    <select id="libAssetOverride">
+     <option value="">— Rileva automaticamente dal nome —</option>
+     <option value="EURUSD">EUR/USD</option>
+     <option value="GBPUSD">GBP/USD</option>
+     <option value="USDJPY">USD/JPY</option>
+     <option value="XAUUSD">XAU/USD (Oro)</option>
+     <option value="XAGUSD">XAG/USD (Argento)</option>
+    </select>
+   </div>
+   <button class="primary" id="libUploadBtn">⬆️ Aggiungi alla libreria</button>
+  </div>
+  <div class="status" id="libStatus">Nessun file caricato in questa sessione.</div>
+ </div>
+
+ <div class="panel">
+  <div class="label">Libreria attuale (raggruppata per asset — come "cartelle")</div>
+  <div id="libAssetGroups"><div class="status">Caricamento libreria…</div></div>
+ </div>
+
+</main>
+<script>
+// ================= IndexedDB condivisa con index.html =================
+// Stesso nome di DB/store usato da "getAssetLibraryFiles()" nel file principale: qui è
+// l'unico posto dove si SCRIVE (upload/rimozione), lì si legge soltanto per caricare in
+// automatico sul grafico i file dell'asset selezionato.
+const LIB_DB_NAME='FxbtAssetLibraryDB', LIB_STORE='csvFiles';
+let libDbPromise=null;
+function openLibDB(){
+ if(libDbPromise)return libDbPromise;
+ libDbPromise=new Promise((resolve,reject)=>{
+   const req=indexedDB.open(LIB_DB_NAME,1);
+   req.onupgradeneeded=()=>{
+     const db=req.result;
+     if(!db.objectStoreNames.contains(LIB_STORE)){
+       const store=db.createObjectStore(LIB_STORE,{keyPath:'id'});
+       store.createIndex('by_asset','asset',{unique:false});
+     }
+   };
+   req.onsuccess=()=>resolve(req.result);
+   req.onerror=()=>reject(req.error);
+ });
+ return libDbPromise;
+}
+async function libPut(record){
+ const db=await openLibDB();
+ return new Promise((resolve,reject)=>{
+   const tx=db.transaction(LIB_STORE,'readwrite');
+   tx.objectStore(LIB_STORE).put(record);
+   tx.oncomplete=()=>resolve(true);
+   tx.onerror=()=>reject(tx.error);
+ });
+}
+async function libDelete(id){
+ const db=await openLibDB();
+ return new Promise((resolve,reject)=>{
+   const tx=db.transaction(LIB_STORE,'readwrite');
+   tx.objectStore(LIB_STORE).delete(id);
+   tx.oncomplete=()=>resolve(true);
+   tx.onerror=()=>reject(tx.error);
+ });
+}
+async function libGetAll(){
+ const db=await openLibDB();
+ return new Promise((resolve,reject)=>{
+   const tx=db.transaction(LIB_STORE,'readonly');
+   const req=tx.objectStore(LIB_STORE).getAll();
+   req.onsuccess=()=>resolve(req.result||[]);
+   req.onerror=()=>reject(req.error);
+ });
+}
+// ================= Riconoscimento asset dal nome file =================
+// Prova prima gli asset noti dell'app (match diretto nel nome), poi in generale qualunque
+// blocco di 6 lettere maiuscole consecutive (es. "EURUSD", "GBPJPY"), che copre anche coppie
+// non presenti nel menu ASSET dell'app principale ma che l'utente potrebbe voler backtestare.
+const KNOWN_ASSETS=['EURUSD','GBPUSD','USDJPY','XAUUSD','XAGUSD'];
+function detectAssetFromName(name){
+ const base=name.toUpperCase().replace(/\.[A-Z0-9]+$/,'');
+ for(const a of KNOWN_ASSETS){ if(base.includes(a)) return a; }
+ const tokens=base.split(/[^A-Z]+/).filter(Boolean);
+ for(const t of tokens){ if(t.length===6) return t; }
+ return null;
+}
+// ================= Parsing CSV (stesso formato accettato dall'app principale) =================
+// Supporta sia CSV con intestazione (Data,Ora,Open,High,Low,Close,Volume) sia il formato
+// MetaTrader senza intestazione usato da HistData.com (data,ora,open,high,low,close,volume).
+// Le righe sono salvate in forma compatta [data,open,high,low,close,volume] per restare
+// leggere in IndexedDB.
+function numLib(v){ const n=parseFloat(String(v).replace(',','.')); return Number.isFinite(n)?n:NaN; }
+function parseCsvLib(txt){
+ const lines=txt.trim().split(/\r?\n/).filter(Boolean); if(!lines.length)return[];
+ const delim=lines[0].includes(';')?';':',';
+ const raw=lines[0].split(delim).map(x=>x.trim().toLowerCase().replace(/^["']|["']$/g,''));
+ const named=raw.some(x=>['open','high','low','close'].includes(x));
+ let start=named?1:0, out=[];
+ const ix=n=>raw.indexOf(n);
+ let oi=ix('open'),hi=ix('high'),li=ix('low'),ci=ix('close'),vi=ix('volume');
+ for(let k=start;k<lines.length;k++){
+   let a=lines[k].split(delim).map(x=>x.trim().replace(/^["']|["']$/g,''));
+   if(named){
+     if([oi,hi,li,ci].some(i=>i<0))continue;
+     out.push([a[0],numLib(a[oi]),numLib(a[hi]),numLib(a[li]),numLib(a[ci]),vi>=0?numLib(a[vi]):0]);
+   }else{
+     if(a.length<6)continue;
+     out.push([(a[0]||'')+' '+(a[1]||''),numLib(a[2]),numLib(a[3]),numLib(a[4]),numLib(a[5]),a[6]?numLib(a[6]):0]);
+   }
+ }
+ return out.filter(r=>[r[1],r[2],r[3],r[4]].every(Number.isFinite));
+}
+// ================= Upload =================
+document.getElementById('libUploadBtn').addEventListener('click', async ()=>{
+ const input=document.getElementById('libFileInput');
+ const files=Array.from(input.files||[]);
+ const statusEl=document.getElementById('libStatus');
+ if(!files.length){ statusEl.textContent='Seleziona almeno un file CSV.'; return; }
+ statusEl.textContent='Caricamento in corso…';
+ const override=document.getElementById('libAssetOverride').value;
+ let added=0, skipped=[];
+ for(const f of files){
+   const asset=override||detectAssetFromName(f.name);
+   if(!asset){ skipped.push(f.name+' (asset non riconosciuto: usa il menu a tendina)'); continue; }
+   const text=await f.text();
+   const rows=parseCsvLib(text);
+   if(!rows.length){ skipped.push(f.name+' (nessuna candela valida trovata)'); continue; }
+   const record={ id:'lib_'+asset+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), asset, fileName:f.name, addedAt:Date.now(), rows };
+   await libPut(record);
+   added++;
+ }
+ statusEl.textContent = `Aggiunti ${added} file alla libreria.` + (skipped.length? ' Ignorati: '+skipped.join('; '):'');
+ input.value='';
+ renderLibrary();
+});
+// ================= Render libreria raggruppata per asset =================
+function fmtRange(rows){
+ if(!rows.length)return'';
+ return rows[0][0]+' → '+rows[rows.length-1][0];
+}
+async function renderLibrary(){
+ const all=await libGetAll();
+ const box=document.getElementById('libAssetGroups');
+ if(!all.length){ box.innerHTML='<div class="status">Libreria vuota. Carica i tuoi primi CSV qui sopra.</div>'; return; }
+ const groups={};
+ all.forEach(r=>{ (groups[r.asset]=groups[r.asset]||[]).push(r); });
+ box.innerHTML = Object.keys(groups).sort().map(asset=>{
+   const files=groups[asset].sort((a,b)=>a.fileName.localeCompare(b.fileName));
+   const totalCandles=files.reduce((s,f)=>s+f.rows.length,0);
+   return `<div class="assetGroup">
+     <div class="assetGroupHead" data-asset="${asset}">
+       <h3>📁 ${asset} <span class="badge">${files.length} file • ${totalCandles.toLocaleString('it-IT')} candele</span></h3>
+       <span>▾</span>
+     </div>
+     <div class="assetGroupBody" id="grp_${asset}">
+       ${files.map(f=>`
+         <div class="fileRow">
+           <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+             <strong>${f.fileName}</strong>
+             <span style="color:#84909f"> • ${f.rows.length.toLocaleString('it-IT')} candele • ${fmtRange(f.rows)}</span>
+           </div>
+           <button class="miniBtn" data-del="${f.id}" type="button">✕ Rimuovi</button>
+         </div>`).join('')}
+     </div>
+   </div>`;
+ }).join('');
+ box.querySelectorAll('.assetGroupHead').forEach(h=>{
+   h.addEventListener('click',()=>{
+     const body=document.getElementById('grp_'+h.dataset.asset);
+     body.classList.toggle('open');
+   });
+ });
+ box.querySelectorAll('[data-del]').forEach(btn=>{
+   btn.addEventListener('click', async (e)=>{
+     e.stopPropagation();
+     await libDelete(btn.dataset.del);
+     renderLibrary();
+   });
+ });
+}
+renderLibrary();
+</script>
+</body>
+</html>
