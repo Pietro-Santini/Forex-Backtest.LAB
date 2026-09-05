@@ -673,6 +673,38 @@ let crosshair=null;
 let touchHoverPoint=null;
 // --- Drawing tools (trendline / rectangle), TradingView-style ---
 let drawings=[], drawTool='cursor', pendingDrawing=null, placingStep=0, selectedDrawing=null, shapeDrag=null, anchorSnap=false, drawDashedDefault=false;
+// Distanza massima (in pixel schermo) entro la quale l'ancoraggio "aggancia" tempo/prezzo alla
+// candela più vicina: oltre questa soglia il punto resta libero (vedi screenToChartPoint).
+// Questo è anche ciò che permette di disegnare oltre l'ultima candela con l'ancoraggio attivo:
+// lì la candela più vicina (sempre l'ultima realmente rivelata) è troppo lontana in pixel, quindi
+// non aggancia più e il punto segue liberamente il dito/mouse.
+const ANCHOR_SNAP_PX=18;
+// --- Anti-sovrapposizione delle caselle di testo del grafico (prezzo entrata, SL/TP, pillole
+// Target/Stop, prezzo corrente, mirino...): ogni casella "prenota" il suo rettangolo per il
+// frame corrente; se una nuova casella lo sovrappone (stessa colonna orizzontale) viene spostata
+// automaticamente in verticale al posto libero più vicino, invece di sovrapporsi. Azzerato a
+// ogni draw() (vedi resetLabelPlacements).
+let labelPlacements=[];
+function resetLabelPlacements(){labelPlacements=[];}
+function placeLabelY(x,w,desiredY,h,minY,maxY){
+ const collide=yy=>labelPlacements.some(b=>x<b.x+b.w&&x+w>b.x&&yy<b.y+b.h&&yy+h>b.y);
+ let y=desiredY;
+ if(collide(y)){
+   const step=Math.max(2,h*0.5);
+   let guard=0,found=false;
+   while(guard<60){
+     guard++;
+     const downY=desiredY+step*guard, upY=desiredY-step*guard;
+     if(!collide(downY)){y=downY;found=true;break;}
+     if(!collide(upY)){y=upY;found=true;break;}
+   }
+   if(!found)y=desiredY+step*guard; // tutte le posizioni vicine occupate: allontana comunque
+ }
+ if(Number.isFinite(minY))y=Math.max(minY,y);
+ if(Number.isFinite(maxY))y=Math.min(maxY-h,y);
+ labelPlacements.push({x,y,w,h});
+ return y;
+}
 // Appunti per copia/incolla di un disegno selezionato (vedi duplicateDrawing/copySelectedDrawing/pasteClipboardDrawing).
 let clipboardDrawing=null;
 // true mentre su touch si sta trascinando il secondo punto di un nuovo disegno appena
@@ -2336,20 +2368,31 @@ function draw(){
  const c=$('chart'),ctx=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
  ctx.clearRect(0,0,w,h);ctx.fillStyle='#0b1016';ctx.fillRect(0,0,w,h);
  if(!rows.length)return;
+ resetLabelPlacements();
  const {n,start,dataStart,dataEnd}=getViewWindow();
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
  const pad={l:18,r:76,t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
  let {lo,hi,range}=computePriceRange(data);
  const y=v=>pad.t+(hi-v)/range*ch, x=i=>pad.l+(dataStart+i-start+.5)*cw/n;
+ // --- Zona di protezione: da qui in poi (candele, griglia, indicatori, disegni, posizioni,
+ // ordini pendenti e caselle Target/Stop) tutto è "ritagliato" (clip) dentro l'area di plot
+ // vera e propria [pad.l..w-pad.r] x [pad.t..h-pad.b]. Così un disegno o una casella con un
+ // prezzo fuori dal range visibile (es. uno Stop molto lontano) non può MAI comparire sopra
+ // la scala dei prezzi o sopra la barra temporale: viene semplicemente tagliato al bordo,
+ // esattamente come richiesto. Il clip viene tolto più sotto, prima di ridisegnare le scale.
+ ctx.save();
+ ctx.beginPath();ctx.rect(pad.l,pad.t,cw,ch);ctx.clip();
  // --- Griglia orizzontale (prezzo): numero di linee proporzionale all'altezza disponibile e
  // alla spaziatura scelta, non più fisso a 5 — così scegliendo una griglia più fitta si vedono
  // più livelli di prezzo contemporaneamente, come su TradingView.
  const priceRows=Math.max(2,Math.round(ch/gridSpacing()));
  ctx.strokeStyle='#1d2731';ctx.lineWidth=1;
- for(let g=0;g<=priceRows;g++){let yy=pad.t+g*ch/priceRows;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();let v=hi-(hi-lo)*g/priceRows;ctx.fillStyle='#788493';
- ctx.font='11px Arial';
- ctx.textAlign='left';
- ctx.fillText(fmtPrice(v),w-pad.r+8,yy+4)}
+ // Le etichette numeriche dell'asse prezzo NON si disegnano più qui (finirebbero tagliate dal
+ // clip, che si ferma al bordo del plot): si accodano e si disegnano più sotto, sulla striscia
+ // protetta della scala, insieme allo sfondo che fa da "zona di protezione".
+ const priceAxisTicks=[];
+ for(let g=0;g<=priceRows;g++){let yy=pad.t+g*ch/priceRows;ctx.beginPath();ctx.moveTo(pad.l,yy);ctx.lineTo(w-pad.r,yy);ctx.stroke();let v=hi-(hi-lo)*g/priceRows;
+ priceAxisTicks.push({y:yy,text:fmtPrice(v)});}
  // --- Griglia verticale (ora/data): stessa spaziatura in px di quella orizzontale, calcolata
  // qui e riusata più sotto sia per le linee sia per le etichette dell'asse tempo, così restano
  // sempre perfettamente allineate.
@@ -2489,7 +2532,14 @@ function draw(){
      ctx.fillStyle=pos.side==='BUY'?'#2fbf71':'#e05252';
      ctx.font=isFocused?'bold 11px Arial':'bold 10px Arial';
      ctx.textAlign='left';
-     ctx.fillText(pos.side,pad.l+6,y(pos.entry)-6);
+     {
+       // Se un'altra etichetta (di un'altra posizione/ordine) occupa già questa zona (es. dopo
+       // uno zoom che avvicina due prezzi), la casella si sposta automaticamente in verticale
+       // per non sovrapporsi, invece di scriverci sopra.
+       const txt=pos.side, tw=ctx.measureText(txt).width, boxH=13;
+       const adjY=placeLabelY(pad.l+4,tw+8,y(pos.entry)-6-11,boxH,pad.t,h-pad.b);
+       ctx.fillText(txt,pad.l+6,adjY+11);
+     }
      ctx.globalAlpha=1;
      ctx.restore();
      // Freccia di apertura disegnata SUBITO quando la posizione è aperta (non solo alla
@@ -2572,7 +2622,11 @@ function draw(){
      ctx.fillStyle=entryColor;
      ctx.font='bold 10px Arial';
      ctx.textAlign='left';
-     ctx.fillText(p.side+' '+(p.kind||'LIMIT')+' '+fmtPrice(p.entry),pad.l+6,y(p.entry)-6);
+     {
+       const txt=p.side+' '+(p.kind||'LIMIT')+' '+fmtPrice(p.entry), tw=ctx.measureText(txt).width, boxH=13;
+       const adjY=placeLabelY(pad.l+4,tw+8,y(p.entry)-6-11,boxH,pad.t,h-pad.b);
+       ctx.fillText(txt,pad.l+6,adjY+11);
+     }
      ctx.globalAlpha=1;
      ctx.restore();
    }
@@ -2585,7 +2639,11 @@ function draw(){
      ctx.beginPath();ctx.moveTo(pad.l,y(v));ctx.lineTo(w-pad.r,y(v));ctx.stroke();
      ctx.setLineDash([]);
      ctx.fillStyle=color;ctx.font='10px Arial';ctx.textAlign='left';
-     ctx.fillText(label+' '+fmtPrice(v)+' (pending)',(w-pad.r)-120,y(v)-4);
+     {
+       const txt=label+' '+fmtPrice(v)+' (pending)', tw=ctx.measureText(txt).width, boxH=12, bx=(w-pad.r)-120;
+       const adjY=placeLabelY(bx-2,tw+6,y(v)-4-10,boxH,pad.t,h-pad.b);
+       ctx.fillText(txt,bx,adjY+10);
+     }
      ctx.globalAlpha=1;
      ctx.restore();
    });
@@ -2635,7 +2693,11 @@ function draw(){
      ctx.fillStyle=draftColor;
      ctx.font='bold 10px Arial';
      ctx.textAlign='left';
-     ctx.fillText(pendingOrderKind+' '+fmtPrice(draftEntry),pad.l+6,y(draftEntry)-6);
+     {
+       const txt=pendingOrderKind+' '+fmtPrice(draftEntry), tw=ctx.measureText(txt).width, boxH=13;
+       const adjY=placeLabelY(pad.l+4,tw+8,y(draftEntry)-6-11,boxH,pad.t,h-pad.b);
+       ctx.fillText(txt,pad.l+6,adjY+11);
+     }
      ctx.globalAlpha=1;
      ctx.restore();
    }
@@ -2667,6 +2729,27 @@ function draw(){
      });
    }
  }
+ // --- Fine zona di protezione: da qui in poi si torna a disegnare su tutto il canvas (le
+ // caselle di prezzo corrente/mirino DEVONO comparire sopra la scala prezzo, quindi non vanno
+ // ritagliate). Prima però ridisegniamo le due strisce delle scale (prezzo a destra, tempo in
+ // basso) con lo STESSO sfondo/bordo per entrambe (come richiesto): qualunque disegno o casella
+ // che fosse arrivato a toccarne il bordo resta coperto da questa "zona di protezione" ridipinta
+ // sopra a tutto il resto, e le etichette numeriche del prezzo (accodate sopra) vengono
+ // ridisegnate pulite su questo sfondo.
+ ctx.restore();
+ (function drawAxisGuard(){
+   const axisBg='#10161d', axisBorder='#232e3a';
+   ctx.save();
+   ctx.fillStyle=axisBg;
+   ctx.fillRect(w-pad.r,0,pad.r,h); // striscia verticale del prezzo (destra, tutta l'altezza)
+   ctx.fillRect(0,h-pad.b,w-pad.r,pad.b); // striscia orizzontale del tempo (sotto, fino alla scala prezzo)
+   ctx.strokeStyle=axisBorder;ctx.lineWidth=1;
+   ctx.beginPath();ctx.moveTo(w-pad.r+.5,0);ctx.lineTo(w-pad.r+.5,h);ctx.stroke();
+   ctx.beginPath();ctx.moveTo(0,h-pad.b+.5);ctx.lineTo(w-pad.r,h-pad.b+.5);ctx.stroke();
+   ctx.font='11px Arial';ctx.textAlign='left';ctx.fillStyle='#788493';
+   priceAxisTicks.forEach(t=>ctx.fillText(t.text,w-pad.r+8,t.y+4));
+   ctx.restore();
+ })();
  // Current market price: close of the latest available candle in the selected timeframe.
  if(rows.length && rows[idx] && Number.isFinite(Number(rows[idx].close))){
    const currentClose=Number(rows[idx].close);
@@ -2681,7 +2764,7 @@ function draw(){
      const labelX=w-pad.r+3;
      const labelW=70;
      const labelH=20;
-     const labelY=Math.max(pad.t,Math.min(h-pad.b-labelH,py-labelH/2));
+     const labelY=placeLabelY(labelX,labelW,py-labelH/2,labelH,pad.t,h-pad.b);
      // Price marker is part of the right-hand scale.
      ctx.fillStyle='#ffffff';
      ctx.fillRect(labelX,labelY,labelW,labelH);
@@ -2722,9 +2805,9 @@ function draw(){
  // corrente, con la data al posto dell'ora ogni volta che si passa a un nuovo giorno.
  (function drawTimeAxis(){
    if(!timeTicks.length)return;
+   // Il bordo/sfondo della striscia oraria è già stato ridisegnato da drawAxisGuard qui sopra
+   // (zona di protezione, stesso stile della scala prezzo): qui restano solo tacche+etichette.
    const axisY=pad.t+ch;
-   ctx.strokeStyle='#1d2731';ctx.lineWidth=1;
-   ctx.beginPath();ctx.moveTo(pad.l,axisY+.5);ctx.lineTo(w-pad.r,axisY+.5);ctx.stroke();
    let lastLabelRight=-Infinity;
    timeTicks.forEach(tk=>{
      const xx=tk.x, dayChanged=tk.dayChanged;
@@ -2758,7 +2841,7 @@ function draw(){
      ctx.beginPath();ctx.moveTo(pad.l,relY);ctx.lineTo(w-pad.r,relY);ctx.stroke();
      // Casella con il prezzo esatto sulla scala verticale.
      const labelX=w-pad.r+3, labelW=70, labelH=20;
-     const labelY=Math.max(pad.t,Math.min(h-pad.b-labelH,relY-labelH/2));
+     const labelY=placeLabelY(labelX,labelW,relY-labelH/2,labelH,pad.t,h-pad.b);
      ctx.fillStyle='#ffffff';ctx.fillRect(labelX,labelY,labelW,labelH);
      ctx.strokeStyle='#ffffff';ctx.lineWidth=1;ctx.strokeRect(labelX,labelY,labelW,labelH);
      ctx.fillStyle='#111820';ctx.font='bold 11px Arial';ctx.textAlign='center';ctx.textBaseline='middle';
@@ -2858,11 +2941,21 @@ function screenToChartPoint(clientX,clientY,snap,clampPlot){
  if(snap){
    const nc=g.nearestCandle(relX);
    if(nc&&nc.row){
-     time=nc.time;
-     const candidates=[nc.row.open,nc.row.high,nc.row.low,nc.row.close];
-     let best=candidates[0],bd=Math.abs(price-candidates[0]);
-     candidates.forEach(cv=>{const dd=Math.abs(price-cv);if(dd<bd){bd=dd;best=cv;}});
-     price=best;
+     // Aggancio solo "in prossimità": se il dito/cursore è a più di ANCHOR_SNAP_PX pixel dalla
+     // candela più vicina (in orizzontale) non si aggancia affatto, e il punto resta libero. È
+     // questo, insieme al clamp di nearestCandle sull'ultima candela reale, che permette di
+     // disegnare anche oltre l'ultima candela con l'ancoraggio attivo: lì la distanza in pixel
+     // dalla candela più vicina (l'ultima) supera subito la soglia, quindi il punto non viene
+     // più tirato indietro su di essa.
+     const candleX=g.xFromTime(nc.time);
+     if(Math.abs(relX-candleX)<=ANCHOR_SNAP_PX){
+       const candidates=[nc.row.open,nc.row.high,nc.row.low,nc.row.close];
+       // Stesso criterio di prossimità in verticale: si aggancia al livello open/high/low/close
+       // più vicino solo se è a non più di ANCHOR_SNAP_PX pixel, altrimenti il prezzo resta libero.
+       let best=null,bd=Infinity;
+       candidates.forEach(cv=>{const dd=Math.abs(relY-g.y(cv));if(dd<bd){bd=dd;best=cv;}});
+       if(best!=null && bd<=ANCHOR_SNAP_PX){ time=nc.time; price=best; }
+     }
    }
  }
  return {price,time};
@@ -3272,14 +3365,19 @@ function drawZonePill(ctx,x,y,text,bg,fg,align){
  ctx.font='bold 10px Arial';
  const tw=ctx.measureText(text).width;
  const padX=7,hh=17;
+ const boxW=tw+padX*2;
  const bx=align==='right'?x-tw-padX*2:x;
- const by=y-hh/2;
+ // Se un'altra pillola (di un'altra posizione/ordine, o la casella P&L/RR) occupa già questa
+ // fascia orizzontale, la pillola si sposta in verticale al posto libero più vicino, invece di
+ // sovrapporsi — tipico quando due Target/Stop finiscono vicini dopo uno zoom.
+ const by=placeLabelY(bx,boxW,y-hh/2,hh);
+ const cy=by+hh/2;
  ctx.globalAlpha=0.95;
- roundRectPath(ctx,bx,by,tw+padX*2,hh,4);
+ roundRectPath(ctx,bx,by,boxW,hh,4);
  ctx.fillStyle=bg;ctx.fill();
  ctx.fillStyle=fg;
  ctx.textAlign='left';ctx.textBaseline='middle';
- ctx.fillText(text,bx+padX,y+0.5);
+ ctx.fillText(text,bx+padX,cy+0.5);
  ctx.restore();
 }
 // Casella "Aperto P&L / Rapporto rischio-rendimento" (o "Anteprima ordine" prima
@@ -3293,7 +3391,10 @@ function drawZoneTooltip(ctx,cx,anchorY,lines,bg,align){
  // align:'left' ancora il bordo DESTRO della casella al punto di ingresso (cx), facendola
  // estendere verso sinistra — usato per la casella "Esito" del trade chiuso, che deve
  // comparire a sinistra sopra il punto di ingresso invece che centrata sull'intera zona.
- const bx=align==='left'?Math.max(4,cx-boxW):Math.max(4,cx-boxW/2), by=anchorY-boxH-6;
+ const bx=align==='left'?Math.max(4,cx-boxW):Math.max(4,cx-boxW/2);
+ // Anti-sovrapposizione: se un'altra casella è già lì (es. due trade vicini), questa si sposta
+ // verticalmente al posto libero più vicino invece di coprirla/esserne coperta.
+ const by=placeLabelY(bx,boxW,anchorY-boxH-6,boxH);
  ctx.globalAlpha=0.95;
  roundRectPath(ctx,bx,by,boxW,boxH,5);
  ctx.fillStyle=bg;ctx.fill();
@@ -5282,7 +5383,7 @@ $('toolAnchor').addEventListener('click',()=>{
  anchorSnap=!anchorSnap;
  $('toolAnchor').textContent='🧲 Ancoraggio: '+(anchorSnap?'ON':'OFF');
  $('toolAnchor').classList.toggle('active',anchorSnap);
- $('status').textContent=anchorSnap?'Ancoraggio attivo: i punti si agganciano a open/high/low/close della candela più vicina.':'Ancoraggio disattivato: posizionamento libero.';
+ $('status').textContent=anchorSnap?'Ancoraggio attivo: i punti si agganciano a open/high/low/close della candela più vicina solo se ti avvicini di pochi pixel; oltre l\'ultima candela resta libero.':'Ancoraggio disattivato: posizionamento libero.';
 });
 $('gridDensityBtn')?.addEventListener('click',()=>{
  gridSpacingIdx=(gridSpacingIdx+1)%GRID_SPACING_LEVELS.length;
