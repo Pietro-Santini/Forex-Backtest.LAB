@@ -459,7 +459,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
      <button id="floatChartBtn" class="chartCornerBtn" title="PiP: stacca il grafico in una finestra flottante separata (es. da spostare su un secondo monitor), continuando a operare da questa pagina">
        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
      </button>
-     <button id="floatFullscreenBtn" class="chartCornerBtn" style="display:none" title="Schermo intero per il grafico flottante">⛶</button>
+     <button id="floatFullscreenBtn" class="chartCornerBtn" style="display:none" title="Ingrandisci rapidamente la finestra flottante a tutto schermo (in alternativa, trascina i bordi/angoli della finestra per ridimensionarla come vuoi)">⛶</button>
      <button id="floatReturnBtn" class="chartCornerBtn" style="display:none" title="Rientra dalla finestra flottante">🗗</button>
    </div>
  </div>
@@ -4326,6 +4326,64 @@ function restoreChartToMainPage(){
  window.removeEventListener('resize',draw);
  draw();
 }
+// La finestra Document Picture-in-Picture non ha i bordi nativi del sistema operativo
+// trascinabili per ridimensionarla (a differenza di una finestra/popup normale): niente
+// bordo, niente resize a mano col mouse. Per aggirare questo, disegniamo noi 8 "maniglie"
+// invisibili lungo i 4 bordi + 4 angoli DENTRO la finestra flottante stessa: trascinandole
+// chiamiamo win.resizeTo()/moveTo() via script, ottenendo lo stesso risultato pratico di un
+// ridimensionamento manuale, esteso quanto si vuole (fino ai limiti dello schermo).
+function enableManualResize(win){
+ const doc=win.document;
+ if(doc.getElementById('rzNW'))return; // già inizializzato per questa finestra
+ const THICK=8, CORNER=16;
+ const mk=(id,style,cursor)=>{
+   const d=doc.createElement('div');
+   d.id=id;
+   d.style.cssText='position:fixed;z-index:2147483647;background:transparent;cursor:'+cursor+';'+style;
+   doc.body.appendChild(d);
+   return d;
+ };
+ const handles={
+   n:mk('rzN',`top:0;left:${CORNER}px;right:${CORNER}px;height:${THICK}px;`,'ns-resize'),
+   s:mk('rzS',`bottom:0;left:${CORNER}px;right:${CORNER}px;height:${THICK}px;`,'ns-resize'),
+   e:mk('rzE',`right:0;top:${CORNER}px;bottom:${CORNER}px;width:${THICK}px;`,'ew-resize'),
+   w:mk('rzW',`left:0;top:${CORNER}px;bottom:${CORNER}px;width:${THICK}px;`,'ew-resize'),
+   ne:mk('rzNE',`top:0;right:0;width:${CORNER}px;height:${CORNER}px;`,'nesw-resize'),
+   nw:mk('rzNW',`top:0;left:0;width:${CORNER}px;height:${CORNER}px;`,'nwse-resize'),
+   se:mk('rzSE',`bottom:0;right:0;width:${CORNER}px;height:${CORNER}px;`,'nwse-resize'),
+   sw:mk('rzSW',`bottom:0;left:0;width:${CORNER}px;height:${CORNER}px;`,'nesw-resize'),
+ };
+ let dragDir=null,startX=0,startY=0,startW=0,startH=0,startWinX=0,startWinY=0,resizeBlocked=false;
+ function onDown(dir,e){
+   dragDir=dir; startX=e.screenX; startY=e.screenY;
+   startW=win.outerWidth; startH=win.outerHeight;
+   startWinX=win.screenX; startWinY=win.screenY;
+   e.preventDefault();
+ }
+ function onMove(e){
+   if(!dragDir||resizeBlocked)return;
+   const dx=e.screenX-startX, dy=e.screenY-startY;
+   let w=startW,h=startH,x=startWinX,y=startWinY;
+   if(dragDir.includes('e'))w=Math.max(320,startW+dx);
+   if(dragDir.includes('w')){w=Math.max(320,startW-dx); x=startWinX+(startW-w);}
+   if(dragDir.includes('s'))h=Math.max(220,startH+dy);
+   if(dragDir.includes('n')){h=Math.max(220,startH-dy); y=startWinY+(startH-h);}
+   try{
+     win.resizeTo(Math.min(w,screen.availWidth),Math.min(h,screen.availHeight));
+     if(dragDir.includes('w')||dragDir.includes('n'))win.moveTo(Math.max(0,x),Math.max(0,y));
+   }catch(err){
+     // Alcuni browser non permettono resizeTo/moveTo su questo tipo di finestra: avvisiamo
+     // una sola volta invece di continuare a fallire silenziosamente ad ogni pixel di drag.
+     resizeBlocked=true;
+     $('status').textContent='Il browser non permette di ridimensionare questa finestra via script: prova F11 per lo schermo intero del browser, oppure sposta/ridimensiona la finestra a mano dal suo bordo se il browser gliene mette uno.';
+   }
+ }
+ function onUp(){ dragDir=null; }
+ Object.entries(handles).forEach(([dir,el])=>el.addEventListener('mousedown',e=>onDown(dir,e)));
+ doc.addEventListener('mousemove',onMove);
+ doc.addEventListener('mouseup',onUp);
+ doc.addEventListener('mouseleave',onUp);
+}
 async function openFloatingChart(){
  const wrap=document.querySelector('.chartWrap');
  if(!wrap)return;
@@ -4356,11 +4414,12 @@ async function openFloatingChart(){
  window.addEventListener('resize',draw);
  floatingWin.addEventListener('resize',draw);
  floatingWin.addEventListener('keydown',handleChartArrowNav);
+ enableManualResize(floatingWin);
  // pagehide scatta sia quando l'utente chiude la finestra PiP/popup manualmente, sia quando
  // richiamiamo noi floatingWin.close() dal pulsante "Rientra".
  floatingWin.addEventListener('pagehide',restoreChartToMainPage,{once:true});
  updateFloatCornerButtons();
- $('status').textContent='Grafico spostato nella finestra flottante: trascinala pure su un altro monitor, puoi continuare a operare da qui.';
+ $('status').textContent='Grafico spostato nella finestra flottante: trascina i bordi/angoli della finestra per ridimensionarla quanto vuoi, oppure spostala pure su un altro monitor.';
  draw();
 }
 function toggleFloatingChart(){
