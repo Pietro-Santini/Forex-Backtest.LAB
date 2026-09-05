@@ -324,7 +324,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
       Scarica candele FX direttamente dall'API gratuita di Alpha Vantage e le aggiunge alla
       stessa libreria CSV usata per i file caricati manualmente. La API Key viene digitata
       dall'utente e salvata solo in localStorage del suo browser: non è mai scritta nel codice. -->
- <div class="panel" style="display:grid;grid-template-columns:1.4fr .7fr .7fr 1fr auto;gap:10px;align-items:end;margin-top:10px">
+ <div class="panel" style="display:grid;grid-template-columns:1.2fr .6fr .6fr .9fr .9fr auto;gap:10px;align-items:end;margin-top:10px">
   <div><div class="label">Alpha Vantage API Key</div><input id="avApiKey" type="password" placeholder="La tua chiave Alpha Vantage"></div>
   <div><div class="label">Da valuta</div><input id="avFromSymbol" placeholder="EUR"></div>
   <div><div class="label">A valuta</div><input id="avToSymbol" placeholder="USD"></div>
@@ -336,6 +336,12 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
     <option value="30min">30 minuti</option>
     <option value="60min">60 minuti</option>
     <option value="daily">Giornaliero</option>
+   </select>
+  </div>
+  <div><div class="label">Quantità dati</div>
+   <select id="avOutputsize" title="Compact: ultimi ~100 punti, sempre incluso nel piano gratuito. Full: storico completo, su alcuni endpoint richiede un piano a pagamento Alpha Vantage.">
+    <option value="compact" selected>Compact (ultimi ~100)</option>
+    <option value="full">Full (storico completo)</option>
    </select>
   </div>
   <button type="button" class="primary" id="avLoadBtn" title="Scarica lo storico da Alpha Vantage con questi parametri">⬇️ Scarica storico</button>
@@ -1695,17 +1701,22 @@ function removeCsvFromLibrary(id){
 // ===================== IMPORT STORICO DA ALPHA VANTAGE (STEP 1) =====================
 // Scarica candele FX (intraday o daily) dall'API gratuita di Alpha Vantage e le aggiunge
 // alla libreria CSV esistente, riusando la stessa pipeline di addFilesToLibrary() sopra.
-async function fetchAlphaVantageFX(fromSymbol, toSymbol, interval, apiKey){
+async function fetchAlphaVantageFX(fromSymbol, toSymbol, interval, apiKey, outputsize){
  const isDaily = interval === 'daily';
  const fn = isDaily ? 'FX_DAILY' : 'FX_INTRADAY';
- let url = `https://www.alphavantage.co/query?function=${fn}&from_symbol=${fromSymbol}&to_symbol=${toSymbol}&apikey=${encodeURIComponent(apiKey)}&outputsize=full`;
+ let url = `https://www.alphavantage.co/query?function=${fn}&from_symbol=${fromSymbol}&to_symbol=${toSymbol}&apikey=${encodeURIComponent(apiKey)}&outputsize=${outputsize||'compact'}`;
  if(!isDaily) url += `&interval=${interval}`;
  const resp = await fetch(url);
  const data = await resp.json();
- if(data['Error Message']) throw new Error('Alpha Vantage: parametri non validi (controlla le valute).');
- if(data['Note'] || data['Information']) throw new Error('Alpha Vantage: limite di richieste raggiunto (piano gratuito: 5/min, 25/giorno). Riprova tra poco.');
+ // Mostriamo il messaggio ESATTO restituito da Alpha Vantage invece di indovinare la causa:
+ // "Error Message" = parametri sbagliati; "Note"/"Information" possono indicare sia il vero
+ // rate limit (5/min, 25/giorno) sia, sempre più spesso di recente, che l'endpoint o il
+ // parametro richiesto (es. outputsize=full) è riservato ai piani a pagamento.
+ if(data['Error Message']) throw new Error('Alpha Vantage: '+data['Error Message']);
+ if(data['Note']) throw new Error('Alpha Vantage: '+data['Note']);
+ if(data['Information']) throw new Error('Alpha Vantage: '+data['Information']);
  const seriesKey = Object.keys(data).find(k => /time series/i.test(k));
- if(!seriesKey) throw new Error('Alpha Vantage: risposta inattesa, nessuna serie storica trovata.');
+ if(!seriesKey) throw new Error('Alpha Vantage: risposta inattesa: '+JSON.stringify(data).slice(0,300));
  const series = data[seriesKey];
  const out = Object.keys(series).map(ts => {
    const bar = series[ts];
@@ -1726,12 +1737,13 @@ async function loadAlphaVantageHistory(){
  const from = $('avFromSymbol').value.trim().toUpperCase();
  const to = $('avToSymbol').value.trim().toUpperCase();
  const interval = $('avInterval').value;
+ const outputsize = $('avOutputsize').value;
  if(!apiKey){ alert('Inserisci la tua Alpha Vantage API Key.'); return; }
  if(!from || !to){ alert('Inserisci entrambe le valute (es. EUR / USD).'); return; }
  localStorage.setItem('fxbt_av_apikey', apiKey); // ricordata solo su questo browser
  $('status').textContent = `Scaricamento ${from}/${to} da Alpha Vantage...`;
  try{
-   const avRows = await fetchAlphaVantageFX(from, to, interval, apiKey);
+   const avRows = await fetchAlphaVantageFX(from, to, interval, apiKey, outputsize);
    if(!avRows.length){ $('status').textContent = 'Nessuna candela ricevuta da Alpha Vantage.'; return; }
    csvLibrary.push({id:'av_'+Date.now(), name:`AlphaVantage ${from}/${to} (${interval})`, addedAt:Date.now(), rows:avRows});
    rebuildBaseRowsFromLibrary();
