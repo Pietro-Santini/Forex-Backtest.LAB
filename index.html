@@ -251,7 +251,6 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 <div class="panel">
  <div class="toolbar">
   <div><div class="label">CSV storico <span class="qtip" style="width:14px;height:14px;font-size:9px;vertical-align:middle">?<span class="qtipBubble">Puoi selezionare più file CSV insieme (tenendo premuto Ctrl/Cmd nel selettore) per allargare il range storico del backtest: verranno uniti e ordinati automaticamente. Puoi anche aggiungerne altri in un secondo momento richiamando di nuovo il selettore.</span></span></div><input id="file" type="file" accept=".csv" multiple style="position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0"><button type="button" id="fileBtn" title="Carica uno o più file CSV storici">📂 Scegli file</button></div>
-  <div><div class="label">Capitale</div><input id="capital" type="number" value="10000"></div>
   <div><div class="label">ASSET</div><select id="market" title="Scegli prima l'ASSET (coppia di valute): serve a impostare automaticamente Decimali prezzo e Decimali per +1 pip corretti per quel mercato, e il calcolo del lottaggio si adatta di conseguenza. 'Personalizzato' lascia Decimali prezzo/pip completamente modificabili a mano. Il CSV storico può essere caricato solo dopo aver scelto un ASSET.">
     <option value="" selected disabled>— Seleziona ASSET —</option>
     <option value="EURUSD">EUR/USD</option>
@@ -261,6 +260,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
     <option value="XAGUSD">XAG/USD (Argento)</option>
     <option value="custom">Personalizzato (manuale)</option>
    </select></div>
+  <div><div class="label">Capitale</div><input id="capital" type="number" value="10000"></div>
   <div><div class="label">Spread pips</div><input id="spread" type="number" value="0" step=".1"></div>
   <div><div class="label">Leva</div><select id="leverage"><option value="10">1:10</option><option value="20">1:20</option><option value="30">1:30</option><option value="50">1:50</option><option value="100" selected>1:100</option><option value="200">1:200</option><option value="500">1:500</option></select></div>
   <div><div class="label">Decimali prezzo</div><select id="decimals"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option></select></div>
@@ -4321,6 +4321,7 @@ function restoreChartToMainPage(){
    else floatingHomeParent.appendChild(wrap);
  }
  floatingDoc=null; floatingWin=null;
+ floatMaximized=false; floatPrevRect=null;
  updateFloatCornerButtons();
  window.removeEventListener('resize',draw);
  draw();
@@ -4371,15 +4372,43 @@ function toggleFloatingChart(){
 // serve una scorciatoia da tastiera dedicata. ESC per uscire funziona automaticamente: è il
 // browser stesso a intercettarlo e chiudere lo schermo intero quando la Fullscreen API è
 // attiva, non serve gestirlo a mano.
+// NOTA IMPORTANTE: le finestre aperte con la Document Picture-in-Picture API (quella "sempre
+// in primo piano") NON possono richiedere la vera Fullscreen API del browser: è una
+// restrizione di sicurezza del browser stesso (non un blocco popup, e non è aggirabile).
+// Come alternativa, in quel caso ingrandiamo/riportiamo la finestra stessa a tutta l'area
+// disponibile dello schermo con moveTo/resizeTo: il grafico occupa comunque tutta la pagina,
+// senza mai incappare in quel blocco.
+let floatMaximized=false, floatPrevRect=null;
 function toggleFullscreen(win){
  win=win||window;
  const doc=win.document, el=doc.documentElement;
- if(doc.fullscreenElement){
-   doc.exitFullscreen?.().catch(()=>{});
- }else{
-   el.requestFullscreen?.().catch(()=>{
+ if(doc.fullscreenElement){ doc.exitFullscreen?.().catch(()=>{}); return; }
+ const maximizeFallback=()=>{
+   if(win===window||typeof win.resizeTo!=='function'){
      $('status').textContent='Il browser ha bloccato la richiesta di schermo intero.';
-   });
+     return;
+   }
+   try{
+     if(!floatMaximized){
+       floatPrevRect={x:win.screenX,y:win.screenY,w:win.outerWidth,h:win.outerHeight};
+       win.moveTo(0,0);
+       win.resizeTo(screen.availWidth,screen.availHeight);
+       floatMaximized=true;
+       $('status').textContent='Finestra flottante ingrandita a tutta la pagina.';
+     }else{
+       win.moveTo(floatPrevRect.x,floatPrevRect.y);
+       win.resizeTo(floatPrevRect.w,floatPrevRect.h);
+       floatMaximized=false;
+       $('status').textContent='Finestra flottante riportata alla dimensione precedente.';
+     }
+   }catch(e){
+     $('status').textContent='Il browser ha bloccato anche il ridimensionamento della finestra flottante.';
+   }
+ };
+ if(el.requestFullscreen){
+   el.requestFullscreen().catch(maximizeFallback);
+ }else{
+   maximizeFallback();
  }
 }
 $('floatChartBtn')?.addEventListener('click',toggleFloatingChart);
