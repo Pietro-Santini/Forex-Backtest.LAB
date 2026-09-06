@@ -126,7 +126,7 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
   // .ready (Promise) e un metodo uploadFile() che non blocca né rompe nulla se fallisce.
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getStorage, ref, uploadBytesResumable, listAll, getBytes, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+  import { getStorage, ref, uploadBytesResumable, listAll, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCz9y-5d9AxqjDtJPbBYyHaUOYRKDGUaO0",
@@ -193,10 +193,27 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
         return out;
       }catch(e){ console.warn('Elenco libreria su Storage fallito:', e); return []; }
     },
-    // Scarica il contenuto testuale di un file già individuato con listFiles().
-    async downloadFileText(fileRef){
-      try{ return new TextDecoder('utf-8').decode(await getBytes(fileRef)); }
-      catch(e){ console.warn('Download file da Storage fallito:', e); return null; }
+    // Scarica il contenuto testuale di un file già individuato con listFiles(). onProgress,
+    // se passato, viene richiamato con la percentuale (0-100) man mano che arrivano i dati,
+    // oppure con null se il server non dichiara la dimensione del file in anticipo.
+    async downloadFileText(fileRef, onProgress){
+      try{
+        const url = await getDownloadURL(fileRef);
+        const resp = await fetch(url);
+        if(!resp.ok) throw new Error('HTTP '+resp.status);
+        const total = Number(resp.headers.get('Content-Length')) || 0;
+        const reader = resp.body.getReader();
+        const chunks = [];
+        let received = 0;
+        while(true){
+          const {done, value} = await reader.read();
+          if(done) break;
+          chunks.push(value);
+          received += value.length;
+          if(onProgress) onProgress(total ? Math.round(received/total*100) : null);
+        }
+        return await new Blob(chunks).text();
+      }catch(e){ console.warn('Download file da Storage fallito:', e); return null; }
     },
     // STEP 0c-3 — elimina un file dalla libreria cloud quando viene rimosso in locale, così
     // sparisce anche dagli altri dispositivi. Se il file non esisteva già su Storage (es.
@@ -814,8 +831,12 @@ async function downloadPendingCloudFiles(){
  let downloaded=0;
  await withLoadingOverlay('Scaricamento libreria dal cloud…', async()=>{
    for(const cf of pendingCloudDownloads){
-     if(statusEl)statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
-     const text=await fs.downloadFileText(cf.fileRef);
+     if(statusEl)statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud… 0%`;
+     const text=await fs.downloadFileText(cf.fileRef, pct=>{
+       if(statusEl) statusEl.textContent = pct==null
+         ? `☁️ Scaricamento "${cf.fileName}" dal cloud… (dimensione sconosciuta)`
+         : `☁️ Scaricamento "${cf.fileName}" dal cloud… ${pct}%`;
+     });
      if(text==null){ if(statusEl)statusEl.textContent=`⚠️ Download di "${cf.fileName}" fallito.`; continue; }
      if(libraryRootHandle){
        const targetDir=await libraryRootHandle.getDirectoryHandle(cf.asset,{create:true});
