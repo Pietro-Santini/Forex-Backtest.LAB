@@ -576,14 +576,14 @@ tr.otherAssetRow td:last-child{opacity:1}
 
 <div class="panel">
  <div class="label">Posizioni aperte</div>
- <table class="posTable"><thead><tr><th>#</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>P/L live</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
 </div>
 
 <div class="panel">
  <div class="label">Ordini pendenti</div>
- <table class="posTable"><thead><tr><th>#</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
  <tbody id="pendingOrdersTbl"></tbody></table>
  <div id="noPending" class="hint">Nessun ordine pendente.</div>
 </div>
@@ -2108,12 +2108,15 @@ function reset(){
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
  idx=Math.min(0,rows.length-1);
  masterTime=rows.length?closeTimeOf(rows[idx]):null;
- viewEnd=idx; positions=[]; active=null; tradeSLLine=null; tradeTPLine=null; pendingOrders=[];
- // Il RESET manuale azzera SOLO le operazioni dell'asset attualmente selezionato nel Trade
- // Journal: le operazioni già registrate su altri asset restano intatte (vedi jumpToTradeOnChart).
- // Il conto (posizioni aperte, ordini pendenti, equity) è invece UNICO e globale: viene comunque
- // azzerato qui sopra perché il RESET riporta il grafico e le posizioni aperte a zero.
+ viewEnd=idx;
+ // Il RESET manuale azzera SOLO le posizioni aperte, gli ordini pendenti e i trade
+ // dell'asset attualmente selezionato: le posizioni/ordini/trade già registrati su ALTRI
+ // asset restano intatti e continuano a comparire nelle rispettive tabelle (vedi
+ // autoLoadAssetLibrary/jumpToTradeOnChart), esattamente come al semplice cambio di asset.
+ positions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)!==currentAssetKey):[];
+ pendingOrders=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)!==currentAssetKey):[];
  trades=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)!==currentAssetKey):[];
+ active=null; tradeSLLine=null; tradeTPLine=null;
  equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
  update(); draw();
  $('status').textContent=rows.length?`Dataset pronto: ${rows.length.toLocaleString('it-IT')} candele. La prima candela è visibile.`:'Carica il CSV per iniziare.';
@@ -2192,32 +2195,38 @@ function update(){
  mEl.className='value '+(fm<0?'marginNeg':(used>0&&fm<used*0.3?'marginTight':'marginFree'));
  mEl.title=`Equity ${euro(eq)} • Margine usato ${euro(used)}`;
 
- // Tabella posizioni aperte: mostra SOLO le posizioni dell'asset a grafico ora (i dati delle
- // posizioni di altri asset NON vengono toccati/cancellati: restano aperte "in background" e
- // ricompariranno in questa tabella non appena si torna sul loro asset — vedi autoLoadAssetLibrary).
+ // Tabella posizioni aperte: mostra le posizioni di TUTTI gli asset (non solo quello a grafico
+ // ora), con una colonna ASSET dedicata, così si vede sempre a colpo d'occhio che le posizioni
+ // di altri asset restano aperte "in background" e NON vengono toccate/cancellate cambiando
+ // asset — vedi autoLoadAssetLibrary. Il P/L live è calcolabile solo per le posizioni
+ // dell'asset attualmente a grafico (le uniche di cui abbiamo il prezzo corrente caricato);
+ // per le posizioni di altri asset si mostra "—".
  const price=currentPrice();
- const ownPositionsTbl=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+ const ownPositionsTbl=positions;
  if(!ownPositionsTbl.length){
    $('openPositions').innerHTML='';
    $('noPositions').style.display='block';
  }else{
    $('noPositions').style.display='none';
    $('openPositions').innerHTML=ownPositionsTbl.map((p,i)=>{
-     const plLive=price!=null?calculateForexPL(p.side,p.entry,price,p.lots):0;
-     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td><td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`+
+     const posAsset=p.asset||currentAssetKey||'—';
+     const isCurrentAsset=!currentAssetKey||posAsset===currentAssetKey;
+     const plLive=(isCurrentAsset&&price!=null)?calculateForexPL(p.side,p.entry,price,p.lots):null;
+     const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
+     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+plCell+
      `<td><button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button></td></tr>`;
    }).join('');
  }
 
- // Tabella ordini pendenti: stesso criterio, solo quelli dell'asset a grafico ora.
- const ownPendingTbl=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders;
+ // Tabella ordini pendenti: stesso criterio, mostra quelli di TUTTI gli asset con colonna ASSET.
+ const ownPendingTbl=pendingOrders;
  if(!ownPendingTbl.length){
    $('pendingOrdersTbl').innerHTML='';
    $('noPending').style.display='block';
  }else{
    $('noPending').style.display='none';
    $('pendingOrdersTbl').innerHTML=ownPendingTbl.map((p,i)=>
-     `<tr><td>${i+1}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
+     `<tr><td>${i+1}</td><td>${p.asset||currentAssetKey||'—'}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
      `<td><button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button></td></tr>`
    ).join('');
  }
