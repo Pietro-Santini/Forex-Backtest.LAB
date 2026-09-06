@@ -750,6 +750,20 @@ async function renderIndexedDbGroups(){
 // QUESTO dispositivo, scrivendoli nel posto giusto secondo la modalità già attiva qui:
 // dentro la cartella collegata se ce n'è una, altrimenti in IndexedDB. Non tocca né
 // sovrascrive mai un file già presente con lo stesso nome (evita doppioni/conflitti).
+async function fileSizeInDir(dirHandle,name){
+ try{ const h=await dirHandle.getFileHandle(name); return (await h.getFile()).size; }
+ catch(e){ return -1; } // -1 = il file non esiste
+}
+// Scrive/sovrascrive un file con ESATTAMENTE questo nome (a differenza di writeFileIntoDir,
+// qui NON rinomina in caso di conflitto): usata solo per la sincronizzazione dal cloud, dove
+// il nome deve restare identico a quello caricato dall'altro dispositivo.
+async function writeCloudFileIntoDir(targetDirHandle,name,text){
+ const destHandle=await targetDirHandle.getFileHandle(name,{create:true});
+ const writable=await destHandle.createWritable();
+ await writable.write(text);
+ await writable.close();
+}
+
 async function syncMissingLibraryFromCloud(){
  const fs=await waitForFxbtStorage();
  const statusEl=document.getElementById('cloudUploadStatus');
@@ -766,10 +780,10 @@ async function syncMissingLibraryFromCloud(){
      for(const cf of cloudFiles){
        if(statusEl) statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
        const targetDir=await libraryRootHandle.getDirectoryHandle(cf.asset,{create:true});
-       if(await fileExistsInDir(targetDir,cf.fileName))continue;
+       if((await fileSizeInDir(targetDir,cf.fileName))>0)continue; // già presente e non vuoto
        const text=await fs.downloadFileText(cf.fileRef);
        if(text==null)continue;
-       await writeFileIntoDir(targetDir,cf.fileName,text);
+       await writeCloudFileIntoDir(targetDir,cf.fileName,text);
        downloaded++;
      }
    });
