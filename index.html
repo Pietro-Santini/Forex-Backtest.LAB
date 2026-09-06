@@ -200,8 +200,13 @@ tr.otherAssetRow td:last-child{opacity:1}
   // Percorso Firestore scelto: users/{uid}/data/session (documento separato
   // dal profilo users/{uid} già usato per prova gratuita/abbonamento, così
   // non rischiamo di sovrascrivere quei campi per errore).
+  let resolveCloudReady;
   window.fxbtCloud = {
     uid: null,
+    // Si risolve (una sola volta, con l'uid o null) al primo controllo di login: lo script
+    // classico più sotto lo usa per sapere quando è sicuro leggere fxbtCloud.uid all'avvio,
+    // dato che il login è asincrono e il resto della pagina parte comunque subito.
+    ready: new Promise(res=>{ resolveCloudReady=res; }),
     async save(state){
       if(!this.uid) return false;
       try{
@@ -304,12 +309,14 @@ tr.otherAssetRow td:last-child{opacity:1}
       // Non autenticato (o appena sloggato): azzeriamo subito l'uid del ponte cloud, poi
       // rimandiamo alla pagina di login.
       window.fxbtCloud.uid = null;
+      resolveCloudReady(null);
       window.location.replace(LOGIN_PAGE);
       return;
     }
     // Utente autenticato: da qui in poi window.fxbtCloud.save()/load()/onChange() operano
     // sul documento Firestore di QUESTO uid.
     window.fxbtCloud.uid = user.uid;
+    resolveCloudReady(user.uid);
     try {
       const ref = doc(db, "users", user.uid);
       let snap = await getDoc(ref);
@@ -746,6 +753,18 @@ async function idbGet(key){
    });
  }catch(e){ console.warn('Lettura sessione fallita:',e); return null; }
 }
+// STEP 0b — attende in modo sicuro che il ponte verso Firestore (window.fxbtCloud, esposto
+// dallo script di login/STEP 0a) sia disponibile E che il primo controllo di login sia
+// concluso: i due script partono in ordine non garantito, quindi non possiamo assumere che
+// window.fxbtCloud esista già quando questo script classico parte.
+function waitForFxbtCloud(){
+ return new Promise(resolve=>{
+   if(window.fxbtCloud){ window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); return; }
+   const t=setInterval(()=>{
+     if(window.fxbtCloud){ clearInterval(t); window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); }
+   },30);
+ });
+}
 async function idbClearAll(){
  try{
    const db=await openSessionDB();
@@ -781,7 +800,14 @@ function scheduleSave(){
 async function saveLightStateNow(){
  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
  if(!baseRows.length)return;
- const ok=await idbPut('state',collectLightSessionState());
+ const state=collectLightSessionState();
+ const ok=await idbPut('state',state);
+ // STEP 0b: oltre alla copia locale (IndexedDB, sempre scritta per prima: è la cache veloce
+ // di riserva se il dispositivo è offline), proviamo a salvare anche su Firestore legato
+ // all'UID, così la sessione è quella che ricompare su un altro dispositivo. Se il salvataggio
+ // cloud fallisce (offline, permessi, ecc.) non blocchiamo né segnaliamo errore: la copia
+ // locale resta comunque valida su QUESTO dispositivo.
+ if(window.fxbtCloud && window.fxbtCloud.uid) window.fxbtCloud.save(state);
  const el=$('autosaveStatus');
  if(el)el.textContent=ok?('Sessione salvata • '+new Date().toLocaleTimeString('it-IT')):'⚠️ Salvataggio non riuscito';
 }
@@ -6797,6 +6823,18 @@ $('clearSavedSessionBtn').addEventListener('click',async()=>{
 
 (async function initSession(){
  let [savedCsv,savedState,savedChartViews]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews')]);
+ // STEP 0b: se l'utente è loggato, aspettiamo il ponte cloud e proviamo a leggere la sessione
+ // da Firestore. Se ne esiste una (es. salvata poco fa da un altro dispositivo/scheda), ha la
+ // precedenza sulla copia locale — è quella che rende i dati "gli stessi ovunque si acceda".
+ // Se il cloud non ha ancora nulla (primo avvio dopo questo aggiornamento, o mai salvato),
+ // restiamo sulla copia locale IndexedDB come prima, senza alcun cambiamento di comportamento.
+ try{
+   const cloud=await waitForFxbtCloud();
+   if(cloud.uid){
+     const cloudState=await cloud.load();
+     if(cloudState && cloudState.version===SESSION_VERSION) savedState=cloudState;
+   }
+ }catch(e){ console.warn('Controllo sessione cloud saltato:',e); }
  // Mappa delle viste per-asset (candela/timeframe/zoom di ognuno): ripristinata subito così,
  // al primo cambio ASSET, si ritrova già la posizione lasciata l'ultima volta.
  assetChartViews=savedChartViews||{};
