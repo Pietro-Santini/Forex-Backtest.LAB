@@ -2214,7 +2214,7 @@ function update(){
      const plLive=(isCurrentAsset&&price!=null)?calculateForexPL(p.side,p.entry,price,p.lots):null;
      const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
      return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+plCell+
-     `<td><button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button></td></tr>`;
+     `<td><button class="miniBtn" data-gotoasset-pos="${p.id}" title="Passa all'asset ${posAsset} e mostra questa posizione a grafico">📍 Vai a grafico</button><button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button></td></tr>`;
    }).join('');
  }
 
@@ -2225,10 +2225,11 @@ function update(){
    $('noPending').style.display='block';
  }else{
    $('noPending').style.display='none';
-   $('pendingOrdersTbl').innerHTML=ownPendingTbl.map((p,i)=>
-     `<tr><td>${i+1}</td><td>${p.asset||currentAssetKey||'—'}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
-     `<td><button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button></td></tr>`
-   ).join('');
+   $('pendingOrdersTbl').innerHTML=ownPendingTbl.map((p,i)=>{
+     const ordAsset=p.asset||currentAssetKey||'—';
+     return `<tr><td>${i+1}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
+     `<td><button class="miniBtn" data-gotoasset-pending="${p.id}" title="Passa all'asset ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button><button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button></td></tr>`;
+   }).join('');
  }
 
  // Trade Journal: elenco GLOBALE (tutti gli asset), ordinato per come sono stati chiusi.
@@ -4942,6 +4943,67 @@ async function jumpToTradeOnChart(tradeIndex){
  draw();update();
  $('status').textContent=`Vista spostata sull'operazione #${tradeIndex+1}${t.asset?' ('+t.asset+')':''} (${t.side} ${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}).`;
 }
+// Porta il grafico sull'ASSET di una posizione APERTA (o ordine pendente) e la seleziona:
+// le tabelle "Posizioni aperte"/"Ordini pendenti" sono una memoria CONDIVISA fra tutti gli
+// asset (come il Trade Journal), quindi da lì si può saltare direttamente all'asset giusto
+// senza doverlo cercare a mano nel menu in alto. Se la posizione/ordine è già sull'asset a
+// grafico ora, non serve alcun cambio: si centra semplicemente la vista su di essa.
+async function jumpToPositionOnChart(posId){
+ const pos=positions.find(p=>String(p.id)===String(posId));
+ if(!pos)return;
+ const currentAsset=$('market')?.value||'';
+ if(pos.asset && currentAsset!==pos.asset){
+   if($('market'))$('market').value=pos.asset;
+   applyInstrument();
+   await autoLoadAssetLibrary(pos.asset);
+ }
+ if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${pos.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere la posizione a grafico.`;return;}
+ focusPosition(pos);
+ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
+ followLatest=false; autoFitWidth=false; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ visibleCount=idealVisibleCount();
+ viewEnd=openIdx!=null?Math.min(maxViewEnd(),openIdx+Math.floor(getVisibleCount()/2)):idx;
+ const pricesToFit=[pos.entry].filter(Number.isFinite);
+ if(Number.isFinite(pos.sl))pricesToFit.push(pos.sl);
+ if(Number.isFinite(pos.tp))pricesToFit.push(pos.tp);
+ if(pricesToFit.length){
+   const fitLo=Math.min(...pricesToFit), fitHi=Math.max(...pricesToFit);
+   const fitRange=(fitHi-fitLo)||Math.abs(pos.entry||1)*0.001||1;
+   const padFit=fitRange*0.25;
+   viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
+ }
+ draw();update();
+ $('status').textContent=`Posizione ${pos.side} su ${pos.asset||currentAssetKey} selezionata a grafico.`;
+}
+// Stessa idea per un ordine pendente: non essendo ancora attivo non ha una candela di apertura
+// propria, quindi si passa semplicemente all'asset (se diverso) e ci si ferma sull'ultima
+// candela disponibile, con la vista verticale già inquadrata su ENTRY/SL/TP dell'ordine.
+async function jumpToPendingOnChart(orderId){
+ const p=pendingOrders.find(o=>String(o.id)===String(orderId));
+ if(!p)return;
+ const currentAsset=$('market')?.value||'';
+ if(p.asset && currentAsset!==p.asset){
+   if($('market'))$('market').value=p.asset;
+   applyInstrument();
+   await autoLoadAssetLibrary(p.asset);
+ }
+ if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${p.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
+ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ visibleCount=idealVisibleCount(); viewEnd=idx;
+ const pricesToFit=[p.entry].filter(Number.isFinite);
+ if(Number.isFinite(p.sl))pricesToFit.push(p.sl);
+ if(Number.isFinite(p.tp))pricesToFit.push(p.tp);
+ if(pricesToFit.length){
+   const fitLo=Math.min(...pricesToFit), fitHi=Math.max(...pricesToFit);
+   const fitRange=(fitHi-fitLo)||Math.abs(p.entry||1)*0.001||1;
+   const padFit=fitRange*0.25;
+   viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
+ }
+ draw();update();
+ $('status').textContent=`Ordine pendente ${p.side} su ${p.asset||currentAssetKey} mostrato a grafico.`;
+}
 function fmtDurationMs(ms){
  if(!Number.isFinite(ms))return '—';
  const totalMin=Math.round(ms/60000);
@@ -5261,9 +5323,15 @@ $('closeAll').onclick=()=>{
  $('status').textContent='Tutte le posizioni sono state chiuse.';
  draw();update();
 };
-$('openPositions').addEventListener('click',e=>{
+$('openPositions').addEventListener('click',async e=>{
+ const gotoId=e.target.getAttribute('data-gotoasset-pos');
  const selId=e.target.getAttribute('data-select');
  const closeId=e.target.getAttribute('data-closepos');
+ if(gotoId){
+   scrollToChart();
+   await jumpToPositionOnChart(gotoId);
+   return;
+ }
  if(selId){
    const pos=positions.find(p=>String(p.id)===selId);
    if(!pos)return;
@@ -6435,8 +6503,14 @@ $('confirmPendingBtn').addEventListener('click',()=>{
  // senza dover scorrere manualmente la pagina.
  $('noPending')?.closest('.panel')?.scrollIntoView({behavior:'smooth',block:'center'});
 });
-$('pendingOrdersTbl').addEventListener('click',e=>{
+$('pendingOrdersTbl').addEventListener('click',async e=>{
+ const gotoId=e.target.getAttribute('data-gotoasset-pending');
  const cancelId=e.target.getAttribute('data-cancelpending');
+ if(gotoId){
+   scrollToChart();
+   await jumpToPendingOnChart(gotoId);
+   return;
+ }
  if(cancelId){
    pendingOrders=pendingOrders.filter(p=>String(p.id)!==cancelId);
    $('status').textContent='Ordine pendente cancellato.';
