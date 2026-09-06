@@ -140,27 +140,37 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
   const storage = getStorage(app);
 
   let resolveReady;
+  let uploadsInFlight = 0;
+  window.addEventListener('beforeunload', (e)=>{
+    // Se esci (o ricarichi) mentre un caricamento su Firebase Storage è ancora in corso,
+    // la richiesta di rete viene interrotta a metà e il file non arriva mai sul cloud.
+    // Questo avviso nativo del browser dà la possibilità di restare finché non finisce.
+    if(uploadsInFlight>0){ e.preventDefault(); e.returnValue=''; }
+  });
   window.fxbtStorage = {
     uid: null,
     ready: new Promise(res => { resolveReady = res; }),
     async uploadFile(asset, fileName, file){
       if(!this.uid){ console.warn('Upload libreria CSV: nessun utente autenticato, upload saltato.'); return false; }
       const statusEl = document.getElementById('cloudUploadStatus');
+      uploadsInFlight++;
       return new Promise(resolve=>{
         const task = uploadBytesResumable(ref(storage, `users/${this.uid}/library/${asset}/${fileName}`), file);
-        if(statusEl) statusEl.textContent = `☁️ Caricamento di "${fileName}" su Firebase in corso… 0%`;
+        if(statusEl) statusEl.textContent = `☁️ Caricamento di "${fileName}" su Firebase in corso… 0% — non uscire dalla pagina finché non finisce.`;
         task.on('state_changed',
           snap=>{
             if(!statusEl)return;
             const pct = snap.totalBytes ? Math.round(snap.bytesTransferred/snap.totalBytes*100) : 0;
-            statusEl.textContent = `☁️ Caricamento di "${fileName}" su Firebase in corso… ${pct}%`;
+            statusEl.textContent = `☁️ Caricamento di "${fileName}" su Firebase in corso… ${pct}% — non uscire dalla pagina finché non finisce.`;
           },
           err=>{
+            uploadsInFlight--;
             console.warn('Upload libreria CSV su Storage fallito:', err);
             if(statusEl) statusEl.textContent = `⚠️ Caricamento di "${fileName}" non riuscito (resta valida solo la copia locale).`;
             resolve(false);
           },
           ()=>{
+            uploadsInFlight--;
             if(statusEl) statusEl.textContent = `☁️ File aggiornati nel cloud (ultimo: "${fileName}").`;
             resolve(true);
           }
@@ -742,16 +752,19 @@ async function renderIndexedDbGroups(){
 // sovrascrive mai un file già presente con lo stesso nome (evita doppioni/conflitti).
 async function syncMissingLibraryFromCloud(){
  const fs=await waitForFxbtStorage();
- if(!fs.uid)return; // non loggato: niente da scaricare
+ const statusEl=document.getElementById('cloudUploadStatus');
+ if(!fs.uid){ if(statusEl) statusEl.textContent='⚠️ Non sei autenticato: impossibile scaricare dalla libreria cloud.'; return; }
+ if(statusEl) statusEl.textContent='☁️ Controllo la libreria cloud…';
  const cloudFiles=await fs.listFiles();
- if(!cloudFiles.length)return;
+ if(!cloudFiles.length){ if(statusEl) statusEl.textContent='☁️ Nessun file trovato nella libreria cloud per questo account (forse non è ancora salito nulla su Storage).'; return; }
 
  if(libraryRootHandle){
    const ok=await verifyDirPermission(libraryRootHandle,'readwrite');
-   if(!ok)return;
+   if(!ok){ if(statusEl) statusEl.textContent='⚠️ Permesso alla cartella non concesso: download annullato.'; return; }
    let downloaded=0;
    await withLoadingOverlay('Scaricamento libreria dal cloud…', async()=>{
      for(const cf of cloudFiles){
+       if(statusEl) statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
        const targetDir=await libraryRootHandle.getDirectoryHandle(cf.asset,{create:true});
        if(await fileExistsInDir(targetDir,cf.fileName))continue;
        const text=await fs.downloadFileText(cf.fileRef);
@@ -761,12 +774,14 @@ async function syncMissingLibraryFromCloud(){
      }
    });
    if(downloaded)await syncLibraryFolder();
+   if(statusEl) statusEl.textContent = downloaded ? `☁️ Scaricati ${downloaded} file nuovi dalla libreria cloud.` : '☁️ Libreria già aggiornata: nessun file nuovo da scaricare.';
  }else{
    const existingKeys=new Set((await libGetAll()).map(r=>r.asset+'|'+r.fileName));
    let downloaded=0;
    await withLoadingOverlay('Scaricamento libreria dal cloud…', async()=>{
      for(const cf of cloudFiles){
        if(existingKeys.has(cf.asset+'|'+cf.fileName))continue;
+       if(statusEl) statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
        const text=await fs.downloadFileText(cf.fileRef);
        if(text==null)continue;
        const rows=parseCsvLib(text);
@@ -777,6 +792,7 @@ async function syncMissingLibraryFromCloud(){
      }
    });
    if(downloaded)await renderLibrary();
+   if(statusEl) statusEl.textContent = downloaded ? `☁️ Scaricati ${downloaded} file nuovi dalla libreria cloud.` : '☁️ Libreria già aggiornata: nessun file nuovo da scaricare.';
  }
 }
 
