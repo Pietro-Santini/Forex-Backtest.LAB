@@ -121,7 +121,7 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
   // .ready (Promise) e un metodo uploadFile() che non blocca né rompe nulla se fallisce.
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getStorage, ref, uploadBytes, listAll, getBytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+  import { getStorage, ref, uploadBytes, listAll, getBytes, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCz9y-5d9AxqjDtJPbBYyHaUOYRKDGUaO0",
@@ -165,6 +165,15 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
     async downloadFileText(fileRef){
       try{ return new TextDecoder('utf-8').decode(await getBytes(fileRef)); }
       catch(e){ console.warn('Download file da Storage fallito:', e); return null; }
+    },
+    // STEP 0c-3 — elimina un file dalla libreria cloud quando viene rimosso in locale, così
+    // sparisce anche dagli altri dispositivi. Se il file non esisteva già su Storage (es.
+    // caricato prima di questi step, o mai salito per essere offline) l'errore viene
+    // ignorato: non è un problema, il risultato voluto (file assente) è già quello attuale.
+    async deleteFile(asset, fileName){
+      if(!this.uid) return false;
+      try{ await deleteObject(ref(storage, `users/${this.uid}/library/${asset}/${fileName}`)); return true; }
+      catch(e){ return false; }
     }
   };
   onAuthStateChanged(auth, user => {
@@ -537,6 +546,10 @@ document.getElementById('libUploadBtn').addEventListener('click', async ()=>{
          const targetDir=await libraryRootHandle.getDirectoryHandle(asset,{create:true});
          await writeFileIntoDir(targetDir,f.name,f);
          added++;
+         // FIX: l'upload su Firebase Storage mancava in questo ramo (cartella collegata) —
+         // c'era solo nel ramo IndexedDB qui sotto. Stessa logica: non blocca, non segnala
+         // errore se fallisce/offline.
+         waitForFxbtStorage().then(fs=>fs.uploadFile(asset,f.name,f));
        }catch(e){ skipped.push(f.name+' (scrittura su cartella fallita)'); }
      }else{
        const text=await f.text();
@@ -629,7 +642,9 @@ function renderFolderGroups(){
    });
    row.querySelector('[data-del]').addEventListener('click', async (e)=>{
      e.stopPropagation();
+     const asset=entry.dirHandle.name, fileName=entry.name;
      try{ await entry.dirHandle.removeEntry(entry.name); }catch(err){}
+     waitForFxbtStorage().then(fs=>fs.deleteFile(asset,fileName));
      syncLibraryFolder();
    });
    const moveBtn=row.querySelector('[data-move]');
@@ -674,7 +689,7 @@ async function renderIndexedDbGroups(){
              <span style="color:#84909f"> • ${f.rows.length.toLocaleString('it-IT')} candele • ${fmtRange(f.rows)}</span>
            </div>
            <div class="fileRowActions">
-             <button class="miniBtn del" data-del="${f.id}" type="button">✕ Rimuovi</button>
+             <button class="miniBtn del" data-del="${f.id}" data-asset="${asset}" data-filename="${f.fileName}" type="button">✕ Rimuovi</button>
            </div>
          </div>`).join('')}
      </div>
@@ -689,6 +704,7 @@ async function renderIndexedDbGroups(){
    btn.addEventListener('click', async (e)=>{
      e.stopPropagation();
      await libDelete(btn.dataset.del);
+     waitForFxbtStorage().then(fs=>fs.deleteFile(btn.dataset.asset,btn.dataset.filename));
      renderIndexedDbGroups();
    });
  });
