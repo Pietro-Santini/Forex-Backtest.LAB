@@ -115,6 +115,12 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 @keyframes shakeInsufficient{0%,100%{transform:translateX(0)}25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
 .posTable{width:100%;border-collapse:collapse;font-size:12px}.posTable th,.posTable td{padding:6px;border-bottom:1px solid #202832;text-align:left}.posTable th{color:#8290a0}
 .posTable tr.focused td{background:#132018}
+/* Riga del Trade Journal relativa a un asset diverso da quello attualmente selezionato:
+   leggermente attenuata, per distinguerla a colpo d'occhio dalle operazioni dell'asset
+   corrente (restano comunque cliccabili con "📍 Vai a grafico", che passerà all'asset giusto). */
+tr.otherAssetRow td{opacity:.6}
+tr.otherAssetRow td:last-child{opacity:1}
+
 .miniBtn{width:auto;padding:5px 9px;font-size:11px;font-weight:600;margin-right:5px}
 .marginFree{color:#2fbf71}.marginTight{color:#e0b552}.marginNeg{color:#e05252}
 .colorPick{width:44px;height:38px;padding:2px;flex:none}
@@ -139,10 +145,12 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 .btnWithHint{display:flex;align-items:center;gap:8px}
 .btnWithHint>button{flex:1}
 /* ---- Overlay "Caricamento in corso…" (popup con rotellina, invece di far freezare la pagina) ---- */
+/* Le stesse regole valgono anche per #auth-check-overlay (schermata iniziale di verifica
+   accesso), così mostra sempre la stessa rotellina invece del testo "Verifica accesso in corso...". */
 #globalLoadingOverlay{position:fixed;inset:0;background:rgba(6,9,13,.72);z-index:999;display:none;align-items:center;justify-content:center;backdrop-filter:blur(1px)}
-#globalLoadingOverlay .loadingBox{display:flex;flex-direction:column;align-items:center;gap:14px;background:#111720;border:1px solid #202832;border-radius:12px;padding:26px 34px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
-#globalLoadingOverlay .loadingSpinner{width:38px;height:38px;border:4px solid #202832;border-top-color:#3ea6ff;border-radius:50%;animation:fxbtSpin .8s linear infinite}
-#globalLoadingOverlay .loadingText{color:#e8edf3;font-size:13px;font-weight:600}
+#globalLoadingOverlay .loadingBox,#auth-check-overlay .loadingBox{display:flex;flex-direction:column;align-items:center;gap:14px;background:#111720;border:1px solid #202832;border-radius:12px;padding:26px 34px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#globalLoadingOverlay .loadingSpinner,#auth-check-overlay .loadingSpinner{width:38px;height:38px;border:4px solid #202832;border-top-color:#3ea6ff;border-radius:50%;animation:fxbtSpin .8s linear infinite}
+#globalLoadingOverlay .loadingText,#auth-check-overlay .loadingText{color:#e8edf3;font-size:13px;font-weight:600}
 @keyframes fxbtSpin{to{transform:rotate(360deg)}}
 </style>
 </head>
@@ -154,7 +162,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
      =================================================================== -->
 <div id="auth-check-overlay" style="position:fixed;inset:0;background:#0b0f14;color:#e8edf3;
   display:flex;align-items:center;justify-content:center;z-index:99999;font-family:Inter,Arial,sans-serif">
-  Verifica accesso in corso...
+  <div class="loadingBox"><div class="loadingSpinner"></div><div class="loadingText">Caricamento pagina home…</div></div>
 </div>
 
 <script type="module">
@@ -582,7 +590,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 
 <div class="panel">
  <div class="label">Trade Journal</div>
- <table><thead><tr><th>#</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
+ <table><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
  <tbody id="journal"></tbody></table>
 </div>
 </main>
@@ -617,7 +625,17 @@ let positionsVisible=true;
 // rettangolo semitrasparente dall'apertura alla chiusura + casella con durata/pip/R:R.
 // Resta impostata finché non si va a un altro trade o non si ricarica/reimposta il grafico.
 let highlightedTrade=null;
-// ===================== SALVATAGGIO AUTOMATICO DELLA SESSIONE =====================
+// ===================== CONTO SEPARATO PER OGNI ASSET =====================
+// Ogni asset (EUR/USD, XAU/USD, ecc.) ha il proprio "conto": posizioni aperte, ordini
+// pendenti, posizione attiva ed equity. Cambiando ASSET questi dati NON vengono azzerati:
+// quello dell'asset che si abbandona viene messo da parte qui, e quello dell'asset scelto
+// (se già usato in passato) viene ripristinato. Il Trade Journal (`trades`), invece, resta
+// condiviso fra tutti gli asset (ogni trade porta con sé il proprio campo `asset`), così da
+// poter vedere e riaprire a grafico un'operazione passata anche di uno strumento diverso da
+// quello attualmente selezionato (vedi "📍 Vai a grafico").
+let assetTradingStates={};
+let currentAssetKey='';
+
 // Tutto lo stato della dashboard (CSV caricato, trade, posizioni, disegni, indicatori,
 // impostazioni della UI) viene salvato in IndexedDB, così chiudendo/riaprendo la scheda
 // si ritrova tutto com'era. Usiamo IndexedDB (non localStorage) perché il CSV storico può
@@ -703,6 +721,9 @@ async function saveLightStateNow(){
  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
  if(!baseRows.length)return;
  const ok=await idbPut('state',collectLightSessionState());
+ // Sincronizza anche il conto dell'asset attivo nella mappa per-asset, così il progresso
+ // resta salvato anche se il browser si chiude prima di cambiare ASSET.
+ if(currentAssetKey)await saveAssetTradingStates();
  const el=$('autosaveStatus');
  if(el)el.textContent=ok?('Sessione salvata • '+new Date().toLocaleTimeString('it-IT')):'⚠️ Salvataggio non riuscito';
 }
@@ -1835,9 +1856,61 @@ async function getAssetLibraryFiles(asset){
 // Se in libreria ci sono CSV per quell'asset, li carica subito sul grafico (sostituendo la
 // libreria CSV corrente, dato che un altro asset ha candele non confrontabili). Se non ce ne
 // sono in nessuna delle due, lascia tutto com'è e lo segnala nello status.
+// Salva lo stato del conto (posizioni, posizione attiva, ordini pendenti, equity) di un
+// asset dentro la mappa `assetTradingStates`, PRIMA di passare a un altro asset. Copia in
+// modo indipendente (deep clone) così modifiche successive alle variabili live non alterano
+// per errore quanto già salvato.
+function captureCurrentTradingStateInto(map,assetKey){
+ if(!assetKey)return;
+ map[assetKey]={
+   positions:JSON.parse(JSON.stringify(positions)),
+   active:active?JSON.parse(JSON.stringify(active)):null,
+   pendingOrders:JSON.parse(JSON.stringify(pendingOrders)),
+   equity:equity.slice()
+ };
+}
+// Ripristina nelle variabili live il conto salvato per un asset (o parte da un conto vuoto
+// se quell'asset non è mai stato usato prima). NON tocca `trades`, che resta sempre globale.
+function loadTradingStateForAsset(assetKey){
+ const st=assetTradingStates[assetKey];
+ if(st){
+   positions=JSON.parse(JSON.stringify(st.positions||[]));
+   active=st.active?JSON.parse(JSON.stringify(st.active)):null;
+   pendingOrders=JSON.parse(JSON.stringify(st.pendingOrders||[]));
+   equity=(st.equity&&st.equity.length)?st.equity.slice():[num($('capital').value)||10000];
+ }else{
+   positions=[]; active=null; pendingOrders=[]; equity=[num($('capital').value)||10000];
+ }
+}
+// Persiste su IndexedDB la mappa dei conti di tutti gli asset (sincronizzando prima quello
+// attualmente attivo, che vive nelle variabili live e non nella mappa finché non si cambia
+// asset).
+async function saveAssetTradingStates(){
+ if(currentAssetKey)captureCurrentTradingStateInto(assetTradingStates,currentAssetKey);
+ await idbPut('assetTradingStates',assetTradingStates);
+}
+// Reset "leggero" usato quando si cambia ASSET: riporta la VISTA del grafico allo stato
+// iniziale (prima candela, zoom, evidenziazioni) esattamente come reset(), ma SENZA toccare
+// posizioni/ordini pendenti/equity (già gestiti da loadTradingStateForAsset) né il Trade
+// Journal (che resta condiviso fra tutti gli asset).
+function resetChartViewForAssetSwitch(){
+ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ idx=Math.min(0,rows.length-1);
+ masterTime=rows.length?closeTimeOf(rows[idx]):null;
+ viewEnd=idx; tradeSLLine=null; tradeTPLine=null;
+ placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
+ priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
+ viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ update(); draw();
+}
 async function autoLoadAssetLibrary(asset){
  if(!asset)return;
  await withLoadingOverlay('Caricamento CSV storici da libreria…', async()=>{
+   // Metti da parte il conto dell'asset che si sta abbandonando (se diverso da quello nuovo),
+   // così restano intatte le sue posizioni/ordini pendenti/equity per quando ci si tornerà.
+   if(currentAssetKey&&currentAssetKey!==asset){
+     captureCurrentTradingStateInto(assetTradingStates,currentAssetKey);
+   }
    let files=await getAssetFolderFiles(asset);
    const fromFolder=!!(files&&files.length);
    if(!fromFolder){
@@ -1845,8 +1918,23 @@ async function autoLoadAssetLibrary(asset){
      files=legacy.map(f=>({id:f.id,name:f.fileName,addedAt:f.addedAt,
        rows:f.rows.map(a=>({date:a[0],open:a[1],high:a[2],low:a[3],close:a[4],volume:a[5]}))}));
    }
+   currentAssetKey=asset;
+   // Ripristina il conto (posizioni/ordini pendenti/equity) proprio di QUESTO asset: se è la
+   // prima volta che lo si usa parte vuoto, altrimenti torna esattamente come lo si era
+   // lasciato l'ultima volta. Il Trade Journal (`trades`) non viene mai toccato qui: resta
+   // sempre visibile con le operazioni di TUTTI gli asset (vedi jumpToTradeOnChart).
+   loadTradingStateForAsset(asset);
    if(!files.length){
-     $('status').textContent = `Nessun CSV in libreria per ${asset}. Aggiungine da "📚 Libreria storici CSV per asset".`;
+     rows=[];baseRows=[];csvLibrary=[];
+     renderCsvLibraryList();
+     updateFileBtnLabel();
+     $('fileName').textContent='';
+     drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+     historyUndo=[];historyRedo=[];
+     resetChartViewForAssetSwitch();
+     saveAssetTradingStates();
+     saveLightStateNow();
+     $('status').textContent = `Nessun CSV in libreria per ${asset}. Aggiungine da "📚 Libreria storici CSV per asset".`+(positions.length||pendingOrders.length?` Conto di ${asset} ripristinato: ${positions.length} posizion${positions.length===1?'e':'i'} aperta/e, ${pendingOrders.length} ordine/i pendente/i.`:'');
      return;
    }
    csvLibrary = files;
@@ -1858,10 +1946,11 @@ async function autoLoadAssetLibrary(asset){
    $('fileName').textContent=csvLibrary.length+' file • '+rows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
    drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
-   reset();
+   resetChartViewForAssetSwitch();
    saveCsvNow();
+   saveAssetTradingStates();
    saveLightStateNow();
-   $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fromFolder?' (cartella di progetto collegata)':''}.`;
+   $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fromFolder?' (cartella di progetto collegata)':''}.`+(positions.length||pendingOrders.length?` Conto di ${asset} ripristinato: ${positions.length} posizion${positions.length===1?'e':'i'} aperta/e, ${pendingOrders.length} ordine/i pendente/i.`:'');
  });
 }
 // ============== SALVATAGGIO DEI CSV DIRETTAMENTE NEL FILE .HTML ==============
@@ -1975,7 +2064,13 @@ function reset(){
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
  idx=Math.min(0,rows.length-1);
  masterTime=rows.length?closeTimeOf(rows[idx]):null;
- viewEnd=idx; positions=[]; active=null; tradeSLLine=null; tradeTPLine=null; pendingOrders=[]; trades=[]; equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ viewEnd=idx; positions=[]; active=null; tradeSLLine=null; tradeTPLine=null; pendingOrders=[];
+ // Il RESET manuale azzera SOLO il conto e le operazioni dell'asset attualmente selezionato:
+ // le operazioni già registrate su altri asset restano nel Trade Journal (condiviso fra
+ // tutti gli asset, vedi jumpToTradeOnChart) e il loro conto separato non viene toccato.
+ trades=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)!==currentAssetKey):[];
+ if(currentAssetKey)delete assetTradingStates[currentAssetKey];
+ equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
  update(); draw();
  $('status').textContent=rows.length?`Dataset pronto: ${rows.length.toLocaleString('it-IT')} candele. La prima candela è visibile.`:'Carica il CSV per iniziare.';
 }
@@ -2025,22 +2120,27 @@ function riskRewardLabel(entry,sl,tp){
 function update(){
  updateLivePL();
  refreshRiskSuggestion();
- const base=num($('capital').value)||10000, pl=trades.reduce((s,t)=>s+t.pl,0), cap=base+pl;
- const wins=trades.filter(t=>t.pl>0), losses=trades.filter(t=>t.pl<0), gp=wins.reduce((s,t)=>s+t.pl,0), gl=-losses.reduce((s,t)=>s+t.pl,0);
+ // Le metriche del riquadro conto (capitale, P/L, winrate, pip, ecc.) riguardano SOLO
+ // l'asset attualmente selezionato: ogni strumento ha il proprio conto separato. Il Trade
+ // Journal più sotto, invece, resta un elenco UNICO con le operazioni di TUTTI gli asset
+ // (serve per poterle riaprire a grafico anche cambiando strumento, vedi jumpToTradeOnChart).
+ const assetTrades=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)===currentAssetKey):trades;
+ const base=num($('capital').value)||10000, pl=assetTrades.reduce((s,t)=>s+t.pl,0), cap=base+pl;
+ const wins=assetTrades.filter(t=>t.pl>0), losses=assetTrades.filter(t=>t.pl<0), gp=wins.reduce((s,t)=>s+t.pl,0), gl=-losses.reduce((s,t)=>s+t.pl,0);
  let peak=base,dd=0; equity.forEach(e=>{peak=Math.max(peak,e);dd=Math.max(dd,(peak-e)/peak*100)});
- const last=trades.length?trades[trades.length-1]:null;
+ const last=assetTrades.length?assetTrades[assetTrades.length-1]:null;
  $('mLast').textContent=last?((last.pl>=0?'+':'')+euro(last.pl)):'—';
  $('mLast').className='value '+(last?(last.pl>=0?'liveProfit':'liveLoss'):'');
  $('mCapital').textContent=euro(cap);$('mPL').textContent=euro(pl);
- $('mWR').textContent=trades.length?(wins.length/trades.length*100).toFixed(1)+'%':'—';
- $('mLR').textContent=trades.length?(losses.length/trades.length*100).toFixed(1)+'%':'—';
+ $('mWR').textContent=assetTrades.length?(wins.length/assetTrades.length*100).toFixed(1)+'%':'—';
+ $('mLR').textContent=assetTrades.length?(losses.length/assetTrades.length*100).toFixed(1)+'%':'—';
  const pctTotal=base?(pl/base*100):0;
  $('mPctTotal').textContent=(pctTotal>=0?'+':'')+pctTotal.toFixed(2)+'%';
- $('mPctTotal').className='value '+(trades.length?(pctTotal>=0?'liveProfit':'liveLoss'):'');
- $('mTrades').textContent=trades.length;
- const totalPips=Math.round(trades.reduce((s,t)=>s+(t.pips||0),0)*10)/10;
+ $('mPctTotal').className='value '+(assetTrades.length?(pctTotal>=0?'liveProfit':'liveLoss'):'');
+ $('mTrades').textContent=assetTrades.length;
+ const totalPips=Math.round(assetTrades.reduce((s,t)=>s+(t.pips||0),0)*10)/10;
  $('mPips').textContent=(totalPips>=0?'+':'')+totalPips.toFixed(1);
- $('mPips').className='value '+(trades.length?(totalPips>=0?'liveProfit':'liveLoss'):'');
+ $('mPips').className='value '+(assetTrades.length?(totalPips>=0?'liveProfit':'liveLoss'):'');
 
  // Margine libero: si aggiorna in tempo reale con il P/L fluttuante di tutte le posizioni aperte.
  const fm=freeMargin(), eq=equityNow(), used=usedMargin();
@@ -2075,12 +2175,19 @@ function update(){
    ).join('');
  }
 
- $('journal').innerHTML=trades.map((t,i)=>`<tr><td>${i+1}</td><td>${t.side}</td><td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.sl)}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
+ // Trade Journal: elenco GLOBALE (tutti gli asset), ordinato per come sono stati chiusi.
+ // La colonna "Asset" identifica a colpo d'occhio a quale strumento appartiene ogni riga,
+ // dato che "📍 Vai a grafico" può ora aprire un asset diverso da quello corrente.
+ $('journal').innerHTML=trades.map((t,i)=>{
+   const tAsset=t.asset||'—';
+   const otherAsset=t.asset&&currentAssetKey&&t.asset!==currentAssetKey;
+   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${t.side}</td><td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.sl)}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+(t.pct!=null?t.pct.toFixed(2):'0.00')}%</td>`+
    `<td>${euro(t.account)}</td>`+
-   `<td><button class="miniBtn" data-jumptrade="${i}" title="Mostra a grafico dove è stata aperta questa operazione">📍 Vai a grafico</button></td></tr>`).join('');
+   `<td><button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button></td></tr>`;
+ }).join('');
  scheduleSave();
 }
 let visibleCount=80; // numero di candele visibili: illimitato, gestito internamente (nessun campo in UI)
@@ -2154,6 +2261,10 @@ function collectTradeLevelPrices(data){
  add(num($('tpPending')?.value));
  pendingOrders.forEach(p=>{ add(p.entry); add(p.sl); add(p.tp); });
  positions.forEach(p=>{ add(p.sl); add(p.tp); });
+ // Solo i trade chiusi DELL'ASSET CORRENTE: il Trade Journal è condiviso fra tutti gli asset,
+ // ma un vecchio trade di un altro strumento (prezzi completamente diversi, es. oro vs
+ // EUR/USD) non deve mai influenzare la scala verticale del grafico attuale.
+ const closedTradesForAsset=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)===currentAssetKey):trades;
  // Trade GIÀ CHIUSI: li includiamo SOLO se apertura o chiusura ricadono nell'intervallo di
  // candele passato in `data` (di norma il breve range recente usato per il fit verticale).
  // Questo è IL LIMITE FORZATO richiesto: un trade vecchio, lontano nel tempo rispetto a dove
@@ -2164,16 +2275,16 @@ function collectTradeLevelPrices(data){
  if(data && data.length){
    const tStart=parseDateTime(data[0].date), tEnd=parseDateTime(data[data.length-1].date);
    if(Number.isFinite(tStart) && Number.isFinite(tEnd)){
-     trades.forEach(t=>{
+     closedTradesForAsset.forEach(t=>{
        const openT=openReferenceTimeForPos(t), closeT=closeReferenceTimeForTrade(t);
        const overlaps=(Number.isFinite(openT)&&openT>=tStart&&openT<=tEnd) || (Number.isFinite(closeT)&&closeT>=tStart&&closeT<=tEnd);
        if(overlaps){ add(t.entry); add(t.exit); }
      });
    }else{
-     trades.forEach(t=>{ add(t.entry); add(t.exit); });
+     closedTradesForAsset.forEach(t=>{ add(t.entry); add(t.exit); });
    }
  }else{
-   trades.forEach(t=>{ add(t.entry); add(t.exit); });
+   closedTradesForAsset.forEach(t=>{ add(t.entry); add(t.exit); });
  }
  return vals;
 }
@@ -2958,12 +3069,16 @@ function drawTradeArrow(ctx,px,py,direction,color){
 // trade è andato a buon fine (profitto), rossa altrimenti.
 const TRADE_ARROW_BLUE='#3b82f6', TRADE_ARROW_RED='#e0524f';
 function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
- if(!trades.length)return;
+ // Solo i trade CHIUSI dell'asset attualmente a grafico: il Trade Journal è condiviso fra
+ // tutti gli asset, ma disegnare sul grafico corrente anche i marker di operazioni di un
+ // altro strumento (con prezzi/tempi non comparabili) sarebbe fuorviante.
+ const assetTrades=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)===currentAssetKey):trades;
+ if(!assetTrades.length)return;
  // Converte un indice ASSOLUTO nell'array `rows` in coordinata x sul canvas. NB: la x()
  // usata altrove in draw() si aspetta invece un indice LOCALE relativo a dataStart — usare
  // qui la stessa formula ma con l'indice assoluto (ri-start anziché dataStart+i-start).
  const xForIndex=ri=>pad.l+(ri-start+.5)*cw/n;
- trades.forEach(t=>{
+ assetTrades.forEach(t=>{
    if(t.entry==null||t.exit==null)return;
    const openTime=openReferenceTimeForPos(t), closeTime=closeReferenceTimeForTrade(t);
    const openIdx=rowIndexContainingTime(openTime), closeIdx=rowIndexContainingTime(closeTime);
@@ -4365,7 +4480,10 @@ function zoneHandleHit(clientX,clientY){
 }
 
 function baseCapital(){ return num($('capital').value)||10000; }
-function closedPL(){ return trades.reduce((s,t)=>s+t.pl,0); }
+function closedPL(){
+ const t=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)===currentAssetKey):trades;
+ return t.reduce((s,t)=>s+t.pl,0);
+}
 function floatingPL(){
  const price=currentPrice(); if(price==null)return 0;
  return positions.reduce((s,p)=>s+calculateForexPL(p.side,p.entry,price,p.lots),0);
@@ -4648,8 +4766,12 @@ function closeTrade(reason,price,pos){
  const pl=calculateForexPL(pos.side,pos.entry,price,lots);
  const pips=pipsFromPrice(pos.side,pos.entry,price);
  // % guadagno/perdita rispetto al saldo del conto immediatamente prima di questa chiusura
- // (capitale iniziale + somma dei P/L dei trade già chiusi in precedenza).
- const balanceBefore=(num($('capital').value)||10000)+trades.reduce((s,t)=>s+t.pl,0);
+ // (capitale iniziale + somma dei P/L dei trade già chiusi in precedenza). Il saldo è
+ // quello del SOLO asset a cui appartiene questa posizione (ogni asset ha il proprio conto
+ // separato), non la somma di tutti gli asset nel Trade Journal condiviso.
+ const posAsset=pos.asset||$('market')?.value||'';
+ const priorAssetTrades=posAsset?trades.filter(t=>(t.asset||posAsset)===posAsset):trades;
+ const balanceBefore=(num($('capital').value)||10000)+priorAssetTrades.reduce((s,t)=>s+t.pl,0);
  const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
  // Conto € cumulativo: saldo del conto subito dopo la chiusura di questa operazione.
  const account=balanceBefore+pl;
@@ -4678,7 +4800,9 @@ function closeTrade(reason,price,pos){
  }
  syncTradeLevels();
  refreshTradeLevelUI();
- equity.push((num($('capital').value)||10000)+trades.reduce((s,t)=>s+t.pl,0));
+ // "account" (calcolato sopra con priorAssetTrades) è già il saldo corretto isolato per
+ // l'asset di questa posizione: lo riusiamo qui invece di ricalcolare su TUTTI i trades.
+ equity.push(account);
  update();
 }
 function closeAllPositions(reason){
@@ -4689,10 +4813,21 @@ function closeAllPositions(reason){
 // funziona anche se nel frattempo hai cambiato timeframe) e adatta automaticamente sia
 // lo zoom orizzontale (numero di candele visibili) sia la scala verticale dei prezzi,
 // così l'operazione risulta sempre ben leggibile qualunque fosse lo stato del grafico prima.
-function jumpToTradeOnChart(tradeIndex){
+async function jumpToTradeOnChart(tradeIndex){
  const t=trades[tradeIndex];
  if(!t)return;
- if(!rows.length){$('status').textContent='Nessun dato caricato.';return;}
+ // Se il trade appartiene a un asset diverso da quello attualmente selezionato, passiamo
+ // prima automaticamente a quell'ASSET (caricandone lo storico e il conto proprio, senza
+ // toccare quello dell'asset che si lascia — vedi autoLoadAssetLibrary): il Trade Journal è
+ // condiviso fra tutti gli asset proprio per permettere questo salto diretto. `trades` non
+ // viene mai svuotato al cambio asset, quindi lo stesso `tradeIndex` resta valido dopo.
+ const currentAsset=$('market')?.value||'';
+ if(t.asset && currentAsset!==t.asset){
+   if($('market'))$('market').value=t.asset;
+   applyInstrument();
+   await autoLoadAssetLibrary(t.asset);
+ }
+ if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${t.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'operazione a grafico.`;return;}
  const openIdx=rowIndexContainingTime(openReferenceTimeForPos(t));
  const closeIdx=rowIndexContainingTime(closeReferenceTimeForTrade(t));
  if(openIdx==null){$('status').textContent='Impossibile individuare quella candela nello storico attuale.';return;}
@@ -4730,7 +4865,7 @@ function jumpToTradeOnChart(tradeIndex){
  const rr=(t.sl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
  highlightedTrade={tradeIndex,openIdx,closeIdx:hasClose?closeIdx:null,entry:t.entry,exit:t.exit,side:t.side,pl:t.pl,pips:t.pips,rr,durationMs};
  draw();update();
- $('status').textContent=`Vista spostata sull'operazione #${tradeIndex+1} (${t.side} ${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}).`;
+ $('status').textContent=`Vista spostata sull'operazione #${tradeIndex+1}${t.asset?' ('+t.asset+')':''} (${t.side} ${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}).`;
 }
 function fmtDurationMs(ms){
  if(!Number.isFinite(ms))return '—';
@@ -4793,6 +4928,7 @@ function activatePendingOrder(p){
  }
  const pos={
    id:Date.now()+Math.random(),
+   asset:$('market')?.value||'',
    side:p.side,entry:p.entry,sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
    lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(rows[idx].date),
    openTF:currentTF, // timeframe attivo al momento dell'apertura: serve per ancorare le frecce
@@ -4998,6 +5134,7 @@ function openMarketTrade(side){
 
  const pos={
    id:Date.now()+Math.random(),
+   asset:$('market')?.value||'',
    side,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,origin:'MARKET',
    lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(market.date),
    openTF:currentTF, // vedi nota in activatePendingOrder()
@@ -5050,14 +5187,14 @@ $('openPositions').addEventListener('click',e=>{
    if(pos){const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();}
  }
 });
-$('journal').addEventListener('click',e=>{
+$('journal').addEventListener('click',async e=>{
  const jumpIdx=e.target.getAttribute('data-jumptrade');
  if(jumpIdx==null)return;
- jumpToTradeOnChart(Number(jumpIdx));
  // Come i pulsanti BUY/SELL e SET SL/TP/ENTRY, anche "Vai a grafico" porta subito la vista
  // sul grafico (utile soprattutto su mobile, dove il Trade Journal è più in basso nella
  // pagina e altrimenti bisognerebbe scorrere su a mano per vedere il risultato del click).
  scrollToChart();
+ await jumpToTradeOnChart(Number(jumpIdx));
 });
 $('next').onclick=forward;
 $('back').onclick=()=>{
@@ -6217,7 +6354,10 @@ $('capital').addEventListener('input',()=>{
  // partenza usato per equity/drawdown. Una volta che c'è storico non lo tocchiamo più: il
  // nuovo valore si applicherà comunque da subito a saldo, margine libero e P/L (calcolati
  // sempre a partire dal valore corrente del campo), preservando lo storico già registrato.
- if(!trades.length && !positions.length)equity=[num($('capital').value)||10000];
+ // "trades" è il Trade Journal globale (tutti gli asset): qui dobbiamo verificare se è
+ // l'asset CORRENTE ad avere già storico, non l'intero journal condiviso.
+ const assetHasTrades=currentAssetKey?trades.some(t=>(t.asset||currentAssetKey)===currentAssetKey):trades.length>0;
+ if(!assetHasTrades && !positions.length)equity=[num($('capital').value)||10000];
  update();
 });
 $('sl').addEventListener('input',()=>{ if(!active)refreshRiskSuggestion(); });
@@ -6436,7 +6576,10 @@ $('clearSavedSessionBtn').addEventListener('click',async()=>{
 });
 
 (async function initSession(){
- let [savedCsv,savedState]=await Promise.all([idbGet('csv'),idbGet('state')]);
+ let [savedCsv,savedState,savedAssetStates]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetTradingStates')]);
+ // Mappa dei conti separati per ogni asset (posizioni/ordini pendenti/equity di ciascuno):
+ // viene ripristinata subito così, appena si cambierà ASSET, si ritroverà tutto com'era.
+ assetTradingStates=savedAssetStates||{};
  // Se IndexedDB non ha nulla (browser/dispositivo nuovo, dati cancellati, ecc.) ma questa
  // stessa pagina .html porta con sé dei CSV incorporati direttamente nel codice (salvati in
  // precedenza con "💾 Salva CSV nel file" o "⬇️ Scarica copia con CSV"), li usiamo come seme
@@ -6482,6 +6625,9 @@ $('clearSavedSessionBtn').addEventListener('click',async()=>{
        const v=savedState.fields&&savedState.fields[id];
        if(v!==undefined&&$(id))$(id).value=v; // riapplica i valori salvati sopra applyInstrument()
      });
+     // L'asset attivo al momento del salvataggio: positions/active/pendingOrders/equity
+     // ripristinati sopra da applyLightSessionState() appartengono proprio a questo asset.
+     currentAssetKey=$('market')?.value||'';
      update(); draw(); refreshRiskSuggestion(); refreshRiskSuggestionPending();
    });
    $('status').textContent=`Sessione ripristinata: ${rows.length.toLocaleString('it-IT')} candele, ${trades.length} trade nel journal.`;
@@ -6489,6 +6635,7 @@ $('clearSavedSessionBtn').addEventListener('click',async()=>{
  }else{
    updateFileBtnLabel();
    applyInstrument();
+   currentAssetKey=$('market')?.value||'';
  }
 })();
 </script>
