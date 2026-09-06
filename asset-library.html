@@ -395,7 +395,35 @@ document.getElementById('grantFolderBtn').addEventListener('click', async ()=>{
    setFolderStatus('Permesso non concesso. Puoi ricollegare la stessa cartella (o un\'altra) col pulsante qui sopra.');
  }
 });
-document.getElementById('syncFolderBtn').addEventListener('click', ()=>syncLibraryFolder());
+// STEP 0c-1b — quando premi "Sincronizza ora", oltre a riordinare i file nella cartella
+// controlliamo anche che siano tutti presenti su Firebase Storage: quelli mancanti (es.
+// aggiunti prima di questo step, o un upload interrotto uscendo troppo presto dalla pagina)
+// vengono caricati automaticamente adesso, uno alla volta, con la stessa percentuale visibile
+// già usata per i caricamenti normali.
+async function pushMissingLocalFilesToCloud(){
+ if(!libraryRootHandle)return;
+ const fs=await waitForFxbtStorage();
+ if(!fs.uid)return;
+ const statusEl=document.getElementById('cloudUploadStatus');
+ const cloudKeys=new Set((await fs.listFiles()).map(cf=>cf.asset+'|'+cf.fileName));
+ const missing=[];
+ for(const asset of Object.keys(libraryGroupsCache)){
+   for(const entry of libraryGroupsCache[asset]){
+     if(!cloudKeys.has(asset+'|'+entry.name)) missing.push({asset,entry});
+   }
+ }
+ if(!missing.length)return;
+ if(statusEl) statusEl.textContent=`☁️ Trovati ${missing.length} file locali non ancora sul cloud, li carico…`;
+ for(const {asset,entry} of missing){
+   const file=await entry.handle.getFile();
+   await fs.uploadFile(asset,entry.name,file); // aggiorna già da sola lo stato con la percentuale
+ }
+}
+
+document.getElementById('syncFolderBtn').addEventListener('click', async ()=>{
+ await syncLibraryFolder();
+ await pushMissingLocalFilesToCloud();
+});
 
 // ---- Utility per spostare/creare file dentro le sottocartelle ----
 async function fileExistsInDir(dirHandle,name){
