@@ -635,6 +635,21 @@ let highlightedTrade=null;
 // condiviso fra tutti gli asset) può mostrare a quale strumento appartiene ciascuna riga e
 // "📍 Vai a grafico" può cambiare asset automaticamente per mostrarla.
 let currentAssetKey='';
+// ===================== MEMORIA DI NAVIGAZIONE PER ASSET (solo vista grafico) =====================
+// A differenza del conto (sopra, unico e globale), la POSIZIONE nel tempo a cui si sta
+// guardando il grafico (candela corrente, timeframe, zoom) è naturalmente diversa per ogni
+// asset: quando si lascia un asset per passare a un altro, la sua vista va "messa in pausa"
+// esattamente dov'era, e ripristinata tale e quale quando ci si torna sopra — mai riportata
+// alla prima candela come se fosse la prima volta (a meno che lo sia davvero).
+let assetChartViews={};
+function captureChartViewInto(map,assetKey){
+ if(!assetKey)return;
+ map[assetKey]={masterTime,currentTF,viewEnd,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+}
+async function saveAssetChartViews(){
+ if(currentAssetKey)captureChartViewInto(assetChartViews,currentAssetKey);
+ await idbPut('assetChartViews',assetChartViews);
+}
 
 // Tutto lo stato della dashboard (CSV caricato, trade, posizioni, disegni, indicatori,
 // impostazioni della UI) viene salvato in IndexedDB, così chiudendo/riaprendo la scheda
@@ -755,6 +770,18 @@ function applyLightSessionState(state){
  positionsVisible=state.positionsVisible!==false;
  positions=state.positions||[]; active=state.active||null;
  pendingOrders=state.pendingOrders||[]; trades=state.trades||[];
+ // MIGRAZIONE una tantum: sessioni salvate da versioni precedenti a questa (prima che ogni
+ // posizione/ordine/trade portasse con sé il proprio campo "asset") non hanno quel tag.
+ // Senza un asset esplicito, andrebbero trattate per errore come "dell'asset corrente"
+ // qualunque asset si selezioni, causando falsi SL/TP/margin-call non appena si cambia
+ // strumento. Le tagghiamo qui, una sola volta, con l'asset che risulta selezionato in
+ // QUESTA sessione salvata (l'unico dato storico disponibile per dedurlo).
+ const legacyAsset=(state.fields&&state.fields.market)||'';
+ if(legacyAsset){
+   positions.forEach(p=>{ if(!p.asset)p.asset=legacyAsset; });
+   pendingOrders.forEach(p=>{ if(!p.asset)p.asset=legacyAsset; });
+   trades.forEach(t=>{ if(!t.asset)t.asset=legacyAsset; });
+ }
  equity=state.equity&&state.equity.length?state.equity:[num($('capital').value)||10000];
  drawings=state.drawings||[];
  activeIndicators=(state.activeIndicators||[]).map(ind=>({...ind,calc:{ref:null,builtTo:-1}}));
@@ -1859,6 +1886,9 @@ async function getAssetLibraryFiles(asset){
 // L'unica cosa che cambia al cambio ASSET sono i parametri dello strumento (decimali prezzo,
 // decimali per il pip) e, ovviamente, la serie storica (CSV) mostrata a grafico.
 function resetChartViewForAssetSwitch(){
+ // Sostituita da applyChartViewForAsset(asset), che fa la stessa cosa MA ripristinando la
+ // vista salvata per quell'asset se già visitato in questa sessione (vedi sotto). Tenuta qui
+ // solo come funzione "fallback senza memoria" per compatibilità con `asset` non passato.
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
  idx=Math.min(0,rows.length-1);
  masterTime=rows.length?closeTimeOf(rows[idx]):null;
@@ -1868,9 +1898,49 @@ function resetChartViewForAssetSwitch(){
  viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
  update(); draw();
 }
+// Ripristina la vista del grafico (candela corrente, timeframe, zoom orizzontale/verticale)
+// per l'asset appena selezionato: se questo asset era già stato visitato in questa sessione
+// (assetChartViews[asset] esiste), torna ESATTAMENTE a dove l'avevamo lasciato — la stessa
+// candela, lo stesso timeframe, lo stesso zoom — invece di ripartire dalla prima candela come
+// se fosse la prima volta. Solo la primissima volta che si visita un asset (nessuna vista
+// salvata) si parte dall'inizio dello storico. NON tocca il conto (posizioni/ordini/equity):
+// quello resta sempre globale, vedi la sezione più sopra.
+function applyChartViewForAsset(asset){
+ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ const saved=assetChartViews[asset];
+ if(saved){
+   currentTF=saved.currentTF||1;
+   masterTime=Number.isFinite(saved.masterTime)?saved.masterTime:null;
+ }else{
+   currentTF=1;
+   masterTime=null; // rebuildRows() la imposta da sola sulla prima candela disponibile
+ }
+ $('tf').value=String(currentTF); if($('tfChart'))$('tfChart').value=String(currentTF);
+ rebuildRows();
+ if(saved){
+   viewEnd=Number.isFinite(saved.viewEnd)?Math.max(0,Math.min(saved.viewEnd,rows.length-1)):idx;
+   followLatest=saved.followLatest!==false;
+   priceZoomFactor=saved.priceZoomFactor||1;
+   viewPriceLo=saved.viewPriceLo??null; viewPriceHi=saved.viewPriceHi??null;
+   autoFitWidth=saved.autoFitWidth!==false;
+   visibleCount=Number.isFinite(saved.visibleCount)?saved.visibleCount:idealVisibleCount();
+ }else{
+   viewEnd=idx;
+   priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
+   viewPriceLo=null; viewPriceHi=null;
+ }
+ tradeSLLine=null; tradeTPLine=null;
+ placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
+ crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ update(); draw();
+}
 async function autoLoadAssetLibrary(asset){
  if(!asset)return;
  await withLoadingOverlay('Caricamento CSV storici da libreria…', async()=>{
+   // Metti da parte la vista del grafico (candela, timeframe, zoom) dell'asset che si lascia,
+   // PRIMA di passare al nuovo: così, tornandoci sopra in futuro, la si ritrova esattamente
+   // dov'era. Il conto (posizioni/ordini/equity) non c'entra qui: resta sempre globale.
+   if(currentAssetKey && currentAssetKey!==asset)captureChartViewInto(assetChartViews,currentAssetKey);
    currentAssetKey=asset;
    // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
    // appartenere all'asset appena selezionato: se quella precedente era di un altro asset,
@@ -1907,8 +1977,9 @@ async function autoLoadAssetLibrary(asset){
      $('fileName').textContent='';
      drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
      historyUndo=[];historyRedo=[];
-     resetChartViewForAssetSwitch();
+     applyChartViewForAsset(asset);
      saveLightStateNow();
+     saveAssetChartViews();
      $('status').textContent = `Nessun CSV in libreria per ${asset}. Aggiungine da "📚 Libreria storici CSV per asset".`;
      return;
    }
@@ -1916,14 +1987,13 @@ async function autoLoadAssetLibrary(asset){
    rebuildBaseRowsFromLibrary();
    renderCsvLibraryList();
    updateFileBtnLabel();
-   currentTF=1; $('tf').value='1'; if($('tfChart'))$('tfChart').value='1';
-   rows=baseRows.slice();
-   $('fileName').textContent=csvLibrary.length+' file • '+rows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
+   $('fileName').textContent=csvLibrary.length+' file • '+baseRows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
    drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
-   resetChartViewForAssetSwitch();
+   applyChartViewForAsset(asset);
    saveCsvNow();
    saveLightStateNow();
+   saveAssetChartViews();
    $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fromFolder?' (cartella di progetto collegata)':''}.`;
  });
 }
@@ -6597,7 +6667,10 @@ $('clearSavedSessionBtn').addEventListener('click',async()=>{
 });
 
 (async function initSession(){
- let [savedCsv,savedState]=await Promise.all([idbGet('csv'),idbGet('state')]);
+ let [savedCsv,savedState,savedChartViews]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews')]);
+ // Mappa delle viste per-asset (candela/timeframe/zoom di ognuno): ripristinata subito così,
+ // al primo cambio ASSET, si ritrova già la posizione lasciata l'ultima volta.
+ assetChartViews=savedChartViews||{};
  // Se IndexedDB non ha nulla (browser/dispositivo nuovo, dati cancellati, ecc.) ma questa
  // stessa pagina .html porta con sé dei CSV incorporati direttamente nel codice (salvati in
  // precedenza con "💾 Salva CSV nel file" o "⬇️ Scarica copia con CSV"), li usiamo come seme
