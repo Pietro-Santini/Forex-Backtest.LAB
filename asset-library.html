@@ -114,6 +114,45 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
  </div>
 
 </main>
+<script type="module">
+  // STEP 0c-1 — ponte verso Firebase Storage per iniziare a sincronizzare la libreria CSV
+  // (solo modalità IndexedDB/fallback di questa pagina). Stesso pattern del ponte fxbtCloud
+  // già usato in index.html/login.html per Firestore: espone window.fxbtStorage con un
+  // .ready (Promise) e un metodo uploadFile() che non blocca né rompe nulla se fallisce.
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getStorage, ref, uploadBytes } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyCz9y-5d9AxqjDtJPbBYyHaUOYRKDGUaO0",
+    authDomain: "forex-backtest-lab.firebaseapp.com",
+    projectId: "forex-backtest-lab",
+    storageBucket: "forex-backtest-lab.firebasestorage.app",
+    messagingSenderId: "808053062225",
+    appId: "1:808053062225:web:7ada623415ae1b1a9d5670",
+    measurementId: "G-Q6K1XXDP8Q"
+  };
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const storage = getStorage(app);
+
+  let resolveReady;
+  window.fxbtStorage = {
+    uid: null,
+    ready: new Promise(res => { resolveReady = res; }),
+    async uploadFile(asset, fileName, file){
+      if(!this.uid) return false;
+      try{
+        await uploadBytes(ref(storage, `users/${this.uid}/library/${asset}/${fileName}`), file);
+        return true;
+      }catch(e){ console.warn('Upload libreria CSV su Storage fallito:', e); return false; }
+    }
+  };
+  onAuthStateChanged(auth, user => {
+    window.fxbtStorage.uid = user ? user.uid : null;
+    resolveReady(window.fxbtStorage);
+  });
+</script>
 <script>
 // ===================== OVERLAY "CARICAMENTO IN CORSO…" =====================
 // Sincronizzare/spostare/leggere molti CSV storici (anche grandi) può richiedere un attimo,
@@ -448,6 +487,17 @@ async function libGetAll(){
  });
 }
 
+// STEP 0c-1 — attende in modo sicuro il ponte verso Firebase Storage (window.fxbtStorage),
+// esposto dal piccolo script module in cima al file, dato che parte in ordine non garantito.
+function waitForFxbtStorage(){
+ return new Promise(resolve=>{
+   if(window.fxbtStorage){ window.fxbtStorage.ready.then(()=>resolve(window.fxbtStorage)); return; }
+   const t=setInterval(()=>{
+     if(window.fxbtStorage){ clearInterval(t); window.fxbtStorage.ready.then(()=>resolve(window.fxbtStorage)); }
+   },30);
+ });
+}
+
 // ================= Upload (va nella cartella collegata se presente, altrimenti in IndexedDB) =================
 document.getElementById('libUploadBtn').addEventListener('click', async ()=>{
  const input=document.getElementById('libFileInput');
@@ -476,6 +526,10 @@ document.getElementById('libUploadBtn').addEventListener('click', async ()=>{
        const record={ id:'lib_'+asset+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), asset, fileName:f.name, addedAt:Date.now(), rows };
        await libPut(record);
        added++;
+       // STEP 0c-1: in più (senza bloccare l'aggiunta né segnalare errore se fallisce/offline)
+       // proviamo a caricare anche il file originale su Firebase Storage legato all'UID —
+       // servirà nello STEP 0c-2 per riscaricarlo su un altro dispositivo.
+       waitForFxbtStorage().then(fs=>fs.uploadFile(asset,f.name,f));
      }
    }
  });
