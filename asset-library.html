@@ -89,7 +89,9 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
   <div class="label">Carica CSV nella libreria</div>
   <div class="status" id="cloudSyncStatus">☁️ Verifica sincronizzazione account…</div>
   <div class="status" id="cloudUploadStatus"></div>
-  <button id="syncCloudLibraryBtn" type="button" style="display:none">🔄 Sincronizza file storici dall'account</button>
+  <div id="cloudDiffList" class="status" style="white-space:pre-line"></div>
+  <button id="checkCloudLibraryBtn" type="button" style="display:none">🔍 Controlla libreria cloud</button>
+  <button id="downloadCloudLibraryBtn" type="button" style="display:none">⬇️ Scarica file nuovi</button>
   <div class="uploadRow">
    <div>
     <div class="label">File CSV (puoi selezionarne più di uno insieme)</div>
@@ -210,7 +212,7 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
     window.fxbtStorage.uid = user ? user.uid : null;
     resolveReady(window.fxbtStorage);
     const el = document.getElementById('cloudSyncStatus');
-    const btn = document.getElementById('syncCloudLibraryBtn');
+    const btn = document.getElementById('checkCloudLibraryBtn');
     if(el) el.textContent = user
       ? '☁️ Sincronizzazione con l\'account attiva.'
       : '⚠️ Non risulti autenticato in questa scheda/pagina: la libreria NON si sincronizza tra dispositivi finché non accedi (index.html → login).';
@@ -764,63 +766,87 @@ async function writeCloudFileIntoDir(targetDirHandle,name,text){
  await writable.close();
 }
 
-async function syncMissingLibraryFromCloud(){
+let pendingCloudDownloads = [];
+
+// FASE 1 — solo controllo: confronta cosa c'è sul cloud con cosa c'è già su questo
+// dispositivo, senza scaricare/scrivere ancora nulla. Mostra il risultato e, se ci sono
+// file nuovi, fa comparire il pulsante di download.
+async function checkCloudLibraryDiff(){
  const fs=await waitForFxbtStorage();
  const statusEl=document.getElementById('cloudUploadStatus');
- if(!fs.uid){ if(statusEl) statusEl.textContent='⚠️ Non sei autenticato: impossibile scaricare dalla libreria cloud.'; return; }
- if(statusEl) statusEl.textContent='☁️ Controllo la libreria cloud…';
+ const diffBox=document.getElementById('cloudDiffList');
+ const downloadBtn=document.getElementById('downloadCloudLibraryBtn');
+ downloadBtn.style.display='none';
+ pendingCloudDownloads=[];
+ if(diffBox)diffBox.textContent='';
+ if(!fs.uid){ if(statusEl)statusEl.textContent='⚠️ Non sei autenticato: impossibile controllare la libreria cloud.'; return; }
+ if(statusEl)statusEl.textContent='☁️ Controllo la libreria cloud…';
  const cloudFiles=await fs.listFiles();
- if(!cloudFiles.length){ if(statusEl) statusEl.textContent='☁️ Nessun file trovato nella libreria cloud per questo account (forse non è ancora salito nulla su Storage).'; return; }
+ if(!cloudFiles.length){ if(statusEl)statusEl.textContent='☁️ Nessun file trovato nella libreria cloud per questo account (forse non è ancora salito nulla su Storage).'; return; }
 
+ const alreadyLocal=[], missing=[];
  if(libraryRootHandle){
    const ok=await verifyDirPermission(libraryRootHandle,'readwrite');
-   if(!ok){ if(statusEl) statusEl.textContent='⚠️ Permesso alla cartella non concesso: download annullato.'; return; }
-   let downloaded=0;
-   await withLoadingOverlay('Scaricamento libreria dal cloud…', async()=>{
-     for(const cf of cloudFiles){
-       if(statusEl) statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
-       const targetDir=await libraryRootHandle.getDirectoryHandle(cf.asset,{create:true});
-       if((await fileSizeInDir(targetDir,cf.fileName))>0)continue; // già presente e non vuoto
-       const text=await fs.downloadFileText(cf.fileRef);
-       if(text==null)continue;
-       await writeCloudFileIntoDir(targetDir,cf.fileName,text);
-       downloaded++;
-     }
-   });
-   if(downloaded)await syncLibraryFolder();
-   if(statusEl) statusEl.textContent = downloaded ? `☁️ Scaricati ${downloaded} file nuovi dalla libreria cloud.` : '☁️ Libreria già aggiornata: nessun file nuovo da scaricare.';
+   if(!ok){ if(statusEl)statusEl.textContent='⚠️ Permesso alla cartella collegata non concesso.'; return; }
+   for(const cf of cloudFiles){
+     const targetDir=await libraryRootHandle.getDirectoryHandle(cf.asset,{create:true});
+     ((await fileSizeInDir(targetDir,cf.fileName))>0 ? alreadyLocal : missing).push(cf);
+   }
  }else{
    const existingKeys=new Set((await libGetAll()).map(r=>r.asset+'|'+r.fileName));
-   let downloaded=0;
-   await withLoadingOverlay('Scaricamento libreria dal cloud…', async()=>{
-     for(const cf of cloudFiles){
-       if(existingKeys.has(cf.asset+'|'+cf.fileName))continue;
-       if(statusEl) statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
-       const text=await fs.downloadFileText(cf.fileRef);
-       if(text==null)continue;
+   for(const cf of cloudFiles){
+     (existingKeys.has(cf.asset+'|'+cf.fileName) ? alreadyLocal : missing).push(cf);
+   }
+ }
+ pendingCloudDownloads=missing;
+ if(statusEl)statusEl.textContent=`☁️ Trovati ${cloudFiles.length} file nel cloud: ${alreadyLocal.length} già presenti su questo dispositivo, ${missing.length} nuovi.`;
+ if(diffBox && missing.length) diffBox.textContent='Nuovi da scaricare:\n'+missing.map(m=>`• ${m.asset}/${m.fileName}`).join('\n');
+ if(missing.length){ downloadBtn.style.display='inline-block'; downloadBtn.textContent=`⬇️ Scarica ${missing.length} file nuovi`; }
+}
+
+// FASE 2 — download vero e proprio, solo dei file individuati alla fase 1, solo quando
+// l'utente lo conferma cliccando il pulsante.
+async function downloadPendingCloudFiles(){
+ if(!pendingCloudDownloads.length)return;
+ const fs=await waitForFxbtStorage();
+ const statusEl=document.getElementById('cloudUploadStatus');
+ const diffBox=document.getElementById('cloudDiffList');
+ let downloaded=0;
+ await withLoadingOverlay('Scaricamento libreria dal cloud…', async()=>{
+   for(const cf of pendingCloudDownloads){
+     if(statusEl)statusEl.textContent=`☁️ Scaricamento "${cf.fileName}" dal cloud…`;
+     const text=await fs.downloadFileText(cf.fileRef);
+     if(text==null){ if(statusEl)statusEl.textContent=`⚠️ Download di "${cf.fileName}" fallito.`; continue; }
+     if(libraryRootHandle){
+       const targetDir=await libraryRootHandle.getDirectoryHandle(cf.asset,{create:true});
+       await writeCloudFileIntoDir(targetDir,cf.fileName,text);
+     }else{
        const rows=parseCsvLib(text);
        if(!rows.length)continue;
        const record={ id:'lib_'+cf.asset+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), asset:cf.asset, fileName:cf.fileName, addedAt:Date.now(), rows };
        await libPut(record);
-       downloaded++;
      }
-   });
-   if(downloaded)await renderLibrary();
-   if(statusEl) statusEl.textContent = downloaded ? `☁️ Scaricati ${downloaded} file nuovi dalla libreria cloud.` : '☁️ Libreria già aggiornata: nessun file nuovo da scaricare.';
- }
+     downloaded++;
+   }
+ });
+ pendingCloudDownloads=[];
+ document.getElementById('downloadCloudLibraryBtn').style.display='none';
+ if(diffBox)diffBox.textContent='';
+ if(libraryRootHandle)await syncLibraryFolder(); else await renderLibrary();
+ if(statusEl)statusEl.textContent=`☁️ Scaricati ${downloaded} file dalla libreria cloud.`;
 }
 
 initLibraryFolder();
-document.getElementById('syncCloudLibraryBtn').addEventListener('click', async ()=>{
+document.getElementById('checkCloudLibraryBtn').addEventListener('click', async ()=>{
  // Il permesso alla cartella va (ri)chiesto qui, per primo e senza nessuna attesa di rete
- // prima, perché il "via libera" dato dal clic dell'utente ha una validità di pochi
- // secondi: se lo consumassimo dopo una chiamata di rete rischieremmo di perderlo.
+ // prima, perché il "via libera" dato dal clic dell'utente ha una validità di pochi secondi.
  if(libraryRootHandle){
    const ok=await verifyDirPermission(libraryRootHandle,'readwrite');
-   if(!ok){ alert('Permesso alla cartella collegata non concesso: impossibile scaricare i file al suo interno.'); return; }
+   if(!ok){ alert('Permesso alla cartella collegata non concesso.'); return; }
  }
- syncMissingLibraryFromCloud();
+ checkCloudLibraryDiff();
 });
+document.getElementById('downloadCloudLibraryBtn').addEventListener('click', ()=>downloadPendingCloudFiles());
 </script>
 </body>
 </html>
