@@ -38,6 +38,12 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
 .folderStatus{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .folderBtns{display:flex;gap:8px;flex-wrap:wrap}
 .hint{font-size:12px;color:#84909f;margin-top:8px;line-height:1.5}
+/* ---- Overlay "Caricamento in corso…" (popup con rotellina, invece di far freezare la pagina) ---- */
+#globalLoadingOverlay{position:fixed;inset:0;background:rgba(6,9,13,.72);z-index:999;display:none;align-items:center;justify-content:center;backdrop-filter:blur(1px)}
+#globalLoadingOverlay .loadingBox{display:flex;flex-direction:column;align-items:center;gap:14px;background:#111720;border:1px solid #202832;border-radius:12px;padding:26px 34px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+#globalLoadingOverlay .loadingSpinner{width:38px;height:38px;border:4px solid #202832;border-top-color:#3ea6ff;border-radius:50%;animation:fxbtSpin .8s linear infinite}
+#globalLoadingOverlay .loadingText{color:#e8edf3;font-size:13px;font-weight:600}
+@keyframes fxbtSpin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -109,6 +115,35 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
 
 </main>
 <script>
+// ===================== OVERLAY "CARICAMENTO IN CORSO…" =====================
+// Sincronizzare/spostare/leggere molti CSV storici (anche grandi) può richiedere un attimo,
+// durante il quale il browser resta comunque "sincrono": mostriamo la rotellina PRIMA di
+// partire, cedendo il controllo per due frame (nextPaint) così fa in tempo a disegnarla,
+// invece di lasciare i pulsanti a rispondere senza nessun feedback visivo.
+function showLoadingOverlay(text){
+ let el=document.getElementById('globalLoadingOverlay');
+ if(!el){
+   el=document.createElement('div');
+   el.id='globalLoadingOverlay';
+   el.innerHTML='<div class="loadingBox"><div class="loadingSpinner"></div><div class="loadingText"></div></div>';
+   document.body.appendChild(el);
+ }
+ el.querySelector('.loadingText').textContent=text||'Caricamento in corso…';
+ el.style.display='flex';
+}
+function hideLoadingOverlay(){
+ const el=document.getElementById('globalLoadingOverlay');
+ if(el)el.style.display='none';
+}
+function nextPaint(){
+ return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+}
+async function withLoadingOverlay(text,fn){
+ showLoadingOverlay(text);
+ await nextPaint();
+ try{ return await fn(); }
+ finally{ hideLoadingOverlay(); }
+}
 // ========================================================================================
 // PARTE 1 — CARTELLA REALE DEL PROGETTO (File System Access API)
 // L'handle della cartella scelta dall'utente viene salvato in una IndexedDB dedicata
@@ -287,34 +322,36 @@ async function syncLibraryFolder(){
    showFolderButtons({pick:true,sync:false,grant:true});
    return;
  }
- setFolderStatus(`Cartella collegata: "${libraryRootHandle.name}". Sincronizzazione in corso…`);
- // 1) file .csv sciolti alla radice → smistati nella sottocartella dell'asset giusto
- const loose=[];
- for await (const [name,handle] of libraryRootHandle.entries()){
-   if(handle.kind==='file'&&/\.csv$/i.test(name))loose.push(name);
- }
- let moved=0;
- for(const name of loose){
-   const asset=detectAssetFromName(name)||UNCLASSIFIED_FOLDER;
-   const targetDir=await libraryRootHandle.getDirectoryHandle(asset,{create:true});
-   try{ await moveFileIntoDir(libraryRootHandle,name,targetDir); moved++; }
-   catch(e){ console.warn('Spostamento fallito per',name,e); }
- }
- // 2) rilettura di root+sottocartelle
- const groups={};
- for await (const [name,handle] of libraryRootHandle.entries()){
-   if(handle.kind!=='directory')continue;
-   const files=[];
-   for await (const [fname,fhandle] of handle.entries()){
-     if(fhandle.kind!=='file'||!/\.csv$/i.test(fname))continue;
-     const file=await fhandle.getFile();
-     files.push({name:fname,handle:fhandle,dirHandle:handle,size:file.size,lastModified:file.lastModified});
+ await withLoadingOverlay('Sincronizzazione cartella libreria…', async()=>{
+   setFolderStatus(`Cartella collegata: "${libraryRootHandle.name}". Sincronizzazione in corso…`);
+   // 1) file .csv sciolti alla radice → smistati nella sottocartella dell'asset giusto
+   const loose=[];
+   for await (const [name,handle] of libraryRootHandle.entries()){
+     if(handle.kind==='file'&&/\.csv$/i.test(name))loose.push(name);
    }
-   if(files.length)groups[name]=files.sort((a,b)=>a.name.localeCompare(b.name));
- }
- libraryGroupsCache=groups;
- setFolderStatus(`Cartella collegata: "${libraryRootHandle.name}"`+(moved?` • ${moved} file smistati automaticamente`:'')+'.');
- renderLibrary();
+   let moved=0;
+   for(const name of loose){
+     const asset=detectAssetFromName(name)||UNCLASSIFIED_FOLDER;
+     const targetDir=await libraryRootHandle.getDirectoryHandle(asset,{create:true});
+     try{ await moveFileIntoDir(libraryRootHandle,name,targetDir); moved++; }
+     catch(e){ console.warn('Spostamento fallito per',name,e); }
+   }
+   // 2) rilettura di root+sottocartelle
+   const groups={};
+   for await (const [name,handle] of libraryRootHandle.entries()){
+     if(handle.kind!=='directory')continue;
+     const files=[];
+     for await (const [fname,fhandle] of handle.entries()){
+       if(fhandle.kind!=='file'||!/\.csv$/i.test(fname))continue;
+       const file=await fhandle.getFile();
+       files.push({name:fname,handle:fhandle,dirHandle:handle,size:file.size,lastModified:file.lastModified});
+     }
+     if(files.length)groups[name]=files.sort((a,b)=>a.name.localeCompare(b.name));
+   }
+   libraryGroupsCache=groups;
+   setFolderStatus(`Cartella collegata: "${libraryRootHandle.name}"`+(moved?` • ${moved} file smistati automaticamente`:'')+'.');
+   renderLibrary();
+ });
 }
 
 // ================= Riconoscimento asset dal nome file =================
@@ -420,26 +457,28 @@ document.getElementById('libUploadBtn').addEventListener('click', async ()=>{
  statusEl.textContent='Caricamento in corso…';
  const override=document.getElementById('libAssetOverride').value;
  let added=0, skipped=[];
- for(const f of files){
-   const asset=override||detectAssetFromName(f.name);
-   if(!asset){ skipped.push(f.name+' (asset non riconosciuto: usa il menu a tendina)'); continue; }
-   if(libraryRootHandle){
-     const ok=await verifyDirPermission(libraryRootHandle,'readwrite');
-     if(!ok){ skipped.push(f.name+' (permesso alla cartella non valido)'); continue; }
-     try{
-       const targetDir=await libraryRootHandle.getDirectoryHandle(asset,{create:true});
-       await writeFileIntoDir(targetDir,f.name,f);
+ await withLoadingOverlay('Caricamento CSV in corso…', async()=>{
+   for(const f of files){
+     const asset=override||detectAssetFromName(f.name);
+     if(!asset){ skipped.push(f.name+' (asset non riconosciuto: usa il menu a tendina)'); continue; }
+     if(libraryRootHandle){
+       const ok=await verifyDirPermission(libraryRootHandle,'readwrite');
+       if(!ok){ skipped.push(f.name+' (permesso alla cartella non valido)'); continue; }
+       try{
+         const targetDir=await libraryRootHandle.getDirectoryHandle(asset,{create:true});
+         await writeFileIntoDir(targetDir,f.name,f);
+         added++;
+       }catch(e){ skipped.push(f.name+' (scrittura su cartella fallita)'); }
+     }else{
+       const text=await f.text();
+       const rows=parseCsvLib(text);
+       if(!rows.length){ skipped.push(f.name+' (nessuna candela valida trovata)'); continue; }
+       const record={ id:'lib_'+asset+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), asset, fileName:f.name, addedAt:Date.now(), rows };
+       await libPut(record);
        added++;
-     }catch(e){ skipped.push(f.name+' (scrittura su cartella fallita)'); }
-   }else{
-     const text=await f.text();
-     const rows=parseCsvLib(text);
-     if(!rows.length){ skipped.push(f.name+' (nessuna candela valida trovata)'); continue; }
-     const record={ id:'lib_'+asset+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8), asset, fileName:f.name, addedAt:Date.now(), rows };
-     await libPut(record);
-     added++;
+     }
    }
- }
+ });
  statusEl.textContent = `Aggiunti ${added} file alla libreria.` + (skipped.length? ' Ignorati: '+skipped.join('; '):'');
  input.value='';
  if(libraryRootHandle) await syncLibraryFolder(); else renderLibrary();
@@ -506,12 +545,14 @@ function renderFolderGroups(){
      e.stopPropagation();
      const btn=e.currentTarget;
      btn.textContent='…';
-     try{
-       const file=await entry.handle.getFile();
-       const rows=parseCsvLib(await file.text());
-       row.querySelector('.rowStats').textContent = ` • ${rows.length.toLocaleString('it-IT')} candele • ${fmtRange(rows)}`;
-       btn.textContent='🔍 Analizza';
-     }catch(err){ btn.textContent='Errore'; }
+     await withLoadingOverlay('Analisi CSV in corso…', async()=>{
+       try{
+         const file=await entry.handle.getFile();
+         const rows=parseCsvLib(await file.text());
+         row.querySelector('.rowStats').textContent = ` • ${rows.length.toLocaleString('it-IT')} candele • ${fmtRange(rows)}`;
+         btn.textContent='🔍 Analizza';
+       }catch(err){ btn.textContent='Errore'; }
+     });
    });
    row.querySelector('[data-del]').addEventListener('click', async (e)=>{
      e.stopPropagation();
