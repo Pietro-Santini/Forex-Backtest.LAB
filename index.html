@@ -576,14 +576,14 @@ tr.otherAssetRow td:last-child{opacity:1}
 
 <div class="panel">
  <div class="label">Posizioni aperte</div>
- <table class="posTable"><thead><tr><th>#</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>P/L live</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
 </div>
 
 <div class="panel">
  <div class="label">Ordini pendenti</div>
- <table class="posTable"><thead><tr><th>#</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
  <tbody id="pendingOrdersTbl"></tbody></table>
  <div id="noPending" class="hint">Nessun ordine pendente.</div>
 </div>
@@ -1872,6 +1872,12 @@ async function autoLoadAssetLibrary(asset){
  if(!asset)return;
  await withLoadingOverlay('Caricamento CSV storici da libreria…', async()=>{
    currentAssetKey=asset;
+   // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
+   // appartenere all'asset appena selezionato: se quella precedente era di un altro asset,
+   // la sostituiamo con l'ultima posizione aperta su QUESTO asset (se esiste), altrimenti null.
+   // Le posizioni stesse NON vengono toccate: restano tutte aperte, di qualunque asset.
+   const ownNow=positions.filter(p=>(p.asset||asset)===asset);
+   active=ownNow.length?ownNow[ownNow.length-1]:null;
    let files=await getAssetFolderFiles(asset);
    const fromFolder=!!(files&&files.length);
    if(!fromFolder){
@@ -2101,7 +2107,9 @@ function update(){
  mEl.className='value '+(fm<0?'marginNeg':(used>0&&fm<used*0.3?'marginTight':'marginFree'));
  mEl.title=`Equity ${euro(eq)} • Margine usato ${euro(used)}`;
 
- // Tabella posizioni aperte
+ // Tabella posizioni aperte: GLOBALE, tutti gli asset (come un vero conto MT5). Il P/L live si
+ // può calcolare solo per le posizioni dell'asset a grafico ora; per le altre mostriamo "—"
+ // finché non si torna sul loro grafico (non abbiamo un prezzo live per loro in questo momento).
  const price=currentPrice();
  if(!positions.length){
    $('openPositions').innerHTML='';
@@ -2109,20 +2117,22 @@ function update(){
  }else{
    $('noPositions').style.display='none';
    $('openPositions').innerHTML=positions.map((p,i)=>{
-     const plLive=price!=null?calculateForexPL(p.side,p.entry,price,p.lots):0;
-     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td><td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`+
+     const isOwn=!currentAssetKey||(p.asset||currentAssetKey)===currentAssetKey;
+     const plLive=(isOwn&&price!=null)?calculateForexPL(p.side,p.entry,price,p.lots):null;
+     const plCell=plLive==null?'—':`<span class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</span>`;
+     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${p.asset||'—'}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td><td>${plCell}</td>`+
      `<td><button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button></td></tr>`;
    }).join('');
  }
 
- // Tabella ordini pendenti
+ // Tabella ordini pendenti: GLOBALE, tutti gli asset.
  if(!pendingOrders.length){
    $('pendingOrdersTbl').innerHTML='';
    $('noPending').style.display='block';
  }else{
    $('noPending').style.display='none';
    $('pendingOrdersTbl').innerHTML=pendingOrders.map((p,i)=>
-     `<tr><td>${i+1}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
+     `<tr><td>${i+1}</td><td>${p.asset||'—'}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
      `<td><button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button></td></tr>`
    ).join('');
  }
@@ -3498,7 +3508,8 @@ function draw(){
  // impostate per quando l'ordine si attiverà. Colore dell'entrata: rosso se sopra al
  // prezzo attuale, verde se sotto (come richiesto), indipendentemente dal lato BUY/SELL.
  const cpForColor=currentPrice();
- pendingOrders.forEach(p=>{
+ // Disegnati SOLO gli ordini pendenti DELL'ASSET a grafico ora, per lo stesso motivo delle posizioni.
+ (currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders).forEach(p=>{
    if(p.entry!=null && p.entry>=lo && p.entry<=hi && !(previewTradeLevel && previewTradeLevel.type===`pending:${p.id}:entry`)){
      const entryColor=entryLineColor(p.entry,p.kind||'LIMIT');
      ctx.save();
@@ -3890,8 +3901,10 @@ function tradeLevelHit(clientX,clientY){
  if(Number.isFinite(draftSlPending) && Math.abs(py-g.y(draftSlPending))<=tolerance)return 'SL_PENDING';
  const draftTpPending=num($('tpPending')?.value);
  if(Number.isFinite(draftTpPending) && Math.abs(py-g.y(draftTpPending))<=tolerance)return 'TP_PENDING';
- // Linee degli ordini pendenti già creati: entrata, SL e TP, tutte trascinabili.
- for(const p of pendingOrders){
+ // Linee degli ordini pendenti già creati: entrata, SL e TP, tutte trascinabili. Solo quelli
+ // DELL'ASSET a grafico ora sono disegnati/trascinabili qui (vedi draw()).
+ const ownPendingForDrag=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders;
+ for(const p of ownPendingForDrag){
    if(Math.abs(py-g.y(p.entry))<=tolerance)return `pending:${p.id}:entry`;
    if(Number.isFinite(p.sl) && Math.abs(py-g.y(p.sl))<=tolerance)return `pending:${p.id}:sl`;
    if(Number.isFinite(p.tp) && Math.abs(py-g.y(p.tp))<=tolerance)return `pending:${p.id}:tp`;
@@ -4737,7 +4750,12 @@ function closeTrade(reason,price,pos){
  trades.push({...pos,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF});
  playOrderSound();
  positions=positions.filter(p=>p!==pos);
- if(active===pos)active=positions.length?positions[positions.length-1]:null;
+ // La nuova posizione attiva (per i controlli SL/TP) deve restare sull'ASSET a grafico ora,
+ // altrimenti le caselle mostrerebbero prezzi su una scala diversa da quella visibile.
+ if(active===pos){
+   const ownRemaining=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   active=ownRemaining.length?ownRemaining[ownRemaining.length-1]:null;
+ }
  tradeSLLine=null; tradeTPLine=null;
  placingTradeLevel=null; previewTradeLevel=null; placingTradeLevelDrag=null; updateTradeLevelArmUI();
  // Operazione terminata: si tolgono le linee (già fatto sopra) e si resettano le caselle
@@ -4765,7 +4783,11 @@ function closeTrade(reason,price,pos){
  update();
 }
 function closeAllPositions(reason){
- [...positions].forEach(p=>closeTrade(reason,currentPrice()??p.entry,p));
+ // Si possono chiudere subito (con un prezzo corretto) solo le posizioni DELL'ASSET a grafico
+ // ora: per le posizioni di altri asset non abbiamo un prezzo live valido in questo momento,
+ // quindi restano aperte finché non si passa sul loro grafico.
+ const ownPositions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+ [...ownPositions].forEach(p=>closeTrade(reason,currentPrice()??p.entry,p));
 }
 // Bottone "Vai a grafico" nel Trade Journal: sposta la vista sulla candela in cui quel
 // trade è stato APERTO (usa lo stesso "match per timestamp reale" delle frecce, così
@@ -5150,12 +5172,27 @@ $('openPositions').addEventListener('click',e=>{
  const closeId=e.target.getAttribute('data-closepos');
  if(selId){
    const pos=positions.find(p=>String(p.id)===selId);
-   if(pos)focusPosition(pos);
+   if(!pos)return;
+   const currentAsset=$('market')?.value||'';
+   if(pos.asset && currentAsset!==pos.asset){
+     $('status').textContent=`Questa posizione è su ${pos.asset}: seleziona quell'ASSET dal menu in alto per gestirla (SL/TP/chiusura) al prezzo corretto.`;
+     return;
+   }
+   focusPosition(pos);
    return;
  }
  if(closeId){
    const pos=positions.find(p=>String(p.id)===closeId);
-   if(pos){const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();}
+   if(!pos)return;
+   // Come per il Trade Journal: una posizione di un asset diverso da quello a grafico ora
+   // non ha un prezzo live corretto qui, quindi non la chiudiamo con un prezzo sbagliato —
+   // chiediamo prima di passare a quell'asset.
+   const currentAsset=$('market')?.value||'';
+   if(pos.asset && currentAsset!==pos.asset){
+     $('status').textContent=`Questa posizione è su ${pos.asset}: seleziona quell'ASSET dal menu in alto per chiuderla al prezzo corretto.`;
+     return;
+   }
+   const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();
  }
 });
 $('journal').addEventListener('click',async e=>{
