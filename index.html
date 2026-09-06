@@ -332,7 +332,7 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
       caricati automaticamente sul grafico (vedi autoLoadAssetLibrary più sotto nel JS). -->
  <div class="panel" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px">
   <div style="font-size:13px;color:#c6ceda;max-width:640px">
-   📥 Scarica gratis i CSV storici (candele a 1 minuto) da <strong>HistData.com</strong>, poi caricali nella libreria dedicata per asset: verranno riconosciuti automaticamente dal nome del file e mostrati sul grafico ogni volta che selezioni quell'ASSET qui sopra.
+   📥 Scarica gratis i CSV storici (candele a 1 minuto) da <strong>HistData.com</strong>, poi mettili nella libreria dedicata per asset (collegabile a una cartella reale del progetto): verranno riconosciuti automaticamente dal nome del file, smistati in sottocartelle per asset e mostrati sul grafico ogni volta che selezioni quell'ASSET qui sopra.
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap">
    <a href="https://www.histdata.com/download-free-forex-data/?/metatrader/1-minute-bar-quotes" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;padding:9px 14px;border-radius:8px;border:1px solid #2b3541;background:#0b1117;color:#e8edf3;font-weight:700;font-size:12.5px">🌐 HistData.com</a>
@@ -1692,12 +1692,82 @@ function removeCsvFromLibrary(id){
  saveLightStateNow();
 }
 // ===================== LIBRERIA STORICI PER ASSET (condivisa con asset-library.html) =====================
-// La pagina separata "asset-library.html" salva i CSV caricati dall'utente (tipicamente
-// scaricati da HistData.com) in una IndexedDB dedicata, raggruppati per asset riconosciuto
-// automaticamente dal nome del file. Qui leggiamo SOLO in lettura quella stessa IndexedDB
-// (stesso nome DB/store, stessa origine GitHub Pages) per caricare in automatico sul grafico
-// i file pertinenti ogni volta che cambia l'ASSET selezionato, senza appesantire questo file
-// con la UI di gestione/caricamento (che vive nell'altra pagina).
+// Due modalità, in ordine di priorità (gestite entrambe automaticamente):
+//  1) CARTELLA REALE del progetto, collegata una volta sola da "asset-library.html" con la
+//     File System Access API: dentro ha una sottocartella per ogni asset, creata e popolata
+//     in automatico da quella pagina. L'handle della cartella è salvato in una IndexedDB
+//     dedicata ("FxbtLibraryDirDB"), condivisa fra le due pagine perché sono la stessa origine:
+//     qui basta rileggerlo, senza dover ricollegare nulla.
+//  2) IndexedDB "FxbtAssetLibraryDB" (vecchia modalità "solo in questo browser"): resta come
+//     fallback automatico sui browser senza File System Access API (Firefox/Safari) o finché
+//     non è stata collegata una cartella reale.
+const LIBDIR_DB_NAME='FxbtLibraryDirDB', LIBDIR_STORE='kv';
+let libDirDbPromise=null;
+function openLibDirDB(){
+ if(libDirDbPromise)return libDirDbPromise;
+ libDirDbPromise=new Promise((resolve,reject)=>{
+   const req=indexedDB.open(LIBDIR_DB_NAME,1);
+   req.onupgradeneeded=()=>{ req.result.createObjectStore(LIBDIR_STORE,{keyPath:'key'}); };
+   req.onsuccess=()=>resolve(req.result);
+   req.onerror=()=>reject(req.error);
+ });
+ return libDirDbPromise;
+}
+async function libDirGet(key){
+ try{
+   const db=await openLibDirDB();
+   return await new Promise((resolve,reject)=>{
+     const tx=db.transaction(LIBDIR_STORE,'readonly');
+     const req=tx.objectStore(LIBDIR_STORE).get(key);
+     req.onsuccess=()=>resolve(req.result?req.result.value:null);
+     req.onerror=()=>reject(req.error);
+   });
+ }catch(e){ return null; }
+}
+let libraryRootHandle=null, libraryRootHandleChecked=false;
+async function verifyDirPermission(handle,mode){
+ if(!handle)return false;
+ try{
+   const opts={mode};
+   if((await handle.queryPermission(opts))==='granted')return true;
+   if((await handle.requestPermission(opts))==='granted')return true;
+ }catch(e){}
+ return false;
+}
+// Recupera (una sola volta, poi la tiene in cache) l'handle della cartella libreria collegata
+// da asset-library.html, verificandone/richiedendone il permesso. È chiamata dal cambio ASSET,
+// quindi c'è sempre un gesto utente valido dietro per l'eventuale richiesta di permesso.
+async function getLibraryRootHandle(){
+ if(libraryRootHandle)return libraryRootHandle;
+ if(libraryRootHandleChecked)return null;
+ libraryRootHandleChecked=true;
+ try{
+   const handle=await libDirGet('rootDir');
+   if(!handle)return null;
+   if(await verifyDirPermission(handle,'read')){ libraryRootHandle=handle; return handle; }
+ }catch(e){}
+ return null;
+}
+// Legge dalla cartella reale tutti i CSV nella sottocartella dell'asset (creata/popolata in
+// automatico da asset-library.html). Ritorna null se la cartella non è collegata o non esiste
+// ancora una sottocartella per quell'asset (mai sincronizzata per quell'asset).
+async function getAssetFolderFiles(asset){
+ const root=await getLibraryRootHandle();
+ if(!root)return null;
+ let dirHandle;
+ try{ dirHandle=await root.getDirectoryHandle(asset); }
+ catch(e){ return null; }
+ const out=[];
+ for await (const [name,handle] of dirHandle.entries()){
+   if(handle.kind!=='file'||!/\.csv$/i.test(name))continue;
+   try{
+     const file=await handle.getFile();
+     const rows=parseCSV(await file.text());
+     if(rows.length)out.push({id:'folder_'+asset+'_'+name,name,addedAt:file.lastModified||Date.now(),rows});
+   }catch(e){ console.warn('Lettura CSV da cartella libreria fallita:',name,e); }
+ }
+ return out;
+}
 const ASSET_LIB_DB_NAME='FxbtAssetLibraryDB', ASSET_LIB_STORE='csvFiles';
 let assetLibDbPromise=null;
 function openAssetLibDB(){
@@ -1729,20 +1799,24 @@ async function getAssetLibraryFiles(asset){
    });
  }catch(e){ console.warn('Lettura libreria storici per asset fallita:',e); return []; }
 }
-// Chiamata al cambio di ASSET: se in libreria ci sono CSV per quell'asset, li carica subito
-// sul grafico (sostituendo la libreria CSV corrente, dato che un altro asset ha candele non
-// confrontabili). Se non ce ne sono, lascia tutto com'è e lo segnala nello status.
+// Chiamata al cambio di ASSET: prova prima la cartella reale collegata, poi l'IndexedDB legacy.
+// Se in libreria ci sono CSV per quell'asset, li carica subito sul grafico (sostituendo la
+// libreria CSV corrente, dato che un altro asset ha candele non confrontabili). Se non ce ne
+// sono in nessuna delle due, lascia tutto com'è e lo segnala nello status.
 async function autoLoadAssetLibrary(asset){
  if(!asset)return;
- const files=await getAssetLibraryFiles(asset);
+ let files=await getAssetFolderFiles(asset);
+ const fromFolder=!!(files&&files.length);
+ if(!fromFolder){
+   const legacy=await getAssetLibraryFiles(asset);
+   files=legacy.map(f=>({id:f.id,name:f.fileName,addedAt:f.addedAt,
+     rows:f.rows.map(a=>({date:a[0],open:a[1],high:a[2],low:a[3],close:a[4],volume:a[5]}))}));
+ }
  if(!files.length){
    $('status').textContent = `Nessun CSV in libreria per ${asset}. Aggiungine da "📚 Libreria storici CSV per asset".`;
    return;
  }
- csvLibrary = files.map(f=>({
-   id:f.id, name:f.fileName, addedAt:f.addedAt,
-   rows: f.rows.map(a=>({date:a[0],open:a[1],high:a[2],low:a[3],close:a[4],volume:a[5]}))
- }));
+ csvLibrary = files;
  rebuildBaseRowsFromLibrary();
  renderCsvLibraryList();
  updateFileBtnLabel();
@@ -1754,7 +1828,7 @@ async function autoLoadAssetLibrary(asset){
  reset();
  saveCsvNow();
  saveLightStateNow();
- $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici.`;
+ $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fromFolder?' (cartella di progetto collegata)':''}.`;
 }
 // ============== SALVATAGGIO DEI CSV DIRETTAMENTE NEL FILE .HTML ==============
 // Oltre al salvataggio in IndexedDB (che copre solo lo stesso browser/profilo), i CSV caricati
