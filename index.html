@@ -168,7 +168,7 @@ tr.otherAssetRow td:last-child{opacity:1}
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCz9y-5d9AxqjDtJPbBYyHaUOYRKDGUaO0",
@@ -185,6 +185,47 @@ tr.otherAssetRow td:last-child{opacity:1}
   const db = getFirestore(app);
   const LOGIN_PAGE = "login.html";
   const TRIAL_DAYS = 7;
+
+  // ===================================================================
+  // STEP 0a — Ponte verso Firestore per lo stato di sessione (posizioni,
+  // ordini, trade, ecc.), legato all'UID dell'utente loggato.
+  // Questo script gira come modulo ES ("type=module") e può quindi fare
+  // gli import di Firebase; il resto dell'app (più sotto) è invece uno
+  // script "classico" che NON può fare import diretti. Per questo esponiamo
+  // qui alcune funzioni pronte all'uso su window.fxbtCloud: nello STEP 0b
+  // collegheremo saveLightStateNow()/applyLightSessionState() a queste
+  // funzioni al posto di IndexedDB. Per ORA queste funzioni esistono ma
+  // non vengono ancora chiamate da nessuna parte: zero rischio di rompere
+  // la modalità storica attuale.
+  // Percorso Firestore scelto: users/{uid}/data/session (documento separato
+  // dal profilo users/{uid} già usato per prova gratuita/abbonamento, così
+  // non rischiamo di sovrascrivere quei campi per errore).
+  window.fxbtCloud = {
+    uid: null,
+    async save(state){
+      if(!this.uid) return false;
+      try{
+        await setDoc(doc(db,"users",this.uid,"data","session"), { state, updatedAt: serverTimestamp() });
+        return true;
+      }catch(e){ console.warn("Salvataggio sessione su Firestore fallito:", e); return false; }
+    },
+    async load(){
+      if(!this.uid) return null;
+      try{
+        const snap = await getDoc(doc(db,"users",this.uid,"data","session"));
+        return snap.exists() ? (snap.data().state ?? null) : null;
+      }catch(e){ console.warn("Lettura sessione da Firestore fallita:", e); return null; }
+    },
+    // Ascolto in tempo reale: ogni volta che il documento cambia (anche da un
+    // altro dispositivo/scheda), cb() viene richiamata col nuovo stato.
+    // Ritorna una funzione da chiamare per interrompere l'ascolto.
+    onChange(cb){
+      if(!this.uid) return ()=>{};
+      return onSnapshot(doc(db,"users",this.uid,"data","session"), snap=>{
+        cb(snap.exists() ? (snap.data().state ?? null) : null);
+      }, e=>console.warn("Ascolto sessione Firestore interrotto:", e));
+    }
+  };
 
   function setOverlayContent(html){
     const overlay = document.getElementById("auth-check-overlay");
@@ -260,10 +301,15 @@ tr.otherAssetRow td:last-child{opacity:1}
     const overlay = document.getElementById("auth-check-overlay");
     const logoutBtn = document.getElementById("logout-btn");
     if (!user) {
-      // Non autenticato: rimanda alla pagina di login
+      // Non autenticato (o appena sloggato): azzeriamo subito l'uid del ponte cloud, poi
+      // rimandiamo alla pagina di login.
+      window.fxbtCloud.uid = null;
       window.location.replace(LOGIN_PAGE);
       return;
     }
+    // Utente autenticato: da qui in poi window.fxbtCloud.save()/load()/onChange() operano
+    // sul documento Firestore di QUESTO uid.
+    window.fxbtCloud.uid = user.uid;
     try {
       const ref = doc(db, "users", user.uid);
       let snap = await getDoc(ref);
