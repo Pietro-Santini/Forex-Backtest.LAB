@@ -88,6 +88,7 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
  <div class="panel">
   <div class="label">Carica CSV nella libreria</div>
   <div class="status" id="cloudSyncStatus">☁️ Verifica sincronizzazione account…</div>
+  <div class="status" id="cloudUploadStatus"></div>
   <button id="syncCloudLibraryBtn" type="button" style="display:none">🔄 Sincronizza file storici dall'account</button>
   <div class="uploadRow">
    <div>
@@ -123,7 +124,7 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
   // .ready (Promise) e un metodo uploadFile() che non blocca né rompe nulla se fallisce.
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getStorage, ref, uploadBytes, listAll, getBytes, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
+  import { getStorage, ref, uploadBytesResumable, listAll, getBytes, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyCz9y-5d9AxqjDtJPbBYyHaUOYRKDGUaO0",
@@ -144,10 +145,27 @@ input,select{width:100%;padding:9px;border-radius:8px;border:1px solid #2b3541;b
     ready: new Promise(res => { resolveReady = res; }),
     async uploadFile(asset, fileName, file){
       if(!this.uid){ console.warn('Upload libreria CSV: nessun utente autenticato, upload saltato.'); return false; }
-      try{
-        await uploadBytes(ref(storage, `users/${this.uid}/library/${asset}/${fileName}`), file);
-        return true;
-      }catch(e){ console.warn('Upload libreria CSV su Storage fallito:', e); return false; }
+      const statusEl = document.getElementById('cloudUploadStatus');
+      return new Promise(resolve=>{
+        const task = uploadBytesResumable(ref(storage, `users/${this.uid}/library/${asset}/${fileName}`), file);
+        if(statusEl) statusEl.textContent = `☁️ Caricamento di "${fileName}" su Firebase in corso… 0%`;
+        task.on('state_changed',
+          snap=>{
+            if(!statusEl)return;
+            const pct = snap.totalBytes ? Math.round(snap.bytesTransferred/snap.totalBytes*100) : 0;
+            statusEl.textContent = `☁️ Caricamento di "${fileName}" su Firebase in corso… ${pct}%`;
+          },
+          err=>{
+            console.warn('Upload libreria CSV su Storage fallito:', err);
+            if(statusEl) statusEl.textContent = `⚠️ Caricamento di "${fileName}" non riuscito (resta valida solo la copia locale).`;
+            resolve(false);
+          },
+          ()=>{
+            if(statusEl) statusEl.textContent = `☁️ File aggiornati nel cloud (ultimo: "${fileName}").`;
+            resolve(true);
+          }
+        );
+      });
     },
     // STEP 0c-2 — elenca i file CSV già presenti su Storage per questo utente (una
     // sottocartella per asset, come in locale), per capire cosa manca su questo dispositivo.
