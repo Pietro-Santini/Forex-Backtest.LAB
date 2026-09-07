@@ -709,7 +709,7 @@ tr.otherAssetRow td:last-child{opacity:1}
 
 <div class="panel">
  <div class="label">Trade Journal</div>
- <table><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
+ <table><thead><tr><th>#</th><th>Asset</th><th>Modalità</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
  <tbody id="journal"></tbody></table>
 </div>
 </main>
@@ -736,6 +736,54 @@ document.addEventListener('click',function(e){
 },true);
 
 let rows=[], baseRows=[], csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, zoneWidthDrag=null;
+// Indice (nel Trade Journal globale, filtrato per modalità) da cui in poi si contano le
+// statistiche del conto (capitale, P/L, winrate, ultimo trade chiuso, ecc.): RESET SESSIONE
+// avanza l'indice della modalità corrente senza mai toccare l'array `trades`, che resta
+// sempre lo storico COMPLETO mostrato nel Trade Journal (si tocca solo eliminando un trade
+// singolarmente con deleteTrade(), che tiene automaticamente allineati questo indice e
+// l'equity curve, o cancellando l'intera sessione salvata). statsTrades() è quello che va
+// usato per qualunque statistica del conto.
+let statsBaselineByMode={backtest:0,live:0};
+function currentMode(){ return liveModeActive?'live':'backtest'; }
+function statsTrades(){
+ const m=currentMode();
+ return trades.filter(t=>t.mode===m).slice(statsBaselineByMode[m]||0);
+}
+// Storico e Live sono due conti SEPARATI (posizioni aperte, ordini pendenti, posizione
+// attiva ed equity curve non hanno nulla in comune fra le due modalità): al passaggio da una
+// modalità all'altra si salva lo stato di quella che si lascia e si ricarica quello — se
+// presente — di quella in cui si entra (altrimenti si riparte da zero). Il Trade Journal
+// invece resta SEMPRE unico e globale per entrambe (solo taggato per modalità).
+let sessionByMode={backtest:null,live:null};
+function captureCurrentModeSnapshot(){
+ sessionByMode[currentMode()]={positions,pendingOrders,active,equity};
+}
+function restoreModeSnapshot(mode){
+ const snap=sessionByMode[mode];
+ if(snap){
+   positions=snap.positions||[]; pendingOrders=snap.pendingOrders||[];
+   active=snap.active||null;
+   equity=(snap.equity&&snap.equity.length)?snap.equity:[num($('capital').value)||10000];
+ }else{
+   positions=[]; pendingOrders=[]; active=null; equity=[num($('capital').value)||10000];
+ }
+}
+// Punto UNICO da cui passare per cambiare modalità (sostituisce l'assegnazione diretta a
+// liveModeActive): salva/ripristina le due sessioni e mostra la rotellina di caricamento,
+// perché il cambio può comportare operazioni non istantanee (rebuild grafico, ecc.).
+async function switchAccountMode(newIsLive){
+ if(liveModeActive===newIsLive)return;
+ await withLoadingOverlay(newIsLive?'Passaggio a modalità Live…':'Ritorno a modalità Storico…', async()=>{
+   captureCurrentModeSnapshot();
+   liveModeActive=newIsLive;
+   restoreModeSnapshot(currentMode());
+   tradeSLLine=null; tradeTPLine=null;
+   syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
+   updateLiveModeUI();
+   update(); draw();
+ });
+ saveLightStateNow();
+}
 // Mostra/nasconde sul grafico le posizioni (linee entry/SL/TP delle posizioni aperte +
 // frecce di apertura/chiusura delle posizioni già chiuse). Non tocca ordini pendenti né
 // le linee "bozza" di SL/TP, che restano sempre visibili come prima.
@@ -852,7 +900,7 @@ function collectLightSessionState(){
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,
-   positions,active,pendingOrders,trades,equity,
+   positions,active,pendingOrders,trades,equity,statsBaselineByMode,sessionByMode,liveModeActive,
    drawings,
    activeIndicators:activeIndicators.map(ind=>({id:ind.id,key:ind.key,params:ind.params,hidden:ind.hidden}))
  };
@@ -920,7 +968,12 @@ function applyLightSessionState(state){
    pendingOrders.forEach(p=>{ if(!p.asset)p.asset=legacyAsset; });
    trades.forEach(t=>{ if(!t.asset)t.asset=legacyAsset; });
  }
+ // Trade salvati prima dell'introduzione della modalità Live: erano tutti backtest.
+ trades.forEach(t=>{ if(!t.mode)t.mode='backtest'; });
  equity=state.equity&&state.equity.length?state.equity:[num($('capital').value)||10000];
+ statsBaselineByMode=state.statsBaselineByMode||{backtest:Number.isFinite(state.statsBaseline)?state.statsBaseline:0,live:0};
+ sessionByMode=state.sessionByMode||{backtest:null,live:null};
+ liveModeActive=!!state.liveModeActive;
  drawings=state.drawings||[];
  activeIndicators=(state.activeIndicators||[]).map(ind=>({...ind,calc:{ref:null,builtTo:-1}}));
 }
@@ -2261,13 +2314,14 @@ function reset(){
  idx=Math.min(0,rows.length-1);
  masterTime=rows.length?closeTimeOf(rows[idx]):null;
  viewEnd=idx;
- // Il RESET manuale azzera SOLO le posizioni aperte, gli ordini pendenti e i trade
- // dell'asset attualmente selezionato: le posizioni/ordini/trade già registrati su ALTRI
- // asset restano intatti e continuano a comparire nelle rispettive tabelle (vedi
- // autoLoadAssetLibrary/jumpToTradeOnChart), esattamente come al semplice cambio di asset.
- positions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)!==currentAssetKey):[];
- pendingOrders=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)!==currentAssetKey):[];
- trades=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)!==currentAssetKey):[];
+ // RESET SESSIONE azzera il conto: posizioni aperte e ordini pendenti di TUTTI gli asset
+ // vengono eliminati (non chiusi, per non generare trade "fittizi" nel journal), e le
+ // statistiche del conto (capitale, P/L, winrate/lossrate, pip, ultimo trade chiuso) ripartono
+ // da zero. Il Trade Journal NON viene mai toccato qui: resta lo storico completo di sempre,
+ // si tocca solo eliminando un trade singolarmente (vedi deleteTrade()) o cancellando
+ // l'intera sessione salvata ("Cancella dati salvati").
+ positions=[]; pendingOrders=[];
+ statsBaselineByMode[currentMode()]=trades.filter(t=>t.mode===currentMode()).length;
  active=null; tradeSLLine=null; tradeTPLine=null;
  equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
  update(); draw();
@@ -2323,22 +2377,25 @@ function update(){
  // conto reale MT5 su cui si opera su più strumenti: NON si azzerano né si ricalcolano "per
  // asset" al cambio di ASSET. Cambiando ASSET cambiano solo i parametri dello strumento
  // (decimali prezzo/pip) e la serie storica mostrata a grafico, non le statistiche del conto.
- const base=num($('capital').value)||10000, pl=trades.reduce((s,t)=>s+t.pl,0), cap=base+pl;
- const wins=trades.filter(t=>t.pl>0), losses=trades.filter(t=>t.pl<0), gp=wins.reduce((s,t)=>s+t.pl,0), gl=-losses.reduce((s,t)=>s+t.pl,0);
+ // Si contano solo i trade successivi all'ultimo RESET SESSIONE (statsTrades()): il Trade
+ // Journal qui sotto invece mostra sempre TUTTO lo storico, anche quello precedente al reset.
+ const st=statsTrades();
+ const base=num($('capital').value)||10000, pl=st.reduce((s,t)=>s+t.pl,0), cap=base+pl;
+ const wins=st.filter(t=>t.pl>0), losses=st.filter(t=>t.pl<0), gp=wins.reduce((s,t)=>s+t.pl,0), gl=-losses.reduce((s,t)=>s+t.pl,0);
  let peak=base,dd=0; equity.forEach(e=>{peak=Math.max(peak,e);dd=Math.max(dd,(peak-e)/peak*100)});
- const last=trades.length?trades[trades.length-1]:null;
+ const last=st.length?st[st.length-1]:null;
  $('mLast').textContent=last?((last.pl>=0?'+':'')+euro(last.pl)):'—';
  $('mLast').className='value '+(last?(last.pl>=0?'liveProfit':'liveLoss'):'');
  $('mCapital').textContent=euro(cap);$('mPL').textContent=euro(pl);
- $('mWR').textContent=trades.length?(wins.length/trades.length*100).toFixed(1)+'%':'—';
- $('mLR').textContent=trades.length?(losses.length/trades.length*100).toFixed(1)+'%':'—';
+ $('mWR').textContent=st.length?(wins.length/st.length*100).toFixed(1)+'%':'—';
+ $('mLR').textContent=st.length?(losses.length/st.length*100).toFixed(1)+'%':'—';
  const pctTotal=base?(pl/base*100):0;
  $('mPctTotal').textContent=(pctTotal>=0?'+':'')+pctTotal.toFixed(2)+'%';
- $('mPctTotal').className='value '+(trades.length?(pctTotal>=0?'liveProfit':'liveLoss'):'');
- $('mTrades').textContent=trades.length;
- const totalPips=Math.round(trades.reduce((s,t)=>s+(t.pips||0),0)*10)/10;
+ $('mPctTotal').className='value '+(st.length?(pctTotal>=0?'liveProfit':'liveLoss'):'');
+ $('mTrades').textContent=st.length;
+ const totalPips=Math.round(st.reduce((s,t)=>s+(t.pips||0),0)*10)/10;
  $('mPips').textContent=(totalPips>=0?'+':'')+totalPips.toFixed(1);
- $('mPips').className='value '+(trades.length?(totalPips>=0?'liveProfit':'liveLoss'):'');
+ $('mPips').className='value '+(st.length?(totalPips>=0?'liveProfit':'liveLoss'):'');
 
  // Margine libero: si aggiorna in tempo reale con il P/L fluttuante di tutte le posizioni aperte.
  const fm=freeMargin(), eq=equityNow(), used=usedMargin();
@@ -2390,12 +2447,14 @@ function update(){
  $('journal').innerHTML=trades.map((t,i)=>{
    const tAsset=t.asset||'—';
    const otherAsset=t.asset&&currentAssetKey&&t.asset!==currentAssetKey;
-   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${t.side}</td><td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.sl)}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
+   const modeTag=t.mode==='live'?'🔴 Live':'📼 Storico';
+   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${modeTag}</td><td>${t.side}</td><td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.sl)}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+(t.pct!=null?t.pct.toFixed(2):'0.00')}%</td>`+
    `<td>${euro(t.account)}</td>`+
-   `<td><button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button></td></tr>`;
+   `<td><button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button>`+
+   `<button class="miniBtn danger" data-deltrade="${i}" title="Elimina definitivamente questo trade dal Journal" style="margin-left:4px">🗑️</button></td></tr>`;
  }).join('');
  scheduleSave();
 }
@@ -4701,7 +4760,7 @@ function zoneHandleHit(clientX,clientY){
 }
 
 function baseCapital(){ return num($('capital').value)||10000; }
-function closedPL(){ return trades.reduce((s,t)=>s+t.pl,0); }
+function closedPL(){ return statsTrades().reduce((s,t)=>s+t.pl,0); }
 function floatingPL(){
  const price=currentPrice(); if(price==null)return 0;
  // Il P/L fluttuante live si può calcolare solo per le posizioni dell'asset a grafico ora:
@@ -4990,11 +5049,11 @@ function closeTrade(reason,price,pos){
  // % guadagno/perdita rispetto al saldo del conto GLOBALE immediatamente prima di questa
  // chiusura (capitale iniziale + somma dei P/L di TUTTI i trade già chiusi in precedenza, su
  // qualunque asset): il conto è unico, come un conto reale MT5 che opera su più strumenti.
- const balanceBefore=(num($('capital').value)||10000)+trades.reduce((s,t)=>s+t.pl,0);
+ const balanceBefore=(num($('capital').value)||10000)+closedPL();
  const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
  // Conto € cumulativo: saldo del conto subito dopo la chiusura di questa operazione.
  const account=balanceBefore+pl;
- trades.push({...pos,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF});
+ trades.push({...pos,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:currentMode()});
  playOrderSound();
  positions=positions.filter(p=>p!==pos);
  // La nuova posizione attiva (per i controlli SL/TP) deve restare sull'ASSET a grafico ora,
@@ -5028,6 +5087,49 @@ function closeTrade(reason,price,pos){
  // l'equity curve è un'unica timeline continua del conto, non una per asset.
  equity.push(account);
  update();
+}
+// Elimina UN SOLO trade dal Trade Journal (richiesto dall'utente): a differenza di RESET
+// SESSIONE o "Cancella dati salvati", qui l'array `trades` viene toccato per davvero,
+// rimuovendo quella riga in modo permanente. Per non sballare le statistiche del conto
+// (capitale, P/L, winrate, drawdown) bisogna tenere allineati anche `statsBaselineByMode`
+// (l'indice-soglia, per modalità, oltre il quale i trade "contano" per il conto) e la
+// equity curve DI QUELLA MODALITÀ (che equity[k] combaci sempre con lo stesso trade
+// contato k-esimo di quella modalità, come già garantito da statsTrades()/closeTrade()):
+// - se il trade eliminato era PRIMA della soglia (già escluso dal conto, tipicamente da un
+//   RESET SESSIONE precedente), si limita a far scorrere la soglia di quella modalità di
+//   uno indietro, così l'insieme dei trade "contati" resta esattamente lo stesso;
+// - se il trade eliminato era DOPO la soglia (quindi già dentro capitale/P/L/winrate
+//   correnti), si rimuove anche il punto corrispondente dell'equity curve di quella
+//   modalità (quella attiva ora se è la modalità corrente, altrimenti lo snapshot salvato
+//   in sessionByMode per l'altra modalità), così drawdown e curva restano coerenti.
+// I campi già scritti negli ALTRI trade (es. "Conto €" cumulativo) restano gli stessi
+// valori storici di sempre: come per RESET SESSIONE, il Journal non riscrive mai a
+// posteriori le righe già chiuse, mostra solo lo storico così com'era in quel momento.
+function deleteTrade(i){
+ const t=trades[i]; if(!t)return;
+ if(!confirm('Eliminare definitivamente questo trade dal Journal? L\'operazione non può essere annullata.'))return;
+ const mode=t.mode||'backtest';
+ const modeTrades=trades.filter(x=>x.mode===mode);
+ const filteredIdx=modeTrades.indexOf(t);
+ const baseline=statsBaselineByMode[mode]||0;
+ if(filteredIdx<baseline){
+   statsBaselineByMode[mode]=baseline-1;
+ }else{
+   const eqIdx=(filteredIdx-baseline)+1; // equity[0] è il capitale iniziale della modalità
+   if(mode===currentMode()){
+     if(eqIdx>0&&eqIdx<equity.length)equity.splice(eqIdx,1);
+   }else{
+     const snap=sessionByMode[mode];
+     if(snap&&Array.isArray(snap.equity)&&eqIdx>0&&eqIdx<snap.equity.length){
+       snap.equity=snap.equity.slice();
+       snap.equity.splice(eqIdx,1);
+     }
+   }
+ }
+ trades.splice(i,1);
+ if(highlightedTrade&&highlightedTrade.tradeIndex===i)highlightedTrade=null;
+ update(); draw();
+ $('status').textContent='Trade eliminato dal Journal.';
 }
 function closeAllPositions(reason){
  // Si possono chiudere subito (con un prezzo corretto) solo le posizioni DELL'ASSET a grafico
@@ -5531,6 +5633,8 @@ $('openPositions').addEventListener('click',async e=>{
  }
 });
 $('journal').addEventListener('click',async e=>{
+ const delIdx=e.target.getAttribute('data-deltrade');
+ if(delIdx!=null){ deleteTrade(Number(delIdx)); return; }
  const jumpIdx=e.target.getAttribute('data-jumptrade');
  if(jumpIdx==null)return;
  // Come i pulsanti BUY/SELL e SET SL/TP/ENTRY, anche "Vai a grafico" porta subito la vista
