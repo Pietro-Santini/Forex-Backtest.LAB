@@ -4276,18 +4276,40 @@ function clampPointToPlot(g,p){
  const cx=Math.min(Math.max(x,minX),maxX), cy=Math.min(Math.max(y,minY),maxY);
  return {time:g.timeFromX(cx),price:g.price(cy)};
 }
+// Range orizzontale [xOrigin,xRight] della casella Target/Stop di una zona (stessa identica
+// formula usata per disegnarla in drawTpSlZoneBox() e per la sua maniglia in zoneHandleHit()):
+// serve a limitare il trascinamento delle linee SL/TP alla sola area della casella, non a
+// tutta la larghezza del grafico.
+function zoneBoxXRange(g,originIdx,ownerKey){
+ const span=getZoneSpan(ownerKey);
+ const xOrigin=g.xLocal(originIdx);
+ const xRightRaw=g.xLocal(originIdx+span);
+ const maxX=g.rect.width-g.pad.r-2;
+ const xRight=Math.max(xOrigin+30,Math.min(xRightRaw,maxX));
+ return {xOrigin,xRight};
+}
 function tradeLevelHit(clientX,clientY){
  const g=chartGeometry();if(!g)return null;
- const py=clientY-g.rect.top,tolerance=14;
+ const px=clientX-g.rect.left, py=clientY-g.rect.top,tolerance=14;
+ // In ORIZZONTALE il trascinamento parte solo da DENTRO la casella Target/Stop (o dal suo
+ // bordo, con un margine di tolleranza): fuori da quell'area, anche se il mouse passa alla
+ // stessa altezza (Y) della linea durante un pan del grafico, non deve agganciarla.
+ const insideZoneBox=(originIdx,ownerKey)=>{
+   const {xOrigin,xRight}=zoneBoxXRange(g,originIdx,ownerKey);
+   return px>=xOrigin-tolerance && px<=xRight+tolerance;
+ };
  if(active){
-   for(const item of [
-     tradeSLLine?{type:'SL',line:tradeSLLine}:null,
-     tradeTPLine?{type:'TP',line:tradeTPLine}:null
-   ].filter(Boolean)){
-     const dist=Math.abs(py-g.y(item.line.price));
-     if(dist<=tolerance)return item.type;
+   const openIdx=rowIndexContainingTime(openReferenceTimeForPos(active));
+   if(openIdx!=null && insideZoneBox(openIdx,'pos:'+active.id)){
+     for(const item of [
+       tradeSLLine?{type:'SL',line:tradeSLLine}:null,
+       tradeTPLine?{type:'TP',line:tradeTPLine}:null
+     ].filter(Boolean)){
+       const dist=Math.abs(py-g.y(item.line.price));
+       if(dist<=tolerance)return item.type;
+     }
    }
- }else{
+ }else if(insideZoneBox(idx,'draft:market')){
    // Bozza SL/TP (nessuna posizione attiva): trascinabile esattamente come le linee di
    // una posizione già aperta, così restano sempre "agganciate" al grafico.
    const draftSl=num($('sl')?.value);
@@ -4296,22 +4318,28 @@ function tradeLevelHit(clientX,clientY){
    if(Number.isFinite(draftTp) && Math.abs(py-g.y(draftTp))<=tolerance)return 'TP';
  }
  // Linea "bozza" del prossimo ordine pendente (prezzo di entrata non ancora confermato
- // con PENDING BUY/SELL): resta visibile e trascinabile dal momento in cui la imposti.
+ // con PENDING BUY/SELL): resta visibile e trascinabile dal momento in cui la imposti,
+ // ma solo dalla sua etichetta (vicino al bordo sinistro del grafico, dove viene disegnata).
  const draftEntry=num($('pendingEntry')?.value);
- if(Number.isFinite(draftEntry) && Math.abs(py-g.y(draftEntry))<=tolerance)return 'ENTRY';
+ if(Number.isFinite(draftEntry) && px<=g.pad.l+160 && Math.abs(py-g.y(draftEntry))<=tolerance)return 'ENTRY';
  // Bozza SL/TP DEDICATA all'ordine pendente in composizione (caselle separate da quelle
- // del trade a mercato): trascinabile allo stesso modo.
- const draftSlPending=num($('slPending')?.value);
- if(Number.isFinite(draftSlPending) && Math.abs(py-g.y(draftSlPending))<=tolerance)return 'SL_PENDING';
- const draftTpPending=num($('tpPending')?.value);
- if(Number.isFinite(draftTpPending) && Math.abs(py-g.y(draftTpPending))<=tolerance)return 'TP_PENDING';
- // Linee degli ordini pendenti già creati: entrata, SL e TP, tutte trascinabili. Solo quelli
+ // del trade a mercato): trascinabile allo stesso modo, solo dentro la sua casella.
+ if(!(active&&active.origin==='PENDING') && insideZoneBox(idx,'draft:pending')){
+   const draftSlPending=num($('slPending')?.value);
+   if(Number.isFinite(draftSlPending) && Math.abs(py-g.y(draftSlPending))<=tolerance)return 'SL_PENDING';
+   const draftTpPending=num($('tpPending')?.value);
+   if(Number.isFinite(draftTpPending) && Math.abs(py-g.y(draftTpPending))<=tolerance)return 'TP_PENDING';
+ }
+ // Linee degli ordini pendenti già creati: entrata, SL e TP, trascinabili solo dall'area
+ // della loro etichetta (l'entrata a sinistra, SL/TP a destra — stessa posizione in cui
+ // vengono disegnate in draw()), non su tutta la larghezza del grafico. Solo quelli
  // DELL'ASSET a grafico ora sono disegnati/trascinabili qui (vedi draw()).
  const ownPendingForDrag=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders;
  for(const p of ownPendingForDrag){
-   if(Math.abs(py-g.y(p.entry))<=tolerance)return `pending:${p.id}:entry`;
-   if(Number.isFinite(p.sl) && Math.abs(py-g.y(p.sl))<=tolerance)return `pending:${p.id}:sl`;
-   if(Number.isFinite(p.tp) && Math.abs(py-g.y(p.tp))<=tolerance)return `pending:${p.id}:tp`;
+   if(px<=g.pad.l+160 && Math.abs(py-g.y(p.entry))<=tolerance)return `pending:${p.id}:entry`;
+   const rightZoneX=(g.rect.width-g.pad.r)-140;
+   if(Number.isFinite(p.sl) && px>=rightZoneX && Math.abs(py-g.y(p.sl))<=tolerance)return `pending:${p.id}:sl`;
+   if(Number.isFinite(p.tp) && px>=rightZoneX && Math.abs(py-g.y(p.tp))<=tolerance)return `pending:${p.id}:tp`;
  }
  return null;
 }
@@ -7389,7 +7417,15 @@ let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, ca
 let liveRefreshTimer=null;
 function startLiveRefreshTimer(){
  if(liveRefreshTimer)return;
- liveRefreshTimer=setInterval(()=>{ if(liveModeActive)update(); },1000);
+ liveRefreshTimer=setInterval(()=>{
+   if(!liveModeActive)return;
+   // Ultimo prezzo noto per l'asset ATTUALMENTE a grafico: viene comunque aggiornato da
+   // applyLiveTick ad ogni tick ricevuto (anche quando il tick non tocca il grafico perché
+   // "in background"), quindi qui basta rileggerlo per far avanzare la candela in corso.
+   const livePrice=currentAssetKey?livePriceByAsset[currentAssetKey]:null;
+   if(Number.isFinite(livePrice) && applyLivePriceToChart(livePrice,Date.now()))draw();
+   update();
+ },1000);
 }
 function stopLiveRefreshTimer(){
  if(liveRefreshTimer){clearInterval(liveRefreshTimer);liveRefreshTimer=null;}
@@ -7463,6 +7499,37 @@ function connectCapitalStream(epics){
 //   la candela in corso e ridisegna il grafico — per gli altri asset non tocchiamo il grafico.
 // Il salvataggio usa scheduleSave() (con debounce) e non saveLightStateNow() diretto: con più
 // tick al secondo scriverebbe troppo spesso su IndexedDB/Firestore.
+// "Bucketing" del prezzo Live nella candela in corso del grafico a schermo (il "file"
+// sintetico csvLibrary[0] creato da loadLiveHistoryFromCapital): aggiorna high/low/close
+// della candela del bucket corrente, oppure ne apre una nuova se il tempo è passato al
+// bucket successivo. Restituisce true se qualcosa è stato effettivamente modificato (quindi
+// vale la pena ridisegnare), false altrimenti (es. timestamp più vecchio di quanto già
+// registrato). Usata sia da un tick WebSocket sia dal timer di refresh ogni 1s qui sotto:
+// quest'ultimo è ciò che garantisce che la candela avanzi visibilmente ogni secondo anche
+// nei momenti in cui i tick WebSocket si diradano, invece di restare ferma finché non si
+// cambia asset (che la ricarica da zero via REST).
+function applyLivePriceToChart(price,timestamp){
+ if(!Number.isFinite(price) || !Number.isFinite(timestamp))return false;
+ const file=csvLibrary[0];
+ if(!file)return false;
+ const bucketMs=(currentTF||1)*60000;
+ const bucketStart=Math.floor(timestamp/bucketMs)*bucketMs;
+ const last=file.rows[file.rows.length-1];
+ const lastT=last?parseDateTime(last.date):NaN;
+ if(last && lastT===bucketStart){
+   if(price===last.high && price===last.low && price===last.close)return false; // nessun cambiamento reale
+   if(price>last.high)last.high=price;
+   if(price<last.low)last.low=price;
+   last.close=price;
+ }else if(!last || bucketStart>lastT){
+   file.rows.push({date:new Date(bucketStart).toISOString(),open:price,high:price,low:price,close:price,volume:0});
+ }else return false; // tick fuori sequenza (bucket più vecchio di quello che abbiamo già): ignorato
+ rebuildBaseRowsFromLibrary();
+ if(followLatest)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+ rebuildRows();
+ if(followLatest)viewEnd=idx;
+ return true;
+}
 function applyLiveTick(p){
  if(!liveModeActive)return;
  const price=p.bid; // prezzo bid: stessa convenzione già usata per le barre storiche caricate via REST
@@ -7477,23 +7544,7 @@ function applyLiveTick(p){
    update();
    return;
  }
- const file=csvLibrary[0];
- if(!file)return;
- const bucketMs=(currentTF||1)*60000;
- const bucketStart=Math.floor(p.timestamp/bucketMs)*bucketMs;
- const last=file.rows[file.rows.length-1];
- const lastT=last?parseDateTime(last.date):NaN;
- if(last && lastT===bucketStart){
-   if(price>last.high)last.high=price;
-   if(price<last.low)last.low=price;
-   last.close=price;
- }else if(!last || bucketStart>lastT){
-   file.rows.push({date:new Date(bucketStart).toISOString(),open:price,high:price,low:price,close:price,volume:0});
- }else return; // tick fuori sequenza (bucket più vecchio di quello che abbiamo già): ignorato
- rebuildBaseRowsFromLibrary();
- if(followLatest)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
- rebuildRows();
- if(followLatest)viewEnd=idx;
+ if(!applyLivePriceToChart(price,p.timestamp))return;
  update();draw();
  scheduleSave();
 }
