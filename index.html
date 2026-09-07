@@ -412,7 +412,7 @@ tr.otherAssetRow td:last-child{opacity:1}
   <div class="fbModalBox" style="max-width:480px">
     <div class="fbModalHeader"><h3>📖 Guida — Come ottenere le credenziali Capital.com</h3><button id="liveGuideCloseBtn" class="fbModalClose" title="Chiudi">✕</button></div>
     <div class="liveLoginBody" style="max-height:60vh;overflow:auto;font-size:13px;line-height:1.55;color:#c8d2dd">
-      <p><strong>1. Accedi</strong> al tuo conto Capital.com da browser (non serve l'app mobile) con l'email e la password del tuo account.</p>
+      <p><strong>1. Accedi</strong> al tuo conto Capital.com da browser (non serve l'app mobile) con l'email e la password del tuo account — <a href="https://mycapital.capital.com/login" target="_blank" rel="noopener" style="color:#3ea6ff">apri qui la pagina di login ↗</a>.</p>
       <p><strong>2. Vai su</strong> Impostazioni → sezione <em>"Integrazioni API"</em>.</p>
       <p><strong>3. Attiva il 2FA</strong> se non l'hai già fatto: è obbligatorio per poter generare una API Key.</p>
       <p><strong>4. Clicca su "Genera chiave API"</strong>. Nella finestra che si apre: dai un nome alla chiave, imposta una <em>password personalizzata per la API Key</em> (è diversa dalla password del tuo account — sarà quella da inserire qui nel campo "Password della API Key") ed eventualmente una scadenza (di default dura 1 anno).</p>
@@ -5327,7 +5327,11 @@ function updateFileBtnLabel(){}
 // dei CSV per quell'asset e, se sì, li portiamo subito sul grafico.
 $('market')?.addEventListener('change',()=>{
  const v=$('market').value;
- if(v && v!=='custom') autoLoadAssetLibrary(v);
+ if(!v || v==='custom') return;
+ // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
+ // cambio ASSET rifacciamo la /prices per il nuovo strumento.
+ if(liveModeActive) loadLiveHistoryFromCapital(v);
+ else autoLoadAssetLibrary(v);
 });
 $('saveCsvToFileBtn')?.addEventListener('click',async()=>{
  const statusEl=$('csvLibraryStatus');
@@ -6945,6 +6949,92 @@ async function connectToCapitalCom(creds){
  }
  return {ok:true,cst,securityToken,accountInfo:body};
 }
+// ===================================================================
+// STEP 1 (completamento) — recupero storico iniziale (/prices) da Capital.com, per l'asset
+// attualmente selezionato. Sostituisce la libreria CSV corrente con le candele scaricate da
+// Capital.com (stesso "slot" usato per i file CSV: rebuildBaseRowsFromLibrary, rebuildRows,
+// ecc. — nessuna funzione di disegno/replay viene toccata, i dati arrivano solo da una fonte
+// diversa). Il replay storico da CSV resta intatto: basta ricaricare un CSV per tornare
+// alla modalità Storico "pura".
+const CAPITAL_RESOLUTION_MAP={1:'MINUTE',5:'MINUTE_5',15:'MINUTE_15',30:'MINUTE_30',60:'HOUR',240:'HOUR_4',1440:'DAY'};
+let capitalEpicCache={};
+// Capital.com identifica gli strumenti con un "epic" (es. "GOLD" per l'oro) che non sempre
+// coincide col nostro codice ASSET (es. "XAUUSD"): lo cerchiamo con l'endpoint /markets e
+// teniamo il risultato in cache per non rifare la ricerca ogni volta.
+async function resolveCapitalEpic(asset){
+ if(capitalEpicCache[asset])return capitalEpicCache[asset];
+ const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+ try{
+   const res=await fetch(base+'/api/v1/markets?searchTerm='+encodeURIComponent(asset),{
+     headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
+   });
+   const body=await res.json();
+   if(res.ok && body && Array.isArray(body.markets) && body.markets.length){
+     const exact=body.markets.find(m=>String(m.epic||'').toUpperCase()===asset.toUpperCase());
+     const epic=(exact||body.markets[0]).epic;
+     capitalEpicCache[asset]=epic;
+     return epic;
+   }
+ }catch(e){ console.warn('Ricerca epic Capital.com fallita:',e); }
+ return null;
+}
+async function loadLiveHistoryFromCapital(asset){
+ if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
+ if(!capitalSessionTokens)return;
+ $('status').textContent=`Ricerca strumento Capital.com per ${asset}…`;
+ const epic=await resolveCapitalEpic(asset);
+ if(!epic){
+   $('status').textContent=`⚠️ Nessuno strumento Capital.com trovato per "${asset}": lo storico Live non è stato caricato (resta il CSV eventualmente già presente).`;
+   return;
+ }
+ const resolution=CAPITAL_RESOLUTION_MAP[currentTF]||'MINUTE';
+ const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+ $('status').textContent=`Scaricamento storico Live (${epic}, ${resolution})…`;
+ let body;
+ try{
+   const res=await fetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution='+resolution+'&max=1000',{
+     headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
+   });
+   body=await res.json();
+   if(!res.ok)throw new Error((body&&(body.errorCode||body.error))||('HTTP '+res.status));
+ }catch(e){
+   $('status').textContent='⚠️ Storico Live non scaricato: '+e.message;
+   return;
+ }
+ const prices=(body&&Array.isArray(body.prices))?body.prices:[];
+ if(!prices.length){
+   $('status').textContent=`⚠️ Capital.com non ha restituito candele per ${epic} (${resolution}).`;
+   return;
+ }
+ // Usiamo il prezzo bid per open/high/low/close (come la maggior parte dei grafici retail).
+ // "Z" in fondo alla data dice esplicitamente "questo è già UTC": parseDateTime lo riconosce
+ // e non lo reinterpreta con il fuso orario usato di solito per i CSV manuali.
+ const liveRows=prices.map(p=>({
+   date:(p.snapshotTimeUTC||p.snapshotTime)+'Z',
+   open:p.openPrice?.bid, high:p.highPrice?.bid, low:p.lowPrice?.bid, close:p.closePrice?.bid,
+   volume:p.lastTradedVolume||0
+ })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite));
+ if(!liveRows.length){
+   $('status').textContent=`⚠️ Le candele ricevute da Capital.com per ${epic} non sono valide: storico Live non caricato.`;
+   return;
+ }
+ csvLibrary=[{id:'capital_live_'+asset,name:`Capital.com Live (${epic})`,addedAt:Date.now(),rows:liveRows}];
+ rebuildBaseRowsFromLibrary();
+ renderCsvLibraryList();
+ updateFileBtnLabel();
+ $('fileName').textContent=liveRows.length.toLocaleString('it-IT')+' candele • '+epic+' (storico Live Capital.com)';
+ drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+ historyUndo=[];historyRedo=[];
+ // A differenza del caricamento di un CSV storico (che parte dalla prima candela per il
+ // replay), in modalità Live vogliamo partire dall'ULTIMA candela ricevuta (il presente).
+ masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ rebuildRows();
+ viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ update();draw();
+ saveCsvNow();
+ saveLightStateNow();
+ $('status').textContent=`🟢 Storico Live caricato: ${liveRows.length.toLocaleString('it-IT')} candele per ${epic} (${resolution}).`;
+}
 
 async function readCapitalCredsFromHandle(handle){
  try{
@@ -7014,6 +7104,8 @@ $('liveModeSwitch').addEventListener('click',async()=>{
      liveModeActive=true;
      updateLiveModeUI();
      $('status').textContent='🟢 Connesso a Capital.com con le credenziali salvate in precedenza.';
+     const currentAsset=$('market')?.value;
+     if(currentAsset && currentAsset!=='custom') loadLiveHistoryFromCapital(currentAsset);
    }else{
      liveModeActive=false;
      updateLiveModeUI();
@@ -7092,6 +7184,8 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
  $('status').textContent=(saved
    ?'🟢 Connesso a Capital.com. Credenziali salvate nella cartella collegata: verranno ricaricate da sole al prossimo accesso.'
    :'🟢 Connesso a Capital.com (credenziali tenute solo per questa sessione: salvataggio automatico non disponibile/non riuscito).');
+ const currentAsset=$('market')?.value;
+ if(currentAsset && currentAsset!=='custom') loadLiveHistoryFromCapital(currentAsset);
 });
 
 (async function initSession(){
