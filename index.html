@@ -723,7 +723,7 @@ tr.otherAssetRow td:last-child{opacity:1}
 
 <div class="panel">
  <div class="label">Posizioni aperte</div>
- <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>P/L live</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
 </div>
@@ -2541,7 +2541,11 @@ function update(){
      const posPrice=isCurrentAsset?price:(liveModeActive?livePriceByAsset[posAsset]:null);
      const plLive=(posPrice!=null)?calculateForexPL(p.side,p.entry,posPrice,p.lots,posAsset):null;
      const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
-     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+plCell+
+     // Colonna "Prezzo corrente": stesso prezzo già usato per calcolare il P/L live di questa
+     // riga (posPrice), quindi si aggiorna in automatico ad ogni update() — a schermo per
+     // l'asset a grafico, via streaming/tick multi-epic per gli altri asset in background.
+     const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):'—'}</td>`;
+     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
      `<td><button class="miniBtn" data-gotoasset-pos="${p.id}" title="Passa all'asset ${posAsset} e mostra questa posizione a grafico">📍 Vai a grafico</button><button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button></td></tr>`;
    }).join('');
  }
@@ -5232,7 +5236,13 @@ function closeTrade(reason,price,pos){
  pos=pos||active;
  if(!pos)return;
  const lots=pos.lots||getLotSize();
- const pl=calculateForexPL(pos.side,pos.entry,price,lots);
+ // BUG RISOLTO: senza l'asset esplicito, calculateForexPL usava lo strumento SELEZIONATO ORA
+ // sul grafico ($('market').value) invece di quello REALE della posizione — se si chiudeva una
+ // posizione di un asset diverso da quello a grafico (es. posizione in background, o chiusura
+ // automatica SL/TP su un altro asset), contractSize/plMode sbagliati falsavano completamente
+ // il P/L (es. una perdita di 242€ calcolata con contractSize dell'oro invece che di una coppia
+ // forex risultava in 0,03€).
+ const pl=calculateForexPL(pos.side,pos.entry,price,lots,pos.asset||currentAssetKey);
  const pips=pipsFromPrice(pos.side,pos.entry,price);
  // % guadagno/perdita rispetto al saldo del conto GLOBALE immediatamente prima di questa
  // chiusura (capitale iniziale + somma dei P/L di TUTTI i trade già chiusi in precedenza, su
@@ -5389,7 +5399,13 @@ async function jumpToPositionOnChart(posId){
  if(pos.asset && currentAsset!==pos.asset){
    if($('market'))$('market').value=pos.asset;
    applyInstrument();
-   await autoLoadAssetLibrary(pos.asset);
+   // BUG RISOLTO: qui si caricava SEMPRE la libreria CSV di Storico (autoLoadAssetLibrary),
+   // anche in modalità Live — per questo "Vai a grafico" su una posizione live riportava alla
+   // sessione Storico invece di restare sulla candela Live in diretta di quell'asset. In Live
+   // va invece ricaricato lo storico Live da Capital.com (stessa funzione già usata dal cambio
+   // ASSET manuale in Live), che tra l'altro riattiva anche lo streaming per il nuovo epic.
+   if(liveModeActive) await loadLiveHistoryFromCapital(pos.asset);
+   else await autoLoadAssetLibrary(pos.asset);
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${pos.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere la posizione a grafico.`;return;}
  focusPosition(pos);
@@ -5420,7 +5436,10 @@ async function jumpToPendingOnChart(orderId){
  if(p.asset && currentAsset!==p.asset){
    if($('market'))$('market').value=p.asset;
    applyInstrument();
-   await autoLoadAssetLibrary(p.asset);
+   // Stessa correzione di jumpToPositionOnChart: in Live va ricaricato lo storico Live, non
+   // quello di Storico.
+   if(liveModeActive) await loadLiveHistoryFromCapital(p.asset);
+   else await autoLoadAssetLibrary(p.asset);
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${p.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -5459,9 +5478,9 @@ function checkMarginCall(){
    guard++;
    const price=currentPrice(); if(price==null)break;
    // Chiude prima la posizione più in perdita, come farebbe un broker in stop-out.
-   let worst=ownPositions[0], worstPL=calculateForexPL(worst.side,worst.entry,price,worst.lots);
+   let worst=ownPositions[0], worstPL=calculateForexPL(worst.side,worst.entry,price,worst.lots,worst.asset||currentAssetKey);
    for(const p of ownPositions){
-     const pl=calculateForexPL(p.side,p.entry,price,p.lots);
+     const pl=calculateForexPL(p.side,p.entry,price,p.lots,p.asset||currentAssetKey);
      if(pl<worstPL){worst=p;worstPL=pl;}
    }
    closeTrade('MARGIN CALL',price,worst);
@@ -5626,7 +5645,7 @@ async function handleCapitalManualAssetSearch(){
  const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
  let body;
  try{
-   const res=await fetch(base+'/api/v1/markets?searchTerm='+encodeURIComponent(term.trim()),{
+   const res=await capitalApiFetch(base+'/api/v1/markets?searchTerm='+encodeURIComponent(term.trim()),{
      headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
    });
    body=await res.json();
@@ -7263,11 +7282,44 @@ let capitalCredsDirHandle=null;
 const CAPITAL_LIVE_BASE='https://api-capital.backend-capital.com';
 const CAPITAL_DEMO_BASE='https://demo-api-capital.backend-capital.com';
 let capitalSessionTokens=null; // {cst, securityToken} — validi 10 minuti, solo in memoria
+// ===================================================================
+// RATE LIMITER richieste REST verso Capital.com: l'API risponde 429 "Too Many Requests" se le
+// richieste partono troppo ravvicinate (es. al cambio asset, quando resolveCapitalEpic +
+// loadLiveHistoryFromCapital + fetchLatestPriceRest possono finire per accavallarsi). Come
+// richiesto, TUTTE le chiamate REST verso Capital.com passano da questa coda, che le serializza
+// garantendo almeno 1000ms fra l'invio di una richiesta e la successiva (una richiesta al
+// secondo), qualunque sia l'ordine/il punto del codice da cui partono. In caso di 429 la
+// richiesta viene ritentata automaticamente dopo un'attesa (rispettando l'header Retry-After se
+// presente) invece di fallire e basta.
+let capitalApiQueueTail=Promise.resolve();
+let capitalApiLastSentAt=0;
+function capitalApiFetch(url,options){
+ const run=async()=>{
+   const waitMs=Math.max(0,1000-(Date.now()-capitalApiLastSentAt));
+   if(waitMs>0)await new Promise(r=>setTimeout(r,waitMs));
+   capitalApiLastSentAt=Date.now();
+   let res=await fetch(url,options);
+   if(res.status===429){
+     const retryAfterHeader=Number(res.headers.get('Retry-After'));
+     const retryMs=(Number.isFinite(retryAfterHeader)&&retryAfterHeader>0)?retryAfterHeader*1000:1500;
+     await new Promise(r=>setTimeout(r,retryMs));
+     capitalApiLastSentAt=Date.now();
+     res=await fetch(url,options);
+   }
+   return res;
+ };
+ // Incodata sulla coda: parte solo dopo che la richiesta precedente (successo o fallimento) è
+ // completata, così l'ordine "1 richiesta al secondo" resta rispettato indipendentemente da
+ // quali punti del codice la chiamano in parallelo.
+ const result=capitalApiQueueTail.then(run,run);
+ capitalApiQueueTail=result.then(()=>{},()=>{}); // un fallimento non deve bloccare la coda per le successive
+ return result;
+}
 async function connectToCapitalCom(creds){
  const base=creds.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
  let res;
  try{
-   res=await fetch(base+'/api/v1/session',{
+   res=await capitalApiFetch(base+'/api/v1/session',{
      method:'POST',
      headers:{'Content-Type':'application/json','X-CAP-API-KEY':creds.apiKey},
      body:JSON.stringify({identifier:creds.email,password:creds.apiKeyPassword,encryptedPassword:false})
@@ -7308,7 +7360,7 @@ async function resolveCapitalEpic(asset){
  if(capitalEpicCache[asset])return capitalEpicCache[asset];
  const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
  try{
-   const res=await fetch(base+'/api/v1/markets?searchTerm='+encodeURIComponent(asset),{
+   const res=await capitalApiFetch(base+'/api/v1/markets?searchTerm='+encodeURIComponent(asset),{
      headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
    });
    const body=await res.json();
@@ -7350,7 +7402,7 @@ async function loadLiveHistoryFromCapital(asset){
  $('status').textContent=`Scaricamento storico Live (${epic}, ${resolution})…`;
  let body;
  try{
-   const res=await fetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution='+resolution+'&max=1000',{
+   const res=await capitalApiFetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution='+resolution+'&max=1000',{
      headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
    });
    body=await res.json();
@@ -7470,7 +7522,7 @@ async function fetchLatestPriceRest(epic){
  if(!capitalSessionTokens||!epic)return null;
  try{
    const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
-   const res=await fetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution=MINUTE&max=1',{
+   const res=await capitalApiFetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution=MINUTE&max=1',{
      headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
    });
    if(!res.ok)return null;
@@ -7511,7 +7563,11 @@ function startLiveRefreshTimer(){
        touched=applyLivePriceToChart(restPrice,Date.now())||touched;
      }
    }
-   if(touched)scheduleSave();
+   // Stessa correzione di applyLiveTick: se questo giro ha aggiornato la candela in corso
+   // (tick "vivo" o fallback REST), va anche rivalutato se SL/TP dell'asset a grafico sono
+   // stati raggiunti e se un ordine pendente va attivato — altrimenti restano ignorati finché
+   // non si passa allo Storico e si avanza manualmente.
+   if(touched){evaluate();checkPendingOrders();scheduleSave();}
    update();
    // Ridisegnato SEMPRE (non solo se il prezzo è cambiato): serve a far scorrere secondo per
    // secondo il conto alla rovescia di chiusura candela nell'etichetta di prezzo corrente.
@@ -7664,6 +7720,12 @@ function applyLiveTick(p){
    return;
  }
  if(!applyLivePriceToChart(price,p.timestamp))return;
+ // BUG RISOLTO: SL/TP e ordini pendenti dell'asset A GRAFICO ORA non venivano MAI valutati in
+ // Live — evaluate()/checkPendingOrders() partivano solo avanzando lo storico a mano (Storico).
+ // Per l'asset "in background" evaluateLiveBackgroundAsset() già lo faceva più sopra: qui
+ // manca la stessa cosa per l'asset visualizzato, usando però l'high/low reale della candela
+ // in corso (appena aggiornata da applyLivePriceToChart), coerente con la valutazione storica.
+ evaluate();checkPendingOrders();
  update();draw();
  scheduleSave();
 }
