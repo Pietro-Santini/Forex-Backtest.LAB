@@ -82,8 +82,10 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 .drawTemplateRowDel:hover{color:#e88;background:#3a1818}
 .drawTemplateEmpty{padding:8px 9px;font-size:12px;color:#7a8492}
 /* ---- Popover impostazioni indicatore (aperto dal pulsante ⚙️ del chip) ---- */
-.indChip{position:relative;display:inline-flex;align-items:center;gap:6px;background:#111823;border:1px solid #263041;border-radius:8px;padding:5px 9px;font-size:12px}
-.indChipName{color:#cfe0f5;font-weight:700;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.indChip{position:relative;display:flex;flex-direction:column;align-items:stretch;gap:5px;background:#111823;border:1px solid #263041;border-radius:8px;padding:7px 9px;font-size:12px;width:100%;box-sizing:border-box}
+.indChipTop{display:flex;align-items:center}
+.indChipBtns{display:flex;align-items:center;gap:6px}
+.indChipName{color:#cfe0f5;font-weight:700;white-space:normal;overflow-wrap:break-word}
 .indChipBtn{background:transparent;border:1px solid #2b3541;color:#c6ceda;font-size:12px;padding:3px 7px;border-radius:6px;cursor:pointer;line-height:1}
 .indChipBtn:hover{background:#1e2836}
 .indSettingsPopover{position:absolute;top:calc(100% + 6px);left:0;min-width:260px;max-width:420px;max-height:70vh;overflow-y:auto;background:#131a24;border:1px solid #2b3541;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:25;padding:10px;display:flex;flex-direction:column;gap:7px}
@@ -3233,33 +3235,43 @@ function renderActiveIndicatorsUI(){
    toggleBtn.textContent=indicatorsListHidden?'👁 Elenco indicatori':'🙈 Elenco indicatori';
    toggleBtn.classList.toggle('active',!indicatorsListHidden);
  }
+ // Un indicatore per riga (colonna verticale), con il nome ben visibile in cima
+ // e i pulsanti (⚙️ 👁 ✕) su una riga separata sotto: così il titolo non viene mai
+ // troncato/nascosto dai pulsanti, indipendentemente da quanto è lungo.
  wrap.style.display=(activeIndicators.length&&!indicatorsListHidden)?'flex':'none';
+ wrap.style.flexDirection='column';
+ wrap.style.alignItems='stretch';
  wrap.innerHTML='';
  activeIndicators.forEach(ind=>{
    const def=INDICATOR_DEFS[ind.key]; if(!def)return;
-   // Chip compatto: solo il nome dell'indicatore resta sempre visibile, per risparmiare
-   // spazio sopra al grafico. Tutti i parametri si spostano dentro un popover che si apre
-   // col pulsante ingranaggio, così non occupano più spazio permanentemente.
-   const chip=document.createElement('span');
+   // Chip: i parametri si spostano dentro un popover che si apre col pulsante
+   // ingranaggio, così non occupano più spazio permanentemente.
+   const chip=document.createElement('div');
    chip.className='indChip';
+   const topRow=document.createElement('div');
+   topRow.className='indChipTop';
    const nameEl=document.createElement('b');
    nameEl.className='indChipName';
    nameEl.textContent='📊 '+def.label;
    nameEl.title=def.label;
-   chip.appendChild(nameEl);
+   topRow.appendChild(nameEl);
+   chip.appendChild(topRow);
+   const btnsRow=document.createElement('div');
+   btnsRow.className='indChipBtns';
    const gearBtn=document.createElement('button');
    gearBtn.className='indChipBtn'; gearBtn.title='Impostazioni indicatore'; gearBtn.textContent='⚙️';
-   chip.appendChild(gearBtn);
+   btnsRow.appendChild(gearBtn);
    const eyeBtn=document.createElement('button');
    eyeBtn.className='indChipBtn'; eyeBtn.title=ind.hidden?'Mostra indicatore sul grafico':'Nascondi indicatore dal grafico';
    eyeBtn.textContent=ind.hidden?'🚫':'👁';
    eyeBtn.style.opacity=ind.hidden?'.55':'1';
    eyeBtn.addEventListener('click',()=>toggleIndicatorHidden(ind.id));
-   chip.appendChild(eyeBtn);
+   btnsRow.appendChild(eyeBtn);
    const rm=document.createElement('button');
    rm.className='indChipBtn'; rm.textContent='✕'; rm.title='Rimuovi indicatore';
    rm.addEventListener('click',()=>removeIndicator(ind.id));
-   chip.appendChild(rm);
+   btnsRow.appendChild(rm);
+   chip.appendChild(btnsRow);
    const pop=document.createElement('div');
    pop.className='indSettingsPopover';
    pop.style.display=(openIndicatorPopoverId===ind.id)?'flex':'none';
@@ -5341,11 +5353,24 @@ async function jumpToTradeOnChart(tradeIndex){
  // toccare quello dell'asset che si lascia — vedi autoLoadAssetLibrary): il Trade Journal è
  // condiviso fra tutti gli asset proprio per permettere questo salto diretto. `trades` non
  // viene mai svuotato al cambio asset, quindi lo stesso `tradeIndex` resta valido dopo.
+ // Distinzione Storico/Live: un'operazione chiusa in modalità Live va riaperta sul grafico
+ // Live in diretta di quell'asset (candele Capital.com), NON sul CSV di Storico; viceversa
+ // un'operazione chiusa in Storico va sempre mostrata sul CSV storico caricato per l'asset.
+ // Il campo t.mode ('live'/'backtest') viene salvato da closeTrade() al momento della chiusura,
+ // quindi riflette la sessione REALE in cui quel trade è avvenuto, non la modalità attuale.
+ const tradeWasLive=t.mode==='live';
+ // Se il trade appartiene alla modalità (Live/Storico) diversa da quella attiva ora, passiamo
+ // prima da switchAccountMode() — l'unico punto sicuro per cambiare modalità (gestisce
+ // snapshot conto, stream Capital.com, ecc.) — poi eventualmente cambiamo asset.
+ if(liveModeActive!==tradeWasLive){
+   await switchAccountMode(tradeWasLive);
+ }
  const currentAsset=$('market')?.value||'';
  if(t.asset && currentAsset!==t.asset){
    if($('market'))$('market').value=t.asset;
    applyInstrument();
-   await autoLoadAssetLibrary(t.asset);
+   if(tradeWasLive) await loadLiveHistoryFromCapital(t.asset);
+   else await autoLoadAssetLibrary(t.asset);
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${t.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'operazione a grafico.`;return;}
  const openIdx=rowIndexContainingTime(openReferenceTimeForPos(t));
