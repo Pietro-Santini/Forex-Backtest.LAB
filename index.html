@@ -808,6 +808,7 @@ async function switchAccountMode(newIsLive){
  await withLoadingOverlay(newIsLive?'Passaggio a modalità Live…':'Ritorno a modalità Storico…', async()=>{
    captureCurrentModeSnapshot();
    liveModeActive=newIsLive;
+   if(!newIsLive)disconnectCapitalStream();
    restoreModeSnapshot(currentMode());
    tradeSLLine=null; tradeTPLine=null;
    syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
@@ -5786,6 +5787,10 @@ $('tf').addEventListener('change',()=>{
  // e tornando indietro a m1 si ritrova esattamente lo stesso identico prezzo di chiusura.
  rebuildRows();
  viewEnd=idx;
+ // STEP 2: la subscription WebSocket è per una risoluzione specifica — cambiando timeframe in
+ // Live va rifatta con la nuova risoluzione (connectCapitalStream si occupa già di evitare
+ // lavoro inutile se per assurdo la risoluzione risultasse la stessa).
+ if(liveModeActive && capitalWsEpic)connectCapitalStream(capitalWsEpic);
 
  // Non azzeriamo più la sessione: capitale, trade e linee restano.
  const label=currentTF>=1440?(currentTF/1440)+'D':currentTF>=60?(currentTF/60)+'H':currentTF+'m';
@@ -7231,6 +7236,85 @@ async function loadLiveHistoryFromCapital(asset){
  // torna in Storico (vedi switchAccountMode()).
  saveLightStateNow();
  $('status').textContent=`🟢 Storico Live caricato: ${liveRows.length.toLocaleString('it-IT')} candele per ${epic} (${resolution}).`;
+ // STEP 2 — apre (o riapre, se già presente da un asset precedente) lo streaming WebSocket
+ // per questo epic/risoluzione, subito dopo che lo storico iniziale via REST è pronto.
+ connectCapitalStream(epic);
+}
+
+// ===================================================================
+// STEP 2 — STREAMING TICK: WebSocket verso Capital.com per aggiornare la candela in corso in
+// tempo reale, oltre allo storico già scaricato via REST qui sopra. Usiamo la subscription
+// "OHLCMarketData" (non i singoli tick bid/ask) perché fornisce già barre OHLC pronte, nella
+// stessa risoluzione del timeframe corrente: il client si limita ad aggiornare l'ultima riga
+// di csvLibrary, senza dover aggregare i tick candela-per-candela da solo.
+// Riferimento: https://open-api.capital.com/ (sezione WebSocket API).
+let capitalWs=null, capitalWsEpic=null, capitalWsResolution=null, capitalWsPingTimer=null, capitalWsCorrId=1;
+function disconnectCapitalStream(){
+ if(capitalWsPingTimer){clearInterval(capitalWsPingTimer);capitalWsPingTimer=null;}
+ if(capitalWs){
+   try{capitalWs.onclose=null;capitalWs.onerror=null;capitalWs.close();}catch(e){}
+   capitalWs=null;
+ }
+ capitalWsEpic=null; capitalWsResolution=null;
+}
+function connectCapitalStream(epic){
+ if(!liveModeActive || !capitalSessionTokens || !epic)return;
+ const resolution=CAPITAL_RESOLUTION_MAP[currentTF]||'MINUTE';
+ // Già connessi allo stesso epic/risoluzione: non c'è nulla da rifare.
+ if(capitalWs && capitalWs.readyState===WebSocket.OPEN && capitalWsEpic===epic && capitalWsResolution===resolution)return;
+ disconnectCapitalStream();
+ const wsBase=liveCredsDraft?.demo
+   ?'wss://demo-api-streaming-capital.backend-capital.com/connect'
+   :'wss://api-streaming-capital.backend-capital.com/connect';
+ let ws;
+ try{ ws=new WebSocket(wsBase); }catch(e){ console.warn('WebSocket Capital.com non avviato:',e); return; }
+ capitalWs=ws; capitalWsEpic=epic; capitalWsResolution=resolution;
+ ws.onopen=()=>{
+   if(ws!==capitalWs)return; // stream nel frattempo sostituito da uno più recente (cambio asset/tf rapido)
+   ws.send(JSON.stringify({
+     destination:'OHLCMarketData.subscribe',
+     correlationId:String(capitalWsCorrId++),
+     cst:capitalSessionTokens.cst, securityToken:capitalSessionTokens.securityToken,
+     payload:{epics:[epic],resolutions:[resolution],type:'classic'}
+   }));
+   // La sessione WebSocket Capital.com scade dopo 10 minuti di inattività: un ping ogni 5 la tiene viva.
+   capitalWsPingTimer=setInterval(()=>{
+     if(!capitalSessionTokens||ws.readyState!==WebSocket.OPEN)return;
+     ws.send(JSON.stringify({destination:'ping',correlationId:String(capitalWsCorrId++),
+       cst:capitalSessionTokens.cst,securityToken:capitalSessionTokens.securityToken}));
+   },5*60*1000);
+   $('status').textContent=`🟢 Streaming Live attivo: ${epic} (${resolution}).`;
+ };
+ ws.onmessage=(ev)=>{
+   if(ws!==capitalWs)return;
+   let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
+   if(msg && msg.destination==='ohlc.event' && msg.payload) applyLiveOhlcTick(msg.payload);
+ };
+ ws.onerror=()=>{ if(ws===capitalWs)$('status').textContent='⚠️ Streaming Live: errore di connessione WebSocket.'; };
+ ws.onclose=()=>{ if(ws===capitalWs)disconnectCapitalStream(); };
+}
+// Applica l'aggiornamento OHLC in arrivo dal WebSocket alla candela "capital_live_" corrente:
+// aggiorna in place se è ancora la stessa barra (stesso istante di apertura), altrimenti ne
+// aggiunge una nuova. Il grafico segue automaticamente se followLatest è attivo; se l'utente
+// ha scorso indietro a guardare candele precedenti, la sua vista non viene spostata.
+function applyLiveOhlcTick(p){
+ if(!liveModeActive || p.epic!==capitalWsEpic)return;
+ const file=csvLibrary[0];
+ if(!file || !Number.isFinite(p.t))return;
+ const dateIso=new Date(p.t).toISOString();
+ const last=file.rows[file.rows.length-1];
+ const lastT=last?parseDateTime(last.date):NaN;
+ if(last && lastT===p.t){
+   last.open=p.o;last.high=p.h;last.low=p.l;last.close=p.c;
+ }else if(!last || p.t>lastT){
+   file.rows.push({date:dateIso,open:p.o,high:p.h,low:p.l,close:p.c,volume:0});
+ }else return;
+ rebuildBaseRowsFromLibrary();
+ if(followLatest)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+ rebuildRows();
+ if(followLatest)viewEnd=idx;
+ update();draw();
+ saveLightStateNow();
 }
 
 async function readCapitalCredsFromHandle(handle){
