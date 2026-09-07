@@ -391,6 +391,10 @@ tr.otherAssetRow td:last-child{opacity:1}
         <input id="liveLoginApiKeyPassword" type="password" autocomplete="off" placeholder="Password impostata quando hai creato la key">
       </div>
       <div id="liveLoginError" class="liveLoginError"></div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8fe0b6;text-transform:none;margin-top:2px">
+        <input type="checkbox" id="liveLoginDemo" style="width:auto" checked>
+        🧪 Usa conto demo (consigliato per i primi test: nessun rischio economico)
+      </label>
       <div id="liveLoginFolderStatus" class="sub" style="margin:0"></div>
       <a class="liveLoginGuide" id="liveLoginChangeFolderBtn" href="javascript:void(0)">📂 Scegli/cambia la cartella dove salvarle</a>
       <a class="liveLoginGuide" id="liveLoginOpenGuideBtn" href="javascript:void(0)">📖 Non sai come ottenere queste credenziali? Leggi la guida qui dentro l'app →</a>
@@ -6901,8 +6905,46 @@ $('clearSavedSessionBtn').addEventListener('click',async()=>{
 // ricordare le credenziali in modo sicuro (mai su Firebase, mai nel codice del sito).
 const CAPITAL_CREDS_FILE='capital-config.json';
 let liveModeActive=false;
-let liveCredsDraft=null; // {email, apiKey, apiKeyPassword} — quelle attualmente "in uso"
+let liveCredsDraft=null; // {email, apiKey, apiKeyPassword, demo} — quelle attualmente "in uso"
 let capitalCredsDirHandle=null;
+
+// ===================================================================
+// STEP 1c — vera chiamata POST /session a Capital.com. Ancora nessuna schermata di prezzi/
+// grafico live: qui ci limitiamo a VERIFICARE che le credenziali funzionino e a scoprire se il
+// browser riesce davvero a parlare con Capital.com (questione CORS, mai testata finora) o se
+// serve il bridge locale Python di cui avevamo parlato.
+const CAPITAL_LIVE_BASE='https://api-capital.backend-capital.com';
+const CAPITAL_DEMO_BASE='https://demo-api-capital.backend-capital.com';
+let capitalSessionTokens=null; // {cst, securityToken} — validi 10 minuti, solo in memoria
+async function connectToCapitalCom(creds){
+ const base=creds.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+ let res;
+ try{
+   res=await fetch(base+'/api/v1/session',{
+     method:'POST',
+     headers:{'Content-Type':'application/json','X-CAP-API-KEY':creds.apiKey},
+     body:JSON.stringify({identifier:creds.email,password:creds.apiKeyPassword,encryptedPassword:false})
+   });
+ }catch(e){
+   // fetch() lancia un errore generico (senza dettagli) quando il browser blocca la richiesta
+   // per CORS: è il sintomo tipico, non un errore di rete "vero".
+   return {ok:false,reason:'network',message:'Il browser non riesce a contattare Capital.com direttamente da qui — molto probabilmente per un blocco CORS (le API dei broker spesso non permettono chiamate dirette dal browser, per sicurezza). Serve il bridge locale Python di cui avevamo parlato. Dettaglio tecnico: '+e.message};
+ }
+ let body=null;
+ try{ body=await res.json(); }catch(e){}
+ if(!res.ok){
+   return {ok:false,reason:'auth',message:(body&&(body.errorCode||body.error))||('Errore HTTP '+res.status+' da Capital.com.')};
+ }
+ // CST e X-SECURITY-TOKEN arrivano negli HEADER della risposta, non nel corpo: per leggerli da
+ // un dominio diverso il server deve esporli esplicitamente (Access-Control-Expose-Headers).
+ // Se qui risultano vuoti, la richiesta è passata ma il browser non può comunque leggerli.
+ const cst=res.headers.get('CST');
+ const securityToken=res.headers.get('X-SECURITY-TOKEN');
+ if(!cst||!securityToken){
+   return {ok:false,reason:'headers',message:'Capital.com ha risposto correttamente, ma il browser non riesce a leggere i token di sessione (CST/X-SECURITY-TOKEN) per una restrizione di sicurezza (CORS) sugli header di risposta. Serve il bridge locale Python per completare questa parte.'};
+ }
+ return {ok:true,cst,securityToken,accountInfo:body};
+}
 
 async function readCapitalCredsFromHandle(handle){
  try{
@@ -6942,6 +6984,7 @@ function openLiveLoginModal(prefill){
  $('liveLoginEmail').value=prefill?.email||'';
  $('liveLoginApiKey').value=prefill?.apiKey||'';
  $('liveLoginApiKeyPassword').value=prefill?.apiKeyPassword||'';
+ $('liveLoginDemo').checked=prefill?.demo!==false;
  $('liveLoginFolderStatus').textContent=capitalCredsDirHandle
    ?`📂 Verranno salvate in: "${capitalCredsDirHandle.name}"`
    :'Nessuna cartella collegata ancora: te ne verrà chiesta una al primo accesso.';
@@ -6957,15 +7000,25 @@ function updateLiveModeUI(){
 $('liveModeSwitch').addEventListener('click',async()=>{
  if(liveModeActive){
    liveModeActive=false;
+   capitalSessionTokens=null;
    updateLiveModeUI();
    return;
  }
  const autoCreds=await tryAutoLoadLiveCreds();
  if(autoCreds){
-   liveCredsDraft=autoCreds;
-   liveModeActive=true;
-   updateLiveModeUI();
-   $('status').textContent='Modalità Live attivata con le credenziali salvate in precedenza.';
+   $('status').textContent='Connessione a Capital.com in corso…';
+   const result=await connectToCapitalCom(autoCreds);
+   if(result.ok){
+     liveCredsDraft=autoCreds;
+     capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
+     liveModeActive=true;
+     updateLiveModeUI();
+     $('status').textContent='🟢 Connesso a Capital.com con le credenziali salvate in precedenza.';
+   }else{
+     liveModeActive=false;
+     updateLiveModeUI();
+     $('status').textContent='⚠️ Connessione a Capital.com non riuscita: '+result.message;
+   }
    return;
  }
  openLiveLoginModal(liveCredsDraft);
@@ -7004,7 +7057,19 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
    errEl.style.display='block';
    return;
  }
- const creds={email,apiKey,apiKeyPassword};
+ const demo=$('liveLoginDemo').checked;
+ const creds={email,apiKey,apiKeyPassword,demo};
+ errEl.style.display='none';
+ $('liveLoginSubmitBtn').disabled=true;
+ $('liveLoginSubmitBtn').textContent='Connessione…';
+ const result=await connectToCapitalCom(creds);
+ $('liveLoginSubmitBtn').disabled=false;
+ $('liveLoginSubmitBtn').textContent='Accedi';
+ if(!result.ok){
+   errEl.textContent='⚠️ '+result.message;
+   errEl.style.display='block';
+   return; // credenziali sbagliate o connessione impossibile: non salviamo né chiudiamo il popup
+ }
  let saved=false;
  if(supportsFS){
    try{
@@ -7020,12 +7085,13 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
    }catch(e){ console.warn('Salvataggio credenziali Live su cartella locale non riuscito:',e); }
  }
  liveCredsDraft=creds;
+ capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
  liveModeActive=true;
  updateLiveModeUI();
  closeLiveLoginModal();
- $('status').textContent=saved
-   ?'Modalità Live attivata: credenziali salvate nella cartella collegata, verranno ricaricate da sole al prossimo accesso.'
-   :'Modalità Live attivata (credenziali tenute solo per questa sessione: salvataggio automatico non disponibile/non riuscito).';
+ $('status').textContent=(saved
+   ?'🟢 Connesso a Capital.com. Credenziali salvate nella cartella collegata: verranno ricaricate da sole al prossimo accesso.'
+   :'🟢 Connesso a Capital.com (credenziali tenute solo per questa sessione: salvataggio automatico non disponibile/non riuscito).');
 });
 
 (async function initSession(){
