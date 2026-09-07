@@ -426,6 +426,23 @@ tr.otherAssetRow td:last-child{opacity:1}
     </div>
   </div>
 </div>
+<!-- ===== Popup personalizzato "Installa l'app" (PWA): cattura beforeinstallprompt e mostra
+     un pulsante di installazione nostro, perché su alcuni Chrome mobile il mini-banner
+     automatico del browser non compare da solo (euristiche di "coinvolgimento" del browser).
+     Sparisce da solo se l'app risulta già installata (vedi script più in basso). -->
+<div id="installPromptBanner" style="display:none;flex-direction:column;position:fixed;left:12px;right:12px;bottom:12px;z-index:90;background:#131a24;border:1px solid #2b3541;border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.55);padding:14px 16px;max-width:460px;margin:0 auto">
+  <div style="display:flex;align-items:center;gap:12px">
+    <div style="font-size:28px;line-height:1">📲</div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:13px;font-weight:700;color:#e8edf3">Installa Forex Backtest Lab</div>
+      <div style="font-size:12px;color:#a7b1bf;line-height:1.4;margin-top:2px">Aggiungila alla schermata Home: si apre come un'app, anche a schermo intero e offline.</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;margin-top:12px">
+    <button id="installPromptDismissBtn" class="toolBtn" style="flex:1">Non ora</button>
+    <button id="installPromptInstallBtn" class="toolBtn" style="flex:1;background:#277d5a;border-color:#3ea6ff">⬇️ Installa</button>
+  </div>
+</div>
 <main>
 <div class="panel">
  <div class="toolbar">
@@ -7424,6 +7441,73 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// ===== Popup personalizzato "Installa l'app" =====
+// Perché serve: Chrome mostra il SUO banner automatico di installazione solo quando decide
+// che l'utente è "abbastanza coinvolto" con il sito (euristica interna, specialmente severa
+// su telefono) — è per questo che su PC/tablet capitava di vederlo comparire da solo mentre
+// su telefono no, anche se il sito è tecnicamente installabile allo stesso modo ovunque
+// (stesso manifest.json, stesso service worker). L'evento "beforeinstallprompt" però il
+// browser lo lancia comunque non appena i criteri di installabilità sono soddisfatti, prima
+// ancora di decidere se mostrare o no il SUO banner: intercettandolo con preventDefault() e
+// tenendocelo da parte, possiamo mostrare NOI un pulsante "Installa" sempre visibile, senza
+// dover aspettare l'euristica del browser.
+// Se l'app è GIÀ installata (aperta come app standalone, oppure l'evento "appinstalled" è
+// già scattato in passato su questo dispositivo), il popup non compare mai: lo riconosciamo
+// sia da matchMedia('display-mode: standalone') sia da un flag che ci salviamo noi in
+// localStorage al momento dell'installazione (utile perché appena installata l'app può
+// restare aperta ancora nella scheda del browser, non ancora in modalità standalone).
+const INSTALL_DISMISS_KEY='fxbt_installPromptDismissedUntil';
+const INSTALL_DONE_KEY='fxbt_installed';
+let deferredInstallPrompt=null;
+function isRunningAsInstalledApp(){
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone===true // Safari iOS, per completezza
+    || localStorage.getItem(INSTALL_DONE_KEY)==='1';
+}
+function showInstallBanner(){
+  if(isRunningAsInstalledApp())return;
+  const dismissedUntil=Number(localStorage.getItem(INSTALL_DISMISS_KEY)||0);
+  if(Date.now()<dismissedUntil)return; // l'utente ha chiuso il popup di recente: non insistiamo subito
+  const el=document.getElementById('installPromptBanner');
+  if(el)el.style.display='flex';
+}
+function hideInstallBanner(){
+  const el=document.getElementById('installPromptBanner');
+  if(el)el.style.display='none';
+}
+window.addEventListener('beforeinstallprompt',(e)=>{
+  e.preventDefault(); // blocca il mini-banner automatico del browser: mostriamo il nostro
+  deferredInstallPrompt=e;
+  showInstallBanner();
+});
+// Scatta quando l'installazione va a buon fine (sia dal nostro popup sia da un eventuale
+// menu del browser usato direttamente dall'utente): nascondiamo il popup per sempre.
+window.addEventListener('appinstalled',()=>{
+  localStorage.setItem(INSTALL_DONE_KEY,'1');
+  deferredInstallPrompt=null;
+  hideInstallBanner();
+});
+document.getElementById('installPromptInstallBtn')?.addEventListener('click',async()=>{
+  if(!deferredInstallPrompt)return;
+  hideInstallBanner();
+  deferredInstallPrompt.prompt();
+  try{
+    const {outcome}=await deferredInstallPrompt.userChoice;
+    if(outcome==='accepted'){ localStorage.setItem(INSTALL_DONE_KEY,'1'); }
+    else{ localStorage.setItem(INSTALL_DISMISS_KEY, String(Date.now()+3*24*60*60*1000)); } // 3 giorni
+  }catch(e){ /* ignorato: il popup nativo può essere stato chiuso in altri modi */ }
+  deferredInstallPrompt=null;
+});
+document.getElementById('installPromptDismissBtn')?.addEventListener('click',()=>{
+  hideInstallBanner();
+  localStorage.setItem(INSTALL_DISMISS_KEY, String(Date.now()+3*24*60*60*1000)); // richiesto tra 3 giorni
+});
+// Se l'app viene aperta già in modalità standalone (installata), memorizziamo subito il
+// flag: così anche se in futuro venisse aperta per una volta dentro il normale browser
+// (link condiviso, ecc.) il popup non ricomparirà per errore.
+if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone===true){
+  localStorage.setItem(INSTALL_DONE_KEY,'1');
+}
 </script>
 <!-- ===================== MODALE IMPOSTAZIONI RITRACCIAMENTO FIBONACCI ===================== -->
 <div id="fibModalOverlay" class="fbModalOverlay" style="display:none">
