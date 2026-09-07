@@ -384,7 +384,7 @@ tr.otherAssetRow td:last-child{opacity:1}
       </div>
       <div>
         <label>API Key</label>
-        <input id="liveLoginApiKey" type="text" autocomplete="off" placeholder="La tua API Key">
+        <input id="liveLoginApiKey" type="password" autocomplete="off" placeholder="La tua API Key">
       </div>
       <div>
         <label>Password della API Key</label>
@@ -437,6 +437,7 @@ tr.otherAssetRow td:last-child{opacity:1}
     <option value="XAUUSD">XAU/USD (Oro)</option>
     <option value="XAGUSD">XAG/USD (Argento)</option>
     <option value="custom">Personalizzato (manuale)</option>
+    <option value="capital_search">🔍 Cerca asset Capital.com…</option>
    </select></div>
   <div><div class="label">Capitale</div><input id="capital" type="number" value="10000"></div>
   <div><div class="label">Spread pips</div><input id="spread" type="number" value="0" step=".1"></div>
@@ -458,6 +459,10 @@ tr.otherAssetRow td:last-child{opacity:1}
       pagina separata "asset-library.html", per non appesantire questo file principale.
       Cambiando ASSET qui sopra, i file già presenti in libreria per quell'asset vengono
       caricati automaticamente sul grafico (vedi autoLoadAssetLibrary più sotto nel JS). -->
+ <!-- Tutta la sessione file CSV (link libreria + elenco file caricati + hint formato): in
+      modalità Live non serve (lo storico arriva da Capital.com), quindi va nascosta per intero
+      per non occupare spazio inutile — vedi updateLiveModeUI() nel JS. -->
+ <div id="csvSessionSection">
  <div class="panel" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;margin-top:10px">
   <div style="font-size:13px;color:#c6ceda;max-width:640px">
    📥 Tutto il caricamento dei CSV storici (download da HistData.com, riconoscimento automatico dell'asset, smistamento nelle cartelle) si gestisce nella libreria dedicata: aprila col pulsante qui a fianco. Ogni volta che selezioni un ASSET qui sopra, i CSV già presenti in libreria per quell'asset vengono mostrati sul grafico in automatico.
@@ -475,8 +480,6 @@ tr.otherAssetRow td:last-child{opacity:1}
    <div style="font-weight:600;color:#e8edf3">📂 File CSV caricati (uniti nel backtest)</div>
    <div style="display:flex;gap:6px;flex-wrap:wrap">
     <button id="toggleCsvListBtn" type="button" class="miniBtn" title="Mostra/nascondi l'elenco dei singoli file (l'elenco può essere lungo)">🙈 Nascondi elenco</button>
-    <button id="saveCsvToFileBtn" type="button" class="miniBtn" title="Incorpora tutti i CSV caricati direttamente nel codice di QUESTO file .html e lo salva sul disco, sovrascrivendolo: alla prossima apertura del file li ritrovi già tutti caricati, anche su un altro browser/PC. Richiede un browser basato su Chrome/Edge.">💾 Salva CSV nel file</button>
-    <button id="downloadCsvHtmlBtn" type="button" class="miniBtn" title="Scarica una copia di questa pagina .html con tutti i CSV caricati incorporati dentro (da usare al posto del file originale). Funziona in qualsiasi browser.">⬇️ Scarica copia con CSV</button>
    </div>
   </div>
   <div id="csvLibraryList" style="margin-top:6px;display:flex;flex-direction:column;gap:4px"></div>
@@ -485,6 +488,7 @@ tr.otherAssetRow td:last-child{opacity:1}
  <div class="hintRow" style="margin-top:4px">
    <span class="qtip">?<span class="qtipBubble">Supporta anche il tuo formato MetaTrader: Data, Ora, Open, High, Low, Close, Volume.</span></span> Formato CSV supportato
    <span class="qtip">?<span class="qtipBubble" id="instrumentHint"></span></span> Info strumento selezionato
+ </div>
  </div>
 </div>
 
@@ -5325,49 +5329,66 @@ function updateFileBtnLabel(){}
 // Auto-caricamento della libreria storici per asset: ogni volta che l'utente cambia ASSET
 // (e non è "Personalizzato"), controlliamo se in asset-library.html sono già stati caricati
 // dei CSV per quell'asset e, se sì, li portiamo subito sul grafico.
+let lastValidMarketValue='';
+async function handleCapitalManualAssetSearch(){
+ // "Cerca asset…" è un comando, non un asset vero: torniamo subito alla selezione precedente.
+ $('market').value=lastValidMarketValue;
+ if(!liveModeActive || !capitalSessionTokens){
+   alert('Attiva prima la Modalità Live (switch in alto) per poter cercare uno strumento su Capital.com.');
+   return;
+ }
+ const term=window.prompt('Cerca uno strumento su Capital.com (es. "GOLD", "APPLE", "BTC"):');
+ if(!term || !term.trim())return;
+ $('status').textContent=`Ricerca "${term}" su Capital.com…`;
+ const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+ let body;
+ try{
+   const res=await fetch(base+'/api/v1/markets?searchTerm='+encodeURIComponent(term.trim()),{
+     headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
+   });
+   body=await res.json();
+   if(!res.ok)throw new Error((body&&(body.errorCode||body.error))||('HTTP '+res.status));
+ }catch(e){
+   $('status').textContent='⚠️ Ricerca strumento fallita: '+e.message;
+   return;
+ }
+ const markets=(body&&Array.isArray(body.markets))?body.markets:[];
+ if(!markets.length){
+   $('status').textContent=`⚠️ Nessuno strumento trovato su Capital.com per "${term}".`;
+   return;
+ }
+ let chosen=markets[0];
+ if(markets.length>1){
+   const shown=markets.slice(0,10);
+   const list=shown.map((m,i)=>`${i+1}. ${m.instrumentName||m.epic} (${m.epic})`).join('\n');
+   const pick=window.prompt(`Trovati ${markets.length} risultati, scrivi il numero di quello giusto:\n${list}`,'1');
+   const n=parseInt(pick,10);
+   if(Number.isFinite(n) && n>=1 && n<=shown.length) chosen=shown[n-1];
+   else return; // annullato o numero non valido: non forziamo una scelta a caso
+ }
+ const epic=chosen.epic;
+ capitalEpicCache[epic]=epic;
+ const marketSel=$('market');
+ if(![...marketSel.options].some(o=>o.value===epic)){
+   const opt=document.createElement('option');
+   opt.value=epic;
+   opt.textContent='🔎 '+(chosen.instrumentName||epic)+' ('+epic+')';
+   marketSel.insertBefore(opt, marketSel.querySelector('option[value="capital_search"]'));
+ }
+ marketSel.value=epic;
+ lastValidMarketValue=epic;
+ applyInstrument();
+ loadLiveHistoryFromCapital(epic);
+}
 $('market')?.addEventListener('change',()=>{
  const v=$('market').value;
+ if(v==='capital_search'){ handleCapitalManualAssetSearch(); return; }
+ lastValidMarketValue=v||'';
  if(!v || v==='custom') return;
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
  if(liveModeActive) loadLiveHistoryFromCapital(v);
  else autoLoadAssetLibrary(v);
-});
-$('saveCsvToFileBtn')?.addEventListener('click',async()=>{
- const statusEl=$('csvLibraryStatus');
- if(!csvLibrary.length){ alert('Nessun CSV caricato da salvare.'); return; }
- if(!window.showSaveFilePicker){
-   if(statusEl)statusEl.textContent='⚠️ Questo browser non supporta il salvataggio diretto nel file (serve Chrome/Edge). Usa "⬇️ Scarica copia con CSV".';
-   return;
- }
- if(statusEl)statusEl.textContent='Salvataggio in corso…';
- try{
-   const handle=await getLinkedFileHandle();
-   if(!handle){ if(statusEl)statusEl.textContent='Salvataggio annullato.'; return; }
-   await withLoadingOverlay('Incorporamento CSV nel file…', async()=>{
-     const html=buildHtmlWithEmbeddedCsv();
-     const writable=await handle.createWritable();
-     await writable.write(html);
-     await writable.close();
-   });
-   if(statusEl)statusEl.textContent='✅ CSV incorporati e salvati nel file • '+new Date().toLocaleTimeString('it-IT');
- }catch(e){
-   console.warn('Salvataggio diretto nel file fallito:',e);
-   if(statusEl)statusEl.textContent='⚠️ Salvataggio diretto non riuscito. Prova con "⬇️ Scarica copia con CSV".';
- }
-});
-$('downloadCsvHtmlBtn')?.addEventListener('click', async()=>{
- if(!csvLibrary.length){ alert('Nessun CSV caricato da includere.'); return; }
- await withLoadingOverlay('Preparazione del file da scaricare…', async()=>{
-   const html=buildHtmlWithEmbeddedCsv();
-   const blob=new Blob([html],{type:'text/html'});
-   const url=URL.createObjectURL(blob);
-   const a=document.createElement('a');
-   a.href=url; a.download='forex_backtest_modify.html';
-   document.body.appendChild(a); a.click(); a.remove();
-   setTimeout(()=>URL.revokeObjectURL(url),2000);
- });
- const statusEl=$('csvLibraryStatus'); if(statusEl)statusEl.textContent='⬇️ Copia scaricata con i CSV incorporati • sostituisci il file originale con questa.';
 });
 function validateTradeLevel(side, entry, sl, tp){
  if(Number.isFinite(sl)){
@@ -7086,6 +7107,10 @@ function closeLiveLoginModal(){
 function updateLiveModeUI(){
  $('liveModeSwitch').textContent=liveModeActive?'🔴 Live':'📼 Storico';
  $('liveChangeAccountBtn').style.display=liveCredsDraft?'inline-block':'none';
+ // In Live lo storico arriva da Capital.com: tutta la sezione file/libreria CSV non serve e
+ // occuperebbe solo spazio inutile.
+ const csvSection=$('csvSessionSection');
+ if(csvSection)csvSection.style.display=liveModeActive?'none':'';
 }
 $('liveModeSwitch').addEventListener('click',async()=>{
  if(liveModeActive){
@@ -7253,6 +7278,7 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
      // L'asset attivo al momento del salvataggio: positions/active/pendingOrders/equity
      // ripristinati sopra da applyLightSessionState() appartengono proprio a questo asset.
      currentAssetKey=$('market')?.value||'';
+     lastValidMarketValue=currentAssetKey;
      update(); draw(); refreshRiskSuggestion(); refreshRiskSuggestionPending();
    });
    $('status').textContent=`Sessione ripristinata: ${rows.length.toLocaleString('it-IT')} candele, ${trades.length} trade nel journal.`;
@@ -7261,6 +7287,7 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
    updateFileBtnLabel();
    applyInstrument();
    currentAssetKey=$('market')?.value||'';
+   lastValidMarketValue=currentAssetKey;
  }
 })();
 </script>
