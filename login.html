@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Accedi — Forex Backtest Lab</title>
 <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<link rel="manifest" href="manifest.json">
 <style>
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
@@ -28,6 +29,14 @@
   .error{background:#2a1414;border:1px solid #7a3030;color:#ffb4b4;font-size:12px;padding:9px;border-radius:7px;margin-top:12px;display:none}
   .info{background:#12241c;border:1px solid #235c3f;color:#8fe0b6;font-size:12px;padding:9px;border-radius:7px;margin-top:12px;display:none}
   #recaptcha-container{margin-top:10px}
+  /* Pulsante "Installa l'app" mostrato in cima al box di login (indipendente dal popup
+     automatico beforeinstallprompt, che su molti browser/dispositivi — iOS Safari in primis —
+     non compare mai). Nascosto di default: appare via JS solo quando l'installazione ha senso
+     (non se l'app gira già installata in standalone). */
+  #installLoginBtn{display:none;width:100%;background:#1a232e;border:1px solid #3ea6ff;
+    color:#e8edf3;font-weight:700;border-radius:8px;padding:11px;cursor:pointer;
+    margin-bottom:16px;font-size:13px;align-items:center;justify-content:center;gap:8px}
+  #installLoginBtn.show{display:flex}
 </style>
 </head>
 <body>
@@ -35,6 +44,8 @@
 <div class="card">
   <h1>Forex Backtest Lab</h1>
   <p class="sub">Accedi per continuare</p>
+
+  <button id="installLoginBtn">⬇️ Installa l'app sul dispositivo</button>
 
   <div id="auth-forms">
     <div class="tabs">
@@ -278,6 +289,56 @@
     clearMsgs();
     await signOut(auth);
     hideVerifyGate();
+  });
+
+  // === Pulsante "Installa l'app" (PWA) ===============================================
+  // Stessa logica del banner già presente in index.html, ma qui il pulsante è SEMPRE
+  // visibile (non un popup che spunta da solo), perché l'evento beforeinstallprompt da cui
+  // dipende il popup automatico non spara affatto su alcuni browser/dispositivi (es. iOS
+  // Safari), e su Chrome/Edge desktop spesso richiede prima un certo "engagement" con il
+  // sito. Registriamo qui anche il service worker: login.html è la prima pagina che molti
+  // utenti aprono, quindi è qui che l'app deve risultare installabile fin da subito.
+  const installBtn = document.getElementById('installLoginBtn');
+  let deferredLoginPrompt = null;
+
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true; // Safari iOS
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(()=>{});
+  }
+
+  if (!isStandalone) {
+    if (isIOS) {
+      // Su iOS Safari "beforeinstallprompt" non esiste: mostriamo comunque il pulsante,
+      // che al click spiega il gesto manuale ("Condividi" → "Aggiungi a Home").
+      installBtn.classList.add('show');
+    }
+    window.addEventListener('beforeinstallprompt', (e)=>{
+      e.preventDefault();
+      deferredLoginPrompt = e;
+      installBtn.classList.add('show');
+    });
+    window.addEventListener('appinstalled', ()=>{
+      deferredLoginPrompt = null;
+      installBtn.classList.remove('show');
+    });
+  }
+
+  installBtn.addEventListener('click', async ()=>{
+    if (deferredLoginPrompt) {
+      deferredLoginPrompt.prompt();
+      try{ await deferredLoginPrompt.userChoice; }catch(e){}
+      deferredLoginPrompt = null;
+      installBtn.classList.remove('show');
+      return;
+    }
+    if (isIOS) {
+      showInfo('Per installare l\'app su iPhone/iPad: tocca il pulsante "Condividi" (il quadrato con la freccia in su) nella barra di Safari, poi "Aggiungi alla schermata Home".');
+      return;
+    }
+    showInfo('Per installare l\'app, cerca la voce "Installa app" nel menu del browser (di solito l\'icona ⋮ o ⋯ in alto a destra).');
   });
 
   function traduciErrore(code){

@@ -667,6 +667,7 @@ tr.otherAssetRow td:last-child{opacity:1}
    <canvas id="chart" draggable="false"></canvas>
    <div id="priceAxisZone"></div><div id="timeAxisZone"></div>
    <div id="chartFloatControls" class="chartFloatControls">
+     <select id="marketChart" class="chartCornerBtn" style="width:auto;max-width:120px;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Cambia ASSET direttamente dal grafico (stesso menu ASSET della barra qui sopra, sempre sincronizzati)"></select>
      <button id="toggleChartExtrasBtn" class="chartCornerBtn" title="Mostra/nascondi: PIP (finestra flottante), mostra/nascondi posizioni, fuso orario e griglia">›</button>
      <select id="tfChart" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Cambia timeframe direttamente dal grafico">
        <option value="1">1m</option>
@@ -816,6 +817,7 @@ async function switchAccountMode(newIsLive){
      else await autoLoadAssetLibrary(asset);
    }
    update(); draw();
+   renderActiveIndicatorsUI();
  });
  saveLightStateNow();
 }
@@ -2220,6 +2222,10 @@ async function autoLoadAssetLibrary(asset){
      applyChartViewForAsset(asset);
      saveLightStateNow();
      saveAssetChartViews();
+     // FIX bug "indicatori spariti dalla lista dopo il cambio ASSET": gli indicatori attivi
+     // sono globali e il grafico li ridisegna già correttamente da solo, ma la strip dei chip
+     // (#activeIndicators) va ri-renderizzata esplicitamente qui per restare allineata.
+     renderActiveIndicatorsUI();
      $('status').textContent = `Nessun CSV in libreria per ${asset}. Aggiungine da "📚 Libreria storici CSV per asset".`;
      return;
    }
@@ -2234,6 +2240,7 @@ async function autoLoadAssetLibrary(asset){
    saveCsvNow();
    saveLightStateNow();
    saveAssetChartViews();
+   renderActiveIndicatorsUI();
    $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fromFolder?' (cartella di progetto collegata)':''}.`;
  });
 }
@@ -2407,6 +2414,7 @@ function riskRewardLabel(entry,sl,tp){
 }
 function update(){
  updateLivePL();
+ syncMarketChartSelect();
  refreshRiskSuggestion();
  // Le metriche del riquadro conto (capitale, P/L, winrate, pip, ecc.) sono GLOBALI, come un
  // conto reale MT5 su cui si opera su più strumenti: NON si azzerano né si ricalcolano "per
@@ -5514,11 +5522,31 @@ async function handleCapitalManualAssetSearch(){
  }
  marketSel.value=epic;
  lastValidMarketValue=epic;
+ syncMarketChartSelect();
  applyInstrument();
  loadLiveHistoryFromCapital(epic);
 }
+// Menu ASSET duplicato in alto a sinistra sul grafico (comodo soprattutto su mobile, dove il
+// menu ASSET "vero" nella toolbar in cima alla pagina è più lontano da raggiungere mentre si
+// guarda il grafico): stesse opzioni, stesso valore, sempre sincronizzato col menu originale
+// (mai una lista separata da mantenere a mano — la copiamo sempre da lì, anche quando Capital
+// Search aggiunge un nuovo asset cercato manualmente, vedi sopra).
+function syncMarketChartSelect(){
+ const src=$('market'), dst=$('marketChart');
+ if(!src||!dst)return;
+ if(dst.innerHTML!==src.innerHTML)dst.innerHTML=src.innerHTML;
+ if(dst.value!==src.value)dst.value=src.value;
+}
+syncMarketChartSelect();
+$('marketChart')?.addEventListener('change',()=>{
+ if(!$('market'))return;
+ $('market').value=$('marketChart').value;
+ $('market').dispatchEvent(new Event('change'));
+ $('marketChart').blur();
+});
 $('market')?.addEventListener('change',()=>{
  const v=$('market').value;
+ syncMarketChartSelect();
  if(v==='capital_search'){ handleCapitalManualAssetSearch(); return; }
  lastValidMarketValue=v||'';
  if(!v || v==='custom') return;
@@ -6029,11 +6057,11 @@ function handleChartArrowNav(e){
  if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return;
  const tag=(e.target&&e.target.tagName||'').toLowerCase();
  const targetId=(e.target&&e.target.id)||'';
- // Le caselle timeframe (#tf, #tfChart) non devono mai "rubare" le frecce quando
- // si sta navigando il grafico: se per qualsiasi motivo hanno ancora il focus
- // (es. tab da tastiera, o il blur sul 'change' non è arrivato in tempo),
+ // Le caselle timeframe/ASSET sul grafico (#tf, #tfChart, #marketChart) non devono mai
+ // "rubare" le frecce quando si sta navigando il grafico: se per qualsiasi motivo hanno
+ // ancora il focus (es. tab da tastiera, o il blur sul 'change' non è arrivato in tempo),
  // le togliamo di focus qui e lasciamo che la freccia muova comunque il grafico.
- if(tag==='select'&&(targetId==='tf'||targetId==='tfChart')){
+ if(tag==='select'&&(targetId==='tf'||targetId==='tfChart'||targetId==='marketChart')){
    e.target.blur();
  }else if(tag==='input'||tag==='select'||tag==='textarea'){
    return;
@@ -7191,6 +7219,9 @@ async function loadLiveHistoryFromCapital(asset){
  rebuildRows();
  viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  update();draw();
+ // Stessa FIX del cambio ASSET storico: riallinea la strip dei chip indicatori dopo il
+ // caricamento dello storico Live (il grafico li disegna già correttamente da solo).
+ renderActiveIndicatorsUI();
  // NON chiamiamo saveCsvNow() qui apposta: quella funzione salva `csvLibrary` (in questo
  // momento il singolo "file" sintetico Live appena creato sopra) nella STESSA chiave
  // IndexedDB usata per la libreria CSV di Storico, sovrascrivendola. La libreria Live non va
