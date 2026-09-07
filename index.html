@@ -769,10 +769,24 @@ function restoreModeSnapshot(mode){
  }
 }
 // Punto UNICO da cui passare per cambiare modalità (sostituisce l'assegnazione diretta a
-// liveModeActive): salva/ripristina le due sessioni e mostra la rotellina di caricamento,
-// perché il cambio può comportare operazioni non istantanee (rebuild grafico, ecc.).
+// liveModeActive): salva/ripristina le due sessioni (conto: posizioni/ordini/attiva/equity)
+// e mostra la rotellina di caricamento, perché il cambio può comportare operazioni non
+// istantanee (rebuild grafico, chiamata a Capital.com o alla libreria CSV, ecc.).
+//
+// IMPORTANTE — dataset a grafico (rows/baseRows/csvLibrary): a differenza del conto (sopra),
+// che ha uno snapshot dedicato per modalità (sessionByMode), il dataset del grafico resta
+// un'unica variabile condivisa in RAM, perché Storico e Live non possono mai essere "visti"
+// insieme. Storico e Live NON sono quindi simmetrici: la libreria CSV di Storico vive sempre
+// nella libreria per-asset persistente (vedi autoLoadAssetLibrary/getAssetFolderFiles), MAI
+// tenuta "da parte" in memoria — quindi il modo corretto e sicuro di tornare in Storico è
+// RICARICARLA da lì (mai provare a "recuperare" una copia in RAM, che il fetch di Live
+// avrebbe già sovrascritto). Live invece la riscarica sempre da capo da Capital.com. Prima
+// di questa funzione, le 4 chiamate dirette a "liveModeActive=..." sparse nella pagina
+// lasciavano semplicemente la libreria Live incollata al posto di quella Storico appena si
+// tornava indietro: da qui in poi passano tutte da qui.
 async function switchAccountMode(newIsLive){
  if(liveModeActive===newIsLive)return;
+ const asset=$('market')?.value;
  await withLoadingOverlay(newIsLive?'Passaggio a modalità Live…':'Ritorno a modalità Storico…', async()=>{
    captureCurrentModeSnapshot();
    liveModeActive=newIsLive;
@@ -780,6 +794,10 @@ async function switchAccountMode(newIsLive){
    tradeSLLine=null; tradeTPLine=null;
    syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
    updateLiveModeUI();
+   if(asset && asset!=='custom'){
+     if(newIsLive) await loadLiveHistoryFromCapital(asset);
+     else await autoLoadAssetLibrary(asset);
+   }
    update(); draw();
  });
  saveLightStateNow();
@@ -7156,7 +7174,13 @@ async function loadLiveHistoryFromCapital(asset){
  rebuildRows();
  viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  update();draw();
- saveCsvNow();
+ // NON chiamiamo saveCsvNow() qui apposta: quella funzione salva `csvLibrary` (in questo
+ // momento il singolo "file" sintetico Live appena creato sopra) nella STESSA chiave
+ // IndexedDB usata per la libreria CSV di Storico, sovrascrivendola. La libreria Live non va
+ // mai persistita lì: è ricostruita da zero a ogni chiamata di questa funzione (nuovo asset,
+ // riconnessione, ecc.), mentre la vera libreria Storico resta al sicuro nella libreria
+ // per-asset persistente e viene ricaricata da lì con autoLoadAssetLibrary() non appena si
+ // torna in Storico (vedi switchAccountMode()).
  saveLightStateNow();
  $('status').textContent=`🟢 Storico Live caricato: ${liveRows.length.toLocaleString('it-IT')} candele per ${epic} (${resolution}).`;
 }
@@ -7218,9 +7242,8 @@ function updateLiveModeUI(){
 }
 $('liveModeSwitch').addEventListener('click',async()=>{
  if(liveModeActive){
-   liveModeActive=false;
+   await switchAccountMode(false);
    capitalSessionTokens=null;
-   updateLiveModeUI();
    return;
  }
  const autoCreds=await tryAutoLoadLiveCreds();
@@ -7230,11 +7253,8 @@ $('liveModeSwitch').addEventListener('click',async()=>{
    if(result.ok){
      liveCredsDraft=autoCreds;
      capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
-     liveModeActive=true;
-     updateLiveModeUI();
      $('status').textContent='🟢 Connesso a Capital.com con le credenziali salvate in precedenza.';
-     const currentAsset=$('market')?.value;
-     if(currentAsset && currentAsset!=='custom') loadLiveHistoryFromCapital(currentAsset);
+     await switchAccountMode(true);
    }else{
      liveModeActive=false;
      updateLiveModeUI();
@@ -7307,14 +7327,11 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
  }
  liveCredsDraft=creds;
  capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
- liveModeActive=true;
- updateLiveModeUI();
  closeLiveLoginModal();
  $('status').textContent=(saved
    ?'🟢 Connesso a Capital.com. Credenziali salvate nella cartella collegata: verranno ricaricate da sole al prossimo accesso.'
    :'🟢 Connesso a Capital.com (credenziali tenute solo per questa sessione: salvataggio automatico non disponibile/non riuscito).');
- const currentAsset=$('market')?.value;
- if(currentAsset && currentAsset!=='custom') loadLiveHistoryFromCapital(currentAsset);
+ await switchAccountMode(true);
 });
 
 (async function initSession(){
