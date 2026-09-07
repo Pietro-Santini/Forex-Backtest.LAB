@@ -704,7 +704,7 @@ tr.otherAssetRow td:last-child{opacity:1}
      <button id="floatReturnBtn" class="chartCornerBtn" style="display:none" title="Rientra dalla finestra flottante">🗗</button>
    </div>
  </div>
- <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+ <div id="replayControlsRow" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
    <button id="back">◀ INDIETRO</button><button id="next">AVANTI ▶</button>
    <div style="display:flex;gap:6px">
      <button id="play" class="primary" style="flex:1;min-width:0">▶ PLAY</button>
@@ -1596,6 +1596,25 @@ function placeLabelY(x,w,desiredY,h,minY,maxY){
  if(Number.isFinite(maxY))y=Math.min(maxY-h,y);
  labelPlacements.push({x,y,w,h});
  return y;
+}
+// Etichetta di riferimento colorata sulla scala prezzi (bordo destro), stile TradingView:
+// usata per ENTRY/TP/SL delle posizioni aperte. `y` è la funzione prezzo->pixel di draw()
+// (non l'etichetta stessa). Riusa lo stesso sistema anti-sovrapposizione delle altre caselle
+// (placeLabelY), così due livelli molto vicini in prezzo non si sovrappongono sulla scala.
+function drawPriceAxisTag(ctx,y,priceVal,text,bg,fg,pad,w,h){
+ if(!Number.isFinite(priceVal))return;
+ const labelX=w-pad.r+3, labelW=62, labelH=16;
+ const labelY=placeLabelY(labelX,labelW,y(priceVal)-labelH/2,labelH,pad.t,h-pad.b);
+ ctx.save();
+ ctx.fillStyle=bg;
+ ctx.fillRect(labelX,labelY,labelW,labelH);
+ ctx.fillStyle=fg;
+ ctx.font='bold 10px Arial';
+ ctx.textAlign='center';
+ ctx.textBaseline='middle';
+ ctx.fillText(text,labelX+labelW/2,labelY+labelH/2+0.5);
+ ctx.textBaseline='alphabetic';
+ ctx.restore();
 }
 // Appunti per copia/incolla di un disegno selezionato (vedi duplicateDrawing/copySelectedDrawing/pasteClipboardDrawing).
 let clipboardDrawing=null;
@@ -4054,6 +4073,21 @@ function draw(){
    priceAxisTicks.forEach(t=>ctx.fillText(t.text,w-pad.r+8,t.y+4));
    ctx.restore();
  })();
+ // Etichette di riferimento sulla scala prezzi (bordo destro) per ENTRY/TP/SL di ogni
+ // posizione aperta visibile, come su TradingView: verde per il Target, rosso per lo Stop,
+ // colore del lato (stesso della linea di entrata sul grafico) per l'entrata. Disegnate DOPO
+ // drawAxisGuard() perché quella ridisegna lo sfondo dell'intera striscia della scala prezzi,
+ // che coprirebbe qualunque etichetta disegnata prima.
+ if(positionsVisible){
+   const ownPositionsAxis=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   ownPositionsAxis.forEach(pos=>{
+     const entryColor=pos.side==='BUY'?'#2fbf71':'#e05252';
+     const entryFg=pos.side==='BUY'?'#04170d':'#ffffff';
+     if(pos.entry!=null && pos.entry>=lo && pos.entry<=hi)drawPriceAxisTag(ctx,y,pos.entry,fmtPrice(pos.entry),entryColor,entryFg,pad,w,h);
+     if(Number.isFinite(pos.tp) && pos.tp>=lo && pos.tp<=hi)drawPriceAxisTag(ctx,y,pos.tp,fmtPrice(pos.tp),'#2fbf71','#04170d',pad,w,h);
+     if(Number.isFinite(pos.sl) && pos.sl>=lo && pos.sl<=hi)drawPriceAxisTag(ctx,y,pos.sl,fmtPrice(pos.sl),'#e05252','#ffffff',pad,w,h);
+   });
+ }
  // Current market price: close of the latest available candle in the selected timeframe.
  if(rows.length && rows[idx] && Number.isFinite(Number(rows[idx].close))){
    const currentClose=Number(rows[idx].close);
@@ -4067,7 +4101,12 @@ function draw(){
      const py=y(currentClose);
      const labelX=w-pad.r+3;
      const labelW=70;
-     const labelH=20;
+     // In Live aggiungiamo, sotto al prezzo, il conto alla rovescia prima della chiusura
+     // della candela in corso (come MT5/TradingView): la casella si allunga di conseguenza.
+     // Ha senso solo in Live perché si basa sull'orologio reale — in Storico/replay la
+     // candela "in corso" avanza col Play, non con il tempo che passa.
+     const showCountdown=liveModeActive;
+     const labelH=showCountdown?30:20;
      const labelY=placeLabelY(labelX,labelW,py-labelH/2,labelH,pad.t,h-pad.b);
      // Price marker is part of the right-hand scale.
      ctx.fillStyle='#ffffff';
@@ -4076,10 +4115,18 @@ function draw(){
      ctx.lineWidth=1;
      ctx.strokeRect(labelX,labelY,labelW,labelH);
      ctx.fillStyle='#111820';
-     ctx.font='bold 11px Arial';
      ctx.textAlign='center';
      ctx.textBaseline='middle';
-     ctx.fillText(fmtPrice(currentClose),labelX+labelW/2,labelY+labelH/2);
+     if(showCountdown){
+       ctx.font='bold 11px Arial';
+       ctx.fillText(fmtPrice(currentClose),labelX+labelW/2,labelY+labelH/2-7);
+       ctx.font='10px Arial';
+       ctx.fillStyle='#4a5568';
+       ctx.fillText(fmtCandleCountdown(),labelX+labelW/2,labelY+labelH/2+8);
+     }else{
+       ctx.font='bold 11px Arial';
+       ctx.fillText(fmtPrice(currentClose),labelX+labelW/2,labelY+labelH/2);
+     }
      ctx.textBaseline='alphabetic';
      ctx.restore();
    }
@@ -6165,6 +6212,7 @@ chartWrapEl?.addEventListener('mouseenter',()=>{chartHovered=true;});
 chartWrapEl?.addEventListener('mouseleave',()=>{chartHovered=false;});
 function handleChartArrowNav(e){
  if(!chartHovered)return;
+ if(liveModeActive)return; // in Live non si naviga nel tempo: lo storico è il presente in diretta.
  if(e.key!=='ArrowRight'&&e.key!=='ArrowLeft')return;
  const tag=(e.target&&e.target.tagName||'').toLowerCase();
  const targetId=(e.target&&e.target.id)||'';
@@ -7423,8 +7471,11 @@ function startLiveRefreshTimer(){
    // applyLiveTick ad ogni tick ricevuto (anche quando il tick non tocca il grafico perché
    // "in background"), quindi qui basta rileggerlo per far avanzare la candela in corso.
    const livePrice=currentAssetKey?livePriceByAsset[currentAssetKey]:null;
-   if(Number.isFinite(livePrice) && applyLivePriceToChart(livePrice,Date.now()))draw();
+   if(Number.isFinite(livePrice))applyLivePriceToChart(livePrice,Date.now());
    update();
+   // Ridisegnato SEMPRE (non solo se il prezzo è cambiato): serve a far scorrere secondo per
+   // secondo il conto alla rovescia di chiusura candela nell'etichetta di prezzo corrente.
+   draw();
  },1000);
 }
 function stopLiveRefreshTimer(){
@@ -7508,6 +7559,20 @@ function connectCapitalStream(epics){
 // quest'ultimo è ciò che garantisce che la candela avanzi visibilmente ogni secondo anche
 // nei momenti in cui i tick WebSocket si diradano, invece di restare ferma finché non si
 // cambia asset (che la ricarica da zero via REST).
+// Tempo rimanente prima della chiusura della candela IN CORSO in Live, calcolato sullo stesso
+// bucketing (basato sull'orologio reale, Date.now()) usato da applyLivePriceToChart(): niente
+// disallineamenti tra "quanto manca" mostrato qui e il momento in cui la candela si chiude
+// davvero. Richiamata dal timer di refresh ogni 1s (vedi startLiveRefreshTimer) per restare
+// aggiornata secondo per secondo.
+function fmtCandleCountdown(){
+ const bucketMs=(currentTF||1)*60000;
+ const bucketStart=Math.floor(Date.now()/bucketMs)*bucketMs;
+ const msLeft=Math.max(0,bucketStart+bucketMs-Date.now());
+ const totalSec=Math.floor(msLeft/1000);
+ const hh=Math.floor(totalSec/3600), mm=Math.floor((totalSec%3600)/60), ss=totalSec%60;
+ const pad2=n=>String(n).padStart(2,'0');
+ return hh>0?`${hh}:${pad2(mm)}:${pad2(ss)}`:`${mm}:${pad2(ss)}`;
+}
 function applyLivePriceToChart(price,timestamp){
  if(!Number.isFinite(price) || !Number.isFinite(timestamp))return false;
  const file=csvLibrary[0];
@@ -7647,6 +7712,14 @@ function updateLiveModeUI(){
  // occuperebbe solo spazio inutile.
  const csvSection=$('csvSessionSection');
  if(csvSection)csvSection.style.display=liveModeActive?'none':'';
+ // In Live non si "naviga nel tempo" (DATA RANDOM, INDIETRO/AVANTI, PLAY/STOP): lo storico
+ // mostrato è il presente in diretta da Capital.com, non un replay su cui scorrere avanti e
+ // indietro. Se il replay era in corso, va anche fermato.
+ const randomBtn=$('randomBtn');
+ if(randomBtn)randomBtn.style.display=liveModeActive?'none':'';
+ const replayRow=$('replayControlsRow');
+ if(replayRow)replayRow.style.display=liveModeActive?'none':'grid';
+ if(liveModeActive && timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
 }
 $('liveModeSwitch').addEventListener('click',async()=>{
  if(liveModeActive){
@@ -7808,6 +7881,7 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
      // ripristinati sopra da applyLightSessionState() appartengono proprio a questo asset.
      currentAssetKey=$('market')?.value||'';
      lastValidMarketValue=currentAssetKey;
+     updateLiveModeUI();
      update(); draw(); refreshRiskSuggestion(); refreshRiskSuggestionPending();
    });
    $('status').textContent=`Sessione ripristinata: ${rows.length.toLocaleString('it-IT')} candele, ${trades.length} trade nel journal.`;
