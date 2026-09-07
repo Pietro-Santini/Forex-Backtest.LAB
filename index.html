@@ -461,12 +461,10 @@ tr.otherAssetRow td:last-child{opacity:1}
   <div><div class="label">Leva</div><select id="leverage"><option value="10">1:10</option><option value="20">1:20</option><option value="30">1:30</option><option value="50">1:50</option><option value="100" selected>1:100</option><option value="200">1:200</option><option value="500">1:500</option></select></div>
   <div><div class="label">Decimali prezzo</div><select id="decimals"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option></select></div>
   <div><div class="label">Decimali per +1 pip</div><input id="pipDecimals" type="number" min="0" max="8" step="1" value="1" title="Da quale cifra decimale del prezzo parte il conteggio di +1 pip. Es: 1 = un pip ogni 0,1 di prezzo (default attuale), 4 = un pip ogni 0,0001."></div>
-  <div><div class="label">Colori candele</div><select id="candleTheme" title="Schema colori delle candele">
-    <option value="green_red" selected>🟩🟥 Verde/Rosso</option>
-    <option value="red_white">⬜🟥 Rosso/Bianco</option>
-    <option value="blue_white">⬜🟦 Blu/Bianco</option>
-    <option value="black_white">⬜⬛ Bianco/Nero</option>
-  </select></div>
+  <!-- "Colori candele" (template) spostato dentro al grafico, nel pannello che si apre col
+       pulsante "hide impostazioni" (›), vicino al pulsante "Griglia" — vedi #candleTheme più
+       sotto dentro #chartFloatControlsExtra. Il <select> reale è quello lì: qui in cima alla
+       pagina non serve più duplicarlo. -->
   <!-- Il Timeframe è già selezionabile direttamente dal grafico (menu #tfChart in alto a destra
        del grafico): questo select è lo stesso controllo "master", tenuto in DOM ma nascosto qui
        in cima alla pagina per non duplicarlo visivamente. -->
@@ -674,7 +672,7 @@ tr.otherAssetRow td:last-child{opacity:1}
    <div id="priceAxisZone"></div><div id="timeAxisZone"></div>
    <div id="chartFloatControls" class="chartFloatControls">
      <select id="marketChart" class="chartCornerBtn" style="width:auto;max-width:120px;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Cambia ASSET direttamente dal grafico (stesso menu ASSET della barra qui sopra, sempre sincronizzati)"></select>
-     <button id="toggleChartExtrasBtn" class="chartCornerBtn" title="Mostra/nascondi: PIP (finestra flottante), mostra/nascondi posizioni, fuso orario e griglia">›</button>
+     <button id="toggleChartExtrasBtn" class="chartCornerBtn" title="Mostra/nascondi: PIP (finestra flottante), mostra/nascondi posizioni, fuso orario, griglia e colori candele/template">›</button>
      <select id="tfChart" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Cambia timeframe direttamente dal grafico">
        <option value="1">1m</option>
        <option value="5">5m</option>
@@ -689,6 +687,12 @@ tr.otherAssetRow td:last-child{opacity:1}
    <div id="chartFloatControlsExtra" class="chartFloatControls" style="top:46px;display:none">
      <select id="tzSelect" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Fuso orario di visualizzazione della barra tempo/data (ora legale gestita automaticamente in base al paese scelto). I dati storici restano invariati: cambia solo come vengono mostrati."></select>
      <button id="gridDensityBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Regola quante righe di griglia mostrare (prezzo in orizzontale, ora/data in verticale). Le due direzioni usano sempre la stessa spaziatura, così le celle restano quadrate; il numero di righe si adatta da solo quando ridimensioni la finestra o fai zoom.">▦ Griglia: Media</button>
+     <select id="candleTheme" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Colori candele / template">
+       <option value="green_red" selected>🟩🟥 Verde/Rosso</option>
+       <option value="red_white">⬜🟥 Rosso/Bianco</option>
+       <option value="blue_white">⬜🟦 Blu/Bianco</option>
+       <option value="black_white">⬜⬛ Bianco/Nero</option>
+     </select>
      <button id="togglePositionsBtn" class="chartCornerBtn active" title="Mostra/nascondi sul grafico le posizioni (linee entry/SL/TP aperte + frecce di apertura/chiusura delle posizioni chiuse)">
        <svg viewBox="0 0 24 24" width="18" height="18">
          <rect x="5.4" y="12" width="3.2" height="6" fill="#3b82f6"/>
@@ -867,24 +871,20 @@ let livePriceByAsset={};
 // per capire a quale asset appartiene un tick in arrivo dal WebSocket (che identifica solo
 // l'epic, non il nostro nome asset interno).
 let epicToAsset={};
-// ===================== BOZZE ENTRY/SL/TP PER ASSET =====================
-// Le caselle ENTRY/SL/TP (quando NON c'è una posizione attiva su quell'asset, cioè sono solo
-// una bozza per il prossimo ordine) vengono messe "in pausa" per asset esattamente come la
-// vista del grafico (vedi assetChartViews): lasciando un asset con una bozza incompleta nelle
-// caselle, tornandoci sopra la si ritrova tale e quale, invece di trovarla svuotata o — peggio —
-// di vedere ancora i valori dell'asset appena lasciato "sporcare" il nuovo.
-let draftLevelsByAsset={};
-function captureDraftLevelsInto(map,assetKey){
- if(!assetKey)return;
- map[assetKey]={sl:$('sl')?.value||'',tp:$('tp')?.value||'',pendingEntry:$('pendingEntry')?.value||'',slPending:$('slPending')?.value||'',tpPending:$('tpPending')?.value||''};
-}
-function restoreDraftLevelsFor(assetKey){
- const d=draftLevelsByAsset[assetKey]||{sl:'',tp:'',pendingEntry:'',slPending:'',tpPending:''};
- if($('sl'))$('sl').value=d.sl||'';
- if($('tp'))$('tp').value=d.tp||'';
- if($('pendingEntry'))$('pendingEntry').value=d.pendingEntry||'';
- if($('slPending'))$('slPending').value=d.slPending||'';
- if($('tpPending'))$('tpPending').value=d.tpPending||'';
+// ===================== ENTRY/SL/TP AL CAMBIO ASSET =====================
+// Le caselle ENTRY/SL/TP, quando NON c'è una posizione realmente aperta su un asset, sono solo
+// una bozza per il prossimo ordine: come richiesto, NON devono mai ricomparire da sole. Prima
+// venivano "messe in pausa" per asset e poi ripristinate tornando su quell'asset (anche a
+// distanza di sessioni) — causando esattamente il bug delle caselle TP/SL che compaiono da
+// sole. Ora, cambiando asset, vanno sempre e solo svuotate (vedi clearDraftTradeLevelFields());
+// l'unica eccezione è una posizione REALMENTE aperta su quell'asset, ripopolata da
+// refreshTradeLevelUI() con i suoi valori veri.
+function clearDraftTradeLevelFields(){
+ if($('sl'))$('sl').value='';
+ if($('tp'))$('tp').value='';
+ if($('pendingEntry'))$('pendingEntry').value='';
+ if($('slPending'))$('slPending').value='';
+ if($('tpPending'))$('tpPending').value='';
 }
 // ===================== MEMORIA DI NAVIGAZIONE PER ASSET (solo vista grafico) =====================
 // A differenza del conto (sopra, unico e globale), la POSIZIONE nel tempo a cui si sta
@@ -976,7 +976,16 @@ async function idbClearAll(){
 }
 // Id di tutti i campi di configurazione della pagina da salvare/ripristinare come semplici
 // valori (input/select). Elencati esplicitamente così è chiaro cosa viene persistito.
-const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','speed','tf','tfChart','lots','risk','sl','tp','lotsPending','riskPending','pendingEntry','slPending','tpPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
+// FIX bug "le caselle TP/SL compaiono da sole a grafico": 'sl','tp','pendingEntry','slPending',
+// 'tpPending' erano nell'elenco dei campi salvati/ripristinati automaticamente ad ogni accesso
+// (e draftLevelsByAsset li ripristinava anche al cambio asset in Live) — così una bozza SL/TP
+// lasciata a metà in una sessione precedente ricompariva da sola al login successivo, o
+// passando da un asset all'altro, senza che l'utente l'avesse messa lì apposta in QUESTA
+// sessione. Ora questi 5 campi NON vengono più persistiti come valori grezzi: restano vuoti
+// finché non è l'utente stesso a valorizzarli (pulsanti SL/TP sul grafico, apertura di una
+// posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
+// ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
+const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
 function collectLightSessionState(){
  return {
    version:SESSION_VERSION,
@@ -985,7 +994,6 @@ function collectLightSessionState(){
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,
    positions,active,pendingOrders,trades,equity,statsBaselineByMode,sessionByMode,liveModeActive,
-   draftLevelsByAsset,
    drawings,
    activeIndicators:activeIndicators.map(ind=>({id:ind.id,key:ind.key,params:ind.params,hidden:ind.hidden}))
  };
@@ -1059,7 +1067,6 @@ function applyLightSessionState(state){
  statsBaselineByMode=state.statsBaselineByMode||{backtest:Number.isFinite(state.statsBaseline)?state.statsBaseline:0,live:0};
  sessionByMode=state.sessionByMode||{backtest:null,live:null};
  liveModeActive=!!state.liveModeActive;
- draftLevelsByAsset=state.draftLevelsByAsset||{};
  candleTheme=(state.fields&&CANDLE_THEMES[state.fields.candleTheme])?state.fields.candleTheme:'green_red';
  if($('candleTheme'))$('candleTheme').value=candleTheme;
  drawings=state.drawings||[];
@@ -2269,11 +2276,7 @@ async function autoLoadAssetLibrary(asset){
      // valori residui dell'asset lasciato (es. un TP di XAU/USD a 2054.20). Vanno svuotate,
      // altrimenti quei numeri "sporcherebbero" sia lo zoom verticale del nuovo grafico
      // (collectTradeLevelPrices li includerebbe per errore) sia un eventuale nuovo ordine.
-     if($('sl'))$('sl').value='';
-     if($('tp'))$('tp').value='';
-     if($('pendingEntry'))$('pendingEntry').value='';
-     if($('slPending'))$('slPending').value='';
-     if($('tpPending'))$('tpPending').value='';
+     clearDraftTradeLevelFields();
    }
    let files=await getAssetFolderFiles(asset);
    const fromFolder=!!(files&&files.length);
@@ -5249,23 +5252,15 @@ function closeTrade(reason,price,pos){
  }
  tradeSLLine=null; tradeTPLine=null;
  placingTradeLevel=null; previewTradeLevel=null; placingTradeLevelDrag=null; updateTradeLevelArmUI();
- // Operazione terminata: si tolgono le linee (già fatto sopra) e si resettano le caselle
- // TP/SL/ENTRY — ma SOLO quelle del "lato" a cui apparteneva la posizione chiusa: un trade
- // aperto a mercato resetta le caselle SL/TP del trade a mercato; una posizione nata da un
- // ordine pendente resetta le caselle ENTRY/SL/TP DEDICATE dell'ordine pendente (prima
- // veniva dimenticato il campo ENTRY, restava sporco col vecchio prezzo). Le due cose
- // restano sempre separate, come richiesto. Se resta un'altra posizione ancora aperta e
- // selezionata, refreshTradeLevelUI() qui sotto la ripopola subito dopo con i suoi valori
- // reali, quindi questo reset non la tocca.
- if(pos.origin==='PENDING'){
-   if($('pendingEntry'))$('pendingEntry').value='';
-   if($('slPending'))$('slPending').value='';
-   if($('tpPending'))$('tpPending').value='';
-   refreshRiskSuggestionPending();
- }else{
-   if($('sl'))$('sl').value='';
-   if($('tp'))$('tp').value='';
- }
+ // Operazione terminata: si tolgono le linee (già fatto sopra) e si resettano SEMPRE ENTRAMBE
+ // le coppie di caselle TP/SL/ENTRY (sia quelle del trade a mercato sia quelle dedicate
+ // all'ordine pendente), non solo quelle del "lato" a cui apparteneva la posizione appena
+ // chiusa: resettando solo un lato, l'altro poteva restare "sporco" con un valore di una bozza
+ // precedente e far ricomparire da solo un riquadro TP/SL sul grafico subito dopo la chiusura
+ // — esattamente il bug segnalato. Se resta un'altra posizione ancora aperta e selezionata,
+ // refreshTradeLevelUI() qui sotto la ripopola subito dopo con i suoi valori reali.
+ clearDraftTradeLevelFields();
+ refreshRiskSuggestionPending();
  syncTradeLevels();
  refreshTradeLevelUI();
  // "account" è il saldo GLOBALE del conto (tutti gli asset) subito dopo questa chiusura:
@@ -5892,7 +5887,7 @@ if($('toggleChartExtrasBtn')&&$('chartFloatControlsExtra')){
  const setExtrasOpen=(open)=>{
    $('chartFloatControlsExtra').style.display=open?'flex':'none';
    $('toggleChartExtrasBtn').textContent=open?'‹':'›';
-   $('toggleChartExtrasBtn').title=open?'Nascondi PIP, posizioni, fuso orario e griglia':'Mostra: PIP (finestra flottante), mostra/nascondi posizioni, fuso orario e griglia';
+   $('toggleChartExtrasBtn').title=open?'Nascondi PIP, posizioni, fuso orario, griglia e colori candele':'Mostra: PIP (finestra flottante), mostra/nascondi posizioni, fuso orario, griglia e colori candele/template';
  };
  setExtrasOpen(extrasOpen);
  $('toggleChartExtrasBtn').addEventListener('click',()=>{
@@ -7331,21 +7326,19 @@ async function loadLiveHistoryFromCapital(asset){
  if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
  if(!capitalSessionTokens)return;
  // ISOLAMENTO PER ASSET IN LIVE (stessa logica già usata in Storico da autoLoadAssetLibrary):
- // prima di cambiare asset, mettiamo "in pausa" la vista del grafico E la bozza ENTRY/SL/TP
- // dell'asset che si lascia (se non erano di una posizione già aperta, in quel caso restano
- // comunque quelle della posizione), poi la posizione "attiva" (quella mostrata/editabile
- // nelle caselle) va sempre fatta appartenere al NUOVO asset: l'ultima posizione aperta su di
- // esso se esiste, altrimenti nessuna. Senza questo, `currentAssetKey` restava fermo
- // sull'asset precedente e le caselle SL/TP di un asset "si vedevano" sull'altro.
- if(currentAssetKey && currentAssetKey!==asset){
-   if(!active || (active.asset||currentAssetKey)===currentAssetKey)captureDraftLevelsInto(draftLevelsByAsset,currentAssetKey);
-   captureChartViewInto(assetChartViews,currentAssetKey);
- }
+ // prima di cambiare asset, mettiamo "in pausa" la vista del grafico dell'asset che si lascia,
+ // poi la posizione "attiva" (quella mostrata/editabile nelle caselle) va sempre fatta
+ // appartenere al NUOVO asset: l'ultima posizione aperta su di esso se esiste, altrimenti
+ // nessuna. Senza questo, `currentAssetKey` restava fermo sull'asset precedente e le caselle
+ // SL/TP di un asset "si vedevano" sull'altro. Le caselle SL/TP/ENTRY NON devono mai ricomparire
+ // da sole al cambio asset: se non c'è una posizione reale sul nuovo asset vengono sempre
+ // svuotate (mai ripristinate da una bozza lasciata in precedenza).
+ if(currentAssetKey && currentAssetKey!==asset)captureChartViewInto(assetChartViews,currentAssetKey);
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
  active=ownNow.length?ownNow[ownNow.length-1]:null;
  if(active) refreshTradeLevelUI();
- else restoreDraftLevelsFor(asset);
+ else clearDraftTradeLevelFields();
  $('status').textContent=`Ricerca strumento Capital.com per ${asset}…`;
  const epic=await resolveCapitalEpic(asset);
  if(!epic){
@@ -7458,20 +7451,67 @@ async function refreshLiveStreamSubscriptions(){
 // visualizzato); tutti gli altri aggiornano solo livePriceByAsset (tabella posizioni, P/L,
 // valutazione SL/TP/pendenti "in background"), senza toccare il grafico a schermo.
 let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, capitalWsPingTimer=null, capitalWsCorrId=1;
+// FIX bug "l'aggiornamento live si blocca dopo un po'": tiene traccia di quando è arrivato
+// l'ultimo tick per l'epic a grafico ora, e di quando abbiamo tentato l'ultima riconnessione.
+// Usati dal watchdog nel timer di refresh (1s) qui sotto per accorgersi che lo streaming si è
+// fermato (anche "silenziosamente", senza che scatti mai onclose) e forzare una riconnessione,
+// più un fallback via REST che garantisce comunque un aggiornamento ogni secondo nel frattempo.
+let lastLiveTickAt=0, liveStreamReconnectAttemptAt=0, liveWsReconnectTimer=null;
 // Refresh continuo in Live: i tick WebSocket aggiornano prezzo/candela solo quando arrivano
 // (possono diradarsi nei momenti di bassa attività di mercato), ma tabella posizioni/ordini,
 // P/L ed equity devono comunque restare "vivi" (es. tempo trascorso, margine libero) anche
 // tra un tick e l'altro. Un giro ogni 1s di update() copre questo, senza toccare le candele.
 let liveRefreshTimer=null;
+// Legge l'ultimo prezzo disponibile per l'epic indicato direttamente via REST (una singola
+// candela recente): usato SOLO come fallback quando lo streaming a tick sembra fermo da un
+// po', per garantire comunque un aggiornamento forzato ogni secondo come richiesto, anche nei
+// momenti in cui il WebSocket non consegna nulla.
+async function fetchLatestPriceRest(epic){
+ if(!capitalSessionTokens||!epic)return null;
+ try{
+   const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+   const res=await fetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution=MINUTE&max=1',{
+     headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
+   });
+   if(!res.ok)return null;
+   const body=await res.json();
+   const p=(body&&Array.isArray(body.prices))?body.prices[body.prices.length-1]:null;
+   const price=p&&p.closePrice?p.closePrice.bid:null;
+   return Number.isFinite(price)?price:null;
+ }catch(e){ return null; }
+}
 function startLiveRefreshTimer(){
  if(liveRefreshTimer)return;
- liveRefreshTimer=setInterval(()=>{
+ liveRefreshTimer=setInterval(async ()=>{
    if(!liveModeActive)return;
+   // WATCHDOG: se non arriva un tick per l'epic a grafico da troppo tempo (streaming fermo,
+   // magari "silenziosamente" senza che scatti mai onclose), forziamo una riconnessione
+   // completa del WebSocket invece di aspettare che l'utente cambi asset o timeframe per
+   // farlo ripartire (era esattamente il bug segnalato).
+   const staleMs=lastLiveTickAt?(Date.now()-lastLiveTickAt):Infinity;
+   if(capitalWsPrimaryEpic && staleMs>8000 && (Date.now()-liveStreamReconnectAttemptAt)>8000){
+     liveStreamReconnectAttemptAt=Date.now();
+     disconnectCapitalStream();
+     refreshLiveStreamSubscriptions();
+   }
    // Ultimo prezzo noto per l'asset ATTUALMENTE a grafico: viene comunque aggiornato da
    // applyLiveTick ad ogni tick ricevuto (anche quando il tick non tocca il grafico perché
    // "in background"), quindi qui basta rileggerlo per far avanzare la candela in corso.
    const livePrice=currentAssetKey?livePriceByAsset[currentAssetKey]:null;
-   if(Number.isFinite(livePrice))applyLivePriceToChart(livePrice,Date.now());
+   let touched=false;
+   if(Number.isFinite(livePrice))touched=applyLivePriceToChart(livePrice,Date.now())||touched;
+   // FALLBACK richiesto dall'utente: se lo streaming a tick è fermo da un po' (>4s), forziamo
+   // comunque una sincronizzazione ogni secondo leggendo l'ultimo prezzo via REST, così la
+   // candela avanza sempre — anche nei momenti in cui la riconnessione del WebSocket qui sopra
+   // non è ancora bastata a far ripartire i tick.
+   if(capitalWsPrimaryEpic && staleMs>4000){
+     const restPrice=await fetchLatestPriceRest(capitalWsPrimaryEpic);
+     if(Number.isFinite(restPrice)){
+       if(currentAssetKey)livePriceByAsset[currentAssetKey]=restPrice;
+       touched=applyLivePriceToChart(restPrice,Date.now())||touched;
+     }
+   }
+   if(touched)scheduleSave();
    update();
    // Ridisegnato SEMPRE (non solo se il prezzo è cambiato): serve a far scorrere secondo per
    // secondo il conto alla rovescia di chiusura candela nell'etichetta di prezzo corrente.
@@ -7480,6 +7520,7 @@ function startLiveRefreshTimer(){
 }
 function stopLiveRefreshTimer(){
  if(liveRefreshTimer){clearInterval(liveRefreshTimer);liveRefreshTimer=null;}
+ if(liveWsReconnectTimer){clearTimeout(liveWsReconnectTimer);liveWsReconnectTimer=null;}
 }
 function disconnectCapitalStream(){
  if(capitalWsPingTimer){clearInterval(capitalWsPingTimer);capitalWsPingTimer=null;}
@@ -7534,6 +7575,7 @@ function connectCapitalStream(epics){
        cst:capitalSessionTokens.cst,securityToken:capitalSessionTokens.securityToken}));
    },5*60*1000);
    $('status').textContent=`🟢 Streaming Live attivo (tick): ${epics.join(', ')}.`;
+   lastLiveTickAt=Date.now(); // evita falsi allarmi del watchdog nell'istante subito dopo la connessione
  };
  ws.onmessage=(ev)=>{
    if(ws!==capitalWs)return;
@@ -7541,7 +7583,18 @@ function connectCapitalStream(epics){
    if(msg && msg.destination==='quote' && msg.payload) applyLiveTick(msg.payload);
  };
  ws.onerror=()=>{ if(ws===capitalWs)$('status').textContent='⚠️ Streaming Live: errore di connessione WebSocket.'; };
- ws.onclose=()=>{ if(ws===capitalWs)disconnectCapitalStream(); };
+ // FIX bug "l'aggiornamento live si blocca e riparte solo cambiando TF/asset": prima, alla
+ // chiusura del socket (anche per un semplice timeout lato server), non veniva MAI tentata una
+ // riconnessione automatica — solo cambiare asset o timeframe richiamava connectCapitalStream().
+ // Ora, se siamo ancora in modalità Live, riproviamo da soli dopo un breve ritardo.
+ ws.onclose=()=>{
+   if(ws!==capitalWs)return;
+   disconnectCapitalStream();
+   if(liveWsReconnectTimer)clearTimeout(liveWsReconnectTimer);
+   if(liveModeActive){
+     liveWsReconnectTimer=setTimeout(()=>{ liveWsReconnectTimer=null; refreshLiveStreamSubscriptions(); },1500);
+   }
+ };
 }
 // Applica un singolo tick prezzo (bid) ricevuto per QUALUNQUE epic sottoscritto:
 // - aggiorna SEMPRE livePriceByAsset[asset] (serve per tabella posizioni/P/L/SL-TP anche
@@ -7599,6 +7652,7 @@ function applyLiveTick(p){
  if(!liveModeActive)return;
  const price=p.bid; // prezzo bid: stessa convenzione già usata per le barre storiche caricate via REST
  if(!Number.isFinite(price) || !Number.isFinite(p.timestamp))return;
+ if(p.epic===capitalWsPrimaryEpic)lastLiveTickAt=Date.now(); // "prova di vita" per il watchdog
  const asset=epicToAsset[p.epic];
  const prevPrice=asset?livePriceByAsset[asset]:null;
  if(asset)livePriceByAsset[asset]=price;
