@@ -1,6 +1,6 @@
-// Service worker minimale: mette in cache i file dell'app così può
+// Service worker: mette in cache i file dell'app così può
 // funzionare offline e i browser la considerano "installabile".
-const CACHE_NAME = "forex-backtest-lab-v1";
+const CACHE_NAME = "forex-backtest-lab-v2"; // Incrementato la versione della cache per forzare l'aggiornamento
 const ASSETS = [
   "/Forex-Backtest.LAB/",
   "/Forex-Backtest.LAB/index.html",
