@@ -2,11 +2,12 @@
 // funzionare offline e i browser la considerano "installabile".
 const CACHE_NAME = "forex-backtest-lab-v1";
 const ASSETS = [
-  "./",
-  "./index.html",
-  "./manifest.json",
-  "./icon-192.png",
-  "./icon-512.png"
+  "/Forex-Backtest.LAB/",
+  "/Forex-Backtest.LAB/index.html",
+  "/Forex-Backtest.LAB/forex_backtest.html",
+  "/Forex-Backtest.LAB/manifest.json",
+  "/Forex-Backtest.LAB/icon-192.png",
+  "/Forex-Backtest.LAB/icon-512.png"
 ];
 
 self.addEventListener("install", (event) => {
