@@ -7648,19 +7648,18 @@ let lastPrimaryEpicPrice=null;
 // zero storico + mappatura epic + sottoscrizione, esattamente come un cambio asset manuale
 // (già dimostrato affidabile). Ha un suo cooldown separato per non for saturare le API in loop.
 let lastChartUpdateAt=0, hardResyncAttemptAt=0;
-// RISINCRONIZZAZIONE FORZATA ALLA CHIUSURA CANDELA (richiesto esplicitamente dall'utente): il bug
-// segnalato — alla chiusura dell'ultima candela del timeframe il grafico si blocca, mostra per
-// qualche secondo SOLO l'ultima candela senza storico, poi riparte da solo — succede esattamente
-// nell'istante di passaggio da un bucket al successivo (es. 13:25 -> 13:26 in 1m). Invece di
-// aspettare che i soli tick WebSocket/fallback REST costruiscano da soli la nuova candela (dove si
-// annidava il problema), qui rileviamo il cambio di bucket confrontando l'inizio del bucket
-// "adesso" con l'ultimo visto, e non appena cambia forziamo SUBITO un refresh pulito e completo
-// (loadLiveHistoryFromCapital: stesso percorso già affidabile di un cambio asset manuale — storico
-// + epic + sottoscrizione rifatti da zero). Sì, questo comporta un piccolo hiccup (una manciata di
-// centinaia di ms, al massimo ~1s) esattamente al cambio candela, ma elimina il blocco più lungo e
-// il "solo ultima candela senza storico" visto finora. Cooldown + flag "in corso" per evitare
-// richieste doppie/sovrapposte se un giro del timer impiega più di 1s.
-let lastSeenCandleBucketStart=null, candleRolloverResyncAt=0, candleRolloverResyncInProgress=false;
+// RISINCRONIZZAZIONE FORZATA ALLA CHIUSURA CANDELA, CON PAUSA DI 1s (richiesto esplicitamente
+// dall'utente, evoluzione della fix precedente): il refresh da solo eliminava il blocco lungo, ma
+// nella finestra tra la chiusura di una candela e l'arrivo dei dati freschi poteva comunque
+// comparire per un istante UNA candela "di transizione" costruita localmente dai tick, con valori
+// non affidabili (rischio di far scattare SL/TP in modo incoerente). Ora, invece di lasciare che
+// quella candela venga mai disegnata/valutata, al cambio di bucket TAGLIAMO SUBITO la connessione
+// (disconnectCapitalStream: nessun tick può più arrivare), mettiamo il grafico in PAUSA per 1s
+// esatto (niente nuovi prezzi applicati, niente valutazione SL/TP: resta fermo sull'ultima candela
+// DAVVERO chiusa) e solo dopo quel secondo richiediamo dati freschi via REST
+// (loadLiveHistoryFromCapital, che riconnette anche lo stream alla fine). Così quella singola
+// candela "sospetta" non esiste mai a schermo né viene mai valutata per SL/TP.
+let lastSeenCandleBucketStart=null, candleRolloverResyncAt=0, candleRolloverResyncInProgress=false, liveCandleFrozen=false;
 // Refresh continuo in Live, al massimo 1 volta al secondo (come richiesto, per non elaborare/
 // ridisegnare ad ogni singolo tick WebSocket che può arrivare più volte al secondo): questo
 // timer è ora l'UNICO punto che applica davvero l'ultimo prezzo ricevuto alla candela in corso
@@ -7691,22 +7690,37 @@ function startLiveRefreshTimer(){
  liveRefreshTimer=setInterval(async ()=>{
    if(!liveModeActive)return;
    // Vedi commento su lastSeenCandleBucketStart più sopra: appena si entra in un NUOVO bucket
-   // (nuova candela) rispetto all'ultimo giro, forziamo subito un refresh pulito invece di
-   // lasciare che sia il flusso normale a costruire la nuova candela (dove si annidava il blocco).
+   // (nuova candela) rispetto all'ultimo giro, tagliamo subito la connessione e mettiamo il
+   // grafico in pausa per 1s prima di richiedere dati freschi, così quella singola candela "di
+   // transizione" con valori non affidabili non viene mai disegnata né valutata per SL/TP.
    const rolloverBucketMs=(currentTF||1)*60000;
    const nowBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
    if(currentAssetKey && capitalWsPrimaryEpic){
      if(lastSeenCandleBucketStart==null){
        lastSeenCandleBucketStart=nowBucketStart;
-     }else if(nowBucketStart>lastSeenCandleBucketStart && !candleRolloverResyncInProgress && (Date.now()-candleRolloverResyncAt)>2000){
+     }else if(nowBucketStart>lastSeenCandleBucketStart && !candleRolloverResyncInProgress && !liveCandleFrozen && (Date.now()-candleRolloverResyncAt)>2000){
        lastSeenCandleBucketStart=nowBucketStart;
        candleRolloverResyncAt=Date.now();
-       candleRolloverResyncInProgress=true;
-       $('status').textContent='🔄 Chiusura candela: risincronizzo con Capital.com…';
-       try{ await loadLiveHistoryFromCapital(currentAssetKey); }
-       finally{ candleRolloverResyncInProgress=false; }
-       return; // il refresh ha già aggiornato candela/tabelle/disegno: salta il resto di questo giro
+       liveCandleFrozen=true;
+       // TAGLIO CONNESSIONE (richiesto esplicitamente): chiudiamo lo stream ORA, così nessun
+       // altro tick può più arrivare e costruire quella candela "sospetta" mentre siamo in pausa.
+       disconnectCapitalStream();
+       $('status').textContent='⏸️ Candela chiusa: pausa di 1s (evita candele con valori inattendibili), poi risincronizzo…';
+       setTimeout(async ()=>{
+         candleRolloverResyncInProgress=true;
+         try{ await loadLiveHistoryFromCapital(currentAssetKey); }
+         finally{ candleRolloverResyncInProgress=false; liveCandleFrozen=false; }
+       },1000);
+       return; // durante la pausa non si applica alcun prezzo/candela nuova
      }
+   }
+   if(liveCandleFrozen){
+     // In pausa: nessun prezzo/candela nuova, nessuna valutazione SL/TP. Ridisegniamo comunque
+     // (leggero) solo per mantenere vivi equity/margine/countdown a schermo, senza toccare la
+     // candela che deve restare ferma sull'ultimo stato davvero chiuso.
+     update();
+     draw();
+     return;
    }
    // WATCHDOG 1 (leggero): se non arriva un tick per l'epic a grafico da troppo tempo
    // (streaming fermo, magari "silenziosamente" senza che scatti mai onclose), forziamo una
@@ -7901,7 +7915,10 @@ function applyLivePriceToChart(price,timestamp){
  return true;
 }
 function applyLiveTick(p){
- if(!liveModeActive)return;
+ // Durante la pausa di 1s alla chiusura candela (vedi liveCandleFrozen sopra) scartiamo anche
+ // eventuali tick già "in volo" prima che disconnectCapitalStream() avesse effetto: nessun prezzo
+ // deve toccare candela/SL/TP finché non arrivano i dati freschi da REST.
+ if(!liveModeActive || liveCandleFrozen)return;
  const price=p.bid; // prezzo bid: stessa convenzione già usata per le barre storiche caricate via REST
  if(!Number.isFinite(price) || !Number.isFinite(p.timestamp))return;
  if(p.epic===capitalWsPrimaryEpic)lastLiveTickAt=Date.now(); // "prova di vita" per il watchdog
