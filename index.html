@@ -5383,6 +5383,36 @@ function closeAllPositions(reason){
 // funziona anche se nel frattempo hai cambiato timeframe) e adatta automaticamente sia
 // lo zoom orizzontale (numero di candele visibili) sia la scala verticale dei prezzi,
 // così l'operazione risulta sempre ben leggibile qualunque fosse lo stato del grafico prima.
+// Assicura una sessione Capital.com valida PRIMA di passare a Live in modo PROGRAMMATICO (es. dal
+// pulsante "📍 Vai a grafico" su un'operazione Live nel Trade Journal mentre si è in Storico).
+// BUG RISOLTO ("da Storico a Live il pulsante Vai a grafico continua a puntare al grafico
+// Storico"): capitalSessionTokens viene azzerato ogni volta che si torna in Storico dallo switch
+// 📼/🔴 in alto (vedi lì) — se poi da Storico si prova a saltare a un'operazione Live SENZA essere
+// passati di nuovo da quello switch, switchAccountMode(true) veniva comunque chiamata, ma
+// loadLiveHistoryFromCapital trovava capitalSessionTokens nullo e usciva subito in silenzio (nessun
+// dato scaricato, nessun errore mostrato): il grafico restava quindi quello di Storico anche se
+// liveModeActive era ormai true. Nel senso opposto (Live -> Storico) il problema non si presenta
+// perché tornare in Storico non richiede alcuna sessione Capital.com. Qui riusiamo la STESSA logica
+// già affidabile del pulsante in alto: prima le credenziali salvate in automatico, altrimenti si
+// apre il popup di login e si chiede di riprovare dopo essersi collegati.
+async function ensureCapitalConnected(){
+ if(capitalSessionTokens)return true;
+ const autoCreds=await tryAutoLoadLiveCreds();
+ if(autoCreds){
+   $('status').textContent='Connessione a Capital.com in corso…';
+   const result=await connectToCapitalCom(autoCreds);
+   if(result.ok){
+     liveCredsDraft=autoCreds;
+     capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
+     return true;
+   }
+   $('status').textContent='⚠️ Connessione a Capital.com non riuscita: '+result.message;
+   return false;
+ }
+ openLiveLoginModal(liveCredsDraft);
+ $('status').textContent="Accedi a Capital.com per mostrare questa operazione sul grafico Live, poi ripremi \"Vai a grafico\".";
+ return false;
+}
 async function jumpToTradeOnChart(tradeIndex){
  const t=trades[tradeIndex];
  if(!t)return;
@@ -5401,6 +5431,13 @@ async function jumpToTradeOnChart(tradeIndex){
  // prima da switchAccountMode() — l'unico punto sicuro per cambiare modalità (gestisce
  // snapshot conto, stream Capital.com, ecc.) — poi eventualmente cambiamo asset.
  if(liveModeActive!==tradeWasLive){
+   if(tradeWasLive){
+     // Verso Live: prima ci assicuriamo che la sessione Capital.com sia davvero valida (vedi
+     // ensureCapitalConnected sopra), altrimenti switchAccountMode(true) passerebbe comunque a
+     // modalità Live ma senza riuscire a scaricare nulla, lasciando a schermo il grafico Storico.
+     const connected=await ensureCapitalConnected();
+     if(!connected)return; // login richiesto: l'utente potrà ripremere "Vai a grafico" dopo essersi collegato
+   }
    await switchAccountMode(tradeWasLive);
  }
  const currentAsset=$('market')?.value||'';
@@ -7529,6 +7566,11 @@ async function loadLiveHistoryFromCapital(asset){
  capitalWsPrimaryEpic=epic;
  lastPrimaryEpicPrice=null; // evita di applicare per uno stesso istante il prezzo dell'asset lasciato
  lastChartUpdateAt=Date.now(); // la candela è appena stata ricostruita da zero: non è "ferma"
+ // Baseline del bucket "adesso" per il rilevamento del cambio candela (vedi
+ // lastSeenCandleBucketStart sopra): appena ricaricato da qui, NON deve scattare un resync
+ // aggiuntivo al giro successivo del timer solo perché non aveva ancora visto questo bucket.
+ const rolloverBucketMs=(currentTF||1)*60000;
+ lastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
  await refreshLiveStreamSubscriptions();
 }
 // Calcola l'insieme di epic Capital.com da tenere sottoscritti in Live ORA: quello a grafico +
@@ -7606,6 +7648,19 @@ let lastPrimaryEpicPrice=null;
 // zero storico + mappatura epic + sottoscrizione, esattamente come un cambio asset manuale
 // (già dimostrato affidabile). Ha un suo cooldown separato per non for saturare le API in loop.
 let lastChartUpdateAt=0, hardResyncAttemptAt=0;
+// RISINCRONIZZAZIONE FORZATA ALLA CHIUSURA CANDELA (richiesto esplicitamente dall'utente): il bug
+// segnalato — alla chiusura dell'ultima candela del timeframe il grafico si blocca, mostra per
+// qualche secondo SOLO l'ultima candela senza storico, poi riparte da solo — succede esattamente
+// nell'istante di passaggio da un bucket al successivo (es. 13:25 -> 13:26 in 1m). Invece di
+// aspettare che i soli tick WebSocket/fallback REST costruiscano da soli la nuova candela (dove si
+// annidava il problema), qui rileviamo il cambio di bucket confrontando l'inizio del bucket
+// "adesso" con l'ultimo visto, e non appena cambia forziamo SUBITO un refresh pulito e completo
+// (loadLiveHistoryFromCapital: stesso percorso già affidabile di un cambio asset manuale — storico
+// + epic + sottoscrizione rifatti da zero). Sì, questo comporta un piccolo hiccup (una manciata di
+// centinaia di ms, al massimo ~1s) esattamente al cambio candela, ma elimina il blocco più lungo e
+// il "solo ultima candela senza storico" visto finora. Cooldown + flag "in corso" per evitare
+// richieste doppie/sovrapposte se un giro del timer impiega più di 1s.
+let lastSeenCandleBucketStart=null, candleRolloverResyncAt=0, candleRolloverResyncInProgress=false;
 // Refresh continuo in Live, al massimo 1 volta al secondo (come richiesto, per non elaborare/
 // ridisegnare ad ogni singolo tick WebSocket che può arrivare più volte al secondo): questo
 // timer è ora l'UNICO punto che applica davvero l'ultimo prezzo ricevuto alla candela in corso
@@ -7635,6 +7690,24 @@ function startLiveRefreshTimer(){
  if(liveRefreshTimer)return;
  liveRefreshTimer=setInterval(async ()=>{
    if(!liveModeActive)return;
+   // Vedi commento su lastSeenCandleBucketStart più sopra: appena si entra in un NUOVO bucket
+   // (nuova candela) rispetto all'ultimo giro, forziamo subito un refresh pulito invece di
+   // lasciare che sia il flusso normale a costruire la nuova candela (dove si annidava il blocco).
+   const rolloverBucketMs=(currentTF||1)*60000;
+   const nowBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+   if(currentAssetKey && capitalWsPrimaryEpic){
+     if(lastSeenCandleBucketStart==null){
+       lastSeenCandleBucketStart=nowBucketStart;
+     }else if(nowBucketStart>lastSeenCandleBucketStart && !candleRolloverResyncInProgress && (Date.now()-candleRolloverResyncAt)>2000){
+       lastSeenCandleBucketStart=nowBucketStart;
+       candleRolloverResyncAt=Date.now();
+       candleRolloverResyncInProgress=true;
+       $('status').textContent='🔄 Chiusura candela: risincronizzo con Capital.com…';
+       try{ await loadLiveHistoryFromCapital(currentAssetKey); }
+       finally{ candleRolloverResyncInProgress=false; }
+       return; // il refresh ha già aggiornato candela/tabelle/disegno: salta il resto di questo giro
+     }
+   }
    // WATCHDOG 1 (leggero): se non arriva un tick per l'epic a grafico da troppo tempo
    // (streaming fermo, magari "silenziosamente" senza che scatti mai onclose), forziamo una
    // riconnessione del solo WebSocket invece di aspettare che l'utente cambi asset o timeframe.
