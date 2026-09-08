@@ -12,6 +12,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <!-- iOS/Safari: fa comparire l'icona quando si fa "Aggiungi a Home" -->
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Backtest Lab">
@@ -379,7 +380,10 @@ tr.otherAssetRow td:last-child{opacity:1}
 <div id="liveLoginModalOverlay" class="fbModalOverlay" style="display:none">
   <div class="fbModalBox" style="max-width:420px">
     <div class="fbModalHeader"><h3>🔴 Accesso Live — Capital.com</h3><button id="liveLoginCloseBtn" class="fbModalClose" title="Chiudi">✕</button></div>
-    <div class="liveLoginBody">
+    <!-- Avvolto in un vero <form> (con submit disabilitato: il login parte solo dal click sul
+         pulsante "Accedi" nel footer, gestito via JS) solo per evitare l'avviso del browser
+         "Password field is not contained in a form" — nessun cambio di comportamento. -->
+    <form class="liveLoginBody" onsubmit="return false;">
       <div>
         <label>Email Capital.com</label>
         <input id="liveLoginEmail" type="email" autocomplete="username" placeholder="tuo@email.it">
@@ -400,7 +404,7 @@ tr.otherAssetRow td:last-child{opacity:1}
       <div id="liveLoginFolderStatus" class="sub" style="margin:0"></div>
       <a class="liveLoginGuide" id="liveLoginChangeFolderBtn" href="javascript:void(0)">📂 Scegli/cambia la cartella dove salvarle</a>
       <a class="liveLoginGuide" id="liveLoginOpenGuideBtn" href="javascript:void(0)">📖 Non sai come ottenere queste credenziali? Leggi la guida qui dentro l'app →</a>
-    </div>
+    </form>
     <div class="liveLoginFooter">
       <button id="liveLoginCancelBtn" class="toolBtn">Annulla</button>
       <button id="liveLoginSubmitBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Accedi</button>
@@ -448,7 +452,7 @@ tr.otherAssetRow td:last-child{opacity:1}
 <main>
 <div class="panel">
  <div class="toolbar">
-  <div><div class="label">ASSET</div><select id="market" title="Scegli l'ASSET (coppia di valute): imposta automaticamente Decimali prezzo e Decimali per +1 pip corretti per quel mercato, e il calcolo del lottaggio si adatta di conseguenza. Carica lo storico dalla '📚 Libreria storici CSV per asset' qui sotto — quando la libreria ha già dei CSV per l'asset scelto, vengono caricati sul grafico in automatico.">
+  <div><div class="label">ASSET</div><select id="market" autocomplete="off" title="Scegli l'ASSET (coppia di valute): imposta automaticamente Decimali prezzo e Decimali per +1 pip corretti per quel mercato, e il calcolo del lottaggio si adatta di conseguenza. Carica lo storico dalla '📚 Libreria storici CSV per asset' qui sotto — quando la libreria ha già dei CSV per l'asset scelto, vengono caricati sul grafico in automatico.">
     <option value="" selected disabled>— Seleziona ASSET —</option>
     <option value="EURUSD">EUR/USD</option>
     <option value="GBPUSD">GBP/USD</option>
@@ -820,7 +824,7 @@ async function switchAccountMode(newIsLive){
  await withLoadingOverlay(newIsLive?'Passaggio a modalità Live…':'Ritorno a modalità Storico…', async()=>{
    captureCurrentModeSnapshot();
    liveModeActive=newIsLive;
-   if(newIsLive)startLiveRefreshTimer(); else { stopLiveRefreshTimer(); disconnectCapitalStream(); }
+   if(newIsLive){startLiveRefreshTimer();startCapitalSessionKeepAlive();} else { stopLiveRefreshTimer(); disconnectCapitalStream(); stopCapitalSessionKeepAlive(); }
    restoreModeSnapshot(currentMode());
    tradeSLLine=null; tradeTPLine=null;
    syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
@@ -2018,6 +2022,16 @@ function parseCSV(txt){
 // rimuovere un singolo file; `baseRows` è sempre ricalcolata come fusione di TUTTI i file
 // della libreria, ordinata per data e senza candele duplicate (stesso timestamp).
 function rebuildBaseRowsFromLibrary(){
+ // FAST PATH per la modalità Live: qui `csvLibrary` contiene SEMPRE un solo "file" sintetico
+ // (creato da loadLiveHistoryFromCapital, poi aggiornato in append da applyLivePriceToChart),
+ // già ordinato e senza duplicati per costruzione. Rifare ogni volta un merge+sort dell'INTERO
+ // storico (come sotto, pensato per più CSV in Storico) è un'operazione O(n log n) che diventa
+ // via via più pesante con l'andare del tempo e causa jank del thread principale proprio nei
+ // momenti "critici" come l'apertura di una nuova candela (contribuiva al bug "l'aggiornamento
+ // live si blocca"). Uno `.slice()` crea comunque una NUOVA copia dell'array — necessaria per
+ // invalidare correttamente le cache di getBaseTimes()/getFullAgg(), basate sul confronto per
+ // riferimento — ma senza il costo di un sort ad ogni tick.
+ if(liveModeActive && csvLibrary.length===1){ baseRows=csvLibrary[0].rows.slice(); return; }
  const all=[];
  csvLibrary.forEach(f=>{ f.rows.forEach(r=>all.push(r)); });
  all.forEach(r=>{ r._t=parseDateTime(r.date); });
@@ -2632,6 +2646,30 @@ function freezeViewIfNeeded(){
    if(data.length){const base=autoFitBaseRange(data);viewPriceLo=base.lo;viewPriceHi=base.hi;}
    followLatest=false;
  }
+}
+// BUG RISOLTO ("i tasti Vai a grafico delle posizioni Live puntano al grafico corretto ma le
+// candele spariscono"): jumpToPositionOnChart/jumpToPendingOnChart/jumpToTradeOnChart
+// congelano la scala verticale (viewPriceLo/viewPriceHi) usando SOLO entry/SL/TP/exit
+// dell'operazione. Se una posizione non ha SL/TP impostati (frequente in Live, dove si apre
+// spesso a mercato senza livelli), pricesToFit conteneva un solo valore (l'entry): il
+// fallback "range 0 → usa lo 0.1% dell'entry" produceva una banda verticale larghissima
+// pochi decimi di pip (o pochi centesimi di $ per l'oro) — molto più stretta della reale
+// oscillazione high/low delle candele in quella finestra, che finivano quindi TUTTE fuori
+// dall'area disegnata (tagliate dal clip in draw()) pur restando la finestra ORIZZONTALE
+// (asset/tempo) corretta: esattamente il sintomo "punta al posto giusto ma non si vede
+// nulla". Questa funzione include SEMPRE anche gli high/low reali delle candele nella
+// finestra che sta per essere mostrata, così la scala verticale non può mai essere più
+// stretta dei dati che deve contenere.
+function fitVerticalRangeToWindow(extraPrices){
+ const {dataStart,dataEnd}=getViewWindow();
+ const windowData=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
+ const vals=(extraPrices||[]).filter(Number.isFinite);
+ windowData.forEach(r=>{ if(Number.isFinite(r.high))vals.push(r.high); if(Number.isFinite(r.low))vals.push(r.low); });
+ if(!vals.length)return;
+ const fitLo=Math.min(...vals), fitHi=Math.max(...vals);
+ const fitRange=(fitHi-fitLo)||Math.abs(fitLo||1)*0.001||1;
+ const padFit=fitRange*0.12;
+ viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
 }
 function resetToLatestCandle(){
  followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
@@ -5392,15 +5430,7 @@ async function jumpToTradeOnChart(tradeIndex){
  // candele ora visibili (che con oscillazioni ampie altrove nella finestra rimpicciolisce
  // troppo l'operazione), la inquadriamo direttamente su entrata/uscita/SL/TP di QUESTA
  // operazione, con un margine, così il grafico si "ridimensiona" apposta per mostrarla bene.
- const pricesToFit=[t.entry,t.exit].filter(Number.isFinite);
- if(Number.isFinite(t.sl))pricesToFit.push(t.sl);
- if(Number.isFinite(t.tp))pricesToFit.push(t.tp);
- if(pricesToFit.length){
-   const fitLo=Math.min(...pricesToFit), fitHi=Math.max(...pricesToFit);
-   const fitRange=(fitHi-fitLo)||Math.abs(t.entry||1)*0.001||1;
-   const padFit=fitRange*0.25;
-   viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
- }
+ fitVerticalRangeToWindow([t.entry,t.exit,t.sl,t.tp]);
  // Rettangolo di evidenziazione + statistiche (durata operazione, pip, R/R), disegnato in
  // draw() finché non si passa a un altro trade o si reimposta il grafico.
  const openTime=openReferenceTimeForPos(t), closeTime=closeReferenceTimeForTrade(t);
@@ -5439,15 +5469,7 @@ async function jumpToPositionOnChart(posId){
  followLatest=false; autoFitWidth=false; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  visibleCount=idealVisibleCount();
  viewEnd=openIdx!=null?Math.min(maxViewEnd(),openIdx+Math.floor(getVisibleCount()/2)):idx;
- const pricesToFit=[pos.entry].filter(Number.isFinite);
- if(Number.isFinite(pos.sl))pricesToFit.push(pos.sl);
- if(Number.isFinite(pos.tp))pricesToFit.push(pos.tp);
- if(pricesToFit.length){
-   const fitLo=Math.min(...pricesToFit), fitHi=Math.max(...pricesToFit);
-   const fitRange=(fitHi-fitLo)||Math.abs(pos.entry||1)*0.001||1;
-   const padFit=fitRange*0.25;
-   viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
- }
+ fitVerticalRangeToWindow([pos.entry,pos.sl,pos.tp]);
  draw();update();
  $('status').textContent=`Posizione ${pos.side} su ${pos.asset||currentAssetKey} selezionata a grafico.`;
 }
@@ -5470,15 +5492,7 @@ async function jumpToPendingOnChart(orderId){
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
  followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  visibleCount=idealVisibleCount(); viewEnd=idx;
- const pricesToFit=[p.entry].filter(Number.isFinite);
- if(Number.isFinite(p.sl))pricesToFit.push(p.sl);
- if(Number.isFinite(p.tp))pricesToFit.push(p.tp);
- if(pricesToFit.length){
-   const fitLo=Math.min(...pricesToFit), fitHi=Math.max(...pricesToFit);
-   const fitRange=(fitHi-fitLo)||Math.abs(p.entry||1)*0.001||1;
-   const padFit=fitRange*0.25;
-   viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
- }
+ fitVerticalRangeToWindow([p.entry,p.sl,p.tp]);
  draw();update();
  $('status').textContent=`Ordine pendente ${p.side} su ${p.asset||currentAssetKey} mostrato a grafico.`;
 }
@@ -7340,6 +7354,35 @@ function capitalApiFetch(url,options){
  capitalApiQueueTail=result.then(()=>{},()=>{}); // un fallimento non deve bloccare la coda per le successive
  return result;
 }
+// ===================================================================
+// KEEP-ALIVE SESSIONE REST: secondo la documentazione Capital.com, la sessione REST
+// (cst/X-SECURITY-TOKEN) resta valida solo 10 MINUTI di inattività — un limite SEPARATO da
+// quello della sessione WebSocket (che ha il suo ping ogni 5 minuti, vedi più sotto). Finché
+// lo streaming a tick funziona bene, può capitare di non fare NESSUNA richiesta REST per
+// diversi minuti (fetchLatestPriceRest scatta solo come fallback quando i tick sembrano
+// fermi): senza un "tocco" periodico, la PRIMA richiesta REST dopo una pausa lunga (es. un
+// cambio asset dopo essere rimasti a lungo fermi su un grafico che nel frattempo aggiornava
+// solo via WebSocket) fallirebbe per sessione scaduta. Un giro ogni 8 minuti (sotto la soglia
+// dei 10) con una GET leggerissima (rilettura dei dettagli della sessione corrente) la
+// mantiene viva senza sprecare altre chiamate né interferire col rate limiter qui sopra
+// (passa dalla stessa coda, quindi resta comunque distanziata di almeno 1s dalle altre).
+let capitalSessionKeepAliveTimer=null;
+function startCapitalSessionKeepAlive(){
+ if(capitalSessionKeepAliveTimer)return;
+ capitalSessionKeepAliveTimer=setInterval(async()=>{
+   if(!liveModeActive||!capitalSessionTokens)return;
+   try{
+     const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+     await capitalApiFetch(base+'/api/v1/session',{
+       headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
+     });
+   }catch(e){ /* un fallimento qui non deve interrompere nulla: i fallback esistenti (watchdog
+     REST/WS in startLiveRefreshTimer) se ne accorgeranno comunque alla prossima chiamata reale */ }
+ },8*60*1000);
+}
+function stopCapitalSessionKeepAlive(){
+ if(capitalSessionKeepAliveTimer){clearInterval(capitalSessionKeepAliveTimer);capitalSessionKeepAliveTimer=null;}
+}
 async function connectToCapitalCom(creds){
  const base=creds.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
  let res;
@@ -7484,6 +7527,8 @@ async function loadLiveHistoryFromCapital(asset){
  // posizioni aperte/ordini pendenti su ALTRI asset, così il loro prezzo (e quindi P/L, SL/TP,
  // attivazione pendenti) continua ad aggiornarsi anche mentre si guarda un asset diverso.
  capitalWsPrimaryEpic=epic;
+ lastPrimaryEpicPrice=null; // evita di applicare per uno stesso istante il prezzo dell'asset lasciato
+ lastChartUpdateAt=Date.now(); // la candela è appena stata ricostruita da zero: non è "ferma"
  await refreshLiveStreamSubscriptions();
 }
 // Calcola l'insieme di epic Capital.com da tenere sottoscritti in Live ORA: quello a grafico +
@@ -7500,7 +7545,16 @@ async function requiredLiveEpics(){
    const e=await resolveCapitalEpic(a);
    if(e)epics.push(e);
  }
- return [...new Set(epics)];
+ const unique=[...new Set(epics)];
+ // LIMITE Capital.com: la WebSocket API accetta la sottoscrizione a un massimo di 40
+ // strumenti contemporaneamente. currentAssetKey è sempre il primo elemento inserito in
+ // `assets` sopra, quindi l'asset a grafico ora resta sempre incluso anche se il taglio
+ // scarta qualche asset "in background" più remoto (posizioni/ordini su altri strumenti).
+ if(unique.length>40){
+   $('status').textContent=`⚠️ ${unique.length} strumenti richiederebbero lo streaming Live ma Capital.com ne permette al massimo 40 in sottoscrizione: l'aggiornamento in background è limitato ai primi 40 (l'asset a grafico ora resta sempre incluso).`;
+   return unique.slice(0,40);
+ }
+ return unique;
 }
 // Ricalcola e applica l'elenco di epic da sottoscrivere (da chiamare al cambio asset, apertura/
 // chiusura posizione o ordine pendente, in Live). Se il socket è già aperto invia solo la
@@ -7534,10 +7588,30 @@ let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, ca
 // fermato (anche "silenziosamente", senza che scatti mai onclose) e forzare una riconnessione,
 // più un fallback via REST che garantisce comunque un aggiornamento ogni secondo nel frattempo.
 let lastLiveTickAt=0, liveStreamReconnectAttemptAt=0, liveWsReconnectTimer=null;
-// Refresh continuo in Live: i tick WebSocket aggiornano prezzo/candela solo quando arrivano
-// (possono diradarsi nei momenti di bassa attività di mercato), ma tabella posizioni/ordini,
-// P/L ed equity devono comunque restare "vivi" (es. tempo trascorso, margine libero) anche
-// tra un tick e l'altro. Un giro ogni 1s di update() copre questo, senza toccare le candele.
+// BUG RISOLTO ("il prezzo non si muove PROPRIO più", regressione introdotta insieme al
+// throttle a 1/sec): il timer da 1s leggeva il prezzo dell'epic a grafico passando dal NOME
+// asset (livePriceByAsset[currentAssetKey]), che dipende dal fatto che epicToAsset[epic]
+// corrisponda ESATTAMENTE alla stringa in currentAssetKey. Prima del throttle, invece, il tick
+// sull'epic a grafico veniva applicato subito confrontando solo gli EPIC (sempre affidabile,
+// sono lo stesso valore usato per sottoscrivere), senza passare dal nome asset. Per non
+// dipendere di nuovo da quella corrispondenza, l'ultimo prezzo dell'epic PRIMARIO (quello a
+// grafico) viene ora tenuto qui a parte, aggiornato solo confrontando l'epic — esattamente come
+// prima — e il timer da 1s legge da qui, non da livePriceByAsset.
+let lastPrimaryEpicPrice=null;
+// RETE DI SICUREZZA aggiuntiva, come richiesto ("l'aggiornamento non si può bloccare"): oltre al
+// watchdog sui tick grezzi qui sotto, teniamo traccia di quando la CANDELA a grafico è stata
+// davvero aggiornata l'ultima volta. Se passano più di 15s senza alcun aggiornamento reale
+// (qualunque sia la causa: WS silenzioso, mismatch epic/asset, token scaduto, ecc.) scatta un
+// resync "pesante" — un intero loadLiveHistoryFromCapital() dell'asset corrente, che rifà da
+// zero storico + mappatura epic + sottoscrizione, esattamente come un cambio asset manuale
+// (già dimostrato affidabile). Ha un suo cooldown separato per non for saturare le API in loop.
+let lastChartUpdateAt=0, hardResyncAttemptAt=0;
+// Refresh continuo in Live, al massimo 1 volta al secondo (come richiesto, per non elaborare/
+// ridisegnare ad ogni singolo tick WebSocket che può arrivare più volte al secondo): questo
+// timer è ora l'UNICO punto che applica davvero l'ultimo prezzo ricevuto alla candela in corso
+// sul grafico (i tick WebSocket in applyLiveTick si limitano a memorizzare il prezzo). Aggiorna
+// anche tabella posizioni/ordini, P/L ed equity (tempo trascorso, margine libero) che devono
+// restare "vivi" anche tra un tick e l'altro.
 let liveRefreshTimer=null;
 // Legge l'ultimo prezzo disponibile per l'epic indicato direttamente via REST (una singola
 // candela recente): usato SOLO come fallback quando lo streaming a tick sembra fermo da un
@@ -7561,22 +7635,19 @@ function startLiveRefreshTimer(){
  if(liveRefreshTimer)return;
  liveRefreshTimer=setInterval(async ()=>{
    if(!liveModeActive)return;
-   // WATCHDOG: se non arriva un tick per l'epic a grafico da troppo tempo (streaming fermo,
-   // magari "silenziosamente" senza che scatti mai onclose), forziamo una riconnessione
-   // completa del WebSocket invece di aspettare che l'utente cambi asset o timeframe per
-   // farlo ripartire (era esattamente il bug segnalato).
+   // WATCHDOG 1 (leggero): se non arriva un tick per l'epic a grafico da troppo tempo
+   // (streaming fermo, magari "silenziosamente" senza che scatti mai onclose), forziamo una
+   // riconnessione del solo WebSocket invece di aspettare che l'utente cambi asset o timeframe.
    const staleMs=lastLiveTickAt?(Date.now()-lastLiveTickAt):Infinity;
    if(capitalWsPrimaryEpic && staleMs>8000 && (Date.now()-liveStreamReconnectAttemptAt)>8000){
      liveStreamReconnectAttemptAt=Date.now();
      disconnectCapitalStream();
      refreshLiveStreamSubscriptions();
    }
-   // Ultimo prezzo noto per l'asset ATTUALMENTE a grafico: viene comunque aggiornato da
-   // applyLiveTick ad ogni tick ricevuto (anche quando il tick non tocca il grafico perché
-   // "in background"), quindi qui basta rileggerlo per far avanzare la candela in corso.
-   const livePrice=currentAssetKey?livePriceByAsset[currentAssetKey]:null;
+   // Ultimo prezzo noto per l'EPIC a grafico ora (non per nome asset: vedi commento su
+   // lastPrimaryEpicPrice più sopra, evita di ridipendere da una corrispondenza asset↔epic).
    let touched=false;
-   if(Number.isFinite(livePrice))touched=applyLivePriceToChart(livePrice,Date.now())||touched;
+   if(Number.isFinite(lastPrimaryEpicPrice))touched=applyLivePriceToChart(lastPrimaryEpicPrice,Date.now())||touched;
    // FALLBACK richiesto dall'utente: se lo streaming a tick è fermo da un po' (>4s), forziamo
    // comunque una sincronizzazione ogni secondo leggendo l'ultimo prezzo via REST, così la
    // candela avanza sempre — anche nei momenti in cui la riconnessione del WebSocket qui sopra
@@ -7584,9 +7655,24 @@ function startLiveRefreshTimer(){
    if(capitalWsPrimaryEpic && staleMs>4000){
      const restPrice=await fetchLatestPriceRest(capitalWsPrimaryEpic);
      if(Number.isFinite(restPrice)){
+       lastPrimaryEpicPrice=restPrice;
        if(currentAssetKey)livePriceByAsset[currentAssetKey]=restPrice;
        touched=applyLivePriceToChart(restPrice,Date.now())||touched;
      }
+   }
+   if(touched)lastChartUpdateAt=Date.now();
+   // WATCHDOG 2 (pesante, richiesto esplicitamente: "l'aggiornamento non si può bloccare"):
+   // qualunque sia la causa (mismatch epic/asset, token di sessione scaduto, bug non ancora
+   // scoperto...), se la candela a grafico non si aggiorna DAVVERO da più di 15s nonostante
+   // siamo in Live con un asset selezionato, rifacciamo da zero storico + epic + sottoscrizione
+   // per l'asset corrente (stesso percorso, già affidabile, di un cambio asset manuale) invece
+   // di continuare a fidarci dei soli tick. Cooldown separato da 20s per non saturare le API.
+   if(currentAssetKey && lastChartUpdateAt && (Date.now()-lastChartUpdateAt)>15000 && (Date.now()-hardResyncAttemptAt)>20000){
+     hardResyncAttemptAt=Date.now();
+     $('status').textContent='⚠️ Nessun aggiornamento prezzo da 15s: resincronizzo con Capital.com…';
+     loadLiveHistoryFromCapital(currentAssetKey); // già gestisce da sola i propri errori/timeout
+   }else if(!lastChartUpdateAt){
+     lastChartUpdateAt=Date.now(); // primo giro: evita un falso allarme immediato
    }
    // Stessa correzione di applyLiveTick: se questo giro ha aggiornato la candela in corso
    // (tick "vivo" o fallback REST), va anche rivalutato se SL/TP dell'asset a grafico sono
@@ -7715,12 +7801,24 @@ function applyLivePriceToChart(price,timestamp){
  const bucketStart=Math.floor(timestamp/bucketMs)*bucketMs;
  const last=file.rows[file.rows.length-1];
  const lastT=last?parseDateTime(last.date):NaN;
- if(last && lastT===bucketStart){
+ // BUG RISOLTO ("alla chiusura della candela l'aggiornamento live si blocca", TF 1m): lo
+ // storico iniziale scaricato da Capital.com via REST può etichettare l'ultima candela con un
+ // timestamp non perfettamente allineato all'inizio esatto del minuto (pochi secondi di scarto,
+ // o addirittura l'orario di CHIUSURA anziché di apertura, a seconda dell'istante in cui è
+ // stata scaricata). Confrontando `lastT` grezzo con `bucketStart` (sempre un multiplo esatto
+ // di bucketMs) capitava che, al cambio di minuto, bucketStart NON risultasse maggiore di
+ // `lastT` (perché quest'ultimo era già "avanti" di qualche secondo/di un intero bucket):
+ // il ramo `else return false` scartava allora OGNI tick successivo per sempre, dando
+ // l'impressione che l'aggiornamento si fosse fermato esattamente alla chiusura della candela.
+ // Confrontando invece i bucket "arrotondati" di entrambi i lati, il problema non si presenta
+ // più, qualunque sia la convenzione di etichettatura usata dalla fonte storica.
+ const lastBucketStart=Number.isFinite(lastT)?Math.floor(lastT/bucketMs)*bucketMs:NaN;
+ if(last && lastBucketStart===bucketStart){
    if(price===last.high && price===last.low && price===last.close)return false; // nessun cambiamento reale
    if(price>last.high)last.high=price;
    if(price<last.low)last.low=price;
    last.close=price;
- }else if(!last || bucketStart>lastT){
+ }else if(!last || bucketStart>lastBucketStart){
    file.rows.push({date:new Date(bucketStart).toISOString(),open:price,high:price,low:price,close:price,volume:0});
  }else return false; // tick fuori sequenza (bucket più vecchio di quello che abbiamo già): ignorato
  rebuildBaseRowsFromLibrary();
@@ -7744,15 +7842,14 @@ function applyLiveTick(p){
    update();
    return;
  }
- if(!applyLivePriceToChart(price,p.timestamp))return;
- // BUG RISOLTO: SL/TP e ordini pendenti dell'asset A GRAFICO ORA non venivano MAI valutati in
- // Live — evaluate()/checkPendingOrders() partivano solo avanzando lo storico a mano (Storico).
- // Per l'asset "in background" evaluateLiveBackgroundAsset() già lo faceva più sopra: qui
- // manca la stessa cosa per l'asset visualizzato, usando però l'high/low reale della candela
- // in corso (appena aggiornata da applyLivePriceToChart), coerente con la valutazione storica.
- evaluate();checkPendingOrders();
- update();draw();
- scheduleSave();
+ // AGGIORNAMENTO GRAFICO LIMITATO A 1 VOLTA AL SECONDO (come richiesto): il WebSocket può
+ // consegnare più tick al secondo (specie su asset volatili), ma qui ci limitiamo a
+ // memorizzare l'ultimo prezzo dell'epic a grafico (confrontando solo l'EPIC, non il nome
+ // asset — vedi commento su lastPrimaryEpicPrice più sopra) senza toccare subito candela/
+ // SL-TP/disegno/salvataggio ad ogni singolo tick. L'unico punto che applica davvero il
+ // prezzo al grafico è il timer da 1000ms in startLiveRefreshTimer, così l'intera catena
+ // (candela, valutazione SL/TP, ridisegno, salvataggio) gira al massimo una volta al secondo.
+ lastPrimaryEpicPrice=price;
 }
 // Valuta SL/TP delle posizioni aperte e l'attivazione degli ordini pendenti su un asset "in
 // background" (diverso da quello a grafico ora) usando l'ultimo prezzo tick ricevuto per quel
@@ -8022,13 +8119,76 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
      // ripristinati sopra da applyLightSessionState() appartengono proprio a questo asset.
      currentAssetKey=$('market')?.value||'';
      lastValidMarketValue=currentAssetKey;
+     if(!liveModeActive){
+       // RICHIESTO: tornando in modalità Storico dopo un ricaricamento della pagina, non deve
+       // restare selezionato alcun asset (va sempre scelto di nuovo a mano) — le posizioni,
+       // gli ordini pendenti, i trade e l'equity dello Storico restano comunque intatti in
+       // memoria (sono "per conto", non per asset, vedi CONTO UNICO E GLOBALE più sopra) e
+       // ricompaiono da soli non appena si riseleziona un asset.
+       // BUG RISOLTO: impostare .value='' non basta da solo se il browser stesso ripristina
+       // il valore del <select> al refresh (comportamento nativo di autofill dei form, non
+       // legato al nostro salvataggio) — per questo il tag ha anche autocomplete="off" (sopra
+       // nell'HTML) e qui reimpostiamo esplicitamente anche l'attributo "selected" sull'opzione
+       // vuota, non solo la proprietà .value, così resta vuoto qualunque cosa il browser abbia
+       // provato a ripristinare da solo.
+       const marketSel=$('market');
+       if(marketSel){
+         Array.from(marketSel.options).forEach(o=>{ o.selected=(o.value===''); });
+         marketSel.value='';
+         marketSel.selectedIndex=0;
+       }
+       currentAssetKey=''; lastValidMarketValue='';
+       csvLibrary=[]; baseRows=[]; rows=[]; idx=0; viewEnd=0; masterTime=null;
+       $('fileName').textContent='Nessun asset selezionato: scegline uno per continuare.';
+       applyInstrument(); // riallinea testi/hint sulla messaggistica "nessun ASSET selezionato"
+     }
      updateLiveModeUI();
      update(); draw(); refreshRiskSuggestion(); refreshRiskSuggestionPending();
    });
-   $('status').textContent=`Sessione ripristinata: ${rows.length.toLocaleString('it-IT')} candele, ${trades.length} trade nel journal.`;
+   if(liveModeActive){
+     $('status').textContent='Sessione ripristinata in modalità Live: riconnessione a Capital.com…';
+   }else{
+     $('status').textContent=trades.length?`Sessione ripristinata (Storico): ${trades.length} trade nel journal. Seleziona un asset per continuare.`:'Sessione Storico ripristinata: seleziona un asset per continuare.';
+   }
    const el=$('autosaveStatus'); if(el)el.textContent='Sessione ripristinata • salvataggio automatico attivo';
+   // RICHIESTO: se l'ultima sessione (prima del ricaricamento) era in modalità Live, restarci
+   // davvero anche dopo il refresh, non solo a livello di etichetta — riconnettendoci da soli a
+   // Capital.com con le credenziali salvate in precedenza e riaprendo lo streaming per l'asset
+   // che era a grafico (loadLiveHistoryFromCapital si occupa anche di risottoscrivere gli epic
+   // di eventuali posizioni/ordini pendenti su altri asset, già ripristinati sopra).
+   if(liveModeActive && currentAssetKey){
+     await withLoadingOverlay('Riconnessione a Capital.com…', async()=>{
+       try{
+         const autoCreds=await tryAutoLoadLiveCreds();
+         const result=autoCreds?await connectToCapitalCom(autoCreds):null;
+         if(result&&result.ok){
+           liveCredsDraft=autoCreds;
+           capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
+           startLiveRefreshTimer();
+           await loadLiveHistoryFromCapital(currentAssetKey);
+           $('status').textContent='🟢 Live riconnesso automaticamente su '+currentAssetKey+'.';
+         }else{
+           $('status').textContent='⚠️ Riconnessione automatica a Capital.com non riuscita: premi 🔴 Live per accedere di nuovo (resti comunque in modalità Live).';
+         }
+       }catch(e){
+         $('status').textContent='⚠️ Riconnessione automatica a Capital.com non riuscita: premi 🔴 Live per accedere di nuovo (resti comunque in modalità Live).';
+       }
+     });
+   }
  }else{
    updateFileBtnLabel();
+   // Stessa protezione del ramo di ripristino sopra: senza una sessione salvata siamo sempre in
+   // Storico "di fatto" (liveModeActive parte a false), quindi anche qui l'asset non deve mai
+   // restare preselezionato per un eventuale ripristino automatico del form fatto dal browser
+   // (indipendente dal nostro salvataggio) — va fatto PRIMA di applyInstrument() così i
+   // testi/hint riflettono subito "nessun ASSET selezionato" invece di un valore residuo.
+   if(!liveModeActive){
+     const marketSel=$('market');
+     if(marketSel){
+       Array.from(marketSel.options).forEach(o=>{ o.selected=(o.value===''); });
+       marketSel.value=''; marketSel.selectedIndex=0;
+     }
+   }
    applyInstrument();
    currentAssetKey=$('market')?.value||'';
    lastValidMarketValue=currentAssetKey;
