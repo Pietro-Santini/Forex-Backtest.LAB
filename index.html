@@ -7533,11 +7533,40 @@ async function loadLiveHistoryFromCapital(asset){
    $('status').textContent=`⚠️ Le candele ricevute da Capital.com per ${epic} non sono valide: storico Live non caricato.`;
    return;
  }
- csvLibrary=[{id:'capital_live_'+asset,name:`Capital.com Live (${epic})`,addedAt:Date.now(),rows:liveRows}];
+ // FIX "lo storico sparisce/salta indietro al cambio candela": questa funzione viene richiamata
+ // non solo al primo caricamento di un asset, ma anche ad OGNI risincronizzazione forzata alla
+ // chiusura di una candela (vedi startLiveRefreshTimer). In quei casi la richiesta REST può, di
+ // tanto in tanto, tornare con un pacchetto di candele più corto o con un range temporale che
+ // non arriva fino ad "adesso" (rallentamento del server, richiesta in corso quando il broker
+ // ruota la finestra, ecc.). Se qui SOSTITUIAMO integralmente csvLibrary/baseRows con la sola
+ // risposta appena ricevuta, per un istante l'intero storico sparisce dal grafico e resta a
+ // schermo una sola candela isolata, magari con un orario più vecchio di quella su cui eravamo
+ // fermi: esattamente il problema visto nel replay. La correzione: quando la libreria contiene
+ // GIÀ lo storico di questo stesso asset/epic, FONDIAMO le candele appena scaricate con quelle
+ // che avevamo (per timestamp, così duplicati impossibili): quelle già presenti vengono
+ // aggiornate ai valori più freschi, quelle nuove vengono aggiunte in coda, ma nessuna candela
+ // già mostrata viene MAI rimossa solo perché questa particolare risposta non la contiene più.
+ // Così l'ultima candela "vecchia" resta sempre attaccata all'apertura di quella nuova, senza
+ // mai un buco o un reset visivo — anche se una singola risincronizzazione arriva incompleta.
+ const prevLiveFile=csvLibrary[0];
+ const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='capital_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
+ let mergedLiveRows=liveRows;
+ if(isSameLiveSeries){
+   const byTime=new Map();
+   prevLiveFile.rows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byTime.set(t,r); });
+   liveRows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byTime.set(t,r); }); // i dati freschi vincono sui duplicati
+   mergedLiveRows=[...byTime.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
+   // Tetto di sicurezza: senza limite, fondere invece di sostituire farebbe crescere lo storico
+   // Live all'infinito nel corso di una sessione lunga (una risincronizzazione al minuto, mai
+   // scartata). 5000 candele m1 (~3,5 giorni) sono ben più del necessario per scorrere indietro
+   // nel grafico e restano leggere da ridisegnare.
+   if(mergedLiveRows.length>5000)mergedLiveRows=mergedLiveRows.slice(mergedLiveRows.length-5000);
+ }
+ csvLibrary=[{id:'capital_live_'+asset,name:`Capital.com Live (${epic})`,addedAt:Date.now(),rows:mergedLiveRows}];
  rebuildBaseRowsFromLibrary();
  renderCsvLibraryList();
  updateFileBtnLabel();
- $('fileName').textContent=liveRows.length.toLocaleString('it-IT')+' candele • '+epic+' (storico Live Capital.com)';
+ $('fileName').textContent=baseRows.length.toLocaleString('it-IT')+' candele • '+epic+' (storico Live Capital.com)';
  drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
  historyUndo=[];historyRedo=[];
  // A differenza del caricamento di un CSV storico (che parte dalla prima candela per il
@@ -7557,7 +7586,7 @@ async function loadLiveHistoryFromCapital(asset){
  // per-asset persistente e viene ricaricata da lì con autoLoadAssetLibrary() non appena si
  // torna in Storico (vedi switchAccountMode()).
  saveLightStateNow();
- $('status').textContent=`🟢 Storico Live caricato: ${liveRows.length.toLocaleString('it-IT')} candele per ${epic} (${resolution}).`;
+ $('status').textContent=`🟢 Storico Live caricato: ${baseRows.length.toLocaleString('it-IT')} candele per ${epic} (${resolution}).`;
  // STEP 2 — apre (o riapre, se già presente da un asset precedente) lo streaming WebSocket
  // per questo epic/risoluzione, subito dopo che lo storico iniziale via REST è pronto.
  // MULTI-EPIC: oltre all'epic a grafico ora, restano sottoscritti anche gli epic di tutte le
