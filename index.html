@@ -2031,7 +2031,17 @@ function rebuildBaseRowsFromLibrary(){
  // live si blocca"). Uno `.slice()` crea comunque una NUOVA copia dell'array — necessaria per
  // invalidare correttamente le cache di getBaseTimes()/getFullAgg(), basate sul confronto per
  // riferimento — ma senza il costo di un sort ad ogni tick.
- if(liveModeActive && csvLibrary.length===1){ baseRows=csvLibrary[0].rows.slice(); return; }
+ // RETE DI SICUREZZA: qualunque candela con data non valida (NaN) romperebbe l'assunzione di
+ // array ordinato su cui si basa la ricerca binaria in rebuildRows()/getBaseTimes() (lowerBound),
+ // facendola convergere su un indice arbitrario — il sintomo "candela isolata/casuale di un
+ // altro giorno". La fonte nota è stata corretta in loadLiveHistoryFromCapital, ma filtriamo
+ // anche qui, all'ultimo punto prima che i dati entrino nel grafico, così nessuna futura fonte
+ // di dati Live rotti può più riprodurre lo stesso bug.
+ if(liveModeActive && csvLibrary.length===1){
+   const src=csvLibrary[0].rows;
+   baseRows=src.every(r=>Number.isFinite(parseDateTime(r.date)))?src.slice():src.filter(r=>Number.isFinite(parseDateTime(r.date)));
+   return;
+ }
  const all=[];
  csvLibrary.forEach(f=>{ f.rows.forEach(r=>all.push(r)); });
  all.forEach(r=>{ r._t=parseDateTime(r.date); });
@@ -7524,11 +7534,31 @@ async function loadLiveHistoryFromCapital(asset){
  // Usiamo il prezzo bid per open/high/low/close (come la maggior parte dei grafici retail).
  // "Z" in fondo alla data dice esplicitamente "questo è già UTC": parseDateTime lo riconosce
  // e non lo reinterpreta con il fuso orario usato di solito per i CSV manuali.
- const liveRows=prices.map(p=>({
-   date:(p.snapshotTimeUTC||p.snapshotTime)+'Z',
-   open:p.openPrice?.bid, high:p.highPrice?.bid, low:p.lowPrice?.bid, close:p.closePrice?.bid,
-   volume:p.lastTradedVolume||0
- })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite));
+ // NUOVO BUG TROVATO (causa reale, probabile, del "candela isolata/casuale di un altro giorno"
+ // visto ancora dopo la fix precedente): qui appendevamo SEMPRE "Z" al valore grezzo restituito
+ // da Capital.com, anche nei rari casi in cui quel valore ha già un fuso esplicito in fondo
+ // (es. già finisce per "Z" o per "+02:00"): il risultato ("...T10:05:00Z" + "Z" = "...ZZ", o
+ // "...+02:00Z") è una stringa data NON valida. Finora questa riga veniva scartata SOLO dal
+ // filtro sui prezzi (open/high/low/close), MAI da un controllo sulla data stessa: una singola
+ // candela con data corrotta poteva quindi restare nell'array (specie nei momenti in cui questa
+ // funzione SOSTITUISCE l'intera libreria anziché fonderla — vedi isSameLiveSeries più sotto).
+ // Una data non valida (NaN) dentro `baseRows` rompe l'assunzione di array ordinato su cui si
+ // basa la ricerca binaria di rebuildRows()/getBaseTimes() (lowerBound): il confronto con NaN è
+ // sempre falso, quindi la ricerca binaria può convergere su un indice del tutto ARBITRARIO
+ // invece che sull'ultima candela — esattamente il sintomo osservato ("una candela isolata,
+ // casuale, con la data di un altro giorno"). Corretto qui alla radice: (1) appendiamo "Z" SOLO
+ // se il valore non ha già un fuso esplicito; (2) scartiamo esplicitamente anche le righe con
+ // data non valida, non solo quelle con prezzi non validi.
+ const liveRows=prices.map(p=>{
+   let d=p.snapshotTimeUTC||p.snapshotTime;
+   d=(d!=null)?String(d):'';
+   if(d && !/(?:[Zz]|[+-]\d{2}:?\d{2})$/.test(d)) d+='Z'; // fuso esplicito già presente: non duplicarlo
+   return {
+     date:d,
+     open:p.openPrice?.bid, high:p.highPrice?.bid, low:p.lowPrice?.bid, close:p.closePrice?.bid,
+     volume:p.lastTradedVolume||0
+   };
+ }).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
  if(!liveRows.length){
    $('status').textContent=`⚠️ Le candele ricevute da Capital.com per ${epic} non sono valide: storico Live non caricato.`;
    return;
@@ -7561,6 +7591,14 @@ async function loadLiveHistoryFromCapital(asset){
    // scartata). 5000 candele m1 (~3,5 giorni) sono ben più del necessario per scorrere indietro
    // nel grafico e restano leggere da ridisegnare.
    if(mergedLiveRows.length>5000)mergedLiveRows=mergedLiveRows.slice(mergedLiveRows.length-5000);
+ }
+ // DIAGNOSTICA (console del browser, F12): se il salto/buco si ripresentasse ancora, questo log
+ // mostra subito se la causa è nella fusione (isSameLiveSeries false quando non dovrebbe, o
+ // l'ultima candela fusa più vecchia di quella precedente) invece di dover indovinare di nuovo.
+ if(prevLiveFile){
+   const prevLastRow=prevLiveFile.rows[prevLiveFile.rows.length-1];
+   const newLastRow=mergedLiveRows[mergedLiveRows.length-1];
+   console.log('[LiveResync]',{asset,isSameLiveSeries,prevRows:prevLiveFile.rows.length,fetchedRows:liveRows.length,mergedRows:mergedLiveRows.length,prevLast:prevLastRow&&prevLastRow.date,newLast:newLastRow&&newLastRow.date});
  }
  csvLibrary=[{id:'capital_live_'+asset,name:`Capital.com Live (${epic})`,addedAt:Date.now(),rows:mergedLiveRows}];
  rebuildBaseRowsFromLibrary();
