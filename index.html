@@ -7489,9 +7489,32 @@ async function resolveCapitalEpic(asset){
  }catch(e){ console.warn('Ricerca epic Capital.com fallita:',e); }
  return null;
 }
+// RE-ENTRANZA: più punti diversi possono chiamare questa funzione per lo stesso asset a
+// distanza di pochi millisecondi (rollover candela, watchdog 15s, riconnessione WS, cambio TF
+// ecc.) — dal log diagnostico si è visto che a volte partono DUE fetch REST quasi in
+// contemporanea per la stessa risincronizzazione, ognuna con la sua chiamata di rete: oltre a
+// essere inutile, questo allunga il tempo in cui il grafico resta "bloccato" (vedi
+// liveCandleFrozen). Se una chiamata per lo STESSO asset è già in corso, la seconda si limita
+// ad attendere il risultato di quella già in volo invece di duplicare la richiesta REST.
+let __loadLiveHistoryInFlight=null, __loadLiveHistoryInFlightAsset=null;
 async function loadLiveHistoryFromCapital(asset){
+ if(__loadLiveHistoryInFlight && __loadLiveHistoryInFlightAsset===asset){
+   console.log(`[LoadHistory] chiamata duplicata per "${asset}" mentre una è già in corso: riuso quella in volo invece di rifare la fetch REST.`);
+   return __loadLiveHistoryInFlight;
+ }
+ const __p=__loadLiveHistoryFromCapitalImpl(asset);
+ __loadLiveHistoryInFlight=__p; __loadLiveHistoryInFlightAsset=asset;
+ try{ return await __p; }
+ finally{ if(__loadLiveHistoryInFlight===__p){ __loadLiveHistoryInFlight=null; __loadLiveHistoryInFlightAsset=null; } }
+}
+async function __loadLiveHistoryFromCapitalImpl(asset){
  if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
  if(!capitalSessionTokens)return;
+ // DIAGNOSTICA BLOCCO: timestamp di inizio + di ogni fase, per capire dove va davvero il tempo
+ // quando questa funzione è chiamata dalla pausa di 1s alla chiusura candela (vedi
+ // startLiveRefreshTimer). Sempre attiva (costo trascurabile) così è pronta anche se il blocco
+ // si presenta in un momento diverso dal previsto.
+ const __t0=performance.now();
  // ISOLAMENTO PER ASSET IN LIVE (stessa logica già usata in Storico da autoLoadAssetLibrary):
  // prima di cambiare asset, mettiamo "in pausa" la vista del grafico dell'asset che si lascia,
  // poi la posizione "attiva" (quella mostrata/editabile nelle caselle) va sempre fatta
@@ -7508,6 +7531,7 @@ async function loadLiveHistoryFromCapital(asset){
  else clearDraftTradeLevelFields();
  $('status').textContent=`Ricerca strumento Capital.com per ${asset}…`;
  const epic=await resolveCapitalEpic(asset);
+ console.log(`[LoadHistory] epic risolto in ${(performance.now()-__t0).toFixed(0)}ms (da cache se già visto prima)`);
  if(!epic){
    $('status').textContent=`⚠️ Nessuno strumento Capital.com trovato per "${asset}": lo storico Live non è stato caricato (resta il CSV eventualmente già presente).`;
    return;
@@ -7516,11 +7540,13 @@ async function loadLiveHistoryFromCapital(asset){
  const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
  $('status').textContent=`Scaricamento storico Live (${epic}, ${resolution})…`;
  let body;
+ const __tFetchStart=performance.now();
  try{
    const res=await capitalApiFetch(base+'/api/v1/prices/'+encodeURIComponent(epic)+'?resolution='+resolution+'&max=1000',{
      headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
    });
    body=await res.json();
+   console.log(`[LoadHistory] fetch REST /prices completata in ${(performance.now()-__tFetchStart).toFixed(0)}ms`);
    if(!res.ok)throw new Error((body&&(body.errorCode||body.error))||('HTTP '+res.status));
  }catch(e){
    $('status').textContent='⚠️ Storico Live non scaricato: '+e.message;
@@ -7600,6 +7626,7 @@ async function loadLiveHistoryFromCapital(asset){
    const newLastRow=mergedLiveRows[mergedLiveRows.length-1];
    console.log('[LiveResync]',{asset,isSameLiveSeries,prevRows:prevLiveFile.rows.length,fetchedRows:liveRows.length,mergedRows:mergedLiveRows.length,prevLast:prevLastRow&&prevLastRow.date,newLast:newLastRow&&newLastRow.date});
  }
+ const __tMergeStart=performance.now();
  csvLibrary=[{id:'capital_live_'+asset,name:`Capital.com Live (${epic})`,addedAt:Date.now(),rows:mergedLiveRows}];
  rebuildBaseRowsFromLibrary();
  renderCsvLibraryList();
@@ -7613,6 +7640,7 @@ async function loadLiveHistoryFromCapital(asset){
  rebuildRows();
  viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  update();draw();
+ console.log(`[LoadHistory] merge+rebuildRows+draw completati in ${(performance.now()-__tMergeStart).toFixed(0)}ms (${baseRows.length.toLocaleString('it-IT')} candele in baseRows)`);
  // Stessa FIX del cambio ASSET storico: riallinea la strip dei chip indicatori dopo il
  // caricamento dello storico Live (il grafico li disegna già correttamente da solo).
  renderActiveIndicatorsUI();
@@ -7623,7 +7651,7 @@ async function loadLiveHistoryFromCapital(asset){
  // riconnessione, ecc.), mentre la vera libreria Storico resta al sicuro nella libreria
  // per-asset persistente e viene ricaricata da lì con autoLoadAssetLibrary() non appena si
  // torna in Storico (vedi switchAccountMode()).
- saveLightStateNow();
+ saveLightStateNow(); // NON awaited: non deve contribuire al blocco percepito (vedi log dedicato al suo interno se serve in futuro)
  $('status').textContent=`🟢 Storico Live caricato: ${baseRows.length.toLocaleString('it-IT')} candele per ${epic} (${resolution}).`;
  // STEP 2 — apre (o riapre, se già presente da un asset precedente) lo streaming WebSocket
  // per questo epic/risoluzione, subito dopo che lo storico iniziale via REST è pronto.
@@ -7638,7 +7666,9 @@ async function loadLiveHistoryFromCapital(asset){
  // aggiuntivo al giro successivo del timer solo perché non aveva ancora visto questo bucket.
  const rolloverBucketMs=(currentTF||1)*60000;
  lastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+ const __tSubStart=performance.now();
  await refreshLiveStreamSubscriptions();
+ console.log(`[LoadHistory] refreshLiveStreamSubscriptions (resolve epic posizioni + apertura WS) in ${(performance.now()-__tSubStart).toFixed(0)}ms — TOTALE funzione: ${(performance.now()-__t0).toFixed(0)}ms`);
 }
 // Calcola l'insieme di epic Capital.com da tenere sottoscritti in Live ORA: quello a grafico +
 // quello di ogni asset con almeno una posizione aperta o un ordine pendente. Risolve gli epic
@@ -7773,9 +7803,24 @@ function startLiveRefreshTimer(){
        // altro tick può più arrivare e costruire quella candela "sospetta" mentre siamo in pausa.
        disconnectCapitalStream();
        $('status').textContent='⏸️ Candela chiusa: pausa di 1s (evita candele con valori inattendibili), poi risincronizzo…';
+       // DIAGNOSTICA BLOCCO (richiesta esplicitamente): il blocco percepito ha DUE componenti
+       // volute (pausa fissa di 1s + tempo reale della fetch REST verso Capital.com, che varia
+       // con la latenza di rete) più il tempo di ricostruzione/ridisegno del grafico. Questi log
+       // isolano quanto dura ciascuna fase, così si vede subito se il blocco "extra" oltre l'1s
+       // previsto viene dalla rete (fetch lenta) o dal lavoro sul thread principale (merge/draw).
+       const rolloverT0=performance.now();
+       console.log(`[CandleRollover] rilevata nuova candela, stream disconnesso, inizio pausa di 1s… (t=0ms)`);
        setTimeout(async ()=>{
+         const fetchT0=performance.now();
+         console.log(`[CandleRollover] pausa di 1s terminata (t=${(fetchT0-rolloverT0).toFixed(0)}ms) → avvio risincronizzazione REST…`);
          candleRolloverResyncInProgress=true;
-         try{ await loadLiveHistoryFromCapital(currentAssetKey); }
+         try{
+           await loadLiveHistoryFromCapital(currentAssetKey);
+           const doneT=performance.now();
+           console.log(`[CandleRollover] risincronizzazione REST completata (durata fetch+merge+draw: ${(doneT-fetchT0).toFixed(0)}ms) → riconnessione stream avviata. TOTALE bloccato: ${(doneT-rolloverT0).toFixed(0)}ms`);
+         }catch(e){
+           console.log(`[CandleRollover] risincronizzazione fallita dopo ${(performance.now()-fetchT0).toFixed(0)}ms:`,e);
+         }
          finally{ candleRolloverResyncInProgress=false; liveCandleFrozen=false; }
        },1000);
        return; // durante la pausa non si applica alcun prezzo/candela nuova
