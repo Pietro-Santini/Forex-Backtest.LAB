@@ -753,6 +753,7 @@ tr.otherAssetRow td:last-child{opacity:1}
        <option value="240">4H</option>
        <option value="1440">1D</option>
      </select>
+     <button id="chartFullscreenBtn" class="chartCornerBtn" title="Schermo intero">⛶</button>
      <button id="randomBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Carica un punto casuale nello storico caricato, da cui far partire un nuovo replay">🎲 DATA RANDOM</button>
    </div>
    <div id="chartFloatControlsExtra" class="chartFloatControls" style="top:46px;display:none">
@@ -775,8 +776,7 @@ tr.otherAssetRow td:last-child{opacity:1}
      <button id="floatChartBtn" class="chartCornerBtn" title="PiP: stacca il grafico in una finestra flottante separata (es. da spostare su un secondo monitor), continuando a operare da questa pagina">
        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
      </button>
-     <button id="chartFullscreenBtn" class="chartCornerBtn" title="Schermo intero: ingrandisce il grafico a tutta la finestra e sposta gli strumenti di disegno in una barra laterale a sinistra">⛶ Schermo intero</button>
-     <button id="floatFullscreenBtn" class="chartCornerBtn" style="display:none" title="Ingrandisci rapidamente la finestra flottante a tutto schermo (in alternativa, trascina i bordi/angoli della finestra per ridimensionarla come vuoi)">⛶</button>
+
      <button id="floatReturnBtn" class="chartCornerBtn" style="display:none" title="Rientra dalla finestra flottante">🗗</button>
    </div>
    </div>
@@ -873,7 +873,10 @@ function statsTrades(){
 // taggato per sessione, vedi modeTag più sotto).
 let sessionByMode={backtest:null,live:null,backtest_propfirm:null,live_propfirm:null};
 function captureCurrentModeSnapshot(){
- sessionByMode[currentMode()]={positions,pendingOrders,active,equity};
+ // I disegni sono ora parte della fotografia della sessione (richiesto esplicitamente): ogni
+ // sessione (Storico/Live/Storico+PF/Live+PF) tiene i PROPRI disegni, separati dalle altre 3,
+ // esattamente come già succede per posizioni/ordini/equity.
+ sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings};
 }
 function restoreModeSnapshot(mode){
  const snap=sessionByMode[mode];
@@ -881,9 +884,16 @@ function restoreModeSnapshot(mode){
    positions=snap.positions||[]; pendingOrders=snap.pendingOrders||[];
    active=snap.active||null;
    equity=(snap.equity&&snap.equity.length)?snap.equity:[num($('capital').value)||10000];
+   drawings=snap.drawings||[];
  }else{
    positions=[]; pendingOrders=[]; active=null; equity=[num($('capital').value)||10000];
+   drawings=[];
  }
+ // Cambiando sessione, selezione/cronologia annulla-ripristina dei disegni non hanno più senso
+ // per quelli della sessione che si lascia: azzerate qui, in un unico punto valido per tutti i
+ // chiamanti (switchAccountMode, proceedEnablePropFirm, disablePropFirmMode).
+ selectedDrawing=null; pendingDrawing=null; placingStep=0; setDrawTool('cursor');
+ historyUndo=[]; historyRedo=[];
 }
 // Punto UNICO da cui passare per cambiare modalità (sostituisce l'assegnazione diretta a
 // liveModeActive): salva/ripristina le due sessioni (conto: posizioni/ordini/attiva/equity)
@@ -2617,6 +2627,11 @@ async function autoLoadAssetLibrary(asset){
    // Metti da parte la vista del grafico (candela, timeframe, zoom) dell'asset che si lascia,
    // PRIMA di passare al nuovo: così, tornandoci sopra in futuro, la si ritrova esattamente
    // dov'era. Il conto (posizioni/ordini/equity) non c'entra qui: resta sempre globale.
+   // Catturato PRIMA di sovrascrivere currentAssetKey: serve più sotto per non azzerare i
+   // disegni quando si arriva da un cambio SESSIONE (currentAssetKey già vuoto perché
+   // clearAssetSelectionForSessionSwitch lo ha appena azzerato) e i disegni mostrati sono in
+   // realtà già quelli corretti per QUESTA sessione, appena ripristinati da restoreModeSnapshot.
+   const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
    if(currentAssetKey && currentAssetKey!==asset)captureCurrentAssetChartView(currentMode());
    currentAssetKey=asset;
    // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
@@ -2648,8 +2663,10 @@ async function autoLoadAssetLibrary(asset){
      renderCsvLibraryList();
      updateFileBtnLabel();
      $('fileName').textContent='';
-     drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
-     historyUndo=[];historyRedo=[];
+     if(wasOnDifferentAsset){
+       drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+       historyUndo=[];historyRedo=[];
+     }
      applyChartViewForAsset(asset);
      saveLightStateNow();
      saveAssetChartViews();
@@ -2665,8 +2682,10 @@ async function autoLoadAssetLibrary(asset){
    renderCsvLibraryList();
    updateFileBtnLabel();
    $('fileName').textContent=csvLibrary.length+' file • '+baseRows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
-   drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
-   historyUndo=[];historyRedo=[];
+   if(wasOnDifferentAsset){
+     drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+     historyUndo=[];historyRedo=[];
+   }
    applyChartViewForAsset(asset);
    saveCsvNow();
    saveLightStateNow();
@@ -6594,15 +6613,18 @@ function copyStylesInto(doc){
    }
  }
 }
-// Mostra/nasconde i 3 pulsanti nell'angolo del grafico a seconda dello stato corrente:
-// solo l'icona PiP quando il grafico è nella pagina principale, oppure schermo-intero +
-// rientra quando è staccato in una finestra flottante.
+// Mostra/nasconde i pulsanti nell'angolo del grafico a seconda dello stato corrente: solo
+// l'icona PiP quando il grafico è nella pagina principale, oppure "rientra" quando è staccato
+// in una finestra flottante. Il pulsante ⛶ Schermo intero (chartFullscreenBtn, vicino al
+// timeframe) usa la vera Fullscreen API del browser, che le finestre Document Picture-in-
+// Picture non possono richiedere: va quindi nascosto mentre si è in PiP, esattamente come il
+// vecchio pulsante rotto che sostituiva (rimosso perché non funzionava).
 function updateFloatCornerButtons(){
- const pip=$('floatChartBtn'), fs=$('floatFullscreenBtn'), ret=$('floatReturnBtn');
+ const pip=$('floatChartBtn'), ret=$('floatReturnBtn'), fsMain=$('chartFullscreenBtn');
  const active=floatingChartActive();
  if(pip)pip.style.display=active?'none':'flex';
- if(fs)fs.style.display=active?'flex':'none';
  if(ret)ret.style.display=active?'flex':'none';
+ if(fsMain)fsMain.style.display=active?'none':'';
 }
 function restoreChartToMainPage(){
  const wrap=document.querySelector('.chartWrap')||(floatingDoc&&floatingDoc.querySelector('.chartWrap'));
@@ -6612,7 +6634,6 @@ function restoreChartToMainPage(){
    else floatingHomeParent.appendChild(wrap);
  }
  floatingDoc=null; floatingWin=null;
- floatMaximized=false; floatPrevRect=null;
  updateFloatCornerButtons();
  window.removeEventListener('resize',draw);
  draw();
@@ -6766,52 +6787,12 @@ document.addEventListener('fullscreenchange',()=>{
  draw();
 });
 $('chartFullscreenBtn')?.addEventListener('click',toggleMainChartFullscreen);
-// Schermo intero della finestra che ospita il grafico flottante (pulsante ⛶ nell'angolo).
-// Per lo schermo intero di tutta la pagina c'è già F11 (nativo del browser), quindi qui non
-// serve una scorciatoia da tastiera dedicata. ESC per uscire funziona automaticamente: è il
-// browser stesso a intercettarlo e chiudere lo schermo intero quando la Fullscreen API è
-// attiva, non serve gestirlo a mano.
-// NOTA IMPORTANTE: le finestre aperte con la Document Picture-in-Picture API (quella "sempre
-// in primo piano") NON possono richiedere la vera Fullscreen API del browser: è una
-// restrizione di sicurezza del browser stesso (non un blocco popup, e non è aggirabile).
-// Come alternativa, in quel caso ingrandiamo/riportiamo la finestra stessa a tutta l'area
-// disponibile dello schermo con moveTo/resizeTo: il grafico occupa comunque tutta la pagina,
-// senza mai incappare in quel blocco.
-let floatMaximized=false, floatPrevRect=null;
-function toggleFullscreen(win){
- win=win||window;
- const doc=win.document, el=doc.documentElement;
- if(doc.fullscreenElement){ doc.exitFullscreen?.().catch(()=>{}); return; }
- const maximizeFallback=()=>{
-   if(win===window||typeof win.resizeTo!=='function'){
-     $('status').textContent='Il browser ha bloccato la richiesta di schermo intero.';
-     return;
-   }
-   try{
-     if(!floatMaximized){
-       floatPrevRect={x:win.screenX,y:win.screenY,w:win.outerWidth,h:win.outerHeight};
-       win.moveTo(0,0);
-       win.resizeTo(screen.availWidth,screen.availHeight);
-       floatMaximized=true;
-       $('status').textContent='Finestra flottante ingrandita a tutta la pagina.';
-     }else{
-       win.moveTo(floatPrevRect.x,floatPrevRect.y);
-       win.resizeTo(floatPrevRect.w,floatPrevRect.h);
-       floatMaximized=false;
-       $('status').textContent='Finestra flottante riportata alla dimensione precedente.';
-     }
-   }catch(e){
-     $('status').textContent='Il browser ha bloccato anche il ridimensionamento della finestra flottante.';
-   }
- };
- if(el.requestFullscreen){
-   el.requestFullscreen().catch(maximizeFallback);
- }else{
-   maximizeFallback();
- }
-}
+// Il vecchio pulsante ⛶ dedicato allo schermo intero DENTRO la finestra flottante è stato
+// rimosso (non funzionava mai per davvero: le finestre Document Picture-in-Picture non
+// possono richiedere la vera Fullscreen API del browser, per una restrizione di sicurezza del
+// browser stesso, non aggirabile). Il pulsante ⛶ Schermo intero rimasto (vicino al timeframe)
+// resta comunque nascosto mentre si è in PiP, vedi updateFloatCornerButtons().
 $('floatChartBtn')?.addEventListener('click',toggleFloatingChart);
-$('floatFullscreenBtn')?.addEventListener('click',()=>toggleFullscreen(floatingWin||window));
 $('floatReturnBtn')?.addEventListener('click',()=>{ if(floatingWin)floatingWin.close(); });
 
 const chartEl=$('chart');
@@ -8052,8 +8033,12 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // svuotate (mai ripristinate da una bozza lasciata in precedenza).
  // Catturato PRIMA di sovrascrivere currentAssetKey: serve più sotto per distinguere un vero
  // cambio asset (drawings/vista da azzerare) da una semplice risincronizzazione dello stesso
- // asset già a grafico (drawings/vista da NON toccare, vedi commento più sotto).
- const wasOnDifferentAsset=(currentAssetKey!==asset);
+ // asset già a grafico (drawings/vista da NON toccare, vedi commento più sotto). Richiede un
+ // currentAssetKey non vuoto: se è vuoto (subito dopo un cambio SESSIONE, che lo azzera sempre
+ // — vedi clearAssetSelectionForSessionSwitch) i disegni mostrati sono già quelli corretti per
+ // QUESTA sessione, appena ripristinati da restoreModeSnapshot, e NON vanno considerati un
+ // "cambio asset" da azzerare.
+ const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset)captureCurrentAssetChartView(currentMode());
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
@@ -8174,7 +8159,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // Disegni: SOLO un vero cambio asset (o il primissimo caricamento) li azzera — mai una
  // semplice risincronizzazione dello stesso strumento già a grafico. È esattamente questo che
  // prima li faceva sparire da soli ad ogni risincronizzazione periodica (una al minuto circa).
- const shouldResetDrawings=(wasOnDifferentAsset||!rows.length);
+ const shouldResetDrawings=wasOnDifferentAsset;
  if(shouldResetDrawings){
    drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
