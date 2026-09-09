@@ -9012,22 +9012,44 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
  }
  const savedLibrary=savedCsv&&Array.isArray(savedCsv.library)&&savedCsv.library.length?savedCsv.library
    :(savedCsv&&savedCsv.baseRows&&savedCsv.baseRows.length?[{id:'csv_legacy',name:savedCsv.fileName||'CSV',addedAt:Date.now(),rows:savedCsv.baseRows}]:null);
- if(savedLibrary&&savedLibrary.length&&savedState&&savedState.version===SESSION_VERSION){
+ // BUG RISOLTO (posizioni/ordini pendenti/Trade Journal spariti in Live dopo un
+ // ricaricamento della pagina o la chiusura/riapertura dell'app): questa condizione
+ // richiedeva ANCHE una libreria CSV storica salvata (savedLibrary) per ripristinare
+ // QUALSIASI cosa, conto compreso. In Live però lo storico a grafico arriva sempre "fresco"
+ // da Capital.com e non viene mai salvato qui apposta (vedi commento su saveCsvNow() più
+ // sotto) — chi usa solo la modalità Live, senza mai aver caricato un CSV in Storico, aveva
+ // quindi savedLibrary vuoto: l'intero ramo di ripristino veniva saltato, perdendo posizioni,
+ // ordini pendenti, Trade Journal ed equity, anche se erano tutti correttamente salvati dentro
+ // savedState. Ora il ripristino del CONTO (posizioni/ordini/trade/equity/sessioni) dipende
+ // SOLO da savedState; savedLibrary serve solo, se presente, a ricostruire anche il grafico
+ // storico CSV — altrimenti (tipicamente proprio il caso Live) si parte senza CSV e ci pensa
+ // la riconnessione a Capital.com qui sotto a ripopolare il grafico.
+ if(savedState&&savedState.version===SESSION_VERSION){
+   const hasSavedLibrary=!!(savedLibrary&&savedLibrary.length);
    // Ripristino completo: applica prima i campi di configurazione (market/decimali/ecc.),
-   // POI ricostruisce rows dal timeframe salvato, POI applica trade/posizioni/disegni.
-   // In questo modo i valori salvati di decimali/pip (che l'utente potrebbe aver
-   // personalizzato rispetto al default dello strumento) non vengono sovrascritti da
-   // applyInstrument(), che viene chiamata solo per aggiornare le parti testuali statiche.
-   // Con librerie CSV grandi questo ripristino può richiedere un attimo: mostriamo la
-   // rotellina invece di lasciare la pagina ferma senza spiegazioni.
+   // POI ricostruisce rows dal timeframe salvato (se c'è un CSV storico), POI applica
+   // trade/posizioni/disegni. In questo modo i valori salvati di decimali/pip (che l'utente
+   // potrebbe aver personalizzato rispetto al default dello strumento) non vengono
+   // sovrascritti da applyInstrument(), che viene chiamata solo per aggiornare le parti
+   // testuali statiche. Con librerie CSV grandi questo ripristino può richiedere un attimo:
+   // mostriamo la rotellina invece di lasciare la pagina ferma senza spiegazioni.
    await withLoadingOverlay('Ripristino sessione…', async()=>{
-     csvLibrary=savedLibrary;
-     rebuildBaseRowsFromLibrary();
-     renderCsvLibraryList();
-     updateFileBtnLabel();
-     $('fileName').textContent=csvLibrary.length+' file • '+baseRows.length.toLocaleString('it-IT')+' candele (sessione ripristinata)';
+     if(hasSavedLibrary){
+       csvLibrary=savedLibrary;
+       rebuildBaseRowsFromLibrary();
+       renderCsvLibraryList();
+       updateFileBtnLabel();
+       $('fileName').textContent=csvLibrary.length+' file • '+baseRows.length.toLocaleString('it-IT')+' candele (sessione ripristinata)';
+     }else{
+       csvLibrary=[]; baseRows=[]; rows=[];
+     }
      applyLightSessionState(savedState);
-     if(Number.isFinite(masterTime)){
+     if(!hasSavedLibrary){
+       // Nessun CSV storico salvato (tipico se l'ultima sessione era Live, che non lo salva
+       // mai qui): niente da ricostruire finché la riconnessione Live qui sotto non ripopola
+       // tutto da sola, oppure finché non si seleziona un asset a mano in Storico.
+       rows=[]; idx=0; masterTime=null;
+     }else if(Number.isFinite(masterTime)){
        rebuildRows();
      }else{
        // Sessione salvata da una versione precedente (senza masterTime salvato): ricostruiamo
