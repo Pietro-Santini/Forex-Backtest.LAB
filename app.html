@@ -8412,6 +8412,126 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
  });
 }
 
+// ===================== MOTORE LIVE IN BACKGROUND (multi-sessione) =====================
+// RICHIESTO: le posizioni/ordini pendenti aperti in Live (sia il conto Live "semplice" sia la
+// Challenge Prop Firm su Live) devono continuare ad aggiornarsi e rispettare i propri SL/TP
+// anche mentre si sta guardando una sessione DIVERSA (Storico, o l'altra combinazione Prop
+// Firm) — esattamente come un conto reale che resta operativo sul server del broker
+// indipendentemente da cosa si guarda a video in quel momento.
+//
+// Il motore "in primo piano" (WebSocket + timer da 1s in startLiveRefreshTimer, più
+// evaluateLiveBackgroundAsset per gli altri ASSET della STESSA sessione attiva) resta
+// invariato e continua a occuparsi della sessione live attualmente selezionata. Qui copriamo
+// il caso complementare: le sessioni live che in questo momento NON sono quella attiva. Non
+// serve un WebSocket (nessun grafico da aggiornare in tempo reale): basta un polling REST
+// leggero ogni pochi secondi, sufficiente per valutare correttamente SL/TP e l'attivazione
+// degli ordini pendenti.
+const BACKGROUND_LIVE_POLL_MS=8000;
+let backgroundLivePollTimer=null;
+let backgroundLastPriceByAsset={};
+
+// Come closeTrade(), ma scrive nella sessione INDICATA (session = sessionByMode[sessionKey])
+// invece che nelle variabili top-level: usata quando la sessione da chiudere NON è quella
+// attualmente a schermo. Non tocca active/linee TP-SL a grafico né richiama update()/draw()
+// (lo fa il chiamante, una sola volta a fine giro, vedi pollBackgroundLiveSession).
+function closeTradeInSession(sessionKey,session,reason,price,pos){
+ const lots=pos.lots||1;
+ const pl=calculateForexPL(pos.side,pos.entry,price,lots,pos.asset);
+ const pips=pipsFromPrice(pos.side,pos.entry,price);
+ const balanceBefore=(session.equity&&session.equity.length)?session.equity[session.equity.length-1]:(num($('capital').value)||10000);
+ const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
+ const account=balanceBefore+pl;
+ trades.push({...pos,exit:price,result:reason,pl,pct,pips,account,closedAt:new Date().toISOString(),closeTF:pos.openTF||currentTF,mode:sessionKey});
+ session.positions=(session.positions||[]).filter(p=>p!==pos);
+ if(session.active===pos)session.active=null;
+ session.equity=session.equity||[];
+ session.equity.push(account);
+}
+// Margine libero della sessione INDICATA (non di quella attiva): stessa formula di
+// freeMargin()/usedMargin(), ma calcolata sulle posizioni/equity di quella sessione.
+function freeMarginForSession(session){
+ const used=(session.positions||[]).reduce((s,p)=>s+(p.marginUsed||marginForLots(p.lots,p.entry,p.asset)),0);
+ const eq=(session.equity&&session.equity.length)?session.equity[session.equity.length-1]:0;
+ return eq-used;
+}
+// Un giro di controllo per UNA sessione live in background: scarica l'ultimo prezzo (REST,
+// non stream) per ciascun asset coinvolto nelle sue posizioni/ordini pendenti, valuta SL/TP
+// e attivazioni esattamente come evaluateLiveBackgroundAsset() fa per gli asset "in
+// background" della sessione attiva, ma leggendo/scrivendo sessionByMode[sessionKey] invece
+// delle variabili top-level.
+async function pollBackgroundLiveSession(sessionKey){
+ const session=sessionByMode[sessionKey];
+ if(!session)return;
+ const hasPositions=session.positions&&session.positions.length;
+ const hasPending=session.pendingOrders&&session.pendingOrders.length;
+ if(!hasPositions&&!hasPending)return;
+ // Connessione SILENZIOSA: siamo in background, quindi MAI un popup di login qui — se non
+ // c'è una sessione Capital.com valida e le credenziali salvate non bastano, si riprova al
+ // giro successivo senza disturbare l'utente con nulla.
+ if(!capitalSessionTokens){
+   const autoCreds=await tryAutoLoadLiveCreds();
+   if(!autoCreds)return;
+   const result=await connectToCapitalCom(autoCreds);
+   if(!result.ok)return;
+   liveCredsDraft=autoCreds;
+   capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
+ }
+ const assets=new Set();
+ (session.positions||[]).forEach(p=>{ if(p.asset)assets.add(p.asset); });
+ (session.pendingOrders||[]).forEach(p=>{ if(p.asset)assets.add(p.asset); });
+ let changed=false;
+ for(const asset of assets){
+   const epic=await resolveCapitalEpic(asset);
+   if(!epic)continue;
+   const price=await fetchLatestPriceRest(epic);
+   if(!Number.isFinite(price))continue;
+   const prevPrice=backgroundLastPriceByAsset[sessionKey+'|'+asset];
+   backgroundLastPriceByAsset[sessionKey+'|'+asset]=price;
+   // SL/TP delle posizioni aperte di questo asset, in QUESTA sessione.
+   const ownPositions=(session.positions||[]).filter(p=>(p.asset||asset)===asset);
+   [...ownPositions].forEach(pos=>{
+     let sl=false,tp=false;
+     if(pos.side==='BUY'){ sl=pos.sl!=null&&price<=pos.sl; tp=pos.tp!=null&&price>=pos.tp; }
+     else{ sl=pos.sl!=null&&price>=pos.sl; tp=pos.tp!=null&&price<=pos.tp; }
+     if(sl||tp){ closeTradeInSession(sessionKey,session,sl?'SL':'TP',sl?pos.sl:pos.tp,pos); changed=true; }
+   });
+   // Attivazione ordini pendenti per "attraversamento" del prezzo di entrata fra il
+   // precedente giro di polling e questo (stesso concetto di evaluateLiveBackgroundAsset).
+   const ownPending=(session.pendingOrders||[]).filter(p=>(p.asset||asset)===asset);
+   const crossed=Number.isFinite(prevPrice)
+     ?(p)=>(prevPrice<=p.entry&&price>=p.entry)||(prevPrice>=p.entry&&price<=p.entry)
+     :(p)=>Math.abs(price-p.entry)<1e-9;
+   const toActivate=ownPending.filter(p=>p.entry!=null&&crossed(p));
+   if(toActivate.length){
+     session.pendingOrders=(session.pendingOrders||[]).filter(p=>!toActivate.includes(p));
+     toActivate.forEach(p=>{
+       const requiredMargin=marginForLots(p.lots,p.entry,asset);
+       if(requiredMargin>freeMarginForSession(session)+1e-9)return; // margine insufficiente: scartato
+       const pos={ id:Date.now()+Math.random(), asset, side:p.side, entry:p.entry, sl:p.sl, tp:p.tp,
+         origin:'PENDING', kind:p.kind||'LIMIT', lots:p.lots, risk:0, dist:0, hasRiskModel:false,
+         start:0, startTime:p.startTime||Date.now(), openTF:currentTF, marginUsed:requiredMargin };
+       session.positions=session.positions||[]; session.positions.push(pos);
+     });
+     changed=true;
+   }
+ }
+ if(changed){
+   playOrderSound();
+   scheduleSave(); // sessionByMode fa già parte dello stato salvato: basta questo per persistere
+   update(); // Trade Journal (globale) e conto attivo aggiornati subito, se pertinenti a schermo
+ }
+}
+function startBackgroundLiveMonitor(){
+ if(backgroundLivePollTimer)return;
+ backgroundLivePollTimer=setInterval(()=>{
+   ['live','live_propfirm'].forEach(key=>{
+     if(key===currentMode())return; // quella eventualmente attiva la segue già il motore normale
+     pollBackgroundLiveSession(key).catch(e=>console.warn('Monitoraggio Live in background fallito ('+key+'):',e));
+   });
+ },BACKGROUND_LIVE_POLL_MS);
+}
+startBackgroundLiveMonitor();
+
 async function readCapitalCredsFromHandle(handle){
  try{
    const fileHandle=await handle.getFileHandle(CAPITAL_CREDS_FILE);
