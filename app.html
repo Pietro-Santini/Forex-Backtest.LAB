@@ -1257,6 +1257,60 @@ function savePropFirmStateNow(){
  const el=$('autosaveStatus');
  if(el)el.textContent='Challenge Prop Firm salvata • '+new Date().toLocaleTimeString('it-IT');
 }
+
+// ===================================================================
+// SINCRONIZZAZIONE FIREBASE — SOLO alla chiusura/inattività dell'app (mai ad ogni trade)
+// ===================================================================
+// Prima ogni autosalvataggio (ogni ~800ms di trading attivo) scriveva anche su Firestore:
+// un volume di scritture/trasferimenti enorme sul piano Blaze, come segnalato. Da qui in poi
+// il flusso è: (1) tutto viene salvato SUBITO in locale (IndexedDB + localStorage per lo
+// Standard, localStorage per la Prop Firm — mai su Firestore); (2) Firestore riceve UN SOLO
+// aggiornamento, con l'ULTIMO stato completo di app.html, quando la scheda diventa inattiva
+// (cambio tab, minimizzazione, blocco schermo) o si sta chiudendo/ricaricando.
+//
+// Il "pacchetto" mandato a Firestore contiene sempre TUTTE E TRE le sessioni (Standard —
+// Storico+Live, già unificate dentro collectLightSessionState() — e Prop Firm), prendendo per
+// ciascuna la versione più recente indipendentemente da quale fosse quella attiva in quel
+// momento: questo evita che il salvataggio cloud di una sessione possa mai sovrascrivere o
+// mescolarsi con quello di un'altra.
+function safeParseJSON(raw){
+ if(!raw)return null;
+ try{ return JSON.parse(raw); }catch(e){ return null; }
+}
+function buildFullStatusBundleForFirebase(){
+ // Se in QUESTO momento si è in Prop Firm, le variabili top-level (positions/active/equity...)
+ // appartengono alla Challenge: lo stato Standard "vero" è quindi quello già messo da parte in
+ // PROP_FIRM_STANDARD_BACKUP_KEY al momento dell'attivazione. Viceversa se si è in Standard.
+ const standard = isPropFirmMode
+   ? safeParseJSON(localStorage.getItem(PROP_FIRM_STANDARD_BACKUP_KEY))
+   : (baseRows.length ? collectLightSessionState() : safeParseJSON(localStorage.getItem(FOREX_LAB_STANDARD_STATE_KEY)));
+ const propFirm = isPropFirmMode
+   ? snapshotAccountForPropFirmSwitch()
+   : safeParseJSON(localStorage.getItem(PROP_FIRM_DATA_KEY));
+ return { standard, propFirm, isPropFirmModeActive:isPropFirmMode, savedAt:Date.now() };
+}
+let lastFirebaseSyncAt=0;
+const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più eventi scattano insieme
+async function syncFullStatusToFirebase(reason){
+ if(!(window.fxbtCloud && window.fxbtCloud.uid))return; // non loggato: niente cloud, solo locale
+ const now=Date.now();
+ if(now-lastFirebaseSyncAt<FIREBASE_MIN_SYNC_INTERVAL_MS)return;
+ lastFirebaseSyncAt=now;
+ try{ await window.fxbtCloud.save(buildFullStatusBundleForFirebase()); }
+ catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
+}
+// "App inattiva": la scheda passa in background (cambio tab, minimizzazione, schermo bloccato).
+// È il segnale più affidabile su mobile (dove "beforeunload" spesso non parte in tempo).
+document.addEventListener('visibilitychange', ()=>{
+ if(document.visibilityState==='hidden') syncFullStatusToFirebase('visibilitychange');
+});
+// "App chiusa"/pagina ricaricata: ultimo tentativo, anche se la scheda si chiude subito dopo.
+window.addEventListener('pagehide', ()=>{ syncFullStatusToFirebase('pagehide'); });
+// Chiave localStorage che affianca l'IndexedDB per la sessione Standard: piccola (solo
+// posizioni/trade/impostazioni, MAI la libreria CSV che può pesare molti MB), scritta ad ogni
+// autosalvataggio così i dati sono SEMPRE presenti anche in localStorage, come richiesto.
+const FOREX_LAB_STANDARD_STATE_KEY='forex_lab_standard_state';
+
 async function saveLightStateNow(){
  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
  // Stessa protezione anche qui: qualunque chiamata DIRETTA a saveLightStateNow() (es. da
@@ -1265,13 +1319,17 @@ async function saveLightStateNow(){
  if(isPropFirmMode){ savePropFirmStateNow(); return; }
  if(!baseRows.length)return;
  const state=collectLightSessionState();
+ // SALVATAGGIO LOCALE (immediato, gratuito, ad ogni modifica): IndexedDB resta la fonte
+ // principale (nessun limite pratico di dimensione, utile perché qui viaggiano anche gli
+ // array di trade/disegni), MA la stessa fotografia va ANCHE in localStorage, così i dati
+ // risultano sempre disponibili localmente in entrambi i posti, come richiesto.
  const ok=await idbPut('state',state);
- // STEP 0b: oltre alla copia locale (IndexedDB, sempre scritta per prima: è la cache veloce
- // di riserva se il dispositivo è offline), proviamo a salvare anche su Firestore legato
- // all'UID, così la sessione è quella che ricompare su un altro dispositivo. Se il salvataggio
- // cloud fallisce (offline, permessi, ecc.) non blocchiamo né segnaliamo errore: la copia
- // locale resta comunque valida su QUESTO dispositivo.
- if(window.fxbtCloud && window.fxbtCloud.uid) window.fxbtCloud.save(state);
+ try{ localStorage.setItem(FOREX_LAB_STANDARD_STATE_KEY, JSON.stringify(state)); }catch(e){ console.warn('Mirror su localStorage non riuscito (quota piena?):', e); }
+ // NIENTE PIÙ SCRITTURE SU FIRESTORE QUI: prima veniva chiamato window.fxbtCloud.save(state)
+ // ad ogni autosalvataggio (ogni ~800ms durante il trading attivo), generando un numero di
+ // scritture/trasferimenti enorme sul piano Blaze. Da ora Firestore viene aggiornato UNA SOLA
+ // VOLTA quando l'app diventa inattiva o si sta chiudendo — vedi syncFullStatusToFirebase()
+ // più sotto, agganciata a visibilitychange/pagehide.
  const el=$('autosaveStatus');
  if(el)el.textContent=ok?('Sessione salvata • '+new Date().toLocaleTimeString('it-IT')):'⚠️ Salvataggio non riuscito';
 }
@@ -8531,8 +8589,22 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
  try{
    const cloud=await waitForFxbtCloud();
    if(cloud.uid){
-     const cloudState=await cloud.load();
-     if(cloudState && cloudState.version===SESSION_VERSION) savedState=cloudState;
+     const cloudBundle=await cloud.load();
+     // Nuovo formato "pacchetto" (dallo Step di ottimizzazione Firebase): { standard, propFirm,
+     // isPropFirmModeActive, savedAt }. Manteniamo anche la lettura del vecchio formato piatto
+     // (un singolo state con version===SESSION_VERSION, salvato prima di questa modifica) per
+     // non perdere sessioni già presenti su Firestore da prima dell'aggiornamento.
+     if(cloudBundle && cloudBundle.standard && cloudBundle.standard.version===SESSION_VERSION){
+       savedState=cloudBundle.standard;
+       // Porta con sé anche la Challenge Prop Firm (se presente) e il flag di modalità attiva,
+       // così il ripristino da cloud resta coerente su tutte e 3 le sessioni anche cambiando
+       // dispositivo — restorePropFirmModeIfNeeded() (più sotto) userà questi valori appena
+       // initSession() avrà finito di ripristinare la sessione Standard qui sopra.
+       if(cloudBundle.propFirm) localStorage.setItem(PROP_FIRM_DATA_KEY, JSON.stringify(cloudBundle.propFirm));
+       localStorage.setItem(PROP_FIRM_ACTIVE_FLAG_KEY, cloudBundle.isPropFirmModeActive ? '1':'0');
+     }else if(cloudBundle && cloudBundle.version===SESSION_VERSION){
+       savedState=cloudBundle; // formato precedente allo Step di ottimizzazione Firebase
+     }
    }
  }catch(e){ console.warn('Controllo sessione cloud saltato:',e); }
  // Mappa delle viste per-asset (candela/timeframe/zoom di ognuno): ripristinata subito così,
