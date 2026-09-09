@@ -1158,28 +1158,14 @@ function captureCurrentAssetChartView(sessionKey){
  if(currentAssetKey)captureChartViewInto(assetChartViews[sessionKey],currentAssetKey);
  scheduleAssetChartViewsPersist();
 }
-// Scrittura su IndexedDB DEBOUNCED (800ms, stessa cadenza di scheduleSave()): questa funzione
-// viene ora chiamata anche molto spesso — ad ogni pan/zoom manuale del grafico, non solo al
-// cambio asset/sessione (vedi scheduleAssetChartViewCapture() dentro draw()) — quindi scrivere
-// su IndexedDB ad ogni chiamata sarebbe eccessivo. La fotografia in memoria (sopra) resta
-// invece sempre immediata.
+// Scrittura su IndexedDB DEBOUNCED (800ms, stessa cadenza di scheduleSave()) invece che
+// immediata ad ogni chiamata: la fotografia in memoria (sopra) resta invece sempre immediata.
 let assetChartViewsPersistTimer=null;
 function scheduleAssetChartViewsPersist(){
  if(assetChartViewsPersistTimer)clearTimeout(assetChartViewsPersistTimer);
  assetChartViewsPersistTimer=setTimeout(()=>{ idbPut('assetChartViews',assetChartViews); },800);
 }
-// Cattura la vista corrente ad ogni interazione che la cambia (pan, zoom, ecc.), non solo al
-// cambio asset/sessione: RICHIESTO ESPLICITAMENTE — se l'utente sposta liberamente il grafico
-// in Live e lo lascia lì (followLatest passa a false, vedi freezeViewIfNeeded), quella
-// posizione deve restare "fissata" anche dopo un ricaricamento della pagina o una
-// risincronizzazione periodica dello storico Live (vedi il controllo in
-// __loadLiveHistoryFromCapitalImpl), non solo finché si resta su questa sessione.
-let assetChartViewCaptureTimer=null;
-function scheduleAssetChartViewCapture(){
- if(!currentAssetKey)return;
- if(assetChartViewCaptureTimer)clearTimeout(assetChartViewCaptureTimer);
- assetChartViewCaptureTimer=setTimeout(()=>{ captureCurrentAssetChartView(currentMode()); },500);
-}
+
 // Sessioni salvate PRIMA di questa modifica avevano una mappa PIATTA {asset:vista}, condivisa
 // fra Storico e Live: la usiamo come base per "backtest" (la sessione più comune) invece di
 // perderla, e le altre 3 ripartono semplicemente vuote (si ripopolano da sole visitando gli
@@ -4664,10 +4650,6 @@ function draw(){
    }
  }
  updateDrawTextHint&&updateDrawTextHint();
- // Cattura (debounced) la vista corrente ad ogni ridisegno: copre pan/zoom manuali senza
- // dover agganciare separatamente ogni singolo gesto (mouse, touch, rotellina, trascinamento
- // della scala prezzi) — vedi scheduleAssetChartViewCapture().
- scheduleAssetChartViewCapture();
 }
 function chartGeometry(){
  const c=$('chart'),rect=c.getBoundingClientRect(),w=rect.width,h=rect.height;
@@ -8035,17 +8017,24 @@ async function resolveCapitalEpic(asset){
 // liveCandleFrozen). Se una chiamata per lo STESSO asset è già in corso, la seconda si limita
 // ad attendere il risultato di quella già in volo invece di duplicare la richiesta REST.
 let __loadLiveHistoryInFlight=null, __loadLiveHistoryInFlightAsset=null;
-async function loadLiveHistoryFromCapital(asset){
+// opts.forceResetView: usato SOLO dalla riconnessione al boot/ricaricamento pagina (vedi
+// initSession) per riportare la vista sull'ultima candela anche quando l'asset "risulta" già
+// quello giusto (perché lo stato salvato lo ha appena ripristinato) — un vero refresh di
+// pagina deve sempre far ripartire la vista da capo, mai restare "fissato" su una posizione
+// manuale precedente (quella vive solo in RAM per la sessione corrente, vedi sotto). NON
+// influisce sui disegni: quelli sono legati all'ASSET, non al fatto che la pagina sia stata
+// ricaricata, quindi restano quelli già ripristinati dallo stato salvato.
+async function loadLiveHistoryFromCapital(asset,opts){
  if(__loadLiveHistoryInFlight && __loadLiveHistoryInFlightAsset===asset){
    console.log(`[LoadHistory] chiamata duplicata per "${asset}" mentre una è già in corso: riuso quella in volo invece di rifare la fetch REST.`);
    return __loadLiveHistoryInFlight;
  }
- const __p=__loadLiveHistoryFromCapitalImpl(asset);
+ const __p=__loadLiveHistoryFromCapitalImpl(asset,opts);
  __loadLiveHistoryInFlight=__p; __loadLiveHistoryInFlightAsset=asset;
  try{ return await __p; }
  finally{ if(__loadLiveHistoryInFlight===__p){ __loadLiveHistoryInFlight=null; __loadLiveHistoryInFlightAsset=null; } }
 }
-async function __loadLiveHistoryFromCapitalImpl(asset){
+async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
  if(!capitalSessionTokens)return;
  // DIAGNOSTICA BLOCCO: timestamp di inizio + di ogni fase, per capire dove va davvero il tempo
@@ -8061,6 +8050,10 @@ async function __loadLiveHistoryFromCapitalImpl(asset){
  // SL/TP di un asset "si vedevano" sull'altro. Le caselle SL/TP/ENTRY NON devono mai ricomparire
  // da sole al cambio asset: se non c'è una posizione reale sul nuovo asset vengono sempre
  // svuotate (mai ripristinate da una bozza lasciata in precedenza).
+ // Catturato PRIMA di sovrascrivere currentAssetKey: serve più sotto per distinguere un vero
+ // cambio asset (drawings/vista da azzerare) da una semplice risincronizzazione dello stesso
+ // asset già a grafico (drawings/vista da NON toccare, vedi commento più sotto).
+ const wasOnDifferentAsset=(currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset)captureCurrentAssetChartView(currentMode());
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
@@ -8170,33 +8163,50 @@ async function __loadLiveHistoryFromCapitalImpl(asset){
  renderCsvLibraryList();
  updateFileBtnLabel();
  $('fileName').textContent=baseRows.length.toLocaleString('it-IT')+' candele • '+epic+' (storico Live Capital.com)';
- drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
- historyUndo=[];historyRedo=[];
- // A differenza del caricamento di un CSV storico (che parte dalla prima candela per il
- // replay), in modalità Live si parte di norma dall'ULTIMA candela ricevuta (il presente).
- // ECCEZIONE RICHIESTA ESPLICITAMENTE ("fix position a grafico"): se l'utente ha spostato
- // liberamente il grafico e l'ha lasciato lì (followLatest:false nella vista salvata per
- // questo asset in questa sessione), quella posizione resta "fissata" e va ripristinata
- // ESATTAMENTE così anche qui — non solo al primo caricamento, ma ad OGNI chiamata di questa
- // funzione: risincronizzazione periodica della candela, riconnessione, o ricaricamento della
- // pagina. Senza questo controllo, ogni risincronizzazione (una al minuto in condizioni
- // normali) riportava forzatamente la vista sull'ultima candela, cancellando la posizione
- // manuale nel giro di pochi secondi anche se l'utente non aveva mai ricaricato la pagina.
- const savedView=(assetChartViews[currentMode()]||{})[asset];
- const hasPinnedView=savedView && savedView.followLatest===false;
- if(hasPinnedView){
-   masterTime=Number.isFinite(savedView.masterTime)?savedView.masterTime:(baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null);
- }else{
-   masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ // BUG RISOLTO (disegni cancellati dai refresh automatici): questa funzione viene richiamata
+ // MOLTO spesso anche restando sullo STESSO asset (risincronizzazione della candela ogni
+ // minuto circa, riconnessione, watchdog "candela ferma da 15s"...), non solo quando si
+ // sceglie davvero un asset diverso. Prima i disegni (e la vista a grafico) venivano azzerati
+ // ad OGNI chiamata, quindi bastava una normale risincronizzazione periodica per farli sparire
+ // senza che l'utente avesse fatto nulla. Ora: i disegni e la vista manuale vengono toccati
+ // SOLO se si sta davvero passando a un asset diverso da quello già a grafico (isAssetSwitch),
+ // mai per una risincronizzazione dei dati dello stesso asset.
+ // Disegni: SOLO un vero cambio asset (o il primissimo caricamento) li azzera — mai una
+ // semplice risincronizzazione dello stesso strumento già a grafico. È esattamente questo che
+ // prima li faceva sparire da soli ad ogni risincronizzazione periodica (una al minuto circa).
+ const shouldResetDrawings=(wasOnDifferentAsset||!rows.length);
+ if(shouldResetDrawings){
+   drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+   historyUndo=[];historyRedo=[];
  }
+ // Posizione a grafico:
+ // - CAMBIO ASSET vero e proprio, primo caricamento, o RICONNESSIONE dopo un ricaricamento
+ //   della pagina (opts.forceResetView, passato solo da initSession): si parte sempre
+ //   dall'ULTIMA candela ricevuta (il presente), come sempre in Live.
+ // - RISINCRONIZZAZIONE dello STESSO asset già a grafico DURANTE la sessione corrente (nessun
+ //   cambio asset, nessun ricaricamento di pagina): la posizione ATTUALE in memoria (candela,
+ //   zoom orizzontale e verticale) resta esattamente quella — richiesto esplicitamente, perché
+ //   l'utente potrebbe averla spostata a mano un attimo prima e starci disegnando sopra proprio
+ //   ora. Uscire dal grafico, cambiare asset o ricaricare la pagina riportano invece sempre
+ //   all'ultima candela: questa memoria vive solo in RAM per la sessione corrente, non viene
+ //   MAI salvata su disco, quindi un vero refresh di pagina la perde naturalmente da sé (da qui
+ //   il bisogno del flag esplicito forceResetView, visto che dopo un reload l'asset "risulta"
+ //   già quello giusto per via dello stato appena ripristinato, pur essendo in tutto e per
+ //   tutto un nuovo avvio).
+ const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
+ let preserved=null;
+ if(!shouldResetView){
+   preserved={viewEnd,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+ }
+ masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rebuildRows();
- if(hasPinnedView){
-   viewEnd=Number.isFinite(savedView.viewEnd)?Math.max(0,Math.min(savedView.viewEnd,rows.length-1)):idx;
-   followLatest=false;
-   priceZoomFactor=savedView.priceZoomFactor||1;
-   viewPriceLo=savedView.viewPriceLo??null; viewPriceHi=savedView.viewPriceHi??null;
-   autoFitWidth=savedView.autoFitWidth!==false;
-   visibleCount=Number.isFinite(savedView.visibleCount)?savedView.visibleCount:idealVisibleCount();
+ if(preserved){
+   viewEnd=Math.max(0,Math.min(preserved.viewEnd,rows.length-1));
+   followLatest=preserved.followLatest;
+   priceZoomFactor=preserved.priceZoomFactor;
+   viewPriceLo=preserved.viewPriceLo; viewPriceHi=preserved.viewPriceHi;
+   autoFitWidth=preserved.autoFitWidth;
+   visibleCount=preserved.visibleCount;
  }else{
    viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  }
@@ -9083,7 +9093,10 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
            liveCredsDraft=autoCreds;
            capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
            startLiveRefreshTimer();
-           await loadLiveHistoryFromCapital(currentAssetKey);
+           // forceResetView: un vero ricaricamento della pagina riparte SEMPRE dall'ultima
+           // candela, mai da una posizione manuale fissata nella sessione precedente (quella
+           // vive solo in RAM e non deve sopravvivere a un refresh, come richiesto).
+           await loadLiveHistoryFromCapital(currentAssetKey,{forceResetView:true});
            $('status').textContent='🟢 Live riconnesso automaticamente su '+currentAssetKey+'.';
          }else{
            $('status').textContent='⚠️ Riconnessione automatica a Capital.com non riuscita: premi 🔴 Live per accedere di nuovo (resti comunque in modalità Live).';
