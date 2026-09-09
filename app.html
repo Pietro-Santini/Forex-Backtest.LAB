@@ -778,14 +778,14 @@ tr.otherAssetRow td:last-child{opacity:1}
 
 <div class="panel">
  <div class="label">Posizioni aperte</div>
- <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Sessione</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
 </div>
 
 <div class="panel">
  <div class="label">Ordini pendenti</div>
- <table class="posTable"><thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
+ <table class="posTable"><thead><tr><th>#</th><th>Sessione</th><th>Asset</th><th>Side</th><th>Entry</th><th>Prezzo corrente</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
  <tbody id="pendingOrdersTbl"></tbody></table>
  <div id="noPending" class="hint">Nessun ordine pendente.</div>
 </div>
@@ -2852,47 +2852,70 @@ function update(){
  mEl.className='value '+(fm<0?'marginNeg':(used>0&&fm<used*0.3?'marginTight':'marginFree'));
  mEl.title=`Equity ${euro(eq)} • Margine usato ${euro(used)}`;
 
- // Tabella posizioni aperte: mostra le posizioni di TUTTI gli asset (non solo quello a grafico
- // ora), con una colonna ASSET dedicata, così si vede sempre a colpo d'occhio che le posizioni
- // di altri asset restano aperte "in background" e NON vengono toccate/cancellate cambiando
- // asset — vedi autoLoadAssetLibrary. In Storico il P/L live è calcolabile solo per le
- // posizioni dell'asset attualmente a grafico (le uniche di cui abbiamo il prezzo corrente
- // caricato). In Live invece abbiamo un prezzo aggiornato in tempo reale anche per gli altri
- // asset con una posizione aperta (streaming multi-epic, vedi livePriceByAsset): solo se
- // quell'asset non ha ancora ricevuto nemmeno un tick si mostra "—".
+ // Tabella posizioni aperte: mostra le posizioni di TUTTE E 4 LE SESSIONI insieme (non solo
+ // quella attiva ora), con colonne "Sessione" e "Asset" dedicate — così si vede sempre a colpo
+ // d'occhio cosa è aperto ovunque, esattamente come richiesto. Il prezzo corrente/P&L si
+ // aggiorna in automatico per le posizioni LIVE (streaming/tick per quella a schermo, polling
+ // REST in background per l'altra combinazione Live — vedi pollBackgroundLiveSession — entrambe
+ // scrivono nello stesso livePriceByAsset); per le posizioni STORICO di una sessione diversa da
+ // quella attiva non c'è modo di avere un prezzo "live" (il CSV di quella sessione non è
+ // caricato finché non ci si torna sopra), quindi si mostra il prezzo di apertura come
+ // riferimento e nessun P/L (a schermo si sa che è "in pausa", non un dato sbagliato).
  const price=currentPrice();
- const ownPositionsTbl=positions;
- if(!ownPositionsTbl.length){
+ const SESSION_LABELS_SHORT={backtest:'📼 Storico',live:'🔴 Live',backtest_propfirm:'🛡️📼 Storico PF',live_propfirm:'🛡️🔴 Live PF'};
+ function collectAcrossSessions(field){
+   const out=[];
+   ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
+     const list=(key===currentMode())?(field==='positions'?positions:pendingOrders):(((sessionByMode[key]||{})[field])||[]);
+     list.forEach(item=>out.push({item,sessionKey:key}));
+   });
+   return out;
+ }
+ const allPosRows=collectAcrossSessions('positions');
+ if(!allPosRows.length){
    $('openPositions').innerHTML='';
    $('noPositions').style.display='block';
  }else{
    $('noPositions').style.display='none';
-   $('openPositions').innerHTML=ownPositionsTbl.map((p,i)=>{
-     const posAsset=p.asset||currentAssetKey||'—';
-     const isCurrentAsset=!currentAssetKey||posAsset===currentAssetKey;
-     const posPrice=isCurrentAsset?price:(liveModeActive?livePriceByAsset[posAsset]:null);
+   $('openPositions').innerHTML=allPosRows.map(({item:p,sessionKey},i)=>{
+     const posAsset=p.asset||'—';
+     const isCurrentRow=sessionKey===currentMode();
+     const isLiveSession=(sessionKey==='live'||sessionKey==='live_propfirm');
+     const isCurrentAssetOnScreen=isCurrentRow&&(!currentAssetKey||posAsset===currentAssetKey);
+     const posPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[posAsset]:null);
      const plLive=(posPrice!=null)?calculateForexPL(p.side,p.entry,posPrice,p.lots,posAsset):null;
      const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
-     // Colonna "Prezzo corrente": stesso prezzo già usato per calcolare il P/L live di questa
-     // riga (posPrice), quindi si aggiorna in automatico ad ogni update() — a schermo per
-     // l'asset a grafico, via streaming/tick multi-epic per gli altri asset in background.
-     const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):'—'}</td>`;
-     return `<tr class="${p===active?'focused':''}"><td>${i+1}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
-     `<td><button class="miniBtn" data-gotoasset-pos="${p.id}" title="Passa all'asset ${posAsset} e mostra questa posizione a grafico">📍 Vai a grafico</button><button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button></td></tr>`;
+     // Colonna "Prezzo corrente": per le sessioni Storico non attive mostriamo il prezzo di
+     // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
+     const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
+     const modeTag=SESSION_LABELS_SHORT[sessionKey]||sessionKey;
+     const actionsCell=isCurrentRow
+       ?`<button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button>`
+       :'';
+     return `<tr class="${isCurrentRow&&p===active?'focused':''}"><td>${i+1}</td><td>${modeTag}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
+     `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTag} / ${posAsset} e mostra questa posizione a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
    }).join('');
  }
 
- // Tabella ordini pendenti: stesso criterio, mostra quelli di TUTTI gli asset con colonna ASSET.
- const ownPendingTbl=pendingOrders;
- if(!ownPendingTbl.length){
+ // Tabella ordini pendenti: stesso criterio, TUTTE E 4 LE SESSIONI insieme, con colonna
+ // "Prezzo corrente" per confrontare a colpo d'occhio quanto manca al prezzo di ingresso.
+ const allPendingRows=collectAcrossSessions('pendingOrders');
+ if(!allPendingRows.length){
    $('pendingOrdersTbl').innerHTML='';
    $('noPending').style.display='block';
  }else{
    $('noPending').style.display='none';
-   $('pendingOrdersTbl').innerHTML=ownPendingTbl.map((p,i)=>{
-     const ordAsset=p.asset||currentAssetKey||'—';
-     return `<tr><td>${i+1}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td><td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
-     `<td><button class="miniBtn" data-gotoasset-pending="${p.id}" title="Passa all'asset ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button><button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button></td></tr>`;
+   $('pendingOrdersTbl').innerHTML=allPendingRows.map(({item:p,sessionKey},i)=>{
+     const ordAsset=p.asset||'—';
+     const isCurrentRow=sessionKey===currentMode();
+     const isLiveSession=(sessionKey==='live'||sessionKey==='live_propfirm');
+     const isCurrentAssetOnScreen=isCurrentRow&&(!currentAssetKey||ordAsset===currentAssetKey);
+     const curPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[ordAsset]:null);
+     const curPriceCell=`<td>${curPrice!=null?fmtPrice(curPrice):'—'}</td>`;
+     const modeTag=SESSION_LABELS_SHORT[sessionKey]||sessionKey;
+     const actionsCell=isCurrentRow?`<button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button>`:'';
+     return `<tr><td>${i+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td>`+curPriceCell+`<td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
+     `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTag} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
    }).join('');
  }
 
@@ -5785,6 +5808,53 @@ async function ensureCapitalConnected(retryHint){
  $('status').textContent=retryHint || "Accedi a Capital.com per mostrare questa operazione sul grafico Live, poi ripremi \"Vai a grafico\".";
  return false;
 }
+// Passa alla SESSIONE indicata (una delle 4: backtest/live/backtest_propfirm/live_propfirm),
+// se non è già quella attiva, riusando esattamente gli stessi meccanismi già collaudati per i
+// due assi indipendenti (switchAccountMode per Storico/Live, la stessa logica di
+// proceedEnablePropFirm/disablePropFirmMode per l'asse Prop Firm). Usata da "📍 Vai a grafico"
+// nel Trade Journal, nelle Posizioni aperte e negli Ordini pendenti, per poter aprire QUALSIASI
+// sessione da lì con un solo click — non solo quella già attiva a schermo.
+async function ensureSessionActive(targetSessionKey){
+ if(targetSessionKey===currentMode())return true;
+ const targetIsLive=(targetSessionKey==='live'||targetSessionKey==='live_propfirm');
+ const targetIsPropFirm=(targetSessionKey==='live_propfirm'||targetSessionKey==='backtest_propfirm');
+ if(targetIsLive){
+   const connected=await ensureCapitalConnected('Accedi a Capital.com per mostrare questa posizione/ordine sul grafico Live, poi ripremi "Vai a grafico".');
+   if(!connected)return false; // login richiesto: si potrà ripremere "Vai a grafico" dopo essersi collegati
+ }
+ return await withLoadingOverlay('Passaggio alla sessione richiesta…', async()=>{
+   // Passo 1 — asse Storico/Live (se serve): riusa integralmente switchAccountMode(), che
+   // gestisce già stream/timer Capital.com, salva l'ultima candela vista e azzera l'asset.
+   if(liveModeActive!==targetIsLive){ await switchAccountMode(targetIsLive); }
+   // Passo 2 — asse Prop Firm (se serve): stessa sequenza di proceedEnablePropFirm()/
+   // disablePropFirmMode(), ma senza passare dai moduli grafici (la sessione di destinazione
+   // esiste di sicuro, visto che le appartiene la posizione/ordine/trade su cui si sta
+   // saltando) e senza richiedere capitale iniziale (mai una sessione "nuova" da qui).
+   if(isPropFirmMode!==targetIsPropFirm){
+     captureCurrentModeSnapshot();
+     captureCurrentAssetChartView(currentMode());
+     isPropFirmMode=targetIsPropFirm;
+     restoreModeSnapshot(currentMode());
+     updatePropFirmBodyClass();
+   }
+   clearAssetSelectionForSessionSwitch();
+   return true;
+ });
+}
+// Versioni di jumpToPositionOnChart/jumpToPendingOnChart che accettano anche la SESSIONE di
+// appartenenza (non necessariamente quella attiva ora): passano prima alla sessione giusta con
+// ensureSessionActive(), poi riusano la funzione originale (che a quel punto trova la
+// posizione/l'ordine already dentro positions/pendingOrders, ormai quelli corretti).
+async function jumpToPositionInSessionOnChart(sessionKey,posId){
+ const ok=await ensureSessionActive(sessionKey);
+ if(!ok)return;
+ await jumpToPositionOnChart(posId);
+}
+async function jumpToPendingInSessionOnChart(sessionKey,orderId){
+ const ok=await ensureSessionActive(sessionKey);
+ if(!ok)return;
+ await jumpToPendingOnChart(orderId);
+}
 async function jumpToTradeOnChart(tradeIndex){
  const t=trades[tradeIndex];
  if(!t)return;
@@ -5793,25 +5863,14 @@ async function jumpToTradeOnChart(tradeIndex){
  // toccare quello dell'asset che si lascia — vedi autoLoadAssetLibrary): il Trade Journal è
  // condiviso fra tutti gli asset proprio per permettere questo salto diretto. `trades` non
  // viene mai svuotato al cambio asset, quindi lo stesso `tradeIndex` resta valido dopo.
- // Distinzione Storico/Live: un'operazione chiusa in modalità Live va riaperta sul grafico
- // Live in diretta di quell'asset (candele Capital.com), NON sul CSV di Storico; viceversa
- // un'operazione chiusa in Storico va sempre mostrata sul CSV storico caricato per l'asset.
- // Il campo t.mode ('live'/'backtest') viene salvato da closeTrade() al momento della chiusura,
- // quindi riflette la sessione REALE in cui quel trade è avvenuto, non la modalità attuale.
- const tradeWasLive=t.mode==='live';
- // Se il trade appartiene alla modalità (Live/Storico) diversa da quella attiva ora, passiamo
- // prima da switchAccountMode() — l'unico punto sicuro per cambiare modalità (gestisce
- // snapshot conto, stream Capital.com, ecc.) — poi eventualmente cambiamo asset.
- if(liveModeActive!==tradeWasLive){
-   if(tradeWasLive){
-     // Verso Live: prima ci assicuriamo che la sessione Capital.com sia davvero valida (vedi
-     // ensureCapitalConnected sopra), altrimenti switchAccountMode(true) passerebbe comunque a
-     // modalità Live ma senza riuscire a scaricare nulla, lasciando a schermo il grafico Storico.
-     const connected=await ensureCapitalConnected();
-     if(!connected)return; // login richiesto: l'utente potrà ripremere "Vai a grafico" dopo essersi collegato
-   }
-   await switchAccountMode(tradeWasLive);
- }
+ // Sessione (una delle 4: Storico/Live/Storico+Prop Firm/Live+Prop Firm): un'operazione
+ // chiusa in una di esse va riaperta ESATTAMENTE lì (stesso asse Storico/Live, stesso asse
+ // Standard/Prop Firm), non semplicemente in "Live" o "Storico" generici come prima che
+ // esistessero le 4 sessioni. Il campo t.mode viene salvato da closeTrade() al momento della
+ // chiusura, quindi riflette la sessione REALE in cui quel trade è avvenuto, non quella attuale.
+ const ok=await ensureSessionActive(t.mode||'backtest');
+ if(!ok)return; // login Capital.com richiesto: si potrà ripremere "Vai a grafico" dopo essersi collegati
+ const tradeWasLive=(t.mode==='live'||t.mode==='live_propfirm');
  const currentAsset=$('market')?.value||'';
  if(t.asset && currentAsset!==t.asset){
    if($('market'))$('market').value=t.asset;
@@ -6279,11 +6338,14 @@ $('closeAll').onclick=()=>{
 };
 $('openPositions').addEventListener('click',async e=>{
  const gotoId=e.target.getAttribute('data-gotoasset-pos');
+ const gotoSession=e.target.getAttribute('data-gotoasset-pos-session');
  const selId=e.target.getAttribute('data-select');
  const closeId=e.target.getAttribute('data-closepos');
  if(gotoId){
    scrollToChart();
-   await jumpToPositionOnChart(gotoId);
+   // La tabella mostra ora le posizioni di TUTTE E 4 le sessioni: passiamo prima a quella
+   // giusta (se diversa dall'attuale) con ensureSessionActive(), poi ci si sposta sul grafico.
+   await jumpToPositionInSessionOnChart(gotoSession||currentMode(),gotoId);
    return;
  }
  if(selId){
@@ -7475,10 +7537,13 @@ $('confirmPendingBtn').addEventListener('click',()=>{
 });
 $('pendingOrdersTbl').addEventListener('click',async e=>{
  const gotoId=e.target.getAttribute('data-gotoasset-pending');
+ const gotoSession=e.target.getAttribute('data-gotoasset-pending-session');
  const cancelId=e.target.getAttribute('data-cancelpending');
  if(gotoId){
    scrollToChart();
-   await jumpToPendingOnChart(gotoId);
+   // Come per le posizioni aperte: la tabella mostra ora gli ordini di TUTTE E 4 le sessioni,
+   // quindi si passa prima a quella giusta se diversa dall'attuale.
+   await jumpToPendingInSessionOnChart(gotoSession||currentMode(),gotoId);
    return;
  }
  if(cancelId){
@@ -8544,6 +8609,11 @@ async function pollBackgroundLiveSession(sessionKey){
    if(!Number.isFinite(price))continue;
    const prevPrice=backgroundLastPriceByAsset[sessionKey+'|'+asset];
    backgroundLastPriceByAsset[sessionKey+'|'+asset]=price;
+   // Scrive anche nella cache CONDIVISA (la stessa che usano le tabelle Posizioni/Ordini a
+   // schermo e il motore in primo piano): così il prezzo "in background" per questa
+   // combinazione [sessione, asset] appare aggiornato in automatico anche nelle tabelle,
+   // esattamente come per l'asset a grafico ora.
+   livePriceByAsset[asset]=price;
    // SL/TP delle posizioni aperte di questo asset, in QUESTA sessione.
    const ownPositions=(session.positions||[]).filter(p=>(p.asset||asset)===asset);
    [...ownPositions].forEach(pos=>{
@@ -8575,8 +8645,12 @@ async function pollBackgroundLiveSession(sessionKey){
  if(changed){
    playOrderSound();
    scheduleSave(); // sessionByMode fa già parte dello stato salvato: basta questo per persistere
-   update(); // Trade Journal (globale) e conto attivo aggiornati subito, se pertinenti a schermo
  }
+ // update() SEMPRE (non solo se changed): richiesto esplicitamente l'aggiornamento in tempo
+ // reale del prezzo/P&L delle posizioni Live nelle tabelle anche quando non hanno ancora
+ // toccato SL/TP — altrimenti "Prezzo corrente" per queste righe resterebbe fermo tra una
+ // chiusura/apertura e l'altra invece di seguire il prezzo che arriva ogni giro di polling.
+ if(assets.size)update();
 }
 function startBackgroundLiveMonitor(){
  if(backgroundLivePollTimer)return;
