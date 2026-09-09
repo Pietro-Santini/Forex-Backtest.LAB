@@ -755,6 +755,7 @@ tr.otherAssetRow td:last-child{opacity:1}
      </select>
      <button id="chartFullscreenBtn" class="chartCornerBtn" title="Schermo intero">⛶</button>
      <button id="randomBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Carica un punto casuale nello storico caricato, da cui far partire un nuovo replay">🎲 DATA RANDOM</button>
+     <button id="clearHighlightBtn" class="chartCornerBtn" style="display:none;width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Chiudi la scheda dell'operazione evidenziata (durata/lottaggio) mostrata da 'Vai a grafico'">✕ Chiudi scheda</button>
    </div>
    <div id="chartFloatControlsExtra" class="chartFloatControls" style="top:46px;display:none">
      <select id="tzSelect" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Fuso orario di visualizzazione della barra tempo/data (ora legale gestita automaticamente in base al paese scelto). I dati storici restano invariati: cambia solo come vengono mostrati."></select>
@@ -4375,6 +4376,10 @@ function draw(){
  // Journal: copre l'intera altezza del grafico dall'apertura alla chiusura, con una
  // casella riepilogativa (durata, pip, R/R) agganciata in alto.
  if(highlightedTrade)drawTradeHighlight(ctx,y,pad,cw,n,start,w,h);
+ // Pulsante "✕ Chiudi scheda" (richiesto esplicitamente): visibile solo quando c'è una
+ // scheda operazione evidenziata a grafico, per poterla togliere manualmente invece di doverla
+ // aspettare sparire da sola (cosa che dava fastidio durante la normale visualizzazione).
+ { const chb=$('clearHighlightBtn'); if(chb)chb.style.display=highlightedTrade?'':'none'; }
  // Ordini pendenti: linea tratteggiata sottile al prezzo di entrata (può trovarsi anche
  // oltre l'ultima candela, avanti nel tempo o nel prezzo), più le eventuali SL/TP già
  // impostate per quando l'ordine si attiverà. Colore dell'entrata: rosso se sopra al
@@ -6548,6 +6553,10 @@ $('tfChart')?.addEventListener('change',()=>{
  // frecce della tastiera cambiano il timeframe invece di scorrere il grafico.
  $('tfChart').blur();
 });
+$('clearHighlightBtn')?.addEventListener('click',()=>{
+ highlightedTrade=null;
+ draw();
+});
 $('randomBtn').addEventListener('click',()=>{
  if(!rows.length||!baseRows.length)return $('status').textContent='Carica prima un CSV.';
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -8179,14 +8188,24 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  //   già quello giusto per via dello stato appena ripristinato, pur essendo in tutto e per
  //   tutto un nuovo avvio).
  const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
+ // FORZATURA RICHIESTA ESPLICITAMENTE: la candela puntata da viewEnd viene identificata per
+ // ORARIO (closeTimeOf), non per INDICE numerico. rebuildRows() qui sotto riaggrega i minuti
+ // grezzi nel timeframe corrente (5m/15m/1H/...): la candela "in formazione" in fondo
+ // all'array può cambiare composizione, e con essa la LUNGHEZZA dell'array stesso, ad ogni
+ // singola risincronizzazione — un indice numerico salvato prima poteva quindi puntare a una
+ // candela leggermente diversa dopo, apparendo come uno "scatto" verso l'ultima candela anche
+ // se il valore veniva tecnicamente preservato. Ancorare all'orario reale della candela
+ // elimina il problema alla radice, indipendentemente da come cambia l'array sotto.
  let preserved=null;
  if(!shouldResetView){
-   preserved={viewEnd,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+   const pinnedTime=rows[viewEnd]?closeTimeOf(rows[viewEnd]):null;
+   preserved={pinnedTime,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
  }
  masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rebuildRows();
  if(preserved){
-   viewEnd=Math.max(0,Math.min(preserved.viewEnd,rows.length-1));
+   const restoredIdx=preserved.pinnedTime!=null?rowIndexContainingTime(preserved.pinnedTime):null;
+   viewEnd=(restoredIdx!=null)?restoredIdx:Math.max(0,rows.length-1);
    followLatest=preserved.followLatest;
    priceZoomFactor=preserved.priceZoomFactor;
    viewPriceLo=preserved.viewPriceLo; viewPriceHi=preserved.viewPriceHi;
