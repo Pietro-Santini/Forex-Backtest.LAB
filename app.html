@@ -883,21 +883,40 @@ function restoreModeSnapshot(mode){
 // di questa funzione, le 4 chiamate dirette a "liveModeActive=..." sparse nella pagina
 // lasciavano semplicemente la libreria Live incollata al posto di quella Storico appena si
 // tornava indietro: da qui in poi passano tutte da qui.
+// Azzera la selezione ASSET al cambio SESSIONE (non al cambio asset dentro la stessa
+// sessione, che resta gestito da autoLoadAssetLibrary/loadLiveHistoryFromCapital): ogni
+// sessione riparte sempre da "— Seleziona ASSET —", mai con lo stesso asset ricaricato in
+// automatico. Questo tiene il cambio sessione istantaneo (nessun CSV pesante da ricaricare
+// subito) — l'ultima candela vista su QUESTO asset in QUESTA sessione resta comunque salvata
+// in assetChartViews e ricompare da sola non appena lo si riseleziona.
+function clearAssetSelectionForSessionSwitch(){
+ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ const marketSel=$('market');
+ if(marketSel){
+   Array.from(marketSel.options).forEach(o=>{ o.selected=(o.value===''); });
+   marketSel.value=''; marketSel.selectedIndex=0;
+ }
+ currentAssetKey=''; lastValidMarketValue='';
+ csvLibrary=[]; baseRows=[]; rows=[]; idx=0; viewEnd=0; masterTime=null;
+ tradeSLLine=null; tradeTPLine=null; active=null; clearDraftTradeLevelFields();
+ if($('fileName'))$('fileName').textContent='Nessun asset selezionato: scegline uno per continuare.';
+ applyInstrument();
+}
 async function switchAccountMode(newIsLive){
  if(liveModeActive===newIsLive)return;
- const asset=$('market')?.value;
  await withLoadingOverlay(newIsLive?'Passaggio a modalità Live…':'Ritorno a modalità Storico…', async()=>{
    captureCurrentModeSnapshot();
+   // Salva l'ultima candela vista su questo asset PRIMA di lasciare la sessione, così la si
+   // ritrova intatta se in futuro si torna su questa stessa combinazione [sessione, asset].
+   captureCurrentAssetChartView(currentMode());
    liveModeActive=newIsLive;
    if(newIsLive){startLiveRefreshTimer();startCapitalSessionKeepAlive();} else { stopLiveRefreshTimer(); disconnectCapitalStream(); stopCapitalSessionKeepAlive(); }
    restoreModeSnapshot(currentMode());
-   tradeSLLine=null; tradeTPLine=null;
    syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
    updateLiveModeUI();
-   if(asset && asset!=='custom'){
-     if(newIsLive) await loadLiveHistoryFromCapital(asset);
-     else await autoLoadAssetLibrary(asset);
-   }
+   // RICHIESTO: la nuova sessione riparte SEMPRE senza asset selezionato (mai lo stesso
+   // ricaricato in automatico), sia per velocità sia per chiarezza.
+   clearAssetSelectionForSessionSwitch();
    update(); draw();
    renderActiveIndicatorsUI();
  });
@@ -946,15 +965,25 @@ async function proceedEnablePropFirm(targetIsLive){
   closePropFirmModeChoiceModal();
   await withLoadingOverlay('Attivazione Modalità Prop Firm…', async()=>{
     // Se la base scelta (Storico/Live) è diversa da quella attuale, ci si passa PRIMA,
-    // riusando integralmente switchAccountMode() — che gestisce già stream/timer Capital.com,
-    // ricarica dello storico e il salvataggio/ripristino della sessione "semplice"
-    // corrispondente, esattamente come quando si preme il pulsante 📼/🔴 in condizioni normali.
-    if(liveModeActive!==targetIsLive){ await switchAccountMode(targetIsLive); }
+    // riusando integralmente switchAccountMode() — che gestisce già stream/timer Capital.com
+    // e (da questa modifica) azzera già da sola la selezione ASSET e salva l'ultima candela
+    // vista, esattamente come quando si preme il pulsante 📼/🔴 in condizioni normali.
+    if(liveModeActive!==targetIsLive){
+      await switchAccountMode(targetIsLive);
+    } else {
+      // La base NON cambia (es. si era già in Storico e si sceglie "Storico" per la Prop
+      // Firm): switchAccountMode() sopra non scatterebbe, quindi qui rifacciamo a mano gli
+      // stessi due passaggi — fotografare l'ultima candela vista e ripartire da "Seleziona
+      // ASSET" — perché comunque stiamo per cambiare sessione-conto (verso una diversa da
+      // quella "semplice" in cui ci troviamo).
+      captureCurrentAssetChartView(currentMode());
+    }
     // A questo punto siamo sulla base giusta (Storico o Live) e ANCORA fuori da Prop Firm:
     // la fotografiamo così com'è (verrà ritrovata intatta disattivando di nuovo la Prop Firm).
     captureCurrentModeSnapshot();
     isPropFirmMode = true;
     const key = currentMode(); // 'backtest_propfirm' oppure 'live_propfirm'
+    clearAssetSelectionForSessionSwitch();
     if(sessionByMode[key]){
       // Challenge già avviata in precedenza su questa combinazione: si riprende da dove
       // era stata lasciata, nessuna domanda.
@@ -990,8 +1019,10 @@ async function disablePropFirmMode(){
   if(!isPropFirmMode) return;
   await withLoadingOverlay('Ritorno alla modalità '+(liveModeActive?'Live':'Storico')+'…', async()=>{
     captureCurrentModeSnapshot(); // salva sotto 'backtest_propfirm' / 'live_propfirm'
+    captureCurrentAssetChartView(currentMode()); // ultima candela vista in QUESTA Challenge
     isPropFirmMode = false;
     restoreModeSnapshot(currentMode()); // 'backtest' / 'live', qualunque fosse prima di entrare
+    clearAssetSelectionForSessionSwitch();
     finalizePropFirmModeChange();
   });
 }
@@ -1080,19 +1111,37 @@ function clearDraftTradeLevelFields(){
  if($('slPending'))$('slPending').value='';
  if($('tpPending'))$('tpPending').value='';
 }
-// ===================== MEMORIA DI NAVIGAZIONE PER ASSET (solo vista grafico) =====================
-// A differenza del conto (sopra, unico e globale), la POSIZIONE nel tempo a cui si sta
-// guardando il grafico (candela corrente, timeframe, zoom) è naturalmente diversa per ogni
-// asset: quando si lascia un asset per passare a un altro, la sua vista va "messa in pausa"
-// esattamente dov'era, e ripristinata tale e quale quando ci si torna sopra — mai riportata
-// alla prima candela come se fosse la prima volta (a meno che lo sia davvero).
-let assetChartViews={};
+// ===================== MEMORIA DI NAVIGAZIONE PER ASSET E PER SESSIONE (solo vista grafico) =====================
+// La POSIZIONE nel tempo a cui si sta guardando il grafico (candela corrente, timeframe,
+// zoom) è diversa per ogni asset, e ORA anche per ciascuna delle 4 sessioni-conto (Storico,
+// Live, Storico+Prop Firm, Live+Prop Firm): la stessa coppia [sessione, asset] ritrova sempre
+// l'ultima candela vista, mentre sessioni diverse sullo stesso asset restano indipendenti.
+let assetChartViews={backtest:{},live:{},backtest_propfirm:{},live_propfirm:{}};
 function captureChartViewInto(map,assetKey){
- if(!assetKey)return;
+ if(!assetKey||!map)return;
  map[assetKey]={masterTime,currentTF,viewEnd,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
 }
+// Fotografa la vista dell'asset attualmente a grafico (se c'è) dentro la sessione indicata —
+// di norma quella corrente, tranne quando la si sta per lasciare (vedi switchAccountMode/
+// proceedEnablePropFirm/disablePropFirmMode, che la chiamano PRIMA di cambiare sessione).
+function captureCurrentAssetChartView(sessionKey){
+ if(!assetChartViews[sessionKey])assetChartViews[sessionKey]={};
+ if(currentAssetKey)captureChartViewInto(assetChartViews[sessionKey],currentAssetKey);
+ idbPut('assetChartViews',assetChartViews); // persistenza immediata (cambio sessione o asset)
+}
+// Sessioni salvate PRIMA di questa modifica avevano una mappa PIATTA {asset:vista}, condivisa
+// fra Storico e Live: la usiamo come base per "backtest" (la sessione più comune) invece di
+// perderla, e le altre 3 ripartono semplicemente vuote (si ripopolano da sole visitando gli
+// asset in quelle sessioni).
+function normalizeAssetChartViews(raw){
+ const base={backtest:{},live:{},backtest_propfirm:{},live_propfirm:{}};
+ if(!raw||typeof raw!=='object')return base;
+ const looksLegacyFlat=Object.values(raw).some(v=>v&&typeof v==='object'&&('masterTime'in v||'currentTF'in v));
+ if(looksLegacyFlat){ base.backtest={...raw}; return base; }
+ return Object.assign(base,raw);
+}
 async function saveAssetChartViews(){
- if(currentAssetKey)captureChartViewInto(assetChartViews,currentAssetKey);
+ captureCurrentAssetChartView(currentMode());
  await idbPut('assetChartViews',assetChartViews);
 }
 
@@ -1195,7 +1244,9 @@ function collectLightSessionState(){
 }
 let saveTimer=null;
 function scheduleSave(){
- if(!baseRows.length)return; // niente da salvare finché non è stato caricato un CSV
+ // NESSUNA guardia su baseRows.length: subito dopo un cambio sessione l'asset è volutamente
+ // vuoto (clearAssetSelectionForSessionSwitch), ma il cambio di conto/sessione va comunque
+ // salvato subito, altrimenti un ricaricamento nel mezzo lo perderebbe.
  if(saveTimer)clearTimeout(saveTimer);
  saveTimer=setTimeout(saveLightStateNow,800);
 }
@@ -1210,7 +1261,6 @@ const FOREX_LAB_STANDARD_STATE_KEY='forex_lab_standard_state';
 
 async function saveLightStateNow(){
  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
- if(!baseRows.length)return;
  const state=collectLightSessionState();
  // SALVATAGGIO LOCALE (immediato, gratuito, ad ogni modifica): IndexedDB resta la fonte
  // principale (nessun limite pratico di dimensione, utile perché qui viaggiano anche gli
@@ -1239,11 +1289,17 @@ let lastFirebaseSyncAt=0;
 const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più eventi scattano insieme
 async function syncFullStatusToFirebase(reason){
  if(!(window.fxbtCloud && window.fxbtCloud.uid))return; // non loggato: niente cloud, solo locale
- if(!baseRows.length)return; // nessuna sessione ancora avviata: niente da sincronizzare
+ // NIENTE guardia su baseRows.length qui: subito dopo un cambio sessione l'asset è
+ // volutamente vuoto (vedi clearAssetSelectionForSessionSwitch), ma conto/Trade Journal/
+ // ultima candela vista per asset restano comunque validi e vanno sincronizzati lo stesso.
  const now=Date.now();
  if(now-lastFirebaseSyncAt<FIREBASE_MIN_SYNC_INTERVAL_MS)return;
  lastFirebaseSyncAt=now;
- try{ await window.fxbtCloud.save(collectLightSessionState()); }
+ try{
+   const bundle=collectLightSessionState();
+   bundle.assetChartViews=assetChartViews; // ultima candela vista, per asset e per sessione
+   await window.fxbtCloud.save(bundle);
+ }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
 }
 // "App inattiva": la scheda passa in background (cambio tab, minimizzazione, schermo bloccato).
@@ -2487,7 +2543,7 @@ function resetChartViewForAssetSwitch(){
 // quello resta sempre globale, vedi la sezione più sopra.
 function applyChartViewForAsset(asset){
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
- const saved=assetChartViews[asset];
+ const saved=(assetChartViews[currentMode()]||{})[asset];
  if(saved){
    currentTF=saved.currentTF||1;
    masterTime=Number.isFinite(saved.masterTime)?saved.masterTime:null;
@@ -2520,7 +2576,7 @@ async function autoLoadAssetLibrary(asset){
    // Metti da parte la vista del grafico (candela, timeframe, zoom) dell'asset che si lascia,
    // PRIMA di passare al nuovo: così, tornandoci sopra in futuro, la si ritrova esattamente
    // dov'era. Il conto (posizioni/ordini/equity) non c'entra qui: resta sempre globale.
-   if(currentAssetKey && currentAssetKey!==asset)captureChartViewInto(assetChartViews,currentAssetKey);
+   if(currentAssetKey && currentAssetKey!==asset)captureCurrentAssetChartView(currentMode());
    currentAssetKey=asset;
    // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
    // appartenere all'asset appena selezionato: se quella precedente era di un altro asset,
@@ -7764,7 +7820,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset){
  // SL/TP di un asset "si vedevano" sull'altro. Le caselle SL/TP/ENTRY NON devono mai ricomparire
  // da sole al cambio asset: se non c'è una posizione reale sul nuovo asset vengono sempre
  // svuotate (mai ripristinate da una bozza lasciata in precedenza).
- if(currentAssetKey && currentAssetKey!==asset)captureChartViewInto(assetChartViews,currentAssetKey);
+ if(currentAssetKey && currentAssetKey!==asset)captureCurrentAssetChartView(currentMode());
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
  active=ownNow.length?ownNow[ownNow.length-1]:null;
@@ -8522,6 +8578,7 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
  // precedenza sulla copia locale — è quella che rende i dati "gli stessi ovunque si acceda".
  // Se il cloud non ha ancora nulla (primo avvio dopo questo aggiornamento, o mai salvato),
  // restiamo sulla copia locale IndexedDB come prima, senza alcun cambiamento di comportamento.
+ let cloudAssetChartViews=null;
  try{
    const cloud=await waitForFxbtCloud();
    if(cloud.uid){
@@ -8529,12 +8586,15 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
      // Un solo blob, come collectLightSessionState(): contiene già tutte e 4 le sessioni
      // (backtest/live/backtest_propfirm/live_propfirm) dentro sessionByMode, quindi il
      // ripristino da cloud le riporta tutte insieme, senza bisogno di pacchetti separati.
-     if(cloudState && cloudState.version===SESSION_VERSION) savedState=cloudState;
+     if(cloudState && cloudState.version===SESSION_VERSION){
+       savedState=cloudState;
+       if(cloudState.assetChartViews) cloudAssetChartViews=cloudState.assetChartViews;
+     }
    }
  }catch(e){ console.warn('Controllo sessione cloud saltato:',e); }
  // Mappa delle viste per-asset (candela/timeframe/zoom di ognuno): ripristinata subito così,
  // al primo cambio ASSET, si ritrova già la posizione lasciata l'ultima volta.
- assetChartViews=savedChartViews||{};
+ assetChartViews=normalizeAssetChartViews(cloudAssetChartViews||savedChartViews);
  // Se IndexedDB non ha nulla (browser/dispositivo nuovo, dati cancellati, ecc.) ma questa
  // stessa pagina .html porta con sé dei CSV incorporati direttamente nel codice (salvati in
  // precedenza con "💾 Salva CSV nel file" o "⬇️ Scarica copia con CSV"), li usiamo come seme
