@@ -507,7 +507,7 @@ tr.otherAssetRow td:last-child{opacity:1}
     <option value="capital_search">🔍 Cerca asset Capital.com…</option>
    </select></div>
   <div><div class="label">Capitale</div><input id="capital" type="number" value="10000"></div>
-  <div><div class="label">Spread pips</div><input id="spread" type="number" value="0" step=".1"></div>
+  <div><div class="label">Spread pips</div><input id="spread" type="number" value="0" step=".1" title="In Modalità Prop Firm viene calcolato e applicato in automatico per l'asset scelto (qui è solo indicativo/di sola lettura): un BUY apre più caro, un SELL più economico, come su un conto reale. Nelle sessioni Standard/Live resta 0 e non ha alcun effetto, come prima."></div>
   <div><div class="label">Leva</div><select id="leverage"><option value="10">1:10</option><option value="20">1:20</option><option value="30">1:30</option><option value="50">1:50</option><option value="100" selected>1:100</option><option value="200">1:200</option><option value="500">1:500</option></select></div>
   <div><div class="label">Decimali prezzo</div><select id="decimals"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5" selected>5</option><option value="6">6</option></select></div>
   <div><div class="label">Decimali per +1 pip</div><input id="pipDecimals" type="number" min="0" max="8" step="1" value="1" title="Da quale cifra decimale del prezzo parte il conteggio di +1 pip. Es: 1 = un pip ogni 0,1 di prezzo (default attuale), 4 = un pip ogni 0,0001."></div>
@@ -4952,13 +4952,18 @@ function getLotSize(){
 //    il risultato in USD viene quindi usato direttamente come approssimazione del saldo in
 //    €. È solo un'approssimazione per il backtest, non un cambio reale — vedi il messaggio
 //    sotto il menu "Strumento".
+// typicalSpreadPips: spread MEDIO realistico in condizioni di mercato normali (fuori dagli
+// orari di bassa liquidità/notizie, dove può allargarsi molto di più) per broker retail al
+// dettaglio — usato SOLO in Modalità Prop Firm per rendere la simulazione più realistica
+// (vedi applySpreadToEntry/typicalSpreadPipsForAsset più sotto): l'utente non deve impostarlo
+// a mano, viene applicato in automatico in base all'asset scelto.
 const INSTRUMENTS={
- EURUSD:{label:'EUR/USD',decimals:5,pipDigit:4,contractSize:100000,plMode:'baseEqualsAccount'},
- GBPUSD:{label:'GBP/USD',decimals:5,pipDigit:4,contractSize:100000,plMode:'approx'},
- USDJPY:{label:'USD/JPY',decimals:3,pipDigit:2,contractSize:100000,plMode:'approx'},
- XAUUSD:{label:'XAU/USD (Oro)',decimals:2,pipDigit:1,contractSize:100,plMode:'approx'},
- XAGUSD:{label:'XAG/USD (Argento)',decimals:3,pipDigit:2,contractSize:5000,plMode:'approx'},
- custom:{label:'Personalizzato',decimals:null,pipDigit:null,contractSize:100000,plMode:'approx'}
+ EURUSD:{label:'EUR/USD',decimals:5,pipDigit:4,contractSize:100000,plMode:'baseEqualsAccount',typicalSpreadPips:0.6},
+ GBPUSD:{label:'GBP/USD',decimals:5,pipDigit:4,contractSize:100000,plMode:'approx',typicalSpreadPips:1.1},
+ USDJPY:{label:'USD/JPY',decimals:3,pipDigit:2,contractSize:100000,plMode:'approx',typicalSpreadPips:0.9},
+ XAUUSD:{label:'XAU/USD (Oro)',decimals:2,pipDigit:1,contractSize:100,plMode:'approx',typicalSpreadPips:2.2},
+ XAGUSD:{label:'XAG/USD (Argento)',decimals:3,pipDigit:2,contractSize:5000,plMode:'approx',typicalSpreadPips:3.0},
+ custom:{label:'Personalizzato',decimals:null,pipDigit:null,contractSize:100000,plMode:'approx',typicalSpreadPips:1.0}
 };
 function currentInstrument(assetKey){
  const key=assetKey!=null?assetKey:$('market')?.value;
@@ -4983,6 +4988,10 @@ function applyInstrument(){
  const instr=INSTRUMENTS[key]||INSTRUMENTS.EURUSD;
  if(instr.decimals!=null&&$('decimals'))$('decimals').value=String(instr.decimals);
  if(instr.pipDigit!=null&&$('pipDecimals'))$('pipDecimals').value=String(instr.pipDigit);
+ // Spread automatico PER ASSET, solo in Modalità Prop Firm (richiesto esplicitamente):
+ // l'utente non deve preoccuparsi di impostarlo a mano, cambia da solo scegliendo l'asset.
+ // Nelle sessioni Standard/Live resta come l'utente l'ha lasciato (nessun automatismo).
+ if(isPropFirmMode && $('spread')) $('spread').value=typicalSpreadPipsForAsset(key).toFixed(1);
  if(sub)sub.textContent=instr.label+' • CSV • Candlestick Replay';
  if(hint){
    hint.textContent=instr.plMode==='baseEqualsAccount'
@@ -5028,6 +5037,45 @@ function calculateForexPL(side,entry,exit,lots,assetKey){
  // simulatore, quindi il risultato in valuta di quotazione viene usato direttamente come
  // approssimazione del saldo in € (vedi hint sotto il menu "Strumento").
  return rawQuote;
+}
+// ===================== SPREAD AUTOMATICO (solo Modalità Prop Firm) =====================
+// L'utente ha chiesto di non doversi preoccupare di come si applica lo spread: qui viene
+// calcolato in automatico per ogni asset (tabella typicalSpreadPips sopra) e applicato SOLO
+// quando isPropFirmMode è true — le sessioni Standard/Live restano invariate, come prima.
+// Non dipende dalla durata della posizione (lo spread è un costo pagato UNA volta, all'apertura,
+// non un costo che cresce nel tempo: quello che aumenta con la durata è semmai lo swap/interesse
+// overnight, un costo DIVERSO e volutamente non implementato qui per restare fedeli a quanto
+// richiesto — "lo spread delle posizioni").
+function typicalSpreadPipsForAsset(assetKey){
+ const instr=currentInstrument(assetKey);
+ return Number.isFinite(instr.typicalSpreadPips)?instr.typicalSpreadPips:1.0;
+}
+// Dimensione di 1 pip per l'asset INDICATO (non necessariamente quello a grafico ora: serve
+// anche per gli asset "in background" in Modalità Prop Firm + Live). Per "Personalizzato"
+// (pipDigit non definito in INSTRUMENTS) si usa il campo "Decimali per +1 pip" corrente, la
+// stessa fonte già usata da pipSize() per l'asset a grafico.
+function pipSizeForAsset(assetKey){
+ const instr=currentInstrument(assetKey);
+ const d=(instr.pipDigit!=null)?instr.pipDigit:(Math.round(num($('pipDecimals')?.value))||1);
+ return Math.pow(10,-(Number.isFinite(d)&&d>=0?Math.min(8,d):1));
+}
+// Costo dello spread in unità di PREZZO (non in €) per l'asset indicato.
+function spreadCostForAsset(assetKey){
+ return typicalSpreadPipsForAsset(assetKey)*pipSizeForAsset(assetKey);
+}
+// Applica lo spread al prezzo di apertura di una posizione, SOLO in Modalità Prop Firm: un
+// BUY compra "peggio" (all'ASK, cioè al prezzo + spread), un SELL vende "peggio" (al BID,
+// cioè al prezzo - spread) — esattamente come su un conto reale, dove lo spread è il margine
+// del broker pagato subito all'apertura, una volta sola per operazione (non si applica di
+// nuovo in chiusura, né dipende da quanto la posizione resta aperta).
+function applySpreadToEntry(side,entry,assetKey,isPropFirmContext){
+ // isPropFirmContext: da passare esplicitamente quando si opera su una sessione DIVERSA da
+ // quella attiva a schermo (es. pollBackgroundLiveSession su 'live_propfirm' mentre si guarda
+ // altro): isPropFirmMode da solo rifletterebbe la sessione attiva, non quella elaborata.
+ const propFirm=(isPropFirmContext!==undefined)?isPropFirmContext:isPropFirmMode;
+ if(!propFirm||!Number.isFinite(entry))return entry;
+ const cost=spreadCostForAsset(assetKey);
+ return side==='BUY'?entry+cost:entry-cost;
 }
 function getLeverage(){
  const v=num($('leverage')?.value);
@@ -5924,10 +5972,15 @@ function activatePendingOrder(p){
    $('status').textContent=`Ordine pendente ${p.side} a ${fmtPrice(p.entry)} scartato: margine insufficiente al momento dell'attivazione.`;
    return;
  }
+ const posAsset=$('market')?.value||'';
+ // Spread automatico (solo Modalità Prop Firm) anche per gli ordini pendenti: si applica al
+ // momento dell'ATTIVAZIONE (quando l'ordine diventa una posizione reale), non a quello della
+ // creazione dell'ordine.
+ const entryWithSpread=applySpreadToEntry(p.side,p.entry,posAsset);
  const pos={
    id:Date.now()+Math.random(),
-   asset:$('market')?.value||'',
-   side:p.side,entry:p.entry,sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
+   asset:posAsset,
+   side:p.side,entry:entryWithSpread,sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
    lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(rows[idx].date),
    openTF:currentTF, // timeframe attivo al momento dell'apertura: serve per ancorare le frecce
    // sempre all'ultima candela CHIUSA in m1 di quel punto, indipendentemente dal timeframe
@@ -6149,8 +6202,12 @@ function refreshTradeLevelUI(){
 }
 function openMarketTrade(side){
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
- const market=rows[idx], entry=Number(market.close);
+ const market=rows[idx];
+ let entry=Number(market.close);
  if(!Number.isFinite(entry))return $('status').textContent='Prezzo corrente non disponibile.';
+ // Spread automatico (solo Modalità Prop Firm): il prezzo di entrata effettivo è già
+ // "peggiorato" dello spread, esattamente come un ordine a mercato reale.
+ entry=applySpreadToEntry(side,entry,$('market')?.value||'');
 
  // BUY/SELL "al prezzo attuale" devono aprire la posizione SEMPRE, anche se nelle caselle
  // SL/TP è rimasto un valore di una bozza precedente incompatibile con il lato scelto (es.
@@ -8402,7 +8459,7 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
    }
    const pos={
      id:Date.now()+Math.random(),
-     asset,side:p.side,entry:p.entry,sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
+     asset,side:p.side,entry:applySpreadToEntry(p.side,p.entry,asset),sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
      lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:0,startTime:p.startTime||Date.now(),
      openTF:currentTF,marginUsed:requiredMargin
    };
@@ -8507,7 +8564,7 @@ async function pollBackgroundLiveSession(sessionKey){
      toActivate.forEach(p=>{
        const requiredMargin=marginForLots(p.lots,p.entry,asset);
        if(requiredMargin>freeMarginForSession(session)+1e-9)return; // margine insufficiente: scartato
-       const pos={ id:Date.now()+Math.random(), asset, side:p.side, entry:p.entry, sl:p.sl, tp:p.tp,
+       const pos={ id:Date.now()+Math.random(), asset, side:p.side, entry:applySpreadToEntry(p.side,p.entry,asset,sessionKey==='live_propfirm'), sl:p.sl, tp:p.tp,
          origin:'PENDING', kind:p.kind||'LIMIT', lots:p.lots, risk:0, dist:0, hasRiskModel:false,
          start:0, startTime:p.startTime||Date.now(), openTF:currentTF, marginUsed:requiredMargin };
        session.positions=session.positions||[]; session.positions.push(pos);
