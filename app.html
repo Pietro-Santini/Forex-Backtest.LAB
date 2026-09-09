@@ -800,7 +800,7 @@ tr.otherAssetRow td:last-child{opacity:1}
         <option value="backtest_propfirm">🛡️📼 Storico PF</option>
         <option value="live_propfirm">🛡️🔴 Live PF</option>
       </select>
-    </th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
+    </th><th>Side</th><th>Lotti</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
  <tbody id="journal"></tbody></table>
 </div>
 </main>
@@ -2932,7 +2932,7 @@ function update(){
    const tAsset=t.asset||'—';
    const otherAsset=t.asset&&currentAssetKey&&t.asset!==currentAssetKey;
    const modeTag=JOURNAL_MODE_TAGS[t.mode]||'📼 Storico';
-   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${modeTag}</td><td>${t.side}</td><td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.sl)}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
+   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${modeTag}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPrice(t.entry)}</td><td>${fmtPrice(t.sl)}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+(t.pct!=null?t.pct.toFixed(2):'0.00')}%</td>`+
@@ -4004,7 +4004,8 @@ function drawTradeHighlight(ctx,y,pad,cw,n,start,w,h){
  ctx.setLineDash([]);
  ctx.restore();
  const lines=[
-   `Durata: ${fmtDurationMs(t.durationMs)}`
+   `Durata: ${fmtDurationMs(t.durationMs)}`,
+   `Lottaggio: ${t.lots!=null?t.lots.toFixed(2)+' lot':'—'}`
  ];
  ctx.save();
  ctx.font='bold 10px Arial';
@@ -4260,7 +4261,7 @@ function draw(){
        // Se un'altra etichetta (di un'altra posizione/ordine) occupa già questa zona (es. dopo
        // uno zoom che avvicina due prezzi), la casella si sposta automaticamente in verticale
        // per non sovrapporsi, invece di scriverci sopra.
-       const txt=pos.side, tw=ctx.measureText(txt).width, boxH=13;
+       const txt=pos.side+(pos.lots!=null?' '+pos.lots.toFixed(2)+' lot':''), tw=ctx.measureText(txt).width, boxH=13;
        const adjY=placeLabelY(pad.l+4,tw+8,y(pos.entry)-6-11,boxH,pad.t,h-pad.b);
        ctx.fillText(txt,pad.l+6,adjY+11);
      }
@@ -4297,6 +4298,7 @@ function draw(){
        ownerKey:'pos:'+pos.id,originIdx:openIdx,entry:pos.entry,sl:liveSl,tp:liveTp,
        pad,cw,n,start,w,y,
        tooltipLines:[
+         `Lottaggio: ${pos.lots!=null?pos.lots.toFixed(2)+' lot':'—'}`,
          `Aperto P&L: ${Number.isFinite(liveVal)?euro(liveVal):'—'}`,
          `Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`
        ]
@@ -5416,8 +5418,11 @@ function flashInsufficient(){
 }
 function refreshTradeRiskModel(){
  if(!active)return;
- const lots=getLotSize();
- active.lots=lots;
+ // IMPORTANTE (richiesto esplicitamente): il lottaggio di una posizione GIA' APERTA è fisso al
+ // momento dell'apertura e non deve mai più cambiare da qui — si ricalcolano solo margine e
+ // rischio in base al lottaggio GIA' registrato sulla posizione (active.lots), MAI a quello che
+ // si trova nella casella "Lottaggio" (quella riguarda solo il PROSSIMO ordine, non uno aperto).
+ const lots=active.lots;
  active.marginUsed=marginForLots(lots,active.entry);
  if(active.sl!=null){
    active.dist=Math.abs(active.entry-active.sl);
@@ -5906,7 +5911,7 @@ async function jumpToTradeOnChart(tradeIndex){
  const risk=Math.abs(t.entry-(t.sl!=null?t.sl:t.entry));
  const reward=Math.abs((t.tp!=null?t.tp:t.entry)-t.entry);
  const rr=(t.sl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
- highlightedTrade={tradeIndex,openIdx,closeIdx:hasClose?closeIdx:null,entry:t.entry,exit:t.exit,side:t.side,pl:t.pl,pips:t.pips,rr,durationMs};
+ highlightedTrade={tradeIndex,openIdx,closeIdx:hasClose?closeIdx:null,entry:t.entry,exit:t.exit,side:t.side,pl:t.pl,pips:t.pips,rr,durationMs,lots:t.lots};
  draw();update();
  $('status').textContent=`Vista spostata sull'operazione #${tradeIndex+1}${t.asset?' ('+t.asset+')':''} (${t.side} ${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}).`;
 }
@@ -7555,7 +7560,9 @@ $('pendingOrdersTbl').addEventListener('click',async e=>{
 $('lots').addEventListener('change',()=>{
  const v=getLotSize();
  $('lots').value=v;
- if(active){active.lots=v;refreshTradeRiskModel();update();}
+ // NON tocca più active.lots: una posizione già aperta ha il lottaggio fisso a quando è stata
+ // aperta. Questa casella riguarda solo il PROSSIMO ordine a mercato (o l'ordine pendente, che
+ // ha comunque una casella Lottaggio dedicata separata, lotsPending).
 });
 $('risk').addEventListener('input',refreshRiskSuggestion);
 $('capital').addEventListener('input',()=>{
@@ -7574,7 +7581,8 @@ $('applySuggestedLot').addEventListener('click',()=>{
  const s=computeSuggestedLots();
  if(!s)return;
  $('lots').value=s.lots;
- if(active){active.lots=s.lots;refreshTradeRiskModel();}
+ // Anche qui: MAI su una posizione già aperta, solo sul PROSSIMO ordine (vedi nota sopra su
+ // refreshTradeRiskModel/casella Lottaggio).
  $('status').textContent=`Lottaggio impostato a ${s.lots.toFixed(2)} lot (consigliato per rischiare ${s.riskPct.toFixed(2)}%).`;
  update();
 });
