@@ -1156,7 +1156,29 @@ function captureChartViewInto(map,assetKey){
 function captureCurrentAssetChartView(sessionKey){
  if(!assetChartViews[sessionKey])assetChartViews[sessionKey]={};
  if(currentAssetKey)captureChartViewInto(assetChartViews[sessionKey],currentAssetKey);
- idbPut('assetChartViews',assetChartViews); // persistenza immediata (cambio sessione o asset)
+ scheduleAssetChartViewsPersist();
+}
+// Scrittura su IndexedDB DEBOUNCED (800ms, stessa cadenza di scheduleSave()): questa funzione
+// viene ora chiamata anche molto spesso — ad ogni pan/zoom manuale del grafico, non solo al
+// cambio asset/sessione (vedi scheduleAssetChartViewCapture() dentro draw()) — quindi scrivere
+// su IndexedDB ad ogni chiamata sarebbe eccessivo. La fotografia in memoria (sopra) resta
+// invece sempre immediata.
+let assetChartViewsPersistTimer=null;
+function scheduleAssetChartViewsPersist(){
+ if(assetChartViewsPersistTimer)clearTimeout(assetChartViewsPersistTimer);
+ assetChartViewsPersistTimer=setTimeout(()=>{ idbPut('assetChartViews',assetChartViews); },800);
+}
+// Cattura la vista corrente ad ogni interazione che la cambia (pan, zoom, ecc.), non solo al
+// cambio asset/sessione: RICHIESTO ESPLICITAMENTE — se l'utente sposta liberamente il grafico
+// in Live e lo lascia lì (followLatest passa a false, vedi freezeViewIfNeeded), quella
+// posizione deve restare "fissata" anche dopo un ricaricamento della pagina o una
+// risincronizzazione periodica dello storico Live (vedi il controllo in
+// __loadLiveHistoryFromCapitalImpl), non solo finché si resta su questa sessione.
+let assetChartViewCaptureTimer=null;
+function scheduleAssetChartViewCapture(){
+ if(!currentAssetKey)return;
+ if(assetChartViewCaptureTimer)clearTimeout(assetChartViewCaptureTimer);
+ assetChartViewCaptureTimer=setTimeout(()=>{ captureCurrentAssetChartView(currentMode()); },500);
 }
 // Sessioni salvate PRIMA di questa modifica avevano una mappa PIATTA {asset:vista}, condivisa
 // fra Storico e Live: la usiamo come base per "backtest" (la sessione più comune) invece di
@@ -4642,6 +4664,10 @@ function draw(){
    }
  }
  updateDrawTextHint&&updateDrawTextHint();
+ // Cattura (debounced) la vista corrente ad ogni ridisegno: copre pan/zoom manuali senza
+ // dover agganciare separatamente ogni singolo gesto (mouse, touch, rotellina, trascinamento
+ // della scala prezzi) — vedi scheduleAssetChartViewCapture().
+ scheduleAssetChartViewCapture();
 }
 function chartGeometry(){
  const c=$('chart'),rect=c.getBoundingClientRect(),w=rect.width,h=rect.height;
@@ -8147,10 +8173,33 @@ async function __loadLiveHistoryFromCapitalImpl(asset){
  drawings=[];selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
  historyUndo=[];historyRedo=[];
  // A differenza del caricamento di un CSV storico (che parte dalla prima candela per il
- // replay), in modalità Live vogliamo partire dall'ULTIMA candela ricevuta (il presente).
- masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ // replay), in modalità Live si parte di norma dall'ULTIMA candela ricevuta (il presente).
+ // ECCEZIONE RICHIESTA ESPLICITAMENTE ("fix position a grafico"): se l'utente ha spostato
+ // liberamente il grafico e l'ha lasciato lì (followLatest:false nella vista salvata per
+ // questo asset in questa sessione), quella posizione resta "fissata" e va ripristinata
+ // ESATTAMENTE così anche qui — non solo al primo caricamento, ma ad OGNI chiamata di questa
+ // funzione: risincronizzazione periodica della candela, riconnessione, o ricaricamento della
+ // pagina. Senza questo controllo, ogni risincronizzazione (una al minuto in condizioni
+ // normali) riportava forzatamente la vista sull'ultima candela, cancellando la posizione
+ // manuale nel giro di pochi secondi anche se l'utente non aveva mai ricaricato la pagina.
+ const savedView=(assetChartViews[currentMode()]||{})[asset];
+ const hasPinnedView=savedView && savedView.followLatest===false;
+ if(hasPinnedView){
+   masterTime=Number.isFinite(savedView.masterTime)?savedView.masterTime:(baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null);
+ }else{
+   masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ }
  rebuildRows();
- viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ if(hasPinnedView){
+   viewEnd=Number.isFinite(savedView.viewEnd)?Math.max(0,Math.min(savedView.viewEnd,rows.length-1)):idx;
+   followLatest=false;
+   priceZoomFactor=savedView.priceZoomFactor||1;
+   viewPriceLo=savedView.viewPriceLo??null; viewPriceHi=savedView.viewPriceHi??null;
+   autoFitWidth=savedView.autoFitWidth!==false;
+   visibleCount=Number.isFinite(savedView.visibleCount)?savedView.visibleCount:idealVisibleCount();
+ }else{
+   viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ }
  update();draw();
  console.log(`[LoadHistory] merge+rebuildRows+draw completati in ${(performance.now()-__tMergeStart).toFixed(0)}ms (${baseRows.length.toLocaleString('it-IT')} candele in baseRows)`);
  // Stessa FIX del cambio ASSET storico: riallinea la strip dei chip indicatori dopo il
