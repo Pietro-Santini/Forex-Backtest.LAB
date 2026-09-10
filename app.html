@@ -874,10 +874,14 @@ function statsTrades(){
 // taggato per sessione, vedi modeTag più sotto).
 let sessionByMode={backtest:null,live:null,backtest_propfirm:null,live_propfirm:null};
 function captureCurrentModeSnapshot(){
- // I disegni sono ora parte della fotografia della sessione (richiesto esplicitamente): ogni
- // sessione (Storico/Live/Storico+PF/Live+PF) tiene i PROPRI disegni, separati dalle altre 3,
- // esattamente come già succede per posizioni/ordini/equity.
- sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings};
+ // I disegni sono parte della fotografia della sessione: ogni sessione (Storico/Live/
+ // Storico+PF/Live+PF) tiene i PROPRI disegni, separati dalle altre 3, esattamente come già
+ // succede per posizioni/ordini/equity. Il CAPITALE visualizzato ($('capital')) è anch'esso
+ // per-sessione (richiesto dallo Step 1 originale: ogni sessione ricorda il proprio) — senza
+ // salvarlo qui, tornare a una sessione dopo averne visitata un'altra con un capitale diverso
+ // (es. una Challenge Prop Firm da 50.000€) mostrava ancora il valore lasciato dall'ultima
+ // sessione visitata invece del proprio.
+ sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings,capital:$('capital').value,initialCapital:propFirmChallengeInitialCapital};
 }
 function restoreModeSnapshot(mode){
  const snap=sessionByMode[mode];
@@ -886,9 +890,19 @@ function restoreModeSnapshot(mode){
    active=snap.active||null;
    equity=(snap.equity&&snap.equity.length)?snap.equity:[num($('capital').value)||10000];
    drawings=snap.drawings||[];
+   if(snap.capital!=null && $('capital'))$('capital').value=snap.capital;
  }else{
    positions=[]; pendingOrders=[]; active=null; equity=[num($('capital').value)||10000];
    drawings=[];
+ }
+ // STEP 2: il capitale INIZIALE della Challenge (fisso per tutta la sua durata, usato dal
+ // motore di rischio per il Max Drawdown) va ripristinato/azzerato insieme al resto SOLO per
+ // le due sessioni Prop Firm — per Storico/Live "semplici" non significa nulla.
+ if(mode==='backtest_propfirm'||mode==='live_propfirm'){
+   propFirmChallengeInitialCapital=(snap&&Number.isFinite(snap.initialCapital))?snap.initialCapital:(num($('capital').value)||10000);
+   propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+ }else{
+   propFirmChallengeInitialCapital=null;
  }
  // Cambiando sessione, selezione/cronologia annulla-ripristina dei disegni non hanno più senso
  // per quelli della sessione che si lascia: azzerate qui, in un unico punto valido per tutti i
@@ -1044,10 +1058,15 @@ async function startNewPropFirmChallenge(initialCapital){
   if(!Number.isFinite(initialCapital) || initialCapital<=0) initialCapital = 10000;
   const key = pendingPropFirmKey;
   await withLoadingOverlay('Creazione Challenge Prop Firm…', async()=>{
-    positions=[]; active=null; pendingOrders=[];
+    positions=[]; active=null; pendingOrders=[]; drawings=[];
     equity=[initialCapital];
     if($('capital')) $('capital').value=String(initialCapital);
-    if(key){ sessionByMode[key]={positions,pendingOrders,active,equity}; statsBaselineByMode[key]=0; }
+    // STEP 2: capitale iniziale fisso della Challenge (usato dal motore di rischio per il Max
+    // Drawdown) e azzeramento del motore di rischio (nuova Challenge = nuova giornata/nessuna
+    // violazione pregressa).
+    propFirmChallengeInitialCapital=initialCapital;
+    propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+    if(key){ sessionByMode[key]={positions,pendingOrders,active,equity,drawings,capital:String(initialCapital),initialCapital}; statsBaselineByMode[key]=0; }
     finalizePropFirmModeChange();
   });
   pendingPropFirmKey = null;
@@ -1073,6 +1092,135 @@ function finalizePropFirmModeChange(){
   updatePropFirmBodyClass();
   update(); draw();
   scheduleSave();
+}
+
+// ===================================================================================
+// STEP 2 — MOTORE DELLE REGOLE FTMO (Risk Management) — Daily Drawdown, Max Drawdown, News
+// ===================================================================================
+// Stato del motore di rischio. Tutto qui è SOLO per la Challenge Prop Firm attualmente attiva
+// (backtest_propfirm o live_propfirm): appena si esce dalla Modalità Prop Firm questi valori
+// non contano più nulla, e vengono ricaricati/azzerati da restoreModeSnapshot() e
+// startNewPropFirmChallenge() ogni volta che si (ri)entra in una delle due Challenge.
+let propFirmChallengeInitialCapital = null; // capitale iniziale della Challenge, FISSO per tutta la sua durata (Max Drawdown)
+let propFirmDailyBaselineDate = null;       // giorno (YYYY-MM-DD, fuso Europe/Rome) a cui si riferisce il saldo qui sotto
+let propFirmDailyStartBalance = null;       // saldo (SENZA il flottante delle posizioni aperte) all'inizio di quel giorno
+// Quando non-null, la Challenge è "chiusa" per violazione di una regola: {rule, message,
+// timestamp, valori numerici della violazione}. Step 3 userà questo oggetto per l'overlay
+// drammatico a tutta pagina; per ora (Step 2) blocchiamo l'operatività e lo segnaliamo nello
+// stato in fondo alla pagina, come placeholder in attesa dell'overlay dedicato.
+let propFirmViolation = null;
+
+// Data (YYYY-MM-DD) nel fuso orario di Francoforte/Milano (Europe/Rome segue automaticamente
+// CET/CEST con l'ora legale, esattamente come richiesto — "mezzanotte CE(S)T").
+function cetDateKey(ms){
+  return new Date(ms).toLocaleDateString('en-CA',{timeZone:'Europe/Rome'}); // 'en-CA' produce direttamente YYYY-MM-DD
+}
+// "Adesso", ai fini del motore di rischio: in Live è l'orologio reale; in Storico (replay) è
+// l'orario SIMULATO della candela corrente (masterTime) — così il Daily Drawdown segue il
+// calendario della riproduzione, non quello reale del computer, esattamente come dovrebbe.
+function currentPropFirmNowMs(){
+  if(liveModeActive) return Date.now();
+  return Number.isFinite(masterTime) ? masterTime : Date.now();
+}
+// Saldo "chiuso" della Challenge: capitale iniziale + P/L di tutti i trade Prop Firm già
+// chiusi in QUESTA combinazione — cioè l'ultimo valore di equity (stessa fonte già usata da
+// statsTrades()/il pannello conto). NON include il flottante delle posizioni ancora aperte.
+function propFirmClosedBalance(){
+  return (equity && equity.length) ? equity[equity.length-1] : (propFirmChallengeInitialCapital||0);
+}
+// P/L flottante di TUTTE le posizioni attualmente aperte in questa Challenge (anche quelle su
+// asset diversi da quello a grafico ora, usando livePriceByAsset come già fa il resto dell'app).
+function propFirmFloatingPL(){
+  let pl=0;
+  (positions||[]).forEach(p=>{
+    const price=(p.asset===currentAssetKey)?currentPrice():livePriceByAsset[p.asset];
+    if(Number.isFinite(price)) pl+=calculateForexPL(p.side,p.entry,price,p.lots,p.asset);
+  });
+  return pl;
+}
+// Se è iniziato un nuovo giorno (secondo currentPropFirmNowMs) rispetto all'ultimo controllo,
+// il saldo di apertura giornata si "fotografa" di nuovo qui — è il riferimento del Daily
+// Drawdown 5%, che si azzera così ogni giorno come da regole FTMO.
+function ensurePropFirmDailyBaseline(){
+  const nowMs=currentPropFirmNowMs();
+  const key=cetDateKey(nowMs);
+  if(propFirmDailyBaselineDate!==key){
+    propFirmDailyBaselineDate=key;
+    propFirmDailyStartBalance=propFirmClosedBalance();
+  }
+}
+// Punto UNICO di controllo delle regole: va richiamato ad OGNI tick del grafico (sia replay
+// storico che sessione live) e ad ogni apertura/chiusura di un trade — per semplicità ed
+// affidabilità è agganciato dentro update() (vedi più sotto), che viene già chiamata da tutti
+// questi punti nell'app, invece di sparpagliare la chiamata manualmente in ogni funzione.
+function checkPropFirmRules(){
+  if(!isPropFirmMode || propFirmViolation) return; // già chiusa per violazione: non ricontrolliamo più
+  if(!Number.isFinite(propFirmChallengeInitialCapital) || propFirmChallengeInitialCapital<=0) return;
+  ensurePropFirmDailyBaseline();
+  const closedBalance=propFirmClosedBalance();
+  const floating=propFirmFloatingPL();
+  const equityNow=closedBalance+floating;
+
+  // --- Daily Drawdown 5%: perdita fluttuante + chiusa nella giornata vs saldo apertura giorno ---
+  const dailyLossLimit=propFirmDailyStartBalance*0.05;
+  const dailyLoss=propFirmDailyStartBalance-equityNow; // positivo = in perdita rispetto a stamattina
+  if(dailyLoss>dailyLossLimit){
+    triggerPropFirmViolation('daily',{
+      dailyStartBalance:propFirmDailyStartBalance, equityNow, dailyLoss, dailyLossLimit,
+      dailyLossPct:(dailyLoss/propFirmDailyStartBalance*100)
+    });
+    return;
+  }
+  // --- Maximum Drawdown 10%: equity totale vs capitale iniziale della Challenge ---
+  const maxDrawdownLimit=propFirmChallengeInitialCapital*0.10;
+  const totalLoss=propFirmChallengeInitialCapital-equityNow;
+  if(totalLoss>maxDrawdownLimit){
+    triggerPropFirmViolation('max',{
+      initialCapital:propFirmChallengeInitialCapital, equityNow, totalLoss, maxDrawdownLimit,
+      totalLossPct:(totalLoss/propFirmChallengeInitialCapital*100)
+    });
+    return;
+  }
+}
+// Blocca IMMEDIATAMENTE il simulatore (pausa il replay storico, disconnette lo stream Live) e
+// registra la violazione con i valori numerici al millisecondo, come richiesto. La schermata
+// drammatica a tutta pagina che LEGGE questo oggetto arriva con lo Step 3: per ora (Step 2)
+// mostriamo un avviso chiaro nello stato in fondo alla pagina come segnaposto funzionante.
+function triggerPropFirmViolation(rule,details){
+  propFirmViolation={rule,...details,timestamp:Date.now(),timestampIso:new Date().toISOString()};
+  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';} // pausa il replay storico
+  if(liveModeActive){ disconnectCapitalStream(); if(liveRefreshTimer){clearInterval(liveRefreshTimer);liveRefreshTimer=null;} } // disconnessione Live
+  const ruleLabel=rule==='daily'?'Daily Drawdown (5%)':'Maximum Drawdown (10%)';
+  $('status').textContent=`🛑 CONTO PROP FIRM CHIUSO — violazione regola "${ruleLabel}". Hai infranto le regole di Risk Management della Prop Firm. (La schermata dedicata arriva con lo Step 3 — per ora il simulatore resta bloccato: usa "🛡️ MODALITÀ PROP FIRM" per uscire o ricomincia una nuova Challenge dal modulo capitale.)`;
+  update();draw();
+}
+
+// --- Pratiche Vietate: Trading sulle News (solo sessione Live) -------------------------
+// "Simulalo" (richiesto esplicitamente, nessun calendario economico reale collegato): orari
+// tipici di rilascio di dati macro importanti, fissi ogni giorno, in ora CET/CEST (fuso
+// Europe/Rome, gestisce da solo l'ora legale). Il trading manuale (apertura/chiusura ordini)
+// resta bloccato nei 2 minuti precedenti E successivi a ciascuno di questi orari.
+const PROP_FIRM_SIMULATED_NEWS_TIMES_CET=['08:30','10:00','14:30','16:00'];
+function propFirmNewsBlackoutLabel(nowMs){
+  if(!isPropFirmMode || !liveModeActive) return null; // il blocco vale SOLO in Live, come richiesto
+  const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Rome',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date(nowMs));
+  const hh=parseInt(parts.find(p=>p.type==='hour').value,10), mm=parseInt(parts.find(p=>p.type==='minute').value,10);
+  const nowMinutes=hh*60+mm;
+  for(const t of PROP_FIRM_SIMULATED_NEWS_TIMES_CET){
+    const [h,m]=t.split(':').map(Number);
+    if(Math.abs(nowMinutes-(h*60+m))<=2) return t;
+  }
+  return null;
+}
+// Da richiamare all'inizio di ogni apertura/chiusura ORDINE MANUALE (non le chiusure
+// automatiche per SL/TP, che non sono una "pratica" dell'utente): restituisce true (e scrive
+// già il messaggio di stato) se l'operazione va bloccata, così il chiamante deve solo fare
+// `if(blockedByPropFirmNews())return;` in testa alla propria funzione.
+function blockedByPropFirmNews(){
+  if(propFirmViolation){ $('status').textContent='🛑 Conto Prop Firm chiuso per violazione: nessuna nuova operazione consentita.'; return true; }
+  const blackout=propFirmNewsBlackoutLabel(currentPropFirmNowMs());
+  if(blackout){ $('status').textContent=`🚫 Trading bloccato (regola Prop Firm "No News Trading"): notizia macro simulata delle ${blackout} CET, ±2 minuti.`; return true; }
+  return false;
 }
 
 /* ---- Modulo grafico per la scelta del capitale iniziale della Challenge ---- */
@@ -2864,6 +3012,10 @@ function riskRewardLabel(entry,sl,tp){
  return '1:'+(reward/risk).toFixed(2);
 }
 function update(){
+ // STEP 2: controllo delle regole Prop Firm ad OGNI tick del grafico (update() viene già
+ // chiamata da tutti i punti richiesti: avanzamento replay storico, tick Live, apertura e
+ // chiusura di un trade) — un solo punto d'aggancio invece di sparpagliare la chiamata.
+ if(isPropFirmMode) checkPropFirmRules();
  updateLivePL();
  syncMarketChartSelect();
  refreshRiskSuggestion();
@@ -6124,6 +6276,7 @@ function checkPendingOrders(){
  toActivate.forEach(activatePendingOrder);
 }
 function createPendingOrder(side){
+ if(blockedByPropFirmNews())return; // STEP 2: conto chiuso per violazione, o notizia macro simulata in corso
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
  const entry=num($('pendingEntry').value);
  if(!Number.isFinite(entry))return $('status').textContent="Imposta un prezzo di entrata per l'ordine pendente (anche cliccando ENTRY SUL GRAFICO).";
@@ -6315,6 +6468,7 @@ function refreshTradeLevelUI(){
  }
 }
 function openMarketTrade(side){
+ if(blockedByPropFirmNews())return; // STEP 2: conto chiuso per violazione, o notizia macro simulata in corso
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
  const market=rows[idx];
  let entry=Number(market.close);
@@ -6387,6 +6541,7 @@ $('close').onclick=()=>{
 };
 $('closeAll').onclick=()=>{
  if(!positions.length)return $('status').textContent='Nessuna posizione aperta.';
+ if(blockedByPropFirmNews())return; // STEP 2
  closeAllPositions('MANUAL');
  $('status').textContent='Tutte le posizioni sono state chiuse.';
  draw();update();
@@ -6425,6 +6580,7 @@ $('openPositions').addEventListener('click',async e=>{
      $('status').textContent=`Questa posizione è su ${pos.asset}: seleziona quell'ASSET dal menu in alto per chiuderla al prezzo corretto.`;
      return;
    }
+   if(blockedByPropFirmNews())return; // STEP 2
    const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();
  }
 });
