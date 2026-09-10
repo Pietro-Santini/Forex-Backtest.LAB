@@ -470,6 +470,46 @@ tr.otherAssetRow td:last-child{opacity:1}
   </div>
 </div>
 
+<!-- Modulo "Codice personalizzato": incolla uno script in stile Pine Script (TradingView) e
+     lo applica come indicatore sul grafico. Non è un compilatore Pine completo: copre un
+     sottoinsieme (variabili, prezzi di base, storico [n], ta.*/math.*, plot()) — vedi il testo
+     esplicativo dentro il modulo per l'elenco esatto. -->
+<div id="customScriptModalOverlay" class="fbModalOverlay" style="display:none">
+  <div class="fbModalBox" style="max-width:640px">
+    <div class="fbModalHeader"><h3>🧩 Codice personalizzato</h3><button id="customScriptCloseBtn" class="fbModalClose" title="Annulla">✕</button></div>
+    <div class="liveLoginBody">
+      <div style="font-size:12px;color:#9aa4b2;line-height:1.55">
+        Incolla qui un codice in stile <b>Pine Script</b> (TradingView). È supportato un sottoinsieme, non un compilatore Pine completo:
+        variabili (<code>nome = espressione</code>, <code>var nome = espressione</code>), i prezzi <code>open high low close volume hl2 hlc3 ohlc4 bar_index</code>,
+        lo storico con <code>nome[1]</code>, le funzioni <code>ta.sma ta.ema ta.rma ta.wma ta.highest ta.lowest ta.stdev ta.change</code> e <code>math.abs/max/min/round/sqrt/pow</code>,
+        operatori aritmetici/di confronto/logici e il ternario <code>? :</code>, e una o più righe <code>plot(espressione, title="...", color=color.blue, linewidth=2)</code>.
+        Script con <code>strategy()</code>, <code>input()</code>, funzioni definite dall'utente o array non sono supportati.
+      </div>
+      <label>
+        <span class="block text-[11px] text-gray-500 uppercase tracking-wide mb-1">Nome dello script</span>
+        <input id="customScriptName" type="text" placeholder="Es. Il mio incrocio di medie">
+      </label>
+      <label>
+        <span class="block text-[11px] text-gray-500 uppercase tracking-wide mb-1">Codice</span>
+        <textarea id="customScriptCode" rows="10" spellcheck="false" placeholder="fastMA = ta.sma(close, 9)
+slowMA = ta.ema(close, 21)
+plot(fastMA, title=&quot;Fast&quot;, color=color.blue, linewidth=2)
+plot(slowMA, title=&quot;Slow&quot;, color=color.orange)" style="width:100%;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;background:#0b1117;color:#e8edf3;border:1px solid #2b3541;border-radius:8px;padding:10px;resize:vertical"></textarea>
+      </label>
+      <div id="customScriptError" style="display:none;color:#f23645;font-size:12px;white-space:pre-wrap;background:rgba(242,54,69,.08);border:1px solid rgba(242,54,69,.3);border-radius:8px;padding:8px"></div>
+      <div>
+        <span class="block text-[11px] text-gray-500 uppercase tracking-wide mb-1">Script salvati</span>
+        <div id="customScriptSavedList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+      </div>
+    </div>
+    <div class="liveLoginFooter">
+      <button id="customScriptCancelBtn" class="toolBtn">Annulla</button>
+      <button id="customScriptSaveAsBtn" class="toolBtn">💾 Salva con nome</button>
+      <button id="customScriptApplyBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">✅ Applica al grafico</button>
+    </div>
+  </div>
+</div>
+
 <!-- STEP 1a bis — guida interna (nessun link esterno da seguire): spiega, dentro l'app, dove
      trovare su Capital.com le 3 credenziali richieste dal popup di login. -->
 <div id="liveGuideModalOverlay" class="fbModalOverlay" style="display:none">
@@ -726,6 +766,7 @@ tr.otherAssetRow td:last-child{opacity:1}
      <option value="ema_ind">Moving Average Exponential [EMA]</option>
      <option value="bsl_ssl_fvg">Buyside &amp; Sellside Liquidity + Aligned FVGs [LuxAlgo]</option>
    </select></span>
+   <button id="openCustomScriptBtn" class="toolBtn" title="Incolla un codice in stile Pine Script (TradingView) e applicalo come indicatore personalizzato">🧩 Codice personalizzato</button>
    <button id="toggleIndicatorsListBtn" class="toolBtn" style="display:none" title="Mostra/nascondi l'elenco degli indicatori attivi">👁 Elenco indicatori</button>
  </div>
  <div id="activeIndicators" class="drawToolbar" style="display:none;margin-top:8px"></div>
@@ -3730,8 +3771,386 @@ const INDICATOR_DEFS={
      drawSide(st.liqB,p.buyOn,p.colorBuy||'#4caf50','BSL');
      drawSide(st.liqS,p.sellOn,p.colorSell||'#f23645','SSL');
    }
+ } ,
+ custom_script:{
+   label:'Script personalizzato',
+   defaultParams:()=>({code:'',name:'Script personalizzato'}),
+   // ===================================================================================
+   // "PINE-LIKE": un piccolo sottoinsieme in stile Pine Script (TradingView), NON un
+   // compilatore Pine completo — copre variabili, i prezzi di base, le funzioni ta.*/math.*
+   // più comuni e plot(), a sufficienza per la maggior parte degli indicatori "a linea"
+   // semplici. Costrutti Pine reali più avanzati (strategy(), input(), array, sicurezza
+   // multi-timeframe, funzioni definite dall'utente, ecc.) NON sono supportati: lo script
+   // viene rifiutato con un errore chiaro invece di essere eseguito a metà.
+   compute(rows, upToIdx, ind){
+     const p=ind.params, st=ind.calc;
+     if(st.ref!==rows || st.builtCode!==p.code){
+       st.ref=rows; st.builtCode=p.code; st.builtTo=-1; st.error=null;
+       st.vars={}; st.callState={};
+       try{ st.compiled=compilePineLikeScript(p.code); st.plots=st.compiled.plots.map(pl=>({...pl,values:[]})); }
+       catch(e){ st.compiled=null; st.plots=[]; st.error=e.message||String(e); }
+     }
+     if(!st.compiled)return;
+     for(let i=st.builtTo+1;i<=upToIdx;i++){
+       try{ runPineLikeBar(st.compiled,rows,i,st); }
+       catch(e){ st.error=e.message||String(e); st.builtTo=upToIdx; return; }
+     }
+     st.builtTo=upToIdx;
+   },
+   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y){
+     const st=ind.calc;
+     if(!st||!st.plots)return;
+     st.plots.forEach(pl=>{
+       ctx.save();ctx.strokeStyle=pl.color||'#3ea6ff';ctx.lineWidth=pl.linewidth||1.6;ctx.beginPath();
+       let started=false;
+       const from=Math.max(0,dataStart-2), to=Math.min(st.builtTo,dataEnd+2);
+       for(let i=from;i<=to;i++){
+         const v=pl.values[i]; if(!Number.isFinite(v)){started=false;continue;}
+         const xx=xAbs(i), yy=y(v);
+         if(!started){ctx.moveTo(xx,yy);started=true;} else ctx.lineTo(xx,yy);
+       }
+       ctx.stroke();ctx.restore();
+     });
+   }
  }
+
 };
+
+// ===================================================================================
+// MINI-INTERPRETE "PINE-LIKE" per gli script personalizzati (sezione "Codice
+// personalizzato" accanto ad "Aggiungi indicatore"). Sottoinsieme deliberatamente
+// piccolo, NON un compilatore Pine Script v5 completo:
+//   - commenti  // ...
+//   - assegnazioni:      nome = espressione        (var nome = espressione per inizializzare
+//                         una sola volta, come "var" in Pine, invece di ricalcolare ad ogni barra)
+//   - prezzi di base:    open, high, low, close, volume, hl2, hlc3, ohlc4, bar_index
+//   - storico:           nome[1], close[2], ecc. (n costante, solo su identificatori semplici)
+//   - operatori:         +  -  *  /  %  >  <  >=  <=  ==  !=  &&  ||  ?:  (ternario)
+//   - funzioni:          ta.sma  ta.ema  ta.rma  ta.wma  ta.highest  ta.lowest  ta.stdev
+//                        ta.change  math.abs  math.max  math.min  math.round  math.sqrt
+//   - colori:            color.red/green/blue/orange/purple/yellow/white/black/aqua/gray,
+//                        oppure #rrggbb
+//   - plot(espressione, title="...", color=..., linewidth=N)
+// Il primo argomento delle funzioni ta.* deve essere un prezzo di base oppure una variabile
+// già assegnata in una riga precedente (non un'espressione qualsiasi) — è la semplificazione
+// che rende possibile calcolare le medie mobili senza un motore di serie storiche completo.
+// ===================================================================================
+const PINE_COLOR_NAMES={
+  red:'#f23645',green:'#089981',blue:'#2962ff',orange:'#ff9800',purple:'#9c27b0',
+  yellow:'#ffeb3b',white:'#ffffff',black:'#000000',aqua:'#00bcd4',gray:'#787b86',grey:'#787b86',
+  lime:'#00e676',maroon:'#800000',navy:'#000080',olive:'#808000',silver:'#c0c0c0',teal:'#009688',
+  fuchsia:'#e040fb'
+};
+function pineTokenize(src){
+  const toks=[]; let i=0;
+  const isIdentStart=c=>/[A-Za-z_]/.test(c), isIdentPart=c=>/[A-Za-z0-9_.]/.test(c);
+  while(i<src.length){
+    const c=src[i];
+    if(c===' '||c==='\t'||c==='\r'){i++;continue;}
+    if(c==='/'&&src[i+1]==='/'){ while(i<src.length&&src[i]!=='\n')i++; continue; }
+    if(c==='\n'){ toks.push({t:'nl'}); i++; continue; }
+    if(c==='#'){ let j=i+1; while(j<src.length&&/[0-9a-fA-F]/.test(src[j]))j++; toks.push({t:'color',v:src.slice(i,j)}); i=j; continue; }
+    if(/[0-9]/.test(c)||(c==='.'&&/[0-9]/.test(src[i+1]||''))){
+      let j=i; while(j<src.length&&/[0-9.]/.test(src[j]))j++;
+      toks.push({t:'num',v:parseFloat(src.slice(i,j))}); i=j; continue;
+    }
+    if(c==='"'||c==="'"){
+      let j=i+1; while(j<src.length&&src[j]!==c)j++;
+      toks.push({t:'str',v:src.slice(i+1,j)}); i=j+1; continue;
+    }
+    if(isIdentStart(c)){
+      let j=i+1; while(j<src.length&&isIdentPart(src[j]))j++;
+      toks.push({t:'ident',v:src.slice(i,j)}); i=j; continue;
+    }
+    const two=src.slice(i,i+2);
+    if(['>=','<=','==','!=','&&','||'].includes(two)){ toks.push({t:'op',v:two}); i+=2; continue; }
+    if('+-*/%()[],?:='.includes(c)){ toks.push({t:'op',v:c}); i++; continue; }
+    if('<>'.includes(c)){ toks.push({t:'op',v:c}); i++; continue; }
+    throw new Error('Carattere non riconosciuto: "'+c+'"');
+  }
+  toks.push({t:'eof'});
+  return toks;
+}
+// Parser a discesa ricorsiva per le espressioni, con precedenza standard:
+// ternario ? : > || > && > confronti > + - > * / % > unario > primario/chiamate/indice storico.
+function pineParseExpr(toks,pos){
+  function peek(){ return toks[pos.i]; }
+  function eatOp(v){ const t=peek(); if(t.t==='op'&&t.v===v){pos.i++;return true;} return false; }
+  function expectOp(v){ if(!eatOp(v))throw new Error('Atteso "'+v+'"'); }
+  function parsePrimary(){
+    const t=peek();
+    if(t.t==='num'){ pos.i++; return {type:'num',value:t.v}; }
+    if(t.t==='str'){ pos.i++; return {type:'str',value:t.v}; }
+    if(t.t==='color'){ pos.i++; return {type:'color',value:t.v}; }
+    if(t.t==='op'&&t.v==='('){ pos.i++; const e=parseTernary(); expectOp(')'); return e; }
+    if(t.t==='op'&&t.v==='-'){ pos.i++; return {type:'unary',op:'-',expr:parseUnary()}; }
+    if(t.t==='op'&&t.v==='!'){ pos.i++; return {type:'unary',op:'!',expr:parseUnary()}; }
+    if(t.t==='ident'){
+      pos.i++;
+      let name=t.v;
+      if(name.startsWith('color.')){
+        const key=name.slice(6);
+        return {type:'color',value:PINE_COLOR_NAMES[key]||'#3ea6ff'};
+      }
+      if(peek().t==='op'&&peek().v==='('){
+        pos.i++;
+        const args=[];
+        if(!(peek().t==='op'&&peek().v===')')){
+          args.push(parseArg());
+          while(eatOp(','))args.push(parseArg());
+        }
+        expectOp(')');
+        return {type:'call',name,args};
+      }
+      let node={type:'ident',name};
+      if(peek().t==='op'&&peek().v==='['){
+        pos.i++;
+        const idxTok=peek();
+        if(idxTok.t!=='num')throw new Error('Indice storico "['+name+'[...]]" deve essere un numero costante');
+        pos.i++;
+        expectOp(']');
+        node={type:'history',name,offset:Math.max(0,Math.round(idxTok.v))};
+      }
+      return node;
+    }
+    throw new Error('Espressione non valida vicino a: '+JSON.stringify(t));
+  }
+  // Argomenti con eventuale "nome=valore" (per plot(...) e per riconoscere/ignorare parametri
+  // nominati non supportati senza far fallire l'intero script).
+  function parseArg(){
+    if(peek().t==='ident' && toks[pos.i+1] && toks[pos.i+1].t==='op' && toks[pos.i+1].v==='='){
+      const name=peek().v; pos.i+=2;
+      return {named:name, value:parseTernary()};
+    }
+    return {named:null, value:parseTernary()};
+  }
+  function parseUnary(){ return parsePrimary(); }
+  function parseMul(){
+    let left=parseUnary();
+    while(true){
+      const t=peek();
+      if(t.t==='op'&&(t.v==='*'||t.v==='/'||t.v==='%')){ pos.i++; left={type:'binop',op:t.v,left,right:parseUnary()}; }
+      else break;
+    }
+    return left;
+  }
+  function parseAdd(){
+    let left=parseMul();
+    while(true){
+      const t=peek();
+      if(t.t==='op'&&(t.v==='+'||t.v==='-')){ pos.i++; left={type:'binop',op:t.v,left,right:parseMul()}; }
+      else break;
+    }
+    return left;
+  }
+  function parseCompare(){
+    let left=parseAdd();
+    while(true){
+      const t=peek();
+      if(t.t==='op'&&['>','<','>=','<=','==','!='].includes(t.v)){ pos.i++; left={type:'binop',op:t.v,left,right:parseAdd()}; }
+      else break;
+    }
+    return left;
+  }
+  function parseAnd(){
+    let left=parseCompare();
+    while(eatOp('&&')) left={type:'binop',op:'&&',left,right:parseCompare()};
+    return left;
+  }
+  function parseOr(){
+    let left=parseAnd();
+    while(eatOp('||')) left={type:'binop',op:'||',left,right:parseAnd()};
+    return left;
+  }
+  function parseTernary(){
+    const cond=parseOr();
+    if(eatOp('?')){
+      const a=parseTernary(); expectOp(':'); const b=parseTernary();
+      return {type:'ternary',cond,a,b};
+    }
+    return cond;
+  }
+  return parseTernary();
+}
+// Compila il codice sorgente in una lista di istruzioni (assegnazioni + plot) pronte da
+// eseguire ripetutamente, una volta per barra, senza dover ri-analizzare il testo ogni volta.
+function compilePineLikeScript(code){
+  if(!code||!code.trim())throw new Error('Lo script è vuoto: scrivi almeno un plot(...).');
+  const lines=code.split('\n');
+  const statements=[]; let callIdCounter=0;
+  for(let ln=0; ln<lines.length; ln++){
+    let raw=lines[ln];
+    const commentAt=raw.indexOf('//'); if(commentAt>=0)raw=raw.slice(0,commentAt);
+    const line=raw.trim();
+    if(!line)continue;
+    if(/^(\/\/@version|study\(|indicator\(|strategy\()/.test(line))continue; // righe di intestazione Pine ignorate, non bloccanti
+    const toks=pineTokenize(line);
+    const pos={i:0};
+    if(toks[0].t==='ident' && toks[0].v==='plot'){
+      pos.i=1;
+      if(!(toks[pos.i].t==='op'&&toks[pos.i].v==='('))throw new Error('Riga '+(ln+1)+': atteso "(" dopo plot');
+      pos.i++;
+      const args=[]; 
+      if(!(toks[pos.i].t==='op'&&toks[pos.i].v===')')){
+        args.push(pineParseArgTop(toks,pos));
+        while(toks[pos.i].t==='op'&&toks[pos.i].v===','){ pos.i++; args.push(pineParseArgTop(toks,pos)); }
+      }
+      if(!(toks[pos.i].t==='op'&&toks[pos.i].v===')'))throw new Error('Riga '+(ln+1)+': parentesi non chiusa in plot(...)');
+      const exprArg=args.find(a=>!a.named)||args[0];
+      const titleArg=args.find(a=>a.named==='title');
+      const colorArg=args.find(a=>a.named==='color');
+      const lwArg=args.find(a=>a.named==='linewidth');
+      statements.push({
+        type:'plot',
+        expr:exprArg?exprArg.value:null,
+        title:(titleArg&&titleArg.value.type==='str')?titleArg.value.value:('Plot '+(statements.filter(s=>s.type==='plot').length+1)),
+        color:pineStaticColor(colorArg?colorArg.value:null),
+        linewidth:(lwArg&&lwArg.value.type==='num')?lwArg.value.value:1.6
+      });
+      continue;
+    }
+    let isVar=false;
+    if(toks[0].t==='ident'&&toks[0].v==='var'){ isVar=true; pos.i=1; }
+    if(toks[pos.i] && toks[pos.i].t==='ident' && toks[pos.i+1] && toks[pos.i+1].t==='op' && toks[pos.i+1].v==='='){
+      const varName=toks[pos.i].v; pos.i+=2;
+      const expr=pineParseExpr(toks,pos);
+      statements.push({type:'assign',name:varName,expr,isVar});
+      continue;
+    }
+    throw new Error('Riga '+(ln+1)+' non riconosciuta: "'+line+'" (sono supportate solo assegnazioni "nome = espressione" e "plot(...)")');
+  }
+  // Assegna un id stabile ad ogni nodo "call" (ta.ema/ta.rma hanno bisogno di uno stato
+  // persistente proprio, distinto da altre chiamate identiche altrove nello script).
+  function tagCalls(node){
+    if(!node||typeof node!=='object')return;
+    if(node.type==='call'){ node.callId=callIdCounter++; node.args.forEach(a=>tagCalls(a.value)); }
+    else if(node.type==='binop'){ tagCalls(node.left); tagCalls(node.right); }
+    else if(node.type==='unary'){ tagCalls(node.expr); }
+    else if(node.type==='ternary'){ tagCalls(node.cond); tagCalls(node.a); tagCalls(node.b); }
+  }
+  statements.forEach(s=>tagCalls(s.expr));
+  const plots=statements.filter(s=>s.type==='plot').map(s=>({name:s.title,color:s.color,linewidth:s.linewidth}));
+  if(!plots.length)throw new Error('Nessun plot(...) trovato: aggiungi almeno una riga plot(espressione).');
+  return {statements,plots};
+}
+function pineParseArgTop(toks,pos){
+  if(toks[pos.i].t==='ident' && toks[pos.i+1] && toks[pos.i+1].t==='op' && toks[pos.i+1].v==='='){
+    const name=toks[pos.i].v; pos.i+=2;
+    return {named:name,value:pineParseExpr(toks,pos)};
+  }
+  return {named:null,value:pineParseExpr(toks,pos)};
+}
+function pineStaticColor(node){
+  if(!node)return '#3ea6ff';
+  if(node.type==='color')return node.value;
+  if(node.type==='str')return node.value;
+  return '#3ea6ff';
+}
+// --- Valori dei prezzi di base, e lettura storica su identificatori semplici -----------
+function pineBaseSeries(name,rows,k){
+  if(k<0||k>=rows.length)return NaN;
+  const r=rows[k];
+  switch(name){
+    case 'open':return r.open; case 'high':return r.high; case 'low':return r.low; case 'close':return r.close;
+    case 'volume':return r.volume||0;
+    case 'hl2':return (r.high+r.low)/2;
+    case 'hlc3':return (r.high+r.low+r.close)/3;
+    case 'ohlc4':return (r.open+r.high+r.low+r.close)/4;
+    case 'bar_index':return k;
+    default:return undefined; // non è un prezzo di base: sarà cercato tra le variabili utente
+  }
+}
+function pineGetSeriesGetter(node,rows,st){
+  // Restituisce una funzione (k)=>valore per il PRIMO argomento delle funzioni ta.*, che deve
+  // essere un prezzo di base o una variabile già assegnata (vedi nota in cima al file).
+  if(node.type==='ident'){
+    const base=pineBaseSeries(node.name,rows,0);
+    if(base!==undefined) return k=>pineBaseSeries(node.name,rows,k);
+    if(st.vars[node.name]) return k=>st.vars[node.name][k];
+  }
+  throw new Error('Il primo argomento delle funzioni ta.* deve essere un prezzo di base (close, open, high, low, hl2, hlc3, ohlc4) o una variabile gia calcolata in una riga precedente, non una espressione qualsiasi.');
+}
+function pineTaCall(name,args,rows,i,st,node){
+  const getSrc=()=>pineGetSeriesGetter(args[0].value,rows,st);
+  const len=Math.max(1,Math.round(pineEval(args[1].value,rows,i,st)));
+  const getter=getSrc();
+  switch(name){
+    case 'ta.sma':{ if(i<len-1)return NaN; let s=0; for(let k=i-len+1;k<=i;k++){const v=getter(k); if(!Number.isFinite(v))return NaN; s+=v;} return s/len; }
+    case 'ta.ema':case 'ta.rma':{
+      const k=name==='ta.ema'?2/(len+1):1/len;
+      const cache=st.callState[node.callId]||(st.callState[node.callId]={prev:null});
+      const v=getter(i);
+      const val=(cache.prev==null)?v:(v*k+cache.prev*(1-k));
+      cache.prev=val; return val;
+    }
+    case 'ta.wma':{ if(i<len-1)return NaN; let s=0,ws=0; for(let q=0;q<len;q++){const w=q+1; const v=getter(i-len+1+q); s+=v*w; ws+=w;} return s/ws; }
+    case 'ta.highest':{ if(i<len-1)return NaN; let m=-Infinity; for(let k=i-len+1;k<=i;k++)m=Math.max(m,getter(k)); return m; }
+    case 'ta.lowest':{ if(i<len-1)return NaN; let m=Infinity; for(let k=i-len+1;k<=i;k++)m=Math.min(m,getter(k)); return m; }
+    case 'ta.stdev':{ if(i<len-1)return NaN; let s=0; for(let k=i-len+1;k<=i;k++)s+=getter(k); const mean=s/len; let sq=0; for(let k=i-len+1;k<=i;k++){const d=getter(k)-mean; sq+=d*d;} return Math.sqrt(sq/len); }
+    case 'ta.change':{ const back=i-len; return back<0?NaN:(getter(i)-getter(back)); }
+    default: throw new Error('Funzione non supportata: '+name);
+  }
+}
+function pineEval(node,rows,i,st){
+  switch(node.type){
+    case 'num': return node.value;
+    case 'str': return node.value;
+    case 'color': return node.value;
+    case 'unary': { const v=pineEval(node.expr,rows,i,st); return node.op==='-'?-v:(node.op==='!'?(v?0:1):v); }
+    case 'binop': {
+      const a=pineEval(node.left,rows,i,st), b=pineEval(node.right,rows,i,st);
+      switch(node.op){
+        case '+':return a+b; case '-':return a-b; case '*':return a*b; case '/':return a/b; case '%':return a%b;
+        case '>':return (a>b)?1:0; case '<':return (a<b)?1:0; case '>=':return (a>=b)?1:0; case '<=':return (a<=b)?1:0;
+        case '==':return (a===b)?1:0; case '!=':return (a!==b)?1:0;
+        case '&&':return (a&&b)?1:0; case '||':return (a||b)?1:0;
+      }
+      return NaN;
+    }
+    case 'ternary': return pineEval(node.cond,rows,i,st)?pineEval(node.a,rows,i,st):pineEval(node.b,rows,i,st);
+    case 'ident': {
+      const base=pineBaseSeries(node.name,rows,i);
+      if(base!==undefined)return base;
+      if(st.vars[node.name])return st.vars[node.name][i];
+      throw new Error('Variabile non definita: "'+node.name+'"');
+    }
+    case 'history': {
+      const k=i-node.offset;
+      const base=pineBaseSeries(node.name,rows,k);
+      if(base!==undefined)return base;
+      if(st.vars[node.name])return k<0?NaN:st.vars[node.name][k];
+      throw new Error('Variabile non definita: "'+node.name+'"');
+    }
+    case 'call': {
+      if(node.name.startsWith('ta.')) return pineTaCall(node.name,node.args,rows,i,st,node);
+      if(node.name==='math.abs')return Math.abs(pineEval(node.args[0].value,rows,i,st));
+      if(node.name==='math.max')return Math.max(pineEval(node.args[0].value,rows,i,st),pineEval(node.args[1].value,rows,i,st));
+      if(node.name==='math.min')return Math.min(pineEval(node.args[0].value,rows,i,st),pineEval(node.args[1].value,rows,i,st));
+      if(node.name==='math.round')return Math.round(pineEval(node.args[0].value,rows,i,st));
+      if(node.name==='math.sqrt')return Math.sqrt(pineEval(node.args[0].value,rows,i,st));
+      if(node.name==='math.pow')return Math.pow(pineEval(node.args[0].value,rows,i,st),pineEval(node.args[1].value,rows,i,st));
+      throw new Error('Funzione non supportata: "'+node.name+'"');
+    }
+    default: throw new Error('Nodo non riconosciuto nello script');
+  }
+}
+// Esegue TUTTE le istruzioni compilate per la barra i, aggiornando st.vars (storico completo
+// di ogni variabile, necessario per l'indicizzazione storica nome[n]) e st.plots[*].values[i].
+function runPineLikeBar(compiled,rows,i,st){
+  let plotIdx=0;
+  for(const s of compiled.statements){
+    if(s.type==='assign'){
+      if(!st.vars[s.name])st.vars[s.name]=[];
+      if(s.isVar && i>0 && st.vars[s.name][i-1]!==undefined){ st.vars[s.name][i]=st.vars[s.name][i-1]; continue; }
+      st.vars[s.name][i]=pineEval(s.expr,rows,i,st);
+    }else if(s.type==='plot'){
+      const v=s.expr?pineEval(s.expr,rows,i,st):NaN;
+      st.plots[plotIdx].values[i]=v;
+      plotIdx++;
+    }
+  }
+}
+
 // Id del popover impostazioni indicatore attualmente aperto (uno alla volta), e stato del
 // pulsante "👁 Elenco indicatori" (che nasconde/mostra tutta la striscia dei chip per
 // risparmiare spazio sopra al grafico, restando comunque attivi in background).
@@ -3833,8 +4252,9 @@ function renderActiveIndicatorsUI(){
    topRow.className='indChipTop';
    const nameEl=document.createElement('b');
    nameEl.className='indChipName';
-   nameEl.textContent='📊 '+def.label;
-   nameEl.title=def.label;
+   const displayLabel=(ind.key==='custom_script'&&ind.params.name)?ind.params.name:def.label;
+   nameEl.textContent='📊 '+displayLabel;
+   nameEl.title=displayLabel;
    topRow.appendChild(nameEl);
    chip.appendChild(topRow);
    const btnsRow=document.createElement('div');
@@ -3967,12 +4387,79 @@ function renderActiveIndicatorsUI(){
    chip.appendChild(pop);
    gearBtn.addEventListener('click',ev=>{
      ev.stopPropagation();
+     // Uno script personalizzato non ha parametri numerici/colore generici: il suo "pannello
+     // impostazioni" è il codice stesso, quindi il pulsante ingranaggio riapre direttamente il
+     // modulo di modifica invece del popover generico.
+     if(ind.key==='custom_script'){ openCustomScriptModal({editingId:ind.id,name:ind.params.name,code:ind.params.code}); return; }
      const isOpen=pop.style.display==='flex';
      closeIndicatorPopovers();
      if(!isOpen){ pop.style.display='flex'; openIndicatorPopoverId=ind.id; }
    });
    wrap.appendChild(chip);
  });
+}
+// ===================== "Codice personalizzato": script in stile Pine Script =====================
+// Elenco degli script salvati dall'utente con "Salva con nome" (persistito su IndexedDB, come
+// la libreria CSV): {id,name,code}. Restano disponibili anche dopo aver rimosso l'indicatore
+// dal grafico o riaperto la pagina in un secondo momento.
+let customIndicatorScripts=[];
+let customScriptEditingId=null; // id dell'indicatore ATTIVO in modifica (gearBtn), null se se ne sta creando uno nuovo
+async function loadCustomIndicatorScripts(){
+ try{ customIndicatorScripts=(await idbGet('customIndicatorScripts'))||[]; }catch(e){ customIndicatorScripts=[]; }
+}
+loadCustomIndicatorScripts(); // caricamento in background all'avvio, pronto per quando si apre il modulo
+async function saveCustomIndicatorScriptsNow(){
+ try{ await idbPut('customIndicatorScripts',customIndicatorScripts); }catch(e){ console.warn('Salvataggio script personalizzati non riuscito:',e); }
+}
+function renderCustomScriptSavedList(){
+ const wrap=$('customScriptSavedList'); if(!wrap)return;
+ wrap.innerHTML='';
+ if(!customIndicatorScripts.length){
+   wrap.innerHTML='<span style="font-size:11px;color:#5b6674">Nessuno script salvato ancora.</span>';
+   return;
+ }
+ customIndicatorScripts.forEach(s=>{
+   const chip=document.createElement('span');
+   chip.style.cssText='display:inline-flex;align-items:center;gap:5px;background:#0b1117;border:1px solid #2b3541;border-radius:999px;padding:3px 4px 3px 10px;font-size:11.5px;color:#c8d2dd;cursor:pointer';
+   chip.title="Carica questo script nell'editor";
+   chip.textContent=s.name;
+   chip.addEventListener('click',()=>{
+     $('customScriptName').value=s.name;
+     $('customScriptCode').value=s.code;
+     hideCustomScriptError();
+   });
+   const del=document.createElement('button');
+   del.textContent='✕'; del.title='Elimina questo script salvato';
+   del.style.cssText='border:none;background:transparent;color:#787b86;cursor:pointer;font-size:11px;padding:2px 4px';
+   del.addEventListener('click',ev=>{
+     ev.stopPropagation();
+     customIndicatorScripts=customIndicatorScripts.filter(x=>x.id!==s.id);
+     saveCustomIndicatorScriptsNow();
+     renderCustomScriptSavedList();
+   });
+   chip.appendChild(del);
+   wrap.appendChild(chip);
+ });
+}
+function hideCustomScriptError(){
+ const box=$('customScriptError'); if(box){ box.style.display='none'; box.textContent=''; }
+}
+function showCustomScriptError(msg){
+ const box=$('customScriptError'); if(box){ box.style.display='block'; box.textContent='⚠️ '+msg; }
+}
+// opts: {editingId,name,code} quando si riapre il modulo per MODIFICARE un indicatore già
+// applicato (dal pulsante ⚙️ del suo chip); omesso quando si crea uno script da zero.
+function openCustomScriptModal(opts){
+ customScriptEditingId=(opts&&opts.editingId)||null;
+ $('customScriptName').value=(opts&&opts.name)||'';
+ $('customScriptCode').value=(opts&&opts.code)||'';
+ hideCustomScriptError();
+ renderCustomScriptSavedList();
+ const ov=$('customScriptModalOverlay'); if(ov)ov.style.display='flex';
+}
+function closeCustomScriptModal(){
+ const ov=$('customScriptModalOverlay'); if(ov)ov.style.display='none';
+ customScriptEditingId=null;
 }
 // Griglia del grafico (orizzontale = prezzo, verticale = ora): entrambe puntano alla STESSA
 // spaziatura in pixel (gridSpacing), così le celle restano circa quadrate e il numero di
@@ -7901,6 +8388,47 @@ $('indicatorSelect')?.addEventListener('change',()=>{
  const key=$('indicatorSelect').value;
  if(key){addIndicator(key);}
  $('indicatorSelect').value='';
+});
+// ===================== Modulo "Codice personalizzato" (Pine-like) =====================
+$('openCustomScriptBtn')?.addEventListener('click',()=>openCustomScriptModal());
+$('customScriptCloseBtn')?.addEventListener('click',closeCustomScriptModal);
+$('customScriptCancelBtn')?.addEventListener('click',closeCustomScriptModal);
+$('customScriptSaveAsBtn')?.addEventListener('click',()=>{
+ const name=($('customScriptName').value||'').trim();
+ const code=$('customScriptCode').value||'';
+ if(!name){ showCustomScriptError('Dai un nome allo script prima di salvarlo.'); return; }
+ if(!code.trim()){ showCustomScriptError('Lo script è vuoto: scrivi almeno una riga plot(...) prima di salvarlo.'); return; }
+ // Compila (senza applicarlo) solo per dare subito un feedback chiaro se il codice contiene
+ // un errore, invece di salvare silenziosamente uno script che non funzionerà mai.
+ try{ compilePineLikeScript(code); }
+ catch(e){ showCustomScriptError('Non salvato: '+(e.message||e)); return; }
+ hideCustomScriptError();
+ const existing=customIndicatorScripts.find(s=>s.name===name);
+ if(existing){ existing.code=code; }
+ else{ customIndicatorScripts.push({id:Date.now()+Math.random(),name,code}); }
+ saveCustomIndicatorScriptsNow();
+ renderCustomScriptSavedList();
+ $('status').textContent=`Script "${name}" salvato.`;
+});
+$('customScriptApplyBtn')?.addEventListener('click',()=>{
+ const name=($('customScriptName').value||'').trim()||'Script personalizzato';
+ const code=$('customScriptCode').value||'';
+ try{ compilePineLikeScript(code); } // solo per validare PRIMA di applicare: errori chiari, niente indicatori "rotti" a grafico
+ catch(e){ showCustomScriptError(e.message||String(e)); return; }
+ hideCustomScriptError();
+ if(customScriptEditingId){
+   // Si stava modificando un indicatore già applicato (aperto dal pulsante ⚙️ del suo chip):
+   // aggiorna i suoi parametri sul posto invece di aggiungerne uno nuovo.
+   const ind=activeIndicators.find(i=>i.id===customScriptEditingId);
+   if(ind){ ind.params={code,name}; ind.calc={ref:null,builtTo:-1}; }
+ }else{
+   activeIndicators.push({id:Date.now()+Math.random(),key:'custom_script',params:{code,name},hidden:false,calc:{ref:null,builtTo:-1}});
+ }
+ renderActiveIndicatorsUI();
+ draw();
+ scheduleSave();
+ closeCustomScriptModal();
+ $('status').textContent=`Script "${name}" applicato al grafico.`;
 });
 $('toggleIndicatorsListBtn')?.addEventListener('click',()=>{
  indicatorsListHidden=!indicatorsListHidden;
