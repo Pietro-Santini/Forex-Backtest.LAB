@@ -8198,14 +8198,24 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // elimina il problema alla radice, indipendentemente da come cambia l'array sotto.
  let preserved=null;
  if(!shouldResetView){
-   const pinnedTime=rows[viewEnd]?closeTimeOf(rows[viewEnd]):null;
-   preserved={pinnedTime,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+   // BUG RISOLTO (lo spostamento/pan non restava fissato: tornava sempre all'ultima candela,
+   // a differenza dello zoom che invece funzionava già): viewEnd è quasi sempre un numero CON
+   // DECIMALI durante uno scorrimento fluido del grafico (vedi commento su getViewWindow più
+   // sopra: "posizioni... anche frazionarie"), e rows[viewEnd] con un indice non intero
+   // restituisce SEMPRE undefined in JavaScript — quindi pinnedTime risultava quasi sempre
+   // null, e con lui il ripristino cadeva nel ramo di fallback "ultima candela". L'indice va
+   // arrotondato per leggere la candela, conservando però lo scarto frazionario originale per
+   // ripristinare la posizione esatta al pixel, non solo la candela più vicina.
+   const anchorIdx=rows.length?Math.max(0,Math.min(rows.length-1,Math.round(viewEnd))):null;
+   const pinnedTime=(anchorIdx!=null&&rows[anchorIdx])?closeTimeOf(rows[anchorIdx]):null;
+   const pinnedFrac=(anchorIdx!=null)?(viewEnd-anchorIdx):0;
+   preserved={pinnedTime,pinnedFrac,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
  }
  masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rebuildRows();
  if(preserved){
    const restoredIdx=preserved.pinnedTime!=null?rowIndexContainingTime(preserved.pinnedTime):null;
-   viewEnd=(restoredIdx!=null)?restoredIdx:Math.max(0,rows.length-1);
+   viewEnd=(restoredIdx!=null)?(restoredIdx+(preserved.pinnedFrac||0)):Math.max(0,rows.length-1);
    followLatest=preserved.followLatest;
    priceZoomFactor=preserved.priceZoomFactor;
    viewPriceLo=preserved.viewPriceLo; viewPriceHi=preserved.viewPriceHi;
