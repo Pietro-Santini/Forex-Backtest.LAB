@@ -250,7 +250,7 @@ tr.otherAssetRow td:last-child{opacity:1}
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getAuth, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getAuth, onAuthStateChanged, onIdTokenChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -283,6 +283,63 @@ tr.otherAssetRow td:last-child{opacity:1}
   // Percorso Firestore scelto: users/{uid}/data/session (documento separato
   // dal profilo users/{uid} già usato per prova gratuita/abbonamento, così
   // non rischiamo di sovrascrivere quei campi per errore).
+  // ===================================================================
+  // TOKEN DI AUTENTICAZIONE TENUTO SEMPRE PRONTO IN MEMORIA
+  // Serve per poter fare, al momento della VERA chiusura della pagina (pagehide), una richiesta
+  // di rete AUTENTICATA senza dover attendere una Promise (user.getIdToken() è asincrono):
+  // onIdTokenChanged scatta al login, al refresh orario del token e al logout, quindi qui
+  // dentro il token è sempre già aggiornato e disponibile in modo sincrono quando serve.
+  let cachedIdToken = null;
+  onIdTokenChanged(auth, async (user)=>{
+    if(user){ try{ cachedIdToken = await user.getIdToken(); }catch(e){ cachedIdToken = null; } }
+    else cachedIdToken = null;
+  });
+  // Converte un valore JS qualsiasi (usato nello stato della sessione: numeri, stringhe, bool,
+  // null, array, oggetti annidati) nel formato tipizzato richiesto dalle REST API di Firestore.
+  function jsToFirestoreValue(v){
+    if(v===null||v===undefined) return {nullValue:null};
+    if(typeof v==='boolean') return {booleanValue:v};
+    if(typeof v==='number') return Number.isFinite(v)
+      ? (Number.isInteger(v)?{integerValue:String(v)}:{doubleValue:v})
+      : {doubleValue:0};
+    if(typeof v==='string') return {stringValue:v};
+    if(Array.isArray(v)) return {arrayValue:{values:v.map(jsToFirestoreValue)}};
+    if(typeof v==='object') return {mapValue:{fields:Object.fromEntries(
+      Object.entries(v).map(([k,val])=>[k,jsToFirestoreValue(val)])
+    )}};
+    return {stringValue:String(v)};
+  }
+  // ===================================================================
+  // SALVATAGGIO "A PROVA DI CHIUSURA" (fetch con keepalive:true)
+  // La normale scrittura via SDK (setDoc, sotto in save()) è una Promise: se la pagina viene
+  // chiusa DAVVERO (non un semplice refresh) mentre quella Promise è ancora in corso, il
+  // browser la interrompe a metà e il salvataggio va perso — per questo finora sembrava
+  // funzionare solo al logout (lì il codice resta in vita abbastanza a lungo da completare
+  // l'await) ma non alla chiusura effettiva dell'app/scheda.
+  // fetch(url,{keepalive:true}) è pensata apposta dai browser per sopravvivere alla chiusura
+  // della pagina (stessa garanzia di navigator.sendBeacon, ma qui possiamo comunque allegare
+  // l'header di autenticazione richiesto da Firestore): la mettiamo in coda e NON la aspettiamo,
+  // così il browser la accoda immediatamente prima di distruggere la pagina.
+  // Limite noto: le richieste keepalive hanno un tetto di ~64KB di corpo imposto dal browser;
+  // per lo stato "leggero" salvato qui (posizioni/trade/disegni correnti, mai la libreria CSV)
+  // è un margine ampio nell'uso normale, ma con moltissimi disegni/trade accumulati potrebbe
+  // in teoria non bastare: in quel caso resta comunque il salvataggio locale (IndexedDB/
+  // localStorage) sempre aggiornato ad ogni azione, mai perso.
+  function saveSessionKeepalive(state){
+    if(!this.uid || !cachedIdToken) return false;
+    try{
+      const url=`https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/(default)/documents/users/${this.uid}/data/session`;
+      const body=JSON.stringify({fields:{
+        state: jsToFirestoreValue(state),
+        updatedAt: jsToFirestoreValue(new Date().toISOString())
+      }});
+      fetch(url,{method:'PATCH',keepalive:true,headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+cachedIdToken
+      },body}).catch(()=>{});
+      return true;
+    }catch(e){ console.warn('Salvataggio keepalive su Firestore non riuscito:', e); return false; }
+  }
   let resolveCloudReady;
   window.fxbtCloud = {
     uid: null,
@@ -297,6 +354,9 @@ tr.otherAssetRow td:last-child{opacity:1}
         return true;
       }catch(e){ console.warn("Salvataggio sessione su Firestore fallito:", e); return false; }
     },
+    // Versione "fire-and-forget" pensata SOLO per pagehide (vedi commento sopra): non va mai
+    // aspettata con await, va solo chiamata perché la richiesta parta subito.
+    saveKeepalive: saveSessionKeepalive,
     async load(){
       if(!this.uid) return null;
       try{
@@ -1799,7 +1859,24 @@ async function syncFullStatusToFirebase(reason,force){
 // non è "uscire dall'app", è solo mettere la scheda in background, e prima faceva scattare un
 // invio a Firebase anche in quel caso. Restano solo i due veri momenti di uscita:
 // "App chiusa"/pagina ricaricata: ultimo tentativo, anche se la scheda si chiude subito dopo.
-window.addEventListener('pagehide', ()=>{ syncFullStatusToFirebase('pagehide'); });
+// FIX (salvataggio mancante alla chiusura reale, non solo al logout): syncFullStatusToFirebase()
+// scrive su Firestore con l'SDK normale, che è asincrono — se la pagina si chiude DAVVERO (non
+// un semplice refresh) mentre quella scrittura è ancora in volo, il browser la interrompe a
+// metà e si perde (per questo prima sembrava funzionare solo al logout: lì il codice resta
+// vivo abbastanza a lungo da completare l'attesa). Per la chiusura vera affianchiamo quindi una
+// seconda scrittura con fetch(...,{keepalive:true}) diretta alle REST API di Firestore, pensata
+// apposta dai browser per sopravvivere alla distruzione della pagina: non va aspettata con
+// await, va solo "lanciata" perché il browser la accodi subito.
+window.addEventListener('pagehide', ()=>{
+  if(window.fxbtCloud && window.fxbtCloud.uid && window.fxbtCloud.saveKeepalive){
+    try{
+      const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
+      bundle.assetChartViews=assetChartViews;
+      window.fxbtCloud.saveKeepalive(bundle);
+    }catch(e){}
+  }
+  syncFullStatusToFirebase('pagehide');
+});
 // "Uscita dall'account": vedi il pulsante logout-btn/blocked-logout-btn più in alto nel file,
 // che chiama window.syncFullStatusToFirebase('logout') PRIMA di eseguire davvero il signOut —
 // esposta su window perché quel pulsante vive in un altro <script type="module"> separato da
