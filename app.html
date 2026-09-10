@@ -1480,31 +1480,44 @@ function collectLightSessionState(){
  };
 }
 let saveTimer=null;
+// Chiave localStorage che affianca l'IndexedDB per la sessione: piccola (solo posizioni/trade/
+// impostazioni/le 4 sessionByMode, MAI la libreria CSV che può pesare molti MB). Scritta qui
+// SUBITO, in modo SINCRONO, ad ogni singola azione (richiesto esplicitamente: "qualsiasi cosa
+// faccio deve essere salvata in automatico in local storage") — niente più attesa di 800ms
+// come per l'IndexedDB qui sotto, che resta debounced solo per motivi di performance (scrittura
+// asincrona più pesante), non perché sia lei la copia "vera": in caso di refresh nel mezzo, è
+// SEMPRE questa copia in localStorage quella che initSession() userà per ripristinare (vedi
+// più sotto), quindi non può mai risultare più vecchia dell'ultima azione fatta.
+const FOREX_LAB_STANDARD_STATE_KEY='forex_lab_standard_state';
+function saveLightStateToLocalStorageNow(){
+ try{
+   const state=collectLightSessionState();
+   localStorage.setItem(FOREX_LAB_STANDARD_STATE_KEY, JSON.stringify(state));
+   return state;
+ }catch(e){ console.warn('Salvataggio immediato su localStorage non riuscito (quota piena?):', e); return null; }
+}
 function scheduleSave(){
  // NESSUNA guardia su baseRows.length: subito dopo un cambio sessione l'asset è volutamente
  // vuoto (clearAssetSelectionForSessionSwitch), ma il cambio di conto/sessione va comunque
  // salvato subito, altrimenti un ricaricamento nel mezzo lo perderebbe.
+ // localStorage: SEMPRE e SUBITO, ad ogni chiamata, sincrono — è la rete di sicurezza contro
+ // esattamente il problema segnalato (posizioni aperte sparite dopo un refresh perché lo stato
+ // più recente non era ancora stato scritto da nessuna parte).
+ saveLightStateToLocalStorageNow();
+ // IndexedDB: resta debounced (scrittura asincrona più pesante, non serve rifarla ad ogni
+ // singolo tick se ne arrivano tanti ravvicinati) — la copia in localStorage sopra intanto è
+ // già al sicuro.
  if(saveTimer)clearTimeout(saveTimer);
  saveTimer=setTimeout(saveLightStateNow,800);
 }
 
-// Chiave localStorage che affianca l'IndexedDB per la sessione: piccola (solo posizioni/trade/
-// impostazioni/le 4 sessionByMode, MAI la libreria CSV che può pesare molti MB), scritta ad
-// ogni autosalvataggio così i dati sono SEMPRE presenti anche in localStorage, come richiesto.
-// Essendo `sessionByMode` (Storico/Live/Storico+PF/Live+PF, vedi più sopra) già parte dello
-// stato salvato qui, questo UNICO salvataggio copre automaticamente tutte e 4 le sessioni,
-// senza bisogno di percorsi di salvataggio separati per la Modalità Prop Firm.
-const FOREX_LAB_STANDARD_STATE_KEY='forex_lab_standard_state';
-
 async function saveLightStateNow(){
  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
- const state=collectLightSessionState();
- // SALVATAGGIO LOCALE (immediato, gratuito, ad ogni modifica): IndexedDB resta la fonte
- // principale (nessun limite pratico di dimensione, utile perché qui viaggiano anche gli
- // array di trade/disegni), MA la stessa fotografia va ANCHE in localStorage, così i dati
- // risultano sempre disponibili localmente in entrambi i posti, come richiesto.
+ const state=saveLightStateToLocalStorageNow()||collectLightSessionState(); // stessa fotografia già scritta su localStorage, riusata anche per IndexedDB
+ // SALVATAGGIO LOCALE: IndexedDB resta la fonte più capiente (nessun limite pratico di
+ // dimensione, utile perché qui viaggiano anche gli array di trade/disegni), ma da ora
+ // localStorage (sopra) è quella scritta per prima e più spesso.
  const ok=await idbPut('state',state);
- try{ localStorage.setItem(FOREX_LAB_STANDARD_STATE_KEY, JSON.stringify(state)); }catch(e){ console.warn('Mirror su localStorage non riuscito (quota piena?):', e); }
  // NIENTE PIÙ SCRITTURE SU FIRESTORE QUI: prima veniva chiamato window.fxbtCloud.save(state)
  // ad ogni autosalvataggio (ogni ~800ms durante il trading attivo), generando un numero di
  // scritture/trasferimenti enorme sul piano Blaze. Da ora Firestore viene aggiornato UNA SOLA
@@ -1533,7 +1546,11 @@ async function syncFullStatusToFirebase(reason){
  if(now-lastFirebaseSyncAt<FIREBASE_MIN_SYNC_INTERVAL_MS)return;
  lastFirebaseSyncAt=now;
  try{
-   const bundle=collectLightSessionState();
+   // Richiesto esplicitamente: si manda su Firebase esattamente il file appena scritto in
+   // localStorage (lo si riscrive qui un'ultima volta, sincrono, per essere certi che sia
+   // aggiornatissimo al millisecondo della chiusura/inattività), non una fotografia ricalcolata
+   // a parte che potrebbe in teoria differire.
+   const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
    bundle.assetChartViews=assetChartViews; // ultima candela vista, per asset e per sessione
    await window.fxbtCloud.save(bundle);
  }
@@ -9674,6 +9691,19 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
 
 (async function initSession(){
  let [savedCsv,savedState,savedChartViews]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews')]);
+ // localStorage viene scritto in modo SINCRONO e IMMEDIATO ad ogni singola azione (vedi
+ // scheduleSave()/saveLightStateToLocalStorageNow()), mentre l'IndexedDB qui sopra resta
+ // debounced di 800ms per performance: se la pagina si ricarica proprio dentro quella finestra,
+ // l'IndexedDB potrebbe non avere ancora l'ultimissima azione (es. la posizione appena aperta),
+ // mentre localStorage ce l'ha già di sicuro. Per questo, se localStorage ha un salvataggio
+ // valido, ha SEMPRE la precedenza su quello IndexedDB come base di partenza per il ripristino.
+ try{
+   const localRaw=localStorage.getItem(FOREX_LAB_STANDARD_STATE_KEY);
+   if(localRaw){
+     const localState=JSON.parse(localRaw);
+     if(localState && localState.version===SESSION_VERSION) savedState=localState;
+   }
+ }catch(e){ console.warn('Lettura del salvataggio locale (localStorage) non riuscita, uso IndexedDB:',e); }
  // STEP 0b: se l'utente è loggato, aspettiamo il ponte cloud e proviamo a leggere la sessione
  // da Firestore. Se ne esiste una (es. salvata poco fa da un altro dispositivo/scheda), ha la
  // precedenza sulla copia locale — è quella che rende i dati "gli stessi ovunque si acceda".
