@@ -132,13 +132,15 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
   50%{box-shadow:inset 0 0 165px rgba(255,10,10,.42),inset 0 0 60px rgba(140,0,0,.5)}
 }
 body.prop-firm-active{background:radial-gradient(ellipse at 50% -10%,#210606 0%,#050101 70%) fixed!important;animation:pfBodyGlow 3.2s ease-in-out infinite}
-/* 2) Effetto "blood" sui testi finanziari (Capitale, P/L, Margine, Win/Loss rate, ecc. — tutti
-   condividono la classe .value nel pannello conto). */
+/* 2) Effetto "blood" sui testi finanziari — OPZIONALE (richiesto esplicitamente per
+   leggibilità): di default i valori restano normali; l'effetto si attiva SOLO se l'operatore
+   spunta la casella "Effetto Blood sui numeri" sopra al pulsante (classe pf-blood-effect sul
+   body, aggiunta/tolta da quel checkbox — vedi JS). */
 @keyframes pfBloodPulse{
   0%,100%{text-shadow:0 0 6px rgba(255,20,20,.85),0 0 16px rgba(170,0,0,.55)}
   50%{text-shadow:0 0 13px rgba(255,70,70,1),0 0 28px rgba(210,0,0,.8)}
 }
-body.prop-firm-active .value,body.prop-firm-active .livePL{
+body.prop-firm-active.pf-blood-effect .value,body.prop-firm-active.pf-blood-effect .livePL{
   color:#ff5050!important;font-weight:800!important;animation:pfBloodPulse 2.3s ease-in-out infinite;
 }
 /* 3) Bordo del grafico + dettagli macabri (teschi discreti negli angoli). */
@@ -699,7 +701,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
       <span id="pfDailyDD">Daily DD: 0.00% / 5%</span>
       <span id="pfMaxDD">Max DD: 0.00% / 10%</span>
     </div>
-    <button id="propFirmToggleBtn" class="pfToggleBtn" title="Attiva/disattiva la Modalità Prop Firm: capitale, posizioni e P/L di una Challenge stile FTMO, completamente isolati dal conto Standard">🛡️ MODALITÀ PROP FIRM</button>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+      <label style="display:flex;align-items:center;gap:4px;font-size:9.5px;color:#8a7070;cursor:pointer;user-select:none" title="Se attivo, in Modalità Prop Firm i valori del conto (Capitale, P/L, ecc.) diventano rossi con un bagliore pulsante. Se disattivo (default) restano leggibili normalmente: cambiano solo sfondo, bordo del grafico e drawdown vicini al limite.">
+        <input type="checkbox" id="pfBloodEffectToggle" style="width:12px;height:12px;accent-color:#f23645"> Effetto "Blood" sui numeri
+      </label>
+      <button id="propFirmToggleBtn" class="pfToggleBtn" title="Attiva/disattiva la Modalità Prop Firm: capitale, posizioni e P/L di una Challenge stile FTMO, completamente isolati dal conto Standard">🛡️ MODALITÀ PROP FIRM</button>
+    </div>
   </div>
   <!-- "Colori candele" (template) spostato dentro al grafico, nel pannello che si apre col
        pulsante "hide impostazioni" (›), vicino al pulsante "Griglia" — vedi #candleTheme più
@@ -1153,6 +1160,13 @@ let isPropFirmMode = false;
 // una Challenge salvata: serve al modulo del capitale per sapere sotto quale chiave di
 // sessionByMode salvare la nuova Challenge una volta confermato l'importo.
 let pendingPropFirmKey = null;
+// true SOLO quando il modulo capitale si apre per la PRIMISSIMA attivazione di questa
+// combinazione (subito dopo aver scelto Storico/Live in onPropFirmToggleClick): in quel caso
+// annullare il modulo deve riportare isPropFirmMode a false (si stava ancora "entrando").
+// false quando lo stesso modulo si apre per un RESET di una Challenge già attiva (RESET
+// SESSIONE o RICOMINCIA DA CAPO, richiesto esplicitamente): lì annullare deve solo richiudere
+// il modulo lasciando tutto com'era (Prop Firm resta attiva, o resta chiusa se era violata).
+let pendingPropFirmIsFreshActivation = false;
 
 // Applica/rimuove sul <body> la classe che scatena il restyling "Danger & Blood Zone" (Step 5).
 function updatePropFirmBodyClass(){
@@ -1222,6 +1236,7 @@ async function proceedEnablePropFirm(targetIsLive){
     } else {
       // Prima volta su QUESTA combinazione: serve il capitale iniziale della Challenge.
       pendingPropFirmKey = key;
+      pendingPropFirmIsFreshActivation = true;
       openPropFirmCapitalModal();
       // isPropFirmMode resta true "in sospeso" — se l'utente annulla il modulo capitale,
       // closePropFirmCapitalModal() lo riporta indietro (vedi sotto).
@@ -1242,10 +1257,16 @@ async function startNewPropFirmChallenge(initialCapital){
     // violazione pregressa).
     propFirmChallengeInitialCapital=initialCapital;
     propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+    // Usata anche per un RESET esplicito (RESET SESSIONE o "Ricomincia da capo", richiesto
+    // espressamente di far ricomparire questo stesso modulo lì): i trade già registrati per
+    // QUESTA combinazione vanno svuotati dal Trade Journal, non solo "nascosti" dal baseline —
+    // le altre 3 sessioni non vengono mai toccate.
+    if(key) trades=trades.filter(t=>t.mode!==key);
     if(key){ sessionByMode[key]={positions,pendingOrders,active,equity,drawings,capital:String(initialCapital),initialCapital}; statsBaselineByMode[key]=0; }
     finalizePropFirmModeChange();
   });
   pendingPropFirmKey = null;
+  pendingPropFirmIsFreshActivation = false;
   closePropFirmCapitalModal();
 }
 
@@ -1419,28 +1440,17 @@ function showPropFirmViolationOverlay(){
 function hidePropFirmViolationOverlay(){
   const ov=$('propFirmViolationOverlay'); if(ov)ov.style.display='none';
 }
-// "RICOMINCIA DA CAPO": resetta SOLO i dati del conto Prop Firm di QUESTA combinazione
-// (Storico+PF o Live+PF) — capitale riportato al valore INIZIALE già scelto (non richiesto di
-// nuovo) e trade di QUESTA sessione svuotati dal Trade Journal; le altre 3 sessioni (incluso
-// l'eventuale altra combinazione Prop Firm) restano del tutto intatte.
+// "RICOMINCIA DA CAPO": richiesto esplicitamente di far riapparire il modulo di scelta del
+// capitale iniziale (come alla primissima attivazione), invece di riusare in automatico quello
+// precedente — l'utente può quindi scegliere un importo diverso ogni volta che riparte.
+// L'overlay di violazione si chiude subito; il vero reset (posizioni/trade/capitale di QUESTA
+// combinazione) avviene solo alla conferma, dentro startNewPropFirmChallenge().
 function restartPropFirmChallenge(){
   if(!isPropFirmMode)return;
-  const key=currentMode();
-  const initCap=Number.isFinite(propFirmChallengeInitialCapital)?propFirmChallengeInitialCapital:(num($('capital').value)||10000);
-  positions=[]; active=null; pendingOrders=[]; drawings=[];
-  equity=[initCap];
-  if($('capital'))$('capital').value=String(initCap);
-  trades=trades.filter(t=>t.mode!==key); // svuota SOLO i trade di questa Challenge, non quelli delle altre 3 sessioni
-  statsBaselineByMode[key]=0;
-  sessionByMode[key]={positions,pendingOrders,active,equity,drawings,capital:String(initCap),initialCapital:initCap};
-  propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
   hidePropFirmViolationOverlay();
-  tradeSLLine=null; tradeTPLine=null;
-  syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
-  if(liveModeActive){ startLiveRefreshTimer(); refreshLiveStreamSubscriptions(); }
-  update(); draw();
-  scheduleSave();
-  $('status').textContent='Nuova Challenge Prop Firm iniziata da capo, con lo stesso capitale iniziale di '+euro(initCap)+'.';
+  pendingPropFirmKey=currentMode();
+  pendingPropFirmIsFreshActivation=false; // annullare qui NON deve disattivare la Prop Firm (vedi closePropFirmCapitalModal)
+  openPropFirmCapitalModal();
 }
 
 
@@ -1477,21 +1487,30 @@ function openPropFirmCapitalModal(){
   const ov = $('propFirmCapitalModalOverlay');
   if(ov) ov.style.display='flex';
 }
-// "Annulla" (✕ o pulsante footer): riporta tutto ESATTAMENTE a prima di aver aperto il modulo
-// (isPropFirmMode torna false, si resta sulla stessa base Storico/Live in cui ci si trovava) —
-// nessuna Challenge viene creata né attivata.
+// "Annulla" (✕ o pulsante footer): comportamento diverso a seconda del perché si era aperto il
+// modulo (vedi pendingPropFirmIsFreshActivation):
+//  - prima attivazione di questa combinazione (dal modulo Storico/Live): riporta tutto
+//    ESATTAMENTE a prima di aver aperto il modulo, isPropFirmMode torna false — nessuna
+//    Challenge viene creata né attivata.
+//  - reset di una Challenge già attiva (RESET SESSIONE, o "Ricomincia da capo" dopo una
+//    violazione): annullare NON deve disattivare la Prop Firm né toccare i dati esistenti —
+//    semplicemente richiude il modulo lasciando tutto com'era (violazione compresa, se c'era).
 function closePropFirmCapitalModal(){
   const ov = $('propFirmCapitalModalOverlay');
   if(ov) ov.style.display='none';
   const custom = $('propFirmCapitalCustom');
   if(custom) custom.value='';
-  if(pendingPropFirmKey){
+  if(pendingPropFirmKey && pendingPropFirmIsFreshActivation){
     isPropFirmMode = false;
     restoreModeSnapshot(currentMode());
     updatePropFirmBodyClass();
     update(); draw();
-    pendingPropFirmKey = null;
+  } else if(propFirmViolation){
+    // Era un "Ricomincia da capo" annullato: il conto era chiuso per violazione e resta chiuso.
+    showPropFirmViolationOverlay();
   }
+  pendingPropFirmKey = null;
+  pendingPropFirmIsFreshActivation = false;
 }
 
 // Mostra/nasconde sul grafico le posizioni (linee entry/SL/TP delle posizioni aperte +
@@ -3244,6 +3263,18 @@ function updateDrawStyleVisibility(){
 }
 function reset(){
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ // RICHIESTO ESPLICITAMENTE: in Modalità Prop Firm, RESET SESSIONE fa ricomparire il modulo di
+ // scelta del capitale iniziale (come alla primissima attivazione), invece di riazzerare in
+ // automatico con il capitale precedente — l'utente può quindi scegliere un importo diverso
+ // ogni volta. Il vero reset (posizioni/trade/capitale di QUESTA combinazione) avviene solo
+ // alla conferma, dentro startNewPropFirmChallenge(). Per Storico/Live "semplici" il
+ // comportamento resta quello di sempre, più sotto.
+ if(isPropFirmMode){
+   pendingPropFirmKey=currentMode();
+   pendingPropFirmIsFreshActivation=false; // annullare qui NON deve disattivare la Prop Firm
+   openPropFirmCapitalModal();
+   return;
+ }
  idx=Math.min(0,rows.length-1);
  masterTime=rows.length?closeTimeOf(rows[idx]):null;
  viewEnd=idx;
@@ -3257,6 +3288,10 @@ function reset(){
  statsBaselineByMode[currentMode()]=trades.filter(t=>t.mode===currentMode()).length;
  active=null; tradeSLLine=null; tradeTPLine=null;
  equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ // BUG RISOLTO: RESET SESSIONE azzerava positions/equity in memoria ma non aggiornava la
+ // fotografia della sessione corrente in sessionByMode — cambiando sessione e tornando
+ // indietro si ritrovavano le vecchie posizioni pre-reset invece di quelle appena azzerate.
+ if(sessionByMode[currentMode()]) sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings,capital:$('capital').value};
  update(); draw();
  $('status').textContent=rows.length?`Dataset pronto: ${rows.length.toLocaleString('it-IT')} candele. La prima candela è visibile.`:'Carica il CSV per iniziare.';
 }
@@ -10183,6 +10218,21 @@ $('liveChangeAccountBtn').addEventListener('click',()=>{ openLiveLoginModal(live
 
 // ===================== PROP FIRM MODE — collegamento pulsante toggle + i 2 moduli grafici =====================
 $('propFirmToggleBtn').addEventListener('click', onPropFirmToggleClick);
+// Preferenza "Effetto Blood sui numeri": opzionale, scelta dall'operatore, ricordata tra una
+// sessione e l'altra (semplice localStorage, non fa parte del salvataggio della sessione di
+// trading — è solo un gusto visivo, non un dato del conto).
+const PF_BLOOD_EFFECT_PREF_KEY='forex_lab_pf_blood_effect';
+(function initPropFirmBloodEffectToggle(){
+  const cb=$('pfBloodEffectToggle'); if(!cb)return;
+  let enabled=false;
+  try{ enabled=localStorage.getItem(PF_BLOOD_EFFECT_PREF_KEY)==='1'; }catch(e){}
+  cb.checked=enabled;
+  document.body.classList.toggle('pf-blood-effect',enabled);
+  cb.addEventListener('change',()=>{
+    document.body.classList.toggle('pf-blood-effect',cb.checked);
+    try{ localStorage.setItem(PF_BLOOD_EFFECT_PREF_KEY,cb.checked?'1':'0'); }catch(e){}
+  });
+})();
 // STEP 3: pulsante "RICOMINCIA DA CAPO" nella schermata di violazione a tutta pagina.
 $('pfViolationRestartBtn')?.addEventListener('click', restartPropFirmChallenge);
 // Modulo 1: "In quale sessione la vuoi attivare?" (Storico o Live)
