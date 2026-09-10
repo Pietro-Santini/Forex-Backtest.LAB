@@ -108,6 +108,13 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 .indSettingsRow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 /* ---- Modale impostazioni Fibonacci (tabella livelli stile TradingView) ---- */
 .fbModalOverlay{position:fixed;inset:0;background:rgba(4,7,11,.6);z-index:80;display:flex;align-items:center;justify-content:center;padding:16px}
+/* STEP 3 — schermata di violazione Prop Firm ("Conto Chiuso"): z-index sopra qualunque modale
+   esistente (9999, come richiesto), design volutamente drammatico. */
+.pfViolationRow{display:flex;justify-content:space-between;gap:12px}
+.pfViolationRow span{color:#a88}
+.pfViolationRow b{color:#fff}
+@keyframes pfPulseBorder{0%,100%{box-shadow:0 0 60px rgba(242,54,69,.5), inset 0 0 40px rgba(242,54,69,.15);}50%{box-shadow:0 0 95px rgba(242,54,69,.85), inset 0 0 60px rgba(242,54,69,.3);}}
+@keyframes pfPulseText{0%,100%{text-shadow:0 0 18px rgba(255,0,0,.8);}50%{text-shadow:0 0 34px rgba(255,40,40,1);}}
 .fbModalBox{background:#131a24;border:1px solid #2b3541;border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.55);width:100%;max-width:520px;max-height:88vh;display:flex;flex-direction:column}
 .fbModalHeader{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #263041}
 .fbModalHeader h3{margin:0;font-size:14px;color:#e8edf3}
@@ -563,6 +570,26 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
   </div>
 </div>
 
+<!-- STEP 3 — schermata di violazione Prop Firm a tutta pagina ("Conto Chiuso"): position:fixed,
+     z-index:9999 come richiesto, sopra qualunque altra cosa a schermo. Popolata da
+     showPropFirmViolationOverlay() con i valori esatti registrati da triggerPropFirmViolation()
+     nello Step 2. -->
+<div id="propFirmViolationOverlay" style="display:none;position:fixed;inset:0;z-index:9999;background:radial-gradient(circle at 50% 38%, rgba(120,0,0,.4), rgba(4,0,0,.97) 72%);align-items:center;justify-content:center;padding:20px;box-sizing:border-box">
+  <div style="max-width:560px;width:100%;background:#0b0505;border:2px solid #f23645;border-radius:16px;padding:36px 30px;text-align:center;animation:pfPulseBorder 2s ease-in-out infinite">
+    <div style="font-size:52px;line-height:1;margin-bottom:14px">💀</div>
+    <div style="font-size:22px;font-weight:800;color:#ff4d4d;letter-spacing:.5px;margin-bottom:6px;animation:pfPulseText 2s ease-in-out infinite">IL TUO CONTO È STATO CHIUSO</div>
+    <div style="font-size:13.5px;color:#e8b4b4;line-height:1.6;margin-bottom:20px">Hai violato le regole di Risk Management della Prop Firm.</div>
+    <div style="background:rgba(242,54,69,.08);border:1px solid rgba(242,54,69,.35);border-radius:10px;padding:14px 16px;margin-bottom:18px;text-align:left">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:#ff8080;margin-bottom:8px">Regola infranta</div>
+      <div id="pfViolationRule" style="font-size:16px;font-weight:700;color:#fff;margin-bottom:14px"></div>
+      <div id="pfViolationDetails" style="font-size:12.5px;color:#d8c4c4;display:flex;flex-direction:column;gap:5px"></div>
+      <div style="font-size:10.5px;color:#8a6a6a;margin-top:10px">Rilevata alle <span id="pfViolationTimestamp"></span></div>
+    </div>
+    <button id="pfViolationRestartBtn" type="button" style="width:100%;padding:14px;border-radius:10px;border:none;background:linear-gradient(135deg,#f23645,#a30d1a);color:#fff;font-weight:800;font-size:14.5px;letter-spacing:.03em;cursor:pointer;box-shadow:0 4px 20px rgba(242,54,69,.5)">🔁 RICOMINCIA DA CAPO</button>
+    <div style="font-size:10.5px;color:#6b5050;margin-top:12px">Riporta il capitale a quello iniziale di questa Challenge e svuota solo i trade di questa sessione dal Trade Journal.</div>
+  </div>
+</div>
+
 <!-- STEP 1a bis — guida interna (nessun link esterno da seguire): spiega, dentro l'app, dove
      trovare su Capital.com le 3 credenziali richieste dal popup di login. -->
 <div id="liveGuideModalOverlay" class="fbModalOverlay" style="display:none">
@@ -976,7 +1003,7 @@ function captureCurrentModeSnapshot(){
  // salvarlo qui, tornare a una sessione dopo averne visitata un'altra con un capitale diverso
  // (es. una Challenge Prop Firm da 50.000€) mostrava ancora il valore lasciato dall'ultima
  // sessione visitata invece del proprio.
- sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings,capital:$('capital').value,initialCapital:propFirmChallengeInitialCapital};
+ sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings,capital:$('capital').value,initialCapital:propFirmChallengeInitialCapital,violation:propFirmViolation,dailyBaselineDate:propFirmDailyBaselineDate,dailyStartBalance:propFirmDailyStartBalance};
 }
 function restoreModeSnapshot(mode){
  const snap=sessionByMode[mode];
@@ -990,14 +1017,17 @@ function restoreModeSnapshot(mode){
    positions=[]; pendingOrders=[]; active=null; equity=[num($('capital').value)||10000];
    drawings=[];
  }
- // STEP 2: il capitale INIZIALE della Challenge (fisso per tutta la sua durata, usato dal
- // motore di rischio per il Max Drawdown) va ripristinato/azzerato insieme al resto SOLO per
- // le due sessioni Prop Firm — per Storico/Live "semplici" non significa nulla.
+ // STEP 2/3: il capitale INIZIALE della Challenge e l'eventuale violazione già registrata
+ // (conto chiuso) vanno ripristinati insieme al resto SOLO per le due sessioni Prop Firm — se
+ // si era chiuso il conto e si esce/rientra in questa Challenge senza premere "Ricomincia da
+ // capo", deve restare chiuso, non riaprirsi da solo cambiando sessione o ricaricando la pagina.
  if(mode==='backtest_propfirm'||mode==='live_propfirm'){
    propFirmChallengeInitialCapital=(snap&&Number.isFinite(snap.initialCapital))?snap.initialCapital:(num($('capital').value)||10000);
-   propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+   propFirmViolation=(snap&&snap.violation)?snap.violation:null;
+   propFirmDailyBaselineDate=(snap&&snap.dailyBaselineDate)||null;
+   propFirmDailyStartBalance=(snap&&Number.isFinite(snap.dailyStartBalance))?snap.dailyStartBalance:null;
  }else{
-   propFirmChallengeInitialCapital=null;
+   propFirmChallengeInitialCapital=null; propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
  }
  // Cambiando sessione, selezione/cronologia annulla-ripristina dei disegni non hanno più senso
  // per quelli della sessione che si lascia: azzerate qui, in un unico punto valido per tutti i
@@ -1185,6 +1215,11 @@ function finalizePropFirmModeChange(){
   tradeSLLine=null; tradeTPLine=null;
   syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
   updatePropFirmBodyClass();
+  // STEP 3: se si sta entrando in una Challenge già chiusa per violazione (restoreModeSnapshot
+  // l'ha appena ripristinata), la schermata drammatica ricompare subito — un conto chiuso resta
+  // chiuso finché non si preme "Ricomincia da capo", non basta cambiare sessione e tornare.
+  if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
+  else hidePropFirmViolationOverlay();
   update(); draw();
   scheduleSave();
 }
@@ -1285,10 +1320,63 @@ function triggerPropFirmViolation(rule,details){
   propFirmViolation={rule,...details,timestamp:Date.now(),timestampIso:new Date().toISOString()};
   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';} // pausa il replay storico
   if(liveModeActive){ disconnectCapitalStream(); if(liveRefreshTimer){clearInterval(liveRefreshTimer);liveRefreshTimer=null;} } // disconnessione Live
-  const ruleLabel=rule==='daily'?'Daily Drawdown (5%)':'Maximum Drawdown (10%)';
-  $('status').textContent=`🛑 CONTO PROP FIRM CHIUSO — violazione regola "${ruleLabel}". Hai infranto le regole di Risk Management della Prop Firm. (La schermata dedicata arriva con lo Step 3 — per ora il simulatore resta bloccato: usa "🛡️ MODALITÀ PROP FIRM" per uscire o ricomincia una nuova Challenge dal modulo capitale.)`;
+  showPropFirmViolationOverlay();
   update();draw();
 }
+// STEP 3: schermata drammatica a tutta pagina, con i valori esatti al millisecondo registrati
+// da triggerPropFirmViolation(). L'overlay copre l'intera viewport (position:fixed, z-index
+// altissimo), quindi blocca già da solo qualunque interazione col resto della pagina.
+function showPropFirmViolationOverlay(){
+  const v=propFirmViolation; if(!v)return;
+  const ruleLabel=v.rule==='daily'?'Daily Drawdown (5%)':'Maximum Drawdown (10%)';
+  $('pfViolationRule').textContent=ruleLabel;
+  const ts=new Date(v.timestamp);
+  const tsLabel=ts.toLocaleDateString('it-IT')+' '+ts.toLocaleTimeString('it-IT',{hour12:false})+'.'+String(v.timestamp%1000).padStart(3,'0');
+  $('pfViolationTimestamp').textContent=tsLabel;
+  let detailsHtml='';
+  if(v.rule==='daily'){
+    detailsHtml=`
+      <div class="pfViolationRow"><span>Saldo di inizio giornata</span><b>${euro(v.dailyStartBalance)}</b></div>
+      <div class="pfViolationRow"><span>Equity al momento della violazione</span><b>${euro(v.equityNow)}</b></div>
+      <div class="pfViolationRow"><span>Perdita giornaliera</span><b>${euro(v.dailyLoss)} (${v.dailyLossPct.toFixed(4)}%)</b></div>
+      <div class="pfViolationRow"><span>Limite consentito (5%)</span><b>${euro(v.dailyLossLimit)}</b></div>`;
+  }else{
+    detailsHtml=`
+      <div class="pfViolationRow"><span>Capitale iniziale della Challenge</span><b>${euro(v.initialCapital)}</b></div>
+      <div class="pfViolationRow"><span>Equity al momento della violazione</span><b>${euro(v.equityNow)}</b></div>
+      <div class="pfViolationRow"><span>Perdita totale</span><b>${euro(v.totalLoss)} (${v.totalLossPct.toFixed(4)}%)</b></div>
+      <div class="pfViolationRow"><span>Limite consentito (10%)</span><b>${euro(v.maxDrawdownLimit)}</b></div>`;
+  }
+  $('pfViolationDetails').innerHTML=detailsHtml;
+  const ov=$('propFirmViolationOverlay'); if(ov)ov.style.display='flex';
+}
+function hidePropFirmViolationOverlay(){
+  const ov=$('propFirmViolationOverlay'); if(ov)ov.style.display='none';
+}
+// "RICOMINCIA DA CAPO": resetta SOLO i dati del conto Prop Firm di QUESTA combinazione
+// (Storico+PF o Live+PF) — capitale riportato al valore INIZIALE già scelto (non richiesto di
+// nuovo) e trade di QUESTA sessione svuotati dal Trade Journal; le altre 3 sessioni (incluso
+// l'eventuale altra combinazione Prop Firm) restano del tutto intatte.
+function restartPropFirmChallenge(){
+  if(!isPropFirmMode)return;
+  const key=currentMode();
+  const initCap=Number.isFinite(propFirmChallengeInitialCapital)?propFirmChallengeInitialCapital:(num($('capital').value)||10000);
+  positions=[]; active=null; pendingOrders=[]; drawings=[];
+  equity=[initCap];
+  if($('capital'))$('capital').value=String(initCap);
+  trades=trades.filter(t=>t.mode!==key); // svuota SOLO i trade di questa Challenge, non quelli delle altre 3 sessioni
+  statsBaselineByMode[key]=0;
+  sessionByMode[key]={positions,pendingOrders,active,equity,drawings,capital:String(initCap),initialCapital:initCap};
+  propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+  hidePropFirmViolationOverlay();
+  tradeSLLine=null; tradeTPLine=null;
+  syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
+  if(liveModeActive){ startLiveRefreshTimer(); refreshLiveStreamSubscriptions(); }
+  update(); draw();
+  scheduleSave();
+  $('status').textContent='Nuova Challenge Prop Firm iniziata da capo, con lo stesso capitale iniziale di '+euro(initCap)+'.';
+}
+
 
 // --- Pratiche Vietate: Trading sulle News (solo sessione Live) -------------------------
 // "Simulalo" (richiesto esplicitamente, nessun calendario economico reale collegato): orari
@@ -1680,6 +1768,19 @@ function applyLightSessionState(state){
  sessionByMode=Object.assign({backtest:null,live:null,backtest_propfirm:null,live_propfirm:null},state.sessionByMode||{});
  liveModeActive=!!state.liveModeActive;
  isPropFirmMode=!!state.isPropFirmMode;
+ // STEP 2/3: se la sessione ripristinata era una Challenge Prop Firm, il capitale iniziale e
+ // l'eventuale violazione già registrata (conto chiuso) vanno ripristinati anche qui — un
+ // refresh di pagina non deve MAI "sbloccare" da solo un conto chiuso per violazione.
+ if(isPropFirmMode){
+   const key=liveModeActive?'live_propfirm':'backtest_propfirm';
+   const snap=sessionByMode[key];
+   propFirmChallengeInitialCapital=(snap&&Number.isFinite(snap.initialCapital))?snap.initialCapital:(num($('capital').value)||10000);
+   propFirmViolation=(snap&&snap.violation)?snap.violation:null;
+   propFirmDailyBaselineDate=(snap&&snap.dailyBaselineDate)||null;
+   propFirmDailyStartBalance=(snap&&Number.isFinite(snap.dailyStartBalance))?snap.dailyStartBalance:null;
+ }else{
+   propFirmChallengeInitialCapital=null; propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+ }
  candleTheme=(state.fields&&CANDLE_THEMES[state.fields.candleTheme])?state.fields.candleTheme:'green_red';
  if($('candleTheme'))$('candleTheme').value=candleTheme;
  drawings=state.drawings||[];
@@ -10020,6 +10121,8 @@ $('liveChangeAccountBtn').addEventListener('click',()=>{ openLiveLoginModal(live
 
 // ===================== PROP FIRM MODE — collegamento pulsante toggle + i 2 moduli grafici =====================
 $('propFirmToggleBtn').addEventListener('click', onPropFirmToggleClick);
+// STEP 3: pulsante "RICOMINCIA DA CAPO" nella schermata di violazione a tutta pagina.
+$('pfViolationRestartBtn')?.addEventListener('click', restartPropFirmChallenge);
 // Modulo 1: "In quale sessione la vuoi attivare?" (Storico o Live)
 $('propFirmChoiceStoricoBtn').addEventListener('click', ()=> proceedEnablePropFirm(false));
 $('propFirmChoiceLiveBtn').addEventListener('click', ()=> proceedEnablePropFirm(true));
@@ -10293,6 +10396,10 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
  // isPropFirmMode è già stato ripristinato da applyLightSessionState() insieme al resto:
  // basta riflettere il suo valore su classe CSS/pulsante/UI a fine ripristino.
  updatePropFirmBodyClass();
+ // STEP 3: se la sessione ripristinata era già una Challenge chiusa per violazione, la
+ // schermata drammatica ricompare subito al caricamento della pagina — non basta un refresh
+ // per "sbloccarla" di nuovo.
+ if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
 })();
 </script>
 
