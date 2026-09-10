@@ -276,6 +276,10 @@ tr.otherAssetRow td:last-child{opacity:1}
       </div>
     `);
     document.getElementById("blocked-logout-btn").addEventListener("click", async () => {
+      // Richiesto esplicitamente: il backup su Firebase scatta anche uscendo dall'account,
+      // non solo chiudendo l'app — va fatto PRIMA del signOut, finché l'utente risulta ancora
+      // autenticato (altrimenti il salvataggio cloud verrebbe rifiutato).
+      if(window.syncFullStatusToFirebase){ try{ await window.syncFullStatusToFirebase('logout', true); }catch(e){} }
       await signOut(auth);
       window.location.replace(LOGIN_PAGE);
     });
@@ -379,6 +383,10 @@ tr.otherAssetRow td:last-child{opacity:1}
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
     if (trialCountdownInterval) clearInterval(trialCountdownInterval);
+    // Richiesto esplicitamente: il backup su Firebase scatta anche uscendo dall'account, non
+    // solo chiudendo l'app — va fatto PRIMA del signOut, finché l'utente risulta ancora
+    // autenticato (altrimenti il salvataggio cloud verrebbe rifiutato).
+    if (window.syncFullStatusToFirebase) { try { await window.syncFullStatusToFirebase('logout', true); } catch(e){} }
     await signOut(auth);
     window.location.replace(LOGIN_PAGE);
   });
@@ -765,6 +773,7 @@ plot(slowMA, title=&quot;Slow&quot;, color=color.orange)" style="width:100%;box-
      <option value="sr_breaks">Support &amp; Resistance Levels with Breaks [LuxAlgo]</option>
      <option value="ema_ind">Moving Average Exponential [EMA]</option>
      <option value="bsl_ssl_fvg">Buyside &amp; Sellside Liquidity + Aligned FVGs [LuxAlgo]</option>
+     <option value="ict_reversal_setup">ICT Reversal Setup [Quant]</option>
    </select></span>
    <button id="openCustomScriptBtn" class="toolBtn" title="Incolla un codice in stile Pine Script (TradingView) e applicalo come indicatore personalizzato">🧩 Codice personalizzato</button>
    <button id="toggleIndicatorsListBtn" class="toolBtn" style="display:none" title="Mostra/nascondi l'elenco degli indicatori attivi">👁 Elenco indicatori</button>
@@ -1521,8 +1530,8 @@ async function saveLightStateNow(){
  // NIENTE PIÙ SCRITTURE SU FIRESTORE QUI: prima veniva chiamato window.fxbtCloud.save(state)
  // ad ogni autosalvataggio (ogni ~800ms durante il trading attivo), generando un numero di
  // scritture/trasferimenti enorme sul piano Blaze. Da ora Firestore viene aggiornato UNA SOLA
- // VOLTA quando l'app diventa inattiva o si sta chiudendo — vedi syncFullStatusToFirebase()
- // più sotto, agganciata a visibilitychange/pagehide.
+ // VOLTA quando si esce davvero dall'app o dall'account — vedi syncFullStatusToFirebase()
+ // più sotto, agganciata a pagehide/logout (mai al semplice cambio tab).
  const el=$('autosaveStatus');
  if(el)el.textContent=ok?('Sessione salvata • '+new Date().toLocaleTimeString('it-IT')):'⚠️ Salvataggio non riuscito';
 }
@@ -1537,13 +1546,13 @@ async function saveLightStateNow(){
 // schermo) o si sta chiudendo/ricaricando — mai durante il trading attivo.
 let lastFirebaseSyncAt=0;
 const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più eventi scattano insieme
-async function syncFullStatusToFirebase(reason){
+async function syncFullStatusToFirebase(reason,force){
  if(!(window.fxbtCloud && window.fxbtCloud.uid))return; // non loggato: niente cloud, solo locale
  // NIENTE guardia su baseRows.length qui: subito dopo un cambio sessione l'asset è
  // volutamente vuoto (vedi clearAssetSelectionForSessionSwitch), ma conto/Trade Journal/
  // ultima candela vista per asset restano comunque validi e vanno sincronizzati lo stesso.
  const now=Date.now();
- if(now-lastFirebaseSyncAt<FIREBASE_MIN_SYNC_INTERVAL_MS)return;
+ if(!force && now-lastFirebaseSyncAt<FIREBASE_MIN_SYNC_INTERVAL_MS)return;
  lastFirebaseSyncAt=now;
  try{
    // Richiesto esplicitamente: si manda su Firebase esattamente il file appena scritto in
@@ -1556,13 +1565,21 @@ async function syncFullStatusToFirebase(reason){
  }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
 }
-// "App inattiva": la scheda passa in background (cambio tab, minimizzazione, schermo bloccato).
-// È il segnale più affidabile su mobile (dove "beforeunload" spesso non parte in tempo).
-document.addEventListener('visibilitychange', ()=>{
- if(document.visibilityState==='hidden') syncFullStatusToFirebase('visibilitychange');
-});
+// RICHIESTO ESPLICITAMENTE: finché non si esce davvero dall'app (chiusura/ricarica pagina) o
+// non si esce dall'account, il backup su Firebase NON deve scattare — tutte le azioni nel
+// frattempo restano SOLO in locale (localStorage/IndexedDB, vedi scheduleSave()). Per questo
+// NON agganciamo più "visibilitychange" (cambio tab, minimizzazione, schermo bloccato): quello
+// non è "uscire dall'app", è solo mettere la scheda in background, e prima faceva scattare un
+// invio a Firebase anche in quel caso. Restano solo i due veri momenti di uscita:
 // "App chiusa"/pagina ricaricata: ultimo tentativo, anche se la scheda si chiude subito dopo.
 window.addEventListener('pagehide', ()=>{ syncFullStatusToFirebase('pagehide'); });
+// "Uscita dall'account": vedi il pulsante logout-btn/blocked-logout-btn più in alto nel file,
+// che chiama window.syncFullStatusToFirebase('logout') PRIMA di eseguire davvero il signOut —
+// esposta su window perché quel pulsante vive in un altro <script type="module"> separato da
+// questo (il motore di trading), che gira PRIMA che questo script sia stato eseguito: la
+// funzione viene quindi chiamata solo al click, quando questo script ha già fatto in tempo a
+// definirla, mai al momento in cui quel listener viene registrato.
+window.syncFullStatusToFirebase = syncFullStatusToFirebase;
 
 async function saveCsvNow(){
  await idbPut('csv',{library:csvLibrary});
@@ -3830,6 +3847,188 @@ const INDICATOR_DEFS={
      });
    }
  }
+ ,
+ ict_reversal_setup:{
+   label:'ICT Reversal Setup [Quant]',
+   // Porting a mano (non passa dal mini-interprete) dello script Pine v6 fornito dall'utente:
+   // pivot high/low, Market Structure Shift con Breaker Block, Fair Value Gap filtrati per
+   // ATR, e la mini-dashboard d'angolo. Restano fedeli le condizioni; lo stile dei box/label
+   // ricalca quello Pine più da vicino possibile con le primitive canvas già usate dagli
+   // altri indicatori (vedi sr_breaks/bsl_ssl_fvg per lo stesso approccio).
+   defaultParams:()=>({
+     pivotLen:5, showFVG:true, fvgExtend:15, showBreaker:true,
+     showDash:true, dashPos:'top_right', trendLookback:50,
+     fvgAtrLen:14, fvgThreshold:0.1,
+     bullColor:'#089981', bearColor:'#f23645', textColor:'#ffffff'
+   }),
+   compute(rows, upToIdx, ind){
+     const p=ind.params, st=ind.calc;
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+       st.labels=[]; st.mssLines=[]; st.breakerBoxes=[]; st.fvgBoxes=[];
+       st.lastPH=NaN; st.prevPH=NaN; st.lastPHBar=null;
+       st.lastPL=NaN; st.prevPL=NaN; st.lastPLBar=null;
+       st.currentHL=NaN; st.currentHLBar=null;
+       st.currentLH=NaN; st.currentLHBar=null;
+       st.atrPrev=null;
+       st.lastBreakerType='None'; st.lastBreakerPrice=NaN;
+       st.lastFVGType='None'; st.lastFVGRange='None';
+       st.trendPctBull=0; st.trendPctBear=0;
+     }
+     const L=Math.max(1,p.pivotLen|0);
+     for(let i=st.builtTo+1;i<=upToIdx;i++){
+       // ta.atr(fvgAtrLen): RMA del True Range, usato come soglia minima per le FVG.
+       const prevClose=i>0?rows[i-1].close:rows[i].close;
+       const tr=Math.max(rows[i].high-rows[i].low, Math.abs(rows[i].high-prevClose), Math.abs(rows[i].low-prevClose));
+       const alen=Math.max(1,p.fvgAtrLen|0);
+       st.atrPrev=(st.atrPrev==null)?tr:((tr+(alen-1)*st.atrPrev)/alen);
+       const atrValue=st.atrPrev;
+
+       // ta.pivothigh(pivotLen,pivotLen) / ta.pivotlow(...): confermato quando si sono viste
+       // anche le "pivotLen" barre successive al candidato (cand = i-L).
+       const cand=i-L;
+       if(cand-L>=0 && cand+L===i){
+         let isHigh=true, isLow=true;
+         const hv=rows[cand].high, lv=rows[cand].low;
+         for(let k=cand-L;k<=cand+L;k++){
+           if(k===cand)continue;
+           if(rows[k].high>hv)isHigh=false;
+           if(rows[k].low<lv)isLow=false;
+         }
+         if(isHigh){
+           st.prevPH=st.lastPH; st.lastPH=hv; st.lastPHBar=cand;
+           const txt=!Number.isFinite(st.prevPH)?'H':(st.lastPH>st.prevPH?'HH':'LH');
+           st.labels.push({idx:cand,price:hv,text:txt,dir:'down',color:p.textColor});
+           if(st.lastPH>st.prevPH){ st.currentLH=NaN; st.currentLHBar=null; }
+           else{ st.currentLH=st.lastPH; st.currentLHBar=st.lastPHBar; }
+         }
+         if(isLow){
+           st.prevPL=st.lastPL; st.lastPL=lv; st.lastPLBar=cand;
+           const txt=!Number.isFinite(st.prevPL)?'L':(st.lastPL>st.prevPL?'HL':'LL');
+           st.labels.push({idx:cand,price:lv,text:txt,dir:'up',color:p.textColor});
+           if(st.lastPL>st.prevPL){ st.currentHL=st.lastPL; st.currentHLBar=st.lastPLBar; }
+           else{ st.currentHL=NaN; st.currentHLBar=null; }
+         }
+       }
+       // Market Structure Shift ribassista: chiusura sotto l'ultimo HL dopo un HH.
+       if(Number.isFinite(st.currentHL) && i>0){
+         const crossUnder=rows[i-1].close>=st.currentHL && rows[i].close<st.currentHL;
+         if(crossUnder){
+           if(p.showBreaker){
+             const topRef=rows[st.currentHLBar]?rows[st.currentHLBar].high:st.currentHL;
+             st.breakerBoxes.push({x1:st.currentHLBar-1,x2:i,top:topRef,bottom:st.currentHL,color:p.bullColor,text:'Breaker'});
+             st.lastBreakerType='Bearish'; st.lastBreakerPrice=st.currentHL;
+           }
+           st.mssLines.push({x1:st.currentHLBar,x2:i,price:st.currentHL,color:p.bearColor});
+           st.labels.push({idx:i,price:st.currentHL,text:'MSS',dir:'up',color:p.bearColor});
+           st.currentHL=NaN; st.currentHLBar=null;
+         }
+       }
+       // Market Structure Shift rialzista: chiusura sopra l'ultimo LH dopo un LL.
+       if(Number.isFinite(st.currentLH) && i>0){
+         const crossOver=rows[i-1].close<=st.currentLH && rows[i].close>st.currentLH;
+         if(crossOver){
+           if(p.showBreaker){
+             const botRef=rows[st.currentLHBar]?rows[st.currentLHBar].low:st.currentLH;
+             st.breakerBoxes.push({x1:st.currentLHBar-1,x2:i,top:st.currentLH,bottom:botRef,color:p.bearColor,text:'Breaker'});
+             st.lastBreakerType='Bullish'; st.lastBreakerPrice=st.currentLH;
+           }
+           st.mssLines.push({x1:st.currentLHBar,x2:i,price:st.currentLH,color:p.bullColor});
+           st.labels.push({idx:i,price:st.currentLH,text:'MSS',dir:'down',color:p.bullColor});
+           st.currentLH=NaN; st.currentLHBar=null;
+         }
+       }
+       // Fair Value Gap a 3 candele, filtrata per ampiezza minima (ATR * moltiplicatore).
+       if(p.showFVG && i>=2){
+         const threshold=atrValue*p.fvgThreshold;
+         const isBearFVG=rows[i-2].low>rows[i].high && (rows[i-2].low-rows[i].high)>threshold;
+         const isBullFVG=rows[i-2].high<rows[i].low && (rows[i].low-rows[i-2].high)>threshold;
+         if(isBearFVG){
+           st.fvgBoxes.push({x1:i-2,x2:i+(p.fvgExtend|0),top:rows[i-2].low,bottom:rows[i].high,color:p.bearColor,text:'FVG'});
+           st.lastFVGType='Bearish'; st.lastFVGRange=fmtPrice(rows[i-2].low)+' - '+fmtPrice(rows[i].high);
+         }
+         if(isBullFVG){
+           st.fvgBoxes.push({x1:i-2,x2:i+(p.fvgExtend|0),top:rows[i].low,bottom:rows[i-2].high,color:p.bullColor,text:'FVG'});
+           st.lastFVGType='Bullish'; st.lastFVGRange=fmtPrice(rows[i-2].high)+' - '+fmtPrice(rows[i].low);
+         }
+       }
+     }
+     // Trend bias (dashboard): % di candele rialziste sulle ultime "trendLookback" fino a upToIdx.
+     const TL=Math.max(1,p.trendLookback|0);
+     let bull=0,cnt=0;
+     for(let k=Math.max(0,upToIdx-TL+1);k<=upToIdx;k++){ cnt++; if(rows[k].close>rows[k].open)bull++; }
+     st.trendPctBull=cnt?Math.round(bull/cnt*1000)/10:0;
+     st.trendPctBear=Math.round((100-st.trendPctBull)*10)/10;
+     st.builtTo=upToIdx;
+   },
+   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y){
+     const st=ind.calc, p=ind.params;
+     if(!st||st.builtTo<0)return;
+     ctx.save();
+     ctx.font='10px system-ui,sans-serif'; ctx.textAlign='center';
+     st.labels.forEach(lb=>{
+       if(lb.idx<dataStart-2||lb.idx>dataEnd+2)return;
+       const xx=xAbs(lb.idx), yy=y(lb.price);
+       ctx.fillStyle=lb.color||p.textColor||'#fff';
+       ctx.fillText(lb.text, xx, lb.dir==='down'?yy-8:yy+14);
+     });
+     ctx.restore();
+     st.mssLines.forEach(ln=>{
+       if(ln.x2<dataStart-2||ln.x1>dataEnd+2)return;
+       ctx.save(); ctx.strokeStyle=ln.color; ctx.lineWidth=1; ctx.setLineDash([4,3]);
+       const yy=y(ln.price);
+       ctx.beginPath(); ctx.moveTo(xAbs(ln.x1),yy); ctx.lineTo(xAbs(ln.x2),yy); ctx.stroke();
+       ctx.restore();
+     });
+     const drawBox=(b)=>{
+       if(b.x2<dataStart-2||b.x1>dataEnd+2)return;
+       const x1=xAbs(b.x1), x2=xAbs(b.x2), yTop=y(b.top), yBot=y(b.bottom);
+       ctx.save();
+       ctx.fillStyle=hexToRgba(b.color,.18);
+       ctx.fillRect(Math.min(x1,x2),Math.min(yTop,yBot),Math.abs(x2-x1),Math.abs(yBot-yTop));
+       ctx.strokeStyle=hexToRgba(b.color,.6); ctx.lineWidth=1;
+       ctx.strokeRect(Math.min(x1,x2),Math.min(yTop,yBot),Math.abs(x2-x1),Math.abs(yBot-yTop));
+       ctx.fillStyle=b.color; ctx.font='9px system-ui,sans-serif'; ctx.textAlign='left';
+       ctx.fillText(b.text, Math.min(x1,x2)+3, Math.min(yTop,yBot)+11);
+       ctx.restore();
+     };
+     st.breakerBoxes.forEach(drawBox);
+     if(p.showFVG) st.fvgBoxes.forEach(drawBox);
+     if(p.showDash){
+       const W=ctx.canvas.clientWidth||ctx.canvas.width, H=ctx.canvas.clientHeight||ctx.canvas.height;
+       const tableRows=[
+         ['ICT Concept','Current Status'],
+         ['Last Breaker', st.lastBreakerType+' ('+(Number.isFinite(st.lastBreakerPrice)?fmtPrice(st.lastBreakerPrice):'-')+')'],
+         ['Last FVG', st.lastFVGType+' ['+st.lastFVGRange+']'],
+         ['Trend Bias', st.trendPctBull+'% Bull / '+st.trendPctBear+'% Bear']
+       ];
+       const rowH=18, colW=[86,150], padd=8;
+       const boxW=colW[0]+colW[1], boxH=rowH*tableRows.length;
+       let bx,by;
+       if(p.dashPos==='top_right'){ bx=W-boxW-padd; by=padd; }
+       else if(p.dashPos==='bottom_right'){ bx=W-boxW-padd; by=H-boxH-padd; }
+       else if(p.dashPos==='top_left'){ bx=padd; by=padd; }
+       else { bx=padd; by=H-boxH-padd; }
+       ctx.save();
+       ctx.fillStyle='rgba(11,17,23,.92)'; ctx.strokeStyle='#2b3541'; ctx.lineWidth=1;
+       ctx.fillRect(bx,by,boxW,boxH); ctx.strokeRect(bx,by,boxW,boxH);
+       ctx.font='10.5px system-ui,sans-serif'; ctx.textBaseline='middle';
+       tableRows.forEach((r,ri)=>{
+         const ry=by+ri*rowH;
+         if(ri>0){
+           const bg=r[1].startsWith('Bullish')?p.bullColor:(r[1].startsWith('Bearish')?p.bearColor:null);
+           if(bg){ ctx.fillStyle=hexToRgba(bg,.35); ctx.fillRect(bx+colW[0],ry,colW[1],rowH); }
+         }
+         ctx.strokeStyle='#202832'; ctx.strokeRect(bx,ry,colW[0],rowH); ctx.strokeRect(bx+colW[0],ry,colW[1],rowH);
+         ctx.fillStyle=ri===0?'#9aa4b2':(p.textColor||'#fff');
+         ctx.textAlign='left';
+         ctx.fillText(r[0], bx+5, ry+rowH/2+1);
+         ctx.fillText(r[1], bx+colW[0]+5, ry+rowH/2+1);
+       });
+       ctx.restore();
+     }
+   }
+ }
 
 };
 
@@ -3894,6 +4093,9 @@ function pineParseExpr(toks,pos){
   function peek(){ return toks[pos.i]; }
   function eatOp(v){ const t=peek(); if(t.t==='op'&&t.v===v){pos.i++;return true;} return false; }
   function expectOp(v){ if(!eatOp(v))throw new Error('Atteso "'+v+'"'); }
+  // Pine Script usa le parole "and"/"or"/"not", non &&/||/! — supportiamo ENTRAMBE le forme
+  // (il codice incollato dagli utenti è quasi sempre scritto alla Pine).
+  function eatKeyword(w){ const t=peek(); if(t.t==='ident'&&t.v===w){pos.i++;return true;} return false; }
   function parsePrimary(){
     const t=peek();
     if(t.t==='num'){ pos.i++; return {type:'num',value:t.v}; }
@@ -3902,6 +4104,8 @@ function pineParseExpr(toks,pos){
     if(t.t==='op'&&t.v==='('){ pos.i++; const e=parseTernary(); expectOp(')'); return e; }
     if(t.t==='op'&&t.v==='-'){ pos.i++; return {type:'unary',op:'-',expr:parseUnary()}; }
     if(t.t==='op'&&t.v==='!'){ pos.i++; return {type:'unary',op:'!',expr:parseUnary()}; }
+    if(t.t==='ident'&&t.v==='not'){ pos.i++; return {type:'unary',op:'!',expr:parseUnary()}; }
+    if(t.t==='ident'&&t.v==='na'&&!(toks[pos.i+1]&&toks[pos.i+1].t==='op'&&toks[pos.i+1].v==='(')){ pos.i++; return {type:'num',value:NaN}; } // na Pine (bare) -> NaN JS
     if(t.t==='ident'){
       pos.i++;
       let name=t.v;
@@ -3971,12 +4175,12 @@ function pineParseExpr(toks,pos){
   }
   function parseAnd(){
     let left=parseCompare();
-    while(eatOp('&&')) left={type:'binop',op:'&&',left,right:parseCompare()};
+    while(eatOp('&&')||eatKeyword('and')) left={type:'binop',op:'&&',left,right:parseCompare()};
     return left;
   }
   function parseOr(){
     let left=parseAnd();
-    while(eatOp('||')) left={type:'binop',op:'||',left,right:parseAnd()};
+    while(eatOp('||')||eatKeyword('or')) left={type:'binop',op:'||',left,right:parseAnd()};
     return left;
   }
   function parseTernary(){
@@ -4146,6 +4350,7 @@ function pineEval(node,rows,i,st){
       if(node.name==='math.round')return Math.round(pineEval(node.args[0].value,rows,i,st));
       if(node.name==='math.sqrt')return Math.sqrt(pineEval(node.args[0].value,rows,i,st));
       if(node.name==='math.pow')return Math.pow(pineEval(node.args[0].value,rows,i,st),pineEval(node.args[1].value,rows,i,st));
+      if(node.name==='na')return Number.isNaN(pineEval(node.args[0].value,rows,i,st))?1:0;
       throw new Error('Funzione non supportata: "'+node.name+'"');
     }
     default: throw new Error('Nodo non riconosciuto nello script');
