@@ -505,6 +505,10 @@ plot(fastMA, title=&quot;Fast&quot;, color=color.blue, linewidth=2)
 plot(slowMA, title=&quot;Slow&quot;, color=color.orange)" style="width:100%;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5;background:#0b1117;color:#e8edf3;border:1px solid #2b3541;border-radius:8px;padding:10px;resize:vertical"></textarea>
       </label>
       <div id="customScriptError" style="display:none;color:#f23645;font-size:12px;white-space:pre-wrap;background:rgba(242,54,69,.08);border:1px solid rgba(242,54,69,.3);border-radius:8px;padding:8px"></div>
+      <div style="font-size:11.5px;color:#787b86;line-height:1.5;border-top:1px solid #202832;padding-top:10px">
+        Il codice sopra è troppo complesso per il sottoinsieme supportato (usa <code>line.new</code>/<code>box.new</code>/<code>label.new</code>, cicli, funzioni personalizzate...)?
+        <button id="openAiConvertBtn" type="button" class="toolBtn" style="margin-left:4px">🤖 Converti con un assistente AI</button>
+      </div>
       <div>
         <span class="block text-[11px] text-gray-500 uppercase tracking-wide mb-1">Script salvati</span>
         <div id="customScriptSavedList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
@@ -514,6 +518,43 @@ plot(slowMA, title=&quot;Slow&quot;, color=color.orange)" style="width:100%;box-
       <button id="customScriptCancelBtn" class="toolBtn">Annulla</button>
       <button id="customScriptSaveAsBtn" class="toolBtn">💾 Salva con nome</button>
       <button id="customScriptApplyBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">✅ Applica al grafico</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modulo "Converti con AI": non possiamo chiamare l'API di Anthropic direttamente da questa
+     pagina statica (nessun posto sicuro dove tenere una chiave API in un file .html pubblico
+     scaricabile da chiunque) — quindi facciamo da PONTE: generiamo il prompt già pronto con
+     tutte le regole del nostro motore indicatori, l'utente lo incolla nell'assistente AI che
+     preferisce (Claude, ecc.), e incolla qui il codice compute/render che ottiene. -->
+<div id="aiConvertModalOverlay" class="fbModalOverlay" style="display:none">
+  <div class="fbModalBox" style="max-width:640px">
+    <div class="fbModalHeader"><h3>🤖 Converti con un assistente AI</h3><button id="aiConvertCloseBtn" class="fbModalClose" title="Chiudi">✕</button></div>
+    <div class="liveLoginBody">
+      <div style="font-size:12px;color:#9aa4b2;line-height:1.55">
+        1) Copia il prompt qui sotto (contiene già il tuo codice e le regole del motore indicatori di quest'app).<br>
+        2) Incollalo in Claude o in un altro assistente AI capace di scrivere JavaScript.<br>
+        3) Incolla qui sotto SOLO il testo che ti restituisce (nel formato richiesto dal prompt) e premi "Applica".
+      </div>
+      <label>
+        <span class="block text-[11px] text-gray-500 uppercase tracking-wide mb-1">Prompt pronto da copiare</span>
+        <textarea id="aiConvertPrompt" rows="8" readonly spellcheck="false" style="width:100%;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.5;background:#0b1117;color:#9aa4b2;border:1px solid #2b3541;border-radius:8px;padding:10px"></textarea>
+        <button id="aiConvertCopyBtn" type="button" class="toolBtn" style="margin-top:6px">📋 Copia prompt</button>
+      </label>
+      <label>
+        <span class="block text-[11px] text-gray-500 uppercase tracking-wide mb-1">Risposta dell'assistente AI (incolla qui)</span>
+        <textarea id="aiConvertResult" rows="10" spellcheck="false" placeholder="===DEFAULT_PARAMS===
+{ ... }
+===COMPUTE===
+function compute(rows, upToIdx, ind) { ... }
+===RENDER===
+function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="width:100%;box-sizing:border-box;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;background:#0b1117;color:#e8edf3;border:1px solid #2b3541;border-radius:8px;padding:10px;resize:vertical"></textarea>
+      </label>
+      <div id="aiConvertError" style="display:none;color:#f23645;font-size:12px;white-space:pre-wrap;background:rgba(242,54,69,.08);border:1px solid rgba(242,54,69,.3);border-radius:8px;padding:8px"></div>
+    </div>
+    <div class="liveLoginFooter">
+      <button id="aiConvertCancelBtn" class="toolBtn">Annulla</button>
+      <button id="aiConvertApplyBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">✅ Applica il codice generato</button>
     </div>
   </div>
 </div>
@@ -4029,8 +4070,43 @@ const INDICATOR_DEFS={
      }
    }
  }
+ ,
+ // "Convertito con AI": non passa dal mini-interprete Pine-like, ma esegue direttamente il
+ // codice compute/render ottenuto (fuori da qui, vedi modulo "🤖 Converti con un assistente
+ // AI") da un assistente esterno. Compilato UNA volta con new Function() e tenuto in cache
+ // per indicatore in aiIndicatorCompileCache (fuori da ind.calc, che resta libero per lo stato
+ // proprio della funzione generata, esattamente come per gli altri indicatori "a mano").
+ ai_converted:{
+   label:'Indicatore convertito con AI',
+   defaultParams:()=>({name:'Indicatore AI',computeSrc:'function compute(rows,upToIdx,ind){}',renderSrc:'function render(ctx,ind,rows,dataStart,dataEnd,xAbs,y){}'}),
+   compute(rows,upToIdx,ind){
+     let entry=aiIndicatorCompileCache.get(ind);
+     if(!entry||entry.computeSrc!==ind.params.computeSrc||entry.renderSrc!==ind.params.renderSrc){
+       entry={computeSrc:ind.params.computeSrc,renderSrc:ind.params.renderSrc,computeFn:null,renderFn:null,error:null,errorShown:false};
+       try{
+         entry.computeFn=new Function('return ('+ind.params.computeSrc+')')();
+         entry.renderFn=new Function('return ('+ind.params.renderSrc+')')();
+       }catch(e){ entry.error='Codice non valido: '+e.message; }
+       aiIndicatorCompileCache.set(ind,entry);
+       ind.calc={ref:null,builtTo:-1}; // funzioni nuove: lo stato precedente non ha più senso
+     }
+     if(entry.error){
+       if(!entry.errorShown){ entry.errorShown=true; $('status').textContent='⚠️ Indicatore AI "'+(ind.params.name||'')+'": '+entry.error; }
+       return;
+     }
+     try{ entry.computeFn(rows,upToIdx,ind); }
+     catch(e){ if(!entry.errorShown){ entry.errorShown=true; entry.error=e.message; $('status').textContent='⚠️ Indicatore AI "'+(ind.params.name||'')+'" (compute): '+e.message; } }
+   },
+   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y){
+     const entry=aiIndicatorCompileCache.get(ind);
+     if(!entry||!entry.renderFn)return;
+     try{ entry.renderFn(ctx,ind,rows,dataStart,dataEnd,xAbs,y); }
+     catch(e){ if(!entry.errorShown){ entry.errorShown=true; $('status').textContent='⚠️ Indicatore AI "'+(ind.params.name||'')+'" (render): '+e.message; } }
+   }
+ }
 
 };
+const aiIndicatorCompileCache=new WeakMap();
 
 // ===================================================================================
 // MINI-INTERPRETE "PINE-LIKE" per gli script personalizzati (sezione "Codice
@@ -4474,7 +4550,7 @@ function renderActiveIndicatorsUI(){
    topRow.className='indChipTop';
    const nameEl=document.createElement('b');
    nameEl.className='indChipName';
-   const displayLabel=(ind.key==='custom_script'&&ind.params.name)?ind.params.name:def.label;
+   const displayLabel=((ind.key==='custom_script'||ind.key==='ai_converted')&&ind.params.name)?ind.params.name:def.label;
    nameEl.textContent='📊 '+displayLabel;
    nameEl.title=displayLabel;
    topRow.appendChild(nameEl);
@@ -4613,6 +4689,17 @@ function renderActiveIndicatorsUI(){
      // impostazioni" è il codice stesso, quindi il pulsante ingranaggio riapre direttamente il
      // modulo di modifica invece del popover generico.
      if(ind.key==='custom_script'){ openCustomScriptModal({editingId:ind.id,name:ind.params.name,code:ind.params.code}); return; }
+     if(ind.key==='ai_converted'){
+       // Riapre il modulo AI già con il codice compute/render esistente pronto a essere
+       // sostituito: comodo per incollare una versione corretta dopo un errore.
+       aiConvertEditingId=ind.id;
+       $('customScriptName').value=ind.params.name||'';
+       $('aiConvertPrompt').value='';
+       $('aiConvertResult').value='===DEFAULT_PARAMS===\n{}\n===COMPUTE===\n'+ind.params.computeSrc+'\n===RENDER===\n'+ind.params.renderSrc;
+       hideAiConvertError();
+       const ov=$('aiConvertModalOverlay'); if(ov)ov.style.display='flex';
+       return;
+     }
      const isOpen=pop.style.display==='flex';
      closeIndicatorPopovers();
      if(!isOpen){ pop.style.display='flex'; openIndicatorPopoverId=ind.id; }
@@ -4682,6 +4769,63 @@ function openCustomScriptModal(opts){
 function closeCustomScriptModal(){
  const ov=$('customScriptModalOverlay'); if(ov)ov.style.display='none';
  customScriptEditingId=null;
+}
+// ===================== "Converti con AI" (ponte manuale, nessuna chiamata API dalla pagina) =====================
+let aiConvertEditingId=null; // come customScriptEditingId: id dell'indicatore AI in modifica, se ce n'è uno
+function buildPineConversionPrompt(pineCode){
+ return `Sei un esperto di Pine Script (TradingView) e di JavaScript per Canvas 2D. Converti questo indicatore Pine Script in DUE funzioni JavaScript, "compute" e "render", secondo queste regole ESATTE del motore indicatori in cui verranno inserite:
+
+- compute(rows, upToIdx, ind): "rows" è un array di candele con campi {open,high,low,close,volume,date} (in ordine cronologico, indice 0 = più vecchia). Calcola in modo INCREMENTALE, un ciclo "for(let i=ind.calc.builtTo+1;i<=upToIdx;i++)"; salva ogni stato/risultato persistente dentro "ind.calc" (es. ind.calc.out=[], inizializzato la prima volta), e alla fine imposta ind.calc.builtTo=upToIdx. "ind.params" contiene i parametri configurabili (con i valori di DEFAULT_PARAMS sotto). NON leggere mai rows oltre l'indice upToIdx (dati futuri non ancora "arrivati" nel replay).
+- render(ctx, ind, rows, dataStart, dataEnd, xAbs, y): disegna sul context Canvas 2D "ctx" leggendo i risultati già calcolati in ind.calc. "xAbs(indiceCandela)" restituisce la coordinata X assoluta sul canvas per quell'indice; "y(prezzo)" restituisce la coordinata Y assoluta per quel prezzo. Disegna solo gli elementi con indice compreso (circa) tra dataStart e dataEnd, per non sprecare tempo su ciò che non è visibile. Puoi usare liberamente ctx.beginPath/moveTo/lineTo/stroke/fillRect/strokeRect/fillText ecc. Se ti servono, questi due helper sono già disponibili nell'ambiente globale: hexToRgba(hex,alpha) e fmtPrice(numero).
+- DEFAULT_PARAMS: un oggetto JS con i valori di default dei parametri (equivalenti agli "input.*" dello script Pine originale).
+- Elementi Pine come line.new/box.new/label.new/table.new vanno tradotti in disegni canvas equivalenti dentro "render" (linee, rettangoli, testo), calcolando le coordinate/i dati da disegnare dentro "compute" e salvandoli in array dentro ind.calc (es. ind.calc.boxes=[{x1,x2,top,bottom,color,text}, ...]).
+
+Rispondi SOLO con questo formato esatto, senza markdown, senza spiegazioni prima o dopo:
+===DEFAULT_PARAMS===
+{ ... }
+===COMPUTE===
+function compute(rows, upToIdx, ind) { ... }
+===RENDER===
+function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }
+
+Ecco lo script Pine Script da convertire:
+
+${pineCode}`;
+}
+function openAiConvertModal(){
+ const pineCode=$('customScriptCode').value||'';
+ if(!pineCode.trim()){ showCustomScriptError('Incolla prima il codice Pine/LuxAlgo nella casella qui sopra, poi premi "Converti con un assistente AI".'); return; }
+ $('aiConvertPrompt').value=buildPineConversionPrompt(pineCode);
+ $('aiConvertResult').value='';
+ hideAiConvertError();
+ aiConvertEditingId=customScriptEditingId; // se si stava modificando un indicatore Pine-like esistente, la conversione AI lo sostituisce
+ const ov=$('aiConvertModalOverlay'); if(ov)ov.style.display='flex';
+}
+function closeAiConvertModal(){
+ const ov=$('aiConvertModalOverlay'); if(ov)ov.style.display='none';
+ aiConvertEditingId=null;
+}
+function hideAiConvertError(){ const b=$('aiConvertError'); if(b){b.style.display='none';b.textContent='';} }
+function showAiConvertError(msg){ const b=$('aiConvertError'); if(b){b.style.display='block';b.textContent='⚠️ '+msg;} }
+// Divide la risposta dell'assistente nei 3 blocchi attesi e compila subito compute/render (solo
+// per validare: se new Function() fallisce, l'errore è quasi sempre un JS non valido incollato
+// per sbaglio a metà, o markdown/spiegazioni lasciate dentro per errore).
+function parseAiConvertedCode(text){
+ const afterDefaults=text.split('===DEFAULT_PARAMS===')[1];
+ if(afterDefaults===undefined)throw new Error('Manca il blocco "===DEFAULT_PARAMS===": incolla per intero la risposta ricevuta, nel formato richiesto dal prompt.');
+ const [dpPart,afterCompute]=afterDefaults.split('===COMPUTE===');
+ if(afterCompute===undefined)throw new Error('Manca il blocco "===COMPUTE===".');
+ const [computePart,renderPart]=afterCompute.split('===RENDER===');
+ if(renderPart===undefined)throw new Error('Manca il blocco "===RENDER===".');
+ let defaultParamsObj;
+ try{ defaultParamsObj=new Function('return ('+dpPart.trim()+')')(); }
+ catch(e){ throw new Error('DEFAULT_PARAMS non è un oggetto JavaScript valido: '+e.message); }
+ const computeSrc=computePart.trim(), renderSrc=renderPart.trim();
+ try{ new Function('return ('+computeSrc+')')(); }
+ catch(e){ throw new Error('La funzione compute non è JavaScript valido: '+e.message); }
+ try{ new Function('return ('+renderSrc+')')(); }
+ catch(e){ throw new Error('La funzione render non è JavaScript valido: '+e.message); }
+ return {defaultParamsObj,computeSrc,renderSrc};
 }
 // Griglia del grafico (orizzontale = prezzo, verticale = ora): entrambe puntano alla STESSA
 // spaziatura in pixel (gridSpacing), così le celle restano circa quadrate e il numero di
@@ -8651,6 +8795,42 @@ $('customScriptApplyBtn')?.addEventListener('click',()=>{
  scheduleSave();
  closeCustomScriptModal();
  $('status').textContent=`Script "${name}" applicato al grafico.`;
+});
+// ===================== Modulo "Converti con AI" =====================
+$('openAiConvertBtn')?.addEventListener('click',openAiConvertModal);
+$('aiConvertCloseBtn')?.addEventListener('click',closeAiConvertModal);
+$('aiConvertCancelBtn')?.addEventListener('click',closeAiConvertModal);
+$('aiConvertCopyBtn')?.addEventListener('click',async()=>{
+ try{
+   await navigator.clipboard.writeText($('aiConvertPrompt').value);
+   $('status').textContent='Prompt copiato: incollalo nel tuo assistente AI.';
+ }catch(e){
+   $('aiConvertPrompt').select();
+   $('status').textContent='Copia automatica non disponibile: il testo è selezionato, usa Ctrl+C (Cmd+C su Mac).';
+ }
+});
+$('aiConvertApplyBtn')?.addEventListener('click',()=>{
+ const raw=$('aiConvertResult').value||'';
+ if(!raw.trim()){ showAiConvertError('Incolla prima la risposta dell\u2019assistente AI nella casella qui sopra.'); return; }
+ let parsed;
+ try{ parsed=parseAiConvertedCode(raw); }
+ catch(e){ showAiConvertError(e.message||String(e)); return; }
+ hideAiConvertError();
+ const name=($('customScriptName').value||'').trim()||'Indicatore AI';
+ const params={name,computeSrc:parsed.computeSrc,renderSrc:parsed.renderSrc,...parsed.defaultParamsObj};
+ if(aiConvertEditingId){
+   const ind=activeIndicators.find(i=>i.id===aiConvertEditingId);
+   if(ind){ ind.key='ai_converted'; ind.params=params; ind.calc={ref:null,builtTo:-1}; }
+   else{ activeIndicators.push({id:Date.now()+Math.random(),key:'ai_converted',params,hidden:false,calc:{ref:null,builtTo:-1}}); }
+ }else{
+   activeIndicators.push({id:Date.now()+Math.random(),key:'ai_converted',params,hidden:false,calc:{ref:null,builtTo:-1}});
+ }
+ renderActiveIndicatorsUI();
+ draw();
+ scheduleSave();
+ closeAiConvertModal();
+ closeCustomScriptModal();
+ $('status').textContent=`Indicatore "${name}" (convertito con AI) applicato al grafico.`;
 });
 $('toggleIndicatorsListBtn')?.addEventListener('click',()=>{
  indicatorsListHidden=!indicatorsListHidden;
