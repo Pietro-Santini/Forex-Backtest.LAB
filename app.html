@@ -217,6 +217,7 @@ tr.otherAssetRow td{opacity:.6}
 tr.otherAssetRow td:last-child{opacity:1}
 
 .miniBtn{width:auto;padding:5px 9px;font-size:11px;font-weight:600;margin-right:5px}
+.miniBtn.active{background:#277d5a;border-color:#3ea6ff;color:#fff}
 .marginFree{color:#2fbf71}.marginTight{color:#e0b552}.marginNeg{color:#e05252}
 .colorPick{width:44px;height:38px;padding:2px;flex:none}
 .toolSelect{width:auto;padding:8px 10px;font-size:12px;flex:none}
@@ -3683,8 +3684,11 @@ function update(){
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
      const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
      const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
+     // Il testo del bottone riflette lo stato di selezione (modalità toggle: ripremendolo si
+     // deseleziona), così è chiaro a colpo d'occhio invece di restare sempre "Seleziona".
+     const isSelected=isCurrentRow&&p===active;
      const actionsCell=isCurrentRow
-       ?`<button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn" data-be="${p.id}" title="Sposta lo Stop Loss al pareggio (spread attuale incluso se è reale)">BE</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button>`
+       ?`<button class="miniBtn${isSelected?' active':''}" data-select="${p.id}">${isSelected?'✓ Selezionata':'Seleziona'}</button><button class="miniBtn" data-be="${p.id}" title="Sposta lo Stop Loss al pareggio (spread attuale incluso se è reale)">BE</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button>`
        :'';
      // R/R sempre calcolato con lo SL "di apertura" congelato (p.rrSl): non cambia se in
      // seguito si sposta lo SL (breakeven/Stop Profit), solo se si sposta il TP. La cella SL
@@ -8352,9 +8356,14 @@ async function placeRealMt5Order(side){
    if(tpAuto)pos.tpAuto=true;
    pos.rrSl=pos.sl;
    positions.push(pos);
-   active=pos;
-   refreshTradeRiskModel();
-   refreshTradeLevelUI();
+   // Richiesto esplicitamente: dopo l'apertura la posizione NON resta selezionata — niente
+   // "active" che blocchi le caselle SL/TP sui valori appena usati. Restano subito libere e
+   // vuote per comporre il PROSSIMO ordine, esattamente come prima di aprire questo. La
+   // posizione appena aperta non ci perde nulla: ha comunque la sua casella Target/Stop sempre
+   // visibile sul grafico indipendentemente dalla selezione (vedi drawTpSlZoneBox in draw()), e
+   // resta selezionabile in qualsiasi momento col tasto "Seleziona" nella tabella.
+   active=null;
+   clearDraftTradeLevelFields();
    syncTradeLevels();
    draw();update();
  }else{
@@ -8527,6 +8536,19 @@ $('openPositions').addEventListener('click',async e=>{
  if(selId){
    const pos=positions.find(p=>String(p.id)===selId);
    if(!pos)return;
+   // Modalità toggle, richiesta esplicitamente: ripremendo "Seleziona" su una posizione GIÀ
+   // selezionata la si deseleziona, svuotando anche le caselle SL/TP/Entry (che altrimenti
+   // resterebbero bloccate sui suoi valori) così sono subito libere per comporre un nuovo
+   // ordine. La posizione non perde nulla deselezionandola: la sua casella Target/Stop resta
+   // comunque sempre visibile sul grafico (vedi drawTpSlZoneBox in draw()), selezionata o no.
+   if(active===pos){
+     active=null;
+     clearDraftTradeLevelFields();
+     syncTradeLevels();
+     draw();update();
+     $('status').textContent='Posizione deselezionata.';
+     return;
+   }
    const currentAsset=$('market')?.value||'';
    if(pos.asset && currentAsset!==pos.asset){
      $('status').textContent=`Questa posizione è su ${pos.asset}: seleziona quell'ASSET dal menu in alto per gestirla (SL/TP/chiusura) al prezzo corretto.`;
