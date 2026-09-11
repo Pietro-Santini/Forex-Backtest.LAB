@@ -7911,7 +7911,11 @@ async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset){
    pendingOrders.push({
      id:Date.now()+Math.random(),
      asset,side,kind,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,lots,
-     mt5Ticket:ticket
+     mt5Ticket:ticket,
+     // Stessa protezione anti-race di placeRealMt5Order (vedi fetchMt5Orders): evita che questo
+     // ordine appena creato risulti "cancellato altrove" per puro timing se una risposta di
+     // polling partita prima della sua creazione arriva dopo.
+     mt5AddedAt:Date.now()
    });
    $('status').textContent=`🟢 Ordine pendente reale creato su MT5: ${side} ${kind} ${asset} a ${fmtPrice(entry)} (ticket ${ticket}).`;
    playOrderSound();
@@ -8339,7 +8343,10 @@ async function placeRealMt5Order(side){
      lots,risk:0,dist:0,hasRiskModel:false,
      start,startTime,openTF:currentTF,
      marginUsed:0,
-     mt5Ticket:ticket
+     mt5Ticket:ticket,
+     // Usato da fetchMt5Positions() per non giornalizzarla come "chiusa" per errore se una
+     // fotografia del conto scattata PRIMA di questo istante arriva dopo (vedi commento lì).
+     mt5AddedAt:Date.now()
    };
    if(slAuto)pos.slAuto=true;
    if(tpAuto)pos.tpAuto=true;
@@ -10192,6 +10199,19 @@ let mt5PositionsFetchInFlight=false; // evita di accumulare richieste in paralle
 async function fetchMt5Positions(){
  if(mt5PositionsFetchInFlight)return; // il giro precedente non ha ancora finito: salta questo tick
  mt5PositionsFetchInFlight=true;
+ // BUG RISOLTO ("apro la posizione collegato a MT5, su MT5 resta aperta con TP/SL ma sull'app
+ // si chiude subito"): questo polling gira ogni 2s in parallelo a QUALUNQUE apertura reale
+ // (placeRealMt5Order chiama anche lui fetchMt5Positions() appena l'ordine va a buon fine). Se
+ // una richiesta GET /positions era già "in volo" (partita PRIMA che l'ordine venisse eseguito
+ // sul broker) e la sua risposta arriva DOPO che la nuova posizione è già stata aggiunta qui in
+ // positions[], quella risposta è una fotografia del conto scattata PRIMA che la posizione
+ // esistesse: il suo ticket risulta "assente" per puro timing, non perché sia stata chiusa
+ // davvero — e veniva quindi giornalizzata come chiusa per errore, mentre su MT5 restava aperta.
+ // Fix: si registra l'istante in cui QUESTA specifica richiesta viene inviata, e più sotto si
+ // esclude dalla chiusura ogni posizione reale aggiunta DOPO quell'istante (mt5AddedAt) — la sua
+ // sorte si giudicherà al giro di polling successivo, con una fotografia scattata per davvero
+ // dopo la sua apertura.
+ const fetchStartedAt=Date.now();
  try{
    const result=await fetchMt5WithTimeout('/positions',{method:'GET'},8000);
    if(result.ok && Array.isArray(result.data)){
@@ -10205,7 +10225,7 @@ async function fetchMt5Positions(){
      // qui: una posizione reale rimasta tracciata in un'altra sessione (mode) verrà riconciliata
      // quando si torna su quella sessione.
      const newTickets=new Set(result.data.map(p=>String(p.ticket)));
-     const justClosed=positions.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)));
+     const justClosed=positions.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)) && !(p.mt5AddedAt!=null && p.mt5AddedAt>=fetchStartedAt));
      for(const p of justClosed){
        const lastKnown=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
        let price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(currentPrice()??p.entry);
@@ -10233,6 +10253,10 @@ let mt5OrdersFetchInFlight=false;
 async function fetchMt5Orders(){
  if(mt5OrdersFetchInFlight)return;
  mt5OrdersFetchInFlight=true;
+ // Stessa protezione anti-race di fetchMt5Positions() (vedi il suo commento): senza questa,
+ // un ordine pendente reale appena creato potrebbe risultare "cancellato/scaduto altrove" per
+ // puro timing se una richiesta GET /orders partita PRIMA della sua creazione risponde DOPO.
+ const fetchStartedAt=Date.now();
  try{
    const result=await fetchMt5WithTimeout('/orders',{method:'GET'},8000);
    if(result.ok && Array.isArray(result.data)){
@@ -10246,7 +10270,7 @@ async function fetchMt5Orders(){
      // uno scatto viene "adottato" come posizione standard al giro successivo, non subito, ma
      // senza mai perdere l'ordine né duplicarlo.
      const newTickets=new Set(result.data.map(o=>String(o.ticket)));
-     const vanished=pendingOrders.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)));
+     const vanished=pendingOrders.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)) && !(p.mt5AddedAt!=null && p.mt5AddedAt>=fetchStartedAt));
      vanished.forEach(p=>{
        pendingOrders=pendingOrders.filter(x=>x!==p);
        const triggered=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
@@ -10262,7 +10286,7 @@ async function fetchMt5Orders(){
            origin:'PENDING',kind:p.kind||'LIMIT',
            lots:Number(triggered.volume)||p.lots,risk:0,dist:0,hasRiskModel:false,
            start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
-           marginUsed:0,mt5Ticket:triggered.ticket
+           marginUsed:0,mt5Ticket:triggered.ticket,mt5AddedAt:Date.now()
          };
          pos.rrSl=pos.sl;
          positions.push(pos);
