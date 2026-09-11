@@ -761,6 +761,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         <input id="mt5LoginServer" type="text" autocomplete="off" placeholder="Es. NomeBroker-Demo">
       </div>
       <div id="mt5LoginError" class="liveLoginError"></div>
+      <div id="mt5BridgeHelp" style="display:none;font-size:12px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px">
+        <div>Il bridge locale non risponde su questo PC. Se hai già installato l'app desktop, aprila da qui; altrimenti scaricala (serve una volta sola).</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" id="mt5OpenDesktopAppBtn" class="toolBtn" style="flex:1;min-width:150px">🖥️ Apri l'app desktop</button>
+          <button type="button" id="mt5DownloadDesktopAppBtn" class="toolBtn" style="flex:1;min-width:150px">⬇️ Scarica l'app per Desktop</button>
+        </div>
+      </div>
       <div id="mt5LoginFolderStatus" class="sub" style="margin:0"></div>
       <a class="liveLoginGuide" id="mt5LoginChangeFolderBtn" href="javascript:void(0)">📂 Scegli/cambia la cartella dove salvarle</a>
     </form>
@@ -10298,6 +10305,15 @@ let capitalCredsDirHandle=null;
 const MT5_CREDS_FILE='mt5-config.json'; // formato legacy STEP A (un solo conto): solo per migrazione
 const MT5_ACCOUNTS_FILE='mt5-accounts.json'; // formato STEP B/C: lista di conti
 const MT5_BRIDGE_URL='http://127.0.0.1:8000';
+// App desktop (bridge + MT5, installata via ForexBacktestLAB_Setup.exe): un sito NON può mai
+// avviare programmi o installare librerie da solo (bloccato dalla sicurezza del browser), quindi
+// quando il bridge locale non risponde offriamo due scorciatoie invece di lasciare solo un
+// messaggio d'errore — "Apri l'app desktop" (funziona SOLO se l'installer è già stato eseguito
+// almeno una volta: registra lui il protocollo "forexbacktestlab://" nel Registro di Windows,
+// esattamente come fanno Zoom/Discord/Spotify per il loro "Apri nell'app") e "Scarica l'app per
+// Desktop" per chi non l'ha ancora installata.
+const DESKTOP_APP_PROTOCOL_URL='forexbacktestlab://avvia';
+const DESKTOP_APP_DOWNLOAD_URL='https://github.com/pietro-santini/Forex-Backtest.LAB/releases/latest/download/ForexBacktestLAB_Setup.exe';
 // BUG RISOLTO (segnalato): un ordine reale può restare "in corso" per sempre, senza mai un
 // errore né una risposta, quando il terminale MT5 ha una finestra di conferma manuale aperta
 // in attesa di un click (Strumenti -> Opzioni -> scheda Trading -> "Richiedi conferma manuale
@@ -11800,6 +11816,7 @@ async function disconnectFromMt5Bridge(){
 }
 function openMt5LoginModal(prefill){
  $('mt5LoginError').style.display='none';
+ $('mt5BridgeHelp').style.display='none';
  $('mt5LoginAccount').value=prefill?.login||'';
  $('mt5LoginPassword').value=prefill?.password||'';
  $('mt5LoginServer').value=prefill?.server||'';
@@ -12001,6 +12018,17 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
 });
 $('mt5LoginCloseBtn').addEventListener('click',closeMt5LoginModal);
 $('mt5LoginCancelBtn').addEventListener('click',closeMt5LoginModal);
+$('mt5OpenDesktopAppBtn').addEventListener('click',()=>{
+ // Se l'app desktop e' gia' installata (ForexBacktestLAB_Setup.exe eseguito almeno una volta),
+ // l'installer ha registrato "forexbacktestlab://" nel Registro di Windows: il browser la apre
+ // da sola (spesso con un avviso "Vuoi aprire Forex Backtest LAB?" la prima volta, poi ricorda
+ // la scelta). Se NON e' installata, il browser semplicemente ignora il link senza errori
+ // visibili: per questo il pulsante "Scarica" resta sempre visibile accanto, non lo sostituisce.
+ window.location.href=DESKTOP_APP_PROTOCOL_URL;
+});
+$('mt5DownloadDesktopAppBtn').addEventListener('click',()=>{
+ window.open(DESKTOP_APP_DOWNLOAD_URL,'_blank','noopener');
+});
 $('mt5LoginChangeFolderBtn').addEventListener('click',async()=>{
  if(!supportsFS){
    $('mt5LoginFolderStatus').textContent='Il tuo browser non supporta il salvataggio automatico (serve Chrome o Edge desktop): le credenziali resteranno solo per questa sessione.';
@@ -12030,6 +12058,7 @@ $('mt5LoginSubmitBtn').addEventListener('click',async()=>{
  }
  const creds={login,password,server};
  errEl.style.display='none';
+ $('mt5BridgeHelp').style.display='none';
  $('mt5LoginSubmitBtn').disabled=true;
  $('mt5LoginSubmitBtn').textContent='Connessione…';
  const result=await connectToMt5Bridge(creds);
@@ -12038,6 +12067,12 @@ $('mt5LoginSubmitBtn').addEventListener('click',async()=>{
  if(!result.ok){
    errEl.textContent='⚠️ '+result.message;
    errEl.style.display='block';
+   // Messaggio specifico impostato da connectToMt5Bridge() quando il fetch fallisce per
+   // connessione rifiutata (bridge non in esecuzione), non per un errore restituito DAL bridge
+   // (es. login sbagliato): solo in quel caso ha senso offrire "apri/scarica l'app desktop".
+   if(/non raggiungibile/i.test(result.message||'')){
+     $('mt5BridgeHelp').style.display='block';
+   }
    return; // bridge irraggiungibile o credenziali sbagliate: non salviamo né chiudiamo il popup
  }
  let saved=false;
