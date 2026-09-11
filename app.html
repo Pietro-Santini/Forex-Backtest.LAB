@@ -11722,6 +11722,27 @@ async function tryAutoLoadMt5Creds(){
  const key=mt5SelectedAccountKey||mt5AccountKey(mt5SavedAccounts[0]);
  return mt5SavedAccounts.find(a=>mt5AccountKey(a)===key)||mt5SavedAccounts[0];
 }
+// Richiesto esplicitamente: per chi usa MT5 reale, l'app desktop (bridge + terminale MT5) deve
+// provare a partire da SOLA quando si apre l'app nel browser — non quando si accende il PC
+// (quello è un'altra cosa, il Task opzionale "avvia con Windows" in installer.iss), e non solo
+// quando si preme "Connetti". Un sito non può MAI eseguire un programma locale da solo (nessuna
+// API del browser lo permette, per sicurezza): l'unico modo legittimo è chiedere al SISTEMA
+// OPERATIVO di farlo, tramite il protocollo "forexbacktestlab://" registrato dall'installer — è
+// lo stesso meccanismo di Zoom/Discord/Spotify per "Apri nell'app". Due limiti onesti, non
+// aggirabili: (1) funziona SOLO se ForexBacktestLAB_Setup.exe è già stato installato almeno una
+// volta su quel PC — se non lo è, il browser ignora la richiesta in silenzio, senza errori
+// visibili; (2) alcuni browser bloccano la navigazione automatica a un protocollo personalizzato
+// se non è la diretta conseguenza di un click umano — in quel caso può non partire da sola,
+// motivo per cui i pulsanti manuali "Apri l'app desktop"/"Scarica" restano comunque disponibili
+// come ripiego. Gate su mt5WasConnectedLastSession (non su "sempre"): parte solo per chi usa
+// davvero MT5 reale, per non disturbare chi apre l'app solo per il backtest storico e non ha
+// mai installato né gli serve l'app desktop.
+async function maybeAutoLaunchDesktopApp(){
+ if(!mt5WasConnectedLastSession) return;
+ const r=await fetchMt5WithTimeout('/health',{method:'GET'},1200);
+ if(r.ok) return; // bridge già acceso: niente da fare
+ window.location.href=DESKTOP_APP_PROTOCOL_URL;
+}
 // Richiesto esplicitamente: se all'ultima chiusura ero connesso a un conto MT5 reale, alla
 // riapertura dell'app un popup mi propone di ricollegarmi in automatico, SENZA doverlo rifare a
 // mano — ma SOLO sullo stesso PC dove gira il bridge locale (mai da tablet/telefono, che non
@@ -12520,9 +12541,12 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
  // per "sbloccarla" di nuovo.
  if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
  // Ultimissimo passo, a ripristino ormai completo (posizioni/sessione/grafico già al punto
- // dove ero rimasto): propone la riconnessione automatica a MT5 se serve — vedi il commento
- // della funzione per perché non compare mai da tablet/telefono.
- maybeOfferMt5AutoReconnect();
+ // dove ero rimasto): prima prova a far partire da sola l'app desktop (bridge + MT5) se non è
+ // già accesa, poi propone la riconnessione automatica a MT5 se serve — l'ordine conta: così il
+ // bridge ha qualche istante in più per avviarsi prima che maybeOfferMt5AutoReconnect inizi a
+ // interrogarlo (che comunque ritenta 3 volte con una pausa, per lo stesso motivo). Vedi i
+ // commenti delle due funzioni per i dettagli/limiti di ciascuna.
+ maybeAutoLaunchDesktopApp().then(()=>maybeOfferMt5AutoReconnect());
 })();
 </script>
 
