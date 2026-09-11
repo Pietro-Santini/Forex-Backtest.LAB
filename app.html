@@ -1200,7 +1200,7 @@ function captureCurrentModeSnapshot(){
  // salvarlo qui, tornare a una sessione dopo averne visitata un'altra con un capitale diverso
  // (es. una Challenge Prop Firm da 50.000€) mostrava ancora il valore lasciato dall'ultima
  // sessione visitata invece del proprio.
- sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings,capital:$('capital').value,initialCapital:propFirmChallengeInitialCapital,violation:propFirmViolation,dailyBaselineDate:propFirmDailyBaselineDate,dailyStartBalance:propFirmDailyStartBalance};
+ sessionByMode[currentMode()]={positions,pendingOrders,active,equity,drawings,capital:$('capital').value,initialCapital:propFirmChallengeInitialCapital,violation:propFirmViolation,dailyBaselineDate:propFirmDailyBaselineDate,dailyStartBalance:propFirmDailyStartBalance,createdAt:propFirmChallengeCreatedAt};
 }
 function restoreModeSnapshot(mode){
  const snap=sessionByMode[mode];
@@ -1223,8 +1223,12 @@ function restoreModeSnapshot(mode){
    propFirmViolation=(snap&&snap.violation)?snap.violation:null;
    propFirmDailyBaselineDate=(snap&&snap.dailyBaselineDate)||null;
    propFirmDailyStartBalance=(snap&&Number.isFinite(snap.dailyStartBalance))?snap.dailyStartBalance:null;
+   // Se manca (sessione salvata prima di questa modifica), meglio "ora" che null: null
+   // significherebbe "nessun limite", cioè contare per sempre anche posizioni vecchissime.
+   propFirmChallengeCreatedAt=(snap&&Number.isFinite(snap.createdAt))?snap.createdAt:Date.now();
  }else{
    propFirmChallengeInitialCapital=null; propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+   propFirmChallengeCreatedAt=null;
  }
  // Cambiando sessione, selezione/cronologia annulla-ripristina dei disegni non hanno più senso
  // per quelli della sessione che si lascia: azzerate qui, in un unico punto valido per tutti i
@@ -1396,12 +1400,17 @@ async function startNewPropFirmChallenge(initialCapital){
     // violazione pregressa).
     propFirmChallengeInitialCapital=initialCapital;
     propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+    // Richiesto esplicitamente: da questo istante in poi (orologio REALE, non quello simulato
+    // dello Storico — un ticket MT5 ha sempre un orario di apertura vero) SOLO le posizioni
+    // reali MT5 aperte DOPO conteranno per le regole di questa Challenge. Una già aperta prima
+    // (magari già in perdita) non verrà mai adottata qui dentro — vedi fetchMt5Positions().
+    propFirmChallengeCreatedAt=Date.now();
     // Usata anche per un RESET esplicito (RESET SESSIONE o "Ricomincia da capo", richiesto
     // espressamente di far ricomparire questo stesso modulo lì): i trade già registrati per
     // QUESTA combinazione vanno svuotati dal Trade Journal, non solo "nascosti" dal baseline —
     // le altre 3 sessioni non vengono mai toccate.
     if(key) trades=trades.filter(t=>t.mode!==key);
-    if(key){ sessionByMode[key]={positions,pendingOrders,active,equity,drawings,capital:String(initialCapital),initialCapital}; statsBaselineByMode[key]=0; }
+    if(key){ sessionByMode[key]={positions,pendingOrders,active,equity,drawings,capital:String(initialCapital),initialCapital,createdAt:propFirmChallengeCreatedAt}; statsBaselineByMode[key]=0; }
     finalizePropFirmModeChange();
   });
   pendingPropFirmKey = null;
@@ -1448,6 +1457,13 @@ function finalizePropFirmModeChange(){
 let propFirmChallengeInitialCapital = null; // capitale iniziale della Challenge, FISSO per tutta la sua durata (Max Drawdown)
 let propFirmDailyBaselineDate = null;       // giorno (YYYY-MM-DD, fuso Europe/Rome) a cui si riferisce il saldo qui sotto
 let propFirmDailyStartBalance = null;       // saldo (SENZA il flottante delle posizioni aperte) all'inizio di quel giorno
+// Istante REALE (Date.now(), sempre orologio vero anche in Storico — un ticket MT5 ha sempre un
+// orario di apertura reale, mai simulato) in cui QUESTA Challenge è stata creata. Richiesto
+// esplicitamente: una posizione reale sul conto MT5 già aperta PRIMA di questo istante non deve
+// mai contare per le regole Prop Firm (Daily/Max Drawdown), altrimenti una posizione già in
+// perdita, riadottata dal polling subito dopo ogni reset/creazione, farebbe chiudere il conto
+// Prop Firm all'infinito — vedi propFirmFloatingPL() e l'adozione in fetchMt5Positions().
+let propFirmChallengeCreatedAt = null;
 // Quando non-null, la Challenge è "chiusa" per violazione di una regola: {rule, message,
 // timestamp, valori numerici della violazione}. Step 3 userà questo oggetto per l'overlay
 // drammatico a tutta pagina; per ora (Step 2) blocchiamo l'operatività e lo segnaliamo nello
@@ -2035,8 +2051,10 @@ function applyLightSessionState(state){
    propFirmViolation=(snap&&snap.violation)?snap.violation:null;
    propFirmDailyBaselineDate=(snap&&snap.dailyBaselineDate)||null;
    propFirmDailyStartBalance=(snap&&Number.isFinite(snap.dailyStartBalance))?snap.dailyStartBalance:null;
+   propFirmChallengeCreatedAt=(snap&&Number.isFinite(snap.createdAt))?snap.createdAt:Date.now();
  }else{
    propFirmChallengeInitialCapital=null; propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
+   propFirmChallengeCreatedAt=null;
  }
  candleTheme=(state.fields&&CANDLE_THEMES[state.fields.candleTheme])?state.fields.candleTheme:'green_red';
  if($('candleTheme'))$('candleTheme').value=candleTheme;
@@ -10292,7 +10310,22 @@ async function fetchMt5Positions(){
      // chiuderanno, grazie alla riconciliazione qui sopra che le tratta ormai come una qualunque
      // altra posizione reale tracciata.
      const trackedTickets=allTrackedMt5PositionTickets();
-     const untrackedRealPositions=result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
+     let untrackedRealPositions=result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
+     // Richiesto esplicitamente: in Modalità Prop Firm, una posizione reale già aperta sul conto
+     // MT5 PRIMA della creazione di QUESTA Challenge (propFirmChallengeCreatedAt) non va mai
+     // adottata qui — altrimenti, magari già in perdita, verrebbe ri-agganciata subito dopo ogni
+     // reset/creazione, contando per le regole Daily/Max Drawdown come se l'avessi aperta ora e
+     // facendo chiudere il conto Prop Firm all'infinito. Resta comunque visibile nella tabella
+     // dedicata "🖥️ Posizioni MT5" (che mostra sempre TUTTO ciò che è realmente aperto), solo
+     // non entra in positions[] né nelle regole di questa Challenge. rp.time è l'orario VERO di
+     // apertura su MT5 (epoch secondi): confrontato con l'orologio reale, mai quello simulato
+     // dello Storico, perché un ticket reale ha sempre un orario di apertura vero.
+     if(isPropFirmMode && Number.isFinite(propFirmChallengeCreatedAt)){
+       untrackedRealPositions=untrackedRealPositions.filter(rp=>{
+         const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:null;
+         return realOpenMs==null || realOpenMs>=propFirmChallengeCreatedAt;
+       });
+     }
      untrackedRealPositions.forEach(rp=>{
        const pos={
          id:Date.now()+Math.random(),
