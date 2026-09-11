@@ -1100,6 +1100,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
 </div>
 
+<div class="panel" id="mt5PosPanel" style="display:none">
+ <div class="label">🖥️ Posizioni MT5 (conto reale collegato)</div>
+ <table class="posTable"><thead><tr><th>#</th><th>Ticket</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
+ <tbody id="mt5OpenPositions"></tbody></table>
+ <div id="noMt5Positions" class="hint">Nessuna posizione reale aperta su questo conto MT5.</div>
+</div>
+
 <div class="panel">
  <div class="label">Ordini pendenti</div>
  <table class="posTable"><thead><tr><th>#</th><th>Sessione</th><th>Asset</th><th>Side</th><th>Entry</th><th>Prezzo corrente</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th></th></tr></thead>
@@ -3571,23 +3578,30 @@ function update(){
    return out;
  }
  const allPosRows=collectAcrossSessions('positions');
- // Posizioni reali aperte DALL'APP (positions[].mt5Ticket): compaiono già come righe standard
- // più sotto (Seleziona/Chiudi normali, che parlano col bridge dietro le quinte) — vanno quindi
- // escluse qui sotto per non duplicarle.
- const trackedMt5Tickets=new Set(allPosRows.map(({item:p})=>p.mt5Ticket).filter(t=>t!=null).map(String));
- // Righe delle posizioni REALI MT5 aperte FUORI dall'app (es. da terminale MT5 direttamente, o
- // da un altro strumento): stessa tabella, ma dati e pulsanti completamente separati da quelli
- // della simulazione — niente "Seleziona"/"Vai a grafico" (non fanno parte del motore di
- // simulazione), solo Chiudi e Modifica SL/TP, che parlano davvero col bridge (vedi listener su
- // #openPositions più sotto).
- const mt5RowsHtml=mt5RealPositions.filter(p=>!trackedMt5Tickets.has(String(p.ticket))).map((p,i)=>{
+ // Tabella dedicata "🖥️ Posizioni MT5 (conto reale collegato)": mostra SEMPRE tutte le
+ // posizioni realmente aperte sul conto MT5 collegato ora (mt5RealPositions, letta dal bridge
+ // ogni 2s), indipendentemente da quale delle 4 sessioni simulate (Storico/Live/Storico
+ // PF/Live PF) sia attiva a schermo in questo momento — una posizione reale esiste sul conto
+ // vero a prescindere da quale modalità stai guardando in app, quindi qui non si nasconde né si
+ // deduplica mai: è la vista di riferimento, sempre presente, di ciò che è VERAMENTE aperto.
+ // La stessa posizione può ANCHE comparire come riga standard qui sotto (con il badge 🖥️) se è
+ // stata aperta dall'app mentre quella sessione era quella attiva — le due viste convivono.
+ const mt5RowsHtml=mt5RealPositions.map((p,i)=>{
    const plVal=Number(p.profit);
    const plCell=Number.isFinite(plVal)?`<td class="${plVal>=0?'liveProfit':'liveLoss'}" title="Profitto di prezzo, esclude lo swap (${euro(p.swap||0)})">${(plVal>=0?'+':'')+euro(plVal)}</td>`:'<td>—</td>';
    const rr=riskRewardLabel(p.price_open,p.sl,p.tp);
-   return `<tr><td>${allPosRows.length+i+1}</td><td>🖥️ MT5 REALE</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPrice(p.price_open)}</td><td>${p.sl!=null?fmtPrice(p.sl):'—'}</td><td>${p.tp!=null?fmtPrice(p.tp):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPrice(p.price_current)}</td>`+plCell+
+   return `<tr><td>${i+1}</td><td>#${p.ticket}</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPrice(p.price_open)}</td><td>${p.sl!=null?fmtPrice(p.sl):'—'}</td><td>${p.tp!=null?fmtPrice(p.tp):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPrice(p.price_current)}</td>`+plCell+
    `<td><button class="miniBtn" data-mt5-modify="${p.ticket}" title="Modifica Stop Loss/Take Profit REALI sul conto MT5">✏️ SL/TP</button><button class="miniBtn danger" data-mt5-close="${p.ticket}" title="Chiude DAVVERO questa posizione sul conto MT5">Chiudi</button></td></tr>`;
  }).join('');
- if(!allPosRows.length && !mt5RealPositions.length){
+ if($('mt5PosPanel'))$('mt5PosPanel').style.display=mt5Connected?'block':'none';
+ if(!mt5RealPositions.length){
+   $('mt5OpenPositions').innerHTML='';
+   $('noMt5Positions').style.display='block';
+ }else{
+   $('noMt5Positions').style.display='none';
+   $('mt5OpenPositions').innerHTML=mt5RowsHtml;
+ }
+ if(!allPosRows.length){
    $('openPositions').innerHTML='';
    $('noPositions').style.display='block';
  }else{
@@ -3614,7 +3628,7 @@ function update(){
      const slCellTxt=fmtPrice(p.sl)+(isStopProfitLevel(p)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre: diventa uno Stop Profit">🔒SP</span>':'');
      return `<tr class="${isCurrentRow&&p===active?'focused':''}"><td>${i+1}</td><td>${modeTag}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${slCellTxt}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
      `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTag} / ${posAsset} e mostra questa posizione a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
-   }).join('')+mt5RowsHtml;
+   }).join('');
  }
 
  // Tabella ordini pendenti: stesso criterio, TUTTE E 4 LE SESSIONI insieme, con colonna
@@ -8096,54 +8110,59 @@ $('closeAll').onclick=()=>{
  $('status').textContent=hasReal?'Posizioni simulate chiuse. Per quelle REALI su MT5, conferma la chiusura nel popup comparso.':'Tutte le posizioni sono state chiuse.';
  draw();update();
 };
+// Chiudi/Modifica SL-TP dalla tabella dedicata "🖥️ Posizioni MT5": parlano DAVVERO col bridge,
+// tramite il ticket reale (non un id della simulazione). Estratte in funzioni a sé perché ora
+// vivono nella tabella dedicata #mt5OpenPositions, separata da quella standard #openPositions.
+async function closeMt5TicketFromTable(mt5CloseTicket){
+ const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5CloseTicket);
+ if(!pos)return;
+ if(!confirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.symbol} (${Number(pos.volume).toFixed(2)} lot, ticket ${pos.ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return;
+ $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.ticket})…`;
+ const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket})});
+ if(result.ok){
+   $('status').textContent=`🔌 Posizione ${pos.symbol} (ticket ${pos.ticket}) chiusa su MT5 al prezzo ${result.data.price!=null?fmtPrice(result.data.price):'—'}.`;
+ }else{
+   $('status').textContent='⚠️ Chiusura reale non riuscita: '+result.message;
+ }
+ fetchMt5Positions();
+}
+async function modifyMt5TicketFromTable(mt5ModifyTicket){
+ const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5ModifyTicket);
+ if(!pos)return;
+ // Stesso stile già usato altrove nell'app per le conferme delicate (prompt() con il valore
+ // attuale precompilato): qui il valore digitato va DAVVERO sul conto MT5, quindi si chiede
+ // conferma esplicita subito dopo, mostrando i due nuovi livelli per esteso.
+ const slInput=prompt(`Nuovo Stop Loss per ${pos.side} ${pos.symbol} (ticket ${pos.ticket})? Lascia vuoto per rimuoverlo, invariato per non toccarlo.`,pos.sl!=null?String(pos.sl):'');
+ if(slInput===null)return;
+ const tpInput=prompt(`Nuovo Take Profit per ${pos.side} ${pos.symbol} (ticket ${pos.ticket})? Lascia vuoto per rimuoverlo, invariato per non toccarlo.`,pos.tp!=null?String(pos.tp):'');
+ if(tpInput===null)return;
+ const newSl=slInput.trim()===''?0:Number(slInput);
+ const newTp=tpInput.trim()===''?0:Number(tpInput);
+ if((slInput.trim()!==''&&!Number.isFinite(newSl))||(tpInput.trim()!==''&&!Number.isFinite(newTp))){
+   $('status').textContent='Valore non valido: modifica annullata.';
+   return;
+ }
+ if(!confirm(`Confermi di impostare DAVVERO su MT5 — ${pos.symbol} ticket ${pos.ticket} — SL: ${slInput.trim()===''?'nessuno':fmtPrice(newSl)}, TP: ${tpInput.trim()===''?'nessuno':fmtPrice(newTp)}?`))return;
+ $('status').textContent=`Modifica SL/TP in corso sul conto MT5 (ticket ${pos.ticket})…`;
+ const result=await fetchMt5WithTimeout('/order/modify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket,sl:newSl,tp:newTp})});
+ if(result.ok){
+   $('status').textContent=`✅ SL/TP di ${pos.symbol} (ticket ${pos.ticket}) aggiornati su MT5.`;
+ }else{
+   $('status').textContent='⚠️ Modifica reale non riuscita: '+result.message;
+ }
+ fetchMt5Positions();
+}
+$('mt5OpenPositions').addEventListener('click',async e=>{
+ const mt5CloseTicket=e.target.getAttribute('data-mt5-close');
+ const mt5ModifyTicket=e.target.getAttribute('data-mt5-modify');
+ if(mt5CloseTicket)return closeMt5TicketFromTable(mt5CloseTicket);
+ if(mt5ModifyTicket)return modifyMt5TicketFromTable(mt5ModifyTicket);
+});
 $('openPositions').addEventListener('click',async e=>{
  const gotoId=e.target.getAttribute('data-gotoasset-pos');
  const gotoSession=e.target.getAttribute('data-gotoasset-pos-session');
  const selId=e.target.getAttribute('data-select');
  const closeId=e.target.getAttribute('data-closepos');
- const mt5CloseTicket=e.target.getAttribute('data-mt5-close');
- const mt5ModifyTicket=e.target.getAttribute('data-mt5-modify');
- if(mt5CloseTicket){
-   const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5CloseTicket);
-   if(!pos)return;
-   if(!confirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.symbol} (${Number(pos.volume).toFixed(2)} lot, ticket ${pos.ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return;
-   $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.ticket})…`;
-   const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket})});
-   if(result.ok){
-     $('status').textContent=`🔌 Posizione ${pos.symbol} (ticket ${pos.ticket}) chiusa su MT5 al prezzo ${result.data.price!=null?fmtPrice(result.data.price):'—'}.`;
-   }else{
-     $('status').textContent='⚠️ Chiusura reale non riuscita: '+result.message;
-   }
-   fetchMt5Positions();
-   return;
- }
- if(mt5ModifyTicket){
-   const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5ModifyTicket);
-   if(!pos)return;
-   // Stesso stile già usato altrove nell'app per le conferme delicate (prompt() con il valore
-   // attuale precompilato): qui il valore digitato va DAVVERO sul conto MT5, quindi si chiede
-   // conferma esplicita subito dopo, mostrando i due nuovi livelli per esteso.
-   const slInput=prompt(`Nuovo Stop Loss per ${pos.side} ${pos.symbol} (ticket ${pos.ticket})? Lascia vuoto per rimuoverlo, invariato per non toccarlo.`,pos.sl!=null?String(pos.sl):'');
-   if(slInput===null)return;
-   const tpInput=prompt(`Nuovo Take Profit per ${pos.side} ${pos.symbol} (ticket ${pos.ticket})? Lascia vuoto per rimuoverlo, invariato per non toccarlo.`,pos.tp!=null?String(pos.tp):'');
-   if(tpInput===null)return;
-   const newSl=slInput.trim()===''?0:Number(slInput);
-   const newTp=tpInput.trim()===''?0:Number(tpInput);
-   if((slInput.trim()!==''&&!Number.isFinite(newSl))||(tpInput.trim()!==''&&!Number.isFinite(newTp))){
-     $('status').textContent='Valore non valido: modifica annullata.';
-     return;
-   }
-   if(!confirm(`Confermi di impostare DAVVERO su MT5 — ${pos.symbol} ticket ${pos.ticket} — SL: ${slInput.trim()===''?'nessuno':fmtPrice(newSl)}, TP: ${tpInput.trim()===''?'nessuno':fmtPrice(newTp)}?`))return;
-   $('status').textContent=`Modifica SL/TP in corso sul conto MT5 (ticket ${pos.ticket})…`;
-   const result=await fetchMt5WithTimeout('/order/modify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket,sl:newSl,tp:newTp})});
-   if(result.ok){
-     $('status').textContent=`✅ SL/TP di ${pos.symbol} (ticket ${pos.ticket}) aggiornati su MT5.`;
-   }else{
-     $('status').textContent='⚠️ Modifica reale non riuscita: '+result.message;
-   }
-   fetchMt5Positions();
-   return;
- }
  if(gotoId){
    scrollToChart();
    // La tabella mostra ora le posizioni di TUTTE E 4 le sessioni: passiamo prima a quella
@@ -10910,6 +10929,18 @@ async function tryAutoLoadMt5Creds(){
  const key=mt5SelectedAccountKey||mt5AccountKey(mt5SavedAccounts[0]);
  return mt5SavedAccounts.find(a=>mt5AccountKey(a)===key)||mt5SavedAccounts[0];
 }
+// Il TERMINALE MT5 (non il nostro bridge) spegne da solo "AutoTrading"/"Trading algoritmico"
+// ogni volta che si cambia conto — è una sicurezza voluta di MT5, non un bug: impedisce che un
+// EA/script continui a operare subito su un conto diverso senza conferma umana. Il bridge prova
+// a riaccenderlo lui stesso (Ctrl+E automatico, vedi bridge.py) ma è un tentativo best-effort
+// che può non riuscire (serve pywinauto installato e Windows); qui mostriamo SEMPRE lo stato
+// vero restituito dal bridge dopo il tentativo, mai un messaggio ottimistico presunto.
+function mt5AlgoTradingNote(data){
+ if(!data || data.algo_trading==null)return '';
+ return data.algo_trading
+   ?' Trading algoritmico attivo.'
+   :' ⚠️ Trading algoritmico ancora SPENTO sul terminale: attiva a mano "AutoTrading" nella barra degli strumenti di MT5 prima di inviare ordini.';
+}
 // Vera chiamata POST /connect al bridge locale Python. Se il bridge non è acceso sul PC, il
 // fetch fallisce a livello di rete (non è un CORS/HTTP error): lo intercettiamo per dare un
 // messaggio chiaro invece del generico "Failed to fetch".
@@ -10964,6 +10995,9 @@ function updateMt5ModeUI(){
  $('mt5ModeBtn').textContent=(mt5Connected?'🖥️ MT5 (connesso)':'🖥️ MT5 (Live)')+' ⌄';
  const discBtn=$('mt5MenuDisconnectBtn');
  if(discBtn)discBtn.textContent=mt5Connected?'🔌 Disconnetti':'🔌 Connetti';
+ // La tabella dedicata alle posizioni REALI compare/scompare subito col login, senza aspettare
+ // il primo giro di polling (che comunque la ripopola appena arriva la prima risposta).
+ if($('mt5PosPanel'))$('mt5PosPanel').style.display=mt5Connected?'block':'none';
  // Punto unico che accende/spegne il polling delle posizioni REALI: ogni punto del codice che
  // cambia mt5Connected chiama già updateMt5ModeUI() subito dopo, quindi non serve ripetere
  // l'avvio/stop del polling in ognuno di quei punti.
@@ -11078,7 +11112,7 @@ $('mt5MenuDisconnectBtn').addEventListener('click',async ev=>{
      mt5CredsDraft=autoCreds;
      mt5Connected=true;
      updateMt5ModeUI();
-     $('status').textContent=`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}) con le credenziali salvate in precedenza.`;
+     $('status').textContent=`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}) con le credenziali salvate in precedenza.`+mt5AlgoTradingNote(result.data);
    }else{
      mt5Connected=false;
      updateMt5ModeUI();
@@ -11108,7 +11142,7 @@ $('mt5AccountSelect').addEventListener('change',async()=>{
    mt5CredsDraft=acc;
    mt5Connected=true;
    updateMt5ModeUI();
-   $('status').textContent=`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}).`;
+   $('status').textContent=`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}).`+mt5AlgoTradingNote(result.data);
  }else{
    mt5Connected=false;
    updateMt5ModeUI();
@@ -11210,7 +11244,7 @@ $('mt5LoginSubmitBtn').addEventListener('click',async()=>{
  renderMt5AccountSelect();
  $('status').textContent=(saved
    ?`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}). Salvato nell'elenco conti nella cartella collegata: lo trovi nel menu accanto al pulsante MT5.`
-   :`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}). Tenuto solo per questa sessione: salvataggio automatico non disponibile/non riuscito.`);
+   :`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}). Tenuto solo per questa sessione: salvataggio automatico non disponibile/non riuscito.`)+mt5AlgoTradingNote(result.data);
 });
 
 // ===================== PROP FIRM MODE — collegamento pulsante toggle + i 2 moduli grafici =====================
