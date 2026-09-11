@@ -3725,7 +3725,12 @@ function update(){
    const untrackedRowsHtml=untrackedMt5Orders.map((o,j)=>{
      const ordAsset=o.symbol||'—';
      const modeTag='<span title="Ordine pendente REALE piazzato direttamente su MT5 (ticket '+o.ticket+')">🖥️ MT5 REALE</span>';
-     const actionsCell=`<button class="miniBtn danger" data-mt5-cancelpending="${o.ticket}">Cancella</button>`;
+     // "Vai a grafico" per questi ordini NON cambia sessione (non ne hanno una: sono una lettura
+     // diretta del conto MT5, visibili qualunque sia la sessione simulata a schermo — stessa
+     // idea della tabella dedicata "Posizioni MT5") — cambia solo l'ASSET se serve, poi mostra
+     // la stessa casella Target/Stop in evidenza con la ✕ già usata per gli ordini pendenti
+     // tracciati in app (vedi jumpToMt5PendingOnChart).
+     const actionsCell=`<button class="miniBtn" data-gotoasset-mt5pending="${o.ticket}" title="Passa a ${ordAsset} e mostra questo ordine reale a grafico">📍 Vai a grafico</button><button class="miniBtn danger" data-mt5-cancelpending="${o.ticket}">Cancella</button>`;
      return `<tr><td>${allPendingRows.length+j+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${o.side||''} ${o.kind||'LIMIT'}</td><td>${fmtPrice(o.price_open)}</td><td>—</td><td>${fmtPrice(o.sl)}</td><td>${fmtPrice(o.tp)}</td><td>${riskRewardLabel(o.price_open,o.sl,o.tp)}</td><td>${Number(o.volume||0).toFixed(2)}</td>`+
      `<td>${actionsCell}</td></tr>`;
    }).join('');
@@ -5985,7 +5990,19 @@ function draw(){
  // drawTradeHighlight/highlightCloseBtnRect usata dal Trade Journal.
  pendingHighlightCloseBtnRect=null;
  if(highlightedPendingOrderId!=null){
-   const hp=pendingOrders.find(o=>String(o.id)===String(highlightedPendingOrderId));
+   // Un id con prefisso "mt5:" identifica un ordine pendente REALE piazzato direttamente su
+   // MT5 (vive solo in mt5RealOrders, mai in pendingOrders[] — vedi jumpToMt5PendingOnChart):
+   // gli si costruisce al volo un oggetto con la stessa forma { id, asset, side, kind, entry,
+   // sl, tp, lots } di un ordine pendente tracciato, così il resto del rendering sotto (identico
+   // per entrambi i casi) non deve sapere la differenza.
+   let hp=null;
+   if(typeof highlightedPendingOrderId==='string' && highlightedPendingOrderId.startsWith('mt5:')){
+     const ticket=highlightedPendingOrderId.slice(4);
+     const o=mt5RealOrders.find(x=>String(x.ticket)===ticket);
+     if(o)hp={id:highlightedPendingOrderId,asset:o.symbol,side:o.side,kind:o.kind,entry:Number(o.price_open),sl:o.sl!=null?Number(o.sl):null,tp:o.tp!=null?Number(o.tp):null,lots:Number(o.volume)||0};
+   }else{
+     hp=pendingOrders.find(o=>String(o.id)===String(highlightedPendingOrderId));
+   }
    if(hp && (!currentAssetKey || (hp.asset||currentAssetKey)===currentAssetKey) && (hp.sl!=null||hp.tp!=null)){
      const box=drawTpSlZoneBox(ctx,{
        ownerKey:'pendingHighlight:'+hp.id,originIdx:idx,entry:hp.entry,sl:hp.sl,tp:hp.tp,
@@ -7711,6 +7728,35 @@ async function jumpToPendingOnChart(orderId){
  highlightedPendingOrderId=p.id;
  draw();update();
  $('status').textContent=`Ordine pendente ${p.side} su ${p.asset||currentAssetKey} mostrato a grafico.`;
+}
+// Stessa idea di jumpToPendingOnChart, ma per un ordine pendente REALE piazzato DIRETTAMENTE su
+// MT5 (non tracciato in pendingOrders[], vive solo in mt5RealOrders — vedi fetchMt5Orders()):
+// non appartiene a nessuna delle 4 sessioni simulate (è una lettura diretta del conto vero,
+// visibile qualunque sia la sessione a schermo, come la tabella dedicata "Posizioni MT5"), quindi
+// qui si cambia solo l'ASSET se serve, MAI la sessione — a differenza di
+// jumpToPendingInSessionOnChart che invece la cambia per gli ordini creati dall'app.
+async function jumpToMt5PendingOnChart(ticket){
+ const o=mt5RealOrders.find(x=>String(x.ticket)===String(ticket));
+ if(!o)return;
+ const asset=o.symbol;
+ const currentAsset=$('market')?.value||'';
+ if(asset && currentAsset!==asset){
+   if($('market'))$('market').value=asset;
+   applyInstrument();
+   if(liveModeActive) await loadLiveHistoryFromCapital(asset);
+   else await autoLoadAssetLibrary(asset);
+ }
+ if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
+ if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ visibleCount=idealVisibleCount(); viewEnd=idx;
+ fitVerticalRangeToWindow([Number(o.price_open),o.sl!=null?Number(o.sl):null,o.tp!=null?Number(o.tp):null]);
+ // Stessa casella Target/Stop in evidenza con la ✕ già usata per gli ordini pendenti tracciati
+ // in app: il prefisso "mt5:" distingue un ticket MT5 (non tracciato) da un id locale
+ // (numerico) di pendingOrders[] — vedi il lookup di highlightedPendingOrderId in draw().
+ highlightedPendingOrderId='mt5:'+o.ticket;
+ draw();update();
+ $('status').textContent=`Ordine pendente reale ${o.side||''} su ${asset||currentAssetKey} (ticket ${o.ticket}) mostrato a grafico.`;
 }
 function fmtDurationMs(ms){
  if(!Number.isFinite(ms))return '—';
@@ -9711,6 +9757,15 @@ $('pendingOrdersTbl').addEventListener('click',async e=>{
  const gotoSession=e.target.getAttribute('data-gotoasset-pending-session');
  const cancelId=e.target.getAttribute('data-cancelpending');
  const mt5CancelTicket=e.target.getAttribute('data-mt5-cancelpending');
+ const gotoMt5Ticket=e.target.getAttribute('data-gotoasset-mt5pending');
+ if(gotoMt5Ticket){
+   scrollToChart();
+   // Nessun cambio sessione qui (a differenza di jumpToPendingInSessionOnChart): un ordine
+   // pendente reale piazzato direttamente su MT5 non appartiene a nessuna delle 4 sessioni
+   // simulate, è visibile qualunque sia quella a schermo — vedi jumpToMt5PendingOnChart.
+   await jumpToMt5PendingOnChart(gotoMt5Ticket);
+   return;
+ }
  if(mt5CancelTicket){
    // Ordine pendente REALE piazzato DIRETTAMENTE su MT5 (non tracciato in pendingOrders[]):
    // si cancella solo sul conto vero via bridge, poi si aggiorna la lista da /orders — non c'è
