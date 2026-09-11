@@ -3571,11 +3571,16 @@ function update(){
    return out;
  }
  const allPosRows=collectAcrossSessions('positions');
- // Righe delle posizioni REALI MT5 (denaro vero, non simulato): stessa tabella, ma dati e
- // pulsanti completamente separati da quelli della simulazione — niente "Seleziona"/"Vai a
- // grafico" (non fanno parte del motore di simulazione), solo Chiudi e Modifica SL/TP, che
- // parlano davvero col bridge (vedi listener su #openPositions più sotto).
- const mt5RowsHtml=mt5RealPositions.map((p,i)=>{
+ // Posizioni reali aperte DALL'APP (positions[].mt5Ticket): compaiono già come righe standard
+ // più sotto (Seleziona/Chiudi normali, che parlano col bridge dietro le quinte) — vanno quindi
+ // escluse qui sotto per non duplicarle.
+ const trackedMt5Tickets=new Set(allPosRows.map(({item:p})=>p.mt5Ticket).filter(t=>t!=null).map(String));
+ // Righe delle posizioni REALI MT5 aperte FUORI dall'app (es. da terminale MT5 direttamente, o
+ // da un altro strumento): stessa tabella, ma dati e pulsanti completamente separati da quelli
+ // della simulazione — niente "Seleziona"/"Vai a grafico" (non fanno parte del motore di
+ // simulazione), solo Chiudi e Modifica SL/TP, che parlano davvero col bridge (vedi listener su
+ // #openPositions più sotto).
+ const mt5RowsHtml=mt5RealPositions.filter(p=>!trackedMt5Tickets.has(String(p.ticket))).map((p,i)=>{
    const plVal=Number(p.profit);
    const plCell=Number.isFinite(plVal)?`<td class="${plVal>=0?'liveProfit':'liveLoss'}" title="Profitto di prezzo, esclude lo swap (${euro(p.swap||0)})">${(plVal>=0?'+':'')+euro(plVal)}</td>`:'<td>—</td>';
    const rr=riskRewardLabel(p.price_open,p.sl,p.tp);
@@ -3598,7 +3603,7 @@ function update(){
      // Colonna "Prezzo corrente": per le sessioni Storico non attive mostriamo il prezzo di
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
      const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
-     const modeTag=SESSION_LABELS_SHORT[sessionKey]||sessionKey;
+     const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
      const actionsCell=isCurrentRow
        ?`<button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button>`
        :'';
@@ -7236,6 +7241,10 @@ function setTradeLevel(type,value,source='input'){
  refreshTradeLevelUI();
  $('status').textContent=`${levelLabel(type)} impostato a ${fmtPrice(value)}.`;
  draw();update();
+ // Posizione REALE (mt5Ticket): specchia SEMPRE la modifica sul conto MT5 collegato, che sia
+ // arrivata trascinando la linea sul grafico o scrivendo nella casella — "come un ordine
+ // normale standard di sempre" vale anche per questo.
+ if(active.mt5Ticket!=null)syncMt5PositionLevels(active);
 }
 function syncTradeLevels(){
  if(!active){tradeSLLine=null;tradeTPLine=null;return;}
@@ -7353,7 +7362,12 @@ function closeAllPositions(reason){
  // REALMENTE verificato via tick (mai rows[idx].close, che durante l'avvio può ancora
  // appartenere a un CSV Storico di tutt'altro asset).
  const price=liveModeActive?livePriceByAsset[currentAssetKey]:currentPrice();
- [...ownPositions].forEach(p=>closeTrade(reason,Number.isFinite(price)?price:p.entry,p));
+ [...ownPositions].forEach(p=>{
+   // Posizione REALE: si chiude sul conto MT5 (con conferma) e SOLO se va a buon fine si
+   // giornalizza in locale — mai chiuderla qui in locale con un prezzo indovinato.
+   if(p.mt5Ticket!=null){ closeMt5PositionReal(p,reason); return; }
+   closeTrade(reason,Number.isFinite(price)?price:p.entry,p);
+ });
 }
 // Bottone "Vai a grafico" nel Trade Journal: sposta la vista sulla candela in cui quel
 // trade è stato APERTO (usa lo stesso "match per timestamp reale" delle frecce, così
@@ -7562,7 +7576,10 @@ function checkMarginCall(){
  // Il margin call forza la chiusura al prezzo LIVE della candela attuale: possiamo farlo solo
  // sulle posizioni dell'asset a grafico ora, perché per gli altri asset non abbiamo un prezzo
  // live corretto in questo momento (restano aperte, verranno valutate quando ci si torna sopra).
- const ownPositions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+ // Le posizioni REALI (mt5Ticket) non entrano MAI nel margin call simulato: il loro margine
+ // vero è quello del conto MT5 (marginUsed:0 qui), e comunque solo MT5/il broker decide se e
+ // quando chiuderle per margine insufficiente — mai questa funzione.
+ const ownPositions=(currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length)return;
  let guard=0;
  while(freeMargin()<0 && ownPositions.length && guard<50){
@@ -7588,7 +7605,9 @@ function checkMarginCall(){
 function evaluate(){
  // Si valutano SOLO le posizioni dell'asset attualmente a grafico: quelle di altri asset hanno
  // SL/TP su una scala di prezzo diversa e non vanno confrontati con QUESTA candela.
- const ownPositions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+ // Le posizioni REALI (mt5Ticket) sono escluse: è MT5/il broker a decidere quando SL/TP reali
+ // scattano, mai questa valutazione locale (che vale solo per le posizioni simulate).
+ const ownPositions=(currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length)return;
  const r=rows[idx];
  const rowTime=parseDateTime(r.date);
@@ -7879,6 +7898,51 @@ function refreshTradeLevelUI(){
 // da openMarketTrade() quando mt5Connected è true: in quel caso i pulsanti BUY/SELL non
 // toccano più affatto il motore di simulazione (niente margine/spread/anteprima SL-TP finti),
 // perché quei concetti non hanno senso su una posizione che il broker gestisce per davvero.
+// Sincronizza SL/TP di una posizione REALE (pos.mt5Ticket) verso il conto MT5 collegato, dopo
+// che l'utente la modifica in app esattamente come farebbe con una posizione simulata
+// (trascinando la linea sul grafico o scrivendo nelle caselle SL/TP standard) — richiesto
+// esplicitamente: "come un ordine normale standard di sempre". mt5SyncInFlightTickets evita di
+// accavallare due PUT/modify per lo stesso ticket se l'utente trascina di nuovo prima che il
+// bridge abbia risposto alla modifica precedente.
+let mt5SyncInFlightTickets=new Set();
+async function syncMt5PositionLevels(pos){
+ if(!pos||pos.mt5Ticket==null)return;
+ const ticket=pos.mt5Ticket;
+ if(mt5SyncInFlightTickets.has(ticket))return;
+ mt5SyncInFlightTickets.add(ticket);
+ $('status').textContent=`Aggiornamento SL/TP sul conto MT5 (ticket ${ticket})…`;
+ const result=await fetchMt5WithTimeout('/order/modify',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({ticket,sl:Number.isFinite(pos.sl)?pos.sl:0,tp:Number.isFinite(pos.tp)?pos.tp:0})
+ });
+ mt5SyncInFlightTickets.delete(ticket);
+ if(result.ok){
+   $('status').textContent=`✅ SL/TP aggiornati anche sul conto MT5 (ticket ${ticket}).`;
+ }else{
+   $('status').textContent=`⚠️ SL/TP aggiornati solo in app: la modifica sul conto MT5 (ticket ${ticket}) non è riuscita — ${result.message}`;
+ }
+ fetchMt5Positions();
+}
+// Chiude DAVVERO sul conto MT5 la posizione (pos.mt5Ticket) e SOLO se la chiusura reale va a
+// buon fine la registra anche in locale (Trade Journal, come closeTrade() fa per tutte le
+// altre): mai il contrario, per non disallineare mai "chiusa in app" da "ancora aperta sul
+// conto vero".
+async function closeMt5PositionReal(pos,reason){
+ if(!pos||pos.mt5Ticket==null)return false;
+ if(!confirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
+ $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.mt5Ticket})…`;
+ const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.mt5Ticket})});
+ if(!result.ok){
+   $('status').textContent='⚠️ Chiusura reale non riuscita: '+result.message;
+   fetchMt5Positions();
+   return false;
+ }
+ const price=Number.isFinite(Number(result.data.price))?Number(result.data.price):(currentPrice()??pos.entry);
+ closeTrade(reason,price,pos);
+ $('status').textContent=`🔌 Posizione ${pos.asset||''} (ticket ${pos.mt5Ticket}) chiusa DAVVERO su MT5 al prezzo ${fmtPrice(price)}.`;
+ fetchMt5Positions();
+ return true;
+}
 async function placeRealMt5Order(side){
  const symbol=currentAssetKey||$('market')?.value||'';
  if(!symbol)return $('status').textContent='Seleziona prima un ASSET.';
@@ -7904,8 +7968,40 @@ async function placeRealMt5Order(side){
    body:JSON.stringify({symbol,side,volume:lots,sl:Number.isFinite(sl)?sl:undefined,tp:Number.isFinite(tp)?tp:undefined})
  });
  if(result.ok){
-   $('status').textContent=`🟢 Ordine reale eseguito su MT5: ${side} ${symbol} a ${fmtPrice(result.data.price)} (ticket ${result.data.ticket}).`+ignoredNote;
+   const filledEntry=Number.isFinite(Number(result.data.price))?Number(result.data.price):entryApprox;
+   const ticket=result.data.ticket;
+   $('status').textContent=`🟢 Ordine reale eseguito su MT5: ${side} ${symbol} a ${fmtPrice(filledEntry)} (ticket ${ticket}).`+ignoredNote;
    playOrderSound();
+   // Richiesto dall'utente: la posizione reale deve comparire in app "come un ordine normale
+   // standard di sempre" — stessa tabella/riga, Seleziona/Chiudi standard, linee SL/TP
+   // trascinabili sul grafico come qualunque posizione simulata. mt5Ticket è l'UNICO campo che
+   // la distingue dalle posizioni simulate, e serve al resto del codice per: non contare il suo
+   // margine come simulato (marginUsed:0), specchiare ogni modifica SL/TP sul conto vero
+   // (syncMt5PositionLevels, agganciato in setTradeLevel), instradare la chiusura standard sul
+   // conto vero (closeMt5PositionReal) e MAI lasciar decidere la chiusura per SL/TP alle
+   // valutazioni locali (evaluate/evaluateLiveBackgroundAsset/checkMarginCall/sessioni in
+   // background la escludono tutte): è MT5 stesso a decidere quando una posizione reale chiude.
+   const start=rows[idx]?idx:0;
+   const startTime=(rows[idx]&&Number.isFinite(parseDateTime(rows[idx].date)))?parseDateTime(rows[idx].date):Date.now();
+   const pos={
+     id:Date.now()+Math.random(),
+     asset:symbol,
+     side,entry:filledEntry,
+     sl:Number.isFinite(sl)?sl:null,
+     tp:Number.isFinite(tp)?tp:null,
+     origin:'MARKET',
+     lots,risk:0,dist:0,hasRiskModel:false,
+     start,startTime,openTF:currentTF,
+     marginUsed:0,
+     mt5Ticket:ticket
+   };
+   pos.rrSl=pos.sl;
+   positions.push(pos);
+   active=pos;
+   refreshTradeRiskModel();
+   refreshTradeLevelUI();
+   syncTradeLevels();
+   draw();update();
  }else{
    $('status').textContent='⚠️ Ordine reale non eseguito: '+result.message;
  }
@@ -7983,8 +8079,9 @@ function openMarketTrade(side){
 
 $('buyBtn').addEventListener('click',()=>{openMarketTrade('BUY');scrollToChart();});
 $('sellBtn').addEventListener('click',()=>{openMarketTrade('SELL');scrollToChart();});
-$('close').onclick=()=>{
+$('close').onclick=async()=>{
  if(!active)return $('status').textContent='Nessuna posizione selezionata.';
+ if(active.mt5Ticket!=null){ await closeMt5PositionReal(active,'MANUAL'); draw();update(); return; }
  const price=rows[idx].close;
  const currentPL=calculateForexPL(active.side,active.entry,price,active.lots||getLotSize());
  closeTrade('MANUAL',price);
@@ -7994,8 +8091,9 @@ $('close').onclick=()=>{
 $('closeAll').onclick=()=>{
  if(!positions.length)return $('status').textContent='Nessuna posizione aperta.';
  if(blockedByPropFirmNews())return; // STEP 2
+ const hasReal=positions.some(p=>p.mt5Ticket!=null);
  closeAllPositions('MANUAL');
- $('status').textContent='Tutte le posizioni sono state chiuse.';
+ $('status').textContent=hasReal?'Posizioni simulate chiuse. Per quelle REALI su MT5, conferma la chiusura nel popup comparso.':'Tutte le posizioni sono state chiuse.';
  draw();update();
 };
 $('openPositions').addEventListener('click',async e=>{
@@ -8076,6 +8174,7 @@ $('openPositions').addEventListener('click',async e=>{
      return;
    }
    if(blockedByPropFirmNews())return; // STEP 2
+   if(pos.mt5Ticket!=null){ await closeMt5PositionReal(pos,'MANUAL'); draw();update(); return; }
    const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();
  }
 });
@@ -9668,7 +9767,23 @@ async function fetchMt5Positions(){
  mt5PositionsFetchInFlight=true;
  try{
    const result=await fetchMt5WithTimeout('/positions',{method:'GET'},8000);
-   if(result.ok && Array.isArray(result.data)){ mt5RealPositions=result.data; update(); }
+   if(result.ok && Array.isArray(result.data)){
+     // Posizioni REALI tracciate in app (positions[].mt5Ticket) sparite dal conto vero: MT5 le
+     // ha chiuse da sola (SL/TP reale colpito, Stop Out del broker, chiusura fatta a mano nel
+     // terminale MT5...). Le giornalizziamo qui come una chiusura normale (Trade Journal),
+     // usando l'ultimo prezzo noto per quel ticket — non riceviamo mai il prezzo esatto in
+     // questo caso, a differenza di quando la chiudiamo noi da bottone "Chiudi" in app
+     // (closeMt5PositionReal, che usa il prezzo restituito dal bridge). Solo la sessione/mode
+     // ATTUALMENTE in `positions` viene controllata qui: una posizione reale rimasta tracciata
+     // in un'altra sessione (mode) verrà riconciliata quando si torna su quella sessione.
+     const newTickets=new Set(result.data.map(p=>String(p.ticket)));
+     positions.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket))).forEach(p=>{
+       const lastKnown=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
+       const price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(currentPrice()??p.entry);
+       closeTrade('MT5_REMOTE',price,p);
+     });
+     mt5RealPositions=result.data; update();
+   }
    // Se non risponde entro il timeout o dà errore, si tiene semplicemente l'ultima lista nota
    // (nessun messaggio di stato: un polling ogni 2s non deve riempire la barra di stato).
  }finally{
@@ -10474,7 +10589,9 @@ function applyLiveTick(p){
 // trattandosi di tick continui, il prezzo passa comunque per ogni livello attraversato.
 function evaluateLiveBackgroundAsset(asset,price,prevPrice){
  if(!liveModeActive)return;
- const ownPositions=positions.filter(p=>(p.asset||asset)===asset);
+ // Escluse le posizioni REALI (mt5Ticket): decide MT5/il broker quando chiudono, non questa
+ // valutazione locale su prezzo tick.
+ const ownPositions=positions.filter(p=>(p.asset||asset)===asset && p.mt5Ticket==null);
  [...ownPositions].forEach(pos=>{
    let sl=false,tp=false;
    // Difesa aggiuntiva: mai chiudere su uno SL/TP <=0 (prezzo non reale) — vedi commento
@@ -10595,8 +10712,9 @@ async function pollBackgroundLiveSession(sessionKey){
    // combinazione [sessione, asset] appare aggiornato in automatico anche nelle tabelle,
    // esattamente come per l'asset a grafico ora.
    livePriceByAsset[asset]=price;
-   // SL/TP delle posizioni aperte di questo asset, in QUESTA sessione.
-   const ownPositions=(session.positions||[]).filter(p=>(p.asset||asset)===asset);
+   // SL/TP delle posizioni aperte di questo asset, in QUESTA sessione (escluse quelle REALI,
+   // mt5Ticket: decide MT5/il broker quando chiudono, mai questa valutazione locale).
+   const ownPositions=(session.positions||[]).filter(p=>(p.asset||asset)===asset && p.mt5Ticket==null);
    [...ownPositions].forEach(pos=>{
      let sl=false,tp=false;
      // Difesa aggiuntiva: mai chiudere su uno SL/TP <=0 (prezzo non reale) — vedi commento
