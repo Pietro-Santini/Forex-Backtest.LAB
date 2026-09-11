@@ -915,6 +915,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
     <div class="btnWithHint"><button id="buyBtn" class="buyBtn">BUY</button><span class="qtip">?<span class="qtipBubble">ENTRA AL PREZZO ATTUALE</span></span></div>
     <div class="btnWithHint"><button id="sellBtn" class="sellBtn">SELL</button><span class="qtip">?<span class="qtipBubble">ENTRA AL PREZZO ATTUALE</span></span></div>
    </div>
+   <button id="breakevenBtn" style="margin-top:9px" title="Sposta lo Stop Loss della posizione selezionata al pareggio (spread attuale incluso se è una posizione reale su MT5): la chiusura su questo livello non sarà mai in perdita.">⚖️ BREAKEVEN (BE)</button>
    <button id="close" style="margin-top:9px">CHIUDI SELEZIONATA A MERCATO</button>
    <button id="closeAll" style="margin-top:9px">CHIUDI TUTTE LE POSIZIONI</button>
   </div>
@@ -3591,7 +3592,7 @@ function update(){
    const plCell=Number.isFinite(plVal)?`<td class="${plVal>=0?'liveProfit':'liveLoss'}" title="Profitto di prezzo, esclude lo swap (${euro(p.swap||0)})">${(plVal>=0?'+':'')+euro(plVal)}</td>`:'<td>—</td>';
    const rr=riskRewardLabel(p.price_open,p.sl,p.tp);
    return `<tr><td>${i+1}</td><td>#${p.ticket}</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPrice(p.price_open)}</td><td>${p.sl!=null?fmtPrice(p.sl):'—'}</td><td>${p.tp!=null?fmtPrice(p.tp):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPrice(p.price_current)}</td>`+plCell+
-   `<td><button class="miniBtn" data-mt5-modify="${p.ticket}" title="Modifica Stop Loss/Take Profit REALI sul conto MT5">✏️ SL/TP</button><button class="miniBtn danger" data-mt5-close="${p.ticket}" title="Chiude DAVVERO questa posizione sul conto MT5">Chiudi</button></td></tr>`;
+   `<td><button class="miniBtn" data-mt5-modify="${p.ticket}" title="Modifica Stop Loss/Take Profit REALI sul conto MT5">✏️ SL/TP</button><button class="miniBtn" data-mt5-be="${p.ticket}" title="Sposta DAVVERO lo Stop Loss al pareggio (spread attuale incluso) sul conto MT5">BE</button><button class="miniBtn danger" data-mt5-close="${p.ticket}" title="Chiude DAVVERO questa posizione sul conto MT5">Chiudi</button></td></tr>`;
  }).join('');
  if($('mt5PosPanel'))$('mt5PosPanel').style.display=mt5Connected?'block':'none';
  if(!mt5RealPositions.length){
@@ -3619,7 +3620,7 @@ function update(){
      const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
      const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
      const actionsCell=isCurrentRow
-       ?`<button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button>`
+       ?`<button class="miniBtn" data-select="${p.id}">Seleziona</button><button class="miniBtn" data-be="${p.id}" title="Sposta lo Stop Loss al pareggio (spread attuale incluso se è reale)">BE</button><button class="miniBtn danger" data-closepos="${p.id}">Chiudi</button>`
        :'';
      // R/R sempre calcolato con lo SL "di apertura" congelato (p.rrSl): non cambia se in
      // seguito si sposta lo SL (breakeven/Stop Profit), solo se si sposta il TP. La cella SL
@@ -7918,6 +7919,68 @@ function refreshTradeLevelUI(){
 // esplicitamente: "come un ordine normale standard di sempre". mt5SyncInFlightTickets evita di
 // accavallare due PUT/modify per lo stesso ticket se l'utente trascina di nuovo prima che il
 // bridge abbia risposto alla modifica precedente.
+// ===================== BREAKEVEN (BE) =====================
+// Sposta lo Stop Loss al prezzo di apertura "considerando lo spread", così una chiusura su
+// quel livello non è MAI in perdita:
+// - Posizione REALE (mt5Ticket): usiamo lo spread ATTUALE del simbolo (bid/ask veri, letti dal
+//   bridge ogni 2s — vedi bid/ask aggiunti a /positions in bridge.py), non quello di quando fu
+//   aperta: lo spread reale cambia nel tempo (si allarga con la volatilità), quindi va preso
+//   ORA per garantire davvero P/L=0 alla chiusura. BUY: SL=entry+spread (lo stop di un long
+//   scatta sul BID, quindi serve che il BID risalga fin sopra il prezzo pagato di uno spread
+//   pieno perché la chiusura sia in pareggio); SELL: SL=entry-spread (specularmente, sull'ASK).
+// - Posizione SIMULATA: nel simulatore lo spread è un costo applicato UNA SOLA VOLTA in
+//   apertura (solo in Modalità Prop Firm, vedi applySpreadToEntry) e mai ricaricato in
+//   chiusura — è quindi già "dentro" pos.entry quando serve: SL=entry, senza sommare altro,
+//   è già l'esatto pareggio (sommare di nuovo lo spread qui significherebbe contarlo due
+//   volte, trasformando il pareggio in un piccolo guadagno garantito anziché zero).
+function mt5LiveSpread(ticket){
+ const live=mt5RealPositions.find(p=>String(p.ticket)===String(ticket));
+ const bid=live?Number(live.bid):NaN, ask=live?Number(live.ask):NaN;
+ return (Number.isFinite(bid)&&Number.isFinite(ask)&&ask>=bid)?(ask-bid):0;
+}
+function computeBreakevenSl(entry,side,spread){
+ if(!Number.isFinite(entry))return NaN;
+ const s=Number.isFinite(spread)&&spread>0?spread:0;
+ return side==='BUY'?entry+s:entry-s;
+}
+// BE su una posizione tracciata in positions[] (simulata, o reale aperta/mostrata come riga
+// standard): aggiorna subito il campo SL locale e, se reale, la specchia sul conto MT5 —
+// stesso identico meccanismo già usato per un trascinamento manuale della linea SL.
+function applyBreakevenToPosition(pos){
+ if(!pos)return;
+ const spread=pos.mt5Ticket!=null?mt5LiveSpread(pos.mt5Ticket):0;
+ const beSl=computeBreakevenSl(pos.entry,pos.side,spread);
+ if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
+ pos.sl=beSl;
+ if(active===pos){ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }
+ draw();update();
+ $('status').textContent=pos.mt5Ticket!=null
+   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}, spread attuale incluso) — sincronizzo sul conto MT5…`
+   :`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}).`;
+ if(pos.mt5Ticket!=null)syncMt5PositionLevels(pos);
+}
+// BE da bottone "BE" nella tabella dedicata "🖥️ Posizioni MT5": qui il ticket può NON essere
+// tracciato in positions[] (posizione aperta fuori dall'app), quindi si parla direttamente col
+// bridge invece di passare da un oggetto locale.
+async function applyBreakevenToMt5TicketDirect(ticket){
+ const live=mt5RealPositions.find(p=>String(p.ticket)===String(ticket));
+ if(!live)return;
+ const spread=mt5LiveSpread(ticket);
+ const beSl=computeBreakevenSl(Number(live.price_open),live.side,spread);
+ if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
+ if(!confirm(`Spostare DAVVERO lo Stop Loss di ${live.side} ${live.symbol} (ticket ${live.ticket}) a pareggio (${fmtPrice(beSl)}, spread attuale incluso) sul conto MT5 collegato?`))return;
+ $('status').textContent=`Spostamento a pareggio in corso sul conto MT5 (ticket ${live.ticket})…`;
+ const result=await fetchMt5WithTimeout('/order/modify',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({ticket:live.ticket,sl:beSl,tp:Number.isFinite(Number(live.tp))?Number(live.tp):0})
+ });
+ if(result.ok){
+   $('status').textContent=`✅ Stop Loss di ${live.symbol} (ticket ${live.ticket}) spostato a pareggio su MT5 (${fmtPrice(beSl)}).`;
+ }else{
+   $('status').textContent='⚠️ Spostamento a pareggio non riuscito: '+result.message;
+ }
+ fetchMt5Positions();
+}
 let mt5SyncInFlightTickets=new Set();
 async function syncMt5PositionLevels(pos){
  if(!pos||pos.mt5Ticket==null)return;
@@ -7972,9 +8035,23 @@ async function placeRealMt5Order(side){
    if(Number.isFinite(sl)){ const e=validateTradeLevel(side,entryApprox,sl,NaN); if(e){ sl=NaN; ignoredNote+=' (SL ignorato: '+e+')'; } }
    if(Number.isFinite(tp)){ const e=validateTradeLevel(side,entryApprox,NaN,tp); if(e){ tp=NaN; ignoredNote+=' (TP ignorato: '+e+')'; } }
  }
+ // Richiesto esplicitamente: come per un ordine simulato, se non hai scritto tu uno SL/TP nelle
+ // caselle l'app ne propone subito due di default (equidistanti dall'entrata, stessa logica di
+ // defaultSlTpFor già usata da openMarketTrade) — qui però NON è solo un'anteprima visiva:
+ // vengono inviati DAVVERO insieme all'ordine a mercato (il bridge li allega alla stessa
+ // richiesta di apertura, vedi bridge.py), così la posizione reale nasce già protetta — mai
+ // "nuda" nemmeno per un istante — e le due linee compaiono già sul grafico, trascinabili
+ // esattamente come per una posizione simulata: se le sposti, si aggiornano anche sul conto
+ // vero (vedi syncMt5PositionLevels, agganciato al commit di setTradeLevel).
+ let slAuto=false,tpAuto=false;
+ if(Number.isFinite(entryApprox) && (!Number.isFinite(sl) || !Number.isFinite(tp))){
+   const defaults=defaultSlTpFor(entryApprox,side);
+   if(!Number.isFinite(sl)){ sl=defaults.sl; slAuto=true; }
+   if(!Number.isFinite(tp)){ tp=defaults.tp; tpAuto=true; }
+ }
  const details=`${side} ${symbol} — ${lots.toFixed(2)} lot`+
-   (Number.isFinite(sl)?` — SL ${fmtPrice(sl)}`:'')+
-   (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}`:'');
+   (Number.isFinite(sl)?` — SL ${fmtPrice(sl)}${slAuto?' (proposto in automatico)':''}`:'')+
+   (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}${tpAuto?' (proposto in automatico)':''}`:'');
  if(!confirm(`Confermi l'invio di un ORDINE VERO a mercato su MT5?\n\n${details}\n\nVerrà eseguito subito sul conto collegato: non è una simulazione.`))return;
  $('status').textContent='Invio ordine reale a MT5 in corso…';
  const result=await fetchMt5WithTimeout('/order/market',{
@@ -8009,6 +8086,8 @@ async function placeRealMt5Order(side){
      marginUsed:0,
      mt5Ticket:ticket
    };
+   if(slAuto)pos.slAuto=true;
+   if(tpAuto)pos.tpAuto=true;
    pos.rrSl=pos.sl;
    positions.push(pos);
    active=pos;
@@ -8093,6 +8172,10 @@ function openMarketTrade(side){
 
 $('buyBtn').addEventListener('click',()=>{openMarketTrade('BUY');scrollToChart();});
 $('sellBtn').addEventListener('click',()=>{openMarketTrade('SELL');scrollToChart();});
+$('breakevenBtn').addEventListener('click',()=>{
+ if(!active)return $('status').textContent='Nessuna posizione selezionata.';
+ applyBreakevenToPosition(active);
+});
 $('close').onclick=async()=>{
  if(!active)return $('status').textContent='Nessuna posizione selezionata.';
  if(active.mt5Ticket!=null){ await closeMt5PositionReal(active,'MANUAL'); draw();update(); return; }
@@ -8155,14 +8238,23 @@ async function modifyMt5TicketFromTable(mt5ModifyTicket){
 $('mt5OpenPositions').addEventListener('click',async e=>{
  const mt5CloseTicket=e.target.getAttribute('data-mt5-close');
  const mt5ModifyTicket=e.target.getAttribute('data-mt5-modify');
+ const mt5BeTicket=e.target.getAttribute('data-mt5-be');
  if(mt5CloseTicket)return closeMt5TicketFromTable(mt5CloseTicket);
  if(mt5ModifyTicket)return modifyMt5TicketFromTable(mt5ModifyTicket);
+ if(mt5BeTicket)return applyBreakevenToMt5TicketDirect(mt5BeTicket);
 });
 $('openPositions').addEventListener('click',async e=>{
  const gotoId=e.target.getAttribute('data-gotoasset-pos');
  const gotoSession=e.target.getAttribute('data-gotoasset-pos-session');
  const selId=e.target.getAttribute('data-select');
  const closeId=e.target.getAttribute('data-closepos');
+ const beId=e.target.getAttribute('data-be');
+ if(beId){
+   const pos=positions.find(p=>String(p.id)===beId);
+   if(!pos)return;
+   applyBreakevenToPosition(pos);
+   return;
+ }
  if(gotoId){
    scrollToChart();
    // La tabella mostra ora le posizioni di TUTTE E 4 le sessioni: passiamo prima a quella
@@ -10937,9 +11029,13 @@ async function tryAutoLoadMt5Creds(){
 // vero restituito dal bridge dopo il tentativo, mai un messaggio ottimistico presunto.
 function mt5AlgoTradingNote(data){
  if(!data || data.algo_trading==null)return '';
- return data.algo_trading
-   ?' Trading algoritmico attivo.'
-   :' ⚠️ Trading algoritmico ancora SPENTO sul terminale: attiva a mano "AutoTrading" nella barra degli strumenti di MT5 prima di inviare ordini.';
+ if(data.algo_trading)return ' Trading algoritmico attivo.';
+ // Se il tentativo automatico ha fallito, il bridge dice ESATTAMENTE dove si è fermato (vedi
+ // _try_reenable_autotrading in bridge.py) — lo mostriamo qui invece di lasciare solo
+ // l'avviso generico, così si capisce subito se manca pywinauto, la finestra non si trova, o è
+ // un problema di privilegi (MT5 come Amministratore).
+ const why=data.algo_trading_autofix_detail?(' Motivo del tentativo automatico non riuscito: '+data.algo_trading_autofix_detail):'';
+ return ' ⚠️ Trading algoritmico ancora SPENTO sul terminale: attiva a mano "AutoTrading" nella barra degli strumenti di MT5 prima di inviare ordini.'+why;
 }
 // Vera chiamata POST /connect al bridge locale Python. Se il bridge non è acceso sul PC, il
 // fetch fallisce a livello di rete (non è un CORS/HTTP error): lo intercettiamo per dare un
