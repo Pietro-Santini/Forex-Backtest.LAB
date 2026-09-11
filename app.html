@@ -7899,17 +7899,15 @@ async function placeRealMt5Order(side){
    (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}`:'');
  if(!confirm(`Confermi l'invio di un ORDINE VERO a mercato su MT5?\n\n${details}\n\nVerrà eseguito subito sul conto collegato: non è una simulazione.`))return;
  $('status').textContent='Invio ordine reale a MT5 in corso…';
- try{
-   const res=await fetch(MT5_BRIDGE_URL+'/order/market',{
-     method:'POST',headers:{'Content-Type':'application/json'},
-     body:JSON.stringify({symbol,side,volume:lots,sl:Number.isFinite(sl)?sl:undefined,tp:Number.isFinite(tp)?tp:undefined})
-   });
-   const data=await res.json().catch(()=>null);
-   if(!res.ok)throw new Error((data&&data.detail)?data.detail:('Errore HTTP '+res.status));
-   $('status').textContent=`🟢 Ordine reale eseguito su MT5: ${side} ${symbol} a ${fmtPrice(data.price)} (ticket ${data.ticket}).`+ignoredNote;
+ const result=await fetchMt5WithTimeout('/order/market',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({symbol,side,volume:lots,sl:Number.isFinite(sl)?sl:undefined,tp:Number.isFinite(tp)?tp:undefined})
+ });
+ if(result.ok){
+   $('status').textContent=`🟢 Ordine reale eseguito su MT5: ${side} ${symbol} a ${fmtPrice(result.data.price)} (ticket ${result.data.ticket}).`+ignoredNote;
    playOrderSound();
- }catch(err){
-   $('status').textContent='⚠️ Ordine reale non eseguito: '+err.message;
+ }else{
+   $('status').textContent='⚠️ Ordine reale non eseguito: '+result.message;
  }
  fetchMt5Positions();
 }
@@ -8012,13 +8010,11 @@ $('openPositions').addEventListener('click',async e=>{
    if(!pos)return;
    if(!confirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.symbol} (${Number(pos.volume).toFixed(2)} lot, ticket ${pos.ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return;
    $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.ticket})…`;
-   try{
-     const res=await fetch(MT5_BRIDGE_URL+'/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket})});
-     const data=await res.json().catch(()=>null);
-     if(!res.ok)throw new Error((data&&data.detail)?data.detail:('Errore HTTP '+res.status));
-     $('status').textContent=`🔌 Posizione ${pos.symbol} (ticket ${pos.ticket}) chiusa su MT5 al prezzo ${data.price!=null?fmtPrice(data.price):'—'}.`;
-   }catch(err){
-     $('status').textContent='⚠️ Chiusura reale non riuscita: '+err.message;
+   const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket})});
+   if(result.ok){
+     $('status').textContent=`🔌 Posizione ${pos.symbol} (ticket ${pos.ticket}) chiusa su MT5 al prezzo ${result.data.price!=null?fmtPrice(result.data.price):'—'}.`;
+   }else{
+     $('status').textContent='⚠️ Chiusura reale non riuscita: '+result.message;
    }
    fetchMt5Positions();
    return;
@@ -8041,13 +8037,11 @@ $('openPositions').addEventListener('click',async e=>{
    }
    if(!confirm(`Confermi di impostare DAVVERO su MT5 — ${pos.symbol} ticket ${pos.ticket} — SL: ${slInput.trim()===''?'nessuno':fmtPrice(newSl)}, TP: ${tpInput.trim()===''?'nessuno':fmtPrice(newTp)}?`))return;
    $('status').textContent=`Modifica SL/TP in corso sul conto MT5 (ticket ${pos.ticket})…`;
-   try{
-     const res=await fetch(MT5_BRIDGE_URL+'/order/modify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket,sl:newSl,tp:newTp})});
-     const data=await res.json().catch(()=>null);
-     if(!res.ok)throw new Error((data&&data.detail)?data.detail:('Errore HTTP '+res.status));
+   const result=await fetchMt5WithTimeout('/order/modify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket,sl:newSl,tp:newTp})});
+   if(result.ok){
      $('status').textContent=`✅ SL/TP di ${pos.symbol} (ticket ${pos.ticket}) aggiornati su MT5.`;
-   }catch(err){
-     $('status').textContent='⚠️ Modifica reale non riuscita: '+err.message;
+   }else{
+     $('status').textContent='⚠️ Modifica reale non riuscita: '+result.message;
    }
    fetchMt5Positions();
    return;
@@ -9632,6 +9626,32 @@ let capitalCredsDirHandle=null;
 const MT5_CREDS_FILE='mt5-config.json'; // formato legacy STEP A (un solo conto): solo per migrazione
 const MT5_ACCOUNTS_FILE='mt5-accounts.json'; // formato STEP B/C: lista di conti
 const MT5_BRIDGE_URL='http://127.0.0.1:8000';
+// BUG RISOLTO (segnalato): un ordine reale può restare "in corso" per sempre, senza mai un
+// errore né una risposta, quando il terminale MT5 ha una finestra di conferma manuale aperta
+// in attesa di un click (Strumenti -> Opzioni -> scheda Trading -> "Richiedi conferma manuale
+// delle operazioni" / "Confirm requests"): mt5.order_send() lato bridge resta bloccato in
+// attesa di quel click e non risponde mai, quindi anche il fetch() del browser resta appeso a
+// vita. Questo helper aggiunge un timeout lato browser a TUTTE le chiamate reali (ordini e
+// polling posizioni): oltre la soglia si ottiene un errore chiaro invece di un'attesa infinita.
+async function fetchMt5WithTimeout(path,options,timeoutMs){
+ timeoutMs=timeoutMs||15000;
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),timeoutMs);
+ try{
+   const res=await fetch(MT5_BRIDGE_URL+path,{...(options||{}),signal:controller.signal});
+   let data=null;
+   try{ data=await res.json(); }catch(e){ /* risposta senza corpo JSON valido */ }
+   if(!res.ok)return {ok:false,message:(data&&data.detail)?data.detail:('Errore HTTP '+res.status)};
+   return {ok:true,data};
+ }catch(e){
+   if(e.name==='AbortError'){
+     return {ok:false,message:`MT5 non ha risposto entro ${(timeoutMs/1000).toFixed(0)}s. Causa più probabile: nel terminale MT5 è aperta una finestra di conferma manuale dell'operazione (Strumenti → Opzioni → scheda Trading → disattiva "Richiedi conferma delle operazioni"/"Confirm requests"), oppure il "Trading algoritmico" non è attivo (pulsante in alto nella barra degli strumenti, deve essere verde).`};
+   }
+   return {ok:false,message:'Bridge locale non raggiungibile su '+MT5_BRIDGE_URL+'.'};
+ }finally{
+   clearTimeout(timer);
+ }
+}
 let mt5CredsDraft=null; // {login, password, server} — il conto attualmente connesso
 let mt5CredsDirHandle=null;
 let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a buon fine
@@ -9642,13 +9662,18 @@ let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a
 // visivamente e logicamente separate (righe di tabella dedicate, pulsanti dedicati).
 let mt5RealPositions=[];
 let mt5PositionsPollTimer=null;
+let mt5PositionsFetchInFlight=false; // evita di accumulare richieste in parallelo se una risposta tarda
 async function fetchMt5Positions(){
+ if(mt5PositionsFetchInFlight)return; // il giro precedente non ha ancora finito: salta questo tick
+ mt5PositionsFetchInFlight=true;
  try{
-   const res=await fetch(MT5_BRIDGE_URL+'/positions');
-   if(!res.ok)return;
-   const data=await res.json();
-   if(Array.isArray(data)){ mt5RealPositions=data; update(); }
- }catch(e){ /* bridge momentaneamente irraggiungibile: si tiene l'ultima lista nota */ }
+   const result=await fetchMt5WithTimeout('/positions',{method:'GET'},8000);
+   if(result.ok && Array.isArray(result.data)){ mt5RealPositions=result.data; update(); }
+   // Se non risponde entro il timeout o dà errore, si tiene semplicemente l'ultima lista nota
+   // (nessun messaggio di stato: un polling ogni 2s non deve riempire la barra di stato).
+ }finally{
+   mt5PositionsFetchInFlight=false;
+ }
 }
 function startMt5PositionsPolling(){
  stopMt5PositionsPolling();
