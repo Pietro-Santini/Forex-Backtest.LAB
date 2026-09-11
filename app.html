@@ -8430,13 +8430,19 @@ function openMarketTrade(side){
  // aggiorna solo se si sposta il TP, perché lì si usa sempre il valore attuale di pos.tp.
  pos.rrSl=pos.sl;
  positions.push(pos);
- active=pos;
+ // Richiesto esplicitamente (stesso comportamento già applicato alle posizioni reali MT5):
+ // dopo l'apertura la posizione NON resta selezionata — niente "active" che blocchi le caselle
+ // SL/TP sui valori appena usati, restano subito libere e vuote per il prossimo ordine. Non si
+ // perde nulla: la posizione ha comunque la sua casella Target/Stop sempre visibile a grafico
+ // (drawTpSlZoneBox in draw(), indipendente da "active"), ed è comunque subito trascinabile —
+ // agganciare la sua linea SL/TP la riseleziona da sola (vedi tradeLevelHit), quindi "trascina
+ // per confermare l'anteprima" resta identico a prima.
+ active=null;
+ clearDraftTradeLevelFields();
  if(liveModeActive)refreshLiveStreamSubscriptions();
  playOrderSound();
- refreshTradeRiskModel();
 
- $('status').textContent=`${side} aperto al prezzo ${entry} (posizione ${positions.length}). SL/TP in anteprima sul grafico: trascinali per confermarli o modificali qui sotto.${ignoredNote}`;
- refreshTradeLevelUI();
+ $('status').textContent=`${side} aperto al prezzo ${entry} (posizione ${positions.length}). SL/TP in anteprima sul grafico: trascinali per confermarli.${ignoredNote}`;
  syncTradeLevels();
  draw();update();
 }
@@ -10212,12 +10218,29 @@ let mt5CredsDirHandle=null;
 let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a buon fine
 // ===================== POSIZIONI REALI MT5 (controllo completo) =====================
 // Da qui in poi si parla di denaro VERO: mt5RealPositions è la fotografia (ogni 2s) di ciò
-// che è REALMENTE aperto sul conto MT5 collegato, letta dal bridge (GET /positions). Non è
-// mai mescolata con l'array "positions" della simulazione: le due cose restano sempre
-// visivamente e logicamente separate (righe di tabella dedicate, pulsanti dedicati).
+// che è REALMENTE aperto sul conto MT5 collegato, letta dal bridge (GET /positions). Questa
+// fotografia grezza resta sempre separata da "positions" (alimenta solo la tabella dedicata
+// "🖥️ Posizioni MT5", sempre presente indipendentemente dalla sessione a schermo) — ma ogni
+// posizione reale che vi compare viene comunque ADOTTATA anche dentro positions[] (vedi
+// fetchMt5Positions più sotto), che sia stata aperta dall'app (placeRealMt5Order) o DIRETTAMENTE
+// a mano nel terminale MT5: in entrambi i casi diventa "una posizione standard di sempre" —
+// casella Target/Stop sul grafico, riga nella tabella "Posizioni aperte", e finirà nel Trade
+// Journal quando si chiuderà.
 let mt5RealPositions=[];
 let mt5PositionsPollTimer=null;
 let mt5PositionsFetchInFlight=false; // evita di accumulare richieste in parallelo se una risposta tarda
+// Tutti i ticket di posizioni reali GIÀ tracciati in positions[], in QUALUNQUE delle 4 sessioni
+// (non solo quella a schermo ora) — usato per capire quali posizioni reali risultano ancora
+// "nuove" e vanno adottate (vedi fetchMt5Positions). Stessa idea di collectAcrossSessions(),
+// ma globale: quella è annidata dentro update() e non richiamabile da qui.
+function allTrackedMt5PositionTickets(){
+ const set=new Set();
+ ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
+   const list=(key===currentMode())?positions:(((sessionByMode[key]||{}).positions)||[]);
+   list.forEach(p=>{ if(p.mt5Ticket!=null)set.add(String(p.mt5Ticket)); });
+ });
+ return set;
+}
 async function fetchMt5Positions(){
  if(mt5PositionsFetchInFlight)return; // il giro precedente non ha ancora finito: salta questo tick
  mt5PositionsFetchInFlight=true;
@@ -10259,6 +10282,32 @@ async function fetchMt5Positions(){
        }
        closeTrade(reason,price,p);
      }
+     // Posizioni reali aperte DIRETTAMENTE nel terminale MT5 (a mano, non tramite i pulsanti
+     // BUY/SELL dell'app): richiesto esplicitamente che non restino visibili SOLO nella tabella
+     // dedicata "🖥️ Posizioni MT5", ma vengano "unite" all'esperienza standard dell'app come
+     // qualunque altra posizione — le adottiamo qui dentro positions[], nella sessione/modalità
+     // ATTUALMENTE a schermo in questo momento (quella scelta ora, esattamente come richiesto):
+     // ottengono così la propria casella Target/Stop sul grafico, una riga nella tabella
+     // "Posizioni aperte" standard (con il badge 🖥️), e finiranno nel Trade Journal quando si
+     // chiuderanno, grazie alla riconciliazione qui sopra che le tratta ormai come una qualunque
+     // altra posizione reale tracciata.
+     const trackedTickets=allTrackedMt5PositionTickets();
+     const untrackedRealPositions=result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
+     untrackedRealPositions.forEach(rp=>{
+       const pos={
+         id:Date.now()+Math.random(),
+         asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
+         sl:rp.sl!=null?Number(rp.sl):null,tp:rp.tp!=null?Number(rp.tp):null,
+         origin:'MARKET',
+         lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
+         start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
+         marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
+       };
+       pos.rrSl=pos.sl;
+       positions.push(pos);
+       playOrderSound();
+       $('status').textContent=`🖥️ Posizione reale aperta direttamente su MT5 rilevata: ${pos.side} ${pos.asset} a ${fmtPrice(pos.entry)} (ticket ${rp.ticket}) — aggiunta anche qui in app.`;
+     });
      mt5RealPositions=result.data; update();
    }
    // Se non risponde entro il timeout o dà errore, si tiene semplicemente l'ultima lista nota
