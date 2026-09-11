@@ -5892,8 +5892,9 @@ function draw(){
    }
  }
  // Linee "bozza" di SL/TP DEDICATE all'ordine pendente in composizione: sempre visibili
- // (indipendentemente da `active`), caselle e linee separate da quelle del trade a mercato.
- if(!(active&&active.origin==='PENDING')){
+ // davvero indipendentemente da `active` (nessuna eccezione per origin==='PENDING' — una
+ // posizione già aperta non usa più queste caselle, vedi refreshTradeLevelUI()).
+ {
    // Stessa casella Target/Stop anche per l'ordine pendente in composizione, non appena si
    // sceglie LIMIT o STOP e ci si proietta sul grafico (vedi anche auto-riempimento di
    // slPending/tpPending in setTradeLevel quando si imposta l'ENTRY). Resta visibile e si
@@ -6202,7 +6203,7 @@ function zoneBoxXRange(g,originIdx,ownerKey){
  const xRight=Math.max(xOrigin+30,Math.min(xRightRaw,maxX));
  return {xOrigin,xRight};
 }
-function tradeLevelHit(clientX,clientY){
+function tradeLevelHit(clientX,clientY,activate){
  const g=chartGeometry();if(!g)return null;
  const px=clientX-g.rect.left, py=clientY-g.rect.top,tolerance=14;
  // In ORIZZONTALE il trascinamento parte solo da DENTRO la casella Target/Stop (o dal suo
@@ -6212,18 +6213,39 @@ function tradeLevelHit(clientX,clientY){
    const {xOrigin,xRight}=zoneBoxXRange(g,originIdx,ownerKey);
    return px>=xOrigin-tolerance && px<=xRight+tolerance;
  };
- if(active){
-   const openIdx=rowIndexContainingTime(openReferenceTimeForPos(active));
-   if(openIdx!=null && insideZoneBox(openIdx,'pos:'+active.id)){
-     for(const item of [
-       tradeSLLine?{type:'SL',line:tradeSLLine}:null,
-       tradeTPLine?{type:'TP',line:tradeTPLine}:null
-     ].filter(Boolean)){
-       const dist=Math.abs(py-g.y(item.line.price));
-       if(dist<=tolerance)return item.type;
+ // Trascinamento SL/TP: deve funzionare su OGNI posizione aperta di questo asset, non solo
+ // su quella attualmente selezionata (richiesto esplicitamente — le linee di una posizione
+ // aperta restano sempre spostabili anche se l'operazione non è quella "attiva" ora).
+ // Agganciare/trascinare la linea di un'ALTRA posizione la seleziona automaticamente (come un
+ // click su di lei), così le caselle SL/TP e il resto dell'interfaccia restano coerenti con
+ // quella che si sta davvero modificando.
+ let posHit=null;
+ {
+   const ownPositionsForDrag=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   for(const pos of ownPositionsForDrag){
+     const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
+     if(openIdx==null || !insideZoneBox(openIdx,'pos:'+pos.id))continue;
+     const items=[
+       Number.isFinite(pos.sl)?{type:'SL',price:pos.sl}:null,
+       Number.isFinite(pos.tp)?{type:'TP',price:pos.tp}:null
+     ].filter(Boolean);
+     for(const item of items){
+       const dist=Math.abs(py-g.y(item.price));
+       if(dist<=tolerance){ posHit={pos,type:item.type}; break; }
      }
+     if(posHit)break;
    }
- }else if(insideZoneBox(idx,'draft:market')){
+ }
+ if(posHit){
+   // La selezione (cambio di "active") va cambiata SOLO quando questa chiamata avvia
+   // davvero un trascinamento (activate===true, dai gestori di pointerdown), MAI durante il
+   // semplice passaggio del mouse/dito usato altrove solo per decidere l'icona del cursore o
+   // se bloccare lo scroll — altrimenti la sola posizione del mouse selezionerebbe/cambierebbe
+   // "active" in continuazione, senza alcun click.
+   if(activate && active!==posHit.pos){ active=posHit.pos; syncTradeLevels(); refreshTradeLevelUI(); update(); }
+   return posHit.type;
+ }
+ if(!active && insideZoneBox(idx,'draft:market')){
    // Bozza SL/TP (nessuna posizione attiva): trascinabile esattamente come le linee di
    // una posizione già aperta, così restano sempre "agganciate" al grafico.
    const draftSl=num($('sl')?.value);
@@ -6237,8 +6259,10 @@ function tradeLevelHit(clientX,clientY){
  const draftEntry=num($('pendingEntry')?.value);
  if(Number.isFinite(draftEntry) && px<=g.pad.l+160 && Math.abs(py-g.y(draftEntry))<=tolerance)return 'ENTRY';
  // Bozza SL/TP DEDICATA all'ordine pendente in composizione (caselle separate da quelle
- // del trade a mercato): trascinabile allo stesso modo, solo dentro la sua casella.
- if(!(active&&active.origin==='PENDING') && insideZoneBox(idx,'draft:pending')){
+ // del trade a mercato): trascinabile allo stesso modo, solo dentro la sua casella. Sempre
+ // attiva indipendentemente da "active": si può comporre un nuovo ordine pendente anche con
+ // una posizione già aperta (di qualunque origine) sul grafico.
+ if(insideZoneBox(idx,'draft:pending')){
    const draftSlPending=num($('slPending')?.value);
    if(Number.isFinite(draftSlPending) && Math.abs(py-g.y(draftSlPending))<=tolerance)return 'SL_PENDING';
    const draftTpPending=num($('tpPending')?.value);
@@ -6835,7 +6859,7 @@ function currentZoneBoxSpecs(){
      if(Number.isFinite(entry))specs.push({ownerKey:'draft:market',originIdx:idx,entry,sl:Number.isFinite(slv)?slv:null,tp:Number.isFinite(tpv)?tpv:null});
    }
  }
- if(!(active&&active.origin==='PENDING')){
+ {
    const slp=num($('slPending')?.value), tpp=num($('tpPending')?.value);
    if(Number.isFinite(slp)||Number.isFinite(tpp)){
      const pe=num($('pendingEntry')?.value);
@@ -7038,12 +7062,11 @@ function refreshRiskSuggestionPending(){
 }
 // STEP: anteprima "quanto perdo/guadagno se tocco SL/TP", accanto alle caselle SL/TP del
 // trade a mercato — usa i valori ATTUALMENTE nelle caselle (posizione attiva selezionata, se
-// c'è una, altrimenti la bozza in composizione) e il relativo lottaggio. Una posizione aperta
-// da ordine pendente (origin==='PENDING') mostra la sua anteprima nelle caselle Pending,
-// gestita da refreshSlTpEuroPreviewPending() qui sotto — qui si nasconde per non duplicarla.
+// c'è una, altrimenti la bozza in composizione) e il relativo lottaggio. Una posizione GIÀ
+// APERTA mostra sempre qui la sua anteprima, anche se nata da un ordine pendente ora attivato
+// (le caselle Pending/refreshSlTpEuroPreviewPending() sono riservate al prossimo ordine).
 function refreshSlTpEuroPreview(){
  const el=$('slTpEuroPreview'); if(!el)return;
- if(active && active.origin==='PENDING'){ el.style.display='none'; return; }
  const entry=active?active.entry:currentPrice();
  const sl=num($('sl')?.value), tp=num($('tp')?.value);
  const lots=active?active.lots:getLotSize();
@@ -7061,16 +7084,16 @@ function refreshSlTpEuroPreview(){
  el.style.display='block';
  el.textContent=parts.join('   •   ');
 }
-// Stesso principio per le caselle SL/TP DEDICATE all'ordine pendente: sia mentre è ancora in
-// composizione (entrata=pendingEntry o prezzo corrente, lottaggio=lotsPending), sia per una
-// posizione già APERTA nata da un ordine pendente (entrata/lottaggio VERI della posizione).
+// Stesso principio per le caselle SL/TP DEDICATE all'ordine pendente IN COMPOSIZIONE (non
+// ancora creato): entrata=pendingEntry o prezzo corrente, lottaggio=lotsPending. Una posizione
+// GIÀ APERTA (anche se nata da un ordine pendente) NON passa più di qui — vedi
+// refreshSlTpEuroPreview() sopra — così le due anteprime non si confondono mai.
 function refreshSlTpEuroPreviewPending(){
  const el=$('slTpEuroPreviewPending'); if(!el)return;
- const isOpenFromPending=active && active.origin==='PENDING';
- const entry=isOpenFromPending?active.entry:(Number.isFinite(num($('pendingEntry')?.value))?num($('pendingEntry')?.value):currentPrice());
+ const entry=Number.isFinite(num($('pendingEntry')?.value))?num($('pendingEntry')?.value):currentPrice();
  const sl=num($('slPending')?.value), tp=num($('tpPending')?.value);
- const lots=isOpenFromPending?active.lots:getLotSizePending();
- const assetKey=isOpenFromPending?active.asset:undefined;
+ const lots=getLotSizePending();
+ const assetKey=undefined;
  const parts=[];
  if(Number.isFinite(entry)&&Number.isFinite(sl)){
    const v=euroAtLevel(entry,sl,lots,assetKey);
@@ -7126,36 +7149,13 @@ function setTradeLevel(type,value,source='input'){
    draw();
    return;
  }
- // SL/TP dell'ordine pendente in composizione: caselle e linee dedicate, separate da
- // quelle del trade a mercato/posizione attiva. Se però è selezionata una posizione già
- // APERTA nata da un ordine pendente (origin==='PENDING'), questi stessi pulsanti/linee
- // devono modificare LEI (resta nel suo ramo per sempre, come una posizione a mercato
- // viene modificata dai pulsanti SL/TP del ramo mercato).
+ // SL/TP dell'ordine pendente in COMPOSIZIONE (non ancora creato): caselle e linee dedicate,
+ // separate da quelle del trade a mercato/posizione attiva. BUG RISOLTO (segnalato): questo
+ // ramo in passato reindirizzava a modificare la posizione "active" quando nata da un ordine
+ // pendente (origin==='PENDING') — ma una posizione in "active" è per definizione già APERTA,
+ // quindi va sempre gestita come un trade a mercato (tipo 'SL'/'TP' più sotto), mai qui. Le
+ // caselle slPending/tpPending ora restano sempre e solo la bozza del PROSSIMO ordine pendente.
  if(type==='SL_PENDING'||type==='TP_PENDING'){
-   const field=type==='SL_PENDING'?'sl':'tp';
-   if(active && active.origin==='PENDING'){
-     // STEP: una posizione GIÀ APERTA (anche se nata da un ordine pendente) può avere lo SL
-     // spostato liberamente oltre l'entry, verso il TP — è gestione del trade (breakeven /
-     // "Stop Profit"), non l'apertura di un ordine nuovo: qui il vincolo "SL dal lato del
-     // rischio" non si applica più. Il TP mantiene invece il vincolo di sempre.
-     if(source==='drag'){
-       const eps=Math.max(Math.abs(active.entry)*1e-6,0.00001);
-       if(field==='tp'){
-         if(active.side==='BUY' && value<=active.entry) value=active.entry+eps;
-         if(active.side==='SELL' && value>=active.entry) value=active.entry-eps;
-       }
-     }else{
-       const err=validateTradeLevel(active.side,active.entry,field==='sl'?value:active.sl,field==='tp'?value:active.tp,true);
-       if(err)return $('status').textContent=err;
-     }
-     active[field]=value;
-     refreshTradeRiskModel();
-     syncTradeLevels();
-     refreshTradeLevelUI();
-     $('status').textContent=`${type==='SL_PENDING'?'Stop Loss':'Take Profit'} dell'ordine pendente impostato a ${fmtPrice(value)}.`;
-     draw();update();
-     return;
-   }
    if(type==='SL_PENDING')$('slPending').value=fmtPrice(value); else $('tpPending').value=fmtPrice(value);
    refreshRiskSuggestionPending();
    $('status').textContent=`${type==='SL_PENDING'?'Stop Loss':'Take Profit'} dell'ordine pendente impostato a ${fmtPrice(value)}.`;
@@ -7568,12 +7568,17 @@ function evaluate(){
      return;
    }
    let sl=false,tp=false;
+   // Difesa aggiuntiva: uno SL/TP <=0 non è mai un prezzo reale valido (nessun asset quota a
+   // zero o sotto) — anche se validateTradeLevel() ora impedisce di impostarlo, qui lo
+   // ignoriamo comunque per non chiudere mai una posizione a un prezzo mostruoso per errore
+   // (es. dati di sessione salvati da prima di questo fix).
+   const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
    if(pos.side==='BUY'){
-     sl=pos.sl!=null && r.low<=pos.sl;
-     tp=pos.tp!=null && r.high>=pos.tp;
+     sl=slOk && r.low<=pos.sl;
+     tp=tpOk && r.high>=pos.tp;
    }else{
-     sl=pos.sl!=null && r.high>=pos.sl;
-     tp=pos.tp!=null && r.low<=pos.tp;
+     sl=slOk && r.high>=pos.sl;
+     tp=tpOk && r.low<=pos.tp;
    }
    if(sl||tp){const result=sl?'SL':'TP';closeTrade(result,sl?pos.sl:pos.tp,pos);$('status').textContent=`Trade chiuso a ${result}.`;}
  });
@@ -7793,6 +7798,16 @@ $('market')?.addEventListener('change',()=>{
 // (gestione del trade: breakeven / Stop Profit) — per un ordine NUOVO (a mercato o pendente,
 // non ancora aperto) lo SL deve sempre restare dal lato del rischio, come prima.
 function validateTradeLevel(side, entry, sl, tp, allowSlPastEntry){
+ // BUG RISOLTO: uno SL/TP a 0 (o negativo) soddisfaceva comunque il solo controllo "dal lato
+ // giusto rispetto all'entry" qui sotto (0 è sempre "sotto" un prezzo reale positivo), quindi
+ // veniva accettato come valido — soprattutto sullo SL quando allowSlPastEntry è true (gestione
+ // breakeven/Stop Profit di una posizione già aperta, dove il controllo lato-entry è saltato
+ // apposta). Una volta salvato, valeva come prezzo di chiusura raggiunto da QUALSIASI candela
+ // (0 è sempre "sotto il minimo"/"sopra il massimo"), chiudendo la posizione al primo tick
+ // successivo con un P/L mostruoso e falso. Ora nessun prezzo <=0 può mai essere accettato,
+ // indipendentemente da allowSlPastEntry.
+ if(Number.isFinite(sl) && sl<=0)return 'Lo Stop Loss deve essere un prezzo valido, maggiore di zero.';
+ if(Number.isFinite(tp) && tp<=0)return 'Il Take Profit deve essere un prezzo valido, maggiore di zero.';
  if(Number.isFinite(sl) && !allowSlPastEntry){
    if(side==='BUY' && sl>=entry)return 'Per un BUY, lo Stop Loss deve essere sotto l\'entry.';
    if(side==='SELL' && sl<=entry)return 'Per un SELL, lo Stop Loss deve essere sopra l\'entry.';
@@ -7811,19 +7826,17 @@ function refreshTradeLevelUI(){
  // modo incoerente tra un ordine e l'altro.
  // Se NON c'è una posizione attiva non tocchiamo le caselle SL/TP: potrebbero contenere una
  // bozza per il prossimo ordine (a mercato o pendente) che l'utente sta ancora componendo.
- // IMPORTANTE: una posizione nata da un ordine pendente (origin==='PENDING') resta nel suo
- // ramo per SEMPRE, anche dopo l'attivazione — i suoi SL/TP vanno mostrati nelle caselle
- // DEDICATE dell'ordine pendente (slPending/tpPending), MAI in quelle del trade a mercato
- // (sl/tp). Prima, attivandosi, un ordine pendente "sporcava" le caselle del trade a
- // mercato: i due rami devono restare sempre separati, come richiesto.
+ // BUG RISOLTO (segnalato): una posizione GIÀ APERTA (in "positions"/"active"), anche se nata
+ // da un ordine pendente ora attivato, è a tutti gli effetti un'operazione a mercato — i suoi
+ // SL/TP vanno mostrati e modificati SEMPRE nelle caselle del trade a mercato (sl/tp), MAI in
+ // quelle dell'ordine pendente in composizione (slPending/tpPending). Prima, selezionando una
+ // posizione nata da pendente, i suoi valori finivano nelle caselle sbagliate: scriverci sopra
+ // (es. per azzerarli) modificava la posizione aperta senza i controlli giusti — vedi il fix
+ // in validateTradeLevel() più sopra. Le caselle slPending/tpPending restano riservate solo
+ // alla composizione di un NUOVO ordine pendente non ancora creato.
  if(active){
-   if(active.origin==='PENDING'){
-     if($('slPending'))$('slPending').value=active.sl!=null?fmtPrice(active.sl):'';
-     if($('tpPending'))$('tpPending').value=active.tp!=null?fmtPrice(active.tp):'';
-   }else{
-     if($('sl'))$('sl').value=active.sl!=null?active.sl:'';
-     if($('tp'))$('tp').value=active.tp!=null?active.tp:'';
-   }
+   if($('sl'))$('sl').value=active.sl!=null?active.sl:'';
+   if($('tp'))$('tp').value=active.tp!=null?active.tp:'';
  }
 }
 function openMarketTrade(side){
@@ -8601,7 +8614,7 @@ chartEl.addEventListener('pointerdown',e=>{
       $('status').textContent='Trascina per allargare/restringere le caselle Target/Stop.';
       return;
     }
-    const tradeHit=tradeLevelHit(e.clientX,e.clientY);
+    const tradeHit=tradeLevelHit(e.clientX,e.clientY,true);
     if(tradeHit){
       e.preventDefault();
       setChartTouchAction(true);
@@ -8664,7 +8677,7 @@ chartEl.addEventListener('pointerdown',e=>{
    $('status').textContent='Trascina per allargare/restringere le caselle Target/Stop.';
    return;
  }
- const tradeHit=tradeLevelHit(e.clientX,e.clientY);
+ const tradeHit=tradeLevelHit(e.clientX,e.clientY,true);
  if(tradeHit){
    e.preventDefault();
    tradeLevelDrag=tradeHit;
@@ -9041,8 +9054,10 @@ chartEl.addEventListener('wheel',e=>{
  document.addEventListener('pointerdown',unlock,{once:true});
  document.addEventListener('keydown',unlock,{once:true});
 })();
-$('sl').addEventListener('change',()=>{if(active && active.origin!=='PENDING')setTradeLevel('SL',$('sl').value,'input');});
-$('tp').addEventListener('change',()=>{if(active && active.origin!=='PENDING')setTradeLevel('TP',$('tp').value,'input');});
+// Una posizione già aperta è sempre gestita qui (caselle "a mercato"), indipendentemente dal
+// fatto che sia nata da un ordine pendente ora attivato — vedi il fix in refreshTradeLevelUI().
+$('sl').addEventListener('change',()=>{if(active)setTradeLevel('SL',$('sl').value,'input');});
+$('tp').addEventListener('change',()=>{if(active)setTradeLevel('TP',$('tp').value,'input');});
 function armTradeLevel(type){
  // 'SL'/'TP': agiscono sul trade a mercato / posizione attiva selezionata.
  // 'SL_PENDING'/'TP_PENDING': agiscono SOLO sulle caselle DEDICATE dell'ordine pendente in
@@ -9077,13 +9092,13 @@ $('entryKindStop')?.addEventListener('click',()=>{
  $('status').textContent="Clicca sul grafico nel punto (anche futuro) in cui vuoi che l'ordine STOP si attivi (Esc per annullare).";
  scrollToChart();
 });
+// Queste caselle sono SEMPRE e solo la bozza del prossimo ordine pendente: una posizione già
+// aperta (anche se nata da un ordine pendente) si modifica dalle caselle "a mercato" sopra.
 $('slPending')?.addEventListener('change',()=>{
- if(active && active.origin==='PENDING')return setTradeLevel('SL_PENDING',$('slPending').value,'input');
  const v=num($('slPending').value);
  if(Number.isFinite(v))$('slPending').value=fmtPrice(v);
 });
 $('tpPending')?.addEventListener('change',()=>{
- if(active && active.origin==='PENDING')return setTradeLevel('TP_PENDING',$('tpPending').value,'input');
  const v=num($('tpPending').value);
  if(Number.isFinite(v))$('tpPending').value=fmtPrice(v);
 });
@@ -10289,8 +10304,11 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
  const ownPositions=positions.filter(p=>(p.asset||asset)===asset);
  [...ownPositions].forEach(pos=>{
    let sl=false,tp=false;
-   if(pos.side==='BUY'){ sl=pos.sl!=null&&price<=pos.sl; tp=pos.tp!=null&&price>=pos.tp; }
-   else{ sl=pos.sl!=null&&price>=pos.sl; tp=pos.tp!=null&&price<=pos.tp; }
+   // Difesa aggiuntiva: mai chiudere su uno SL/TP <=0 (prezzo non reale) — vedi commento
+   // analogo in evaluate().
+   const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
+   if(pos.side==='BUY'){ sl=slOk&&price<=pos.sl; tp=tpOk&&price>=pos.tp; }
+   else{ sl=slOk&&price>=pos.sl; tp=tpOk&&price<=pos.tp; }
    if(sl||tp)closeTrade(sl?'SL':'TP',sl?pos.sl:pos.tp,pos);
  });
  // Attivazione ordini pendenti "in background": NON possiamo usare activatePendingOrder()
@@ -10408,8 +10426,11 @@ async function pollBackgroundLiveSession(sessionKey){
    const ownPositions=(session.positions||[]).filter(p=>(p.asset||asset)===asset);
    [...ownPositions].forEach(pos=>{
      let sl=false,tp=false;
-     if(pos.side==='BUY'){ sl=pos.sl!=null&&price<=pos.sl; tp=pos.tp!=null&&price>=pos.tp; }
-     else{ sl=pos.sl!=null&&price>=pos.sl; tp=pos.tp!=null&&price<=pos.tp; }
+     // Difesa aggiuntiva: mai chiudere su uno SL/TP <=0 (prezzo non reale) — vedi commento
+     // analogo in evaluate().
+     const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
+     if(pos.side==='BUY'){ sl=slOk&&price<=pos.sl; tp=tpOk&&price>=pos.tp; }
+     else{ sl=slOk&&price>=pos.sl; tp=tpOk&&price<=pos.tp; }
      if(sl||tp){ closeTradeInSession(sessionKey,session,sl?'SL':'TP',sl?pos.sl:pos.tp,pos); changed=true; }
    });
    // Attivazione ordini pendenti per "attraversamento" del prezzo di entrata fra il
