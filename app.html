@@ -1868,6 +1868,11 @@ function collectLightSessionState(){
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,
    positions,active,pendingOrders,trades,equity,statsBaselineByMode,sessionByMode,liveModeActive,
    isPropFirmMode,
+   // Richiesto esplicitamente: se ero connesso a un conto MT5 reale, alla riapertura dell'app
+   // deve proporsi da sola la riconnessione (vedi il popup in initSession() più sotto). Salviamo
+   // qui solo SE ero connesso, MAI la password (quella resta dov'era già, nella cartella
+   // credenziali collegata via File System Access API — vedi getMt5CredsDirHandle).
+   mt5WasConnected:mt5Connected,
    drawings,
    activeIndicators:activeIndicators.map(ind=>({id:ind.id,key:ind.key,params:ind.params,hidden:ind.hidden}))
  };
@@ -2058,6 +2063,10 @@ function applyLightSessionState(state){
  }
  candleTheme=(state.fields&&CANDLE_THEMES[state.fields.candleTheme])?state.fields.candleTheme:'green_red';
  if($('candleTheme'))$('candleTheme').value=candleTheme;
+ // Solo lette qui, NON riconnesse subito: il popup "Riconnetti a MT5?" in initSession() decide
+ // se proporre la riconnessione automatica (richiede comunque un click, come da API browser per
+ // l'accesso alla cartella delle credenziali — vedi getMt5CredsDirHandle).
+ mt5WasConnectedLastSession=!!state.mt5WasConnected;
  drawings=state.drawings||[];
  activeIndicators=(state.activeIndicators||[]).map(ind=>({...ind,calc:{ref:null,builtTo:-1}}));
 }
@@ -3695,8 +3704,18 @@ function update(){
      const isCurrentRow=sessionKey===currentMode();
      const isLiveSession=(sessionKey==='live'||sessionKey==='live_propfirm');
      const isCurrentAssetOnScreen=isCurrentRow&&(!currentAssetKey||posAsset===currentAssetKey);
-     const posPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[posAsset]:null);
-     const plLive=(posPrice!=null)?calculateForexPL(p.side,p.entry,posPrice,p.lots,posAsset):null;
+     // BUG RISOLTO ("la prop firm somma la stessa posizione" — in realtà due P/L diversi per la
+     // stessa posizione reale mostrati in due tabelle): questa riga usava SEMPRE il feed Live di
+     // Capital.com (livePriceByAsset) anche per una posizione realmente aperta su MT5, che ha
+     // però il SUO prezzo/P&L vero riportato dal broker — da qui il numero diverso rispetto alla
+     // tabella "Posizioni MT5" per la stessa identica posizione. Per un ticket reale usiamo ora
+     // sempre il prezzo/P&L VERO del broker (mt5RealPrice/mt5RealProfit, la stessa fotografia
+     // già usata da quella tabella): stesso numero ovunque, e coerente con quello che la Prop
+     // Firm ora usa davvero per le sue regole (vedi floatingPL()).
+     const mt5Price=p.mt5Ticket!=null?mt5RealPrice(p.mt5Ticket):null;
+     const posPrice=mt5Price!=null?mt5Price:(isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[posAsset]:null));
+     const mt5Profit=p.mt5Ticket!=null?mt5RealProfit(p.mt5Ticket):null;
+     const plLive=mt5Profit!=null?mt5Profit:((posPrice!=null)?calculateForexPL(p.side,p.entry,posPrice,p.lots,posAsset):null);
      const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
      // Colonna "Prezzo corrente": per le sessioni Storico non attive mostriamo il prezzo di
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
@@ -7125,7 +7144,38 @@ function zoneHandleHit(clientX,clientY){
 
 function baseCapital(){ return num($('capital').value)||10000; }
 function closedPL(){ return statsTrades().reduce((s,t)=>s+t.pl,0); }
+// P/L reale (in valuta di conto) di una posizione TRACCIATA su MT5, letto DIRETTAMENTE dal
+// campo "profit" che il broker stesso restituisce per quel ticket (mt5RealPositions, la stessa
+// fotografia che alimenta la tabella "🖥️ Posizioni MT5" e il suo P/L live) — non un ricalcolo
+// con un prezzo di un'altra fonte. Restituisce null se per questo ticket non è ancora arrivata
+// nessuna fotografia dal bridge (es. appena aperta, prima del primo giro di polling).
+function mt5RealProfit(ticket){
+ const rp=mt5RealPositions.find(x=>String(x.ticket)===String(ticket));
+ const v=rp?Number(rp.profit):NaN;
+ return Number.isFinite(v)?v:null;
+}
+// Stessa idea di mt5RealProfit ma per il prezzo corrente REALE di un ticket MT5 (usato nella
+// colonna "Prezzo corrente" della tabella "Posizioni aperte", per lo stesso motivo: mostrare
+// per una posizione reale lo stesso numero della tabella "Posizioni MT5", non quello di un'altra
+// fonte dati (feed Live o rows[idx] dello Storico).
+function mt5RealPrice(ticket){
+ const rp=mt5RealPositions.find(x=>String(x.ticket)===String(ticket));
+ const v=rp?Number(rp.price_current):NaN;
+ return Number.isFinite(v)?v:null;
+}
 function floatingPL(){
+ // BUG RISOLTO ("la prop firm somma la stessa posizione", segnalato guardando due P/L diversi
+ // per la STESSA posizione reale in "Posizioni aperte" e in "Posizioni MT5"): non è mai stata
+ // una doppia somma — floatingPL() ha sempre letto SOLO positions[] (il riquadro "Posizioni
+ // aperte"), mai mt5RealPositions, quindi ogni posizione viene contata una volta sola qui. Il
+ // problema vero è che per una posizione reale, il prezzo usato per calcolarne il P/L flottante
+ // (livePriceByAsset di Capital.com, o currentPrice() in Storico — un'altra fonte dati) può
+ // discostarsi dalla vera quotazione del broker MT5 collegato, dando un P/L diverso da quello
+ // reale mostrato nella tabella MT5: la Prop Firm valutava quindi un rischio "sbagliato"
+ // (spesso più severo del vero), potendo chiudere la Challenge per un drawdown che sul conto
+ // reale non c'era davvero. Per ogni posizione con mt5Ticket usiamo perciò SEMPRE il P/L VERO
+ // riportato dal broker stesso (mt5RealProfit) invece di ricalcolarlo con un prezzo di
+ // un'altra fonte — stesso identico numero che vedi nella tabella "Posizioni MT5".
  if(liveModeActive){
    // BUG RISOLTO (causa dell'errore mostrato: chiusura per margine/drawdown appena dopo un F5
    // con una posizione appena aperta): per l'asset "a grafico ora" si usava currentPrice() =
@@ -7139,18 +7189,30 @@ function floatingPL(){
    // per un asset, quella posizione viene correttamente ignorata per questo giro invece di
    // usare un prezzo a caso.
    return positions.reduce((s,p)=>{
+     if(p.mt5Ticket!=null){
+       const real=mt5RealProfit(p.mt5Ticket);
+       if(real!=null)return s+real; // fallback sotto solo se manca ancora una fotografia MT5
+     }
      const posAsset=p.asset||currentAssetKey;
      const px=livePriceByAsset[posAsset];
      return Number.isFinite(px)?s+calculateForexPL(p.side,p.entry,px,p.lots,posAsset):s;
    },0);
  }
- const price=currentPrice(); if(price==null)return 0;
  // Storico: il P/L fluttuante live si può calcolare solo per le posizioni dell'asset a
  // grafico ora: per le posizioni aperte su altri asset non abbiamo in questo momento un
  // prezzo corretto (restano "congelate" all'ultimo valore noto finché non si torna sul loro
- // grafico) — qui, a differenza della Live, non c'è alcun collegamento dati continuo.
- const ownPositions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
- return ownPositions.reduce((s,p)=>s+calculateForexPL(p.side,p.entry,price,p.lots,p.asset||currentAssetKey),0);
+ // grafico) — qui, a differenza della Live, non c'è alcun collegamento dati continuo. Una
+ // posizione reale (mt5Ticket) fa eccezione: il suo P/L vero arriva sempre dal broker, non da
+ // rows[idx], quindi resta corretto anche per asset diversi da quello a grafico ora.
+ const price=currentPrice();
+ const ownPositions=currentAssetKey?positions.filter(p=>p.mt5Ticket!=null||(p.asset||currentAssetKey)===currentAssetKey):positions;
+ return ownPositions.reduce((s,p)=>{
+   if(p.mt5Ticket!=null){
+     const real=mt5RealProfit(p.mt5Ticket);
+     if(real!=null)return s+real;
+   }
+   return (price==null)?s:s+calculateForexPL(p.side,p.entry,price,p.lots,p.asset||currentAssetKey);
+ },0);
 }
 function usedMargin(){ return positions.reduce((s,p)=>s+(p.marginUsed||0),0); }
 function equityNow(){ return baseCapital()+closedPL()+floatingPL(); }
@@ -10265,6 +10327,10 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
 let mt5CredsDraft=null; // {login, password, server} — il conto attualmente connesso
 let mt5CredsDirHandle=null;
 let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a buon fine
+// true se ERO connesso a un conto MT5 reale nell'ultima sessione salvata (letto da
+// applyLightSessionState): usato SOLO da initSession() per decidere se proporre il popup di
+// riconnessione automatica al prossimo avvio — vedi lì.
+let mt5WasConnectedLastSession=false;
 // ===================== POSIZIONI REALI MT5 (controllo completo) =====================
 // Da qui in poi si parla di denaro VERO: mt5RealPositions è la fotografia (ogni 2s) di ciò
 // che è REALMENTE aperto sul conto MT5 collegato, letta dal bridge (GET /positions). Questa
@@ -11631,6 +11697,54 @@ async function tryAutoLoadMt5Creds(){
  const key=mt5SelectedAccountKey||mt5AccountKey(mt5SavedAccounts[0]);
  return mt5SavedAccounts.find(a=>mt5AccountKey(a)===key)||mt5SavedAccounts[0];
 }
+// Richiesto esplicitamente: se all'ultima chiusura ero connesso a un conto MT5 reale, alla
+// riapertura dell'app un popup mi propone di ricollegarmi in automatico, SENZA doverlo rifare a
+// mano — ma SOLO sullo stesso PC dove gira il bridge locale (mai da tablet/telefono, che non
+// vedono lo stesso 127.0.0.1). Chiamata alla fine di initSession(), quando tutto il resto della
+// sessione (posizioni, sessione/mode, grafico) è già stato ripristinato al punto dove ero
+// rimasto: la riconnessione MT5 arriva "sopra" a quello, non lo sostituisce.
+async function maybeOfferMt5AutoReconnect(){
+ if(!mt5WasConnectedLastSession || mt5Connected) return;
+ // Il bridge gira SOLO in locale: raggiungibile SOLO dallo stesso PC dove sta girando. Da un
+ // tablet/telefono questa richiesta fallisce sempre (127.0.0.1 lì è il tablet/telefono stesso,
+ // non il PC) — è proprio questo controllo, non un rilevamento del dispositivo, a garantire che
+ // il popup non compaia mai da tablet/telefono, come richiesto esplicitamente. Un paio di
+ // tentativi ravvicinati: se l'app è stata aperta insieme al bridge dal lanciatore .bat,
+ // quest'ultimo potrebbe metterci ancora un istante prima di essere pronto.
+ let reachable=false;
+ for(let i=0;i<3 && !reachable;i++){
+   if(i>0)await new Promise(r=>setTimeout(r,1200));
+   const r=await fetchMt5WithTimeout('/health',{method:'GET'},1500);
+   reachable=!!r.ok;
+ }
+ if(!reachable)return;
+ const ok=await appConfirm(
+   "Risultavi connesso a un conto MT5 reale l'ultima volta che hai usato l'app.\n\nVuoi ricollegarti in automatico con le credenziali salvate e riprendere da dove avevi lasciato?",
+   {title:'Riconnessione MT5',okLabel:'Sì, ricollega',cancelLabel:'No, resto scollegato',danger:false}
+ );
+ if(!ok)return;
+ // La richiesta del permesso sulla cartella credenziali (dentro tryAutoLoadMt5Creds ->
+ // getMt5CredsDirHandle) va fatta qui, SUBITO dopo questo click reale sul popup: è quanto le API
+ // del browser richiedono per concederlo senza fallire in silenzio (stesso motivo per cui non
+ // viene mai chiamata prima, es. per mostrare già nel popup il nome del conto).
+ const creds=await tryAutoLoadMt5Creds();
+ if(!creds){
+   $('status').textContent='Nessuna credenziale MT5 salvata trovata: apri il menu MT5 per collegarti di nuovo.';
+   return;
+ }
+ $('status').textContent='Riconnessione automatica a MT5 in corso…';
+ const result=await connectToMt5Bridge(creds);
+ if(result.ok){
+   mt5CredsDraft=creds;
+   mt5Connected=true;
+   updateMt5ModeUI();
+   $('status').textContent=`🟢 Riconnesso automaticamente a MT5 (conto ${result.data.login} su ${result.data.server}).`+mt5AlgoTradingNote(result.data);
+ }else{
+   mt5Connected=false;
+   updateMt5ModeUI();
+   $('status').textContent='⚠️ Riconnessione automatica a MT5 non riuscita: '+result.message+' — apri il menu MT5 per riprovare a mano.';
+ }
+}
 // Il TERMINALE MT5 (non il nostro bridge) spegne da solo "AutoTrading"/"Trading algoritmico"
 // ogni volta che si cambia conto — è una sicurezza voluta di MT5, non un bug: impedisce che un
 // EA/script continui a operare subito su un conto diverso senza conferma umana. Il bridge prova
@@ -12343,6 +12457,10 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
  // schermata drammatica ricompare subito al caricamento della pagina — non basta un refresh
  // per "sbloccarla" di nuovo.
  if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
+ // Ultimissimo passo, a ripristino ormai completo (posizioni/sessione/grafico già al punto
+ // dove ero rimasto): propone la riconnessione automatica a MT5 se serve — vedi il commento
+ // della funzione per perché non compare mai da tablet/telefono.
+ maybeOfferMt5AutoReconnect();
 })();
 </script>
 
