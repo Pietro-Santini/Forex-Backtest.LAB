@@ -10313,18 +10313,55 @@ async function fetchMt5Positions(){
      let untrackedRealPositions=result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
      // Richiesto esplicitamente: in Modalità Prop Firm, una posizione reale già aperta sul conto
      // MT5 PRIMA della creazione di QUESTA Challenge (propFirmChallengeCreatedAt) non va mai
-     // adottata qui — altrimenti, magari già in perdita, verrebbe ri-agganciata subito dopo ogni
+     // adottata QUI — altrimenti, magari già in perdita, verrebbe ri-agganciata subito dopo ogni
      // reset/creazione, contando per le regole Daily/Max Drawdown come se l'avessi aperta ora e
-     // facendo chiudere il conto Prop Firm all'infinito. Resta comunque visibile nella tabella
-     // dedicata "🖥️ Posizioni MT5" (che mostra sempre TUTTO ciò che è realmente aperto), solo
-     // non entra in positions[] né nelle regole di questa Challenge. rp.time è l'orario VERO di
-     // apertura su MT5 (epoch secondi): confrontato con l'orologio reale, mai quello simulato
-     // dello Storico, perché un ticket reale ha sempre un orario di apertura vero.
+     // facendo chiudere il conto Prop Firm all'infinito. Non resta però orfana solo nella tabella
+     // dedicata "🖥️ Posizioni MT5": viene invece "passata in automatico" alla sessione GEMELLA
+     // senza Prop Firm (Storico+PF -> Storico, Live+PF -> Live), esattamente come richiesto,
+     // così diventa lì una posizione standard qualunque (casella a grafico, riga in tabella,
+     // Trade Journal alla chiusura) senza mai contare per le regole di QUESTA Challenge. rp.time
+     // è l'orario VERO di apertura su MT5 (epoch secondi): confrontato con l'orologio reale, mai
+     // quello simulato dello Storico, perché un ticket reale ha sempre un orario di apertura vero.
+     let preExistingForPairedSession=[];
      if(isPropFirmMode && Number.isFinite(propFirmChallengeCreatedAt)){
-       untrackedRealPositions=untrackedRealPositions.filter(rp=>{
+       const stillPending=[];
+       untrackedRealPositions.forEach(rp=>{
          const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:null;
-         return realOpenMs==null || realOpenMs>=propFirmChallengeCreatedAt;
+         if(realOpenMs==null || realOpenMs>=propFirmChallengeCreatedAt)stillPending.push(rp);
+         else preExistingForPairedSession.push(rp);
        });
+       untrackedRealPositions=stillPending;
+     }
+     if(preExistingForPairedSession.length){
+       const pairedMode=currentMode()==='live_propfirm'?'live':'backtest';
+       // Ticket già presenti nella sessione gemella (es. un giro di polling precedente li ha già
+       // spostati lì): evita duplicati se questo blocco gira più volte prima che l'utente cambi
+       // sessione e "consumi" quella copia.
+       const pairedTracked=allTrackedMt5PositionTickets();
+       const toMove=preExistingForPairedSession.filter(rp=>!pairedTracked.has(String(rp.ticket)));
+       if(toMove.length){
+         if(!sessionByMode[pairedMode]){
+           sessionByMode[pairedMode]={positions:[],pendingOrders:[],active:null,equity:[num($('capital').value)||10000],drawings:[]};
+         }
+         const pairedSnap=sessionByMode[pairedMode];
+         if(!Array.isArray(pairedSnap.positions))pairedSnap.positions=[];
+         toMove.forEach(rp=>{
+           const pos={
+             id:Date.now()+Math.random(),
+             asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
+             sl:rp.sl!=null?Number(rp.sl):null,tp:rp.tp!=null?Number(rp.tp):null,
+             origin:'MARKET',
+             lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
+             start:0,startTime:Date.now(),openTF:currentTF,
+             marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
+           };
+           pos.rrSl=pos.sl;
+           pairedSnap.positions.push(pos);
+         });
+         scheduleSave();
+         const pairedLabel=pairedMode==='live'?'Live (senza Prop Firm)':'Storico (senza Prop Firm)';
+         $('status').textContent=`🖥️ ${toMove.length} posizione/i reale/i già aperta/e su MT5 prima di questa Challenge: esclusa/e dalla Prop Firm e spostata/e automaticamente sulla sessione ${pairedLabel}.`;
+       }
      }
      untrackedRealPositions.forEach(rp=>{
        const pos={
