@@ -173,6 +173,18 @@ body.pf-blood-effect .pf-danger-blink{animation:pfDangerBlink 1s step-start infi
 .fbModalClose{background:transparent;border:none;color:#8b96a5;font-size:18px;cursor:pointer;line-height:1;padding:2px 6px;border-radius:6px}
 .fbModalClose:hover{background:#1e2836;color:#e8edf3}
 .fbModalTabs{display:flex;gap:4px;padding:8px 16px 0}
+/* ---- Popup di conferma "carino" (appConfirm), sostituisce i confirm() nativi del browser
+   riusando lo stesso stile delle altre finestre modali dell'app (.fbModalOverlay/.fbModalBox). ---- */
+.appConfirmOverlay{z-index:500;animation:appConfirmFadeIn .12s ease-out}
+@keyframes appConfirmFadeIn{from{opacity:0}to{opacity:1}}
+.appConfirmBox{animation:appConfirmPopIn .16s cubic-bezier(.2,.9,.3,1.2)}
+@keyframes appConfirmPopIn{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
+.appConfirmBody{padding:16px;font-size:13.5px;line-height:1.6;color:#dbe3ee;white-space:pre-line}
+.appConfirmBtn{transition:filter .15s,box-shadow .15s}
+.appConfirmBtn:hover{filter:brightness(1.14)}
+.appConfirmBtn.appConfirmOk{color:#fff;font-weight:700}
+.appConfirmBtn.appConfirmOk.danger{background:linear-gradient(135deg,#8a2323,#4a1414);border-color:#ff3b3b}
+.appConfirmBtn.appConfirmOk.safe{background:linear-gradient(135deg,#1f6b4d,#134631);border-color:#3ea6ff}
 /* STEP 1a — popup "Login sessione" per la Modalità Live (Capital.com) */
 .liveLoginBody{padding:16px;display:flex;flex-direction:column;gap:10px}
 .liveLoginBody label{display:block;font-size:11px;color:#8290a0;text-transform:uppercase;margin:6px 0 2px}
@@ -1650,6 +1662,14 @@ let highlightedTrade=null;
 // invece che in un pulsante separato in alto. Aggiornato da drawTradeHighlight() ad ogni
 // disegno, usato dal pointerdown del canvas per capire se si sta cliccando proprio lì.
 let highlightCloseBtnRect=null;
+// Stessa idea di highlightedTrade/highlightCloseBtnRect, ma per un ORDINE PENDENTE selezionato
+// con "📍 Vai a grafico": a differenza delle posizioni aperte (che hanno SEMPRE la propria
+// casella Target/Stop visibile, vedi drawTpSlZoneBox in draw()), gli ordini pendenti hanno solo
+// le linee tratteggiate leggere — la casella Target/Stop compare apposta solo per quello scelto
+// da "Vai a grafico", con la stessa "✕" per richiuderla, per non affollare il grafico quando ci
+// sono molti ordini pendenti insieme.
+let highlightedPendingOrderId=null;
+let pendingHighlightCloseBtnRect=null;
 // ===================== CONTO UNICO E GLOBALE (stile MT5) =====================
 // Il conto (capitale, posizioni aperte, ordini pendenti, equity, P/L, winrate/lossrate, pip
 // totali) è UNICO per tutti gli asset: cambiare ASSET (EUR/USD, XAU/USD, ecc.) NON lo azzera e
@@ -2309,8 +2329,8 @@ function applyDrawingDefaults(){
    $('status').textContent='Stile predefinito impostato per il prossimo disegno che creerai.';
  }
 }
-function deleteDrawingTemplate(name){
- if(!confirm(`Eliminare definitivamente il modello "${name}"?`))return;
+async function deleteDrawingTemplate(name){
+ if(!await appConfirm(`Eliminare definitivamente il modello "${name}"?`))return;
  const templates=loadDrawingTemplates();
  delete templates[name];
  saveDrawingTemplates(templates);
@@ -2350,7 +2370,7 @@ function renderDrawTemplateMenu(){
    main.appendChild(nameEl); main.appendChild(metaEl);
    const delBtn=document.createElement('button');
    delBtn.className='drawTemplateRowDel'; delBtn.title='Elimina questo modello'; delBtn.textContent='🗑';
-   delBtn.addEventListener('click',ev=>{ ev.stopPropagation(); deleteDrawingTemplate(name); });
+   delBtn.addEventListener('click',async ev=>{ ev.stopPropagation(); await deleteDrawingTemplate(name); });
    row.appendChild(main); row.appendChild(delBtn);
    row.addEventListener('click',()=>applyDrawingTemplate(name));
    list.appendChild(row);
@@ -2421,9 +2441,9 @@ function renderFibTemplateMenu(){
    main.appendChild(nameEl);
    const delBtn=document.createElement('button');
    delBtn.className='drawTemplateRowDel'; delBtn.title='Elimina questo modello'; delBtn.textContent='🗑';
-   delBtn.addEventListener('click',ev=>{
+   delBtn.addEventListener('click',async ev=>{
      ev.stopPropagation();
-     if(!confirm(`Eliminare definitivamente il modello "${name}"?`))return;
+     if(!await appConfirm(`Eliminare definitivamente il modello "${name}"?`))return;
      const t=loadFibTemplates(); delete t[name]; saveFibTemplates(t); renderFibTemplateMenu();
    });
    row.appendChild(main); row.appendChild(delBtn);
@@ -2661,6 +2681,50 @@ async function withLoadingOverlay(text,fn){
  await nextPaint();
  try{ return await fn(); }
  finally{ hideLoadingOverlay(); }
+}
+// ---- Popup di conferma "carino" (sostituisce i confirm() nativi del browser, bruttini e non
+// coerenti con lo stile dell'app) — riusa esattamente lo stesso schema visivo delle altre
+// finestre modali (fbModalOverlay/fbModalBox/fbModalHeader/fbModalClose + liveLoginFooter/
+// toolBtn), quindi da fuori sembra "parte dell'app" invece di un dialog di sistema. Ritorna una
+// Promise<boolean>: true se l'utente conferma, false se annulla/chiude/clicca fuori/Esc.
+function escapeHtmlLite(s){
+ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function appConfirm(message,opts={}){
+ return new Promise(resolve=>{
+   const danger=opts.danger!==false; // di default trattiamo ogni conferma come "delicata" (colore rosso)
+   const title=opts.title||(danger?'⚠️ Conferma richiesta':'Conferma');
+   const okLabel=opts.okLabel||(danger?'Sì, conferma':'OK');
+   const cancelLabel=opts.cancelLabel||'Annulla';
+   const overlay=document.createElement('div');
+   overlay.className='fbModalOverlay appConfirmOverlay';
+   overlay.innerHTML=`
+     <div class="fbModalBox appConfirmBox" style="max-width:440px">
+       <div class="fbModalHeader"><h3>${escapeHtmlLite(title)}</h3><button type="button" class="fbModalClose" data-role="cancel" title="Chiudi">✕</button></div>
+       <div class="appConfirmBody">${escapeHtmlLite(message)}</div>
+       <div class="liveLoginFooter">
+         <button type="button" class="toolBtn" data-role="cancel">${escapeHtmlLite(cancelLabel)}</button>
+         <button type="button" class="toolBtn appConfirmBtn appConfirmOk ${danger?'danger':'safe'}" data-role="ok">${escapeHtmlLite(okLabel)}</button>
+       </div>
+     </div>`;
+   document.body.appendChild(overlay);
+   function cleanup(result){
+     document.removeEventListener('keydown',onKey);
+     overlay.remove();
+     resolve(result);
+   }
+   function onKey(e){
+     if(e.key==='Escape'){ e.preventDefault(); cleanup(false); }
+     else if(e.key==='Enter'){ e.preventDefault(); cleanup(true); }
+   }
+   document.addEventListener('keydown',onKey);
+   // Click sullo sfondo scuro (fuori dal box) = come Annulla, stesso comportamento delle altre
+   // finestre modali dell'app.
+   overlay.addEventListener('mousedown',e=>{ if(e.target===overlay)cleanup(false); });
+   overlay.querySelectorAll('[data-role="cancel"]').forEach(b=>b.addEventListener('click',()=>cleanup(false)));
+   overlay.querySelector('[data-role="ok"]').addEventListener('click',()=>cleanup(true));
+   requestAnimationFrame(()=>overlay.querySelector('[data-role="ok"]')?.focus());
+ });
 }
 const num=x=>parseFloat(String(x).replace(',','.'));
 // Fuso orario "sorgente" dei timestamp nel CSV. Il mercato forex tecnicamente gira 24h, ma la
@@ -3188,7 +3252,7 @@ function resetChartViewForAssetSwitch(){
  viewEnd=idx; tradeSLLine=null; tradeTPLine=null;
  placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
  priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
- viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; highlightedPendingOrderId=null; touchHoverPoint=null;
  update(); draw();
 }
 // Ripristina la vista del grafico (candela corrente, timeframe, zoom orizzontale/verticale)
@@ -3224,7 +3288,7 @@ function applyChartViewForAsset(asset){
  }
  tradeSLLine=null; tradeTPLine=null;
  placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
- crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ crosshair=null; highlightedTrade=null; highlightedPendingOrderId=null; touchHoverPoint=null;
  update(); draw();
 }
 async function autoLoadAssetLibrary(asset){
@@ -3433,7 +3497,7 @@ function reset(){
  positions=[]; pendingOrders=[];
  statsBaselineByMode[currentMode()]=trades.filter(t=>t.mode===currentMode()).length;
  active=null; tradeSLLine=null; tradeTPLine=null;
- equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; touchHoverPoint=null;
+ equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; highlightedPendingOrderId=null; touchHoverPoint=null;
  // BUG RISOLTO: RESET SESSIONE azzerava positions/equity in memoria ma non aggiornava la
  // fotografia della sessione corrente in sessionByMode — cambiando sessione e tornando
  // indietro si ritrovavano le vecchie posizioni pre-reset invece di quelle appena azzerate.
@@ -3635,12 +3699,18 @@ function update(){
  // Tabella ordini pendenti: stesso criterio, TUTTE E 4 LE SESSIONI insieme, con colonna
  // "Prezzo corrente" per confrontare a colpo d'occhio quanto manca al prezzo di ingresso.
  const allPendingRows=collectAcrossSessions('pendingOrders');
- if(!allPendingRows.length){
+ // Ordini pendenti REALI aperti DIRETTAMENTE da MT5 (non creati dall'app, quindi non ancora
+ // presenti in pendingOrders[]): li aggiungiamo come righe extra nella STESSA tabella, non in
+ // una tabella a parte, così l'elenco ordini pendenti resta un unico posto valido sia per gli
+ // ordini simulati/creati dall'app sia per quelli piazzati a mano sul conto vero.
+ const trackedMt5PendingTickets=new Set(allPendingRows.map(({item:p})=>p.mt5Ticket).filter(t=>t!=null).map(String));
+ const untrackedMt5Orders=(mt5Connected?mt5RealOrders:[]).filter(o=>!trackedMt5PendingTickets.has(String(o.ticket)));
+ if(!allPendingRows.length && !untrackedMt5Orders.length){
    $('pendingOrdersTbl').innerHTML='';
    $('noPending').style.display='block';
  }else{
    $('noPending').style.display='none';
-   $('pendingOrdersTbl').innerHTML=allPendingRows.map(({item:p,sessionKey},i)=>{
+   const trackedRowsHtml=allPendingRows.map(({item:p,sessionKey},i)=>{
      const ordAsset=p.asset||'—';
      const isCurrentRow=sessionKey===currentMode();
      const isLiveSession=(sessionKey==='live'||sessionKey==='live_propfirm');
@@ -3652,6 +3722,14 @@ function update(){
      return `<tr><td>${i+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td>`+curPriceCell+`<td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
      `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTag} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
    }).join('');
+   const untrackedRowsHtml=untrackedMt5Orders.map((o,j)=>{
+     const ordAsset=o.symbol||'—';
+     const modeTag='<span title="Ordine pendente REALE piazzato direttamente su MT5 (ticket '+o.ticket+')">🖥️ MT5 REALE</span>';
+     const actionsCell=`<button class="miniBtn danger" data-mt5-cancelpending="${o.ticket}">Cancella</button>`;
+     return `<tr><td>${allPendingRows.length+j+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${o.side||''} ${o.kind||'LIMIT'}</td><td>${fmtPrice(o.price_open)}</td><td>—</td><td>${fmtPrice(o.sl)}</td><td>${fmtPrice(o.tp)}</td><td>${riskRewardLabel(o.price_open,o.sl,o.tp)}</td><td>${Number(o.volume||0).toFixed(2)}</td>`+
+     `<td>${actionsCell}</td></tr>`;
+   }).join('');
+   $('pendingOrdersTbl').innerHTML=trackedRowsHtml+untrackedRowsHtml;
  }
 
  // Trade Journal: elenco GLOBALE (tutti gli asset), ordinato per come sono stati chiusi.
@@ -4940,9 +5018,9 @@ function def_paramsSafe(ind){
  const def=INDICATOR_DEFS[ind.key];
  return def?def.defaultParams():{};
 }
-function deletePresetForIndicator(ind,name){
+async function deletePresetForIndicator(ind,name){
  if(!name)return;
- if(!confirm(`Eliminare definitivamente il setup "${name}"?`))return;
+ if(!await appConfirm(`Eliminare definitivamente il setup "${name}"?`))return;
  const presets=loadIndicatorPresets(ind.key);
  delete presets[name];
  saveIndicatorPresets(ind.key,presets);
@@ -5115,8 +5193,8 @@ function renderActiveIndicatorsUI(){
    if(presetNames.length){
      const delBtn=document.createElement('button');
      delBtn.className='toolBtn'; delBtn.textContent='🗑📂'; delBtn.title='Elimina un setup salvato';
-     delBtn.addEventListener('click',()=>{
-       if(presetSel.value)deletePresetForIndicator(ind,presetSel.value);
+     delBtn.addEventListener('click',async()=>{
+       if(presetSel.value)await deletePresetForIndicator(ind,presetSel.value);
        else $('status').textContent='Seleziona prima un setup dal menu da eliminare.';
      });
      presetRow.appendChild(delBtn);
@@ -5854,6 +5932,12 @@ function draw(){
  const cpForColor=currentPrice();
  // Disegnati SOLO gli ordini pendenti DELL'ASSET a grafico ora, per lo stesso motivo delle posizioni.
  (currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders).forEach(p=>{
+   // L'ordine scelto con "📍 Vai a grafico" (highlightedPendingOrderId) ottiene sotto la sua
+   // casella Target/Stop in evidenza (stessa identica resa delle posizioni aperte): quando è
+   // così E ha almeno uno tra SL/TP, le righe tratteggiate "generiche" di SL/TP qui sotto
+   // vengono saltate per non duplicare la stessa informazione due volte sullo stesso grafico.
+   const isHighlightedPending=String(p.id)===String(highlightedPendingOrderId);
+   const showPendingZoneBox=isHighlightedPending && (p.sl!=null||p.tp!=null);
    if(p.entry!=null && p.entry>=lo && p.entry<=hi && !(previewTradeLevel && previewTradeLevel.type===`pending:${p.id}:entry`)){
      const entryColor=entryLineColor(p.entry,p.kind||'LIMIT');
      ctx.save();
@@ -5875,6 +5959,7 @@ function draw(){
      ctx.restore();
    }
    [[p.sl,'SL','#e05b64'],[p.tp,'TP','#55c28b']].forEach(([v,label,color])=>{
+     if(showPendingZoneBox)return;
      if(v==null||!Number.isFinite(v)||v<lo||v>hi)return;
      if(previewTradeLevel && previewTradeLevel.type===`pending:${p.id}:${label.toLowerCase()}`)return;
      ctx.save();
@@ -5892,6 +5977,48 @@ function draw(){
      ctx.restore();
    });
  });
+ // Casella Target/Stop "in evidenza" per l'ordine pendente scelto con "📍 Vai a grafico" (vedi
+ // jumpToPendingOnChart/highlightedPendingOrderId): riusa la STESSA identica casella
+ // TradingView-style delle posizioni aperte (drawTpSlZoneBox), ma non trascinabile (noHandle) e
+ // ancorata alla vista attuale invece che a una candela di apertura, dato che l'ordine non è
+ // ancora scattato. Ha una "✕" per richiuderla, stessa idea/stile di
+ // drawTradeHighlight/highlightCloseBtnRect usata dal Trade Journal.
+ pendingHighlightCloseBtnRect=null;
+ if(highlightedPendingOrderId!=null){
+   const hp=pendingOrders.find(o=>String(o.id)===String(highlightedPendingOrderId));
+   if(hp && (!currentAssetKey || (hp.asset||currentAssetKey)===currentAssetKey) && (hp.sl!=null||hp.tp!=null)){
+     const box=drawTpSlZoneBox(ctx,{
+       ownerKey:'pendingHighlight:'+hp.id,originIdx:idx,entry:hp.entry,sl:hp.sl,tp:hp.tp,
+       lots:hp.lots,assetKey:hp.asset,fixedSpan:26,noHandle:true,
+       pad,cw,n,start,w,y,
+       tooltipLines:[
+         `${hp.side} ${hp.kind||'LIMIT'} in attesa`,
+         `Entrata: ${fmtPrice(hp.entry)}`,
+         `Lottaggio: ${hp.lots!=null?hp.lots.toFixed(2)+' lot':'—'}`
+       ]
+     });
+     if(box){
+       const topY=Math.min(box.yEntry,Number.isFinite(hp.sl)?y(hp.sl):box.yEntry,Number.isFinite(hp.tp)?y(hp.tp):box.yEntry);
+       const closeSize=13, closeCx=box.xRight-closeSize/2-4, closeCy=Math.max(pad.t+9,topY-14);
+       ctx.save();
+       ctx.beginPath(); ctx.arc(closeCx,closeCy,closeSize/2,0,Math.PI*2);
+       ctx.fillStyle='rgba(10,14,20,0.8)'; ctx.fill();
+       ctx.strokeStyle='#eafff6'; ctx.lineWidth=1.4;
+       const r=3.2;
+       ctx.beginPath();
+       ctx.moveTo(closeCx-r,closeCy-r); ctx.lineTo(closeCx+r,closeCy+r);
+       ctx.moveTo(closeCx+r,closeCy-r); ctx.lineTo(closeCx-r,closeCy+r);
+       ctx.stroke();
+       ctx.restore();
+       const hitPad=6; // area cliccabile più larga del solo cerchio, comoda anche da touch
+       pendingHighlightCloseBtnRect={x:closeCx-closeSize/2-hitPad,y:closeCy-closeSize/2-hitPad,w:closeSize+hitPad*2,h:closeSize+hitPad*2};
+     }
+   }else{
+     // L'ordine è stato cancellato/attivato/spostato su un altro asset nel frattempo: niente
+     // più da evidenziare.
+     highlightedPendingOrderId=null;
+   }
+ }
  // Linee "bozza" di SL/TP: quando NON c'è una posizione attiva selezionata (prima di
  // aprire una posizione a mercato, o mentre si compone un ordine pendente), i valori
  // impostati con i pulsanti SL/TP SUL GRAFICO (o scritti a mano nelle caselle) restano
@@ -7346,9 +7473,9 @@ function closeTrade(reason,price,pos){
 // I campi già scritti negli ALTRI trade (es. "Conto €" cumulativo) restano gli stessi
 // valori storici di sempre: come per RESET SESSIONE, il Journal non riscrive mai a
 // posteriori le righe già chiuse, mostra solo lo storico così com'era in quel momento.
-function deleteTrade(i){
+async function deleteTrade(i){
  const t=trades[i]; if(!t)return;
- if(!confirm('Eliminare definitivamente questo trade dal Journal? L\'operazione non può essere annullata.'))return;
+ if(!await appConfirm('Eliminare definitivamente questo trade dal Journal? L\'operazione non può essere annullata.'))return;
  const mode=t.mode||'backtest';
  const modeTrades=trades.filter(x=>x.mode===mode);
  const filteredIdx=modeTrades.indexOf(t);
@@ -7578,6 +7705,10 @@ async function jumpToPendingOnChart(orderId){
  followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  visibleCount=idealVisibleCount(); viewEnd=idx;
  fitVerticalRangeToWindow([p.entry,p.sl,p.tp]);
+ // Come richiesto: "Vai a grafico" su un ordine pendente mostra la sua casella Target/Stop in
+ // evidenza (stessa resa delle posizioni aperte), con una "✕" per richiuderla — vedi il
+ // rendering in draw() e l'hit-test della "✕" nel pointerdown del canvas.
+ highlightedPendingOrderId=p.id;
  draw();update();
  $('status').textContent=`Ordine pendente ${p.side} su ${p.asset||currentAssetKey} mostrato a grafico.`;
 }
@@ -7721,7 +7852,7 @@ async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset){
  const details=`${side} ${kind} ${asset} a ${fmtPrice(entry)} — ${lots.toFixed(2)} lot`+
    (Number.isFinite(sl)?` — SL ${fmtPrice(sl)}`:'')+
    (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}`:'');
- if(!confirm(`Confermi la creazione di un ORDINE PENDENTE VERO su MT5?\n\n${details}\n\nResterà in attesa sul conto collegato finché il prezzo non lo raggiunge: non è una simulazione.`))return;
+ if(!await appConfirm(`Confermi la creazione di un ORDINE PENDENTE VERO su MT5?\n\n${details}\n\nResterà in attesa sul conto collegato finché il prezzo non lo raggiunge: non è una simulazione.`))return;
  $('status').textContent='Invio ordine pendente reale a MT5 in corso…';
  const result=await fetchMt5WithTimeout('/order/pending',{
    method:'POST',headers:{'Content-Type':'application/json'},
@@ -8022,7 +8153,7 @@ async function applyBreakevenToMt5TicketDirect(ticket){
  const spread=mt5LiveSpread(ticket);
  const beSl=computeBreakevenSl(Number(live.price_open),live.side,spread);
  if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
- if(!confirm(`Spostare DAVVERO lo Stop Loss di ${live.side} ${live.symbol} (ticket ${live.ticket}) a pareggio (${fmtPrice(beSl)}, spread attuale incluso) sul conto MT5 collegato?`))return;
+ if(!await appConfirm(`Spostare DAVVERO lo Stop Loss di ${live.side} ${live.symbol} (ticket ${live.ticket}) a pareggio (${fmtPrice(beSl)}, spread attuale incluso) sul conto MT5 collegato?`))return;
  $('status').textContent=`Spostamento a pareggio in corso sul conto MT5 (ticket ${live.ticket})…`;
  const result=await fetchMt5WithTimeout('/order/modify',{
    method:'POST',headers:{'Content-Type':'application/json'},
@@ -8082,7 +8213,7 @@ async function syncMt5PendingOrderLevels(p){
 // conto vero".
 async function closeMt5PositionReal(pos,reason){
  if(!pos||pos.mt5Ticket==null)return false;
- if(!confirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
+ if(!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
  $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.mt5Ticket})…`;
  const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.mt5Ticket})});
  if(!result.ok){
@@ -8128,7 +8259,7 @@ async function placeRealMt5Order(side){
  const details=`${side} ${symbol} — ${lots.toFixed(2)} lot`+
    (Number.isFinite(sl)?` — SL ${fmtPrice(sl)}${slAuto?' (proposto in automatico)':''}`:'')+
    (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}${tpAuto?' (proposto in automatico)':''}`:'');
- if(!confirm(`Confermi l'invio di un ORDINE VERO a mercato su MT5?\n\n${details}\n\nVerrà eseguito subito sul conto collegato: non è una simulazione.`))return;
+ if(!await appConfirm(`Confermi l'invio di un ORDINE VERO a mercato su MT5?\n\n${details}\n\nVerrà eseguito subito sul conto collegato: non è una simulazione.`))return;
  $('status').textContent='Invio ordine reale a MT5 in corso…';
  const result=await fetchMt5WithTimeout('/order/market',{
    method:'POST',headers:{'Content-Type':'application/json'},
@@ -8275,7 +8406,7 @@ $('closeAll').onclick=()=>{
 async function closeMt5TicketFromTable(mt5CloseTicket){
  const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5CloseTicket);
  if(!pos)return;
- if(!confirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.symbol} (${Number(pos.volume).toFixed(2)} lot, ticket ${pos.ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return;
+ if(!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.symbol} (${Number(pos.volume).toFixed(2)} lot, ticket ${pos.ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return;
  $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.ticket})…`;
  const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket})});
  if(result.ok){
@@ -8301,7 +8432,7 @@ async function modifyMt5TicketFromTable(mt5ModifyTicket){
    $('status').textContent='Valore non valido: modifica annullata.';
    return;
  }
- if(!confirm(`Confermi di impostare DAVVERO su MT5 — ${pos.symbol} ticket ${pos.ticket} — SL: ${slInput.trim()===''?'nessuno':fmtPrice(newSl)}, TP: ${tpInput.trim()===''?'nessuno':fmtPrice(newTp)}?`))return;
+ if(!await appConfirm(`Confermi di impostare DAVVERO su MT5 — ${pos.symbol} ticket ${pos.ticket} — SL: ${slInput.trim()===''?'nessuno':fmtPrice(newSl)}, TP: ${tpInput.trim()===''?'nessuno':fmtPrice(newTp)}?`))return;
  $('status').textContent=`Modifica SL/TP in corso sul conto MT5 (ticket ${pos.ticket})…`;
  const result=await fetchMt5WithTimeout('/order/modify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.ticket,sl:newSl,tp:newTp})});
  if(result.ok){
@@ -8367,7 +8498,7 @@ $('openPositions').addEventListener('click',async e=>{
 });
 $('journal').addEventListener('click',async e=>{
  const delIdx=e.target.getAttribute('data-deltrade');
- if(delIdx!=null){ deleteTrade(Number(delIdx)); return; }
+ if(delIdx!=null){ await deleteTrade(Number(delIdx)); return; }
  const jumpIdx=e.target.getAttribute('data-jumptrade');
  if(jumpIdx==null)return;
  // Come i pulsanti BUY/SELL e SET SL/TP/ENTRY, anche "Vai a grafico" porta subito la vista
@@ -8508,7 +8639,7 @@ $('randomBtn').addEventListener('click',()=>{
  // disponibile (quella appena raggiunta) con la scala originale, senza zoom
  // verticale/orizzontale residuo del punto precedente.
  viewEnd=idx; followLatest=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
- positions=[];active=null;tradeSLLine=null;tradeTPLine=null;pendingOrders=[];
+ positions=[];active=null;tradeSLLine=null;tradeTPLine=null;pendingOrders=[];highlightedPendingOrderId=null;
  draw();update();
  $('status').textContent=`🎲 Punto casuale: ${rows[idx]?.date||''} • candela ${idx+1}/${rows.length}`;
 });
@@ -8929,6 +9060,21 @@ chartEl.addEventListener('pointerdown',e=>{
      e.preventDefault();
      highlightedTrade=null;
      highlightCloseBtnRect=null;
+     draw();
+     return;
+   }
+ }
+ // Stessa identica logica, per la "✕" della casella Target/Stop in evidenza di un ordine
+ // pendente scelto con "Vai a grafico" (vedi drawTpSlZoneBox più sopra in draw() e
+ // highlightedPendingOrderId): controllata anche questa PRIMA di ogni altra interazione.
+ if(pendingHighlightCloseBtnRect){
+   const rectC=chartEl.getBoundingClientRect();
+   const relX=e.clientX-rectC.left, relY=e.clientY-rectC.top;
+   const r=pendingHighlightCloseBtnRect;
+   if(relX>=r.x && relX<=r.x+r.w && relY>=r.y && relY<=r.y+r.h){
+     e.preventDefault();
+     highlightedPendingOrderId=null;
+     pendingHighlightCloseBtnRect=null;
      draw();
      return;
    }
@@ -9564,6 +9710,24 @@ $('pendingOrdersTbl').addEventListener('click',async e=>{
  const gotoId=e.target.getAttribute('data-gotoasset-pending');
  const gotoSession=e.target.getAttribute('data-gotoasset-pending-session');
  const cancelId=e.target.getAttribute('data-cancelpending');
+ const mt5CancelTicket=e.target.getAttribute('data-mt5-cancelpending');
+ if(mt5CancelTicket){
+   // Ordine pendente REALE piazzato DIRETTAMENTE su MT5 (non tracciato in pendingOrders[]):
+   // si cancella solo sul conto vero via bridge, poi si aggiorna la lista da /orders — non c'è
+   // nulla da rimuovere in locale perché non è mai stato aggiunto a pendingOrders[].
+   const o=mt5RealOrders.find(x=>String(x.ticket)===mt5CancelTicket);
+   if(!await appConfirm(`Cancellare DAVVERO l'ordine pendente ${o?.side||''} ${o?.kind||'LIMIT'} ${o?.symbol||''} a ${fmtPrice(o?.price_open)} (ticket ${mt5CancelTicket}) sul conto MT5 collegato?`))return;
+   $('status').textContent=`Cancellazione in corso sul conto MT5 (ticket ${mt5CancelTicket})…`;
+   const result=await fetchMt5WithTimeout('/order/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:Number(mt5CancelTicket)})});
+   if(result.ok){
+     $('status').textContent=`🔌 Ordine pendente (ticket ${mt5CancelTicket}) cancellato su MT5.`;
+   }else{
+     $('status').textContent='⚠️ Cancellazione reale non riuscita: '+result.message;
+   }
+   await fetchMt5Orders();
+   update();
+   return;
+ }
  if(gotoId){
    scrollToChart();
    // Come per le posizioni aperte: la tabella mostra ora gli ordini di TUTTE E 4 le sessioni,
@@ -9578,7 +9742,7 @@ $('pendingOrdersTbl').addEventListener('click',async e=>{
      // Ordine pendente REALE: si cancella DAVVERO sul conto MT5 (con conferma) e solo se va a
      // buon fine si rimuove anche in locale — mai il contrario, per non disallineare mai
      // "cancellato in app" da "ancora in attesa sul conto vero".
-     if(!confirm(`Cancellare DAVVERO l'ordine pendente ${p.side} ${p.kind||'LIMIT'} ${p.asset||''} a ${fmtPrice(p.entry)} (ticket ${p.mt5Ticket}) sul conto MT5 collegato?`))return;
+     if(!await appConfirm(`Cancellare DAVVERO l'ordine pendente ${p.side} ${p.kind||'LIMIT'} ${p.asset||''} a ${fmtPrice(p.entry)} (ticket ${p.mt5Ticket}) sul conto MT5 collegato?`))return;
      $('status').textContent=`Cancellazione in corso sul conto MT5 (ticket ${p.mt5Ticket})…`;
      const result=await fetchMt5WithTimeout('/order/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:p.mt5Ticket})});
      if(result.ok){
@@ -9907,7 +10071,7 @@ $('togglePositionsBtn')?.addEventListener('click',()=>{
 });
 
 $('clearSavedSessionBtn').addEventListener('click',async()=>{
- if(!confirm('Cancellare tutti i dati salvati automaticamente (CSV caricato, trade, disegni, impostazioni)? La pagina si ricaricherà da zero.'))return;
+ if(!await appConfirm('Cancellare tutti i dati salvati automaticamente (CSV caricato, trade, disegni, impostazioni)? La pagina si ricaricherà da zero.'))return;
  await clearSavedSession();
  location.reload();
 });
@@ -11410,7 +11574,7 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
  const val=$('mt5AccountSelect').value;
  const acc=mt5SavedAccounts.find(a=>mt5AccountKey(a)===val);
  if(!acc)return;
- if(!confirm(`Eliminare definitivamente il conto MT5 ${acc.login} @ ${acc.server} dalla cartella salvata? L'operazione non può essere annullata.`))return;
+ if(!await appConfirm(`Eliminare definitivamente il conto MT5 ${acc.login} @ ${acc.server} dalla cartella salvata? L'operazione non può essere annullata.`))return;
  // Conferma AGGIUNTIVA di precauzione (richiesta esplicitamente): un secondo semplice
  // OK/Annulla si clicca per abitudine senza pensarci — qui invece bisogna ridigitare il
  // numero di conto per procedere davvero, così un click sbagliato non basta più a cancellare
