@@ -3647,7 +3647,7 @@ function update(){
      const isCurrentAssetOnScreen=isCurrentRow&&(!currentAssetKey||ordAsset===currentAssetKey);
      const curPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[ordAsset]:null);
      const curPriceCell=`<td>${curPrice!=null?fmtPrice(curPrice):'—'}</td>`;
-     const modeTag=SESSION_LABELS_SHORT[sessionKey]||sessionKey;
+     const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Ordine pendente REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
      const actionsCell=isCurrentRow?`<button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button>`:'';
      return `<tr><td>${i+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td>`+curPriceCell+`<td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
      `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTag} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
@@ -7182,8 +7182,12 @@ function setTradeLevel(type,value,source='input'){
    $('status').textContent=`Ordine pendente ${p.side}: ${field==='entry'?'entrata':field.toUpperCase()} impostata a ${fmtPrice(value)}.`;
    // Come alla creazione: se il nuovo prezzo di entrata cade già dentro la candela
    // attuale, l'ordine si attiva subito invece di restare in attesa di una candela futura.
+   // (checkPendingOrders() esclude già da sola gli ordini REALI, mt5Ticket: per quelli decide
+   // solo MT5 quando scattano davvero, mai questa valutazione locale.)
    if(field==='entry')checkPendingOrders();
    draw();update();
+   // Ordine pendente REALE: specchia SEMPRE la modifica sul conto MT5 collegato.
+   if(p.mt5Ticket!=null)syncMt5PendingOrderLevels(p);
    return;
  }
 
@@ -7693,11 +7697,50 @@ function checkPendingOrders(){
  // tocca il prezzo di entrata scelto, esattamente come per SL/TP. Si controllano SOLO gli
  // ordini pendenti DELL'ASSET a grafico ora: quelli di un altro asset hanno prezzi di entrata
  // su una scala completamente diversa e verrebbero valutati con la candela sbagliata.
- const ownPending=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders;
+ // Esclusi gli ordini pendenti REALI (mt5Ticket): quelli scattano da soli sul conto MT5 quando
+ // il prezzo VERO li raggiunge, e la loro attivazione viene rilevata dal polling
+ // (fetchMt5Orders) — mai da questa valutazione locale sulla candela simulata.
+ const ownPending=(currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders).filter(p=>p.mt5Ticket==null);
  const toActivate=ownPending.filter(p=>r.low<=p.entry && r.high>=p.entry);
  if(!toActivate.length)return;
  pendingOrders=pendingOrders.filter(p=>!toActivate.includes(p));
  toActivate.forEach(activatePendingOrder);
+}
+// Crea DAVVERO un ordine pendente (BUY/SELL LIMIT o STOP) sul conto MT5 collegato, con lo
+// stesso SL/TP impostati nelle caselle/a grafico — richiesto esplicitamente: "manda i valori
+// esatti della tipologia di ordine pendente insieme ai TP/SL impostati direttamente a grafico".
+// Se va a buon fine lo tracciamo in pendingOrders[] con mt5Ticket, esattamente come le
+// posizioni reali: compare nella tabella standard "Ordini pendenti" (badge 🖥️), è cancellabile
+// col bottone "Cancella" normale (che qui cancella DAVVERO sul conto, vedi listener dedicato) e
+// ogni trascinamento delle sue linee su grafico si specchia sul conto vero (setTradeLevel ->
+// syncMt5PendingOrderLevels). Se scatta per davvero, fetchMt5Orders() lo rileva e lo adotta come
+// posizione standard.
+async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset){
+ if(!asset)return $('status').textContent='Seleziona prima un ASSET.';
+ if(!(lots>0))return $('status').textContent='Lottaggio non valido.';
+ const details=`${side} ${kind} ${asset} a ${fmtPrice(entry)} — ${lots.toFixed(2)} lot`+
+   (Number.isFinite(sl)?` — SL ${fmtPrice(sl)}`:'')+
+   (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}`:'');
+ if(!confirm(`Confermi la creazione di un ORDINE PENDENTE VERO su MT5?\n\n${details}\n\nResterà in attesa sul conto collegato finché il prezzo non lo raggiunge: non è una simulazione.`))return;
+ $('status').textContent='Invio ordine pendente reale a MT5 in corso…';
+ const result=await fetchMt5WithTimeout('/order/pending',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({symbol:asset,side,kind,volume:lots,price:entry,sl:Number.isFinite(sl)?sl:undefined,tp:Number.isFinite(tp)?tp:undefined})
+ });
+ if(result.ok){
+   const ticket=result.data.ticket;
+   pendingOrders.push({
+     id:Date.now()+Math.random(),
+     asset,side,kind,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,lots,
+     mt5Ticket:ticket
+   });
+   $('status').textContent=`🟢 Ordine pendente reale creato su MT5: ${side} ${kind} ${asset} a ${fmtPrice(entry)} (ticket ${ticket}).`;
+   playOrderSound();
+   draw();update();
+ }else{
+   $('status').textContent='⚠️ Ordine pendente reale non creato: '+result.message;
+ }
+ fetchMt5Orders();
 }
 function createPendingOrder(side){
  if(blockedByPropFirmNews())return; // STEP 2: conto chiuso per violazione, o notizia macro simulata in corso
@@ -7710,9 +7753,20 @@ function createPendingOrder(side){
  if(err)return $('status').textContent=err;
  const lots=getLotSizePending();
  const kind=pendingOrderKind;
+ const asset=$('market')?.value||'';
+ // Con MT5 collegato, l'ordine pendente è VERO (vedi placeRealMt5PendingOrder) invece che
+ // simulato: le due cose restano sempre separate, mai mescolate (stesso principio già seguito
+ // per BUY/SELL a mercato).
+ if(mt5Connected){
+   placeRealMt5PendingOrder(side,kind,entry,Number.isFinite(sl)?sl:null,Number.isFinite(tp)?tp:null,lots,asset);
+   $('pendingEntry').value='';
+   $('slPending').value='';
+   $('tpPending').value='';
+   return;
+ }
  pendingOrders.push({
    id:Date.now()+Math.random(),
-   asset:$('market')?.value||'',
+   asset,
    side,kind,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,lots
  });
  // Svuota Entry/SL/TP dell'ordine pendente dopo la conferma riuscita: pronte per impostarne
@@ -7999,6 +8053,28 @@ async function syncMt5PositionLevels(pos){
    $('status').textContent=`⚠️ SL/TP aggiornati solo in app: la modifica sul conto MT5 (ticket ${ticket}) non è riuscita — ${result.message}`;
  }
  fetchMt5Positions();
+}
+// Stesso principio di syncMt5PositionLevels ma per un ordine PENDENTE reale (non ancora
+// scattato): specchia entrata/SL/TP sul conto MT5 dopo che l'utente li trascina/modifica sul
+// grafico esattamente come farebbe con un ordine pendente simulato.
+let mt5PendingSyncInFlightTickets=new Set();
+async function syncMt5PendingOrderLevels(p){
+ if(!p||p.mt5Ticket==null)return;
+ const ticket=p.mt5Ticket;
+ if(mt5PendingSyncInFlightTickets.has(ticket))return;
+ mt5PendingSyncInFlightTickets.add(ticket);
+ $('status').textContent=`Aggiornamento ordine pendente sul conto MT5 (ticket ${ticket})…`;
+ const result=await fetchMt5WithTimeout('/order/modify_pending',{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({ticket,price:Number.isFinite(p.entry)?p.entry:undefined,sl:Number.isFinite(p.sl)?p.sl:0,tp:Number.isFinite(p.tp)?p.tp:0})
+ });
+ mt5PendingSyncInFlightTickets.delete(ticket);
+ if(result.ok){
+   $('status').textContent=`✅ Ordine pendente (ticket ${ticket}) aggiornato anche su MT5.`;
+ }else{
+   $('status').textContent=`⚠️ Aggiornato solo in app: la modifica dell'ordine pendente su MT5 (ticket ${ticket}) non è riuscita — ${result.message}`;
+ }
+ fetchMt5Orders();
 }
 // Chiude DAVVERO sul conto MT5 la posizione (pos.mt5Ticket) e SOLO se la chiusura reale va a
 // buon fine la registra anche in locale (Trade Journal, come closeTrade() fa per tutte le
@@ -9496,7 +9572,26 @@ $('pendingOrdersTbl').addEventListener('click',async e=>{
    return;
  }
  if(cancelId){
-   pendingOrders=pendingOrders.filter(p=>String(p.id)!==cancelId);
+   const p=pendingOrders.find(x=>String(x.id)===cancelId);
+   if(!p)return;
+   if(p.mt5Ticket!=null){
+     // Ordine pendente REALE: si cancella DAVVERO sul conto MT5 (con conferma) e solo se va a
+     // buon fine si rimuove anche in locale — mai il contrario, per non disallineare mai
+     // "cancellato in app" da "ancora in attesa sul conto vero".
+     if(!confirm(`Cancellare DAVVERO l'ordine pendente ${p.side} ${p.kind||'LIMIT'} ${p.asset||''} a ${fmtPrice(p.entry)} (ticket ${p.mt5Ticket}) sul conto MT5 collegato?`))return;
+     $('status').textContent=`Cancellazione in corso sul conto MT5 (ticket ${p.mt5Ticket})…`;
+     const result=await fetchMt5WithTimeout('/order/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:p.mt5Ticket})});
+     if(result.ok){
+       pendingOrders=pendingOrders.filter(x=>x!==p);
+       $('status').textContent=`🔌 Ordine pendente (ticket ${p.mt5Ticket}) cancellato su MT5.`;
+       draw();update();
+     }else{
+       $('status').textContent='⚠️ Cancellazione reale non riuscita: '+result.message;
+     }
+     fetchMt5Orders();
+     return;
+   }
+   pendingOrders=pendingOrders.filter(x=>x!==p);
    $('status').textContent='Ordine pendente cancellato.';
    draw();update();
  }
@@ -9881,18 +9976,26 @@ async function fetchMt5Positions(){
    if(result.ok && Array.isArray(result.data)){
      // Posizioni REALI tracciate in app (positions[].mt5Ticket) sparite dal conto vero: MT5 le
      // ha chiuse da sola (SL/TP reale colpito, Stop Out del broker, chiusura fatta a mano nel
-     // terminale MT5...). Le giornalizziamo qui come una chiusura normale (Trade Journal),
-     // usando l'ultimo prezzo noto per quel ticket — non riceviamo mai il prezzo esatto in
-     // questo caso, a differenza di quando la chiudiamo noi da bottone "Chiudi" in app
-     // (closeMt5PositionReal, che usa il prezzo restituito dal bridge). Solo la sessione/mode
-     // ATTUALMENTE in `positions` viene controllata qui: una posizione reale rimasta tracciata
-     // in un'altra sessione (mode) verrà riconciliata quando si torna su quella sessione.
+     // terminale MT5...). Le giornalizziamo qui come una chiusura normale (Trade Journal). Il
+     // motivo (colonna "Risultato") NON viene indovinato dal prezzo: si chiede al bridge il
+     // motivo VERO letto dallo storico deal del broker (/deal_reason — SL, TP, STOP OUT,
+     // MANUAL o EA), così il Journal dice davvero cosa è successo invece di un'etichetta
+     // generica poco chiara. Solo la sessione/mode ATTUALMENTE in `positions` viene controllata
+     // qui: una posizione reale rimasta tracciata in un'altra sessione (mode) verrà riconciliata
+     // quando si torna su quella sessione.
      const newTickets=new Set(result.data.map(p=>String(p.ticket)));
-     positions.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket))).forEach(p=>{
+     const justClosed=positions.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)));
+     for(const p of justClosed){
        const lastKnown=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
-       const price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(currentPrice()??p.entry);
-       closeTrade('MT5_REMOTE',price,p);
-     });
+       let price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(currentPrice()??p.entry);
+       let reason='MT5'; // ripiego se /deal_reason non risponde o non trova nulla
+       const dr=await fetchMt5WithTimeout('/deal_reason?ticket='+p.mt5Ticket,{method:'GET'},8000);
+       if(dr.ok && dr.data){
+         if(dr.data.reason)reason=dr.data.reason;
+         if(Number.isFinite(Number(dr.data.price)))price=Number(dr.data.price);
+       }
+       closeTrade(reason,price,p);
+     }
      mt5RealPositions=result.data; update();
    }
    // Se non risponde entro il timeout o dà errore, si tiene semplicemente l'ultima lista nota
@@ -9901,14 +10004,69 @@ async function fetchMt5Positions(){
    mt5PositionsFetchInFlight=false;
  }
 }
+// ===================== ORDINI PENDENTI REALI MT5 (LIMIT/STOP, non ancora scattati) =====================
+// Stesso schema di mt5RealPositions/fetchMt5Positions ma per gli ordini pendenti reali, letti
+// dal bridge ogni 2s (GET /orders) sullo stesso timer delle posizioni.
+let mt5RealOrders=[];
+let mt5OrdersFetchInFlight=false;
+async function fetchMt5Orders(){
+ if(mt5OrdersFetchInFlight)return;
+ mt5OrdersFetchInFlight=true;
+ try{
+   const result=await fetchMt5WithTimeout('/orders',{method:'GET'},8000);
+   if(result.ok && Array.isArray(result.data)){
+     // Ordini pendenti REALI tracciati in app (pendingOrders[].mt5Ticket) spariti dal conto
+     // vero: o sono SCATTATI (diventano una posizione — in MT5 la posizione risultante eredita
+     // lo STESSO numero di ticket dell'ordine che l'ha generata, quindi la cerchiamo tra le
+     // posizioni reali note) oppure sono stati cancellati/scaduti/rifiutati altrove (dal
+     // terminale, da un altro strumento...). Usa l'ultima fotografia nota di mt5RealPositions
+     // (aggiornata al massimo 2s fa dal polling parallelo delle posizioni, vedi
+     // startMt5PositionsPolling) invece di interrogare di nuovo il bridge qui: nel caso limite
+     // uno scatto viene "adottato" come posizione standard al giro successivo, non subito, ma
+     // senza mai perdere l'ordine né duplicarlo.
+     const newTickets=new Set(result.data.map(o=>String(o.ticket)));
+     const vanished=pendingOrders.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)));
+     vanished.forEach(p=>{
+       pendingOrders=pendingOrders.filter(x=>x!==p);
+       const triggered=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
+       if(triggered){
+         // Scattato per davvero: lo adottiamo come posizione standard — stessa idea di
+         // activatePendingOrder() per un ordine pendente simulato — così compare subito nella
+         // tabella "Operazioni aperte" invece che solo in quella dedicata MT5.
+         const pos={
+           id:Date.now()+Math.random(),
+           asset:p.asset,side:triggered.side,entry:Number(triggered.price_open),
+           sl:triggered.sl!=null?Number(triggered.sl):null,
+           tp:triggered.tp!=null?Number(triggered.tp):null,
+           origin:'PENDING',kind:p.kind||'LIMIT',
+           lots:Number(triggered.volume)||p.lots,risk:0,dist:0,hasRiskModel:false,
+           start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
+           marginUsed:0,mt5Ticket:triggered.ticket
+         };
+         pos.rrSl=pos.sl;
+         positions.push(pos);
+         playOrderSound();
+         $('status').textContent=`🟢 Ordine pendente reale scattato: ${pos.side} ${pos.asset} a ${fmtPrice(pos.entry)} (ticket ${pos.mt5Ticket}).`;
+       }else{
+         $('status').textContent=`Ordine pendente (ticket ${p.mt5Ticket}) non è più in attesa sul conto MT5 (cancellato, scaduto o rifiutato altrove).`;
+       }
+     });
+     mt5RealOrders=result.data; update();
+   }
+ }finally{
+   mt5OrdersFetchInFlight=false;
+ }
+}
 function startMt5PositionsPolling(){
  stopMt5PositionsPolling();
  fetchMt5Positions();
- mt5PositionsPollTimer=setInterval(fetchMt5Positions,2000);
+ fetchMt5Orders();
+ mt5PositionsPollTimer=setInterval(()=>{ fetchMt5Positions(); fetchMt5Orders(); },2000);
 }
 function stopMt5PositionsPolling(){
  if(mt5PositionsPollTimer){ clearInterval(mt5PositionsPollTimer); mt5PositionsPollTimer=null; }
  mt5RealPositions=[];
+ mt5RealOrders=[];
 }
 let mt5SavedAccounts=[]; // cache della lista di conti letta dalla cartella (STEP B)
 let mt5SelectedAccountKey=null; // login@server del conto attualmente selezionato nel menu (STEP B)
@@ -10718,7 +10876,8 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
  // i dati corretti per QUESTO asset in background. Attivazione per "attraversamento" del
  // livello di entrata fra il tick precedente e quello corrente (stesso concetto del range
  // low/high usato per la valutazione a grafico, adattato a dati tick singoli).
- const ownPending=pendingOrders.filter(p=>(p.asset||asset)===asset);
+ // Esclusi gli ordini pendenti REALI (mt5Ticket): decide solo MT5 quando scattano davvero.
+ const ownPending=pendingOrders.filter(p=>(p.asset||asset)===asset && p.mt5Ticket==null);
  const crossed=Number.isFinite(prevPrice)
    ?(p)=>(prevPrice<=p.entry&&price>=p.entry)||(prevPrice>=p.entry&&price<=p.entry)
    :(p)=>Math.abs(price-p.entry)<1e-9;
@@ -10837,7 +10996,8 @@ async function pollBackgroundLiveSession(sessionKey){
    });
    // Attivazione ordini pendenti per "attraversamento" del prezzo di entrata fra il
    // precedente giro di polling e questo (stesso concetto di evaluateLiveBackgroundAsset).
-   const ownPending=(session.pendingOrders||[]).filter(p=>(p.asset||asset)===asset);
+   // Esclusi gli ordini pendenti REALI (mt5Ticket): decide solo MT5 quando scattano davvero.
+   const ownPending=(session.pendingOrders||[]).filter(p=>(p.asset||asset)===asset && p.mt5Ticket==null);
    const crossed=Number.isFinite(prevPrice)
      ?(p)=>(prevPrice<=p.entry&&price>=p.entry)||(prevPrice>=p.entry&&price<=p.entry)
      :(p)=>Math.abs(price-p.entry)<1e-9;
