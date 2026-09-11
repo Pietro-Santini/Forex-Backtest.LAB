@@ -1033,7 +1033,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    <div><span>OPERAZIONE</span><strong id="liveSide">—</strong></div>
    <div><span>PREZZO ATTUALE / CLOSE</span><strong id="livePrice">—</strong></div>
    <div><span>P/L LIVE</span><strong id="liveValue">—</strong></div>
-   <div><span>R/R / LOTTI</span><strong id="liveRR">—</strong></div>
+   <div><span>R/R</span><strong id="liveRR">—</strong></div>
  </div>
  <div class="chartWrap" id="chartWrap">
    <div id="chartFsSidebar" class="chartFsSidebar"></div>
@@ -3438,19 +3438,46 @@ function formatRR(ratio){
  const r=Math.round(ratio*100)/100;
  return `1/${r%1===0?r.toFixed(0):r.toFixed(2)}`;
 }
+// P/L LIVE del riquadro in alto: SOMMA di TUTTE le posizioni aperte in questa sessione, sia
+// quella sull'asset a grafico ora sia le altre aperte in background su asset diversi — non
+// solo l'eventuale posizione selezionata. È la fotografia del conto (come un vero MT5 con più
+// strumenti aperti insieme), non il P&L di una singola operazione (quello resta nella
+// casella/tooltip dedicata di ciascuna posizione, sempre per-posizione).
+function computeTotalLivePL(){
+ if(!positions.length)return null;
+ const current=currentPrice();
+ let total=0, any=false;
+ positions.forEach(pos=>{
+   const posAsset=pos.asset||currentAssetKey;
+   const isCurrentAssetOnScreen=(!currentAssetKey||posAsset===currentAssetKey);
+   // Sull'asset a grafico ora usiamo il prezzo del grafico (valido sia a storico che live);
+   // per gli altri asset serve un prezzo live davvero verificato via tick/polling — in
+   // Storico non esiste (il CSV di quell'asset non è caricato), quindi quella posizione resta
+   // fuori dal totale invece di mostrare un P/L inventato.
+   const price=isCurrentAssetOnScreen?current:(liveModeActive?livePriceByAsset[posAsset]:null);
+   if(!Number.isFinite(price))return;
+   const lots=pos.lots||getLotSize();
+   const pl=calculateForexPL(pos.side,pos.entry,price,lots,posAsset);
+   if(Number.isFinite(pl)){ total+=pl; any=true; }
+ });
+ return any?total:null;
+}
 function updateLivePL(){
  const sideEl=$('liveSide'), priceEl=$('livePrice'), valueEl=$('liveValue'), rrEl=$('liveRR');
  if(!rows.length){
    sideEl.textContent='—';priceEl.textContent='—';valueEl.textContent='—';rrEl.textContent='—';
    valueEl.className=''; return;
  }
+ const totalPL=computeTotalLivePL();
+ valueEl.textContent=totalPL!=null?(totalPL>=0?'+':'')+euro(totalPL):'—';
+ valueEl.className=totalPL!=null?(totalPL>=0?'liveProfit':'liveLoss'):'';
  if(!active){
-   // Nessuna posizione aperta: mostriamo comunque il rapporto R/R pianificato in base
-   // a SL/TP già impostati (utile anche per gli ordini pendenti).
+   // Nessuna posizione selezionata: OPERAZIONE/PREZZO restano generici e l'R/R mostra quello
+   // pianificato in base a SL/TP già impostati (utile anche per gli ordini pendenti); il P/L
+   // LIVE sopra resta comunque valorizzato se c'è almeno una posizione aperta.
    sideEl.textContent='—';
    const cp=currentPrice();
    priceEl.textContent=Number.isFinite(cp)?fmtPrice(cp):'—';
-   valueEl.textContent='—'; valueEl.className='';
    const ratio=computeRRRatio();
    rrEl.textContent=ratio!=null?formatRR(ratio):'—';
    return;
@@ -3460,12 +3487,10 @@ function updateLivePL(){
  sideEl.textContent=active.side;
  sideEl.className=active.side==='BUY'?'liveProfit':'liveLoss';
  priceEl.textContent=fmtPrice(current);
- const lots=active.lots||getLotSize();
- const pl=calculateForexPL(active.side,active.entry,current,lots);
- valueEl.textContent=(pl>=0?'+':'')+euro(pl);
- valueEl.className=pl>=0?'liveProfit':'liveLoss';
+ // R/R: SOLO quello della posizione selezionata (mai più "o lottaggio" come fallback) — si
+ // aggiorna cambiando selezione, indipendente dal totale P/L sopra.
  const ratio=computeRRRatio();
- rrEl.textContent=ratio!=null?formatRR(ratio):`${lots.toFixed(2)} lot`;
+ rrEl.textContent=ratio!=null?formatRR(ratio):'—';
 }
 // Rapporto Rischio/Rendimento (R/R): quanto si rischia (distanza entry-SL) rispetto a quanto si
 // punta a guadagnare (distanza entry-TP). Es. "1:2" = si rischia 1 per puntare a guadagnare 2.
