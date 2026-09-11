@@ -3702,6 +3702,12 @@ function update(){
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
      const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
      const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
+     // Versione SOLO TESTO di modeTag (senza il tag <span> annidato), da usare quando serve
+     // dentro un ALTRO attributo title="...": BUG RISOLTO — inserire modeTag (che contiene un
+     // secondo title="..." con le sue virgolette) dentro un title="..." più esterno chiudeva
+     // quest'ultimo in anticipo alla prima virgoletta incontrata, lasciando il resto del testo
+     // (e un "> di troppo) riversato come testo visibile nel bottone invece che nel tooltip.
+     const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' (posizione reale MT5)':'');
      // Il testo del bottone riflette lo stato di selezione (modalità toggle: ripremendolo si
      // deseleziona), così è chiaro a colpo d'occhio invece di restare sempre "Seleziona".
      const isSelected=isCurrentRow&&p===active;
@@ -3714,7 +3720,7 @@ function update(){
      // con un'etichetta 🔒SP quando è stato portato a breakeven o oltre.
      const slCellTxt=fmtPrice(p.sl)+(isStopProfitLevel(p)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre: diventa uno Stop Profit">🔒SP</span>':'');
      return `<tr class="${isCurrentRow&&p===active?'focused':''}"><td>${i+1}</td><td>${modeTag}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td>${slCellTxt}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
-     `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTag} / ${posAsset} e mostra questa posizione a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
+     `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTagPlain} / ${posAsset} e mostra questa posizione a grafico">${p.mt5Ticket!=null?'Vai a Grafico':'📍 Vai a grafico'}</button>${actionsCell}</td></tr>`;
    }).join('');
  }
 
@@ -3740,9 +3746,12 @@ function update(){
      const curPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[ordAsset]:null);
      const curPriceCell=`<td>${curPrice!=null?fmtPrice(curPrice):'—'}</td>`;
      const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Ordine pendente REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
+     // Stessa correzione della tabella "Posizioni aperte" qui sopra: versione solo testo di
+     // modeTag da usare dentro un title="..." esterno, per non annidare virgolette/tag.
+     const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' (ordine reale MT5)':'');
      const actionsCell=isCurrentRow?`<button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button>`:'';
      return `<tr><td>${i+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td>`+curPriceCell+`<td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
-     `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTag} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
+     `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTagPlain} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
    }).join('');
    const untrackedRowsHtml=untrackedMt5Orders.map((o,j)=>{
      const ordAsset=o.symbol||'—';
@@ -8335,10 +8344,28 @@ async function placeRealMt5Order(side){
    (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}${tpAuto?' (proposto in automatico)':''}`:'');
  if(!await appConfirm(`Confermi l'invio di un ORDINE VERO a mercato su MT5?\n\n${details}\n\nVerrà eseguito subito sul conto collegato: non è una simulazione.`))return;
  $('status').textContent='Invio ordine reale a MT5 in corso…';
- const result=await fetchMt5WithTimeout('/order/market',{
-   method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({symbol,side,volume:lots,sl:Number.isFinite(sl)?sl:undefined,tp:Number.isFinite(tp)?tp:undefined})
- });
+ // mt5OwnMarketOrderInFlight resta >0 per tutta la durata della richiesta HTTP (l'unico vero
+ // "buco" in cui il polling ogni 2s potrebbe interrogare /positions e vedere il ticket come
+ // sconosciuto): vedi il suo commento più sopra (BUG RISOLTO: posizione duplicata nel caso).
+ // Decrementato appena la risposta torna, PRIMA del push in positions[] qui sotto — ma da qui
+ // al push non c'è più nessun altro "await": essendo JavaScript a singolo thread, quel tratto
+ // di codice sincrono non può essere interrotto a metà dal timer del polling, quindi non riapre
+ // davvero la finestra di corsa nonostante il contatore torni a 0 un istante prima del push.
+ mt5OwnMarketOrderInFlight++;
+ let result;
+ try{
+   result=await fetchMt5WithTimeout('/order/market',{
+     method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({symbol,side,volume:lots,sl:Number.isFinite(sl)?sl:undefined,tp:Number.isFinite(tp)?tp:undefined})
+   });
+ }finally{
+   // Il push in positions[] (poche righe sotto, se result.ok) avviene PRIMA di uscire da questa
+   // funzione: essendo tutto codice sincrono da qui in poi (nessun altro await), non c'è alcuna
+   // finestra residua in cui il contatore risulti già a 0 ma la posizione non sia ancora dentro
+   // positions[]. Va decrementato qui, non dentro il ramo result.ok, altrimenti un ordine
+   // rifiutato lo lascerebbe bloccato per sempre a >0.
+   mt5OwnMarketOrderInFlight--;
+ }
  if(result.ok){
    const filledEntry=Number.isFinite(Number(result.data.price))?Number(result.data.price):entryApprox;
    const ticket=result.data.ticket;
@@ -10251,15 +10278,42 @@ let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a
 let mt5RealPositions=[];
 let mt5PositionsPollTimer=null;
 let mt5PositionsFetchInFlight=false; // evita di accumulare richieste in parallelo se una risposta tarda
-// Tutti i ticket di posizioni reali GIÀ tracciati in positions[], in QUALUNQUE delle 4 sessioni
-// (non solo quella a schermo ora) — usato per capire quali posizioni reali risultano ancora
-// "nuove" e vanno adottate (vedi fetchMt5Positions). Stessa idea di collectAcrossSessions(),
-// ma globale: quella è annidata dentro update() e non richiamabile da qui.
+// Contatore (non booleano, per sicurezza in caso di doppio click) di richieste di apertura
+// ordine reale A MERCATO attualmente in corso da placeRealMt5Order(): stessa famiglia di bug
+// del fix qui sopra in allTrackedMt5PositionTickets(), ma per l'apertura diretta invece che per
+// uno scatto di pendente. Tra "l'ordine è stato eseguito sul broker" e "è stato spinto dentro
+// positions[]" c'è comunque un istante (la risposta HTTP deve tornare al browser): se in quello
+// stesso istante il polling ogni 2s interroga /positions, vedrebbe il ticket come "sconosciuto"
+// e lo adotterebbe anche lui, duplicandolo. Mentre questo contatore è >0, fetchMt5Positions()
+// salta per intero l'adozione di posizioni non tracciate per questo giro (al giro successivo,
+// 2s dopo, la nuova posizione sarà comunque già in positions[] e correttamente riconosciuta).
+let mt5OwnMarketOrderInFlight=0;
+// Tutti i ticket di posizioni reali GIÀ tracciati, in QUALUNQUE delle 4 sessioni (non solo
+// quella a schermo ora) — usato per capire quali posizioni reali risultano ancora "nuove" e
+// vanno adottate (vedi fetchMt5Positions). Stessa idea di collectAcrossSessions(), ma globale:
+// quella è annidata dentro update() e non richiamabile da qui.
+// BUG RISOLTO (posizione reale "fantasma" duplicata nel Trade Journal, motivo "EA"): questa
+// funzione considerava tracciati SOLO i ticket già dentro positions[], mai quelli ancora in
+// pendingOrders[]. fetchMt5Positions() e fetchMt5Orders() girano IN PARALLELO sullo stesso
+// intervallo di polling (setInterval chiama entrambe senza aspettare l'una per l'altra): appena
+// un ordine pendente reale scattava, per una frazione di secondo il suo ticket compariva già
+// tra le posizioni vere del conto ma non ancora dentro positions[] (solo fetchMt5Orders() lo
+// avrebbe "promosso" da pendingOrders a positions, alla fine del suo giro). In quella finestra,
+// fetchMt5Positions() lo vedeva come "sconosciuto" e lo adottava PURE lui — stesso ticket,
+// DUE oggetti posizione locali — e alla chiusura reale entrambi finivano nel Journal come due
+// operazioni distinte (la seconda, spesso con verifica del motivo reale = "EA" = Expert
+// Advisor, l'etichetta che MT5 usa per qualunque ordine arrivato via API/bridge, non un robot
+// misterioso). Includendo qui anche i ticket ancora in pendingOrders[], fetchMt5Positions()
+// li considera già "tracciati" e lascia che sia SOLO fetchMt5Orders() a promuoverli — mai più
+// i due controlli in corsa fra loro sullo stesso ticket.
 function allTrackedMt5PositionTickets(){
  const set=new Set();
  ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
-   const list=(key===currentMode())?positions:(((sessionByMode[key]||{}).positions)||[]);
-   list.forEach(p=>{ if(p.mt5Ticket!=null)set.add(String(p.mt5Ticket)); });
+   const isCurrent=key===currentMode();
+   const posList=isCurrent?positions:(((sessionByMode[key]||{}).positions)||[]);
+   const pendList=isCurrent?pendingOrders:(((sessionByMode[key]||{}).pendingOrders)||[]);
+   posList.forEach(p=>{ if(p.mt5Ticket!=null)set.add(String(p.mt5Ticket)); });
+   pendList.forEach(p=>{ if(p.mt5Ticket!=null)set.add(String(p.mt5Ticket)); });
  });
  return set;
 }
@@ -10314,7 +10368,13 @@ async function fetchMt5Positions(){
      // chiuderanno, grazie alla riconciliazione qui sopra che le tratta ormai come una qualunque
      // altra posizione reale tracciata.
      const trackedTickets=allTrackedMt5PositionTickets();
-     let untrackedRealPositions=result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
+     // Mentre un ordine a mercato aperto dall'app è "in volo" (vedi mt5OwnMarketOrderInFlight),
+     // saltiamo per intero questo giro di adozione: evita di duplicare la posizione appena
+     // aperta se la sua risposta HTTP non è ancora tornata al browser quando arriva questa
+     // fotografia. Un istante di ritardo nell'adottare una posizione DAVVERO esterna (aperta a
+     // mano nel terminale mentre, per puro caso, un altro ordine dell'app è in corso) non è un
+     // problema: verrà comunque adottata al giro successivo, 2s dopo.
+     let untrackedRealPositions=mt5OwnMarketOrderInFlight>0?[]:result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
      // Richiesto esplicitamente: in Modalità Prop Firm, una posizione reale già aperta sul conto
      // MT5 PRIMA della creazione di QUESTA Challenge (propFirmChallengeCreatedAt) non va mai
      // adottata QUI — altrimenti, magari già in perdita, verrebbe ri-agganciata subito dopo ogni
