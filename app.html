@@ -412,6 +412,9 @@ tr.otherAssetRow td:last-child{opacity:1}
       // non solo chiudendo l'app — va fatto PRIMA del signOut, finché l'utente risulta ancora
       // autenticato (altrimenti il salvataggio cloud verrebbe rifiutato).
       if(window.syncFullStatusToFirebase){ try{ await window.syncFullStatusToFirebase('logout', true); }catch(e){} }
+      // Richiesto esplicitamente: uscire dall'account spegne anche il bridge/terminale MT5 sul PC,
+      // non solo chiudere la scheda del browser (vedi window.disconnectMt5Bridge più in basso).
+      if(window.disconnectMt5Bridge){ try{ await window.disconnectMt5Bridge(); }catch(e){} }
       await signOut(auth);
       window.location.replace(LOGIN_PAGE);
     });
@@ -519,6 +522,9 @@ tr.otherAssetRow td:last-child{opacity:1}
     // solo chiudendo l'app — va fatto PRIMA del signOut, finché l'utente risulta ancora
     // autenticato (altrimenti il salvataggio cloud verrebbe rifiutato).
     if (window.syncFullStatusToFirebase) { try { await window.syncFullStatusToFirebase('logout', true); } catch(e){} }
+    // Richiesto esplicitamente: uscire dall'account spegne anche il bridge/terminale MT5 sul PC,
+    // non solo chiudere la scheda del browser (vedi window.disconnectMt5Bridge più in basso).
+    if (window.disconnectMt5Bridge) { try { await window.disconnectMt5Bridge(); } catch(e){} }
     await signOut(auth);
     window.location.replace(LOGIN_PAGE);
   });
@@ -11890,22 +11896,33 @@ async function disconnectFromMt5Bridge(){
  }
  return {ok:true,data};
 }
-// Richiesto esplicitamente: chiudere app.html mentre si è connessi a un conto MT5 reale deve
-// spegnere anche il terminale MT5 e il bridge stesso, non lasciarli accesi in background senza
-// che l'utente se ne accorga. navigator.sendBeacon() è, come per il salvataggio Firestore più in
-// alto in questo file, l'unico modo affidabile di "lanciare" una richiesta di rete che sopravvive
-// alla distruzione della pagina (un fetch normale verrebbe interrotto a metà).
+// Richiesto esplicitamente: chiudere app.html (SEMPRE, non solo se in quel momento sei connesso a
+// un conto MT5 reale — prima qui c'era un controllo su mt5Connected che lasciava il processo
+// bridge acceso in background ogni volta che si chiudeva la pagina senza essere connessi, es. uso
+// puro di backtest storico) deve spegnere anche il terminale MT5 e il bridge stesso, non lasciarli
+// accesi senza che l'utente se ne accorga. navigator.sendBeacon() è, come per il salvataggio
+// Firestore più in alto in questo file, l'unico modo affidabile di "lanciare" una richiesta di
+// rete che sopravvive alla distruzione della pagina (un fetch normale verrebbe interrotto a metà).
+// Innocuo se il bridge non sta girando: la richiesta fallisce in silenzio (connessione rifiutata),
+// nessun errore visibile, nulla da gestire.
 // DUE LIMITI ONESTI, non aggirabili lato browser:
 // (1) 'pagehide' scatta ANCHE per un semplice refresh/ricarica della pagina, non solo per una
-//     chiusura vera — ogni refresh mentre sei connesso spegnerà quindi il terminale MT5 e il
-//     bridge, e dovrai rifare tutto il collegamento da capo, non solo ricaricare la pagina;
+//     chiusura vera — ogni refresh spegnerà quindi il bridge (e il terminale MT5, se connesso),
+//     e dovrai rifare tutto il collegamento da capo, non solo ricaricare la pagina;
 // (2) sendBeacon() non aspetta né legge una risposta (per definizione: la pagina potrebbe già
 //     essere sparita quando arriva), quindi qui non sapremo mai con certezza se il bridge ha
 //     davvero ricevuto ed eseguito la richiesta prima di terminare.
 window.addEventListener('pagehide', ()=>{
- if(!mt5Connected) return;
  try{ navigator.sendBeacon(MT5_BRIDGE_URL+'/disconnect'); }catch(e){}
 });
+// Esposta su window per lo stesso motivo di window.syncFullStatusToFirebase (vedi più in alto in
+// questo file): i pulsanti "Esci" vivono in un altro <script type="module"> separato, eseguito
+// PRIMA che questo script definisca disconnectFromMt5Bridge — la funzione viene quindi chiamata
+// solo al click, quando questo script ha già fatto in tempo a definirla. Richiesto esplicitamente:
+// uscire dall'account (non solo chiudere la scheda) deve anch'esso spegnere terminale MT5 e
+// bridge — qui possiamo aspettare la vera risposta (niente teardown di pagina in corso), quindi
+// usiamo la chiamata normale invece di sendBeacon.
+window.disconnectMt5Bridge = disconnectFromMt5Bridge;
 function openMt5LoginModal(prefill){
  $('mt5LoginError').style.display='none';
  $('mt5BridgeHelp').style.display='none';
