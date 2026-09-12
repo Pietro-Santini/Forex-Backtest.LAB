@@ -762,6 +762,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         </div>
         <div id="mt5GateResult" style="display:none"></div>
       </div>
+      <!-- Serve DUE volte: durante il gate (prima ancora dei campi di login, se il bridge non
+           risponde quando si prova a verificare il terminale MT5) e più avanti, se il vero
+           tentativo di /connect scopre che il bridge si è fermato nel frattempo. Spostato qui,
+           fuori da mt5CredFields, cosi' è raggiungibile in entrambi i casi — gli id restano gli
+           stessi, il codice JS che lo usa non cambia. -->
+      <div id="mt5BridgeHelp" style="display:none;font-size:12px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px">
+        <div>(Passo 1 di 2 — installa i pacchetti aggiuntivi) Il servizio necessario per il collegamento a MT5 non risulta ancora attivo su questo PC. Non è un'app da aprire: una volta installato parte da solo, in automatico e senza finestre — dovrai solo installarlo una volta sola.</div>
+        <button type="button" id="mt5DownloadDesktopAppBtn" class="toolBtn" style="width:100%">⬇️ avvia download dei pacchetti</button>
+        <button type="button" id="mt5BridgeContinueBtn" class="toolBtn" style="width:100%;background:#277d5a;border-color:#3ea6ff">✅ Fatto, ho installato — continua</button>
+        <div id="mt5BridgeContinueResult" style="display:none"></div>
+      </div>
       <!-- Campi di login: restano nascosti finché il controllo sopra non conferma che il
            terminale MT5 c'è davvero (mt5CredFields.style.display passa a "flex" via JS). -->
       <div id="mt5CredFields" style="display:none;flex-direction:column;gap:10px">
@@ -788,13 +799,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
           <input id="mt5LoginServer" type="text" autocomplete="off" placeholder="Es. NomeBroker-Demo">
         </div>
         <div id="mt5LoginError" class="liveLoginError"></div>
-        <div id="mt5BridgeHelp" style="display:none;font-size:12px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px">
-          <div>Il bridge locale non risponde su questo PC. Se hai già installato l'app desktop, aprila da qui; altrimenti scaricala (serve una volta sola).</div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button type="button" id="mt5OpenDesktopAppBtn" class="toolBtn" style="flex:1;min-width:150px">🖥️ Apri l'app desktop</button>
-            <button type="button" id="mt5DownloadDesktopAppBtn" class="toolBtn" style="flex:1;min-width:150px">⬇️ Scarica l'app per Desktop</button>
-          </div>
-        </div>
         <!-- Ripiego, in caso il controllo del gate sopra e il vero tentativo di connessione
              diano risposte diverse (es. terminale disinstallato nel frattempo): stesso
              messaggio/pulsante del gate, qui applicato al fallimento reale di /connect. -->
@@ -10361,7 +10365,10 @@ const INSTALLER_SOURCE_DOWNLOAD_URL='https://github.com/pietro-santini/Forex-Bac
 // locale risponde ma dice esplicitamente "nessun terminale installato" (vedi bridge.py,
 // _find_registered_mt5_terminal). Broker diversi hanno una propria copia preconfigurata con i
 // loro server: questo è solo il ripiego generico per chi non ne ha ancora una.
-const MT5_TERMINAL_DOWNLOAD_URL='https://www.metatrader5.com/it/download';
+// Link "/it/download" verificato dall'utente: dà 404. Questo "/en/download" è quello confermato
+// funzionante — non cambiarlo senza riverificare a mano, il sito di MetaQuotes non ha una
+// struttura di URL localizzata coerente per tutte le lingue.
+const MT5_TERMINAL_DOWNLOAD_URL='https://www.metatrader5.com/en/download';
 // BUG RISOLTO (segnalato): un ordine reale può restare "in corso" per sempre, senza mai un
 // errore né una risposta, quando il terminale MT5 ha una finestra di conferma manuale aperta
 // in attesa di un click (Strumenti -> Opzioni -> scheda Trading -> "Richiedi conferma manuale
@@ -11883,6 +11890,22 @@ async function disconnectFromMt5Bridge(){
  }
  return {ok:true,data};
 }
+// Richiesto esplicitamente: chiudere app.html mentre si è connessi a un conto MT5 reale deve
+// spegnere anche il terminale MT5 e il bridge stesso, non lasciarli accesi in background senza
+// che l'utente se ne accorga. navigator.sendBeacon() è, come per il salvataggio Firestore più in
+// alto in questo file, l'unico modo affidabile di "lanciare" una richiesta di rete che sopravvive
+// alla distruzione della pagina (un fetch normale verrebbe interrotto a metà).
+// DUE LIMITI ONESTI, non aggirabili lato browser:
+// (1) 'pagehide' scatta ANCHE per un semplice refresh/ricarica della pagina, non solo per una
+//     chiusura vera — ogni refresh mentre sei connesso spegnerà quindi il terminale MT5 e il
+//     bridge, e dovrai rifare tutto il collegamento da capo, non solo ricaricare la pagina;
+// (2) sendBeacon() non aspetta né legge una risposta (per definizione: la pagina potrebbe già
+//     essere sparita quando arriva), quindi qui non sapremo mai con certezza se il bridge ha
+//     davvero ricevuto ed eseguito la richiesta prima di terminare.
+window.addEventListener('pagehide', ()=>{
+ if(!mt5Connected) return;
+ try{ navigator.sendBeacon(MT5_BRIDGE_URL+'/disconnect'); }catch(e){}
+});
 function openMt5LoginModal(prefill){
  $('mt5LoginError').style.display='none';
  $('mt5BridgeHelp').style.display='none';
@@ -11893,18 +11916,34 @@ function openMt5LoginModal(prefill){
  $('mt5LoginFolderStatus').textContent=mt5CredsDirHandle
    ?`📂 Verranno salvate in: "${mt5CredsDirHandle.name}"`
    :'Nessuna cartella collegata ancora: te ne verrà chiesta una al primo accesso.';
- // Il gate (verifica terminale MT5) riparte sempre da capo ad ogni apertura del popup: mai
- // ricordare un "sì" di una volta precedente, perché il terminale potrebbe essere stato
- // disinstallato nel frattempo — meglio un controllo in più che un login negato a sorpresa.
+ // Il gate (bridge acceso? poi: terminale MT5 c'è?) riparte sempre da capo ad ogni apertura del
+ // popup: mai ricordare uno stato di una volta precedente, perché nel frattempo l'app desktop o
+ // il terminale potrebbero essere stati chiusi/disinstallati — meglio un controllo in più che un
+ // login negato a sorpresa.
  resetMt5TerminalGate();
  $('mt5LoginModalOverlay').style.display='flex';
+ mt5StartLoginFlow();
 }
 function resetMt5TerminalGate(){
- $('mt5TerminalGate').style.display='flex';
+ $('mt5TerminalGate').style.display='none';
  $('mt5CredFields').style.display='none';
  $('mt5GateDownload').style.display='none';
  $('mt5GateResult').style.display='none';
+ $('mt5BridgeHelp').style.display='none';
  $('mt5LoginSubmitBtn').disabled=true;
+}
+// PRIMO passo del popup, richiesto esplicitamente: prima di tutto si verifica se l'app desktop
+// (il bridge, "ForexBacktestLAB_Setup.exe" — quello che l'utente vede come "installa pacchetti
+// aggiuntivi") è accesa. Se non lo è, è inutile mostrare subito la domanda su MT5: quella
+// domanda ha bisogno del bridge per avere una risposta (vedi commento su mt5GateYesBtn più
+// sotto). Solo quando il bridge risponde passiamo alla domanda "hai installato MT5?".
+async function mt5StartLoginFlow(){
+ const r=await fetchMt5WithTimeout('/health',{method:'GET'},1500);
+ if(r.ok){
+   $('mt5TerminalGate').style.display='flex';
+ }else{
+   $('mt5BridgeHelp').style.display='block';
+ }
 }
 function closeMt5LoginModal(){
  $('mt5LoginModalOverlay').style.display='none';
@@ -12019,7 +12058,13 @@ $('mt5MenuDisconnectBtn').addEventListener('click',async ev=>{
    const result=await disconnectFromMt5Bridge();
    mt5Connected=false;
    updateMt5ModeUI();
-   $('status').textContent=result.ok?'🔌 Disconnesso da MT5.':('⚠️ Disconnessione da MT5 non riuscita (stato locale comunque azzerato): '+result.message);
+   $('status').textContent=result.ok?'🔌 Disconnesso da MT5 (terminale e servizio in chiusura).':('⚠️ Disconnessione da MT5 non riuscita (stato locale comunque azzerato): '+result.message);
+   // Richiesto esplicitamente: disconnettersi deve chiudere anche la pagina stessa, non solo il
+   // terminale/bridge lato PC. LIMITE ONESTO, non aggirabile: window.close() funziona SOLO su una
+   // scheda aperta da uno script (window.open()) — su una scheda normale, aperta digitando
+   // l'indirizzo o da un segnalibro (il caso quasi certamente più comune qui), ogni browser
+   // moderno lo blocca per sicurezza e non succede nulla, senza nemmeno un errore visibile.
+   if(result.ok) setTimeout(()=>{ try{ window.close(); }catch(e){} }, 400);
    return;
  }
  const autoCreds=await tryAutoLoadMt5Creds();
@@ -12099,16 +12144,26 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
 });
 $('mt5LoginCloseBtn').addEventListener('click',closeMt5LoginModal);
 $('mt5LoginCancelBtn').addEventListener('click',closeMt5LoginModal);
-$('mt5OpenDesktopAppBtn').addEventListener('click',()=>{
- // Se l'app desktop e' gia' installata (ForexBacktestLAB_Setup.exe eseguito almeno una volta),
- // l'installer ha registrato "forexbacktestlab://" nel Registro di Windows: il browser la apre
- // da sola (spesso con un avviso "Vuoi aprire Forex Backtest LAB?" la prima volta, poi ricorda
- // la scelta). Se NON e' installata, il browser semplicemente ignora il link senza errori
- // visibili: per questo il pulsante "Scarica" resta sempre visibile accanto, non lo sostituisce.
- window.location.href=DESKTOP_APP_PROTOCOL_URL;
-});
 $('mt5DownloadDesktopAppBtn').addEventListener('click',()=>{
  window.open(DESKTOP_APP_DOWNLOAD_URL,'_blank','noopener');
+});
+$('mt5BridgeContinueBtn').addEventListener('click',async()=>{
+ const resEl=$('mt5BridgeContinueResult');
+ $('mt5BridgeContinueBtn').disabled=true;
+ $('mt5BridgeContinueBtn').textContent='Verifica in corso…';
+ resEl.style.display='none';
+ const r=await fetchMt5WithTimeout('/health',{method:'GET'},1500);
+ $('mt5BridgeContinueBtn').disabled=false;
+ $('mt5BridgeContinueBtn').textContent='✅ Fatto, ho installato — continua';
+ if(r.ok){
+   // Bridge acceso: passo 1 superato, si passa al passo 2 (la domanda su MT5).
+   $('mt5BridgeHelp').style.display='none';
+   $('mt5TerminalGate').style.display='flex';
+ }else{
+   resEl.style.display='block';
+   resEl.style.color='#e0857a';
+   resEl.textContent='Ancora non risulta attivo. Se l\'hai appena installato, aspetta qualche secondo (parte da solo, senza finestre) e riprova.';
+ }
 });
 $('mt5DownloadTerminalBtn').addEventListener('click',()=>{
  window.open(MT5_TERMINAL_DOWNLOAD_URL,'_blank','noopener');
@@ -12122,29 +12177,43 @@ $('mt5GateDownloadBtn').addEventListener('click',()=>{
  window.open(MT5_TERMINAL_DOWNLOAD_URL,'_blank','noopener');
 });
 $('mt5GateYesBtn').addEventListener('click',async()=>{
- // Ripristinato su richiesta esplicita (era stato tolto, poi richiesto di nuovo): controllo
- // VERO lato bridge, non solo la parola dell'utente — vedi _find_registered_mt5_terminal in
- // bridge.py. Side-effect-free: non fa login, non avvia nulla, guarda solo se un terminale
- // risulta registrato su questo PC.
+ // Controllo VERO in due fasi, non solo la parola dell'utente. Un sito non può MAI ispezionare
+ // direttamente i programmi installati su Windows (nessuna API del browser lo permette): l'unico
+ // modo che abbiamo di sapere se il terminale MT5 c'è è chiederlo al NOSTRO bridge (Python, gira
+ // in locale con accesso reale al sistema) — quindi il bridge stesso deve prima risultare acceso,
+ // altrimenti la domanda "c'è MT5?" non ha nessuno a cui essere fatta. Le due fasi restano
+ // volutamente separate, con messaggi diversi, per non confondere "manca la TUA app" con "manca
+ // MT5": sono due software diversi, installati in momenti diversi.
  const resultEl=$('mt5GateResult');
  $('mt5GateYesBtn').disabled=true;
  $('mt5GateNoBtn').disabled=true;
+ $('mt5BridgeHelp').style.display='none';
  resultEl.style.display='block';
  resultEl.style.color='#cdd6e0';
  resultEl.textContent='Verifica in corso…';
+
+ // FASE 1: il nostro bridge (ForexBacktestLAB) è acceso? Side-effect-free, nessuna navigazione
+ // automatica al protocollo forexbacktestlab:// — se non è mai stato installato, navigarci alla
+ // cieca fa comparire il popup di Windows "Hai bisogno di una nuova app per aprire questo
+ // collegamento", una brutta sorpresa se l'utente non se l'aspetta. Meglio un messaggio chiaro
+ // con un pulsante esplicito: se lo clicca sapendo cosa fa, quel popup (se compare, perché non
+ // ancora installato) è la conseguenza attesa di un click suo, non un'azione nostra silenziosa.
+ const bridgeCheck=await fetchMt5WithTimeout('/health',{method:'GET'},1500);
+ if(!bridgeCheck.ok){
+   $('mt5GateYesBtn').disabled=false;
+   $('mt5GateNoBtn').disabled=false;
+   resultEl.style.display='none';
+   $('mt5BridgeHelp').style.display='block';
+   return;
+ }
+
+ // FASE 2: bridge acceso e raggiungibile — ORA la domanda "c'è un terminale MT5?" ha senso e ha
+ // una risposta vera (vedi _find_registered_mt5_terminal in bridge.py). Side-effect-free anche
+ // questa: non fa login, non avvia nulla.
  const r=await fetchMt5WithTimeout('/mt5-terminal-status',{method:'GET'},2500);
  $('mt5GateYesBtn').disabled=false;
  $('mt5GateNoBtn').disabled=false;
- if(!r.ok){
-   // Bridge stesso non raggiungibile: caso diverso da "MT5 non installato" — qui manca a monte
-   // l'app desktop. Stesso meccanismo di avvio automatico usato altrove nell'app.
-   resultEl.style.color='#e0b84f';
-   resultEl.textContent='⚠️ Il bridge locale (l\'app desktop) non risulta acceso su questo PC. Se l\'hai già installata, si sta aprendo da sola; altrimenti scaricala dal pulsante qui sotto.';
-   $('mt5GateDownload').style.display='none';
-   window.location.href=DESKTOP_APP_PROTOCOL_URL;
-   return;
- }
- if(r.data && r.data.installed){
+ if(r.ok && r.data && r.data.installed){
    resultEl.style.display='none';
    $('mt5GateDownload').style.display='none';
    $('mt5TerminalGate').style.display='none';
@@ -12152,7 +12221,7 @@ $('mt5GateYesBtn').addEventListener('click',async()=>{
    $('mt5LoginSubmitBtn').disabled=false;
  }else{
    resultEl.style.color='#e0857a';
-   resultEl.textContent='❌ Nessun terminale MetaTrader 5 risulta ancora installato su questo PC: senza di lui l\'accesso all\'account non è possibile. Installalo (pulsante sopra) e poi clicca di nuovo "Sì, è installato".';
+   resultEl.textContent='❌ L\'app MT5 non è presente su questo dispositivo. Vuoi procedere con l\'installazione? Usa il pulsante di download qui sotto, poi clicca di nuovo "Sì, è installato".';
    $('mt5GateDownload').style.display='block';
  }
 });
