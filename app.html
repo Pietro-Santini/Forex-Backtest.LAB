@@ -751,6 +751,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            fallire e spiega subito cosa manca invece di un errore dopo. -->
       <div id="mt5TerminalGate" style="font-size:12px;line-height:1.6;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:12px;display:flex;flex-direction:column;gap:10px">
         <div>⚠️ Per collegarti al tuo conto reale serve il terminale <b>MetaTrader 5</b> installato su questo PC — è un programma di terze parti (del tuo broker, o quello generico di MetaQuotes), NON incluso in questa app. Senza di lui l'accesso all'account non è possibile.</div>
+        <div>⚠️ L'app può solo <b>accedere</b> a un conto MT5 che esiste già, non crearne uno nuovo: se non hai ancora un conto (o il terminale è appena installato, senza nessun conto configurato), aprilo prima tu stesso dal terminale ("File → Apri un conto") o dal sito del tuo broker — poi torna qui per collegarlo.</div>
         <div>Hai già scaricato e installato il terminale MetaTrader 5?</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" id="mt5GateNoBtn" class="toolBtn" style="flex:1;min-width:140px">No, non ancora</button>
@@ -12120,16 +12121,40 @@ $('mt5GateNoBtn').addEventListener('click',()=>{
 $('mt5GateDownloadBtn').addEventListener('click',()=>{
  window.open(MT5_TERMINAL_DOWNLOAD_URL,'_blank','noopener');
 });
-$('mt5GateYesBtn').addEventListener('click',()=>{
- // Nessuna verifica automatica qui: risposta dichiarata dall'utente, non controllata dal
- // bridge — se ha risposto "sì" senza averlo installato davvero, il vero tentativo di
- // connessione più avanti (via /connect, quando inserisce le credenziali) fallirà comunque con
- // un messaggio chiaro (vedi mt5NoTerminalHelp) e il pulsante di download resta disponibile lì.
- $('mt5GateResult').style.display='none';
- $('mt5GateDownload').style.display='none';
- $('mt5TerminalGate').style.display='none';
- $('mt5CredFields').style.display='flex';
- $('mt5LoginSubmitBtn').disabled=false;
+$('mt5GateYesBtn').addEventListener('click',async()=>{
+ // Ripristinato su richiesta esplicita (era stato tolto, poi richiesto di nuovo): controllo
+ // VERO lato bridge, non solo la parola dell'utente — vedi _find_registered_mt5_terminal in
+ // bridge.py. Side-effect-free: non fa login, non avvia nulla, guarda solo se un terminale
+ // risulta registrato su questo PC.
+ const resultEl=$('mt5GateResult');
+ $('mt5GateYesBtn').disabled=true;
+ $('mt5GateNoBtn').disabled=true;
+ resultEl.style.display='block';
+ resultEl.style.color='#cdd6e0';
+ resultEl.textContent='Verifica in corso…';
+ const r=await fetchMt5WithTimeout('/mt5-terminal-status',{method:'GET'},2500);
+ $('mt5GateYesBtn').disabled=false;
+ $('mt5GateNoBtn').disabled=false;
+ if(!r.ok){
+   // Bridge stesso non raggiungibile: caso diverso da "MT5 non installato" — qui manca a monte
+   // l'app desktop. Stesso meccanismo di avvio automatico usato altrove nell'app.
+   resultEl.style.color='#e0b84f';
+   resultEl.textContent='⚠️ Il bridge locale (l\'app desktop) non risulta acceso su questo PC. Se l\'hai già installata, si sta aprendo da sola; altrimenti scaricala dal pulsante qui sotto.';
+   $('mt5GateDownload').style.display='none';
+   window.location.href=DESKTOP_APP_PROTOCOL_URL;
+   return;
+ }
+ if(r.data && r.data.installed){
+   resultEl.style.display='none';
+   $('mt5GateDownload').style.display='none';
+   $('mt5TerminalGate').style.display='none';
+   $('mt5CredFields').style.display='flex';
+   $('mt5LoginSubmitBtn').disabled=false;
+ }else{
+   resultEl.style.color='#e0857a';
+   resultEl.textContent='❌ Nessun terminale MetaTrader 5 risulta ancora installato su questo PC: senza di lui l\'accesso all\'account non è possibile. Installalo (pulsante sopra) e poi clicca di nuovo "Sì, è installato".';
+   $('mt5GateDownload').style.display='block';
+ }
 });
 $('mt5GateLaunchBtn').addEventListener('click',async()=>{
  $('mt5GateLaunchBtn').disabled=true;
