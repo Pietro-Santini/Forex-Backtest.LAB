@@ -1875,7 +1875,7 @@ function updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct){
 function triggerPropFirmViolation(rule,details){
   propFirmViolation={rule,...details,timestamp:Date.now(),timestampIso:new Date().toISOString()};
   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';} // pausa il replay storico
-  if(liveModeActive){ disconnectCapitalStream(); if(liveRefreshTimer){clearInterval(liveRefreshTimer);liveRefreshTimer=null;} } // disconnessione Live
+  if(liveModeActive){ disconnectCapitalStream(); stopLiveRefreshTimer(); } // disconnessione Live
   showPropFirmViolationOverlay();
   update();draw();
 }
@@ -11957,6 +11957,52 @@ function capitalApiFetch(url,options){
  return result;
 }
 // ===================================================================
+// HEARTBEAT IN BACKGROUND (richiesto esplicitamente: l'aggiornamento delle candele Live deve
+// proseguire anche quando si cambia scheda/finestra sullo stesso PC lasciando il browser
+// aperto). I browser rallentano pesantemente i normali setInterval/setTimeout del thread
+// principale in una scheda non visibile (Chrome, dopo qualche minuto in background, può arrivare
+// a un solo colpo al minuto): un Web Worker dedicato NON subisce lo stesso rallentamento, quindi
+// i motori periodici della modalità Live (refresh candele/SL-TP, ping WebSocket, keep-alive
+// sessione REST, polling Live in background) vengono ora pilotati da un piccolo worker che batte
+// un "tick" ogni secondo, invece che dal setInterval del thread principale. Se il browser non
+// supporta i Worker (o li blocca) si ricade in automatico sul normale setInterval di prima, con
+// lo stesso comportamento di sempre (nessuna regressione, solo niente aggiornamento in background).
+let __bgHeartbeatWorker=null, __bgHeartbeatListeners=new Set();
+function ensureBackgroundHeartbeat(){
+ if(__bgHeartbeatWorker!==null)return __bgHeartbeatWorker; // già creato (o già tentato e fallito: resta non-null)
+ try{
+   const src="setInterval(function(){ postMessage(1); }, 1000);";
+   const blobUrl=URL.createObjectURL(new Blob([src],{type:'application/javascript'}));
+   const w=new Worker(blobUrl);
+   w.onmessage=()=>{ __bgHeartbeatListeners.forEach(fn=>{ try{fn();}catch(e){console.warn('Heartbeat Live: listener fallito:',e);} }); };
+   w.onerror=(e)=>{ console.warn('Heartbeat Live: worker in errore, si continua con il normale setInterval (possibile rallentamento a scheda nascosta):',e); };
+   __bgHeartbeatWorker=w;
+ }catch(e){
+   console.warn('Heartbeat Live: Web Worker non disponibile, si usa il normale setInterval (possibile rallentamento a scheda nascosta):',e);
+   __bgHeartbeatWorker=false; // false = tentato e fallito: non ritentare ad ogni chiamata successiva
+ }
+ return __bgHeartbeatWorker;
+}
+// Stessa interfaccia "pratica" di un vero intervalId (un valore truthy da passare poi a
+// clearHeartbeatInterval per fermarlo): il fire è cadenzato sul tempo reale trascorso
+// (Date.now()), non sul conteggio dei tick, così resta preciso anche se il worker stesso
+// accumula un piccolo ritardo sotto carico.
+function setHeartbeatInterval(fn,delayMs){
+ const worker=ensureBackgroundHeartbeat();
+ if(!worker)return setInterval(fn,delayMs); // fallback: vero setInterval del thread principale
+ let last=Date.now();
+ const listener=()=>{
+   const now=Date.now();
+   if(now-last>=delayMs){ last=now; fn(); }
+ };
+ __bgHeartbeatListeners.add(listener);
+ return {__isHeartbeatHandle:true,listener};
+}
+function clearHeartbeatInterval(handle){
+ if(handle&&handle.__isHeartbeatHandle)__bgHeartbeatListeners.delete(handle.listener);
+ else if(handle)clearInterval(handle); // era un vero intervalId (fallback senza worker)
+}
+// ===================================================================
 // KEEP-ALIVE SESSIONE REST: secondo la documentazione Capital.com, la sessione REST
 // (cst/X-SECURITY-TOKEN) resta valida solo 10 MINUTI di inattività — un limite SEPARATO da
 // quello della sessione WebSocket (che ha il suo ping ogni 5 minuti, vedi più sotto). Finché
@@ -11971,7 +12017,7 @@ function capitalApiFetch(url,options){
 let capitalSessionKeepAliveTimer=null;
 function startCapitalSessionKeepAlive(){
  if(capitalSessionKeepAliveTimer)return;
- capitalSessionKeepAliveTimer=setInterval(async()=>{
+ capitalSessionKeepAliveTimer=setHeartbeatInterval(async()=>{
    if(!liveModeActive||!capitalSessionTokens)return;
    try{
      const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
@@ -11983,7 +12029,7 @@ function startCapitalSessionKeepAlive(){
  },8*60*1000);
 }
 function stopCapitalSessionKeepAlive(){
- if(capitalSessionKeepAliveTimer){clearInterval(capitalSessionKeepAliveTimer);capitalSessionKeepAliveTimer=null;}
+ if(capitalSessionKeepAliveTimer){clearHeartbeatInterval(capitalSessionKeepAliveTimer);capitalSessionKeepAliveTimer=null;}
 }
 async function connectToCapitalCom(creds){
  const base=creds.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
@@ -12431,7 +12477,7 @@ async function fetchLatestPriceRest(epic){
 }
 function startLiveRefreshTimer(){
  if(liveRefreshTimer)return;
- liveRefreshTimer=setInterval(async ()=>{
+ liveRefreshTimer=setHeartbeatInterval(async ()=>{
    if(!liveModeActive)return;
    // Vedi commento su lastSeenCandleBucketStart più sopra: appena si entra in un NUOVO bucket
    // (nuova candela) rispetto all'ultimo giro, tagliamo subito la connessione e mettiamo il
@@ -12532,11 +12578,11 @@ function startLiveRefreshTimer(){
  },1000);
 }
 function stopLiveRefreshTimer(){
- if(liveRefreshTimer){clearInterval(liveRefreshTimer);liveRefreshTimer=null;}
+ if(liveRefreshTimer){clearHeartbeatInterval(liveRefreshTimer);liveRefreshTimer=null;}
  if(liveWsReconnectTimer){clearTimeout(liveWsReconnectTimer);liveWsReconnectTimer=null;}
 }
 function disconnectCapitalStream(){
- if(capitalWsPingTimer){clearInterval(capitalWsPingTimer);capitalWsPingTimer=null;}
+ if(capitalWsPingTimer){clearHeartbeatInterval(capitalWsPingTimer);capitalWsPingTimer=null;}
  if(capitalWs){
    try{capitalWs.onclose=null;capitalWs.onerror=null;capitalWs.close();}catch(e){}
    capitalWs=null;
@@ -12582,7 +12628,7 @@ function connectCapitalStream(epics){
    }));
    capitalWsSubscribed=new Set(epics);
    // La sessione WebSocket Capital.com scade dopo 10 minuti di inattività: un ping ogni 5 la tiene viva.
-   capitalWsPingTimer=setInterval(()=>{
+   capitalWsPingTimer=setHeartbeatInterval(()=>{
      if(!capitalSessionTokens||ws.readyState!==WebSocket.OPEN)return;
      ws.send(JSON.stringify({destination:'ping',correlationId:String(capitalWsCorrId++),
        cst:capitalSessionTokens.cst,securityToken:capitalSessionTokens.securityToken}));
@@ -12876,7 +12922,7 @@ async function pollBackgroundLiveSession(sessionKey){
 }
 function startBackgroundLiveMonitor(){
  if(backgroundLivePollTimer)return;
- backgroundLivePollTimer=setInterval(()=>{
+ backgroundLivePollTimer=setHeartbeatInterval(()=>{
    ['live','live_propfirm'].forEach(key=>{
      if(key===currentMode())return; // quella eventualmente attiva la segue già il motore normale
      pollBackgroundLiveSession(key).catch(e=>console.warn('Monitoraggio Live in background fallito ('+key+'):',e));
