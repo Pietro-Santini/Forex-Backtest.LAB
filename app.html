@@ -5764,40 +5764,38 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
    const yOpen=y(t.entry), yClose=y(t.exit);
    const openOnScreen=t.entry>=lo&&t.entry<=hi&&xOpen>=pad.l-1&&xOpen<=w-pad.r+1;
    const closeOnScreen=closeReached&&t.exit>=lo&&t.exit<=hi&&xClose>=pad.l-1&&xClose<=w-pad.r+1;
-   // Casella Target/Stop anche per il trade GIÀ CHIUSO (non solo mentre era aperto), come
-   // richiesto: resta SEMPRE visibile dopo la chiusura (non più solo in hover) — ma con le
-   // etichette "Target:"/"Stop:" nascoste (hidePills, non più utili a trade concluso) e SOLO
-   // la casella "Esito"+R:R resta come testo, sempre visibile (alwaysShowTooltip, nessuna
-   // "X" — un trade chiuso non si può "richiudere"). Larghezza FISSA dall'apertura alla
-   // candela di chiusura (fixedSpan) e senza maniglia (noHandle), dato che un trade concluso
-   // non è più modificabile.
-   if(closeReached && (t.sl!=null||t.tp!=null)){
+   const lineVisible=closeReached&&(openOnScreen||closeOnScreen);
+   // Hit-test per il click-to-select (multi-selezione) e per l'hover: registrato SOLO se la
+   // linea tratteggiata apertura->chiusura è davvero disegnata più sotto (altrimenti non c'è
+   // nulla su cui cliccare/passare col mouse).
+   let isHoveredNow=false;
+   if(lineVisible){
+     closedTradeHitSegments.push({tradeId:t.id,x1:xOpen,y1:yOpen,x2:xClose,y2:yClose});
+     if(hoverLocal)isHoveredNow=pointSegmentDist(hoverLocal.x,hoverLocal.y,xOpen,yOpen,xClose,yClose)<=CLOSED_TRADE_HIT_TOL;
+   }
+   const isSelected=selectedClosedTradeIds.has(t.id);
+   // CORRETTO su richiesta esplicita (prima era invertito rispetto alle posizioni aperte): la
+   // vera casella Target/Stop di un trade GIÀ CHIUSO ora compare SOLO se il trade è stato
+   // selezionato con un click (più trade insieme, multi-selezione) — MAI di default. Etichette
+   // prezzo incluse (nessun hidePills: da selezionato si vuole il dettaglio completo, come per
+   // una posizione aperta). Larghezza FISSA dall'apertura alla candela di chiusura (fixedSpan)
+   // e senza maniglia (noHandle), dato che un trade concluso non è più modificabile. Il testo
+   // Esito/R:R non passa più da qui: è gestito separatamente sotto, solo in hover.
+   if(isSelected && (t.sl!=null||t.tp!=null)){
      const span=Math.max(1,closeIdx-openIdx);
-     // R/R congelato sullo SL "di apertura" (t.rrSl), non su quello con cui si è chiuso.
-     const rrSl=t.rrSl??t.sl;
-     const risk=Math.abs(t.entry-(rrSl!=null?rrSl:t.entry));
-     const reward=Math.abs((t.tp!=null?t.tp:t.entry)-t.entry);
-     const rr=(rrSl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
      drawTpSlZoneBox(ctx,{
        ownerKey:'trade:'+t.id,originIdx:openIdx,entry:t.entry,sl:t.sl,tp:t.tp,
        lots:t.lots,assetKey:t.asset,stopProfit:isStopProfitLevel(t),
        pad,cw,n,start,w,y,
        fixedSpan:span,
-       noHandle:true,
-       hidePills:true,
-       alwaysShowTooltip:true,
-       tooltipAlign:'left',
-       tooltipLines:[
-         `Esito: ${t.result||'-'} ${fmtPctSigned(t.pct)}`,
-         `R/R: ${rr!=null?rr.toFixed(2):'—'}`
-       ]
+       noHandle:true
      });
    }
-   // Linea tratteggiata tra apertura e chiusura: disegnata solo se la chiusura è già stata
-   // raggiunta dal replay (closeReached) e almeno un'estremità è visibile, così il tratto
-   // resta coerente anche se un lato esce leggermente dal grafico e non punta mai verso un
-   // punto "futuro" non ancora mostrato.
-   if(closeReached&&(openOnScreen||closeOnScreen)){
+   // Linea tratteggiata tra apertura e chiusura: SEMPRE visibile (indipendentemente da hover
+   // o selezione) finché la chiusura è già stata raggiunta dal replay (closeReached) e almeno
+   // un'estremità è visibile — l'UNICA cosa che resta quando il trade non è né selezionato né
+   // sotto il mouse, come richiesto esplicitamente.
+   if(lineVisible){
      ctx.save();
      ctx.setLineDash([6,5]);
      ctx.strokeStyle=(t.pl>0)?TRADE_ARROW_BLUE:TRADE_ARROW_RED;
@@ -5815,6 +5813,20 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
    if(closeOnScreen){
      const priceWentDown=t.exit<t.entry;
      drawTradeArrow(ctx,xClose,yClose,priceWentDown?'up':'down',priceWentDown?TRADE_ARROW_BLUE:TRADE_ARROW_RED);
+   }
+   // Dati statistici (Esito + R:R) SOLO al passaggio del mouse sopra la linea/frecce di
+   // QUESTO trade — richiesto esplicitamente: non richiede selezione, e sparisce da solo non
+   // appena il mouse si allontana (a differenza della casella Target/Stop qui sopra, che
+   // invece resta finché non si deseleziona il trade con un click).
+   if(isHoveredNow){
+     const rrSl=t.rrSl??t.sl;
+     const risk=Math.abs(t.entry-(rrSl!=null?rrSl:t.entry));
+     const reward=Math.abs((t.tp!=null?t.tp:t.entry)-t.entry);
+     const rr=(rrSl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
+     drawZoneTooltip(ctx,xOpen,Math.min(yOpen,yClose),[
+       `Esito: ${t.result||'-'} ${fmtPctSigned(t.pct)}`,
+       `R/R: ${rr!=null?rr.toFixed(2):'—'}`
+     ],'#1a8f7a','left',false);
    }
  });
 }
@@ -5930,6 +5942,10 @@ function draw(){
  // pointerdown del canvas per sapere su quale casella TP-SL si è cliccato (vedi
  // zoneStatsOpenKey/zoneClickCandidateKey).
  zoneBoxHitRects=[];
+ // Ripopolato da drawClosedTradeMarkers() in questo stesso giro di disegno — usato dal
+ // pointerdown del canvas per sapere su quale trade GIÀ CHIUSO si è cliccato (vedi
+ // selectedClosedTradeIds/closedTradeClickCandidateId).
+ closedTradeHitSegments=[];
  const {n,start,dataStart,dataEnd}=getViewWindow();
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
  const pad={l:18,r:76,t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
@@ -7294,6 +7310,34 @@ let zoneBoxHitRects=[];
 // rilascio (pointerup) avviene senza un vero trascinamento — altrimenti si lascia che sia un
 // pan/zoom normale del grafico, esattamente come già succede cliccando in un punto vuoto.
 let zoneClickCandidateKey=null;
+// ===================== TRADE GIÀ CHIUSI: hover per le statistiche, click (multi-selezione) =====
+// per le caselle Target/Stop — CORRETTO su richiesta esplicita: il comportamento "click per
+// aprire, X per richiudere" era stato applicato per sbaglio alle posizioni APERTE invece che ai
+// trade già CHIUSI (che prima mostravano tutto sempre, senza possibilità di nascondere nulla).
+// Ora, per un trade chiuso, di default resta visibile SOLO la linea tratteggiata apertura->
+// chiusura (+ le due frecce): passandoci sopra col mouse compare il solo testo Esito/R:R
+// (transitorio, sparisce non appena ci si allontana), mentre CLICCANDOCI sopra si "seleziona"
+// il trade e ne compare la vera casella Target/Stop (con le rispettive etichette prezzo),
+// finché non lo si riclicca per deselezionarlo — più trade possono restare selezionati insieme
+// (multi-selezione), uno per ogni click, esattamente come richiesto.
+let selectedClosedTradeIds=new Set();
+// Segmenti apertura->chiusura di ogni trade chiuso disegnato in quest'ultimo draw() (per il
+// click-to-select) — azzerato e ripopolato ad ogni draw(), stesso schema di zoneBoxHitRects.
+let closedTradeHitSegments=[];
+// id "candidato" sotto il pointerdown iniziale: la selezione si attiva/disattiva SOLO se il
+// rilascio avviene senza un vero trascinamento (altrimenti è un pan normale del grafico).
+let closedTradeClickCandidateId=null;
+// Distanza minima punto-segmento: usata sia per il click-to-select sia per l'hover, così
+// un trade lungo/diagonale resta comunque facile da colpire lungo tutta la sua linea (non solo
+// vicino agli estremi).
+function pointSegmentDist(px,py,x1,y1,x2,y2){
+ const dx=x2-x1,dy=y2-y1,lenSq=dx*dx+dy*dy;
+ if(lenSq<1e-6)return Math.hypot(px-x1,py-y1);
+ let t=((px-x1)*dx+(py-y1)*dy)/lenSq;
+ t=Math.max(0,Math.min(1,t));
+ return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+const CLOSED_TRADE_HIT_TOL=7;
 function defaultZoneSpanCandles(){
  const vc=(typeof getVisibleCount==='function')?getVisibleCount():80;
  return Math.max(14,Math.round(vc*0.32));
@@ -9900,6 +9944,15 @@ chartEl.addEventListener('pointerdown',e=>{
    const hitBox=zoneBoxHitRects.find(r=>relXc>=r.xOrigin&&relXc<=r.xRight&&relYc>=r.yMin&&relYc<=r.yMax);
    zoneClickCandidateKey=hitBox?hitBox.ownerKey:null;
  }
+ // Stessa idea, per la linea tratteggiata di un trade GIÀ CHIUSO: un click su di essa
+ // seleziona/deseleziona quel trade (multi-selezione, vedi selectedClosedTradeIds), sempre
+ // solo se il rilascio avviene senza un vero trascinamento (vedi pointerup più sotto).
+ {
+   const rectC=chartEl.getBoundingClientRect();
+   const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
+   const hitTrade=closedTradeHitSegments.find(s=>pointSegmentDist(relXc,relYc,s.x1,s.y1,s.x2,s.y2)<=CLOSED_TRADE_HIT_TOL);
+   closedTradeClickCandidateId=hitTrade?hitTrade.tradeId:null;
+ }
  if(selectedDrawing)deselectDrawing();
  e.preventDefault();
  panDrag=true; panStartX=e.clientX; panStartY=e.clientY; panStartViewEnd=viewEnd; freezeViewIfNeeded(); panStartScale=currentDisplayScale(); panStartPriceLo=viewPriceLo; panStartPriceHi=viewPriceHi;
@@ -10176,6 +10229,19 @@ chartEl.addEventListener('pointerup',e=>{
    }
    zoneClickCandidateKey=null;
  }
+ // Stesso schema, per il click-to-select (multi-selezione) di un trade GIÀ CHIUSO: un vero
+ // click (non un trascinamento) sulla sua linea tratteggiata lo aggiunge/toglie da
+ // selectedClosedTradeIds — ricliccandolo si deseleziona, cliccandone altri restano tutti
+ // selezionati insieme, esattamente come richiesto.
+ if(closedTradeClickCandidateId!=null){
+   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
+   if(moved<4){
+     if(selectedClosedTradeIds.has(closedTradeClickCandidateId))selectedClosedTradeIds.delete(closedTradeClickCandidateId);
+     else selectedClosedTradeIds.add(closedTradeClickCandidateId);
+     draw();
+   }
+   closedTradeClickCandidateId=null;
+ }
  panDrag=false;
  chartEl.releasePointerCapture?.(e.pointerId);
 });
@@ -10186,6 +10252,7 @@ chartEl.addEventListener('pointercancel',e=>{
  shapeDrag=null;
  previewTradeLevel=null;
  zoneClickCandidateKey=null;
+ closedTradeClickCandidateId=null;
  if(touchDrawDrag){
    // Gesto di disegno-a-trascinamento interrotto (es. il sistema toglie il focus a metà
    // trascinamento): annulliamo il disegno in corso invece di crearlo a metà, così non
