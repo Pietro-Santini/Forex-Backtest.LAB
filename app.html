@@ -2905,9 +2905,24 @@ function zonedTimeToUtc(y,mo,d,h,mi,s,tz){
 function parseDateTime(value){
   if(!value) return NaN;
   let v=String(value).trim();
-  // MetaTrader format: YYYY.MM.DD HH:MM[:SS]
-  v=v.replace(/\./g,'-');
-  if(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(v)) v=v.replace(' ','T');
+  // BUG RISOLTO ("il punto di apertura di una posizione aperta in Live sembra spostarsi/
+  // sparire"): una stringa già in formato ISO 8601 (es. "2024-01-01T12:00:00.000Z", prodotta da
+  // new Date().toISOString() — le candele Live appena create da applyLivePriceToChart ad ogni
+  // nuovo minuto, o il closedAt di closeTradeInSession) contiene un punto nei millisecondi. La
+  // sostituzione qui sotto (pensata SOLO per il formato MetaTrader "YYYY.MM.DD", che non usa mai
+  // la "T") lo trasformava in un trattino ("...12:00:00-000Z"), rendendo la stringa illeggibile
+  // per Date.parse (tornava NaN). Una candela con data NaN sparisce da qualunque calcolo che
+  // richiede un timestamp valido — in particolare rowIndexContainingTime()/openReferenceTimeForPos()
+  // usati per posizionare il marcatore fisso di apertura: se una posizione veniva aperta proprio
+  // sulla candela "in formazione" del momento (sempre creata da applyLivePriceToChart, quindi
+  // sempre con questo problema in Live), il suo pos.startTime restava NaN e il marcatore non si
+  // ancorava mai correttamente. Il formato MetaTrader non usa mai la "T": la sostituzione va
+  // fatta SOLO se il valore non è già in formato ISO.
+  if(!v.includes('T')){
+    // MetaTrader format: YYYY.MM.DD HH:MM[:SS]
+    v=v.replace(/\./g,'-');
+    if(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(v)) v=v.replace(' ','T');
+  }
   // Se il valore porta già un fuso esplicito (Z o +hh:mm/-hh:mm) ci fidiamo di quello: sa già
   // dirci il vero istante UTC, non va reinterpretato come CSV_SOURCE_TZ.
   const m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(v);
