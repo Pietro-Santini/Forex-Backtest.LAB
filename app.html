@@ -6760,6 +6760,17 @@ function copySelectedDrawing(){
  clipboardDrawing={type:selectedDrawing.type,p1:{...selectedDrawing.p1},p2:{...selectedDrawing.p2},color:selectedDrawing.color,lineWidth:selectedDrawing.lineWidth,dashed:selectedDrawing.dashed,opacity:selectedDrawing.opacity,fillColor:selectedDrawing.fillColor,fillOpacity:selectedDrawing.fillOpacity,text:selectedDrawing.text||'',levels:selectedDrawing.levels?JSON.parse(JSON.stringify(selectedDrawing.levels)):undefined,opts:selectedDrawing.opts?{...selectedDrawing.opts}:undefined};
  $('status').textContent='Disegno copiato. Premi Ctrl+V per incollarlo.';
 }
+// Ctrl+X: come Ctrl+C ma rimuove subito l'originale dal grafico ("taglia") — richiesto insieme
+// a copia/incolla/annulla/ripristina, ma non esisteva ancora in nessuna forma (né qui né sulla
+// pagina principale): non era un problema solo della finestra separata/PIP, mancava proprio
+// l'azione stessa. Riusa copySelectedDrawing()+removeSelectedDrawing() per restare coerente con
+// gli appunti già usati da Ctrl+V.
+function cutSelectedDrawing(){
+ if(!selectedDrawing)return;
+ copySelectedDrawing();
+ removeSelectedDrawing();
+ $('status').textContent='Disegno tagliato. Premi Ctrl+V per incollarlo.';
+}
 // Ctrl+V: incolla il disegno copiato, spostato leggermente per non sovrapporlo
 // all'originale; incolla ripetutamente ogni volta più spostato, così anche più copie
 // consecutive restano distinguibili.
@@ -9082,6 +9093,10 @@ async function openFloatingChart(){
  window.addEventListener('resize',draw);
  floatingWin.addEventListener('resize',draw);
  floatingWin.addEventListener('keydown',handleChartArrowNav);
+ // Stesse scorciatoie da tastiera della pagina principale (Delete, Ctrl+C/X/V/Z/Y) anche qui:
+ // senza questa riga funzionavano SOLO nella pagina principale, mai nella finestra separata
+ // (vedi il commento su handleDrawingKeyboardShortcuts).
+ floatingWin.addEventListener('keydown',handleDrawingKeyboardShortcuts);
  enableManualResize(floatingWin);
  // pagehide scatta sia quando l'utente chiude la finestra separata manualmente, sia quando
  // richiamiamo noi floatingWin.close() dal pulsante "Rientra".
@@ -10293,8 +10308,24 @@ $('deleteAllDrawings').addEventListener('click',removeAllDrawings);
 $('drawColor').addEventListener('input',()=>{
  if(selectedDrawing){selectedDrawing.color=$('drawColor').value;draw();}
 });
-document.addEventListener('keydown',e=>{
- const tag=(document.activeElement&&document.activeElement.tagName||'').toLowerCase();
+// BUG RISOLTO ("in modalità PIP/finestra flottante ctrl+c/v/x/y e Delete non funzionano più"):
+// questo listener era attaccato SOLO a `document` (la pagina principale). Quando il grafico
+// viene staccato in una finestra separata (window.open, vedi openFloatingChart) i tasti premuti
+// lì arrivano al `document` di QUELLA finestra, un oggetto completamente diverso — mai a questo
+// listener, che quindi restava sordo. handleChartArrowNav (le frecce) aveva già lo stesso
+// problema ed era già registrato su entrambi i documenti: stessa soluzione qui, spostando la
+// logica in una funzione nominata così da poterla agganciare a entrambi (vedi più sotto e
+// openFloatingChart). Aggiunto anche Ctrl+X (taglia), richiesto insieme agli altri ma non
+// implementato in nessuna forma finora.
+function handleDrawingKeyboardShortcuts(e){
+ // e.target (non document.activeElement): stesso principio già usato da handleChartArrowNav
+ // qui sopra — document.activeElement, per come questa funzione è chiusa sulla pagina
+ // principale, punterebbe SEMPRE al documento principale anche quando l'evento arriva in realtà
+ // dalla finestra separata (un document diverso), con l'effetto paradossale di ignorare
+ // Ctrl+C/V/X/Z/Y/Delete lì ogni volta che (per puro caso) un campo input era a fuoco nella
+ // pagina principale rimasta in background. e.target è invece sempre l'elemento REALE che ha
+ // ricevuto l'evento, nel documento giusto.
+ const tag=(e.target&&e.target.tagName||'').toLowerCase();
  if(tag==='input'||tag==='select'||tag==='textarea')return;
  if(e.key==='Escape'){
    if(placingTradeLevel){placingTradeLevel=null;previewTradeLevel=null;placingTradeLevelDrag=null;updateTradeLevelArmUI();refreshTradeLevelUI();$('status').textContent='Posizionamento annullato.';draw();return;}
@@ -10305,6 +10336,10 @@ document.addEventListener('keydown',e=>{
  if((e.key==='Delete'||e.key==='Backspace')&&selectedDrawing){
    e.preventDefault();
    removeSelectedDrawing();
+ }
+ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='x'&&selectedDrawing){
+   e.preventDefault();
+   cutSelectedDrawing();
  }
  if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='c'&&selectedDrawing){
    e.preventDefault();
@@ -10324,7 +10359,8 @@ document.addEventListener('keydown',e=>{
    redoDrawing();
    return;
  }
-});
+}
+document.addEventListener('keydown',handleDrawingKeyboardShortcuts);
 
 window.onresize=()=>{ if(autoFitWidth)visibleCount=idealVisibleCount(); draw(); };
 
