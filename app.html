@@ -6757,8 +6757,8 @@ function clampPointToPlot(g,p){
 // formula usata per disegnarla in drawTpSlZoneBox() e per la sua maniglia in zoneHandleHit()):
 // serve a limitare il trascinamento delle linee SL/TP alla sola area della casella, non a
 // tutta la larghezza del grafico.
-function zoneBoxXRange(g,originIdx,ownerKey){
- const span=getZoneSpan(ownerKey);
+function zoneBoxXRange(g,originIdx,ownerKey,keepPaceIdx){
+ const span=effectiveZoneSpan(ownerKey,originIdx,keepPaceIdx);
  const xOrigin=g.xLocal(originIdx);
  const xRightRaw=g.xLocal(originIdx+span);
  const maxX=g.rect.width-g.pad.r-2;
@@ -6771,8 +6771,11 @@ function tradeLevelHit(clientX,clientY,activate){
  // In ORIZZONTALE il trascinamento parte solo da DENTRO la casella Target/Stop (o dal suo
  // bordo, con un margine di tolleranza): fuori da quell'area, anche se il mouse passa alla
  // stessa altezza (Y) della linea durante un pan del grafico, non deve agganciarla.
- const insideZoneBox=(originIdx,ownerKey)=>{
-   const {xOrigin,xRight}=zoneBoxXRange(g,originIdx,ownerKey);
+ // keepPaceIdx: solo le posizioni REALMENTE aperte (vedi 'pos:'+pos.id più sotto) allungano da
+ // sole la casella fino all'ultima candela — le bozze (draft:market/draft:pending) no, quindi
+ // per loro questo parametro resta omesso (nessun cambiamento di comportamento).
+ const insideZoneBox=(originIdx,ownerKey,keepPaceIdx)=>{
+   const {xOrigin,xRight}=zoneBoxXRange(g,originIdx,ownerKey,keepPaceIdx);
    return px>=xOrigin-tolerance && px<=xRight+tolerance;
  };
  // Trascinamento SL/TP: deve funzionare su OGNI posizione aperta di questo asset, non solo
@@ -6786,7 +6789,7 @@ function tradeLevelHit(clientX,clientY,activate){
    const ownPositionsForDrag=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
    for(const pos of ownPositionsForDrag){
      const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
-     if(openIdx==null || !insideZoneBox(openIdx,'pos:'+pos.id))continue;
+     if(openIdx==null || !insideZoneBox(openIdx,'pos:'+pos.id,idx))continue;
      const items=[
        Number.isFinite(pos.sl)?{type:'SL',price:pos.sl}:null,
        Number.isFinite(pos.tp)?{type:'TP',price:pos.tp}:null
@@ -7350,6 +7353,21 @@ function setZoneSpan(ownerKey,v){
  if(!Number.isFinite(v))return;
  zoneSpanOverrides[ownerKey]=Math.max(4,v);
 }
+// BUG RISOLTO ("con lo scorrimento automatico attivo, la maniglia per allargare le caselle
+// TP-SL si pianta e non si riesce più a trascinare"): la larghezza VISIVA di una casella di
+// posizione APERTA non è sempre lo `span` grezzo salvato in zoneSpanOverrides — se la casella
+// resta indietro rispetto all'ultima candela, drawTpSlZoneBox() la allunga automaticamente
+// fino a raggiungerla (vedi keepPaceIdx lì dentro). zoneHandleHit()/zoneBoxXRange() calcolavano
+// però la posizione della maniglia/il bordo cliccabile usando SOLO lo span grezzo: con lo
+// scorrimento automatico attivo la casella disegnata a schermo finiva quindi più a destra di
+// dove l'hit-test se l'aspettava, rendendo la maniglia (visivamente più a destra) impossibile
+// da agganciare. Centralizzata qui la STESSA identica formula usata da drawTpSlZoneBox, così i
+// tre punti (disegno, hit-test del bordo, hit-test della maniglia) non possono più disallinearsi.
+function effectiveZoneSpan(ownerKey,originIdx,keepPaceIdx){
+ let span=getZoneSpan(ownerKey);
+ if(Number.isFinite(keepPaceIdx)&&Number.isFinite(originIdx))span=Math.max(span,keepPaceIdx-originIdx);
+ return span;
+}
 function fmtPctSigned(v){
  if(!Number.isFinite(v))return '—';
  const s=v>=0?'+':'';
@@ -7458,8 +7476,7 @@ function drawTpSlZoneBox(ctx,opts){
  // MINIMA: se la candela corrente (keepPaceIdx) è già oltre quel punto, la casella si
  // allunga automaticamente fino a raggiungerla, ad ogni ridisegno — mai il contrario (non si
  // restringe mai sotto la scelta esplicita dell'utente).
- let span=Number.isFinite(fixedSpan)?Math.max(1,fixedSpan):getZoneSpan(ownerKey);
- if(!Number.isFinite(fixedSpan) && Number.isFinite(keepPaceIdx))span=Math.max(span,keepPaceIdx-originIdx);
+ let span=Number.isFinite(fixedSpan)?Math.max(1,fixedSpan):effectiveZoneSpan(ownerKey,originIdx,keepPaceIdx);
  const xOrigin=pad.l+(originIdx-start+.5)*perCandle;
  const xRightRaw=xOrigin+span*perCandle;
  const xRight=Math.max(xOrigin+30,Math.min(xRightRaw,w-pad.r-2));
@@ -7569,7 +7586,10 @@ function currentZoneBoxSpecs(){
    ownPositions.forEach(pos=>{
      if(pos.sl!=null||pos.tp!=null){
        const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
-       if(openIdx!=null)specs.push({ownerKey:'pos:'+pos.id,originIdx:openIdx,entry:pos.entry,sl:pos.sl,tp:pos.tp});
+       // keepPaceIdx:idx — stessa identica ragione di drawTpSlZoneBox(): la casella di una
+       // posizione aperta si allunga da sola fino all'ultima candela, quindi la sua maniglia va
+       // cercata (e trascinata a partire) da lì, non dallo span "grezzo" salvato.
+       if(openIdx!=null)specs.push({ownerKey:'pos:'+pos.id,originIdx:openIdx,entry:pos.entry,sl:pos.sl,tp:pos.tp,keepPaceIdx:idx});
      }
    });
  }
@@ -7591,8 +7611,12 @@ function currentZoneBoxSpecs(){
  return specs;
 }
 // Individua se il punto (clientX,clientY) cade sul bordo destro trascinabile di una delle
-// caselle Target/Stop correnti (tolleranza generosa, comoda anche su touch): restituisce la
-// ownerKey della casella colpita, o null.
+// caselle Target/Stop correnti (tolleranza generosa, comoda anche su touch): restituisce
+// {ownerKey,effectiveSpan} della casella colpita, o null. effectiveSpan (lo span REALMENTE
+// disegnato a schermo in questo momento, non quello "grezzo" salvato — vedi effectiveZoneSpan)
+// va usato per inizializzare il trascinamento (zoneWidthDrag.startSpan): partire invece dallo
+// span grezzo farebbe "scattare" la casella indietro non appena si inizia a trascinare, con lo
+// scorrimento automatico attivo.
 function zoneHandleHit(clientX,clientY){
  const g=chartGeometry(); if(!g)return null;
  const specs=currentZoneBoxSpecs();
@@ -7600,7 +7624,7 @@ function zoneHandleHit(clientX,clientY){
  const relX=clientX-g.rect.left, relY=clientY-g.rect.top;
  const tol=12;
  for(const spec of specs){
-   const span=getZoneSpan(spec.ownerKey);
+   const span=effectiveZoneSpan(spec.ownerKey,spec.originIdx,spec.keepPaceIdx);
    const xOrigin=g.xLocal(spec.originIdx);
    const xRightRaw=g.xLocal(spec.originIdx+span);
    const maxX=g.rect.width-g.pad.r-2;
@@ -7608,7 +7632,7 @@ function zoneHandleHit(clientX,clientY){
    const yEntry=g.y(spec.entry);
    // Un solo punto di trascinamento, al confine tra Target e Stop (l'altezza dell'entrata),
    // coerente con l'unica maniglia ora disegnata da drawTpSlZoneBox.
-   if(Math.abs(relX-xRight)<=tol && Math.abs(relY-yEntry)<=tol)return spec.ownerKey;
+   if(Math.abs(relX-xRight)<=tol && Math.abs(relY-yEntry)<=tol)return {ownerKey:spec.ownerKey,effectiveSpan:span};
  }
  return null;
 }
@@ -9841,7 +9865,7 @@ chartEl.addEventListener('pointerdown',e=>{
     if(zoneHitT){
       e.preventDefault();
       setChartTouchAction(true);
-      zoneWidthDrag={ownerKey:zoneHitT,startX:e.clientX,startSpan:getZoneSpan(zoneHitT)};
+      zoneWidthDrag={ownerKey:zoneHitT.ownerKey,startX:e.clientX,startSpan:zoneHitT.effectiveSpan};
       chartEl.setPointerCapture?.(e.pointerId);
       $('status').textContent='Trascina per allargare/restringere le caselle Target/Stop.';
       return;
@@ -9904,7 +9928,7 @@ chartEl.addEventListener('pointerdown',e=>{
  const zoneHitM=zoneHandleHit(e.clientX,e.clientY);
  if(zoneHitM){
    e.preventDefault();
-   zoneWidthDrag={ownerKey:zoneHitM,startX:e.clientX,startSpan:getZoneSpan(zoneHitM)};
+   zoneWidthDrag={ownerKey:zoneHitM.ownerKey,startX:e.clientX,startSpan:zoneHitM.effectiveSpan};
    chartEl.setPointerCapture?.(e.pointerId);
    $('status').textContent='Trascina per allargare/restringere le caselle Target/Stop.';
    return;
