@@ -5718,12 +5718,45 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
  });
 }
 
-// RICHIESTO ESPLICITAMENTE: rimossa drawOpenTradeProgress() (la linea/freccia "viva" che
-// seguiva il prezzo corrente per un trade ancora aperto, stile TradingView) — veniva scambiata
-// per il punto di apertura che "avanza" ad ogni candela, dato che riusava la stessa icona a
-// freccia di drawTradeArrow(). Ora, mentre una posizione resta aperta, l'unico marcatore
-// disegnato è quello fisso sulla candela/prezzo di apertura: nulla si muove più finché il
-// trade non chiude davvero.
+// RIPRISTINATA su richiesta esplicita (era già stata specificata in una conversazione
+// precedente, con tanto di screenshot TradingView di riferimento): questa funzione era stata
+// tolta per errore, scambiandola per la causa del bug "il punto di apertura avanza" — la vera
+// causa era invece un problema di parsing delle date delle candele Live (vedi parseDateTime),
+// ora corretto altrove. La funzione resta intenzionale: linea tratteggiata dalla candela di
+// apertura fino al prezzo/candela ATTUALE, con una freccia in punta colorata in base al P&L
+// flottante (blu se in guadagno, rossa se in perdita — per un BUY, prezzo sceso sotto
+// l'apertura = rosso, e viceversa per un SELL), esattamente come lo strumento posizione di
+// TradingView. Il marcatore FISSO sulla candela di apertura (disegnato altrove, sempre presente)
+// non si tocca: resta sempre fermo, anche a trade chiuso (dove subentra drawClosedTradeMarkers,
+// che lascia visibili sia la freccia di apertura sia quella di chiusura).
+function drawOpenTradeProgress(ctx,pos,y,lo,hi,pad,cw,n,start,w){
+ if(!rows.length||!rows[idx])return;
+ const openTime=openReferenceTimeForPos(pos);
+ const openIdx=rowIndexContainingTime(openTime);
+ if(openIdx==null||openIdx>idx)return;
+ const xForIndex=ri=>pad.l+(ri-start+.5)*cw/n;
+ const xOpen=xForIndex(openIdx), xNow=xForIndex(idx);
+ const price=currentPrice();
+ if(!Number.isFinite(price))return;
+ const yOpen=y(pos.entry), yNow=y(price);
+ const openOnScreen=pos.entry>=lo&&pos.entry<=hi&&xOpen>=pad.l-1&&xOpen<=w-pad.r+1;
+ const nowOnScreen=price>=lo&&price<=hi&&xNow>=pad.l-1&&xNow<=w-pad.r+1;
+ if(!openOnScreen&&!nowOnScreen)return;
+ const inProfit=calculateForexPL(pos.side,pos.entry,price,pos.lots||1)>=0;
+ ctx.save();
+ ctx.setLineDash([6,5]);
+ ctx.strokeStyle=inProfit?TRADE_ARROW_BLUE:TRADE_ARROW_RED;
+ ctx.lineWidth=1.4;
+ ctx.globalAlpha=0.85;
+ ctx.beginPath();ctx.moveTo(xOpen,yOpen);ctx.lineTo(xNow,yNow);ctx.stroke();
+ ctx.setLineDash([]);
+ ctx.globalAlpha=1;
+ ctx.restore();
+ if(nowOnScreen){
+   const priceWentDown=price<pos.entry;
+   drawTradeArrow(ctx,xNow,yNow,priceWentDown?'up':'down',inProfit?TRADE_ARROW_BLUE:TRADE_ARROW_RED);
+ }
+}
 // Rettangolo di evidenziazione dell'operazione scelta con "Vai a grafico" (Trade Journal):
 // copre l'intera altezza del grafico dall'apertura alla chiusura del trade, con una casella
 // in alto che riepiloga durata, pip e rapporto rischio/rendimento.
@@ -6072,11 +6105,11 @@ function draw(){
          `Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`
        ]
      });
-     // RICHIESTO ESPLICITAMENTE: rimossa la linea/freccia che seguiva il prezzo attuale
-     // (drawOpenTradeProgress, stile TradingView) — veniva scambiata per il punto di apertura
-     // che "avanza" ad ogni candela, perché usava la stessa icona a freccia. Ora, finché la
-     // posizione resta aperta, l'unico marcatore mostrato è quello fisso sulla candela/prezzo
-     // di apertura (disegnato più sopra): non si muove più nulla fino alla chiusura del trade.
+     // Linea tratteggiata con freccia che segue il prezzo attuale, come su TradingView: avanza
+     // candela per candela dall'apertura fino ad ORA, e si ferma da sola quando il trade chiude
+     // (a quel punto subentra la versione "storica" in drawClosedTradeMarkers). RIPRISTINATA:
+     // funzionalità intenzionale, non il bug che sembrava — vedi nota su drawOpenTradeProgress().
+     drawOpenTradeProgress(ctx,pos,y,lo,hi,pad,cw,n,start,w);
    }
  });
  // Frecce di apertura/chiusura + linea tratteggiata per ogni trade già CHIUSO (storico),
