@@ -947,7 +947,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 <div class="cards">
  <div class="panel"><div class="label">Margine libero</div><div id="mMargin" class="value">—</div></div>
  <div class="panel"><div class="label">Ultimo trade chiuso</div><div id="mLast" class="value">—</div></div>
- <div class="panel"><div class="label">Capitale</div><div id="mCapital" class="value">€10.000</div></div>
+ <div class="panel"><div class="label">Capitale</div><div id="mCapital" class="value" title="Capitale + P/L flottante delle posizioni attualmente aperte, aggiornato in tempo reale (come l'Equity in MT5) — non solo il saldo dei trade già chiusi.">€10.000</div></div>
  <div class="panel"><div class="label">P/L</div><div id="mPL" class="value">€0</div></div>
  <div class="panel"><div class="label">Win rate</div><div id="mWR" class="value">—</div></div>
  <div class="panel"><div class="label">Loss rate</div><div id="mLR" class="value">—</div></div>
@@ -3664,6 +3664,20 @@ function isStopProfitLevel(pos){
  if(!pos || !Number.isFinite(pos.sl) || !Number.isFinite(pos.entry))return false;
  return pos.side==='BUY' ? pos.sl>=pos.entry : pos.sl<=pos.entry;
 }
+// Etichetta precisa da mostrare nel Trade Journal quando una posizione si chiude perché il suo
+// Stop Loss è stato colpito (reason 'SL', simulato o reale): se quello Stop era a pareggio o
+// oltre, "SL" è fuorviante (non è stata una perdita) — distinguiamo:
+//  - "BE" quando lo SL attuale coincide ancora con quello impostato dal pulsante BE (pos.beMarkerSl,
+//    salvato da applyBreakevenToPosition/applyBreakevenToMt5TicketDirect nel momento in cui è stato
+//    premuto) — è scattato esattamente al pareggio;
+//  - "SP" (Stop Profit) quando è comunque a pareggio o oltre ma diverso dal marcatore BE (spostato
+//    più in profitto a mano dopo il BE, o portato in profitto senza mai passare dal pulsante BE).
+// Qualunque altro motivo di chiusura (TP, MANUAL, STOP OUT, EA, MARGIN CALL...) resta invariato.
+function closeResultLabel(reason,pos){
+ if(reason!=='SL'||!isStopProfitLevel(pos))return reason;
+ if(Number.isFinite(pos&&pos.beMarkerSl)&&Math.abs(pos.beMarkerSl-pos.sl)<1e-9)return 'BE';
+ return 'SP';
+}
 function update(){
  // STEP 2: controllo delle regole Prop Firm ad OGNI tick del grafico (update() viene già
  // chiamata da tutti i punti richiesti: avanzamento replay storico, tick Live, apertura e
@@ -3682,12 +3696,22 @@ function update(){
  // Journal qui sotto invece mostra sempre TUTTO lo storico, anche quello precedente al reset.
  const st=statsTrades();
  const base=num($('capital').value)||10000, pl=st.reduce((s,t)=>s+t.pl,0), cap=base+pl;
+ // BUG RISOLTO ("il capitale si aggiorna solo alla chiusura di un trade, non in tempo reale con
+ // posizioni aperte"): "cap" sopra è il saldo REALIZZATO (base + soli trade già chiusi) — utile
+ // per le statistiche (winrate, drawdown sull'equity curve dei trade chiusi, ecc.) ma non è ciò
+ // che un trader si aspetta leggendo "Capitale" mentre ha posizioni aperte: su MT5 quel numero è
+ // l'Equity, che include il P/L FLOTTANTE di ogni posizione aperta e si muove tick per tick.
+ // equityNow() (= baseCapital()+closedPL()+floatingPL(), già usata per il Margine libero qui
+ // sotto) è esattamente questo: la riusiamo per mostrare un capitale davvero live.
+ const capLive=equityNow();
  const wins=st.filter(t=>t.pl>0), losses=st.filter(t=>t.pl<0), gp=wins.reduce((s,t)=>s+t.pl,0), gl=-losses.reduce((s,t)=>s+t.pl,0);
  let peak=base,dd=0; equity.forEach(e=>{peak=Math.max(peak,e);dd=Math.max(dd,(peak-e)/peak*100)});
  const last=st.length?st[st.length-1]:null;
  $('mLast').textContent=last?((last.pl>=0?'+':'')+euro(last.pl)):'—';
  $('mLast').className='value '+(last?(last.pl>=0?'liveProfit':'liveLoss'):'');
- $('mCapital').textContent=euro(cap);$('mPL').textContent=euro(pl);
+ $('mCapital').textContent=euro(capLive);
+ $('mCapital').className='value '+(capLive>=base?'liveProfit':'liveLoss');
+ $('mPL').textContent=euro(pl);
  $('mWR').textContent=st.length?(wins.length/st.length*100).toFixed(1)+'%':'—';
  $('mLR').textContent=st.length?(losses.length/st.length*100).toFixed(1)+'%':'—';
  const pctTotal=base?(pl/base*100):0;
@@ -7980,7 +8004,7 @@ function evaluate(){
      sl=slOk && r.high>=pos.sl;
      tp=tpOk && r.low<=pos.tp;
    }
-   if(sl||tp){const result=sl?'SL':'TP';closeTrade(result,sl?pos.sl:pos.tp,pos);$('status').textContent=`Trade chiuso a ${result}.`;}
+   if(sl||tp){const result=sl?closeResultLabel('SL',pos):'TP';closeTrade(result,sl?pos.sl:pos.tp,pos);$('status').textContent=`Trade chiuso a ${result}.`;}
  });
  checkMarginCall();
 }
@@ -8336,6 +8360,7 @@ function applyBreakevenToPosition(pos){
  const beSl=computeBreakevenSl(pos.entry,pos.side,spread);
  if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
  pos.sl=beSl;
+ pos.beMarkerSl=beSl; // ricordato per il Trade Journal: se scatta ancora qui, il risultato è "BE" e non un generico "SL"
  if(active===pos){ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }
  draw();update();
  $('status').textContent=pos.mt5Ticket!=null
@@ -8360,6 +8385,14 @@ async function applyBreakevenToMt5TicketDirect(ticket){
  });
  if(result.ok){
    $('status').textContent=`✅ Stop Loss di ${live.symbol} (ticket ${live.ticket}) spostato a pareggio su MT5 (${fmtPrice(beSl)}).`;
+   // BUG RISOLTO: questo pulsante "BE" (tabella dedicata "🖥️ Posizioni MT5", ticket non
+   // necessariamente passato da un oggetto pos locale) parlava SOLO col bridge — la stessa
+   // posizione, se già adottata anche in positions[] (tabella unificata "Posizioni aperte",
+   // sempre il caso dopo il primo giro di polling), restava con lo SL vecchio finché non
+   // arrivava un altro evento a toccarlo: le due tabelle mostravano SL diversi per lo stesso
+   // ticket, e il Journal non poteva riconoscere questa chiusura come "BE" (vedi closeResultLabel).
+   const trackedPos=positions.find(p=>String(p.mt5Ticket)===String(live.ticket));
+   if(trackedPos){ trackedPos.sl=beSl; trackedPos.beMarkerSl=beSl; draw(); update(); }
  }else{
    $('status').textContent='⚠️ Spostamento a pareggio non riuscito: '+result.message;
  }
@@ -10489,17 +10522,45 @@ async function fetchMt5Positions(){
      // qui: una posizione reale rimasta tracciata in un'altra sessione (mode) verrà riconciliata
      // quando si torna su quella sessione.
      const newTickets=new Set(result.data.map(p=>String(p.ticket)));
-     const justClosed=positions.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)) && !(p.mt5AddedAt!=null && p.mt5AddedAt>=fetchStartedAt));
-     for(const p of justClosed){
+     // BUG RISOLTO ("trade fantasma nel Journal: chiuso con motivo EA, Uscita=Entrata, P/L
+     // 0.00, mentre su MT5 la posizione era ancora regolarmente aperta"): un ticket tracciato
+     // che risultava assente da QUESTA SOLA fotografia veniva giornalizzato subito come chiuso
+     // — ma un singolo giro di polling sfortunato (es. mt5.positions_get() col terminale che ha
+     // un intoppo momentaneo — vedi il fix lato bridge su /positions) bastava a far sembrare
+     // "chiuse" tutte le posizioni reali tracciate in un colpo solo. Ora un ticket assente viene
+     // solo "segnato sospetto" al primo giro (mt5MissingSince) — si considera chiusura VERA solo
+     // se manca anche al giro SUCCESSIVO (~2s dopo, doppia conferma), e comunque solo se anche
+     // /deal_reason conferma un deal di chiusura reale (vedi stillOpen più sotto: seconda difesa,
+     // lato bridge, per lo stesso identico problema).
+     const justConfirmedClosed=[];
+     for(const p of positions){
+       if(p.mt5Ticket==null)continue;
+       if(newTickets.has(String(p.mt5Ticket))){
+         p.mt5MissingSince=null; // ricomparsa: falso allarme, il sospetto si cancella
+         continue;
+       }
+       if(p.mt5AddedAt!=null && p.mt5AddedAt>=fetchStartedAt)continue; // adottata dopo l'inizio di QUESTA richiesta: si giudica al giro dopo
+       if(p.mt5MissingSince==null){
+         p.mt5MissingSince=fetchStartedAt; // primo giro in cui manca: solo sospetta, non ancora chiusa
+       }else{
+         justConfirmedClosed.push(p); // mancava già anche al giro precedente: chiusura confermata
+       }
+     }
+     for(const p of justConfirmedClosed){
        const lastKnown=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
        let price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(currentPrice()??p.entry);
        let reason='MT5'; // ripiego se /deal_reason non risponde o non trova nulla
        const dr=await fetchMt5WithTimeout('/deal_reason?ticket='+p.mt5Ticket,{method:'GET'},8000);
        if(dr.ok && dr.data){
+         // Il bridge ha trovato in storico SOLO il deal di apertura (nessuna chiusura reale):
+         // nonostante sia mancata due volte di fila, su MT5 non risulta affatto chiusa — non la
+         // giornalizziamo, resta tracciata e si ripresenterà da sola in newTickets non appena la
+         // fotografia torna normale.
+         if(dr.data.stillOpen){ p.mt5MissingSince=null; continue; }
          if(dr.data.reason)reason=dr.data.reason;
          if(Number.isFinite(Number(dr.data.price)))price=Number(dr.data.price);
        }
-       closeTrade(reason,price,p);
+       closeTrade(closeResultLabel(reason,p),price,p);
      }
      // Posizioni reali aperte DIRETTAMENTE nel terminale MT5 (a mano, non tramite i pulsanti
      // BUY/SELL dell'app): richiesto esplicitamente che non restino visibili SOLO nella tabella
@@ -10553,13 +10614,19 @@ async function fetchMt5Positions(){
          const pairedSnap=sessionByMode[pairedMode];
          if(!Array.isArray(pairedSnap.positions))pairedSnap.positions=[];
          toMove.forEach(rp=>{
+           // FIX: prima si usava Date.now() (l'istante in cui il polling se ne accorge) come
+           // orario/candela di apertura — sbagliato per una posizione aperta DIRETTAMENTE su
+           // MT5, il cui vero istante di apertura è rp.time (epoch secondi, dato reale dal
+           // broker). Usarlo qui allinea l'apertura disegnata a grafico con quella vera su MT5.
+           const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now();
+           const realOpenIdx=rowIndexContainingTime(realOpenMs);
            const pos={
              id:Date.now()+Math.random(),
              asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
              sl:rp.sl!=null?Number(rp.sl):null,tp:rp.tp!=null?Number(rp.tp):null,
              origin:'MARKET',
              lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
-             start:0,startTime:Date.now(),openTF:currentTF,
+             start:realOpenIdx!=null?realOpenIdx:0,startTime:realOpenMs,openTF:currentTF,
              marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
            };
            pos.rrSl=pos.sl;
@@ -10571,13 +10638,20 @@ async function fetchMt5Positions(){
        }
      }
      untrackedRealPositions.forEach(rp=>{
+       // FIX (stesso motivo del blocco Prop Firm sopra): start/startTime devono riflettere
+       // l'orario VERO di apertura su MT5 (rp.time), non il momento in cui l'app se ne accorge
+       // (Date.now()) né la candela di replay attualmente a schermo (rows[idx]) — altrimenti la
+       // freccia/casella TP-SL viene disegnata sulla candela sbagliata, con relativo prezzo di
+       // apertura mostrato fuori posto anche se pos.entry è già corretto.
+       const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now();
+       const realOpenIdx=rowIndexContainingTime(realOpenMs);
        const pos={
          id:Date.now()+Math.random(),
          asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
          sl:rp.sl!=null?Number(rp.sl):null,tp:rp.tp!=null?Number(rp.tp):null,
          origin:'MARKET',
          lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
-         start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
+         start:realOpenIdx!=null?realOpenIdx:(rows[idx]?idx:0),startTime:realOpenMs,openTF:currentTF,
          marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
        };
        pos.rrSl=pos.sl;
