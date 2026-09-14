@@ -1182,7 +1182,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <option value="red_white">⬜🟥 Rosso/Bianco</option>
        <option value="blue_white">⬜🟦 Blu/Bianco</option>
        <option value="black_white">⬜⬛ Bianco/Nero</option>
+       <option value="custom">🎨 Personalizzato</option>
      </select>
+     <!-- RICHIESTO ESPLICITAMENTE: oltre ai pattern già pronti sopra, l'utente deve poter
+          scegliere liberamente il colore delle candele, con due selettori separati (una
+          "sezione" per il BUY/rialzista, una per il SELL/ribassista) — visibili solo quando
+          si sceglie "🎨 Personalizzato" sopra. Salvati/ripristinati automaticamente come ogni
+          altro campo di sessione (vedi SESSION_CONFIG_FIELD_IDS). -->
+     <span id="candleCustomColors" style="display:none;align-items:center;gap:6px">
+       <span class="hint" style="margin:0" title="Colore candele rialziste (BUY: chiusura ≥ apertura)">📈</span>
+       <input id="candleColorBuy" type="color" class="colorPick" value="#55c28b" title="Colore candele rialziste (BUY)">
+       <span class="hint" style="margin:0" title="Colore candele ribassiste (SELL: chiusura < apertura)">📉</span>
+       <input id="candleColorSell" type="color" class="colorPick" value="#e05b64" title="Colore candele ribassiste (SELL)">
+     </span>
      <button id="togglePositionsBtn" class="chartCornerBtn active" title="Mostra/nascondi sul grafico le posizioni (linee entry/SL/TP aperte + frecce di apertura/chiusura delle posizioni chiuse)">
        <svg viewBox="0 0 24 24" width="18" height="18">
          <rect x="5.4" y="12" width="3.2" height="6" fill="#3b82f6"/>
@@ -1812,7 +1824,26 @@ const CANDLE_THEMES={
  black_white:{up:'#ffffff',down:'#0b0f14'}
 };
 let candleTheme='green_red';
-function currentCandleColors(){ return CANDLE_THEMES[candleTheme]||CANDLE_THEMES.green_red; }
+// RICHIESTO ESPLICITAMENTE: oltre ai pattern predefiniti sopra, l'utente può scegliere
+// liberamente il colore delle candele BUY (rialziste) e SELL (ribassiste) separatamente,
+// selezionando il tema "custom" (select #candleTheme) — i due colori vivono negli input
+// #candleColorBuy/#candleColorSell, salvati/ripristinati come ogni altro campo di sessione
+// (vedi SESSION_CONFIG_FIELD_IDS), così restano anche per le prossime posizioni/sessioni.
+function currentCandleColors(){
+ if(candleTheme==='custom'){
+   return {
+     up:$('candleColorBuy')?.value||CANDLE_THEMES.green_red.up,
+     down:$('candleColorSell')?.value||CANDLE_THEMES.green_red.down
+   };
+ }
+ return CANDLE_THEMES[candleTheme]||CANDLE_THEMES.green_red;
+}
+// Mostra i due selettori colore SOLO quando il tema scelto è "Personalizzato": per i preset
+// già pronti restano nascosti, come prima.
+function updateCandleCustomColorsVisibility(){
+ const wrap=$('candleCustomColors');
+ if(wrap)wrap.style.display=(candleTheme==='custom')?'inline-flex':'none';
+}
 // ===================== LIVE MULTI-ASSET (streaming Capital.com) =====================
 // Ultimo prezzo (bid) ricevuto via WebSocket per OGNI asset con streaming attivo (asset a
 // grafico + tutti quelli con una posizione aperta o un ordine pendente in Live), non solo
@@ -1963,7 +1994,7 @@ async function idbClearAll(){
 // finché non è l'utente stesso a valorizzarli (pulsanti SL/TP sul grafico, apertura di una
 // posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
 // ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
-const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
+const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
 function collectLightSessionState(){
  return {
    version:SESSION_VERSION,
@@ -2166,8 +2197,13 @@ function applyLightSessionState(state){
    propFirmChallengeInitialCapital=null; propFirmViolation=null; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
    propFirmChallengeCreatedAt=null;
  }
- candleTheme=(state.fields&&CANDLE_THEMES[state.fields.candleTheme])?state.fields.candleTheme:'green_red';
+ // "custom" non è una chiave di CANDLE_THEMES (i suoi colori vivono negli input
+ // candleColorBuy/candleColorSell, ripristinati a parte dal loop SESSION_CONFIG_FIELD_IDS):
+ // va quindi accettato esplicitamente qui, non solo i temi predefiniti.
+ const savedTheme=state.fields&&state.fields.candleTheme;
+ candleTheme=(savedTheme==='custom'||(savedTheme&&CANDLE_THEMES[savedTheme]))?savedTheme:'green_red';
  if($('candleTheme'))$('candleTheme').value=candleTheme;
+ updateCandleCustomColorsVisibility();
  // Solo lette qui, NON riconnesse subito: il popup "Riconnetti a MT5?" in initSession() decide
  // se proporre la riconnessione automatica (richiede comunque un click, come da API browser per
  // l'accesso alla cartella delle credenziali — vedi getMt5CredsDirHandle).
@@ -3735,6 +3771,21 @@ function closeResultLabel(reason,pos){
  if(Number.isFinite(pos&&pos.beMarkerSl)&&Math.abs(pos.beMarkerSl-pos.sl)<1e-9)return 'BE';
  return 'SP';
 }
+// Raccoglie un campo (positions/pendingOrders) di TUTTE E 4 le sessioni simulate insieme (non
+// solo quella attiva ora) — usata sia da update() per le tabelle "Posizioni aperte"/"Ordini
+// pendenti" sia da draw() per mostrare a grafico gli ordini pendenti di OGNI sessione, non solo
+// di quella a schermo (richiesto esplicitamente per il task 31: un ordine pendente creato in
+// un'altra sessione o direttamente su MT5 deve restare sempre visibile a grafico). Era prima
+// definita SOLO dentro update() (quindi invisibile a draw()): promossa qui a livello globale
+// perché ora serve a entrambe.
+function collectAcrossSessions(field){
+ const out=[];
+ ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
+   const list=(key===currentMode())?(field==='positions'?positions:pendingOrders):(((sessionByMode[key]||{})[field])||[]);
+   list.forEach(item=>out.push({item,sessionKey:key}));
+ });
+ return out;
+}
 function update(){
  // STEP 2: controllo delle regole Prop Firm ad OGNI tick del grafico (update() viene già
  // chiamata da tutti i punti richiesti: avanzamento replay storico, tick Live, apertura e
@@ -3805,14 +3856,6 @@ function update(){
  // riferimento e nessun P/L (a schermo si sa che è "in pausa", non un dato sbagliato).
  const price=currentPrice();
  const SESSION_LABELS_SHORT={backtest:'📼 Storico',live:'🔴 Live',backtest_propfirm:'🛡️📼 Storico PF',live_propfirm:'🛡️🔴 Live PF'};
- function collectAcrossSessions(field){
-   const out=[];
-   ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
-     const list=(key===currentMode())?(field==='positions'?positions:pendingOrders):(((sessionByMode[key]||{})[field])||[]);
-     list.forEach(item=>out.push({item,sessionKey:key}));
-   });
-   return out;
- }
  const allPosRows=collectAcrossSessions('positions');
  // Tabella dedicata "🖥️ Posizioni MT5 (conto reale collegato)": mostra SEMPRE tutte le
  // posizioni realmente aperte sul conto MT5 collegato ora (mt5RealPositions, letta dal bridge
@@ -5658,39 +5701,33 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
    const openOnScreen=t.entry>=lo&&t.entry<=hi&&xOpen>=pad.l-1&&xOpen<=w-pad.r+1;
    const closeOnScreen=closeReached&&t.exit>=lo&&t.exit<=hi&&xClose>=pad.l-1&&xClose<=w-pad.r+1;
    // Casella Target/Stop anche per il trade GIÀ CHIUSO (non solo mentre era aperto), come
-   // richiesto: resta disponibile dopo la chiusura, ma NASCOSTA di default per pulizia e
-   // ordine del grafico — compare solo passandoci sopra col mouse (hover) o tenendoci il
-   // dito sopra su tablet (touchHoverPoint), esattamente come un tooltip. Larghezza FISSA
-   // dall'apertura alla candela di chiusura (fixedSpan) e senza maniglia (noHandle), dato
-   // che un trade concluso non è più modificabile.
-   if(closeReached && (t.sl!=null||t.tp!=null) && hoverLocal){
-     const perCandle=cw/n;
-     const boxOriginX=pad.l+(openIdx-start+.5)*perCandle;
+   // richiesto: resta SEMPRE visibile dopo la chiusura (non più solo in hover) — ma con le
+   // etichette "Target:"/"Stop:" nascoste (hidePills, non più utili a trade concluso) e SOLO
+   // la casella "Esito"+R:R resta come testo, sempre visibile (alwaysShowTooltip, nessuna
+   // "X" — un trade chiuso non si può "richiudere"). Larghezza FISSA dall'apertura alla
+   // candela di chiusura (fixedSpan) e senza maniglia (noHandle), dato che un trade concluso
+   // non è più modificabile.
+   if(closeReached && (t.sl!=null||t.tp!=null)){
      const span=Math.max(1,closeIdx-openIdx);
-     const boxRightRaw=boxOriginX+span*perCandle;
-     const boxRight=Math.max(boxOriginX+30,Math.min(boxRightRaw,w-pad.r-2));
-     const yE=y(t.entry), yT=Number.isFinite(t.tp)?y(t.tp):yE, yS=Number.isFinite(t.sl)?y(t.sl):yE;
-     const boxYMin=Math.min(yE,yT,yS)-8, boxYMax=Math.max(yE,yT,yS)+8;
-     const isHovered=hoverLocal.x>=boxOriginX-6&&hoverLocal.x<=boxRight+6&&hoverLocal.y>=boxYMin&&hoverLocal.y<=boxYMax;
-     if(isHovered){
-       // R/R congelato sullo SL "di apertura" (t.rrSl), non su quello con cui si è chiuso.
-       const rrSl=t.rrSl??t.sl;
-       const risk=Math.abs(t.entry-(rrSl!=null?rrSl:t.entry));
-       const reward=Math.abs((t.tp!=null?t.tp:t.entry)-t.entry);
-       const rr=(rrSl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
-       drawTpSlZoneBox(ctx,{
-         ownerKey:'trade:'+t.id,originIdx:openIdx,entry:t.entry,sl:t.sl,tp:t.tp,
-         lots:t.lots,assetKey:t.asset,stopProfit:isStopProfitLevel(t),
-         pad,cw,n,start,w,y,
-         fixedSpan:span,
-         noHandle:true,
-         tooltipAlign:'left',
-         tooltipLines:[
-           `Esito: ${t.result||'-'} ${fmtPctSigned(t.pct)}`,
-           `R/R: ${rr!=null?rr.toFixed(2):'—'}`
-         ]
-       });
-     }
+     // R/R congelato sullo SL "di apertura" (t.rrSl), non su quello con cui si è chiuso.
+     const rrSl=t.rrSl??t.sl;
+     const risk=Math.abs(t.entry-(rrSl!=null?rrSl:t.entry));
+     const reward=Math.abs((t.tp!=null?t.tp:t.entry)-t.entry);
+     const rr=(rrSl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
+     drawTpSlZoneBox(ctx,{
+       ownerKey:'trade:'+t.id,originIdx:openIdx,entry:t.entry,sl:t.sl,tp:t.tp,
+       lots:t.lots,assetKey:t.asset,stopProfit:isStopProfitLevel(t),
+       pad,cw,n,start,w,y,
+       fixedSpan:span,
+       noHandle:true,
+       hidePills:true,
+       alwaysShowTooltip:true,
+       tooltipAlign:'left',
+       tooltipLines:[
+         `Esito: ${t.result||'-'} ${fmtPctSigned(t.pct)}`,
+         `R/R: ${rr!=null?rr.toFixed(2):'—'}`
+       ]
+     });
    }
    // Linea tratteggiata tra apertura e chiusura: disegnata solo se la chiusura è già stata
    // raggiunta dal replay (closeReached) e almeno un'estremità è visibile, così il tratto
@@ -5825,6 +5862,10 @@ function draw(){
  ctx.clearRect(0,0,w,h);ctx.fillStyle='#0b1016';ctx.fillRect(0,0,w,h);
  if(!rows.length)return;
  resetLabelPlacements();
+ // Ripopolate da ogni drawTpSlZoneBox() in questo stesso giro di disegno — usate dal
+ // pointerdown del canvas per sapere su quale casella TP-SL si è cliccato (vedi
+ // zoneStatsOpenKey/zoneClickCandidateKey).
+ zoneBoxHitRects=[];
  const {n,start,dataStart,dataEnd}=getViewWindow();
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
  const pad={l:18,r:76,t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
@@ -6058,9 +6099,22 @@ function draw(){
        // Se un'altra etichetta (di un'altra posizione/ordine) occupa già questa zona (es. dopo
        // uno zoom che avvicina due prezzi), la casella si sposta automaticamente in verticale
        // per non sovrapporsi, invece di scriverci sopra.
-       const txt=pos.side+(pos.lots!=null?' '+pos.lots.toFixed(2)+' lot':''), tw=ctx.measureText(txt).width, boxH=13;
+       // RICHIESTO ESPLICITAMENTE: niente più la parola "lot" (il numero accanto al side basta
+       // da solo), e accanto — sempre sulla stessa riga — il profitto live di QUESTA posizione,
+       // aggiornato ad ogni frame come su MT5: blu se in guadagno (esattamente come l'Equity a
+       // profitto su MT5, non verde), rosso se in perdita.
+       const lotsTxt=pos.side+(pos.lots!=null?' '+pos.lots.toFixed(2):'');
+       const livePrice=currentPrice();
+       const livePL=(Number.isFinite(livePrice)&&pos.lots!=null)?calculateForexPL(pos.side,pos.entry,livePrice,pos.lots,pos.asset||currentAssetKey):null;
+       const plTxt=livePL!=null?('  '+(livePL>=0?'+':'')+euro(livePL)):'';
+       const fullTxt=lotsTxt+plTxt, tw=ctx.measureText(fullTxt).width, boxH=13;
        const adjY=placeLabelY(pad.l+4,tw+8,y(pos.entry)-6-11,boxH,pad.t,h-pad.b);
-       ctx.fillText(txt,pad.l+6,adjY+11);
+       ctx.fillStyle=pos.side==='BUY'?'#2fbf71':'#e05252';
+       ctx.fillText(lotsTxt,pad.l+6,adjY+11);
+       if(plTxt){
+         ctx.fillStyle=livePL>=0?TRADE_ARROW_BLUE:TRADE_ARROW_RED;
+         ctx.fillText(plTxt,pad.l+6+ctx.measureText(lotsTxt).width,adjY+11);
+       }
      }
      ctx.globalAlpha=1;
      ctx.restore();
@@ -6099,6 +6153,9 @@ function draw(){
        ownerKey:'pos:'+pos.id,originIdx:openIdx,entry:pos.entry,sl:liveSl,tp:liveTp,
        lots:pos.lots,assetKey:pos.asset,stopProfit:isStopProfitLive,
        pad,cw,n,start,w,y,
+       // La casella non deve restare "indietro" rispetto all'ultima candela finché la
+       // posizione resta aperta — vedi il commento su keepPaceIdx dentro drawTpSlZoneBox.
+       keepPaceIdx:idx,
        tooltipLines:[
          `Lottaggio: ${pos.lots!=null?pos.lots.toFixed(2)+' lot':'—'}`,
          `Aperto P&L: ${Number.isFinite(liveVal)?euro(liveVal):'—'}`,
@@ -6140,8 +6197,23 @@ function draw(){
  // impostate per quando l'ordine si attiverà. Colore dell'entrata: rosso se sopra al
  // prezzo attuale, verde se sotto (come richiesto), indipendentemente dal lato BUY/SELL.
  const cpForColor=currentPrice();
- // Disegnati SOLO gli ordini pendenti DELL'ASSET a grafico ora, per lo stesso motivo delle posizioni.
- (currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders).forEach(p=>{
+ // Disegnati gli ordini pendenti di TUTTE E 4 le sessioni simulate insieme (non solo quella a
+ // schermo ora) più quelli reali piazzati DIRETTAMENTE su MT5 (mai tracciati in pendingOrders[]
+ // — vedi fetchMt5Orders/mt5RealOrders): un ordine pendente, creato dall'app o su MT5, deve
+ // restare sempre visibile a grafico indipendentemente dalla sessione attualmente a schermo
+ // (richiesto esplicitamente — task 31). Filtrati solo per ASSET, stesso motivo delle posizioni
+ // aperte qui sopra. Gli ordini reali non tracciati vengono normalizzati alla stessa identica
+ // forma {id,asset,side,kind,entry,sl,tp,lots}, con id "mt5:<ticket>" — STESSO formato già usato
+ // da highlightedPendingOrderId per "📍 Vai a grafico" (vedi più sotto), così la casella Target/
+ // Stop in evidenza per un ordine reale continua a funzionare esattamente come prima.
+ const allPendingForChart=collectAcrossSessions('pendingOrders').map(({item})=>item);
+ const trackedMt5PendingTicketsForChart=new Set(allPendingForChart.map(p=>p.mt5Ticket).filter(t=>t!=null).map(String));
+ const untrackedMt5OrdersForChart=(mt5Connected?mt5RealOrders:[]).filter(o=>!trackedMt5PendingTicketsForChart.has(String(o.ticket))).map(o=>({
+   id:'mt5:'+o.ticket,asset:o.symbol,side:o.side,kind:o.kind||'LIMIT',entry:Number(o.price_open),
+   sl:o.sl!=null?Number(o.sl):null,tp:o.tp!=null?Number(o.tp):null,lots:Number(o.volume)||0,mt5Ticket:o.ticket
+ }));
+ const pendingForChart=allPendingForChart.concat(untrackedMt5OrdersForChart);
+ (currentAssetKey?pendingForChart.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingForChart).forEach(p=>{
    // L'ordine scelto con "📍 Vai a grafico" (highlightedPendingOrderId) ottiene sotto la sua
    // casella Target/Stop in evidenza (stessa identica resa delle posizioni aperte): quando è
    // così E ha almeno uno tra SL/TP, le righe tratteggiate "generiche" di SL/TP qui sotto
@@ -6212,6 +6284,9 @@ function draw(){
      const box=drawTpSlZoneBox(ctx,{
        ownerKey:'pendingHighlight:'+hp.id,originIdx:idx,entry:hp.entry,sl:hp.sl,tp:hp.tp,
        lots:hp.lots,assetKey:hp.asset,fixedSpan:26,noHandle:true,
+       // Ha già una propria "X" dedicata (pendingHighlightCloseBtnRect, gestita a parte):
+       // le statistiche restano sempre visibili qui, senza il gate click/X generico.
+       alwaysShowTooltip:true,
        pad,cw,n,start,w,y,
        tooltipLines:[
          `${hp.side} ${hp.kind||'LIMIT'} in attesa`,
@@ -6265,6 +6340,7 @@ function draw(){
        ownerKey:'draft:market',originIdx:idx,entry:draftEntryMkt,
        sl:Number.isFinite(draftSl)?draftSl:null,tp:Number.isFinite(draftTp)?draftTp:null,
        lots:getLotSize(),
+       alwaysShowTooltip:true,
        pad,cw,n,start,w,y,
        tooltipLines:[`Anteprima ordine`,`Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`]
      });
@@ -6320,6 +6396,7 @@ function draw(){
        ownerKey:'draft:pending',originIdx:idx,entry:draftEntryP,
        sl:Number.isFinite(draftSlP)?draftSlP:null,tp:Number.isFinite(draftTpP)?draftTpP:null,
        lots:getLotSizePending(),
+       alwaysShowTooltip:true,
        pad,cw,n,start,w,y,
        tooltipLines:[`Anteprima ordine pendente (${pendingOrderKind})`,`Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`]
      });
@@ -7099,6 +7176,27 @@ function defaultSlTpFor(entry,side){
  if(side==='SELL')return {sl:entry+off,tp:entry-off};
  return {sl:entry-off,tp:entry+off};
 }
+// Posizione REALE aperta DIRETTAMENTE su MT5 (rilevata e adottata da fetchMt5Positions), senza
+// SL e/o TP impostati sul broker: richiesto esplicitamente che le caselle Target/Stop
+// trascinabili compaiano SUBITO a grafico anche in questo caso, non solo per le posizioni aperte
+// dall'app — altrimenti drawTpSlZoneBox() non disegna nulla (richiede almeno uno tra SL e TP
+// finito) e non c'è nessuna maniglia da trascinare. Qui valorizziamo il lato mancante con lo
+// stesso default usato per un ordine aperto dall'app (defaultSlTpFor), ma SOLO in locale: non
+// viene scritto NULLA sul conto MT5 in questo momento. La sincronizzazione reale verso MT5
+// scatta solo quando l'utente conferma trascinando (o modificando) la linea — meccanismo già
+// esistente in setTradeLevel(), che chiama syncMt5PositionLevels() per qualunque posizione con
+// mt5Ticket valorizzato, esattamente come richiesto ("poi al momento della posizione confermata
+// tramite trascinamento delle linee tp-sl tramite l'app si riportano sul terminale mt5").
+function applyLocalSlTpDefaultsIfMissing(pos){
+ if(!pos)return;
+ if(pos.sl==null||pos.tp==null){
+   const defaults=defaultSlTpFor(pos.entry,pos.side);
+   if(pos.sl==null)pos.sl=defaults.sl;
+   if(pos.tp==null)pos.tp=defaults.tp;
+   pos.mt5SlTpAppOnly=true; // valori predefiniti mostrati solo in app, non ancora confermati/inviati a MT5
+ }
+ pos.rrSl=pos.sl;
+}
 
 // ===================== CASELLE TARGET/STOP STILE TRADINGVIEW =====================
 // Al posto delle semplici linee dritte a tutta larghezza, la posizione/ordine
@@ -7107,6 +7205,19 @@ function defaultSlTpFor(entry,side){
 // orizzontalmente da un'unica maniglia sul bordo destro (in sincro per le due caselle,
 // come richiesto), esattamente come lo strumento posizione lunga/corta di TradingView.
 let zoneSpanOverrides={};
+// ownerKey della casella TP-SL con le statistiche (P&L aperto / R:R) aperte ora — mostrate solo
+// al click sulla casella, richiuse SOLO con la "X" (mai un secondo click altrove), come
+// richiesto esplicitamente stile TradingView. null = nessuna casella statistiche aperta.
+let zoneStatsOpenKey=null;
+// Hit-test della "X" per richiudere le statistiche aperte (stesse coordinate CSS del canvas di
+// highlightCloseBtnRect/pendingHighlightCloseBtnRect), e delle caselle TP-SL stesse (per sapere
+// su quale si è cliccato) — quest'ultimo azzerato e ripopolato ad ogni draw().
+let zoneStatsCloseBtnRect=null;
+let zoneBoxHitRects=[];
+// ownerKey "candidato" sotto il pointerdown iniziale: le statistiche si aprono SOLO se il
+// rilascio (pointerup) avviene senza un vero trascinamento — altrimenti si lascia che sia un
+// pan/zoom normale del grafico, esattamente come già succede cliccando in un punto vuoto.
+let zoneClickCandidateKey=null;
 function defaultZoneSpanCandles(){
  const vc=(typeof getVisibleCount==='function')?getVisibleCount():80;
  return Math.max(14,Math.round(vc*0.32));
@@ -7140,14 +7251,17 @@ function roundRectPath(ctx,x,y,w,h,r){
 }
 // Etichetta a "pillola" colorata (Target/Stop/Chiuso...): align 'right' ancora il bordo
 // destro della pillola al punto x dato (usata sul bordo destro della casella), altrimenti
-// il bordo sinistro (usata accanto alle frecce di chiusura trade).
-function drawZonePill(ctx,x,y,text,bg,fg,align){
+// il bordo sinistro (usata accanto alle frecce di chiusura trade, e per Target/Stop spostate
+// FUORI dalla casella — vedi drawTpSlZoneBox). maxX (opzionale): non lascia mai la pillola
+// uscire dal bordo destro del grafico quando non è ancorata con align 'right'.
+function drawZonePill(ctx,x,y,text,bg,fg,align,maxX){
  ctx.save();
  ctx.font='bold 10px Arial';
  const tw=ctx.measureText(text).width;
  const padX=7,hh=17;
  const boxW=tw+padX*2;
- const bx=align==='right'?x-tw-padX*2:x;
+ let bx=align==='right'?x-tw-padX*2:x;
+ if(align!=='right' && Number.isFinite(maxX))bx=Math.min(bx,maxX-boxW-2);
  // Se un'altra pillola (di un'altra posizione/ordine, o la casella P&L/RR) occupa già questa
  // fascia orizzontale, la pillola si sposta in verticale al posto libero più vicino, invece di
  // sovrapporsi — tipico quando due Target/Stop finiscono vicini dopo uno zoom.
@@ -7162,13 +7276,17 @@ function drawZonePill(ctx,x,y,text,bg,fg,align){
  ctx.restore();
 }
 // Casella "Aperto P&L / Rapporto rischio-rendimento" (o "Anteprima ordine" prima
-// dell'apertura), appesa appena sopra la casella Target/Stop, come su TradingView.
-function drawZoneTooltip(ctx,cx,anchorY,lines,bg,align){
+// dell'apertura, o "Esito"+R:R a trade chiuso), appesa appena sopra la casella Target/Stop,
+// come su TradingView. showCloseBtn (posizioni aperte, mostrate solo al click — vedi
+// zoneStatsOpenKey): disegna anche una "X" per richiuderla e ne ritorna l'hit-test (stesse
+// coordinate CSS del canvas di highlightCloseBtnRect) — null se showCloseBtn è falso/assente.
+function drawZoneTooltip(ctx,cx,anchorY,lines,bg,align,showCloseBtn){
  ctx.save();
  ctx.font='bold 10px Arial';
  let maxW=0; lines.forEach(l=>{maxW=Math.max(maxW,ctx.measureText(l).width);});
  const padX=9,padY=6,lineH=13;
- const boxW=maxW+padX*2, boxH=lines.length*lineH+padY*2;
+ const closeReserve=showCloseBtn?16:0;
+ const boxW=maxW+padX*2+closeReserve, boxH=lines.length*lineH+padY*2;
  // align:'left' ancora il bordo DESTRO della casella al punto di ingresso (cx), facendola
  // estendere verso sinistra — usato per la casella "Esito" del trade chiuso, che deve
  // comparire a sinistra sopra il punto di ingresso invece che centrata sull'intera zona.
@@ -7182,14 +7300,31 @@ function drawZoneTooltip(ctx,cx,anchorY,lines,bg,align){
  ctx.fillStyle='#eafff6';
  ctx.textAlign='left';ctx.textBaseline='alphabetic';
  lines.forEach((l,i)=>ctx.fillText(l,bx+padX,by+padY+lineH*(i+1)-3));
+ let closeRect=null;
+ if(showCloseBtn){
+   // Stessa identica "X" (stile/dimensioni) già usata per richiudere la scheda "Vai a grafico"
+   // (vedi drawTradeHighlight/highlightCloseBtnRect) — coerenza visiva in tutta l'app.
+   const closeSize=13, closeCx=bx+boxW-closeSize/2-4, closeCy=by+closeSize/2+4;
+   ctx.beginPath(); ctx.arc(closeCx,closeCy,closeSize/2,0,Math.PI*2);
+   ctx.fillStyle='rgba(0,0,0,0.28)'; ctx.fill();
+   ctx.strokeStyle='#eafff6'; ctx.lineWidth=1.4;
+   const r=3.2;
+   ctx.beginPath();
+   ctx.moveTo(closeCx-r,closeCy-r); ctx.lineTo(closeCx+r,closeCy+r);
+   ctx.moveTo(closeCx+r,closeCy-r); ctx.lineTo(closeCx-r,closeCy+r);
+   ctx.stroke();
+   const hitPad=6;
+   closeRect={x:closeCx-closeSize/2-hitPad,y:closeCy-closeSize/2-hitPad,w:closeSize+hitPad*2,h:closeSize+hitPad*2};
+ }
  ctx.restore();
+ return closeRect;
 }
 // Disegna la casella Target (verde, entrata->TP) + casella Stop (rossa, entrata->SL) tra
 // la candela `originIdx` e una maniglia destra trascinabile (xRight, distanza in candele
 // = getZoneSpan(ownerKey)): due maniglie quadrate blu segnano gli angoli destri, sempre le
 // stesse per Target e Stop, così trascinandole si allargano/restringono IN SINCRO.
 function drawTpSlZoneBox(ctx,opts){
- const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit}=opts;
+ const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,hidePills,alwaysShowTooltip}=opts;
  if(!Number.isFinite(entry)||!Number.isFinite(originIdx))return null;
  const hasSl=Number.isFinite(sl), hasTp=Number.isFinite(tp);
  if(!hasSl&&!hasTp)return null;
@@ -7197,7 +7332,14 @@ function drawTpSlZoneBox(ctx,opts){
  if(!(perCandle>0))return null;
  // fixedSpan: usato per i trade GIÀ CHIUSI, la casella si ferma esattamente alla candela
  // di chiusura invece di estendersi per la larghezza "libera" trascinabile di default.
- const span=Number.isFinite(fixedSpan)?Math.max(1,fixedSpan):getZoneSpan(ownerKey);
+ // keepPaceIdx (posizioni APERTE): la casella non deve mai restare "indietro" rispetto
+ // all'ultima candela finché la posizione resta aperta — richiesto esplicitamente. Lo span
+ // scelto dall'utente (trascinando la maniglia, o quello di default) resta una larghezza
+ // MINIMA: se la candela corrente (keepPaceIdx) è già oltre quel punto, la casella si
+ // allunga automaticamente fino a raggiungerla, ad ogni ridisegno — mai il contrario (non si
+ // restringe mai sotto la scelta esplicita dell'utente).
+ let span=Number.isFinite(fixedSpan)?Math.max(1,fixedSpan):getZoneSpan(ownerKey);
+ if(!Number.isFinite(fixedSpan) && Number.isFinite(keepPaceIdx))span=Math.max(span,keepPaceIdx-originIdx);
  const xOrigin=pad.l+(originIdx-start+.5)*perCandle;
  const xRightRaw=xOrigin+span*perCandle;
  const xRight=Math.max(xOrigin+30,Math.min(xRightRaw,w-pad.r-2));
@@ -7212,12 +7354,18 @@ function drawTpSlZoneBox(ctx,opts){
    ctx.strokeStyle='#e8a13b';ctx.lineWidth=1.3;ctx.globalAlpha=0.9;
    ctx.beginPath();ctx.moveTo(xOrigin,yTp);ctx.lineTo(xRight,yTp);ctx.stroke();
    ctx.setLineDash([]);ctx.globalAlpha=1;
-   const pct=entry!==0?((tp-entry)/entry*100):0;
-   const pipsVal=(tp-entry)/pipSize();
-   // Anteprima guadagno in € se il TP viene raggiunto (richiede un lottaggio noto).
-   const tpEuro=Number.isFinite(lots)?euroAtLevel(entry,tp,lots,assetKey):null;
-   const tpEuroTxt=tpEuro!=null?` • +${euro(tpEuro)}`:'';
-   drawZonePill(ctx,xRight-4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${tpEuroTxt}`,'#e8a13b','#1a1204','right');
+   // hidePills (trade GIÀ CHIUSI): l'etichetta "Target:..." non serve più a trade concluso —
+   // resta solo la casella colorata più l'esito/R:R (vedi tooltipLines/alwaysShowTooltip).
+   if(!hidePills){
+     const pct=entry!==0?((tp-entry)/entry*100):0;
+     const pipsVal=(tp-entry)/pipSize();
+     // Anteprima guadagno in € se il TP viene raggiunto (richiede un lottaggio noto).
+     const tpEuro=Number.isFinite(lots)?euroAtLevel(entry,tp,lots,assetKey):null;
+     const tpEuroTxt=tpEuro!=null?` • +${euro(tpEuro)}`:'';
+     // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
+     // candele al suo interno) — richiesto esplicitamente.
+     drawZonePill(ctx,xRight+4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${tpEuroTxt}`,'#e8a13b','#1a1204',undefined,w-pad.r);
+   }
  }
  if(hasSl){
    ySl=y(sl);
@@ -7232,12 +7380,14 @@ function drawTpSlZoneBox(ctx,opts){
    ctx.strokeStyle=spColor;ctx.lineWidth=1.3;ctx.globalAlpha=0.9;
    ctx.beginPath();ctx.moveTo(xOrigin,ySl);ctx.lineTo(xRight,ySl);ctx.stroke();
    ctx.setLineDash([]);ctx.globalAlpha=1;
-   const pct=entry!==0?((sl-entry)/entry*100):0;
-   const pipsVal=(sl-entry)/pipSize();
-   // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
-   const slEuro=Number.isFinite(lots)?euroAtLevel(entry,sl,lots,assetKey):null;
-   const slEuroTxt=slEuro!=null?` • ${stopProfit?'+':'-'}${euro(slEuro)}`:'';
-   drawZonePill(ctx,xRight-4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,'#fff','right');
+   if(!hidePills){
+     const pct=entry!==0?((sl-entry)/entry*100):0;
+     const pipsVal=(sl-entry)/pipSize();
+     // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
+     const slEuro=Number.isFinite(lots)?euroAtLevel(entry,sl,lots,assetKey):null;
+     const slEuroTxt=slEuro!=null?` • ${stopProfit?'+':'-'}${euro(slEuro)}`:'';
+     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,'#fff',undefined,w-pad.r);
+   }
  }
  // Separatore tratteggiato bianco all'entrata (come la linea centrale dello strumento
  // posizione di TradingView), con etichetta P&L/RR appesa sopra.
@@ -7245,10 +7395,24 @@ function drawTpSlZoneBox(ctx,opts){
  ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=1;ctx.globalAlpha=0.9;
  ctx.beginPath();ctx.moveTo(xOrigin,yEntry);ctx.lineTo(xRight,yEntry);ctx.stroke();
  ctx.setLineDash([]);ctx.globalAlpha=1;
- if(tooltipLines&&tooltipLines.length){
+ // Area cliccabile dell'intera casella (per aprire le statistiche P&L/R:R al click — vedi
+ // zoneStatsOpenKey/zoneClickCandidateKey nel pointerdown/pointerup del canvas), ripopolata
+ // ad ogni draw(): un margine verticale di qualche pixel oltre Target/Stop/entrata la rende
+ // più facile da colpire.
+ const yBoxMin=Math.min(yEntry,hasTp?yTp:yEntry,hasSl?ySl:yEntry)-6;
+ const yBoxMax=Math.max(yEntry,hasTp?yTp:yEntry,hasSl?ySl:yEntry)+6;
+ zoneBoxHitRects.push({ownerKey,xOrigin,xRight,yMin:yBoxMin,yMax:yBoxMax});
+ // tooltipLines (P&L aperto/R:R, o "Anteprima ordine", o "Esito"+R:R a trade chiuso):
+ // - alwaysShowTooltip (bozze, ordine pendente in evidenza, trade GIÀ CHIUSI): sempre visibile,
+ //   nessuna "X" — a trade chiuso è l'UNICA cosa che deve restare (richiesto esplicitamente).
+ // - altrimenti (posizione REALMENTE aperta): visibile solo al click sulla casella, con "X"
+ //   per richiuderla — stile TradingView, richiesto esplicitamente.
+ if(tooltipLines&&tooltipLines.length && (alwaysShowTooltip||zoneStatsOpenKey===ownerKey)){
    const topY=Math.min(yEntry,hasTp?yTp:yEntry,hasSl?ySl:yEntry);
    const anchorX=opts.tooltipAlign==='left'?xOrigin:(xOrigin+xRight)/2;
-   drawZoneTooltip(ctx,anchorX,topY,tooltipLines,'#1a8f7a',opts.tooltipAlign);
+   const showCloseBtn=!alwaysShowTooltip;
+   const closeRect=drawZoneTooltip(ctx,anchorX,topY,tooltipLines,'#1a8f7a',opts.tooltipAlign,showCloseBtn);
+   if(showCloseBtn && closeRect)zoneStatsCloseBtnRect=closeRect;
  }
  // Un'UNICA maniglia quadrata blu, sul bordo destro all'altezza dell'entrata (il confine
  // esatto tra l'inizio della casella Target e l'inizio della casella Stop): trascinandola
@@ -9457,6 +9621,20 @@ chartEl.addEventListener('pointerdown',e=>{
      return;
    }
  }
+ // Stessa idea, per la "X" della casella statistiche P&L/R:R di una casella TP-SL aperta al
+ // click (vedi zoneStatsOpenKey/drawZoneTooltip): richiude SOLO qui, mai cliccando altrove.
+ if(zoneStatsCloseBtnRect){
+   const rectC=chartEl.getBoundingClientRect();
+   const relX=e.clientX-rectC.left, relY=e.clientY-rectC.top;
+   const r=zoneStatsCloseBtnRect;
+   if(relX>=r.x && relX<=r.x+r.w && relY>=r.y && relY<=r.y+r.h){
+     e.preventDefault();
+     zoneStatsOpenKey=null;
+     zoneStatsCloseBtnRect=null;
+     draw();
+     return;
+   }
+ }
  // --- Zoom verticale stile TradingView: trascina sulla scala prezzi (bordo destro).
  // Funziona anche da tablet/touch con un dito solo: qui blocchiamo lo scroll pagina,
  // ovunque altro nel grafico invece la pagina deve poter scorrere normalmente. ---
@@ -9628,6 +9806,17 @@ chartEl.addEventListener('pointerdown',e=>{
    chartEl.setPointerCapture?.(e.pointerId);
    draw();
    return;
+ }
+ // Il punto cade dentro una casella TP-SL (Target/Stop) disegnata in quest'ultimo draw()?
+ // Non blocchiamo/consumiamo il click qui: lasciamo che il pan parta normalmente come
+ // sempre (così trascinare da dentro la casella continua a spostare il grafico esattamente
+ // come prima) — ci limitiamo a RICORDARE quale casella, per aprirne le statistiche al
+ // pointerup SOLO se si è trattato di un vero click e non di un trascinamento (vedi sotto).
+ {
+   const rectC=chartEl.getBoundingClientRect();
+   const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
+   const hitBox=zoneBoxHitRects.find(r=>relXc>=r.xOrigin&&relXc<=r.xRight&&relYc>=r.yMin&&relYc<=r.yMax);
+   zoneClickCandidateKey=hitBox?hitBox.ownerKey:null;
  }
  if(selectedDrawing)deselectDrawing();
  e.preventDefault();
@@ -9893,6 +10082,18 @@ chartEl.addEventListener('pointerup',e=>{
    chartEl.releasePointerCapture?.(e.pointerId);
    return;
  }
+ // Il pointerdown era caduto dentro una casella TP-SL: se il rilascio avviene qui senza un
+ // vero trascinamento (pochi pixel di distanza dal punto di partenza del pan), è stato un
+ // CLICK — apriamo le sue statistiche P&L/R:R (richiudibili solo con la "X", mai ricliccando
+ // altrove). Se invece ci si è davvero spostati, era un pan del grafico: non si apre nulla.
+ if(zoneClickCandidateKey!=null){
+   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
+   if(moved<4){
+     zoneStatsOpenKey=zoneClickCandidateKey;
+     draw();
+   }
+   zoneClickCandidateKey=null;
+ }
  panDrag=false;
  chartEl.releasePointerCapture?.(e.pointerId);
 });
@@ -9902,6 +10103,7 @@ chartEl.addEventListener('pointercancel',e=>{
  zoneWidthDrag=null;
  shapeDrag=null;
  previewTradeLevel=null;
+ zoneClickCandidateKey=null;
  if(touchDrawDrag){
    // Gesto di disegno-a-trascinamento interrotto (es. il sistema toglie il focus a metà
    // trascinamento): annulliamo il disegno in corso invece di crearlo a metà, così non
@@ -10187,7 +10389,11 @@ $('applySuggestedLot').addEventListener('click',()=>{
 });
 $('market')?.addEventListener('change',applyInstrument);
 $('decimals').addEventListener('change',()=>{draw();update();});
-$('candleTheme')?.addEventListener('change',()=>{ candleTheme=$('candleTheme').value; draw(); scheduleSave(); });
+$('candleTheme')?.addEventListener('change',()=>{ candleTheme=$('candleTheme').value; updateCandleCustomColorsVisibility(); draw(); scheduleSave(); });
+// I due colori personalizzati si applicano in tempo reale mentre si trascina il selettore
+// colore (evento 'input', come drawColor sopra), non solo al rilascio.
+$('candleColorBuy')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('candleColorSell')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('pipDecimals')?.addEventListener('change',()=>{draw();update();});
 $('pipDecimals')?.addEventListener('input',()=>{update();});
 
@@ -10754,7 +10960,7 @@ async function fetchMt5Positions(){
              start:realOpenIdx!=null?realOpenIdx:0,startTime:realOpenMs,openTF:currentTF,
              marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
            };
-           pos.rrSl=pos.sl;
+           applyLocalSlTpDefaultsIfMissing(pos);
            pairedSnap.positions.push(pos);
          });
          scheduleSave();
@@ -10779,10 +10985,13 @@ async function fetchMt5Positions(){
          start:realOpenIdx!=null?realOpenIdx:(rows[idx]?idx:0),startTime:realOpenMs,openTF:currentTF,
          marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
        };
-       pos.rrSl=pos.sl;
+       const hadRealSlTp=pos.sl!=null&&pos.tp!=null;
+       applyLocalSlTpDefaultsIfMissing(pos);
        positions.push(pos);
        playOrderSound();
-       $('status').textContent=`🖥️ Posizione reale aperta direttamente su MT5 rilevata: ${pos.side} ${pos.asset} a ${fmtPrice(pos.entry)} (ticket ${rp.ticket}) — aggiunta anche qui in app.`;
+       $('status').textContent=hadRealSlTp
+         ?`🖥️ Posizione reale aperta direttamente su MT5 rilevata: ${pos.side} ${pos.asset} a ${fmtPrice(pos.entry)} (ticket ${rp.ticket}) — aggiunta anche qui in app.`
+         :`🖥️ Posizione reale aperta direttamente su MT5 rilevata: ${pos.side} ${pos.asset} a ${fmtPrice(pos.entry)} (ticket ${rp.ticket}) — aggiunta con caselle Target/Stop predefinite (solo in app): trascinale per confermarle anche sul conto MT5.`;
      });
      mt5RealPositions=result.data; update();
    }
