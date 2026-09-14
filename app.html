@@ -1195,6 +1195,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <span class="hint" style="margin:0" title="Colore candele ribassiste (SELL: chiusura < apertura)">📉</span>
        <input id="candleColorSell" type="color" class="colorPick" value="#e05b64" title="Colore candele ribassiste (SELL)">
      </span>
+     <!-- RICHIESTO ESPLICITAMENTE: l'utente deve poter scegliere liberamente anche il colore
+          delle caselle Target/Stop (riempimento + bordo + etichetta), e vanno salvate in
+          memoria per le prossime posizioni — stesso meccanismo automatico di
+          SESSION_CONFIG_FIELD_IDS già usato sopra per le candele. Sempre visibili (non
+          legate a un tema, a differenza delle candele): valgono per ogni posizione/ordine.
+          Lo "Stop Profit" (breakeven) resta sempre blu, qualunque sia questo colore: è un
+          indicatore di stato, non decorativo — vedi drawTpSlZoneBox. -->
+     <span id="zoneCustomColors" style="display:inline-flex;align-items:center;gap:6px">
+       <span class="hint" style="margin:0" title="Colore casella Target (TP)">🎯</span>
+       <input id="tpZoneColor" type="color" class="colorPick" value="#e8a13b" title="Colore casella Target (TP)">
+       <span class="hint" style="margin:0" title="Colore casella Stop (SL)">🛑</span>
+       <input id="slZoneColor" type="color" class="colorPick" value="#e05252" title="Colore casella Stop (SL)">
+     </span>
      <button id="togglePositionsBtn" class="chartCornerBtn active" title="Mostra/nascondi sul grafico le posizioni (linee entry/SL/TP aperte + frecce di apertura/chiusura delle posizioni chiuse)">
        <svg viewBox="0 0 24 24" width="18" height="18">
          <rect x="5.4" y="12" width="3.2" height="6" fill="#3b82f6"/>
@@ -1844,6 +1857,27 @@ function updateCandleCustomColorsVisibility(){
  const wrap=$('candleCustomColors');
  if(wrap)wrap.style.display=(candleTheme==='custom')?'inline-flex':'none';
 }
+// Colori scelti liberamente dall'utente per le caselle Target (TP)/Stop (SL) — vedi
+// #tpZoneColor/#slZoneColor, sempre visibili e salvati/ripristinati come ogni altro campo di
+// sessione (SESSION_CONFIG_FIELD_IDS), così restano anche per le prossime posizioni/ordini.
+function currentZoneColors(){
+ return {
+   tp:$('tpZoneColor')?.value||'#e8a13b',
+   sl:$('slZoneColor')?.value||'#e05252'
+ };
+}
+// Sceglie testo nero o bianco sopra un colore di sfondo qualunque (etichette Target/Stop),
+// in base alla sua luminanza percepita, così resta sempre leggibile qualunque colore scelga
+// l'utente (un colore chiaro come il giallo con testo bianco sarebbe illeggibile).
+function contrastTextColor(hex){
+ const h=String(hex||'').replace('#','');
+ const full=h.length===3?h.split('').map(c=>c+c).join(''):h;
+ const n=parseInt(full,16);
+ if(!Number.isFinite(n))return '#fff';
+ const r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+ const luminance=(0.299*r+0.587*g+0.114*b)/255;
+ return luminance>0.6?'#1a1204':'#fff';
+}
 // ===================== LIVE MULTI-ASSET (streaming Capital.com) =====================
 // Ultimo prezzo (bid) ricevuto via WebSocket per OGNI asset con streaming attivo (asset a
 // grafico + tutti quelli con una posizione aperta o un ordine pendente in Live), non solo
@@ -1994,15 +2028,34 @@ async function idbClearAll(){
 // finché non è l'utente stesso a valorizzarli (pulsanti SL/TP sul grafico, apertura di una
 // posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
 // ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
-const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
+const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
+// Le posizioni/ordini pendenti REALI (mt5Ticket valorizzato) non vengono MAI salvati in
+// locale — richiesto esplicitamente per sicurezza: se ci si disconnette da MT5, si chiude
+// l'app o si ricarica la pagina, non devono restare visibili a grafico da un salvataggio
+// precedente. Ricompaiono SOLO dopo un nuovo login riuscito sul conto MT5 collegato, che le
+// riadotta da zero (aggiornate) tramite fetchMt5Positions()/fetchMt5Orders() — mai da qui.
+function stripMt5TrackedForSave(list){
+ return Array.isArray(list)?list.filter(p=>p&&p.mt5Ticket==null):list;
+}
 function collectLightSessionState(){
+ // La posizione "active" (selezionata) va azzerata nel salvataggio se era proprio una
+ // posizione REALE appena esclusa qui sopra — altrimenti resterebbe un riferimento "orfano"
+ // che al ripristino punterebbe a una posizione non più presente in positions[].
+ const activeIsReal=active&&active.mt5Ticket!=null;
+ const sessionByModeSaved={};
+ Object.keys(sessionByMode||{}).forEach(k=>{
+   const s=sessionByMode[k];
+   sessionByModeSaved[k]=s?{...s,positions:stripMt5TrackedForSave(s.positions),pendingOrders:stripMt5TrackedForSave(s.pendingOrders)}:s;
+ });
  return {
    version:SESSION_VERSION,
    savedAt:Date.now(),
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,
-   positions,active,pendingOrders,trades,equity,statsBaselineByMode,sessionByMode,liveModeActive,
+   positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
+   pendingOrders:stripMt5TrackedForSave(pendingOrders),
+   trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
    isPropFirmMode,
    // Richiesto esplicitamente: se ero connesso a un conto MT5 reale, alla riapertura dell'app
    // deve proporsi da sola la riconnessione (vedi il popup in initSession() più sotto). Salviamo
@@ -2157,8 +2210,13 @@ function applyLightSessionState(state){
  anchorSnap=!!state.anchorSnap;
  straightLockToggle=!!state.straightLockToggle;
  positionsVisible=state.positionsVisible!==false;
- positions=state.positions||[]; active=state.active||null;
- pendingOrders=state.pendingOrders||[]; trades=state.trades||[];
+ // Doppia sicurezza (oltre a non scriverle più — vedi stripMt5TrackedForSave/
+ // collectLightSessionState): un salvataggio scritto PRIMA di questa modifica potrebbe
+ // ancora contenere posizioni/ordini REALI (mt5Ticket) — li scartiamo anche qui in lettura,
+ // così anche un vecchio salvataggio "avvelenato" non li rimette a grafico prima di un nuovo
+ // login MT5 riuscito.
+ positions=stripMt5TrackedForSave(state.positions||[]); active=(state.active&&state.active.mt5Ticket==null)?state.active:null;
+ pendingOrders=stripMt5TrackedForSave(state.pendingOrders||[]); trades=state.trades||[];
  // MIGRAZIONE una tantum: sessioni salvate da versioni precedenti a questa (prima che ogni
  // posizione/ordine/trade portasse con sé il proprio campo "asset") non hanno quel tag.
  // Senza un asset esplicito, andrebbero trattate per errore come "dell'asset corrente"
@@ -2180,6 +2238,12 @@ function applyLightSessionState(state){
  // Challenge Prop Firm salvata, che verrà creata alla prima attivazione).
  statsBaselineByMode=Object.assign({backtest:Number.isFinite(state.statsBaseline)?state.statsBaseline:0,live:0,backtest_propfirm:0,live_propfirm:0},state.statsBaselineByMode||{});
  sessionByMode=Object.assign({backtest:null,live:null,backtest_propfirm:null,live_propfirm:null},state.sessionByMode||{});
+ // Stessa doppia sicurezza di positions/pendingOrders qui sopra, ma per le 4 sessioni "in
+ // pausa": niente posizioni/ordini REALI residui in nessuna di loro finché non si rifà login.
+ Object.keys(sessionByMode).forEach(k=>{
+   const s=sessionByMode[k];
+   if(s)sessionByMode[k]={...s,positions:stripMt5TrackedForSave(s.positions),pendingOrders:stripMt5TrackedForSave(s.pendingOrders)};
+ });
  liveModeActive=!!state.liveModeActive;
  isPropFirmMode=!!state.isPropFirmMode;
  // STEP 2/3: se la sessione ripristinata era una Challenge Prop Firm, il capitale iniziale e
@@ -6903,9 +6967,21 @@ const DUPLICATE_OFFSET_PX=26;
 // l'area di plot (mai sopra le scale prezzo/tempo) esattamente come ogni altro disegno.
 function buildOffsetCopy(d){
  const g=chartGeometry();if(!g)return null;
+ const minX=g.pad.l, maxX=g.rect.width-g.pad.r, minY=g.pad.t, maxY=g.rect.height-g.pad.b;
  const shift=p=>{
-   const x=g.xFromTime(p.time)+DUPLICATE_OFFSET_PX, y=g.y(p.price)+DUPLICATE_OFFSET_PX;
-   return clampPointToPlot(g,{time:g.timeFromX(x),price:g.price(y)});
+   const x0=g.xFromTime(p.time), y0=g.y(p.price);
+   const x=x0+DUPLICATE_OFFSET_PX, y=y0+DUPLICATE_OFFSET_PX;
+   // BUG RISOLTO ("copio una linea che esce dai bordi del grafico, incollandola prende i
+   // riferimenti dei bordi della finestra invece che del disegno originale"): il clamp dentro
+   // l'area di plot va bene SOLO per un punto che era già visibile (evita che la copia finisca
+   // sotto le scale prezzo/tempo, il motivo per cui esiste) — ma applicato SEMPRE "tirava
+   // dentro" ai bordi della vista corrente anche un punto che nell'originale era FUORI dalla
+   // vista (es. una linea che si estende oltre l'ultima candela mostrata), perdendo la sua
+   // vera posizione relativa all'altro punto del disegno. Un punto che era già fuori vista
+   // resta quindi semplicemente spostato dello stesso offset, senza clamp.
+   const wasOnScreen=x0>=minX&&x0<=maxX&&y0>=minY&&y0<=maxY;
+   const shifted={time:g.timeFromX(x),price:g.price(y)};
+   return wasOnScreen?clampPointToPlot(g,shifted):shifted;
  };
  return {type:d.type,p1:shift(d.p1),p2:shift(d.p2),color:d.color,lineWidth:d.lineWidth,dashed:d.dashed,opacity:d.opacity,fillColor:d.fillColor,fillOpacity:d.fillOpacity,text:d.text||'',levels:d.levels?JSON.parse(JSON.stringify(d.levels)):undefined,opts:d.opts?{...d.opts}:undefined,id:Date.now()+Math.random()};
 }
@@ -7344,14 +7420,19 @@ function drawTpSlZoneBox(ctx,opts){
  const xRightRaw=xOrigin+span*perCandle;
  const xRight=Math.max(xOrigin+30,Math.min(xRightRaw,w-pad.r-2));
  const yEntry=y(entry);
+ // Colori scelti liberamente dall'utente per le caselle Target/Stop (vedi
+ // currentZoneColors/#tpZoneColor/#slZoneColor), salvati in memoria per le prossime
+ // posizioni/ordini — richiesto esplicitamente. Il testo delle etichette si adatta da solo
+ // (contrastTextColor) per restare leggibile qualunque colore venga scelto.
+ const zoneColors=currentZoneColors();
  ctx.save();
  let yTp=null,ySl=null;
  if(hasTp){
    yTp=y(tp);
-   ctx.fillStyle='rgba(47,191,113,0.15)';
+   ctx.fillStyle=hexToRgba(zoneColors.tp,0.15);
    ctx.fillRect(xOrigin,Math.min(yEntry,yTp),xRight-xOrigin,Math.abs(yEntry-yTp)||1);
    ctx.setLineDash([3,3]);
-   ctx.strokeStyle='#e8a13b';ctx.lineWidth=1.3;ctx.globalAlpha=0.9;
+   ctx.strokeStyle=zoneColors.tp;ctx.lineWidth=1.3;ctx.globalAlpha=0.9;
    ctx.beginPath();ctx.moveTo(xOrigin,yTp);ctx.lineTo(xRight,yTp);ctx.stroke();
    ctx.setLineDash([]);ctx.globalAlpha=1;
    // hidePills (trade GIÀ CHIUSI): l'etichetta "Target:..." non serve più a trade concluso —
@@ -7364,15 +7445,16 @@ function drawTpSlZoneBox(ctx,opts){
      const tpEuroTxt=tpEuro!=null?` • +${euro(tpEuro)}`:'';
      // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
      // candele al suo interno) — richiesto esplicitamente.
-     drawZonePill(ctx,xRight+4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${tpEuroTxt}`,'#e8a13b','#1a1204',undefined,w-pad.r);
+     drawZonePill(ctx,xRight+4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${tpEuroTxt}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
    }
  }
  if(hasSl){
    ySl=y(sl);
    // "Stop Profit": lo SL è stato portato oltre l'entry, verso il TP (breakeven o più) —
-   // puramente un cambio di colore/etichetta, la logica di chiusura resta identica.
-   const spColor=stopProfit?'#3ea6ff':'#e05252';
-   const spFill=stopProfit?'rgba(62,166,255,0.15)':'rgba(224,82,82,0.15)';
+   // resta SEMPRE blu (indicatore di stato, non decorativo) qualunque sia il colore Stop
+   // scelto dall'utente, così si distingue sempre chiaramente da uno Stop Loss normale.
+   const spColor=stopProfit?'#3ea6ff':zoneColors.sl;
+   const spFill=stopProfit?'rgba(62,166,255,0.15)':hexToRgba(zoneColors.sl,0.15);
    const spLabel=stopProfit?'Stop Profit':'Stop';
    ctx.fillStyle=spFill;
    ctx.fillRect(xOrigin,Math.min(yEntry,ySl),xRight-xOrigin,Math.abs(yEntry-ySl)||1);
@@ -7386,7 +7468,7 @@ function drawTpSlZoneBox(ctx,opts){
      // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
      const slEuro=Number.isFinite(lots)?euroAtLevel(entry,sl,lots,assetKey):null;
      const slEuroTxt=slEuro!=null?` • ${stopProfit?'+':'-'}${euro(slEuro)}`:'';
-     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,'#fff',undefined,w-pad.r);
+     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
    }
  }
  // Separatore tratteggiato bianco all'entrata (come la linea centrale dello strumento
@@ -10394,6 +10476,8 @@ $('candleTheme')?.addEventListener('change',()=>{ candleTheme=$('candleTheme').v
 // colore (evento 'input', come drawColor sopra), non solo al rilascio.
 $('candleColorBuy')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('candleColorSell')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('tpZoneColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('slZoneColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('pipDecimals')?.addEventListener('change',()=>{draw();update();});
 $('pipDecimals')?.addEventListener('input',()=>{update();});
 
@@ -10949,7 +11033,11 @@ async function fetchMt5Positions(){
            // orario/candela di apertura — sbagliato per una posizione aperta DIRETTAMENTE su
            // MT5, il cui vero istante di apertura è rp.time (epoch secondi, dato reale dal
            // broker). Usarlo qui allinea l'apertura disegnata a grafico con quella vera su MT5.
-           const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now();
+           // Clamp di sicurezza (vedi commento identico più sotto, blocco principale): un bridge
+           // non ancora aggiornato può ancora restituire rp.time nell'orario SERVER del broker
+           // (non UTC) — mai più avanti di "adesso" per davvero, altrimenti l'ancoraggio
+           // insegue ogni nuova candela invece di restare fermo.
+           const realOpenMs=Math.min(Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now(),Date.now());
            const realOpenIdx=rowIndexContainingTime(realOpenMs);
            const pos={
              id:Date.now()+Math.random(),
@@ -10974,7 +11062,18 @@ async function fetchMt5Positions(){
        // (Date.now()) né la candela di replay attualmente a schermo (rows[idx]) — altrimenti la
        // freccia/casella TP-SL viene disegnata sulla candela sbagliata, con relativo prezzo di
        // apertura mostrato fuori posto anche se pos.entry è già corretto.
-       const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now();
+       // BUG RISOLTO ("l'apertura di una posizione aperta direttamente su MT5 non resta ferma:
+       // continua a spostarsi verso destra man mano che arrivano nuove candele"): rp.time è
+       // l'orario del SERVER del broker, quasi mai davvero UTC (spesso EET, UTC+2/+3) — il
+       // bridge ora lo corregge già alla fonte (vedi bridge.py, _server_time_offset_seconds),
+       // ma un bridge non ancora aggiornato sul PC dell'utente può ancora restituirlo grezzo:
+       // se il server risulta "avanti" rispetto a UTC, ogni ricalcolo di rowIndexContainingTime
+       // lo troverebbe sempre più avanti di qualunque candela già caricata, agganciandosi
+       // sempre all'ULTIMA candela disponibile e "inseguendola" mano a mano che il grafico ne
+       // riceve di nuove. Una posizione reale non può mai essere stata aperta nel futuro: questo
+       // clamp è quindi sempre sicuro, indipendentemente dal fatto che il bridge sia aggiornato
+       // o no.
+       const realOpenMs=Math.min(Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now(),Date.now());
        const realOpenIdx=rowIndexContainingTime(realOpenMs);
        const pos={
          id:Date.now()+Math.random(),
