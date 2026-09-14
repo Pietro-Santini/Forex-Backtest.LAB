@@ -11077,6 +11077,21 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
 let mt5CredsDraft=null; // {login, password, server} — il conto attualmente connesso
 let mt5CredsDirHandle=null;
 let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a buon fine
+// RICHIESTO ESPLICITAMENTE: se l'utente ha già superato con successo il gate "hai installato
+// MT5?" (o si è già connesso davvero almeno una volta) su QUESTO PC, non richiederglielo più ad
+// ogni apertura del popup di login — persiste tra le sessioni (localStorage) esattamente come le
+// altre preferenze di interfaccia salvate allo stesso modo (vedi fxbt_chartExtrasOpen). Il
+// controllo VERO di sicurezza (bridge acceso? terminale MT5 installato?) resta comunque garantito
+// dal tentativo di connessione reale subito dopo: se qualcosa è cambiato nel frattempo (terminale
+// disinstallato, bridge non ancora acceso), il fallback mt5NoTerminalHelp/mt5BridgeHelp esistente
+// scatta comunque, quindi saltare il gate qui non toglie nessuna sicurezza, solo un passaggio
+// ridondante per chi ha già dimostrato di avercelo.
+let mt5TerminalConfirmedBefore=false;
+try{ mt5TerminalConfirmedBefore=localStorage.getItem('fxbt_mt5TerminalConfirmed')==='1'; }catch(e){}
+function markMt5TerminalConfirmed(){
+ mt5TerminalConfirmedBefore=true;
+ try{ localStorage.setItem('fxbt_mt5TerminalConfirmed','1'); }catch(e){}
+}
 // true se ERO connesso a un conto MT5 reale nell'ultima sessione salvata (letto da
 // applyLightSessionState): usato SOLO da initSession() per decidere se proporre il popup di
 // riconnessione automatica al prossimo avvio — vedi lì.
@@ -12641,6 +12656,11 @@ async function connectToMt5Bridge(creds){
  if(!res.ok){
    return {ok:false,message:(data && data.detail)?data.detail:('Errore HTTP '+res.status)};
  }
+ // Una connessione VERA appena riuscita è la prova più forte possibile che il terminale MT5 è
+ // installato e funzionante su questo PC: non richiedere più il gate "hai installato MT5?" ad
+ // ogni popup di login futuro, qualunque sia la strada che ha portato qui (login manuale,
+ // riconnessione automatica con credenziali salvate, cambio account dalla tendina...).
+ markMt5TerminalConfirmed();
  return {ok:true,data};
 }
 // Vera chiamata POST /disconnect al bridge locale: chiude la sessione MT5 lato terminale
@@ -12720,7 +12740,18 @@ function resetMt5TerminalGate(){
 async function mt5StartLoginFlow(){
  const r=await fetchMt5WithTimeout('/health',{method:'GET'},1500);
  if(r.ok){
-   $('mt5TerminalGate').style.display='flex';
+   // RICHIESTO ESPLICITAMENTE: se l'utente ha già superato questo gate (o si è già connesso)
+   // in precedenza su questo PC, si salta direttamente ai campi di login — vedi
+   // mt5TerminalConfirmedBefore più sopra. Il vero controllo di sicurezza resta comunque il
+   // tentativo di connessione reale appena sotto (mt5NoTerminalHelp scatta comunque se nel
+   // frattempo il terminale non c'è più).
+   if(mt5TerminalConfirmedBefore){
+     $('mt5TerminalGate').style.display='none';
+     $('mt5CredFields').style.display='flex';
+     $('mt5LoginSubmitBtn').disabled=false;
+   }else{
+     $('mt5TerminalGate').style.display='flex';
+   }
  }else{
    $('mt5BridgeHelp').style.display='block';
  }
@@ -12999,6 +13030,7 @@ $('mt5GateYesBtn').addEventListener('click',async()=>{
    $('mt5TerminalGate').style.display='none';
    $('mt5CredFields').style.display='flex';
    $('mt5LoginSubmitBtn').disabled=false;
+   markMt5TerminalConfirmed(); // non richiedere più questo gate su questo PC d'ora in poi
  }else{
    resultEl.style.color='#e0857a';
    resultEl.textContent='❌ L\'app MT5 non è presente su questo dispositivo. Vuoi procedere con l\'installazione? Usa il pulsante di download qui sotto, poi clicca di nuovo "Sì, è installato".';
