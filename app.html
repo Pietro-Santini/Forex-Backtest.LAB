@@ -9041,6 +9041,11 @@ async function placeRealMt5Order(side){
    // background la escludono tutte): è MT5 stesso a decidere quando una posizione reale chiude.
    const start=rows[idx]?idx:0;
    const startTime=(rows[idx]&&Number.isFinite(parseDateTime(rows[idx].date)))?parseDateTime(rows[idx].date):Date.now();
+   // Fissa subito l'ancoraggio per questo ticket (vedi mt5TicketOpenAnchor/resolveMt5OpenAnchor
+   // più sotto): se in futuro il polling la perde e ritrova per un giro sfortunato, riuserà
+   // SEMPRE questo istante — quello vero, dell'app che l'ha appena aperta — invece di
+   // ricalcolarne uno nuovo da un eventuale rp.time del broker.
+   mt5TicketOpenAnchor[String(ticket)]={realOpenMs:startTime,realOpenIdx:start};
    const pos={
      id:Date.now()+Math.random(),
      asset:symbol,
@@ -11089,6 +11094,30 @@ let mt5WasConnectedLastSession=false;
 let mt5RealPositions=[];
 let mt5PositionsPollTimer=null;
 let mt5PositionsFetchInFlight=false; // evita di accumulare richieste in parallelo se una risposta tarda
+// BUG RISOLTO ("il punto di apertura di una posizione aperta DIRETTAMENTE su MT5 continua a
+// spostarsi verso destra, candela per candela, invece di restare fermo"): il fix precedente
+// (clamp "mai nel futuro" + correzione del fuso del server nel bridge) rende STABILE l'orario
+// di apertura calcolato al momento dell'ADOZIONE — ma se quella stessa posizione viene per
+// qualunque motivo "persa e ri-adottata" più avanti (es. un singolo giro di polling sfortunato
+// che la segna sospetta due volte di fila — vedi mt5MissingSince — o una fotografia del conto
+// momentaneamente vuota/incompleta lato bridge), l'adozione RIPARTE da zero: con un bridge non
+// ancora aggiornato (orologio del server broker avanti rispetto a UTC), il clamp restituisce
+// sempre "adesso", quindi ogni ri-adozione fissa l'apertura un po' più avanti nel tempo di
+// quella precedente — visivamente identico a un punto di apertura che "insegue" ogni nuova
+// candela. Fix: il primo orario di apertura calcolato per un dato ticket resta in cache qui
+// (per tutta la sessione del browser, a prescindere da quante volte quel ticket viene poi
+// perso e ritrovato dal polling) e viene SEMPRE riusato al posto di ricalcolarlo da capo.
+let mt5TicketOpenAnchor={};
+function resolveMt5OpenAnchor(rp){
+ const key=String(rp.ticket);
+ const cached=mt5TicketOpenAnchor[key];
+ if(cached && Number.isFinite(cached.realOpenMs))return cached;
+ const realOpenMs=Math.min(Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now(),Date.now());
+ const realOpenIdx=rowIndexContainingTime(realOpenMs);
+ const anchor={realOpenMs,realOpenIdx};
+ mt5TicketOpenAnchor[key]=anchor;
+ return anchor;
+}
 // Contatore (non booleano, per sicurezza in caso di doppio click) di richieste di apertura
 // ordine reale A MERCATO attualmente in corso da placeRealMt5Order(): stessa famiglia di bug
 // del fix qui sopra in allTrackedMt5PositionTickets(), ma per l'apertura diretta invece che per
@@ -11196,6 +11225,7 @@ async function fetchMt5Positions(){
          if(Number.isFinite(Number(dr.data.price)))price=Number(dr.data.price);
        }
        closeTrade(closeResultLabel(reason,p),price,p);
+       delete mt5TicketOpenAnchor[String(p.mt5Ticket)]; // chiusura vera confermata: la cache per questo ticket non serve più
      }
      // Posizioni reali aperte DIRETTAMENTE nel terminale MT5 (a mano, non tramite i pulsanti
      // BUY/SELL dell'app): richiesto esplicitamente che non restino visibili SOLO nella tabella
@@ -11253,12 +11283,12 @@ async function fetchMt5Positions(){
            // orario/candela di apertura — sbagliato per una posizione aperta DIRETTAMENTE su
            // MT5, il cui vero istante di apertura è rp.time (epoch secondi, dato reale dal
            // broker). Usarlo qui allinea l'apertura disegnata a grafico con quella vera su MT5.
-           // Clamp di sicurezza (vedi commento identico più sotto, blocco principale): un bridge
-           // non ancora aggiornato può ancora restituire rp.time nell'orario SERVER del broker
-           // (non UTC) — mai più avanti di "adesso" per davvero, altrimenti l'ancoraggio
-           // insegue ogni nuova candela invece di restare fermo.
-           const realOpenMs=Math.min(Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now(),Date.now());
-           const realOpenIdx=rowIndexContainingTime(realOpenMs);
+           // resolveMt5OpenAnchor() applica anche il clamp di sicurezza "mai nel futuro" E la
+           // cache per ticket (vedi commento su mt5TicketOpenAnchor più sopra): così, anche se
+           // questa posizione viene "persa e ritrovata" dal polling più avanti, l'orario di
+           // apertura usato resta SEMPRE il primo calcolato per questo ticket, invece di
+           // inseguire ogni nuova candela ad ogni ri-adozione.
+           const {realOpenMs,realOpenIdx}=resolveMt5OpenAnchor(rp);
            const pos={
              id:Date.now()+Math.random(),
              asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
@@ -11293,8 +11323,14 @@ async function fetchMt5Positions(){
        // riceve di nuove. Una posizione reale non può mai essere stata aperta nel futuro: questo
        // clamp è quindi sempre sicuro, indipendentemente dal fatto che il bridge sia aggiornato
        // o no.
-       const realOpenMs=Math.min(Number.isFinite(Number(rp.time))?Number(rp.time)*1000:Date.now(),Date.now());
-       const realOpenIdx=rowIndexContainingTime(realOpenMs);
+       // BUG RISOLTO DI NUOVO ("continua a inseguire le candele anche con questo clamp"): il
+       // clamp da solo non basta se questa STESSA posizione viene persa e ri-adottata più volte
+       // dal polling (mt5MissingSince/giro sospetto — vedi sopra): con un bridge non ancora
+       // aggiornato, ogni ri-adozione ricalcolava il clamp con un Date.now() SEMPRE PIÙ AVANTI,
+       // spostando l'ancoraggio un po' più a destra ad ogni falso allarme. resolveMt5OpenAnchor()
+       // tiene in cache il primo orario calcolato per QUESTO ticket e lo riusa sempre, quindi
+       // anche una ri-adozione spuria non sposta più nulla.
+       const {realOpenMs,realOpenIdx}=resolveMt5OpenAnchor(rp);
        const pos={
          id:Date.now()+Math.random(),
          asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
