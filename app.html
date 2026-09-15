@@ -1578,7 +1578,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
             riproposto QUI accanto all'icona a orologio (#quickPendingBtn) così non serve scorrere
             fino al pannello per attivare l'ordine dopo aver posizionato entry/SL/TP sul grafico —
             nessuna logica duplicata, richiama la stessa funzione condivisa. -->
-       <button id="quickConfirmPendingBtn" type="button" class="chartCornerBtn" title="Conferma e attiva l'ordine pendente (stesso pulsante CONFERMA ORDINE PENDENTE del pannello Ordini pendenti)">✅</button>
+       <button id="quickConfirmPendingBtn" type="button" class="chartCornerBtn" style="display:none" title="Conferma e attiva l'ordine pendente (stesso pulsante CONFERMA ORDINE PENDENTE del pannello Ordini pendenti)">✅</button>
        <button id="quickPendingKindToggle" type="button" class="chartCornerBtn" style="display:none" title="LIMIT attivo: premi per passare a STOP">LIMIT</button>
        <button id="quickBarToggleBtn" type="button" class="chartCornerBtn" title="Mostra/nascondi la barra ordine rapido">
          <svg width="22" height="15" viewBox="0 0 24 16" aria-hidden="true">
@@ -3507,6 +3507,13 @@ function applyStraightLock(fixedPoint,movingPoint){
 // 'SL_PENDING'/'TP_PENDING' agiscono SOLO sulle caselle dedicate dell'ordine pendente,
 // 'ENTRY' sul prezzo di entrata dell'ordine pendente in composizione.
 let placingTradeLevel=null, previewTradeLevel=null, placingTradeLevelDrag=null;
+// RICHIESTO ESPLICITAMENTE: il pulsante ✅ CONFERMA dentro al grafico (#quickConfirmPendingBtn,
+// accanto all'icona a orologio) deve restare nascosto finché non si clicca quell'icona per
+// iniziare a comporre un ordine pendente — non può bastare placingTradeLevel==='ENTRY' (si
+// azzera da solo appena si clicca il grafico per fissare il prezzo d'entrata, MOLTO prima che
+// l'utente abbia finito di impostare SL/TP e sia pronto a confermare): serve uno stato dedicato,
+// che resta true per tutta la composizione e si azzera solo ad annullamento/conferma esplicita.
+let quickPendingConfirmActive=false;
 // Tipo di ordine pendente in composizione: 'LIMIT' o 'STOP'. Determina il colore della
 // linea di entrata (bozza, anteprima e già creata): per LIMIT sopra al prezzo attuale =
 // rosso, sotto = verde; per STOP sopra al prezzo attuale = verde, sotto = rosso.
@@ -3548,6 +3555,11 @@ function updateTradeLevelArmUI(){
  $('quickPendingBtn')?.classList.toggle('active',placingTradeLevel==='ENTRY');
  const qToggle=$('quickPendingKindToggle');
  if(qToggle)qToggle.style.display=placingTradeLevel==='ENTRY'?'inline-flex':'none';
+ // Vedi commento su quickPendingConfirmActive più sopra: mostrato SOLO mentre si sta componendo
+ // un ordine pendente iniziato dal pulsante ⏱️ dentro al grafico, non semplicemente mentre ENTRY
+ // è armato (altrimenti sparirebbe subito dopo il click che fissa il prezzo d'entrata).
+ const qConfirm=$('quickConfirmPendingBtn');
+ if(qConfirm)qConfirm.style.display=quickPendingConfirmActive?'inline-flex':'none';
  $('chart').parentElement.classList.toggle('drawMode',!!placingTradeLevel||drawTool!=='cursor');
 }
 // floatingDoc: quando il grafico è "staccato" in una finestra separata (window.open, stesso
@@ -8802,6 +8814,9 @@ function drawTpSlZoneBox(ctx,opts){
    ctx.setLineDash([]);ctx.globalAlpha=1;
    // hidePills (trade GIÀ CHIUSI): l'etichetta "Target:..." non serve più a trade concluso —
    // resta solo la casella colorata più l'esito/R:R (vedi tooltipLines/alwaysShowTooltip).
+   // CHIARITO ESPLICITAMENTE dall'utente: tpSlZoneFillVisible NON deve toccare questa etichetta
+   // (resta sempre visibile) — nasconde SOLO il riempimento colorato sopra (vedi "if(tpSlZoneFillVisible)"
+   // poco più sopra), che è la VERA "casella" verde/rossa a cui l'utente si riferisce.
    if(!hidePills){
      const pct=entry!==0?((tp-entry)/entry*100):0;
      const pipsVal=(tp-entry)/pipSize();
@@ -8829,6 +8844,8 @@ function drawTpSlZoneBox(ctx,opts){
    ctx.strokeStyle=spColor;ctx.lineWidth=1.3;ctx.globalAlpha=0.9;
    ctx.beginPath();ctx.moveTo(xOrigin,ySl);ctx.lineTo(xRight,ySl);ctx.stroke();
    ctx.setLineDash([]);ctx.globalAlpha=1;
+   // Vedi commento nel blocco Target qui sopra: l'etichetta resta sempre visibile, solo il
+   // riempimento colorato è governato da tpSlZoneFillVisible.
    if(!hidePills){
      const pct=entry!==0?((sl-entry)/entry*100):0;
      const pipsVal=(sl-entry)/pipSize();
@@ -10501,11 +10518,11 @@ $('quickLotCalcBtn')?.addEventListener('click',()=>{ $('applySuggestedLot')?.cli
 // (vedi entryLineColor), esattamente come richiesto ("come fa esattamente MetaTrader 5").
 $('quickPendingBtn')?.addEventListener('click',()=>{
  if(placingTradeLevel==='ENTRY'){
-   placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
+   placingTradeLevel=null; previewTradeLevel=null; quickPendingConfirmActive=false; updateTradeLevelArmUI();
    $('status').textContent='Posizionamento annullato.';
    return;
  }
- placingTradeLevel='ENTRY'; previewTradeLevel=null; updateTradeLevelArmUI();
+ placingTradeLevel='ENTRY'; previewTradeLevel=null; quickPendingConfirmActive=true; updateTradeLevelArmUI();
  $('status').textContent=`Clicca sul grafico nel punto (anche futuro) in cui vuoi che l'ordine ${pendingOrderKind} si attivi (Esc per annullare). Usa il pulsante accanto per passare a ${pendingOrderKind==='LIMIT'?'STOP':'LIMIT'}.`;
  scrollToChart();
 });
@@ -11852,6 +11869,21 @@ chartEl.addEventListener('pointerup',e=>{
    }
    closedTradeClickCandidateId=null;
  }
+ // RICHIESTO ESPLICITAMENTE (rifiutato l'approccio precedente con un pulsante/pillola "torna al
+ // vivo": l'utente vuole che il grafico riprenda da solo, senza dover cliccare nulla): un
+ // trascinamento manuale congela la vista (freezeViewIfNeeded, all'inizio del pan) così si può
+ // scorrere la cronologia senza che la vista "salti via" mentre ci si sposta — comportamento
+ // corretto e voluto. Il problema reale era che restava congelata PER SEMPRE anche quando, alla
+ // fine dello stesso trascinamento, si finiva di nuovo vicini o esattamente sull'ultima candela:
+ // da quel momento in poi ogni nuova candela dal vivo restava fuori dalla vista (viewEnd fisso)
+ // finché non si premeva a mano "TORNA ALL'ULTIMA CANDELA". Qui, al rilascio del trascinamento,
+ // se si è rimasti entro 2 candele dal bordo live (idx), si riattiva da sola la modalità
+ // "insegui l'ultima candela" — nessun clic richiesto. Se invece si è finiti più indietro nella
+ // cronologia, la vista resta ferma lì: è la normale navigazione voluta, non un difetto.
+ if(panDrag && rows.length && viewEnd>=idx-2){
+   followLatest=true; viewPriceLo=null; viewPriceHi=null;
+   draw();
+ }
  panDrag=false;
  chartEl.releasePointerCapture?.(e.pointerId);
 });
@@ -12052,7 +12084,7 @@ function confirmPendingOrderFromFields(scrollToPanel){
  createPendingOrder(side);
  // Dopo la conferma disattiviamo tutti i pulsanti SL/TP/ENTRY SUL GRAFICO (smettono di
  // essere "armati": se erano attivi, si spengono e il grafico torna in modalità normale).
- placingTradeLevel=null;previewTradeLevel=null;placingTradeLevelDrag=null;
+ placingTradeLevel=null;previewTradeLevel=null;placingTradeLevelDrag=null;quickPendingConfirmActive=false;
  updateTradeLevelArmUI();
  draw();
  if(scrollToPanel){
@@ -12526,7 +12558,7 @@ function handleDrawingKeyboardShortcuts(e){
  const tag=(e.target&&e.target.tagName||'').toLowerCase();
  if(tag==='input'||tag==='select'||tag==='textarea')return;
  if(e.key==='Escape'){
-   if(placingTradeLevel){placingTradeLevel=null;previewTradeLevel=null;placingTradeLevelDrag=null;updateTradeLevelArmUI();refreshTradeLevelUI();$('status').textContent='Posizionamento annullato.';draw();return;}
+   if(placingTradeLevel||quickPendingConfirmActive){placingTradeLevel=null;previewTradeLevel=null;placingTradeLevelDrag=null;quickPendingConfirmActive=false;updateTradeLevelArmUI();refreshTradeLevelUI();$('status').textContent='Posizionamento annullato.';draw();return;}
    if(placingStep!==0){pendingDrawing=null;placingStep=0;touchDrawDrag=false;setDrawTool('cursor');$('status').textContent='Disegno annullato.';}
    else if(selectedDrawing)deselectDrawing();
    return;
