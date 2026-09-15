@@ -4817,11 +4817,20 @@ function update(){
  // deduplica mai: è la vista di riferimento, sempre presente, di ciò che è VERAMENTE aperto.
  // La stessa posizione può ANCHE comparire come riga standard qui sotto (con il badge 🖥️) se è
  // stata aperta dall'app mentre quella sessione era quella attiva — le due viste convivono.
+ // BUG RISOLTO ("continua a non fare ciò che ho richiesto" sul toggle colore caselle TP/SL): il
+ // fix precedente era stato applicato SOLO alla tabella #openPositions (le posizioni delle 4
+ // sessioni simulate) — ma un utente collegato a un conto MT5 reale guarda la tabella DEDICATA
+ // "🖥️ Posizioni MT5 (conto reale collegato)" qui sotto (#mt5OpenPositions, sempre presente,
+ // aggiornata ogni 2s dal bridge), che aveva le celle SL/TP come <td> semplici — nessuna classe
+ // slTpZoneToggleCell, quindi zero click possibile — e il suo listener (vedi più sotto) non
+ // controllava nemmeno quella classe. Stessa identica classe/title/comportamento di
+ // #openPositions applicati qui: ora il toggle funziona su ENTRAMBE le tabelle.
+ const zoneToggleTitleMt5='Clicca per mostrare/nascondere il colore delle caselle TP/SL sul grafico (le linee restano visibili)';
  const mt5RowsHtml=mt5RealPositions.map((p,i)=>{
    const plVal=Number(p.profit);
    const plCell=Number.isFinite(plVal)?`<td class="${plVal>=0?'liveProfit':'liveLoss'}" title="Profitto di prezzo, esclude lo swap (${euro(p.swap||0)})">${(plVal>=0?'+':'')+euro(plVal)}</td>`:'<td>—</td>';
    const rr=riskRewardLabel(p.price_open,p.sl,p.tp);
-   return `<tr><td>${i+1}</td><td>#${p.ticket}</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPrice(p.price_open)}</td><td>${p.sl!=null?fmtPrice(p.sl):'—'}</td><td>${p.tp!=null?fmtPrice(p.tp):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPrice(p.price_current)}</td>`+plCell+
+   return `<tr><td>${i+1}</td><td>#${p.ticket}</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPrice(p.price_open)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitleMt5}">${p.sl!=null?fmtPrice(p.sl):'—'}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitleMt5}">${p.tp!=null?fmtPrice(p.tp):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPrice(p.price_current)}</td>`+plCell+
    // Richiesto esplicitamente: rimosso il pulsante "✏️ SL/TP" (non serve più) — restano solo
    // BE e Chiudi. modifyMt5TicketFromTable() più sotto resta definita ma non più agganciata a
    // nessun pulsante qui.
@@ -10571,6 +10580,16 @@ async function modifyMt5TicketFromTable(mt5ModifyTicket){
  fetchMt5Positions();
 }
 $('mt5OpenPositions').addEventListener('click',async e=>{
+ // Stesso identico toggle già presente su #openPositions (vedi commento lì e su mt5RowsHtml più
+ // sopra): controllato PRIMA di tutto il resto, queste celle non devono innescare nessun'altra
+ // azione della riga.
+ if(e.target.closest('td.slTpZoneToggleCell')){
+   tpSlZoneFillVisible=!tpSlZoneFillVisible;
+   draw();
+   scheduleSave();
+   $('status').textContent=tpSlZoneFillVisible?'Colore delle caselle TP/SL sul grafico riattivato.':'Colore delle caselle TP/SL sul grafico nascosto: le linee restano visibili.';
+   return;
+ }
  const mt5CloseTicket=e.target.getAttribute('data-mt5-close');
  const mt5BeTicket=e.target.getAttribute('data-mt5-be');
  if(mt5CloseTicket)return closeMt5TicketFromTable(mt5CloseTicket);
@@ -13985,6 +14004,23 @@ const MT5_FEED_URL='http://127.0.0.1:8001';
 let mt5FeedSymbolForAsset={};
 let mt5FallbackConfirmedForAsset=new Set(); // asset per cui l'utente ha già confermato "resta su Capital.com" in questa sessione
 let mt5FeedWs=null, mt5FeedWsSymbol=null, mt5FeedWsReconnectTimer=null;
+// BUG RISOLTO ("si blocca all'ultima candela e non aggiorna più", ricomparso IDENTICO dopo i due
+// fix precedenti — perché la causa vera è questa, non quelle): mt5FeedWsSymbol è null ogni volta
+// che il WS non è connesso IN QUESTO MOMENTO (disconnectMt5Stream lo azzera sempre, anche durante
+// una disconnessione VOLUTA a cavallo del rollover di candela, vedi startMt5RefreshTimer). Il
+// watchdog di riconnessione dentro startMt5RefreshTimer leggeva PROPRIO mt5FeedWsSymbol per sapere
+// quale simbolo riconnettere — quindi se, DURANTE la pausa di 1s a cavallo del rollover,
+// loadLiveHistoryFromMt5() falliva anche una sola volta per un motivo qualsiasi (un fetch/history
+// che fallisce, un intoppo momentaneo dell'IPC verso il terminale — casi già esplicitamente
+// previsti nei commenti qui sotto) SENZA mai arrivare alla connectMt5Stream() finale, il simbolo
+// restava null PER SEMPRE: il prossimo giro del timer trovava "symbol" null e usciva subito
+// (return), watchdog di riconnessione incluso — quindi nessuno tentava mai più di riconnettersi,
+// esattamente il freeze "al termine della candela" segnalato fin dal primo report. Fix: un
+// secondo stato, mt5ActiveSymbol, che ricorda "quale simbolo dovremmo star trasmettendo in Live"
+// indipendentemente dallo stato istantaneo della connessione — sopravvive a una disconnessione
+// voluta interna, e viene azzerato SOLO quando si abbandona davvero MT5 come sorgente (vedi i
+// punti che lo azzerano più sotto).
+let mt5ActiveSymbol=null;
 let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null;
 let lastMt5ChartUpdateAt=0, mt5HardResyncAttemptAt=0;
 let mt5LastSeenCandleBucketStart=null, mt5CandleRolloverResyncAt=0, mt5CandleRolloverResyncInProgress=false, mt5CandleFrozen=false;
@@ -14014,6 +14050,7 @@ async function syncChartSourceWithMt5(){
  }else{
    stopMt5RefreshTimer();
    disconnectMt5Stream();
+   mt5ActiveSymbol=null; // si abbandona MT5 come sorgente grafico: vedi commento su mt5ActiveSymbol
    // Ripristina Capital.com come sorgente ESCLUSIVA del grafico (capitalWsPrimaryEpic viene
    // rivalorizzato dentro __loadLiveHistoryFromCapitalImpl, come sempre) — se il WS era già
    // rimasto connesso in background (vedi sopra) si limita a resettare storico+sottoscrizioni
@@ -14043,7 +14080,7 @@ async function loadLiveHistoryFromMt5(asset,opts){
  const resolved=await resolveMt5SymbolForAsset(asset);
  if(resolved===undefined){
    $('status').textContent=`⚠️ Servizio dati MT5 (mt5_feed_server.py, porta 8001) non raggiungibile: il grafico resta su Capital.com finché non riparte (avvia "uvicorn mt5_feed_server:app --port 8001" sul tuo PC).`;
-   stopMt5RefreshTimer();disconnectMt5Stream();
+   stopMt5RefreshTimer();disconnectMt5Stream();mt5ActiveSymbol=null;
    return __loadLiveHistoryFromCapitalImpl(asset,opts);
  }
  if(resolved===null){
@@ -14062,12 +14099,18 @@ async function loadLiveHistoryFromMt5(asset,opts){
      }
      mt5FallbackConfirmedForAsset.add(asset);
    }
-   stopMt5RefreshTimer();disconnectMt5Stream();
+   stopMt5RefreshTimer();disconnectMt5Stream();mt5ActiveSymbol=null;
    return __loadLiveHistoryFromCapitalImpl(asset,opts);
  }
  // Simbolo MT5 risolto: procede con la sorgente MT5 esclusiva — stessa logica di
  // preservazione vista/disegni/posizione attiva già usata da __loadLiveHistoryFromCapitalImpl,
  // per garantire lo stesso identico comportamento percepito indipendentemente dalla sorgente.
+ // mt5ActiveSymbol va valorizzato QUI, PRIMA del fetch dello storico qui sotto (che può fallire):
+ // vedi il commento su mt5ActiveSymbol più in alto — deve sopravvivere anche a un resync che va
+ // storto, altrimenti il watchdog di riconnessione in startMt5RefreshTimer perde per sempre il
+ // simbolo da riconnettere proprio nel caso (rollover di candela + intoppo transitorio) che questa
+ // variabile esiste per coprire.
+ mt5ActiveSymbol=resolved;
  const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
  currentAssetKey=asset;
@@ -14225,7 +14268,12 @@ function startMt5RefreshTimer(){
  if(mt5RefreshTimer)return;
  mt5RefreshTimer=setHeartbeatInterval(async ()=>{
    if(!liveModeActive || !mt5Connected)return;
-   const symbol=mt5FeedWsSymbol;
+   // BUG FIX: legge mt5ActiveSymbol (sopravvive a una disconnessione voluta interna, es. a
+   // cavallo del rollover di candela), NON mt5FeedWsSymbol (che disconnectMt5Stream azzera
+   // SEMPRE, anche durante quella pausa voluta) — vedi il commento completo su mt5ActiveSymbol
+   // più in alto nel file per il perché questa distinzione è quella che tiene vivo il watchdog
+   // di riconnessione qui sotto invece di farlo morire in silenzio al primo intoppo.
+   const symbol=mt5ActiveSymbol;
    if(!symbol)return;
    // Stessa identica pausa di 1s a cavallo del cambio candela già usata per Capital.com (vedi
    // commento completo su startLiveRefreshTimer): evita che una candela "di transizione" coi
