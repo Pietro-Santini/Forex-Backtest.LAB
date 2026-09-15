@@ -14031,9 +14031,23 @@ function connectMt5Stream(symbol){
    if(ws!==mt5FeedWs)return;
    let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
    if(msg && msg.error){ console.warn('[MT5Feed] errore WS:',msg.error); return; }
-   if(!msg || !Number.isFinite(msg.bid))return;
-   if(mt5CandleFrozen)return; // stessa pausa di 1s a cavallo del cambio candela usata da Capital.com
+   if(!msg)return;
+   // BUG RISOLTO ("al termine della candela aggiorna ad X tempo a seconda del timeframe
+   // selezionato", con più riconnessioni WS ravvicinate) — il server (mt5_feed_server.py) manda un
+   // messaggio "vero" SOLO quando il prezzo cambia davvero (niente spam di prezzi duplicati sul
+   // grafico), ma QUI sotto usavamo "tempo dall'ultimo messaggio ricevuto" come unico segnale per
+   // decidere se il canale fosse vivo (watchdog di staleness, soglia 8s, più sotto in
+   // startMt5RefreshTimer). Su molti simboli/orari (es. XAUUSD fuori dagli orari più liquidi) il
+   // prezzo resta fermo per PIÙ di 8s anche col terminale perfettamente sano: zero messaggi ->
+   // pensavamo il canale morto -> disconnessione/riconnessione inutile ogni ~8-10s in loop, e
+   // l'unico aggiornamento visibile restava la risincronizzazione forzata di fine candela (la cui
+   // cadenza è esattamente il timeframe scelto: da qui il sintomo). Il server ora manda anche un
+   // "battito" leggero (msg.heartbeat, senza prezzo) quando non c'è un tick nuovo da inviare: conta
+   // come prova di vita del canale (resetta lastMt5TickAt) ma NON tocca mai lastMt5TickPrice.
    lastMt5TickAt=Date.now();
+   if(msg.heartbeat)return;
+   if(!Number.isFinite(msg.bid))return;
+   if(mt5CandleFrozen)return; // stessa pausa di 1s a cavallo del cambio candela usata da Capital.com
    lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
  };
  ws.onerror=()=>{ if(ws===mt5FeedWs)$('status').textContent='⚠️ Streaming Live MT5: errore di connessione WebSocket.'; };
