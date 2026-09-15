@@ -13512,18 +13512,25 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // elimina il problema alla radice, indipendentemente da come cambia l'array sotto.
  let preserved=null;
  if(!shouldResetView){
-   // BUG RISOLTO (lo spostamento/pan non restava fissato: tornava sempre all'ultima candela,
-   // a differenza dello zoom che invece funzionava già): viewEnd è quasi sempre un numero CON
-   // DECIMALI durante uno scorrimento fluido del grafico (vedi commento su getViewWindow più
-   // sopra: "posizioni... anche frazionarie"), e rows[viewEnd] con un indice non intero
-   // restituisce SEMPRE undefined in JavaScript — quindi pinnedTime risultava quasi sempre
-   // null, e con lui il ripristino cadeva nel ramo di fallback "ultima candela". L'indice va
-   // arrotondato per leggere la candela, conservando però lo scarto frazionario originale per
-   // ripristinare la posizione esatta al pixel, non solo la candela più vicina.
-   const anchorIdx=rows.length?Math.max(0,Math.min(rows.length-1,Math.round(viewEnd))):null;
-   const pinnedTime=(anchorIdx!=null&&rows[anchorIdx])?closeTimeOf(rows[anchorIdx]):null;
-   const pinnedFrac=(anchorIdx!=null)?(viewEnd-anchorIdx):0;
-   preserved={pinnedTime,pinnedFrac,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+   // BUG RISOLTO ESPLICITAMENTE, dopo diversi giri di test con l'utente ("le candele successive
+   // devono continuare ad aggiornarsi SEMPRE, indipendentemente da dove mi trovo — il pulsante
+   // TORNA ALL'ULTIMA CANDELA serve SOLO a saltare lì, non è lui a far ripartire
+   // l'aggiornamento"): questa risincronizzazione gira periodicamente (e ad ogni chiusura di
+   // candela quando in Live), quindi succede in continuazione, non solo occasionalmente. La
+   // versione precedente ancorava la vista a un ORARIO fisso (pinnedTime) — corretto per non
+   // far "saltare" la vista quando la risincronizzazione periodica riaggregava le stesse
+   // candele (motivo per cui esisteva; vedi anche il commento sopra sull'indice frazionario),
+   // ma con un effetto collaterale mai notato prima: con followLatest=false (utente che ha
+   // trascinato il grafico altrove) la vista restava ancorata ESATTAMENTE alla stessa candela
+   // per sempre — ad ogni nuova candela dal vivo lo scostamento dal bordo veniva ignorato,
+   // quindi la vista non avanzava MAI, dando l'impressione (corretta!) che "l'aggiornamento si
+   // fermi al cambio candela". Ora si preserva invece la DISTANZA dal bordo live in numero di
+   // candele (frazione compresa, per restare precisi anche con lo zoom): la vista avanza di
+   // pari passo con ogni nuova candela che arriva, qualunque sia followLatest, senza mai
+   // "rimandare" l'utente altrove — resta sempre a N candele dal vivo, esattamente quante
+   // l'utente aveva scelto trascinando.
+   const offsetFromEnd=rows.length?((rows.length-1)-viewEnd):0;
+   preserved={offsetFromEnd,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
  }
  masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rebuildRows();
@@ -13533,8 +13540,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // commento completo su scanHistoricalSlTpTouches().
  scanHistoricalSlTpTouches();
  if(preserved){
-   const restoredIdx=preserved.pinnedTime!=null?rowIndexContainingTime(preserved.pinnedTime):null;
-   viewEnd=(restoredIdx!=null)?(restoredIdx+(preserved.pinnedFrac||0)):Math.max(0,rows.length-1);
+   viewEnd=Math.max(0,(rows.length-1)-preserved.offsetFromEnd);
    followLatest=preserved.followLatest;
    priceZoomFactor=preserved.priceZoomFactor;
    viewPriceLo=preserved.viewPriceLo; viewPriceHi=preserved.viewPriceHi;
@@ -14208,17 +14214,30 @@ async function loadLiveHistoryFromMt5(asset,opts){
  const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
  let preserved=null;
  if(!shouldResetView){
-   const anchorIdx=rows.length?Math.max(0,Math.min(rows.length-1,Math.round(viewEnd))):null;
-   const pinnedTime=(anchorIdx!=null&&rows[anchorIdx])?closeTimeOf(rows[anchorIdx]):null;
-   const pinnedFrac=(anchorIdx!=null)?(viewEnd-anchorIdx):0;
-   preserved={pinnedTime,pinnedFrac,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+   // BUG RISOLTO ESPLICITAMENTE, dopo diversi giri di test con l'utente ("le candele successive
+   // devono continuare ad aggiornarsi SEMPRE, indipendentemente da dove mi trovo — il pulsante
+   // TORNA ALL'ULTIMA CANDELA serve SOLO a saltare lì, non è lui a far ripartire
+   // l'aggiornamento"): questa risincronizzazione gira ad OGNI chiusura di candela (vedi il
+   // rollover dentro startMt5RefreshTimer), quindi in Live succede in continuazione, non solo
+   // occasionalmente. La versione precedente ancorava la vista a un ORARIO fisso (pinnedTime) —
+   // corretto per non far "saltare" la vista quando la risincronizzazione periodica riaggregava
+   // le stesse candele (motivo per cui esisteva), ma con un effetto collaterale mai notato
+   // prima: con followLatest=false (utente che ha trascinato il grafico altrove) la vista
+   // restava ancorata ESATTAMENTE alla stessa candela per sempre — ad ogni nuova candela dal
+   // vivo lo scostamento dal bordo veniva ignorato, quindi la vista non avanzava MAI, dando
+   // l'impressione (corretta!) che "l'aggiornamento si fermi al cambio candela". Ora si
+   // preserva invece la DISTANZA dal bordo live in numero di candele (frazione compresa, per
+   // restare precisi anche con lo zoom): la vista avanza di pari passo con ogni nuova candela
+   // che arriva, qualunque sia followLatest, senza mai "rimandare" l'utente altrove — resta
+   // sempre a N candele dal vivo, esattamente quante l'utente aveva scelto trascinando.
+   const offsetFromEnd=rows.length?((rows.length-1)-viewEnd):0;
+   preserved={offsetFromEnd,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
  }
  masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rebuildRows();
  scanHistoricalSlTpTouches();
  if(preserved){
-   const restoredIdx=preserved.pinnedTime!=null?rowIndexContainingTime(preserved.pinnedTime):null;
-   viewEnd=(restoredIdx!=null)?(restoredIdx+(preserved.pinnedFrac||0)):Math.max(0,rows.length-1);
+   viewEnd=Math.max(0,(rows.length-1)-preserved.offsetFromEnd);
    followLatest=preserved.followLatest; priceZoomFactor=preserved.priceZoomFactor;
    viewPriceLo=preserved.viewPriceLo; viewPriceHi=preserved.viewPriceHi;
    autoFitWidth=preserved.autoFitWidth; visibleCount=preserved.visibleCount;
