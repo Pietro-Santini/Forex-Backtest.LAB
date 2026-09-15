@@ -14064,6 +14064,19 @@ function startMt5RefreshTimer(){
      mt5LastSeenCandleBucketStart=nowBucketStart;
      mt5CandleRolloverResyncAt=Date.now();
      mt5CandleFrozen=true;
+     // BUG RISOLTO ("l'aggiornamento si blocca al cambio candela", persisteva anche dopo il fix
+     // del lock lato server): qui NON chiudevamo mai la connessione WebSocket a cavallo del
+     // rollover (a differenza di Capital.com, che la taglia sempre — vedi disconnectCapitalStream
+     // più sopra in startLiveRefreshTimer). Se quella singola connessione WS resta aperta per
+     // ore, e il suo loop lato server finisce anche solo una volta in uno stato bloccato (per
+     // QUALUNQUE causa — non solo la collisione di thread già corretta in mt5_feed_server.py:
+     // anche un intoppo momentaneo dell'IPC verso il terminale, o un mercato che smette di
+     // "tickare" per un istante), quella connessione resta silenziosamente morta per sempre: il
+     // watchdog di staleness qui sotto (8s) avrebbe dovuto accorgersene e riconnettere da solo,
+     // ma tagliare ESPLICITAMENTE la connessione a ogni rollover (come fa già Capital.com da
+     // sempre) elimina la classe di bug alla radice invece di affidarsi solo al watchdog:
+     // ogni candela nuova riparte con una connessione WebSocket fresca lato server.
+     disconnectMt5Stream();
      $('status').textContent='⏸️ Candela chiusa: pausa di 1s, poi risincronizzo con MT5…';
      setTimeout(async ()=>{
        mt5CandleRolloverResyncInProgress=true;
