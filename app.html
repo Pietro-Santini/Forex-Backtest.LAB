@@ -13083,6 +13083,15 @@ let __loadLiveHistoryInFlight=null, __loadLiveHistoryInFlightAsset=null;
 // influisce sui disegni: quelli sono legati all'ASSET, non al fatto che la pagina sia stata
 // ricaricata, quindi restano quelli già ripristinati dallo stato salvato.
 async function loadLiveHistoryFromCapital(asset,opts){
+ // SORGENTE MT5 ESCLUSIVA (richiesto esplicitamente): quando un conto MT5 è collegato, il
+ // grafico deve usare SOLO MT5 (storico+live), MAI mescolato con Capital.com. Invece di
+ // duplicare ognuno dei ~9 punti del codice che chiamano questa funzione (cambio asset, cambio
+ // timeframe, apertura trade, resync di rollover candela, watchdog, riconnessione al boot...),
+ // un solo guard qui in cima li intercetta TUTTI: con MT5 connesso, deleghiamo a
+ // loadLiveHistoryFromMt5 (che referisce direttamente __loadLiveHistoryFromCapitalImpl, MAI
+ // questa funzione, per il proprio fallback su asset non trovati — evita ricorsione infinita).
+ // Con MT5 NON connesso il comportamento sotto resta bit-per-bit quello di sempre.
+ if(mt5Connected)return loadLiveHistoryFromMt5(asset,opts);
  if(__loadLiveHistoryInFlight && __loadLiveHistoryInFlightAsset===asset){
    console.log(`[LoadHistory] chiamata duplicata per "${asset}" mentre una è già in corso: riuso quella in volo invece di rifare la fetch REST.`);
    return __loadLiveHistoryInFlight;
@@ -13541,7 +13550,16 @@ function startLiveRefreshTimer(){
    // siamo in Live con un asset selezionato, rifacciamo da zero storico + epic + sottoscrizione
    // per l'asset corrente (stesso percorso, già affidabile, di un cambio asset manuale) invece
    // di continuare a fidarci dei soli tick. Cooldown separato da 20s per non saturare le API.
-   if(currentAssetKey && lastChartUpdateAt && (Date.now()-lastChartUpdateAt)>15000 && (Date.now()-hardResyncAttemptAt)>20000){
+   // AGGIUNTO (sorgente MT5): questo watchdog leggeva SOLO currentAssetKey/lastChartUpdateAt,
+   // senza controllare se Capital.com è davvero la sorgente del grafico ora. Da quando MT5 può
+   // restare "primario" per il grafico mentre Capital.com resta comunque connesso in background
+   // (per le posizioni simulate su altri asset — capitalWsPrimaryEpic viene forzato a null in
+   // quel caso, vedi syncChartSourceWithMt5), lastChartUpdateAt smette per forza di avanzare: il
+   // guard capitalWsPrimaryEpic evita che questo scatti a vuoto ogni 20s cercando di
+   // "risincronizzare con Capital.com" un grafico che in realtà sta mostrando MT5. Nessun
+   // cambiamento di comportamento quando Capital.com è davvero la sorgente (capitalWsPrimaryEpic
+   // è sempre valorizzato in quel caso, esattamente come prima).
+   if(capitalWsPrimaryEpic && currentAssetKey && lastChartUpdateAt && (Date.now()-lastChartUpdateAt)>15000 && (Date.now()-hardResyncAttemptAt)>20000){
      hardResyncAttemptAt=Date.now();
      $('status').textContent='⚠️ Nessun aggiornamento prezzo da 15s: resincronizzo con Capital.com…';
      loadLiveHistoryFromCapital(currentAssetKey); // già gestisce da sola i propri errori/timeout
@@ -13777,6 +13795,313 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
    playOrderSound();
    $('status').textContent=`Ordine pendente attivato in background: ${p.side} ${asset} a ${fmtPrice(p.entry)}.`;
  });
+}
+
+// ===================== SORGENTE GRAFICO: MT5 (esclusiva, quando connesso) =====================
+// Richiesto esplicitamente: quando un conto MT5 reale è collegato, il grafico (storico + candela
+// in corso) deve usare SOLO MT5 — mai due broker mescolati sulla STESSA CANDELA (rischio concreto
+// per la valutazione di SL/TP). Capital.com NON viene disconnesso: resta attivo in background per
+// le posizioni/ordini pendenti SIMULATI aperti su altri asset (richiesto esplicitamente anche
+// questo) — viene solo escluso come sorgente del grafico finché MT5 resta connesso (vedi
+// capitalWsPrimaryEpic=null in syncChartSourceWithMt5). Alla disconnessione da MT5 il grafico
+// torna in automatico a Capital.com, esattamente come prima di questa funzione.
+//
+// Dati storici/tick arrivano da mt5_feed_server.py — un SECONDO processo Python, separato da
+// bridge.py (porta 8001 invece di 8000), pensato apposta per non far girare questo nuovo canale
+// dati ad alta frequenza nello stesso processo che apre/chiude gli ordini VERI: un bug qui non
+// deve mai poter toccare l'esecuzione ordini. Si aggancia in sola lettura al terminale che
+// bridge.py ha già connesso — nessuna credenziale, nessun ordine possibile da qui.
+//
+// NON TOCCA MAI le posizioni/ordini REALI MT5 (quelli restano su fetchMt5Positions/fetchMt5Orders,
+// pollati separatamente ogni 2s da bridge.py, indipendenti da questo modulo): qui si parla SOLO
+// dei dati usati per disegnare il grafico. Tutto il resto a valle (indicatori, volume profile,
+// VWAP, disegni, SL/TP delle posizioni simulate) legge da `rows`/`baseRows` esattamente come
+// sempre: non richiede NESSUNA modifica, perché questo modulo scrive nella stessa identica
+// struttura dati (csvLibrary[0].rows) che già scrive loadLiveHistoryFromCapital.
+const MT5_FEED_URL='http://127.0.0.1:8001';
+// symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
+// (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
+// dati irraggiungibile (va MAI messo in cache in modo permanente, si ritenta al giro successivo).
+let mt5FeedSymbolForAsset={};
+let mt5FallbackConfirmedForAsset=new Set(); // asset per cui l'utente ha già confermato "resta su Capital.com" in questa sessione
+let mt5FeedWs=null, mt5FeedWsSymbol=null, mt5FeedWsReconnectTimer=null;
+let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null;
+let lastMt5ChartUpdateAt=0, mt5HardResyncAttemptAt=0;
+let mt5LastSeenCandleBucketStart=null, mt5CandleRolloverResyncAt=0, mt5CandleRolloverResyncInProgress=false, mt5CandleFrozen=false;
+let mt5RefreshTimer=null;
+
+// Punto unico chiamato da updateMt5ModeUI() (già eseguita da OGNI punto del codice che cambia
+// mt5Connected, vedi commento lì) — nessun altro hook sparso serve: entra/esce dalla sorgente
+// MT5 esattamente negli stessi istanti in cui l'app entra/esce dallo stato "connesso a MT5".
+async function syncChartSourceWithMt5(){
+ if(!liveModeActive)return; // riguarda solo la modalità Live: Storico/CSV non è mai toccato
+ if(mt5Connected){
+   // Connessione FRESCA: le risoluzioni simbolo/conferme di un conto MT5 precedente non hanno
+   // validità su un broker/conto diverso appena collegato.
+   mt5FeedSymbolForAsset={};
+   mt5FallbackConfirmedForAsset=new Set();
+   // RICHIESTO ESPLICITAMENTE (corretto dopo la prima versione, che fermava Capital.com del
+   // tutto): Capital.com NON va disconnesso — deve continuare ad aggiornare le posizioni/ordini
+   // pendenti SIMULATI aperti su ALTRI asset esattamente come prima. Lo neutralizziamo SOLO come
+   // sorgente del GRAFICO: capitalWsPrimaryEpic=null fa sì che applyLiveTick/startLiveRefreshTimer
+   // (invariati, vedi i loro commenti) trattino OGNI tick Capital.com — incluso quello dell'asset
+   // a grafico ora — come "solo background" (aggiorna prezzo/P&L/SL-TP di eventuali posizioni
+   // simulate su quell'asset, mai la candela): la candela a grafico resta di competenza esclusiva
+   // di MT5 da qui in poi, senza che i due broker possano mai scrivere sulla stessa candela.
+   capitalWsPrimaryEpic=null;
+   lastPrimaryEpicPrice=null;
+   if(currentAssetKey)await loadLiveHistoryFromCapital(currentAssetKey); // il guard in cima la fa già deviare su MT5
+ }else{
+   stopMt5RefreshTimer();
+   disconnectMt5Stream();
+   // Ripristina Capital.com come sorgente ESCLUSIVA del grafico (capitalWsPrimaryEpic viene
+   // rivalorizzato dentro __loadLiveHistoryFromCapitalImpl, come sempre) — se il WS era già
+   // rimasto connesso in background (vedi sopra) si limita a resettare storico+sottoscrizioni
+   // per l'asset corrente, senza un'interruzione percepibile per le posizioni in background.
+   if(currentAssetKey && capitalSessionTokens)await loadLiveHistoryFromCapital(currentAssetKey);
+ }
+}
+
+async function resolveMt5SymbolForAsset(asset){
+ if(Object.prototype.hasOwnProperty.call(mt5FeedSymbolForAsset,asset))return mt5FeedSymbolForAsset[asset];
+ try{
+   const res=await fetch(MT5_FEED_URL+'/symbol-check?symbol='+encodeURIComponent(asset));
+   const body=await res.json();
+   if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
+   const resolved=body.found?body.resolved_symbol:null;
+   mt5FeedSymbolForAsset[asset]=resolved; // sia string sia null sono risultati DEFINITIVI: si mettono in cache
+   return resolved;
+ }catch(e){
+   console.warn('[MT5Feed] symbol-check fallito (servizio dati non raggiungibile?):',e);
+   return undefined; // NON in cache: va ritentato, non è "asset non trovato"
+ }
+}
+
+async function loadLiveHistoryFromMt5(asset,opts){
+ if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
+ if(!liveModeActive)return;
+ const resolved=await resolveMt5SymbolForAsset(asset);
+ if(resolved===undefined){
+   $('status').textContent=`⚠️ Servizio dati MT5 (mt5_feed_server.py, porta 8001) non raggiungibile: il grafico resta su Capital.com finché non riparte (avvia "uvicorn mt5_feed_server:app --port 8001" sul tuo PC).`;
+   stopMt5RefreshTimer();disconnectMt5Stream();
+   return __loadLiveHistoryFromCapitalImpl(asset,opts);
+ }
+ if(resolved===null){
+   // Simbolo non trovato sul broker MT5 collegato — SICUREZZA RICHIESTA ESPLICITAMENTE: si
+   // chiede conferma prima di mostrare comunque Capital.com, ed è ESPLICITO che questo tocca
+   // SOLO la visualizzazione in app — nessun ordine/effetto sul conto MT5 collegato per questo
+   // asset (qui non si chiama MAI nessuna funzione che parla col bridge ordini).
+   if(!mt5FallbackConfirmedForAsset.has(asset)){
+     const ok=await appConfirm(
+       `L'asset "${asset}" non risulta disponibile sul broker MT5 collegato.\n\nVuoi comunque vederlo sul grafico tramite Capital.com? Questa scelta riguarda SOLO la visualizzazione in questa app: non aprirà e non influenzerà in alcun modo un'operazione sul conto MT5 collegato per questo asset.`,
+       {title:'Asset non trovato su MT5',okLabel:'Sì, continua con Capital.com',cancelLabel:'Annulla',danger:false}
+     );
+     if(!ok){
+       $('status').textContent=`"${asset}" non è disponibile su MT5: caricamento annullato (nessun cambio al grafico).`;
+       return;
+     }
+     mt5FallbackConfirmedForAsset.add(asset);
+   }
+   stopMt5RefreshTimer();disconnectMt5Stream();
+   return __loadLiveHistoryFromCapitalImpl(asset,opts);
+ }
+ // Simbolo MT5 risolto: procede con la sorgente MT5 esclusiva — stessa logica di
+ // preservazione vista/disegni/posizione attiva già usata da __loadLiveHistoryFromCapitalImpl,
+ // per garantire lo stesso identico comportamento percepito indipendentemente dalla sorgente.
+ const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
+ if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+ currentAssetKey=asset;
+ const ownNow=positions.filter(p=>(p.asset||asset)===asset);
+ active=ownNow.length?ownNow[ownNow.length-1]:null;
+ if(active){ refreshTradeLevelUI(); }
+ else if(wasOnDifferentAsset){ clearDraftTradeLevelFields(); }
+
+ $('status').textContent=`Scaricamento storico MT5 (${resolved})…`;
+ let body;
+ try{
+   const timeframe=(MT5_TIMEFRAME_MAP[currentTF]||'M1');
+   const res=await fetch(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=1000');
+   body=await res.json();
+   if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
+ }catch(e){
+   $('status').textContent='⚠️ Storico MT5 non scaricato: '+e.message;
+   return;
+ }
+ const mt5Rows=(body.candles||[]).map(c=>({
+   date:new Date(c.time*1000).toISOString(),
+   open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
+ })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
+ if(!mt5Rows.length){
+   $('status').textContent=`⚠️ MT5 non ha restituito candele per ${resolved}.`;
+   return;
+ }
+ // Stessa fusione "mai sparire una candela già mostrata" già usata per Capital.com (vedi
+ // commento completo in __loadLiveHistoryFromCapitalImpl): una risincronizzazione periodica con
+ // una risposta più corta del solito non deve mai far sparire lo storico per un istante.
+ const prevLiveFile=csvLibrary[0];
+ const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='mt5_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
+ let mergedRows=mt5Rows;
+ if(isSameLiveSeries){
+   const byTime=new Map();
+   prevLiveFile.rows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byTime.set(t,r); });
+   mt5Rows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byTime.set(t,r); });
+   mergedRows=[...byTime.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
+   if(mergedRows.length>5000)mergedRows=mergedRows.slice(mergedRows.length-5000);
+ }
+ csvLibrary=[{id:'mt5_live_'+asset,name:`MT5 Live (${resolved})`,addedAt:Date.now(),rows:mergedRows}];
+ rebuildBaseRowsFromLibrary();
+ renderCsvLibraryList();
+ updateFileBtnLabel();
+ $('fileName').textContent=baseRows.length.toLocaleString('it-IT')+' candele • '+resolved+' (storico Live MT5)';
+ scanHistoricalSlTpTouches();
+
+ const shouldResetDrawings=wasOnDifferentAsset;
+ if(shouldResetDrawings){
+   drawings=((assetDrawings[currentMode()]||{})[asset])||[];
+   selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
+   historyUndo=[];historyRedo=[];
+ }
+ const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
+ let preserved=null;
+ if(!shouldResetView){
+   const anchorIdx=rows.length?Math.max(0,Math.min(rows.length-1,Math.round(viewEnd))):null;
+   const pinnedTime=(anchorIdx!=null&&rows[anchorIdx])?closeTimeOf(rows[anchorIdx]):null;
+   const pinnedFrac=(anchorIdx!=null)?(viewEnd-anchorIdx):0;
+   preserved={pinnedTime,pinnedFrac,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+ }
+ masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ rebuildRows();
+ scanHistoricalSlTpTouches();
+ if(preserved){
+   const restoredIdx=preserved.pinnedTime!=null?rowIndexContainingTime(preserved.pinnedTime):null;
+   viewEnd=(restoredIdx!=null)?(restoredIdx+(preserved.pinnedFrac||0)):Math.max(0,rows.length-1);
+   followLatest=preserved.followLatest; priceZoomFactor=preserved.priceZoomFactor;
+   viewPriceLo=preserved.viewPriceLo; viewPriceHi=preserved.viewPriceHi;
+   autoFitWidth=preserved.autoFitWidth; visibleCount=preserved.visibleCount;
+ }else{
+   viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ }
+ update();draw();
+ renderActiveIndicatorsUI();
+ saveLightStateNow();
+ $('status').textContent=`🟢 Storico Live MT5 caricato: ${baseRows.length.toLocaleString('it-IT')} candele per ${resolved}.`;
+ lastMt5ChartUpdateAt=Date.now();
+ const rolloverBucketMs=(currentTF||1)*60000;
+ mt5LastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+ connectMt5Stream(resolved);
+ startMt5RefreshTimer();
+}
+
+const MT5_TIMEFRAME_MAP={1:'M1',5:'M5',15:'M15',30:'M30',60:'H1',240:'H4',1440:'D1'};
+
+async function fetchLatestMt5PriceRest(symbol){
+ if(!symbol)return null;
+ try{
+   const res=await fetch(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(symbol)+'&timeframe=M1&count=1');
+   if(!res.ok)return null;
+   const body=await res.json();
+   const c=(body.candles||[])[body.candles.length-1];
+   return c&&Number.isFinite(c.close)?c.close:null;
+ }catch(e){ return null; }
+}
+
+function disconnectMt5Stream(){
+ if(mt5FeedWsReconnectTimer){clearTimeout(mt5FeedWsReconnectTimer);mt5FeedWsReconnectTimer=null;}
+ if(mt5FeedWs){
+   try{mt5FeedWs.onclose=null;mt5FeedWs.onerror=null;mt5FeedWs.close();}catch(e){}
+   mt5FeedWs=null;
+ }
+ mt5FeedWsSymbol=null;
+}
+
+function connectMt5Stream(symbol){
+ if(!liveModeActive || !mt5Connected || !symbol)return;
+ if(mt5FeedWs && mt5FeedWsSymbol===symbol && (mt5FeedWs.readyState===WebSocket.OPEN||mt5FeedWs.readyState===WebSocket.CONNECTING))return;
+ disconnectMt5Stream();
+ let ws;
+ try{ ws=new WebSocket(MT5_FEED_URL.replace(/^http/,'ws')+'/ws/ticks/'+encodeURIComponent(symbol)); }
+ catch(e){ console.warn('WebSocket MT5 feed non avviato:',e); return; }
+ mt5FeedWs=ws; mt5FeedWsSymbol=symbol;
+ ws.onopen=()=>{
+   if(ws!==mt5FeedWs)return;
+   $('status').textContent=`🟢 Streaming Live MT5 attivo: ${symbol}.`;
+   lastMt5TickAt=Date.now();
+ };
+ ws.onmessage=(ev)=>{
+   if(ws!==mt5FeedWs)return;
+   let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
+   if(msg && msg.error){ console.warn('[MT5Feed] errore WS:',msg.error); return; }
+   if(!msg || !Number.isFinite(msg.bid))return;
+   if(mt5CandleFrozen)return; // stessa pausa di 1s a cavallo del cambio candela usata da Capital.com
+   lastMt5TickAt=Date.now();
+   lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
+ };
+ ws.onerror=()=>{ if(ws===mt5FeedWs)$('status').textContent='⚠️ Streaming Live MT5: errore di connessione WebSocket.'; };
+ ws.onclose=()=>{
+   if(ws!==mt5FeedWs)return;
+   disconnectMt5Stream();
+   if(mt5FeedWsReconnectTimer)clearTimeout(mt5FeedWsReconnectTimer);
+   if(liveModeActive && mt5Connected){
+     mt5FeedWsReconnectTimer=setTimeout(()=>{ mt5FeedWsReconnectTimer=null; connectMt5Stream(symbol); },1500);
+   }
+ };
+}
+
+function startMt5RefreshTimer(){
+ if(mt5RefreshTimer)return;
+ mt5RefreshTimer=setHeartbeatInterval(async ()=>{
+   if(!liveModeActive || !mt5Connected)return;
+   const symbol=mt5FeedWsSymbol;
+   if(!symbol)return;
+   // Stessa identica pausa di 1s a cavallo del cambio candela già usata per Capital.com (vedi
+   // commento completo su startLiveRefreshTimer): evita che una candela "di transizione" coi
+   // valori non affidabili venga mai disegnata o valutata per SL/TP.
+   const rolloverBucketMs=(currentTF||1)*60000;
+   const nowBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+   if(mt5LastSeenCandleBucketStart==null){
+     mt5LastSeenCandleBucketStart=nowBucketStart;
+   }else if(nowBucketStart>mt5LastSeenCandleBucketStart && !mt5CandleRolloverResyncInProgress && !mt5CandleFrozen && (Date.now()-mt5CandleRolloverResyncAt)>2000){
+     mt5LastSeenCandleBucketStart=nowBucketStart;
+     mt5CandleRolloverResyncAt=Date.now();
+     mt5CandleFrozen=true;
+     $('status').textContent='⏸️ Candela chiusa: pausa di 1s, poi risincronizzo con MT5…';
+     setTimeout(async ()=>{
+       mt5CandleRolloverResyncInProgress=true;
+       try{ await loadLiveHistoryFromMt5(currentAssetKey); }
+       finally{ mt5CandleRolloverResyncInProgress=false; mt5CandleFrozen=false; }
+     },1000);
+     return;
+   }
+   if(mt5CandleFrozen){ update();draw(); return; }
+   const staleMs=lastMt5TickAt?(Date.now()-lastMt5TickAt):Infinity;
+   if(staleMs>8000 && (Date.now()-mt5StreamReconnectAttemptAt)>8000){
+     mt5StreamReconnectAttemptAt=Date.now();
+     disconnectMt5Stream();
+     connectMt5Stream(symbol);
+   }
+   let touched=false;
+   if(Number.isFinite(lastMt5TickPrice))touched=applyLivePriceToChart(lastMt5TickPrice,Date.now())||touched;
+   if(staleMs>4000){
+     const restPrice=await fetchLatestMt5PriceRest(symbol);
+     if(Number.isFinite(restPrice)){
+       lastMt5TickPrice=restPrice;
+       touched=applyLivePriceToChart(restPrice,Date.now())||touched;
+     }
+   }
+   if(touched)lastMt5ChartUpdateAt=Date.now();
+   if(currentAssetKey && lastMt5ChartUpdateAt && (Date.now()-lastMt5ChartUpdateAt)>15000 && (Date.now()-mt5HardResyncAttemptAt)>20000){
+     mt5HardResyncAttemptAt=Date.now();
+     $('status').textContent='⚠️ Nessun aggiornamento prezzo da 15s: risincronizzo con MT5…';
+     loadLiveHistoryFromMt5(currentAssetKey);
+   }else if(!lastMt5ChartUpdateAt){
+     lastMt5ChartUpdateAt=Date.now();
+   }
+   if(touched){evaluate();checkPendingOrders();scheduleSave();}
+   update();draw();
+ },1000);
+}
+function stopMt5RefreshTimer(){
+ if(mt5RefreshTimer){clearHeartbeatInterval(mt5RefreshTimer);mt5RefreshTimer=null;}
 }
 
 // ===================== MOTORE LIVE IN BACKGROUND (multi-sessione) =====================
@@ -14277,6 +14602,12 @@ function updateMt5ModeUI(){
  // l'avvio/stop del polling in ognuno di quei punti.
  if(mt5Connected){ if(!mt5PositionsPollTimer)startMt5PositionsPolling(); }
  else{ stopMt5PositionsPolling(); update(); }
+ // Stesso punto unico: fa passare il grafico su MT5 (esclusivo) o tornare a Capital.com a
+ // seconda dello stato appena aggiornato — vedi syncChartSourceWithMt5() per il motivo di
+ // agganciarsi qui invece che in ognuno dei singoli punti che cambiano mt5Connected.
+ // Non-awaited di proposito: updateMt5ModeUI() è sincrona e chiamata da molti punti diversi,
+ // il caricamento del grafico prosegue in background senza bloccare nessuno di quei chiamanti.
+ syncChartSourceWithMt5();
 }
 // Menu a tendina del pulsante MT5 (stesso pattern di drawTemplateMenu/fibTemplateMenu): un solo
 // tasto apre due strade — "Account" (elenco conti salvati + eliminazione) oppure connessione/
