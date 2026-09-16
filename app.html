@@ -977,7 +977,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        </div>
        <div class="fbOptRow">
          <label style="flex:none;min-width:150px">Dimensione istogramma</label>
-         <input id="vpBarSizePct" type="number" min="20" max="200" step="5" value="100" style="width:64px"><span class="hint" style="margin:0">%</span>
+         <input id="vpBarSizePct" type="number" min="20" step="5" value="100" style="width:64px"><span class="hint" style="margin:0">%</span>
        </div>
        <div class="fbOptRow" id="vpExtendRow">
          <label><input type="checkbox" id="vpExtendRight"> Estendi fino al bordo destro del grafico</label>
@@ -3390,8 +3390,11 @@ function applyVpSettingsFromModal(){
    d.downColor=$('vpDownColor')?.value||d.downColor;
    const nbVal=Math.round(Number($('vpBuckets')?.value));
    d.buckets=Number.isFinite(nbVal)?Math.max(6,Math.min(500,nbVal)):d.buckets;
+   // Nessun tetto massimo (richiesta esplicita: "la percentuale all'infinito", l'utente deve
+   // poter inserire un valore qualsiasi, non fermarsi al 200%) — resta solo un minimo di 20%
+   // per evitare un istogramma invisibile/negativo.
    const sizeVal=Number($('vpBarSizePct')?.value);
-   d.barSizePct=Number.isFinite(sizeVal)?Math.max(20,Math.min(200,sizeVal)):d.barSizePct;
+   d.barSizePct=Number.isFinite(sizeVal)?Math.max(20,sizeVal):d.barSizePct;
    if(d.type==='vpfixed')d.extendRight=!!$('vpExtendRight')?.checked;
    d.pocEnabled=!!$('vpPocEnabled')?.checked;
    d.pocColor=$('vpPocColor')?.value||d.pocColor;
@@ -7258,23 +7261,22 @@ function draw(){
        const rightBoundX=d.type==='vpfixed'?(d.extendRight?(w-pad.r):shapesGeo.xFromTime(fullTs[lastIdx])):(w-pad.r);
        const nb=d.buckets?Math.max(6,Math.min(500,Math.round(d.buckets))):Math.max(8,Math.min(60,Math.round(ch/7)));
        const profile=computeVolumeProfile(startIdx,lastIdx,nb);
-       const sizeScale=Math.max(0.2,Math.min(2,(d.barSizePct||100)/100));
-       // BUG RISOLTO ("con lo zoom orizzontale l'istogramma deve restare fermo, esattamente come
-       // su TradingView — non deve adattarsi allo zoom"): il tentativo precedente calcolava
-       // maxBarPx come proporzione dello spazio in pixel fra leftX e rightBoundX — ma quello
-       // spazio è ESSO STESSO legato allo zoom orizzontale (più candele per pixel = leftX/
-       // rightBoundX più vicini o più lontani), quindi la lunghezza delle barre finiva comunque
-       // per crescere/restringersi zoomando, il che è esattamente l'opposto di quanto richiesto.
-       // Su TradingView la lunghezza massima delle barre (che rappresenta il VOLUME, non il
-       // tempo) è una quantità in pixel fissa, indipendente dallo zoom orizzontale — cambia solo
-       // se ridimensioni la finestra del grafico o cambi manualmente la larghezza dal pannello
-       // impostazioni (barSizePct). Base ricalibrata a 150px (prima 90, misurata troppo sottile)
-       // confrontando fotogramma per fotogramma un video di TradingView fornito come riferimento:
-       // lì la barra più lunga occupa consistentemente circa il 16-20% della larghezza del
-       // pannello grafico, qualunque fosse il livello di zoom orizzontale nel video. Moltiplicata
-       // SOLO per sizeScale (l'impostazione utente "dimensione barre"), MAI per lo spazio
-       // occupato dal profilo — così lo zoom orizzontale non la tocca più, in nessuna direzione.
-       const maxBarPx=Math.max(1,150)*sizeScale;
+       // Nessun tetto massimo (stesso motivo: barSizePct non è più limitato a 200%).
+       const sizeScale=Math.max(0.2,(d.barSizePct||100)/100);
+       // RICHIESTA FINALE (dopo vari tentativi contraddittori, chiarita esplicitamente
+       // dall'utente): la lunghezza delle barre deve essere PROPORZIONALE alla "scala del
+       // tempo" del grafico — cioè ai pixel per candela — non fissa in pixel. Zoomando dentro
+       // (meno candele visibili, ciascuna più larga) le barre si allungano; zoomando fuori
+       // (più candele visibili, ciascuna più stretta) le barre si accorciano. `cw/n` è
+       // esattamente questa quantità (cw=larghezza area di plot in px, n=candele visibili
+       // nella finestra corrente), la stessa usata per calcolare la larghezza del corpo delle
+       // candele (`bw`, poco più sopra in draw()). Il moltiplicatore 8 è calibrato così che, a
+       // zoom "normale" (~80 candele visibili su un pannello tipico), la barra più lunga sia
+       // vicina ai ~150px misurati sul video di TradingView fornito come riferimento.
+       // Clampata solo per evitare barre invisibili (<4px) a zoom fuori estremo o barre che
+       // invadono metà del pannello a zoom dentro estremo — non per tenerla "ferma".
+       const pxPerCandle=cw/n;
+       const maxBarPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8))*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
        if(profile&&profile.maxTotal>0){
          ctx.save();
