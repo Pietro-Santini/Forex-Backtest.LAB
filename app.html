@@ -1141,19 +1141,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <button id="chartLayersModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
    </div>
    <div class="fbModalBody">
-     <p class="hint" style="margin:0 0 12px">Nascondi/mostra singolarmente i disegni sul grafico per tipo. Un tipo nascosto non è più visibile né selezionabile finché non lo riattivi qui — le impostazioni di ogni disegno restano comunque intatte.</p>
-     <div class="fbOptRow" style="justify-content:space-between">
-       <span>📐 Fibonacci</span>
-       <button type="button" class="drawLayerToggleBtn indChipBtn" data-layer="fib" title="Mostra/nascondi tutti i ritracciamenti Fibonacci">👁️</button>
-     </div>
-     <div class="fbOptRow" style="justify-content:space-between">
-       <span>📊 Profili volumetrici</span>
-       <button type="button" class="drawLayerToggleBtn indChipBtn" data-layer="vp" title="Mostra/nascondi tutti i profili volumetrici (intervallo fisso e ancorato)">👁️</button>
-     </div>
-     <div class="fbOptRow" style="justify-content:space-between">
-       <span>〰️ VWAP</span>
-       <button type="button" class="drawLayerToggleBtn indChipBtn" data-layer="vwap" title="Mostra/nascondi tutte le linee VWAP">👁️</button>
-     </div>
+     <p class="hint" style="margin:0 0 12px">Ogni Fibonacci, profilo volumetrico e VWAP presente sul grafico è elencato qui singolarmente. Da ogni riga puoi aprirne le impostazioni (⚙️), nascondere/mostrare solo quello (👁️) o eliminarlo (🗑️) — gli altri non vengono toccati.</p>
+     <div id="chartLayersListBody"></div>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="chartLayersModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
@@ -2242,15 +2231,36 @@ let tpSlZoneFillVisible=true;
 // più sotto nell'HTML). Un disegno nascosto non viene più né disegnato (draw()) né selezionabile/
 // trascinabile (hitTestDrawings) — stessa coerenza già scelta per "mostra/nascondi posizioni"
 // (positionsVisible): nascosto vuol dire davvero non interagibile, non solo invisibile.
+// RICHIESTA ESPLICITA (evoluzione): il pannello "Livelli" nascondeva/mostrava un TIPO intero
+// di disegno alla volta (una riga per "Fibonacci", una per "Profili volumetrici", ecc.). Ora
+// elenca ogni SINGOLO disegno inserito, individualmente — se ci sono due Fibonacci, compaiono
+// due righe distinte, ciascuna con le proprie ⚙️/👁️/🗑️. La visibilità è quindi ora una proprietà
+// del singolo disegno (`d.hidden`), non più del tipo. `drawingLayerVisible` resta solo per
+// compatibilità con le sessioni salvate PRIMA di questa modifica (vedi migrazione in
+// restoreSessionState): alla prima apertura di un vecchio salvataggio con un tipo nascosto,
+// quello stato viene trasferito una tantum sui singoli disegni già presenti, poi non viene più
+// consultato.
 let drawingLayerVisible={fib:true,vp:true,vwap:true};
 // Mappa tipo-disegno -> chiave del livello: 'vpfixed'/'vpanchor' condividono lo stesso livello
 // "profili volumetrici" (sono la stessa categoria concettuale per l'utente, solo due varianti di
-// intervallo). I tipi non elencati qui (trendline, fib esclusa che ha la sua chiave dedicata,
-// rettangoli, ecc.) non hanno ancora un livello dedicato e restano sempre visibili.
+// intervallo). Usata solo dal pannello "Livelli" per raggruppare le etichette e dalla migrazione
+// legacy qui sopra — non più dalla logica di visibilità vera e propria (vedi isDrawingLayerVisible).
 const DRAWING_LAYER_KEY_BY_TYPE={fib:'fib',vpfixed:'vp',vpanchor:'vp',vwap:'vwap'};
 function isDrawingLayerVisible(d){
- const key=DRAWING_LAYER_KEY_BY_TYPE[d&&d.type];
- return !key || drawingLayerVisible[key]!==false;
+ return !(d&&d.hidden);
+}
+// Migrazione una tantum (vedi commento sopra drawingLayerVisible): un disegno letto da un
+// salvataggio PRECEDENTE a questa modifica non ha ancora la proprietà `hidden` — se il suo
+// TIPO era stato nascosto col vecchio pannello "Livelli" (drawingLayerVisible[key]===false),
+// lo nascondiamo ora individualmente, una volta sola, così non ricompare di sorpresa.
+function migrateDrawingLayerVisibilityToHidden(list){
+ if(!Array.isArray(list))return list;
+ list.forEach(d=>{
+   if(!d||d.hidden!==undefined)return;
+   const key=DRAWING_LAYER_KEY_BY_TYPE[d.type];
+   d.hidden=!!(key&&drawingLayerVisible[key]===false);
+ });
+ return list;
 }
 // Evidenziazione dell'operazione selezionata dal bottone "Vai a grafico" nel Trade Journal:
 // rettangolo semitrasparente dall'apertura alla chiusura + casella con durata/pip/R:R.
@@ -2796,7 +2806,7 @@ function applyLightSessionState(state){
  // se proporre la riconnessione automatica (richiede comunque un click, come da API browser per
  // l'accesso alla cartella delle credenziali — vedi getMt5CredsDirHandle).
  mt5WasConnectedLastSession=!!state.mt5WasConnected;
- drawings=state.drawings||[];
+ drawings=migrateDrawingLayerVisibilityToHidden(state.drawings||[]);
  // Richiesto esplicitamente: i disegni di ogni asset già visitato (in ognuna delle 4 sessioni)
  // sopravvivono alla chiusura/riapertura dell'app — vedi blocco MEMORIA DEI DISEGNI PER ASSET E
  // PER SESSIONE più sopra. `drawings` qui sopra resta comunque quello dell'asset che era a
@@ -4280,7 +4290,7 @@ async function autoLoadAssetLibrary(asset){
        // RICHIESTO ESPLICITAMENTE: i disegni di QUESTO asset (già visitato in questa sessione)
        // si ricaricano da assetDrawings invece di azzerarsi — vedi blocco MEMORIA DEI DISEGNI
        // PER ASSET E PER SESSIONE più sopra.
-       drawings=((assetDrawings[currentMode()]||{})[asset])||[];
+       drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
        selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
        historyUndo=[];historyRedo=[];
      }
@@ -4300,7 +4310,7 @@ async function autoLoadAssetLibrary(asset){
    updateFileBtnLabel();
    $('fileName').textContent=csvLibrary.length+' file • '+baseRows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
    if(wasOnDifferentAsset){
-     drawings=((assetDrawings[currentMode()]||{})[asset])||[];
+     drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
      selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
      historyUndo=[];historyRedo=[];
    }
@@ -4467,9 +4477,29 @@ function computeVolumeProfile(startIdx,endIdx,buckets){
  const upVol=new Array(nb).fill(0), downVol=new Array(nb).fill(0);
  let hasVolume=false;
  for(let i=lo2;i<=hi2;i++){const r=rows[i]; if(r&&Number.isFinite(r.volume)&&r.volume>0){hasVolume=true;break;}}
+ // BUG RISOLTO ("l'istogramma non si aggiorna in tempo reale, solo alla chiusura della
+ // candela"): la candela ANCORA IN FORMAZIONE (l'ultima di `rows` mentre si è in Live) arriva
+ // dal feed a tick (sia Capital.com che MT5) con volume SEMPRE a 0 — applyLivePriceToChart()
+ // aggiorna solo high/low/close ad ogni tick, il volume reale arriva solo dopo, quando la
+ // candela chiude e viene risincronizzata con lo storico vero (vedi commento sul merge-cap
+ // nella sezione MT5). Prima, se le altre candele del range avevano volume reale (hasVolume
+ // true), questa candela veniva SEMPRE scartata (vol<=0 -> continue) perché il suo volume era
+ // 0: l'istogramma restava quindi fermo per tutta la durata della candela e "scattava" solo al
+ // giro successivo, quando il merge la sostituiva con dati reali — esattamente il
+ // comportamento segnalato. Le si assegna ora un peso stimato (media del volume delle altre
+ // candele reali nel range) così contribuisce SUBITO e proporzionalmente al profilo, aggiornandosi
+ // ad ogni ridisegno (ogni tick/secondo) man mano che il suo high/low si muove — non più solo
+ // alla chiusura.
+ let liveRowAvgVol=1;
+ if(hasVolume){
+   let sumV=0,cntV=0;
+   for(let i=lo2;i<=hi2;i++){const r=rows[i]; if(r&&Number.isFinite(r.volume)&&r.volume>0){sumV+=r.volume;cntV++;}}
+   if(cntV>0)liveRowAvgVol=sumV/cntV;
+ }
+ const liveRowIdx=(typeof liveModeActive!=='undefined'&&liveModeActive)?rows.length-1:-1;
  for(let i=lo2;i<=hi2;i++){
    const r=rows[i]; if(!r||!Number.isFinite(r.low)||!Number.isFinite(r.high))continue;
-   const vol=hasVolume?(Number.isFinite(r.volume)?r.volume:0):1;
+   const vol=(i===liveRowIdx)?(hasVolume?liveRowAvgVol:1):(hasVolume?(Number.isFinite(r.volume)?r.volume:0):1);
    if(vol<=0)continue;
    const rLo=Math.max(r.low,priceLo), rHi=Math.min(r.high,priceHi);
    const span=Math.max(rHi-rLo,bucketSize*0.001);
@@ -7303,18 +7333,10 @@ function draw(){
        const profile=computeVolumeProfile(startIdx,lastIdx,nb);
        // Nessun tetto massimo (stesso motivo: barSizePct non è più limitato a 200%).
        const sizeScale=Math.max(0.2,(d.barSizePct||100)/100);
-       // RICHIESTA FINALE (dopo vari tentativi contraddittori, chiarita esplicitamente
-       // dall'utente): la lunghezza delle barre deve essere PROPORZIONALE alla "scala del
-       // tempo" del grafico — cioè ai pixel per candela — non fissa in pixel. Zoomando dentro
-       // (meno candele visibili, ciascuna più larga) le barre si allungano; zoomando fuori
-       // (più candele visibili, ciascuna più stretta) le barre si accorciano. `cw/n` è
-       // esattamente questa quantità (cw=larghezza area di plot in px, n=candele visibili
-       // nella finestra corrente), la stessa usata per calcolare la larghezza del corpo delle
-       // candele (`bw`, poco più sopra in draw()). Il moltiplicatore 8 è calibrato così che, a
-       // zoom "normale" (~80 candele visibili su un pannello tipico), la barra più lunga sia
-       // vicina ai ~150px misurati sul video di TradingView fornito come riferimento.
-       // Clampata solo per evitare barre invisibili (<4px) a zoom fuori estremo o barre che
-       // invadono metà del pannello a zoom dentro estremo — non per tenerla "ferma".
+       // RICHIESTA: la lunghezza delle barre deve essere PROPORZIONALE alla "scala del tempo"
+       // del grafico — cioè ai pixel per candela — non fissa in pixel. Zoomando dentro (meno
+       // candele visibili, ciascuna più larga) le barre si allungano; zoomando fuori (più
+       // candele visibili, ciascuna più stretta) le barre si accorciano.
        const pxPerCandle=cw/n;
        const maxBarPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8))*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
@@ -7350,28 +7372,34 @@ function draw(){
          ctx.restore();
        }
        // POC (Point of Control) e Value Area (VAH/VAL): livelli orizzontali facoltativi, ciascuno
-       // col proprio colore/spessore configurabili dalle impostazioni. "Sviluppo" (richiesta
-       // esplicita dell'utente) NON estende più la linea piatta oltre il profilo: traccia invece
-       // lo STORICO del livello, cioè come POC/VAH/VAL si sarebbero mossi calcolando il profilo
-       // via via con le sole candele fino a quel punto — sempre dentro l'intervallo del profilo
-       // [leftX,rightBoundX], mai oltre.
+       // col proprio colore/spessore configurabili dalle impostazioni. Il livello (POC/VAH/VAL) è
+       // UNICO per definizione — una sola riga dritta — e resta SEMPRE disegnato quando abilitato.
+       // "Sviluppo" (richiesto esplicitamente dall'utente: "deve farmi un'altra linea, differente
+       // da quella che è il POC stesso... lo sviluppo invece deve essere un'altra linea che mostra
+       // lo storico") AGGIUNGE una SECONDA linea distinta, più sottile e punteggiata, che traccia
+       // come il livello si è mosso nel tempo — non sostituisce più la riga piatta.
        const va=(d.pocEnabled||d.vahEnabled||d.valEnabled)?computeValueArea(profile,0.7):null;
        const developing=(va&&(d.pocExtend||d.vaExtend))?developingLevels(startIdx,lastIdx,nb,0.7):null;
-       const drawLevelLine=(priceKey,color,width,useDeveloping)=>{
+       const drawLevelLine=(priceKey,color,width,showDeveloping)=>{
+         // 1) La riga piatta del livello attuale (unica, sempre presente quando abilitata).
          ctx.save();ctx.globalAlpha=strokeAlpha;ctx.strokeStyle=color;ctx.lineWidth=width;
          if(priceKey!=='pocPrice')ctx.setLineDash([5,3]);
-         if(useDeveloping&&developing&&developing.length>1){
+         const py=shapesGeo.y(va[priceKey]);
+         ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(rightBoundX,py);ctx.stroke();
+         ctx.setLineDash([]);ctx.restore();
+         // 2) La riga "in sviluppo" (storico), SEPARATA e distinguibile: stesso colore ma più
+         // sottile e punteggiata fitta, così le due linee restano entrambe leggibili insieme.
+         if(showDeveloping&&developing&&developing.length>1){
+           ctx.save();ctx.globalAlpha=strokeAlpha*0.9;ctx.strokeStyle=color;ctx.lineWidth=Math.max(1,width*0.6);
+           ctx.setLineDash([2,2]);
            ctx.beginPath();
            developing.forEach((pt,ix)=>{
-             const px=shapesGeo.xFromTime(fullTs[pt.i]), py=shapesGeo.y(pt[priceKey]);
-             if(ix===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);
+             const px=shapesGeo.xFromTime(fullTs[pt.i]), pyDev=shapesGeo.y(pt[priceKey]);
+             if(ix===0)ctx.moveTo(px,pyDev); else ctx.lineTo(px,pyDev);
            });
            ctx.stroke();
-         }else{
-           const py=shapesGeo.y(va[priceKey]);
-           ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(rightBoundX,py);ctx.stroke();
+           ctx.setLineDash([]);ctx.restore();
          }
-         ctx.setLineDash([]);ctx.restore();
        };
        if(va){
          if(d.pocEnabled)drawLevelLine('pocPrice',d.pocColor||'#ff9800',d.pocWidth||2,d.pocExtend);
@@ -11503,7 +11531,7 @@ chartEl.addEventListener('pointerdown',e=>{
    if(!point)return;
    if(placingStep===0){
      const type=LINE_TYPES.includes(drawTool)?drawTool:drawTool==='fib'?'fib':drawTool==='vwap'?'vwap':drawTool==='vpfixed'?'vpfixed':drawTool==='vpanchor'?'vpanchor':'rectangle';
-     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:null,barSizePct:500,extendRight:false,bgEnabled:false,bgColor:'#1a2230',bgOpacity:30,pocEnabled:false,pocColor:'#ff9800',pocWidth:2,pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,valEnabled:false,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{})};
+     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:null,barSizePct:500,extendRight:false,bgEnabled:false,bgColor:'#1a2230',bgOpacity:30,pocEnabled:false,pocColor:'#ff9800',pocWidth:2,pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,valEnabled:false,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{})};
      if(type==='vwap'||type==='vpanchor'||type==='horizontal'||type==='horizontalray'||type==='vertical'||type==='crossline'){
        // VWAP ancorato e Profilo volume ancorato hanno una sola "ancora" (un solo polo, come
        // nella loro icona): niente secondo punto da fissare, un solo clic basta e il
@@ -12369,21 +12397,74 @@ document.querySelectorAll('#chartStyleModalOverlay .fbModalTab').forEach(tabBtn=
    });
  });
 });
-// ===================== MODALE "LIVELLI" (nascondi/mostra singolarmente Fibonacci/profili
-// volumetrici/VWAP) — stesso identico pattern di apertura/chiusura del modale Style qui sopra. =====================
-function syncDrawLayerToggleButtons(){
- // Stesso identico pattern visivo dell'occhio già usato per nascondere i singoli indicatori
- // (vedi eyeBtn/toggleIndicatorHidden più sopra nel file): emoji 👁️/🚫 + opacità ridotta quando
- // nascosto, nessuna nuova classe CSS da aggiungere.
- document.querySelectorAll('#chartLayersModalOverlay .drawLayerToggleBtn').forEach(btn=>{
-   const key=btn.dataset.layer;
-   const visible=drawingLayerVisible[key]!==false;
-   btn.textContent=visible?'👁️':'🚫';
-   btn.style.opacity=visible?'1':'.55';
-   btn.title=(visible?'Nascondi':'Mostra')+' '+({fib:'i ritracciamenti Fibonacci',vp:'i profili volumetrici',vwap:'le linee VWAP'}[key]||'questo tipo di disegno');
+// ===================== MODALE "LIVELLI" (RICHIESTO ESPLICITAMENTE: non più una riga per TIPO,
+// ma una riga per ogni SINGOLO disegno — se ci sono due Fibonacci compaiono due righe distinte,
+// ciascuna con ⚙️ impostazioni / 👁️ nascondi-mostra / 🗑️ elimina, senza toccare gli altri) =====
+const CHART_LAYERS_TYPES=['fib','vpfixed','vpanchor','vwap'];
+function chartLayerRowLabel(type){
+ return {fib:'📐 Fibonacci',vpfixed:'📊 Profilo volumetrico (intervallo fisso)',vpanchor:'📊 Profilo volumetrico (ancorato)',vwap:'〰️ VWAP'}[type]||type;
+}
+function openDrawingSettingsFromLayer(d){
+ if(d.type==='fib')openFibSettingsModal(d);
+ else openVpSettingsModal(d); // vpfixed/vpanchor/vwap condividono lo stesso modale impostazioni
+}
+function removeDrawingInstance(d){
+ pushHistory();
+ drawings=drawings.filter(x=>x!==d);
+ if(hoverDrawing===d)hoverDrawing=null;
+ if(selectedDrawing===d){ closeDrawTextEditor&&closeDrawTextEditor(); selectedDrawing=null; updateDrawStyleVisibility(); }
+ if(vpModalTarget===d)closeVpSettingsModal();
+ draw();
+ scheduleSave();
+}
+function renderChartLayersList(){
+ const body=$('chartLayersListBody'); if(!body)return;
+ body.innerHTML='';
+ const counters={};
+ const rows2=drawings.filter(d=>d&&CHART_LAYERS_TYPES.includes(d.type));
+ if(!rows2.length){
+   const p=document.createElement('p');
+   p.className='hint'; p.style.margin='4px 0';
+   p.textContent='Nessun Fibonacci, profilo volumetrico o VWAP presente sul grafico.';
+   body.appendChild(p);
+   return;
+ }
+ rows2.forEach(d=>{
+   counters[d.type]=(counters[d.type]||0)+1;
+   const n=counters[d.type];
+   const row=document.createElement('div');
+   row.className='fbOptRow';
+   row.style.justifyContent='space-between';
+   const label=document.createElement('span');
+   label.textContent=chartLayerRowLabel(d.type)+' #'+n;
+   label.title=Number.isFinite(d.p1&&d.p1.time)?('Ancorato al '+new Date(d.p1.time).toLocaleString()):'';
+   const btns=document.createElement('span');
+   btns.style.display='inline-flex'; btns.style.gap='6px';
+   const settingsBtn=document.createElement('button');
+   settingsBtn.type='button'; settingsBtn.className='indChipBtn'; settingsBtn.title='Impostazioni'; settingsBtn.textContent='⚙️';
+   settingsBtn.addEventListener('click',()=>openDrawingSettingsFromLayer(d));
+   const hideBtn=document.createElement('button');
+   hideBtn.type='button'; hideBtn.className='indChipBtn'; hideBtn.title=d.hidden?'Mostra':'Nascondi';
+   hideBtn.textContent=d.hidden?'🚫':'👁️'; hideBtn.style.opacity=d.hidden?'.55':'1';
+   hideBtn.addEventListener('click',()=>{
+     d.hidden=!d.hidden;
+     if(d.hidden&&selectedDrawing===d)selectedDrawing=null;
+     renderChartLayersList();
+     draw();
+     scheduleSave();
+   });
+   const delBtn=document.createElement('button');
+   delBtn.type='button'; delBtn.className='indChipBtn'; delBtn.title='Elimina questo disegno'; delBtn.textContent='🗑️';
+   delBtn.addEventListener('click',()=>{
+     removeDrawingInstance(d);
+     renderChartLayersList();
+   });
+   btns.appendChild(settingsBtn); btns.appendChild(hideBtn); btns.appendChild(delBtn);
+   row.appendChild(label); row.appendChild(btns);
+   body.appendChild(row);
  });
 }
-$('chartLayersBtn')?.addEventListener('click',()=>{ const ov=$('chartLayersModalOverlay'); moveModalToFloatingIfActive(ov); syncDrawLayerToggleButtons(); if(ov)ov.style.display='flex'; });
+$('chartLayersBtn')?.addEventListener('click',()=>{ const ov=$('chartLayersModalOverlay'); moveModalToFloatingIfActive(ov); renderChartLayersList(); if(ov)ov.style.display='flex'; });
 function closeChartLayersModal(){ if($('chartLayersModalOverlay'))$('chartLayersModalOverlay').style.display='none'; }
 $('chartLayersModalCloseBtn')?.addEventListener('click',closeChartLayersModal);
 $('chartLayersModalDoneBtn')?.addEventListener('click',closeChartLayersModal);
@@ -12393,18 +12474,6 @@ document.addEventListener('keydown',e=>{
    e.preventDefault();
    closeChartLayersModal();
  }
-});
-document.querySelectorAll('#chartLayersModalOverlay .drawLayerToggleBtn').forEach(btn=>{
- btn.addEventListener('click',()=>{
-   const key=btn.dataset.layer;
-   drawingLayerVisible[key]=!(drawingLayerVisible[key]!==false);
-   syncDrawLayerToggleButtons();
-   // Un disegno del tipo appena nascosto potrebbe essere quello selezionato/in trascinamento:
-   // lo deselezioniamo, coerente con "nascosto = non interagibile" (vedi isDrawingLayerVisible).
-   if(selectedDrawing && !isDrawingLayerVisible(selectedDrawing))selectedDrawing=null;
-   draw();
-   scheduleSave();
- });
 });
 
 $('pipDecimals')?.addEventListener('change',()=>{draw();update();});
@@ -13670,7 +13739,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
    // anche cambiando asset — si ricaricano da assetDrawings invece di azzerarsi, esattamente
    // come per lo Storico in autoLoadAssetLibrary (vedi blocco MEMORIA DEI DISEGNI PER ASSET E
    // PER SESSIONE più sopra).
-   drawings=((assetDrawings[currentMode()]||{})[asset])||[];
+   drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
    selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
  }
@@ -14458,7 +14527,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
 
  const shouldResetDrawings=wasOnDifferentAsset;
  if(shouldResetDrawings){
-   drawings=((assetDrawings[currentMode()]||{})[asset])||[];
+   drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
    selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
  }
