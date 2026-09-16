@@ -992,16 +992,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpPocEnabled"> Mostra POC</label>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpPocColor" type="color" class="colorPick" value="#ff9800"></span>
          <span style="display:inline-flex;align-items:center;gap:5px">Spessore <input id="vpPocWidth" type="number" min="1" max="10" step="1" value="2" style="width:50px"></span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Linea <select id="vpPocLineStyle"><option value="solid">Continua</option><option value="dashed">Tratteggiata</option></select></span>
        </div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpVahEnabled"> Mostra VAH (Value Area High)</label>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpVahColor" type="color" class="colorPick" value="#3ea6ff"></span>
          <span style="display:inline-flex;align-items:center;gap:5px">Spessore <input id="vpVahWidth" type="number" min="1" max="10" step="1" value="1" style="width:50px"></span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Linea <select id="vpVahLineStyle"><option value="solid">Continua</option><option value="dashed" selected>Tratteggiata</option></select></span>
        </div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpValEnabled"> Mostra VAL (Value Area Low)</label>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpValColor" type="color" class="colorPick" value="#3ea6ff"></span>
          <span style="display:inline-flex;align-items:center;gap:5px">Spessore <input id="vpValWidth" type="number" min="1" max="10" step="1" value="1" style="width:50px"></span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Linea <select id="vpValLineStyle"><option value="solid">Continua</option><option value="dashed" selected>Tratteggiata</option></select></span>
        </div>
        <div class="fbOptRow">
          <label><input type="checkbox" id="vpPocExtend"> Sviluppo del POC (traccia lo storico del POC dentro l'istogramma)</label>
@@ -3369,13 +3372,16 @@ function openVpSettingsModal(target){
    if($('vpPocEnabled'))$('vpPocEnabled').checked=!!target.pocEnabled;
    if($('vpPocColor'))$('vpPocColor').value=target.pocColor||'#ff9800';
    if($('vpPocWidth'))$('vpPocWidth').value=target.pocWidth||2;
+   if($('vpPocLineStyle'))$('vpPocLineStyle').value=target.pocLineStyle||'solid';
    if($('vpPocExtend'))$('vpPocExtend').checked=!!target.pocExtend;
    if($('vpVahEnabled'))$('vpVahEnabled').checked=!!target.vahEnabled;
    if($('vpVahColor'))$('vpVahColor').value=target.vahColor||'#3ea6ff';
    if($('vpVahWidth'))$('vpVahWidth').value=target.vahWidth||1;
+   if($('vpVahLineStyle'))$('vpVahLineStyle').value=target.vahLineStyle||'dashed';
    if($('vpValEnabled'))$('vpValEnabled').checked=!!target.valEnabled;
    if($('vpValColor'))$('vpValColor').value=target.valColor||'#3ea6ff';
    if($('vpValWidth'))$('vpValWidth').value=target.valWidth||1;
+   if($('vpValLineStyle'))$('vpValLineStyle').value=target.valLineStyle||'dashed';
    if($('vpVaExtend'))$('vpVaExtend').checked=!!target.vaExtend;
  }else{
    if($('vpVwapColor'))$('vpVwapColor').value=target.color||defaultColorFor('vwap');
@@ -3424,15 +3430,18 @@ function applyVpSettingsFromModal(){
    d.pocColor=$('vpPocColor')?.value||d.pocColor;
    const pocW=Math.round(Number($('vpPocWidth')?.value));
    d.pocWidth=Number.isFinite(pocW)?Math.max(1,Math.min(10,pocW)):d.pocWidth;
+   d.pocLineStyle=$('vpPocLineStyle')?.value==='dashed'?'dashed':'solid';
    d.pocExtend=!!$('vpPocExtend')?.checked;
    d.vahEnabled=!!$('vpVahEnabled')?.checked;
    d.vahColor=$('vpVahColor')?.value||d.vahColor;
    const vahW=Math.round(Number($('vpVahWidth')?.value));
    d.vahWidth=Number.isFinite(vahW)?Math.max(1,Math.min(10,vahW)):d.vahWidth;
+   d.vahLineStyle=$('vpVahLineStyle')?.value==='solid'?'solid':'dashed';
    d.valEnabled=!!$('vpValEnabled')?.checked;
    d.valColor=$('vpValColor')?.value||d.valColor;
    const valW=Math.round(Number($('vpValWidth')?.value));
    d.valWidth=Number.isFinite(valW)?Math.max(1,Math.min(10,valW)):d.valWidth;
+   d.valLineStyle=$('vpValLineStyle')?.value==='solid'?'solid':'dashed';
    d.vaExtend=!!$('vpVaExtend')?.checked;
  }else{
    d.color=$('vpVwapColor')?.value||d.color;
@@ -7337,9 +7346,23 @@ function draw(){
        // del grafico — cioè ai pixel per candela — non fissa in pixel. Zoomando dentro (meno
        // candele visibili, ciascuna più larga) le barre si allungano; zoomando fuori (più
        // candele visibili, ciascuna più stretta) le barre si accorciano.
+       //
+       // COMPENSAZIONE TIMEFRAME (segnalato con screenshot 1m vs 5m: a parità di zoom/barSizePct
+       // l'istogramma risultava molto più "ingombrante" a TF più alti): "8 larghezze di candela"
+       // di barra rappresentano un intervallo di tempo reale che CRESCE con currentTF (8 candele
+       // da 1 minuto = 8 minuti, ma 8 candele da 5 minuti = 40 minuti) — pxPerCandle da solo non
+       // lo compensa, perché è legato al numero di candele visibili a schermo, non ai minuti che
+       // ciascuna rappresenta. Dividendo per currentTF la barra torna a coprire lo stesso
+       // intervallo di tempo assoluto a qualunque timeframe, quindi la stessa "impronta" visiva
+       // su schermo: a TF=5 le barre sono 5 volte più corte che a TF=1, a parità di zoom/scala.
        const pxPerCandle=cw/n;
-       const maxBarPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8))*sizeScale;
+       const tfSizeCompensation=Math.max(1,currentTF||1);
+       const maxBarPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8/tfSizeCompensation))*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
+       // Value Area calcolata QUI, PRIMA delle barre (non solo quando le righe POC/VAH/VAL sono
+       // abilitate): serve anche per attenuare le barre fuori dalla Value Area qualche riga sotto,
+       // una cosa richiesta a prescindere dal fatto che le righe POC/VAH/VAL siano visibili o no.
+       const va=(profile&&profile.maxTotal>0)?computeValueArea(profile,0.7):null;
        // Sfondo dell'istogramma (facoltativo, disattivato di default per non cambiare l'aspetto
        // a chi già usa il profilo volumetrico): un rettangolo pieno dietro alle barre, dal
        // bordo sinistro (leftX) fino alla lunghezza massima raggiungibile dalle barre
@@ -7356,6 +7379,13 @@ function draw(){
        if(profile&&profile.maxTotal>0){
          ctx.save();
          ctx.globalAlpha=Math.min(1,strokeAlpha);
+         // RICHIESTA: la parte centrale dell'istogramma (i bucket compresi tra VAL e VAH, cioè
+         // dentro la Value Area) deve risaltare rispetto a quella esterna, che viene attenuata —
+         // stessa idea del "Value Area highlight" dei profili volumetrici professionali.
+         // OUTSIDE_VA_DIM_FACTOR moltiplica l'opacità di base (0.55) solo per i bucket che NON si
+         // sovrappongono affatto a [valPrice,vahPrice]; un bucket a cavallo del confine resta a
+         // piena opacità (fa comunque parte, almeno in parte, della Value Area).
+         const OUTSIDE_VA_DIM_FACTOR=0.35;
          for(let b=0;b<profile.buckets;b++){
            const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
            const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
@@ -7364,9 +7394,11 @@ function draw(){
            if(total<=0)continue;
            const totalPx=Math.max(1,total/profile.maxTotal*maxBarPx);
            const upPx=totalPx*(profile.upVol[b]/total), downPx=totalPx-upPx;
-           ctx.fillStyle=hexToRgba(upCol,0.55);
+           const insideVA=!va||(bucketHiPrice>=va.valPrice&&bucketLoPrice<=va.vahPrice);
+           const barAlpha=insideVA?0.55:0.55*OUTSIDE_VA_DIM_FACTOR;
+           ctx.fillStyle=hexToRgba(upCol,barAlpha);
            ctx.fillRect(leftX,yTop+0.5,upPx,barH);
-           ctx.fillStyle=hexToRgba(downCol,0.55);
+           ctx.fillStyle=hexToRgba(downCol,barAlpha);
            ctx.fillRect(leftX+upPx,yTop+0.5,downPx,barH);
          }
          ctx.restore();
@@ -7378,12 +7410,15 @@ function draw(){
        // da quella che è il POC stesso... lo sviluppo invece deve essere un'altra linea che mostra
        // lo storico") AGGIUNGE una SECONDA linea distinta, più sottile e punteggiata, che traccia
        // come il livello si è mosso nel tempo — non sostituisce più la riga piatta.
-       const va=(d.pocEnabled||d.vahEnabled||d.valEnabled)?computeValueArea(profile,0.7):null;
        const developing=(va&&(d.pocExtend||d.vaExtend))?developingLevels(startIdx,lastIdx,nb,0.7):null;
-       const drawLevelLine=(priceKey,color,width,showDeveloping)=>{
+       // Tipo di linea (continua/tratteggiata) per la riga piatta del livello, configurabile per
+       // POC/VAH/VAL separatamente (default: POC continuo, VAH/VAL tratteggiati — comportamento
+       // di prima, per chi ha già un disegno salvato senza questo campo).
+       const LINE_DASH_BY_STYLE={solid:[],dashed:[5,3]};
+       const drawLevelLine=(priceKey,color,width,showDeveloping,lineStyle)=>{
          // 1) La riga piatta del livello attuale (unica, sempre presente quando abilitata).
          ctx.save();ctx.globalAlpha=strokeAlpha;ctx.strokeStyle=color;ctx.lineWidth=width;
-         if(priceKey!=='pocPrice')ctx.setLineDash([5,3]);
+         ctx.setLineDash(LINE_DASH_BY_STYLE[lineStyle]||[]);
          const py=shapesGeo.y(va[priceKey]);
          ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(rightBoundX,py);ctx.stroke();
          ctx.setLineDash([]);ctx.restore();
@@ -7402,9 +7437,9 @@ function draw(){
          }
        };
        if(va){
-         if(d.pocEnabled)drawLevelLine('pocPrice',d.pocColor||'#ff9800',d.pocWidth||2,d.pocExtend);
-         if(d.vahEnabled)drawLevelLine('vahPrice',d.vahColor||'#3ea6ff',d.vahWidth||1,d.vaExtend);
-         if(d.valEnabled)drawLevelLine('valPrice',d.valColor||'#3ea6ff',d.valWidth||1,d.vaExtend);
+         if(d.pocEnabled)drawLevelLine('pocPrice',d.pocColor||'#ff9800',d.pocWidth||2,d.pocExtend,d.pocLineStyle||'solid');
+         if(d.vahEnabled)drawLevelLine('vahPrice',d.vahColor||'#3ea6ff',d.vahWidth||1,d.vaExtend,d.vahLineStyle||'dashed');
+         if(d.valEnabled)drawLevelLine('valPrice',d.valColor||'#3ea6ff',d.valWidth||1,d.vaExtend,d.valLineStyle||'dashed');
        }
        // RICHIESTO ESPLICITAMENTE: le due maniglie devono stare agli angoli VERI dell'istogramma
        // (basso-sinistra dove inizia, alto-destra dove finisce), non più a un'altezza fissa vicino
