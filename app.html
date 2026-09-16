@@ -5064,6 +5064,9 @@ function fitVerticalRangeToWindow(extraPrices){
  viewPriceLo=fitLo-padFit; viewPriceHi=fitHi+padFit;
 }
 function resetToLatestCandle(){
+ // DIAGNOSTICA TEMPORANEA: se questo scatta senza un vero click dell'utente sul pulsante, è la
+ // prova diretta di una chiamata automatica indesiderata (vedi diagnosi in corso su followLatest).
+ console.warn('[FL-TRACE] resetToLatestCandle() chiamata', new Error().stack);
  followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
  viewEnd=idx; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  draw();update();
@@ -13502,6 +13505,10 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  //   già quello giusto per via dello stato appena ripristinato, pur essendo in tutto e per
  //   tutto un nuovo avvio).
  const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
+ if(shouldResetView){
+   // DIAGNOSTICA TEMPORANEA: vedi commento gemello in loadLiveHistoryFromMt5.
+   console.warn('[FL-TRACE][Capital] shouldResetView=true — wasOnDifferentAsset='+wasOnDifferentAsset+' rowsLenBefore='+rows.length+' forceResetView='+!!(opts&&opts.forceResetView)+' asset='+asset, new Error().stack);
+ }
  // FORZATURA RICHIESTA ESPLICITAMENTE: la candela puntata da viewEnd viene identificata per
  // ORARIO (closeTimeOf), non per INDICE numerico. rebuildRows() qui sotto riaggrega i minuti
  // grezzi nel timeframe corrente (5m/15m/1H/...): la candela "in formazione" in fondo
@@ -14072,6 +14079,24 @@ let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null;
 let lastMt5ChartUpdateAt=0, mt5HardResyncAttemptAt=0;
 let mt5LastSeenCandleBucketStart=null, mt5CandleRolloverResyncAt=0, mt5CandleRolloverResyncInProgress=false, mt5CandleFrozen=false;
 let mt5RefreshTimer=null;
+// DIAGNOSTICA TEMPORANEA (da rimuovere una volta isolata la causa del reset spontaneo di
+// followLatest segnalato dall'utente): conta quante chiamate a loadLiveHistoryFromMt5/
+// __loadLiveHistoryFromCapitalImpl sono "in volo" contemporaneamente, per scoprire se due
+// risincronizzazioni concorrenti (una dal rollover MT5, una da un altro trigger) si accavallano
+// mai — cosa che da sola spiegherebbe una vista che "salta" alcuni secondi dopo che il rollover
+// sembrava già concluso, senza che nessuno abbia premuto il pulsante.
+let __liveHistoryLoadDepth=0;
+// FIX DIFENSIVO (stesso identico pattern già usato per Capital.com — vedi
+// __loadLiveHistoryInFlight/__loadLiveHistoryInFlightAsset in loadLiveHistoryFromCapital): il
+// guard "richiesta già in volo -> riusa quella" copriva SOLO il ramo Capital.com. Con MT5
+// connesso, loadLiveHistoryFromCapital devia SUBITO verso loadLiveHistoryFromMt5 (vedi
+// `if(mt5Connected)return loadLiveHistoryFromMt5(asset,opts);` più sotto) PRIMA di raggiungere
+// quel guard — quindi due chiamate quasi simultanee a loadLiveHistoryFromMt5 (es. il resync di
+// rollover candela e un qualunque altro trigger che ricarichi lo storico Live) potevano partire
+// ENTRAMBE per intero in parallelo, senza alcuna protezione, correndo sulle stesse variabili
+// globali condivise (rows/viewEnd/followLatest/currentAssetKey...). Ora si riusa la stessa identica
+// promise in volo invece di farne partire una seconda concorrente.
+let __mt5LoadHistoryInFlight=null, __mt5LoadHistoryInFlightAsset=null;
 
 // Punto unico chiamato da updateMt5ModeUI() (già eseguita da OGNI punto del codice che cambia
 // mt5Connected, vedi commento lì) — nessun altro hook sparso serve: entra/esce dalla sorgente
@@ -14124,6 +14149,29 @@ async function resolveMt5SymbolForAsset(asset){
 async function loadLiveHistoryFromMt5(asset,opts){
  if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
  if(!liveModeActive)return;
+ // FIX DIFENSIVO: vedi commento su __mt5LoadHistoryInFlight più in alto — una richiesta già in
+ // volo per lo STESSO asset viene riusata invece di farne partire una seconda in parallelo.
+ if(__mt5LoadHistoryInFlight && __mt5LoadHistoryInFlightAsset===asset){
+   console.warn('[FL-TRACE] loadLiveHistoryFromMt5 chiamata di nuovo per "'+asset+'" mentre una è già in corso: riuso quella in volo invece di farne partire una seconda in parallelo.', new Error().stack);
+   return __mt5LoadHistoryInFlight;
+ }
+ // DIAGNOSTICA TEMPORANEA: vedi commento su __liveHistoryLoadDepth più in alto — questo NON
+ // dovrebbe più scattare per lo stesso asset (coperto dal guard sopra), ma resta utile per
+ // scoprire un eventuale caso ancora scoperto (es. asset diverso) durante la diagnosi in corso.
+ __liveHistoryLoadDepth++;
+ if(__liveHistoryLoadDepth>1){
+   console.warn('[FL-TRACE] loadLiveHistoryFromMt5 chiamata mentre un\'altra risincronizzazione è già in corso (depth='+__liveHistoryLoadDepth+'), asset='+asset+', currentAssetKey='+currentAssetKey+', opts=',opts, new Error().stack);
+ }
+ const __p=__loadLiveHistoryFromMt5Body(asset,opts);
+ __mt5LoadHistoryInFlight=__p; __mt5LoadHistoryInFlightAsset=asset;
+ try{
+   return await __p;
+ }finally{
+   __liveHistoryLoadDepth--;
+   if(__mt5LoadHistoryInFlight===__p){ __mt5LoadHistoryInFlight=null; __mt5LoadHistoryInFlightAsset=null; }
+ }
+}
+async function __loadLiveHistoryFromMt5Body(asset,opts){
  const resolved=await resolveMt5SymbolForAsset(asset);
  if(resolved===undefined){
    $('status').textContent=`⚠️ Servizio dati MT5 (mt5_feed_server.py, porta 8001) non raggiungibile: il grafico resta su Capital.com finché non riparte (avvia "uvicorn mt5_feed_server:app --port 8001" sul tuo PC).`;
@@ -14212,6 +14260,12 @@ async function loadLiveHistoryFromMt5(asset,opts){
    historyUndo=[];historyRedo=[];
  }
  const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
+ if(shouldResetView){
+   // DIAGNOSTICA TEMPORANEA: vedi commento su __liveHistoryLoadDepth più in alto — se questo
+   // scatta SENZA che l'utente abbia cambiato asset né premuto "torna all'ultima candela", è la
+   // prova diretta di quale ramo sta causando il reset spontaneo della vista segnalato.
+   console.warn('[FL-TRACE][MT5] shouldResetView=true — wasOnDifferentAsset='+wasOnDifferentAsset+' rowsLenBefore='+rows.length+' forceResetView='+!!(opts&&opts.forceResetView)+' asset='+asset+' depth='+__liveHistoryLoadDepth, new Error().stack);
+ }
  let preserved=null;
  if(!shouldResetView){
    // BUG RISOLTO ESPLICITAMENTE, dopo diversi giri di test con l'utente ("le candele successive
