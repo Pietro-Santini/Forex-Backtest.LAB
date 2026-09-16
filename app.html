@@ -2933,7 +2933,10 @@ function updateDrawTextHint(){
  const hintEl=ensureDrawTextHintEl();
  if(drawTextEditorEl){ hintEl.style.display='none'; return; }
  const d=activeHintDrawing();
- if(!d||drawTool!=='cursor'||panDrag||shapeDrag||placingStep!==0){ hintEl.style.display='none'; return; }
+ // RICHIESTO ESPLICITAMENTE: niente suggerimento "+ Aggiungi testo" per profilo volumetrico e
+ // VWAP — non è un'annotazione a punto singolo come le altre, un'etichetta di testo lì non
+ // avrebbe un posto sensato dove stare ed era solo una casellina inutile sopra di loro.
+ if(!d||drawTool!=='cursor'||panDrag||shapeDrag||placingStep!==0||d.type==='vpfixed'||d.type==='vpanchor'||d.type==='vwap'){ hintEl.style.display='none'; return; }
  const anchor=drawingTextAnchor(d);
  if(!anchor){ hintEl.style.display='none'; return; }
  hintEl.style.left=anchor.x+'px';
@@ -7256,7 +7259,18 @@ function draw(){
        const nb=d.buckets?Math.max(6,Math.min(500,Math.round(d.buckets))):Math.max(8,Math.min(60,Math.round(ch/7)));
        const profile=computeVolumeProfile(startIdx,lastIdx,nb);
        const sizeScale=Math.max(0.2,Math.min(2,(d.barSizePct||100)/100));
-       const maxBarPx=Math.max(24,Math.min(110,Math.abs((d.type==='vpfixed'?shapesGeo.xFromTime(fullTs[lastIdx]):w-pad.r)-leftX)*(d.type==='vpfixed'?0.9:0.35)))*sizeScale;
+       // BUG RISOLTO ("con lo zoom orizzontale l'istogramma non si ridimensiona insieme al
+       // grafico, resta com'era"): qui sotto c'era un Math.max(24,Math.min(110,...)) che
+       // fissava la lunghezza massima delle barre entro un intervallo di pixel ASSOLUTO,
+       // indipendente dallo zoom — appena la proporzione naturale (in base allo spazio in
+       // pixel realmente occupato dal profilo, che invece SEGUE lo zoom tramite xFromTime)
+       // superava 110px (zoom avanti) o scendeva sotto 24px (zoom indietro), l'istogramma
+       // smetteva di seguire ulteriormente lo zoom e restava "congelato" alla sua scala
+       // originale. Tolto il tetto/pavimento: ora le barre sono sempre una proporzione fissa
+       // dello spazio orizzontale realmente occupato dal profilo sullo schermo, quindi si
+       // zoomano insieme al grafico esattamente come le candele, senza mai bloccarsi. Il
+       // minimo di 1px resta solo per evitare un rettangolo di larghezza zero/negativa.
+       const maxBarPx=Math.max(1,Math.abs((d.type==='vpfixed'?shapesGeo.xFromTime(fullTs[lastIdx]):w-pad.r)-leftX)*(d.type==='vpfixed'?0.9:0.35))*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
        if(profile&&profile.maxTotal>0){
          ctx.save();
@@ -7328,7 +7342,13 @@ function draw(){
      // finalizzati. L'icona cambia a seconda dello stato: lucchetto chiuso = bloccato (le
      // maniglie di trascinamento qui sopra sono infatti nascoste quando d.locked), lucchetto
      // aperto = sbloccato. Identico per trendline, linea estesa, rettangolo e Fibonacci.
-     if(isSelected&&!isPending){
+     // RICHIESTO ESPLICITAMENTE: niente lucchetto (né l'indicatore persistente qui sotto) per
+     // profilo volumetrico e VWAP — il blocco posizione non ha senso per questi due tipi (il
+     // VWAP resta ancorato al suo punto, il profilo volumetrico ancorato/fisso si ridefinisce
+     // dai suoi due indici, non da un trascinamento libero come le altre forme) ed era solo un
+     // pulsante inutile sopra di loro.
+     const vpOrVwap=d.type==='vpfixed'||d.type==='vpanchor'||d.type==='vwap';
+     if(isSelected&&!isPending&&!vpOrVwap){
        const topY=d.type==='rectangle'?Math.min(dy1,dy2):Math.min(dy1,dy2);
        const cx=(dx1+dx2)/2;
        const btnW=26,btnH=20;
@@ -7350,7 +7370,7 @@ function draw(){
      // Piccolo indicatore persistente di "bloccato" accanto al punto p1, visibile anche quando
      // il disegno NON è selezionato, così si capisce a colpo d'occhio quali disegni sono
      // bloccati senza doverli selezionare uno per uno.
-     if(d.locked&&!isSelected&&!isPending){
+     if(d.locked&&!isSelected&&!isPending&&!vpOrVwap){
        ctx.save();
        ctx.globalAlpha=1;
        ctx.font='11px Arial';
@@ -8216,7 +8236,16 @@ function hitTestDrawings(clientX,clientY,vpBodySelect){
      // sposta — richiesto per evitare spostamenti accidentali trascinando sull'istogramma.
      const fullTs=getRowsTimestamps();
      const aIdx=rowIndexNearTime(d.p1.time);
-     const bIdx=d.type==='vpfixed'?rowIndexNearTime(d.p2.time):aIdx;
+     // BUG RISOLTO ("la maniglia del profilo volume ancorato non si può più afferrare/spostare"):
+     // qui sotto bIdx per 'vpanchor' era fermo su aIdx (una sola candela), mentre draw() (vedi lì,
+     // stesso identico calcolo) lo estende sempre fino alla candela live attuale
+     // (Math.min(idx,rows.length-1)) — è così che 'vpanchor' cresce da solo nel tempo. Il profilo
+     // usato QUI per calcolare priceLo/priceHi (e quindi la posizione Y della maniglia da
+     // intercettare) copriva quindi un intervallo di prezzo completamente diverso da quello
+     // realmente disegnato: la maniglia visibile a schermo e il punto testato dal click potevano
+     // finire a decine/centinaia di pixel di distanza, rendendola di fatto non cliccabile appena
+     // erano passate un po' di candele dall'ancoraggio. Allineato allo stesso calcolo di draw().
+     const bIdx=d.type==='vpfixed'?rowIndexNearTime(d.p2.time):Math.min(idx,rows.length-1);
      const leftX=g.xFromTime(fullTs[Math.min(aIdx,bIdx)]);
      const rightX=d.type==='vpfixed'?(d.extendRight?(g.rect.width-g.pad.r):g.xFromTime(fullTs[Math.max(aIdx,bIdx)])):(g.rect.width-g.pad.r);
      // Stesse maniglie agli angoli VERI dell'istogramma di draw() (vedi lì il commento): il
@@ -11472,7 +11501,15 @@ chartEl.addEventListener('pointerdown',e=>{
       $('status').textContent='Trascina '+dragLabel(tradeHit)+' per modificarla.';
       return;
     }
-    const shapeHit=hitTestDrawings(e.clientX,e.clientY);
+    // vpBodySelect=true: RICHIESTO ESPLICITAMENTE — un click (non trascinamento) dentro il
+    // corpo/linea di un profilo volumetrico o del VWAP deve selezionare il disegno, così Canc
+    // può eliminarlo (prima solo le minuscole maniglie erano cliccabili per selezionare, e sul
+    // resto dell'istogramma un click singolo non selezionava nulla). Stesso compromesso già in
+    // vigore da prima per il VWAP (la sua linea seleziona già col click semplice, senza gating):
+    // un click che parte esattamente dentro il corpo del disegno seleziona invece di avviare il
+    // pan — per spostare il grafico partendo da lì, basta iniziare il trascinamento un pixel più
+    // in là, fuori dall'istogramma/linea.
+    const shapeHit=hitTestDrawings(e.clientX,e.clientY,true);
     if(shapeHit){
       e.preventDefault();
       setChartTouchAction(true);
@@ -11540,7 +11577,10 @@ chartEl.addEventListener('pointerdown',e=>{
    $('status').textContent='Trascina '+dragLabel(tradeHit)+' per modificarla.';
    return;
  }
- const shapeHit=hitTestDrawings(e.clientX,e.clientY);
+ // vpBodySelect=true: vedi il commento gemello nel ramo touch più sopra — un click semplice
+ // dentro il corpo del profilo volumetrico o sulla linea del VWAP deve selezionare il disegno
+ // (per poterlo cancellare con Canc), stesso trattamento già riservato al VWAP.
+ const shapeHit=hitTestDrawings(e.clientX,e.clientY,true);
  if(shapeHit){
    selectedDrawing=shapeHit.drawing;
    syncDrawStyleUI(selectedDrawing);
@@ -14266,7 +14306,15 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  let body;
  try{
    const timeframe=(MT5_TIMEFRAME_MAP[currentTF]||'M1');
-   const res=await fetch(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=1000');
+   // count alzato da 1000 a 200000 su richiesta esplicita ("voglio il massimo dello storico
+   // disponibile quando mi connetto a MT5"): il server (mt5_feed_server.py, vedi lì il commento
+   // gemello) restituisce comunque solo le candele che il terminale MT5 ha davvero in locale per
+   // quel simbolo, quindi chiedere un numero alto non causa errori né candele finte, semplicemente
+   // arriva il massimo realmente disponibile. Vedi però anche il tetto di fusione poco più sotto
+   // (mergedRows.length>...): senza ALZARE ANCHE QUELLO in pari misura, questo storico più ampio
+   // sarebbe stato tagliato di nuovo a 5000 candele alla primissima risincronizzazione dopo il
+   // cambio candela — l'ho alzato in coppia con questo, vedi lì.
+   const res=await fetch(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=200000');
    body=await res.json();
    if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
  }catch(e){
@@ -14292,7 +14340,18 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    prevLiveFile.rows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byTime.set(t,r); });
    mt5Rows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byTime.set(t,r); });
    mergedRows=[...byTime.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
-   if(mergedRows.length>5000)mergedRows=mergedRows.slice(mergedRows.length-5000);
+   // Tetto alzato da 5000 a 200000 IN COPPIA col count della fetch qui sopra: senza alzare anche
+   // questo, lo storico più ampio appena richiesto sarebbe stato tagliato via di nuovo alla primissima
+   // risincronizzazione dopo un cambio candela (questo ramo isSameLiveSeries gira ad ogni rollover,
+   // quindi in pratica ogni minuto su M1) — il tetto resta comunque un limite ESPLICITO e non
+   // rimosso del tutto: senza un tetto, fondere invece di sostituire farebbe crescere lo storico
+   // Live all'infinito nel corso di una sessione lunga (vedi commento originale qui accanto).
+   // ATTENZIONE PRESTAZIONI: 200000 candele M1 (~139 giorni) sono MOLTE più delle 5000 (~3,5
+   // giorni) di prima — ogni ridisegno, calcolo di profilo volumetrico/indicatore e ricostruzione
+   // di rows lavora ora su un array molto più grande. Se dopo questa modifica il grafico risulta
+   // più lento (specie con più profili volumetrici/indicatori attivi insieme), il primo posto
+   // dove abbassare di nuovo il tetto è qui.
+   if(mergedRows.length>200000)mergedRows=mergedRows.slice(mergedRows.length-200000);
  }
  csvLibrary=[{id:'mt5_live_'+asset,name:`MT5 Live (${resolved})`,addedAt:Date.now(),rows:mergedRows}];
  rebuildBaseRowsFromLibrary();
