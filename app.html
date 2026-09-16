@@ -982,12 +982,16 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <div class="fbOptRow" id="vpExtendRow">
          <label><input type="checkbox" id="vpExtendRight"> Estendi fino al bordo destro del grafico</label>
        </div>
+       <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
+         <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpBgEnabled"> Mostra sfondo istogramma</label>
+         <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpBgColor" type="color" class="colorPick" value="#1a2230"></span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Opacità <input id="vpBgOpacity" type="number" min="0" max="100" step="5" value="30" style="width:50px">%</span>
+       </div>
        <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">LIVELLI</div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpPocEnabled"> Mostra POC</label>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpPocColor" type="color" class="colorPick" value="#ff9800"></span>
          <span style="display:inline-flex;align-items:center;gap:5px">Spessore <input id="vpPocWidth" type="number" min="1" max="10" step="1" value="2" style="width:50px"></span>
-         <label style="display:inline-flex;align-items:center;gap:5px"><input type="checkbox" id="vpPocExtend"> Sviluppo del POC (estendi a destra)</label>
        </div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpVahEnabled"> Mostra VAH (Value Area High)</label>
@@ -1000,7 +1004,10 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <span style="display:inline-flex;align-items:center;gap:5px">Spessore <input id="vpValWidth" type="number" min="1" max="10" step="1" value="1" style="width:50px"></span>
        </div>
        <div class="fbOptRow">
-         <label><input type="checkbox" id="vpVaExtend"> Sviluppo VA (estendi VAH/VAL a destra)</label>
+         <label><input type="checkbox" id="vpPocExtend"> Sviluppo del POC (traccia lo storico del POC dentro l'istogramma)</label>
+       </div>
+       <div class="fbOptRow">
+         <label><input type="checkbox" id="vpVaExtend"> Sviluppo VA (traccia lo storico di VAH/VAL dentro l'istogramma)</label>
        </div>
      </div>
      <div id="vpModalVwapPanel" style="display:none">
@@ -3346,6 +3353,9 @@ function openVpSettingsModal(target){
    if($('vpBuckets'))$('vpBuckets').value=target.buckets||24;
    if($('vpBarSizePct'))$('vpBarSizePct').value=target.barSizePct||100;
    if($('vpExtendRight'))$('vpExtendRight').checked=!!target.extendRight;
+   if($('vpBgEnabled'))$('vpBgEnabled').checked=!!target.bgEnabled;
+   if($('vpBgColor'))$('vpBgColor').value=target.bgColor||'#1a2230';
+   if($('vpBgOpacity'))$('vpBgOpacity').value=target.bgOpacity!=null?target.bgOpacity:30;
    if($('vpPocEnabled'))$('vpPocEnabled').checked=!!target.pocEnabled;
    if($('vpPocColor'))$('vpPocColor').value=target.pocColor||'#ff9800';
    if($('vpPocWidth'))$('vpPocWidth').value=target.pocWidth||2;
@@ -3396,6 +3406,10 @@ function applyVpSettingsFromModal(){
    const sizeVal=Number($('vpBarSizePct')?.value);
    d.barSizePct=Number.isFinite(sizeVal)?Math.max(20,sizeVal):d.barSizePct;
    if(d.type==='vpfixed')d.extendRight=!!$('vpExtendRight')?.checked;
+   d.bgEnabled=!!$('vpBgEnabled')?.checked;
+   d.bgColor=$('vpBgColor')?.value||d.bgColor;
+   const bgOpVal=Math.round(Number($('vpBgOpacity')?.value));
+   d.bgOpacity=Number.isFinite(bgOpVal)?Math.max(0,Math.min(100,bgOpVal)):d.bgOpacity;
    d.pocEnabled=!!$('vpPocEnabled')?.checked;
    d.pocColor=$('vpPocColor')?.value||d.pocColor;
    const pocW=Math.round(Number($('vpPocWidth')?.value));
@@ -4500,6 +4514,32 @@ function computeValueArea(profile,vaPct){
    valPrice:profile.priceLo+lo*profile.bucketSize,
    pocIdx,loIdx:lo,hiIdx:hi
  };
+}
+// "Sviluppo" (POC/VA in sviluppo, come su TradingView): NON estende più la riga piatta oltre il
+// profilo verso il bordo destro del grafico — richiesta esplicita dell'utente ("traccia quello
+// che è stato il POC precedente... traccia delle linee dentro l'istogramma che fa vedere
+// praticamente lo storico delle linee"). Ricalcola il profilo (e quindi POC/VAH/VAL) usando via
+// via SOLO le candele da startIdx fino a ciascun punto intermedio i, producendo una spezzata che
+// mostra come questi livelli si sono mossi nel tempo — sempre dentro l'intervallo del profilo
+// stesso [startIdx,lastIdx], mai oltre. Campionata a passi (stride) quando l'intervallo è molto
+// lungo, per non ricalcolare centinaia di profili ad ogni frame durante pan/zoom.
+function developingLevels(startIdx,lastIdx,nb,vaPct){
+ const total=lastIdx-startIdx+1;
+ if(total<=1)return null;
+ const maxSteps=150;
+ const stride=Math.max(1,Math.ceil(total/maxSteps));
+ const pts=[];
+ for(let i=startIdx;i<=lastIdx;i+=stride){
+   const prof=computeVolumeProfile(startIdx,i,nb);
+   const va=prof?computeValueArea(prof,vaPct):null;
+   if(va)pts.push({i,pocPrice:va.pocPrice,vahPrice:va.vahPrice,valPrice:va.valPrice});
+ }
+ if(pts.length&&pts[pts.length-1].i!==lastIdx){
+   const prof=computeVolumeProfile(startIdx,lastIdx,nb);
+   const va=prof?computeValueArea(prof,vaPct):null;
+   if(va)pts.push({i:lastIdx,pocPrice:va.pocPrice,vahPrice:va.vahPrice,valPrice:va.valPrice});
+ }
+ return pts;
 }
 // Icone SVG (path esatti, ricalcati pixel per pixel sulle icone originali di TradingView) e
 // etichette per le 3 modalità dello strumento "Profilo volumetrico" — usate sia per l'icona sul
@@ -7278,6 +7318,19 @@ function draw(){
        const pxPerCandle=cw/n;
        const maxBarPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8))*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
+       // Sfondo dell'istogramma (facoltativo, disattivato di default per non cambiare l'aspetto
+       // a chi già usa il profilo volumetrico): un rettangolo pieno dietro alle barre, dal
+       // bordo sinistro (leftX) fino alla lunghezza massima raggiungibile dalle barre
+       // (leftX+maxBarPx), esteso su tutto il range di prezzo del profilo — disegnato PRIMA
+       // delle barre così resta dietro, non sopra.
+       if(d.bgEnabled&&profile){
+         const bgTopY=shapesGeo.y(profile.priceHi), bgBotY=shapesGeo.y(profile.priceLo);
+         ctx.save();
+         ctx.globalAlpha=Math.min(1,strokeAlpha)*Math.max(0,Math.min(100,d.bgOpacity!=null?d.bgOpacity:30))/100;
+         ctx.fillStyle=d.bgColor||'#1a2230';
+         ctx.fillRect(leftX,bgTopY,maxBarPx,Math.max(1,bgBotY-bgTopY));
+         ctx.restore();
+       }
        if(profile&&profile.maxTotal>0){
          ctx.save();
          ctx.globalAlpha=Math.min(1,strokeAlpha);
@@ -7296,31 +7349,34 @@ function draw(){
          }
          ctx.restore();
        }
-       // POC (Point of Control) e Value Area (VAH/VAL): livelli orizzontali facoltativi,
-       // ciascuno col proprio colore/spessore configurabili dalle impostazioni. "Sviluppo"
-       // prolunga la relativa linea fino al bordo destro del grafico invece di fermarsi al
-       // bordo destro del profilo (stessa idea di "Estendi fino al bordo destro" qui sopra).
+       // POC (Point of Control) e Value Area (VAH/VAL): livelli orizzontali facoltativi, ciascuno
+       // col proprio colore/spessore configurabili dalle impostazioni. "Sviluppo" (richiesta
+       // esplicita dell'utente) NON estende più la linea piatta oltre il profilo: traccia invece
+       // lo STORICO del livello, cioè come POC/VAH/VAL si sarebbero mossi calcolando il profilo
+       // via via con le sole candele fino a quel punto — sempre dentro l'intervallo del profilo
+       // [leftX,rightBoundX], mai oltre.
        const va=(d.pocEnabled||d.vahEnabled||d.valEnabled)?computeValueArea(profile,0.7):null;
+       const developing=(va&&(d.pocExtend||d.vaExtend))?developingLevels(startIdx,lastIdx,nb,0.7):null;
+       const drawLevelLine=(priceKey,color,width,useDeveloping)=>{
+         ctx.save();ctx.globalAlpha=strokeAlpha;ctx.strokeStyle=color;ctx.lineWidth=width;
+         if(priceKey!=='pocPrice')ctx.setLineDash([5,3]);
+         if(useDeveloping&&developing&&developing.length>1){
+           ctx.beginPath();
+           developing.forEach((pt,ix)=>{
+             const px=shapesGeo.xFromTime(fullTs[pt.i]), py=shapesGeo.y(pt[priceKey]);
+             if(ix===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);
+           });
+           ctx.stroke();
+         }else{
+           const py=shapesGeo.y(va[priceKey]);
+           ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(rightBoundX,py);ctx.stroke();
+         }
+         ctx.setLineDash([]);ctx.restore();
+       };
        if(va){
-         const vaRight=w-pad.r;
-         if(d.pocEnabled){
-           const py=shapesGeo.y(va.pocPrice);
-           const segR=d.pocExtend?vaRight:rightBoundX;
-           ctx.save();ctx.globalAlpha=strokeAlpha;ctx.strokeStyle=d.pocColor||'#ff9800';ctx.lineWidth=d.pocWidth||2;
-           ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(segR,py);ctx.stroke();ctx.restore();
-         }
-         if(d.vahEnabled){
-           const py=shapesGeo.y(va.vahPrice);
-           const segR=d.vaExtend?vaRight:rightBoundX;
-           ctx.save();ctx.globalAlpha=strokeAlpha;ctx.strokeStyle=d.vahColor||'#3ea6ff';ctx.lineWidth=d.vahWidth||1;ctx.setLineDash([5,3]);
-           ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(segR,py);ctx.stroke();ctx.setLineDash([]);ctx.restore();
-         }
-         if(d.valEnabled){
-           const py=shapesGeo.y(va.valPrice);
-           const segR=d.vaExtend?vaRight:rightBoundX;
-           ctx.save();ctx.globalAlpha=strokeAlpha;ctx.strokeStyle=d.valColor||'#3ea6ff';ctx.lineWidth=d.valWidth||1;ctx.setLineDash([5,3]);
-           ctx.beginPath();ctx.moveTo(leftX,py);ctx.lineTo(segR,py);ctx.stroke();ctx.setLineDash([]);ctx.restore();
-         }
+         if(d.pocEnabled)drawLevelLine('pocPrice',d.pocColor||'#ff9800',d.pocWidth||2,d.pocExtend);
+         if(d.vahEnabled)drawLevelLine('vahPrice',d.vahColor||'#3ea6ff',d.vahWidth||1,d.vaExtend);
+         if(d.valEnabled)drawLevelLine('valPrice',d.valColor||'#3ea6ff',d.valWidth||1,d.vaExtend);
        }
        // RICHIESTO ESPLICITAMENTE: le due maniglie devono stare agli angoli VERI dell'istogramma
        // (basso-sinistra dove inizia, alto-destra dove finisce), non più a un'altezza fissa vicino
@@ -11447,7 +11503,7 @@ chartEl.addEventListener('pointerdown',e=>{
    if(!point)return;
    if(placingStep===0){
      const type=LINE_TYPES.includes(drawTool)?drawTool:drawTool==='fib'?'fib':drawTool==='vwap'?'vwap':drawTool==='vpfixed'?'vpfixed':drawTool==='vpanchor'?'vpanchor':'rectangle';
-     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:null,barSizePct:100,extendRight:false,pocEnabled:false,pocColor:'#ff9800',pocWidth:2,pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,valEnabled:false,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{})};
+     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:null,barSizePct:500,extendRight:false,bgEnabled:false,bgColor:'#1a2230',bgOpacity:30,pocEnabled:false,pocColor:'#ff9800',pocWidth:2,pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,valEnabled:false,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{})};
      if(type==='vwap'||type==='vpanchor'||type==='horizontal'||type==='horizontalray'||type==='vertical'||type==='crossline'){
        // VWAP ancorato e Profilo volume ancorato hanno una sola "ancora" (un solo polo, come
        // nella loro icona): niente secondo punto da fissare, un solo clic basta e il
