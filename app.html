@@ -1173,6 +1173,21 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="newsFilterMedium"> <span style="color:#f0a83c">●</span> Media</label>
        <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="newsFilterHigh"> <span style="color:#e0524f">●</span> Alta</label>
      </div>
+     <!-- Tabella paesi/valute (RICHIESTA ESPLICITAMENTE): righe generate dinamicamente da
+          renderNewsCountryFilterUI() in base a cosa contiene DAVVERO l'ultimo feed ricevuto (non
+          un elenco fisso scritto a mano, che rischierebbe di non combaciare mai con le valute che
+          il broker/Forex Factory restituiscono davvero) — vedi anche "All" per gli eventi globali
+          (es. i summit), che non appartengono a nessuna valuta specifica. -->
+     <div style="margin:10px 0 6px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+       <div class="hint" style="font-weight:700;letter-spacing:.3px">PAESE / VALUTA</div>
+       <div style="display:flex;gap:6px">
+         <button type="button" id="newsCountrySelectAllBtn" class="toolBtn" style="padding:2px 8px;font-size:11px">Tutte</button>
+         <button type="button" id="newsCountrySelectNoneBtn" class="toolBtn" style="padding:2px 8px;font-size:11px">Nessuna</button>
+       </div>
+     </div>
+     <div id="newsCountryFilterContainer" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:6px 10px;max-height:160px;overflow-y:auto;padding:2px 2px 4px">
+       <div class="hint" id="newsCountryFilterEmptyHint" style="grid-column:1/-1">Nessun evento ricevuto ancora: la lista si popola da sola al primo aggiornamento del feed.</div>
+     </div>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="newsSettingsModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
@@ -5150,9 +5165,23 @@ function maxViewEnd(){
 // candela, anche frazionarie) del bordo sinistro/destro della vista e possono andare
 // oltre l'ultima candela reale (idx). `dataStart`/`dataEnd` sono invece i limiti reali
 // dei dati disponibili da disegnare (non mostriamo mai candele future).
+// Margine di default (solo in Live) oltre l'ultima candela reale: richiesto esplicitamente
+// dall'utente ("dopo l'ultima candela bisogna continuare a far vedere l'orario... il tempo è
+// infinito") — senza questo, con viewEnd che di default combacia esattamente con idx,
+// l'ultima candela starebbe sempre incollata al bordo destro e non ci sarebbe MAI spazio
+// visibile di default per gli orari futuri, né per i pallini delle notizie Forex Factory non
+// ancora uscite (vedi newsDotHitRects in draw(): calcolano già la x giusta per qualunque
+// timestamp futuro, gli mancava solo lo spazio per comparire). Una FRAZIONE di `n` (non un
+// numero fisso di minuti) così si adatta da sola a qualunque timeframe/zoom. Resta scoped a
+// liveModeActive (in Storico "il futuro" non esiste, è un replay) e ben dentro il tetto già
+// esistente di maxViewEnd() (85%, pensato per il pan manuale). NON tocca `viewEnd` stesso, che
+// resta l'unica fonte di verità per il pan manuale (vedi pointerdown/pointermove del grafico
+// più sotto) — questo margine si applica solo qui, al momento di calcolare la finestra.
+const LIVE_FUTURE_MARGIN_FRACTION=0.12;
 function getViewWindow(){
  const n=getVisibleCount();
- const end=Math.max(0,Math.min(maxViewEnd(),viewEnd));
+ const liveMargin=liveModeActive?n*LIVE_FUTURE_MARGIN_FRACTION:0;
+ const end=Math.max(0,Math.min(maxViewEnd(),viewEnd+liveMargin));
  const start=end-n+1;
  const dataEnd=Math.min(idx,Math.ceil(end));
  const dataStart=Math.max(0,Math.floor(start));
@@ -7064,7 +7093,7 @@ function draw(){
  // --- Griglia verticale (ora/data): stessa spaziatura in px di quella orizzontale, calcolata
  // qui e riusata più sotto sia per le linee sia per le etichette dell'asse tempo, così restano
  // sempre perfettamente allineate.
- let timeTicks=[];
+ timeTicks=[];
  (function computeTimeTicks(){
    const ts=data.map(r=>parseDateTime(r.date));
    if(!ts.length||!ts.some(Number.isFinite))return;
@@ -7088,6 +7117,35 @@ function draw(){
      prevDayKey=dayKey;
      timeTicks.push({x:xx,t,dayChanged,hour:p.hour,minute:p.minute});
    });
+   // --- Prosegue l'asse oltre l'ultima candela reale, solo in Live: richiesto esplicitamente
+   // ("il tempo è infinito"), sia per continuare a mostrare l'orario che avanza sia perché è lo
+   // spazio dove compaiono i pallini delle notizie Forex Factory future (vedi newsDotHitRects
+   // più sotto in draw() — calcola già la x giusta per qualunque timestamp, gli mancava solo lo
+   // spazio per rientrare nell'area di plot: vedi il margine aggiunto in getViewWindow()).
+   // Usa chartGeometry().xFromTime() (la STESSA funzione già usata per i pallini delle notizie)
+   // invece di riscrivere a mano la stessa estrapolazione tempo→x: così i tick restano SEMPRE
+   // coerenti con dove finiscono davvero a comparire i pallini. Si ferma solo quando esce
+   // dall'area di plot (xx>w-pad.r+2) — nessun limite temporale, solo spaziale.
+   if(liveModeActive){
+     const g=chartGeometry();
+     if(g){
+       let k=1, guard=0;
+       while(guard++<5000){
+         const t=last+k*step; k++;
+         const xx=g.xFromTime(t);
+         if(xx>w-pad.r+2)break;
+         if(xx<pad.l-2)continue;
+         const bucket=Math.floor(t/step);
+         if(prevBucket!==null && bucket===prevBucket)continue;
+         prevBucket=bucket;
+         const p=tzParts(t); if(!p)continue;
+         const dayKey=p.year+'-'+p.month+'-'+p.day;
+         const dayChanged=dayKey!==prevDayKey;
+         prevDayKey=dayKey;
+         timeTicks.push({x:xx,t,dayChanged,hour:p.hour,minute:p.minute});
+       }
+     }
+   }
  })();
  timeTicks.forEach(tk=>{
    ctx.strokeStyle=tk.dayChanged?gridColorStrong:gridColor;ctx.lineWidth=1;
@@ -8042,6 +8100,7 @@ function draw(){
      ctx.save();
      newsEvents.forEach(ev=>{
        if(!ev||!newsSeverityFilter[ev.impact])return;
+       if(!newsCountryEnabled(ev.country))return;
        const t=Date.parse(ev.date);
        if(!Number.isFinite(t))return;
        const xx=g.xFromTime(t);
@@ -8854,6 +8913,11 @@ let zoneStatsOpenKey=null;
 // su quale si è cliccato) — quest'ultimo azzerato e ripopolato ad ogni draw().
 let zoneStatsCloseBtnRect=null;
 let zoneBoxHitRects=[];
+// Tick dell'asse del tempo dell'ultimo draw() (globale solo per ispezione/debug — non serve ad
+// altro codice applicativo, ma tenerlo qui invece che locale a draw() evita di doverlo
+// re-derivare altrove se in futuro serve, e segue lo stesso schema di zoneBoxHitRects/
+// closedTradeHitSegments/newsDotHitRects qui sotto).
+let timeTicks=[];
 // ownerKey "candidato" sotto il pointerdown iniziale: le statistiche si aprono SOLO se il
 // rilascio (pointerup) avviene senza un vero trascinamento — altrimenti si lascia che sia un
 // pan/zoom normale del grafico, esattamente come già succede cliccando in un punto vuoto.
@@ -12614,6 +12678,27 @@ function syncNewsSettingsModalFromState(){
  if($('newsFilterLow'))$('newsFilterLow').checked=!!newsSeverityFilter.Low;
  if($('newsFilterMedium'))$('newsFilterMedium').checked=!!newsSeverityFilter.Medium;
  if($('newsFilterHigh'))$('newsFilterHigh').checked=!!newsSeverityFilter.High;
+ renderNewsCountryFilterUI();
+}
+// Ricostruisce la tabella paese/valuta dentro #newsCountryFilterContainer a partire da cosa
+// contiene DAVVERO newsEvents in questo momento (ultimo feed ricevuto da bridge.py /news) —
+// ordinata alfabeticamente, con "All" (eventi globali, es. summit) sempre per ultima. Chiamata
+// ogni volta che il modale si apre (syncNewsSettingsModalFromState) così riflette sempre il feed
+// più recente, anche se nel frattempo sono comparse valute mai viste prima.
+function renderNewsCountryFilterUI(){
+ const box=$('newsCountryFilterContainer'); if(!box)return;
+ const seen=new Set();
+ newsEvents.forEach(ev=>{ if(ev)seen.add((ev.country&&String(ev.country).trim())||'All'); });
+ const countries=[...seen].sort((a,b)=> a==='All'?1 : b==='All'?-1 : a.localeCompare(b));
+ if(!countries.length){
+   box.innerHTML='<div class="hint" id="newsCountryFilterEmptyHint" style="grid-column:1/-1">Nessun evento ricevuto ancora: la lista si popola da sola al primo aggiornamento del feed.</div>';
+   return;
+ }
+ box.innerHTML=countries.map(c=>{
+   const checked=newsCountryEnabled(c)?'checked':'';
+   const label=c==='All'?'🌐 All':c;
+   return `<label style="display:inline-flex;align-items:center;gap:5px;font-size:12px"><input type="checkbox" class="newsCountryFilterCb" data-country="${c}" ${checked}> ${label}</label>`;
+ }).join('');
 }
 function closeNewsSettingsModal(){ if($('newsSettingsModalOverlay'))$('newsSettingsModalOverlay').style.display='none'; }
 $('newsToggleBtn')?.addEventListener('click',()=>{
@@ -12641,6 +12726,37 @@ document.addEventListener('keydown',e=>{
    saveNewsPrefs();
    draw();
  });
+});
+// Delegazione sul contenitore (le singole checkbox paese/valuta sono generate dinamicamente da
+// renderNewsCountryFilterUI, quindi non esistono ancora quando la pagina carica — un listener
+// diretto su ognuna, come sopra, non funzionerebbe).
+$('newsCountryFilterContainer')?.addEventListener('change',e=>{
+ const cb=e.target.closest('.newsCountryFilterCb'); if(!cb)return;
+ const country=cb.dataset.country;
+ // Si registra solo l'ECCEZIONE (vedi commento su newsCountryFilter): togliere il flag quando
+ // torna a "checked" invece di lasciarlo a true esplicito, così un paese mai toccato dall'utente
+ // resta indistinguibile da uno riportato a "visibile" a mano — entrambi semplicemente assenti
+ // dall'oggetto, comportamento identico e file più piccolo da salvare.
+ if(cb.checked)delete newsCountryFilter[country];
+ else newsCountryFilter[country]=false;
+ saveNewsPrefs();
+ draw();
+});
+$('newsCountrySelectAllBtn')?.addEventListener('click',()=>{
+ newsCountryFilter={};
+ saveNewsPrefs();
+ renderNewsCountryFilterUI();
+ draw();
+});
+$('newsCountrySelectNoneBtn')?.addEventListener('click',()=>{
+ const seen=new Set();
+ newsEvents.forEach(ev=>{ if(ev)seen.add((ev.country&&String(ev.country).trim())||'All'); });
+ const next={};
+ seen.forEach(c=>{ next[c]=false; });
+ newsCountryFilter=next;
+ saveNewsPrefs();
+ renderNewsCountryFilterUI();
+ draw();
 });
 // ===================== MODALE DETTAGLIO NOTIZIA — popolata al click su un pallino =====================
 function openNewsEventModal(ev){
@@ -13112,17 +13228,35 @@ let newsPollTimer=null;
 // (fxbt_chartExtrasOpen ecc.): default TUTTO attivo, come richiesto esplicitamente.
 let newsEnabled=true;
 let newsSeverityFilter={Low:true,Medium:true,High:true};
+// Filtro per paese/valuta (RICHIESTO ESPLICITAMENTE, "una tabella che mi faccia selezionare
+// quale notizie voglio di una determinata nazione"): a differenza di newsSeverityFilter, qui
+// l'insieme delle chiavi possibili NON è fisso (dipende da cosa contiene il feed in un dato
+// momento: USD/EUR/GBP/JPY/... più "All" per gli eventi globali) — quindi si tiene solo la
+// LISTA DELLE ESCLUSIONI esplicite dell'utente (countryFilter[country]===false), mai un elenco
+// di "tutto ciò che è vero": così un paese MAI visto prima (il feed cambia nel tempo) è visibile
+// di default senza bisogno di inizializzarlo, e una valuta che l'utente ha esplicitamente
+// disattivato resta disattivata anche se sparisce e poi ritorna nel feed in un secondo momento.
+let newsCountryFilter={};
 try{
  const savedEnabled=localStorage.getItem('fxbt_newsEnabled');
  if(savedEnabled!=null)newsEnabled=savedEnabled==='1';
  const savedFilter=JSON.parse(localStorage.getItem('fxbt_newsSeverityFilter')||'null');
  if(savedFilter&&typeof savedFilter==='object')newsSeverityFilter={...newsSeverityFilter,...savedFilter};
+ const savedCountryFilter=JSON.parse(localStorage.getItem('fxbt_newsCountryFilter')||'null');
+ if(savedCountryFilter&&typeof savedCountryFilter==='object')newsCountryFilter={...savedCountryFilter};
 }catch(e){}
 function saveNewsPrefs(){
  try{
    localStorage.setItem('fxbt_newsEnabled',newsEnabled?'1':'0');
    localStorage.setItem('fxbt_newsSeverityFilter',JSON.stringify(newsSeverityFilter));
+   localStorage.setItem('fxbt_newsCountryFilter',JSON.stringify(newsCountryFilter));
  }catch(e){}
+}
+// Un paese/valuta è visibile finché non è stato ESPLICITAMENTE disattivato (vedi commento sopra
+// su newsCountryFilter) — normalizza anche eventuali country mancanti/vuoti nel feed su 'All'.
+function newsCountryEnabled(country){
+ const key=(country&&String(country).trim())||'All';
+ return newsCountryFilter[key]!==false;
 }
 // Popolato ad ogni draw() con la posizione schermo di ogni pallino disegnato (vedi drawTimeAxis
 // più sotto): usato dal pointerdown/click sul canvas per sapere su quale notizia si è cliccato,
