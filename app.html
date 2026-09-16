@@ -8657,6 +8657,13 @@ let zoneBoxHitRects=[];
 // rilascio (pointerup) avviene senza un vero trascinamento — altrimenti si lascia che sia un
 // pan/zoom normale del grafico, esattamente come già succede cliccando in un punto vuoto.
 let zoneClickCandidateKey=null;
+// Stesso identico schema "candidato al click, non al pointerdown" (vedi commento sopra) applicato
+// al mouse su profilo volumetrico/VWAP: cliccarci sopra deve selezionarli (per poterli cancellare
+// con Canc), ma iniziare un trascinamento da lì deve continuare a spostare il grafico come da
+// qualunque altro punto — BUG RISOLTO ("se clicco l'istogramma e provo a trascinare per spostare
+// il grafico, non mi lascia più spostare"): prima selezionare consumava sempre il click, quindi
+// bloccava anche l'inizio di un pan che partiva da dentro l'istogramma/linea.
+let vpVwapClickCandidate=null;
 // ===================== TRADE GIÀ CHIUSI: hover per le statistiche, click (multi-selezione) =====
 // per le caselle Target/Stop — CORRETTO su richiesta esplicita: il comportamento "click per
 // aprire, X per richiudere" era stato applicato per sbaglio alle posizioni APERTE invece che ai
@@ -11581,15 +11588,28 @@ chartEl.addEventListener('pointerdown',e=>{
  // dentro il corpo del profilo volumetrico o sulla linea del VWAP deve selezionare il disegno
  // (per poterlo cancellare con Canc), stesso trattamento già riservato al VWAP.
  const shapeHit=hitTestDrawings(e.clientX,e.clientY,true);
- if(shapeHit){
+ // Disegno bloccato (vedi pulsante lucchetto — non più mostrato per profilo volumetrico/VWAP,
+ // ma un disegno salvato da PRIMA di quel cambio potrebbe averlo ancora impostato): resta
+ // selezionabile (per poterlo sbloccare) ma NON si arma il trascinamento né si lascia partire
+ // il pan, così la sua posizione non può cambiare finché non viene sbloccato.
+ if(shapeHit&&shapeHit.drawing.locked){
    selectedDrawing=shapeHit.drawing;
    syncDrawStyleUI(selectedDrawing);
-   // Disegno bloccato (vedi pulsante lucchetto): resta selezionabile (per poterlo sbloccare dal
-   // pulsante appena comparso sopra di esso) ma NON avviamo il trascinamento, così la sua
-   // posizione non può cambiare finché non viene sbloccato. handle.type==='select': hit "solo
-   // selezione" (istogramma del profilo volumetrico o linea del VWAP, non una vera maniglia) —
-   // seleziona ma non arma il trascinamento (richiesto).
-   if(shapeHit.drawing.locked||shapeHit.handle.type==='select'){ draw(); return; }
+   draw();
+   return;
+ }
+ if(shapeHit&&shapeHit.handle.type==='select'){
+   // BUG RISOLTO ("se clicco l'istogramma/la linea VWAP e provo a trascinare per spostare il
+   // grafico, non mi lascia più spostare"): qui NON selezioniamo subito e NON consumiamo il
+   // click con un return — lo memorizziamo solo come "candidato" ed è il pointerup più sotto
+   // (stesso schema già usato per le caselle Target/Stop, vedi zoneClickCandidateKey) a deciderne
+   // la sorte: se il rilascio avviene senza un vero trascinamento, ERA un click → si seleziona
+   // (Canc potrà cancellarlo); se invece ci si è mossi, ERA l'inizio di un pan → si lascia
+   // scorrere il grafico normalmente, esattamente come da qualunque altro punto vuoto.
+   vpVwapClickCandidate=shapeHit.drawing;
+ }else if(shapeHit){
+   selectedDrawing=shapeHit.drawing;
+   syncDrawStyleUI(selectedDrawing);
    const point=screenToChartPoint(e.clientX,e.clientY);
    // `historyPushed`: la history viene registrata al PRIMO movimento effettivo del trascinamento
    // (vedi pointermove più sotto), non già qui alla sola selezione — così un semplice clic per
@@ -11912,6 +11932,19 @@ chartEl.addEventListener('pointerup',e=>{
    }
    closedTradeClickCandidateId=null;
  }
+ // Stesso schema, per il click-to-select su profilo volumetrico/VWAP (vedi vpVwapClickCandidate
+ // nel pointerdown): un vero click (non un trascinamento) lo seleziona ora, a rilascio avvenuto;
+ // se invece ci si è mossi, era l'inizio di un pan e non si seleziona nulla — il grafico si è
+ // già spostato normalmente nel frattempo, senza che nulla lo bloccasse.
+ if(vpVwapClickCandidate!=null){
+   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
+   if(moved<4){
+     selectedDrawing=vpVwapClickCandidate;
+     syncDrawStyleUI(selectedDrawing);
+     draw();
+   }
+   vpVwapClickCandidate=null;
+ }
  // RICHIESTO ESPLICITAMENTE, ribaltando il tentativo precedente (riattivare da solo
  // "followLatest" al rilascio del trascinamento se si finiva vicino al bordo live): l'utente
  // vuole poter scorrere liberamente lungo il grafico SENZA che nessun evento — nemmeno il
@@ -11932,6 +11965,7 @@ chartEl.addEventListener('pointercancel',e=>{
  previewTradeLevel=null;
  zoneClickCandidateKey=null;
  closedTradeClickCandidateId=null;
+ vpVwapClickCandidate=null;
  if(touchDrawDrag){
    // Gesto di disegno-a-trascinamento interrotto (es. il sistema toglie il focus a metà
    // trascinamento): annulliamo il disegno in corso invece di crearlo a metà, così non
