@@ -13168,15 +13168,63 @@ function capitalApiFetch(url,options){
 // supporta i Worker (o li blocca) si ricade in automatico sul normale setInterval di prima, con
 // lo stesso comportamento di sempre (nessuna regressione, solo niente aggiornamento in background).
 let __bgHeartbeatWorker=null, __bgHeartbeatListeners=new Set();
+// AUTO-GUARIGIONE DEL BATTITO (richiesta esplicitamente, dopo la caccia al blocco silenzioso del
+// grafico Live): TUTTI i motori periodici della modalità Live (candele/rollover, SL/TP, ping
+// WebSocket, keep-alive sessione, polling posizioni in background) dipendono dal "tick" che
+// questo Worker manda ogni secondo — se il Worker si blocca o muore senza errore (può succedere:
+// crash interno del motore JS del Worker, thread bloccato, tab sospesa a lungo dal sistema
+// operativo...), TUTTI quei motori si fermano insieme a lui, in silenzio, perché vivono tutti
+// DENTRO le funzioni che lui stesso richiama — nessuno di loro può accorgersi da solo che il
+// battito è sparito. Per questo il controllo qui sotto vive DELIBERATAMENTE fuori da quel
+// meccanismo (un setInterval nativo del thread principale, indipendente dal Worker): registra
+// l'istante dell'ultimo tick ricevuto e, se passano troppi secondi senza che ne arrivi uno nuovo
+// MENTRE un Worker risulta comunque creato, lo considera morto e ne crea uno nuovo al suo posto —
+// riattaccando automaticamente gli stessi listener già registrati (che restano in
+// __bgHeartbeatListeners, mai svuotato da questo riavvio), senza bisogno di scoprirlo da un log
+// muto o di un intervento manuale.
+let __lastHeartbeatBeatAt=Date.now();
+let __heartbeatWatchdogTimer=null;
+// Soglia volutamente larga (stesso ordine di grandezza degli altri watchdog "pesanti" già in uso
+// nel file, es. il resync forzato dopo 15s senza aggiornamenti reali): un vero blocco del Worker
+// resta comunque silenzioso per minuti se non corretto, quindi anche 15s di margine sono
+// trascurabili per l'utente — ma bastano a non scambiare per "morto" un Worker solo rallentato
+// per un istante da un carico momentaneo della macchina (altre schede, CPU occupata, ecc.).
+const HEARTBEAT_WATCHDOG_STALE_MS=15000;
+function __createHeartbeatWorker(){
+ const src="setInterval(function(){ postMessage(1); }, 1000);";
+ const blobUrl=URL.createObjectURL(new Blob([src],{type:'application/javascript'}));
+ const w=new Worker(blobUrl);
+ w.onmessage=()=>{
+   __lastHeartbeatBeatAt=Date.now();
+   __bgHeartbeatListeners.forEach(fn=>{ try{fn();}catch(e){console.warn('Heartbeat Live: listener fallito:',e);} });
+ };
+ w.onerror=(e)=>{ console.warn('Heartbeat Live: worker in errore (il watchdog lo farà ripartire da solo se smette di battere):',e); };
+ return w;
+}
+function __startHeartbeatWatchdog(){
+ if(__heartbeatWatchdogTimer)return;
+ __heartbeatWatchdogTimer=setInterval(()=>{
+   if(!__bgHeartbeatWorker)return; // nessun Worker attivo (fallback su setInterval nativo: niente da sorvegliare qui)
+   const silentMs=Date.now()-__lastHeartbeatBeatAt;
+   if(silentMs>HEARTBEAT_WATCHDOG_STALE_MS){
+     console.warn('[FL-TRACE][Heartbeat] Worker del battito silenzioso da '+silentMs+'ms: lo ricreo automaticamente (stesso identico set di listener già registrati).', new Error().stack);
+     try{ __bgHeartbeatWorker.terminate(); }catch(e){}
+     __lastHeartbeatBeatAt=Date.now(); // evita un secondo riavvio a raffica mentre il nuovo worker si avvia
+     try{
+       __bgHeartbeatWorker=__createHeartbeatWorker();
+     }catch(e){
+       console.warn('Heartbeat Live: impossibile ricreare il Worker, si torna al fallback setInterval nativo:',e);
+       __bgHeartbeatWorker=false;
+     }
+   }
+ },2000);
+}
 function ensureBackgroundHeartbeat(){
  if(__bgHeartbeatWorker!==null)return __bgHeartbeatWorker; // già creato (o già tentato e fallito: resta non-null)
  try{
-   const src="setInterval(function(){ postMessage(1); }, 1000);";
-   const blobUrl=URL.createObjectURL(new Blob([src],{type:'application/javascript'}));
-   const w=new Worker(blobUrl);
-   w.onmessage=()=>{ __bgHeartbeatListeners.forEach(fn=>{ try{fn();}catch(e){console.warn('Heartbeat Live: listener fallito:',e);} }); };
-   w.onerror=(e)=>{ console.warn('Heartbeat Live: worker in errore, si continua con il normale setInterval (possibile rallentamento a scheda nascosta):',e); };
-   __bgHeartbeatWorker=w;
+   __bgHeartbeatWorker=__createHeartbeatWorker();
+   __lastHeartbeatBeatAt=Date.now();
+   __startHeartbeatWatchdog();
  }catch(e){
    console.warn('Heartbeat Live: Web Worker non disponibile, si usa il normale setInterval (possibile rallentamento a scheda nascosta):',e);
    __bgHeartbeatWorker=false; // false = tentato e fallito: non ritentare ad ogni chiamata successiva
