@@ -1152,6 +1152,50 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
  </div>
 </div>
+<!-- ===================== MODALE "NOTIZIE" (RICHIESTO ESPLICITAMENTE): mostra/nascondi i
+     pallini delle notizie Forex Factory sulla barra del tempo del grafico LIVE, e filtri per
+     gravità (Bassa/Media/Alta) — tutti attivi di default. Stesso pattern a modale delle altre
+     finestre dell'app (#chartLayersModalOverlay ecc.). ===================== -->
+<div id="newsSettingsModalOverlay" class="fbModalOverlay" style="display:none">
+ <div class="fbModalBox">
+   <div class="fbModalHeader">
+     <h3>📰 Notizie Forex Factory</h3>
+     <button id="newsSettingsModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
+   </div>
+   <div class="fbModalBody">
+     <p class="hint" style="margin:0 0 12px">Pallini lungo la barra del tempo per gli eventi del calendario economico di Forex Factory, colorati per gravità. Disponibile solo sul grafico LIVE (mai in Storico/replay). Clicca un pallino sul grafico per vederne i dettagli.</p>
+     <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+       <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="newsEnabledCheckbox"> Mostra notizie sul grafico</label>
+     </div>
+     <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">GRAVITÀ</div>
+     <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="newsFilterLow"> <span style="color:#8a97a8">●</span> Bassa</label>
+       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="newsFilterMedium"> <span style="color:#f0a83c">●</span> Media</label>
+       <label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" id="newsFilterHigh"> <span style="color:#e0524f">●</span> Alta</label>
+     </div>
+   </div>
+   <div class="fbModalFooter" style="justify-content:flex-end">
+     <button id="newsSettingsModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
+   </div>
+ </div>
+</div>
+<!-- ===================== MODALE DETTAGLIO NOTIZIA (aperta al click su un pallino sulla barra
+     del tempo) — mostra titolo/valuta/orario/gravità/forecast/previous/actual dell'evento
+     cliccato. Popolata dinamicamente da openNewsEventModal(ev) al momento del click. ========= -->
+<div id="newsEventModalOverlay" class="fbModalOverlay" style="display:none">
+ <div class="fbModalBox" style="max-width:420px">
+   <div class="fbModalHeader">
+     <h3 id="newsEventModalTitle">📰 Notizia</h3>
+     <button id="newsEventModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
+   </div>
+   <div class="fbModalBody">
+     <div id="newsEventModalBody" style="display:flex;flex-direction:column;gap:6px;font-size:13px"></div>
+   </div>
+   <div class="fbModalFooter" style="justify-content:flex-end">
+     <button id="newsEventModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Chiudi</button>
+   </div>
+ </div>
+</div>
 <!-- ===================== MODALE IMPOSTAZIONI INDICATORE (aperta dal pulsante ⚙️ nella
      leggenda indicatori dentro al grafico) — RICHIESTO ESPLICITAMENTE: si apre sopra il
      grafico (stesso pattern .fbModalOverlay/.fbModalBox delle altre finestre modali dell'app),
@@ -1618,6 +1662,10 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
           disegni per tipo (Fibonacci, profili volumetrici, VWAP), accanto a Indicatori/Style,
           stesso pattern a modale di #chartStyleBtn — vedi #chartLayersModalOverlay più sotto. -->
      <button id="chartLayersBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Nascondi/mostra singolarmente i disegni sul grafico (Fibonacci, profili volumetrici, VWAP)">🗂️ Livelli</button>
+     <!-- RICHIESTO ESPLICITAMENTE: pallini lungo la barra del tempo per le notizie Forex Factory,
+          SOLO nel grafico live (mai in Storico) — vedi #newsSettingsModalOverlay più sotto per i
+          filtri di gravità e #newsEventModalOverlay per il dettaglio al click su un pallino. -->
+     <button id="newsToggleBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700;display:none" title="Notizie Forex Factory sulla barra del tempo (solo grafico live): mostra/nascondi e filtra per gravità">📰 Notizie</button>
      <button id="togglePositionsBtn" class="chartCornerBtn active" title="Mostra/nascondi sul grafico le posizioni (linee entry/SL/TP aperte + frecce di apertura/chiusura delle posizioni chiuse)">
        <svg viewBox="0 0 24 24" width="18" height="18">
          <rect x="5.4" y="12" width="3.2" height="6" fill="#3b82f6"/>
@@ -1829,7 +1877,7 @@ async function switchAccountMode(newIsLive){
    captureCurrentAssetChartView(currentMode());
    captureCurrentAssetDrawings(currentMode());
    liveModeActive=newIsLive;
-   if(newIsLive){startLiveRefreshTimer();startCapitalSessionKeepAlive();} else { stopLiveRefreshTimer(); disconnectCapitalStream(); stopCapitalSessionKeepAlive(); }
+   if(newIsLive){startLiveRefreshTimer();startCapitalSessionKeepAlive();startNewsPolling();} else { stopLiveRefreshTimer(); disconnectCapitalStream(); stopCapitalSessionKeepAlive(); stopNewsPolling(); }
    restoreModeSnapshot(currentMode());
    syncTradeLevels(); refreshTradeLevelUI(); updateTogglePositionsBtn();
    updateLiveModeUI();
@@ -7980,6 +8028,34 @@ function draw(){
    });
    ctx.textAlign='left';
  })();
+ // Notizie Forex Factory (RICHIESTO ESPLICITAMENTE): pallini lungo la barra del tempo, colorati
+ // per gravità, SOLO sul grafico LIVE (mai in Storico/replay — vedi newsToggleBtn, nascosto
+ // fuori da Live) e solo se l'utente non li ha disattivati/filtrati dal pannello Notizie.
+ // newsDotHitRects si ripopola qui ad ogni giro di draw(), stesso pattern già usato per
+ // zoneBoxHitRects/closedTradeHitSegments — il click sul canvas lo consulta per aprire il
+ // dettaglio dell'evento (vedi openNewsEventModal più sotto nello script).
+ newsDotHitRects=[];
+ if(liveModeActive && newsEnabled && newsEvents.length){
+   const axisY=pad.t+ch;
+   const g=chartGeometry();
+   if(g){
+     ctx.save();
+     newsEvents.forEach(ev=>{
+       if(!ev||!newsSeverityFilter[ev.impact])return;
+       const t=Date.parse(ev.date);
+       if(!Number.isFinite(t))return;
+       const xx=g.xFromTime(t);
+       if(xx<pad.l-4||xx>w-pad.r+4)return;
+       const yy=axisY-9, rr=4;
+       const col=newsImpactColor(ev.impact);
+       ctx.beginPath();ctx.arc(xx,yy,rr,0,Math.PI*2);
+       ctx.fillStyle=col;ctx.fill();
+       ctx.lineWidth=1;ctx.strokeStyle=chartBg;ctx.stroke();
+       newsDotHitRects.push({x:xx,y:yy,r:rr+3,event:ev});
+     });
+     ctx.restore();
+   }
+ }
  // Mirino (crosshair): linea continua bianca sul prezzo puntato dal cursore/penna,
  // più il prezzo esatto nella casella sulla scala verticale, come richiesto.
  if(crosshair && !priceAxisDrag && !panDrag && !shapeDrag && !tradeLevelDrag && !zoneWidthDrag && !placingTradeLevel && drawTool==='cursor'){
@@ -8806,6 +8882,10 @@ let closedTradeHitSegments=[];
 // id "candidato" sotto il pointerdown iniziale: la selezione si attiva/disattiva SOLO se il
 // rilascio avviene senza un vero trascinamento (altrimenti è un pan normale del grafico).
 let closedTradeClickCandidateId=null;
+// Stesso schema, per l'apertura del dettaglio di un pallino-notizia (vedi newsDotHitRects nel
+// draw() e il popup openNewsEventModal): l'evento "candidato" sotto il pointerdown iniziale,
+// consumato al pointerup solo se non c'è stato un vero trascinamento.
+let newsDotClickCandidate=null;
 // Distanza minima punto-segmento: usata sia per il click-to-select sia per l'hover, così
 // un trade lungo/diagonale resta comunque facile da colpire lungo tutta la sua linea (non solo
 // vicino agli estremi).
@@ -11764,6 +11844,15 @@ chartEl.addEventListener('pointerdown',e=>{
    const hitTrade=closedTradeHitSegments.find(s=>pointSegmentDist(relXc,relYc,s.x1,s.y1,s.x2,s.y2)<=CLOSED_TRADE_HIT_TOL);
    closedTradeClickCandidateId=hitTrade?hitTrade.tradeId:null;
  }
+ // Stessa idea, per un pallino di una notizia Forex Factory sulla barra del tempo: si apre il
+ // dettaglio SOLO al pointerup, e SOLO se non c'è stato un vero trascinamento nel frattempo
+ // (altrimenti un pan che parte "sopra" un pallino aprirebbe per sbaglio il popup).
+ {
+   const rectC=chartEl.getBoundingClientRect();
+   const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
+   const hitNews=newsDotHitRects.find(r=>Math.hypot(relXc-r.x,relYc-r.y)<=r.r);
+   newsDotClickCandidate=hitNews?hitNews.event:null;
+ }
  if(selectedDrawing)deselectDrawing();
  e.preventDefault();
  panDrag=true; panStartX=e.clientX; panStartY=e.clientY; panStartViewEnd=viewEnd; freezeViewIfNeeded(); panStartScale=currentDisplayScale(); panStartPriceLo=viewPriceLo; panStartPriceHi=viewPriceHi;
@@ -12056,6 +12145,14 @@ chartEl.addEventListener('pointerup',e=>{
      draw();
    }
    closedTradeClickCandidateId=null;
+ }
+ // Stesso schema, per l'apertura del dettaglio di un pallino-notizia: un vero click (non un
+ // trascinamento) apre il popup con i dettagli dell'evento; un pan che parte sopra un pallino
+ // non apre nulla.
+ if(newsDotClickCandidate!=null){
+   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
+   if(moved<4)openNewsEventModal(newsDotClickCandidate);
+   newsDotClickCandidate=null;
  }
  // Stesso schema, per il click-to-select su profilo volumetrico/VWAP (vedi vpVwapClickCandidate
  // nel pointerdown): un vero click (non un trascinamento) lo seleziona ora, a rilascio avvenuto;
@@ -12511,6 +12608,69 @@ document.addEventListener('keydown',e=>{
  }
 });
 
+// ===================== MODALE "NOTIZIE" — apertura/chiusura + salvataggio filtri =====================
+function syncNewsSettingsModalFromState(){
+ if($('newsEnabledCheckbox'))$('newsEnabledCheckbox').checked=newsEnabled;
+ if($('newsFilterLow'))$('newsFilterLow').checked=!!newsSeverityFilter.Low;
+ if($('newsFilterMedium'))$('newsFilterMedium').checked=!!newsSeverityFilter.Medium;
+ if($('newsFilterHigh'))$('newsFilterHigh').checked=!!newsSeverityFilter.High;
+}
+function closeNewsSettingsModal(){ if($('newsSettingsModalOverlay'))$('newsSettingsModalOverlay').style.display='none'; }
+$('newsToggleBtn')?.addEventListener('click',()=>{
+ const ov=$('newsSettingsModalOverlay'); moveModalToFloatingIfActive(ov);
+ syncNewsSettingsModalFromState();
+ if(ov)ov.style.display='flex';
+});
+$('newsSettingsModalCloseBtn')?.addEventListener('click',closeNewsSettingsModal);
+$('newsSettingsModalDoneBtn')?.addEventListener('click',closeNewsSettingsModal);
+$('newsSettingsModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('newsSettingsModalOverlay'))closeNewsSettingsModal(); });
+document.addEventListener('keydown',e=>{
+ if(e.key==='Escape' && $('newsSettingsModalOverlay') && $('newsSettingsModalOverlay').style.display!=='none'){
+   e.preventDefault();
+   closeNewsSettingsModal();
+ }
+});
+['newsEnabledCheckbox','newsFilterLow','newsFilterMedium','newsFilterHigh'].forEach(id=>{
+ $(id)?.addEventListener('change',()=>{
+   newsEnabled=!!$('newsEnabledCheckbox')?.checked;
+   newsSeverityFilter={
+     Low:!!$('newsFilterLow')?.checked,
+     Medium:!!$('newsFilterMedium')?.checked,
+     High:!!$('newsFilterHigh')?.checked,
+   };
+   saveNewsPrefs();
+   draw();
+ });
+});
+// ===================== MODALE DETTAGLIO NOTIZIA — popolata al click su un pallino =====================
+function openNewsEventModal(ev){
+ if(!ev)return;
+ if($('newsEventModalTitle'))$('newsEventModalTitle').textContent='📰 '+(ev.title||'Notizia');
+ const body=$('newsEventModalBody');
+ if(body){
+   const dt=new Date(ev.date);
+   const dateLabel=Number.isFinite(dt.getTime())?dt.toLocaleString():String(ev.date||'');
+   const impactColor=newsImpactColor(ev.impact);
+   const row=(label,val)=>(val==null||val==='')?'':`<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">${label}</span><span style="font-weight:600">${val}</span></div>`;
+   body.innerHTML=
+     `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Valuta</span><span style="font-weight:600">${ev.country||'—'}</span></div>`+
+     `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Orario</span><span style="font-weight:600">${dateLabel}</span></div>`+
+     `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Gravità</span><span style="font-weight:700;color:${impactColor}">${ev.impact||'—'}</span></div>`+
+     row('Forecast',ev.forecast)+row('Previous',ev.previous)+row('Actual',ev.actual);
+ }
+ const ov=$('newsEventModalOverlay'); moveModalToFloatingIfActive(ov); if(ov)ov.style.display='flex';
+}
+function closeNewsEventModal(){ if($('newsEventModalOverlay'))$('newsEventModalOverlay').style.display='none'; }
+$('newsEventModalCloseBtn')?.addEventListener('click',closeNewsEventModal);
+$('newsEventModalDoneBtn')?.addEventListener('click',closeNewsEventModal);
+$('newsEventModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('newsEventModalOverlay'))closeNewsEventModal(); });
+document.addEventListener('keydown',e=>{
+ if(e.key==='Escape' && $('newsEventModalOverlay') && $('newsEventModalOverlay').style.display!=='none'){
+   e.preventDefault();
+   closeNewsEventModal();
+ }
+});
+
 $('pipDecimals')?.addEventListener('change',()=>{draw();update();});
 $('pipDecimals')?.addEventListener('input',()=>{update();});
 
@@ -12937,6 +13097,74 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
    clearTimeout(timer);
  }
 }
+// ===================== NOTIZIE FOREX FACTORY (solo grafico LIVE) =====================
+// RICHIESTO ESPLICITAMENTE: pallini lungo la barra del tempo, filtrabili per gravità, che al
+// click mostrano i dettagli della notizia — SOLO per il grafico live, mai in Storico/replay
+// (nessuna fonte affidabile di notizie storiche via questo feed). I dati arrivano da bridge.py
+// (GET /news, vedi lì per caching/parsing difensivo lato server) — mai un fetch diretto al sito
+// di Forex Factory dal browser, per lo stesso motivo per cui tutto il resto passa dal bridge:
+// evitare CORS e permettere il caching server-side condiviso tra eventuali più tab.
+let newsEvents=[]; // ultima copia ricevuta da bridge.py /news (mai toccata se un fetch fallisce)
+let newsFetchedAt=0;
+let newsFetchInFlight=null;
+let newsPollTimer=null;
+// "Mostra notizie" + filtri per gravità, persistiti come le altre preferenze di interfaccia
+// (fxbt_chartExtrasOpen ecc.): default TUTTO attivo, come richiesto esplicitamente.
+let newsEnabled=true;
+let newsSeverityFilter={Low:true,Medium:true,High:true};
+try{
+ const savedEnabled=localStorage.getItem('fxbt_newsEnabled');
+ if(savedEnabled!=null)newsEnabled=savedEnabled==='1';
+ const savedFilter=JSON.parse(localStorage.getItem('fxbt_newsSeverityFilter')||'null');
+ if(savedFilter&&typeof savedFilter==='object')newsSeverityFilter={...newsSeverityFilter,...savedFilter};
+}catch(e){}
+function saveNewsPrefs(){
+ try{
+   localStorage.setItem('fxbt_newsEnabled',newsEnabled?'1':'0');
+   localStorage.setItem('fxbt_newsSeverityFilter',JSON.stringify(newsSeverityFilter));
+ }catch(e){}
+}
+// Popolato ad ogni draw() con la posizione schermo di ogni pallino disegnato (vedi drawTimeAxis
+// più sotto): usato dal pointerdown/click sul canvas per sapere su quale notizia si è cliccato,
+// stesso pattern già usato per zoneBoxHitRects/closedTradeHitSegments.
+let newsDotHitRects=[];
+async function refreshNewsFeed(){
+ // Una sola richiesta in volo alla volta: se il timer scatta di nuovo mentre una fetch
+ // precedente è ancora appesa (bridge lento a rispondere), riusiamo quella invece di
+ // accumulare richieste parallele inutili.
+ if(newsFetchInFlight)return newsFetchInFlight;
+ const p=(async()=>{
+   try{
+     const res=await fetchMt5WithTimeout('/news',{method:'GET'},8000);
+     if(res.ok&&res.data&&Array.isArray(res.data.events)){
+       newsEvents=res.data.events;
+       newsFetchedAt=Date.now();
+     }
+     // Se il bridge non risponde o dà errore: NON tocchiamo newsEvents (si tiene l'ultima
+     // copia buona, o resta vuota se non ne abbiamo mai avuta una) — mai un errore visibile
+     // all'utente per una funzione accessoria come questa, il grafico deve restare usabile.
+   }catch(e){ /* stesso principio: mai propagare un errore per le notizie */ }
+   finally{ newsFetchInFlight=null; }
+ })();
+ newsFetchInFlight=p;
+ return p;
+}
+// Poll periodico SOLO mentre si è in Live (vedi switchAccountMode): bridge.py fa già la sua
+// cache lato server (1 ora normale, 2 minuti vicino a un evento in corso — vedi bridge.py), qui
+// basta un intervallo ragionevole lato client per non riscaricare ad ogni singolo redraw (che
+// avviene ogni secondo, vedi startLiveRefreshTimer) senza però restare troppo indietro quando
+// una notizia "calda" sta per uscire.
+const NEWS_POLL_INTERVAL_MS=60*1000;
+function startNewsPolling(){
+ stopNewsPolling();
+ refreshNewsFeed();
+ newsPollTimer=setInterval(refreshNewsFeed,NEWS_POLL_INTERVAL_MS);
+}
+function stopNewsPolling(){
+ if(newsPollTimer){clearInterval(newsPollTimer);newsPollTimer=null;}
+}
+const NEWS_IMPACT_COLOR={Low:'#8a97a8',Medium:'#f0a83c',High:'#e0524f'};
+function newsImpactColor(impact){ return NEWS_IMPACT_COLOR[impact]||NEWS_IMPACT_COLOR.Low; }
 let mt5CredsDraft=null; // {login, password, server} — il conto attualmente connesso
 let mt5CredsDirHandle=null;
 let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a buon fine
@@ -15303,6 +15531,9 @@ function updateLiveModeUI(){
  const replayRow=$('replayControlsRow');
  if(replayRow)replayRow.style.display=liveModeActive?'none':'grid';
  if(liveModeActive && timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+ // Notizie Forex Factory: pulsante visibile SOLO in Live (vedi commento sopra #newsToggleBtn).
+ const newsBtn=$('newsToggleBtn');
+ if(newsBtn)newsBtn.style.display=liveModeActive?'':'none';
 }
 $('liveModeSwitch').addEventListener('click',async()=>{
  if(liveModeActive){
