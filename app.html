@@ -6001,8 +6001,8 @@ const INDICATOR_DEFS={
      if(!entry||entry.computeSrc!==ind.params.computeSrc||entry.renderSrc!==ind.params.renderSrc){
        entry={computeSrc:ind.params.computeSrc,renderSrc:ind.params.renderSrc,computeFn:null,renderFn:null,error:null,errorShown:false};
        try{
-         entry.computeFn=new Function('return ('+ind.params.computeSrc+')')();
-         entry.renderFn=new Function('return ('+ind.params.renderSrc+')')();
+         entry.computeFn=compileAiNamedFunction(ind.params.computeSrc,'compute');
+         entry.renderFn=compileAiNamedFunction(ind.params.renderSrc,'render');
        }catch(e){ entry.error='Codice non valido: '+e.message; }
        aiIndicatorCompileCache.set(ind,entry);
        ind.calc={ref:null,builtTo:-1}; // funzioni nuove: lo stato precedente non ha più senso
@@ -6024,6 +6024,47 @@ const INDICATOR_DEFS={
 
 };
 const aiIndicatorCompileCache=new WeakMap();
+// BUG RISOLTO (segnalato dall'utente: il prompt pronto "sembra" funzionare — l'assistente AI
+// risponde nel formato richiesto (DEFAULT_PARAMS/COMPUTE/RENDER) — ma l'app "non lo accetta"):
+// individuate due cause reali, non solo un problema di formulazione del prompt:
+//
+// 1) Quasi tutti gli assistenti AI (soprattutto ChatGPT, ma capita anche con Claude) avvolgono
+//    il codice in un blocco markdown ``` ... ``` per abitudine, ANCHE quando gli si chiede
+//    esplicitamente "senza markdown" — non è affidabile al 100% neanche rendendo il prompt più
+//    insistente. stripMarkdownFence() qui sotto ripulisce ogni blocco estratto da un'eventuale
+//    recinzione ``` (di apertura e/o chiusura, anche se solo una delle due) PRIMA di provare a
+//    compilarlo, così l'app funziona comunque anche se l'assistente ignora l'istruzione.
+// 2) Il compilo precedente era "new Function('return ('+src+')')()": avvolge l'INTERO blocco in
+//    un'unica espressione tra parentesi — funziona SOLO se il blocco contiene ESATTAMENTE una
+//    singola "function compute(...){...}" e nient'altro. Un indicatore LuxAlgo/Pine non banale
+//    ha quasi sempre bisogno di funzioni di supporto (es. un proprio ema()/rma() interno): non
+//    appena l'assistente le aggiunge PRIMA della funzione principale (cosa che il prompt ora
+//    esplicitamente permette, vedi buildPineConversionPrompt), "return (...)" diventa un errore
+//    di sintassi — il codice è valido JavaScript, ma non in quella forma. compileAiNamedFunction()
+//    compila invece l'intero blocco come corpo di script (permettendo più dichiarazioni) e
+//    restituisce ESPLICITAMENTE la funzione dal nome atteso alla fine ("...\nreturn compute;"),
+//    quindi funzioni di supporto prima di quella principale ora funzionano.
+function stripMarkdownFence(src){
+ let s=(src||'').trim();
+ s=s.replace(/^```[a-zA-Z0-9_-]*[ \t]*\n?/,''); // recinzione di apertura, se presente
+ s=s.replace(/\n?```[ \t]*$/,''); // recinzione di chiusura, se presente (indipendente dall'apertura)
+ return s.trim();
+}
+function compileAiNamedFunction(src,fnName){
+ const cleaned=stripMarkdownFence(src);
+ const notFoundMsg='non ho trovato una funzione chiamata "'+fnName+'" in questo blocco — deve essere dichiarata esattamente come "function '+fnName+'(...) { ... }" (eventuali funzioni di supporto possono stare PRIMA, ma quella principale deve avere questo nome esatto).';
+ let fn;
+ try{ fn=new Function(cleaned+'\nreturn '+fnName+';')(); }
+ catch(e){
+   // "<fnName> is not defined" è un ReferenceError lanciato PRIMA del controllo qui sotto (il
+   // nome non esiste proprio, non solo "non è una funzione") — stesso messaggio chiaro in
+   // entrambi i casi, invece di far trapelare l'errore JS grezzo per questo caso specifico.
+   if(String(e.message||'').includes(fnName+' is not defined'))throw new Error(notFoundMsg);
+   throw new Error('il codice non è JavaScript valido: '+e.message);
+ }
+ if(typeof fn!=='function')throw new Error(notFoundMsg);
+ return fn;
+}
 
 // ===================================================================================
 // MINI-INTERPRETE "PINE-LIKE" per gli script personalizzati (sezione "Codice
@@ -6734,14 +6775,15 @@ function closeCustomScriptModal(){
 // ===================== "Converti con AI" (ponte manuale, nessuna chiamata API dalla pagina) =====================
 let aiConvertEditingId=null; // come customScriptEditingId: id dell'indicatore AI in modifica, se ce n'è uno
 function buildPineConversionPrompt(pineCode){
- return `Sei un esperto di Pine Script (TradingView) e di JavaScript per Canvas 2D. Converti questo indicatore Pine Script in DUE funzioni JavaScript, "compute" e "render", secondo queste regole ESATTE del motore indicatori in cui verranno inserite:
+ return `Adatta questo codice Pine Script (TradingView, incluso stile LuxAlgo) e convertilo in JavaScript. Sei un esperto di Pine Script e di JavaScript per Canvas 2D. Converti questo indicatore in DUE funzioni JavaScript, "compute" e "render", secondo queste regole ESATTE del motore indicatori in cui verranno inserite — questa app le compila ed esegue automaticamente, quindi vanno rispettate alla lettera, non solo "nello spirito":
 
 - compute(rows, upToIdx, ind): "rows" è un array di candele con campi {open,high,low,close,volume,date} (in ordine cronologico, indice 0 = più vecchia). Calcola in modo INCREMENTALE, un ciclo "for(let i=ind.calc.builtTo+1;i<=upToIdx;i++)"; salva ogni stato/risultato persistente dentro "ind.calc" (es. ind.calc.out=[], inizializzato la prima volta), e alla fine imposta ind.calc.builtTo=upToIdx. "ind.params" contiene i parametri configurabili (con i valori di DEFAULT_PARAMS sotto). NON leggere mai rows oltre l'indice upToIdx (dati futuri non ancora "arrivati" nel replay).
-- render(ctx, ind, rows, dataStart, dataEnd, xAbs, y): disegna sul context Canvas 2D "ctx" leggendo i risultati già calcolati in ind.calc. "xAbs(indiceCandela)" restituisce la coordinata X assoluta sul canvas per quell'indice; "y(prezzo)" restituisce la coordinata Y assoluta per quel prezzo. Disegna solo gli elementi con indice compreso (circa) tra dataStart e dataEnd, per non sprecare tempo su ciò che non è visibile. Puoi usare liberamente ctx.beginPath/moveTo/lineTo/stroke/fillRect/strokeRect/fillText ecc. Se ti servono, questi due helper sono già disponibili nell'ambiente globale: hexToRgba(hex,alpha) e fmtPrice(numero).
-- DEFAULT_PARAMS: un oggetto JS con i valori di default dei parametri (equivalenti agli "input.*" dello script Pine originale).
+- render(ctx, ind, rows, dataStart, dataEnd, xAbs, y): disegna sul context Canvas 2D "ctx" leggendo i risultati già calcolati in ind.calc. "xAbs(indiceCandela)" restituisce la coordinata X assoluta sul canvas per quell'indice; "y(prezzo)" restituisce la coordinata Y assoluta per quel prezzo. Disegna solo gli elementi con indice compreso (circa) tra dataStart e dataEnd, per non sprecare tempo su ciò che non è visibile. Puoi usare liberamente ctx.beginPath/moveTo/lineTo/stroke/fillRect/strokeRect/fillText ecc. Se ti servono, questi due helper sono già disponibili nell'ambiente globale: hexToRgba(hex,alpha) e fmtPrice(numero). NON esistono equivalenti pronti di ta.sma/ta.ema/ta.atr/ecc.: se il calcolo ti serve, scrivilo tu stesso (vedi il punto sulle funzioni di supporto qui sotto).
+- DEFAULT_PARAMS: un oggetto JS con i valori di default dei parametri (equivalenti agli "input.*" dello script Pine originale) — SOLO un oggetto letterale { ... }, nessuna funzione o codice attorno.
 - Elementi Pine come line.new/box.new/label.new/table.new vanno tradotti in disegni canvas equivalenti dentro "render" (linee, rettangoli, testo), calcolando le coordinate/i dati da disegnare dentro "compute" e salvandoli in array dentro ind.calc (es. ind.calc.boxes=[{x1,x2,top,bottom,color,text}, ...]).
+- Se ti serve una funzione di supporto (es. un tuo ema()/rma()/pivot() interno, comune negli script LuxAlgo), scrivila PRIMA della funzione principale, nello stesso blocco: sia in ===COMPUTE=== sia in ===RENDER=== puoi avere più dichiarazioni, purché la funzione "compute" (o "render") con questo identico nome sia una di quelle dichiarate in quel blocco — è quella che verrà usata. I due blocchi vengono compilati ed eseguiti SEPARATAMENTE, in scope indipendenti: una funzione di supporto scritta dentro ===COMPUTE=== NON è visibile dentro ===RENDER=== (e viceversa) — se ti serve lo stesso helper in entrambi i blocchi, riscrivilo in ciascuno dei due; se invece ti serve solo il RISULTATO calcolato in compute, passalo tramite ind.calc (compute lo scrive, render lo legge).
 
-Rispondi SOLO con questo formato esatto, senza markdown, senza spiegazioni prima o dopo:
+IMPORTANTE sul formato della risposta — causa più comune di errore: rispondi in TESTO PURO, MAI dentro un blocco di codice/markdown (niente \`\`\`, in nessun punto della risposta, nemmeno attorno ai singoli blocchi), e senza NESSUNA frase prima o dopo (niente "Ecco il codice:", niente spiegazioni finali, niente commenti fuori dai blocchi). Rispondi SOLO ED ESATTAMENTE con questo formato, marcatori compresi:
 ===DEFAULT_PARAMS===
 { ... }
 ===COMPUTE===
@@ -6778,14 +6820,20 @@ function parseAiConvertedCode(text){
  if(afterCompute===undefined)throw new Error('Manca il blocco "===COMPUTE===".');
  const [computePart,renderPart]=afterCompute.split('===RENDER===');
  if(renderPart===undefined)throw new Error('Manca il blocco "===RENDER===".');
+ // stripMarkdownFence qui sotto (vedi il commento sopra la sua definizione, accanto a
+ // aiIndicatorCompileCache): ripulisce un'eventuale recinzione ``` che l'assistente AI ha
+ // lasciato attorno al blocco nonostante l'istruzione di non usare markdown — capita spesso,
+ // e prima faceva fallire la validazione con un errore di sintassi che sembrava un problema nel
+ // codice, mentre era solo markdown residuo.
  let defaultParamsObj;
- try{ defaultParamsObj=new Function('return ('+dpPart.trim()+')')(); }
- catch(e){ throw new Error('DEFAULT_PARAMS non è un oggetto JavaScript valido: '+e.message); }
- const computeSrc=computePart.trim(), renderSrc=renderPart.trim();
- try{ new Function('return ('+computeSrc+')')(); }
- catch(e){ throw new Error('La funzione compute non è JavaScript valido: '+e.message); }
- try{ new Function('return ('+renderSrc+')')(); }
- catch(e){ throw new Error('La funzione render non è JavaScript valido: '+e.message); }
+ const dpCleaned=stripMarkdownFence(dpPart);
+ try{ defaultParamsObj=new Function('return ('+dpCleaned+')')(); }
+ catch(e){ throw new Error('DEFAULT_PARAMS non è un oggetto JavaScript valido: '+e.message+' — controlla che sia un semplice oggetto { ... } senza codice prima o dopo (e senza blocchi ```).'); }
+ const computeSrc=stripMarkdownFence(computePart), renderSrc=stripMarkdownFence(renderPart);
+ try{ compileAiNamedFunction(computeSrc,'compute'); }
+ catch(e){ throw new Error('La funzione compute non è valida: '+e.message); }
+ try{ compileAiNamedFunction(renderSrc,'render'); }
+ catch(e){ throw new Error('La funzione render non è valida: '+e.message); }
  return {defaultParamsObj,computeSrc,renderSrc};
 }
 // Griglia del grafico (orizzontale = prezzo, verticale = ora): entrambe puntano alla STESSA
@@ -7497,7 +7545,21 @@ function draw(){
        const candlesInRange=Math.max(1,lastIdx-startIdx+1);
        const PERIOD_BASELINE_CANDLES=200;
        const periodMultiplier=Math.max(1,candlesInRange/PERIOD_BASELINE_CANDLES);
-       const maxBarPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8/tfSizeCompensation*periodMultiplier))*sizeScale;
+       // BUG RISOLTO (segnalato dall'utente: "le barre rimangono corte e non si allungano
+       // nonostante un profilo lungo"): riprodotto e confermato con misure vere sui pixel
+       // disegnati — il tetto Math.min(cw*0.6,...) qui sotto era pensato SOLO per il fattore
+       // zoom/timeframe (pxPerCandle/tfSizeCompensation, l'unica cosa che esisteva quando è stato
+       // scritto), ma periodMultiplier veniva moltiplicato PRIMA di quel tetto: bastava un
+       // profilo di poche migliaia di candele per saturare il tetto, e da lì in su qualunque
+       // periodo — 5.000 candele o 40.000 — produceva la STESSA identica lunghezza massima,
+       // esattamente il comportamento segnalato. sizeScale (dimensione istogramma %) era già
+       // stato messo a moltiplicare DOPO il tetto (nessun limite per il barSizePct, commento qui
+       // sopra) — periodMultiplier va trattato allo stesso modo, per lo stesso motivo esplicito
+       // della richiesta originale ("mano mano che aumenta il periodo mi moltiplica in automatico
+       // la lunghezza", nessun tetto menzionato): il tetto zoom/timeframe resta solo sulla parte
+       // che gli compete, periodo e dimensione% crescono entrambi senza un soffitto arbitrario.
+       const zoomCappedPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8/tfSizeCompensation));
+       const maxBarPx=zoomCappedPx*periodMultiplier*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
        // Value Area calcolata QUI, PRIMA delle barre (non solo quando le righe POC/VAH/VAL sono
        // abilitate): serve anche per attenuare le barre fuori dalla Value Area qualche riga sotto,
@@ -12880,11 +12942,27 @@ function openNewsEventModal(ev){
    // feed non fornisce nessun id/url per l'evento (verificato), solo la data ci arriva.
    const ffUrl=newsForexFactoryDayUrl(ev.date);
    const linkRow=ffUrl?`<div style="margin-top:4px;padding-top:8px;border-top:1px solid rgba(128,128,128,.25)"><a href="${ffUrl}" target="_blank" rel="noopener noreferrer" style="color:#3ea6ff;font-weight:600;text-decoration:none">Apri su Forex Factory (giornata) →</a></div>`:'';
+   // RICHIESTO ESPLICITAMENTE ("indaga sulla notizia... note FF e perché interessa ai
+   // trader... in autonomia"): vedi il commento sopra NEWS_GLOSSARY per il perché è un
+   // glossario statico curato e non scraping live. Solo Medium/High (newsGlossaryFor lo filtra
+   // già da sola) — per Low non mostriamo proprio la sezione (richiesto esplicitamente: "quelle
+   // basse poco ci interessano"). Per Medium/High senza corrispondenza nel glossario, un avviso
+   // onesto invece di sparire silenziosamente: aiuta a capire che manca copertura, non che manca
+   // per un errore.
+   const glossary=newsGlossaryFor(ev);
+   const glossarySection=(ev.impact!=='High'&&ev.impact!=='Medium')?'':(
+     glossary
+       ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25);display:flex;flex-direction:column;gap:8px">`+
+         (glossary.ffNote?`<div><div style="opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">📋 Note FF</div><div style="line-height:1.45">${glossary.ffNote}</div></div>`:'')+
+         (glossary.why?`<div><div style="opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">💡 Perché interessa ai trader</div><div style="line-height:1.45">${glossary.why}</div></div>`:'')+
+         `</div>`
+       : `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25);opacity:.6;font-size:12px">ℹ️ Nessuna scheda disponibile per questo indicatore nel glossario.</div>`
+   );
    body.innerHTML=
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Valuta</span><span style="font-weight:600">${newsCountryFlag(ev.country)} ${ev.country||'—'}</span></div>`+
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Orario</span><span style="font-weight:600">${dateLabel}</span></div>`+
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Gravità</span><span style="font-weight:700;color:${impactColor}">${ev.impact||'—'}</span></div>`+
-     row('Forecast',ev.forecast)+row('Previous',ev.previous)+actualRow+linkRow;
+     row('Forecast',ev.forecast)+row('Previous',ev.previous)+actualRow+linkRow+glossarySection;
  }
  const ov=$('newsEventModalOverlay'); moveModalToFloatingIfActive(ov); if(ov)ov.style.display='flex';
 }
@@ -13512,6 +13590,189 @@ function newsForexFactoryDayUrl(dateStr){
  const mon=NEWS_FF_MONTHS[d.getMonth()];
  const dd=String(d.getDate()).padStart(2,'0');
  return `https://www.forexfactory.com/calendar?day=${mon}${dd}.${d.getFullYear()}`;
+}
+// ===================== GLOSSARIO STATICO NOTIZIE — "Note FF" + "Perché interessa ai trader" =====
+// RICHIESTO ESPLICITAMENTE ("indaga sulla notizia... note FF e perché interessa ai trader... in
+// autonomia"): la scelta deliberata qui è un glossario CURATO scritto una volta e incluso
+// staticamente nell'app — NON scraping live della pagina di dettaglio di ogni evento su
+// forexfactory.com. Due motivi, entrambi concreti: (1) il feed calendario che già usiamo (vedi
+// bridge.py) non contiene questo testo, quindi servirebbe una richiesta HTTP IN PIÙ per OGNI
+// singola notizia — esattamente il tipo di traffico che oggi ci ha già fatto bloccare qualche
+// minuto da FF con un semplice refresh ripetuto della pagina, moltiplicato per ogni pallino; (2)
+// "Note FF"/"Perché interessa ai trader" sono per la stragrande maggioranza testo FISSO legato al
+// TIPO di indicatore (una CPI si spiega sempre allo stesso modo, cambia solo il numero uscito),
+// non contenuto che cambia release per release — uno scraping live sarebbe un rischio inutile per
+// un testo che è comunque quasi sempre lo stesso.
+// Copertura: SOLO impatto Medio/Alto (RICHIESTO ESPLICITAMENTE: "quelle basse poco ci
+// interessano" — vedi newsGlossaryFor). Circa 45 voci, in due livelli:
+//  - "generiche": lo stesso TIPO di indicatore esiste con nomi quasi identici in tutte le valute
+//    principali (CPI, PPI, PMI, GDP, tasso di disoccupazione, decisione sui tassi, verbali di
+//    politica monetaria...) — una sola voce copre tutte le valute, con la banca centrale giusta
+//    (NEWS_CENTRAL_BANK) sostituita in base a ev.country. Così la copertura arriva "gratis" anche
+//    su EUR/GBP/JPY/AUD/CAD/CHF/NZD senza dover riscrivere lo stesso testo 8 volte.
+//  - specifiche per nome: indicatori il cui nome stesso identifica il paese (Non-Farm Payrolls,
+//    Philly Fed, ADP, JOLTS, German ZEW/Ifo, Tankan, Claimant Count...), quindi testate PRIMA
+//    delle generiche nell'ordine dell'array (vedi newsGlossaryFor: la prima corrispondenza vince).
+// Testo scritto in autonomia sulla base di conoscenza economica consolidata (non è una citazione
+// letterale delle pagine di Forex Factory): dove non sono sicuro di un dettaglio molto specifico
+// (es. una data esatta di revisione metodologica), l'ho lasciato fuori piuttosto che inventarlo.
+const NEWS_CENTRAL_BANK={USD:'Federal Reserve',EUR:'BCE',GBP:'Bank of England',JPY:'Bank of Japan',AUD:'Reserve Bank of Australia',CAD:'Bank of Canada',CHF:'Banca Nazionale Svizzera',NZD:'Reserve Bank of New Zealand',CNY:'People’s Bank of China'};
+function newsCentralBank(country){ return NEWS_CENTRAL_BANK[country]||'la banca centrale'; }
+const NEWS_GLOSSARY=[
+ // --- Specifiche per nome (testate PRIMA delle generiche) -----------------------------------
+ // ADP TESTATO PRIMA dell'NFP ufficiale: il titolo "ADP Non-Farm Employment Change" contiene la
+ // sottostringa "Non-Farm Employment Change" e verrebbe altrimenti scambiato per il report
+ // ufficiale del governo — sono due eventi diversi (uno privato/ADP, uno governativo), stesso
+ // errore di ordine già trovato e corretto per ISM Manufacturing/Non-Manufacturing qui sopra.
+ {match:/\badp\b.*employment/i,
+  ffNote:'Stima privata (non governativa) della variazione dei posti di lavoro nel settore privato USA, elaborata da ADP su dati di libro paga reali, pubblicata due giorni prima del Non-Farm Payrolls ufficiale.',
+  why:'Viene guardata come un possibile anticipo di quello che dirà l’NFP due giorni dopo, anche se storicamente la correlazione tra i due dati non è sempre affidabile — il mercato reagisce comunque, soprattutto se il numero è molto lontano dalle attese.'},
+ {match:/non.?farm\s*(payrolls|employment change)|\bnfp\b/i,
+  ffNote:'Misura la variazione del numero di posti di lavoro nel settore non agricolo USA rispetto al mese precedente. Esclude di proposito il settore agricolo, l’amministrazione pubblica, le famiglie private e le organizzazioni no-profit, che hanno un andamento stagionale poco significativo per l’economia reale.',
+  why:'È il dato macro più seguito in assoluto sul mercato USD: un unico numero che riassume la salute del mercato del lavoro, che a sua volta guida i consumi (circa due terzi del PIL USA) e le decisioni della Fed sui tassi. Sorprese rispetto alle attese producono tipicamente i movimenti più violenti e immediati di tutto il calendario economico.'},
+ {match:/average hourly earnings/i,
+  ffNote:'Misura la variazione dei salari orari medi USA rispetto al mese precedente, pubblicato insieme al Non-Farm Payrolls.',
+  why:'È il termometro delle pressioni salariali: salari che crescono più in fretta dei prezzi alimentano la spesa dei consumatori ma possono anche alimentare l’inflazione stessa (spirale prezzi-salari), quindi la Fed lo guarda con attenzione quasi quanto il tasso di disoccupazione.'},
+ // "Continuing Claims" TESTATO PRIMA: il titolo "Continuing Jobless Claims" contiene la
+ // sottostringa "Jobless Claims" e verrebbe altrimenti scambiato per le richieste INIZIALI —
+ // stesso errore di ordine già corretto sopra per ADP/NFP e ISM Manufacturing/Non-Manufacturing.
+ {match:/continuing.*claims/i,
+  ffNote:'Numero di persone che stanno continuando a ricevere il sussidio di disoccupazione USA, pubblicato insieme alle richieste iniziali ma con una settimana di ritardo in più.',
+  why:'Misura quanto velocemente chi perde il lavoro riesce a ritrovarne uno: un numero in crescita persistente indica che il mercato del lavoro fatica ad assorbire chi resta disoccupato, non solo che ne escono di nuovi.'},
+ {match:/unemployment claims|initial claims|jobless claims/i,
+  ffNote:'Numero di persone che hanno presentato per la prima volta domanda di sussidio di disoccupazione negli USA nell’ultima settimana. Dato settimanale, quindi più “rumoroso” (volatile) dei dati mensili.',
+  why:'È il dato sul mercato del lavoro USA più tempestivo che esiste (settimanale, non mensile): un aumento persistente segnala un mercato del lavoro in indebolimento prima ancora che si veda nei dati mensili più seguiti come NFP e tasso di disoccupazione.'},
+ {match:/\bfomc\b.*(statement|rate)|federal funds rate|fed interest rate/i,
+  ffNote:'Annuncio della decisione della Fed sul tasso di riferimento USA (Federal Funds Rate) al termine della riunione del FOMC, accompagnato da un comunicato che spiega il ragionamento del comitato.',
+  why:'È l’evento macro più importante per il dollaro: oltre al livello del tasso (spesso già scontato dal mercato), conta soprattutto il TONO del comunicato e le parole usate, che indicano la direzione futura della politica monetaria — è lì che si concentra la vera sorpresa per il mercato.'},
+ {match:/fomc.*minutes/i,
+  ffNote:'Verbale dettagliato della riunione del FOMC, pubblicato circa tre settimane dopo la decisione sui tassi: riporta il dibattito interno tra i membri del comitato, non solo la conclusione.',
+  why:'Dà al mercato una lettura più profonda di quanto siano davvero divisi i membri della Fed e di cosa stiano guardando per le prossime decisioni — può ribaltare le aspettative sui tassi anche settimane dopo la riunione stessa.'},
+ {match:/philly\s*fed|philadelphia fed/i,
+  ffNote:'Indagine mensile della Federal Reserve di Philadelphia tra le imprese manifatturiere della sua area di competenza (Pennsylvania, New Jersey, Delaware) sulle condizioni di business attuali. Un valore sopra 0,0 indica un miglioramento delle condizioni, un valore sotto 0,0 un peggioramento.',
+  why:'È un indicatore anticipatore della salute economica: le imprese reagiscono rapidamente alle condizioni di mercato, e i cambiamenti nel loro sentiment possono essere un segnale precoce dell’attività economica futura, come la spesa, le assunzioni e gli investimenti.'},
+ {match:/empire state/i,
+  ffNote:'Indagine mensile della Federal Reserve di New York tra le imprese manifatturiere dello stato di New York sulle condizioni di business attuali. Stessa scala della maggior parte degli indici regionali Fed: sopra 0,0 espansione, sotto 0,0 contrazione.',
+  why:'Come gli altri indici regionali Fed (Philly Fed compreso), è tra i primi dati del mese a uscire e funge da anteprima informale dell’ISM Manufacturing nazionale, pubblicato circa due settimane dopo.'},
+ {match:/\bjolts\b/i,
+  ffNote:'Numero di posizioni lavorative aperte (non ancora coperte) negli USA a fine mese, pubblicato con circa un mese di ritardo rispetto al periodo di riferimento.',
+  why:'Misura la DOMANDA di lavoro da parte delle imprese, non l’offerta: la Fed lo usa per giudicare quanto sia davvero "teso" il mercato del lavoro — molti posti aperti per ogni disoccupato segnalano pressione salariale in arrivo.'},
+ {match:/german\s*zew|\bzew\b/i,
+  ffNote:'Sondaggio mensile tra circa 350 analisti ed investitori istituzionali tedeschi sulle aspettative economiche per i prossimi 6 mesi (non sulle condizioni attuali).',
+  why:'Essendo basato sulle ASPETTATIVE più che sui dati correnti, tende ad anticipare i punti di svolta del ciclo economico tedesco — e quindi, dato il peso della Germania, dell’intera Eurozona.'},
+ {match:/german\s*ifo|\bifo\b/i,
+  ffNote:'Sondaggio mensile dell’istituto Ifo tra circa 9.000 imprese tedesche su condizioni attuali e aspettative future, combinate in un unico indice di clima di fiducia.',
+  why:'È uno degli indicatori anticipatori più seguiti per l’economia tedesca (la più grande dell’Eurozona): a differenza dello ZEW copre anche le condizioni ATTUALI, non solo le aspettative.'},
+ {match:/tankan/i,
+  ffNote:'Sondaggio trimestrale della Bank of Japan tra migliaia di imprese giapponesi (grandi e piccole, manifatturiere e non) sulle condizioni di business attuali e attese.',
+  why:'È il sondaggio sul sentiment delle imprese più autorevole in Giappone: la BoJ stessa lo usa come input diretto per le proprie decisioni di politica monetaria, quindi il mercato lo segue da vicino per anticipare le mosse della banca centrale.'},
+ {match:/claimant count/i,
+  ffNote:'Variazione del numero di persone nel Regno Unito che richiedono sussidi legati alla disoccupazione (Universal Credit nella componente "cercare lavoro"), pubblicata mensilmente.',
+  why:'È il dato sul mercato del lavoro britannico più tempestivo (mensile, contro il tasso di disoccupazione che arriva con più ritardo): un aumento persistente segnala debolezza del mercato del lavoro UK prima che si veda altrove.'},
+ // --- Generiche: valgono per qualunque valuta, banca centrale sostituita in base a ev.country --
+ {match:/core\s*pce/i,
+  ffNote:'Si differenzia dall’indice dei prezzi al consumo core (Core CPI) in quanto misura solo i beni e i servizi destinati al consumo dei singoli individui. I prezzi sono ponderati in base alla spesa totale per articolo, il che fornisce importanti informazioni sul comportamento di spesa dei consumatori. Il CPI viene pubblicato circa 10 giorni prima e tende ad attirare la maggior parte dell’attenzione.',
+  why:(c)=>`È il principale indicatore di inflazione utilizzato dalla ${newsCentralBank(c)}. L’inflazione è importante per la valutazione della valuta, perché l’aumento dei prezzi induce la banca centrale ad alzare i tassi di interesse nel rispetto del proprio mandato di contenimento dell’inflazione.`},
+ {match:/\bpce\s*price index/i,
+  ffNote:'Misura la variazione dei prezzi pagati per beni e servizi di consumo, includendo (a differenza della versione "core") anche alimentari ed energia, storicamente più volatili.',
+  why:(c)=>`È l’indicatore di inflazione "completo" preferito dalla ${newsCentralBank(c)}, complementare alla versione core: utile per capire quanto le voci più volatili (energia, alimentari) stiano pesando sul costo della vita reale, anche se la banca centrale guarda soprattutto il dato core per le proprie decisioni.`},
+ {match:/core\s*cpi/i,
+  ffNote:'Misura la variazione dei prezzi al consumo escludendo alimentari ed energia, le componenti più volatili e soggette a shock temporanei (es. un raccolto scarso, un’oscillazione del petrolio).',
+  why:(c)=>`Essendo depurato dalle componenti più volatili, è il dato di inflazione che la ${newsCentralBank(c)} guarda con più attenzione per giudicare la tendenza di fondo dei prezzi: un’inflazione core persistente sopra target è tra i motivi principali per cui una banca centrale alza i tassi.`},
+ {match:/\bcpi\b/i,
+  ffNote:'Misura la variazione del prezzo di un paniere di beni e servizi acquistati dai consumatori rispetto al periodo precedente. È la misura di inflazione più citata e seguita dal grande pubblico.',
+  why:(c)=>`È il principale indicatore di inflazione: un’inflazione persistentemente sopra l’obiettivo spinge la ${newsCentralBank(c)} ad alzare i tassi di interesse, il che tende a rafforzare la valuta; un’inflazione in calo apre invece la porta a tagli dei tassi.`},
+ {match:/core\s*ppi/i,
+  ffNote:'Misura la variazione dei prezzi alla PRODUZIONE (prima che arrivino al consumatore finale), escludendo alimentari ed energia.',
+  why:'I prezzi alla produzione tendono ad anticipare quelli al consumo di qualche mese: un PPI core in accelerazione è spesso un segnale precoce che anche il CPI core salirà nei mesi successivi, quindi il mercato lo guarda come "anteprima" dell’inflazione al consumo.'},
+ {match:/\bppi\b/i,
+  ffNote:'Misura la variazione dei prezzi ricevuti dai produttori nazionali per i loro beni, PRIMA che questi costi vengano (eventualmente) trasferiti ai consumatori finali.',
+  why:'Anticipa le pressioni inflazionistiche lungo la catena produttiva prima che si vedano nei prezzi al consumo: le imprese tendono infatti a scaricare sui listini finali gli aumenti dei costi di produzione con qualche mese di ritardo.'},
+ {match:/core\s*retail sales/i,
+  ffNote:'Misura la variazione delle vendite al dettaglio escludendo il comparto auto, storicamente molto più volatile (dipende da grandi acquisti occasionali, promozioni, disponibilità di credito).',
+  why:'Depurata dalla componente auto, è considerata una misura più pulita e affidabile della vera tendenza della spesa dei consumatori rispetto al dato headline.'},
+ {match:/retail sales/i,
+  ffNote:'Misura la variazione del fatturato del commercio al dettaglio rispetto al mese precedente.',
+  why:'È il principale indicatore della spesa dei consumatori, che rappresenta la maggior parte dell’attività economica complessiva in quasi tutte le economie sviluppate: una spesa robusta segnala un’economia solida, un calo persistente è spesso tra i primi segnali di rallentamento.'},
+ {match:/\bgdp\b/i,
+  ffNote:'Misura la variazione del valore totale di beni e servizi prodotti nell’economia rispetto al periodo precedente — la fotografia più completa (ma anche più in ritardo) della salute economica di un paese.',
+  why:'È la misura più ampia della crescita economica: numeri sopra le attese rafforzano tipicamente la valuta (economia forte → possibili tassi più alti), numeri sotto le attese la indeboliscono. Essendo un dato trimestrale e spesso rivisto, il mercato reagisce anche alle revisioni dei dati dei trimestri precedenti, non solo al numero nuovo.'},
+ {match:/unemployment rate/i,
+  ffNote:'Percentuale della forza lavoro totale che risulta disoccupata e alla ricerca attiva di un impiego.',
+  why:(c)=>`È uno dei due mandati principali di gran parte delle banche centrali (insieme all’inflazione): un tasso di disoccupazione in salita aumenta le probabilità che la ${newsCentralBank(c)} tagli i tassi per sostenere l’economia, un tasso in calo verso la piena occupazione va nella direzione opposta.`},
+ {match:/employment change/i,
+  ffNote:'Misura la variazione netta del numero di persone occupate rispetto al mese/trimestre precedente.',
+  why:'È un indicatore diretto e tempestivo della salute del mercato del lavoro: un mercato del lavoro che continua a creare posti sostiene la fiducia dei consumatori e la spesa, con effetti diretti sulla crescita economica complessiva.'},
+ // ISM Non-Manufacturing/Services TESTATO PRIMA di quello manifatturiero: il titolo "ISM Non-
+ // Manufacturing PMI" contiene la sottostringa "Manufacturing", quindi un pattern manifatturiero
+ // troppo permissivo lo intercetterebbe per primo e darebbe la spiegazione sbagliata — bug reale
+ // trovato scrivendo questo glossario, non solo teorico (vedi test dedicato).
+ {match:/ism\s*services|ism\s*non.?manufacturing|services pmi/i,
+  ffNote:'Stesso principio del PMI manifatturiero ma riferito al settore dei servizi: sopra 50 espansione, sotto 50 contrazione.',
+  why:'Nelle economie sviluppate il settore dei servizi pesa molto più di quello manifatturiero sul PIL totale, quindi questo dato spesso conta più del PMI manifatturiero per giudicare la salute reale dell’economia.'},
+ {match:/ism\s*manufacturing|(?<!non.)(?<!non )manufacturing pmi/i,
+  ffNote:'Indice basato su un sondaggio tra i responsabili degli acquisti (purchasing managers) delle imprese manifatturiere: un valore sopra 50 indica espansione del settore, sotto 50 contrazione.',
+  why:'È tra i primi dati del mese a essere pubblicati e ha una lunga storia di anticipare i punti di svolta del ciclo economico — per questo il mercato gli dà un peso spesso superiore alla sua reale importanza statistica.'},
+ {match:/composite pmi/i,
+  ffNote:'Media ponderata dei PMI manifatturiero e servizi, pensata per dare un’unica lettura sintetica dell’intera economia privata: sopra 50 espansione, sotto 50 contrazione.',
+  why:'Riassume in un solo numero l’andamento di entrambi i settori principali dell’economia, utile quando i due PMI danno segnali contrastanti tra loro.'},
+ {match:/interest rate decision|official bank rate|main refinancing rate|cash rate|overnight rate|policy rate|official cash rate/i,
+  ffNote:(c)=>`Annuncio della decisione della ${newsCentralBank(c)} sul proprio tasso di riferimento, il principale strumento di politica monetaria a disposizione della banca centrale.`,
+  why:(c)=>`È tipicamente l’evento macro più importante per quella valuta: oltre al livello del tasso (spesso già in gran parte scontato dal mercato), conta soprattutto il linguaggio usato nel comunicato che accompagna la decisione, che indica la direzione futura della politica monetaria.`},
+ {match:/monetary policy (statement|minutes|meeting minutes|report)|mpc.*minutes/i,
+  ffNote:(c)=>`Verbale o rapporto dettagliato della riunione di politica monetaria della ${newsCentralBank(c)}, pubblicato dopo la decisione sui tassi: riporta il dibattito interno, non solo la conclusione già nota.`,
+  why:'Dà al mercato una lettura più profonda di quanto siano davvero divisi i membri del comitato e di cosa stiano guardando per le prossime decisioni — può spostare le aspettative sui tassi anche a distanza di settimane dalla riunione.'},
+ {match:/trade balance/i,
+  ffNote:'Differenza tra il valore delle esportazioni e quello delle importazioni di beni (ed eventualmente servizi) in un dato mese: positiva se il paese esporta più di quanto importa (surplus), negativa in caso contrario (deficit).',
+  why:'Un surplus commerciale in crescita significa più domanda estera per la valuta locale (serve per pagare le esportazioni), tendenzialmente positivo per il cambio; un deficit in peggioramento va nella direzione opposta.'},
+ {match:/industrial production/i,
+  ffNote:'Misura la variazione della produzione fisica di fabbriche, miniere e utility rispetto al mese precedente.',
+  why:'È un indicatore diretto dell’attività del settore manifatturiero/industriale, una componente ciclica dell’economia che tende a rallentare/accelerare prima del resto quando cambia il ciclo economico.'},
+ {match:/consumer confidence|consumer sentiment/i,
+  ffNote:'Sondaggio tra le famiglie sulla loro percezione delle condizioni economiche attuali e sulle aspettative per i prossimi mesi.',
+  why:'La fiducia dei consumatori tende ad anticipare i loro comportamenti di spesa reali: un calo di fiducia spesso precede (e in parte causa) un rallentamento vero e proprio della spesa nei mesi successivi.'},
+ {match:/building permits/i,
+  ffNote:'Numero di permessi rilasciati per la costruzione di nuove abitazioni residenziali nel mese, un indicatore ANTICIPATO rispetto ai cantieri effettivi (housing starts).',
+  why:'Essendo il primo passo formale prima che inizi davvero un cantiere, anticipa di alcuni mesi l’attività edilizia reale — il settore immobiliare è tra i più sensibili ai tassi di interesse, quindi è anche un termometro indiretto dell’efficacia della politica monetaria.'},
+ {match:/housing starts/i,
+  ffNote:'Numero di nuovi cantieri residenziali avviati nel mese.',
+  why:'Il settore immobiliare è uno dei più sensibili ai tassi di interesse (mutui più cari = meno cantieri): è quindi tra i primi settori a mostrare l’effetto reale dei rialzi/tagli di una banca centrale sull’economia.'},
+ {match:/existing home sales/i,
+  ffNote:'Numero di abitazioni già esistenti (non di nuova costruzione) vendute nel mese, la grande maggioranza del mercato immobiliare residenziale.',
+  why:'Rappresenta la parte più ampia del mercato immobiliare: un rallentamento delle vendite segnala che il costo dei mutui sta pesando sulle famiglie, un indizio indiretto di quanto la politica monetaria restrittiva stia davvero mordendo sull’economia reale.'},
+ {match:/new home sales/i,
+  ffNote:'Numero di abitazioni di nuova costruzione vendute nel mese — una quota minore del mercato rispetto alle case già esistenti, ma più direttamente legata alla nuova attività edilizia.',
+  why:'A differenza delle vendite di case esistenti, ogni nuova vendita corrisponde a nuova attività economica reale (costruzione, materiali, manodopera): è quindi un indicatore più diretto della salute del settore edile.'},
+ {match:/core durable goods/i,
+  ffNote:'Misura la variazione degli ordini ai produttori per beni destinati a durare più di 3 anni, escludendo il comparto trasporti (soprattutto ordini di aerei, molto grandi e irregolari, capaci da soli di far oscillare il dato headline in un mese).',
+  why:'Depurato dalla componente trasporti, è considerato un termometro più pulito e affidabile degli investimenti reali delle imprese rispetto al dato headline, spesso distorto da un singolo grosso ordine aeronautico.'},
+ {match:/durable goods/i,
+  ffNote:'Misura la variazione degli ordini ricevuti dai produttori per beni destinati a durare più di 3 anni (auto, elettrodomestici, macchinari industriali) — spesa importante e non urgente, quindi molto sensibile alla fiducia delle imprese e dei consumatori.',
+  why:'Essendo acquisti importanti e rimandabili, gli ordini di beni durevoli sono tra i primi a calare quando imprese e famiglie diventano caute sul futuro: un utile indicatore anticipatore della fiducia nell’economia.'},
+];
+// I campi ffNote/why possono essere una stringa fissa oppure una funzione (country)=>stringa,
+// per i casi in cui il testo cambia in base alla banca centrale competente (vedi NEWS_CENTRAL_BANK
+// sopra) — resolveNewsGlossaryText() gestisce entrambe le forme in modo uniforme.
+function resolveNewsGlossaryText(field,country){
+ if(typeof field==='function')return field(country);
+ return field||null;
+}
+// Filtro esplicito richiesto: SOLO Medium/High. La prima voce di NEWS_GLOSSARY il cui pattern
+// combacia col titolo vince (l’array è ordinato apposta: voci specifiche per nome prima, quelle
+// generiche per tipo di indicatore dopo — es. "Philly Fed" deve vincere su un eventuale pattern
+// generico più permissivo, "Core CPI" deve vincere su "CPI" semplice, ecc.).
+function newsGlossaryFor(ev){
+ if(!ev||!ev.title)return null;
+ if(ev.impact!=='High'&&ev.impact!=='Medium')return null;
+ for(const entry of NEWS_GLOSSARY){
+   if(entry.match.test(ev.title)){
+     return{
+       ffNote:resolveNewsGlossaryText(entry.ffNote,ev.country),
+       why:resolveNewsGlossaryText(entry.why,ev.country),
+     };
+   }
+ }
+ return null;
 }
 let mt5CredsDraft=null; // {login, password, server} — il conto attualmente connesso
 let mt5CredsDirHandle=null;
