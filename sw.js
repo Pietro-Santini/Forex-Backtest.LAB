@@ -12,7 +12,7 @@
 // rete per prima; la cache resta come rete di sicurezza SOLO per l'uso offline vero (o se la rete
 // è momentaneamente irraggiungibile). CACHE_NAME cambiato apposta (v2 -> v3) per invalidare una
 // volta per tutte le cache vecchie di chi ha già usato l'app prima di questo fix.
-const CACHE_NAME = "forex-backtest-lab-v4";
+const CACHE_NAME = "forex-backtest-lab-v5";
 const ASSETS = [
   "./",
   "./app.html",
