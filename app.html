@@ -7846,46 +7846,41 @@ function draw(){
        // del grafico — cioè ai pixel per candela — non fissa in pixel. Zoomando dentro (meno
        // candele visibili, ciascuna più larga) le barre si allungano; zoomando fuori (più
        // candele visibili, ciascuna più stretta) le barre si accorciano.
-       //
-       // COMPENSAZIONE TIMEFRAME (segnalato con screenshot 1m vs 5m: a parità di zoom/barSizePct
-       // l'istogramma risultava molto più "ingombrante" a TF più alti): "8 larghezze di candela"
-       // di barra rappresentano un intervallo di tempo reale che CRESCE con currentTF (8 candele
-       // da 1 minuto = 8 minuti, ma 8 candele da 5 minuti = 40 minuti) — pxPerCandle da solo non
-       // lo compensa, perché è legato al numero di candele visibili a schermo, non ai minuti che
-       // ciascuna rappresenta. Dividendo per currentTF la barra torna a coprire lo stesso
-       // intervallo di tempo assoluto a qualunque timeframe, quindi la stessa "impronta" visiva
-       // su schermo: a TF=5 le barre sono 5 volte più corte che a TF=1, a parità di zoom/scala.
        const pxPerCandle=cw/n;
-       const tfSizeCompensation=Math.max(1,currentTF||1);
        // RICHIESTO ESPLICITAMENTE: "più il periodo che ricopre è lungo più la lunghezza delle
        // barre... mano mano che aumenta il periodo mi moltiplica in automatico la lunghezza" —
-       // finora la formula sopra dipendeva SOLO da zoom/timeframe (pxPerCandle/tfSizeCompensation),
-       // MAI da quante candele copre QUESTO specifico profilo: due profili alla stessa identica
-       // vista (stesso zoom) ma uno su 1 giorno e uno su 1 mese uscivano con barre identiche.
-       // periodMultiplier confronta candlesInRange con una base di riferimento (200, la stessa
-       // usata ora come default "numero di barre" — un ancoraggio coerente, non un numero a caso)
-       // e moltiplica linearmente da lì in su: un profilo sopra la base ha barre proporzionalmente
-       // più lunghe, uno sotto resta invariato (Math.max(1,...) — non si è MAI chiesto che i
-       // profili corti si accorciano, solo che quelli lunghi crescano). Nessun tetto arbitrario
-       // separato: il Math.min(cw*0.6,...) qui sotto, già esistente, lo contiene comunque entro
-       // il grafico a prescindere da quanto grande diventi il moltiplicatore.
-       const candlesInRange=Math.max(1,lastIdx-startIdx+1);
-       const PERIOD_BASELINE_CANDLES=200;
-       const periodMultiplier=Math.max(1,candlesInRange/PERIOD_BASELINE_CANDLES);
-       // BUG RISOLTO (segnalato dall'utente: "le barre rimangono corte e non si allungano
-       // nonostante un profilo lungo"): riprodotto e confermato con misure vere sui pixel
-       // disegnati — il tetto Math.min(cw*0.6,...) qui sotto era pensato SOLO per il fattore
-       // zoom/timeframe (pxPerCandle/tfSizeCompensation, l'unica cosa che esisteva quando è stato
-       // scritto), ma periodMultiplier veniva moltiplicato PRIMA di quel tetto: bastava un
-       // profilo di poche migliaia di candele per saturare il tetto, e da lì in su qualunque
-       // periodo — 5.000 candele o 40.000 — produceva la STESSA identica lunghezza massima,
-       // esattamente il comportamento segnalato. sizeScale (dimensione istogramma %) era già
-       // stato messo a moltiplicare DOPO il tetto (nessun limite per il barSizePct, commento qui
-       // sopra) — periodMultiplier va trattato allo stesso modo, per lo stesso motivo esplicito
-       // della richiesta originale ("mano mano che aumenta il periodo mi moltiplica in automatico
-       // la lunghezza", nessun tetto menzionato): il tetto zoom/timeframe resta solo sulla parte
-       // che gli compete, periodo e dimensione% crescono entrambi senza un soffitto arbitrario.
-       const zoomCappedPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8/tfSizeCompensation));
+       // periodMultiplier confronta il periodo REALE (in minuti, non in numero di candele) coperto
+       // da questo specifico profilo con una base di riferimento, e moltiplica linearmente da lì in
+       // su: un profilo sopra la base ha barre proporzionalmente più lunghe, uno sotto resta
+       // invariato (Math.max(1,...) — non si è MAI chiesto che i profili corti si accorciano, solo
+       // che quelli lunghi crescano).
+       //
+       // BUG RISOLTO (segnalato con screenshot 1m/5m/15m: "l'istogramma diventa molto più piccolo
+       // cambiando timeframe, deve mantenere le stesse dimensioni... l'estensione deve arrivare
+       // sempre allo stesso punto"): misurato con un profilo ancorato a un intervallo di tempo
+       // FISSO (6 ore) a TF diversi — a parità di zoom la barra massima crollava da 1209px (TF=1)
+       // a 134px (TF=5) a 45px (TF=15), un fattore fino a 27×. Due cause, entrambe corrette ora:
+       // 1) periodMultiplier usava candlesInRange (il numero di CANDELE nell'intervallo), che per
+       //    uno stesso intervallo di tempo reale si riduce proporzionalmente al crescere del
+       //    timeframe (6 ore = 361 candele a 1m, ma solo 73 a 5m, 24 a 15m) — quindi un profilo che
+       //    copriva "tanto tempo" a 1m risultava "poco tempo" a 5m/15m pur essendo lo STESSO
+       //    intervallo. Corretto usando la durata reale in minuti (dai timestamp effettivi delle
+       //    candele di inizio/fine), che non dipende dal timeframe con cui la si sta guardando.
+       // 2) Esisteva anche una "compensazione timeframe" separata (pxPerCandle*8/currentTF) che
+       //    divideva deliberatamente la lunghezza delle barre per il timeframe corrente — richiesta
+       //    esplicitamente in precedenza per l'esigenza OPPOSTA (le barre sembravano troppo
+       //    ingombranti nei TF alti). Riconfermato con l'utente (17/18 set): questa richiesta viene
+       //    ora esplicitamente ANNULLATA a favore di "stessa estensione a qualunque timeframe" — la
+       //    divisione per currentTF è stata rimossa.
+       const rangeMs=Math.max(0,fullTs[lastIdx]-fullTs[startIdx]);
+       const rangeMinutes=rangeMs/60000;
+       const PERIOD_BASELINE_MINUTES=200; // stessa base di riferimento di prima (200 candele da 1 minuto = 200 minuti)
+       const periodMultiplier=Math.max(1,rangeMinutes/PERIOD_BASELINE_MINUTES);
+       // Nessun tetto separato per periodo/dimensione%: il Math.min(cw*0.6,...) qui sotto, già
+       // esistente, riguarda solo il fattore zoom (pxPerCandle) — periodMultiplier e sizeScale
+       // moltiplicano DOPO quel tetto e possono crescere entrambi senza un soffitto arbitrario
+       // (stesso motivo del bug "barre che non si allungano" risolto in precedenza).
+       const zoomCappedPx=Math.max(4,Math.min(cw*0.6,pxPerCandle*8));
        const maxBarPx=zoomCappedPx*periodMultiplier*sizeScale;
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
        // Value Area calcolata QUI, PRIMA delle barre (non solo quando le righe POC/VAH/VAL sono
