@@ -1071,7 +1071,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        </div>
        <div class="fbOptRow">
          <label style="flex:none;min-width:150px">Dimensione istogramma</label>
-         <input id="vpBarSizePct" type="number" min="20" step="5" value="500" style="width:64px"><span class="hint" style="margin:0">%</span>
+         <input id="vpBarSizePct" type="number" min="20" step="5" value="500" style="width:64px" title="Lunghezza della barra più lunga rispetto alla larghezza del periodo: 500% = 70% (come TradingView). Le barre restano agganciate al tempo; zoomando si fermano a un minimo e a un massimo in pixel."><span class="hint" style="margin:0">%</span>
        </div>
        <div class="fbOptRow" id="vpExtendRow">
          <label><input type="checkbox" id="vpExtendRight"> Estendi fino al bordo destro del grafico</label>
@@ -2786,6 +2786,96 @@ function normalizeAssetDrawings(raw){
  return Object.assign(base,raw);
 }
 
+// ===================== SALVATAGGIO DEDICATO E "A PROVA DI SPEGNIMENTO" DEI DISEGNI =====================
+// RICHIESTO ESPLICITAMENTE: Fibonacci, profili volumetrici, VWAP e qualunque altro disegno, per ogni
+// asset, devono restare salvati in modo definitivo anche se si spegne il PC o si chiude il browser
+// senza chiudere l'app. Tre difese, indipendenti dal salvataggio generale della sessione:
+//  1) un CONTROLLO PERIODICO (ogni 1,5s) confronta i disegni dell'asset a grafico con l'ultima copia
+//     scritta: qualunque modifica (spostamento, colore, spessore, testo, blocco, undo/redo...) viene
+//     salvata da sola, anche se il punto del codice che l'ha fatta non chiamava scheduleSave();
+//  2) una COPIA DEDICATA solo dei disegni (tutti gli asset, tutte e 4 le sessioni) in localStorage
+//     (sincrona) e in IndexedDB (capiente): non dipende dalle dimensioni del resto della sessione,
+//     quindi non può fallire per quota piena a causa di trade/posizioni;
+//  3) all'avvio si ripristina la copia PIÙ RECENTE tra sessione e copia dedicata.
+// Il controllo parte SOLO a ripristino concluso (armDrawingsPersistence, chiamata in fondo a
+// initSession), altrimenti potrebbe salvare un elenco ancora vuoto sopra quello vero.
+const DRAWINGS_BACKUP_KEY='fxbt_drawings_backup_v1';
+let drawingsPersistenceArmed=false;
+let drawingsBackupSig=null;
+let drawingsBackupLastTotal=0;
+function mirrorCurrentDrawingsIntoAssetDrawings(){
+ if(!currentAssetKey)return;
+ const mode=currentMode();
+ if(!assetDrawings[mode])assetDrawings[mode]={};
+ assetDrawings[mode][currentAssetKey]=drawings;
+}
+function countAllAssetDrawings(){
+ let n=0;
+ Object.values(assetDrawings||{}).forEach(m=>Object.values(m||{}).forEach(l=>{ if(Array.isArray(l))n+=l.length; }));
+ return n;
+}
+function persistDrawingsBackupNow(){
+ try{
+   mirrorCurrentDrawingsIntoAssetDrawings();
+   const total=countAllAssetDrawings();
+   // Mai scrivere una copia completamente vuota sopra una che (in questa apertura dell'app) conteneva
+   // dei disegni, a meno che non siano stati davvero cancellati dall'utente (total scende da >0 a 0
+   // dopo che questa stessa pagina li aveva visti): in quel caso è una cancellazione voluta.
+   if(total===0 && drawingsBackupLastTotal===0)return;
+   drawingsBackupLastTotal=total;
+   const payload={v:1,savedAt:Date.now(),uid:(window.fxbtCloud&&window.fxbtCloud.uid)||null,assetDrawings};
+   try{ localStorage.setItem(DRAWINGS_BACKUP_KEY,JSON.stringify(payload)); }catch(e){ console.warn('Copia dedicata disegni su localStorage non riuscita:',e); }
+   idbPut('drawingsBackup',payload); // asincrona, non serve attenderla
+ }catch(e){ console.warn('Salvataggio dedicato dei disegni non riuscito:',e); }
+}
+function armDrawingsPersistence(){
+ if(drawingsPersistenceArmed)return;
+ drawingsPersistenceArmed=true;
+ mirrorCurrentDrawingsIntoAssetDrawings();
+ drawingsBackupLastTotal=countAllAssetDrawings();
+ drawingsBackupSig=currentMode()+'|'+(currentAssetKey||'')+'|'+JSON.stringify(drawings);
+ persistDrawingsBackupNow(); // fotografia iniziale (crea la copia dedicata anche per chi non l'aveva ancora)
+ setInterval(()=>{
+   if(!drawingsPersistenceArmed)return;
+   // Durante un trascinamento/disegno in corso si aspetta il rilascio: niente scritture a raffica.
+   if(shapeDrag||touchDrawDrag||placingStep!==0)return;
+   try{
+     const sig=currentMode()+'|'+(currentAssetKey||'')+'|'+JSON.stringify(drawings);
+     if(sig===drawingsBackupSig)return;
+     drawingsBackupSig=sig;
+     persistDrawingsBackupNow();
+     scheduleSave();
+   }catch(e){}
+ },1500);
+}
+function flushDrawingsOnExit(){
+ if(!drawingsPersistenceArmed)return;
+ try{ persistDrawingsBackupNow(); saveLightStateToLocalStorageNow(); }catch(e){}
+}
+window.addEventListener('pagehide',flushDrawingsOnExit);
+window.addEventListener('beforeunload',flushDrawingsOnExit);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden')flushDrawingsOnExit(); });
+// Ripristino all'avvio: se la copia dedicata è più recente della sessione ripristinata (o la sessione
+// manca del tutto), i suoi disegni prevalgono. Firmata con l'account, come lo stato principale.
+async function restoreDrawingsFromBackupIfNewer(savedState,uid){
+ try{
+   const candidates=[];
+   try{ const raw=localStorage.getItem(DRAWINGS_BACKUP_KEY); if(raw)candidates.push(JSON.parse(raw)); }catch(e){}
+   try{ const b=await idbGet('drawingsBackup'); if(b)candidates.push(b); }catch(e){}
+   const valid=candidates.filter(b=>b&&b.v===1&&b.assetDrawings&&typeof b.assetDrawings==='object'&&((b.uid||null)===(uid||null)));
+   if(!valid.length)return false;
+   valid.sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
+   const best=valid[0];
+   const stateAt=(savedState&&Number.isFinite(savedState.savedAt))?savedState.savedAt:0;
+   if((best.savedAt||0)<=stateAt)return false;
+   assetDrawings=normalizeAssetDrawings(best.assetDrawings);
+   if(liveModeActive&&currentAssetKey){
+     drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[currentAssetKey])||[]);
+   }
+   return true;
+ }catch(e){ console.warn('Ripristino copia dedicata dei disegni non riuscito:',e); return false; }
+}
+
 // Tutto lo stato della dashboard (CSV caricato, trade, posizioni, disegni, indicatori,
 // impostazioni della UI) viene salvato in IndexedDB, così chiudendo/riaprendo la scheda
 // si ritrova tutto com'era. Usiamo IndexedDB (non localStorage) perché il CSV storico può
@@ -2935,16 +3025,25 @@ let saveTimer=null;
 // più sotto), quindi non può mai risultare più vecchia dell'ultima azione fatta.
 const FOREX_LAB_STANDARD_STATE_KEY='forex_lab_standard_state';
 function saveLightStateToLocalStorageNow(){
+ let state=null;
  try{
-   const state=collectLightSessionState();
+   state=collectLightSessionState();
    // Firmato con l'UID dell'account attualmente collegato (o null se non si è loggati): serve
    // al ripristino all'avvio per capire se questo salvataggio locale appartiene DAVVERO
    // all'account con cui si sta aprendo la pagina ora, o a un account diverso usato in
    // precedenza sullo stesso browser/dispositivo (in quel caso va ignorato, mai mescolato).
    state.savedByUid=(window.fxbtCloud&&window.fxbtCloud.uid)||null;
+ }catch(e){ console.warn('Raccolta stato sessione non riuscita:', e); return null; }
+ try{
    localStorage.setItem(FOREX_LAB_STANDARD_STATE_KEY, JSON.stringify(state));
-   return state;
- }catch(e){ console.warn('Salvataggio immediato su localStorage non riuscito (quota piena?):', e); return null; }
+ }catch(e){
+   // Quota piena: la copia in localStorage resta quella VECCHIA. Prima si tornava null e la copia
+   // IndexedDB veniva scritta senza firma account, quindi all'avvio la vecchia copia localStorage
+   // vinceva comunque. Ora lo stato (già firmato) viene comunque restituito, così finisce anche in
+   // IndexedDB e all'avvio si sceglie la copia più recente (vedi initSession).
+   console.warn('Salvataggio immediato su localStorage non riuscito (quota piena?):', e);
+ }
+ return state;
 }
 function scheduleSave(){
  // NESSUNA guardia su baseRows.length: subito dopo un cambio sessione l'asset è volutamente
@@ -4657,6 +4756,19 @@ async function autoLoadAssetLibrary(asset){
    // clearAssetSelectionForSessionSwitch lo ha appena azzerato) e i disegni mostrati sono in
    // realtà già quelli corretti per QUESTA sessione, appena ripristinati da restoreModeSnapshot.
    const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
+   // BUG RISOLTO ("chiudo l'app o spengo il PC e i disegni/livelli di un asset spariscono del
+   // tutto"): `wasOnDifferentAsset` qui sopra è FALSO quando currentAssetKey è vuoto — condizione
+   // che si verifica SEMPRE al primo asset scelto dopo un cambio sessione o un ricaricamento
+   // della pagina (clearAssetSelectionForSessionSwitch/initSession azzerano sia currentAssetKey
+   // che `drawings`). I due blocchi "if(wasOnDifferentAsset)" più sotto, che ricaricano i disegni
+   // di QUESTO asset da assetDrawings, venivano quindi SALTATI proprio in quel momento: `drawings`
+   // restava [] per sempre (finché non si passava a un asset diverso e poi si tornava indietro),
+   // anche se i disegni erano tutti ancora salvati in assetDrawings/localStorage. Qui invece
+   // basta che l'asset richiesto sia DIVERSO da quello attualmente caricato (currentAssetKey,
+   // vuoto compreso) per ricaricare i suoi disegni salvati — nessun rischio di sovrascrivere
+   // disegni non ancora salvati, perché l'asset che si lascia è già stato fotografato sopra da
+   // captureCurrentAssetDrawings() prima di arrivare qui.
+   const shouldLoadAssetDrawings=currentAssetKey!==asset;
    if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
    currentAssetKey=asset;
    // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
@@ -4688,7 +4800,7 @@ async function autoLoadAssetLibrary(asset){
      renderCsvLibraryList();
      updateFileBtnLabel();
      $('fileName').textContent='';
-     if(wasOnDifferentAsset){
+     if(shouldLoadAssetDrawings){
        // RICHIESTO ESPLICITAMENTE: i disegni di QUESTO asset (già visitato in questa sessione)
        // si ricaricano da assetDrawings invece di azzerarsi — vedi blocco MEMORIA DEI DISEGNI
        // PER ASSET E PER SESSIONE più sopra.
@@ -4711,7 +4823,7 @@ async function autoLoadAssetLibrary(asset){
    renderCsvLibraryList();
    updateFileBtnLabel();
    $('fileName').textContent=csvLibrary.length+' file • '+baseRows.length.toLocaleString('it-IT')+' candele (da libreria asset)';
-   if(wasOnDifferentAsset){
+   if(shouldLoadAssetDrawings){
      drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
      selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
      historyUndo=[];historyRedo=[];
@@ -8086,52 +8198,22 @@ function draw(){
        const rightBoundX=d.type==='vpfixed'?(d.extendRight?(w-pad.r):shapesGeo.xFromTime(fullTs[lastIdx])):(w-pad.r);
        const nb=d.buckets?Math.max(6,Math.min(500,Math.round(d.buckets))):Math.max(8,Math.min(60,Math.round(ch/7)));
        const profile=computeVolumeProfile(startIdx,lastIdx,nb);
-       // Nessun tetto massimo (stesso motivo: barSizePct non è più limitato a 200%).
-       const sizeScale=Math.max(0.2,(d.barSizePct||100)/100);
-       // RICHIESTA: la lunghezza delle barre deve essere PROPORZIONALE alla "scala del tempo"
-       // del grafico — cioè ai pixel per candela — non fissa in pixel. Zoomando dentro (meno
-       // candele visibili, ciascuna più larga) le barre si allungano; zoomando fuori (più
-       // candele visibili, ciascuna più stretta) le barre si accorciano.
-       //
-       // BUG RISOLTO (18/9, scoperto testando il cambio-comportamento del cambio TF che ora
-       // preserva la finestra di TEMPO REALE invece del numero di candele — vedi commenti su
-       // $('tf').addEventListener('change',...)): questo termine usava cw/n, cioè i pixel per
-       // CANDELA SULLO SCHERMO (n=candele visibili). Finché il cambio TF lasciava n invariato,
-       // cw/n restava per puro accidente uguale a qualsiasi timeframe — ma ora che n si restringe
-       // deliberatamente al crescere del TF (per mantenere la stessa finestra di tempo reale),
-       // cw/n CRESCE con il TF, e le barre tornavano a "gonfiarsi" a TF alti: esattamente il bug
-       // già risolto in precedenza, reintrodotto da un percorso diverso. Corretto usando i pixel
-       // per MINUTO REALE (cw/(n*currentTF)) invece che per candela-schermo: a TF=1 le due
-       // formule coincidono esattamente (nessuna differenza per l'utente), ma a TF più alti
-       // restano stabili perché n*currentTF (la finestra di tempo reale visibile) ora è
-       // costante attraverso i cambi TF, mentre continuano a variare correttamente con lo zoom
-       // manuale (rotella/trascinamento), che cambia n a parità di currentTF.
-       // RICHIESTO ESPLICITAMENTE: "più il periodo che ricopre è lungo più la lunghezza delle
-       // barre... mano mano che aumenta il periodo mi moltiplica in automatico la lunghezza" —
-       // periodMultiplier confronta il periodo REALE (in minuti, non in numero di candele) coperto
-       // da questo specifico profilo con una base di riferimento, e moltiplica linearmente da lì in
-       // su: un profilo sopra la base ha barre proporzionalmente più lunghe, uno sotto resta
-       // invariato (Math.max(1,...) — non si è MAI chiesto che i profili corti si accorciano, solo
-       // che quelli lunghi crescano).
-       const rangeMs=Math.max(0,fullTs[lastIdx]-fullTs[startIdx]);
-       const rangeMinutes=rangeMs/60000;
-       const PERIOD_BASELINE_MINUTES=200; // stessa base di riferimento di prima (200 candele da 1 minuto = 200 minuti)
-       const periodMultiplier=Math.max(1,rangeMinutes/PERIOD_BASELINE_MINUTES);
-       // BUG RISOLTO (21/9, richiesta esplicita): la lunghezza massima delle barre veniva
-       // ricalcolata ad ogni zoom in base ai pixel per candela/minuto VISIBILI a schermo
-       // (pxPerRealMinute) — cosa che la faceva "camminare" lungo il grafico: zoommando fuori
-       // (più candele compresse a schermo) il rapporto cambiava di continuo e, sommato a
-       // periodMultiplier senza un vero soffitto, l'istogramma poteva arrivare a coprire/nascondere
-       // le candele di prezzo successive all'ancora. Ora la lunghezza NON dipende più dallo zoom
-       // corrente: parte da una base FISSA in pixel (BASE_BAR_PX, indipendente da n/currentTF),
-       // cresce con periodMultiplier/sizeScale esattamente come prima (la "dimensione istogramma"
-       // impostata dall'utente resta l'unico moltiplicatore diretto), ma il risultato finale resta
-       // sempre bloccato (clampato) a un tetto massimo fisso legato solo alla larghezza del grafico
-       // (MAX_BAR_CEILING_PX=cw*0.6, anch'esso indipendente dallo zoom): raggiunto quel tetto, la
-       // barra più lunga vi resta ferma invece di continuare a crescere/spostarsi zoommando.
-       const BASE_BAR_PX=50;
-       const MAX_BAR_CEILING_PX=cw*0.6;
-       const maxBarPx=Math.max(4,Math.min(MAX_BAR_CEILING_PX,BASE_BAR_PX*periodMultiplier*sizeScale));
+       // RICHIESTO ESPLICITAMENTE (stile TradingView): la lunghezza delle barre è AGGANCIATA ALL'ASSE DEL
+       // TEMPO. La barra più lunga (POC) occupa una percentuale FISSA della larghezza del periodo coperto
+       // dal profilo (leftX -> ultima candela del profilo), quindi zoommando dentro/fuori le barre si
+       // allungano/accorciano insieme alle candele e restano ferme sul punto d'aggancio (leftX), invece
+       // di avere una lunghezza fissa in pixel che "scorre" rispetto al tempo. La percentuale la decide
+       // "Dimensione istogramma" (barSizePct): 500% (valore predefinito) = 70% della larghezza del
+       // periodo, come il "Width 70%" di default del Volume Profile di TradingView; 100% = 14%, ecc.
+       // TETTI: zoom in -> la barra cresce fino a VP_MAX_BAR_PX e poi resta ferma; zoom out -> si
+       // accorcia fino a VP_MIN_BAR_PX e poi resta ferma (lunghezze in pixel, indipendenti dallo zoom).
+       const periodRightX=shapesGeo.xFromTime(fullTs[lastIdx]);
+       const periodPx=Math.max(0,periodRightX-leftX);
+       const VP_WIDTH_FRACTION_PER_PCT=0.14/100; // 500% -> 0.70 della larghezza del periodo
+       const VP_MAX_BAR_PX=cw*0.6;
+       const VP_MIN_BAR_PX=Math.min(VP_MAX_BAR_PX,40);
+       const timeAnchoredPx=periodPx*(d.barSizePct||500)*VP_WIDTH_FRACTION_PER_PCT;
+       const maxBarPx=Math.max(VP_MIN_BAR_PX,Math.min(VP_MAX_BAR_PX,timeAnchoredPx));
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
        // Value Area calcolata QUI, PRIMA delle barre (non solo quando le righe POC/VAH/VAL sono
        // abilitate): serve anche per attenuare le barre fuori dalla Value Area qualche riga sotto,
@@ -10479,7 +10561,7 @@ function playOrderSound(){
  if(!el)return;
  try{ el.currentTime=0; el.play().catch(()=>{}); }catch(err){}
 }
-function closeTrade(reason,price,pos){
+function closeTrade(reason,price,pos,realLevels){
  pos=pos||active;
  if(!pos)return;
  const lots=pos.lots||getLotSize();
@@ -10498,7 +10580,9 @@ function closeTrade(reason,price,pos){
  const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
  // Conto € cumulativo: saldo del conto subito dopo la chiusura di questa operazione.
  const account=balanceBefore+pl;
- trades.push({...pos,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:currentMode()});
+ // Posizione REALE MT5: nel Journal vanno gli SL/TP veri di MT5 (realLevels), non i valori locali.
+ const realLevelFields=realLevels?{sl:realLevels.sl,tp:realLevels.tp,rrSl:realLevels.sl==null?null:(Number.isFinite(pos.rrSl)?pos.rrSl:realLevels.sl)}:{};
+ trades.push({...pos,...realLevelFields,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:currentMode()});
  playOrderSound();
  positions=positions.filter(p=>p!==pos);
  // La nuova posizione attiva (per i controlli SL/TP) deve restare sull'ASSET a grafico ora,
@@ -10721,6 +10805,9 @@ async function jumpToTradeOnChart(tradeIndex){
  const reward=Math.abs((t.tp!=null?t.tp:t.entry)-t.entry);
  const rr=(t.sl!=null&&t.tp!=null&&risk>0)?(reward/risk):null;
  highlightedTrade={tradeIndex,openIdx,closeIdx:hasClose?closeIdx:null,entry:t.entry,exit:t.exit,side:t.side,pl:t.pl,pips:t.pips,rr,durationMs,lots:t.lots};
+ // Le caselle TP/SL di un trade chiuso compaiono da selezionato: "Vai a grafico" lo seleziona, così
+ // si vedono subito gli SL/TP presi da MT5 (se erano impostati).
+ if(t.id!=null&&(t.sl!=null||t.tp!=null))selectedClosedTradeIds.add(t.id);
  draw();update();
  $('status').textContent=`Vista spostata sull'operazione #${tradeIndex+1}${t.asset?' ('+t.asset+')':''} (${t.side} ${fmtPrice(t.entry)} → ${fmtPrice(t.exit)}).`;
 }
@@ -11401,7 +11488,7 @@ async function closeMt5PositionReal(pos,reason){
    return false;
  }
  const price=Number.isFinite(Number(result.data.price))?Number(result.data.price):(currentPrice()??pos.entry);
- closeTrade(reason,price,pos);
+ closeTrade(reason,price,pos,resolveMt5FinalLevels(pos,mt5RealPositions.find(rp=>String(rp.ticket)===String(pos.mt5Ticket))));
  $('status').textContent=`🔌 Posizione ${pos.asset||''} (ticket ${pos.mt5Ticket}) chiusa DAVVERO su MT5 al prezzo ${fmtPrice(price)}.`;
  fetchMt5Positions();
  return true;
@@ -13062,7 +13149,7 @@ chartEl.addEventListener('pointerup',e=>{
    draw();
    return;
  }
- if(shapeDrag){shapeDrag=null;chartEl.releasePointerCapture?.(e.pointerId);if(e.pointerType==='touch')setChartTouchAction(false);return;}
+ if(shapeDrag){shapeDrag=null;chartEl.releasePointerCapture?.(e.pointerId);if(e.pointerType==='touch')setChartTouchAction(false);scheduleSave();return;}
  if(zoneWidthDrag){
    zoneWidthDrag=null;
    chartEl.releasePointerCapture?.(e.pointerId);
@@ -15173,7 +15260,12 @@ function addBackfilledMt5Trade(d){
  const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
  const account=balanceBefore+pl;
  const closeIso=new Date(d.timeClose*1000).toISOString();
- const sl=d.sl!=null?Number(d.sl):null, tp=d.tp!=null?Number(d.tp):null;
+ // SL/TP: prima quelli del bridge; se mancano, gli ultimi SL/TP REALI visti dall'app su quel ticket
+ // (cache persistita) — mai valori inventati.
+ const cachedLv=mt5LastLevelsByTicket[String(d.positionId)]||{};
+ // Il bridge legge SL/TP dagli ORDINI storici, che NON registrano le modifiche fatte dopo l'apertura
+ // (trascinamento in app, modifica dal terminale): l'ultimo valore visto dall'app ha quindi la precedenza.
+ const sl=cachedLv.sl!=null?cachedLv.sl:(d.sl!=null?Number(d.sl):null), tp=cachedLv.tp!=null?cachedLv.tp:(d.tp!=null?Number(d.tp):null);
  // beMarkerSl non è mai disponibile qui (l'app non ha mai visto questo trade mentre era
  // aperto, quindi non può sapere se/quando è stato premuto il pulsante Breakeven): la
  // distinzione SL/BE/SP resta comunque corretta per "SP" (calcolabile dal solo SL finale),
@@ -15275,6 +15367,47 @@ let mt5TicketOpenAnchor=(()=>{
  });
  return out;
 })();
+// ===================== ULTIMI SL/TP REALI DI MT5, PER TICKET =====================
+// RICHIESTO ESPLICITAMENTE: nel Trade Journal (e nelle caselle TP/SL a grafico di un trade chiuso)
+// devono comparire gli SL/TP VERI letti da MT5, mai quelli predefiniti "solo in app" (vedi
+// applyLocalSlTpDefaultsIfMissing) e mai vuoti se MT5 li aveva. Ad ogni giro di polling si ricorda
+// l'ultimo {sl,tp} reale di ogni ticket (persistito, così sopravvive a riavvii/chiusure dell'app):
+// serve sia alla chiusura vista in tempo reale (quando l'ultima fotografia con quel ticket non c'è
+// più) sia al recupero di un trade chiuso ad app spenta, se lo storico del bridge non restituisce SL/TP.
+const MT5_LAST_LEVELS_KEY='fxbt_mt5LastLevels_v1';
+let mt5LastLevelsByTicket=(()=>{
+ try{
+   const raw=localStorage.getItem(MT5_LAST_LEVELS_KEY);
+   const parsed=raw?JSON.parse(raw):null;
+   const out={};
+   if(parsed&&typeof parsed==='object'){
+     const cutoff=Date.now()-30*24*3600*1000; // oltre 30 giorni dall'ultima variazione non serve più
+     Object.keys(parsed).forEach(k=>{ const e=parsed[k]; if(e&&Number.isFinite(e.t)&&e.t>=cutoff)out[k]=e; });
+   }
+   return out;
+ }catch(e){ return {}; }
+})();
+function normalizeMt5Level(v){ const n=(v!=null)?Number(v):NaN; return (Number.isFinite(n)&&n>0)?n:null; }
+function rememberMt5LevelsFromSnapshot(list){
+ let changed=false;
+ (list||[]).forEach(rp=>{
+   if(!rp||rp.ticket==null)return;
+   const sl=normalizeMt5Level(rp.sl), tp=normalizeMt5Level(rp.tp);
+   const key=String(rp.ticket), prev=mt5LastLevelsByTicket[key];
+   if(!prev||prev.sl!==sl||prev.tp!==tp){ mt5LastLevelsByTicket[key]={sl,tp,t:Date.now()}; changed=true; }
+ });
+ if(changed){ try{ localStorage.setItem(MT5_LAST_LEVELS_KEY,JSON.stringify(mt5LastLevelsByTicket)); }catch(e){} }
+}
+// SL/TP da registrare nel Journal per una posizione REALE che si sta chiudendo. Ordine: ultima
+// fotografia MT5 che conteneva il ticket, poi la cache persistita, poi (solo se mai visti su MT5 e
+// non predefiniti in app) i valori della posizione. Se erano solo predefiniti in app: nulli.
+function resolveMt5FinalLevels(pos,lastKnownRp){
+ if(lastKnownRp)return {sl:normalizeMt5Level(lastKnownRp.sl),tp:normalizeMt5Level(lastKnownRp.tp)};
+ const c=pos&&pos.mt5Ticket!=null?mt5LastLevelsByTicket[String(pos.mt5Ticket)]:null;
+ if(c)return {sl:c.sl,tp:c.tp};
+ if(pos&&pos.mt5SlTpAppOnly)return {sl:null,tp:null};
+ return {sl:normalizeMt5Level(pos&&pos.sl),tp:normalizeMt5Level(pos&&pos.tp)};
+}
 function resolveMt5OpenAnchor(rp){
  const key=String(rp.ticket);
  const cached=mt5TicketOpenAnchor[key];
@@ -15380,6 +15513,7 @@ async function fetchMt5Positions(){
      // prossima connessione, quindi va aggiornato ad ogni giro di polling riuscito, non solo
      // alla connessione iniziale (l'app potrebbe restare connessa per ore).
      markMt5OnlineNow();
+     rememberMt5LevelsFromSnapshot(result.data); // ultimi SL/TP reali per ticket (vedi blocco dedicato)
      // Posizioni REALI tracciate in app (positions[].mt5Ticket) sparite dal conto vero: MT5 le
      // ha chiuse da sola (SL/TP reale colpito, Stop Out del broker, chiusura fatta a mano nel
      // terminale MT5...). Le giornalizziamo qui come una chiusura normale (Trade Journal). Il
@@ -15454,7 +15588,8 @@ async function fetchMt5Positions(){
          if(dr.data.reason)reason=dr.data.reason;
          if(Number.isFinite(Number(dr.data.price)))price=Number(dr.data.price);
        }
-       closeTrade(closeResultLabel(reason,p),price,p);
+       const finalLevels=resolveMt5FinalLevels(p,lastKnown);
+       closeTrade(closeResultLabel(reason,{...p,sl:finalLevels.sl}),price,p,finalLevels);
        delete mt5TicketOpenAnchor[String(p.mt5Ticket)]; // chiusura vera confermata: la cache per questo ticket non serve più
        saveMt5OpenAnchorsToStorage(); // rimosso anche da localStorage, non resta nulla di un ticket ormai chiuso
      }
@@ -15928,6 +16063,12 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // QUESTA sessione, appena ripristinati da restoreModeSnapshot, e NON vanno considerati un
  // "cambio asset" da azzerare.
  const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
+ // FIX DEFINITIVO (disegni persi dopo cambio sessione/riapertura): wasOnDifferentAsset è falso
+ // quando currentAssetKey è vuoto (subito dopo un cambio sessione o un ricaricamento pagina), quindi
+ // `drawings` restava [] e il salvataggio successivo SOVRASCRIVEVA con [] i disegni già salvati di
+ // quell'asset. I disegni vanno ricaricati ogni volta che l'asset caricato è diverso da quello
+ // attualmente associato a `drawings` (vuoto compreso), mai su una semplice risincronizzazione.
+ const shouldLoadAssetDrawings=(currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
@@ -16060,7 +16201,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // Disegni: SOLO un vero cambio asset (o il primissimo caricamento) li azzera — mai una
  // semplice risincronizzazione dello stesso strumento già a grafico. È esattamente questo che
  // prima li faceva sparire da soli ad ogni risincronizzazione periodica (una al minuto circa).
- const shouldResetDrawings=wasOnDifferentAsset;
+ const shouldResetDrawings=shouldLoadAssetDrawings;
  if(shouldResetDrawings){
    // RICHIESTO ESPLICITAMENTE: i disegni tracciati su un asset in Live restano in memoria
    // anche cambiando asset — si ricaricano da assetDrawings invece di azzerarsi, esattamente
@@ -16799,6 +16940,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // variabile esiste per coprire.
  mt5ActiveSymbol=resolved;
  const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
+ const shouldLoadAssetDrawings=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso fix
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
@@ -16864,7 +17006,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  $('fileName').textContent=baseRows.length.toLocaleString('it-IT')+' candele • '+resolved+' (storico Live MT5)';
  scanHistoricalSlTpTouches();
 
- const shouldResetDrawings=wasOnDifferentAsset;
+ const shouldResetDrawings=shouldLoadAssetDrawings;
  if(shouldResetDrawings){
    drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
    selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
@@ -18183,7 +18325,12 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
  }catch(e){ console.warn('Lettura del salvataggio locale (localStorage) non riuscita:',e); }
  const localMatchesAccount = localState && ((localState.savedByUid||null)===(currentUid||null));
  if(localMatchesAccount){
-   savedState=localState; // stesso account (o entrambi non loggati): localStorage vince sempre, cloud ignorato
+   // localStorage vince sempre sul cloud (vedi sopra). Fra localStorage e IndexedDB dello STESSO
+   // dispositivo/account vince invece la copia più recente: se una scrittura su localStorage era
+   // fallita (quota piena) quella copia era rimasta vecchia, mentre IndexedDB aveva l'ultimo stato.
+   const idbNewer=!!(savedState && savedState.version===SESSION_VERSION && Number.isFinite(savedState.savedAt)
+     && savedState.savedAt>(localState.savedAt||0) && ('savedByUid' in savedState) && ((savedState.savedByUid||null)===(currentUid||null)));
+   if(!idbNewer)savedState=localState; // stesso account (o entrambi non loggati): localStorage di norma vince, cloud ignorato
  }else{
    // Account diverso da chi ha scritto il localStorage (o nessun salvataggio locale valido):
    // proviamo Firestore, se l'utente risulta loggato.
@@ -18275,6 +18422,7 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
      // ripristinati sopra da applyLightSessionState() appartengono proprio a questo asset.
      currentAssetKey=$('market')?.value||'';
      lastValidMarketValue=currentAssetKey;
+     await restoreDrawingsFromBackupIfNewer(savedState,currentUid); // copia dedicata dei disegni, se più recente
      if(!liveModeActive){
        // RICHIESTO: tornando in modalità Storico dopo un ricaricamento della pagina, non deve
        // restare selezionato alcun asset (va sempre scelto di nuovo a mano) — le posizioni,
@@ -18371,6 +18519,7 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
    applyInstrument();
    currentAssetKey=$('market')?.value||'';
    lastValidMarketValue=currentAssetKey;
+   await restoreDrawingsFromBackupIfNewer(null,currentUid); // nessuna sessione salvata: i disegni possono comunque esserci
    // BUG RISOLTO ("il colore del testo Capitale resta sempre bianco"): a differenza del ramo
    // di ripristino sessione qui sopra (che chiama update();draw(); a fine restore), questo ramo
    // "nessuna sessione salvata" (primo avvio, storage svuotato, ecc.) non chiamava mai update()
@@ -18384,6 +18533,7 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
  // isPropFirmMode è già stato ripristinato da applyLightSessionState() insieme al resto:
  // basta riflettere il suo valore su classe CSS/pulsante/UI a fine ripristino.
  updatePropFirmBodyClass();
+ armDrawingsPersistence(); // da qui in poi ogni modifica ai disegni viene salvata da sola (vedi blocco dedicato)
  // STEP 3: se la sessione ripristinata era già una Challenge chiusa per violazione, la
  // schermata drammatica ricompare subito al caricamento della pagina — non basta un refresh
  // per "sbloccarla" di nuovo.
