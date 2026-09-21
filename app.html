@@ -1075,6 +1075,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpBgColor" type="color" class="colorPick" value="#ffffff"></span>
          <span style="display:inline-flex;align-items:center;gap:5px">Opacità <input id="vpBgOpacity" type="number" min="0" max="100" step="5" value="5" style="width:50px">%</span>
        </div>
+       <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
+         <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpLvnEnabled" checked> Mostra zona a basso volume (no volume)</label>
+         <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpLvnColor" type="color" class="colorPick" value="#00e676"></span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Opacità <input id="vpLvnOpacity" type="number" min="0" max="100" step="5" value="25" style="width:50px">%</span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Sensibilità <input id="vpLvnThreshold" type="number" min="1" max="100" step="1" value="15" style="width:50px">%</span>
+         <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Trova la fascia di prezzo con meno volume nell'istogramma e disegna un rettangolo orizzontale da lì fino all'ultima candela. "Sensibilità" = quanto larga può diventare la fascia (barre vicine sotto questa % del volume massimo vengono incluse).</span>
+       </div>
        <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">LIVELLI</div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpPocEnabled" checked> Mostra POC</label>
@@ -3666,9 +3673,15 @@ function applyFibSettingsFromModal(){
 // di barre, dimensione dell'istogramma ed estensione fino al bordo destro del grafico — per il
 // VWAP invece (una semplice linea, non un istogramma) solo colore e spessore della linea. ------
 let vpModalTarget=null;
+let vpModalSnapshot=null;
 function openVpSettingsModal(target){
  if(!target)return;
  vpModalTarget=target;
+ // Istantanea dei valori della zona a basso volume PRIMA di qualsiasi modifica: permette
+ // all'anteprima dal vivo (vedi i listener 'input' più sotto, vicino a vpModalCloseBtn) di
+ // aggiornare subito il rettangolo sul grafico mentre l'utente sposta color-picker/opacità/
+ // sensibilità, e a "Annulla"/chiusura/Esc di riportare tutto com'era se non si preme "OK".
+ vpModalSnapshot={lvnEnabled:target.lvnEnabled,lvnColor:target.lvnColor,lvnOpacity:target.lvnOpacity,lvnThresholdPct:target.lvnThresholdPct};
  const isHist=target.type==='vpfixed'||target.type==='vpanchor';
  if($('vpModalHistPanel'))$('vpModalHistPanel').style.display=isHist?'block':'none';
  if($('vpModalVwapPanel'))$('vpModalVwapPanel').style.display=isHist?'none':'block';
@@ -3685,6 +3698,10 @@ function openVpSettingsModal(target){
    if($('vpBgEnabled'))$('vpBgEnabled').checked=!!target.bgEnabled;
    if($('vpBgColor'))$('vpBgColor').value=target.bgColor||'#ffffff';
    if($('vpBgOpacity'))$('vpBgOpacity').value=target.bgOpacity!=null?target.bgOpacity:5;
+   if($('vpLvnEnabled'))$('vpLvnEnabled').checked=!!target.lvnEnabled;
+   if($('vpLvnColor'))$('vpLvnColor').value=target.lvnColor||'#00e676';
+   if($('vpLvnOpacity'))$('vpLvnOpacity').value=target.lvnOpacity!=null?target.lvnOpacity:25;
+   if($('vpLvnThreshold'))$('vpLvnThreshold').value=target.lvnThresholdPct!=null?target.lvnThresholdPct:15;
    if($('vpPocEnabled'))$('vpPocEnabled').checked=!!target.pocEnabled;
    if($('vpPocColor'))$('vpPocColor').value=target.pocColor||'#ff9800';
    if($('vpPocWidth'))$('vpPocWidth').value=target.pocWidth||1;
@@ -3719,9 +3736,23 @@ function openVpSettingsModal(target){
  if($('vpModalOverlay'))$('vpModalOverlay').style.display='flex';
  $('status').textContent='Modifica le impostazioni di questo profilo volumetrico.';
 }
-function closeVpSettingsModal(){
+function closeVpSettingsModal(revert){
+ // revert!==false copre sia le chiusure "vere" (Annulla, ✕, click fuori dal modale, Esc — tutte
+ // chiamano questa funzione senza argomenti) sia il caso in cui il gestore di un click passa
+ // l'oggetto evento come primo argomento (sempre "diverso da false", quindi si ripristina
+ // comunque): solo applyVpSettingsFromModal chiama esplicitamente closeVpSettingsModal(false)
+ // dopo aver già salvato le nuove impostazioni, per NON annullare quello che ha appena applicato.
+ if(revert!==false&&vpModalTarget&&vpModalSnapshot){
+   const d=vpModalTarget;
+   d.lvnEnabled=vpModalSnapshot.lvnEnabled;
+   d.lvnColor=vpModalSnapshot.lvnColor;
+   d.lvnOpacity=vpModalSnapshot.lvnOpacity;
+   d.lvnThresholdPct=vpModalSnapshot.lvnThresholdPct;
+   draw();
+ }
  if($('vpModalOverlay'))$('vpModalOverlay').style.display='none';
  vpModalTarget=null;
+ vpModalSnapshot=null;
 }
 function applyVpSettingsFromModal(){
  if(!vpModalTarget){ closeVpSettingsModal(); return; }
@@ -3742,6 +3773,12 @@ function applyVpSettingsFromModal(){
    d.bgColor=$('vpBgColor')?.value||d.bgColor;
    const bgOpVal=Math.round(Number($('vpBgOpacity')?.value));
    d.bgOpacity=Number.isFinite(bgOpVal)?Math.max(0,Math.min(100,bgOpVal)):d.bgOpacity;
+   d.lvnEnabled=!!$('vpLvnEnabled')?.checked;
+   d.lvnColor=$('vpLvnColor')?.value||d.lvnColor;
+   const lvnOpVal=Math.round(Number($('vpLvnOpacity')?.value));
+   d.lvnOpacity=Number.isFinite(lvnOpVal)?Math.max(0,Math.min(100,lvnOpVal)):d.lvnOpacity;
+   const lvnThrVal=Math.round(Number($('vpLvnThreshold')?.value));
+   d.lvnThresholdPct=Number.isFinite(lvnThrVal)?Math.max(1,Math.min(100,lvnThrVal)):d.lvnThresholdPct;
    d.pocEnabled=!!$('vpPocEnabled')?.checked;
    d.pocColor=$('vpPocColor')?.value||d.pocColor;
    const pocW=Math.round(Number($('vpPocWidth')?.value));
@@ -3784,7 +3821,7 @@ function applyVpSettingsFromModal(){
  }
  draw(); scheduleSave();
  $('status').textContent='Impostazioni del profilo volumetrico applicate.';
- closeVpSettingsModal();
+ closeVpSettingsModal(false);
 }
 // (il collegamento dei pulsanti #vpModal*/tasto Esc a queste funzioni è più sotto, insieme a
 // quello del modale Fibonacci — $ non è ancora definito qui in cima al file)
@@ -4890,6 +4927,30 @@ function computeValueArea(profile,vaPct){
    vahPrice:profile.priceLo+(hi+1)*profile.bucketSize,
    valPrice:profile.priceLo+lo*profile.bucketSize,
    pocIdx,loIdx:lo,hiIdx:hi
+ };
+}
+// Zona a "basso volume" (Low Volume Zone / "not volume"): trova, dentro un profilo già calcolato
+// (uscito da computeVolumeProfile), la fascia di prezzo dove il volume scambiato è più scarso —
+// l'opposto del POC. Parte dal bucket con volume assoluto minimo (il "buco" più profondo
+// nell'istogramma) e lo allarga verso i bucket adiacenti finché anche loro restano sotto una
+// soglia (thresholdPct% del volume massimo del profilo), così la zona evidenziata copre l'intera
+// "valle" a bassa attività invece di un'unica barra sottile — esattamente come nell'esempio
+// fornito dall'utente, dove il rettangolo copre più righe consecutive dell'istogramma.
+function computeLowVolumeZone(profile,thresholdPct){
+ if(!profile||!profile.buckets||profile.maxTotal<=0)return null;
+ const nb=profile.buckets;
+ const totals=new Array(nb);
+ for(let b=0;b<nb;b++)totals[b]=profile.upVol[b]+profile.downVol[b];
+ const thr=profile.maxTotal*Math.max(1,Math.min(100,thresholdPct!=null?thresholdPct:15))/100;
+ let minIdx=0,minVal=Infinity;
+ for(let b=0;b<nb;b++){ if(totals[b]<minVal){minVal=totals[b];minIdx=b;} }
+ let lo=minIdx,hi=minIdx;
+ while(lo>0&&totals[lo-1]<=thr)lo--;
+ while(hi<nb-1&&totals[hi+1]<=thr)hi++;
+ return{
+   loPrice:profile.priceLo+lo*profile.bucketSize,
+   hiPrice:profile.priceLo+(hi+1)*profile.bucketSize,
+   loIdx:lo,hiIdx:hi,minVol:minVal
  };
 }
 // "Sviluppo" (POC/VA in sviluppo, come su TradingView): NON estende più la riga piatta oltre il
@@ -8023,6 +8084,21 @@ function draw(){
          ctx.fillStyle=d.bgColor||'#ffffff';
          ctx.fillRect(leftX,bgTopY,Math.max(1,rightBoundX-leftX),Math.max(1,bgBotY-bgTopY));
          ctx.restore();
+       }
+       // Zona a basso volume ("not volume"): rettangolo orizzontale disegnato sulla fascia di
+       // prezzo con meno volume dell'istogramma, esteso da dove inizia il profilo fino allo
+       // stesso bordo destro usato dall'istogramma/dalle righe POC-VAH-VAL (ultima candela, o
+       // bordo del grafico se "estendi a destra"/ancorato) — vedi computeLowVolumeZone() sopra.
+       if(d.lvnEnabled&&profile&&profile.maxTotal>0){
+         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15);
+         if(lvz){
+           const lvTopY=shapesGeo.y(lvz.hiPrice), lvBotY=shapesGeo.y(lvz.loPrice);
+           ctx.save();
+           ctx.globalAlpha=Math.min(1,strokeAlpha)*Math.max(0,Math.min(100,d.lvnOpacity!=null?d.lvnOpacity:25))/100;
+           ctx.fillStyle=d.lvnColor||'#00e676';
+           ctx.fillRect(leftX,lvTopY,Math.max(1,rightBoundX-leftX),Math.max(1,lvBotY-lvTopY));
+           ctx.restore();
+         }
        }
        if(profile&&profile.maxTotal>0){
          ctx.save();
@@ -12451,7 +12527,7 @@ chartEl.addEventListener('pointerdown',e=>{
      // esplicito qui, altrimenti un click con lo strumento Linea Alarm attivo creerebbe per
      // sbaglio un RETTANGOLO (il fallback finale qui sotto) invece di una linea Alarm.
      const type=(LINE_TYPES.includes(drawTool)||drawTool==='alarmline')?drawTool:drawTool==='fib'?'fib':drawTool==='vwap'?'vwap':drawTool==='vpfixed'?'vpfixed':drawTool==='vpanchor'?'vpanchor':'rectangle';
-     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null}:{})};
+     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null}:{})};
      if(type==='vwap'||type==='vpanchor'||type==='horizontal'||type==='horizontalray'||type==='vertical'||type==='crossline'||type==='alarmline'){
        // VWAP ancorato e Profilo volume ancorato hanno una sola "ancora" (un solo polo, come
        // nella loro icona): niente secondo punto da fissare, un solo clic basta e il
@@ -13870,6 +13946,14 @@ $('vpModalCloseBtn')?.addEventListener('click',closeVpSettingsModal);
 $('vpModalCancelBtn')?.addEventListener('click',closeVpSettingsModal);
 $('vpModalOkBtn')?.addEventListener('click',applyVpSettingsFromModal);
 $('vpModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('vpModalOverlay'))closeVpSettingsModal(); });
+// Anteprima dal vivo della zona a basso volume: mentre il modale impostazioni è aperto, cambiare
+// colore/opacità/sensibilità/spunta aggiorna SUBITO il rettangolo sul grafico (senza aspettare
+// "OK") così l'utente vede il risultato mentre sceglie — se poi chiude/annulla senza premere OK,
+// closeVpSettingsModal() sopra ripristina i valori originali dallo snapshot.
+$('vpLvnEnabled')?.addEventListener('change',()=>{ if(!vpModalTarget)return; vpModalTarget.lvnEnabled=!!$('vpLvnEnabled').checked; draw(); });
+$('vpLvnColor')?.addEventListener('input',()=>{ if(!vpModalTarget)return; vpModalTarget.lvnColor=$('vpLvnColor').value; draw(); });
+$('vpLvnOpacity')?.addEventListener('input',()=>{ if(!vpModalTarget)return; const v=Number($('vpLvnOpacity').value); if(Number.isFinite(v))vpModalTarget.lvnOpacity=Math.max(0,Math.min(100,v)); draw(); });
+$('vpLvnThreshold')?.addEventListener('input',()=>{ if(!vpModalTarget)return; const v=Number($('vpLvnThreshold').value); if(Number.isFinite(v))vpModalTarget.lvnThresholdPct=Math.max(1,Math.min(100,v)); draw(); });
 document.addEventListener('keydown',e=>{
  if(e.key==='Escape' && $('vpModalOverlay') && $('vpModalOverlay').style.display!=='none'){
    e.preventDefault();
