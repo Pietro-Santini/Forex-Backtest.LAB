@@ -1297,7 +1297,27 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
               ===================== -->
          <div data-settings-panel="alarm" style="display:none">
            <p class="hint" style="margin:0 0 12px">Disegna una linea <b>Alarm</b> sul grafico (menu <b>🔔 Linee</b> nella barra strumenti disegno): quando il prezzo la attraversa parte il suono scelto qui sotto. Doppio click su una linea Alarm già disegnata per disattivarla/riattivarla senza cancellarla.</p>
-           <div class="fbSettingsSectionTitle" style="margin-top:0;padding-top:0;border-top:none">🔊 Suono di notifica</div>
+           <div class="fbSettingsSectionTitle" style="margin-top:0;padding-top:0;border-top:none">⏱️ Quando suona</div>
+           <!-- RICHIESTO ESPLICITAMENTE: tre modalità per decidere QUANDO un nuovo allarme deve
+                suonare, più cosa succede DOPO che ha suonato — valgono come valore predefinito
+                per ogni NUOVA linea Alarm disegnata da qui in poi (ogni allarme già esistente
+                mantiene la propria, modificabile riga per riga dalla lista 🔔 Allarmi). -->
+           <div class="fbOptRow">
+             <label style="flex:none;min-width:110px">Modalità</label>
+             <select id="alarmTriggerModeSelect" class="toolSelect" title="Al solo passaggio: suona una volta sola. All'incrocio della linea: suona ogni volta che il prezzo attraversa la linea da un lato all'altro. Ogni volta che passa: suona ogni volta che il prezzo tocca quel livello.">
+               <option value="once">Al solo passaggio</option>
+               <option value="cross">All'incrocio della linea</option>
+               <option value="repeat" selected>Ogni volta che passa per quel punto</option>
+             </select>
+           </div>
+           <div class="fbOptRow">
+             <label style="flex:none;min-width:110px">Dopo lo squillo</label>
+             <select id="alarmAfterActionSelect" class="toolSelect" title="Disattiva: la linea resta sul grafico spenta, riattivabile dalla lista 🔔 Allarmi (o al passaggio del prezzo). Elimina: la linea viene rimossa definitivamente dal grafico.">
+               <option value="deactivate" selected>Si disattiva (riattivabile)</option>
+               <option value="delete">Viene eliminato definitivamente</option>
+             </select>
+           </div>
+           <div class="fbSettingsSectionTitle">🔊 Suono di notifica</div>
            <div class="fbOptRow">
              <label style="flex:none;min-width:110px">Suono</label>
              <select id="alarmSoundSelect" class="toolSelect" title="Suono riprodotto quando il prezzo attraversa una linea Alarm"></select>
@@ -1343,6 +1363,23 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="chartLayersModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
+   </div>
+ </div>
+</div>
+<!-- ===================== MODALE "ALLARMI" (elenco delle linee Alarm dell'asset a grafico, con
+     prezzo impostato/prezzo attuale affiancati) — vedi renderAlarmsList() più sotto. ========= -->
+<div id="alarmsListModalOverlay" class="fbModalOverlay" style="display:none">
+ <div class="fbModalBox">
+   <div class="fbModalHeader">
+     <h3>🔔 Allarmi</h3>
+     <button id="alarmsListModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
+   </div>
+   <div class="fbModalBody">
+     <p class="hint" style="margin:0 0 12px">Ogni linea Alarm dell'asset a grafico è elencata qui, col prezzo impostato e quello attuale. Un allarme disattivato (dopo aver suonato) mostra "🔄 Riattiva" quando il prezzo attuale torna vicino al suo livello.</p>
+     <div id="alarmsListBody"></div>
+   </div>
+   <div class="fbModalFooter" style="justify-content:flex-end">
+     <button id="alarmsListModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
    </div>
  </div>
 </div>
@@ -1710,6 +1747,29 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    <button id="duplicateDrawingBtn" class="toolBtn" title="Duplica il disegno selezionato, spostandolo leggermente per non sovrapporlo all'originale (scorciatoie: Ctrl+C per copiare, Ctrl+V per incollare)">📋 Duplica selezionato</button>
    <button id="deleteSelectedDrawing" class="toolBtn" title="Elimina il disegno selezionato">🗑 Elimina selezionato</button>
    <button id="deleteAllDrawings" class="toolBtn danger" title="Elimina tutti i disegni">🗑 Rimuovi tutti</button>
+   <!-- RICHIESTO ESPLICITAMENTE: sezione con le frecce di navigazione storico + "torna
+        all'ultima candela", subito sotto "🗑 Rimuovi tutti" — essendo dentro #mainDrawToolbar
+        segue automaticamente il toolbar disegni ovunque venga spostato (schermo intero E
+        finestra separata/PIP, vedi moveDrawToolbarIntoSidebar più sotto nello script), quindi
+        resta visibile in TUTTE le sezioni come richiesto, pagina principale compresa. Il
+        pulsante "🎯 TORNA ALL'ULTIMA CANDELA" qui sotto è l'unica istanza (trasportato qui dalla
+        vecchia posizione sotto al grafico, non duplicato): stesso id "resetView" di sempre,
+        stesso listener già registrato più sotto nello script. Stesso discorso per "▶ PLAY" e il
+        moltiplicatore di velocità: spostati qui, affianco alle frecce, stessi identici id
+        "play"/"speed" di sempre (nessun secondo pulsante da tenere sincronizzato con lo stato
+        del replay: è letteralmente lo stesso elemento, solo spostato di posizione). Frecce,
+        PLAY e moltiplicatore stanno tutti e tre nella STESSA riga: nascondendo quella riga in
+        Live (vedi updateLiveModeUI) spariscono insieme, come richiesto ("visualizzabili solo in
+        modalità storico") — "🎯 Torna all'ultima candela" invece resta sempre visibile. -->
+   <div id="pipHistNavSection" class="drawToolbar" style="flex-direction:column;align-items:stretch;gap:6px;width:auto">
+     <div style="display:flex;gap:6px;flex-wrap:wrap">
+       <button id="pipHistBackBtn" type="button" class="toolBtn" style="flex:1;min-width:36px" title="Candela precedente (stesso comando di ◀ INDIETRO)">◀</button>
+       <button id="pipHistNextBtn" type="button" class="toolBtn" style="flex:1;min-width:36px" title="Candela successiva (stesso comando di AVANTI ▶)">▶</button>
+       <button id="play" class="primary" style="flex:2;min-width:90px">▶ PLAY</button>
+       <select id="speed" title="Velocità Play" style="width:64px;flex:none"><option value="2000">0,5x</option><option value="1000" selected>1x</option><option value="500">2x</option><option value="250">4x</option><option value="100">10x</option></select>
+     </div>
+     <button id="resetView" class="primary">🎯 TORNA ALL'ULTIMA CANDELA (scala auto)</button>
+   </div>
  </div>
  <div class="drawToolbar" id="indicatorsToolbar" style="margin-top:8px">
    <span id="indicatorSelectWrap" style="position:relative;display:inline-flex;align-items:center">
@@ -1897,15 +1957,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    <div id="activeIndicators" class="inChartIndLegend"></div>
    </div>
  </div>
- <div id="replayControlsRow" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
+ <div id="replayControlsRow" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
    <button id="back">◀ INDIETRO</button><button id="next">AVANTI ▶</button>
-   <div style="display:flex;gap:6px">
-     <button id="play" class="primary" style="flex:1;min-width:0">▶ PLAY</button>
-     <select id="speed" title="Velocità Play" style="width:64px;flex:none"><option value="2000">0,5x</option><option value="1000" selected>1x</option><option value="500">2x</option><option value="250">4x</option><option value="100">10x</option></select>
-   </div>
- </div>
- <div style="margin-top:10px">
-   <button id="resetView" class="primary">🎯 TORNA ALL'ULTIMA CANDELA (scala auto)</button>
  </div>
  <div class="hintRow"><span class="qtip">?<span class="qtipBubble">Puoi trascinare direttamente il grafico con mouse o dito sia in orizzontale (avanti/indietro nel tempo, anche oltre l'ultima candela) sia in verticale (per spostare la vista sui prezzi), senza limiti. Trascina invece sulla scala prezzi (a destra) per restringere/allargare la vista verticale, come su TradingView. Da tastiera: CTRL + rotellina sul grafico zooma orizzontalmente (candele visibili), SHIFT + rotellina zooma verticalmente (scala prezzi) — entrambi illimitati. Muovi il mouse o la penna sul grafico per vedere il mirino con il prezzo puntato.</span></span> Come navigare il grafico</div>
 </div>
@@ -11989,6 +12042,13 @@ $('back').onclick=()=>{
  $('status').textContent=`Tornato alla candela ${idx+1}.`;
 };
 $('resetView').addEventListener('click',resetToLatestCandle);
+// Frecce storico duplicate nella sezione sotto "🗑 Rimuovi tutti" (vedi #pipHistNavSection nel
+// markup): riusano ESATTAMENTE lo stesso comando di ◀ INDIETRO / AVANTI ▶ simulando il click
+// sui pulsanti originali, invece di ripetere la logica — così restano sempre allineate a
+// qualunque cambiamento futuro di #back/#next, e funzionano identiche anche nella finestra
+// separata/PIP (dove #pipHistNavSection segue il toolbar disegni nella sidebar).
+$('pipHistBackBtn')?.addEventListener('click',()=>$('back').click());
+$('pipHistNextBtn')?.addEventListener('click',()=>$('next').click());
 $('reset').onclick=reset;
 $('play').addEventListener('click',()=>{
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
@@ -12024,6 +12084,7 @@ if($('toggleChartExtrasBtn')&&$('chartSettingsBtn')){
    $('chartSettingsBtn').style.display=open?'inline-flex':'none';
    if($('indicatorsLegendToggleBtn'))$('indicatorsLegendToggleBtn').style.display=open?'inline-flex':'none';
    if($('chartLayersBtn'))$('chartLayersBtn').style.display=open?'inline-flex':'none';
+   if($('alarmsListBtn'))$('alarmsListBtn').style.display=open?'inline-flex':'none';
    $('toggleChartExtrasBtn').textContent=open?'‹':'›';
    $('toggleChartExtrasBtn').title=open?'Nascondi Indicatori, Livelli e il pulsante Impostazioni':'Mostra Indicatori, Livelli e il pulsante Impostazioni (Style, Griglia, Notizie)';
  };
@@ -12067,7 +12128,7 @@ $('tf').addEventListener('change',()=>{
    // bucket e i tick nuovi aggiunti dallo streaming a un'altra, mischiate insieme.
    const asset=$('market')?.value;
    if(asset && asset!=='custom'){
-     withLoadingOverlay('Cambio timeframe Live…', ()=>loadLiveHistoryFromCapital(asset,{tfChangeSpanMinutes:visibleRealMinutes}));
+     withLoadingOverlay('Cambio timeframe Live…', ()=>loadLiveHistoryFromCapital(asset,{tfChangeSpanMinutes:visibleRealMinutes,tfChangeOldTF:oldTF}));
    }
    $('tf').blur();
    return;
@@ -12699,7 +12760,7 @@ chartEl.addEventListener('pointerdown',e=>{
      // esplicito qui, altrimenti un click con lo strumento Linea Alarm attivo creerebbe per
      // sbaglio un RETTANGOLO (il fallback finale qui sotto) invece di una linea Alarm.
      const type=(LINE_TYPES.includes(drawTool)||drawTool==='alarmline')?drawTool:drawTool==='fib'?'fib':drawTool==='vwap'?'vwap':drawTool==='vpfixed'?'vpfixed':drawTool==='vpanchor'?'vpanchor':'rectangle';
-     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null}:{})};
+     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null,triggerMode:alarmSelectedTriggerMode,afterAction:alarmSelectedAfterAction,triggered:false,lastSide:null}:{})};
      if(type==='vwap'||type==='vpanchor'||type==='horizontal'||type==='horizontalray'||type==='vertical'||type==='crossline'||type==='alarmline'){
        // VWAP ancorato e Profilo volume ancorato hanno una sola "ancora" (un solo polo, come
        // nella loro icona): niente secondo punto da fissare, un solo clic basta e il
@@ -13700,6 +13761,14 @@ $('alarmSoundSelect')?.addEventListener('change',()=>{
  alarmSelectedSoundId=$('alarmSoundSelect').value;
  saveAlarmPrefs();
 });
+$('alarmTriggerModeSelect')?.addEventListener('change',()=>{
+ alarmSelectedTriggerMode=$('alarmTriggerModeSelect').value;
+ saveAlarmPrefs();
+});
+$('alarmAfterActionSelect')?.addEventListener('change',()=>{
+ alarmSelectedAfterAction=$('alarmAfterActionSelect').value;
+ saveAlarmPrefs();
+});
 $('alarmSoundPreviewBtn')?.addEventListener('click',()=>{
  playAlarmSound($('alarmSoundSelect')?.value||alarmSelectedSoundId);
 });
@@ -13814,14 +13883,22 @@ function renderChartLayersList(){
    body.appendChild(p);
    return;
  }
- rows2.forEach(d=>{
+ rows2.forEach((d,i)=>{
    counters[d.type]=(counters[d.type]||0)+1;
    const n=counters[d.type];
    const row=document.createElement('div');
    row.className='fbOptRow';
    row.style.justifyContent='space-between';
    const label=document.createElement('span');
-   label.textContent=chartLayerRowLabel(d.type)+' #'+n;
+   // RICHIESTO ESPLICITAMENTE: numero d'ordine globale (vecchio→nuovo, #1 = il disegno più
+   // vecchio su questo asset, in cima all'array `drawings`) oltre al contatore per tipo già
+   // presente — così si vede subito quale disegno è stato aggiunto prima/dopo gli altri, anche
+   // di tipo diverso, e l'ordine resta quello salvato per asset (assetDrawings[mode][asset]).
+   const orderBadge=document.createElement('span');
+   orderBadge.textContent='#'+(i+1); orderBadge.title='Ordine di creazione su questo asset (1 = il più vecchio)';
+   orderBadge.style.cssText='display:inline-block;min-width:22px;text-align:center;margin-right:6px;padding:0 4px;border-radius:4px;background:rgba(255,255,255,.08);font-size:11px;opacity:.75;';
+   label.appendChild(orderBadge);
+   label.appendChild(document.createTextNode(chartLayerRowLabel(d.type)+' #'+n));
    label.title=Number.isFinite(d.p1&&d.p1.time)?('Ancorato al '+new Date(d.p1.time).toLocaleString()):'';
    const btns=document.createElement('span');
    btns.style.display='inline-flex'; btns.style.gap='6px';
@@ -13864,6 +13941,85 @@ function renderChartLayersList(){
    body.appendChild(row);
  });
 }
+// ===================== SEZIONE DEDICATA "🔔 Allarmi" (elenco delle linee Alarm, con prezzo
+// impostato/attuale affiancati) — stesso schema a modale di 🗂️ Livelli qui sopra. =====================
+const ALARM_REACTIVATE_TOLERANCE_PIPS=5; // entro quanti "pip" dal livello mostrare "🔄 Riattiva"
+function alarmModeLabel(mode){
+ return {once:'Al solo passaggio',cross:"All'incrocio",repeat:'Ogni volta'}[mode]||'Ogni volta';
+}
+function renderAlarmsList(){
+ const body=$('alarmsListBody'); if(!body)return;
+ if($('alarmsListModalOverlay')&&$('alarmsListModalOverlay').style.display==='none')return; // niente da ridisegnare a modale chiuso
+ body.innerHTML='';
+ const lines=(drawings||[]).filter(d=>d&&d.type==='alarmline');
+ if(!lines.length){
+   const p=document.createElement('p');
+   p.className='hint'; p.style.margin='4px 0';
+   p.textContent='Nessuna linea Alarm presente sul grafico di questo asset.';
+   body.appendChild(p);
+   return;
+ }
+ const cp=currentPrice();
+ const pip=pipSizeForAsset?.(currentAssetKey)||0.0001;
+ lines.forEach((d,i)=>{
+   const price=d.p1&&d.p1.price;
+   const row=document.createElement('div');
+   row.className='fbOptRow'; row.style.justifyContent='space-between'; row.style.flexWrap='wrap'; row.style.rowGap='6px';
+   const info=document.createElement('span');
+   info.style.display='flex'; info.style.flexDirection='column'; info.style.gap='2px';
+   const title=document.createElement('span');
+   title.textContent=`🔔 Allarme #${i+1} — ${alarmModeLabel(d.triggerMode)}`;
+   title.style.fontWeight='600';
+   const sub=document.createElement('span');
+   sub.className='hint';
+   sub.textContent=`Target ${Number.isFinite(price)?fmtPrice(price):'—'}   •   Attuale ${Number.isFinite(cp)?fmtPrice(cp):'—'}   •   ${d.enabled===false?'🔕 Disattivato':'🔔 Attivo'}`;
+   info.appendChild(title); info.appendChild(sub);
+   const btns=document.createElement('span');
+   btns.style.display='inline-flex'; btns.style.gap='6px';
+   const nearLevel=Number.isFinite(cp)&&Number.isFinite(price)&&Math.abs(cp-price)<=pip*ALARM_REACTIVATE_TOLERANCE_PIPS;
+   if(d.enabled===false&&nearLevel){
+     // RICHIESTO ESPLICITAMENTE: un allarme disattivato mostra "🔄 Riattiva" quando il prezzo
+     // torna a passare vicino al suo livello, invece di doverlo ridisegnare da capo.
+     const reactivateBtn=document.createElement('button');
+     reactivateBtn.type='button'; reactivateBtn.className='indChipBtn'; reactivateBtn.title='Riattiva questo allarme'; reactivateBtn.textContent='🔄 Riattiva';
+     reactivateBtn.addEventListener('click',()=>{
+       d.enabled=true; d.armed=true; d.triggered=false;
+       renderAlarmsList(); draw(); scheduleSave();
+     });
+     btns.appendChild(reactivateBtn);
+   }else{
+     const toggleBtn=document.createElement('button');
+     toggleBtn.type='button'; toggleBtn.className='indChipBtn'; toggleBtn.title=d.enabled===false?'Riattiva':'Disattiva';
+     toggleBtn.textContent=d.enabled===false?'🔔':'🔕';
+     toggleBtn.addEventListener('click',()=>{
+       d.enabled=(d.enabled===false); d.armed=true;
+       renderAlarmsList(); draw(); scheduleSave();
+     });
+     btns.appendChild(toggleBtn);
+   }
+   const delBtn=document.createElement('button');
+   delBtn.type='button'; delBtn.className='indChipBtn'; delBtn.title='Elimina questo allarme'; delBtn.textContent='🗑️';
+   delBtn.addEventListener('click',()=>{ removeDrawingInstance(d); renderAlarmsList(); });
+   btns.appendChild(delBtn);
+   row.appendChild(info); row.appendChild(btns);
+   body.appendChild(row);
+ });
+}
+$('alarmsListBtn')?.addEventListener('click',()=>{ const ov=$('alarmsListModalOverlay'); moveModalToFloatingIfActive(ov); renderAlarmsList(); if(ov)ov.style.display='flex'; });
+function closeAlarmsListModal(){ if($('alarmsListModalOverlay'))$('alarmsListModalOverlay').style.display='none'; }
+$('alarmsListModalCloseBtn')?.addEventListener('click',closeAlarmsListModal);
+$('alarmsListModalDoneBtn')?.addEventListener('click',closeAlarmsListModal);
+$('alarmsListModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('alarmsListModalOverlay'))closeAlarmsListModal(); });
+document.addEventListener('keydown',e=>{
+ if(e.key==='Escape' && $('alarmsListModalOverlay') && $('alarmsListModalOverlay').style.display!=='none'){
+   e.preventDefault();
+   closeAlarmsListModal();
+ }
+});
+// Il prezzo attuale nella lista deve seguire il mercato mentre il modale resta aperto (Live o
+// Storico in play): un refresh leggero ogni secondo, senza dipendere da ogni singolo draw().
+setInterval(renderAlarmsList,1000);
+
 $('chartLayersBtn')?.addEventListener('click',()=>{ const ov=$('chartLayersModalOverlay'); moveModalToFloatingIfActive(ov); renderChartLayersList(); if(ov)ov.style.display='flex'; });
 function closeChartLayersModal(){ if($('chartLayersModalOverlay'))$('chartLayersModalOverlay').style.display='none'; }
 $('chartLayersModalCloseBtn')?.addEventListener('click',closeChartLayersModal);
@@ -14107,6 +14263,7 @@ chartEl.addEventListener('dblclick',e=>{
    hit.drawing.armed=true;
    $('status').textContent=hit.drawing.enabled?'🔔 Allarme riattivato.':'🔕 Allarme disattivato (la linea resta sul grafico, ma non suona più finché non la riattivi).';
    scheduleSave();
+   renderAlarmsList();
    draw();
  }
 });
@@ -14605,6 +14762,12 @@ const ALARM_DEFAULT_SOUNDS=[
 ];
 let alarmSelectedSoundId='bell';
 let alarmWebNotifEnabled=false;
+// RICHIESTO ESPLICITAMENTE: modalità di suono predefinita ('once'=al solo passaggio,
+// 'cross'=all'incrocio della linea, 'repeat'=ogni volta che passa) e cosa succede dopo lo
+// squillo ('deactivate'=si disattiva restando a grafico e riattivabile, 'delete'=eliminato
+// definitivamente) per ogni NUOVA linea Alarm — persistite come le altre impostazioni Alarm.
+let alarmSelectedTriggerMode='repeat';
+let alarmSelectedAfterAction='deactivate';
 // Suoni personalizzati caricati dall'utente: {id, name, dataUrl}. Salvati in localStorage come
 // data URL base64 — per questo il file caricato è limitato (vedi ALARM_CUSTOM_SOUND_MAX_BYTES)
 // a un peso ragionevole, per non rischiare di saturare la quota di localStorage.
@@ -14616,6 +14779,12 @@ try{
  if(savedSound)alarmSelectedSoundId=savedSound;
  const savedNotif=localStorage.getItem('fxbt_alarmWebNotifEnabled');
  if(savedNotif!=null)alarmWebNotifEnabled=savedNotif==='1';
+ const savedMode=localStorage.getItem('fxbt_alarmTriggerMode');
+ if(savedMode==='once'||savedMode==='cross'||savedMode==='repeat')alarmSelectedTriggerMode=savedMode;
+ const savedAfter=localStorage.getItem('fxbt_alarmAfterAction');
+ if(savedAfter==='deactivate'||savedAfter==='delete')alarmSelectedAfterAction=savedAfter;
+ if($('alarmTriggerModeSelect'))$('alarmTriggerModeSelect').value=alarmSelectedTriggerMode;
+ if($('alarmAfterActionSelect'))$('alarmAfterActionSelect').value=alarmSelectedAfterAction;
  const savedCustom=JSON.parse(localStorage.getItem('fxbt_customAlarmSounds')||'null');
  if(Array.isArray(savedCustom))customAlarmSounds=savedCustom;
 }catch(e){}
@@ -14623,6 +14792,8 @@ function saveAlarmPrefs(){
  try{
    localStorage.setItem('fxbt_alarmSoundId',alarmSelectedSoundId);
    localStorage.setItem('fxbt_alarmWebNotifEnabled',alarmWebNotifEnabled?'1':'0');
+   localStorage.setItem('fxbt_alarmTriggerMode',alarmSelectedTriggerMode);
+   localStorage.setItem('fxbt_alarmAfterAction',alarmSelectedAfterAction);
    localStorage.setItem('fxbt_customAlarmSounds',JSON.stringify(customAlarmSounds));
    return true;
  }catch(e){
@@ -14662,20 +14833,42 @@ function playAlarmSound(soundId){
 // browser. Non scatta di nuovo finché il prezzo non si allontana e rientra (evita un suono
 // ripetuto candela dopo candela mentre il prezzo resta fermo lì) — tracciato con `d.armed`
 // (torna true quando il prezzo esce dal range della linea, "riarmando" l'allarme).
+// RICHIESTO ESPLICITAMENTE: tre modalità distinte di rilevamento (vedi d.triggerMode, scelto
+// nelle impostazioni al momento della creazione, modificabile in seguito dalla lista 🔔 Allarmi):
+//  - 'once'/'repeat' (al solo passaggio / ogni volta che passa): stessa logica di sempre, il
+//    prezzo entra nel range della candela (r.low..r.high) — 'once' e 'repeat' si comportano allo
+//    stesso modo QUI, la differenza è nell'azione dopo lo squillo (vedi triggerAlarmLine).
+//  - 'cross' (all'incrocio della linea): serve un vero CAMBIO DI LATO (il prezzo era sopra la
+//    linea e ora è sotto, o viceversa), non basta restare fermi dentro la stessa candela che la
+//    attraversa — tracciato con d.lastSide ('above'/'below'), aggiornato ad ogni candela.
 function checkAlarmLines(){
  if(!rows||!rows.length||idx==null||idx<0||idx>=rows.length)return;
  const r=rows[idx];
  if(!r||!Number.isFinite(r.low)||!Number.isFinite(r.high))return;
- const lines=(drawings||[]).filter(d=>d&&d.type==='alarmline'&&d.enabled!==false);
+ const lines=(drawings||[]).filter(d=>d&&d.type==='alarmline');
  if(!lines.length)return;
  lines.forEach(d=>{
    const price=d.p1&&d.p1.price;
    if(!Number.isFinite(price))return;
    const inRange=r.low<=price&&price<=r.high;
-   if(inRange){
-     if(d.armed!==false){ triggerAlarmLine(d,price); d.armed=false; }
+   const mode=d.triggerMode||'repeat';
+   if(d.enabled===false){
+     // Disattivato dopo uno squillo precedente: resta muto finché non lo si riattiva (dalla
+     // lista 🔔 Allarmi o al passaggio del prezzo, vedi renderAlarmsList) — ma continuiamo ad
+     // aggiornare lastSide, altrimenti al riattivarsi 'cross' potrebbe scattare a vuoto.
+     d.lastSide=(r.close>=price)?'above':'below';
+     return;
+   }
+   if(mode==='cross'){
+     const side=(r.close>=price)?'above':'below';
+     if(d.lastSide&&d.lastSide!==side){ triggerAlarmLine(d,price); }
+     d.lastSide=side;
    }else{
-     d.armed=true;
+     if(inRange){
+       if(d.armed!==false){ triggerAlarmLine(d,price); d.armed=false; }
+     }else{
+       d.armed=true;
+     }
    }
  });
 }
@@ -14688,6 +14881,19 @@ function triggerAlarmLine(d,price){
      new Notification('🔔 Allarme prezzo — Forex Backtest LAB',{ body:`${assetLabel||'Asset'} ha raggiunto ${fmtPrice(price)}`, tag:'fxbt-alarm-'+d.id });
    }catch(e){}
  }
+ d.triggered=true;
+ // RICHIESTO ESPLICITAMENTE: dopo lo squillo, l'allarme si disattiva (resta a grafico, spento e
+ // riattivabile) oppure viene eliminato definitivamente — scelto per QUESTO allarme al momento
+ // della creazione (d.afterAction), non un'impostazione globale applicata a posteriori.
+ if(d.afterAction==='delete'){
+   removeDrawingInstance(d);
+ }else{
+   d.enabled=false;
+   if(selectedDrawing===d)selectedDrawing=null;
+   draw();
+ }
+ scheduleSave();
+ renderAlarmsList();
 }
 // Un paese/valuta è visibile finché non è stato ESPLICITAMENTE disattivato (vedi commento sopra
 // su newsCountryFilter) — normalizza anche eventuali country mancanti/vuoti nel feed su 'All'.
@@ -16268,6 +16474,17 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
    // allo stesso istante reale sotto sotto (la causa esatta segnalata). Nelle risincronizzazioni
    // "normali" (nessun cambio TF: rollover di candela, resync periodico...) opts.tfChangeSpanMinutes
    // è assente e il comportamento resta quello di sempre (visibleCount preservato invariato).
+   // BUG RISOLTO ESPLICITAMENTE ("a volte cambiando timeframe la vista finisce in un punto a
+   // caso del grafico"): offsetFromEnd sopra è una DISTANZA IN CANDELE dal bordo live, misurata
+   // nel VECCHIO timeframe (rows è ancora quello prima di rebuildRows() qui sotto). Applicarla
+   // così com'è al NUOVO array di rows (dopo rebuildRows, in un timeframe diverso) la trattava
+   // come se fosse comunque una distanza in candele del NUOVO timeframe: 50 candele di distanza
+   // in 1m (50 minuti) diventavano 50 candele di distanza anche in 15m (750 minuti) — la vista
+   // saltava altrove. Va convertita nella stessa identica distanza in TEMPO REALE, poi
+   // riespressa in candele del NUOVO timeframe.
+   if(opts&&Number.isFinite(opts.tfChangeSpanMinutes)&&Number.isFinite(opts.tfChangeOldTF)&&opts.tfChangeOldTF>0){
+     preserved.offsetFromEnd=Math.max(0,Math.round(preserved.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
+   }
    if(opts&&Number.isFinite(opts.tfChangeSpanMinutes)){
      preserved.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
    }
@@ -17043,6 +17260,17 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    // ancorato a un orario preciso "scivolava" visivamente cambiando timeframe): vedi il commento
    // gemello in __loadLiveHistoryFromCapitalImpl — stessa identica logica, duplicata qui perché
    // questo è il secondo, separato punto di risincronizzazione Live (percorso MT5 diretto).
+   // BUG RISOLTO ESPLICITAMENTE ("a volte cambiando timeframe la vista finisce in un punto a
+   // caso del grafico"): offsetFromEnd sopra è una DISTANZA IN CANDELE dal bordo live, misurata
+   // nel VECCHIO timeframe (rows è ancora quello prima di rebuildRows() qui sotto). Applicarla
+   // così com'è al NUOVO array di rows (dopo rebuildRows, in un timeframe diverso) la trattava
+   // come se fosse comunque una distanza in candele del NUOVO timeframe: 50 candele di distanza
+   // in 1m (50 minuti) diventavano 50 candele di distanza anche in 15m (750 minuti) — la vista
+   // saltava altrove. Va convertita nella stessa identica distanza in TEMPO REALE, poi
+   // riespressa in candele del NUOVO timeframe.
+   if(opts&&Number.isFinite(opts.tfChangeSpanMinutes)&&Number.isFinite(opts.tfChangeOldTF)&&opts.tfChangeOldTF>0){
+     preserved.offsetFromEnd=Math.max(0,Math.round(preserved.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
+   }
    if(opts&&Number.isFinite(opts.tfChangeSpanMinutes)){
      preserved.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
    }
@@ -17758,6 +17986,14 @@ function updateLiveModeUI(){
  if(randomBtn)randomBtn.style.display=liveModeActive?'none':'';
  const replayRow=$('replayControlsRow');
  if(replayRow)replayRow.style.display=liveModeActive?'none':'grid';
+ // Le due frecce ◀/▶ + "▶ PLAY"/moltiplicatore della sezione sotto "🗑 Rimuovi tutti" (vedi
+ // #pipHistNavSection, stessa riga per tutti e tre) sono nascoste in Live insieme, per lo
+ // stesso motivo di ◀ INDIETRO/AVANTI ▶/PLAY di #replayControlsRow (in Live non si "naviga nel
+ // tempo", vedi commento sopra): "visualizzabili solo in modalità storico" come richiesto. "🎯
+ // Torna all'ultima candela" invece resta SEMPRE visibile in quella sezione, Live compreso,
+ // come già accadeva prima nella sua vecchia posizione.
+ const pipHistArrows=$('pipHistBackBtn')?.parentElement;
+ if(pipHistArrows)pipHistArrows.style.display=liveModeActive?'none':'flex';
  if(liveModeActive && timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
  // Notizie Forex Factory: la scheda "📰 Notizie" dentro il popup Impostazioni ha senso SOLO in
  // Live (i pallini non compaiono mai in Storico/replay — vedi draw()). Se si esce da Live mentre
