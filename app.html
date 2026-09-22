@@ -6659,11 +6659,17 @@ const INDICATOR_DEFS={
  // grafico, appoggiata all'asse del tempo. Non è un pannello separato con una propria scala
  // sincronizzata (che richiederebbe di ridisegnare tutto il layout verticale del grafico): è un
  // overlay, come tutti gli altri indicatori di questa lista, disegnato in una fascia configurabile
- // in basso — stesso approccio già usato da moltissime piattaforme per il volume "semplice". Nessun
- // dato stimato: usa rows[i].volume così com'è (tick-count o volume reale, a seconda della fonte —
- // stessa colonna già usata altrove nell'app, es. filtro volumi di sr_breaks più sotto); se il
- // dataset non ha volume (colonna assente o tutta zero), semplicemente non disegna nulla anziché
- // inventare barre.
+ // in basso — stesso approccio già usato da moltissime piattaforme per il volume "semplice". Usa
+ // rows[i].volume così com'è (tick-count o volume reale, a seconda della fonte) quando c'è.
+ // FALLBACK ALLINEATO A PROPOSITO ("perché il Profilo Volumetrico funziona sempre e il Volume
+ // no?", chiesto esplicitamente): Profilo Volumetrico e VWAP (vedi computeVolumeProfile/
+ // computeAnchoredVWAP più sopra nel file) quando manca il volume reale ripiegano su un peso di 1
+ // "unità" per candela, così l'istogramma non resta mai vuoto — questo indicatore prima NON lo
+ // faceva (usciva in silenzio), creando un'incoerenza tra indicatori diversi sullo stesso identico
+ // problema. Scelta esplicita dell'utente: allinearsi allo stesso fallback già in uso altrove,
+ // invece di restare "onesto ma vuoto" mentre il resto dell'app non lo è. Onestà minima comunque
+ // preservata: quando il fallback è attivo, le barre restano ma un'etichetta piccola lo dichiara,
+ // così non si scambia mai per volume vero quello che in realtà è solo "una candela = un'unità".
  volume_default:{
    label:'Volume',
    defaultParams:()=>({upColor:'#55c28b',downColor:'#e05b64',heightPct:18,opacity:70}),
@@ -6681,22 +6687,11 @@ const INDICATOR_DEFS={
      const bandBottom=h-pad.b;
      let maxVol=0;
      for(let i=dataStart;i<=dataEnd;i++){ const v=rows[i]&&rows[i].volume; if(Number.isFinite(v)&&v>maxVol)maxVol=v; }
-     if(!(maxVol>0)){
-       // RICHIESTO ESPLICITAMENTE ("voglio il Volume anche in Storico"): prima qui si usciva del
-       // tutto in silenzio quando i dati non avevano volume (dataset senza quella colonna) — per
-       // chi guarda il grafico è indistinguibile da "l'indicatore è rotto/non funziona in
-       // Storico". Ora, invece di continuare a tacere, si scrive onestamente il motivo esatto
-       // sopra la fascia dove le barre dovrebbero stare: non è un bug dell'indicatore, è che il
-       // file caricato non porta nessun dato di volume/tick-volume leggibile.
-       ctx.save();
-       ctx.fillStyle='#8b96a5';
-       ctx.font='11px system-ui,sans-serif';
-       ctx.textAlign='left';
-       ctx.textBaseline='bottom';
-       ctx.fillText('Volume: nessun dato nel file caricato (colonna volume/tickvol assente o a zero)',pad.l+4,bandBottom-2);
-       ctx.restore();
-       return;
-     }
+     const hasRealVolume=maxVol>0;
+     // Fallback "1 unità per candela" (vedi commento sopra), stesso principio di
+     // computeVolumeProfile/computeAnchoredVWAP: attivo SOLO se davvero nessuna candela in vista
+     // ha un volume reale registrato.
+     const effMaxVol=hasRealVolume?maxVol:1;
      // Larghezza barra ricavata dalla spaziatura reale fra due candele consecutive (xAbs è
      // lineare in indice candela): stessa larghezza/proporzione delle candele, senza bisogno che
      // draw() passi anche `bw` qui dentro.
@@ -6706,14 +6701,28 @@ const INDICATOR_DEFS={
      ctx.globalAlpha=Math.min(1,Math.max(5,Number(p.opacity)||70)/100);
      for(let i=dataStart;i<=dataEnd;i++){
        const r=rows[i]; if(!r)continue;
-       const v=r.volume; if(!Number.isFinite(v)||v<=0)continue;
+       const vRaw=r.volume;
+       const v=hasRealVolume?(Number.isFinite(vRaw)&&vRaw>0?vRaw:0):1; // fallback: ogni candela pesa 1
+       if(!(v>0))continue;
        const up=r.close>=r.open;
        ctx.fillStyle=up?(p.upColor||'#55c28b'):(p.downColor||'#e05b64');
-       const barH=Math.max(1,bandH*(v/maxVol));
+       const barH=Math.max(1,bandH*(v/effMaxVol));
        const xx=xAbs(i);
        ctx.fillRect(xx-barW/2,bandBottom-barH,barW,barH);
      }
      ctx.restore();
+     if(!hasRealVolume){
+       // Onestà minima: le barre ora ci sono sempre (fallback), ma questa etichetta chiarisce che
+       // NON sono volume reale — solo "una candela = un'unità", esattamente come già capita in
+       // silenzio nel Profilo Volumetrico/VWAP quando manca il dato vero.
+       ctx.save();
+       ctx.fillStyle='#8b96a5';
+       ctx.font='10px system-ui,sans-serif';
+       ctx.textAlign='left';
+       ctx.textBaseline='bottom';
+       ctx.fillText('Volume: nessun dato reale nel file — barre = 1 candela/unità (come Profilo Volumetrico)',pad.l+4,bandBottom-bandH-4);
+       ctx.restore();
+     }
    }
  },
  sr_breaks:{
@@ -7815,6 +7824,21 @@ function addIndicator(key){
  renderActiveIndicatorsUI();
  draw();
  scheduleSave();
+ // RICHIESTO ESPLICITAMENTE ("un'avvertenza quando si inserisce... i volumi... che in Storico
+ // non è il vero volume reale. Il volume reale lo abbiamo collegato solo con MT5 e Capital.com"):
+ // avviso mostrato SEMPRE in Storico quando si aggiunge l'indicatore Volume, indipendentemente
+ // dal fatto che quella singola candela abbia o meno un numero nella colonna volume del CSV —
+ // per scelta esplicita dell'utente, in Storico il volume non va mai considerato "vero" quanto
+ // quello di un conto Live/MT5/Capital.com collegato davvero.
+ if(key==='volume_default'&&!liveModeActive){
+   $('status').textContent='⚠️ Volume aggiunto — in modalità Storico NON è volume reale (nessun feed di mercato collegato): il volume vero è disponibile solo con MT5 o Capital.com in Live.';
+ }else if(key==='sr_breaks'&&!liveModeActive){
+   // Questo indicatore usa il volume solo come FILTRO opzionale per confermare le rotture (vedi
+   // hasVolume/volumeThresh in compute() più sopra nel file) — non fabbrica mai un finto volume,
+   // se manca lo ignora semplicemente. Avviso comunque dovuto: in Storico quel filtro, quando
+   // c'è, non è mai volume di mercato reale.
+   $('status').textContent='⚠️ Support & Resistance with Breaks aggiunto — il suo filtro sul volume, in modalità Storico, NON usa volume di mercato reale (nessun feed collegato): il volume vero è disponibile solo con MT5 o Capital.com in Live.';
+ }
 }
 function removeIndicator(id){
  activeIndicators=activeIndicators.filter(ind=>ind.id!==id);
@@ -15689,7 +15713,14 @@ document.querySelectorAll('#volProfileMenu .vpMenuItem').forEach(btn=>{
    updateVolProfileButtonUI();
    closeVolProfileMenu();
    setDrawTool(volProfileMode);
-   $('status').textContent='Profilo volumetrico ('+(VP_LABELS[volProfileMode]||'')+'): clicca sul grafico per posizionarlo.'+(volProfileMode==='vpfixed'?' Un primo clic fissa l\'inizio dell\'intervallo, un secondo clic ne fissa la fine.':' Un solo clic fissa l\'ancora: il calcolo continua da solo fino alla candela attuale.');
+   // RICHIESTO ESPLICITAMENTE ("un'avvertenza quando si inserisce un profilo volumetrico, un
+   // VWAP... in Storico non è il vero volume reale, il volume reale lo abbiamo collegato solo con
+   // MT5 e Capital.com"): avviso SEMPRE in Storico, non solo quando manca il dato — per scelta
+   // esplicita dell'utente, in Storico il volume non va mai considerato "vero" come quello di un
+   // conto Live/MT5/Capital.com collegato davvero (vedi lo stesso avviso su addIndicator() per
+   // l'indicatore Volume).
+   const vpLiveWarning=liveModeActive?'':' ⚠️ In modalità Storico NON è volume reale (nessun feed di mercato collegato): il volume vero è disponibile solo con MT5 o Capital.com in Live.';
+   $('status').textContent='Profilo volumetrico ('+(VP_LABELS[volProfileMode]||'')+'): clicca sul grafico per posizionarlo.'+(volProfileMode==='vpfixed'?' Un primo clic fissa l\'inizio dell\'intervallo, un secondo clic ne fissa la fine.':' Un solo clic fissa l\'ancora: il calcolo continua da solo fino alla candela attuale.')+vpLiveWarning;
    scheduleSave();
  });
 });
