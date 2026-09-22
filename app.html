@@ -1258,6 +1258,23 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              </div>
              <p class="hint" style="margin-top:6px">Scala tutti i testi disegnati dentro il grafico (prezzi, orari, etichette dei disegni, profili volumetrici, dashboard degli indicatori, caselle TP-SL...). Non modifica il nome dell'asset, i pulsanti della barra degli strumenti né i nomi degli indicatori nella legenda in alto.</p>
            </div>
+           <!-- FOOTPRINT/ORDER FLOW (punto 1 roadmap, tick-rule su stream Live Capital.com/MT5):
+                vedi footprintRegisterTick()/footprintByBucket e drawFootprintCandle() in fondo al
+                file per l'implementazione completa. Attivo SOLO sulle candele che hanno davvero
+                accumulato tick (in pratica solo quella in formazione, in Live) — le altre restano
+                candlestick normali. Sotto una certa soglia di zoom (poche righe leggibili) il
+                rendering ricade da solo sulla candela normale, vedi draw(). -->
+           <div class="fbSettingsSectionTitle">📊 Footprint (tick, solo Live)</div>
+           <div data-style-panel="footprint">
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintEnabled"> Mostra footprint sulla candela in formazione</label>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:110px">Righe (pip/riga)</label>
+               <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip.">
+             </div>
+             <p class="hint" style="margin-top:6px">⚠️ Stima da tick-rule (buy a destra/sell a sinistra, in base al rialzo/ribasso del prezzo bid tra un tick e il successivo). Su Capital.com è un conteggio puro di tick (nessun size nel dato ricevuto). Su MT5 usa invece il "tick volume" del broker quando disponibile — un proxy migliore ma non garantito come volume realmente scambiato (dipende dal feed del broker). Mai un vero order flow a size di trade. Visibile solo sulla candela in formazione in Live, ingrandendo abbastanza da avere spazio per le due colonne — le candele storiche/già chiuse restano candlestick normali perché non hanno mai avuto dati tick.</p>
+           </div>
          </div>
          <div data-settings-panel="grid" style="display:none">
            <p class="hint" style="margin:0 0 12px">Quante righe di griglia mostrare (prezzo in orizzontale, ora/data in verticale). Le due direzioni usano sempre la stessa spaziatura, così le celle restano quadrate; il numero di righe si adatta da solo quando ridimensioni la finestra o fai zoom.</p>
@@ -2595,6 +2612,11 @@ let positionsVisible=true;
 // "leggero" del pulsante "mostra/nascondi posizioni" nella barra sopra il grafico, che invece
 // nasconde tutto quanto.
 let tpSlZoneFillVisible=true;
+// FOOTPRINT/ORDER FLOW (punto 1 della roadmap: tick-count, NON volume reale — vedi i commenti
+// completi su footprintRegisterTick()/footprintByBucket più sotto, vicino allo streaming tick).
+// footprintEnabled: interruttore utente (⚙️ Impostazioni → Style → Footprint). footprintRowPips:
+// ampiezza di ogni riga del footprint, in pip (riusa pipSizeForAsset(), come il resto dell'app).
+let footprintEnabled=false, footprintRowPips=1;
 // RICHIESTO ESPLICITAMENTE: doppio click DIRETTAMENTE sopra la casella Target/Stop di una
 // posizione APERTA (sul grafico) nasconde/mostra il riempimento colorato SOLO di QUELLA
 // posizione (0% quando nascosto, 20% di default quando visibile) — indipendente dal pulsante
@@ -3075,6 +3097,7 @@ function collectLightSessionState(){
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,tpSlZoneFillVisible,volProfileMode,linesMode,drawingLayerVisible,
+   footprintEnabled,footprintRowPips,
    positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
    pendingOrders:stripMt5TrackedForSave(pendingOrders),
    trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
@@ -3252,6 +3275,10 @@ function applyLightSessionState(state){
  straightLockToggle=!!state.straightLockToggle;
  positionsVisible=state.positionsVisible!==false;
  tpSlZoneFillVisible=state.tpSlZoneFillVisible!==false;
+ footprintEnabled=!!state.footprintEnabled;
+ footprintRowPips=(Number.isFinite(state.footprintRowPips)&&state.footprintRowPips>0)?state.footprintRowPips:1;
+ if($('footprintEnabled'))$('footprintEnabled').checked=footprintEnabled;
+ if($('footprintRowPips'))$('footprintRowPips').value=footprintRowPips;
  // drawingLayerVisible (RICHIESTO ESPLICITAMENTE: nascondere singolarmente Fibonacci/profili
  // volumetrici/VWAP dal nuovo pannello "Livelli", vedi apriChartLayersModal()): merge col
  // default invece di una sostituzione secca, così un salvataggio precedente a questa funzione
@@ -7904,6 +7931,37 @@ function drawTradeHighlight(ctx,y,pad,cw,n,start,w,h){
  highlightCloseBtnRect={x:closeCx-closeSize/2-hitPad,y:closeCy-closeSize/2-hitPad,w:closeSize+hitPad*2,h:closeSize+hitPad*2};
  ctx.restore();
 }
+// Disegna UNA candela in modalità footprint: due colonne per riga di prezzo (sell a sinistra,
+// buy a destra — convenzione footprint standard), colorate per intensità relativa (heatmap) sul
+// massimo tick-count di QUESTA candela, più un contorno sottile high-low come riferimento OHLC.
+// Numeri per riga solo se c'è davvero spazio (bw>=44) per restare leggibili senza sovrapporsi.
+// `fp` = { step, rows:{ [livello prezzo]: {buy,sell} } }, `yFn` = stessa y(v) di draw().
+function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor){
+ const step=fp.step;
+ const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>b-a); // alto → basso
+ if(!levels.length)return;
+ let maxCount=1;
+ levels.forEach(lv=>{ const c=fp.rows[lv]; maxCount=Math.max(maxCount,c.buy,c.sell); });
+ const half=bw/2;
+ const showNumbers=bw>=44;
+ const fontPx=Math.max(8,Math.min(11,bw/5));
+ if(showNumbers){ ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font=fontPx+'px sans-serif'; }
+ levels.forEach(lv=>{
+   const c=fp.rows[lv];
+   const yTop=yFn(lv+step/2), yBot=yFn(lv-step/2);
+   const rowH=Math.max(1,yBot-yTop);
+   const sellA=c.sell>0?0.15+0.65*(c.sell/maxCount):0, buyA=c.buy>0?0.15+0.65*(c.buy/maxCount):0;
+   if(sellA>0){ ctx.fillStyle=`rgba(224,91,100,${sellA})`; ctx.fillRect(xx-half,yTop,half-1,rowH); }
+   if(buyA>0){ ctx.fillStyle=`rgba(85,194,139,${buyA})`; ctx.fillRect(xx+1,yTop,half-1,rowH); }
+   if(showNumbers && rowH>=fontPx){
+     ctx.fillStyle=lineColor;
+     if(c.sell>0)ctx.fillText(String(c.sell),xx-half/2,(yTop+yBot)/2);
+     if(c.buy>0)ctx.fillText(String(c.buy),xx+half/2,(yTop+yBot)/2);
+   }
+ });
+ ctx.strokeStyle=lineColor; ctx.lineWidth=1;
+ ctx.strokeRect(xx-half,yFn(r.high),bw,Math.max(1,yFn(r.low)-yFn(r.high)));
+}
 function draw(){
  const c=$('chart'),ctx=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
  // Sfondo del grafico personalizzabile (tasto Style → Background): tutte le "linee del
@@ -8015,10 +8073,22 @@ function draw(){
    ctx.strokeStyle=tk.dayChanged?gridColorStrong:gridColor;ctx.lineWidth=1;
    ctx.beginPath();ctx.moveTo(tk.x,pad.t);ctx.lineTo(tk.x,pad.t+ch);ctx.stroke();
  });
- const bw=Math.max(2,Math.min(12,cw/n*.62));
+ // FOOTPRINT: quando attivo, permettiamo alle candele di allargarsi molto di più del normale (fino
+ // a 90px invece di 12px) — MA solo se n (candele in vista) è già abbastanza piccolo perché
+ // cw/n*.62 ci arrivi da solo: a molte candele in vista bw resta comunque stretto e si ricade sul
+ // rendering normale candela per candela, vedi drawFootprintCandle() più sotto e _FOOTPRINT_MIN_BW.
+ const _footprintOn=footprintEnabledNow();
+ const _FOOTPRINT_MIN_BW=34; // sotto questa soglia due colonne buy/sell non hanno spazio per essere leggibili
+ const bw=Math.max(2,Math.min(_footprintOn?90:12,cw/n*.62));
  const _cc=currentCandleColors();
  data.forEach((r,i)=>{
-   let xx=x(i), up=r.close>=r.open;ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
+   let xx=x(i), up=r.close>=r.open;
+   const fp=_footprintOn&&bw>=_FOOTPRINT_MIN_BW?footprintByBucket[footprintBucketStart(parseDateTime(r.date))]:null;
+   if(fp && Object.keys(fp.rows).length){
+     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor);
+     return;
+   }
+   ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
    ctx.beginPath();ctx.moveTo(xx,y(r.high));ctx.lineTo(xx,y(r.low));ctx.stroke();
    let top=y(Math.max(r.open,r.close)), bot=y(Math.min(r.open,r.close));ctx.fillRect(xx-bw/2,top,bw,Math.max(1,bot-top));
  });
@@ -12191,6 +12261,7 @@ $('tf').addEventListener('change',()=>{
  const visibleRealMinutes=getVisibleCount()*oldTF;
 
  currentTF=Number($('tf').value)||1;
+ footprintReset(); // il bucketing del footprint dipende da currentTF: niente bucket vecchi con TF diverso
  if(liveModeActive){
    // In Live ogni timeframe corrisponde a una risoluzione diversa scaricata via REST da
    // Capital.com (non una semplice riaggregazione locale come in Storico, dove i dati sono a
@@ -13726,6 +13797,16 @@ $('applySuggestedLot').addEventListener('click',()=>{
 $('market')?.addEventListener('change',applyInstrument);
 $('decimals').addEventListener('change',()=>{draw();update();});
 $('candleTheme')?.addEventListener('change',()=>{ candleTheme=$('candleTheme').value; updateCandleCustomColorsVisibility(); draw(); scheduleSave(); });
+$('footprintEnabled')?.addEventListener('change',()=>{ footprintEnabled=$('footprintEnabled').checked; draw(); scheduleSave(); });
+$('footprintRowPips')?.addEventListener('input',()=>{
+ const v=Number($('footprintRowPips').value);
+ footprintRowPips=(Number.isFinite(v)&&v>0)?v:1;
+ // Cambiando l'ampiezza riga, i bucket già accumulati con lo step vecchio non sono più
+ // confrontabili (vedi il controllo bucket.step!==step in footprintRegisterTick): si riparte da
+ // zero invece di mischiare due granularità diverse nella stessa candela.
+ footprintByBucket={};
+ draw(); scheduleSave();
+});
 // I due colori personalizzati si applicano in tempo reale mentre si trascina il selettore
 // colore (evento 'input', come drawColor sopra), non solo al rilascio.
 $('candleColorBuy')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
@@ -16402,6 +16483,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // attualmente associato a `drawings` (vuoto compreso), mai su una semplice risincronizzazione.
  const shouldLoadAssetDrawings=(currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+ if(currentAssetKey!==asset)footprintReset(); // nuovo asset: la sequenza tick precedente non ha più senso
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
  active=ownNow.length?ownNow[ownNow.length-1]:null;
@@ -16713,6 +16795,96 @@ async function refreshLiveStreamSubscriptions(){
 // capitalWsPrimaryEpic è l'unico che aggiorna il GRAFICO/candele (quello attualmente
 // visualizzato); tutti gli altri aggiornano solo livePriceByAsset (tabella posizioni, P/L,
 // valutazione SL/TP/pendenti "in background"), senza toccare il grafico a schermo.
+// ===================================================================
+// FOOTPRINT/ORDER FLOW — PUNTO 1 della roadmap discussa con l'utente: "footprint reale, solo in
+// Live, costruito dal tick streaming già attivo" (vedi connectCapitalStream()/connectMt5Stream()
+// qui sotto). Onestà sui dati, prima del codice: NESSUNA delle due fonti manda il size del
+// singolo trade — la subscription "marketData" di Capital.com e il feed MT5 (mt5FeedWs.onmessage,
+// più sotto) spingono solo il prezzo bid via tick. Quindi questo NON è un vero order flow a
+// volume: è un tick-count delta, calcolato con la tick-rule standard (il prezzo bid sale rispetto
+// al tick precedente = tick "buy", scende = tick "sell", invariato = eredita il lato del tick
+// precedente). Utile per vedere DOVE dentro la candela si è concentrata l'attività e in quale
+// direzione, ma la lettura "tot lotti comprati vs venduti" resterebbe fuorviante — per questo in
+// UI (vedi #footprintEnabled) è etichettato esplicitamente come stima da tick-rule.
+// Struttura dati già pronta per diventare volume-weighted il giorno in cui una delle due fonti
+// aggiungesse anche il size del tick: basterebbe sommare quel valore invece di "+1" dentro
+// footprintRegisterTick(), senza toccare il resto (accumulo, rendering, persistenza).
+//
+// footprintByBucket: { [bucketStartMs]: { step, rows:{ [livello di prezzo]: {buy,sell} } } } — una
+// voce per ogni candela che ha ricevuto almeno un tick da quando la funzione è attiva. bucketStartMs
+// usa la STESSA convenzione di bucketing (Date.now(), non il timestamp del tick) già usata da
+// applyLivePriceToChart() per costruire/aggiornare la candela in corso, così footprint e candela
+// restano sempre sulla stessa "riga" anche a cavallo di riconnessioni WS/resync REST.
+let footprintByBucket={};
+// Ultimo prezzo/lato noto per la tick-rule. UNA sola coppia (non per-epic): il footprint si
+// accumula solo per l'asset a grafico ora (capitalWsPrimaryEpic o mt5ActiveSymbol) — gli asset "in
+// background" non vengono mai disegnati come footprint, quindi non serve tracciarli. Vengono
+// azzerati ad ogni cambio asset/timeframe (vedi loadLiveHistoryFromCapital/loadLiveHistoryFromMt5/
+// il listener di #tf più sotto) per non mischiare la sequenza di prezzi di un asset/TF con quella
+// di un altro.
+let footprintTickLastPrice=null, footprintTickLastSide=1;
+function footprintEnabledNow(){ return !!$('footprintEnabled')?.checked; }
+function footprintRowPipsNow(){
+ const v=Number($('footprintRowPips')?.value);
+ return (Number.isFinite(v)&&v>0)?v:1;
+}
+// Ampiezza di una riga del footprint in unità di PREZZO (non pip): riusa pipSizeForAsset(), la
+// stessa funzione già usata ovunque nell'app per convertire pip↔prezzo per l'asset scelto.
+function footprintStepForAsset(assetKey){
+ const pip=pipSizeForAsset(assetKey);
+ return Number.isFinite(pip)&&pip>0?pip*footprintRowPipsNow():null;
+}
+function footprintBucketStart(timestamp){
+ const bucketMs=(currentTF||1)*60000;
+ return Math.floor(timestamp/bucketMs)*bucketMs;
+}
+// Azzera l'accumulo: chiamata a ogni cambio asset/timeframe/righe-per-pip, cioè ogni volta che la
+// candela in formazione RIPARTE da zero o che lo step di prezzo cambia (bucket vecchi con uno step
+// diverso non sarebbero più confrontabili con quelli nuovi).
+function footprintReset(){
+ footprintByBucket={};
+ footprintTickLastPrice=null;
+ footprintTickLastSide=1;
+}
+// Registra UN tick di prezzo per l'asset a grafico ora (chiamata sia da applyLiveTick() per
+// Capital.com sia da mt5FeedWs.onmessage per MT5 — vedi entrambe più sotto). Nessun costo se la
+// feature è spenta: esce subito senza toccare nulla.
+// `weight`: quanto pesa QUESTO tick nel conteggio buy/sell della sua riga — di default 1 (tick-
+// count puro, l'unica cosa che il feed Capital.com può dare: nessun size nel payload "marketData").
+// Il feed MT5 (mt5_feed_server.py) invece manda già tick.volume nel campo "volume" del messaggio
+// WS: quando disponibile lo passiamo qui come weight, così quella candela diventa "volume-
+// weighted" invece che un semplice conteggio — vedi la chiamata in mt5FeedWs.onmessage più sotto.
+// ATTENZIONE (onestà sul dato, non solo sul codice): tick.volume in MT5 è "tick volume", cioè
+// dipende dal broker — su alcuni feed è il size reale dell'ultimo trade, su altri è solo un
+// contatore di variazioni quotazione (quindi quasi equivalente al tick-count che useremmo comunque
+// come fallback). Non c'è modo di saperlo a priori da qui: è il miglior proxy disponibile, non
+// volume reale garantito — per questo il tooltip in UI lo definisce così, non come "volume vero".
+function footprintRegisterTick(price,timestamp,assetKey,weight){
+ if(!footprintEnabledNow())return;
+ const w=(Number.isFinite(weight)&&weight>0)?weight:1;
+ if(!Number.isFinite(price)||!Number.isFinite(timestamp))return;
+ let side=footprintTickLastSide;
+ if(Number.isFinite(footprintTickLastPrice)){
+   if(price>footprintTickLastPrice)side=1;
+   else if(price<footprintTickLastPrice)side=-1;
+   // price invariato: eredita il lato del tick precedente (tick-rule standard).
+ }
+ footprintTickLastPrice=price;
+ footprintTickLastSide=side;
+ const step=footprintStepForAsset(assetKey);
+ if(!(step>0))return;
+ const bucketStart=footprintBucketStart(timestamp);
+ let bucket=footprintByBucket[bucketStart];
+ if(!bucket||bucket.step!==step)bucket=footprintByBucket[bucketStart]={step,rows:{}};
+ const levelKey=Math.round(price/step)*step;
+ const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={buy:0,sell:0});
+ if(side>0)cell.buy+=w; else cell.sell+=w;
+ // Tiene solo gli ultimi 20 bucket: evita che footprintByBucket cresca senza limite in una
+ // sessione Live lasciata aperta per ore (l'unico bucket davvero utile è comunque quello della
+ // candela in formazione, i precedenti restano solo per una rapida occhiata indietro).
+ const keys=Object.keys(footprintByBucket);
+ if(keys.length>20)keys.map(Number).sort((a,b)=>a-b).slice(0,keys.length-20).forEach(k=>delete footprintByBucket[k]);
+}
 let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, capitalWsPingTimer=null, capitalWsCorrId=1;
 // FIX bug "l'aggiornamento live si blocca dopo un po'": tiene traccia di quando è arrivato
 // l'ultimo tick per l'epic a grafico ora, e di quando abbiamo tentato l'ultima riconnessione.
@@ -17054,6 +17226,11 @@ function applyLiveTick(p){
  // prezzo al grafico è il timer da 1000ms in startLiveRefreshTimer, così l'intera catena
  // (candela, valutazione SL/TP, ridisegno, salvataggio) gira al massimo una volta al secondo.
  lastPrimaryEpicPrice=price;
+ // FOOTPRINT: registrato qui, ad OGNI tick grezzo (non al ritmo throttled 1/sec della candela sopra)
+ // — è proprio la granularità tick, non quella della candela, il punto di un footprint. Usa
+ // Date.now() (non p.timestamp) per il bucketing: stessa convenzione di applyLivePriceToChart()
+ // poco sotto, così footprint e candela in formazione restano sempre sullo stesso bucket.
+ footprintRegisterTick(price,Date.now(),asset);
 }
 // Valuta SL/TP delle posizioni aperte e l'attivazione degli ordini pendenti su un asset "in
 // background" (diverso da quello a grafico ora) usando l'ultimo prezzo tick ricevuto per quel
@@ -17285,6 +17462,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
  const shouldLoadAssetDrawings=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso fix
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+ if(currentAssetKey!==asset)footprintReset(); // vedi commento nel loader Capital.com: stesso motivo
  currentAssetKey=asset;
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
  active=ownNow.length?ownNow[ownNow.length-1]:null;
@@ -17480,6 +17658,14 @@ function connectMt5Stream(symbol){
    if(!Number.isFinite(msg.bid))return;
    if(mt5CandleFrozen)return; // stessa pausa di 1s a cavallo del cambio candela usata da Capital.com
    lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
+   // FOOTPRINT: stesso identico principio del ramo Capital.com in applyLiveTick() (vedi commento
+   // completo lì) — registrato a ogni tick grezzo del feed MT5, non al ritmo 1/sec del refresh
+   // sotto. mt5ActiveSymbol qui è sempre l'asset a grafico ora, per costruzione di questo feed.
+   // A differenza di Capital.com, mt5_feed_server.py manda già tick.volume nel campo msg.volume
+   // (vedi il "volume": tick.volume nel server Python) — lo usiamo come peso invece del semplice
+   // conteggio a 1 per tick, quando è un numero valido e positivo (vedi il commento completo su
+   // "weight" dentro footprintRegisterTick() per i limiti di affidabilità di questo campo).
+   footprintRegisterTick(msg.bid,Date.now(),mt5ActiveSymbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1);
  };
  ws.onerror=()=>{ if(ws===mt5FeedWs)$('status').textContent='⚠️ Streaming Live MT5: errore di connessione WebSocket.'; };
  ws.onclose=()=>{
