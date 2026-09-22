@@ -3368,6 +3368,38 @@ async function idbClearAll(){
 // posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
 // ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
 const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
+// RICHIESTO ESPLICITAMENTE ("le pagine 2-3-4 devono essere sostanzialmente un clone della
+// madre... trasporti anche tutti quei parametri legati a style"): sottoinsieme di
+// SESSION_CONFIG_FIELD_IDS qui sopra, SOLO i campi di puro ASPETTO visivo del grafico (colori,
+// stile candele, font, disegni, footprint) — esclude di proposito market/capital/spread/
+// leverage/decimals/pipDecimals/speed/tf/tfChart/lots/risk/lotsPending/riskPending: quelli sono
+// o già sincronizzati per conto proprio (capital/leverage/lots/risk fanno parte del conto unico,
+// vedi trading_sync) o devono restare scelte libere e indipendenti di ciascuna finestra (asset,
+// timeframe — vedi il commento su applyRemoteAssetSwitch() più sotto nel file). Usato da
+// collectStyleCloneFields()/applyStyleCloneFields() più sotto per il "clone" iniziale delle
+// finestre PIP 2/3/4 dalla pagina madre.
+const STYLE_CLONE_FIELD_IDS=['decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
+function collectStyleCloneFields(){
+ const out={};
+ STYLE_CLONE_FIELD_IDS.forEach(id=>{ const el=$(id); if(el)out[id]=el.value; });
+ return out;
+}
+function applyStyleCloneFields(fields){
+ if(!fields||typeof fields!=='object')return;
+ STYLE_CLONE_FIELD_IDS.forEach(id=>{
+   if(!(id in fields))return;
+   const el=$(id);
+   if(!el||el.value===fields[id])return;
+   el.value=fields[id];
+   // Molti di questi campi sono letti da variabili JS aggiornate SOLO dal loro listener
+   // 'input'/'change' (es. candleTheme, chartBgColor, chartFontScalePct — vedi i listener dedicati
+   // più sotto nello script), non da $(id).value ad ogni disegno: senza ridispararli qui il valore
+   // resterebbe scritto nel campo ma MAI applicato davvero al grafico. Innocuo dispararli entrambi
+   // anche sui campi che in realtà leggono solo .value ad ogni draw().
+   el.dispatchEvent(new Event('input',{bubbles:true}));
+   el.dispatchEvent(new Event('change',{bubbles:true}));
+ });
+}
 // Le posizioni/ordini pendenti REALI (mt5Ticket valorizzato) non vengono MAI salvati in
 // locale — richiesto esplicitamente per sicurezza: se ci si disconnette da MT5, si chiude
 // l'app o si ricarica la pagina, non devono restare visibili a grafico da un salvataggio
@@ -3542,8 +3574,14 @@ function broadcastAssetAnnounce(){
  // storico:!liveModeActive viaggia insieme all'asset per il collegamento diretto pagina madre→
  // finestre PIP qui sotto (vedi RICHIESTO ESPLICITAMENTE su applyRemoteAssetSwitch()): la
  // propagazione automatica dell'asset è voluta SOLO in modalità Storico, mai in Live (dove ogni
- // finestra PIP tiene già il proprio streaming/epic indipendente da Capital.com/MT5).
- try{ tradingChannel.postMessage({type:'asset_announce',slot:PIP_SLOT,asset:currentAssetKey||null,storico:!liveModeActive}); }catch(e){}
+ // finestra PIP tiene già il proprio streaming/epic indipendente da Capital.com/MT5). masterTime
+ // viaggia insieme (RICHIESTO ESPLICITAMENTE: "se è stata salvata una posizione di un asset nella
+ // pagina madre PIP, la posizione dell'ultima candela deve essere trasportata anche sulle altre
+ // pagine PIP") — usato SOLO da applyRemoteAssetSwitch() qui sotto, al momento in cui una finestra
+ // PIP cambia DAVVERO asset per allinearsi alla stessa candela della madre in quel momento, mai
+ // per "inseguire" continuamente la madre dopo (il conto/i disegni restano l'unica cosa sempre
+ // sincronizzata in tempo reale, vedi i commenti più sotto sul resto del protocollo).
+ try{ tradingChannel.postMessage({type:'asset_announce',slot:PIP_SLOT,asset:currentAssetKey||null,storico:!liveModeActive,masterTime:Number.isFinite(masterTime)?masterTime:null}); }catch(e){}
 }
 // RICHIESTO ESPLICITAMENTE: "quando siamo in modalità storico e selezioniamo nella pagina madre
 // l'asset, di conseguenza verrà aperto anche nelle altre pagine PIP. È un collegamento diretto."
@@ -3556,7 +3594,7 @@ function broadcastAssetAnnounce(){
 // lo stesso comportamento che avrebbe un cambio asset manuale dal menu ASSET di questa finestra,
 // il timeframe non è mai copiato dalla finestra madre.
 let applyingRemoteAssetSwitch=false;
-async function applyRemoteAssetSwitch(asset){
+async function applyRemoteAssetSwitch(asset,masterTimeVal){
  if(!asset||liveModeActive||applyingRemoteAssetSwitch)return;
  if(asset===currentAssetKey)return;
  const marketSel=$('market');
@@ -3574,6 +3612,32 @@ async function applyRemoteAssetSwitch(asset){
    marketSel.value=asset;
    syncMarketChartSelect();
    lastValidMarketValue=asset;
+   // BUG TROVATO E RISOLTO: qui sotto si simula "a mano" lo stesso identico effetto che avrebbe
+   // un cambio ASSET manuale dal menu di questa finestra (marketSel.value=asset seguito da
+   // autoLoadAssetLibrary(asset)) — MA senza mai disparare un vero evento 'change' su #market, il
+   // listener $('market')?.addEventListener('change',applyInstrument) (che imposta decimali/
+   // decimali-pip dello strumento, vedi applyInstrument() più sopra nel file) non scattava MAI in
+   // una finestra PIP che riceve l'asset dalla madre: i decimali restavano quelli residui
+   // dell'asset precedente (o quelli di default). Richiamata qui esplicitamente, stesso ordine
+   // del vero cambio manuale (prima i decimali, poi il caricamento dei CSV).
+   applyInstrument();
+   // RICHIESTO ESPLICITAMENTE: "se è stata salvata una posizione di un asset nella pagina madre
+   // PIP, la posizione dell'ultima candela deve essere trasportata anche sulle altre pagine PIP"
+   // — seminiamo QUI la vista salvata di QUESTA finestra per l'asset in arrivo con l'istante
+   // reale (masterTime) che la madre aveva in quel momento, PRIMA di autoLoadAssetLibrary(): sotto
+   // il cofano chiama applyChartViewForAsset(asset), che legge esattamente questa mappa — stesso
+   // identico meccanismo già usato per "ricordare dove eravamo rimasti" cambiando asset a mano,
+   // qui semplicemente pre-compilato con l'istante della madre invece che con la cronologia PROPRIA
+   // di questa finestra. Se questa finestra aveva GIÀ una sua vista salvata per questo stesso
+   // asset (da una visita precedente nella stessa sessione), aggiorniamo solo l'istante reale e
+   // lasciamo intatti timeframe/zoom che aveva lei — mai forzati dalla madre, per lo stesso motivo
+   // spiegato sopra (timeframe sempre indipendente per finestra).
+   if(Number.isFinite(masterTimeVal)){
+     const mode=currentMode();
+     if(!assetChartViews[mode])assetChartViews[mode]={};
+     if(assetChartViews[mode][asset])assetChartViews[mode][asset].masterTime=masterTimeVal;
+     else assetChartViews[mode][asset]={masterTime:masterTimeVal,currentTF:1,followLatest:true,priceZoomFactor:1,viewPriceLo:null,viewPriceHi:null,autoFitWidth:true};
+   }
    await autoLoadAssetLibrary(asset);
  }finally{ applyingRemoteAssetSwitch=false; }
 }
@@ -3607,6 +3671,33 @@ function applyRemoteRandomJump(masterTimeVal){
    draw();update();
    $('status').textContent=`🎲 Punto casuale (da un'altra finestra): ${rows[idx]?.date||''} • candela ${idx+1}/${rows.length}`;
  }finally{ applyingRemoteRandomJump=false; }
+}
+// RICHIESTO ESPLICITAMENTE: "quando premo i bottoni avanti e indietro mi avanzano e retrocedono
+// le candele in tutte le altre pagine PIP associate alla madre, è tutto sincronizzato tra loro" —
+// stesso principio di broadcastRandomJumpSync() qui sopra (masterTime come orologio comune,
+// simmetrico, qualunque finestra lo cambi), ma con un'applicazione più "leggera": un passo
+// avanti/indietro NON deve azzerare lo zoom/pan che l'utente ha impostato a mano in ciascuna
+// finestra (a differenza del salto casuale, dove ripartire dalla vista base è voluto) — qui si
+// aggiorna solo l'istante e, SOLO se questa finestra stava già seguendo il bordo "adesso"
+// (followLatest), la si tiene ancorata lì; altrimenti resta ferma dov'era, esattamente come fa
+// forward()/il click su #back quando il cambiamento arriva da un'azione LOCALE.
+let applyingRemoteChartTimeSync=false;
+function broadcastChartTimeSync(masterTimeVal){
+ if(!tradingChannel)return;
+ try{ tradingChannel.postMessage({type:'chart_time_sync',slot:PIP_SLOT,storico:!liveModeActive,masterTime:masterTimeVal}); }catch(e){}
+}
+function applyRemoteChartTimeSync(masterTimeVal){
+ if(liveModeActive||applyingRemoteChartTimeSync||applyingRemoteRandomJump)return;
+ if(!Number.isFinite(masterTimeVal))return;
+ if(!baseRows.length)return; // nessun CSV caricato in questa finestra: niente su cui avanzare
+ if(masterTimeVal===masterTime)return;
+ applyingRemoteChartTimeSync=true;
+ try{
+   masterTime=masterTimeVal;
+   rebuildRows();
+   if(followLatest)viewEnd=idx;
+   draw();update();
+ }finally{ applyingRemoteChartTimeSync=false; }
 }
 function anotherWindowOwnsAssetEvaluation(asset){
  if(!asset)return false;
@@ -3667,7 +3758,7 @@ if(tradingChannel){
      // entrambe le parti, e SOLO in una finestra PIP aggiuntiva (mai la madre stessa, che deve
      // restare libera di mostrare un asset diverso da quello scelto in una finestra PIP).
      if(PIP_SLOT>0 && msg.slot===0 && msg.storico && !liveModeActive && msg.asset){
-       applyRemoteAssetSwitch(msg.asset);
+       applyRemoteAssetSwitch(msg.asset,msg.masterTime);
      }
    }else if(msg.type==='drawings_sync'){
      // Applicato SOLO se questa finestra sta mostrando ORA lo stesso identico asset+modalità del
@@ -3691,12 +3782,59 @@ if(tradingChannel){
      // Vedi il commento completo su broadcastRandomJumpSync()/applyRemoteRandomJump() più sopra
      // nel file: solo in Storico da entrambe le parti, qualunque sia la finestra mittente.
      if(msg.storico && !liveModeActive)applyRemoteRandomJump(msg.masterTime);
+   }else if(msg.type==='chart_time_sync'){
+     // Vedi il commento completo su broadcastChartTimeSync()/applyRemoteChartTimeSync() più sopra
+     // nel file: solo in Storico da entrambe le parti, qualunque sia la finestra mittente.
+     if(msg.storico && !liveModeActive)applyRemoteChartTimeSync(msg.masterTime);
+   }else if(msg.type==='pip_clone_request'){
+     // RICHIESTO ESPLICITAMENTE ("le pagine 2-3-4 devono essere sostanzialmente un clone della
+     // madre... trasporti anche tutti quei parametri legati a style"): risponde SOLO la pagina
+     // madre (slot 0) — una finestra PIP appena aperta la interroga qui sotto, subito dopo aver
+     // agganciato tradingChannel. Vedi collectStyleCloneFields()/STYLE_CLONE_FIELD_IDS più sopra
+     // nel file per l'elenco esatto dei campi trasportati (solo aspetto visivo + decimali, MAI
+     // asset/timeframe/capitale — quelli restano rispettivamente indipendenti o già sincronizzati
+     // per conto proprio, vedi i commenti su applyRemoteAssetSwitch()).
+     if(PIP_SLOT===0){
+       captureCurrentAssetChartView(currentMode()); // fotografa la vista ATTUALE prima di leggerla
+       const mode=currentMode();
+       const chartView=currentAssetKey?((assetChartViews[mode]||{})[currentAssetKey]||null):null;
+       try{
+         tradingChannel.postMessage({
+           type:'pip_clone_snapshot', slot:0, storico:!liveModeActive,
+           asset:currentAssetKey||null, mode, chartView,
+           styleFields:collectStyleCloneFields()
+         });
+       }catch(e){}
+     }
+   }else if(msg.type==='pip_clone_snapshot'){
+     // Applicato SOLO da una finestra PIP aggiuntiva, e solo dalla risposta della madre (slot 0) —
+     // vedi pip_clone_request qui sopra. Gli stili si applicano SEMPRE (utili anche in Live);
+     // l'asset+posizione SOLO in Storico da entrambe le parti, stesso identico criterio già usato
+     // per asset_announce/applyRemoteAssetSwitch più sopra nel file.
+     if(PIP_SLOT>0 && msg.slot===0){
+       applyStyleCloneFields(msg.styleFields);
+       if(msg.storico && !liveModeActive && msg.asset){
+         if(msg.chartView){
+           const mode=msg.mode||currentMode();
+           if(!assetChartViews[mode])assetChartViews[mode]={};
+           assetChartViews[mode][msg.asset]={...msg.chartView};
+         }
+         applyRemoteAssetSwitch(msg.asset, msg.chartView&&Number.isFinite(msg.chartView.masterTime)?msg.chartView.masterTime:undefined);
+       }
+     }
    }
  };
  // All'avvio, chiede alle altre finestre già aperte lo stato attuale del conto — così una
  // finestra PIP aperta ORA mostra subito le posizioni/il saldo già in corso, invece di partire
  // "a zero" finché qualcuno non fa un nuovo trade da qualche parte.
  try{ tradingChannel.postMessage({type:'trading_sync_request',slot:PIP_SLOT}); }catch(e){}
+ // RICHIESTO ESPLICITAMENTE: una finestra PIP aggiuntiva appena aperta chiede SUBITO alla madre
+ // uno "scatto" completo (stile grafico + asset/posizione corrente) invece di aspettare che
+ // qualcosa cambi là — vedi pip_clone_request/pip_clone_snapshot qui sopra. Solo le finestre
+ // PIP_SLOT>0 chiedono: la madre stessa non ha bisogno di clonare nessuno.
+ if(PIP_SLOT>0){
+   try{ tradingChannel.postMessage({type:'pip_clone_request',slot:PIP_SLOT}); }catch(e){}
+ }
 }
 
 // ===================================================================
@@ -12481,6 +12619,10 @@ function forward(){
  if(idx>=rows.length-1)$('status').textContent='Fine dello storico.';
  else if(positions.length)$('status').textContent=`Candela ${idx+1}/${rows.length} • ${positions.length} posizion${positions.length>1?'i':'e'} aperta/e.`;
  draw();update();
+ // RICHIESTO ESPLICITAMENTE: avanti/indietro (qui e su #back più sotto) sincronizzati su tutte le
+ // finestre PIP aperte — vedi broadcastChartTimeSync() più sopra nel file. Copre anche il PLAY
+ // automatico, che richiama forward() a intervalli regolari (vedi startPlayInterval()).
+ if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump)broadcastChartTimeSync(masterTime);
 }
 // Il CSV storico può essere caricato SOLO dopo aver scelto un ASSET (coppia di valute):
 // blocchiamo l'apertura stessa della finestra di selezione file al click, così l'utente
@@ -13258,6 +13400,9 @@ $('back').onclick=()=>{
  if(followLatest)viewEnd=idx;
  draw();update();
  $('status').textContent=`Tornato alla candela ${idx+1}.`;
+ // RICHIESTO ESPLICITAMENTE: vedi il commento completo su broadcastChartTimeSync() più sopra nel
+ // file, stesso identico discorso di forward() qui sopra ma all'indietro.
+ if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump)broadcastChartTimeSync(masterTime);
 };
 $('resetView').addEventListener('click',resetToLatestCandle);
 // Frecce storico duplicate nella sezione sotto "🗑 Rimuovi tutti" (vedi #pipHistNavSection nel
