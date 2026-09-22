@@ -34,10 +34,19 @@ input,select,button{width:100%;padding:10px;border-radius:8px;border:1px solid #
    Sia lo schermo intero del grafico principale (chartFullscreenBtn) sia la finestra separata
    del grafico (floatChartBtn) riusano la STESSA sidebar: il toolbar dei disegni (#mainDrawToolbar)
    viene spostato lì dentro (invece che restare in alto nella pagina), disposto in verticale. */
-.chartFsSidebar{display:none;flex:0 0 220px;width:220px;max-width:40vw;overflow-y:auto;background:#0b1117;border-right:1px solid #202832;padding:10px;box-sizing:border-box}
+.chartFsSidebar{display:none;flex:0 0 220px;width:220px;max-width:40vw;overflow-y:auto;background:#0b1117;border-right:1px solid #202832;padding:10px;box-sizing:border-box;transition:flex-basis .15s,width .15s,padding .15s}
 .chartFsSidebar.active{display:block}
+/* RICHIESTO ESPLICITAMENTE: il pulsantino a freccia (#fsSidebarToggleBtn, subito dopo nel
+   markup) nasconde/mostra l'intera sidebar (Torna all'ultima candela compreso, che vi finisce
+   dentro via moveResetViewIntoSidebar) per vedere il grafico a piena larghezza — restringiamo a
+   0 invece di display:none così il pulsante (fuori da questo elemento, mai suo figlio) resta
+   sempre cliccabile per riaprirla. */
+.chartFsSidebar.collapsed{flex:0 0 0;width:0;max-width:0;padding:0;overflow:hidden;border-right:none}
 .chartFsSidebar #mainDrawToolbar{display:flex;flex-direction:column;flex-wrap:nowrap;gap:6px;margin-bottom:0}
 .chartFsSidebar #mainDrawToolbar .toolBtn,.chartFsSidebar #mainDrawToolbar select,.chartFsSidebar #mainDrawToolbar input[type="number"]{width:100%;box-sizing:border-box}
+.fsSidebarToggleBtn{position:absolute;top:50%;left:220px;transform:translateY(-50%);z-index:15;width:18px;height:48px;padding:0;align-items:center;justify-content:center;background:#0b1117;color:#c7d0da;border:1px solid #202832;border-left:none;border-radius:0 6px 6px 0;cursor:pointer;font-size:11px;line-height:1;transition:left .15s}
+.fsSidebarToggleBtn:hover{background:#182230}
+.fsSidebarToggleBtn.collapsed{left:0}
 .chartWrap:fullscreen{height:100vh}
 .chartWrap:-webkit-full-screen{height:100vh}
 .chartFloatControls{position:absolute;top:8px;left:8px;z-index:5;display:flex;gap:6px}
@@ -1101,6 +1110,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          </span>
          <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Esclude questa percentuale di bucket ai due estremi dell'istogramma dalla ricerca del punto di partenza della zona, così non finisce sempre ai bordi massimi/minimi. 0% = nessuna esclusione (comportamento precedente).</span>
        </div>
+       <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ORDER BOOK (MT5)</div>
+       <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
+         <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="obEnabled"> Mostra Order Book Profile (a sinistra)</label>
+         <span style="display:inline-flex;align-items:center;gap:5px">Colore bid <input id="obBidColor" type="color" class="colorPick" value="#2f6fed"></span>
+         <span style="display:inline-flex;align-items:center;gap:5px">Colore ask <input id="obAskColor" type="color" class="colorPick" value="#e05b4f"></span>
+         <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Specchia l'istogramma classico (a destra, volume scambiato) con un istogramma a sinistra basato sul book degli ordini REALE letto in questo momento da MT5 (Market Depth): profondità in acquisto (bid, blu) sopra al prezzo attuale e in vendita (ask, rosso) sotto — stessa griglia di prezzo dell'istogramma di destra. Richiede lo streaming Live MT5 attivo e che il broker collegato pubblichi il Market Depth per questo simbolo: se non lo pubblica, qui non appare nulla (mai un book inventato).</span>
+       </div>
        <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">LIVELLI</div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpPocEnabled" checked> Mostra POC</label>
@@ -1189,6 +1205,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <button type="button" id="chartSettingsTabGrid" class="fbSettingsNavItem" data-settings-tab="grid">▦ Griglia</button>
          <button type="button" id="chartSettingsTabNews" class="fbSettingsNavItem" data-settings-tab="news" style="display:none">📰 Notizie</button>
          <button type="button" id="chartSettingsTabAlarm" class="fbSettingsNavItem" data-settings-tab="alarm">🔔 Alarm</button>
+         <!-- RICHIESTO ESPLICITAMENTE: sezione dedicata (non più annegata dentro "Style"),
+              subito sotto "Alarm" nella navigazione — tutte le impostazioni del footprint
+              (stile, righe, backfill MT5, zone zero-print, Absorption/Rejection) vivono qui
+              dentro, spostate di peso dal loro vecchio posto (vedi data-settings-panel="footprint"
+              più sotto). -->
+         <button type="button" id="chartSettingsTabFootprint" class="fbSettingsNavItem" data-settings-tab="footprint">📊 Footprint</button>
        </div>
        <div class="fbSettingsDetail">
          <div data-settings-panel="style">
@@ -1271,106 +1293,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              </div>
              <p class="hint" style="margin-top:6px">Scala tutti i testi disegnati dentro il grafico (prezzi, orari, etichette dei disegni, profili volumetrici, dashboard degli indicatori, caselle TP-SL...). Non modifica il nome dell'asset, i pulsanti della barra degli strumenti né i nomi degli indicatori nella legenda in alto.</p>
            </div>
-           <!-- FOOTPRINT/ORDER FLOW (tick-rule su stream Live Capital.com/MT5, PIÙ backfill di tick
-                storici reali via mt5_feed_server.py per MT5 — vedi footprintRegisterTick()/
-                footprintByBucket/footprintTickLogByAsset/footprintBackfillMt5() e
-                drawFootprintCandle() in fondo al file per l'implementazione completa. Attivo su
-                OGNI candela per cui esiste almeno un tick REALE nel log (in sessione, più il
-                backfill storico su MT5) — le candele MAI osservate (nessun tick disponibile da
-                nessuna fonte) restano candlestick normali: NIENTE stime/invenzioni, rimosse su
-                richiesta esplicita dell'utente dopo discussione sul rischio di confonderle con dati
-                reali. Sotto una certa soglia di zoom il rendering ricade da solo sulla candela
-                normale, vedi draw() e "Larghezza minima" qui sotto. -->
-           <div class="fbSettingsSectionTitle">📊 Footprint (tick, solo Live)</div>
-           <div data-style-panel="footprint">
-             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
-               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintEnabled"> Mostra footprint sulle candele con tick registrati</label>
-             </div>
-             <div class="fbOptRow" style="margin-top:8px">
-               <label style="flex:none;min-width:110px">Stile</label>
-               <select id="footprintStyle" class="toolSelect" title="Come disegnare ogni riga del footprint">
-                 <option value="bidask" selected>Bid-Ask (due colonne)</option>
-                 <option value="delta">Delta (buy − sell)</option>
-                 <option value="volume">Volume (buy + sell)</option>
-               </select>
-             </div>
-             <div class="fbOptRow" style="margin-top:8px">
-               <label style="flex:none;min-width:110px">Righe (pip/riga)</label>
-               <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip.">
-             </div>
-             <!-- RICHIESTO ESPLICITAMENTE: più candele leggibili in vista, senza dover ridurre lo
-                  zoom fino a vederne pochissime. Due soglie separate invece di una sola: sotto
-                  "Larghezza minima" niente footprint (candela normale, come prima); tra questa e
-                  "Larghezza numeri" le celle si vedono comunque colorate (l'informazione visiva
-                  principale) ma senza i numeri sovrapposti, che a quella dimensione diventerebbero
-                  illeggibili comunque — vedi drawFootprintCandle()/showNumbers in draw(). Abbassare
-                  "Larghezza minima" (default 34→14) è la leva vera per vedere più candele: con
-                  quella a 14 e lo zoom giusto, un TF M15 che prima mostrava 4-5 candele in
-                  footprint ora può arrivare a mostrarne 3-4 volte tante, solo colorate. -->
-             <div class="fbOptRow" style="margin-top:8px">
-               <label style="flex:none;min-width:110px">Larghezza minima</label>
-               <input id="footprintMinBw" type="number" min="6" max="60" step="1" value="14" style="width:60px" title="Larghezza minima in pixel di una candela per mostrare comunque il footprint (solo colori, senza numeri). Sotto questa soglia: candela normale.">px
-               <span style="display:inline-flex;align-items:center;gap:5px;margin-left:14px">Larghezza numeri <input id="footprintNumbersMinBw" type="number" min="20" max="120" step="1" value="44" style="width:60px">px</span>
-             </div>
-             <p class="hint" style="margin-top:4px">Abbassa "Larghezza minima" per vedere più candele in footprint contemporaneamente (a scapito dei numeri, che spariscono sotto "Larghezza numeri" mostrando solo l'intensità colore). A parità di zoom, più basso = più candele in vista.</p>
-             <p class="hint" style="margin-top:6px">⚠️ Stima da tick-rule (buy = tick al rialzo del prezzo bid, sell = tick al ribasso, rispetto al tick precedente). Su Capital.com è un conteggio puro di tick (nessun size nel dato ricevuto, e nessuno storico: solo da quando accendi il footprint in avanti — la loro API pubblica non espone tick storici, verificato). Su MT5 usa invece il "tick volume" del broker quando disponibile — un proxy migliore ma non garantito come volume realmente scambiato (dipende dal feed del broker). Mai un vero order flow a size di trade.</p>
-             <!-- RICHIESTO ESPLICITAMENTE ("prendiamo i tick reali del passato"): su MT5 il
-                  pacchetto MetaTrader5 espone mt5.copy_ticks_range(), che restituisce i tick
-                  REALMENTE registrati dal broker per un intervallo di tempo passato — non una
-                  stima. Il server mt5_feed_server.py ora ha un endpoint /ticks che lo usa (vedi
-                  footprintBackfillMt5() più sotto nel file). Limite onesto: dipende da quanto
-                  storico tick il TUO broker/terminale conserva davvero — non è garantito che
-                  copra tutte le ore richieste, specie per periodi lontani o simboli poco liquidi. -->
-             <div class="fbOptRow" style="margin-top:8px">
-               <label style="flex:none;min-width:140px">Backfill storico MT5</label>
-               <input id="footprintBackfillHours" type="number" min="1" max="168" step="1" value="24" style="width:60px" title="Quante ore indietro richiedere di tick storici reali a MT5 quando selezioni un asset (richiede mt5_feed_server.py aggiornato con l'endpoint /ticks).">ore
-             </div>
-             <p class="hint" style="margin-top:2px">Solo MT5 (Capital.com non ha uno storico tick nella loro API pubblica). Richiesto una volta per asset quando lo selezioni (o quando accendi il footprint), in background. Se il tuo broker conserva meno storico tick di quanto richiesto, riceverai solo quello disponibile — nessun errore, solo meno candele con footprint reale nella parte più vecchia.</p>
-             <!-- RICHIESTO ESPLICITAMENTE, schema "zero print" (foto fornita dall'utente): non più
-                  un confronto a soglia %, ma un vero e proprio BUCO — una riga di prezzo dentro il
-                  range della candela dove un lato (buy o sell) è ESATTAMENTE zero mentre l'altro ha
-                  attività. Le righe zero-print consecutive formano una zona che, se il prezzo non
-                  ci torna dentro nelle candele successive, si ESTENDE verso destra candela dopo
-                  candela (come una calamita ancora "aperta"); alla prima candela il cui range
-                  [low,high] rientra nella zona, la zona si "ferma" lì (mitigata) — vedi
-                  footprintFindZeroPrintZones()/footprintUpdateZeroPrintZones() più sotto nel file
-                  per l'implementazione completa. Calcolato solo su celle con tick REALI. -->
-             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ZONE ZERO-PRINT (imbalance)</div>
-             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
-               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintImbalanceEnabled"> Evidenzia zone a buco di contratti (zero print)</label>
-               <span style="display:inline-flex;align-items:center;gap:5px">Righe minime <input id="footprintImbalanceMinRows" type="number" min="1" max="20" step="1" value="1" style="width:50px"></span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Max zone in vista <input id="footprintImbalanceMaxRects" type="number" min="1" max="30" step="1" value="8" style="width:50px"></span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="footprintImbalanceColor" type="color" class="colorPick" value="#8a97a8"></span>
-             </div>
-             <p class="hint" style="margin-top:2px">Una riga è "zero print" quando, dentro il range della candela, un lato (buy o sell) ha ESATTAMENTE zero contratti mentre l'altro ne ha. "Righe minime" = quante righe zero-print consecutive servono per formare una zona (1 = anche una singola riga vuota conta). Ogni zona nasce nella candela dove appare e si allarga verso destra finché il prezzo non ci ritorna dentro (poi si ferma lì); disegnata come una banda orizzontale sotto le candele, esattamente come un profilo di volume "col buco". Solo le "Max zone in vista" più larghe (per numero di righe) vengono disegnate. Calcolato solo su celle con tick REALI, mai stimate.</p>
-             <!-- RICHIESTO ESPLICITAMENTE, dopo uno screenshot di riferimento (indicatore
-                  commerciale "DeepCharts"): pallini di Absorption/Rejection sugli stoppini delle
-                  candele, dimensione proporzionale all'intensità. ONESTÀ: quello screenshot è
-                  materiale di marketing di un prodotto a pagamento — non esiste modo di conoscere
-                  la LORO formula esatta (nessuno fuori da quel team ce l'ha). Quella qui sotto è
-                  una definizione originale, costruita sugli stessi dati reali già usati dal resto
-                  del footprint (righe buy/sell per candela), non una copia: vedi
-                  footprintFindAbsorptionRejectionMarkers() più sotto nel file per la logica
-                  completa. Calcolato solo su celle con tick REALI, mai stimate — stessa regola di
-                  tutto il resto del footprint. -->
-             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ABSORPTION / REJECTION (sugli stoppini)</div>
-             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
-               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintArEnabled"> Mostra pallini Absorption/Rejection sugli stoppini</label>
-             </div>
-             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
-               <span style="display:inline-flex;align-items:center;gap:5px">Soglia volume (× media riga) <input id="footprintArMinVolMult" type="number" min="0.5" max="20" step="0.1" value="1.5" style="width:60px"></span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Dominanza direzionale % <input id="footprintArDominancePct" type="number" min="5" max="95" step="1" value="60" style="width:55px"></span>
-             </div>
-             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
-               <span style="display:inline-flex;align-items:center;gap:5px">Colore Rejection <input id="footprintArRejectionColor" type="color" class="colorPick" value="#4caf6d"></span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Colore Absorption <input id="footprintArAbsorptionColor" type="color" class="colorPick" value="#e05b64"></span>
-             </div>
-             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
-               <span style="display:inline-flex;align-items:center;gap:5px">Pallino min <input id="footprintArMinDotPx" type="number" min="2" max="20" step="1" value="3" style="width:50px">px</span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Pallino max <input id="footprintArMaxDotPx" type="number" min="4" max="40" step="1" value="12" style="width:50px">px</span>
-             </div>
-             <p class="hint" style="margin-top:2px">Per ogni stoppino (sopra o sotto il corpo della candela) con volume reale ≥ "Soglia volume" rispetto alla media delle righe di quella candela: se un lato (buy/sell) domina per almeno "Dominanza direzionale %" → <b>Rejection</b> (spinta decisa e respinta, pallino colore Rejection); se il volume è alto ma i due lati sono più bilanciati → <b>Absorption</b> (il movimento viene assorbito senza proseguire, pallino colore Absorption). La dimensione del pallino è proporzionale al volume reale nello stoppino, tra "Pallino min" e "Pallino max".</p>
-           </div>
          </div>
          <div data-settings-panel="grid" style="display:none">
            <p class="hint" style="margin:0 0 12px">Quante righe di griglia mostrare (prezzo in orizzontale, ora/data in verticale). Le due direzioni usano sempre la stessa spaziatura, così le celle restano quadrate; il numero di righe si adatta da solo quando ridimensioni la finestra o fai zoom.</p>
@@ -1450,6 +1372,127 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <button type="button" id="alarmNotifPermissionBtn" class="toolBtn" style="width:auto">🔔 Attiva notifiche browser</button>
              <span id="alarmNotifPermissionStatus" class="hint"></span>
            </div>
+         </div>
+         <div data-settings-panel="footprint" style="display:none">
+           <p class="hint" style="margin:0 0 12px">Tutte le impostazioni del footprint (order flow a tick) vivono qui, in una sezione dedicata invece che annegate dentro "Style" — spostate di peso su richiesta esplicita, nessuna impostazione persa: gli stessi identici controlli, con gli stessi id, solo in un posto diverso.</p>
+           <!-- FOOTPRINT/ORDER FLOW (tick-rule su stream Live Capital.com/MT5, PIÙ backfill di tick
+                storici reali via mt5_feed_server.py per MT5 — vedi footprintRegisterTick()/
+                footprintByBucket/footprintTickLogByAsset/footprintBackfillMt5() e
+                drawFootprintCandle() in fondo al file per l'implementazione completa. Attivo su
+                OGNI candela per cui esiste almeno un tick REALE nel log (in sessione, più il
+                backfill storico su MT5) — le candele MAI osservate (nessun tick disponibile da
+                nessuna fonte) restano candlestick normali: NIENTE stime/invenzioni, rimosse su
+                richiesta esplicita dell'utente dopo discussione sul rischio di confonderle con dati
+                reali. Sotto una certa soglia di zoom il rendering ricade da solo sulla candela
+                normale, vedi draw() e "Larghezza minima" qui sotto. -->
+           <div class="fbSettingsSectionTitle">📊 Footprint (tick, solo Live)</div>
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintEnabled"> Mostra footprint sulle candele con tick registrati</label>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:110px">Stile</label>
+               <select id="footprintStyle" class="toolSelect" title="Come disegnare ogni riga del footprint">
+                 <option value="bidask" selected>Bid-Ask (due colonne)</option>
+                 <option value="delta">Delta (buy − sell)</option>
+                 <option value="volume">Volume (buy + sell)</option>
+               </select>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:110px">Righe (pip/riga)</label>
+               <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip.">
+             </div>
+             <!-- RICHIESTO ESPLICITAMENTE: più candele leggibili in vista, senza dover ridurre lo
+                  zoom fino a vederne pochissime. Due soglie separate invece di una sola: sotto
+                  "Larghezza minima" niente footprint (candela normale, come prima); tra questa e
+                  "Larghezza numeri" le celle si vedono comunque colorate (l'informazione visiva
+                  principale) ma senza i numeri sovrapposti, che a quella dimensione diventerebbero
+                  illeggibili comunque — vedi drawFootprintCandle()/showNumbers in draw(). Abbassare
+                  "Larghezza minima" (default 34→14) è la leva vera per vedere più candele: con
+                  quella a 14 e lo zoom giusto, un TF M15 che prima mostrava 4-5 candele in
+                  footprint ora può arrivare a mostrarne 3-4 volte tante, solo colorate. -->
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:110px">Larghezza minima</label>
+               <input id="footprintMinBw" type="number" min="6" max="60" step="1" value="14" style="width:60px" title="Larghezza minima in pixel di una candela per mostrare comunque il footprint (solo colori, senza numeri). Sotto questa soglia: candela normale.">px
+               <span style="display:inline-flex;align-items:center;gap:5px;margin-left:14px">Larghezza numeri <input id="footprintNumbersMinBw" type="number" min="20" max="120" step="1" value="44" style="width:60px">px</span>
+             </div>
+             <p class="hint" style="margin-top:4px">Abbassa "Larghezza minima" per vedere più candele in footprint contemporaneamente (a scapito dei numeri, che spariscono sotto "Larghezza numeri" mostrando solo l'intensità colore). A parità di zoom, più basso = più candele in vista.</p>
+             <!-- RICHIESTO ESPLICITAMENTE ("prendiamo i tick reali del passato"): su MT5 il
+                  pacchetto MetaTrader5 espone mt5.copy_ticks_range(), che restituisce i tick
+                  REALMENTE registrati dal broker per un intervallo di tempo passato — non una
+                  stima. Il server mt5_feed_server.py ora ha un endpoint /ticks che lo usa (vedi
+                  footprintBackfillMt5() più sotto nel file). Limite onesto: dipende da quanto
+                  storico tick il TUO broker/terminale conserva davvero — non è garantito che
+                  copra tutte le ore richieste, specie per periodi lontani o simboli poco liquidi. -->
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:140px">Backfill storico MT5</label>
+               <input id="footprintBackfillHours" type="number" min="1" max="168" step="1" value="24" style="width:60px" title="Quante ore indietro richiedere di tick storici reali a MT5 quando selezioni un asset (richiede mt5_feed_server.py aggiornato con l'endpoint /ticks).">ore
+             </div>
+             <p class="hint" style="margin-top:2px">Solo MT5 (Capital.com non ha uno storico tick nella loro API pubblica). Richiesto una volta per asset quando lo selezioni (o quando accendi il footprint), in background. Se il tuo broker conserva meno storico tick di quanto richiesto, riceverai solo quello disponibile — nessun errore, solo meno candele con footprint reale nella parte più vecchia.</p>
+             <!-- RICHIESTO ESPLICITAMENTE, schema "zero print" (foto fornita dall'utente): non più
+                  un confronto a soglia %, ma un vero e proprio BUCO — una riga di prezzo dentro il
+                  range della candela dove un lato (buy o sell) è ESATTAMENTE zero mentre l'altro ha
+                  attività. Le righe zero-print consecutive formano una zona che, se il prezzo non
+                  ci torna dentro nelle candele successive, si ESTENDE verso destra candela dopo
+                  candela (come una calamita ancora "aperta"); alla prima candela il cui range
+                  [low,high] rientra nella zona, la zona si "ferma" lì (mitigata) — vedi
+                  footprintFindZeroPrintZones()/footprintUpdateZeroPrintZones() più sotto nel file
+                  per l'implementazione completa. Calcolato solo su celle con tick REALI. -->
+             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ZONE ZERO-PRINT (imbalance)</div>
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintImbalanceEnabled"> Evidenzia zone a buco di contratti (zero print)</label>
+               <span style="display:inline-flex;align-items:center;gap:5px">Righe minime <input id="footprintImbalanceMinRows" type="number" min="1" max="20" step="1" value="1" style="width:50px"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Max zone in vista <input id="footprintImbalanceMaxRects" type="number" min="1" max="30" step="1" value="8" style="width:50px"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="footprintImbalanceColor" type="color" class="colorPick" value="#8a97a8"></span>
+             </div>
+             <p class="hint" style="margin-top:2px">Una riga è "zero print" quando, dentro il range della candela, un lato (buy o sell) ha ESATTAMENTE zero contratti mentre l'altro ne ha. "Righe minime" = quante righe zero-print consecutive servono per formare una zona (1 = anche una singola riga vuota conta). Ogni zona nasce nella candela dove appare e si allarga verso destra finché il prezzo non ci ritorna dentro (poi si ferma lì); disegnata come una banda orizzontale sotto le candele, esattamente come un profilo di volume "col buco". Solo le "Max zone in vista" più larghe (per numero di righe) vengono disegnate. Calcolato solo su celle con tick REALI, mai stimate.</p>
+             <!-- RICHIESTO ESPLICITAMENTE, dopo uno screenshot di riferimento (indicatore
+                  commerciale "DeepCharts"): pallini di Absorption/Rejection sugli stoppini delle
+                  candele, dimensione proporzionale all'intensità. ONESTÀ: quello screenshot è
+                  materiale di marketing di un prodotto a pagamento — non esiste modo di conoscere
+                  la LORO formula esatta (nessuno fuori da quel team ce l'ha). Quella qui sotto è
+                  una definizione originale, costruita sugli stessi dati reali già usati dal resto
+                  del footprint (righe buy/sell per candela), non una copia: vedi
+                  footprintFindAbsorptionRejectionMarkers() più sotto nel file per la logica
+                  completa. Calcolato solo su celle con tick REALI, mai stimate — stessa regola di
+                  tutto il resto del footprint. -->
+             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ABSORPTION / REJECTION (sugli stoppini)</div>
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintArEnabled"> Mostra pallini Absorption/Rejection sugli stoppini</label>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Soglia volume (× media riga) <input id="footprintArMinVolMult" type="number" min="0.5" max="20" step="0.1" value="1.5" style="width:60px"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Dominanza direzionale % <input id="footprintArDominancePct" type="number" min="5" max="95" step="1" value="60" style="width:55px"></span>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore Rejection <input id="footprintArRejectionColor" type="color" class="colorPick" value="#4caf6d"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore Absorption <input id="footprintArAbsorptionColor" type="color" class="colorPick" value="#e05b64"></span>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Pallino min <input id="footprintArMinDotPx" type="number" min="2" max="20" step="1" value="3" style="width:50px">px</span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Pallino max <input id="footprintArMaxDotPx" type="number" min="4" max="40" step="1" value="12" style="width:50px">px</span>
+             </div>
+             <p class="hint" style="margin-top:2px">Per ogni stoppino (sopra o sotto il corpo della candela) con volume reale ≥ "Soglia volume" rispetto alla media delle righe di quella candela: se un lato (buy/sell) domina per almeno "Dominanza direzionale %" → <b>Rejection</b> (spinta decisa e respinta, pallino colore Rejection); se il volume è alto ma i due lati sono più bilanciati → <b>Absorption</b> (il movimento viene assorbito senza proseguire, pallino colore Absorption). La dimensione del pallino è proporzionale al volume reale nello stoppino, tra "Pallino min" e "Pallino max".</p>
+             <!-- RICHIESTO ESPLICITAMENTE: heatmap di liquidità costruita sul book REALE letto da
+                  MT5 (mt5.market_book_get, vedi /ws/orderbook/{symbol} in mt5_feed_server.py e
+                  connectMt5OrderBook/orderBookHistoryByAsset più sopra nel file). Colora lo sfondo
+                  del grafico, candela per candela, in base alla liquidità media in attesa (bid/ask)
+                  osservata negli snapshot del book caduti dentro la finestra temporale di quella
+                  candela. Solo Live + streaming MT5 attivo + simbolo con Market Depth pubblicato dal
+                  broker: altrove (storico/replay, o simboli senza DOM) semplicemente non compare
+                  nulla — nessun dato stimato o inventato, mai. -->
+             <div class="hint" style="margin:14px 0 6px;font-weight:700;letter-spacing:.3px">HEATMAP LIQUIDITÀ ORDER BOOK (MT5, solo Live)</div>
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="heatmapEnabled"> Mostra heatmap di liquidità sullo sfondo del grafico</label>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Altezza riga <input id="heatmapRowPips" type="number" min="0.1" step="0.1" value="5" style="width:60px">pip</span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Opacità max <input id="heatmapOpacity" type="number" min="5" max="100" step="5" value="60" style="width:55px">%</span>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore bid <input id="heatmapBidColor" type="color" class="colorPick" value="#2f6fed"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore ask <input id="heatmapAskColor" type="color" class="colorPick" value="#e05b4f"></span>
+             </div>
+             <p class="hint" style="margin-top:2px">Ogni cella (colonna = candela, riga = fascia di prezzo alta "Altezza riga" pip) prende il colore del lato con più volume in attesa in quella fascia (bid = blu, ask = rosso) nella media degli snapshot del book osservati durante quella candela; l'opacità è proporzionale alla quantità rispetto alla cella più "piena" in vista ora. Lo storico si accumula da quando lo streaming Live MT5 per questo simbolo è stato aperto in questa sessione — le candele precedenti restano senza heatmap.</p>
          </div>
        </div>
      </div>
@@ -1860,20 +1903,16 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    <button id="duplicateDrawingBtn" class="toolBtn" title="Duplica il disegno selezionato, spostandolo leggermente per non sovrapporlo all'originale (scorciatoie: Ctrl+C per copiare, Ctrl+V per incollare)">📋 Duplica selezionato</button>
    <button id="deleteSelectedDrawing" class="toolBtn" title="Elimina il disegno selezionato">🗑 Elimina selezionato</button>
    <button id="deleteAllDrawings" class="toolBtn danger" title="Elimina tutti i disegni">🗑 Rimuovi tutti</button>
-   <!-- RICHIESTO ESPLICITAMENTE: sezione con le frecce di navigazione storico + "torna
-        all'ultima candela", subito sotto "🗑 Rimuovi tutti" — essendo dentro #mainDrawToolbar
-        segue automaticamente il toolbar disegni ovunque venga spostato (schermo intero E
-        finestra separata/PIP, vedi moveDrawToolbarIntoSidebar più sotto nello script), quindi
-        resta visibile in TUTTE le sezioni come richiesto, pagina principale compresa. Il
-        pulsante "🎯 TORNA ALL'ULTIMA CANDELA" qui sotto è l'unica istanza (trasportato qui dalla
-        vecchia posizione sotto al grafico, non duplicato): stesso id "resetView" di sempre,
-        stesso listener già registrato più sotto nello script. Stesso discorso per "▶ PLAY" e il
-        moltiplicatore di velocità: spostati qui, affianco alle frecce, stessi identici id
-        "play"/"speed" di sempre (nessun secondo pulsante da tenere sincronizzato con lo stato
-        del replay: è letteralmente lo stesso elemento, solo spostato di posizione). Frecce,
-        PLAY e moltiplicatore stanno tutti e tre nella STESSA riga: nascondendo quella riga in
-        Live (vedi updateLiveModeUI) spariscono insieme, come richiesto ("visualizzabili solo in
-        modalità storico") — "🎯 Torna all'ultima candela" invece resta sempre visibile. -->
+   <!-- RICHIESTO ESPLICITAMENTE (di nuovo, dopo un primo tentativo non gradito): "🎯 Torna
+        all'ultima candela" NON deve più stare qui in mezzo a Duplica/Elimina/Tratteggia — deve
+        tornare sotto al grafico, come all'inizio (vedi #resetViewHome più sotto, fuori da
+        #mainDrawToolbar). Frecce ◀▶ + PLAY + moltiplicatore restano invece qui (nessuna lamentela
+        su questi), perché devono seguire il toolbar disegni in schermo intero/finestra separata
+        (PIP) — vedi moveDrawToolbarIntoSidebar più sotto nello script. Il bottone resetView vive
+        ora SOLO in #resetViewHome, spostato dentro la sidebar SOLO mentre si è in schermo intero
+        o nella finestra separata (vedi moveResetViewIntoSidebar()/restoreResetViewHome() più
+        sotto nello script) — così nella pagina normale resta sotto al grafico, ma resta comunque
+        raggiungibile quando il grafico è staccato/a schermo intero. -->
    <div id="pipHistNavSection" class="drawToolbar" style="flex-direction:column;align-items:stretch;gap:6px;width:auto">
      <div style="display:flex;gap:6px;flex-wrap:wrap">
        <button id="pipHistBackBtn" type="button" class="toolBtn" style="flex:1;min-width:36px" title="Candela precedente (stesso comando di ◀ INDIETRO)">◀</button>
@@ -1881,7 +1920,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <button id="play" class="primary" style="flex:2;min-width:90px">▶ PLAY</button>
        <select id="speed" title="Velocità Play" style="width:64px;flex:none"><option value="2000">0,5x</option><option value="1000" selected>1x</option><option value="500">2x</option><option value="250">4x</option><option value="100">10x</option></select>
      </div>
-     <button id="resetView" class="primary">🎯 TORNA ALL'ULTIMA CANDELA (scala auto)</button>
    </div>
  </div>
  <div class="drawToolbar" id="indicatorsToolbar" style="margin-top:8px">
@@ -1928,6 +1966,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  </div>
  <div class="chartWrap" id="chartWrap">
    <div id="chartFsSidebar" class="chartFsSidebar"></div>
+   <!-- RICHIESTO ESPLICITAMENTE: in schermo intero/finestra separata (PIP), un pulsantino a
+        freccia sul bordo destro della sidebar strumenti di disegno che nasconde/mostra l'intera
+        sidebar (compreso "Torna all'ultima candela", che ci finisce dentro via
+        moveResetViewIntoSidebar) per vedere il grafico a piena larghezza. Va SUBITO dopo
+        #chartFsSidebar nel markup (toggleFsSidebarCollapsed() lo trova con
+        previousElementSibling) — un solo pulsante, mai duplicato, che segue #chartWrap quando si
+        sposta per intero nella finestra separata (stesso principio già usato per
+        #mainDrawToolbar/#resetView). Nascosto di default (style.display qui sotto): lo mostra
+        solo moveDrawToolbarIntoSidebar(), lo nasconde solo restoreDrawToolbarHome() — stesso ciclo
+        di vita della sidebar stessa. -->
+   <button id="fsSidebarToggleBtn" class="fsSidebarToggleBtn" type="button" title="Nascondi gli strumenti di disegno" style="display:none">◀</button>
    <div id="chartMainArea">
    <canvas id="chart" draggable="false"></canvas>
    <div id="priceAxisZone"></div><div id="timeAxisZone"></div>
@@ -2052,6 +2101,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
      </button>
      <button id="floatReturnBtn" class="chartCornerBtn" style="display:none" title="Rientra dalla finestra flottante">🗗</button>
+     <!-- RICHIESTO ESPLICITAMENTE: finestre PIP AGGIUNTIVE (2ª/3ª/4ª), per chi ha più monitor —
+          a differenza di floatChartBtn qui sopra (che stacca lo STESSO grafico, un solo cervello
+          spostato tra due superfici), ognuna di queste è un'ISTANZA COMPLETA E INDIPENDENTE
+          dell'app (app.html?pipSlot=2/3/4 aperta con window.open): asset, timeframe, indicatori,
+          footprint/order flow/heatmap propri, scelti liberamente in ciascuna finestra — vedi
+          openExtraPipWindow()/PIP_SLOT più sotto nello script per l'implementazione completa e il
+          meccanismo di sincronizzazione (solo posizioni/conto, MAI la configurazione del
+          grafico) tra le finestre via BroadcastChannel. -->
+     <div id="extraPipGroup" class="chartCornerBtn" style="display:flex;padding:0;overflow:hidden;width:auto" title="Apri una finestra PIP aggiuntiva (asset/timeframe/indicatori indipendenti — per chi ha più monitor)">
+       <button type="button" class="extraPipSlotBtn" data-pip-slot="2" style="all:unset;cursor:pointer;padding:0 6px;font-size:11px;font-weight:700;display:flex;align-items:center">2</button>
+       <button type="button" class="extraPipSlotBtn" data-pip-slot="3" style="all:unset;cursor:pointer;padding:0 6px;font-size:11px;font-weight:700;display:flex;align-items:center;border-left:1px solid rgba(255,255,255,.15)">3</button>
+       <button type="button" class="extraPipSlotBtn" data-pip-slot="4" style="all:unset;cursor:pointer;padding:0 6px;font-size:11px;font-weight:700;display:flex;align-items:center;border-left:1px solid rgba(255,255,255,.15)">4</button>
+     </div>
      <select id="tfChart" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Cambia timeframe direttamente dal grafico">
        <option value="1">1m</option>
        <option value="5">5m</option>
@@ -2082,6 +2144,15 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         righe di #chartFloatControls/#chartFloatControlsExtra — vedi il top:86px in CSS. -->
    <div id="activeIndicators" class="inChartIndLegend"></div>
    </div>
+ </div>
+ <!-- RICHIESTO ESPLICITAMENTE: "🎯 Torna all'ultima candela" sotto al grafico, non più in mezzo
+      a Duplica/Elimina/Tratteggia — casa originaria di questo bottone (stesso id "resetView" di
+      sempre, stesso listener già registrato). Spostato dentro la sidebar SOLO mentre si è in
+      schermo intero o nella finestra separata (PIP) — vedi moveResetViewIntoSidebar()/
+      restoreResetViewHome() più sotto nello script — e riportato qui appena si torna alla vista
+      normale. -->
+ <div id="resetViewHome" style="margin-top:10px">
+   <button id="resetView" class="primary">🎯 TORNA ALL'ULTIMA CANDELA (scala auto)</button>
  </div>
  <div id="replayControlsRow" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
    <button id="back">◀ INDIETRO</button><button id="next">AVANTI ▶</button>
@@ -2160,6 +2231,34 @@ document.addEventListener('click',function(e){
 },true);
 
 let rows=[], baseRows=[], csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, zoneWidthDrag=null;
+// ===================================================================
+// FINESTRE PIP AGGIUNTIVE (multi-monitor): PIP_SLOT identifica QUESTA istanza della pagina.
+// slot 0 = finestra principale (comportamento identico a sempre, invariato: sessione salvata su
+// IndexedDB/localStorage, autosalvataggio, tutto come prima). slot 2/3/4 = finestre aperte da
+// openExtraPipWindow() (vedi più sotto vicino a floatingWin) con app.html?pipSlot=N — istanze
+// COMPLETE e indipendenti dell'app (proprio motore JS, proprio asset/timeframe/indicatori/
+// footprint/heatmap), MAI la sessione salvata della finestra principale: partono vuote (per
+// scelta esplicita dell'utente, discussa prima di costruire questa funzionalità — "solo live, si
+// azzerano alla chiusura") e non scrivono MAI su IndexedDB/localStorage (vedi i guard PIP_SLOT>0
+// dentro saveLightStateToLocalStorageNow()/saveLightStateNow()/initSession() più sotto): l'unica
+// fonte di verità persistente resta SEMPRE la finestra slot 0.
+// Posizioni/conto (positions, pendingOrders, trades, equity, sessionByMode...) restano invece
+// SEMPRE gli stessi in OGNI finestra aperta — un trader con più schermi vede lo stesso conto
+// ovunque — sincronizzati dal vivo tramite BroadcastChannel (vedi TRADING_CHANNEL più sotto):
+// aprire/chiudere/modificare un trade in QUALUNQUE finestra, per l'asset mostrato IN QUELLA
+// finestra (stesso identico codice di sempre, openMarketTrade()/closeTrade()/placeRealMt5Order(),
+// invariato: zero rischio di eseguire un trade sull'asset sbagliato), si riflette subito in tutte
+// le altre. La finestra slot 0 resta l'unica che scrive davvero su disco: un trade nato in una
+// finestra 2/3/4 arriva lì via broadcast e viene salvato come se fosse stato fatto lì — quindi se
+// si chiude la finestra principale (slot 0) le finestre PIP restano operative ma quel che vi si fa
+// da quel momento in poi non viene più persistito da nessuna parte finché slot 0 non torna aperta.
+const PIP_SLOT=(()=>{
+ try{
+   const v=Number(new URLSearchParams(location.search).get('pipSlot'));
+   return (Number.isFinite(v)&&v>=2&&v<=4)?v:0;
+ }catch(e){ return 0; }
+})();
+// ===================================================================
 // RICHIESTO ESPLICITAMENTE: colonna "Strategia" nel Trade Journal — elenco dei nomi di
 // strategia creati dall'utente (dal menu a tendina nell'intestazione, vedi
 // journalStrategyFilterSelect), globale per tutta l'app (non per asset/sessione), salvato in
@@ -2953,6 +3052,7 @@ function captureCurrentAssetChartView(sessionKey){
 // immediata ad ogni chiamata: la fotografia in memoria (sopra) resta invece sempre immediata.
 let assetChartViewsPersistTimer=null;
 function scheduleAssetChartViewsPersist(){
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non scrivono mai su disco: vedi PIP_SLOT più sopra
  if(assetChartViewsPersistTimer)clearTimeout(assetChartViewsPersistTimer);
  assetChartViewsPersistTimer=setTimeout(()=>{ idbPut('assetChartViews',assetChartViews); },800);
 }
@@ -2969,6 +3069,7 @@ function normalizeAssetChartViews(raw){
  return Object.assign(base,raw);
 }
 async function saveAssetChartViews(){
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non scrivono mai su disco: vedi PIP_SLOT più sopra
  captureCurrentAssetChartView(currentMode());
  await idbPut('assetChartViews',assetChartViews);
 }
@@ -3030,6 +3131,7 @@ function countAllAssetDrawings(){
  return n;
 }
 function persistDrawingsBackupNow(){
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non scrivono mai su disco: vedi PIP_SLOT più sopra
  try{
    mirrorCurrentDrawingsIntoAssetDrawings();
    const total=countAllAssetDrawings();
@@ -3060,12 +3162,23 @@ function armDrawingsPersistence(){
      drawingsBackupSig=sig;
      persistDrawingsBackupNow();
      scheduleSave();
+     broadcastDrawingsStateNow(); // vedi SINCRONIZZAZIONE DISEGNI TRA FINESTRE più sopra nel file
    }catch(e){}
  },1500);
 }
 function flushDrawingsOnExit(){
  if(!drawingsPersistenceArmed)return;
- try{ persistDrawingsBackupNow(); saveLightStateToLocalStorageNow(); }catch(e){}
+ try{
+   persistDrawingsBackupNow(); saveLightStateToLocalStorageNow();
+   // Richiesto esplicitamente: anche il log tick del footprint (buyer/seller) non deve mai
+   // perdersi a un refresh — qui normalmente scatta anche l'ultimo giro utile prima che la pagina
+   // sparisca davvero. idbPut su IndexedDB è asincrona e la pagina potrebbe chiudersi PRIMA che
+   // finisca (stessa limitazione, onesta, già documentata sopra per Firestore/pagehide): la si
+   // "lancia" comunque, perché i browser in pratica lasciano quasi sempre completare una
+   // transazione IndexedDB già aperta anche a pagina in chiusura — il salvataggio debounced a
+   // 800ms durante la sessione normale resta comunque la vera rete di sicurezza.
+   saveFootprintTicksNow();
+ }catch(e){}
 }
 window.addEventListener('pagehide',flushDrawingsOnExit);
 window.addEventListener('beforeunload',flushDrawingsOnExit);
@@ -3242,6 +3355,7 @@ let saveTimer=null;
 // più sotto), quindi non può mai risultare più vecchia dell'ultima azione fatta.
 const FOREX_LAB_STANDARD_STATE_KEY='forex_lab_standard_state';
 function saveLightStateToLocalStorageNow(){
+ if(PIP_SLOT>0)return null; // le finestre PIP aggiuntive non scrivono mai su disco: vedi PIP_SLOT più sopra
  let state=null;
  try{
    state=collectLightSessionState();
@@ -3263,6 +3377,17 @@ function saveLightStateToLocalStorageNow(){
  return state;
 }
 function scheduleSave(){
+ // TRADING SYNC (finestre PIP multiple, vedi PIP_SLOT più sopra nel file): ad ogni singola
+ // azione, in QUALUNQUE finestra, si prova a comunicare alle altre lo stato aggiornato del conto
+ // (posizioni/ordini pendenti/trade/equity) — vedi broadcastTradingStateNow() più sotto. Saltato
+ // se questa chiamata arriva mentre stiamo APPLICANDO una sincronizzazione ricevuta da un'altra
+ // finestra (applyingRemoteTradingSync): altrimenti ogni finestra rimbalzerebbe all'infinito lo
+ // stesso aggiornamento alle altre.
+ broadcastTradingStateNow();
+ // Le finestre PIP aggiuntive (PIP_SLOT>0) non scrivono MAI su disco (localStorage/IndexedDB):
+ // solo la finestra principale (slot 0) è la fonte di verità persistente — vedi il commento
+ // completo su PIP_SLOT più sopra nel file per il perché di questa scelta.
+ if(PIP_SLOT>0)return;
  // NESSUNA guardia su baseRows.length: subito dopo un cambio sessione l'asset è volutamente
  // vuoto (clearAssetSelectionForSessionSwitch), ma il cambio di conto/sessione va comunque
  // salvato subito, altrimenti un ricaricamento nel mezzo lo perderebbe.
@@ -3278,12 +3403,17 @@ function scheduleSave(){
 }
 
 async function saveLightStateNow(){
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non scrivono mai su disco: vedi PIP_SLOT più sopra
  if(saveTimer){clearTimeout(saveTimer);saveTimer=null;}
  const state=saveLightStateToLocalStorageNow()||collectLightSessionState(); // stessa fotografia già scritta su localStorage, riusata anche per IndexedDB
  // SALVATAGGIO LOCALE: IndexedDB resta la fonte più capiente (nessun limite pratico di
  // dimensione, utile perché qui viaggiano anche gli array di trade/disegni), ma da ora
  // localStorage (sopra) è quella scritta per prima e più spesso.
  const ok=await idbPut('state',state);
+ // Log tick grezzo del footprint (buyer/seller per candela): stesso giro debounced, MAI quello
+ // sincrono su localStorage (potenzialmente troppo grande) — vedi footprintTicksDirty più sotto
+ // nel file, che evita di riscriverlo quando non c'è nulla di nuovo.
+ saveFootprintTicksNow();
  // NIENTE PIÙ SCRITTURE SU FIRESTORE QUI: prima veniva chiamato window.fxbtCloud.save(state)
  // ad ogni autosalvataggio (ogni ~800ms durante il trading attivo), generando un numero di
  // scritture/trasferimenti enorme sul piano Blaze. Da ora Firestore viene aggiornato UNA SOLA
@@ -3291,6 +3421,124 @@ async function saveLightStateNow(){
  // più sotto, agganciata a pagehide/logout (mai al semplice cambio tab).
  const el=$('autosaveStatus');
  if(el)el.textContent=ok?('Sessione salvata • '+new Date().toLocaleTimeString('it-IT')):'⚠️ Salvataggio non riuscito';
+}
+
+// ===================================================================
+// TRADING SYNC TRA FINESTRE PIP (BroadcastChannel) — vedi il commento completo su PIP_SLOT più
+// sopra nel file per il quadro d'insieme. Qui: SOLO il conto (posizioni/ordini pendenti/trade/
+// equity/sessioni per modalità) viaggia tra le finestre, MAI la configurazione del grafico
+// (asset/timeframe/indicatori/disegni/footprint/heatmap) — quella resta libera e indipendente in
+// ciascuna finestra, per costruzione (semplicemente non viene mai messa in questo messaggio).
+const TRADING_CHANNEL_NAME='fxbt_trading_sync_v1';
+let tradingChannel=null;
+try{ tradingChannel=('BroadcastChannel' in window)?new BroadcastChannel(TRADING_CHANNEL_NAME):null; }catch(e){ tradingChannel=null; }
+// true mentre si sta APPLICANDO un messaggio ricevuto da un'altra finestra: scheduleSave() (vedi
+// sopra) guarda questo flag per non ri-trasmettere all'infinito lo stesso aggiornamento appena
+// ricevuto (ogni finestra lo riapplicherebbe, ritrasmetterebbe, e così via).
+let applyingRemoteTradingSync=false;
+function collectTradingSyncPayload(){
+ return {
+   type:'trading_sync', slot:PIP_SLOT, at:Date.now(),
+   positions:stripMt5TrackedForSave(positions),
+   pendingOrders:stripMt5TrackedForSave(pendingOrders),
+   trades, equity, sessionByMode, statsBaselineByMode, isPropFirmMode, tradeStrategies
+ };
+}
+function broadcastTradingStateNow(){
+ if(!tradingChannel||applyingRemoteTradingSync)return;
+ try{ tradingChannel.postMessage(collectTradingSyncPayload()); }catch(e){ console.warn('Broadcast stato conto (PIP) non riuscito:',e); }
+}
+// Guardia duplicato-asset (evita di valutare due volte lo stesso Stop Loss/Take Profit se lo
+// STESSO asset è mostrato in due finestre insieme, es. stesso simbolo a due timeframe diversi su
+// due monitor): ogni finestra annuncia il proprio asset a grafico; evaluate() più sotto nel file
+// (SOLO per le posizioni simulate, mai per quelle reali mt5Ticket — il broker decide da solo
+// quando le sue chiudere) salta la chiusura automatica per un asset se un'altra finestra con slot
+// PIÙ BASSO (la principale, slot 0, vince sempre) sta mostrando lo stesso asset ORA — criterio
+// deterministico, nessuna doppia elaborazione possibile.
+let siblingAssetBySlot={};
+let __lastAnnouncedAsset=undefined;
+function broadcastAssetAnnounce(){
+ if(!tradingChannel)return;
+ try{ tradingChannel.postMessage({type:'asset_announce',slot:PIP_SLOT,asset:currentAssetKey||null}); }catch(e){}
+}
+function anotherWindowOwnsAssetEvaluation(asset){
+ if(!asset)return false;
+ for(const slotStr in siblingAssetBySlot){
+   const slot=Number(slotStr);
+   if(slot===PIP_SLOT)continue;
+   if(siblingAssetBySlot[slotStr]===asset && slot<PIP_SLOT)return true;
+ }
+ return false;
+}
+// SINCRONIZZAZIONE DISEGNI TRA FINESTRE (RICHIESTO ESPLICITAMENTE): quando lo STESSO asset (e la
+// STESSA modalità Storico/Live/Prop Firm — i disegni sono salvati per asset+modalità, vedi
+// assetDrawings più sopra nel file) è mostrato in due o più finestre insieme, tutto ciò che vive
+// nell'array `drawings` — trendline, linee estese, rettangoli, Fibonacci, VWAP, Profilo
+// Volumetrico, linee Allarme (type:'alarmline', stesso array, vedi checkAlarmLines()) — resta
+// sincronizzato tra quelle finestre: disegni/modifichi/cancelli in una, compare subito anche
+// nell'altra. Gli INDICATORI (activeIndicators) restano SEMPRE e SOLO locali a ciascuna finestra,
+// per scelta esplicita: non c'è alcun messaggio per loro qui, quindi non vengono mai toccati.
+// Riusa lo stesso giro (ogni 1500ms) già usato da armDrawingsPersistence() per rilevare un
+// cambiamento nei disegni — nessun nuovo punto d'aggancio sparso nel codice.
+let applyingRemoteDrawingsSync=false;
+function broadcastDrawingsStateNow(){
+ if(!tradingChannel||applyingRemoteDrawingsSync||!currentAssetKey)return;
+ try{ tradingChannel.postMessage({type:'drawings_sync',slot:PIP_SLOT,asset:currentAssetKey,mode:currentMode(),drawings}); }catch(e){}
+}
+function requestDrawingsSyncNow(){
+ if(!tradingChannel||!currentAssetKey)return;
+ try{ tradingChannel.postMessage({type:'drawings_sync_request',slot:PIP_SLOT,asset:currentAssetKey,mode:currentMode()}); }catch(e){}
+}
+if(tradingChannel){
+ tradingChannel.onmessage=(ev)=>{
+   const msg=ev&&ev.data;
+   if(!msg||typeof msg!=='object'||msg.slot===PIP_SLOT)return;
+   if(msg.type==='trading_sync'){
+     applyingRemoteTradingSync=true;
+     try{
+       positions=Array.isArray(msg.positions)?msg.positions:positions;
+       pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
+       trades=Array.isArray(msg.trades)?msg.trades:trades;
+       equity=Array.isArray(msg.equity)?msg.equity:equity;
+       if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
+       if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
+       if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
+       if(msg.tradeStrategies)tradeStrategies=msg.tradeStrategies;
+       // "active" (la posizione selezionata nelle caselle SL/TP) resta SEMPRE locale a questa
+       // finestra — ma se puntava a una posizione che nel frattempo è stata chiusa altrove, va
+       // sganciata per non lasciare un riferimento orfano.
+       if(active&&!positions.includes(active))active=null;
+       if(PIP_SLOT===0)scheduleSave(); // la finestra principale persiste comunque il trade arrivato da un'altra finestra
+     }finally{ applyingRemoteTradingSync=false; }
+     try{ draw(); update(); }catch(e){}
+   }else if(msg.type==='trading_sync_request'){
+     broadcastTradingStateNow();
+   }else if(msg.type==='asset_announce'){
+     siblingAssetBySlot[msg.slot]=msg.asset||null;
+   }else if(msg.type==='drawings_sync'){
+     // Applicato SOLO se questa finestra sta mostrando ORA lo stesso identico asset+modalità del
+     // mittente — vedi il commento completo su SINCRONIZZAZIONE DISEGNI più sopra.
+     if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey&&msg.mode===currentMode()&&Array.isArray(msg.drawings)){
+       applyingRemoteDrawingsSync=true;
+       try{
+         drawings=msg.drawings;
+         selectedDrawing=null; // un riferimento selezionato potrebbe puntare a un oggetto ormai sostituito dalla sincronizzazione
+         mirrorCurrentDrawingsIntoAssetDrawings();
+         // Aggiorna subito la "firma" che armDrawingsPersistence() confronta ogni 1500ms: senza
+         // questo, al giro successivo vedrebbe i disegni appena ricevuti come "cambiati" (diversi
+         // dall'ultima firma nota) e li ritrasmetterebbe subito indietro inutilmente.
+         drawingsBackupSig=currentMode()+'|'+(currentAssetKey||'')+'|'+JSON.stringify(drawings);
+         draw();
+       }finally{ applyingRemoteDrawingsSync=false; }
+     }
+   }else if(msg.type==='drawings_sync_request'){
+     if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey&&msg.mode===currentMode())broadcastDrawingsStateNow();
+   }
+ };
+ // All'avvio, chiede alle altre finestre già aperte lo stato attuale del conto — così una
+ // finestra PIP aperta ORA mostra subito le posizioni/il saldo già in corso, invece di partire
+ // "a zero" finché qualcuno non fa un nuovo trade da qualche parte.
+ try{ tradingChannel.postMessage({type:'trading_sync_request',slot:PIP_SLOT}); }catch(e){}
 }
 
 // ===================================================================
@@ -3304,6 +3552,7 @@ async function saveLightStateNow(){
 let lastFirebaseSyncAt=0;
 const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più eventi scattano insieme
 async function syncFullStatusToFirebase(reason,force){
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non toccano MAI il salvataggio cloud dell'account: vedi PIP_SLOT più sopra
  if(!(window.fxbtCloud && window.fxbtCloud.uid))return; // non loggato: niente cloud, solo locale
  // NIENTE guardia su baseRows.length qui: subito dopo un cambio sessione l'asset è
  // volutamente vuoto (vedi clearAssetSelectionForSessionSwitch), ma conto/Trade Journal/
@@ -3356,10 +3605,24 @@ window.addEventListener('pagehide', ()=>{
 window.syncFullStatusToFirebase = syncFullStatusToFirebase;
 
 async function saveCsvNow(){
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non scrivono mai su disco: vedi PIP_SLOT più sopra
  await idbPut('csv',{library:csvLibrary});
 }
 async function clearSavedSession(){
+ if(PIP_SLOT>0){
+   // Una finestra PIP aggiuntiva non ha una sessione propria salvata da cancellare (non scrive
+   // mai su disco, vedi PIP_SLOT più sopra nel file) — idbClearAll() qui sotto cancellerebbe
+   // invece la sessione VERA della finestra principale, condivisa dalla stessa origine: bloccato.
+   const el=$('autosaveStatus');
+   if(el)el.textContent='In questa finestra PIP non c\'è nessuna sessione salvata da cancellare (solo la finestra principale salva su disco).';
+   return;
+ }
  await idbClearAll();
+ // idbClearAll() svuota anche la chiave 'footprintTicks' appena aggiunta: allineiamo la copia in
+ // RAM, altrimenti il prossimo giro di saveLightStateNow() la riscriverebbe subito su IndexedDB
+ // (footprintTicksDirty resta comunque false qui: non c'è nulla di NUOVO da salvare).
+ footprintTickLogByAsset={};
+ footprintByBucket={};
  const el=$('autosaveStatus');
  if(el)el.textContent='Dati salvati cancellati.';
 }
@@ -4061,6 +4324,9 @@ function openVpSettingsModal(target){
    if($('vpValWidth'))$('vpValWidth').value=target.valWidth||1;
    if($('vpValLineStyle'))$('vpValLineStyle').value=target.valLineStyle||'dashed';
    if($('vpVaExtend'))$('vpVaExtend').checked=!!target.vaExtend;
+   if($('obEnabled'))$('obEnabled').checked=!!target.obEnabled;
+   if($('obBidColor'))$('obBidColor').value=target.obBidColor||'#2f6fed';
+   if($('obAskColor'))$('obAskColor').value=target.obAskColor||'#e05b4f';
  }else{
    if($('vpVwapColor'))$('vpVwapColor').value=target.color||defaultColorFor('vwap');
    if($('vpVwapWidth'))$('vpVwapWidth').value=target.lineWidth||2;
@@ -4144,6 +4410,9 @@ function applyVpSettingsFromModal(){
    d.valWidth=Number.isFinite(valW)?Math.max(1,Math.min(10,valW)):d.valWidth;
    d.valLineStyle=$('vpValLineStyle')?.value==='solid'?'solid':'dashed';
    d.vaExtend=!!$('vpVaExtend')?.checked;
+   d.obEnabled=!!$('obEnabled')?.checked;
+   d.obBidColor=$('obBidColor')?.value||d.obBidColor;
+   d.obAskColor=$('obAskColor')?.value||d.obAskColor;
  }else{
    d.color=$('vpVwapColor')?.value||d.color;
    const wVal=Math.round(Number($('vpVwapWidth')?.value));
@@ -4204,6 +4473,24 @@ function placeLabelY(x,w,desiredY,h,minY,maxY){
  if(Number.isFinite(maxY))y=Math.min(maxY-h,y);
  labelPlacements.push({x,y,w,h});
  return y;
+}
+// RICHIESTO ESPLICITAMENTE: i pallini Absorption/Rejection del footprint non devono sovrapporsi
+// a testi/icone già disegnati da un indicatore attivo sopra o sotto le candele (es. le
+// etichette "B"/"Wick" di Support & Resistance with Breaks, "BSL"/"SSL", le label BOS/CHoCH e i
+// box FVG/Breaker di ICT Reversal Setup — ognuno registra il proprio rettangolo qui dentro subito
+// dopo averlo disegnato, vedi INDICATOR_DEFS più sotto). Stesso registro condiviso di
+// placeLabelY() sopra, ma a differenza sua qui la ricerca è SOLO in una direzione (mai bidirezionale):
+// un pallino sopra la candela va spostato ANCORA più in alto se collide, uno sotto ANCORA più in
+// basso — mai dall'altra parte, altrimenti finirebbe dentro il corpo della candela stessa.
+function placeArDotCenterY(cx,radius,desiredCy,dir,minY,maxY){
+ const w=radius*2,h=radius*2;
+ const collide=cy=>labelPlacements.some(b=>(cx-radius)<b.x+b.w&&(cx+radius)>b.x&&(cy-radius)<b.y+b.h&&(cy+radius)>b.y);
+ let cy=desiredCy,guard=0;
+ while(collide(cy)&&guard<40){ cy+=dir*(radius*0.6+2); guard++; }
+ if(Number.isFinite(minY))cy=Math.max(minY+radius,cy);
+ if(Number.isFinite(maxY))cy=Math.min(maxY-radius,cy);
+ labelPlacements.push({x:cx-radius,y:cy-radius,w,h});
+ return cy;
 }
 // Etichetta di riferimento colorata sulla scala prezzi (bordo destro), stile TradingView:
 // usata per ENTRY/TP/SL delle posizioni aperte. `y` è la funzione prezzo->pixel di draw()
@@ -5297,6 +5584,29 @@ function computeVolumeProfile(startIdx,endIdx,buckets){
  for(let b=0;b<nb;b++)maxTotal=Math.max(maxTotal,upVol[b]+downVol[b]);
  return{priceLo,priceHi,bucketSize,upVol,downVol,maxTotal,buckets:nb};
 }
+// Order Book Profile: raggruppa i livelli REALI del book MT5 (letto in questo momento da
+// /ws/orderbook/{symbol}, vedi connectMt5OrderBook) sulla STESSA griglia di prezzo già usata
+// dall'istogramma di destra (priceLo/bucketSize/buckets di un profilo già calcolato da
+// computeVolumeProfile), così le due barre — bid a sinistra, ask a destra del prezzo — restano
+// allineate riga per riga col volume scambiato. A differenza dell'istogramma di destra questo NON
+// è uno storico: è lo snapshot del book COSÌ COM'È ORA (il book cambia in continuazione, non ha
+// senso "sommarlo" nel tempo) — se il book è vuoto o non disponibile, ogni bucket resta a 0 e non
+// si disegna nulla (mai un book inventato).
+function bucketOrderBookIntoProfile(book,priceLo,bucketSize,buckets){
+ const bidVol=new Array(buckets).fill(0), askVol=new Array(buckets).fill(0);
+ if(!book||!(bucketSize>0))return {bidVol,askVol,maxLevel:0};
+ const put=(arr,price,vol)=>{
+   if(!Number.isFinite(price)||!Number.isFinite(vol)||vol<=0)return;
+   const b=Math.floor((price-priceLo)/bucketSize);
+   if(b<0||b>=buckets)return;
+   arr[b]+=vol;
+ };
+ (book.bids||[]).forEach(e=>put(bidVol,e.price,e.volume));
+ (book.asks||[]).forEach(e=>put(askVol,e.price,e.volume));
+ let maxLevel=0;
+ for(let i=0;i<buckets;i++)maxLevel=Math.max(maxLevel,bidVol[i],askVol[i]);
+ return {bidVol,askVol,maxLevel};
+}
 // POC (Point of Control, il bucket con più volume) e Value Area (VAH/VAL, i bordi alto/basso
 // della zona che racchiude il 70% del volume totale, partendo dal POC e allargandosi verso il
 // bucket vicino con più volume ad ogni passo — stesso principio del calcolo standard della Value
@@ -6386,10 +6696,14 @@ const INDICATOR_DEFS={
          const yy=y(row.high)-13;
          ctx.beginPath();ctx.moveTo(xx,yy+7);ctx.lineTo(xx-5,yy);ctx.lineTo(xx+5,yy);ctx.closePath();ctx.fill();
          ctx.fillStyle='#0b1016';ctx.font=scaledFont('8px system-ui');ctx.textAlign='center';ctx.fillText(label,xx,yy-3);
+         // Registrato per i pallini Absorption/Rejection del footprint (vedi placeArDotCenterY):
+         // ingombro dell'icona freccia + etichetta, così un pallino non ci finisce sopra.
+         labelPlacements.push({x:xx-7,y:yy-11,w:14,h:18});
        }else{
          const yy=y(row.low)+13;
          ctx.beginPath();ctx.moveTo(xx,yy-7);ctx.lineTo(xx-5,yy);ctx.lineTo(xx+5,yy);ctx.closePath();ctx.fill();
          ctx.fillStyle='#0b1016';ctx.font=scaledFont('8px system-ui');ctx.textAlign='center';ctx.fillText(label,xx,yy+10);
+         labelPlacements.push({x:xx-7,y:yy-7,w:14,h:18});
        }
      }
      ctx.restore();
@@ -6677,6 +6991,8 @@ const INDICATOR_DEFS={
            ctx.setLineDash([]);
            ctx.fillStyle=color; ctx.font=scaledFont('9px system-ui'); ctx.textAlign='left';
            ctx.fillText(label,xAbs(z.startX)+2,y(z.level)-3);
+           // Registrato per i pallini Absorption/Rejection del footprint (vedi placeArDotCenterY).
+           labelPlacements.push({x:xAbs(z.startX)+1,y:y(z.level)-12,w:ctx.measureText(label).width+4,h:14});
          }else if(Number.isFinite(z.zoneTop) && Number.isFinite(z.zoneBot)){
            ctx.fillStyle=hexToRgba(color,.18);
            ctx.fillRect(xAbs(z.zoneLeft),y(z.zoneTop),xAbs(z.zoneRight)-xAbs(z.zoneLeft),y(z.zoneBot)-y(z.zoneTop));
@@ -6854,7 +7170,11 @@ const INDICATOR_DEFS={
        if(lb.idx<dataStart-2||lb.idx>dataEnd+2)return;
        const xx=xAbs(lb.idx), yy=y(lb.price);
        ctx.fillStyle=lb.color||p.textColor||'#fff';
-       ctx.fillText(lb.text, xx, lb.dir==='down'?yy-8:yy+14);
+       const ly=lb.dir==='down'?yy-8:yy+14;
+       ctx.fillText(lb.text, xx, ly);
+       // Registrato per i pallini Absorption/Rejection del footprint (vedi placeArDotCenterY).
+       const ltw=ctx.measureText(lb.text).width;
+       labelPlacements.push({x:xx-ltw/2-2,y:ly-10,w:ltw+4,h:13});
      });
      ctx.restore();
      st.mssLines.forEach(ln=>{
@@ -6874,6 +7194,9 @@ const INDICATOR_DEFS={
        ctx.strokeRect(Math.min(x1,x2),Math.min(yTop,yBot),Math.abs(x2-x1),Math.abs(yBot-yTop));
        ctx.fillStyle=b.color; ctx.font=scaledFont('9px system-ui,sans-serif'); ctx.textAlign='left';
        ctx.fillText(b.text, Math.min(x1,x2)+3, Math.min(yTop,yBot)+11);
+       // Registrato per i pallini Absorption/Rejection del footprint (vedi placeArDotCenterY).
+       const btw=ctx.measureText(b.text).width;
+       labelPlacements.push({x:Math.min(x1,x2)+2,y:Math.min(yTop,yBot)+2,w:btw+4,h:12});
        ctx.restore();
      };
      st.breakerBoxes.forEach(drawBox);
@@ -8158,11 +8481,16 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style){
      }
    }
  });
- const topY=yFn(r.high), botY=yFn(r.low);
- ctx.strokeStyle=lineColor; ctx.lineWidth=1;
- ctx.strokeRect(xx-half,topY,bw,Math.max(1,botY-topY));
+ // RICHIESTO ESPLICITAMENTE: rimosso il bordo (strokeRect) che delimitava l'intera candela
+ // [high,low] — ridondante in modalità footprint, dove l'estensione delle caselline colorate
+ // rende già visibile dove finisce la candela, senza bisogno di un contorno separato.
 }
 function draw(){
+ // Annuncia l'asset a grafico ORA alle altre finestre PIP (solo se cambiato dall'ultima volta —
+ // vedi anotherWindowOwnsAssetEvaluation()/broadcastAssetAnnounce() più sopra nel file): usato
+ // solo per la guardia anti-doppia-chiusura SL/TP quando lo stesso asset è aperto in due finestre
+ // insieme, costo trascurabile (un confronto di stringa) ad ogni ridisegno.
+ if(currentAssetKey!==__lastAnnouncedAsset){ __lastAnnouncedAsset=currentAssetKey; broadcastAssetAnnounce(); requestDrawingsSyncNow(); }
  const c=$('chart'),ctx=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
  // Sfondo del grafico personalizzabile (tasto Style → Background): tutte le "linee del
  // grafico" (griglia, assi, mirino, linea prezzo corrente, testo dei disegni) si adattano di
@@ -8177,6 +8505,9 @@ function draw(){
  // pointerdown del canvas per sapere su quale casella TP-SL si è cliccato (vedi
  // zoneStatsOpenKey/zoneClickCandidateKey).
  zoneBoxHitRects=[];
+ // Ripopolata più sotto, durante il disegno vero e proprio delle candele footprint — vedi
+ // footprintCellClickCandidate/click-to-cycle-stile nel pointerdown/pointerup del canvas.
+ footprintCellHitRects=[];
  // Pulizia: una posizione chiusa non deve lasciare per sempre la sua chiave in
  // tpSlZoneFillHiddenByOwner (mai più letta, ma crescerebbe all'infinito in una sessione lunga
  // con molte posizioni aperte/chiuse). Basta confrontare con le posizioni APERTE ora.
@@ -8302,6 +8633,70 @@ function draw(){
    }
    return{r,xx,xxLeft:xx-bw/2,xxRight:xx+bw/2,fp};
  }):null;
+ // Heatmap di liquidità (Order Book MT5 reale): livello di sfondo, disegnato PRIMA delle candele
+ // (e prima delle zone zero-print, che devono restare leggibili sopra) — vedi
+ // connectMt5OrderBook()/orderBookHistoryByAsset e heatmapEnabledNow()/heatmapStepForAsset() più
+ // sopra nel file. Colora ogni cella [candela, fascia di prezzo] in base alla liquidità media
+ // bid/ask osservata negli snapshot REALI del book caduti dentro la finestra temporale di quella
+ // candela — una candela senza snapshot in quella finestra (storico prima dell'apertura dello
+ // streaming MT5 dell'order book, o simbolo senza Market Depth) resta semplicemente senza
+ // heatmap: nessun dato stimato o inventato.
+ if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
+   const _hmHist=orderBookHistoryByAsset[mt5ActiveSymbol];
+   if(_hmHist&&_hmHist.length){
+     const _hmRowSize=heatmapStepForAsset(currentAssetKey);
+     if(_hmRowSize>0){
+       const _hmTfMs=(currentTF||1)*60000;
+       const _hmRowLoBase=Math.floor(lo/_hmRowSize)*_hmRowSize;
+       const _hmNRows=Math.max(1,Math.min(2000,Math.ceil((hi-_hmRowLoBase)/_hmRowSize)));
+       const _hmCellBid=new Array(data.length), _hmCellAsk=new Array(data.length);
+       let _hmMaxCell=0, _hmCursor=0; // _hmHist è cronologico crescente: un solo passaggio avanti, mai riavvolto
+       for(let i=0;i<data.length;i++){
+         const r=data[i];
+         const tStart=parseDateTime(r.date);
+         if(!Number.isFinite(tStart)){ _hmCellBid[i]=null; _hmCellAsk[i]=null; continue; }
+         const tEnd=tStart+_hmTfMs;
+         while(_hmCursor<_hmHist.length&&_hmHist[_hmCursor].time_ms<tStart)_hmCursor++;
+         let j=_hmCursor, cnt=0;
+         const bidRows=new Array(_hmNRows).fill(0), askRows=new Array(_hmNRows).fill(0);
+         while(j<_hmHist.length&&_hmHist[j].time_ms<tEnd){
+           const snap=_hmHist[j];
+           (snap.bids||[]).forEach(e=>{ const rIdx=Math.floor((e.price-_hmRowLoBase)/_hmRowSize); if(rIdx>=0&&rIdx<_hmNRows&&Number.isFinite(e.volume))bidRows[rIdx]+=e.volume; });
+           (snap.asks||[]).forEach(e=>{ const rIdx=Math.floor((e.price-_hmRowLoBase)/_hmRowSize); if(rIdx>=0&&rIdx<_hmNRows&&Number.isFinite(e.volume))askRows[rIdx]+=e.volume; });
+           cnt++; j++;
+         }
+         if(cnt>0){
+           for(let rI=0;rI<_hmNRows;rI++){ bidRows[rI]/=cnt; askRows[rI]/=cnt; _hmMaxCell=Math.max(_hmMaxCell,bidRows[rI],askRows[rI]); }
+           _hmCellBid[i]=bidRows; _hmCellAsk[i]=askRows;
+         }else{ _hmCellBid[i]=null; _hmCellAsk[i]=null; }
+       }
+       if(_hmMaxCell>0){
+         ctx.save();
+         const _hmBaseOp=heatmapOpacityNow();
+         const _hmBidCol=$('heatmapBidColor')?.value||'#2f6fed', _hmAskCol=$('heatmapAskColor')?.value||'#e05b4f';
+         for(let i=0;i<data.length;i++){
+           const bidRows=_hmCellBid[i], askRows=_hmCellAsk[i];
+           if(!bidRows)continue;
+           const xxL=x(i)-bw/2, cellW=Math.max(1,bw);
+           for(let rI=0;rI<_hmNRows;rI++){
+             const rowLoPrice=_hmRowLoBase+rI*_hmRowSize, rowHiPrice=rowLoPrice+_hmRowSize;
+             const yTop=y(rowHiPrice), yBot=y(rowLoPrice);
+             if(yBot<pad.t||yTop>h-pad.b)continue;
+             const bidV=bidRows[rI], askV=askRows[rI];
+             if(bidV<=0&&askV<=0)continue;
+             const dominant=bidV>=askV?_hmBidCol:_hmAskCol;
+             const val=Math.max(bidV,askV);
+             const alpha=Math.min(1,val/_hmMaxCell)*_hmBaseOp;
+             if(alpha<=0.01)continue;
+             ctx.fillStyle=hexToRgba(dominant,alpha);
+             ctx.fillRect(xxL,yTop,cellW,Math.max(1,yBot-yTop));
+           }
+         }
+         ctx.restore();
+       }
+     }
+   }
+ }
  // Zone zero-print (imbalance): calcolate PRIMA di disegnare le candele e disegnate SUBITO DOPO,
  // così restano SOTTO alle candele (come la banda grigia nel riferimento fornito dall'utente),
  // non sopra.
@@ -8322,15 +8717,45 @@ function draw(){
    const fp=_footprintEntries?_footprintEntries[i].fp:null;
    if(fp){
      drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle);
+     // Area cliccabile per il cambio-stile al click (vedi footprintCellClickCandidate nel
+     // pointerdown/pointerup del canvas): l'intera estensione verticale della candela
+     // (high->low, coordinate schermo in Y possono invertirsi a seconda della scala, per questo
+     // Math.min/Math.max) — coincide con l'ingombro reale delle caselline disegnate sopra.
+     footprintCellHitRects.push({xxLeft:xx-bw/2,xxRight:xx+bw/2,yTop:Math.min(y(r.high),y(r.low)),yBot:Math.max(y(r.high),y(r.low))});
      return;
    }
    ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
    ctx.beginPath();ctx.moveTo(xx,y(r.high));ctx.lineTo(xx,y(r.low));ctx.stroke();
    let top=y(Math.max(r.open,r.close)), bot=y(Math.min(r.open,r.close));ctx.fillRect(xx-bw/2,top,bw,Math.max(1,bot-top));
  });
- // Pallini Absorption/Rejection: disegnati DOPO le candele (devono stare sopra, appoggiati sulla
- // punta dello stoppino, esattamente come nel riferimento fornito dall'utente) — vedi
- // footprintFindAbsorptionRejectionMarkers() per la logica di classificazione/dimensione.
+ // Indicatori attivi (es. Support & Resistance with Breaks): calcolati in modo incrementale
+ // fino alla candela corrente `idx` (mai oltre: il futuro non viene mostrato/anticipato) e
+ // disegnati SOTTO ai disegni utente, sopra alle candele. SPOSTATO QUI, PRIMA dei pallini
+ // Absorption/Rejection (RICHIESTO ESPLICITAMENTE: i pallini non devono sovrapporsi a testi/
+ // icone disegnati da un indicatore) — ogni indicatore che disegna testo/icone accanto alle
+ // candele registra il proprio rettangolo in labelPlacements subito dopo averlo disegnato (vedi
+ // sr_breaks/bsl_ssl_fvg/ict_reversal_setup più sotto), così i pallini, disegnati dopo, possono
+ // vederlo e spostarsi di conseguenza (placeArDotCenterY() qui sotto).
+ if(activeIndicators.length){
+   const xAbs=j=>pad.l+(j-start+.5)*cw/n;
+   activeIndicators.forEach(ind=>{
+     const def=INDICATOR_DEFS[ind.key]; if(!def)return;
+     try{
+       def.compute(rows,idx,ind);
+       if(!ind.hidden)def.render(ctx,ind,rows,dataStart,dataEnd,xAbs,y);
+     }catch(err){ /* un indicatore mal configurato non deve rompere il resto del grafico */ }
+   });
+ }
+ // Pallini Absorption/Rejection: disegnati DOPO le candele E dopo gli indicatori attivi (devono
+ // stare sopra, appoggiati sulla punta dello stoppino, esattamente come nel riferimento fornito
+ // dall'utente) — vedi footprintFindAbsorptionRejectionMarkers() per la logica di
+ // classificazione/dimensione. RICHIESTO ESPLICITAMENTE: se un indicatore ha già disegnato del
+ // testo/un'icona in quella posizione (registrato in labelPlacements qui sopra), il pallino viene
+ // spinto ANCORA PIÙ IN ALTO (stoppino superiore) o ANCORA PIÙ IN BASSO (stoppino inferiore) —
+ // mai dall'altra parte, mai dentro il corpo della candela — finché non trova spazio libero.
+ // Limite onesto: copre solo gli indicatori integrati che registrano il proprio ingombro (vedi
+ // sopra); lo "Script personalizzato" (Pine-like) disegna solo linee, mai testo/icone sopra le
+ // candele, quindi non ha nulla da registrare qui.
  if(_footprintOn&&_footprintEntries&&footprintArEnabledNow()){
    const arMinVolMult=footprintArMinVolMultNow(), arDominance=footprintArDominancePctNow();
    const arRejColor=footprintArRejectionColorNow(), arAbsColor=footprintArAbsorptionColorNow();
@@ -8338,8 +8763,10 @@ function draw(){
    const arMarkers=footprintFindAbsorptionRejectionMarkers(_footprintEntries,arMinVolMult,arDominance);
    ctx.save();
    arMarkers.forEach(m=>{
-     const cy=y(m.price)+(m.side==='upper'?-1:1)*(arMinPx+(arMaxPx-arMinPx)*m.intensity+2);
+     const dir=m.side==='upper'?-1:1;
      const radius=arMinPx+(arMaxPx-arMinPx)*m.intensity;
+     const desiredCy=y(m.price)+dir*(radius+2);
+     const cy=placeArDotCenterY(m.xx,radius,desiredCy,dir,pad.t,h-pad.b);
      ctx.beginPath();
      ctx.arc(m.xx,cy,radius,0,Math.PI*2);
      ctx.fillStyle=m.kind==='rejection'?arRejColor:arAbsColor;
@@ -8350,19 +8777,6 @@ function draw(){
      ctx.stroke();
    });
    ctx.restore();
- }
- // Indicatori attivi (es. Support & Resistance with Breaks): calcolati in modo incrementale
- // fino alla candela corrente `idx` (mai oltre: il futuro non viene mostrato/anticipato) e
- // disegnati SOTTO ai disegni utente, sopra alle candele.
- if(activeIndicators.length){
-   const xAbs=j=>pad.l+(j-start+.5)*cw/n;
-   activeIndicators.forEach(ind=>{
-     const def=INDICATOR_DEFS[ind.key]; if(!def)return;
-     try{
-       def.compute(rows,idx,ind);
-       if(!ind.hidden)def.render(ctx,ind,rows,dataStart,dataEnd,xAbs,y);
-     }catch(err){ /* un indicatore mal configurato non deve rompere il resto del grafico */ }
-   });
  }
  // User drawings: trendlines & rectangles (TradingView-style).
  // Anchored to real time + price, so they stay put across pan/zoom,
@@ -8726,6 +9140,39 @@ function draw(){
            ctx.fillRect(leftX+upPx,yTop+0.5,downPx,barH);
          }
          ctx.restore();
+       }
+       // Order Book Profile: istogramma "specchio" a SINISTRA di leftX, sulla stessa griglia di
+       // prezzo del profilo appena disegnato a destra — bid (blu) sopra il prezzo attuale, ask
+       // (rosso) sotto, letti dal book REALE MT5 più recente arrivato via WebSocket (vedi
+       // connectMt5OrderBook/latestOrderBookByAsset). Per-disegno (d.obEnabled), non globale:
+       // stesso schema on/off delle altre sezioni di questo profilo (LVN, POC/VAH/VAL, ecc.).
+       if(d.obEnabled&&profile&&profile.maxTotal>0){
+         const obBook=(typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol)?latestOrderBookByAsset[mt5ActiveSymbol]:null;
+         if(obBook&&((obBook.bids&&obBook.bids.length)||(obBook.asks&&obBook.asks.length))){
+           const ob=bucketOrderBookIntoProfile(obBook,profile.priceLo,profile.bucketSize,profile.buckets);
+           if(ob.maxLevel>0){
+             ctx.save();
+             ctx.globalAlpha=Math.min(1,strokeAlpha);
+             const obBidCol=d.obBidColor||'#2f6fed', obAskCol=d.obAskColor||'#e05b4f';
+             for(let b=0;b<profile.buckets;b++){
+               const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
+               const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
+               const barH=Math.max(1,yBot-yTop-1);
+               const bidV=ob.bidVol[b], askV=ob.askVol[b];
+               if(bidV>0){
+                 const px=Math.max(1,bidV/ob.maxLevel*maxBarPx);
+                 ctx.fillStyle=hexToRgba(obBidCol,0.55);
+                 ctx.fillRect(leftX-px,yTop+0.5,px,barH);
+               }
+               if(askV>0){
+                 const px=Math.max(1,askV/ob.maxLevel*maxBarPx);
+                 ctx.fillStyle=hexToRgba(obAskCol,0.55);
+                 ctx.fillRect(leftX-px,yTop+0.5,px,barH);
+               }
+             }
+             ctx.restore();
+           }
+         }
        }
        // POC (Point of Control) e Value Area (VAH/VAL): livelli orizzontali facoltativi, ciascuno
        // col proprio colore/spessore configurabili dalle impostazioni. Il livello (POC/VAH/VAL) è
@@ -10235,6 +10682,19 @@ let timeTicks=[];
 // rilascio (pointerup) avviene senza un vero trascinamento — altrimenti si lascia che sia un
 // pan/zoom normale del grafico, esattamente come già succede cliccando in un punto vuoto.
 let zoneClickCandidateKey=null;
+// RICHIESTO ESPLICITAMENTE: cliccare direttamente sopra le caselle disegnate dal footprint deve
+// far cambiare lo stile di visualizzazione (bid/ask -> delta -> volume -> di nuovo bid/ask),
+// un'alternativa più rapida al menu a tendina nelle Impostazioni. Stesso identico schema
+// "candidato al pointerdown, consumato al pointerup solo se non c'è stato un vero trascinamento"
+// già usato sopra per zoneClickCandidateKey — così un click sopra una candela footprint per
+// iniziare un pan del grafico continua a funzionare normalmente, esattamente come già succede
+// per le caselle Target/Stop.
+// footprintCellHitRects: azzerato e ripopolato ad ogni draw() (vedi il ciclo di disegno delle
+// candele footprint), una entry per ogni candela DAVVERO disegnata in stile footprint in
+// quest'ultimo giro (non per le candele "normali" che a bw troppo stretto ricadono sul
+// rendering a candela singola — su quelle il click resta un pan/selezione come sempre).
+let footprintCellHitRects=[];
+let footprintCellClickCandidate=null;
 // Ricorda l'ultimo VERO click (ownerKey+istante) su una casella Target/Stop di una posizione
 // APERTA ('pos:'+id): se il click successivo cade sulla STESSA casella entro ZONE_DBLCLICK_MS,
 // è un doppio click -> si alterna tpSlZoneFillHiddenByOwner invece di (ri)aprire le statistiche.
@@ -11396,6 +11856,11 @@ function evaluate(){
  // questa funzione, che sotto esce subito se non c'è nulla da controllare per SL/TP) — vedi
  // checkAlarmLines() più sopra.
  checkAlarmLines();
+ // Finestre PIP multiple (vedi PIP_SLOT più sopra nel file): se un'altra finestra con slot PIÙ
+ // BASSO sta mostrando ADESSO questo stesso asset, la chiusura automatica SL/TP per quell'asset
+ // spetta SOLO a lei (criterio deterministico, evita di chiudere la stessa posizione due volte
+ // se lo stesso simbolo è aperto in due finestre insieme).
+ if(anotherWindowOwnsAssetEvaluation(currentAssetKey))return;
  const ownPositions=(currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length)return;
  const r=rows[idx];
@@ -11442,6 +11907,7 @@ function evaluate(){
 // grafico (vedi __loadLiveHistoryFromCapitalImpl), mai durante il normale tick-by-tick.
 function scanHistoricalSlTpTouches(){
  if(!currentAssetKey||!rows.length)return;
+ if(anotherWindowOwnsAssetEvaluation(currentAssetKey))return; // vedi commento identico in evaluate()
  const ownPositions=positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey&&p.mt5Ticket==null);
  if(!ownPositions.length)return;
  ownPositions.forEach(pos=>{
@@ -12617,6 +13083,44 @@ function panBy(amount){
 // "always-on-top" automatico, ma resta comunque visibile insieme alla pagina principale finché
 // non lo copri o lo minimizzi tu.
 let floatingWin=null, floatingHomeParent=null, floatingHomeNext=null;
+// Finestre PIP AGGIUNTIVE (2ª/3ª/4ª, vedi PIP_SLOT più sopra nel file): a differenza di
+// floatingWin qui sopra (che stacca lo STESSO grafico), ognuna di queste è una vera, nuova
+// finestra del browser con una copia COMPLETA e indipendente di questa stessa pagina
+// (app.html?pipSlot=N) — window reference tenuta solo per sapere se è ancora aperta e per
+// poterla riportare in primo piano/richiudere dal pulsantino corrispondente.
+let extraPipWindows={};
+function updateExtraPipButtonsUI(){
+ document.querySelectorAll('.extraPipSlotBtn').forEach(btn=>{
+   const slot=Number(btn.dataset.pipSlot);
+   const win=extraPipWindows[slot];
+   const openNow=!!(win&&!win.closed);
+   btn.style.background=openNow?'#277d5a':'transparent';
+   btn.style.color=openNow?'#fff':'';
+   btn.title=openNow?('Finestra PIP '+slot+' aperta: clicca per portarla in primo piano, tieni premuto/clicca col tasto destro per chiuderla'):('Apri finestra PIP '+slot);
+ });
+}
+function openExtraPipWindow(slot){
+ const existing=extraPipWindows[slot];
+ if(existing&&!existing.closed){ existing.focus(); return; }
+ // Stessa pagina, stessa origine: nuova finestra popup completamente indipendente (proprio
+ // motore JS, vedi PIP_SLOT letto dalla query string all'avvio) — offset di posizione per non
+ // farle comparire tutte esattamente sovrapposte l'una sull'altra.
+ const url=location.pathname+'?pipSlot='+slot;
+ const offset=(slot-2)*40;
+ const win=window.open(url,'fxbtPipWindow'+slot,'width=1100,height=720,left='+(80+offset)+',top='+(80+offset));
+ if(!win){ $('status').textContent='⚠️ Il browser ha bloccato l\'apertura della finestra PIP '+slot+' (popup bloccati?). Consenti i popup per questo sito e riprova.'; return; }
+ extraPipWindows[slot]=win;
+ updateExtraPipButtonsUI();
+ const watchTimer=setInterval(()=>{
+   if(win.closed){ clearInterval(watchTimer); if(extraPipWindows[slot]===win)delete extraPipWindows[slot]; updateExtraPipButtonsUI(); }
+ },1500);
+}
+function closeExtraPipWindow(slot){
+ const win=extraPipWindows[slot];
+ if(win&&!win.closed)win.close();
+ delete extraPipWindows[slot];
+ updateExtraPipButtonsUI();
+}
 function floatingChartActive(){ return !!floatingWin; }
 // RICHIESTO ESPLICITAMENTE: quando il grafico è staccato nella finestra separata, TUTTI i
 // popup di configurazione (impostazioni Fibonacci/Profilo volumetrico, Stile del grafico,
@@ -12677,6 +13181,7 @@ function restoreChartToMainPage(){
  const wrap=document.querySelector('.chartWrap')||(floatingDoc&&floatingDoc.querySelector('.chartWrap'));
  restoreDrawToolbarHome(); // riporta il toolbar disegni alla pagina PRIMA di spostare via floatingDoc
  restoreQuickTradeClusterHome();
+ restoreResetViewHome();
  restoreAllFloatingModalsHome(); // idem per qualunque popup di configurazione finito nella finestra separata
  if(wrap && floatingHomeParent){
    if(floatingHomeNext&&floatingHomeNext.parentNode===floatingHomeParent)floatingHomeParent.insertBefore(wrap,floatingHomeNext);
@@ -12771,6 +13276,7 @@ async function openFloatingChart(){
  // Stessa sidebar dello schermo intero: gli strumenti di disegno seguono il grafico nella
  // finestra separata, così non serve più guardare la pagina principale per disegnare.
  moveDrawToolbarIntoSidebar(floatingDoc);
+ moveResetViewIntoSidebar(floatingDoc);
  // RICHIESTO ESPLICITAMENTE ("in modalità PIP la barra ordine rapido va dentro al grafico, in
  // alto al centro, identica a quando non è in modalità PIP"): NON spostiamo più
  // #quickTradeCluster nella sidebar qui — restando dentro #chartMainArea (che si è già mosso
@@ -12811,6 +13317,18 @@ function moveDrawToolbarIntoSidebar(targetDoc){
  sidebar.appendChild(toolbar); // appendChild adotta automaticamente il nodo se sidebar è in un altro document (finestra separata)
  sidebar.classList.add('active');
  sidebar.style.display='block'; // forza la visibilità (coerente con .chartFsSidebar.active nel CSS)
+ // Pulsantino a freccia per nascondere/mostrare la sidebar (vedi toggleFsSidebarCollapsed()):
+ // sempre il fratello immediato di #chartFsSidebar nel markup, quindi si trova con
+ // nextElementSibling anche qui — mostrato solo mentre la sidebar è davvero attiva, sempre
+ // riaperto (mai collassato) ad ogni nuovo ingresso in schermo intero/PIP.
+ const toggleBtn=sidebar.nextElementSibling;
+ if(toggleBtn&&toggleBtn.id==='fsSidebarToggleBtn'){
+   toggleBtn.style.display='flex';
+   sidebar.classList.remove('collapsed');
+   toggleBtn.classList.remove('collapsed');
+   toggleBtn.textContent='◀';
+   toggleBtn.title='Nascondi gli strumenti di disegno';
+ }
 }
 function restoreDrawToolbarHome(){
  const toolbar=document.getElementById('mainDrawToolbar')||(floatingDoc&&floatingDoc.getElementById('mainDrawToolbar'));
@@ -12819,10 +13337,40 @@ function restoreDrawToolbarHome(){
    else drawToolbarHomeParent.appendChild(toolbar);
  }
  const sidebarMain=document.getElementById('chartFsSidebar');
- if(sidebarMain){ sidebarMain.classList.remove('active'); sidebarMain.style.display='none'; }
+ if(sidebarMain){
+   sidebarMain.classList.remove('active','collapsed');
+   sidebarMain.style.display='none';
+   const btnMain=sidebarMain.nextElementSibling;
+   if(btnMain&&btnMain.id==='fsSidebarToggleBtn'){ btnMain.style.display='none'; btnMain.classList.remove('collapsed'); btnMain.textContent='◀'; }
+ }
  const sidebarFloat=floatingDoc&&floatingDoc.getElementById('chartFsSidebar');
- if(sidebarFloat){ sidebarFloat.classList.remove('active'); sidebarFloat.style.display='none'; }
+ if(sidebarFloat){
+   sidebarFloat.classList.remove('active','collapsed');
+   sidebarFloat.style.display='none';
+   const btnFloat=sidebarFloat.nextElementSibling;
+   if(btnFloat&&btnFloat.id==='fsSidebarToggleBtn'){ btnFloat.style.display='none'; btnFloat.classList.remove('collapsed'); btnFloat.textContent='◀'; }
+ }
 }
+// RICHIESTO ESPLICITAMENTE: il pulsantino a freccia nasconde/mostra l'INTERA sidebar (strumenti
+// di disegno + "Torna all'ultima candela", entrambi già dentro #chartFsSidebar in questo momento
+// — vedi moveResetViewIntoSidebar) per vedere il grafico a piena larghezza in schermo intero/PIP.
+// Un solo pulsante (mai duplicato, si sposta con #chartWrap nella finestra separata): lo si
+// individua sempre con previousElementSibling a partire da sé stesso, mai da un id fisso per
+// documento, così funziona identico sia nella pagina principale sia nella finestra separata.
+function toggleFsSidebarCollapsed(e){
+ const btn=e.currentTarget;
+ const sidebar=btn.previousElementSibling;
+ if(!sidebar||sidebar.id!=='chartFsSidebar')return;
+ const collapsed=sidebar.classList.toggle('collapsed');
+ btn.classList.toggle('collapsed',collapsed);
+ btn.textContent=collapsed?'▶':'◀';
+ btn.title=collapsed?'Mostra gli strumenti di disegno':'Nascondi gli strumenti di disegno';
+ // Il canvas legge sempre clientWidth/clientHeight ad ogni draw(): basta richiamarlo subito
+ // perché il grafico occupi immediatamente lo spazio liberato (o lo ceda di nuovo), senza
+ // aspettare un resize della finestra o un altro ridisegno casuale.
+ draw();
+}
+$('fsSidebarToggleBtn')?.addEventListener('click',toggleFsSidebarCollapsed);
 // Stesso identico principio, per la barra ordine rapido + i suoi 2 pulsanti (#quickTradeCluster):
 // RICHIESTO ESPLICITAMENTE — in schermo intero il blocco si sposta in basso a sinistra, dove
 // vive il pulsante "🗑 Rimuovi tutti" (l'ultimo pulsante di #mainDrawToolbar) — quindi lo
@@ -12845,6 +13393,30 @@ function restoreQuickTradeClusterHome(){
    else quickTradeClusterHomeParent.appendChild(cluster);
  }
 }
+// RICHIESTO ESPLICITAMENTE: "🎯 Torna all'ultima candela" (#resetView) deve stare SOTTO al
+// grafico nella pagina normale (#resetViewHome, fuori da #mainDrawToolbar — vedi lì il commento),
+// non in mezzo a Duplica/Elimina/Tratteggia. Ma deve restare raggiungibile anche in schermo
+// intero/finestra separata (PIP), dove #resetViewHome non è visibile (resta indietro nella
+// pagina principale, non si sposta con .chartWrap): stesso identico principio di
+// moveQuickTradeClusterIntoSidebar/restoreQuickTradeClusterHome qui sopra, stesso bottone (mai
+// duplicato), solo spostato di nodo DOM.
+let resetViewHomeParent=null, resetViewHomeNext=null;
+function moveResetViewIntoSidebar(targetDoc){
+ const btn=document.getElementById('resetView')||(floatingDoc&&floatingDoc.getElementById('resetView'));
+ const sidebar=(targetDoc||document).getElementById('chartFsSidebar');
+ if(!btn||!sidebar)return;
+ if(!resetViewHomeParent){ resetViewHomeParent=btn.parentNode; resetViewHomeNext=btn.nextSibling; }
+ const toolbar=sidebar.querySelector('#mainDrawToolbar');
+ if(toolbar)toolbar.appendChild(btn); // finisce in fondo al toolbar disegni già spostato, stessa sidebar
+ else sidebar.appendChild(btn);
+}
+function restoreResetViewHome(){
+ const btn=document.getElementById('resetView')||(floatingDoc&&floatingDoc.getElementById('resetView'));
+ if(btn&&resetViewHomeParent){
+   if(resetViewHomeNext&&resetViewHomeNext.parentNode===resetViewHomeParent)resetViewHomeParent.insertBefore(btn,resetViewHomeNext);
+   else resetViewHomeParent.appendChild(btn);
+ }
+}
 // Schermo intero del grafico PRINCIPALE (pagina normale, non staccato): stesso principio del
 // pulsante ⛶ della finestra separata, ma sul <div id="chartWrap"> della pagina.
 function toggleMainChartFullscreen(){
@@ -12859,8 +13431,8 @@ function toggleMainChartFullscreen(){
 }
 document.addEventListener('fullscreenchange',()=>{
  const wrap=document.getElementById('chartWrap');
- if(document.fullscreenElement===wrap){ moveDrawToolbarIntoSidebar(document); moveQuickTradeClusterIntoSidebar(document); }
- else if(!floatingChartActive()){ restoreDrawToolbarHome(); restoreQuickTradeClusterHome(); }
+ if(document.fullscreenElement===wrap){ moveDrawToolbarIntoSidebar(document); moveQuickTradeClusterIntoSidebar(document); moveResetViewIntoSidebar(document); }
+ else if(!floatingChartActive()){ restoreDrawToolbarHome(); restoreQuickTradeClusterHome(); restoreResetViewHome(); }
  draw();
 });
 $('chartFullscreenBtn')?.addEventListener('click',toggleMainChartFullscreen);
@@ -12872,6 +13444,19 @@ $('chartFullscreenBtn')?.addEventListener('click',toggleMainChartFullscreen);
 // updateFloatCornerButtons().
 $('floatChartBtn')?.addEventListener('click',toggleFloatingChart);
 $('floatReturnBtn')?.addEventListener('click',()=>{ if(floatingWin)floatingWin.close(); });
+// Finestre PIP aggiuntive: nascoste del tutto DENTRO una finestra PIP stessa (PIP_SLOT>0) — non
+// avrebbe senso aprirne un'altra da lì, la barra dei pulsantini 2/3/4 resta solo nella finestra
+// principale. Click normale = apri/porta in primo piano; click destro = chiudi (senza dover
+// andare a cercare la finestra e premere la sua X).
+if(PIP_SLOT>0){ if($('extraPipGroup'))$('extraPipGroup').style.display='none'; }
+else{
+ document.querySelectorAll('.extraPipSlotBtn').forEach(btn=>{
+   const slot=Number(btn.dataset.pipSlot);
+   btn.addEventListener('click',()=>openExtraPipWindow(slot));
+   btn.addEventListener('contextmenu',(e)=>{ e.preventDefault(); closeExtraPipWindow(slot); });
+ });
+ updateExtraPipButtonsUI();
+}
 
 const chartEl=$('chart');
 
@@ -13359,6 +13944,15 @@ chartEl.addEventListener('pointerdown',e=>{
    const hitBox=zoneBoxHitRects.find(r=>relXc>=r.xOrigin&&relXc<=r.xRight&&relYc>=r.yMin&&relYc<=r.yMax);
    zoneClickCandidateKey=hitBox?hitBox.ownerKey:null;
  }
+ // Stessa idea, per il click-to-cycle-stile sopra una candela footprint (bid/ask -> delta ->
+ // volume -> bid/ask, vedi footprintCellClickCandidate nel pointerup): niente se il click cade
+ // già su una casella Target/Stop qui sopra (quella resta prioritaria, più specifica dell'intera
+ // candela footprint su cui è disegnata).
+ {
+   const rectC=chartEl.getBoundingClientRect();
+   const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
+   footprintCellClickCandidate=!zoneClickCandidateKey&&footprintCellHitRects.some(r=>relXc>=r.xxLeft&&relXc<=r.xxRight&&relYc>=r.yTop&&relYc<=r.yBot);
+ }
  // Stessa idea, per la linea tratteggiata di un trade GIÀ CHIUSO: un click su di essa
  // seleziona/deseleziona quel trade (multi-selezione, vedi selectedClosedTradeIds), sempre
  // solo se il rilascio avviene senza un vero trascinamento (vedi pointerup più sotto).
@@ -13700,6 +14294,26 @@ chartEl.addEventListener('pointerup',e=>{
    }
    zoneClickCandidateKey=null;
  }
+ // RICHIESTO ESPLICITAMENTE: un vero click (non un trascinamento) sopra una candela disegnata in
+ // stile footprint fa scorrere lo stile di visualizzazione bid/ask -> delta -> volume -> di nuovo
+ // bid/ask, un'alternativa più rapida al menu a tendina "Stile" nelle Impostazioni footprint
+ // (che resta comunque disponibile e si aggiorna da solo, essendo lo stesso <select>). Un pan che
+ // parte sopra una candela footprint continua invece a spostare il grafico normalmente, come per
+ // tutte le altre candidature "al click" qui sopra.
+ if(footprintCellClickCandidate){
+   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
+   if(moved<4){
+     const styleSel=$('footprintStyle');
+     if(styleSel){
+       const order=['bidask','delta','volume'];
+       const idxStyle=order.indexOf(styleSel.value);
+       styleSel.value=order[(idxStyle<0?0:idxStyle+1)%order.length];
+       draw(); scheduleSave();
+       $('status').textContent='Stile footprint: '+(styleSel.value==='bidask'?'Bid/Ask':styleSel.value==='delta'?'Delta':'Volume')+'.';
+     }
+   }
+   footprintCellClickCandidate=false;
+ }
  // Stesso schema, per il click-to-select (multi-selezione) di un trade GIÀ CHIUSO: un vero
  // click (non un trascinamento) sulla sua linea tratteggiata lo aggiunge/toglie da
  // selectedClosedTradeIds — ricliccandolo si deseleziona, cliccandone altri restano tutti
@@ -13761,6 +14375,7 @@ chartEl.addEventListener('pointercancel',e=>{
  zoneClickCandidateKey=null;
  closedTradeClickCandidateId=null;
  vpVwapClickCandidate=null;
+ footprintCellClickCandidate=false;
  if(touchDrawDrag){
    // Gesto di disegno-a-trascinamento interrotto (es. il sistema toglie il focus a metà
    // trascinamento): annulliamo il disegno in corso invece di crearlo a metà, così non
@@ -13785,7 +14400,23 @@ chartEl.addEventListener('pointercancel',e=>{
 // Zoom da tastiera+mouse: CTRL premuto + rotellina sul grafico allarga/restringe la vista
 // (numero di candele visibili), come richiesto. Senza CTRL la rotellina non fa nulla, per
 // non interferire con lo scroll della pagina.
-chartEl.addEventListener('wheel',e=>{
+// BUG RISOLTO ("cambiando timeframe, CTRL+rotellina smette di funzionare finché non zoomo a
+// mano dalla barra sotto il grafico"): il listener era agganciato SOLO al <canvas> — ma sopra
+// di esso ci sono elementi FRATELLI sovrapposti via CSS (il selettore timeframe #tfChart in
+// alto a destra, e gli altri pulsanti d'angolo #chartFloatControls/#chartFloatControlsExtra):
+// essendo fratelli e non discendenti del canvas, un wheel che parte da uno di loro NON risale
+// mai fino al listener del canvas (il bubbling degli eventi segue la catena degli ANTENATI
+// dell'elemento colpito, mai i suoi fratelli). Appena l'utente cambia timeframe dal selettore
+// in alto, il mouse resta fisicamente sopra quel <select> — lì CTRL+rotellina è quindi morto
+// finché il cursore non si sposta altrove (es. in basso sulla barra del tempo, dove infatti
+// "si sblocca": lì il mouse è finalmente sopra al canvas o a un suo discendente). Fix: il
+// listener si aggancia invece a #chartMainArea, il contenitore comune di canvas E di TUTTI quei
+// pulsanti d'angolo — così CTRL/SHIFT+rotellina funziona OVUNQUE dentro l'area del grafico,
+// qualunque elemento si trovi esattamente sotto al cursore in quel momento. La logica di
+// ancoraggio del punto sotto al mouse (rect/mx/my qui sotto) resta invariata: usa comunque
+// getBoundingClientRect() del canvas vero, non dell'elemento che ha ricevuto l'evento.
+const chartWheelTarget=document.getElementById('chartMainArea')||chartEl;
+chartWheelTarget.addEventListener('wheel',e=>{
  if(!rows.length)return;
  if(e.shiftKey){
    // SHIFT + rotellina: zoom verticale (scala prezzi), illimitato.
@@ -17131,6 +17762,22 @@ async function refreshLiveStreamSubscriptions(){
 // richiesta esplicita — nessun dato inventato in nessun punto di questo file).
 let footprintTickLogByAsset={};      // assetKey -> [{t,price,side,weight}, ...] ordinato per t
 const FOOTPRINT_MAX_TICKS_PER_ASSET=150000; // tetto per asset: oltre, i tick più vecchi vengono scartati (FIFO)
+// PERSISTENZA (richiesta esplicitamente: "i tick generati da footprint, dove contengono tutti i
+// dati dei buyers e dei sellers... alla prossima riapertura della sessione abbiamo tutto presente
+// e nulla si è tolto"): il commento sopra descriveva una scelta precedente di TENERE questo log
+// solo in RAM per non appesantire il salvataggio automatico ad ogni singolo tick — ora lo
+// persistiamo comunque, ma SENZA riscriverlo ad ogni tick: footprintTicksDirty segna solo che
+// c'è qualcosa di nuovo da salvare, e saveFootprintTicksNow() (chiamata dallo stesso giro
+// debounced a 800ms di saveLightStateNow(), mai da quello sincrono su localStorage) lo scrive su
+// IndexedDB solo se il flag è acceso, poi lo spegne — così un mercato silenzioso non genera
+// scritture inutili, ma nessun tick osservato va mai perso a un refresh/chiusura pagina.
+let footprintTicksDirty=false;
+async function saveFootprintTicksNow(){
+ if(!footprintTicksDirty)return;
+ footprintTicksDirty=false;
+ const ok=await idbPut('footprintTicks',footprintTickLogByAsset);
+ if(!ok)footprintTicksDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
+}
 // footprintByBucket: SEMPRE relativo all'asset/TF/step correnti, ricostruito da
 // footprintRebuildBucketsForCurrentAsset() — non toccarlo direttamente altrove.
 // { [bucketStartMs]: { step, rows:{ [livello di prezzo]: {buy,sell} } } }
@@ -17160,6 +17807,23 @@ function footprintRowPipsNow(){
 function footprintStepForAsset(assetKey){
  const pip=pipSizeForAsset(assetKey);
  return Number.isFinite(pip)&&pip>0?pip*footprintRowPipsNow():null;
+}
+// Heatmap di liquidità (Order Book MT5 reale) — stesso schema "Now()" dei getter footprint sopra,
+// stessi id-pattern nel modale Impostazioni → Footprint. Vedi il blocco di disegno in draw()
+// (subito prima del loop delle candele) e connectMt5OrderBook/orderBookHistoryByAsset più sopra
+// nel file per da dove arrivano davvero i dati (mai stimati/inventati).
+function heatmapEnabledNow(){ return !!$('heatmapEnabled')?.checked; }
+function heatmapRowPipsNow(){
+ const v=Number($('heatmapRowPips')?.value);
+ return (Number.isFinite(v)&&v>0)?v:5;
+}
+function heatmapOpacityNow(){
+ const v=Number($('heatmapOpacity')?.value);
+ return (Number.isFinite(v)&&v>=5)?Math.min(100,v)/100:0.6;
+}
+function heatmapStepForAsset(assetKey){
+ const pip=pipSizeForAsset(assetKey);
+ return Number.isFinite(pip)&&pip>0?pip*heatmapRowPipsNow():null;
 }
 function footprintBucketStart(timestamp){
  const bucketMs=(currentTF||1)*60000;
@@ -17218,6 +17882,7 @@ function footprintRegisterTick(price,timestamp,assetKey,weight){
  }
  log.push({t:timestamp,price,side,weight:w});
  if(log.length>FOOTPRINT_MAX_TICKS_PER_ASSET)log.splice(0,log.length-FOOTPRINT_MAX_TICKS_PER_ASSET);
+ footprintTicksDirty=true; // vedi saveFootprintTicksNow(): persistito al prossimo giro debounced, non subito
  // Aggiorna anche i bucket già pronti SOLO se questo tick appartiene all'asset a grafico ora — per
  // gli asset "in background" il log basta e avanza (verrà ricostruito in blocco quando/se ci si
  // torna sopra, vedi footprintRebuildBucketsForCurrentAsset() richiamata al cambio asset).
@@ -17273,6 +17938,7 @@ function footprintIngestHistoricalTicks(assetKey,rawTicks){
  }
  footprintTickLogByAsset[assetKey]=merged.length>FOOTPRINT_MAX_TICKS_PER_ASSET
    ?merged.slice(merged.length-FOOTPRINT_MAX_TICKS_PER_ASSET):merged;
+ footprintTicksDirty=true; // vedi saveFootprintTicksNow(): il backfill storico va persistito quanto i tick live
  if(assetKey===currentAssetKey){ footprintRebuildBucketsForCurrentAsset(); draw(); }
 }
 async function footprintBackfillMt5(symbol,assetKey){
@@ -17357,9 +18023,19 @@ function footprintBuildZeroPrintZones(entries,minRows){
 //    una spinta decisa in quella direzione, respinta con forza (un lato ha chiaramente vinto).
 //  - altrimenti (volume alto ma due lati più bilanciati, "un tira e molla"): ABSORPTION — il
 //    movimento viene assorbito senza che nessuno dei due lati prenda il controllo.
-// Dimensione del pallino proporzionale al volume reale di quello stoppino specifico (non
-// dell'intera candela), normalizzata sul massimo tra tutti i marker trovati nella vista corrente
-// — stessa tecnica di normalizzazione già usata per le intensità colore altrove nel footprint.
+// Dimensione del pallino proporzionale alla FORZA ASSOLUTA del singolo segnale, non alla sua
+// posizione relativa rispetto agli altri pallini visibili in quel momento (una normalizzazione
+// "sul massimo in vista" farebbe sembrare grande un segnale mediocre solo perché è l'unico a
+// schermo, e farebbe sembrare piccolo un segnale enorme solo perché ce n'è uno ancora più enorme
+// accanto). La forza combina due componenti, ciascuna già limitata tra 0 e 1:
+//  - volStrength: di quanto il volume dello stoppino supera la soglia minima impostata
+//    (footprintArMinVolMult) — più lo supera, più il pallino cresce, fino a un tetto a 5x soglia;
+//  - dirStrength: quanto è estrema la direzionalità rispetto alla soglia di dominanza impostata
+//    (footprintArDominancePct) — per una rejection, quanto la dominanza supera quella soglia;
+//    per un'absorption, quanto la dominanza è SOTTO quella soglia (più è bilanciato, più
+//    l'assorbimento è "puro").
+// Così una piccola rejection/absorption resta un pallino piccolo anche se è l'unica a schermo,
+// e una grande resta grande anche vicino ad altre grandi.
 function footprintFindAbsorptionRejectionMarkers(entries,minVolMult,dominanceFrac){
  const markers=[];
  for(let i=0;i<entries.length;i++){
@@ -17379,15 +18055,18 @@ function footprintFindAbsorptionRejectionMarkers(entries,minVolMult,dominanceFra
      let buy=0,sell=0;
      wick.lvls.forEach(lv=>{ const c=e.fp.rows[lv]; buy+=c.buy; sell+=c.sell; });
      const tot=buy+sell;
-     if(tot<avgRowVol*minVolMult)return; // stoppino non abbastanza attivo: niente pallino
+     const volRatio=tot/avgRowVol; // quante volte il volume medio di riga di questa candela
+     if(volRatio<minVolMult)return; // stoppino non abbastanza attivo: niente pallino
      const dominance=tot>0?Math.abs(buy-sell)/tot:0;
      const kind=dominance>=dominanceFrac?'rejection':'absorption';
-     markers.push({xx:e.xx,price:wick.y,side:wick.side,kind,vol:tot,dominance});
+     const volStrength=Math.max(0,Math.min(1,(volRatio-minVolMult)/(minVolMult*4)));
+     const dirStrength=kind==='rejection'
+       ?Math.max(0,Math.min(1,(dominance-dominanceFrac)/Math.max(1e-6,1-dominanceFrac)))
+       :Math.max(0,Math.min(1,(dominanceFrac-dominance)/Math.max(1e-6,dominanceFrac)));
+     const intensity=volStrength*0.5+dirStrength*0.5;
+     markers.push({xx:e.xx,price:wick.y,side:wick.side,kind,vol:tot,volRatio,dominance,intensity});
    });
  }
- if(!markers.length)return markers;
- const maxVol=Math.max(...markers.map(m=>m.vol));
- markers.forEach(m=>{ m.intensity=maxVol>0?m.vol/maxVol:0; });
  return markers;
 }
 let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, capitalWsPingTimer=null, capitalWsCorrId=1;
@@ -17816,6 +18495,18 @@ const MT5_FEED_URL='http://127.0.0.1:8001';
 let mt5FeedSymbolForAsset={};
 let mt5FallbackConfirmedForAsset=new Set(); // asset per cui l'utente ha già confermato "resta su Capital.com" in questa sessione
 let mt5FeedWs=null, mt5FeedWsSymbol=null, mt5FeedWsReconnectTimer=null;
+// Order Book (Market Depth) MT5 reale — WS dedicato separato dal feed tick sopra (endpoint diverso,
+// /ws/orderbook/{symbol} su mt5_feed_server.py). latestOrderBookByAsset tiene solo l'ULTIMO snapshot
+// per asset (usato dall'Order Book Profile, che disegna sempre lo stato attuale del DOM);
+// orderBookHistoryByAsset accumula uno storico limitato di snapshot con timestamp (usato dalla
+// heatmap di liquidità, che deve colorare per fascia oraria passata, non solo "adesso"). MAI dati
+// finti: se il broker non pubblica il DOM per un simbolo, il server manda {error:...} e chiudiamo —
+// qui semplicemente non arriva/aggiorna nulla per quell'asset (nessun order book disegnato).
+let mt5OrderBookWs=null, mt5OrderBookWsSymbol=null, mt5OrderBookWsReconnectTimer=null;
+let latestOrderBookByAsset={};
+let orderBookHistoryByAsset={}; // { assetKey: [ {time_ms,bids,asks}, ... ] } — capped, vedi ORDERBOOK_HISTORY_MAX_PER_ASSET
+const ORDERBOOK_HISTORY_MAX_PER_ASSET=2000;
+let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha già risposto "niente DOM" in questa sessione (evita retry infiniti/log spam)
 // BUG RISOLTO ("si blocca all'ultima candela e non aggiorna più", ricomparso IDENTICO dopo i due
 // fix precedenti — perché la causa vera è questa, non quelle): mt5FeedWsSymbol è null ogni volta
 // che il WS non è connesso IN QUESTO MOMENTO (disconnectMt5Stream lo azzera sempre, anche durante
@@ -17880,6 +18571,7 @@ async function syncChartSourceWithMt5(){
  }else{
    stopMt5RefreshTimer();
    disconnectMt5Stream();
+   disconnectMt5OrderBook();
    mt5ActiveSymbol=null; // si abbandona MT5 come sorgente grafico: vedi commento su mt5ActiveSymbol
    // Ripristina Capital.com come sorgente ESCLUSIVA del grafico (capitalWsPrimaryEpic viene
    // rivalorizzato dentro __loadLiveHistoryFromCapitalImpl, come sempre) — se il WS era già
@@ -17933,7 +18625,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  const resolved=await resolveMt5SymbolForAsset(asset);
  if(resolved===undefined){
    $('status').textContent=`⚠️ Servizio dati MT5 (mt5_feed_server.py, porta 8001) non raggiungibile: il grafico resta su Capital.com finché non riparte (avvia "uvicorn mt5_feed_server:app --port 8001" sul tuo PC).`;
-   stopMt5RefreshTimer();disconnectMt5Stream();mt5ActiveSymbol=null;
+   stopMt5RefreshTimer();disconnectMt5Stream();disconnectMt5OrderBook();mt5ActiveSymbol=null;
    return __loadLiveHistoryFromCapitalImpl(asset,opts);
  }
  if(resolved===null){
@@ -17952,7 +18644,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
      }
      mt5FallbackConfirmedForAsset.add(asset);
    }
-   stopMt5RefreshTimer();disconnectMt5Stream();mt5ActiveSymbol=null;
+   stopMt5RefreshTimer();disconnectMt5Stream();disconnectMt5OrderBook();mt5ActiveSymbol=null;
    return __loadLiveHistoryFromCapitalImpl(asset,opts);
  }
  // Simbolo MT5 risolto: procede con la sorgente MT5 esclusiva — stessa logica di
@@ -18104,6 +18796,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  const rolloverBucketMs=(currentTF||1)*60000;
  mt5LastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
  connectMt5Stream(resolved);
+ connectMt5OrderBook(resolved);
  startMt5RefreshTimer();
  // Backfill storico tick reali (vedi footprintBackfillMt5): fire-and-forget, NON attesa qui — non
  // deve mai ritardare la comparsa del grafico/storico candele, che è già pronto sopra. Un solo
@@ -18185,6 +18878,60 @@ function connectMt5Stream(symbol){
    if(mt5FeedWsReconnectTimer)clearTimeout(mt5FeedWsReconnectTimer);
    if(liveModeActive && mt5Connected){
      mt5FeedWsReconnectTimer=setTimeout(()=>{ mt5FeedWsReconnectTimer=null; connectMt5Stream(symbol); },1500);
+   }
+ };
+}
+
+function disconnectMt5OrderBook(){
+ if(mt5OrderBookWsReconnectTimer){clearTimeout(mt5OrderBookWsReconnectTimer);mt5OrderBookWsReconnectTimer=null;}
+ if(mt5OrderBookWs){
+   try{mt5OrderBookWs.onclose=null;mt5OrderBookWs.onerror=null;mt5OrderBookWs.close();}catch(e){}
+   mt5OrderBookWs=null;
+ }
+ mt5OrderBookWsSymbol=null;
+}
+
+function connectMt5OrderBook(symbol){
+ if(!liveModeActive || !mt5Connected || !symbol)return;
+ if(mt5OrderBookUnavailableForAsset.has(symbol))return; // il broker ha già detto "niente DOM" per questo simbolo, non ritentiamo in loop
+ if(mt5OrderBookWs && mt5OrderBookWsSymbol===symbol && (mt5OrderBookWs.readyState===WebSocket.OPEN||mt5OrderBookWs.readyState===WebSocket.CONNECTING))return;
+ disconnectMt5OrderBook();
+ let ws;
+ try{ ws=new WebSocket(MT5_FEED_URL.replace(/^http/,'ws')+'/ws/orderbook/'+encodeURIComponent(symbol)); }
+ catch(e){ console.warn('WebSocket MT5 order book non avviato:',e); return; }
+ mt5OrderBookWs=ws; mt5OrderBookWsSymbol=symbol;
+ ws.onmessage=(ev)=>{
+   if(ws!==mt5OrderBookWs)return;
+   let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
+   if(!msg)return;
+   if(msg.error){
+     // Broker non pubblica il DOM per questo simbolo (frequente su Forex/CFD OTC): honest fail,
+     // niente order book/heatmap per questo asset — MAI dati finti al suo posto. Segnato come
+     // "non disponibile" per non ritentare la connessione ad ogni resync di candela.
+     console.warn('[MT5 OrderBook] non disponibile per '+symbol+':',msg.error);
+     mt5OrderBookUnavailableForAsset.add(symbol);
+     disconnectMt5OrderBook();
+     return;
+   }
+   if(msg.heartbeat)return;
+   if(!msg.bids && !msg.asks)return;
+   const snap={time_ms:msg.time_ms||Date.now(),bids:Array.isArray(msg.bids)?msg.bids:[],asks:Array.isArray(msg.asks)?msg.asks:[]};
+   latestOrderBookByAsset[symbol]=snap;
+   let hist=orderBookHistoryByAsset[symbol];
+   if(!hist){hist=[];orderBookHistoryByAsset[symbol]=hist;}
+   hist.push(snap);
+   if(hist.length>ORDERBOOK_HISTORY_MAX_PER_ASSET)hist.splice(0,hist.length-ORDERBOOK_HISTORY_MAX_PER_ASSET);
+   // Ridisegna solo se l'asset col DOM aggiornato è quello a grafico ora (evita ridisegni inutili
+   // per un simbolo in background) — stesso schema difensivo usato per applyLiveTick/footprint.
+   if(typeof mt5ActiveSymbol!=='undefined' && mt5ActiveSymbol===symbol)draw();
+ };
+ ws.onerror=()=>{ /* silenzioso: l'errore "vero" (niente DOM sul broker) arriva come msg.error sopra, non come evento WS onerror */ };
+ ws.onclose=()=>{
+   if(ws!==mt5OrderBookWs)return;
+   disconnectMt5OrderBook();
+   if(mt5OrderBookWsReconnectTimer)clearTimeout(mt5OrderBookWsReconnectTimer);
+   if(liveModeActive && mt5Connected && !mt5OrderBookUnavailableForAsset.has(symbol)){
+     mt5OrderBookWsReconnectTimer=setTimeout(()=>{ mt5OrderBookWsReconnectTimer=null; connectMt5OrderBook(symbol); },1500);
    }
  };
 }
@@ -19382,12 +20129,47 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
  $('unlockFilesBanner').style.display='none';
 });
 
+// Avvio minimo per una finestra PIP AGGIUNTIVA (PIP_SLOT>0): NIENTE ripristino da storage (vedi
+// il branch in cima a initSession() più sotto) — parte sempre da zero, un asset/timeframe/
+// indicatori tutti da scegliere in questa finestra, esattamente come un primo avvio dell'app.
+// Il conto (posizioni/ordini pendenti/trade/equity) arriva invece SUBITO dopo, in automatico, dal
+// vivo dalla finestra principale tramite la richiesta trading_sync_request già inviata più sopra
+// nel file (vedi il blocco BroadcastChannel vicino a scheduleSave()) — qui sotto si mette solo un
+// valore di partenza ragionevole nel frattempo (sovrascritto appena arriva la prima risposta).
+async function initExtraPipWindow(){
+ document.title='Forex Backtest Lab — PIP '+PIP_SLOT;
+ // Banderuola fissa in alto, sempre visibile: questa finestra non salva nulla della propria
+ // configurazione (asset/timeframe/indicatori/disegni) — chiuderla la azzera, per scelta
+ // esplicita discussa con l'utente prima di costruire questa funzionalità.
+ const badge=document.createElement('div');
+ badge.textContent='🪟 Finestra PIP '+PIP_SLOT+' — vista live indipendente (asset/timeframe/indicatori tutti tuoi in questa finestra). Il conto è lo stesso di tutte le altre finestre aperte, sempre sincronizzato. Questa finestra NON salva la propria configurazione: chiudendola riparte vuota.';
+ badge.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:#1a2b3d;color:#8fd3ff;font-size:11px;padding:5px 12px;text-align:center;border-bottom:1px solid #2b3541';
+ document.body.prepend(badge);
+ document.body.style.paddingTop=(document.body.style.paddingTop?parseInt(document.body.style.paddingTop):0)+badge.offsetHeight+'px';
+ positions=[]; pendingOrders=[]; trades=[]; equity=[num($('capital').value)||10000]; active=null;
+ armDrawingsPersistence(); // sicuro anche qui: ogni scrittura su disco è già bloccata da PIP_SLOT dentro persistDrawingsBackupNow()/scheduleSave()
+ $('status').textContent='Finestra PIP '+PIP_SLOT+': scegli un asset per iniziare. Il conto si sincronizza da solo appena arriva dalla finestra principale.';
+}
 (async function initSession(){
+ // FINESTRE PIP AGGIUNTIVE (PIP_SLOT>0, vedi il commento completo più sopra nel file): NESSUN
+ // ripristino da IndexedDB/localStorage/cloud — partono sempre vuote per scelta esplicita
+ // dell'utente ("solo live, si azzerano alla chiusura"), MAI la sessione della finestra
+ // principale. Tutto il ramo sotto (il vero e proprio ripristino, invariato) resta riservato
+ // alla finestra principale (slot 0) — vedi initExtraPipWindow() più sotto nel file per il
+ // minimo indispensabile che una finestra PIP fa invece all'avvio.
+ if(PIP_SLOT>0){ await initExtraPipWindow(); return; }
  // Va chiamato PRIMA di qualsiasi caricamento automatico che dipenda da cartelle collegate
  // (libreria CSV, credenziali Live): se il permesso è scaduto, meglio chiederlo tutto subito
  // con un tocco esplicito dell'utente piuttosto che farlo fallire in silenzio più avanti.
  maybeShowUnlockFilesBanner();
- let [savedCsv,savedState,savedChartViews]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews')]);
+ let [savedCsv,savedState,savedChartViews,savedFootprintTicks]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews'),idbGet('footprintTicks')]);
+ // Log tick grezzo del footprint (buyer/seller reali per candela, per asset): ripristinato qui,
+ // PRIMA di sapere quale asset/timeframe sarà a grafico — footprintRebuildBucketsForCurrentAsset()
+ // più sotto (a ripristino ormai completo) lo ribucketizza per l'asset/TF/step correnti, esattamente
+ // come farebbe durante la sessione normale a ogni cambio TF. Richiesto esplicitamente: "nulla si
+ // deve togliere" a una riapertura, quindi lo si ripristina SEMPRE, non solo se l'utente riattiva
+ // il footprint — così è già lì pronto se lo riaccende più avanti nella stessa sessione.
+ if(savedFootprintTicks&&typeof savedFootprintTicks==='object')footprintTickLogByAsset=savedFootprintTicks;
  // BUG RISOLTO (posizioni Live sparite dopo un refresh): prima il controllo cloud, qui sotto,
  // sovrascriveva SEMPRE savedState con la copia Firestore se ne trovava una valida — anche
  // quando localStorage aveva già una versione più fresca (scritta in modo sincrono ad ogni
@@ -19625,6 +20407,11 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
  // isPropFirmMode è già stato ripristinato da applyLightSessionState() insieme al resto:
  // basta riflettere il suo valore su classe CSS/pulsante/UI a fine ripristino.
  updatePropFirmBodyClass();
+ // Log tick del footprint ripristinato sopra (savedFootprintTicks): se il footprint era attivo e
+ // c'è già un asset a grafico, ribucketizza SUBITO per l'asset/TF/step correnti — stessa funzione
+ // già usata a ogni cambio TF durante la sessione normale, così i dati buyer/seller osservati
+ // prima del refresh ricompaiono a schermo senza aspettare il prossimo tick in arrivo.
+ if(footprintEnabledNow()&&currentAssetKey){ footprintRebuildBucketsForCurrentAsset(); draw(); }
  armDrawingsPersistence(); // da qui in poi ogni modifica ai disegni viene salvata da sola (vedi blocco dedicato)
  // STEP 3: se la sessione ripristinata era già una Challenge chiusa per violazione, la
  // schermata drammatica ricompare subito al caricamento della pagina — non basta un refresh
