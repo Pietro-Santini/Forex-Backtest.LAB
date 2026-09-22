@@ -3577,6 +3577,37 @@ async function applyRemoteAssetSwitch(asset){
    await autoLoadAssetLibrary(asset);
  }finally{ applyingRemoteAssetSwitch=false; }
 }
+// RICHIESTO ESPLICITAMENTE: "se clicco DATA RANDOM in modalità storico, la data dell'ultima
+// candela viene applicata anche alla pagina 2, 3 e 4. Ma anche se premo il pulsante sulla pagina
+// 2, modificherà la pagina madre PIP, la pagina 3 e la pagina 4" — a differenza del cambio asset
+// qui sopra (SOLO madre→figlie), questo è simmetrico: QUALUNQUE finestra (madre o PIP 2/3/4) che
+// preme 🎲 DATA RANDOM porta TUTTE le altre finestre aperte sullo STESSO istante reale
+// (masterTime è già, per costruzione in questo file, un orologio del backtest indipendente
+// dall'asset — lo stesso concetto già usato per ricordare "dove eravamo rimasti" cambiando asset,
+// vedi applyChartViewForAsset più sopra nel file): ogni finestra ricostruisce le PROPRIE candele
+// (rebuildRows) fino a quell'istante, sul PROPRIO asset e PROPRIO timeframe correnti — quindi
+// nessuna finestra "eredita" l'asset o il timeframe di chi ha premuto il pulsante, solo il punto
+// nel tempo.
+let applyingRemoteRandomJump=false;
+function broadcastRandomJumpSync(masterTimeVal){
+ if(!tradingChannel)return;
+ try{ tradingChannel.postMessage({type:'random_jump_sync',slot:PIP_SLOT,storico:!liveModeActive,masterTime:masterTimeVal}); }catch(e){}
+}
+function applyRemoteRandomJump(masterTimeVal){
+ if(liveModeActive||applyingRemoteRandomJump)return;
+ if(!Number.isFinite(masterTimeVal))return;
+ if(!baseRows.length)return; // nessun CSV caricato in questa finestra: niente su cui saltare
+ if(masterTimeVal===masterTime)return;
+ applyingRemoteRandomJump=true;
+ try{
+   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+   masterTime=masterTimeVal;
+   rebuildRows();
+   viewEnd=idx; followLatest=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+   draw();update();
+   $('status').textContent=`🎲 Punto casuale (da un'altra finestra): ${rows[idx]?.date||''} • candela ${idx+1}/${rows.length}`;
+ }finally{ applyingRemoteRandomJump=false; }
+}
 function anotherWindowOwnsAssetEvaluation(asset){
  if(!asset)return false;
  for(const slotStr in siblingAssetBySlot){
@@ -3656,6 +3687,10 @@ if(tradingChannel){
      }
    }else if(msg.type==='drawings_sync_request'){
      if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey&&msg.mode===currentMode())broadcastDrawingsStateNow();
+   }else if(msg.type==='random_jump_sync'){
+     // Vedi il commento completo su broadcastRandomJumpSync()/applyRemoteRandomJump() più sopra
+     // nel file: solo in Storico da entrambe le parti, qualunque sia la finestra mittente.
+     if(msg.storico && !liveModeActive)applyRemoteRandomJump(msg.masterTime);
    }
  };
  // All'avvio, chiede alle altre finestre già aperte lo stato attuale del conto — così una
@@ -13392,6 +13427,9 @@ $('randomBtn').addEventListener('click',()=>{
  positions=[];active=null;tradeSLLine=null;tradeTPLine=null;pendingOrders=[];highlightedPendingOrderId=null;
  draw();update();
  $('status').textContent=`🎲 Punto casuale: ${rows[idx]?.date||''} • candela ${idx+1}/${rows.length}`;
+ // RICHIESTO ESPLICITAMENTE: propaga il nuovo istante a TUTTE le altre finestre PIP aperte (madre
+ // e/o 2/3/4, in qualunque direzione — vedi broadcastRandomJumpSync() più sopra nel file).
+ broadcastRandomJumpSync(masterTime);
 });
 // Porta la vista sul grafico senza che l'utente debba scorrere manualmente: usata dai
 // pulsanti BUY/SELL e SET SL/TP/ENTRY, così dopo il click si vede subito cosa succede sul
