@@ -1488,6 +1488,14 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                <span style="display:inline-flex;align-items:center;gap:5px">Altezza riga <input id="heatmapRowPips" type="number" min="0.1" step="0.1" value="5" style="width:60px">pip</span>
                <span style="display:inline-flex;align-items:center;gap:5px">Opacità max <input id="heatmapOpacity" type="number" min="5" max="100" step="5" value="60" style="width:55px">%</span>
              </div>
+             <!-- RICHIESTO ESPLICITAMENTE: estensione verticale della heatmap oltre il range
+                  alto/basso delle candele in vista, per mostrare anche livelli bid/ask REALI più
+                  lontani dal prezzo — vedi heatmapVertPadPipsNow()/il blocco che allarga lo/hi in
+                  draw() più sotto nel file. A 0: nessuna estensione, il grafico si comporta come
+                  prima (range verticale = solo alto/basso delle candele). -->
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Estensione verticale <input id="heatmapVertPadPips" type="number" min="0" step="5" value="20" style="width:60px">pip (sopra e sotto)</span>
+             </div>
              <!-- RICHIESTO ESPLICITAMENTE (riferimento fornito dall'utente: Bookmap): niente più
                   "blu = lato bid dominante / rosso = lato ask dominante" — sostituito da un'unica
                   scala di calore (stile Bookmap: blu scuro=poca liquidità → ciano/verde/giallo/
@@ -1958,6 +1966,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      </svg>
      <select id="indicatorSelect" class="toolSelect" style="padding-left:38px" title="📊 Aggiungi un indicatore al grafico">
      <option value="">+ Aggiungi indicatore...</option>
+     <option value="volume_default">Volume</option>
      <option value="sr_breaks">Support &amp; Resistance Levels with Breaks [LuxAlgo]</option>
      <option value="ema_ind">Moving Average Exponential [EMA]</option>
      <option value="bsl_ssl_fvg">Buyside &amp; Sellside Liquidity + Aligned FVGs [LuxAlgo]</option>
@@ -2080,6 +2089,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <select id="marketChart" class="chartCornerBtn" style="width:auto;max-width:120px;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="Cambia ASSET direttamente dal grafico (stesso menu ASSET della barra qui sopra, sempre sincronizzati)"></select>
      <button id="toggleChartExtrasBtn" class="chartCornerBtn" title="Mostra/nascondi Indicatori, Livelli e il pulsante Impostazioni (Style, Griglia, Notizie)">›</button>
      <button id="chartSettingsBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700;display:none" title="Impostazioni: stile del grafico, griglia, notizie Forex Factory">⚙️ Impostazioni</button>
+     <!-- RICHIESTO ESPLICITAMENTE (bug segnalato: finestre PIP 2/3/4 restano vuote, "non fa
+          vedere nessun grafico né la disponibilità di selezionare l'asset"): causa reale — il
+          pulsante che apre #generalSettingsModalOverlay (dove vivono il passaggio Storico↔Live e
+          "Connetti" MT5, #liveModeSwitch/#mt5ModeBtn) vive nella riga impostazioni IN CIMA alla
+          pagina normale, FUORI da .chartWrap — nella modalità "solo grafico" delle finestre PIP
+          quella riga è volutamente nascosta (vedi initExtraPipWindow()/kioskStyle più sotto nel
+          file), quindi in una finestra PIP non c'era NESSUN modo di raggiungere quel pulsante: la
+          finestra si apriva "vuota" non per un bug di disegno, ma perché non si poteva mai
+          arrivare a scegliere Live/Storico o connettersi a MT5. Questo pulsante duplica lo stesso
+          #generalSettingsModalOverlay già esistente (nessuna logica nuova, stesso identico
+          modale) dentro .chartWrap, quindi resta raggiungibile anche in modalità "solo grafico" —
+          utile anche nella pagina normale come scorciatoia, non solo nelle finestre PIP. -->
+     <button id="chartLiveMt5Btn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Storico/Live e connessione MT5 — stesso popup di ⚙️ Impostazioni generali, raggiungibile anche dalle finestre PIP">🔴 Live/MT5</button>
      <!-- RICHIESTO ESPLICITAMENTE: "nascondi posizioni" e la modalità PIP (finestra staccata)
           spostati QUI, in alto, tra la freccetta "›" (nascondi/mostra Indicatori/Livelli/
           Impostazioni) e il selettore del timeframe — prima vivevano nella riga sotto insieme a
@@ -6608,6 +6630,54 @@ function currentDisplayScale(){
 // ricalcolare tutto lo storico ad ogni frame.
 let activeIndicators=[];
 const INDICATOR_DEFS={
+ // RICHIESTO ESPLICITAMENTE: indicatore volumetrico di base ("quello che sta in basso attaccato
+ // alla barra del periodo del tempo"), disponibile come default per tutti — barre verdi/rosse
+ // (stessi colori delle candele rialziste/ribassiste, personalizzabili) in una fascia in fondo al
+ // grafico, appoggiata all'asse del tempo. Non è un pannello separato con una propria scala
+ // sincronizzata (che richiederebbe di ridisegnare tutto il layout verticale del grafico): è un
+ // overlay, come tutti gli altri indicatori di questa lista, disegnato in una fascia configurabile
+ // in basso — stesso approccio già usato da moltissime piattaforme per il volume "semplice". Nessun
+ // dato stimato: usa rows[i].volume così com'è (tick-count o volume reale, a seconda della fonte —
+ // stessa colonna già usata altrove nell'app, es. filtro volumi di sr_breaks più sotto); se il
+ // dataset non ha volume (colonna assente o tutta zero), semplicemente non disegna nulla anziché
+ // inventare barre.
+ volume_default:{
+   label:'Volume',
+   defaultParams:()=>({upColor:'#55c28b',downColor:'#e05b64',heightPct:18,opacity:70}),
+   // Nessun calcolo incrementale da mantenere: il volume di ogni candela è già in rows[i].volume,
+   // letto direttamente in render() per le sole candele in vista — compute() resta vuota solo per
+   // rispettare la stessa interfaccia {compute,render} di tutti gli altri indicatori.
+   compute(){},
+   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
+     if(!pad||!h)return; // retrocompatibilità: se richiamato senza questi due argomenti extra, non disegna (mai un errore)
+     const p=ind.params;
+     const ch=h-pad.t-pad.b;
+     if(!(ch>0))return;
+     const heightPct=Math.min(60,Math.max(5,Number(p.heightPct)||18));
+     const bandH=Math.max(16,ch*heightPct/100);
+     const bandBottom=h-pad.b;
+     let maxVol=0;
+     for(let i=dataStart;i<=dataEnd;i++){ const v=rows[i]&&rows[i].volume; if(Number.isFinite(v)&&v>maxVol)maxVol=v; }
+     if(!(maxVol>0))return; // nessun volume reale nei dati in vista: niente disegnato, onestamente
+     // Larghezza barra ricavata dalla spaziatura reale fra due candele consecutive (xAbs è
+     // lineare in indice candela): stessa larghezza/proporzione delle candele, senza bisogno che
+     // draw() passi anche `bw` qui dentro.
+     const slot=Math.max(1,xAbs(dataStart+1)-xAbs(dataStart));
+     const barW=Math.max(1,slot*0.62);
+     ctx.save();
+     ctx.globalAlpha=Math.min(1,Math.max(5,Number(p.opacity)||70)/100);
+     for(let i=dataStart;i<=dataEnd;i++){
+       const r=rows[i]; if(!r)continue;
+       const v=r.volume; if(!Number.isFinite(v)||v<=0)continue;
+       const up=r.close>=r.open;
+       ctx.fillStyle=up?(p.upColor||'#55c28b'):(p.downColor||'#e05b64');
+       const barH=Math.max(1,bandH*(v/maxVol));
+       const xx=xAbs(i);
+       ctx.fillRect(xx-barW/2,bandBottom-barH,barW,barH);
+     }
+     ctx.restore();
+   }
+ },
  sr_breaks:{
    label:'Support & Resistance Levels with Breaks [LuxAlgo]',
    defaultParams:()=>({showBreaks:true,leftBars:15,rightBars:15,volumeThresh:20,resColor:'#ff3b3b',supColor:'#2f9bff'}),
@@ -7901,7 +7971,12 @@ function openIndicatorSettingsModal(ind){
      lbl.appendChild(sel);
      return lbl;
    };
-   if(ind.key==='sr_breaks'){
+   if(ind.key==='volume_default'){
+     paramsRow.appendChild(mkColor('Rialzo','upColor'));
+     paramsRow.appendChild(mkColor('Ribasso','downColor'));
+     paramsRow.appendChild(mkNum('Altezza fascia %','heightPct',5,60));
+     paramsRow.appendChild(mkNum('Opacità %','opacity',5,100));
+   }else if(ind.key==='sr_breaks'){
      paramsRow.appendChild(mkNum('Sinistra','leftBars',1,200));
      paramsRow.appendChild(mkNum('Destra','rightBars',1,200));
      paramsRow.appendChild(mkNum('Soglia vol.','volumeThresh',0,1000));
@@ -8542,6 +8617,15 @@ function draw(){
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
  const pad={l:18,r:76,t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
  let {lo,hi,range}=computePriceRange(data);
+ // Estensione verticale per la heatmap (richiesta esplicitamente, vedi heatmapVertPadPriceNow()
+ // più sopra nel file): allarga lo/hi PRIMA che vengano usati per griglia/candele/tutto il resto,
+ // così anche i livelli bid/ask reali più lontani dal prezzo rientrano nell'area disegnata. Stesse
+ // identiche condizioni del blocco di disegno heatmap più sotto — se la heatmap non è attiva il
+ // range resta esattamente quello di sempre (solo alto/basso delle candele in vista).
+ if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
+   const _hmVertPad=heatmapVertPadPriceNow(currentAssetKey);
+   if(_hmVertPad>0){ lo-=_hmVertPad; hi+=_hmVertPad; range=hi-lo; }
+ }
  const y=v=>pad.t+(hi-v)/range*ch, x=i=>pad.l+(dataStart+i-start+.5)*cw/n;
  // --- Zona di protezione: da qui in poi (candele, griglia, indicatori, disegni, posizioni,
  // ordini pendenti e caselle Target/Stop) tutto è "ritagliato" (clip) dentro l'area di plot
@@ -8670,28 +8754,48 @@ function draw(){
    const _hmStep=_hmMeta&&_hmMeta.step;
    if(_hmStep>0){
      const _hmBucketForIdx=new Array(data.length);
-     let _hmMaxCell=0;
      for(let i=0;i<data.length;i++){
        const tStart=parseDateTime(data[i].date);
        if(!Number.isFinite(tStart)){ _hmBucketForIdx[i]=null; continue; }
        const bucket=_hmCells[footprintBucketStart(tStart)];
        _hmBucketForIdx[i]=(bucket&&bucket.cnt>0)?bucket:null;
-       if(bucket&&bucket.cnt>0){
-         const cnt=bucket.cnt;
-         // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
-         // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
-         // quantità di liquidità che conta per le strisce, non la direzione.
-         for(const k in bucket.rows){ const c=bucket.rows[k]; _hmMaxCell=Math.max(_hmMaxCell,(c.bid+c.ask)/cnt); }
-       }
+     }
+     // RICHIESTO ESPLICITAMENTE ("senza interruzioni tra una candela e l'altra"): una candela
+     // senza uno snapshot REALE caduto esattamente nella sua finestra temporale (feed non ancora
+     // partito su quella fascia oraria, micro-buco nello streaming) eredita l'ultima cella reale
+     // osservata PRIMA di lei — non è un dato inventato: è esattamente come si comporta un vero
+     // book, dove la liquidità in attesa resta lì finché non arriva un aggiornamento che la cambia
+     // davvero, non sparisce fra un tick e l'altro. Mai all'indietro: le candele PRIMA del primo
+     // dato reale restano scoperte, onestamente (storico precedente all'apertura dello streaming).
+     let _hmLastReal=null;
+     for(let i=0;i<data.length;i++){
+       if(_hmBucketForIdx[i])_hmLastReal=_hmBucketForIdx[i];
+       else if(_hmLastReal)_hmBucketForIdx[i]=_hmLastReal;
+     }
+     let _hmMaxCell=0;
+     for(let i=0;i<data.length;i++){
+       const bucket=_hmBucketForIdx[i];
+       if(!bucket)continue;
+       const cnt=bucket.cnt;
+       // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
+       // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
+       // quantità di liquidità che conta per le strisce, non la direzione.
+       for(const k in bucket.rows){ const c=bucket.rows[k]; _hmMaxCell=Math.max(_hmMaxCell,(c.bid+c.ask)/cnt); }
      }
      if(_hmMaxCell>0){
        ctx.save();
        const _hmBaseOp=heatmapOpacityNow();
+       // RICHIESTO ESPLICITAMENTE ("tinteggiata... senza interruzioni"): la cella copre l'INTERO
+       // slot della candela (cw/n, con un filo di sovrapposizione anti-hairline), non solo la
+       // larghezza del corpo candela (bw, più stretto per lasciare lo spazio vuoto fra un corpo e
+       // l'altro) — così le colonne della heatmap si toccano davvero, niente più righe verticali
+       // di sfondo che spuntano fra una candela e l'altra.
+       const _hmSlot=cw/n;
        for(let i=0;i<data.length;i++){
          const bucket=_hmBucketForIdx[i];
          if(!bucket)continue;
          const cnt=bucket.cnt;
-         const xxL=x(i)-bw/2, cellW=Math.max(1,bw);
+         const xxL=x(i)-_hmSlot/2-0.4, cellW=_hmSlot+0.8;
          for(const levelKey in bucket.rows){
            const rowLoPrice=Number(levelKey), rowHiPrice=rowLoPrice+_hmStep;
            const yTop=y(rowHiPrice), yBot=y(rowLoPrice);
@@ -8707,7 +8811,7 @@ function draw(){
            const t=Math.sqrt(Math.min(1,val/_hmMaxCell));
            ctx.fillStyle=heatmapColorForValue(t);
            ctx.globalAlpha=_hmBaseOp;
-           ctx.fillRect(xxL,yTop,cellW,Math.max(1,yBot-yTop));
+           ctx.fillRect(xxL,yTop-0.4,cellW,Math.max(1,yBot-yTop)+0.8); // +0.8: stesso filo di sovrapposizione anti-hairline usato in orizzontale, fra una fascia di prezzo e l'altra
          }
        }
        ctx.globalAlpha=1;
@@ -8760,7 +8864,10 @@ function draw(){
      const def=INDICATOR_DEFS[ind.key]; if(!def)return;
      try{
        def.compute(rows,idx,ind);
-       if(!ind.hidden)def.render(ctx,ind,rows,dataStart,dataEnd,xAbs,y);
+       // pad/h in coda (RICHIESTO per l'indicatore Volume, vedi volume_default più sopra nel
+       // file): tutti gli altri indicatori li ignorano semplicemente, nessuna modifica alla loro
+       // firma esistente.
+       if(!ind.hidden)def.render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h);
      }catch(err){ /* un indicatore mal configurato non deve rompere il resto del grafico */ }
    });
  }
@@ -12998,6 +13105,16 @@ $('tf').addEventListener('change',()=>{
  // sotto e i commenti gemelli in __loadLiveHistoryFromCapitalImpl/loadLiveHistoryFromMt5).
  const oldTF=currentTF||1;
  const visibleRealMinutes=getVisibleCount()*oldTF;
+ // BUG RISOLTO ESPLICITAMENTE ("cambiando timeframe deve sempre rimanere sul punto di
+ // visualizzazione, tenendo conto del prezzo e della barra del periodo di tempo"): prima
+ // "viewEnd=idx" più sotto saltava SEMPRE al bordo "adesso" (idx = candela corrente del
+ // replay/masterTime), qualunque candela l'utente stesse guardando — se aveva scorso indietro
+ // nella storia (followLatest=false), il cambio TF lo strappava via da lì e lo riportava sempre
+ // al punto "adesso". Catturiamo qui la distanza IN CANDELE dal bordo "adesso" (idx-viewEnd, nel
+ // VECCHIO timeframe) PRIMA di rebuildRows() — stesso identico approccio già usato per il cambio
+ // TF in Live (vedi preserved.offsetFromEnd in __loadLiveHistoryFromCapitalImpl più sotto nel
+ // file), qui applicato anche allo Storico, mai fatto finora.
+ const oldIdx=idx, oldViewEnd=viewEnd;
 
  currentTF=Number($('tf').value)||1;
  // Il bucketing del footprint dipende da currentTF: ricostruisce i bucket dal log tick grezzo
@@ -13023,7 +13140,18 @@ $('tf').addEventListener('change',()=>{
  // Così 1m -> 5m -> 15m -> 1H mantiene esattamente lo stesso prezzo/istante di mercato,
  // e tornando indietro a m1 si ritrova esattamente lo stesso identico prezzo di chiusura.
  rebuildRows();
- viewEnd=idx;
+ if(followLatest){
+   // L'utente stava già seguendo il bordo "adesso": resta lì, comportamento invariato.
+   viewEnd=idx;
+ }else{
+   // L'utente aveva scorso indietro: restiamo ancorati a QUELLA distanza reale da "adesso", non
+   // allo stesso NUMERO di candele (che nel nuovo TF rappresenterebbe un intervallo di tempo
+   // diverso) — la convertiamo in minuti reali nel vecchio TF, poi la riespimiamo in candele del
+   // nuovo TF, esattamente come già fatto per visibleCount qui sotto.
+   const offsetFromEndOldTF=Math.max(0,oldIdx-oldViewEnd);
+   const offsetFromEndNewTF=Math.max(0,Math.round(offsetFromEndOldTF*oldTF/(currentTF||1)));
+   viewEnd=Math.max(0,idx-offsetFromEndNewTF);
+ }
  // Stessa finestra di tempo reale, non più lo stesso numero di candele (vedi commento sopra).
  visibleCount=Math.max(2,Math.round(visibleRealMinutes/(currentTF||1)));
 
@@ -14432,24 +14560,29 @@ chartEl.addEventListener('pointercancel',e=>{
 // Zoom da tastiera+mouse: CTRL premuto + rotellina sul grafico allarga/restringe la vista
 // (numero di candele visibili), come richiesto. Senza CTRL la rotellina non fa nulla, per
 // non interferire con lo scroll della pagina.
-// BUG RISOLTO ("cambiando timeframe, CTRL+rotellina smette di funzionare finché non zoomo a
-// mano dalla barra sotto il grafico"): il listener era agganciato SOLO al <canvas> — ma sopra
-// di esso ci sono elementi FRATELLI sovrapposti via CSS (il selettore timeframe #tfChart in
-// alto a destra, e gli altri pulsanti d'angolo #chartFloatControls/#chartFloatControlsExtra):
-// essendo fratelli e non discendenti del canvas, un wheel che parte da uno di loro NON risale
-// mai fino al listener del canvas (il bubbling degli eventi segue la catena degli ANTENATI
-// dell'elemento colpito, mai i suoi fratelli). Appena l'utente cambia timeframe dal selettore
-// in alto, il mouse resta fisicamente sopra quel <select> — lì CTRL+rotellina è quindi morto
-// finché il cursore non si sposta altrove (es. in basso sulla barra del tempo, dove infatti
-// "si sblocca": lì il mouse è finalmente sopra al canvas o a un suo discendente). Fix: il
-// listener si aggancia invece a #chartMainArea, il contenitore comune di canvas E di TUTTI quei
-// pulsanti d'angolo — così CTRL/SHIFT+rotellina funziona OVUNQUE dentro l'area del grafico,
-// qualunque elemento si trovi esattamente sotto al cursore in quel momento. La logica di
-// ancoraggio del punto sotto al mouse (rect/mx/my qui sotto) resta invariata: usa comunque
-// getBoundingClientRect() del canvas vero, non dell'elemento che ha ricevuto l'evento.
-const chartWheelTarget=document.getElementById('chartMainArea')||chartEl;
-chartWheelTarget.addEventListener('wheel',e=>{
+// BUG RISOLTO DI NUOVO, dopo un primo tentativo insufficiente ("in qualunque momento, in
+// qualunque situazione, CTRL+rotellina deve sempre funzionare, non si può bloccare"): un primo
+// fix agganciava il listener a #chartMainArea in fase di BUBBLING, ragionando che fosse "il
+// contenitore comune" di canvas e pulsanti d'angolo — ma affidarsi alla risalita (bubbling) di un
+// evento attraverso la gerarchia DOM resta fragile: BASTA che un discendente intermedio
+// (#tfChart, un <select> nativo, un futuro pulsante) gestisca il wheel a modo suo, o che il
+// browser tratti diversamente un elemento a fuoco, perché l'evento non arrivi mai al listener più
+// in alto — esattamente il tipo di bug "funziona quasi sempre, tranne quando il mouse è sopra un
+// controllo preciso" che l'utente continuava a incontrare. Fix strutturalmente diverso, non un
+// ennesimo aggiustamento del bersaglio: il listener si aggancia a `document`, in fase di CATTURA
+// (capture:true) invece che di bubbling — la fase di cattura scende dalla radice VERSO il
+// bersaglio, quindi questo listener vede l'evento per PRIMO, prima ancora che l'elemento preciso
+// sotto il cursore (canvas, select, bottone) possa reagirci a modo suo. `e.target.closest
+// ('.chartWrap')` delimita l'effetto alla sola area del grafico (mai fuori, per non rompere lo
+// scroll del resto della pagina) — .chartWrap è il contenitore VERO di tutto quello che sta sopra
+// al grafico (corner button, toolbar, canvas), verificato sulla struttura HTML effettiva, non
+// presunta. La logica di ancoraggio del punto sotto al mouse (rect/mx/my qui sotto) resta
+// invariata: usa comunque getBoundingClientRect() del canvas vero, non dell'elemento che ha
+// ricevuto l'evento.
+document.addEventListener('wheel',e=>{
  if(!rows.length)return;
+ if(!(e.ctrlKey||e.shiftKey))return; // senza modificatori: nessuna interferenza, lo scroll della pagina resta quello di sempre ovunque
+ if(!e.target||!e.target.closest||!e.target.closest('.chartWrap'))return; // fuori dall'area del grafico: non tocchiamo nulla
  if(e.shiftKey){
    // SHIFT + rotellina: zoom verticale (scala prezzi), illimitato.
    e.preventDefault();
@@ -14496,7 +14629,7 @@ chartWheelTarget.addEventListener('wheel',e=>{
    return;
  }
  // Senza CTRL/SHIFT la rotellina non fa nulla, per non interferire con lo scroll della pagina.
-},{passive:false});
+},{passive:false,capture:true});
 
 // Sblocca la riproduzione audio (policy autoplay dei browser) alla prima interazione
 // dell'utente con la pagina, così il suono funziona anche quando una posizione si
@@ -14969,6 +15102,12 @@ $('alarmNotifPermissionBtn')?.addEventListener('click',()=>{
 // pattern di apertura/chiusura/schede di #chartSettingsModalOverlay qui sopra, ma con attributi
 // dedicati data-gensettings-tab/-panel per non confondersi con quel popup. =====================
 $('generalSettingsBtn')?.addEventListener('click',()=>{
+ const ov=$('generalSettingsModalOverlay');
+ if(ov)ov.style.display='flex';
+});
+// Scorciatoia dentro .chartWrap (vedi #chartLiveMt5Btn più sopra nel file): stesso identico
+// popup, così resta raggiungibile anche in modalità "solo grafico" (finestre PIP 2/3/4).
+$('chartLiveMt5Btn')?.addEventListener('click',()=>{
  const ov=$('generalSettingsModalOverlay');
  if(ov)ov.style.display='flex';
 });
@@ -17914,6 +18053,21 @@ function heatmapOpacityNow(){
 function heatmapStepForAsset(assetKey){
  const pip=pipSizeForAsset(assetKey);
  return Number.isFinite(pip)&&pip>0?pip*heatmapRowPipsNow():null;
+}
+// Estensione verticale della heatmap (richiesta esplicitamente): allarga il range prezzo alto/
+// basso del grafico (lo/hi in draw()) oltre le sole candele in vista, così anche livelli bid/ask
+// REALI più lontani dal prezzo attuale (che prima restavano semplicemente fuori dall'area
+// disegnata, non "mancanti" — erano già in bucket.rows, solo fuori dal viewport verticale)
+// diventano visibili. Applicata SOLO quando la heatmap è davvero attiva (stesse condizioni del suo
+// blocco di disegno) — altrove il grafico resta esattamente come prima, range = solo alto/basso
+// delle candele.
+function heatmapVertPadPipsNow(){
+ const v=Number($('heatmapVertPadPips')?.value);
+ return (Number.isFinite(v)&&v>=0)?v:20;
+}
+function heatmapVertPadPriceNow(assetKey){
+ const pip=pipSizeForAsset(assetKey);
+ return (Number.isFinite(pip)&&pip>0)?pip*heatmapVertPadPipsNow():0;
 }
 // SCALA DI COLORE HEATMAP (richiesto esplicitamente, riferimento Bookmap fornito dall'utente):
 // una sola scala "di calore" continua — blu scuro (poca liquidità) → blu → ciano → verde → giallo
