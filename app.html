@@ -1994,7 +1994,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         <option value="backtest_propfirm">🛡️📼 Storico PF</option>
         <option value="live_propfirm">🛡️🔴 Live PF</option>
       </select>
-    </th><th>Side</th><th>Lotti</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
+    </th><th>Side</th><th>Lotti</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Exit</th><th>Risultato</th><th>
+      <!-- RICHIESTO ESPLICITAMENTE: colonna "Strategia" tra Risultato e Pip — stesso select-
+           nell'intestazione già usato per "Modalità" qui sopra, ma con la lista di nomi creata
+           a mano dall'utente (vedi tradeStrategies) invece di opzioni fisse: l'ultima voce
+           "➕ Aggiungi nuova..." apre un prompt per crearne una nuova (listener in fondo allo
+           script). -->
+      <select id="journalStrategyFilterSelect" title="Filtra il Trade Journal per strategia, o aggiungine una nuova" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:120px">
+        <option value="all">Strategia ▾</option>
+        <option value="__add_new__">➕ Aggiungi nuova...</option>
+      </select>
+    </th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
  <tbody id="journal"></tbody></table></div>
  <!-- RICHIESTO ESPLICITAMENTE: paginazione automatica, 20 operazioni a pagina, le più recenti
       in pagina 1 — popolata da update() (vedi JOURNAL_PAGE_SIZE/journalCurrentPage nel JS). -->
@@ -2024,6 +2034,13 @@ document.addEventListener('click',function(e){
 },true);
 
 let rows=[], baseRows=[], csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, zoneWidthDrag=null;
+// RICHIESTO ESPLICITAMENTE: colonna "Strategia" nel Trade Journal — elenco dei nomi di
+// strategia creati dall'utente (dal menu a tendina nell'intestazione, vedi
+// journalStrategyFilterSelect), globale per tutta l'app (non per asset/sessione), salvato in
+// collectLightSessionState/applyLightSessionState come `trades`. journalStrategyOptionsDirty
+// evita di ricostruire le opzioni del filtro ad ogni singolo update() (chiamato spesso, anche
+// solo per un tick di prezzo Live): si ricostruiscono solo quando la lista cambia davvero.
+let tradeStrategies=[], journalStrategyOptionsDirty=true;
 // RICHIESTO ESPLICITAMENTE: Trade Journal paginato, 20 operazioni a pagina, le più recenti in
 // pagina 1 — vedi il blocco "Trade Journal" dentro update() più sotto per il render effettivo.
 const JOURNAL_PAGE_SIZE=20;
@@ -3049,6 +3066,7 @@ function collectLightSessionState(){
    pendingOrders:stripMt5TrackedForSave(pendingOrders),
    trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
    isPropFirmMode,
+   tradeStrategies,
    // Richiesto esplicitamente: se ero connesso a un conto MT5 reale, alla riapertura dell'app
    // deve proporsi da sola la riconnessione (vedi il popup in initSession() più sotto). Salviamo
    // qui solo SE ero connesso, MAI la password (quella resta dov'era già, nella cartella
@@ -3236,6 +3254,8 @@ function applyLightSessionState(state){
  // login MT5 riuscito.
  positions=stripMt5TrackedForSave(state.positions||[]); active=(state.active&&state.active.mt5Ticket==null)?state.active:null;
  pendingOrders=stripMt5TrackedForSave(state.pendingOrders||[]); trades=state.trades||[];
+ tradeStrategies=Array.isArray(state.tradeStrategies)?state.tradeStrategies:[];
+ journalStrategyOptionsDirty=true;
  // MIGRAZIONE una tantum: sessioni salvate da versioni precedenti a questa (prima che ogni
  // posizione/ordine/trade portasse con sé il proprio campo "asset") non hanno quel tag.
  // Senza un asset esplicito, andrebbero trattate per errore come "dell'asset corrente"
@@ -5477,6 +5497,21 @@ function collectAcrossSessions(field){
  });
  return out;
 }
+// RICHIESTO ESPLICITAMENTE: select "Strategia" nell'intestazione del Trade Journal, usato sia
+// come filtro (Tutte/una strategia) sia per aggiungerne una nuova (opzione speciale in fondo).
+// Ricostruita SOLO quando tradeStrategies cambia davvero (journalStrategyOptionsDirty), non ad
+// ogni update() — altrimenti ricreare il <select> spesso perderebbe/sfarfallerebbe la
+// selezione corrente dell'utente durante il Live (update() gira ad ogni tick di prezzo).
+function refreshJournalStrategyFilterOptions(){
+ if(!journalStrategyOptionsDirty)return;
+ const sel=$('journalStrategyFilterSelect'); if(!sel)return;
+ const prev=sel.value||'all';
+ sel.innerHTML='<option value="all">Strategia ▾</option>'+
+   tradeStrategies.map(s=>`<option value="${escapeHtmlLite(s)}">${escapeHtmlLite(s)}</option>`).join('')+
+   '<option value="__add_new__">➕ Aggiungi nuova...</option>';
+ sel.value=(prev==='all'||prev==='__add_new__'||tradeStrategies.includes(prev))?prev:'all';
+ journalStrategyOptionsDirty=false;
+}
 function update(){
  // STEP 2: controllo delle regole Prop Firm ad OGNI tick del grafico (update() viene già
  // chiamata da tutti i punti richiesti: avanzamento replay storico, tick Live, apertura e
@@ -5713,12 +5748,18 @@ function update(){
  // trade dentro `trades` (serve intatto a "Vai a grafico"/"Elimina", che agiscono per indice),
  // anche quando si sta visualizzando solo una delle 4 sessioni invece che "Tutte".
  const journalModeFilter=$('journalModeFilterSelect')?$('journalModeFilterSelect').value:'all';
+ // Filtro "Strategia" (vedi journalStrategyFilterSelect nell'intestazione): opzioni ricostruite
+ // solo quando la lista tradeStrategies cambia davvero (journalStrategyOptionsDirty), MAI ad
+ // ogni update() — altrimenti ricostruire il <select> spesso (es. ogni tick di prezzo Live)
+ // perderebbe/sfarfallerebbe la selezione corrente dell'utente.
+ refreshJournalStrategyFilterOptions();
+ const journalStrategyFilter=$('journalStrategyFilterSelect')?$('journalStrategyFilterSelect').value:'all';
  // RICHIESTO ESPLICITAMENTE ("suddividiamo in automatico di 20 operazioni a pagina... le prime
  // 20 sono sempre quelle più fresche"): `trades` cresce con push() quindi l'ultimo elemento è il
  // più recente — invertiamo l'ordine DOPO il filtro per mostrare i più recenti per primi, poi
  // paginiamo. L'indice `i` di ogni riga resta quello ORIGINALE dentro `trades` (non quello di
  // visualizzazione), cosi "Vai a grafico"/"Elimina" continuano a puntare al trade giusto.
- const journalRowsNewestFirst=trades.map((t,i)=>({t,i})).filter(({t})=>journalModeFilter==='all'||t.mode===journalModeFilter).reverse();
+ const journalRowsNewestFirst=trades.map((t,i)=>({t,i})).filter(({t})=>(journalModeFilter==='all'||t.mode===journalModeFilter)&&(journalStrategyFilter==='all'||(t.strategy||'')===journalStrategyFilter)).reverse();
  const journalTotalPages=Math.max(1,Math.ceil(journalRowsNewestFirst.length/JOURNAL_PAGE_SIZE));
  if(journalCurrentPage>journalTotalPages)journalCurrentPage=journalTotalPages;
  if(journalCurrentPage<1)journalCurrentPage=1;
@@ -5736,7 +5777,14 @@ function update(){
    const modeTag=(JOURNAL_MODE_TAGS[t.mode]||'📼 Storico')+(t.mt5Ticket!=null?' <span title="Posizione REALE sul conto MT5 collegato (ticket '+t.mt5Ticket+')">🖥️</span>':'');
    // Stesso principio della tabella posizioni aperte: R/R congelato sullo SL di apertura.
    const journalSlTxt=fmtPrice(t.sl)+(isStopProfitLevel(t)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre prima della chiusura">🔒SP</span>':'');
+   // Select per-riga per assegnare/cambiare la strategia di QUESTO trade (colonna tra
+   // Risultato e Pip, vedi header): opzioni sempre in sync con tradeStrategies, valore
+   // corrente t.strategy preselezionato se presente. Il cambio è gestito in delega sul tbody
+   // #journal (vedi listener 'change' più sotto nello script), come già per jumptrade/deltrade.
+   const strategyOptionsHtml='<option value="">—</option>'+tradeStrategies.map(s=>`<option value="${escapeHtmlLite(s)}"${t.strategy===s?' selected':''}>${escapeHtmlLite(s)}</option>`).join('');
+   const strategyCell=`<td><select class="journalStrategySelect" data-strategy-trade="${i}" title="Strategia usata in questa operazione" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:100px">${strategyOptionsHtml}</select></td>`;
    return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${modeTag}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPrice(t.entry)}</td><td>${journalSlTxt}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
+   strategyCell+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+(t.pct!=null?t.pct.toFixed(2):'0.00')}%</td>`+
@@ -9088,7 +9136,7 @@ function chartGeometry(){
    const row=rows[li];
    return {row,time:tsOk?ts[li]:li};
  };
- return {rect,pad,y,price,xFromTime,timeFromX,nearestCandle,xLocal,globalPosFromX};
+ return {rect,pad,y,price,xFromTime,timeFromX,nearestCandle,xLocal,globalPosFromX,dataPosFromTime,timeFromDataPos};
 }
 function screenToChartPoint(clientX,clientY,snap,clampPlot){
  const g=chartGeometry();if(!g)return null;
@@ -12856,7 +12904,14 @@ chartEl.addEventListener('pointerdown',e=>{
       // maniglia) — seleziona ma non arma il trascinamento (richiesto).
       if(shapeHit.drawing.locked||shapeHit.handle.type==='select'){ draw(); return; }
       const point=screenToChartPoint(e.clientX,e.clientY);
-      shapeDrag={handle:shapeHit.handle,startPoint:point,origP1:{...shapeHit.drawing.p1},origP2:{...shapeHit.drawing.p2}};
+      // startPos (posizione ASSOLUTA in indice di candela, spazio lineare rispetto ai pixel):
+      // vedi il commento sul trascinamento "body" più sotto nel listener pointermove — serve a
+      // spostare l'intero disegno mantenendone ESATTAMENTE le dimensioni, anche quando il
+      // trascinamento attraversa un salto nel tempo (es. weekend), dove il tempo reale non è
+      // lineare rispetto ai pixel.
+      const gDown=chartGeometry();
+      const startPos=gDown?gDown.globalPosFromX(e.clientX-gDown.rect.left):null;
+      shapeDrag={handle:shapeHit.handle,startPoint:point,startPos,origP1:{...shapeHit.drawing.p1},origP2:{...shapeHit.drawing.p2}};
       chartEl.setPointerCapture?.(e.pointerId);
       draw();
       return;
@@ -12941,7 +12996,10 @@ chartEl.addEventListener('pointerdown',e=>{
    // `historyPushed`: la history viene registrata al PRIMO movimento effettivo del trascinamento
    // (vedi pointermove più sotto), non già qui alla sola selezione — così un semplice clic per
    // selezionare un disegno (senza spostarlo) non crea una voce inutile nella cronologia Ctrl+Z.
-   shapeDrag={handle:shapeHit.handle,startPoint:point,origP1:{...shapeHit.drawing.p1},origP2:{...shapeHit.drawing.p2},historyPushed:false};
+   // startPos: vedi commento gemello nel ramo touch più sopra.
+   const gDown2=chartGeometry();
+   const startPos2=gDown2?gDown2.globalPosFromX(e.clientX-gDown2.rect.left):null;
+   shapeDrag={handle:shapeHit.handle,startPoint:point,startPos:startPos2,origP1:{...shapeHit.drawing.p1},origP2:{...shapeHit.drawing.p2},historyPushed:false};
    chartEl.setPointerCapture?.(e.pointerId);
    draw();
    return;
@@ -13088,15 +13146,41 @@ chartEl.addEventListener('pointermove',e=>{
      // estremo può benissimo essere GIÀ fuori da quell'area PRIMA ancora di iniziare a
      // trascinare: in quel caso il calcolo (serve uno spostamento minimo positivo maggiore del
      // massimo consentito) risultava sempre "impossibile" e bloccava OGNI movimento, non solo
-     // quello verso il bordo già superato. Spostiamo invece l'intero disegno per un delta
-     // diretto in TEMPO/PREZZO (spazio dati, non pixel): sempre valido, indipendente dallo zoom
-     // e dalla vista attuale, e mantiene forma/proporzioni esattamente come prima (entrambi gli
-     // estremi si spostano dello stesso identico delta) — può uscire dalla vista, esattamente
-     // come una linea "estesa" si comporta in TradingView (si segue con pan/zoom, non si blocca).
-     const dTime=point.time-shapeDrag.startPoint.time;
-     const dPrice=point.price-shapeDrag.startPoint.price;
-     d.p1={time:shapeDrag.origP1.time+dTime,price:shapeDrag.origP1.price+dPrice};
-     d.p2={time:shapeDrag.origP2.time+dTime,price:shapeDrag.origP2.price+dPrice};
+     // quello verso il bordo già superato.
+     // BUG RISOLTO ("un punto del grafico dove i disegni si bloccano e cambiano di dimensione
+     // senza un perché" durante il trascinamento): qui sopra lo spostamento veniva calcolato
+     // come delta di TEMPO REALE in millisecondi (point.time-shapeDrag.startPoint.time) e
+     // sommato all'ancora originale di ciascun estremo — ma il tempo reale NON è lineare
+     // rispetto ai pixel quando la serie storica ha un salto (es. weekend, festivi, buchi tra
+     // sessioni): pochi pixel di trascinamento nel punto esatto in cui il grafico attraversa
+     // uno di questi salti corrispondono a ORE o GIORNI di tempo reale, quindi lo stesso identico
+     // dTime applicato a entrambi gli estremi li spostava correttamente in "tempo assoluto" ma
+     // uno dei due poteva finire dall'altra parte del salto rispetto all'altro, facendo
+     // sembrare il disegno "bloccato" o improvvisamente più corto/lungo sullo schermo (dove
+     // quei salti sono compressi in pochi pixel, esattamente come le candele). Calcoliamo
+     // invece lo spostamento in spazio POSIZIONE/INDICE di candela (globalPosFromX, lineare
+     // rispetto ai pixel per costruzione, buchi compresi) e lo applichiamo alla posizione di
+     // ciascun estremo (convertita da/verso il suo timestamp reale con dataPosFromTime/
+     // timeFromDataPos) — così le dimensioni del disegno restano IDENTICHE in ogni punto del
+     // trascinamento, e ogni estremo resta comunque ancorato al suo vero timestamp/prezzo.
+     const gBody=chartGeometry();
+     if(gBody && shapeDrag.startPos!=null){
+       const curPos=gBody.globalPosFromX(e.clientX-gBody.rect.left);
+       const dPos=curPos-shapeDrag.startPos;
+       const posP1=gBody.dataPosFromTime(shapeDrag.origP1.time)+dPos;
+       const posP2=gBody.dataPosFromTime(shapeDrag.origP2.time)+dPos;
+       const dPrice=point.price-shapeDrag.startPoint.price;
+       d.p1={time:gBody.timeFromDataPos(posP1),price:shapeDrag.origP1.price+dPrice};
+       d.p2={time:gBody.timeFromDataPos(posP2),price:shapeDrag.origP2.price+dPrice};
+     }else{
+       // Fallback (geometria non disponibile per qualche motivo, es. grafico non ancora
+       // renderizzato): stesso comportamento di prima, meglio di un trascinamento che non
+       // fa nulla.
+       const dTime=point.time-shapeDrag.startPoint.time;
+       const dPrice=point.price-shapeDrag.startPoint.price;
+       d.p1={time:shapeDrag.origP1.time+dTime,price:shapeDrag.origP1.price+dPrice};
+       d.p2={time:shapeDrag.origP2.time+dTime,price:shapeDrag.origP2.price+dPrice};
+     }
    }
    draw();
    return;
@@ -18383,6 +18467,39 @@ $('propFirmCapitalStartBtn').addEventListener('click', ()=>{
 // sempre a pagina 1 (restare su un numero di pagina che magari non esiste più nel sotto-elenco
 // filtrato darebbe una tabella vuota o disorientante).
 $('journalModeFilterSelect')?.addEventListener('change', ()=>{ journalCurrentPage=1; update(); });
+// Filtro/aggiunta "Strategia" del Trade Journal (vedi journalStrategyFilterSelect
+// nell'intestazione e refreshJournalStrategyFilterOptions più sopra): la voce speciale
+// "➕ Aggiungi nuova..." apre un prompt per creare un nuovo nome di strategia (salvato in
+// tradeStrategies, persistito con lo stato leggero come i trade), poi la seleziona subito come
+// filtro; qualunque altra scelta filtra semplicemente l'elenco come "Modalità" qui sopra.
+$('journalStrategyFilterSelect')?.addEventListener('change', ()=>{
+ const sel=$('journalStrategyFilterSelect'); if(!sel)return;
+ if(sel.value==='__add_new__'){
+   const name=(prompt('Nome della nuova strategia:')||'').trim();
+   if(name && !tradeStrategies.includes(name)){
+     tradeStrategies.push(name);
+     journalStrategyOptionsDirty=true;
+     scheduleSave();
+   }
+   sel.value=name&&tradeStrategies.includes(name)?name:'all';
+ }
+ journalCurrentPage=1;
+ update();
+});
+// Assegna/cambia la strategia di UN SOLO trade dal select nella sua riga (colonna "Strategia"
+// tra Risultato e Pip, popolata dentro update()): delega sul tbody #journal, stesso schema già
+// usato per data-jumptrade/data-deltrade qui sotto.
+$('journal').addEventListener('change', e=>{
+ const sel=e.target.closest('[data-strategy-trade]'); if(!sel)return;
+ const ti=Number(sel.getAttribute('data-strategy-trade'));
+ if(!Number.isFinite(ti)||!trades[ti])return;
+ trades[ti].strategy=sel.value||undefined;
+ scheduleSave();
+ // Se il filtro Strategia è attivo su un valore diverso da quello appena assegnato, questa
+ // riga sparirà dal Journal al prossimo render — comportamento atteso di un filtro (identico a
+ // quanto già succede cambiando "Modalità" su un trade non più coerente col filtro corrente).
+ update();
+});
 // Click sui pulsanti di paginazione del Trade Journal (Prec./Succ./numeri di pagina).
 $('journalPagination')?.addEventListener('click',e=>{
  const btn=e.target.closest('[data-journal-page]'); if(!btn||btn.disabled)return;
