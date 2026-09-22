@@ -14560,29 +14560,27 @@ chartEl.addEventListener('pointercancel',e=>{
 // Zoom da tastiera+mouse: CTRL premuto + rotellina sul grafico allarga/restringe la vista
 // (numero di candele visibili), come richiesto. Senza CTRL la rotellina non fa nulla, per
 // non interferire con lo scroll della pagina.
-// BUG RISOLTO DI NUOVO, dopo un primo tentativo insufficiente ("in qualunque momento, in
-// qualunque situazione, CTRL+rotellina deve sempre funzionare, non si può bloccare"): un primo
-// fix agganciava il listener a #chartMainArea in fase di BUBBLING, ragionando che fosse "il
-// contenitore comune" di canvas e pulsanti d'angolo — ma affidarsi alla risalita (bubbling) di un
-// evento attraverso la gerarchia DOM resta fragile: BASTA che un discendente intermedio
-// (#tfChart, un <select> nativo, un futuro pulsante) gestisca il wheel a modo suo, o che il
-// browser tratti diversamente un elemento a fuoco, perché l'evento non arrivi mai al listener più
-// in alto — esattamente il tipo di bug "funziona quasi sempre, tranne quando il mouse è sopra un
-// controllo preciso" che l'utente continuava a incontrare. Fix strutturalmente diverso, non un
-// ennesimo aggiustamento del bersaglio: il listener si aggancia a `document`, in fase di CATTURA
-// (capture:true) invece che di bubbling — la fase di cattura scende dalla radice VERSO il
-// bersaglio, quindi questo listener vede l'evento per PRIMO, prima ancora che l'elemento preciso
-// sotto il cursore (canvas, select, bottone) possa reagirci a modo suo. `e.target.closest
-// ('.chartWrap')` delimita l'effetto alla sola area del grafico (mai fuori, per non rompere lo
-// scroll del resto della pagina) — .chartWrap è il contenitore VERO di tutto quello che sta sopra
-// al grafico (corner button, toolbar, canvas), verificato sulla struttura HTML effettiva, non
-// presunta. La logica di ancoraggio del punto sotto al mouse (rect/mx/my qui sotto) resta
-// invariata: usa comunque getBoundingClientRect() del canvas vero, non dell'elemento che ha
-// ricevuto l'evento.
-document.addEventListener('wheel',e=>{
+// BUG RISOLTO DI NUOVO: un tentativo intermedio agganciava il listener a `document` (fase di
+// cattura) invece che a un elemento del grafico, nel tentativo di "vedere l'evento per primo" a
+// prescindere da cosa ci fosse sotto il cursore — ma un listener globale su document, anche se
+// filtrato a runtime con `e.target.closest('.chartWrap')`, ha introdotto una regressione ben
+// peggiore del bug che doveva risolvere: CTRL+rotellina zoomava l'INTERA PAGINA del browser
+// (lo zoom nativo del browser), non solo il grafico. Si torna quindi all'approccio corretto:
+// il listener è agganciato DIRETTAMENTE a `.chartWrap` (non a `document`), così l'evento non
+// esce MAI dall'area del grafico per definizione — non serve alcun controllo runtime su
+// e.target. Resta però la fase di CATTURA (capture:true), che è la parte del fix originale che
+// funzionava davvero: la cattura scende dalla radice VERSO il bersaglio, quindi questo listener
+// vede l'evento PRIMA che un discendente (#tfChart, un <select> nativo, un pulsante d'angolo)
+// possa gestirlo o assorbirlo a modo suo — risolvendo il bug "CTRL+rotellina smette di
+// funzionare dopo il cambio di timeframe / sopra certi controlli", verificato sulla struttura
+// HTML effettiva: .chartWrap è il vero antenato di canvas#chart, #chartMainArea, #tfChart e
+// #chartFloatControls (confermato via parsing reale del DOM, non per supposizione).
+// La logica di ancoraggio del punto sotto al mouse (rect/mx/my qui sotto) resta invariata: usa
+// comunque getBoundingClientRect() del canvas vero, non dell'elemento che ha ricevuto l'evento.
+const chartWheelTarget=document.getElementById('chartWrap')||chartEl;
+chartWheelTarget.addEventListener('wheel',e=>{
  if(!rows.length)return;
  if(!(e.ctrlKey||e.shiftKey))return; // senza modificatori: nessuna interferenza, lo scroll della pagina resta quello di sempre ovunque
- if(!e.target||!e.target.closest||!e.target.closest('.chartWrap'))return; // fuori dall'area del grafico: non tocchiamo nulla
  if(e.shiftKey){
    // SHIFT + rotellina: zoom verticale (scala prezzi), illimitato.
    e.preventDefault();
