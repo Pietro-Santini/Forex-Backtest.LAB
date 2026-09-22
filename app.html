@@ -1271,16 +1271,16 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              </div>
              <p class="hint" style="margin-top:6px">Scala tutti i testi disegnati dentro il grafico (prezzi, orari, etichette dei disegni, profili volumetrici, dashboard degli indicatori, caselle TP-SL...). Non modifica il nome dell'asset, i pulsanti della barra degli strumenti né i nomi degli indicatori nella legenda in alto.</p>
            </div>
-           <!-- FOOTPRINT/ORDER FLOW (punto 1 roadmap, tick-rule su stream Live Capital.com/MT5):
-                vedi footprintRegisterTick()/footprintByBucket/footprintTickLogByAsset e
+           <!-- FOOTPRINT/ORDER FLOW (tick-rule su stream Live Capital.com/MT5, PIÙ backfill di tick
+                storici reali via mt5_feed_server.py per MT5 — vedi footprintRegisterTick()/
+                footprintByBucket/footprintTickLogByAsset/footprintBackfillMt5() e
                 drawFootprintCandle() in fondo al file per l'implementazione completa. Attivo su
-                OGNI candela per cui esiste almeno un tick nel log di questa sessione (non solo
-                quella in formazione: il log tick grezzo per asset sopravvive ai cambi TF/pip-riga,
-                vedi footprintRebuildBucketsForCurrentAsset()) — le candele MAI osservate restano
-                candlestick normali, a meno di accendere "Mostra anche stime OHLCV" qui sotto
-                (spento di default, vedi il suo hint per il perché). Sotto una certa soglia di zoom
-                (poche righe leggibili) il rendering ricade da solo sulla candela normale, vedi
-                draw(). -->
+                OGNI candela per cui esiste almeno un tick REALE nel log (in sessione, più il
+                backfill storico su MT5) — le candele MAI osservate (nessun tick disponibile da
+                nessuna fonte) restano candlestick normali: NIENTE stime/invenzioni, rimosse su
+                richiesta esplicita dell'utente dopo discussione sul rischio di confonderle con dati
+                reali. Sotto una certa soglia di zoom il rendering ricade da solo sulla candela
+                normale, vedi draw() e "Larghezza minima" qui sotto. -->
            <div class="fbSettingsSectionTitle">📊 Footprint (tick, solo Live)</div>
            <div data-style-panel="footprint">
              <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
@@ -1298,26 +1298,78 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                <label style="flex:none;min-width:110px">Righe (pip/riga)</label>
                <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip.">
              </div>
-             <p class="hint" style="margin-top:6px">⚠️ Stima da tick-rule (buy = tick al rialzo del prezzo bid, sell = tick al ribasso, rispetto al tick precedente). Su Capital.com è un conteggio puro di tick (nessun size nel dato ricevuto). Su MT5 usa invece il "tick volume" del broker quando disponibile — un proxy migliore ma non garantito come volume realmente scambiato (dipende dal feed del broker). Mai un vero order flow a size di trade.</p>
-             <!-- RICHIESTO ESPLICITAMENTE, con avvertenza altrettanto esplicita (vedi la
-                  discussione con l'utente): SPENTO di default apposta. Quando acceso, le candele
-                  MAI osservate da questa sessione (storico precedente, asset non seguito, programma
-                  chiuso) mostrano una stima euristica da OHLCV (footprintEstimateForCandle()) —
-                  MAI disegnata con lo stesso aspetto delle celle reali: sempre tratteggiata, colore
-                  ambra/neutro invece che verde/rosso, ed etichetta "STIMA OHLCV" fissa sopra la
-                  candela, per non poter mai essere scambiata per un dato osservato davvero. -->
-             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px;margin-top:6px">
-               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintShowEstimated"> Mostra anche stime OHLCV sulle candele senza tick reali</label>
+             <!-- RICHIESTO ESPLICITAMENTE: più candele leggibili in vista, senza dover ridurre lo
+                  zoom fino a vederne pochissime. Due soglie separate invece di una sola: sotto
+                  "Larghezza minima" niente footprint (candela normale, come prima); tra questa e
+                  "Larghezza numeri" le celle si vedono comunque colorate (l'informazione visiva
+                  principale) ma senza i numeri sovrapposti, che a quella dimensione diventerebbero
+                  illeggibili comunque — vedi drawFootprintCandle()/showNumbers in draw(). Abbassare
+                  "Larghezza minima" (default 34→14) è la leva vera per vedere più candele: con
+                  quella a 14 e lo zoom giusto, un TF M15 che prima mostrava 4-5 candele in
+                  footprint ora può arrivare a mostrarne 3-4 volte tante, solo colorate. -->
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:110px">Larghezza minima</label>
+               <input id="footprintMinBw" type="number" min="6" max="60" step="1" value="14" style="width:60px" title="Larghezza minima in pixel di una candela per mostrare comunque il footprint (solo colori, senza numeri). Sotto questa soglia: candela normale.">px
+               <span style="display:inline-flex;align-items:center;gap:5px;margin-left:14px">Larghezza numeri <input id="footprintNumbersMinBw" type="number" min="20" max="120" step="1" value="44" style="width:60px">px</span>
              </div>
-             <p class="hint" style="margin-top:2px">⚠️ NON è un dato osservato: è una stima euristica calcolata dall'OHLC/volume della candela (distribuzione triangolare centrata sul close, 60/40 buy/sell lato chiusura). Disegnata sempre tratteggiata, con colori diversi da quella reale e l'etichetta "STIMA OHLCV" sopra la candela — per non confonderla mai con un tick davvero osservato. Di default spenta: accendila solo se ti serve un colpo d'occhio approssimativo, mai per decisioni che richiedono dati reali.</p>
-             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">IMBALANCE AUTOMATICO</div>
+             <p class="hint" style="margin-top:4px">Abbassa "Larghezza minima" per vedere più candele in footprint contemporaneamente (a scapito dei numeri, che spariscono sotto "Larghezza numeri" mostrando solo l'intensità colore). A parità di zoom, più basso = più candele in vista.</p>
+             <p class="hint" style="margin-top:6px">⚠️ Stima da tick-rule (buy = tick al rialzo del prezzo bid, sell = tick al ribasso, rispetto al tick precedente). Su Capital.com è un conteggio puro di tick (nessun size nel dato ricevuto, e nessuno storico: solo da quando accendi il footprint in avanti — la loro API pubblica non espone tick storici, verificato). Su MT5 usa invece il "tick volume" del broker quando disponibile — un proxy migliore ma non garantito come volume realmente scambiato (dipende dal feed del broker). Mai un vero order flow a size di trade.</p>
+             <!-- RICHIESTO ESPLICITAMENTE ("prendiamo i tick reali del passato"): su MT5 il
+                  pacchetto MetaTrader5 espone mt5.copy_ticks_range(), che restituisce i tick
+                  REALMENTE registrati dal broker per un intervallo di tempo passato — non una
+                  stima. Il server mt5_feed_server.py ora ha un endpoint /ticks che lo usa (vedi
+                  footprintBackfillMt5() più sotto nel file). Limite onesto: dipende da quanto
+                  storico tick il TUO broker/terminale conserva davvero — non è garantito che
+                  copra tutte le ore richieste, specie per periodi lontani o simboli poco liquidi. -->
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:140px">Backfill storico MT5</label>
+               <input id="footprintBackfillHours" type="number" min="1" max="168" step="1" value="24" style="width:60px" title="Quante ore indietro richiedere di tick storici reali a MT5 quando selezioni un asset (richiede mt5_feed_server.py aggiornato con l'endpoint /ticks).">ore
+             </div>
+             <p class="hint" style="margin-top:2px">Solo MT5 (Capital.com non ha uno storico tick nella loro API pubblica). Richiesto una volta per asset quando lo selezioni (o quando accendi il footprint), in background. Se il tuo broker conserva meno storico tick di quanto richiesto, riceverai solo quello disponibile — nessun errore, solo meno candele con footprint reale nella parte più vecchia.</p>
+             <!-- RICHIESTO ESPLICITAMENTE, schema "zero print" (foto fornita dall'utente): non più
+                  un confronto a soglia %, ma un vero e proprio BUCO — una riga di prezzo dentro il
+                  range della candela dove un lato (buy o sell) è ESATTAMENTE zero mentre l'altro ha
+                  attività. Le righe zero-print consecutive formano una zona che, se il prezzo non
+                  ci torna dentro nelle candele successive, si ESTENDE verso destra candela dopo
+                  candela (come una calamita ancora "aperta"); alla prima candela il cui range
+                  [low,high] rientra nella zona, la zona si "ferma" lì (mitigata) — vedi
+                  footprintFindZeroPrintZones()/footprintUpdateZeroPrintZones() più sotto nel file
+                  per l'implementazione completa. Calcolato solo su celle con tick REALI. -->
+             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ZONE ZERO-PRINT (imbalance)</div>
              <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
-               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintImbalanceEnabled"> Evidenzia zone di imbalance</label>
-               <span style="display:inline-flex;align-items:center;gap:5px">Soglia <input id="footprintImbalanceThresholdPct" type="number" min="100" max="1000" step="10" value="200" style="width:60px">%</span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Max rettangoli <input id="footprintImbalanceMaxRects" type="number" min="1" max="20" step="1" value="5" style="width:50px"></span>
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintImbalanceEnabled"> Evidenzia zone a buco di contratti (zero print)</label>
+               <span style="display:inline-flex;align-items:center;gap:5px">Righe minime <input id="footprintImbalanceMinRows" type="number" min="1" max="20" step="1" value="1" style="width:50px"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Max zone in vista <input id="footprintImbalanceMaxRects" type="number" min="1" max="30" step="1" value="8" style="width:50px"></span>
                <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="footprintImbalanceColor" type="color" class="colorPick" value="#8a97a8"></span>
              </div>
-             <p class="hint" style="margin-top:2px">Confronto "diagonale" standard: buy a un livello vs sell del livello subito sotto (e viceversa). "Soglia" = di quante volte un lato deve superare l'altro (200% = il doppio) per contare come imbalance. Righe consecutive in imbalance vengono raggruppate in un unico rettangolo; solo i "Max rettangoli" più marcati (per numero di righe coinvolte) vengono disegnati, per candela, per non riempire il grafico. Calcolato solo su celle con tick REALI, mai su quelle stimate da OHLCV.</p>
+             <p class="hint" style="margin-top:2px">Una riga è "zero print" quando, dentro il range della candela, un lato (buy o sell) ha ESATTAMENTE zero contratti mentre l'altro ne ha. "Righe minime" = quante righe zero-print consecutive servono per formare una zona (1 = anche una singola riga vuota conta). Ogni zona nasce nella candela dove appare e si allarga verso destra finché il prezzo non ci ritorna dentro (poi si ferma lì); disegnata come una banda orizzontale sotto le candele, esattamente come un profilo di volume "col buco". Solo le "Max zone in vista" più larghe (per numero di righe) vengono disegnate. Calcolato solo su celle con tick REALI, mai stimate.</p>
+             <!-- RICHIESTO ESPLICITAMENTE, dopo uno screenshot di riferimento (indicatore
+                  commerciale "DeepCharts"): pallini di Absorption/Rejection sugli stoppini delle
+                  candele, dimensione proporzionale all'intensità. ONESTÀ: quello screenshot è
+                  materiale di marketing di un prodotto a pagamento — non esiste modo di conoscere
+                  la LORO formula esatta (nessuno fuori da quel team ce l'ha). Quella qui sotto è
+                  una definizione originale, costruita sugli stessi dati reali già usati dal resto
+                  del footprint (righe buy/sell per candela), non una copia: vedi
+                  footprintFindAbsorptionRejectionMarkers() più sotto nel file per la logica
+                  completa. Calcolato solo su celle con tick REALI, mai stimate — stessa regola di
+                  tutto il resto del footprint. -->
+             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ABSORPTION / REJECTION (sugli stoppini)</div>
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintArEnabled"> Mostra pallini Absorption/Rejection sugli stoppini</label>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Soglia volume (× media riga) <input id="footprintArMinVolMult" type="number" min="0.5" max="20" step="0.1" value="1.5" style="width:60px"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Dominanza direzionale % <input id="footprintArDominancePct" type="number" min="5" max="95" step="1" value="60" style="width:55px"></span>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore Rejection <input id="footprintArRejectionColor" type="color" class="colorPick" value="#4caf6d"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore Absorption <input id="footprintArAbsorptionColor" type="color" class="colorPick" value="#e05b64"></span>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+               <span style="display:inline-flex;align-items:center;gap:5px">Pallino min <input id="footprintArMinDotPx" type="number" min="2" max="20" step="1" value="3" style="width:50px">px</span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Pallino max <input id="footprintArMaxDotPx" type="number" min="4" max="40" step="1" value="12" style="width:50px">px</span>
+             </div>
+             <p class="hint" style="margin-top:2px">Per ogni stoppino (sopra o sotto il corpo della candela) con volume reale ≥ "Soglia volume" rispetto alla media delle righe di quella candela: se un lato (buy/sell) domina per almeno "Dominanza direzionale %" → <b>Rejection</b> (spinta decisa e respinta, pallino colore Rejection); se il volume è alto ma i due lati sono più bilanciati → <b>Absorption</b> (il movimento viene assorbito senza proseguire, pallino colore Absorption). La dimensione del pallino è proporzionale al volume reale nello stoppino, tra "Pallino min" e "Pallino max".</p>
            </div>
          </div>
          <div data-settings-panel="grid" style="display:none">
@@ -2115,6 +2167,20 @@ let rows=[], baseRows=[], csvLibrary=[], idx=0, viewEnd=0, masterTime=null, posi
 // evita di ricostruire le opzioni del filtro ad ogni singolo update() (chiamato spesso, anche
 // solo per un tick di prezzo Live): si ricostruiscono solo quando la lista cambia davvero.
 let tradeStrategies=[], journalStrategyOptionsDirty=true;
+// BUG RISOLTO ("il menu a tendina Strategia di una riga del Trade Journal si chiude/sparisce
+// prima di riuscire a cliccare un'opzione, anche appena aperto"): la tabella #journal veniva
+// ricostruita con innerHTML ad OGNI singola chiamata di update() — che gira ad ogni tick di
+// prezzo Live, ogni passo di replay, ogni apertura/chiusura trade (vedi il commento in cima a
+// update()) — quindi anche più volte al secondo in Live. Il <select> nativo di ogni riga veniva
+// quindi distrutto e ricreato da capo nel mezzo dell'interazione: un browser chiude SEMPRE il
+// popup nativo di un <select> se l'elemento viene rimosso dal DOM, quindi all'utente sembrava che
+// il nome scomparisse "da solo" appena provava a cliccarlo, anche senza aver toccato nulla. I
+// trade nel Journal sono però CHIUSI (pl/pips/exit/account sono valori congelati al momento della
+// chiusura, non cambiano più con un tick di prezzo): non c'è nessun motivo reale per ricostruire
+// quella tabella così spesso. Stessa tecnica già usata sopra per journalStrategyOptionsDirty:
+// ricostruita SOLO quando la sua "firma" (pagina, filtri, numero di trade, asset a grafico,
+// elenco strategie) cambia davvero — vedi update(), poco prima di $('journal').innerHTML=...
+let __journalLastRenderSig=null;
 // RICHIESTO ESPLICITAMENTE: Trade Journal paginato, 20 operazioni a pagina, le più recenti in
 // pagina 1 — vedi il blocco "Trade Journal" dentro update() più sotto per il render effettivo.
 const JOURNAL_PAGE_SIZE=20;
@@ -2660,7 +2726,7 @@ let tpSlZoneFillVisible=true;
 // completi su footprintRegisterTick()/footprintByBucket più sotto, vicino allo streaming tick).
 // footprintEnabled: interruttore utente (⚙️ Impostazioni → Style → Footprint). footprintRowPips:
 // ampiezza di ogni riga del footprint, in pip (riusa pipSizeForAsset(), come il resto dell'app).
-let footprintEnabled=false, footprintRowPips=1, footprintShowEstimated=false, footprintImbalanceEnabled=false;
+let footprintEnabled=false, footprintRowPips=1, footprintImbalanceEnabled=false, footprintArEnabled=false;
 // RICHIESTO ESPLICITAMENTE: doppio click DIRETTAMENTE sopra la casella Target/Stop di una
 // posizione APERTA (sul grafico) nasconde/mostra il riempimento colorato SOLO di QUELLA
 // posizione (0% quando nascosto, 20% di default quando visibile) — indipendente dal pulsante
@@ -3108,7 +3174,7 @@ async function idbClearAll(){
 // finché non è l'utente stesso a valorizzarli (pulsanti SL/TP sul grafico, apertura di una
 // posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
 // ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
-const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceThresholdPct','footprintImbalanceMaxRects','footprintImbalanceColor'];
+const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
 // Le posizioni/ordini pendenti REALI (mt5Ticket valorizzato) non vengono MAI salvati in
 // locale — richiesto esplicitamente per sicurezza: se ci si disconnette da MT5, si chiude
 // l'app o si ricarica la pagina, non devono restare visibili a grafico da un salvataggio
@@ -3141,7 +3207,7 @@ function collectLightSessionState(){
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,tpSlZoneFillVisible,volProfileMode,linesMode,drawingLayerVisible,
-   footprintEnabled,footprintRowPips,footprintShowEstimated,footprintImbalanceEnabled,
+   footprintEnabled,footprintRowPips,footprintImbalanceEnabled,footprintArEnabled,
    positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
    pendingOrders:stripMt5TrackedForSave(pendingOrders),
    trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
@@ -3321,12 +3387,12 @@ function applyLightSessionState(state){
  tpSlZoneFillVisible=state.tpSlZoneFillVisible!==false;
  footprintEnabled=!!state.footprintEnabled;
  footprintRowPips=(Number.isFinite(state.footprintRowPips)&&state.footprintRowPips>0)?state.footprintRowPips:1;
- footprintShowEstimated=!!state.footprintShowEstimated;
  footprintImbalanceEnabled=!!state.footprintImbalanceEnabled;
+ footprintArEnabled=!!state.footprintArEnabled;
  if($('footprintEnabled'))$('footprintEnabled').checked=footprintEnabled;
  if($('footprintRowPips'))$('footprintRowPips').value=footprintRowPips;
- if($('footprintShowEstimated'))$('footprintShowEstimated').checked=footprintShowEstimated;
  if($('footprintImbalanceEnabled'))$('footprintImbalanceEnabled').checked=footprintImbalanceEnabled;
+ if($('footprintArEnabled'))$('footprintArEnabled').checked=footprintArEnabled;
  // drawingLayerVisible (RICHIESTO ESPLICITAMENTE: nascondere singolarmente Fibonacci/profili
  // volumetrici/VWAP dal nuovo pannello "Livelli", vedi apriChartLayersModal()): merge col
  // default invece di una sostituzione secca, così un salvataggio precedente a questa funzione
@@ -5120,6 +5186,33 @@ function rowIndexNearTime(t){
  while(hi2-lo2>1){const mid=(lo2+hi2)>>1; if(ts[mid]<=t)lo2=mid; else hi2=mid;}
  return (t-ts[lo2])<=(ts[hi2]-t)?lo2:hi2;
 }
+// Range [aIdx,bIdx] (indici di candela nel timeframe CORRENTE) di un profilo volumetrico
+// 'vpfixed'/'vpanchor'. RICHIESTO ESPLICITAMENTE ("cambiando timeframe il numero di candele
+// dentro l'istogramma non deve cambiare"): un profilo vpfixed nasce ancorato per TEMPO
+// (p1.time/p2.time) — cambiando TF lo stesso intervallo di tempo contiene automaticamente un
+// numero diverso di candele (aritmetica: M15 ne ha 1/15 di quelle di M1 sullo stesso periodo),
+// esattamente come un Fixed Range Volume Profile "normale" (TradingView compreso). Qui invece,
+// solo per 'vpfixed', il NUMERO di candele (d.candleCount) viene fissato la prima volta che il
+// profilo viene calcolato/disegnato e poi mantenuto costante ad ogni cambio TF successivo: bIdx si
+// riallinea per contenerne sempre lo stesso numero a partire da aIdx (p1 resta il punto fisso),
+// aggiornando anche d.p2.time così la coerenza resta anche dopo un salvataggio/ricaricamento
+// sessione. ATTENZIONE (onestà sul comportamento, non solo sul codice): questo significa che
+// l'intervallo di TEMPO coperto dall'istogramma CAMBIA da solo quando cambi TF (più corto su TF
+// più alti, più lungo su TF più bassi) — è l'esatto opposto della modalità precedente (tempo
+// fisso, candele variabili). 'vpanchor' NON è toccato: cresce apposta fino alla candela attuale,
+// comportamento voluto e non oggetto di questa richiesta.
+function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
+ const aIdx=rowIndexNearTime(d.p1.time);
+ if(d.type!=='vpfixed')return{aIdx,bIdx:Math.min(idxLive,rowsLen-1)};
+ const rawBIdx=rowIndexNearTime(d.p2.time);
+ if(!Number.isFinite(d.candleCount)||d.candleCount<1)d.candleCount=Math.abs(rawBIdx-aIdx)+1;
+ const dir=rawBIdx>=aIdx?1:-1;
+ let bIdx=aIdx+dir*(d.candleCount-1);
+ bIdx=Math.max(0,Math.min(rowsLen-1,bIdx));
+ const newTime=fullTs[bIdx];
+ if(Number.isFinite(newTime)&&newTime!==d.p2.time)d.p2.time=newTime;
+ return{aIdx,bIdx};
+}
 // VWAP ancorato: media del prezzo tipico (H+L+C)/3 pesata sul volume reale di ogni candela,
 // cumulata dalla candela di ancoraggio fino alla candela attuale inclusa (mai oltre: le candele
 // future non ancora rivelate dal backtest non esistono per questo calcolo, si aggiorna da sola
@@ -5873,6 +5966,20 @@ function update(){
  const journalPageStart=(journalCurrentPage-1)*JOURNAL_PAGE_SIZE;
  const journalRows=journalRowsNewestFirst.slice(journalPageStart,journalPageStart+JOURNAL_PAGE_SIZE);
  const JOURNAL_MODE_TAGS={backtest:'📼 Storico',live:'🔴 Live',backtest_propfirm:'🛡️📼 Storico PF',live_propfirm:'🛡️🔴 Live PF'};
+ // BUG RISOLTO (vedi il commento completo su __journalLastRenderSig, dove è dichiarata): NON
+ // ricostruire più questa tabella ad ogni update() (ogni tick Live) se nulla di ciò che mostra è
+ // davvero cambiato — altrimenti il <select> Strategia di ogni riga viene distrutto e ricreato
+ // nel mezzo del click dell'utente, chiudendogli il popup nativo prima che riesca a scegliere. I
+ // trade qui sono CHIUSI (valori congelati), quindi la tabella deve ricostruirsi SOLO quando
+ // cambia uno di: pagina, filtri, numero di trade (uno nuovo chiuso/eliminato), asset a grafico
+ // (cambia l'evidenziazione "otherAssetRow"), elenco strategie (nuova opzione nei <select> di
+ // riga) — non ad ogni tick di prezzo, che qui non c'entra nulla.
+ const journalRenderSig=journalCurrentPage+'|'+journalModeFilter+'|'+journalStrategyFilter+'|'+trades.length+'|'+(currentAssetKey||'')+'|'+tradeStrategies.length;
+ // NIENTE "return" qui: update() continua sempre dopo questo blocco (barra di paginazione,
+ // scheduleSave() più sotto) — si salta SOLO la ricostruzione della tabella quando non serve,
+ // non il resto di update().
+ if(journalRenderSig!==__journalLastRenderSig){
+ __journalLastRenderSig=journalRenderSig;
  $('journal').innerHTML=journalRows.map(({t,i})=>{
    const tAsset=t.asset||'—';
    const otherAsset=t.asset&&currentAssetKey&&t.asset!==currentAssetKey;
@@ -5899,6 +6006,7 @@ function update(){
    `<td><button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button>`+
    `<button class="miniBtn danger" data-deltrade="${i}" title="Elimina definitivamente questo trade dal Journal" style="margin-left:4px">🗑️</button></td></tr>`;
  }).join('');
+ } // fine if(journalRenderSig!==__journalLastRenderSig) — vedi commento sopra
  // Barra di paginazione (RICHIESTO ESPLICITAMENTE): Prev/Next + finestra di massimo 7 numeri
  // attorno alla pagina corrente (con 1 e l'ultima sempre raggiungibili) invece di un pulsante
  // per OGNI pagina, così anche con centinaia di trade (decine di pagine) la barra resta
@@ -8001,19 +8109,15 @@ function drawTradeHighlight(ctx,y,pad,cw,n,start,w,h){
 // Disegna UNA candela in modalità footprint, in uno dei tre stili scelti in Impostazioni
 // (#footprintStyle): "bidask" (due colonne sell/buy, default), "delta" (un solo numero netto
 // buy-sell per riga) o "volume" (un solo numero buy+sell per riga, senza direzione).
-// `fp` = { step, rows:{ [livello prezzo]: {buy,sell} }, estimated? }. Quando fp.estimated è true
-// (stima OHLCV da footprintEstimateForCandle(), MAI un tick osservato davvero) il rendering è
-// SEMPRE visivamente diverso, in ogni stile — tratteggio + palette ambra/neutra invece di
-// verde/rosso + etichetta "STIMA OHLCV" fissa sopra la candela — apposta per non poter mai essere
-// scambiato per un dato reale, nemmeno a colpo d'occhio. `imbalanceRuns` = array già filtrato di
-// {loPrice,hiPrice,count} da disegnare come overlay (mai popolato per fp.estimated: i chiamanti
-// in draw() già non lo passano in quel caso, il controllo qui sotto è solo una seconda rete di
-// sicurezza).
-function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,imbalanceRuns,imbalanceColor){
+// `fp` = { step, rows:{ [livello prezzo]: {buy,sell} } } — SEMPRE da tick reali (la modalità stima
+// OHLCV è stata rimossa su richiesta esplicita: nessun dato inventato passa più di qui). Le zone
+// zero-print/imbalance NON si disegnano più qui candela per candela: sono un pre-pass separato in
+// draw() (footprintBuildZeroPrintZones), perché devono poter estendersi su PIÙ candele fino alla
+// mitigazione — vedi lì.
+function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style){
  const step=fp.step;
  const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>b-a); // alto → basso
  if(!levels.length)return;
- const estimated=!!fp.estimated;
  let maxCount=1, maxDelta=1, maxVol=1;
  levels.forEach(lv=>{
    const c=fp.rows[lv];
@@ -8034,19 +8138,19 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,imbalanceRuns,im
      const delta=c.buy-c.sell;
      const a=maxDelta>0?0.15+0.65*(Math.abs(delta)/maxDelta):0;
      if(a>0){
-       ctx.fillStyle=estimated?`rgba(196,164,86,${a})`:(delta>=0?`rgba(85,194,139,${a})`:`rgba(224,91,100,${a})`);
+       ctx.fillStyle=delta>=0?`rgba(85,194,139,${a})`:`rgba(224,91,100,${a})`;
        ctx.fillRect(xx-half,yTop,bw-1,rowH);
      }
      if(showNumbers&&rowH>=fontPx&&delta!==0){ ctx.fillStyle=lineColor; ctx.fillText((delta>=0?'+':'')+fmtNum(delta),xx,(yTop+yBot)/2); }
    }else if(style==='volume'){
      const tot=c.buy+c.sell;
      const a=tot>0&&maxVol>0?0.15+0.65*(tot/maxVol):0;
-     if(a>0){ ctx.fillStyle=estimated?`rgba(196,164,86,${a})`:`rgba(126,110,224,${a})`; ctx.fillRect(xx-half,yTop,bw-1,rowH); }
+     if(a>0){ ctx.fillStyle=`rgba(126,110,224,${a})`; ctx.fillRect(xx-half,yTop,bw-1,rowH); }
      if(showNumbers&&rowH>=fontPx&&tot>0){ ctx.fillStyle=lineColor; ctx.fillText(fmtNum(tot),xx,(yTop+yBot)/2); }
    }else{ // 'bidask' (default): sell a sinistra, buy a destra — convenzione footprint standard
      const sellA=c.sell>0&&maxCount>0?0.15+0.65*(c.sell/maxCount):0, buyA=c.buy>0&&maxCount>0?0.15+0.65*(c.buy/maxCount):0;
-     if(sellA>0){ ctx.fillStyle=estimated?`rgba(168,138,74,${sellA})`:`rgba(224,91,100,${sellA})`; ctx.fillRect(xx-half,yTop,half-1,rowH); }
-     if(buyA>0){ ctx.fillStyle=estimated?`rgba(214,180,96,${buyA})`:`rgba(85,194,139,${buyA})`; ctx.fillRect(xx+1,yTop,half-1,rowH); }
+     if(sellA>0){ ctx.fillStyle=`rgba(224,91,100,${sellA})`; ctx.fillRect(xx-half,yTop,half-1,rowH); }
+     if(buyA>0){ ctx.fillStyle=`rgba(85,194,139,${buyA})`; ctx.fillRect(xx+1,yTop,half-1,rowH); }
      if(showNumbers && rowH>=fontPx){
        ctx.fillStyle=lineColor;
        if(c.sell>0)ctx.fillText(fmtNum(c.sell),xx-half/2,(yTop+yBot)/2);
@@ -8055,41 +8159,8 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,imbalanceRuns,im
    }
  });
  const topY=yFn(r.high), botY=yFn(r.low);
- // Tratteggio diagonale SOLO sulle celle stimate — sopra i riempimenti colorati, sotto contorno e
- // numeri: nessuna cella stimata può avere lo stesso aspetto di una con tick reali, in nessuno
- // stile.
- if(estimated){
-   ctx.save();
-   ctx.beginPath(); ctx.rect(xx-half,topY,bw,Math.max(1,botY-topY)); ctx.clip();
-   ctx.strokeStyle='rgba(255,255,255,0.22)'; ctx.lineWidth=1;
-   const diagLen=bw+(botY-topY);
-   for(let off=-diagLen;off<diagLen;off+=6){
-     ctx.beginPath(); ctx.moveTo(xx-half+off,botY); ctx.lineTo(xx-half+off+(botY-topY),topY); ctx.stroke();
-   }
-   ctx.restore();
- }
  ctx.strokeStyle=lineColor; ctx.lineWidth=1;
  ctx.strokeRect(xx-half,topY,bw,Math.max(1,botY-topY));
- // Rettangoli di imbalance automatico (mai su fp.estimated: vedi commento della funzione).
- if(!estimated&&imbalanceRuns&&imbalanceRuns.length){
-   ctx.save();
-   ctx.globalAlpha=0.35;
-   ctx.fillStyle=imbalanceColor||'#8a97a8';
-   imbalanceRuns.forEach(run=>{
-     const rTop=yFn(run.hiPrice), rBot=yFn(run.loPrice);
-     ctx.fillRect(xx-half,rTop,bw,Math.max(1,rBot-rTop));
-   });
-   ctx.restore();
- }
- // Etichetta "STIMA OHLCV" fissa sopra la candela stimata — SEMPRE visibile, non solo al passaggio
- // del mouse: deve essere impossibile non accorgersi che quella candela non ha tick reali.
- if(estimated){
-   ctx.save();
-   ctx.font='9px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='bottom';
-   ctx.fillStyle='#e0b84a';
-   ctx.fillText('STIMA OHLCV',xx,topY-3);
-   ctx.restore();
- }
 }
 function draw(){
  const c=$('chart'),ctx=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -8205,35 +8276,81 @@ function draw(){
  // FOOTPRINT: quando attivo, permettiamo alle candele di allargarsi molto di più del normale (fino
  // a 90px invece di 12px) — MA solo se n (candele in vista) è già abbastanza piccolo perché
  // cw/n*.62 ci arrivi da solo: a molte candele in vista bw resta comunque stretto e si ricade sul
- // rendering normale candela per candela, vedi drawFootprintCandle() più sotto e _FOOTPRINT_MIN_BW.
+ // rendering normale candela per candela, vedi drawFootprintCandle() più sotto e _FOOTPRINT_MIN_BW
+ // (ora configurabile in Impostazioni → "Larghezza minima": abbassarla è la leva per vedere più
+ // candele in footprint con la stessa inquadratura, a scapito dei numeri che restano leggibili
+ // solo sopra "Larghezza numeri" — vedi drawFootprintCandle()).
  const _footprintOn=footprintEnabledNow();
- const _footprintShowEst=_footprintOn&&footprintShowEstimatedNow();
  const _footprintStyle=footprintStyleNow();
  const _footprintImbOn=_footprintOn&&footprintImbalanceEnabledNow();
- const _footprintImbThr=footprintImbalanceThresholdPctNow();
+ const _footprintImbMinRows=footprintImbalanceMinRowsNow();
  const _footprintImbMax=footprintImbalanceMaxRectsNow();
  const _footprintImbColor=footprintImbalanceColorNow();
- const _footprintStep=_footprintOn?footprintStepForAsset(currentAssetKey):null;
- const _FOOTPRINT_MIN_BW=34; // sotto questa soglia due colonne buy/sell non hanno spazio per essere leggibili
+ const _FOOTPRINT_MIN_BW=footprintMinBwNow();
  const bw=Math.max(2,Math.min(_footprintOn?90:12,cw/n*.62));
  const _cc=currentCandleColors();
- data.forEach((r,i)=>{
-   let xx=x(i), up=r.close>=r.open;
+ // Pre-pass: un'unica lista, in ordine cronologico, con posizione x e footprint reale (o null) di
+ // OGNI candela visibile — costruita UNA volta, poi riusata sia per le zone zero-print (che devono
+ // "vedere" la sequenza intera per sapere quando una zona viene mitigata da una candela successiva)
+ // sia per il disegno vero e proprio più sotto, senza ricalcolare due volte lo stesso footprintByBucket.
+ const _footprintEntries=_footprintOn?data.map((r,i)=>{
+   const xx=x(i);
    let fp=null;
-   if(_footprintOn&&bw>=_FOOTPRINT_MIN_BW){
+   if(bw>=_FOOTPRINT_MIN_BW){
      const real=footprintByBucket[footprintBucketStart(parseDateTime(r.date))];
      if(real&&Object.keys(real.rows).length)fp=real;
-     else if(_footprintShowEst&&_footprintStep>0)fp=footprintEstimateForCandle(r,_footprintStep);
    }
+   return{r,xx,xxLeft:xx-bw/2,xxRight:xx+bw/2,fp};
+ }):null;
+ // Zone zero-print (imbalance): calcolate PRIMA di disegnare le candele e disegnate SUBITO DOPO,
+ // così restano SOTTO alle candele (come la banda grigia nel riferimento fornito dall'utente),
+ // non sopra.
+ if(_footprintOn&&_footprintImbOn&&_footprintEntries){
+   const zones=footprintBuildZeroPrintZones(_footprintEntries,_footprintImbMinRows)
+     .sort((a,b)=>b.count-a.count).slice(0,_footprintImbMax);
+   ctx.save();
+   ctx.globalAlpha=0.30;
+   ctx.fillStyle=_footprintImbColor;
+   zones.forEach(z=>{
+     const zTop=y(z.hiPrice), zBot=y(z.loPrice);
+     ctx.fillRect(Math.min(z.xStart,z.xEnd),zTop,Math.max(1,Math.abs(z.xEnd-z.xStart)),Math.max(1,zBot-zTop));
+   });
+   ctx.restore();
+ }
+ data.forEach((r,i)=>{
+   let xx=x(i), up=r.close>=r.open;
+   const fp=_footprintEntries?_footprintEntries[i].fp:null;
    if(fp){
-     const runs=(!fp.estimated&&_footprintImbOn)?footprintFindImbalanceRuns(fp,_footprintImbThr).sort((a,b)=>b.count-a.count).slice(0,_footprintImbMax):[];
-     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle,runs,_footprintImbColor);
+     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle);
      return;
    }
    ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
    ctx.beginPath();ctx.moveTo(xx,y(r.high));ctx.lineTo(xx,y(r.low));ctx.stroke();
    let top=y(Math.max(r.open,r.close)), bot=y(Math.min(r.open,r.close));ctx.fillRect(xx-bw/2,top,bw,Math.max(1,bot-top));
  });
+ // Pallini Absorption/Rejection: disegnati DOPO le candele (devono stare sopra, appoggiati sulla
+ // punta dello stoppino, esattamente come nel riferimento fornito dall'utente) — vedi
+ // footprintFindAbsorptionRejectionMarkers() per la logica di classificazione/dimensione.
+ if(_footprintOn&&_footprintEntries&&footprintArEnabledNow()){
+   const arMinVolMult=footprintArMinVolMultNow(), arDominance=footprintArDominancePctNow();
+   const arRejColor=footprintArRejectionColorNow(), arAbsColor=footprintArAbsorptionColorNow();
+   const arMinPx=footprintArMinDotPxNow(), arMaxPx=footprintArMaxDotPxNow();
+   const arMarkers=footprintFindAbsorptionRejectionMarkers(_footprintEntries,arMinVolMult,arDominance);
+   ctx.save();
+   arMarkers.forEach(m=>{
+     const cy=y(m.price)+(m.side==='upper'?-1:1)*(arMinPx+(arMaxPx-arMinPx)*m.intensity+2);
+     const radius=arMinPx+(arMaxPx-arMinPx)*m.intensity;
+     ctx.beginPath();
+     ctx.arc(m.xx,cy,radius,0,Math.PI*2);
+     ctx.fillStyle=m.kind==='rejection'?arRejColor:arAbsColor;
+     ctx.globalAlpha=0.85;
+     ctx.fill();
+     ctx.globalAlpha=1;
+     ctx.strokeStyle=lineColor; ctx.lineWidth=1;
+     ctx.stroke();
+   });
+   ctx.restore();
+ }
  // Indicatori attivi (es. Support & Resistance with Breaks): calcolati in modo incrementale
  // fino alla candela corrente `idx` (mai oltre: il futuro non viene mostrato/anticipato) e
  // disegnati SOTTO ai disegni utente, sopra alle candele.
@@ -8521,8 +8638,7 @@ function draw(){
        // confine sono state rimosse su richiesta (restano comunque selezionabili/trascinabili
        // cliccando nell'area dell'istogramma o vicino ai quadratini quando selezionato).
        const fullTs=getRowsTimestamps();
-       const aIdx=rowIndexNearTime(d.p1.time);
-       const bIdx=d.type==='vpfixed'?rowIndexNearTime(d.p2.time):Math.min(idx,rows.length-1);
+       const {aIdx,bIdx}=vpFixedResolveRange(d,fullTs,idx,rows.length);
        const startIdx=Math.min(aIdx,bIdx), lastIdx=Math.max(aIdx,bIdx);
        const leftX=shapesGeo.xFromTime(fullTs[startIdx]);
        // "Estendi fino al bordo destro" (impostabile dal doppio click, solo per l'intervallo
@@ -9665,17 +9781,14 @@ function hitTestDrawings(clientX,clientY,vpBodySelect){
      // l'istogramma SELEZIONA soltanto il disegno (mostra le maniglie/il lucchetto) ma non lo
      // sposta — richiesto per evitare spostamenti accidentali trascinando sull'istogramma.
      const fullTs=getRowsTimestamps();
-     const aIdx=rowIndexNearTime(d.p1.time);
      // BUG RISOLTO ("la maniglia del profilo volume ancorato non si può più afferrare/spostare"):
-     // qui sotto bIdx per 'vpanchor' era fermo su aIdx (una sola candela), mentre draw() (vedi lì,
-     // stesso identico calcolo) lo estende sempre fino alla candela live attuale
-     // (Math.min(idx,rows.length-1)) — è così che 'vpanchor' cresce da solo nel tempo. Il profilo
-     // usato QUI per calcolare priceLo/priceHi (e quindi la posizione Y della maniglia da
-     // intercettare) copriva quindi un intervallo di prezzo completamente diverso da quello
-     // realmente disegnato: la maniglia visibile a schermo e il punto testato dal click potevano
-     // finire a decine/centinaia di pixel di distanza, rendendola di fatto non cliccabile appena
-     // erano passate un po' di candele dall'ancoraggio. Allineato allo stesso calcolo di draw().
-     const bIdx=d.type==='vpfixed'?rowIndexNearTime(d.p2.time):Math.min(idx,rows.length-1);
+     // questo calcolo DEVE restare identico a quello di draw() (vedi vpFixedResolveRange, stessa
+     // funzione condivisa) — se i due divergono la maniglia visibile a schermo e il punto testato
+     // dal click finiscono a decine/centinaia di pixel di distanza, rendendola di fatto non
+     // cliccabile. Prima della condivisione in una funzione unica i due punti avevano lo stesso
+     // calcolo duplicato due volte: bastava toccarne uno solo (come poi successo per il fix del
+     // conteggio candele fisso) per farli disallineare di nuovo.
+     const {aIdx,bIdx}=vpFixedResolveRange(d,fullTs,idx,rows.length);
      const leftX=g.xFromTime(fullTs[Math.min(aIdx,bIdx)]);
      const rightX=d.type==='vpfixed'?(d.extendRight?(g.rect.width-g.pad.r):g.xFromTime(fullTs[Math.max(aIdx,bIdx)])):(g.rect.width-g.pad.r);
      // Stesse maniglie agli angoli VERI dell'istogramma di draw() (vedi lì il commento): il
@@ -13360,6 +13473,11 @@ chartEl.addEventListener('pointermove',e=>{
        np=applyStraightLock(d[otherKey],np);
      }
      d[h.key]=np;
+     // Trascinando a mano una maniglia di un profilo 'vpfixed' l'utente sta RIDEFINENDO
+     // l'intervallo: il numero di candele "bloccato" (vedi vpFixedResolveRange, RICHIESTO
+     // ESPLICITAMENTE che non cambi da solo al cambio TF) deve ripartire da questa nuova
+     // dimensione scelta a mano, non restare quello vecchio.
+     if(d.type==='vpfixed')delete d.candleCount;
    }else if(h.type==='corner'){
      d[h.xKey]={...d[h.xKey],time:point.time};
      d[h.yKey]={...d[h.yKey],price:point.price};
@@ -13947,14 +14065,32 @@ $('footprintEnabled')?.addEventListener('change',()=>{
  // Accendendo la feature, ricostruisci SUBITO dal log già raccolto (se l'utente l'aveva già usata
  // in questa sessione e poi spenta/riaccesa) invece di aspettare il prossimo tick.
  if(footprintEnabled)footprintRebuildBucketsForCurrentAsset();
+ // Accensione con MT5 già collegato come sorgente Live per l'asset a grafico ora: prova SUBITO il
+ // backfill storico reale (vedi footprintBackfillMt5) invece di aspettare il prossimo cambio
+ // asset/reconnect — altrimenti chi accende la spunta a metà sessione vedrebbe solo tick forward
+ // da quel momento, come se il backfill non esistesse.
+ if(footprintEnabled&&mt5Connected&&mt5ActiveSymbol&&currentAssetKey)footprintBackfillMt5(mt5ActiveSymbol,currentAssetKey);
  draw(); scheduleSave();
 });
-$('footprintShowEstimated')?.addEventListener('change',()=>{ footprintShowEstimated=$('footprintShowEstimated').checked; draw(); scheduleSave(); });
 $('footprintStyle')?.addEventListener('change',()=>{ draw(); scheduleSave(); });
 $('footprintImbalanceEnabled')?.addEventListener('change',()=>{ footprintImbalanceEnabled=$('footprintImbalanceEnabled').checked; draw(); scheduleSave(); });
-$('footprintImbalanceThresholdPct')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintImbalanceMinRows')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintImbalanceMaxRects')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintImbalanceColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+// BUG RISOLTO (mai collegati finora: cambiare questi valori non aggiornava il grafico finché non
+// scattava un ridisegno per un altro motivo, es. pan/zoom) — vedi anche footprintMinBwNow()/
+// footprintNumbersMinBwNow(): leggono $('...').value al momento del draw(), quindi basta
+// richiamare draw() qui, non serve una variabile globale dedicata.
+$('footprintMinBw')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintNumbersMinBw')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintBackfillHours')?.addEventListener('input',()=>{ scheduleSave(); });
+$('footprintArEnabled')?.addEventListener('change',()=>{ footprintArEnabled=$('footprintArEnabled').checked; draw(); scheduleSave(); });
+$('footprintArMinVolMult')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintArDominancePct')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintArRejectionColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintArAbsorptionColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintArMinDotPx')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintArMaxDotPx')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintRowPips')?.addEventListener('input',()=>{
  const v=Number($('footprintRowPips').value);
  footprintRowPips=(Number.isFinite(v)&&v>0)?v:1;
@@ -16990,8 +17126,9 @@ async function refreshLiveStreamSubscriptions(){
 // "cambio TF" senza appesantire il salvataggio automatico ad ogni tick). Copre quindi tutto quello
 // che il programma ha DAVVERO osservato in questa sessione, per qualunque asset visitato (anche
 // "in background", non solo quello a grafico ora) — non le candele precedenti alla sessione o
-// quelle mai seguite: per quelle vedi footprintEstimateForCandle() più sotto, ESPLICITAMENTE
-// separato e mai mescolato senza etichetta con questi dati reali.
+// quelle mai seguite: per quelle vedi footprintBackfillMt5()/footprintIngestHistoricalTicks() più
+// sotto (tick REALI storici via MT5, mai una stima: la modalità stima OHLCV è stata rimossa su
+// richiesta esplicita — nessun dato inventato in nessun punto di questo file).
 let footprintTickLogByAsset={};      // assetKey -> [{t,price,side,weight}, ...] ordinato per t
 const FOOTPRINT_MAX_TICKS_PER_ASSET=150000; // tetto per asset: oltre, i tick più vecchi vengono scartati (FIFO)
 // footprintByBucket: SEMPRE relativo all'asset/TF/step correnti, ricostruito da
@@ -16999,12 +17136,21 @@ const FOOTPRINT_MAX_TICKS_PER_ASSET=150000; // tetto per asset: oltre, i tick pi
 // { [bucketStartMs]: { step, rows:{ [livello di prezzo]: {buy,sell} } } }
 let footprintByBucket={};
 function footprintEnabledNow(){ return !!$('footprintEnabled')?.checked; }
-function footprintShowEstimatedNow(){ return !!$('footprintShowEstimated')?.checked; }
 function footprintStyleNow(){ return $('footprintStyle')?.value||'bidask'; }
+function footprintMinBwNow(){ const v=Math.round(Number($('footprintMinBw')?.value)); return (Number.isFinite(v)&&v>=6)?Math.min(60,v):14; }
+function footprintNumbersMinBwNow(){ const v=Math.round(Number($('footprintNumbersMinBw')?.value)); return (Number.isFinite(v)&&v>=20)?Math.min(120,v):44; }
+function footprintBackfillHoursNow(){ const v=Number($('footprintBackfillHours')?.value); return (Number.isFinite(v)&&v>=1)?Math.min(168,v):24; }
 function footprintImbalanceEnabledNow(){ return !!$('footprintImbalanceEnabled')?.checked; }
-function footprintImbalanceThresholdPctNow(){ const v=Number($('footprintImbalanceThresholdPct')?.value); return (Number.isFinite(v)&&v>=100)?v:200; }
-function footprintImbalanceMaxRectsNow(){ const v=Math.round(Number($('footprintImbalanceMaxRects')?.value)); return (Number.isFinite(v)&&v>=1)?Math.min(20,v):5; }
+function footprintImbalanceMinRowsNow(){ const v=Math.round(Number($('footprintImbalanceMinRows')?.value)); return (Number.isFinite(v)&&v>=1)?Math.min(20,v):1; }
+function footprintImbalanceMaxRectsNow(){ const v=Math.round(Number($('footprintImbalanceMaxRects')?.value)); return (Number.isFinite(v)&&v>=1)?Math.min(30,v):8; }
 function footprintImbalanceColorNow(){ return $('footprintImbalanceColor')?.value||'#8a97a8'; }
+function footprintArEnabledNow(){ return !!$('footprintArEnabled')?.checked; }
+function footprintArMinVolMultNow(){ const v=Number($('footprintArMinVolMult')?.value); return (Number.isFinite(v)&&v>0)?Math.min(20,v):1.5; }
+function footprintArDominancePctNow(){ const v=Number($('footprintArDominancePct')?.value); return (Number.isFinite(v)&&v>=5)?Math.min(95,v)/100:0.6; }
+function footprintArRejectionColorNow(){ return $('footprintArRejectionColor')?.value||'#4caf6d'; }
+function footprintArAbsorptionColorNow(){ return $('footprintArAbsorptionColor')?.value||'#e05b64'; }
+function footprintArMinDotPxNow(){ const v=Number($('footprintArMinDotPx')?.value); return (Number.isFinite(v)&&v>=2)?Math.min(20,v):3; }
+function footprintArMaxDotPxNow(){ const v=Number($('footprintArMaxDotPx')?.value); return (Number.isFinite(v)&&v>=4)?Math.min(40,v):12; }
 function footprintRowPipsNow(){
  const v=Number($('footprintRowPips')?.value);
  return (Number.isFinite(v)&&v>0)?v:1;
@@ -17080,84 +17226,169 @@ function footprintRegisterTick(price,timestamp,assetKey,weight){
    if(step>0)footprintApplyTickToBuckets(price,timestamp,side,w,step);
  }
 }
-// STIMA DA OHLCV per candele SENZA nessun tick reale registrato (storico precedente a questa
-// sessione, asset mai seguito, programma chiuso in quel momento) — SOLO se l'utente ha acceso
-// esplicitamente "Mostra anche stime OHLCV" (default SPENTO): vedi il div.hint accanto al
-// checkbox #footprintShowEstimated per il perché di questa scelta di default. Euristica dichiarata,
-// NON un vero footprint: distribuisce il volume della candela (r.volume, tick-count OHLCV) sulle
-// righe di prezzo tra low e high con un peso triangolare centrato sul CLOSE (dove il "prezzo si è
-// fermato di più", proxy grezzo di dove si è concentrata l'attività), e lo spacca buy/sell in
-// proporzione fissa 60/40 lato chiusura della candela (60% al lato vincente: buy se rialzista,
-// sell se ribassista) — una convenzione arbitraria dichiarata, non una misura. Il chiamante
-// (drawFootprintCandle) marca SEMPRE fp.estimated=true su questo risultato e lo disegna con uno
-// stile visivamente inconfondibile (tratteggio + etichetta "STIMA OHLCV", vedi draw()): non deve
-// MAI poter essere scambiato per una cella con tick reali.
-function footprintEstimateForCandle(r,step){
- if(!(step>0))return null;
- const hi=r.high,lo=r.low;
- if(!Number.isFinite(hi)||!Number.isFinite(lo)||hi<lo)return null;
- const totalVol=Math.max(0,Number(r.volume)||0);
- if(totalVol<=0)return null;
- const up=r.close>=r.open;
- const buyShare=up?0.6:0.4;
- const loLevel=Math.round(lo/step)*step, hiLevel=Math.round(hi/step)*step;
- const nRows=Math.max(1,Math.round((hiLevel-loLevel)/step)+1);
- // peso triangolare centrato sul close: righe vicine al close pesano di più, righe agli estremi
- // (high/low) pesano meno — evita di nuovo l'effetto "tutto ai bordi" visto per il LVN.
- const weights=[]; let wSum=0;
- for(let i=0;i<nRows;i++){
-   const lv=loLevel+i*step;
-   const distFromClose=Math.abs(lv-r.close);
-   const span=Math.max(step,hiLevel-loLevel);
-   const w=Math.max(0.05,1-distFromClose/span); // mai zero secco: anche i bordi restano visibili, solo attenuati
-   weights.push(w); wSum+=w;
+// BACKFILL STORICO MT5 (tick reali, non stimati) — RICHIESTO ESPLICITAMENTE ("cerchiamo di
+// prendere i tick reali del passato di MT5 o di Capital.com", dopo aver rimosso la modalità stima
+// OHLCV su richiesta esplicita): quando ci si collega a un asset via MT5 con il footprint attivo,
+// prova a scaricare i tick REALI delle ultime footprintBackfillHoursNow() ore tramite il nuovo
+// endpoint /ticks di mt5_feed_server.py (mt5.copy_ticks_range) e li fonde nel log usato dal
+// footprint — esattamente come se l'app fosse stata aperta e collegata a quell'asset per tutto
+// quel periodo, invece di stimare nulla.
+//
+// Capital.com NON ha alcun endpoint storico tick (verificato sulla loro documentazione pubblica
+// open-api.capital.com: solo OHLC storico + quote live via WebSocket, nessuna cronologia tick):
+// per quella fonte il footprint resta quindi SOLO forward, da quando lo attivi in poi — nessun
+// backfill possibile lì, e footprintBackfillMt5() infatti non viene mai chiamata per Capital.com.
+//
+// LIMITE ONESTO sul lato MT5 (non aggirabile da qui, dipende dal broker): molti broker retail
+// conservano solo pochi giorni/settimane di storico tick — se il broker non ha più il dato per
+// quel periodo, /ticks torna count:0 e qui NON si inventa nulla al suo posto: quelle candele
+// restano semplicemente senza footprint, esattamente come prima dell'introduzione di questa
+// funzione (mai un fallback stimato silenzioso — vedi la rimozione di footprintEstimateForCandle).
+let footprintBackfilledAssets=new Set(); // assetKey già tentati in questa sessione (successo o storico non disponibile): un solo tentativo per asset, non ad ogni resync/cambio TF
+function footprintIngestHistoricalTicks(assetKey,rawTicks){
+ if(!assetKey||!rawTicks||!rawTicks.length)return;
+ const existing=footprintTickLogByAsset[assetKey]||(footprintTickLogByAsset[assetKey]=[]);
+ const seen=new Set(existing.map(e=>e.t+'_'+e.price));
+ const merged=existing.slice();
+ rawTicks.forEach(t=>{
+   const price=Number.isFinite(t.bid)?t.bid:t.last;
+   const ts=Math.round(t.time_ms);
+   if(!Number.isFinite(price)||!Number.isFinite(ts))return;
+   const key=ts+'_'+price;
+   if(seen.has(key))return; // stesso identico (istante,prezzo) già nel log: evita doppio conteggio nella finestra di sovrapposizione col live
+   seen.add(key);
+   merged.push({t:ts,price,side:1,weight:(Number.isFinite(t.volume)&&t.volume>0)?t.volume:1});
+ });
+ merged.sort((a,b)=>a.t-b.t);
+ // Ricalcola il lato (buy/sell) con la stessa tick-rule di footprintRegisterTick(), ma su TUTTA la
+ // sequenza fusa in ordine di TEMPO REALE: necessario perché i tick storici sono stati appesi sopra
+ // in ordine di arrivo dalla risposta HTTP, non in ordine temporale rispetto a quelli già nel log —
+ // il lato calcolato al volo sopra sarebbe sbagliato per qualunque tick storico che finisce prima di
+ // un tick già presente.
+ for(let i=1;i<merged.length;i++){
+   const prev=merged[i-1], cur=merged[i];
+   if(cur.price>prev.price)cur.side=1;
+   else if(cur.price<prev.price)cur.side=-1;
+   else cur.side=prev.side;
  }
- if(wSum<=0)return null;
- const rows={};
- for(let i=0;i<nRows;i++){
-   const lv=loLevel+i*step;
-   const rowVol=totalVol*(weights[i]/wSum);
-   if(rowVol<=0)continue;
-   rows[lv]={buy:rowVol*buyShare,sell:rowVol*(1-buyShare)};
- }
- return{step,rows,estimated:true};
+ footprintTickLogByAsset[assetKey]=merged.length>FOOTPRINT_MAX_TICKS_PER_ASSET
+   ?merged.slice(merged.length-FOOTPRINT_MAX_TICKS_PER_ASSET):merged;
+ if(assetKey===currentAssetKey){ footprintRebuildBucketsForCurrentAsset(); draw(); }
 }
-// IMBALANCE AUTOMATICO (richiesto esplicitamente): confronto "diagonale" standard dei footprint
-// professionali — al livello di prezzo `lv`, il lato buy (chi ha comprato aggressivamente lì)
-// viene confrontato con il lato sell del livello SUBITO SOTTO (`lv-step`), e viceversa il lato
-// sell di `lv` con il buy del livello SUBITO SOPRA (`lv+step`). Se un lato supera l'altro di
-// `thresholdPct`% (200% = il doppio), quel livello è marcato come imbalance. SOLO su celle con
-// tick reali (mai su fp.estimated — un imbalance calcolato su un numero inventato sarebbe un
-// altro layer di finzione sopra la prima, non lo facciamo). Ritorna un array di "run" (gruppi di
-// livelli consecutivi in imbalance), ciascuno con lo/hi price e un punteggio (numero di livelli
-// coinvolti) usato per scegliere quali disegnare quando ce ne sono più di footprintImbalanceMaxRects.
-function footprintFindImbalanceRuns(fp,thresholdPct){
- if(!fp||fp.estimated||!fp.rows)return [];
- const step=fp.step, thr=Math.max(1,(thresholdPct||200)/100);
- const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>a-b);
- // Lookup robusto ai residui di floating point: le chiavi di fp.rows sono numeri calcolati con
- // Math.round(price/step)*step, quindi "lv-step" può non coincidere bit-per-bit con la chiave
- // reale del livello sotto. Indicizziamo per multiplo intero di step (arrotondato), non per il
- // valore di prezzo grezzo.
- const byMultiple=new Map();
- levels.forEach(lv=>byMultiple.set(Math.round(lv/step),lv));
- const cellBelow=lv=>{ const k=byMultiple.get(Math.round(lv/step)-1); return k!=null?fp.rows[k]:null; };
- const cellAbove=lv=>{ const k=byMultiple.get(Math.round(lv/step)+1); return k!=null?fp.rows[k]:null; };
- const marked=new Set();
- levels.forEach(lv=>{
-   const cell=fp.rows[lv];
-   const below=cellBelow(lv), above=cellAbove(lv);
-   if(below&&below.sell>0&&cell.buy>=below.sell*thr)marked.add(lv);
-   if(above&&above.buy>0&&cell.sell>=above.buy*thr)marked.add(lv);
+async function footprintBackfillMt5(symbol,assetKey){
+ if(!footprintEnabledNow()||!symbol||!assetKey)return;
+ if(footprintBackfilledAssets.has(assetKey))return;
+ footprintBackfilledAssets.add(assetKey); // segnato SUBITO: un solo tentativo per asset per sessione, anche se questo fallisce (broker senza storico tick, servizio non raggiungibile, ecc.)
+ try{
+   const toMs=Date.now();
+   const fromMs=toMs-footprintBackfillHoursNow()*3600000;
+   const res=await fetch(MT5_FEED_URL+'/ticks?symbol='+encodeURIComponent(symbol)+'&from_ms='+fromMs+'&to_ms='+toMs+'&max_ticks=50000');
+   if(!res.ok)return; // servizio non raggiungibile/errore lato server: nessun dato inventato al suo posto, si esce silenziosamente
+   const body=await res.json();
+   if(body&&body.count>0)footprintIngestHistoricalTicks(assetKey,body.ticks);
+ }catch(e){ /* rete/servizio non disponibile in questo momento: nessun backfill, nessun dato finto al suo posto */ }
+}
+// ZONE ZERO-PRINT (IMBALANCE) — schema richiesto esplicitamente dall'utente dopo aver mostrato un
+// riferimento visivo: non più un confronto a soglia percentuale, ma un vero BUCO — una riga di
+// prezzo, dentro il range [low,high] della candela, dove un lato (buy o sell) è ESATTAMENTE zero
+// mentre l'altro ha attività. SOLO su footprint con tick reali (fp.estimated non esiste più: la
+// modalità stima è stata rimossa su richiesta esplicita, vedi la discussione — niente più dati
+// inventati da nessuna parte in questo file).
+//
+// Righe zero-print di UNA candela: gruppi di livelli consecutivi dentro [r.low,r.high] dove un
+// lato ha zero e l'altro no. Ritorna [{loPrice,hiPrice,count}] — count = numero di righe nel gruppo.
+function footprintFindZeroPrintRowsForCandle(fp,r){
+ if(!fp||!fp.rows)return [];
+ const step=fp.step;
+ const levels=Object.keys(fp.rows).map(Number)
+   .filter(lv=>lv>=r.low-step/2&&lv<=r.high+step/2)
+   .sort((a,b)=>a-b);
+ const marked=levels.filter(lv=>{
+   const c=fp.rows[lv], tot=c.buy+c.sell;
+   return tot>0&&(c.buy===0||c.sell===0);
  });
- if(!marked.size)return [];
- const sortedMarked=[...marked].sort((a,b)=>a-b);
- const runs=[]; let cur=null;
- sortedMarked.forEach(lv=>{
+ if(!marked.length)return [];
+ const groups=[]; let cur=null;
+ marked.forEach(lv=>{
    if(cur&&Math.abs(lv-cur.hi-step)<step*1e-6){ cur.hi=lv; cur.count++; }
-   else{ cur={lo:lv,hi:lv,count:1}; runs.push(cur); }
+   else{ cur={lo:lv,hi:lv,count:1}; groups.push(cur); }
  });
- return runs.map(r=>({loPrice:r.lo-step/2,hiPrice:r.hi+step/2,count:r.count}));
+ return groups.map(g=>({loPrice:g.lo-step/2,hiPrice:g.hi+step/2,count:g.count}));
+}
+// Costruisce le zone zero-print "vive" per la SEQUENZA di candele visibili (richiesto
+// esplicitamente: "un rettangolo che si muove andando avanti nel grafico man mano che si
+// sviluppano nuove candele"). `entries` = [{r,xx,fp}] in ordine cronologico per OGNI candela
+// visibile — fp è null per le candele senza footprint reale, ma la loro [low,high] SERVE comunque
+// per capire se "mitigano" (chiudono) una zona nata prima, quindi vanno incluse tutte, non solo
+// quelle con dati footprint. Una zona nasce nella candela dove appare il buco e si estende verso
+// destra candela dopo candela finché nessuna candela successiva ha un range che si sovrappone alla
+// zona; alla PRIMA che lo fa, la zona si ferma lì ("mitigata"). Se nessuna la mitiga, resta aperta
+// fino all'ultima candela visibile (esattamente come nel riferimento: si allarga ad ogni nuova
+// candela finché il prezzo non ci torna dentro). Ritorna [{loPrice,hiPrice,xStart,xEnd,count,mitigated}].
+function footprintBuildZeroPrintZones(entries,minRows){
+ const zones=[];
+ for(let i=0;i<entries.length;i++){
+   const e=entries[i];
+   if(!e.fp)continue;
+   const groups=footprintFindZeroPrintRowsForCandle(e.fp,e.r).filter(g=>g.count>=minRows);
+   groups.forEach(g=>{
+     let endXX=e.xxRight, mitigated=false;
+     for(let j=i+1;j<entries.length;j++){
+       const later=entries[j];
+       if(later.r.low<=g.hiPrice&&later.r.high>=g.loPrice){ endXX=later.xx; mitigated=true; break; }
+       endXX=later.xxRight;
+     }
+     zones.push({loPrice:g.loPrice,hiPrice:g.hiPrice,xStart:e.xxLeft,xEnd:endXX,count:g.count,mitigated});
+   });
+ }
+ return zones;
+}
+// ABSORPTION / REJECTION sugli stoppini — RICHIESTO ESPLICITAMENTE dopo uno screenshot di
+// riferimento di un indicatore commerciale (DeepCharts). ONESTÀ SUL DATO (non solo sul codice):
+// quello screenshot è materiale di marketing — nessuno fuori da quel team conosce la LORO
+// formula esatta, quindi questa NON è una replica ma una definizione originale, costruita sugli
+// stessi dati reali già usati dal resto del footprint (righe buy/sell per candela, mai stimate:
+// stessa regola di footprintFindZeroPrintRowsForCandle). Per ogni candela con footprint reale, si
+// guarda lo stoppino SOPRA il corpo (righe tra il top del corpo e il massimo) e quello SOTTO
+// (righe tra il minimo e il fondo del corpo) separatamente:
+//  - si scarta uno stoppino con volume totale sotto "soglia volume" (× la media di volume per
+//    riga di quella candela): niente attività degna di nota, niente pallino.
+//  - se il lato che domina (buy o sell) supera "dominanza direzionale %" del totale: REJECTION —
+//    una spinta decisa in quella direzione, respinta con forza (un lato ha chiaramente vinto).
+//  - altrimenti (volume alto ma due lati più bilanciati, "un tira e molla"): ABSORPTION — il
+//    movimento viene assorbito senza che nessuno dei due lati prenda il controllo.
+// Dimensione del pallino proporzionale al volume reale di quello stoppino specifico (non
+// dell'intera candela), normalizzata sul massimo tra tutti i marker trovati nella vista corrente
+// — stessa tecnica di normalizzazione già usata per le intensità colore altrove nel footprint.
+function footprintFindAbsorptionRejectionMarkers(entries,minVolMult,dominanceFrac){
+ const markers=[];
+ for(let i=0;i<entries.length;i++){
+   const e=entries[i];
+   if(!e.fp||!e.fp.rows)continue;
+   const step=e.fp.step, r=e.r;
+   const levels=Object.keys(e.fp.rows).map(Number);
+   if(!levels.length)continue;
+   let totalVol=0; levels.forEach(lv=>{ const c=e.fp.rows[lv]; totalVol+=c.buy+c.sell; });
+   const avgRowVol=totalVol/levels.length;
+   if(!(avgRowVol>0))continue;
+   const bodyTop=Math.max(r.open,r.close), bodyBot=Math.min(r.open,r.close);
+   const upperLevels=levels.filter(lv=>lv>bodyTop+step*1e-6&&lv<=r.high+step/2);
+   const lowerLevels=levels.filter(lv=>lv<bodyBot-step*1e-6&&lv>=r.low-step/2);
+   [{side:'upper',lvls:upperLevels,y:r.high},{side:'lower',lvls:lowerLevels,y:r.low}].forEach(wick=>{
+     if(!wick.lvls.length)return;
+     let buy=0,sell=0;
+     wick.lvls.forEach(lv=>{ const c=e.fp.rows[lv]; buy+=c.buy; sell+=c.sell; });
+     const tot=buy+sell;
+     if(tot<avgRowVol*minVolMult)return; // stoppino non abbastanza attivo: niente pallino
+     const dominance=tot>0?Math.abs(buy-sell)/tot:0;
+     const kind=dominance>=dominanceFrac?'rejection':'absorption';
+     markers.push({xx:e.xx,price:wick.y,side:wick.side,kind,vol:tot,dominance});
+   });
+ }
+ if(!markers.length)return markers;
+ const maxVol=Math.max(...markers.map(m=>m.vol));
+ markers.forEach(m=>{ m.intensity=maxVol>0?m.vol/maxVol:0; });
+ return markers;
 }
 let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, capitalWsPingTimer=null, capitalWsCorrId=1;
 // FIX bug "l'aggiornamento live si blocca dopo un po'": tiene traccia di quando è arrivato
@@ -17874,6 +18105,11 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  mt5LastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
  connectMt5Stream(resolved);
  startMt5RefreshTimer();
+ // Backfill storico tick reali (vedi footprintBackfillMt5): fire-and-forget, NON attesa qui — non
+ // deve mai ritardare la comparsa del grafico/storico candele, che è già pronto sopra. Un solo
+ // tentativo per asset per sessione (footprintBackfilledAssets), quindi innocuo chiamarla ad ogni
+ // resync: esce subito se già tentata o se il footprint non è attivo.
+ if(__footprintAssetChanged)footprintBackfillMt5(resolved,asset);
 }
 
 const MT5_TIMEFRAME_MAP={1:'M1',5:'M5',15:'M15',30:'M30',60:'H1',240:'H4',1440:'D1'};
