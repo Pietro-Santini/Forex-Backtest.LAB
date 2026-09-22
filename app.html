@@ -2213,7 +2213,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 
 <div class="panel">
  <div class="label">Trade Journal</div>
- <div class="tableScroll"><table><thead><tr><th>#</th><th>Asset</th><th>
+ <div class="tableScroll"><table><thead><tr><th>#</th><th title="Data e ora di chiusura dell'operazione, nel fuso orario locale del browser">Chiusura</th><th>Asset</th><th>
       <select id="journalModeFilterSelect" title="Filtra il Trade Journal per sessione" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:120px">
         <option value="all">Modalità ▾</option>
         <option value="backtest">📼 Storico</option>
@@ -4851,6 +4851,21 @@ function tzDateLabel(t){ // es. "05/01/2024"
  const fmt=tzDateFmtCache[selectedTimeZone]||(tzDateFmtCache[selectedTimeZone]=new Intl.DateTimeFormat('it-IT',{timeZone:selectedTimeZone,day:'2-digit',month:'2-digit',year:'numeric'}));
  return fmt.format(new Date(t));
 }
+// RICHIESTO ESPLICITAMENTE ("nel trade journal, a fianco al numero id, la data con ora e minuto
+// della chiusura"): t.closedAt è già valorizzato in modo affidabile per OGNI trade chiuso, sia
+// Storico (rows[idx].date, formato MetaTrader) sia Live/MT5 (new Date().toISOString()) — vedi i
+// 3 punti in cui trades.push() lo imposta. Si riusa qui la stessa infrastruttura già in uso per
+// l'asse del tempo del grafico (parseDateTime per leggere ENTRAMBI i formati, tzDateLabel/
+// tzParts per mostrare nel fuso orario locale del browser, stesso di tutto il resto dell'app —
+// mai un fuso a caso o UTC crudo) invece di scrivere un parser/formattatore nuovo e diverso.
+function journalClosedAtLabel(closedAt){
+ if(!closedAt)return '—';
+ const t=parseDateTime(closedAt);
+ if(!Number.isFinite(t))return '—';
+ const p=tzParts(t);
+ if(!p)return '—';
+ return tzDateLabel(t)+' '+String(p.hour).padStart(2,'0')+':'+String(p.minute).padStart(2,'0');
+}
 // Cache dei timestamp reali (ms) di TUTTO il dataset `rows` attualmente caricato (non solo
 // della finestra visibile): i disegni (linee di tendenza, linee estese, rettangoli) sono
 // ancorati a tempo+prezzo reali e devono restare fissi su quelle candele SIA cambiando
@@ -5030,7 +5045,15 @@ function parseCSV(txt){
  const named=raw.some(x=>['open','high','low','close'].includes(x));
  let start=named?1:0, out=[];
  const ix=n=>raw.indexOf(n);
- let oi=ix('open'),hi=ix('high'),li=ix('low'),ci=ix('close'),vi=ix('volume');
+ let oi=ix('open'),hi=ix('high'),li=ix('low'),ci=ix('close');
+ // BUG RISOLTO ("voglio l'indicatore Volume anche in Storico"): qui si cercava SOLO una colonna
+ // chiamata esattamente "volume" — ma l'export standard del terminale MetaTrader (File > Esporta)
+ // usa gli header <TICKVOL>/<VOL>, MAI "volume" alla lettera. Per qualunque CSV esportato così da
+ // MT5, vi restava quindi sempre -1, e ogni riga aveva volume forzato a 0 — l'indicatore Volume
+ // (che dipende da rows[i].volume) non aveva letteralmente nulla da disegnare, e lo faceva in
+ // silenzio, senza nessun avviso. Si cercano ora anche i nomi-colonna standard MetaTrader, nello
+ // stesso ordine di preferenza (volume esplicito prima, poi le varianti tick-volume di MT5).
+ let vi=ix('volume'); if(vi<0)vi=ix('tickvol'); if(vi<0)vi=ix('tick_volume'); if(vi<0)vi=ix('vol');
  for(let k=start;k<lines.length;k++){
    let a=lines[k].split(delim).map(x=>x.trim().replace(/^["']|["']$/g,''));
    if(named){
@@ -6348,7 +6371,7 @@ function update(){
    // #journal (vedi listener 'change' più sotto nello script), come già per jumptrade/deltrade.
    const strategyOptionsHtml='<option value="">—</option>'+tradeStrategies.map(s=>`<option value="${escapeHtmlLite(s)}"${t.strategy===s?' selected':''}>${escapeHtmlLite(s)}</option>`).join('');
    const strategyCell=`<td><select class="journalStrategySelect" data-strategy-trade="${i}" title="Strategia usata in questa operazione" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:100px">${strategyOptionsHtml}</select></td>`;
-   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${tAsset}</td><td>${modeTag}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPrice(t.entry)}</td><td>${journalSlTxt}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
+   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td>${journalClosedAtLabel(t.closedAt)}</td><td>${tAsset}</td><td>${modeTag}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPrice(t.entry)}</td><td>${journalSlTxt}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
    strategyCell+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
@@ -6658,7 +6681,22 @@ const INDICATOR_DEFS={
      const bandBottom=h-pad.b;
      let maxVol=0;
      for(let i=dataStart;i<=dataEnd;i++){ const v=rows[i]&&rows[i].volume; if(Number.isFinite(v)&&v>maxVol)maxVol=v; }
-     if(!(maxVol>0))return; // nessun volume reale nei dati in vista: niente disegnato, onestamente
+     if(!(maxVol>0)){
+       // RICHIESTO ESPLICITAMENTE ("voglio il Volume anche in Storico"): prima qui si usciva del
+       // tutto in silenzio quando i dati non avevano volume (dataset senza quella colonna) — per
+       // chi guarda il grafico è indistinguibile da "l'indicatore è rotto/non funziona in
+       // Storico". Ora, invece di continuare a tacere, si scrive onestamente il motivo esatto
+       // sopra la fascia dove le barre dovrebbero stare: non è un bug dell'indicatore, è che il
+       // file caricato non porta nessun dato di volume/tick-volume leggibile.
+       ctx.save();
+       ctx.fillStyle='#8b96a5';
+       ctx.font='11px system-ui,sans-serif';
+       ctx.textAlign='left';
+       ctx.textBaseline='bottom';
+       ctx.fillText('Volume: nessun dato nel file caricato (colonna volume/tickvol assente o a zero)',pad.l+4,bandBottom-2);
+       ctx.restore();
+       return;
+     }
      // Larghezza barra ricavata dalla spaziatura reale fra due candele consecutive (xAbs è
      // lineare in indice candela): stessa larghezza/proporzione delle candele, senza bisogno che
      // draw() passi anche `bw` qui dentro.
@@ -14579,8 +14617,17 @@ chartEl.addEventListener('pointercancel',e=>{
 // comunque getBoundingClientRect() del canvas vero, non dell'elemento che ha ricevuto l'evento.
 const chartWheelTarget=document.getElementById('chartWrap')||chartEl;
 chartWheelTarget.addEventListener('wheel',e=>{
- if(!rows.length)return;
  if(!(e.ctrlKey||e.shiftKey))return; // senza modificatori: nessuna interferenza, lo scroll della pagina resta quello di sempre ovunque
+ // BUG RISOLTO (finestre PIP: CTRL+rotellina zoomava la PAGINA sopra la toolbar/sidebar/pulsanti
+ // d'angolo, ma non sopra al grafico): qui il controllo `if(!rows.length)return` veniva PRIMA del
+ // controllo su CTRL/SHIFT — quindi finché il grafico non ha ancora dati (finestra PIP appena
+ // aperta, prima di scegliere un asset, o durante un cambio asset/timeframe) l'handler usciva
+ // SENZA MAI chiamare preventDefault(), e il browser applicava il suo zoom nativo di pagina — su
+ // QUALSIASI punto dentro .chartWrap, comandi e toolbar compresi, non solo sul canvas. Ora invece
+ // si "mangia" sempre l'evento (preventDefault) appena CTRL/SHIFT sono premuti dentro l'area del
+ // grafico, e solo DOPO si controlla se ci sono davvero dati su cui applicare lo zoom.
+ e.preventDefault();
+ if(!rows.length)return; // nessun dato caricato: evento comunque bloccato qui sopra, ma niente zoom da applicare
  if(e.shiftKey){
    // SHIFT + rotellina: zoom verticale (scala prezzi), illimitato.
    e.preventDefault();
@@ -20508,16 +20555,43 @@ async function initExtraPipWindow(){
  // meccanismo già usato dal PIP singolo: si spostano il toolbar dei disegni e "Torna all'ultima
  // candela" dentro #chartFsSidebar (che è già dentro .chartWrap, vedi moveDrawToolbarIntoSidebar/
  // moveResetViewIntoSidebar più sopra nel file — qui senza indicare targetDoc, usano questo
- // stesso document di default), poi si nasconde con un foglio di stile tutto ciò che non è
- // .chartWrap o un popup di configurazione (fbModalOverlay) — mai la sidebar dei disegni, mai i
- // pulsanti nell'angolo del grafico (2/3/4 comprese), che vivono già dentro .chartWrap.
+ // stesso document di default), poi si nasconde tutto ciò che non è .chartWrap o un popup di
+ // configurazione (fbModalOverlay) — mai la sidebar dei disegni, mai i pulsanti nell'angolo del
+ // grafico (2/3/4 comprese), che vivono già dentro .chartWrap.
+ // BUG RISOLTO (finestre PIP 2/3/4 completamente vuote, nulla visibile): la vecchia regola CSS
+ // qui sotto era `body.fbPipChartOnly>*:not(.chartWrap)...{display:none}` — ma `>*` seleziona
+ // SOLO i figli DIRETTI di <body>, mentre .chartWrap non lo è: nella struttura reale della pagina
+ // sta annidato dentro <main><div class="panel">...<div class="chartWrap">, verificato sulla
+ // struttura HTML effettiva (non per supposizione). Quel selettore quindi nascondeva <main> per
+ // intero (perché <main> in sé non porta la classe chartWrap) — e con <main> spariva anche tutto
+ // quello che ci stava dentro, incluso il grafico stesso: da qui la pagina completamente vuota.
+ // Fix: invece di un selettore CSS statico che presume una posizione precisa nel DOM, si risale
+ // dal vero elemento .chartWrap verso <body> passo per passo, e a OGNI livello si nascondono solo
+ // i fratelli reali di quel livello (mai l'antenato stesso, che resta con la sua visualizzazione
+ // normale) — funziona qualunque sia la profondità di annidamento effettiva, oggi o in futuro, e
+ // lascia sempre visibili i popup di configurazione (fbModalOverlay) e la banderuola PIP ovunque
+ // si trovino nel DOM.
+ function fbPipHideEverythingExceptChartWrap(){
+  const chartWrapEl=document.querySelector('.chartWrap');
+  if(!chartWrapEl)return;
+  let node=chartWrapEl;
+  while(node&&node!==document.body&&node.parentElement){
+   const parent=node.parentElement;
+   Array.from(parent.children).forEach(sib=>{
+    if(sib===node)return;
+    if(sib.classList&&(sib.classList.contains('fbModalOverlay')||sib.id==='fbPipChartOnlyBadge'))return;
+    sib.style.setProperty('display','none','important');
+   });
+   node=parent;
+  }
+ }
  const kioskStyle=document.createElement('style');
  kioskStyle.textContent=`
    body.fbPipChartOnly{padding:0!important;margin:0!important;overflow:hidden}
-   body.fbPipChartOnly>*:not(.chartWrap):not(.fbModalOverlay):not(#fbPipChartOnlyBadge){display:none!important}
    body.fbPipChartOnly .chartWrap{height:calc(100vh - 24px)!important;margin-top:24px}
  `;
  document.head.appendChild(kioskStyle);
+ fbPipHideEverythingExceptChartWrap();
  moveDrawToolbarIntoSidebar();
  moveResetViewIntoSidebar();
  document.body.classList.add('fbPipChartOnly');
