@@ -1087,6 +1087,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <span style="display:inline-flex;align-items:center;gap:5px">Opacità <input id="vpLvnOpacity" type="number" min="0" max="100" step="5" value="25" style="width:50px">%</span>
          <span style="display:inline-flex;align-items:center;gap:5px">Sensibilità <input id="vpLvnThreshold" type="number" min="1" max="100" step="1" value="15" style="width:50px">%</span>
          <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Trova la fascia di prezzo con meno volume nell'istogramma e disegna un rettangolo orizzontale da lì fino all'ultima candela. "Sensibilità" = quanto larga può diventare la fascia (barre vicine sotto questa % del volume massimo vengono incluse).</span>
+         <!-- RICHIESTO ESPLICITAMENTE: senza questo, il bucket di volume minimo trovato dalla
+              ricerca sopra è quasi sempre proprio quello ai bordi estremi dell'istogramma (high/low
+              esatti del periodo, dove il prezzo è passato una volta sola) — il rettangolo finiva
+              quindi disegnato sempre appiccicato al bordo superiore o inferiore. Questo cursore
+              esclude una percentuale di bucket da ogni lato PRIMA di cercare il minimo (vedi
+              computeLowVolumeZone()): l'allargamento successivo della fascia può comunque arrivare
+              fino al bordo vero se la valle a bassa attività si estende davvero lì. -->
+         <span style="display:flex;align-items:center;gap:8px;flex:1 1 100%;margin-top:4px">
+           <span style="white-space:nowrap">Tolleranza bordi</span>
+           <input id="vpLvnEdgePct" type="range" min="0" max="30" step="1" value="8" style="flex:1;min-width:80px">
+           <span id="vpLvnEdgePctVal" style="min-width:32px;text-align:right">8%</span>
+         </span>
+         <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Esclude questa percentuale di bucket ai due estremi dell'istogramma dalla ricerca del punto di partenza della zona, così non finisce sempre ai bordi massimi/minimi. 0% = nessuna esclusione (comportamento precedente).</span>
        </div>
        <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">LIVELLI</div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
@@ -1259,21 +1272,52 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <p class="hint" style="margin-top:6px">Scala tutti i testi disegnati dentro il grafico (prezzi, orari, etichette dei disegni, profili volumetrici, dashboard degli indicatori, caselle TP-SL...). Non modifica il nome dell'asset, i pulsanti della barra degli strumenti né i nomi degli indicatori nella legenda in alto.</p>
            </div>
            <!-- FOOTPRINT/ORDER FLOW (punto 1 roadmap, tick-rule su stream Live Capital.com/MT5):
-                vedi footprintRegisterTick()/footprintByBucket e drawFootprintCandle() in fondo al
-                file per l'implementazione completa. Attivo SOLO sulle candele che hanno davvero
-                accumulato tick (in pratica solo quella in formazione, in Live) — le altre restano
-                candlestick normali. Sotto una certa soglia di zoom (poche righe leggibili) il
-                rendering ricade da solo sulla candela normale, vedi draw(). -->
+                vedi footprintRegisterTick()/footprintByBucket/footprintTickLogByAsset e
+                drawFootprintCandle() in fondo al file per l'implementazione completa. Attivo su
+                OGNI candela per cui esiste almeno un tick nel log di questa sessione (non solo
+                quella in formazione: il log tick grezzo per asset sopravvive ai cambi TF/pip-riga,
+                vedi footprintRebuildBucketsForCurrentAsset()) — le candele MAI osservate restano
+                candlestick normali, a meno di accendere "Mostra anche stime OHLCV" qui sotto
+                (spento di default, vedi il suo hint per il perché). Sotto una certa soglia di zoom
+                (poche righe leggibili) il rendering ricade da solo sulla candela normale, vedi
+                draw(). -->
            <div class="fbSettingsSectionTitle">📊 Footprint (tick, solo Live)</div>
            <div data-style-panel="footprint">
              <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
-               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintEnabled"> Mostra footprint sulla candela in formazione</label>
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintEnabled"> Mostra footprint sulle candele con tick registrati</label>
+             </div>
+             <div class="fbOptRow" style="margin-top:8px">
+               <label style="flex:none;min-width:110px">Stile</label>
+               <select id="footprintStyle" class="toolSelect" title="Come disegnare ogni riga del footprint">
+                 <option value="bidask" selected>Bid-Ask (due colonne)</option>
+                 <option value="delta">Delta (buy − sell)</option>
+                 <option value="volume">Volume (buy + sell)</option>
+               </select>
              </div>
              <div class="fbOptRow" style="margin-top:8px">
                <label style="flex:none;min-width:110px">Righe (pip/riga)</label>
                <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip.">
              </div>
-             <p class="hint" style="margin-top:6px">⚠️ Stima da tick-rule (buy a destra/sell a sinistra, in base al rialzo/ribasso del prezzo bid tra un tick e il successivo). Su Capital.com è un conteggio puro di tick (nessun size nel dato ricevuto). Su MT5 usa invece il "tick volume" del broker quando disponibile — un proxy migliore ma non garantito come volume realmente scambiato (dipende dal feed del broker). Mai un vero order flow a size di trade. Visibile solo sulla candela in formazione in Live, ingrandendo abbastanza da avere spazio per le due colonne — le candele storiche/già chiuse restano candlestick normali perché non hanno mai avuto dati tick.</p>
+             <p class="hint" style="margin-top:6px">⚠️ Stima da tick-rule (buy = tick al rialzo del prezzo bid, sell = tick al ribasso, rispetto al tick precedente). Su Capital.com è un conteggio puro di tick (nessun size nel dato ricevuto). Su MT5 usa invece il "tick volume" del broker quando disponibile — un proxy migliore ma non garantito come volume realmente scambiato (dipende dal feed del broker). Mai un vero order flow a size di trade.</p>
+             <!-- RICHIESTO ESPLICITAMENTE, con avvertenza altrettanto esplicita (vedi la
+                  discussione con l'utente): SPENTO di default apposta. Quando acceso, le candele
+                  MAI osservate da questa sessione (storico precedente, asset non seguito, programma
+                  chiuso) mostrano una stima euristica da OHLCV (footprintEstimateForCandle()) —
+                  MAI disegnata con lo stesso aspetto delle celle reali: sempre tratteggiata, colore
+                  ambra/neutro invece che verde/rosso, ed etichetta "STIMA OHLCV" fissa sopra la
+                  candela, per non poter mai essere scambiata per un dato osservato davvero. -->
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px;margin-top:6px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintShowEstimated"> Mostra anche stime OHLCV sulle candele senza tick reali</label>
+             </div>
+             <p class="hint" style="margin-top:2px">⚠️ NON è un dato osservato: è una stima euristica calcolata dall'OHLC/volume della candela (distribuzione triangolare centrata sul close, 60/40 buy/sell lato chiusura). Disegnata sempre tratteggiata, con colori diversi da quella reale e l'etichetta "STIMA OHLCV" sopra la candela — per non confonderla mai con un tick davvero osservato. Di default spenta: accendila solo se ti serve un colpo d'occhio approssimativo, mai per decisioni che richiedono dati reali.</p>
+             <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">IMBALANCE AUTOMATICO</div>
+             <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintImbalanceEnabled"> Evidenzia zone di imbalance</label>
+               <span style="display:inline-flex;align-items:center;gap:5px">Soglia <input id="footprintImbalanceThresholdPct" type="number" min="100" max="1000" step="10" value="200" style="width:60px">%</span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Max rettangoli <input id="footprintImbalanceMaxRects" type="number" min="1" max="20" step="1" value="5" style="width:50px"></span>
+               <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="footprintImbalanceColor" type="color" class="colorPick" value="#8a97a8"></span>
+             </div>
+             <p class="hint" style="margin-top:2px">Confronto "diagonale" standard: buy a un livello vs sell del livello subito sotto (e viceversa). "Soglia" = di quante volte un lato deve superare l'altro (200% = il doppio) per contare come imbalance. Righe consecutive in imbalance vengono raggruppate in un unico rettangolo; solo i "Max rettangoli" più marcati (per numero di righe coinvolte) vengono disegnati, per candela, per non riempire il grafico. Calcolato solo su celle con tick REALI, mai su quelle stimate da OHLCV.</p>
            </div>
          </div>
          <div data-settings-panel="grid" style="display:none">
@@ -2616,7 +2660,7 @@ let tpSlZoneFillVisible=true;
 // completi su footprintRegisterTick()/footprintByBucket più sotto, vicino allo streaming tick).
 // footprintEnabled: interruttore utente (⚙️ Impostazioni → Style → Footprint). footprintRowPips:
 // ampiezza di ogni riga del footprint, in pip (riusa pipSizeForAsset(), come il resto dell'app).
-let footprintEnabled=false, footprintRowPips=1;
+let footprintEnabled=false, footprintRowPips=1, footprintShowEstimated=false, footprintImbalanceEnabled=false;
 // RICHIESTO ESPLICITAMENTE: doppio click DIRETTAMENTE sopra la casella Target/Stop di una
 // posizione APERTA (sul grafico) nasconde/mostra il riempimento colorato SOLO di QUELLA
 // posizione (0% quando nascosto, 20% di default quando visibile) — indipendente dal pulsante
@@ -3064,7 +3108,7 @@ async function idbClearAll(){
 // finché non è l'utente stesso a valorizzarli (pulsanti SL/TP sul grafico, apertura di una
 // posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
 // ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
-const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity'];
+const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceThresholdPct','footprintImbalanceMaxRects','footprintImbalanceColor'];
 // Le posizioni/ordini pendenti REALI (mt5Ticket valorizzato) non vengono MAI salvati in
 // locale — richiesto esplicitamente per sicurezza: se ci si disconnette da MT5, si chiude
 // l'app o si ricarica la pagina, non devono restare visibili a grafico da un salvataggio
@@ -3097,7 +3141,7 @@ function collectLightSessionState(){
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,anchorSnap,straightLockToggle,positionsVisible,tpSlZoneFillVisible,volProfileMode,linesMode,drawingLayerVisible,
-   footprintEnabled,footprintRowPips,
+   footprintEnabled,footprintRowPips,footprintShowEstimated,footprintImbalanceEnabled,
    positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
    pendingOrders:stripMt5TrackedForSave(pendingOrders),
    trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
@@ -3277,8 +3321,12 @@ function applyLightSessionState(state){
  tpSlZoneFillVisible=state.tpSlZoneFillVisible!==false;
  footprintEnabled=!!state.footprintEnabled;
  footprintRowPips=(Number.isFinite(state.footprintRowPips)&&state.footprintRowPips>0)?state.footprintRowPips:1;
+ footprintShowEstimated=!!state.footprintShowEstimated;
+ footprintImbalanceEnabled=!!state.footprintImbalanceEnabled;
  if($('footprintEnabled'))$('footprintEnabled').checked=footprintEnabled;
  if($('footprintRowPips'))$('footprintRowPips').value=footprintRowPips;
+ if($('footprintShowEstimated'))$('footprintShowEstimated').checked=footprintShowEstimated;
+ if($('footprintImbalanceEnabled'))$('footprintImbalanceEnabled').checked=footprintImbalanceEnabled;
  // drawingLayerVisible (RICHIESTO ESPLICITAMENTE: nascondere singolarmente Fibonacci/profili
  // volumetrici/VWAP dal nuovo pannello "Livelli", vedi apriChartLayersModal()): merge col
  // default invece di una sostituzione secca, così un salvataggio precedente a questa funzione
@@ -3911,7 +3959,7 @@ function openVpSettingsModal(target){
  // all'anteprima dal vivo (vedi i listener 'input' più sotto, vicino a vpModalCloseBtn) di
  // aggiornare subito il rettangolo sul grafico mentre l'utente sposta color-picker/opacità/
  // sensibilità, e a "Annulla"/chiusura/Esc di riportare tutto com'era se non si preme "OK".
- vpModalSnapshot={lvnEnabled:target.lvnEnabled,lvnColor:target.lvnColor,lvnOpacity:target.lvnOpacity,lvnThresholdPct:target.lvnThresholdPct};
+ vpModalSnapshot={lvnEnabled:target.lvnEnabled,lvnColor:target.lvnColor,lvnOpacity:target.lvnOpacity,lvnThresholdPct:target.lvnThresholdPct,lvnEdgePct:target.lvnEdgePct};
  const isHist=target.type==='vpfixed'||target.type==='vpanchor';
  if($('vpModalHistPanel'))$('vpModalHistPanel').style.display=isHist?'block':'none';
  if($('vpModalVwapPanel'))$('vpModalVwapPanel').style.display=isHist?'none':'block';
@@ -3932,6 +3980,7 @@ function openVpSettingsModal(target){
    if($('vpLvnColor'))$('vpLvnColor').value=target.lvnColor||'#00e676';
    if($('vpLvnOpacity'))$('vpLvnOpacity').value=target.lvnOpacity!=null?target.lvnOpacity:25;
    if($('vpLvnThreshold'))$('vpLvnThreshold').value=target.lvnThresholdPct!=null?target.lvnThresholdPct:15;
+   if($('vpLvnEdgePct')){ const ep=target.lvnEdgePct!=null?target.lvnEdgePct:8; $('vpLvnEdgePct').value=ep; if($('vpLvnEdgePctVal'))$('vpLvnEdgePctVal').textContent=ep+'%'; }
    if($('vpPocEnabled'))$('vpPocEnabled').checked=!!target.pocEnabled;
    if($('vpPocColor'))$('vpPocColor').value=target.pocColor||'#ff9800';
    if($('vpPocWidth'))$('vpPocWidth').value=target.pocWidth||1;
@@ -3978,6 +4027,7 @@ function closeVpSettingsModal(revert){
    d.lvnColor=vpModalSnapshot.lvnColor;
    d.lvnOpacity=vpModalSnapshot.lvnOpacity;
    d.lvnThresholdPct=vpModalSnapshot.lvnThresholdPct;
+   d.lvnEdgePct=vpModalSnapshot.lvnEdgePct;
    draw();
  }
  if($('vpModalOverlay'))$('vpModalOverlay').style.display='none';
@@ -4009,6 +4059,8 @@ function applyVpSettingsFromModal(){
    d.lvnOpacity=Number.isFinite(lvnOpVal)?Math.max(0,Math.min(100,lvnOpVal)):d.lvnOpacity;
    const lvnThrVal=Math.round(Number($('vpLvnThreshold')?.value));
    d.lvnThresholdPct=Number.isFinite(lvnThrVal)?Math.max(1,Math.min(100,lvnThrVal)):d.lvnThresholdPct;
+   const lvnEdgeVal=Math.round(Number($('vpLvnEdgePct')?.value));
+   d.lvnEdgePct=Number.isFinite(lvnEdgeVal)?Math.max(0,Math.min(30,lvnEdgeVal)):d.lvnEdgePct;
    d.pocEnabled=!!$('vpPocEnabled')?.checked;
    d.pocColor=$('vpPocColor')?.value||d.pocColor;
    const pocW=Math.round(Number($('vpPocWidth')?.value));
@@ -5187,14 +5239,29 @@ function computeValueArea(profile,vaPct){
 // soglia (thresholdPct% del volume massimo del profilo), così la zona evidenziata copre l'intera
 // "valle" a bassa attività invece di un'unica barra sottile — esattamente come nell'esempio
 // fornito dall'utente, dove il rettangolo copre più righe consecutive dell'istogramma.
-function computeLowVolumeZone(profile,thresholdPct){
+// TOLLERANZA DI ESCLUSIONE BORDI (richiesta esplicitamente, ora regolabile dal cursore "Tolleranza
+// bordi" nel pannello LVN — vedi #vpLvnEdgePct): i bucket ESTREMI del profilo (il primo e
+// l'ultimo, cioè high/low esatti del periodo) hanno quasi sempre volume vicinissimo a zero per
+// costruzione — il prezzo ci è passato una volta sola (wick), non è una vera "valle" a bassa
+// attività. Senza escluderli, il bucket di volume minimo finisce quasi sempre proprio lì, e il
+// rettangolo LVN risulta disegnato sempre appiccicato al bordo superiore o inferiore
+// dell'istogramma invece che su una vera zona a bassa attività. `edgePct` esclude questa
+// percentuale di bucket da OGNI lato prima di cercare il minimo — ma la ricerca del minimo parte
+// comunque ristretta al centro, mentre l'allargamento successivo (il while qui sotto) può
+// comunque arrivare fino al bordo vero se la valle a bassa attività si estende davvero fin lì: non
+// è un taglio permanente, solo una tolleranza sul PUNTO DI PARTENZA della zona. Default 8 se il
+// disegno non ha ancora questo campo (creato prima dell'introduzione del cursore).
+function computeLowVolumeZone(profile,thresholdPct,edgePct){
  if(!profile||!profile.buckets||profile.maxTotal<=0)return null;
  const nb=profile.buckets;
  const totals=new Array(nb);
  for(let b=0;b<nb;b++)totals[b]=profile.upVol[b]+profile.downVol[b];
  const thr=profile.maxTotal*Math.max(1,Math.min(100,thresholdPct!=null?thresholdPct:15))/100;
- let minIdx=0,minVal=Infinity;
- for(let b=0;b<nb;b++){ if(totals[b]<minVal){minVal=totals[b];minIdx=b;} }
+ const edgeFrac=Math.max(0,Math.min(30,edgePct!=null?edgePct:8))/100;
+ const edgeExclude=Math.min(Math.floor((nb-1)/2),Math.round(nb*edgeFrac));
+ const searchLo=edgeExclude, searchHi=nb-1-edgeExclude;
+ let minIdx=searchLo,minVal=Infinity;
+ for(let b=searchLo;b<=searchHi;b++){ if(totals[b]<minVal){minVal=totals[b];minIdx=b;} }
  let lo=minIdx,hi=minIdx;
  while(lo>0&&totals[lo-1]<=thr)lo--;
  while(hi<nb-1&&totals[hi+1]<=thr)hi++;
@@ -7931,36 +7998,98 @@ function drawTradeHighlight(ctx,y,pad,cw,n,start,w,h){
  highlightCloseBtnRect={x:closeCx-closeSize/2-hitPad,y:closeCy-closeSize/2-hitPad,w:closeSize+hitPad*2,h:closeSize+hitPad*2};
  ctx.restore();
 }
-// Disegna UNA candela in modalità footprint: due colonne per riga di prezzo (sell a sinistra,
-// buy a destra — convenzione footprint standard), colorate per intensità relativa (heatmap) sul
-// massimo tick-count di QUESTA candela, più un contorno sottile high-low come riferimento OHLC.
-// Numeri per riga solo se c'è davvero spazio (bw>=44) per restare leggibili senza sovrapporsi.
-// `fp` = { step, rows:{ [livello prezzo]: {buy,sell} } }, `yFn` = stessa y(v) di draw().
-function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor){
+// Disegna UNA candela in modalità footprint, in uno dei tre stili scelti in Impostazioni
+// (#footprintStyle): "bidask" (due colonne sell/buy, default), "delta" (un solo numero netto
+// buy-sell per riga) o "volume" (un solo numero buy+sell per riga, senza direzione).
+// `fp` = { step, rows:{ [livello prezzo]: {buy,sell} }, estimated? }. Quando fp.estimated è true
+// (stima OHLCV da footprintEstimateForCandle(), MAI un tick osservato davvero) il rendering è
+// SEMPRE visivamente diverso, in ogni stile — tratteggio + palette ambra/neutra invece di
+// verde/rosso + etichetta "STIMA OHLCV" fissa sopra la candela — apposta per non poter mai essere
+// scambiato per un dato reale, nemmeno a colpo d'occhio. `imbalanceRuns` = array già filtrato di
+// {loPrice,hiPrice,count} da disegnare come overlay (mai popolato per fp.estimated: i chiamanti
+// in draw() già non lo passano in quel caso, il controllo qui sotto è solo una seconda rete di
+// sicurezza).
+function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,imbalanceRuns,imbalanceColor){
  const step=fp.step;
  const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>b-a); // alto → basso
  if(!levels.length)return;
- let maxCount=1;
- levels.forEach(lv=>{ const c=fp.rows[lv]; maxCount=Math.max(maxCount,c.buy,c.sell); });
+ const estimated=!!fp.estimated;
+ let maxCount=1, maxDelta=1, maxVol=1;
+ levels.forEach(lv=>{
+   const c=fp.rows[lv];
+   maxCount=Math.max(maxCount,c.buy,c.sell);
+   maxDelta=Math.max(maxDelta,Math.abs(c.buy-c.sell));
+   maxVol=Math.max(maxVol,c.buy+c.sell);
+ });
  const half=bw/2;
  const showNumbers=bw>=44;
  const fontPx=Math.max(8,Math.min(11,bw/5));
  if(showNumbers){ ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font=fontPx+'px sans-serif'; }
+ const fmtNum=v=>String(Math.round(v)); // i valori stimati/volume-weighted possono essere frazionari: arrotondati solo per la label
  levels.forEach(lv=>{
    const c=fp.rows[lv];
    const yTop=yFn(lv+step/2), yBot=yFn(lv-step/2);
    const rowH=Math.max(1,yBot-yTop);
-   const sellA=c.sell>0?0.15+0.65*(c.sell/maxCount):0, buyA=c.buy>0?0.15+0.65*(c.buy/maxCount):0;
-   if(sellA>0){ ctx.fillStyle=`rgba(224,91,100,${sellA})`; ctx.fillRect(xx-half,yTop,half-1,rowH); }
-   if(buyA>0){ ctx.fillStyle=`rgba(85,194,139,${buyA})`; ctx.fillRect(xx+1,yTop,half-1,rowH); }
-   if(showNumbers && rowH>=fontPx){
-     ctx.fillStyle=lineColor;
-     if(c.sell>0)ctx.fillText(String(c.sell),xx-half/2,(yTop+yBot)/2);
-     if(c.buy>0)ctx.fillText(String(c.buy),xx+half/2,(yTop+yBot)/2);
+   if(style==='delta'){
+     const delta=c.buy-c.sell;
+     const a=maxDelta>0?0.15+0.65*(Math.abs(delta)/maxDelta):0;
+     if(a>0){
+       ctx.fillStyle=estimated?`rgba(196,164,86,${a})`:(delta>=0?`rgba(85,194,139,${a})`:`rgba(224,91,100,${a})`);
+       ctx.fillRect(xx-half,yTop,bw-1,rowH);
+     }
+     if(showNumbers&&rowH>=fontPx&&delta!==0){ ctx.fillStyle=lineColor; ctx.fillText((delta>=0?'+':'')+fmtNum(delta),xx,(yTop+yBot)/2); }
+   }else if(style==='volume'){
+     const tot=c.buy+c.sell;
+     const a=tot>0&&maxVol>0?0.15+0.65*(tot/maxVol):0;
+     if(a>0){ ctx.fillStyle=estimated?`rgba(196,164,86,${a})`:`rgba(126,110,224,${a})`; ctx.fillRect(xx-half,yTop,bw-1,rowH); }
+     if(showNumbers&&rowH>=fontPx&&tot>0){ ctx.fillStyle=lineColor; ctx.fillText(fmtNum(tot),xx,(yTop+yBot)/2); }
+   }else{ // 'bidask' (default): sell a sinistra, buy a destra — convenzione footprint standard
+     const sellA=c.sell>0&&maxCount>0?0.15+0.65*(c.sell/maxCount):0, buyA=c.buy>0&&maxCount>0?0.15+0.65*(c.buy/maxCount):0;
+     if(sellA>0){ ctx.fillStyle=estimated?`rgba(168,138,74,${sellA})`:`rgba(224,91,100,${sellA})`; ctx.fillRect(xx-half,yTop,half-1,rowH); }
+     if(buyA>0){ ctx.fillStyle=estimated?`rgba(214,180,96,${buyA})`:`rgba(85,194,139,${buyA})`; ctx.fillRect(xx+1,yTop,half-1,rowH); }
+     if(showNumbers && rowH>=fontPx){
+       ctx.fillStyle=lineColor;
+       if(c.sell>0)ctx.fillText(fmtNum(c.sell),xx-half/2,(yTop+yBot)/2);
+       if(c.buy>0)ctx.fillText(fmtNum(c.buy),xx+half/2,(yTop+yBot)/2);
+     }
    }
  });
+ const topY=yFn(r.high), botY=yFn(r.low);
+ // Tratteggio diagonale SOLO sulle celle stimate — sopra i riempimenti colorati, sotto contorno e
+ // numeri: nessuna cella stimata può avere lo stesso aspetto di una con tick reali, in nessuno
+ // stile.
+ if(estimated){
+   ctx.save();
+   ctx.beginPath(); ctx.rect(xx-half,topY,bw,Math.max(1,botY-topY)); ctx.clip();
+   ctx.strokeStyle='rgba(255,255,255,0.22)'; ctx.lineWidth=1;
+   const diagLen=bw+(botY-topY);
+   for(let off=-diagLen;off<diagLen;off+=6){
+     ctx.beginPath(); ctx.moveTo(xx-half+off,botY); ctx.lineTo(xx-half+off+(botY-topY),topY); ctx.stroke();
+   }
+   ctx.restore();
+ }
  ctx.strokeStyle=lineColor; ctx.lineWidth=1;
- ctx.strokeRect(xx-half,yFn(r.high),bw,Math.max(1,yFn(r.low)-yFn(r.high)));
+ ctx.strokeRect(xx-half,topY,bw,Math.max(1,botY-topY));
+ // Rettangoli di imbalance automatico (mai su fp.estimated: vedi commento della funzione).
+ if(!estimated&&imbalanceRuns&&imbalanceRuns.length){
+   ctx.save();
+   ctx.globalAlpha=0.35;
+   ctx.fillStyle=imbalanceColor||'#8a97a8';
+   imbalanceRuns.forEach(run=>{
+     const rTop=yFn(run.hiPrice), rBot=yFn(run.loPrice);
+     ctx.fillRect(xx-half,rTop,bw,Math.max(1,rBot-rTop));
+   });
+   ctx.restore();
+ }
+ // Etichetta "STIMA OHLCV" fissa sopra la candela stimata — SEMPRE visibile, non solo al passaggio
+ // del mouse: deve essere impossibile non accorgersi che quella candela non ha tick reali.
+ if(estimated){
+   ctx.save();
+   ctx.font='9px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='bottom';
+   ctx.fillStyle='#e0b84a';
+   ctx.fillText('STIMA OHLCV',xx,topY-3);
+   ctx.restore();
+ }
 }
 function draw(){
  const c=$('chart'),ctx=c.getContext('2d'),dpr=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);
@@ -8078,14 +8207,27 @@ function draw(){
  // cw/n*.62 ci arrivi da solo: a molte candele in vista bw resta comunque stretto e si ricade sul
  // rendering normale candela per candela, vedi drawFootprintCandle() più sotto e _FOOTPRINT_MIN_BW.
  const _footprintOn=footprintEnabledNow();
+ const _footprintShowEst=_footprintOn&&footprintShowEstimatedNow();
+ const _footprintStyle=footprintStyleNow();
+ const _footprintImbOn=_footprintOn&&footprintImbalanceEnabledNow();
+ const _footprintImbThr=footprintImbalanceThresholdPctNow();
+ const _footprintImbMax=footprintImbalanceMaxRectsNow();
+ const _footprintImbColor=footprintImbalanceColorNow();
+ const _footprintStep=_footprintOn?footprintStepForAsset(currentAssetKey):null;
  const _FOOTPRINT_MIN_BW=34; // sotto questa soglia due colonne buy/sell non hanno spazio per essere leggibili
  const bw=Math.max(2,Math.min(_footprintOn?90:12,cw/n*.62));
  const _cc=currentCandleColors();
  data.forEach((r,i)=>{
    let xx=x(i), up=r.close>=r.open;
-   const fp=_footprintOn&&bw>=_FOOTPRINT_MIN_BW?footprintByBucket[footprintBucketStart(parseDateTime(r.date))]:null;
-   if(fp && Object.keys(fp.rows).length){
-     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor);
+   let fp=null;
+   if(_footprintOn&&bw>=_FOOTPRINT_MIN_BW){
+     const real=footprintByBucket[footprintBucketStart(parseDateTime(r.date))];
+     if(real&&Object.keys(real.rows).length)fp=real;
+     else if(_footprintShowEst&&_footprintStep>0)fp=footprintEstimateForCandle(r,_footprintStep);
+   }
+   if(fp){
+     const runs=(!fp.estimated&&_footprintImbOn)?footprintFindImbalanceRuns(fp,_footprintImbThr).sort((a,b)=>b.count-a.count).slice(0,_footprintImbMax):[];
+     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle,runs,_footprintImbColor);
      return;
    }
    ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
@@ -8432,7 +8574,7 @@ function draw(){
        // stesso bordo destro usato dall'istogramma/dalle righe POC-VAH-VAL (ultima candela, o
        // bordo del grafico se "estendi a destra"/ancorato) — vedi computeLowVolumeZone() sopra.
        if(d.lvnEnabled&&profile&&profile.maxTotal>0){
-         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15);
+         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15,d.lvnEdgePct);
          if(lvz){
            const lvTopY=shapesGeo.y(lvz.hiPrice), lvBotY=shapesGeo.y(lvz.loPrice);
            ctx.save();
@@ -12261,7 +12403,10 @@ $('tf').addEventListener('change',()=>{
  const visibleRealMinutes=getVisibleCount()*oldTF;
 
  currentTF=Number($('tf').value)||1;
- footprintReset(); // il bucketing del footprint dipende da currentTF: niente bucket vecchi con TF diverso
+ // Il bucketing del footprint dipende da currentTF: ricostruisce i bucket dal log tick grezzo
+ // dell'asset corrente per il NUOVO TF, invece di azzerare — così i valori restano visibili anche
+ // cambiando timeframe (richiesta esplicita), per tutto quello che è stato davvero osservato.
+ footprintRebuildBucketsForCurrentAsset();
  if(liveModeActive){
    // In Live ogni timeframe corrisponde a una risoluzione diversa scaricata via REST da
    // Capital.com (non una semplice riaggregazione locale come in Storico, dove i dati sono a
@@ -12902,7 +13047,7 @@ chartEl.addEventListener('pointerdown',e=>{
      // esplicito qui, altrimenti un click con lo strumento Linea Alarm attivo creerebbe per
      // sbaglio un RETTANGOLO (il fallback finale qui sotto) invece di una linea Alarm.
      const type=(LINE_TYPES.includes(drawTool)||drawTool==='alarmline')?drawTool:drawTool==='fib'?'fib':drawTool==='vwap'?'vwap':drawTool==='vpfixed'?'vpfixed':drawTool==='vpanchor'?'vpanchor':'rectangle';
-     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null,triggerMode:alarmSelectedTriggerMode,afterAction:alarmSelectedAfterAction,triggered:false,lastSide:null}:{})};
+     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,lvnEdgePct:8,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null,triggerMode:alarmSelectedTriggerMode,afterAction:alarmSelectedAfterAction,triggered:false,lastSide:null}:{})};
      if(type==='vwap'||type==='vpanchor'||type==='horizontal'||type==='horizontalray'||type==='vertical'||type==='crossline'||type==='alarmline'){
        // VWAP ancorato e Profilo volume ancorato hanno una sola "ancora" (un solo polo, come
        // nella loro icona): niente secondo punto da fissare, un solo clic basta e il
@@ -13797,14 +13942,26 @@ $('applySuggestedLot').addEventListener('click',()=>{
 $('market')?.addEventListener('change',applyInstrument);
 $('decimals').addEventListener('change',()=>{draw();update();});
 $('candleTheme')?.addEventListener('change',()=>{ candleTheme=$('candleTheme').value; updateCandleCustomColorsVisibility(); draw(); scheduleSave(); });
-$('footprintEnabled')?.addEventListener('change',()=>{ footprintEnabled=$('footprintEnabled').checked; draw(); scheduleSave(); });
+$('footprintEnabled')?.addEventListener('change',()=>{
+ footprintEnabled=$('footprintEnabled').checked;
+ // Accendendo la feature, ricostruisci SUBITO dal log già raccolto (se l'utente l'aveva già usata
+ // in questa sessione e poi spenta/riaccesa) invece di aspettare il prossimo tick.
+ if(footprintEnabled)footprintRebuildBucketsForCurrentAsset();
+ draw(); scheduleSave();
+});
+$('footprintShowEstimated')?.addEventListener('change',()=>{ footprintShowEstimated=$('footprintShowEstimated').checked; draw(); scheduleSave(); });
+$('footprintStyle')?.addEventListener('change',()=>{ draw(); scheduleSave(); });
+$('footprintImbalanceEnabled')?.addEventListener('change',()=>{ footprintImbalanceEnabled=$('footprintImbalanceEnabled').checked; draw(); scheduleSave(); });
+$('footprintImbalanceThresholdPct')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintImbalanceMaxRects')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+$('footprintImbalanceColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintRowPips')?.addEventListener('input',()=>{
  const v=Number($('footprintRowPips').value);
  footprintRowPips=(Number.isFinite(v)&&v>0)?v:1;
  // Cambiando l'ampiezza riga, i bucket già accumulati con lo step vecchio non sono più
- // confrontabili (vedi il controllo bucket.step!==step in footprintRegisterTick): si riparte da
- // zero invece di mischiare due granularità diverse nella stessa candela.
- footprintByBucket={};
+ // confrontabili: ricostruiamo dal log tick grezzo (mai perso) invece di azzerare e basta — i
+ // valori restano visibili, solo ri-bucketizzati alla nuova ampiezza.
+ footprintRebuildBucketsForCurrentAsset();
  draw(); scheduleSave();
 });
 // I due colori personalizzati si applicano in tempo reale mentre si trascina il selettore
@@ -14471,6 +14628,13 @@ $('vpLvnEnabled')?.addEventListener('change',()=>{ if(!vpModalTarget)return; vpM
 $('vpLvnColor')?.addEventListener('input',()=>{ if(!vpModalTarget)return; vpModalTarget.lvnColor=$('vpLvnColor').value; draw(); });
 $('vpLvnOpacity')?.addEventListener('input',()=>{ if(!vpModalTarget)return; const v=Number($('vpLvnOpacity').value); if(Number.isFinite(v))vpModalTarget.lvnOpacity=Math.max(0,Math.min(100,v)); draw(); });
 $('vpLvnThreshold')?.addEventListener('input',()=>{ if(!vpModalTarget)return; const v=Number($('vpLvnThreshold').value); if(Number.isFinite(v))vpModalTarget.lvnThresholdPct=Math.max(1,Math.min(100,v)); draw(); });
+$('vpLvnEdgePct')?.addEventListener('input',()=>{
+ if($('vpLvnEdgePctVal'))$('vpLvnEdgePctVal').textContent=$('vpLvnEdgePct').value+'%';
+ if(!vpModalTarget)return;
+ const v=Number($('vpLvnEdgePct').value);
+ if(Number.isFinite(v))vpModalTarget.lvnEdgePct=Math.max(0,Math.min(30,v));
+ draw();
+});
 document.addEventListener('keydown',e=>{
  if(e.key==='Escape' && $('vpModalOverlay') && $('vpModalOverlay').style.display!=='none'){
    e.preventDefault();
@@ -16483,8 +16647,13 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // attualmente associato a `drawings` (vuoto compreso), mai su una semplice risincronizzazione.
  const shouldLoadAssetDrawings=(currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
- if(currentAssetKey!==asset)footprintReset(); // nuovo asset: la sequenza tick precedente non ha più senso
+ const __footprintAssetChanged=(currentAssetKey!==asset);
  currentAssetKey=asset;
+ // Nuovo asset: ricostruisce i bucket dal SUO log tick (vuoto se non l'abbiamo mai seguito in
+ // questa sessione — footprintRebuildBucketsForCurrentAsset() gestisce già quel caso restituendo
+ // un footprintByBucket vuoto, la candela in formazione resta candlestick normale finché non
+ // arrivano i primi tick di questo asset).
+ if(__footprintAssetChanged)footprintRebuildBucketsForCurrentAsset();
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
  active=ownNow.length?ownNow[ownNow.length-1]:null;
  if(active){
@@ -16810,20 +16979,32 @@ async function refreshLiveStreamSubscriptions(){
 // aggiungesse anche il size del tick: basterebbe sommare quel valore invece di "+1" dentro
 // footprintRegisterTick(), senza toccare il resto (accumulo, rendering, persistenza).
 //
-// footprintByBucket: { [bucketStartMs]: { step, rows:{ [livello di prezzo]: {buy,sell} } } } — una
-// voce per ogni candela che ha ricevuto almeno un tick da quando la funzione è attiva. bucketStartMs
-// usa la STESSA convenzione di bucketing (Date.now(), non il timestamp del tick) già usata da
-// applyLivePriceToChart() per costruire/aggiornare la candela in corso, così footprint e candela
-// restano sempre sulla stessa "riga" anche a cavallo di riconnessioni WS/resync REST.
+// ARCHITETTURA (RICHIESTA ESPLICITAMENTE, evoluzione della prima versione): serve che il footprint
+// resti visibile su TUTTE le candele già osservate quando si cambia timeframe, non solo su quella
+// in formazione. Con la prima versione (un solo footprintByBucket già aggregato al TF corrente)
+// questo era impossibile: cambiando TF i bucket vecchi non sono ri-bucketizzabili, andavano
+// buttati via. Ora teniamo invece un LOG DI TICK GREZZI per asset — footprintTickLogByAsset — e
+// footprintByBucket viene SEMPRE ricostruito da lì per il TF/step correnti, su richiesta
+// (footprintRebuildBucketsForCurrentAsset(), chiamata a ogni cambio TF/pip-per-riga/asset). Il log
+// vive solo per la durata della sessione (in RAM, non su IndexedDB — scelta esplicita: coprire
+// "cambio TF" senza appesantire il salvataggio automatico ad ogni tick). Copre quindi tutto quello
+// che il programma ha DAVVERO osservato in questa sessione, per qualunque asset visitato (anche
+// "in background", non solo quello a grafico ora) — non le candele precedenti alla sessione o
+// quelle mai seguite: per quelle vedi footprintEstimateForCandle() più sotto, ESPLICITAMENTE
+// separato e mai mescolato senza etichetta con questi dati reali.
+let footprintTickLogByAsset={};      // assetKey -> [{t,price,side,weight}, ...] ordinato per t
+const FOOTPRINT_MAX_TICKS_PER_ASSET=150000; // tetto per asset: oltre, i tick più vecchi vengono scartati (FIFO)
+// footprintByBucket: SEMPRE relativo all'asset/TF/step correnti, ricostruito da
+// footprintRebuildBucketsForCurrentAsset() — non toccarlo direttamente altrove.
+// { [bucketStartMs]: { step, rows:{ [livello di prezzo]: {buy,sell} } } }
 let footprintByBucket={};
-// Ultimo prezzo/lato noto per la tick-rule. UNA sola coppia (non per-epic): il footprint si
-// accumula solo per l'asset a grafico ora (capitalWsPrimaryEpic o mt5ActiveSymbol) — gli asset "in
-// background" non vengono mai disegnati come footprint, quindi non serve tracciarli. Vengono
-// azzerati ad ogni cambio asset/timeframe (vedi loadLiveHistoryFromCapital/loadLiveHistoryFromMt5/
-// il listener di #tf più sotto) per non mischiare la sequenza di prezzi di un asset/TF con quella
-// di un altro.
-let footprintTickLastPrice=null, footprintTickLastSide=1;
 function footprintEnabledNow(){ return !!$('footprintEnabled')?.checked; }
+function footprintShowEstimatedNow(){ return !!$('footprintShowEstimated')?.checked; }
+function footprintStyleNow(){ return $('footprintStyle')?.value||'bidask'; }
+function footprintImbalanceEnabledNow(){ return !!$('footprintImbalanceEnabled')?.checked; }
+function footprintImbalanceThresholdPctNow(){ const v=Number($('footprintImbalanceThresholdPct')?.value); return (Number.isFinite(v)&&v>=100)?v:200; }
+function footprintImbalanceMaxRectsNow(){ const v=Math.round(Number($('footprintImbalanceMaxRects')?.value)); return (Number.isFinite(v)&&v>=1)?Math.min(20,v):5; }
+function footprintImbalanceColorNow(){ return $('footprintImbalanceColor')?.value||'#8a97a8'; }
 function footprintRowPipsNow(){
  const v=Number($('footprintRowPips')?.value);
  return (Number.isFinite(v)&&v>0)?v:1;
@@ -16838,17 +17019,35 @@ function footprintBucketStart(timestamp){
  const bucketMs=(currentTF||1)*60000;
  return Math.floor(timestamp/bucketMs)*bucketMs;
 }
-// Azzera l'accumulo: chiamata a ogni cambio asset/timeframe/righe-per-pip, cioè ogni volta che la
-// candela in formazione RIPARTE da zero o che lo step di prezzo cambia (bucket vecchi con uno step
-// diverso non sarebbero più confrontabili con quelli nuovi).
-function footprintReset(){
+// Ricostruisce footprintByBucket da ZERO, dal log tick grezzo dell'asset a grafico ORA
+// (currentAssetKey), per il TF/step CORRENTI. Chiamata a ogni cambio TF, cambio asset, cambio
+// pip/riga: è l'unico punto che scrive in footprintByBucket. Costo O(tick registrati per
+// quell'asset) — accettabile grazie al tetto FOOTPRINT_MAX_TICKS_PER_ASSET, e comunque chiamata
+// solo sui cambi elencati sopra, mai ad ogni tick (per quello vedi footprintApplyTickToBuckets()).
+function footprintRebuildBucketsForCurrentAsset(){
  footprintByBucket={};
- footprintTickLastPrice=null;
- footprintTickLastSide=1;
+ const log=footprintTickLogByAsset[currentAssetKey];
+ if(!log||!log.length)return;
+ const step=footprintStepForAsset(currentAssetKey);
+ if(!(step>0))return;
+ for(let i=0;i<log.length;i++)footprintApplyTickToBuckets(log[i].price,log[i].t,log[i].side,log[i].weight,step);
 }
-// Registra UN tick di prezzo per l'asset a grafico ora (chiamata sia da applyLiveTick() per
-// Capital.com sia da mt5FeedWs.onmessage per MT5 — vedi entrambe più sotto). Nessun costo se la
-// feature è spenta: esce subito senza toccare nulla.
+// Applica UN tick già classificato (side/weight già noti) al bucket/riga corrispondente di
+// footprintByBucket. Fattorizzata a parte perché usata sia dalla ricostruzione totale sopra sia
+// dall'aggiornamento incrementale ad ogni tick nuovo (footprintRegisterTick(), più sotto) — così i
+// due percorsi non possono mai divergere nella logica di bucketing.
+function footprintApplyTickToBuckets(price,timestamp,side,weight,step){
+ const bucketStart=footprintBucketStart(timestamp);
+ let bucket=footprintByBucket[bucketStart];
+ if(!bucket||bucket.step!==step)bucket=footprintByBucket[bucketStart]={step,rows:{}};
+ const levelKey=Math.round(price/step)*step;
+ const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={buy:0,sell:0});
+ if(side>0)cell.buy+=weight; else cell.sell+=weight;
+}
+// Registra UN tick di prezzo per un asset qualunque (chiamata sia da applyLiveTick() per
+// Capital.com sia da mt5FeedWs.onmessage per MT5, per OGNI asset con streaming attivo — non solo
+// quello a grafico ora, così tornando su un asset già visitato in questa sessione il suo log è già
+// pronto). Nessun costo se la feature è spenta: esce subito senza toccare nulla.
 // `weight`: quanto pesa QUESTO tick nel conteggio buy/sell della sua riga — di default 1 (tick-
 // count puro, l'unica cosa che il feed Capital.com può dare: nessun size nel payload "marketData").
 // Il feed MT5 (mt5_feed_server.py) invece manda già tick.volume nel campo "volume" del messaggio
@@ -16861,29 +17060,104 @@ function footprintReset(){
 // volume reale garantito — per questo il tooltip in UI lo definisce così, non come "volume vero".
 function footprintRegisterTick(price,timestamp,assetKey,weight){
  if(!footprintEnabledNow())return;
+ if(!Number.isFinite(price)||!Number.isFinite(timestamp)||!assetKey)return;
  const w=(Number.isFinite(weight)&&weight>0)?weight:1;
- if(!Number.isFinite(price)||!Number.isFinite(timestamp))return;
- let side=footprintTickLastSide;
- if(Number.isFinite(footprintTickLastPrice)){
-   if(price>footprintTickLastPrice)side=1;
-   else if(price<footprintTickLastPrice)side=-1;
+ const log=footprintTickLogByAsset[assetKey]||(footprintTickLogByAsset[assetKey]=[]);
+ const prev=log.length?log[log.length-1]:null;
+ let side=prev?prev.side:1; // primissimo tick dell'asset: convenzione standard, parte da "buy"
+ if(prev){
+   if(price>prev.price)side=1;
+   else if(price<prev.price)side=-1;
    // price invariato: eredita il lato del tick precedente (tick-rule standard).
  }
- footprintTickLastPrice=price;
- footprintTickLastSide=side;
- const step=footprintStepForAsset(assetKey);
- if(!(step>0))return;
- const bucketStart=footprintBucketStart(timestamp);
- let bucket=footprintByBucket[bucketStart];
- if(!bucket||bucket.step!==step)bucket=footprintByBucket[bucketStart]={step,rows:{}};
- const levelKey=Math.round(price/step)*step;
- const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={buy:0,sell:0});
- if(side>0)cell.buy+=w; else cell.sell+=w;
- // Tiene solo gli ultimi 20 bucket: evita che footprintByBucket cresca senza limite in una
- // sessione Live lasciata aperta per ore (l'unico bucket davvero utile è comunque quello della
- // candela in formazione, i precedenti restano solo per una rapida occhiata indietro).
- const keys=Object.keys(footprintByBucket);
- if(keys.length>20)keys.map(Number).sort((a,b)=>a-b).slice(0,keys.length-20).forEach(k=>delete footprintByBucket[k]);
+ log.push({t:timestamp,price,side,weight:w});
+ if(log.length>FOOTPRINT_MAX_TICKS_PER_ASSET)log.splice(0,log.length-FOOTPRINT_MAX_TICKS_PER_ASSET);
+ // Aggiorna anche i bucket già pronti SOLO se questo tick appartiene all'asset a grafico ora — per
+ // gli asset "in background" il log basta e avanza (verrà ricostruito in blocco quando/se ci si
+ // torna sopra, vedi footprintRebuildBucketsForCurrentAsset() richiamata al cambio asset).
+ if(assetKey===currentAssetKey){
+   const step=footprintStepForAsset(assetKey);
+   if(step>0)footprintApplyTickToBuckets(price,timestamp,side,w,step);
+ }
+}
+// STIMA DA OHLCV per candele SENZA nessun tick reale registrato (storico precedente a questa
+// sessione, asset mai seguito, programma chiuso in quel momento) — SOLO se l'utente ha acceso
+// esplicitamente "Mostra anche stime OHLCV" (default SPENTO): vedi il div.hint accanto al
+// checkbox #footprintShowEstimated per il perché di questa scelta di default. Euristica dichiarata,
+// NON un vero footprint: distribuisce il volume della candela (r.volume, tick-count OHLCV) sulle
+// righe di prezzo tra low e high con un peso triangolare centrato sul CLOSE (dove il "prezzo si è
+// fermato di più", proxy grezzo di dove si è concentrata l'attività), e lo spacca buy/sell in
+// proporzione fissa 60/40 lato chiusura della candela (60% al lato vincente: buy se rialzista,
+// sell se ribassista) — una convenzione arbitraria dichiarata, non una misura. Il chiamante
+// (drawFootprintCandle) marca SEMPRE fp.estimated=true su questo risultato e lo disegna con uno
+// stile visivamente inconfondibile (tratteggio + etichetta "STIMA OHLCV", vedi draw()): non deve
+// MAI poter essere scambiato per una cella con tick reali.
+function footprintEstimateForCandle(r,step){
+ if(!(step>0))return null;
+ const hi=r.high,lo=r.low;
+ if(!Number.isFinite(hi)||!Number.isFinite(lo)||hi<lo)return null;
+ const totalVol=Math.max(0,Number(r.volume)||0);
+ if(totalVol<=0)return null;
+ const up=r.close>=r.open;
+ const buyShare=up?0.6:0.4;
+ const loLevel=Math.round(lo/step)*step, hiLevel=Math.round(hi/step)*step;
+ const nRows=Math.max(1,Math.round((hiLevel-loLevel)/step)+1);
+ // peso triangolare centrato sul close: righe vicine al close pesano di più, righe agli estremi
+ // (high/low) pesano meno — evita di nuovo l'effetto "tutto ai bordi" visto per il LVN.
+ const weights=[]; let wSum=0;
+ for(let i=0;i<nRows;i++){
+   const lv=loLevel+i*step;
+   const distFromClose=Math.abs(lv-r.close);
+   const span=Math.max(step,hiLevel-loLevel);
+   const w=Math.max(0.05,1-distFromClose/span); // mai zero secco: anche i bordi restano visibili, solo attenuati
+   weights.push(w); wSum+=w;
+ }
+ if(wSum<=0)return null;
+ const rows={};
+ for(let i=0;i<nRows;i++){
+   const lv=loLevel+i*step;
+   const rowVol=totalVol*(weights[i]/wSum);
+   if(rowVol<=0)continue;
+   rows[lv]={buy:rowVol*buyShare,sell:rowVol*(1-buyShare)};
+ }
+ return{step,rows,estimated:true};
+}
+// IMBALANCE AUTOMATICO (richiesto esplicitamente): confronto "diagonale" standard dei footprint
+// professionali — al livello di prezzo `lv`, il lato buy (chi ha comprato aggressivamente lì)
+// viene confrontato con il lato sell del livello SUBITO SOTTO (`lv-step`), e viceversa il lato
+// sell di `lv` con il buy del livello SUBITO SOPRA (`lv+step`). Se un lato supera l'altro di
+// `thresholdPct`% (200% = il doppio), quel livello è marcato come imbalance. SOLO su celle con
+// tick reali (mai su fp.estimated — un imbalance calcolato su un numero inventato sarebbe un
+// altro layer di finzione sopra la prima, non lo facciamo). Ritorna un array di "run" (gruppi di
+// livelli consecutivi in imbalance), ciascuno con lo/hi price e un punteggio (numero di livelli
+// coinvolti) usato per scegliere quali disegnare quando ce ne sono più di footprintImbalanceMaxRects.
+function footprintFindImbalanceRuns(fp,thresholdPct){
+ if(!fp||fp.estimated||!fp.rows)return [];
+ const step=fp.step, thr=Math.max(1,(thresholdPct||200)/100);
+ const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>a-b);
+ // Lookup robusto ai residui di floating point: le chiavi di fp.rows sono numeri calcolati con
+ // Math.round(price/step)*step, quindi "lv-step" può non coincidere bit-per-bit con la chiave
+ // reale del livello sotto. Indicizziamo per multiplo intero di step (arrotondato), non per il
+ // valore di prezzo grezzo.
+ const byMultiple=new Map();
+ levels.forEach(lv=>byMultiple.set(Math.round(lv/step),lv));
+ const cellBelow=lv=>{ const k=byMultiple.get(Math.round(lv/step)-1); return k!=null?fp.rows[k]:null; };
+ const cellAbove=lv=>{ const k=byMultiple.get(Math.round(lv/step)+1); return k!=null?fp.rows[k]:null; };
+ const marked=new Set();
+ levels.forEach(lv=>{
+   const cell=fp.rows[lv];
+   const below=cellBelow(lv), above=cellAbove(lv);
+   if(below&&below.sell>0&&cell.buy>=below.sell*thr)marked.add(lv);
+   if(above&&above.buy>0&&cell.sell>=above.buy*thr)marked.add(lv);
+ });
+ if(!marked.size)return [];
+ const sortedMarked=[...marked].sort((a,b)=>a-b);
+ const runs=[]; let cur=null;
+ sortedMarked.forEach(lv=>{
+   if(cur&&Math.abs(lv-cur.hi-step)<step*1e-6){ cur.hi=lv; cur.count++; }
+   else{ cur={lo:lv,hi:lv,count:1}; runs.push(cur); }
+ });
+ return runs.map(r=>({loPrice:r.lo-step/2,hiPrice:r.hi+step/2,count:r.count}));
 }
 let capitalWs=null, capitalWsSubscribed=new Set(), capitalWsPrimaryEpic=null, capitalWsPingTimer=null, capitalWsCorrId=1;
 // FIX bug "l'aggiornamento live si blocca dopo un po'": tiene traccia di quando è arrivato
@@ -17462,8 +17736,9 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
  const shouldLoadAssetDrawings=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso fix
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
- if(currentAssetKey!==asset)footprintReset(); // vedi commento nel loader Capital.com: stesso motivo
+ const __footprintAssetChanged=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso motivo
  currentAssetKey=asset;
+ if(__footprintAssetChanged)footprintRebuildBucketsForCurrentAsset();
  const ownNow=positions.filter(p=>(p.asset||asset)===asset);
  active=ownNow.length?ownNow[ownNow.length-1]:null;
  if(active){ refreshTradeLevelUI(); }
