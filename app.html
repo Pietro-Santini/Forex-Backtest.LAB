@@ -1488,11 +1488,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                <span style="display:inline-flex;align-items:center;gap:5px">Altezza riga <input id="heatmapRowPips" type="number" min="0.1" step="0.1" value="5" style="width:60px">pip</span>
                <span style="display:inline-flex;align-items:center;gap:5px">Opacità max <input id="heatmapOpacity" type="number" min="5" max="100" step="5" value="60" style="width:55px">%</span>
              </div>
-             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
-               <span style="display:inline-flex;align-items:center;gap:5px">Colore bid <input id="heatmapBidColor" type="color" class="colorPick" value="#2f6fed"></span>
-               <span style="display:inline-flex;align-items:center;gap:5px">Colore ask <input id="heatmapAskColor" type="color" class="colorPick" value="#e05b4f"></span>
+             <!-- RICHIESTO ESPLICITAMENTE (riferimento fornito dall'utente: Bookmap): niente più
+                  "blu = lato bid dominante / rosso = lato ask dominante" — sostituito da un'unica
+                  scala di calore (stile Bookmap: blu scuro=poca liquidità → ciano/verde/giallo/
+                  arancione/rosso=molta), applicata al volume TOTALE in attesa in quella cella
+                  (bid+ask), non al lato dominante. Palette fissa (non personalizzabile via colore
+                  bid/ask: con più di 2 colori un semplice color-picker non basta), vedi
+                  HEATMAP_COLOR_STOPS/heatmapColorForValue() più sotto nel file. -->
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px;align-items:center">
+               <span style="font-size:12px;color:#a7b1bf">Scala colore (fissa, stile Bookmap):</span>
+               <span id="heatmapPaletteSwatch" style="display:inline-block;width:160px;height:14px;border-radius:3px;border:1px solid rgba(255,255,255,.15);background:linear-gradient(to right,#0a1a3c,#163a7a,#1f8fd9,#29c2b0,#6fd94a,#f5e042,#f5a623,#e0342b)"></span>
+               <span style="font-size:11px;color:#6b7684">poca</span><span style="font-size:11px;color:#6b7684;margin-left:auto">molta</span>
              </div>
-             <p class="hint" style="margin-top:2px">Ogni cella (colonna = candela, riga = fascia di prezzo alta "Altezza riga" pip) prende il colore del lato con più volume in attesa in quella fascia (bid = blu, ask = rosso) nella media degli snapshot del book osservati durante quella candela; l'opacità è proporzionale alla quantità rispetto alla cella più "piena" in vista ora. Lo storico si accumula da quando lo streaming Live MT5 per questo simbolo è stato aperto in questa sessione — le candele precedenti restano senza heatmap.</p>
+             <p class="hint" style="margin-top:2px">Ogni cella (colonna = candela, riga = fascia di prezzo alta "Altezza riga" pip) prende un colore sulla scala sopra in base al volume TOTALE reale in attesa in quella fascia (bid+ask insieme, media degli snapshot del book osservati durante quella candela) rispetto alla cella più "piena" in vista ora — non più un colore diverso per lato: è la quantità di liquidità che conta, non la direzione, esattamente come una vera heatmap di book. "Opacità max" scala l'intensità complessiva dello strato heatmap sullo sfondo. Lo storico si accumula da quando lo streaming Live MT5 per questo simbolo è stato aperto in questa sessione (fino a 12 ore indietro) — le candele precedenti restano senza heatmap. Resta solo in questa sessione: non è (ancora) salvato su disco/cloud come il footprint.</p>
          </div>
        </div>
      </div>
@@ -2109,7 +2117,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
           openExtraPipWindow()/PIP_SLOT più sotto nello script per l'implementazione completa e il
           meccanismo di sincronizzazione (solo posizioni/conto, MAI la configurazione del
           grafico) tra le finestre via BroadcastChannel. -->
-     <div id="extraPipGroup" class="chartCornerBtn" style="display:flex;padding:0;overflow:hidden;width:auto" title="Apri una finestra PIP aggiuntiva (asset/timeframe/indicatori indipendenti — per chi ha più monitor)">
+     <div id="extraPipGroup" class="chartCornerBtn" style="display:none;padding:0;overflow:hidden;width:auto" title="Apri una finestra PIP aggiuntiva (asset/timeframe/indicatori indipendenti — per chi ha più monitor)">
        <button type="button" class="extraPipSlotBtn" data-pip-slot="2" style="all:unset;cursor:pointer;padding:0 6px;font-size:11px;font-weight:700;display:flex;align-items:center">2</button>
        <button type="button" class="extraPipSlotBtn" data-pip-slot="3" style="all:unset;cursor:pointer;padding:0 6px;font-size:11px;font-weight:700;display:flex;align-items:center;border-left:1px solid rgba(255,255,255,.15)">3</button>
        <button type="button" class="extraPipSlotBtn" data-pip-slot="4" style="all:unset;cursor:pointer;padding:0 6px;font-size:11px;font-weight:700;display:flex;align-items:center;border-left:1px solid rgba(255,255,255,.15)">4</button>
@@ -3567,6 +3575,7 @@ async function syncFullStatusToFirebase(reason,force){
    // a parte che potrebbe in teoria differire.
    const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
    bundle.assetChartViews=assetChartViews; // ultima candela vista, per asset e per sessione
+   bundle.footprintCells=footprintCollectCloudAggregate(); // backup footprint cloud (celle aggregate, non il log tick grezzo — vedi footprintCollectCloudAggregate())
    await window.fxbtCloud.save(bundle);
  }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
@@ -3591,6 +3600,16 @@ window.addEventListener('pagehide', ()=>{
     try{
       const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
       bundle.assetChartViews=assetChartViews;
+      // NIENTE footprintCells qui: la richiesta keepalive ha un tetto di ~64KB di corpo imposto
+      // dal browser (vedi saveSessionKeepalive più sopra nel file) — le celle footprint da sole
+      // possono arrivare fino a FOOTPRINT_CLOUD_MAX_BYTES (400KB), quindi le aggiungeremmo qui
+      // rischiando di far fallire silenziosamente l'INTERA richiesta keepalive, comprese
+      // posizioni/trade/disegni che invece devono sempre arrivare. Il backup footprint cloud lo
+      // manda solo syncFullStatusToFirebase() qui sotto, che usa l'SDK normale (setDoc, nessun
+      // tetto di 64KB, solo il limite di 1MB per documento già rispettato da
+      // footprintCollectCloudAggregate()) — se anche quella scrittura async viene interrotta a
+      // metà dalla chiusura pagina, il prossimo avvio la ritenta comunque: IndexedDB locale
+      // (footprintTicks) resta comunque la copia vera e non dipende mai da questo invio cloud.
       window.fxbtCloud.saveKeepalive(bundle);
     }catch(e){}
   }
@@ -8636,64 +8655,63 @@ function draw(){
  // Heatmap di liquidità (Order Book MT5 reale): livello di sfondo, disegnato PRIMA delle candele
  // (e prima delle zone zero-print, che devono restare leggibili sopra) — vedi
  // connectMt5OrderBook()/orderBookHistoryByAsset e heatmapEnabledNow()/heatmapStepForAsset() più
- // sopra nel file. Colora ogni cella [candela, fascia di prezzo] in base alla liquidità media
- // bid/ask osservata negli snapshot REALI del book caduti dentro la finestra temporale di quella
- // candela — una candela senza snapshot in quella finestra (storico prima dell'apertura dello
- // streaming MT5 dell'order book, o simbolo senza Market Depth) resta semplicemente senza
- // heatmap: nessun dato stimato o inventato.
+ // sopra nel file. Colora ogni cella [candela, fascia di prezzo] su una scala di calore continua
+ // (vedi heatmapColorForValue()/HEATMAP_COLOR_STOPS, rif. Bookmap fornito dall'utente) in base al
+ // volume TOTALE bid+ask osservato negli snapshot REALI del book caduti dentro la finestra
+ // temporale di quella candela — una candela senza snapshot in quella finestra (storico prima
+ // dell'apertura dello streaming MT5 dell'order book, o simbolo senza Market Depth) resta
+ // semplicemente senza heatmap: nessun dato stimato o inventato.
  if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
-   const _hmHist=orderBookHistoryByAsset[mt5ActiveSymbol];
-   if(_hmHist&&_hmHist.length){
-     const _hmRowSize=heatmapStepForAsset(currentAssetKey);
-     if(_hmRowSize>0){
-       const _hmTfMs=(currentTF||1)*60000;
-       const _hmRowLoBase=Math.floor(lo/_hmRowSize)*_hmRowSize;
-       const _hmNRows=Math.max(1,Math.min(2000,Math.ceil((hi-_hmRowLoBase)/_hmRowSize)));
-       const _hmCellBid=new Array(data.length), _hmCellAsk=new Array(data.length);
-       let _hmMaxCell=0, _hmCursor=0; // _hmHist è cronologico crescente: un solo passaggio avanti, mai riavvolto
+   // Legge dalla cache a bucket già aggiornata in incrementale (vedi heatmapCellsForAssetNow() più
+   // sopra nel file): nessuna scansione dello storico grezzo qui, a differenza di prima — il costo
+   // per frame è ora proporzionale alle sole candele in vista con dati reali, non all'intero log.
+   const _hmCells=heatmapCellsForAssetNow(mt5ActiveSymbol);
+   const _hmMeta=heatmapCellsMeta[mt5ActiveSymbol];
+   const _hmStep=_hmMeta&&_hmMeta.step;
+   if(_hmStep>0){
+     const _hmBucketForIdx=new Array(data.length);
+     let _hmMaxCell=0;
+     for(let i=0;i<data.length;i++){
+       const tStart=parseDateTime(data[i].date);
+       if(!Number.isFinite(tStart)){ _hmBucketForIdx[i]=null; continue; }
+       const bucket=_hmCells[footprintBucketStart(tStart)];
+       _hmBucketForIdx[i]=(bucket&&bucket.cnt>0)?bucket:null;
+       if(bucket&&bucket.cnt>0){
+         const cnt=bucket.cnt;
+         // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
+         // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
+         // quantità di liquidità che conta per le strisce, non la direzione.
+         for(const k in bucket.rows){ const c=bucket.rows[k]; _hmMaxCell=Math.max(_hmMaxCell,(c.bid+c.ask)/cnt); }
+       }
+     }
+     if(_hmMaxCell>0){
+       ctx.save();
+       const _hmBaseOp=heatmapOpacityNow();
        for(let i=0;i<data.length;i++){
-         const r=data[i];
-         const tStart=parseDateTime(r.date);
-         if(!Number.isFinite(tStart)){ _hmCellBid[i]=null; _hmCellAsk[i]=null; continue; }
-         const tEnd=tStart+_hmTfMs;
-         while(_hmCursor<_hmHist.length&&_hmHist[_hmCursor].time_ms<tStart)_hmCursor++;
-         let j=_hmCursor, cnt=0;
-         const bidRows=new Array(_hmNRows).fill(0), askRows=new Array(_hmNRows).fill(0);
-         while(j<_hmHist.length&&_hmHist[j].time_ms<tEnd){
-           const snap=_hmHist[j];
-           (snap.bids||[]).forEach(e=>{ const rIdx=Math.floor((e.price-_hmRowLoBase)/_hmRowSize); if(rIdx>=0&&rIdx<_hmNRows&&Number.isFinite(e.volume))bidRows[rIdx]+=e.volume; });
-           (snap.asks||[]).forEach(e=>{ const rIdx=Math.floor((e.price-_hmRowLoBase)/_hmRowSize); if(rIdx>=0&&rIdx<_hmNRows&&Number.isFinite(e.volume))askRows[rIdx]+=e.volume; });
-           cnt++; j++;
+         const bucket=_hmBucketForIdx[i];
+         if(!bucket)continue;
+         const cnt=bucket.cnt;
+         const xxL=x(i)-bw/2, cellW=Math.max(1,bw);
+         for(const levelKey in bucket.rows){
+           const rowLoPrice=Number(levelKey), rowHiPrice=rowLoPrice+_hmStep;
+           const yTop=y(rowHiPrice), yBot=y(rowLoPrice);
+           if(yBot<pad.t||yTop>h-pad.b)continue;
+           const cell=bucket.rows[levelKey];
+           const val=(cell.bid+cell.ask)/cnt;
+           if(val<=0)continue;
+           // Compressione percettiva (radice quadrata): senza, un solo ordine enorme (iceberg,
+           // livello istituzionale) normalizzerebbe TUTTO il resto quasi a zero, appiattendo la
+           // heatmap a un'unica macchia scura — con la radice le fasce medie restano visibili,
+           // come nelle bande a più colori dell'immagine di riferimento. Non altera il dato reale,
+           // solo come viene mappato sulla scala colore.
+           const t=Math.sqrt(Math.min(1,val/_hmMaxCell));
+           ctx.fillStyle=heatmapColorForValue(t);
+           ctx.globalAlpha=_hmBaseOp;
+           ctx.fillRect(xxL,yTop,cellW,Math.max(1,yBot-yTop));
          }
-         if(cnt>0){
-           for(let rI=0;rI<_hmNRows;rI++){ bidRows[rI]/=cnt; askRows[rI]/=cnt; _hmMaxCell=Math.max(_hmMaxCell,bidRows[rI],askRows[rI]); }
-           _hmCellBid[i]=bidRows; _hmCellAsk[i]=askRows;
-         }else{ _hmCellBid[i]=null; _hmCellAsk[i]=null; }
        }
-       if(_hmMaxCell>0){
-         ctx.save();
-         const _hmBaseOp=heatmapOpacityNow();
-         const _hmBidCol=$('heatmapBidColor')?.value||'#2f6fed', _hmAskCol=$('heatmapAskColor')?.value||'#e05b4f';
-         for(let i=0;i<data.length;i++){
-           const bidRows=_hmCellBid[i], askRows=_hmCellAsk[i];
-           if(!bidRows)continue;
-           const xxL=x(i)-bw/2, cellW=Math.max(1,bw);
-           for(let rI=0;rI<_hmNRows;rI++){
-             const rowLoPrice=_hmRowLoBase+rI*_hmRowSize, rowHiPrice=rowLoPrice+_hmRowSize;
-             const yTop=y(rowHiPrice), yBot=y(rowLoPrice);
-             if(yBot<pad.t||yTop>h-pad.b)continue;
-             const bidV=bidRows[rI], askV=askRows[rI];
-             if(bidV<=0&&askV<=0)continue;
-             const dominant=bidV>=askV?_hmBidCol:_hmAskCol;
-             const val=Math.max(bidV,askV);
-             const alpha=Math.min(1,val/_hmMaxCell)*_hmBaseOp;
-             if(alpha<=0.01)continue;
-             ctx.fillStyle=hexToRgba(dominant,alpha);
-             ctx.fillRect(xxL,yTop,cellW,Math.max(1,yBot-yTop));
-           }
-         }
-         ctx.restore();
-       }
+       ctx.globalAlpha=1;
+       ctx.restore();
      }
    }
  }
@@ -13090,7 +13108,13 @@ let floatingWin=null, floatingHomeParent=null, floatingHomeNext=null;
 // poterla riportare in primo piano/richiudere dal pulsantino corrispondente.
 let extraPipWindows={};
 function updateExtraPipButtonsUI(){
- document.querySelectorAll('.extraPipSlotBtn').forEach(btn=>{
+ // I pulsanti 2/3/4 vivono dentro .chartWrap: quando il PIP singolo è attivo si sono spostati
+ // per intero in floatingDoc (vedi il commento su appendChild più sopra nel file) — qui li si
+ // cerca in ENTRAMBI i documenti, esattamente come fa $(), altrimenti dopo l'attivazione del PIP
+ // questa funzione non troverebbe più nulla nella pagina principale (ormai vuota di questi
+ // pulsanti) e l'evidenziazione "aperta/chiusa" smetterebbe di aggiornarsi.
+ const root=(floatingChartActive()&&floatingDoc)?floatingDoc:document;
+ root.querySelectorAll('.extraPipSlotBtn').forEach(btn=>{
    const slot=Number(btn.dataset.pipSlot);
    const win=extraPipWindows[slot];
    const openNow=!!(win&&!win.closed);
@@ -13176,6 +13200,14 @@ function updateFloatCornerButtons(){
  if(pip)pip.style.display=active?'none':'flex';
  if(ret)ret.style.display=active?'flex':'none';
  if(fsMain)fsMain.style.display=active?'none':'';
+ // RICHIESTO ESPLICITAMENTE: i pulsantini 2/3/4 (finestre PIP aggiuntive) si vedono SOLO dopo
+ // aver attivato il PIP singolo (floatChartBtn) — restano nascosti nella pagina normale. Dato che
+ // vivono dentro .chartWrap, quando il PIP si attiva si spostano insieme al resto del grafico
+ // nella finestra separata: da lì si aprono le finestre 2/3/4, non dalla pagina principale.
+ if(PIP_SLOT===0){
+   const grp=$('extraPipGroup');
+   if(grp)grp.style.display=active?'flex':'none';
+ }
 }
 function restoreChartToMainPage(){
  const wrap=document.querySelector('.chartWrap')||(floatingDoc&&floatingDoc.querySelector('.chartWrap'));
@@ -17778,6 +17810,64 @@ async function saveFootprintTicksNow(){
  const ok=await idbPut('footprintTicks',footprintTickLogByAsset);
  if(!ok)footprintTicksDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
 }
+// BACKUP CLOUD DEL FOOTPRINT (richiesto esplicitamente, come secondo livello oltre a IndexedDB
+// locale sopra): NON mandiamo su Firestore il log tick grezzo (footprintTickLogByAsset) — un solo
+// asset attivo può da solo superare il limite di 1MB per documento di Firestore, condiviso con
+// conto/sessione/Trade Journal (users/{uid}/data/session, vedi syncFullStatusToFirebase()). Quello
+// che mandiamo sono le CELLE già aggregate (buy/sell per riga di prezzo per candela — esattamente
+// "le caselline" che l'utente rivede, non il tick-by-tick), e solo le ultime
+// FOOTPRINT_CLOUD_MAX_BUCKETS_PER_ASSET candele per asset, con un tetto di sicurezza sulla
+// dimensione totale del pacchetto. È un backup di riserva per un dispositivo/browser nuovo (dove
+// IndexedDB locale è vuoto): il log tick grezzo locale resta sempre la copia "vera" e ha sempre
+// precedenza quando c'è.
+const FOOTPRINT_CLOUD_MAX_BUCKETS_PER_ASSET=200;
+const FOOTPRINT_CLOUD_MAX_BYTES=400*1024;
+let footprintCloudCellsByAsset={}; // fallback da cloud, usato SOLO per asset senza log tick locale — vedi footprintRebuildBucketsForCurrentAsset()
+function footprintBuildBucketsFromLog(log,step){
+ const buckets={};
+ for(let i=0;i<log.length;i++){
+   const t=log[i];
+   const bucketStart=footprintBucketStart(t.t);
+   let bucket=buckets[bucketStart];
+   if(!bucket)bucket=buckets[bucketStart]={step,rows:{}};
+   const levelKey=Math.round(t.price/step)*step;
+   const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={buy:0,sell:0});
+   if(t.side>0)cell.buy+=t.weight; else cell.sell+=t.weight;
+ }
+ return buckets;
+}
+function footprintCollectCloudAggregate(){
+ const out={};
+ const assets=Object.keys(footprintTickLogByAsset);
+ for(const assetKey of assets){
+   const log=footprintTickLogByAsset[assetKey];
+   if(!log||!log.length)continue;
+   const step=footprintStepForAsset(assetKey);
+   if(!(step>0))continue;
+   const buckets=footprintBuildBucketsFromLog(log,step);
+   const starts=Object.keys(buckets).map(Number).sort((a,b)=>a-b);
+   const kept=starts.slice(-FOOTPRINT_CLOUD_MAX_BUCKETS_PER_ASSET);
+   const trimmed={};
+   for(const s of kept)trimmed[s]=buckets[s];
+   out[assetKey]=trimmed;
+ }
+ // Rete di sicurezza sulla dimensione totale: se anche dopo il tetto per-asset il pacchetto resta
+ // troppo grande (tanti asset diversi seguiti nella stessa sessione), si scartano interi asset,
+ // partendo dal meno recente (ultimo bucket più vecchio), finché non rientra nel budget — mai un
+ // singolo asset troncato a metà.
+ let json=JSON.stringify(out);
+ if(json.length<=FOOTPRINT_CLOUD_MAX_BYTES)return out;
+ const byLastSeen=Object.keys(out).map(k=>{
+   const starts=Object.keys(out[k]).map(Number);
+   return {k,last:starts.length?Math.max(...starts):0};
+ }).sort((a,b)=>a.last-b.last);
+ for(const {k} of byLastSeen){
+   delete out[k];
+   json=JSON.stringify(out);
+   if(json.length<=FOOTPRINT_CLOUD_MAX_BYTES)break;
+ }
+ return out;
+}
 // footprintByBucket: SEMPRE relativo all'asset/TF/step correnti, ricostruito da
 // footprintRebuildBucketsForCurrentAsset() — non toccarlo direttamente altrove.
 // { [bucketStartMs]: { step, rows:{ [livello di prezzo]: {buy,sell} } } }
@@ -17825,6 +17915,37 @@ function heatmapStepForAsset(assetKey){
  const pip=pipSizeForAsset(assetKey);
  return Number.isFinite(pip)&&pip>0?pip*heatmapRowPipsNow():null;
 }
+// SCALA DI COLORE HEATMAP (richiesto esplicitamente, riferimento Bookmap fornito dall'utente):
+// una sola scala "di calore" continua — blu scuro (poca liquidità) → blu → ciano → verde → giallo
+// → arancione → rosso (molta liquidità) — invece del vecchio schema "blu = bid dominante, rosso =
+// ask dominante". Palette fissa, non un semplice lerp a 2 colori (con 2 soli colori non si ottiene
+// l'effetto "arcobaleno a bande" delle strisce nell'immagine di riferimento): interpola linearmente
+// fra gli stop più vicini, negli stessi punti mostrati nell'anteprima statica in Impostazioni →
+// Footprint (#heatmapPaletteSwatch).
+const HEATMAP_COLOR_STOPS=[
+ [0.00,[10,26,60]],   // blu scuro (quasi lo sfondo del grafico)
+ [0.15,[22,58,122]],  // blu
+ [0.32,[31,143,217]], // blu chiaro
+ [0.48,[41,194,176]], // ciano/verde acqua
+ [0.62,[111,217,74]], // verde
+ [0.75,[245,224,66]], // giallo
+ [0.86,[245,166,35]], // arancione
+ [1.00,[224,52,43]],  // rosso
+];
+function heatmapColorForValue(t){
+ const v=Math.max(0,Math.min(1,t));
+ const stops=HEATMAP_COLOR_STOPS;
+ let lo=stops[0],hi=stops[stops.length-1];
+ for(let i=0;i<stops.length-1;i++){
+   if(v>=stops[i][0]&&v<=stops[i+1][0]){ lo=stops[i]; hi=stops[i+1]; break; }
+ }
+ const span=hi[0]-lo[0];
+ const f=span>0?(v-lo[0])/span:0;
+ const r=Math.round(lo[1][0]+(hi[1][0]-lo[1][0])*f);
+ const g=Math.round(lo[1][1]+(hi[1][1]-lo[1][1])*f);
+ const b=Math.round(lo[1][2]+(hi[1][2]-lo[1][2])*f);
+ return 'rgb('+r+','+g+','+b+')';
+}
 function footprintBucketStart(timestamp){
  const bucketMs=(currentTF||1)*60000;
  return Math.floor(timestamp/bucketMs)*bucketMs;
@@ -17837,10 +17958,20 @@ function footprintBucketStart(timestamp){
 function footprintRebuildBucketsForCurrentAsset(){
  footprintByBucket={};
  const log=footprintTickLogByAsset[currentAssetKey];
- if(!log||!log.length)return;
- const step=footprintStepForAsset(currentAssetKey);
- if(!(step>0))return;
- for(let i=0;i<log.length;i++)footprintApplyTickToBuckets(log[i].price,log[i].t,log[i].side,log[i].weight,step);
+ if(log&&log.length){
+   const step=footprintStepForAsset(currentAssetKey);
+   if(!(step>0))return;
+   for(let i=0;i<log.length;i++)footprintApplyTickToBuckets(log[i].price,log[i].t,log[i].side,log[i].weight,step);
+   return;
+ }
+ // Nessun log tick locale per questo asset (dispositivo/browser nuovo, IndexedDB vuoto): se il
+ // backup cloud aveva celle già aggregate per questo asset, le usiamo come fallback di sola
+ // lettura — meglio delle candele vuote, anche se copre solo le ultime
+ // FOOTPRINT_CLOUD_MAX_BUCKETS_PER_ASSET candele (non l'intero storico che aveva il log locale
+ // sull'altro dispositivo). Appena arriva un tick vero per questo asset, footprintRegisterTick()
+ // inizia un log locale a tutti gli effetti e questo fallback smette di essere usato.
+ const cloudCells=footprintCloudCellsByAsset[currentAssetKey];
+ if(cloudCells)footprintByBucket=cloudCells;
 }
 // Applica UN tick già classificato (side/weight già noti) al bucket/riga corrispondente di
 // footprintByBucket. Fattorizzata a parte perché usata sia dalla ricostruzione totale sopra sia
@@ -18504,9 +18635,69 @@ let mt5FeedWs=null, mt5FeedWsSymbol=null, mt5FeedWsReconnectTimer=null;
 // qui semplicemente non arriva/aggiorna nulla per quell'asset (nessun order book disegnato).
 let mt5OrderBookWs=null, mt5OrderBookWsSymbol=null, mt5OrderBookWsReconnectTimer=null;
 let latestOrderBookByAsset={};
-let orderBookHistoryByAsset={}; // { assetKey: [ {time_ms,bids,asks}, ... ] } — capped, vedi ORDERBOOK_HISTORY_MAX_PER_ASSET
-const ORDERBOOK_HISTORY_MAX_PER_ASSET=2000;
+let orderBookHistoryByAsset={}; // { assetKey: [ {time_ms,bids,asks}, ... ] } — capped per TEMPO, vedi HEATMAP_HISTORY_MAX_HOURS/HEATMAP_MIN_SNAPSHOT_GAP_MS
 let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha già risposto "niente DOM" in questa sessione (evita retry infiniti/log spam)
+// HEATMAP DI LIQUIDITÀ — CACHE A BUCKET PER CANDELA (richiesto esplicitamente: "lasciata come
+// impronta mano a mano che si sviluppa il grafico", stile Bookmap, non solo lo stato attuale del
+// book). Prima la heatmap ricalcolava OGNI cella di OGNI candela in vista, per OGNI frame di
+// disegno, scandendo l'intero storico grezzo (tappato a un numero fisso di snapshot, ~2000) — con
+// un feed veloce quel tetto copriva solo pochi minuti prima di scartare i dati più vecchi, e il
+// ricalcolo ad ogni frame diventava via via più pesante alzando il tetto. Ora, stessa architettura
+// già usata per il footprint (footprintTickLogByAsset/footprintByBucket): orderBookHistoryByAsset
+// resta il log grezzo REALE (mai stimato) e permette di ricostruire da zero quando cambiano TF o
+// "Altezza riga" heatmap, ma le celle già aggregate per candela (heatmapCellsByAsset) vengono
+// aggiornate UNA VOLTA per ogni nuovo snapshot in arrivo (non ricalcolate ad ogni frame), e restano
+// valide finché TF/step non cambiano — così lo storico può durare l'intera sessione senza appesantire
+// il disegno.
+let heatmapCellsByAsset={};   // assetKey -> { bucketStartMs: { step, cnt, rows:{ levelKey:{bid,ask} } } }
+let heatmapCellsMeta={};      // assetKey -> { tf, step } con cui heatmapCellsByAsset[assetKey] è stata costruita — se non combaciano più, si ricostruisce da orderBookHistoryByAsset
+const HEATMAP_HISTORY_MAX_HOURS=12; // oltre, gli snapshot grezzi più vecchi vengono scartati (per TEMPO, non per conteggio: una sessione intera, non pochi minuti)
+const HEATMAP_MIN_SNAPSHOT_GAP_MS=250; // throttle in ingresso: un aggiornamento del book più frequente di così non aggiunge nulla di utile a una heatmap per-candela, e gonfierebbe solo il log grezzo
+function heatmapStepForCurrentSettings(){ return heatmapStepForAsset(currentAssetKey); }
+// Applica UN solo snapshot già arrivato (bid/ask REALI, mai stimati) alle celle aggregate per
+// candela — usata sia dall'aggiornamento incrementale ad ogni nuovo snapshot sia dalla
+// ricostruzione totale, così i due percorsi non possono mai divergere (stesso schema di
+// footprintApplyTickToBuckets/footprintRebuildBucketsForCurrentAsset).
+function heatmapApplySnapshotToBuckets(cellsForAsset,step,snap){
+ const bucketStart=footprintBucketStart(snap.time_ms);
+ let bucket=cellsForAsset[bucketStart];
+ if(!bucket||bucket.step!==step)bucket=cellsForAsset[bucketStart]={step,cnt:0,rows:{}};
+ bucket.cnt++;
+ (snap.bids||[]).forEach(e=>{
+   if(!Number.isFinite(e.price)||!Number.isFinite(e.volume))return;
+   const levelKey=Math.round(e.price/step)*step;
+   const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={bid:0,ask:0});
+   cell.bid+=e.volume;
+ });
+ (snap.asks||[]).forEach(e=>{
+   if(!Number.isFinite(e.price)||!Number.isFinite(e.volume))return;
+   const levelKey=Math.round(e.price/step)*step;
+   const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={bid:0,ask:0});
+   cell.ask+=e.volume;
+ });
+}
+// Ricostruisce heatmapCellsByAsset[assetKey] da ZERO dal log grezzo, per il TF/step CORRENTI —
+// chiamata solo quando i parametri sono cambiati (cambio TF, cambio "Altezza riga" heatmap, primo
+// utilizzo per questo asset), mai ad ogni frame.
+function heatmapRebuildCellsForAsset(assetKey){
+ const step=heatmapStepForCurrentSettings();
+ const cells={};
+ if(step>0){
+   const hist=orderBookHistoryByAsset[assetKey];
+   if(hist&&hist.length)for(let i=0;i<hist.length;i++)heatmapApplySnapshotToBuckets(cells,step,hist[i]);
+ }
+ heatmapCellsByAsset[assetKey]=cells;
+ heatmapCellsMeta[assetKey]={tf:currentTF,step};
+ return cells;
+}
+// Punto unico da cui draw() legge le celle: ricostruisce solo se TF/step sono cambiati dall'ultima
+// volta, altrimenti riusa la cache già tenuta aggiornata in incrementale da connectMt5OrderBook().
+function heatmapCellsForAssetNow(assetKey){
+ const step=heatmapStepForCurrentSettings();
+ const meta=heatmapCellsMeta[assetKey];
+ if(meta&&meta.tf===currentTF&&meta.step===step)return heatmapCellsByAsset[assetKey]||{};
+ return heatmapRebuildCellsForAsset(assetKey);
+}
 // BUG RISOLTO ("si blocca all'ultima candela e non aggiorna più", ricomparso IDENTICO dopo i due
 // fix precedenti — perché la causa vera è questa, non quelle): mt5FeedWsSymbol è null ogni volta
 // che il WS non è connesso IN QUESTO MOMENTO (disconnectMt5Stream lo azzera sempre, anche durante
@@ -18916,11 +19107,31 @@ function connectMt5OrderBook(symbol){
    if(msg.heartbeat)return;
    if(!msg.bids && !msg.asks)return;
    const snap={time_ms:msg.time_ms||Date.now(),bids:Array.isArray(msg.bids)?msg.bids:[],asks:Array.isArray(msg.asks)?msg.asks:[]};
-   latestOrderBookByAsset[symbol]=snap;
+   latestOrderBookByAsset[symbol]=snap; // SEMPRE aggiornato, non soggetto al throttle sotto: l'Order Book Profile disegna lo stato "adesso", che deve restare al tick più recente
    let hist=orderBookHistoryByAsset[symbol];
    if(!hist){hist=[];orderBookHistoryByAsset[symbol]=hist;}
-   hist.push(snap);
-   if(hist.length>ORDERBOOK_HISTORY_MAX_PER_ASSET)hist.splice(0,hist.length-ORDERBOOK_HISTORY_MAX_PER_ASSET);
+   // Throttle in ingresso sullo STORICO (mai su latestOrderBookByAsset sopra): un feed molto
+   // rapido non aggiunge precisione utile a una heatmap per-candela, solo peso — vedi
+   // HEATMAP_MIN_SNAPSHOT_GAP_MS più sopra nel file.
+   const _lastHist=hist.length?hist[hist.length-1]:null;
+   if(!_lastHist||snap.time_ms-_lastHist.time_ms>=HEATMAP_MIN_SNAPSHOT_GAP_MS){
+     hist.push(snap);
+     // Tetto per TEMPO (non per conteggio): scarta solo gli snapshot più vecchi della finestra di
+     // retention, così lo storico copre l'intera sessione invece di poche migliaia di update.
+     const _histCutoff=snap.time_ms-HEATMAP_HISTORY_MAX_HOURS*3600000;
+     let _dropTo=0;
+     while(_dropTo<hist.length&&hist[_dropTo].time_ms<_histCutoff)_dropTo++;
+     if(_dropTo>0)hist.splice(0,_dropTo);
+     // Aggiornamento incrementale della cache a bucket (vedi heatmapApplySnapshotToBuckets più
+     // sopra): solo se i parametri con cui la cache di QUESTO asset è stata costruita combaciano
+     // ancora con quelli correnti — altrimenti la prossima draw() la ricostruirà comunque da zero
+     // da questo stesso storico grezzo (heatmapCellsForAssetNow()), niente perso.
+     const _hmMeta=heatmapCellsMeta[symbol];
+     if(_hmMeta&&_hmMeta.tf===currentTF&&_hmMeta.step===heatmapStepForCurrentSettings()){
+       if(!heatmapCellsByAsset[symbol])heatmapCellsByAsset[symbol]={};
+       heatmapApplySnapshotToBuckets(heatmapCellsByAsset[symbol],_hmMeta.step,snap);
+     }
+   }
    // Ridisegna solo se l'asset col DOM aggiornato è quello a grafico ora (evita ridisegni inutili
    // per un simbolo in background) — stesso schema difensivo usato per applyLiveTick/footprint.
    if(typeof mt5ActiveSymbol!=='undefined' && mt5ActiveSymbol===symbol)draw();
@@ -20138,17 +20349,39 @@ $('unlockFilesDismissBtn')?.addEventListener('click',()=>{
 // valore di partenza ragionevole nel frattempo (sovrascritto appena arriva la prima risposta).
 async function initExtraPipWindow(){
  document.title='Forex Backtest Lab — PIP '+PIP_SLOT;
- // Banderuola fissa in alto, sempre visibile: questa finestra non salva nulla della propria
+ // RICHIESTO ESPLICITAMENTE: questa finestra deve mostrare SOLO il grafico con gli strumenti a
+ // sinistra — esattamente come il PIP singolo (floatChartBtn), non tutta la pagina (pannello
+ // conto, libreria CSV, giornale trade, ecc.). Qui è una pagina indipendente vera (non un nodo
+ // spostato da un'altra finestra), quindi si ottiene lo stesso risultato visivo con lo stesso
+ // meccanismo già usato dal PIP singolo: si spostano il toolbar dei disegni e "Torna all'ultima
+ // candela" dentro #chartFsSidebar (che è già dentro .chartWrap, vedi moveDrawToolbarIntoSidebar/
+ // moveResetViewIntoSidebar più sopra nel file — qui senza indicare targetDoc, usano questo
+ // stesso document di default), poi si nasconde con un foglio di stile tutto ciò che non è
+ // .chartWrap o un popup di configurazione (fbModalOverlay) — mai la sidebar dei disegni, mai i
+ // pulsanti nell'angolo del grafico (2/3/4 comprese), che vivono già dentro .chartWrap.
+ const kioskStyle=document.createElement('style');
+ kioskStyle.textContent=`
+   body.fbPipChartOnly{padding:0!important;margin:0!important;overflow:hidden}
+   body.fbPipChartOnly>*:not(.chartWrap):not(.fbModalOverlay):not(#fbPipChartOnlyBadge){display:none!important}
+   body.fbPipChartOnly .chartWrap{height:calc(100vh - 24px)!important;margin-top:24px}
+ `;
+ document.head.appendChild(kioskStyle);
+ moveDrawToolbarIntoSidebar();
+ moveResetViewIntoSidebar();
+ document.body.classList.add('fbPipChartOnly');
+ // Banderuola fissa in alto, sottile: questa finestra non salva nulla della propria
  // configurazione (asset/timeframe/indicatori/disegni) — chiuderla la azzera, per scelta
- // esplicita discussa con l'utente prima di costruire questa funzionalità.
+ // esplicita discussa con l'utente prima di costruire questa funzionalità. Esclusa dalla regola
+ // "nascondi tutto tranne .chartWrap" qui sopra tramite il suo id.
  const badge=document.createElement('div');
- badge.textContent='🪟 Finestra PIP '+PIP_SLOT+' — vista live indipendente (asset/timeframe/indicatori tutti tuoi in questa finestra). Il conto è lo stesso di tutte le altre finestre aperte, sempre sincronizzato. Questa finestra NON salva la propria configurazione: chiudendola riparte vuota.';
- badge.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:#1a2b3d;color:#8fd3ff;font-size:11px;padding:5px 12px;text-align:center;border-bottom:1px solid #2b3541';
+ badge.id='fbPipChartOnlyBadge';
+ badge.textContent='🪟 PIP '+PIP_SLOT+' — solo grafico, non salva la propria configurazione. Il conto è condiviso con le altre finestre.';
+ badge.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:#1a2b3d;color:#8fd3ff;font-size:11px;padding:3px 12px;text-align:center;border-bottom:1px solid #2b3541;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
  document.body.prepend(badge);
- document.body.style.paddingTop=(document.body.style.paddingTop?parseInt(document.body.style.paddingTop):0)+badge.offsetHeight+'px';
  positions=[]; pendingOrders=[]; trades=[]; equity=[num($('capital').value)||10000]; active=null;
  armDrawingsPersistence(); // sicuro anche qui: ogni scrittura su disco è già bloccata da PIP_SLOT dentro persistDrawingsBackupNow()/scheduleSave()
  $('status').textContent='Finestra PIP '+PIP_SLOT+': scegli un asset per iniziare. Il conto si sincronizza da solo appena arriva dalla finestra principale.';
+ window.addEventListener('resize',draw);
 }
 (async function initSession(){
  // FINESTRE PIP AGGIUNTIVE (PIP_SLOT>0, vedi il commento completo più sopra nel file): NESSUN
@@ -20218,6 +20451,17 @@ async function initExtraPipWindow(){
        if(cloudState && cloudState.version===SESSION_VERSION){
          savedState=cloudState;
          if(cloudState.assetChartViews) cloudAssetChartViews=cloudState.assetChartViews;
+         // Fallback footprint da cloud (celle già aggregate, non il log tick grezzo — vedi
+         // footprintCollectCloudAggregate()): usato SOLO per gli asset senza log tick locale in
+         // IndexedDB (dispositivo/browser nuovo). Per gli asset che invece hanno già un log
+         // locale, quello resta sempre la copia "vera" — footprintRebuildBucketsForCurrentAsset()
+         // preferisce il log locale quando c'è.
+         if(cloudState.footprintCells && typeof cloudState.footprintCells==='object'){
+           for(const assetKey in cloudState.footprintCells){
+             if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
+               footprintCloudCellsByAsset[assetKey]=cloudState.footprintCells[assetKey];
+           }
+         }
        }
      }
    }catch(e){ console.warn('Controllo sessione cloud saltato:',e); }
