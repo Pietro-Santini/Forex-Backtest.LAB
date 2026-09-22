@@ -3583,11 +3583,12 @@ function broadcastAssetAnnounce(){
  // sincronizzata in tempo reale, vedi i commenti più sotto sul resto del protocollo).
  try{ tradingChannel.postMessage({type:'asset_announce',slot:PIP_SLOT,asset:currentAssetKey||null,storico:!liveModeActive,masterTime:Number.isFinite(masterTime)?masterTime:null}); }catch(e){}
 }
-// RICHIESTO ESPLICITAMENTE: "quando siamo in modalità storico e selezioniamo nella pagina madre
-// l'asset, di conseguenza verrà aperto anche nelle altre pagine PIP. È un collegamento diretto."
-// — SOLO in questo verso (pagina madre, slot 0, → finestre PIP 2/3/4, PIP_SLOT>0), mai al
-// contrario: cambiare asset in una finestra PIP resta una scelta libera di quella finestra e non
-// tocca le altre. Il timeframe NON viene mai toccato da questa funzione (richiesto esplicitamente
+// RICHIESTO ESPLICITAMENTE (AGGIORNATO — prima era solo madre→figlie, ora è SIMMETRICO): "quando
+// vado a selezionare un asset su una delle pagine, che sia la pagina madre PIP, la 2, la 3 o la
+// 4, quell'asset viene proiettato anche su TUTTE le altre pagine indifferentemente da quale
+// pagina sto selezionando, con l'ultima posizione caricata spalmata su tutte" — QUALUNQUE finestra
+// (madre o PIP 2/3/4) selezioni un asset lo propaga a TUTTE le altre, non solo dalla madre in giù.
+// Il timeframe NON viene mai toccato da questa funzione (richiesto esplicitamente
 // "su una pagina posso mettere un time frame, su un'altra pagina ne posso mettere un altro"):
 // autoLoadAssetLibrary() più sotto nel file applica da sola, per conto proprio, la vista salvata
 // per QUESTO asset in QUESTA finestra (o parte da timeframe 1 se mai visitato qui) — esattamente
@@ -3686,18 +3687,36 @@ function broadcastChartTimeSync(masterTimeVal){
  if(!tradingChannel)return;
  try{ tradingChannel.postMessage({type:'chart_time_sync',slot:PIP_SLOT,storico:!liveModeActive,masterTime:masterTimeVal}); }catch(e){}
 }
+// RICHIESTO ESPLICITAMENTE ("perfezioniamo il sync per non avere troppo ritardo, un boost per il
+// caricamento dati quando premo avanti/indietro/play"): durante il PLAY automatico forward() (vedi
+// più sotto nel file) chiama broadcastChartTimeSync() ad ogni singola candela, anche a intervalli
+// di soli 100ms (velocità 10x) — se OGNI finestra ricostruisse subito le proprie righe
+// (rebuildRows(), potenzialmente pesante su dataset lunghi) ad OGNI singolo messaggio ricevuto, le
+// finestre PIP aggiuntive finivano per accumulare ricostruzioni in coda più veloce di quanto
+// riuscissero a smaltirle, percepito come ritardo crescente. Fix: le applicazioni ravvicinate
+// (entro REMOTE_CHART_TIME_SYNC_COALESCE_MS) vengono raccolte e se ne applica SOLO l'ultima —
+// stesso risultato finale (la candela corretta), una sola rebuildRows()/draw() invece di una per
+// ogni tick intermedio.
+const REMOTE_CHART_TIME_SYNC_COALESCE_MS=80;
+let pendingRemoteChartTime=null, remoteChartTimeSyncTimer=null;
 function applyRemoteChartTimeSync(masterTimeVal){
- if(liveModeActive||applyingRemoteChartTimeSync||applyingRemoteRandomJump)return;
+ if(liveModeActive||applyingRemoteRandomJump)return;
  if(!Number.isFinite(masterTimeVal))return;
  if(!baseRows.length)return; // nessun CSV caricato in questa finestra: niente su cui avanzare
- if(masterTimeVal===masterTime)return;
- applyingRemoteChartTimeSync=true;
- try{
-   masterTime=masterTimeVal;
-   rebuildRows();
-   if(followLatest)viewEnd=idx;
-   draw();update();
- }finally{ applyingRemoteChartTimeSync=false; }
+ pendingRemoteChartTime=masterTimeVal;
+ if(remoteChartTimeSyncTimer)return; // già in coda: verrà applicato solo il valore più recente
+ remoteChartTimeSyncTimer=setTimeout(()=>{
+   remoteChartTimeSyncTimer=null;
+   const v=pendingRemoteChartTime; pendingRemoteChartTime=null;
+   if(!Number.isFinite(v)||v===masterTime||applyingRemoteRandomJump)return;
+   applyingRemoteChartTimeSync=true;
+   try{
+     masterTime=v;
+     rebuildRows();
+     if(followLatest)viewEnd=idx;
+     draw();update();
+   }finally{ applyingRemoteChartTimeSync=false; }
+ },REMOTE_CHART_TIME_SYNC_COALESCE_MS);
 }
 function anotherWindowOwnsAssetEvaluation(asset){
  if(!asset)return false;
@@ -3753,11 +3772,11 @@ if(tradingChannel){
      broadcastTradingStateNow();
    }else if(msg.type==='asset_announce'){
      siblingAssetBySlot[msg.slot]=msg.asset||null;
-     // RICHIESTO ESPLICITAMENTE (vedi il commento completo su applyRemoteAssetSwitch() più sopra
-     // nel file): SOLO se il messaggio arriva dalla pagina madre (slot 0), SOLO in Storico da
-     // entrambe le parti, e SOLO in una finestra PIP aggiuntiva (mai la madre stessa, che deve
-     // restare libera di mostrare un asset diverso da quello scelto in una finestra PIP).
-     if(PIP_SLOT>0 && msg.slot===0 && msg.storico && !liveModeActive && msg.asset){
+     // RICHIESTO ESPLICITAMENTE (AGGIORNATO, vedi il commento completo su applyRemoteAssetSwitch()
+     // più sopra nel file): ORA simmetrico — QUALUNQUE finestra (madre o PIP 2/3/4) applica
+     // l'asset annunciato da QUALUNQUE altra, non solo dalla madre. Resta SOLO in Storico da
+     // entrambe le parti (in Live ogni finestra tiene il proprio streaming/epic indipendente).
+     if(msg.storico && !liveModeActive && msg.asset){
        applyRemoteAssetSwitch(msg.asset,msg.masterTime);
      }
    }else if(msg.type==='drawings_sync'){
@@ -13756,6 +13775,7 @@ function restoreChartToMainPage(){
  restoreQuickTradeClusterHome();
  restoreResetViewHome();
  restorePipHistNavHome();
+ restoreIndicatorsToolbarHome();
  restoreAllFloatingModalsHome(); // idem per qualunque popup di configurazione finito nella finestra separata
  if(wrap && floatingHomeParent){
    if(floatingHomeNext&&floatingHomeNext.parentNode===floatingHomeParent)floatingHomeParent.insertBefore(wrap,floatingHomeNext);
@@ -13852,6 +13872,7 @@ async function openFloatingChart(){
  moveDrawToolbarIntoSidebar(floatingDoc);
  moveResetViewIntoSidebar(floatingDoc);
  movePipHistNavIntoSidebar(floatingDoc);
+ moveIndicatorsToolbarIntoSidebar(floatingDoc);
  // RICHIESTO ESPLICITAMENTE ("in modalità PIP la barra ordine rapido va dentro al grafico, in
  // alto al centro, identica a quando non è in modalità PIP"): NON spostiamo più
  // #quickTradeCluster nella sidebar qui — restando dentro #chartMainArea (che si è già mosso
@@ -14016,6 +14037,32 @@ function restorePipHistNavHome(){
    else pipHistNavHomeParent.appendChild(section);
  }
 }
+// RICHIESTO ESPLICITAMENTE: "anche le pagine 2-3-4 (e la pagina madre PIP) devono avere la
+// possibilità di aggiungere un pulsante aggiungi indicatore, a fianco al pulsante Indicatori" —
+// #indicatorsToolbar (la casella "+ Aggiungi indicatore..." con l'icona a candele, più "🧩 Codice
+// personalizzato") viveva SOLO nella toolbar in cima alla pagina normale, FUORI da .chartWrap:
+// esattamente come mainDrawToolbar/resetView/pipHistNavSection qui sopra, spariva del tutto in
+// schermo intero/finestra separata/finestre PIP 2-3-4 (dove SOLO .chartWrap resta visibile) —
+// fino ad ora l'unico controllo indicatori raggiungibile lì dentro era #indicatorsLegendToggleBtn
+// ("📊 Indicatori"), che mostra/nasconde la legenda di quelli GIÀ aggiunti, non ne aggiunge di
+// nuovi. Stesso identico principio di spostamento (mai duplicato, stesso nodo/stessi listener) —
+// vedi i 4 punti di richiamo più sotto nel file (schermo intero nativo, finestra separata/PIP
+// singola, finestre PIP 2/3/4).
+let indicatorsToolbarHomeParent=null, indicatorsToolbarHomeNext=null;
+function moveIndicatorsToolbarIntoSidebar(targetDoc){
+ const toolbar=document.getElementById('indicatorsToolbar')||(floatingDoc&&floatingDoc.getElementById('indicatorsToolbar'));
+ const sidebar=(targetDoc||document).getElementById('chartFsSidebar');
+ if(!toolbar||!sidebar)return;
+ if(!indicatorsToolbarHomeParent){ indicatorsToolbarHomeParent=toolbar.parentNode; indicatorsToolbarHomeNext=toolbar.nextSibling; }
+ sidebar.appendChild(toolbar); // in fondo alla sidebar, dopo tutto il resto già spostato lì
+}
+function restoreIndicatorsToolbarHome(){
+ const toolbar=document.getElementById('indicatorsToolbar')||(floatingDoc&&floatingDoc.getElementById('indicatorsToolbar'));
+ if(toolbar&&indicatorsToolbarHomeParent){
+   if(indicatorsToolbarHomeNext&&indicatorsToolbarHomeNext.parentNode===indicatorsToolbarHomeParent)indicatorsToolbarHomeParent.insertBefore(toolbar,indicatorsToolbarHomeNext);
+   else indicatorsToolbarHomeParent.appendChild(toolbar);
+ }
+}
 // Schermo intero del grafico PRINCIPALE (pagina normale, non staccato): stesso principio del
 // pulsante ⛶ della finestra separata, ma sul <div id="chartWrap"> della pagina.
 function toggleMainChartFullscreen(){
@@ -14030,8 +14077,8 @@ function toggleMainChartFullscreen(){
 }
 document.addEventListener('fullscreenchange',()=>{
  const wrap=document.getElementById('chartWrap');
- if(document.fullscreenElement===wrap){ moveDrawToolbarIntoSidebar(document); moveQuickTradeClusterIntoSidebar(document); moveResetViewIntoSidebar(document); movePipHistNavIntoSidebar(document); }
- else if(!floatingChartActive()){ restoreDrawToolbarHome(); restoreQuickTradeClusterHome(); restoreResetViewHome(); restorePipHistNavHome(); }
+ if(document.fullscreenElement===wrap){ moveDrawToolbarIntoSidebar(document); moveQuickTradeClusterIntoSidebar(document); moveResetViewIntoSidebar(document); movePipHistNavIntoSidebar(document); moveIndicatorsToolbarIntoSidebar(document); }
+ else if(!floatingChartActive()){ restoreDrawToolbarHome(); restoreQuickTradeClusterHome(); restoreResetViewHome(); restorePipHistNavHome(); restoreIndicatorsToolbarHome(); }
  draw();
 });
 $('chartFullscreenBtn')?.addEventListener('click',toggleMainChartFullscreen);
@@ -21038,6 +21085,10 @@ async function initExtraPipWindow(){
  moveDrawToolbarIntoSidebar();
  moveResetViewIntoSidebar();
  movePipHistNavIntoSidebar();
+ // RICHIESTO ESPLICITAMENTE: anche #indicatorsToolbar ("+ Aggiungi indicatore...", stesso
+ // ordine/stesso motivo dei tre spostamenti qui sopra — è un fratello di .chartWrap, va spostato
+ // DENTRO PRIMA di nascondere tutto il resto, altrimenti resterebbe invisibile pure lui.
+ moveIndicatorsToolbarIntoSidebar();
  fbPipHideEverythingExceptChartWrap();
  document.body.classList.add('fbPipChartOnly');
  // Banderuola fissa in alto, sottile: questa finestra non salva nulla della propria
