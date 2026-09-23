@@ -1467,10 +1467,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <!-- RICHIESTO ESPLICITAMENTE, schema "zero print" (foto fornita dall'utente): non più
                   un confronto a soglia %, ma un vero e proprio BUCO — una riga di prezzo dentro il
                   range della candela dove un lato (buy o sell) è ESATTAMENTE zero mentre l'altro ha
-                  attività. Le righe zero-print consecutive formano una zona che, se il prezzo non
-                  ci torna dentro nelle candele successive, si ESTENDE verso destra candela dopo
-                  candela (come una calamita ancora "aperta"); alla prima candela il cui range
-                  [low,high] rientra nella zona, la zona si "ferma" lì (mitigata) — vedi
+                  attività, OPPURE dove NESSUNO dei due lati ha scambiato contratti (aggiornamento
+                  esplicito dell'utente: un buco completo, non solo "sbilanciato", deve contare
+                  allo stesso modo — vedi footprintFindZeroPrintRowsForCandle()). Le righe
+                  zero-print consecutive formano una zona che, se il prezzo non ci torna dentro
+                  nelle candele successive, si ESTENDE verso destra candela dopo candela (come una
+                  calamita ancora "aperta"); alla prima candela il cui range [low,high] rientra
+                  nella zona, la zona si "ferma" lì (mitigata) — vedi
                   footprintFindZeroPrintZones()/footprintUpdateZeroPrintZones() più sotto nel file
                   per l'implementazione completa. Calcolato solo su celle con tick REALI. -->
              <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">ZONE ZERO-PRINT (imbalance)</div>
@@ -1480,7 +1483,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                <span style="display:inline-flex;align-items:center;gap:5px">Max zone in vista <input id="footprintImbalanceMaxRects" type="number" min="1" max="30" step="1" value="8" style="width:50px"></span>
                <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="footprintImbalanceColor" type="color" class="colorPick" value="#8a97a8"></span>
              </div>
-             <p class="hint" style="margin-top:2px">Una riga è "zero print" quando, dentro il range della candela, un lato (buy o sell) ha ESATTAMENTE zero contratti mentre l'altro ne ha. "Righe minime" = quante righe zero-print consecutive servono per formare una zona (1 = anche una singola riga vuota conta). Ogni zona nasce nella candela dove appare e si allarga verso destra finché il prezzo non ci ritorna dentro (poi si ferma lì); disegnata come una banda orizzontale sotto le candele, esattamente come un profilo di volume "col buco". Solo le "Max zone in vista" più larghe (per numero di righe) vengono disegnate. Calcolato solo su celle con tick REALI, mai stimate.</p>
+             <p class="hint" style="margin-top:2px">Una riga è "zero print" quando, dentro il range della candela, un lato (buy o sell) ha ESATTAMENTE zero contratti mentre l'altro ne ha, OPPURE quando nessuno dei due lati ha scambiato nulla (un vero buco completo). "Righe minime" = quante righe zero-print consecutive servono per formare una zona (1 = anche una singola riga vuota conta). Ogni zona nasce nella candela dove appare e si allarga verso destra finché il prezzo non ci ritorna dentro (poi si ferma lì); disegnata come una banda orizzontale sotto le candele, esattamente come un profilo di volume "col buco". Solo le "Max zone in vista" più larghe (per numero di righe) vengono disegnate. Calcolato solo su celle con tick REALI, mai stimate.</p>
              <!-- RICHIESTO ESPLICITAMENTE, dopo uno screenshot di riferimento (indicatore
                   commerciale "DeepCharts"): pallini di Absorption/Rejection sugli stoppini delle
                   candele, dimensione proporzionale all'intensità. ONESTÀ: quello screenshot è
@@ -18976,16 +18979,27 @@ async function footprintBackfillMt5(symbol,assetKey){
 // inventati da nessuna parte in questo file).
 //
 // Righe zero-print di UNA candela: gruppi di livelli consecutivi dentro [r.low,r.high] dove un
-// lato ha zero e l'altro no. Ritorna [{loPrice,hiPrice,count}] — count = numero di righe nel gruppo.
+// lato ha zero e l'altro no, OPPURE dove NESSUNO dei due lati ha contratti scambiati. Ritorna
+// [{loPrice,hiPrice,count}] — count = numero di righe nel gruppo.
+// AGGIORNAMENTO ESPLICITO DELL'UTENTE: prima si guardava SOLO Object.keys(fp.rows) — cioè solo i
+// livelli che il footprint aveva già una VOCE per loro, scartando quelli dove tot===0 — ma un
+// livello con ENTRAMBI i lati a zero contratti non ha proprio una voce in fp.rows (viene creata
+// solo quando arriva un tick vero su quel livello, vedi footprintApplyTickToBuckets), quindi non
+// compariva mai in quella lista: un vero "buco" totale (nessun contratto né buy né sell) restava
+// invisibile. Ora si ricostruisce l'INTERA scaletta di prezzo (ogni livello possibile, passo
+// `step`, stessa formula Math.round(price/step)*step già usata per assegnare i tick ai livelli)
+// dentro [r.low,r.high], e ogni livello SENZA voce in fp.rows viene trattato come {buy:0,sell:0}
+// — un buco vero, non un dato stimato: è l'assenza di qualunque tick osservato in quel punto.
 function footprintFindZeroPrintRowsForCandle(fp,r){
  if(!fp||!fp.rows)return [];
  const step=fp.step;
- const levels=Object.keys(fp.rows).map(Number)
-   .filter(lv=>lv>=r.low-step/2&&lv<=r.high+step/2)
-   .sort((a,b)=>a-b);
+ if(!(step>0))return [];
+ const loLevel=Math.round((r.low)/step)*step, hiLevel=Math.round((r.high)/step)*step;
+ const levels=[];
+ for(let lv=loLevel;lv<=hiLevel+step*1e-6;lv+=step)levels.push(Math.round(lv/step)*step); // ri-arrotondato ad ogni passo: evita la deriva in virgola mobile su tante candele
  const marked=levels.filter(lv=>{
-   const c=fp.rows[lv], tot=c.buy+c.sell;
-   return tot>0&&(c.buy===0||c.sell===0);
+   const c=fp.rows[lv]||{buy:0,sell:0};
+   return !(c.buy>0&&c.sell>0); // "buco" = tutto tranne il vero due lati attivi insieme: un lato solo, o nessuno dei due
  });
  if(!marked.length)return [];
  const groups=[]; let cur=null;
