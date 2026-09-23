@@ -4985,8 +4985,22 @@ function placeArDotCenterY(cx,radius,desiredCy,dir,minY,maxY,placedDots){
  const collideLabel=cy=>labelPlacements.some(b=>(cx-radius)<b.x+b.w&&(cx+radius)>b.x&&(cy-radius)<b.y+b.h&&(cy+radius)>b.y);
  const collideDot=cy=>placedDots&&placedDots.some(p=>Math.hypot(cx-p.cx,cy-p.cy)<(radius+p.radius+_AR_MIN_GAP));
  const collide=cy=>collideLabel(cy)||collideDot(cy);
+ // BUG RISOLTO (segnalato con screenshot: XAU/USD a zoom out estremo, decine di pallini
+ // ammassati in un'unica colonna che copre quasi tutta l'altezza del grafico su una sola
+ // candela): il ciclo qui sotto, da solo, NON creava sovrapposizioni (ogni pallino trovava
+ // comunque un punto libero), ma quando su UNA SOLA candela cadono molti eventi absorption/
+ // rejection (normale a zoom out, dove tante candele reali si comprimono in pochi pixel), la
+ // ricerca li spingeva sempre più lontano dal loro prezzo VERO pur di trovare spazio — fino a
+ // riempire l'intera colonna verticale. Un pallino spinto a 300px dal prezzo a cui si riferisce
+ // non è "non sovrapposto", è illeggibile allo stesso modo: non si capisce più a quale livello
+ // di prezzo appartenga. _AR_MAX_DRIFT pone un tetto a quanto un pallino può essere spostato
+ // dalla sua posizione reale prima di rinunciare a disegnarlo (sparisce, non si accumula):
+ // oltre quella soglia, ulteriori eventi sulla stessa candela smettono semplicemente di essere
+ // mostrati — esattamente il comportamento "i pallini devono sparire, mai ammassarsi" richiesto.
+ const _AR_MAX_DRIFT=Math.max(30,radius*5);
  let cy=desiredCy,guard=0;
- while(collide(cy)&&guard<40){ cy+=dir*(radius*0.6+2); guard++; }
+ while(collide(cy)&&guard<40&&Math.abs(cy-desiredCy)<_AR_MAX_DRIFT){ cy+=dir*(radius*0.6+2); guard++; }
+ if(Math.abs(cy-desiredCy)>=_AR_MAX_DRIFT)return null; // troppo lontano dal prezzo vero: meglio sparire che ingannare
  if(Number.isFinite(minY)&&cy-radius<minY)return null; // spinto fuori dal bordo alto: niente spazio, il pallino sparisce
  if(Number.isFinite(maxY)&&cy+radius>maxY)return null; // idem bordo basso
  if(collide(cy))return null; // ancora troppo vicino/sovrapposto dopo aver esaurito i tentativi: sparisce, mai "attaccato" a un altro
@@ -9610,7 +9624,21 @@ function draw(){
  // Limite onesto: copre solo gli indicatori integrati che registrano il proprio ingombro (vedi
  // sopra); lo "Script personalizzato" (Pine-like) disegna solo linee, mai testo/icone sopra le
  // candele, quindi non ha nulla da registrare qui.
- if(_footprintOn&&_footprintEntries&&footprintArEnabledNow()){
+ // BUG RISOLTO (segnalato con screenshot: zoom out estremo, decine di pallini ammassati in
+ // un'unica colonna che copre quasi tutta l'altezza del grafico): a differenza di prima, questo
+ // non è più solo un problema di sovrapposizione fisica (già coperto da placeArDotCenterY() e
+ // dal suo limite di deriva massima dal prezzo vero, vedi lì) — a UN livello di zoom così estremo
+ // che ogni "candela" a schermo (bw, la stessa larghezza in pixel già usata sopra per decidere se
+ // mostrare i numeri nel footprint) è larga solo 2-3 pixel, decine di candele REALI diverse, ognuna
+ // con un proprio evento absorption/rejection a un prezzo diverso, si comprimono sulla stessa
+ // colonna: ogni singolo pallino resta "corretto" (non sovrapposto, vicino al suo prezzo vero),
+ // ma la sequenza intera è illeggibile e non dice più nulla di utile. CORREZIONE ESPLICITA
+ // DELL'UTENTE, che qui supera quella precedente scritta sopra ("restano sempre visibili anche a
+ // candele molto strette"): oltre questa soglia estrema (non il caso normale di candele
+ // semplicemente strette, quello resta gestito solo dalla collisione) i pallini non si disegnano
+ // affatto — l'utente deve zoomare per vederli, non riceverli come un muro di puntini illeggibile.
+ const _AR_MIN_CANDLE_PX=4;
+ if(_footprintOn&&_footprintEntries&&footprintArEnabledNow()&&bw>=_AR_MIN_CANDLE_PX){
    const arMinVolMult=footprintArMinVolMultNow(), arDominance=footprintArDominancePctNow();
    const arRejColor=footprintArRejectionColorNow(), arAbsColor=footprintArAbsorptionColorNow();
    const arMinPx=footprintArMinDotPxNow(), arMaxPx=footprintArMaxDotPxNow();
