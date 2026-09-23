@@ -1577,6 +1577,26 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
  </div>
 </div>
+<!-- ===================== MODALE "WATCHLIST" (asset preferiti, richiesto esplicitamente): elenco
+     degli asset con la stellina dorata, raggiungibile dalla voce "⭐ Watch list" in fondo al
+     menu ASSET oppure dalla stellina ☆/⭐ accanto ad esso — vedi renderWatchlistList()/
+     addToWatchlist()/removeFromWatchlist() più sotto nel JS. Stesso identico pattern a modale
+     di #chartLayersModalOverlay qui sopra. ========= -->
+<div id="watchlistModalOverlay" class="fbModalOverlay" style="display:none">
+ <div class="fbModalBox">
+   <div class="fbModalHeader">
+     <h3>⭐ Watch list</h3>
+     <button id="watchlistModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
+   </div>
+   <div class="fbModalBody">
+     <p class="hint" style="margin:0 0 12px">Gli asset preferiti (stellina dorata) vengono seguiti in background — footprint, zone di buco dei contratti, absorption/rejection e heatmap — anche quando non sono a grafico ora, rispettando gli stessi orari di sessione MT5/Capital.com del grafico principale. Massimo 10 asset: oltre, verrà chiesto quale sostituire. Clicca un asset per aprirlo a grafico, "✕" per toglierlo dalla watchlist.</p>
+     <div id="watchlistListBody"></div>
+   </div>
+   <div class="fbModalFooter" style="justify-content:flex-end">
+     <button id="watchlistModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
+   </div>
+ </div>
+</div>
 <!-- ===================== MODALE "ALLARMI" (elenco delle linee Alarm dell'asset a grafico, con
      prezzo impostato/prezzo attuale affiancati) — vedi renderAlarmsList() più sotto. ========= -->
 <div id="alarmsListModalOverlay" class="fbModalOverlay" style="display:none">
@@ -1703,7 +1723,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
     <option value="XAGUSD">XAG/USD (Argento)</option>
     <option value="custom">Personalizzato (manuale)</option>
     <option value="capital_search">🔍 Cerca asset Capital.com…</option>
-   </select></div>
+    <option value="__watchlist__">⭐ Watch list</option>
+   </select><button id="assetFavToggleBtn" type="button" class="miniBtn" style="margin-left:4px;font-size:15px;padding:2px 7px" title="Aggiungi questo asset alla watchlist">☆</button></div>
   <div><div class="label">Capitale</div><input id="capital" type="number" value="10000"></div>
   <div><div class="label">Spread pips</div><input id="spread" type="number" value="0" step=".1" title="In Modalità Prop Firm viene calcolato e applicato in automatico per l'asset scelto (qui è solo indicativo/di sola lettura): un BUY apre più caro, un SELL più economico, come su un conto reale. Nelle sessioni Standard/Live resta 0 e non ha alcun effetto, come prima."></div>
   <div><div class="label">Leva</div><select id="leverage"><option value="10">1:10</option><option value="20">1:20</option><option value="30">1:30</option><option value="50">1:50</option><option value="100" selected>1:100</option><option value="200">1:200</option><option value="500">1:500</option></select></div>
@@ -3213,8 +3234,24 @@ const DRAWINGS_BACKUP_KEY='fxbt_drawings_backup_v1';
 let drawingsPersistenceArmed=false;
 let drawingsBackupSig=null;
 let drawingsBackupLastTotal=0;
+// BUG RISOLTO (segnalato con esempio preciso: Fibonacci di XAU/USD a 4000 comparso su EURUSD
+// appena aperto, candele "appiattite"): tra il momento in cui una funzione di cambio asset
+// riassegna currentAssetKey al NUOVO asset e il momento (righe più sotto, DOPO l'attesa della
+// history via rete) in cui riassegna `drawings` ai disegni SALVATI di quel nuovo asset, passa
+// del tempo reale (il fetch storico/l'attesa del bridge MT5). In quella finestra `currentAssetKey`
+// è già il nuovo asset ma `drawings` contiene ancora quelli del VECCHIO. Il controllo periodico
+// ogni 1,5s (armDrawingsPersistence) chiama proprio questa funzione: se scattava in quella
+// finestra, scriveva assetDrawings[mode][NUOVO_ASSET]=drawings-del-VECCHIO-asset — corrompendo
+// per sempre la voce del nuovo asset con i disegni di quello lasciato, anche dopo che il reset
+// "vero" avveniva pochi istanti più tardi (perché a quel punto rileggeva proprio quella voce
+// corrotta). Il flag assetSwitchInProgress (impostato a true subito prima di riassegnare
+// currentAssetKey, e riportato a false subito dopo il reset di `drawings`, in ciascuno dei tre
+// punti di cambio asset: libreria CSV, Capital.com Live, MT5 Live) sospende ogni scrittura qui
+// mentre lo switch è a metà, eliminando la finestra di corsa critica alla radice.
+let assetSwitchInProgress=false;
 function mirrorCurrentDrawingsIntoAssetDrawings(){
  if(!currentAssetKey)return;
+ if(assetSwitchInProgress)return;
  const mode=currentMode();
  if(!assetDrawings[mode])assetDrawings[mode]={};
  assetDrawings[mode][currentAssetKey]=drawings;
@@ -3470,7 +3507,15 @@ function collectLightSessionState(){
    // blocco MEMORIA DEI DISEGNI PER ASSET E PER SESSIONE più sopra). `drawings` qui sopra resta
    // comunque il campo "veloce" per l'asset corrente, invariato per compatibilità.
    assetDrawings,
-   activeIndicators:activeIndicators.map(ind=>({id:ind.id,key:ind.key,params:ind.params,hidden:ind.hidden}))
+   activeIndicators:activeIndicators.map(ind=>({id:ind.id,key:ind.key,params:ind.params,hidden:ind.hidden})),
+   // WATCHLIST (asset preferiti, richiesta esplicitamente): elenco degli asset marcati con la
+   // stellina dorata, fino a FAVORITE_ASSETS_MAX — sopravvive a chiusura/riapertura come tutto il
+   // resto qui. assetAutoMeta (decimali/pip/spread auto-rilevati dal broker per ogni asset, non
+   // solo quelli in watchlist) viene salvato insieme: senza persisterlo, ogni asset "nuovo" (non
+   // nella tabella INSTRUMENTS fissa) perderebbe i suoi decimali/pip/spread reali a ogni riavvio,
+   // tornando al fallback EUR/USD finché non arriva un nuovo tick/storico per ri-rilevarli.
+   favoriteAssets,
+   assetAutoMeta
  };
 }
 let saveTimer=null;
@@ -3759,7 +3804,12 @@ function anotherWindowOwnsAssetEvaluation(asset){
 // cambiamento nei disegni — nessun nuovo punto d'aggancio sparso nel codice.
 let applyingRemoteDrawingsSync=false;
 function broadcastDrawingsStateNow(){
- if(!tradingChannel||applyingRemoteDrawingsSync||!currentAssetKey)return;
+ // Stessa finestra di corsa descritta sopra mirrorCurrentDrawingsIntoAssetDrawings(): durante un
+ // cambio asset a metà, `currentAssetKey` è già il nuovo ma `drawings` sono ancora del vecchio —
+ // trasmettere in quell'istante taggherebbe i disegni del vecchio asset con l'ID del nuovo anche
+ // verso le ALTRE finestre aperte (che li accetterebbero come buoni, vedi msg.asset===currentAssetKey
+ // nel gestore drawings_sync), propagando la stessa corruzione oltre questa finestra.
+ if(!tradingChannel||applyingRemoteDrawingsSync||!currentAssetKey||assetSwitchInProgress)return;
  try{ tradingChannel.postMessage({type:'drawings_sync',slot:PIP_SLOT,asset:currentAssetKey,mode:currentMode(),drawings}); }catch(e){}
 }
 function requestDrawingsSyncNow(){
@@ -4170,6 +4220,11 @@ function applyLightSessionState(state){
  // grafico al momento del salvataggio (già coerente con la voce corrispondente qui dentro).
  assetDrawings=normalizeAssetDrawings(state.assetDrawings);
  activeIndicators=(state.activeIndicators||[]).map(ind=>({...ind,calc:{ref:null,builtTo:-1}}));
+ // WATCHLIST — vedi collectLightSessionState(): elenco preferiti + metadati auto-rilevati per
+ // asset, entrambi ripristinati qui tali e quali (un tetto già rispettato al salvataggio, non
+ // c'è bisogno di ritagliarlo di nuovo qui).
+ favoriteAssets=Array.isArray(state.favoriteAssets)?state.favoriteAssets.filter(a=>typeof a==='string'&&a):[];
+ if(state.assetAutoMeta&&typeof state.assetAutoMeta==='object')assetAutoMeta=state.assetAutoMeta;
 }
 // --- Vertical (price-axis) zoom, TradingView-style drag on the right price scale ---
 let priceZoomFactor=1, priceAxisDrag=null;
@@ -4919,16 +4974,22 @@ function placeLabelY(x,w,desiredY,h,minY,maxY){
 // spazio realmente libero (né dentro il budget di tentativi né dentro i limiti verticali), la
 // funzione restituisce null: il pallino va fatto SPARIRE invece di sovrapporsi — mai una zona
 // leggibile "riempita a forza".
+// CORREZIONE ESPLICITA DELL'UTENTE (ulteriore giro di vite): non basta evitare la sovrapposizione
+// vera e propria — due pallini anche solo "attaccati" (bordo contro bordo, zero spazio vuoto fra
+// loro) creano comunque confusione a zoom-out spinto o su timeframe alti. _AR_MIN_GAP aggiunge un
+// margine minimo di respiro (proporzionale al raggio, mai sotto i 3px) alla soglia di collisione:
+// due pallini ora devono avere un vuoto visibile fra loro, non solo "non toccarsi per un pixel".
 function placeArDotCenterY(cx,radius,desiredCy,dir,minY,maxY,placedDots){
  const w=radius*2,h=radius*2;
+ const _AR_MIN_GAP=Math.max(3,radius*0.5);
  const collideLabel=cy=>labelPlacements.some(b=>(cx-radius)<b.x+b.w&&(cx+radius)>b.x&&(cy-radius)<b.y+b.h&&(cy+radius)>b.y);
- const collideDot=cy=>placedDots&&placedDots.some(p=>Math.hypot(cx-p.cx,cy-p.cy)<(radius+p.radius));
+ const collideDot=cy=>placedDots&&placedDots.some(p=>Math.hypot(cx-p.cx,cy-p.cy)<(radius+p.radius+_AR_MIN_GAP));
  const collide=cy=>collideLabel(cy)||collideDot(cy);
  let cy=desiredCy,guard=0;
  while(collide(cy)&&guard<40){ cy+=dir*(radius*0.6+2); guard++; }
  if(Number.isFinite(minY)&&cy-radius<minY)return null; // spinto fuori dal bordo alto: niente spazio, il pallino sparisce
  if(Number.isFinite(maxY)&&cy+radius>maxY)return null; // idem bordo basso
- if(collide(cy))return null; // ancora sovrapposto dopo aver esaurito i tentativi: sparisce, non si sovrappone
+ if(collide(cy))return null; // ancora troppo vicino/sovrapposto dopo aver esaurito i tentativi: sparisce, mai "attaccato" a un altro
  labelPlacements.push({x:cx-radius,y:cy-radius,w,h});
  return cy;
 }
@@ -5769,6 +5830,12 @@ async function autoLoadAssetLibrary(asset){
    // captureCurrentAssetDrawings() prima di arrivare qui.
    const shouldLoadAssetDrawings=currentAssetKey!==asset;
    if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+   // BUG RISOLTO (vedi il commento completo su assetSwitchInProgress sopra
+   // mirrorCurrentDrawingsIntoAssetDrawings()): da qui fino al reset di `drawings` poco più sotto,
+   // currentAssetKey punta già al nuovo asset ma `drawings` è ancora quello del vecchio — il flag
+   // blocca ogni scrittura di assetDrawings in quella finestra (il controllo periodico ogni 1,5s
+   // compreso), che altrimenti corromperebbe la voce del nuovo asset con i disegni del vecchio.
+   if(shouldLoadAssetDrawings)assetSwitchInProgress=true;
    currentAssetKey=asset;
    // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
    // appartenere all'asset appena selezionato: se quella precedente era di un altro asset,
@@ -5806,6 +5873,7 @@ async function autoLoadAssetLibrary(asset){
        drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
        selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
        historyUndo=[];historyRedo=[];
+       assetSwitchInProgress=false; // il reset è concluso: `drawings` e `currentAssetKey` sono di nuovo coerenti
      }
      applyChartViewForAsset(asset);
      saveLightStateNow();
@@ -5826,6 +5894,7 @@ async function autoLoadAssetLibrary(asset){
      drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
      selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
      historyUndo=[];historyRedo=[];
+     assetSwitchInProgress=false; // vedi commento gemello poco più sopra (ramo "nessun CSV in libreria")
    }
    applyChartViewForAsset(asset);
    saveCsvNow();
@@ -11262,9 +11331,205 @@ const INSTRUMENTS={
  XAGUSD:{label:'XAG/USD (Argento)',decimals:3,pipDigit:2,contractSize:5000,plMode:'approx',typicalSpreadPips:3.0},
  custom:{label:'Personalizzato',decimals:null,pipDigit:null,contractSize:100000,plMode:'approx',typicalSpreadPips:1.0}
 };
+// ===================== METADATI AUTOMATICI PER ASSET (decimali/pip/spread REALI dal broker) =====================
+// RICHIESTO ESPLICITAMENTE ("per ogni asset nuovo deve capire i decimali del prezzo e i decimali
+// per +1 pip in automatico... uguale anche lo spread"): la tabella INSTRUMENTS qui sopra copre
+// SOLO 5 strumenti scritti a mano — qualunque altro asset cercato su Capital.com o collegato via
+// MT5 (es. indici come US Tech 100/USTEC, criptovalute, azioni…) ricadeva SEMPRE nel fallback
+// INSTRUMENTS.EURUSD (5 decimali, pip alla 4ª cifra) qualunque fosse la sua vera scala di
+// prezzo — causa reale, verificata, delle "caselline del footprint piccolissime" su USTEC: un
+// indice che vale ~24000 con un pip forzato a 0,0001 genera centinaia di migliaia di righe per
+// candela. footprintStepForAsset()/pipSizeForAsset() dipendono ENTRAMBI da currentInstrument()
+// qui sotto, quindi la stessa correzione risolve insieme footprint, zone zero-print, pallini
+// Absorption/Rejection E la heatmap (heatmapRebuildCellsForAsset usa la stessa footprintStepForAsset).
+//
+// NON usiamo "internet" come fonte (nessun servizio pubblico stabile e gratuito restituisce
+// "decimali/pip" per qualunque simbolo di qualunque broker): la fonte è sempre il prezzo REALE
+// che il broker collegato ci sta già mandando per quell'asset. Regola: i decimali si contano
+// direttamente dal prezzo osservato (es. "24567.3" → 1 decimale), il pip è sempre la penultima
+// cifra decimale (pipDigit = decimals-1) — la stessa convenzione già usata a mano per tutti e 5
+// gli strumenti della tabella qui sopra (5/4, 5/4, 3/2, 2/1, 3/2: sempre decimals-1), generalizzata
+// automaticamente a qualunque nuovo simbolo. Lo spread si calcola dalla differenza reale ask-bid
+// quando il broker la fornisce (MT5: ogni tick; Capital.com: se il payload live include l'offer).
+let assetAutoMeta={}; // assetKey -> {decimals,pipDigit,typicalSpreadPips,source,updatedAt}
+let __assetSpreadLastCapturedAt={}; // assetKey -> timestamp dell'ultimo aggiornamento spread da tick live (throttle, vedi applyLiveTick/onmessage MT5)
+// ===================== WATCHLIST (ASSET PREFERITI) =====================
+// RICHIESTO ESPLICITAMENTE: una sezione "asset preferiti", raggiungibile dal selettore ASSET
+// (in fondo alla tendina, voce "⭐ Watch list"), con stellina dorata; tetto a 10 asset (oltre,
+// si sceglie quale sostituire); OGNI asset in watchlist deve avere footprint/zero-print/
+// absorption-rejection/heatmap tracciati in BACKGROUND, anche quando non è l'asset a grafico —
+// vedi refreshWatchlistBackgroundTracking() più sotto (dopo connectMt5Stream) per la parte MT5, e
+// requiredLiveEpics()/applyLiveTick() più sopra per la parte Capital.com, che riusano il
+// meccanismo multi-epic già esistente per le posizioni aperte "in background".
+let favoriteAssets=[];
+const FAVORITE_ASSETS_MAX=10;
+function isAssetInWatchlist(asset){ return !!asset && favoriteAssets.includes(asset); }
+// Etichetta leggibile per un asset nella lista Watchlist: riusa il testo dell'<option> già
+// presente nel <select> ASSET quando c'è (es. "🔎 Apple (APPLE.US)" per un asset cercato via
+// Capital.com), altrimenti mostra semplicemente la chiave.
+function watchlistAssetLabel(asset){
+ const opt=$('market')&&[...$('market').options].find(o=>o.value===asset);
+ return (opt?opt.textContent:asset)||asset;
+}
+// Aggiunge un asset alla watchlist. Se già a tetto (10), chiede quale sostituire con lo stesso
+// pattern a prompt numerato già usato per la ricerca Capital.com (vedi handleCapitalManualAssetSearch),
+// per restare coerente con l'unica UI di scelta multipla già presente in questo file — richiesto
+// esplicitamente: "si fa scegliere quale mantenere per il caricamento dei tracciamenti dei dati".
+function addToWatchlist(asset){
+ if(!asset)return false;
+ if(favoriteAssets.includes(asset)){ renderWatchlistList(); updateAssetFavToggleBtn(); return true; }
+ if(favoriteAssets.length>=FAVORITE_ASSETS_MAX){
+   const list=favoriteAssets.map((a,i)=>`${i+1}. ${watchlistAssetLabel(a)}`).join('\n');
+   const pick=window.prompt(`La watchlist è già piena (massimo ${FAVORITE_ASSETS_MAX} asset). Scrivi il numero di quello da SOSTITUIRE con "${watchlistAssetLabel(asset)}":\n${list}`,'');
+   const n=parseInt(pick,10);
+   if(!Number.isFinite(n)||n<1||n>favoriteAssets.length){
+     $('status').textContent='Aggiunta alla watchlist annullata: nessun asset sostituito.';
+     return false;
+   }
+   const removed=favoriteAssets[n-1];
+   favoriteAssets.splice(n-1,1,asset);
+   $('status').textContent=`⭐ "${watchlistAssetLabel(removed)}" tolto dalla watchlist, "${watchlistAssetLabel(asset)}" aggiunto al suo posto.`;
+ }else{
+   favoriteAssets.push(asset);
+   $('status').textContent=`⭐ "${watchlistAssetLabel(asset)}" aggiunto alla watchlist.`;
+ }
+ renderWatchlistList();
+ updateAssetFavToggleBtn();
+ saveLightStateNow();
+ if(liveModeActive)refreshLiveStreamSubscriptions(); else refreshWatchlistBackgroundTracking();
+ return true;
+}
+function removeFromWatchlist(asset){
+ const idx=favoriteAssets.indexOf(asset);
+ if(idx<0)return;
+ favoriteAssets.splice(idx,1);
+ renderWatchlistList();
+ updateAssetFavToggleBtn();
+ saveLightStateNow();
+ if(liveModeActive)refreshLiveStreamSubscriptions(); else refreshWatchlistBackgroundTracking();
+}
+function toggleCurrentAssetWatchlist(){
+ const asset=$('market')?.value;
+ if(!asset||asset==='custom'||asset==='capital_search'||asset==='__watchlist__')return;
+ if(isAssetInWatchlist(asset))removeFromWatchlist(asset);
+ else addToWatchlist(asset);
+}
+// Pulsante stellina accanto al menu ASSET: pieno/dorato se l'asset a grafico ora è già in
+// watchlist, vuoto altrimenti — riflette sempre lo stato corrente, chiamato ad ogni cambio asset.
+function updateAssetFavToggleBtn(){
+ const btn=$('assetFavToggleBtn');
+ if(!btn)return;
+ const asset=$('market')?.value;
+ const on=isAssetInWatchlist(asset);
+ btn.textContent=on?'⭐':'☆';
+ btn.title=on?'Togli questo asset dalla watchlist':'Aggiungi questo asset alla watchlist';
+ btn.style.color=on?'#e8c34a':'';
+}
+// Popola il corpo del modale Watchlist (stesso pattern a righe di renderChartLayersList/
+// renderAlarmsList più sotto): nome asset, click sulla riga per aprirlo a grafico, "✕" per
+// toglierlo. Nessun'azione distruttiva senza conferma: la "✕" toglie solo dalla watchlist (e
+// quindi dal tracciamento in background), non cancella storico/disegni/posizioni di quell'asset.
+function renderWatchlistList(){
+ const body=$('watchlistListBody');
+ if(!body)return;
+ if(!favoriteAssets.length){
+   body.innerHTML='<div class="hint" style="padding:8px 0">Nessun asset preferito ancora. Aggiungi l\'asset a grafico ora con la stellina ☆ accanto al menu ASSET, oppure aggiungi un nuovo asset cercato su Capital.com direttamente dal risultato della ricerca.</div>';
+   return;
+ }
+ body.innerHTML='';
+ favoriteAssets.forEach(asset=>{
+   const row=document.createElement('div');
+   row.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 4px;border-bottom:1px solid #202832';
+   const left=document.createElement('div');
+   left.style.cssText='display:flex;align-items:center;gap:8px;cursor:pointer;flex:1;min-width:0';
+   left.title='Apri questo asset a grafico';
+   const isCurrent=asset===currentAssetKey;
+   left.innerHTML=`<span style="color:#e8c34a">⭐</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:${isCurrent?700:400};color:${isCurrent?'#e8edf3':'#c6ceda'}">${watchlistAssetLabel(asset)}${isCurrent?' (a grafico ora)':''}</span>`;
+   left.addEventListener('click',()=>{
+     if(!$('market'))return;
+     if(![...$('market').options].some(o=>o.value===asset)){
+       const opt=document.createElement('option');
+       opt.value=asset; opt.textContent=watchlistAssetLabel(asset);
+       $('market').insertBefore(opt,$('market').querySelector('option[value="capital_search"]')||null);
+     }
+     $('market').value=asset;
+     $('market').dispatchEvent(new Event('change'));
+     closeWatchlistModal();
+   });
+   const removeBtn=document.createElement('button');
+   removeBtn.className='miniBtn'; removeBtn.type='button'; removeBtn.textContent='✕';
+   removeBtn.title='Togli dalla watchlist';
+   removeBtn.style.cssText='padding:2px 8px;font-size:12px';
+   removeBtn.addEventListener('click',(e)=>{ e.stopPropagation(); removeFromWatchlist(asset); });
+   row.appendChild(left); row.appendChild(removeBtn);
+   body.appendChild(row);
+ });
+}
+function closeWatchlistModal(){ if($('watchlistModalOverlay'))$('watchlistModalOverlay').style.display='none'; }
+function decimalsOfNumber(v){
+ if(!Number.isFinite(v))return 5;
+ const s=String(Math.abs(v));
+ if(s.includes('e')||s.includes('E'))return 5; // notazione esponenziale (prezzo assurdo): ripiego prudente, mai un crash
+ const i=s.indexOf('.');
+ return i<0?0:Math.min(8,s.length-i-1);
+}
+// Aggiorna (mai sovrascrive con dati mancanti) i metadati automatici di un asset. `partial` può
+// contenere solo alcuni campi (es. solo lo spread da un tick live, senza ritoccare i decimali già
+// noti dallo storico) — ogni campo assente qui mantiene il valore già registrato in precedenza.
+function recordAssetAutoMeta(assetKey,partial,source){
+ if(!assetKey||!partial)return;
+ const prev=assetAutoMeta[assetKey]||{};
+ const next={
+   decimals:Number.isFinite(partial.decimals)?partial.decimals:prev.decimals,
+   pipDigit:Number.isFinite(partial.pipDigit)?partial.pipDigit:prev.pipDigit,
+   typicalSpreadPips:Number.isFinite(partial.typicalSpreadPips)?partial.typicalSpreadPips:prev.typicalSpreadPips,
+   source:source||prev.source,
+   updatedAt:Date.now()
+ };
+ assetAutoMeta[assetKey]=next;
+ // RICHIESTO ESPLICITAMENTE ("deve modificare anche quella casellina in alto... tra capitale e
+ // la leva"): se l'asset appena aggiornato è quello a grafico ORA, riflette subito Decimali/Pip/
+ // Spread nelle caselle in alto — solo scrittura dei campi (leggera), nessun ridisegno forzato
+ // qui: ci pensa già il normale ciclo di aggiornamento del prezzo live a tenerlo a schermo.
+ if(assetKey===currentAssetKey)applyAutoAssetMetaToUI(assetKey);
+}
+function applyAutoAssetMetaToUI(assetKey){
+ const meta=assetAutoMeta[assetKey];
+ if(!meta)return;
+ if($('decimals')&&Number.isFinite(meta.decimals))$('decimals').value=String(Math.max(0,Math.min(6,meta.decimals)));
+ if($('pipDecimals')&&Number.isFinite(meta.pipDigit))$('pipDecimals').value=String(Math.max(0,Math.min(8,meta.pipDigit)));
+ // Spread: qui SEMPRE (non solo in Modalità Prop Firm come fa applyInstrument() per la tabella
+ // statica) — richiesto esplicitamente per ogni asset con uno spread reale appena scoperto dal
+ // broker, indipendentemente dalla modalità attiva.
+ if($('spread')&&Number.isFinite(meta.typicalSpreadPips))$('spread').value=meta.typicalSpreadPips.toFixed(1);
+}
+// Deriva {decimals,pipDigit,typicalSpreadPips} da una coppia bid/ask REALE (Capital.com live tick,
+// MT5 symbol_info_tick…): usata ovunque arrivi un prezzo con lo spread reale a corredo.
+function metaFromBidAsk(bid,ask){
+ if(!Number.isFinite(bid))return null;
+ const decimals=decimalsOfNumber(bid);
+ const pipDigit=Math.max(0,decimals-1);
+ let typicalSpreadPips=undefined;
+ if(Number.isFinite(ask)&&ask>0&&bid>0){
+   const pipSz=Math.pow(10,-pipDigit);
+   const spreadPrice=ask-bid;
+   if(spreadPrice>=0&&pipSz>0)typicalSpreadPips=spreadPrice/pipSz;
+ }
+ return {decimals,pipDigit,typicalSpreadPips};
+}
 function currentInstrument(assetKey){
  const key=assetKey!=null?assetKey:$('market')?.value;
- return INSTRUMENTS[key]||INSTRUMENTS.EURUSD;
+ if(INSTRUMENTS[key])return INSTRUMENTS[key];
+ // Nessuna voce scritta a mano per questo asset: usa i metadati REALI auto-rilevati dal broker
+ // (vedi blocco sopra), se già disponibili — molto più affidabile del fallback EURUSD di prima,
+ // che imponeva 5 decimali/pip alla 4ª cifra a QUALUNQUE asset sconosciuto (indici, cripto,
+ // azioni…), sbagliando sistematicamente footprint/heatmap/pip per tutto ciò che non fosse una
+ // delle 5 coppie forex scritte sopra.
+ const auto=assetAutoMeta[key];
+ if(auto&&Number.isFinite(auto.decimals)&&Number.isFinite(auto.pipDigit)){
+   return {label:key,decimals:auto.decimals,pipDigit:auto.pipDigit,contractSize:100000,plMode:'approx',typicalSpreadPips:Number.isFinite(auto.typicalSpreadPips)?auto.typicalSpreadPips:1.0};
+ }
+ return INSTRUMENTS.EURUSD;
 }
 // Applica lo strumento scelto: imposta automaticamente Decimali prezzo/pip (tranne che per
 // "Personalizzato", dove restano liberamente modificabili a mano) e aggiorna il messaggio
@@ -11282,19 +11547,31 @@ function applyInstrument(){
    draw();update();refreshRiskSuggestion();refreshRiskSuggestionPending();
    return;
  }
- const instr=INSTRUMENTS[key]||INSTRUMENTS.EURUSD;
+ // BUG RISOLTO (coerente col fix di currentInstrument() più sopra): qui si leggeva SOLO dalla
+ // tabella scritta a mano, col fallback diretto a EURUSD anche per un asset con metadati REALI
+ // già auto-rilevati (es. USTEC100) — l'etichetta "Strumento: EUR/USD" e i campi Decimali/Pip
+ // qui sotto partivano quindi sbagliati per un istante, corretti solo dopo da
+ // applyAutoAssetMetaToUI() poco più sotto (che però non tocca label/hint). currentInstrument(key)
+ // fa già esattamente questa scelta (tabella scritta a mano → metadati auto-rilevati → EURUSD),
+ // un solo punto di verità invece di due che possono disallinearsi.
+ const instr=currentInstrument(key);
  if(instr.decimals!=null&&$('decimals'))$('decimals').value=String(instr.decimals);
  if(instr.pipDigit!=null&&$('pipDecimals'))$('pipDecimals').value=String(instr.pipDigit);
  // Spread automatico PER ASSET, solo in Modalità Prop Firm (richiesto esplicitamente):
  // l'utente non deve preoccuparsi di impostarlo a mano, cambia da solo scegliendo l'asset.
  // Nelle sessioni Standard/Live resta come l'utente l'ha lasciato (nessun automatismo).
  if(isPropFirmMode && $('spread')) $('spread').value=typicalSpreadPipsForAsset(key).toFixed(1);
+ // RICHIESTO ESPLICITAMENTE ("quando calcola lo spread... deve modificare anche quella
+ // casellina in alto"), per QUALUNQUE asset auto-rilevato (non nella tabella INSTRUMENTS scritta
+ // a mano): qui SEMPRE, non solo in Prop Firm — è un dato reale del broker, non una simulazione.
+ if(assetAutoMeta[key])applyAutoAssetMetaToUI(key);
  if(sub)sub.textContent=instr.label+' • CSV • Candlestick Replay';
  if(hint){
    hint.textContent=instr.plMode==='baseEqualsAccount'
      ?`Strumento: ${instr.label}. 1 lotto standard = ${instr.contractSize.toLocaleString('it-IT')} unità. Conversione USD→€ tramite il prezzo stesso (come per EUR/USD).`
      :`Strumento: ${instr.label}. 1 lotto standard = ${instr.contractSize.toLocaleString('it-IT')} unità. Nota: senza un tasso EUR/USD separato nel simulatore, il risultato in USD viene usato come approssimazione diretta del saldo in €.`;
  }
+ updateAssetFavToggleBtn();
  draw();update();refreshRiskSuggestion();refreshRiskSuggestionPending();
 }
 function pipSize(){
@@ -13029,6 +13306,13 @@ async function handleCapitalManualAssetSearch(){
  syncMarketChartSelect();
  applyInstrument();
  loadLiveHistoryFromCapital(epic);
+ // RICHIESTO ESPLICITAMENTE ("tramite un tastino più, di aggiungerlo alla watchlist"): per un
+ // asset NUOVO trovato ora su Capital.com, offriamo subito di aggiungerlo ai preferiti — qui,
+ // non dentro un pulsante "+" separato, perché è il momento in cui l'utente ha appena deciso che
+ // questo asset gli interessa. Un "no" non ha alcun effetto (l'asset resta comunque a grafico).
+ if(!isAssetInWatchlist(epic) && window.confirm(`Aggiungere "${chosen.instrumentName||epic}" alla watchlist (⭐)? Verrà tracciato in background — footprint, heatmap, absorption/rejection — anche quando non sarà a grafico.`)){
+   addToWatchlist(epic);
+ }
 }
 // Menu ASSET duplicato in alto a sinistra sul grafico (comodo soprattutto su mobile, dove il
 // menu ASSET "vero" nella toolbar in cima alla pagina è più lontano da raggiungere mentre si
@@ -13052,13 +13336,27 @@ $('market')?.addEventListener('change',()=>{
  const v=$('market').value;
  syncMarketChartSelect();
  if(v==='capital_search'){ handleCapitalManualAssetSearch(); return; }
+ if(v==='__watchlist__'){
+   // "⭐ Watch list" è un comando (apre il pannello), non un asset vero: torniamo subito alla
+   // selezione precedente, stesso pattern già usato per "🔍 Cerca asset Capital.com…".
+   $('market').value=lastValidMarketValue;
+   syncMarketChartSelect();
+   renderWatchlistList();
+   if($('watchlistModalOverlay'))$('watchlistModalOverlay').style.display='flex';
+   return;
+ }
  lastValidMarketValue=v||'';
+ updateAssetFavToggleBtn();
  if(!v || v==='custom') return;
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
  if(liveModeActive) loadLiveHistoryFromCapital(v);
  else autoLoadAssetLibrary(v);
 });
+$('assetFavToggleBtn')?.addEventListener('click',toggleCurrentAssetWatchlist);
+$('watchlistModalCloseBtn')?.addEventListener('click',closeWatchlistModal);
+$('watchlistModalDoneBtn')?.addEventListener('click',closeWatchlistModal);
+$('watchlistModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('watchlistModalOverlay'))closeWatchlistModal(); });
 // allowSlPastEntry: true SOLO quando si sta modificando lo SL di una posizione GIÀ APERTA
 // (gestione del trade: breakeven / Stop Profit) — per un ordine NUOVO (a mercato o pendente,
 // non ancora aperto) lo SL deve sempre restare dal lato del rischio, come prima.
@@ -16154,6 +16452,10 @@ document.addEventListener('keydown',e=>{
    e.preventDefault();
    closeChartLayersModal();
  }
+ if(e.key==='Escape' && $('watchlistModalOverlay') && $('watchlistModalOverlay').style.display!=='none'){
+   e.preventDefault();
+   closeWatchlistModal();
+ }
 });
 
 // ===================== MODALE "NOTIZIE" — apertura/chiusura + salvataggio filtri =====================
@@ -18451,6 +18753,12 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // attualmente associato a `drawings` (vuoto compreso), mai su una semplice risincronizzazione.
  const shouldLoadAssetDrawings=(currentAssetKey!==asset);
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+ // BUG RISOLTO (vedi il commento completo su assetSwitchInProgress sopra
+ // mirrorCurrentDrawingsIntoAssetDrawings()): da qui fino al reset di `drawings` più sotto (dopo
+ // l'attesa della history REST da Capital.com) currentAssetKey è già il nuovo asset ma `drawings`
+ // è ancora quello del vecchio — il flag blocca ogni scrittura di assetDrawings in quella
+ // finestra, altrimenti corromperebbe la voce del nuovo asset coi disegni del vecchio.
+ if(shouldLoadAssetDrawings)assetSwitchInProgress=true;
  const __footprintAssetChanged=(currentAssetKey!==asset);
  currentAssetKey=asset;
  // Nuovo asset: ricostruisce i bucket dal SUO log tick (vuoto se non l'abbiamo mai seguito in
@@ -18479,6 +18787,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  console.log(`[LoadHistory] epic risolto in ${(performance.now()-__t0).toFixed(0)}ms (da cache se già visto prima)`);
  if(!epic){
    $('status').textContent=`⚠️ Nessuno strumento Capital.com trovato per "${asset}": lo storico Live non è stato caricato (resta il CSV eventualmente già presente).`;
+   assetSwitchInProgress=false; // uscita anticipata: non deve restare bloccato a true per il resto della sessione
    return;
  }
  const resolution=CAPITAL_RESOLUTION_MAP[currentTF]||'MINUTE';
@@ -18495,11 +18804,13 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
    if(!res.ok)throw new Error((body&&(body.errorCode||body.error))||('HTTP '+res.status));
  }catch(e){
    $('status').textContent='⚠️ Storico Live non scaricato: '+e.message;
+   assetSwitchInProgress=false; // uscita anticipata: non deve restare bloccato a true per il resto della sessione
    return;
  }
  const prices=(body&&Array.isArray(body.prices))?body.prices:[];
  if(!prices.length){
    $('status').textContent=`⚠️ Capital.com non ha restituito candele per ${epic} (${resolution}).`;
+   assetSwitchInProgress=false; // uscita anticipata: non deve restare bloccato a true per il resto della sessione
    return;
  }
  // Usiamo il prezzo bid per open/high/low/close (come la maggior parte dei grafici retail).
@@ -18532,7 +18843,20 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  }).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
  if(!liveRows.length){
    $('status').textContent=`⚠️ Le candele ricevute da Capital.com per ${epic} non sono valide: storico Live non caricato.`;
+   assetSwitchInProgress=false; // uscita anticipata: non deve restare bloccato a true per il resto della sessione
    return;
+ }
+ // METADATI AUTOMATICI PER ASSET (decimali/pip/spread REALI) — vedi il blocco
+ // recordAssetAutoMeta()/metaFromBidAsk() più sopra nel file per il perché. Presi dall'ULTIMA
+ // candela ricevuta (il prezzo più recente/affidabile); l'ask qui può mancare a seconda del
+ // piano/endpoint Capital.com, in tal caso restano solo decimali/pip (mai un crash, mai uno
+ // spread inventato quando il dato reale non c'è).
+ {
+   const lastP=prices[prices.length-1];
+   const lastBid=lastP&&lastP.closePrice?Number(lastP.closePrice.bid):NaN;
+   const lastAsk=lastP&&lastP.closePrice?Number(lastP.closePrice.ask??lastP.closePrice.ofr):NaN;
+   const __meta=metaFromBidAsk(lastBid,lastAsk);
+   if(__meta)recordAssetAutoMeta(asset,__meta,'capital');
  }
  // FIX "lo storico sparisce/salta indietro al cambio candela": questa funzione viene richiamata
  // non solo al primo caricamento di un asset, ma anche ad OGNI risincronizzazione forzata alla
@@ -18597,6 +18921,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
    drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
    selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
+   assetSwitchInProgress=false; // il reset è concluso: `drawings` e `currentAssetKey` sono di nuovo coerenti
  }
  // Posizione a grafico:
  // - CAMBIO ASSET vero e proprio, primo caricamento, o RICONNESSIONE dopo un ricaricamento
@@ -18727,6 +19052,11 @@ async function requiredLiveEpics(){
  if(currentAssetKey)assets.add(currentAssetKey);
  positions.forEach(p=>{ if(p.asset)assets.add(p.asset); });
  pendingOrders.forEach(p=>{ if(p.asset)assets.add(p.asset); });
+ // WATCHLIST (richiesto esplicitamente): tutti gli asset preferiti vanno seguiti in background,
+ // non solo quelli con una posizione/ordine aperto — vedi anche il ramo "in background" di
+ // applyLiveTick() più sotto, che registra i tick footprint SOLO per questi (non per ogni asset
+ // con una posizione, per non appesantire inutilmente la sessione).
+ favoriteAssets.forEach(a=>{ if(a)assets.add(a); });
  const epics=[];
  for(const a of assets){
    const e=await resolveCapitalEpic(a);
@@ -18749,6 +19079,11 @@ async function requiredLiveEpics(){
 // il socket con l'elenco già pronto.
 async function refreshLiveStreamSubscriptions(){
  if(!liveModeActive)return;
+ // WATCHLIST: stesso ricalcolo va fatto anche lato MT5 (connessioni WS separate per simbolo,
+ // vedi refreshWatchlistBackgroundTracking() più sotto) ad ogni punto in cui si ricalcolano le
+ // sottoscrizioni Capital.com — un solo punto d'aggancio per entrambe le fonti, invece di uno
+ // sparso per ciascuna delle chiamate a questa funzione nel resto del file.
+ refreshWatchlistBackgroundTracking();
  const epics=await requiredLiveEpics();
  if(!epics.length)return;
  connectCapitalStream(epics);
@@ -19024,8 +19359,31 @@ function footprintApplyTickToBuckets(price,timestamp,side,weight,step){
 // contatore di variazioni quotazione (quindi quasi equivalente al tick-count che useremmo comunque
 // come fallback). Non c'è modo di saperlo a priori da qui: è il miglior proxy disponibile, non
 // volume reale garantito — per questo il tooltip in UI lo definisce così, non come "volume vero".
-function footprintRegisterTick(price,timestamp,assetKey,weight){
+// CORREZIONE ESPLICITA DELL'UTENTE (chiusura sessione MT5, 22-24 ora del fuso a grafico):
+// MetaTrader 5 chiude la sessione dalle 22 a mezzanotte, ma Capital.com continua ad aggiornare i
+// dati del grafico fino alle 23 — senza questo filtro, dalle 23 a mezzanotte Capital.com
+// continuerebbe comunque a generare "tick" (l'ultimo prezzo ripetuto, senza scambi reali dietro,
+// dato che il mercato è chiuso ovunque a quell'ora) che creerebbero caselle vuote/casuali nel
+// footprint, una ogni minuto o ogni timeframe selezionato. Regola (attiva SOLO quando MT5 è
+// connesso, cioè è lui la fonte primaria — se MT5 non è connesso Capital.com resta l'unica fonte
+// disponibile e non viene filtrato, invariato rispetto a prima):
+//  - prima delle 22: contano solo i tick MT5 (Capital.com viene ignorato qui per non raddoppiare
+//    lo stesso movimento di prezzo con due fonti contemporaneamente);
+//  - dalle 22 alle 23: MT5 ha chiuso la sessione, contano solo i tick Capital.com;
+//  - dalle 23 a mezzanotte: nessun tick viene registrato da nessuna delle due fonti — meglio
+//    nessuna casella che una casella inventata dal nulla.
+// L'ora è quella di selectedTimeZone (lo stesso fuso, rilevato in automatico, con cui il grafico
+// mostra già le sue candele — vedi tzParts()), non un fuso fisso indipendente da quello a schermo.
+function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  if(!Number.isFinite(price)||!Number.isFinite(timestamp)||!assetKey)return;
+ if(mt5Connected&&source){
+   const tzp=tzParts(timestamp), hh=tzp?tzp.hour:NaN;
+   if(Number.isFinite(hh)){
+     if(hh>=23)return; // 23:00-24:00: buco intenzionale, nessun print da nessuna fonte
+     if(hh>=22){ if(source!=='capital')return; } // 22:00-23:00: solo Capital.com
+     else{ if(source!=='mt5')return; } // prima delle 22: solo MT5
+   }
+ }
  const w=(Number.isFinite(weight)&&weight>0)?weight:1;
  const log=footprintTickLogByAsset[assetKey]||(footprintTickLogByAsset[assetKey]=[]);
  const prev=log.length?log[log.length-1]:null;
@@ -19598,10 +19956,31 @@ function applyLiveTick(p){
  const asset=epicToAsset[p.epic];
  const prevPrice=asset?livePriceByAsset[asset]:null;
  if(asset)livePriceByAsset[asset]=price;
+ // METADATI AUTOMATICI: spread REALE dal payload live, quando Capital.com lo include (offer/ask
+ // accanto al bid) — throttled a 1 volta ogni 5s per asset, niente da guadagnare aggiornandolo ad
+ // ogni singolo tick. I decimali/pip restano quelli già derivati dallo storico REST (più sopra in
+ // __loadLiveHistoryFromCapitalImpl): qui aggiorniamo SOLO lo spread, mai sovrascritto con un
+ // valore assente se il payload non lo include.
+ if(asset){
+   const ofr=Number(p.ofr??p.ask??p.offer);
+   if(Number.isFinite(ofr)&&(Date.now()-(__assetSpreadLastCapturedAt[asset]||0)>5000)){
+     __assetSpreadLastCapturedAt[asset]=Date.now();
+     const __meta=metaFromBidAsk(price,ofr);
+     if(__meta)recordAssetAutoMeta(asset,{typicalSpreadPips:__meta.typicalSpreadPips},'capital');
+   }
+ }
  if(p.epic!==capitalWsPrimaryEpic){
    // Asset "in background": aggiorna solo tabella/P&L + valuta SL/TP/pendenti su quell'asset,
    // senza toccare il grafico a schermo (che mostra un asset diverso).
    if(asset)evaluateLiveBackgroundAsset(asset,price,prevPrice);
+   // WATCHLIST (richiesto esplicitamente): SOLO per gli asset preferiti, oltre a tabella/P&L,
+   // teniamo aggiornato anche il footprint (quindi zero-print/absorption-rejection/heatmap, che
+   // ne dipendono tutti) mentre non sono a grafico — non per OGNI asset in background (es. uno con
+   // solo una posizione aperta), per non appesantire inutilmente la sessione con asset che
+   // l'utente non ha scelto di seguire. Rispetta già da solo l'orario MT5/Capital.com/blackout
+   // (vedi footprintRegisterTick()) perché quella logica è generica, non legata all'asset a
+   // grafico ora.
+   if(asset && isAssetInWatchlist(asset))footprintRegisterTick(price,Date.now(),asset,undefined,'capital');
    update();
    return;
  }
@@ -19617,7 +19996,7 @@ function applyLiveTick(p){
  // — è proprio la granularità tick, non quella della candela, il punto di un footprint. Usa
  // Date.now() (non p.timestamp) per il bucketing: stessa convenzione di applyLivePriceToChart()
  // poco sotto, così footprint e candela in formazione restano sempre sullo stesso bucket.
- footprintRegisterTick(price,Date.now(),asset);
+ footprintRegisterTick(price,Date.now(),asset,undefined,'capital');
 }
 // Valuta SL/TP delle posizioni aperte e l'attivazione degli ordini pendenti su un asset "in
 // background" (diverso da quello a grafico ora) usando l'ultimo prezzo tick ricevuto per quel
@@ -19867,19 +20246,75 @@ async function syncChartSourceWithMt5(){
  }
 }
 
+// BUG RISOLTO (segnalato: "cerco US Tech 100, che è come lo chiama Capital.com, ma su MT5 si
+// chiama US Tech — non lo trova"): /symbol-check su mt5_feed_server.py fa già un confronto
+// case-insensitive per prefisso/contenuto (vedi _resolve_symbol lì), ma quello funziona solo
+// quando i due nomi CONDIVIDONO comunque una sottostringa in comune — per indici e commodity,
+// Capital.com e i vari broker MT5 usano spesso epiteti/nomi COMPLETAMENTE diversi per lo STESSO
+// strumento reale (nessuna sottostringa in comune tra "US Tech 100" e "USTEC" una volta rimossi
+// spazi, ad esempio con "NAS100"). Qui sotto costruiamo, PRIMA di interrogare MT5, un elenco di
+// nomi candidati da provare in sequenza: il nome grezzo usato dall'app, l'etichetta leggibile
+// mostrata nel menu ASSET (es. "US Tech 100", non l'epic Capital.com), e — quando uno dei due
+// combacia con un alias noto — tutti gli altri alias noti dello STESSO strumento reale. Elenco
+// limitato ai CFD più comuni per cui questa divergenza di nome tra broker è un problema diffuso
+// e documentato (indici principali, oro/argento, petrolio, gas naturale): non è un tentativo di
+// coprire ogni asset esistente, ma risolve esattamente il caso segnalato e i più frequenti
+// analoghi, senza inventare corrispondenze per asset non in questo elenco (per quelli resta
+// comunque attivo il confronto prefisso/contenuto già esistente lato server, invariato).
+const MT5_SYMBOL_ALIAS_GROUPS=[
+ ['US Tech 100','USTEC','USTEC100','US100','US Tech','NAS100','NASDAQ100','USNDAQ100','NDX100'],
+ ['Wall Street 30','US Wall St 30','US30','DJ30','DJI30','WALLST30','US Wall Street 30'],
+ ['US 500','US500','SPX500','SP500','S&P 500','SPX','US SPX 500'],
+ ['Germany 40','GER40','DE40','DAX40','DAX','Germany 30','GER30'],
+ ['UK 100','UK100','FTSE100','FTSE','FTSE 100'],
+ ['France 40','FRA40','CAC40','CAC 40'],
+ ['Europe 50','EU50','STOXX50','EUSTX50','Euro Stoxx 50'],
+ ['Japan 225','JPN225','NI225','NIKKEI225','Japan 225 Index'],
+ ['Australia 200','AUS200','ASX200'],
+ ['Hong Kong 50','HK50','HSI50'],
+ ['Spain 35','ESP35','IBEX35'],
+ ['Gold','XAUUSD','GOLD','SPOT GOLD'],
+ ['Silver','XAGUSD','SILVER','SPOT SILVER'],
+ ['Oil - US Crude','USOIL','WTI','US CRUDE','CRUDE OIL WTI'],
+ ['Oil - UK Brent','UKOIL','BRENT','UK CRUDE','BRENT CRUDE OIL'],
+ ['Natural Gas','NATGAS','NGAS','NATURAL GAS'],
+];
+function mt5SymbolCandidates(asset){
+ const label=(typeof watchlistAssetLabel==='function'?watchlistAssetLabel(asset):asset)
+   .replace(/^🔎\s*/,'').replace(/\s*\([^)]*\)\s*$/,'').trim();
+ const seeds=[asset,label].filter(Boolean);
+ const norm=s=>String(s).toUpperCase().replace(/[^A-Z0-9]/g,'');
+ const seen=new Set();
+ const out=[];
+ const add=s=>{ if(!s)return; const n=norm(s); if(!n||seen.has(n))return; seen.add(n); out.push(s); };
+ seeds.forEach(add);
+ const seedsNorm=seeds.map(norm);
+ MT5_SYMBOL_ALIAS_GROUPS.forEach(group=>{
+   const matches=group.some(g=>{ const gn=norm(g); return seedsNorm.some(s=>s===gn||s.includes(gn)||gn.includes(s)); });
+   if(matches)group.forEach(add);
+ });
+ return out;
+}
 async function resolveMt5SymbolForAsset(asset){
  if(Object.prototype.hasOwnProperty.call(mt5FeedSymbolForAsset,asset))return mt5FeedSymbolForAsset[asset];
- try{
-   const res=await fetch(MT5_FEED_URL+'/symbol-check?symbol='+encodeURIComponent(asset));
-   const body=await res.json();
-   if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
-   const resolved=body.found?body.resolved_symbol:null;
-   mt5FeedSymbolForAsset[asset]=resolved; // sia string sia null sono risultati DEFINITIVI: si mettono in cache
-   return resolved;
- }catch(e){
-   console.warn('[MT5Feed] symbol-check fallito (servizio dati non raggiungibile?):',e);
-   return undefined; // NON in cache: va ritentato, non è "asset non trovato"
+ const candidates=mt5SymbolCandidates(asset);
+ for(const cand of candidates){
+   let body;
+   try{
+     const res=await fetch(MT5_FEED_URL+'/symbol-check?symbol='+encodeURIComponent(cand));
+     body=await res.json();
+     if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
+   }catch(e){
+     console.warn('[MT5Feed] symbol-check fallito (servizio dati non raggiungibile?):',e);
+     return undefined; // errore di RETE, non "non trovato": NON va in cache, si ritenta al giro successivo
+   }
+   if(body&&body.found){
+     mt5FeedSymbolForAsset[asset]=body.resolved_symbol; // risultato DEFINITIVO: in cache
+     return body.resolved_symbol;
+   }
  }
+ mt5FeedSymbolForAsset[asset]=null; // nessuno dei candidati trovato: risultato DEFINITIVO, in cache
+ return null;
 }
 
 async function loadLiveHistoryFromMt5(asset,opts){
@@ -19945,6 +20380,10 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  const wasOnDifferentAsset=!!(currentAssetKey && currentAssetKey!==asset);
  const shouldLoadAssetDrawings=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso fix
  if(currentAssetKey && currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+ // BUG RISOLTO — stesso fix gemello del loader Capital.com (vedi il commento completo su
+ // assetSwitchInProgress sopra mirrorCurrentDrawingsIntoAssetDrawings()): qui l'attesa è quella
+ // dello storico REST dal bridge MT5.
+ if(shouldLoadAssetDrawings)assetSwitchInProgress=true;
  const __footprintAssetChanged=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso motivo
  currentAssetKey=asset;
  if(__footprintAssetChanged)footprintRebuildBucketsForCurrentAsset();
@@ -19970,6 +20409,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
  }catch(e){
    $('status').textContent='⚠️ Storico MT5 non scaricato: '+e.message;
+   assetSwitchInProgress=false; // uscita anticipata: non deve restare bloccato a true per il resto della sessione
    return;
  }
  const mt5Rows=(body.candles||[]).map(c=>({
@@ -19978,7 +20418,29 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
  if(!mt5Rows.length){
    $('status').textContent=`⚠️ MT5 non ha restituito candele per ${resolved}.`;
+   assetSwitchInProgress=false; // uscita anticipata: non deve restare bloccato a true per il resto della sessione
    return;
+ }
+ // METADATI AUTOMATICI PER ASSET (decimali/pip) — vedi il blocco recordAssetAutoMeta() più sopra
+ // nel file. MT5 è la fonte più diretta possibile: mt5_feed_server.py restituisce già
+ // symbol_info.digits (i decimali VERI del simbolo su questo broker, non un conteggio sul
+ // prezzo) in ogni risposta di /history — usato quando presente; altrimenti (vecchio bridge non
+ // aggiornato, campo assente) si ripiega sul conteggio decimali dell'ultima candela ricevuta,
+ // stessa logica già usata per Capital.com. Lo spread reale arriva invece tick per tick dal WS
+ // (vedi connectMt5Stream()/ws.onmessage più sotto, che ha SEMPRE bid E ask insieme).
+ {
+   const lastRow=mt5Rows[mt5Rows.length-1];
+   const digitsFromServer=Number.isFinite(body.digits)?body.digits:null;
+   const decimals=digitsFromServer!=null?digitsFromServer:decimalsOfNumber(lastRow.close);
+   const __metaObj={decimals,pipDigit:Math.max(0,decimals-1)};
+   // Registrato sotto DUE chiavi: `asset` (il nome usato ovunque per posizioni/P&L/le caselle
+   // Decimali-Pip-Spread in alto) e, se diverso, `resolved` (il simbolo VERO del broker, es. con
+   // suffisso ".a" — è la chiave che footprint/zero-print/pallini AR/heatmap usano già per
+   // costruzione per un asset MT5, vedi mt5ActiveSymbol nel resto del file). Senza questa
+   // duplicazione i due sottosistemi, che qui divergono per una scelta già esistente nel codice,
+   // non troverebbero mai gli stessi metadati.
+   recordAssetAutoMeta(asset,__metaObj,'mt5');
+   if(resolved&&resolved!==asset)recordAssetAutoMeta(resolved,__metaObj,'mt5');
  }
  // Stessa fusione "mai sparire una candela già mostrata" già usata per Capital.com (vedi
  // commento completo in __loadLiveHistoryFromCapitalImpl): una risincronizzazione periodica con
@@ -20005,6 +20467,23 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    if(mergedRows.length>200000)mergedRows=mergedRows.slice(mergedRows.length-200000);
  }
  csvLibrary=[{id:'mt5_live_'+asset,name:`MT5 Live (${resolved})`,addedAt:Date.now(),rows:mergedRows}];
+ // BUG RISOLTO ("cambiando asset, la candela finale prende un valore enorme senza senso" — segnalato
+ // con screenshot, uno spillover di prezzo da un simbolo all'altro): mt5ActiveSymbol viene
+ // riassegnato al NUOVO simbolo qui sopra, MOLTO prima di questo punto (prima ancora dell'await
+ // sullo storico REST) — ma la connessione WebSocket del simbolo VECCHIO resta aperta e continua a
+ // ricevere tick REALI (del vecchio simbolo) per tutta la durata di quell'await, ognuno dei quali
+ // aggiorna lastMt5TickPrice. startMt5RefreshTimer() (il timer periodico che applica davvero il
+ // prezzo alla candela via applyLivePriceToChart) NON viene mai fermato durante il cambio asset: se
+ // scatta subito dopo che csvLibrary è stato appena sostituito con lo storico del NUOVO simbolo (qui
+ // sopra) ma PRIMA che questo reset avvenisse, applicava ancora l'ULTIMO prezzo del simbolo
+ // VECCHIO (rimasto in lastMt5TickPrice, mai azzerato) alla candela del NUOVO simbolo appena
+ // caricata — un wick che va dal prezzo reale del nuovo simbolo fino al prezzo, completamente
+ // estraneo, del vecchio. Esattamente la stessa identica fix già presente per Capital.com
+ // (lastPrimaryEpicPrice=null, vedi il commento gemello in __loadLiveHistoryFromCapitalImpl):
+ // azzerare qui, PRIMA che il timer possa scattare di nuovo, garantisce che il primo prezzo
+ // applicato alla candela del nuovo asset sia SEMPRE un tick vero del nuovo simbolo (la vecchia
+ // connessione WS viene comunque chiusa poco più sotto da connectMt5Stream()→disconnectMt5Stream()).
+ lastMt5TickPrice=null;
  rebuildBaseRowsFromLibrary();
  renderCsvLibraryList();
  updateFileBtnLabel();
@@ -20016,6 +20495,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
    selectedDrawing=null;pendingDrawing=null;placingStep=0;setDrawTool('cursor');
    historyUndo=[];historyRedo=[];
+   assetSwitchInProgress=false; // il reset è concluso: `drawings` e `currentAssetKey` sono di nuovo coerenti
  }
  const shouldResetView=(wasOnDifferentAsset||!rows.length||(opts&&opts.forceResetView));
  if(shouldResetView){
@@ -20084,6 +20564,12 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  connectMt5Stream(resolved);
  connectMt5OrderBook(resolved);
  startMt5RefreshTimer();
+ // WATCHLIST: ricalcola sia le connessioni MT5 di background (per i preferiti diversi
+ // dall'asset appena aperto a grafico) sia le sottoscrizioni Capital.com "in background" (già
+ // usate anche per posizioni/ordini su altri asset mentre il grafico è su MT5) — un asset in
+ // watchlist può risolvere su MT5, su Capital.com, o su entrambi. refreshLiveStreamSubscriptions()
+ // richiama già al suo interno refreshWatchlistBackgroundTracking(), un solo punto per entrambe.
+ if(liveModeActive)refreshLiveStreamSubscriptions();
  // Backfill storico tick reali (vedi footprintBackfillMt5): fire-and-forget, NON attesa qui — non
  // deve mai ritardare la comparsa del grafico/storico candele, che è già pronto sopra. Un solo
  // tentativo per asset per sessione (footprintBackfilledAssets), quindi innocuo chiamarla ad ogni
@@ -20147,15 +20633,41 @@ function connectMt5Stream(symbol){
    if(msg.heartbeat)return;
    if(!Number.isFinite(msg.bid))return;
    if(mt5CandleFrozen)return; // stessa pausa di 1s a cavallo del cambio candela usata da Capital.com
+   // BUG RISOLTO ("candela enorme senza senso ad ogni cambio asset"): `symbol` qui è il simbolo
+   // di QUESTA connessione WS (il parametro con cui connectMt5Stream(symbol) l'ha aperta), mentre
+   // mt5ActiveSymbol è il simbolo a grafico ORA — normalmente coincidono, ma loadLiveHistoryFromMt5
+   // riassegna mt5ActiveSymbol al NUOVO simbolo MOLTO prima di aprire la nuova connessione WS (resta
+   // ancora aperta quella vecchia per tutta la durata del download dello storico REST del nuovo
+   // asset). Un tick REALE del vecchio simbolo, arrivato in quella finestra, andava comunque a
+   // finire su lastMt5TickPrice/nel log footprint del simbolo NUOVO (mt5ActiveSymbol), perché qui
+   // sotto non veniva mai verificato quale dei due fosse cambiato nel frattempo. Il guardiano qui
+   // sotto scarta ogni messaggio la cui connessione non corrisponde più al simbolo a grafico ORA —
+   // niente più prezzi di un asset che finiscono sulla candela di un altro.
+   if(symbol!==mt5ActiveSymbol)return;
    lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
+   // METADATI AUTOMATICI: spread REALE, ogni tick ha già bid E ask insieme (a differenza di
+   // Capital.com, mai da sperare che ci sia) — throttled a 1 volta ogni 5s per asset, vedi
+   // commento gemello in applyLiveTick().
+   if(Number.isFinite(msg.ask)&&(Date.now()-(__assetSpreadLastCapturedAt[symbol]||0)>5000)){
+     __assetSpreadLastCapturedAt[symbol]=Date.now();
+     const __meta=metaFromBidAsk(msg.bid,msg.ask);
+     if(__meta){
+       // Stessa doppia chiave del blocco storico in loadLiveHistoryFromMt5 (vedi commento lì):
+       // `symbol` è quello che footprint/heatmap usano già, `currentAssetKey` quello che
+       // usano le caselle Decimali/Pip/Spread in alto e i calcoli P&L.
+       recordAssetAutoMeta(symbol,{typicalSpreadPips:__meta.typicalSpreadPips},'mt5');
+       if(currentAssetKey&&currentAssetKey!==symbol)recordAssetAutoMeta(currentAssetKey,{typicalSpreadPips:__meta.typicalSpreadPips},'mt5');
+     }
+   }
    // FOOTPRINT: stesso identico principio del ramo Capital.com in applyLiveTick() (vedi commento
    // completo lì) — registrato a ogni tick grezzo del feed MT5, non al ritmo 1/sec del refresh
-   // sotto. mt5ActiveSymbol qui è sempre l'asset a grafico ora, per costruzione di questo feed.
+   // sotto. mt5ActiveSymbol qui è sempre l'asset a grafico ora, per costruzione di questo feed
+   // (garantito ORA anche dal guardiano subito sopra, non solo "per costruzione").
    // A differenza di Capital.com, mt5_feed_server.py manda già tick.volume nel campo msg.volume
    // (vedi il "volume": tick.volume nel server Python) — lo usiamo come peso invece del semplice
    // conteggio a 1 per tick, quando è un numero valido e positivo (vedi il commento completo su
    // "weight" dentro footprintRegisterTick() per i limiti di affidabilità di questo campo).
-   footprintRegisterTick(msg.bid,Date.now(),mt5ActiveSymbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1);
+   footprintRegisterTick(msg.bid,Date.now(),mt5ActiveSymbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1,'mt5');
  };
  ws.onerror=()=>{ if(ws===mt5FeedWs)$('status').textContent='⚠️ Streaming Live MT5: errore di connessione WebSocket.'; };
  ws.onclose=()=>{
@@ -20167,6 +20679,88 @@ function connectMt5Stream(symbol){
    }
  };
 }
+
+// ===================== WATCHLIST — TRACCIAMENTO MT5 IN BACKGROUND =====================
+// mt5FeedWs/connectMt5Stream() sopra gestiscono UN SOLO simbolo alla volta: quello a grafico ora
+// (mt5ActiveSymbol). Capital.com invece supporta già nativamente più epic sullo stesso WebSocket
+// (vedi requiredLiveEpics()/connectCapitalStream()), quindi la watchlist per quella fonte è già
+// coperta da lì. Per MT5, che non ha questo meccanismo, serve una struttura PARALLELA: una
+// connessione WebSocket separata per ciascun asset in watchlist DIVERSO da quello a grafico ora,
+// che alimenta SOLO footprintRegisterTick() (quindi footprint/zero-print/absorption-rejection/
+// heatmap) e i metadati auto-rilevati per quell'asset — mai lastMt5TickPrice, mai mt5ActiveSymbol,
+// mai la candela a grafico: quelle restano ESCLUSIVAMENTE di competenza di mt5FeedWs, per non
+// rischiare di reintrodurre lo stesso tipo di bug ("candela enorme senza senso") già risolto lì.
+let mt5BackgroundWs={};                 // asset (chiave app, non il simbolo risolto) -> WebSocket
+let mt5BackgroundWsReconnectTimers={};  // asset -> timer di riconnessione
+function disconnectMt5BackgroundStream(asset){
+ if(mt5BackgroundWsReconnectTimers[asset]){clearTimeout(mt5BackgroundWsReconnectTimers[asset]);delete mt5BackgroundWsReconnectTimers[asset];}
+ const ws=mt5BackgroundWs[asset];
+ if(ws){ try{ws.onclose=null;ws.onerror=null;ws.close();}catch(e){} }
+ delete mt5BackgroundWs[asset];
+}
+function disconnectAllMt5BackgroundStreams(){
+ Object.keys(mt5BackgroundWs).forEach(disconnectMt5BackgroundStream);
+}
+function connectMt5BackgroundStream(asset,symbol){
+ if(!liveModeActive || !mt5Connected || !symbol)return;
+ if(symbol===mt5ActiveSymbol)return; // già coperto dal feed principale: evita di contare due volte lo stesso tick
+ const existing=mt5BackgroundWs[asset];
+ if(existing && existing.__symbol===symbol && (existing.readyState===WebSocket.OPEN||existing.readyState===WebSocket.CONNECTING))return;
+ disconnectMt5BackgroundStream(asset);
+ let ws;
+ try{ ws=new WebSocket(MT5_FEED_URL.replace(/^http/,'ws')+'/ws/ticks/'+encodeURIComponent(symbol)); }
+ catch(e){ console.warn('WebSocket MT5 feed (watchlist background) non avviato:',e); return; }
+ ws.__symbol=symbol;
+ mt5BackgroundWs[asset]=ws;
+ ws.onmessage=(ev)=>{
+   if(mt5BackgroundWs[asset]!==ws)return;
+   if(symbol===mt5ActiveSymbol){ disconnectMt5BackgroundStream(asset); return; } // il feed principale l'ha appena preso in carico: evita un doppio conteggio
+   let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
+   if(!msg || msg.error || msg.heartbeat)return;
+   if(!Number.isFinite(msg.bid))return;
+   if(Number.isFinite(msg.ask)&&(Date.now()-(__assetSpreadLastCapturedAt[symbol]||0)>5000)){
+     __assetSpreadLastCapturedAt[symbol]=Date.now();
+     const __meta=metaFromBidAsk(msg.bid,msg.ask);
+     if(__meta){
+       recordAssetAutoMeta(symbol,{typicalSpreadPips:__meta.typicalSpreadPips},'mt5');
+       if(asset!==symbol)recordAssetAutoMeta(asset,{typicalSpreadPips:__meta.typicalSpreadPips},'mt5');
+     }
+   }
+   // Stesso principio di connectMt5Stream() più sopra: registrato a ogni tick grezzo, rispetta da
+   // solo l'orario MT5/Capital.com/blackout (footprintRegisterTick() è generica, non legata
+   // all'asset a grafico ora).
+   footprintRegisterTick(msg.bid,Date.now(),symbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1,'mt5');
+ };
+ ws.onerror=()=>{};
+ ws.onclose=()=>{
+   if(mt5BackgroundWs[asset]!==ws)return;
+   delete mt5BackgroundWs[asset];
+   if(liveModeActive && mt5Connected && favoriteAssets.includes(asset)){
+     mt5BackgroundWsReconnectTimers[asset]=setTimeout(()=>{ delete mt5BackgroundWsReconnectTimers[asset]; connectMt5BackgroundStream(asset,symbol); },3000);
+   }
+ };
+}
+// Ricalcola l'insieme di connessioni MT5 di background da tenere aperte: un asset in watchlist
+// DIVERSO da quello a grafico ora, per il quale un simbolo MT5 risolve con successo. Da chiamare
+// dopo ogni add/removeFromWatchlist e ad ogni cambio asset/connessione MT5 (vedi i punti di
+// chiamata più sotto/sopra nel file).
+async function refreshWatchlistBackgroundTracking(){
+ if(!liveModeActive){ disconnectAllMt5BackgroundStreams(); return; } // Storico: nessun tracciamento in background ha senso
+ const wanted=new Set(favoriteAssets.filter(a=>a && a!==currentAssetKey));
+ Object.keys(mt5BackgroundWs).forEach(a=>{ if(!wanted.has(a))disconnectMt5BackgroundStream(a); });
+ if(!mt5Connected){ disconnectAllMt5BackgroundStreams(); return; } // le connessioni di background MT5 hanno senso solo con MT5 collegato
+ for(const a of wanted){
+   const resolved=await resolveMt5SymbolForAsset(a);
+   if(resolved)connectMt5BackgroundStream(a,resolved);
+ }
+}
+// AUTO-CORREZIONE PERIODICA: invece di intercettare ogni singolo punto del file in cui
+// mt5Connected/liveModeActive possono cambiare (login riuscito, disconnessione manuale,
+// credenziali scadute, chiusura sessione…), un giro ogni 15s garantisce che le connessioni di
+// background MT5 restino sempre coerenti con lo stato reale, anche se un punto di cambio non
+// richiama esplicitamente refreshWatchlistBackgroundTracking() — costo trascurabile (poche
+// verifiche, nessuna riconnessione se già tutto a posto) per una garanzia molto più solida.
+setInterval(()=>{ try{ refreshWatchlistBackgroundTracking(); }catch(e){} },15000);
 
 function disconnectMt5OrderBook(){
  if(mt5OrderBookWsReconnectTimer){clearTimeout(mt5OrderBookWsReconnectTimer);mt5OrderBookWsReconnectTimer=null;}
