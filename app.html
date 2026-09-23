@@ -3272,6 +3272,9 @@ function flushDrawingsOnExit(){
    // transazione IndexedDB già aperta anche a pagina in chiusura — il salvataggio debounced a
    // 800ms durante la sessione normale resta comunque la vera rete di sicurezza.
    saveFootprintTicksNow();
+   // Stesso identico discorso per il log dello storico order book (heatmap) — vedi
+   // orderBookHistoryDirty/saveOrderBookHistoryNow() più sopra nel file.
+   saveOrderBookHistoryNow();
  }catch(e){}
 }
 window.addEventListener('pagehide',flushDrawingsOnExit);
@@ -3540,6 +3543,9 @@ async function saveLightStateNow(){
  // sincrono su localStorage (potenzialmente troppo grande) — vedi footprintTicksDirty più sotto
  // nel file, che evita di riscriverlo quando non c'è nulla di nuovo.
  saveFootprintTicksNow();
+ // Log grezzo dello storico order book (heatmap): stesso identico schema, stesso giro debounced —
+ // vedi orderBookHistoryDirty/saveOrderBookHistoryNow() più sopra nel file.
+ saveOrderBookHistoryNow();
  // NIENTE PIÙ SCRITTURE SU FIRESTORE QUI: prima veniva chiamato window.fxbtCloud.save(state)
  // ad ogni autosalvataggio (ogni ~800ms durante il trading attivo), generando un numero di
  // scritture/trasferimenti enorme sul piano Blaze. Da ora Firestore viene aggiornato UNA SOLA
@@ -6039,57 +6045,33 @@ function computeVolumeProfile(startIdx,endIdx,buckets){
  for(let b=0;b<nb;b++)maxTotal=Math.max(maxTotal,upVol[b]+downVol[b]);
  return{priceLo,priceHi,bucketSize,upVol,downVol,maxTotal,buckets:nb};
 }
-// Order Book Profile: raggruppa i livelli REALI del book MT5 (letto in questo momento da
-// /ws/orderbook/{symbol}, vedi connectMt5OrderBook) sulla STESSA griglia di prezzo già usata
-// dall'istogramma di destra (priceLo/bucketSize/buckets di un profilo già calcolato da
-// computeVolumeProfile), così le due barre — bid a sinistra, ask a destra del prezzo — restano
-// allineate riga per riga col volume scambiato. Questo è lo snapshot del book COSÌ COM'È ORA (il
-// book cambia in continuazione, non ha senso "sommarlo" nel tempo) — se il book è vuoto o non
-// disponibile, ogni bucket resta a 0 e non si disegna nulla (mai un book inventato). Il confronto
-// con lo storico recente (quanto peso buyer/seller hanno lasciato dietro) è una funzione separata,
-// vedi bucketOrderBookHistoryIntoProfile più sotto — disegnata insieme a questa ma da un log
-// diverso (orderBookHistoryByAsset, non il solo ultimo snapshot).
-function bucketOrderBookIntoProfile(book,priceLo,bucketSize,buckets){
+// Order Book Profile — ISTOGRAMMA A SVILUPPO (RISCRITTO PER INTERO, CORREZIONE ESPLICITA
+// DELL'UTENTE: "non mi deve far vedere una zona del passato che si aggiorna insieme al
+// millisecondo... semplicemente mi aggiorna mano a mano un piccolo istogramma mantenendo un
+// certo tipo di forma come l'istogramma principale del profilo volumetrico"). La versione
+// precedente mostrava lo snapshot ISTANTANEO del book (latestOrderBookByAsset, aggiornato ad ogni
+// singolo tick del DOM) — non più quello che serve. Ora, per ogni fascia di prezzo, si SOMMANO
+// tutti i volumi bid e ask REALI osservati nel tempo in orderBookHistoryByAsset (lo stesso log
+// già accumulato in continuo da connectMt5OrderBook, mai stimato) — cresce candela dopo candela
+// come il profilo volumetrico a destra, mai un salto al millisecondo. Il lato che ha prevalso in
+// quella fascia (bidVol vs askVol) decide il colore dell'UNICA barra piena disegnata lì — vedi il
+// punto di disegno in draw() per la scelta del colore, qui si restituiscono solo i due totali.
+function bucketOrderBookDominanceProfile(hist,priceLo,bucketSize,buckets){
  const bidVol=new Array(buckets).fill(0), askVol=new Array(buckets).fill(0);
- if(!book||!(bucketSize>0))return {bidVol,askVol,maxLevel:0};
+ if(!hist||!hist.length||!(bucketSize>0))return {bidVol,askVol,maxTotal:0};
  const put=(arr,price,vol)=>{
    if(!Number.isFinite(price)||!Number.isFinite(vol)||vol<=0)return;
    const b=Math.floor((price-priceLo)/bucketSize);
    if(b<0||b>=buckets)return;
    arr[b]+=vol;
  };
- (book.bids||[]).forEach(e=>put(bidVol,e.price,e.volume));
- (book.asks||[]).forEach(e=>put(askVol,e.price,e.volume));
- let maxLevel=0;
- for(let i=0;i<buckets;i++)maxLevel=Math.max(maxLevel,bidVol[i],askVol[i]);
- return {bidVol,askVol,maxLevel};
-}
-// Order Book Profile STORICO — RICHIESTO ESPLICITAMENTE ("non solo l'aggiornamento reale del
-// momento, ma anche quello che si è lasciato dietro... un piccolo storico, sia la parte buyers
-// che sia la parte sellers, quindi un piccolo confronto"): a differenza dello snapshot "adesso"
-// sopra (bucketOrderBookIntoProfile), questo NON è inventato — riusa orderBookHistoryByAsset, lo
-// stesso log REALE di snapshot già accumulato in continuo da connectMt5OrderBook (per la heatmap,
-// sempre attivo in background indipendentemente dai toggle di visualizzazione). Per ogni bucket
-// di prezzo si prende il livello MASSIMO di bid/ask visto in un qualunque snapshot storico
-// recente — il "muro" più pesante che è passato di lì — non una somma nel tempo (che non avrebbe
-// senso per un book che cambia in continuo) né una media (che appiattirebbe un muro grosso ma
-// breve). Disegnato come contorno dietro alla barra piena dello snapshot attuale.
-function bucketOrderBookHistoryIntoProfile(hist,priceLo,bucketSize,buckets){
- const bidMax=new Array(buckets).fill(0), askMax=new Array(buckets).fill(0);
- if(!hist||!hist.length||!(bucketSize>0))return {bidMax,askMax,maxLevel:0};
- const put=(arr,price,vol)=>{
-   if(!Number.isFinite(price)||!Number.isFinite(vol)||vol<=0)return;
-   const b=Math.floor((price-priceLo)/bucketSize);
-   if(b<0||b>=buckets)return;
-   if(vol>arr[b])arr[b]=vol;
- };
  hist.forEach(snap=>{
-   (snap.bids||[]).forEach(e=>put(bidMax,e.price,e.volume));
-   (snap.asks||[]).forEach(e=>put(askMax,e.price,e.volume));
+   (snap.bids||[]).forEach(e=>put(bidVol,e.price,e.volume));
+   (snap.asks||[]).forEach(e=>put(askVol,e.price,e.volume));
  });
- let maxLevel=0;
- for(let i=0;i<buckets;i++)maxLevel=Math.max(maxLevel,bidMax[i],askMax[i]);
- return {bidMax,askMax,maxLevel};
+ let maxTotal=0;
+ for(let i=0;i<buckets;i++)maxTotal=Math.max(maxTotal,bidVol[i]+askVol[i]);
+ return {bidVol,askVol,maxTotal};
 }
 // POC (Point of Control, il bucket con più volume) e Value Area (VAH/VAL, i bordi alto/basso
 // della zona che racchiude il 70% del volume totale, partendo dal POC e allargandosi verso il
@@ -9263,29 +9245,31 @@ function draw(){
    const _hmMeta=heatmapCellsMeta[mt5ActiveSymbol];
    const _hmStep=_hmMeta&&_hmMeta.step;
    if(_hmStep>0){
-     const _hmBucketForIdx=new Array(data.length);
-     for(let i=0;i<data.length;i++){
-       const tStart=parseDateTime(data[i].date);
-       if(!Number.isFinite(tStart)){ _hmBucketForIdx[i]=null; continue; }
-       const bucket=_hmCells[footprintBucketStart(tStart)];
-       _hmBucketForIdx[i]=(bucket&&bucket.cnt>0)?bucket:null;
-     }
-     // RICHIESTO ESPLICITAMENTE ("senza interruzioni tra una candela e l'altra"): una candela
-     // senza uno snapshot REALE caduto esattamente nella sua finestra temporale (feed non ancora
-     // partito su quella fascia oraria, micro-buco nello streaming) eredita l'ultima cella reale
-     // osservata PRIMA di lei — non è un dato inventato: è esattamente come si comporta un vero
-     // book, dove la liquidità in attesa resta lì finché non arriva un aggiornamento che la cambia
-     // davvero, non sparisce fra un tick e l'altro. Mai all'indietro: le candele PRIMA del primo
-     // dato reale restano scoperte, onestamente (storico precedente all'apertura dello streaming).
-     let _hmLastReal=null;
-     for(let i=0;i<data.length;i++){
-       if(_hmBucketForIdx[i])_hmLastReal=_hmBucketForIdx[i];
-       else if(_hmLastReal)_hmBucketForIdx[i]=_hmLastReal;
-     }
+     // RIDISEGNATO PER INTERO (rif. screenshot Bookmap fornito dall'utente, con le frecce sulle
+     // bande orizzontali che "continuano ad avanzare a destra anche se le candele sono più alte o
+     // più basse"): la versione precedente trascinava avanti un'INTERA candela mancante (bucket
+     // intero, "eredita l'ultima cella reale osservata PRIMA di lei") solo quando MANCAVA del
+     // tutto uno snapshot per quella finestra temporale — ma quando UNO snapshot arrivava, quella
+     // candela mostrava SOLO i livelli coperti dal DOM in quel preciso istante (tipicamente pochi,
+     // vicini al prezzo del momento): un livello osservato 10-20 pip più lontano tempo fa, se il
+     // prezzo nel frattempo si è allontanato e il DOM del broker non lo ripubblica più ogni volta,
+     // spariva subito dalla vista — mai "trascinato" oltre quella singola candela. Esattamente il
+     // difetto segnalato ("rimane sempre vicinissimo al prezzo di mercato").
+     // Ora il trascinamento è per SINGOLO LIVELLO DI PREZZO, non più per intera candela: si scorre
+     // la sequenza cronologica delle candele in vista aggiornando, livello per livello, l'ULTIMA
+     // cella REALE nota — un livello aggiornato in una candela resta colorato con quel valore in
+     // OGNI candela successiva finché non arriva una NUOVA osservazione REALE per QUEL livello
+     // (mai un dato stimato: è l'ultimo valore realmente osservato lì, semplicemente ripetuto
+     // finché non cambia davvero — la stessa identica logica "mai indietro, sempre in avanti finché
+     // non aggiornato" già usata sopra, applicata riga per riga invece che a bucket interi). Prima
+     // passata: solo per calcolare il massimo (normalizzazione colore stabile per tutto il frame,
+     // niente ricalcolo del trascinamento riga per riga una seconda volta con denominatori diversi).
      let _hmMaxCell=0;
      for(let i=0;i<data.length;i++){
-       const bucket=_hmBucketForIdx[i];
-       if(!bucket)continue;
+       const tStart=parseDateTime(data[i].date);
+       if(!Number.isFinite(tStart))continue;
+       const bucket=_hmCells[footprintBucketStart(tStart)];
+       if(!bucket||!(bucket.cnt>0))continue;
        const cnt=bucket.cnt;
        // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
        // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
@@ -9301,18 +9285,29 @@ function draw(){
        // l'altro) — così le colonne della heatmap si toccano davvero, niente più righe verticali
        // di sfondo che spuntano fra una candela e l'altra.
        const _hmSlot=cw/n;
+       // Seconda passata: ricostruisce lo stesso trascinamento riga per riga (stato "come noto ad
+       // ogni colonna", accumulato scorrendo in avanti) e disegna SUBITO ogni colonna con
+       // l'insieme COMPLETO dei livelli noti fino a quel punto — non solo quelli della candela
+       // corrente. `_hmLastKnownVal` vive per tutta questa passata: è la vera "impronta che si
+       // lascia dietro" richiesta, mai azzerata finché la candela resta in vista.
+       const _hmLastKnownVal={}; // levelKey (stringa) -> valore (bid+ask)/cnt più recente osservato REALMENTE su QUEL livello
        for(let i=0;i<data.length;i++){
-         const bucket=_hmBucketForIdx[i];
-         if(!bucket)continue;
-         const cnt=bucket.cnt;
+         const tStart=parseDateTime(data[i].date);
+         const bucket=Number.isFinite(tStart)?_hmCells[footprintBucketStart(tStart)]:null;
+         if(bucket&&bucket.cnt>0){
+           const cnt=bucket.cnt;
+           for(const levelKey in bucket.rows){
+             const c=bucket.rows[levelKey];
+             _hmLastKnownVal[levelKey]=(c.bid+c.ask)/cnt;
+           }
+         }
          const xxL=x(i)-_hmSlot/2-0.4, cellW=_hmSlot+0.8;
-         for(const levelKey in bucket.rows){
+         for(const levelKey in _hmLastKnownVal){
+           const val=_hmLastKnownVal[levelKey];
+           if(!(val>0))continue;
            const rowLoPrice=Number(levelKey), rowHiPrice=rowLoPrice+_hmStep;
            const yTop=y(rowHiPrice), yBot=y(rowLoPrice);
-           if(yBot<pad.t||yTop>h-pad.b)continue;
-           const cell=bucket.rows[levelKey];
-           const val=(cell.bid+cell.ask)/cnt;
-           if(val<=0)continue;
+           if(yBot<pad.t||yTop>h-pad.b)continue; // fuori dalla finestra verticale in vista: costa solo il confronto, mai disegnato
            // Compressione percettiva (radice quadrata): senza, un solo ordine enorme (iceberg,
            // livello istituzionale) normalizzerebbe TUTTO il resto quasi a zero, appiattendo la
            // heatmap a un'unica macchia scura — con la radice le fasce medie restano visibili,
@@ -9363,12 +9358,23 @@ function draw(){
          const _fpAvgDelta=_fpDeltaSum/_fpLevels.length;
          const _fpLabelFontPx=Math.max(8,Math.min(11,bw/5));
          if(bw>=44){ // stessa soglia di leggibilità già usata dai numeri riga per riga in drawFootprintCandle()
+           // CORREZIONE ESPLICITA DELL'UTENTE ("stai attento a non mettere le scritte dentro le
+           // candele/caselle, fai in modo che Δ e V non si sovrappongano, più staccate"): prima le
+           // due righe erano praticamente attaccate al bordo alto della candela (2px di margine) e
+           // fra loro (0px di distanza reale, solo l'altezza del font) — su candele con stoppino
+           // corto il testo finiva visivamente dentro/a ridosso delle caselline colorate. Ora
+           // baseline esplicite: _fpClearance stacca la riga più vicina (V) dal vero massimo della
+           // candela, _fpLineGap aggiunge un vuoto ulteriore fra V e Δ oltre alla sola altezza del
+           // font — mai calcolato "a occhio" dall'ordine delle fillText come prima.
            ctx.save();
-           ctx.textAlign='center'; ctx.textBaseline='bottom'; ctx.font=_fpLabelFontPx+'px sans-serif';
-           ctx.fillStyle=_fpAvgDelta>=0?'#55c28b':'#e05b64';
-           ctx.fillText('Δ'+(_fpAvgDelta>=0?'+':'')+_fpAvgDelta.toFixed(1),xx,y(r.high)-_fpLabelFontPx-2);
+           ctx.textAlign='center'; ctx.textBaseline='alphabetic'; ctx.font=_fpLabelFontPx+'px sans-serif';
+           const _fpClearance=6, _fpLineGap=3;
+           const _fpVBaseline=y(r.high)-_fpClearance;
+           const _fpDeltaBaseline=_fpVBaseline-_fpLabelFontPx-_fpLineGap;
            ctx.fillStyle=lineColor;
-           ctx.fillText('V'+Math.round(_fpVolSum),xx,y(r.high)-2);
+           ctx.fillText('V'+Math.round(_fpVolSum),xx,_fpVBaseline);
+           ctx.fillStyle=_fpAvgDelta>=0?'#55c28b':'#e05b64';
+           ctx.fillText('Δ'+(_fpAvgDelta>=0?'+':'')+_fpAvgDelta.toFixed(1),xx,_fpDeltaBaseline);
            ctx.restore();
          }
        }
@@ -9810,66 +9816,41 @@ function draw(){
          }
          ctx.restore();
        }
-       // Order Book Profile: istogramma "specchio" a SINISTRA di leftX, sulla stessa griglia di
-       // prezzo del profilo appena disegnato a destra — bid (blu) sopra il prezzo attuale, ask
-       // (rosso) sotto, letti dal book REALE MT5 più recente arrivato via WebSocket (vedi
-       // connectMt5OrderBook/latestOrderBookByAsset). Per-disegno (d.obEnabled), non globale:
-       // stesso schema on/off delle altre sezioni di questo profilo (LVN, POC/VAH/VAL, ecc.).
+       // Order Book Profile: istogramma a SINISTRA di leftX, sulla stessa griglia di prezzo del
+       // profilo appena disegnato a destra.
+       // RIDISEGNATO PER INTERO (CORREZIONE ESPLICITA DELL'UTENTE: "non mi deve far vedere una
+       // zona del passato che si aggiorna insieme al millisecondo con le lotte tra buyers e
+       // sellers del prezzo corrente... semplicemente mi aggiorna mano a mano un piccolo
+       // istogramma mantenendo comunque un certo tipo di forma come l'istogramma principale del
+       // profilo volumetrico"): la versione precedente mostrava lo snapshot ISTANTANEO del DOM
+       // (latestOrderBookByAsset) — due barre bid/ask separate che cambiano ad ogni singolo tick
+       // del book, praticamente in tempo reale — con sopra un contorno storico "muro massimo"
+       // come confronto. Non è più quello che serve: ora è UN SOLO istogramma "a sviluppo", che
+       // cresce candela dopo candela come il profilo volumetrico a destra (mai un aggiornamento
+       // al millisecondo) — per ogni fascia di prezzo si sommano TUTTI i volumi bid e ask REALI
+       // osservati nella storia (orderBookHistoryByAsset, mai stimati), e la barra è UNA SOLA,
+       // piena, del colore del lato che ha prevalso in quella fascia: colore bid se lì i buyers
+       // hanno pesato di più nel tempo, colore ask se hanno prevalso i sellers — non più due
+       // colonne bid/ask affiancate.
        if(d.obEnabled&&profile&&profile.maxTotal>0){
-         const obBook=(typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol)?latestOrderBookByAsset[mt5ActiveSymbol]:null;
          const obHist=(typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol)?orderBookHistoryByAsset[mt5ActiveSymbol]:null;
-         const hasNow=obBook&&((obBook.bids&&obBook.bids.length)||(obBook.asks&&obBook.asks.length));
-         const ob=hasNow?bucketOrderBookIntoProfile(obBook,profile.priceLo,profile.bucketSize,profile.buckets):null;
-         // Storico: RICHIESTO ESPLICITAMENTE ("non solo l'aggiornamento reale del momento, ma
-         // anche quello che si è lasciato dietro... un piccolo confronto"). Stessa scala PX dello
-         // snapshot attuale (un unico maxLevel condiviso), così le due barre restano confrontabili
-         // a colpo d'occhio invece di essere normalizzate separatamente l'una dall'altra.
-         const obh=bucketOrderBookHistoryIntoProfile(obHist,profile.priceLo,profile.bucketSize,profile.buckets);
-         const sharedMax=Math.max(ob?ob.maxLevel:0,obh.maxLevel);
-         if(sharedMax>0){
+         const obDom=bucketOrderBookDominanceProfile(obHist,profile.priceLo,profile.bucketSize,profile.buckets);
+         if(obDom.maxTotal>0){
            const obBidCol=d.obBidColor||'#2f6fed', obAskCol=d.obAskColor||'#e05b4f';
            ctx.save();
            ctx.globalAlpha=Math.min(1,strokeAlpha);
-           // 1) Storico SOTTO (contorno sottile, senza riempimento): il "muro" massimo bid/ask
-           // visto di recente in quella zona — disegnato per primo così lo snapshot attuale, pieno,
-           // resta sempre sopra e più leggibile.
-           if(obh.maxLevel>0){
-             ctx.lineWidth=1;
-             for(let b=0;b<profile.buckets;b++){
-               const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
-               const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
-               const barH=Math.max(1,yBot-yTop-1);
-               const bidHV=obh.bidMax[b], askHV=obh.askMax[b];
-               if(bidHV>0){
-                 const px=Math.max(1,bidHV/sharedMax*maxBarPx);
-                 ctx.strokeStyle=hexToRgba(obBidCol,0.5);
-                 ctx.strokeRect(leftX-px+0.5,yTop+0.5,px-1,barH-1);
-               }
-               if(askHV>0){
-                 const px=Math.max(1,askHV/sharedMax*maxBarPx);
-                 ctx.strokeStyle=hexToRgba(obAskCol,0.5);
-                 ctx.strokeRect(leftX-px+0.5,yTop+0.5,px-1,barH-1);
-               }
-             }
-           }
-           // 2) Snapshot ATTUALE sopra (barra piena) — comportamento originale, invariato.
-           if(ob&&ob.maxLevel>0){
-             for(let b=0;b<profile.buckets;b++){
-               const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
-               const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
-               const barH=Math.max(1,yBot-yTop-1);
-               const bidV=ob.bidVol[b], askV=ob.askVol[b];
-               if(bidV>0){
-                 const px=Math.max(1,bidV/sharedMax*maxBarPx);
-                 ctx.fillStyle=hexToRgba(obBidCol,0.55);
-                 ctx.fillRect(leftX-px,yTop+0.5,px,barH);
-               }
-               if(askV>0){
-                 const px=Math.max(1,askV/sharedMax*maxBarPx);
-                 ctx.fillStyle=hexToRgba(obAskCol,0.55);
-                 ctx.fillRect(leftX-px,yTop+0.5,px,barH);
-               }
-             }
+           for(let b=0;b<profile.buckets;b++){
+             const total=obDom.bidVol[b]+obDom.askVol[b];
+             if(total<=0)continue;
+             const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
+             const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
+             const barH=Math.max(1,yBot-yTop-1);
+             const px=Math.max(1,total/obDom.maxTotal*maxBarPx);
+             // Un lato solo, quello che ha prevalso nella fascia — mai due barre affiancate come
+             // nella versione precedente: qui non stiamo confrontando "adesso" bid vs ask, stiamo
+             // mostrando CHI ha controllato quella zona di prezzo nel tempo.
+             ctx.fillStyle=hexToRgba(obDom.bidVol[b]>=obDom.askVol[b]?obBidCol:obAskCol,0.55);
+             ctx.fillRect(leftX-px,yTop+0.5,px,barH);
            }
            ctx.restore();
          }
@@ -19011,7 +18992,7 @@ function footprintFindZeroPrintRowsForCandle(fp,r){
 }
 // Costruisce le zone zero-print "vive" per la SEQUENZA di candele visibili (richiesto
 // esplicitamente: "un rettangolo che si muove andando avanti nel grafico man mano che si
-// sviluppano nuove candele"). `entries` = [{r,xx,fp}] in ordine cronologico per OGNI candela
+// sviluppano nuove candele"). `entries` = [{r,xx,fp,fpAR}] in ordine cronologico per OGNI candela
 // visibile — fp è null per le candele senza footprint reale, ma la loro [low,high] SERVE comunque
 // per capire se "mitigano" (chiudono) una zona nata prima, quindi vanno incluse tutte, non solo
 // quelle con dati footprint. Una zona nasce nella candela dove appare il buco e si estende verso
@@ -19019,12 +19000,17 @@ function footprintFindZeroPrintRowsForCandle(fp,r){
 // zona; alla PRIMA che lo fa, la zona si ferma lì ("mitigata"). Se nessuna la mitiga, resta aperta
 // fino all'ultima candela visibile (esattamente come nel riferimento: si allarga ad ogni nuova
 // candela finché il prezzo non ci torna dentro). Ritorna [{loPrice,hiPrice,xStart,xEnd,count,mitigated}].
+// CORREZIONE ESPLICITA DELL'UTENTE: usa e.fpAR (MAI azzerato dalla larghezza candela, stesso campo
+// già usato dai pallini Absorption/Rejection), non e.fp (quello sì tagliato sotto _FOOTPRINT_MIN_BW
+// e usato solo per decidere candela-footprint-dettagliata-vs-normale) — così le zone zero-print
+// restano visibili anche quando uno zoom verso l'esterno fa tornare le candele al disegno normale
+// (troppo strette per il footprint riga-per-riga), esattamente come già succede per i pallini.
 function footprintBuildZeroPrintZones(entries,minRows){
  const zones=[];
  for(let i=0;i<entries.length;i++){
    const e=entries[i];
-   if(!e.fp)continue;
-   const groups=footprintFindZeroPrintRowsForCandle(e.fp,e.r).filter(g=>g.count>=minRows);
+   if(!e.fpAR)continue;
+   const groups=footprintFindZeroPrintRowsForCandle(e.fpAR,e.r).filter(g=>g.count>=minRows);
    groups.forEach(g=>{
      let endXX=e.xxRight, mitigated=false;
      for(let j=i+1;j<entries.length;j++){
@@ -19562,6 +19548,23 @@ let mt5OrderBookWs=null, mt5OrderBookWsSymbol=null, mt5OrderBookWsReconnectTimer
 let latestOrderBookByAsset={};
 let orderBookHistoryByAsset={}; // { assetKey: [ {time_ms,bids,asks}, ... ] } — capped per TEMPO, vedi HEATMAP_HISTORY_MAX_HOURS/HEATMAP_MIN_SNAPSHOT_GAP_MS
 let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha già risposto "niente DOM" in questa sessione (evita retry infiniti/log spam)
+// PERSISTENZA (RICHIESTO ESPLICITAMENTE: "la heatmap deve comportarsi come il footprint... quello
+// che ha scaricato se lo salva in locale, alla riapertura ricarica quello che aveva scaricato e
+// continua ad aggiornare"): stesso, identico schema già usato per il log tick del footprint
+// (footprintTickLogByAsset/footprintTicksDirty/saveFootprintTicksNow, vedi più sotto nel file) —
+// orderBookHistoryDirty segna solo che c'è qualcosa di nuovo da salvare (un mercato silenzioso non
+// genera scritture inutili), saveOrderBookHistoryNow() scrive su IndexedDB nello stesso giro
+// debounced a 800ms di saveLightStateNow() (mai sincrono su localStorage: può crescere parecchio),
+// e il caricamento all'avvio (vedi initSession) lo ripristina PRIMA che arrivi il primo snapshot
+// live — da lì in poi connectMt5OrderBook() continua semplicemente ad aggiungere allo stesso log,
+// esattamente come il footprint continua ad aggiungere allo stesso footprintTickLogByAsset.
+let orderBookHistoryDirty=false;
+async function saveOrderBookHistoryNow(){
+ if(!orderBookHistoryDirty)return;
+ orderBookHistoryDirty=false;
+ const ok=await idbPut('orderBookHistory',orderBookHistoryByAsset);
+ if(!ok)orderBookHistoryDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
+}
 // HEATMAP DI LIQUIDITÀ — CACHE A BUCKET PER CANDELA (richiesto esplicitamente: "lasciata come
 // impronta mano a mano che si sviluppa il grafico", stile Bookmap, non solo lo stato attuale del
 // book). Prima la heatmap ricalcolava OGNI cella di OGNI candela in vista, per OGNI frame di
@@ -20041,6 +20044,7 @@ function connectMt5OrderBook(symbol){
    const _lastHist=hist.length?hist[hist.length-1]:null;
    if(!_lastHist||snap.time_ms-_lastHist.time_ms>=HEATMAP_MIN_SNAPSHOT_GAP_MS){
      hist.push(snap);
+     orderBookHistoryDirty=true; // vedi saveOrderBookHistoryNow(): persistito al prossimo giro debounced, non subito
      // Tetto per TEMPO (non per conteggio): scarta solo gli snapshot più vecchi della finestra di
      // retention, così lo storico copre l'intera sessione invece di poche migliaia di update.
      const _histCutoff=snap.time_ms-HEATMAP_HISTORY_MAX_HOURS*3600000;
@@ -21379,7 +21383,7 @@ async function initExtraPipWindow(){
  // (libreria CSV, credenziali Live): se il permesso è scaduto, meglio chiederlo tutto subito
  // con un tocco esplicito dell'utente piuttosto che farlo fallire in silenzio più avanti.
  maybeShowUnlockFilesBanner();
- let [savedCsv,savedState,savedChartViews,savedFootprintTicks]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews'),idbGet('footprintTicks')]);
+ let [savedCsv,savedState,savedChartViews,savedFootprintTicks,savedOrderBookHistory]=await Promise.all([idbGet('csv'),idbGet('state'),idbGet('assetChartViews'),idbGet('footprintTicks'),idbGet('orderBookHistory')]);
  // Log tick grezzo del footprint (buyer/seller reali per candela, per asset): ripristinato qui,
  // PRIMA di sapere quale asset/timeframe sarà a grafico — footprintRebuildBucketsForCurrentAsset()
  // più sotto (a ripristino ormai completo) lo ribucketizza per l'asset/TF/step correnti, esattamente
@@ -21387,6 +21391,13 @@ async function initExtraPipWindow(){
  // deve togliere" a una riapertura, quindi lo si ripristina SEMPRE, non solo se l'utente riattiva
  // il footprint — così è già lì pronto se lo riaccende più avanti nella stessa sessione.
  if(savedFootprintTicks&&typeof savedFootprintTicks==='object')footprintTickLogByAsset=savedFootprintTicks;
+ // RICHIESTO ESPLICITAMENTE ("la heatmap deve comportarsi come il footprint... alla riapertura
+ // ricarica quello che aveva scaricato e continua ad aggiornare"): stesso identico ripristino,
+ // stesso momento (prima di sapere quale asset sarà a grafico) — heatmapCellsForAssetNow()
+ // ricostruisce da qui le celle aggregate alla prima draw(), esattamente come
+ // footprintRebuildBucketsForCurrentAsset() fa per il footprint qui sopra. Da qui in poi
+ // connectMt5OrderBook() continua semplicemente ad aggiungere allo stesso log ripristinato.
+ if(savedOrderBookHistory&&typeof savedOrderBookHistory==='object')orderBookHistoryByAsset=savedOrderBookHistory;
  // BUG RISOLTO (posizioni Live sparite dopo un refresh): prima il controllo cloud, qui sotto,
  // sovrascriveva SEMPRE savedState con la copia Firestore se ne trovava una valida — anche
  // quando localStorage aveva già una versione più fresca (scritta in modo sincrono ad ogni
