@@ -147,6 +147,17 @@ table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px;borde
 @media(max-width:700px){.livePL{grid-template-columns:1fr 1fr}}
 
 .drawToolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+/* CORREZIONE ESPLICITA DELL'UTENTE: #indicatorsToolbar ("+ Aggiungi indicatore..." e "🧩 Codice
+   personalizzato"), quando vive dentro #chartFloatControlsExtra (schermo intero/PIP, spostato lì
+   da moveIndicatorsToolbarIntoSidebar più sotto nello script), è troppo largo per quella riga
+   stretta in alto al grafico: qui lo restringiamo, nascondendo anche l'icona decorativa. La
+   visibilità (mostra/nascondi insieme al pulsante "📊 Indicatori") è gestita in JS da
+   renderActiveIndicatorsUI(), non da CSS.*/
+#chartFloatControlsExtra #indicatorsToolbar{gap:4px;margin:0}
+#chartFloatControlsExtra #indicatorSelectWrap svg{display:none}
+#chartFloatControlsExtra #indicatorSelectWrap{max-width:118px}
+#chartFloatControlsExtra #indicatorSelect{width:118px;max-width:118px;padding:6px 8px;font-size:11px}
+#chartFloatControlsExtra #openCustomScriptBtn{padding:6px 8px;font-size:11px;white-space:nowrap}
 .toolBtn{width:auto;padding:8px 13px;font-size:12px;font-weight:600;background:#0b1117;border:1px solid #2b3541;color:#e8edf3}
 .toolBtn.active{background:#277d5a;border-color:#3ea6ff;box-shadow:0 0 0 1px #3ea6ff inset}
 .toolBtn.danger{background:#0b1117;border-color:#7a3030;color:#e88}
@@ -3821,7 +3832,16 @@ if(tradingChannel){
          tradingChannel.postMessage({
            type:'pip_clone_snapshot', slot:0, storico:!liveModeActive,
            asset:currentAssetKey||null, mode, chartView,
-           styleFields:collectStyleCloneFields()
+           styleFields:collectStyleCloneFields(),
+           // WARM-START (RICHIESTO ESPLICITAMENTE: "sono veramente troppo lente... a meno che
+           // non ci inventiamo un qualcosa che sia molto più rapido"): niente riscrittura del
+           // motore di rendering (draw()/chartGeometry() sono legati a un canvas solo, troppo
+           // rischioso farlo condividere a 4 finestre in una sessione) — invece, ogni finestra
+           // PIP aggiuntiva resta un programma indipendente (come oggi, zero rischio sul grafico
+           // principale) ma la madre le passa SUBITO, qui, quello che ha già verificato funzionare
+           // (conto MT5 già connesso) invece di lasciarla rifare da zero l'intera trafila di
+           // login/conferma che normalmente costa i secondi più lunghi all'apertura.
+           mt5Connected:!!mt5Connected, mt5CredsDraft:mt5Connected?mt5CredsDraft:null
          });
        }catch(e){}
      }
@@ -3839,6 +3859,25 @@ if(tradingChannel){
            assetChartViews[mode][msg.asset]={...msg.chartView};
          }
          applyRemoteAssetSwitch(msg.asset, msg.chartView&&Number.isFinite(msg.chartView.masterTime)?msg.chartView.masterTime:undefined);
+       }
+       // WARM-START MT5 (vedi commento sopra su pip_clone_request): se la madre risulta già
+       // connessa a un conto MT5 reale, questa finestra si collega SUBITO con le STESSE
+       // credenziali — mai richieste all'utente qui, sono le stesse già verificate funzionanti
+       // un istante fa dalla madre — invece di restare scollegata in attesa di un gesto manuale
+       // (la finestra PIP non ha comunque un proprio popup di login MT5: fino a questo fix
+       // sarebbe rimasta MT5-scollegata per tutta la sua vita, a meno di intervento manuale).
+       // Fire-and-forget: se fallisce (bridge occupato in quell'istante, account nel frattempo
+       // disconnesso) la finestra resta semplicemente scollegata come oggi, nessun blocco, nessun
+       // popup d'errore che interrompa l'apertura.
+       if(msg.mt5Connected && msg.mt5CredsDraft && !mt5Connected){
+         connectToMt5Bridge(msg.mt5CredsDraft).then(result=>{
+           if(result.ok){
+             mt5CredsDraft=msg.mt5CredsDraft;
+             mt5Connected=true;
+             updateMt5ModeUI();
+             runMt5HistoryCatchUp();
+           }
+         }).catch(()=>{});
        }
      }
    }
@@ -3866,6 +3905,35 @@ if(tradingChannel){
 // schermo) o si sta chiudendo/ricaricando — mai durante il trading attivo.
 let lastFirebaseSyncAt=0;
 const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più eventi scattano insieme
+// CORREZIONE ESPLICITA DELL'UTENTE ("problemi di caricamento delle vecchie posizioni nel trade
+// journal"): il bundle mandato a Firestore includeva SEMPRE l'intero array `trades` per intero
+// (mai tagliato: in locale "resta lo storico completo di sempre", giustamente) dentro un
+// documento Firestore con un tetto DURO di 1MiB — superata quella soglia l'INTERA scrittura
+// falliva (setDoc lancia un errore, preso solo da un console.warn), quindi l'ultima copia buona
+// su Firestore restava sempre più vecchia man mano che si chiudevano nuovi trade — e non solo i
+// trade: anche posizioni/disegni/stato corrente restavano fermi a quel momento, perché è tutto
+// nello STESSO documento. Un ripristino da cloud (nuovo dispositivo, dati locali persi/cache
+// svuotata) mostrava quindi un Trade Journal (e non solo) bloccato a quell'istante nel tempo. Il
+// salvataggio LOCALE (IndexedDB/localStorage) non ha invece nessun limite pratico e resta
+// sempre completo — è SOLO la copia cloud a dover stare sotto budget. Stessa idea già usata per
+// footprintCollectCloudAggregate(): se il bundle supera il budget, si tagliano SOLO i trade più
+// VECCHI (quelli che contano di meno per la continuità, e restano comunque intatti in locale)
+// finché non rientra, mai un fallimento totale della scrittura.
+const FIRESTORE_DOC_MAX_BYTES=900*1024; // margine di sicurezza sotto il tetto reale di 1MiB di Firestore
+const FIRESTORE_KEEPALIVE_MAX_BYTES=56*1024; // margine sotto il tetto di ~64KB imposto dal browser per fetch keepalive
+function trimTradesForCloudBudget(bundle,maxBytes){
+ let json;
+ try{ json=JSON.stringify(bundle); }catch(e){ return bundle; }
+ if(json.length<=maxBytes)return bundle;
+ if(!Array.isArray(bundle.trades)||!bundle.trades.length)return bundle;
+ const trimmed={...bundle,trades:bundle.trades.slice()};
+ while(trimmed.trades.length>0){
+   trimmed.trades.shift(); // trades è cronologico (push() in coda): il primo è sempre il più vecchio
+   try{ json=JSON.stringify(trimmed); }catch(e){ break; }
+   if(json.length<=maxBytes)break;
+ }
+ return trimmed;
+}
 async function syncFullStatusToFirebase(reason,force){
  if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non toccano MAI il salvataggio cloud dell'account: vedi PIP_SLOT più sopra
  if(!(window.fxbtCloud && window.fxbtCloud.uid))return; // non loggato: niente cloud, solo locale
@@ -3895,7 +3963,8 @@ async function syncFullStatusToFirebase(reason,force){
    const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
    bundle.assetChartViews=assetChartViews; // ultima candela vista, per asset e per sessione
    bundle.footprintCells=footprintCollectCloudAggregate(); // backup footprint cloud (celle aggregate, non il log tick grezzo — vedi footprintCollectCloudAggregate())
-   await window.fxbtCloud.save(bundle);
+   const trimmedBundle=trimTradesForCloudBudget(bundle,FIRESTORE_DOC_MAX_BYTES);
+   await window.fxbtCloud.save(trimmedBundle);
  }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
 }
@@ -3938,7 +4007,10 @@ window.addEventListener('pagehide', ()=>{
       // footprintCollectCloudAggregate()) — se anche quella scrittura async viene interrotta a
       // metà dalla chiusura pagina, il prossimo avvio la ritenta comunque: IndexedDB locale
       // (footprintTicks) resta comunque la copia vera e non dipende mai da questo invio cloud.
-      window.fxbtCloud.saveKeepalive(bundle);
+      // Stesso taglio dei trade più vecchi (vedi trimTradesForCloudBudget sopra) applicato anche
+      // qui, con budget più stretto (~64KB): un Trade Journal ormai grande avrebbe altrimenti
+      // fatto fallire silenziosamente anche QUESTA scrittura keepalive.
+      window.fxbtCloud.saveKeepalive(trimTradesForCloudBudget(bundle,FIRESTORE_KEEPALIVE_MAX_BYTES));
     }catch(e){}
   }
   syncFullStatusToFirebase('pagehide');
@@ -5968,10 +6040,12 @@ function computeVolumeProfile(startIdx,endIdx,buckets){
 // /ws/orderbook/{symbol}, vedi connectMt5OrderBook) sulla STESSA griglia di prezzo già usata
 // dall'istogramma di destra (priceLo/bucketSize/buckets di un profilo già calcolato da
 // computeVolumeProfile), così le due barre — bid a sinistra, ask a destra del prezzo — restano
-// allineate riga per riga col volume scambiato. A differenza dell'istogramma di destra questo NON
-// è uno storico: è lo snapshot del book COSÌ COM'È ORA (il book cambia in continuazione, non ha
-// senso "sommarlo" nel tempo) — se il book è vuoto o non disponibile, ogni bucket resta a 0 e non
-// si disegna nulla (mai un book inventato).
+// allineate riga per riga col volume scambiato. Questo è lo snapshot del book COSÌ COM'È ORA (il
+// book cambia in continuazione, non ha senso "sommarlo" nel tempo) — se il book è vuoto o non
+// disponibile, ogni bucket resta a 0 e non si disegna nulla (mai un book inventato). Il confronto
+// con lo storico recente (quanto peso buyer/seller hanno lasciato dietro) è una funzione separata,
+// vedi bucketOrderBookHistoryIntoProfile più sotto — disegnata insieme a questa ma da un log
+// diverso (orderBookHistoryByAsset, non il solo ultimo snapshot).
 function bucketOrderBookIntoProfile(book,priceLo,bucketSize,buckets){
  const bidVol=new Array(buckets).fill(0), askVol=new Array(buckets).fill(0);
  if(!book||!(bucketSize>0))return {bidVol,askVol,maxLevel:0};
@@ -5986,6 +6060,33 @@ function bucketOrderBookIntoProfile(book,priceLo,bucketSize,buckets){
  let maxLevel=0;
  for(let i=0;i<buckets;i++)maxLevel=Math.max(maxLevel,bidVol[i],askVol[i]);
  return {bidVol,askVol,maxLevel};
+}
+// Order Book Profile STORICO — RICHIESTO ESPLICITAMENTE ("non solo l'aggiornamento reale del
+// momento, ma anche quello che si è lasciato dietro... un piccolo storico, sia la parte buyers
+// che sia la parte sellers, quindi un piccolo confronto"): a differenza dello snapshot "adesso"
+// sopra (bucketOrderBookIntoProfile), questo NON è inventato — riusa orderBookHistoryByAsset, lo
+// stesso log REALE di snapshot già accumulato in continuo da connectMt5OrderBook (per la heatmap,
+// sempre attivo in background indipendentemente dai toggle di visualizzazione). Per ogni bucket
+// di prezzo si prende il livello MASSIMO di bid/ask visto in un qualunque snapshot storico
+// recente — il "muro" più pesante che è passato di lì — non una somma nel tempo (che non avrebbe
+// senso per un book che cambia in continuo) né una media (che appiattirebbe un muro grosso ma
+// breve). Disegnato come contorno dietro alla barra piena dello snapshot attuale.
+function bucketOrderBookHistoryIntoProfile(hist,priceLo,bucketSize,buckets){
+ const bidMax=new Array(buckets).fill(0), askMax=new Array(buckets).fill(0);
+ if(!hist||!hist.length||!(bucketSize>0))return {bidMax,askMax,maxLevel:0};
+ const put=(arr,price,vol)=>{
+   if(!Number.isFinite(price)||!Number.isFinite(vol)||vol<=0)return;
+   const b=Math.floor((price-priceLo)/bucketSize);
+   if(b<0||b>=buckets)return;
+   if(vol>arr[b])arr[b]=vol;
+ };
+ hist.forEach(snap=>{
+   (snap.bids||[]).forEach(e=>put(bidMax,e.price,e.volume));
+   (snap.asks||[]).forEach(e=>put(askMax,e.price,e.volume));
+ });
+ let maxLevel=0;
+ for(let i=0;i<buckets;i++)maxLevel=Math.max(maxLevel,bidMax[i],askMax[i]);
+ return {bidMax,askMax,maxLevel};
 }
 // POC (Point of Control, il bucket con più volume) e Value Area (VAH/VAL, i bordi alto/basso
 // della zona che racchiude il 70% del volume totale, partendo dal POC e allargandosi verso il
@@ -6935,6 +7036,20 @@ function autoFitBaseRange(data){
  let lo=Math.min(...recent.map(r=>r.low)),hi=Math.max(...recent.map(r=>r.high));
  collectTradeLevelPrices(recent).forEach(v=>{ if(v<lo)lo=v; if(v>hi)hi=v; });
  let range=hi-lo||1; lo-=range*.04; hi+=range*.04;
+ // CORREZIONE ESPLICITA DELL'UTENTE ("l'estensione verticale della heatmap non deve incidere
+ // sulla possibilità di zoomare il grafico più/oltre di lei"): l'estensione verticale della
+ // heatmap (heatmapVertPadPips) va applicata SOLO qui, alla base AUTO-FIT — non più ad ogni
+ // singolo frame di draw() sopra lo zoom/pan già scelti dall'utente (era quello il bug: un pad
+ // fisso riapplicato ogni volta sopra viewPriceLo/viewPriceHi congelati sovrascriveva di fatto
+ // lo zoom manuale). Così facendo: appena si entra a grafico (o si preme "torna all'ultima
+ // candela") si vede comunque subito più in là grazie all'estensione, ESATTAMENTE come prima —
+ // ma da quel momento in poi lo zoom/pan manuale (priceZoomFactor, trascinamento) è libero di
+ // andare sia più stretto sia più largo di quel valore, senza che la heatmap lo forzi più ad
+ // ogni frame.
+ if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
+   const _hmVertPad=heatmapVertPadPriceNow(currentAssetKey);
+   if(_hmVertPad>0){ lo-=_hmVertPad; hi+=_hmVertPad; }
+ }
  return {lo,hi};
 }
 function computePriceRange(data){
@@ -8230,6 +8345,12 @@ function renderActiveIndicatorsUI(){
  const wrap=$('activeIndicators'); if(!wrap)return;
  const toggleBtn=$('indicatorsLegendToggleBtn');
  if(toggleBtn)toggleBtn.classList.toggle('active',!indicatorsListHidden);
+ // CORREZIONE ESPLICITA DELL'UTENTE: il pulsante "📊 Indicatori" deve mostrare/nascondere
+ // INSIEME sia gli indicatori già presenti a grafico (leggenda, sopra) sia i due controlli per
+ // aggiungerne altri ("+ Aggiungi indicatore..." e "🧩 Codice personalizzato", #indicatorsToolbar)
+ // — prima #indicatorsToolbar restava sempre visibile per conto suo, slegato da questo toggle.
+ const addToolbar=document.getElementById('indicatorsToolbar')||(floatingDoc&&floatingDoc.getElementById('indicatorsToolbar'));
+ if(addToolbar)addToolbar.style.display=indicatorsListHidden?'none':'flex';
  // RICHIESTO ESPLICITAMENTE (stile TradingView, vedi foto di riferimento): un indicatore per
  // riga, nome semplice senza icona davanti; i 3 pulsanti (occhio "visibilità", ingranaggio
  // "impostazioni", cestino "elimina") restano nascosti e compaiono SOLO passandoci sopra col
@@ -9004,16 +9125,11 @@ function draw(){
  const {n,start,dataStart,dataEnd}=getViewWindow();
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
  const pad={l:18,r:76,t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
+ // CORREZIONE ESPLICITA DELL'UTENTE: l'estensione verticale della heatmap non viene più
+ // riapplicata qui ad ogni frame sopra lo zoom/pan dell'utente (vedi ora dentro
+ // autoFitBaseRange() più sopra nel file, applicata solo alla base auto-fit) — zoom/pan manuali
+ // restano quindi sempre liberi di andare sia oltre sia sotto quell'estensione.
  let {lo,hi,range}=computePriceRange(data);
- // Estensione verticale per la heatmap (richiesta esplicitamente, vedi heatmapVertPadPriceNow()
- // più sopra nel file): allarga lo/hi PRIMA che vengano usati per griglia/candele/tutto il resto,
- // così anche i livelli bid/ask reali più lontani dal prezzo rientrano nell'area disegnata. Stesse
- // identiche condizioni del blocco di disegno heatmap più sotto — se la heatmap non è attiva il
- // range resta esattamente quello di sempre (solo alto/basso delle candele in vista).
- if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
-   const _hmVertPad=heatmapVertPadPriceNow(currentAssetKey);
-   if(_hmVertPad>0){ lo-=_hmVertPad; hi+=_hmVertPad; range=hi-lo; }
- }
  const y=v=>pad.t+(hi-v)/range*ch, x=i=>pad.l+(dataStart+i-start+.5)*cw/n;
  // --- Zona di protezione: da qui in poi (candele, griglia, indicatori, disegni, posizioni,
  // ordini pendenti e caselle Target/Stop) tutto è "ritagliato" (clip) dentro l'area di plot
@@ -9117,12 +9233,15 @@ function draw(){
  // sia per il disegno vero e proprio più sotto, senza ricalcolare due volte lo stesso footprintByBucket.
  const _footprintEntries=_footprintOn?data.map((r,i)=>{
    const xx=x(i);
-   let fp=null;
-   if(bw>=_FOOTPRINT_MIN_BW){
-     const real=footprintByBucket[footprintBucketStart(parseDateTime(r.date))];
-     if(real&&Object.keys(real.rows).length)fp=real;
-   }
-   return{r,xx,xxLeft:xx-bw/2,xxRight:xx+bw/2,fp};
+   const real=footprintByBucket[footprintBucketStart(parseDateTime(r.date))];
+   const hasReal=!!(real&&Object.keys(real.rows).length);
+   const fp=(bw>=_FOOTPRINT_MIN_BW&&hasReal)?real:null;
+   // CORREZIONE ESPLICITA DELL'UTENTE: i pallini Absorption/Rejection NON seguono lo stesso
+   // taglio del footprint normale (fp, sopra — sotto _FOOTPRINT_MIN_BW torna alla candela
+   // semplice): restano visibili anche a candele molto strette, finché c'è dato reale — fpAR
+   // quindi non è mai azzerato dalla larghezza candela, solo dalla mancanza di dato reale.
+   const fpAR=hasReal?real:null;
+   return{r,xx,xxLeft:xx-bw/2,xxRight:xx+bw/2,fp,fpAR};
  }):null;
  // Heatmap di liquidità (Order Book MT5 reale): livello di sfondo, disegnato PRIMA delle candele
  // (e prima delle zone zero-print, che devono restare leggibili sopra) — vedi
@@ -9227,6 +9346,30 @@ function draw(){
    const fp=_footprintEntries?_footprintEntries[i].fp:null;
    if(fp){
      drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle);
+     // RICHIESTO ESPLICITAMENTE: SOLO in stile Bid/Ask (mai in Delta o Volume, dove le caselline
+     // mostrano già rispettivamente il delta o il volume riga per riga — questo numero sopra la
+     // candela ripeterebbe la stessa informazione già a schermo) si scrive sopra alla candela un
+     // riepilogo a colpo d'occhio: la MEDIA del delta (buy-sell) tra tutte le righe della candela
+     // e il volume TOTALE (buy+sell) di tutta la candela — utile proprio in Bid/Ask perché lì le
+     // caselline mostrano solo buy/sell riga per riga, senza un totale/sintesi visibile altrove.
+     if(_footprintStyle==='bidask'){
+       const _fpLevels=Object.keys(fp.rows);
+       if(_fpLevels.length){
+         let _fpDeltaSum=0,_fpVolSum=0;
+         _fpLevels.forEach(lv=>{ const c=fp.rows[lv]; _fpDeltaSum+=(c.buy-c.sell); _fpVolSum+=(c.buy+c.sell); });
+         const _fpAvgDelta=_fpDeltaSum/_fpLevels.length;
+         const _fpLabelFontPx=Math.max(8,Math.min(11,bw/5));
+         if(bw>=44){ // stessa soglia di leggibilità già usata dai numeri riga per riga in drawFootprintCandle()
+           ctx.save();
+           ctx.textAlign='center'; ctx.textBaseline='bottom'; ctx.font=_fpLabelFontPx+'px sans-serif';
+           ctx.fillStyle=_fpAvgDelta>=0?'#55c28b':'#e05b64';
+           ctx.fillText('Δ'+(_fpAvgDelta>=0?'+':'')+_fpAvgDelta.toFixed(1),xx,y(r.high)-_fpLabelFontPx-2);
+           ctx.fillStyle=lineColor;
+           ctx.fillText('V'+Math.round(_fpVolSum),xx,y(r.high)-2);
+           ctx.restore();
+         }
+       }
+     }
      // Area cliccabile per il cambio-stile al click (vedi footprintCellClickCandidate nel
      // pointerdown/pointerup del canvas): l'intera estensione verticale della candela
      // (high->low, coordinate schermo in Y possono invertirsi a seconda della scala, per questo
@@ -9275,11 +9418,21 @@ function draw(){
    const arMinPx=footprintArMinDotPxNow(), arMaxPx=footprintArMaxDotPxNow();
    const arMarkers=footprintFindAbsorptionRejectionMarkers(_footprintEntries,arMinVolMult,arDominance);
    ctx.save();
+   // CORREZIONE ESPLICITA DELL'UTENTE: i pallini restano sempre visibili anche a candele molto
+   // strette — l'UNICO motivo per farne sparire uno è che si sovrapponga fisicamente a un
+   // pallino già disegnato (candele troppo fitte perché stiano uno accanto all'altro senza
+   // fondersi in una macchia illeggibile). Si nasconde SOLO quello che si sovrappone, non
+   // l'intera serie — a differenza del footprint normale, che sotto una certa larghezza
+   // abbandona del tutto il rendering dettagliato e torna alla candela semplice.
+   const _placedArDots=[];
    arMarkers.forEach(m=>{
      const dir=m.side==='upper'?-1:1;
      const radius=arMinPx+(arMaxPx-arMinPx)*m.intensity;
      const desiredCy=y(m.price)+dir*(radius+2);
      const cy=placeArDotCenterY(m.xx,radius,desiredCy,dir,pad.t,h-pad.b);
+     const overlaps=_placedArDots.some(p=>Math.hypot(m.xx-p.cx,cy-p.cy)<(radius+p.radius));
+     if(overlaps)return;
+     _placedArDots.push({cx:m.xx,cy,radius});
      ctx.beginPath();
      ctx.arc(m.xx,cy,radius,0,Math.PI*2);
      ctx.fillStyle=m.kind==='rejection'?arRejColor:arAbsColor;
@@ -9661,30 +9814,61 @@ function draw(){
        // stesso schema on/off delle altre sezioni di questo profilo (LVN, POC/VAH/VAL, ecc.).
        if(d.obEnabled&&profile&&profile.maxTotal>0){
          const obBook=(typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol)?latestOrderBookByAsset[mt5ActiveSymbol]:null;
-         if(obBook&&((obBook.bids&&obBook.bids.length)||(obBook.asks&&obBook.asks.length))){
-           const ob=bucketOrderBookIntoProfile(obBook,profile.priceLo,profile.bucketSize,profile.buckets);
-           if(ob.maxLevel>0){
-             ctx.save();
-             ctx.globalAlpha=Math.min(1,strokeAlpha);
-             const obBidCol=d.obBidColor||'#2f6fed', obAskCol=d.obAskColor||'#e05b4f';
+         const obHist=(typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol)?orderBookHistoryByAsset[mt5ActiveSymbol]:null;
+         const hasNow=obBook&&((obBook.bids&&obBook.bids.length)||(obBook.asks&&obBook.asks.length));
+         const ob=hasNow?bucketOrderBookIntoProfile(obBook,profile.priceLo,profile.bucketSize,profile.buckets):null;
+         // Storico: RICHIESTO ESPLICITAMENTE ("non solo l'aggiornamento reale del momento, ma
+         // anche quello che si è lasciato dietro... un piccolo confronto"). Stessa scala PX dello
+         // snapshot attuale (un unico maxLevel condiviso), così le due barre restano confrontabili
+         // a colpo d'occhio invece di essere normalizzate separatamente l'una dall'altra.
+         const obh=bucketOrderBookHistoryIntoProfile(obHist,profile.priceLo,profile.bucketSize,profile.buckets);
+         const sharedMax=Math.max(ob?ob.maxLevel:0,obh.maxLevel);
+         if(sharedMax>0){
+           const obBidCol=d.obBidColor||'#2f6fed', obAskCol=d.obAskColor||'#e05b4f';
+           ctx.save();
+           ctx.globalAlpha=Math.min(1,strokeAlpha);
+           // 1) Storico SOTTO (contorno sottile, senza riempimento): il "muro" massimo bid/ask
+           // visto di recente in quella zona — disegnato per primo così lo snapshot attuale, pieno,
+           // resta sempre sopra e più leggibile.
+           if(obh.maxLevel>0){
+             ctx.lineWidth=1;
+             for(let b=0;b<profile.buckets;b++){
+               const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
+               const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
+               const barH=Math.max(1,yBot-yTop-1);
+               const bidHV=obh.bidMax[b], askHV=obh.askMax[b];
+               if(bidHV>0){
+                 const px=Math.max(1,bidHV/sharedMax*maxBarPx);
+                 ctx.strokeStyle=hexToRgba(obBidCol,0.5);
+                 ctx.strokeRect(leftX-px+0.5,yTop+0.5,px-1,barH-1);
+               }
+               if(askHV>0){
+                 const px=Math.max(1,askHV/sharedMax*maxBarPx);
+                 ctx.strokeStyle=hexToRgba(obAskCol,0.5);
+                 ctx.strokeRect(leftX-px+0.5,yTop+0.5,px-1,barH-1);
+               }
+             }
+           }
+           // 2) Snapshot ATTUALE sopra (barra piena) — comportamento originale, invariato.
+           if(ob&&ob.maxLevel>0){
              for(let b=0;b<profile.buckets;b++){
                const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
                const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
                const barH=Math.max(1,yBot-yTop-1);
                const bidV=ob.bidVol[b], askV=ob.askVol[b];
                if(bidV>0){
-                 const px=Math.max(1,bidV/ob.maxLevel*maxBarPx);
+                 const px=Math.max(1,bidV/sharedMax*maxBarPx);
                  ctx.fillStyle=hexToRgba(obBidCol,0.55);
                  ctx.fillRect(leftX-px,yTop+0.5,px,barH);
                }
                if(askV>0){
-                 const px=Math.max(1,askV/ob.maxLevel*maxBarPx);
+                 const px=Math.max(1,askV/sharedMax*maxBarPx);
                  ctx.fillStyle=hexToRgba(obAskCol,0.55);
                  ctx.fillRect(leftX-px,yTop+0.5,px,barH);
                }
              }
-             ctx.restore();
            }
+           ctx.restore();
          }
        }
        // POC (Point of Control) e Value Area (VAH/VAL): livelli orizzontali facoltativi, ciascuno
@@ -12002,7 +12186,14 @@ function closeTrade(reason,price,pos,realLevels){
  const account=balanceBefore+pl;
  // Posizione REALE MT5: nel Journal vanno gli SL/TP veri di MT5 (realLevels), non i valori locali.
  const realLevelFields=realLevels?{sl:realLevels.sl,tp:realLevels.tp,rrSl:realLevels.sl==null?null:(Number.isFinite(pos.rrSl)?pos.rrSl:realLevels.sl)}:{};
- trades.push({...pos,...realLevelFields,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:currentMode()});
+ // CORREZIONE ESPLICITA DELL'UTENTE: una posizione REALE (pos.mt5Ticket) non deve MAI finire
+ // nel Journal taggata come Storico — "impossibile", combinazione 📼+🖥️ da eliminare sempre.
+ // currentMode() normalmente basta (posizioni reali vivono solo in sessioni Live, vedi il fix
+ // in fetchMt5Positions() che ormai non le adotta più in Storico), ma qui forziamo comunque il
+ // ramo Live corretto come ultima rete di sicurezza, qualunque fosse la sessione a schermo nel
+ // momento esatto della chiusura.
+ const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):currentMode();
+ trades.push({...pos,...realLevelFields,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode});
  playOrderSound();
  positions=positions.filter(p=>p!==pos);
  // La nuova posizione attiva (per i controlli SL/TP) deve restare sull'ASSET a grafico ora,
@@ -14937,19 +15128,12 @@ chartEl.addEventListener('pointerup',e=>{
  if(zoneClickCandidateKey!=null){
    const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
    if(moved<4){
-     // Doppio click SOLO sulla casella di una posizione APERTA ('pos:'+id, non bozze/ordini
-     // pendenti/trade chiusi): richiesto esplicitamente, alterna il riempimento colorato di
-     // QUELLA posizione (0%<->20%) invece di (ri)aprire le statistiche P&L/R:R.
-     const now=Date.now();
-     const isDoubleClick=zoneClickCandidateKey.startsWith('pos:')&&lastPosZoneClick.ownerKey===zoneClickCandidateKey&&(now-lastPosZoneClick.t)<ZONE_DBLCLICK_MS;
-     if(isDoubleClick){
-       tpSlZoneFillHiddenByOwner[zoneClickCandidateKey]=!tpSlZoneFillHiddenByOwner[zoneClickCandidateKey];
-       $('status').textContent=tpSlZoneFillHiddenByOwner[zoneClickCandidateKey]?'Colore della casella Target/Stop nascosto per questa posizione: la linea resta visibile.':'Colore della casella Target/Stop riattivato per questa posizione.';
-       lastPosZoneClick={ownerKey:null,t:0}; // consumato: un 3° click ravvicinato riparte da capo, non alterna di nuovo
-     }else{
-       zoneStatsOpenKey=zoneClickCandidateKey;
-       if(zoneClickCandidateKey.startsWith('pos:'))lastPosZoneClick={ownerKey:zoneClickCandidateKey,t:now};
-     }
+     // CORREZIONE ESPLICITA DELL'UTENTE: tolto il doppio click sulla singola casella TP/SL per
+     // nascondere/mostrare il suo riempimento colorato — resta SOLO il pulsante globale
+     // "nascondi le caselle TP/SL" (tpSlZoneFillVisible) per tutte le posizioni insieme; le
+     // linee TP/SL restano sempre visibili in ogni caso. Un click (singolo o doppio, non importa
+     // più) su una casella apre sempre le sue statistiche P&L/R:R.
+     zoneStatsOpenKey=zoneClickCandidateKey;
      draw();
    }
    zoneClickCandidateKey=null;
@@ -17316,7 +17500,11 @@ function addBackfilledMt5Trade(d){
    startTime:d.timeOpen*1000,openTF:currentTF,
    marginUsed:0,mt5Ticket:d.positionId,mt5AddedAt:Date.now(),
    exit:Number(d.priceClose),result,pl,pct,pips,account,
-   closedAt:closeIso,closeTF:currentTF,mode:currentMode(),
+   // Stesso fix di closeTrade() (bug #7): un trade recuperato da /history_deals è SEMPRE un
+   // trade REALE sul conto MT5 collegato, non può mai finire marcato come Storico/backtest solo
+   // perché l'utente in quel momento ha la sessione backtest a schermo (currentMode() leggerebbe
+   // quella, non da dove viene davvero il trade) — mai l'impossibile combo Storico+🖥️.
+   closedAt:closeIso,closeTF:currentTF,mode:(isPropFirmMode&&liveModeActive?'live_propfirm':'live'),
    // Marcatore interno (non mostrato in una colonna dedicata del Journal, che non ne ha una):
    // distingue programmaticamente un trade "scoperto" da /history_deals da uno rilevato in
    // tempo reale dal normale polling — utile per debug/dedup, non per la UI.
@@ -17655,23 +17843,38 @@ async function fetchMt5Positions(){
      // Trade Journal alla chiusura) senza mai contare per le regole di QUESTA Challenge. rp.time
      // è l'orario VERO di apertura su MT5 (epoch secondi): confrontato con l'orologio reale, mai
      // quello simulato dello Storico, perché un ticket reale ha sempre un orario di apertura vero.
-     let preExistingForPairedSession=[];
+     let toRedirectToLive=[];
      if(isPropFirmMode && Number.isFinite(propFirmChallengeCreatedAt)){
        const stillPending=[];
        untrackedRealPositions.forEach(rp=>{
          const realOpenMs=Number.isFinite(Number(rp.time))?Number(rp.time)*1000:null;
          if(realOpenMs==null || realOpenMs>=propFirmChallengeCreatedAt)stillPending.push(rp);
-         else preExistingForPairedSession.push(rp);
+         else toRedirectToLive.push(rp);
        });
        untrackedRealPositions=stillPending;
      }
-     if(preExistingForPairedSession.length){
-       const pairedMode=currentMode()==='live_propfirm'?'live':'backtest';
+     // CORREZIONE ESPLICITA DELL'UTENTE ("in storico è impossibile che venga visualizzato... il
+     // simbolo che raffigura lo storico e poi l'icona del PC del monitor"): una posizione REALE
+     // MT5 non deve MAI finire tracciata in una sessione Storico, con o senza Prop Firm. Questo
+     // polling gira indipendentemente da cosa è a schermo (legato solo a mt5Connected, vedi
+     // startMt5PositionsPolling più sotto), quindi se in questo istante si è in una sessione
+     // Storico qualunque (backtest o backtest_propfirm) NON adottiamo la posizione qui: la
+     // dirottiamo sempre sulla sessione "Live (senza Prop Firm)" gemella — mai su un ramo
+     // Storico, e mai arruolata in automatico in una Challenge Prop Firm che l'utente non ha
+     // scelto esplicitamente per questo ticket. PRIMA questa funzione mandava le posizioni
+     // pre-esistenti a una Challenge su 'backtest' quando si partiva da backtest_propfirm: era
+     // proprio quello a produrre la combinazione impossibile "📼 Storico + 🖥️" — corretto qui.
+     if(!liveModeActive && untrackedRealPositions.length){
+       toRedirectToLive=toRedirectToLive.concat(untrackedRealPositions);
+       untrackedRealPositions=[];
+     }
+     if(toRedirectToLive.length){
+       const pairedMode='live';
        // Ticket già presenti nella sessione gemella (es. un giro di polling precedente li ha già
        // spostati lì): evita duplicati se questo blocco gira più volte prima che l'utente cambi
        // sessione e "consumi" quella copia.
        const pairedTracked=allTrackedMt5PositionTickets();
-       const toMove=preExistingForPairedSession.filter(rp=>!pairedTracked.has(String(rp.ticket)));
+       const toMove=toRedirectToLive.filter(rp=>!pairedTracked.has(String(rp.ticket)));
        if(toMove.length){
          if(!sessionByMode[pairedMode]){
            sessionByMode[pairedMode]={positions:[],pendingOrders:[],active:null,equity:[num($('capital').value)||10000],drawings:[]};
@@ -17702,8 +17905,7 @@ async function fetchMt5Positions(){
            pairedSnap.positions.push(pos);
          });
          scheduleSave();
-         const pairedLabel=pairedMode==='live'?'Live (senza Prop Firm)':'Storico (senza Prop Firm)';
-         $('status').textContent=`🖥️ ${toMove.length} posizione/i reale/i già aperta/e su MT5 prima di questa Challenge: esclusa/e dalla Prop Firm e spostata/e automaticamente sulla sessione ${pairedLabel}.`;
+         $('status').textContent=`🖥️ ${toMove.length} posizione/i reale/i rilevata/e su MT5: aggiunta/e automaticamente sulla sessione Live (senza Prop Firm) — mai in Storico.`;
        }
      }
      untrackedRealPositions.forEach(rp=>{
@@ -18661,7 +18863,12 @@ function footprintApplyTickToBuckets(price,timestamp,side,weight,step){
 // Registra UN tick di prezzo per un asset qualunque (chiamata sia da applyLiveTick() per
 // Capital.com sia da mt5FeedWs.onmessage per MT5, per OGNI asset con streaming attivo — non solo
 // quello a grafico ora, così tornando su un asset già visitato in questa sessione il suo log è già
-// pronto). Nessun costo se la feature è spenta: esce subito senza toccare nulla.
+// pronto). CORREZIONE ESPLICITA DELL'UTENTE: PRIMA usciva subito se il footprint era spento
+// ("nessun costo se la feature è spenta"), esattamente come footprintBackfillMt5() più sotto —
+// ma così facendo tick/pallini/zero-print restavano vuoti finché non si accendeva la spunta,
+// mentre la heatmap (connectMt5OrderBook, mai gated dal suo interruttore) continuava a
+// raccogliere sempre. Ora si comporta allo stesso modo: raccoglie SEMPRE, la spunta "Footprint"
+// decide solo se disegnarlo, non se registrarlo.
 // `weight`: quanto pesa QUESTO tick nel conteggio buy/sell della sua riga — di default 1 (tick-
 // count puro, l'unica cosa che il feed Capital.com può dare: nessun size nel payload "marketData").
 // Il feed MT5 (mt5_feed_server.py) invece manda già tick.volume nel campo "volume" del messaggio
@@ -18673,7 +18880,6 @@ function footprintApplyTickToBuckets(price,timestamp,side,weight,step){
 // come fallback). Non c'è modo di saperlo a priori da qui: è il miglior proxy disponibile, non
 // volume reale garantito — per questo il tooltip in UI lo definisce così, non come "volume vero".
 function footprintRegisterTick(price,timestamp,assetKey,weight){
- if(!footprintEnabledNow())return;
  if(!Number.isFinite(price)||!Number.isFinite(timestamp)||!assetKey)return;
  const w=(Number.isFinite(weight)&&weight>0)?weight:1;
  const log=footprintTickLogByAsset[assetKey]||(footprintTickLogByAsset[assetKey]=[]);
@@ -18746,7 +18952,11 @@ function footprintIngestHistoricalTicks(assetKey,rawTicks){
  if(assetKey===currentAssetKey){ footprintRebuildBucketsForCurrentAsset(); draw(); }
 }
 async function footprintBackfillMt5(symbol,assetKey){
- if(!footprintEnabledNow()||!symbol||!assetKey)return;
+ // CORREZIONE ESPLICITA DELL'UTENTE: prima usciva subito se il footprint era spento, quindi il
+ // backfill storico partiva solo al momento in cui si accendeva la spunta (mai in automatico al
+ // caricamento dell'asset) — ora raccoglie sempre, come la heatmap (connectMt5OrderBook), la
+ // spunta resta solo per decidere cosa disegnare.
+ if(!symbol||!assetKey)return;
  if(footprintBackfilledAssets.has(assetKey))return;
  footprintBackfilledAssets.add(assetKey); // segnato SUBITO: un solo tentativo per asset per sessione, anche se questo fallisce (broker senza storico tick, servizio non raggiungibile, ecc.)
  try{
@@ -18823,10 +19033,24 @@ function footprintBuildZeroPrintZones(entries,minRows){
 // (righe tra il minimo e il fondo del corpo) separatamente:
 //  - si scarta uno stoppino con volume totale sotto "soglia volume" (× la media di volume per
 //    riga di quella candela): niente attività degna di nota, niente pallino.
-//  - se il lato che domina (buy o sell) supera "dominanza direzionale %" del totale: REJECTION —
-//    una spinta decisa in quella direzione, respinta con forza (un lato ha chiaramente vinto).
-//  - altrimenti (volume alto ma due lati più bilanciati, "un tira e molla"): ABSORPTION — il
-//    movimento viene assorbito senza che nessuno dei due lati prenda il controllo.
+//  - REVISIONE ESPLICITA DELL'UTENTE ("vedo solo absorption, mai rejection"): la prima versione
+//    misurava la dominanza buy/sell su TUTTO lo stoppino, righe vicino al corpo comprese — ma
+//    proprio lì, vicino al bordo del corpo, il traffico è quasi sempre bidirezionale per motivi
+//    banali (entrate/uscite mentre il prezzo attraversa quel livello, non un vero "rifiuto").
+//    Quel rumore vicino al corpo annacquava quasi sempre la dominanza verso il 50/50, quindi la
+//    soglia di rejection non scattava praticamente mai: la formula, di fatto, misurava quasi la
+//    stessa cosa dell'absorption. Ora ogni riga dello stoppino pesa in base a QUANTO È VICINA
+//    ALLA PUNTA (l'estremo, dove il prezzo è stato davvero spinto e poi respinto): peso 0 al
+//    bordo del corpo, peso 1 alla punta dello stoppino. La dominanza direzionale si calcola sul
+//    volume buy/sell COSÌ PESATO, non sul totale grezzo — se un lato ha davvero vinto proprio
+//    all'estremo (rejection vera), ora emerge; se il tira e molla è diffuso su tutto lo stoppino
+//    senza una vera punta univoca, resta absorption. Il filtro di attività minima (volRatio,
+//    sopra) resta invece sul volume grezzo non pesato: decide SE c'è abbastanza traffico per
+//    meritare un pallino, non la sua direzione.
+//  - se la dominanza pesata (buy o sell) supera "dominanza direzionale %": REJECTION — una spinta
+//    decisa in quella direzione, respinta con forza proprio all'estremo dello stoppino.
+//  - altrimenti (volume alto ma direzione diffusa/bilanciata anche pesando la punta): ABSORPTION
+//    — il movimento viene assorbito senza che nessuno dei due lati prenda davvero il controllo.
 // Dimensione del pallino proporzionale alla FORZA ASSOLUTA del singolo segnale, non alla sua
 // posizione relativa rispetto agli altri pallini visibili in quel momento (una normalizzazione
 // "sul massimo in vista" farebbe sembrare grande un segnale mediocre solo perché è l'unico a
@@ -18844,24 +19068,38 @@ function footprintFindAbsorptionRejectionMarkers(entries,minVolMult,dominanceFra
  const markers=[];
  for(let i=0;i<entries.length;i++){
    const e=entries[i];
-   if(!e.fp||!e.fp.rows)continue;
-   const step=e.fp.step, r=e.r;
-   const levels=Object.keys(e.fp.rows).map(Number);
+   // CORREZIONE ESPLICITA DELL'UTENTE: i pallini leggono e.fpAR (mai azzerato dalla larghezza
+   // candela), NON e.fp (quello sì tagliato sotto _FOOTPRINT_MIN_BW e usato solo per decidere
+   // candela-footprint-vs-normale) — così restano visibili anche quando le candele sono troppo
+   // strette per il rendering footprint dettagliato per-riga.
+   if(!e.fpAR||!e.fpAR.rows)continue;
+   const step=e.fpAR.step, r=e.r;
+   const levels=Object.keys(e.fpAR.rows).map(Number);
    if(!levels.length)continue;
-   let totalVol=0; levels.forEach(lv=>{ const c=e.fp.rows[lv]; totalVol+=c.buy+c.sell; });
+   let totalVol=0; levels.forEach(lv=>{ const c=e.fpAR.rows[lv]; totalVol+=c.buy+c.sell; });
    const avgRowVol=totalVol/levels.length;
    if(!(avgRowVol>0))continue;
    const bodyTop=Math.max(r.open,r.close), bodyBot=Math.min(r.open,r.close);
    const upperLevels=levels.filter(lv=>lv>bodyTop+step*1e-6&&lv<=r.high+step/2);
    const lowerLevels=levels.filter(lv=>lv<bodyBot-step*1e-6&&lv>=r.low-step/2);
-   [{side:'upper',lvls:upperLevels,y:r.high},{side:'lower',lvls:lowerLevels,y:r.low}].forEach(wick=>{
+   [{side:'upper',lvls:upperLevels,y:r.high,bodyEdge:bodyTop,tip:r.high},{side:'lower',lvls:lowerLevels,y:r.low,bodyEdge:bodyBot,tip:r.low}].forEach(wick=>{
      if(!wick.lvls.length)return;
-     let buy=0,sell=0;
-     wick.lvls.forEach(lv=>{ const c=e.fp.rows[lv]; buy+=c.buy; sell+=c.sell; });
+     let buy=0,sell=0,buyTip=0,sellTip=0;
+     const wickRange=Math.abs(wick.tip-wick.bodyEdge)||step;
+     wick.lvls.forEach(lv=>{
+       const c=e.fpAR.rows[lv];
+       buy+=c.buy; sell+=c.sell;
+       // Peso 0..1: 0 al bordo del corpo, 1 alla punta dello stoppino (vedi commento sopra la
+       // funzione) — dà più voce a dove il prezzo è stato davvero respinto, meno al traffico
+       // "di passaggio" vicino al corpo.
+       const w=Math.max(0,Math.min(1,Math.abs(lv-wick.bodyEdge)/wickRange));
+       buyTip+=c.buy*w; sellTip+=c.sell*w;
+     });
      const tot=buy+sell;
-     const volRatio=tot/avgRowVol; // quante volte il volume medio di riga di questa candela
+     const volRatio=tot/avgRowVol; // quante volte il volume medio di riga di questa candela (sul totale grezzo: decide solo SE c'è attività)
      if(volRatio<minVolMult)return; // stoppino non abbastanza attivo: niente pallino
-     const dominance=tot>0?Math.abs(buy-sell)/tot:0;
+     const totTip=buyTip+sellTip;
+     const dominance=totTip>0?Math.abs(buyTip-sellTip)/totTip:0; // dominanza pesata verso la punta, non sul totale grezzo
      const kind=dominance>=dominanceFrac?'rejection':'absorption';
      const volStrength=Math.max(0,Math.min(1,(volRatio-minVolMult)/(minVolMult*4)));
      const dirStrength=kind==='rejection'
