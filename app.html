@@ -4910,13 +4910,25 @@ function placeLabelY(x,w,desiredY,h,minY,maxY){
 // placeLabelY() sopra, ma a differenza sua qui la ricerca è SOLO in una direzione (mai bidirezionale):
 // un pallino sopra la candela va spostato ANCORA più in alto se collide, uno sotto ANCORA più in
 // basso — mai dall'altra parte, altrimenti finirebbe dentro il corpo della candela stessa.
-function placeArDotCenterY(cx,radius,desiredCy,dir,minY,maxY){
+// CORREZIONE ESPLICITA DELL'UTENTE (revisione della regola precedente): a zoom-out molto
+// spinto, con tante candele compresse in pochi pixel, lo spostamento verticale qui sotto poteva
+// esaurire il budget di tentativi (guard) o il margine verticale disponibile PRIMA di trovare un
+// punto davvero libero — il vecchio codice a quel punto si arrendeva e accettava comunque la
+// posizione (con eventuale sovrapposizione residua), oppure la bloccava al bordo del grafico
+// dove più pallini finivano schiacciati praticamente uno sopra l'altro. Ora, se non si trova
+// spazio realmente libero (né dentro il budget di tentativi né dentro i limiti verticali), la
+// funzione restituisce null: il pallino va fatto SPARIRE invece di sovrapporsi — mai una zona
+// leggibile "riempita a forza".
+function placeArDotCenterY(cx,radius,desiredCy,dir,minY,maxY,placedDots){
  const w=radius*2,h=radius*2;
- const collide=cy=>labelPlacements.some(b=>(cx-radius)<b.x+b.w&&(cx+radius)>b.x&&(cy-radius)<b.y+b.h&&(cy+radius)>b.y);
+ const collideLabel=cy=>labelPlacements.some(b=>(cx-radius)<b.x+b.w&&(cx+radius)>b.x&&(cy-radius)<b.y+b.h&&(cy+radius)>b.y);
+ const collideDot=cy=>placedDots&&placedDots.some(p=>Math.hypot(cx-p.cx,cy-p.cy)<(radius+p.radius));
+ const collide=cy=>collideLabel(cy)||collideDot(cy);
  let cy=desiredCy,guard=0;
  while(collide(cy)&&guard<40){ cy+=dir*(radius*0.6+2); guard++; }
- if(Number.isFinite(minY))cy=Math.max(minY+radius,cy);
- if(Number.isFinite(maxY))cy=Math.min(maxY-radius,cy);
+ if(Number.isFinite(minY)&&cy-radius<minY)return null; // spinto fuori dal bordo alto: niente spazio, il pallino sparisce
+ if(Number.isFinite(maxY)&&cy+radius>maxY)return null; // idem bordo basso
+ if(collide(cy))return null; // ancora sovrapposto dopo aver esaurito i tentativi: sparisce, non si sovrappone
  labelPlacements.push({x:cx-radius,y:cy-radius,w,h});
  return cy;
 }
@@ -8335,7 +8347,15 @@ function renderActiveIndicatorsUI(){
  // aggiungerne altri ("+ Aggiungi indicatore..." e "🧩 Codice personalizzato", #indicatorsToolbar)
  // — prima #indicatorsToolbar restava sempre visibile per conto suo, slegato da questo toggle.
  const addToolbar=document.getElementById('indicatorsToolbar')||(floatingDoc&&floatingDoc.getElementById('indicatorsToolbar'));
- if(addToolbar)addToolbar.style.display=indicatorsListHidden?'none':'flex';
+ // CORREZIONE ESPLICITA DELL'UTENTE: la freccetta "›" (#toggleChartExtrasBtn) ha "forza maggiore"
+ // su #indicatorsToolbar — se lei è chiusa, il menu "+ Aggiungi indicatore"/"Codice personalizzato"
+ // resta nascosto A PRESCINDERE da indicatorsListHidden (altrimenti riattivare/disattivare un
+ // indicatore da qui, che richiama questa funzione, lo riportava visibile "scavalcando" la
+ // freccetta chiusa). $('chartSettingsBtn') è l'elemento di riferimento già usato dalla freccetta
+ // stessa per sapere se è aperta o chiusa — vedi setExtrasOpen()/toggleChartExtrasBtn più sotto.
+ const extrasBtnEl=$('chartSettingsBtn');
+ const extrasClosed=extrasBtnEl&&extrasBtnEl.style.display==='none';
+ if(addToolbar)addToolbar.style.display=(indicatorsListHidden||extrasClosed)?'none':'flex';
  // RICHIESTO ESPLICITAMENTE (stile TradingView, vedi foto di riferimento): un indicatore per
  // riga, nome semplice senza icona davanti; i 3 pulsanti (occhio "visibilità", ingranaggio
  // "impostazioni", cestino "elimina") restano nascosti e compaiono SOLO passandoci sopra col
@@ -9261,23 +9281,52 @@ function draw(){
      // OGNI candela successiva finché non arriva una NUOVA osservazione REALE per QUEL livello
      // (mai un dato stimato: è l'ultimo valore realmente osservato lì, semplicemente ripetuto
      // finché non cambia davvero — la stessa identica logica "mai indietro, sempre in avanti finché
-     // non aggiornato" già usata sopra, applicata riga per riga invece che a bucket interi). Prima
-     // passata: solo per calcolare il massimo (normalizzazione colore stabile per tutto il frame,
-     // niente ricalcolo del trascinamento riga per riga una seconda volta con denominatori diversi).
+     // non aggiornato" già usata sopra, applicata riga per riga invece che a bucket interi).
+     // CORREZIONE ESPLICITA DELL'UTENTE ("le righe devono essere presenti fino all'ultima candela
+     // per estensione anche se non si vedono le candele precedenti per lo zoom"): la prima versione
+     // di questo trascinamento ripartiva da ZERO (`_hmLastKnownVal={}`) all'inizio della sola
+     // finestra VISIBILE (`data`, già tagliata dallo zoom) — uno zoom-in che spinge fuori schermo
+     // la candela dove una fascia è stata osservata l'ultima volta faceva "dimenticare" quella
+     // fascia, anche se non è affatto mitigata (il prezzo non ci è mai tornato sopra). Ora si
+     // "pre-carica" lo stato PRIMA di iniziare a scorrere la finestra visibile, leggendo TUTTI i
+     // bucket reali di _hmCells con orario precedente alla prima candela in vista (mai uno storico
+     // "infinito" da scandire: _hmCells è già limitato per tempo da HEATMAP_HISTORY_MAX_HOURS, non
+     // dal numero di candele/zoom) — così la mappatura resta "seria" e completa qualunque sia lo
+     // zoom, esattamente come richiesto.
+     const _hmViewStartTime=data.length?parseDateTime(data[0].date):null;
+     const _hmSeedLastKnownVal=()=>{
+       const seed={};
+       if(!Number.isFinite(_hmViewStartTime))return seed;
+       const starts=Object.keys(_hmCells).map(Number).filter(bs=>bs<_hmViewStartTime).sort((a,b)=>a-b);
+       for(const bs of starts){
+         const bucket=_hmCells[bs];
+         if(!bucket||!(bucket.cnt>0))continue;
+         const cnt=bucket.cnt;
+         for(const levelKey in bucket.rows){ const c=bucket.rows[levelKey]; seed[levelKey]=(c.bid+c.ask)/cnt; }
+       }
+       return seed;
+     };
+     // Prima passata: solo per calcolare il massimo (normalizzazione colore stabile per tutto il
+     // frame, niente ricalcolo del trascinamento riga per riga una seconda volta con denominatori
+     // diversi) — parte anch'essa dallo stato "pre-caricato", altrimenti una fascia trascinata da
+     // fuori schermo potrebbe superare il massimo calcolato solo sulle candele visibili.
      let _hmMaxCell=0;
-     for(let i=0;i<data.length;i++){
-       const tStart=parseDateTime(data[i].date);
-       if(!Number.isFinite(tStart))continue;
-       const bucket=_hmCells[footprintBucketStart(tStart)];
-       if(!bucket||!(bucket.cnt>0))continue;
-       const cnt=bucket.cnt;
-       // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
-       // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
-       // quantità di liquidità che conta per le strisce, non la direzione.
-       for(const k in bucket.rows){ const c=bucket.rows[k]; _hmMaxCell=Math.max(_hmMaxCell,(c.bid+c.ask)/cnt); }
+     {
+       const _hmSeed=_hmSeedLastKnownVal();
+       for(const k in _hmSeed)_hmMaxCell=Math.max(_hmMaxCell,_hmSeed[k]);
+       for(let i=0;i<data.length;i++){
+         const tStart=parseDateTime(data[i].date);
+         if(!Number.isFinite(tStart))continue;
+         const bucket=_hmCells[footprintBucketStart(tStart)];
+         if(!bucket||!(bucket.cnt>0))continue;
+         const cnt=bucket.cnt;
+         // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
+         // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
+         // quantità di liquidità che conta per le strisce, non la direzione.
+         for(const k in bucket.rows){ const c=bucket.rows[k]; _hmMaxCell=Math.max(_hmMaxCell,(c.bid+c.ask)/cnt); }
+       }
      }
      if(_hmMaxCell>0){
-       ctx.save();
        const _hmBaseOp=heatmapOpacityNow();
        // RICHIESTO ESPLICITAMENTE ("tinteggiata... senza interruzioni"): la cella copre l'INTERO
        // slot della candela (cw/n, con un filo di sovrapposizione anti-hairline), non solo la
@@ -9285,20 +9334,40 @@ function draw(){
        // l'altro) — così le colonne della heatmap si toccano davvero, niente più righe verticali
        // di sfondo che spuntano fra una candela e l'altra.
        const _hmSlot=cw/n;
+       // CORREZIONE ESPLICITA DELL'UTENTE ("non devono comparire righe verticali dentro al colore
+       // del calore"): il filo di sovrapposizione (0.8px) qui sopra bastava a chiudere il varco fra
+       // una colonna e l'altra, ma ogni fillRect veniva disegnato con globalAlpha<1 DIRETTAMENTE
+       // sopra lo sfondo — nella striscia di sovrapposizione fra due colonne adiacenti, il secondo
+       // rettangolo si mescolava (alpha blend) SOPRA il primo già mescolato, risultando in
+       // quell'1px di sovrapposizione più scuro/più opaco del resto della cella: una riga verticale
+       // visibile ad ogni confine di colonna, tanto più evidente quanto più le due colonne avevano
+       // colori diversi. Fix: si disegna tutta la heatmap OPACA (alpha 1) su un livello separato,
+       // fuori schermo — colonne adiacenti opache si sovrascrivono senza mescolarsi, quindi nessuna
+       // striscia più scura possibile — e SOLO alla fine si compone quel livello UNA sola volta sul
+       // grafico con la trasparenza scelta dall'utente: l'intera heatmap prende la stessa,
+       // identica opacità uniforme, invece di sommarne un pezzetto in più ad ogni confine.
+       if(!_heatmapLayerCanvas)_heatmapLayerCanvas=document.createElement('canvas');
+       if(_heatmapLayerCanvas.width!==c.width||_heatmapLayerCanvas.height!==c.height){
+         _heatmapLayerCanvas.width=c.width; _heatmapLayerCanvas.height=c.height;
+       }
+       const hctx=_heatmapLayerCanvas.getContext('2d');
+       hctx.setTransform(dpr,0,0,dpr,0,0);
+       hctx.clearRect(0,0,w,h);
        // Seconda passata: ricostruisce lo stesso trascinamento riga per riga (stato "come noto ad
-       // ogni colonna", accumulato scorrendo in avanti) e disegna SUBITO ogni colonna con
-       // l'insieme COMPLETO dei livelli noti fino a quel punto — non solo quelli della candela
-       // corrente. `_hmLastKnownVal` vive per tutta questa passata: è la vera "impronta che si
-       // lascia dietro" richiesta, mai azzerata finché la candela resta in vista.
-       const _hmLastKnownVal={}; // levelKey (stringa) -> valore (bid+ask)/cnt più recente osservato REALMENTE su QUEL livello
+       // ogni colonna", accumulato scorrendo in avanti a partire dallo stato pre-caricato sopra) e
+       // disegna SUBITO ogni colonna con l'insieme COMPLETO dei livelli noti fino a quel punto —
+       // non solo quelli della candela corrente. `_hmLastKnownVal` vive per tutta questa passata:
+       // è la vera "impronta che si lascia dietro" richiesta, mai azzerata finché la candela resta
+       // in vista, e mai dimenticata solo perché lo zoom ne ha nascosto l'origine.
+       const _hmLastKnownVal=_hmSeedLastKnownVal(); // levelKey (stringa) -> valore (bid+ask)/cnt più recente osservato REALMENTE su QUEL livello
        for(let i=0;i<data.length;i++){
          const tStart=parseDateTime(data[i].date);
          const bucket=Number.isFinite(tStart)?_hmCells[footprintBucketStart(tStart)]:null;
          if(bucket&&bucket.cnt>0){
            const cnt=bucket.cnt;
            for(const levelKey in bucket.rows){
-             const c=bucket.rows[levelKey];
-             _hmLastKnownVal[levelKey]=(c.bid+c.ask)/cnt;
+             const c2=bucket.rows[levelKey];
+             _hmLastKnownVal[levelKey]=(c2.bid+c2.ask)/cnt;
            }
          }
          const xxL=x(i)-_hmSlot/2-0.4, cellW=_hmSlot+0.8;
@@ -9314,11 +9383,18 @@ function draw(){
            // come nelle bande a più colori dell'immagine di riferimento. Non altera il dato reale,
            // solo come viene mappato sulla scala colore.
            const t=Math.sqrt(Math.min(1,val/_hmMaxCell));
-           ctx.fillStyle=heatmapColorForValue(t);
-           ctx.globalAlpha=_hmBaseOp;
-           ctx.fillRect(xxL,yTop-0.4,cellW,Math.max(1,yBot-yTop)+0.8); // +0.8: stesso filo di sovrapposizione anti-hairline usato in orizzontale, fra una fascia di prezzo e l'altra
+           hctx.fillStyle=heatmapColorForValue(t);
+           hctx.fillRect(xxL,yTop-0.4,cellW,Math.max(1,yBot-yTop)+0.8); // +0.8: stesso filo di sovrapposizione anti-hairline usato in orizzontale, fra una fascia di prezzo e l'altra — qui innocuo, il livello è opaco
          }
        }
+       // Composizione UNICA di tutto il livello sul grafico, con l'opacità scelta dall'utente
+       // applicata una volta sola: fuori dalla trasformazione dpr del contesto principale (che
+       // scalerebbe altrimenti l'immagine una seconda volta, essendo il livello già alla
+       // risoluzione fisica in pixel) e ripristinata subito dopo per il resto del disegno.
+       ctx.save();
+       ctx.setTransform(1,0,0,1,0,0);
+       ctx.globalAlpha=_hmBaseOp;
+       ctx.drawImage(_heatmapLayerCanvas,0,0);
        ctx.globalAlpha=1;
        ctx.restore();
      }
@@ -9327,15 +9403,49 @@ function draw(){
  // Zone zero-print (imbalance): calcolate PRIMA di disegnare le candele e disegnate SUBITO DOPO,
  // così restano SOTTO alle candele (come la banda grigia nel riferimento fornito dall'utente),
  // non sopra.
+ // CORREZIONE ESPLICITA DELL'UTENTE ("il rettangolo deve rimanere visibile anche se non vediamo
+ // perfettamente quella candela che ha quel buco, fino all'ultima candela per estensione"): prima
+ // le zone si costruivano SOLO da _footprintEntries, cioè le sole candele nella finestra VISIBILE
+ // (già tagliata dallo zoom) — uno zoom-in che spinge fuori schermo, a sinistra, la candela dove è
+ // nato il buco faceva sparire l'intera zona, anche se non è affatto mitigata (il prezzo non ci è
+ // mai tornato sopra da allora). _footprintEntries resta INVARIATO per tutto il resto del disegno
+ // (footprint dettagliato riga-per-riga, pallini AR — quelli sì corretti a restare "solo se
+ // visibili a schermo"): qui invece serve un elenco più ampio, che guarda anche un tratto di
+ // candele appena fuori vista a sinistra, solo per sapere se una zona è ancora aperta.
  if(_footprintOn&&_footprintImbOn&&_footprintEntries){
-   const zones=footprintBuildZeroPrintZones(_footprintEntries,_footprintImbMinRows)
+   // Limite di sicurezza: supera abbondantemente il backfill footprint massimo configurabile
+   // (168h anche a M1 ≈ 10080 candele) — copre in pratica sempre tutto lo storico footprint REALE
+   // disponibile per l'asset, senza scandire per intero uno storico Storico/backtest di anni
+   // quando i dati footprint reali coprono comunque un periodo molto più corto.
+   const _ZONE_LOOKBACK_MAX=12000;
+   const _zoneScanStart=Math.max(0,dataStart-_ZONE_LOOKBACK_MAX);
+   const _zoneEntries=[];
+   for(let absIdx=_zoneScanStart;absIdx<=dataEnd&&absIdx<rows.length;absIdx++){
+     const r=rows[absIdx];
+     if(!r)continue;
+     // Stessa formula di x(i) qui sopra, generalizzata a un indice ASSOLUTO (non solo relativo
+     // alla finestra visibile: x(i) prende i come offset dentro `data`, qui serve anche per
+     // candele PRIMA di dataStart, quindi si ricalcola direttamente da `start`) — per una candela
+     // fuori schermo a sinistra il risultato è semplicemente una coordinata minore di pad.l, mai
+     // disegnata direttamente (solo usata per il ritaglio del rettangolo più sotto).
+     const xx=pad.l+(absIdx-start+.5)*cw/n;
+     const real=footprintByBucket[footprintBucketStart(parseDateTime(r.date))];
+     const hasReal=!!(real&&Object.keys(real.rows).length);
+     _zoneEntries.push({r,xx,xxLeft:xx-bw/2,xxRight:xx+bw/2,fpAR:hasReal?real:null});
+   }
+   const zones=footprintBuildZeroPrintZones(_zoneEntries,_footprintImbMinRows)
      .sort((a,b)=>b.count-a.count).slice(0,_footprintImbMax);
    ctx.save();
    ctx.globalAlpha=0.30;
    ctx.fillStyle=_footprintImbColor;
    zones.forEach(z=>{
      const zTop=y(z.hiPrice), zBot=y(z.loPrice);
-     ctx.fillRect(Math.min(z.xStart,z.xEnd),zTop,Math.max(1,Math.abs(z.xEnd-z.xStart)),Math.max(1,zBot-zTop));
+     // Ritaglio orizzontale al bordo sinistro dell'area grafico: una zona nata prima della
+     // finestra visibile ha xStart fuori schermo (coordinata minore di pad.l) — la disegniamo
+     // comunque, ma mai oltre pad.l, altrimenti si estenderebbe (invisibilmente, ma inutilmente)
+     // anche sopra l'asse/etichette a sinistra.
+     const zXStart=Math.max(pad.l,Math.min(z.xStart,z.xEnd)), zXEnd=Math.max(z.xStart,z.xEnd);
+     ctx.fillRect(zXStart,zTop,Math.max(1,zXEnd-zXStart),Math.max(1,zBot-zTop));
    });
    ctx.restore();
  }
@@ -9369,7 +9479,17 @@ function draw(){
            ctx.save();
            ctx.textAlign='center'; ctx.textBaseline='alphabetic'; ctx.font=_fpLabelFontPx+'px sans-serif';
            const _fpClearance=6, _fpLineGap=3;
-           const _fpVBaseline=y(r.high)-_fpClearance;
+           // CORREZIONE ESPLICITA DELL'UTENTE: l'ancoraggio precedente usava y(r.high) — il prezzo
+           // "alto" della candela — ma le caselline del footprint NON finiscono esattamente lì: ogni
+           // riga occupa [livello-step/2, livello+step/2], quindi il bordo superiore della casellina
+           // più alta è yFn(livelloMax+step/2), che può estendersi SOPRA r.high (lo step raramente
+           // divide in modo esatto lo stoppino). Ancorare al prezzo candela, fisso, ignorava questo
+           // margine: a certi zoom/prezzi il testo finiva dentro l'ultima casellina. Ora si calcola
+           // il vero bordo pixel più alto tra TUTTE le caselline disegnate da drawFootprintCandle()
+           // (si ridimensiona quindi da solo con lo zoom, lo step e la posizione di mercato).
+           let _fpCellTopY=y(r.high);
+           _fpLevels.forEach(lv=>{ _fpCellTopY=Math.min(_fpCellTopY,y(Number(lv)+fp.step/2)); });
+           const _fpVBaseline=_fpCellTopY-_fpClearance;
            const _fpDeltaBaseline=_fpVBaseline-_fpLabelFontPx-_fpLineGap;
            ctx.fillStyle=lineColor;
            ctx.fillText('V'+Math.round(_fpVolSum),xx,_fpVBaseline);
@@ -9433,14 +9553,16 @@ function draw(){
    // fondersi in una macchia illeggibile). Si nasconde SOLO quello che si sovrappone, non
    // l'intera serie — a differenza del footprint normale, che sotto una certa larghezza
    // abbandona del tutto il rendering dettagliato e torna alla candela semplice.
+   // A zoom-out estremo (tanti pallini candidati vicinissimi fra loro) placeArDotCenterY() può
+   // non trovare più nessuno spazio libero: restituisce null e qui il pallino viene semplicemente
+   // saltato (mai disegnato sovrapposto ad un altro già piazzato).
    const _placedArDots=[];
    arMarkers.forEach(m=>{
      const dir=m.side==='upper'?-1:1;
      const radius=arMinPx+(arMaxPx-arMinPx)*m.intensity;
      const desiredCy=y(m.price)+dir*(radius+2);
-     const cy=placeArDotCenterY(m.xx,radius,desiredCy,dir,pad.t,h-pad.b);
-     const overlaps=_placedArDots.some(p=>Math.hypot(m.xx-p.cx,cy-p.cy)<(radius+p.radius));
-     if(overlaps)return;
+     const cy=placeArDotCenterY(m.xx,radius,desiredCy,dir,pad.t,h-pad.b,_placedArDots);
+     if(cy===null)return;
      _placedArDots.push({cx:m.xx,cy,radius});
      ctx.beginPath();
      ctx.arc(m.xx,cy,radius,0,Math.PI*2);
@@ -10797,6 +10919,15 @@ function hitTestDrawings(clientX,clientY,vpBodySelect){
  // vince sempre su un corpo ampio sopra di essa, qualunque sia l'ordine z, esattamente il
  // comportamento intuitivo che ci si aspetta cliccando su qualcosa di piccolo e specifico.
  let bodyFallback=null;
+ // CORREZIONE ESPLICITA DELL'UTENTE ("se ho tre profili volumetrici e clicco, deve prendere
+ // quello più vicino al mouse, non uno a caso"): con più profili volume (vpfixed/vpanchor)
+ // sovrapposti, il corpo/select andava a tutta l'altezza del grafico e vinceva sempre il più
+ // recente (ultimo in drawings[], topmost in z-order) trovato per primo scorrendo dall'alto —
+ // indipendentemente da quale istogramma fosse REALMENTE più vicino al punto cliccato. Ora i
+ // profili vengono raccolti qui (vpCandidates), non assegnati subito a bodyFallback, e SOLO se
+ // nessun altro disegno non-profilo più in alto in z-order ha già reclamato il corpo (vedi dopo
+ // il ciclo) si sceglie fra loro il più vicino al mouse — mai più "il primo trovato".
+ const vpCandidates=[];
  for(let k=drawings.length-1;k>=0;k--){
    const d=drawings[k];
    // Pannello "Livelli": un disegno del tipo nascosto non è più selezionabile/trascinabile,
@@ -10943,12 +11074,29 @@ function hitTestDrawings(clientX,clientY,vpBodySelect){
      // IMPEDIVA al pan di iniziare. Anche questo è ora un bodyFallback, non un return immediato
      // (vedi commento in cima alla funzione): un profilo/VWAP più vecchio (o qualunque altro
      // disegno) sotto quest'area amplissima resta comunque raggiungibile dalle SUE maniglie.
-     if(!bodyFallback&&vpBodySelect){
-       const topY=g.pad.t, botY=g.rect.height-g.pad.b;
+     if(vpBodySelect){
+       // CORREZIONE ESPLICITA DELL'UTENTE: prima l'area cliccabile andava dal bordo superiore al
+       // bordo inferiore di TUTTO il grafico (topY/botY), qualunque fosse la reale altezza
+       // dell'istogramma — così un click anche molto lontano in verticale dall'istogramma vero e
+       // proprio, ma dentro l'intervallo di tempo di PIÙ profili sovrapposti, finiva per
+       // selezionarne uno a caso (il più recente). Ora l'area verticale è quella REALE
+       // dell'istogramma (handleYTop/handleYBottom, calcolati sopra dal suo priceLo/priceHi) —
+       // molto più fedele a "quello più vicino al mouse", perché profili a fasce di prezzo
+       // diverse ormai proprio non si candidano più insieme.
+       const yminH=Math.min(handleYTop,handleYBottom), ymaxH=Math.max(handleYTop,handleYBottom);
        const xminH=Math.min(leftX,rightX),xmaxH=Math.max(leftX,rightX);
-       if(relX>=xminH-tol&&relX<=xmaxH+tol&&relY>=topY-tol&&relY<=botY+tol)bodyFallback={drawing:d,handle:{type:'select'}};
+       if(relX>=xminH-tol&&relX<=xmaxH+tol&&relY>=yminH-tol&&relY<=ymaxH+tol){
+         const cx=(xminH+xmaxH)/2, cy=(yminH+ymaxH)/2;
+         vpCandidates.push({drawing:d,handle:{type:'select'},dist:Math.hypot(relX-cx,relY-cy)});
+       }
      }
    }
+ }
+ if(!bodyFallback&&vpCandidates.length){
+   // Fra tutti i profili volumetrici il cui istogramma copre il punto cliccato, vince quello il
+   // cui CENTRO (nel tempo e nel prezzo) è più vicino al mouse — non più il più recente.
+   vpCandidates.sort((a,b)=>a.dist-b.dist);
+   bodyFallback={drawing:vpCandidates[0].drawing,handle:vpCandidates[0].handle};
  }
  return bodyFallback;
 }
@@ -13637,11 +13785,20 @@ $('speed').addEventListener('change',()=>{
 // ricordato tra le sessioni, stesso meccanismo di prima.
 if($('toggleChartExtrasBtn')&&$('chartSettingsBtn')){
  const extrasOpen=localStorage.getItem('fxbt_chartExtrasOpen')==='1';
+ // CORREZIONE ESPLICITA DELL'UTENTE ("la freccetta è la cartella principale, se la nascondi
+ // nascondi anche le sottocartelle"): #indicatorsToolbar ("+ Aggiungi indicatore...", "🧩 Codice
+ // personalizzato") prima era governato SOLO da indicatorsListHidden (il pulsante "📊 Indicatori"),
+ // completamente slegato da questa freccetta — restava visibile anche a freccetta chiusa se
+ // l'utente l'aveva aperto in precedenza. Ora, chiudendo la freccetta, si nasconde SEMPRE anche
+ // lui (ha "forza maggiore"); riaprendo la freccetta, torna a seguire il proprio stato normale
+ // (indicatorsListHidden) invece di essere forzato visibile a prescindere.
  const setExtrasOpen=(open)=>{
    $('chartSettingsBtn').style.display=open?'inline-flex':'none';
    if($('indicatorsLegendToggleBtn'))$('indicatorsLegendToggleBtn').style.display=open?'inline-flex':'none';
    if($('chartLayersBtn'))$('chartLayersBtn').style.display=open?'inline-flex':'none';
    if($('alarmsListBtn'))$('alarmsListBtn').style.display=open?'inline-flex':'none';
+   const addToolbar=document.getElementById('indicatorsToolbar')||(typeof floatingDoc!=='undefined'&&floatingDoc&&floatingDoc.getElementById('indicatorsToolbar'));
+   if(addToolbar)addToolbar.style.display=(open&&!indicatorsListHidden)?'flex':'none';
    $('toggleChartExtrasBtn').textContent=open?'‹':'›';
    $('toggleChartExtrasBtn').title=open?'Nascondi Indicatori, Livelli e il pulsante Impostazioni':'Mostra Indicatori, Livelli e il pulsante Impostazioni (Style, Griglia, Notizie)';
  };
@@ -13652,6 +13809,10 @@ if($('toggleChartExtrasBtn')&&$('chartSettingsBtn')){
    try{localStorage.setItem('fxbt_chartExtrasOpen',open?'1':'0');}catch(e){}
    $('toggleChartExtrasBtn').blur();
  });
+ // Se lo stato di indicatorsListHidden cambia mentre la freccetta è chiusa, alla riapertura
+ // #indicatorsToolbar deve rispettarlo di nuovo — renderActiveIndicatorsUI() già lo aggiorna da
+ // sola quando la freccetta è aperta; qui serve solo che setExtrasOpen(true) (sopra) lo rilegga
+ // ogni volta che viene richiamata, cosa già garantita dal controllo su indicatorsListHidden.
 }
 // La select manuale del fuso orario (#tzSelect) è stata rimossa: selectedTimeZone viene
 // rilevato in automatico una sola volta all'avvio (vedi detectLocalTimeZone() sopra), niente
@@ -19579,6 +19740,12 @@ async function saveOrderBookHistoryNow(){
 // il disegno.
 let heatmapCellsByAsset={};   // assetKey -> { bucketStartMs: { step, cnt, rows:{ levelKey:{bid,ask} } } }
 let heatmapCellsMeta={};      // assetKey -> { tf, step } con cui heatmapCellsByAsset[assetKey] è stata costruita — se non combaciano più, si ricostruisce da orderBookHistoryByAsset
+// Canvas fuori schermo riusato ad ogni draw() per comporre la heatmap come un livello OPACO unico
+// (vedi il blocco di disegno della heatmap in draw() per il perché: evita le righe verticali che
+// comparivano ai confini fra colonne quando ogni cella veniva disegnata semi-trasparente
+// direttamente sul grafico). Creato una sola volta, ridimensionato solo quando cambiano le
+// dimensioni fisiche del canvas principale.
+let _heatmapLayerCanvas=null;
 const HEATMAP_HISTORY_MAX_HOURS=12; // oltre, gli snapshot grezzi più vecchi vengono scartati (per TEMPO, non per conteggio: una sessione intera, non pochi minuti)
 const HEATMAP_MIN_SNAPSHOT_GAP_MS=250; // throttle in ingresso: un aggiornamento del book più frequente di così non aggiunge nulla di utile a una heatmap per-candela, e gonfierebbe solo il log grezzo
 function heatmapStepForCurrentSettings(){ return heatmapStepForAsset(currentAssetKey); }
