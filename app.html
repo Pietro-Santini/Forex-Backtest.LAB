@@ -8015,6 +8015,15 @@ function vpIndBuildInstances(ind){
 }
 // Ridisegno: disegni virtuali da passare al ciclo dei disegni + rettangoli per il passaggio del mouse.
 let vpIndHitRects=[];
+// Bande del VWAP degli indicatori VP: 3 bande come il VWAP ancorato (on, moltiplicatore, colore,
+// spessore). Migra la vecchia casella unica "±1σ" (vwapBands) nella banda 1.
+function vpIndVwapBands(params){
+ const def=[{on:false,mult:1,color:'#3ea6ff',width:1},{on:false,mult:2,color:'#f0a020',width:1},{on:false,mult:3,color:'#c77dff',width:1}];
+ if(!Array.isArray(params.vwapBandsCfg)||params.vwapBandsCfg.length!==3){
+   params.vwapBandsCfg=def.map((d,i)=>({...d,on:i===0?!!params.vwapBands:false}));
+ }
+ return params.vwapBandsCfg;
+}
 function buildVpIndicatorVirtualDrawings(geo){
  vpIndHitRects=[];
  const virt=[];
@@ -8046,7 +8055,20 @@ function buildVpIndicatorVirtualDrawings(geo){
      // dell'istogramma (buyers, volume rialzista); la parte esterna (sellers) resta col colore di
      // sistema/delle impostazioni istogramma, intatto.
      if(useSessColors&&inst.color){ d.upColor=inst.color; }
-     virt.push(d);
+     if(ind.params.showHistograms!==false)virt.push(d);
+     // RICHIESTO ESPLICITAMENTE: VWAP opzionale con la STESSA logica degli istogrammi — uno per ogni
+     // giorno/blocco di giorni/sessione, ancorato al suo inizio e fermo alla sua fine (cresce con il
+     // tempo come l'istogramma). Nascosto insieme al suo istogramma (box Mostra/Nascondi).
+     if(ind.params.vwapOn){
+       const vCol=(ind.key==='vp_sessions'&&ind.params.vwapUseSessionColor!==false&&inst.color)?inst.color:(ind.params.vwapColor||'#f5a524');
+       virt.push({type:'vwap',_virtual:true,id:'vpindvwap_'+ind.id+'_'+fullKey,
+         p1:{time:ts[inst.a],price:rows[inst.a].close},p2:{time:ts[inst.b],price:rows[inst.b].close},
+         color:vCol,lineWidth:Math.max(1,Math.min(6,Number(ind.params.vwapWidth)||2)),opacity:1,
+         ...(()=>{ const bc=vpIndVwapBands(ind.params); const o={};
+           bc.forEach((bd,bi)=>{ const n=bi+1; o['band'+n+'Enabled']=!!bd.on; o['band'+n+'Mult']=Number.isFinite(Number(bd.mult))?Number(bd.mult):n; o['band'+n+'Color']=bd.color||'#3ea6ff'; o['band'+n+'Width']=Math.max(1,Math.min(6,Number(bd.width)||1)); });
+           return o; })(),
+         _vwapEndIdx:inst.b,locked:true,hidden:false});
+     }
    });
  });
  return virt;
@@ -8101,6 +8123,40 @@ function buildVpIndicatorSettings(row,ind){
    uc.addEventListener('change',()=>{ p.useSessionColors=uc.checked; draw(); scheduleSave(); });
    ucL.prepend(uc); ucL.append(' Colora la parte buyers (interna) di ogni istogramma con il colore della sua sessione');
    wrap.appendChild(ucL);
+ }
+ // VWAP con la stessa logica giornaliera/sessioni (richiesto esplicitamente).
+ {
+   const box=document.createElement('div');
+   box.style.cssText='display:flex;flex-direction:column;gap:6px;padding:8px;border:1px solid #2b3541;border-radius:7px;background:#121922';
+   const t=document.createElement('div'); t.textContent='VWAP'; t.style.cssText='font-weight:700;color:#e8edf3;font-size:12.5px';
+   box.appendChild(t);
+   const mkCb=(label,get,set)=>{ const l=lbl(''); const c=document.createElement('input'); c.type='checkbox'; c.checked=get(); c.style.cssText='width:16px;height:16px;flex:none;margin:0'; c.addEventListener('change',()=>{ set(c.checked); draw(); scheduleSave(); }); l.prepend(c); l.append(' '+label); return l; };
+   box.appendChild(mkCb(ind.key==='vp_sessions'?'Mostra il VWAP di ogni sessione':'Mostra il VWAP di ogni istogramma (giorno o blocco di giorni)',()=>!!p.vwapOn,v=>{p.vwapOn=v;}));
+   const cr=document.createElement('div'); cr.style.cssText='display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;color:#93a1b3';
+   const col=document.createElement('input'); col.type='color'; col.className='colorPick'; col.value=p.vwapColor||'#f5a524';
+   col.addEventListener('input',()=>{ p.vwapColor=col.value; draw(); scheduleSave(); });
+   const wI=document.createElement('input'); wI.type='number'; wI.min=1; wI.max=6; wI.step=1; wI.value=p.vwapWidth||2; wI.style.width='50px';
+   wI.addEventListener('change',()=>{ const v=Math.round(Number(wI.value)); p.vwapWidth=Number.isFinite(v)?Math.max(1,Math.min(6,v)):2; wI.value=p.vwapWidth; draw(); scheduleSave(); });
+   cr.append('Colore ',col,' Spessore ',wI);
+   box.appendChild(cr);
+   if(ind.key==='vp_sessions')box.appendChild(mkCb('Usa il colore della sessione per il suo VWAP',()=>p.vwapUseSessionColor!==false,v=>{p.vwapUseSessionColor=v;}));
+   // Bande di deviazione standard #1/#2/#3: attiva, moltiplicatore, colore, spessore (come il VWAP ancorato).
+   vpIndVwapBands(p).forEach((bd,bi)=>{
+     const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:nowrap;font-size:12.5px;color:#93a1b3';
+     const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!bd.on; cb.style.cssText='width:16px;height:16px;flex:none;margin:0';
+     cb.addEventListener('change',()=>{ bd.on=cb.checked; draw(); scheduleSave(); });
+     const nm=document.createElement('span'); nm.textContent='Banda '+(bi+1); nm.style.cssText='min-width:56px;font-weight:700;color:#e8edf3';
+     const mI=document.createElement('input'); mI.type='number'; mI.min=0.1; mI.max=10; mI.step=0.1; mI.value=bd.mult; mI.style.width='56px'; mI.title='Moltiplicatore (deviazioni standard)';
+     mI.addEventListener('change',()=>{ const v=Number(mI.value); bd.mult=Number.isFinite(v)&&v>0?Math.min(10,Math.round(v*100)/100):(bi+1); mI.value=bd.mult; draw(); scheduleSave(); });
+     const bc=document.createElement('input'); bc.type='color'; bc.className='colorPick'; bc.value=bd.color;
+     bc.addEventListener('input',()=>{ bd.color=bc.value; draw(); scheduleSave(); });
+     const bw=document.createElement('input'); bw.type='number'; bw.min=1; bw.max=6; bw.step=1; bw.value=bd.width; bw.style.width='46px'; bw.title='Spessore';
+     bw.addEventListener('change',()=>{ const v=Math.round(Number(bw.value)); bd.width=Number.isFinite(v)?Math.max(1,Math.min(6,v)):1; bw.value=bd.width; draw(); scheduleSave(); });
+     r.append(cb,nm,'×',mI,'σ',bc,'spess.',bw);
+     box.appendChild(r);
+   });
+   box.appendChild(mkCb('Mostra gli istogrammi (spegnilo per vedere solo i VWAP)',()=>p.showHistograms!==false,v=>{p.showHistograms=v;}));
+   wrap.appendChild(box);
  }
  const styleBtn=document.createElement('button'); styleBtn.type='button'; styleBtn.className='toolBtn'; styleBtn.style.width='auto';
  styleBtn.textContent='📊 Impostazioni istogramma (colori, barre, dimensione, sfondo, LVN, POC/VAH/VAL)';
@@ -10972,7 +11028,9 @@ function draw(){
        // stesso linguaggio dell'icona) e mostra la media del prezzo tipico pesata sul volume,
        // cumulata fino alla candela attuale — si allunga da sola man mano che il tempo avanza.
        const anchorIdx=rowIndexNearTime(d.p1.time);
-       const nowIdx=Math.min(idx,rows.length-1);
+       // VWAP degli indicatori "Profili volumetrici giornalieri/sessioni": si ferma alla fine del
+       // proprio giorno/blocco/sessione (_vwapEndIdx), mai oltre la candela attuale.
+       const nowIdx=Number.isFinite(d._vwapEndIdx)?Math.min(d._vwapEndIdx,idx,rows.length-1):Math.min(idx,rows.length-1);
        const {pts}=computeAnchoredVWAP(anchorIdx,nowIdx);
        const fullTs=getRowsTimestamps();
        ctx.save();
@@ -11021,11 +11079,13 @@ function draw(){
            ctx.restore();
          });
        });
-       ctx.save();
-       ctx.globalAlpha=1;
-       ctx.fillStyle=isSelected?'#3ea6ff':dCol;
-       ctx.beginPath();ctx.arc(dx1,dy1,4,0,Math.PI*2);ctx.fill();
-       ctx.restore();
+       if(!d._virtual){
+         ctx.save();
+         ctx.globalAlpha=1;
+         ctx.fillStyle=isSelected?'#3ea6ff':dCol;
+         ctx.beginPath();ctx.arc(dx1,dy1,4,0,Math.PI*2);ctx.fill();
+         ctx.restore();
+       }
        if(isSelected&&!d.locked)handleAt(dx1,dy1);
      }else if(d.type==='vpfixed'||d.type==='vpanchor'){
        // Profilo volume (ad intervallo fisso o ancorato): istogramma orizzontale a due colori
@@ -12214,7 +12274,9 @@ function hitTestDrawings(clientX,clientY,vpBodySelect){
      if(Math.hypot(relX-x1,relY-y1)<=tol+3)return{drawing:d,handle:{type:'point',key:'p1'}};
      if(!bodyFallback){
        const anchorIdx=rowIndexNearTime(d.p1.time);
-       const nowIdx=Math.min(idx,rows.length-1);
+       // VWAP degli indicatori "Profili volumetrici giornalieri/sessioni": si ferma alla fine del
+       // proprio giorno/blocco/sessione (_vwapEndIdx), mai oltre la candela attuale.
+       const nowIdx=Number.isFinite(d._vwapEndIdx)?Math.min(d._vwapEndIdx,idx,rows.length-1):Math.min(idx,rows.length-1);
        const {pts}=computeAnchoredVWAP(anchorIdx,nowIdx);
        const fullTs=getRowsTimestamps();
        for(let pi=1;pi<pts.length;pi++){
