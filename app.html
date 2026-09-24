@@ -6888,6 +6888,25 @@ function computeValueArea(profile,vaPct){
 // comunque arrivare fino al bordo vero se la valle a bassa attività si estende davvero fin lì: non
 // è un taglio permanente, solo una tolleranza sul PUNTO DI PARTENZA della zona. Default 8 se il
 // disegno non ha ancora questo campo (creato prima dell'introduzione del cursore).
+// RICHIESTO ESPLICITAMENTE: la zona a basso volume resta disegnata DOPO la fine dell'istogramma
+// finché il mercato non la tocca (prima candela successiva il cui range high-low entra nella
+// fascia): lì si ferma. Se non è mai stata toccata continua ad allungarsi fino all'ultima candela,
+// al passo con il mercato. Ricerca incrementale con cache (niente riscansione a ogni ridisegno).
+let _lvnTouchCache=new Map(), _lvnTouchRowsRef=null;
+function lvnTouchIndex(fromIdx,lo,hi){
+ if(_lvnTouchRowsRef!==rows){ _lvnTouchCache=new Map(); _lvnTouchRowsRef=rows; }
+ const end=Math.min(idx,rows.length-1);
+ const key=fromIdx+'|'+lo+'|'+hi;
+ let c=_lvnTouchCache.get(key);
+ if(!c){ if(_lvnTouchCache.size>3000)_lvnTouchCache.clear(); c={touch:-1,scanned:fromIdx}; _lvnTouchCache.set(key,c); }
+ if(c.touch>=0) return c.touch<=end?c.touch:-1; // replay tornato indietro prima del tocco: non ancora toccata
+ for(let i=Math.max(fromIdx+1,c.scanned+1);i<=end;i++){
+   const r=rows[i]; if(!r)continue;
+   if(r.high>=lo&&r.low<=hi){ c.touch=i; c.scanned=i; return i; }
+   c.scanned=i;
+ }
+ return -1;
+}
 function computeLowVolumeZone(profile,thresholdPct,edgePct){
  if(!profile||!profile.buckets||profile.maxTotal<=0)return null;
  const nb=profile.buckets;
@@ -11148,10 +11167,17 @@ function draw(){
          const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15,d.lvnEdgePct);
          if(lvz){
            const lvTopY=shapesGeo.y(lvz.hiPrice), lvBotY=shapesGeo.y(lvz.loPrice);
+           // Fine della zona: la candela che la tocca per prima dopo l'istogramma, altrimenti
+           // l'ultima candela (o il bordo del grafico per un profilo esteso/ancorato).
+           const _tIdx=lvnTouchIndex(lastIdx,lvz.loPrice,lvz.hiPrice);
+           const _endI=Math.min(idx,rows.length-1);
+           let lvRightX=_tIdx>=0?shapesGeo.xFromTime(fullTs[_tIdx]):((d.type==='vpanchor'||d.extendRight)?rightBoundX:shapesGeo.xFromTime(fullTs[_endI]));
+           if(!Number.isFinite(lvRightX))lvRightX=rightBoundX;
+           lvRightX=Math.max(lvRightX,Math.min(rightBoundX,shapesGeo.xFromTime(fullTs[lastIdx])||rightBoundX));
            ctx.save();
            ctx.globalAlpha=Math.min(1,strokeAlpha)*Math.max(0,Math.min(100,d.lvnOpacity!=null?d.lvnOpacity:25))/100;
            ctx.fillStyle=d.lvnColor||'#00e676';
-           ctx.fillRect(leftX,lvTopY,Math.max(1,rightBoundX-leftX),Math.max(1,lvBotY-lvTopY));
+           ctx.fillRect(leftX,lvTopY,Math.max(1,lvRightX-leftX),Math.max(1,lvBotY-lvTopY));
            ctx.restore();
          }
        }
