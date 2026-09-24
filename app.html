@@ -7804,7 +7804,7 @@ const VP_IND_SESSIONS_DEFAULT=[
  {key:'newyork',label:'New York',start:'14:00',end:'23:00',color:'#f5a524',on:true},
 ];
 function vpIndDefaultStyle(){
- return {type:'vpfixed',buckets:70,barSizePct:500,bgEnabled:true,bgColor:'#ffffff',bgOpacity:3,lvnEnabled:false,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocLineStyle:'solid',pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,vahLineStyle:'dashed',valEnabled:false,valColor:'#3ea6ff',valWidth:1,valLineStyle:'dashed',vaExtend:false,obEnabled:false};
+ return {type:'vpfixed',buckets:70,barSizePct:500,barOpacity:55,bgEnabled:true,bgColor:'#ffffff',bgOpacity:3,lvnEnabled:false,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocLineStyle:'solid',pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,vahLineStyle:'dashed',valEnabled:false,valColor:'#3ea6ff',valWidth:1,valLineStyle:'dashed',vaExtend:false,obEnabled:false};
 }
 // Ora italiana di un istante: offset Europe/Rome calcolato una volta per ora e messo in cache.
 const _romeOffsetByHour=new Map();
@@ -7891,7 +7891,10 @@ function buildVpIndicatorVirtualDrawings(geo){
        p1:{time:ts[inst.a],price:rows[inst.a].close},p2:{time:ts[inst.b],price:rows[inst.b].close},
        candleCount:inst.b-inst.a+1,extendRight:false,locked:true,hidden:false
      });
-     if(useSessColors&&inst.color){ d.upColor=inst.color; d.downColor=darkenHex(inst.color,0.45); }
+     // CORREZIONE ESPLICITA DELL'UTENTE: il colore della sessione tinge SOLO la parte interna
+     // dell'istogramma (buyers, volume rialzista); la parte esterna (sellers) resta col colore di
+     // sistema/delle impostazioni istogramma, intatto.
+     if(useSessColors&&inst.color){ d.upColor=inst.color; }
      virt.push(d);
    });
  });
@@ -7910,6 +7913,13 @@ function buildVpIndicatorSettings(row,ind){
  const daysI=document.createElement('input'); daysI.type='number'; daysI.min=1; daysI.max=90; daysI.step=1; daysI.value=p.days||5; daysI.style.width='60px';
  daysI.addEventListener('change',()=>{ const v=Math.round(Number(daysI.value)); p.days=Number.isFinite(v)?Math.max(1,Math.min(90,v)):5; daysI.value=p.days; draw(); scheduleSave(); });
  daysL.appendChild(daysI); wrap.appendChild(daysL);
+ // RICHIESTO ESPLICITAMENTE: opacità delle barre dell'istogramma, qui direttamente.
+ const opL=lbl('Opacità barre istogramma ');
+ const opI=document.createElement('input'); opI.type='number'; opI.min=0; opI.max=100; opI.step=1; opI.style.width='60px';
+ opI.value=Number.isFinite(Number(p.style.barOpacity))?p.style.barOpacity:55;
+ const applyOp=()=>{ const v=Math.round(Number(opI.value)); if(Number.isFinite(v)){ p.style.barOpacity=Math.max(0,Math.min(100,v)); draw(); scheduleSave(); } };
+ opI.addEventListener('input',applyOp); opI.addEventListener('change',()=>{ applyOp(); opI.value=p.style.barOpacity; });
+ opL.appendChild(opI); opL.append(' %'); wrap.appendChild(opL);
  if(ind.key==='vp_sessions'){
    if(!Array.isArray(p.sessions)||!p.sessions.length)p.sessions=VP_IND_SESSIONS_DEFAULT.map(x=>({...x}));
    const hint=document.createElement('div'); hint.className='hint'; hint.style.margin='0';
@@ -7929,7 +7939,7 @@ function buildVpIndicatorSettings(row,ind){
    });
    const ucL=lbl(''); const uc=document.createElement('input'); uc.type='checkbox'; uc.checked=p.useSessionColors!==false; uc.style.cssText='width:16px;height:16px;flex:none;margin:0';
    uc.addEventListener('change',()=>{ p.useSessionColors=uc.checked; draw(); scheduleSave(); });
-   ucL.prepend(uc); ucL.append(' Colora ogni istogramma con il colore della sua sessione');
+   ucL.prepend(uc); ucL.append(' Colora la parte buyers (interna) di ogni istogramma con il colore della sua sessione');
    wrap.appendChild(ucL);
  }
  const styleBtn=document.createElement('button'); styleBtn.type='button'; styleBtn.className='toolBtn'; styleBtn.style.width='auto';
@@ -10920,7 +10930,10 @@ function draw(){
            const totalPx=Math.max(1,total/profile.maxTotal*maxBarPx);
            const upPx=totalPx*(profile.upVol[b]/total), downPx=totalPx-upPx;
            const insideVA=!va||(bucketHiPrice>=va.valPrice&&bucketLoPrice<=va.vahPrice);
-           const barAlpha=insideVA?0.55:0.55*OUTSIDE_VA_DIM_FACTOR;
+           // Opacità delle barre regolabile (richiesta per i Profili volumetrici giornalieri/delle
+           // sessioni, d.barOpacity 0-100%); senza impostazione resta il 55% di sempre.
+           const _baseBarA=Number.isFinite(Number(d.barOpacity))?Math.max(0,Math.min(100,Number(d.barOpacity)))/100:0.55;
+           const barAlpha=insideVA?_baseBarA:_baseBarA*OUTSIDE_VA_DIM_FACTOR;
            ctx.fillStyle=hexToRgba(upCol,barAlpha);
            ctx.fillRect(leftX,yTop+0.5,upPx,barH);
            ctx.fillStyle=hexToRgba(downCol,barAlpha);
@@ -17838,16 +17851,49 @@ function hitTestZoneBoxAt(clientX,clientY){
  const relXc=clientX-rectC.left, relYc=clientY-rectC.top;
  return zoneBoxHitRects.find(r=>relXc>=r.xOrigin&&relXc<=r.xRight&&relYc>=r.yMin&&relYc<=r.yMax)||null;
 }
-chartEl.addEventListener('dblclick',e=>{
- // Priorità alla casella TP/SL (vedi hitTestZoneBoxAt sopra): se il doppio click cade anche
- // dentro una casella TP/SL, il suo toggle mostra/nascondi (gestito altrove, via pointerdown/
- // pointerup con ZONE_DBLCLICK_MS) è l'UNICA cosa che deve succedere — non apriamo ANCHE le
- // impostazioni di un disegno che si trovasse alla stessa coordinata sotto di essa.
- if(hitTestZoneBoxAt(e.clientX,e.clientY))return;
+// RICHIESTO ESPLICITAMENTE ("il doppio clic su linee/rettangoli deve funzionare in maniera
+// perfetta, anche se la linea sta sopra un istogramma o un altro oggetto"): per il doppio clic
+// ogni disegno viene provato SINGOLARMENTE e fra tutti quelli colpiti vince il più PRECISO:
+//  0) una maniglia (punto/angolo) — 1) il tratto di una linea o il bordo di un rettangolo —
+//  2) l'interno di un rettangolo — 3) il corpo di un profilo volumetrico/VWAP (area enorme).
+// A parità di precisione vince il tratto più vicino al puntatore, poi quello disegnato sopra.
+// Così una linea sopra un istogramma/rettangolo apre SEMPRE le impostazioni della linea.
+function distPointToSegPx(px,py,x1,y1,x2,y2){ const dx=x2-x1,dy=y2-y1; const L=dx*dx+dy*dy; let t=L?((px-x1)*dx+(py-y1)*dy)/L:0; t=Math.max(0,Math.min(1,t)); return Math.hypot(px-(x1+t*dx),py-(y1+t*dy)); }
+function hitTestDrawingForDblClick(clientX,clientY){
+ const all=drawings; if(!all||!all.length)return null;
+ const g=chartGeometry(); if(!g)return null;
+ const relX=clientX-g.rect.left, relY=clientY-g.rect.top;
+ const cands=[];
+ try{
+   for(let k=all.length-1;k>=0;k--){
+     const d=all[k];
+     drawings=[d];
+     const h=hitTestDrawings(clientX,clientY,true);
+     if(!h)continue;
+     const t=h.handle&&h.handle.type;
+     const rank=t==='point'?0:(t==='select'?3:(h.handle.area?2:1));
+     let dist=0;
+     if(rank===1&&d.p1&&d.p2){
+       const x1=g.xFromTime(d.p1.time),y1=g.y(d.p1.price),x2=g.xFromTime(d.p2.time),y2=g.y(d.p2.price);
+       if(d.type==='horizontal'||d.type==='horizontalray'||d.type==='alarmline')dist=Math.abs(relY-y1);
+       else if(d.type==='vertical')dist=Math.abs(relX-x1);
+       else if(d.type==='rectangle'){ const xa=Math.min(x1,x2),xb=Math.max(x1,x2),ya=Math.min(y1,y2),yb=Math.max(y1,y2); dist=Math.min(Math.abs(relX-xa),Math.abs(relX-xb),Math.abs(relY-ya),Math.abs(relY-yb)); }
+       else if([x1,y1,x2,y2].every(Number.isFinite))dist=distPointToSegPx(relX,relY,x1,y1,x2,y2);
+     }
+     cands.push({hit:h,rank,dist,z:k});
+   }
+ }finally{ drawings=all; }
+ if(!cands.length)return null;
+ cands.sort((a,b)=>a.rank-b.rank||a.dist-b.dist||b.z-a.z);
+ return {...cands[0].hit,_rank:cands[0].rank};
+}
+function handleChartDblClick(e){
  // vpBodySelect=true SOLO qui: il doppio click deve poter aprire le impostazioni cliccando
- // ovunque nell'istogramma del profilo volumetrico, non solo sulle due maniglie (vedi il
- // parametro di hitTestDrawings) — il click singolo altrove nel file lo lascia false apposta.
- const hit=hitTestDrawings(e.clientX,e.clientY,true);
+ // ovunque nell'istogramma del profilo volumetrico, non solo sulle due maniglie.
+ const hit=hitTestDrawingForDblClick(e.clientX,e.clientY);
+ // Casella TP/SL: il suo doppio clic (mostra/nascondi colore) ha la precedenza solo se sotto al
+ // puntatore NON c'è il tratto preciso di un disegno (maniglia, linea, bordo di rettangolo).
+ if(hitTestZoneBoxAt(e.clientX,e.clientY)&&(!hit||hit._rank>1))return;
  if(!hit)return;
  if(hit.drawing.type==='fib'){ e.preventDefault(); openFibSettingsModal(hit.drawing); }
  else if(hit.drawing.type==='vwap'||hit.drawing.type==='vpfixed'||hit.drawing.type==='vpanchor'){ e.preventDefault(); openVpSettingsModal(hit.drawing); }
@@ -17864,7 +17910,20 @@ chartEl.addEventListener('dblclick',e=>{
    draw();
  }
  else { e.preventDefault(); openDrawStyleModal(hit.drawing); }
-});
+}
+chartEl.addEventListener('dblclick',handleChartDblClick);
+// Elementi flottanti SOPRA il grafico (suggerimento "+ Aggiungi testo", casellina Mostra/Nascondi
+// degli istogrammi, etichette...): un doppio clic caduto su di loro ma dentro l'area del grafico
+// viene girato al grafico, altrimenti "si perdeva" e le impostazioni non si aprivano.
+document.addEventListener('dblclick',e=>{
+ try{
+   const c=$('chart'); if(!c||e.target===c)return;
+   if(e.target&&e.target.closest&&e.target.closest('button,input,select,textarea,a,.fbModalOverlay,.drawTextEditor'))return;
+   const r=c.getBoundingClientRect();
+   if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)return;
+   handleChartDblClick(e);
+ }catch(err){}
+},true);
 $('fibModalCloseBtn')?.addEventListener('click',closeFibSettingsModal);
 $('fibModalCancelBtn')?.addEventListener('click',closeFibSettingsModal);
 $('fibModalOkBtn')?.addEventListener('click',applyFibSettingsFromModal);
