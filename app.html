@@ -1664,7 +1664,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <button id="chartLayersModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
    </div>
    <div class="fbModalBody">
-     <p class="hint" style="margin:0 0 12px">Ogni Fibonacci, profilo volumetrico, VWAP e linea Alarm presente sul grafico di QUESTO asset è elencato qui singolarmente, e sotto trovi anche gli indicatori. Da ogni riga puoi aprirne le impostazioni (⚙️), nascondere/mostrare solo quello (👁️) o eliminarlo (🗑️) — gli altri non vengono toccati.</p>
+     <p class="hint" style="margin:0 0 12px">Ogni disegno presente sul grafico di QUESTO asset (linee, rettangoli, Fibonacci, profili volumetrici, VWAP, linee Alarm) è elencato qui singolarmente, e sotto trovi anche gli indicatori. 🔒 blocca un disegno così non si sposta né si deforma per errore a grafico. Da ogni riga puoi aprirne le impostazioni (⚙️), nascondere/mostrare solo quello (👁️) o eliminarlo (🗑️) — gli altri non vengono toccati.</p>
      <div id="chartLayersListBody"></div>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
@@ -2127,6 +2127,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <option value="ema_ind">Moving Average Exponential [EMA]</option>
      <option value="bsl_ssl_fvg">Buyside &amp; Sellside Liquidity + Aligned FVGs [LuxAlgo]</option>
      <option value="ict_reversal_setup">ICT Reversal Setup [Quant]</option>
+     <option value="vp_daily">Profili volumetrici giornalieri</option>
+     <option value="vp_sessions">Profili volumetrici delle sessioni</option>
    </select></span>
    <button id="openCustomScriptBtn" class="toolBtn" title="Incolla un codice in stile Pine Script (TradingView) e applicalo come indicatore personalizzato">🧩 Codice personalizzato</button>
  </div>
@@ -2403,7 +2405,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         <option value="all">Strategia ▾</option>
         <option value="__add_new__">➕ Aggiungi nuova...</option>
       </select>
-    </th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th></th></tr></thead>
+    </th><th>Pip</th><th>P/L</th><th>% Conto</th><th>Conto €</th><th id="journalSelectTh" style="white-space:nowrap"></th></tr></thead>
  <tbody id="journal"></tbody></table></div>
  <!-- RICHIESTO ESPLICITAMENTE: paginazione automatica, 20 operazioni a pagina, le più recenti
       in pagina 1 — popolata da update() (vedi JOURNAL_PAGE_SIZE/journalCurrentPage nel JS). -->
@@ -2490,6 +2492,41 @@ let tradeStrategies=[], journalStrategyOptionsDirty=true;
 // ricostruita SOLO quando la sua "firma" (pagina, filtri, numero di trade, asset a grafico,
 // elenco strategie) cambia davvero — vedi update(), poco prima di $('journal').innerHTML=...
 let __journalLastRenderSig=null;
+// ===================== SELEZIONE MULTIPLA NEL TRADE JOURNAL (richiesta esplicitamente) =====================
+// "☑ Seleziona" in cima alla colonna dei cestini attiva una casella per riga; "🗑️ Elimina (N)"
+// chiede conferma e cancella insieme tutte le operazioni spuntate (anche su pagine diverse).
+let journalSelectMode=false;
+const journalSelectedIds=new Set();
+let __journalSelectHeaderSig='';
+function renderJournalSelectHeader(){
+ const th=$('journalSelectTh'); if(!th)return;
+ const sig=(journalSelectMode?'1':'0')+'|'+journalSelectedIds.size;
+ if(sig===__journalSelectHeaderSig&&th.childNodes.length)return;
+ __journalSelectHeaderSig=sig;
+ const btnCss='font-size:11px;padding:3px 8px;margin-left:4px';
+ th.innerHTML=journalSelectMode
+   ?`<button type="button" class="miniBtn danger" id="journalBulkDeleteBtn" style="${btnCss}" ${journalSelectedIds.size?'':'disabled'} title="Elimina tutte le operazioni selezionate">🗑️ Elimina (${journalSelectedIds.size})</button><button type="button" class="miniBtn" id="journalSelectAllPageBtn" style="${btnCss}" title="Seleziona/deseleziona tutte le operazioni di questa pagina">Tutte</button><button type="button" class="miniBtn" id="journalSelectExitBtn" style="${btnCss}" title="Esci dalla selezione multipla">Fine</button>`
+   :`<button type="button" class="miniBtn" id="journalSelectModeBtn" style="${btnCss}" title="Seleziona più operazioni da eliminare insieme">☑ Seleziona</button>`;
+}
+function setJournalSelectMode(on){
+ journalSelectMode=!!on;
+ if(!journalSelectMode)journalSelectedIds.clear();
+ __journalLastRenderSig=null; __journalSelectHeaderSig='';
+ update();
+}
+async function deleteSelectedJournalTrades(){
+ const ids=new Set(journalSelectedIds);
+ const idxs=[]; trades.forEach((t,i)=>{ if(t&&ids.has(String(t.id)))idxs.push(i); });
+ if(!idxs.length)return;
+ const mt5Count=idxs.filter(i=>trades[i].mt5Ticket!=null).length;
+ if(!await appConfirm(`Eliminare definitivamente ${idxs.length} ${idxs.length===1?'operazione selezionata':'operazioni selezionate'} dal Trade Journal?`+(mt5Count?`\n\n(${mt5Count} sono operazioni reali MT5: vengono tolte solo dal Journal dell'app, non dallo storico del conto MT5.)`:'')+`\n\nL'operazione non può essere annullata.`,{title:'🗑️ Elimina operazioni',okLabel:'Sì, elimina'}))return;
+ idxs.sort((a,b)=>b-a).forEach(i=>removeTradeRecordAt(i));
+ journalSelectedIds.clear();
+ journalSelectMode=false;
+ __journalLastRenderSig=null; __journalSelectHeaderSig='';
+ scheduleSave(); update(); draw();
+ $('status').textContent=`🗑️ ${idxs.length} ${idxs.length===1?'operazione eliminata':'operazioni eliminate'} dal Trade Journal.`;
+}
 // ===================== TRADE JOURNAL SEPARATO PER CONTO =====================
 // RICHIESTO ESPLICITAMENTE: il Journal deve distinguere a colpo d'occhio Storico, Live
 // Capital.com e OGNI conto MT5 (per numero di conto), e poterli filtrare separatamente.
@@ -5454,6 +5491,17 @@ async function withLoadingOverlay(text,fn){
 function escapeHtmlLite(s){
  return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+// RICHIESTO ESPLICITAMENTE: col grafico staccato (PIP) un popup compare nella finestra DOVE si è
+// appena cliccato — es. eliminando un trade dal Journal (pagina principale) la conferma resta nella
+// pagina principale, non salta nella finestra PIP. Se nessuna delle due ha il focus (azione partita
+// da sola, es. un timer), si usa la finestra PIP come prima.
+function popupTargetDoc(){
+ let fdoc=null;
+ try{ fdoc=(floatingChartActive()&&floatingDoc)?floatingDoc:null; }catch(e){ fdoc=null; }
+ if(!fdoc)return document;
+ try{ if(document.hasFocus())return document; }catch(e){}
+ return fdoc;
+}
 function appConfirm(message,opts={}){
  return new Promise(resolve=>{
    const danger=opts.danger!==false; // di default trattiamo ogni conferma come "delicata" (colore rosso)
@@ -5478,7 +5526,7 @@ function appConfirm(message,opts={}){
    // moveModalToFloatingIfActive usato per gli altri popup di configurazione, ma qui il nodo è
    // creato al volo ad ogni chiamata (mai riusato), quindi basta scegliere subito il document
    // giusto invece di doverlo poi "riportare a casa".
-   const targetDoc=(floatingChartActive()&&floatingDoc)?floatingDoc:document;
+   const targetDoc=popupTargetDoc();
    targetDoc.body.appendChild(overlay);
    function cleanup(result){
      targetDoc.removeEventListener('keydown',onKey);
@@ -5516,7 +5564,7 @@ function appPrompt(message,opts={}){
          <button type="button" class="toolBtn appConfirmBtn appConfirmOk safe" data-role="ok">${escapeHtmlLite(opts.okLabel||'Ok')}</button>
        </div>
      </div>`;
-   const targetDoc=(typeof floatingChartActive==='function'&&floatingChartActive()&&floatingDoc)?floatingDoc:document;
+   const targetDoc=popupTargetDoc();
    targetDoc.body.appendChild(overlay);
    const input=overlay.querySelector('[data-role="input"]');
    input.value=opts.defaultValue!=null?String(opts.defaultValue):'';
@@ -5542,7 +5590,7 @@ function appAlert(message,opts={}){
        <div class="appConfirmBody">${escapeHtmlLite(message)}</div>
        <div class="liveLoginFooter"><button type="button" class="toolBtn appConfirmBtn appConfirmOk safe" data-role="ok">Ok</button></div>
      </div>`;
-   const targetDoc=(typeof floatingChartActive==='function'&&floatingChartActive()&&floatingDoc)?floatingDoc:document;
+   const targetDoc=popupTargetDoc();
    targetDoc.body.appendChild(overlay);
    function cleanup(){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(); }
    function onKey(e){ if(e.key==='Escape'||e.key==='Enter'){ e.preventDefault(); cleanup(); } }
@@ -6641,7 +6689,23 @@ function computeAnchoredVWAP(anchorIdx,endIdx){
 // come le candele verdi) da quello "ribassista" (colorato come le candele rosse). Se una
 // candela non ha volume registrato le viene assegnato un peso di 1 "unità" così il profilo
 // mostra comunque la distribuzione dei prezzi invece di restare completamente vuoto.
+// PRESTAZIONI: con i Profili volumetrici giornalieri/delle sessioni si calcolano decine di profili
+// a ogni ridisegno. Un profilo già calcolato su candele CHIUSE non cambia più: si riusa (cache per
+// array `rows` + intervallo + barre). L'ultima candela (in formazione in Live) entra nella chiave
+// con il suo high/low/close/volume, così quel profilo si ricalcola a ogni tick come prima.
+let _vpProfileCache=new Map(), _vpProfileCacheRows=null;
 function computeVolumeProfile(startIdx,endIdx,buckets){
+ if(_vpProfileCacheRows!==rows||_vpProfileCache.size>600){ _vpProfileCache=new Map(); _vpProfileCacheRows=rows; }
+ const _hiK=Math.min(rows.length-1,Math.max(startIdx,endIdx));
+ const _lastR=rows[_hiK];
+ const _key=Math.min(startIdx,endIdx)+'|'+_hiK+'|'+buckets+'|'+rows.length+'|'+(_lastR?(_lastR.high+','+_lastR.low+','+_lastR.close+','+_lastR.volume):'')+'|'+((typeof liveModeActive!=='undefined'&&liveModeActive)?1:0);
+ const _hit=_vpProfileCache.get(_key);
+ if(_hit!==undefined)return _hit;
+ const _res=_computeVolumeProfileUncached(startIdx,endIdx,buckets);
+ _vpProfileCache.set(_key,_res);
+ return _res;
+}
+function _computeVolumeProfileUncached(startIdx,endIdx,buckets){
  const lo2=Math.max(0,Math.min(startIdx,endIdx)), hi2=Math.min(rows.length-1,Math.max(startIdx,endIdx));
  if(hi2<lo2)return null;
  let priceLo=Infinity,priceHi=-Infinity;
@@ -7400,7 +7464,9 @@ function update(){
  // cambia uno di: pagina, filtri, numero di trade (uno nuovo chiuso/eliminato), asset a grafico
  // (cambia l'evidenziazione "otherAssetRow"), elenco strategie (nuova opzione nei <select> di
  // riga) — non ad ogni tick di prezzo, che qui non c'entra nulla.
- const journalRenderSig=journalCurrentPage+'|'+journalModeFilter+'|'+__journalAccountOptsSig+'|'+journalStrategyFilter+'|'+trades.length+'|'+(currentAssetKey||'')+'|'+tradeStrategies.length;
+ journalRows.forEach(({t})=>{ if(t.id==null)t.id=Date.now()+Math.random(); });
+ renderJournalSelectHeader();
+ const journalRenderSig=(journalSelectMode?'S|':'')+journalCurrentPage+'|'+journalModeFilter+'|'+__journalAccountOptsSig+'|'+journalStrategyFilter+'|'+trades.length+'|'+(currentAssetKey||'')+'|'+tradeStrategies.length;
  // NIENTE "return" qui: update() continua sempre dopo questo blocco (barra di paginazione,
  // scheduleSave() più sotto) — si salta SOLO la ricostruzione della tabella quando non serve,
  // non il resto di update().
@@ -7429,7 +7495,7 @@ function update(){
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+(t.pct!=null?t.pct.toFixed(2):'0.00')}%</td>`+
    `<td>${euro(t.account)}</td>`+
-   `<td><button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button>`+
+   `<td>${journalSelectMode?`<input type="checkbox" class="journalSelCb" data-seltrade="${escapeHtmlLite(String(t.id))}" ${journalSelectedIds.has(String(t.id))?'checked':''} title="Seleziona per l'eliminazione multipla" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;accent-color:#e0524f">`:''}<button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button>`+
    `<button class="miniBtn danger" data-deltrade="${i}" title="Elimina definitivamente questo trade dal Journal" style="margin-left:4px">🗑️</button></td></tr>`;
  }).join('');
  } // fine if(journalRenderSig!==__journalLastRenderSig) — vedi commento sopra
@@ -7718,7 +7784,235 @@ function currentDisplayScale(){
 // incrementale (`calc`) che si estende mano a mano che avanza `idx`, senza dover
 // ricalcolare tutto lo storico ad ogni frame.
 let activeIndicators=[];
+// ===================== PROFILI VOLUMETRICI GIORNALIERI / DELLE SESSIONI (richiesti esplicitamente) =====================
+// Due indicatori che disegnano, in automatico, un profilo volumetrico a intervallo fisso:
+//  - "Profili volumetrici giornalieri": uno per giorno, 00:00→23:59 ORA ITALIANA;
+//  - "Profili volumetrici delle sessioni": uno per sessione (Sydney, Tokyo, Londra, New York),
+//    dall'apertura alla chiusura della sessione (orari modificabili, ora italiana).
+// L'utente sceglie quanti giorni nel passato vedere. Ogni profilo si COSTRUISCE MANO A MANO col
+// passare del tempo: considera solo le candele fino a quella attuale (idx) — in Storico cresce
+// candela dopo candela col replay, in Live tick dopo tick — mai candele future.
+// Il disegno riusa IDENTICO il profilo volumetrico a intervallo fisso dei disegni (stesse
+// impostazioni: colori, barre, dimensione, sfondo, LVN, POC/VAH/VAL): ogni istogramma è un
+// "disegno virtuale" di tipo vpfixed, generato a ogni ridisegno e mai salvato fra i disegni
+// (quindi non finisce negli undo, nei disegni per asset, né è selezionabile/trascinabile).
+// Passando il mouse su un istogramma compare una casellina per nasconderlo/mostrarlo singolarmente.
+const VP_IND_SESSIONS_DEFAULT=[
+ {key:'sydney',label:'Sydney',start:'23:00',end:'08:00',color:'#a78bfa',on:true},
+ {key:'tokyo',label:'Tokyo',start:'01:00',end:'10:00',color:'#f472b6',on:true},
+ {key:'london',label:'Londra',start:'09:00',end:'18:00',color:'#3ea6ff',on:true},
+ {key:'newyork',label:'New York',start:'14:00',end:'23:00',color:'#f5a524',on:true},
+];
+function vpIndDefaultStyle(){
+ return {type:'vpfixed',buckets:70,barSizePct:500,bgEnabled:true,bgColor:'#ffffff',bgOpacity:3,lvnEnabled:false,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocLineStyle:'solid',pocExtend:false,vahEnabled:false,vahColor:'#3ea6ff',vahWidth:1,vahLineStyle:'dashed',valEnabled:false,valColor:'#3ea6ff',valWidth:1,valLineStyle:'dashed',vaExtend:false,obEnabled:false};
+}
+// Ora italiana di un istante: offset Europe/Rome calcolato una volta per ora e messo in cache.
+const _romeOffsetByHour=new Map();
+let _romeOffsetFmt=null;
+function romeOffsetMs(t){
+ const hb=Math.floor(t/3600000);
+ let off=_romeOffsetByHour.get(hb);
+ if(off===undefined){
+   if(!_romeOffsetFmt)_romeOffsetFmt=new Intl.DateTimeFormat('en-GB',{timeZone:'Europe/Rome',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+   const parts={}; _romeOffsetFmt.formatToParts(new Date(hb*3600000)).forEach(p=>{ if(p.type!=='literal')parts[p.type]=Number(p.value); });
+   off=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour,parts.minute)-hb*3600000;
+   if(_romeOffsetByHour.size>20000)_romeOffsetByHour.clear();
+   _romeOffsetByHour.set(hb,off);
+ }
+ return off;
+}
+function romeDayAndMinute(t){ const loc=t+romeOffsetMs(t); const day=Math.floor(loc/86400000); return {day,min:Math.floor((loc-day*86400000)/60000)}; }
+function hhmmToMin(str,def){ const m=/^(\d{1,2}):(\d{2})$/.exec(String(str||'').trim()); if(!m)return def; const h=Math.min(23,Number(m[1])), mi=Math.min(59,Number(m[2])); return h*60+mi; }
+function romeDayLabel(day){ const d=new Date(day*86400000); return String(d.getUTCDate()).padStart(2,'0')+'/'+String(d.getUTCMonth()+1).padStart(2,'0'); }
+function darkenHex(hex,f){ const m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m)return hex; const n=parseInt(m[1],16); const c=v=>Math.round(v*(1-f)).toString(16).padStart(2,'0'); return '#'+c((n>>16)&255)+c((n>>8)&255)+c(n&255); }
+// Costruisce le istanze (giorno o giorno+sessione) con i loro intervalli di candele [a,b], con b
+// mai oltre la candela attuale: è ciò che fa crescere ogni profilo col passare del tempo.
+function vpIndBuildInstances(ind){
+ const out=[];
+ if(!rows.length||idx==null||idx<0)return out;
+ const ts=getRowsTimestamps();
+ const endI=Math.min(idx,rows.length-1);
+ const days=Math.max(1,Math.min(90,Math.round(Number(ind.params.days)||5)));
+ const curDay=romeDayAndMinute(ts[endI]).day;
+ const firstDay=curDay-days+1;
+ const map=new Map();
+ const sessions=ind.key==='vp_sessions'?(ind.params.sessions||VP_IND_SESSIONS_DEFAULT):null;
+ const sessDefs=sessions?sessions.map(sd=>({...sd,s:hhmmToMin(sd.start,0),e:hhmmToMin(sd.end,0)})):null;
+ for(let i=endI;i>=0;i--){
+   const t=ts[i]; if(!Number.isFinite(t))continue;
+   const {day,min}=romeDayAndMinute(t);
+   if(day<firstDay-1)break; // un giorno in più: le sessioni che scavalcano la mezzanotte partono dal giorno prima
+   if(!sessDefs){
+     if(day<firstDay)continue;
+     const k='d'+day;
+     const it=map.get(k); if(it){ it.a=i; } else map.set(k,{key:k,a:i,b:i,label:'Giorno '+romeDayLabel(day)});
+   }else{
+     sessDefs.forEach(sd=>{
+       if(!sd.on)return;
+       const wrap=sd.e<=sd.s;
+       const inS=wrap?(min>=sd.s||min<sd.e):(min>=sd.s&&min<sd.e);
+       if(!inS)return;
+       const startDay=(wrap&&min<sd.e)?day-1:day;
+       if(startDay<firstDay)return;
+       const k=sd.key+'|'+startDay;
+       const it=map.get(k); if(it){ it.a=i; } else map.set(k,{key:k,a:i,b:i,label:sd.label+' '+romeDayLabel(startDay),color:sd.color,sessionKey:sd.key});
+     });
+   }
+ }
+ map.forEach(v=>out.push(v));
+ return out.sort((x,y)=>x.a-y.a);
+}
+// Ridisegno: disegni virtuali da passare al ciclo dei disegni + rettangoli per il passaggio del mouse.
+let vpIndHitRects=[];
+function buildVpIndicatorVirtualDrawings(geo){
+ vpIndHitRects=[];
+ const virt=[];
+ if(!geo||!Array.isArray(activeIndicators))return virt;
+ const ts=getRowsTimestamps();
+ const viewL=geo.pad?geo.pad.l:0, viewR=geo.rect?geo.rect.width-(geo.pad?geo.pad.r:0):Infinity;
+ activeIndicators.forEach(ind=>{
+   if(!ind||ind.hidden||(ind.key!=='vp_daily'&&ind.key!=='vp_sessions'))return;
+   const style=Object.assign(vpIndDefaultStyle(),ind.params.style||{});
+   const hiddenKeys=new Set(ind.params.hiddenKeys||[]);
+   const useSessColors=ind.key==='vp_sessions'&&ind.params.useSessionColors!==false;
+   vpIndBuildInstances(ind).forEach(inst=>{
+     const xL=geo.xFromTime(ts[inst.a]), xR=geo.xFromTime(ts[inst.b]);
+     if(!Number.isFinite(xL)||!Number.isFinite(xR))return;
+     if(xR<viewL-4||xL>viewR+4)return; // fuori schermo: niente calcolo
+     let lo=Infinity,hi=-Infinity;
+     for(let i=inst.a;i<=inst.b;i++){ const r=rows[i]; if(!r)continue; if(r.low<lo)lo=r.low; if(r.high>hi)hi=r.high; }
+     if(!Number.isFinite(lo)||!Number.isFinite(hi))return;
+     const fullKey=inst.key;
+     const isHidden=hiddenKeys.has(fullKey);
+     vpIndHitRects.push({ind,key:fullKey,label:inst.label,hidden:isHidden,x1:Math.min(xL,xR),x2:Math.max(xL,xR,Math.min(xL,xR)+6),y1:geo.y(hi),y2:geo.y(lo),color:inst.color||style.upColor||'#3ea6ff'});
+     if(isHidden)return;
+     const d=Object.assign({},style,{
+       type:'vpfixed',_virtual:true,id:'vpind_'+ind.id+'_'+fullKey,
+       p1:{time:ts[inst.a],price:rows[inst.a].close},p2:{time:ts[inst.b],price:rows[inst.b].close},
+       candleCount:inst.b-inst.a+1,extendRight:false,locked:true,hidden:false
+     });
+     if(useSessColors&&inst.color){ d.upColor=inst.color; d.downColor=darkenHex(inst.color,0.45); }
+     virt.push(d);
+   });
+ });
+ return virt;
+}
+// Impostazioni specifiche (dentro il popup ⚙️ dell'indicatore) + pulsante che apre le impostazioni
+// COMPLETE dell'istogramma: è la stessa finestra del profilo volumetrico a intervallo fisso.
+function buildVpIndicatorSettings(row,ind){
+ const p=ind.params;
+ if(!p.style)p.style=vpIndDefaultStyle();
+ if(!Array.isArray(p.hiddenKeys))p.hiddenKeys=[];
+ const wrap=document.createElement('div');
+ wrap.style.cssText='display:flex;flex-direction:column;gap:10px;width:100%';
+ const lbl=(t)=>{ const l=document.createElement('label'); l.style.cssText='display:inline-flex;align-items:center;gap:6px;color:#93a1b3'; l.append(t); return l; };
+ const daysL=lbl('Istogrammi nel passato (giorni) ');
+ const daysI=document.createElement('input'); daysI.type='number'; daysI.min=1; daysI.max=90; daysI.step=1; daysI.value=p.days||5; daysI.style.width='60px';
+ daysI.addEventListener('change',()=>{ const v=Math.round(Number(daysI.value)); p.days=Number.isFinite(v)?Math.max(1,Math.min(90,v)):5; daysI.value=p.days; draw(); scheduleSave(); });
+ daysL.appendChild(daysI); wrap.appendChild(daysL);
+ if(ind.key==='vp_sessions'){
+   if(!Array.isArray(p.sessions)||!p.sessions.length)p.sessions=VP_IND_SESSIONS_DEFAULT.map(x=>({...x}));
+   const hint=document.createElement('div'); hint.className='hint'; hint.style.margin='0';
+   hint.textContent='Orari in ora italiana (HH:MM). Una sessione che scavalca la mezzanotte (es. Sydney 23:00→08:00) viene gestita da sola.';
+   wrap.appendChild(hint);
+   p.sessions.forEach(sd=>{
+     const r=document.createElement('div'); r.style.cssText='display:flex;align-items:center;gap:8px;flex-wrap:nowrap;font-size:12.5px;color:#93a1b3';
+     const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=sd.on!==false; cb.style.cssText='width:16px;height:16px;flex:none;margin:0';
+     cb.addEventListener('change',()=>{ sd.on=cb.checked; draw(); scheduleSave(); });
+     const name=document.createElement('span'); name.textContent=sd.label; name.style.cssText='min-width:70px;font-weight:700;color:#e8edf3;font-size:12.5px';
+     const col=document.createElement('input'); col.type='color'; col.className='colorPick'; col.value=sd.color;
+     col.addEventListener('input',()=>{ sd.color=col.value; draw(); scheduleSave(); });
+     const mkT=(k)=>{ const t=document.createElement('input'); t.type='text'; t.value=sd[k]; t.style.width='58px'; t.placeholder='HH:MM';
+       t.addEventListener('change',()=>{ if(/^\d{1,2}:\d{2}$/.test(t.value.trim())){ sd[k]=t.value.trim(); draw(); scheduleSave(); } else t.value=sd[k]; }); return t; };
+     r.append(cb,name,col,'dalle',mkT('start'),'alle',mkT('end'));
+     wrap.appendChild(r);
+   });
+   const ucL=lbl(''); const uc=document.createElement('input'); uc.type='checkbox'; uc.checked=p.useSessionColors!==false; uc.style.cssText='width:16px;height:16px;flex:none;margin:0';
+   uc.addEventListener('change',()=>{ p.useSessionColors=uc.checked; draw(); scheduleSave(); });
+   ucL.prepend(uc); ucL.append(' Colora ogni istogramma con il colore della sua sessione');
+   wrap.appendChild(ucL);
+ }
+ const styleBtn=document.createElement('button'); styleBtn.type='button'; styleBtn.className='toolBtn'; styleBtn.style.width='auto';
+ styleBtn.textContent='📊 Impostazioni istogramma (colori, barre, dimensione, sfondo, LVN, POC/VAH/VAL)';
+ styleBtn.addEventListener('click',()=>{
+   openVpSettingsModal(p.style);
+   if($('vpExtendRow'))$('vpExtendRow').style.display='none';
+   if($('vpModalTitle'))$('vpModalTitle').textContent='⚙️ Istogramma — '+(INDICATOR_DEFS[ind.key]?.label||'');
+ });
+ wrap.appendChild(styleBtn);
+ if(p.hiddenKeys.length){
+   const rb=document.createElement('button'); rb.type='button'; rb.className='toolBtn'; rb.style.width='auto';
+   rb.textContent='👁️ Rimostra i '+p.hiddenKeys.length+' istogrammi nascosti';
+   rb.addEventListener('click',()=>{ p.hiddenKeys=[]; draw(); scheduleSave(); rebuildIndicatorSettingsModal(); });
+   wrap.appendChild(rb);
+ }
+ row.appendChild(wrap);
+}
+// Casellina "Mostra/Nascondi" al passaggio del mouse su un istogramma (richiesta esplicitamente):
+// capisce da sola su QUALE istogramma si trova il puntatore (vpIndHitRects, ricalcolati a ogni
+// ridisegno). Un istogramma nascosto resta segnato da un sottile contorno tratteggiato, così ci si
+// può ripassare sopra e rimostrarlo.
+let _vpIndHoverBox=null, _vpIndHoverTarget=null, _vpIndHoverHideT=null;
+function vpIndHoverBoxEl(){
+ const doc=$('chart')?.ownerDocument||document;
+ if(_vpIndHoverBox&&_vpIndHoverBox.ownerDocument===doc)return _vpIndHoverBox;
+ _vpIndHoverBox?.remove();
+ const b=doc.createElement('div');
+ b.style.cssText='position:fixed;z-index:8000;display:none;align-items:center;gap:6px;padding:4px 6px;border-radius:7px;background:#131a24;border:1px solid #2b3541;box-shadow:0 6px 18px rgba(0,0,0,.45);font-size:11.5px;color:#c8d2dd';
+ b.innerHTML='<span data-role="lbl"></span><button type="button" data-role="btn" class="miniBtn" style="font-size:11px;padding:2px 8px"></button>';
+ b.addEventListener('pointerenter',()=>{ clearTimeout(_vpIndHoverHideT); });
+ b.addEventListener('pointerleave',()=>{ _vpIndHoverHideT=setTimeout(hideVpIndHoverBox,350); });
+ b.addEventListener('pointerdown',e=>e.stopPropagation());
+ b.querySelector('[data-role="btn"]').addEventListener('click',e=>{
+   e.stopPropagation();
+   const t=_vpIndHoverTarget; if(!t)return;
+   const hk=Array.isArray(t.ind.params.hiddenKeys)?t.ind.params.hiddenKeys:(t.ind.params.hiddenKeys=[]);
+   const at=hk.indexOf(t.key);
+   if(at>=0)hk.splice(at,1); else { hk.push(t.key); if(hk.length>300)hk.splice(0,hk.length-300); }
+   hideVpIndHoverBox(); draw(); scheduleSave();
+ });
+ doc.body.appendChild(b);
+ _vpIndHoverBox=b; return b;
+}
+function hideVpIndHoverBox(){ if(_vpIndHoverBox)_vpIndHoverBox.style.display='none'; _vpIndHoverTarget=null; }
+function updateVpIndHover(e){
+ if(!vpIndHitRects.length){ if(_vpIndHoverTarget&&!_vpIndHoverHideT)_vpIndHoverHideT=setTimeout(hideVpIndHoverBox,350); return; }
+ const c=$('chart'); if(!c)return;
+ const rc=c.getBoundingClientRect();
+ const x=e.clientX-rc.left, y=e.clientY-rc.top;
+ let hit=null;
+ for(let k=vpIndHitRects.length-1;k>=0;k--){ const r=vpIndHitRects[k]; const yT=Math.min(r.y1,r.y2), yB=Math.max(r.y1,r.y2); if(x>=r.x1&&x<=r.x2&&y>=yT-4&&y<=yB+4){ hit=r; break; } }
+ if(!hit){ if(_vpIndHoverTarget){ clearTimeout(_vpIndHoverHideT); _vpIndHoverHideT=setTimeout(hideVpIndHoverBox,350); } return; }
+ clearTimeout(_vpIndHoverHideT); _vpIndHoverHideT=null;
+ if(_vpIndHoverTarget&&_vpIndHoverTarget.key===hit.key&&_vpIndHoverTarget.ind===hit.ind)return;
+ _vpIndHoverTarget=hit;
+ const b=vpIndHoverBoxEl();
+ b.querySelector('[data-role="lbl"]').textContent=hit.label;
+ b.querySelector('[data-role="btn"]').textContent=hit.hidden?'👁️ Mostra':'🚫 Nascondi';
+ b.style.display='flex';
+ b.style.left=Math.max(4,rc.left+hit.x1)+'px';
+ b.style.top=Math.max(4,rc.top+Math.min(hit.y1,hit.y2)-30)+'px';
+}
+function drawVpIndicatorHiddenOutlines(ctx){
+ vpIndHitRects.forEach(r=>{
+   if(!r.hidden)return;
+   ctx.save();
+   ctx.globalAlpha=0.35; ctx.strokeStyle=r.color; ctx.lineWidth=1; ctx.setLineDash([3,4]);
+   ctx.strokeRect(r.x1,Math.min(r.y1,r.y2),Math.max(2,r.x2-r.x1),Math.max(2,Math.abs(r.y2-r.y1)));
+   ctx.restore();
+ });
+}
 const INDICATOR_DEFS={
+ vp_daily:{
+   label:'Profili volumetrici giornalieri',
+   defaultParams:()=>({days:5,style:vpIndDefaultStyle(),hiddenKeys:[]}),
+   compute(){}, render(){} // disegnati nel ciclo dei disegni: vedi buildVpIndicatorVirtualDrawings()
+ },
+ vp_sessions:{
+   label:'Profili volumetrici delle sessioni',
+   defaultParams:()=>({days:5,useSessionColors:true,sessions:VP_IND_SESSIONS_DEFAULT.map(s=>({...s})),style:vpIndDefaultStyle(),hiddenKeys:[]}),
+   compute(){}, render(){}
+ },
  // RICHIESTO ESPLICITAMENTE: indicatore volumetrico di base ("quello che sta in basso attaccato
  // alla barra del periodo del tempo"), disponibile come default per tutti — barre verdi/rosse
  // (stessi colori delle candele rialziste/ribassiste, personalizzabili) in una fascia in fondo al
@@ -9128,6 +9422,8 @@ function openIndicatorSettingsModal(ind){
      paramsRow.appendChild(mkColor('Ribasso','downColor'));
      paramsRow.appendChild(mkNum('Altezza fascia %','heightPct',5,60));
      paramsRow.appendChild(mkNum('Opacità %','opacity',5,100));
+   }else if(ind.key==='vp_daily'||ind.key==='vp_sessions'){
+     buildVpIndicatorSettings(paramsRow,ind);
    }else if(ind.key==='sr_breaks'){
      paramsRow.appendChild(mkNum('Sinistra','leftBars',1,200));
      paramsRow.appendChild(mkNum('Destra','rightBars',1,200));
@@ -10274,7 +10570,9 @@ function draw(){
  const shapesGeo=chartGeometry();
  if(shapesGeo){
    lockButtonRects=[];
-   (pendingDrawing?drawings.concat([pendingDrawing]):drawings).forEach(d=>{
+   const _vpIndVirtual=buildVpIndicatorVirtualDrawings(shapesGeo); // profili giornalieri/sessioni (sotto ai disegni dell'utente)
+   drawVpIndicatorHiddenOutlines(ctx);
+   _vpIndVirtual.concat(pendingDrawing?drawings.concat([pendingDrawing]):drawings).forEach(d=>{
      // Pannello "Livelli" (vedi drawingLayerVisible/isDrawingLayerVisible più sopra): un disegno
      // del tipo nascosto non va disegnato — il pendingDrawing (disegno ancora in composizione, non
      // salvato) resta sempre visibile qualunque sia lo stato del livello, altrimenti sparirebbe
@@ -10739,7 +11037,9 @@ function draw(){
      // dai suoi due indici, non da un trascinamento libero come le altre forme) ed era solo un
      // pulsante inutile sopra di loro.
      const vpOrVwap=d.type==='vpfixed'||d.type==='vpanchor'||d.type==='vwap';
-     if(isSelected&&!isPending&&!vpOrVwap){
+     // RICHIESTO ESPLICITAMENTE: il lucchetto non compare più sul grafico passando/selezionando un
+     // disegno — si blocca/sblocca dal pannello 🗂️ Livelli disegni (pulsante 🔒 accanto a ⚙️).
+     if(false&&isSelected&&!isPending&&!vpOrVwap){
        const topY=d.type==='rectangle'?Math.min(dy1,dy2):Math.min(dy1,dy2);
        const cx=(dx1+dx2)/2;
        const btnW=26,btnH=20;
@@ -11849,6 +12149,9 @@ function openDrawStyleModal(d){
  $('dsFillRow').style.display=isRect?'':'none';
  $('dsFillColor').value=d.fillColor||d.color||defaultColorFor(d.type);
  $('dsFillOpacity').value=Math.round((d.fillOpacity!=null?d.fillOpacity:.12)*100);
+ // RICHIESTO ESPLICITAMENTE: col grafico staccato (PIP) le impostazioni del disegno (e il
+ // "Salva modello") compaiono nella finestra PIP, dove si sta disegnando — non nella pagina principale.
+ moveModalToFloatingIfActive($('drawStyleModalOverlay'));
  $('drawStyleModalOverlay').style.display='flex';
  draw();
 }
@@ -14801,6 +15104,24 @@ $('openPositions').addEventListener('click',async e=>{
    const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();
  }
 });
+$('journal').addEventListener('change',e=>{
+ const cb=e.target.closest?e.target.closest('.journalSelCb'):null; if(!cb)return;
+ const id=cb.getAttribute('data-seltrade');
+ if(cb.checked)journalSelectedIds.add(id); else journalSelectedIds.delete(id);
+ renderJournalSelectHeader();
+});
+$('journalSelectTh')?.addEventListener('click',async e=>{
+ const b=e.target.closest?e.target.closest('button'):null; if(!b)return;
+ if(b.id==='journalSelectModeBtn')setJournalSelectMode(true);
+ else if(b.id==='journalSelectExitBtn')setJournalSelectMode(false);
+ else if(b.id==='journalBulkDeleteBtn')await deleteSelectedJournalTrades();
+ else if(b.id==='journalSelectAllPageBtn'){
+   const cbs=[...document.querySelectorAll('#journal .journalSelCb')];
+   const allOn=cbs.length&&cbs.every(c=>c.checked);
+   cbs.forEach(c=>{ c.checked=!allOn; const id=c.getAttribute('data-seltrade'); if(c.checked)journalSelectedIds.add(id); else journalSelectedIds.delete(id); });
+   renderJournalSelectHeader();
+ }
+});
 $('journal').addEventListener('click',async e=>{
  const delIdx=e.target.getAttribute('data-deltrade');
  if(delIdx!=null){ await deleteTrade(Number(delIdx)); return; }
@@ -16072,6 +16393,8 @@ chartEl.addEventListener('pointerdown',e=>{
  chartEl.setPointerCapture?.(e.pointerId);
 });
 
+chartEl.addEventListener('pointermove',e=>{ if(e.pointerType==='mouse'&&!panDrag&&!shapeDrag)updateVpIndHover(e); },{passive:true});
+chartEl.addEventListener('pointerleave',()=>{ if(_vpIndHoverTarget){ clearTimeout(_vpIndHoverHideT); _vpIndHoverHideT=setTimeout(hideVpIndHoverBox,350); } });
 chartEl.addEventListener('pointermove',e=>{
  // Mirino (crosshair) per mouse/penna: sempre aggiornato, indipendentemente da altre azioni.
  if(e.pointerType==='mouse'||e.pointerType==='pen'){
@@ -17081,14 +17404,11 @@ $$('#generalSettingsModalOverlay [data-gensettings-tab]').forEach(tabBtn=>{
 // ===================== MODALE "LIVELLI" (RICHIESTO ESPLICITAMENTE: non più una riga per TIPO,
 // ma una riga per ogni SINGOLO disegno — se ci sono due Fibonacci compaiono due righe distinte,
 // ciascuna con ⚙️ impostazioni / 👁️ nascondi-mostra / 🗑️ elimina, senza toccare gli altri) =====
-const CHART_LAYERS_TYPES=['fib','vpfixed','vpanchor','vwap','alarmline'];
+const CHART_LAYERS_TYPES=['fib','vpfixed','vpanchor','vwap','alarmline','rectangle',...LINE_TYPES];
 function chartLayerRowLabel(type){
- return {fib:'📐 Fibonacci',vpfixed:'📊 Profilo volumetrico (intervallo fisso)',vpanchor:'📊 Profilo volumetrico (ancorato)',vwap:'〰️ VWAP',alarmline:'🔔 Linea Alarm'}[type]||type;
+ return {fib:'📐 Fibonacci',vpfixed:'📊 Profilo volumetrico (intervallo fisso)',vpanchor:'📊 Profilo volumetrico (ancorato)',vwap:'〰️ VWAP',alarmline:'🔔 Linea Alarm',trendline:'📏 Linea di tendenza',ray:'📏 Semiretta',extendedline:'📏 Linea estesa',extended:'📏 Linea estesa',horizontal:'➖ Linea orizzontale',horizontalray:'➖ Semiretta orizzontale',vertical:'│ Linea verticale',crossline:'✚ Linea a croce',rectangle:'▭ Rettangolo'}[type]||(typeof drawingTypeLabel==='function'?drawingTypeLabel(type):('✏️ '+type));
 }
-function openDrawingSettingsFromLayer(d){
- if(d.type==='fib')openFibSettingsModal(d);
- else openVpSettingsModal(d); // vpfixed/vpanchor/vwap condividono lo stesso modale impostazioni
-}
+function openDrawingSettingsFromLayer(d){ openDrawingSettings(d); } // fib/vp/vwap → loro finestre, linee/rettangoli → impostazioni disegno
 function removeDrawingInstance(d){
  pushHistory();
  drawings=drawings.filter(x=>x!==d);
@@ -17136,7 +17456,7 @@ function renderChartLayersList(){
  if(!rows2.length){
    const p=document.createElement('p');
    p.className='hint'; p.style.margin='4px 0';
-   p.textContent='Nessun Fibonacci, profilo volumetrico, VWAP o linea Alarm presente sul grafico di questo asset.';
+   p.textContent='Nessun disegno presente sul grafico di questo asset.';
    body.appendChild(p);
    renderChartLayersIndicators(body);
    return;
@@ -17178,6 +17498,20 @@ function renderChartLayersList(){
      settingsBtn.addEventListener('click',()=>openDrawingSettingsFromLayer(d));
      btns.appendChild(settingsBtn);
    }
+   // RICHIESTO ESPLICITAMENTE: 🔒 accanto alle impostazioni, per OGNI disegno (anche profili
+   // volumetrici, VWAP e linee Alarm) — bloccato non si può più spostare né deformare a grafico.
+   const lockBtn=document.createElement('button');
+   lockBtn.type='button'; lockBtn.className='indChipBtn';
+   lockBtn.title=d.locked?'Bloccato: clicca per sbloccare (potrai di nuovo spostarlo/modificarlo a grafico)':'Sbloccato: clicca per bloccarlo (non si potrà spostare/modificare per errore a grafico)';
+   lockBtn.textContent=d.locked?'🔒':'🔓';
+   if(d.locked)lockBtn.style.cssText='background:rgba(240,160,32,.18);border-radius:5px';
+   lockBtn.addEventListener('click',()=>{
+     d.locked=!d.locked;
+     if(d.locked&&shapeDrag)shapeDrag=null;
+     renderChartLayersList(); draw(); scheduleSave();
+     $('status').textContent=d.locked?'🔒 Disegno bloccato: non si può più spostare né modificare a grafico.':'🔓 Disegno sbloccato.';
+   });
+   btns.appendChild(lockBtn);
    const hideBtn=document.createElement('button');
    hideBtn.type='button'; hideBtn.className='indChipBtn'; hideBtn.title=d.hidden?'Mostra':'Nascondi';
    hideBtn.textContent=d.hidden?'🚫':'👁️'; hideBtn.style.opacity=d.hidden?'.55':'1';
