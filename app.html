@@ -1710,6 +1710,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">HEATMAP LIQUIDITÀ ORDER BOOK (MT5, solo Live)</div>
            <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
              <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="heatmapEnabled"> Mostra heatmap di liquidità sullo sfondo del grafico</label>
+             <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="heatmapCobSvp" checked> Mostra le colonne <b>COB</b> (order book attuale) e <b>SVP</b> (volume della sessione) a destra della scala prezzi</label>
            </div>
            <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
              <span style="display:inline-flex;align-items:center;gap:5px">Altezza riga <input id="heatmapRowPips" type="number" min="0.1" step="0.1" value="5" style="width:60px">pip</span>
@@ -7708,7 +7709,7 @@ function getVisibleCount(){
 function idealVisibleCount(){
  const c=$('chart'); if(!c)return 80;
  const w=c.clientWidth||c.getBoundingClientRect().width||800;
- const cw=Math.max(50,w-18-76);
+ const cw=Math.max(50,w-18-chartPadR(w));
  const targetSlot=9; // px per candela: spessore risultante ~5.5px, ben leggibile
  return Math.max(30,Math.min(200,Math.round(cw/targetSlot)));
 }
@@ -7740,7 +7741,7 @@ const PRICE_ZOOM_MIN_FACTOR=1e-9;
 function maxNoOverlapVisibleCount(){
  const c=$('chart'); if(!c)return 20000;
  const w=c.clientWidth||c.getBoundingClientRect().width||800;
- const cw=Math.max(50,w-18-76); // stessi padding orizzontali di draw()/idealVisibleCount()
+ const cw=Math.max(50,w-18-chartPadR(w)); // stessi padding orizzontali di draw()/idealVisibleCount()
  return Math.max(30,Math.floor(cw/MIN_CANDLE_SLOT_PX));
 }
 // RICHIESTO ESPLICITAMENTE ("lo zoom di tutto il grafico, quindi il periodo del tempo, deve
@@ -9084,7 +9085,7 @@ const INDICATOR_DEFS={
        // sta nemmeno con il clamp (caso estremo, grafico più stretto del box stesso) resta
        // ancorato al bordo sinistro/superiore dell'area di plot, il meno peggio possibile,
        // invece di sparire parzialmente.
-       const plotL=18, plotR=76, plotT=18, plotB=44;
+       const plotL=18, plotR=chartPadR(W), plotT=18, plotB=44;
        let bx,by;
        if(p.dashPos==='top_right'){ bx=W-plotR-boxW-padd; by=plotT+padd; }
        else if(p.dashPos==='bottom_right'){ bx=W-plotR-boxW-padd; by=H-plotB-boxH-padd; }
@@ -10432,7 +10433,7 @@ function draw(){
  closedTradeHitSegments=[];
  const {n,start,dataStart,dataEnd}=getViewWindow();
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
- const pad={l:18,r:76,t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
+ const pad={l:18,r:chartPadR(w),t:18,b:44}, cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
  // CORREZIONE ESPLICITA DELL'UTENTE: l'estensione verticale della heatmap non viene più
  // riapplicata qui ad ogni frame sopra lo zoom/pan dell'utente (vedi ora dentro
  // autoFitBaseRange() più sopra nel file, applicata solo alla base auto-fit) — zoom/pan manuali
@@ -11815,6 +11816,12 @@ function draw(){
    priceAxisTicks.forEach(t=>ctx.fillText(t.text,w-pad.r+8,t.y+4));
    ctx.restore();
  })();
+ try{ drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,{bg:chartBg,grid:gridColorStrong,text:lineSecondary}); }catch(e){ console.warn('COB/SVP',e); }
+ try{
+   const _ex=cobSvpExtraWidth(w);
+   const _pz=document.getElementById('priceAxisZone'); if(_pz&&_pz.style.right!==_ex+'px')_pz.style.right=_ex+'px';
+   const _tz=document.getElementById('timeAxisZone'); if(_tz&&_tz.style.right!==pad.r+'px')_tz.style.right=pad.r+'px';
+ }catch(e){}
  // Etichette di riferimento sulla scala prezzi (bordo destro) per ENTRY/TP/SL di ogni
  // posizione aperta visibile, come su TradingView: verde per il Target, rosso per lo Stop,
  // colore del lato (stesso della linea di entrata sul grafico) per l'entrata. Disegnate DOPO
@@ -12043,7 +12050,7 @@ function chartGeometry(){
  const c=$('chart'),rect=c.getBoundingClientRect(),w=rect.width,h=rect.height;
  const {n,start,dataStart,dataEnd}=getViewWindow();
  const data=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
- const pad={l:18,r:76,t:18,b:44},cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
+ const pad={l:18,r:chartPadR(w),t:18,b:44},cw=w-pad.l-pad.r,ch=h-pad.t-pad.b;
  if(!data.length)return null;
  let {lo,hi,range}=computePriceRange(data);
  const y=price=>pad.t+(hi-price)/range*ch;
@@ -16303,8 +16310,9 @@ function handleTwoFingerPan(){
 
 function isOnPriceAxis(clientX){
  const rect=chartEl.getBoundingClientRect();
- const pad={r:76};
- return (clientX-rect.left)>=(rect.width-pad.r);
+ const pad={r:chartPadR(rect.width)};
+ const rel=clientX-rect.left;
+ return rel>=(rect.width-pad.r)&&rel<(rect.width-cobSvpExtraWidth(rect.width));
 }
 
 // --- Overlay dedicato #priceAxisZone: sta SOPRA al canvas sul bordo destro (dove è
@@ -17255,7 +17263,7 @@ chartWheelTarget.addEventListener('wheel',e=>{
    const oldStart=oldEnd-oldN+1;
    // Stessi identici padding usati in draw() per il calcolo delle coordinate: devono restare
    // sincronizzati con quelli, altrimenti l'ancoraggio del punto sotto il mouse andrebbe fuori fase.
-   const pad={l:18,r:76,t:18,b:44};
+   const pad={l:18,r:chartPadR(chartEl.clientWidth||chartEl.getBoundingClientRect().width),t:18,b:44};
    const rect=chartEl.getBoundingClientRect();
    const w=chartEl.clientWidth||rect.width, h=chartEl.clientHeight||rect.height;
    const mx=e.clientX-rect.left, my=e.clientY-rect.top;
@@ -21340,13 +21348,138 @@ function footprintStepForAsset(assetKey){
 // (subito prima del loop delle candele) e connectMt5OrderBook/orderBookHistoryByAsset più sopra
 // nel file per da dove arrivano davvero i dati (mai stimati/inventati).
 function heatmapEnabledNow(){ return !!$('heatmapEnabled')?.checked; }
+// RICHIESTO ESPLICITAMENTE (rif. Bookmap): con la heatmap attiva, due colonne a destra della scala
+// prezzi — COB (Current Order Book: liquidità in attesa ADESSO, ask rossi sopra / bid verdi sotto,
+// dall'ultimo snapshot reale del DOM MT5) e SVP (Session Volume Profile: volume scambiato oggi per
+// livello, vendite rosse + acquisti verdi, dai tick reali del footprint). Stesse condizioni della
+// heatmap (Live + MT5): altrove le colonne non occupano spazio. La larghezza extra entra nel
+// margine destro del grafico (chartPadR), così la scala prezzi si sposta a sinistra delle colonne
+// come in Bookmap e nessun calcolo di coordinate va fuori fase.
+function cobSvpEnabledNow(){ return !!$('heatmapCobSvp')?.checked; }
+function cobSvpActiveNow(){
+ try{ return cobSvpEnabledNow()&&heatmapEnabledNow()&&!!liveModeActive&&!!mt5Connected&&!!mt5ActiveSymbol; }catch(e){ return false; }
+}
+function cobSvpColWidth(w){ return (Number(w)||900)<700?44:64; }
+function cobSvpExtraWidth(w){ return cobSvpActiveNow()?cobSvpColWidth(w)*2:0; }
+function chartPadR(w){ return 76+cobSvpExtraWidth(w); }
+// SVP: somma dei bucket footprint (asset a grafico) caduti nel giorno di sessione dell'ultima
+// candela. Cache leggera: ricalcolo al massimo ogni 200ms o quando cambiano bucket/step/giorno.
+let _svpCache={ref:null,day:null,step:null,at:0,levels:null};
+function svpLevelsNow(){
+ if(!rows.length||idx==null||idx<0)return null;
+ const last=rows[Math.min(idx,rows.length-1)];
+ const tLast=last?parseDateTime(last.date):NaN;
+ if(!Number.isFinite(tLast))return null;
+ const day=romeDayAndMinute(tLast).day;
+ const now=Date.now();
+ if(_svpCache.ref===footprintByBucket&&_svpCache.day===day&&now-_svpCache.at<200&&_svpCache.levels)return _svpCache.levels;
+ const levels=new Map(); // prezzo livello footprint -> {buy,sell}
+ for(const bs in footprintByBucket){
+   const t=Number(bs);
+   if(!Number.isFinite(t)||romeDayAndMinute(t).day!==day)continue;
+   const b=footprintByBucket[bs]; if(!b||!b.rows)continue;
+   for(const k in b.rows){
+     const c=b.rows[k]; const lv=Number(k);
+     let e=levels.get(lv); if(!e){e={buy:0,sell:0};levels.set(lv,e);}
+     e.buy+=c.buy||0; e.sell+=c.sell||0;
+   }
+ }
+ _svpCache={ref:footprintByBucket,day,step:null,at:now,levels};
+ return levels;
+}
+function fmtCompactVol(v){
+ if(!Number.isFinite(v))return '';
+ const a=Math.abs(v);
+ if(a>=1e6)return (v/1e6).toFixed(a>=1e7?0:1)+'M';
+ if(a>=1e3)return (v/1e3).toFixed(a>=1e4?0:1)+'K';
+ if(a>=100)return String(Math.round(v));
+ if(a>=10)return v.toFixed(0);
+ return (Math.round(v*100)/100).toString();
+}
+function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
+ const chartBg=theme.bg, gridColorStrong=theme.grid, lineSecondary=theme.text;
+ if(!cobSvpActiveNow())return;
+ const colW=cobSvpColWidth(w), extra=colW*2;
+ const cobX=w-extra, svpX=w-colW;
+ const ch=h-pad.t-pad.b;
+ // Passo delle righe: quello del footprint (pip × "Altezza riga" footprint), raddoppiato finché
+ // ogni riga non è alta almeno 4px — con lo zoom indietro le righe si accorpano invece di
+ // diventare un'unica macchia illeggibile.
+ const pip=pipSizeForAsset(currentAssetKey);
+ let base=footprintStepForAsset(currentAssetKey);
+ if(!(base>0))base=(pip>0?pip:range/200);
+ const pxPer=base/range*ch;
+ const mult=pxPer>=4?1:Math.ceil(4/Math.max(1e-9,pxPer));
+ const step=base*mult;
+ const binOf=p=>Math.round(p/step);
+ const rowGeom=k=>{ const yTop=y((k+0.5)*step), yBot=y((k-0.5)*step); return {yTop,yBot,h:Math.max(1,yBot-yTop)}; };
+ const kLo=binOf(lo)-1, kHi=binOf(hi)+1;
+ const BID='#2fbf71', ASK='#e05252';
+ ctx.save();
+ ctx.fillStyle=chartBg; ctx.fillRect(cobX,0,extra,h);
+ ctx.beginPath(); ctx.rect(cobX,pad.t,extra,ch); ctx.clip();
+ const showNums=(k)=>rowGeom(k).h>=10;
+ ctx.font=scaledFont('9px Arial'); ctx.textBaseline='middle'; ctx.textAlign='right';
+ ctx.shadowColor='rgba(0,0,0,.9)'; ctx.shadowBlur=2; // numeri leggibili anche sopra le barre
+ // --- COB: ultimo snapshot reale del DOM ---
+ const snap=latestOrderBookByAsset[mt5ActiveSymbol];
+ const cob=new Map(); // bin -> {bid,ask}
+ if(snap){
+   (snap.bids||[]).forEach(e=>{ const p=Number(e.price),v=Number(e.volume); if(!Number.isFinite(p)||!(v>0))return; const k=binOf(p); if(k<kLo||k>kHi)return; const o=cob.get(k)||{bid:0,ask:0}; o.bid+=v; cob.set(k,o); });
+   (snap.asks||[]).forEach(e=>{ const p=Number(e.price),v=Number(e.volume); if(!Number.isFinite(p)||!(v>0))return; const k=binOf(p); if(k<kLo||k>kHi)return; const o=cob.get(k)||{bid:0,ask:0}; o.ask+=v; cob.set(k,o); });
+ }
+ let cobMax=0; cob.forEach(o=>{ cobMax=Math.max(cobMax,o.bid,o.ask); });
+ const barMax=colW-6;
+ cob.forEach((o,k)=>{
+   const g=rowGeom(k);
+   const isAsk=o.ask>=o.bid, v=isAsk?o.ask:o.bid;
+   const len=cobMax>0?Math.max(1.5,v/cobMax*barMax):0;
+   ctx.fillStyle=hexToRgba(isAsk?ASK:BID,0.85);
+   ctx.fillRect(cobX+2,g.yTop+0.5,len,Math.max(1,g.h-1));
+   if(showNums(k)){ ctx.fillStyle='#e8edf3'; ctx.fillText(fmtCompactVol(v),cobX+colW-3,(g.yTop+g.yBot)/2); }
+ });
+ // --- SVP: volume scambiato nella sessione (giorno) per livello ---
+ const svpRaw=svpLevelsNow();
+ const svp=new Map();
+ if(svpRaw)svpRaw.forEach((e,lv)=>{ const k=binOf(lv); if(k<kLo||k>kHi)return; const o=svp.get(k)||{buy:0,sell:0}; o.buy+=e.buy; o.sell+=e.sell; svp.set(k,o); });
+ let svpMax=0; svp.forEach(o=>{ svpMax=Math.max(svpMax,o.buy+o.sell); });
+ svp.forEach((o,k)=>{
+   const tot=o.buy+o.sell; if(!(tot>0))return;
+   const g=rowGeom(k);
+   const len=svpMax>0?Math.max(1.5,tot/svpMax*barMax):0;
+   const sellLen=len*(o.sell/tot);
+   ctx.fillStyle=hexToRgba(ASK,0.85); ctx.fillRect(svpX+2,g.yTop+0.5,sellLen,Math.max(1,g.h-1));
+   ctx.fillStyle=hexToRgba(BID,0.85); ctx.fillRect(svpX+2+sellLen,g.yTop+0.5,len-sellLen,Math.max(1,g.h-1));
+   if(showNums(k)){ ctx.fillStyle='#e8edf3'; ctx.fillText(fmtCompactVol(tot),svpX+colW-3,(g.yTop+g.yBot)/2); }
+ });
+ ctx.shadowBlur=0; ctx.shadowColor='transparent';
+ // Riga del prezzo attuale attraverso le due colonne (riferimento visivo come in Bookmap).
+ if(rows.length&&rows[idx]&&Number.isFinite(Number(rows[idx].close))){
+   const pc=Number(rows[idx].close);
+   if(pc>=lo&&pc<=hi){ const py=Math.round(y(pc))+0.5; ctx.strokeStyle='rgba(255,255,255,.55)'; ctx.setLineDash([3,3]); ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(cobX,py); ctx.lineTo(w,py); ctx.stroke(); ctx.setLineDash([]); }
+ }
+ ctx.restore();
+ // Intestazioni, separatori e messaggi "nessun dato" (fuori dal clip).
+ ctx.save();
+ ctx.strokeStyle=gridColorStrong; ctx.lineWidth=1;
+ ctx.beginPath(); ctx.moveTo(cobX+.5,0); ctx.lineTo(cobX+.5,h); ctx.moveTo(svpX+.5,0); ctx.lineTo(svpX+.5,h); ctx.stroke();
+ ctx.font=scaledFont('bold 10px Arial'); ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle=lineSecondary;
+ ctx.fillText('COB',cobX+colW/2,pad.t/2+1); ctx.fillText('SVP',svpX+colW/2,pad.t/2+1);
+ ctx.font=scaledFont('9px Arial'); ctx.fillStyle='rgba(167,177,191,.7)';
+ if(!cob.size){
+   const na=mt5OrderBookUnavailableForAsset&&mt5OrderBookUnavailableForAsset.has(mt5ActiveSymbol);
+   ctx.save(); ctx.translate(cobX+colW/2,pad.t+ch/2); ctx.rotate(-Math.PI/2); ctx.fillText(na?'DOM non disponibile dal broker':'in attesa del book…',0,0); ctx.restore();
+ }
+ if(!svp.size){ ctx.save(); ctx.translate(svpX+colW/2,pad.t+ch/2); ctx.rotate(-Math.PI/2); ctx.fillText('nessun volume oggi',0,0); ctx.restore(); }
+ ctx.restore();
+}
 // RICHIESTO ESPLICITAMENTE: le impostazioni del grafico devono restare fisse tra una riapertura
 // e l'altra. Verificato campo per campo con un test di ricarica pagina: tutte le altre schede
 // (Style, Griglia, Notizie, Alarm, Footprint, Audio) si salvavano già — la Heatmap NO, tornava
 // sempre ai valori di fabbrica. Salvata ora in localStorage come le altre preferenze globali
 // (non legata alla sessione Storico/Live: vale per tutto il programma).
 const HEATMAP_PREFS_KEY='forex_lab_heatmap_prefs';
-const HEATMAP_PREF_FIELDS=['heatmapEnabled','heatmapRowPips','heatmapOpacity','heatmapVertPadPips'];
+const HEATMAP_PREF_FIELDS=['heatmapEnabled','heatmapCobSvp','heatmapRowPips','heatmapOpacity','heatmapVertPadPips'];
 function saveHeatmapPrefs(){
  const o={};
  HEATMAP_PREF_FIELDS.forEach(id=>{ const el=$(id); if(el)o[id]=el.type==='checkbox'?!!el.checked:el.value; });
