@@ -2729,6 +2729,30 @@ function currentMt5AccountTag(){
  }catch(e){}
  return {};
 }
+// RICHIESTO ESPLICITAMENTE (punto 2): un trade chiuso appartiene alla vista corrente solo se e'
+// della STESSA modalita' E della STESSA sorgente dati in uso adesso. Conseguenze volute:
+//  - in Storico non si vedono MAI operazioni Live (ne' MT5 ne' Capital.com);
+//  - in Live collegati a un conto MT5 si vedono SOLO le operazioni reali di QUEL conto;
+//  - in Live su Capital.com si vedono SOLO le operazioni simulate Capital.com.
+// Estratta da statsTrades() (che applicava questa regola alle sole statistiche del conto) per
+// poterla riusare IDENTICA anche nel disegno del grafico: prima i marker dei trade chiusi e la
+// scala verticale filtravano solo per asset, quindi in Live su Capital.com comparivano a grafico
+// anche le operazioni reali MT5, e in Storico comparivano quelle Live.
+// Le Challenge Prop Firm restano com'erano: tutte le operazioni della Challenge contano.
+function tradeBelongsToCurrentView(t){
+ if(!t)return false;
+ const m=currentMode();
+ if((t.mode||'backtest')!==m)return false;
+ if(m==='live'){
+   let conn=false; try{ conn=!!mt5Connected; }catch(e){}
+   if(conn){
+     const login=currentMt5AccountTag().mt5Login;
+     return t.mt5Ticket!=null&&(!login||String(t.mt5Login||'')===login);
+   }
+   return t.mt5Ticket==null;
+ }
+ return true;
+}
 function statsTrades(){
  const m=currentMode();
  const list=trades.filter(t=>t.mode===m).slice(statsBaselineByMode[m]||0);
@@ -7209,6 +7233,8 @@ function computeTotalLivePL(){
  const current=currentPrice();
  let total=0, any=false;
  positions.forEach(pos=>{
+   // Posizione MT5 mostrata su Capital.com: puro riferimento, fuori da questo totale (punto 3).
+   if(isMt5ReferenceOnly(pos))return;
    // BUG RISOLTO (segnalato: "il P/L live sopra il grafico non tiene conto dello swap e non è
    // il valore effettivo di quello collegato con l'account MT5"): per una posizione REALE
    // (mt5Ticket) questo box ricalcolava sempre in locale con calculateForexPL() e un prezzo di
@@ -7532,8 +7558,12 @@ function update(){
      // sempre il prezzo/P&L VERO del broker (mt5RealPrice/mt5RealProfit, la stessa fotografia
      // già usata da quella tabella): stesso numero ovunque, e coerente con quello che la Prop
      // Firm ora usa davvero per le sue regole (vedi floatingPL()).
-     const mt5Price=p.mt5Ticket!=null?mt5RealPrice(p.mt5Ticket):null;
-     const posPrice=mt5Price!=null?mt5Price:(isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[posAsset]:null));
+     // Riferimento visivo (MT5 mostrato su Capital.com): NON usiamo la fotografia del broker,
+     // che da scollegati e' ferma all'ultimo valore noto e lascerebbe l'andamento congelato.
+     // Usiamo i prezzi Capital.com, cosi' la posizione continua a muoversi come richiesto.
+     const isRefOnly=isMt5ReferenceOnly(p);
+     const mt5Price=(p.mt5Ticket!=null&&!isRefOnly)?mt5RealPrice(p.mt5Ticket):null;
+     const posPrice=mt5Price!=null?mt5Price:(isCurrentAssetOnScreen?price:((isLiveSession||isRefOnly)?livePriceByAsset[posAsset]:null));
      // ALLINEATO col box "P/L Live" e con la tabella "Posizioni MT5" (richiesto esplicitamente):
      // per una posizione REALE questa cella mostrava mt5RealProfit() da solo (profitto di
      // prezzo, senza swap) — stesso numero di floatingPL()/Prop Firm, ma diverso da quello che
@@ -7541,19 +7571,21 @@ function update(){
      // sommiamo lo swap SOLO per la visualizzazione (mt5RealSwap sotto): floatingPL()/equityNow()
      // (margine, drawdown, regole Prop Firm) restano invariati apposta, per non cambiare la
      // logica di rischio/margin call senza che sia stato chiesto esplicitamente.
-     const mt5Profit=p.mt5Ticket!=null?mt5RealProfit(p.mt5Ticket):null;
+     const mt5Profit=(p.mt5Ticket!=null&&!isRefOnly)?mt5RealProfit(p.mt5Ticket):null;
      const plLive=mt5Profit!=null?mt5Profit+mt5RealSwap(p.mt5Ticket):((posPrice!=null)?calculateForexPL(p.side,p.entry,posPrice,p.lots,posAsset):null);
      const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
      // Colonna "Prezzo corrente": per le sessioni Storico non attive mostriamo il prezzo di
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
      const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
-     const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
+     const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?(isRefOnly
+       ?' <span title="Posizione reale MT5 (ticket '+p.mt5Ticket+') mostrata solo come RIFERIMENTO: terminale MT5 non collegato, andamento seguito coi prezzi Capital.com. Non conta in P/L, statistiche o totale del conto.">🖥️◻</span>'
+       :' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>'):'');
      // Versione SOLO TESTO di modeTag (senza il tag <span> annidato), da usare quando serve
      // dentro un ALTRO attributo title="...": BUG RISOLTO — inserire modeTag (che contiene un
      // secondo title="..." con le sue virgolette) dentro un title="..." più esterno chiudeva
      // quest'ultimo in anticipo alla prima virgoletta incontrata, lasciando il resto del testo
      // (e un "> di troppo) riversato come testo visibile nel bottone invece che nel tooltip.
-     const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' (posizione reale MT5)':'');
+     const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?(isRefOnly?' (posizione MT5, solo riferimento)':' (posizione reale MT5)'):'');
      // Il testo del bottone riflette lo stato di selezione (modalità toggle: ripremendolo si
      // deseleziona), così è chiaro a colpo d'occhio invece di restare sempre "Seleziona".
      const isSelected=isCurrentRow&&p===active;
@@ -7887,7 +7919,9 @@ function collectTradeLevelPrices(data){
  // Solo i trade chiusi DELL'ASSET CORRENTE: il Trade Journal è condiviso fra tutti gli asset,
  // ma un vecchio trade di un altro strumento (prezzi completamente diversi, es. oro vs
  // EUR/USD) non deve mai influenzare la scala verticale del grafico attuale.
- const closedTradesForAsset=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)===currentAssetKey):trades;
+ // Filtro per MODALITA'+SORGENTE oltre che per asset (vedi tradeBelongsToCurrentView): un trade
+ // Live/MT5 non deve piu' allargare la scala verticale mentre si guarda lo Storico o Capital.com.
+ const closedTradesForAsset=trades.filter(t=>tradeBelongsToCurrentView(t)&&(!currentAssetKey||(t.asset||currentAssetKey)===currentAssetKey));
  // Trade GIÀ CHIUSI: li includiamo SOLO se apertura o chiusura ricadono nell'intervallo di
  // candele passato in `data` (di norma il breve range recente usato per il fit verticale).
  // Questo è IL LIMITE FORZATO richiesto: un trade vecchio, lontano nel tempo rispetto a dove
@@ -10166,7 +10200,10 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
  // Solo i trade CHIUSI dell'asset attualmente a grafico: il Trade Journal è condiviso fra
  // tutti gli asset, ma disegnare sul grafico corrente anche i marker di operazioni di un
  // altro strumento (con prezzi/tempi non comparabili) sarebbe fuorviante.
- const assetTrades=currentAssetKey?trades.filter(t=>(t.asset||currentAssetKey)===currentAssetKey):trades;
+ // Oltre all'asset, filtra per MODALITA'+SORGENTE (vedi tradeBelongsToCurrentView): in Storico
+ // nessun marker di operazioni Live, in Live su Capital.com nessun marker di operazioni MT5 e
+ // viceversa — richiesto esplicitamente.
+ const assetTrades=trades.filter(t=>tradeBelongsToCurrentView(t)&&(!currentAssetKey||(t.asset||currentAssetKey)===currentAssetKey));
  if(!assetTrades.length)return;
  // Converte un indice ASSOLUTO nell'array `rows` in coordinata x sul canvas. NB: la x()
  // usata altrove in draw() si aspetta invece un indice LOCALE relativo a dataStart — usare
@@ -13731,6 +13768,23 @@ function closedPL(){ return statsTrades().reduce((s,t)=>s+t.pl,0); }
 // fotografia che alimenta la tabella "🖥️ Posizioni MT5" e il suo P/L live) — non un ricalcolo
 // con un prezzo di un'altra fonte. Restituisce null se per questo ticket non è ancora arrivata
 // nessuna fotografia dal bridge (es. appena aperta, prima del primo giro di polling).
+// RICHIESTO ESPLICITAMENTE (punto 3): una posizione reale MT5 mostrata mentre la sorgente del
+// conto e' Capital.com e' un puro RIFERIMENTO VISIVO. Si deve continuare a vedere nelle posizioni
+// aperte e a grafico anche da scollegati, con l'andamento aggiornato dai prezzi Capital.com, ma
+// NON deve influire su NIENTE della dashboard Capital.com: ne' P/L, ne' win rate / loss rate, ne'
+// pip totali, ne' numero di trade, ne' profitto, ne' totale del conto, ne' ultimo trade chiuso.
+// Le statistiche sui trade CHIUSI erano gia' a posto (vedi statsTrades/tradeBelongsToCurrentView,
+// che escludono i ticket MT5 quando non si e' collegati); mancava l'esclusione delle posizioni
+// APERTE dagli aggregati di P/L, piu' il fatto che da scollegati l'andamento restava CONGELATO
+// sull'ultima fotografia del broker invece di seguire i prezzi Capital.com.
+// mt5MonitorOnly NON conta come "riferimento": in quello stato il polling delle posizioni e'
+// ancora vivo e sincronizzato col conto reale, quindi il comportamento resta quello di prima.
+function isMt5ReferenceOnly(pos){
+ if(!pos||pos.mt5Ticket==null)return false;
+ let conn=false, monitor=false;
+ try{ conn=!!mt5Connected; monitor=!!mt5MonitorOnly; }catch(e){}
+ return !conn&&!monitor;
+}
 function mt5RealProfit(ticket){
  const rp=mt5RealPositions.find(x=>String(x.ticket)===String(ticket));
  const v=rp?Number(rp.profit):NaN;
@@ -13781,6 +13835,7 @@ function floatingPL(){
    // per un asset, quella posizione viene correttamente ignorata per questo giro invece di
    // usare un prezzo a caso.
    return positions.reduce((s,p)=>{
+     if(isMt5ReferenceOnly(p))return s; // riferimento visivo: fuori da equity/margine/Prop Firm (punto 3)
      if(p.mt5Ticket!=null){
        const real=mt5RealProfit(p.mt5Ticket);
        if(real!=null)return s+real; // fallback sotto solo se manca ancora una fotografia MT5
@@ -14942,7 +14997,17 @@ $('market')?.addEventListener('change',()=>{
  if(!v || v==='custom') return;
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
- if(liveModeActive) loadLiveHistoryFromCapital(v);
+ // ORDINE RICHIESTO ESPLICITAMENTE: prima si ferma TUTTO l'aggiornamento del grafico (timer da
+ // 1s + stream Capital.com/MT5, e si scarta l'ultimo prezzo noto), solo dopo si esegue il cambio
+ // di asset, e l'aggiornamento riparte quando il nuovo storico e' caricato. Senza questo, fra il
+ // cambio di csvLibrary[0] e l'azzeramento del prezzo dentro il caricatore restava una finestra
+ // in cui il timer applicava all'asset NUOVO il prezzo del VECCHIO (vedi chartFeedSuspended).
+ if(liveModeActive){
+   suspendChartFeed('cambio asset -> '+v);
+   Promise.resolve(loadLiveHistoryFromCapital(v)).catch(e=>{
+     console.log('[ChartFeed] caricamento storico fallito al cambio asset:',e);
+   }).finally(resumeChartFeed);
+ }
  else autoLoadAssetLibrary(v);
 });
 $('assetFavToggleBtn')?.addEventListener('click',toggleCurrentAssetWatchlist);
@@ -22501,6 +22566,43 @@ let lastLiveTickAt=0, liveStreamReconnectAttemptAt=0, liveWsReconnectTimer=null;
 // grafico) viene ora tenuto qui a parte, aggiornato solo confrontando l'epic — esattamente come
 // prima — e il timer da 1s legge da qui, non da livePriceByAsset.
 let lastPrimaryEpicPrice=null;
+// BUG RISOLTO (segnalato: "passando da BTCUSD a XAUUSD mi ha tirato una candela lunga dal prezzo
+// del bitcoin al prezzo dell'oro"). lastPrimaryEpicPrice qui sopra e' volutamente slegato dal NOME
+// asset (confronta solo gli EPIC), ma al CAMBIO di asset quel prezzo resta in memoria mentre
+// csvLibrary[0] e' gia' diventato il nuovo asset: il timer da 1s lo applicava quindi alla serie
+// SBAGLIATA, creando una candela che va dal prezzo del vecchio asset a quello del nuovo. Non era
+// un problema solo estetico: applyLivePriceToChart aggiorna high/low/close, e da quei valori
+// dipendono la valutazione di SL/TP, l'attivazione degli ordini pendenti e gli allarmi — un
+// prezzo del Bitcoin applicato all'oro ATTRAVERSA ogni livello in mezzo, quindi poteva chiudere
+// posizioni in stop e far scattare pendenti mai realmente toccati (denaro vero, con MT5).
+// Due protezioni, entrambe strutturali (non dipendono dall'ordine in cui girano le funzioni):
+//  1. il prezzo viaggia SEMPRE insieme all'asset da cui proviene (lastPrimaryEpicPriceAsset), e
+//     applyLivePriceToChart rifiuta qualunque prezzo che non appartenga all'asset a grafico ORA;
+//  2. chartFeedSuspended: il cambio asset spegne PRIMA tutto l'aggiornamento (timer + stream) e
+//     lo riaccende solo quando il nuovo storico e' caricato — come richiesto esplicitamente.
+let lastPrimaryEpicPriceAsset=null;
+let chartFeedSuspended=false, chartFeedSuspendReason='';
+// Spegne ogni sorgente che puo' toccare la candela, e svuota lo stato volatile del prezzo. Da
+// chiamare SINCRONAMENTE prima di qualunque await che porti a un cambio di asset.
+function suspendChartFeed(reason){
+  chartFeedSuspended=true; chartFeedSuspendReason=reason||'';
+  try{ stopLiveRefreshTimer(); }catch(e){}
+  try{ disconnectCapitalStream(); }catch(e){}
+  try{ disconnectMt5Stream(); }catch(e){}
+  lastPrimaryEpicPrice=null; lastPrimaryEpicPriceAsset=null;
+  lastSeenCandleBucketStart=null; lastLiveTickAt=0;
+  console.log(`[ChartFeed] aggiornamento SOSPESO (${chartFeedSuspendReason}): timer e stream fermi, ultimo prezzo scartato.`);
+}
+// Riaccende il timer. Gli stream li riaprono da se' i due caricatori di storico alla fine
+// (refreshLiveStreamSubscriptions per Capital.com, connectMt5Stream per MT5), quindi qui non
+// serve riconnetterli a mano: farlo raddoppierebbe le sottoscrizioni.
+function resumeChartFeed(){
+  if(!chartFeedSuspended)return;
+  chartFeedSuspended=false;
+  console.log(`[ChartFeed] aggiornamento RIPRESO dopo "${chartFeedSuspendReason}".`);
+  chartFeedSuspendReason='';
+  if(liveModeActive)startLiveRefreshTimer();
+}
 // RETE DI SICUREZZA aggiuntiva, come richiesto ("l'aggiornamento non si può bloccare"): oltre al
 // watchdog sui tick grezzi qui sotto, teniamo traccia di quando la CANDELA a grafico è stata
 // davvero aggiornata l'ultima volta. Se passano più di 15s senza alcun aggiornamento reale
@@ -22550,6 +22652,7 @@ function startLiveRefreshTimer(){
  if(liveRefreshTimer)return;
  liveRefreshTimer=setHeartbeatInterval(async ()=>{
    if(!liveModeActive)return;
+   if(chartFeedSuspended)return; // cambio asset in corso: fermo tutto, nessun prezzo applicato
    // Vedi commento su lastSeenCandleBucketStart più sopra: appena si entra in un NUOVO bucket
    // (nuova candela) rispetto all'ultimo giro, tagliamo subito la connessione e mettiamo il
    // grafico in pausa per 1s prima di richiedere dati freschi, così quella singola candela "di
@@ -22611,7 +22714,7 @@ function startLiveRefreshTimer(){
    // lastPrimaryEpicPrice più sopra, evita di ridipendere da una corrispondenza asset↔epic).
    let touched=false;
    const __capBucket=Math.floor(Date.now()/((currentTF||1)*60000))*((currentTF||1)*60000);
-   if(Number.isFinite(lastPrimaryEpicPrice))touched=applyLivePriceToChart(lastPrimaryEpicPrice,Date.now(),{allowNew:(lastLiveTickAt||0)>=__capBucket})||touched;
+   if(Number.isFinite(lastPrimaryEpicPrice))touched=applyLivePriceToChart(lastPrimaryEpicPrice,Date.now(),{allowNew:(lastLiveTickAt||0)>=__capBucket,fromAsset:lastPrimaryEpicPriceAsset})||touched;
    // FALLBACK richiesto dall'utente: se lo streaming a tick è fermo da un po' (>4s), forziamo
    // comunque una sincronizzazione ogni secondo leggendo l'ultimo prezzo via REST, così la
    // candela avanza sempre — anche nei momenti in cui la riconnessione del WebSocket qui sopra
@@ -22619,9 +22722,9 @@ function startLiveRefreshTimer(){
    if(capitalWsPrimaryEpic && staleMs>4000){
      const restPrice=await fetchLatestPriceRest(capitalWsPrimaryEpic);
      if(Number.isFinite(restPrice)){
-       lastPrimaryEpicPrice=restPrice;
+       lastPrimaryEpicPrice=restPrice; lastPrimaryEpicPriceAsset=currentAssetKey||null;
        if(currentAssetKey)livePriceByAsset[currentAssetKey]=restPrice;
-       touched=applyLivePriceToChart(restPrice,Date.now(),{allowNew:false})||touched;
+       touched=applyLivePriceToChart(restPrice,Date.now(),{allowNew:false,fromAsset:currentAssetKey||null})||touched;
      }
    }
    if(touched)lastChartUpdateAt=Date.now();
@@ -22768,6 +22871,14 @@ function fmtCandleCountdown(){
 }
 function applyLivePriceToChart(price,timestamp,opts){
  if(!Number.isFinite(price) || !Number.isFinite(timestamp))return false;
+ // Cambio asset in corso: nessun prezzo tocca la candela finche' il nuovo storico non e' pronto.
+ if(chartFeedSuspended)return false;
+ // Il prezzo deve appartenere all'asset a grafico ORA. Se chi chiama sa da quale asset viene il
+ // prezzo (opts.fromAsset) e non corrisponde, lo scartiamo: e' il prezzo di un asset lasciato.
+ if(opts&&opts.fromAsset&&currentAssetKey&&opts.fromAsset!==currentAssetKey){
+   console.log(`[ChartFeed] scartato prezzo ${price} di "${opts.fromAsset}": a grafico c'e' "${currentAssetKey}".`);
+   return false;
+ }
  // RICHIESTO ESPLICITAMENTE ("si deve comportare esattamente come il terminale MT5"): a mercato
  // chiuso (23:00-00:00 e weekend, con MT5 collegato) nessun prezzo tocca il grafico.
  if(liveSessionPhaseNow()==='closed')return false;
@@ -22811,7 +22922,7 @@ function applyLiveTick(p){
  // Durante la pausa di 1s alla chiusura candela (vedi liveCandleFrozen sopra) scartiamo anche
  // eventuali tick già "in volo" prima che disconnectCapitalStream() avesse effetto: nessun prezzo
  // deve toccare candela/SL/TP finché non arrivano i dati freschi da REST.
- if(!liveModeActive || liveCandleFrozen)return;
+ if(!liveModeActive || liveCandleFrozen || chartFeedSuspended)return;
  const price=p.bid; // prezzo bid: stessa convenzione già usata per le barre storiche caricate via REST
  if(!Number.isFinite(price) || !Number.isFinite(p.timestamp))return;
  if(p.epic===capitalWsPrimaryEpic)lastLiveTickAt=Date.now(); // "prova di vita" per il watchdog
@@ -22853,7 +22964,7 @@ function applyLiveTick(p){
  // SL-TP/disegno/salvataggio ad ogni singolo tick. L'unico punto che applica davvero il
  // prezzo al grafico è il timer da 1000ms in startLiveRefreshTimer, così l'intera catena
  // (candela, valutazione SL/TP, ridisegno, salvataggio) gira al massimo una volta al secondo.
- lastPrimaryEpicPrice=price;
+ lastPrimaryEpicPrice=price; lastPrimaryEpicPriceAsset=asset||null;
  // FOOTPRINT: registrato qui, ad OGNI tick grezzo (non al ritmo throttled 1/sec della candela sopra)
  // — è proprio la granularità tick, non quella della candela, il punto di un footprint. Usa
  // Date.now() (non p.timestamp) per il bucketing: stessa convenzione di applyLivePriceToChart()
