@@ -12,7 +12,28 @@
 // rete per prima; la cache resta come rete di sicurezza SOLO per l'uso offline vero (o se la rete
 // è momentaneamente irraggiungibile). CACHE_NAME cambiato apposta (v2 -> v3) per invalidare una
 // volta per tutte le cache vecchie di chi ha già usato l'app prima di questo fix.
-const CACHE_NAME = "forex-backtest-lab-v4";
+// ---------------------------------------------------------------------------
+// REGOLA: ALZA DI UNO QUESTO NUMERO A OGNI RILASCIO CHE L'UTENTE DEVE RICEVERE.
+//
+// Questa costante e' l'UNICA cosa che costringe il browser di chi ha gia' usato
+// l'app a buttare via la copia in cache e riprendere i file aggiornati. Se
+// pubblichi un app.html nuovo SENZA toccarla, l'activate() qui sotto non
+// cancella nulla (la chiave cache e' rimasta la stessa) e una parte degli
+// utenti continua a vedere la versione vecchia, senza nessun errore visibile:
+// per te il fix "non funziona", in realta' non e' mai arrivato al browser.
+//
+// Va alzata in particolare ogni volta che si rigenera l'installer da
+// installer_build (build_exe.bat + installer.iss): il pacchetto desktop
+// contiene la sua copia di questo file, quindi le due cose vanno in coppia.
+// Tenere allineate TUTTE le copie (vedi ISTRUZIONI_BUILD.txt):
+//   applicazione/sw.js             -> quella che va sul repo del sito
+//   installer_build/sw.js
+//   installer_build/build/sw.js    -> quella impacchettata nell'exe
+// Storico: v4 = pubblicato sul repo fino al 26-09-2026 · v5 = mai pubblicato
+//          v6 = rilascio con installer desktop, Mt5FeedServer e protocollo
+//               forexbacktestlab://
+// ---------------------------------------------------------------------------
+const CACHE_NAME = "forex-backtest-lab-v6";
 const ASSETS = [
   "./",
   "./app.html",
