@@ -1707,11 +1707,25 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                 candela. Solo Live + streaming MT5 attivo + simbolo con Market Depth pubblicato dal
                 broker: altrove (storico/replay, o simboli senza DOM) semplicemente non compare
                 nulla — nessun dato stimato o inventato, mai. -->
-           <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">HEATMAP LIQUIDITÀ ORDER BOOK (MT5, solo Live)</div>
+           <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">HEATMAP LIQUIDITÀ ORDER BOOK (solo Live)</div>
            <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
              <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="heatmapEnabled"> Mostra heatmap di liquidità sullo sfondo del grafico</label>
              <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="heatmapCobSvp" checked> Mostra le colonne <b>COB</b> (order book attuale) e <b>SVP</b> (volume della sessione) a destra della scala prezzi</label>
            </div>
+           <div class="hint" style="margin:14px 0 6px;font-weight:700;letter-spacing:.3px">FONTI DEL BOOK</div>
+           <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+             <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="depthCryptoEnabled" checked> Crypto: book reale e completo da <b>Binance</b> (gratuito, collegamento diretto dal tuo browser)</label>
+             <span style="display:inline-flex;align-items:center;gap:5px">Profondità <input id="depthCryptoRangePct" type="number" min="0.2" max="10" step="0.1" value="1.5" style="width:60px">% sopra e sotto il prezzo</span>
+             <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="depthExtEnabled"> Bridge book esterno sul PC (es. Dukascopy) — porta <input id="depthExtPort" type="number" min="1024" max="65535" value="8766" style="width:75px"></label>
+             <div id="depthSourceStatus" style="flex:1 1 100%;font-size:12px;color:#a7b1bf;line-height:1.5"></div>
+           </div>
+           <p class="hint" style="margin-top:2px">Priorità: crypto → Binance; se attivo, bridge esterno; altrimenti il DOM del broker MT5. Il book esterno viene allineato in automatico al prezzo del tuo grafico (il prezzo Binance o Dukascopy differisce di qualche punto da quello del broker).</p>
+           <div class="hint" style="margin:14px 0 6px;font-weight:700;letter-spacing:.3px">ZONE DI LIQUIDITÀ</div>
+           <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
+             <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="heatmapZonesEnabled" checked> Evidenzia dove si piazzano compratori (verde) e venditori (rosso), classificati forte ●●● / media ●●○ / debole ●○○</label>
+             <span style="display:inline-flex;align-items:center;gap:5px">Analizza le ultime <input id="heatmapZonesWindow" type="number" min="10" max="2000" step="10" value="120" style="width:65px"> candele</span>
+           </div>
+           <p class="hint" style="margin-top:2px">Una zona nasce dove la liquidità in attesa resta alta nel tempo (sopra il 70% dei livelli osservati) e resta sul grafico finché il prezzo non la attraversa per intero: da lì si ferma e si spegne.</p>
            <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
              <span style="display:inline-flex;align-items:center;gap:5px">Altezza riga <input id="heatmapRowPips" type="number" min="0.1" step="0.1" value="5" style="width:60px">pip</span>
              <span style="display:inline-flex;align-items:center;gap:5px">Opacità max <input id="heatmapOpacity" type="number" min="5" max="100" step="5" value="60" style="width:55px">%</span>
@@ -6927,6 +6941,8 @@ function bucketOrderBookDominanceProfile(hist,priceLo,bucketSize,buckets){
  hist.forEach(snap=>{
    (snap.bids||[]).forEach(e=>put(bidVol,e.price,e.volume));
    (snap.asks||[]).forEach(e=>put(askVol,e.price,e.volume));
+   if(snap.b)for(let i=0;i+1<snap.b.length;i+=2)put(bidVol,snap.b[i],snap.b[i+1]);
+   if(snap.a)for(let i=0;i+1<snap.a.length;i+=2)put(askVol,snap.a[i],snap.a[i+1]);
  });
  let maxTotal=0;
  for(let i=0;i<buckets;i++)maxTotal=Math.max(maxTotal,bidVol[i]+askVol[i]);
@@ -7914,7 +7930,7 @@ function autoFitBaseRange(data){
  // ma da quel momento in poi lo zoom/pan manuale (priceZoomFactor, trascinamento) è libero di
  // andare sia più stretto sia più largo di quel valore, senza che la heatmap lo forzi più ad
  // ogni frame.
- if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
+ if(heatmapEnabledNow()&&depthKeyNow()){
    const _hmVertPad=heatmapVertPadPriceNow(currentAssetKey);
    if(_hmVertPad>0){ lo-=_hmVertPad; hi+=_hmVertPad; }
  }
@@ -10562,12 +10578,13 @@ function draw(){
  // temporale di quella candela — una candela senza snapshot in quella finestra (storico prima
  // dell'apertura dello streaming MT5 dell'order book, o simbolo senza Market Depth) resta
  // semplicemente senza heatmap: nessun dato stimato o inventato.
- if(heatmapEnabledNow()&&liveModeActive&&mt5Connected&&typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol){
+ const _depthKey=heatmapEnabledNow()?depthKeyNow():null;
+ if(_depthKey){
    // Legge dalla cache a bucket già aggiornata in incrementale (vedi heatmapCellsForAssetNow() più
    // sopra nel file): nessuna scansione dello storico grezzo qui, a differenza di prima — il costo
    // per frame è ora proporzionale alle sole candele in vista con dati reali, non all'intero log.
-   const _hmCells=heatmapCellsForAssetNow(mt5ActiveSymbol);
-   const _hmMeta=heatmapCellsMeta[mt5ActiveSymbol];
+   const _hmCells=heatmapCellsForAssetNow(_depthKey);
+   const _hmMeta=heatmapCellsMeta[_depthKey];
    const _hmStep=_hmMeta&&_hmMeta.step;
    if(_hmStep>0){
      // RIDISEGNATO PER INTERO (rif. screenshot Bookmap fornito dall'utente, con le frecce sulle
@@ -10721,6 +10738,38 @@ function draw(){
        ctx.globalAlpha=_hmBaseOp;
        ctx.drawImage(_heatmapLayerCanvas,0,0);
        ctx.globalAlpha=1;
+       ctx.restore();
+     }
+     // Zone di liquidità classificate (compratori/venditori, forte/media/debole) — vedi
+     // computeLiquidityZones(): sopra la heatmap, sotto le candele.
+     if(heatmapZonesEnabledNow()){
+       const _zEnd=Math.min(idx,rows.length-1);
+       const _zones=computeLiquidityZones(_hmCells,_hmStep,_zEnd,heatmapZonesWindowNow());
+       const _zSlot=cw/n, _zx=r=>x(r-dataStart);
+       ctx.save();
+       ctx.font=scaledFont('bold 10px Arial'); ctx.textBaseline='middle'; ctx.textAlign='right';
+       for(const z of _zones){
+         const yT=y(z.hi), yB=y(z.lo);
+         if(yB<pad.t||yT>h-pad.b)continue;
+         const col=z.side==='buy'?'47,191,113':'224,82,82';
+         const xL=Math.max(pad.l,_zx(z.first)-_zSlot/2);
+         const xR=z.consumedAt>=0?Math.min(w-pad.r,_zx(z.consumedAt)+_zSlot/2):w-pad.r;
+         if(xR<=xL)continue;
+         const alive=z.consumedAt<0;
+         const a=[0,0.10,0.17,0.26][z.cls]*(alive?1:0.45);
+         ctx.fillStyle='rgba('+col+','+a+')';
+         ctx.fillRect(xL,yT,xR-xL,Math.max(2,yB-yT));
+         ctx.strokeStyle='rgba('+col+','+(alive?0.75:0.3)+')'; ctx.lineWidth=1;
+         ctx.beginPath();
+         ctx.moveTo(xL,Math.round(yT)+.5); ctx.lineTo(xR,Math.round(yT)+.5);
+         ctx.moveTo(xL,Math.round(yB)-.5); ctx.lineTo(xR,Math.round(yB)-.5);
+         ctx.stroke();
+         if(alive){
+           const lbl=(z.side==='buy'?'Buyers ':'Sellers ')+'●'.repeat(z.cls)+'○'.repeat(3-z.cls);
+           ctx.fillStyle='rgba('+col+',0.95)';
+           ctx.fillText(lbl,w-pad.r-6,(yT+yB)/2);
+         }
+       }
        ctx.restore();
      }
    }
@@ -11319,7 +11368,7 @@ function draw(){
        // hanno pesato di più nel tempo, colore ask se hanno prevalso i sellers — non più due
        // colonne bid/ask affiancate.
        if(d.obEnabled&&profile&&profile.maxTotal>0){
-         const obHist=(typeof mt5ActiveSymbol!=='undefined'&&mt5ActiveSymbol)?orderBookHistoryByAsset[mt5ActiveSymbol]:null;
+         const _obk=depthKeyNow(); const obHist=_obk?orderBookHistoryByAsset[_obk]:null;
          const obDom=bucketOrderBookDominanceProfile(obHist,profile.priceLo,profile.bucketSize,profile.buckets);
          if(obDom.maxTotal>0){
            const obBidCol=d.obBidColor||'#2f6fed', obAskCol=d.obAskColor||'#e05b4f';
@@ -17831,7 +17880,7 @@ function notionTradePayload(t){
    mt5Login:t.mt5Login!=null?String(t.mt5Login):null, mt5Server:t.mt5Server||''
  };
 }
-function notionReady(){ return !!(notionState&&notionState.paid&&notionState.connected&&notionState.complete!==false); }
+function notionReady(){ return !!(notionState&&notionState.paid&&notionState.connected&&!notionState.preparing&&notionState.complete!==false); }
 function notionPendingCounts(){
  const h=notionLoadHashes(); let changed=0; const live=new Set();
  (trades||[]).forEach(t=>{ if(!t||t.id==null)return; const k=String(t.id); live.add(k); if(h[k]!==JSON.stringify(notionTradePayload(t)))changed++; });
@@ -17895,6 +17944,11 @@ function renderNotionPanel(){
  }else{
    const pc=notionPendingCounts();
    const acc=(notionState.mt5Accounts||[]).map(a=>'••'+a.last+(a.server?' ('+a.server+')':'')+(a.withCharts?'':' — senza grafici')).join(', ');
+   if(notionState.preparing){
+     st.innerHTML='✅ Template copiato nel tuo Notion'+(notionState.workspaceName?' — <b>'+escapeHtmlLite(notionState.workspaceName)+'</b>':'')+'.<br>⏳ Sto preparando le dashboard (Storico, Live, Prop Firm, Conti MT5): di solito meno di un minuto. Non serve fare nulla.';
+     const info0=$('notionSyncInfo'); if(info0)info0.textContent=notionLastSyncInfo||'';
+     return;
+   }
    st.innerHTML=`🟢 Collegato a Notion${notionState.workspaceName?' — <b>'+escapeHtmlLite(notionState.workspaceName)+'</b>':''}.`
      +(notionState.complete===false?'<br>⚠️ Nel tuo Notion mancano alcune dashboard del template: ricollega Notion scegliendo di nuovo il template.':'')
      +`<br>Conti MT5 con dashboard: ${acc||'nessuno ancora'} • dashboard MT5 libere: ${notionState.freeMt5Slots??'—'}`
@@ -17902,13 +17956,36 @@ function renderNotionPanel(){
  }
  const info=$('notionSyncInfo'); if(info)info.textContent=notionLastSyncInfo||'';
 }
-async function refreshNotionStatus(){
- try{ notionState=await notionCall('notionStatus',{}); }
+async function refreshNotionStatus(prepare){
+ try{ notionState=await notionCall('notionStatus',prepare?{prepare:true}:{}); }
  catch(e){ notionState={paid:false,connected:false,error:(e&&e.message)||String(e)}; }
  renderNotionPanel();
  return notionState;
 }
 function notionOriginOk(){ return /^https?:$/.test(location.protocol); }
+// Dopo il collegamento: Notion copia il template in background. L'app chiede al server di cercare
+// le dashboard ogni 4 s (max ~6 min) e, appena pronte, conferma e invia i trade.
+let notionPrepareLoopOn=false;
+async function notionWaitPrepared(showConfirm){
+ if(notionPrepareLoopOn)return;
+ notionPrepareLoopOn=true;
+ try{
+   for(let i=0;i<90;i++){
+     const st=await refreshNotionStatus(true);
+     if(!st||!st.connected||!st.preparing)break;
+     await new Promise(r=>setTimeout(r,4000));
+   }
+ }finally{ notionPrepareLoopOn=false; }
+ if(notionState&&notionState.connected&&!notionState.preparing){
+   if(notionState.complete!==false){
+     $('status').textContent='🟢 Notion collegato: i trade del Journal verranno inviati in automatico.';
+     if(showConfirm)appAlert('✅ Notion collegato!\n\nIl tuo Trading Journal è pronto nel tuo Notion. Invio i trade del Journal adesso: da qui in poi ogni trade chiuso arriva da solo.');
+     notionSyncTick(true);
+   }else{
+     $('status').textContent='⚠️ Notion collegato, ma nella copia mancano alcune dashboard del template: ricollega scegliendo il template.';
+   }
+ }
+}
 $('genSettingsTabNotion')?.addEventListener('click',()=>{ refreshNotionStatus(); });
 $('notionUnlockBtn')?.addEventListener('click',async()=>{
  if(!notionOriginOk()){ appAlert('Per il pagamento apri l\'app dal sito o dall\'app desktop (non da un file salvato sul PC).'); return; }
@@ -17956,13 +18033,21 @@ $('notionDisconnectBtn')?.addEventListener('click',async()=>{
      for(let i=0;i<14;i++){ const st=await refreshNotionStatus(); if(st&&st.paid)break; await new Promise(r=>setTimeout(r,3000)); }
      $('status').textContent=notionState&&notionState.paid?'✅ Template Notion sbloccato: ora collega Notion.':'⏳ Pagamento ricevuto, sblocco in corso: riapri la scheda Template Notion tra qualche istante.';
    }else if(ret==='cancel'){ $('status').textContent='Pagamento annullato: il Template Notion resta bloccato.'; }
+   else if(ret==='connected_pending'){
+     // Collegamento nuovo (anche un ricollegamento): la copia del template è nuova, quindi tutti i
+     // trade vanno reinviati lì — si azzera la memoria locale di "già inviato".
+     notionSaveHashes({}); notionLastSyncInfo='';
+     $('status').textContent='✅ Template copiato nel tuo Notion: preparazione delle dashboard in corso…';
+     notionWaitPrepared(true);
+   }
    else if(ret==='connected'||ret==='connected_partial'){
      await refreshNotionStatus();
      $('status').textContent=ret==='connected'?'🟢 Notion collegato: i trade del Journal verranno inviati in automatico.':'⚠️ Notion collegato, ma il template non è stato trovato completo: ricollega scegliendo il template.';
      notionSyncTick(true);
    }else if(ret==='error'){ await refreshNotionStatus(); appAlert('Collegamento a Notion non riuscito: '+(msg||'errore sconosciuto')); }
  }else{
-   await refreshNotionStatus();
+   const st0=await refreshNotionStatus();
+   if(st0&&st0.connected&&st0.preparing)notionWaitPrepared(false); // pagina ricaricata durante la preparazione
  }
  setInterval(()=>notionSyncTick(false),15000);
  setTimeout(()=>notionSyncTick(false),5000);
@@ -21357,7 +21442,7 @@ function heatmapEnabledNow(){ return !!$('heatmapEnabled')?.checked; }
 // come in Bookmap e nessun calcolo di coordinate va fuori fase.
 function cobSvpEnabledNow(){ return !!$('heatmapCobSvp')?.checked; }
 function cobSvpActiveNow(){
- try{ return cobSvpEnabledNow()&&heatmapEnabledNow()&&!!liveModeActive&&!!mt5Connected&&!!mt5ActiveSymbol; }catch(e){ return false; }
+ try{ return cobSvpEnabledNow()&&heatmapEnabledNow()&&!!depthKeyNow(); }catch(e){ return false; }
 }
 function cobSvpColWidth(w){ return (Number(w)||900)<700?44:64; }
 function cobSvpExtraWidth(w){ return cobSvpActiveNow()?cobSvpColWidth(w)*2:0; }
@@ -21422,7 +21507,8 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
  ctx.font=scaledFont('9px Arial'); ctx.textBaseline='middle'; ctx.textAlign='right';
  ctx.shadowColor='rgba(0,0,0,.9)'; ctx.shadowBlur=2; // numeri leggibili anche sopra le barre
  // --- COB: ultimo snapshot reale del DOM ---
- const snap=latestOrderBookByAsset[mt5ActiveSymbol];
+ const _dk=depthKeyNow();
+ const snap=_dk?latestOrderBookByAsset[_dk]:null;
  const cob=new Map(); // bin -> {bid,ask}
  if(snap){
    (snap.bids||[]).forEach(e=>{ const p=Number(e.price),v=Number(e.volume); if(!Number.isFinite(p)||!(v>0))return; const k=binOf(p); if(k<kLo||k>kHi)return; const o=cob.get(k)||{bid:0,ask:0}; o.bid+=v; cob.set(k,o); });
@@ -21439,7 +21525,10 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
    if(showNums(k)){ ctx.fillStyle='#e8edf3'; ctx.fillText(fmtCompactVol(v),cobX+colW-3,(g.yTop+g.yBot)/2); }
  });
  // --- SVP: volume scambiato nella sessione (giorno) per livello ---
- const svpRaw=svpLevelsNow();
+ let svpRaw=null;
+ const _psvp=_dk&&providerSvpByKey[_dk];
+ if(_psvp&&Object.keys(_psvp.levels).length){ svpRaw=new Map(); for(const k in _psvp.levels)svpRaw.set(Number(k),_psvp.levels[k]); } // trade reali della fonte (es. Binance)
+ else svpRaw=svpLevelsNow();
  const svp=new Map();
  if(svpRaw)svpRaw.forEach((e,lv)=>{ const k=binOf(lv); if(k<kLo||k>kHi)return; const o=svp.get(k)||{buy:0,sell:0}; o.buy+=e.buy; o.sell+=e.sell; svp.set(k,o); });
  let svpMax=0; svp.forEach(o=>{ svpMax=Math.max(svpMax,o.buy+o.sell); });
@@ -21467,7 +21556,7 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
  ctx.fillText('COB',cobX+colW/2,pad.t/2+1); ctx.fillText('SVP',svpX+colW/2,pad.t/2+1);
  ctx.font=scaledFont('9px Arial'); ctx.fillStyle='rgba(167,177,191,.7)';
  if(!cob.size){
-   const na=mt5OrderBookUnavailableForAsset&&mt5OrderBookUnavailableForAsset.has(mt5ActiveSymbol);
+   const na=mt5OrderBookUnavailableForAsset&&mt5OrderBookUnavailableForAsset.has(_dk);
    ctx.save(); ctx.translate(cobX+colW/2,pad.t+ch/2); ctx.rotate(-Math.PI/2); ctx.fillText(na?'DOM non disponibile dal broker':'in attesa del book…',0,0); ctx.restore();
  }
  if(!svp.size){ ctx.save(); ctx.translate(svpX+colW/2,pad.t+ch/2); ctx.rotate(-Math.PI/2); ctx.fillText('nessun volume oggi',0,0); ctx.restore(); }
@@ -21479,7 +21568,382 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
 // sempre ai valori di fabbrica. Salvata ora in localStorage come le altre preferenze globali
 // (non legata alla sessione Storico/Live: vale per tutto il programma).
 const HEATMAP_PREFS_KEY='forex_lab_heatmap_prefs';
-const HEATMAP_PREF_FIELDS=['heatmapEnabled','heatmapCobSvp','heatmapRowPips','heatmapOpacity','heatmapVertPadPips'];
+const HEATMAP_PREF_FIELDS=['heatmapEnabled','heatmapCobSvp','depthCryptoEnabled','depthCryptoRangePct','depthExtEnabled','depthExtPort','heatmapZonesEnabled','heatmapZonesWindow','heatmapRowPips','heatmapOpacity','heatmapVertPadPips'];
+// =====================================================================================
+// FONTI DEL BOOK "ELASTICHE" (RICHIESTO ESPLICITAMENTE: heatmap come Bookmap, con dove si
+// piazzano davvero compratori e venditori su un range ampio, per tutti gli asset).
+// Heatmap, COB, SVP e zone di liquidità non leggono più SOLO il DOM di MT5: leggono dalla fonte
+// migliore disponibile per l'asset a grafico, scelta da depthKeyNow():
+//   1) Crypto → book REALE e completo di Binance (fino a 5000 livelli per lato + ogni trade con
+//      il lato dell'aggressore), aperto DIRETTAMENTE dal browser del cliente: nessun dato passa da
+//      noi, quindi nessuna ridistribuzione. Gratuito.
+//   2) Bridge esterno sul PC (es. Dukascopy JForex) → ws://127.0.0.1:<porta>/ws/depth/<SIMBOLO>,
+//      stesso formato messaggi del DOM MT5 ({time_ms,bids:[{price,volume}],asks:[...]}).
+//   3) DOM MT5 del broker (come prima).
+// Il book della fonte esterna viene "traslato" sul prezzo del grafico (offset medio mobile fra il
+// prezzo del grafico e il mid della fonte): BTCUSDT Binance e BTCUSD del broker differiscono di
+// qualche punto, e senza traslazione le zone cadrebbero a livelli sbagliati.
+// =====================================================================================
+function depthCryptoEnabledNow(){ return !!$('depthCryptoEnabled')?.checked; }
+function depthCryptoRangePctNow(){ const v=Number($('depthCryptoRangePct')?.value); return (Number.isFinite(v)&&v>=0.2)?Math.min(10,v):1.5; }
+function depthExtEnabledNow(){ return !!$('depthExtEnabled')?.checked; }
+function depthExtPortNow(){ const v=Math.round(Number($('depthExtPort')?.value)); return (v>1023&&v<65536)?v:8766; }
+function heatmapZonesEnabledNow(){ return !!$('heatmapZonesEnabled')?.checked; }
+function heatmapZonesWindowNow(){ const v=Math.round(Number($('heatmapZonesWindow')?.value)); return (Number.isFinite(v)&&v>=10)?Math.min(2000,v):120; }
+function isDeepDepthKey(k){ return /^(bn|ext):/.test(String(k||'')); }
+
+const CRYPTO_BASES=['DOGE','SHIB','PEPE','AVAX','LINK','ATOM','AAVE','NEAR','BTC','ETH','SOL','XRP','ADA','BNB','LTC','DOT','TRX','BCH','XLM','UNI','ETC','APT','ARB','SUI','TON','FIL','ICP','INJ','POL','OP'];
+const CRYPTO_ALIASES={BITCOIN:'BTC',ETHEREUM:'ETH',SOLANA:'SOL',RIPPLE:'XRP',CARDANO:'ADA',DOGECOIN:'DOGE',LITECOIN:'LTC',POLKADOT:'DOT'};
+function binanceSymbolForAsset(assetKey){
+ let k=String(assetKey||'').toUpperCase().replace(/\.[A-Z0-9]+$/,'').replace(/[^A-Z]/g,'');
+ if(!k)return null;
+ for(const a in CRYPTO_ALIASES){ if(k.startsWith(a)){ k=CRYPTO_ALIASES[a]+k.slice(a.length); break; } }
+ for(const b of CRYPTO_BASES){
+   if(!k.startsWith(b))continue;
+   const q=k.slice(b.length);
+   if(q===''||q==='USD'||q==='USDT'||q==='USDC')return b+'USDT';
+   if(q==='EUR')return b+'EUR';
+ }
+ return null;
+}
+// Simbolo per il bridge esterno: solo lettere/cifre (EURUSD, XAUUSD…); la conversione nel formato
+// del fornitore (es. "EUR/USD" per Dukascopy) la fa il bridge.
+function extSymbolForAsset(assetKey){
+ const k=String(assetKey||'').toUpperCase().replace(/\.[A-Z0-9]+$/,'').replace(/[^A-Z0-9]/g,'');
+ return k||null;
+}
+
+let bnDepth=null, extDepth=null;
+// Quale "chiave" di latestOrderBookByAsset/orderBookHistoryByAsset alimenta ORA heatmap/COB/zone.
+function depthKeyNow(){
+ try{
+   if(!liveModeActive)return null;
+   if(depthCryptoEnabledNow()&&bnDepth&&bnDepth.asset===currentAssetKey&&bnDepth.ready)return bnDepth.key;
+   if(depthExtEnabledNow()&&extDepth&&extDepth.asset===currentAssetKey&&extDepth.ready)return extDepth.key;
+   if(mt5Connected&&mt5ActiveSymbol)return mt5ActiveSymbol;
+ }catch(e){}
+ return null;
+}
+function depthChartRefPrice(asset){
+ try{
+   if(asset!==currentAssetKey||!rows.length)return null;
+   const r=rows[Math.min(idx,rows.length-1)];
+   const p=r?Number(r.close):NaN;
+   return Number.isFinite(p)&&p>0?p:null;
+ }catch(e){ return null; }
+}
+// Offset medio mobile prezzo grafico − mid della fonte (scartato se assurdo: mappatura sbagliata).
+function depthUpdateOffset(st,mid){
+ const ref=depthChartRefPrice(st.asset);
+ if(!(ref>0)||!(mid>0))return;
+ const off=ref-mid;
+ if(Math.abs(off)/mid>0.03)return;
+ st.offset=(st.offset==null)?off:st.offset*0.95+off*0.05;
+}
+// Ingresso UNICO di uno snapshot di book, qualunque sia la fonte (MT5, Binance, bridge esterno).
+let _depthDrawTimer=null;
+function scheduleDepthDraw(){
+ if(_depthDrawTimer)return;
+ _depthDrawTimer=setTimeout(()=>{ _depthDrawTimer=null; try{ draw(); }catch(e){} },250);
+}
+let orderBookDeepDirty=false, orderBookDeepSavedAt=0;
+function depthIngest(key,snap,opt){
+ opt=opt||{};
+ latestOrderBookByAsset[key]=snap; // sempre l'ultimo stato: lo usa il COB
+ let hist=orderBookHistoryByAsset[key];
+ if(!hist){ hist=[]; orderBookHistoryByAsset[key]=hist; }
+ const gap=opt.gapMs||HEATMAP_MIN_SNAPSHOT_GAP_MS;
+ const last=hist.length?hist[hist.length-1]:null;
+ if(!last||snap.time_ms-last.time_ms>=gap){
+   let stored=snap;
+   if(opt.compact){
+     const b=[],a=[];
+     (snap.bids||[]).forEach(e=>{ b.push(e.price,e.volume); });
+     (snap.asks||[]).forEach(e=>{ a.push(e.price,e.volume); });
+     stored={time_ms:snap.time_ms,b,a};
+   }
+   hist.push(stored);
+   if(opt.deep)orderBookDeepDirty=true; else orderBookHistoryDirty=true;
+   const cutoff=snap.time_ms-(opt.maxHours||HEATMAP_HISTORY_MAX_HOURS)*3600000;
+   let dropTo=0;
+   while(dropTo<hist.length&&hist[dropTo].time_ms<cutoff)dropTo++;
+   if(dropTo>0)hist.splice(0,dropTo);
+   const meta=heatmapCellsMeta[key];
+   if(meta&&meta.tf===currentTF&&meta.step===heatmapStepForKey(key)){
+     if(!heatmapCellsByAsset[key])heatmapCellsByAsset[key]={};
+     heatmapApplySnapshotToBuckets(heatmapCellsByAsset[key],meta.step,stored);
+   }
+ }
+ if(key===depthKeyNow()){ if(opt.deep)scheduleDepthDraw(); else draw(); }
+}
+
+// ---------------- Binance (crypto) ----------------
+function bnDisconnect(){
+ const st=bnDepth; bnDepth=null;
+ if(st&&st.ws){ try{ st.ws.onclose=null; st.ws.onmessage=null; st.ws.close(); }catch(e){} }
+ if(st&&st.resyncTimer)clearTimeout(st.resyncTimer);
+}
+function bnConnect(asset,symbol){
+ bnDisconnect();
+ const st={asset,symbol,key:'bn:'+symbol,bids:new Map(),asks:new Map(),lastU:0,buffer:[],synced:false,ready:false,status:'connessione a Binance…',offset:null,lastEmit:0,resyncAt:0,resyncTimer:null,urlIdx:0,levels:0,mid:null};
+ bnDepth=st;
+ const s=symbol.toLowerCase();
+ const urls=[
+   'wss://stream.binance.com:9443/stream?streams='+s+'@depth@100ms/'+s+'@aggTrade',
+   'wss://data-stream.binance.vision/stream?streams='+s+'@depth@100ms/'+s+'@aggTrade'
+ ];
+ const open=()=>{
+   if(bnDepth!==st)return;
+   let ws;
+   try{ ws=new WebSocket(urls[st.urlIdx%urls.length]); }catch(e){ st.status='WebSocket non disponibile'; updateDepthStatusUi(); return; }
+   st.ws=ws;
+   ws.onopen=()=>{ st.status='collegato, sincronizzo il book…'; updateDepthStatusUi(); bnFetchSnapshot(st); };
+   ws.onmessage=(ev)=>{
+     if(bnDepth!==st)return;
+     let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+     const d=m&&m.data; if(!d)return;
+     if(d.e==='depthUpdate'){
+       if(!st.synced){ st.buffer.push(d); if(st.buffer.length>3000)st.buffer.shift(); return; }
+       bnApplyDiff(st,d);
+     }else if(d.e==='aggTrade'){ bnOnTrade(st,d); }
+   };
+   ws.onerror=()=>{};
+   ws.onclose=()=>{
+     if(bnDepth!==st)return;
+     st.synced=false; st.ready=false; st.status='connessione persa, riprovo…'; updateDepthStatusUi();
+     st.urlIdx++;
+     setTimeout(open,3000);
+   };
+ };
+ open();
+ updateDepthStatusUi();
+}
+async function bnFetchSnapshot(st){
+ if(bnDepth!==st)return;
+ const wait=5000-(Date.now()-st.resyncAt);
+ if(wait>0){ if(!st.resyncTimer)st.resyncTimer=setTimeout(()=>{ st.resyncTimer=null; bnFetchSnapshot(st); },wait); return; }
+ st.resyncAt=Date.now();
+ const urls=[
+   'https://data-api.binance.vision/api/v3/depth?symbol='+st.symbol+'&limit=5000',
+   'https://api.binance.com/api/v3/depth?symbol='+st.symbol+'&limit=5000'
+ ];
+ for(const u of urls){
+   try{
+     const r=await fetch(u,{cache:'no-store'});
+     if(!r.ok)continue;
+     const j=await r.json();
+     if(bnDepth!==st)return;
+     if(!j||!Array.isArray(j.bids)||!Array.isArray(j.asks))continue;
+     st.bids=new Map(j.bids.map(x=>[Number(x[0]),Number(x[1])]));
+     st.asks=new Map(j.asks.map(x=>[Number(x[0]),Number(x[1])]));
+     st.lastU=Number(j.lastUpdateId)||0;
+     const buf=st.buffer; st.buffer=[]; st.synced=true;
+     for(const d of buf){ if(d.u<=st.lastU)continue; bnApplyDiff(st,d); if(!st.synced)return; }
+     st.status='attivo'; updateDepthStatusUi();
+     bnEmit(st,true);
+     return;
+   }catch(e){}
+ }
+ st.status='book non raggiungibile: Binance potrebbe essere bloccato dalla tua rete';
+ updateDepthStatusUi();
+ if(!st.resyncTimer)st.resyncTimer=setTimeout(()=>{ st.resyncTimer=null; bnFetchSnapshot(st); },15000);
+}
+function bnApplyDiff(st,d){
+ if(d.u<=st.lastU)return;
+ if(d.U>st.lastU+1){ // aggiornamento perso: si risincronizza da uno snapshot nuovo
+   st.synced=false; st.buffer=[d]; bnFetchSnapshot(st); return;
+ }
+ const up=(map,arr)=>{ for(const x of arr){ const p=Number(x[0]),q=Number(x[1]); if(!(p>0))continue; if(q>0)map.set(p,q); else map.delete(p); } };
+ up(st.bids,d.b||[]); up(st.asks,d.a||[]);
+ st.lastU=d.u;
+ bnEmit(st,false);
+}
+function bnEmit(st,force){
+ const now=Date.now();
+ if(!force&&now-st.lastEmit<250)return;
+ st.lastEmit=now;
+ let bb=-Infinity,ba=Infinity;
+ st.bids.forEach((q,p)=>{ if(p>bb)bb=p; });
+ st.asks.forEach((q,p)=>{ if(p<ba)ba=p; });
+ if(!Number.isFinite(bb)||!Number.isFinite(ba))return;
+ const mid=(bb+ba)/2;
+ st.mid=mid;
+ depthUpdateOffset(st,mid);
+ const off=st.offset||0;
+ const range=mid*depthCryptoRangePctNow()/100;
+ const hs=heatmapStepForAsset(st.asset);
+ const bin=niceStep(Math.max((hs>0?hs/4:0),(2*range)/400,mid*1e-7));
+ st.bin=bin;
+ const agg=(map,lo,hi)=>{
+   const out=new Map();
+   map.forEach((q,p)=>{
+     if(p<lo||p>hi){ if(Math.abs(p-mid)>range*3)map.delete(p); return; } // potatura dei livelli lontanissimi
+     const k=Math.round((p+off)/bin)*bin;
+     out.set(k,(out.get(k)||0)+q);
+   });
+   const arr=[]; out.forEach((v,k)=>arr.push({price:k,volume:v}));
+   return arr;
+ };
+ const bids=agg(st.bids,mid-range,mid), asks=agg(st.asks,mid,mid+range);
+ st.levels=bids.length+asks.length;
+ const wasReady=st.ready;
+ st.ready=true;
+ depthIngest(st.key,{time_ms:now,bids,asks},{gapMs:5000,deep:true,compact:true,maxHours:8});
+ if(!wasReady){ updateDepthStatusUi(); try{ draw(); }catch(e){} }
+}
+// Trade REALI con il lato dell'aggressore (m=true → il compratore era "maker" → vendita
+// aggressiva): alimentano la SVP con i volumi veri scambiati, non con il conteggio dei tick.
+let providerSvpByKey={}, providerSvpDirty=false;
+function bnOnTrade(st,d){
+ const p=Number(d.p),q=Number(d.q),T=Number(d.T)||Date.now();
+ if(!(p>0)||!(q>0))return;
+ const price=p+(st.offset||0);
+ const day=romeDayAndMinute(T).day;
+ let s=providerSvpByKey[st.key];
+ const fs=footprintStepForAsset(st.asset);
+ const bin=fs>0?fs:(heatmapStepForAsset(st.asset)||p*0.0005);
+ if(!s||s.day!==day||s.bin!==bin){ s={day,bin,levels:{}}; providerSvpByKey[st.key]=s; }
+ const k=Math.round(price/bin)*bin;
+ const c=s.levels[k]||(s.levels[k]={buy:0,sell:0});
+ if(d.m)c.sell+=q; else c.buy+=q;
+ providerSvpDirty=true;
+}
+
+// ---------------- Bridge esterno (es. Dukascopy) ----------------
+function extDisconnect(){
+ const st=extDepth; extDepth=null;
+ if(st&&st.ws){ try{ st.ws.onclose=null; st.ws.onmessage=null; st.ws.close(); }catch(e){} }
+}
+function extConnect(asset,sym,port){
+ extDisconnect();
+ const st={asset,sym,port,key:'ext:'+sym,ready:false,status:'connessione al bridge…',offset:null,levels:0,lastEmit:0};
+ extDepth=st;
+ const open=()=>{
+   if(extDepth!==st)return;
+   let ws;
+   try{ ws=new WebSocket('ws://127.0.0.1:'+port+'/ws/depth/'+encodeURIComponent(sym)); }catch(e){ st.status='bridge non raggiungibile'; updateDepthStatusUi(); return; }
+   st.ws=ws;
+   ws.onopen=()=>{ st.status='collegato'; updateDepthStatusUi(); };
+   ws.onmessage=(ev)=>{
+     if(extDepth!==st)return;
+     let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+     if(!m||m.heartbeat)return;
+     if(m.error){ st.status='il bridge dice: '+m.error; st.ready=false; updateDepthStatusUi(); return; }
+     const bids=Array.isArray(m.bids)?m.bids:[], asks=Array.isArray(m.asks)?m.asks:[];
+     if(!bids.length&&!asks.length)return;
+     const now=Date.now();
+     if(now-st.lastEmit<200)return;
+     st.lastEmit=now;
+     const bb=bids.reduce((mx,e)=>Math.max(mx,Number(e.price)||-Infinity),-Infinity);
+     const ba=asks.reduce((mn,e)=>Math.min(mn,Number(e.price)||Infinity),Infinity);
+     if(Number.isFinite(bb)&&Number.isFinite(ba))depthUpdateOffset(st,(bb+ba)/2);
+     const off=st.offset||0;
+     const map=arr=>arr.map(e=>({price:Number(e.price)+off,volume:Number(e.volume)})).filter(e=>Number.isFinite(e.price)&&e.volume>0);
+     const wasReady=st.ready;
+     st.ready=true; st.levels=bids.length+asks.length; st.status='attivo';
+     depthIngest(st.key,{time_ms:Number(m.time_ms)||now,bids:map(bids),asks:map(asks)},{gapMs:1000,deep:true,compact:true,maxHours:12});
+     if(!wasReady)updateDepthStatusUi();
+   };
+   ws.onerror=()=>{};
+   ws.onclose=()=>{
+     if(extDepth!==st)return;
+     st.ready=false; st.status='bridge non raggiungibile su 127.0.0.1:'+port+' — è avviato?'; updateDepthStatusUi();
+     setTimeout(open,5000);
+   };
+ };
+ open();
+ updateDepthStatusUi();
+}
+
+// ---------------- Gestore ----------------
+function depthRefreshProviders(){
+ let live=false; try{ live=!!liveModeActive; }catch(e){}
+ const asset=currentAssetKey;
+ const bs=(live&&depthCryptoEnabledNow())?binanceSymbolForAsset(asset):null;
+ if(bs){ if(!bnDepth||bnDepth.symbol!==bs||bnDepth.asset!==asset)bnConnect(asset,bs); }
+ else if(bnDepth)bnDisconnect();
+ const es=(live&&depthExtEnabledNow()&&!bs)?extSymbolForAsset(asset):null;
+ const port=depthExtPortNow();
+ if(es){ if(!extDepth||extDepth.sym!==es||extDepth.asset!==asset||extDepth.port!==port)extConnect(asset,es,port); }
+ else if(extDepth)extDisconnect();
+ updateDepthStatusUi();
+}
+function updateDepthStatusUi(){
+ const el=$('depthSourceStatus'); if(!el)return;
+ let live=false; try{ live=!!liveModeActive; }catch(e){}
+ const key=depthKeyNow();
+ const fmtOff=o=>(o==null?'':' • allineamento al grafico '+(o>=0?'+':'')+(Math.abs(o)>=1?o.toFixed(2):o.toPrecision(3)));
+ let txt;
+ if(!live)txt='Fonte del book: nessuna (la heatmap funziona solo in Live).';
+ else if(bnDepth)txt='Fonte del book: Binance '+bnDepth.symbol+' — '+bnDepth.status+(bnDepth.ready?' • '+bnDepth.levels+' livelli ±'+depthCryptoRangePctNow()+'%'+fmtOff(bnDepth.offset):'');
+ else if(extDepth)txt='Fonte del book: bridge esterno '+extDepth.sym+' — '+extDepth.status+(extDepth.ready?' • '+extDepth.levels+' livelli'+fmtOff(extDepth.offset):'');
+ else if(key)txt='Fonte del book: DOM del broker MT5 ('+key+')'+((typeof mt5OrderBookUnavailableForAsset!=='undefined'&&mt5OrderBookUnavailableForAsset.has(key))?' — il broker non pubblica il book per questo simbolo':'');
+ else txt='Fonte del book: nessuna per questo asset.';
+ el.textContent=txt;
+}
+setInterval(()=>{ try{ depthRefreshProviders(); }catch(e){} },2000);
+setInterval(()=>{ try{ updateDepthStatusUi(); }catch(e){} },5000);
+['depthCryptoEnabled','depthCryptoRangePct','depthExtEnabled','depthExtPort'].forEach(id=>{ $(id)?.addEventListener('change',()=>{ try{ depthRefreshProviders(); }catch(e){} }); });
+
+// ---------------- Zone di liquidità classificate ----------------
+// Dalle celle della heatmap (liquidità REALE in attesa, media per candela) sulle ultime N candele:
+// per ogni livello, volume medio in attesa → i livelli sopra il 70° percentile diventano zone,
+// raggruppate se adiacenti e dello stesso lato (più bid = compratori, più ask = venditori),
+// classificate forte (≥95° pct) / media (≥85°) / debole (≥70°). Una zona resta disegnata finché il
+// prezzo non la attraversa per intero; da lì si ferma e si spegne.
+function computeLiquidityZones(cells,step,endI,winN){
+ if(!cells||!(step>0)||!rows.length)return [];
+ const ts=getRowsTimestamps();
+ const startI=Math.max(0,endI-winN+1);
+ const stat=new Map(); let nB=0;
+ for(let i=startI;i<=endI;i++){
+   const t=ts[i]; if(!Number.isFinite(t))continue;
+   const b=cells[footprintBucketStart(t)];
+   if(!b||!(b.cnt>0))continue;
+   nB++;
+   for(const k in b.rows){
+     const c=b.rows[k];
+     let s=stat.get(k);
+     if(!s){ s={bid:0,ask:0,first:i}; stat.set(k,s); }
+     s.bid+=c.bid/b.cnt; s.ask+=c.ask/b.cnt;
+   }
+ }
+ if(nB<3||stat.size<5)return [];
+ const lv=[];
+ stat.forEach((s,k)=>{ const score=(s.bid+s.ask)/nB; if(score>0)lv.push({p:Number(k),bid:s.bid,ask:s.ask,score,first:s.first}); });
+ const sorted=lv.map(l=>l.score).sort((a,b)=>a-b);
+ const pct=q=>sorted[Math.min(sorted.length-1,Math.floor(q*(sorted.length-1)))];
+ // Soglie relative sia alla distribuzione (percentili) sia alla liquidità "tipica" (mediana): in un
+ // book uniforme, senza veri muri, non si inventano zone solo perché qualcuno deve stare in cima.
+ const med=pct(0.5)||0;
+ const p70=Math.max(pct(0.70),med*2.5),p85=Math.max(pct(0.85),med*5),p95=Math.max(pct(0.95),med*8);
+ // Passo reale fra i livelli (la fonte può avere livelli più radi dell'"Altezza riga"): serve per
+ // unire in un'unica zona livelli vicini dello stesso lato e per dare spessore alla zona.
+ const byP=lv.map(l=>l.p).sort((a,b)=>a-b), gaps=[];
+ for(let i=1;i<byP.length;i++){ const g=byP[i]-byP[i-1]; if(g>0)gaps.push(g); }
+ gaps.sort((a,b)=>a-b);
+ const unit=Math.max(step,gaps.length?gaps[Math.floor(gaps.length/2)]:step);
+ const hot=lv.filter(l=>l.score>=p70).sort((a,b)=>a.p-b.p);
+ const zones=[];
+ let cur=null;
+ for(const l of hot){
+   const side=l.bid>=l.ask?'buy':'sell';
+   const cls=l.score>=p95?3:(l.score>=p85?2:1);
+   if(cur&&cur.side===side&&l.p-cur.hiP<=unit*2.01){
+     cur.hiP=l.p; cur.cls=Math.max(cur.cls,cls); cur.strength+=l.score; cur.first=Math.min(cur.first,l.first);
+   }else{
+     cur={loP:l.p,hiP:l.p,side,cls,strength:l.score,first:l.first};
+     zones.push(cur);
+   }
+ }
+ zones.forEach(z=>{
+   z.lo=z.loP-unit/2; z.hi=z.hiP+unit/2;
+   z.consumedAt=-1;
+   for(let i=z.first+1;i<=endI;i++){ const r=rows[i]; if(r&&r.low<=z.lo&&r.high>=z.hi){ z.consumedAt=i; break; } }
+ });
+ return zones.sort((a,b)=>b.strength-a.strength).slice(0,10);
+}
+
 function saveHeatmapPrefs(){
  const o={};
  HEATMAP_PREF_FIELDS.forEach(id=>{ const el=$(id); if(el)o[id]=el.type==='checkbox'?!!el.checked:el.value; });
@@ -22355,10 +22819,24 @@ let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha gi�
 // esattamente come il footprint continua ad aggiungere allo stesso footprintTickLogByAsset.
 let orderBookHistoryDirty=false;
 async function saveOrderBookHistoryNow(){
- if(!orderBookHistoryDirty)return;
- orderBookHistoryDirty=false;
- const ok=await idbPut('orderBookHistory',orderBookHistoryByAsset);
- if(!ok)orderBookHistoryDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
+ // Fonti profonde (Binance/bridge esterno, chiavi "bn:"/"ext:") salvate a parte e al massimo una
+ // volta al minuto: sono molto più pesanti del DOM MT5 e riscriverle ogni 800ms bloccherebbe l'app.
+ if(orderBookHistoryDirty){
+   orderBookHistoryDirty=false;
+   const shallow={};
+   for(const k in orderBookHistoryByAsset)if(!isDeepDepthKey(k))shallow[k]=orderBookHistoryByAsset[k];
+   const ok=await idbPut('orderBookHistory',shallow);
+   if(!ok)orderBookHistoryDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
+ }
+ if((orderBookDeepDirty||providerSvpDirty)&&Date.now()-orderBookDeepSavedAt>60000){
+   orderBookDeepSavedAt=Date.now();
+   orderBookDeepDirty=false; providerSvpDirty=false;
+   const deep={};
+   for(const k in orderBookHistoryByAsset)if(isDeepDepthKey(k))deep[k]=orderBookHistoryByAsset[k];
+   const ok1=await idbPut('orderBookHistoryDeep',deep);
+   const ok2=await idbPut('providerSvp',providerSvpByKey);
+   if(!ok1||!ok2)orderBookDeepDirty=true;
+ }
 }
 // HEATMAP DI LIQUIDITÀ — CACHE A BUCKET PER CANDELA (richiesto esplicitamente: "lasciata come
 // impronta mano a mano che si sviluppa il grafico", stile Bookmap, non solo lo stato attuale del
@@ -22383,6 +22861,16 @@ let _heatmapLayerCanvas=null;
 const HEATMAP_HISTORY_MAX_HOURS=12; // oltre, gli snapshot grezzi più vecchi vengono scartati (per TEMPO, non per conteggio: una sessione intera, non pochi minuti)
 const HEATMAP_MIN_SNAPSHOT_GAP_MS=250; // throttle in ingresso: un aggiornamento del book più frequente di così non aggiunge nulla di utile a una heatmap per-candela, e gonfierebbe solo il log grezzo
 function heatmapStepForCurrentSettings(){ return heatmapStepForAsset(currentAssetKey); }
+// Passo righe per una fonte specifica: mai più fine dei livelli che quella fonte fornisce davvero
+// (Binance aggrega il book in fasce "tonde", vedi bnEmit) — altrimenti le celle diventerebbero
+// righe sottilissime separate da vuoti.
+function niceStep(v){ if(!(v>0))return v; const e=Math.pow(10,Math.floor(Math.log10(v))); const m=v/e; return (m<=1?1:m<=2?2:m<=5?5:10)*e; }
+function heatmapStepForKey(key){
+ const base=heatmapStepForAsset(currentAssetKey);
+ let min=0;
+ try{ if(bnDepth&&bnDepth.key===key&&bnDepth.bin>0)min=bnDepth.bin; }catch(e){}
+ return Math.max(base||0,min)||base;
+}
 // Applica UN solo snapshot già arrivato (bid/ask REALI, mai stimati) alle celle aggregate per
 // candela — usata sia dall'aggiornamento incrementale ad ogni nuovo snapshot sia dalla
 // ricostruzione totale, così i due percorsi non possono mai divergere (stesso schema di
@@ -22404,12 +22892,24 @@ function heatmapApplySnapshotToBuckets(cellsForAsset,step,snap){
    const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={bid:0,ask:0});
    cell.ask+=e.volume;
  });
+ // Formato compatto delle fonti profonde (Binance/bridge esterno): [prezzo,volume,prezzo,volume…]
+ const packed=(arr,isBid)=>{
+   if(!arr)return;
+   for(let i=0;i+1<arr.length;i+=2){
+     const pr=arr[i],v=arr[i+1];
+     if(!Number.isFinite(pr)||!Number.isFinite(v))continue;
+     const levelKey=Math.round(pr/step)*step;
+     const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={bid:0,ask:0});
+     if(isBid)cell.bid+=v; else cell.ask+=v;
+   }
+ };
+ packed(snap.b,true); packed(snap.a,false);
 }
 // Ricostruisce heatmapCellsByAsset[assetKey] da ZERO dal log grezzo, per il TF/step CORRENTI —
 // chiamata solo quando i parametri sono cambiati (cambio TF, cambio "Altezza riga" heatmap, primo
 // utilizzo per questo asset), mai ad ogni frame.
 function heatmapRebuildCellsForAsset(assetKey){
- const step=heatmapStepForCurrentSettings();
+ const step=heatmapStepForKey(assetKey);
  const cells={};
  if(step>0){
    const hist=orderBookHistoryByAsset[assetKey];
@@ -22422,7 +22922,7 @@ function heatmapRebuildCellsForAsset(assetKey){
 // Punto unico da cui draw() legge le celle: ricostruisce solo se TF/step sono cambiati dall'ultima
 // volta, altrimenti riusa la cache già tenuta aggiornata in incrementale da connectMt5OrderBook().
 function heatmapCellsForAssetNow(assetKey){
- const step=heatmapStepForCurrentSettings();
+ const step=heatmapStepForKey(assetKey);
  const meta=heatmapCellsMeta[assetKey];
  if(meta&&meta.tf===currentTF&&meta.step===step)return heatmapCellsByAsset[assetKey]||{};
  return heatmapRebuildCellsForAsset(assetKey);
@@ -23051,35 +23551,9 @@ function connectMt5OrderBook(symbol){
    if(msg.heartbeat)return;
    if(!msg.bids && !msg.asks)return;
    const snap={time_ms:msg.time_ms||Date.now(),bids:Array.isArray(msg.bids)?msg.bids:[],asks:Array.isArray(msg.asks)?msg.asks:[]};
-   latestOrderBookByAsset[symbol]=snap; // SEMPRE aggiornato, non soggetto al throttle sotto: l'Order Book Profile disegna lo stato "adesso", che deve restare al tick più recente
-   let hist=orderBookHistoryByAsset[symbol];
-   if(!hist){hist=[];orderBookHistoryByAsset[symbol]=hist;}
-   // Throttle in ingresso sullo STORICO (mai su latestOrderBookByAsset sopra): un feed molto
-   // rapido non aggiunge precisione utile a una heatmap per-candela, solo peso — vedi
-   // HEATMAP_MIN_SNAPSHOT_GAP_MS più sopra nel file.
-   const _lastHist=hist.length?hist[hist.length-1]:null;
-   if(!_lastHist||snap.time_ms-_lastHist.time_ms>=HEATMAP_MIN_SNAPSHOT_GAP_MS){
-     hist.push(snap);
-     orderBookHistoryDirty=true; // vedi saveOrderBookHistoryNow(): persistito al prossimo giro debounced, non subito
-     // Tetto per TEMPO (non per conteggio): scarta solo gli snapshot più vecchi della finestra di
-     // retention, così lo storico copre l'intera sessione invece di poche migliaia di update.
-     const _histCutoff=snap.time_ms-HEATMAP_HISTORY_MAX_HOURS*3600000;
-     let _dropTo=0;
-     while(_dropTo<hist.length&&hist[_dropTo].time_ms<_histCutoff)_dropTo++;
-     if(_dropTo>0)hist.splice(0,_dropTo);
-     // Aggiornamento incrementale della cache a bucket (vedi heatmapApplySnapshotToBuckets più
-     // sopra): solo se i parametri con cui la cache di QUESTO asset è stata costruita combaciano
-     // ancora con quelli correnti — altrimenti la prossima draw() la ricostruirà comunque da zero
-     // da questo stesso storico grezzo (heatmapCellsForAssetNow()), niente perso.
-     const _hmMeta=heatmapCellsMeta[symbol];
-     if(_hmMeta&&_hmMeta.tf===currentTF&&_hmMeta.step===heatmapStepForCurrentSettings()){
-       if(!heatmapCellsByAsset[symbol])heatmapCellsByAsset[symbol]={};
-       heatmapApplySnapshotToBuckets(heatmapCellsByAsset[symbol],_hmMeta.step,snap);
-     }
-   }
-   // Ridisegna solo se l'asset col DOM aggiornato è quello a grafico ora (evita ridisegni inutili
-   // per un simbolo in background) — stesso schema difensivo usato per applyLiveTick/footprint.
-   if(typeof mt5ActiveSymbol!=='undefined' && mt5ActiveSymbol===symbol)draw();
+   // Ingresso unico condiviso con le altre fonti del book (Binance, bridge esterno): storico,
+   // cache heatmap e ridisegno — vedi depthIngest().
+   depthIngest(symbol,snap,{gapMs:HEATMAP_MIN_SNAPSHOT_GAP_MS});
  };
  ws.onerror=()=>{ /* silenzioso: l'errore "vero" (niente DOM sul broker) arriva come msg.error sopra, non come evento WS onerror */ };
  ws.onclose=()=>{
@@ -24566,6 +25040,12 @@ var __initLocalStateSnapshot=null;
  // footprintRebuildBucketsForCurrentAsset() fa per il footprint qui sopra. Da qui in poi
  // connectMt5OrderBook() continua semplicemente ad aggiungere allo stesso log ripristinato.
  if(savedOrderBookHistory&&typeof savedOrderBookHistory==='object')orderBookHistoryByAsset=savedOrderBookHistory;
+ try{
+   const _deepHist=await idbGet('orderBookHistoryDeep');
+   if(_deepHist&&typeof _deepHist==='object')for(const k in _deepHist)if(isDeepDepthKey(k)&&Array.isArray(_deepHist[k]))orderBookHistoryByAsset[k]=_deepHist[k];
+   const _psvp=await idbGet('providerSvp');
+   if(_psvp&&typeof _psvp==='object')providerSvpByKey=_psvp;
+ }catch(e){}
  // BUG RISOLTO (posizioni Live sparite dopo un refresh): prima il controllo cloud, qui sotto,
  // sovrascriveva SEMPRE savedState con la copia Firestore se ne trovava una valida — anche
  // quando localStorage aveva già una versione più fresca (scritta in modo sincrono ad ogni
