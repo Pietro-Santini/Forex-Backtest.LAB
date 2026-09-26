@@ -848,6 +848,7 @@ tr.otherAssetRow td:last-child{opacity:1}
           <div id="mt5Menu" class="mt5MenuPanel" style="display:none">
             <button id="mt5MenuAccountBtn" type="button" class="drawTemplateMenuItem">👤 Account</button>
             <button id="mt5MenuDisconnectBtn" type="button" class="drawTemplateMenuItem">🔌 Disconnetti</button>
+            <button id="mt5MenuShutdownBtn" type="button" class="drawTemplateMenuItem" style="display:none" title="Chiude terminale MT5 e bridge: le posizioni MT5 non si aggiornano più finché non ricolleghi">⏻ Spegni MT5 (terminale)</button>
             <div id="mt5AccountSection" style="display:none">
               <div class="drawTemplateSep"></div>
               <select id="mt5AccountSelect" style="width:100%;margin:4px 0 6px" title="Passa a un altro conto MT5 salvato, o aggiungine uno nuovo"></select>
@@ -2491,6 +2492,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 
 <div class="panel" id="mt5PosPanel" style="display:none">
  <div class="label">🖥️ Posizioni MT5 (conto reale collegato)</div>
+ <div id="mt5PosStatus" class="hint" style="display:none;margin:2px 0 6px"></div>
  <div class="tableScroll"><table class="posTable"><thead><tr><th>#</th><th>Ticket</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="mt5OpenPositions"></tbody></table></div>
  <div id="noMt5Positions" class="hint">Nessuna posizione reale aperta su questo conto MT5.</div>
@@ -7495,7 +7497,16 @@ function update(){
    // nessun pulsante qui.
    `<td><button class="miniBtn" data-mt5-be="${p.ticket}" title="Sposta DAVVERO lo Stop Loss al pareggio (spread attuale incluso) sul conto MT5">BE</button><button class="miniBtn danger" data-mt5-close="${p.ticket}" title="Chiude DAVVERO questa posizione sul conto MT5">Chiudi</button></td></tr>`;
  }).join('');
- if($('mt5PosPanel'))$('mt5PosPanel').style.display=mt5Connected?'block':'none';
+ if($('mt5PosPanel'))$('mt5PosPanel').style.display=(mt5Connected||mt5MonitorOnly||mt5RealPositions.length)?'block':'none';
+ if($('mt5PosStatus')){
+   const age=mt5PositionsLastOkAt?Date.now()-mt5PositionsLastOkAt:Infinity;
+   const hh=mt5PositionsLastOkAt?new Date(mt5PositionsLastOkAt).toLocaleTimeString('it-IT'):'';
+   let st='';
+   if(!mt5Connected&&!mt5MonitorOnly&&mt5RealPositions.length)st='⚠️ Terminale MT5 spento: ultimo stato noto alle '+hh+' (non aggiornato). Ricollega MT5 per i dati reali.';
+   else if(mt5MonitorOnly)st=age<10000?'🟢 Grafico scollegato da MT5 — posizioni sincronizzate con il conto reale (aggiornate alle '+hh+')':'⚠️ Bridge MT5 non raggiungibile: dati fermi alle '+(hh||'—');
+   else if(mt5Connected&&age>10000&&mt5PositionsLastOkAt)st='⚠️ Dati MT5 fermi alle '+hh;
+   $('mt5PosStatus').textContent=st; $('mt5PosStatus').style.display=st?'block':'none';
+ }
  if(!mt5RealPositions.length){
    $('mt5OpenPositions').innerHTML='';
    $('noMt5Positions').style.display='block';
@@ -10650,95 +10661,91 @@ function draw(){
      }
      if(_hmMaxCell>0){
        const _hmBaseOp=heatmapOpacityNow();
-       // RICHIESTO ESPLICITAMENTE ("tinteggiata... senza interruzioni"): la cella copre l'INTERO
-       // slot della candela (cw/n, con un filo di sovrapposizione anti-hairline), non solo la
-       // larghezza del corpo candela (bw, più stretto per lasciare lo spazio vuoto fra un corpo e
-       // l'altro) — così le colonne della heatmap si toccano davvero, niente più righe verticali
-       // di sfondo che spuntano fra una candela e l'altra.
+       // RIDISEGNATA (RICHIESTO ESPLICITAMENTE: "non quadratini, ma linee intere come Bookmap,
+       // con curve, spigoli e tonalità che si capiscono subito all'occhio"). Non si disegna più
+       // una casella per ogni [candela × fascia di prezzo]: si costruisce un'immagine con UNA
+       // colonna per candela e UNA riga per ogni pixel reale dello schermo, dove:
+       //  - in verticale il valore di ogni pixel è interpolato (curva morbida smoothstep) fra i
+       //    due livelli di prezzo più vicini → niente gradini fra una fascia e l'altra;
+       //  - in orizzontale l'immagine viene allargata alla larghezza delle candele con
+       //    interpolazione bilineare del browser → le strisce scorrono continue nel tempo, si
+       //    accendono e si spengono sfumando invece di cambiare a scatti ad ogni candela;
+       //  - un secondo passaggio sfocato in modalità "lighter" dà il bagliore alle zone calde.
+       // Stessi dati REALI e stessa logica di prima (trascinamento per livello, gradiente di
+       // intensità per volume, spegnimento lento delle zone non più aggiornate). L'immagine viene
+       // ricostruita solo se cambiano dati o vista (cache per firma), non ad ogni movimento del mouse.
        const _hmSlot=cw/n;
-       // CORREZIONE ESPLICITA DELL'UTENTE ("non devono comparire righe verticali dentro al colore
-       // del calore"): il filo di sovrapposizione (0.8px) qui sopra bastava a chiudere il varco fra
-       // una colonna e l'altra, ma ogni fillRect veniva disegnato con globalAlpha<1 DIRETTAMENTE
-       // sopra lo sfondo — nella striscia di sovrapposizione fra due colonne adiacenti, il secondo
-       // rettangolo si mescolava (alpha blend) SOPRA il primo già mescolato, risultando in
-       // quell'1px di sovrapposizione più scuro/più opaco del resto della cella: una riga verticale
-       // visibile ad ogni confine di colonna, tanto più evidente quanto più le due colonne avevano
-       // colori diversi. Fix: si disegna tutta la heatmap OPACA (alpha 1) su un livello separato,
-       // fuori schermo — colonne adiacenti opache si sovrascrivono senza mescolarsi, quindi nessuna
-       // striscia più scura possibile — e SOLO alla fine si compone quel livello UNA sola volta sul
-       // grafico con la trasparenza scelta dall'utente: l'intera heatmap prende la stessa,
-       // identica opacità uniforme, invece di sommarne un pezzetto in più ad ogni confine.
-       if(!_heatmapLayerCanvas)_heatmapLayerCanvas=document.createElement('canvas');
-       if(_heatmapLayerCanvas.width!==c.width||_heatmapLayerCanvas.height!==c.height){
-         _heatmapLayerCanvas.width=c.width; _heatmapLayerCanvas.height=c.height;
-       }
-       const hctx=_heatmapLayerCanvas.getContext('2d');
-       hctx.setTransform(dpr,0,0,dpr,0,0);
-       hctx.clearRect(0,0,w,h);
-       // Seconda passata: ricostruisce lo stesso trascinamento riga per riga (stato "come noto ad
-       // ogni colonna", accumulato scorrendo in avanti a partire dallo stato pre-caricato sopra) e
-       // disegna SUBITO ogni colonna con l'insieme COMPLETO dei livelli noti fino a quel punto —
-       // non solo quelli della candela corrente. `_hmLastKnownVal` vive per tutta questa passata:
-       // è la vera "impronta che si lascia dietro" richiesta, mai azzerata finché la candela resta
-       // in vista, e mai dimenticata solo perché lo zoom ne ha nascosto l'origine.
-       const _hmLastKnownVal=_hmSeedLastKnownVal(); // levelKey (stringa) -> valore (bid+ask)/cnt più recente osservato REALMENTE su QUEL livello
-       // RICHIESTO ESPLICITAMENTE — GRADIENTE ADATTIVO: ogni casella ha ora una propria intensità
-       // (alpha) invece di essere piena allo stesso modo:
-       //  - poco volume → la zona si "spegne" (più trasparente), ma resta sempre visibile e distinta
-       //    dallo sfondo (mai sotto _HM_MIN_A);
-       //  - molto volume → la zona si accende sempre di più;
-       //  - zona "morta" (livello non più toccato da contratti man mano che il prezzo si allontana
-       //    e le candele passano) → si affievolisce piano piano, candela dopo candela;
-       // il tutto moltiplicato per l'opacità massima scelta dall'utente (applicata sull'intero
-       // strato più sotto con ctx.globalAlpha=_hmBaseOp): non viene MAI superata.
-       const _HM_MIN_A=0.14, _HM_DECAY_CANDLES=45;
-       const _hmBgRgb=(()=>{ const m=/^#?([0-9a-f]{6})$/i.exec(String(chartBg||'').trim()); if(!m)return [11,16,22]; const n=parseInt(m[1],16); return [(n>>16)&255,(n>>8)&255,n&255]; })();
-       const _hmLastSeenIdx={}; for(const k in _hmLastKnownVal)_hmLastSeenIdx[k]=-_HM_DECAY_CANDLES; // livelli ereditati da prima della vista: già "vecchi"
-       for(let i=0;i<data.length;i++){
-         const tStart=parseDateTime(data[i].date);
-         const bucket=Number.isFinite(tStart)?_hmCells[footprintBucketStart(tStart)]:null;
-         if(bucket&&bucket.cnt>0){
-           const cnt=bucket.cnt;
-           for(const levelKey in bucket.rows){
-             const c2=bucket.rows[levelKey];
-             _hmLastKnownVal[levelKey]=(c2.bid+c2.ask)/cnt;
-             _hmLastSeenIdx[levelKey]=i;
+       const _HM_MIN_A=0.10, _HM_DECAY_CANDLES=45;
+       const _N=data.length;
+       const _H=Math.max(40,Math.min(1600,Math.round(ch*dpr)));
+       const _sig=[_depthKey,dataStart,_N,lo,hi,_H,currentTF,_hmStep,_hmMaxCell,heatmapCellsVersion].join('|');
+       if(_N>0&&_hmImgCache.sig!==_sig){
+         const colMaps=new Array(_N);
+         const known=new Map(), seen=new Map();
+         const seed=_hmSeedLastKnownVal();
+         for(const k in seed){ const ki=Math.round(Number(k)/_hmStep); known.set(ki,seed[k]); seen.set(ki,-_HM_DECAY_CANDLES); }
+         const kLo=Math.floor(lo/_hmStep)-2, kHi=Math.ceil(hi/_hmStep)+2;
+         for(let i=0;i<_N;i++){
+           const tStart=parseDateTime(data[i].date);
+           const bucket=Number.isFinite(tStart)?_hmCells[footprintBucketStart(tStart)]:null;
+           if(bucket&&bucket.cnt>0){
+             for(const k in bucket.rows){ const c2=bucket.rows[k]; const ki=Math.round(Number(k)/_hmStep); known.set(ki,(c2.bid+c2.ask)/bucket.cnt); seen.set(ki,i); }
+           }
+           const m=new Map();
+           known.forEach((val,ki)=>{
+             if(ki<kLo||ki>kHi||!(val>0))return;
+             // Compressione percettiva (radice): un solo ordine enorme non appiattisce il resto.
+             const t=Math.sqrt(Math.min(1,val/_hmMaxCell));
+             const age=Math.max(0,i-(seen.has(ki)?seen.get(ki):i));
+             const volA=_HM_MIN_A+(1-_HM_MIN_A)*Math.pow(t,1.25);   // più volume → più acceso
+             const ageA=Math.exp(-age/_HM_DECAY_CANDLES);             // zona non più toccata → si spegne piano
+             m.set(ki,[t,Math.min(1,volA*(0.35+0.65*ageA))]);
+           });
+           colMaps[i]=m;
+         }
+         let off=_hmImgCache.canvas||document.createElement('canvas');
+         if(off.width!==_N||off.height!==_H){ off.width=_N; off.height=_H; }
+         const octx=off.getContext('2d');
+         const img=octx.createImageData(_N,_H), dd=img.data;
+         const lut=heatmapLut(), rng=hi-lo;
+         for(let py=0;py<_H;py++){
+           const f=(hi-(py+0.5)/_H*rng)/_hmStep;
+           const k0=Math.floor(f);
+           let wg=f-k0; wg=wg*wg*(3-2*wg); // smoothstep: transizione morbida fra due livelli
+           for(let i=0;i<_N;i++){
+             const m=colMaps[i];
+             const A=m.get(k0), B=m.get(k0+1);
+             if(!A&&!B)continue;
+             const aa=A?A[1]*(1-wg):0, ab=B?B[1]*wg:0;
+             const a=aa+ab;
+             if(a<=0.004)continue;
+             const t=((A?A[0]*aa:0)+(B?B[0]*ab:0))/a;
+             const li=Math.max(0,Math.min(255,Math.round(t*255)))*3;
+             const o=(py*_N+i)*4;
+             dd[o]=lut[li]; dd[o+1]=lut[li+1]; dd[o+2]=lut[li+2]; dd[o+3]=Math.round(Math.min(1,a)*255);
            }
          }
-         const xxL=x(i)-_hmSlot/2-0.4, cellW=_hmSlot+0.8;
-         for(const levelKey in _hmLastKnownVal){
-           const val=_hmLastKnownVal[levelKey];
-           if(!(val>0))continue;
-           const rowLoPrice=Number(levelKey), rowHiPrice=rowLoPrice+_hmStep;
-           const yTop=y(rowHiPrice), yBot=y(rowLoPrice);
-           if(yBot<pad.t||yTop>h-pad.b)continue; // fuori dalla finestra verticale in vista: costa solo il confronto, mai disegnato
-           // Compressione percettiva (radice quadrata): senza, un solo ordine enorme (iceberg,
-           // livello istituzionale) normalizzerebbe TUTTO il resto quasi a zero, appiattendo la
-           // heatmap a un'unica macchia scura — con la radice le fasce medie restano visibili,
-           // come nelle bande a più colori dell'immagine di riferimento. Non altera il dato reale,
-           // solo come viene mappato sulla scala colore.
-           const t=Math.sqrt(Math.min(1,val/_hmMaxCell));
-           const age=Math.max(0,i-(_hmLastSeenIdx[levelKey]??i));
-           const volA=_HM_MIN_A+(1-_HM_MIN_A)*Math.pow(t,1.25); // più volume → più acceso
-           const ageA=Math.exp(-age/_HM_DECAY_CANDLES);          // zona non più toccata → si spegne piano
-           const a=Math.max(_HM_MIN_A,Math.min(1,volA*(0.35+0.65*ageA)));
-           // Intensità applicata sfumando il colore verso lo sfondo del grafico (matematicamente
-           // identico a una trasparenza, ma senza le sottili righe che la sovrapposizione di
-           // caselle semitrasparenti lascerebbe tra una candela e l'altra).
-           hctx.fillStyle=heatmapColorForValue(t,a,_hmBgRgb);
-           hctx.fillRect(xxL,yTop-0.4,cellW,Math.max(1,yBot-yTop)+0.8); // +0.8: stesso filo di sovrapposizione anti-hairline usato in orizzontale, fra una fascia di prezzo e l'altra — qui innocuo, il livello è opaco
-         }
+         octx.putImageData(img,0,0);
+         _hmImgCache={sig:_sig,canvas:off};
        }
-       // Composizione UNICA di tutto il livello sul grafico, con l'opacità scelta dall'utente
-       // applicata una volta sola: fuori dalla trasformazione dpr del contesto principale (che
-       // scalerebbe altrimenti l'immagine una seconda volta, essendo il livello già alla
-       // risoluzione fisica in pixel) e ripristinata subito dopo per il resto del disegno.
-       ctx.save();
-       ctx.setTransform(1,0,0,1,0,0);
-       ctx.globalAlpha=_hmBaseOp;
-       ctx.drawImage(_heatmapLayerCanvas,0,0);
-       ctx.globalAlpha=1;
-       ctx.restore();
+       const _off=_hmImgCache.canvas;
+       if(_off&&_N>0){
+         const x0=x(0)-_hmSlot/2, wImg=_N*_hmSlot;
+         ctx.save();
+         ctx.imageSmoothingEnabled=true;
+         try{ ctx.imageSmoothingQuality='high'; }catch(e){}
+         ctx.globalAlpha=_hmBaseOp;
+         ctx.drawImage(_off,0,0,_N,_H,x0,pad.t,wImg,ch);
+         // Bagliore sulle zone calde (dove il browser supporta i filtri del canvas).
+         if(typeof ctx.filter==='string'){
+           ctx.globalCompositeOperation='lighter';
+           ctx.globalAlpha=_hmBaseOp*0.35;
+           ctx.filter='blur(3px)';
+           ctx.drawImage(_off,0,0,_N,_H,x0,pad.t,wImg,ch);
+           ctx.filter='none';
+         }
+         ctx.restore();
+       }
      }
      // Zone di liquidità classificate (compratori/venditori, forte/media/debole) — vedi
      // computeLiquidityZones(): sopra la heatmap, sotto le candele.
@@ -10756,7 +10763,7 @@ function draw(){
          const xR=z.consumedAt>=0?Math.min(w-pad.r,_zx(z.consumedAt)+_zSlot/2):w-pad.r;
          if(xR<=xL)continue;
          const alive=z.consumedAt<0;
-         const a=[0,0.10,0.17,0.26][z.cls]*(alive?1:0.45);
+         const a=[0,0.06,0.10,0.15][z.cls]*(alive?1:0.45);
          ctx.fillStyle='rgba('+col+','+a+')';
          ctx.fillRect(xL,yT,xR-xL,Math.max(2,yB-yT));
          ctx.strokeStyle='rgba('+col+','+(alive?0.75:0.3)+')'; ctx.lineWidth=1;
@@ -11903,7 +11910,7 @@ function draw(){
      // della candela in corso (come MT5/TradingView): la casella si allunga di conseguenza.
      // Ha senso solo in Live perché si basa sull'orologio reale — in Storico/replay la
      // candela "in corso" avanza col Play, non con il tempo che passa.
-     const showCountdown=liveModeActive;
+     const showCountdown=liveModeActive&&liveSessionPhaseNow()!=='closed'; // a mercato chiuso il conto alla rovescia si ferma, come su MT5
      const labelH=showCountdown?30:20;
      const labelY=placeLabelY(labelX,labelW,py-labelH/2,labelH,pad.t,h-pad.b);
      // Price marker is part of the right-hand scale. Sfondo casella = colore linea tema,
@@ -12939,10 +12946,34 @@ function decimalsOfNumber(v){
 function recordAssetAutoMeta(assetKey,partial,source){
  if(!assetKey||!partial)return;
  const prev=assetAutoMeta[assetKey]||{};
+ // BUG RISOLTO (segnalato su BTCUSD: "decimali 0, poi 1, spread 500 poi 50"): i decimali
+ // "dedotti" contando le cifre del prezzo cambiavano ad ogni tick (84000.5 → 1, 84001 → 0) e con
+ // loro pip e spread. Ora:
+ //  - se l'asset ha le specifiche UFFICIALI del broker (locked: Capital.com /markets/{epic}), un
+ //    valore dedotto dal prezzo non le tocca mai;
+ //  - altrimenti un valore dedotto può solo SALIRE (il numero di decimali vero è il massimo visto),
+ //    mai oscillare verso il basso per uno zero finale mancante.
+ let decimals=prev.decimals, pipDigit=prev.pipDigit;
+ if(Number.isFinite(partial.decimals)){
+   if(partial.derived){
+     if(!prev.locked){
+       const d=Number.isFinite(prev.decimals)?Math.max(prev.decimals,partial.decimals):partial.decimals;
+       decimals=d; pipDigit=pipDigitForDecimals(d,assetKey);
+     }
+   }else{
+     decimals=partial.decimals;
+     pipDigit=Number.isFinite(partial.pipDigit)?partial.pipDigit:pipDigitForDecimals(partial.decimals,assetKey);
+   }
+ }
  const next={
-   decimals:Number.isFinite(partial.decimals)?partial.decimals:prev.decimals,
-   pipDigit:Number.isFinite(partial.pipDigit)?partial.pipDigit:prev.pipDigit,
+   decimals,
+   pipDigit,
    typicalSpreadPips:Number.isFinite(partial.typicalSpreadPips)?partial.typicalSpreadPips:prev.typicalSpreadPips,
+   contractSize:Number.isFinite(partial.contractSize)&&partial.contractSize>0?partial.contractSize:prev.contractSize,
+   leverage:Number.isFinite(partial.leverage)&&partial.leverage>0?partial.leverage:prev.leverage,
+   minDeal:Number.isFinite(partial.minDeal)&&partial.minDeal>0?partial.minDeal:prev.minDeal,
+   instrType:partial.instrType||prev.instrType,
+   locked:!!(partial.locked||prev.locked),
    source:source||prev.source,
    updatedAt:Date.now()
  };
@@ -12956,6 +12987,18 @@ function recordAssetAutoMeta(assetKey,partial,source){
 function applyAutoAssetMetaToUI(assetKey){
  const meta=assetAutoMeta[assetKey];
  if(!meta)return;
+ // Leva REALE del broker per questo asset (es. crypto 1:2 su Capital.com): la casella Leva la
+ // mostra, aggiungendo l'opzione se nel menu non c'è.
+ if($('leverage')&&Number.isFinite(meta.leverage)&&meta.leverage>0){
+   const lv=String(Math.round(meta.leverage*100)/100);
+   const sel=$('leverage');
+   if(![...sel.options].some(o=>o.value===lv)){
+     const o=document.createElement('option'); o.value=lv; o.textContent='1:'+lv;
+     const after=[...sel.options].find(x=>Number(x.value)>Number(lv));
+     sel.insertBefore(o,after||null);
+   }
+   sel.value=lv;
+ }
  if($('decimals')&&Number.isFinite(meta.decimals))$('decimals').value=String(Math.max(0,Math.min(6,meta.decimals)));
  if($('pipDecimals')&&Number.isFinite(meta.pipDigit))$('pipDecimals').value=String(Math.max(0,Math.min(8,meta.pipDigit)));
  // Spread: qui SEMPRE (non solo in Modalità Prop Firm come fa applyInstrument() per la tabella
@@ -12965,17 +13008,28 @@ function applyAutoAssetMetaToUI(assetKey){
 }
 // Deriva {decimals,pipDigit,typicalSpreadPips} da una coppia bid/ask REALE (Capital.com live tick,
 // MT5 symbol_info_tick…): usata ovunque arrivi un prezzo con lo spread reale a corredo.
-function metaFromBidAsk(bid,ask){
+// Pip convenzionale: penultima cifra decimale (EURUSD 5→4, oro 2→1). Per le crypto un pip non
+// scende mai all'unità intera se il prezzo ha decimali (BTC a 2 decimali → pip 0,1).
+function pipDigitForDecimals(dec,assetKey){
+ if(!Number.isFinite(dec))return undefined;
+ let pd=Math.max(0,dec-1);
+ try{ if(dec>=1&&pd===0&&binanceSymbolForAsset(assetKey))pd=1; }catch(e){}
+ return pd;
+}
+function metaFromBidAsk(bid,ask,assetKey){
  if(!Number.isFinite(bid))return null;
+ const known=assetKey?assetAutoMeta[assetKey]:null;
  const decimals=decimalsOfNumber(bid);
- const pipDigit=Math.max(0,decimals-1);
+ // Lo spread si misura con il pip GIÀ NOTO dell'asset (mai con uno dedotto al volo da questo
+ // singolo prezzo, che faceva saltare lo spread da 500 a 50 pip e viceversa).
+ const pipDigit=(known&&Number.isFinite(known.pipDigit))?known.pipDigit:(INSTRUMENTS[assetKey]&&Number.isFinite(INSTRUMENTS[assetKey].pipDigit)?INSTRUMENTS[assetKey].pipDigit:pipDigitForDecimals(decimals,assetKey));
  let typicalSpreadPips=undefined;
  if(Number.isFinite(ask)&&ask>0&&bid>0){
    const pipSz=Math.pow(10,-pipDigit);
    const spreadPrice=ask-bid;
    if(spreadPrice>=0&&pipSz>0)typicalSpreadPips=spreadPrice/pipSz;
  }
- return {decimals,pipDigit,typicalSpreadPips};
+ return {decimals,pipDigit,typicalSpreadPips,derived:true};
 }
 function currentInstrument(assetKey){
  const key=assetKey!=null?assetKey:$('market')?.value;
@@ -12987,7 +13041,12 @@ function currentInstrument(assetKey){
  // delle 5 coppie forex scritte sopra.
  const auto=assetAutoMeta[key];
  if(auto&&Number.isFinite(auto.decimals)&&Number.isFinite(auto.pipDigit)){
-   return {label:key,decimals:auto.decimals,pipDigit:auto.pipDigit,contractSize:100000,plMode:'approx',typicalSpreadPips:Number.isFinite(auto.typicalSpreadPips)?auto.typicalSpreadPips:1.0};
+   // Dimensione del contratto: quella UFFICIALE del broker se nota (Capital.com lotSize: 1 BTC
+   // per lotto sulle crypto), altrimenti 1 per le crypto e 100.000 (forex) per il resto. Prima era
+   // sempre 100.000: 0,01 lotti di BTC risultavano 1.000 BTC → margine richiesto di 840.000 €.
+   let __cs=Number(auto.contractSize);
+   if(!(__cs>0)){ let __cr=false; try{ __cr=!!binanceSymbolForAsset(key); }catch(e){} __cs=__cr?1:100000; }
+   return {label:key,decimals:auto.decimals,pipDigit:auto.pipDigit,contractSize:__cs,plMode:'approx',typicalSpreadPips:Number.isFinite(auto.typicalSpreadPips)?auto.typicalSpreadPips:1.0};
  }
  return INSTRUMENTS.EURUSD;
 }
@@ -13025,6 +13084,9 @@ function applyInstrument(){
  // casellina in alto"), per QUALUNQUE asset auto-rilevato (non nella tabella INSTRUMENTS scritta
  // a mano): qui SEMPRE, non solo in Prop Firm — è un dato reale del broker, non una simulazione.
  if(assetAutoMeta[key])applyAutoAssetMetaToUI(key);
+ // Asset senza leva ufficiale nota: torna la leva scelta dall'utente (non resta "1:2" solo perché
+ // l'asset precedente era una crypto).
+ if(!(assetAutoMeta[key]&&Number.isFinite(assetAutoMeta[key].leverage))&&$('leverage')&&userLeverageChoice&&[...$('leverage').options].some(o=>o.value===userLeverageChoice))$('leverage').value=userLeverageChoice;
  if(sub)sub.textContent=instr.label+' • CSV • Candlestick Replay';
  if(hint){
    hint.textContent=instr.plMode==='baseEqualsAccount'
@@ -13132,9 +13194,25 @@ function applySpreadToEntry(side,entry,assetKey,isPropFirmContext){
  const cost=spreadCostForAsset(assetKey);
  return side==='BUY'?entry+cost:entry-cost;
 }
+// Ultima leva scelta A MANO dall'utente (le leve ufficiali per asset la sovrascrivono solo a video).
+let userLeverageChoice=null;
+try{ userLeverageChoice=localStorage.getItem('fxbt_user_leverage')||null; }catch(e){}
+setTimeout(()=>{
+ const sel=$('leverage'); if(!sel)return;
+ if(!userLeverageChoice)userLeverageChoice=sel.value;
+ sel.addEventListener('change',ev=>{ if(!ev.isTrusted)return; userLeverageChoice=sel.value; try{ localStorage.setItem('fxbt_user_leverage',sel.value); }catch(e){} });
+},0);
 function getLeverage(){
  const v=num($('leverage')?.value);
  return Number.isFinite(v)&&v>0?v:30;
+}
+// Leva per un asset preciso: quella REALE del broker se nota (Capital.com marginFactor, es. crypto
+// 50% → 1:2), altrimenti quella scelta nella casella Leva.
+function getLeverageForAsset(assetKey){
+ const k=assetKey!=null?assetKey:currentAssetKey;
+ const m=k?assetAutoMeta[k]:null;
+ if(m&&Number.isFinite(m.leverage)&&m.leverage>0)return m.leverage;
+ return getLeverage();
 }
 function marginForLots(lots,price,assetKey){
  const instr=currentInstrument(assetKey);
@@ -13143,12 +13221,12 @@ function marginForLots(lots,price,assetKey){
    // Nozionale = lots * unità del contratto, già nella valuta del conto (€) essendo la
    // valuta base della coppia: margine = nozionale / leva.
    const notional=lots*size;
-   return notional/getLeverage();
+   return notional/getLeverageForAsset(assetKey);
  }
  // Nozionale in valuta di quotazione = lots * unità del contratto * prezzo corrente,
  // trattato come approssimazione diretta in € (stessa logica di calculateForexPL).
  const notional=lots*size*(Number(price)||0);
- return notional/getLeverage();
+ return notional/getLeverageForAsset(assetKey);
 }
 // Quanti lotti sono acquistabili al massimo con il margine LIBERO attualmente disponibile
 // (alla leva corrente), per lo strumento selezionato e al prezzo di entrata indicato. Usata
@@ -13159,7 +13237,7 @@ function maxLotsByMargin(entry){
  if(!Number.isFinite(free)||free<=0)return 0;
  const instr=currentInstrument();
  const size=contractSize();
- const lev=getLeverage();
+ const lev=getLeverageForAsset();
  if(instr.plMode==='baseEqualsAccount'){
    return (free*lev)/size;
  }
@@ -19750,6 +19828,12 @@ function newsGlossaryFor(ev){
 let mt5CredsDraft=null; // {login, password, server} — il conto attualmente connesso
 let mt5CredsDirHandle=null;
 let mt5Connected=false; // true se l'ultima connect al bridge locale è andata a buon fine
+// RICHIESTO ESPLICITAMENTE: "mi scollego per quanto riguarda il grafico, ma la casella delle
+// posizioni MT5 deve restare in sync con i dati reali". mt5MonitorOnly = grafico e ordini NON più
+// su MT5 (mt5Connected=false: il grafico torna su Capital.com, BUY/SELL tornano simulati), ma il
+// bridge e il terminale restano accesi e le posizioni/ordini reali del conto continuano a essere
+// letti ogni 2s — in qualunque sessione (anche Storico) e qualunque asset a grafico.
+let mt5MonitorOnly=false, mt5PositionsLastOkAt=0;
 // RICHIESTO ESPLICITAMENTE: se l'utente ha già superato con successo il gate "hai installato
 // MT5?" (o si è già connesso davvero almeno una volta) su QUESTO PC, non richiederglielo più ad
 // ogni apertura del popup di login — persiste tra le sessioni (localStorage) esattamente come le
@@ -20316,7 +20400,7 @@ async function fetchMt5Positions(){
      // Aggiorna la "memoria" di questo giro di collegamento DOPO aver deciso i suoni qui sopra.
      result.data.forEach(rp=>mt5SoundSeenOpenTickets.add(String(rp.ticket)));
      mt5SoundPositionsBaselineDone=true;
-     mt5RealPositions=result.data; update();
+     mt5RealPositions=result.data; mt5PositionsLastOkAt=Date.now(); update();
    }
    // Se non risponde entro il timeout o dà errore, si tiene semplicemente l'ultima lista nota
    // (nessun messaggio di stato: un polling ogni 2s non deve riempire la barra di stato).
@@ -20448,7 +20532,7 @@ function recoverUnknownMt5TradeAccounts(){
 // Dopo una chiusura (dall'app, dal terminale o da SL/TP del broker) si rilegge lo storico poco
 // dopo, così numero trade/P/L/win rate si aggiornano subito e non al giro dei 30s.
 function scheduleMt5AccountHistoryRefresh(){
- if(!mt5Connected)return;
+ if(!mt5Connected&&!mt5MonitorOnly)return;
  if(mt5AccountHistoryRefreshSoon)clearTimeout(mt5AccountHistoryRefreshSoon);
  mt5AccountHistoryRefreshSoon=setTimeout(()=>{ mt5AccountHistoryRefreshSoon=null; fetchMt5AccountHistory(); },1500);
 }
@@ -20642,9 +20726,10 @@ function startMt5PositionsPolling(){
  mt5PositionsPollTimer=setInterval(()=>{ fetchMt5Positions(); fetchMt5Orders(); fetchMt5AccountInfo(); },2000);
  mt5AccountHistoryTimer=setInterval(fetchMt5AccountHistory,30000);
 }
-function stopMt5PositionsPolling(){
+function stopMt5PositionsPolling(keepSnapshot){
  if(mt5PositionsPollTimer){ clearInterval(mt5PositionsPollTimer); mt5PositionsPollTimer=null; }
  if(mt5AccountHistoryTimer){ clearInterval(mt5AccountHistoryTimer); mt5AccountHistoryTimer=null; }
+ if(keepSnapshot)return; // spegnimento del terminale: l'ultima fotografia resta visibile (segnata "non aggiornata")
  mt5RealPositions=[];
  mt5RealOrders=[];
  mt5AccountInfo=null;
@@ -20871,10 +20956,42 @@ async function resolveCapitalEpic(asset){
      const epic=(exact||body.markets[0]).epic;
      capitalEpicCache[asset]=epic;
      epicToAsset[epic]=asset;
+     fetchCapitalMarketSpec(asset,epic); // non atteso: specifiche ufficiali anche per gli asset in background
      return epic;
    }
  }catch(e){ console.warn('Ricerca epic Capital.com fallita:',e); }
  return null;
+}
+// SPECIFICHE UFFICIALI DELLO STRUMENTO (Capital.com GET /api/v1/markets/{epic}): decimali del
+// prezzo (snapshot.decimalPlacesFactor), dimensione del lotto (instrument.lotSize), margine
+// richiesto (instrument.marginFactor, % → leva = 100/%), lotto minimo e spread attuale.
+// Sostituiscono i valori "dedotti" dal prezzo, che oscillavano. In cache 6 ore per asset.
+let capitalMarketSpecAt={};
+async function fetchCapitalMarketSpec(asset,epic){
+ if(!asset||!epic||!capitalSessionTokens)return null;
+ if(capitalMarketSpecAt[asset]&&Date.now()-capitalMarketSpecAt[asset]<6*3600000&&assetAutoMeta[asset]&&assetAutoMeta[asset].locked)return assetAutoMeta[asset];
+ const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
+ try{
+   const res=await capitalApiFetch(base+'/api/v1/markets/'+encodeURIComponent(epic),{
+     headers:{'X-SECURITY-TOKEN':capitalSessionTokens.securityToken,'CST':capitalSessionTokens.cst}
+   });
+   const b=await res.json();
+   if(!res.ok||!b)return null;
+   const ins=b.instrument||{}, snap=b.snapshot||{}, dr=b.dealingRules||{};
+   const partial={locked:true,instrType:String(ins.type||'')};
+   const dec=Number(snap.decimalPlacesFactor);
+   if(Number.isFinite(dec)&&dec>=0&&dec<=8){ partial.decimals=dec; partial.pipDigit=pipDigitForDecimals(dec,asset); }
+   const lot=Number(ins.lotSize); if(lot>0)partial.contractSize=lot;
+   const mf=Number(ins.marginFactor), unit=String(ins.marginFactorUnit||'PERCENTAGE').toUpperCase();
+   if(mf>0)partial.leverage=unit==='PERCENTAGE'?100/mf:(mf<1?1/mf:null);
+   const md=Number(dr.minDealSize&&dr.minDealSize.value); if(md>0)partial.minDeal=md;
+   const bid=Number(snap.bid), ofr=Number(snap.offer);
+   if(Number.isFinite(partial.pipDigit)&&bid>0&&ofr>=bid)partial.typicalSpreadPips=(ofr-bid)/Math.pow(10,-partial.pipDigit);
+   if(!Number.isFinite(partial.decimals)&&!partial.contractSize&&!partial.leverage)return null;
+   recordAssetAutoMeta(asset,partial,'capital');
+   capitalMarketSpecAt[asset]=Date.now();
+   return assetAutoMeta[asset];
+ }catch(e){ console.warn('Specifiche strumento Capital.com non lette:',e); return null; }
 }
 // RE-ENTRANZA: più punti diversi possono chiamare questa funzione per lo stesso asset a
 // distanza di pochi millisecondi (rollover candela, watchdog 15s, riconnessione WS, cambio TF
@@ -21039,11 +21156,12 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // candela ricevuta (il prezzo più recente/affidabile); l'ask qui può mancare a seconda del
  // piano/endpoint Capital.com, in tal caso restano solo decimali/pip (mai un crash, mai uno
  // spread inventato quando il dato reale non c'è).
+ try{ await fetchCapitalMarketSpec(asset,epic); }catch(e){} // specifiche ufficiali PRIMA dei valori dedotti dal prezzo
  {
    const lastP=prices[prices.length-1];
    const lastBid=lastP&&lastP.closePrice?Number(lastP.closePrice.bid):NaN;
    const lastAsk=lastP&&lastP.closePrice?Number(lastP.closePrice.ask??lastP.closePrice.ofr):NaN;
-   const __meta=metaFromBidAsk(lastBid,lastAsk);
+   const __meta=metaFromBidAsk(lastBid,lastAsk,asset);
    if(__meta)recordAssetAutoMeta(asset,__meta,'capital');
  }
  // FIX "lo storico sparisce/salta indietro al cambio candela": questa funzione viene richiamata
@@ -21923,25 +22041,40 @@ function computeLiquidityZones(cells,step,endI,winN){
  for(let i=1;i<byP.length;i++){ const g=byP[i]-byP[i-1]; if(g>0)gaps.push(g); }
  gaps.sort((a,b)=>a-b);
  const unit=Math.max(step,gaps.length?gaps[Math.floor(gaps.length/2)]:step);
+ // Zone "a picco" (non più blocchi enormi quando un muro si sposta nel tempo): si parte dal
+ // livello più forte non ancora assegnato e ci si allarga ai livelli ADIACENTI dello stesso lato
+ // finché restano almeno al 50% del picco, al massimo 2 livelli per parte. Ogni zona è quindi un
+ // muro vero e compatto, non una fascia che copre mezzo grafico.
  const hot=lv.filter(l=>l.score>=p70).sort((a,b)=>a.p-b.p);
+ const sideOf=l=>l.bid>=l.ask?'buy':'sell';
+ const clsOf=sc=>sc>=p95?3:(sc>=p85?2:1);
+ const used=new Array(hot.length).fill(false);
+ const order=hot.map((l,i)=>i).sort((i,j)=>hot[j].score-hot[i].score);
  const zones=[];
- let cur=null;
- for(const l of hot){
-   const side=l.bid>=l.ask?'buy':'sell';
-   const cls=l.score>=p95?3:(l.score>=p85?2:1);
-   if(cur&&cur.side===side&&l.p-cur.hiP<=unit*2.01){
-     cur.hiP=l.p; cur.cls=Math.max(cur.cls,cls); cur.strength+=l.score; cur.first=Math.min(cur.first,l.first);
-   }else{
-     cur={loP:l.p,hiP:l.p,side,cls,strength:l.score,first:l.first};
-     zones.push(cur);
+ for(const pi of order){
+   if(used[pi])continue;
+   const pk=hot[pi], side=sideOf(pk);
+   used[pi]=true;
+   let loI=pi, hiI=pi, strength=pk.score, first=pk.first;
+   for(let s=0;s<2;s++){
+     const j=loI-1; if(j<0||used[j])break;
+     const l=hot[j]; if(sideOf(l)!==side||hot[loI].p-l.p>unit*1.51||l.score<pk.score*0.5)break;
+     used[j]=true; loI=j; strength+=l.score; first=Math.min(first,l.first);
    }
+   for(let s=0;s<2;s++){
+     const j=hiI+1; if(j>=hot.length||used[j])break;
+     const l=hot[j]; if(sideOf(l)!==side||l.p-hot[hiI].p>unit*1.51||l.score<pk.score*0.5)break;
+     used[j]=true; hiI=j; strength+=l.score; first=Math.min(first,l.first);
+   }
+   zones.push({loP:hot[loI].p,hiP:hot[hiI].p,side,cls:clsOf(pk.score),strength,first});
  }
  zones.forEach(z=>{
    z.lo=z.loP-unit/2; z.hi=z.hiP+unit/2;
    z.consumedAt=-1;
    for(let i=z.first+1;i<=endI;i++){ const r=rows[i]; if(r&&r.low<=z.lo&&r.high>=z.hi){ z.consumedAt=i; break; } }
  });
- return zones.sort((a,b)=>b.strength-a.strength).slice(0,10);
+ // Solo i muri veri (forza media o forte), i più importanti: poche zone chiare invece di tante.
+ return zones.filter(z=>z.cls>=2).sort((a,b)=>b.strength-a.strength).slice(0,6);
 }
 
 function saveHeatmapPrefs(){
@@ -22096,11 +22229,13 @@ function footprintApplyTickToBuckets(price,timestamp,side,weight,step){
 function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  if(!Number.isFinite(price)||!Number.isFinite(timestamp)||!assetKey)return;
  if(mt5Connected&&source){
-   const tzp=tzParts(timestamp), hh=tzp?tzp.hour:NaN;
-   if(Number.isFinite(hh)){
-     if(hh>=23)return; // 23:00-24:00: buco intenzionale, nessun print da nessuna fonte
-     if(hh>=22){ if(source!=='capital')return; } // 22:00-23:00: solo Capital.com
-     else{ if(source!=='mt5')return; } // prima delle 22: solo MT5
+   // Stesso calendario del grafico (vedi liveSessionPhaseAt): MT5 fino alle 22, Capital.com
+   // 22-23, nulla 23-24 e nel weekend. Le crypto (24/7) ne sono escluse.
+   if(!binanceSymbolForAsset(assetKey)){
+     const ph=liveSessionPhaseAt(timestamp);
+     if(ph==='closed')return;
+     if(ph==='capital'){ if(source!=='capital')return; }
+     else if(source!=='mt5')return;
    }
  }
  const w=(Number.isFinite(weight)&&weight>0)?weight:1;
@@ -22421,7 +22556,7 @@ function startLiveRefreshTimer(){
    // transizione" con valori non affidabili non viene mai disegnata né valutata per SL/TP.
    const rolloverBucketMs=(currentTF||1)*60000;
    const nowBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
-   if(currentAssetKey && capitalWsPrimaryEpic){
+   if(currentAssetKey && capitalWsPrimaryEpic && liveSessionPhaseNow()!=='capital'){
      if(lastSeenCandleBucketStart==null){
        lastSeenCandleBucketStart=nowBucketStart;
      }else if(nowBucketStart>lastSeenCandleBucketStart && !candleRolloverResyncInProgress && !liveCandleFrozen && (Date.now()-candleRolloverResyncAt)>2000){
@@ -22475,7 +22610,8 @@ function startLiveRefreshTimer(){
    // Ultimo prezzo noto per l'EPIC a grafico ora (non per nome asset: vedi commento su
    // lastPrimaryEpicPrice più sopra, evita di ridipendere da una corrispondenza asset↔epic).
    let touched=false;
-   if(Number.isFinite(lastPrimaryEpicPrice))touched=applyLivePriceToChart(lastPrimaryEpicPrice,Date.now())||touched;
+   const __capBucket=Math.floor(Date.now()/((currentTF||1)*60000))*((currentTF||1)*60000);
+   if(Number.isFinite(lastPrimaryEpicPrice))touched=applyLivePriceToChart(lastPrimaryEpicPrice,Date.now(),{allowNew:(lastLiveTickAt||0)>=__capBucket})||touched;
    // FALLBACK richiesto dall'utente: se lo streaming a tick è fermo da un po' (>4s), forziamo
    // comunque una sincronizzazione ogni secondo leggendo l'ultimo prezzo via REST, così la
    // candela avanza sempre — anche nei momenti in cui la riconnessione del WebSocket qui sopra
@@ -22485,7 +22621,7 @@ function startLiveRefreshTimer(){
      if(Number.isFinite(restPrice)){
        lastPrimaryEpicPrice=restPrice;
        if(currentAssetKey)livePriceByAsset[currentAssetKey]=restPrice;
-       touched=applyLivePriceToChart(restPrice,Date.now())||touched;
+       touched=applyLivePriceToChart(restPrice,Date.now(),{allowNew:false})||touched;
      }
    }
    if(touched)lastChartUpdateAt=Date.now();
@@ -22504,7 +22640,7 @@ function startLiveRefreshTimer(){
    // "risincronizzare con Capital.com" un grafico che in realtà sta mostrando MT5. Nessun
    // cambiamento di comportamento quando Capital.com è davvero la sorgente (capitalWsPrimaryEpic
    // è sempre valorizzato in quel caso, esattamente come prima).
-   if(capitalWsPrimaryEpic && currentAssetKey && lastChartUpdateAt && (Date.now()-lastChartUpdateAt)>15000 && (Date.now()-hardResyncAttemptAt)>20000){
+   if(capitalWsPrimaryEpic && currentAssetKey && liveSessionPhaseNow()==='free' && lastChartUpdateAt && (Date.now()-lastChartUpdateAt)>15000 && (Date.now()-hardResyncAttemptAt)>20000){
      hardResyncAttemptAt=Date.now();
      $('status').textContent='⚠️ Nessun aggiornamento prezzo da 15s: resincronizzo con Capital.com…';
      loadLiveHistoryFromCapital(currentAssetKey); // già gestisce da sola i propri errori/timeout
@@ -22630,8 +22766,11 @@ function fmtCandleCountdown(){
  const pad2=n=>String(n).padStart(2,'0');
  return hh>0?`${hh}:${pad2(mm)}:${pad2(ss)}`:`${mm}:${pad2(ss)}`;
 }
-function applyLivePriceToChart(price,timestamp){
+function applyLivePriceToChart(price,timestamp,opts){
  if(!Number.isFinite(price) || !Number.isFinite(timestamp))return false;
+ // RICHIESTO ESPLICITAMENTE ("si deve comportare esattamente come il terminale MT5"): a mercato
+ // chiuso (23:00-00:00 e weekend, con MT5 collegato) nessun prezzo tocca il grafico.
+ if(liveSessionPhaseNow()==='closed')return false;
  const file=csvLibrary[0];
  if(!file)return false;
  const bucketMs=(currentTF||1)*60000;
@@ -22656,6 +22795,10 @@ function applyLivePriceToChart(price,timestamp){
    if(price<last.low)last.low=price;
    last.close=price;
  }else if(!last || bucketStart>lastBucketStart){
+   // Una candela NUOVA nasce solo da un tick VERO arrivato in quel periodo (come fa MT5): mai più
+   // candele "piatte" create dall'orologio con l'ultimo prezzo vecchio a mercato fermo — erano
+   // loro a sfalsare footprint e candele dopo la chiusura della sessione.
+   if(opts&&opts.allowNew===false)return false;
    file.rows.push({date:new Date(bucketStart).toISOString(),open:price,high:price,low:price,close:price,volume:0});
  }else return false; // tick fuori sequenza (bucket più vecchio di quello che abbiamo già): ignorato
  rebuildBaseRowsFromLibrary();
@@ -22684,7 +22827,7 @@ function applyLiveTick(p){
    const ofr=Number(p.ofr??p.ask??p.offer);
    if(Number.isFinite(ofr)&&(Date.now()-(__assetSpreadLastCapturedAt[asset]||0)>5000)){
      __assetSpreadLastCapturedAt[asset]=Date.now();
-     const __meta=metaFromBidAsk(price,ofr);
+     const __meta=metaFromBidAsk(price,ofr,asset);
      if(__meta)recordAssetAutoMeta(asset,{typicalSpreadPips:__meta.typicalSpreadPips},'capital');
    }
  }
@@ -22858,6 +23001,18 @@ let heatmapCellsMeta={};      // assetKey -> { tf, step } con cui heatmapCellsBy
 // direttamente sul grafico). Creato una sola volta, ridimensionato solo quando cambiano le
 // dimensioni fisiche del canvas principale.
 let _heatmapLayerCanvas=null;
+// Heatmap continua (vedi draw()): immagine in cache per firma dati+vista, versione delle celle
+// (cresce a ogni snapshot applicato) e tabella colori precalcolata.
+let _hmImgCache={sig:null,canvas:null}, heatmapCellsVersion=0, _hmLutCache=null;
+function heatmapLut(){
+ if(_hmLutCache)return _hmLutCache;
+ const a=new Uint8ClampedArray(256*3);
+ for(let i=0;i<256;i++){
+   const mm=/rgb\((\d+),(\d+),(\d+)\)/.exec(heatmapColorForValue(i/255));
+   if(mm){ a[i*3]=+mm[1]; a[i*3+1]=+mm[2]; a[i*3+2]=+mm[3]; }
+ }
+ return _hmLutCache=a;
+}
 const HEATMAP_HISTORY_MAX_HOURS=12; // oltre, gli snapshot grezzi più vecchi vengono scartati (per TEMPO, non per conteggio: una sessione intera, non pochi minuti)
 const HEATMAP_MIN_SNAPSHOT_GAP_MS=250; // throttle in ingresso: un aggiornamento del book più frequente di così non aggiunge nulla di utile a una heatmap per-candela, e gonfierebbe solo il log grezzo
 function heatmapStepForCurrentSettings(){ return heatmapStepForAsset(currentAssetKey); }
@@ -22876,6 +23031,7 @@ function heatmapStepForKey(key){
 // ricostruzione totale, così i due percorsi non possono mai divergere (stesso schema di
 // footprintApplyTickToBuckets/footprintRebuildBucketsForCurrentAsset).
 function heatmapApplySnapshotToBuckets(cellsForAsset,step,snap){
+ heatmapCellsVersion++;
  const bucketStart=footprintBucketStart(snap.time_ms);
  let bucket=cellsForAsset[bucketStart];
  if(!bucket||bucket.step!==step)bucket=cellsForAsset[bucketStart]={step,cnt:0,rows:{}};
@@ -22917,6 +23073,7 @@ function heatmapRebuildCellsForAsset(assetKey){
  }
  heatmapCellsByAsset[assetKey]=cells;
  heatmapCellsMeta[assetKey]={tf:currentTF,step};
+ heatmapCellsVersion++;
  return cells;
 }
 // Punto unico da cui draw() legge le celle: ricostruisce solo se TF/step sono cambiati dall'ultima
@@ -22944,7 +23101,7 @@ function heatmapCellsForAssetNow(assetKey){
 // voluta interna, e viene azzerato SOLO quando si abbandona davvero MT5 come sorgente (vedi i
 // punti che lo azzerano più sotto).
 let mt5ActiveSymbol=null;
-let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null;
+let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null, lastMt5RealTickAt=0;
 let lastMt5ChartUpdateAt=0, mt5HardResyncAttemptAt=0;
 let mt5LastSeenCandleBucketStart=null, mt5CandleRolloverResyncAt=0, mt5CandleRolloverResyncInProgress=false, mt5CandleFrozen=false;
 let mt5RefreshTimer=null;
@@ -23221,6 +23378,17 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    // dove abbassare di nuovo il tetto è qui.
    if(mergedRows.length>200000)mergedRows=mergedRows.slice(mergedRows.length-200000);
  }
+ // Candele costruite con Capital.com nella fascia 22-23 (MT5 non le ha): restano sul grafico anche
+ // dopo la riapertura e dopo un riavvio dell'app, mai sostituite né spostate.
+ {
+   const __off=liveOffSessionRowsFor(asset);
+   if(__off.length){
+     const byT=new Map();
+     mergedRows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byT.set(t,r); });
+     __off.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t)&&!byT.has(t))byT.set(t,r); });
+     mergedRows=[...byT.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
+   }
+ }
  csvLibrary=[{id:'mt5_live_'+asset,name:`MT5 Live (${resolved})`,addedAt:Date.now(),rows:mergedRows}];
  // BUG RISOLTO ("cambiando asset, la candela finale prende un valore enorme senza senso" — segnalato
  // con screenshot, uno spillover di prezzo da un simbolo all'altro): mt5ActiveSymbol viene
@@ -23316,6 +23484,17 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  lastMt5ChartUpdateAt=Date.now();
  const rolloverBucketMs=(currentTF||1)*60000;
  mt5LastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+ // Fuori dall'orario MT5 (22-24 e weekend) lo storico si carica ma MT5 NON si ricollega: ci
+ // pensa il gestore orari (liveSessionTick) a passare a Capital.com 22-23 o a fermare tutto.
+ {
+   const __ph=liveSessionPhaseNow();
+   if(__ph==='capital'||__ph==='closed'){
+     liveSessionPhase=null; // forza il gestore a riapplicare la fase al prossimo secondo
+     if(liveModeActive)refreshLiveStreamSubscriptions();
+     if(__footprintAssetChanged)footprintBackfillMt5(resolved,asset);
+     return;
+   }
+ }
  connectMt5Stream(resolved);
  connectMt5OrderBook(resolved);
  startMt5RefreshTimer();
@@ -23400,12 +23579,13 @@ function connectMt5Stream(symbol){
    // niente più prezzi di un asset che finiscono sulla candela di un altro.
    if(symbol!==mt5ActiveSymbol)return;
    lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
+   lastMt5RealTickAt=Date.now(); // tick VERO (non heartbeat): solo lui può aprire una candela nuova
    // METADATI AUTOMATICI: spread REALE, ogni tick ha già bid E ask insieme (a differenza di
    // Capital.com, mai da sperare che ci sia) — throttled a 1 volta ogni 5s per asset, vedi
    // commento gemello in applyLiveTick().
    if(Number.isFinite(msg.ask)&&(Date.now()-(__assetSpreadLastCapturedAt[symbol]||0)>5000)){
      __assetSpreadLastCapturedAt[symbol]=Date.now();
-     const __meta=metaFromBidAsk(msg.bid,msg.ask);
+     const __meta=metaFromBidAsk(msg.bid,msg.ask,symbol);
      if(__meta){
        // Stessa doppia chiave del blocco storico in loadLiveHistoryFromMt5 (vedi commento lì):
        // `symbol` è quello che footprint/heatmap usano già, `currentAssetKey` quello che
@@ -23475,7 +23655,7 @@ function connectMt5BackgroundStream(asset,symbol){
    if(!Number.isFinite(msg.bid))return;
    if(Number.isFinite(msg.ask)&&(Date.now()-(__assetSpreadLastCapturedAt[symbol]||0)>5000)){
      __assetSpreadLastCapturedAt[symbol]=Date.now();
-     const __meta=metaFromBidAsk(msg.bid,msg.ask);
+     const __meta=metaFromBidAsk(msg.bid,msg.ask,symbol);
      if(__meta){
        recordAssetAutoMeta(symbol,{typicalSpreadPips:__meta.typicalSpreadPips},'mt5');
        if(asset!==symbol)recordAssetAutoMeta(asset,{typicalSpreadPips:__meta.typicalSpreadPips},'mt5');
@@ -23617,12 +23797,13 @@ function startMt5RefreshTimer(){
      connectMt5Stream(symbol);
    }
    let touched=false;
-   if(Number.isFinite(lastMt5TickPrice))touched=applyLivePriceToChart(lastMt5TickPrice,Date.now())||touched;
+   const __mt5Bucket=Math.floor(Date.now()/((currentTF||1)*60000))*((currentTF||1)*60000);
+   if(Number.isFinite(lastMt5TickPrice))touched=applyLivePriceToChart(lastMt5TickPrice,Date.now(),{allowNew:lastMt5RealTickAt>=__mt5Bucket})||touched;
    if(staleMs>4000){
      const restPrice=await fetchLatestMt5PriceRest(symbol);
      if(Number.isFinite(restPrice)){
        lastMt5TickPrice=restPrice;
-       touched=applyLivePriceToChart(restPrice,Date.now())||touched;
+       touched=applyLivePriceToChart(restPrice,Date.now(),{allowNew:false})||touched;
      }
    }
    if(touched)lastMt5ChartUpdateAt=Date.now();
@@ -23640,6 +23821,107 @@ function startMt5RefreshTimer(){
 function stopMt5RefreshTimer(){
  if(mt5RefreshTimer){clearHeartbeatInterval(mt5RefreshTimer);mt5RefreshTimer=null;}
 }
+
+// ===================== ORARI DI SESSIONE CON MT5 (RICHIESTO ESPLICITAMENTE) =====================
+// Con MT5 collegato il grafico segue il calendario del terminale, in ora italiana:
+//  - lun-ven fino alle 22:00 → dati MT5 (normale);
+//  - 22:00-23:00 → MT5 ha chiuso: il grafico viene salvato, MT5 smette di aggiornare e la candela
+//    prosegue con i tick Capital.com dello stesso asset;
+//  - 23:00-24:00 e tutto il weekend → mercato chiuso: nessun aggiornamento, conto alla rovescia
+//    fermo, nessuna candela nuova;
+//  - 00:00 → riapertura automatica con MT5.
+// Le crypto (24/7) sono escluse, così come la modalità senza MT5 (solo Capital.com).
+const LIVE_MT5_CLOSE_MIN=22*60, LIVE_CAPITAL_UNTIL_MIN=23*60;
+const OFFSESSION_ROWS_KEY='fxbt_offsession_rows_v1';
+function liveScheduleAppliesNow(){
+ try{ return !!(liveModeActive&&mt5Connected&&currentAssetKey&&!binanceSymbolForAsset(currentAssetKey)); }catch(e){ return false; }
+}
+function liveSessionPhaseAt(t){
+ const dm=romeDayAndMinute(t);
+ const wd=((dm.day+4)%7+7)%7; // 0=domenica … 6=sabato
+ if(wd===6||wd===0)return 'closed';
+ if(dm.min<LIVE_MT5_CLOSE_MIN)return 'mt5';
+ if(dm.min<LIVE_CAPITAL_UNTIL_MIN)return 'capital';
+ return 'closed';
+}
+function liveSessionPhaseNow(){ return liveScheduleAppliesNow()?liveSessionPhaseAt(Date.now()):'free'; }
+// Candele della fascia Capital.com salvate a parte (per asset e timeframe, ultimi 7 giorni).
+function liveOffSessionSaveRows(){
+ try{
+   const file=csvLibrary[0];
+   if(!file||!/^mt5_live_/.test(file.id||'')||!currentAssetKey)return;
+   const cutoff=Date.now()-7*86400000;
+   let all={}; try{ all=JSON.parse(localStorage.getItem(OFFSESSION_ROWS_KEY)||'{}')||{}; }catch(e){}
+   const k=currentAssetKey+'|'+(currentTF||1);
+   const map=new Map();
+   (all[k]||[]).forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t)&&t>=cutoff)map.set(t,r); });
+   file.rows.forEach(r=>{
+     const t=parseDateTime(r.date);
+     if(Number.isFinite(t)&&t>=cutoff&&liveSessionPhaseAt(t)==='capital')map.set(t,{date:r.date,open:r.open,high:r.high,low:r.low,close:r.close,volume:r.volume||0});
+   });
+   all[k]=[...map.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
+   Object.keys(all).forEach(kk=>{ if(!all[kk]||!all[kk].length)delete all[kk]; });
+   localStorage.setItem(OFFSESSION_ROWS_KEY,JSON.stringify(all));
+ }catch(e){}
+}
+function liveOffSessionRowsFor(asset){
+ try{
+   const all=JSON.parse(localStorage.getItem(OFFSESSION_ROWS_KEY)||'{}')||{};
+   const cutoff=Date.now()-7*86400000;
+   return (all[asset+'|'+(currentTF||1)]||[]).filter(r=>{ const t=parseDateTime(r.date); return Number.isFinite(t)&&t>=cutoff; });
+ }catch(e){ return []; }
+}
+let liveSessionPhase=null, liveSessionBusy=false, liveOffSessionSavedAt=0;
+async function liveSessionFreezeMt5(ph){
+ // 1) "Fotografia" del grafico: stato, footprint e book salvati subito.
+ try{ saveLightStateNow(); }catch(e){}
+ try{ saveFootprintTicksNow(); }catch(e){}
+ try{ saveOrderBookHistoryNow(); }catch(e){}
+ liveOffSessionSaveRows();
+ // 2) MT5 smette di aggiornare (il collegamento al conto resta: posizioni e ordini non si toccano).
+ stopMt5RefreshTimer(); disconnectMt5Stream(); disconnectMt5OrderBook();
+ mt5CandleFrozen=false; mt5CandleRolloverResyncInProgress=false; lastMt5TickPrice=null;
+ lastPrimaryEpicPrice=null;
+ // 3) Sorgente della fascia: Capital.com (22-23) oppure nessuna (23-24 / weekend).
+ if(ph==='capital'&&capitalSessionTokens&&currentAssetKey){
+   let epic=null;
+   try{ epic=await resolveCapitalEpic(currentAssetKey); }catch(e){}
+   if(liveSessionPhaseNow()!=='capital')return;
+   capitalWsPrimaryEpic=epic||null;
+   lastLiveTickAt=0;
+   lastChartUpdateAt=Date.now();
+   try{ await refreshLiveStreamSubscriptions(); }catch(e){}
+   $('status').textContent=epic
+     ?'🌙 22:00 — MT5 ha chiuso la sessione: grafico salvato. Fino alle 23:00 la candela prosegue con i dati Capital.com.'
+     :'🌙 MT5 ha chiuso la sessione e questo asset non è disponibile su Capital.com: grafico salvato e fermo fino alla riapertura.';
+ }else{
+   capitalWsPrimaryEpic=null;
+   $('status').textContent='🌙 Mercato chiuso: grafico salvato e fermo. Si ricollega da solo a MT5 alla riapertura (00:00).';
+ }
+ try{ update(); draw(); }catch(e){}
+}
+async function liveSessionTick(){
+ if(liveSessionBusy)return;
+ const ph=liveSessionPhaseNow();
+ if(ph==='capital'&&Date.now()-liveOffSessionSavedAt>10000){ liveOffSessionSavedAt=Date.now(); liveOffSessionSaveRows(); }
+ const prev=liveSessionPhase;
+ if(ph===prev)return;
+ liveSessionPhase=ph;
+ liveSessionBusy=true;
+ try{
+   if(ph==='capital'||ph==='closed'){
+     if(prev==='capital')liveOffSessionSaveRows();
+     await liveSessionFreezeMt5(ph);
+   }else if(ph==='mt5'&&(prev==='capital'||prev==='closed')){
+     liveOffSessionSaveRows();
+     capitalWsPrimaryEpic=null; lastPrimaryEpicPrice=null;
+     $('status').textContent='☀️ Riapertura della sessione: mi ricollego a MT5…';
+     if(currentAssetKey)await loadLiveHistoryFromMt5(currentAssetKey);
+   }
+ }catch(e){ console.warn('[Sessione]',e); }
+ finally{ liveSessionBusy=false; }
+}
+setInterval(()=>{ liveSessionTick(); },1000);
 
 // ===================== MOTORE LIVE IN BACKGROUND (multi-sessione) =====================
 // RICHIESTO: le posizioni/ordini pendenti aperti in Live (sia il conto Live "semplice" sia la
@@ -24255,15 +24537,18 @@ function updateMt5ModeUI(){
  }
  updateLiveModeUI();
  const discBtn=$('mt5MenuDisconnectBtn');
- if(discBtn)discBtn.textContent=mt5Connected?'🔌 Disconnetti':'🔌 Connetti';
+ if(discBtn)discBtn.textContent=mt5Connected?'🔌 Scollega il grafico (le posizioni restano sincronizzate)':'🔌 Connetti';
  // La tabella dedicata alle posizioni REALI compare/scompare subito col login, senza aspettare
  // il primo giro di polling (che comunque la ripopola appena arriva la prima risposta).
- if($('mt5PosPanel'))$('mt5PosPanel').style.display=mt5Connected?'block':'none';
+ if(mt5Connected)mt5MonitorOnly=false; // ricollegato davvero: non più "solo posizioni"
+ if($('mt5PosPanel'))$('mt5PosPanel').style.display=(mt5Connected||mt5MonitorOnly||mt5RealPositions.length)?'block':'none';
+ if($('mt5MenuShutdownBtn'))$('mt5MenuShutdownBtn').style.display=(mt5Connected||mt5MonitorOnly)?'':'none';
+ if(mt5MonitorOnly&&!mt5Connected)$('mt5ModeBtn').textContent='🖥️ MT5 (solo posizioni) ⌄';
  // Punto unico che accende/spegne il polling delle posizioni REALI: ogni punto del codice che
  // cambia mt5Connected chiama già updateMt5ModeUI() subito dopo, quindi non serve ripetere
- // l'avvio/stop del polling in ognuno di quei punti.
- if(mt5Connected){ if(!mt5PositionsPollTimer)startMt5PositionsPolling(); }
- else{ stopMt5PositionsPolling(); update(); }
+ // l'avvio/stop del polling in ognuno di quei punti. In "solo posizioni" il polling continua.
+ if(mt5Connected||mt5MonitorOnly){ if(!mt5PositionsPollTimer)startMt5PositionsPolling(); }
+ else{ stopMt5PositionsPolling(true); update(); }
  // Stesso punto unico: fa passare il grafico su MT5 (esclusivo) o tornare a Capital.com a
  // seconda dello stato appena aggiornato — vedi syncChartSourceWithMt5() per il motivo di
  // agganciarsi qui invece che in ognuno dei singoli punti che cambiano mt5Connected.
@@ -24398,11 +24683,13 @@ $('mt5MenuDisconnectBtn').addEventListener('click',async ev=>{
  ev.stopPropagation();
  closeMt5Menu();
  if(mt5Connected){
-   $('status').textContent='Disconnessione da MT5 in corso…';
-   const result=await disconnectFromMt5Bridge();
+   // RICHIESTO ESPLICITAMENTE: "Disconnetti" scollega il GRAFICO (e gli ordini) da MT5, ma il
+   // terminale resta acceso e la casella "Posizioni MT5" continua a sincronizzarsi col conto
+   // reale. Per spegnere davvero terminale e bridge c'è "⏻ Spegni MT5".
+   mt5MonitorOnly=true;
    mt5Connected=false;
    updateMt5ModeUI();
-   $('status').textContent=result.ok?'🔌 Disconnesso da MT5 (terminale e servizio in chiusura).':('⚠️ Disconnessione da MT5 non riuscita (stato locale comunque azzerato): '+result.message);
+   $('status').textContent='📉 Grafico scollegato da MT5 (ora su Capital.com). Le posizioni MT5 restano sincronizzate con il conto reale, anche cambiando asset o passando in Storico.';
    // RICHIESTO ESPLICITAMENTE (ribaltando una richiesta precedente): disconnettersi da MT5 chiude
    // il terminale e il servizio bridge lato PC (vedi disconnectFromMt5Bridge/bridge.py), ma NON
    // deve più chiudere anche questa pagina — l'app resta aperta e usabile (es. per continuare in
@@ -24498,6 +24785,16 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
  mt5SelectedAccountKey = mt5SavedAccounts.length ? mt5AccountKey(mt5SavedAccounts[0]) : null;
  updateMt5ModeUI();
  renderMt5AccountSelect();
+});
+$('mt5MenuShutdownBtn')?.addEventListener('click',async ev=>{
+ ev.stopPropagation();
+ closeMt5Menu();
+ if(!await appConfirm('Spegnere terminale MT5 e bridge?\n\nIl grafico resta su Capital.com. La casella "Posizioni MT5" mostrerà l\'ultimo stato noto, non più aggiornato, finché non ricolleghi MT5.',{title:'⏻ Spegni MT5',okLabel:'Spegni',cancelLabel:'Annulla',danger:true}))return;
+ $('status').textContent='Spegnimento di MT5 in corso…';
+ const result=await disconnectFromMt5Bridge();
+ mt5MonitorOnly=false; mt5Connected=false;
+ updateMt5ModeUI();
+ $('status').textContent=result.ok?'⏻ MT5 spento (terminale e servizio in chiusura).':('⚠️ Spegnimento MT5 non riuscito (stato locale comunque azzerato): '+result.message);
 });
 $('mt5LoginCloseBtn').addEventListener('click',closeMt5LoginModal);
 $('mt5LoginCancelBtn').addEventListener('click',closeMt5LoginModal);
