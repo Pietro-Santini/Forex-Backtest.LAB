@@ -22182,8 +22182,8 @@ function footprintBuildBucketsFromLog(log,step){
    let bucket=buckets[bucketStart];
    if(!bucket)bucket=buckets[bucketStart]={step,rows:{}};
    const levelKey=Math.round(t.price/step)*step;
-   const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={buy:0,sell:0});
-   if(t.side>0)cell.buy+=t.weight; else cell.sell+=t.weight;
+   const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]=footprintNewCell());
+   footprintAddToCell(cell,t.side,t.weight,(t.aggr===undefined?t.side:t.aggr),t.vol);
  }
  return buckets;
 }
@@ -22873,7 +22873,7 @@ function footprintRebuildBucketsForCurrentAsset(){
  if(log&&log.length){
    const step=footprintStepForAsset(currentAssetKey);
    if(!(step>0))return;
-   for(let i=0;i<log.length;i++)footprintApplyTickToBuckets(log[i].price,log[i].t,log[i].side,log[i].weight,step);
+   for(let i=0;i<log.length;i++)footprintApplyTickToBuckets(log[i].price,log[i].t,log[i].side,log[i].weight,step,log[i].aggr,log[i].vol);
    return;
  }
  // Nessun log tick locale per questo asset (dispositivo/browser nuovo, IndexedDB vuoto): se il
@@ -22889,13 +22889,76 @@ function footprintRebuildBucketsForCurrentAsset(){
 // footprintByBucket. Fattorizzata a parte perché usata sia dalla ricostruzione totale sopra sia
 // dall'aggiornamento incrementale ad ogni tick nuovo (footprintRegisterTick(), più sotto) — così i
 // due percorsi non possono mai divergere nella logica di bucketing.
-function footprintApplyTickToBuckets(price,timestamp,side,weight,step){
+// ===================== FOOTPRINT REALE — PASSO 1: IL DATO =====================
+// Per assomigliare a DeepChart servono, per OGNI livello di prezzo di OGNI candela, quattro
+// numeri veri: volume scambiato in ASK (compratori aggressivi), volume in BID (venditori
+// aggressivi), numero di trade, e il delta che ne deriva. Finora la cella conteneva solo
+// {buy,sell}: conteggi di tick classificati con la tick-rule (prezzo sale = compratore), che e'
+// una STIMA e non order flow.
+//
+// Tre livelli di qualita', in ordine decrescente, decisi dal dato che il broker manda davvero:
+//   'flags'    → MetaTrader dichiara il lato dell'aggressore (TICK_FLAG_BUY 32 / SELL 64).
+//                E' il dato certo: identico a quello che usa una piattaforma futures.
+//   'bidask'   → niente flag ma c'e' "last": si classifica confrontandolo con bid/ask
+//                (at-ask = compratore aggressivo, at-bid = venditore aggressivo). E' la regola
+//                standard dei footprint, affidabile.
+//   'tickrule' → il broker manda solo quotazioni bid/ask senza trade: si ripiega sulla tick-rule
+//                e il volume diventa conteggio di tick. FUNZIONA, ma NON e' volume reale e non va
+//                mai presentato come tale: l'etichetta in UI lo dira' esplicitamente.
+// Capital.com resta sempre e solo 'tickrule': il suo stream manda un prezzo bid e basta.
+const FP_TICK_FLAG_BUY=32, FP_TICK_FLAG_SELL=64;
+let footprintDataQuality='tickrule';      // qualita' del dato attualmente in uso
+let footprintDataQualityDetail=null;      // conteggi grezzi, per poterlo mostrare senza promettere
+function footprintQualityLabel(q){
+ if(q==='flags')return 'Order flow reale (lato aggressore dichiarato dal broker)';
+ if(q==='bidask')return 'Order flow reale (classificato at bid/ask)';
+ return 'Stimato dalla tick-rule — conteggio tick, NON volume reale';
+}
+// Classifica UN tick grezzo. Ritorna {aggr,vol,mode}: aggr +1 = comprato in ask, -1 = venduto in
+// bid, 0 = indeterminato. prevPrice serve solo al ripiego tick-rule.
+function footprintClassifyTick(t,prevPrice){
+ const flags=Number(t&&t.flags)||0;
+ const bid=Number(t&&t.bid), ask=Number(t&&t.ask), last=Number(t&&t.last);
+ const volRaw=Number(t&&t.volume);
+ const vol=(Number.isFinite(volRaw)&&volRaw>0)?volRaw:1;
+ if(flags&FP_TICK_FLAG_BUY)return {aggr:1,vol,mode:'flags'};
+ if(flags&FP_TICK_FLAG_SELL)return {aggr:-1,vol,mode:'flags'};
+ if(Number.isFinite(last)&&last>0&&Number.isFinite(bid)&&Number.isFinite(ask)&&ask>=bid){
+   // Tolleranza di mezzo tick sul confronto: un last esattamente pari all'ask e' un acquisto
+   // aggressivo, ma i float non combaciano mai al bit.
+   const half=Math.max((ask-bid)/2,0);
+   if(last>=ask-half*0.001)return {aggr:1,vol,mode:'bidask'};
+   if(last<=bid+half*0.001)return {aggr:-1,vol,mode:'bidask'};
+   // Trade a meta' spread: nessuna delle due parti ha "aggredito" in modo netto.
+   return {aggr:0,vol,mode:'bidask'};
+ }
+ const px=Number.isFinite(bid)?bid:last;
+ if(Number.isFinite(px)&&Number.isFinite(prevPrice)){
+   if(px>prevPrice)return {aggr:1,vol,mode:'tickrule'};
+   if(px<prevPrice)return {aggr:-1,vol,mode:'tickrule'};
+ }
+ return {aggr:0,vol,mode:'tickrule'};
+}
+// Cella vuota nel nuovo formato. buy/sell restano per compatibilita' con tutto il disegno gia'
+// esistente (imbalance, zero-print, absorption/rejection): cosi' il passo 1 non rompe nulla di
+// quel che funziona oggi, e i campi nuovi sono pronti per il passo 2 (il disegno stile DeepChart).
+function footprintNewCell(){ return {buy:0,sell:0,askVol:0,bidVol:0,trades:0}; }
+function footprintAddToCell(cell,side,weight,aggr,vol){
+ if(side>0)cell.buy+=weight; else cell.sell+=weight;
+ if(cell.askVol===undefined){ cell.askVol=0; cell.bidVol=0; cell.trades=0; } // celle vecchie dal cloud
+ const v=Number.isFinite(vol)?vol:weight;
+ if(aggr>0)cell.askVol+=v;
+ else if(aggr<0)cell.bidVol+=v;
+ else { cell.askVol+=v/2; cell.bidVol+=v/2; } // trade a meta' spread: diviso, mai attribuito a caso
+ cell.trades+=1;
+}
+function footprintApplyTickToBuckets(price,timestamp,side,weight,step,aggr,vol){
  const bucketStart=footprintBucketStart(timestamp);
  let bucket=footprintByBucket[bucketStart];
  if(!bucket||bucket.step!==step)bucket=footprintByBucket[bucketStart]={step,rows:{}};
  const levelKey=Math.round(price/step)*step;
- const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]={buy:0,sell:0});
- if(side>0)cell.buy+=weight; else cell.sell+=weight;
+ const cell=bucket.rows[levelKey]||(bucket.rows[levelKey]=footprintNewCell());
+ footprintAddToCell(cell,side,weight,(aggr===undefined?side:aggr),vol);
 }
 // Registra UN tick di prezzo per un asset qualunque (chiamata sia da applyLiveTick() per
 // Capital.com sia da mt5FeedWs.onmessage per MT5, per OGNI asset con streaming attivo — non solo
@@ -22994,7 +23057,11 @@ function footprintIngestHistoricalTicks(assetKey,rawTicks){
    const key=ts+'_'+price;
    if(seen.has(key))return; // stesso identico (istante,prezzo) già nel log: evita doppio conteggio nella finestra di sovrapposizione col live
    seen.add(key);
-   merged.push({t:ts,price,side:1,weight:(Number.isFinite(t.volume)&&t.volume>0)?t.volume:1});
+   // PASSO 1: conserviamo il lato AGGRESSORE vero (flags o at bid/ask) e il volume del trade,
+   // non solo il conteggio. `side` resta la tick-rule, ricalcolata sotto, perche' continua a
+   // servire a imbalance/zero-print/absorption gia' esistenti.
+   const cls=footprintClassifyTick(t,null);
+   merged.push({t:ts,price,side:1,weight:cls.vol,aggr:cls.aggr,vol:cls.vol,mode:cls.mode});
  });
  merged.sort((a,b)=>a.t-b.t);
  // Ricalcola il lato (buy/sell) con la stessa tick-rule di footprintRegisterTick(), ma su TUTTA la
@@ -23013,6 +23080,16 @@ function footprintIngestHistoricalTicks(assetKey,rawTicks){
  footprintTicksDirty=true; // vedi saveFootprintTicksNow(): il backfill storico va persistito quanto i tick live
  if(assetKey===currentAssetKey){ footprintRebuildBucketsForCurrentAsset(); draw(); }
 }
+// Registra la qualita' dichiarata dal server per l'ultimo lotto di tick ricevuto, cosi' l'UI
+// puo' dire esattamente che tipo di footprint si sta guardando invece di lasciarlo intendere.
+function footprintNoteDataQuality(quality,detail){
+ const rank={tickrule:0,bidask:1,flags:2};
+ if(quality&&rank[quality]!==undefined){
+   footprintDataQuality=quality;
+   footprintDataQualityDetail=detail||null;
+   console.log('[Footprint] qualita\' del dato: '+quality+' — '+footprintQualityLabel(quality),detail||'');
+ }
+}
 async function footprintBackfillMt5(symbol,assetKey){
  // CORREZIONE ESPLICITA DELL'UTENTE: prima usciva subito se il footprint era spento, quindi il
  // backfill storico partiva solo al momento in cui si accendeva la spunta (mai in automatico al
@@ -23027,6 +23104,9 @@ async function footprintBackfillMt5(symbol,assetKey){
    const res=await fetch(MT5_FEED_URL+'/ticks?symbol='+encodeURIComponent(symbol)+'&from_ms='+fromMs+'&to_ms='+toMs+'&max_ticks=50000');
    if(!res.ok)return; // servizio non raggiungibile/errore lato server: nessun dato inventato al suo posto, si esce silenziosamente
    const body=await res.json();
+   // Il server dichiara che tipo di dato ha davvero trovato (vedi "quality" in /ticks):
+   // lo registriamo PRIMA di ingerire, cosi' l'etichetta in UI e' gia' corretta al primo disegno.
+   if(body&&body.quality)footprintNoteDataQuality(body.quality,body.quality_detail);
    if(body&&body.count>0)footprintIngestHistoricalTicks(assetKey,body.ticks);
  }catch(e){ /* rete/servizio non disponibile in questo momento: nessun backfill, nessun dato finto al suo posto */ }
 }
