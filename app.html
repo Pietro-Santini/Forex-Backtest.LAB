@@ -3393,6 +3393,19 @@ function migrateDrawingLayerVisibilityToHidden(list){
 // rettangolo semitrasparente dall'apertura alla chiusura + casella con durata/pip/R:R.
 // Resta impostata finché non si va a un altro trade o non si ricarica/reimposta il grafico.
 let highlightedTrade=null;
+// BUG SEGNALATO: dopo "Vai a grafico" su un'operazione chiusa, cambiando asset restavano a
+// schermo il rettangolo di evidenziazione, le frecce entrata/uscita e il riquadro con durata e
+// lottaggio dell'operazione — appartenenti a un ALTRO strumento. Azzerarli era gia' previsto,
+// ma solo dentro applyChartViewForAsset(), che viene chiamata dal percorso STORICO
+// (autoLoadAssetLibrary): in Live non lo faceva nessuno. Questa funzione raccoglie tutto lo
+// stato di "evidenziazione" in un punto solo, cosi' ogni cambio asset lo ripulisce davvero,
+// qualunque sia la modalita' e qualunque sia la strada usata per cambiare asset.
+function clearClosedTradeHighlight(){
+ highlightedTrade=null;
+ highlightCloseBtnRect=null;
+ highlightedPendingOrderId=null;
+ try{ selectedClosedTradeIds.clear(); }catch(e){}
+}
 // Rettangolo (coordinate canvas-locali, stesse di draw()) della "X" disegnata dentro la
 // scheda dell'operazione evidenziata — richiesto esplicitamente vicino/dentro al riquadro
 // invece che in un pulsante separato in alto. Aggiornato da drawTradeHighlight() ad ogni
@@ -11715,7 +11728,14 @@ function draw(){
  // Rettangolo di evidenziazione dell'operazione scelta con "Vai a grafico" nel Trade
  // Journal: copre l'intera altezza del grafico dall'apertura alla chiusura, con una
  // casella riepilogativa (durata, pip, R/R) agganciata in alto.
- if(highlightedTrade)drawTradeHighlight(ctx,y,pad,cw,n,start,w,h);
+ // Ultima difesa: l'evidenziazione si disegna solo se il trade e' dell'asset a grafico ORA.
+ // Anche se un cambio asset sfuggisse a clearClosedTradeHighlight(), qui non puo' comunque
+ // finire a schermo il riquadro di un'operazione di un altro strumento.
+ if(highlightedTrade){
+   const __ht=trades[highlightedTrade.tradeIndex];
+   if(__ht&&!belongsToCurrentAsset(__ht))clearClosedTradeHighlight();
+   else drawTradeHighlight(ctx,y,pad,cw,n,start,w,h);
+ }
  // "✕ Chiudi scheda" ora è disegnata DIRETTAMENTE dentro il riquadro sul grafico (vedi
  // drawTradeHighlight/highlightCloseBtnRect), non più un pulsante separato in alto.
  // Ordini pendenti: linea tratteggiata sottile al prezzo di entrata (può trovarsi anche
@@ -14464,6 +14484,7 @@ async function jumpToPendingInSessionOnChart(sessionKey,orderId){
 async function jumpToTradeOnChart(tradeIndex){
  const t=trades[tradeIndex];
  if(!t)return;
+ clearClosedTradeHighlight();
  // Se il trade appartiene a un asset diverso da quello attualmente selezionato, passiamo
  // prima automaticamente a quell'ASSET (caricandone lo storico e il conto proprio, senza
  // toccare quello dell'asset che si lascia — vedi autoLoadAssetLibrary): il Trade Journal è
@@ -14479,10 +14500,16 @@ async function jumpToTradeOnChart(tradeIndex){
  const tradeWasLive=(t.mode==='live'||t.mode==='live_propfirm');
  const currentAsset=$('market')?.value||'';
  if(t.asset && currentAsset!==t.asset){
-   if($('market'))$('market').value=t.asset;
+   applyAssetSelection(t.asset);
    applyInstrument();
-   if(tradeWasLive) await loadLiveHistoryFromCapital(t.asset);
-   else await autoLoadAssetLibrary(t.asset);
+   // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
+   // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
+   // del vecchio (vedi chartFeedSuspended).
+   suspendChartFeed('vai a grafico -> '+t.asset);
+   try{
+     if(tradeWasLive) await loadLiveHistoryFromCapital(t.asset);
+     else await autoLoadAssetLibrary(t.asset);
+   }finally{ resumeChartFeed(); }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${t.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'operazione a grafico.`;return;}
  const openIdx=rowIndexContainingTime(openReferenceTimeForPos(t));
@@ -14527,17 +14554,24 @@ async function jumpToTradeOnChart(tradeIndex){
 async function jumpToPositionOnChart(posId){
  const pos=positions.find(p=>String(p.id)===String(posId));
  if(!pos)return;
+ clearClosedTradeHighlight();
  const currentAsset=$('market')?.value||'';
  if(pos.asset && currentAsset!==pos.asset){
-   if($('market'))$('market').value=pos.asset;
+   applyAssetSelection(pos.asset);
    applyInstrument();
    // BUG RISOLTO: qui si caricava SEMPRE la libreria CSV di Storico (autoLoadAssetLibrary),
    // anche in modalità Live — per questo "Vai a grafico" su una posizione live riportava alla
    // sessione Storico invece di restare sulla candela Live in diretta di quell'asset. In Live
    // va invece ricaricato lo storico Live da Capital.com (stessa funzione già usata dal cambio
    // ASSET manuale in Live), che tra l'altro riattiva anche lo streaming per il nuovo epic.
-   if(liveModeActive) await loadLiveHistoryFromCapital(pos.asset);
-   else await autoLoadAssetLibrary(pos.asset);
+   // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
+   // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
+   // del vecchio (vedi chartFeedSuspended).
+   suspendChartFeed('vai a grafico -> '+pos.asset);
+   try{
+     if(liveModeActive) await loadLiveHistoryFromCapital(pos.asset);
+     else await autoLoadAssetLibrary(pos.asset);
+   }finally{ resumeChartFeed(); }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${pos.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere la posizione a grafico.`;return;}
  focusPosition(pos);
@@ -14556,14 +14590,21 @@ async function jumpToPositionOnChart(posId){
 async function jumpToPendingOnChart(orderId){
  const p=pendingOrders.find(o=>String(o.id)===String(orderId));
  if(!p)return;
+ clearClosedTradeHighlight();
  const currentAsset=$('market')?.value||'';
  if(p.asset && currentAsset!==p.asset){
-   if($('market'))$('market').value=p.asset;
+   applyAssetSelection(p.asset);
    applyInstrument();
    // Stessa correzione di jumpToPositionOnChart: in Live va ricaricato lo storico Live, non
    // quello di Storico.
-   if(liveModeActive) await loadLiveHistoryFromCapital(p.asset);
-   else await autoLoadAssetLibrary(p.asset);
+   // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
+   // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
+   // del vecchio (vedi chartFeedSuspended).
+   suspendChartFeed('vai a grafico -> '+p.asset);
+   try{
+     if(liveModeActive) await loadLiveHistoryFromCapital(p.asset);
+     else await autoLoadAssetLibrary(p.asset);
+   }finally{ resumeChartFeed(); }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${p.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -14588,13 +14629,20 @@ async function jumpToPendingOnChart(orderId){
 async function jumpToMt5PendingOnChart(ticket){
  const o=mt5RealOrders.find(x=>String(x.ticket)===String(ticket));
  if(!o)return;
+ clearClosedTradeHighlight();
  const asset=o.symbol;
  const currentAsset=$('market')?.value||'';
  if(asset && currentAsset!==asset){
-   if($('market'))$('market').value=asset;
+   applyAssetSelection(asset);
    applyInstrument();
-   if(liveModeActive) await loadLiveHistoryFromCapital(asset);
-   else await autoLoadAssetLibrary(asset);
+   // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
+   // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
+   // del vecchio (vedi chartFeedSuspended).
+   suspendChartFeed('vai a grafico -> '+asset);
+   try{
+     if(liveModeActive) await loadLiveHistoryFromCapital(asset);
+     else await autoLoadAssetLibrary(asset);
+   }finally{ resumeChartFeed(); }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -14662,6 +14710,10 @@ function evaluate(){
  // spetta SOLO a lei (criterio deterministico, evita di chiudere la stessa posizione due volte
  // se lo stesso simbolo è aperto in due finestre insieme).
  if(anotherWindowOwnsAssetEvaluation(currentAssetKey))return;
+ // Vedi commento su slTpScanDoneForAsset: in Live non si chiude nulla finche' lo storico di
+ // questo asset non e' stato ricaricato E scansionato, altrimenti il primo tick dopo una
+ // riapertura chiuderebbe al prezzo/orario di adesso una posizione gia' toccata molto prima.
+ if(liveModeActive&&slTpScanDoneForAsset!==currentAssetKey)return;
  const ownPositions=positions.filter(belongsToCurrentAsset).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length)return;
  const r=rows[idx];
@@ -14706,10 +14758,28 @@ function evaluate(){
 // alla PRIMA che tocca SL o TP — con il prezzo E l'orario di quel tocco reale, non con quelli
 // di "adesso". Va richiamata subito dopo ogni ricostruzione completa di `rows` per l'asset a
 // grafico (vedi __loadLiveHistoryFromCapitalImpl), mai durante il normale tick-by-tick.
+// BUG SEGNALATO CON SCREENSHOT: riaprendo l'app, una posizione BTCUSD che aveva toccato lo
+// Stop Loss il 26/09 alle 23:00 e' stata chiusa il 27/09 alle 22:40, cioe' sull'ULTIMA candela.
+// Causa: al ripristino della sessione lo streaming riparte e il primo tick chiama evaluate(),
+// che guarda solo rows[idx] (la candela di ADESSO). Il prezzo e' sopra lo SL, quindi chiude
+// subito — con prezzo e orario di adesso — PRIMA che scanHistoricalSlTpTouches() abbia avuto
+// modo di ricostruire dallo storico il momento del tocco reale.
+// Rimedio: finche' per l'asset a grafico non e' stata fatta almeno una scansione dello storico,
+// evaluate() non chiude nulla in Live. Cosi' si comporta come qualsiasi piattaforma di trading:
+// il riferimento e' la PRIMA candela che ha toccato SL/TP, anche se l'app era chiusa.
+// Il gate vale SOLO in Live (liveModeActive): in Storico si avanza candela per candela e lo scan
+// non viene mai invocato, quindi un gate globale bloccherebbe per sempre gli SL/TP del backtest.
+let slTpScanDoneForAsset=null;
 function scanHistoricalSlTpTouches(){
  if(!currentAssetKey||!rows.length)return;
+ // Marcato SUBITO dopo i guard su asset/righe: da qui in poi lo storico di QUESTO asset e'
+ // stato esaminato, quindi evaluate() puo' tornare a lavorare sulla candela corrente. Va messo
+ // prima dei return anticipati qui sotto (nessuna posizione da controllare, valutazione di
+ // competenza di un'altra finestra PIP): in quei casi non c'e' nulla da ricostruire, ma il
+ // grafico e' comunque pronto — lasciarlo "in attesa" bloccherebbe per sempre le chiusure.
+ slTpScanDoneForAsset=currentAssetKey;
  if(anotherWindowOwnsAssetEvaluation(currentAssetKey))return; // vedi commento identico in evaluate()
- const ownPositions=positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey&&p.mt5Ticket==null);
+ const ownPositions=positions.filter(p=>belongsToCurrentAsset(p)&&p.mt5Ticket==null);
  if(!ownPositions.length)return;
  ownPositions.forEach(pos=>{
    if(!positions.includes(pos))return; // già chiusa da uno scan precedente in questo stesso giro
@@ -15008,6 +15078,29 @@ async function handleCapitalManualAssetSearch(){
 // guarda il grafico): stesse opzioni, stesso valore, sempre sincronizzato col menu originale
 // (mai una lista separata da mantenere a mano — la copiamo sempre da lì, anche quando Capital
 // Search aggiunge un nuovo asset cercato manualmente, vedi sopra).
+// BUG SEGNALATO: da XAUUSD, "Vai a grafico" su un'operazione chiusa BTCUSD caricava i dati di
+// BTCUSD ma il menu ASSET restava su XAUUSD. Le quattro funzioni jump*OnChart impostavano
+// `$('market').value = asset` e basta: se quell'asset non e' fra le <option> del menu (simbolo
+// Capital.com mai aggiunto in questa sessione) assegnare .value non ha alcun effetto e il menu
+// resta sulla selezione precedente, mentre il grafico e' gia' passato al nuovo asset. In piu'
+// non veniva mai aggiornato ne' il secondo menu nell'angolo del grafico (#marketChart) ne'
+// lastValidMarketValue, usato per ripristinare la selezione dopo Watchlist/Cerca.
+// Qui il cambio programmatico passa da un unico punto che tiene tutto allineato.
+function applyAssetSelection(asset){
+ if(!asset)return;
+ const sel=$('market');
+ if(sel){
+   if(!Array.from(sel.options).some(o=>o.value===asset)){
+     const opt=document.createElement('option');
+     opt.value=asset; opt.textContent=asset;
+     sel.insertBefore(opt, sel.querySelector('option[value="capital_search"]')||null);
+   }
+   sel.value=asset;
+ }
+ lastValidMarketValue=asset;
+ syncMarketChartSelect();
+ try{ updateAssetFavToggleBtn(); }catch(e){}
+}
 function syncMarketChartSelect(){
  const src=$('market'), dst=$('marketChart');
  if(!src||!dst)return;
@@ -15036,6 +15129,9 @@ $('market')?.addEventListener('change',()=>{
  }
  lastValidMarketValue=v||'';
  updateAssetFavToggleBtn();
+ // Cambio asset: via l'evidenziazione dell'operazione chiusa dell'asset precedente
+ // (rettangolo, frecce, riquadro durata/lottaggio) — vedi clearClosedTradeHighlight().
+ clearClosedTradeHighlight();
  if(!v || v==='custom') return;
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
@@ -22633,6 +22729,9 @@ function suspendChartFeed(reason){
   try{ disconnectMt5Stream(); }catch(e){}
   lastPrimaryEpicPrice=null; lastPrimaryEpicPriceAsset=null;
   lastSeenCandleBucketStart=null; lastLiveTickAt=0;
+  // Lo storico scansionato era quello dell'asset che si lascia: finche' non si rifa' lo scan sul
+  // nuovo, evaluate() non deve chiudere nulla (vedi slTpScanDoneForAsset).
+  slTpScanDoneForAsset=null;
   console.log(`[ChartFeed] aggiornamento SOSPESO (${chartFeedSuspendReason}): timer e stream fermi, ultimo prezzo scartato.`);
 }
 // Riaccende il timer. Gli stream li riaprono da se' i due caricatori di storico alla fine
