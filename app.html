@@ -1935,7 +1935,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
     <option value="USDJPY">USD/JPY</option>
     <option value="XAUUSD">XAU/USD (Oro)</option>
     <option value="XAGUSD">XAG/USD (Argento)</option>
-    <option value="custom">Personalizzato (manuale)</option>
     <option value="capital_search">🔍 Cerca asset Capital.com…</option>
     <option value="__watchlist__">⭐ Watch list</option>
    </select><button id="assetFavToggleBtn" type="button" class="miniBtn" style="margin-left:4px;font-size:15px;padding:2px 7px" title="Aggiungi questo asset alla watchlist">☆</button></div>
@@ -7387,6 +7386,44 @@ function closeResultLabel(reason,pos){
 // un'altra sessione o direttamente su MT5 deve restare sempre visibile a grafico). Era prima
 // definita SOLO dentro update() (quindi invisibile a draw()): promossa qui a livello globale
 // perché ora serve a entrambe.
+// ===================== APPARTENENZA ASSET / SORGENTE (BUG SEGNALATO CON SCREENSHOT) =====
+// Due bug reali, entrambi nati dallo stesso idioma ripetuto ovunque:
+//   currentAssetKey ? lista.filter(p=>(p.asset||currentAssetKey)===currentAssetKey) : lista
+//
+// 1) "non ho selezionato nessun asset e mi mostra lo stesso una posizione": con currentAssetKey
+//    vuoto (menu su "— Seleziona…") il ramo else restituiva la lista INTERA, quindi a grafico
+//    finivano posizioni/ordini di QUALUNQUE strumento, e la scala verticale veniva stirata per
+//    contenerli (una posizione BTCUSD a 84.000 su un grafico a 4.318).
+// 2) "mi visualizza la posizione XAU/USD nell'asset BTC/USD e viceversa": `p.asset||currentAssetKey`
+//    fa sì che un elemento SENZA campo asset (posizioni/ordini vecchi o arrivati da una fonte che
+//    non lo valorizza) combaci con QUALSIASI asset a schermo, perché il fallback lo fa diventare
+//    per definizione uguale a currentAssetKey.
+//
+// Regole ora rigide: senza un asset selezionato non appartiene NIENTE, e un elemento senza asset
+// non viene più attribuito d'ufficio a quello a schermo. Vale anche per le posizioni MT5 mostrate
+// come riferimento da scollegati: si vedono SOLO sul loro asset, mai su tutti.
+function belongsToCurrentAsset(item){
+ if(!item||!currentAssetKey)return false;
+ return String(item.asset||'')===String(currentAssetKey);
+}
+// Sorgente dati: collegati a un conto MT5 il grafico mostra SOLO le posizioni di quel conto;
+// su Capital.com mostra le simulate PIÙ quelle MT5 in sola lettura (riferimento, vedi
+// isMt5ReferenceOnly). Richiesto esplicitamente: "se sono collegato a MT5 mi farà vedere a
+// grafico soltanto le posizioni aperte e chiuse di MT5; se sono collegato con Capital.com
+// soltanto quelle di Capital.com". Prima il filtro era applicato ai soli trade CHIUSI
+// (tradeBelongsToCurrentView): le posizioni APERTE sfuggivano, ed era il motivo per cui con MT5
+// collegato restava a grafico una posizione aperta su Capital.com.
+function positionBelongsToCurrentView(pos){
+ if(!pos)return false;
+ let conn=false; try{ conn=!!mt5Connected; }catch(e){}
+ if(conn)return pos.mt5Ticket!=null;
+ return true;
+}
+// Comodo: entrambe le condizioni insieme, usato da tutto il disegno del grafico.
+function drawableOnCurrentChart(item){
+ return belongsToCurrentAsset(item)&&positionBelongsToCurrentView(item);
+}
+
 function collectAcrossSessions(field){
  const out=[];
  ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
@@ -7489,7 +7526,12 @@ function update(){
  // riferimento e nessun P/L (a schermo si sa che è "in pausa", non un dato sbagliato).
  const price=currentPrice();
  const SESSION_LABELS_SHORT={backtest:'📼 Storico',live:'🔴 Live',backtest_propfirm:'🛡️📼 Storico PF',live_propfirm:'🛡️🔴 Live PF'};
- const allPosRows=collectAcrossSessions('positions');
+ // Le righe della sessione LIVE rispettano la sorgente dati in uso (vedi
+ // positionBelongsToCurrentView): con un conto MT5 collegato non deve piu' comparire qui una
+ // posizione aperta su Capital.com, come segnalato. Le sessioni Storico/Prop Firm restano
+ // elencate come prima: sono conti separati, la colonna "Sessione" serve proprio a distinguerli.
+ const allPosRows=collectAcrossSessions('positions').filter(({item,sessionKey})=>
+   (sessionKey==='live'||sessionKey==='live_propfirm')?positionBelongsToCurrentView(item):true);
  // Tabella dedicata "🖥️ Posizioni MT5 (conto reale collegato)": mostra SEMPRE tutte le
  // posizioni realmente aperte sul conto MT5 collegato ora (mt5RealPositions, letta dal bridge
  // ogni 2s), indipendentemente da quale delle 4 sessioni simulate (Storico/Live/Storico
@@ -7912,8 +7954,8 @@ function collectTradeLevelPrices(data){
  add(num($('tpPending')?.value));
  // Solo ordini/posizioni DELL'ASSET a grafico ora: quelli di altri asset hanno prezzi su una
  // scala completamente diversa e non devono influenzare la scala verticale di QUESTO grafico.
- const ownPendingForScale=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders;
- const ownPositionsForScale=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+ const ownPendingForScale=pendingOrders.filter(drawableOnCurrentChart);
+ const ownPositionsForScale=positions.filter(drawableOnCurrentChart);
  ownPendingForScale.forEach(p=>{ add(p.entry); add(p.sl); add(p.tp); });
  ownPositionsForScale.forEach(p=>{ add(p.sl); add(p.tp); });
  // Solo i trade chiusi DELL'ASSET CORRENTE: il Trade Journal è condiviso fra tutti gli asset,
@@ -7921,7 +7963,7 @@ function collectTradeLevelPrices(data){
  // EUR/USD) non deve mai influenzare la scala verticale del grafico attuale.
  // Filtro per MODALITA'+SORGENTE oltre che per asset (vedi tradeBelongsToCurrentView): un trade
  // Live/MT5 non deve piu' allargare la scala verticale mentre si guarda lo Storico o Capital.com.
- const closedTradesForAsset=trades.filter(t=>tradeBelongsToCurrentView(t)&&(!currentAssetKey||(t.asset||currentAssetKey)===currentAssetKey));
+ const closedTradesForAsset=trades.filter(t=>tradeBelongsToCurrentView(t)&&belongsToCurrentAsset(t));
  // Trade GIÀ CHIUSI: li includiamo SOLO se apertura o chiusura ricadono nell'intervallo di
  // candele passato in `data` (di norma il breve range recente usato per il fit verticale).
  // Questo è IL LIMITE FORZATO richiesto: un trade vecchio, lontano nel tempo rispetto a dove
@@ -10203,7 +10245,7 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
  // Oltre all'asset, filtra per MODALITA'+SORGENTE (vedi tradeBelongsToCurrentView): in Storico
  // nessun marker di operazioni Live, in Live su Capital.com nessun marker di operazioni MT5 e
  // viceversa — richiesto esplicitamente.
- const assetTrades=trades.filter(t=>tradeBelongsToCurrentView(t)&&(!currentAssetKey||(t.asset||currentAssetKey)===currentAssetKey));
+ const assetTrades=trades.filter(t=>tradeBelongsToCurrentView(t)&&belongsToCurrentAsset(t));
  if(!assetTrades.length)return;
  // Converte un indice ASSOLUTO nell'array `rows` in coordinata x sul canvas. NB: la x()
  // usata altrove in draw() si aspetta invece un indice LOCALE relativo a dataStart — usare
@@ -11561,7 +11603,7 @@ function draw(){
  // Disegnate SOLO le posizioni DELL'ASSET a grafico ora: quelle di altri asset hanno prezzi
  // su una scala diversa e non avrebbero senso su QUESTO grafico.
  if(positionsVisible)
- (currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions).forEach(pos=>{
+ positions.filter(drawableOnCurrentChart).forEach(pos=>{
    const isFocused=pos===active;
    // Calcolato una volta sola per candela di apertura, usato sia dalla freccia sia dalla
    // casella Target/Stop qui sotto (che deve restare disponibile anche quando l'entrata è
@@ -11697,7 +11739,7 @@ function draw(){
    sl:o.sl!=null?Number(o.sl):null,tp:o.tp!=null?Number(o.tp):null,lots:Number(o.volume)||0,mt5Ticket:o.ticket
  }));
  const pendingForChart=allPendingForChart.concat(untrackedMt5OrdersForChart);
- (currentAssetKey?pendingForChart.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingForChart).forEach(p=>{
+ pendingForChart.filter(drawableOnCurrentChart).forEach(p=>{
    // L'ordine scelto con "📍 Vai a grafico" (highlightedPendingOrderId) ottiene sotto la sua
    // casella Target/Stop in evidenza (stessa identica resa delle posizioni aperte): quando è
    // così E ha almeno uno tra SL/TP, le righe tratteggiate "generiche" di SL/TP qui sotto
@@ -11921,7 +11963,7 @@ function draw(){
  // drawAxisGuard() perché quella ridisegna lo sfondo dell'intera striscia della scala prezzi,
  // che coprirebbe qualunque etichetta disegnata prima.
  if(positionsVisible){
-   const ownPositionsAxis=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   const ownPositionsAxis=positions.filter(drawableOnCurrentChart);
    ownPositionsAxis.forEach(pos=>{
      const entryColor=pos.side==='BUY'?'#2fbf71':'#e05252';
      const entryFg=pos.side==='BUY'?'#04170d':'#ffffff';
@@ -12280,7 +12322,7 @@ function tradeLevelHit(clientX,clientY,activate){
  // agganciare/spostare SL/TP "alla cieca" nel punto esatto dove sarebbe stata la linea, anche a
  // schermo vuoto. Si riattiva da solo appena si preme di nuovo "mostra posizioni".
  if(positionsVisible){
-   const ownPositionsForDrag=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   const ownPositionsForDrag=positions.filter(drawableOnCurrentChart);
    for(const pos of ownPositionsForDrag){
      const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
      if(openIdx==null || !insideZoneBox(openIdx,'pos:'+pos.id,idx))continue;
@@ -12331,7 +12373,7 @@ function tradeLevelHit(clientX,clientY,activate){
  // della loro etichetta (l'entrata a sinistra, SL/TP a destra — stessa posizione in cui
  // vengono disegnate in draw()), non su tutta la larghezza del grafico. Solo quelli
  // DELL'ASSET a grafico ora sono disegnati/trascinabili qui (vedi draw()).
- const ownPendingForDrag=currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders;
+ const ownPendingForDrag=pendingOrders.filter(drawableOnCurrentChart);
  for(const p of ownPendingForDrag){
    if(px<=g.pad.l+160 && Math.abs(py-g.y(p.entry))<=tolerance)return `pending:${p.id}:entry`;
    const rightZoneX=(g.rect.width-g.pad.r)-140;
@@ -13706,7 +13748,7 @@ function currentZoneBoxSpecs(){
  if(positionsVisible){
    // Solo le posizioni DELL'ASSET a grafico ora: quelle di un altro asset hanno prezzi su una
    // scala diversa e non vanno disegnate/trascinate su QUESTO grafico.
-   const ownPositions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   const ownPositions=positions.filter(drawableOnCurrentChart);
    ownPositions.forEach(pos=>{
      if(pos.sl!=null||pos.tp!=null){
        const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
@@ -13852,7 +13894,7 @@ function floatingPL(){
  // posizione reale (mt5Ticket) fa eccezione: il suo P/L vero arriva sempre dal broker, non da
  // rows[idx], quindi resta corretto anche per asset diversi da quello a grafico ora.
  const price=currentPrice();
- const ownPositions=currentAssetKey?positions.filter(p=>p.mt5Ticket!=null||(p.asset||currentAssetKey)===currentAssetKey):positions;
+ const ownPositions=positions.filter(p=>p.mt5Ticket!=null||belongsToCurrentAsset(p));
  return ownPositions.reduce((s,p)=>{
    if(p.mt5Ticket!=null){
      const real=mt5RealProfit(p.mt5Ticket);
@@ -14248,7 +14290,7 @@ function closeTrade(reason,price,pos,realLevels,silent){
  // La nuova posizione attiva (per i controlli SL/TP) deve restare sull'ASSET a grafico ora,
  // altrimenti le caselle mostrerebbero prezzi su una scala diversa da quella visibile.
  if(active===pos){
-   const ownRemaining=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+   const ownRemaining=positions.filter(belongsToCurrentAsset);
    active=ownRemaining.length?ownRemaining[ownRemaining.length-1]:null;
  }
  tradeSLLine=null; tradeTPLine=null;
@@ -14322,7 +14364,7 @@ function closeAllPositions(reason){
  // Si possono chiudere subito (con un prezzo corretto) solo le posizioni DELL'ASSET a grafico
  // ora: per le posizioni di altri asset non abbiamo un prezzo live valido in questo momento,
  // quindi restano aperte finché non si passa sul loro grafico.
- const ownPositions=currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions;
+ const ownPositions=positions.filter(belongsToCurrentAsset);
  // Stessa correzione di floatingPL()/checkMarginCall(): in Live il prezzo dev'essere quello
  // REALMENTE verificato via tick (mai rows[idx].close, che durante l'avvio può ancora
  // appartenere a un CSV Storico di tutt'altro asset).
@@ -14583,7 +14625,7 @@ function checkMarginCall(){
  // Le posizioni REALI (mt5Ticket) non entrano MAI nel margin call simulato: il loro margine
  // vero è quello del conto MT5 (marginUsed:0 qui), e comunque solo MT5/il broker decide se e
  // quando chiuderle per margine insufficiente — mai questa funzione.
- const ownPositions=(currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions).filter(p=>p.mt5Ticket==null);
+ const ownPositions=positions.filter(belongsToCurrentAsset).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length)return;
  let guard=0;
  while(freeMargin()<0 && ownPositions.length && guard<50){
@@ -14620,7 +14662,7 @@ function evaluate(){
  // spetta SOLO a lei (criterio deterministico, evita di chiudere la stessa posizione due volte
  // se lo stesso simbolo è aperto in due finestre insieme).
  if(anotherWindowOwnsAssetEvaluation(currentAssetKey))return;
- const ownPositions=(currentAssetKey?positions.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):positions).filter(p=>p.mt5Ticket==null);
+ const ownPositions=positions.filter(belongsToCurrentAsset).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length)return;
  const r=rows[idx];
  const rowTime=parseDateTime(r.date);
@@ -14747,7 +14789,7 @@ function checkPendingOrders(){
  // Esclusi gli ordini pendenti REALI (mt5Ticket): quelli scattano da soli sul conto MT5 quando
  // il prezzo VERO li raggiunge, e la loro attivazione viene rilevata dal polling
  // (fetchMt5Orders) — mai da questa valutazione locale sulla candela simulata.
- const ownPending=(currentAssetKey?pendingOrders.filter(p=>(p.asset||currentAssetKey)===currentAssetKey):pendingOrders).filter(p=>p.mt5Ticket==null);
+ const ownPending=pendingOrders.filter(belongsToCurrentAsset).filter(p=>p.mt5Ticket==null);
  const toActivate=ownPending.filter(p=>r.low<=p.entry && r.high>=p.entry);
  if(!toActivate.length)return;
  pendingOrders=pendingOrders.filter(p=>!toActivate.includes(p));
