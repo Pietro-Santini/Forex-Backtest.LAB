@@ -1773,16 +1773,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                <label style="flex:none;margin-left:12px"><input type="checkbox" id="footprintSumBid"> Bid</label>
                <label style="flex:none;margin-left:12px"><input type="checkbox" id="footprintSumCumDelta" checked> &Delta; cumulato</label>
              </div>
-             <!-- PASSO 4 (rif. DeepChart, "volumi alla sinistra"): profilo dei volumi per livello di
-                  prezzo sul bordo sinistro, sempre agganciato alla finestra visibile. L'order book
-                  laterale sono le colonne COB/SVP, che si accendono nella sezione Heatmap qui sotto. -->
+             <!-- PASSO 4, corretto su indicazione dell'utente: l'istogramma dei volumi per livello sta
+                  a fianco di OGNI SINGOLA candela, non sul bordo sinistro del grafico (dove aggregava
+                  tutte le candele in vista, che &egrave; una cosa diversa). L'order book laterale sono le
+                  colonne COB/SVP, che si accendono nella sezione Heatmap qui sotto. -->
              <div class="fbOptRow" style="margin-top:10px;flex-wrap:wrap;row-gap:6px">
-               <label style="flex:1 1 100%;min-width:150px;color:#9ca3af;font-size:10px;font-weight:700;letter-spacing:.1em">VOLUMI A SINISTRA</label>
-               <label style="flex:none"><input type="checkbox" id="footprintProfileEnabled" checked> Profilo dei volumi sul bordo sinistro</label>
-               <span style="display:inline-flex;align-items:center;gap:5px;margin-left:14px">Larghezza <input id="footprintProfileWidthPct" type="number" min="4" max="40" step="1" value="14" style="width:55px" title="Larghezza massima delle barre, in percentuale della larghezza del grafico.">%</span>
+               <label style="flex:1 1 100%;min-width:150px;color:#9ca3af;font-size:10px;font-weight:700;letter-spacing:.1em">VOLUMI PER LIVELLO, A FIANCO DELLA CANDELA</label>
+               <label style="flex:none"><input type="checkbox" id="footprintProfileEnabled" checked> Istogramma a fianco di ogni candela</label>
+               <span style="display:inline-flex;align-items:center;gap:5px;margin-left:14px">Larghezza <input id="footprintProfileWidthPct" type="number" min="8" max="45" step="1" value="22" style="width:55px" title="Larghezza dell'istogramma, in percentuale della larghezza della colonna di quella candela. Il resto della colonna resta alle caselline bid/ask.">%</span>
                <label style="flex:none;margin-left:14px"><input type="checkbox" id="footprintProfileVpoc" checked> Linea VPOC</label>
              </div>
-             <p class="hint" style="margin-top:2px">Quanto si &egrave; scambiato a ciascun livello di prezzo nelle candele <strong>attualmente in vista</strong> (non nell'intera sessione): la parte rossa &egrave; venduta, quella verde comprata. <strong>VPOC</strong> = il livello pi&ugrave; scambiato di tutta la vista, con una linea che attraversa il grafico. Diverso dal profilo volumetrico che puoi disegnare a mano: quello lo ancori dove vuoi, questo resta sul bordo e segue sempre la finestra visibile.</p>
+             <p class="hint" style="margin-top:2px">Quanto si &egrave; scambiato a ciascun livello di prezzo <strong>in quella candela</strong>: barra rossa la parte venduta, verde la comprata, lunghezza in proporzione al livello pi&ugrave; scambiato della candela stessa. Si infila fra la candelina e le caselline bid/ask. <strong>Linea VPOC</strong>: indipendente dall'istogramma &mdash; &egrave; il livello pi&ugrave; scambiato di <em>tutta la finestra visibile</em>, che una singola candela non pu&ograve; dire.</p>
              <!-- PASSO 5: i colori del footprint, prima costanti scritte dentro la funzione di
                   disegno. I colori di absorption/rejection non sono qui: hanno gi&agrave; i loro campi
                   pi&ugrave; sotto, in "Absorption / Rejection". -->
@@ -10767,7 +10768,7 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
  const step=fp.step;
  const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>b-a); // alto -> basso
  if(!levels.length)return;
- let maxCount=1, maxDelta=1, maxVol=1, pocLevel=null, pocVol=-1;
+ let maxCount=1, maxDelta=1, maxVol=1, pocLevel=null, pocVol=-1, maxAggrTot=1;
  levels.forEach(lv=>{
    const c=fp.rows[lv];
    maxCount=Math.max(maxCount,c.buy,c.sell);
@@ -10775,6 +10776,10 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
    const tot=c.buy+c.sell;
    maxVol=Math.max(maxVol,tot);
    if(tot>pocVol){ pocVol=tot; pocLevel=lv; }
+   // Per l'istogramma a fianco si usa l'aggressore (askVol/bidVol, vedi fpCellAggr): con una fonte
+   // che non pubblica i trade coincide con buy/sell, con una che li pubblica e' il dato vero.
+   const a=fpCellAggr(c);
+   maxAggrTot=Math.max(maxAggrTot,a.ask+a.bid);
  });
  const half=bw/2;
  // La candela si prende una fetta stretta a sinistra; le caselline occupano tutto il resto. Sotto
@@ -10782,7 +10787,16 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
  // il footprint leggibile che una candelina simbolica.
  const wantCandle=footprintShowCandleNow()&&bw>=16;
  const candW=wantCandle?Math.max(3,Math.min(9,bw*0.16)):0;
- const cellL=xx-half+(candW?candW+1:0);
+ // CORREZIONE ESPLICITA DELL'UTENTE: "voglio quanto si e' scambiato a ciascun livello di OGNI
+ // SINGOLA candela, quindi quell'istogramma deve stare a fianco della candela" - la prima versione
+ // lo metteva sul bordo sinistro del grafico, aggregando tutte le candele in vista: una cosa
+ // diversa, e non quella chiesta. Ora ogni candela ha il suo, subito a destra della candelina:
+ // barra orizzontale per livello, lunga in proporzione a quanto si e' scambiato LI' in QUELLA
+ // candela, divisa in venduto e comprato. Le caselline bid/ask iniziano dopo.
+ const wantHist=footprintProfileEnabledNow()&&bw>=20;
+ const histW=wantHist?Math.max(4,bw*footprintProfileWidthPctNow()/100):0;
+ const histL=xx-half+(candW?candW+1:0);
+ const cellL=histL+(histW?histW+1:0);
  const cellR=xx+half;
  const cellW=Math.max(2,cellR-cellL);
  const mid=cellL+cellW/2;
@@ -10879,6 +10893,21 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
        ctx.fillStyle=lineColor;
        if(c.sell>0){ ctx.textAlign='right'; ctx.fillText(fmtNum(c.sell),mid-2,yMid); }
        if(c.buy>0){ ctx.textAlign='left'; ctx.fillText(fmtNum(c.buy),mid+3,yMid); }
+     }
+   }
+   // ---- istogramma dei volumi a fianco della candela, per questo livello
+   if(histW>0){
+     const a=fpCellAggr(c);
+     const tot=a.ask+a.bid;
+     if(tot>0){
+       const len=Math.max(1,histW*(tot/maxAggrTot));
+       const sellLen=len*(a.bid/tot);
+       // Venduto sempre per primo (attaccato alla candela) e comprato dopo: mantenendo lo stesso
+       // ordine su ogni riga, la lunghezza dei due segmenti e' confrontabile da un livello all'altro.
+       ctx.fillStyle='rgba('+SELL+','+barA+')';
+       ctx.fillRect(histL,yTop,Math.max(1,sellLen),barH);
+       ctx.fillStyle='rgba('+BUY+','+barA+')';
+       ctx.fillRect(histL+sellLen,yTop,Math.max(1,len-sellLen),barH);
      }
    }
    // ---- 3) POC: la riga piu' scambiata della candela
@@ -11447,9 +11476,8 @@ function draw(){
    });
    ctx.restore();
  }
- // PASSO 4: il profilo dei volumi sul bordo sinistro, disegnato PRIMA delle candele cosi' le
- // candele gli restano sopra e non viceversa.
- try{ drawFootprintVolumeProfile(ctx,w,h,pad,data,y,lo,hi,cw); }catch(e){ console.warn('Profilo volumi',e); }
+ // La linea VPOC della finestra visibile, prima delle candele cosi' non le attraversa sopra.
+ try{ drawFootprintVpocLine(ctx,w,h,pad,data,y,lo,hi); }catch(e){ console.warn('VPOC',e); }
  data.forEach((r,i)=>{
    let xx=x(i), up=r.close>=r.open;
    const fp=_footprintEntries?_footprintEntries[i].fp:null;
@@ -17548,6 +17576,18 @@ function handleTwoFingerPan(){
  if(changed)draw();
 }
 
+// RICHIESTO ESPLICITAMENTE: "quello che deve effettuare lo zoom e' soltanto la scala dei prezzi,
+// quindi COB e SVP no". Le colonne sono una lettura, non un'area interattiva: qui si dichiara la
+// loro fascia una volta sola e la si esclude sia dallo zoom verticale sia dal pan, invece di
+// affidarsi al fatto che la geometria non le faccia capitare sotto la striscia dell'asse.
+function isOnCobSvpBand(clientX){
+ try{
+   if(!cobSvpActiveNow())return false;
+   const rect=chartEl.getBoundingClientRect();
+   const rel=clientX-rect.left;
+   return rel>=(rect.width-chartPadR(rect.width))&&rel<priceAxisX(rect.width);
+ }catch(e){ return false; }
+}
 function isOnPriceAxis(clientX){
  const rect=chartEl.getBoundingClientRect();
  // La scala prezzi ora e' la striscia PIU' ESTERNA (vedi PRICE_AXIS_W/priceAxisX): coincide
@@ -17727,6 +17767,7 @@ chartEl.addEventListener('pointerdown',e=>{
  // --- Zoom verticale stile TradingView: trascina sulla scala prezzi (bordo destro).
  // Funziona anche da tablet/touch con un dito solo: qui blocchiamo lo scroll pagina,
  // ovunque altro nel grafico invece la pagina deve poter scorrere normalmente. ---
+ if(isOnCobSvpBand(e.clientX))return; // colonne COB/SVP: nessuno zoom, nessun pan, nessun disegno
  if(!placingTradeLevel && drawTool==='cursor' && isOnPriceAxis(e.clientX) && !tradeLevelHit(e.clientX,e.clientY)){
    e.preventDefault();
    if(e.pointerType==='touch')setChartTouchAction(true);
@@ -18474,6 +18515,7 @@ chartWheelTarget.addEventListener('wheel',e=>{
  // grafico, e solo DOPO si controlla se ci sono davvero dati su cui applicare lo zoom.
  e.preventDefault();
  if(!rows.length)return; // nessun dato caricato: evento comunque bloccato qui sopra, ma niente zoom da applicare
+ if(isOnCobSvpBand(e.clientX))return; // sopra le colonne COB/SVP la rotellina non zooma nulla
  if(e.shiftKey){
    // SHIFT + rotellina: zoom verticale (scala prezzi), illimitato.
    e.preventDefault();
@@ -22968,91 +23010,54 @@ function drawFootprintSummary(ctx,w,h,pad,dataArr,xFn,bw,lineColor,gridStrong,mu
  ctx.textAlign='left';
  ctx.restore();
 }
-// ===================== PASSO 4: VOLUMI A SINISTRA =====================
-// RICHIESTO ESPLICITAMENTE (rif. DeepChart): "istogramma laterale order book, volumi alla
-// sinistra". L'order book laterale c'era gia' - sono le colonne COB/SVP a destra della scala
-// prezzi, vedi drawCobSvpColumns() qui sotto, alimentate dal DOM reale (MT5 market_book_get o
-// Binance). Mancava il profilo dei volumi sul bordo SINISTRO: quanto si e' scambiato a ciascun
-// livello di prezzo nelle candele attualmente in vista, non nell'intera sessione.
-// Differenza dal profilo volumetrico che si puo' gia' disegnare a mano (#volProfileMode): quello
-// e' un disegno che l'utente ancora dove vuole; questo e' fisso sul bordo e segue sempre la
-// finestra visibile, come in DeepChart.
-// Ogni barra e' divisa in due: la parte venduta e quella comprata, con gli stessi colori delle
-// caselline. VPOC = il livello piu' scambiato di tutta la vista, con una linea che attraversa il
-// grafico: e' il riferimento che si cerca a colpo d'occhio.
+// ===================== PASSO 4 (CORRETTO): VOLUMI PER LIVELLO, A FIANCO DELLA CANDELA ==========
+// La prima versione disegnava un profilo sul bordo SINISTRO del grafico, che aggregava tutte le
+// candele in vista. Non era quel che serviva: la richiesta e' "quanto si e' scambiato a ciascun
+// livello di OGNI SINGOLA candela", quindi l'istogramma sta a fianco di ciascuna candela - vedi
+// histL/histW in drawFootprintCandle(). Qui resta solo la linea VPOC, che non e' legata al bordo:
+// e' il livello piu' scambiato di tutta la finestra visibile, un riferimento che si cerca a colpo
+// d'occhio e che una singola candela non puo' dare.
+// L'order book laterale, invece, sono le colonne COB/SVP qui sotto, alimentate dal DOM reale.
 function footprintProfileEnabledNow(){ const el=$('footprintProfileEnabled'); return el?!!el.checked:true; }
-function footprintProfileWidthPctNow(){ const v=Number($('footprintProfileWidthPct')?.value); return (Number.isFinite(v)&&v>=4)?Math.min(40,v):14; }
+function footprintProfileWidthPctNow(){ const v=Number($('footprintProfileWidthPct')?.value); return (Number.isFinite(v)&&v>=8)?Math.min(45,v):22; }
 function footprintProfileVpocNow(){ const el=$('footprintProfileVpoc'); return el?!!el.checked:true; }
-function drawFootprintVolumeProfile(ctx,w,h,pad,dataArr,yFn,lo,hi,cwPlot){
- if(!footprintEnabledNow()||!footprintProfileEnabledNow())return;
+function drawFootprintVpocLine(ctx,w,h,pad,dataArr,yFn,lo,hi){
+ if(!footprintEnabledNow()||!footprintProfileVpocNow())return;
  if(!dataArr||!dataArr.length)return;
  let step=footprintStepForAsset(currentAssetKey);
  if(!(step>0))return;
- const ch=h-pad.t-pad.b;
- // Le righe del profilo non sono quelle del footprint: con lo zoom indietro sarebbero alte meno di
- // un pixel e diventerebbero una macchia. Si accorpano finche' ogni riga non e' alta almeno 2 px,
- // esattamente come fanno gia' le colonne COB/SVP.
- {
-   const pxPer=step/(hi-lo)*ch;
-   if(pxPer>0&&pxPer<2)step=step*Math.ceil(2/pxPer);
- }
- const levels=new Map(); // bin -> {ask,bid}
- let maxTot=0, vpocBin=null, vpocTot=-1;
+ const levels=new Map(); // bin -> volume totale
  for(let i=0;i<dataArr.length;i++){
    const t=parseDateTime(dataArr[i].date);
    if(!Number.isFinite(t))continue;
    const bucket=footprintByBucket[footprintBucketStart(t)];
    if(!bucket||!bucket.rows)continue;
    for(const k in bucket.rows){
-     const c=bucket.rows[k];
-     const ask=Number.isFinite(c.askVol)?c.askVol:(c.buy||0);
-     const bid=Number.isFinite(c.bidVol)?c.bidVol:(c.sell||0);
-     if(!(ask>0||bid>0))continue;
+     const a=fpCellAggr(bucket.rows[k]);
+     const tot=a.ask+a.bid;
+     if(!(tot>0))continue;
      const b=Math.round(Number(k)/step);
-     let e=levels.get(b);
-     if(!e){ e={ask:0,bid:0}; levels.set(b,e); }
-     e.ask+=ask; e.bid+=bid;
+     levels.set(b,(levels.get(b)||0)+tot);
    }
  }
  if(!levels.size)return;
- levels.forEach((e,b)=>{ const tot=e.ask+e.bid; if(tot>maxTot)maxTot=tot; if(tot>vpocTot){ vpocTot=tot; vpocBin=b; } });
- if(!(maxTot>0))return;
- const maxLen=Math.max(20,cwPlot*footprintProfileWidthPctNow()/100);
- const BUY=fpColBuyRgb(), SELL=fpColSellRgb(), POC=fpColPocRgb();
- const barA=fpBarOpacityNow();
+ let vpocBin=null, vpocTot=-1;
+ levels.forEach((tot,b)=>{ if(tot>vpocTot){ vpocTot=tot; vpocBin=b; } });
+ if(vpocBin==null)return;
+ const yv=yFn(vpocBin*step);
+ if(!(yv>=pad.t&&yv<=h-pad.b))return;
+ const POC=fpColPocRgb();
  ctx.save();
- ctx.beginPath(); ctx.rect(pad.l,pad.t,Math.max(1,maxLen+2),ch); ctx.clip();
- levels.forEach((e,b)=>{
-   const yTop=yFn((b+0.5)*step), yBot=yFn((b-0.5)*step);
-   const rowH=Math.max(1,yBot-yTop-1);
-   if(yBot<pad.t||yTop>h-pad.b)return;
-   const tot=e.ask+e.bid;
-   const len=Math.max(1,maxLen*(tot/maxTot));
-   const sellLen=len*(e.bid/tot);
-   // Venduto prima (attaccato al bordo) e comprato dopo: sempre lo stesso ordine, altrimenti la
-   // lunghezza dei due segmenti non sarebbe confrontabile da una riga all'altra.
-   ctx.fillStyle='rgba('+SELL+','+barA+')';
-   ctx.fillRect(pad.l,yTop,Math.max(1,sellLen),rowH);
-   ctx.fillStyle='rgba('+BUY+','+barA+')';
-   ctx.fillRect(pad.l+sellLen,yTop,Math.max(1,len-sellLen),rowH);
- });
+ ctx.strokeStyle='rgba('+POC+',0.75)';
+ ctx.lineWidth=1.2;
+ ctx.setLineDash([5,4]);
+ ctx.beginPath(); ctx.moveTo(pad.l,Math.round(yv)+0.5); ctx.lineTo(w-pad.r,Math.round(yv)+0.5); ctx.stroke();
+ ctx.setLineDash([]);
+ ctx.font=scaledFont('bold 9px Arial'); ctx.textAlign='left'; ctx.textBaseline='bottom';
+ ctx.fillStyle='rgba('+POC+',0.95)';
+ ctx.fillText('VPOC',pad.l+3,yv-2);
+ ctx.textBaseline='alphabetic'; ctx.textAlign='left';
  ctx.restore();
- if(footprintProfileVpocNow()&&vpocBin!=null){
-   const yv=yFn(vpocBin*step);
-   if(yv>=pad.t&&yv<=h-pad.b){
-     ctx.save();
-     ctx.strokeStyle='rgba('+POC+',0.75)';
-     ctx.lineWidth=1.2;
-     ctx.setLineDash([5,4]);
-     ctx.beginPath(); ctx.moveTo(pad.l,Math.round(yv)+0.5); ctx.lineTo(w-pad.r,Math.round(yv)+0.5); ctx.stroke();
-     ctx.setLineDash([]);
-     ctx.font=scaledFont('bold 9px Arial'); ctx.textAlign='left'; ctx.textBaseline='bottom';
-     ctx.fillStyle='rgba('+POC+',0.95)';
-     ctx.fillText('VPOC',pad.l+3,yv-2);
-     ctx.textBaseline='alphabetic';
-     ctx.restore();
-   }
- }
 }
 function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
  const chartBg=theme.bg, gridColorStrong=theme.grid, lineSecondary=theme.text;
