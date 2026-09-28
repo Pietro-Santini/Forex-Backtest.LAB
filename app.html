@@ -6061,6 +6061,23 @@ async function withLoadingOverlay(text,fn){
  try{ return await fn(); }
  finally{ hideLoadingOverlay(); }
 }
+// Variante che chiude il riquadro appena il lavoro e' UTILMENTE finito, senza aspettare la coda.
+// CORREZIONE ESPLICITA DELL'UTENTE: "il grafico sotto e' gia' completo e aggiorna, ma il popup
+// resta li' trenta secondi". Era vero: il riquadro viveva quanto l'intera promessa, e in coda
+// c'erano le sottoscrizioni degli asset in background - roba che non riguarda cio' che si sta
+// guardando. Ora `pronto()` decide quando togliere il velo; il resto prosegue dietro le quinte.
+// Il tetto massimo e' una rete di sicurezza: se `pronto()` non diventasse mai vero per un motivo
+// imprevisto, meglio un riquadro che sparisce da solo che uno che resta per sempre.
+async function withLoadingOverlayUntilReady(text,fn,pronto,tettoMs){
+ showLoadingOverlay(text);
+ await nextPaint();
+ let chiuso=false;
+ const chiudi=()=>{ if(chiuso)return; chiuso=true; try{ hideLoadingOverlay(); }catch(e){} };
+ const vigile=setInterval(()=>{ try{ if(pronto&&pronto())chiudi(); }catch(e){} },150);
+ const tetto=setTimeout(chiudi,Math.max(1000,Number(tettoMs)||10000));
+ try{ return await fn(); }
+ finally{ clearInterval(vigile); clearTimeout(tetto); chiudi(); }
+}
 // ---- Popup di conferma "carino" (sostituisce i confirm() nativi del browser, bruttini e non
 // coerenti con lo stile dell'app) — riusa esattamente lo stesso schema visivo delle altre
 // finestre modali (fbModalOverlay/fbModalBox/fbModalHeader/fbModalClose + liveLoginFooter/
@@ -22723,6 +22740,44 @@ let capitalEpicCache={};
 // Capital.com identifica gli strumenti con un "epic" (es. "GOLD" per l'oro) che non sempre
 // coincide col nostro codice ASSET (es. "XAUUSD"): lo cerchiamo con l'endpoint /markets e
 // teniamo il risultato in cache per non rifare la ricerca ogni volta.
+// L'epic e' l'identificatore Capital.com di uno strumento: stabile nel tempo, non cambia da un
+// giorno all'altro. Tenerlo SOLO in memoria significa ributtarlo via ad ogni ricarica di pagina e
+// doverlo richiedere da capo per OGNI asset - ed e' la ragione per cui la riconnessione dopo un
+// refresh durava decine di secondi. Qui la cache diventa persistente.
+// Chiave separata fra demo e reale: gli ambienti sono due installazioni distinte e non c'e' motivo
+// di dare per scontato che un identificatore valga su entrambi.
+const CAPITAL_EPIC_CACHE_KEY='fbCapitalEpicCache';
+const CAPITAL_EPIC_CACHE_MAX_AGE=30*24*3600*1000; // un mese: oltre, meglio richiederlo di nuovo
+function capitalEpicCacheEnv(){ try{ return liveCredsDraft?.demo?'demo':'live'; }catch(e){ return 'live'; } }
+function loadCapitalEpicCache(){
+ try{
+   const raw=JSON.parse(localStorage.getItem(CAPITAL_EPIC_CACHE_KEY)||'null');
+   if(!raw||raw.env!==capitalEpicCacheEnv())return;
+   if(!(Date.now()-Number(raw.at||0)<CAPITAL_EPIC_CACHE_MAX_AGE))return;
+   for(const a in (raw.map||{})){
+     const e=raw.map[a];
+     if(typeof e!=='string'||!e)continue;
+     capitalEpicCache[a]=e;
+     epicToAsset[e]=a;
+   }
+ }catch(e){}
+}
+let _capEpicSaveT=null;
+function saveCapitalEpicCache(){
+ clearTimeout(_capEpicSaveT);
+ _capEpicSaveT=setTimeout(()=>{
+   try{
+     localStorage.setItem(CAPITAL_EPIC_CACHE_KEY,JSON.stringify({
+       env:capitalEpicCacheEnv(),at:Date.now(),map:capitalEpicCache
+     }));
+   }catch(e){}
+ },500);
+}
+// Un epic che non funziona piu' (strumento rinominato o ritirato) non deve restare in cache per
+// un mese: chi se ne accorge lo butta via da qui e al giro dopo viene richiesto di nuovo.
+function forgetCapitalEpic(asset){
+ try{ delete capitalEpicCache[asset]; saveCapitalEpicCache(); }catch(e){}
+}
 async function resolveCapitalEpic(asset){
  if(capitalEpicCache[asset])return capitalEpicCache[asset];
  const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
@@ -22736,6 +22791,7 @@ async function resolveCapitalEpic(asset){
      const epic=(exact||body.markets[0]).epic;
      capitalEpicCache[asset]=epic;
      epicToAsset[epic]=asset;
+     saveCapitalEpicCache();
      fetchCapitalMarketSpec(asset,epic); // non atteso: specifiche ufficiali anche per gli asset in background
      return epic;
    }
@@ -23125,6 +23181,10 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // aggiuntivo al giro successivo del timer solo perché non aveva ancora visto questo bucket.
  const rolloverBucketMs=(currentTF||1)*60000;
  lastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+ // Da qui in poi il grafico e' completo e disegnato: quello che resta (sottoscrizioni degli
+ // asset in background) non cambia cio' che si vede. Il marcatore serve al riquadro di
+ // caricamento per sapere che puo' togliersi di mezzo - vedi withLoadingOverlayUntilReady.
+ liveHistoryReadyAt=Date.now();
  const __tSubStart=performance.now();
  await refreshLiveStreamSubscriptions();
  console.log(`[LoadHistory] refreshLiveStreamSubscriptions (resolve epic posizioni + apertura WS) in ${(performance.now()-__tSubStart).toFixed(0)}ms — TOTALE funzione: ${(performance.now()-__t0).toFixed(0)}ms`);
@@ -23143,10 +23203,17 @@ async function requiredLiveEpics(){
  // applyLiveTick() più sotto, che registra i tick footprint SOLO per questi (non per ogni asset
  // con una posizione, per non appesantire inutilmente la sessione).
  favoriteAssets.forEach(a=>{ if(a)assets.add(a); });
+ // IN PARALLELO, non uno alla volta. Prima c'era un `await` dentro il ciclo: con una watchlist
+ // di venti preferiti significava venti chiamate HTTP IN FILA, ognuna con la sua latenza - ed era
+ // la vera ragione per cui la riconnessione dopo un refresh durava mezzo minuto.
+ // Non tutte insieme, pero': a raffica Capital.com risponde con un limite di frequenza e si
+ // finirebbe piu' lenti di prima. Sei per volta e' il compromesso.
+ const elenco=[...assets];
  const epics=[];
- for(const a of assets){
-   const e=await resolveCapitalEpic(a);
-   if(e)epics.push(e);
+ const LOTTO=6;
+ for(let i=0;i<elenco.length;i+=LOTTO){
+   const parte=await Promise.all(elenco.slice(i,i+LOTTO).map(a=>resolveCapitalEpic(a).catch(()=>null)));
+   parte.forEach(e=>{ if(e)epics.push(e); });
  }
  const unique=[...new Set(epics)];
  // LIMITE Capital.com: la WebSocket API accetta la sottoscrizione a un massimo di 40
@@ -23163,16 +23230,36 @@ async function requiredLiveEpics(){
 // chiusura posizione o ordine pendente, in Live). Se il socket è già aperto invia solo la
 // sottoscrizione degli epic NUOVI (non richiede una riconnessione completa); altrimenti apre
 // il socket con l'elenco già pronto.
+// Gli epic gia' noti (in cache) si possono usare SUBITO, senza chiedere niente alla rete.
+function knownLiveEpics(){
+ const assets=new Set();
+ if(currentAssetKey)assets.add(currentAssetKey);
+ positions.forEach(p=>{ if(p.asset)assets.add(p.asset); });
+ pendingOrders.forEach(p=>{ if(p.asset)assets.add(p.asset); });
+ favoriteAssets.forEach(a=>{ if(a)assets.add(a); });
+ const out=[];
+ assets.forEach(a=>{ const e=capitalEpicCache[a]; if(e&&out.indexOf(e)<0)out.push(e); });
+ return out.slice(0,40);
+}
 async function refreshLiveStreamSubscriptions(){
  if(!liveModeActive)return;
  // WATCHLIST: stesso ricalcolo va fatto anche lato MT5 (connessioni WS separate per simbolo,
  // vedi refreshWatchlistBackgroundTracking() più sotto) ad ogni punto in cui si ricalcolano le
  // sottoscrizioni Capital.com — un solo punto d'aggancio per entrambe le fonti, invece di uno
  // sparso per ciascuna delle chiamate a questa funzione nel resto del file.
+ try{ loadCapitalEpicCache(); }catch(e){}
  refreshWatchlistBackgroundTracking();
+ // DUE TEMPI, e il primo e' quello che conta per chi guarda:
+ //  1. ci si sottoscrive SUBITO agli epic gia' noti - dopo la prima sessione l'asset a grafico e'
+ //     sempre fra questi, quindi i prezzi iniziano ad arrivare senza aspettare nessuna ricerca;
+ //  2. poi si risolvono gli eventuali mancanti e, solo se l'elenco e' cambiato davvero, ci si
+ //     ri-sottoscrive. Prima invece si aspettava l'intero elenco prima di collegare qualunque
+ //     cosa: bastava un preferito nuovo per tenere fermo anche l'asset a grafico.
+ const subito=knownLiveEpics();
+ if(subito.length)connectCapitalStream(subito);
  const epics=await requiredLiveEpics();
  if(!epics.length)return;
- connectCapitalStream(epics);
+ if(epics.length!==subito.length||epics.some((e,i)=>e!==subito[i]))connectCapitalStream(epics);
 }
 
 // ===================================================================
@@ -24240,6 +24327,9 @@ function binanceSymbolForAsset(assetKey){
 }
 
 let bnDepth=null;
+// Quando lo storico Live e' stato applicato e disegnato l'ultima volta (vedi il marcatore in
+// __loadLiveHistoryFromCapitalImpl): lo legge solo il riquadro di caricamento.
+let liveHistoryReadyAt=0;
 // Quale "chiave" di latestOrderBookByAsset/orderBookHistoryByAsset alimenta ORA heatmap/COB/zone.
 function depthKeyNow(){
  try{
@@ -28373,7 +28463,8 @@ var __initLocalStateSnapshot=null;
    // che era a grafico (loadLiveHistoryFromCapital si occupa anche di risottoscrivere gli epic
    // di eventuali posizioni/ordini pendenti su altri asset, già ripristinati sopra).
    if(liveModeActive && currentAssetKey){
-     await withLoadingOverlay('Riconnessione a Capital.com…', async()=>{
+     const __riconnAvviataA=Date.now();
+     await withLoadingOverlayUntilReady('Riconnessione a Capital.com…', async()=>{
        try{
          const autoCreds=await tryAutoLoadLiveCreds();
          const result=autoCreds?await connectToCapitalCom(autoCreds):null;
@@ -28402,7 +28493,7 @@ var __initLocalStateSnapshot=null;
        }catch(e){
          $('status').textContent='⚠️ Riconnessione automatica a Capital.com non riuscita: premi 🔴 Live per accedere di nuovo (resti comunque in modalità Live).';
        }
-     });
+     }, ()=>liveHistoryReadyAt>__riconnAvviataA, 12000);
    }
  }else{
    updateFileBtnLabel();
