@@ -1756,10 +1756,21 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                  <option value="volume">Volume (buy + sell)</option>
                </select>
              </div>
-             <div class="fbOptRow" style="margin-top:8px">
-               <label style="flex:none;min-width:110px">Righe (pip/riga)</label>
-               <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip.">
+             <!-- RICHIESTO ESPLICITAMENTE: "le righe per pip di EURUSD sono totalmente diverse da
+                  quelle di XAU/USD o di Bitcoin o del Nasdaq, deve essere tutto proporzionato in
+                  automatico che sia ben leggibile". Un unico numero di pip per riga non è
+                  confrontabile fra asset: 1 pip su EURUSD è 0,0001 e una candela M5 ne copre una
+                  decina; su XAUUSD il pip è 0,1 e la stessa candela ne copre 40-50; su BTCUSD o
+                  NASDAQ centinaia. Con "automatica" attiva si misura l'ampiezza tipica di una
+                  candela sul timeframe a grafico e si ricava l'altezza riga che dà il numero di
+                  righe scelto qui sotto — vedi footprintAutoRowPipsFor() nello script. -->
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:6px">
+               <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintAutoRow" checked> Altezza riga automatica (proporzionata all'asset e al timeframe)</label>
+               <label style="flex:none;min-width:110px">Righe per candela</label>
+               <input id="footprintAutoRowsTarget" type="number" min="4" max="40" step="1" value="12" style="width:60px" title="Quante righe di footprint vedere in una candela di ampiezza tipica. Più righe = più dettaglio di prezzo, caselline più basse.">
+               <span style="display:inline-flex;align-items:center;gap:5px;margin-left:14px">Righe (pip/riga) <input id="footprintRowPips" type="number" min="0.1" step="0.1" value="1" style="width:70px" title="Ampiezza di ogni riga del footprint, in pip. Modificabile solo con l'altezza riga automatica spenta."></span>
              </div>
+             <p class="hint" id="footprintRowPipsHint" style="margin-top:4px"></p>
              <!-- RICHIESTO ESPLICITAMENTE: più candele leggibili in vista, senza dover ridurre lo
                   zoom fino a vederne pochissime. Due soglie separate invece di una sola: sotto
                   "Larghezza minima" niente footprint (candela normale, come prima); tra questa e
@@ -1784,7 +1795,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                   copra tutte le ore richieste, specie per periodi lontani o simboli poco liquidi. -->
              <div class="fbOptRow" style="margin-top:8px">
                <label style="flex:none;min-width:140px">Backfill storico MT5</label>
-               <input id="footprintBackfillHours" type="number" min="1" max="168" step="1" value="24" style="width:60px" title="Quante ore indietro richiedere di tick storici reali a MT5 quando selezioni un asset (richiede mt5_feed_server.py aggiornato con l'endpoint /ticks).">ore
+               <input id="footprintBackfillHours" type="number" min="1" max="168" step="1" value="150" style="width:60px" title="Quante ore indietro richiedere di tick storici reali a MT5 quando selezioni un asset (richiede mt5_feed_server.py aggiornato con l'endpoint /ticks).">ore
              </div>
              <p class="hint" style="margin-top:2px">Solo MT5 (Capital.com non ha uno storico tick nella loro API pubblica). Richiesto una volta per asset quando lo selezioni (o quando accendi il footprint), in background. Se il tuo broker conserva meno storico tick di quanto richiesto, riceverai solo quello disponibile — nessun errore, solo meno candele con footprint reale nella parte più vecchia.</p>
              <!-- RICHIESTO ESPLICITAMENTE, schema "zero print" (foto fornita dall'utente): non più
@@ -3496,6 +3507,12 @@ let tpSlZoneFillVisible=true;
 // footprintEnabled: interruttore utente (⚙️ Impostazioni → Style → Footprint). footprintRowPips:
 // ampiezza di ogni riga del footprint, in pip (riusa pipSizeForAsset(), come il resto dell'app).
 let footprintEnabled=false, footprintRowPips=1, footprintImbalanceEnabled=false, footprintArEnabled=false;
+let footprintAutoRow=true; // altezza riga proporzionata all'asset/TF: accesa di default, vedi footprintAutoRowPipsFor()
+// Dichiarate QUI, molto prima di draw(): footprintStepForAsset() puo' essere raggiunta da un
+// disegno molto precoce, e con let/const piu' in basso nel file si prenderebbe un errore di uso
+// prima dell'inizializzazione invece del valore.
+const FOOTPRINT_NICE_ROW_PIPS=[0.1,0.2,0.25,0.5,1,2,2.5,5,10,20,25,50,100,200,250,500,1000,2000,2500,5000,10000,25000,50000];
+let _fpAutoRow={key:null,pips:null};
 // RICHIESTO ESPLICITAMENTE: doppio click DIRETTAMENTE sopra la casella Target/Stop di una
 // posizione APERTA (sul grafico) nasconde/mostra il riempimento colorato SOLO di QUELLA
 // posizione (0% quando nascosto, 20% di default quando visibile) — indipendente dal pulsante
@@ -4031,7 +4048,7 @@ async function idbClearAll(){
 // finché non è l'utente stesso a valorizzarli (pulsanti SL/TP sul grafico, apertura di una
 // posizione/ordine pendente) — l'unica eccezione resta una posizione REALMENTE aperta, che le
 // ripopola comunque con i suoi valori reali tramite refreshTradeLevelUI(), non da qui.
-const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintImbalanceOpacity','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
+const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','speed','tf','tfChart','lots','risk','lotsPending','riskPending','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintImbalanceOpacity','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintAutoRowsTarget','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
 // RICHIESTO ESPLICITAMENTE ("le pagine 2-3-4 devono essere sostanzialmente un clone della
 // madre... trasporti anche tutti quei parametri legati a style"): sottoinsieme di
 // SESSION_CONFIG_FIELD_IDS qui sopra, SOLO i campi di puro ASPETTO visivo del grafico (colori,
@@ -4042,7 +4059,7 @@ const SESSION_CONFIG_FIELD_IDS=['market','capital','spread','leverage','decimals
 // timeframe — vedi il commento su applyRemoteAssetSwitch() più sotto nel file). Usato da
 // collectStyleCloneFields()/applyStyleCloneFields() più sotto per il "clone" iniziale delle
 // finestre PIP 2/3/4 dalla pagina madre.
-const STYLE_CLONE_FIELD_IDS=['decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintImbalanceOpacity','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
+const STYLE_CLONE_FIELD_IDS=['decimals','pipDecimals','candleTheme','candleColorBuy','candleColorSell','tpZoneColor','slZoneColor','tpZoneOpacity','slZoneOpacity','chartBgColor','chartFontScalePct','drawColor','drawWidth','drawOpacity','drawFillColor','drawFillOpacity','footprintStyle','footprintImbalanceMinRows','footprintImbalanceMaxRects','footprintImbalanceColor','footprintImbalanceOpacity','footprintMinBw','footprintNumbersMinBw','footprintBackfillHours','footprintAutoRowsTarget','footprintArMinVolMult','footprintArDominancePct','footprintArRejectionColor','footprintArAbsorptionColor','footprintArMinDotPx','footprintArMaxDotPx'];
 function collectStyleCloneFields(){
  const out={};
  STYLE_CLONE_FIELD_IDS.forEach(id=>{ const el=$(id); if(el)out[id]=el.value; });
@@ -4099,7 +4116,7 @@ function collectLightSessionState(){
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,drawDottedDefault,anchorSnap,straightLockToggle,positionsVisible,tpSlZoneFillVisible,volProfileMode,linesMode,drawingLayerVisible,
-   footprintEnabled,footprintRowPips,footprintImbalanceEnabled,footprintArEnabled,
+   footprintEnabled,footprintRowPips,footprintImbalanceEnabled,footprintArEnabled,footprintAutoRow,
    positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
    pendingOrders:stripMt5TrackedForSave(pendingOrders),
    trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
@@ -4754,12 +4771,25 @@ async function clearSavedSession(){
 }
 // Al ripristino la selezione/trascinamento in corso non vengono mai riportati indietro:
 // solo lo stato "stabile" (trade, posizioni, disegni finalizzati, configurazioni).
+// RICHIESTO ESPLICITAMENTE: "il backfill storico sarà sempre 150 ore". Il nuovo default sta
+// nell'attributo value del campo, ma una sessione salvata PRIMA di questa modifica porta ancora
+// 24 e il ripristino qui sopra glielo riscriverebbe sopra, lasciando il footprint con sei volte
+// meno storico senza che si capisca perche'. Si alza a 150; un valore scelto a mano PIU' ALTO
+// resta rispettato.
+const FOOTPRINT_BACKFILL_HOURS_DEFAULT=150;
+function footprintNormalizeBackfillHours(){
+ const el=$('footprintBackfillHours');
+ if(!el)return;
+ const v=Number(el.value);
+ if(!Number.isFinite(v)||v<FOOTPRINT_BACKFILL_HOURS_DEFAULT)el.value=String(FOOTPRINT_BACKFILL_HOURS_DEFAULT);
+}
 function applyLightSessionState(state){
  if(!state||state.version!==SESSION_VERSION)return;
  SESSION_CONFIG_FIELD_IDS.forEach(id=>{
    const v=state.fields&&state.fields[id];
    if(v!==undefined&&$(id))$(id).value=v;
  });
+ footprintNormalizeBackfillHours();
  currentTF=state.currentTF||1;
  idx=state.idx||0; viewEnd=state.viewEnd||0;
  // Sessioni salvate da versioni precedenti (senza masterTime) restano null qui: verranno
@@ -4779,11 +4809,16 @@ function applyLightSessionState(state){
  footprintRowPips=(Number.isFinite(state.footprintRowPips)&&state.footprintRowPips>0)?state.footprintRowPips:1;
  footprintImbalanceEnabled=!!state.footprintImbalanceEnabled;
  footprintArEnabled=!!state.footprintArEnabled;
+ // Assente nei salvataggi precedenti a questa funzione: si riparte da ACCESA (!==false), che e'
+ // il comportamento nuovo richiesto, non da spenta.
+ footprintAutoRow=state.footprintAutoRow!==false;
  pfRealMt5Login=state.pfRealMt5Login!=null?String(state.pfRealMt5Login):null;
  if($('footprintEnabled'))$('footprintEnabled').checked=footprintEnabled;
  if($('footprintRowPips'))$('footprintRowPips').value=footprintRowPips;
  if($('footprintImbalanceEnabled'))$('footprintImbalanceEnabled').checked=footprintImbalanceEnabled;
  if($('footprintArEnabled'))$('footprintArEnabled').checked=footprintArEnabled;
+ if($('footprintAutoRow'))$('footprintAutoRow').checked=footprintAutoRow;
+ try{ footprintUpdateRowPipsUI(); }catch(e){}
  // drawingLayerVisible (RICHIESTO ESPLICITAMENTE: nascondere singolarmente Fibonacci/profili
  // volumetrici/VWAP dal nuovo pannello "Livelli", vedi apriChartLayersModal()): merge col
  // default invece di una sostituzione secca, così un salvataggio precedente a questa funzione
@@ -11091,6 +11126,18 @@ function draw(){
  data.forEach((r,i)=>{
    let xx=x(i), up=r.close>=r.open;
    const fp=_footprintEntries?_footprintEntries[i].fp:null;
+   // AREA CLICCABILE PER IL CAMBIO STILE - vedi footprintConsumeStyleClick() nel pointerup.
+   // Registrata per OGNI candela finche' il footprint e' attivo, anche senza tick registrati:
+   // prima stava dentro il ramo `if(fp)` qui sotto, quindi su tutte le candele fuori dal backfill
+   // il click non trovava niente da colpire e non succedeva nulla. L'estensione verticale e' quella
+   // della candela (high/low) unita all'ingombro reale delle caselline, che stanno ai livelli dei
+   // tick e possono cadere sopra o sotto quel range; in Y le coordinate schermo possono invertirsi
+   // a seconda della scala, da cui i Math.min/Math.max.
+   if(_footprintOn){
+     let _hTop=Math.min(y(r.high),y(r.low)), _hBot=Math.max(y(r.high),y(r.low));
+     if(fp&&fp.rows)Object.keys(fp.rows).forEach(lv=>{ const a=y(Number(lv)+fp.step/2), b2=y(Number(lv)-fp.step/2); _hTop=Math.min(_hTop,a,b2); _hBot=Math.max(_hBot,a,b2); });
+     footprintCellHitRects.push({xxLeft:xx-bw/2,xxRight:xx+bw/2,yTop:_hTop,yBot:_hBot});
+   }
    if(fp){
      drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle);
      // RICHIESTO ESPLICITAMENTE: SOLO in stile Bid/Ask (mai in Delta o Volume, dove le caselline
@@ -11138,20 +11185,7 @@ function draw(){
          }
        }
      }
-     // Area cliccabile per il cambio-stile al click (vedi footprintCellClickCandidate nel
-     // pointerdown/pointerup del canvas): l'intera estensione verticale della candela
-     // (high->low, coordinate schermo in Y possono invertirsi a seconda della scala, per questo
-     // Math.min/Math.max) — coincide con l'ingombro reale delle caselline disegnate sopra.
-     // CORREZIONE (click che funzionava solo sull'ultima candela): l'area cliccabile era SOLO il
-     // range high→low della candela del grafico, ma le caselline del footprint stanno ai livelli
-     // di prezzo dei tick registrati (es. MT5), che possono cadere sopra/sotto quel range — cliccando
-     // proprio sulle caselline di una candela passata spesso si finiva FUORI dall'area e non
-     // succedeva nulla. Ora l'area è l'unione del corpo candela e dell'ingombro reale delle caselline.
-     {
-       let _hTop=Math.min(y(r.high),y(r.low)), _hBot=Math.max(y(r.high),y(r.low));
-       Object.keys(fp.rows).forEach(lv=>{ const a=y(Number(lv)+fp.step/2), b2=y(Number(lv)-fp.step/2); _hTop=Math.min(_hTop,a,b2); _hBot=Math.max(_hBot,a,b2); });
-       footprintCellHitRects.push({xxLeft:xx-bw/2,xxRight:xx+bw/2,yTop:_hTop,yBot:_hBot});
-     }
+     // (L'area cliccabile per il cambio stile e' registrata piu' sopra, per OGNI candela.)
      return;
    }
    ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
@@ -13604,6 +13638,25 @@ let zoneClickCandidateKey=null;
 // rendering a candela singola — su quelle il click resta un pan/selezione come sempre).
 let footprintCellHitRects=[];
 let footprintCellClickCandidate=null;
+// Un vero click (non un trascinamento) sopra una candela in modalita' footprint fa scorrere lo
+// stile: Bid/Ask -> Delta -> Volume -> di nuovo Bid/Ask. Alternativa rapida al menu "Stile" nelle
+// impostazioni, che resta e si aggiorna da solo essendo lo stesso <select>. Estratta in funzione
+// perche' serve in DUE punti del pointerup: per il mouse, e prima dell'uscita anticipata del ramo
+// touch, che altrimenti non ci arriverebbe mai.
+function footprintConsumeStyleClick(e){
+ if(!footprintCellClickCandidate)return false;
+ footprintCellClickCandidate=false;
+ if(Math.hypot(e.clientX-panStartX,e.clientY-panStartY)>=4)return false; // era un pan del grafico
+ const styleSel=$('footprintStyle');
+ if(!styleSel)return false;
+ const order=['bidask','delta','volume'];
+ const i=order.indexOf(styleSel.value);
+ styleSel.value=order[(i<0?0:i+1)%order.length];
+ draw(); scheduleSave();
+ const el=$('status');
+ if(el)el.textContent='Stile footprint: '+(styleSel.value==='bidask'?'Bid/Ask':styleSel.value==='delta'?'Delta':'Volume')+'.';
+ return true;
+}
 // Ricorda l'ultimo VERO click (ownerKey+istante) su una casella Target/Stop di una posizione
 // APERTA ('pos:'+id): se il click successivo cade sulla STESSA casella entro ZONE_DBLCLICK_MS,
 // è un doppio click -> si alterna tpSlZoneFillHiddenByOwner invece di (ri)aprire le statistiche.
@@ -17930,6 +17983,11 @@ chartEl.addEventListener('pointerup',e=>{
    if(e.pointerType==='touch'){chartEl.releasePointerCapture?.(e.pointerId);setChartTouchAction(false);}
    draw();
  }
+ // Il cambio stile footprint va deciso PRIMA di questa uscita anticipata: su schermo touch il
+ // pointerup usciva qui e il blocco piu' sotto non veniva mai raggiunto, quindi il tocco su una
+ // candela non cambiava mai stile (col mouse invece funzionava). Stesso criterio del mouse: conta
+ // solo se il dito non si e' spostato, altrimenti era un trascinamento del grafico.
+ if(e.pointerType==='touch')footprintConsumeStyleClick(e);
  if(e.pointerType==='touch'){
    touchPoints.delete(e.pointerId);
    if(touchPoints.size<2){twoFingerPan=false;if(touchPoints.size===0)setChartTouchAction(false);}
@@ -17959,20 +18017,7 @@ chartEl.addEventListener('pointerup',e=>{
  // (che resta comunque disponibile e si aggiorna da solo, essendo lo stesso <select>). Un pan che
  // parte sopra una candela footprint continua invece a spostare il grafico normalmente, come per
  // tutte le altre candidature "al click" qui sopra.
- if(footprintCellClickCandidate){
-   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
-   if(moved<4){
-     const styleSel=$('footprintStyle');
-     if(styleSel){
-       const order=['bidask','delta','volume'];
-       const idxStyle=order.indexOf(styleSel.value);
-       styleSel.value=order[(idxStyle<0?0:idxStyle+1)%order.length];
-       draw(); scheduleSave();
-       $('status').textContent='Stile footprint: '+(styleSel.value==='bidask'?'Bid/Ask':styleSel.value==='delta'?'Delta':'Volume')+'.';
-     }
-   }
-   footprintCellClickCandidate=false;
- }
+ footprintConsumeStyleClick(e);
  // Stesso schema, per il click-to-select (multi-selezione) di un trade GIÀ CHIUSO: un vero
  // click (non un trascinamento) sulla sua linea tratteggiata lo aggiunge/toglie da
  // selectedClosedTradeIds — ricliccandolo si deseleziona, cliccandone altri restano tutti
@@ -18396,9 +18441,25 @@ $('footprintArRejectionColor')?.addEventListener('input',()=>{ draw(); scheduleS
 $('footprintArAbsorptionColor')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintArMinDotPx')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintArMaxDotPx')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
+// I due comandi dell'altezza riga automatica cambiano lo step dei bucket esattamente come il
+// campo manuale qui sotto, quindi devono ricostruire dal log tick grezzo allo stesso modo.
+$('footprintAutoRow')?.addEventListener('change',()=>{
+ footprintAutoRow=$('footprintAutoRow').checked;
+ _fpAutoRow={key:null,pips:null};
+ footprintRebuildBucketsForCurrentAsset();
+ footprintUpdateRowPipsUI();
+ draw(); scheduleSave();
+});
+$('footprintAutoRowsTarget')?.addEventListener('input',()=>{
+ _fpAutoRow={key:null,pips:null};
+ footprintRebuildBucketsForCurrentAsset();
+ footprintUpdateRowPipsUI();
+ draw(); scheduleSave();
+});
 $('footprintRowPips')?.addEventListener('input',()=>{
  const v=Number($('footprintRowPips').value);
  footprintRowPips=(Number.isFinite(v)&&v>0)?v:1;
+ footprintUpdateRowPipsUI();
  // Cambiando l'ampiezza riga, i bucket già accumulati con lo step vecchio non sono più
  // confrontabili: ricostruiamo dal log tick grezzo (mai perso) invece di azzerare e basta — i
  // valori restano visibili, solo ri-bucketizzati alla nuova ampiezza.
@@ -22244,7 +22305,7 @@ function footprintEnabledNow(){ return !!$('footprintEnabled')?.checked; }
 function footprintStyleNow(){ return $('footprintStyle')?.value||'bidask'; }
 function footprintMinBwNow(){ const v=Math.round(Number($('footprintMinBw')?.value)); return (Number.isFinite(v)&&v>=6)?Math.min(60,v):14; }
 function footprintNumbersMinBwNow(){ const v=Math.round(Number($('footprintNumbersMinBw')?.value)); return (Number.isFinite(v)&&v>=20)?Math.min(120,v):44; }
-function footprintBackfillHoursNow(){ const v=Number($('footprintBackfillHours')?.value); return (Number.isFinite(v)&&v>=1)?Math.min(168,v):24; }
+function footprintBackfillHoursNow(){ const v=Number($('footprintBackfillHours')?.value); return (Number.isFinite(v)&&v>=1)?Math.min(168,v):150; } // default richiesto: 150 ore
 function footprintImbalanceEnabledNow(){ return !!$('footprintImbalanceEnabled')?.checked; }
 function footprintImbalanceMinRowsNow(){ const v=Math.round(Number($('footprintImbalanceMinRows')?.value)); return (Number.isFinite(v)&&v>=1)?Math.min(20,v):1; }
 function footprintImbalanceMaxRectsNow(){ const v=Math.round(Number($('footprintImbalanceMaxRects')?.value)); return (Number.isFinite(v)&&v>=1)?Math.min(30,v):8; }
@@ -22258,15 +22319,103 @@ function footprintArRejectionColorNow(){ return $('footprintArRejectionColor')?.
 function footprintArAbsorptionColorNow(){ return $('footprintArAbsorptionColor')?.value||'#e05b64'; }
 function footprintArMinDotPxNow(){ const v=Number($('footprintArMinDotPx')?.value); return (Number.isFinite(v)&&v>=2)?Math.min(20,v):3; }
 function footprintArMaxDotPxNow(){ const v=Number($('footprintArMaxDotPx')?.value); return (Number.isFinite(v)&&v>=4)?Math.min(40,v):12; }
-function footprintRowPipsNow(){
+function footprintAutoRowEnabledNow(){ const el=$('footprintAutoRow'); return el?!!el.checked:true; }
+function footprintAutoRowsTargetNow(){ const v=Math.round(Number($('footprintAutoRowsTarget')?.value)); return (Number.isFinite(v)&&v>=4)?Math.min(40,v):12; }
+function footprintRowPipsManualNow(){
  const v=Number($('footprintRowPips')?.value);
  return (Number.isFinite(v)&&v>0)?v:1;
+}
+// RICHIESTO ESPLICITAMENTE: "le righe per pip di EURUSD sono totalmente diverse da quelle di
+// XAU/USD o di Bitcoin o del Nasdaq, deve essere tutto proporzionato in automatico che sia ben
+// leggibile". Un unico numero di pip per riga non e' confrontabile fra asset: 1 pip su EURUSD e'
+// 0,0001 e una candela M5 ne copre una decina; su XAUUSD il pip e' 0,1 e la stessa candela ne
+// copre 40-50; su BTCUSD o NASDAQ centinaia. Con un valore unico le righe restano leggibili solo
+// sul forex e diventano una macchia su tutto il resto.
+// Qui si parte dall'ampiezza TIPICA di una candela sul TF a grafico (misurata sui dati veri) e si
+// ricava l'altezza riga che produce il numero di righe desiderato.
+//
+// Valori "tondi" ammessi, in pip: l'automatismo non restituisce mai 3,7 pip/riga — tecnicamente
+// corretto, ma una griglia di prezzi che non cade su valori leggibili non si legge a occhio.
+function footprintNiceRowPips(v){
+ if(!(v>0))return 1;
+ for(let i=0;i<FOOTPRINT_NICE_ROW_PIPS.length;i++)if(FOOTPRINT_NICE_ROW_PIPS[i]>=v)return FOOTPRINT_NICE_ROW_PIPS[i];
+ return FOOTPRINT_NICE_ROW_PIPS[FOOTPRINT_NICE_ROW_PIPS.length-1];
+}
+// Cache dell'altezza riga automatica. La chiave NON include il numero di candele: il valore deve
+// restare FERMO mentre arrivano nuovi tick, altrimenti cambierebbe da solo sotto gli occhi e i
+// bucket gia' accumulati andrebbero ricostruiti in continuazione. Si ricalcola solo al cambio di
+// asset, di timeframe a grafico o del numero di righe desiderato.
+// Ampiezza tipica di una candela, in pip, misurata sui dati VERI a grafico: mediana di (high-low)
+// sulle ultime candele. Mediana e non media: una singola candela da notizia (spike) sposterebbe la
+// media e appiattirebbe tutto il resto.
+function footprintTypicalCandlePips(assetKey){
+ const pip=pipSizeForAsset(assetKey);
+ if(!(pip>0)||!Array.isArray(rows)||!rows.length)return null;
+ const from=Math.max(0,rows.length-300);
+ const arr=[];
+ for(let i=from;i<rows.length;i++){
+   const r=rows[i];
+   const hi=Number(r&&r.high), lo=Number(r&&r.low);
+   if(!Number.isFinite(hi)||!Number.isFinite(lo)||hi<lo)continue;
+   const rng=(hi-lo)/pip;
+   if(rng>0)arr.push(rng);
+ }
+ if(arr.length<5)return null;
+ arr.sort((a,b)=>a-b);
+ const m=arr.length>>1;
+ return arr.length%2?arr[m]:(arr[m-1]+arr[m])/2;
+}
+function footprintAutoRowPipsFor(assetKey){
+ // L'automatismo misura `rows`, cioe' le candele dell'asset A GRAFICO: per un asset diverso
+ // (aggregato cloud, sessioni in background) non c'e' nulla da misurare e si usa il valore
+ // manuale, invece di applicargli una misura che non gli appartiene.
+ if(assetKey!==currentAssetKey)return footprintRowPipsManualNow();
+ const target=footprintAutoRowsTargetNow();
+ const key=String(assetKey)+'|'+String(currentTF)+'|'+target;
+ if(_fpAutoRow.key===key&&_fpAutoRow.pips>0)return _fpAutoRow.pips;
+ const typical=footprintTypicalCandlePips(assetKey);
+ if(!(typical>0))return footprintRowPipsManualNow(); // candele non ancora caricate: non si memorizza, si riprova al prossimo giro
+ const pips=footprintNiceRowPips(typical/target);
+ const changed=(_fpAutoRow.pips!==pips);
+ _fpAutoRow={key,pips};
+ // I bucket accumulati con l'altezza precedente non sono piu' confrontabili. Il ricalcolo si fa
+ // fuori dal giro di disegno in corso (questa funzione viene chiamata proprio da draw()) e una
+ // volta sola: la cache qui sopra e' gia' aggiornata, quindi la lettura successiva non ripassa
+ // da qui e non si innesca nessun ciclo.
+ if(changed)setTimeout(()=>{ try{ footprintRebuildBucketsForCurrentAsset(); footprintUpdateRowPipsUI(); draw(); }catch(e){} },0);
+ return pips;
+}
+function footprintRowPipsForAsset(assetKey){
+ return footprintAutoRowEnabledNow()?footprintAutoRowPipsFor(assetKey):footprintRowPipsManualNow();
+}
+// Conservata con lo stesso nome: la chiamano altri punti che ragionano sull'asset a grafico.
+function footprintRowPipsNow(){ return footprintRowPipsForAsset(currentAssetKey); }
+// Scrive sotto ai campi cosa si sta usando DAVVERO, in pip e in prezzo: senza questo l'automatismo
+// sarebbe una scatola chiusa e non si capirebbe perche' le righe sono alte cosi'.
+function footprintUpdateRowPipsUI(){
+ const auto=footprintAutoRowEnabledNow();
+ const manual=$('footprintRowPips');
+ if(manual){ manual.disabled=auto; manual.style.opacity=auto?'.45':''; }
+ const tgt=$('footprintAutoRowsTarget');
+ if(tgt){ tgt.disabled=!auto; tgt.style.opacity=auto?'':'.45'; }
+ const hint=$('footprintRowPipsHint');
+ if(!hint)return;
+ if(!currentAssetKey){ hint.textContent='Seleziona un asset per vedere l\'altezza riga calcolata.'; return; }
+ const pip=pipSizeForAsset(currentAssetKey);
+ const pips=footprintRowPipsForAsset(currentAssetKey);
+ const price=(pip>0&&pips>0)?pip*pips:null;
+ const typical=footprintTypicalCandlePips(currentAssetKey);
+ const parts=[(auto?'Automatica: ':'Manuale: ')+(pips>0?pips:'\u2014')+' pip per riga'+(price?' ('+price.toLocaleString('it-IT',{maximumFractionDigits:8})+' di prezzo)':'')];
+ if(typical>0)parts.push('candela tipica '+Math.round(typical)+' pip sul TF a grafico \u2192 circa '+Math.max(1,Math.round(typical/pips))+' righe');
+ if(auto)parts.push('togli la spunta per imporre un valore tuo');
+ hint.textContent=parts.join(' \u2022 ')+'.';
 }
 // Ampiezza di una riga del footprint in unità di PREZZO (non pip): riusa pipSizeForAsset(), la
 // stessa funzione già usata ovunque nell'app per convertire pip↔prezzo per l'asset scelto.
 function footprintStepForAsset(assetKey){
  const pip=pipSizeForAsset(assetKey);
- return Number.isFinite(pip)&&pip>0?pip*footprintRowPipsNow():null;
+ const rp=footprintRowPipsForAsset(assetKey);
+ return (Number.isFinite(pip)&&pip>0&&rp>0)?pip*rp:null;
 }
 // Heatmap di liquidità (Order Book MT5 reale) — stesso schema "Now()" dei getter footprint sopra,
 // stessi id-pattern nel modale Impostazioni → Footprint. Vedi il blocco di disegno in draw()
@@ -22884,7 +23033,13 @@ function footprintBucketStart(timestamp){
 // pip/riga: è l'unico punto che scrive in footprintByBucket. Costo O(tick registrati per
 // quell'asset) — accettabile grazie al tetto FOOTPRINT_MAX_TICKS_PER_ASSET, e comunque chiamata
 // solo sui cambi elencati sopra, mai ad ogni tick (per quello vedi footprintApplyTickToBuckets()).
+// Involucro: il riepilogo sotto ai campi ("Automatica: N pip per riga...") deve seguire OGNI
+// ricostruzione, che e' esattamente quando l'altezza riga puo' essere cambiata - cambio asset,
+// cambio timeframe, cambio dei comandi. Un solo punto invece di ricordarsene a ogni chiamante.
 function footprintRebuildBucketsForCurrentAsset(){
+ try{ __footprintRebuildBuckets(); }finally{ try{ footprintUpdateRowPipsUI(); }catch(e){} }
+}
+function __footprintRebuildBuckets(){
  footprintByBucket={};
  const log=footprintTickLogByAsset[currentAssetKey];
  if(log&&log.length){
@@ -24182,12 +24337,16 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    // chiede conferma prima di mostrare comunque Capital.com, ed è ESPLICITO che questo tocca
    // SOLO la visualizzazione in app — nessun ordine/effetto sul conto MT5 collegato per questo
    // asset (qui non si chiama MAI nessuna funzione che parla col bridge ordini).
-   // RICHIESTO ESPLICITAMENTE: la domanda va fatta OGNI volta, non una sola per asset. Passare
-   // a uno strumento che MT5 non ha significa staccare il grafico dal terminale, e l'utente deve
-   // deciderlo consapevolmente ogni volta, non ereditare una risposta data mezz'ora prima.
-   // mt5FallbackConfirmedForAsset resta popolato: serve ancora a non ripetere la domanda dentro
-   // uno stesso caricamento (resync di candela, watchdog) — vedi il reset in switchAccountMode.
-   {
+   // CORREZIONE RICHIESTA: la domanda va fatta UNA VOLTA per asset, non a ogni ritocco del
+   // grafico. Nella versione precedente chiedeva sempre, e siccome questo loader viene richiamato
+   // anche da un semplice cambio di timeframe o da un resync di candela, il popup tornava
+   // addosso all'utente di continuo su un asset per cui aveva gia' risposto.
+   // Regola voluta: confermato "continuo con Capital.com" per l'asset X -> non si chiede piu'
+   // per X. La domanda torna solo quando il terminale MT5 viene ricollegato (la conferma valeva
+   // per QUEL collegamento: broker/conto diverso, strumenti diversi) e si rientra su X.
+   // Il reset e' in syncChartSourceWithMt5(), ramo mt5Connected: azzera l'insieme insieme alle
+   // risoluzioni simbolo, che per lo stesso motivo non sopravvivono a una connessione nuova.
+   if(!mt5FallbackConfirmedForAsset.has(asset)){
      const ok=await appConfirm(
        `L'asset "${asset}" non risulta disponibile sul broker MT5 collegato.\n\n`+
        `Se continui, il grafico si stacca dal terminale MT5 e passa ai dati di Capital.com. `+
@@ -26436,6 +26595,7 @@ var __initLocalStateSnapshot=null;
        const v=savedState.fields&&savedState.fields[id];
        if(v!==undefined&&$(id))$(id).value=v; // riapplica i valori salvati sopra applyInstrument()
      });
+     footprintNormalizeBackfillHours();
      // L'asset attivo al momento del salvataggio: positions/active/pendingOrders/equity
      // ripristinati sopra da applyLightSessionState() appartengono proprio a questo asset.
      currentAssetKey=$('market')?.value||'';
