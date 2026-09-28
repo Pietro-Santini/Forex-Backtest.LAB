@@ -20430,6 +20430,14 @@ async function tgImpostaAttivo(acceso){
   tgCollega();
  }else{
   tgScollega();
+  // Spegnere deve spegnere DAVVERO: il ponte e' un processo senza finestra, e lasciarlo acceso
+  // vorrebbe dire costringere ad andarlo a chiudere da Gestione attivita' (e' successo).
+  try{
+   const r=await fetchMt5WithTimeout('/segnali-stop',{method:'POST'},10000);
+   if(r&&r.ok&&r.data&&r.data.ancora_attivo){
+    tgStato('Collegamento spento in app. Il ponte però risponde ancora: era stato avviato fuori dall\'app, chiudilo da lì.','err');
+   }
+  }catch(e){ /* nessun servizio locale: il ponte, se c'e', l'ha avviato l'utente a mano */ }
  }
  tgAggiornaInterruttore();
 }
@@ -20440,6 +20448,9 @@ async function tgImpostaAttivo(acceso){
 // Se quel servizio non c'e' (app aperta nel solo browser, senza il programma desktop) non si puo'
 // fare altro che dirlo: si prova comunque a collegarsi, nel caso il ponte sia gia' avviato a mano.
 let tgAvvioInCorso=false;
+// Quando si e' provato l'ultima volta ad avviare il ponte: serve a non ripetere la richiesta ad
+// ogni caduta della presa (che, se il ponte non c'e', e' ogni pochi secondi).
+let tgUltimoAvvio=0;
 async function tgAssicuraPonte(){
  if(tgAvvioInCorso)return false;
  // Gia' in piedi? Nessuno lo avvia due volte.
@@ -20447,6 +20458,7 @@ async function tgAssicuraPonte(){
  tgAvvioInCorso=true;
  try{
   tgStato('Avvio del ponte dei segnali in corso…');
+  tgUltimoAvvio=Date.now();
   const r=await fetchMt5WithTimeout('/segnali-launch',{method:'POST'},20000);
   if(r&&r.ok){
    tgStato(r.data&&r.data.gia_attivo?'Ponte dei segnali già attivo.':'Ponte dei segnali avviato.');
@@ -20527,6 +20539,13 @@ function tgRenderGruppi(){
 // in due passaggi) e l'app lo chiede con un popup, invece di lasciare che lo chieda una finestra
 // nera. Il valore va dritto al ponte sul WebSocket: l'app non lo salva e non lo rilegge mai.
 let tgAccessoInCorso=false;
+// Stesso criterio del ponte (e di Telethon): via +, spazi, parentesi, punti e trattini, poi
+// devono restare solo cifre, fra 6 e 15. Controllarlo qui evita un giro inutile fino a Telegram
+// e un messaggio d'errore che nessuno capirebbe.
+function tgTelefonoValido(v){
+ const cifre=String(v||'').replace(/[+()\s.\-]/g,'');
+ return /^\d{6,15}$/.test(cifre);
+}
 async function tgChiediAccesso(cosa,errore){
  if(tgAccessoInCorso)return;
  tgAccessoInCorso=true;
@@ -20534,10 +20553,20 @@ async function tgChiediAccesso(cosa,errore){
   const avviso=errore?('\n\n⚠ '+errore):'';
   let valore=null;
   if(cosa==='telefono'){
-   valore=await appPrompt('Per leggere le sale serve entrare nel TUO account Telegram.\n\n'
-    +'Scrivi il numero con il prefisso internazionale, per esempio +39 333 1234567.'
-    +'\n\nIl numero va solo al ponte sul tuo PC: non viene salvato da nessuna parte.'+avviso,
-    {title:'📱 Numero di telefono',type:'tel',placeholder:'+39…',okLabel:'Invia'});
+   // Si controlla QUI, prima di mandarlo: un numero scritto male faceva rispondere al ponte
+   // "bytes or str expected, not NoneType", che non vuol dire niente per chi legge. Si richiede
+   // finche' non ha senso, o finche' non si annulla.
+   for(;;){
+    valore=await appPrompt('Per leggere le sale serve entrare nel TUO account Telegram.\n\n'
+     +'Scrivi il numero con il prefisso internazionale, per esempio +39 333 1234567.'
+     +'\n\nIl numero va solo al ponte sul tuo PC: non viene salvato da nessuna parte.'+avviso,
+     {title:'📱 Numero di telefono',type:'tel',placeholder:'+39 333 1234567',okLabel:'Invia'});
+    if(valore==null)break;                       // annullato: se ne occupa il codice qui sotto
+    if(tgTelefonoValido(valore))break;
+    await appAlert('«'+valore+'» non sembra un numero di telefono.\n\n'
+     +'Ci vogliono solo cifre, con il prefisso internazionale davanti: +39 333 1234567.\n'
+     +'Spazi, trattini e parentesi si possono usare, il resto no.');
+   }
   }else if(cosa==='codice'){
    valore=await appPrompt('Telegram ti ha mandato un codice di verifica (nell\'app Telegram, o via SMS).\n\n'
     +'Scrivilo qui.'+avviso,
@@ -20549,7 +20578,10 @@ async function tgChiediAccesso(cosa,errore){
     {title:'🔒 Password della verifica in due passaggi',type:'password',okLabel:'Entra'});
   }
   if(valore==null||valore===''){
+   // Annullato: il ponte resterebbe in attesa per cinque minuti. Lo si spegne, cosi' il prossimo
+   // "Collegamento" riparte pulito invece di riagganciarsi a un accesso lasciato a meta'.
    tgStato('Accesso a Telegram annullato. Premi di nuovo Collegamento quando vuoi riprovare.','err');
+   try{ await tgImpostaAttivo(false); }catch(e){}
    return;
   }
   tgInvia({azione:'accesso_'+cosa,valore:String(valore)});
@@ -20622,8 +20654,25 @@ function tgCollega(){
  ws.onclose=()=>{
    if(tgWs!==ws)return;
    tgWs=null; tgCollegatoTelegram=false; tgAggiornaInterruttore();
-   tgStato('Ponte non raggiungibile su 127.0.0.1:'+porta+' — è avviato? (segnali_bridge.py)','err');
+   tgStato('Ponte non raggiungibile su 127.0.0.1:'+porta+'. Provo a riavviarlo…','err');
    clearTimeout(tgRiconnT);
+   // Ritentare la presa all'infinito non fa comparire un programma che non e' in esecuzione: si
+   // chiede al servizio locale di riavviarlo. Non piu' di una volta al minuto, altrimenti a ogni
+   // caduta si finirebbe per tempestarlo di richieste di avvio.
+   const adesso=Date.now();
+   const puoRiprovare=tgAttivo()&&(adesso-tgUltimoAvvio>60000);
+   if(puoRiprovare){
+     tgUltimoAvvio=adesso;
+     tgAssicuraPonte().then(riuscito=>{
+       if(!riuscito){
+         tgStato('Il ponte dei segnali non è in esecuzione e non sono riuscito ad avviarlo. '
+           +'Avvialo a mano con avvia_segnali.bat, oppure spegni il collegamento per non riprovare.','err');
+       }
+       clearTimeout(tgRiconnT);
+       tgRiconnT=setTimeout(tgCollega,3000);
+     });
+     return;
+   }
    tgRiconnT=setTimeout(tgCollega,tgCollegamentoChiesto?5000:20000);
  };
 }
