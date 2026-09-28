@@ -1071,6 +1071,7 @@ input[type=color]:hover{border-color:var(--fbAccent2)}
       <button type="button" id="genSettingsTabMt5" class="fbModalTab" data-gensettings-tab="mt5">🖥️ MT5</button>
       <button type="button" id="genSettingsTabPropFirm" class="fbModalTab" data-gensettings-tab="propfirm">🛡️ Prop Firm</button>
       <button type="button" id="genSettingsTabNotion" class="fbModalTab" data-gensettings-tab="notion">📓 Template Notion</button>
+      <button type="button" id="genSettingsTabTelegram" class="fbModalTab" data-gensettings-tab="telegram">✈️ Telegram</button>
     </div>
     <div class="fbModalBody">
       <div data-gensettings-panel="live">
@@ -1095,6 +1096,28 @@ input[type=color]:hover{border-color:var(--fbAccent2)}
             </div>
           </div>
         </span>
+      </div>
+      <!-- RICHIESTO ESPLICITAMENTE: una sezione dove elencare le sale segnali Telegram da cui
+           prendere gli ordini, aggiungendole scrivendo il canale pubblico o il link del gruppo
+           privato. L'elenco vive nel ponte locale (segnali_bridge.py), non qui: l'app lo legge e
+           lo riscrive, ma non custodisce nulla. Le credenziali Telegram non passano MAI da questa
+           schermata - restano nel file di configurazione sul PC, come tutte le altre. -->
+      <div data-gensettings-panel="telegram" style="display:none">
+        <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Legge le sale segnali di cui <b>sei gia' membro</b> e ti propone qui gli ordini. Non entra in nessun gruppo, non scrive e non invia niente: legge come leggi tu dal telefono.</div>
+        <div id="tgStatusBox" style="font-size:12.5px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px;margin-bottom:10px">Controllo il ponte…</div>
+        <div class="fbOptRow" style="margin-bottom:10px">
+          <label style="flex:none;min-width:110px">Porta del ponte</label>
+          <input id="tgPort" type="number" min="1024" max="65535" value="8769" style="width:80px">
+          <button type="button" id="tgRefreshBtn" class="miniBtn" style="margin-left:10px">↻ Ricontrolla</button>
+        </div>
+        <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">SALE SEGNALI</div>
+        <div id="tgGroupList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+        <div class="fbOptRow">
+          <input id="tgNewGroup" type="text" placeholder="t.me/goldsnipers11  oppure  @nomecanale  oppure  link di invito" style="flex:1;min-width:180px">
+          <button type="button" id="tgAddBtn" class="miniBtn" style="margin-left:8px">+ Aggiungi</button>
+        </div>
+        <p class="hint" style="margin-top:8px">Va bene un <b>canale pubblico</b> (<code>t.me/nome</code> o <code>@nome</code>) o il <b>link di invito</b> di un gruppo privato. Per i gruppi privati devi gia' esserci dentro con il tuo account: il ponte non puo' entrare da solo, e non ci prova.</p>
+        <p class="hint" style="margin-top:4px"><b>Nessun ordine parte da solo.</b> Il ponte legge e interpreta; l'ordine te lo propone l'app e lo apri tu con una conferma. Un messaggio scritto da una persona puo' essere ambiguo, e fra l'interpretazione e i tuoi soldi deve restare un tuo clic.</p>
       </div>
       <div data-gensettings-panel="notion" style="display:none">
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Ogni trade del Trade Journal arriva da solo nel tuo Notion, nella dashboard della sua sessione (Storico, Live, Storico Prop Firm, Live Prop Firm) e, per i conti MT5, in una dashboard dedicata a ciascun conto.</div>
@@ -20148,6 +20171,132 @@ document.addEventListener('keydown',e=>{
  }
 });
 
+// ===================== SALE SEGNALI TELEGRAM =====================
+// L'app NON parla con Telegram: parla con il ponte locale (segnali_bridge.py), che legge le chat
+// di cui l'utente e' gia' membro e restituisce i segnali gia' interpretati. Due ragioni per cui
+// e' diviso cosi':
+//  - le credenziali Telegram restano sul PC, in un file locale, e non passano mai dalla pagina;
+//  - interpretare testo libero scritto da una persona e' la parte che puo' sbagliare, e sta
+//    lontana dalla parte che apre ordini veri.
+// Qui dentro c'e' solo la gestione dell'ELENCO delle sale. L'arrivo dei segnali e la conferma
+// degli ordini sono il passo successivo.
+function tgPortNow(){ const v=Math.round(Number($('tgPort')?.value)); return (v>1023&&v<65536)?v:8769; }
+// Da un link a un identificatore: "https://t.me/goldsnipers11" -> "goldsnipers11". I link di
+// invito (t.me/+XXXX o /joinchat/XXXX) restano interi, perche' li' la parte dopo la barra E' la
+// chiave e non un nome leggibile.
+function tgNormalizzaGruppo(testo){
+ let t=String(testo||'').trim();
+ if(!t)return '';
+ t=t.replace(/^https?:\/\//i,'').replace(/^t\.me\//i,'').replace(/^telegram\.me\//i,'');
+ if(/^\+/.test(t)||/^joinchat\//i.test(t))return 'https://t.me/'+t; // invito: serve intero
+ t=t.replace(/^@/,'').replace(/\/+$/,'').split('?')[0];
+ return t;
+}
+let tgGruppi=[];
+let tgWs=null, tgWsPorta=null, tgUltimoId=0, tgRiconnT=null;
+// I segnali arrivati e non ancora valutati. Il pannello che li mostra e li fa confermare e' il
+// passo successivo: qui si tengono da parte, cosi' quando arrivera' avra' gia' i suoi dati.
+let tgSegnaliRicevuti=[];
+function tgStato(testo,tipo){
+ const el=$('tgStatusBox'); if(!el)return;
+ el.textContent=testo;
+ el.style.borderColor=tipo==='ok'?'rgba(45,212,191,.45)':(tipo==='err'?'rgba(224,82,82,.45)':'#2c3a4f');
+}
+function tgRenderGruppi(){
+ const box=$('tgGroupList'); if(!box)return;
+ if(!tgGruppi.length){
+   box.innerHTML='<div class="hint" style="margin:0">Nessuna sala ancora. Aggiungine una qui sotto.</div>';
+   return;
+ }
+ box.innerHTML='';
+ tgGruppi.forEach((g,i)=>{
+   const riga=document.createElement('div');
+   riga.style.cssText='display:flex;align-items:center;gap:8px;background:#141b26;border:1px solid #232d3d;border-radius:7px;padding:6px 9px';
+   const nome=document.createElement('span');
+   nome.style.cssText='flex:1;font-size:12.5px;color:#cdd6e0;word-break:break-all';
+   nome.textContent=g;
+   const via=document.createElement('button');
+   via.type='button'; via.className='miniBtn'; via.textContent='✕';
+   via.title='Togli questa sala';
+   via.style.cssText='width:auto;padding:2px 9px';
+   via.addEventListener('click',()=>{ tgGruppi.splice(i,1); tgInvia({azione:'scrivi_chat',chat:tgGruppi}); tgRenderGruppi(); });
+   riga.appendChild(nome); riga.appendChild(via);
+   box.appendChild(riga);
+ });
+}
+function tgApplicaStato(m){
+ if(Array.isArray(m.chat)){ tgGruppi=m.chat; tgRenderGruppi(); }
+ if(m.modalita==='simulatore'){
+   tgStato('Ponte attivo in MODALITA SIMULATORE: i messaggi sono inventati, servono solo a provare la catena.','ok');
+ }else if(!m.credenziali_presenti){
+   tgStato('Ponte attivo, ma mancano le credenziali Telegram: vanno messe in configurazione.json sul PC (api_id e api_hash da my.telegram.org). Non si inseriscono da qui.','err');
+ }else if(m.errore){
+   tgStato('Il ponte dice: '+m.errore,'err');
+ }else if(m.collegato){
+   tgStato('Collegato a Telegram. Sale in ascolto: '+(tgGruppi.length||0)+'.','ok');
+ }else{
+   tgStato('Ponte avviato, collegamento a Telegram in corso…');
+ }
+}
+function tgInvia(oggetto){
+ try{ if(tgWs&&tgWs.readyState===1){ tgWs.send(JSON.stringify(oggetto)); return true; } }catch(e){}
+ return false;
+}
+// Un solo canale con il ponte: i segnali arrivano, i comandi partono. Si e' scelto il WebSocket e
+// non fetch() perche' in prova una fetch() verso 127.0.0.1 veniva rifiutata dalla pagina mentre il
+// WebSocket verso lo stesso indirizzo funzionava - ed e' la stessa via gia' usata per Binance e
+// per il DOM di MT5.
+function tgCollega(){
+ const porta=tgPortNow();
+ if(tgWs&&tgWsPorta===porta&&(tgWs.readyState===0||tgWs.readyState===1))return;
+ try{ if(tgWs){ tgWs.onclose=null; tgWs.close(); } }catch(e){}
+ tgWs=null; tgWsPorta=porta;
+ let ws;
+ try{ ws=new WebSocket('ws://127.0.0.1:'+porta+'/ws/segnali'); }
+ catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
+ tgWs=ws;
+ tgStato('Collegamento al ponte…');
+ ws.onopen=()=>{ tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'}); };
+ ws.onmessage=ev=>{
+   let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
+   if(m.tipo==='stato'){ tgApplicaStato(m); return; }
+   if(m.tipo==='battito'){ return; }
+   if(m.tipo==='salvato'){
+     if(!m.ok)tgStato('Non sono riuscito a salvare: '+(m.errore||'errore sconosciuto'),'err');
+     return;
+   }
+   if(m.tipo==='segnale'&&m.segnale){
+     tgUltimoId=m.id||tgUltimoId;
+     tgSegnaliRicevuti.push(m);
+     if(tgSegnaliRicevuti.length>200)tgSegnaliRicevuti.splice(0,tgSegnaliRicevuti.length-200);
+     // Nessun ordine parte da qui: per ora si annota soltanto. La conferma arrivera' col suo
+     // pannello, ed e' l'unico posto da cui potra' mai partire un ordine.
+     console.log('[Segnali] '+m.segnale.direzione+' '+m.segnale.strumento
+       +' conf '+m.segnale.confidenza+'%'+(m.segnale.avvisi.length?(' AVVISI: '+m.segnale.avvisi.join('; ')):''));
+   }
+ };
+ ws.onerror=()=>{};
+ ws.onclose=()=>{
+   if(tgWs!==ws)return;
+   tgWs=null;
+   tgStato('Ponte non raggiungibile su 127.0.0.1:'+porta+' — è avviato? (segnali_bridge.py)','err');
+   clearTimeout(tgRiconnT);
+   tgRiconnT=setTimeout(tgCollega,5000);
+ };
+}
+$('tgAddBtn')?.addEventListener('click',()=>{
+ const campo=$('tgNewGroup'); if(!campo)return;
+ const g=tgNormalizzaGruppo(campo.value);
+ if(!g){ tgStato('Scrivi un canale o un link prima di aggiungere.','err'); return; }
+ if(tgGruppi.indexOf(g)>=0){ tgStato("Questa sala c'è già nell'elenco.",'err'); return; }
+ tgGruppi.push(g); campo.value='';
+ tgRenderGruppi();
+ if(!tgInvia({azione:'scrivi_chat',chat:tgGruppi}))tgStato('Ponte non collegato: la modifica non è stata salvata.','err');
+});
+$('tgNewGroup')?.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('tgAddBtn')?.click(); } });
+$('tgRefreshBtn')?.addEventListener('click',()=>{ tgCollega(); tgInvia({azione:'leggi_chat'}); });
+$('tgPort')?.addEventListener('change',tgCollega);
+$('genSettingsTabTelegram')?.addEventListener('click',()=>{ tgCollega(); setTimeout(()=>tgInvia({azione:'leggi_chat'}),150); });
 // ===================== MODALE "NOTIZIE" — apertura/chiusura + salvataggio filtri =====================
 function syncNewsSettingsModalFromState(){
  if($('newsEnabledCheckbox'))$('newsEnabledCheckbox').checked=newsEnabled;
