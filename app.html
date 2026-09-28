@@ -8894,6 +8894,66 @@ function tvp3dColor(f){
  const a=TVP3D_PALETTE[i], b=TVP3D_PALETTE[i+1];
  return [Math.round(a[0]+(b[0]-a[0])*t),Math.round(a[1]+(b[1]-a[1])*t),Math.round(a[2]+(b[2]-a[2])*t)];
 }
+// Lisciatura lungo il PREZZO (mai lungo il tempo: unire fette diverse falserebbe l'evoluzione,
+// che e' proprio quello che si vuole leggere). Kernel 1-2-1 ripetuto: le creste diventano curve
+// invece che seghettate, senza spostare i massimi.
+function tvp3dSmoothRows(grid,S,K,passes){
+ const n=Math.max(0,Math.min(6,passes|0));
+ for(let it=0;it<n;it++){
+   for(let s2=0;s2<S;s2++){
+     const row=grid[s2], out=new Float64Array(K);
+     for(let k=0;k<K;k++){
+       const a=row[Math.max(0,k-1)], c=row[k], d=row[Math.min(K-1,k+1)];
+       out[k]=(a+2*c+d)/4;
+     }
+     grid[s2]=out;
+   }
+ }
+ return grid;
+}
+function tvp3dFinish(grid,S,K,lo,hi,usedReal,smooth,fonte){
+ tvp3dSmoothRows(grid,S,K,smooth);
+ let max=0, mS=0, mK=0;
+ for(let s2=0;s2<S;s2++)for(let k=0;k<K;k++){ const v=grid[s2][k]; if(v>max){ max=v; mS=s2; mK=k; } }
+ if(!(max>0))return null;
+ return {grid,lo,hi,span:hi-lo,max,S,K,usedReal,fonte,peak:{s:mS,k:mK}};
+}
+// RICHIESTO ESPLICITAMENTE: poter guardare SOLO L'ULTIMA CANDELA invece delle candele in vista.
+// Sono due domande diverse: "come si e' distribuito il volume nelle ultime ore" e "come si sta
+// formando il profilo della candela in corso, adesso". La seconda si costruisce dai TICK grezzi
+// dell'ultima candela, divisi per tempo: ogni fetta e' una frazione di candela, e si vede il
+// profilo nascere. Senza tick registrati non si puo' fare - e in quel caso si dice, invece di
+// mostrare un modello vuoto senza spiegazione.
+function tvp3dBuildGridLastCandle(rows,dataEnd,S,K,smooth){
+ const r=rows[dataEnd];
+ if(!r)return null;
+ const t=parseDateTime(r.date);
+ if(!Number.isFinite(t))return null;
+ const bucketMs=(currentTF||1)*60000;
+ const t0=footprintBucketStart(t), t1=t0+bucketMs;
+ const log=footprintTickLogByAsset[currentAssetKey];
+ if(!log||!log.length)return null;
+ // I tick sono in ordine di tempo: si parte dal fondo e si risale finche' si resta nella candela.
+ let i=log.length-1;
+ while(i>=0&&log[i].t>=t1)i--;
+ const end=i;
+ while(i>=0&&log[i].t>=t0)i--;
+ const start=i+1;
+ if(end<start)return null;
+ let lo=Infinity,hi=-Infinity;
+ for(let j=start;j<=end;j++){ const px=log[j].price; if(px<lo)lo=px; if(px>hi)hi=px; }
+ if(!(hi>lo))return null;
+ const grid=[]; for(let s2=0;s2<S;s2++)grid.push(new Float64Array(K));
+ const span=hi-lo;
+ for(let j=start;j<=end;j++){
+   const e=log[j];
+   const sIdx=Math.max(0,Math.min(S-1,Math.floor((e.t-t0)/bucketMs*S)));
+   const k=Math.max(0,Math.min(K-1,Math.floor((e.price-lo)/span*K)));
+   const v=(Number.isFinite(e.vol)&&e.vol>0)?e.vol:((Number.isFinite(e.weight)&&e.weight>0)?e.weight:1);
+   grid[sIdx][k]+=v;
+ }
+ return tvp3dFinish(grid,S,K,lo,hi,true,smooth,'ultima candela');
+}
 // Griglia [fetta di tempo][livello di prezzo] con i volumi della finestra visibile.
 function tvp3dBuildGrid(rows,dataStart,dataEnd,S,K,smooth){
  let lo=Infinity,hi=-Infinity;
@@ -8929,24 +8989,7 @@ function tvp3dBuildGrid(rows,dataStart,dataEnd,S,K,smooth){
      for(let k=k0;k<=k1;k++)grid[sIdx][k]+=vol/nK;
    }
  }
- // Lisciatura lungo il PREZZO (mai lungo il tempo: unire fette diverse falserebbe l'evoluzione,
- // che e' proprio quello che si vuole leggere). Kernel 1-2-1 ripetuto: le creste diventano curve
- // invece che seghettate, senza spostare i massimi.
- const passes=Math.max(0,Math.min(6,smooth|0));
- for(let it=0;it<passes;it++){
-   for(let s2=0;s2<S;s2++){
-     const row=grid[s2], out=new Float64Array(K);
-     for(let k=0;k<K;k++){
-       const a=row[Math.max(0,k-1)], c=row[k], d=row[Math.min(K-1,k+1)];
-       out[k]=(a+2*c+d)/4;
-     }
-     grid[s2]=out;
-   }
- }
- let max=0, mS=0, mK=0;
- for(let s2=0;s2<S;s2++)for(let k=0;k<K;k++){ const v=grid[s2][k]; if(v>max){ max=v; mS=s2; mK=k; } }
- if(!(max>0))return null;
- return {grid,lo,hi,span,max,S,K,usedReal,peak:{s:mS,k:mK}};
+ return tvp3dFinish(grid,S,K,lo,hi,usedReal,smooth,'candele in vista');
 }
 function tvp3dRender(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
  if(!pad||!h)return;
@@ -8957,7 +9000,14 @@ function tvp3dRender(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
  if(!(cw>0&&ch>0))return;
  const S=Math.max(4,Math.min(60,Math.round(Number(p.slices)||18)));
  const K=Math.max(16,Math.min(240,Math.round(Number(p.buckets)||90)));
- const g=tvp3dBuildGrid(rows,dataStart,dataEnd,S,K,Number(p.smooth)||2);
+ // RICHIESTO: sorgente selezionabile. Se "ultima candela" non ha tick da mostrare si ricade
+ // sulle candele in vista invece di lasciare il grafico vuoto - e l'etichetta lo dichiara.
+ let g=null, ripiego=false;
+ if(p.source==='last'){
+   g=tvp3dBuildGridLastCandle(rows,dataEnd,S,K,Number(p.smooth)||2);
+   if(!g)ripiego=true;
+ }
+ if(!g)g=tvp3dBuildGrid(rows,dataStart,dataEnd,S,K,Number(p.smooth)||2);
  if(!g)return;
  const yaw=(Number(p.yaw)||0)*Math.PI/180;
  const pitch=Math.max(4,Math.min(82,Number(p.pitch)||28))*Math.PI/180;
@@ -9000,39 +9050,78 @@ function tvp3dRender(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
  }
  // ---- creste, dalla piu' LONTANA alla piu' vicina: cosi' le vicine coprono le lontane e la
  // profondita' si legge davvero. L'ordine dipende dalla rotazione, quindi si calcola, non si assume.
+ // RICHIESTO ESPLICITAMENTE ("delle vere e proprie colline di montagna che uniscono le fette"):
+ // fra una cresta e la successiva si stende una SUPERFICIE, invece di lasciare le linee sospese
+ // una accanto all'altra. Due accorgimenti la rendono davvero continua:
+ //  - INTERPOLAZIONE: fra due creste vere se ne generano altre, per semplice media pesata. Non
+ //    aggiunge informazione (non ci sono dati in mezzo, e inventarli sarebbe sbagliato), ma
+ //    smussa il passaggio: e' la differenza fra un ventaglio di lamine e un rilievo.
+ //  - SUPERFICIE: ogni coppia di creste adiacenti chiude un poligono riempito. Disegnate dalla
+ //    piu' lontana alla piu' vicina, le piu' vicine coprono le altre e la profondita' si legge.
+ const interp=Math.max(0,Math.min(6,Math.round(Number(p.interp)||0)));
+ const totalLines=(S-1)*(interp+1)+1;
+ const lineAt=li=>{
+   // li scorre TUTTE le linee, comprese quelle interpolate: da li si risale alla coppia di
+   // creste vere che la circondano e al peso della mescolanza.
+   const f=(totalLines===1)?0:li/(totalLines-1)*(S-1);
+   const s0=Math.min(S-1,Math.floor(f)), s1=Math.min(S-1,s0+1), t=f-s0;
+   const u=(S===1)?0:(-1+2*f/(S-1));
+   return {s0,s1,t,u,tint:(S===1)?1:f/(S-1)};
+ };
+ const ptsOf=info=>{
+   const r0=g.grid[info.s0], r1=g.grid[info.s1], out=[];
+   for(let k=0;k<K;k++){
+     const v=-1+2*k/(K-1);
+     const val=(r0[k]*(1-info.t)+r1[k]*info.t)/g.max;
+     out.push(proj(info.u,v,val));
+   }
+   return out;
+ };
  const order=[];
- for(let s2=0;s2<S;s2++){
-   const u=S===1?0:(-1+2*s2/(S-1));
-   order.push({s:s2,u,d:(u*DP)*cyw*sp});
+ for(let li=0;li<totalLines;li++){
+   const info=lineAt(li);
+   order.push({li,info,d:(info.u*DP)*cyw*sp});
  }
  order.sort((a,b)=>a.d-b.d);
  const fillOn=p.fill!==false;
+ const surfaceOn=p.surface!==false;
+ let prev=null, prevTint=0;
  for(const it of order){
-   const row=g.grid[it.s];
-   const col=tvp3dColor(S===1?1:it.s/(S-1));
+   const col=tvp3dColor(it.info.tint);
    const rgb=col[0]+','+col[1]+','+col[2];
-   const pts=[];
-   for(let k=0;k<K;k++){
-     const v=-1+2*k/(K-1);
-     pts.push(proj(it.u,v,row[k]/g.max));
+   const pts=ptsOf(it.info);
+   // La superficie si stende solo fra linee CONSECUTIVE nell'ordine di profondita': con una
+   // rotazione qualunque l'ordine puo' invertirsi, ma restano comunque adiacenti fra loro.
+   if(surfaceOn&&prev){
+     const mid=tvp3dColor((it.info.tint+prevTint)/2);
+     ctx.beginPath();
+     ctx.moveTo(prev[0][0],prev[0][1]);
+     for(let k=1;k<K;k++)ctx.lineTo(prev[k][0],prev[k][1]);
+     for(let k=K-1;k>=0;k--)ctx.lineTo(pts[k][0],pts[k][1]);
+     ctx.closePath();
+     ctx.fillStyle='rgba('+mid[0]+','+mid[1]+','+mid[2]+',0.22)';
+     ctx.fill();
    }
    if(fillOn){
-     // Riempimento fino al piano base: e' quello che da' l'idea di superficie invece di un
-     // fascio di fili sovrapposti.
+     // Velo fino al piano base: da' corpo al rilievo e nasconde il vuoto sotto le creste.
      ctx.beginPath();
      ctx.moveTo(pts[0][0],pts[0][1]);
      for(let k=1;k<K;k++)ctx.lineTo(pts[k][0],pts[k][1]);
-     const e2=proj(it.u,1,0), e1=proj(it.u,-1,0);
+     const e2=proj(it.info.u,1,0), e1=proj(it.info.u,-1,0);
      ctx.lineTo(e2[0],e2[1]); ctx.lineTo(e1[0],e1[1]); ctx.closePath();
-     ctx.fillStyle='rgba('+rgb+',0.13)';
+     ctx.fillStyle='rgba('+rgb+',0.10)';
      ctx.fill();
    }
    ctx.beginPath();
    ctx.moveTo(pts[0][0],pts[0][1]);
    for(let k=1;k<K;k++)ctx.lineTo(pts[k][0],pts[k][1]);
    ctx.strokeStyle='rgba('+rgb+',0.95)';
-   ctx.lineWidth=lw;
+   // Le linee interpolate sono piu' sottili delle creste vere: cosi' si continua a distinguere
+   // il dato reale dal raccordo, invece di annegarli in una massa unica.
+   const vera=Math.abs(it.info.t)<1e-6;
+   ctx.lineWidth=vera?lw:Math.max(0.4,lw*0.45);
    ctx.stroke();
+   prev=pts; prevTint=it.info.tint;
  }
  // ---- punto di massimo volume, con il prezzo
  if(p.showPeak!==false){
@@ -9062,41 +9151,97 @@ function tvp3dRender(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
    });
  });
  ctx.globalAlpha=1;
- const label='✥ Temporal VP 3D'+(g.usedReal?'':' · volume stimato');
+ const locked=!!p.locked;
+ // Etichetta onesta su COSA si sta guardando: sorgente e qualita' del volume. Con un modello
+ // cosi' astratto, senza questa riga non c'e' modo di sapere se quello che si vede sono i tick
+ // veri dell'ultima candela o una stima sulle candele in vista.
+ const label=(locked?'🔒 ':'✥ ')+'Temporal VP 3D · '+g.fonte+(g.usedReal?'':' · volume stimato')+(ripiego?' (niente tick: ripiego)':'');
  ctx.font=scaledFont('bold 10px Arial'); ctx.textAlign='left'; ctx.textBaseline='middle';
- const lwid=ctx.measureText(label).width+14, lhei=18;
+ const lhei=18, pad2=7;
+ const tw=ctx.measureText(label).width;
+ const btnW=18;
+ // [etichetta][−][+][lucchetto] — i tre pulsantini a destra, ognuno con la sua zona sensibile.
+ const lwid=tw+pad2*2+btnW*3;
  const hx=x1, hy=y1-lhei-4;
  ctx.fillStyle='rgba(11,17,23,.88)';
  ctx.strokeStyle='rgba(148,163,184,.35)'; ctx.lineWidth=1;
  roundRectPath(ctx,hx,hy,lwid,lhei,6); ctx.fill(); ctx.stroke();
- ctx.fillStyle=g.usedReal?'#8bd6c4':'#e0c07a';
- ctx.fillText(label,hx+7,hy+lhei/2);
+ ctx.fillStyle=locked?'#9ca3af':(g.usedReal?'#8bd6c4':'#e0c07a');
+ ctx.fillText(label,hx+pad2,hy+lhei/2);
+ const bx0=hx+tw+pad2*2;
+ const zone=[];
+ ['−','+',locked?'🔓':'🔒'].forEach((txt,i)=>{
+   const bx=bx0+i*btnW;
+   ctx.strokeStyle='rgba(148,163,184,.22)';
+   ctx.beginPath(); ctx.moveTo(bx+.5,hy+3); ctx.lineTo(bx+.5,hy+lhei-3); ctx.stroke();
+   ctx.fillStyle='#c8d2dd'; ctx.textAlign='center';
+   ctx.fillText(txt,bx+btnW/2,hy+lhei/2);
+   zone.push({x1:bx,y1:hy,x2:bx+btnW,y2:hy+lhei});
+ });
+ ctx.textAlign='left';
+ // Maniglia d'angolo per ridimensionare trascinando: in basso a destra dell'ingombro, dove la
+ // cerca chiunque abbia mai ridimensionato una finestra.
+ const gs=12, gx=x2-gs, gy=y2-gs;
+ ctx.strokeStyle=locked?'rgba(148,163,184,.25)':'rgba(148,163,184,.6)'; ctx.lineWidth=1.5;
+ for(let i=0;i<3;i++){
+   ctx.beginPath();
+   ctx.moveTo(gx+i*4,gy+gs); ctx.lineTo(gx+gs,gy+i*4);
+   ctx.stroke();
+ }
  ctx.restore();
- tvp3dHits.push({id:ind.id,ind,box:{x1,y1,x2,y2},handle:{x1:hx,y1:hy,x2:hx+lwid,y2:hy+lhei}});
+ tvp3dHits.push({id:ind.id,ind,locked,box:{x1,y1,x2,y2},
+   handle:{x1:hx,y1:hy,x2:bx0,y2:hy+lhei},
+   minus:zone[0],plus:zone[1],lock:zone[2],
+   grip:{x1:gx-3,y1:gy-3,x2:gx+gs+3,y2:gy+gs+3}});
 }
 // Trascinamento: sulla maniglia si SPOSTA, dentro al modello si RUOTA. Due gesti sullo stesso
 // oggetto, distinti da dove iniziano - come nelle finestre di un sistema operativo, dove la barra
 // del titolo sposta e il contenuto no.
+const tvp3dIn=(z,x,y)=>!!z&&x>=z.x1&&x<=z.x2&&y>=z.y1&&y<=z.y2;
 function tvp3dHitAt(clientX,clientY){
  const c=$('chart'); if(!c||!tvp3dHits.length)return null;
  const rc=c.getBoundingClientRect();
  const x=clientX-rc.left, y2=clientY-rc.top;
  for(let i=tvp3dHits.length-1;i>=0;i--){
    const t=tvp3dHits[i];
-   const hh=t.handle;
-   if(x>=hh.x1&&x<=hh.x2&&y2>=hh.y1&&y2<=hh.y2)return {t,mode:'move'};
-   const b=t.box;
-   if(x>=b.x1&&x<=b.x2&&y2>=b.y1&&y2<=b.y2)return {t,mode:'rotate'};
+   // I pulsantini rispondono SEMPRE, anche a modello bloccato: il lucchetto dev'essere
+   // riapribile, altrimenti bloccarlo sarebbe una porta che si chiude da fuori.
+   if(tvp3dIn(t.lock,x,y2))return {t,mode:'lock'};
+   if(tvp3dIn(t.minus,x,y2))return {t,mode:'scale-'};
+   if(tvp3dIn(t.plus,x,y2))return {t,mode:'scale+'};
+   // RICHIESTO ESPLICITAMENTE: da bloccato, trascinare sopra al modello deve spostare il
+   // GRAFICO, non il modello. Quindi qui si lascia passare l'evento come se il modello non ci
+   // fosse - e il pan parte normalmente.
+   if(t.locked)continue;
+   if(tvp3dIn(t.grip,x,y2))return {t,mode:'resize'};
+   if(tvp3dIn(t.handle,x,y2))return {t,mode:'move'};
+   if(tvp3dIn(t.box,x,y2))return {t,mode:'rotate'};
  }
  return null;
+}
+function tvp3dNum(v,d){ return Number.isFinite(Number(v))?Number(v):d; }
+// Ingrandisce o rimpicciolisce di un passo. RICHIESTO: poterlo fare dal grafico, non solo dalle
+// impostazioni. Le tre misure si scalano INSIEME, altrimenti a forza di premere il modello si
+// deformerebbe invece di crescere.
+function tvp3dScale(ind,factor){
+ const p=ind.params;
+ p.extent=Math.max(10,Math.min(140,tvp3dNum(p.extent,55)*factor));
+ p.depth=Math.max(5,Math.min(120,tvp3dNum(p.depth,30)*factor));
+ p.height=Math.max(5,Math.min(90,tvp3dNum(p.height,34)*factor));
+ draw(); scheduleSave();
+ try{ rebuildIndicatorSettingsModal(); }catch(err){}
 }
 function tvp3dPointerDown(e){
  const hit=tvp3dHitAt(e.clientX,e.clientY);
  if(!hit)return false;
- const p=hit.t.ind.params;
- const num=(v,d)=>Number.isFinite(Number(v))?Number(v):d;
- tvp3dDrag={mode:hit.mode,ind:hit.t.ind,x0:e.clientX,y0:e.clientY,
-   ox:num(p.ox,0.5),oy:num(p.oy,0.62),yaw:num(p.yaw,0),pitch:num(p.pitch,28)};
+ const ind=hit.t.ind, p=ind.params;
+ if(hit.mode==='lock'){ p.locked=!p.locked; draw(); scheduleSave(); try{ rebuildIndicatorSettingsModal(); }catch(err){} return true; }
+ if(hit.mode==='scale-'){ tvp3dScale(ind,1/1.12); return true; }
+ if(hit.mode==='scale+'){ tvp3dScale(ind,1.12); return true; }
+ tvp3dDrag={mode:hit.mode,ind,x0:e.clientX,y0:e.clientY,
+   ox:tvp3dNum(p.ox,0.5),oy:tvp3dNum(p.oy,0.62),
+   yaw:tvp3dNum(p.yaw,0),pitch:tvp3dNum(p.pitch,28),
+   extent:tvp3dNum(p.extent,55),depth:tvp3dNum(p.depth,30),height:tvp3dNum(p.height,34)};
  try{ $('chart').setPointerCapture?.(e.pointerId); }catch(err){}
  return true;
 }
@@ -9114,6 +9259,13 @@ function tvp3dPointerMove(e){
    const cwp=Math.max(1,rc.width-pd.l-pd.r), chp=Math.max(1,rc.height-pd.t-pd.b);
    p.ox=Math.max(0,Math.min(1,tvp3dDrag.ox+dx/cwp));
    p.oy=Math.max(0,Math.min(1,tvp3dDrag.oy+dy/chp));
+ }else if(tvp3dDrag.mode==='resize'){
+   // Orizzontale allarga la base, verticale alza le creste: due gesti indipendenti nello stesso
+   // trascinamento, come il ridimensionamento di una finestra.
+   const fx=1+dx/220, fy=1+dy/180;
+   p.extent=Math.max(10,Math.min(140,tvp3dDrag.extent*Math.max(0.15,fx)));
+   p.depth=Math.max(5,Math.min(120,tvp3dDrag.depth*Math.max(0.15,fx)));
+   p.height=Math.max(5,Math.min(90,tvp3dDrag.height*Math.max(0.15,fy)));
  }else{
    p.yaw=tvp3dDrag.yaw+dx*0.4;
    p.pitch=Math.max(4,Math.min(82,tvp3dDrag.pitch+dy*0.25));
@@ -9130,8 +9282,9 @@ function tvp3dPointerUp(){
 const INDICATOR_DEFS={
  tvp3d:{
    label:'Temporal Volume Profile 3D',
-   defaultParams:()=>({slices:18,buckets:90,smooth:2,yaw:-32,pitch:28,extent:55,depth:30,height:34,
-     ox:0.5,oy:0.62,opacity:90,lineWidth:1.4,fill:true,showBase:true,showGrid:true,showPeak:true}),
+   defaultParams:()=>({slices:18,buckets:90,smooth:2,interp:2,yaw:-32,pitch:28,extent:55,depth:30,height:34,
+     ox:0.5,oy:0.62,opacity:90,lineWidth:1.4,fill:true,surface:true,showBase:true,showGrid:true,showPeak:true,
+     locked:false,source:'view'}),
    compute(){}, // niente da mantenere fra un disegno e l'altro: la griglia si ricostruisce dalla finestra visibile
    render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){ tvp3dRender(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h); }
  },
@@ -10553,6 +10706,8 @@ function openIndicatorSettingsModal(ind){
    if(ind.key==='tvp3d'){
      // Tutto regolabile, come richiesto. I nomi sono quelli usati nella spiegazione: chi legge la
      // guida deve ritrovare qui le stesse parole.
+     paramsRow.appendChild(mkSelect('Sorgente','source',['view','last']));
+     paramsRow.appendChild(mkCheck('Bloccato (il trascinamento sposta il grafico)','locked'));
      paramsRow.appendChild(mkNum('Fette di tempo','slices',4,60));
      paramsRow.appendChild(mkNum('Livelli di prezzo','buckets',16,240));
      paramsRow.appendChild(mkNum('Lisciatura','smooth',0,6));
@@ -10563,6 +10718,8 @@ function openIndicatorSettingsModal(ind){
      paramsRow.appendChild(mkNum('Altezza %','height',5,90));
      paramsRow.appendChild(mkNum('Opacità %','opacity',5,100));
      paramsRow.appendChild(mkNum('Spessore linea','lineWidth',0.5,4,0.1));
+     paramsRow.appendChild(mkNum('Raccordo fra le fette','interp',0,6));
+     paramsRow.appendChild(mkCheck('Superficie continua','surface'));
      paramsRow.appendChild(mkCheck('Riempimento','fill'));
      paramsRow.appendChild(mkCheck('Piano base','showBase'));
      paramsRow.appendChild(mkCheck('Griglia','showGrid'));
