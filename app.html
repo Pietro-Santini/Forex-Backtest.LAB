@@ -3033,16 +3033,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  </div>
  <div class="tgPanelBody" id="tgPanelBody"></div>
  <div class="tgPanelFoot">
-   <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#cdd6e0">
-     Rischio <b>totale</b> per segnale
-     <input id="tgRischioTot" type="number" step="0.1" min="0.1" max="20" value="1" style="width:66px;padding:3px 6px;font-size:12px"> %
-   </label>
    <label class="tgCfgCampo" style="font-size:11.5px"
           title="Quanti segnali tenere nell'elenco: quando ne arriva uno nuovo, i più vecchi vengono tolti">
      Tieni gli ultimi
      <input id="tgMaxSegnali" class="tgCfgIn" type="number" step="1" min="3" max="50" value="10" style="width:56px">
    </label>
-   <div class="hint" id="tgRischioNota" style="margin:0;flex:1 1 100%;font-size:11px;line-height:1.45"></div>
+   <div class="hint" style="margin:0;flex:1 1 100%;font-size:11px;line-height:1.45">Il rischio si decide su ogni singolo segnale, nella finestra che si apre premendo «Apri N posizioni».</div>
  </div>
  <div class="tgRes" id="tgPanelRes" title="Trascina per ridimensionare"></div>
 </div>
@@ -20426,22 +20422,63 @@ let tgWs=null, tgWsPorta=null, tgUltimoId=0, tgRiconnT=null;
 const TG_ATTIVO_KEY='fb_tg_attivo';
 function tgAttivo(){ try{ return localStorage.getItem(TG_ATTIVO_KEY)==='1'; }catch(e){ return false; } }
 function tgGiaDeciso(){ try{ return localStorage.getItem(TG_ATTIVO_KEY)!=null; }catch(e){ return false; } }
-function tgImpostaAttivo(acceso){
+async function tgImpostaAttivo(acceso){
  try{ localStorage.setItem(TG_ATTIVO_KEY,acceso?'1':'0'); }catch(e){}
- if(acceso)tgCollega(); else tgScollega();
+ if(acceso){
+  tgAggiornaInterruttore();
+  await tgAssicuraPonte();   // se non e' in piedi, lo si fa avviare dal servizio locale
+  tgCollega();
+ }else{
+  tgScollega();
+ }
  tgAggiornaInterruttore();
+}
+// RICHIESTO ESPLICITAMENTE: premendo Collegamento il ponte deve partire da solo, senza aprire
+// nessun prompt dei comandi. Una pagina web NON puo' avviare un programma - lo impedisce il
+// browser, ed e' giusto cosi'. Chi puo' farlo e' il servizio locale gia' in esecuzione (lo stesso
+// che parla con MT5): gli si chiede di avviarlo lui, in background e senza finestre.
+// Se quel servizio non c'e' (app aperta nel solo browser, senza il programma desktop) non si puo'
+// fare altro che dirlo: si prova comunque a collegarsi, nel caso il ponte sia gia' avviato a mano.
+let tgAvvioInCorso=false;
+async function tgAssicuraPonte(){
+ if(tgAvvioInCorso)return false;
+ // Gia' in piedi? Nessuno lo avvia due volte.
+ if(tgWs&&tgWs.readyState===1)return true;
+ tgAvvioInCorso=true;
+ try{
+  tgStato('Avvio del ponte dei segnali in corso…');
+  const r=await fetchMt5WithTimeout('/segnali-launch',{method:'POST'},20000);
+  if(r&&r.ok){
+   tgStato(r.data&&r.data.gia_attivo?'Ponte dei segnali già attivo.':'Ponte dei segnali avviato.');
+   return true;
+  }
+  tgStato('Non sono riuscito ad avviarlo da solo: '+((r&&r.message)||'servizio locale non raggiungibile')
+   +'. Se l\'app è aperta solo nel browser, avvia a mano avvia_segnali.bat.','err');
+  return false;
+ }catch(e){
+  tgStato('Non sono riuscito ad avviare il ponte: '+e.message,'err');
+  return false;
+ }finally{ tgAvvioInCorso=false; }
 }
 // Nome storico mantenuto dove serviva: aggiungere una sala vuol dire volerle ascoltare.
 function tgSegnaUsato(){ if(!tgAttivo())tgImpostaAttivo(true); }
 function tgGiaUsato(){ return tgAttivo(); }
-function tgAggiornaInterruttore(){
+let tgCollegatoTelegram=false;
+function tgAggiornaInterruttore(m){
+ if(m&&typeof m.collegato==='boolean')tgCollegatoTelegram=!!m.collegato;
  const b=$('tgToggleBtn'); if(!b)return;
  const acceso=tgAttivo();
- b.textContent=acceso?'Collegamento: ACCESO':'Collegamento: spento';
- b.classList.toggle('active',acceso);
- b.title=acceso
-   ? 'Il collegamento al ponte e\' attivo: i segnali delle sale arrivano in app. Premi per spegnerlo.'
-   : 'Il collegamento al ponte e\' spento: nessun segnale arriva. Premi per accenderlo.';
+ // Tre stati, non due: spento, acceso ma non ancora dentro Telegram, e collegato davvero. Il
+ // secondo e' quello in cui l'accesso e' a meta': mostrarlo come "collegato" farebbe credere che i
+ // segnali stiano gia' arrivando.
+ b.textContent=!acceso?'Collegamento: spento'
+   :(tgCollegatoTelegram?'Collegamento: COLLEGATO':'Collegamento: acceso, accesso in corso…');
+ b.classList.toggle('active',acceso&&tgCollegatoTelegram);
+ b.title=!acceso
+   ? 'Il collegamento al ponte e\' spento: nessun segnale arriva. Premi per accenderlo.'
+   : (tgCollegatoTelegram
+      ? 'Collegato a Telegram: i segnali delle sale arrivano in app. Premi per spegnere.'
+      : 'Acceso, ma l\'accesso a Telegram non e\' ancora completo. Premi per spegnere.');
 }
 // Spegnere davvero: si chiude la presa e si disinnesca la riconnessione automatica, altrimenti
 // un secondo dopo tornerebbe su da sola e il pulsante non spegnerebbe niente.
@@ -20449,6 +20486,7 @@ function tgScollega(){
  clearTimeout(tgRiconnT); tgRiconnT=null;
  try{ if(tgWs){ tgWs.onclose=null; tgWs.onmessage=null; tgWs.close(); } }catch(e){}
  tgWs=null; tgWsPorta=null;
+ tgCollegatoTelegram=false;
  tgStato('Collegamento alle sale segnali SPENTO. Nessun segnale in arrivo.');
 }
 // true quando il collegamento l'ha chiesto l'utente (scheda aperta, "Ricontrolla", cambio porta):
@@ -20485,8 +20523,47 @@ function tgRenderGruppi(){
    box.appendChild(riga);
  });
 }
+// Il ponte dice cosa gli serve per entrare in Telegram (numero, codice, password della verifica
+// in due passaggi) e l'app lo chiede con un popup, invece di lasciare che lo chieda una finestra
+// nera. Il valore va dritto al ponte sul WebSocket: l'app non lo salva e non lo rilegge mai.
+let tgAccessoInCorso=false;
+async function tgChiediAccesso(cosa,errore){
+ if(tgAccessoInCorso)return;
+ tgAccessoInCorso=true;
+ try{
+  const avviso=errore?('\n\n⚠ '+errore):'';
+  let valore=null;
+  if(cosa==='telefono'){
+   valore=await appPrompt('Per leggere le sale serve entrare nel TUO account Telegram.\n\n'
+    +'Scrivi il numero con il prefisso internazionale, per esempio +39 333 1234567.'
+    +'\n\nIl numero va solo al ponte sul tuo PC: non viene salvato da nessuna parte.'+avviso,
+    {title:'📱 Numero di telefono',type:'tel',placeholder:'+39…',okLabel:'Invia'});
+  }else if(cosa==='codice'){
+   valore=await appPrompt('Telegram ti ha mandato un codice di verifica (nell\'app Telegram, o via SMS).\n\n'
+    +'Scrivilo qui.'+avviso,
+    {title:'🔑 Codice di verifica',type:'text',placeholder:'12345',okLabel:'Conferma'});
+  }else if(cosa==='password'){
+   valore=await appPrompt('Il tuo account ha la verifica in due passaggi.\n\n'
+    +'Serve la password del cloud Telegram. Viene usata solo adesso per entrare: non viene salvata '
+    +'né dall\'app né dal ponte.'+avviso,
+    {title:'🔒 Password della verifica in due passaggi',type:'password',okLabel:'Entra'});
+  }
+  if(valore==null||valore===''){
+   tgStato('Accesso a Telegram annullato. Premi di nuovo Collegamento quando vuoi riprovare.','err');
+   return;
+  }
+  tgInvia({azione:'accesso_'+cosa,valore:String(valore)});
+  tgStato(cosa==='telefono'?'Numero inviato: aspetto il codice di verifica…':'Verifica in corso…');
+ }finally{
+  // Un attimo di respiro prima di poter riaprire un popup: lo stato arriva anche piu' volte di
+  // fila, e senza questa pausa il codice appena mandato riaprirebbe subito la stessa domanda.
+  setTimeout(()=>{ tgAccessoInCorso=false; },800);
+ }
+}
 function tgApplicaStato(m){
  if(Array.isArray(m.chat)){ tgGruppi=m.chat; tgRenderGruppi(); }
+ if(m.accesso_serve){ tgChiediAccesso(m.accesso_serve,m.accesso_errore); }
+ tgAggiornaInterruttore(m);
  if(m.modalita==='simulatore'){
    tgStato('Ponte attivo in MODALITA SIMULATORE: i messaggi sono inventati, servono solo a provare la catena.','ok');
  }else if(!m.credenziali_presenti){
@@ -20544,7 +20621,7 @@ function tgCollega(){
  ws.onerror=()=>{};
  ws.onclose=()=>{
    if(tgWs!==ws)return;
-   tgWs=null;
+   tgWs=null; tgCollegatoTelegram=false; tgAggiornaInterruttore();
    tgStato('Ponte non raggiungibile su 127.0.0.1:'+porta+' — è avviato? (segnali_bridge.py)','err');
    clearTimeout(tgRiconnT);
    tgRiconnT=setTimeout(tgCollega,tgCollegamentoChiesto?5000:20000);
@@ -20588,8 +20665,12 @@ const TG_GEOM_KEY='fb_tg_panel_geom';
 const TG_RISCHIO_KEY='fb_tg_rischio_totale';
 let tgTrascina=null, tgRidim=null;
 
+// L'ultimo rischio usato: non e' piu' una casella nel pannello (li' non si vedeva l'effetto che
+// faceva), serve solo a proporre un punto di partenza quando si apre la configurazione di un
+// segnale. Da li' in poi comanda quello che scrivi nella configurazione stessa.
 function tgRischioTotale(){
- const v=num($('tgRischioTot')?.value);
+ let v=NaN;
+ try{ v=Number(localStorage.getItem(TG_RISCHIO_KEY)); }catch(e){}
  return (Number.isFinite(v)&&v>0)?Math.min(20,v):1;
 }
 function tgDaValutare(){ return tgSegnaliRicevuti.filter(v=>!v.stato||v.stato==='nuovo'); }
@@ -20635,6 +20716,15 @@ function tgAggiornaPulsante(){
    ? (nuovi===1?'1 segnale da valutare: aprilo, leggilo e decidi tu':nuovi+' segnali da valutare: aprili, leggili e decidi tu')
    : 'Segnali ricevuti in questa sessione (nessuno da valutare)';
 }
+// La finestra in cui il pannello vive ADESSO: quella principale, oppure quella del grafico
+// staccato. Misurare sempre con window (la principale) vorrebbe dire, in PIP, limitare il
+// pannello a un'area che non c'entra niente con quella in cui si trova davvero.
+function tgFinestra(){
+ try{
+  const p=$('tgPanel');
+  return (p&&p.ownerDocument&&p.ownerDocument.defaultView)||window;
+ }catch(e){ return window; }
+}
 function tgSalvaGeom(){
  const p=$('tgPanel'); if(!p)return;
  try{ localStorage.setItem(TG_GEOM_KEY,JSON.stringify({l:p.offsetLeft,t:p.offsetTop,w:p.offsetWidth,h:p.offsetHeight})); }catch(e){}
@@ -20646,17 +20736,24 @@ function tgApplicaGeom(){
  let g=null;
  try{ g=JSON.parse(localStorage.getItem(TG_GEOM_KEY)||'null'); }catch(e){}
  if(!g||typeof g!=='object')g={};
- const w=Math.max(300,Math.min(Number(g.w)||430,Math.max(300,window.innerWidth-20)));
- const h=Math.max(200,Math.min(Number(g.h)||460,Math.max(200,window.innerHeight-20)));
+ const fin=tgFinestra();
+ const w=Math.max(300,Math.min(Number(g.w)||430,Math.max(300,fin.innerWidth-20)));
+ const h=Math.max(200,Math.min(Number(g.h)||460,Math.max(200,fin.innerHeight-20)));
  let l=Number(g.l), t=Number(g.t);
- if(!Number.isFinite(l))l=Math.max(10,window.innerWidth-w-26);
+ if(!Number.isFinite(l))l=Math.max(10,fin.innerWidth-w-26);
  if(!Number.isFinite(t))t=92;
  p.style.width=w+'px'; p.style.height=h+'px';
- p.style.left=Math.max(0,Math.min(l,window.innerWidth-w))+'px';
- p.style.top=Math.max(0,Math.min(t,window.innerHeight-h))+'px';
+ p.style.left=Math.max(0,Math.min(l,Math.max(0,fin.innerWidth-w)))+'px';
+ p.style.top=Math.max(0,Math.min(t,Math.max(0,fin.innerHeight-h)))+'px';
 }
 function tgApriPannello(){
  const p=$('tgPanel'); if(!p)return;
+ // RICHIESTO ESPLICITAMENTE: aprendolo dalla pagina PIP il pannello deve comparire LI', non sulla
+ // pagina principale rimasta dietro (che magari sta su un altro monitor). routeModalToHostDoc lo
+ // porta nel documento da cui e' partito il click - finestra staccata o elemento a schermo intero
+ // - e lo registra in modalFloatHomes, cosi' rientra da solo quando la finestra PIP si chiude
+ // (restoreAllFloatingModalsHome), invece di sparire insieme a lei.
+ try{ routeModalToHostDoc(p); }catch(e){}
  tgApplicaGeom();
  p.style.display='flex';
  tgRenderPannello();
@@ -20676,8 +20773,9 @@ $('tgPanelHead')?.addEventListener('pointerdown',ev=>{
 $('tgPanelHead')?.addEventListener('pointermove',ev=>{
  if(!tgTrascina)return;
  const p=$('tgPanel'); if(!p)return;
- p.style.left=Math.max(0,Math.min(ev.clientX-tgTrascina.dx,window.innerWidth-p.offsetWidth))+'px';
- p.style.top=Math.max(0,Math.min(ev.clientY-tgTrascina.dy,window.innerHeight-p.offsetHeight))+'px';
+ const fin=tgFinestra();
+ p.style.left=Math.max(0,Math.min(ev.clientX-tgTrascina.dx,Math.max(0,fin.innerWidth-p.offsetWidth)))+'px';
+ p.style.top=Math.max(0,Math.min(ev.clientY-tgTrascina.dy,Math.max(0,fin.innerHeight-p.offsetHeight)))+'px';
 });
 ['pointerup','pointercancel'].forEach(t=>$('tgPanelHead')?.addEventListener(t,()=>{
  if(tgTrascina){ tgTrascina=null; tgSalvaGeom(); }
@@ -20691,8 +20789,9 @@ $('tgPanelRes')?.addEventListener('pointerdown',ev=>{
 $('tgPanelRes')?.addEventListener('pointermove',ev=>{
  if(!tgRidim)return;
  const p=$('tgPanel'); if(!p)return;
- p.style.width=Math.max(300,Math.min(tgRidim.w+(ev.clientX-tgRidim.x),window.innerWidth-p.offsetLeft))+'px';
- p.style.height=Math.max(200,Math.min(tgRidim.h+(ev.clientY-tgRidim.y),window.innerHeight-p.offsetTop))+'px';
+ const fin=tgFinestra();
+ p.style.width=Math.max(300,Math.min(tgRidim.w+(ev.clientX-tgRidim.x),Math.max(300,fin.innerWidth-p.offsetLeft)))+'px';
+ p.style.height=Math.max(200,Math.min(tgRidim.h+(ev.clientY-tgRidim.y),Math.max(200,fin.innerHeight-p.offsetTop)))+'px';
 });
 ['pointerup','pointercancel'].forEach(t=>$('tgPanelRes')?.addEventListener(t,()=>{
  if(tgRidim){ tgRidim=null; tgSalvaGeom(); }
@@ -20702,14 +20801,6 @@ $('tgAlertBtn')?.addEventListener('click',()=>{ tgPannelloAperto()?tgChiudiPanne
 $('tgOpenPanelBtn')?.addEventListener('click',()=>{ tgApriPannello(); });
 $('tgToggleBtn')?.addEventListener('click',()=>{ tgImpostaAttivo(!tgAttivo()); });
 tgAggiornaInterruttore();
-$('tgRischioTot')?.addEventListener('input',()=>{
- try{ localStorage.setItem(TG_RISCHIO_KEY,String(tgRischioTotale())); }catch(e){}
- tgRenderPannello();
-});
-try{
- const r=Number(localStorage.getItem(TG_RISCHIO_KEY));
- if(Number.isFinite(r)&&r>0&&$('tgRischioTot'))$('tgRischioTot').value=r;
-}catch(e){}
 window.addEventListener('resize',()=>{ if(tgPannelloAperto())tgApplicaGeom(); });
 // Collegato un conto MT5, l'app chiede se accendere anche il collegamento alle sale. Si chiede
 // perche' da quel momento un segnale potrebbe diventare un ordine VERO: e' una cosa che va accesa
@@ -20753,12 +20844,6 @@ function tgBottone(testo,primario){
 }
 function tgRenderPannello(){
  const box=$('tgPanelBody'); if(!box)return;
- const nota=$('tgRischioNota');
- if(nota){
-  const pct=tgRischioTotale();
-  nota.textContent='E\' il rischio complessivo del segnale, diviso fra le posizioni che apre: '
-   +'con 4 take profit e '+pct.toFixed(2)+'% si aprono 4 posizioni da '+(pct/4).toFixed(2)+'% ciascuna.';
- }
  box.innerHTML='';
  if(!tgSegnaliRicevuti.length){
   box.appendChild(tgRiga('Nessun segnale ancora. Quando una sala ne manda uno compare qui, e il pulsante "!" si accende accanto al timeframe.','hint'));
@@ -21081,7 +21166,17 @@ function tgCfgRegoleEffettive(){
  }).filter(Boolean);
 }
 $('tgCfgSl')?.addEventListener('change',()=>{ if(!tgCfg)return; const v=Number($('tgCfgSl').value); if(Number.isFinite(v)&&v>0)tgCfg.sl=v; tgCfgDisegna(); });
-$('tgCfgRischio')?.addEventListener('input',()=>{ if(!tgCfg)return; const v=Number($('tgCfgRischio').value); if(Number.isFinite(v)&&v>0)tgCfg.pct=Math.min(20,v); tgCfgDisegna(); });
+$('tgCfgRischio')?.addEventListener('input',()=>{
+ if(!tgCfg)return;
+ const v=Number($('tgCfgRischio').value);
+ if(Number.isFinite(v)&&v>0){
+  tgCfg.pct=Math.min(20,v);
+  // Ricordato come punto di partenza per il prossimo segnale: chi rischia l'1% lo rischia quasi
+  // sempre, e riscriverlo ogni volta e' solo un modo per sbagliarlo prima o poi.
+  try{ localStorage.setItem(TG_RISCHIO_KEY,String(tgCfg.pct)); }catch(e){}
+ }
+ tgCfgDisegna();
+});
 $('tgCfgStratPrudente')?.addEventListener('click',()=>{
  if(!tgCfg)return;
  // Il primo target porta a pareggio (da li' in poi l'operazione non puo' piu' costare niente),
