@@ -1748,6 +1748,16 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
                <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="footprintEnabled"> Mostra footprint sulle candele con tick registrati</label>
              </div>
+             <!-- PASSO 2 (stile DeepChart): i tre elementi nuovi del disegno, accendibili uno per uno.
+                  Accesi tutti per default, perche' sono esattamente cio' che rende leggibile un
+                  footprint: la candela per sapere dove apre/chiude, la barra per leggere la
+                  quantita' dalla LUNGHEZZA e non dalla sola tonalita', il POC per vedere subito il
+                  livello piu' scambiato. -->
+             <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:6px">
+               <label style="flex:none"><input type="checkbox" id="footprintShowCandle" checked> Candela visibile</label>
+               <label style="flex:none;margin-left:14px"><input type="checkbox" id="footprintShowBars" checked> Istogramma per riga</label>
+               <label style="flex:none;margin-left:14px"><input type="checkbox" id="footprintShowPoc" checked> POC (riga piu' scambiata)</label>
+             </div>
              <div class="fbOptRow" style="margin-top:8px">
                <label style="flex:none;min-width:110px">Stile</label>
                <select id="footprintStyle" class="toolSelect" title="Come disegnare ogni riga del footprint">
@@ -1879,6 +1889,9 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            <div class="fbOptRow" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
              <span style="display:inline-flex;align-items:center;gap:5px">Altezza riga <input id="heatmapRowPips" type="number" min="0.1" step="0.1" value="5" style="width:60px">pip</span>
              <span style="display:inline-flex;align-items:center;gap:5px">Opacità max <input id="heatmapOpacity" type="number" min="5" max="100" step="5" value="60" style="width:55px">%</span>
+             <!-- Riferimento del colore: percentile invece del massimo. Con il massimo bastava un
+                  muro enorme a schiacciare tutto il resto nel blu scuro - vedi heatmapPercentileNow(). -->
+             <span style="display:inline-flex;align-items:center;gap:5px">Saturazione colore <input id="heatmapPercentile" type="number" min="50" max="100" step="1" value="97" style="width:55px" title="Percentile dei valori osservati usato come riferimento del colore. 100 = il massimo (vecchio comportamento): un solo ordine enorme appiattisce tutto il resto. Più basso = più fasce raggiungono i colori caldi, comprese quelle vicine al prezzo.">° perc.</span>
            </div>
            <!-- RICHIESTO ESPLICITAMENTE: estensione verticale della heatmap oltre il range
                 alto/basso delle candele in vista, per mostrare anche livelli bid/ask REALI più
@@ -3508,6 +3521,8 @@ let tpSlZoneFillVisible=true;
 // ampiezza di ogni riga del footprint, in pip (riusa pipSizeForAsset(), come il resto dell'app).
 let footprintEnabled=false, footprintRowPips=1, footprintImbalanceEnabled=false, footprintArEnabled=false;
 let footprintAutoRow=true; // altezza riga proporzionata all'asset/TF: accesa di default, vedi footprintAutoRowPipsFor()
+// Passo 2 (stile DeepChart): candela visibile, istogramma per riga, POC. Tutti accesi di default.
+let footprintShowCandle=true, footprintShowBars=true, footprintShowPoc=true;
 // Dichiarate QUI, molto prima di draw(): footprintStepForAsset() puo' essere raggiunta da un
 // disegno molto precoce, e con let/const piu' in basso nel file si prenderebbe un errore di uso
 // prima dell'inizializzazione invece del valore.
@@ -4116,7 +4131,7 @@ function collectLightSessionState(){
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
    currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
    gridSpacingIdx,drawDashedDefault,drawDottedDefault,anchorSnap,straightLockToggle,positionsVisible,tpSlZoneFillVisible,volProfileMode,linesMode,drawingLayerVisible,
-   footprintEnabled,footprintRowPips,footprintImbalanceEnabled,footprintArEnabled,footprintAutoRow,
+   footprintEnabled,footprintRowPips,footprintImbalanceEnabled,footprintArEnabled,footprintAutoRow,footprintShowCandle,footprintShowBars,footprintShowPoc,
    positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
    pendingOrders:stripMt5TrackedForSave(pendingOrders),
    trades,equity,statsBaselineByMode,sessionByMode:sessionByModeSaved,liveModeActive,
@@ -4812,12 +4827,18 @@ function applyLightSessionState(state){
  // Assente nei salvataggi precedenti a questa funzione: si riparte da ACCESA (!==false), che e'
  // il comportamento nuovo richiesto, non da spenta.
  footprintAutoRow=state.footprintAutoRow!==false;
+ footprintShowCandle=state.footprintShowCandle!==false;
+ footprintShowBars=state.footprintShowBars!==false;
+ footprintShowPoc=state.footprintShowPoc!==false;
  pfRealMt5Login=state.pfRealMt5Login!=null?String(state.pfRealMt5Login):null;
  if($('footprintEnabled'))$('footprintEnabled').checked=footprintEnabled;
  if($('footprintRowPips'))$('footprintRowPips').value=footprintRowPips;
  if($('footprintImbalanceEnabled'))$('footprintImbalanceEnabled').checked=footprintImbalanceEnabled;
  if($('footprintArEnabled'))$('footprintArEnabled').checked=footprintArEnabled;
  if($('footprintAutoRow'))$('footprintAutoRow').checked=footprintAutoRow;
+ if($('footprintShowCandle'))$('footprintShowCandle').checked=footprintShowCandle;
+ if($('footprintShowBars'))$('footprintShowBars').checked=footprintShowBars;
+ if($('footprintShowPoc'))$('footprintShowPoc').checked=footprintShowPoc;
  try{ footprintUpdateRowPipsUI(); }catch(e){}
  // drawingLayerVisible (RICHIESTO ESPLICITAMENTE: nascondere singolarmente Fibonacci/profili
  // volumetrici/VWAP dal nuovo pannello "Livelli", vedi apriChartLayersModal()): merge col
@@ -10651,61 +10672,176 @@ function drawTradeHighlight(ctx,y,pad,cw,n,start,w,h){
  highlightCloseBtnRect={x:closeCx-closeSize/2-hitPad,y:closeCy-closeSize/2-hitPad,w:closeSize+hitPad*2,h:closeSize+hitPad*2};
  ctx.restore();
 }
-// Disegna UNA candela in modalità footprint, in uno dei tre stili scelti in Impostazioni
-// (#footprintStyle): "bidask" (due colonne sell/buy, default), "delta" (un solo numero netto
-// buy-sell per riga) o "volume" (un solo numero buy+sell per riga, senza direzione).
-// `fp` = { step, rows:{ [livello prezzo]: {buy,sell} } } — SEMPRE da tick reali (la modalità stima
-// OHLCV è stata rimossa su richiesta esplicita: nessun dato inventato passa più di qui). Le zone
-// zero-print/imbalance NON si disegnano più qui candela per candela: sono un pre-pass separato in
-// draw() (footprintBuildZeroPrintZones), perché devono poter estendersi su PIÙ candele fino alla
-// mitigazione — vedi lì.
-function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style){
+function footprintShowCandleNow(){ const el=$('footprintShowCandle'); return el?!!el.checked:true; }
+function footprintShowBarsNow(){ const el=$('footprintShowBars'); return el?!!el.checked:true; }
+function footprintShowPocNow(){ const el=$('footprintShowPoc'); return el?!!el.checked:true; }
+// Disegna UNA candela in modalita' footprint, nello stile scelto in Impostazioni
+// (#footprintStyle): "bidask" (bid a sinistra / ask a destra, default), "delta" (netto per riga) o
+// "volume" (totale per riga, senza direzione).
+// `fp` = { step, rows:{ [livello prezzo]: {buy,sell,askVol,bidVol,trades} } } — SEMPRE da tick
+// reali (la modalita' stima OHLCV e' stata rimossa su richiesta esplicita: nessun dato inventato
+// passa di qui). Le zone zero-print NON si disegnano qui candela per candela: sono un pre-pass in
+// draw() (footprintBuildZeroPrintZones), perche' devono estendersi su PIU' candele fino alla
+// mitigazione.
+//
+// ===================== PASSO 2 — DISEGNO IN STILE DEEPCHART =====================
+// Com'era prima: ogni riga era un rettangolo tinto, con l'intensita' del colore come UNICA
+// codifica della quantita'. Il colore da solo e' il canale percettivo piu' debole che esista: due
+// righe con 40 e 70 si distinguono male, e il livello dove si e' scambiato di piu' non salta agli
+// occhi. Mancava anche la candela, quindi in footprint non si vedeva piu' dove aprisse e chiudesse
+// il prezzo.
+// Come e' adesso, come in DeepChart:
+//   1) CANDELA sempre visibile, stretta, alla sinistra della colonna: non copre mai i numeri.
+//   2) ISTOGRAMMA per riga: una barra la cui LUNGHEZZA e' proporzionale alla quantita'. La
+//      lunghezza si legge a occhio, l'intensita' del colore resta come rinforzo. In bid-ask le due
+//      barre crescono dal divisorio centrale verso l'esterno, come nel riferimento.
+//   3) POC (Point of Control): la riga con piu' scambi della candela, contornata — e' il livello
+//      che conta, e prima non era segnalato in alcun modo.
+//   4) Numeri allineati al divisorio (bid a destra del suo spazio, ask a sinistra del suo) invece
+//      che centrati in mezzo a ciascuna meta': incolonnati fra candele diverse, quindi leggibili
+//      di fila.
+// NOTA SULL'ETICHETTA DEI NUMERI: con questo broker MT5 (misurato: with_last 0, with_volume 0,
+// with_aggressor_flag 0 su 50.000 tick) questi non sono contratti ma CONTEGGI DI TICK. Il disegno
+// e' identico, il significato no — vedi footprintDataQuality/footprintQualityLabel().
+function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
+ opt=opt||{};
  const step=fp.step;
- const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>b-a); // alto → basso
+ const levels=Object.keys(fp.rows).map(Number).sort((a,b)=>b-a); // alto -> basso
  if(!levels.length)return;
- let maxCount=1, maxDelta=1, maxVol=1;
+ let maxCount=1, maxDelta=1, maxVol=1, pocLevel=null, pocVol=-1;
  levels.forEach(lv=>{
    const c=fp.rows[lv];
    maxCount=Math.max(maxCount,c.buy,c.sell);
    maxDelta=Math.max(maxDelta,Math.abs(c.buy-c.sell));
-   maxVol=Math.max(maxVol,c.buy+c.sell);
+   const tot=c.buy+c.sell;
+   maxVol=Math.max(maxVol,tot);
+   if(tot>pocVol){ pocVol=tot; pocLevel=lv; }
  });
  const half=bw/2;
- const showNumbers=bw>=44;
+ // La candela si prende una fetta stretta a sinistra; le caselline occupano tutto il resto. Sotto
+ // una certa larghezza di colonna la candela verrebbe piu' larga delle celle: la si salta, meglio
+ // il footprint leggibile che una candelina simbolica.
+ const wantCandle=footprintShowCandleNow()&&bw>=16;
+ const candW=wantCandle?Math.max(3,Math.min(9,bw*0.16)):0;
+ const cellL=xx-half+(candW?candW+1:0);
+ const cellR=xx+half;
+ const cellW=Math.max(2,cellR-cellL);
+ const mid=cellL+cellW/2;
+ // Il taglio dei numeri e' quello configurato in Impostazioni ("Larghezza numeri"), non un 44
+ // fisso scritto qui: prima quel campo non aveva alcun effetto su questa funzione.
+ let numMin=44; try{ numMin=footprintNumbersMinBwNow(); }catch(e){}
+ const showNumbers=bw>=numMin;
  const fontPx=Math.max(8,Math.min(11,bw/5));
- if(showNumbers){ ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font=fontPx+'px sans-serif'; }
- const fmtNum=v=>String(Math.round(v)); // i valori stimati/volume-weighted possono essere frazionari: arrotondati solo per la label
+ const fmtNum=v=>String(Math.round(v)); // i valori pesati sul volume possono essere frazionari: arrotondati solo per l'etichetta
+ // ---- 1) la candela, disegnata prima di tutto cosi' resta sotto alle caselline
+ if(candW>0){
+   const up=r.close>=r.open;
+   const col=up?(opt.up||'#26a69a'):(opt.down||'#ef5350');
+   const xc=xx-half+candW/2;
+   ctx.save();
+   ctx.globalAlpha=0.85;
+   ctx.strokeStyle=col; ctx.fillStyle=col; ctx.lineWidth=1;
+   const yH=yFn(r.high), yL=yFn(r.low);
+   ctx.beginPath(); ctx.moveTo(xc,yH); ctx.lineTo(xc,yL); ctx.stroke();
+   const t2=yFn(Math.max(r.open,r.close)), b2=yFn(Math.min(r.open,r.close));
+   ctx.fillRect(xc-candW/2,t2,candW,Math.max(1,b2-t2));
+   ctx.restore();
+ }
+ // ---- 2/3/4) le righe
+ const showBars=footprintShowBarsNow();
+ const showPoc=footprintShowPocNow();
+ if(showNumbers){ ctx.textBaseline='middle'; ctx.font=scaledFont(fontPx+'px sans-serif'); }
+ const BUY='85,194,139', SELL='224,91,100', VOL='126,110,224';
  levels.forEach(lv=>{
    const c=fp.rows[lv];
    const yTop=yFn(lv+step/2), yBot=yFn(lv-step/2);
    const rowH=Math.max(1,yBot-yTop);
+   const barH=Math.max(1,rowH-1);
+   const yMid=(yTop+yBot)/2;
    if(style==='delta'){
      const delta=c.buy-c.sell;
-     const a=maxDelta>0?0.15+0.65*(Math.abs(delta)/maxDelta):0;
-     if(a>0){
-       ctx.fillStyle=delta>=0?`rgba(85,194,139,${a})`:`rgba(224,91,100,${a})`;
-       ctx.fillRect(xx-half,yTop,bw-1,rowH);
+     const f=maxDelta>0?Math.abs(delta)/maxDelta:0;
+     const rgb=delta>=0?BUY:SELL;
+     // Tinta leggera su tutta la cella (dove sta il dato) + barra proporzionale (quanto).
+     if(f>0){
+       ctx.fillStyle='rgba('+rgb+',0.12)';
+       ctx.fillRect(cellL,yTop,cellW,barH);
+       if(showBars){
+         const bw2=Math.max(1,cellW*f);
+         ctx.fillStyle='rgba('+rgb+',0.62)';
+         // Delta positivo verso destra dal centro, negativo verso sinistra: il segno si legge
+         // dalla direzione, non solo dal colore.
+         if(delta>=0)ctx.fillRect(mid,yTop,Math.max(1,bw2/2),barH);
+         else ctx.fillRect(mid-Math.max(1,bw2/2),yTop,Math.max(1,bw2/2),barH);
+       }
      }
-     if(showNumbers&&rowH>=fontPx&&delta!==0){ ctx.fillStyle=lineColor; ctx.fillText((delta>=0?'+':'')+fmtNum(delta),xx,(yTop+yBot)/2); }
+     if(showNumbers&&rowH>=fontPx&&delta!==0){
+       ctx.fillStyle=lineColor; ctx.textAlign='center';
+       ctx.fillText((delta>=0?'+':'')+fmtNum(delta),mid,yMid);
+     }
    }else if(style==='volume'){
      const tot=c.buy+c.sell;
-     const a=tot>0&&maxVol>0?0.15+0.65*(tot/maxVol):0;
-     if(a>0){ ctx.fillStyle=`rgba(126,110,224,${a})`; ctx.fillRect(xx-half,yTop,bw-1,rowH); }
-     if(showNumbers&&rowH>=fontPx&&tot>0){ ctx.fillStyle=lineColor; ctx.fillText(fmtNum(tot),xx,(yTop+yBot)/2); }
-   }else{ // 'bidask' (default): sell a sinistra, buy a destra — convenzione footprint standard
-     const sellA=c.sell>0&&maxCount>0?0.15+0.65*(c.sell/maxCount):0, buyA=c.buy>0&&maxCount>0?0.15+0.65*(c.buy/maxCount):0;
-     if(sellA>0){ ctx.fillStyle=`rgba(224,91,100,${sellA})`; ctx.fillRect(xx-half,yTop,half-1,rowH); }
-     if(buyA>0){ ctx.fillStyle=`rgba(85,194,139,${buyA})`; ctx.fillRect(xx+1,yTop,half-1,rowH); }
-     if(showNumbers && rowH>=fontPx){
+     const f=maxVol>0?tot/maxVol:0;
+     if(tot>0){
+       ctx.fillStyle='rgba('+VOL+',0.12)';
+       ctx.fillRect(cellL,yTop,cellW,barH);
+       if(showBars){
+         ctx.fillStyle='rgba('+VOL+',0.62)';
+         ctx.fillRect(cellL,yTop,Math.max(1,cellW*f),barH);
+       }
+     }
+     if(showNumbers&&rowH>=fontPx&&tot>0){
+       ctx.fillStyle=lineColor; ctx.textAlign='center';
+       ctx.fillText(fmtNum(tot),mid,yMid);
+     }
+   }else{ // 'bidask': venduto a sinistra, comprato a destra - convenzione footprint standard
+     const hw=cellW/2;
+     const fs=maxCount>0?c.sell/maxCount:0, fb=maxCount>0?c.buy/maxCount:0;
+     if(c.sell>0){
+       ctx.fillStyle='rgba('+SELL+',0.10)';
+       ctx.fillRect(cellL,yTop,hw,barH);
+       if(showBars){
+         const len=Math.max(1,hw*fs);
+         ctx.fillStyle='rgba('+SELL+',0.60)';
+         ctx.fillRect(mid-len,yTop,len,barH); // cresce dal divisorio verso sinistra
+       }
+     }
+     if(c.buy>0){
+       ctx.fillStyle='rgba('+BUY+',0.10)';
+       ctx.fillRect(mid,yTop,hw,barH);
+       if(showBars){
+         ctx.fillStyle='rgba('+BUY+',0.60)';
+         ctx.fillRect(mid,yTop,Math.max(1,hw*fb),barH); // e dal divisorio verso destra
+       }
+     }
+     if(showNumbers&&rowH>=fontPx){
        ctx.fillStyle=lineColor;
-       if(c.sell>0)ctx.fillText(fmtNum(c.sell),xx-half/2,(yTop+yBot)/2);
-       if(c.buy>0)ctx.fillText(fmtNum(c.buy),xx+half/2,(yTop+yBot)/2);
+       if(c.sell>0){ ctx.textAlign='right'; ctx.fillText(fmtNum(c.sell),mid-2,yMid); }
+       if(c.buy>0){ ctx.textAlign='left'; ctx.fillText(fmtNum(c.buy),mid+3,yMid); }
      }
    }
+   // ---- 3) POC: la riga piu' scambiata della candela
+   if(showPoc&&lv===pocLevel&&pocVol>0&&rowH>=2){
+     ctx.save();
+     ctx.strokeStyle='rgba(245,197,66,0.85)';
+     ctx.lineWidth=1;
+     ctx.strokeRect(cellL+0.5,yTop+0.5,Math.max(1,cellW-1),Math.max(1,barH-1));
+     ctx.restore();
+   }
  });
- // RICHIESTO ESPLICITAMENTE: rimosso il bordo (strokeRect) che delimitava l'intera candela
- // [high,low] — ridondante in modalità footprint, dove l'estensione delle caselline colorate
- // rende già visibile dove finisce la candela, senza bisogno di un contorno separato.
+ // Divisorio bid/ask: una linea sottile al centro delle celle. Senza di essa, con le barre che
+ // crescono verso l'esterno, il punto zero da cui si misurano non e' visibile.
+ if(style==='bidask'&&cellW>=6){
+   ctx.save();
+   ctx.strokeStyle=lineColor==='#000000'?'rgba(0,0,0,0.20)':'rgba(255,255,255,0.20)';
+   ctx.lineWidth=1;
+   const yTopAll=yFn(levels[0]+step/2), yBotAll=yFn(levels[levels.length-1]-step/2);
+   ctx.beginPath(); ctx.moveTo(Math.round(mid)+0.5,yTopAll); ctx.lineTo(Math.round(mid)+0.5,yBotAll); ctx.stroke();
+   ctx.restore();
+ }
+ ctx.textAlign='center'; // ripristino: il resto di draw() da' per scontato questo allineamento
+ // RICHIESTO ESPLICITAMENTE: nessun bordo (strokeRect) attorno all'intera candela [high,low] -
+ // in footprint l'estensione delle caselline dice gia' dove finisce, un contorno sarebbe rumore.
 }
 function draw(){
  // Annuncia l'asset a grafico ORA alle altre finestre PIP (solo se cambiato dall'ultima volta —
@@ -10936,85 +11072,204 @@ function draw(){
      // frame, niente ricalcolo del trascinamento riga per riga una seconda volta con denominatori
      // diversi) — parte anch'essa dallo stato "pre-caricato", altrimenti una fascia trascinata da
      // fuori schermo potrebbe superare il massimo calcolato solo sulle candele visibili.
-     let _hmMaxCell=0;
-     {
-       const _hmSeed=_hmSeedLastKnownVal();
-       for(const k in _hmSeed)_hmMaxCell=Math.max(_hmMaxCell,_hmSeed[k]);
+     // ===================== NORMALIZZAZIONE: PERCENTILE, NON MASSIMO =====================
+     // Prima il riferimento del colore era il MASSIMO osservato e il colore era sqrt(val/max).
+     // Un solo ordine enorme (un muro, un iceberg) bastava a schiacciare tutto il resto verso il
+     // blu scuro: si vedevano solo "le piu' rilevanti", e proprio le fasce attaccate al prezzo -
+     // dove si scambia di piu' e dove in Bookmap si vedono molte bande - restavano piatte.
+     // Ora il riferimento e' un PERCENTILE ALTO: i muri saturano in rosso (giusto, sono fuori
+     // scala) e tutto il resto usa la scala di colore per intero. Il percentile si calcola con un
+     // istogramma a 512 caselle su [0,max]: una sola passata in piu' e memoria fissa, invece di
+     // raccogliere e ordinare centinaia di migliaia di valori ad ogni ridisegno.
+     const _hmEachVal=(cb)=>{
+       const sd=_hmSeedLastKnownVal();
+       for(const k in sd)cb(sd[k]);
        for(let i=0;i<data.length;i++){
          const tStart=parseDateTime(data[i].date);
          if(!Number.isFinite(tStart))continue;
          const bucket=_hmCells[footprintBucketStart(tStart)];
          if(!bucket||!(bucket.cnt>0))continue;
          const cnt=bucket.cnt;
-         // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" della cella è il volume TOTALE in
-         // attesa in quella fascia di prezzo (bid+ask insieme), non il lato dominante — è la
-         // quantità di liquidità che conta per le strisce, non la direzione.
-         for(const k in bucket.rows){ const c=bucket.rows[k]; _hmMaxCell=Math.max(_hmMaxCell,(c.bid+c.ask)/cnt); }
+         // RICHIESTO ESPLICITAMENTE (rif. Bookmap): il "calore" e' il volume TOTALE in attesa in
+         // quella fascia (bid+ask insieme), non il lato dominante - conta quanta liquidita' c'e'.
+         for(const k in bucket.rows){ const c=bucket.rows[k]; cb((c.bid+c.ask)/cnt); }
+       }
+     };
+     let _hmMaxObs=0;
+     _hmEachVal(v=>{ if(v>_hmMaxObs)_hmMaxObs=v; });
+     let _hmRef=_hmMaxObs;
+     const _hmPct=heatmapPercentileNow();
+     if(_hmMaxObs>0&&_hmPct<100){
+       const NB=512, hist=new Float64Array(NB);
+       let tot=0;
+       _hmEachVal(v=>{ if(!(v>0))return; let b=Math.floor(v/_hmMaxObs*(NB-1)); if(b<0)b=0; if(b>NB-1)b=NB-1; hist[b]++; tot++; });
+       if(tot>0){
+         const want=tot*(_hmPct/100);
+         let acc=0, bi=NB-1;
+         for(let b=0;b<NB;b++){ acc+=hist[b]; if(acc>=want){ bi=b; break; } }
+         const cand=(bi+1)/NB*_hmMaxObs;
+         if(cand>0)_hmRef=cand;
        }
      }
-     if(_hmMaxCell>0){
+     if(_hmRef>0){
        const _hmBaseOp=heatmapOpacityNow();
-       // RIDISEGNATA (RICHIESTO ESPLICITAMENTE: "non quadratini, ma linee intere come Bookmap,
-       // con curve, spigoli e tonalità che si capiscono subito all'occhio"). Non si disegna più
-       // una casella per ogni [candela × fascia di prezzo]: si costruisce un'immagine con UNA
-       // colonna per candela e UNA riga per ogni pixel reale dello schermo, dove:
-       //  - in verticale il valore di ogni pixel è interpolato (curva morbida smoothstep) fra i
-       //    due livelli di prezzo più vicini → niente gradini fra una fascia e l'altra;
-       //  - in orizzontale l'immagine viene allargata alla larghezza delle candele con
-       //    interpolazione bilineare del browser → le strisce scorrono continue nel tempo, si
-       //    accendono e si spengono sfumando invece di cambiare a scatti ad ogni candela;
-       //  - un secondo passaggio sfocato in modalità "lighter" dà il bagliore alle zone calde.
-       // Stessi dati REALI e stessa logica di prima (trascinamento per livello, gradiente di
-       // intensità per volume, spegnimento lento delle zone non più aggiornate). L'immagine viene
-       // ricostruita solo se cambiano dati o vista (cache per firma), non ad ogni movimento del mouse.
+       // ===================== COLONNE PER PIXEL, NON PER CANDELA =====================
+       // Com'era: una colonna d'immagine per CANDELA, e il valore di ogni cella era la MEDIA degli
+       // snapshot caduti in quella candela (bucket.cnt). Su M5 una colonna sono cinque minuti: per
+       // costruzione non si poteva vedere una fascia accendersi e spegnersi in due secondi. Era il
+       // limite vero, non una questione di colori.
+       // Com'e' adesso, come in Bookmap: l'asse X e' TEMPO-PER-PIXEL. L'immagine ha una colonna
+       // ogni due pixel dell'area disegnata, e ogni colonna rappresenta la sua fetta di tempo:
+       //  - se in quella fetta ci sono snapshot VIVI (depthLiveSlices, piena cadenza) si usa
+       //    l'ULTIMO, cioe' com'era davvero il book in quell'istante -> zoom vicino = colonne da
+       //    frazione di secondo, e le tracce si vedono nascere e morire;
+       //  - se non ce ne sono (piu' indietro nel tempo, oppure zoom lontano) si ricade sui bucket
+       //    per candela di prima, esattamente come si comportava fino a ieri.
+       // Il riquadro disegnato a schermo e' lo STESSO di prima (x0/wImg qui sotto): cambia solo
+       // quante colonne contiene l'immagine che ci viene stirata dentro.
+       //
+       // ASSENZA = ZERO, ma solo sulle fonti profonde. Binance manda il book COMPLETO ad ogni
+       // snapshot: se un livello non c'e' piu', quella liquidita' e' stata tolta, e va spenta
+       // subito. Il DOM di MT5 invece pubblica solo pochi livelli attorno al prezzo: la' l'assenza
+       // significa "non osservato", e il valore va trascinato avanti come prima. E' questa
+       // distinzione - non una dissolvenza - che da' l'effetto "diventa gialla e dopo due secondi
+       // sparisce": l'ordine e' stato ritirato per davvero.
        const _hmSlot=cw/n;
        const _HM_MIN_A=0.10, _HM_DECAY_CANDLES=45;
-       const _N=data.length;
-       const _H=Math.max(40,Math.min(1600,Math.round(ch*dpr)));
-       const _sig=[_depthKey,dataStart,_N,lo,hi,_H,currentTF,_hmStep,_hmMaxCell,heatmapCellsVersion].join('|');
-       if(_N>0&&_hmImgCache.sig!==_sig){
-         const colMaps=new Array(_N);
-         const known=new Map(), seen=new Map();
-         const seed=_hmSeedLastKnownVal();
-         for(const k in seed){ const ki=Math.round(Number(k)/_hmStep); known.set(ki,seed[k]); seen.set(ki,-_HM_DECAY_CANDLES); }
-         const kLo=Math.floor(lo/_hmStep)-2, kHi=Math.ceil(hi/_hmStep)+2;
-         for(let i=0;i<_N;i++){
-           const tStart=parseDateTime(data[i].date);
-           const bucket=Number.isFinite(tStart)?_hmCells[footprintBucketStart(tStart)]:null;
-           if(bucket&&bucket.cnt>0){
-             for(const k in bucket.rows){ const c2=bucket.rows[k]; const ki=Math.round(Number(k)/_hmStep); known.set(ki,(c2.bid+c2.ask)/bucket.cnt); seen.set(ki,i); }
+       const _NC=data.length;
+       const bucketMs=(currentTF||1)*60000;
+       const _hmDecayMs=_HM_DECAY_CANDLES*bucketMs;
+       const wImgPx=Math.max(1,Math.round(_NC*_hmSlot));
+       // Una colonna ogni 2 px: dopo lo stiramento interpolato del browser e' indistinguibile da
+       // una per pixel, e dimezza il costo del ridisegno.
+       const _NP=Math.max(1,Math.min(900,Math.round(wImgPx/2)));
+       const _H=Math.max(40,Math.min(900,Math.round(ch*dpr)));
+       // Righe dell'immagine: solo la fascia di prezzo in vista, con passo ingrossato se servissero
+       // troppe caselle (uno zoom molto indietro con un passo molto fine).
+       const _rng=hi-lo;
+       let _mult=1;
+       {
+         const need=Math.ceil(_rng/_hmStep)+4;
+         if(need>3000)_mult=Math.ceil(need/3000);
+       }
+       const stepEff=_hmStep*_mult;
+       const kLo=Math.floor(lo/stepEff)-2, kHi=Math.ceil(hi/stepEff)+2;
+       const nBins=Math.max(1,kHi-kLo+1);
+       const tView0=Number.isFinite(_hmViewStartTime)?_hmViewStartTime:null;
+       const _slices=tView0!=null?depthLiveSlicesFor(_depthKey):null;
+       const _sliceSig=_slices?(_slices.length+':'+_slices[_slices.length-1].t):'0';
+       const _sig=[_depthKey,dataStart,_NC,_NP,lo,hi,_H,currentTF,stepEff,_hmRef,heatmapCellsVersion,_sliceSig].join('|');
+       if(_NC>0&&tView0!=null&&_hmImgCache.sig!==_sig){
+         const colMs=(_NC*bucketMs)/_NP;
+         // Stato trascinato, in array tipizzati invece di una Map per colonna: con 900 colonne
+         // allocare una Map per colonna era il vero costo.
+         const kv=new Float32Array(nBins);      // ultimo valore noto per fascia
+         const kt=new Float64Array(nBins);      // quando e' stato osservato (ms)
+         const tArr=new Float32Array(nBins);    // colore 0..1 della colonna corrente
+         const aArr=new Float32Array(nBins);    // opacita' della colonna corrente
+         kt.fill(-Infinity);
+         // Pre-caricamento da prima della finestra visibile: una fascia osservata fuori schermo
+         // (per lo zoom) non deve "sparire" - vedi il commento sul seed piu' sopra.
+         {
+           const sd=_hmSeedLastKnownVal();
+           for(const k in sd){
+             const b=Math.round(Number(k)/stepEff)-kLo;
+             if(b<0||b>=nBins)continue;
+             kv[b]=Math.max(kv[b],sd[k]);
+             kt[b]=tView0-_hmDecayMs; // osservata "tanto tempo fa": presente ma attenuata
            }
-           const m=new Map();
-           known.forEach((val,ki)=>{
-             if(ki<kLo||ki>kHi||!(val>0))return;
-             // Compressione percettiva (radice): un solo ordine enorme non appiattisce il resto.
-             const t=Math.sqrt(Math.min(1,val/_hmMaxCell));
-             const age=Math.max(0,i-(seen.has(ki)?seen.get(ki):i));
-             const volA=_HM_MIN_A+(1-_HM_MIN_A)*Math.pow(t,1.25);   // più volume → più acceso
-             const ageA=Math.exp(-age/_HM_DECAY_CANDLES);             // zona non più toccata → si spegne piano
-             m.set(ki,[t,Math.min(1,volA*(0.35+0.65*ageA))]);
-           });
-           colMaps[i]=m;
+         }
+         const applySlice=(sl)=>{
+           // Fonte profonda: dentro la fascia coperta dallo snapshot, quel che non c'e' e' zero.
+           if(sl.deep){
+             const b0=Math.max(0,Math.round(sl.pMin/stepEff)-kLo), b1=Math.min(nBins-1,Math.round(sl.pMax/stepEff)-kLo);
+             for(let b=b0;b<=b1;b++){ kv[b]=0; kt[b]=sl.t; }
+           }
+           const pr=sl.pr, vv=sl.vol;
+           for(let i=0;i<pr.length;i++){
+             const b=Math.round(pr[i]/stepEff)-kLo;
+             if(b<0||b>=nBins)continue;
+             kv[b]+=vv[i]; kt[b]=sl.t;
+           }
+         };
+         const applyBucket=(bucket,tStart)=>{
+           const cnt=bucket.cnt;
+           for(const k in bucket.rows){
+             const b=Math.round(Number(k)/stepEff)-kLo;
+             if(b<0||b>=nBins)continue;
+             const c=bucket.rows[k];
+             kv[b]=(c.bid+c.ask)/cnt; kt[b]=tStart;
+           }
+         };
+         // Cursore sull'anello vivo: si avanza una volta sola su tutto l'array, mai una ricerca
+         // per colonna.
+         let si=0;
+         if(_slices){ while(si<_slices.length&&_slices[si].t<tView0)si++; }
+         let lastCandle=-1;
+         // Geometria verticale: indipendente dalla colonna, quindi calcolata una volta.
+         const pyK0=new Int32Array(_H), pyWg=new Float32Array(_H);
+         for(let py=0;py<_H;py++){
+           const f=(hi-(py+0.5)/_H*_rng)/stepEff;
+           const k0=Math.floor(f);
+           let wg=f-k0; wg=wg*wg*(3-2*wg); // smoothstep: nessun gradino fra una fascia e l'altra
+           pyK0[py]=k0-kLo; pyWg[py]=wg;
          }
          let off=_hmImgCache.canvas||document.createElement('canvas');
-         if(off.width!==_N||off.height!==_H){ off.width=_N; off.height=_H; }
+         if(off.width!==_NP||off.height!==_H){ off.width=_NP; off.height=_H; }
          const octx=off.getContext('2d');
-         const img=octx.createImageData(_N,_H), dd=img.data;
-         const lut=heatmapLut(), rng=hi-lo;
-         for(let py=0;py<_H;py++){
-           const f=(hi-(py+0.5)/_H*rng)/_hmStep;
-           const k0=Math.floor(f);
-           let wg=f-k0; wg=wg*wg*(3-2*wg); // smoothstep: transizione morbida fra due livelli
-           for(let i=0;i<_N;i++){
-             const m=colMaps[i];
-             const A=m.get(k0), B=m.get(k0+1);
-             if(!A&&!B)continue;
-             const aa=A?A[1]*(1-wg):0, ab=B?B[1]*wg:0;
-             const a=aa+ab;
+         const img=octx.createImageData(_NP,_H), dd=img.data;
+         const lut=heatmapLut();
+         for(let j=0;j<_NP;j++){
+           const t0=tView0+j*colMs, t1=t0+colMs;
+           let used=false;
+           if(_slices){
+             // Gli snapshot di questa fetta di tempo. Su una fonte PROFONDA ogni snapshot sostituisce
+             // per intero la propria fascia di prezzo, quindi conta solo l'ULTIMO della fetta - cioe'
+             // com'era il book alla fine della fetta, che e' esattamente cio' che la colonna
+             // rappresenta: applicarli tutti significherebbe rifare lo stesso lavoro decine di volte
+             // per colonna. Su una fonte parziale (DOM MT5, pochi livelli attorno al prezzo) invece
+             // ogni snapshot aggiunge osservazioni diverse e vanno applicati tutti: sono pochi
+             // livelli, il costo e' trascurabile.
+             let first=si, last=-1;
+             while(si<_slices.length&&_slices[si].t<t1){ last=si; si++; used=true; }
+             if(last>=0){
+               if(_slices[last].deep)applySlice(_slices[last]);
+               else for(let q=first;q<=last;q++)applySlice(_slices[q]);
+             }
+           }
+           if(!used){
+             // Nessuno snapshot vivo qui: si usa il bucket della candela, una volta sola per
+             // candela (riapplicare la stessa media ad ogni colonna non aggiungerebbe nulla).
+             const ci=Math.min(_NC-1,Math.floor(j*colMs/bucketMs));
+             if(ci!==lastCandle){
+               lastCandle=ci;
+               const tStart=parseDateTime(data[ci].date);
+               const bucket=Number.isFinite(tStart)?_hmCells[footprintBucketStart(tStart)]:null;
+               if(bucket&&bucket.cnt>0)applyBucket(bucket,tStart);
+             }
+           }
+           // Colore e opacita' di ogni fascia per QUESTA colonna.
+           for(let b=0;b<nBins;b++){
+             const val=kv[b];
+             if(!(val>0)){ aArr[b]=0; continue; }
+             // Compressione percettiva (radice) sopra il riferimento a percentile.
+             const t=Math.sqrt(Math.min(1,val/_hmRef));
+             const age=Math.max(0,t1-kt[b]);
+             const volA=_HM_MIN_A+(1-_HM_MIN_A)*Math.pow(t,1.25);  // piu' liquidita' -> piu' acceso
+             const ageA=Math.exp(-age/_hmDecayMs);                  // fascia non piu' osservata -> si spegne piano
+             tArr[b]=t; aArr[b]=Math.min(1,volA*(0.35+0.65*ageA));
+           }
+           for(let py=0;py<_H;py++){
+             const b0=pyK0[py];
+             if(b0<-1||b0>=nBins)continue;
+             const wg=pyWg[py];
+             const aA=(b0>=0&&b0<nBins)?aArr[b0]*(1-wg):0;
+             const aB=(b0+1>=0&&b0+1<nBins)?aArr[b0+1]*wg:0;
+             const a=aA+aB;
              if(a<=0.004)continue;
-             const t=((A?A[0]*aa:0)+(B?B[0]*ab:0))/a;
-             const li=Math.max(0,Math.min(255,Math.round(t*255)))*3;
-             const o=(py*_N+i)*4;
+             const tt=((b0>=0&&b0<nBins?tArr[b0]*aA:0)+(b0+1>=0&&b0+1<nBins?tArr[b0+1]*aB:0))/a;
+             const li=Math.max(0,Math.min(255,Math.round(tt*255)))*3;
+             const o=(py*_NP+j)*4;
              dd[o]=lut[li]; dd[o+1]=lut[li+1]; dd[o+2]=lut[li+2]; dd[o+3]=Math.round(Math.min(1,a)*255);
            }
          }
@@ -11022,19 +11277,19 @@ function draw(){
          _hmImgCache={sig:_sig,canvas:off};
        }
        const _off=_hmImgCache.canvas;
-       if(_off&&_N>0){
-         const x0=x(0)-_hmSlot/2, wImg=_N*_hmSlot;
+       if(_off&&_NC>0){
+         const x0=x(0)-_hmSlot/2, wImg=_NC*_hmSlot;
          ctx.save();
          ctx.imageSmoothingEnabled=true;
          try{ ctx.imageSmoothingQuality='high'; }catch(e){}
          ctx.globalAlpha=_hmBaseOp;
-         ctx.drawImage(_off,0,0,_N,_H,x0,pad.t,wImg,ch);
+         ctx.drawImage(_off,0,0,_off.width,_off.height,x0,pad.t,wImg,ch);
          // Bagliore sulle zone calde (dove il browser supporta i filtri del canvas).
          if(typeof ctx.filter==='string'){
            ctx.globalCompositeOperation='lighter';
            ctx.globalAlpha=_hmBaseOp*0.35;
            ctx.filter='blur(3px)';
-           ctx.drawImage(_off,0,0,_N,_H,x0,pad.t,wImg,ch);
+           ctx.drawImage(_off,0,0,_off.width,_off.height,x0,pad.t,wImg,ch);
            ctx.filter='none';
          }
          ctx.restore();
@@ -11139,7 +11394,7 @@ function draw(){
      footprintCellHitRects.push({xxLeft:xx-bw/2,xxRight:xx+bw/2,yTop:_hTop,yBot:_hBot});
    }
    if(fp){
-     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle);
+     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle,{up:_cc.up,down:_cc.down});
      // RICHIESTO ESPLICITAMENTE: SOLO in stile Bid/Ask (mai in Delta o Volume, dove le caselline
      // mostrano già rispettivamente il delta o il volume riga per riga — questo numero sopra la
      // candela ripeterebbe la stessa informazione già a schermo) si scrive sopra alla candela un
@@ -18422,6 +18677,10 @@ $('footprintEnabled')?.addEventListener('change',()=>{
  draw(); scheduleSave();
 });
 $('footprintStyle')?.addEventListener('change',()=>{ draw(); scheduleSave(); });
+// Solo aspetto: cambiano il disegno, non i bucket - nessuna ricostruzione necessaria.
+$('footprintShowCandle')?.addEventListener('change',()=>{ footprintShowCandle=$('footprintShowCandle').checked; draw(); scheduleSave(); });
+$('footprintShowBars')?.addEventListener('change',()=>{ footprintShowBars=$('footprintShowBars').checked; draw(); scheduleSave(); });
+$('footprintShowPoc')?.addEventListener('change',()=>{ footprintShowPoc=$('footprintShowPoc').checked; draw(); scheduleSave(); });
 $('footprintImbalanceEnabled')?.addEventListener('change',()=>{ footprintImbalanceEnabled=$('footprintImbalanceEnabled').checked; draw(); scheduleSave(); });
 $('footprintImbalanceMinRows')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
 $('footprintImbalanceMaxRects')?.addEventListener('input',()=>{ draw(); scheduleSave(); });
@@ -22557,7 +22816,7 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
 // sempre ai valori di fabbrica. Salvata ora in localStorage come le altre preferenze globali
 // (non legata alla sessione Storico/Live: vale per tutto il programma).
 const HEATMAP_PREFS_KEY='forex_lab_heatmap_prefs';
-const HEATMAP_PREF_FIELDS=['heatmapEnabled','heatmapCobSvp','depthCryptoEnabled','depthCryptoRangePct','depthExtEnabled','depthExtPort','heatmapZonesEnabled','heatmapZonesWindow','heatmapRowPips','heatmapOpacity','heatmapVertPadPips'];
+const HEATMAP_PREF_FIELDS=['heatmapEnabled','heatmapCobSvp','depthCryptoEnabled','depthCryptoRangePct','depthExtEnabled','depthExtPort','heatmapZonesEnabled','heatmapZonesWindow','heatmapRowPips','heatmapOpacity','heatmapPercentile','heatmapVertPadPips'];
 // =====================================================================================
 // FONTI DEL BOOK "ELASTICHE" (RICHIESTO ESPLICITAMENTE: heatmap come Bookmap, con dove si
 // piazzano davvero compratori e venditori su un range ampio, per tutti gli asset).
@@ -22639,6 +22898,12 @@ let orderBookDeepDirty=false, orderBookDeepSavedAt=0;
 function depthIngest(key,snap,opt){
  opt=opt||{};
  latestOrderBookByAsset[key]=snap; // sempre l'ultimo stato: lo usa il COB
+ // A PIENA CADENZA, prima di qualunque throttle: e' la finestra viva della heatmap (vedi
+ // depthLivePush). Lo storico compatto qui sotto resta throttlato da gapMs come prima.
+ // In try/catch di proposito: questo e' solo il livello visivo della heatmap, e lo stesso
+ // percorso alimenta COB, SVP e zone di liquidita'. Un suo errore non deve mai fermare
+ // l'ingresso del book.
+ try{ depthLivePush(key,snap,!!opt.deep); }catch(e){}
  let hist=orderBookHistoryByAsset[key];
  if(!hist){ hist=[]; orderBookHistoryByAsset[key]=hist; }
  const gap=opt.gapMs||HEATMAP_MIN_SNAPSHOT_GAP_MS;
@@ -22965,6 +23230,13 @@ function saveHeatmapPrefs(){
 function heatmapRowPipsNow(){
  const v=Number($('heatmapRowPips')?.value);
  return (Number.isFinite(v)&&v>0)?v:5;
+}
+// RICHIESTO: "non soltanto quelle piu' rilevanti, anche quelle vicino al prezzo". Riferimento
+// del colore: il percentile indicato dei valori osservati, non il massimo. 100 = comportamento
+// precedente (massimo). Piu' basso = piu' fasce arrivano ai colori caldi.
+function heatmapPercentileNow(){
+ const v=Number($('heatmapPercentile')?.value);
+ return (Number.isFinite(v)&&v>=50)?Math.min(100,v):97;
 }
 function heatmapOpacityNow(){
  const v=Number($('heatmapOpacity')?.value);
@@ -24018,6 +24290,47 @@ let mt5FeedWs=null, mt5FeedWsSymbol=null, mt5FeedWsReconnectTimer=null;
 // finti: se il broker non pubblica il DOM per un simbolo, il server manda {error:...} e chiudiamo —
 // qui semplicemente non arriva/aggiorna nulla per quell'asset (nessun order book disegnato).
 let mt5OrderBookWs=null, mt5OrderBookWsSymbol=null, mt5OrderBookWsReconnectTimer=null;
+// ANELLO DI SNAPSHOT VIVI (heatmap stile Bookmap): ogni snapshot ricevuto, senza throttle, per
+// la finestra piu' recente. I prezzi si tengono ASSOLUTI (Float64Array) e non come indici di
+// livello: cosi' un cambio di "Altezza riga" o di asset non invalida nulla, si ri-bucketizza al
+// volo in disegno. Costo: ~5 KB per snapshot (circa 400 livelli, vedi il `bin` scelto in bnEmit),
+// quindi qualche MB per l'intero anello - in cambio le tracce si vedono muovere al ritmo vero
+// della fonte invece che a scatti di 5 secondi.
+const DEPTH_LIVE_MAX_SLICES=1500;      // a 250 ms di cadenza sono circa 6 minuti di finestra viva
+const DEPTH_LIVE_MAX_MS=20*60000;      // e comunque mai piu' di 20 minuti indietro
+let depthLiveSlices={};                // key -> [{t,pr,vol,pMin,pMax,deep}] in ordine di tempo
+function depthLiveSlicesFor(key){ const a=depthLiveSlices[key]; return (a&&a.length)?a:null; }
+function depthLivePush(key,snap,deep){
+ // Serve SOLO la vista: se questa non e' la fonte a grafico ora, non si accumula nulla (e le
+ // finestre vive delle altre fonti si buttano: due sorgenti attive insieme non devono sommarsi
+ // in memoria).
+ let cur=null; try{ cur=depthKeyNow(); }catch(e){}
+ if(cur&&key!==cur){ if(depthLiveSlices[key])delete depthLiveSlices[key]; return; }
+ const bids=snap.bids||[], asks=snap.asks||[];
+ const n=bids.length+asks.length;
+ if(!n)return;
+ const pr=new Float64Array(n), vol=new Float32Array(n);
+ let w=0, pMin=Infinity, pMax=-Infinity;
+ const add=arr=>{
+   for(let i=0;i<arr.length;i++){
+     const e=arr[i], q=Number(e&&e.volume), px=Number(e&&e.price);
+     if(!Number.isFinite(px)||!(q>0))continue;
+     pr[w]=px; vol[w]=q; w++;
+     if(px<pMin)pMin=px; if(px>pMax)pMax=px;
+   }
+ };
+ add(bids); add(asks);
+ if(!w)return;
+ let arr=depthLiveSlices[key];
+ if(!arr){ arr=[]; depthLiveSlices[key]=arr; }
+ arr.push({t:Number(snap.time_ms)||Date.now(),pr:pr.subarray(0,w),vol:vol.subarray(0,w),pMin,pMax,deep:!!deep});
+ // Tetto doppio: per numero (memoria) e per tempo (non serve tenere piu' della finestra viva).
+ const cutoff=arr[arr.length-1].t-DEPTH_LIVE_MAX_MS;
+ let drop=0;
+ while(drop<arr.length&&arr[drop].t<cutoff)drop++;
+ if(arr.length-drop>DEPTH_LIVE_MAX_SLICES)drop=arr.length-DEPTH_LIVE_MAX_SLICES;
+ if(drop>0)arr.splice(0,drop);
+}
 let latestOrderBookByAsset={};
 let orderBookHistoryByAsset={}; // { assetKey: [ {time_ms,bids,asks}, ... ] } — capped per TEMPO, vedi HEATMAP_HISTORY_MAX_HOURS/HEATMAP_MIN_SNAPSHOT_GAP_MS
 let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha già risposto "niente DOM" in questa sessione (evita retry infiniti/log spam)
