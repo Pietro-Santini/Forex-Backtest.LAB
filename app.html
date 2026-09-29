@@ -22847,22 +22847,53 @@ async function fblProvaPorta(host,chiave,def,timeoutMs){
  }finally{ clearTimeout(tmr); }
  return esito;
 }
+// Il permesso che Chrome chiede prima che un sito pubblico parli con una rete privata (Tailscale e'
+// 100.64.0.0/10). Negato, ogni chiamata fallisce con un "Failed to fetch" che non dice niente: e' il
+// caso in cui il computer risponde benissimo e l'app dava la colpa a lui. Il nome del permesso e'
+// cambiato fra le versioni di Chrome: si provano tutti e due. Safari e Firefox non lo hanno.
+async function fblPermessoReteLocale(){
+ try{
+  if(!navigator.permissions||!navigator.permissions.query)return 'assente';
+  for(const nome of ['local-network-access','local-network']){
+   try{ return (await navigator.permissions.query({name:nome})).state; }catch(e){}
+  }
+ }catch(e){}
+ return 'assente';
+}
+// Quando tutte e tre le chiamate falliscono senza una risposta leggibile, la frase generica non basta:
+// si guarda il permesso e si offre il test che separa "computer" da "browser" in dieci secondi.
+async function fblSpiegaBlocco(let_,host){
+ const perm=await fblPermessoReteLocale();
+ fblLog('permesso «rete locale» del browser:',perm);
+ const url=fblBaseUrl(8000,host)+'/health';
+ const prova='<div class="tgCfgNota" style="margin-top:6px"><b>Il test che toglie ogni dubbio:</b> '
+  +'<a href="'+fbEsc(url)+'" target="_blank" rel="noopener">apri questo indirizzo</a> in una nuova scheda. '
+  +'Se vedi <i>«Chiave d\'accesso mancante o errata»</i>, il computer è a posto e il blocco è nel browser; '
+  +'se la pagina non si apre, il problema è Tailscale o il nome.</div>';
+ const comeRiattivare='Tocca l’icona a sinistra dell’indirizzo (in alto) → <b>Autorizzazioni</b> o <b>Impostazioni sito</b> → '
+  +'<b>Rete locale</b> (o «Dispositivi sulla rete locale») → <b>Consenti</b>. Poi riprova.';
+ if(perm==='denied'){
+  return {classe:'ko',titolo:'Permesso «rete locale» negato',
+   testo:'Il browser ha il permesso <b>negato</b> per questo sito, e blocca ogni chiamata verso il computer prima che parta. '
+    +comeRiattivare+prova};
+ }
+ if(perm==='prompt'){
+  return {classe:'ko',titolo:'Manca il permesso «rete locale»',
+   testo:'Il browser deve chiederti il permesso di accedere alla <b>rete locale</b>, e finché non rispondi <b>Consenti</b> blocca le chiamate. '
+    +'Riprova il collegamento e, se compare la finestra, consenti. Se non compare: '+comeRiattivare+prova};
+ }
+ return {classe:let_.classe,titolo:let_.titolo,testo:let_.testo+prova};
+}
 function fblLeggiEsiti(esiti,host){
  const vivi=esiti.filter(x=>x.ok);
  const rifiutati=esiti.filter(x=>x.stato===403);
  const scaduti=esiti.filter(x=>x.esito&&x.esito.indexOf('scaduto')===0);
  const spenti=esiti.filter(x=>!x.ok&&x.stato===undefined&&x.esito==='irraggiungibile');
- // 502 = Tailscale ha risposto, ma dietro di lui sul computer quel servizio non c'e'.
- const senzaServizio=esiti.filter(x=>x.stato===502);
  const h='<b>'+fbEsc(host)+'</b>';
  if(vivi.length===esiti.length)
   return {classe:'ok',titolo:'Collegamento riuscito',testo:'Tutti e tre i servizi rispondono da '+h+': ordini, grafico e segnali.'};
  if(rifiutati.length)
   return {classe:'ko',titolo:'Rifiutato',testo:'Il computer c’è e risponde, ma dice di no: la <b>chiave</b> non corrisponde, oppure sul computer l’accesso da altri dispositivi è spento. Ricopia la chiave dal computer.'};
- if(senzaServizio.length)
-  return {classe:'ko',titolo:'Applicazione chiusa sul computer',
-   testo:'Tailscale raggiunge il computer, ma dietro non risponde <b>'+senzaServizio.map(x=>fbEsc(x.nome)).join(', ')+'</b>: '
-    +'l’applicazione sul computer è chiusa, o quel servizio non è partito. Riaprila sul computer.'};
  if(vivi.length&&(scaduti.length||spenti.length)){
   const muti=esiti.filter(x=>!x.ok).map(x=>x.nome).join(', ');
   return {classe:'mezzo',titolo:'Collegamento parziale',
@@ -22875,10 +22906,10 @@ function fblLeggiEsiti(esiti,host){
     +'controlla che sia acceso e collegato su <b>tutti e due</b> i dispositivi, con lo <b>stesso account</b>. '
     +'Oppure il computer è spento o in sospensione.'};
  if(spenti.length===esiti.length)
-  return {classe:'ko',titolo:'Computer non trovato',
-   testo:'Il browser non è riuscito nemmeno a collegarsi a '+h+'. Le cause, in ordine di frequenza: il <b>nome</b> è scritto male '
-    +'(copialo dal computer), <b>Tailscale</b> è spento su questo dispositivo, sul computer l’interruttore è <b>spento</b>, '
-    +'oppure hai negato al browser il permesso di <b>accedere alla rete locale</b> (si riattiva dalle impostazioni del sito).'};
+  return {classe:'ko',titolo:'Chiamata bloccata',
+   testo:'Il browser non è riuscito a completare la chiamata a '+h+', e per scelta non dice perché. Le cause possibili: '
+    +'il <b>permesso «rete locale»</b> negato a questo sito, <b>Tailscale</b> spento su questo dispositivo, il <b>nome</b> scritto male '
+    +'(copialo dal computer), oppure sul computer l’interruttore è <b>spento</b>.'};
  return {classe:'ko',titolo:'Esito misto',testo:'Guarda il dettaglio qui sotto: ogni porta racconta una cosa diversa.'};
 }
 $('fblRemotoProva')?.addEventListener('click',async ()=>{
@@ -22908,7 +22939,9 @@ $('fblRemotoProva')?.addEventListener('click',async ()=>{
  const esiti=await Promise.all(FBL_PORTE.map(d=>fblProvaPorta(host,chiave,d,8000)));
  esiti.forEach(x=>fblLog('porta '+x.porta+' — '+x.nome+': '+x.esito+' in '+x.ms+' ms',
    x.errore?{url:x.url,errore:x.errore}:{url:x.url,stato:x.stato,corpo:x.corpo}));
- const let_=fblLeggiEsiti(esiti,host);
+ let let_=fblLeggiEsiti(esiti,host);
+ const nessunaRisposta=esiti.every(x=>!x.ok&&x.stato===undefined);
+ if(remoto&&nessunaRisposta){ try{ let_=await fblSpiegaBlocco(let_,host); }catch(e){} }
  fblLog('conclusione: '+let_.titolo);
  const colore=let_.classe==='ok'?'#4ecb83':(let_.classe==='mezzo'?'#ffb96b':'#ff7b78');
  if(es){

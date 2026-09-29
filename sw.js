@@ -41,8 +41,10 @@
 //               Windows italiano, messaggio del tablet che non accusa piu' il PC
 //          v10 = accesso da altri dispositivi SOLO via Tailscale (https sul nome
 //               .ts.net): niente Wi-Fi, niente firewall, stesso sito sul tablet
+//          v11 = la prova del collegamento riconosce il permesso «rete locale» del
+//               browser e offre il test diretto, invece di dire «computer non trovato»
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v10";
+const CACHE_NAME = "forex-backtest-lab-v11";
 const ASSETS = [
   "./",
   "./app.html",
