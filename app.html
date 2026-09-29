@@ -583,6 +583,16 @@ input[type=number],.fbLevelsTable td,.fbPickerSym,#openPositions td,#mt5OpenPosi
    vede a colpo d'occhio dove si deve essere seduti per fare ogni passo. Su schermo stretto le due
    colonne si impilano, e restano in ordine: prima tutto il computer, poi tutto il telefono. */
 .fblGuida{margin:0 0 14px}
+/* Il riquadro del firewall: rosso quando blocca, verde quando e' a posto. E' l'unica cosa in
+   questa schermata che si deve notare prima di tutto il resto, perche' se blocca, tutto il resto
+   e' inutile. */
+.fblMuro{margin-top:10px;padding:9px 11px;border-radius:9px;font-size:11.5px;line-height:1.5;
+  border:1px solid var(--fbLine2);background:var(--fbPanel)}
+.fblMuro.blocca{border-color:#7a2f2c;background:rgba(122,47,44,.16)}
+.fblMuro.ok{border-color:#2f6b4a;background:rgba(47,107,74,.14)}
+.fblMuro code{font-size:10.5px;word-break:break-all;background:#0b1117;border:1px solid var(--fbLine2);
+  border-radius:5px;padding:1px 4px;display:inline-block;margin-top:4px}
+.fblMuroAzioni{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
 .fblGuidaScelta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .fblGuidaScelta button{flex:1 1 200px}
 .fblGuidaCols{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:10px}
@@ -3117,6 +3127,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        </label>
        <div class="tgCfgNota" style="margin-top:6px">Finché è spento, il computer risponde solo a sé stesso. Acceso, accetta anche telefono e tablet — ma <b>solo</b> con la chiave qui sotto.</div>
        <div id="fblRemotoIndirizzi" class="tgCfgRiep" style="margin-top:10px"></div>
+       <div id="fblMuro" class="fblMuro" style="display:none"></div>
        <div class="fbOptRow" style="margin-top:10px;gap:8px">
          <input id="fblRemotoChiave" class="tgCfgIn" type="text" readonly style="flex:1;min-width:200px" title="La chiave da scrivere sull'altro dispositivo">
          <button type="button" id="fblRemotoCopia" class="miniBtn">Copia</button>
@@ -22558,6 +22569,7 @@ async function fblRemotoLeggi(){
   const d=r.data||{};
   if($('fblRemotoAttivo'))$('fblRemotoAttivo').checked=!!d.rete;
   if($('fblRemotoChiave'))$('fblRemotoChiave').value=d.chiave||'';
+  try{ fblMuroDisegna(d); }catch(e){ console.log('[Accesso remoto] stato firewall non mostrato:',e); }
   try{ fblGuidaDisegna(); }catch(e){}
   if(ind){
    const righe=(d.indirizzi||[]).map(x=>'<b>'+x.indirizzo+'</b> — '+x.tipo);
@@ -22568,6 +22580,83 @@ async function fblRemotoLeggi(){
   }
  }catch(e){ if(ind)ind.textContent='Servizio non raggiungibile: '+(e&&e.message||e); }
 }
+// --- Firewall di Windows ---------------------------------------------------------------------
+// Causa numero uno di "nessuna risposta" quando tutto il resto e' giusto: Windows scarta le
+// richieste in ingresso prima che arrivino all'applicazione, e non lascia nessuna traccia visibile
+// da questa parte. Va detto PRIMA di provare, non dedotto dopo.
+let fblUltimoStatoPc=null;
+function fblMuroDisegna(d){
+ const box=$('fblMuro'); if(!box)return;
+ fblUltimoStatoPc=d||null;
+ if(!d||d.firewall===undefined){ box.style.display='none'; return; }
+ box.style.display='block';
+ const profili=(d.profili_rete||[]);
+ // Una rete "pubblica" e' bloccata da Windows comunque, regola o no: si segnala a parte, perche'
+ // e' un problema diverso che si risolve in un altro posto (impostazioni di rete di Windows).
+ const pubbliche=profili.filter(x=>!x.privata).map(x=>x.rete);
+ const righeReti=profili.length
+  ? ('<div style="margin-top:6px">Le tue reti, come le vede Windows:<br>'
+     +profili.map(x=>'• <b>'+fbEsc(x.rete)+'</b> — '+(x.privata?'privata':'<b style="color:#ff9d7b">pubblica</b>')).join('<br>')+'</div>')
+  : '';
+ if(d.firewall===null){
+  box.className='fblMuro';
+  box.innerHTML='<b>Firewall: non sono riuscito a controllarlo.</b> Se la prova del collegamento '
+   +'non riesce e tutto il resto è a posto, è quasi sempre lui.<br><code>'+fbEsc(d.comando_firewall||'')+'</code>'
+   +righeReti;
+  return;
+ }
+ if(d.firewall){
+  box.className='fblMuro ok';
+  box.innerHTML='<b>✓ Firewall a posto.</b> Windows lascia passare le porte '+fbEsc(d.porte||'')
+   +' sulle reti <b>private</b>.'+righeReti
+   +(pubbliche.length?('<div style="margin-top:6px"><b style="color:#ff9d7b">Attenzione:</b> '
+     +fbEsc(pubbliche.join(', '))+' è classificata <b>pubblica</b>, e su una rete pubblica Windows '
+     +'blocca comunque. Da telefono funzionerà con Tailscale; per farlo funzionare sulla Wi‑Fi di '
+     +'casa, in Windows imposta quella rete come <b>privata</b> (Impostazioni → Rete e Internet → '
+     +'Wi‑Fi → la tua rete → «Rete privata»).</div>'):'');
+  return;
+ }
+ box.className='fblMuro blocca';
+ box.innerHTML='<b>Il firewall di Windows sta bloccando.</b> Non c’è nessuna regola che lasci '
+  +'entrare le porte '+fbEsc(d.porte||'')+': le richieste dal telefono arrivano al computer e '
+  +'vengono scartate prima di raggiungere l’applicazione. <b>Finché è così, la prova del '
+  +'collegamento non può riuscire</b>, anche con indirizzo e chiave giusti.'
+  +righeReti
+  +'<div class="fblMuroAzioni">'
+  +'<button type="button" id="fblMuroApri" class="toolBtn active" style="font-weight:700">Apri le porte</button>'
+  +'<button type="button" id="fblMuroCopia" class="miniBtn">Copia il comando</button>'
+  +'</div>'
+  +'<div class="tgCfgNota" style="margin-top:6px">Comparirà la finestra di autorizzazione di '
+  +'Windows: senza il tuo consenso non viene cambiato niente. La regola vale <b>solo per le reti '
+  +'private</b> — su una Wi‑Fi pubblica non viene aperto nulla.</div>'
+  +'<code>'+fbEsc(d.comando_firewall||'')+'</code>';
+ $('fblMuroApri')?.addEventListener('click',fblMuroApriPorte);
+ $('fblMuroCopia')?.addEventListener('click',async ()=>{
+  try{ await navigator.clipboard.writeText(d.comando_firewall||''); $('fblRemotoEsito').textContent='Comando copiato. Incollalo in un PowerShell aperto come amministratore.'; }
+  catch(e){ $('fblRemotoEsito').textContent='Copialo a mano dal riquadro qui sopra.'; }
+ });
+}
+async function fblMuroApriPorte(){
+ const b=$('fblMuroApri'); if(b){ b.disabled=true; b.textContent='Aspetto la tua autorizzazione…'; }
+ const es=$('fblRemotoEsito');
+ try{
+  const r=await fetchMt5WithTimeout('/accesso-remoto/firewall',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:'{}'},25000);
+  if(r&&r.ok&&r.data&&r.data.regola){
+   if(es)es.innerHTML='<b style="color:#4ecb83">Porte aperte.</b> Ora prova il collegamento dal telefono.';
+   fblRemotoLeggi();
+   return;
+  }
+  if(es)es.innerHTML='<b style="color:#ff7b78">Porte non aperte.</b> '
+   +fbEsc((r&&r.data&&r.data.detail)||(r&&r.message)||'Autorizzazione non concessa.')
+   +'<br><span class="tgCfgNota">Puoi farlo a mano: copia il comando e incollalo in PowerShell aperto come amministratore.</span>';
+ }catch(e){
+  if(es)es.textContent='Non sono riuscito a chiedere l’apertura: '+(e&&e.message||e);
+ }finally{
+  if(b){ b.disabled=false; b.textContent='Apri le porte'; }
+ }
+}
+
 // --- Guida passo per passo -------------------------------------------------------------------
 // RICHIESTO ESPLICITAMENTE: "cosa fare nel primo dispositivo (pc) e nel secondo dispositivo
 // (telefono/tablet)", passo per passo, per chi non ha mai fatto una cosa del genere.
@@ -22594,6 +22683,9 @@ function fblPassiComputer(modo){
  p.push({t:'Qui sotto, accendi <b>«Consenti l’accesso dagli altri miei dispositivi»</b>.',
    perche:'Finché è spento, il computer risponde solo a sé stesso.',
    fatto:()=>{ try{ return !!$('fblRemotoAttivo')?.checked; }catch(e){ return false; } }});
+ p.push({t:'Sempre qui sotto, guarda il riquadro del <b>firewall di Windows</b>. Se dice che sta bloccando, premi <b>«Apri le porte»</b> e accetta la finestra di Windows.',
+   perche:'Senza questa regola Windows scarta le richieste del telefono prima che arrivino all’applicazione: tutto il resto è giusto e non funziona lo stesso. È la causa più frequente di «nessuna risposta».',
+   fatto:()=>{ try{ return !!(fblUltimoStatoPc&&fblUltimoStatoPc.firewall===true); }catch(e){ return false; } }});
  p.push({t:'<b>Chiudi e riapri</b> l’applicazione sul computer.',
    perche:'Obbligatorio, non è un consiglio: l’indirizzo su cui ascoltare si sceglie all’avvio. Senza riavvio il passo 3 non ha ancora effetto.'});
  p.push({t:'Riapri questa schermata e <b>segna due cose</b>: l’indirizzo che comincia per '
@@ -22613,7 +22705,7 @@ function fblPassiTelefono(modo){
  }
  p.push({t:'Sul telefono apri l’app, vai su <b>Collegamento / Modalità</b> e premi <b>«📱 Accesso da altri dispositivi»</b>: torni su questa stessa schermata.',
    perche:'La schermata è la stessa su tutti e due i dispositivi. Quello che cambia è quale metà si compila.'});
- p.push({t:'Qui sotto, in <b>«Su telefono o tablet»</b>, scrivi l’<b>indirizzo</b> e la <b>chiave</b> del passo 5.',
+ p.push({t:'Qui sotto, in <b>«Su telefono o tablet»</b>, scrivi l’<b>indirizzo</b> e la <b>chiave</b> del passo 6.',
    perche:'L’indirizzo dice dove sta il computer; la chiave è quella che il computer pretende prima di rispondere.',
    fatto:()=>{ try{ return !!(($('fblHostCampo')?.value||'').trim()
      &&($('fblHostCampo').value||'').trim()!=='127.0.0.1'&&($('fblChiaveCampo')?.value||'').trim()); }catch(e){ return false; } }});
@@ -22659,9 +22751,9 @@ function fblGuidaDisegna(){
  });
  const aiuto=$('fblGuidaAiuto');
  if(aiuto)aiuto.innerHTML='<b>Se «Prova il collegamento» non riesce</b>, quasi sempre è uno di questi tre: '
-  +'l’app sul computer è chiusa (passo 2), il computer non è stato riavviato dopo aver acceso l’interruttore (passo 4), '
-  +'oppure i due dispositivi non sono sulla stessa rete (passo 1 e passo 6). '
-  +'Se invece risponde <b>«Rifiutato»</b>, il computer c’è ma la chiave non gli torna: ricopiala dal passo 5.';
+  +'l’app sul computer è chiusa (passo 2), il firewall di Windows blocca (passo 4), il computer non è stato riavviato dopo aver acceso l’interruttore (passo 5), '
+  +'oppure i due dispositivi non sono sulla stessa rete (passo 1 e passo 7). '
+  +'Se invece risponde <b>«Rifiutato»</b>, il computer c’è ma la chiave non gli torna: ricopiala dal passo 6.';
 }
 document.querySelectorAll('[data-fbl-modo]').forEach(b=>{
  b.addEventListener('click',()=>{
@@ -22746,8 +22838,12 @@ $('fblRemotoProva')?.addEventListener('click',async ()=>{
   if(r.status===403){ if(es)es.innerHTML='<b style="color:#ff7b78">Rifiutato</b>: chiave errata, oppure l\'accesso da altri dispositivi non è acceso sul computer.'; return; }
   if(es)es.textContent='Il computer ha risposto con un errore ('+r.status+').';
  }catch(e){
+  // Ordine non casuale: il firewall e' la causa piu' frequente quando tutto il resto e' a posto,
+  // ed e' anche l'unica che dal telefono non si puo' vedere in nessun modo.
   if(es)es.innerHTML='<b style="color:#ff7b78">Nessuna risposta</b> da '+host+':8000.<br>'
-   +'<span class="tgCfgNota">Controlla che l\'applicazione sia avviata sul computer, che l\'indirizzo sia giusto, e che i due dispositivi siano sulla stessa rete (o tutti e due su Tailscale).</span>';
+   +'<span class="tgCfgNota"><b>1.</b> Il <b>firewall di Windows</b>: apri questa schermata <i>sul computer</i> e guarda il riquadro del firewall — se dice che sta bloccando, premi «Apri le porte». È la causa più frequente quando tutto il resto sembra giusto.<br>'
+   +'<b>2.</b> L\'applicazione non è avviata sul computer, o non è stata riavviata dopo aver acceso l\'accesso.<br>'
+   +'<b>3.</b> L\'indirizzo è sbagliato, oppure i due dispositivi non sono sulla stessa rete (o non tutti e due su Tailscale).</span>';
  }
 });
 
