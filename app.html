@@ -593,6 +593,11 @@ input[type=number],.fbLevelsTable td,.fbPickerSym,#openPositions td,#mt5OpenPosi
 .fblMuro code{font-size:10.5px;word-break:break-all;background:#0b1117;border:1px solid var(--fbLine2);
   border-radius:5px;padding:1px 4px;display:inline-block;margin-top:4px}
 .fblMuroAzioni{display:flex;gap:7px;flex-wrap:wrap;margin-top:8px}
+/* L'esito porta per porta: tre righe, un pallino per colore. Si legge in un secondo quale dei tre
+   servizi non risponde, che e' la cosa che il vecchio "riuscito/non riuscito" nascondeva. */
+.fblEsiti{margin-top:8px;font-size:11px;line-height:1.7}
+.fblEsiti .pal{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.fblEsiti .ms{color:var(--fbMuted);font-size:10px}
 .fblGuidaScelta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .fblGuidaScelta button{flex:1 1 200px}
 .fblGuidaCols{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:10px}
@@ -22594,6 +22599,26 @@ function fblMuroDisegna(d){
  // Una rete "pubblica" e' bloccata da Windows comunque, regola o no: si segnala a parte, perche'
  // e' un problema diverso che si risolve in un altro posto (impostazioni di rete di Windows).
  const pubbliche=profili.filter(x=>!x.privata).map(x=>x.rete);
+ const ascolto=d.porte_in_ascolto||null;
+ const NOMI_PORTA={'8000':'ordini','8001':'grafico','8769':'segnali'};
+ let righeAscolto='';
+ if(ascolto&&Object.keys(ascolto).length){
+  const voci=['8000','8001','8769'].map(pt=>{
+   const su=ascolto[pt];
+   if(!su)return '• <b>'+pt+'</b> '+NOMI_PORTA[pt]+' — <b style="color:#ff9d7b">servizio non avviato</b>';
+   const aperto=(su==='0.0.0.0'||su==='::');
+   return '• <b>'+pt+'</b> '+NOMI_PORTA[pt]+' — '
+    +(aperto?'raggiungibile dalla rete'
+            :'<b style="color:#ff9d7b">solo su questo computer</b> ('+fbEsc(su)+')');
+  });
+  const muti=['8000','8001','8769'].filter(pt=>ascolto[pt]&&ascolto[pt]!=='0.0.0.0'&&ascolto[pt]!=='::');
+  righeAscolto='<div style="margin-top:6px">I tre servizi, chi risponde dalla rete:<br>'+voci.join('<br>')+'</div>'
+   +(muti.length?('<div style="margin-top:4px"><b style="color:#ff9d7b">Attenzione:</b> '
+     +muti.map(pt=>NOMI_PORTA[pt]).join(' e ')+' rispond'+(muti.length>1?'ono':'e')+' solo a questo computer. '
+     +'Dal telefono la prova riuscirebbe lo stesso (la controlla sulla porta degli ordini) ma '
+     +(muti.length>1?'quei servizi resterebbero muti':'quel servizio resterebbe muto')
+     +'. Sono i servizi vecchi: vanno aggiornati e riavviati.</div>'):'');
+ }
  const righeReti=profili.length
   ? ('<div style="margin-top:6px">Le tue reti, come le vede Windows:<br>'
      +profili.map(x=>'• <b>'+fbEsc(x.rete)+'</b> — '+(x.privata?'privata':'<b style="color:#ff9d7b">pubblica</b>')).join('<br>')+'</div>')
@@ -22602,13 +22627,13 @@ function fblMuroDisegna(d){
   box.className='fblMuro';
   box.innerHTML='<b>Firewall: non sono riuscito a controllarlo.</b> Se la prova del collegamento '
    +'non riesce e tutto il resto è a posto, è quasi sempre lui.<br><code>'+fbEsc(d.comando_firewall||'')+'</code>'
-   +righeReti;
+   +righeReti+righeAscolto;
   return;
  }
  if(d.firewall){
   box.className='fblMuro ok';
   box.innerHTML='<b>✓ Firewall a posto.</b> Windows lascia passare le porte '+fbEsc(d.porte||'')
-   +' sulle reti <b>private</b>.'+righeReti
+   +' sulle reti <b>private</b>.'+righeReti+righeAscolto
    +(pubbliche.length?('<div style="margin-top:6px"><b style="color:#ff9d7b">Attenzione:</b> '
      +fbEsc(pubbliche.join(', '))+' è classificata <b>pubblica</b>, e su una rete pubblica Windows '
      +'blocca comunque. Da telefono funzionerà con Tailscale; per farlo funzionare sulla Wi‑Fi di '
@@ -22621,7 +22646,7 @@ function fblMuroDisegna(d){
   +'entrare le porte '+fbEsc(d.porte||'')+': le richieste dal telefono arrivano al computer e '
   +'vengono scartate prima di raggiungere l’applicazione. <b>Finché è così, la prova del '
   +'collegamento non può riuscire</b>, anche con indirizzo e chiave giusti.'
-  +righeReti
+  +righeReti+righeAscolto
   +'<div class="fblMuroAzioni">'
   +'<button type="button" id="fblMuroApri" class="toolBtn active" style="font-weight:700">Apri le porte</button>'
   +'<button type="button" id="fblMuroCopia" class="miniBtn">Copia il comando</button>'
@@ -22703,8 +22728,12 @@ function fblPassiTelefono(modo){
   p.push({t:'Collega il telefono alla <b>stessa Wi‑Fi</b> del computer.',
     perche:'Attenzione ai dati mobili: se il telefono resta sulla rete del gestore, non vedrà il computer. Wi‑Fi acceso e agganciato.'});
  }
- p.push({t:'Sul telefono apri l’app, vai su <b>Collegamento / Modalità</b> e premi <b>«📱 Accesso da altri dispositivi»</b>: torni su questa stessa schermata.',
-   perche:'La schermata è la stessa su tutti e due i dispositivi. Quello che cambia è quale metà si compila.'});
+ p.push({t:'Sul telefono apri il browser e vai su <b>http://INDIRIZZO:8000/</b> — l’indirizzo del passo 6, per esempio <i>http://192.168.1.5:8000/</i>. <b>Non aprire il sito</b>.',
+   perche:'È il computer che ti serve l’app. Aprendo il sito (che è in https) il browser blocca da solo ogni chiamata verso il computer, che risponde in http: si chiama «contenuto misto» e nessuna regola del firewall lo risolve. Da qui invece pagina e servizio sono la stessa cosa.'});
+ p.push({t:'Se l’app ti chiede la <b>chiave</b>, incolla quella del passo 6. Poi hai finito: grafico, segnali e ordini funzionano.',
+   perche:'Aprendo l’app dall’indirizzo del computer, l’indirizzo non serve più scriverlo: l’app parla con il computer da cui è arrivata.'});
+ p.push({t:'<i>In alternativa</i>, se preferisci usare il sito: apri l’app, vai su <b>Collegamento / Modalità</b> → <b>«📱 Accesso da altri dispositivi»</b> e torni su questa schermata.',
+   perche:'Funziona solo se apri il sito in http, non in https. È la strada più fragile: se puoi, usa quella del passo precedente.'});
  p.push({t:'Qui sotto, in <b>«Su telefono o tablet»</b>, scrivi l’<b>indirizzo</b> e la <b>chiave</b> del passo 6.',
    perche:'L’indirizzo dice dove sta il computer; la chiave è quella che il computer pretende prima di rispondere.',
    fatto:()=>{ try{ return !!(($('fblHostCampo')?.value||'').trim()
@@ -22820,30 +22849,133 @@ $('fblRemotoSalva')?.addEventListener('click',()=>{
  const box=$('fblRemotoLocale');
  if(box)box.style.display=fblRemoto()?'none':'block';
 });
+// --- Registro della prova ---------------------------------------------------------------------
+// Tutto quello che succede finisce in console con il prefisso [FBL], e in un registro in memoria
+// che si puo' copiare con un pulsante: dal telefono aprire gli strumenti da sviluppatore non e'
+// pratico, e un rapporto da incollare vale piu' di un racconto a memoria.
+const FBL_REGISTRO=[];
+function fblLog(testo,dati){
+ const riga='['+new Date().toLocaleTimeString()+'] '+testo
+   +(dati!==undefined?(' '+(typeof dati==='string'?dati:JSON.stringify(dati))):'');
+ FBL_REGISTRO.push(riga);
+ if(FBL_REGISTRO.length>200)FBL_REGISTRO.shift();
+ try{ console.log('%c[FBL]%c '+testo,'color:#4ecb83;font-weight:700','color:inherit',dati!==undefined?dati:''); }catch(e){}
+ return riga;
+}
+// Le tre porte, con il nome di cosa serve ognuna: "8001 non risponde" da solo non dice niente,
+// "il grafico non risponde" si capisce.
+const FBL_PORTE=[
+ {porta:8000,nome:'ordini (ponte MT5)',percorso:'/health'},
+ {porta:8001,nome:'grafico (dati candele)',percorso:'/health'},
+ {porta:8769,nome:'segnali (sale Telegram)',percorso:'/health'}
+];
+// Una singola porta. Torna sempre un oggetto, mai un'eccezione: un esito e' un dato, e serve per
+// il confronto con gli altri due.
+async function fblProvaPorta(host,chiave,def,timeoutMs){
+ let url='http://'+host+':'+def.porta+def.percorso;
+ const remoto=(host!=='127.0.0.1'&&host!=='localhost');
+ if(remoto&&chiave)url+=(url.indexOf('?')>=0?'&':'?')+'chiave='+encodeURIComponent(chiave);
+ const t0=(performance&&performance.now)?performance.now():Date.now();
+ const c=new AbortController();
+ const tmr=setTimeout(()=>c.abort(),timeoutMs||8000);
+ const esito={porta:def.porta,nome:def.nome,url:url.replace(/chiave=[^&]*/,'chiave=***')};
+ try{
+  const r=await fetch(url,{signal:c.signal});
+  esito.ms=Math.round(((performance&&performance.now)?performance.now():Date.now())-t0);
+  esito.stato=r.status;
+  esito.ok=r.ok;
+  try{ esito.corpo=(await r.text()).slice(0,200); }catch(e){}
+  if(r.ok)esito.esito='risponde';
+  else if(r.status===403)esito.esito='rifiutato (chiave o interruttore)';
+  else esito.esito='errore HTTP '+r.status;
+ }catch(e){
+  esito.ms=Math.round(((performance&&performance.now)?performance.now():Date.now())-t0);
+  esito.ok=false;
+  esito.errore=(e&&e.name||'')+': '+(e&&e.message||e);
+  // Qui sta il dato che distingue le due cause, e non c'e' altro modo di ottenerlo dal browser:
+  // - scaduto  -> nessuno ha risposto NIENTE: quasi sempre il firewall scarta in silenzio, o
+  //               l'indirizzo non esiste sulla rete;
+  // - rifiutato subito -> il computer c'e' e ha detto di no: su quella porta non ascolta nessuno
+  //               (servizio spento, o ancora in ascolto solo su 127.0.0.1).
+  esito.esito=(e&&e.name==='AbortError')?'scaduto (nessuna risposta)':'irraggiungibile';
+ }finally{ clearTimeout(tmr); }
+ return esito;
+}
+function fblLeggiEsiti(esiti,host){
+ const vivi=esiti.filter(x=>x.ok);
+ const rifiutati=esiti.filter(x=>x.stato===403);
+ const scaduti=esiti.filter(x=>x.esito&&x.esito.indexOf('scaduto')===0);
+ const spenti=esiti.filter(x=>!x.ok&&x.stato===undefined&&x.esito==='irraggiungibile');
+ if(vivi.length===esiti.length)
+  return {classe:'ok',titolo:'Collegamento riuscito',testo:'Tutti e tre i servizi rispondono da <b>'+host+'</b>: ordini, grafico e segnali.'};
+ if(rifiutati.length)
+  return {classe:'ko',titolo:'Rifiutato',testo:'Il computer c’è e risponde, ma dice di no: la <b>chiave</b> non corrisponde, oppure sul computer l’accesso da altri dispositivi non è acceso. Ricopia la chiave dal computer.'};
+ if(vivi.length&&(scaduti.length||spenti.length)){
+  // Il caso che ha fatto perdere tempo: la prova "riusciva" perche' guardava solo la 8000.
+  const muti=esiti.filter(x=>!x.ok).map(x=>x.nome).join(', ');
+  return {classe:'mezzo',titolo:'Collegamento parziale',
+   testo:'Gli <b>ordini</b> rispondono, ma <b>'+muti+'</b> no. Dal telefono il grafico resterebbe vuoto e i segnali non arriverebbero. '
+    +'Di solito è il computer con i servizi vecchi: vanno aggiornati (le porte 8001 e 8769 ascoltavano solo sul computer stesso).'};
+ }
+ if(scaduti.length===esiti.length)
+  return {classe:'ko',titolo:'Nessuna risposta',
+   testo:'Nessuno dei tre servizi ha risposto, e nessuno ha nemmeno <b>rifiutato</b>: le richieste spariscono nel nulla. '
+    +'È il comportamento tipico del <b>firewall di Windows</b> che le scarta in silenzio (oppure di un indirizzo che su questa rete non esiste). '
+    +'Apri questa schermata <i>sul computer</i> e guarda il riquadro del firewall.'};
+ if(spenti.length===esiti.length)
+  return {classe:'ko',titolo:'Connessione rifiutata',
+   testo:'Il computer <b>c’è</b> e risponde subito, ma su queste porte non ascolta nessuno. '
+    +'L’applicazione non è avviata sul computer, oppure non è stata riavviata dopo aver acceso l’accesso da altri dispositivi.'};
+ return {classe:'ko',titolo:'Esito misto',testo:'Guarda il dettaglio qui sotto: ogni porta racconta una cosa diversa.'};
+}
 $('fblRemotoProva')?.addEventListener('click',async ()=>{
  const es=$('fblRemotoEsito');
- if(es)es.textContent='Provo…';
  const host=($('fblHostCampo')?.value||'').trim()||'127.0.0.1';
  const chiave=($('fblChiaveCampo')?.value||'').trim();
+ if(es)es.innerHTML='Provo tutte e tre le porte… <span class="tgCfgNota">(fino a 8 secondi per porta)</span>';
  // Si prova con i valori SCRITTI ADESSO, anche se non ancora salvati: provare quelli vecchi
  // direbbe una cosa diversa da quella che si sta chiedendo.
- let url='http://'+host+':8000/health';
- if(host!=='127.0.0.1'&&chiave)url+='?chiave='+encodeURIComponent(chiave);
- try{
-  const c=new AbortController();
-  const t=setTimeout(()=>c.abort(),8000);
-  const r=await fetch(url,{signal:c.signal});
-  clearTimeout(t);
-  if(r.ok){ if(es)es.innerHTML='<b style="color:#4ecb83">Collegamento riuscito</b> con '+host+'.'; return; }
-  if(r.status===403){ if(es)es.innerHTML='<b style="color:#ff7b78">Rifiutato</b>: chiave errata, oppure l\'accesso da altri dispositivi non è acceso sul computer.'; return; }
-  if(es)es.textContent='Il computer ha risposto con un errore ('+r.status+').';
- }catch(e){
-  // Ordine non casuale: il firewall e' la causa piu' frequente quando tutto il resto e' a posto,
-  // ed e' anche l'unica che dal telefono non si puo' vedere in nessun modo.
-  if(es)es.innerHTML='<b style="color:#ff7b78">Nessuna risposta</b> da '+host+':8000.<br>'
-   +'<span class="tgCfgNota"><b>1.</b> Il <b>firewall di Windows</b>: apri questa schermata <i>sul computer</i> e guarda il riquadro del firewall — se dice che sta bloccando, premi «Apri le porte». È la causa più frequente quando tutto il resto sembra giusto.<br>'
-   +'<b>2.</b> L\'applicazione non è avviata sul computer, o non è stata riavviata dopo aver acceso l\'accesso.<br>'
-   +'<b>3.</b> L\'indirizzo è sbagliato, oppure i due dispositivi non sono sulla stessa rete (o non tutti e due su Tailscale).</span>';
+ fblLog('--- prova del collegamento ---');
+ fblLog('indirizzo:',host);
+ fblLog('chiave:',chiave?('presente, '+chiave.length+' caratteri'):'NON scritta');
+ if(host!=='127.0.0.1'&&!chiave)fblLog('ATTENZIONE: indirizzo remoto senza chiave: il computer rifiuterà.');
+ fblLog('da questa pagina:',location.origin||location.href);
+ // Si controlla PRIMA di provare: se e' questo il caso, gli esiti delle tre porte sarebbero tutti
+ // "irraggiungibile in pochi ms" e porterebbero a incolpare il servizio o il firewall, che non
+ // c'entrano niente.
+ const remoto=(host!=='127.0.0.1'&&host!=='localhost');
+ if(remoto&&location.protocol==='https:'){
+  fblLog('BLOCCO: pagina in https che chiama un indirizzo http — contenuto misto, il browser non farà partire le richieste');
+  if(es)es.innerHTML='<b style="color:#ff7b78">Il browser non lascia nemmeno partire le richieste</b> — '
+   +'questa pagina è aperta in <b>https</b> (dal sito) e il tuo computer risponde in <b>http</b>. '
+   +'I browser bloccano questa combinazione da soli, prima di mandare qualunque cosa: si chiama '
+   +'<i>contenuto misto</i>, e <b>nessuna regola del firewall può risolverlo</b>.'
+   +'<div class="tgCfgNota" style="margin-top:6px"><b>La soluzione è più semplice di così:</b> sul telefono non aprire il sito. '
+   +'Vai col browser direttamente su <b>http://'+fbEsc(host)+':8000/</b> — è il tuo computer che ti serve l’app. '
+   +'Da lì pagina e servizio sono la stessa cosa, e non serve nemmeno più scrivere indirizzo e chiave qui dentro.</div>';
+  return;
+ }
+ // Le tre prove insieme, non una dopo l'altra: in serie, tre timeout da 8 secondi sono 24
+ // secondi di attesa davanti a un pulsante che sembra bloccato.
+ const esiti=await Promise.all(FBL_PORTE.map(d=>fblProvaPorta(host,chiave,d,8000)));
+ esiti.forEach(x=>fblLog('porta '+x.porta+' — '+x.nome+': '+x.esito+' in '+x.ms+' ms',
+   x.errore?{url:x.url,errore:x.errore}:{url:x.url,stato:x.stato,corpo:x.corpo}));
+ const let_=fblLeggiEsiti(esiti,host);
+ fblLog('conclusione: '+let_.titolo);
+ const colore=let_.classe==='ok'?'#4ecb83':(let_.classe==='mezzo'?'#ffb96b':'#ff7b78');
+ if(es){
+  es.innerHTML='<b style="color:'+colore+'">'+let_.titolo+'</b> — '+let_.testo
+   +'<div class="fblEsiti">'+esiti.map(x=>
+     '<div><span class="pal" style="background:'+(x.ok?'#4ecb83':(x.stato===403?'#ffb96b':'#ff7b78'))+'"></span>'
+     +'<b>'+x.porta+'</b> '+fbEsc(x.nome)+' — '+fbEsc(x.esito)+' <span class="ms">'+x.ms+' ms</span></div>').join('')
+   +'</div>'
+   +'<div class="fblMuroAzioni"><button type="button" id="fblCopiaRapporto" class="miniBtn">Copia il rapporto</button>'
+   +'<span class="tgCfgNota" style="align-self:center">Tutto il dettaglio è anche nella console del browser (F12), con il prefisso <b>[FBL]</b>.</span></div>';
+  $('fblCopiaRapporto')?.addEventListener('click',async ()=>{
+   const testo=FBL_REGISTRO.join('\n');
+   try{ await navigator.clipboard.writeText(testo); es.querySelector('#fblCopiaRapporto').textContent='Copiato'; }
+   catch(e){ console.log(testo); es.querySelector('#fblCopiaRapporto').textContent='Guarda la console (F12)'; }
+  });
  }
 });
 
@@ -23851,8 +23983,27 @@ const MT5_ACCOUNTS_FILE='mt5-accounts.json'; // formato STEP B/C: lista di conti
 // servizi aprono ordini veri, e sulla rete non si puo' presumere che ci sia solo chi di dovere.
 const FBL_HOST_KEY='fb_indirizzo_ponte';
 const FBL_CHIAVE_KEY='fb_chiave_ponte';
+// L'indirizzo del computer ricavato da DOVE si e' aperta la pagina, se e solo se ha senso.
+// Deve restare stretta: su https://<sito>/app.html l'host e' quello del sito, e adottarlo
+// manderebbe l'app a cercare il ponte su http://<sito>:8000, cioe' da nessuna parte.
+// Due condizioni, tutte e due necessarie:
+//  - http semplice: il ponte parla solo http, quindi una pagina https non puo' venire da lui;
+//  - l'host e' un indirizzo IP: un nome di dominio non e' mai il ponte di casa.
+function fblHostDallaPagina(){
+ try{
+  if(location.protocol!=='http:')return '';
+  const h=(location.hostname||'').trim();
+  if(!h||h==='127.0.0.1'||h==='localhost'||h==='::1')return '';
+  if(!/^\d{1,3}(\.\d{1,3}){3}$/.test(h))return '';
+  return h;
+ }catch(e){ return ''; }
+}
 function fblHost(){
  try{ const v=(localStorage.getItem(FBL_HOST_KEY)||'').trim(); if(v)return v; }catch(e){}
+ // Se la pagina e' arrivata DA un computer (telefono che apre http://192.168.1.5:8000/, dove e'
+ // il ponte stesso a servire app.html), e' con quel computer che si deve parlare. Il predefinito
+ // 127.0.0.1 cercherebbe il ponte sul telefono, dove non c'e' niente.
+ if(fblHostDallaPagina())return fblHostDallaPagina();
  return '127.0.0.1';
 }
 function fblChiave(){
