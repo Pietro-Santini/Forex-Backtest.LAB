@@ -45,8 +45,10 @@
 //               browser e offre il test diretto, invece di dire «computer non trovato»
 //          v12 = login al conto MT5 dal tablet (mancava la chiave); dal tablet
 //               «Disconnetti» e la chiusura della pagina non spengono piu' il PC
+//          v13 = cambio conto MT5: le posizioni dell'altro conto non si chiudono piu'
+//               a prezzo 0 nel Trade Journal, si mettono da parte e tornano
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v12";
+const CACHE_NAME = "forex-backtest-lab-v13";
 const ASSETS = [
   "./",
   "./app.html",

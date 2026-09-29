@@ -3483,8 +3483,74 @@ function currentMode(){
  return isPropFirmMode?(base+'_propfirm'):base;
 }
 // Conto MT5 attualmente collegato (numero + server), per etichettare le operazioni reali.
+// ===================== PIU' CONTI MT5: OGNI POSIZIONE RESTA SUL SUO CONTO =====================
+// BUG RISOLTO ("passo da un conto all'altro e l'altro conto mi chiude le posizioni con TP
+// provvisorio e me le mette nel Trade Journal; tornando sul primo conto riappaiono vere"): il
+// cambio conto collegava il nuovo account e basta. Le posizioni del conto di prima restavano in
+// lista, il polling non le trovava nel conto nuovo, dopo due giri le dava per chiuse e le
+// giornalizzava - a prezzo 0, perche' il conto nuovo non ha quei ticket nello storico. Ora:
+//  - il conto collegato si prende dalla risposta di /connect (mt5ContoAttivo), non da
+//    mt5AccountInfo, che arriva dal polling e per qualche secondo descrive ancora il vecchio;
+//  - al cambio, posizioni e pendenti degli ALTRI conti si mettono da parte (mt5Parcheggio) e
+//    tornano al loro posto quando si ricollega il loro conto;
+//  - durante /connect il polling si ferma, e una fotografia chiesta prima del cambio e arrivata
+//    dopo si butta (mt5GenerazioneConto): descrive un conto diverso da quello che l'app crede.
+let mt5ContoAttivo=null;            // {login, server} del conto su cui il ponte e' collegato ORA
+let mt5GenerazioneConto=0;          // sale a ogni /connect
+let mt5ConnessioneInCorso=0;        // >0 mentre un /connect e' in corso
+const MT5_PARCHEGGIO_KEY='fb_mt5_parcheggio';
+let mt5Parcheggio={};               // login -> [{modo, tipo:'pos'|'pend', p}]
+try{ mt5Parcheggio=JSON.parse(localStorage.getItem(MT5_PARCHEGGIO_KEY)||'{}')||{}; }catch(e){ mt5Parcheggio={}; }
+function mt5SalvaParcheggio(){ try{ localStorage.setItem(MT5_PARCHEGGIO_KEY,JSON.stringify(mt5Parcheggio)); }catch(e){} }
+function mt5AttivaConto(login,server){
+ const precedente=mt5ContoAttivo?mt5ContoAttivo.login:null;
+ mt5ContoAttivo={login:String(login),server:server?String(server):''};
+ const ora=mt5ContoAttivo.login;
+ // I dati del conto (saldo, margine...) del conto di prima non valgono per questo.
+ try{ if(mt5AccountInfo&&mt5AccountInfo.login!=null&&String(mt5AccountInfo.login)!==ora)mt5AccountInfo=null; }catch(e){}
+ const modi=['backtest','live','backtest_propfirm','live_propfirm'];
+ let parcheggiate=0, riprese=0;
+ const daRiprendere=mt5Parcheggio[ora]||[];
+ const nonRipresi=[];
+ modi.forEach(modo=>{
+  const corrente=(modo===currentMode());
+  const snap=corrente?null:(sessionByMode[modo]||null);
+  if(!corrente&&!snap){
+   daRiprendere.filter(x=>x.modo===modo).forEach(x=>nonRipresi.push(x));   // sessione non ancora creata: restano da parte
+   return;
+  }
+  const resta=(lista,tipo)=>(lista||[]).filter(p=>{
+   if(!p||p.mt5Ticket==null)return true;
+   // Mai vista con un conto addosso: era viva sul conto di prima, ed e' li' che appartiene.
+   if(!p.mt5Login&&precedente&&precedente!==ora)p.mt5Login=precedente;
+   if(!p.mt5Login||String(p.mt5Login)===ora)return true;
+   (mt5Parcheggio[p.mt5Login]=mt5Parcheggio[p.mt5Login]||[]).push({modo,tipo,p});
+   if(corrente&&active===p)active=null;
+   parcheggiate++;
+   return false;
+  });
+  const pos=resta(corrente?positions:snap.positions,'pos');
+  const pend=resta(corrente?pendingOrders:snap.pendingOrders,'pend');
+  daRiprendere.filter(x=>x.modo===modo).forEach(x=>{
+   const gia=(x.tipo==='pos'?pos:pend).some(q=>q.mt5Ticket!=null&&String(q.mt5Ticket)===String(x.p.mt5Ticket));
+   if(!gia){ x.p.mt5MissingSince=null; (x.tipo==='pos'?pos:pend).push(x.p); riprese++; }
+  });
+  if(corrente){ positions=pos; pendingOrders=pend; }
+  else{ snap.positions=pos; snap.pendingOrders=pend; }
+ });
+ if(nonRipresi.length)mt5Parcheggio[ora]=nonRipresi; else delete mt5Parcheggio[ora];
+ // Nessun sospetto ereditato dal conto di prima: si riparte da una fotografia vera di questo.
+ positions.forEach(p=>{ if(p)p.mt5MissingSince=null; });
+ mt5SalvaParcheggio();
+ if(parcheggiate||riprese){
+  try{ scheduleSave(); }catch(e){}
+  try{ update(); }catch(e){}
+ }
+ return {parcheggiate,riprese};
+}
 function currentMt5AccountTag(){
  try{
+   if(mt5ContoAttivo&&mt5ContoAttivo.login)return {mt5Login:mt5ContoAttivo.login,mt5Server:mt5ContoAttivo.server||''};
    const src=(mt5AccountInfo&&mt5AccountInfo.login!=null)?mt5AccountInfo:mt5CredsDraft;
    if(src&&src.login!=null)return {mt5Login:String(src.login),mt5Server:src.server?String(src.server):''};
  }catch(e){}
@@ -25091,6 +25157,8 @@ function allTrackedMt5PositionTickets(){
 }
 async function fetchMt5Positions(){
  if(mt5PositionsFetchInFlight)return; // il giro precedente non ha ancora finito: salta questo tick
+ if(mt5ConnessioneInCorso>0)return;   // cambio conto in corso: nessuna fotografia e' affidabile
+ const generazione=mt5GenerazioneConto;
  mt5PositionsFetchInFlight=true;
  // BUG RISOLTO ("apro la posizione collegato a MT5, su MT5 resta aperta con TP/SL ma sull'app
  // si chiude subito"): questo polling gira ogni 2s in parallelo a QUALUNQUE apertura reale
@@ -25107,6 +25175,8 @@ async function fetchMt5Positions(){
  const fetchStartedAt=Date.now();
  try{
    const result=await fetchMt5WithTimeout('/positions',{method:'GET'},8000);
+   // Chiesta prima di un cambio conto: descrive un altro conto, non si usa.
+   if(generazione!==mt5GenerazioneConto)return;
    if(result.ok && Array.isArray(result.data)){
      // Contatto riuscito col bridge/terminale in questo preciso istante: vedi il blocco
      // RECUPERO STORICO MT5 più sopra — serve come punto di partenza per /history_deals alla
@@ -25135,8 +25205,11 @@ async function fetchMt5Positions(){
      // /deal_reason conferma un deal di chiusura reale (vedi stillOpen più sotto: seconda difesa,
      // lato bridge, per lo stesso identico problema).
      const justConfirmedClosed=[];
+     const contoOra=(mt5ContoAttivo&&mt5ContoAttivo.login)||null;
      for(const p of positions){
        if(p.mt5Ticket==null)continue;
+       // Di un altro conto: non puo' comparire in questa fotografia, e la sua assenza non dice niente.
+       if(contoOra&&p.mt5Login&&String(p.mt5Login)!==contoOra)continue;
        if(newTickets.has(String(p.mt5Ticket))){
          p.mt5MissingSince=null; // ricomparsa: falso allarme, il sospetto si cancella
          if(!p.mt5Login)Object.assign(p,currentMt5AccountTag()); // conto su cui vive davvero questa posizione
@@ -25186,9 +25259,17 @@ async function fetchMt5Positions(){
          // giornalizziamo, resta tracciata e si ripresenterà da sola in newTickets non appena la
          // fotografia torna normale.
          if(dr.data.stillOpen){ p.mt5MissingSince=null; continue; }
+         // Nessun deal: questo conto non ha MAI visto il ticket. Non e' una chiusura - e' una
+         // posizione di un altro conto, o uno storico non ancora pronto. Non si giornalizza; si
+         // riguarda piu' tardi. Era esattamente il caso del cambio conto.
+         if(dr.data.reason==null&&dr.data.price==null){ p.mt5MissingSince=null; continue; }
          if(dr.data.reason)reason=dr.data.reason;
-         if(Number.isFinite(Number(dr.data.price)))price=Number(dr.data.price);
+         // Number(null) vale 0, che e' "finito": cosi' un prezzo mancante diventava un'uscita a 0.
+         const prezzoDeal=dr.data.price!=null?Number(dr.data.price):NaN;
+         if(Number.isFinite(prezzoDeal)&&prezzoDeal>0)price=prezzoDeal;
        }
+       // Un'uscita a 0 (o negativa) non esiste: meglio non scrivere niente che un P/L inventato.
+       if(!(Number(price)>0)){ p.mt5MissingSince=null; continue; }
        const finalLevels=resolveMt5FinalLevels(p,lastKnown);
        // Silenziosa se il ticket non è mai stato visto aperto da quando siamo collegati: la
        // chiusura è avvenuta mentre l'app era chiusa/scollegata (vedi blocco SUONO ORDINI MT5).
@@ -25282,7 +25363,7 @@ async function fetchMt5Positions(){
              origin:'MARKET',
              lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
              start:realOpenIdx!=null?realOpenIdx:0,startTime:realOpenMs,openTF:currentTF,
-             marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
+             marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
            };
            applyLocalSlTpDefaultsIfMissing(pos);
            pairedSnap.positions.push(pos);
@@ -25312,7 +25393,7 @@ async function fetchMt5Positions(){
          origin:'MARKET',
          lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
          start:realOpenIdx!=null?realOpenIdx:(rows[idx]?idx:0),startTime:realOpenMs,openTF:currentTF,
-         marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now()
+         marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
        };
        const hadRealSlTp=pos.sl!=null&&pos.tp!=null;
        applyLocalSlTpDefaultsIfMissing(pos);
@@ -25343,6 +25424,8 @@ let mt5RealOrders=[];
 let mt5OrdersFetchInFlight=false;
 async function fetchMt5Orders(){
  if(mt5OrdersFetchInFlight)return;
+ if(mt5ConnessioneInCorso>0)return;   // cambio conto in corso: vedi fetchMt5Positions
+ const generazione=mt5GenerazioneConto;
  mt5OrdersFetchInFlight=true;
  // Stessa protezione anti-race di fetchMt5Positions() (vedi il suo commento): senza questa,
  // un ordine pendente reale appena creato potrebbe risultare "cancellato/scaduto altrove" per
@@ -25350,6 +25433,7 @@ async function fetchMt5Orders(){
  const fetchStartedAt=Date.now();
  try{
    const result=await fetchMt5WithTimeout('/orders',{method:'GET'},8000);
+   if(generazione!==mt5GenerazioneConto)return;   // fotografia di un altro conto
    if(result.ok && Array.isArray(result.data)){
      // Ordini pendenti REALI tracciati in app (pendingOrders[].mt5Ticket) spariti dal conto
      // vero: o sono SCATTATI (diventano una posizione — in MT5 la posizione risultante eredita
@@ -25361,7 +25445,11 @@ async function fetchMt5Orders(){
      // uno scatto viene "adottato" come posizione standard al giro successivo, non subito, ma
      // senza mai perdere l'ordine né duplicarlo.
      const newTickets=new Set(result.data.map(o=>String(o.ticket)));
-     const vanished=pendingOrders.filter(p=>p.mt5Ticket!=null && !newTickets.has(String(p.mt5Ticket)) && !(p.mt5AddedAt!=null && p.mt5AddedAt>=fetchStartedAt));
+     const contoOra=(mt5ContoAttivo&&mt5ContoAttivo.login)||null;
+     // Il conto si segna appena l'ordine si vede sul conto collegato: serve al cambio conto.
+     pendingOrders.forEach(p=>{ if(p&&p.mt5Ticket!=null&&!p.mt5Login&&contoOra&&newTickets.has(String(p.mt5Ticket)))p.mt5Login=contoOra; });
+     // Un pendente di un altro conto non puo' comparire qui: la sua assenza non dice niente.
+     const vanished=pendingOrders.filter(p=>p.mt5Ticket!=null && !(contoOra&&p.mt5Login&&String(p.mt5Login)!==contoOra) && !newTickets.has(String(p.mt5Ticket)) && !(p.mt5AddedAt!=null && p.mt5AddedAt>=fetchStartedAt));
      vanished.forEach(p=>{
        pendingOrders=pendingOrders.filter(x=>x!==p);
        const triggered=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
@@ -25377,7 +25465,7 @@ async function fetchMt5Orders(){
            origin:'PENDING',kind:p.kind||'LIMIT',
            lots:Number(triggered.volume)||p.lots,risk:0,dist:0,hasRiskModel:false,
            start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
-           marginUsed:0,mt5Ticket:triggered.ticket,mt5AddedAt:Date.now()
+           marginUsed:0,mt5Ticket:triggered.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
          };
          pos.rrSl=pos.sl;
          positions.push(pos);
@@ -30564,6 +30652,22 @@ function mt5AlgoTradingNote(data){
 // fetch fallisce a livello di rete (non è un CORS/HTTP error): lo intercettiamo per dare un
 // messaggio chiaro invece del generico "Failed to fetch".
 async function connectToMt5Bridge(creds){
+ // Durante /connect il conto sul ponte puo' cambiare: il polling si ferma, e ogni fotografia
+ // chiesta prima (o durante) viene scartata all'arrivo. Il conto nuovo si registra da qui,
+ // qualunque sia la strada che ha portato al collegamento (tendina, login, riconnessione).
+ mt5ConnessioneInCorso++; mt5GenerazioneConto++;
+ try{
+  const esito=await connectToMt5BridgeCorpo(creds);
+  if(esito&&esito.ok&&esito.data&&esito.data.login!=null){
+   const r=mt5AttivaConto(esito.data.login,esito.data.server);
+   if(r&&r.parcheggiate)esito.notaConti=' '+r.parcheggiate+' posizione/i o ordine/i di altri conti messi da parte: tornano quando ricolleghi quel conto.';
+  }
+  return esito;
+ }finally{
+  mt5ConnessioneInCorso--; mt5GenerazioneConto++;
+ }
+}
+async function connectToMt5BridgeCorpo(creds){
  let res;
  try{
    // La chiave: dal PC non serve, dal tablet (via Tailscale) si'. Mancava solo qui e in /disconnect,
@@ -31015,7 +31119,7 @@ $('mt5AccountSelect').addEventListener('change',async()=>{
    mt5Connected=true;
    updateMt5ModeUI();
    runMt5HistoryCatchUp();
-   $('status').textContent=`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}).`+mt5AlgoTradingNote(result.data);
+   $('status').textContent=`🟢 Connesso a MT5 (conto ${result.data.login} su ${result.data.server}).`+mt5AlgoTradingNote(result.data)+(result.notaConti||'');
  }else{
    mt5Connected=false;
    updateMt5ModeUI();
