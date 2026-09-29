@@ -20499,6 +20499,7 @@ function tgScollega(){
  try{ if(tgWs){ tgWs.onclose=null; tgWs.onmessage=null; tgWs.close(); } }catch(e){}
  tgWs=null; tgWsPorta=null;
  tgCollegatoTelegram=false;
+ tgAccessoFermaAttesa(); tgAccessoPendente=null;
  tgStato('Collegamento alle sale segnali SPENTO. Nessun segnale in arrivo.');
 }
 // true quando il collegamento l'ha chiesto l'utente (scheda aperta, "Ricontrolla", cambio porta):
@@ -20538,7 +20539,45 @@ function tgRenderGruppi(){
 // Il ponte dice cosa gli serve per entrare in Telegram (numero, codice, password della verifica
 // in due passaggi) e l'app lo chiede con un popup, invece di lasciare che lo chieda una finestra
 // nera. Il valore va dritto al ponte sul WebSocket: l'app non lo salva e non lo rilegge mai.
-let tgAccessoInCorso=false;
+// Un popup alla volta, ma nessuna richiesta buttata via. Prima c'era una pausa cieca di 800ms
+// dopo ogni risposta: se il ponte chiedeva il codice dentro quella pausa - e lo chiede appena
+// Telegram gli risponde, cioe' quasi sempre entro mezzo secondo - la domanda veniva scartata e il
+// popup del codice non compariva piu', perche' lo stato non si ripete da solo. Ora la richiesta
+// che arriva a popup aperto si mette da parte e si apre subito dopo.
+let tgAccessoPopupAperto=false;
+let tgAccessoPendente=null;
+let tgAccessoRisposto='';
+let tgAccessoRispostoT=0;
+let tgAccessoAttesaT=null;
+let tgAccessoAttesaGiri=0;
+function tgAccessoFirma(cosa,errore){ return String(cosa||'')+'|'+String(errore||''); }
+// Se la richiesta del ponte si perde comunque per strada (presa caduta e riaperta, stato mandato
+// una volta sola mentre il popup era aperto), qui la si va a ricercare: finche' l'accesso non e'
+// finito si richiede lo stato al ponte, cosi' il popup compare comunque invece di lasciare
+// l'utente con un codice in mano e nessun posto dove scriverlo.
+function tgAccessoFermaAttesa(){ clearTimeout(tgAccessoAttesaT); tgAccessoAttesaT=null; }
+function tgAccessoAttendi(){
+ tgAccessoFermaAttesa(); tgAccessoAttesaGiri=0;
+ const giro=()=>{
+  tgAccessoAttesaT=null;
+  if(!tgAttivo()||tgCollegatoTelegram||tgAccessoPopupAperto)return;
+  if(++tgAccessoAttesaGiri>20)return;   // un minuto di tentativi, poi si smette di chiedere
+  tgInvia({azione:'leggi_chat'});
+  tgAccessoAttesaT=setTimeout(giro,3000);
+ };
+ tgAccessoAttesaT=setTimeout(giro,3000);
+}
+function tgChiediAccesso(cosa,errore){
+ if(!cosa)return;
+ const firma=tgAccessoFirma(cosa,errore);
+ // Lo stesso stato puo' arrivare due volte: quello che segue di poco la risposta e' l'eco di
+ // prima che il ponte la ricevesse, non una domanda nuova. Piu' tardi invece lo e' davvero
+ // (codice sbagliato, codice scaduto) e allora si richiede.
+ if(firma===tgAccessoRisposto&&(Date.now()-tgAccessoRispostoT)<6000)return;
+ if(tgAccessoPopupAperto){ tgAccessoPendente={cosa,errore}; return; }
+ tgAccessoPendente=null;
+ tgApriAccesso(cosa,errore);
+}
 // Stesso criterio del ponte (e di Telethon): via +, spazi, parentesi, punti e trattini, poi
 // devono restare solo cifre, fra 6 e 15. Controllarlo qui evita un giro inutile fino a Telegram
 // e un messaggio d'errore che nessuno capirebbe.
@@ -20546,9 +20585,9 @@ function tgTelefonoValido(v){
  const cifre=String(v||'').replace(/[+()\s.\-]/g,'');
  return /^\d{6,15}$/.test(cifre);
 }
-async function tgChiediAccesso(cosa,errore){
- if(tgAccessoInCorso)return;
- tgAccessoInCorso=true;
+async function tgApriAccesso(cosa,errore){
+ tgAccessoPopupAperto=true;
+ tgAccessoFermaAttesa();
  try{
   const avviso=errore?('\n\n⚠ '+errore):'';
   let valore=null;
@@ -20580,21 +20619,28 @@ async function tgChiediAccesso(cosa,errore){
   if(valore==null||valore===''){
    // Annullato: il ponte resterebbe in attesa per cinque minuti. Lo si spegne, cosi' il prossimo
    // "Collegamento" riparte pulito invece di riagganciarsi a un accesso lasciato a meta'.
+   tgAccessoPendente=null; tgAccessoFermaAttesa();
    tgStato('Accesso a Telegram annullato. Premi di nuovo Collegamento quando vuoi riprovare.','err');
    try{ await tgImpostaAttivo(false); }catch(e){}
    return;
   }
+  tgAccessoRisposto=tgAccessoFirma(cosa,errore);
+  tgAccessoRispostoT=Date.now();
   tgInvia({azione:'accesso_'+cosa,valore:String(valore)});
   tgStato(cosa==='telefono'?'Numero inviato: aspetto il codice di verifica…':'Verifica in corso…');
+  tgAccessoAttendi();   // se la prossima richiesta non arriva, la si va a chiedere
  }finally{
-  // Un attimo di respiro prima di poter riaprire un popup: lo stato arriva anche piu' volte di
-  // fila, e senza questa pausa il codice appena mandato riaprirebbe subito la stessa domanda.
-  setTimeout(()=>{ tgAccessoInCorso=false; },800);
+  tgAccessoPopupAperto=false;
+  // La richiesta arrivata mentre il popup era aperto (tipicamente il codice, chiesto dal ponte
+  // mentre l'utente stava ancora scrivendo il numero) si apre adesso, non si perde.
+  const dopo=tgAccessoPendente; tgAccessoPendente=null;
+  if(dopo)tgChiediAccesso(dopo.cosa,dopo.errore);
  }
 }
 function tgApplicaStato(m){
  if(Array.isArray(m.chat)){ tgGruppi=m.chat; tgRenderGruppi(); }
  if(m.accesso_serve){ tgChiediAccesso(m.accesso_serve,m.accesso_errore); }
+ else if(m.collegato){ tgAccessoFermaAttesa(); }
  tgAggiornaInterruttore(m);
  if(m.modalita==='simulatore'){
    tgStato('Ponte attivo in MODALITA SIMULATORE: i messaggi sono inventati, servono solo a provare la catena.','ok');
