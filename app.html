@@ -1177,6 +1177,20 @@ input[type=color]:hover{border-color:var(--fbAccent2)}
           <button type="button" id="tgToggleBtn" class="toolBtn" style="flex:1;min-width:150px">Collegamento: —</button>
           <button type="button" id="tgOpenPanelBtn" class="toolBtn" style="flex:1;min-width:150px">📡 Apri il pannello dei segnali</button>
         </div>
+         <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">ACCESSO A TELEGRAM</div>
+        <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
+           <span id="tgTelefonoSalvatoLbl" style="flex:1;min-width:150px;font-size:12px;color:#8b96a5">Numero non ancora salvato.</span>
+           <button type="button" id="tgTelefonoForgetBtn" class="miniBtn" style="width:auto;display:none" title="Togli il numero salvato su questo browser: al prossimo accesso te lo richiede">&#129529; Dimentica il numero</button>
+        </div>
+        <p class="hint" style="margin:0 0 10px">Il numero viene ricordato <b>su questo browser</b> (nessun server) solo dopo un accesso riuscito, e dall'accesso successivo viene mandato da solo: il popup non ricompare piu'. Il <b>codice di verifica non viene mai salvato</b> - e' monouso e scade in pochi minuti, tenerlo non servirebbe a niente. A non farlo richiedere ogni volta e' il ponte sul PC, che conserva la sua sessione Telegram in un file locale.</p>
+        <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">SUONO QUANDO ARRIVA UN SEGNALE</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#c8d2dd;margin-bottom:6px;cursor:pointer;user-select:none"><input type="checkbox" id="tgSuonoCheckbox" checked> Riproduci un suono all'arrivo di un nuovo segnale</label>
+        <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
+           <label style="flex:none;min-width:110px">Suono</label>
+           <select id="tgSuonoSelect" class="toolSelect" title="Suono riprodotto quando una sala manda un nuovo segnale"></select>
+           <button type="button" id="tgSuonoPreviewBtn" class="toolBtn" style="width:auto">&#9654; Prova</button>
+        </div>
+        <p class="hint" style="margin:0 0 12px">Sono gli stessi suoni delle linee Alarm, compresi quelli caricati da te: si aggiungono e si eliminano da <b>Impostazioni &rarr; &#128276; Alarm</b>, e compaiono da soli anche qui. Il suono avvisa, non apre niente: l'ordine resta da confermare nel pannello.</p>
         <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">SALE SEGNALI</div>
         <div id="tgGroupList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
         <div class="fbOptRow">
@@ -19804,6 +19818,9 @@ function populateAlarmSoundSelect(){
  const stillExists=[...sel.options].some(o=>o.value===prevValue);
  sel.value=stillExists?prevValue:ALARM_DEFAULT_SOUNDS[0].id;
  if(!stillExists)alarmSelectedSoundId=sel.value;
+ // L'elenco dei suoni dei segnali Telegram e' lo stesso: rigenerarlo qui (e non ad ogni singolo
+ // punto in cui un suono viene caricato o eliminato) garantisce che restino sempre allineati.
+ try{ tgPopolaSuoni(); }catch(e){}
 }
 function renderAlarmCustomSoundList(){
  const box=$('alarmCustomSoundList'); if(!box)return;
@@ -20499,6 +20516,7 @@ function tgScollega(){
  try{ if(tgWs){ tgWs.onclose=null; tgWs.onmessage=null; tgWs.close(); } }catch(e){}
  tgWs=null; tgWsPorta=null;
  tgCollegatoTelegram=false;
+ tgAccessoFermaAttesa(); tgAccessoPendente=null;
  tgStato('Collegamento alle sale segnali SPENTO. Nessun segnale in arrivo.');
 }
 // true quando il collegamento l'ha chiesto l'utente (scheda aperta, "Ricontrolla", cambio porta):
@@ -20538,7 +20556,83 @@ function tgRenderGruppi(){
 // Il ponte dice cosa gli serve per entrare in Telegram (numero, codice, password della verifica
 // in due passaggi) e l'app lo chiede con un popup, invece di lasciare che lo chieda una finestra
 // nera. Il valore va dritto al ponte sul WebSocket: l'app non lo salva e non lo rilegge mai.
-let tgAccessoInCorso=false;
+// Il numero di telefono e' l'unica cosa dell'accesso che si puo' ricordare: si scrive in
+// localStorage SOLO dopo un accesso andato a buon fine (un numero rifiutato non vale la pena di
+// essere ricordato) e dall'accesso dopo parte da solo, senza popup. Il codice di verifica invece
+// NON si salva e non si salvera': e' monouso e scade, riproporlo darebbe solo un errore. Quello che
+// evita di richiederlo ogni volta e' la sessione che il ponte tiene sul PC, non l'app.
+const TG_TEL_KEY='fb_tg_telefono';
+let tgTelefonoInAttesa='';   // numero appena mandato, in attesa di sapere se e' andato
+let tgTelefonoAutoInvii=0;   // quante volte lo si e' mandato da soli: due, poi si chiede
+function tgTelefonoSalvato(){
+ try{ const v=localStorage.getItem(TG_TEL_KEY)||''; return tgTelefonoValido(v)?v:''; }catch(e){ return ''; }
+}
+function tgAggiornaTelefonoUI(){
+ const v=tgTelefonoSalvato();
+ const el=$('tgTelefonoSalvatoLbl'); const b=$('tgTelefonoForgetBtn');
+ if(el)el.textContent=v?('Numero salvato: '+v+' - al prossimo accesso parte da solo.')
+                      :'Numero non ancora salvato: te lo chiede al primo accesso.';
+ if(b)b.style.display=v?'':'none';
+}
+function tgDimenticaTelefono(){
+ try{ localStorage.removeItem(TG_TEL_KEY); }catch(e){}
+ tgTelefonoInAttesa=''; tgTelefonoAutoInvii=0;
+ tgAggiornaTelefonoUI();
+}
+// Un popup alla volta, ma nessuna richiesta buttata via. Prima c'era una pausa cieca di 800ms
+// dopo ogni risposta: se il ponte chiedeva il codice dentro quella pausa - e lo chiede appena
+// Telegram gli risponde, cioe' quasi sempre entro mezzo secondo - la domanda veniva scartata e il
+// popup del codice non compariva piu', perche' lo stato non si ripete da solo. Ora la richiesta
+// che arriva a popup aperto si mette da parte e si apre subito dopo.
+let tgAccessoPopupAperto=false;
+let tgAccessoPendente=null;
+let tgAccessoRisposto='';
+let tgAccessoRispostoT=0;
+let tgAccessoAttesaT=null;
+let tgAccessoAttesaGiri=0;
+function tgAccessoFirma(cosa,errore){ return String(cosa||'')+'|'+String(errore||''); }
+// Se la richiesta del ponte si perde comunque per strada (presa caduta e riaperta, stato mandato
+// una volta sola mentre il popup era aperto), qui la si va a ricercare: finche' l'accesso non e'
+// finito si richiede lo stato al ponte, cosi' il popup compare comunque invece di lasciare
+// l'utente con un codice in mano e nessun posto dove scriverlo.
+function tgAccessoFermaAttesa(){ clearTimeout(tgAccessoAttesaT); tgAccessoAttesaT=null; }
+function tgAccessoAttendi(){
+ tgAccessoFermaAttesa(); tgAccessoAttesaGiri=0;
+ const giro=()=>{
+  tgAccessoAttesaT=null;
+  if(!tgAttivo()||tgCollegatoTelegram||tgAccessoPopupAperto)return;
+  if(++tgAccessoAttesaGiri>20)return;   // un minuto di tentativi, poi si smette di chiedere
+  tgInvia({azione:'leggi_chat'});
+  tgAccessoAttesaT=setTimeout(giro,3000);
+ };
+ tgAccessoAttesaT=setTimeout(giro,3000);
+}
+function tgChiediAccesso(cosa,errore){
+ if(!cosa)return;
+ const firma=tgAccessoFirma(cosa,errore);
+ // Lo stesso stato puo' arrivare due volte: quello che segue di poco la risposta e' l'eco di
+ // prima che il ponte la ricevesse, non una domanda nuova. Piu' tardi invece lo e' davvero
+ // (codice sbagliato, codice scaduto) e allora si richiede.
+ if(firma===tgAccessoRisposto&&(Date.now()-tgAccessoRispostoT)<3000)return;
+ // Numero gia' noto e nessun errore da mostrare: si manda senza disturbare. Con un errore invece
+ // il popup ci vuole - il numero salvato non va piu' bene e solo l'utente puo' correggerlo - e si
+ // smette di riprovare da soli dopo due giri, per non restare in un botta e risposta muto.
+ if(cosa==='telefono'&&!errore&&tgTelefonoAutoInvii<2){
+  const tel=tgTelefonoSalvato();
+  if(tel){
+   tgTelefonoAutoInvii++;
+   tgAccessoRisposto=firma; tgAccessoRispostoT=Date.now();
+   tgTelefonoInAttesa=tel;
+   tgInvia({azione:'accesso_telefono',valore:tel});
+   tgStato('Numero salvato ('+tel+') inviato: aspetto il codice di verifica…');
+   tgAccessoAttendi();
+   return;
+  }
+ }
+ if(tgAccessoPopupAperto){ tgAccessoPendente={cosa,errore}; return; }
+ tgAccessoPendente=null;
+ tgApriAccesso(cosa,errore);
+}
 // Stesso criterio del ponte (e di Telethon): via +, spazi, parentesi, punti e trattini, poi
 // devono restare solo cifre, fra 6 e 15. Controllarlo qui evita un giro inutile fino a Telegram
 // e un messaggio d'errore che nessuno capirebbe.
@@ -20546,9 +20640,9 @@ function tgTelefonoValido(v){
  const cifre=String(v||'').replace(/[+()\s.\-]/g,'');
  return /^\d{6,15}$/.test(cifre);
 }
-async function tgChiediAccesso(cosa,errore){
- if(tgAccessoInCorso)return;
- tgAccessoInCorso=true;
+async function tgApriAccesso(cosa,errore){
+ tgAccessoPopupAperto=true;
+ tgAccessoFermaAttesa();
  try{
   const avviso=errore?('\n\n⚠ '+errore):'';
   let valore=null;
@@ -20560,7 +20654,8 @@ async function tgChiediAccesso(cosa,errore){
     valore=await appPrompt('Per leggere le sale serve entrare nel TUO account Telegram.\n\n'
      +'Scrivi il numero con il prefisso internazionale, per esempio +39 333 1234567.'
      +'\n\nIl numero va solo al ponte sul tuo PC: non viene salvato da nessuna parte.'+avviso,
-     {title:'📱 Numero di telefono',type:'tel',placeholder:'+39 333 1234567',okLabel:'Invia'});
+     {title:'📱 Numero di telefono',type:'tel',placeholder:'+39 333 1234567',okLabel:'Invia',
+      defaultValue:tgTelefonoSalvato()});
     if(valore==null)break;                       // annullato: se ne occupa il codice qui sotto
     if(tgTelefonoValido(valore))break;
     await appAlert('«'+valore+'» non sembra un numero di telefono.\n\n'
@@ -20580,21 +20675,48 @@ async function tgChiediAccesso(cosa,errore){
   if(valore==null||valore===''){
    // Annullato: il ponte resterebbe in attesa per cinque minuti. Lo si spegne, cosi' il prossimo
    // "Collegamento" riparte pulito invece di riagganciarsi a un accesso lasciato a meta'.
+   tgAccessoPendente=null; tgAccessoFermaAttesa();
    tgStato('Accesso a Telegram annullato. Premi di nuovo Collegamento quando vuoi riprovare.','err');
    try{ await tgImpostaAttivo(false); }catch(e){}
    return;
   }
+  tgAccessoRisposto=tgAccessoFirma(cosa,errore);
+  tgAccessoRispostoT=Date.now();
+  // Da ricordare solo se funziona: lo si mette da parte e lo si salva quando il ponte dira'
+  // "collegato". Salvarlo adesso vorrebbe dire ritrovarsi un numero sbagliato ad ogni avvio.
+  if(cosa==='telefono')tgTelefonoInAttesa=String(valore);
   tgInvia({azione:'accesso_'+cosa,valore:String(valore)});
   tgStato(cosa==='telefono'?'Numero inviato: aspetto il codice di verifica…':'Verifica in corso…');
+  tgAccessoAttendi();   // se la prossima richiesta non arriva, la si va a chiedere
  }finally{
-  // Un attimo di respiro prima di poter riaprire un popup: lo stato arriva anche piu' volte di
-  // fila, e senza questa pausa il codice appena mandato riaprirebbe subito la stessa domanda.
-  setTimeout(()=>{ tgAccessoInCorso=false; },800);
+  tgAccessoPopupAperto=false;
+  // La richiesta arrivata mentre il popup era aperto (tipicamente il codice, chiesto dal ponte
+  // mentre l'utente stava ancora scrivendo il numero) si apre adesso, non si perde.
+  const dopo=tgAccessoPendente; tgAccessoPendente=null;
+  if(dopo)tgChiediAccesso(dopo.cosa,dopo.errore);
  }
+}
+// Accesso finito bene: si smette di sollecitare il ponte e si tiene il numero, che a questo punto
+// e' dimostrato funzionante.
+function tgAccessoConcluso(){
+ tgAccessoFermaAttesa();
+ tgAccessoPendente=null;
+ tgAccessoRisposto='';
+ if(tgTelefonoInAttesa){
+   try{ localStorage.setItem(TG_TEL_KEY,tgTelefonoInAttesa); }catch(e){}
+   tgTelefonoInAttesa=''; tgAggiornaTelefonoUI();
+ }
+ tgTelefonoAutoInvii=0;
 }
 function tgApplicaStato(m){
  if(Array.isArray(m.chat)){ tgGruppi=m.chat; tgRenderGruppi(); }
  if(m.accesso_serve){ tgChiediAccesso(m.accesso_serve,m.accesso_errore); }
+ else{
+   // Il ponte non aspetta piu' niente: se piu' tardi richiede la stessa cosa con lo stesso errore
+   // (il codice sbagliato due volte di fila) e' una domanda nuova, non l'eco di questa.
+   tgAccessoRisposto='';
+   if(m.collegato)tgAccessoConcluso();
+ }
  tgAggiornaInterruttore(m);
  if(m.modalita==='simulatore'){
    tgStato('Ponte attivo in MODALITA SIMULATORE: i messaggi sono inventati, servono solo a provare la catena.','ok');
@@ -20607,6 +20729,43 @@ function tgApplicaStato(m){
  }else{
    tgStato('Ponte avviato, collegamento a Telegram in corso…');
  }
+}
+// RICHIESTO ESPLICITAMENTE: all'arrivo di un segnale parte un suono, scelto fra gli stessi delle
+// linee Alarm (quelli di default e quelli caricati dall'utente). Non si duplica niente: si riusano
+// ALARM_DEFAULT_SOUNDS, customAlarmSounds e playAlarmSound, cosi' un suono caricato nella scheda
+// Alarm compare qui senza doverlo ricaricare.
+const TG_SUONO_KEY='fb_tg_suono_id';
+const TG_SUONO_ON_KEY='fb_tg_suono_on';
+function tgSuonoAttivo(){ try{ return localStorage.getItem(TG_SUONO_ON_KEY)!=='0'; }catch(e){ return true; } }
+function tgSuonoId(){ try{ return localStorage.getItem(TG_SUONO_KEY)||''; }catch(e){ return ''; } }
+function tgPopolaSuoni(){
+ const sel=$('tgSuonoSelect');
+ const cb=$('tgSuonoCheckbox'); if(cb)cb.checked=tgSuonoAttivo();
+ if(!sel)return;
+ // ALARM_DEFAULT_SOUNDS e customAlarmSounds vivono piu' in basso nello stesso script: finche' la
+ // loro riga non e' stata eseguita non esistono ancora, e leggerle e' un errore. Qui si tace e si
+ // riprova al prossimo giro (apertura della scheda), invece di far cadere tutto il resto.
+ try{
+  const scelto=sel.value||tgSuonoId()||alarmSelectedSoundId;
+  sel.innerHTML='';
+  ALARM_DEFAULT_SOUNDS.forEach(x=>{
+    const o=document.createElement('option'); o.value=x.id; o.textContent=x.name; sel.appendChild(o);
+  });
+  if(customAlarmSounds.length){
+    const g=document.createElement('optgroup'); g.label='Personalizzati';
+    customAlarmSounds.forEach(x=>{
+      const o=document.createElement('option'); o.value='custom:'+x.id; o.textContent='🎵 '+x.name; g.appendChild(o);
+    });
+    sel.appendChild(g);
+  }
+  const esiste=[...sel.options].some(o=>o.value===scelto);
+  sel.value=esiste?scelto:ALARM_DEFAULT_SOUNDS[0].id;
+ }catch(e){}
+}
+function tgSuonaSegnale(){
+ if(!tgSuonoAttivo())return;
+ // Nessun suono scelto qui: si usa quello delle linee Alarm, che l'utente ha gia' scelto una volta.
+ try{ playAlarmSound(tgSuonoId()||alarmSelectedSoundId); }catch(e){}
 }
 function tgInvia(oggetto){
  try{ if(tgWs&&tgWs.readyState===1){ tgWs.send(JSON.stringify(oggetto)); return true; } }catch(e){}
@@ -20631,7 +20790,19 @@ function tgCollega(){
  ws.onmessage=ev=>{
    let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
    if(m.tipo==='stato'){ tgApplicaStato(m); return; }
-   if(m.tipo==='battito'){ return; }
+   if(m.tipo==='battito'){
+     // Il battito porta solo collegato/errore, e prima veniva buttato via: era il secondo motivo per
+     // cui, dopo aver confermato il codice, bisognava premere "Ricontrolla" per vedersi collegati.
+     // Non lo si passa a tgApplicaStato: non contiene ne' le sale ne' credenziali_presenti, e
+     // scriverebbe "mancano le credenziali" quando non e' vero.
+     const eraCollegato=tgCollegatoTelegram;
+     tgAggiornaInterruttore(m);
+     if(m.collegato&&!eraCollegato){
+       tgAccessoConcluso();
+       tgStato('Collegato a Telegram. Sale in ascolto: '+(tgGruppi.length||0)+'.','ok');
+     }
+     return;
+   }
    if(m.tipo==='salvato'){
      if(!m.ok)tgStato('Non sono riuscito a salvare: '+(m.errore||'errore sconosciuto'),'err');
      return;
@@ -20641,6 +20812,7 @@ function tgCollega(){
      m.stato='nuovo';
      tgSegnaliRicevuti.push(m);
      tgSfoltisci();
+     tgSuonaSegnale();
      // Nessun ordine parte da qui: si annota, si accende il pulsante "!" accanto al timeframe e si
      // aspetta. L'unico posto da cui un ordine puo' partire e' il pannello, con la sua conferma.
      try{ tgAggiornaPulsante(); if(tgPannelloAperto())tgRenderPannello(); }catch(e){}
@@ -20687,6 +20859,21 @@ $('tgAddBtn')?.addEventListener('click',()=>{
  if(!tgInvia({azione:'scrivi_chat',chat:tgGruppi}))tgStato('Ponte non collegato: la modifica non è stata salvata.','err');
 });
 $('tgNewGroup')?.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('tgAddBtn')?.click(); } });
+$('tgTelefonoForgetBtn')?.addEventListener('click',()=>{
+ tgDimenticaTelefono();
+ tgStato('Numero dimenticato su questo browser: al prossimo accesso te lo richiede.');
+});
+$('tgSuonoSelect')?.addEventListener('change',()=>{
+ try{ localStorage.setItem(TG_SUONO_KEY,$('tgSuonoSelect').value); }catch(e){}
+});
+$('tgSuonoCheckbox')?.addEventListener('change',()=>{
+ try{ localStorage.setItem(TG_SUONO_ON_KEY,$('tgSuonoCheckbox').checked?'1':'0'); }catch(e){}
+});
+// Il primo click su "Prova" serve anche a sbloccare l'autoplay del browser, come per le linee
+// Alarm: senza un gesto dell'utente il suono automatico resterebbe muto.
+$('tgSuonoPreviewBtn')?.addEventListener('click',()=>{
+ playAlarmSound($('tgSuonoSelect')?.value||tgSuonoId());
+});
 $('tgRefreshBtn')?.addEventListener('click',()=>{ tgCollegamentoChiesto=true; tgSegnaUsato(); tgCollega(); tgInvia({azione:'leggi_chat'}); });
 $('tgPort')?.addEventListener('change',()=>{ tgCollegamentoChiesto=true; tgCollega(); });
 $('genSettingsTabTelegram')?.addEventListener('click',()=>{
@@ -20694,6 +20881,8 @@ $('genSettingsTabTelegram')?.addEventListener('click',()=>{
  // si limita a rinfrescare quello che si vede, e a ricollegarsi se era gia' acceso.
  tgCollegamentoChiesto=true;
  tgAggiornaInterruttore();
+ tgAggiornaTelefonoUI();
+ tgPopolaSuoni();
  tgCollega(); setTimeout(()=>tgInvia({azione:'leggi_chat'}),150);
 });
 // ===================== PANNELLO DEI SEGNALI DALLE SALE =====================
