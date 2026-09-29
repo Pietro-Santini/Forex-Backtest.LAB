@@ -37,8 +37,12 @@
 //               piu', numero ricordato, suono all'arrivo di un segnale. Si salta
 //               la v7 apposta: chi ha l'installer precedente ha gia' quella
 //               chiave in cache e con lo stesso numero non scaricherebbe niente.
+//          v9 = accesso da altri dispositivi: controllo del firewall corretto su
+//               Windows italiano, messaggio del tablet che non accusa piu' il PC
+//          v10 = accesso da altri dispositivi SOLO via Tailscale (https sul nome
+//               .ts.net): niente Wi-Fi, niente firewall, stesso sito sul tablet
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v8";
+const CACHE_NAME = "forex-backtest-lab-v10";
 const ASSETS = [
   "./",
   "./app.html",

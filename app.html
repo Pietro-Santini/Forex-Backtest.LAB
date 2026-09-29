@@ -3114,11 +3114,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div class="tgCfgSez">Come si fa, passo per passo</div>
      <div class="fblGuida">
        <div class="tgCfgNota" style="margin-bottom:9px">
-         Prima scegli dove ti serve: cambia solo l'inizio, il resto è uguale.
-       </div>
-       <div class="fblGuidaScelta">
-         <button type="button" class="toolBtn" data-fbl-modo="casa">🏠 Solo in casa — stessa Wi‑Fi</button>
-         <button type="button" class="toolBtn" data-fbl-modo="fuori">🌍 Anche fuori casa — Tailscale</button>
+         Si passa <b>solo</b> da <b>Tailscale</b>: funziona uguale in casa e fuori, e non apre nessuna porta sulla Wi‑Fi.
        </div>
        <div id="fblGuidaCols" class="fblGuidaCols"></div>
        <div id="fblGuidaAiuto" class="tgCfgNota" style="margin-top:9px"></div>
@@ -3130,7 +3126,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input type="checkbox" id="fblRemotoAttivo" style="width:17px;height:17px;accent-color:var(--fbAccent2);cursor:pointer">
          <b>Consenti l'accesso dagli altri miei dispositivi</b>
        </label>
-       <div class="tgCfgNota" style="margin-top:6px">Finché è spento, il computer risponde solo a sé stesso. Acceso, accetta anche telefono e tablet — ma <b>solo</b> con la chiave qui sotto.</div>
+       <div class="tgCfgNota" style="margin-top:6px">Finché è spento, il computer risponde solo a sé stesso. Acceso, lo raggiungono i dispositivi del tuo account <b>Tailscale</b> — e <b>solo</b> con la chiave qui sotto.</div>
        <div id="fblRemotoIndirizzi" class="tgCfgRiep" style="margin-top:10px"></div>
        <div id="fblMuro" class="fblMuro" style="display:none"></div>
        <div class="fbOptRow" style="margin-top:10px;gap:8px">
@@ -3142,14 +3138,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 
      <div class="tgCfgSez">Su telefono o tablet</div>
      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
-       <label class="tgCfgCampo">Indirizzo del computer
-         <input id="fblHostCampo" class="tgCfgIn" type="text" placeholder="192.168.1.5" style="width:170px"></label>
+       <label class="tgCfgCampo">Nome del computer
+         <input id="fblHostCampo" class="tgCfgIn" type="text" placeholder="nome-pc.tail1234.ts.net" autocapitalize="off" autocorrect="off" spellcheck="false" style="width:230px"></label>
        <label class="tgCfgCampo">Chiave
          <input id="fblChiaveCampo" class="tgCfgIn" type="text" placeholder="incollala qui" style="width:210px"></label>
      </div>
      <div class="tgCfgNota" style="margin-top:8px">
-       <b>Sotto casa</b>: scrivi l'indirizzo che comincia per 192.168 (o 10.).<br>
-       <b>Anche fuori casa</b>: installa <b>Tailscale</b> sul computer e sul telefono, entra con lo stesso account su tutti e due, e scrivi qui l'indirizzo che comincia per <b>100.</b> — è una rete privata fra i tuoi dispositivi, e non apre nessuna porta su internet.<br>
+       Scrivi il <b>nome</b> che il computer mostra qui sopra: finisce con <b>.ts.net</b>. Non l'indirizzo che comincia per 100.: il collegamento è in https, e il certificato vale solo per il nome.<br>
        Lascia <b>127.0.0.1</b> quando usi l'app sul computer stesso.
      </div>
      <div id="fblRemotoEsito" class="tgCfgRiep"></div>
@@ -21191,7 +21186,7 @@ function tgCollega(){
  try{ if(tgWs){ tgWs.onclose=null; tgWs.close(); } }catch(e){}
  tgWs=null; tgWsPorta=porta;
  let ws;
- try{ ws=new WebSocket(fblConChiave('ws://'+fblHost()+':'+porta+'/ws/segnali')); }
+ try{ ws=new WebSocket(fblConChiave(fblBaseUrl(porta).replace(/^http/,'ws')+'/ws/segnali')); }
  catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
  tgWs=ws;
  tgStato('Collegamento al ponte…');
@@ -22570,179 +22565,115 @@ async function fblRemotoLeggi(){
  const ind=$('fblRemotoIndirizzi');
  try{
   const r=await fetchMt5WithTimeout('/accesso-remoto',{method:'GET'},8000);
-  if(!r||!r.ok){ if(ind)ind.textContent='Servizio non raggiungibile: avvia l\'applicazione sul computer.'; return; }
+  if(!r||!r.ok){
+   // Questa parte gira anche su telefono e tablet, finche' non si salva l'indirizzo del computer:
+   // li' 127.0.0.1 e' il tablet stesso, che non ha nessun servizio. Dire "avvia l'applicazione sul
+   // computer" mandava a cercare sul PC un guasto che non c'era, con l'applicazione gia' aperta.
+   if(ind)ind.innerHTML='Su <b>questo dispositivo</b> non risponde nessun servizio. '
+    +'Se sei <b>sul computer</b>: avvia l\'applicazione. '
+    +'Se sei su <b>telefono o tablet</b> è normale: scrivi indirizzo e chiave in «Su telefono o tablet» qui sotto.';
+   return;
+  }
   const d=r.data||{};
   if($('fblRemotoAttivo'))$('fblRemotoAttivo').checked=!!d.rete;
   if($('fblRemotoChiave'))$('fblRemotoChiave').value=d.chiave||'';
-  try{ fblMuroDisegna(d); }catch(e){ console.log('[Accesso remoto] stato firewall non mostrato:',e); }
+  try{ fblTsDisegna(d); }catch(e){ console.log('[Accesso remoto] stato di Tailscale non mostrato:',e); }
   try{ fblGuidaDisegna(); }catch(e){}
   if(ind){
-   const righe=(d.indirizzi||[]).map(x=>'<b>'+x.indirizzo+'</b> — '+x.tipo);
-   ind.innerHTML=righe.length
-    ? ('Indirizzi di questo computer:<br>'+righe.join('<br>')
-       +'<br><span class="tgCfgNota">Scrivi uno di questi nel campo «Indirizzo del computer» sull\'altro dispositivo.</span>')
-    : 'Non sono riuscito a leggere gli indirizzi di questo computer.';
+   const nome=((d.tailscale||{}).nome)||'';
+   ind.innerHTML=nome
+    ? 'Sul tablet, come <b>nome del computer</b>, scrivi: <b>'+fbEsc(nome)+'</b>'
+    : 'Il nome da scrivere sul tablet comparirà qui quando Tailscale sarà installato e collegato su questo computer.';
   }
  }catch(e){ if(ind)ind.textContent='Servizio non raggiungibile: '+(e&&e.message||e); }
 }
-// --- Firewall di Windows ---------------------------------------------------------------------
-// Causa numero uno di "nessuna risposta" quando tutto il resto e' giusto: Windows scarta le
-// richieste in ingresso prima che arrivino all'applicazione, e non lascia nessuna traccia visibile
-// da questa parte. Va detto PRIMA di provare, non dedotto dopo.
+// --- Tailscale su questo computer -----------------------------------------------------------------
+// Dagli altri dispositivi si arriva SOLO con Tailscale Serve: il computer risponde in https sul suo
+// nome (nome-pc.xxxx.ts.net), e sul tablet si usa il sito normale, con lo stesso login. Qui si
+// mostra quello che serve sapere per arrivarci - installato? collegato? le tre regole ci sono? -
+// invece di lasciarlo scoprire dal tablet con una prova che non riesce.
+// Prima c'era il firewall di Windows: con i servizi in ascolto solo su 127.0.0.1 non serve piu'.
 let fblUltimoStatoPc=null;
-function fblMuroDisegna(d){
+const FBL_NOMI_PORTA={'8000':'ordini','8001':'grafico','8769':'segnali'};
+function fblTsDisegna(d){
  const box=$('fblMuro'); if(!box)return;
  fblUltimoStatoPc=d||null;
- if(!d||d.firewall===undefined){ box.style.display='none'; return; }
+ const ts=(d&&d.tailscale)||null;
+ if(!ts){ box.style.display='none'; return; }
  box.style.display='block';
- const profili=(d.profili_rete||[]);
- // Una rete "pubblica" e' bloccata da Windows comunque, regola o no: si segnala a parte, perche'
- // e' un problema diverso che si risolve in un altro posto (impostazioni di rete di Windows).
- const pubbliche=profili.filter(x=>!x.privata).map(x=>x.rete);
- const ascolto=d.porte_in_ascolto||null;
- const NOMI_PORTA={'8000':'ordini','8001':'grafico','8769':'segnali'};
- let righeAscolto='';
- if(ascolto&&Object.keys(ascolto).length){
-  const voci=['8000','8001','8769'].map(pt=>{
-   const su=ascolto[pt];
-   if(!su)return '• <b>'+pt+'</b> '+NOMI_PORTA[pt]+' — <b style="color:#ff9d7b">servizio non avviato</b>';
-   const aperto=(su==='0.0.0.0'||su==='::');
-   return '• <b>'+pt+'</b> '+NOMI_PORTA[pt]+' — '
-    +(aperto?'raggiungibile dalla rete'
-            :'<b style="color:#ff9d7b">solo su questo computer</b> ('+fbEsc(su)+')');
-  });
-  const muti=['8000','8001','8769'].filter(pt=>ascolto[pt]&&ascolto[pt]!=='0.0.0.0'&&ascolto[pt]!=='::');
-  righeAscolto='<div style="margin-top:6px">I tre servizi, chi risponde dalla rete:<br>'+voci.join('<br>')+'</div>'
-   +(muti.length?('<div style="margin-top:4px"><b style="color:#ff9d7b">Attenzione:</b> '
-     +muti.map(pt=>NOMI_PORTA[pt]).join(' e ')+' rispond'+(muti.length>1?'ono':'e')+' solo a questo computer. '
-     +'Dal telefono la prova riuscirebbe lo stesso (la controlla sulla porta degli ordini) ma '
-     +(muti.length>1?'quei servizi resterebbero muti':'quel servizio resterebbe muto')
-     +'. Sono i servizi vecchi: vanno aggiornati e riavviati.</div>'):'');
- }
- const righeReti=profili.length
-  ? ('<div style="margin-top:6px">Le tue reti, come le vede Windows:<br>'
-     +profili.map(x=>'• <b>'+fbEsc(x.rete)+'</b> — '+(x.privata?'privata':'<b style="color:#ff9d7b">pubblica</b>')).join('<br>')+'</div>')
-  : '';
- if(d.firewall===null){
-  box.className='fblMuro';
-  box.innerHTML='<b>Firewall: non sono riuscito a controllarlo.</b> Se la prova del collegamento '
-   +'non riesce e tutto il resto è a posto, è quasi sempre lui.<br><code>'+fbEsc(d.comando_firewall||'')+'</code>'
-   +righeReti+righeAscolto;
+ if(!ts.installato){
+  box.className='fblMuro blocca';
+  box.innerHTML='<b>Tailscale non è installato su questo computer.</b> Scaricalo da '
+   +'<a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale.com/download</a>, '
+   +'entra con un tuo account, poi riapri questa schermata.';
   return;
  }
- if(d.firewall){
-  box.className='fblMuro ok';
-  box.innerHTML='<b>✓ Firewall a posto.</b> Windows lascia passare le porte '+fbEsc(d.porte||'')
-   +' sulle reti <b>private</b>.'+righeReti+righeAscolto
-   +(pubbliche.length?('<div style="margin-top:6px"><b style="color:#ff9d7b">Attenzione:</b> '
-     +fbEsc(pubbliche.join(', '))+' è classificata <b>pubblica</b>, e su una rete pubblica Windows '
-     +'blocca comunque. Da telefono funzionerà con Tailscale; per farlo funzionare sulla Wi‑Fi di '
-     +'casa, in Windows imposta quella rete come <b>privata</b> (Impostazioni → Rete e Internet → '
-     +'Wi‑Fi → la tua rete → «Rete privata»).</div>'):'');
+ if(!ts.attivo||!ts.nome){
+  box.className='fblMuro blocca';
+  box.innerHTML='<b>Tailscale è installato ma non è collegato.</b> Aprilo (icona vicino all’orologio) '
+   +'ed entra con il tuo account, poi riapri questa schermata.';
   return;
  }
- box.className='fblMuro blocca';
- box.innerHTML='<b>Il firewall di Windows sta bloccando.</b> Non c’è nessuna regola che lasci '
-  +'entrare le porte '+fbEsc(d.porte||'')+': le richieste dal telefono arrivano al computer e '
-  +'vengono scartate prima di raggiungere l’applicazione. <b>Finché è così, la prova del '
-  +'collegamento non può riuscire</b>, anche con indirizzo e chiave giusti.'
-  +righeReti+righeAscolto
-  +'<div class="fblMuroAzioni">'
-  +'<button type="button" id="fblMuroApri" class="toolBtn active" style="font-weight:700">Apri le porte</button>'
-  +'<button type="button" id="fblMuroCopia" class="miniBtn">Copia il comando</button>'
-  +'</div>'
-  +'<div class="tgCfgNota" style="margin-top:6px">Comparirà la finestra di autorizzazione di '
-  +'Windows: senza il tuo consenso non viene cambiato niente. La regola vale <b>solo per le reti '
-  +'private</b> — su una Wi‑Fi pubblica non viene aperto nulla.</div>'
-  +'<code>'+fbEsc(d.comando_firewall||'')+'</code>';
- $('fblMuroApri')?.addEventListener('click',fblMuroApriPorte);
- $('fblMuroCopia')?.addEventListener('click',async ()=>{
-  try{ await navigator.clipboard.writeText(d.comando_firewall||''); $('fblRemotoEsito').textContent='Comando copiato. Incollalo in un PowerShell aperto come amministratore.'; }
-  catch(e){ $('fblRemotoEsito').textContent='Copialo a mano dal riquadro qui sopra.'; }
+ const acceso=!!(d&&d.rete);
+ const serve=ts.serve||{};
+ const porte=['8000','8001','8769'];
+ const tutte=porte.every(p=>serve[p]);
+ const righe=porte.map(p=>'• <b>'+p+'</b> '+FBL_NOMI_PORTA[p]+' — '
+   +(serve[p]?'raggiungibile in https':'<b style="color:#ff9d7b">non raggiungibile</b>')).join('<br>');
+ box.className='fblMuro'+((acceso&&tutte)?' ok':(acceso?' blocca':''));
+ box.innerHTML='<b>'+((acceso&&tutte)?'✓ ':'')+'Tailscale collegato.</b> Nome di questo computer: <b>'+fbEsc(ts.nome)+'</b>'
+  +'<div class="fblMuroAzioni"><button type="button" id="fblTsCopiaNome" class="miniBtn">Copia il nome</button></div>'
+  +(acceso
+    ? '<div style="margin-top:6px">'+righe+'</div>'
+      +(tutte?'':'<div style="margin-top:4px"><b style="color:#ff9d7b">Mancano delle regole.</b> '
+        +'Spegni e riaccendi l’interruttore qui sopra: le rimette tutte e tre.</div>')
+    : '<div style="margin-top:6px">L’accesso è spento: nessun altro dispositivo raggiunge questo computer.</div>');
+ $('fblTsCopiaNome')?.addEventListener('click',async ()=>{
+  try{ await navigator.clipboard.writeText(ts.nome); $('fblRemotoEsito').textContent='Nome copiato.'; }
+  catch(e){ $('fblRemotoEsito').textContent='Copialo a mano: '+ts.nome; }
  });
 }
-async function fblMuroApriPorte(){
- const b=$('fblMuroApri'); if(b){ b.disabled=true; b.textContent='Aspetto la tua autorizzazione…'; }
- const es=$('fblRemotoEsito');
- try{
-  const r=await fetchMt5WithTimeout('/accesso-remoto/firewall',{method:'POST',
-    headers:{'Content-Type':'application/json'},body:'{}'},25000);
-  if(r&&r.ok&&r.data&&r.data.regola){
-   if(es)es.innerHTML='<b style="color:#4ecb83">Porte aperte.</b> Ora prova il collegamento dal telefono.';
-   fblRemotoLeggi();
-   return;
-  }
-  if(es)es.innerHTML='<b style="color:#ff7b78">Porte non aperte.</b> '
-   +fbEsc((r&&r.data&&r.data.detail)||(r&&r.message)||'Autorizzazione non concessa.')
-   +'<br><span class="tgCfgNota">Puoi farlo a mano: copia il comando e incollalo in PowerShell aperto come amministratore.</span>';
- }catch(e){
-  if(es)es.textContent='Non sono riuscito a chiedere l’apertura: '+(e&&e.message||e);
- }finally{
-  if(b){ b.disabled=false; b.textContent='Apri le porte'; }
- }
+// Il nome del computer come lo scrive una persona - con o senza https://, con la porta, con il
+// punto finale che mette Tailscale - diventa sempre nome-pc.xxxx.ts.net.
+function fblNormalizzaHost(v){
+ let h=String(v||'').trim().toLowerCase();
+ h=h.replace(/^[a-z]+:\/\//,'').split('/')[0].split('?')[0];
+ return h.replace(/:\d+$/,'').replace(/\.$/,'');
 }
-
-// --- Guida passo per passo -------------------------------------------------------------------
-// RICHIESTO ESPLICITAMENTE: "cosa fare nel primo dispositivo (pc) e nel secondo dispositivo
-// (telefono/tablet)", passo per passo, per chi non ha mai fatto una cosa del genere.
-// Due colonne, una per dispositivo, numerate in ordine: i passi del computer vanno fatti TUTTI
-// prima di passare al telefono, e il numero lo dice senza doverlo spiegare.
-const FBL_MODO_KEY='fb_accesso_modo';
-function fblModo(){
- try{ const v=localStorage.getItem(FBL_MODO_KEY); if(v==='casa'||v==='fuori')return v; }catch(e){}
- return 'casa';   // la strada piu' semplice: chi apre la schermata per la prima volta vede quella
-}
+function fblEIndirizzoIp(h){ return /^\d{1,3}(\.\d{1,3}){3}$/.test(String(h||'')); }
 // I passi. `fatto` c'e' solo dove l'app puo' davvero saperlo: promettere una spunta e poi non
 // saperla dare sarebbe peggio che non darla affatto.
-function fblPassiComputer(modo){
- const p=[];
- if(modo==='fuori'){
-  p.push({t:'Installa <b>Tailscale</b> sul computer, da <b>tailscale.com/download</b>, ed entra con un tuo account (va bene quello Google).',
-    perche:'Tailscale crea una rete privata fra i tuoi dispositivi. Non apre nessuna porta su internet: nessun altro può entrarci.'});
- }else{
-  p.push({t:'Collega il computer alla <b>Wi‑Fi di casa</b> (o al cavo dello stesso router).',
-    perche:'Computer e telefono si trovano solo se stanno sulla stessa rete. Rete diversa = il telefono non vedrà mai il computer.'});
- }
- p.push({t:'Avvia <b>Forex Backtest LAB</b> sul computer e <b>lasciala aperta</b>.',
-   perche:'È il computer che parla con MetaTrader ed esegue gli ordini. Se è chiuso, dal telefono non c’è nessuno con cui parlare.'});
- p.push({t:'Qui sotto, accendi <b>«Consenti l’accesso dagli altri miei dispositivi»</b>.',
-   perche:'Finché è spento, il computer risponde solo a sé stesso.',
-   fatto:()=>{ try{ return !!$('fblRemotoAttivo')?.checked; }catch(e){ return false; } }});
- p.push({t:'Sempre qui sotto, guarda il riquadro del <b>firewall di Windows</b>. Se dice che sta bloccando, premi <b>«Apri le porte»</b> e accetta la finestra di Windows.',
-   perche:'Senza questa regola Windows scarta le richieste del telefono prima che arrivino all’applicazione: tutto il resto è giusto e non funziona lo stesso. È la causa più frequente di «nessuna risposta».',
-   fatto:()=>{ try{ return !!(fblUltimoStatoPc&&fblUltimoStatoPc.firewall===true); }catch(e){ return false; } }});
- p.push({t:'<b>Chiudi e riapri</b> l’applicazione sul computer.',
-   perche:'Obbligatorio, non è un consiglio: l’indirizzo su cui ascoltare si sceglie all’avvio. Senza riavvio il passo 3 non ha ancora effetto.'});
- p.push({t:'Riapri questa schermata e <b>segna due cose</b>: l’indirizzo che comincia per '
-     +(modo==='fuori'?'<b>100.</b>':'<b>192.168.</b> (o <b>10.</b>)')
-     +' nell’elenco qui sotto, e la <b>chiave</b> (premi «Copia»).',
-   perche:'Sono le due cose da riscrivere sul telefono. Mandartele per messaggio o per email è il modo più comodo: sono lunghe da copiare a mano.'});
- return p;
+function fblPassiComputer(){
+ const ts=(fblUltimoStatoPc&&fblUltimoStatoPc.tailscale)||{};
+ return [
+  {t:'Installa <b>Tailscale</b> sul computer, da <b>tailscale.com/download</b>, ed entra con un tuo account (va bene quello Google).',
+   perche:'Tailscale crea una rete privata fra i tuoi dispositivi. Non apre nessuna porta su internet né sulla Wi‑Fi: nessun altro può entrarci.',
+   fatto:()=>!!(ts.installato&&ts.attivo)},
+  {t:'Solo la prima volta: nel pannello di Tailscale abilita i certificati <b>HTTPS</b> — <b>login.tailscale.com/admin/dns</b> → «HTTPS Certificates» → <b>Enable</b>.',
+   perche:'Il tablet usa il sito, che è in https, e può parlare con il computer solo in https. Tailscale dà gratis il certificato per il nome del computer. Se salti questo passo, al passo 4 l’app ti mostra il link giusto.'},
+  {t:'Avvia <b>Forex Backtest LAB</b> sul computer e <b>lasciala aperta</b>.',
+   perche:'È il computer che parla con MetaTrader ed esegue gli ordini. Se è chiuso, dal tablet non c’è nessuno con cui parlare.'},
+  {t:'Qui sotto, accendi <b>«Consenti l’accesso dagli altri miei dispositivi»</b>.',
+   perche:'Accende le tre regole di Tailscale: ordini, grafico e segnali. Non serve riavviare niente.',
+   fatto:()=>{ try{ const sv=ts.serve||{}; return !!$('fblRemotoAttivo')?.checked&&!!(sv['8000']&&sv['8001']&&sv['8769']); }catch(e){ return false; } }},
+  {t:'Segna due cose: il <b>nome del computer</b> (finisce con <b>.ts.net</b>) e la <b>chiave</b> — premi «Copia» su tutti e due.',
+   perche:'Sono le due cose da scrivere sul tablet. Mandartele per messaggio è il modo più comodo: sono lunghe da copiare a mano.'}
+ ];
 }
-function fblPassiTelefono(modo){
- const p=[];
- if(modo==='fuori'){
-  p.push({t:'Installa <b>Tailscale</b> sul telefono (App Store o Play Store) ed entra con <b>lo stesso account</b> usato sul computer.',
-    perche:'Se l’account è diverso, i due dispositivi finiscono in due reti separate e non si vedono.'});
- }else{
-  p.push({t:'Collega il telefono alla <b>stessa Wi‑Fi</b> del computer.',
-    perche:'Attenzione ai dati mobili: se il telefono resta sulla rete del gestore, non vedrà il computer. Wi‑Fi acceso e agganciato.'});
- }
- p.push({t:'Sul telefono apri il browser e vai su <b>http://INDIRIZZO:8000/</b> — l’indirizzo del passo 6, per esempio <i>http://192.168.1.5:8000/</i>. <b>Non aprire il sito</b>.',
-   perche:'È il computer che ti serve l’app. Aprendo il sito (che è in https) il browser blocca da solo ogni chiamata verso il computer, che risponde in http: si chiama «contenuto misto» e nessuna regola del firewall lo risolve. Da qui invece pagina e servizio sono la stessa cosa.'});
- p.push({t:'Se l’app ti chiede la <b>chiave</b>, incolla quella del passo 6. Poi hai finito: grafico, segnali e ordini funzionano.',
-   perche:'Aprendo l’app dall’indirizzo del computer, l’indirizzo non serve più scriverlo: l’app parla con il computer da cui è arrivata.'});
- p.push({t:'<i>In alternativa</i>, se preferisci usare il sito: apri l’app, vai su <b>Collegamento / Modalità</b> → <b>«📱 Accesso da altri dispositivi»</b> e torni su questa schermata.',
-   perche:'Funziona solo se apri il sito in http, non in https. È la strada più fragile: se puoi, usa quella del passo precedente.'});
- p.push({t:'Qui sotto, in <b>«Su telefono o tablet»</b>, scrivi l’<b>indirizzo</b> e la <b>chiave</b> del passo 6.',
-   perche:'L’indirizzo dice dove sta il computer; la chiave è quella che il computer pretende prima di rispondere.',
-   fatto:()=>{ try{ return !!(($('fblHostCampo')?.value||'').trim()
-     &&($('fblHostCampo').value||'').trim()!=='127.0.0.1'&&($('fblChiaveCampo')?.value||'').trim()); }catch(e){ return false; } }});
- p.push({t:'Premi <b>«Prova il collegamento»</b> e aspetta la risposta.',
-   perche:'Si prova prima di salvare, con quello che hai appena scritto. Deve comparire «Collegamento riuscito».'});
- p.push({t:'Solo se la prova è riuscita, premi <b>«Salva»</b>.',
-   perche:'Salvare un indirizzo sbagliato non rompe niente, ma il grafico e gli ordini smetteranno di rispondere finché non lo correggi.'});
- return p;
+function fblPassiTelefono(){
+ return [
+  {t:'Installa <b>Tailscale</b> sul telefono o tablet (App Store o Play Store) ed entra con <b>lo stesso account</b> del computer. Lascialo acceso.',
+   perche:'Con un account diverso i due dispositivi finiscono in due reti separate e non si vedono.'},
+  {t:'Apri il <b>sito di sempre</b> ed entra con il tuo account, come sul computer.',
+   perche:'Stesso sito, stesso login: niente indirizzi da ricordare e niente da installare in più.'},
+  {t:'Vai su <b>Collegamento / Modalità</b> → <b>«📱 Accesso da altri dispositivi»</b> e, in <b>«Su telefono o tablet»</b>, scrivi il <b>nome</b> e la <b>chiave</b> del passo 5.',
+   perche:'Il nome dice dove sta il computer; la chiave è quella che il computer pretende prima di rispondere.',
+   fatto:()=>{ try{ const h=fblNormalizzaHost($('fblHostCampo')?.value); return /\.ts\.net$/.test(h)&&!!($('fblChiaveCampo')?.value||'').trim(); }catch(e){ return false; } }},
+  {t:'Premi <b>«Prova il collegamento»</b>. Se il browser chiede di <b>accedere ai dispositivi della rete locale</b>, rispondi <b>Consenti</b>.',
+   perche:'Tailscale usa indirizzi di rete privata, e il browser chiede il permesso prima di lasciarci parlare un sito. Deve comparire «Collegamento riuscito».'},
+  {t:'Solo se la prova è riuscita, premi <b>«Salva»</b>.',
+   perche:'Salvare un nome sbagliato non rompe niente, ma grafico e ordini smetteranno di rispondere finché non lo correggi.'}
+ ];
 }
 function fblPassiHtml(passi,offset){
  const da=Number(offset)||0;
@@ -22758,12 +22689,11 @@ function fblPassiHtml(passi,offset){
 }
 function fblGuidaDisegna(){
  const cols=$('fblGuidaCols'); if(!cols)return;
- const modo=fblModo();
  // Su quale dei due dispositivi si sta leggendo. Se l'indirizzo impostato e' questo stesso
  // computer si sta sul computer; se punta a un altro, si sta sul secondo dispositivo. E' la
  // stessa distinzione che governa gia' il resto della schermata.
  const suPc=!fblRemoto();
- const cPc=fblPassiComputer(modo), cTel=fblPassiTelefono(modo);
+ const cPc=fblPassiComputer(), cTel=fblPassiTelefono();
  // I numeri sono UNICI e continui fra le due colonne: il passo 5 e' il passo 5 ovunque, e i passi
  // del telefono possono citarlo senza mandare a cercarlo nella colonna sbagliata.
  cols.innerHTML=
@@ -22775,21 +22705,12 @@ function fblGuidaDisegna(){
    +'<h5>📱 Sul telefono o tablet'+(suPc?'':'<span class="fblGuidaQui">sei qui</span>')+'</h5>'
    +fblPassiHtml(cTel,cPc.length)
   +'</div>';
- document.querySelectorAll('[data-fbl-modo]').forEach(b=>{
-  b.classList.toggle('active',b.dataset.fblModo===modo);
- });
  const aiuto=$('fblGuidaAiuto');
- if(aiuto)aiuto.innerHTML='<b>Se «Prova il collegamento» non riesce</b>, quasi sempre è uno di questi tre: '
-  +'l’app sul computer è chiusa (passo 2), il firewall di Windows blocca (passo 4), il computer non è stato riavviato dopo aver acceso l’interruttore (passo 5), '
-  +'oppure i due dispositivi non sono sulla stessa rete (passo 1 e passo 7). '
-  +'Se invece risponde <b>«Rifiutato»</b>, il computer c’è ma la chiave non gli torna: ricopiala dal passo 6.';
+ if(aiuto)aiuto.innerHTML='<b>Se «Prova il collegamento» non riesce</b>, quasi sempre è uno di questi: '
+  +'Tailscale spento, o con un account diverso, su uno dei due dispositivi (passi 1 e 6); '
+  +'l’applicazione chiusa sul computer (passo 3); l’interruttore spento (passo 4); il nome scritto male (passo 8). '
+  +'Se invece risponde <b>«Rifiutato»</b>, il computer c’è ma la chiave non gli torna: ricopiala dal passo 5.';
 }
-document.querySelectorAll('[data-fbl-modo]').forEach(b=>{
- b.addEventListener('click',()=>{
-  try{ localStorage.setItem(FBL_MODO_KEY,b.dataset.fblModo); }catch(e){}
-  fblGuidaDisegna();
- });
-});
 // I segni verdi devono seguire quello che si fa mentre lo si fa, non solo all'apertura.
 ['fblRemotoAttivo','fblHostCampo','fblChiaveCampo'].forEach(id=>{
  const el=$(id); if(!el)return;
@@ -22800,26 +22721,42 @@ $('fblRemotoBtn')?.addEventListener('click',fblRemotoApri);
 $('fblRemotoCloseBtn')?.addEventListener('click',()=>{ const ov=$('fblRemotoOverlay'); if(ov)ov.style.display='none'; });
 $('fblRemotoOverlay')?.addEventListener('mousedown',ev=>{ if(ev.target===$('fblRemotoOverlay'))$('fblRemotoOverlay').style.display='none'; });
 $('fblRemotoAttivo')?.addEventListener('change',async ()=>{
- const acceso=!!$('fblRemotoAttivo').checked;
+ const cb=$('fblRemotoAttivo');
+ const acceso=!!cb.checked;
  if(acceso){
   const ok=await appConfirm('Consentire l\'accesso dagli altri tuoi dispositivi?\n\n'
-   +'Il computer comincerà ad accettare richieste anche dalla rete, non solo da sé stesso. '
-   +'Servirà sempre la chiave: senza, ogni richiesta viene rifiutata.\n\n'
-   +'Su una rete di cui non ti fidi (Wi-Fi pubblico, ufficio condiviso) meglio usare Tailscale, '
-   +'che non espone niente alla rete locale.',
+   +'Il computer diventerà raggiungibile SOLO dai dispositivi collegati al tuo account Tailscale, in https. '
+   +'Nessuna porta aperta sulla Wi‑Fi. Servirà sempre la chiave: senza, ogni richiesta viene rifiutata.',
    {title:'📱 Accesso da altri dispositivi',okLabel:'Sì, consenti',cancelLabel:'No',danger:false});
-  if(!ok){ $('fblRemotoAttivo').checked=false; return; }
+  if(!ok){ cb.checked=false; return; }
  }
- const r=await fetchMt5WithTimeout('/accesso-remoto',{method:'POST',headers:{'Content-Type':'application/json'},
-   body:JSON.stringify({rete:acceso})},8000);
  const es=$('fblRemotoEsito');
- if(r&&r.ok){
-  // L'indirizzo su cui ascoltare si sceglie all'avvio del servizio: cambiarlo adesso non ha
-  // effetto finche' non riparte. Dirlo subito evita mezz'ora di prove dal telefono a vuoto.
-  if(es)es.innerHTML=acceso
-   ? '<b>Acceso.</b> Chiudi e riapri l\'applicazione sul computer perché abbia effetto: l\'indirizzo su cui ascoltare si sceglie all\'avvio.'
-   : '<b>Spento.</b> Chiudi e riapri l\'applicazione sul computer perché abbia effetto.';
- }else if(es)es.textContent='Non sono riuscito a cambiare l\'impostazione: '+((r&&r.message)||'servizio non raggiungibile');
+ cb.disabled=true;
+ if(es)es.innerHTML=acceso?'Accendo le regole di Tailscale… <span class="tgCfgNota">(qualche secondo)</span>':'Spengo le regole di Tailscale…';
+ try{
+  // Tempo largo: la prima volta Tailscale prepara il certificato, e sono tre comandi di fila.
+  const r=await fetchMt5WithTimeout('/accesso-remoto',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({rete:acceso})},70000);
+  if(!r||!r.ok){ if(es)es.textContent='Non sono riuscito a cambiare l\'impostazione: '+((r&&r.message)||'servizio non raggiungibile'); return; }
+  const ts=(r.data&&r.data.tailscale)||{};
+  const nome=((ts.stato||{}).nome)||'';
+  if(ts.ok){
+   if(es)es.innerHTML=acceso
+    ? '<b style="color:#4ecb83">Acceso.</b> Sul tablet scrivi il nome <b>'+fbEsc(nome)+'</b> e la chiave qui sotto. Non serve riavviare niente.'
+    : '<b>Spento.</b> Nessun altro dispositivo raggiunge più questo computer.';
+  }else if(ts.link){
+   // HTTPS non ancora abilitato nella rete Tailscale: e' il caso della prima volta.
+   if(es)es.innerHTML='<b style="color:#ff9d7b">Manca un passo, una volta sola:</b> Tailscale deve abilitare HTTPS per la tua rete. '
+    +'<a href="'+fbEsc(ts.link)+'" target="_blank" rel="noopener">Apri questa pagina</a>, abilita, poi spegni e riaccendi l’interruttore.';
+  }else{
+   if(es)es.innerHTML='<b style="color:#ff7b78">'+fbEsc(ts.detail||'Tailscale non ha applicato le regole.')+'</b>'
+    +((ts.passi||[]).length?('<div class="fblEsiti">'+ts.passi.map(x=>'<div><code>'+fbEsc(x.comando)+'</code> — '
+      +fbEsc(x.testo||(x.ok?'ok':'errore'))+'</div>').join('')+'</div>'):'');
+  }
+ }finally{
+  cb.disabled=false;
+  fblRemotoLeggi();
+ }
 });
 $('fblRemotoCopia')?.addEventListener('click',async ()=>{
  const v=$('fblRemotoChiave')?.value||'';
@@ -22834,20 +22771,29 @@ $('fblRemotoRigenera')?.addEventListener('click',async ()=>{
  if(r&&r.ok){ fblRemotoLeggi(); $('fblRemotoEsito').textContent='Chiave cambiata.'; }
 });
 $('fblRemotoSalva')?.addEventListener('click',()=>{
- const host=($('fblHostCampo')?.value||'').trim()||'127.0.0.1';
+ const host=fblNormalizzaHost($('fblHostCampo')?.value)||'127.0.0.1';
  const chiave=($('fblChiaveCampo')?.value||'').trim();
+ // Un indirizzo IP non puo' funzionare: il collegamento e' in https e il certificato vale solo per
+ // il nome. Salvarlo vorrebbe dire grafico e ordini muti, senza un perche' visibile.
+ if(host!=='127.0.0.1'&&fblEIndirizzoIp(host)){
+  $('fblRemotoEsito').innerHTML='<b style="color:#ff7b78">Non salvato.</b> Serve il <b>nome</b> del computer (finisce con <b>.ts.net</b>), '
+   +'non il suo indirizzo: il collegamento è in https e il certificato vale solo per il nome.';
+  return;
+ }
  try{
   localStorage.setItem(FBL_HOST_KEY,host);
   localStorage.setItem(FBL_CHIAVE_KEY,chiave);
  }catch(e){}
+ if($('fblHostCampo'))$('fblHostCampo').value=host;
  fblAggiornaIndirizzi();
  // Le prese aperte puntano ancora al vecchio indirizzo: si riaprono.
  try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
  try{ if(typeof tgAttivo==='function'&&tgAttivo()&&typeof tgCollega==='function')tgCollega(); }catch(e){}
- $('fblRemotoEsito').innerHTML='Salvato: l\'app parlerà con <b>'+host+'</b>.'
+ $('fblRemotoEsito').innerHTML='Salvato: l\'app parlerà con <b>'+fbEsc(host)+'</b>.'
   +(host!=='127.0.0.1'&&!chiave?' <b style="color:#ff7b78">Manca la chiave</b>: senza, il computer rifiuterà ogni richiesta.':'');
  const box=$('fblRemotoLocale');
  if(box)box.style.display=fblRemoto()?'none':'block';
+ try{ fblGuidaDisegna(); }catch(e){}   // "sei qui" e le spunte cambiano colonna dopo il salvataggio
 });
 // --- Registro della prova ---------------------------------------------------------------------
 // Tutto quello che succede finisce in console con il prefisso [FBL], e in un registro in memoria
@@ -22872,7 +22818,7 @@ const FBL_PORTE=[
 // Una singola porta. Torna sempre un oggetto, mai un'eccezione: un esito e' un dato, e serve per
 // il confronto con gli altri due.
 async function fblProvaPorta(host,chiave,def,timeoutMs){
- let url='http://'+host+':'+def.porta+def.percorso;
+ let url=fblBaseUrl(def.porta,host)+def.percorso;
  const remoto=(host!=='127.0.0.1'&&host!=='localhost');
  if(remoto&&chiave)url+=(url.indexOf('?')>=0?'&':'?')+'chiave='+encodeURIComponent(chiave);
  const t0=(performance&&performance.now)?performance.now():Date.now();
@@ -22906,31 +22852,38 @@ function fblLeggiEsiti(esiti,host){
  const rifiutati=esiti.filter(x=>x.stato===403);
  const scaduti=esiti.filter(x=>x.esito&&x.esito.indexOf('scaduto')===0);
  const spenti=esiti.filter(x=>!x.ok&&x.stato===undefined&&x.esito==='irraggiungibile');
+ // 502 = Tailscale ha risposto, ma dietro di lui sul computer quel servizio non c'e'.
+ const senzaServizio=esiti.filter(x=>x.stato===502);
+ const h='<b>'+fbEsc(host)+'</b>';
  if(vivi.length===esiti.length)
-  return {classe:'ok',titolo:'Collegamento riuscito',testo:'Tutti e tre i servizi rispondono da <b>'+host+'</b>: ordini, grafico e segnali.'};
+  return {classe:'ok',titolo:'Collegamento riuscito',testo:'Tutti e tre i servizi rispondono da '+h+': ordini, grafico e segnali.'};
  if(rifiutati.length)
-  return {classe:'ko',titolo:'Rifiutato',testo:'Il computer c’è e risponde, ma dice di no: la <b>chiave</b> non corrisponde, oppure sul computer l’accesso da altri dispositivi non è acceso. Ricopia la chiave dal computer.'};
+  return {classe:'ko',titolo:'Rifiutato',testo:'Il computer c’è e risponde, ma dice di no: la <b>chiave</b> non corrisponde, oppure sul computer l’accesso da altri dispositivi è spento. Ricopia la chiave dal computer.'};
+ if(senzaServizio.length)
+  return {classe:'ko',titolo:'Applicazione chiusa sul computer',
+   testo:'Tailscale raggiunge il computer, ma dietro non risponde <b>'+senzaServizio.map(x=>fbEsc(x.nome)).join(', ')+'</b>: '
+    +'l’applicazione sul computer è chiusa, o quel servizio non è partito. Riaprila sul computer.'};
  if(vivi.length&&(scaduti.length||spenti.length)){
-  // Il caso che ha fatto perdere tempo: la prova "riusciva" perche' guardava solo la 8000.
   const muti=esiti.filter(x=>!x.ok).map(x=>x.nome).join(', ');
   return {classe:'mezzo',titolo:'Collegamento parziale',
-   testo:'Gli <b>ordini</b> rispondono, ma <b>'+muti+'</b> no. Dal telefono il grafico resterebbe vuoto e i segnali non arriverebbero. '
-    +'Di solito è il computer con i servizi vecchi: vanno aggiornati (le porte 8001 e 8769 ascoltavano solo sul computer stesso).'};
+   testo:'Gli <b>ordini</b> rispondono, ma <b>'+fbEsc(muti)+'</b> no: dal tablet il grafico resterebbe vuoto o i segnali non arriverebbero. '
+    +'Sul computer spegni e riaccendi «Consenti l’accesso»: rimette tutte e tre le regole di Tailscale.'};
  }
  if(scaduti.length===esiti.length)
   return {classe:'ko',titolo:'Nessuna risposta',
-   testo:'Nessuno dei tre servizi ha risposto, e nessuno ha nemmeno <b>rifiutato</b>: le richieste spariscono nel nulla. '
-    +'È il comportamento tipico del <b>firewall di Windows</b> che le scarta in silenzio (oppure di un indirizzo che su questa rete non esiste). '
-    +'Apri questa schermata <i>sul computer</i> e guarda il riquadro del firewall.'};
+   testo:'Nessuno dei tre servizi ha risposto: le richieste non arrivano al computer. Quasi sempre è <b>Tailscale</b>: '
+    +'controlla che sia acceso e collegato su <b>tutti e due</b> i dispositivi, con lo <b>stesso account</b>. '
+    +'Oppure il computer è spento o in sospensione.'};
  if(spenti.length===esiti.length)
-  return {classe:'ko',titolo:'Connessione rifiutata',
-   testo:'Il computer <b>c’è</b> e risponde subito, ma su queste porte non ascolta nessuno. '
-    +'L’applicazione non è avviata sul computer, oppure non è stata riavviata dopo aver acceso l’accesso da altri dispositivi.'};
+  return {classe:'ko',titolo:'Computer non trovato',
+   testo:'Il browser non è riuscito nemmeno a collegarsi a '+h+'. Le cause, in ordine di frequenza: il <b>nome</b> è scritto male '
+    +'(copialo dal computer), <b>Tailscale</b> è spento su questo dispositivo, sul computer l’interruttore è <b>spento</b>, '
+    +'oppure hai negato al browser il permesso di <b>accedere alla rete locale</b> (si riattiva dalle impostazioni del sito).'};
  return {classe:'ko',titolo:'Esito misto',testo:'Guarda il dettaglio qui sotto: ogni porta racconta una cosa diversa.'};
 }
 $('fblRemotoProva')?.addEventListener('click',async ()=>{
  const es=$('fblRemotoEsito');
- const host=($('fblHostCampo')?.value||'').trim()||'127.0.0.1';
+ const host=fblNormalizzaHost($('fblHostCampo')?.value)||'127.0.0.1';
  const chiave=($('fblChiaveCampo')?.value||'').trim();
  if(es)es.innerHTML='Provo tutte e tre le porte… <span class="tgCfgNota">(fino a 8 secondi per porta)</span>';
  // Si prova con i valori SCRITTI ADESSO, anche se non ancora salvati: provare quelli vecchi
@@ -22940,19 +22893,14 @@ $('fblRemotoProva')?.addEventListener('click',async ()=>{
  fblLog('chiave:',chiave?('presente, '+chiave.length+' caratteri'):'NON scritta');
  if(host!=='127.0.0.1'&&!chiave)fblLog('ATTENZIONE: indirizzo remoto senza chiave: il computer rifiuterà.');
  fblLog('da questa pagina:',location.origin||location.href);
- // Si controlla PRIMA di provare: se e' questo il caso, gli esiti delle tre porte sarebbero tutti
- // "irraggiungibile in pochi ms" e porterebbero a incolpare il servizio o il firewall, che non
- // c'entrano niente.
+ // Si controlla PRIMA di provare: con un indirizzo IP le tre prove fallirebbero in pochi millisecondi
+ // per il certificato, e porterebbero a incolpare Tailscale o il computer, che non c'entrano.
  const remoto=(host!=='127.0.0.1'&&host!=='localhost');
- if(remoto&&location.protocol==='https:'){
-  fblLog('BLOCCO: pagina in https che chiama un indirizzo http — contenuto misto, il browser non farà partire le richieste');
-  if(es)es.innerHTML='<b style="color:#ff7b78">Il browser non lascia nemmeno partire le richieste</b> — '
-   +'questa pagina è aperta in <b>https</b> (dal sito) e il tuo computer risponde in <b>http</b>. '
-   +'I browser bloccano questa combinazione da soli, prima di mandare qualunque cosa: si chiama '
-   +'<i>contenuto misto</i>, e <b>nessuna regola del firewall può risolverlo</b>.'
-   +'<div class="tgCfgNota" style="margin-top:6px"><b>La soluzione è più semplice di così:</b> sul telefono non aprire il sito. '
-   +'Vai col browser direttamente su <b>http://'+fbEsc(host)+':8000/</b> — è il tuo computer che ti serve l’app. '
-   +'Da lì pagina e servizio sono la stessa cosa, e non serve nemmeno più scrivere indirizzo e chiave qui dentro.</div>';
+ if(remoto&&fblEIndirizzoIp(host)){
+  fblLog('BLOCCO: indirizzo IP al posto del nome .ts.net — il certificato https vale solo per il nome');
+  if(es)es.innerHTML='<b style="color:#ff7b78">Serve il nome del computer, non il suo indirizzo</b> — '
+   +'il collegamento passa da Tailscale in <b>https</b>, e il certificato vale solo per il nome che finisce con <b>.ts.net</b> '
+   +'(per esempio <i>nome-pc.tail1234.ts.net</i>). Lo trovi sul computer, in questa stessa schermata.';
   return;
  }
  // Le tre prove insieme, non una dopo l'altra: in serie, tre timeout da 8 secondi sono 24
@@ -24010,6 +23958,14 @@ function fblChiave(){
  try{ return (localStorage.getItem(FBL_CHIAVE_KEY)||'').trim(); }catch(e){ return ''; }
 }
 function fblRemoto(){ return fblHost()!=='127.0.0.1'&&fblHost()!=='localhost'; }
+// Dal PC si parla in http con 127.0.0.1. Da qualunque altro dispositivo SOLO attraverso Tailscale
+// Serve, che risponde in https sul nome del PC con le stesse porte: https://nome-pc.xxxx.ts.net:8000.
+// Il sito e' in https, quindi e' anche l'unica combinazione che il browser lascia passare.
+function fblBaseUrl(porta,host){
+ const h=(host!=null?host:fblHost());
+ const locale=(h==='127.0.0.1'||h==='localhost');
+ return (locale?'http://':'https://')+h+':'+porta;
+}
 // La chiave va come parametro nell'indirizzo e non come intestazione: cosi' vale anche per i
 // WebSocket, che intestazioni personalizzate non ne accettano.
 function fblConChiave(url){
@@ -24019,7 +23975,7 @@ function fblConChiave(url){
 }
 // `let` e non `const`: cambiando l'indirizzo dalle impostazioni questi due vanno rifatti, e tutti
 // i punti che li concatenano continuano a funzionare senza toccarli.
-let MT5_BRIDGE_URL='http://'+fblHost()+':8000';
+let MT5_BRIDGE_URL=fblBaseUrl(8000);
 // App desktop (bridge + MT5, installata via ForexBacktestLAB_Setup.exe): un sito NON può mai
 // avviare programmi o installare librerie da solo (bloccato dalla sicurezza del browser), quindi
 // quando il bridge locale non risponde offriamo due scorciatoie invece di lasciare solo un
@@ -29124,10 +29080,10 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
 // VWAP, disegni, SL/TP delle posizioni simulate) legge da `rows`/`baseRows` esattamente come
 // sempre: non richiede NESSUNA modifica, perché questo modulo scrive nella stessa identica
 // struttura dati (csvLibrary[0].rows) che già scrive loadLiveHistoryFromCapital.
-let MT5_FEED_URL='http://'+fblHost()+':8001';
+let MT5_FEED_URL=fblBaseUrl(8001);
 function fblAggiornaIndirizzi(){
- MT5_BRIDGE_URL='http://'+fblHost()+':8000';
- MT5_FEED_URL='http://'+fblHost()+':8001';
+ MT5_BRIDGE_URL=fblBaseUrl(8000);
+ MT5_FEED_URL=fblBaseUrl(8001);
 }
 // symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
 // (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
