@@ -20613,7 +20613,7 @@ function tgChiediAccesso(cosa,errore){
  // Lo stesso stato puo' arrivare due volte: quello che segue di poco la risposta e' l'eco di
  // prima che il ponte la ricevesse, non una domanda nuova. Piu' tardi invece lo e' davvero
  // (codice sbagliato, codice scaduto) e allora si richiede.
- if(firma===tgAccessoRisposto&&(Date.now()-tgAccessoRispostoT)<6000)return;
+ if(firma===tgAccessoRisposto&&(Date.now()-tgAccessoRispostoT)<3000)return;
  // Numero gia' noto e nessun errore da mostrare: si manda senza disturbare. Con un errore invece
  // il popup ci vuole - il numero salvato non va piu' bene e solo l'utente puo' correggerlo - e si
  // smette di riprovare da soli dopo due giri, per non restare in un botta e risposta muto.
@@ -20696,17 +20696,26 @@ async function tgApriAccesso(cosa,errore){
   if(dopo)tgChiediAccesso(dopo.cosa,dopo.errore);
  }
 }
+// Accesso finito bene: si smette di sollecitare il ponte e si tiene il numero, che a questo punto
+// e' dimostrato funzionante.
+function tgAccessoConcluso(){
+ tgAccessoFermaAttesa();
+ tgAccessoPendente=null;
+ tgAccessoRisposto='';
+ if(tgTelefonoInAttesa){
+   try{ localStorage.setItem(TG_TEL_KEY,tgTelefonoInAttesa); }catch(e){}
+   tgTelefonoInAttesa=''; tgAggiornaTelefonoUI();
+ }
+ tgTelefonoAutoInvii=0;
+}
 function tgApplicaStato(m){
  if(Array.isArray(m.chat)){ tgGruppi=m.chat; tgRenderGruppi(); }
  if(m.accesso_serve){ tgChiediAccesso(m.accesso_serve,m.accesso_errore); }
- else if(m.collegato){
-   tgAccessoFermaAttesa();
-   // Accesso riuscito: adesso quel numero vale la pena di essere ricordato.
-   if(tgTelefonoInAttesa){
-     try{ localStorage.setItem(TG_TEL_KEY,tgTelefonoInAttesa); }catch(e){}
-     tgTelefonoInAttesa=''; tgAggiornaTelefonoUI();
-   }
-   tgTelefonoAutoInvii=0;
+ else{
+   // Il ponte non aspetta piu' niente: se piu' tardi richiede la stessa cosa con lo stesso errore
+   // (il codice sbagliato due volte di fila) e' una domanda nuova, non l'eco di questa.
+   tgAccessoRisposto='';
+   if(m.collegato)tgAccessoConcluso();
  }
  tgAggiornaInterruttore(m);
  if(m.modalita==='simulatore'){
@@ -20781,7 +20790,19 @@ function tgCollega(){
  ws.onmessage=ev=>{
    let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
    if(m.tipo==='stato'){ tgApplicaStato(m); return; }
-   if(m.tipo==='battito'){ return; }
+   if(m.tipo==='battito'){
+     // Il battito porta solo collegato/errore, e prima veniva buttato via: era il secondo motivo per
+     // cui, dopo aver confermato il codice, bisognava premere "Ricontrolla" per vedersi collegati.
+     // Non lo si passa a tgApplicaStato: non contiene ne' le sale ne' credenziali_presenti, e
+     // scriverebbe "mancano le credenziali" quando non e' vero.
+     const eraCollegato=tgCollegatoTelegram;
+     tgAggiornaInterruttore(m);
+     if(m.collegato&&!eraCollegato){
+       tgAccessoConcluso();
+       tgStato('Collegato a Telegram. Sale in ascolto: '+(tgGruppi.length||0)+'.','ok');
+     }
+     return;
+   }
    if(m.tipo==='salvato'){
      if(!m.ok)tgStato('Non sono riuscito a salvare: '+(m.errore||'errore sconosciuto'),'err');
      return;

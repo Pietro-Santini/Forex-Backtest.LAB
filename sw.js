@@ -32,8 +32,13 @@
 // Storico: v4 = pubblicato sul repo fino al 26-09-2026 · v5 = mai pubblicato
 //          v6 = rilascio con installer desktop, Mt5FeedServer e protocollo
 //               forexbacktestlab://
+//          v7 = usata dalle copie in installer_build (il repo era rimasto a v6)
+//          v8 = accesso alle sale Telegram: popup del codice che non si perde
+//               piu', numero ricordato, suono all'arrivo di un segnale. Si salta
+//               la v7 apposta: chi ha l'installer precedente ha gia' quella
+//               chiave in cache e con lo stesso numero non scaricherebbe niente.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v6";
+const CACHE_NAME = "forex-backtest-lab-v8";
 const ASSETS = [
   "./",
   "./app.html",
