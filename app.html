@@ -30566,7 +30566,10 @@ function mt5AlgoTradingNote(data){
 async function connectToMt5Bridge(creds){
  let res;
  try{
-   res=await fetch(MT5_BRIDGE_URL+'/connect',{
+   // La chiave: dal PC non serve, dal tablet (via Tailscale) si'. Mancava solo qui e in /disconnect,
+   // le uniche due chiamate al ponte che non passano da fetchMt5WithTimeout: dal tablet il login
+   // al conto rispondeva "Chiave d'accesso mancante o errata".
+   res=await fetch(fblConChiave(MT5_BRIDGE_URL+'/connect'),{
      method:'POST',
      headers:{'Content-Type':'application/json'},
      body:JSON.stringify({login:Number(creds.login),password:creds.password,server:creds.server})
@@ -30589,9 +30592,13 @@ async function connectToMt5Bridge(creds){
 // Vera chiamata POST /disconnect al bridge locale: chiude la sessione MT5 lato terminale
 // (mt5.shutdown()) invece di limitarsi ad azzerare lo stato solo nel browser.
 async function disconnectFromMt5Bridge(){
+ // Dal tablet NON si spegne il PC. /disconnect chiude MT5, il terminale e lo stesso processo del
+ // ponte: chiamato da remoto, nessuno potrebbe piu' riaccenderli se non tornando al computer. Da
+ // qui ci si scollega solo questo dispositivo; il PC resta com'e'. (Lo impone anche il ponte.)
+ if(fblRemoto())return {ok:true,data:{status:'disconnected',soloQuestoDispositivo:true}};
  let res;
  try{
-   res=await fetch(MT5_BRIDGE_URL+'/disconnect',{method:'POST'});
+   res=await fetch(fblConChiave(MT5_BRIDGE_URL+'/disconnect'),{method:'POST'});
  }catch(e){
    return {ok:false,message:'Bridge locale non raggiungibile su '+MT5_BRIDGE_URL+'.'};
  }
@@ -30619,6 +30626,9 @@ async function disconnectFromMt5Bridge(){
 //     essere sparita quando arriva), quindi qui non sapremo mai con certezza se il bridge ha
 //     davvero ricevuto ed eseguito la richiesta prima di terminare.
 window.addEventListener('pagehide', ()=>{
+ // Solo sul PC. Chiudere o ricaricare la pagina sul TABLET non deve spegnere MT5 e il ponte sul
+ // computer: basterebbe un refresh per perdere tutto, senza modo di riaccenderlo da remoto.
+ if(fblRemoto())return;
  try{ navigator.sendBeacon(MT5_BRIDGE_URL+'/disconnect'); }catch(e){}
 });
 // Esposta su window per lo stesso motivo di window.syncFullStatusToFirebase (vedi più in alto in
@@ -31072,12 +31082,18 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
 $('mt5MenuShutdownBtn')?.addEventListener('click',async ev=>{
  ev.stopPropagation();
  closeMt5Menu();
- if(!await appConfirm('Spegnere terminale MT5 e bridge?\n\nIl grafico resta su Capital.com. La casella "Posizioni MT5" mostrerà l\'ultimo stato noto, non più aggiornato, finché non ricolleghi MT5.',{title:'⏻ Spegni MT5',okLabel:'Spegni',cancelLabel:'Annulla',danger:true}))return;
+ const daRemoto=fblRemoto();
+ if(!await appConfirm(daRemoto
+   ? 'Scollegare questo dispositivo da MT5?\n\nSul computer MT5 e il servizio restano accesi: da qui non si potrebbero riaccendere, per questo non si spengono. Si spengono dal computer.'
+   : 'Spegnere terminale MT5 e bridge?\n\nIl grafico resta su Capital.com. La casella "Posizioni MT5" mostrerà l\'ultimo stato noto, non più aggiornato, finché non ricolleghi MT5.',
+   {title:'⏻ Spegni MT5',okLabel:daRemoto?'Scollega':'Spegni',cancelLabel:'Annulla',danger:!daRemoto}))return;
  $('status').textContent='Spegnimento di MT5 in corso…';
  const result=await disconnectFromMt5Bridge();
  mt5MonitorOnly=false; mt5Connected=false;
  updateMt5ModeUI();
- $('status').textContent=result.ok?'⏻ MT5 spento (terminale e servizio in chiusura).':('⚠️ Spegnimento MT5 non riuscito (stato locale comunque azzerato): '+result.message);
+ $('status').textContent=(result.ok&&result.data&&result.data.soloQuestoDispositivo)
+   ? '⏻ Scollegato questo dispositivo. Sul computer MT5 e il servizio restano accesi.'
+   : (result.ok?'⏻ MT5 spento (terminale e servizio in chiusura).':('⚠️ Spegnimento MT5 non riuscito (stato locale comunque azzerato): '+result.message));
 });
 $('mt5LoginCloseBtn').addEventListener('click',closeMt5LoginModal);
 $('mt5LoginCancelBtn').addEventListener('click',closeMt5LoginModal);

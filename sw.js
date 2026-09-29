@@ -43,8 +43,10 @@
 //               .ts.net): niente Wi-Fi, niente firewall, stesso sito sul tablet
 //          v11 = la prova del collegamento riconosce il permesso «rete locale» del
 //               browser e offre il test diretto, invece di dire «computer non trovato»
+//          v12 = login al conto MT5 dal tablet (mancava la chiave); dal tablet
+//               «Disconnetti» e la chiusura della pagina non spengono piu' il PC
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v11";
+const CACHE_NAME = "forex-backtest-lab-v12";
 const ASSETS = [
   "./",
   "./app.html",
