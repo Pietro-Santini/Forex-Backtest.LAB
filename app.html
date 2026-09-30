@@ -13842,11 +13842,12 @@ function draw(){
    const previewLabel=previewTradeLevel.type==='ENTRY'?pendingOrderKind:previewTradeLevel.type.replace('_',' ');
    ctx.fillText(previewLabel+'? '+fmtPrice(previewTradeLevel.price),(w-pad.r)-110,y(previewTradeLevel.price)-6);
    ctx.restore();
- }else if(lineaTradePremuta){
-   // Premuta ma non ancora trascinata (il primo tocco che la seleziona): evidenziata lo stesso,
-   // cosi' si vede QUALE linea si e' presa prima di spostarla.
-   const pz=prezzoLineaTrade(lineaTradePremuta);
-   if(pz!=null&&pz>=lo&&pz<=hi)disegnaLineaTradeEvidenziata(ctx,coloreLineaTrade(lineaTradePremuta,pz),y(pz),pad.l,w-pad.r);
+ }else if(lineaTradePremuta||tradeLevelArmata){
+   // Premuta, oppure SELEZIONATA (resta evidenziata finche' non si tocca un punto vuoto, come su
+   // MT5): si vede QUALE linea si e' presa prima di spostarla.
+   const sel=lineaTradePremuta||tradeLevelArmata;
+   const pz=prezzoLineaTrade(sel);
+   if(pz!=null&&pz>=lo&&pz<=hi)disegnaLineaTradeEvidenziata(ctx,coloreLineaTrade(sel,pz),y(pz),pad.l,w-pad.r);
  }
  // Barra dell'asse temporale in basso, stile TradingView: tacche + orario ad intervalli
  // "puliti" (5m/15m/30m/1h/4h/1g...) scelti automaticamente in base allo zoom orizzontale
@@ -14218,13 +14219,23 @@ function disegnaLineaTradeEvidenziata(ctx,colore,yy,xDa,xA){
  ctx.beginPath();ctx.moveTo(xDa,yy);ctx.lineTo(xA,yy);ctx.stroke();
  ctx.restore();
 }
+// RICHIESTO ESPLICITAMENTE ("come su MetaTrader 5"): la selezione resta finche' non si tocca un
+// punto vuoto del grafico (o si preme Esc), e la linea selezionata resta evidenziata. Prima scadeva
+// da sola dopo 8 secondi e toccare altrove non la toglieva.
 function tradeLevelPronta(tipo){
- return tradeLevelArmata===tipo && (Date.now()-tradeLevelArmataMs)<TRADE_LEVEL_ARMO_MS;
+ return tradeLevelArmata===tipo;
 }
 function tradeLevelArma(tipo){
  tradeLevelArmata=tipo; tradeLevelArmataMs=Date.now();
- try{ $('status').textContent=dragLabel(tipo)+' selezionata. Premi di nuovo sopra per spostarla.'; }catch(e){}
+ try{ $('status').textContent=dragLabel(tipo)+' selezionata. Premi di nuovo sopra per spostarla; tocca un punto vuoto del grafico per deselezionarla.'; }catch(e){}
 }
+function tradeLevelDeseleziona(){
+ if(!tradeLevelArmata)return false;
+ tradeLevelArmata=null;
+ try{ draw(); }catch(e){}
+ return true;
+}
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&tradeLevelArmata&&!tradeLevelDrag)tradeLevelDeseleziona(); });
 function tradeLevelHit(clientX,clientY,activate){
  const g=chartGeometry();if(!g)return null;
  const px=clientX-g.rect.left, py=clientY-g.rect.top,tolerance=14;
@@ -19319,6 +19330,9 @@ chartEl.addEventListener('pointerdown',e=>{
       $('status').textContent='Trascina '+dragLabel(tradeHit)+' per modificarla.';
       return;
     }
+    // Tocco fuori dalle linee: la linea selezionata si deseleziona (come su MT5). Il resto del tocco
+    // (pan del grafico, disegni...) prosegue normalmente.
+    tradeLevelDeseleziona();
     // vpBodySelect=true: RICHIESTO ESPLICITAMENTE — un click (non trascinamento) dentro il
     // corpo/linea di un profilo volumetrico o del VWAP deve selezionare il disegno, così Canc
     // può eliminarlo (prima solo le minuscole maniglie erano cliccabili per selezionare, e sul
@@ -19427,6 +19441,8 @@ chartEl.addEventListener('pointerdown',e=>{
    $('status').textContent='Trascina '+dragLabel(tradeHit)+' per modificarla.';
    return;
  }
+ // Clic fuori dalle linee: la linea selezionata si deseleziona (come su MT5).
+ tradeLevelDeseleziona();
  // vpBodySelect=true: vedi il commento gemello nel ramo touch più sopra — un click semplice
  // dentro il corpo del profilo volumetrico o sulla linea del VWAP deve selezionare il disegno
  // (per poterlo cancellare con Canc), stesso trattamento già riservato al VWAP.
