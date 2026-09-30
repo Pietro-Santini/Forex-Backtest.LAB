@@ -19571,6 +19571,89 @@ function setChartTouchAction(locked){
  // trascinamento della scala prezzi, di una linea/disegno, o gesto a due dita.
  chartEl.style.touchAction=locked?'none':'pan-y';
 }
+// Secondo dito appena appoggiato: inizializza tutto lo stato del gesto a due dita (pan
+// orizzontale/verticale + pizzico orizzontale/verticale), e blocca lo scroll della pagina solo per
+// la durata di questo gesto. Usata dal gestore principale e dalla GUARDIA DUE DITA qui sotto.
+function iniziaGestoDueDita(e){
+ e.preventDefault();
+ setChartTouchAction(true);
+ freezeViewIfNeeded();
+ twoFingerPan=true;
+ const pts=[...touchPoints.values()];
+ twoFingerStartX=(pts[0].x+pts[1].x)/2;
+ twoFingerStartY=(pts[0].y+pts[1].y)/2;
+ twoFingerStartViewEnd=viewEnd;
+ twoFingerStartScale=currentDisplayScale();
+ twoFingerStartPriceLo=viewPriceLo;
+ twoFingerStartPriceHi=viewPriceHi;
+ twoFingerStartDistX=Math.abs(pts[0].x-pts[1].x);
+ twoFingerStartDistY=Math.abs(pts[0].y-pts[1].y);
+ twoFingerStartVisibleCount=visibleCount;
+ twoFingerStartPriceZoomFactor=priceZoomFactor;
+ // Due dita già vicine tra loro all'inizio del gesto (es. < 60px): trattiamo tutto il gesto come
+ // uno spostamento libero (mai zoom), come se si usasse la penna, per tutta la sua durata.
+ twoFingerCloseMode=Math.hypot(twoFingerStartDistX,twoFingerStartDistY)<60;
+ for(const id of touchPoints.keys())chartEl.setPointerCapture?.(id);
+}
+// ===================== GUARDIA DUE DITA (tablet e telefono) =====================
+// RICHIESTO: "per spostarmi sul grafico uso due dita; se il primo dito cade su una linea, un
+// disegno, SL/TP/entrata... non deve selezionare ne' spostare niente". Il primo dito arriva
+// sempre un attimo prima del secondo, e da solo non si puo' sapere che ne arrivera' un altro:
+// quindi al primo tocco si fotografa lo stato, e se arriva il secondo dito mentre il primo e'
+// ancora giu' TUTTO quello che il primo ha fatto si annulla (selezione, trascinamento di una
+// linea o di un disegno, disegno appena creato, casella Target/Stop, zoom della scala prezzi) e
+// il gesto diventa solo spostamento/zoom del grafico. Ascoltatore in fase di cattura: arriva
+// prima del gestore principale, e per il secondo dito lo sostituisce del tutto (nessuna ricerca
+// di linee/disegni sotto il secondo dito).
+const ditaSulGrafico=new Map();
+let fotoPrimoDito=null;
+chartEl.addEventListener('pointerdown',e=>{
+ if(e.pointerType!=='touch')return;
+ ditaSulGrafico.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(ditaSulGrafico.size===1){
+   fotoPrimoDito={
+     selezionato:selectedDrawing, armata:tradeLevelArmata, nDisegni:drawings.length,
+     strumento:drawTool, passo:placingStep, inAttesa:pendingDrawing,
+     zoomPrezzi:priceZoomFactor
+   };
+   return;
+ }
+ // Secondo (o terzo) dito: si annulla quello che ha fatto il primo.
+ const f=fotoPrimoDito;
+ try{
+   if(shapeDrag&&selectedDrawing){
+     if(shapeDrag.origP1)selectedDrawing.p1={...shapeDrag.origP1};
+     if(shapeDrag.origP2)selectedDrawing.p2={...shapeDrag.origP2};
+   }
+   shapeDrag=null;
+   tradeLevelDrag=null; placingTradeLevelDrag=null; previewTradeLevel=null; lineaTradePremuta=null;
+   zoneWidthDrag=null;
+   if(priceAxisDrag){ priceZoomFactor=priceAxisDrag.startFactor; priceAxisDrag=null; }
+   touchDrawDrag=false;
+   if(f){
+     if(drawings.length>f.nDisegni)drawings.splice(f.nDisegni);   // disegno creato dal primo dito
+     pendingDrawing=f.inAttesa; placingStep=f.passo;
+     if(drawTool!==f.strumento)setDrawTool(f.strumento);
+     tradeLevelArmata=f.armata;
+     selectedDrawing=f.selezionato;
+   }
+   hideDrawSettingsTouchBtn();
+   zoneClickCandidateKey=null; closedTradeClickCandidateId=null; vpVwapClickCandidate=null;
+ }catch(err){}
+ // Il gesto a due dita parte con le posizioni vere di entrambe le dita.
+ touchPoints.clear();
+ ditaSulGrafico.forEach((p,id)=>touchPoints.set(id,{x:p.x,y:p.y}));
+ iniziaGestoDueDita(e);
+ try{ $('status').textContent='Due dita: sposto il grafico, nessuna linea o disegno toccato.'; }catch(err){}
+ draw();
+ e.stopImmediatePropagation();   // il gestore principale non deve cercare linee sotto il secondo dito
+},true);
+chartEl.addEventListener('pointermove',e=>{ if(e.pointerType==='touch'&&ditaSulGrafico.has(e.pointerId))ditaSulGrafico.set(e.pointerId,{x:e.clientX,y:e.clientY}); },true);
+['pointerup','pointercancel'].forEach(t=>chartEl.addEventListener(t,e=>{
+ if(e.pointerType!=='touch')return;
+ ditaSulGrafico.delete(e.pointerId);
+ if(!ditaSulGrafico.size)fotoPrimoDito=null;
+},true));
 chartEl.addEventListener('dragstart',e=>e.preventDefault());
 // Blocco extra e più "robusto" dello scroll della pagina con il dito: cambiare
 // touch-action via JS dentro il solo pointerdown a volte arriva troppo tardi (il
@@ -19843,31 +19926,7 @@ chartEl.addEventListener('pointerdown',e=>{
       return;
     }else if(selectedDrawing)deselectDrawing();
    touchPoints.set(e.pointerId,{x:e.clientX,y:e.clientY});
-   if(touchPoints.size>=2){
-     // Secondo dito appena appoggiato: inizializziamo QUI tutto lo stato del gesto a due
-     // dita (pan orizzontale/verticale + pizzico orizzontale/verticale), e blocchiamo lo
-     // scroll della pagina solo per la durata di questo gesto.
-     e.preventDefault();
-     setChartTouchAction(true);
-     freezeViewIfNeeded();
-     twoFingerPan=true;
-     const pts=[...touchPoints.values()];
-     twoFingerStartX=(pts[0].x+pts[1].x)/2;
-     twoFingerStartY=(pts[0].y+pts[1].y)/2;
-     twoFingerStartViewEnd=viewEnd;
-     twoFingerStartScale=currentDisplayScale();
-     twoFingerStartPriceLo=viewPriceLo;
-     twoFingerStartPriceHi=viewPriceHi;
-     twoFingerStartDistX=Math.abs(pts[0].x-pts[1].x);
-     twoFingerStartDistY=Math.abs(pts[0].y-pts[1].y);
-     twoFingerStartVisibleCount=visibleCount;
-     twoFingerStartPriceZoomFactor=priceZoomFactor;
-     // Due dita già vicine tra loro all'inizio del gesto (es. < 60px): trattiamo tutto il
-     // gesto come uno spostamento libero (mai zoom), come se si usasse la penna, per tutta
-     // la sua durata — deciso una volta sola qui, senza cambiare a metà gesto.
-     twoFingerCloseMode=Math.hypot(twoFingerStartDistX,twoFingerStartDistY)<60;
-     for(const id of touchPoints.keys())chartEl.setPointerCapture?.(id);
-   }
+   if(touchPoints.size>=2)iniziaGestoDueDita(e);
    // Un solo dito su un punto vuoto del grafico: NON blocchiamo nulla, così la pagina
    // può scorrere normalmente in verticale (richiesta esplicita).
    return;
