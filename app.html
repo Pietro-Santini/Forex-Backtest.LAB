@@ -3228,8 +3228,10 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input id="tgAutoPerdita" class="tgCfgIn tgCfgNum" type="number" min="0.5" max="50" step="0.5" style="width:70px"> % si spegne</label>
        <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, l'app lo calcola dal rischio scelto con questo lotto per posizione. Il minimo (0,01) mette lo stop il più lontano possibile a parità di perdita massima.">Senza stop della sala: lotto per posizione
          <input id="tgAutoLottoSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.01" max="100" step="0.01" style="width:70px"></label>
-       <label class="tgCfgCampo" title="Quando la sala dà lo stop ma nessun take profit, l'app mette il target a questa percentuale della distanza dello stop. 20% = rapporto 1:0,2: per andare in pari serve vincere l'83% delle volte; 100% = 1:1 (50%).">Senza target della sala: target al
-         <input id="tgAutoTpSenzaTp" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % della distanza dello stop</label>
+       <label class="tgCfgCampo" title="Quando la sala dà lo stop ma nessun take profit: appena il prezzo percorre questa percentuale della distanza dello stop, lo stop va a pareggio (profitto netto 0,00).">Senza target della sala: pareggio al
+         <input id="tgAutoBeSenzaTp" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % dello stop</label>
+       <label class="tgCfgCampo" title="Il target sta questa percentuale della distanza dello stop OLTRE il punto di pareggio. Con 20% + 10% il target è al 30%: rapporto 1:0,3.">e target un ulteriore
+         <input id="tgAutoTpExtra" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % più in là</label>
      </div>
      <div class="tgCfgNota" style="margin-top:7px">Il tetto complessivo vince sempre su quelli delle singole sale. Quando un limite è raggiunto il segnale <b>non viene buttato</b>: finisce nel pannello, da valutare a mano.</div>
 
@@ -21967,7 +21969,7 @@ function tgRenderPannello(){
   card.appendChild(tgRiga(tps.length
    ? (tps.length+(tps.length===1?' take profit: ':' take profit: ')+tps.map(tgFmt).join('  ·  ')
       +'   →   '+tps.length+(tps.length===1?' posizione':' posizioni'))
-   : ('Nessun take profit indicato: una sola posizione, con il target calcolato dall\'app al '+tgTpSenzaTpPct()+'% della distanza dello stop')));
+   : ('Nessun take profit indicato: una posizione; pareggio al '+tgBeSenzaTpPct()+'% della distanza dello stop, target un ulteriore '+tgTpExtraPct()+'% più in là')));
 
   // Il riepilogo di cosa e' stato aperto davvero (prezzi reali del piano, non quelli della sala).
   if(voce.stato==='eseguito'&&voce.eseguito){
@@ -22252,8 +22254,9 @@ function tgCfgDisegnaRiepilogo(piano){
  agg('Entrata al prezzo di adesso <b>'+tgFmt(piano.entry)+'</b> · stop loss <b>'+tgFmt(piano.sl)+'</b> su tutte · <b>'+piano.lotti.toFixed(2)+'</b> lot ciascuna');
  if(piano.tpCalcolato){
   const d=document.createElement('div'); d.className='tgCfgAllarme';
-  d.textContent='La sala non ha dato il take profit: l\'ho messo al '+tgTpSenzaTpPct()+'% della distanza dello stop ('+tgFmt(piano.tp[0])
-   +'). Rapporto 1:'+(piano.rr!=null?piano.rr.toFixed(2):'?')+': per andare in pari serve vincere il '+(piano.rr?Math.round(100/(1+piano.rr)):'?')+'% delle volte.';
+  d.textContent='La sala non ha dato il take profit. Al '+tgBeSenzaTpPct()+'% della distanza dello stop lo stop va a pareggio; il target è un ulteriore '
+   +tgTpExtraPct()+'% più in là ('+tgFmt(piano.tp[0])+', rapporto 1:'+(piano.rr!=null?piano.rr.toFixed(2):'?')+'). Per ogni stop pieno servono '
+   +(piano.rr?(1/piano.rr).toFixed(1):'?')+' target.';
   box.appendChild(d);
  }
  if(piano.slCalcolato){
@@ -22713,7 +22716,8 @@ function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
  if($('tgAutoLottoSenzaSl'))$('tgAutoLottoSenzaSl').value=tgLottoSenzaSl().toFixed(2);
- if($('tgAutoTpSenzaTp'))$('tgAutoTpSenzaTp').value=tgTpSenzaTpPct();
+ if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
+ if($('tgAutoTpExtra'))$('tgAutoTpExtra').value=tgTpExtraPct();
  if($('tgAutoPerdita'))$('tgAutoPerdita').value=tgAuto.perditaMaxGiorno;
  const nota=$('tgAutoStatoNota');
  if(nota){
@@ -22889,9 +22893,14 @@ $('tgAutoAttivo')?.addEventListener('change',async ()=>{
  if(acceso)tgAuto.spentoIl=null;   // riaccendere a mano annulla lo stop di giornata
  tgAutoSalva(); tgAutoDisegna();
 });
-$('tgAutoTpSenzaTp')?.addEventListener('change',()=>{
- const v=Number($('tgAutoTpSenzaTp').value);
- if(v>0)tgAuto.tpSenzaTpPct=Math.min(500,v);
+$('tgAutoBeSenzaTp')?.addEventListener('change',()=>{
+ const v=Number($('tgAutoBeSenzaTp').value);
+ if(v>0)tgAuto.beSenzaTpPct=Math.min(500,v);
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgAutoTpExtra')?.addEventListener('change',()=>{
+ const v=Number($('tgAutoTpExtra').value);
+ if(v>0)tgAuto.tpExtraPct=Math.min(500,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoLottoSenzaSl')?.addEventListener('change',()=>{
@@ -23484,10 +23493,22 @@ async function tgPortaAGrafico(sym){
 // parita' di perdita massima e' la scelta che mette lo stop piu' lontano possibile) - e lo stop si
 // ricava: la perdita, se scatta, e' al massimo il rischio % scelto, sommato su tutte le posizioni.
 // E' un tetto alla perdita, non un livello tecnico: con conti piccoli lo stop viene vicino.
-function tgTpSenzaTpPct(){
- const v=Number(tgAuto&&tgAuto.tpSenzaTpPct);
+// SENZA TARGET DELLA SALA (RICHIESTO): quando il prezzo percorre il 20% della distanza dello stop,
+// stop a pareggio; il target sta un ulteriore 10% piu' in la' (30%). Il target si mette SUBITO al
+// 30% invece di spostarlo dal 20% al 30% al momento giusto: su MT5 il broker chiuderebbe al 20%
+// prima che l'app faccia in tempo a spostarlo. Stesso risultato, senza la corsa contro il broker.
+function tgBeSenzaTpPct(){
+ const v=Number(tgAuto&&tgAuto.beSenzaTpPct);
  return (Number.isFinite(v)&&v>0)?Math.min(500,v):20;
 }
+function tgTpExtraPct(){
+ const v=Number(tgAuto&&tgAuto.tpExtraPct);
+ return (Number.isFinite(v)&&v>0)?Math.min(500,v):10;
+}
+function tgTpSenzaTpPct(){ return tgBeSenzaTpPct()+tgTpExtraPct(); }
+// Il pareggio anticipato si esprime come percentuale della strada verso il target (vedi
+// tgLivelloAvvicinamento): 20% dello stop con target al 30% = 66,7% della strada.
+function tgAvvicinamentoSenzaTp(){ return tgBeSenzaTpPct()/tgTpSenzaTpPct()*100; }
 function tgLottoSenzaSl(){
  const v=Number(tgAuto&&tgAuto.lottoSenzaSl);
  return (Number.isFinite(v)&&v>=0.01)?Math.round(v*100)/100:0.01;
@@ -23615,7 +23636,9 @@ async function tgEseguiSegnale(voce,opzioni){
   return;
  }
  const regole=(opzioni&&Array.isArray(opzioni.regole))?opzioni.regole:[];
- const avvicinamento=(opzioni&&opzioni.avvicinamento)?opzioni.avvicinamento:null;
+ // Target calcolato dall'app: il pareggio al 20% dello stop fa parte della regola, sempre.
+ const avvicinamento=p.tpCalcolato?{pct:tgAvvicinamentoSenzaTp()}
+   :((opzioni&&opzioni.avvicinamento)?opzioni.avvicinamento:null);
  const reale=!!mt5Connected;
  if(!reale&&p.margine>freeMargin()+1e-9){
   await appAlert('Margine non sufficiente per '+p.n+' posizioni da '+p.lotti.toFixed(2)+' lot: servono '+euro(p.margine)+', liberi ce ne sono '+euro(freeMargin())+'.');
@@ -23628,8 +23651,8 @@ async function tgEseguiSegnale(voce,opzioni){
  r.push('Stop loss: '+tgFmt(p.sl)+' su tutte'+(p.slCalcolato
    ?(' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Con '+p.lotti.toFixed(2)+' lot per posizione, se scatta si perde al massimo il '+p.pct.toFixed(2)+'% scelto.'):''));
  r.push(p.tpCalcolato
-   ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non l\'ha dato. È al '+tgTpSenzaTpPct()+'% della distanza dello stop: rapporto 1:'
-      +(p.rr!=null?p.rr.toFixed(2):'?')+', per andare in pari serve vincere il '+(p.rr?Math.round(100/(1+p.rr)):'?')+'% delle volte.')
+   ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Quando il prezzo percorre il '+tgBeSenzaTpPct()
+      +'% della distanza dello stop, lo stop va a pareggio; il target è un ulteriore '+tgTpExtraPct()+'% più in là (rapporto 1:'+(p.rr!=null?p.rr.toFixed(2):'?')+').')
    : p.tp.length
    ? ('Take profit: '+p.tp.map(tgFmt).join('  ·  ')+'  (uno per posizione)')
    : 'Nessun take profit: una sola posizione, con il solo stop loss');
