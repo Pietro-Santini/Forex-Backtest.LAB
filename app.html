@@ -30553,7 +30553,12 @@ function startLiveRefreshTimer(){
        //     piu' fresco per definizione, il dato REST e' gia' superato appena nato;
        //  2. la candela M1 restituita e' anteriore all'ultimo tick applicato.
        const tickArrivedDuringFetch=(lastLiveTickAt>__reqAt);
-       const olderThanLastTick=restStampUsable(rest.atMs)&&lastLiveTickAt&&rest.atMs<lastLiveTickAt;
+       // rest.atMs e' l'APERTURA della candela M1 di Capital.com, non l'ora del tick: e' vecchia
+       // solo se quella candela era gia' finita prima dell'ultimo tick. SEGNALATO: "dopo il cambio
+       // candela l'aggiornamento si ferma e riprende solo alla chiusura": confrontando l'apertura,
+       // dopo il primo tick di ogni minuto il prezzo REST di riserva veniva scartato SEMPRE, e se lo
+       // stream si fermava la candela restava ferma fino al ricaricamento di fine candela.
+       const olderThanLastTick=restStampUsable(rest.atMs)&&lastLiveTickAt&&(rest.atMs+60000)<lastLiveTickAt;
        if(tickArrivedDuringFetch||olderThanLastTick){
          console.log('[LiveFeed] prezzo REST '+restPrice+' scartato: '+(tickArrivedDuringFetch
            ?'e\' arrivato un tick durante la richiesta'
@@ -31913,13 +31918,30 @@ async function gcUltimaBarraMt5(symbol){
  }catch(e){ return null; }
  finally{ clearTimeout(t); }
 }
+// Stesso guardiano per il grafico alimentato da Capital.com (senza MT5, o nella fascia 22-23):
+// SEGNALATO "con Capital.com la candela segue il prezzo, poi dopo il cambio candela si aggiorna
+// solo a ogni chiusura". Qui la barra arriva dal REST di Capital.com (solo il prezzo di chiusura
+// e l'apertura della candela M1).
+function gcSorgente(){
+ if(!liveModeActive||!currentAssetKey)return null;
+ const fase=liveSessionPhaseNow();
+ if(mt5Connected&&mt5ActiveSymbol){ return (fase==='closed'||fase==='capital')?null:'mt5'; }
+ if(!mt5ActiveSymbol&&capitalWsPrimaryEpic&&capitalSessionTokens&&(fase==='free'||fase==='capital'))return 'capital';
+ return null;
+}
+async function gcUltimaBarraCapital(epic){
+ const r=await fetchLatestPriceRest(epic);
+ if(!r||!Number.isFinite(r.price))return null;
+ const atMs=Number.isFinite(r.atMs)?r.atMs:Math.floor(Date.now()/60000)*60000;
+ return {atMs,open:r.price,high:r.price,low:r.price,close:r.price,vol:0};
+}
 async function guardianoCandeleMt5(){
  if(gcRichiestaInCorso)return;
- if(!(liveModeActive&&mt5Connected&&mt5ActiveSymbol&&currentAssetKey))return;
- const fase=liveSessionPhaseNow();
- if(fase==='closed'||fase==='capital')return;
+ const sorgente=gcSorgente();
+ if(!sorgente)return;
  const file=csvLibrary[0];
- if(!file||!file.rows||!file.rows.length||!/^mt5_live_/.test(file.id||''))return;
+ if(!file||!file.rows||!file.rows.length)return;
+ if(sorgente==='mt5'&&!/^mt5_live_/.test(file.id||''))return;
  // Un cambio asset dura qualche secondo; se resta "in corso" oltre 30 s e' rimasto appeso.
  if(chartFeedSuspended){ if(!gcSospesoDa)gcSospesoDa=Date.now(); if(Date.now()-gcSospesoDa<30000)return; }
  else gcSospesoDa=0;
@@ -31928,11 +31950,13 @@ async function guardianoCandeleMt5(){
  if(st!==gcStato){ gcStato=st; gcCambioAt=Date.now(); return; }
  if(Date.now()-gcCambioAt<3000||Date.now()-gcRestAt<2500)return;
  gcRestAt=Date.now();
- const sym=mt5ActiveSymbol, asset=currentAssetKey;
+ const sym=sorgente==='mt5'?mt5ActiveSymbol:capitalWsPrimaryEpic, asset=currentAssetKey;
  gcRichiestaInCorso=true;
  let bar=null;
- try{ bar=await gcUltimaBarraMt5(sym); }finally{ gcRichiestaInCorso=false; }
- if(!bar||sym!==mt5ActiveSymbol||asset!==currentAssetKey||csvLibrary[0]!==file)return;
+ try{ bar=sorgente==='mt5'?await gcUltimaBarraMt5(sym):await gcUltimaBarraCapital(sym); }finally{ gcRichiestaInCorso=false; }
+ if(!bar||asset!==currentAssetKey||csvLibrary[0]!==file||gcSorgente()!==sorgente)return;
+ if(sorgente==='mt5'&&sym!==mt5ActiveSymbol)return;
+ if(sorgente==='capital'&&sym!==capitalWsPrimaryEpic)return;
  const tfMs=(currentTF||1)*60000;
  const L=file.rows[file.rows.length-1];
  const lB=Math.floor(parseDateTime(L.date)/tfMs)*tfMs;
@@ -31941,17 +31965,25 @@ async function guardianoCandeleMt5(){
  // --- Da qui il grafico e' indietro rispetto a MT5: si corregge e si rimette in piedi tutto. ---
  const motivi=[];
  if(chartFeedSuspended&&gcSospesoDa&&Date.now()-gcSospesoDa>=30000){ chartFeedSuspended=false; motivi.push('cambio asset rimasto appeso'); }
- if(mt5CandleFrozen||mt5CandleRolloverResyncInProgress){ mt5CandleFrozen=false; mt5CandleRolloverResyncInProgress=false; motivi.push('pausa di fine candela rimasta accesa'); }
- if(!mt5RefreshTimer){ startMt5RefreshTimer(); motivi.push('timer di aggiornamento ripartito'); }
- // L'orologio del servizio e' avanti rispetto a questo dispositivo: lo si impara dalla barra.
- if(mt5Adesso()<bar.atMs){ mt5ScartoOrologioMs=bar.atMs+500-Date.now(); motivi.push('orologio riallineato a MT5'); }
- // Canale tick chiuso, o aperto ma senza un prezzo vero da oltre 5 s mentre MT5 si muove: si riapre.
- const wsMorto=!mt5FeedWs||mt5FeedWs.readyState!==WebSocket.OPEN||!lastMt5RealTickAt||(mt5Adesso()-lastMt5RealTickAt)>5000;
- if(wsMorto&&(Date.now()-mt5StreamReconnectAttemptAt)>8000){ mt5StreamReconnectAttemptAt=Date.now(); try{ disconnectMt5Stream(); connectMt5Stream(sym); }catch(e){} motivi.push('canale prezzi riaperto'); }
+ if(sorgente==='mt5'){
+   if(mt5CandleFrozen||mt5CandleRolloverResyncInProgress){ mt5CandleFrozen=false; mt5CandleRolloverResyncInProgress=false; motivi.push('pausa di fine candela rimasta accesa'); }
+   if(!mt5RefreshTimer){ startMt5RefreshTimer(); motivi.push('timer di aggiornamento ripartito'); }
+   // L'orologio del servizio e' avanti rispetto a questo dispositivo: lo si impara dalla barra.
+   if(mt5Adesso()<bar.atMs){ mt5ScartoOrologioMs=bar.atMs+500-Date.now(); motivi.push('orologio riallineato a MT5'); }
+   // Canale tick chiuso, o aperto ma senza un prezzo vero da oltre 5 s mentre MT5 si muove: si riapre.
+   const wsMorto=!mt5FeedWs||mt5FeedWs.readyState!==WebSocket.OPEN||!lastMt5RealTickAt||(mt5Adesso()-lastMt5RealTickAt)>5000;
+   if(wsMorto&&(Date.now()-mt5StreamReconnectAttemptAt)>8000){ mt5StreamReconnectAttemptAt=Date.now(); try{ disconnectMt5Stream(); connectMt5Stream(sym); }catch(e){} motivi.push('canale prezzi riaperto'); }
+ }else{
+   // Pausa di fine candela rimasta accesa oltre 20 s (ricaricamento dello storico mai tornato).
+   if((liveCandleFrozen||candleRolloverResyncInProgress)&&Date.now()-candleRolloverResyncAt>20000){ liveCandleFrozen=false; candleRolloverResyncInProgress=false; motivi.push('pausa di fine candela rimasta accesa'); }
+   if(!liveRefreshTimer){ startLiveRefreshTimer(); motivi.push('timer di aggiornamento ripartito'); }
+   const wsMorto=!capitalWs||capitalWs.readyState!==WebSocket.OPEN||!lastLiveTickAt||(Date.now()-lastLiveTickAt)>5000;
+   if(wsMorto&&(Date.now()-liveStreamReconnectAttemptAt)>8000){ liveStreamReconnectAttemptAt=Date.now(); try{ disconnectCapitalStream(); refreshLiveStreamSubscriptions(); }catch(e){} motivi.push('stream Capital.com riaperto'); }
+ }
  if(bB===lB){
    L.close=bar.close; if(bar.high>L.high)L.high=bar.high; if(bar.low<L.low)L.low=bar.low;
    gcFuoriOrario=0;
- }else if(bB>lB&&bB<=mt5Adesso()+5000){
+ }else if(bB>lB&&bB<=(sorgente==='mt5'?mt5Adesso():Date.now())+5000){
    file.rows.push({date:new Date(bB).toISOString(),open:bar.open,high:bar.high,low:bar.low,close:bar.close,volume:bar.vol});
    gcFuoriOrario=0; motivi.push('candela nuova aggiunta');
  }else{
@@ -31959,20 +31991,21 @@ async function guardianoCandeleMt5(){
    L.close=bar.close; if(bar.close>L.high)L.high=bar.close; if(bar.close<L.low)L.low=bar.close;
    gcFuoriOrario++;
    motivi.push('orario barra '+new Date(bB).toISOString().slice(11,16)+' / grafico '+new Date(lB).toISOString().slice(11,16));
-   if(gcFuoriOrario>=3&&Date.now()-gcReloadAt>30000){ gcReloadAt=Date.now(); gcFuoriOrario=0; motivi.push('storico ricaricato'); try{ loadLiveHistoryFromMt5(currentAssetKey); }catch(e){} }
+   if(gcFuoriOrario>=3&&Date.now()-gcReloadAt>30000){ gcReloadAt=Date.now(); gcFuoriOrario=0; motivi.push('storico ricaricato'); try{ if(sorgente==='mt5')loadLiveHistoryFromMt5(currentAssetKey); else loadLiveHistoryFromCapital(currentAssetKey); }catch(e){} }
  }
- lastMt5TickPrice=bar.close;
+ if(sorgente==='mt5')lastMt5TickPrice=bar.close;
+ else{ lastPrimaryEpicPrice=bar.close; lastPrimaryEpicPriceAsset=currentAssetKey; livePriceByAsset[currentAssetKey]=bar.close; }
  try{
    rebuildBaseRowsFromLibrary();
    if(followLatest)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
    rebuildRows();
    if(followLatest)viewEnd=idx;
-   lastMt5ChartUpdateAt=Date.now();
+   if(sorgente==='mt5')lastMt5ChartUpdateAt=Date.now(); else lastChartUpdateAt=Date.now();
    evaluate(); checkPendingOrders(); update(); draw();
  }catch(e){}
  gcStato=''; // la prossima volta si riparte dal nuovo stato
- gcLog('prezzo '+bar.close+(motivi.length?(' — '+motivi.join(', ')):''));
- if(!gcIncidente){ gcIncidente=true; try{ $('status').textContent='🔧 Il flusso dei prezzi MT5 si era fermato: candela riallineata e aggiornamento ripreso da solo.'; }catch(e){} }
+ gcLog('['+sorgente+'] prezzo '+bar.close+(motivi.length?(' — '+motivi.join(', ')):''));
+ if(!gcIncidente){ gcIncidente=true; try{ $('status').textContent='🔧 Il flusso dei prezzi '+(sorgente==='mt5'?'MT5':'Capital.com')+' si era fermato: candela riallineata e aggiornamento ripreso da solo.'; }catch(e){} }
 }
 setInterval(()=>{ guardianoCandeleMt5().catch(()=>{ gcRichiestaInCorso=false; }); },1000);
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ gcCambioAt=0; gcRestAt=0; guardianoCandeleMt5().catch(()=>{}); } });
