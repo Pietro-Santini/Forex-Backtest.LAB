@@ -2620,7 +2620,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 <div class="cards">
  <div class="panel"><div class="label">Margine libero</div><div id="mMargin" class="value">—</div></div>
  <div class="panel"><div class="label">Ultimo trade chiuso</div><div id="mLast" class="value">—</div></div>
- <div class="panel"><div class="label">Capitale</div><div id="mCapital" class="value" title="Capitale + P/L flottante delle posizioni attualmente aperte, aggiornato in tempo reale (come l'Equity in MT5) — non solo il saldo dei trade già chiusi.">€10.000</div></div>
+ <div class="panel"><div class="label">Capitale</div><div id="mCapital" class="value" title="Capitale + P/L flottante delle posizioni attualmente aperte, aggiornato in tempo reale (come l'Equity in MT5) — non solo il saldo dei trade già chiusi.">€10.000</div><div id="mCapitalFonte" class="sub" style="font-size:10.5px;margin-top:3px;line-height:1.3"></div></div>
  <div class="panel"><div class="label">P/L</div><select class="dashPeriodo" data-dash="pl" title="Periodo su cui calcolare questo valore"><option value="tutto">tutto lo storico</option><option value="giorno">oggi</option><option value="settimana">questa settimana</option><option value="mese">questo mese</option><option value="intervallo">da… a…</option></select><div class="dashDate" data-dash-date="pl"><input type="date" data-dash-da="pl"><input type="date" data-dash-a="pl"></div><div id="mPL" class="value">€0</div></div>
  <div class="panel"><div class="label">Win rate</div><div id="mWR" class="value">—</div></div>
  <div class="panel"><div class="label">Loss rate</div><div id="mLR" class="value">—</div></div>
@@ -8596,6 +8596,7 @@ function update(){
  mEl.title=`Equity ${euro(eq)} • Margine usato ${euro(used)}`;
  // Collegati a MT5 (sessione Live normale): il riquadro mostra i dati VERI del conto MT5.
  if(!applyMt5AccountStatsToPanel())clearMt5AccountStatsTitles();
+ try{ mostraFonteCapitale(); }catch(e){}
 
  // Tabella posizioni aperte: mostra le posizioni di TUTTE E 4 LE SESSIONI insieme (non solo
  // quella attiva ora), con colonne "Sessione" e "Asset" dedicate — così si vede sempre a colpo
@@ -26478,13 +26479,40 @@ function mt5StatsActive(){
  try{ return !!(mt5Connected && liveModeActive && (!isPropFirmMode || pfRealMt5DataReady()) && mt5AccountInfo && Number.isFinite(Number(mt5AccountInfo.equity))); }catch(e){ return false; }
 }
 var _mt5AccountInfoInFlight=false;
+var mt5AccountInfoErrore=null;
 async function fetchMt5AccountInfo(){
  if(_mt5AccountInfoInFlight)return; // su un PC lento la risposta può tardare: mai richieste accavallate
  _mt5AccountInfoInFlight=true;
  try{
    const r=await fetchMt5WithTimeout('/account',{method:'GET'},8000);
-   if(r.ok&&r.data&&Number.isFinite(Number(r.data.equity))){ mt5AccountInfo=r.data; }
+   if(r.ok&&r.data&&Number.isFinite(Number(r.data.equity))){ mt5AccountInfo=r.data; mt5AccountInfoErrore=null; }
+   else mt5AccountInfoErrore=(r&&r.message)||'risposta non valida';
  }finally{ _mt5AccountInfoInFlight=false; }
+}
+// SEGNALATO: "collegato a MT5 il capitale e' 9.980 mentre su MT5 il bilancio e' 9.540, senza
+// posizioni aperte". Il riquadro mostrava il capitale SIMULATO dell'app ogni volta che una delle
+// condizioni per usare i dati veri non era vera (sessione Storico, MT5 in sola lettura, Prop Firm,
+// dati del conto non arrivati) - senza dirlo. Ora sotto il numero c'e' scritto da dove viene.
+function mostraFonteCapitale(){
+ const el=$('mCapitalFonte'); if(!el)return;
+ let t='', colore='#8b96a5';
+ if(mt5StatsActive()){
+  t='🖥️ Conto MT5 reale '+(mt5AccountInfo.login||'')+' · saldo '+mt5Money(Number(mt5AccountInfo.balance));
+  colore='#5eead4';
+ }else if(isPropFirmMode){
+  t='🛡️ Capitale della Challenge Prop Firm (simulato)';
+ }else if(!liveModeActive){
+  t='📼 Simulato: sessione Storico'+((mt5Connected||mt5MonitorOnly)?' (il conto MT5 vale solo in Live)':'');
+ }else if(mt5MonitorOnly){
+  t='⚠️ Simulato: MT5 in sola lettura (grafico e ordini su Capital.com). Ricollega MT5 per vedere il conto vero';
+  colore='#e8c34a';
+ }else if(mt5Connected){
+  t='⚠️ Simulato: i dati del conto MT5 non arrivano'+(mt5AccountInfoErrore?(' ('+mt5AccountInfoErrore+')'):' (in attesa…)');
+  colore='#e8c34a';
+ }else{
+  t='Simulato (MT5 non collegato)';
+ }
+ if(el.textContent!==t){ el.textContent=t; el.style.color=colore; el.title=t; }
 }
 async function fetchMt5AccountHistory(){
  if(mt5AccountHistoryInFlight)return;
