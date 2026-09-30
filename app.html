@@ -8191,34 +8191,50 @@ function decimaliAsset(asset,v){
 let fblPremutoIn=null;
 document.addEventListener('pointerdown',e=>{ fblPremutoIn=e.target; },true);
 ['pointerup','pointercancel'].forEach(ev=>document.addEventListener(ev,()=>{ setTimeout(()=>{ fblPremutoIn=null; },0); },true));
-function aggiornaTbody(tbody,html){
- if(!tbody)return;
+// Allinea l'elemento esistente "a" a quello nuovo "b" SENZA ricrearlo: attributi, testi e figli uno
+// per uno, scendendo nei figli finche' la struttura coincide. Un pulsante resta lo STESSO elemento
+// anche se cambia il suo testo o il suo title: niente lampeggio, niente clic perso. Si ricrea solo
+// la parte la cui struttura e' cambiata davvero.
+function fblMorphAttributi(a,b){
+ for(const at of Array.from(b.attributes)){ if(a.getAttribute(at.name)!==at.value)a.setAttribute(at.name,at.value); }
+ for(const at of Array.from(a.attributes)){ if(!b.hasAttribute(at.name))a.removeAttribute(at.name); }
+ if(a.tagName==='BUTTON'||a.tagName==='INPUT')a.disabled=b.hasAttribute('disabled');
+}
+function fblMorphFigli(a,b){
+ const ac=Array.from(a.childNodes), bc=Array.from(b.childNodes);
+ const n=Math.min(ac.length,bc.length);
+ for(let i=0;i<n;i++){
+  const x=ac[i], y=bc[i];
+  if(x.nodeType!==y.nodeType||(x.nodeType===1&&x.tagName!==y.tagName)){ a.replaceChild(y,x); continue; }
+  if(x.nodeType===3||x.nodeType===8){ if(x.nodeValue!==y.nodeValue)x.nodeValue=y.nodeValue; continue; }
+  if(x.nodeType!==1)continue;
+  if(x.outerHTML===y.outerHTML)continue;
+  fblMorphAttributi(x,y);
+  fblMorphFigli(x,y);
+ }
+ for(let i=ac.length-1;i>=n;i--)a.removeChild(ac[i]);          // righe/nodi in meno: via dal fondo
+ for(let i=n;i<bc.length;i++)a.appendChild(bc[i]);              // righe/nodi in piu': aggiunti in fondo
+}
+function fblMorphHtml(el,html){
+ if(!el)return;
  html=String(html||'');
- if(tbody.__fblHtml===html)return;
- if(fblPremutoIn&&tbody.contains(fblPremutoIn)){
-  clearTimeout(tbody.__fblRitardo);
-  tbody.__fblRitardo=setTimeout(()=>aggiornaTbody(tbody,html),120);
+ if(el.__fblHtml===html)return;
+ // Mentre si tiene premuto dentro (su un pulsante) non si tocca niente: si riprova appena rilasciato.
+ if(fblPremutoIn&&el.contains(fblPremutoIn)){
+  clearTimeout(el.__fblRitardo);
+  el.__fblRitardo=setTimeout(()=>fblMorphHtml(el,html),120);
   return;
  }
- tbody.__fblHtml=html;
- const tpl=document.createElement('tbody');
+ el.__fblHtml=html;
+ const tpl=document.createElement(el.tagName==='TBODY'?'tbody':'div');
  tpl.innerHTML=html;
- const nuove=Array.from(tpl.children), vecchie=Array.from(tbody.children);
- if(nuove.length!==vecchie.length){ tbody.innerHTML=html; return; }
- for(let i=0;i<nuove.length;i++){
-  const a=vecchie[i], b=nuove[i];
-  if(a.outerHTML===b.outerHTML)continue;
-  if(a.tagName!==b.tagName||a.children.length!==b.children.length){ a.replaceWith(b); continue; }
-  if(a.className!==b.className)a.className=b.className;
-  for(let j=0;j<b.children.length;j++){
-   const ca=a.children[j], cb=b.children[j];
-   if(ca.outerHTML===cb.outerHTML)continue;
-   if(ca.innerHTML!==cb.innerHTML)ca.innerHTML=cb.innerHTML;
-   for(const at of Array.from(cb.attributes)){ if(ca.getAttribute(at.name)!==at.value)ca.setAttribute(at.name,at.value); }
-   for(const at of Array.from(ca.attributes)){ if(!cb.hasAttribute(at.name))ca.removeAttribute(at.name); }
-  }
- }
+ fblMorphFigli(el,tpl);
 }
+// Tabelle (posizioni aperte, posizioni MT5, ordini pendenti, journal). Prima, quando una riga
+// compariva o spariva (un ordine pendente attivato o cancellato, una posizione chiusa) l'intera
+// tabella veniva ricreata e tutti i pulsanti lampeggiavano: ora anche in quel caso si tocca solo
+// cio' che e' cambiato.
+function aggiornaTbody(tbody,html){ fblMorphHtml(tbody,html); }
 function fmtPriceA(v,asset){
  if(v==null||!Number.isFinite(Number(v)))return '—';
  return Number(v).toFixed(decimaliAsset(asset,v));
@@ -9237,7 +9253,7 @@ function update(){
  const pagBar=$('journalPagination');
  if(pagBar){
    if(journalTotalPages<=1){
-     pagBar.innerHTML='';
+     fblMorphHtml(pagBar,'');
    }else{
      const pageBtn=(p)=>`<button type="button" class="miniBtn journalPageBtn${p===journalCurrentPage?' active':''}" data-journal-page="${p}" ${p===journalCurrentPage?'disabled':''}>${p}</button>`;
      const windowSize=7;
@@ -9256,7 +9272,9 @@ function update(){
      }
      html+=`<button type="button" class="miniBtn" data-journal-page="${journalCurrentPage+1}" ${journalCurrentPage>=journalTotalPages?'disabled':''} title="Pagina successiva">Succ. ›</button>`;
      html+=`<span class="hint" style="margin-left:6px">Pagina ${journalCurrentPage} di ${journalTotalPages} (${journalRowsNewestFirst.length} operazioni)</span>`;
-     pagBar.innerHTML=html;
+     // RICHIESTO: i pulsanti di pagina (numeri, Prec., Succ.) lampeggiavano: la barra veniva
+     // riscritta da zero a ogni aggiornamento dei prezzi. Ora si tocca solo se cambia qualcosa.
+     fblMorphHtml(pagBar,html);
    }
  }
  scheduleSave();
