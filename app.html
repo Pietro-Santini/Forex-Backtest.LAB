@@ -16875,6 +16875,8 @@ function activatePendingOrder(p){
    // "Congela" lo SL di apertura per l'R/R (vedi nota identica in openMarketTrade()).
    rrSl:p.sl
  };
+ // Pendente nato da un segnale: la posizione eredita sala, gruppo e target (strategia, Journal).
+ ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
  positions.push(pos);
  active=pos;
  playOrderSound();
@@ -16909,13 +16911,15 @@ function checkPendingOrders(){
 // ogni trascinamento delle sue linee su grafico si specchia sul conto vero (setTradeLevel ->
 // syncMt5PendingOrderLevels). Se scatta per davvero, fetchMt5Orders() lo rileva e lo adotta come
 // posizione standard.
-async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset){
- if(!asset)return $('status').textContent='Seleziona prima un ASSET.';
- if(!(lots>0))return $('status').textContent='Lottaggio non valido.';
+async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset,opz){
+ opz=opz||{};
+ if(!asset){ $('status').textContent='Seleziona prima un ASSET.'; return null; }
+ if(!(lots>0)){ $('status').textContent='Lottaggio non valido.'; return null; }
  const details=`${side} ${kind} ${asset} a ${fmtPrice(entry)} — ${lots.toFixed(2)} lot`+
    (Number.isFinite(sl)?` — SL ${fmtPrice(sl)}`:'')+
    (Number.isFinite(tp)?` — TP ${fmtPrice(tp)}`:'');
- if(!await appConfirm(`Confermi la creazione di un ORDINE PENDENTE VERO su MT5?\n\n${details}\n\nResterà in attesa sul conto collegato finché il prezzo non lo raggiunge: non è una simulazione.`))return;
+ // Dai segnali la conferma e' gia' avvenuta (o l'apertura e' automatica): niente secondo popup.
+ if(!opz.senzaConferma&&!await appConfirm(`Confermi la creazione di un ORDINE PENDENTE VERO su MT5?\n\n${details}\n\nResterà in attesa sul conto collegato finché il prezzo non lo raggiunge: non è una simulazione.`))return null;
  $('status').textContent='Invio ordine pendente reale a MT5 in corso…';
  const result=await fetchMt5WithTimeout('/order/pending',{
    method:'POST',headers:{'Content-Type':'application/json'},
@@ -16931,15 +16935,20 @@ async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset){
      // Stessa protezione anti-race di placeRealMt5Order (vedi fetchMt5Orders): evita che questo
      // ordine appena creato risulti "cancellato altrove" per puro timing se una risposta di
      // polling partita prima della sua creazione arriva dopo.
-     mt5AddedAt:Date.now()
+     mt5AddedAt:Date.now(),
+     ...(opz.meta||{})
    });
+   // Su MT5 la posizione che nascera' da questo ordine ha lo STESSO numero: la sala resta legata.
+   if(opz.meta&&ticket!=null)try{ mt5RicordaSegnale(ticket,opz.meta); }catch(e){}
    $('status').textContent=`🟢 Ordine pendente reale creato su MT5: ${side} ${kind} ${asset} a ${fmtPrice(entry)} (ticket ${ticket}).`;
    playOrderSound();
    draw();update();
- }else{
-   $('status').textContent='⚠️ Ordine pendente reale non creato: '+result.message;
+   fetchMt5Orders();
+   return ticket==null?true:ticket;
  }
+ $('status').textContent='⚠️ Ordine pendente reale non creato: '+result.message;
  fetchMt5Orders();
+ return null;
 }
 // Richiesto esplicitamente: cancellando un ordine pendente (dalla tabella, sia locale che reale
 // su MT5) le caselle di composizione Entry/SL/TP dell'ordine pendente si svuotano, esattamente
@@ -22062,7 +22071,7 @@ function tgRenderPannello(){
   // Il riepilogo di cosa e' stato aperto davvero (prezzi reali del piano, non quelli della sala).
   if(voce.stato==='eseguito'&&voce.eseguito){
    const e=voce.eseguito;
-   card.appendChild(tgRiga('✅ Aperto: '+e.side+' '+e.sym+' · '+(voce.aperte||0)+(voce.aperte===1?' posizione':' posizioni')
+   card.appendChild(tgRiga((e.pendente?('⏳ Ordini '+e.kind+' a '+tgFmt(e.entry)+': '):'✅ Aperto: ')+e.side+' '+e.sym+' · '+(voce.aperte||0)+(e.pendente?(voce.aperte===1?' ordine pendente':' ordini pendenti'):(voce.aperte===1?' posizione':' posizioni'))
      +' da '+Number(e.lotti||0).toFixed(2)+' lot'+(e.reale?' su MT5':' simulate')
      +' · SL '+tgFmt(e.sl)+(e.slCalcolato?' (calcolato dall\'app: la sala non l\'ha dato)':'')
      +(e.tp&&e.tp.length?(' · TP '+e.tp.map(tgFmt).join(' / ')+(e.tpCalcolato?' (calcolato dall\'app: la sala non l\'ha dato)':'')):''),'tgCardRiga'));
@@ -22513,6 +22522,8 @@ function tgStrategiaRiaggancia(id,st){
 // spariva in silenzio proprio mentre serviva.
 const TG_STRATEGIA_SCADENZA_MS=30*24*3600*1000;   // un mese: oltre, e' comunque roba vecchia
 function tgStrategiaDaButtare(id,st){
+ // Ordini pendenti del segnale ancora in attesa: le posizioni devono ancora nascere.
+ if((pendingOrders||[]).some(p=>p&&p.tgGruppo===id))return false;
  // Finche' non si e' MAI visto il conto in questa sessione non si butta niente: non sapere non
  // e' sapere che non c'e'.
  const tickets=(st.tickets||[]).map(String);
@@ -22712,7 +22723,8 @@ function tgAutoPerditaOggi(){
 }
 // Posizioni aperte adesso, in tutto e per una singola sala.
 function tgAutoAperte(sala){
- const vive=(positions||[]).filter(p=>p&&p.tgSala);
+ // Anche gli ordini pendenti in attesa contano: ognuno e' una posizione che puo' nascere da sola.
+ const vive=(positions||[]).filter(p=>p&&p.tgSala).concat((pendingOrders||[]).filter(p=>p&&p.tgSala));
  if(sala==null)return vive.length;
  return vive.filter(p=>String(p.tgSala)===String(sala)).length;
 }
@@ -23644,10 +23656,27 @@ function tgStopCalcolato(side,entry,n,importoTot,sym){
 }
 function tgPiano(seg,sym,pctForzata){
  const side=String(seg.direzione||'').toUpperCase();
- const entry=currentPrice();
+ let entry=currentPrice();
  let sl=Number(seg.stop_loss);
  if(side!=='BUY'&&side!=='SELL')return {problemi:['il segnale non dice se comprare o vendere']};
  if(!Number.isFinite(entry))return {problemi:['il grafico non ha ancora un prezzo per '+sym]};
+ // ORDINI LIMITE E STOP (segnalato: "ancora non funzionano"). La sala scrive "BUY LIMIT / ENTRY
+ // 4190" o "SELL-LIMIT @1.90699": prima si apriva comunque A MERCATO al prezzo di adesso. Ora
+ // diventa un ORDINE PENDENTE al prezzo della sala, e il rischio si calcola da quel prezzo.
+ //  - LIMIT: BUY sotto il prezzo attuale, SELL sopra. Se il prezzo e' GIA' oltre l'entrata dalla
+ //    parte buona, un limite non si puo' piu' piazzare: si apre a mercato, a un prezzo migliore
+ //    di quello della sala (sempre che lo stop sia ancora dalla parte giusta).
+ //  - STOP: BUY sopra il prezzo, SELL sotto. Se il prezzo l'ha gia' superata la rottura e' gia'
+ //    avvenuta: non la si insegue, il segnale si scarta.
+ let pendente=false, kind=null, notaEntrata=null;
+ const tipoOrd=String(seg.tipo_ordine||'').toLowerCase();
+ if((tipoOrd==='limit'||tipoOrd==='stop')&&tgC(seg.entrata)){
+  const e=Number(seg.entrata);
+  const piazzabile=tipoOrd==='limit'?(side==='BUY'?e<entry:e>entry):(side==='BUY'?e>entry:e<entry);
+  if(piazzabile){ pendente=true; kind=tipoOrd.toUpperCase(); entry=e; }
+  else if(tipoOrd==='limit'){ notaEntrata='il prezzo è già oltre l\'entrata limite della sala ('+tgFmt(e)+'): aperto a mercato, a un prezzo migliore'; }
+  else return {problemi:['entrata STOP a '+tgFmt(e)+' già superata dal prezzo ('+tgFmt(entry)+'): la rottura è già avvenuta, non la inseguo']};
+ }
  let slCalcolato=false, lottiFissi=null;
  if(!tgC(seg.stop_loss)){
   const tuttiTp=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!validateTradeLevel(side,entry,NaN,v));
@@ -23698,6 +23727,7 @@ function tgPiano(seg,sym,pctForzata){
  let margine=0;
  try{ margine=marginForLots(lotti,entry,sym)*n; }catch(e){}
  return {side,entry,sl,tp,scartati,n,lotti,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,tpCalcolato,
+   pendente,kind,notaEntrata,
    rr:(tp.length&&Math.abs(entry-sl)>0)?Math.abs(tp[0]-entry)/Math.abs(entry-sl):null,
    rischioRealePct:(saldo>0?rischioReale/saldo*100:null)};
 }
@@ -23755,7 +23785,9 @@ async function tgEseguiSegnale(voce,opzioni){
  }
  const r=[];
  r.push((reale?'ORDINI VERI su MT5':'Posizioni simulate')+': '+p.n+(p.n===1?' posizione ':' posizioni separate ')+p.side+' su '+sym);
- r.push('Entrata: il prezzo di adesso, '+tgFmt(p.entry)
+ if(p.pendente)r.push('ORDINE '+p.kind+' (pendente) a '+tgFmt(p.entry)+': si apre da solo quando il prezzo ci arriva.');
+ else if(p.notaEntrata)r.push('Nota: '+p.notaEntrata+'.');
+ if(!p.pendente)r.push('Entrata: il prezzo di adesso, '+tgFmt(p.entry)
    +(tgC(seg.entrata)?(' — la sala diceva '+tgFmt(seg.entrata)+(tgC(seg.entrata_max)?('–'+tgFmt(seg.entrata_max)):'')):''));
  r.push('Stop loss: '+tgFmt(p.sl)+' su tutte'+(p.slCalcolato
    ?(' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Con '+p.lotti.toFixed(2)+' lot per posizione, se scatta si perde al massimo il '+p.pct.toFixed(2)+'% scelto.'):''));
@@ -23809,6 +23841,7 @@ async function tgEseguiSegnale(voce,opzioni){
  // che fa comparire la sigla SS nel Trade Journal.
  const gruppo='sg'+Date.now().toString(36)+Math.floor(Math.random()*1000).toString(36);
  let aperte=0;
+ const ticketPendenti=[];
  for(let i=0;i<p.n;i++){
   const tp=(i<p.tp.length)?p.tp[i]:null;
   // L'asset a grafico e' quello su cui partono gli ordini: se nel frattempo e' cambiato (un
@@ -23818,11 +23851,25 @@ async function tgEseguiSegnale(voce,opzioni){
    voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
    break;
   }
+  const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:String(voce.chat||''),tgSegnaleId:voce.id};
+  // Ordine limite/stop della sala: ordine PENDENTE al suo prezzo (vero su MT5, simulato altrimenti).
+  if(p.pendente){
+   if(reale){
+    const t=await placeRealMt5PendingOrder(p.side,p.kind,p.entry,p.sl,tp,p.lotti,sym,{senzaConferma:true,meta});
+    if(!t)break;
+    if(t!==true)ticketPendenti.push(String(t));
+   }else{
+    pendingOrders.push({id:Date.now()+Math.random(),asset:sym,side:p.side,kind:p.kind,entry:p.entry,
+     sl:p.sl,tp:Number.isFinite(tp)?tp:null,lots:p.lotti,...meta});
+    try{ if(liveModeActive)refreshLiveStreamSubscriptions(); }catch(e){}
+   }
+   aperte++;
+   continue;
+  }
   const prima=positions.length;
   let esito;
   try{
-   esito=await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,
-    meta:{tgGruppo:gruppo,tgTpIndice:i+1,tgSala:String(voce.chat||''),tgSegnaleId:voce.id}});
+   esito=await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta});
   }
   catch(e){ console.log('[Segnali] apertura fallita:',e); break; }
   if(esito===false)break;
@@ -23836,7 +23883,7 @@ async function tgEseguiSegnale(voce,opzioni){
   const mie=positions.filter(x=>x&&x.tgGruppo===gruppo);
   tgStrategie[gruppo]={sala:String(voce.chat||''),sym,side:p.side,entry:p.entry,
     tps:p.tp.slice(0,aperte),regole:regole.filter(reg=>reg.quando<=aperte),fatte:[],creato:Date.now(),
-    tickets:mie.map(x=>x.mt5Ticket).filter(t=>t!=null).map(String),
+    tickets:mie.map(x=>x.mt5Ticket).filter(t=>t!=null).map(String).concat(ticketPendenti),
     ids:mie.map(x=>x.id).filter(v=>v!=null),
     // Pareggio anticipato: "fatto" resta false finche' non scatta, e una volta scattato non si
     // ripete (lo stop non deve tornare indietro a ogni candela).
@@ -23850,11 +23897,12 @@ async function tgEseguiSegnale(voce,opzioni){
  if(aperte){
   voce.automatico=!!(opzioni&&opzioni.automatico);
   voce.eseguito={il:Date.now(),sym,side:p.side,lotti:p.lotti,sl:p.sl,slCalcolato:!!p.slCalcolato,
-    tp:p.tp.slice(0,aperte),tpCalcolato:!!p.tpCalcolato,reale:!!mt5Connected};
+    tp:p.tp.slice(0,aperte),tpCalcolato:!!p.tpCalcolato,reale:!!mt5Connected,
+    pendente:!!p.pendente,kind:p.kind||null,entry:p.entry};
  }
  tgAggiornaPulsante(); tgRenderPannello();
  $('status').textContent=aperte
-  ? ('📡 Segnale di '+String(voce.chat||'')+': aperte '+aperte+(aperte===1?' posizione ':' posizioni ')+p.side+' su '+sym+' — SL '+tgFmt(p.sl)+(p.tp.length?(', TP '+p.tp.slice(0,aperte).map(tgFmt).join(' / ')):''))
+  ? ('📡 Segnale di '+String(voce.chat||'')+': '+(p.pendente?('piazzati '+aperte+(aperte===1?' ordine ':' ordini ')+p.kind+' a '+tgFmt(p.entry)+' '):('aperte '+aperte+(aperte===1?' posizione ':' posizioni ')))+p.side+' su '+sym+' — SL '+tgFmt(p.sl)+(p.tp.length?(', TP '+p.tp.slice(0,aperte).map(tgFmt).join(' / ')):''))
   : ('📡 Segnale di '+String(voce.chat||'')+': nessuna posizione aperta.');
  if(aperte&&aperte<p.n){
   const msg='Attenzione: erano previste '+p.n+' posizioni ma ne sono state aperte '+aperte+'. Mi sono fermato alla prima che non e\' andata a buon fine — controlla il conto prima di riprovare.';
@@ -26241,6 +26289,7 @@ async function fetchMt5Orders(){
            start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
            marginUsed:0,mt5Ticket:triggered.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
          };
+         ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
          pos.rrSl=pos.sl;
          mt5AllineaApertura(pos,triggered);
          positions.push(pos);
