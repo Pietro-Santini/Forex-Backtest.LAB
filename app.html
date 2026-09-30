@@ -89,11 +89,25 @@ input,select,button{width:100%;padding:10px;border-radius:8px;border:1px solid #
 .quickLotCalcBtn{width:300px;max-width:60vw;height:30px;border-radius:6px;background:#1f7a52;border:1px solid #2a9d6d;color:#eafff3;font-size:12px;font-weight:800;letter-spacing:.4px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;font-family:inherit}
 .quickLotCalcBtn:hover{background:#238a5c}
 .quickTradeControlsRow{display:flex;gap:6px}
-@media(max-width:700px){
- .quickTradeCluster{width:calc(100% - 16px);left:8px;right:8px;transform:none}
- .quickTradeBar{width:100%;max-width:none}
- .quickTradeSlTpRow,.quickTradeRiskBox,.quickLotCalcBtn{width:100%;max-width:none}
-}
+/* GRAFICO STRETTO (telefono, tablet, finestra piccola) - RICHIESTO: "i pulsanti si sovrappongono
+   (la barra operazioni copre timeframe, schermo intero, PIP): ridimensiona in automatico". La classe
+   qtCompatto la mette qtAutoLayout (sotto i 900 px) in base alla larghezza VERA del grafico (non dello schermo): il
+   blocco diventa due righe strette (SELL/lotti/BUY, poi SL-TP / rischio / lottaggio) e qtAutoLayout
+   lo fa scendere sotto le righe di pulsanti in alto quando le toccherebbe. */
+.quickTradeCluster.qtCompatto{flex-direction:row;flex-wrap:wrap;justify-content:center;gap:4px;width:360px;max-width:calc(100% - 16px)}
+.quickTradeCluster.qtCompatto>.quickTradeBar{flex:0 0 100%;width:auto;max-width:280px;margin:0 auto;height:32px}
+.quickTradeCluster.qtCompatto .quickTradeLots{flex-basis:84px}
+.quickTradeCluster.qtCompatto>.quickTradeSlTpRow{flex:0 0 auto;width:auto;max-width:none;gap:4px}
+.quickTradeCluster.qtCompatto .quickTradeSlTpBtn{flex:0 0 54px;width:54px;height:26px;padding:0;font-size:10.5px}
+.quickTradeCluster.qtCompatto>.quickTradeRiskBox{flex:0 0 auto;width:auto;max-width:none;padding:0 6px;height:26px;gap:3px}
+.quickTradeCluster.qtCompatto>.quickTradeRiskBox input{width:30px}
+.quickTradeCluster.qtCompatto>.quickLotCalcBtn{flex:0 0 auto;width:auto;max-width:none;height:26px;padding:0 8px;font-size:10.5px;gap:4px;white-space:nowrap}
+.quickTradeCluster.qtCompatto>.quickTradeControlsRow{flex:0 0 100%;justify-content:center}
+.quickTradeCluster.qtCompatto .chartCornerBtn{width:28px;height:28px}
+/* Molto stretto (telefono in verticale): la scritta RISCHIO sparisce, resta la casella con il %. */
+.quickTradeCluster.qtStretto>.quickTradeRiskBox>span:first-child{display:none}
+/* I pulsanti in alto (asset, timeframe, schermo intero...) vanno a capo invece di uscire dal grafico. */
+.chartFloatControls.qtACapo{flex-wrap:wrap;right:8px}
 /* In schermo intero il blocco viene spostato dentro #chartFsSidebar (vedi
    moveQuickTradeClusterIntoSidebar), subito sotto gli strumenti di disegno: qui perde il
    posizionamento assoluto e diventa un blocco normale, largo quanto la sidebar. */
@@ -19095,10 +19109,13 @@ function moveDrawToolbarIntoSidebar(targetDoc){
  const toggleBtn=sidebar.nextElementSibling;
  if(toggleBtn&&toggleBtn.id==='fsSidebarToggleBtn'){
    toggleBtn.style.display='flex';
-   sidebar.classList.remove('collapsed');
-   toggleBtn.classList.remove('collapsed');
-   toggleBtn.textContent='◀';
-   toggleBtn.title='Nascondi gli strumenti di disegno';
+   // Schermo stretto (telefono in verticale): la barra laterale partirebbe larga il 40% dello
+   // schermo, sopra un grafico gia' stretto. Parte chiusa; la freccetta ▶ la riapre.
+   const chiusa=(targetDoc||document)===document&&window.innerWidth<600;
+   sidebar.classList.toggle('collapsed',chiusa);
+   toggleBtn.classList.toggle('collapsed',chiusa);
+   toggleBtn.textContent=chiusa?'▶':'◀';
+   toggleBtn.title=chiusa?'Mostra gli strumenti di disegno':'Nascondi gli strumenti di disegno';
  }
 }
 function restoreDrawToolbarHome(){
@@ -19148,7 +19165,14 @@ $('fsSidebarToggleBtn')?.addEventListener('click',toggleFsSidebarCollapsed);
 // inseriamo SUBITO DOPO quel toolbar una volta già spostato nella sidebar, così finisce
 // visivamente sotto di esso.
 let quickTradeClusterHomeParent=null, quickTradeClusterHomeNext=null;
+// RICHIESTO: su telefono e tablet la barra operazioni resta DENTRO al grafico anche in schermo intero,
+// come sul PC - nella barra laterale degli strumenti (larga al massimo il 40% di uno schermo gia'
+// stretto) finiva schiacciata e toglieva spazio al grafico.
+function qtSchermoPiccolo(){
+ try{ return window.innerWidth<=1024||(window.matchMedia&&matchMedia('(pointer:coarse)').matches); }catch(e){ return false; }
+}
 function moveQuickTradeClusterIntoSidebar(targetDoc){
+ if(qtSchermoPiccolo()&&(!targetDoc||targetDoc===document)){ restoreQuickTradeClusterHome(); setTimeout(qtAutoLayout,0); return; }
  const cluster=document.getElementById('quickTradeCluster')||(floatingDoc&&floatingDoc.getElementById('quickTradeCluster'));
  const sidebar=(targetDoc||document).getElementById('chartFsSidebar');
  if(!cluster||!sidebar)return;
@@ -19253,7 +19277,45 @@ function toggleMainChartFullscreen(){
    $('status').textContent='Il browser non supporta lo schermo intero.';
  }
 }
+// ===================== DISPOSIZIONE AUTOMATICA DELLA BARRA OPERAZIONI NEL GRAFICO =====================
+// Compatta sotto i 900 px di larghezza del grafico (molto stretta sotto i 400) e, se toccherebbe i
+// pulsanti in alto (asset, timeframe, schermo intero, indicatori, PIP...), scende sotto di loro.
+// Si ricalcola a ogni cambio di dimensione, schermo intero, e ogni secondo (costa pochi rettangoli):
+// cosi' segue anche i pulsanti che compaiono/spariscono (freccetta ›, DATA RANDOM in Storico...).
+function qtAutoLayout(){
+ try{
+   const cl=document.getElementById('quickTradeCluster')||(floatingDoc&&floatingDoc.getElementById('quickTradeCluster'));
+   if(!cl)return;
+   if(cl.closest('.chartFsSidebar')){ cl.classList.remove('qtCompatto','qtStretto'); cl.style.top=''; return; }
+   const host=cl.parentElement; if(!host||!host.getBoundingClientRect)return;
+   const hr=host.getBoundingClientRect();
+   if(!hr.width)return;
+   cl.classList.toggle('qtCompatto',hr.width<900);
+   cl.classList.toggle('qtStretto',hr.width<400);
+   ['chartFloatControls','chartFloatControlsExtra'].forEach(id=>{ const e=cl.ownerDocument.getElementById(id); if(e)e.classList.toggle('qtACapo',hr.width<900); });
+   const rc=cl.getBoundingClientRect();
+   const doc=cl.ownerDocument;
+   let top=8;
+   ['chartFloatControls','chartFloatControlsExtra'].forEach(id=>{
+     const box=doc.getElementById(id);
+     if(!box||!host.contains(box))return;
+     [...box.children].forEach(el=>{
+       const r=el.getBoundingClientRect();
+       if(!r.width||!r.height)return; // nascosto
+       if(r.right<=rc.left-4||r.left>=rc.right+4)return; // non si toccano in orizzontale
+       top=Math.max(top,Math.round(r.bottom-hr.top+6));
+     });
+   });
+   const t=top+'px';
+   if(cl.style.top!==t)cl.style.top=t;
+ }catch(e){}
+}
+window.addEventListener('resize',()=>requestAnimationFrame(qtAutoLayout));
+window.addEventListener('orientationchange',()=>setTimeout(qtAutoLayout,300));
+setInterval(qtAutoLayout,1000);
+setTimeout(qtAutoLayout,0);
 document.addEventListener('fullscreenchange',()=>{
+ setTimeout(qtAutoLayout,50);
  const wrap=document.getElementById('chartWrap');
  if(document.fullscreenElement===wrap){ moveDrawToolbarIntoSidebar(document); moveQuickTradeClusterIntoSidebar(document); moveResetViewIntoSidebar(document); movePipHistNavIntoSidebar(document); moveIndicatorsToolbarIntoSidebar(document); }
  else if(!floatingChartActive()){ restoreDrawToolbarHome(); restoreQuickTradeClusterHome(); restoreResetViewHome(); restorePipHistNavHome(); restoreIndicatorsToolbarHome(); }
