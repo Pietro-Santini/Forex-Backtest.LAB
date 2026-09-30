@@ -14511,6 +14511,7 @@ function draw(){
      ctx.restore();
    }
  }
+ try{ disegnaStatoMercato(ctx,w,h,pad,chartBg,lineColor); }catch(e){}
  updateDrawTextHint&&updateDrawTextHint();
 }
 // ANTEPRIMA DELL'AGGANCIO (richiesto esplicitamente: "mi fa vedere gia' in anteprima dove si va a
@@ -27801,6 +27802,7 @@ async function fetchCapitalMarketSpec(asset,epic){
    const b=await res.json();
    if(!res.ok||!b)return null;
    const ins=b.instrument||{}, snap=b.snapshot||{}, dr=b.dealingRules||{};
+   orariSalva(asset,ins.openingHours,snap.marketStatus);
    const partial={locked:true,instrType:String(ins.type||'')};
    const dec=Number(snap.decimalPlacesFactor);
    if(Number.isFinite(dec)&&dec>=0&&dec<=8){ partial.decimals=dec; partial.pipDigit=pipDigitForDecimals(dec,asset); }
@@ -32072,6 +32074,128 @@ function liveSessionPhaseAt(t){
  if(dm.min<LIVE_CAPITAL_UNTIL_MIN)return fblCapitalSeraAttiva()?'capital':'closed';
  return 'closed';
 }
+// ===================== MERCATO CHIUSO: SCRITTA E CONTO ALLA ROVESCIA =====================
+// RICHIESTO: "quando il mercato e' chiuso, in basso a destra nel grafico: 'Mercato chiuso' e tra
+// quanto apre, verificando a che ora apre e chiude QUELL'asset". Gli orari veri dello strumento
+// arrivano da Capital.com (GET /api/v1/markets/{epic}: instrument.openingHours, per giorno, e
+// snapshot.marketStatus), riletti ogni 6 ore e tenuti in memoria sul dispositivo. Se non ci sono
+// (Capital.com non collegato) si usa l'orario con cui l'app segue MT5 (lun-ven fino alle 22,
+// riapertura alle 00:00). Le crypto non chiudono mai.
+const ORARI_KEY='fbl_orari_asset';
+let orariAsset={};
+try{ orariAsset=JSON.parse(localStorage.getItem(ORARI_KEY)||'{}')||{}; }catch(e){ orariAsset={}; }
+function orariSalva(asset,oh,stato){
+ if(!asset||!oh||typeof oh!=='object')return;
+ const giorni={};
+ ['mon','tue','wed','thu','fri','sat','sun'].forEach(g=>{ if(Array.isArray(oh[g]))giorni[g]=oh[g].map(String); });
+ orariAsset[asset]={zona:String(oh.zone||'UTC'),giorni,stato:stato?String(stato):null,letto:Date.now()};
+ try{ localStorage.setItem(ORARI_KEY,JSON.stringify(orariAsset)); }catch(e){}
+}
+let orariRichiestaAt={};
+async function orariAggiorna(asset){
+ if(!asset||!capitalSessionTokens)return;
+ const o=orariAsset[asset];
+ if(o&&Date.now()-o.letto<6*3600000)return;
+ if(Date.now()-(orariRichiestaAt[asset]||0)<10*60000)return;
+ orariRichiestaAt[asset]=Date.now();
+ try{
+   const epic=await resolveCapitalEpic(asset);
+   if(!epic)return;
+   capitalMarketSpecAt[asset]=0;              // forza la rilettura della scheda (che salva anche gli orari)
+   await fetchCapitalMarketSpec(asset,epic);
+ }catch(e){}
+}
+// Scarto in minuti di un fuso rispetto a UTC in un certo istante (per zone diverse da UTC).
+function orariScartoZona(zona,t){
+ if(!zona||/^utc$/i.test(zona)||/^gmt$/i.test(zona))return 0;
+ try{
+   const f=new Intl.DateTimeFormat('en-US',{timeZone:zona,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+   const p={}; f.formatToParts(new Date(t)).forEach(x=>{ p[x.type]=x.value; });
+   const comeUtc=Date.UTC(+p.year,+p.month-1,+p.day,(+p.hour)%24,+p.minute);
+   return Math.round((comeUtc-t)/60000);
+ }catch(e){ return 0; }
+}
+// Intervalli di apertura [inizio,fine] in ms, da ieri a +8 giorni, uniti quando si toccano.
+function orariIntervalli(o,t){
+ const nomi=['sun','mon','tue','wed','thu','fri','sat'];
+ const out=[];
+ const oggi=Date.UTC(new Date(t).getUTCFullYear(),new Date(t).getUTCMonth(),new Date(t).getUTCDate());
+ for(let d=-1;d<=8;d++){
+   const g0=oggi+d*86400000;
+   const scarto=orariScartoZona(o.zona,g0+12*3600000);
+   const giorno=nomi[new Date(g0).getUTCDay()];
+   (o.giorni[giorno]||[]).forEach(txt=>{
+     const m=String(txt).match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+     if(!m)return;
+     let a=g0+((+m[1])*60+(+m[2])-scarto)*60000, b=g0+((+m[3])*60+(+m[4])-scarto)*60000;
+     if(b<=a)b+=86400000; // "22:05 - 00:00": finisce a mezzanotte (o il giorno dopo)
+     out.push([a,b]);
+   });
+ }
+ out.sort((x,y)=>x[0]-y[0]);
+ const uniti=[];
+ out.forEach(iv=>{ const u=uniti[uniti.length-1]; if(u&&iv[0]<=u[1]+60000)u[1]=Math.max(u[1],iv[1]); else uniti.push([iv[0],iv[1]]); });
+ return uniti;
+}
+// Stato del mercato per l'asset a grafico: {chiuso, apreAt, fonte} oppure null (niente da dire).
+function statoMercato(asset,t){
+ if(!liveModeActive||!asset)return null;
+ try{ if(binanceSymbolForAsset(asset))return null; }catch(e){}
+ const o=orariAsset[asset];
+ if(o&&o.giorni&&Object.keys(o.giorni).length){
+   const iv=orariIntervalli(o,t);
+   const dentro=iv.find(x=>t>=x[0]&&t<x[1]);
+   if(!dentro){
+     const pross=iv.find(x=>x[0]>t);
+     return {chiuso:true,apreAt:pross?pross[0]:null,fonte:'orari'};
+   }
+ }
+ // Orario con cui l'app segue MT5 (anche se lo strumento sul broker e' aperto, il grafico e' fermo).
+ if(liveScheduleAppliesNow()&&liveSessionPhaseAt(t)==='closed'){
+   let apreAt=null;
+   for(let k=1;k<=4*24*60;k++){ const tt=Math.floor(t/60000)*60000+k*60000; if(liveSessionPhaseAt(tt)!=='closed'){ apreAt=tt; break; } }
+   return {chiuso:true,apreAt,fonte:'mt5'};
+ }
+ return null;
+}
+function durataTesto(ms){
+ const s=Math.max(0,Math.floor(ms/1000));
+ const g=Math.floor(s/86400), h=Math.floor(s%86400/3600), m=Math.floor(s%3600/60), sec=s%60;
+ const hh=String(h).padStart(2,'0'), mm=String(m).padStart(2,'0'), ss=String(sec).padStart(2,'0');
+ return (g?g+'g ':'')+hh+':'+mm+':'+ss;
+}
+function disegnaStatoMercato(ctx,w,h,pad,sfondo,colore){
+ const st=statoMercato(currentAssetKey,Date.now());
+ if(!st||!st.chiuso)return;
+ let testo='🔒 Mercato chiuso';
+ if(st.apreAt){
+   const p=tzParts(st.apreAt);
+   testo+=' · apre tra '+durataTesto(st.apreAt-Date.now())+' ('+tzDayLabel(st.apreAt)+' '+String(p.hour).padStart(2,'0')+':'+String(p.minute).padStart(2,'0')+')';
+ }
+ ctx.save();
+ ctx.font=scaledFont('bold 12px Arial');
+ const tw=ctx.measureText(testo).width+18, th=24;
+ const x=w-pad.r-tw-6, y=h-pad.b-th-8;
+ ctx.globalAlpha=.92;
+ ctx.fillStyle='#3a1418';
+ if(ctx.roundRect){ ctx.beginPath(); ctx.roundRect(x,y,tw,th,6); ctx.fill(); } else ctx.fillRect(x,y,tw,th);
+ ctx.globalAlpha=1;
+ ctx.strokeStyle='#e0524f'; ctx.lineWidth=1;
+ if(ctx.roundRect){ ctx.beginPath(); ctx.roundRect(x+.5,y+.5,tw-1,th-1,6); ctx.stroke(); }
+ ctx.fillStyle='#ffd7d7'; ctx.textAlign='left'; ctx.textBaseline='middle';
+ ctx.fillText(testo,x+9,y+th/2+1);
+ ctx.restore();
+}
+// Conto alla rovescia vivo anche a grafico fermo (a mercato chiuso nessun prezzo ridisegna), e
+// orari dell'asset a grafico tenuti aggiornati.
+setInterval(()=>{
+ try{
+   if(!liveModeActive||!currentAssetKey)return;
+   orariAggiorna(currentAssetKey);
+   const st=statoMercato(currentAssetKey,Date.now());
+   if(st&&st.chiuso)draw();
+ }catch(e){}
+},1000);
 function liveSessionPhaseNow(){ return liveScheduleAppliesNow()?liveSessionPhaseAt(Date.now()):'free'; }
 // Candele della fascia Capital.com salvate a parte (per asset e timeframe, ultimi 7 giorni).
 function liveOffSessionSaveRows(){
