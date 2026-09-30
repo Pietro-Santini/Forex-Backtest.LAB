@@ -47,8 +47,10 @@
 //               «Disconnetti» e la chiusura della pagina non spengono piu' il PC
 //          v13 = cambio conto MT5: le posizioni dell'altro conto non si chiudono piu'
 //               a prezzo 0 nel Trade Journal, si mettono da parte e tornano
+//          v14 = con piu' conti MT5 si sceglie su quale entrare (niente riconnessione
+//               all'ultimo); server predefinito MetaQuotes-Demo
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v13";
+const CACHE_NAME = "forex-backtest-lab-v14";
 const ASSETS = [
   "./",
   "./app.html",

@@ -1590,7 +1590,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         </div>
         <div>
           <label>Server</label>
-          <input id="mt5LoginServer" type="text" autocomplete="off" placeholder="Es. NomeBroker-Demo">
+          <input id="mt5LoginServer" type="text" autocomplete="off" value="MetaQuotes-Demo" placeholder="MetaQuotes-Demo">
         </div>
         <div id="mt5LoginError" class="liveLoginError"></div>
         <!-- Ripiego, in caso il controllo del gate sopra e il vero tentativo di connessione
@@ -30539,30 +30539,63 @@ function renderMt5AccountSelect(){
  sel.style.display = 'inline-block';
  $('mt5DeleteAccountBtn').style.display = (mt5SavedAccounts.length && sel.value!=='__add__') ? 'inline-block' : 'none';
 }
-// Al click su "MT5 (Live)": ritorna il conto attualmente selezionato nel menu a tendina (o il
-// primo salvato, se il menu non è ancora stato aperto), per il tentativo di riconnessione
-// automatica. null se non c'è nessuna cartella collegata o nessun conto salvato.
-async function tryAutoLoadMt5Creds(){
+// ===================== SCELTA DEL CONTO MT5 =====================
+// RICHIESTO ESPLICITAMENTE: con piu' conti salvati l'app NON si ricollega da sola all'ultimo usato:
+// chiede su quale conto entrare, oppure di accedere a un conto nuovo. Con un solo conto non c'e'
+// niente da scegliere e si usa quello.
+// Esito: {conto} | {nuovo:true} (accedere a un conto nuovo) | {nessuno:true} (nessun conto
+// salvato) | null (annullato).
+async function mt5ScegliConto(opts={}){
  await refreshMt5AccountsUI();
- if(!mt5SavedAccounts.length) return null;
- const key=mt5SelectedAccountKey||mt5AccountKey(mt5SavedAccounts[0]);
- return mt5SavedAccounts.find(a=>mt5AccountKey(a)===key)||mt5SavedAccounts[0];
+ if(!mt5SavedAccounts.length)return {nessuno:true};
+ if(mt5SavedAccounts.length===1)return {conto:mt5SavedAccounts[0]};
+ const scelta=await mt5ScegliContoPopup(mt5SavedAccounts,opts);
+ if(scelta&&scelta.conto){ mt5SelectedAccountKey=mt5AccountKey(scelta.conto); try{ renderMt5AccountSelect(); }catch(e){} }
+ return scelta;
 }
-// Richiesto esplicitamente: per chi usa MT5 reale, l'app desktop (bridge + terminale MT5) deve
-// provare a partire da SOLA quando si apre l'app nel browser — non quando si accende il PC
-// (quello è un'altra cosa, il Task opzionale "avvia con Windows" in installer.iss), e non solo
-// quando si preme "Connetti". Un sito non può MAI eseguire un programma locale da solo (nessuna
-// API del browser lo permette, per sicurezza): l'unico modo legittimo è chiedere al SISTEMA
-// OPERATIVO di farlo, tramite il protocollo "forexbacktestlab://" registrato dall'installer — è
-// lo stesso meccanismo di Zoom/Discord/Spotify per "Apri nell'app". Due limiti onesti, non
-// aggirabili: (1) funziona SOLO se ForexBacktestLAB_Setup.exe è già stato installato almeno una
-// volta su quel PC — se non lo è, il browser ignora la richiesta in silenzio, senza errori
-// visibili; (2) alcuni browser bloccano la navigazione automatica a un protocollo personalizzato
-// se non è la diretta conseguenza di un click umano — in quel caso può non partire da sola,
-// motivo per cui i pulsanti manuali "Apri l'app desktop"/"Scarica" restano comunque disponibili
-// come ripiego. Gate su mt5WasConnectedLastSession (non su "sempre"): parte solo per chi usa
-// davvero MT5 reale, per non disturbare chi apre l'app solo per il backtest storico e non ha
-// mai installato né gli serve l'app desktop.
+// I conti salvati SOLO se si possono leggere senza chiedere niente (permesso sulla cartella gia'
+// concesso). Chiederlo adesso fallirebbe in silenzio: il browser lo concede solo subito dopo un
+// clic dell'utente. null = non si sa senza chiedere.
+async function mt5ContiSenzaChiedere(){
+ try{
+  if(mt5CredsDirHandle)return await readMt5AccountsFromHandle(mt5CredsDirHandle);
+  if(!supportsFS)return null;
+  const h=await libDirGet('mt5CredsDir');
+  if(!h||!h.queryPermission)return null;
+  if((await h.queryPermission({mode:'readwrite'}))!=='granted')return null;
+  mt5CredsDirHandle=h;
+  return await readMt5AccountsFromHandle(h);
+ }catch(e){ return null; }
+}
+function mt5ScegliContoPopup(conti,opts={}){
+ return new Promise(resolve=>{
+  const overlay=document.createElement('div');
+  overlay.className='fbModalOverlay appConfirmOverlay';
+  const stile='width:100%;text-align:left;padding:10px 12px;font-size:13px';
+  overlay.innerHTML=`
+    <div class="fbModalBox appConfirmBox" style="max-width:460px">
+      <div class="fbModalHeader"><h3>${escapeHtmlLite(opts.title||'🖥️ Su quale conto MT5 vuoi entrare?')}</h3></div>
+      <div class="appConfirmBody">${escapeHtmlLite(opts.message||'Hai più conti MT5 salvati: scegli quello su cui collegarti.')}</div>
+      <div style="display:flex;flex-direction:column;gap:8px;padding:0 16px 14px">
+        ${conti.map((acc,i)=>`<button type="button" class="toolBtn" data-conto="${i}" style="${stile}">🖥️ Conto <b>${escapeHtmlLite(String(acc.login))}</b> <span style="opacity:.7">· ${escapeHtmlLite(String(acc.server||''))}</span></button>`).join('')}
+        <button type="button" class="toolBtn" data-nuovo="1" style="${stile}">➕ Accedi a un nuovo conto</button>
+      </div>
+      <div class="liveLoginFooter">
+        <button type="button" class="toolBtn fbBackBtn" data-role="cancel">${escapeHtmlLite(opts.cancelLabel||'Annulla')}</button>
+      </div>
+    </div>`;
+  const targetDoc=popupTargetDoc();
+  targetDoc.body.appendChild(overlay);
+  function fine(v){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(v); }
+  function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); fine(null); } }
+  targetDoc.addEventListener('keydown',onKey);
+  overlay.addEventListener('mousedown',e=>{ if(e.target===overlay)fine(null); });
+  overlay.querySelector('[data-role="cancel"]').addEventListener('click',()=>fine(null));
+  overlay.querySelector('[data-nuovo]').addEventListener('click',()=>fine({nuovo:true}));
+  overlay.querySelectorAll('[data-conto]').forEach(b=>b.addEventListener('click',()=>fine({conto:conti[Number(b.dataset.conto)]})));
+  // Nessun conto preselezionato: niente "Invio" che collega per abitudine all'ultimo usato.
+ });
+}
 async function maybeAutoLaunchDesktopApp(){
  if(!mt5WasConnectedLastSession) return;
  const r=await fetchMt5WithTimeout('/health',{method:'GET'},1200);
@@ -30587,26 +30620,41 @@ async function maybeOfferMt5AutoReconnect(){
  // Fino a 60 s: su un PC lento l'app desktop, appena lanciata, impiega a lungo ad avviarsi.
  reachable=!!(await waitForBridgeHealthy(60000)).ok;
  if(!reachable)return;
- const ok=await appConfirm(
-   "Risultavi connesso a un conto MT5 reale l'ultima volta che hai usato l'app.\n\nVuoi ricollegarti in automatico con le credenziali salvate e riprendere da dove avevi lasciato?",
-   {title:'Riconnessione MT5',okLabel:'Sì, ricollega',cancelLabel:'No, resto scollegato',danger:false}
- );
- if(!ok)return;
- // La richiesta del permesso sulla cartella credenziali (dentro tryAutoLoadMt5Creds ->
- // getMt5CredsDirHandle) va fatta qui, SUBITO dopo questo click reale sul popup: è quanto le API
- // del browser richiedono per concederlo senza fallire in silenzio (stesso motivo per cui non
- // viene mai chiamata prima, es. per mostrare già nel popup il nome del conto).
- const creds=await tryAutoLoadMt5Creds();
- if(!creds){
-   // RICHIESTO ESPLICITAMENTE ("evitare brutte figure"): l'utente ha appena cliccato "Sì,
-   // ricollega" aspettandosi che qualcosa succeda subito — lasciarlo con solo una riga di stato
-   // in fondo alla pagina (facile non notare, specie davanti a un cliente) sembra un errore muto.
-   // Apriamo direttamente il popup di accesso manuale MT5, così il passo successivo è già lì,
-   // pronto, invece di dover andare a cercarlo nel menu da soli.
-   $('status').textContent='Nessuna credenziale MT5 salvata trovata: completa l\'accesso qui sotto.';
-   openMt5LoginModal();
+ // RICHIESTO ESPLICITAMENTE: con piu' conti salvati non ci si ricollega all'ultimo usato, si sceglie
+ // su quale entrare (o si accede a un conto nuovo). Se il permesso sulla cartella dei conti e' gia'
+ // concesso la scelta e' la PRIMA e unica domanda; altrimenti serve prima un clic, e la scelta
+ // arriva subito dopo.
+ let scelta=null;
+ const contiNoti=await mt5ContiSenzaChiedere();
+ if(contiNoti&&contiNoti.length>1){
+  mt5SavedAccounts=contiNoti;
+  try{ renderMt5AccountSelect(); }catch(e){}
+  scelta=await mt5ScegliContoPopup(contiNoti,{title:'🖥️ Riconnessione MT5',
+   message:"Risultavi connesso a MT5 l'ultima volta che hai usato l'app. Su quale conto vuoi entrare?",
+   cancelLabel:'Resto scollegato'});
+  if(scelta&&scelta.conto){ mt5SelectedAccountKey=mt5AccountKey(scelta.conto); try{ renderMt5AccountSelect(); }catch(e){} }
+ }else{
+  const ok=await appConfirm(
+    "Risultavi connesso a un conto MT5 reale l'ultima volta che hai usato l'app.\n\nVuoi ricollegarti?",
+    {title:'Riconnessione MT5',okLabel:'Sì, ricollega',cancelLabel:'No, resto scollegato',danger:false}
+  );
+  if(!ok)return;
+  // La richiesta del permesso sulla cartella credenziali (dentro mt5ScegliConto ->
+  // getMt5CredsDirHandle) va fatta qui, SUBITO dopo questo click reale sul popup: è quanto le API
+  // del browser richiedono per concederlo senza fallire in silenzio.
+  scelta=await mt5ScegliConto({title:'🖥️ Riconnessione MT5',cancelLabel:'Resto scollegato'});
+ }
+ if(!scelta){ $('status').textContent='Resti scollegato da MT5: ti colleghi quando vuoi dal menu MT5.'; return; }
+ if(scelta.nuovo||scelta.nessuno){
+   // RICHIESTO ESPLICITAMENTE ("evitare brutte figure"): il popup di accesso si apre subito, invece
+   // di lasciare solo una riga di stato in fondo alla pagina.
+   $('status').textContent=scelta.nessuno
+     ?'Nessuna credenziale MT5 salvata trovata: completa l\'accesso qui sotto.'
+     :'Accesso a un nuovo conto MT5: completa i dati qui sotto.';
+   openMt5LoginModal(null);
    return;
  }
+ const creds=scelta.conto;
  $('status').textContent='Riconnessione automatica a MT5 in corso…';
  const result=await connectToMt5Bridge(creds);
  if(result.ok){
@@ -30743,13 +30791,16 @@ window.addEventListener('pagehide', ()=>{
 // bridge — qui possiamo aspettare la vera risposta (niente teardown di pagina in corso), quindi
 // usiamo la chiamata normale invece di sendBeacon.
 window.disconnectMt5Bridge = disconnectFromMt5Bridge;
+const MT5_SERVER_PREDEFINITO='MetaQuotes-Demo';
 function openMt5LoginModal(prefill){
  $('mt5LoginError').style.display='none';
  $('mt5BridgeHelp').style.display='none';
  $('mt5NoTerminalHelp').style.display='none';
  $('mt5LoginAccount').value=prefill?.login||'';
  $('mt5LoginPassword').value=prefill?.password||'';
- $('mt5LoginServer').value=prefill?.server||'';
+ // RICHIESTO ESPLICITAMENTE: il server e' sempre compilato, MetaQuotes-Demo se non se ne conosce un
+ // altro. Il server di un conto gia' salvato resta il suo: sovrascriverlo romperebbe il login.
+ $('mt5LoginServer').value=prefill?.server||MT5_SERVER_PREDEFINITO;
  $('mt5LoginFolderStatus').textContent=mt5CredsDirHandle
    ?`📂 Verranno salvate in: "${mt5CredsDirHandle.name}"`
    :'Nessuna cartella collegata ancora: te ne verrà chiesta una al primo accesso.';
@@ -31079,7 +31130,11 @@ $('mt5MenuDisconnectBtn').addEventListener('click',async ev=>{
  // Primo accesso (procedura mai completata su questo PC): subito la procedura guidata, senza
  // chiedere prima la cartella delle credenziali (non ce ne sono ancora).
  if(!mt5TerminalConfirmedBefore){ openMt5LoginModal(mt5CredsDraft); return; }
- const autoCreds=await tryAutoLoadMt5Creds();
+ // Con piu' conti salvati si sceglie su quale entrare (RICHIESTO ESPLICITAMENTE): mai l'ultimo in automatico.
+ const scelta=await mt5ScegliConto();
+ if(!scelta){ $('status').textContent='Collegamento a MT5 annullato.'; return; }
+ if(scelta.nuovo){ openMt5LoginModal(null); return; }
+ const autoCreds=scelta.conto||null;
  if(autoCreds){
    $('status').textContent='Connessione al bridge MT5 in corso…';
    const result=await connectToMt5Bridge(autoCreds);
