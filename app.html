@@ -317,7 +317,7 @@ body.pf-blood-effect .pf-danger-blink{animation:pfDangerBlink 1s step-start infi
 .fbModalTabs{display:flex;gap:4px;padding:8px 16px 0}
 /* ---- Popup di conferma "carino" (appConfirm), sostituisce i confirm() nativi del browser
    riusando lo stesso stile delle altre finestre modali dell'app (.fbModalOverlay/.fbModalBox). ---- */
-.appConfirmOverlay{z-index:500;animation:appConfirmFadeIn .12s ease-out}
+.appConfirmOverlay{z-index:100000;animation:appConfirmFadeIn .12s ease-out}
 @keyframes appConfirmFadeIn{from{opacity:0}to{opacity:1}}
 .appConfirmBox{animation:appConfirmPopIn .16s cubic-bezier(.2,.9,.3,1.2)}
 @keyframes appConfirmPopIn{from{transform:scale(.94);opacity:0}to{transform:scale(1);opacity:1}}
@@ -870,7 +870,7 @@ setTimeout(function(){
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged, onIdTokenChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
   const firebaseConfig = {
@@ -1011,6 +1011,19 @@ setTimeout(function(){
         await setDoc(doc(db,"users",this.uid,"data","grafico"), { v:1, voci, at: serverTimestamp() }, { merge:true });
         return true;
       }catch(e){ console.warn("Salvataggio disegni condivisi fallito:", e); return false; }
+    },
+    // UN SEGNALE = UN SOLO DISPOSITIVO (vedi tgRivendicaSegnale): il primo dispositivo che scrive
+    // users/{uid}/data/tgx_<id> lo apre; gli altri trovano il documento gia' li' e si fermano.
+    // Transazione: due dispositivi nello stesso istante non possono vincere entrambi.
+    async segnaleRivendica(id, dev){
+      if(!this.uid) return true;
+      const ref = doc(db,"users",this.uid,"data","tgx_"+id);
+      return await runTransaction(db, async tx => {
+        const s = await tx.get(ref);
+        if (s.exists()) return (s.data() || {}).dev === dev;
+        tx.set(ref, { dev, at: serverTimestamp() });
+        return true;
+      });
     },
     graficoAscolta(cb, errCb){
       if(!this.uid) return ()=>{};
@@ -3327,6 +3340,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input id="tgAutoMaxGlob" class="tgCfgIn tgCfgNum" type="number" min="1" max="50" step="1" style="width:70px"></label>
        <label class="tgCfgCampo">Se la giornata perde più del
          <input id="tgAutoPerdita" class="tgCfgIn tgCfgNum" type="number" min="0.5" max="50" step="0.5" style="width:70px"> % si spegne</label>
+       <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, la perdita massima di quel segnale (tutte le sue posizioni insieme) è questa percentuale del conto, al posto del rischio della sala.">Senza stop della sala: rischio
+         <input id="tgAutoRischioSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.1" max="20" step="0.1" style="width:70px"> % del conto</label>
        <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, l'app lo calcola dal rischio scelto con questo lotto per posizione. Il minimo (0,01) mette lo stop il più lontano possibile a parità di perdita massima.">Senza stop della sala: lotto per posizione
          <input id="tgAutoLottoSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.01" max="100" step="0.01" style="width:70px"></label>
        <label class="tgCfgCampo" title="Quando la sala dà lo stop ma nessun take profit: appena il prezzo percorre questa percentuale della distanza dello stop, lo stop va a pareggio (profitto netto 0,00).">Senza target della sala: pareggio al
@@ -4800,7 +4815,22 @@ async function restoreDrawingsFromBackupIfNewer(savedState,uid){
 // Voci mai toccate da questo sistema (disegni gia' esistenti prima di questa versione): valgono
 // come "semi" con un istante minuscolo (1 + numero di disegni), quindi vince il dispositivo che ne
 // ha di piu' (di solito il PC) e qualunque modifica vera li supera sempre.
-const GRAFICO_CAMPI_LOCALI=new Set(['lastSide','armed']); // stato dell'allarme sul singolo dispositivo, non si condivide
+const GRAFICO_CAMPI_LOCALI=new Set(['lastSide','armed']);
+// CONFIGURAZIONE DELLE SALE SEGNALI (RICHIESTO: "tablet e telefono devono avere la stessa
+// configurazione dell'apertura automatica, per tutti i gruppi, e tutte le sale"): voci "ls|<chiave>"
+// dello stesso documento, una per impostazione salvata in localStorage. La funzione accanto la
+// riapplica quando arriva da un altro dispositivo. Le strategie delle posizioni aperte
+// (fb_tg_strategie) restano del dispositivo che le ha aperte: sono stato, non configurazione.
+const GRAFICO_LS={
+ fb_tg_auto:v=>{ try{ tgAuto=tgAutoDaSalvato(JSON.parse(v)||{}); }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
+ fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
+ fb_tg_attivo:v=>{ try{ if(v==='1'){ tgAggiornaInterruttore(); tgCollega(); } else { tgScollega(); tgAggiornaInterruttore(); } }catch(e){} },
+ fb_tg_rischio_totale:null,
+ fb_tg_avvicinamento_pct:null,
+ fb_tg_suono_id:v=>{ try{ const el=$('tgSuonoSelect'); if(el&&[...el.options].some(o=>o.value===v))el.value=v; }catch(e){} },
+ fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} }
+};
+function graficoLsLeggi(nome){ try{ return localStorage.getItem(nome); }catch(e){ return null; } } // stato dell'allarme sul singolo dispositivo, non si condivide
 let graficoT={};               // chiave -> istante dell'ultima modifica nota su questo dispositivo
 let graficoVisto={};           // chiave -> JSON gia' noto (per capire se l'utente ha cambiato qualcosa)
 let graficoInAttesa={};        // voci remote da applicare appena l'utente finisce un trascinamento
@@ -4815,6 +4845,7 @@ function graficoChiaveCorrente(){ return currentAssetKey?(currentMode()+'|'+curr
 // Valore attuale di una voce su questo dispositivo (per l'asset a grafico si guarda `drawings`, che e'
 // la copia viva; per gli altri la memoria per asset).
 function graficoValoreLocale(k){
+ if(k.startsWith('ls|'))return graficoLsLeggi(k.slice(3));
  if(k.startsWith('ind|')){
    const mode=k.slice(4);
    if(mode===currentMode())return serializeIndicators(activeIndicators);
@@ -4830,12 +4861,25 @@ function graficoTutteLeChiavi(){
  Object.keys(assetDrawings||{}).forEach(mode=>Object.keys(assetDrawings[mode]||{}).forEach(a=>out.add(mode+'|'+a)));
  const kc=graficoChiaveCorrente(); if(kc)out.add(kc);
  Object.keys(indicatorsByMode||{}).forEach(mode=>{ if(Array.isArray(indicatorsByMode[mode])||mode===currentMode())out.add('ind|'+mode); });
+ Object.keys(GRAFICO_LS).forEach(n=>{ if(graficoLsLeggi(n)!=null)out.add('ls|'+n); });
  return [...out];
 }
-function graficoSeme(v){ return Array.isArray(v)&&v.length?(1+v.length):0; }
+function graficoSeme(v,k){
+ // Impostazioni mai sincronizzate: vince quella del PC con MT5 (2) su quella di un telefono (1).
+ if(k&&k.startsWith('ls|'))return v==null?0:(fblRemoto()?1:2);
+ return Array.isArray(v)&&v.length?(1+v.length):0;
+}
 // Il dispositivo sta trascinando/disegnando: una voce remota per l'asset a grafico aspetta.
 function graficoOccupato(){ return !!(shapeDrag||touchDrawDrag||placingStep!==0||tradeLevelDrag||assetSwitchInProgress); }
 function graficoApplica(k,valore){
+ if(k.startsWith('ls|')){
+   const nome=k.slice(3);
+   if(!(nome in GRAFICO_LS))return true;
+   try{ localStorage.setItem(nome,valore); }catch(e){}
+   graficoVisto[k]=graficoJson(valore);
+   const f=GRAFICO_LS[nome]; if(f){ try{ f(valore); }catch(e){} }
+   return true;
+ }
  if(k.startsWith('ind|')){
    const mode=k.slice(4);
    if(!(mode in indicatorsByMode))return true;
@@ -4914,11 +4958,11 @@ function graficoRicevi(vociRemote){
  Object.keys(remote).forEach(k=>{
    const r=remote[k];
    let lt=graficoT[k];
-   if(lt==null){ lt=graficoSeme(graficoValoreLocale(k)); graficoT[k]=lt; cambiato=true; }
+   if(lt==null){ lt=graficoSeme(graficoValoreLocale(k),k); graficoT[k]=lt; cambiato=true; }
    if(r.t>lt){
      if(r.d===graficoJson(graficoValoreLocale(k))){ graficoT[k]=r.t; cambiato=true; return; }
      let val; try{ val=JSON.parse(r.d); }catch(e){ return; }
-     if(!Array.isArray(val))return;
+     if(k.startsWith('ls|')?(typeof val!=='string'):!Array.isArray(val))return;
      if(graficoApplica(k,val)){ graficoT[k]=r.t; delete graficoInAttesa[k]; }
      else graficoInAttesa[k]={t:r.t,val};
      cambiato=true;
@@ -4927,7 +4971,7 @@ function graficoRicevi(vociRemote){
  // Quello che questo dispositivo ha di piu' recente (o che il cloud non ha ancora) parte.
  graficoTutteLeChiavi().forEach(k=>{
    let lt=graficoT[k];
-   if(lt==null){ lt=graficoSeme(graficoValoreLocale(k)); if(!lt)return; graficoT[k]=lt; cambiato=true; }
+   if(lt==null){ lt=graficoSeme(graficoValoreLocale(k),k); if(!lt)return; graficoT[k]=lt; cambiato=true; }
    const r=remote[k];
    if(!r||lt>r.t)graficoDaInviare.add(k);
  });
@@ -4951,6 +4995,13 @@ function graficoControllaModifiche(){
    if(kc!==graficoUltimaChiaveCorrente||graficoVisto[kc]==null){ graficoUltimaChiaveCorrente=kc; graficoVisto[kc]=j; }
    else if(j!==graficoVisto[kc]){ graficoVisto[kc]=j; segna(kc); }
  }
+ Object.keys(GRAFICO_LS).forEach(n=>{
+   const k='ls|'+n, v=graficoLsLeggi(n);
+   if(v==null)return;
+   const j=graficoJson(v);
+   if(graficoVisto[k]==null)graficoVisto[k]=j;
+   else if(j!==graficoVisto[k]){ graficoVisto[k]=j; segna(k); }
+ });
  const ki='ind|'+currentMode();
  const ji=graficoJson(serializeIndicators(activeIndicators));
  if(graficoVisto[ki]==null)graficoVisto[ki]=ji;
@@ -6933,6 +6984,15 @@ function escapeHtmlLite(s){
 // appena cliccato — es. eliminando un trade dal Journal (pagina principale) la conferma resta nella
 // pagina principale, non salta nella finestra PIP. Se nessuna delle due ha il focus (azione partita
 // da sola, es. un timer), si usa la finestra PIP come prima.
+// Dove appendere un popup creato al volo: nel documento giusto (pagina o finestra PIP) e, se quel
+// documento e' in SCHERMO INTERO, dentro l'elemento a schermo intero. SEGNALATO: "da tablet e
+// telefono, in schermo intero, la conferma di Spegni MT5 / Scollega non compare": finiva nel body,
+// che in schermo intero non si vede, sotto la finestra Impostazioni (quella invece gia' spostata).
+function popupContenitore(d){
+ d=d||popupTargetDoc();
+ try{ const fs=d.fullscreenElement; if(fs&&fs!==d.body&&fs!==d.documentElement)return fs; }catch(e){}
+ return d.body;
+}
 function popupTargetDoc(){
  let fdoc=null;
  try{ fdoc=(floatingChartActive()&&floatingDoc)?floatingDoc:null; }catch(e){ fdoc=null; }
@@ -6965,7 +7025,7 @@ function appConfirm(message,opts={}){
    // creato al volo ad ogni chiamata (mai riusato), quindi basta scegliere subito il document
    // giusto invece di doverlo poi "riportare a casa".
    const targetDoc=popupTargetDoc();
-   targetDoc.body.appendChild(overlay);
+   popupContenitore(targetDoc).appendChild(overlay);
    function cleanup(result){
      targetDoc.removeEventListener('keydown',onKey);
      overlay.remove();
@@ -7003,7 +7063,7 @@ function appPrompt(message,opts={}){
        </div>
      </div>`;
    const targetDoc=popupTargetDoc();
-   targetDoc.body.appendChild(overlay);
+   popupContenitore(targetDoc).appendChild(overlay);
    const input=overlay.querySelector('[data-role="input"]');
    input.value=opts.defaultValue!=null?String(opts.defaultValue):'';
    function cleanup(result){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(result); }
@@ -7029,7 +7089,7 @@ function appAlert(message,opts={}){
        <div class="liveLoginFooter"><button type="button" class="toolBtn appConfirmBtn appConfirmOk safe" data-role="ok">Ok</button></div>
      </div>`;
    const targetDoc=popupTargetDoc();
-   targetDoc.body.appendChild(overlay);
+   popupContenitore(targetDoc).appendChild(overlay);
    function cleanup(){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(); }
    function onKey(e){ if(e.key==='Escape'||e.key==='Enter'){ e.preventDefault(); cleanup(); } }
    targetDoc.addEventListener('keydown',onKey);
@@ -13061,7 +13121,7 @@ function draw(){
  data.forEach((r,i)=>{
    let xx=x(i), up=r.close>=r.open;
    const fp=_footprintEntries?_footprintEntries[i].fp:null;
-   // AREA CLICCABILE PER IL CAMBIO STILE - vedi footprintConsumeStyleClick() nel pointerup.
+   // AREA CLICCABILE PER IL CAMBIO STILE - vedi FOOTPRINT: TOCCO/CLIC SU UNA CANDELA (fpTocco).
    // Registrata per OGNI candela finche' il footprint e' attivo, anche senza tick registrati:
    // prima stava dentro il ramo `if(fp)` qui sotto, quindi su tutte le candele fuori dal backfill
    // il click non trovava niente da colpire e non succedeva nulla. L'estensione verticale e' quella
@@ -15717,25 +15777,7 @@ let zoneClickCandidateKey=null;
 // rendering a candela singola — su quelle il click resta un pan/selezione come sempre).
 let footprintCellHitRects=[];
 let footprintCellClickCandidate=null;
-// Un vero click (non un trascinamento) sopra una candela in modalita' footprint fa scorrere lo
-// stile: Bid/Ask -> Delta -> Volume -> di nuovo Bid/Ask. Alternativa rapida al menu "Stile" nelle
-// impostazioni, che resta e si aggiorna da solo essendo lo stesso <select>. Estratta in funzione
-// perche' serve in DUE punti del pointerup: per il mouse, e prima dell'uscita anticipata del ramo
-// touch, che altrimenti non ci arriverebbe mai.
-function footprintConsumeStyleClick(e){
- if(!footprintCellClickCandidate)return false;
- footprintCellClickCandidate=false;
- if(Math.hypot(e.clientX-panStartX,e.clientY-panStartY)>=4)return false; // era un pan del grafico
- const styleSel=$('footprintStyle');
- if(!styleSel)return false;
- const order=['bidask','delta','volume'];
- const i=order.indexOf(styleSel.value);
- styleSel.value=order[(i<0?0:i+1)%order.length];
- draw(); scheduleSave();
- const el=$('status');
- if(el)el.textContent='Stile footprint: '+(styleSel.value==='bidask'?'Bid/Ask':styleSel.value==='delta'?'Delta':'Volume')+'.';
- return true;
-}
+// Il cambio stile al tocco/clic vive in un ascoltatore dedicato: vedi FOOTPRINT: TOCCO/CLIC SU UNA CANDELA.
 // Ricorda l'ultimo VERO click (ownerKey+istante) su una casella Target/Stop di una posizione
 // APERTA ('pos:'+id): se il click successivo cade sulla STESSA casella entro ZONE_DBLCLICK_MS,
 // è un doppio click -> si alterna tpSlZoneFillHiddenByOwner invece di (ri)aprire le statistiche.
@@ -19529,6 +19571,89 @@ function setChartTouchAction(locked){
  // trascinamento della scala prezzi, di una linea/disegno, o gesto a due dita.
  chartEl.style.touchAction=locked?'none':'pan-y';
 }
+// Secondo dito appena appoggiato: inizializza tutto lo stato del gesto a due dita (pan
+// orizzontale/verticale + pizzico orizzontale/verticale), e blocca lo scroll della pagina solo per
+// la durata di questo gesto. Usata dal gestore principale e dalla GUARDIA DUE DITA qui sotto.
+function iniziaGestoDueDita(e){
+ e.preventDefault();
+ setChartTouchAction(true);
+ freezeViewIfNeeded();
+ twoFingerPan=true;
+ const pts=[...touchPoints.values()];
+ twoFingerStartX=(pts[0].x+pts[1].x)/2;
+ twoFingerStartY=(pts[0].y+pts[1].y)/2;
+ twoFingerStartViewEnd=viewEnd;
+ twoFingerStartScale=currentDisplayScale();
+ twoFingerStartPriceLo=viewPriceLo;
+ twoFingerStartPriceHi=viewPriceHi;
+ twoFingerStartDistX=Math.abs(pts[0].x-pts[1].x);
+ twoFingerStartDistY=Math.abs(pts[0].y-pts[1].y);
+ twoFingerStartVisibleCount=visibleCount;
+ twoFingerStartPriceZoomFactor=priceZoomFactor;
+ // Due dita già vicine tra loro all'inizio del gesto (es. < 60px): trattiamo tutto il gesto come
+ // uno spostamento libero (mai zoom), come se si usasse la penna, per tutta la sua durata.
+ twoFingerCloseMode=Math.hypot(twoFingerStartDistX,twoFingerStartDistY)<60;
+ for(const id of touchPoints.keys())chartEl.setPointerCapture?.(id);
+}
+// ===================== GUARDIA DUE DITA (tablet e telefono) =====================
+// RICHIESTO: "per spostarmi sul grafico uso due dita; se il primo dito cade su una linea, un
+// disegno, SL/TP/entrata... non deve selezionare ne' spostare niente". Il primo dito arriva
+// sempre un attimo prima del secondo, e da solo non si puo' sapere che ne arrivera' un altro:
+// quindi al primo tocco si fotografa lo stato, e se arriva il secondo dito mentre il primo e'
+// ancora giu' TUTTO quello che il primo ha fatto si annulla (selezione, trascinamento di una
+// linea o di un disegno, disegno appena creato, casella Target/Stop, zoom della scala prezzi) e
+// il gesto diventa solo spostamento/zoom del grafico. Ascoltatore in fase di cattura: arriva
+// prima del gestore principale, e per il secondo dito lo sostituisce del tutto (nessuna ricerca
+// di linee/disegni sotto il secondo dito).
+const ditaSulGrafico=new Map();
+let fotoPrimoDito=null;
+chartEl.addEventListener('pointerdown',e=>{
+ if(e.pointerType!=='touch')return;
+ ditaSulGrafico.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(ditaSulGrafico.size===1){
+   fotoPrimoDito={
+     selezionato:selectedDrawing, armata:tradeLevelArmata, nDisegni:drawings.length,
+     strumento:drawTool, passo:placingStep, inAttesa:pendingDrawing,
+     zoomPrezzi:priceZoomFactor
+   };
+   return;
+ }
+ // Secondo (o terzo) dito: si annulla quello che ha fatto il primo.
+ const f=fotoPrimoDito;
+ try{
+   if(shapeDrag&&selectedDrawing){
+     if(shapeDrag.origP1)selectedDrawing.p1={...shapeDrag.origP1};
+     if(shapeDrag.origP2)selectedDrawing.p2={...shapeDrag.origP2};
+   }
+   shapeDrag=null;
+   tradeLevelDrag=null; placingTradeLevelDrag=null; previewTradeLevel=null; lineaTradePremuta=null;
+   zoneWidthDrag=null;
+   if(priceAxisDrag){ priceZoomFactor=priceAxisDrag.startFactor; priceAxisDrag=null; }
+   touchDrawDrag=false;
+   if(f){
+     if(drawings.length>f.nDisegni)drawings.splice(f.nDisegni);   // disegno creato dal primo dito
+     pendingDrawing=f.inAttesa; placingStep=f.passo;
+     if(drawTool!==f.strumento)setDrawTool(f.strumento);
+     tradeLevelArmata=f.armata;
+     selectedDrawing=f.selezionato;
+   }
+   hideDrawSettingsTouchBtn();
+   zoneClickCandidateKey=null; closedTradeClickCandidateId=null; vpVwapClickCandidate=null;
+ }catch(err){}
+ // Il gesto a due dita parte con le posizioni vere di entrambe le dita.
+ touchPoints.clear();
+ ditaSulGrafico.forEach((p,id)=>touchPoints.set(id,{x:p.x,y:p.y}));
+ iniziaGestoDueDita(e);
+ try{ $('status').textContent='Due dita: sposto il grafico, nessuna linea o disegno toccato.'; }catch(err){}
+ draw();
+ e.stopImmediatePropagation();   // il gestore principale non deve cercare linee sotto il secondo dito
+},true);
+chartEl.addEventListener('pointermove',e=>{ if(e.pointerType==='touch'&&ditaSulGrafico.has(e.pointerId))ditaSulGrafico.set(e.pointerId,{x:e.clientX,y:e.clientY}); },true);
+['pointerup','pointercancel'].forEach(t=>chartEl.addEventListener(t,e=>{
+ if(e.pointerType!=='touch')return;
+ ditaSulGrafico.delete(e.pointerId);
+ if(!ditaSulGrafico.size)fotoPrimoDito=null;
+},true));
 chartEl.addEventListener('dragstart',e=>e.preventDefault());
 // Blocco extra e più "robusto" dello scroll della pagina con il dito: cambiare
 // touch-action via JS dentro il solo pointerdown a volte arriva troppo tardi (il
@@ -19801,31 +19926,7 @@ chartEl.addEventListener('pointerdown',e=>{
       return;
     }else if(selectedDrawing)deselectDrawing();
    touchPoints.set(e.pointerId,{x:e.clientX,y:e.clientY});
-   if(touchPoints.size>=2){
-     // Secondo dito appena appoggiato: inizializziamo QUI tutto lo stato del gesto a due
-     // dita (pan orizzontale/verticale + pizzico orizzontale/verticale), e blocchiamo lo
-     // scroll della pagina solo per la durata di questo gesto.
-     e.preventDefault();
-     setChartTouchAction(true);
-     freezeViewIfNeeded();
-     twoFingerPan=true;
-     const pts=[...touchPoints.values()];
-     twoFingerStartX=(pts[0].x+pts[1].x)/2;
-     twoFingerStartY=(pts[0].y+pts[1].y)/2;
-     twoFingerStartViewEnd=viewEnd;
-     twoFingerStartScale=currentDisplayScale();
-     twoFingerStartPriceLo=viewPriceLo;
-     twoFingerStartPriceHi=viewPriceHi;
-     twoFingerStartDistX=Math.abs(pts[0].x-pts[1].x);
-     twoFingerStartDistY=Math.abs(pts[0].y-pts[1].y);
-     twoFingerStartVisibleCount=visibleCount;
-     twoFingerStartPriceZoomFactor=priceZoomFactor;
-     // Due dita già vicine tra loro all'inizio del gesto (es. < 60px): trattiamo tutto il
-     // gesto come uno spostamento libero (mai zoom), come se si usasse la penna, per tutta
-     // la sua durata — deciso una volta sola qui, senza cambiare a metà gesto.
-     twoFingerCloseMode=Math.hypot(twoFingerStartDistX,twoFingerStartDistY)<60;
-     for(const id of touchPoints.keys())chartEl.setPointerCapture?.(id);
-   }
+   if(touchPoints.size>=2)iniziaGestoDueDita(e);
    // Un solo dito su un punto vuoto del grafico: NON blocchiamo nulla, così la pagina
    // può scorrere normalmente in verticale (richiesta esplicita).
    return;
@@ -20280,7 +20381,6 @@ chartEl.addEventListener('pointerup',e=>{
  // pointerup usciva qui e il blocco piu' sotto non veniva mai raggiunto, quindi il tocco su una
  // candela non cambiava mai stile (col mouse invece funzionava). Stesso criterio del mouse: conta
  // solo se il dito non si e' spostato, altrimenti era un trascinamento del grafico.
- if(e.pointerType==='touch')footprintConsumeStyleClick(e);
  if(e.pointerType==='touch'){
    touchPoints.delete(e.pointerId);
    if(touchPoints.size<2){twoFingerPan=false;if(touchPoints.size===0)setChartTouchAction(false);}
@@ -20310,7 +20410,7 @@ chartEl.addEventListener('pointerup',e=>{
  // (che resta comunque disponibile e si aggiorna da solo, essendo lo stesso <select>). Un pan che
  // parte sopra una candela footprint continua invece a spostare il grafico normalmente, come per
  // tutte le altre candidature "al click" qui sopra.
- footprintConsumeStyleClick(e);
+ // (Ora gestito da un ascoltatore dedicato: vedi FOOTPRINT: TOCCO/CLIC SU UNA CANDELA.)
  // Stesso schema, per il click-to-select (multi-selezione) di un trade GIÀ CHIUSO: un vero
  // click (non un trascinamento) sulla sua linea tratteggiata lo aggiunge/toglie da
  // selectedClosedTradeIds — ricliccandolo si deseleziona, cliccandone altri restano tutti
@@ -20722,6 +20822,53 @@ $('footprintEnabled')?.addEventListener('change',()=>{
  draw(); scheduleSave();
 });
 $('footprintStyle')?.addEventListener('change',()=>{ draw(); scheduleSave(); });
+// ===================== FOOTPRINT: TOCCO/CLIC SU UNA CANDELA -> STILE SUCCESSIVO =====================
+// SEGNALATO: "cliccando sopra una candela deve passare bid/ask -> delta -> volume, e non deve
+// interrompersi mai, su PC come su tablet e telefono". Prima la decisione dipendeva da un
+// "candidato" scritto a meta' del gestore principale del puntatore: col dito il ramo touch usciva
+// PRIMA di scriverlo (e prima di scrivere il punto di partenza), quindi al rilascio si leggevano i
+// valori del clic di mouse precedente e il cambio quasi mai partiva; col mouse diverse uscite
+// anticipate (linee, disegni, caselle...) lo lasciavano sporco. Ora un ascoltatore a parte, in fase
+// di cattura (arriva prima di tutti gli altri e non dipende dalle loro uscite): conta solo un tocco
+// o clic breve e fermo sopra una candela footprint, che non sia su una linea TP/SL/entrata, su un
+// disegno, su una casella Target/Stop, e a nessuno strumento di disegno attivo.
+let fpTocco=null;
+function footprintCicloStile(){
+ const styleSel=$('footprintStyle');
+ if(!styleSel)return;
+ const order=['bidask','delta','volume'];
+ const i=order.indexOf(styleSel.value);
+ styleSel.value=order[(i<0?0:i+1)%order.length];
+ draw(); scheduleSave();
+ const el=$('status');
+ if(el)el.textContent='Stile footprint: '+(styleSel.value==='bidask'?'Bid/Ask':styleSel.value==='delta'?'Delta':'Volume')+'.';
+}
+chartEl.addEventListener('pointerdown',e=>{
+ if(fpTocco&&fpTocco.id!==e.pointerId){ fpTocco=null; return; } // secondo dito: e' un gesto, non un tocco
+ fpTocco=null;
+ try{
+   if(e.pointerType==='mouse'&&e.button!==0)return;
+   if(drawTool!=='cursor'||placingTradeLevel||placingStep!==0)return;
+   const r=chartEl.getBoundingClientRect();
+   const x=e.clientX-r.left, y=e.clientY-r.top;
+   if(!footprintCellHitRects.some(c=>x>=c.xxLeft&&x<=c.xxRight&&y>=c.yTop&&y<=c.yBot))return;
+   if(zoneBoxHitRects.some(z=>x>=z.xOrigin&&x<=z.xRight&&y>=z.yMin&&y<=z.yMax))return;
+   if(tradeLevelHit(e.clientX,e.clientY))return;
+   const sh=hitTestDrawings(e.clientX,e.clientY,false);
+   if(sh&&sh.drawing&&!sh.drawing.locked)return;
+   fpTocco={id:e.pointerId,x:e.clientX,y:e.clientY,t:performance.now(),dito:e.pointerType!=='mouse'};
+ }catch(err){ fpTocco=null; }
+},true);
+chartEl.addEventListener('pointerup',e=>{
+ const t=fpTocco;
+ if(!t||t.id!==e.pointerId)return;
+ fpTocco=null;
+ if(Math.hypot(e.clientX-t.x,e.clientY-t.y)>(t.dito?10:4))return;   // era un trascinamento
+ if(performance.now()-t.t>700)return;                                  // pressione lunga: non e' un tocco
+ if(shapeDrag||tradeLevelDrag||zoneWidthDrag||twoFingerPan)return;
+ footprintCicloStile();
+},true);
+chartEl.addEventListener('pointercancel',()=>{ fpTocco=null; },true);
 // Solo aspetto: cambiano il disegno, non i bucket - nessuna ricostruzione necessaria.
 $('footprintShowCandle')?.addEventListener('change',()=>{ footprintShowCandle=$('footprintShowCandle').checked; draw(); scheduleSave(); });
 $('footprintShowBars')?.addEventListener('change',()=>{ footprintShowBars=$('footprintShowBars').checked; draw(); scheduleSave(); });
@@ -21574,6 +21721,7 @@ function tgNormalizzaGruppo(testo){
  return t;
 }
 let tgGruppi=[];
+try{ const g=JSON.parse(localStorage.getItem('fb_tg_gruppi')||'null'); if(Array.isArray(g))tgGruppi=g; }catch(e){}
 let tgWs=null, tgWsPorta=null, tgUltimoId=0, tgRiconnT=null;
 // "Questo utente usa i segnali": lo si scrive quando apre la scheda Telegram o aggiunge una sala.
 // Serve a decidere se collegarsi al ponte gia' all'avvio (vedi in fondo al blocco): senza questo
@@ -21866,7 +22014,12 @@ function tgAggiornaSetup(m){
  }
 }
 function tgApplicaStato(m){
- if(Array.isArray(m.chat)){ tgGruppi=m.chat; tgRenderGruppi(); }
+ if(Array.isArray(m.chat)){
+   tgGruppi=m.chat; tgRenderGruppi();
+   // Copia locale dell'elenco sale: condivisa con gli altri dispositivi (vedi GRAFICO_LS) e
+   // mostrata anche quando il servizio segnali non e' ancora raggiungibile.
+   try{ const j=JSON.stringify(m.chat); if(localStorage.getItem('fb_tg_gruppi')!==j)localStorage.setItem('fb_tg_gruppi',j); }catch(e){}
+ }
  tgAggiornaSetup(m);
  if(m.accesso_serve){ tgChiediAccesso(m.accesso_serve,m.accesso_errore); }
  else{
@@ -22981,17 +23134,33 @@ function tgStrategiaValuta(){
 // Parte sempre spento, e si accende una sala alla volta.
 const TG_AUTO_KEY='fb_tg_auto';
 function tgAutoVuoto(){
- return {attivo:false,maxGlobali:6,perditaMaxGiorno:3,sale:{},spentoIl:null};
+ // Predefiniti RICHIESTI: 40 posizioni in tutto, spegnimento oltre il 10% di perdita nella giornata,
+ // 1% del conto quando la sala non da' lo stop.
+ return {attivo:false,maxGlobali:40,perditaMaxGiorno:10,rischioSenzaSl:1,sale:{},spentoIl:null,predefinitiV:2};
+}
+// Configurazioni salvate coi predefiniti di prima (6 posizioni in tutto, 3% di perdita, 4 posizioni
+// per sala): passano ai nuovi (40, 10%, 6 - una per ogni TP). Un valore scelto a mano, diverso dal
+// vecchio predefinito, resta com'e'. Usata anche per la configurazione che arriva da un altro
+// dispositivo (vedi GRAFICO_LS), che puo' essere ancora quella vecchia.
+function tgAutoDaSalvato(v){
+ const a=Object.assign(tgAutoVuoto(),v||{});
+ if(!(v&&v.predefinitiV>=2)){
+   if(Number(a.maxGlobali)===6)a.maxGlobali=40;
+   if(Number(a.perditaMaxGiorno)===3)a.perditaMaxGiorno=10;
+   Object.values(a.sale||{}).forEach(c=>{ if(c&&Number(c.maxPosizioni)===4)c.maxPosizioni=6; });
+   a.predefinitiV=2;
+ }
+ return a;
 }
 let tgAuto=tgAutoVuoto();
 try{
  const v=JSON.parse(localStorage.getItem(TG_AUTO_KEY)||'null');
- if(v&&typeof v==='object')tgAuto=Object.assign(tgAutoVuoto(),v);
+ if(v&&typeof v==='object'){ tgAuto=tgAutoDaSalvato(v); if(!(v.predefinitiV>=2))tgAutoSalva(); }
 }catch(e){}
 function tgAutoSalva(){ try{ localStorage.setItem(TG_AUTO_KEY,JSON.stringify(tgAuto)); }catch(e){} }
-// Quanti take profit si possono configurare per sala. Cinque perche' e' il massimo che le sale
-// seguite mandano davvero; un segnale con meno target usa solo le prime caselle.
-const TG_AUTO_MAX_TP=5;
+// Quanti take profit si possono configurare per sala: sei (RICHIESTO). Un segnale con meno target
+// usa solo le prime caselle.
+const TG_AUTO_MAX_TP=6;
 // La strategia "prudente" scritta come regole: il primo target porta a pareggio, ogni target
 // successivo sposta lo stop al target precedente.
 function tgAutoRegolePrudenti(){
@@ -23001,7 +23170,7 @@ function tgAutoRegolePrudenti(){
 }
 function tgAutoSala(nome){
  const k=String(nome||'');
- if(!tgAuto.sale[k])tgAuto.sale[k]={attivo:false,rischio:1,maxPosizioni:4,regole:tgAutoRegolePrudenti(),avvicinamento:70};
+ if(!tgAuto.sale[k])tgAuto.sale[k]={attivo:false,rischio:1,maxPosizioni:6,regole:tgAutoRegolePrudenti(),avvicinamento:70};
  const cfg=tgAuto.sale[k];
  // Configurazioni salvate prima che esistessero le regole per target: si convertono, invece di
  // buttarle. Chi aveva scelto "prudente" ritrova esattamente quel comportamento.
@@ -23151,6 +23320,7 @@ function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
  if($('tgAutoLottoSenzaSl'))$('tgAutoLottoSenzaSl').value=tgLottoSenzaSl().toFixed(2);
+ if($('tgAutoRischioSenzaSl'))$('tgAutoRischioSenzaSl').value=tgRischioSenzaSl();
  if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
  if($('tgAutoTpExtra'))$('tgAutoTpExtra').value=tgTpExtraPct();
  if($('tgAutoPerdita'))$('tgAutoPerdita').value=tgAuto.perditaMaxGiorno;
@@ -23338,6 +23508,11 @@ $('tgAutoTpExtra')?.addEventListener('change',()=>{
  if(v>0)tgAuto.tpExtraPct=Math.min(500,v);
  tgAutoSalva(); tgAutoDisegna();
 });
+$('tgAutoRischioSenzaSl')?.addEventListener('change',()=>{
+ const v=Math.round(Number($('tgAutoRischioSenzaSl').value)*10)/10;
+ if(v>0)tgAuto.rischioSenzaSl=Math.min(20,v);
+ tgAutoSalva(); tgAutoDisegna();
+});
 $('tgAutoLottoSenzaSl')?.addEventListener('change',()=>{
  const v=Math.round(Number($('tgAutoLottoSenzaSl').value)*100)/100;
  if(v>=0.01)tgAuto.lottoSenzaSl=Math.min(100,v);
@@ -23383,6 +23558,13 @@ async function tgAutoValuta(voce){
   }
   return;
  }
+ // Con la configurazione condivisa, PC, tablet e telefono hanno tutti l'apertura automatica accesa:
+ // senza questo controllo ognuno aprirebbe le SUE posizioni sullo stesso conto (doppie).
+ if(!await tgRivendicaSegnale(voce)){
+  voce.autoMotivo='aperto automaticamente da un altro dispositivo collegato al tuo account';
+  try{ tgRenderPannello(); }catch(e){}
+  return;
+ }
  const seg=voce.segnale;
  const sym=await tgPreparaAssetAutomatico(voce);
  if(!sym){ voce.autoMotivo='asset «'+seg.strumento+'» non trovato'; try{ tgRenderPannello(); }catch(e){} return; }
@@ -23403,6 +23585,30 @@ async function tgAutoValuta(voce){
  const avvicinamento=(d.avvicinamento>0)?{pct:d.avvicinamento}:null;
  voce.autoMotivo=null;
  await tgEseguiSegnale(voce,{sym,piano,regole,avvicinamento,automatico:true});
+}
+// Identificativo di questo dispositivo (resta lo stesso fra un avvio e l'altro).
+function fblIdDispositivo(){
+ try{
+  let v=localStorage.getItem('fbl_id_dispositivo');
+  if(!v){ v=Date.now().toString(36)+Math.random().toString(36).slice(2,10); localStorage.setItem('fbl_id_dispositivo',v); }
+  return v;
+ }catch(e){ return 'sconosciuto'; }
+}
+// Chi apre questo segnale? Il primo dispositivo che lo rivendica sul cloud. Senza account (o con il
+// cloud irraggiungibile per 8 s) decide la posizione: apre solo il dispositivo che sta sul PC con
+// MT5, cosi' un telefono senza rete non raddoppia mai quello che il PC ha gia' aperto.
+async function tgRivendicaSegnale(voce){
+ const c=window.fxbtCloud;
+ if(!c||!c.uid||typeof c.segnaleRivendica!=='function')return true;
+ const grezzo=String(voce.id!=null?voce.id:((voce.chat||'')+'|'+(voce.quando||voce.data||'')+'|'+((voce.segnale&&voce.segnale.testo)||voce.testo||'')));
+ let id=grezzo.replace(/[^A-Za-z0-9_-]/g,'_');
+ if(id.length>120){ let h=0; for(let i=0;i<grezzo.length;i++)h=(h*31+grezzo.charCodeAt(i))|0; id=id.slice(0,100)+'_'+(h>>>0).toString(36); }
+ try{
+  return await Promise.race([c.segnaleRivendica(id,fblIdDispositivo()),new Promise((_,no)=>setTimeout(()=>no(new Error('tempo scaduto')),8000))]);
+ }catch(e){
+  console.warn('[Segnali] rivendicazione sul cloud non riuscita ('+((e&&e.message)||e)+'): apre solo il PC con MT5.');
+  return !fblRemoto();
+ }
 }
 // Nell'automatico il cambio di asset non puo' passare da una domanda: non c'e' nessuno a
 // rispondere. Si cambia e basta, e se non riesce il segnale torna manuale.
@@ -23965,6 +24171,12 @@ function tgTpSenzaTpPct(){ return tgBeSenzaTpPct()+tgTpExtraPct(); }
 // Il pareggio anticipato si esprime come percentuale della strada verso il target (vedi
 // tgLivelloAvvicinamento): 20% dello stop con target al 30% = 66,7% della strada.
 function tgAvvicinamentoSenzaTp(){ return tgBeSenzaTpPct()/tgTpSenzaTpPct()*100; }
+// Rischio quando la sala non da' lo stop (RICHIESTO: 1% del conto di predefinito), al posto del
+// rischio della sala: lo stop e' calcolato dall'app, quindi la perdita massima la decide questo.
+function tgRischioSenzaSl(){
+ const v=Number(tgAuto&&tgAuto.rischioSenzaSl);
+ return (Number.isFinite(v)&&v>0)?Math.min(20,v):1;
+}
 function tgLottoSenzaSl(){
  const v=Number(tgAuto&&tgAuto.lottoSenzaSl);
  return (Number.isFinite(v)&&v>=0.01)?Math.round(v*100)/100:0.01;
@@ -24016,7 +24228,8 @@ function tgPiano(seg,sym,pctForzata){
  if(!tgC(seg.stop_loss)){
   const tuttiTp=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!validateTradeLevel(side,entry,NaN,v));
   const nTp=Math.max(1,tuttiTp.length);
-  const pctTmp=(Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale();
+  // Automatico (pctForzata = rischio della sala): senza stop si usa il rischio dedicato.
+  const pctTmp=(Number.isFinite(pctForzata)&&pctForzata>0)?tgRischioSenzaSl():tgRischioTotale();
   const calc=tgStopCalcolato(side,entry,nTp,realizedBalanceNow()*pctTmp/100,sym);
   if(calc.problema)return {problemi:[calc.problema]};
   sl=calc.sl; lottiFissi=calc.lotti; slCalcolato=true;
@@ -31868,7 +32081,7 @@ function mt5ScegliContoPopup(conti,opts={}){
       </div>
     </div>`;
   const targetDoc=popupTargetDoc();
-  targetDoc.body.appendChild(overlay);
+  popupContenitore(targetDoc).appendChild(overlay);
   function fine(v){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(v); }
   function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); fine(null); } }
   targetDoc.addEventListener('keydown',onKey);
