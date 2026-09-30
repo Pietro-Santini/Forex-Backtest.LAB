@@ -3228,6 +3228,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input id="tgAutoPerdita" class="tgCfgIn tgCfgNum" type="number" min="0.5" max="50" step="0.5" style="width:70px"> % si spegne</label>
        <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, l'app lo calcola dal rischio scelto con questo lotto per posizione. Il minimo (0,01) mette lo stop il più lontano possibile a parità di perdita massima.">Senza stop della sala: lotto per posizione
          <input id="tgAutoLottoSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.01" max="100" step="0.01" style="width:70px"></label>
+       <label class="tgCfgCampo" title="Quando la sala dà lo stop ma nessun take profit, l'app mette il target a questa percentuale della distanza dello stop. 20% = rapporto 1:0,2: per andare in pari serve vincere l'83% delle volte; 100% = 1:1 (50%).">Senza target della sala: target al
+         <input id="tgAutoTpSenzaTp" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % della distanza dello stop</label>
      </div>
      <div class="tgCfgNota" style="margin-top:7px">Il tetto complessivo vince sempre su quelli delle singole sale. Quando un limite è raggiunto il segnale <b>non viene buttato</b>: finisce nel pannello, da valutare a mano.</div>
 
@@ -21965,7 +21967,7 @@ function tgRenderPannello(){
   card.appendChild(tgRiga(tps.length
    ? (tps.length+(tps.length===1?' take profit: ':' take profit: ')+tps.map(tgFmt).join('  ·  ')
       +'   →   '+tps.length+(tps.length===1?' posizione':' posizioni'))
-   : 'Nessun take profit indicato: una sola posizione, con il solo stop loss'));
+   : ('Nessun take profit indicato: una sola posizione, con il target calcolato dall\'app al '+tgTpSenzaTpPct()+'% della distanza dello stop')));
 
   // Il riepilogo di cosa e' stato aperto davvero (prezzi reali del piano, non quelli della sala).
   if(voce.stato==='eseguito'&&voce.eseguito){
@@ -21973,7 +21975,7 @@ function tgRenderPannello(){
    card.appendChild(tgRiga('✅ Aperto: '+e.side+' '+e.sym+' · '+(voce.aperte||0)+(voce.aperte===1?' posizione':' posizioni')
      +' da '+Number(e.lotti||0).toFixed(2)+' lot'+(e.reale?' su MT5':' simulate')
      +' · SL '+tgFmt(e.sl)+(e.slCalcolato?' (calcolato dall\'app: la sala non l\'ha dato)':'')
-     +(e.tp&&e.tp.length?(' · TP '+e.tp.map(tgFmt).join(' / ')):''),'tgCardRiga'));
+     +(e.tp&&e.tp.length?(' · TP '+e.tp.map(tgFmt).join(' / ')+(e.tpCalcolato?' (calcolato dall\'app: la sala non l\'ha dato)':'')):''),'tgCardRiga'));
   }
   (seg.avvisi||[]).forEach(a=>card.appendChild(tgRiga('⚠ '+a,'tgCardAvviso')));
   // Perche' l'apertura automatica NON ha aperto questo segnale. Senza, resterebbe un mistero: si
@@ -22248,6 +22250,12 @@ function tgCfgDisegnaRiepilogo(piano){
  const quante=piano.n+(piano.n===1?' posizione':' posizioni');
  agg('<span class="grande">'+quante+' '+piano.side+' su '+tgCfg.sym+'</span>');
  agg('Entrata al prezzo di adesso <b>'+tgFmt(piano.entry)+'</b> · stop loss <b>'+tgFmt(piano.sl)+'</b> su tutte · <b>'+piano.lotti.toFixed(2)+'</b> lot ciascuna');
+ if(piano.tpCalcolato){
+  const d=document.createElement('div'); d.className='tgCfgAllarme';
+  d.textContent='La sala non ha dato il take profit: l\'ho messo al '+tgTpSenzaTpPct()+'% della distanza dello stop ('+tgFmt(piano.tp[0])
+   +'). Rapporto 1:'+(piano.rr!=null?piano.rr.toFixed(2):'?')+': per andare in pari serve vincere il '+(piano.rr?Math.round(100/(1+piano.rr)):'?')+'% delle volte.';
+  box.appendChild(d);
+ }
  if(piano.slCalcolato){
   const d=document.createElement('div'); d.className='tgCfgNota';
   d.textContent='La sala non ha dato lo stop loss: l\'ho calcolato io dal rischio scelto, con '+piano.lotti.toFixed(2)
@@ -22705,6 +22713,7 @@ function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
  if($('tgAutoLottoSenzaSl'))$('tgAutoLottoSenzaSl').value=tgLottoSenzaSl().toFixed(2);
+ if($('tgAutoTpSenzaTp'))$('tgAutoTpSenzaTp').value=tgTpSenzaTpPct();
  if($('tgAutoPerdita'))$('tgAutoPerdita').value=tgAuto.perditaMaxGiorno;
  const nota=$('tgAutoStatoNota');
  if(nota){
@@ -22878,6 +22887,11 @@ $('tgAutoAttivo')?.addEventListener('change',async ()=>{
  }
  tgAuto.attivo=acceso;
  if(acceso)tgAuto.spentoIl=null;   // riaccendere a mano annulla lo stop di giornata
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgAutoTpSenzaTp')?.addEventListener('change',()=>{
+ const v=Number($('tgAutoTpSenzaTp').value);
+ if(v>0)tgAuto.tpSenzaTpPct=Math.min(500,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoLottoSenzaSl')?.addEventListener('change',()=>{
@@ -23470,6 +23484,10 @@ async function tgPortaAGrafico(sym){
 // parita' di perdita massima e' la scelta che mette lo stop piu' lontano possibile) - e lo stop si
 // ricava: la perdita, se scatta, e' al massimo il rischio % scelto, sommato su tutte le posizioni.
 // E' un tetto alla perdita, non un livello tecnico: con conti piccoli lo stop viene vicino.
+function tgTpSenzaTpPct(){
+ const v=Number(tgAuto&&tgAuto.tpSenzaTpPct);
+ return (Number.isFinite(v)&&v>0)?Math.min(500,v):20;
+}
 function tgLottoSenzaSl(){
  const v=Number(tgAuto&&tgAuto.lottoSenzaSl);
  return (Number.isFinite(v)&&v>=0.01)?Math.round(v*100)/100:0.01;
@@ -23517,7 +23535,18 @@ function tgPiano(seg,sym,pctForzata){
  const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
  // Un take profit che il prezzo ha gia' passato non ha senso come posizione a se': aprirla
  // significherebbe nascere oltre il proprio obiettivo. Si scartano quelli, non tutto il segnale.
- const tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
+ let tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
+ // TARGET CALCOLATO (RICHIESTO): la sala da' lo stop ma nessun target -> un target a una
+ // percentuale della distanza dello stop (di default 20%, regolabile). Attenzione, detto anche
+ // nella conferma: al 20% il rapporto e' 1:0,2 e per andare in pari serve vincere l'83% delle volte.
+ let tpCalcolato=false;
+ if(!tutti.length){
+  const pctTp=tgTpSenzaTpPct();
+  const passoTp=pipSizeForAsset(sym)/10;
+  let v=side==='BUY'?entry+Math.abs(entry-sl)*pctTp/100:entry-Math.abs(entry-sl)*pctTp/100;
+  v=Number((Math.round(v/passoTp)*passoTp).toFixed(8));
+  if(!validateTradeLevel(side,entry,NaN,v)&&v!==entry){ tp=[v]; tpCalcolato=true; }
+ }
  const scartati=tutti.filter(v=>!!validateTradeLevel(side,entry,NaN,v));
  const n=Math.max(1,tp.length);
  const pct=(Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale();
@@ -23538,7 +23567,8 @@ function tgPiano(seg,sym,pctForzata){
  const rischioReale=lotti*perLotto*n;
  let margine=0;
  try{ margine=marginForLots(lotti,entry,sym)*n; }catch(e){}
- return {side,entry,sl,tp,scartati,n,lotti,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,
+ return {side,entry,sl,tp,scartati,n,lotti,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,tpCalcolato,
+   rr:(tp.length&&Math.abs(entry-sl)>0)?Math.abs(tp[0]-entry)/Math.abs(entry-sl):null,
    rischioRealePct:(saldo>0?rischioReale/saldo*100:null)};
 }
 // Il momento in cui un segnale diventa (o non diventa) delle posizioni.
@@ -23597,7 +23627,10 @@ async function tgEseguiSegnale(voce,opzioni){
    +(tgC(seg.entrata)?(' — la sala diceva '+tgFmt(seg.entrata)+(tgC(seg.entrata_max)?('–'+tgFmt(seg.entrata_max)):'')):''));
  r.push('Stop loss: '+tgFmt(p.sl)+' su tutte'+(p.slCalcolato
    ?(' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Con '+p.lotti.toFixed(2)+' lot per posizione, se scatta si perde al massimo il '+p.pct.toFixed(2)+'% scelto.'):''));
- r.push(p.tp.length
+ r.push(p.tpCalcolato
+   ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non l\'ha dato. È al '+tgTpSenzaTpPct()+'% della distanza dello stop: rapporto 1:'
+      +(p.rr!=null?p.rr.toFixed(2):'?')+', per andare in pari serve vincere il '+(p.rr?Math.round(100/(1+p.rr)):'?')+'% delle volte.')
+   : p.tp.length
    ? ('Take profit: '+p.tp.map(tgFmt).join('  ·  ')+'  (uno per posizione)')
    : 'Nessun take profit: una sola posizione, con il solo stop loss');
  r.push('Lottaggio: '+p.lotti.toFixed(2)+' lot per posizione');
@@ -23685,7 +23718,7 @@ async function tgEseguiSegnale(voce,opzioni){
  if(aperte){
   voce.automatico=!!(opzioni&&opzioni.automatico);
   voce.eseguito={il:Date.now(),sym,side:p.side,lotti:p.lotti,sl:p.sl,slCalcolato:!!p.slCalcolato,
-    tp:p.tp.slice(0,aperte),reale:!!mt5Connected};
+    tp:p.tp.slice(0,aperte),tpCalcolato:!!p.tpCalcolato,reale:!!mt5Connected};
  }
  tgAggiornaPulsante(); tgRenderPannello();
  $('status').textContent=aperte
