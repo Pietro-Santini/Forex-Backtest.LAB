@@ -3340,6 +3340,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input id="tgAutoMaxGlob" class="tgCfgIn tgCfgNum" type="number" min="1" max="50" step="1" style="width:70px"></label>
        <label class="tgCfgCampo">Se la giornata perde più del
          <input id="tgAutoPerdita" class="tgCfgIn tgCfgNum" type="number" min="0.5" max="50" step="0.5" style="width:70px"> % si spegne</label>
+       <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, la perdita massima di quel segnale (tutte le sue posizioni insieme) è questa percentuale del conto, al posto del rischio della sala.">Senza stop della sala: rischio
+         <input id="tgAutoRischioSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.1" max="20" step="0.1" style="width:70px"> % del conto</label>
        <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, l'app lo calcola dal rischio scelto con questo lotto per posizione. Il minimo (0,01) mette lo stop il più lontano possibile a parità di perdita massima.">Senza stop della sala: lotto per posizione
          <input id="tgAutoLottoSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.01" max="100" step="0.01" style="width:70px"></label>
        <label class="tgCfgCampo" title="Quando la sala dà lo stop ma nessun take profit: appena il prezzo percorre questa percentuale della distanza dello stop, lo stop va a pareggio (profitto netto 0,00).">Senza target della sala: pareggio al
@@ -4820,7 +4822,7 @@ const GRAFICO_CAMPI_LOCALI=new Set(['lastSide','armed']);
 // riapplica quando arriva da un altro dispositivo. Le strategie delle posizioni aperte
 // (fb_tg_strategie) restano del dispositivo che le ha aperte: sono stato, non configurazione.
 const GRAFICO_LS={
- fb_tg_auto:v=>{ try{ tgAuto=Object.assign(tgAutoVuoto(),JSON.parse(v)||{}); }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
+ fb_tg_auto:v=>{ try{ tgAuto=tgAutoDaSalvato(JSON.parse(v)||{}); }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
  fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
  fb_tg_attivo:v=>{ try{ if(v==='1'){ tgAggiornaInterruttore(); tgCollega(); } else { tgScollega(); tgAggiornaInterruttore(); } }catch(e){} },
  fb_tg_rischio_totale:null,
@@ -23073,17 +23075,33 @@ function tgStrategiaValuta(){
 // Parte sempre spento, e si accende una sala alla volta.
 const TG_AUTO_KEY='fb_tg_auto';
 function tgAutoVuoto(){
- return {attivo:false,maxGlobali:6,perditaMaxGiorno:3,sale:{},spentoIl:null};
+ // Predefiniti RICHIESTI: 40 posizioni in tutto, spegnimento oltre il 10% di perdita nella giornata,
+ // 1% del conto quando la sala non da' lo stop.
+ return {attivo:false,maxGlobali:40,perditaMaxGiorno:10,rischioSenzaSl:1,sale:{},spentoIl:null,predefinitiV:2};
+}
+// Configurazioni salvate coi predefiniti di prima (6 posizioni in tutto, 3% di perdita, 4 posizioni
+// per sala): passano ai nuovi (40, 10%, 6 - una per ogni TP). Un valore scelto a mano, diverso dal
+// vecchio predefinito, resta com'e'. Usata anche per la configurazione che arriva da un altro
+// dispositivo (vedi GRAFICO_LS), che puo' essere ancora quella vecchia.
+function tgAutoDaSalvato(v){
+ const a=Object.assign(tgAutoVuoto(),v||{});
+ if(!(v&&v.predefinitiV>=2)){
+   if(Number(a.maxGlobali)===6)a.maxGlobali=40;
+   if(Number(a.perditaMaxGiorno)===3)a.perditaMaxGiorno=10;
+   Object.values(a.sale||{}).forEach(c=>{ if(c&&Number(c.maxPosizioni)===4)c.maxPosizioni=6; });
+   a.predefinitiV=2;
+ }
+ return a;
 }
 let tgAuto=tgAutoVuoto();
 try{
  const v=JSON.parse(localStorage.getItem(TG_AUTO_KEY)||'null');
- if(v&&typeof v==='object')tgAuto=Object.assign(tgAutoVuoto(),v);
+ if(v&&typeof v==='object'){ tgAuto=tgAutoDaSalvato(v); if(!(v.predefinitiV>=2))tgAutoSalva(); }
 }catch(e){}
 function tgAutoSalva(){ try{ localStorage.setItem(TG_AUTO_KEY,JSON.stringify(tgAuto)); }catch(e){} }
-// Quanti take profit si possono configurare per sala. Cinque perche' e' il massimo che le sale
-// seguite mandano davvero; un segnale con meno target usa solo le prime caselle.
-const TG_AUTO_MAX_TP=5;
+// Quanti take profit si possono configurare per sala: sei (RICHIESTO). Un segnale con meno target
+// usa solo le prime caselle.
+const TG_AUTO_MAX_TP=6;
 // La strategia "prudente" scritta come regole: il primo target porta a pareggio, ogni target
 // successivo sposta lo stop al target precedente.
 function tgAutoRegolePrudenti(){
@@ -23093,7 +23111,7 @@ function tgAutoRegolePrudenti(){
 }
 function tgAutoSala(nome){
  const k=String(nome||'');
- if(!tgAuto.sale[k])tgAuto.sale[k]={attivo:false,rischio:1,maxPosizioni:4,regole:tgAutoRegolePrudenti(),avvicinamento:70};
+ if(!tgAuto.sale[k])tgAuto.sale[k]={attivo:false,rischio:1,maxPosizioni:6,regole:tgAutoRegolePrudenti(),avvicinamento:70};
  const cfg=tgAuto.sale[k];
  // Configurazioni salvate prima che esistessero le regole per target: si convertono, invece di
  // buttarle. Chi aveva scelto "prudente" ritrova esattamente quel comportamento.
@@ -23243,6 +23261,7 @@ function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
  if($('tgAutoLottoSenzaSl'))$('tgAutoLottoSenzaSl').value=tgLottoSenzaSl().toFixed(2);
+ if($('tgAutoRischioSenzaSl'))$('tgAutoRischioSenzaSl').value=tgRischioSenzaSl();
  if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
  if($('tgAutoTpExtra'))$('tgAutoTpExtra').value=tgTpExtraPct();
  if($('tgAutoPerdita'))$('tgAutoPerdita').value=tgAuto.perditaMaxGiorno;
@@ -23428,6 +23447,11 @@ $('tgAutoBeSenzaTp')?.addEventListener('change',()=>{
 $('tgAutoTpExtra')?.addEventListener('change',()=>{
  const v=Number($('tgAutoTpExtra').value);
  if(v>0)tgAuto.tpExtraPct=Math.min(500,v);
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgAutoRischioSenzaSl')?.addEventListener('change',()=>{
+ const v=Math.round(Number($('tgAutoRischioSenzaSl').value)*10)/10;
+ if(v>0)tgAuto.rischioSenzaSl=Math.min(20,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoLottoSenzaSl')?.addEventListener('change',()=>{
@@ -24088,6 +24112,12 @@ function tgTpSenzaTpPct(){ return tgBeSenzaTpPct()+tgTpExtraPct(); }
 // Il pareggio anticipato si esprime come percentuale della strada verso il target (vedi
 // tgLivelloAvvicinamento): 20% dello stop con target al 30% = 66,7% della strada.
 function tgAvvicinamentoSenzaTp(){ return tgBeSenzaTpPct()/tgTpSenzaTpPct()*100; }
+// Rischio quando la sala non da' lo stop (RICHIESTO: 1% del conto di predefinito), al posto del
+// rischio della sala: lo stop e' calcolato dall'app, quindi la perdita massima la decide questo.
+function tgRischioSenzaSl(){
+ const v=Number(tgAuto&&tgAuto.rischioSenzaSl);
+ return (Number.isFinite(v)&&v>0)?Math.min(20,v):1;
+}
 function tgLottoSenzaSl(){
  const v=Number(tgAuto&&tgAuto.lottoSenzaSl);
  return (Number.isFinite(v)&&v>=0.01)?Math.round(v*100)/100:0.01;
@@ -24139,7 +24169,8 @@ function tgPiano(seg,sym,pctForzata){
  if(!tgC(seg.stop_loss)){
   const tuttiTp=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!validateTradeLevel(side,entry,NaN,v));
   const nTp=Math.max(1,tuttiTp.length);
-  const pctTmp=(Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale();
+  // Automatico (pctForzata = rischio della sala): senza stop si usa il rischio dedicato.
+  const pctTmp=(Number.isFinite(pctForzata)&&pctForzata>0)?tgRischioSenzaSl():tgRischioTotale();
   const calc=tgStopCalcolato(side,entry,nTp,realizedBalanceNow()*pctTmp/100,sym);
   if(calc.problema)return {problemi:[calc.problema]};
   sl=calc.sl; lottiFissi=calc.lotti; slCalcolato=true;
