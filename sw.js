@@ -45,8 +45,14 @@
 //               browser e offre il test diretto, invece di dire «computer non trovato»
 //          v12 = login al conto MT5 dal tablet (mancava la chiave); dal tablet
 //               «Disconnetti» e la chiusura della pagina non spengono piu' il PC
+//          v13 = cambio conto MT5: le posizioni dell'altro conto non si chiudono piu'
+//               a prezzo 0 nel Trade Journal, si mettono da parte e tornano
+//          v14 = con piu' conti MT5 si sceglie su quale entrare (niente riconnessione
+//               all'ultimo); server predefinito MetaQuotes-Demo
+//          v15 = footprint allineato nell'ora 22-23 (via i tick MT5 storici dalle fasce
+//               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v12";
+const CACHE_NAME = "forex-backtest-lab-v18";
 const ASSETS = [
   "./",
   "./app.html",
