@@ -30653,7 +30653,33 @@ function heatmapCellsForAssetNow(assetKey){
 // voluta interna, e viene azzerato SOLO quando si abbandona davvero MT5 come sorgente (vedi i
 // punti che lo azzerano più sotto).
 let mt5ActiveSymbol=null;
+let mt5UltimoRestSenzaTickAt=0;
 let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null, lastMt5RealTickAt=0;
+// ===================== OROLOGIO DEL SERVIZIO MT5 (tablet/telefono) =====================
+// SEGNALATO: "dal tablet/telefono via Tailscale il grafico si aggiorna nei primi istanti, poi la
+// candela si muove solo a ogni chiusura; il COB invece segue il prezzo". mt5_feed_server.py etichetta
+// candele e tick con l'orario del broker riportato all'OROLOGIO DEL PC (scarto arrotondato al minuto).
+// Se l'orologio del PC e' avanti/indietro di oltre 30 s rispetto a quello del telefono, le candele
+// risultano un minuto "avanti" (o indietro) rispetto al minuto che il telefono crede in corso: ogni
+// tick veniva scartato come "fuori sequenza" in applyLivePriceToChart e la candela si aggiornava
+// solo al ricaricamento dello storico di fine candela. Sul PC non succede perche' usa lo stesso
+// orologio del servizio. Fix: ogni dispositivo misura lo scarto fra il suo orologio e quello dei
+// tick (il tick piu' fresco degli ultimi 90 s: un tick nuovo arriva pochi ms dopo essere nato) e
+// usa quell'ora per candele, cambio candela e confronti col REST.
+let mt5ScartiOrologio=[], mt5ScartoOrologioMs=0;
+function mt5RegistraOrarioTick(timeMs){
+ if(!Number.isFinite(timeMs))return;
+ const ora=Date.now(), d=timeMs-ora;
+ if(Math.abs(d)>6*3600000)return; // tick vecchio di ore (mercato chiuso): non dice nulla
+ mt5ScartiOrologio.push({at:ora,d});
+ while(mt5ScartiOrologio.length&&ora-mt5ScartiOrologio[0].at>90000)mt5ScartiOrologio.shift();
+ if(mt5ScartiOrologio.length>400)mt5ScartiOrologio.splice(0,mt5ScartiOrologio.length-400);
+ const max=Math.max(...mt5ScartiOrologio.map(x=>x.d));
+ const prima=mt5ScartoOrologioMs;
+ mt5ScartoOrologioMs=Math.abs(max)>2000?Math.round(max):0; // sotto i 2 s: rete e ritardi normali
+ if(Math.abs(mt5ScartoOrologioMs-prima)>5000)console.log('[MT5Feed] orologio del servizio MT5 '+(mt5ScartoOrologioMs>=0?'+':'')+(mt5ScartoOrologioMs/1000).toFixed(1)+' s rispetto a questo dispositivo: candele allineate a quello.');
+}
+function mt5Adesso(){ return Date.now()+mt5ScartoOrologioMs; }
 let lastMt5ChartUpdateAt=0, mt5HardResyncAttemptAt=0;
 let mt5LastSeenCandleBucketStart=null, mt5CandleRolloverResyncAt=0, mt5CandleRolloverResyncInProgress=false, mt5CandleFrozen=false;
 let mt5RefreshTimer=null;
@@ -31145,8 +31171,9 @@ function connectMt5Stream(symbol){
    // sotto scarta ogni messaggio la cui connessione non corrisponde più al simbolo a grafico ORA —
    // niente più prezzi di un asset che finiscono sulla candela di un altro.
    if(symbol!==mt5ActiveSymbol)return;
+   mt5RegistraOrarioTick(Number(msg.time_ms));
    lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
-   lastMt5RealTickAt=Date.now(); // tick VERO (non heartbeat): solo lui può aprire una candela nuova
+   lastMt5RealTickAt=mt5Adesso(); // tick VERO (non heartbeat): solo lui può aprire una candela nuova. Ora del servizio MT5 (vedi mt5Adesso)
    // METADATI AUTOMATICI: spread REALE, ogni tick ha già bid E ask insieme (a differenza di
    // Capital.com, mai da sperare che ci sia) — throttled a 1 volta ogni 5s per asset, vedi
    // commento gemello in applyLiveTick().
@@ -31169,7 +31196,7 @@ function connectMt5Stream(symbol){
    // (vedi il "volume": tick.volume nel server Python) — lo usiamo come peso invece del semplice
    // conteggio a 1 per tick, quando è un numero valido e positivo (vedi il commento completo su
    // "weight" dentro footprintRegisterTick() per i limiti di affidabilità di questo campo).
-   footprintRegisterTick(msg.bid,Date.now(),mt5ActiveSymbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1,'mt5');
+   footprintRegisterTick(msg.bid,mt5Adesso(),mt5ActiveSymbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1,'mt5');
  };
  ws.onerror=()=>{ if(ws===mt5FeedWs)$('status').textContent='⚠️ Streaming Live MT5: errore di connessione WebSocket.'; };
  ws.onclose=()=>{
@@ -31231,7 +31258,7 @@ function connectMt5BackgroundStream(asset,symbol){
    // Stesso principio di connectMt5Stream() più sopra: registrato a ogni tick grezzo, rispetta da
    // solo l'orario MT5/Capital.com/blackout (footprintRegisterTick() è generica, non legata
    // all'asset a grafico ora).
-   footprintRegisterTick(msg.bid,Date.now(),symbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1,'mt5');
+   footprintRegisterTick(msg.bid,mt5Adesso(),symbol,Number.isFinite(msg.volume)&&msg.volume>0?msg.volume:1,'mt5');
  };
  ws.onerror=()=>{};
  ws.onclose=()=>{
@@ -31333,7 +31360,7 @@ function startMt5RefreshTimer(){
    // commento completo su startLiveRefreshTimer): evita che una candela "di transizione" coi
    // valori non affidabili venga mai disegnata o valutata per SL/TP.
    const rolloverBucketMs=(currentTF||1)*60000;
-   const nowBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
+   const nowBucketStart=Math.floor(mt5Adesso()/rolloverBucketMs)*rolloverBucketMs; // ora del servizio MT5, vedi mt5Adesso
    if(mt5LastSeenCandleBucketStart==null){
      mt5LastSeenCandleBucketStart=nowBucketStart;
    }else if(nowBucketStart>mt5LastSeenCandleBucketStart && !mt5CandleRolloverResyncInProgress && !mt5CandleFrozen && (Date.now()-mt5CandleRolloverResyncAt)>2000){
@@ -31361,6 +31388,9 @@ function startMt5RefreshTimer(){
      },1000);
      return;
    }
+   // Rete di sicurezza: se il ricaricamento dello storico di fine candela non torna (rete lenta o
+   // caduta dal telefono), la pausa non deve durare per sempre.
+   if(mt5CandleFrozen&&(Date.now()-mt5CandleRolloverResyncAt)>20000){ mt5CandleFrozen=false; mt5CandleRolloverResyncInProgress=false; }
    if(mt5CandleFrozen){ update();draw(); return; }
    const staleMs=lastMt5TickAt?(Date.now()-lastMt5TickAt):Infinity;
    if(staleMs>8000 && (Date.now()-mt5StreamReconnectAttemptAt)>8000){
@@ -31369,21 +31399,36 @@ function startMt5RefreshTimer(){
      connectMt5Stream(symbol);
    }
    let touched=false;
-   const __mt5Bucket=Math.floor(Date.now()/((currentTF||1)*60000))*((currentTF||1)*60000);
-   if(Number.isFinite(lastMt5TickPrice))touched=applyLivePriceToChart(lastMt5TickPrice,Date.now(),{allowNew:lastMt5RealTickAt>=__mt5Bucket,fromAsset:currentAssetKey||null})||touched;
-   if(staleMs>4000){
-     const __reqAt=Date.now();
+   const __mt5Ora=mt5Adesso();
+   const __mt5Bucket=Math.floor(__mt5Ora/((currentTF||1)*60000))*((currentTF||1)*60000);
+   if(Number.isFinite(lastMt5TickPrice))touched=applyLivePriceToChart(lastMt5TickPrice,__mt5Ora,{allowNew:lastMt5RealTickAt>=__mt5Bucket,fromAsset:currentAssetKey||null})||touched;
+   // Oltre al canale muto (staleMs), si interroga il REST ogni 3 s anche quando arrivano solo i
+   // "battiti" senza prezzo da oltre 5 s: il prezzo non deve MAI restare fermo se MT5 si muove.
+   const __senzaTickVeri=lastMt5RealTickAt?(__mt5Ora-lastMt5RealTickAt):Infinity;
+   if(staleMs>4000||(__senzaTickVeri>5000&&(Date.now()-mt5UltimoRestSenzaTickAt)>3000)){
+     mt5UltimoRestSenzaTickAt=Date.now();
+     const __reqAt=mt5Adesso();
      const rest=await fetchLatestMt5PriceRest(symbol);
      const restPrice=rest?rest.price:null;
      if(Number.isFinite(restPrice)){
        // Stessa identica protezione del ramo Capital.com qui sopra.
        const tickArrivedDuringFetch=(lastMt5RealTickAt>__reqAt);
-       const olderThanLastTick=restStampUsable(rest.atMs)&&lastMt5RealTickAt&&rest.atMs<lastMt5RealTickAt;
+       // rest.atMs e' l'APERTURA della candela M1 (non l'ora del tick): e' vecchia solo se quella
+       // candela era gia' finita prima dell'ultimo tick applicato. Prima si confrontava l'apertura,
+       // e dopo il primo tick di ogni minuto il REST veniva scartato sempre.
+       const olderThanLastTick=restStampUsable(rest.atMs)&&lastMt5RealTickAt&&(rest.atMs+60000)<lastMt5RealTickAt;
        if(tickArrivedDuringFetch||olderThanLastTick){
          console.log('[MT5Feed] prezzo REST '+restPrice+' scartato: piu\' vecchio dell\'ultimo tick applicato (evita lo sbalzo fra due prezzi).');
        }else{
+         // Canale vivo (solo battiti) ma il prezzo REST e' diverso: il canale tick si e' fermato
+         // lato servizio. Lo si riapre subito (al massimo ogni 10 s) invece di aspettare.
+         if(staleMs<=4000&&Number.isFinite(lastMt5TickPrice)&&restPrice!==lastMt5TickPrice&&(Date.now()-mt5StreamReconnectAttemptAt)>10000){
+           mt5StreamReconnectAttemptAt=Date.now();
+           console.log('[MT5Feed] prezzo fermo sul canale tick ma MT5 si e\' mosso: riapro il canale.');
+           disconnectMt5Stream(); connectMt5Stream(symbol);
+         }
          lastMt5TickPrice=restPrice;
-         touched=applyLivePriceToChart(restPrice,Date.now(),{allowNew:false,fromAsset:currentAssetKey||null})||touched;
+         touched=applyLivePriceToChart(restPrice,mt5Adesso(),{allowNew:false,fromAsset:currentAssetKey||null})||touched;
        }
      }
    }
