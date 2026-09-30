@@ -1025,6 +1025,11 @@ setTimeout(function(){
         return true;
       });
     },
+    async graficoLeggi(){
+      if(!this.uid) return null;
+      const s = await getDoc(doc(db,"users",this.uid,"data","grafico"));
+      return s.exists() ? (s.data().voci || {}) : {};
+    },
     graficoAscolta(cb, errCb){
       if(!this.uid) return ()=>{};
       return onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
@@ -2451,6 +2456,15 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    <div class="fbModalBody">
      <p class="hint" style="margin:0 0 12px">Ogni disegno presente sul grafico di QUESTO asset (linee, rettangoli, Fibonacci, profili volumetrici, VWAP, linee Alarm) è elencato qui singolarmente, e sotto trovi anche gli indicatori. 🔒 blocca un disegno così non si sposta né si deforma per errore a grafico. Da ogni riga puoi aprirne le impostazioni (⚙️), nascondere/mostrare solo quello (👁️) o eliminarlo (🗑️) — gli altri non vengono toccati.</p>
      <div id="chartLayersListBody"></div>
+     <!-- Disegni condivisi fra PC, tablet e telefono: stato e comandi manuali (vedi graficoCloudAvvia). -->
+     <div style="margin-top:14px;padding:10px;border:1px solid #2b3541;border-radius:8px;background:#0e141c">
+       <div style="font-size:12.5px;font-weight:700;margin-bottom:4px">☁️ Disegni condivisi con gli altri dispositivi</div>
+       <div id="graficoSyncStato" class="hint" style="margin:0 0 8px">—</div>
+       <div style="display:flex;flex-wrap:wrap;gap:6px">
+         <button type="button" id="graficoPrendiBtn" class="miniBtn" title="Sostituisce disegni, indicatori e configurazione delle sale di questo dispositivo con quelli salvati sul cloud dagli altri dispositivi">⬇️ Prendi dagli altri dispositivi</button>
+         <button type="button" id="graficoMandaBtn" class="miniBtn" title="Manda a tutti gli altri dispositivi i disegni, gli indicatori e la configurazione delle sale di QUESTO dispositivo, sostituendo i loro">⬆️ Manda questi a tutti</button>
+       </div>
+     </div>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="chartLayersModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
@@ -4926,6 +4940,17 @@ function graficoProgrammaInvio(){
  graficoTimerInvio=setTimeout(graficoInviaOra,1500);
 }
 let graficoAvvisoPieno=false;
+const graficoStat={inviatoAt:0,inviate:0,ricevutoAt:0,ricevute:0,errore:'',ascolto:false};
+function graficoOra(t){ return t?new Date(t).toLocaleTimeString('it-IT'):'mai'; }
+function graficoAggiornaStato(){
+ const el=document.getElementById('graficoSyncStato')||(typeof floatingDoc!=='undefined'&&floatingDoc&&floatingDoc.getElementById('graficoSyncStato'));
+ if(!el)return;
+ if(!graficoAttivo){ el.textContent=(PIP_SLOT>0)?'Finestra PIP: la condivisione la fa la finestra principale.':'Non attiva (serve essere collegati al proprio account).'; return; }
+ el.textContent=(graficoStat.ascolto?'🟢 In ascolto':'🟠 Ascolto in ripresa')
+  +' · ultimo invio '+graficoOra(graficoStat.inviatoAt)+' ('+graficoStat.inviate+' voci)'
+  +' · ultima ricezione '+graficoOra(graficoStat.ricevutoAt)+' ('+graficoStat.ricevute+' voci applicate)'
+  +(graficoStat.errore?(' · ⚠️ '+graficoStat.errore):'');
+}
 async function graficoInviaOra(){
  graficoTimerInvio=null;
  if(!graficoAttivo||!graficoDaInviare.size)return;
@@ -4945,6 +4970,9 @@ async function graficoInviaOra(){
    return;
  }
  const ok=await window.fxbtCloud.graficoSalva(voci);
+ if(ok){ graficoStat.inviatoAt=Date.now(); graficoStat.inviate=Object.keys(voci).length; graficoStat.errore=''; }
+ else graficoStat.errore='invio non riuscito, ritento fra 15 s';
+ graficoAggiornaStato();
  if(!ok){ Object.keys(voci).forEach(ek=>{ const k=graficoDecodifica(ek); if(k)graficoDaInviare.add(k); }); setTimeout(graficoProgrammaInvio,15000); }
 }
 // Voci arrivate dal cloud (all'avvio e a ogni modifica fatta da un altro dispositivo).
@@ -4963,7 +4991,7 @@ function graficoRicevi(vociRemote){
      if(r.d===graficoJson(graficoValoreLocale(k))){ graficoT[k]=r.t; cambiato=true; return; }
      let val; try{ val=JSON.parse(r.d); }catch(e){ return; }
      if(k.startsWith('ls|')?(typeof val!=='string'):!Array.isArray(val))return;
-     if(graficoApplica(k,val)){ graficoT[k]=r.t; delete graficoInAttesa[k]; }
+     if(graficoApplica(k,val)){ graficoT[k]=r.t; delete graficoInAttesa[k]; graficoStat.ricevutoAt=Date.now(); graficoStat.ricevute++; }
      else graficoInAttesa[k]={t:r.t,val};
      cambiato=true;
    }
@@ -4977,7 +5005,38 @@ function graficoRicevi(vociRemote){
  });
  if(cambiato)graficoSalvaT();
  if(graficoDaInviare.size)graficoProgrammaInvio();
+ graficoAggiornaStato();
 }
+// Comandi manuali ("forza"): prendere tutto dagli altri, o mandare a tutti quello che c'e' qui.
+async function graficoPrendiTutto(){
+ const c=window.fxbtCloud;
+ if(!graficoAttivo||!c){ appAlert('La condivisione non è attiva su questo dispositivo: serve essere collegati al proprio account.'); return; }
+ let voci; try{ voci=await c.graficoLeggi(); }catch(e){ graficoStat.errore='lettura non riuscita: '+((e&&e.message)||e); graficoAggiornaStato(); return; }
+ let n=0;
+ Object.keys(voci||{}).forEach(ek=>{
+   const k=graficoDecodifica(ek), e=voci[ek];
+   if(!k||!e||typeof e.d!=='string')return;
+   let val; try{ val=JSON.parse(e.d); }catch(_){ return; }
+   if(k.startsWith('ls|')?(typeof val!=='string'):!Array.isArray(val))return;
+   if(graficoApplica(k,val)){ graficoT[k]=Math.max(Number(e.t)||0,1); n++; }
+   else graficoInAttesa[k]={t:Number(e.t)||1,val};
+ });
+ graficoSalvaT(); graficoStat.ricevutoAt=Date.now(); graficoStat.ricevute+=n; graficoAggiornaStato();
+ try{ draw(); }catch(e){}
+ $('status').textContent='⬇️ Presi dagli altri dispositivi: '+n+' voci (disegni, indicatori, sale).';
+}
+async function graficoMandaTutto(){
+ if(!graficoAttivo){ appAlert('La condivisione non è attiva su questo dispositivo: serve essere collegati al proprio account.'); return; }
+ const ora=Date.now();
+ mirrorCurrentDrawingsIntoAssetDrawings();
+ graficoTutteLeChiavi().forEach(k=>{ graficoT[k]=Math.max(ora,(graficoT[k]||0)+1); graficoDaInviare.add(k); });
+ graficoSalvaT();
+ if(graficoTimerInvio){ clearTimeout(graficoTimerInvio); graficoTimerInvio=null; }
+ await graficoInviaOra();
+ $('status').textContent=graficoStat.errore?('⚠️ Invio non riuscito: '+graficoStat.errore):'⬆️ Disegni, indicatori e sale di questo dispositivo mandati a tutti gli altri.';
+}
+document.getElementById('graficoPrendiBtn')?.addEventListener('click',()=>{ graficoPrendiTutto(); });
+document.getElementById('graficoMandaBtn')?.addEventListener('click',()=>{ graficoMandaTutto(); });
 // Ogni 1,5 s: l'utente ha cambiato i disegni dell'asset a grafico o gli indicatori della sessione?
 function graficoControllaModifiche(){
  if(!graficoAttivo)return;
@@ -5016,14 +5075,24 @@ async function graficoCloudAvvia(){
  graficoAttivo=true;
  let fermo=null, tentativi=0;
  const ascolta=()=>{
-   fermo=cloud.graficoAscolta((voci,locale)=>{ tentativi=0; if(!locale)graficoRicevi(voci); },()=>{
+   fermo=cloud.graficoAscolta((voci,locale)=>{ tentativi=0; graficoStat.ascolto=true; if(!locale)graficoRicevi(voci); else graficoAggiornaStato(); },(err)=>{
      // Ascolto caduto (rete assente a lungo, token scaduto...): si riprova da soli.
+     graficoStat.ascolto=false; graficoStat.errore='ascolto interrotto ('+((err&&err.code)||'rete')+'), riprovo';
+     graficoAggiornaStato();
      try{ fermo&&fermo(); }catch(e){}
      setTimeout(ascolta,Math.min(300000,10000*Math.pow(2,tentativi++)));
    });
  };
  ascolta();
  setInterval(graficoControllaModifiche,1500);
+ // Rete di sicurezza: ogni 60 s (e al ritorno sull'app) si rilegge il documento intero. Un
+ // aggiornamento in tempo reale perso (rete del telefono che cambia, app in background) non
+ // lascia mai i disegni indietro per piu' di un minuto.
+ const rileggi=async()=>{ try{ const v=await cloud.graficoLeggi(); if(v)graficoRicevi(v); }catch(e){ graficoStat.errore='rilettura non riuscita'; graficoAggiornaStato(); } };
+ setInterval(rileggi,60000);
+ setInterval(graficoAggiornaStato,5000);
+ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')rileggi(); });
+ graficoAggiornaStato();
  window.addEventListener('pagehide',()=>{ if(graficoDaInviare.size)graficoInviaOra(); });
 }
 
@@ -15005,9 +15074,79 @@ const DRAW_TYPE_LABELS={trendline:'Linea di tendenza',ray:'Semiretta',extended:'
 // le loro finestre dedicate, tutti gli altri usano #drawStyleModalOverlay.
 function openDrawingSettings(d){
  if(!d)return;
+ if(d.type==='alarmline')return apriOpzioniAllarme(d);
  if(d.type==='fib')return openFibSettingsModal(d);
  if(d.type==='vwap'||d.type==='vpfixed'||d.type==='vpanchor')return openVpSettingsModal(d);
  openDrawStyleModal(d);
+}
+// ===================== OPZIONI DELLA SINGOLA LINEA ALARM =====================
+// Doppio clic (o ⚙️ su tablet/telefono) su una linea Alarm. "Come in Impostazioni" = segue la scelta
+// generale di Impostazioni → Alarm; qualunque altra scelta vale solo per questa linea.
+function apriOpzioniAllarme(d){
+ if(!d)return;
+ hideDrawSettingsTouchBtn();
+ selectedDrawing=d;
+ try{ if(!$('alarmSoundSelect')?.options.length)populateAlarmSoundSelect(); }catch(e){}
+ const opzioni=(id,conGenerale)=>{
+   const sel=$(id); let h=conGenerale?'<option value="">Come in Impostazioni</option>':'';
+   if(sel)[...sel.options].forEach(o=>{ h+='<option value="'+escapeHtmlLite(o.value)+'">'+escapeHtmlLite(o.textContent)+'</option>'; });
+   return h;
+ };
+ const riga=(etichetta,campo)=>'<div class="fbOptRow" style="display:flex;align-items:center;gap:10px;margin-bottom:9px"><label style="flex:none;min-width:130px">'+etichetta+'</label>'+campo+'</div>';
+ const ov=document.createElement('div');
+ ov.className='fbModalOverlay appConfirmOverlay';
+ ov.innerHTML='<div class="fbModalBox" style="max-width:460px;width:100%">'
+  +'<div class="fbModalHeader"><h3>🔔 Opzioni allarme</h3></div>'
+  +'<div style="padding:14px 16px">'
+  +riga('Attivo','<input type="checkbox" data-k="attivo">')
+  +riga('Prezzo','<input type="number" step="any" data-k="prezzo" class="toolSelect" style="width:140px">')
+  +riga('Modalità','<select data-k="modo" class="toolSelect" style="flex:1">'+opzioni('alarmTriggerModeSelect',false)+'</select>')
+  +riga('Dopo lo squillo','<select data-k="dopo" class="toolSelect" style="flex:1">'+opzioni('alarmAfterActionSelect',true)+'</select>')
+  +riga('Suono','<select data-k="suono" class="toolSelect" style="flex:1">'+opzioni('alarmSoundSelect',true)+'</select><button type="button" class="miniBtn" data-k="prova" style="width:auto">▶ Prova</button>')
+  +riga('Notifica del browser','<select data-k="notifica" class="toolSelect" style="flex:1"><option value="">Come in Impostazioni</option><option value="si">Sì</option><option value="no">No</option></select>')
+  +riga('Colore','<input type="color" data-k="colore">')
+  +riga('Spessore','<input type="number" min="1" max="8" step="1" data-k="spessore" class="toolSelect" style="width:70px">')
+  +'</div>'
+  +'<div class="liveLoginFooter" style="justify-content:space-between">'
+  +'<button type="button" class="toolBtn fbBackBtn" data-k="elimina">🗑️ Elimina</button>'
+  +'<span style="display:flex;gap:8px"><button type="button" class="toolBtn fbBackBtn" data-k="annulla">Annulla</button>'
+  +'<button type="button" class="toolBtn appConfirmBtn appConfirmOk safe" data-k="salva">Salva</button></span></div></div>';
+ const q=k=>ov.querySelector('[data-k="'+k+'"]');
+ q('attivo').checked=(d.enabled!==false);
+ q('prezzo').value=(d.p1&&Number.isFinite(d.p1.price))?d.p1.price:'';
+ q('modo').value=d.triggerMode||'repeat';
+ q('dopo').value=d.afterActionPropria||'';
+ q('suono').value=d.soundId||'';
+ q('notifica').value=d.notificaPropria===true?'si':(d.notificaPropria===false?'no':'');
+ q('colore').value=d.color||defaultColorFor('alarmline');
+ q('spessore').value=d.lineWidth||2;
+ const chiudi=()=>{ ov.remove(); draw(); };
+ q('prova').addEventListener('click',()=>{ try{ playAlarmSound(q('suono').value||alarmSelectedSoundId); }catch(e){} });
+ q('annulla').addEventListener('click',chiudi);
+ ov.addEventListener('mousedown',ev=>{ if(ev.target===ov)chiudi(); });
+ q('elimina').addEventListener('click',()=>{
+   if(hoverDrawing===d)hoverDrawing=null;
+   removeDrawingInstance(d); if(selectedDrawing===d)selectedDrawing=null;
+   scheduleSave(); renderAlarmsList(); chiudi();
+   $('status').textContent='🗑️ Linea Alarm eliminata.';
+ });
+ q('salva').addEventListener('click',()=>{
+   const eraAttivo=(d.enabled!==false);
+   d.enabled=q('attivo').checked;
+   if(d.enabled&&!eraAttivo){ d.armed=true; d.triggered=false; }
+   const pz=Number(q('prezzo').value);
+   if(Number.isFinite(pz)&&pz>0&&d.p1&&pz!==d.p1.price){ d.p1.price=pz; if(d.p2)d.p2.price=pz; d.armed=true; d.lastSide=null; }
+   d.triggerMode=q('modo').value||'repeat';
+   d.afterActionPropria=q('dopo').value||null;
+   d.soundId=q('suono').value||null;
+   const n=q('notifica').value; d.notificaPropria=(n==='si')?true:(n==='no'?false:null);
+   if(n==='si'&&typeof Notification!=='undefined'&&Notification.permission==='default'){ try{ Notification.requestPermission(); }catch(e){} }
+   d.color=q('colore').value||d.color;
+   const sp=Math.round(Number(q('spessore').value)); if(sp>=1&&sp<=8)d.lineWidth=sp;
+   scheduleSave(); renderAlarmsList(); chiudi();
+   $('status').textContent=d.enabled?'🔔 Opzioni dell\'allarme salvate.':'🔕 Allarme disattivato: la linea resta sul grafico ma non suona.';
+ });
+ popupContenitore().appendChild(ov);
 }
 function openDrawStyleModal(d){
  if(!d)return;
@@ -19661,10 +19800,21 @@ chartEl.addEventListener('dragstart',e=>e.preventDefault());
 // giri). Un listener 'touchstart'/'touchmove' NON passivo, con preventDefault()
 // chiamato qui, è il modo più affidabile per fermare lo scroll fin dal primissimo
 // tocco quando si sta per trascinare (o si sta già trascinando) una linea TP/SL/ENTRY.
+// PENNA DEL TABLET (RICHIESTO): sopra il grafico la penna sposta il GRAFICO in tutte le direzioni,
+// anche in verticale; la pagina si scorre col dito. Prima il grafico lasciava al browser lo
+// scorrimento verticale (touch-action:pan-y, pensato per il dito) anche per la penna, e il browser
+// si prendeva il gesto: restava solo lo spostamento orizzontale. La penna si avvicina allo schermo
+// PRIMA di toccarlo (passa sopra senza toccare): in quel momento il grafico smette di cedere lo
+// scorrimento; appena la penna se ne va torna come prima per il dito.
+chartEl.addEventListener('pointerover',e=>{ if(e.pointerType==='pen')chartEl.style.touchAction='none'; });
+chartEl.addEventListener('pointerleave',e=>{ if(e.pointerType==='pen'&&!ditaSulGrafico.size)chartEl.style.touchAction='pan-y'; });
+chartEl.addEventListener('pointerdown',e=>{ if(e.pointerType==='pen')chartEl.style.touchAction='none'; },true);
 chartEl.addEventListener('touchstart',e=>{
  if(placingTradeLevel){e.preventDefault();return;}
  const t=e.touches&&e.touches[0];
  if(!t)return;
+ // Penna (su Android arriva anche come tocco "stylus"): mai scorrimento della pagina.
+ if(t.touchType==='stylus'){ e.preventDefault(); return; }
  if(tradeLevelHit(t.clientX,t.clientY)){e.preventDefault();return;}
  if(drawTool==='cursor'){
    // Stiamo per trascinare l'estremità (o il corpo) di un disegno esistente: blocchiamo lo
@@ -24728,15 +24878,10 @@ function handleChartDblClick(e){
  // NUOVO: doppio click su una linea Alarm la disattiva/riattiva (🔕/🔔) senza cancellarla —
  // niente popup di impostazioni dedicato, per coerenza con le altre linee (colore/spessore si
  // scelgono dalla toolbar PRIMA di disegnarla, come tutte le altre tipologie di linea).
- else if(hit.drawing.type==='alarmline'){
-   e.preventDefault();
-   hit.drawing.enabled=(hit.drawing.enabled===false);
-   hit.drawing.armed=true;
-   $('status').textContent=hit.drawing.enabled?'🔔 Allarme riattivato.':'🔕 Allarme disattivato (la linea resta sul grafico, ma non suona più finché non la riattivi).';
-   scheduleSave();
-   renderAlarmsList();
-   draw();
- }
+ // RICHIESTO: doppio clic su una linea Alarm = le SUE opzioni (attiva, prezzo, modalita', cosa
+ // succede dopo lo squillo, suono, notifica del browser, colore, spessore). Prima il doppio clic
+ // la accendeva/spegneva e basta: ora quello e' la prima casella della finestra.
+ else if(hit.drawing.type==='alarmline'){ e.preventDefault(); apriOpzioniAllarme(hit.drawing); }
  else { e.preventDefault(); openDrawStyleModal(hit.drawing); }
 }
 chartEl.addEventListener('dblclick',handleChartDblClick);
@@ -25482,9 +25627,12 @@ function checkAlarmLines(){
 }
 function triggerAlarmLine(d,price){
  playAlarmSound(d.soundId||alarmSelectedSoundId);
+ // Notifica del browser: scelta della singola linea (finestra Opzioni allarme) se c'e', altrimenti
+ // quella generale di Impostazioni → Alarm.
+ const notificaQui=(d.notificaPropria===true||d.notificaPropria===false)?d.notificaPropria:alarmWebNotifEnabled;
  const assetLabel=currentAssetKey||$('market')?.value||'';
  $('status').textContent=`🔔 Allarme: ${assetLabel} ha raggiunto ${fmtPrice(price)}.`;
- if(alarmWebNotifEnabled&&typeof Notification!=='undefined'&&Notification.permission==='granted'){
+ if(notificaQui&&typeof Notification!=='undefined'&&Notification.permission==='granted'){
    try{
      new Notification('🔔 Allarme prezzo — Forex Backtest LAB',{ body:`${assetLabel||'Asset'} ha raggiunto ${fmtPrice(price)}`, tag:'fxbt-alarm-'+d.id });
    }catch(e){}
@@ -25498,7 +25646,8 @@ function triggerAlarmLine(d,price){
  // momento in cui la si disegnava — le linee disegnate PRIMA di cambiare l'impostazione restavano
  // per sempre su "si disattiva", e non esisteva alcun modo di cambiarle. Ora vale SEMPRE
  // l'impostazione attuale di Impostazioni → Alarm → "Dopo lo squillo", per tutte le linee.
- const afterAction=alarmSelectedAfterAction||d.afterAction||'deactivate';
+ // Scelta della singola linea (finestra Opzioni allarme) prima di quella generale.
+ const afterAction=d.afterActionPropria||alarmSelectedAfterAction||d.afterAction||'deactivate';
  d.afterAction=afterAction;
  if(afterAction==='delete'){
    // Eliminazione completa: via dal grafico, dalla lista 🔔 Allarmi e dal pannello Livelli.
@@ -31657,6 +31806,96 @@ function startMt5RefreshTimer(){
    update();draw();
  },1000);
 }
+// ===================== GUARDIANO DELLE CANDELE MT5 (non si ferma mai) =====================
+// RICHIESTO: "le candele non devono MAI fermarsi, anche dopo giorni, su PC, tablet e telefono: una
+// forzatura che risolva definitivamente". Tutto il resto (canale tick, timer, pausa di fine candela,
+// cambio asset, orologi) puo' incepparsi per un motivo che da qui non si vede; questo controllo non
+// dipende da nessuno di loro. Ogni secondo guarda l'ULTIMA candela del grafico: se da 3 s non e'
+// cambiata, chiede a MT5 l'ultima barra (ogni 2,5 s al massimo) e la confronta. Se MT5 ha un prezzo
+// diverso, la candela viene corretta subito qui, per IDENTITA' della barra (orario della barra di
+// MT5, non l'orologio di questo dispositivo), e si rimettono in piedi i pezzi fermi: blocchi rimasti
+// accesi, timer di aggiornamento, canale tick. Se l'orario della barra non torna (candela "del
+// futuro" o piu' vecchia) il prezzo si aggiorna comunque sull'ultima candela, e dopo tre volte di
+// fila si ricarica lo storico. Nessun tetto, nessuna scadenza: gira finche' la pagina e' aperta.
+// Le correzioni fatte sono in window.fblDiagCandele (ultime 60) per capire cosa si era fermato.
+let gcStato='', gcCambioAt=Date.now(), gcRestAt=0, gcRichiestaInCorso=false, gcFuoriOrario=0, gcReloadAt=0, gcIncidente=false, gcSospesoDa=0;
+window.fblDiagCandele=[];
+function gcLog(msg){ try{ window.fblDiagCandele.push(new Date().toLocaleTimeString('it-IT')+' '+msg); if(window.fblDiagCandele.length>60)window.fblDiagCandele.shift(); console.log('[Guardiano candele] '+msg); }catch(e){} }
+async function gcUltimaBarraMt5(symbol){
+ const ctl=new AbortController(); const t=setTimeout(()=>ctl.abort(),8000);
+ try{
+   const res=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(symbol)+'&timeframe=M1&count=1'),{signal:ctl.signal,cache:'no-store'});
+   if(!res.ok)return null;
+   const body=await res.json();
+   const c=(body&&body.candles||[])[body.candles.length-1];
+   if(!c||!Number.isFinite(c.close)||!Number.isFinite(c.time))return null;
+   return {atMs:c.time*1000,open:c.open,high:c.high,low:c.low,close:c.close,vol:c.tick_volume||0};
+ }catch(e){ return null; }
+ finally{ clearTimeout(t); }
+}
+async function guardianoCandeleMt5(){
+ if(gcRichiestaInCorso)return;
+ if(!(liveModeActive&&mt5Connected&&mt5ActiveSymbol&&currentAssetKey))return;
+ const fase=liveSessionPhaseNow();
+ if(fase==='closed'||fase==='capital')return;
+ const file=csvLibrary[0];
+ if(!file||!file.rows||!file.rows.length||!/^mt5_live_/.test(file.id||''))return;
+ // Un cambio asset dura qualche secondo; se resta "in corso" oltre 30 s e' rimasto appeso.
+ if(chartFeedSuspended){ if(!gcSospesoDa)gcSospesoDa=Date.now(); if(Date.now()-gcSospesoDa<30000)return; }
+ else gcSospesoDa=0;
+ const last=file.rows[file.rows.length-1];
+ const st=file.rows.length+'|'+last.date+'|'+last.close+'|'+last.high+'|'+last.low;
+ if(st!==gcStato){ gcStato=st; gcCambioAt=Date.now(); return; }
+ if(Date.now()-gcCambioAt<3000||Date.now()-gcRestAt<2500)return;
+ gcRestAt=Date.now();
+ const sym=mt5ActiveSymbol, asset=currentAssetKey;
+ gcRichiestaInCorso=true;
+ let bar=null;
+ try{ bar=await gcUltimaBarraMt5(sym); }finally{ gcRichiestaInCorso=false; }
+ if(!bar||sym!==mt5ActiveSymbol||asset!==currentAssetKey||csvLibrary[0]!==file)return;
+ const tfMs=(currentTF||1)*60000;
+ const L=file.rows[file.rows.length-1];
+ const lB=Math.floor(parseDateTime(L.date)/tfMs)*tfMs;
+ const bB=Math.floor(bar.atMs/tfMs)*tfMs;
+ if(bB===lB&&L.close===bar.close&&L.high>=bar.high&&L.low<=bar.low){ gcFuoriOrario=0; if(gcIncidente){ gcIncidente=false; } return; } // tutto allineato: mercato fermo
+ // --- Da qui il grafico e' indietro rispetto a MT5: si corregge e si rimette in piedi tutto. ---
+ const motivi=[];
+ if(chartFeedSuspended&&gcSospesoDa&&Date.now()-gcSospesoDa>=30000){ chartFeedSuspended=false; motivi.push('cambio asset rimasto appeso'); }
+ if(mt5CandleFrozen||mt5CandleRolloverResyncInProgress){ mt5CandleFrozen=false; mt5CandleRolloverResyncInProgress=false; motivi.push('pausa di fine candela rimasta accesa'); }
+ if(!mt5RefreshTimer){ startMt5RefreshTimer(); motivi.push('timer di aggiornamento ripartito'); }
+ // L'orologio del servizio e' avanti rispetto a questo dispositivo: lo si impara dalla barra.
+ if(mt5Adesso()<bar.atMs){ mt5ScartoOrologioMs=bar.atMs+500-Date.now(); motivi.push('orologio riallineato a MT5'); }
+ // Canale tick chiuso, o aperto ma senza un prezzo vero da oltre 5 s mentre MT5 si muove: si riapre.
+ const wsMorto=!mt5FeedWs||mt5FeedWs.readyState!==WebSocket.OPEN||!lastMt5RealTickAt||(mt5Adesso()-lastMt5RealTickAt)>5000;
+ if(wsMorto&&(Date.now()-mt5StreamReconnectAttemptAt)>8000){ mt5StreamReconnectAttemptAt=Date.now(); try{ disconnectMt5Stream(); connectMt5Stream(sym); }catch(e){} motivi.push('canale prezzi riaperto'); }
+ if(bB===lB){
+   L.close=bar.close; if(bar.high>L.high)L.high=bar.high; if(bar.low<L.low)L.low=bar.low;
+   gcFuoriOrario=0;
+ }else if(bB>lB&&bB<=mt5Adesso()+5000){
+   file.rows.push({date:new Date(bB).toISOString(),open:bar.open,high:bar.high,low:bar.low,close:bar.close,volume:bar.vol});
+   gcFuoriOrario=0; motivi.push('candela nuova aggiunta');
+ }else{
+   // Orario della barra incoerente col grafico: il PREZZO pero' e' giusto, e si mostra comunque.
+   L.close=bar.close; if(bar.close>L.high)L.high=bar.close; if(bar.close<L.low)L.low=bar.close;
+   gcFuoriOrario++;
+   motivi.push('orario barra '+new Date(bB).toISOString().slice(11,16)+' / grafico '+new Date(lB).toISOString().slice(11,16));
+   if(gcFuoriOrario>=3&&Date.now()-gcReloadAt>30000){ gcReloadAt=Date.now(); gcFuoriOrario=0; motivi.push('storico ricaricato'); try{ loadLiveHistoryFromMt5(currentAssetKey); }catch(e){} }
+ }
+ lastMt5TickPrice=bar.close;
+ try{
+   rebuildBaseRowsFromLibrary();
+   if(followLatest)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+   rebuildRows();
+   if(followLatest)viewEnd=idx;
+   lastMt5ChartUpdateAt=Date.now();
+   evaluate(); checkPendingOrders(); update(); draw();
+ }catch(e){}
+ gcStato=''; // la prossima volta si riparte dal nuovo stato
+ gcLog('prezzo '+bar.close+(motivi.length?(' — '+motivi.join(', ')):''));
+ if(!gcIncidente){ gcIncidente=true; try{ $('status').textContent='🔧 Il flusso dei prezzi MT5 si era fermato: candela riallineata e aggiornamento ripreso da solo.'; }catch(e){} }
+}
+setInterval(()=>{ guardianoCandeleMt5().catch(()=>{ gcRichiestaInCorso=false; }); },1000);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ gcCambioAt=0; gcRestAt=0; guardianoCandeleMt5().catch(()=>{}); } });
 function stopMt5RefreshTimer(){
  if(mt5RefreshTimer){clearHeartbeatInterval(mt5RefreshTimer);mt5RefreshTimer=null;}
 }
