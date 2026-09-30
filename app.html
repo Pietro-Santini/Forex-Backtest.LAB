@@ -1366,7 +1366,10 @@ setTimeout(function(){
       <div data-gensettings-panel="mt5" style="display:none">
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Connetti/disconnetti l'account MT5, oppure gestisci gli account MT5 salvati.</div>
         <span id="mt5MenuWrap" style="display:flex;flex-direction:column;align-items:flex-start;width:100%">
+          <span style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <button id="mt5ModeBtn" class="miniBtn" title="Menu MT5: connetti/disconnetti o gestisci gli account salvati">🖥️ MT5 (Live) ⌄</button>
+          <label title="Dalle 22:00 alle 23:00, quando il broker MT5 chiude, il grafico prosegue con i dati Capital.com. Alle 00:00 si ricollega da solo a MT5." style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;font-size:12px"><input type="checkbox" class="fblCapitalSeraToggle"> 🌙 22-23 con Capital.com</label>
+          </span>
           <div id="mt5Menu" class="mt5MenuPanel" style="display:none">
             <button id="mt5MenuAccountBtn" type="button" class="drawTemplateMenuItem">👤 Account</button>
             <button id="mt5MenuDisconnectBtn" type="button" class="drawTemplateMenuItem">🔌 Disconnetti</button>
@@ -2023,6 +2026,11 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        </div>
        <div class="fbSettingsDetail">
          <div data-settings-panel="style">
+           <div class="fbSettingsSectionTitle">🌙 Chiusura serale di MT5</div>
+           <div class="fbOptRow">
+             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none"><input type="checkbox" class="fblCapitalSeraToggle"> Dalle 22:00 alle 23:00 prosegui il grafico con Capital.com</label>
+           </div>
+           <p class="hint fblCapitalSeraNota" style="margin:-4px 0 12px">Spento: alle 22:00 il grafico si ferma. In entrambi i casi alle 00:00 si ricollega da solo al conto MT5 e riprende l'aggiornamento da MT5.</p>
            <div class="fbSettingsSectionTitle">🕯️ Candele</div>
            <div class="fbOptRow">
              <label style="flex:none;min-width:110px">Tema candele</label>
@@ -4840,6 +4848,7 @@ const GRAFICO_LS={
  fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
  fb_tg_attivo:v=>{ try{ if(v==='1'){ tgAggiornaInterruttore(); tgCollega(); } else { tgScollega(); tgAggiornaInterruttore(); } }catch(e){} },
  fb_tg_rischio_totale:null,
+ fbl_capital_22_23:()=>{ try{ fblCapitalSeraAggiornaUi(); liveSessionPhase=null; }catch(e){} },
  fb_tg_avvicinamento_pct:null,
  fb_tg_suono_id:v=>{ try{ const el=$('tgSuonoSelect'); if(el&&[...el.options].some(o=>o.value===v))el.value=v; }catch(e){} },
  fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} }
@@ -31985,12 +31994,32 @@ const OFFSESSION_ROWS_KEY='fxbt_offsession_rows_v1';
 function liveScheduleAppliesNow(){
  try{ return !!(liveModeActive&&mt5Connected&&currentAssetKey&&!binanceSymbolForAsset(currentAssetKey)); }catch(e){ return false; }
 }
+// RICHIESTO: la fascia 22-23 con Capital.com si accende e si spegne (Impostazioni grafico → Style,
+// e accanto al menu MT5 in Collegamento/Modalita'). Spenta: dalle 22 il grafico resta fermo fino
+// alla riapertura. Acceso di predefinito (comportamento di prima). Condiviso fra i dispositivi.
+const FBL_CAPITAL_SERA_KEY='fbl_capital_22_23';
+function fblCapitalSeraAttiva(){ try{ return localStorage.getItem(FBL_CAPITAL_SERA_KEY)!=='0'; }catch(e){ return true; } }
+function fblCapitalSeraAggiornaUi(){
+ const v=fblCapitalSeraAttiva();
+ [document,typeof floatingDoc!=='undefined'?floatingDoc:null].forEach(d=>{ if(d)d.querySelectorAll('.fblCapitalSeraToggle').forEach(c=>{ c.checked=v; }); });
+}
+document.addEventListener('change',e=>{
+ const c=e.target;
+ if(!c||!c.classList||!c.classList.contains('fblCapitalSeraToggle'))return;
+ try{ localStorage.setItem(FBL_CAPITAL_SERA_KEY,c.checked?'1':'0'); }catch(err){}
+ fblCapitalSeraAggiornaUi();
+ $('status').textContent=c.checked
+   ?'🌙 Dalle 22:00 alle 23:00 il grafico prosegue con Capital.com; alle 00:00 torna su MT5.'
+   :'🌙 Dalle 22:00 il grafico resta fermo fino alle 00:00, quando torna su MT5.';
+ liveSessionPhase=null; // si rivaluta subito la fascia oraria con la nuova scelta
+},true);
+setTimeout(fblCapitalSeraAggiornaUi,0);
 function liveSessionPhaseAt(t){
  const dm=romeDayAndMinute(t);
  const wd=((dm.day+4)%7+7)%7; // 0=domenica … 6=sabato
  if(wd===6||wd===0)return 'closed';
  if(dm.min<LIVE_MT5_CLOSE_MIN)return 'mt5';
- if(dm.min<LIVE_CAPITAL_UNTIL_MIN)return 'capital';
+ if(dm.min<LIVE_CAPITAL_UNTIL_MIN)return fblCapitalSeraAttiva()?'capital':'closed';
  return 'closed';
 }
 function liveSessionPhaseNow(){ return liveScheduleAppliesNow()?liveSessionPhaseAt(Date.now()):'free'; }
@@ -32028,6 +32057,7 @@ async function liveSessionFreezeMt5(ph){
  try{ saveOrderBookHistoryNow(); }catch(e){}
  liveOffSessionSaveRows();
  // 2) MT5 smette di aggiornare (il collegamento al conto resta: posizioni e ordini non si toccano).
+ fblNotteMt5=true;
  stopMt5RefreshTimer(); disconnectMt5Stream(); disconnectMt5OrderBook();
  mt5CandleFrozen=false; mt5CandleRolloverResyncInProgress=false; lastMt5TickPrice=null;
  lastPrimaryEpicPrice=null;
@@ -32049,6 +32079,44 @@ async function liveSessionFreezeMt5(ph){
  }
  try{ update(); draw(); }catch(e){}
 }
+// RIAPERTURA (00:00): conto MT5 ricollegato se nella notte si e' perso, storico ricaricato, timer
+// e canali prezzi/book riaccesi. Prima si ricaricava solo lo storico: timer e canale tick spenti
+// alle 22 restavano spenti, e se il conto si era scollegato la fascia oraria non ripartiva mai.
+let fblNotteMt5=false, fblRiaperturaTentataAt=0;
+async function fblRicollegaContoMt5(){
+ if(mt5Connected)return true;
+ try{ if(await mt5RiagganciaSilenzioso())return true; }catch(e){}
+ const login=mt5CredsDraft&&mt5CredsDraft.login;
+ const creds=(mt5CredsDraft&&mt5CredsDraft.password)?mt5CredsDraft
+   :(Array.isArray(mt5SavedAccounts)?mt5SavedAccounts:[]).find(a=>a&&a.password&&(login==null||String(a.login)===String(login)));
+ if(!creds)return false;
+ const r=await connectToMt5Bridge(creds);
+ if(!(r&&r.ok))return false;
+ mt5CredsDraft=creds; mt5Connected=true; updateMt5ModeUI();
+ try{ runMt5HistoryCatchUp(); }catch(e){}
+ return true;
+}
+async function fblRiaperturaMt5(){
+ if(!(await fblRicollegaContoMt5())){ $('status').textContent='⚠️ Riapertura: il conto MT5 non risponde, riprovo fra 30 s.'; return false; }
+ if(currentAssetKey)await loadLiveHistoryFromMt5(currentAssetKey);
+ if(mt5ActiveSymbol){
+   if(!mt5RefreshTimer)startMt5RefreshTimer();
+   try{ connectMt5Stream(mt5ActiveSymbol); }catch(e){}
+   try{ connectMt5OrderBook(mt5ActiveSymbol); }catch(e){}
+ }
+ fblNotteMt5=false;
+ $('status').textContent='☀️ Sessione riaperta: grafico di nuovo aggiornato da MT5.';
+ return true;
+}
+// Se nella notte il conto MT5 si e' scollegato, la fascia oraria non si calcola piu' (serve MT5
+// collegato): questo controllo a parte ricollega comunque alla riapertura, ogni 30 s finche' riesce.
+setInterval(()=>{
+ if(!fblNotteMt5||!liveModeActive||mt5Connected||liveSessionBusy)return;
+ if(liveSessionPhaseAt(Date.now())!=='mt5'||Date.now()-fblRiaperturaTentataAt<30000)return;
+ fblRiaperturaTentataAt=Date.now();
+ liveSessionBusy=true;
+ fblRiaperturaMt5().catch(()=>{}).finally(()=>{ liveSessionBusy=false; liveSessionPhase='mt5'; });
+},5000);
 async function liveSessionTick(){
  if(liveSessionBusy)return;
  const ph=liveSessionPhaseNow();
@@ -32065,7 +32133,7 @@ async function liveSessionTick(){
      liveOffSessionSaveRows();
      capitalWsPrimaryEpic=null; lastPrimaryEpicPrice=null;
      $('status').textContent='☀️ Riapertura della sessione: mi ricollego a MT5…';
-     if(currentAssetKey)await loadLiveHistoryFromMt5(currentAssetKey);
+     await fblRiaperturaMt5();
    }
  }catch(e){ console.warn('[Sessione]',e); }
  finally{ liveSessionBusy=false; }
