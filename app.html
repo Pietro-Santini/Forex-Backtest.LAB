@@ -21503,7 +21503,7 @@ function tgCollega(){
      try{ tgAggiornaPulsante(); if(tgPannelloAperto())tgRenderPannello(); }catch(e){}
      // Apertura automatica: decide da sola se questo segnale puo' diventare posizioni. Se non
      // puo', il segnale resta qui con scritto il perche'.
-     try{ tgAutoValuta(m); }catch(e){ console.log('[Segnali] valutazione automatica fallita:',e); }
+     tgAutoInCoda(m);
      $('status').textContent='📡 Nuovo segnale da '+String(m.chat||'una sala')+': '
        +String(m.segnale.direzione||'')+' '+String(m.segnale.strumento||'')+' — apri il pannello "!" per decidere.';
      console.log('[Segnali] '+m.segnale.direzione+' '+m.segnale.strumento
@@ -22553,6 +22553,28 @@ function tgAutoAperte(sala){
  if(sala==null)return vive.length;
  return vive.filter(p=>String(p.tgSala)===String(sala)).length;
 }
+// QUALE sala dell'elenco ha mandato il segnale. BUG SEGNALATO ("ho spuntato tutte le sale ma a
+// volte dice che la sala non e' fra quelle automatiche"): l'elenco contiene le sale come le hai
+// scritte (@nome, link t.me/..., titolo), mentre il segnale arrivava solo col TITOLO del gruppo su
+// Telegram - "GOLD Snipers VIP 🔥" non e' "@goldsnipers", e la configurazione non si trovava.
+// Ora il servizio manda anche `sala`, la voce esatta dell'elenco. Per i servizi non ancora
+// aggiornati si prova a far combaciare il titolo con le voci dell'elenco, ignorando maiuscole,
+// @, link t.me, spazi, emoji e punteggiatura.
+function tgNormSala(v){
+ return String(v||'').toLowerCase()
+  .replace(/^https?:\/\//,'').replace(/^(www\.)?t(elegram)?\.me\//,'').replace(/^@/,'')
+  .normalize('NFKD').replace(/[^a-z0-9]/g,'');
+}
+function tgChiaveSala(voce){
+ const elenco=(Array.isArray(tgGruppi)?tgGruppi:[]).map(String).concat(Object.keys(tgAuto.sale||{}));
+ const esatta=voce&&voce.sala!=null?String(voce.sala):'';
+ if(esatta&&elenco.indexOf(esatta)>=0)return esatta;
+ const titolo=String((voce&&voce.chat)||'');
+ if(elenco.indexOf(titolo)>=0)return titolo;
+ const n1=tgNormSala(esatta), n2=tgNormSala(titolo);
+ const trovata=elenco.find(k=>{ const nk=tgNormSala(k); return nk&&(nk===n1||nk===n2); });
+ return trovata||esatta||titolo;
+}
 // LA DECISIONE. Nessun effetto: guarda e risponde. Si apre solo se `apri` e' true; in ogni altro
 // caso `motivo` dice perche', e quel motivo finisce sotto gli occhi dell'utente nel pannello.
 function tgAutoDecidi(voce){
@@ -22560,6 +22582,13 @@ function tgAutoDecidi(voce){
  const no=(motivo)=>({apri:false,motivo});
  if(!seg||!seg.strumento||!seg.direzione)return no('il messaggio non dice strumento o direzione');
  if(!tgAuto.attivo)return no('apertura automatica spenta');
+ // In Storico il grafico mostra il passato: un segnale di adesso aperto li' finirebbe a un prezzo
+ // di mesi fa, nel backtest.
+ if(!liveModeActive&&!mt5Connected)return no('sei in modalità Storico: i segnali dal vivo si aprono solo in Live o su MT5');
+ // Segnale rimasto in fila troppo a lungo (servizio che recupera messaggi vecchi, pagina
+ // riaperta): il prezzo di allora non c'e' piu'.
+ if(Number(voce.ricevuto_ms)>0&&Date.now()-Number(voce.ricevuto_ms)>5*60*1000)
+   return no('segnale arrivato più di 5 minuti fa: troppo vecchio per aprirlo da solo');
  // Freno di giornata: se e' scattato oggi, tutto manuale fino a domani.
  if(tgAuto.spentoIl===tgAutoOggi())
    return no('automatico fermo per oggi: superata la perdita massima giornaliera');
@@ -22567,9 +22596,11 @@ function tgAutoDecidi(voce){
  const tetto=Number(tgAuto.perditaMaxGiorno);
  if(Number.isFinite(tetto)&&tetto>0&&perdita.pct<=-tetto)
    return {apri:false,motivo:'perdita di oggi '+perdita.pct.toFixed(2)+'%: oltre il limite del '+tetto+'%',spegni:true};
- const sala=String(voce.chat||'');
- const cfg=tgAuto.sale[sala];
- if(!cfg||!cfg.attivo)return no('la sala «'+sala+'» non è fra quelle automatiche');
+ const chiave=tgChiaveSala(voce);
+ const sala=String(voce.chat||chiave||'');   // il titolo: e' quello scritto sulle posizioni (tgSala)
+ const cfg=tgAuto.sale[chiave];
+ if(!cfg)return no('la sala «'+sala+'» non corrisponde a nessuna voce dell\'elenco sale ('+(chiave||'?')+'): controlla il nome nelle impostazioni Telegram');
+ if(!cfg.attivo)return no('la sala «'+sala+'» non ha l\'apertura automatica spuntata');
  // Un raddoppio dedotto non si apre mai da solo: e' gia' un'interpretazione, e sommarla a
  // un'apertura senza controllo sarebbe due incertezze una sopra l'altra.
  if(voce.sottotipo==='aggiunta')return no('è un raddoppio dedotto: va confermato a mano');
@@ -22800,6 +22831,18 @@ $('tgAutoAzzeraBtn')?.addEventListener('click',()=>{
 
 // --- All'arrivo di un segnale: si decide, e se si puo' si apre. Se non si puo', il segnale resta
 // nel pannello con scritto PERCHE' - non si butta via niente.
+// IN FILA, UNO ALLA VOLTA. Prima ogni segnale partiva per conto suo: con due segnali a pochi
+// secondi (GOLD ed EURUSD) il secondo cambiava il grafico mentre il primo aspettava il prezzo, e il
+// primo calcolava lotti e ordini sul prezzo dell'ALTRO asset, aprendoli li'. E i tetti venivano
+// controllati da entrambi prima che uno dei due avesse aperto, quindi si potevano sforare.
+let tgAutoCodaPromessa=Promise.resolve();
+function tgAutoInCoda(voce){
+ tgAutoCodaPromessa=tgAutoCodaPromessa
+  .then(()=>tgAutoValuta(voce))
+  .catch(e=>{ console.log('[Segnali] valutazione automatica fallita:',e);
+    try{ voce.autoMotivo='errore durante l\'apertura automatica: '+((e&&e.message)||e); tgRenderPannello(); }catch(_){} });
+ return tgAutoCodaPromessa;
+}
 async function tgAutoValuta(voce){
  let d;
  try{ d=tgAutoDecidi(voce); }catch(e){ return; }
@@ -23491,6 +23534,13 @@ async function tgEseguiSegnale(voce,opzioni){
  let aperte=0;
  for(let i=0;i<p.n;i++){
   const tp=(i<p.tp.length)?p.tp[i]:null;
+  // L'asset a grafico e' quello su cui partono gli ordini: se nel frattempo e' cambiato (un
+  // altro segnale, un clic dell'utente) ci si ferma invece di aprire sulla cosa sbagliata.
+  if(currentAssetKey!==sym){
+   console.log('[Segnali] asset cambiato durante l\'apertura ('+currentAssetKey+' invece di '+sym+'): mi fermo');
+   voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
+   break;
+  }
   const prima=positions.length;
   let esito;
   try{
