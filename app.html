@@ -7742,6 +7742,72 @@ function fmtPrice(v){
  if(v==null||!Number.isFinite(Number(v)))return '—';
  return Number(v).toFixed(getDecimals());
 }
+// DECIMALI PER ASSET (segnalato: con GBPAUD a grafico, le posizioni XAUUSD in tabella mostravano 5
+// decimali invece di 2 - fmtPrice usa sempre i decimali dell'asset A GRAFICO). Per una riga di un
+// altro asset si usano i SUOI decimali: quelli visti l'ultima volta che era a grafico (ricordati
+// qui sotto), poi la scheda dello strumento, poi i metadati del broker, e solo alla fine una stima
+// dal prezzo stesso.
+const DECIMALI_ASSET_KEY='fbl_decimali_per_asset';
+let decimaliPerAsset={};
+try{ decimaliPerAsset=JSON.parse(localStorage.getItem(DECIMALI_ASSET_KEY)||'{}')||{}; }catch(e){ decimaliPerAsset={}; }
+function ricordaDecimaliAsset(chiave){
+ try{
+  const k=chiave||currentAssetKey; if(!k||k==='custom')return;
+  const d=getDecimals();
+  if(decimaliPerAsset[k]!==d){ decimaliPerAsset[k]=d; localStorage.setItem(DECIMALI_ASSET_KEY,JSON.stringify(decimaliPerAsset)); }
+ }catch(e){}
+}
+function decimaliAsset(asset,v){
+ const k=String(asset||'');
+ if(!k||k==='—'||k===currentAssetKey)return getDecimals();
+ if(Number.isFinite(decimaliPerAsset[k]))return decimaliPerAsset[k];
+ try{ if(INSTRUMENTS[k]&&Number.isFinite(INSTRUMENTS[k].decimals))return INSTRUMENTS[k].decimals; }catch(e){}
+ try{ const m=assetAutoMeta[k]; if(m&&Number.isFinite(m.decimals))return m.decimals; }catch(e){}
+ const a=Math.abs(Number(v));
+ return !(a>0)?getDecimals():a<10?5:a<1000?3:2;
+}
+// AGGIORNAMENTO DELLE TABELLE SENZA RICOSTRUIRLE (segnalato: i pulsanti delle tabelle - BE,
+// Seleziona, Vai a grafico, Chiudi - lampeggiavano di continuo e a volte non prendevano il clic).
+// Le tabelle venivano rigenerate da zero a ogni aggiornamento dei prezzi, piu' volte al secondo:
+// il pulsante sotto il mouse veniva distrutto e ricreato (ripartiva la sua animazione di colore) e
+// un clic premuto su un pulsante finiva rilasciato su un altro, quindi perso. Ora si aggiornano
+// SOLO le celle il cui contenuto e' cambiato davvero (prezzi, P/L): i pulsanti restano gli stessi.
+// Mentre si tiene premuto dentro una tabella non la si tocca affatto: si riprova appena rilasciato.
+let fblPremutoIn=null;
+document.addEventListener('pointerdown',e=>{ fblPremutoIn=e.target; },true);
+['pointerup','pointercancel'].forEach(ev=>document.addEventListener(ev,()=>{ setTimeout(()=>{ fblPremutoIn=null; },0); },true));
+function aggiornaTbody(tbody,html){
+ if(!tbody)return;
+ html=String(html||'');
+ if(tbody.__fblHtml===html)return;
+ if(fblPremutoIn&&tbody.contains(fblPremutoIn)){
+  clearTimeout(tbody.__fblRitardo);
+  tbody.__fblRitardo=setTimeout(()=>aggiornaTbody(tbody,html),120);
+  return;
+ }
+ tbody.__fblHtml=html;
+ const tpl=document.createElement('tbody');
+ tpl.innerHTML=html;
+ const nuove=Array.from(tpl.children), vecchie=Array.from(tbody.children);
+ if(nuove.length!==vecchie.length){ tbody.innerHTML=html; return; }
+ for(let i=0;i<nuove.length;i++){
+  const a=vecchie[i], b=nuove[i];
+  if(a.outerHTML===b.outerHTML)continue;
+  if(a.tagName!==b.tagName||a.children.length!==b.children.length){ a.replaceWith(b); continue; }
+  if(a.className!==b.className)a.className=b.className;
+  for(let j=0;j<b.children.length;j++){
+   const ca=a.children[j], cb=b.children[j];
+   if(ca.outerHTML===cb.outerHTML)continue;
+   if(ca.innerHTML!==cb.innerHTML)ca.innerHTML=cb.innerHTML;
+   for(const at of Array.from(cb.attributes)){ if(ca.getAttribute(at.name)!==at.value)ca.setAttribute(at.name,at.value); }
+   for(const at of Array.from(ca.attributes)){ if(!cb.hasAttribute(at.name))ca.removeAttribute(at.name); }
+  }
+ }
+}
+function fmtPriceA(v,asset){
+ if(v==null||!Number.isFinite(Number(v)))return '—';
+ return Number(v).toFixed(decimaliAsset(asset,v));
+}
 function hexToRgba(hex,alpha){
  const h=String(hex||'#e8c34a').replace('#','');
  const full=h.length===3?h.split('').map(c=>c+c).join(''):h;
@@ -8540,7 +8606,7 @@ function update(){
    const plVal=Number.isFinite(priceProfit)?priceProfit+swapVal:NaN;
    const plCell=Number.isFinite(plVal)?`<td class="${plVal>=0?'liveProfit':'liveLoss'}" title="Profitto di prezzo: ${euro(priceProfit)} • Swap: ${euro(swapVal)}">${(plVal>=0?'+':'')+euro(plVal)}</td>`:'<td>—</td>';
    const rr=riskRewardLabel(p.price_open,p.sl,p.tp);
-   return `<tr><td>${i+1}</td><td>#${p.ticket}</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPrice(p.price_open)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitleMt5}">${p.sl!=null?fmtPrice(p.sl):'—'}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitleMt5}">${p.tp!=null?fmtPrice(p.tp):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPrice(p.price_current)}</td>`+plCell+
+   return `<tr><td>${i+1}</td><td>#${p.ticket}</td><td>${p.symbol}</td><td>${p.side}</td><td>${fmtPriceA(p.price_open,p.symbol)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitleMt5}">${p.sl!=null?fmtPriceA(p.sl,p.symbol):'—'}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitleMt5}">${p.tp!=null?fmtPriceA(p.tp,p.symbol):'—'}</td><td>${rr}</td><td>${Number(p.volume).toFixed(2)}</td><td title="Non disponibile via bridge per la singola posizione">—</td><td>${fmtPriceA(p.price_current,p.symbol)}</td>`+plCell+
    // Richiesto esplicitamente: rimosso il pulsante "✏️ SL/TP" (non serve più) — restano solo
    // BE e Chiudi. modifyMt5TicketFromTable() più sotto resta definita ma non più agganciata a
    // nessun pulsante qui.
@@ -8557,18 +8623,18 @@ function update(){
    $('mt5PosStatus').textContent=st; $('mt5PosStatus').style.display=st?'block':'none';
  }
  if(!mt5RealPositions.length){
-   $('mt5OpenPositions').innerHTML='';
+   aggiornaTbody($('mt5OpenPositions'),'');
    $('noMt5Positions').style.display='block';
  }else{
    $('noMt5Positions').style.display='none';
-   $('mt5OpenPositions').innerHTML=mt5RowsHtml;
+   aggiornaTbody($('mt5OpenPositions'),mt5RowsHtml);
  }
  if(!allPosRows.length){
-   $('openPositions').innerHTML='';
+   aggiornaTbody($('openPositions'),'');
    $('noPositions').style.display='block';
  }else{
    $('noPositions').style.display='none';
-   $('openPositions').innerHTML=allPosRows.map(({item:p,sessionKey},i)=>{
+   aggiornaTbody($('openPositions'),allPosRows.map(({item:p,sessionKey},i)=>{
      const posAsset=p.asset||'—';
      const isCurrentRow=sessionKey===currentMode();
      const isLiveSession=(sessionKey==='live'||sessionKey==='live_propfirm');
@@ -8599,7 +8665,7 @@ function update(){
      const plCell=plLive!=null?`<td class="${plLive>=0?'liveProfit':'liveLoss'}">${(plLive>=0?'+':'')+euro(plLive)}</td>`:'<td>—</td>';
      // Colonna "Prezzo corrente": per le sessioni Storico non attive mostriamo il prezzo di
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
-     const curPriceCell=`<td>${posPrice!=null?fmtPrice(posPrice):(isLiveSession?'—':fmtPrice(p.entry))}</td>`;
+     const curPriceCell=`<td>${posPrice!=null?fmtPriceA(posPrice,posAsset):(isLiveSession?'—':fmtPriceA(p.entry,posAsset))}</td>`;
      const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?(isRefOnly
        ?' <span title="Posizione reale MT5 (ticket '+p.mt5Ticket+') mostrata solo come RIFERIMENTO: terminale MT5 non collegato, andamento seguito coi prezzi Capital.com. Non conta in P/L, statistiche o totale del conto.">🖥️◻</span>'
        :' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>'):'');
@@ -8626,13 +8692,13 @@ function update(){
      // seguito si sposta lo SL (breakeven/Stop Profit), solo se si sposta il TP. La cella SL
      // mostra comunque il valore ATTUALE (quello vero, che determina davvero la chiusura),
      // con un'etichetta 🔒SP quando è stato portato a breakeven o oltre.
-     const slCellTxt=fmtPrice(p.sl)+(isStopProfitLevel(p)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre: diventa uno Stop Profit">🔒SP</span>':'');
+     const slCellTxt=fmtPriceA(p.sl,posAsset)+(isStopProfitLevel(p)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre: diventa uno Stop Profit">🔒SP</span>':'');
      // RICHIESTO ESPLICITAMENTE: le celle SL/TP sono cliccabili e mostrano/nascondono il colore
      // di riempimento delle caselle Target/Stop sul grafico (mai le linee, vedi tpSlZoneFillVisible).
      const zoneToggleTitle='Clicca per mostrare/nascondere il colore delle caselle TP/SL sul grafico (le linee restano visibili)';
-     return `<tr class="${isCurrentRow&&p===active?'focused':''}"><td>${i+1}</td><td>${modeTag}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPrice(p.entry)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${slCellTxt}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
+     return `<tr class="${isCurrentRow&&p===active?'focused':''}"><td>${i+1}</td><td>${modeTag}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPriceA(p.entry,posAsset)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${slCellTxt}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${fmtPriceA(p.tp,posAsset)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
      `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTagPlain} / ${posAsset} e mostra questa posizione a grafico">${p.mt5Ticket!=null?'Vai a Grafico':'📍 Vai a grafico'}</button>${actionsCell}</td></tr>`;
-   }).join('');
+   }).join(''));
  }
 
  // Tabella ordini pendenti: stesso criterio, TUTTE E 4 LE SESSIONI insieme, con colonna
@@ -8645,7 +8711,7 @@ function update(){
  const trackedMt5PendingTickets=new Set(allPendingRows.map(({item:p})=>p.mt5Ticket).filter(t=>t!=null).map(String));
  const untrackedMt5Orders=(mt5Connected?mt5RealOrders:[]).filter(o=>!trackedMt5PendingTickets.has(String(o.ticket)));
  if(!allPendingRows.length && !untrackedMt5Orders.length){
-   $('pendingOrdersTbl').innerHTML='';
+   aggiornaTbody($('pendingOrdersTbl'),'');
    $('noPending').style.display='block';
  }else{
    $('noPending').style.display='none';
@@ -8655,13 +8721,13 @@ function update(){
      const isLiveSession=(sessionKey==='live'||sessionKey==='live_propfirm');
      const isCurrentAssetOnScreen=isCurrentRow&&(!currentAssetKey||ordAsset===currentAssetKey);
      const curPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[ordAsset]:null);
-     const curPriceCell=`<td>${curPrice!=null?fmtPrice(curPrice):'—'}</td>`;
+     const curPriceCell=`<td>${curPrice!=null?fmtPriceA(curPrice,ordAsset):'—'}</td>`;
      const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Ordine pendente REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
      // Stessa correzione della tabella "Posizioni aperte" qui sopra: versione solo testo di
      // modeTag da usare dentro un title="..." esterno, per non annidare virgolette/tag.
      const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' (ordine reale MT5)':'');
      const actionsCell=isCurrentRow?`<button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button>`:'';
-     return `<tr><td>${i+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPrice(p.entry)}</td>`+curPriceCell+`<td>${fmtPrice(p.sl)}</td><td>${fmtPrice(p.tp)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
+     return `<tr><td>${i+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPriceA(p.entry,ordAsset)}</td>`+curPriceCell+`<td>${fmtPriceA(p.sl,ordAsset)}</td><td>${fmtPriceA(p.tp,ordAsset)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
      `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTagPlain} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
    }).join('');
    const untrackedRowsHtml=untrackedMt5Orders.map((o,j)=>{
@@ -8673,10 +8739,10 @@ function update(){
      // la stessa casella Target/Stop in evidenza con la ✕ già usata per gli ordini pendenti
      // tracciati in app (vedi jumpToMt5PendingOnChart).
      const actionsCell=`<button class="miniBtn" data-gotoasset-mt5pending="${o.ticket}" title="Passa a ${ordAsset} e mostra questo ordine reale a grafico">📍 Vai a grafico</button><button class="miniBtn danger" data-mt5-cancelpending="${o.ticket}">Cancella</button>`;
-     return `<tr><td>${allPendingRows.length+j+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${o.side||''} ${o.kind||'LIMIT'}</td><td>${fmtPrice(o.price_open)}</td><td>—</td><td>${fmtPrice(o.sl)}</td><td>${fmtPrice(o.tp)}</td><td>${riskRewardLabel(o.price_open,o.sl,o.tp)}</td><td>${Number(o.volume||0).toFixed(2)}</td>`+
+     return `<tr><td>${allPendingRows.length+j+1}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${o.side||''} ${o.kind||'LIMIT'}</td><td>${fmtPriceA(o.price_open,ordAsset)}</td><td>—</td><td>${fmtPriceA(o.sl,ordAsset)}</td><td>${fmtPriceA(o.tp,ordAsset)}</td><td>${riskRewardLabel(o.price_open,o.sl,o.tp)}</td><td>${Number(o.volume||0).toFixed(2)}</td>`+
      `<td>${actionsCell}</td></tr>`;
    }).join('');
-   $('pendingOrdersTbl').innerHTML=trackedRowsHtml+untrackedRowsHtml;
+   aggiornaTbody($('pendingOrdersTbl'),trackedRowsHtml+untrackedRowsHtml);
  }
 
  // Trade Journal: elenco GLOBALE (tutti gli asset), ordinato per come sono stati chiusi.
@@ -8721,7 +8787,7 @@ function update(){
  // non il resto di update().
  if(journalRenderSig!==__journalLastRenderSig){
  __journalLastRenderSig=journalRenderSig;
- $('journal').innerHTML=journalRows.map(({t,i})=>{
+ aggiornaTbody($('journal'),journalRows.map(({t,i})=>{
    const tAsset=t.asset||'—';
    const otherAsset=t.asset&&currentAssetKey&&t.asset!==currentAssetKey;
    // RICHIESTO ESPLICITAMENTE: stesso badge 🖥️ già mostrato nelle tabelle "Posizioni aperte" e
@@ -8731,14 +8797,14 @@ function update(){
    // Journal, dove queste operazioni chiuse finivano indistinguibili da quelle simulate.
    const modeTag=journalSessionBadgeHtml(t,JOURNAL_MODE_TAGS);
    // Stesso principio della tabella posizioni aperte: R/R congelato sullo SL di apertura.
-   const journalSlTxt=fmtPrice(t.sl)+(isStopProfitLevel(t)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre prima della chiusura">🔒SP</span>':'');
+   const journalSlTxt=fmtPriceA(t.sl,t.asset)+(isStopProfitLevel(t)?' <span style="color:#3ea6ff" title="Stop portato a breakeven o oltre prima della chiusura">🔒SP</span>':'');
    // Select per-riga per assegnare/cambiare la strategia di QUESTO trade (colonna tra
    // Risultato e Pip, vedi header): opzioni sempre in sync con tradeStrategies, valore
    // corrente t.strategy preselezionato se presente. Il cambio è gestito in delega sul tbody
    // #journal (vedi listener 'change' più sotto nello script), come già per jumptrade/deltrade.
    const strategyOptionsHtml='<option value="">—</option>'+tradeStrategies.map(s=>`<option value="${escapeHtmlLite(s)}"${t.strategy===s?' selected':''}>${escapeHtmlLite(s)}</option>`).join('');
    const strategyCell=`<td><select class="journalStrategySelect" data-strategy-trade="${i}" title="Strategia usata in questa operazione" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:100px">${strategyOptionsHtml}</select></td>`;
-   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td class="journalClosedCell" data-open-label="${escapeHtmlLite(journalOpenAtLabel(t))}">${journalClosedAtLabel(t.closedAt)}</td><td>${tAsset}</td><td>${modeTag}</td><td>${journalOrigineHtml(t)}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPrice(t.entry)}</td><td>${journalSlTxt}</td><td>${fmtPrice(t.tp)}</td><td>${riskRewardLabel(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPrice(t.exit)}</td><td>${t.result}</td>`+
+   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td class="journalClosedCell" data-open-label="${escapeHtmlLite(journalOpenAtLabel(t))}">${journalClosedAtLabel(t.closedAt)}</td><td>${tAsset}</td><td>${modeTag}</td><td>${journalOrigineHtml(t)}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPriceA(t.entry,t.asset)}</td><td>${journalSlTxt}</td><td>${fmtPriceA(t.tp,t.asset)}</td><td>${riskRewardLabel(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPriceA(t.exit,t.asset)}</td><td>${t.result}</td>`+
    strategyCell+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
@@ -8746,7 +8812,7 @@ function update(){
    `<td>${euro(t.account)}</td>`+
    `<td>${journalSelectMode?`<input type="checkbox" class="journalSelCb" data-seltrade="${escapeHtmlLite(String(t.id))}" ${journalSelectedIds.has(String(t.id))?'checked':''} title="Seleziona per l'eliminazione multipla" style="width:16px;height:16px;vertical-align:middle;margin-right:6px;accent-color:#e0524f">`:''}<button class="miniBtn" data-jumptrade="${i}" title="${otherAsset?`Passa a ${tAsset} e mostra a grafico dove è stata aperta questa operazione`:'Mostra a grafico dove è stata aperta questa operazione'}">📍 Vai a grafico</button>`+
    `<button class="miniBtn danger" data-deltrade="${i}" title="Elimina definitivamente questo trade dal Journal" style="margin-left:4px">🗑️</button></td></tr>`;
- }).join('');
+ }).join(''));
  } // fine if(journalRenderSig!==__journalLastRenderSig) — vedi commento sopra
  // Barra di paginazione (RICHIESTO ESPLICITAMENTE): Prev/Next + finestra di massimo 7 numeri
  // attorno alla pagina corrente (con 1 e l'ultima sempre raggiungibili) invece di un pulsante
@@ -15023,6 +15089,7 @@ function applyAutoAssetMetaToUI(assetKey){
    sel.value=lv;
  }
  if($('decimals')&&Number.isFinite(meta.decimals))$('decimals').value=String(Math.max(0,Math.min(6,meta.decimals)));
+ if(Number.isFinite(meta.decimals))ricordaDecimaliAsset(assetKey);
  if($('pipDecimals')&&Number.isFinite(meta.pipDigit))$('pipDecimals').value=String(Math.max(0,Math.min(8,meta.pipDigit)));
  // Spread: qui SEMPRE (non solo in Modalità Prop Firm come fa applyInstrument() per la tabella
  // statica) — richiesto esplicitamente per ogni asset con uno spread reale appena scoperto dal
@@ -15098,6 +15165,7 @@ function applyInstrument(){
  // un solo punto di verità invece di due che possono disallinearsi.
  const instr=currentInstrument(key);
  if(instr.decimals!=null&&$('decimals'))$('decimals').value=String(instr.decimals);
+ ricordaDecimaliAsset(key);
  if(instr.pipDigit!=null&&$('pipDecimals'))$('pipDecimals').value=String(instr.pipDigit);
  // Spread automatico PER ASSET, solo in Modalità Prop Firm (richiesto esplicitamente):
  // l'utente non deve preoccuparsi di impostarlo a mano, cambia da solo scegliendo l'asset.
@@ -27523,11 +27591,38 @@ function footprintTypicalCandlePips(assetKey){
  const m=arr.length>>1;
  return arr.length%2?arr[m]:(arr[m-1]+arr[m])/2;
 }
+// CANDELE DELL'ASSET GIUSTO? (segnalato: passando da XAUUSD a GBPAUD o EURUSD righe del footprint
+// e colonne COB/SVP enormi, e l'altezza automatica "se la scordava"). Al cambio di asset l'app
+// aggiorna subito currentAssetKey, ma per un attimo `rows` contiene ancora le candele dell'asset di
+// prima: l'automatismo misurava l'oro col pip di GBPAUD (mille volte piu' piccolo) e MEMORIZZAVA quel
+// valore per GBPAUD. Due controlli, prima di misurare:
+//  1. al cambio di asset si ricorda quale array di candele c'era: finche' e' ancora quello, non si misura;
+//  2. il prezzo delle candele deve essere compatibile coi decimali dell'asset (un prezzo da 4000 non
+//     e' di un asset a 5 decimali, un prezzo da 1,08 non e' di un asset a 2).
+let _fpAutoRowGuardia={asset:null,rowsVecchie:null};
+function footprintCandeleDellAsset(assetKey){
+ if(_fpAutoRowGuardia.asset!==assetKey){
+  _fpAutoRowGuardia={asset:assetKey,rowsVecchie:_fpAutoRowGuardia.asset?rows:null};
+ }
+ if(_fpAutoRowGuardia.rowsVecchie&&rows===_fpAutoRowGuardia.rowsVecchie)return false;
+ try{
+  const ultima=rows&&rows.length?Number(rows[rows.length-1].close):NaN;
+  const dec=getDecimals();
+  if(Number.isFinite(ultima)&&ultima>0&&((ultima<10)!==(dec>=4)))return false;
+ }catch(e){}
+ return true;
+}
 function footprintAutoRowPipsFor(assetKey){
  // L'automatismo misura `rows`, cioe' le candele dell'asset A GRAFICO: per un asset diverso
  // (aggregato cloud, sessioni in background) non c'e' nulla da misurare e si usa il valore
  // manuale, invece di applicargli una misura che non gli appartiene.
  if(assetKey!==currentAssetKey)return footprintRowPipsManualNow();
+ // Candele non ancora dell'asset nuovo: valore manuale, e NON si memorizza niente (vedi sopra).
+ if(!footprintCandeleDellAsset(assetKey)){
+  const k0=String(assetKey)+'|'+String(currentTF)+'|'+footprintAutoRowsTargetNow();
+  if(_fpAutoRow.key===k0&&_fpAutoRow.pips>0)return _fpAutoRow.pips;
+  return footprintRowPipsManualNow();
+ }
  const target=footprintAutoRowsTargetNow();
  const key=String(assetKey)+'|'+String(currentTF)+'|'+target;
  if(_fpAutoRow.key===key&&_fpAutoRow.pips>0)return _fpAutoRow.pips;
