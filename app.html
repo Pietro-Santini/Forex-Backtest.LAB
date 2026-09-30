@@ -3226,6 +3226,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input id="tgAutoMaxGlob" class="tgCfgIn tgCfgNum" type="number" min="1" max="50" step="1" style="width:70px"></label>
        <label class="tgCfgCampo">Se la giornata perde più del
          <input id="tgAutoPerdita" class="tgCfgIn tgCfgNum" type="number" min="0.5" max="50" step="0.5" style="width:70px"> % si spegne</label>
+       <label class="tgCfgCampo" title="Quando la sala non dà lo stop loss, l'app lo calcola dal rischio scelto con questo lotto per posizione. Il minimo (0,01) mette lo stop il più lontano possibile a parità di perdita massima.">Senza stop della sala: lotto per posizione
+         <input id="tgAutoLottoSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.01" max="100" step="0.01" style="width:70px"></label>
+       <label class="tgCfgCampo" title="Quando la sala dà lo stop ma nessun take profit: appena il prezzo percorre questa percentuale della distanza dello stop, lo stop va a pareggio (profitto netto 0,00).">Senza target della sala: pareggio al
+         <input id="tgAutoBeSenzaTp" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % dello stop</label>
+       <label class="tgCfgCampo" title="Il target sta questa percentuale della distanza dello stop OLTRE il punto di pareggio. Con 20% + 10% il target è al 30%: rapporto 1:0,3.">e target un ulteriore
+         <input id="tgAutoTpExtra" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % più in là</label>
      </div>
      <div class="tgCfgNota" style="margin-top:7px">Il tetto complessivo vince sempre su quelli delle singole sale. Quando un limite è raggiunto il segnale <b>non viene buttato</b>: finisce nel pannello, da valutare a mano.</div>
 
@@ -21933,7 +21939,8 @@ function tgRenderPannello(){
   if(voce.stato==='eseguito'){
    const tag=document.createElement('span');
    tag.style.cssText='color:#4ecb83;font-weight:700';
-   tag.textContent='· aperte '+(voce.aperte||0);
+   tag.textContent='· aperte '+(voce.aperte||0)+(voce.automatico?' ⚡ in automatico':'')
+     +(voce.eseguito&&voce.eseguito.il?(' alle '+tgOra(voce.eseguito.il)):'');
    top.appendChild(tag);
   }else if(voce.stato==='ignorato'){
    const tag=document.createElement('span');
@@ -21956,13 +21963,22 @@ function tgRenderPannello(){
    :(tgC(seg.entrata)
       ?(tgFmt(seg.entrata)+(tgC(seg.entrata_max)?('–'+tgFmt(seg.entrata_max)):''))
       :'non indicata');
-  card.appendChild(tgRiga('Entrata della sala: '+entrataSala+'   ·   Stop loss: '+tgFmt(seg.stop_loss)));
+  card.appendChild(tgRiga('Entrata della sala: '+entrataSala+'   ·   Stop loss: '
+   +(tgC(seg.stop_loss)?tgFmt(seg.stop_loss):'non dato dalla sala (lo calcola l\'app dal rischio scelto)')));
   const tps=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
   card.appendChild(tgRiga(tps.length
    ? (tps.length+(tps.length===1?' take profit: ':' take profit: ')+tps.map(tgFmt).join('  ·  ')
       +'   →   '+tps.length+(tps.length===1?' posizione':' posizioni'))
-   : 'Nessun take profit indicato: una sola posizione, con il solo stop loss'));
+   : ('Nessun take profit indicato: una posizione; pareggio al '+tgBeSenzaTpPct()+'% della distanza dello stop, target un ulteriore '+tgTpExtraPct()+'% più in là')));
 
+  // Il riepilogo di cosa e' stato aperto davvero (prezzi reali del piano, non quelli della sala).
+  if(voce.stato==='eseguito'&&voce.eseguito){
+   const e=voce.eseguito;
+   card.appendChild(tgRiga('✅ Aperto: '+e.side+' '+e.sym+' · '+(voce.aperte||0)+(voce.aperte===1?' posizione':' posizioni')
+     +' da '+Number(e.lotti||0).toFixed(2)+' lot'+(e.reale?' su MT5':' simulate')
+     +' · SL '+tgFmt(e.sl)+(e.slCalcolato?' (calcolato dall\'app: la sala non l\'ha dato)':'')
+     +(e.tp&&e.tp.length?(' · TP '+e.tp.map(tgFmt).join(' / ')+(e.tpCalcolato?' (calcolato dall\'app: la sala non l\'ha dato)':'')):''),'tgCardRiga'));
+  }
   (seg.avvisi||[]).forEach(a=>card.appendChild(tgRiga('⚠ '+a,'tgCardAvviso')));
   // Perche' l'apertura automatica NON ha aperto questo segnale. Senza, resterebbe un mistero: si
   // vedrebbe solo un segnale fermo nel pannello, senza sapere se e' stato ignorato o rifiutato.
@@ -21980,6 +21996,9 @@ function tgRenderPannello(){
    const sum=document.createElement('summary');
    sum.style.cssText='font-size:11px;color:#9ca3af;cursor:pointer';
    sum.textContent='Messaggio originale della sala';
+   // RICHIESTO: il messaggio completo si vede sempre, anche per i segnali gia' aperti in
+   // automatico, per tenerne traccia. Si puo' comunque richiudere con un clic.
+   det.open=true;
    const pre=document.createElement('pre');
    pre.className='tgGrezzo';
    pre.textContent=String(seg.testo||voce.testo||'');
@@ -22233,6 +22252,19 @@ function tgCfgDisegnaRiepilogo(piano){
  const quante=piano.n+(piano.n===1?' posizione':' posizioni');
  agg('<span class="grande">'+quante+' '+piano.side+' su '+tgCfg.sym+'</span>');
  agg('Entrata al prezzo di adesso <b>'+tgFmt(piano.entry)+'</b> · stop loss <b>'+tgFmt(piano.sl)+'</b> su tutte · <b>'+piano.lotti.toFixed(2)+'</b> lot ciascuna');
+ if(piano.tpCalcolato){
+  const d=document.createElement('div'); d.className='tgCfgAllarme';
+  d.textContent='La sala non ha dato il take profit. Al '+tgBeSenzaTpPct()+'% della distanza dello stop lo stop va a pareggio; il target è un ulteriore '
+   +tgTpExtraPct()+'% più in là ('+tgFmt(piano.tp[0])+', rapporto 1:'+(piano.rr!=null?piano.rr.toFixed(2):'?')+'). Per ogni stop pieno servono '
+   +(piano.rr?(1/piano.rr).toFixed(1):'?')+' target.';
+  box.appendChild(d);
+ }
+ if(piano.slCalcolato){
+  const d=document.createElement('div'); d.className='tgCfgNota';
+  d.textContent='La sala non ha dato lo stop loss: l\'ho calcolato io dal rischio scelto, con '+piano.lotti.toFixed(2)
+   +' lot per posizione. È un tetto alla perdita, non un livello tecnico: se preferisci un tuo stop, scrivilo nella casella qui sopra.';
+  box.appendChild(d);
+ }
  agg('Rischio totale <b>'+piano.pct.toFixed(2)+'%</b> del saldo = <b>'+euro(piano.importoTot)+'</b>'
    +(piano.n>1?(', cioè '+euro(piano.importoTot/piano.n)+' per posizione'):''));
  const guadagni=piano.tp.map(v=>euroAtLevel(piano.entry,v,piano.lotti,tgCfg.sym)).filter(v=>v!=null);
@@ -22650,7 +22682,8 @@ function tgAutoDecidi(voce){
  // tgC e non Number.isFinite: Number(null) vale 0, che e' finito - un segnale SENZA stop loss
  // sarebbe passato per buono e aperto in automatico senza protezione. E' la stessa trappola
  // gia' presa sull'entrata a fascia, e qui costerebbe molto di piu'.
- if(!tgC(seg.stop_loss))return no('il segnale non ha stop loss');
+ // Senza stop della sala lo calcola l'app dal rischio scelto (vedi tgStopCalcolato): mai una
+ // posizione senza protezione, ma nemmeno un segnale buttato solo perche' la sala non lo scrive.
  // I tetti: prima quello della sala, poi quello complessivo, che vince sempre.
  const apertePerSala=tgAutoAperte(sala), aperteTotali=tgAutoAperte(null);
  const maxSala=Math.max(1,Math.round(Number(cfg.maxPosizioni)||1));
@@ -22682,6 +22715,9 @@ let tgAutoApertaSala=null;
 function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
+ if($('tgAutoLottoSenzaSl'))$('tgAutoLottoSenzaSl').value=tgLottoSenzaSl().toFixed(2);
+ if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
+ if($('tgAutoTpExtra'))$('tgAutoTpExtra').value=tgTpExtraPct();
  if($('tgAutoPerdita'))$('tgAutoPerdita').value=tgAuto.perditaMaxGiorno;
  const nota=$('tgAutoStatoNota');
  if(nota){
@@ -22855,6 +22891,21 @@ $('tgAutoAttivo')?.addEventListener('change',async ()=>{
  }
  tgAuto.attivo=acceso;
  if(acceso)tgAuto.spentoIl=null;   // riaccendere a mano annulla lo stop di giornata
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgAutoBeSenzaTp')?.addEventListener('change',()=>{
+ const v=Number($('tgAutoBeSenzaTp').value);
+ if(v>0)tgAuto.beSenzaTpPct=Math.min(500,v);
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgAutoTpExtra')?.addEventListener('change',()=>{
+ const v=Number($('tgAutoTpExtra').value);
+ if(v>0)tgAuto.tpExtraPct=Math.min(500,v);
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgAutoLottoSenzaSl')?.addEventListener('change',()=>{
+ const v=Math.round(Number($('tgAutoLottoSenzaSl').value)*100)/100;
+ if(v>=0.01)tgAuto.lottoSenzaSl=Math.min(100,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoMaxGlob')?.addEventListener('change',()=>{
@@ -23436,13 +23487,67 @@ async function tgPortaAGrafico(sym){
 }
 // Il conto completo di cosa si sta per aprire. Nessun effetto: calcola e restituisce, cosi' il
 // popup di conferma puo' mostrare gli stessi numeri con cui si aprira'.
+// STOP LOSS CALCOLATO DALL'APP (RICHIESTO: sale che scrivono "STOP LOSS: VIP GROUP", cioe' non lo
+// danno). Rischio, lotti e distanza dello stop dipendono uno dall'altro: senza lo stop della sala
+// se ne fissano due - il RISCHIO scelto e il LOTTO per posizione (di default il minimo, 0,01: a
+// parita' di perdita massima e' la scelta che mette lo stop piu' lontano possibile) - e lo stop si
+// ricava: la perdita, se scatta, e' al massimo il rischio % scelto, sommato su tutte le posizioni.
+// E' un tetto alla perdita, non un livello tecnico: con conti piccoli lo stop viene vicino.
+// SENZA TARGET DELLA SALA (RICHIESTO): quando il prezzo percorre il 20% della distanza dello stop,
+// stop a pareggio; il target sta un ulteriore 10% piu' in la' (30%). Il target si mette SUBITO al
+// 30% invece di spostarlo dal 20% al 30% al momento giusto: su MT5 il broker chiuderebbe al 20%
+// prima che l'app faccia in tempo a spostarlo. Stesso risultato, senza la corsa contro il broker.
+function tgBeSenzaTpPct(){
+ const v=Number(tgAuto&&tgAuto.beSenzaTpPct);
+ return (Number.isFinite(v)&&v>0)?Math.min(500,v):20;
+}
+function tgTpExtraPct(){
+ const v=Number(tgAuto&&tgAuto.tpExtraPct);
+ return (Number.isFinite(v)&&v>0)?Math.min(500,v):10;
+}
+function tgTpSenzaTpPct(){ return tgBeSenzaTpPct()+tgTpExtraPct(); }
+// Il pareggio anticipato si esprime come percentuale della strada verso il target (vedi
+// tgLivelloAvvicinamento): 20% dello stop con target al 30% = 66,7% della strada.
+function tgAvvicinamentoSenzaTp(){ return tgBeSenzaTpPct()/tgTpSenzaTpPct()*100; }
+function tgLottoSenzaSl(){
+ const v=Number(tgAuto&&tgAuto.lottoSenzaSl);
+ return (Number.isFinite(v)&&v>=0.01)?Math.round(v*100)/100:0.01;
+}
+function tgStopCalcolato(side,entry,n,importoTot,sym){
+ const lotti=tgLottoSenzaSl();
+ const perUnita=euroAtLevel(entry,entry+1,lotti,sym);            // € per 1,0 di prezzo, per posizione
+ if(!(perUnita>0)||!(importoTot>0))return {problema:'non riesco a calcolare il valore di un punto su '+sym};
+ const dist=importoTot/(n*perUnita);
+ const passo=pipSizeForAsset(sym)/10;
+ // Arrotondato verso l'entrata: la perdita resta sotto il rischio scelto, mai sopra.
+ let sl=side==='BUY'?entry-dist:entry+dist;
+ sl=side==='BUY'?Math.ceil(sl/passo-1e-9)*passo:Math.floor(sl/passo+1e-9)*passo;
+ sl=Number(sl.toFixed(8));
+ // Troppo vicino (conto piccolo, molte posizioni): scatterebbe per il solo spread.
+ // Soglia: il piu' grande fra 3 volte lo spread tipico e lo 0,1% del prezzo (circa 4 punti su GOLD,
+ // 11 pip su EURUSD). Sotto, uno stop scatta per il normale rumore del mercato.
+ const minimo=Math.max(3*spreadCostForAsset(sym),entry*0.001,10*passo);
+ if(Math.abs(entry-sl)<minimo){
+  return {problema:'col rischio scelto e '+n+(n===1?' posizione':' posizioni')+' da '+lotti.toFixed(2)
+    +' lot lo stop calcolato starebbe a '+tgFmt(sl)+', troppo vicino al prezzo: scatterebbe per il normale movimento del mercato. Aumenta il rischio o tieni meno target'};
+ }
+ return {sl,lotti};
+}
 function tgPiano(seg,sym,pctForzata){
  const side=String(seg.direzione||'').toUpperCase();
  const entry=currentPrice();
- const sl=Number(seg.stop_loss);
+ let sl=Number(seg.stop_loss);
  if(side!=='BUY'&&side!=='SELL')return {problemi:['il segnale non dice se comprare o vendere']};
  if(!Number.isFinite(entry))return {problemi:['il grafico non ha ancora un prezzo per '+sym]};
- if(!Number.isFinite(sl))return {problemi:['il segnale non ha uno stop loss: senza non si puo\' dimensionare il rischio, e il rischio e\' il punto di partenza di tutto']};
+ let slCalcolato=false, lottiFissi=null;
+ if(!tgC(seg.stop_loss)){
+  const tuttiTp=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!validateTradeLevel(side,entry,NaN,v));
+  const nTp=Math.max(1,tuttiTp.length);
+  const pctTmp=(Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale();
+  const calc=tgStopCalcolato(side,entry,nTp,realizedBalanceNow()*pctTmp/100,sym);
+  if(calc.problema)return {problemi:[calc.problema]};
+  sl=calc.sl; lottiFissi=calc.lotti; slCalcolato=true;
+ }
  // Se il prezzo ha GIA' superato lo stop loss, quel segnale e' morto: aprirlo vorrebbe dire
  // nascere oltre il proprio stop. Non si "aggiusta", si rifiuta.
  if(validateTradeLevel(side,entry,sl,NaN)){
@@ -23451,7 +23556,18 @@ function tgPiano(seg,sym,pctForzata){
  const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
  // Un take profit che il prezzo ha gia' passato non ha senso come posizione a se': aprirla
  // significherebbe nascere oltre il proprio obiettivo. Si scartano quelli, non tutto il segnale.
- const tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
+ let tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
+ // TARGET CALCOLATO (RICHIESTO): la sala da' lo stop ma nessun target -> un target a una
+ // percentuale della distanza dello stop (di default 20%, regolabile). Attenzione, detto anche
+ // nella conferma: al 20% il rapporto e' 1:0,2 e per andare in pari serve vincere l'83% delle volte.
+ let tpCalcolato=false;
+ if(!tutti.length){
+  const pctTp=tgTpSenzaTpPct();
+  const passoTp=pipSizeForAsset(sym)/10;
+  let v=side==='BUY'?entry+Math.abs(entry-sl)*pctTp/100:entry-Math.abs(entry-sl)*pctTp/100;
+  v=Number((Math.round(v/passoTp)*passoTp).toFixed(8));
+  if(!validateTradeLevel(side,entry,NaN,v)&&v!==entry){ tp=[v]; tpCalcolato=true; }
+ }
  const scartati=tutti.filter(v=>!!validateTradeLevel(side,entry,NaN,v));
  const n=Math.max(1,tp.length);
  const pct=(Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale();
@@ -23463,6 +23579,8 @@ function tgPiano(seg,sym,pctForzata){
  // DIFETTO, mai per eccesso: la percentuale scelta e' un tetto, e un tetto non si supera per una
  // questione di arrotondamento. Si rischia un filo meno del richiesto, mai un filo di piu'.
  let lotti=Math.floor((importoTot/n)/perLotto*100)/100;
+ // Stop calcolato dall'app: il lotto e' quello fissato per ricavarlo (vedi tgStopCalcolato).
+ if(lottiFissi!=null)lotti=lottiFissi;
  let alMinimo=false;
  // L'unica eccezione: sotto 0,01 lot non si puo' scendere. Qui, e solo qui, il rischio reale puo'
  // superare quello chiesto - e allora va detto chiaramente prima di confermare.
@@ -23470,7 +23588,8 @@ function tgPiano(seg,sym,pctForzata){
  const rischioReale=lotti*perLotto*n;
  let margine=0;
  try{ margine=marginForLots(lotti,entry,sym)*n; }catch(e){}
- return {side,entry,sl,tp,scartati,n,lotti,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,
+ return {side,entry,sl,tp,scartati,n,lotti,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,tpCalcolato,
+   rr:(tp.length&&Math.abs(entry-sl)>0)?Math.abs(tp[0]-entry)/Math.abs(entry-sl):null,
    rischioRealePct:(saldo>0?rischioReale/saldo*100:null)};
 }
 // Il momento in cui un segnale diventa (o non diventa) delle posizioni.
@@ -23517,7 +23636,9 @@ async function tgEseguiSegnale(voce,opzioni){
   return;
  }
  const regole=(opzioni&&Array.isArray(opzioni.regole))?opzioni.regole:[];
- const avvicinamento=(opzioni&&opzioni.avvicinamento)?opzioni.avvicinamento:null;
+ // Target calcolato dall'app: il pareggio al 20% dello stop fa parte della regola, sempre.
+ const avvicinamento=p.tpCalcolato?{pct:tgAvvicinamentoSenzaTp()}
+   :((opzioni&&opzioni.avvicinamento)?opzioni.avvicinamento:null);
  const reale=!!mt5Connected;
  if(!reale&&p.margine>freeMargin()+1e-9){
   await appAlert('Margine non sufficiente per '+p.n+' posizioni da '+p.lotti.toFixed(2)+' lot: servono '+euro(p.margine)+', liberi ce ne sono '+euro(freeMargin())+'.');
@@ -23527,8 +23648,12 @@ async function tgEseguiSegnale(voce,opzioni){
  r.push((reale?'ORDINI VERI su MT5':'Posizioni simulate')+': '+p.n+(p.n===1?' posizione ':' posizioni separate ')+p.side+' su '+sym);
  r.push('Entrata: il prezzo di adesso, '+tgFmt(p.entry)
    +(tgC(seg.entrata)?(' — la sala diceva '+tgFmt(seg.entrata)+(tgC(seg.entrata_max)?('–'+tgFmt(seg.entrata_max)):'')):''));
- r.push('Stop loss: '+tgFmt(p.sl)+' su tutte');
- r.push(p.tp.length
+ r.push('Stop loss: '+tgFmt(p.sl)+' su tutte'+(p.slCalcolato
+   ?(' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Con '+p.lotti.toFixed(2)+' lot per posizione, se scatta si perde al massimo il '+p.pct.toFixed(2)+'% scelto.'):''));
+ r.push(p.tpCalcolato
+   ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Quando il prezzo percorre il '+tgBeSenzaTpPct()
+      +'% della distanza dello stop, lo stop va a pareggio; il target è un ulteriore '+tgTpExtraPct()+'% più in là (rapporto 1:'+(p.rr!=null?p.rr.toFixed(2):'?')+').')
+   : p.tp.length
    ? ('Take profit: '+p.tp.map(tgFmt).join('  ·  ')+'  (uno per posizione)')
    : 'Nessun take profit: una sola posizione, con il solo stop loss');
  r.push('Lottaggio: '+p.lotti.toFixed(2)+' lot per posizione');
@@ -23611,12 +23736,22 @@ async function tgEseguiSegnale(voce,opzioni){
  }
  voce.stato=aperte?'eseguito':'nuovo';
  voce.aperte=aperte;
+ // Cosa e' stato aperto davvero, per il pannello (RICHIESTO: tenere traccia anche dei segnali
+ // aperti in automatico, con tutto il messaggio e il risultato).
+ if(aperte){
+  voce.automatico=!!(opzioni&&opzioni.automatico);
+  voce.eseguito={il:Date.now(),sym,side:p.side,lotti:p.lotti,sl:p.sl,slCalcolato:!!p.slCalcolato,
+    tp:p.tp.slice(0,aperte),tpCalcolato:!!p.tpCalcolato,reale:!!mt5Connected};
+ }
  tgAggiornaPulsante(); tgRenderPannello();
  $('status').textContent=aperte
   ? ('📡 Segnale di '+String(voce.chat||'')+': aperte '+aperte+(aperte===1?' posizione ':' posizioni ')+p.side+' su '+sym+' — SL '+tgFmt(p.sl)+(p.tp.length?(', TP '+p.tp.slice(0,aperte).map(tgFmt).join(' / ')):''))
   : ('📡 Segnale di '+String(voce.chat||'')+': nessuna posizione aperta.');
  if(aperte&&aperte<p.n){
-  await appAlert('Attenzione: erano previste '+p.n+' posizioni ma ne sono state aperte '+aperte+'. Mi sono fermato alla prima che non e\' andata a buon fine — controlla il conto prima di riprovare.');
+  const msg='Attenzione: erano previste '+p.n+' posizioni ma ne sono state aperte '+aperte+'. Mi sono fermato alla prima che non e\' andata a buon fine — controlla il conto prima di riprovare.';
+  // In automatico nessun popup: bloccherebbe la fila dei segnali finche' qualcuno non clicca.
+  if(opzioni&&opzioni.automatico){ voce.autoMotivo=msg; try{ tgRenderPannello(); }catch(e){} }
+  else await appAlert(msg);
  }
  try{ draw(); update(); }catch(e){}
 }
