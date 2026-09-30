@@ -52,7 +52,7 @@
 //          v15 = footprint allineato nell'ora 22-23 (via i tick MT5 storici dalle fasce
 //               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v24";
+const CACHE_NAME = "forex-backtest-lab-v25";
 const ASSETS = [
   "./",
   "./app.html",
@@ -79,9 +79,44 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// RETE CON RISERVA (segnalato: sul telefono, a ogni ritorno nell'app, la pagina da quasi 4 MB
+// restava bianca finche' non era riscaricata tutta). Resta network-first - un app.html appena
+// pubblicato arriva subito - ma se la rete non risponde entro RISERVA_MS e in cache c'e' una copia,
+// si mostra SUBITO quella; il download continua comunque e aggiorna la cache per la volta dopo.
+const RISERVA_MS = 4000;
+function rispostaConRiserva(request) {
+  const rete = fetch(request, { cache: 'no-store' })
+    .then((response) => {
+      if (response && response.status === 200) {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+      }
+      return response;
+    });
+  const riserva = new Promise((resolve) => {
+    setTimeout(() => {
+      caches.match(request).then((c) => { if (c) resolve(c); });
+    }, RISERVA_MS);
+  });
+  return Promise.race([
+    rete.catch(() => caches.match(request).then((c) => c || Promise.reject(new Error('offline')))),
+    riserva
+  ]);
+}
+
 self.addEventListener("fetch", (event) => {
-  // Solo richieste GET dello stesso sito
+  // Solo richieste GET dello stesso sito. BUG CORRETTO: il commento lo diceva, il codice no - si
+  // intercettava OGNI GET, compresi i dati dal vivo del PC (/positions, /account, notizie...) e di
+  // Firebase/Capital.com, salvandone una copia. Col PC irraggiungibile si restituiva l'ultima copia:
+  // posizioni e saldo VECCHI mostrati come attuali. I dati dal vivo non passano piu' da qui.
   if (event.request.method !== "GET") return;
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  // Anche sullo stesso sito, SOLO i file dell'app: quando l'app e' servita dal PC (127.0.0.1:8000)
+  // anche /positions e /account sono "dello stesso sito", e non devono mai finire in cache.
+  const statico = event.request.mode === "navigate" || url.pathname.endsWith("/") ||
+    /\.(html|js|css|json|png|ico|svg|webmanifest|woff2?)$/i.test(url.pathname);
+  if (!statico) return;
 
   event.respondWith(
     // NETWORK-FIRST: prova sempre la rete per prima (così un app.html appena pubblicato arriva
@@ -95,14 +130,6 @@ self.addEventListener("fetch", (event) => {
     // l'euristica del browser) SENZA toccare davvero la rete — proprio il bug per cui un fix
     // pubblicato non arrivava a chi ricaricava con F5 invece di CTRL+SHIFT+R. Ora bypassa sempre
     // anche quella, in coppia con gli header no-cache lato server (vedi bridge.py, serve_app()).
-    fetch(event.request, { cache: 'no-store' })
-      .then((response) => {
-        if (response && response.status === 200) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-        }
-        return response;
-      })
-      .catch(() => caches.match(event.request))
+    rispostaConRiserva(event.request)
   );
 });
