@@ -9144,6 +9144,10 @@ function vpIndBuildInstances(ind){
 }
 // Ridisegno: disegni virtuali da passare al ciclo dei disegni + rettangoli per il passaggio del mouse.
 let vpIndHitRects=[];
+// Barre VERE disegnate per ogni istogramma degli indicatori (id disegno virtuale -> elenco di
+// rettangoli in pixel), riempite dal disegno dei vpfixed: la casellina Mostra/Nascondi compare
+// solo cliccando DENTRO una barra, fino alla sua punta — non nel vuoto oltre la punta.
+let vpIndBarRects=new Map();
 // Bande del VWAP degli indicatori VP: 3 bande come il VWAP ancorato (on, moltiplicatore, colore,
 // spessore). Migra la vecchia casella unica "±1σ" (vwapBands) nella banda 1.
 function vpIndVwapBands(params){
@@ -9155,6 +9159,7 @@ function vpIndVwapBands(params){
 }
 function buildVpIndicatorVirtualDrawings(geo){
  vpIndHitRects=[];
+ vpIndBarRects=new Map();
  const virt=[];
  if(!geo||!Array.isArray(activeIndicators))return virt;
  const ts=getRowsTimestamps();
@@ -9173,10 +9178,10 @@ function buildVpIndicatorVirtualDrawings(geo){
      if(!Number.isFinite(lo)||!Number.isFinite(hi))return;
      const fullKey=inst.key;
      const isHidden=hiddenKeys.has(fullKey);
-     vpIndHitRects.push({ind,key:fullKey,label:inst.label,hidden:isHidden,x1:Math.min(xL,xR),x2:Math.max(xL,xR,Math.min(xL,xR)+6),y1:geo.y(hi),y2:geo.y(lo),color:inst.color||style.upColor||'#3ea6ff'});
+     vpIndHitRects.push({ind,key:fullKey,drawId:'vpind_'+ind.id+'_'+fullKey,label:inst.label,hidden:isHidden,x1:Math.min(xL,xR),x2:Math.max(xL,xR,Math.min(xL,xR)+6),y1:geo.y(hi),y2:geo.y(lo),color:inst.color||style.upColor||'#3ea6ff'});
      if(isHidden)return;
      const d=Object.assign({},style,{
-       type:'vpfixed',_virtual:true,id:'vpind_'+ind.id+'_'+fullKey,
+       type:'vpfixed',_virtual:true,_vpIndBars:true,id:'vpind_'+ind.id+'_'+fullKey,
        p1:{time:ts[inst.a],price:rows[inst.a].close},p2:{time:ts[inst.b],price:rows[inst.b].close},
        candleCount:inst.b-inst.a+1,extendRight:false,locked:true,hidden:false
      });
@@ -9332,13 +9337,42 @@ function hideVpIndHoverBox(){ if(_vpIndHoverBox)_vpIndHoverBox.style.display='no
 // RICHIESTO ESPLICITAMENTE: la casellina Mostra/Nascondi compare CLICCANDO un istogramma degli
 // indicatori (profili giornalieri/sessioni), non più al semplice passaggio del mouse. Resta aperta
 // finché non si clicca altrove sul grafico, si trascina il grafico o si preme il suo pulsante.
+// RICHIESTO ESPLICITAMENTE: vale SOLO il click dentro le barre dell'istogramma (dalla base fino
+// alla punta di ciascuna barra, alla sua altezza di prezzo); oltre la punta, o fra le candele del
+// periodo dove non c'e' barra, niente casellina. Un istogramma NASCOSTO non ha barre: per quello
+// vale il contorno tratteggiato che lo rappresenta (l'unica cosa visibile da cliccare).
 function vpIndHitAt(clientX,clientY){
  if(!vpIndHitRects.length)return null;
  const c=$('chart'); if(!c)return null;
  const rc=c.getBoundingClientRect();
  const x=clientX-rc.left, y=clientY-rc.top;
- for(let k=vpIndHitRects.length-1;k>=0;k--){ const r=vpIndHitRects[k]; const yT=Math.min(r.y1,r.y2), yB=Math.max(r.y1,r.y2); if(x>=r.x1&&x<=r.x2&&y>=yT-4&&y<=yB+4)return r; }
+ for(let k=vpIndHitRects.length-1;k>=0;k--){
+   const r=vpIndHitRects[k];
+   if(r.hidden){ const yT=Math.min(r.y1,r.y2), yB=Math.max(r.y1,r.y2); if(x>=r.x1&&x<=r.x2&&y>=yT-2&&y<=yB+2)return r; continue; }
+   const barre=vpIndBarRects.get(r.drawId); if(!barre)continue;
+   if(barre.some(b=>y>=b.yT&&y<=b.yB&&x>=b.x1-1&&x<=b.x2+1))return r;
+ }
  return null;
+}
+// PRIORITA' (richiesta esplicitamente): se sopra l'istogramma, in quel punto, c'e' qualunque
+// altro elemento cliccabile — un disegno, un pallino notizia, una linea/casella di un trade, la
+// linea di un trade chiuso, una cella footprint, una "X" di chiusura — vince quello e la
+// casellina Mostra/Nascondi non compare. Idem mentre si sta disegnando con uno strumento.
+function vpIndAltroElementoSopra(clientX,clientY){
+ try{
+   if(drawTool!=='cursor'||placingStep!==0)return true;
+   const rc=chartEl.getBoundingClientRect();
+   const x=clientX-rc.left, y=clientY-rc.top;
+   const dentro=r=>r&&x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h;
+   if(dentro(highlightCloseBtnRect)||dentro(pendingHighlightCloseBtnRect)||dentro(zoneStatsCloseBtnRect))return true;
+   if(newsDotHitRects.some(r=>Math.hypot(x-r.x,y-r.y)<=r.r))return true;
+   if(zoneHandleHit(clientX,clientY)||tradeLevelHit(clientX,clientY,false))return true;
+   if(hitTestZoneBoxAt(clientX,clientY))return true;
+   if(closedTradeHitSegments.some(s=>pointSegmentDist(x,y,s.x1,s.y1,s.x2,s.y2)<=CLOSED_TRADE_HIT_TOL))return true;
+   if(footprintCellHitRects.some(r=>x>=r.xxLeft&&x<=r.xxRight&&y>=r.yTop&&y<=r.yBot))return true;
+   if(hitTestDrawings(clientX,clientY))return true;
+ }catch(_){ }
+ return false;
 }
 // CORREZIONE ESPLICITA DELL'UTENTE: la casellina deve comparire ESATTAMENTE SOPRA IL PUNTO IN CUI
 // SI E' CLICCATO, non in cima al grafico. L'istogramma copre tutta l'escursione di prezzo del
@@ -13113,6 +13147,8 @@ function draw(){
          // sovrappongono affatto a [valPrice,vahPrice]; un bucket a cavallo del confine resta a
          // piena opacità (fa comunque parte, almeno in parte, della Value Area).
          const OUTSIDE_VA_DIM_FACTOR=0.35;
+         const _barreInd=d._vpIndBars?[]:null;
+         if(_barreInd)vpIndBarRects.set(d.id,_barreInd);
          for(let b=0;b<profile.buckets;b++){
            const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
            const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
@@ -13121,6 +13157,7 @@ function draw(){
            if(total<=0)continue;
            const totalPx=Math.max(1,total/profile.maxTotal*maxBarPx);
            const upPx=totalPx*(profile.upVol[b]/total), downPx=totalPx-upPx;
+           if(_barreInd)_barreInd.push({x1:leftX,x2:leftX+totalPx,yT:yTop,yB:yBot});
            const insideVA=!va||(bucketHiPrice>=va.valPrice&&bucketLoPrice<=va.vahPrice);
            // Opacità delle barre regolabile (richiesta per i Profili volumetrici giornalieri/delle
            // sessioni, d.barOpacity 0-100%); senza impostazione resta il 55% di sempre.
@@ -19408,7 +19445,7 @@ chartEl.addEventListener('pointerdown',e=>{
  chartEl.setPointerCapture?.(e.pointerId);
 });
 
-chartEl.addEventListener('pointerdown',e=>{ _vpIndClickDown={x:e.clientX,y:e.clientY,id:e.pointerId}; },{capture:true,passive:true});
+chartEl.addEventListener('pointerdown',e=>{ _vpIndClickDown={x:e.clientX,y:e.clientY,id:e.pointerId,altroSopra:vpIndAltroElementoSopra(e.clientX,e.clientY)}; },{capture:true,passive:true});
 chartEl.addEventListener('pointermove',e=>{
  // Trascinamento del grafico: la casellina aperta si chiude (resterebbe altrimenti "appesa" nel vuoto).
  if(_vpIndClickDown&&_vpIndClickDown.id===e.pointerId&&_vpIndHoverTarget&&Math.hypot(e.clientX-_vpIndClickDown.x,e.clientY-_vpIndClickDown.y)>5)hideVpIndHoverBox();
@@ -19418,7 +19455,7 @@ chartEl.addEventListener('pointerup',e=>{
  const d=_vpIndClickDown; _vpIndClickDown=null;
  if(!d||d.id!==e.pointerId)return;
  if(Math.hypot(e.clientX-d.x,e.clientY-d.y)>5)return; // era un trascinamento, non un click
- const hit=vpIndHitAt(e.clientX,e.clientY);
+ const hit=d.altroSopra?null:vpIndHitAt(e.clientX,e.clientY);
  if(hit)showVpIndBoxFor(hit,e.clientX,e.clientY); else hideVpIndHoverBox();
 },{capture:true,passive:true});
 chartEl.addEventListener('pointermove',e=>{
@@ -23475,6 +23512,9 @@ function openNewsEventModal(ev,backContext){
    // onesto invece di sparire silenziosamente: aiuta a capire che manca copertura, non che manca
    // per un errore.
    const glossary=newsGlossaryFor(ev);
+   const effetto=newsEffettoUsuale(ev);
+   const effettoSection=effetto?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25)"><div style="opacity:.7;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px">🎯 Effetto usuale</div><div style="line-height:1.45">${effetto.testo}</div>`+
+     (effetto.esito?`<div style="margin-top:5px;font-weight:600;color:${effetto.esito.verso>0?'#26a69a':effetto.esito.verso<0?'#ef5350':'inherit'}">${effetto.esito.testo}</div>`:'')+`</div>`:'';
    const glossarySection=(ev.impact!=='High'&&ev.impact!=='Medium')?'':(
      glossary
        ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(128,128,128,.25);display:flex;flex-direction:column;gap:8px">`+
@@ -23487,7 +23527,7 @@ function openNewsEventModal(ev,backContext){
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Valuta</span><span style="font-weight:600">${countryFlagImgTag(ev.country,18)} ${ev.country||'—'}</span></div>`+
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Orario</span><span style="font-weight:600">${dateLabel}</span></div>`+
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Gravità</span><span style="font-weight:700;color:${impactColor}">${ev.impact||'—'}</span></div>`+
-     row('Forecast',ev.forecast)+row('Previous',ev.previous)+actualRow+linkRow+glossarySection;
+     row('Forecast',ev.forecast)+row('Previous',ev.previous)+actualRow+linkRow+effettoSection+glossarySection;
  }
  const ov=$('newsEventModalOverlay'); moveModalToFloatingIfActive(ov); if(ov)ov.style.display='flex';
 }
@@ -24870,6 +24910,42 @@ const NEWS_GLOSSARY=[
 function resolveNewsGlossaryText(field,country){
  if(typeof field==='function')return field(country);
  return field||null;
+}
+// ===================== "EFFETTO USUALE" (stile Forex Factory) =====================
+// RICHIESTO ESPLICITAMENTE: oltre alle Note FF, la riga "Usual Effect" della scheda Forex Factory.
+// Su FF e' una regola FISSA per tipo di indicatore, non cambia release per release, quindi (come
+// il glossario qui sopra) la ricaviamo dal titolo invece di fare scraping della pagina evento:
+//  - dati "piu' basso e' meglio" (disoccupazione, richieste di sussidio): Actual MINORE del
+//    Forecast e' positivo per la valuta;
+//  - eventi senza numero (discorsi, verbali, comunicati, conferenze): conta il tono — piu'
+//    aggressivo (hawkish) del previsto e' positivo per la valuta;
+//  - tutto il resto (la stragrande maggioranza, inflazione e tassi compresi): Actual MAGGIORE del
+//    Forecast e' positivo per la valuta.
+// In piu', se l'evento e' gia' uscito con Actual e Forecast numerici, diciamo subito in che verso
+// e' andato rispetto alle attese (solo lettura della regola, non una previsione del prezzo).
+const NEWS_EFFETTO_INVERSO=/unemployment rate|unemployment change|jobless|unemployment claims|initial claims|continuing.*claims|claimant count/i;
+const NEWS_EFFETTO_TONO=/speaks|speech|testimony|minutes|statement|press conference|monetary policy report|policy report|outlook report|summary of opinions|parliament|hearing/i;
+function newsNumero(v){
+ if(v==null)return NaN;
+ let t=String(v).trim().replace(/,/g,'').replace(/[<>|]/g,'');
+ const m=t.match(/^([+-]?\d*\.?\d+)\s*([%KMBT])?$/i);
+ if(!m)return NaN;
+ const n=parseFloat(m[1]), suf=(m[2]||'').toUpperCase();
+ return n*({K:1e3,M:1e6,B:1e9,T:1e12}[suf]||1);
+}
+function newsEffettoUsuale(ev){
+ if(!ev||!ev.title)return null;
+ const cur=ev.country||'la valuta';
+ if(NEWS_EFFETTO_TONO.test(ev.title))return{tipo:'tono',testo:`Un tono più aggressivo (hawkish) del previsto è positivo per ${cur}; più accomodante (dovish) è negativo.`,esito:null};
+ const inverso=NEWS_EFFETTO_INVERSO.test(ev.title);
+ const testo=inverso?`'Actual' minore di 'Forecast' è positivo per ${cur}.`:`'Actual' maggiore di 'Forecast' è positivo per ${cur}.`;
+ let esito=null;
+ const a=newsNumero(ev.actual), f=newsNumero(ev.forecast);
+ if(Number.isFinite(a)&&Number.isFinite(f)){
+   if(a===f)esito={verso:0,testo:'Uscito in linea con le attese: di norma impatto limitato.'};
+   else{ const buono=inverso?(a<f):(a>f); esito={verso:buono?1:-1,testo:buono?`Uscito MIGLIORE delle attese → di norma positivo per ${cur}.`:`Uscito PEGGIORE delle attese → di norma negativo per ${cur}.`}; }
+ }
+ return{tipo:inverso?'inverso':'diretto',testo,esito};
 }
 // Filtro esplicito richiesto: SOLO Medium/High. La prima voce di NEWS_GLOSSARY il cui pattern
 // combacia col titolo vince (l’array è ordinato apposta: voci specifiche per nome prima, quelle
@@ -31303,14 +31379,26 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
  // perche' dopo non si saprebbe piu' quali erano.
  let vuoleNotion=false;
  try{
-   const daNotion=trades.filter(t=>t&&t.mt5Ticket!=null&&String(t.mt5Login||'')===accLogin&&t.id!=null);
-   if(daNotion.length&&typeof notionReady==='function'&&notionReady()){
+   // Solo le operazioni che sono DAVVERO su Notion (gia' inviate): quelle mai partite non hanno
+   // nulla da togliere e non occupano spazio.
+   const giaInviate=(typeof notionLoadHashes==='function')?notionLoadHashes():{};
+   const daNotion=trades.filter(t=>t&&t.mt5Ticket!=null&&String(t.mt5Login||'')===accLogin&&t.id!=null&&Object.prototype.hasOwnProperty.call(giaInviate,String(t.id)));
+   // La domanda si fa anche se in questo momento Notion non risulta pronto (stato non ancora
+   // caricato, rete assente): la scelta resta salvata e il giro di sincronizzazione la esegue
+   // appena Notion torna disponibile. Prima, in quel caso, la domanda veniva saltata in silenzio.
+   if(daNotion.length){
      vuoleNotion=await appConfirm('Vuoi togliere da Notion anche le '+daNotion.length
        +' operazioni di questo conto?\n\nServe a liberare lo spazio per il prossimo conto che collegherai. '
        +'Su Notion vengono archiviate: il Trade Journal dell\'app le perde comunque insieme al conto.\n\n'
        +'Se rispondi no restano su Notion, e le potrai togliere a mano da lì.',
        {title:'📓 Operazioni su Notion',okLabel:'Sì, togli anche da Notion',cancelLabel:'No, lasciale',danger:false});
      if(vuoleNotion)notionAggiungiVolute(daNotion.map(t=>String(t.id)));
+     else{
+       // BUG CORRETTO: con "No, lasciale" le operazioni sparivano da Notion lo stesso, perche' la
+       // sincronizzazione archivia su Notion tutto cio' che non c'e' piu' nel Journal. Ora l'app
+       // le "dimentica" (non le considera piu' sue da allineare): restano davvero su Notion.
+       const h=notionLoadHashes(); daNotion.forEach(t=>{ delete h[String(t.id)]; }); notionSaveHashes(h);
+     }
    }
  }catch(e){ console.log('[Notion] domanda sulla cancellazione saltata:',e); }
  let removedTrades=0;
