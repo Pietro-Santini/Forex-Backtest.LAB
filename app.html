@@ -826,11 +826,28 @@ window.fblSchermataRiprova=function(testo){
  clearInterval(window.__fblRiprovaT);
  window.__fblRiprovaT=setInterval(()=>{ resto--; scrivi(); if(resto<=0){ clearInterval(window.__fblRiprovaT); location.reload(); } },1000);
 };
+// RIENTRO SENZA SCHERMATA DI CARICAMENTO (RICHIESTO: "se esco anche pochi secondi e rientro mi rifa'
+// sempre il caricamento"). Quando il telefono chiude la scheda in background la pagina riparte da zero
+// e nessuna pagina web puo' impedirlo; si puo' pero' non far ASPETTARE: se questo account e' stato
+// verificato nelle ultime 12 ore e l'app era aperta nelle ultime 12 ore, la schermata di attesa non si
+// mostra e la verifica di account/abbonamento continua dietro. Se la verifica dice "non attivo" la
+// schermata torna su (showBlockedScreen); se la rete non risponde, si resta nell'app.
+(function fblAvvioRapido(){
+ try{
+  const a=JSON.parse(localStorage.getItem('fbl_accesso_ok')||'null');
+  const ult=Number(localStorage.getItem('fbl_ultima_attivita'))||0;
+  const H12=12*3600*1000, ora=Date.now();
+  if(a&&a.uid&&ora-(a.at||0)<H12&&ora-ult<H12){
+   const ov=document.getElementById('auth-check-overlay');
+   if(ov){ ov.style.display='none'; window.fblAvvioOttimista=a.uid; }
+  }
+ }catch(e){}
+})();
 // Caricamento che non finisce mai: dopo 25 secondi con la schermata di attesa ancora su, si offre
 // Riprova invece di lasciare l'utente davanti a una rotella che gira.
 setTimeout(function(){
  const ov=document.getElementById('auth-check-overlay');
- if(ov&&ov.isConnected&&ov.querySelector('.loadingSpinner')&&!document.getElementById('fbl-riprova-btn')){
+ if(ov&&ov.isConnected&&ov.style.display!=='none'&&ov.querySelector('.loadingSpinner')&&!document.getElementById('fbl-riprova-btn')){
   window.fblSchermataRiprova('Il collegamento sta impiegando troppo tempo: di solito è la rete (Wi-Fi o dati deboli, VPN). Controlla la connessione e riprova.');
  }
 },25000);
@@ -970,13 +987,32 @@ setTimeout(function(){
       return onSnapshot(doc(db,"users",this.uid,"data","session"), snap=>{
         cb(snap.exists() ? (snap.data().state ?? null) : null);
       }, e=>console.warn("Ascolto sessione Firestore interrotto:", e));
+    },
+    // DISEGNI/INDICATORI CONDIVISI FRA DISPOSITIVI (vedi graficoCloudAvvia nello script principale):
+    // documento a parte, users/{uid}/data/grafico, una voce per sessione+asset. Scrittura "merge":
+    // si mandano solo le voci cambiate, le altre restano come sono.
+    async graficoSalva(voci){
+      if(!this.uid) return false;
+      try{
+        await setDoc(doc(db,"users",this.uid,"data","grafico"), { v:1, voci, at: serverTimestamp() }, { merge:true });
+        return true;
+      }catch(e){ console.warn("Salvataggio disegni condivisi fallito:", e); return false; }
+    },
+    graficoAscolta(cb, errCb){
+      if(!this.uid) return ()=>{};
+      return onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
+        cb(snap.exists() ? (snap.data().voci || {}) : {}, !!(snap.metadata && snap.metadata.hasPendingWrites));
+      }, e=>{ console.warn("Ascolto disegni condivisi interrotto:", e); if(errCb) errCb(e); });
     }
   };
 
   function setOverlayContent(html){
     const overlay = document.getElementById("auth-check-overlay");
-    if (overlay) overlay.innerHTML = html;
+    if (overlay) { overlay.innerHTML = html; overlay.style.display = ""; }
   }
+  // Vedi fblAvvioRapido: accesso verificato ora, il prossimo rientro entro 12 ore non aspetta.
+  function ricordaAccessoOk(uid){ try{ localStorage.setItem("fbl_accesso_ok", JSON.stringify({ uid, at: Date.now() })); }catch(e){} }
+  function dimenticaAccessoOk(){ try{ localStorage.removeItem("fbl_accesso_ok"); }catch(e){} window.fblAvvioOttimista = null; }
 
   // ABBONAMENTO MENSILE (RICHIESTO ESPLICITAMENTE, sostituisce la vecchia licenza a vita da 50 €):
   // 30 €/mese, prova di 7 giorni dall'iscrizione senza carta. Chi si abbona durante la prova paga
@@ -1043,6 +1079,7 @@ setTimeout(function(){
   }
 
   function showBlockedScreen(lic){
+    dimenticaAccessoOk();
     // Abbonamento finito (disdetto o carta rifiutata fino in fondo) oppure prova appena scaduta:
     // due situazioni diverse, due messaggi diversi.
     const exSub = !!(lic && lic.type === "subscription");
@@ -1085,6 +1122,9 @@ setTimeout(function(){
   }
 
   function showErrorScreen(){
+    // Rientro rapido gia' dentro l'app (vedi fblAvvioRapido): la rete che non risponde non deve
+    // coprire l'app con la schermata di errore; la verifica si rifa' al prossimo avvio.
+    if (window.fblAvvioOttimista) { console.warn("Verifica account non riuscita: si resta nell'app (rientro rapido)."); return; }
     window.fblSchermataRiprova("Non sono riuscito a verificare il tuo account: di solito è la rete che non risponde (Wi-Fi o dati deboli, VPN, server momentaneamente irraggiungibile). I tuoi dati sono al sicuro.");
   }
 
@@ -1132,6 +1172,7 @@ setTimeout(function(){
     if (!user) {
       // Non autenticato (o appena sloggato): azzeriamo subito l'uid del ponte cloud, poi
       // rimandiamo alla pagina di login.
+      dimenticaAccessoOk();
       window.fxbtCloud.uid = null;
       resolveCloudReady(null);
       window.location.replace(LOGIN_PAGE);
@@ -1173,6 +1214,7 @@ setTimeout(function(){
         setTimeout(() => alert(err), 300);
       }
       if (licensed) {
+        ricordaAccessoOk(user.uid);
         overlay.remove();
         logoutBtn.style.display = "inline-block";
         showSubscriptionState(licenseData);
@@ -1183,11 +1225,13 @@ setTimeout(function(){
       const trialEndMs = trialStartMs + TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
       if (Date.now() >= trialEndMs || (licenseData && licenseData.type === "subscription")) {
+        dimenticaAccessoOk();
         showBlockedScreen(licenseData);
         logoutBtn.style.display = "none";
         return;
       }
 
+      ricordaAccessoOk(user.uid);
       overlay.remove();
       logoutBtn.style.display = "inline-block";
       const buyBtn = document.getElementById("buyLicenseBtn"); if (buyBtn) buyBtn.style.display = "inline-block";
@@ -4727,6 +4771,195 @@ async function restoreDrawingsFromBackupIfNewer(savedState,uid){
    }
    return true;
  }catch(e){ console.warn('Ripristino copia dedicata dei disegni non riuscito:',e); return false; }
+}
+
+// ===================== DISEGNI E INDICATORI CONDIVISI FRA TUTTI I DISPOSITIVI =====================
+// SEGNALATO: "i disegni fatti dal PC (indicatori, livelli, linee d'allarme...) non compaiono su
+// tablet e telefono: deve essere tutto condiviso". Prima i disegni andavano sul cloud SOLO dentro il
+// salvataggio di chiusura dell'app (pagehide/logout, vedi syncFullStatusToFirebase): il PC, che resta
+// sempre aperto, non li mandava mai; e all'avvio il telefono teneva la sua copia locale.
+// Ora c'e' un documento dedicato (users/{uid}/data/grafico) con UNA voce per sessione+asset
+// ("live|XAUUSD") e una per gli indicatori di ogni sessione ("ind|live"), ognuna con l'istante
+// della sua ultima modifica. Ogni dispositivo:
+//  - ascolta il documento in tempo reale e adotta le voci piu' recenti delle sue;
+//  - quando l'utente cambia qualcosa, manda SOLO quella voce (scrittura merge), ~1,5 s dopo.
+// Voci mai toccate da questo sistema (disegni gia' esistenti prima di questa versione): valgono
+// come "semi" con un istante minuscolo (1 + numero di disegni), quindi vince il dispositivo che ne
+// ha di piu' (di solito il PC) e qualunque modifica vera li supera sempre.
+const GRAFICO_CAMPI_LOCALI=new Set(['lastSide','armed']); // stato dell'allarme sul singolo dispositivo, non si condivide
+let graficoT={};               // chiave -> istante dell'ultima modifica nota su questo dispositivo
+let graficoVisto={};           // chiave -> JSON gia' noto (per capire se l'utente ha cambiato qualcosa)
+let graficoInAttesa={};        // voci remote da applicare appena l'utente finisce un trascinamento
+let graficoDaInviare=new Set();
+let graficoTimerInvio=null, graficoAttivo=false, graficoUid=null, graficoUltimaChiaveCorrente=null;
+function graficoJson(v){ try{ return JSON.stringify(v,(k,x)=>GRAFICO_CAMPI_LOCALI.has(k)?undefined:x); }catch(e){ return null; } }
+function graficoTKey(){ return 'fbl_grafico_t_'+(graficoUid||''); }
+function graficoSalvaT(){ try{ localStorage.setItem(graficoTKey(),JSON.stringify(graficoT)); }catch(e){} }
+function graficoCodifica(k){ return encodeURIComponent(k).replace(/\./g,'%2E'); }
+function graficoDecodifica(k){ try{ return decodeURIComponent(k); }catch(e){ return null; } }
+function graficoChiaveCorrente(){ return currentAssetKey?(currentMode()+'|'+currentAssetKey):null; }
+// Valore attuale di una voce su questo dispositivo (per l'asset a grafico si guarda `drawings`, che e'
+// la copia viva; per gli altri la memoria per asset).
+function graficoValoreLocale(k){
+ if(k.startsWith('ind|')){
+   const mode=k.slice(4);
+   if(mode===currentMode())return serializeIndicators(activeIndicators);
+   return Array.isArray(indicatorsByMode[mode])?indicatorsByMode[mode]:null;
+ }
+ const i=k.indexOf('|'); const mode=k.slice(0,i), asset=k.slice(i+1);
+ if(k===graficoChiaveCorrente()&&!assetSwitchInProgress)return drawings;
+ const l=(assetDrawings[mode]||{})[asset];
+ return Array.isArray(l)?l:null;
+}
+function graficoTutteLeChiavi(){
+ const out=new Set();
+ Object.keys(assetDrawings||{}).forEach(mode=>Object.keys(assetDrawings[mode]||{}).forEach(a=>out.add(mode+'|'+a)));
+ const kc=graficoChiaveCorrente(); if(kc)out.add(kc);
+ Object.keys(indicatorsByMode||{}).forEach(mode=>{ if(Array.isArray(indicatorsByMode[mode])||mode===currentMode())out.add('ind|'+mode); });
+ return [...out];
+}
+function graficoSeme(v){ return Array.isArray(v)&&v.length?(1+v.length):0; }
+// Il dispositivo sta trascinando/disegnando: una voce remota per l'asset a grafico aspetta.
+function graficoOccupato(){ return !!(shapeDrag||touchDrawDrag||placingStep!==0||tradeLevelDrag||assetSwitchInProgress); }
+function graficoApplica(k,valore){
+ if(k.startsWith('ind|')){
+   const mode=k.slice(4);
+   if(!(mode in indicatorsByMode))return true;
+   indicatorsByMode[mode]=serializeIndicators(valore);
+   if(mode===currentMode()){
+     activeIndicators=hydrateIndicators(indicatorsByMode[mode]);
+     try{ renderActiveIndicatorsUI(); }catch(e){}
+   }
+   graficoVisto[k]=graficoJson(indicatorsByMode[mode]);
+   try{ persistIndicatorsBackupNow(); }catch(e){}
+   try{ draw(); }catch(e){}
+   return true;
+ }
+ const i=k.indexOf('|'); const mode=k.slice(0,i), asset=k.slice(i+1);
+ if(!asset)return true;
+ if(!assetDrawings[mode])assetDrawings[mode]={};
+ if(k===graficoChiaveCorrente()){
+   if(graficoOccupato())return false;
+   // Lo stato dell'allarme resta quello di QUESTO dispositivo: senza, ogni aggiornamento riarmerebbe
+   // le linee e un allarme con il prezzo gia' sopra suonerebbe di nuovo.
+   const vecchie=new Map();
+   (drawings||[]).forEach(d=>{ if(d&&d.type==='alarmline')vecchie.set(String(d.id!=null?d.id:(d.p1&&d.p1.price)),d); });
+   const nuovi=migrateDrawingLayerVisibilityToHidden(valore);
+   nuovi.forEach(d=>{
+     if(!d||d.type!=='alarmline')return;
+     const v=vecchie.get(String(d.id!=null?d.id:(d.p1&&d.p1.price)));
+     if(v){ if(v.lastSide!=null)d.lastSide=v.lastSide; if(v.armed!=null)d.armed=v.armed; }
+   });
+   drawings=nuovi;
+   selectedDrawing=null;
+   assetDrawings[mode][asset]=drawings;
+   drawingsBackupSig=currentMode()+'|'+(currentAssetKey||'')+'|'+JSON.stringify(drawings);
+   try{ broadcastDrawingsStateNow(); }catch(e){}
+   try{ draw(); }catch(e){}
+ }else{
+   assetDrawings[mode][asset]=valore;
+ }
+ graficoVisto[k]=graficoJson(valore);
+ try{ persistDrawingsBackupNow(); }catch(e){}
+ return true;
+}
+function graficoProgrammaInvio(){
+ if(graficoTimerInvio)return;
+ graficoTimerInvio=setTimeout(graficoInviaOra,1500);
+}
+let graficoAvvisoPieno=false;
+async function graficoInviaOra(){
+ graficoTimerInvio=null;
+ if(!graficoAttivo||!graficoDaInviare.size)return;
+ if(graficoOccupato()){ graficoProgrammaInvio(); return; }
+ const voci={}; let byte=0;
+ [...graficoDaInviare].forEach(k=>{
+   const v=graficoValoreLocale(k); if(v==null)return;
+   const d=graficoJson(v); if(d==null)return;
+   voci[graficoCodifica(k)]={t:graficoT[k]||0,d};
+   byte+=d.length;
+ });
+ graficoDaInviare.clear();
+ if(!Object.keys(voci).length)return;
+ // Tetto di Firestore: 1 MB per documento. Oltre, la scrittura fallirebbe comunque: lo si dice.
+ if(byte>900*1024){
+   if(!graficoAvvisoPieno){ graficoAvvisoPieno=true; try{ $('status').textContent='⚠️ Disegni troppo pesanti per la condivisione fra dispositivi (oltre 900 KB): restano salvati su questo dispositivo.'; }catch(e){} }
+   return;
+ }
+ const ok=await window.fxbtCloud.graficoSalva(voci);
+ if(!ok){ Object.keys(voci).forEach(ek=>{ const k=graficoDecodifica(ek); if(k)graficoDaInviare.add(k); }); setTimeout(graficoProgrammaInvio,15000); }
+}
+// Voci arrivate dal cloud (all'avvio e a ogni modifica fatta da un altro dispositivo).
+function graficoRicevi(vociRemote){
+ const remote={};
+ Object.keys(vociRemote||{}).forEach(ek=>{
+   const k=graficoDecodifica(ek); const e=vociRemote[ek];
+   if(k&&e&&typeof e.d==='string')remote[k]={t:Number(e.t)||0,d:e.d};
+ });
+ let cambiato=false;
+ Object.keys(remote).forEach(k=>{
+   const r=remote[k];
+   let lt=graficoT[k];
+   if(lt==null){ lt=graficoSeme(graficoValoreLocale(k)); graficoT[k]=lt; cambiato=true; }
+   if(r.t>lt){
+     if(r.d===graficoJson(graficoValoreLocale(k))){ graficoT[k]=r.t; cambiato=true; return; }
+     let val; try{ val=JSON.parse(r.d); }catch(e){ return; }
+     if(!Array.isArray(val))return;
+     if(graficoApplica(k,val)){ graficoT[k]=r.t; delete graficoInAttesa[k]; }
+     else graficoInAttesa[k]={t:r.t,val};
+     cambiato=true;
+   }
+ });
+ // Quello che questo dispositivo ha di piu' recente (o che il cloud non ha ancora) parte.
+ graficoTutteLeChiavi().forEach(k=>{
+   let lt=graficoT[k];
+   if(lt==null){ lt=graficoSeme(graficoValoreLocale(k)); if(!lt)return; graficoT[k]=lt; cambiato=true; }
+   const r=remote[k];
+   if(!r||lt>r.t)graficoDaInviare.add(k);
+ });
+ if(cambiato)graficoSalvaT();
+ if(graficoDaInviare.size)graficoProgrammaInvio();
+}
+// Ogni 1,5 s: l'utente ha cambiato i disegni dell'asset a grafico o gli indicatori della sessione?
+function graficoControllaModifiche(){
+ if(!graficoAttivo)return;
+ // Voci remote rimaste in attesa di un trascinamento finito.
+ Object.keys(graficoInAttesa).forEach(k=>{
+   const p=graficoInAttesa[k];
+   if(graficoApplica(k,p.val)){ graficoT[k]=Math.max(graficoT[k]||0,p.t); delete graficoInAttesa[k]; graficoSalvaT(); }
+ });
+ if(graficoOccupato())return;
+ const segna=k=>{ graficoT[k]=Math.max(Date.now(),(graficoT[k]||0)+1); graficoSalvaT(); graficoDaInviare.add(k); graficoProgrammaInvio(); };
+ const kc=graficoChiaveCorrente();
+ if(kc){
+   const j=graficoJson(drawings);
+   // Appena arrivati su un asset: si prende nota, non e' una modifica.
+   if(kc!==graficoUltimaChiaveCorrente||graficoVisto[kc]==null){ graficoUltimaChiaveCorrente=kc; graficoVisto[kc]=j; }
+   else if(j!==graficoVisto[kc]){ graficoVisto[kc]=j; segna(kc); }
+ }
+ const ki='ind|'+currentMode();
+ const ji=graficoJson(serializeIndicators(activeIndicators));
+ if(graficoVisto[ki]==null)graficoVisto[ki]=ji;
+ else if(ji!==graficoVisto[ki]){ graficoVisto[ki]=ji; segna(ki); }
+}
+async function graficoCloudAvvia(){
+ if(PIP_SLOT>0||graficoAttivo)return;
+ const cloud=await waitForFxbtCloud();
+ if(!cloud||!cloud.uid||typeof cloud.graficoAscolta!=='function')return;
+ graficoUid=cloud.uid;
+ try{ graficoT=JSON.parse(localStorage.getItem(graficoTKey())||'{}')||{}; }catch(e){ graficoT={}; }
+ graficoAttivo=true;
+ let fermo=null, tentativi=0;
+ const ascolta=()=>{
+   fermo=cloud.graficoAscolta((voci,locale)=>{ tentativi=0; if(!locale)graficoRicevi(voci); },()=>{
+     // Ascolto caduto (rete assente a lungo, token scaduto...): si riprova da soli.
+     try{ fermo&&fermo(); }catch(e){}
+     setTimeout(ascolta,Math.min(300000,10000*Math.pow(2,tentativi++)));
+   });
+ };
+ ascolta();
+ setInterval(graficoControllaModifiche,1500);
+ window.addEventListener('pagehide',()=>{ if(graficoDaInviare.size)graficoInviaOra(); });
 }
 
 // Tutto lo stato della dashboard (CSV caricato, trade, posizioni, disegni, indicatori,
@@ -33199,6 +33432,7 @@ var __initLocalStateSnapshot=null;
  __sessionRestoreDone=true;
  scheduleSave();
  armDrawingsPersistence(); // da qui in poi ogni modifica ai disegni viene salvata da sola (vedi blocco dedicato)
+ graficoCloudAvvia(); // disegni e indicatori condivisi con gli altri dispositivi dell'account
  // STEP 3: se la sessione ripristinata era già una Challenge chiusa per violazione, la
  // schermata drammatica ricompare subito al caricamento della pagina — non basta un refresh
  // per "sbloccarla" di nuovo.
