@@ -19694,7 +19694,19 @@ if(priceAxisZoneEl){
 let timeAxisZoneDrag=null;
 const timeAxisZoneEl=$('timeAxisZone');
 if(timeAxisZoneEl){
+ // I pallini delle notizie stanno appena sopra la barra del tempo: col dito il tocco cade spesso
+ // dentro questa zona, che partiva con lo zoom del tempo e il popup della notizia non si apriva
+ // mai. Prima si guarda se sotto c'e' un pallino: in quel caso niente zoom, e al rilascio (se il
+ // dito non si e' spostato) si apre la notizia.
+ let newsZonaTocco=null;
  timeAxisZoneEl.addEventListener('pointerdown',e=>{
+  newsZonaTocco=null;
+  try{
+   const r=chartEl.getBoundingClientRect();
+   const x=e.clientX-r.left, y=e.clientY-r.top, tol=e.pointerType==='mouse'?0:14;
+   const hit=newsDotHitRects.find(d=>Math.hypot(x-d.x,y-d.y)<=Math.max(d.r,tol));
+   if(hit){ e.preventDefault(); newsZonaTocco={id:e.pointerId,x:e.clientX,y:e.clientY,t:performance.now(),eventi:hit.events}; return; }
+  }catch(err){}
   e.preventDefault();
   autoFitWidth=false; // zoom manuale: da qui in poi non sovrascriviamo più la scelta dell'utente
   timeAxisZoneDrag={startX:e.clientX,startCount:visibleCount};
@@ -19717,6 +19729,13 @@ if(timeAxisZoneEl){
   timeAxisZoneEl.releasePointerCapture?.(e.pointerId);
   chartEl.parentElement.classList.remove('timeAxisHover');
  }
+ timeAxisZoneEl.addEventListener('pointerup',e=>{
+  const t=newsZonaTocco; newsZonaTocco=null;
+  if(t&&t.id===e.pointerId&&Math.hypot(e.clientX-t.x,e.clientY-t.y)<=10&&performance.now()-t.t<=700){
+   newsPopupApertoAt=Date.now();
+   if(t.eventi.length===1)openNewsEventModal(t.eventi[0]); else openNewsClusterModal(t.eventi);
+  }
+ });
  timeAxisZoneEl.addEventListener('pointerup',endTimeAxisZoneDrag);
  timeAxisZoneEl.addEventListener('pointercancel',endTimeAxisZoneDrag);
  timeAxisZoneEl.addEventListener('pointerenter',()=>{ if(!timeAxisZoneDrag)chartEl.parentElement.classList.add('timeAxisHover'); });
@@ -24705,6 +24724,7 @@ $('newsCountryFilterContainer')?.addEventListener('change',e=>{
 // singolo), letta dal click handler di #newsEventModalBackBtn più sotto.
 let newsEventModalBackEvents=null;
 function openNewsEventModal(ev,backContext){
+ newsPopupApertoAt=Date.now();
  if(!ev)return;
  newsEventModalBackEvents=backContext||null;
  const backBtn=$('newsEventModalBackBtn');
@@ -24763,6 +24783,7 @@ function openNewsEventModal(ev,backContext){
 // ===================== MODALE ELENCO CLUSTER NOTIZIE — popolata al click su un pallino-cluster
 // (più eventi nello stesso momento/pochi minuti, vedi clusterNewsForDisplay) =====================
 function openNewsClusterModal(events){
+ newsPopupApertoAt=Date.now();
  if(!events||!events.length)return;
  if(events.length===1){ openNewsEventModal(events[0]); return; }
  const titleEl=$('newsClusterModalTitle');
@@ -24792,10 +24813,15 @@ function openNewsClusterModal(events){
  }
  const ov=$('newsClusterModalOverlay'); moveModalToFloatingIfActive(ov); if(ov)ov.style.display='flex';
 }
+// Istante di apertura dei popup notizie: il "clic" che il telefono genera DOPO il tocco (qualche
+// decina di ms piu' tardi) cade sullo sfondo del popup appena comparso sotto il dito e lo
+// richiudeva all'istante. Nei primi 600 ms un clic sullo sfondo non chiude.
+let newsPopupApertoAt=0;
+function newsPopupAppenaAperto(){ return Date.now()-newsPopupApertoAt<600; }
 function closeNewsClusterModal(){ if($('newsClusterModalOverlay'))$('newsClusterModalOverlay').style.display='none'; }
 $('newsClusterModalCloseBtn')?.addEventListener('click',closeNewsClusterModal);
 $('newsClusterModalDoneBtn')?.addEventListener('click',closeNewsClusterModal);
-$('newsClusterModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('newsClusterModalOverlay'))closeNewsClusterModal(); });
+$('newsClusterModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('newsClusterModalOverlay')&&!newsPopupAppenaAperto())closeNewsClusterModal(); });
 document.addEventListener('keydown',e=>{
  if(e.key==='Escape' && $('newsClusterModalOverlay') && $('newsClusterModalOverlay').style.display!=='none'){
    e.preventDefault();
@@ -24815,7 +24841,34 @@ $('newsEventModalBackBtn')?.addEventListener('click',()=>{
  newsEventModalBackEvents=null;
  if(events&&events.length)openNewsClusterModal(events);
 });
-$('newsEventModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('newsEventModalOverlay'))closeNewsEventModal(); });
+$('newsEventModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('newsEventModalOverlay')&&!newsPopupAppenaAperto())closeNewsEventModal(); });
+// ===================== TOCCO SUI PALLINI DELLE NOTIZIE (tablet e telefono) =====================
+// SEGNALATO: "da tablet e telefono, toccando un pallino con la bandiera il popup prova ad aprirsi ma
+// sparisce subito". Col dito il gestore principale del puntatore esce PRIMA del controllo dei
+// pallini (ramo touch), quindi il popup non si apriva mai: si vedeva solo per un istante l'anteprima
+// sotto il dito. Ascoltatore dedicato, in cattura: un tocco breve e fermo su un pallino apre il
+// dettaglio (o l'elenco, se nello stesso punto ci sono piu' notizie).
+let newsTocco=null;
+chartEl.addEventListener('pointerdown',e=>{
+ newsTocco=null;
+ if(e.pointerType!=='touch'||ditaSulGrafico.size>1)return;
+ try{
+   const r=chartEl.getBoundingClientRect();
+   const x=e.clientX-r.left, y=e.clientY-r.top;
+   // Tolleranza piu' larga del mouse: un dito e' meno preciso di un puntatore.
+   const hit=newsDotHitRects.find(d=>Math.hypot(x-d.x,y-d.y)<=Math.max(d.r,14));
+   if(hit)newsTocco={id:e.pointerId,x:e.clientX,y:e.clientY,t:performance.now(),eventi:hit.events};
+ }catch(err){ newsTocco=null; }
+},true);
+chartEl.addEventListener('pointerup',e=>{
+ const t=newsTocco; newsTocco=null;
+ if(!t||t.id!==e.pointerId)return;
+ if(Math.hypot(e.clientX-t.x,e.clientY-t.y)>10||performance.now()-t.t>700)return;
+ if(twoFingerPan||shapeDrag||tradeLevelDrag)return;
+ newsPopupApertoAt=Date.now();
+ if(t.eventi.length===1)openNewsEventModal(t.eventi[0]); else openNewsClusterModal(t.eventi);
+},true);
+chartEl.addEventListener('pointercancel',()=>{ newsTocco=null; },true);
 document.addEventListener('keydown',e=>{
  if(e.key==='Escape' && $('newsEventModalOverlay') && $('newsEventModalOverlay').style.display!=='none'){
    e.preventDefault();
