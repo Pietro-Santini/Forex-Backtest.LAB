@@ -49,8 +49,10 @@
 //               a prezzo 0 nel Trade Journal, si mettono da parte e tornano
 //          v14 = con piu' conti MT5 si sceglie su quale entrare (niente riconnessione
 //               all'ultimo); server predefinito MetaQuotes-Demo
+//          v15 = footprint allineato nell'ora 22-23 (via i tick MT5 storici dalle fasce
+//               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v14";
+const CACHE_NAME = "forex-backtest-lab-v15";
 const ASSETS = [
   "./",
   "./app.html",
