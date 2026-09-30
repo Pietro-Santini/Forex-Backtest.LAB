@@ -31487,6 +31487,57 @@ async function maybeAutoLaunchDesktopApp(){
 // vedono lo stesso 127.0.0.1). Chiamata alla fine di initSession(), quando tutto il resto della
 // sessione (posizioni, sessione/mode, grafico) è già stato ripristinato al punto dove ero
 // rimasto: la riconnessione MT5 arriva "sopra" a quello, non lo sostituisce.
+// ===================== DIAGNOSI (E RIPARAZIONE) DELLO SCORRIMENTO DELLA PAGINA =====================
+// SEGNALATO: "la rotella non scorre piu' la pagina, da nessuna parte - nemmeno col tasto centrale;
+// Ctrl/Shift+rotella sul grafico invece funzionano". Non riproducibile qui: si raccoglie il fatto
+// sul PC dell'utente. Quando si gira la rotella (senza Ctrl/Shift) e la pagina non si muove pur
+// avendo spazio per farlo, si scrive nella barra di stato PERCHE', una volta. Se la causa e' uno
+// scorrimento disattivato sulla pagina principale (overflow hidden su html/body fuori dalle
+// finestre PIP), lo si riattiva.
+(function fblDiagnosiScorrimento(){
+ let segnalato=false, ultimoScroll=0;
+ // Lo scorrimento di Chrome e' "morbido": parte qualche decina di millisecondi dopo la rotella. Si
+ // guarda se c'e' stato un QUALSIASI evento di scorrimento nel frattempo, non la posizione a un
+ // istante preciso (che dava un falso allarme).
+ window.addEventListener('scroll',()=>{ ultimoScroll=performance.now(); },{passive:true,capture:true});
+ window.addEventListener('wheel',e=>{
+  if(e.ctrlKey||e.shiftKey||e.defaultPrevented||!e.deltaY)return;
+  const y0=window.scrollY, t0=performance.now();
+  setTimeout(()=>{
+   try{
+    if(window.scrollY!==y0||ultimoScroll>=t0)return;      // si e' mosso qualcosa: tutto normale
+    const d=document.documentElement, b=document.body;
+    const giu=e.deltaY>0, spazio=giu?(d.scrollHeight-d.clientHeight-window.scrollY):window.scrollY;
+    if(spazio<=2)return;                                  // era gia' in fondo (o in cima): normale
+    // Qualcosa dentro la pagina ha assorbito la rotella (una tabella o un pannello con lo scorrimento
+    // suo): normale anche questo.
+    let el=e.target, interno=false;
+    while(el&&el!==b&&el!==d){
+     const cs=getComputedStyle(el);
+     if(/(auto|scroll)/.test(cs.overflowY)&&el.scrollHeight>el.clientHeight+2){ interno=true; break; }
+     el=el.parentElement;
+    }
+    if(interno)return;
+    const csH=getComputedStyle(d), csB=getComputedStyle(b);
+    const pip=b.classList.contains('fbPipChartOnly');
+    const sopra=document.elementFromPoint(e.clientX,e.clientY);
+    const nome=n=>n?(n.id?('#'+n.id):(n.className&&typeof n.className==='string'?('.'+n.className.split(' ')[0]):n.tagName)):'—';
+    const diag='html overflow '+csH.overflowY+' · body overflow '+csB.overflowY+' · pagina '+d.scrollHeight+'px / finestra '+d.clientHeight+'px'
+      +' · sotto il mouse '+nome(sopra)+' · overscroll '+csH.overscrollBehaviorY+'/'+csB.overscrollBehaviorY;
+    console.warn('[Scorrimento] la rotella non ha mosso la pagina: '+diag);
+    let riparato=false;
+    if(!pip&&(csH.overflowY==='hidden'||csB.overflowY==='hidden')){
+     d.style.overflowY='auto'; b.style.overflowY='visible'; riparato=true;
+    }
+    if(!segnalato||riparato){
+     segnalato=true;
+     $('status').textContent='⚠️ Scorrimento della pagina bloccato'+(riparato?' (riattivato ora)':'')+' — '+diag
+       +'. Mandami questa riga se il problema resta.';
+    }
+   }catch(err){}
+  },700);
+ },{passive:true});
+})();
 // ===================== RIPRESA DOPO UNA CHIUSURA DEL BROWSER =====================
 // SEGNALATO (telefono): "ogni volta che esco e torno, l'app si ricarica e rifa' tutti i
 // collegamenti". L'app non si ricarica MAI da sola: e' il browser (Chrome su Android) che, quando
