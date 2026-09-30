@@ -1306,6 +1306,7 @@ input[type=color]:hover{border-color:var(--fbAccent2)}
             <button type="button" id="notionSyncAllBtn" class="toolBtn" style="flex:1;min-width:150px;display:none">⬆️ Invia tutti i trade registrati</button>
             <button type="button" id="notionDisconnectBtn" class="toolBtn" style="flex:1;min-width:150px;display:none">Scollega Notion</button>
           </div>
+          <div id="notionOrfaniBox" style="display:none;flex-direction:column;gap:6px;font-size:12px;background:#221c14;border:1px solid #4a3a22;border-radius:7px;padding:9px"></div>
           <div id="notionSyncInfo" class="sub" style="margin:0"></div>
         </div>
       </div>
@@ -20540,6 +20541,43 @@ function notionTogliVolute(chiavi){
   localStorage.setItem(NOTION_VOLUTE_KEY,JSON.stringify(notionVolute().filter(k=>!via.has(k))));
  }catch(e){}
 }
+// Dashboard dei conti MT5 da restituire (conto eliminato dall'app con "Sì, togli anche da Notion").
+// Anche queste in localStorage: se la pagina si chiude o il server non risponde, si riprova al
+// giro dopo. Ogni voce: {login} (conto appena eliminato) oppure {last,server} (conto eliminato in
+// passato, di cui Notion conosce solo le ultime 4 cifre).
+const NOTION_RILASCI_KEY='fxbt_notion_slot_da_liberare';
+function notionRilasci(){ try{ const v=JSON.parse(localStorage.getItem(NOTION_RILASCI_KEY)||'[]'); return Array.isArray(v)?v.filter(x=>x&&(x.login||x.last)):[]; }catch(e){ return []; } }
+function notionRilascioId(x){ return x.login?('L'+x.login):('U'+x.last+'@'+(x.server||'')); }
+function notionAggiungiRilascio(x){
+ try{ const v=notionRilasci(); if(!v.some(y=>notionRilascioId(y)===notionRilascioId(x)))v.push(x); localStorage.setItem(NOTION_RILASCI_KEY,JSON.stringify(v)); }catch(e){}
+}
+function notionTogliRilascio(x){
+ try{ localStorage.setItem(NOTION_RILASCI_KEY,JSON.stringify(notionRilasci().filter(y=>notionRilascioId(y)!==notionRilascioId(x)))); }catch(e){}
+}
+// Restituisce le dashboard in coda (funzione server notionReleaseMt5Account): archivia le righe di
+// quel conto a blocchi e, a database vuoto, rimette lo slot libero. Chiamata dal giro di sync.
+let notionRilasciInCorso=false;
+async function notionEseguiRilasci(){
+ if(notionRilasciInCorso||!notionReady())return false;
+ const coda=notionRilasci(); if(!coda.length)return false;
+ notionRilasciInCorso=true; let fatto=false;
+ try{
+   for(const x of coda){
+     for(let giro=0;giro<40;giro++){
+       const r=await notionCall('notionReleaseMt5Account',x.login?{login:String(x.login)}:{last:String(x.last),server:x.server||''});
+       if(r&&r.released){ notionTogliRilascio(x); fatto=true; break; }
+       if(!r||!(r.remaining>0))break;
+     }
+   }
+   if(fatto){ notionLastSyncInfo='✅ Dashboard del conto MT5 eliminato liberata: è pronta per il prossimo conto.'; await refreshNotionStatus(); }
+ }catch(e){
+   const msg=(e&&e.message)||String(e);
+   notionLastSyncInfo=/not.?found|NOT_FOUND|does not exist/i.test(msg)
+     ? '⚠️ Per liberare la dashboard del conto eliminato va aggiornato il server Notion (funzione notionReleaseMt5Account): la richiesta resta in attesa e parte da sola appena è pubblicata.'
+     : '⚠️ Liberazione della dashboard del conto MT5 non riuscita, riprovo più tardi: '+msg;
+ }finally{ notionRilasciInCorso=false; renderNotionPanel(); }
+ return fatto;
+}
 function notionSyncStoreKey(){ const uid=window.fxbtCloud&&window.fxbtCloud.uid; return uid?('fxbt_notion_sync_v1_'+uid):null; }
 function notionLoadHashes(){ try{ const k=notionSyncStoreKey(); return k?(JSON.parse(localStorage.getItem(k)||'{}').hashes||{}):{}; }catch(e){ return {}; } }
 function notionSaveHashes(h){ try{ const k=notionSyncStoreKey(); if(k)localStorage.setItem(k,JSON.stringify({hashes:h,at:Date.now()})); }catch(e){} }
@@ -20596,7 +20634,7 @@ async function notionSyncTick(force){
    const known=Object.keys(hashes).length;
    if(deleteAltre.length>20&&deleteAltre.length>known*0.5){ notionLastSyncInfo='⚠️ Molti trade risultano spariti dal Journal: per sicurezza non li ho rimossi da Notion.'; deleteAltre=[]; }
    deletes=deleteVolute.concat(deleteAltre).slice(0,40);
-   if(!upserts.length&&!deletes.length){ if(force)notionLastSyncInfo='✅ Tutto già sincronizzato con Notion.'; return; }
+   if(!upserts.length&&!deletes.length){ if(force)notionLastSyncInfo='✅ Tutto già sincronizzato con Notion.'; if(notionRilasci().length)setTimeout(()=>notionEseguiRilasci(),50); return; }
    const res=await notionCall('notionSyncTrades',{upserts,deletes,tz:Intl.DateTimeFormat().resolvedOptions().timeZone||'Europe/Rome'});
    hashes=notionLoadHashes();
    const byKey=new Map(upserts.map(u=>[u.key,u]));
@@ -20608,6 +20646,7 @@ async function notionSyncTick(force){
    notionLastSyncInfo=f?`⚠️ ${f} trade non inviati: ${(res.failed[0]&&res.failed[0].error)||''}`:`✅ Inviati ${(res.ok||[]).length} trade${(res.deleted||[]).length?`, rimossi ${(res.deleted||[]).length}`:''} • ${new Date().toLocaleTimeString('it-IT')}`;
    // Altri da inviare? si continua subito (coda a blocchi da 40).
    if((res.ok||[]).length&&(upserts.length>=40||deletes.length>=40))setTimeout(()=>notionSyncTick(true),1500);
+   else if(notionRilasci().length)setTimeout(()=>notionEseguiRilasci(),50);
  }catch(e){
    notionLastSyncInfo='⚠️ Invio a Notion non riuscito: '+((e&&e.message)||e);
  }finally{
@@ -20644,7 +20683,36 @@ function renderNotionPanel(){
      +`<br>Conti MT5 con dashboard: ${acc||'nessuno ancora'} • dashboard MT5 libere: ${notionState.freeMt5Slots??'—'}`
      +`<br>Da inviare: ${pc.changed} trade${pc.removed?`, da rimuovere: ${pc.removed}`:''}.`;
  }
+ notionDisegnaOrfani();
  const info=$('notionSyncInfo'); if(info)info.textContent=notionLastSyncInfo||'';
+}
+// Conti che su Notion hanno ancora una dashboard ma non esistono piu' tra i conti MT5 salvati in
+// questa app (eliminati prima che esistesse la liberazione dello slot): pulsante per liberarla.
+function notionDisegnaOrfani(){
+ const box=$('notionOrfaniBox'); if(!box)return;
+ const salvati=(typeof mt5SavedAccounts!=='undefined'&&Array.isArray(mt5SavedAccounts))?mt5SavedAccounts:[];
+ const inCoda=new Set(notionRilasci().map(notionRilascioId));
+ const orfani=(notionState&&notionState.connected&&Array.isArray(notionState.mt5Accounts))
+   ? notionState.mt5Accounts.filter(a=>!salvati.some(c=>String(c.login).slice(-4)===String(a.last)&&(!a.server||(c.server||'')===a.server)))
+   : [];
+ // Senza la cartella dei conti caricata non si puo' sapere quali siano davvero eliminati.
+ if(!orfani.length||!salvati.length){ box.style.display='none'; box.innerHTML=''; return; }
+ box.style.display='flex';
+ box.innerHTML='<div style="color:#e8c34a;font-weight:600">Dashboard MT5 di conti non più presenti nell’app</div>'
+   +'<div style="opacity:.8">Liberandola, le operazioni che l’app aveva inviato lì vengono archiviate su Notion e la dashboard torna disponibile per un nuovo conto.</div>';
+ orfani.forEach(a=>{
+   const x={last:String(a.last),server:a.server||''};
+   const riga=document.createElement('div'); riga.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:8px';
+   const lbl=document.createElement('span'); lbl.textContent='Conto ••'+a.last+(a.server?' ('+a.server+')':'')+(a.withCharts?'':' — senza grafici');
+   const btn=document.createElement('button'); btn.type='button'; btn.className='miniBtn';
+   const attesa=inCoda.has(notionRilascioId(x));
+   btn.textContent=attesa?'⏳ In corso…':'🗑️ Libera'; btn.disabled=attesa;
+   btn.addEventListener('click',async()=>{
+     if(!await appConfirm('Liberare la dashboard del conto ••'+a.last+'?\n\nLe operazioni che l’app aveva inviato lì vengono archiviate su Notion (restano recuperabili dal cestino di Notion per 30 giorni). Le righe aggiunte a mano non si toccano.',{title:'📓 Libera dashboard MT5',okLabel:'Sì, libera',cancelLabel:'Annulla'}))return;
+     notionAggiungiRilascio(x); notionDisegnaOrfani(); notionEseguiRilasci();
+   });
+   riga.appendChild(lbl); riga.appendChild(btn); box.appendChild(riga);
+ });
 }
 async function refreshNotionStatus(prepare){
  try{ notionState=await notionCall('notionStatus',prepare?{prepare:true}:{}); }
@@ -21749,6 +21817,15 @@ function tgBottone(testo,primario){
  b.style.cssText='margin-right:0;padding:5px 11px'+(primario?';background:#277d5a;border-color:#3ea6ff;font-weight:700':'');
  return b;
 }
+function tgEliminaSegnale(voce){
+ const i=tgSegnaliRicevuti.indexOf(voce);
+ if(i<0)return;
+ tgSegnaliRicevuti.splice(i,1);
+ // Se la configurazione aperta era proprio di questo segnale, si chiude: resterebbe a confermare
+ // posizioni di un segnale che non esiste piu'.
+ if(tgCfg&&tgCfg.voce===voce){ tgCfg=null; const ov=$('tgConfigOverlay'); if(ov)ov.style.display='none'; }
+ tgAggiornaPulsante(); tgRenderPannello();
+}
 function tgRenderPannello(){
  const box=$('tgPanelBody'); if(!box)return;
  box.innerHTML='';
@@ -21848,6 +21925,16 @@ function tgRenderPannello(){
    ri.addEventListener('click',()=>{ voce.stato='nuovo'; tgAggiornaPulsante(); tgRenderPannello(); });
    azioni.appendChild(ri);
   }
+  // RICHIESTO ESPLICITAMENTE: oltre ad aprire o ignorare, eliminare il segnale DEFINITIVAMENTE
+  // (sparisce dall'elenco, non si puo' rimettere fra i nuovi). Nessuna conferma in piu': quando
+  // arriva un segnale conta la velocita', e chi vuole solo metterlo da parte ha "Ignora".
+  // Le posizioni gia' aperte da questo segnale non si toccano: vivono per conto loro.
+  const del=tgBottone('🗑️ Elimina');
+  del.style.marginLeft='auto';
+  del.style.color='#e88';
+  del.title='Toglie questo segnale dall’elenco, definitivamente';
+  del.addEventListener('click',()=>{ tgEliminaSegnale(voce); });
+  azioni.appendChild(del);
   card.appendChild(azioni);
   box.appendChild(card);
  });
@@ -31386,13 +31473,14 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
    // La domanda si fa anche se in questo momento Notion non risulta pronto (stato non ancora
    // caricato, rete assente): la scelta resta salvata e il giro di sincronizzazione la esegue
    // appena Notion torna disponibile. Prima, in quel caso, la domanda veniva saltata in silenzio.
-   if(daNotion.length){
-     vuoleNotion=await appConfirm('Vuoi togliere da Notion anche le '+daNotion.length
-       +' operazioni di questo conto?\n\nServe a liberare lo spazio per il prossimo conto che collegherai. '
+   const haDashboard=!!(notionState&&Array.isArray(notionState.mt5Accounts)&&notionState.mt5Accounts.some(a=>String(a.last)===accLogin.slice(-4)&&(!a.server||a.server===(acc.server||''))));
+   if(daNotion.length||haDashboard){
+     vuoleNotion=await appConfirm((daNotion.length?('Vuoi togliere da Notion anche le '+daNotion.length+' operazioni di questo conto?'):'Questo conto ha una dashboard su Notion. Vuoi liberarla?')
+       +'\n\nServe a liberare lo spazio (la dashboard) per il prossimo conto che collegherai. '
        +'Su Notion vengono archiviate: il Trade Journal dell\'app le perde comunque insieme al conto.\n\n'
        +'Se rispondi no restano su Notion, e le potrai togliere a mano da lì.',
        {title:'📓 Operazioni su Notion',okLabel:'Sì, togli anche da Notion',cancelLabel:'No, lasciale',danger:false});
-     if(vuoleNotion)notionAggiungiVolute(daNotion.map(t=>String(t.id)));
+     if(vuoleNotion){ notionAggiungiVolute(daNotion.map(t=>String(t.id))); notionAggiungiRilascio({login:accLogin}); }
      else{
        // BUG CORRETTO: con "No, lasciale" le operazioni sparivano da Notion lo stesso, perche' la
        // sincronizzazione archivia su Notion tutto cio' che non c'e' piu' nel Journal. Ora l'app
