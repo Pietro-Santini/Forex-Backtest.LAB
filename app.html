@@ -341,6 +341,10 @@ body.pf-blood-effect .pf-danger-blink{animation:pfDangerBlink 1s step-start infi
 #chartSettingsModalOverlay .fbSettingsLayout{flex:1 1 auto;min-height:0;height:auto}
 #chartSettingsModalOverlay .fbSettingsNav{overflow-y:auto;min-height:0}
 #chartSettingsModalOverlay .fbSettingsDetail{min-height:0;overscroll-behavior:contain}
+/* SEGNALATO (telefono): la pagina si ricaricava. Su Chrome Android trascinare verso il basso quando la
+   pagina e' in cima ("tira giu' per aggiornare") RICARICA tutto - su un'app in cui si trascinano
+   grafici e pannelli succede senza volerlo. Il gesto si spegne cosi'; lo scorrimento normale resta. */
+html,body{overscroll-behavior-y:contain}
 .fbSettingsSectionTitle{font-weight:700;font-size:12.5px;letter-spacing:.02em;color:#e8edf3;margin:18px 0 10px;padding-top:14px;border-top:1px solid #1c2530}
 .fbSettingsSectionTitle:first-child{margin-top:0;padding-top:0;border-top:none}
 /* Solo #chartSettingsModalOverlay usa un .fbModalBox più largo (serve spazio per il layout a
@@ -23263,7 +23267,16 @@ async function fblProvaPorta(host,chiave,def,timeoutMs){
  const tmr=setTimeout(()=>c.abort(),timeoutMs||8000);
  const esito={porta:def.porta,nome:def.nome,url:url.replace(/chiave=[^&]*/,'chiave=***')};
  try{
-  const r=await fetch(url,{signal:c.signal});
+  let r;
+  try{ r=await fetch(url,{signal:c.signal}); }
+  catch(e1){
+   // Secondo tentativo, solo da telefono/tablet e solo se il primo e' fallito senza risposta:
+   // dichiarando a Chrome che la chiamata va alla rete locale, e' lui a mostrare la finestra
+   // "consenti". Non lo si fa al primo colpo: se Chrome non considerasse locale l'indirizzo, la
+   // dichiarazione farebbe fallire anche una chiamata che senza sarebbe andata.
+   if(!remoto||(e1&&e1.name==='AbortError'))throw e1;
+   r=await fetch(url,{signal:c.signal,targetAddressSpace:'local'});
+  }
   esito.ms=Math.round(((performance&&performance.now)?performance.now():Date.now())-t0);
   esito.stato=r.status;
   esito.ok=r.ok;
@@ -23307,8 +23320,17 @@ async function fblSpiegaBlocco(let_,host){
   +'<a href="'+fbEsc(url)+'" target="_blank" rel="noopener">apri questo indirizzo</a> in una nuova scheda. '
   +'Se vedi <i>«Chiave d\'accesso mancante o errata»</i>, il computer è a posto e il blocco è nel browser; '
   +'se la pagina non si apre, il problema è Tailscale o il nome.</div>';
- const comeRiattivare='Tocca l’icona a sinistra dell’indirizzo (in alto) → <b>Autorizzazioni</b> o <b>Impostazioni sito</b> → '
-  +'<b>Rete locale</b> (o «Dispositivi sulla rete locale») → <b>Consenti</b>. Poi riprova.';
+ // Tre passi, nell'ordine in cui conviene provarli. Il terzo funziona sempre su Chrome Android, anche
+ // quando la finestra del permesso non compare mai (Chrome la blocca in silenzio dopo che e' stata
+ // chiusa o ignorata qualche volta, o non la mostra affatto su alcune versioni).
+ const comeRiattivare='<ol style="margin:6px 0 0 18px;padding:0">'
+  +'<li>Tocca l’icona a sinistra dell’indirizzo (in alto) → <b>Autorizzazioni</b> / <b>Impostazioni sito</b> → '
+  +'<b>Rete locale</b> (o «Dispositivi sulla rete locale») → <b>Consenti</b>. Poi riprova.</li>'
+  +'<li>Se lì non c’è, nella stessa schermata premi <b>Reimposta autorizzazioni</b>, ricarica la pagina e riprova: '
+  +'Chrome, dopo che la richiesta è stata chiusa qualche volta, smette di mostrarla e blocca in silenzio.</li>'
+  +'<li>Se ancora niente: nella barra degli indirizzi di Chrome scrivi <b>chrome://flags</b>, cerca <b>Local Network Access</b>, '
+  +'imposta <b>Local Network Access Checks</b> su <b>Disabled</b> e premi <b>Relaunch</b>. Chrome smette di bloccare queste '
+  +'chiamate (vale solo per il tuo telefono).</li></ol>';
  if(perm==='denied'){
   return {classe:'ko',titolo:'Permesso «rete locale» negato',
    testo:'Il browser ha il permesso <b>negato</b> per questo sito, e blocca ogni chiamata verso il computer prima che parta. '
@@ -23317,9 +23339,12 @@ async function fblSpiegaBlocco(let_,host){
  if(perm==='prompt'){
   return {classe:'ko',titolo:'Manca il permesso «rete locale»',
    testo:'Il browser deve chiederti il permesso di accedere alla <b>rete locale</b>, e finché non rispondi <b>Consenti</b> blocca le chiamate. '
-    +'Riprova il collegamento e, se compare la finestra, consenti. Se non compare: '+comeRiattivare+prova};
+    +'Riprova il collegamento e, se compare la finestra, consenti. Se non compare:'+comeRiattivare+prova};
  }
- return {classe:let_.classe,titolo:let_.titolo,testo:let_.testo+prova};
+ // Permesso non leggibile (versioni di Chrome che non lo espongono): se nemmeno una porta ha dato una
+ // risposta, la causa piu' probabile resta il blocco della rete locale - si danno gli stessi passi.
+ return {classe:let_.classe,titolo:let_.titolo,testo:let_.testo
+   +'<div class="tgCfgNota" style="margin-top:6px">Se il computer è acceso e Tailscale è collegato su entrambi, la causa più probabile è il blocco «rete locale» di Chrome:'+comeRiattivare+'</div>'+prova};
 }
 function fblLeggiEsiti(esiti,host){
  const vivi=esiti.filter(x=>x.ok);
@@ -31299,6 +31324,57 @@ async function maybeAutoLaunchDesktopApp(){
 // vedono lo stesso 127.0.0.1). Chiamata alla fine di initSession(), quando tutto il resto della
 // sessione (posizioni, sessione/mode, grafico) è già stato ripristinato al punto dove ero
 // rimasto: la riconnessione MT5 arriva "sopra" a quello, non lo sostituisce.
+// ===================== RIPRESA DOPO UNA CHIUSURA DEL BROWSER =====================
+// SEGNALATO (telefono): "ogni volta che esco e torno, l'app si ricarica e rifa' tutti i
+// collegamenti". L'app non si ricarica MAI da sola: e' il browser (Chrome su Android) che, quando
+// manca memoria, chiude le schede non in vista e al ritorno le riapre da zero - anche con le
+// restrizioni di batteria tolte, che valgono per l'app Chrome, non per le sue schede. Da una pagina
+// web non si puo' impedire. Si puo' pero' rendere il ritorno immediato: se si esce e si torna entro
+// FBL_RIPRESA_MS, l'app riprende da dov'era SENZA popup (riaggancio al conto MT5 gia' attivo sul PC).
+const FBL_RIPRESA_KEY='fbl_ultima_attivita';
+const FBL_RIPRESA_MS=30*60*1000;
+const fblUltimaAttivitaAllAvvio=(()=>{ try{ return Number(localStorage.getItem(FBL_RIPRESA_KEY))||0; }catch(e){ return 0; } })();
+function fblSegnaAttivita(){ try{ localStorage.setItem(FBL_RIPRESA_KEY,String(Date.now())); }catch(e){} }
+setInterval(()=>{ if(document.visibilityState==='visible')fblSegnaAttivita(); },20000);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden')fblSegnaAttivita(); });
+window.addEventListener('pagehide',fblSegnaAttivita);
+function fblRipresaRecente(){ return fblUltimaAttivitaAllAvvio>0&&(Date.now()-fblUltimaAttivitaAllAvvio)<FBL_RIPRESA_MS; }
+// DIAGNOSI: perche' la pagina e' ripartita. Serve a lavorare su un fatto, non su un'ipotesi.
+(function fblDiagnosiAvvio(){
+ try{
+  const nav=(performance.getEntriesByType&&performance.getEntriesByType('navigation')[0])||null;
+  const tipo=nav?nav.type:'';
+  const scartata=!!document.wasDiscarded;
+  const fa=fblUltimaAttivitaAllAvvio?Math.round((Date.now()-fblUltimaAttivitaAllAvvio)/1000):null;
+  const motivo=scartata?'il browser aveva chiuso la scheda per liberare memoria (Android/Chrome)'
+    :tipo==='reload'?'la pagina è stata ricaricata (dal browser o col gesto "tira giù per aggiornare")'
+    :tipo==='back_forward'?'ritorno con Indietro/Avanti'
+    :'apertura normale';
+  window.fblMotivoAvvio={tipo,scartata,secondiDallUltimaAttivita:fa,motivo};
+  console.log('[Avvio] '+motivo+(fa!=null?(' — ultima attività '+fa+' s fa'):''));
+  if(fblRipresaRecente()&&(scartata||tipo==='reload')){
+   setTimeout(()=>{ try{ $('status').textContent='↩️ Ripresa: '+motivo+'. Riprendo da dov\'eri, senza rifare i collegamenti.'; }catch(e){} },1500);
+  }
+ }catch(e){}
+})();
+// Riaggancio SILENZIOSO: se il servizio sul PC e' ancora collegato a un conto MT5, ci si riattacca a
+// quello senza login e senza scelta del conto (niente password: il collegamento e' gia' sul PC).
+async function mt5RiagganciaSilenzioso(){
+ const acc=await fetchMt5WithTimeout('/account',{method:'GET'},8000);
+ if(!(acc&&acc.ok&&acc.data&&acc.data.login!=null))return false;
+ const login=String(acc.data.login), server=String(acc.data.server||'');
+ try{ mt5AttivaConto(login,server); }catch(e){}
+ if(!mt5CredsDraft||String(mt5CredsDraft.login)!==login){
+  const salvato=(Array.isArray(mt5SavedAccounts)?mt5SavedAccounts:[]).find(a=>String(a.login)===login);
+  mt5CredsDraft=salvato||{login,server};
+ }
+ mt5AccountInfo=acc.data;
+ mt5Connected=true;
+ updateMt5ModeUI();
+ runMt5HistoryCatchUp();
+ $('status').textContent='🟢 Ripreso il collegamento MT5 (conto '+login+(server?(' su '+server):'')+') senza ricollegarsi.';
+ return true;
+}
 async function maybeOfferMt5AutoReconnect(){
  if(!mt5WasConnectedLastSession || mt5Connected) return;
  // Il bridge gira SOLO in locale: raggiungibile SOLO dallo stesso PC dove sta girando. Da un
@@ -31311,6 +31387,8 @@ async function maybeOfferMt5AutoReconnect(){
  // Fino a 60 s: su un PC lento l'app desktop, appena lanciata, impiega a lungo ad avviarsi.
  reachable=!!(await waitForBridgeHealthy(60000)).ok;
  if(!reachable)return;
+ // Ritorno entro mezz'ora e PC ancora collegato: si riprende senza domande.
+ if(fblRipresaRecente()){ try{ if(await mt5RiagganciaSilenzioso())return; }catch(e){ console.log('[MT5] riaggancio silenzioso non riuscito:',e); } }
  // RICHIESTO ESPLICITAMENTE: con piu' conti salvati non ci si ricollega all'ultimo usato, si sceglie
  // su quale entrare (o si accede a un conto nuovo). Se il permesso sulla cartella dei conti e' gia'
  // concesso la scelta e' la PRIMA e unica domanda; altrimenti serve prima un clic, e la scelta
