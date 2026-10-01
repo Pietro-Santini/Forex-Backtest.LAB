@@ -23583,6 +23583,12 @@ function tgEtaSegnaleMs(voce){
  if(Number(voce.ricevuto_ms)>0)return Math.max(0,Date.now()-Number(voce.ricevuto_ms));
  return 0;
 }
+// BUY/SELL scritti in lettere nel messaggio. Il servizio aggiornato lo dice (direzione_esplicita);
+// per quello vecchio si guarda il testo.
+function tgDirezioneScritta(seg){
+ if(seg&&typeof seg.direzione_esplicita==='boolean')return seg.direzione_esplicita;
+ return /(^|[^A-Z])(BUY|SELL|LONG|SHORT|COMPRA|ACQUISTA|ACQUISTO|VENDI|VENDITA)([^A-Z]|$)/i.test(String((seg&&seg.testo)||''));
+}
 function tgAutoDecidi(voce){
  const seg=voce&&voce.segnale;
  const no=(motivo)=>({apri:false,motivo});
@@ -23618,6 +23624,10 @@ function tgAutoDecidi(voce){
  // Un raddoppio dedotto non si apre mai da solo: e' gia' un'interpretazione, e sommarla a
  // un'apertura senza controllo sarebbe due incertezze una sopra l'altra.
  if(voce.sottotipo==='aggiunta')return no('è un raddoppio dedotto: va confermato a mano');
+ // Senza stop e senza target l'app si inventa i livelli (1% del conto, target al 50%): lo fa solo
+ // se la sala ha scritto BUY/SELL in lettere. Un razzo o un pallino verde non sono un ordine.
+ if(!tgC(seg.stop_loss)&&!(seg.take_profit||[]).length&&!tgDirezioneScritta(seg))
+   return no('nessuno stop, nessun target e nessun BUY/SELL scritto: non è un segnale da aprire da solo');
  // tgC e non Number.isFinite: Number(null) vale 0, che e' finito - un segnale SENZA stop loss
  // sarebbe passato per buono e aperto in automatico senza protezione. E' la stessa trappola
  // gia' presa sull'entrata a fascia, e qui costerebbe molto di piu'.
@@ -24613,6 +24623,15 @@ function tgPiano(seg,sym,pctForzata,opz){
  let sl=Number(seg.stop_loss);
  if(side!=='BUY'&&side!=='SELL')return {problemi:['il segnale non dice se comprare o vendere']};
  if(!Number.isFinite(entry))return {problemi:['il grafico non ha ancora un prezzo per '+sym]};
+ // PREZZI IMPOSSIBILI (segnalato: "🎯 XAUUSD 🚀 4-6 Daily Accurate Signals" aperto come BUY con
+ // entrata 4, con l'oro a 4000). Un livello lontanissimo dal mercato non e' un prezzo ma un numero
+ // qualunque del messaggio: entrata oltre il 5%, stop oltre il 20% -> il segnale non si apre.
+ const mercato=entry;
+ const lontano=(v,pct)=>tgC(v)&&mercato>0&&Math.abs(Number(v)-mercato)/mercato>pct/100;
+ if(lontano(seg.entrata,5))
+  return {problemi:['l\'entrata della sala ('+tgFmt(Number(seg.entrata))+') è lontanissima dal prezzo di '+sym+' ('+tgFmt(mercato)+'): non è un prezzo vero, il messaggio è stato letto male']};
+ if(lontano(seg.stop_loss,20))
+  return {problemi:['lo stop loss della sala ('+tgFmt(Number(seg.stop_loss))+') è lontanissimo dal prezzo di '+sym+' ('+tgFmt(mercato)+'): non è un prezzo vero']};
  // ORDINI LIMITE E STOP (segnalato: "ancora non funzionano"). La sala scrive "BUY LIMIT / ENTRY
  // 4190" o "SELL-LIMIT @1.90699": prima si apriva comunque A MERCATO al prezzo di adesso. Ora
  // diventa un ORDINE PENDENTE al prezzo della sala, e il rischio si calcola da quel prezzo.
@@ -24645,7 +24664,7 @@ function tgPiano(seg,sym,pctForzata,opz){
  if(validateTradeLevel(side,entry,sl,NaN)){
   return {problemi:['lo stop loss della sala ('+tgFmt(sl)+') e\' dalla parte sbagliata rispetto al prezzo di adesso ('+tgFmt(entry)+'): il prezzo lo ha gia\' superato, il segnale non e\' piu\' valido']};
  }
- const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
+ const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!lontano(v,20));
  // Un take profit che il prezzo ha gia' passato non ha senso come posizione a se': aprirla
  // significherebbe nascere oltre il proprio obiettivo. Si scartano quelli, non tutto il segnale.
  let tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
