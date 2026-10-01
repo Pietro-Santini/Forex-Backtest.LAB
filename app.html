@@ -8854,6 +8854,42 @@ function isStopProfitLevel(pos){
 //  - "SP" (Stop Profit) quando è comunque a pareggio o oltre ma diverso dal marcatore BE (spostato
 //    più in profitto a mano dopo il BE, o portato in profitto senza mai passare dal pulsante BE).
 // Qualunque altro motivo di chiusura (TP, MANUAL, STOP OUT, EA, MARGIN CALL...) resta invariato.
+// ESITO DI UN'OPERAZIONE CHIUSA: 'WIN', 'LOSS' o 'BE' (pareggio). Una sola definizione, usata dal
+// riquadro del conto (simulato e storico MT5) e mandata a Notion, cosi' i numeri coincidono ovunque.
+// Pareggio quando:
+//  - il Journal l'ha gia' chiamato BE (scattato lo stop messo col pulsante BE);
+//  - il risultato e' esattamente 0;
+//  - si e' chiuso sullo stop (SL/SP/BE) e quello stop stava praticamente sull'entrata: entro due
+//    volte lo spread tipico (o due pip), mai oltre lo 0,1% del prezzo. E' il caso del BE "spread
+//    incluso" su MT5: chiude a +0,05 o -0,30 per commissioni e spread, e prima contava come
+//    vittoria o perdita vera, falsando le percentuali.
+function esitoOperazione(o){
+ const pl=Number(o&&o.pl);
+ const reason=String((o&&o.result)||'').toUpperCase();
+ if(reason==='BE')return 'BE';
+ if(Number.isFinite(pl)&&Math.abs(pl)<0.005)return 'BE';
+ const sl=Number(o&&o.sl), entry=Number(o&&o.entry);
+ if((reason==='SL'||reason==='SP')&&Number.isFinite(sl)&&Number.isFinite(entry)&&entry>0){
+  let tol=0;
+  try{ tol=Math.max(2*pipSizeForAsset(o.asset),2*spreadCostForAsset(o.asset)); }catch(e){}
+  if(!(tol>0))tol=entry*0.0002;
+  tol=Math.min(tol,entry*0.001);
+  if(Math.abs(sl-entry)<=tol+1e-9)return 'BE';
+ }
+ if(!Number.isFinite(pl))return 'BE';
+ return pl>0?'WIN':'LOSS';
+}
+// Win rate e loss rate (RICHIESTO): un pareggio conta META' come vittoria e META' come perdita.
+// Cosi' win rate + loss rate fa sempre 100% e il pareggio non sparisce dal conto: con 2 vinte,
+// 1 persa e 1 a pareggio -> 62,5% / 37,5% (prima 50% / 25%, che sommati facevano 75%).
+function percentualiEsiti(esiti){
+ let w=0,l=0,be=0;
+ esiti.forEach(e=>{ if(e==='WIN')w++; else if(e==='LOSS')l++; else be++; });
+ const n=w+l+be;
+ return {n,w,l,be,
+   wr:n?((w+be/2)/n*100):null, lr:n?((l+be/2)/n*100):null,
+   titolo:n?(w+' vinte, '+l+' perse, '+be+' a pareggio (ogni pareggio conta metà vinta e metà persa)'):''};
+}
 function closeResultLabel(reason,pos){
  if(reason!=='SL'||!isStopProfitLevel(pos))return reason;
  if(Number.isFinite(pos&&pos.beMarkerSl)&&Math.abs(pos.beMarkerSl-pos.sl)<1e-9)return 'BE';
@@ -8986,8 +9022,9 @@ function update(){
  const plPer=stPL.reduce((s,t)=>s+t.pl,0);
  $('mPL').textContent=euro(plPer);
  $('mPL').title='P/L su '+dashEtichetta('pl')+' — '+stPL.length+' operazioni chiuse';
- $('mWR').textContent=st.length?(wins.length/st.length*100).toFixed(1)+'%':'—';
- $('mLR').textContent=st.length?(losses.length/st.length*100).toFixed(1)+'%':'—';
+ const esitiSt=percentualiEsiti(st.map(esitoOperazione));
+ $('mWR').textContent=esitiSt.n?esitiSt.wr.toFixed(1)+'%':'—'; $('mWR').title=esitiSt.titolo;
+ $('mLR').textContent=esitiSt.n?esitiSt.lr.toFixed(1)+'%':'—'; $('mLR').title=esitiSt.titolo;
  // La percentuale resta sempre rapportata al capitale di partenza: "quanto ha reso il conto in
  // questo periodo", non "quanto e' cresciuto rispetto a quanto c'era all'inizio del periodo".
  const plPct=stPct.reduce((s,t)=>s+t.pl,0);
@@ -21484,6 +21521,8 @@ function notionTradePayload(t){
  const origine=t.tgSala?('📡 '+String(t.tgSala)):'👤 Manuale';
  return {
    origine,
+   // Esito calcolato qui, con la stessa regola del riquadro del conto: Notion non deve indovinarlo.
+   esito:esitoOperazione(t),
    key:String(t.id), mode:t.mode||'backtest', asset:t.asset||'', side:t.side||'',
    lots:t.lots??null, entry:t.entry??null, exit:t.exit??null, sl:t.sl??null, tp:t.tp??null,
    pips:Number.isFinite(Number(t.pips))?Math.round(Number(t.pips)*10)/10:null,
@@ -23544,6 +23583,12 @@ function tgEtaSegnaleMs(voce){
  if(Number(voce.ricevuto_ms)>0)return Math.max(0,Date.now()-Number(voce.ricevuto_ms));
  return 0;
 }
+// BUY/SELL scritti in lettere nel messaggio. Il servizio aggiornato lo dice (direzione_esplicita);
+// per quello vecchio si guarda il testo.
+function tgDirezioneScritta(seg){
+ if(seg&&typeof seg.direzione_esplicita==='boolean')return seg.direzione_esplicita;
+ return /(^|[^A-Z])(BUY|SELL|LONG|SHORT|COMPRA|ACQUISTA|ACQUISTO|VENDI|VENDITA)([^A-Z]|$)/i.test(String((seg&&seg.testo)||''));
+}
 function tgAutoDecidi(voce){
  const seg=voce&&voce.segnale;
  const no=(motivo)=>({apri:false,motivo});
@@ -23579,6 +23624,10 @@ function tgAutoDecidi(voce){
  // Un raddoppio dedotto non si apre mai da solo: e' gia' un'interpretazione, e sommarla a
  // un'apertura senza controllo sarebbe due incertezze una sopra l'altra.
  if(voce.sottotipo==='aggiunta')return no('è un raddoppio dedotto: va confermato a mano');
+ // Senza stop e senza target l'app si inventa i livelli (1% del conto, target al 50%): lo fa solo
+ // se la sala ha scritto BUY/SELL in lettere. Un razzo o un pallino verde non sono un ordine.
+ if(!tgC(seg.stop_loss)&&!(seg.take_profit||[]).length&&!tgDirezioneScritta(seg))
+   return no('nessuno stop, nessun target e nessun BUY/SELL scritto: non è un segnale da aprire da solo');
  // tgC e non Number.isFinite: Number(null) vale 0, che e' finito - un segnale SENZA stop loss
  // sarebbe passato per buono e aperto in automatico senza protezione. E' la stessa trappola
  // gia' presa sull'entrata a fascia, e qui costerebbe molto di piu'.
@@ -24574,6 +24623,15 @@ function tgPiano(seg,sym,pctForzata,opz){
  let sl=Number(seg.stop_loss);
  if(side!=='BUY'&&side!=='SELL')return {problemi:['il segnale non dice se comprare o vendere']};
  if(!Number.isFinite(entry))return {problemi:['il grafico non ha ancora un prezzo per '+sym]};
+ // PREZZI IMPOSSIBILI (segnalato: "🎯 XAUUSD 🚀 4-6 Daily Accurate Signals" aperto come BUY con
+ // entrata 4, con l'oro a 4000). Un livello lontanissimo dal mercato non e' un prezzo ma un numero
+ // qualunque del messaggio: entrata oltre il 5%, stop oltre il 20% -> il segnale non si apre.
+ const mercato=entry;
+ const lontano=(v,pct)=>tgC(v)&&mercato>0&&Math.abs(Number(v)-mercato)/mercato>pct/100;
+ if(lontano(seg.entrata,5))
+  return {problemi:['l\'entrata della sala ('+tgFmt(Number(seg.entrata))+') è lontanissima dal prezzo di '+sym+' ('+tgFmt(mercato)+'): non è un prezzo vero, il messaggio è stato letto male']};
+ if(lontano(seg.stop_loss,20))
+  return {problemi:['lo stop loss della sala ('+tgFmt(Number(seg.stop_loss))+') è lontanissimo dal prezzo di '+sym+' ('+tgFmt(mercato)+'): non è un prezzo vero']};
  // ORDINI LIMITE E STOP (segnalato: "ancora non funzionano"). La sala scrive "BUY LIMIT / ENTRY
  // 4190" o "SELL-LIMIT @1.90699": prima si apriva comunque A MERCATO al prezzo di adesso. Ora
  // diventa un ORDINE PENDENTE al prezzo della sala, e il rischio si calcola da quel prezzo.
@@ -24606,7 +24664,7 @@ function tgPiano(seg,sym,pctForzata,opz){
  if(validateTradeLevel(side,entry,sl,NaN)){
   return {problemi:['lo stop loss della sala ('+tgFmt(sl)+') e\' dalla parte sbagliata rispetto al prezzo di adesso ('+tgFmt(entry)+'): il prezzo lo ha gia\' superato, il segnale non e\' piu\' valido']};
  }
- const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
+ const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!lontano(v,20));
  // Un take profit che il prezzo ha gia' passato non ha senso come posizione a se': aprirla
  // significherebbe nascere oltre il proprio obiettivo. Si scartano quelli, non tutto il segnale.
  let tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
@@ -27541,14 +27599,22 @@ function applyMt5AccountStatsToPanel(){
  // periodo scelto a schermo, e filtrarlo darebbe un capitale iniziale inventato.
  const pl=nets.reduce((s,v)=>s+v,0);
  const plPer=clPL.reduce((s,c)=>s+mt5ClosedNet(c),0);
- const wins=nets.filter(v=>v>0).length, losses=nets.filter(v=>v<0).length;
+ // Esito di ogni posizione chiusa: se il Journal la conosce (stesso ticket) vale il suo risultato
+ // (BE compreso), altrimenti si guarda lo stop finale rispetto all'entrata.
+ const perTicketJ=new Map((trades||[]).filter(t=>t&&t.mt5Ticket!=null).map(t=>[String(t.mt5Ticket),t]));
+ const esitiCl=percentualiEsiti(cl.map(c=>{
+  const j=perTicketJ.get(String(c.positionId));
+  const lv=(typeof mt5LastLevelsByTicket!=='undefined'&&mt5LastLevelsByTicket[String(c.positionId)])||{};
+  return esitoOperazione({pl:mt5ClosedNet(c),result:(j&&j.result)||c.reason,
+    sl:lv.sl!=null?lv.sl:c.sl,entry:c.priceOpen,asset:(j&&j.asset)||c.symbol});
+ }));
  const pips=Math.round(clPip.reduce((s,c)=>s+mt5ClosedPips(c),0)*10)/10;
  const histTitle='Calcolato sullo storico reale del conto'+tag;
  $('mPL').textContent=mt5Money(plPer);
  $('mPL').title=histTitle+' • '+clPL.length+' posizioni su '+dashEtichetta('pl')+' (profitto + swap + commissioni)';
  $('mTrades').textContent=clTr.length; $('mTrades').title=histTitle+' • '+dashEtichetta('trades');
- $('mWR').textContent=cl.length?(wins/cl.length*100).toFixed(1)+'%':'—'; $('mWR').title=histTitle+' • tutto lo storico';
- $('mLR').textContent=cl.length?(losses/cl.length*100).toFixed(1)+'%':'—'; $('mLR').title=histTitle+' • tutto lo storico';
+ $('mWR').textContent=esitiCl.n?esitiCl.wr.toFixed(1)+'%':'—'; $('mWR').title=histTitle+' • tutto lo storico • '+esitiCl.titolo;
+ $('mLR').textContent=esitiCl.n?esitiCl.lr.toFixed(1)+'%':'—'; $('mLR').title=histTitle+' • tutto lo storico • '+esitiCl.titolo;
  $('mPips').textContent=(pips>=0?'+':'')+pips.toFixed(1);
  $('mPips').className='value '+(clPip.length?(pips>=0?'liveProfit':'liveLoss'):'');
  $('mPips').title=histTitle+' • '+clPip.length+' posizioni su '+dashEtichetta('pips')+' (pip dai prezzi reali)';
