@@ -23920,16 +23920,13 @@ async function tgAutoValuta(voce){
  const seg=voce.segnale;
  const sym=await tgPreparaAssetAutomatico(voce);
  if(!sym){ voce.autoMotivo='asset «'+seg.strumento+'» non trovato'; try{ tgRenderPannello(); }catch(e){} return; }
- const piano=tgPiano(seg,sym,d.rischio);
+ // Lotto = rischio della sala diviso per le posizioni che si aprono DAVVERO (tagliate sullo spazio
+ // rimasto sotto i tetti): la somma delle perdite, se scattano tutti gli stop, e' il rischio scelto.
+ const piano=tgPiano(seg,sym,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true});
  if(piano.problemi&&piano.problemi.length){
   voce.autoMotivo=piano.problemi.join('; ');
   try{ tgRenderPannello(); }catch(e){}
   return;
- }
- // Il piano non puo' superare lo spazio rimasto sotto i tetti.
- if(piano.n>d.spazio){
-  piano.tp=piano.tp.slice(0,d.spazio);
-  piano.n=Math.max(1,piano.tp.length);
  }
  // Le regole sono quelle scelte per QUESTA sala, tagliate sul numero di target che il segnale ha
  // davvero: una regola sul quinto target non serve a niente se i target sono tre.
@@ -24560,7 +24557,18 @@ function tgStopCalcolato(side,entry,n,importoTot,sym){
  }
  return {sl,lotti};
 }
-function tgPiano(seg,sym,pctForzata){
+// opz (solo apertura automatica):
+//  - maxN: quante posizioni si possono aprire al massimo (tetti della sala e complessivo). Il
+//    lotto si calcola su QUESTO numero: prima si calcolava su tutti i target e poi si tagliavano le
+//    posizioni, e il rischio usato restava una frazione di quello scelto (6 target, tetto 3 = meta').
+//  - parti: in quante entrate e' diviso lo stesso messaggio ("BUY NOW 4183 / MORE BUY 4173" = 2).
+//    Il rischio della sala vale per il MESSAGGIO intero: ogni entrata ne prende la sua parte.
+//  - entroRischio: se anche col lotto minimo (0,01) la somma delle perdite supererebbe il rischio,
+//    si aprono MENO posizioni (i primi target) invece di sforare; se non basta nemmeno una, no.
+function tgPiano(seg,sym,pctForzata,opz){
+ opz=opz||{};
+ const maxN=(Number(opz.maxN)>=1)?Math.floor(Number(opz.maxN)):Infinity;
+ const parti=(Number(opz.parti)>1)?Math.min(10,Math.floor(Number(opz.parti))):1;
  const side=String(seg.direzione||'').toUpperCase();
  let entry=currentPrice();
  let sl=Number(seg.stop_loss);
@@ -24586,9 +24594,9 @@ function tgPiano(seg,sym,pctForzata){
  let slCalcolato=false, lottiFissi=null;
  if(!tgC(seg.stop_loss)){
   const tuttiTp=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!validateTradeLevel(side,entry,NaN,v));
-  const nTp=Math.max(1,tuttiTp.length);
+  const nTp=Math.max(1,Math.min(maxN,tuttiTp.length));
   // Automatico (pctForzata = rischio della sala): senza stop si usa il rischio dedicato.
-  const pctTmp=(Number.isFinite(pctForzata)&&pctForzata>0)?tgRischioSenzaSl():tgRischioTotale();
+  const pctTmp=((Number.isFinite(pctForzata)&&pctForzata>0)?tgRischioSenzaSl():tgRischioTotale())/parti;
   const calc=tgStopCalcolato(side,entry,nTp,realizedBalanceNow()*pctTmp/100,sym);
   if(calc.problema)return {problemi:[calc.problema]};
   sl=calc.sl; lottiFissi=calc.lotti; slCalcolato=true;
@@ -24615,8 +24623,9 @@ function tgPiano(seg,sym,pctForzata){
   if(!validateTradeLevel(side,entry,NaN,v)&&v!==entry){ tp=[v]; tpCalcolato=true; }
  }
  const scartati=tutti.filter(v=>!!validateTradeLevel(side,entry,NaN,v));
- const n=Math.max(1,tp.length);
- const pct=(Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale();
+ if(tp.length>maxN)tp=tp.slice(0,maxN);
+ let n=Math.max(1,tp.length);
+ const pct=((Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale())/parti;
  const saldo=realizedBalanceNow();
  const importoTot=saldo*pct/100;
  const perLotto=euroAtLevel(entry,sl,1,sym);
@@ -24631,11 +24640,24 @@ function tgPiano(seg,sym,pctForzata){
  // L'unica eccezione: sotto 0,01 lot non si puo' scendere. Qui, e solo qui, il rischio reale puo'
  // superare quello chiesto - e allora va detto chiaramente prima di confermare.
  if(!(lotti>=0.01)){ lotti=0.01; alMinimo=true; }
+ let notaRidotte=null;
+ if(opz.entroRischio&&alMinimo&&lotti*perLotto*n>importoTot+0.01){
+  // Quante posizioni da 0,01 stanno dentro al rischio: si tengono i primi target.
+  const k=Math.floor(importoTot/(0.01*perLotto)+1e-9);
+  if(k<1)return {problemi:['anche una sola posizione da 0,01 lot rischierebbe '+euro(0.01*perLotto)
+    +', più del '+pct.toFixed(2)+'% scelto ('+euro(importoTot)+'): stop troppo lontano per questo conto']};
+  if(k<n){
+   notaRidotte='aperte '+k+' posizioni invece di '+n+': con 0,01 lot (il minimo) tutte e '+n+' insieme avrebbero superato il rischio scelto';
+   if(tp.length>k)tp=tp.slice(0,k);
+   n=k;
+  }
+  alMinimo=false;
+ }
  const rischioReale=lotti*perLotto*n;
  let margine=0;
  try{ margine=marginForLots(lotti,entry,sym)*n; }catch(e){}
  return {side,entry,sl,tp,scartati,n,lotti,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,tpCalcolato,senzaLivelli,
-   pendente,kind,notaEntrata,
+   pendente,kind,notaEntrata,notaRidotte,parti,
    rr:(tp.length&&Math.abs(entry-sl)>0)?Math.abs(tp[0]-entry)/Math.abs(entry-sl):null,
    rischioRealePct:(saldo>0?rischioReale/saldo*100:null)};
 }
@@ -24696,6 +24718,8 @@ async function tgEseguiSegnale(voce,opzioni){
  r.push((reale?'ORDINI VERI su MT5':'Posizioni simulate')+': '+p.n+(p.n===1?' posizione ':' posizioni separate ')+p.side+' su '+sym);
  if(p.pendente)r.push('ORDINE '+p.kind+' (pendente) a '+tgFmt(p.entry)+': si apre da solo quando il prezzo ci arriva.');
  else if(p.notaEntrata)r.push('Nota: '+p.notaEntrata+'.');
+ if(p.notaRidotte)r.push('Nota: '+p.notaRidotte+'.');
+ if(p.parti>1)r.push('Il messaggio ha '+p.parti+' entrate: questa usa 1/'+p.parti+' del rischio della sala, così tutte insieme restano dentro al rischio scelto.');
  if(!p.pendente)r.push('Entrata: il prezzo di adesso, '+tgFmt(p.entry)
    +(tgC(seg.entrata)?(' — la sala diceva '+tgFmt(seg.entrata)+(tgC(seg.entrata_max)?('–'+tgFmt(seg.entrata_max)):'')):''));
  r.push('Stop loss: '+tgFmt(p.sl)+' su tutte'+(p.slCalcolato
