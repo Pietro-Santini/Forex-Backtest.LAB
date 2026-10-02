@@ -2586,6 +2586,16 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    <div class="fbModalBody">
      <p class="hint" style="margin:0 0 12px">Gli asset preferiti (stellina dorata) vengono seguiti in background — footprint, zone di buco dei contratti, absorption/rejection e heatmap — anche quando non sono a grafico ora e anche in modalità Storico, finché l'app è aperta: MT5 per gli asset del broker, i trade veri per le cripto in tempo reale (Capital.com solo in Live). Rispettano gli stessi orari di sessione MT5/Capital.com del grafico principale. Massimo 10 asset: oltre, verrà chiesto quale sostituire. Clicca un asset per aprirlo a grafico, "✕" per toglierlo dalla watchlist.</p>
      <div id="watchlistListBody"></div>
+     <div class="fbSettingsSectionTitle" style="margin-top:14px">Registratore sul PC</div>
+     <p class="hint" style="margin:0 0 6px">Il programma sul PC registra per questi asset i trade veri e il book delle cripto e il DOM MT5 <b>anche ad app chiusa</b> (finché il PC è acceso). Riaprendo l'app i buchi si riempiono da soli; per gli asset MT5 i tick mancanti arrivano dallo storico del broker.</p>
+     <div id="regStatoBox" style="font-size:12px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:8px;margin-bottom:8px">…</div>
+     <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+       <select id="regCsvAsset" class="toolSelect" style="width:auto;min-width:140px"></select>
+       <select id="regCsvGiorni" class="toolSelect" style="width:auto"><option value="1">ultimo giorno</option><option value="2">ultimi 2 giorni</option><option value="3">ultimi 3 giorni</option><option value="7">ultimi 7 giorni</option><option value="8">ultimi 8 giorni</option></select>
+       <select id="regCsvCosa" class="toolSelect" style="width:auto"><option value="candele">candele da 1 minuto (per la modalità Storico)</option><option value="tick">tutti i tick / trade</option></select>
+       <button type="button" id="regCsvBtn" class="toolBtn" onclick="registratoreScaricaCsv()">⬇️ Scarica CSV</button>
+     </div>
+     <p class="hint" style="margin:6px 0 0">Cripto: dai trade registrati sul PC (8 giorni; dove il PC era spento mancano, mai inventati). MT5: dallo storico del broker.</p>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="watchlistModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
@@ -32848,6 +32858,202 @@ function fblProfiloIndControlla(){
  setTimeout(()=>{ const tutti=fblProfiliIndCarica(); tutti[fblProfiloIndAttuale]=fblProfiloIndLeggi(); fblProfiliIndSalva(tutti); },0);
 },true));
 setInterval(()=>{ try{ fblProfiloIndControlla(); }catch(e){} },700);
+
+// ===================== REGISTRATORE SUL PC =====================
+// RICHIESTO ("la registrazione deve continuare anche ad app chiusa, impeccabile"): il servizio dati
+// sul PC (porta 8001, registratore.py) registra per la watchlist i trade veri delle cripto, il book
+// delle cripto e il DOM MT5, anche quando l'app e' chiusa. L'app:
+//  1) gli comunica la watchlist (ogni minuto e a ogni modifica);
+//  2) all'apertura e ogni 3 minuti RIEMPIE SOLO I BUCHI dei suoi dati con quelli del PC (mai
+//     doppioni: si prende dal PC solo cio' che cade dove l'app non ha registrato niente);
+//  3) per gli asset MT5 i tick dei buchi li prende dallo storico del broker (/ticks), che li
+//     conserva gia'.
+var registratoreFirma='', registratoreFirmaAt=0, registratoreStato=null, registratoreRecuperoInCorso=false;
+function registratoreUrl(percorso){ return fblConChiave(MT5_FEED_URL+percorso); }
+async function registratoreAssetCfg(){
+ const out=[], crypto=depthCryptoEnabledNow();
+ for(const a of favoriteAssets){
+  if(!a)continue;
+  if(binanceAssetKey(a)){
+   const s=binanceSimboloDaAsset(a);
+   if(s)out.push({asset:a,tipo:'cripto',simbolo:s,book:crypto?(binanceSymbolForAsset(a)||s):''});
+   continue;
+  }
+  const bk=crypto?binanceSymbolForAsset(a):null;
+  if(bk)out.push({asset:a,tipo:'book',simbolo:'',book:bk});
+  if(mt5Connected){
+   let r=null; try{ r=await resolveMt5SymbolForAsset(a); }catch(e){}
+   if(r)out.push({asset:a,tipo:'mt5',simbolo:r});
+  }
+ }
+ return out;
+}
+async function registratoreSincronizza(forza){
+ try{
+  const cfg={assets:await registratoreAssetCfg(),range_pct:depthCryptoRangePctNow()};
+  const firma=JSON.stringify(cfg);
+  if(!forza&&firma===registratoreFirma&&Date.now()-registratoreFirmaAt<600000)return;
+  const r=await fetch(registratoreUrl('/registratore/config'),{method:'POST',headers:{'Content-Type':'application/json'},body:firma});
+  if(r.ok){ registratoreFirma=firma; registratoreFirmaAt=Date.now(); }
+ }catch(e){}
+}
+// Buchi in una serie di tempi ordinati, dentro [da,a]: intervalli senza dati piu' lunghi di `soglia`.
+function registratoreBuchi(tempi,da,a,soglia){
+ const buchi=[]; let prec=da;
+ for(const t of tempi){ if(t<da)continue; if(t>a)break; if(t-prec>soglia)buchi.push([prec,t]); prec=t; }
+ if(a-prec>soglia)buchi.push([prec,a]);
+ return buchi;
+}
+// Trade cripto dal PC: entrano solo nei SECONDI in cui l'app non ha nessun trade (l'app e il PC
+// uniscono i trade allo stesso modo, quindi un secondo gia' presente e' gia' completo).
+function registratoreImportaTrade(asset,trade){
+ if(!trade||!trade.length)return 0;
+ const log=footprintTickLogByAsset[asset]||(footprintTickLogByAsset[asset]=[]);
+ const secondi=new Set(log.map(e=>Math.floor(e.t/1000)));
+ let n=0;
+ trade.forEach(([t,p,q,lato])=>{
+  if(!Number.isFinite(t)||!Number.isFinite(p)||secondi.has(Math.floor(t/1000)))return;
+  log.push({t,price:p,side:1,weight:q>0?q:1,src:'binance',aggr:lato>0?1:-1,vol:q,mode:'flags'}); n++;
+ });
+ if(!n)return 0;
+ log.sort((x,y)=>x.t-y.t);
+ for(let i=1;i<log.length;i++){ const pr=log[i-1], c=log[i]; c.side=c.price>pr.price?1:(c.price<pr.price?-1:pr.side); }
+ if(log.length>FOOTPRINT_MAX_TICKS_PER_ASSET)log.splice(0,log.length-FOOTPRINT_MAX_TICKS_PER_ASSET);
+ footprintTicksDirty=true;
+ if(asset===currentAssetKey&&liveModeActive){ footprintRebuildBucketsForCurrentAsset(); try{ draw(); }catch(e){} }
+ return n;
+}
+// Book dal PC dentro i buchi dello storico del book dell'app.
+function registratoreImportaBook(chiave,asset,foto,cripto,da,a){
+ if(!foto||!foto.length)return 0;
+ const hist=orderBookHistoryByAsset[chiave]||(orderBookHistoryByAsset[chiave]=[]);
+ // Buchi cercati su TUTTO il periodo richiesto (non solo fra la prima e l'ultima fotografia
+ // arrivata): con lo storico dell'app vuoto, tutto il periodo e' un buco.
+ const buchi=registratoreBuchi(hist.map(h=>h.time_ms),Number.isFinite(da)?da:foto[0].t-1,Number.isFinite(a)?a:foto[foto.length-1].t+1,cripto?15000:8000);
+ const dentro=t=>buchi.some(([x,y])=>t>x+500&&t<y-500);
+ const hs=heatmapStepForAsset(asset);
+ let n=0;
+ foto.forEach(f=>{
+  if(!dentro(f.t))return;
+  if(cripto){
+   const rng=(f.mid||0)*depthCryptoRangePctNow()/100;
+   const bin=niceStep(Math.max((hs>0?hs/4:0),(2*rng)/400,(f.mid||0)*1e-7,f.passo||0));
+   const ragg=arr=>{ const m=new Map(); for(let i=0;i+1<arr.length;i+=2){ const k=Math.round((arr[i]+(f.off||0))/bin)*bin; m.set(k,(m.get(k)||0)+arr[i+1]); } const o=[]; m.forEach((v,k)=>o.push(k,v)); return o; };
+   hist.push({time_ms:f.t,b:ragg(f.b||[]),a:ragg(f.a||[])});
+  }else hist.push({time_ms:f.t,bids:f.bids||[],asks:f.asks||[]});
+  n++;
+ });
+ if(!n)return 0;
+ hist.sort((x,y)=>x.time_ms-y.time_ms);
+ const taglio=Date.now()-(cripto?8:HEATMAP_HISTORY_MAX_HOURS)*3600000;
+ let via=0; while(via<hist.length&&hist[via].time_ms<taglio)via++; if(via)hist.splice(0,via);
+ if(cripto)orderBookDeepDirty=true; else orderBookHistoryDirty=true;
+ delete heatmapCellsMeta[chiave];          // celle della heatmap da ricostruire con i dati nuovi
+ try{ if(chiave===depthKeyNow())draw(); }catch(e){}
+ return n;
+}
+async function registratoreRecupera(){
+ if(registratoreRecuperoInCorso)return;
+ registratoreRecuperoInCorso=true;
+ const resoconto=[];
+ try{
+  const ora=Date.now(), da=ora-footprintBackfillHoursNow()*3600000;
+  const cfg=await registratoreAssetCfg();
+  const asset=new Set(cfg.map(c=>c.asset)); if(currentAssetKey)asset.add(currentAssetKey);
+  for(const c of cfg){
+   try{
+    if(c.tipo==='cripto'){
+     const r=await fetch(registratoreUrl('/registratore/trade?asset='+encodeURIComponent(c.asset)+'&da_ms='+Math.round(da)+'&a_ms='+ora));
+     if(r.ok){ const j=await r.json(); const n=registratoreImportaTrade(c.asset,j.trade); if(n)resoconto.push(c.asset+': '+n+' trade'); }
+    }
+    if(c.book){
+     const chiave='bn:'+c.book, hist=orderBookHistoryByAsset[chiave]||[];
+     for(const [x,y] of registratoreBuchi(hist.map(h=>h.time_ms),ora-8*3600000,ora,15000).slice(-30)){
+      const r=await fetch(registratoreUrl('/registratore/book?chiave='+encodeURIComponent(chiave)+'&da_ms='+Math.round(x)+'&a_ms='+Math.round(y)));
+      if(r.ok){ const j=await r.json(); const n=registratoreImportaBook(chiave,c.asset,j.foto,true,x,y); if(n)resoconto.push(chiave+': '+n+' fotografie del book'); }
+     }
+    }
+    if(c.tipo==='mt5'){
+     const hist=orderBookHistoryByAsset[c.simbolo]||[];
+     for(const [x,y] of registratoreBuchi(hist.map(h=>h.time_ms),ora-HEATMAP_HISTORY_MAX_HOURS*3600000,ora,8000).slice(-30)){
+      const r=await fetch(registratoreUrl('/registratore/book?chiave='+encodeURIComponent(c.simbolo)+'&da_ms='+Math.round(x)+'&a_ms='+Math.round(y)));
+      if(r.ok){ const j=await r.json(); const n=registratoreImportaBook(c.simbolo,c.asset,j.foto,false,x,y); if(n)resoconto.push(c.simbolo+': '+n+' fotografie DOM'); }
+     }
+     // Tick dei buchi dallo storico del broker (solo buchi veri: oltre 30 s senza tick).
+     const log=footprintTickLogByAsset[c.asset]||[];
+     const buchi=registratoreBuchi(log.map(e=>e.t),da,ora-5000,30000).slice(-40).reverse();   // dal piu' recente
+     let presi=0;
+     for(const [x,y] of buchi){
+      if(presi>=FOOTPRINT_MAX_TICKS_PER_ASSET)break;     // oltre, il footprint non li terrebbe comunque
+      let fine=y, giri=0;
+      while(fine>x+1000&&giri++<20&&presi<FOOTPRINT_MAX_TICKS_PER_ASSET){
+       const r=await fetch(registratoreUrl('/ticks?symbol='+encodeURIComponent(c.simbolo)+'&from_ms='+Math.round(x)+'&to_ms='+Math.round(fine)+'&max_ticks=50000'));
+       if(!r.ok)break;
+       const j=await r.json(); const tk=(j&&j.ticks)||[];
+       const utili=tk.filter(k=>k.time_ms>x+1000&&k.time_ms<y-1000);
+       if(utili.length){ presi+=utili.length; footprintIngestHistoricalTicks(c.asset,utili); resoconto.push(c.asset+': '+utili.length+' tick dal broker'); }
+       if(!j.truncated||!tk.length)break;
+       fine=tk[0].time_ms;     // risposta troncata: si va piu' indietro a pezzi
+      }
+     }
+    }
+   }catch(e){ console.warn('[Registratore] recupero',c.asset,e); }
+  }
+  if(resoconto.length)console.log('%c[Registratore] buchi riempiti: '+resoconto.join(' · '),'color:#7fdc9a');
+ }finally{ registratoreRecuperoInCorso=false; }
+ return resoconto;
+}
+async function registratoreLeggiStato(){
+ try{ const r=await fetch(registratoreUrl('/registratore/stato')); if(r.ok)registratoreStato=await r.json(); }catch(e){ registratoreStato=null; }
+ return registratoreStato;
+}
+setTimeout(()=>{ registratoreSincronizza(true).then(()=>registratoreRecupera()); },8000);
+setInterval(()=>{ registratoreSincronizza(false); },60000);
+setInterval(()=>{ registratoreRecupera(); },180000);
+// Tornando sull'app (tab o finestra che riprende) si riempiono subito i buchi lasciati mentre era ferma.
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')setTimeout(()=>registratoreRecupera(),1500); });
+
+// --- Esporta CSV per il backtest (RICHIESTO: "salviamo anche tick e candele, cosi' li carichiamo
+// come CSV completo per fare backtest in modalita' Storico").
+async function registratoreScaricaCsv(){
+ const asset=$('regCsvAsset')?.value, giorni=Number($('regCsvGiorni')?.value)||1, cosa=$('regCsvCosa')?.value||'candele';
+ if(!asset){ await appAlert('Scegli un asset della watchlist.'); return; }
+ const a=Date.now(), da=a-giorni*86400000;
+ let tipo='cripto', simbolo='';
+ if(!binanceAssetKey(asset)){
+  tipo='mt5';
+  try{ simbolo=await resolveMt5SymbolForAsset(asset)||''; }catch(e){}
+  if(!simbolo){ await appAlert('«'+asset+'» non è né una cripto in tempo reale né un simbolo del broker MT5 collegato: per questo asset non ci sono dati da esportare.'); return; }
+ }
+ const b=$('regCsvBtn'); if(b){ b.disabled=true; b.textContent='⏳ Preparo il CSV…'; }
+ try{
+  const r=await fetch(registratoreUrl('/registratore/csv?asset='+encodeURIComponent(asset)+'&da_ms='+da+'&a_ms='+a+'&cosa='+cosa+'&tipo='+tipo+'&simbolo='+encodeURIComponent(simbolo)));
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  const blob=await r.blob();
+  const nome=((r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)||[])[1]||(asset.replace(/[^A-Za-z0-9]+/g,'_')+'_'+cosa+'.csv');
+  const righe=Math.max(0,(await blob.slice(0,Math.min(blob.size,50_000_000)).text()).split('\n').length-2);
+  const url=URL.createObjectURL(blob), el=document.createElement('a');
+  el.href=url; el.download=nome; document.body.appendChild(el); el.click(); el.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  $('status').textContent='⬇️ '+nome+': '+righe.toLocaleString('it-IT')+' righe'+(cosa==='candele'?' (candele da 1 minuto, ora UTC): caricalo in Storico come un CSV normale.':'.');
+ }catch(e){ await appAlert('CSV non preparato: il servizio dati sul PC (porta 8001) non risponde ('+e.message+').'); }
+ finally{ if(b){ b.disabled=false; b.textContent='⬇️ Scarica CSV'; } }
+}
+async function registratoreDisegna(){
+ const box=$('regStatoBox'); if(!box)return;
+ const sel=$('regCsvAsset');
+ if(sel){ const v=sel.value; sel.innerHTML=favoriteAssets.filter(Boolean).map(a=>'<option value="'+escapeHtmlAttr(a)+'">'+escapeHtmlText(assetDisplayName(a))+'</option>').join(''); if(v)sel.value=v; }
+ const s=await registratoreLeggiStato();
+ if(!s||!s.stato){ box.innerHTML='⚠️ Il servizio dati sul PC (porta 8001) non risponde: il registratore gira lì.'; return; }
+ const st=s.stato, quando=t=>t?new Date(t).toLocaleTimeString('it-IT'):'—';
+ const righe=[];
+ Object.entries(st.cripto||{}).forEach(([k,v])=>righe.push(escapeHtmlText(k)+': '+(v.trade_scritti!=null?(v.trade_scritti.toLocaleString('it-IT')+' trade, ultimo '+quando(v.ultimo_trade)):'')+(v.book_scritti!=null?(v.book_scritti.toLocaleString('it-IT')+' fotografie del book, ultima '+quando(v.ultimo_book)):'')));
+ Object.entries(st.mt5||{}).forEach(([k,v])=>righe.push(escapeHtmlText(k)+' (MT5): '+(v.book==='ok'?(v.book_scritti.toLocaleString('it-IT')+' fotografie del DOM, ultima '+quando(v.ultimo_book)):escapeHtmlText(v.book||''))));
+ box.innerHTML=(st.attivo?'<b style="color:#7fdc9a">Registratore attivo sul PC</b>':'⚠️ Registratore fermo')
+  +' · '+((s.config&&s.config.assets)||[]).length+' voci in registrazione'
+  +(righe.length?'<br>'+righe.join('<br>'):'')
+  +((st.errori||[]).length?'<br><span style="color:#ffb86b">Ultimo avviso: '+escapeHtmlText(st.errori[st.errori.length-1].msg)+'</span>':'');
+}
 
 // ===================== WATCHLIST CRIPTO IN SOTTOFONDO =====================
 // RICHIESTO: footprint e heatmap seguiti per TUTTI gli asset della watchlist, anche le cripto in
