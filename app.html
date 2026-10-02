@@ -1354,6 +1354,7 @@ setTimeout(function(){
       <button type="button" id="genSettingsTabPropFirm" class="fbModalTab" data-gensettings-tab="propfirm">🛡️ Prop Firm</button>
       <button type="button" id="genSettingsTabNotion" class="fbModalTab" data-gensettings-tab="notion">📓 Template Notion</button>
       <button type="button" id="genSettingsTabTelegram" class="fbModalTab" data-gensettings-tab="telegram">✈️ Telegram</button>
+      <button type="button" id="genSettingsTabBinance" class="fbModalTab" data-gensettings-tab="binance">🟡 Binance</button>
     </div>
     <div class="fbModalBody">
       <div data-gensettings-panel="live">
@@ -1381,6 +1382,12 @@ setTimeout(function(){
             </div>
           </div>
         </span>
+      </div>
+      <div data-gensettings-panel="binance" style="display:none">
+        <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Cripto da <b>Binance Futures</b> (contratti perpetui USDⓈ-M): grafico in tempo reale e ricerca dei simboli direttamente da Binance.</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px"><input type="checkbox" class="fblBinanceToggle" style="width:17px;height:17px;accent-color:var(--fbAccent2)"> <b>Attiva la sessione Binance</b></label>
+        <p class="hint" id="binanceStatoNota" style="margin:8px 0 10px"></p>
+        <p class="hint" style="margin:0">Collegamento al conto e ordini: <b>in arrivo</b>. Passeranno dal programma sul tuo PC, come per MT5: le chiavi API di Binance non verranno mai salvate nell'app né sul cloud.</p>
       </div>
       <!-- RICHIESTO ESPLICITAMENTE: una sezione dove elencare le sale segnali Telegram da cui
            prendere gli ordini, aggiungendole scrivendo il canale pubblico o il link del gruppo
@@ -4858,6 +4865,7 @@ const GRAFICO_LS={
  fb_tg_rischio_totale:null,
  fbl_griglia_visibile:()=>{ try{ updateGridVisibleBtn(); draw(); }catch(e){} },
  fbl_capital_22_23:()=>{ try{ fblCapitalSeraAggiornaUi(); liveSessionPhase=null; }catch(e){} },
+ fbl_binance_attivo:()=>{ try{ binanceAggiornaUi(); }catch(e){} },
  fb_tg_avvicinamento_pct:null,
  fb_tg_suono_id:v=>{ try{ const el=$('tgSuonoSelect'); if(el&&[...el.options].some(o=>o.value===v))el.value=v; }catch(e){} },
  fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} }
@@ -17661,6 +17669,8 @@ let lastValidMarketValue='';
 let customAssets=[];            // [{symbol,name,type}] trovati su Capital.com e salvati
 let assetPickerQuery='', assetPickerType='all';
 let assetPickerRemote=[], assetPickerSeq=0, assetPickerDebounce=null, assetPickerBusy=false;
+// Risultati Binance Futures (sessione Binance attiva): null = ricerca non riuscita (rete).
+let assetPickerBinance=[], assetPickerBinanceBusy=false, assetPickerBinanceErr=false;
 const ASSET_PICKER_TYPES=[
   ['all','Tutto'],['forex','Forex'],['crypto','Cripto'],
   ['commodity','Materie prime'],['index','Indici'],['share','Azioni'],['other','Altro'],
@@ -17680,6 +17690,7 @@ function assetTypeFromCapital(t){
   return 'other';
 }
 function assetTypeOf(sym){
+  if(binanceAssetKey(sym))return 'crypto';
   const known=customAssets.find(a=>a.symbol===sym);
   if(known&&known.type)return known.type;
   const v=String(sym||'').toUpperCase();
@@ -17789,6 +17800,15 @@ function renderAssetPicker(){
         : '<div class="fbPickerEmpty">Nessun asset salvato corrisponde a questa ricerca.</div>');
   // In watchlist non si mostrano i risultati di Capital.com: si guardano i preferiti, non si cerca.
   if(soloWatchlist){ box.innerHTML=html; return; }
+  // SESSIONE BINANCE: i contratti Futures, prima di Capital.com (sono quelli da cui si copia).
+  if(binanceAttivo()&&q.length>=2&&(assetPickerType==='all'||assetPickerType==='crypto')){
+    if(assetPickerBinanceBusy)html+='<div class="fbPickerGroup">Binance Futures</div><div class="fbPickerEmpty">Ricerca in corso…</div>';
+    else if(assetPickerBinanceErr)html+='<div class="fbPickerGroup">Binance Futures</div><div class="fbPickerEmpty">Binance non raggiungibile da questa rete.</div>';
+    else if(assetPickerBinance.length){
+      html+='<div class="fbPickerGroup">Risultati Binance Futures</div>';
+      html+=assetPickerBinance.map(i=>assetPickerRowHtml('BINANCE:'+i.symbol,binanceNomeAsset(i),'crypto','Binance')).join('');
+    }else html+='<div class="fbPickerGroup">Binance Futures</div><div class="fbPickerEmpty">Nessun contratto per "'+escapeHtmlText(assetPickerQuery)+'".</div>';
+  }
   const remote=assetPickerRemote.filter(m=>assetPickerType==='all'||assetTypeFromCapital(m.instrumentType)===assetPickerType);
   if(assetPickerBusy){
     html+='<div class="fbPickerGroup">Capital.com</div><div class="fbPickerEmpty">Ricerca in corso…</div>';
@@ -17807,6 +17827,16 @@ function renderAssetPicker(){
 function scheduleAssetPickerRemoteSearch(){
   if(assetPickerDebounce){ clearTimeout(assetPickerDebounce); assetPickerDebounce=null; }
   const term=assetPickerQuery.trim();
+  // Binance: non serve Capital.com ne' la modalita' Live per CERCARE (i dati sono pubblici).
+  if(binanceAttivo()&&term.length>=2){
+    const seqB=assetPickerSeq+1;
+    assetPickerBinanceBusy=true; assetPickerBinanceErr=false;
+    binanceCerca(term).then(r=>{
+      if(seqB<assetPickerSeq)return;
+      assetPickerBinance=r||[]; assetPickerBinanceErr=(r==null);
+    }).catch(()=>{ assetPickerBinance=[]; assetPickerBinanceErr=true; })
+      .finally(()=>{ assetPickerBinanceBusy=false; try{ renderAssetPicker(); }catch(e){} });
+  }else{ assetPickerBinance=[]; assetPickerBinanceBusy=false; assetPickerBinanceErr=false; }
   if(term.length<2||!liveModeActive||!capitalSessionTokens){
     assetPickerRemote=[]; assetPickerBusy=false; renderAssetPicker(); return;
   }
@@ -17835,7 +17865,7 @@ function scheduleAssetPickerRemoteSearch(){
 function chooseAssetFromPicker(sym,name,type){
   if(!sym)return;
   rememberCustomAsset(sym,name,type);
-  if(sym!==currentAssetKey){
+  if(sym!==currentAssetKey&&!binanceAssetKey(sym)){
     capitalEpicCache[sym]=capitalEpicCache[sym]||sym;
     epicToAsset[sym]=epicToAsset[sym]||sym;
   }
@@ -28048,6 +28078,7 @@ function forgetCapitalEpic(asset){
  try{ delete capitalEpicCache[asset]; saveCapitalEpicCache(); }catch(e){}
 }
 async function resolveCapitalEpic(asset){
+ if(binanceAssetKey(asset))return null; // contratto Binance: Capital.com non c'entra
  if(capitalEpicCache[asset])return capitalEpicCache[asset];
  const base=liveCredsDraft?.demo?CAPITAL_DEMO_BASE:CAPITAL_LIVE_BASE;
  try{
@@ -28123,6 +28154,9 @@ async function loadLiveHistoryFromCapital(asset,opts){
  // loadLiveHistoryFromMt5 (che referisce direttamente __loadLiveHistoryFromCapitalImpl, MAI
  // questa funzione, per il proprio fallback su asset non trovati — evita ricorsione infinita).
  // Con MT5 NON connesso il comportamento sotto resta bit-per-bit quello di sempre.
+ // SESSIONE BINANCE: gli asset "BINANCE:..." hanno la loro fonte, sempre, anche con MT5 collegato.
+ if(binanceAssetKey(asset))return loadLiveHistoryFromBinance(asset,opts);
+ if(binanceAssetAttivo)binanceFermaGrafico();
  if(mt5Connected)return loadLiveHistoryFromMt5(asset,opts);
  if(__loadLiveHistoryInFlight && __loadLiveHistoryInFlightAsset===asset){
    console.log(`[LoadHistory] chiamata duplicata per "${asset}" mentre una è già in corso: riuso quella in volo invece di rifare la fetch REST.`);
@@ -29708,6 +29742,7 @@ function isDeepDepthKey(k){ return /^(bn|ext):/.test(String(k||'')); }
 const CRYPTO_BASES=['DOGE','SHIB','PEPE','AVAX','LINK','ATOM','AAVE','NEAR','BTC','ETH','SOL','XRP','ADA','BNB','LTC','DOT','TRX','BCH','XLM','UNI','ETC','APT','ARB','SUI','TON','FIL','ICP','INJ','POL','OP'];
 const CRYPTO_ALIASES={BITCOIN:'BTC',ETHEREUM:'ETH',SOLANA:'SOL',RIPPLE:'XRP',CARDANO:'ADA',DOGECOIN:'DOGE',LITECOIN:'LTC',POLKADOT:'DOT'};
 function binanceSymbolForAsset(assetKey){
+ if(binanceAssetKey(assetKey))return binanceSimboloDaAsset(assetKey);
  let k=String(assetKey||'').toUpperCase().replace(/\.[A-Z0-9]+$/,'').replace(/[^A-Z]/g,'');
  if(!k)return null;
  for(const a in CRYPTO_ALIASES){ if(k.startsWith(a)){ k=CRYPTO_ALIASES[a]+k.slice(a.length); break; } }
@@ -31533,6 +31568,7 @@ function mt5SymbolCandidates(asset){
  return out;
 }
 async function resolveMt5SymbolForAsset(asset){
+ if(binanceAssetKey(asset))return null; // contratto Binance: non si cerca sul broker MT5
  if(Object.prototype.hasOwnProperty.call(mt5FeedSymbolForAsset,asset))return mt5FeedSymbolForAsset[asset];
  const candidates=mt5SymbolCandidates(asset);
  for(const cand of candidates){
@@ -31555,6 +31591,7 @@ async function resolveMt5SymbolForAsset(asset){
 }
 
 async function loadLiveHistoryFromMt5(asset,opts){
+ if(binanceAssetKey(asset))return loadLiveHistoryFromBinance(asset,opts);
  if(!asset){ $('status').textContent='Seleziona prima un ASSET per caricare lo storico Live.'; return; }
  if(!liveModeActive)return;
  // FIX DIFENSIVO: vedi commento su __mt5LoadHistoryInFlight più in alto — una richiesta già in
@@ -32191,6 +32228,347 @@ function startMt5RefreshTimer(){
    update();draw();
  },1000);
 }
+// ===================== SESSIONE BINANCE FUTURES (fase 1: grafico e ricerca) =====================
+// RICHIESTO: "sessione Binance in impostazioni, tutto il sistema uguale a MT5: collegamento al conto,
+// grafico, ricerca simboli su Binance". Fase 1 = grafico e ricerca, SOLO dati pubblici (nessuna
+// chiave, nessun ordine). Il collegamento al conto e gli ordini arrivano nella fase 2 e passeranno
+// dal programma sul PC, come MT5: le chiavi API non devono mai stare nel browser.
+// Mercato: Futures USD(S)-M perpetui (quello che si usera' per copiare le operazioni). Gli asset hanno
+// chiave "BINANCE:BTCUSDT", cosi' non si confondono mai con BTCUSD di Capital.com o del broker MT5:
+// un solo posto (loadLiveHistoryFromCapital) li manda qui, e nessuna delle altre fonti li tocca.
+// Le cripto non hanno orari (24/7): niente fasce 22-23 ne' "mercato chiuso".
+const BINANCE_PREFISSO='BINANCE:';
+const BINANCE_ATTIVO_KEY='fbl_binance_attivo';
+const BINANCE_REST=['https://fapi.binance.com'];
+const BINANCE_WS='wss://fstream.binance.com';
+const BINANCE_INTERVALLI={1:'1m',3:'3m',5:'5m',15:'15m',30:'30m',60:'1h',120:'2h',240:'4h',360:'6h',480:'8h',720:'12h',1440:'1d'};
+// Scritte con i valori letterali, non con le costanti qui sopra: sono funzioni dichiarate, quindi
+// chiamabili anche PRIMA che questo blocco venga eseguito (all'avvio), quando le costanti non esistono ancora.
+function binanceAttivo(){ try{ return localStorage.getItem('fbl_binance_attivo')==='1'; }catch(e){ return false; } }
+function binanceAssetKey(k){ return typeof k==='string'&&k.startsWith('BINANCE:'); }
+function binanceSimboloDaAsset(k){ return binanceAssetKey(k)?k.slice(8).toUpperCase():null; }
+function binanceNomeAsset(info){ return info?(info.base+'/'+info.quote+' perpetuo · Binance'):''; }
+
+// --- Elenco simboli (exchangeInfo): una richiesta, tenuta 12 ore anche fra un avvio e l'altro.
+let binanceInfo=null, binanceInfoCaricamento=null;
+function binanceInfoDaRisposta(j){
+ const m=new Map();
+ (j&&Array.isArray(j.symbols)?j.symbols:[]).forEach(s=>{
+  if(!s||s.contractType!=='PERPETUAL'||s.status!=='TRADING')return;
+  const f=t=>(s.filters||[]).find(x=>x.filterType===t)||{};
+  const tick=Number(f('PRICE_FILTER').tickSize), step=Number(f('LOT_SIZE').stepSize);
+  m.set(s.symbol,{symbol:s.symbol,base:s.baseAsset,quote:s.quoteAsset,tick:tick>0?tick:Math.pow(10,-(s.pricePrecision||2)),
+   step:step>0?step:Math.pow(10,-(s.quantityPrecision||3)),minQty:Number(f('LOT_SIZE').minQty)||null,
+   minNotional:Number(f('MIN_NOTIONAL').notional)||null});
+ });
+ return m;
+}
+async function binanceCaricaSimboli(){
+ if(binanceInfo)return binanceInfo;
+ if(binanceInfoCaricamento)return binanceInfoCaricamento;
+ binanceInfoCaricamento=(async()=>{
+  try{
+   const c=JSON.parse(localStorage.getItem('fbl_binance_info')||'null');
+   if(c&&Date.now()-c.t<12*3600000&&Array.isArray(c.l)){ binanceInfo=new Map(c.l.map(x=>[x.symbol,x])); return binanceInfo; }
+  }catch(e){}
+  for(const base of BINANCE_REST){
+   try{
+    const r=await fetch(base+'/fapi/v1/exchangeInfo',{cache:'no-store'});
+    if(!r.ok)continue;
+    const m=binanceInfoDaRisposta(await r.json());
+    if(!m.size)continue;
+    binanceInfo=m;
+    try{ localStorage.setItem('fbl_binance_info',JSON.stringify({t:Date.now(),l:[...m.values()]})); }catch(e){}
+    return m;
+   }catch(e){}
+  }
+  return null;
+ })();
+ try{ return await binanceInfoCaricamento; }finally{ binanceInfoCaricamento=null; }
+}
+// Decimali dal passo di prezzo (0.1 -> 1, 0.0001 -> 4): sono quelli VERI del contratto.
+function binanceDecimali(passo){
+ if(!(passo>0))return 2;
+ const s=String(passo); if(s.includes('e-'))return Number(s.split('e-')[1])||2;
+ const i=s.indexOf('.'); return i<0?0:s.replace(/0+$/,'').length-i-1;
+}
+function binanceRegistraMeta(asset,info){
+ if(!info)return;
+ const d=binanceDecimali(info.tick);
+ // 1 "lotto" = 1 unita' della moneta (1 BTC), come i contratti cripto di Capital.com.
+ recordAssetAutoMeta(asset,{decimals:d,contractSize:1,minDeal:info.minQty||undefined,instrType:'crypto',locked:true},'binance');
+}
+async function binanceCerca(termine){
+ const m=await binanceCaricaSimboli();
+ if(!m)return null;
+ const q=String(termine||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+ if(!q)return [];
+ const out=[];
+ m.forEach(i=>{
+  if(!(i.symbol.includes(q)||i.base.includes(q)))return;
+  const punti=(i.base===q?0:i.symbol===q?0:i.symbol.startsWith(q)?1:2)+(i.quote==='USDT'?0:0.5);
+  out.push({punti,i});
+ });
+ out.sort((a,b)=>a.punti-b.punti||a.i.symbol.localeCompare(b.i.symbol));
+ return out.slice(0,25).map(x=>x.i);
+}
+
+// --- Stato del grafico Binance (una sola fonte alla volta, come MT5).
+var binanceAssetAttivo=null, binanceWs=null, binanceWsSimbolo=null, binanceWsRiprovaT=null;
+let binanceUltimoPrezzo=null, binanceUltimoTickVeroAt=0, binanceUltimoMsgAt=0, binanceScartoMs=0;
+let binanceTimer=null, binanceUltimoBucket=null, binanceCandelaFerma=false, binanceResyncAt=0, binanceResyncInCorso=false;
+let binanceRestAt=0, binanceRiconnessioneAt=0, binanceGraficoAggiornatoAt=0, binanceRicaricaAt=0;
+let binanceStoricoInVolo=null, binanceStoricoInVoloAsset=null;
+// Orologio di Binance (orario dei trade), per decidere a quale candela appartiene un prezzo: un PC
+// con l'orologio avanti di qualche secondo non deve aprire candele in anticipo.
+function binanceAdesso(){ return Date.now()+binanceScartoMs; }
+
+async function binanceKlines(simbolo,intervallo,quante,fineMs){
+ const tutte=[];
+ let fine=fineMs||null;
+ while(tutte.length<quante){
+  const lim=Math.min(1500,quante-tutte.length);
+  let blocco=null;
+  for(const base of BINANCE_REST){
+   try{
+    const u=base+'/fapi/v1/klines?symbol='+encodeURIComponent(simbolo)+'&interval='+intervallo+'&limit='+lim+(fine?('&endTime='+fine):'');
+    const r=await fetch(u,{cache:'no-store'});
+    if(!r.ok){ const t=await r.text().catch(()=>'' ); throw new Error('HTTP '+r.status+' '+t.slice(0,120)); }
+    blocco=await r.json(); break;
+   }catch(e){ if(base===BINANCE_REST[BINANCE_REST.length-1])throw e; }
+  }
+  if(!Array.isArray(blocco)||!blocco.length)break;
+  tutte.unshift(...blocco);
+  if(blocco.length<lim)break;
+  fine=Number(blocco[0][0])-1;
+ }
+ // [apertura, open, high, low, close, volume, ...]
+ return tutte.map(k=>({date:new Date(Number(k[0])).toISOString(),open:Number(k[1]),high:Number(k[2]),low:Number(k[3]),close:Number(k[4]),volume:Number(k[5])||0}))
+  .filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite));
+}
+
+// Ferma tutto quello che riguarda il grafico Binance (si passa a un asset di un'altra fonte).
+function binanceFermaGrafico(){
+ binanceDisconnettiStream();
+ if(binanceTimer){ clearHeartbeatInterval(binanceTimer); binanceTimer=null; }
+ binanceAssetAttivo=null; binanceUltimoPrezzo=null; binanceCandelaFerma=false; binanceResyncInCorso=false;
+}
+function binanceDisconnettiStream(){
+ if(binanceWsRiprovaT){ clearTimeout(binanceWsRiprovaT); binanceWsRiprovaT=null; }
+ if(binanceWs){ try{ binanceWs.onclose=null; binanceWs.onerror=null; binanceWs.onmessage=null; binanceWs.close(); }catch(e){} }
+ binanceWs=null; binanceWsSimbolo=null;
+}
+function binanceConnettiStream(asset,simbolo){
+ if(!liveModeActive||!simbolo)return;
+ if(binanceWs&&binanceWsSimbolo===simbolo&&(binanceWs.readyState===WebSocket.OPEN||binanceWs.readyState===WebSocket.CONNECTING))return;
+ binanceDisconnettiStream();
+ let ws;
+ try{ ws=new WebSocket(BINANCE_WS+'/ws/'+simbolo.toLowerCase()+'@aggTrade'); }catch(e){ return; }
+ binanceWs=ws; binanceWsSimbolo=simbolo;
+ ws.onopen=()=>{ if(ws!==binanceWs)return; binanceUltimoMsgAt=Date.now(); $('status').textContent='🟢 Streaming Live Binance attivo: '+simbolo+'.'; };
+ ws.onmessage=ev=>{
+  if(ws!==binanceWs)return;
+  let d; try{ d=JSON.parse(ev.data); }catch(e){ return; }
+  if(!d||d.e!=='aggTrade')return;
+  binanceUltimoMsgAt=Date.now();
+  if(binanceAssetAttivo!==asset||currentAssetKey!==asset)return; // trade di un asset lasciato
+  const p=Number(d.p), q=Number(d.q), T=Number(d.T);
+  if(!Number.isFinite(p)||!Number.isFinite(T))return;
+  // Scarto fra l'orologio di questo dispositivo e quello di Binance, smussato (il trade arriva con
+  // qualche decina di ms di ritardo: un singolo valore non basta).
+  const s=T-Date.now(); binanceScartoMs=binanceScartoMs?binanceScartoMs*0.9+s*0.1:s;
+  if(binanceCandelaFerma)return;
+  binanceUltimoPrezzo=p; binanceUltimoTickVeroAt=T;
+  // Footprint con il VOLUME VERO di ogni trade (Binance lo pubblica, Capital.com e MT5 no).
+  try{ footprintRegisterTick(p,T,asset,q>0?q:1,'binance'); }catch(e){}
+ };
+ ws.onerror=()=>{};
+ ws.onclose=()=>{
+  if(ws!==binanceWs)return;
+  binanceWs=null; binanceWsSimbolo=null;
+  if(liveModeActive&&binanceAssetAttivo===asset)binanceWsRiprovaT=setTimeout(()=>{ binanceWsRiprovaT=null; binanceConnettiStream(asset,simbolo); },2000);
+ };
+}
+async function binancePrezzoRest(simbolo){
+ for(const base of BINANCE_REST){
+  try{
+   const r=await fetch(base+'/fapi/v1/ticker/price?symbol='+encodeURIComponent(simbolo),{cache:'no-store'});
+   if(!r.ok)continue;
+   const j=await r.json();
+   const p=Number(j&&j.price);
+   if(Number.isFinite(p))return {price:p,atMs:Number(j.time)||null};
+  }catch(e){}
+ }
+ return null;
+}
+function binanceAvviaTimer(){
+ if(binanceTimer)return;
+ binanceTimer=setHeartbeatInterval(async ()=>{
+  if(!liveModeActive&&binanceAssetAttivo){ binanceFermaGrafico(); return; }
+  if(!liveModeActive||!binanceAssetAttivo||chartFeedSuspended)return;
+  const asset=binanceAssetAttivo, simbolo=binanceSimboloDaAsset(asset);
+  if(currentAssetKey!==asset)return;
+  const tfMs=(currentTF||1)*60000;
+  const ora=binanceAdesso();
+  const bucket=Math.floor(ora/tfMs)*tfMs;
+  // Cambio candela: un secondo di pausa, poi le candele chiuse si riallineano a quelle ufficiali
+  // di Binance (stessa regola di MT5 e Capital.com: una candela di transizione non si disegna).
+  if(binanceUltimoBucket==null)binanceUltimoBucket=bucket;
+  else if(bucket>binanceUltimoBucket&&!binanceResyncInCorso&&!binanceCandelaFerma&&Date.now()-binanceResyncAt>2000){
+   binanceUltimoBucket=bucket; binanceResyncAt=Date.now(); binanceCandelaFerma=true;
+   setTimeout(async ()=>{
+    binanceResyncInCorso=true;
+    try{ await loadLiveHistoryFromBinance(asset,{resync:true}); }
+    finally{ binanceResyncInCorso=false; binanceCandelaFerma=false; }
+   },1000);
+   return;
+  }
+  if(binanceCandelaFerma&&Date.now()-binanceResyncAt>20000){ binanceCandelaFerma=false; binanceResyncInCorso=false; }
+  if(binanceCandelaFerma){ update(); draw(); return; }
+  // Canale muto da 8 s: si riapre.
+  const muto=binanceUltimoMsgAt?Date.now()-binanceUltimoMsgAt:Infinity;
+  if(muto>8000&&Date.now()-binanceRiconnessioneAt>8000){ binanceRiconnessioneAt=Date.now(); binanceDisconnettiStream(); binanceConnettiStream(asset,simbolo); }
+  let toccato=false;
+  if(Number.isFinite(binanceUltimoPrezzo))
+   toccato=applyLivePriceToChart(binanceUltimoPrezzo,ora,{allowNew:binanceUltimoTickVeroAt>=bucket,fromAsset:asset})||toccato;
+  // Nessun trade da 5 s (canale bloccato dalla rete): il prezzo arriva dal REST ogni 3 s.
+  const senzaTrade=binanceUltimoTickVeroAt?ora-binanceUltimoTickVeroAt:Infinity;
+  if(senzaTrade>5000&&Date.now()-binanceRestAt>3000){
+   binanceRestAt=Date.now();
+   const r=await binancePrezzoRest(simbolo);
+   if(r&&binanceAssetAttivo===asset&&currentAssetKey===asset&&!binanceCandelaFerma){
+    binanceUltimoPrezzo=r.price;
+    toccato=applyLivePriceToChart(r.price,binanceAdesso(),{allowNew:false,fromAsset:asset})||toccato;
+   }
+  }
+  if(toccato)binanceGraficoAggiornatoAt=Date.now();
+  else if(!binanceGraficoAggiornatoAt)binanceGraficoAggiornatoAt=Date.now();
+  // Rete di sicurezza come il guardiano MT5: 20 s senza nessun aggiornamento -> storico ricaricato.
+  if(Date.now()-binanceGraficoAggiornatoAt>20000&&Date.now()-binanceRicaricaAt>30000){
+   binanceRicaricaAt=Date.now();
+   $('status').textContent='⚠️ Nessun prezzo da Binance da 20 s: risincronizzo…';
+   loadLiveHistoryFromBinance(asset,{resync:true});
+  }
+  if(toccato){ evaluate(); checkPendingOrders(); scheduleSave(); }
+  update(); draw();
+ },1000);
+}
+
+async function loadLiveHistoryFromBinance(asset,opts){
+ if(!asset||!liveModeActive)return;
+ if(binanceStoricoInVolo&&binanceStoricoInVoloAsset===asset)return binanceStoricoInVolo;
+ const p=__loadLiveHistoryFromBinanceBody(asset,opts||{});
+ binanceStoricoInVolo=p; binanceStoricoInVoloAsset=asset;
+ try{ return await p; }finally{ if(binanceStoricoInVolo===p){ binanceStoricoInVolo=null; binanceStoricoInVoloAsset=null; } }
+}
+async function __loadLiveHistoryFromBinanceBody(asset,opts){
+ const simbolo=binanceSimboloDaAsset(asset);
+ // Il grafico passa a Binance: MT5 e Capital.com smettono di scriverci sopra.
+ stopMt5RefreshTimer(); disconnectMt5Stream(); disconnectMt5OrderBook(); mt5ActiveSymbol=null; lastMt5TickPrice=null;
+ capitalWsPrimaryEpic=null; lastPrimaryEpicPrice=null;
+ if(binanceAssetAttivo&&binanceAssetAttivo!==asset)binanceFermaGrafico();
+ const wasOnDifferentAsset=!!(currentAssetKey&&currentAssetKey!==asset);
+ const shouldLoadAssetDrawings=(currentAssetKey!==asset);
+ if(currentAssetKey&&currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
+ if(shouldLoadAssetDrawings){ assetSwitchInProgress=true; assetSwitchStartedAt=Date.now(); }
+ const assetCambiato=(currentAssetKey!==asset);
+ currentAssetKey=asset;
+ binanceAssetAttivo=asset;
+ if(assetCambiato)footprintRebuildBucketsForCurrentAsset();
+ const ownNow=positions.filter(p=>(p.asset||asset)===asset);
+ active=ownNow.length?ownNow[ownNow.length-1]:null;
+ if(active)refreshTradeLevelUI(); else if(wasOnDifferentAsset)clearDraftTradeLevelFields();
+ try{ const m=await binanceCaricaSimboli(); if(m)binanceRegistraMeta(asset,m.get(simbolo)); }catch(e){}
+ const tf=currentTF||1;
+ const intervallo=BINANCE_INTERVALLI[tf]||'1m';
+ const prev=csvLibrary[0];
+ const stessaSerie=!!(prev&&prev.id==='binance_live_'+asset+'_'+intervallo&&prev.rows&&prev.rows.length);
+ if(!opts.resync)$('status').textContent='Scaricamento storico Binance ('+simbolo+', '+intervallo+')…';
+ let nuove;
+ try{
+  // Prima apertura: 6000 candele (4 giorni in 1m, 2 mesi in 15m). Ai cambi candela bastano le
+  // ultime 1500, fuse con quelle gia' a grafico.
+  nuove=await binanceKlines(simbolo,intervallo,(stessaSerie&&opts.resync)?1500:6000);
+ }catch(e){
+  $('status').textContent='⚠️ Storico Binance non scaricato ('+simbolo+'): '+(e&&e.message||e)+'. Se la rete blocca Binance, il grafico cripto non puo\' funzionare.';
+  finishAssetSwitchDrawings(asset);
+  return;
+ }
+ if(binanceAssetAttivo!==asset||currentAssetKey!==asset)return; // nel frattempo l'utente ha cambiato asset
+ if(!nuove.length){ $('status').textContent='⚠️ Binance non ha restituito candele per '+simbolo+'.'; finishAssetSwitchDrawings(asset); return; }
+ // Se il TF non ha un intervallo Binance (es. 2m o 10m) si scarica 1m e lo aggrega il grafico.
+ let unite=nuove;
+ if(stessaSerie){
+  const perT=new Map();
+  prev.rows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))perT.set(t,r); });
+  nuove.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))perT.set(t,r); });
+  unite=[...perT.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
+  if(unite.length>200000)unite=unite.slice(unite.length-200000);
+ }
+ csvLibrary=[{id:'binance_live_'+asset+'_'+intervallo,name:'Binance Futures ('+simbolo+')',addedAt:Date.now(),rows:unite}];
+ binanceUltimoPrezzo=null;
+ rebuildBaseRowsFromLibrary();
+ renderCsvLibraryList();
+ updateFileBtnLabel();
+ $('fileName').textContent=baseRows.length.toLocaleString('it-IT')+' candele • '+simbolo+' (Binance)';
+ scanHistoricalSlTpTouches();
+ if(shouldLoadAssetDrawings){
+  drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[asset])||[]);
+  selectedDrawing=null; pendingDrawing=null; placingStep=0; setDrawTool('cursor');
+  historyUndo=[]; historyRedo=[];
+  assetSwitchInProgress=false;
+ }
+ const resetVista=(wasOnDifferentAsset||!rows.length||opts.forceResetView);
+ let conservata=null;
+ if(!resetVista){
+  conservata={offsetFromEnd:rows.length?((rows.length-1)-viewEnd):0,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
+  if(Number.isFinite(opts.tfChangeSpanMinutes)&&Number.isFinite(opts.tfChangeOldTF)&&opts.tfChangeOldTF>0)
+   conservata.offsetFromEnd=Math.max(0,Math.round(conservata.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
+  if(Number.isFinite(opts.tfChangeSpanMinutes))conservata.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
+ }
+ masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ rebuildRows();
+ scanHistoricalSlTpTouches();
+ if(conservata){
+  viewEnd=Math.max(0,(rows.length-1)-conservata.offsetFromEnd);
+  followLatest=conservata.followLatest; priceZoomFactor=conservata.priceZoomFactor;
+  viewPriceLo=conservata.viewPriceLo; viewPriceHi=conservata.viewPriceHi;
+  autoFitWidth=conservata.autoFitWidth; visibleCount=conservata.visibleCount;
+ }else{
+  viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ }
+ update(); draw();
+ renderActiveIndicatorsUI();
+ saveLightStateNow();
+ liveHistoryReadyAt=Date.now();
+ binanceGraficoAggiornatoAt=Date.now();
+ binanceUltimoBucket=Math.floor(binanceAdesso()/((currentTF||1)*60000))*((currentTF||1)*60000);
+ if(!opts.resync)$('status').textContent='🟢 Storico Binance caricato: '+baseRows.length.toLocaleString('it-IT')+' candele per '+simbolo+'.';
+ binanceConnettiStream(asset,simbolo);
+ binanceAvviaTimer();
+ // Le altre fonti restano per le posizioni aperte su altri asset (prezzi in background).
+ try{ if(liveModeActive)refreshLiveStreamSubscriptions(); }catch(e){}
+}
+
+// --- Impostazioni: interruttore della sessione.
+function binanceAggiornaUi(){
+ const v=binanceAttivo();
+ document.querySelectorAll('.fblBinanceToggle').forEach(c=>{ c.checked=v; });
+ const n=$('binanceStatoNota');
+ if(n)n.innerHTML=v
+  ?'<b style="color:#7fdc9a">Attiva.</b> Nel selettore ASSET (in Live) la ricerca mostra anche i contratti <b>Binance Futures</b>: sceglierne uno porta il grafico su Binance, in tempo reale.'
+  :'Spenta: le cripto si vedono da Capital.com o dal broker MT5, come prima.';
+}
+document.addEventListener('change',ev=>{
+ const c=ev.target&&ev.target.closest&&ev.target.closest('.fblBinanceToggle');
+ if(!c)return;
+ try{ localStorage.setItem(BINANCE_ATTIVO_KEY,c.checked?'1':'0'); }catch(e){}
+ binanceAggiornaUi();
+ if(c.checked)binanceCaricaSimboli();
+ try{ renderAssetPicker(); }catch(e){}
+},true);
+try{ binanceAggiornaUi(); }catch(e){}
+
 // ===================== GUARDIANO DELLE CANDELE MT5 (non si ferma mai) =====================
 // RICHIESTO: "le candele non devono MAI fermarsi, anche dopo giorni, su PC, tablet e telefono: una
 // forzatura che risolva definitivamente". Tutto il resto (canale tick, timer, pausa di fine candela,
