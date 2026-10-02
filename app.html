@@ -18266,7 +18266,9 @@ async function closeMt5PositionReal(pos,reason){
 // specificato" - percio' diventa NaN e NON viene rimpiazzato dal TP automatico qui sotto.
 // Restituisce true/false: chi apre N posizioni in fila deve potersi fermare alla prima rifiutata.
 async function placeRealMt5Order(side,forz){
- const symbol=currentAssetKey||$('market')?.value||'';
+ // forz.sym: ordine su un asset che non e' a grafico (apertura automatica dei segnali), con il
+ // prezzo indicativo in forz.prezzo. Senza, tutto come sempre: l'asset a grafico.
+ const symbol=(forz&&forz.sym)||currentAssetKey||$('market')?.value||'';
  if(!symbol){ $('status').textContent='Seleziona prima un ASSET.'; return false; }
  const lots=(forz&&Number.isFinite(Number(forz.lots)))?Number(forz.lots):getLotSize();
  if(!(lots>0)){ $('status').textContent='Lottaggio non valido.'; return false; }
@@ -18275,7 +18277,7 @@ async function placeRealMt5Order(side,forz){
  // Stesso controllo di sensatezza usato in simulazione (validateTradeLevel): mai inviare a
  // MT5 uno SL/TP dal lato sbagliato o <=0. Qui però non blocchiamo l'apertura, la scartiamo
  // solo (con avviso) — una posizione reale può benissimo partire senza SL/TP.
- const entryApprox=currentPrice();
+ const entryApprox=(forz&&forz.sym&&Number.isFinite(Number(forz.prezzo)))?Number(forz.prezzo):currentPrice();
  let ignoredNote='';
  if(Number.isFinite(entryApprox)){
    if(Number.isFinite(sl)){ const e=validateTradeLevel(side,entryApprox,sl,NaN); if(e){ sl=NaN; ignoredNote+=' (SL ignorato: '+e+')'; } }
@@ -18345,6 +18347,14 @@ async function placeRealMt5Order(side,forz){
    // conto vero (closeMt5PositionReal) e MAI lasciar decidere la chiusura per SL/TP alle
    // valutazioni locali (evaluate/evaluateLiveBackgroundAsset/checkMarginCall/sessioni in
    // background la escludono tutte): è MT5 stesso a decidere quando una posizione reale chiude.
+   // Asset non a grafico: niente posizione locale ancorata alle candele di un ALTRO asset. La
+   // riprende la lettura del conto (fetchMt5Positions), con l'orario vero di apertura, e la
+   // sala/gruppo dal ticket (mt5RicordaSegnale) - come una posizione aperta dal terminale.
+   if(symbol!==currentAssetKey){
+     if(forz&&forz.meta)mt5RicordaSegnale(ticket,forz.meta);
+     fetchMt5Positions();
+     return (forz&&forz.ritornaTicket&&ticket!=null)?ticket:true;
+   }
    const start=rows[idx]?idx:0;
    const startTime=(rows[idx]&&Number.isFinite(parseDateTime(rows[idx].date)))?parseDateTime(rows[idx].date):Date.now();
    // Fissa subito l'ancoraggio per questo ticket (vedi mt5TicketOpenAnchor/resolveMt5OpenAnchor
@@ -18390,6 +18400,7 @@ async function placeRealMt5Order(side,forz){
    $('status').textContent='⚠️ Ordine reale non eseguito: '+result.message;
  }
  fetchMt5Positions();
+ if(result&&result.ok&&forz&&forz.ritornaTicket&&result.data&&result.data.ticket!=null)return result.data.ticket;
  return !!(result&&result.ok);
 }
 function openMarketTrade(side,forz){
@@ -23593,9 +23604,24 @@ function tgAutoPerditaOggi(){
  return {euro:somma,pct:(somma/saldo)*100};
 }
 // Posizioni aperte adesso, in tutto e per una singola sala.
-function tgAutoAperte(sala){
+// SU QUALE CONTO va un segnale (RICHIESTO: "se il segnale e' cripto lo apre su Binance, se e' forex
+// lo apre su MT5", qualunque sia la fonte - sala Telegram o utente Syntra). Lo decide lo STRUMENTO:
+//  - cripto con la sessione Binance attiva -> 'binance';
+//  - tutto il resto -> 'mt5' se il conto e' collegato, altrimenti 'sim' (posizioni simulate).
+// Un segnale cripto non finisce MAI su MT5 di ripiego quando la sessione Binance e' attiva: sarebbe
+// un'altra operazione (CFD del broker, spread e orari diversi) rispetto a quella scelta.
+function tgContoPerSegnale(seg){
+ let cripto=false;
+ try{ cripto=!!binanceSymbolForAsset(seg&&seg.strumento); }catch(e){}
+ if(cripto&&binanceAttivo())return 'binance';
+ return mt5Connected?'mt5':'sim';
+}
+function tgContoDiPosizione(p){ return (p&&binanceAssetKey(p.asset))?'binance':(mt5Connected?'mt5':'sim'); }
+function tgAutoAperte(sala,conto){
  // Anche gli ordini pendenti in attesa contano: ognuno e' una posizione che puo' nascere da sola.
- const vive=(positions||[]).filter(p=>p&&p.tgSala).concat((pendingOrders||[]).filter(p=>p&&p.tgSala));
+ // Con `conto` si contano solo quelle di quel conto: i tetti valgono conto per conto.
+ const vive=(positions||[]).filter(p=>p&&p.tgSala).concat((pendingOrders||[]).filter(p=>p&&p.tgSala))
+  .filter(p=>!conto||tgContoDiPosizione(p)===conto);
  if(sala==null)return vive.length;
  return vive.filter(p=>String(p.tgSala)===String(sala)).length;
 }
@@ -23685,13 +23711,14 @@ function tgAutoDecidi(voce){
  // Senza stop della sala lo calcola l'app dal rischio scelto (vedi tgStopCalcolato): mai una
  // posizione senza protezione, ma nemmeno un segnale buttato solo perche' la sala non lo scrive.
  // I tetti: prima quello della sala, poi quello complessivo, che vince sempre.
- const apertePerSala=tgAutoAperte(sala), aperteTotali=tgAutoAperte(null);
+ const conto=tgContoPerSegnale(seg);
+ const apertePerSala=tgAutoAperte(sala,conto), aperteTotali=tgAutoAperte(null,conto);
  const maxSala=Math.max(1,Math.round(Number(cfg.maxPosizioni)||1));
  const maxTot=Math.max(1,Math.round(Number(tgAuto.maxGlobali)||1));
  if(apertePerSala>=maxSala)
    return no('la sala ha già '+apertePerSala+' posizioni aperte (tetto '+maxSala+')');
  if(aperteTotali>=maxTot)
-   return no('ci sono già '+aperteTotali+' posizioni aperte in tutto (tetto '+maxTot+')');
+   return no('ci sono già '+aperteTotali+' posizioni aperte in tutto sul conto '+(conto==='binance'?'Binance':conto==='mt5'?'MT5':'simulato')+' (tetto '+maxTot+')');
  // Quante se ne possono ancora aprire: il piano verra' tagliato a questo numero.
  const spazio=Math.min(maxSala-apertePerSala,maxTot-aperteTotali);
  return {apri:true,sala,rischio:Number(cfg.rischio)||1,spazio,
@@ -23991,15 +24018,40 @@ $('tgAutoAzzeraBtn')?.addEventListener('click',()=>{
 // secondi (GOLD ed EURUSD) il secondo cambiava il grafico mentre il primo aspettava il prezzo, e il
 // primo calcolava lotti e ordini sul prezzo dell'ALTRO asset, aprendoli li'. E i tetti venivano
 // controllati da entrambi prima che uno dei due avesse aperto, quindi si potevano sforare.
-let tgAutoCodaPromessa=Promise.resolve();
+// UNA FILA PER CONTO (RICHIESTO: segnali cripto e forex che arrivano insieme partono insieme, ognuno
+// sul suo conto). Dentro lo stesso conto si resta in fila, per i motivi scritti sopra: i tetti
+// vanno controllati dopo che il segnale precedente ha aperto.
+const tgAutoCode={};
 function tgAutoInCoda(voce){
- tgAutoCodaPromessa=tgAutoCodaPromessa
-  .then(()=>tgAutoValuta(voce))
+ let conto='sim';
+ try{ conto=tgContoPerSegnale(voce&&voce.segnale); }catch(e){}
+ const prima=tgAutoCode[conto]||Promise.resolve();
+ const dopo=prima
+  .then(()=>tgAutoValuta(voce,conto))
   .catch(e=>{ console.log('[Segnali] valutazione automatica fallita:',e);
     try{ voce.autoMotivo='errore durante l\'apertura automatica: '+((e&&e.message)||e); tgRenderPannello(); }catch(_){} });
- return tgAutoCodaPromessa;
+ tgAutoCode[conto]=dopo;
+ return dopo;
 }
-async function tgAutoValuta(voce){
+// Prezzo di adesso per un asset che NON e' necessariamente a grafico: dal conto MT5 (ultima barra
+// M1 del servizio dati). null se non si riesce: allora si torna al vecchio modo (grafico).
+async function tgPrezzoSenzaGrafico(sym){
+ try{
+  if(sym===currentAssetKey){ const p=currentPrice(); if(Number.isFinite(p))return p; }
+  if(!mt5Connected)return null;
+  const res=await resolveMt5SymbolForAsset(sym);
+  if(!res)return null;
+  const r=await fetchLatestMt5PriceRest(res);
+  return (r&&Number.isFinite(r.price))?r.price:null;
+ }catch(e){ return null; }
+}
+// Decimali, pip e dimensione del contratto devono essere quelli VERI dell'asset: se l'app non li
+// conosce ancora (asset mai aperto), il calcolo del lotto userebbe quelli di EUR/USD. In quel caso
+// si passa dal grafico, che li scarica.
+function tgMetaNota(sym){
+ try{ return !!(INSTRUMENTS[sym]||(assetAutoMeta[sym]&&Number.isFinite(assetAutoMeta[sym].decimals))); }catch(e){ return false; }
+}
+async function tgAutoValuta(voce,conto){
  let d;
  try{ d=tgAutoDecidi(voce); }catch(e){ return; }
  if(d.spegni){ tgAutoSpegniPerOggi(d.motivo); }
@@ -24018,11 +24070,32 @@ async function tgAutoValuta(voce){
   return;
  }
  const seg=voce.segnale;
- const sym=await tgPreparaAssetAutomatico(voce);
- if(!sym){ voce.autoMotivo='asset «'+seg.strumento+'» non trovato'; try{ tgRenderPannello(); }catch(e){} return; }
+ conto=conto||tgContoPerSegnale(seg);
+ // Conto Binance: la decisione e' presa (tetti, rischio, ritardo), ma gli ordini su Binance arrivano
+ // con la fase 2. Fino ad allora il segnale resta nel pannello, con scritto perche'.
+ if(conto==='binance'){
+  voce.autoMotivo='segnale cripto: va sul conto Binance, i cui ordini automatici non sono ancora attivi';
+  try{ tgRenderPannello(); }catch(e){}
+  return;
+ }
+ // CONTO MT5: il segnale si apre SENZA portare il grafico sul suo asset. Prezzo dal conto, ordini
+ // sull'asset del segnale: chi sta guardando un altro grafico non se lo vede cambiare sotto gli
+ // occhi, e un segnale non aspetta che il grafico abbia finito di caricare quello precedente.
+ let sym=null, prezzo=null, senzaGrafico=false;
+ if(conto==='mt5'){
+  sym=await tgAssetPerStrumento(seg.strumento);
+  if(sym&&tgMetaNota(sym)){
+   prezzo=await tgPrezzoSenzaGrafico(sym);
+   senzaGrafico=Number.isFinite(prezzo);
+  }
+ }
+ if(!senzaGrafico){
+  sym=await tgPreparaAssetAutomatico(voce);
+  if(!sym){ voce.autoMotivo='asset «'+seg.strumento+'» non trovato'; try{ tgRenderPannello(); }catch(e){} return; }
+ }
  // Lotto = rischio della sala diviso per le posizioni che si aprono DAVVERO (tagliate sullo spazio
  // rimasto sotto i tetti): la somma delle perdite, se scattano tutti gli stop, e' il rischio scelto.
- const piano=tgPiano(seg,sym,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true});
+ const piano=tgPiano(seg,sym,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo:senzaGrafico?prezzo:undefined});
  if(piano.problemi&&piano.problemi.length){
   voce.autoMotivo=piano.problemi.join('; ');
   try{ tgRenderPannello(); }catch(e){}
@@ -24033,7 +24106,7 @@ async function tgAutoValuta(voce){
  const regole=tgAutoRegolePerSegnale(d.cfg||{},piano.tp.length);
  const avvicinamento=(d.avvicinamento>0)?{pct:d.avvicinamento}:null;
  voce.autoMotivo=null;
- await tgEseguiSegnale(voce,{sym,piano,regole,avvicinamento,automatico:true});
+ await tgEseguiSegnale(voce,{sym,piano,regole,avvicinamento,automatico:true,senzaGrafico});
 }
 // Identificativo di questo dispositivo (resta lo stesso fra un avvio e l'altro).
 function fblIdDispositivo(){
@@ -24670,7 +24743,7 @@ function tgPiano(seg,sym,pctForzata,opz){
  const maxN=(Number(opz.maxN)>=1)?Math.floor(Number(opz.maxN)):Infinity;
  const parti=(Number(opz.parti)>1)?Math.min(10,Math.floor(Number(opz.parti))):1;
  const side=String(seg.direzione||'').toUpperCase();
- let entry=currentPrice();
+ let entry=Number.isFinite(opz.prezzo)?Number(opz.prezzo):currentPrice();
  let sl=Number(seg.stop_loss);
  if(side!=='BUY'&&side!=='SELL')return {problemi:['il segnale non dice se comprare o vendere']};
  if(!Number.isFinite(entry))return {problemi:['il grafico non ha ancora un prezzo per '+sym]};
@@ -24893,11 +24966,14 @@ async function tgEseguiSegnale(voce,opzioni){
  const gruppo='sg'+Date.now().toString(36)+Math.floor(Math.random()*1000).toString(36);
  let aperte=0;
  const ticketPendenti=[];
+ // Apertura senza grafico (conto MT5): gli ordini portano il LORO asset, il grafico non conta.
+ const senzaGrafico=!!(opzioni&&opzioni.senzaGrafico&&reale);
+ const ticketAperti=[];
  for(let i=0;i<p.n;i++){
   const tp=(i<p.tp.length)?p.tp[i]:null;
   // L'asset a grafico e' quello su cui partono gli ordini: se nel frattempo e' cambiato (un
   // altro segnale, un clic dell'utente) ci si ferma invece di aprire sulla cosa sbagliata.
-  if(currentAssetKey!==sym){
+  if(!senzaGrafico&&currentAssetKey!==sym){
    console.log('[Segnali] asset cambiato durante l\'apertura ('+currentAssetKey+' invece di '+sym+'): mi fermo');
    voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
    break;
@@ -24920,10 +24996,18 @@ async function tgEseguiSegnale(voce,opzioni){
   const prima=positions.length;
   let esito;
   try{
-   esito=await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta});
+   esito=senzaGrafico
+    ?await placeRealMt5Order(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta,sym,prezzo:p.entry,ritornaTicket:true})
+    :await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta});
   }
   catch(e){ console.log('[Segnali] apertura fallita:',e); break; }
   if(esito===false)break;
+  if(senzaGrafico){
+   if(!esito)break;
+   aperte++;
+   if(esito!==true)ticketAperti.push(String(esito));
+   continue;
+  }
   if(positions.length>prima)aperte++; else break;
  }
  if(aperte&&(regole.length||avvicinamento)){
@@ -24934,7 +25018,7 @@ async function tgEseguiSegnale(voce,opzioni){
   const mie=positions.filter(x=>x&&x.tgGruppo===gruppo);
   tgStrategie[gruppo]={sala:String(voce.chat||''),sym,side:p.side,entry:p.entry,
     tps:p.tp.slice(0,aperte),regole:regole.filter(reg=>reg.quando<=aperte),fatte:[],creato:Date.now(),
-    tickets:mie.map(x=>x.mt5Ticket).filter(t=>t!=null).map(String).concat(ticketPendenti),
+    tickets:mie.map(x=>x.mt5Ticket).filter(t=>t!=null).map(String).concat(ticketPendenti,ticketAperti),
     ids:mie.map(x=>x.id).filter(v=>v!=null),
     // Pareggio anticipato: "fatto" resta false finche' non scatta, e una volta scattato non si
     // ripete (lo stop non deve tornare indietro a ogni candela).
@@ -24951,6 +25035,9 @@ async function tgEseguiSegnale(voce,opzioni){
     tp:p.tp.slice(0,aperte),tpCalcolato:!!p.tpCalcolato,reale:!!mt5Connected,
     pendente:!!p.pendente,kind:p.kind||null,entry:p.entry};
  }
+ // Fuori grafico le posizioni arrivano dal conto (non sono state aggiunte qui): si aspetta il
+ // giro di lettura, cosi' il prossimo segnale della fila conta i tetti giusti.
+ if(senzaGrafico&&aperte){ try{ await fetchMt5Positions(); }catch(e){} }
  tgAggiornaPulsante(); tgRenderPannello();
  $('status').textContent=aperte
   ? ('📡 Segnale di '+String(voce.chat||'')+': '+(p.pendente?('piazzati '+aperte+(aperte===1?' ordine ':' ordini ')+p.kind+' a '+tgFmt(p.entry)+' '):('aperte '+aperte+(aperte===1?' posizione ':' posizioni ')))+p.side+' su '+sym+' — SL '+tgFmt(p.sl)+(p.tp.length?(', TP '+p.tp.slice(0,aperte).map(tgFmt).join(' / ')):''))
