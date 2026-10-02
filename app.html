@@ -2271,6 +2271,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            </div>
          </div>
          <div data-settings-panel="footprint" style="display:none">
+           <div class="hint fblProfiloIndNota" style="margin:0 0 8px;color:#ffd866"></div>
            <p class="hint" style="margin:0 0 12px">Tutte le impostazioni del footprint (order flow a tick) vivono qui, in una sezione dedicata invece che annegate dentro "Style" — spostate di peso su richiesta esplicita, nessuna impostazione persa: gli stessi identici controlli, con gli stessi id, solo in un posto diverso.</p>
            <!-- FOOTPRINT/ORDER FLOW (tick-rule su stream Live Capital.com/MT5, PIÙ backfill di tick
                 storici reali via mt5_feed_server.py per MT5 — vedi footprintRegisterTick()/
@@ -2440,6 +2441,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <p class="hint" style="margin-top:2px">Per ogni stoppino (sopra o sotto il corpo della candela) con volume reale ≥ "Soglia volume" rispetto alla media delle righe di quella candela: se un lato (buy/sell) domina per almeno "Dominanza direzionale %" → <b>Rejection</b> (spinta decisa e respinta, pallino colore Rejection); se il volume è alto ma i due lati sono più bilanciati → <b>Absorption</b> (il movimento viene assorbito senza proseguire, pallino colore Absorption). La dimensione del pallino è proporzionale al volume reale nello stoppino, tra "Pallino min" e "Pallino max".</p>
          </div>
          <div data-settings-panel="heatmap" style="display:none">
+           <div class="hint fblProfiloIndNota" style="margin:0 0 8px;color:#ffd866"></div>
            <p class="hint" style="margin:0 0 12px">Heatmap di liquidità order book — sezione a sé (prima annegata dentro "Footprint" su richiesta esplicita, ora spostata qui: stessi identici controlli, stessi id, nessuna impostazione persa).</p>
            <!-- RICHIESTO ESPLICITAMENTE: heatmap di liquidità costruita sul book REALE letto da
                 MT5 (mt5.market_book_get, vedi /ws/orderbook/{symbol} in mt5_feed_server.py e
@@ -2582,7 +2584,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <button id="watchlistModalCloseBtn" class="fbModalClose" title="Chiudi">✕</button>
    </div>
    <div class="fbModalBody">
-     <p class="hint" style="margin:0 0 12px">Gli asset preferiti (stellina dorata) vengono seguiti in background — footprint, zone di buco dei contratti, absorption/rejection e heatmap — anche quando non sono a grafico ora, rispettando gli stessi orari di sessione MT5/Capital.com del grafico principale. Massimo 10 asset: oltre, verrà chiesto quale sostituire. Clicca un asset per aprirlo a grafico, "✕" per toglierlo dalla watchlist.</p>
+     <p class="hint" style="margin:0 0 12px">Gli asset preferiti (stellina dorata) vengono seguiti in background — footprint, zone di buco dei contratti, absorption/rejection e heatmap — anche quando non sono a grafico ora e anche in modalità Storico, finché l'app è aperta: MT5 per gli asset del broker, i trade veri per le cripto in tempo reale (Capital.com solo in Live). Rispettano gli stessi orari di sessione MT5/Capital.com del grafico principale. Massimo 10 asset: oltre, verrà chiesto quale sostituire. Clicca un asset per aprirlo a grafico, "✕" per toglierlo dalla watchlist.</p>
      <div id="watchlistListBody"></div>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
@@ -17722,6 +17724,9 @@ let assetPickerQuery='', assetPickerType='all';
 let assetPickerRemote=[], assetPickerSeq=0, assetPickerDebounce=null, assetPickerBusy=false;
 // Risultati Binance Futures (sessione Binance attiva): null = ricerca non riuscita (rete).
 let assetPickerBinance=[], assetPickerBinanceBusy=false, assetPickerBinanceErr=false;
+// Risultati del broker MT5 (RICHIESTO: la ricerca guarda PRIMA MT5, poi le cripto in tempo reale,
+// e Capital.com solo se l'asset non c'e' ne' sull'uno ne' sull'altro).
+let assetPickerMt5=[], assetPickerMt5Busy=false, assetPickerMt5Err=false;
 const ASSET_PICKER_TYPES=[
   ['all','Tutto'],['forex','Forex'],['crypto','Cripto'],
   ['commodity','Materie prime'],['index','Indici'],['share','Azioni'],['other','Altro'],
@@ -17851,15 +17856,30 @@ function renderAssetPicker(){
         : '<div class="fbPickerEmpty">Nessun asset salvato corrisponde a questa ricerca.</div>');
   // In watchlist non si mostrano i risultati di Capital.com: si guardano i preferiti, non si cerca.
   if(soloWatchlist){ box.innerHTML=html; return; }
-  // SESSIONE BINANCE: i contratti Futures, prima di Capital.com (sono quelli da cui si copia).
-  if(binanceAttivo()&&q.length>=2&&(assetPickerType==='all'||assetPickerType==='crypto')){
-    if(assetPickerBinanceBusy)html+='<div class="fbPickerGroup">Cripto in tempo reale</div><div class="fbPickerEmpty">Ricerca in corso…</div>';
+  // ORDINE DI RICERCA (RICHIESTO): 1) broker MT5 collegato; 2) se MT5 non lo ha, le cripto in
+  // tempo reale (se la sessione e' accesa); 3) Capital.com solo se non c'e' su nessuno dei due.
+  // Un gruppo piu' in basso compare solo quando quelli sopra hanno finito e non hanno trovato niente.
+  const tipoOk=t=>assetPickerType==='all'||t===assetPickerType;
+  let aspetta=false, trovato=false;
+  if(mt5Connected&&q.length>=2){
+    const mt5=assetPickerMt5.filter(s=>tipoOk(s.tipo));
+    if(assetPickerMt5Busy){ html+='<div class="fbPickerGroup">MT5 (il tuo broker)</div><div class="fbPickerEmpty">Ricerca in corso…</div>'; aspetta=true; }
+    else if(mt5.length){
+      html+='<div class="fbPickerGroup">MT5 (il tuo broker)</div>';
+      html+=mt5.map(s=>assetPickerRowHtml(s.nome,s.descrizione||s.nome,s.tipo,'MT5')).join('');
+      trovato=true;
+    }else if(assetPickerMt5Err)html+='<div class="fbPickerGroup">MT5 (il tuo broker)</div><div class="fbPickerEmpty">Servizio dati MT5 (porta 8001) non raggiungibile.</div>';
+  }
+  if(!trovato&&!aspetta&&binanceAttivo()&&q.length>=2&&(assetPickerType==='all'||assetPickerType==='crypto')){
+    if(assetPickerBinanceBusy){ html+='<div class="fbPickerGroup">Cripto in tempo reale</div><div class="fbPickerEmpty">Ricerca in corso…</div>'; aspetta=true; }
     else if(assetPickerBinanceErr)html+='<div class="fbPickerGroup">Cripto in tempo reale</div><div class="fbPickerEmpty">Dati cripto non raggiungibili da questa rete.</div>';
     else if(assetPickerBinance.length){
       html+='<div class="fbPickerGroup">Cripto in tempo reale</div>';
       html+=assetPickerBinance.map(i=>assetPickerRowHtml('BINANCE:'+i.symbol,binanceNomeAsset(i),'crypto','Cripto')).join('');
-    }else html+='<div class="fbPickerGroup">Cripto in tempo reale</div><div class="fbPickerEmpty">Nessun contratto per "'+escapeHtmlText(assetPickerQuery)+'".</div>';
+      trovato=true;
+    }
   }
+  if(trovato||aspetta){ box.innerHTML=html; return; }
   const remote=assetPickerRemote.filter(m=>assetPickerType==='all'||assetTypeFromCapital(m.instrumentType)===assetPickerType);
   if(assetPickerBusy){
     html+='<div class="fbPickerGroup">Capital.com</div><div class="fbPickerEmpty">Ricerca in corso…</div>';
@@ -17867,7 +17887,7 @@ function renderAssetPicker(){
     html+='<div class="fbPickerGroup">Risultati Capital.com</div>';
     html+=remote.map(m=>assetPickerRowHtml(m.epic,m.instrumentName||m.epic,assetTypeFromCapital(m.instrumentType),'Capital.com')).join('');
   }else if(q.length>=2&&liveModeActive&&capitalSessionTokens){
-    html+='<div class="fbPickerGroup">Capital.com</div><div class="fbPickerEmpty">Nessun risultato per "'+escapeHtmlText(assetPickerQuery)+'".</div>';
+    html+='<div class="fbPickerGroup">Capital.com</div><div class="fbPickerEmpty">Nessun risultato per "'+escapeHtmlText(assetPickerQuery)+'"'+(mt5Connected?' (né su MT5'+(binanceAttivo()?', né fra le cripto':'')+')':'')+'.</div>';
   }else if(q.length>=2&&!liveModeActive){
     html+='<div class="fbPickerGroup">Capital.com</div><div class="fbPickerEmpty">Attiva la Modalità Live per cercare nuovi strumenti su Capital.com.</div>';
   }
@@ -17888,6 +17908,16 @@ function scheduleAssetPickerRemoteSearch(){
     }).catch(()=>{ assetPickerBinance=[]; assetPickerBinanceErr=true; })
       .finally(()=>{ assetPickerBinanceBusy=false; try{ renderAssetPicker(); }catch(e){} });
   }else{ assetPickerBinance=[]; assetPickerBinanceBusy=false; assetPickerBinanceErr=false; }
+  // MT5: elenco dei simboli del broker dal servizio dati sul PC (porta 8001).
+  if(mt5Connected&&term.length>=2){
+    const seqM=assetPickerSeq+1;
+    assetPickerMt5Busy=true; assetPickerMt5Err=false;
+    fetch(fblConChiave(MT5_FEED_URL+'/symbols?q='+encodeURIComponent(term)+'&limit=30'))
+     .then(r=>r.ok?r.json():Promise.reject(new Error('HTTP '+r.status)))
+     .then(j=>{ if(seqM<assetPickerSeq)return; assetPickerMt5=(j&&Array.isArray(j.simboli))?j.simboli:[]; })
+     .catch(()=>{ assetPickerMt5=[]; assetPickerMt5Err=true; })
+     .finally(()=>{ assetPickerMt5Busy=false; try{ renderAssetPicker(); }catch(e){} });
+  }else{ assetPickerMt5=[]; assetPickerMt5Busy=false; assetPickerMt5Err=false; }
   if(term.length<2||!liveModeActive||!capitalSessionTokens){
     assetPickerRemote=[]; assetPickerBusy=false; renderAssetPicker(); return;
   }
@@ -17916,6 +17946,8 @@ function scheduleAssetPickerRemoteSearch(){
 function chooseAssetFromPicker(sym,name,type){
   if(!sym)return;
   rememberCustomAsset(sym,name,type);
+  // Simbolo scelto dal gruppo MT5: e' gia' il nome esatto del broker, niente ricerca di alias.
+  if(assetPickerMt5.some(s=>s.nome===sym)){ try{ mt5FeedSymbolForAsset[sym]=sym; }catch(e){} }
   if(sym!==currentAssetKey&&!binanceAssetKey(sym)){
     capitalEpicCache[sym]=capitalEpicCache[sym]||sym;
     epicToAsset[sym]=epicToAsset[sym]||sym;
@@ -30609,6 +30641,15 @@ function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  const w=(Number.isFinite(weight)&&weight>0)?weight:1;
  const log=footprintTickLogByAsset[assetKey]||(footprintTickLogByAsset[assetKey]=[]);
  const prev=log.length?log[log.length-1]:null;
+ // CRIPTO (trade veri con volume): sullo stesso prezzo nello stesso secondo i trade si sommano in
+ // una riga sola. Il footprint e' identico (stesso prezzo, stesso lato, stesso volume totale) ma il
+ // log dura molto di piu': su BTC arrivano decine di trade al secondo e il tetto per asset si
+ // riempirebbe in poche ore, perdendo la traccia degli asset in watchlist.
+ if(source==='binance'&&prev&&prev.src==='binance'&&prev.price===price&&Math.floor(prev.t/1000)===Math.floor(timestamp/1000)){
+   prev.weight+=w; footprintTicksDirty=true;
+   if(assetKey===currentAssetKey&&liveModeActive){ const step=footprintStepForAsset(assetKey); if(step>0)footprintApplyTickToBuckets(price,timestamp,prev.side,w,step); }
+   return;
+ }
  let side=prev?prev.side:1; // primissimo tick dell'asset: convenzione standard, parte da "buy"
  if(prev){
    if(price>prev.price)side=1;
@@ -30622,7 +30663,9 @@ function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  // Aggiorna anche i bucket già pronti SOLO se questo tick appartiene all'asset a grafico ora — per
  // gli asset "in background" il log basta e avanza (verrà ricostruito in blocco quando/se ci si
  // torna sopra, vedi footprintRebuildBucketsForCurrentAsset() richiamata al cambio asset).
- if(assetKey===currentAssetKey){
+ // Solo in Live: in Storico il grafico mostra il passato e i tick registrati in sottofondo non
+ // vanno mescolati alle sue candele (restano nel log, per quando si torna in Live).
+ if(assetKey===currentAssetKey&&liveModeActive){
    const step=footprintStepForAsset(assetKey);
    if(step>0)footprintApplyTickToBuckets(price,timestamp,side,w,step);
  }
@@ -32279,8 +32322,10 @@ function disconnectAllMt5BackgroundStreams(){
  Object.keys(mt5BackgroundWs).forEach(disconnectMt5BackgroundStream);
 }
 function connectMt5BackgroundStream(asset,symbol){
- if(!liveModeActive || !mt5Connected || !symbol)return;
- if(symbol===mt5ActiveSymbol)return; // già coperto dal feed principale: evita di contare due volte lo stesso tick
+ // RICHIESTO: "heatmap e footprint sempre attivi per tutti gli asset della watchlist, cosi' non
+ // perdo alcuna traccia" - quindi anche in Storico (dove il feed principale e' spento).
+ if(!mt5Connected || !symbol)return;
+ if(liveModeActive&&symbol===mt5ActiveSymbol)return; // già coperto dal feed principale: evita di contare due volte lo stesso tick
  const existing=mt5BackgroundWs[asset];
  if(existing && existing.__symbol===symbol && (existing.readyState===WebSocket.OPEN||existing.readyState===WebSocket.CONNECTING))return;
  disconnectMt5BackgroundStream(asset);
@@ -32291,7 +32336,7 @@ function connectMt5BackgroundStream(asset,symbol){
  mt5BackgroundWs[asset]=ws;
  ws.onmessage=(ev)=>{
    if(mt5BackgroundWs[asset]!==ws)return;
-   if(symbol===mt5ActiveSymbol){ disconnectMt5BackgroundStream(asset); return; } // il feed principale l'ha appena preso in carico: evita un doppio conteggio
+   if(liveModeActive&&symbol===mt5ActiveSymbol){ disconnectMt5BackgroundStream(asset); return; } // il feed principale l'ha appena preso in carico: evita un doppio conteggio
    let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
    if(!msg || msg.error || msg.heartbeat)return;
    if(!Number.isFinite(msg.bid))return;
@@ -32312,7 +32357,7 @@ function connectMt5BackgroundStream(asset,symbol){
  ws.onclose=()=>{
    if(mt5BackgroundWs[asset]!==ws)return;
    delete mt5BackgroundWs[asset];
-   if(liveModeActive && mt5Connected && favoriteAssets.includes(asset)){
+   if(mt5Connected && favoriteAssets.includes(asset)){
      mt5BackgroundWsReconnectTimers[asset]=setTimeout(()=>{ delete mt5BackgroundWsReconnectTimers[asset]; connectMt5BackgroundStream(asset,symbol); },3000);
    }
  };
@@ -32322,8 +32367,10 @@ function connectMt5BackgroundStream(asset,symbol){
 // dopo ogni add/removeFromWatchlist e ad ogni cambio asset/connessione MT5 (vedi i punti di
 // chiamata più sotto/sopra nel file).
 async function refreshWatchlistBackgroundTracking(){
- if(!liveModeActive){ disconnectAllMt5BackgroundStreams(); return; } // Storico: nessun tracciamento in background ha senso
- const wanted=new Set(favoriteAssets.filter(a=>a && a!==currentAssetKey));
+ // Anche in Storico (RICHIESTO): li' il feed principale e' spento, quindi si seguono TUTTI i
+ // preferiti, compreso quello a grafico. In Live quello a grafico lo segue gia' il feed principale.
+ try{ binanceSfondoAggiorna(); }catch(e){}
+ const wanted=new Set(favoriteAssets.filter(a=>a && !binanceAssetKey(a) && (!liveModeActive || a!==currentAssetKey)));
  Object.keys(mt5BackgroundWs).forEach(a=>{ if(!wanted.has(a))disconnectMt5BackgroundStream(a); });
  if(!mt5Connected){ disconnectAllMt5BackgroundStreams(); return; } // le connessioni di background MT5 hanno senso solo con MT5 collegato
  for(const a of wanted){
@@ -32653,6 +32700,105 @@ function binanceConnettiStream(asset,simbolo){
   if(liveModeActive&&binanceAssetAttivo===asset)binanceWsRiprovaT=setTimeout(()=>{ binanceWsRiprovaT=null; binanceConnettiStream(asset,simbolo); },2000);
  };
 }
+// ===================== PROFILI FOOTPRINT/HEATMAP: MT5 E CRIPTO =====================
+// RICHIESTO: le impostazioni di footprint e heatmap si ricordano SEPARATE per gli asset del broker
+// MT5 e per le cripto in tempo reale, come due sessioni diverse. Cambiando asset da una famiglia
+// all'altra si salvano i valori della famiglia lasciata e si rimettono quelli della nuova
+// (simulando la modifica a mano: ogni campo esegue i suoi soliti aggiornamenti e salvataggi).
+const FBL_PROFILI_IND_KEY='fbl_profili_indicatori';
+var fblProfiloIndAttuale=null, fblProfiloIndModo=null, fblProfiloIndIds=null, fblProfiloIndApplicando=false;
+function fblProfiloIndFamiglia(asset){ return binanceAssetKey(asset)?'cripto':'mt5'; }
+function fblProfiloIndCampi(){
+ if(fblProfiloIndIds)return fblProfiloIndIds;
+ const ids=[];
+ document.querySelectorAll('[data-settings-panel="footprint"] input[id],[data-settings-panel="footprint"] select[id],[data-settings-panel="heatmap"] input[id],[data-settings-panel="heatmap"] select[id]')
+  .forEach(el=>{ if(el.type!=='button'&&el.type!=='file'&&ids.indexOf(el.id)<0)ids.push(el.id); });
+ return fblProfiloIndIds=ids;
+}
+function fblProfiloIndLeggi(){ const o={}; fblProfiloIndCampi().forEach(id=>{ const el=$(id); if(el)o[id]=el.type==='checkbox'?!!el.checked:el.value; }); return o; }
+function fblProfiliIndCarica(){ try{ return JSON.parse(localStorage.getItem(FBL_PROFILI_IND_KEY)||'{}')||{}; }catch(e){ return {}; } }
+function fblProfiliIndSalva(tutti){ try{ localStorage.setItem(FBL_PROFILI_IND_KEY,JSON.stringify(tutti)); }catch(e){} }
+function fblProfiloIndApplica(valori){
+ fblProfiloIndApplicando=true;
+ try{
+  fblProfiloIndCampi().forEach(id=>{
+   const el=$(id); if(!el||!(id in valori))return;
+   if(el.type==='checkbox'){ if(el.checked===!!valori[id])return; el.checked=!!valori[id]; }
+   else{ if(String(el.value)===String(valori[id]))return; el.value=valori[id]; el.dispatchEvent(new Event('input',{bubbles:true})); }
+   el.dispatchEvent(new Event('change',{bubbles:true}));
+  });
+ }finally{ fblProfiloIndApplicando=false; }
+}
+function fblProfiloIndEtichetta(){
+ const testo=fblProfiloIndAttuale==='cripto'
+  ?'Impostazioni delle <b>cripto in tempo reale</b>: valgono per tutti gli asset cripto, separate da quelle degli asset MT5.'
+  :'Impostazioni degli <b>asset MT5 / broker</b>: valgono per tutti questi asset, separate da quelle delle cripto in tempo reale.';
+ document.querySelectorAll('.fblProfiloIndNota').forEach(n=>{ n.innerHTML=fblProfiloIndAttuale?testo:''; });
+}
+function fblProfiloIndControlla(){
+ let modo=null; try{ modo=currentMode(); }catch(e){}
+ // Cambio sessione (Storico/Live/Prop): la sessione rimette i suoi valori, poi si riapplica il profilo.
+ if(modo!==fblProfiloIndModo){ fblProfiloIndModo=modo; fblProfiloIndAttuale=null; }
+ const asset=currentAssetKey; if(!asset)return;
+ const fam=fblProfiloIndFamiglia(asset);
+ if(fam===fblProfiloIndAttuale)return;
+ const tutti=fblProfiliIndCarica();
+ if(fblProfiloIndAttuale)tutti[fblProfiloIndAttuale]=fblProfiloIndLeggi();
+ fblProfiloIndAttuale=fam;
+ if(tutti[fam])fblProfiloIndApplica(tutti[fam]); else tutti[fam]=fblProfiloIndLeggi();
+ fblProfiliIndSalva(tutti);
+ fblProfiloIndEtichetta();
+}
+['change','input'].forEach(tipo=>document.addEventListener(tipo,ev=>{
+ if(fblProfiloIndApplicando||!fblProfiloIndAttuale)return;
+ const el=ev.target; if(!el||!el.id||fblProfiloIndCampi().indexOf(el.id)<0)return;
+ setTimeout(()=>{ const tutti=fblProfiliIndCarica(); tutti[fblProfiloIndAttuale]=fblProfiloIndLeggi(); fblProfiliIndSalva(tutti); },0);
+},true));
+setInterval(()=>{ try{ fblProfiloIndControlla(); }catch(e){} },700);
+
+// ===================== WATCHLIST CRIPTO IN SOTTOFONDO =====================
+// RICHIESTO: footprint e heatmap seguiti per TUTTI gli asset della watchlist, anche le cripto in
+// tempo reale. Una sola connessione per tutte (stream combinato di Binance Futures), che alimenta
+// solo il log del footprint di ogni asset (trade veri con volume). In Live l'asset cripto a grafico
+// lo segue gia' binanceConnettiStream(); in Storico si seguono tutte.
+var binanceSfondoWs=null, binanceSfondoChiave='', binanceSfondoMappa={}, binanceSfondoRiprovaT=null;
+function binanceSfondoChiudi(){
+ if(binanceSfondoRiprovaT){ clearTimeout(binanceSfondoRiprovaT); binanceSfondoRiprovaT=null; }
+ if(binanceSfondoWs){ try{ binanceSfondoWs.onclose=null; binanceSfondoWs.onmessage=null; binanceSfondoWs.close(); }catch(e){} }
+ binanceSfondoWs=null; binanceSfondoChiave=''; binanceSfondoMappa={};
+}
+function binanceSfondoAggiorna(){
+ const mappa={};
+ if(binanceAttivo())favoriteAssets.forEach(a=>{
+  if(!a||!binanceAssetKey(a))return;
+  if(liveModeActive&&a===binanceAssetAttivo)return;
+  const s=binanceSymbolForAsset(a); if(s)mappa[String(s).toLowerCase()]=a;
+ });
+ const chiave=Object.keys(mappa).sort().join('/');
+ if(chiave&&chiave===binanceSfondoChiave&&binanceSfondoWs&&binanceSfondoWs.readyState<=1){ binanceSfondoMappa=mappa; return; }
+ binanceSfondoChiudi();
+ if(!chiave)return;
+ let ws;
+ try{ ws=new WebSocket(BINANCE_WS+'/stream?streams='+Object.keys(mappa).map(s=>s+'@aggTrade').join('/')); }catch(e){ return; }
+ binanceSfondoWs=ws; binanceSfondoChiave=chiave; binanceSfondoMappa=mappa;
+ ws.onmessage=ev=>{
+  if(ws!==binanceSfondoWs)return;
+  let j; try{ j=JSON.parse(ev.data); }catch(e){ return; }
+  const d=j&&j.data; if(!d||d.e!=='aggTrade')return;
+  const asset=binanceSfondoMappa[String(d.s||'').toLowerCase()]; if(!asset)return;
+  if(liveModeActive&&asset===binanceAssetAttivo)return;   // lo segue il feed principale
+  const p=Number(d.p), q=Number(d.q), T=Number(d.T);
+  if(!Number.isFinite(p)||!Number.isFinite(T))return;
+  try{ footprintRegisterTick(p,T,asset,q>0?q:1,'binance'); }catch(e){}
+ };
+ ws.onerror=()=>{};
+ ws.onclose=()=>{
+  if(ws!==binanceSfondoWs)return;
+  binanceSfondoWs=null; binanceSfondoChiave='';
+  binanceSfondoRiprovaT=setTimeout(()=>{ binanceSfondoRiprovaT=null; binanceSfondoAggiorna(); },3000);
+ };
+}
+setInterval(()=>{ try{ binanceSfondoAggiorna(); }catch(e){} },15000);
 async function binancePrezzoRest(simbolo){
  for(const base of BINANCE_REST){
   try{
