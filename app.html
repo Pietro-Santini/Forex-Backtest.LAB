@@ -1387,7 +1387,21 @@ setTimeout(function(){
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Cripto da <b>Binance Futures</b> (contratti perpetui USDⓈ-M): grafico in tempo reale e ricerca dei simboli direttamente da Binance.</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px"><input type="checkbox" class="fblBinanceToggle" style="width:17px;height:17px;accent-color:var(--fbAccent2)"> <b>Attiva la sessione Binance</b></label>
         <p class="hint" id="binanceStatoNota" style="margin:8px 0 10px"></p>
-        <p class="hint" style="margin:0">Collegamento al conto e ordini: <b>in arrivo</b>. Passeranno dal programma sul tuo PC, come per MT5: le chiavi API di Binance non verranno mai salvate nell'app né sul cloud.</p>
+        <div class="fbSettingsSectionTitle" style="margin-top:6px">Conto Binance Futures</div>
+        <div id="binanceContoBox" style="font-size:12.5px;line-height:1.55;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px;margin-bottom:8px">Controllo il conto…</div>
+        <div id="binancePosizioniBox" style="font-size:12px;line-height:1.5;color:#cdd6e0;margin-bottom:8px"></div>
+        <div style="display:flex;flex-direction:column;gap:6px;max-width:460px">
+          <select id="binanceAmbiente" class="toolSelect"><option value="demo">Conto DEMO di Binance (soldi finti)</option><option value="testnet">Testnet Futures</option><option value="reale">Conto REALE</option></select>
+          <input id="binanceApiKey" class="tgCfgIn" type="text" autocomplete="off" placeholder="API Key">
+          <input id="binanceApiSecret" class="tgCfgIn" type="password" autocomplete="new-password" placeholder="Secret Key">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" id="binanceCollegaBtn" class="toolBtn active">🔗 Collega</button>
+            <button type="button" id="binanceAggiornaBtn" class="miniBtn">🔄 Aggiorna</button>
+            <button type="button" id="binanceScollegaBtn" class="miniBtn">Scollega</button>
+          </div>
+        </div>
+        <p class="hint" style="margin:8px 0 0">Le chiavi si inseriscono <b>dal PC</b>: vanno al programma sul PC (cifrate con Windows) e non tornano mai nell'app né sul cloud. Su Binance crea la chiave con <b>solo "Futures"</b> abilitato, <b>mai "Prelievi"</b>, e limitala all'indirizzo IP del tuo PC. Conto Futures in modalità <b>Unidirezionale</b> (One-way).</p>
+        <p class="hint" style="margin:6px 0 0">Ogni segnale cripto apre <b>una</b> posizione con una chiusura parziale per take profit e lo stop su tutta la posizione. Se Binance rifiuta lo stop, la posizione viene chiusa subito. Un solo segnale per simbolo alla volta.</p>
       </div>
       <!-- RICHIESTO ESPLICITAMENTE: una sezione dove elencare le sale segnali Telegram da cui
            prendere gli ordini, aggiungendole scrivendo il canale pubblico o il link del gruppo
@@ -23393,13 +23407,27 @@ function tgStrategiaDaButtare(id,st){
 // vuoto perche' la sessione si sta ripristinando, e non vuol dire che non ci sia piu' niente.
 let tgStrategiaPronti=false;
 setTimeout(()=>{ tgStrategiaPronti=true; },20000);
+// Prezzo per la strategia di un segnale il cui asset NON e' a grafico (apertura automatica senza
+// cambio grafico, v57): quello che il conto MT5 riporta per le sue posizioni (price_current, letto
+// ogni 2 s). Prima la strategia guardava solo le candele a schermo: con il grafico su un altro
+// asset non avrebbe mai spostato lo stop.
+function tgStrategiaBarraFuoriGrafico(st){
+ try{
+  const tickets=(st.tickets||[]).map(String);
+  if(!tickets.length||!Array.isArray(mt5RealPositions))return null;
+  const rp=mt5RealPositions.find(x=>tickets.indexOf(String(x.ticket))>=0&&Number.isFinite(Number(x.price_current)));
+  if(!rp)return null;
+  const p=Number(rp.price_current);
+  return {high:p,low:p,close:p};
+ }catch(e){ return null; }
+}
 function tgStrategiaValuta(){
- const r=rows[idx];
- if(!r)return;
+ const rGrafico=rows[idx];
  let cambiato=false;
  Object.keys(tgStrategie).forEach(id=>{
   const st=tgStrategie[id];
   if(!st||!Array.isArray(st.tps))return;
+  if(st.conto==='binance')return;   // le strategie Binance le segue binanceStrategieValuta()
   if(tgStrategiaRiaggancia(id,st))cambiato=true;
   const aperte=positions.filter(p=>p&&p.tgGruppo===id);
   if(!aperte.length){
@@ -23408,7 +23436,9 @@ function tgStrategiaValuta(){
    }
    return;   // niente posizioni AL MOMENTO: si riprova al giro dopo, senza buttare niente
   }
-  if(st.sym!==currentAssetKey)return;                                  // altra scala di prezzo
+  // Asset a grafico: la candela (massimi e minimi veri). Altrimenti il prezzo dal conto MT5.
+  const r=(st.sym===currentAssetKey)?rGrafico:tgStrategiaBarraFuoriGrafico(st);
+  if(!r)return;
   // PAREGGIO ANTICIPATO: non aspetta che un target arrivi, scatta a meta' strada. E' la regola
   // che evita di vedere un'operazione arrivare quasi al primo target e poi tornare fino allo stop.
   if(st.avvicinamento&&!st.avvicinamento.fatto&&st.tps.length){
@@ -23618,6 +23648,12 @@ function tgContoPerSegnale(seg){
 }
 function tgContoDiPosizione(p){ return (p&&binanceAssetKey(p.asset))?'binance':(mt5Connected?'mt5':'sim'); }
 function tgAutoAperte(sala,conto){
+ // Binance: le posizioni non stanno in positions[], si contano dalle strategie (quote ancora aperte).
+ if(conto==='binance'){
+  let n=0;
+  Object.values(tgStrategie||{}).forEach(st=>{ if(st&&st.conto==='binance'&&(sala==null||String(st.sala)===String(sala)))n+=binanceQuoteAperte(st); });
+  return n;
+ }
  // Anche gli ordini pendenti in attesa contano: ognuno e' una posizione che puo' nascere da sola.
  // Con `conto` si contano solo quelle di quel conto: i tetti valgono conto per conto.
  const vive=(positions||[]).filter(p=>p&&p.tgSala).concat((pendingOrders||[]).filter(p=>p&&p.tgSala))
@@ -24074,8 +24110,34 @@ async function tgAutoValuta(voce,conto){
  // Conto Binance: la decisione e' presa (tetti, rischio, ritardo), ma gli ordini su Binance arrivano
  // con la fase 2. Fino ad allora il segnale resta nel pannello, con scritto perche'.
  if(conto==='binance'){
-  voce.autoMotivo='segnale cripto: va sul conto Binance, i cui ordini automatici non sono ancora attivi';
-  try{ tgRenderPannello(); }catch(e){}
+  const no=m=>{ voce.autoMotivo=m; try{ tgRenderPannello(); }catch(e){} };
+  if(!binanceContoPronto())await binanceAggiornaConto();
+  if(!binanceContoPronto())return no(binanceConto&&binanceConto.hedge
+    ?'conto Binance in modalità HEDGE: impostalo su Unidirezionale'
+    :'segnale cripto per il conto Binance, che non è collegato (Impostazioni → Binance)'+(binanceConto&&binanceConto.errore?(': '+binanceConto.errore):''));
+  const simbolo=binanceSymbolForAsset(seg.strumento);
+  const mappa=await binanceCaricaSimboli();
+  const info=mappa&&mappa.get(simbolo);
+  if(!info)return no('«'+seg.strumento+'» non è un contratto di Binance Futures ('+simbolo+')');
+  const symB='BINANCE:'+simbolo;
+  binanceRegistraMeta(symB,info);
+  // Un solo segnale per simbolo (scelta: due segnali sommati in un'unica posizione mescolerebbero
+  // stop e target diversi).
+  if(Object.values(tgStrategie||{}).some(st=>st&&st.conto==='binance'&&st.simbolo===simbolo))
+   return no('c\'è già un segnale aperto su '+simbolo+' (Binance): un solo segnale per simbolo');
+  const pr=await binancePrezzoRest(simbolo);
+  if(!pr)return no('prezzo di '+simbolo+' non disponibile da Binance');
+  const minimo=Math.max(Number(info.minQty)||0,Number(info.step)||0.001);
+  const piano=tgPiano(seg,symB,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo:pr.price,
+   saldo:Number(binanceConto.saldo)||0,valore:(a,b,l)=>Math.abs(a-b)*l,passo:Number(info.step)||0.001,minimo,valuta:'USDT'});
+  if(piano.problemi&&piano.problemi.length)return no(piano.problemi.join('; '));
+  if(piano.pendente)return no('ordine '+piano.kind+' a '+tgFmt(piano.entry)+': su Binance per ora si aprono solo segnali a mercato');
+  if(info.minNotional&&piano.lotti*piano.n*piano.entry<info.minNotional)
+   return no('valore della posizione '+(piano.lotti*piano.n*piano.entry).toFixed(2)+' USDT sotto il minimo di Binance ('+info.minNotional+' USDT)');
+  const regole=tgAutoRegolePerSegnale(d.cfg||{},piano.tp.length);
+  const avvicinamento=(d.avvicinamento>0)?{pct:d.avvicinamento}:null;
+  voce.autoMotivo=null;
+  await binanceEseguiSegnale(voce,{sym:symB,simbolo,piano,regole,avvicinamento});
   return;
  }
  // CONTO MT5: il segnale si apre SENZA portare il grafico sul suo asset. Prezzo dal conto, ordini
@@ -24710,9 +24772,11 @@ function tgRischioSenzaSl(){
 // che a parita' di perdita massima mette lo stop il piu' lontano possibile. Il campo per cambiarlo
 // e' stato tolto (RICHIESTO): conta solo il rischio in % del conto.
 function tgLottoSenzaSl(){ return 0.01; }
-function tgStopCalcolato(side,entry,n,importoTot,sym){
- const lotti=tgLottoSenzaSl();
- const perUnita=euroAtLevel(entry,entry+1,lotti,sym);            // € per 1,0 di prezzo, per posizione
+function tgStopCalcolato(side,entry,n,importoTot,sym,opz){
+ opz=opz||{};
+ // Conto Binance: lotto minimo del contratto (es. 0,001 BTC) e valore in USDT (opz.valore).
+ const lotti=Number(opz.minimo)>0?Number(opz.minimo):tgLottoSenzaSl();
+ const perUnita=(typeof opz.valore==='function')?opz.valore(entry,entry+1,lotti):euroAtLevel(entry,entry+1,lotti,sym); // per 1,0 di prezzo, per posizione
  if(!(perUnita>0)||!(importoTot>0))return {problema:'non riesco a calcolare il valore di un punto su '+sym};
  const dist=importoTot/(n*perUnita);
  const passo=pipSizeForAsset(sym)/10;
@@ -24740,6 +24804,13 @@ function tgStopCalcolato(side,entry,n,importoTot,sym){
 //    si aprono MENO posizioni (i primi target) invece di sforare; se non basta nemmeno una, no.
 function tgPiano(seg,sym,pctForzata,opz){
  opz=opz||{};
+ // Conto Binance (opz.valore/saldo/passo/minimo): saldo e valori in USDT, lotto = quantita' in
+ // monete, col passo e il minimo del contratto. Senza, tutto come prima (conto MT5/simulato, in €).
+ const saldoConto=()=>Number.isFinite(opz.saldo)?Number(opz.saldo):realizedBalanceNow();
+ const valoreA=(a,b,l)=>(typeof opz.valore==='function')?opz.valore(a,b,l):euroAtLevel(a,b,l,sym);
+ const passoLotto=Number(opz.passo)>0?Number(opz.passo):0.01;
+ const minimoLotto=Number(opz.minimo)>0?Number(opz.minimo):0.01;
+ const decLotto=Math.max(0,Math.round(-Math.log10(passoLotto)));
  const maxN=(Number(opz.maxN)>=1)?Math.floor(Number(opz.maxN)):Infinity;
  const parti=(Number(opz.parti)>1)?Math.min(10,Math.floor(Number(opz.parti))):1;
  const side=String(seg.direzione||'').toUpperCase();
@@ -24786,7 +24857,7 @@ function tgPiano(seg,sym,pctForzata,opz){
   const nTp=Math.max(1,Math.min(maxN,tuttiTp.length));
   // Automatico (pctForzata = rischio della sala): senza stop si usa il rischio dedicato.
   const pctTmp=((Number.isFinite(pctForzata)&&pctForzata>0)?tgRischioSenzaSl():tgRischioTotale())/parti;
-  const calc=tgStopCalcolato(side,entry,nTp,realizedBalanceNow()*pctTmp/100,sym);
+  const calc=tgStopCalcolato(side,entry,nTp,saldoConto()*pctTmp/100,sym,opz);
   if(calc.problema)return {problemi:[calc.problema]};
   sl=calc.sl; lottiFissi=calc.lotti; slCalcolato=true;
  }
@@ -24815,28 +24886,28 @@ function tgPiano(seg,sym,pctForzata,opz){
  if(tp.length>maxN)tp=tp.slice(0,maxN);
  let n=Math.max(1,tp.length);
  const pct=((Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale())/parti;
- const saldo=realizedBalanceNow();
+ const saldo=saldoConto();
  const importoTot=saldo*pct/100;
- const perLotto=euroAtLevel(entry,sl,1,sym);
+ const perLotto=valoreA(entry,sl,1);
  if(!(perLotto>0))return {problemi:['non riesco a calcolare quanto si perde per lotto su '+sym]};
  // Il lottaggio ha un passo di 0,01: il valore esatto quasi mai ci cade sopra. Si arrotonda per
  // DIFETTO, mai per eccesso: la percentuale scelta e' un tetto, e un tetto non si supera per una
  // questione di arrotondamento. Si rischia un filo meno del richiesto, mai un filo di piu'.
- let lotti=Math.floor((importoTot/n)/perLotto*100)/100;
+ let lotti=Number((Math.floor((importoTot/n)/perLotto/passoLotto+1e-9)*passoLotto).toFixed(decLotto));
  // Stop calcolato dall'app: il lotto e' quello fissato per ricavarlo (vedi tgStopCalcolato).
  if(lottiFissi!=null)lotti=lottiFissi;
  let alMinimo=false;
  // L'unica eccezione: sotto 0,01 lot non si puo' scendere. Qui, e solo qui, il rischio reale puo'
  // superare quello chiesto - e allora va detto chiaramente prima di confermare.
- if(!(lotti>=0.01)){ lotti=0.01; alMinimo=true; }
+ if(!(lotti>=minimoLotto)){ lotti=minimoLotto; alMinimo=true; }
  let notaRidotte=null;
  if(opz.entroRischio&&alMinimo&&lotti*perLotto*n>importoTot+0.01){
-  // Quante posizioni da 0,01 stanno dentro al rischio: si tengono i primi target.
-  const k=Math.floor(importoTot/(0.01*perLotto)+1e-9);
-  if(k<1)return {problemi:['anche una sola posizione da 0,01 lot rischierebbe '+euro(0.01*perLotto)
-    +', più del '+pct.toFixed(2)+'% scelto ('+euro(importoTot)+'): stop troppo lontano per questo conto']};
+  // Quante posizioni al lotto minimo stanno dentro al rischio: si tengono i primi target.
+  const k=Math.floor(importoTot/(minimoLotto*perLotto)+1e-9);
+  if(k<1)return {problemi:['anche una sola posizione da '+minimoLotto+(opz.valore?'':' lot')+' rischierebbe '+(opz.valuta?(opz.valuta+' '+(minimoLotto*perLotto).toFixed(2)):euro(minimoLotto*perLotto))
+    +', più del '+pct.toFixed(2)+'% scelto ('+(opz.valuta?(opz.valuta+' '+importoTot.toFixed(2)):euro(importoTot))+'): stop troppo lontano per questo conto']};
   if(k<n){
-   notaRidotte='aperte '+k+' posizioni invece di '+n+': con 0,01 lot (il minimo) tutte e '+n+' insieme avrebbero superato il rischio scelto';
+   notaRidotte='aperte '+k+' posizioni invece di '+n+': con '+minimoLotto+(opz.valore?'':' lot')+' (il minimo) tutte e '+n+' insieme avrebbero superato il rischio scelto';
    if(tp.length>k)tp=tp.slice(0,k);
    n=k;
   }
@@ -32655,6 +32726,170 @@ document.addEventListener('change',ev=>{
  try{ renderAssetPicker(); }catch(e){}
 },true);
 try{ binanceAggiornaUi(); }catch(e){}
+
+// ===================== SESSIONE BINANCE — FASE 2: conto e ordini =====================
+// Gli ordini partono dal programma sul PC (bridge.py, percorsi /binance/*): e' li' che stanno le
+// chiavi API. Da qui si mandano solo quantita' e prezzi; le chiavi si inseriscono una volta, dal PC,
+// e non tornano mai indietro.
+// Un segnale = UNA posizione su Binance con una chiusura parziale (ordine limite) per ogni take
+// profit e uno stop sull'intera posizione. Un solo segnale per simbolo alla volta.
+var binanceConto=null;          // ultimo /binance/stato
+var binancePosizioni=null;      // ultimo /binance/posizioni (null = mai letto)
+var binancePosizioniAt=0;
+async function binanceBridge(percorso,corpo){
+ return fetchMt5WithTimeout('/binance'+percorso,corpo===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)},30000);
+}
+async function binanceAggiornaConto(){
+ const r=await binanceBridge('/stato');
+ binanceConto=r.ok?r.data:{configurato:false,collegato:false,errore:r.message,bridgeAssente:true};
+ try{ binanceDisegnaConto(); }catch(e){}
+ return binanceConto;
+}
+function binanceContoPronto(){ return !!(binanceConto&&binanceConto.collegato&&!binanceConto.hedge); }
+function binanceDisegnaConto(){
+ const box=$('binanceContoBox'); if(!box)return;
+ const c=binanceConto;
+ const usd=v=>Number.isFinite(Number(v))?Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' USDT':'—';
+ let html;
+ if(!c)html='Controllo il conto…';
+ else if(c.bridgeAssente)html='⚠️ Il programma sul PC non risponde: '+escapeHtmlText(c.errore||'')+'. Gli ordini Binance passano da lì (porta 8000).';
+ else if(!c.configurato)html='Conto non collegato. Inserisci qui sotto le chiavi API (<b>solo dal PC</b>).';
+ else if(!c.collegato)html='⚠️ Chiavi salvate ma Binance risponde: '+escapeHtmlText(c.errore||'errore');
+ else html='<b style="color:#7fdc9a">Collegato</b> ('+escapeHtmlText(c.ambiente==='reale'?'conto REALE':c.ambiente==='demo'?'conto DEMO':c.ambiente)+', chiave '+escapeHtmlText(c.chiave||'')+')'
+   +'<br>Saldo '+usd(c.saldo)+' · disponibile '+usd(c.disponibile)+' · P/L aperto '+usd(c.pnl_aperto)
+   +(c.hedge?'<br><b style="color:#ff7b78">Modalità HEDGE attiva</b>: su Binance imposta i Futures su "Unidirezionale" (One-way), altrimenti non apro niente.':'');
+ box.innerHTML=html;
+ const lista=$('binancePosizioniBox');
+ if(lista){
+  const ps=(binancePosizioni&&binancePosizioni.posizioni)||[];
+  lista.innerHTML=!c||!c.collegato?'':(ps.length
+   ?('<b>Posizioni aperte</b><br>'+ps.map(p=>escapeHtmlText(p.simbolo)+' '+p.lato+' '+p.quantita+' @ '+p.entrata
+      +' · SL '+(p.sl!=null?p.sl:'—')+' · TP '+(p.tp.map(t=>t.prezzo).join(' / ')||'—')+' · P/L '+usd(p.pnl)).join('<br>'))
+   :'Nessuna posizione aperta.');
+ }
+}
+async function binanceLeggiPosizioni(){
+ const r=await binanceBridge('/posizioni');
+ if(r.ok){ binancePosizioni=r.data; binancePosizioniAt=Date.now(); }
+ try{ binanceDisegnaConto(); }catch(e){}
+ return r.ok?binancePosizioni:null;
+}
+// Collega/scollega dalla scheda Binance.
+document.addEventListener('click',async ev=>{
+ const b=ev.target&&ev.target.closest&&ev.target.closest('#binanceCollegaBtn,#binanceScollegaBtn,#binanceAggiornaBtn');
+ if(!b)return;
+ if(b.id==='binanceAggiornaBtn'){ await binanceAggiornaConto(); await binanceLeggiPosizioni(); return; }
+ if(b.id==='binanceScollegaBtn'){
+  if(!await appConfirm('Scollegare il conto Binance? Le chiavi vengono cancellate dal PC; le posizioni aperte su Binance restano come sono.',{title:'Binance',okLabel:'Scollega',cancelLabel:'Annulla'}))return;
+  const r=await binanceBridge('/scollega',{});
+  if(!r.ok)await appAlert('Non scollegato: '+r.message);
+  await binanceAggiornaConto(); return;
+ }
+ const k=($('binanceApiKey')?.value||'').trim(), s=($('binanceApiSecret')?.value||'').trim(), a=$('binanceAmbiente')?.value||'demo';
+ if(!k||!s){ await appAlert('Inserisci API Key e Secret Key create su Binance (permessi: solo Futures, MAI prelievi).'); return; }
+ if(a==='reale'&&!await appConfirm('Stai collegando il conto REALE: gli ordini automatici useranno soldi veri.\n\nConsiglio: prima una settimana sul conto DEMO di Binance.',{title:'Conto reale',okLabel:'Collega il reale',cancelLabel:'Annulla'}))return;
+ b.disabled=true;
+ const r=await binanceBridge('/configura',{api_key:k,api_secret:s,ambiente:a});
+ b.disabled=false;
+ if($('binanceApiSecret'))$('binanceApiSecret').value='';
+ if(!r.ok){ await appAlert('Binance non ha accettato le chiavi: '+r.message); return; }
+ if($('binanceApiKey'))$('binanceApiKey').value='';
+ await binanceAggiornaConto(); await binanceLeggiPosizioni();
+});
+// Stato e posizioni: ogni 15 s con la sessione attiva, ogni 3 s se c'e' una strategia da seguire.
+setInterval(()=>{
+ if(!binanceAttivo())return;
+ const strategie=Object.values(tgStrategie||{}).some(st=>st&&st.conto==='binance');
+ const scheda=$('genSettingsTabBinance')?.classList.contains('active');
+ if(strategie||scheda||Date.now()-binancePosizioniAt>15000){
+  binanceLeggiPosizioni().then(()=>{ try{ binanceStrategieValuta(); }catch(e){} });
+ }
+ if(!binanceConto||Date.now()-(binanceConto.__at||0)>15000){ binanceAggiornaConto().then(c=>{ if(c)c.__at=Date.now(); }); }
+},3000);
+
+// Esecuzione di un segnale sul conto Binance (chiamata dalla fila 'binance' dell'automatico).
+async function binanceEseguiSegnale(voce,o){
+ const p=o.piano;
+ const gruppo='sg'+Date.now().toString(36)+Math.floor(Math.random()*1000).toString(36);
+ const r=await binanceBridge('/segnale',{simbolo:o.simbolo,lato:p.side,quantita_per_tp:p.lotti,tp:p.tp.slice(0,p.n),sl:p.sl,gruppo});
+ if(!r.ok){
+  voce.autoMotivo='Binance non ha aperto: '+r.message;
+  try{ tgRenderPannello(); }catch(e){}
+  return false;
+ }
+ const d=r.data||{};
+ tgStrategie[gruppo]={conto:'binance',sala:String(voce.chat||''),simbolo:o.simbolo,sym:o.sym,side:p.side,
+  entry:Number(d.entrata)||p.entry,tps:p.tp.slice(0,p.n),regole:o.regole||[],fatte:[],creato:Date.now(),
+  quantita:Number(d.quantita)||p.lotti*p.n,quota:p.lotti,
+  avvicinamento:o.avvicinamento?{pct:Number(o.avvicinamento.pct),fatto:false}:null,sl:p.sl,visto:false,
+  tpPiazzati:(d.tp||[]).map(x=>Number(x.indice))};
+ tgSalvaStrategie();
+ voce.stato='eseguito'; voce.aperte=p.n; voce.automatico=true;
+ voce.eseguito={il:Date.now(),sym:o.sym,side:p.side,lotti:p.lotti,sl:p.sl,slCalcolato:!!p.slCalcolato,tp:p.tp.slice(0,p.n),
+  tpCalcolato:!!p.tpCalcolato,reale:true,conto:'binance',pendente:false,entry:Number(d.entrata)||p.entry};
+ voce.autoMotivo=(d.tp_errori&&d.tp_errori.length)?('aperto su Binance, ma alcuni take profit sono stati rifiutati: '+d.tp_errori.join('; ')):null;
+ try{ tgAggiornaPulsante(); tgRenderPannello(); }catch(e){}
+ $('status').textContent='📡 Segnale di '+String(voce.chat||'')+': aperto su Binance '+p.side+' '+o.simbolo+' '+d.quantita
+  +' ('+p.n+(p.n===1?' chiusura':' chiusure parziali')+'), stop '+p.sl+'.';
+ try{ await binanceLeggiPosizioni(); }catch(e){}
+ return true;
+}
+// Posizioni "vive" di una strategia Binance per i tetti: le quote non ancora chiuse.
+function binanceQuoteAperte(st){
+ const pos=binancePosizioni&&(binancePosizioni.posizioni||[]).find(p=>p.simbolo===st.simbolo);
+ if(!pos)return st.visto?0:Math.max(1,st.tps.length);   // appena aperta, non ancora letta: conta tutta
+ const q=Number(st.quota)||0;
+ return q>0?Math.max(1,Math.round(pos.quantita/q)):1;
+}
+// La strategia sulle posizioni Binance: TP raggiunti (le chiusure parziali che mancano all'appello,
+// o il prezzo oltre il target) -> stop spostato come da regole; pareggio anticipato; posizione
+// chiusa -> strategia finita.
+async function binanceStrategieValuta(){
+ if(!binancePosizioni)return;
+ const elenco=binancePosizioni.posizioni||[];
+ for(const id of Object.keys(tgStrategie)){
+  const st=tgStrategie[id];
+  if(!st||st.conto!=='binance')continue;
+  const pos=elenco.find(p=>p.simbolo===st.simbolo);
+  if(!pos){
+   // Mai vista aperta: si aspetta qualche secondo (la lettura puo' arrivare prima dell'esecuzione).
+   if(st.visto||Date.now()-(st.creato||0)>120000){ delete tgStrategie[id]; tgSalvaStrategie(); }
+   continue;
+  }
+  st.visto=true;
+  const prezzo=Number(pos.mark);
+  const raggiunto=k=>{
+   const t=st.tps[k-1];
+   if(!Number.isFinite(t))return false;
+   // il suo ordine limite non c'e' piu' (eseguito) oppure il prezzo e' gia' oltre
+   const ancora=(pos.tp||[]).some(o=>Math.abs(o.prezzo-t)<=Math.abs(t)*1e-6+1e-9);
+   // Un TP che Binance aveva rifiutato non c'e' mai stato: per lui vale solo il prezzo.
+   const piazzato=!Array.isArray(st.tpPiazzati)||st.tpPiazzati.indexOf(k)>=0;
+   return (piazzato&&!ancora)||(st.side==='BUY'?prezzo>=t:prezzo<=t);
+  };
+  let nuovoSl=null, motivo='';
+  if(st.avvicinamento&&!st.avvicinamento.fatto&&st.tps.length){
+   const liv=tgLivelloAvvicinamento(st.entry,st.tps[0],st.avvicinamento.pct);
+   if(Number.isFinite(liv)&&(st.side==='BUY'?prezzo>=liv:prezzo<=liv)){
+    st.avvicinamento.fatto=true; nuovoSl=st.entry; motivo='pareggio anticipato';
+   }
+  }
+  (st.regole||[]).forEach(reg=>{
+   if(!reg||(st.fatte||[]).indexOf(reg.quando)>=0||!raggiunto(reg.quando))return;
+   (st.fatte=st.fatte||[]).push(reg.quando);
+   const l=tgLivelloRegola(st,reg);
+   if(Number.isFinite(l)&&tgStopMigliore(st.side,nuovoSl!=null?nuovoSl:st.sl,l)){ nuovoSl=l; motivo='raggiunto il take profit n. '+reg.quando; }
+  });
+  if(nuovoSl!=null&&tgStopMigliore(st.side,st.sl,nuovoSl)&&(st.side==='BUY'?nuovoSl<prezzo:nuovoSl>prezzo)){
+   const r=await binanceBridge('/sl',{simbolo:st.simbolo,sl:nuovoSl});
+   if(r.ok){
+    st.sl=nuovoSl;
+    $('status').textContent='🛡️ Binance '+st.simbolo+' (segnale di '+String(st.sala||'')+'): '+motivo+', stop portato a '+nuovoSl+'.';
+   }else console.warn('[Binance] spostamento stop non riuscito:',r.message);
+  }
+  tgSalvaStrategie();
+ }
+}
 
 // ===================== GUARDIANO DELLE CANDELE MT5 (non si ferma mai) =====================
 // RICHIESTO: "le candele non devono MAI fermarsi, anche dopo giorni, su PC, tablet e telefono: una
