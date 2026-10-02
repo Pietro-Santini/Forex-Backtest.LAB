@@ -19767,7 +19767,9 @@ function qtSchermoPiccolo(){
  try{ return window.innerWidth<=1024||(window.matchMedia&&matchMedia('(pointer:coarse)').matches); }catch(e){ return false; }
 }
 function moveQuickTradeClusterIntoSidebar(targetDoc){
- if(qtSchermoPiccolo()&&(!targetDoc||targetDoc===document)){ restoreQuickTradeClusterHome(); setTimeout(qtAutoLayout,0); return; }
+ // RICHIESTO: nello schermo intero della pagina principale la barra ordini resta IN ALTO DENTRO
+ // IL GRAFICO su telefono, tablet E PC (prima sul PC finiva nella barra degli strumenti).
+ if(!targetDoc||targetDoc===document){ restoreQuickTradeClusterHome(); setTimeout(qtAutoLayout,0); return; }
  const cluster=document.getElementById('quickTradeCluster')||(floatingDoc&&floatingDoc.getElementById('quickTradeCluster'));
  const sidebar=(targetDoc||document).getElementById('chartFsSidebar');
  if(!cluster||!sidebar)return;
@@ -19799,8 +19801,38 @@ function moveResetViewIntoSidebar(targetDoc){
  const toolbar=sidebar.querySelector('#mainDrawToolbar');
  if(toolbar)toolbar.appendChild(btn); // finisce in fondo al toolbar disegni già spostato, stessa sidebar
  else sidebar.appendChild(btn);
+ if(!targetDoc||targetDoc===document)fblMiniDashMostra(btn);
 }
+// ===================== MINI DASHBOARD IN SCHERMO INTERO =====================
+// RICHIESTO: in schermo intero, sotto "Torna all'ultima candela", una dashboard in miniatura con
+// l'operazione aperta, il P/L live, il capitale, win rate, loss rate e margine libero. I valori sono
+// quelli della dashboard principale (stessi numeri, stesso conto), copiati ogni secondo.
+function fblMiniDashMostra(dopo){
+ let el=document.getElementById('fblMiniDash');
+ if(!el){
+  el=document.createElement('div'); el.id='fblMiniDash';
+  el.style.cssText='flex:0 0 100%;width:100%;box-sizing:border-box;min-width:0;margin-top:8px;padding:7px 8px;border:1px solid #2b3541;border-radius:8px;background:#0f1620;font-size:10.5px;line-height:1.35;color:#cdd6e0;display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px';
+ }
+ if(dopo&&dopo.parentNode)dopo.parentNode.insertBefore(el,dopo.nextSibling);
+ fblMiniDashAggiorna();
+}
+function fblMiniDashNascondi(){ const el=document.getElementById('fblMiniDash'); if(el)el.remove(); }
+function fblMiniDashAggiorna(){
+ const el=document.getElementById('fblMiniDash'); if(!el||!el.isConnected)return;
+ const testo=id=>{ const e=$(id); return e?(e.textContent||'').trim()||'—':'—'; };
+ let pl=null; try{ pl=floatingPL(); }catch(e){}
+ const aperte=(positions||[]).filter(p=>p&&!p.closed);
+ let op='nessuna';
+ if(aperte.length){ const p=aperte.find(x=>x.asset===currentAssetKey)||aperte[aperte.length-1]; op=(p.side||'')+' '+(p.lots!=null?p.lots+' ':'')+(p.asset||'')+(aperte.length>1?' (+'+(aperte.length-1)+')':''); }
+ const colore=Number.isFinite(pl)?(pl>=0?'#7fdc9a':'#ff8a8a'):'#cdd6e0';
+ const righe=[['Operazione',escapeHtmlText(op)],['P/L live','<b style="color:'+colore+'">'+(Number.isFinite(pl)?((pl>=0?'+':'')+euro(pl)):'—')+'</b>'],
+  ['Capitale',escapeHtmlText(testo('mCapital'))],['Win rate',escapeHtmlText(testo('mWR'))],['Loss rate',escapeHtmlText(testo('mLR'))],['Margine libero',escapeHtmlText(testo('mMargin'))]];
+ const html=righe.map(([k,v])=>'<span style="color:#8b96a5">'+k+'</span><span style="text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+v+'</span>').join('');
+ if(el.innerHTML!==html)el.innerHTML=html;
+}
+setInterval(()=>{ try{ fblMiniDashAggiorna(); }catch(e){} },1000);
 function restoreResetViewHome(){
+ fblMiniDashNascondi();
  const btn=document.getElementById('resetView')||(floatingDoc&&floatingDoc.getElementById('resetView'));
  if(btn&&resetViewHomeParent){
    if(resetViewHomeNext&&resetViewHomeNext.parentNode===resetViewHomeParent)resetViewHomeParent.insertBefore(btn,resetViewHomeNext);
@@ -20656,8 +20688,9 @@ chartEl.addEventListener('pointerup',e=>{
 chartEl.addEventListener('pointermove',e=>{
  if(tvp3dPointerMove(e))return; // trascinamento del modello 3D in corso
  // Mirino (crosshair) per mouse/penna: sempre aggiornato, indipendentemente da altre azioni.
- if(e.pointerType==='mouse'||e.pointerType==='pen'){
+ if(e.pointerType==='mouse'||e.pointerType==='pen'||(fblMirinoTocco&&fblMirinoTocco.id===e.pointerId)){
    crosshair={x:e.clientX,y:e.clientY};
+   if(fblMirinoTocco&&fblMirinoTocco.id===e.pointerId){ e.preventDefault(); draw(); return; }   // il dito muove solo il mirino
  }else{
    crosshair=null;
  }
@@ -20892,6 +20925,56 @@ chartEl.addEventListener('pointerdown',e=>{ if(e.pointerType==='touch'){ touchHo
 chartEl.addEventListener('pointermove',e=>{ if(e.pointerType==='touch'&&touchHoverPoint){ touchHoverPoint={x:e.clientX,y:e.clientY}; draw(); } },{passive:true});
 chartEl.addEventListener('pointerup',e=>{ if(e.pointerType==='touch'&&touchHoverPoint){ touchHoverPoint=null; draw(); } });
 chartEl.addEventListener('pointercancel',e=>{ if(e.pointerType==='touch'&&touchHoverPoint){ touchHoverPoint=null; draw(); } });
+// ===================== TELEFONO / TABLET: DOPPIO TOCCO E PRESSIONE LUNGA =====================
+// RICHIESTO: "doppio tocco del dito su un disegno = popup delle impostazioni, come il doppio clic
+// del mouse" e "tenendo premuto il dito compare la croce degli assi, come il puntatore del mouse".
+// Il browser non manda il doppio clic per i tocchi (il grafico gestisce da se' i tocchi per pan e
+// zoom), quindi il doppio tocco si riconosce qui: due tocchi brevi e fermi, entro 350 ms e 30 px.
+// Pressione lunga: dito fermo 450 ms -> mirino; finche' il dito resta giu' lo muove, e intanto la
+// pagina non scorre. Alzando il dito il mirino sparisce.
+var fblMirinoTocco=null, fblTocco=null, fblUltimoTap=null;
+chartEl.addEventListener('pointerdown',e=>{
+ if(e.pointerType!=='touch')return;
+ if(fblTocco&&fblTocco.timer)clearTimeout(fblTocco.timer);
+ const tocco={id:e.pointerId,x:e.clientX,y:e.clientY,t:Date.now(),mosso:false};
+ tocco.timer=setTimeout(()=>{
+  if(fblTocco!==tocco||tocco.mosso)return;
+  if(typeof touchPoints!=='undefined'&&touchPoints.size>1)return;      // due dita: e' pan/zoom
+  fblMirinoTocco={id:tocco.id};
+  crosshair={x:tocco.ux??tocco.x,y:tocco.uy??tocco.y};
+  try{ setChartTouchAction(true); }catch(err){}
+  try{ if(navigator.vibrate)navigator.vibrate(15); }catch(err){}
+  draw();
+ },450);
+ fblTocco=tocco;
+},{passive:true});
+chartEl.addEventListener('pointermove',e=>{
+ if(e.pointerType!=='touch'||!fblTocco||fblTocco.id!==e.pointerId)return;
+ fblTocco.ux=e.clientX; fblTocco.uy=e.clientY;
+ if(Math.hypot(e.clientX-fblTocco.x,e.clientY-fblTocco.y)>10)fblTocco.mosso=true;
+},{passive:true,capture:true});
+function fblFineTocco(e){
+ if(e.pointerType!=='touch')return;
+ const tocco=fblTocco;
+ if(tocco&&tocco.timer)clearTimeout(tocco.timer);
+ fblTocco=null;
+ if(fblMirinoTocco&&fblMirinoTocco.id===e.pointerId){
+  fblMirinoTocco=null; crosshair=null;
+  try{ setChartTouchAction(false); }catch(err){}
+  draw(); fblUltimoTap=null;
+  return;
+ }
+ if(e.type!=='pointerup'||!tocco||tocco.id!==e.pointerId||tocco.mosso||Date.now()-tocco.t>300)return;
+ const ora=Date.now();
+ if(fblUltimoTap&&ora-fblUltimoTap.t<350&&Math.hypot(e.clientX-fblUltimoTap.x,e.clientY-fblUltimoTap.y)<30){
+  fblUltimoTap=null;
+  try{ handleChartDblClick({clientX:e.clientX,clientY:e.clientY,preventDefault(){},target:chartEl}); }catch(err){ console.warn('[Tocco] doppio tocco',err); }
+ }else fblUltimoTap={t:ora,x:e.clientX,y:e.clientY};
+}
+chartEl.addEventListener('pointerup',fblFineTocco,{passive:true});
+chartEl.addEventListener('pointercancel',fblFineTocco,{passive:true});
+// Niente menu del browser con la pressione lunga sul grafico.
+chartEl.addEventListener('contextmenu',e=>{ if(fblMirinoTocco||(e.pointerType==='touch'))e.preventDefault(); });
 
 chartEl.addEventListener('pointerup',e=>{
  if(priceAxisDrag){priceAxisDrag=null;chartEl.releasePointerCapture?.(e.pointerId);if(e.pointerType==='touch')setChartTouchAction(false);return;}
