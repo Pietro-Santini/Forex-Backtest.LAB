@@ -2592,10 +2592,10 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
        <select id="regCsvAsset" class="toolSelect" style="width:auto;min-width:140px"></select>
        <select id="regCsvGiorni" class="toolSelect" style="width:auto"><option value="1">ultimo giorno</option><option value="2">ultimi 2 giorni</option><option value="3">ultimi 3 giorni</option><option value="7">ultimi 7 giorni</option><option value="8">ultimi 8 giorni</option></select>
-       <select id="regCsvCosa" class="toolSelect" style="width:auto"><option value="candele">candele da 1 minuto (per la modalità Storico)</option><option value="tick">tutti i tick / trade</option></select>
+       <select id="regCsvCosa" class="toolSelect" style="width:auto"><option value="completo">FILE UNICO: candele + footprint + book (per lo Storico)</option><option value="candele">solo candele da 1 minuto</option><option value="tick">solo tick / trade</option></select>
        <button type="button" id="regCsvBtn" class="toolBtn" onclick="registratoreScaricaCsv()">⬇️ Scarica CSV</button>
      </div>
-     <p class="hint" style="margin:6px 0 0">Cripto: dai trade registrati sul PC (8 giorni; dove il PC era spento mancano, mai inventati). MT5: dallo storico del broker.</p>
+     <p class="hint" style="margin:6px 0 0"><b>File unico</b>: un solo CSV con candele da 1 minuto, footprint di ogni minuto (volume comprato/venduto per prezzo, aggressore vero) e fotografie del book ogni 30 s. Si aggiunge dalla Libreria storici CSV; in Storico il replay mostra footprint e heatmap solo fino alla candela già rivelata, con le impostazioni di sempre. Cripto: dai trade registrati sul PC (8 giorni, book 2 giorni; dove il PC era spento mancano, mai inventati). MT5: candele e tick dallo storico del broker, book dal registratore.</p>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="watchlistModalDoneBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Fatto</button>
@@ -7707,6 +7707,8 @@ function rebuildBaseRowsFromLibrary(){
    merged.push(r);
  }
  baseRows=merged;
+ // FILE UNICO del registratore: footprint e book per lo Storico (vedi fblRegStoricoImposta).
+ try{ fblRegStoricoImposta(currentAssetKey,csvLibrary); }catch(e){ console.warn('[Registrazione] non letta:',e); }
 }
 function csvLibraryDateRangeLabel(fRows){
  if(!fRows.length)return '';
@@ -7835,8 +7837,9 @@ async function getAssetFolderFiles(asset){
    if(handle.kind!=='file'||!/\.csv$/i.test(name))continue;
    try{
      const file=await handle.getFile();
-     const rows=await parseCSVAsync(await file.text(),name);
-     if(rows.length)out.push({id:'folder_'+asset+'_'+name,name,addedAt:file.lastModified||Date.now(),rows});
+     const testo=await file.text();
+     const rows=await parseCSVAsync(testo,name);
+     if(rows.length){ const voce={id:'folder_'+asset+'_'+name,name,addedAt:file.lastModified||Date.now(),rows}; const reg=fblRegRighe(testo); if(reg)voce.registrazione=reg; out.push(voce); }
    }catch(e){ console.warn('Lettura CSV da cartella libreria fallita:',name,e); }
  }
  return out;
@@ -7867,6 +7870,8 @@ function _csvIsNamedHeader(line){
  return raw.some(x=>['open','high','low','close'].includes(x));
 }
 function _csvRowTime(header,named,line){
+ // File unico del registratore: anche le righe F/B/M hanno la data nella prima colonna.
+ if(named&&/,-,-,-,-,-,[FBM],/.test(line))return parseDateTime(String(line).split(',')[0]);
  const r=parseCSV(named?(header+'\n'+line):line);
  return r.length?parseDateTime(r[0].date):NaN;
 }
@@ -7922,12 +7927,14 @@ async function getAssetFolderFilesProgressive(asset,targetTime){
  const partialRows=parseCSV(windowTxt);
  if(!partialRows.length)return null;
  const partial=[{id:'folder_'+asset+'_'+chosen.name,name:chosen.name,addedAt:chosen.file.lastModified||Date.now(),rows:partialRows}];
+ { const reg=fblRegRighe(text); if(reg)partial[0].registrazione=reg; }
  const loadAll=async()=>{
    const out=[];
    for(const e of entries){
      try{
-       const rowsAll=await parseCSVAsync(e===chosen?text:await e.file.text());
-       if(rowsAll.length)out.push({id:'folder_'+asset+'_'+e.name,name:e.name,addedAt:e.file.lastModified||Date.now(),rows:rowsAll});
+       const testo=e===chosen?text:await e.file.text();
+       const rowsAll=await parseCSVAsync(testo);
+       if(rowsAll.length){ const voce={id:'folder_'+asset+'_'+e.name,name:e.name,addedAt:e.file.lastModified||Date.now(),rows:rowsAll}; const reg=fblRegRighe(testo); if(reg)voce.registrazione=reg; out.push(voce); }
      }catch(err){ console.warn('Lettura CSV da cartella libreria fallita:',e.name,err); }
    }
    return out;
@@ -8115,7 +8122,7 @@ async function autoLoadAssetLibrary(asset){
    const fromFolder=!!(files&&files.length);
    if(!fromFolder){
      const legacy=await getAssetLibraryFiles(asset);
-     files=legacy.map(f=>({id:f.id,name:f.fileName,addedAt:f.addedAt,
+     files=legacy.map(f=>({id:f.id,name:f.fileName,addedAt:f.addedAt,registrazione:f.registrazione||undefined,
        rows:f.rows.map(a=>({date:a[0],open:a[1],high:a[2],low:a[3],close:a[4],volume:a[5]}))}));
    }
    if(!files.length){
@@ -12901,6 +12908,7 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
  // l'estensione delle caselline dice gia' dove finisce, un contorno sarebbe rumore.
 }
 function draw(){
+ if(!liveModeActive){ try{ fblRegStoricoSync(); }catch(e){} }
  // Annuncia l'asset a grafico ORA alle altre finestre PIP (solo se cambiato dall'ultima volta —
  // vedi anotherWindowOwnsAssetEvaluation()/broadcastAssetAnnounce() più sopra nel file): usato
  // solo per la guardia anti-doppia-chiusura SL/TP quando lo stesso asset è aperto in due finestre
@@ -30160,7 +30168,8 @@ let liveHistoryReadyAt=0;
 // Quale "chiave" di latestOrderBookByAsset/orderBookHistoryByAsset alimenta ORA heatmap/COB/zone.
 function depthKeyNow(){
  try{
-   if(!liveModeActive)return null;
+   if(!liveModeActive)return fblRegChiaveStorico();   // Storico: il book del file unico, se c'e'
+
    if(depthCryptoEnabledNow()&&bnDepth&&bnDepth.asset===currentAssetKey&&bnDepth.ready)return bnDepth.key;
    if(mt5Connected&&mt5ActiveSymbol)return mt5ActiveSymbol;
  }catch(e){}
@@ -30603,6 +30612,7 @@ function footprintRebuildBucketsForCurrentAsset(){
 }
 function __footprintRebuildBuckets(){
  footprintByBucket={};
+ if(!liveModeActive&&fblRegStoricoPer(currentAssetKey)){ fblRegFootprintRicostruisci(); return; }
  const log=footprintTickLogByAsset[currentAssetKey];
  if(log&&log.length){
    const step=footprintStepForAsset(currentAssetKey);
@@ -31710,7 +31720,7 @@ async function saveOrderBookHistoryNow(){
  if(orderBookHistoryDirty){
    orderBookHistoryDirty=false;
    const shallow={};
-   for(const k in orderBookHistoryByAsset)if(!isDeepDepthKey(k))shallow[k]=orderBookHistoryByAsset[k];
+   for(const k in orderBookHistoryByAsset)if(!isDeepDepthKey(k)&&!/^reg:/.test(k))shallow[k]=orderBookHistoryByAsset[k];   // reg: = dal file unico, gia' sul disco
    const ok=await idbPut('orderBookHistory',shallow);
    if(!ok)orderBookHistoryDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
  }
@@ -32859,6 +32869,92 @@ function fblProfiloIndControlla(){
 },true));
 setInterval(()=>{ try{ fblProfiloIndControlla(); }catch(e){} },700);
 
+
+// ===================== FILE UNICO DEL REGISTRATORE IN MODALITA' STORICO =====================
+// RICHIESTO: "un unico file, compreso di tutto: lo carichiamo in Storico per il backtest, e
+// footprint e heatmap si regolano dalle impostazioni come oggi". Il file ha le candele da 1 minuto
+// (lette dal caricatore di sempre) piu' righe F (footprint di ogni minuto: prezzo, volume comprato,
+// volume venduto, con l'aggressore vero) e B (fotografie del book). Durante il replay entrano SOLO
+// i dati fino alla candela gia' rivelata: mai il futuro. Passo righe, colori, imbalance, heatmap...
+// restano quelli delle impostazioni, applicati a questi dati come a quelli dal vivo.
+var fblRegStorico={};   // asset Storico -> {fpT,fpP,fpB,fpS, book:[{time_ms,b,a}], meta, fpFino, bookFino, limite}
+function fblRegRighe(testo){
+ if(!testo||!/,-,-,-,-,-,[FBM],/.test(testo))return null;
+ const out=[];
+ testo.split(/\r?\n/).forEach(l=>{ if(/^[^,]*,-,-,-,-,-,[FBM],/.test(l))out.push(l); });
+ return out.length?out.join('\n'):null;
+}
+function fblRegStoricoImposta(asset,libreria){
+ if(liveModeActive||!asset)return;
+ const testi=(libreria||[]).map(f=>f&&f.registrazione).filter(Boolean);
+ const firma=testi.map(s=>s.length+':'+s.slice(0,40)+':'+s.slice(-40)).join('|');
+ if(fblRegStorico[asset]&&fblRegStorico[asset].firma===firma)return;
+ if(!testi.length){ delete fblRegStorico[asset]; return; }
+ const fp=[], book=[], meta={};
+ testi.forEach(testo=>testo.split('\n').forEach(l=>{
+  const i=l.indexOf(',-,-,-,-,-,'); if(i<0)return;
+  const t=parseDateTime(l.slice(0,i)); const tipo=l.charAt(i+11); const dati=l.slice(i+13);
+  if(tipo==='M'){ dati.split(';').forEach(kv=>{ const j=kv.indexOf('='); if(j>0)meta[kv.slice(0,j)]=kv.slice(j+1); }); return; }
+  if(!Number.isFinite(t))return;
+  if(tipo==='F'){ const [p,b,s]=dati.split(';').map(Number); if(Number.isFinite(p))fp.push([t,p,b||0,s||0]); }
+  else if(tipo==='B'){
+   const [off,bs,as]=dati.split('|'); const o=Number(off)||0;
+   const comp=txt=>{ const v=(txt||'').trim().split(/\s+/).map(Number), r=[]; for(let k=0;k+1<v.length;k+=2)if(Number.isFinite(v[k])&&Number.isFinite(v[k+1]))r.push(v[k]+o,v[k+1]); return r; };
+   book.push({time_ms:t,b:comp(bs),a:comp(as)});
+  }
+ }));
+ fp.sort((x,y)=>x[0]-y[0]); book.sort((x,y)=>x.time_ms-y.time_ms);
+ fblRegStorico[asset]={firma,fp,book,meta,fpFino:0,bookFino:0,limite:null};
+ const chiave='reg:'+asset;
+ orderBookHistoryByAsset[chiave]=[]; delete heatmapCellsMeta[chiave]; delete latestOrderBookByAsset[chiave];
+ try{ footprintNoteDataQuality('flags',{fonte:'file unico del registratore',righe_footprint:fp.length,fotografie_book:book.length}); }catch(e){}
+ console.log('[Registrazione] '+asset+': '+fp.length.toLocaleString('it-IT')+' righe di footprint, '+book.length.toLocaleString('it-IT')+' fotografie del book'+(meta.asset?(' (registrato come '+meta.asset+')'):''));
+}
+function fblRegStoricoPer(asset){ const r=fblRegStorico[asset]; return r&&(r.fp.length||r.book.length)?r:null; }
+function fblRegChiaveStorico(){ const r=fblRegStoricoPer(currentAssetKey); return r&&r.book.length?'reg:'+currentAssetKey:null; }
+// Limite del replay: la candela da 1 minuto gia' rivelata (masterTime) e' visibile per intero.
+function fblRegLimite(){ return Number.isFinite(masterTime)?masterTime+60000:-Infinity; }
+function fblRegApplicaFp(r,i,step){ const e=r.fp[i]; if(e[2]>0)footprintApplyTickToBuckets(e[1],e[0],1,e[2],step,1,e[2]); if(e[3]>0)footprintApplyTickToBuckets(e[1],e[0],-1,e[3],step,-1,e[3]); }
+function fblRegFootprintRicostruisci(){
+ const r=fblRegStoricoPer(currentAssetKey); if(!r)return;
+ const step=footprintStepForAsset(currentAssetKey); if(!(step>0))return;
+ const lim=fblRegLimite(); let i=0;
+ for(;i<r.fp.length&&r.fp[i][0]<lim;i++)fblRegApplicaFp(r,i,step);
+ r.fpFino=i; r.limiteFp=lim;
+}
+function fblRegLatest(snap){ const g=(arr)=>{ const o=[]; for(let k=0;k+1<arr.length;k+=2)o.push({price:arr[k],volume:arr[k+1]}); return o; }; return {time_ms:snap.time_ms,bids:g(snap.b),asks:g(snap.a)}; }
+function fblRegStoricoSync(){
+ const r=fblRegStoricoPer(currentAssetKey); if(!r)return;
+ const lim=fblRegLimite();
+ // Footprint: avanti = solo le righe nuove; indietro (salto, DATA RANDOM, nuovo timeframe) = da capo.
+ if(r.limiteFp==null||lim<r.limiteFp){ footprintRebuildBucketsForCurrentAsset(); }
+ else if(lim>r.limiteFp){
+  const step=footprintStepForAsset(currentAssetKey);
+  if(step>0){ let i=r.fpFino; for(;i<r.fp.length&&r.fp[i][0]<lim;i++)fblRegApplicaFp(r,i,step); r.fpFino=i; }
+  r.limiteFp=lim;
+ }
+ // Book (heatmap): lo storico della chiave reg: contiene solo le fotografie fino al limite.
+ if(!r.book.length)return;
+ const chiave='reg:'+currentAssetKey;
+ let hist=orderBookHistoryByAsset[chiave];
+ if(!hist||r.limiteBook==null||lim<r.limiteBook){
+  let n=0; while(n<r.book.length&&r.book[n].time_ms<lim)n++;
+  hist=orderBookHistoryByAsset[chiave]=r.book.slice(0,n); r.bookFino=n;
+  delete heatmapCellsMeta[chiave];
+ }else if(lim>r.limiteBook){
+  const meta=heatmapCellsMeta[chiave];
+  let n=r.bookFino;
+  for(;n<r.book.length&&r.book[n].time_ms<lim;n++){
+   hist.push(r.book[n]);
+   if(meta&&meta.tf===currentTF&&meta.step===heatmapStepForKey(chiave))heatmapApplySnapshotToBuckets(heatmapCellsByAsset[chiave]||(heatmapCellsByAsset[chiave]={}),meta.step,r.book[n]);
+  }
+  r.bookFino=n;
+ }
+ r.limiteBook=lim;
+ const ultima=hist.length?hist[hist.length-1]:null;
+ if(ultima!==r.ultimaFoto){ r.ultimaFoto=ultima; if(ultima)latestOrderBookByAsset[chiave]=fblRegLatest(ultima); else delete latestOrderBookByAsset[chiave]; }
+}
+
 // ===================== REGISTRATORE SUL PC =====================
 // RICHIESTO ("la registrazione deve continuare anche ad app chiusa, impeccabile"): il servizio dati
 // sul PC (porta 8001, registratore.py) registra per la watchlist i trade veri delle cripto, il book
@@ -33027,7 +33123,8 @@ async function registratoreScaricaCsv(){
  }
  const b=$('regCsvBtn'); if(b){ b.disabled=true; b.textContent='⏳ Preparo il CSV…'; }
  try{
-  const r=await fetch(registratoreUrl('/registratore/csv?asset='+encodeURIComponent(asset)+'&da_ms='+da+'&a_ms='+a+'&cosa='+cosa+'&tipo='+tipo+'&simbolo='+encodeURIComponent(simbolo)));
+  const book=(tipo==='cripto'&&depthCryptoEnabledNow())?(binanceSymbolForAsset(asset)||''):'';
+  const r=await fetch(registratoreUrl('/registratore/csv?asset='+encodeURIComponent(asset)+'&da_ms='+da+'&a_ms='+a+'&cosa='+cosa+'&tipo='+tipo+'&simbolo='+encodeURIComponent(simbolo)+'&book='+encodeURIComponent(book)));
   if(!r.ok)throw new Error('HTTP '+r.status);
   const blob=await r.blob();
   const nome=((r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)||[])[1]||(asset.replace(/[^A-Za-z0-9]+/g,'_')+'_'+cosa+'.csv');
@@ -33035,7 +33132,7 @@ async function registratoreScaricaCsv(){
   const url=URL.createObjectURL(blob), el=document.createElement('a');
   el.href=url; el.download=nome; document.body.appendChild(el); el.click(); el.remove();
   setTimeout(()=>URL.revokeObjectURL(url),60000);
-  $('status').textContent='⬇️ '+nome+': '+righe.toLocaleString('it-IT')+' righe'+(cosa==='candele'?' (candele da 1 minuto, ora UTC): caricalo in Storico come un CSV normale.':'.');
+  $('status').textContent='⬇️ '+nome+': '+righe.toLocaleString('it-IT')+' righe'+(cosa==='completo'?' (candele da 1 minuto + footprint + book, ora UTC): aggiungilo dalla Libreria storici CSV come un CSV normale; in Storico footprint e heatmap si accendono dalle impostazioni.':cosa==='candele'?' (candele da 1 minuto, ora UTC): caricalo in Storico come un CSV normale.':'.');
  }catch(e){ await appAlert('CSV non preparato: il servizio dati sul PC (porta 8001) non risponde ('+e.message+').'); }
  finally{ if(b){ b.disabled=false; b.textContent='⬇️ Scarica CSV'; } }
 }
