@@ -1384,6 +1384,7 @@ setTimeout(function(){
         </span>
       </div>
       <div data-gensettings-panel="binance" style="display:none">
+        <button type="button" id="krakenApriContoBtn" class="toolBtn active" style="width:100%;margin-bottom:10px">📊 Apri conto Kraken (dashboard e ordini su Kraken)</button>
         <div class="fbSettingsSectionTitle">Conto cripto: Kraken Futures</div>
         <div style="font-size:12.5px;line-height:1.55;color:#ffe9a8;background:#2a2410;border:1px solid #5a4a12;border-radius:7px;padding:10px;margin-bottom:8px">
           <b>ℹ️ Kraken non ha un conto demo.</b> Con MT5 apri dal sito del broker tutti i conti demo gratuiti che vuoi; con Kraken Futures <b>no</b>: la demo ufficiale è stata chiusa a luglio 2026 e dal sito di Kraken non si può più crearla.<br>
@@ -1521,6 +1522,10 @@ setTimeout(function(){
         </div>
         <div class="hint" style="margin:12px 0 6px;font-weight:700;letter-spacing:.3px">UTENTI SYNTRA (SALE SEGNALI)</div>
         <div id="syntraUtentiList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
+        <div class="fbOptRow">
+          <input id="syntraNuovoUtente" type="text" placeholder="nome utente Syntra (es. CrownPips)" style="flex:1;min-width:180px">
+          <button type="button" id="syntraAggiungiBtn" class="miniBtn" style="margin-left:8px">+ Aggiungi</button>
+        </div>
         <p class="hint" style="margin-top:4px">Un utente nuovo <b>non diventa sala da solo</b>: i suoi segnali arrivano nel pannello "!" con il pulsante <b>«Aggiungi utente come sala segnali»</b>. Finché non lo aggiungi, niente si apre in automatico dai suoi segnali.</p>
         <p class="hint" style="margin-top:6px">BlueStacks aperto con Syntra in primo piano e ADB attivo (Impostazioni → Avanzate). Il ponte resta sulla pagina <b>Notifiche</b> di Syntra (se non c'è la apre da solo): per ogni notifica nuova di un ordine (IN ATTESA, ATTIVATO...) apre il dettaglio, legge entrata, TP e SL e la passa come segnale; «Scambio concluso», «Target hit», «Vinto», «Perso» sono solo informazioni e non aprono niente. «ATTIVATO» apre a mercato solo su Kraken (su MT5 il pendente è già piazzato dall'«IN ATTESA»): la "sala" è <b>Syntra · nome utente</b>. Gli utenti compaiono nella tabella dell'apertura automatica, dove si accendono uno per uno, solo dopo averli aggiunti come sala (qui sotto o dal pannello del segnale). Le operazioni già presenti quando il lettore parte non vengono aperte.</p>
         </div>
@@ -3593,9 +3598,16 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 // sezione "SALVATAGGIO DEI CSV DIRETTAMENTE NEL FILE .HTML" più sotto), senza perdere nulla del
 // resto della pagina.
 const PRISTINE_HTML=document.documentElement.outerHTML;
+// Gestore "delegato" su tutto il documento, valido ANCHE nella finestra separata del grafico
+// (vedi trackPopupInteractions): i popup aperti da li' vengono spostati in quel documento.
+function fblDelega(tipo,fn,cattura){
+ (window.__fblDelegati=window.__fblDelegati||[]).push([tipo,fn,cattura]);
+ document.addEventListener(tipo,fn,cattura);
+ try{ if(typeof floatingDoc!=='undefined'&&floatingDoc&&floatingDoc!==document&&floatingDoc.__fbPopupTracked)floatingDoc.addEventListener(tipo,fn,cattura); }catch(e){}
+}
 // Gestione icone "?" di suggerimento: click/tap apre o chiude il fumetto (hover lo mostra già via CSS
 // sul desktop). Usiamo la fase di cattura così il click sull'icona non arriva mai al pulsante che la contiene.
-document.addEventListener('click',function(e){
+fblDelega('click',function(e){
  const qt=e.target.closest&&e.target.closest('.qtip');
  if(qt){
    e.preventDefault();e.stopPropagation();
@@ -4967,6 +4979,8 @@ const GRAFICO_LS={
  fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
  fb_tg_attivo:v=>{ try{ if(v==='1'){ tgAggiornaInterruttore(); tgCollega(); } else { tgScollega(); tgAggiornaInterruttore(); } }catch(e){} },
  fb_tg_rischio_totale:null,
+ fbl_registrazione_on:()=>{ try{ if($('fblRegAttiva'))$('fblRegAttiva').checked=fblRegAttivaNow(); registratoreSincronizza(true).then(()=>registratoreDisegna()); }catch(e){} },
+ fbl_etichette_tpsl:()=>{ try{ fblEtichetteTpSlUi(); draw(); }catch(e){} },
  fbl_griglia_visibile:()=>{ try{ updateGridVisibleBtn(); draw(); }catch(e){} },
  fbl_capital_22_23:()=>{ try{ fblCapitalSeraAggiornaUi(); liveSessionPhase=null; }catch(e){} },
  fbl_binance_attivo:()=>{ try{ binanceAggiornaUi(); }catch(e){} },
@@ -7114,6 +7128,8 @@ function updateTradeLevelArmUI(){
 // documento principale e, se non trova nulla, in quello staccato (se aperto).
 let floatingDoc=null;
 const $=x=>document.getElementById(x)||(floatingDoc&&floatingDoc.getElementById(x));
+// Come querySelectorAll, ma anche nella finestra separata (dove finiscono i popup aperti da li').
+function $$tutti(sel){ const a=[...document.querySelectorAll(sel)]; try{ if(floatingDoc&&floatingDoc!==document)a.push(...floatingDoc.querySelectorAll(sel)); }catch(e){} return a; }
 // BUG RISOLTO (segnalato: dentro alla finestra separata/PIP, le schede del popup "⚙️
 // Impostazioni" — Style/Griglia/Notizie e le sotto-schede di Style — sembravano "incastrate":
 // cliccandole il pulsante si evidenziava ma il pannello non cambiava mai). Causa: quel codice
@@ -16463,7 +16479,7 @@ function drawNewsHoverPreview(ctx,dot){
 // operazioni si sovrappongono e coprono il grafico). Spente: restano le linee, spariscono le etichette.
 function fblEtichetteTpSlVisibili(){ try{ return localStorage.getItem('fbl_etichette_tpsl')!=='0'; }catch(e){ return true; } }
 function fblEtichetteTpSlUi(){ const b=$('toggleTpSlEtichetteBtn'); if(b)b.classList.toggle('active',fblEtichetteTpSlVisibili()); }
-document.addEventListener('click',ev=>{
+fblDelega('click',ev=>{
  const b=ev.target&&ev.target.closest&&ev.target.closest('#toggleTpSlEtichetteBtn'); if(!b)return;
  const ora=!fblEtichetteTpSlVisibili();
  try{ localStorage.setItem('fbl_etichette_tpsl',ora?'1':'0'); }catch(e){}
@@ -19398,6 +19414,10 @@ let lastInteractionDoc=document;
 function trackPopupInteractions(doc){
  if(!doc||doc.__fbPopupTracked)return;
  doc.__fbPopupTracked=true;
+ // I gestori "delegati" (registrati con fblDelega) ascoltano anche qui: i popup aperti dalla
+ // finestra separata vengono spostati in questo documento, e senza di loro i loro pulsanti
+ // (schede, interruttori) non risponderebbero (BUG SEGNALATO: "premo e non fa nulla").
+ if(doc!==document)(window.__fblDelegati||[]).forEach(([t,f,c])=>{ try{ doc.addEventListener(t,f,c); }catch(e){} });
  ['pointerdown','keydown'].forEach(evt=>{
    // In cattura: registriamo il documento PRIMA che il gestore del pulsante apra il popup.
    doc.addEventListener(evt,ev=>{
@@ -22540,6 +22560,18 @@ function tgStato(testo,tipo){
  el.style.borderColor=tipo==='ok'?'rgba(45,212,191,.45)':(tipo==='err'?'rgba(224,82,82,.45)':'#2c3a4f');
 }
 function tgRenderGruppi(){
+ // RICHIESTO: gli utenti Syntra stanno SOLO nella sessione Syntra. Se un elenco vecchio (o di un
+ // altro dispositivo) li ha fra le sale Telegram, si spostano di la' e si tolgono da qui.
+ try{
+  const sy=(tgGruppi||[]).filter(g=>syntraEUtente(g));
+  if(sy.length){
+   tgGruppi=tgGruppi.filter(g=>!syntraEUtente(g));
+   sy.forEach(g=>{ syntraVisto(g); if(!syntraEAggiunto(g))tgGruppiSyntra.push(g); });
+   syntraSalvaSale();
+   try{ localStorage.setItem('fb_tg_gruppi',JSON.stringify(tgGruppi)); }catch(e){}
+   tgInvia({azione:'scrivi_chat',chat:tgGruppi});
+  }
+ }catch(e){}
  const box=$('tgGroupList'); if(!box)return;
  if(!tgGruppi.length){
    box.innerHTML='<div class="hint" style="margin:0">Nessuna sala ancora. Aggiungine una qui sotto.</div>';
@@ -22811,6 +22843,18 @@ function syntraUtentiDisegna(){
   box.appendChild(riga);
  });
 }
+function syntraAggiungiDaCampo(){
+ const c=$('syntraNuovoUtente'); if(!c)return;
+ const nome=String(c.value||'').trim().replace(/^Syntra\s*·\s*/i,'').replace(/^@/,'');
+ if(!nome){ c.focus(); return; }
+ const k='Syntra · '+nome;
+ // Stesso utente gia' visto con maiuscole diverse: si usa il nome come lo scrive Syntra.
+ const gia=syntraVisti.concat(tgGruppiSyntra).find(x=>x.toLowerCase()===k.toLowerCase());
+ syntraAggiungiSala(gia||k,false); c.value='';
+ $('status').textContent='📱 '+(gia||k)+' aggiunto alle sale segnali Syntra. L\'apertura automatica la accendi con ⚡ Forex / ⚡ Cripto.';
+}
+fblDelega('click',ev=>{ if(ev.target&&ev.target.closest&&ev.target.closest('#syntraAggiungiBtn'))syntraAggiungiDaCampo(); });
+fblDelega('keydown',ev=>{ if(ev.key==='Enter'&&ev.target&&ev.target.id==='syntraNuovoUtente'){ ev.preventDefault(); syntraAggiungiDaCampo(); } });
 function tgSaleTutte(){ return (Array.isArray(tgGruppi)?tgGruppi:[]).concat(tgGruppiSyntra.filter(n=>tgGruppi.indexOf(n)<0)); }
 let syntraStatoUltimo=null, syntraCampiToccati=false;
 function syntraDisegna(){
@@ -22963,6 +23007,15 @@ function tgCollega(){
      m.stato='nuovo';
      try{ syntraVisto(m.chat); }catch(e){}
      m.arrivoLocale_ms=Date.now();   // con eta_ms: eta' vera senza fidarsi dell'orologio di questo dispositivo
+     // RICHIESTO: un segnale vale UN minuto. Riaprendo l'app il ponte rimanda gli ultimi segnali:
+     // quelli piu' vecchi di un minuto entrano gia' disattivati (scaduti), senza suono, senza
+     // notifica e senza apertura automatica. Restano leggibili nel pannello.
+     if(tgEtaSegnaleMs(m)>TG_SEGNALE_VALIDO_MS){
+      m.stato='scaduto';
+      tgSegnaliRicevuti.push(m); tgSfoltisci();
+      try{ tgAggiornaPulsante(); if(tgPannelloAperto())tgRenderPannello(); }catch(e){}
+      return;
+     }
      tgSegnaliRicevuti.push(m);
      tgSfoltisci();
      tgSuonaSegnale();
@@ -23034,11 +23087,11 @@ $('tgRefreshBtn')?.addEventListener('click',()=>{ tgCollegamentoChiesto=true; tg
 $('tgPort')?.addEventListener('change',()=>{ tgCollegamentoChiesto=true; tgCollega(); });
 // Sala segnali: sessioni Telegram / Syntra (si ricorda l'ultima aperta).
 function fblSalaSessione(nome){
- document.querySelectorAll('[data-salasessione]').forEach(b=>b.classList.toggle('active',b.dataset.salasessione===nome));
- document.querySelectorAll('[data-salasessione-panel]').forEach(p=>{ p.style.display=p.dataset.salasessionePanel===nome?'':'none'; });
+ $$tutti('[data-salasessione]').forEach(b=>b.classList.toggle('active',b.dataset.salasessione===nome));
+ $$tutti('[data-salasessione-panel]').forEach(p=>{ p.style.display=p.dataset.salasessionePanel===nome?'':'none'; });
  try{ localStorage.setItem('fbl_sala_sessione',nome); }catch(e){}
 }
-document.addEventListener('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('[data-salasessione]'); if(b)fblSalaSessione(b.dataset.salasessione); });
+fblDelega('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('[data-salasessione]'); if(b)fblSalaSessione(b.dataset.salasessione); });
 try{ fblSalaSessione(localStorage.getItem('fbl_sala_sessione')==='syntra'?'syntra':'telegram'); }catch(e){}
 $('genSettingsTabTelegram')?.addEventListener('click',()=>{
  // Aprire la scheda NON accende niente: c'e' un interruttore, e girarlo spetta all'utente. Qui ci
@@ -23075,6 +23128,15 @@ function tgRischioTotale(){
  try{ v=Number(localStorage.getItem(TG_RISCHIO_KEY)); }catch(e){}
  return (Number.isFinite(v)&&v>0)?Math.min(20,v):1;
 }
+// Un segnale non aperto si disattiva da solo dopo un minuto (aperto: e' gia' "eseguito").
+const TG_SEGNALE_VALIDO_MS=60000;
+setInterval(()=>{
+ let cambiato=false;
+ (tgSegnaliRicevuti||[]).forEach(v=>{
+  if(v&&(!v.stato||v.stato==='nuovo')&&!v.tenuto&&tgEtaSegnaleMs(v)>TG_SEGNALE_VALIDO_MS){ v.stato='scaduto'; cambiato=true; }
+ });
+ if(cambiato){ try{ tgAggiornaPulsante(); if(tgPannelloAperto())tgRenderPannello(); }catch(e){} }
+},5000);
 function tgDaValutare(){ return tgSegnaliRicevuti.filter(v=>!v.stato||v.stato==='nuovo'); }
 // RICHIESTO ESPLICITAMENTE: "al decimo segnale inizi ad eliminare, man mano che arriva un nuovo
 // segnale, i segnali piu' vecchi". Un elenco che cresce all'infinito non si legge piu'.
@@ -23399,6 +23461,11 @@ function tgRenderPannello(){
    tag.style.cssText='color:#9ca3af;font-weight:700';
    tag.textContent='· ignorato';
    top.appendChild(tag);
+  }else if(voce.stato==='scaduto'){
+   const tag=document.createElement('span');
+   tag.style.cssText='color:#9ca3af;font-weight:700';
+   tag.textContent='· disattivato (oltre 1 minuto)';
+   top.appendChild(tag);
   }
   card.appendChild(top);
 
@@ -23483,7 +23550,7 @@ function tgRenderPannello(){
    azioni.appendChild(apri); azioni.appendChild(via);
   }else{
    const ri=tgBottone('Rimetti fra i nuovi');
-   ri.addEventListener('click',()=>{ voce.stato='nuovo'; tgAggiornaPulsante(); tgRenderPannello(); });
+   ri.addEventListener('click',()=>{ voce.stato='nuovo'; voce.tenuto=true; tgAggiornaPulsante(); tgRenderPannello(); });   // rimesso a mano: non riscade
    azioni.appendChild(ri);
   }
   // RICHIESTO ESPLICITAMENTE: oltre ad aprire o ignorare, eliminare il segnale DEFINITIVAMENTE
@@ -24088,14 +24155,14 @@ if(tgAutoCrNuova)tgAutoSalva();
 function tgAutoMostraFam(fam){
  tgAutoFamUi=fam==='cr'?'cr':'fx'; tgAuto=tgAutoDi(tgAutoFamUi);
  try{ localStorage.setItem('fbl_tg_auto_scheda',tgAutoFamUi); }catch(e){}
- document.querySelectorAll('[data-tgautofam]').forEach(b=>b.classList.toggle('active',b.dataset.tgautofam===tgAutoFamUi));
+ $$tutti('[data-tgautofam]').forEach(b=>b.classList.toggle('active',b.dataset.tgautofam===tgAutoFamUi));
  const t=$('tgAutoFamNota');
  if(t)t.innerHTML=tgAutoFamUi==='cr'
-  ?'Stai modificando la strategia <b>Cripto</b>: vale per i segnali su BTC, ETH e le altre cripto (Kraken o conto simulato).'
+  ?'Stai modificando la strategia <b>Cripto</b>: vale per i segnali su BTC, ETH e le altre cripto (Kraken o conto simulato). Interruttore, freni e strategia universale qui sotto sono <b>solo per le cripto</b>. Su Kraken ogni take profit è una <b>chiusura parziale</b> della stessa posizione: la strategia (universale o della sala) decide dove va lo stop dopo ogni chiusura.'
   :'Stai modificando la strategia <b>Forex, indici e azioni</b>: vale per tutti i segnali che non sono cripto (MT5 o conto simulato).';
  try{ tgAutoDisegna(); }catch(e){}
 }
-document.addEventListener('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('[data-tgautofam]'); if(b)tgAutoMostraFam(b.dataset.tgautofam); });
+fblDelega('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('[data-tgautofam]'); if(b)tgAutoMostraFam(b.dataset.tgautofam); });
 try{ syntraUtentiDisegna(); }catch(e){}   // qui: l'elenco legge tgAuto (spunta automatico)
 // Quanti take profit si possono configurare per sala: sei (RICHIESTO). Un segnale con meno target
 // usa solo le prime caselle.
@@ -24444,7 +24511,16 @@ function tgAutoDisegna(){
   tr.appendChild(td); corpo.appendChild(tr);
   return;
  }
+ let gruppoPrec=null;
  tgGruppi.forEach(nome=>{
+  // Intestazione di gruppo: le sale Telegram e gli utenti Syntra non si mischiano.
+  const gruppo=syntraEUtente(nome)?'📱 Utenti Syntra':'✈️ Sale Telegram';
+  if(gruppo!==gruppoPrec){
+   gruppoPrec=gruppo;
+   const th=document.createElement('tr'), td=document.createElement('td');
+   td.colSpan=5; td.style.cssText='padding:10px 4px 4px;font-weight:700;font-size:11.5px;letter-spacing:.3px;color:#8b96a5';
+   td.textContent=gruppo; th.appendChild(td); corpo.appendChild(th);
+  }
   const cfg=tgAutoSala(nome);
   const tr=document.createElement('tr');
   if(!cfg.attivo)tr.className='spenta';
@@ -28244,7 +28320,7 @@ function dashAggiornaUI(){
   }
  });
 }
-document.addEventListener('change',ev=>{
+fblDelega('change',ev=>{
  const sel=ev.target.closest&&ev.target.closest('.dashPeriodo');
  if(sel){
   const nome=sel.dataset.dash;
@@ -33561,16 +33637,19 @@ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==
 // --- Registrazione grafico: interruttore, archivio dei file giornalieri (RICHIESTO: "giorno per
 // giorno, illimitata, la interrompo io; i file giornalieri uno sotto l'altro, li seleziono e li
 // aggiungo all'asset nella Libreria per il backtest").
-function fblRegAttivaNow(){ try{ return localStorage.getItem('fbl_registrazione_attiva')==='1'; }catch(e){ return false; } }
-document.addEventListener('change',ev=>{
+// RICHIESTO: sempre accesa, finche' non la si spegne a mano. Senza scelta salvata = accesa. La
+// scelta e' condivisa fra i dispositivi (GRAFICO_LS): un telefono rimasto "spento" non spegne piu'
+// la registrazione del PC a ogni sincronizzazione.
+function fblRegAttivaNow(){ try{ return localStorage.getItem('fbl_registrazione_on')!=='0'; }catch(e){ return true; } }
+fblDelega('change',ev=>{
  const c=ev.target; if(!c||c.id!=='fblRegAttiva')return;
- try{ localStorage.setItem('fbl_registrazione_attiva',c.checked?'1':'0'); }catch(e){}
+ try{ localStorage.setItem('fbl_registrazione_on',c.checked?'1':'0'); }catch(e){}
  registratoreSincronizza(true).then(()=>registratoreDisegna());
  $('status').textContent=c.checked?'⏺️ Registrazione grafico ACCESA per gli asset della watchlist (sul PC, anche ad app chiusa).':'⏹️ Registrazione grafico spenta: i giorni già registrati restano sul PC.';
 },true);
 function fblMb(b){ if(b<1048576)return Math.max(1,Math.round(b/1024)).toLocaleString('it-IT')+' KB'; return (b/1048576).toLocaleString('it-IT',{maximumFractionDigits:b<10485760?1:0})+' MB'; }
-function registratoreSelezionaTutti(si){ document.querySelectorAll('#regGiorniBox input[data-giorno]').forEach(c=>{ c.checked=si; }); }
-function registratoreSelezionati(){ return [...document.querySelectorAll('#regGiorniBox input[data-giorno]:checked')].map(c=>({asset:c.dataset.asset,giorno:c.dataset.giorno})); }
+function registratoreSelezionaTutti(si){ $$tutti('#regGiorniBox input[data-giorno]').forEach(c=>{ c.checked=si; }); }
+function registratoreSelezionati(){ return $$tutti('#regGiorniBox input[data-giorno]:checked').map(c=>({asset:c.dataset.asset,giorno:c.dataset.giorno})); }
 async function registratoreScaricaSelezionati(){
  const sel=registratoreSelezionati();
  if(!sel.length){ await appAlert('Seleziona almeno un giorno.'); return; }
@@ -33609,7 +33688,13 @@ async function registratoreDisegna(){
  const s=await registratoreLeggiStato();
  if(!s||!s.stato){ box.innerHTML='⚠️ Il servizio dati sul PC (porta 8001) non risponde: la registrazione gira lì.'; if(lista)lista.innerHTML=''; return; }
  const st=s.stato, quando=t=>t?new Date(t).toLocaleString('it-IT'):'—';
- const acceso=!!(s.config&&s.config.registrazione);
+ let acceso=!!(s.config&&s.config.registrazione);
+ if(acceso!==fblRegAttivaNow()&&!registratoreDisegna.__corretto){
+  registratoreDisegna.__corretto=true;   // una correzione per giro, niente rimbalzi
+  await registratoreSincronizza(true);
+  const s2=await registratoreLeggiStato(); if(s2&&s2.config)acceso=!!s2.config.registrazione;
+  setTimeout(()=>{ registratoreDisegna.__corretto=false; },5000);
+ }
  const righe=[];
  if(acceso){
   Object.entries(st.cripto||{}).forEach(([k,v])=>righe.push(escapeHtmlText(k)+': '+(v.trade_scritti!=null?(v.trade_scritti.toLocaleString('it-IT')+' trade, ultimo '+quando(v.ultimo_trade)):'')+(v.book_scritti!=null?(v.book_scritti.toLocaleString('it-IT')+' fotografie del book, ultima '+quando(v.ultimo_book)):'')));
@@ -33848,7 +33933,7 @@ function binanceAggiornaUi(){
   ?'<b style="color:#7fdc9a">Attiva.</b> Nel selettore ASSET (in Live) la ricerca mostra anche i contratti <b>Binance Futures</b>: sceglierne uno porta il grafico su Binance, in tempo reale.'
   :'Spenta: le cripto si vedono da Capital.com o dal broker MT5, come prima.';
 }
-document.addEventListener('change',ev=>{
+fblDelega('change',ev=>{
  const c=ev.target&&ev.target.closest&&ev.target.closest('.fblBinanceToggle');
  if(!c)return;
  try{ localStorage.setItem(BINANCE_ATTIVO_KEY,c.checked?'1':'0'); }catch(e){}
@@ -33978,7 +34063,7 @@ function fblContoEffettivo(){
 }
 function fblContoDisegna(){
  const eff=fblContoEffettivo();
- document.querySelectorAll('.fblContoBtn').forEach(b=>{
+ $$tutti('.fblContoBtn').forEach(b=>{
   b.classList.toggle('active',b.dataset.conto===eff);
   const punto=b.querySelector('.fblContoPunto'); if(!punto)return;
   let on=false; try{ on=b.dataset.conto==='mt5'?!!mt5Connected:krakenContoPronto(); }catch(e){}
@@ -34013,7 +34098,15 @@ async function fblContoScegli(c){
  fblContoDisegna();
  try{ update(); draw(); }catch(e){}
 }
-document.addEventListener('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('.fblContoBtn'); if(b)fblContoScegli(b.dataset.conto); });
+fblDelega('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('.fblContoBtn'); if(b)fblContoScegli(b.dataset.conto); });
+// Collegamento/Modalita' -> Kraken -> "Apri conto Kraken": chiude il popup e porta la dashboard su Kraken.
+fblDelega('click',async ev=>{
+ if(!(ev.target&&ev.target.closest&&ev.target.closest('#krakenApriContoBtn')))return;
+ await fblContoScegli('kraken');
+ if(fblContoEffettivo()!=='kraken')return;   // non collegato: il motivo e' gia' nella riga di stato
+ const ov=$('generalSettingsModalOverlay'); if(ov)ov.style.display='none';
+ try{ ($('fblContoBar')||document.body).scrollIntoView({behavior:'smooth',block:'start'}); }catch(e){}
+});
 setInterval(()=>{ try{ fblContoDisegna(); }catch(e){} },2000);
 // La dashboard sui numeri del conto Kraken. Le cripto non hanno pip: al loro posto i punti di
 // prezzo (USD per moneta) delle chiusure.
@@ -34106,13 +34199,13 @@ async function krakenLeggiPosizioni(){
  try{ krakenDisegnaConto(); }catch(e){}
  return r.ok?krakenPosizioni:null;
 }
-document.addEventListener('change',ev=>{
+fblDelega('change',ev=>{
  const t=ev.target; if(!t)return;
  if(t.id==='krakenOrdiniAttivi'){ try{ localStorage.setItem('fbl_kraken_ordini',t.checked?'1':'0'); }catch(e){} }
  if(t.id==='krakenAmbiente'||t.id==='krakenSimTipo'){ krakenFormToccato=true; try{ krakenFormUi(); }catch(e){} }
  if(t.id==='krakenLeva'){ const v=Number(t.value); if(v>=1){ try{ localStorage.setItem('fbl_kraken_leva',String(Math.min(50,v))); }catch(e){} } }
 },true);
-document.addEventListener('click',async ev=>{
+fblDelega('click',async ev=>{
  const b=ev.target&&ev.target.closest&&ev.target.closest('#krakenCollegaBtn,#krakenScollegaBtn,#krakenAggiornaBtn,#krakenAzzeraBtn,#krakenPropBtn');
  if(!b)return;
  if(b.id==='krakenAggiornaBtn'){ await krakenAggiornaConto(); await krakenLeggiPosizioni(); await krakenLeggiStorico(); krakenDisegnaConto(); return; }
@@ -34435,7 +34528,7 @@ function fblCapitalSeraAggiornaUi(){
  const v=fblCapitalSeraAttiva();
  [document,typeof floatingDoc!=='undefined'?floatingDoc:null].forEach(d=>{ if(d)d.querySelectorAll('.fblCapitalSeraToggle').forEach(c=>{ c.checked=v; }); });
 }
-document.addEventListener('change',e=>{
+fblDelega('change',e=>{
  const c=e.target;
  if(!c||!c.classList||!c.classList.contains('fblCapitalSeraToggle'))return;
  try{ localStorage.setItem(FBL_CAPITAL_SERA_KEY,c.checked?'1':'0'); }catch(err){}
