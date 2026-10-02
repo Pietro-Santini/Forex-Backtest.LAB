@@ -9418,6 +9418,85 @@ let visibleCount=80; // numero di candele visibili: illimitato, gestito internam
 function getVisibleCount(){
  return Math.max(2, Math.round(visibleCount)||80);
 }
+// ===================== ANCORA DELLA VISTA AL CAMBIO TIMEFRAME =====================
+// RICHIESTO ("al cambio del timeframe la zona di riferimento si sposta di tantissimo; deve restare
+// nella parte del grafico che sto guardando, prendendo come riferimento il periodo di tempo e la
+// scala dei prezzi; e se un bug mi manda in tutt'altro giorno, si ricorda dove eravamo e mi ci
+// riporta"). Prima la vista si spostava contando le CANDELE dal bordo live: notti, weekend e
+// storici di lunghezza diversa fra un timeframe e l'altro rendevano quel conto sbagliato, anche di
+// giorni. Ora si fotografa l'ORARIO al centro della vista e la scala dei prezzi, e dopo il cambio
+// si cerca la candela di quell'orario nel nuovo timeframe. Per qualche secondo una sentinella
+// controlla che la vista resti li': se qualcosa la sposta altrove (e l'utente non ha toccato il
+// grafico), la riporta indietro.
+const FBL_VISTA_MIN_CANDELE=12;
+var fblVistaUtenteAt=0, fblVistaSentinellaT=[], fblVistaUltimo=null;
+function fblTempoRiga(r){ if(!r)return NaN; const t=parseDateTime(r.date); return Number.isFinite(t)?t:closeTimeOf(r); }
+function fblIndicePerTempo(tm){
+ let lo=0, hi=rows.length-1, ris=0;
+ while(lo<=hi){ const m=(lo+hi)>>1; const tt=fblTempoRiga(rows[m]); if(tt<=tm){ ris=m; lo=m+1; } else hi=m-1; }
+ return ris;
+}
+// Posizione (indice di candela, anche frazionaria) di un istante nelle candele attuali.
+function fblPosizionePerTempo(tm){
+ const tf=currentTF||1, last=rows.length-1;
+ const t0=fblTempoRiga(rows[0]), tL=fblTempoRiga(rows[last]);
+ if(tm<=t0)return (tm-t0)/(tf*60000);
+ if(tm>=tL)return last+(tm-tL)/(tf*60000);
+ const i=fblIndicePerTempo(tm), a=fblTempoRiga(rows[i]), b=i<last?fblTempoRiga(rows[i+1]):a+tf*60000;
+ return i+Math.max(0,Math.min(1,(tm-a)/Math.max(1,b-a)));
+}
+function fblTempoPerPosizione(pos){
+ const tf=currentTF||1, last=rows.length-1;
+ if(pos<=0)return fblTempoRiga(rows[0])+pos*tf*60000;
+ if(pos>=last)return fblTempoRiga(rows[last])+(pos-last)*tf*60000;
+ const i=Math.floor(pos), a=fblTempoRiga(rows[i]), b=fblTempoRiga(rows[i+1]);
+ return a+(pos-i)*(b-a);
+}
+function fblVistaFotografa(){
+ if(!rows.length)return null;
+ const n=getVisibleCount(), end=Math.max(0,Math.min(maxViewEnd(),viewEnd));
+ const tCentro=fblTempoPerPosizione(end-(n-1)/2);
+ if(!Number.isFinite(tCentro))return null;
+ // Ampiezza VOLUTA: se l'ultimo cambio ha dovuto allargare la vista al minimo di candele e
+ // l'utente non ha zoomato da allora, si riparte dall'ampiezza che aveva scelto lui (altrimenti
+ // 1m -> 1H -> 1m tornerebbe con una vista molto piu' larga di quella di partenza).
+ let minuti=n*(currentTF||1);
+ if(fblVistaUltimo&&fblVistaUtenteAt<fblVistaUltimo.at&&Math.round(visibleCount)===fblVistaUltimo.vc)minuti=fblVistaUltimo.minuti;
+ return {tCentro,minuti,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,autoFitWidth,asset:currentAssetKey,fattaAt:Date.now()};
+}
+function fblVistaRipristina(f){
+ if(!f||!rows.length||(f.asset&&f.asset!==currentAssetKey))return;
+ const tf=currentTF||1;
+ visibleCount=Math.max(FBL_VISTA_MIN_CANDELE,Math.round(f.minuti/tf));
+ fblVistaUltimo={minuti:f.minuti,vc:Math.round(visibleCount),at:Date.now()};
+ const n=getVisibleCount();
+ if(f.followLatest)viewEnd=idx;
+ else viewEnd=Math.max(0,Math.min(maxViewEnd(),fblPosizionePerTempo(f.tCentro)+(n-1)/2));
+ followLatest=f.followLatest;
+ viewPriceLo=f.viewPriceLo; viewPriceHi=f.viewPriceHi; priceZoomFactor=f.priceZoomFactor;
+ autoFitWidth=false;   // la larghezza scelta si conserva: niente ricalcolo automatico che la cambi
+}
+// Sentinella: la vista e' ancora sull'orario fotografato? Se no (e l'utente non ha toccato il
+// grafico dopo il cambio), la rimette dov'era.
+function fblVistaSorveglia(f){
+ fblVistaSentinellaT.forEach(clearTimeout); fblVistaSentinellaT=[];
+ if(!f)return;
+ const partenza=Date.now();
+ [400,1200,2500,5000].forEach(ms=>fblVistaSentinellaT.push(setTimeout(()=>{
+  if(fblVistaUtenteAt>partenza||!rows.length||(f.asset&&f.asset!==currentAssetKey))return;
+  const n=getVisibleCount(), end=Math.max(0,Math.min(maxViewEnd(),viewEnd));
+  let fuori;
+  if(f.followLatest)fuori=Math.abs(end-idx)>n*0.5;
+  else{
+   const a=fblTempoPerPosizione(end-n+1), b=fblTempoPerPosizione(end);
+   fuori=!(f.tCentro>=a&&f.tCentro<=b);
+  }
+  if(fuori){
+   console.warn('[Vista] spostata altrove dopo il cambio timeframe: riportata dov\'era.');
+   fblVistaRipristina(f); try{ update(); draw(); }catch(e){}
+  }
+ },ms)));
+}
 // Calcola quante candele mostrare in base alla larghezza ATTUALE del grafico, così ogni
 // candela mantiene uno spessore leggibile: né troppo sottile/ammassata (grafico
 // "schiacciato" quando ce ne sono troppe per lo spazio disponibile) né troppo larga e
@@ -18996,6 +19075,7 @@ $('tf').addEventListener('change',()=>{
  // TF in Live (vedi preserved.offsetFromEnd in __loadLiveHistoryFromCapitalImpl più sotto nel
  // file), qui applicato anche allo Storico, mai fatto finora.
  const oldIdx=idx, oldViewEnd=viewEnd;
+ const vistaFoto=fblVistaFotografa();   // orario al centro + scala prezzi, nel VECCHIO timeframe
 
  currentTF=Number($('tf').value)||1;
  // Il bucketing del footprint dipende da currentTF: ricostruisce i bucket dal log tick grezzo
@@ -19010,7 +19090,7 @@ $('tf').addEventListener('change',()=>{
    // bucket e i tick nuovi aggiunti dallo streaming a un'altra, mischiate insieme.
    const asset=$('market')?.value;
    if(asset && asset!=='custom'){
-     withLoadingOverlay('Cambio timeframe Live…', ()=>loadLiveHistoryFromCapital(asset,{tfChangeSpanMinutes:visibleRealMinutes,tfChangeOldTF:oldTF}));
+     withLoadingOverlay('Cambio timeframe Live…', ()=>loadLiveHistoryFromCapital(asset,{tfChangeSpanMinutes:visibleRealMinutes,tfChangeOldTF:oldTF,vistaFoto}));
    }
    $('tf').blur();
    return;
@@ -19035,6 +19115,8 @@ $('tf').addEventListener('change',()=>{
  }
  // Stessa finestra di tempo reale, non più lo stesso numero di candele (vedi commento sopra).
  visibleCount=Math.max(2,Math.round(visibleRealMinutes/(currentTF||1)));
+ // Ancora per ORARIO (non per numero di candele): vedi fblVistaFotografa().
+ if(vistaFoto){ fblVistaRipristina(vistaFoto); fblVistaSorveglia(vistaFoto); }
 
  // Non azzeriamo più la sessione: capitale, trade e linee restano.
  const label=currentTF>=1440?(currentTF/1440)+'D':currentTF>=60?(currentTF/60)+'H':currentTF+'m';
@@ -20934,6 +21016,10 @@ chartEl.addEventListener('pointercancel',e=>{
 // La logica di ancoraggio del punto sotto al mouse (rect/mx/my qui sotto) resta invariata: usa
 // comunque getBoundingClientRect() del canvas vero, non dell'elemento che ha ricevuto l'evento.
 const chartWheelTarget=document.getElementById('chartWrap')||chartEl;
+// Ogni gesto dell'utente sul grafico ferma la sentinella della vista (vedi fblVistaSorveglia):
+// se sposta lui il grafico, la sentinella non deve riportarlo indietro.
+['wheel','pointerdown','touchstart'].forEach(tipo=>chartWheelTarget.addEventListener(tipo,()=>{ fblVistaUtenteAt=Date.now(); },{passive:true,capture:true}));
+document.addEventListener('keydown',e=>{ if(/^Arrow|^Page|^Home$|^End$/.test(e.key))fblVistaUtenteAt=Date.now(); },true);
 chartWheelTarget.addEventListener('wheel',e=>{
  if(!(e.ctrlKey||e.shiftKey))return; // senza modificatori: nessuna interferenza, lo scroll della pagina resta quello di sempre ovunque
  // BUG RISOLTO (finestre PIP: CTRL+rotellina zoomava la PAGINA sopra la toolbar/sidebar/pulsanti
@@ -20976,7 +21062,12 @@ chartWheelTarget.addEventListener('wheel',e=>{
    const mx=e.clientX-rect.left, my=e.clientY-rect.top;
    const cw=w-pad.l-pad.r, ch=h-pad.t-pad.b;
    const insideChart=rows.length&&cw>0&&ch>0&&mx>=pad.l&&mx<=w-pad.r&&my>=pad.t&&my<=h-pad.b;
-   const newN=Math.max(2,Math.min(maxManualZoomOutVisibleCount(),Math.round(visibleCount*factor)));
+   // BUG RISOLTO ("passando da 1m a un timeframe alto CTRL+rotellina orizzontale si blocca"): con
+   // poche candele visibili l'arrotondamento annullava il passo (2*1.1=2.2 -> 2, 5*0.9=4.5 -> 5)
+   // e lo zoom restava fermo. Ora ogni scatto cambia almeno di una candela.
+   const vcOra=Math.max(2,Math.round(visibleCount)||2);
+   const grezzo=Math.round(vcOra*factor);
+   const newN=Math.max(2,Math.min(maxManualZoomOutVisibleCount(),factor<1?Math.min(grezzo,vcOra-1):Math.max(grezzo,vcOra+1)));
    if(insideChart){
      const f=(mx-pad.l)/cw; // frazione orizzontale (0..1) del punto sotto il puntatore nell'area di plot
      const pos=oldStart+f*oldN; // posizione (indice candela, anche frazionaria) sotto il puntatore, PRIMA dello zoom
@@ -28754,6 +28845,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  }else{
    viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  }
+ if(preserved&&opts&&opts.vistaFoto){ fblVistaRipristina(opts.vistaFoto); fblVistaSorveglia(opts.vistaFoto); }
  update();draw();
  console.log(`[LoadHistory] merge+rebuildRows+draw completati in ${(performance.now()-__tMergeStart).toFixed(0)}ms (${baseRows.length.toLocaleString('it-IT')} candele in baseRows)`);
  // Stessa FIX del cambio ASSET storico: riallinea la strip dei chip indicatori dopo il
@@ -32159,6 +32251,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  }else{
    viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  }
+ if(preserved&&opts&&opts.vistaFoto){ fblVistaRipristina(opts.vistaFoto); fblVistaSorveglia(opts.vistaFoto); }
  update();draw();
  renderActiveIndicatorsUI();
  saveLightStateNow();
@@ -32947,6 +33040,7 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
  }else{
   viewEnd=idx; followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
  }
+ if(conservata&&opts&&opts.vistaFoto){ fblVistaRipristina(opts.vistaFoto); fblVistaSorveglia(opts.vistaFoto); }
  update(); draw();
  renderActiveIndicatorsUI();
  saveLightStateNow();
