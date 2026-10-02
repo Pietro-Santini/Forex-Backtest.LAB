@@ -2808,6 +2808,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
   <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
    <div style="font-weight:600;color:#e8edf3">📂 File CSV caricati (uniti nel backtest)</div>
    <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <button id="fblAggiornaCartellaBtn" type="button" class="miniBtn" title="Rilegge i CSV di questo asset dalla cartella collegata (o dal PC) e aggiorna la copia interna dell'app">🔄 Aggiorna dalla cartella</button>
     <button id="toggleCsvListBtn" type="button" class="miniBtn" title="Mostra/nascondi l'elenco dei singoli file (l'elenco può essere lungo)">🙈 Nascondi elenco</button>
    </div>
   </div>
@@ -7869,6 +7870,7 @@ async function getLibraryRootHandle(){
 async function getAssetFolderFiles(asset){
  const root=await getLibraryRootHandle();
  if(!root)return null;
+ const grezzi=[];
  let dirHandle;
  try{ dirHandle=await root.getDirectoryHandle(asset); }
  catch(e){ return null; }
@@ -7879,9 +7881,10 @@ async function getAssetFolderFiles(asset){
      const file=await handle.getFile();
      const testo=await file.text();
      const rows=await parseCSVAsync(testo,name);
-     if(rows.length){ const voce={id:'folder_'+asset+'_'+name,name,addedAt:file.lastModified||Date.now(),rows}; const reg=fblRegRighe(testo); if(reg)voce.registrazione=reg; out.push(voce); }
+     if(rows.length){ const voce={id:'folder_'+asset+'_'+name,name,addedAt:file.lastModified||Date.now(),rows}; const reg=fblRegRighe(testo); if(reg)voce.registrazione=reg; out.push(voce); grezzi.push({nome:name,mod:file.lastModified||0,byte:file.size||testo.length,testo}); }
    }catch(e){ console.warn('Lettura CSV da cartella libreria fallita:',name,e); }
  }
+ fblDopoLetturaCartella(asset,grezzi);
  return out;
 }
 // ===================== CARICAMENTO CSV PROGRESSIVO =====================
@@ -7969,14 +7972,15 @@ async function getAssetFolderFilesProgressive(asset,targetTime){
  const partial=[{id:'folder_'+asset+'_'+chosen.name,name:chosen.name,addedAt:chosen.file.lastModified||Date.now(),rows:partialRows}];
  { const reg=fblRegRighe(text); if(reg)partial[0].registrazione=reg; }
  const loadAll=async()=>{
-   const out=[];
+   const out=[], grezzi=[];
    for(const e of entries){
      try{
        const testo=e===chosen?text:await e.file.text();
        const rowsAll=await parseCSVAsync(testo);
-       if(rowsAll.length){ const voce={id:'folder_'+asset+'_'+e.name,name:e.name,addedAt:e.file.lastModified||Date.now(),rows:rowsAll}; const reg=fblRegRighe(testo); if(reg)voce.registrazione=reg; out.push(voce); }
+       if(rowsAll.length){ const voce={id:'folder_'+asset+'_'+e.name,name:e.name,addedAt:e.file.lastModified||Date.now(),rows:rowsAll}; const reg=fblRegRighe(testo); if(reg)voce.registrazione=reg; out.push(voce); grezzi.push({nome:e.name,mod:e.file.lastModified||0,byte:e.file.size||testo.length,testo}); }
      }catch(err){ console.warn('Lettura CSV da cartella libreria fallita:',e.name,err); }
    }
+   fblDopoLetturaCartella(asset,grezzi);
    return out;
  };
  return {partial,loadAll,totalFiles:entries.length};
@@ -8152,7 +8156,20 @@ async function autoLoadAssetLibrary(asset){
    csvBackgroundLoadPromise=null;
    let progressiveLoadAll=null;
    let files=null;
-   try{
+   // CSV SENZA PERMESSI (RICHIESTO): se la cartella non e' gia' sbloccata, si usa la copia interna
+   // dell'app; se non c'e', la libreria del PC (telefono/tablet). La cartella si usa solo se il
+   // browser la lascia gia' leggere, o se l'utente preme "Aggiorna dalla cartella".
+   let fonteCsv='cartella';
+   if(!fblForzaCartella&&!(await fblCartellaSenzaChiedere())){
+     files=await fblFileDaCache(asset);
+     if(files){ fonteCsv='copia'; fblControllaPcInSottofondo(asset); }
+     else{
+       const pc=await fblLibreriaPcScarica(asset);
+       if(pc&&pc.length){ await fblCsvCacheSalva(asset,pc); files=await fblFileDaCache(asset); if(files)fonteCsv='pc'; }
+     }
+   }
+   fblForzaCartella=false;
+   if(!files)try{
      const savedView=(assetChartViews[currentMode()]||{})[asset];
      const target=savedView&&Number.isFinite(savedView.masterTime)?savedView.masterTime:NaN;
      const prog=await getAssetFolderFilesProgressive(asset,target);
@@ -8209,7 +8226,7 @@ async function autoLoadAssetLibrary(asset){
      $('fileName').textContent='⏳ '+baseRows.length.toLocaleString('it-IT')+' candele (caricamento completo in corso…)';
      $('status').textContent=`Grafico pronto per ${asset}: sto caricando il resto dello storico in background, puoi già usarlo.`;
    }else{
-     $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fromFolder?' (cartella di progetto collegata)':''}.`;
+     $('status').textContent = `Caricati automaticamente ${rows.length.toLocaleString('it-IT')} candele per ${asset} dalla libreria storici${fonteCsv==='copia'?' (copia interna dell\'app: nessun permesso richiesto)':fonteCsv==='pc'?' (dalla libreria del PC)':fromFolder?' (cartella di progetto collegata)':''}.`;
    }
    autoLoadAssetLibrary._pendingBackground=progressiveLoadAll?{asset,loadAll:progressiveLoadAll,gen:myGen}:null;
  });
@@ -21825,10 +21842,14 @@ function notionTradePayload(t){
  // Colonna "Origine" su Notion (richiesta): stessa etichetta della colonna del Journal.
  if(t.mt5Ticket!=null&&!t.tgSala&&typeof mt5ApplicaSegnale==='function')mt5ApplicaSegnale(t);
  const origine=t.tgSala?('📡 '+String(t.tgSala)):'👤 Manuale';
+ // SEGNALATO: le chiusure in Stop Profit arrivavano su Notion come "Stop Loss" (il trade conserva
+ // il motivo grezzo 'SL'). Stessa regola del Journal: stop a pareggio o in profitto -> 'BE' o
+ // "Stop Profit" (scritto per esteso: Notion lo usa cosi' com'e', senza aggiornare il server).
+ const motivo=closeResultLabel(String(t.result||''),t);
  return {
    origine,
    // Esito calcolato qui, con la stessa regola del riquadro del conto: Notion non deve indovinarlo.
-   esito:esitoOperazione(t),
+   esito:esitoOperazione(Object.assign({},t,{result:motivo})),
    // R/R gia' arrotondato al mezzo punto, come nel Journal ("1/2.5"): Notion non lo ricalcola.
    rr:(()=>{ const v=rrArrotondatoTesto(t.entry,t.rrSl??t.sl,t.tp,'/'); return v==='—'?null:v; })(),
    key:String(t.id), mode:t.mode||'backtest', asset:t.asset||'', side:t.side||'',
@@ -21836,7 +21857,7 @@ function notionTradePayload(t){
    pips:Number.isFinite(Number(t.pips))?Math.round(Number(t.pips)*10)/10:null,
    pl:Number.isFinite(Number(t.pl))?Math.round(Number(t.pl)*100)/100:null,
    account:Number.isFinite(Number(t.account))?Math.round(Number(t.account)*100)/100:null,
-   result:t.result||'', openedAt:Number.isFinite(openMs)?openMs:null, closedAt:Number.isFinite(closedMs)?closedMs:null,
+   result:motivo==='SP'?'Stop Profit':(motivo||''), openedAt:Number.isFinite(openMs)?openMs:null, closedAt:Number.isFinite(closedMs)?closedMs:null,
    strategy:t.strategy||'', mt5Ticket:t.mt5Ticket!=null?String(t.mt5Ticket):null,
    mt5Login:t.mt5Login!=null?String(t.mt5Login):null, mt5Server:t.mt5Server||''
  };
@@ -32937,6 +32958,104 @@ function fblProfiloIndControlla(){
 },true));
 setInterval(()=>{ try{ fblProfiloIndControlla(); }catch(e){} },700);
 
+
+
+// ===================== CSV SENZA PERMESSI: COPIA INTERNA + LIBRERIA DEL PC =====================
+// RICHIESTO ("confermato la prima volta, poi deve rifarsi da solo"): il browser non permette di
+// confermare da script l'accesso a una cartella. Quindi, dopo la prima lettura, i CSV di ogni asset
+// restano COPIATI nella memoria interna dell'app (IndexedDB, nessun permesso) e da li' si leggono.
+// In piu' l'app sul PC manda la sua libreria al servizio dati del PC (/libreria/*): telefono e tablet
+// la scaricano da li' (via Tailscale) senza nessuna cartella collegata.
+const FBL_CSV_CACHE='csvCache:';
+var fblForzaCartella=false, fblPcControllati=new Set();
+async function fblCsvCacheSalva(asset,voci){
+ if(!asset||!voci||!voci.length)return false;
+ const ok=await idbPut(FBL_CSV_CACHE+asset,{at:Date.now(),files:voci.map(v=>({nome:v.nome,mod:v.mod||0,byte:v.byte||(v.testo||'').length,testo:v.testo}))});
+ if(!ok)console.warn('[CSV] copia interna non salvata per '+asset+' (spazio del browser finito?)');
+ return ok;
+}
+async function fblCsvCacheLeggi(asset){ try{ return await idbGet(FBL_CSV_CACHE+asset); }catch(e){ return null; } }
+async function fblFileDaCache(asset){
+ const c=await fblCsvCacheLeggi(asset);
+ if(!c||!Array.isArray(c.files)||!c.files.length)return null;
+ const out=[];
+ for(const f of c.files){
+  try{
+   const rows=await parseCSVAsync(f.testo||'',f.nome);
+   if(!rows.length)continue;
+   const voce={id:'copia_'+asset+'_'+f.nome,name:f.nome,addedAt:f.mod||c.at||Date.now(),rows};
+   const reg=fblRegRighe(f.testo); if(reg)voce.registrazione=reg;
+   out.push(voce);
+  }catch(e){}
+ }
+ return out.length?out:null;
+}
+// Cartella gia' leggibile SENZA chiedere niente (nessun popup, nessun banner).
+async function fblCartellaSenzaChiedere(){
+ if(libraryRootHandle)return libraryRootHandle;
+ try{
+  const h=await libDirGet('rootDir'); if(!h)return null;
+  if((await h.queryPermission({mode:'read'}))==='granted'){ libraryRootHandle=h; libraryRootHandleChecked=true; return h; }
+ }catch(e){}
+ return null;
+}
+function fblLibUrl(p){ return fblConChiave(MT5_FEED_URL+p); }
+async function fblLibreriaPcElenco(asset){
+ try{ const r=await fetch(fblLibUrl('/libreria/elenco?asset='+encodeURIComponent(asset)),{cache:'no-store'}); if(!r.ok)return null; const j=await r.json(); return Array.isArray(j.file)?j.file:null; }catch(e){ return null; }
+}
+async function fblLibreriaPcScarica(asset){
+ const el=await fblLibreriaPcElenco(asset);
+ if(!el||!el.length)return null;
+ const out=[];
+ for(const f of el){
+  try{ const r=await fetch(fblLibUrl('/libreria/file?asset='+encodeURIComponent(asset)+'&nome='+encodeURIComponent(f.nome))); if(r.ok)out.push({nome:f.nome,mod:f.modificato||0,byte:f.byte||0,testo:await r.text()}); }catch(e){}
+ }
+ return out.length?out:null;
+}
+// Dopo una lettura dalla cartella: aggiorna la copia interna e manda al PC i file nuovi o cambiati.
+async function fblDopoLetturaCartella(asset,grezzi){
+ if(!asset||!grezzi||!grezzi.length)return;
+ try{ await fblCsvCacheSalva(asset,grezzi); }catch(e){}
+ try{
+  const el=await fblLibreriaPcElenco(asset);
+  if(el===null)return;                              // servizio dati del PC non raggiungibile
+  const noti=new Map(el.map(f=>[f.nome,f]));
+  for(const g of grezzi){
+   const n=noti.get(g.nome);
+   if(n&&Number(n.modificato)===Number(g.mod)&&Number(n.byte)>0)continue;
+   await fetch(fblLibUrl('/libreria/file?asset='+encodeURIComponent(asset)+'&nome='+encodeURIComponent(g.nome)+'&modificato='+(g.mod||0)),{method:'POST',headers:{'Content-Type':'text/csv'},body:g.testo});
+  }
+ }catch(e){ console.warn('[CSV] invio al PC non riuscito',e); }
+}
+// Usando la copia interna: se il PC ha file diversi (aggiunti/aggiornati), si aggiorna la copia
+// in sottofondo e si ricarica l'asset. Una volta per asset per apertura.
+async function fblControllaPcInSottofondo(asset){
+ if(fblPcControllati.has(asset))return; fblPcControllati.add(asset);
+ setTimeout(async()=>{
+  try{
+   const el=await fblLibreriaPcElenco(asset), c=await fblCsvCacheLeggi(asset);
+   if(!el||!el.length||!c)return;
+   const firma=a=>a.map(f=>f.nome+':'+(f.mod??f.modificato)).sort().join('|');
+   if(firma(el)===firma(c.files.map(f=>({nome:f.nome,mod:f.mod}))))return;
+   const pc=await fblLibreriaPcScarica(asset);
+   if(pc&&pc.length){ await fblCsvCacheSalva(asset,pc); if(currentAssetKey===asset&&!liveModeActive){ $('status').textContent='🔄 Nuovi CSV per '+asset+' dalla libreria del PC: ricarico.'; autoLoadAssetLibrary(asset); } }
+  }catch(e){}
+ },3000);
+}
+$('fblAggiornaCartellaBtn')?.addEventListener('click',async()=>{
+ const asset=$('market')?.value||currentAssetKey;
+ if(!asset||liveModeActive){ await appAlert('Scegli prima un asset in modalità Storico.'); return; }
+ // Con il tocco in corso il browser puo' chiedere l'accesso alla cartella (se serve).
+ libraryRootHandleChecked=false;
+ const root=await getLibraryRootHandle();
+ if(root){ fblForzaCartella=true; await autoLoadAssetLibrary(asset); return; }
+ // Nessuna cartella su questo dispositivo: si riprende dal PC.
+ const pc=await fblLibreriaPcScarica(asset);
+ if(pc&&pc.length){ await fblCsvCacheSalva(asset,pc); await autoLoadAssetLibrary(asset); }
+ else await appAlert('Nessuna cartella collegata su questo dispositivo e nessun CSV di «'+asset+'» nella libreria del PC (il PC è acceso e raggiungibile?).');
+});
+// La memoria interna del browser, se possibile, non va cancellata dal sistema per fare spazio.
+try{ if(navigator.storage&&navigator.storage.persist)navigator.storage.persisted().then(p=>{ if(!p)navigator.storage.persist().catch(()=>{}); }); }catch(e){}
 
 // ===================== FILE UNICO DEL REGISTRATORE IN MODALITA' STORICO =====================
 // RICHIESTO: "un unico file, compreso di tutto: lo carichiamo in Storico per il backtest, e
