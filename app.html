@@ -9017,17 +9017,17 @@ function updateLivePL(){
 // Solo per le chiuse (Journal, tooltip sul grafico, Notion): mentre si prepara o si gestisce
 // un'operazione aperta il valore resta esatto, perche' li' serve per decidere dove mettere i livelli.
 // Sotto 0,25 il mezzo punto darebbe "1:0": si mostra il valore vero.
-// RICHIESTO (come su Notion, ora in TUTTA l'app): il rapporto rischio/rendimento si mostra a passi
-// di 0,5 -> 1:0.5, 1:1, 1:1.5, 1:2, 1:2.5... (sotto 0,25 resta il valore con due decimali).
+// RICHIESTO (app, Notion e Statistiche): il rapporto rischio/rendimento si mostra SOLO a passi di 0,5
+// -> 1:0.5, 1:1, 1:1.5, 1:2, 1:2.5... arrotondato al gradino piu' vicino. Il gradino minimo e' 1:0.5
+// (anche un target vicinissimo all'entrata, mai 1:0.12). Notion riceve lo stesso testo dall'app.
 function rrArrotondaRapporto(r){
- r=Number(r); if(!Number.isFinite(r)||r<0)return null;
- if(r<0.25)return Math.round(r*100)/100;
- return Math.round(r*2+1e-9)/2;
+ r=Number(r); if(!Number.isFinite(r)||!(r>0))return null;
+ return Math.max(0.5,Math.round(r*2+1e-9)/2);
 }
 function rrRapportoTesto(r,sep){
  r=rrArrotondaRapporto(r);
  if(r==null)return '—';
- const txt=Number.isInteger(r)?String(r):(r>=0.25&&Math.abs(r*2-Math.round(r*2))<1e-9?r.toFixed(1):r.toFixed(2));
+ const txt=Number.isInteger(r)?String(r):r.toFixed(1);
  return '1'+(sep||':')+txt;
 }
 function rrArrotondato(entry,sl,tp){
@@ -37553,7 +37553,7 @@ function disegna(animato){
  kpi('Loss rate',st.lr==null?NaN:st.lr,v=>isFinite(v)?v.toFixed(1)+'%':'—','neg','peggior trade '+(isFinite(st.worst)?fmtE(st.worst):'—'),3);
  kpi('Profit factor',st.pf==null?NaN:(st.pf===Infinity?NaN:st.pf),v=>st.pf===Infinity?'∞':isFinite(v)?v.toFixed(2):'—',st.pf>=1?'pos':'neg','profitti lordi / perdite lorde',4);
  // RICHIESTO: anche qui i multipli del rischio a passi di 0,5 (stessa regola di Notion e del resto dell'app).
- const rPassi=v=>{ if(!isFinite(v))return '—'; const r=rrArrotondaRapporto(Math.abs(v)); if(r==null)return '—'; const t=Number.isInteger(r)?String(r):(r>=0.25?r.toFixed(1):r.toFixed(2)); return (r===0?'':(v>=0?'+':'−'))+t+'R'; };
+ const rPassi=v=>{ if(!isFinite(v))return '—'; const r=Math.round(Math.abs(v)*2+1e-9)/2; if(r===0)return '0R'; return (v>=0?'+':'−')+(Number.isInteger(r)?String(r):r.toFixed(1))+'R'; };
  kpi('R medio realizzato',st.rMed==null?NaN:st.rMed,rPassi,(st.rMed||0)>=0?'pos':'neg','risultato in multipli del rischio (passi di 0,5)',5);
  kpi('Pip totali',st.pips,v=>(v>=0?'+':'')+v.toFixed(1),st.pips>=0?'pos':'neg','media vincita '+fmtE(st.avgW),6);
  kpi('Max drawdown',st.dd,v=>fmtE(v),'neg','media perdita '+fmtE(st.avgL),7);
@@ -37580,8 +37580,15 @@ function disegna(animato){
  // scaletta R:R
  { const m=[...raggruppa(rs.filter(r=>r.rr),r=>r.rr)];
    const num=x=>Number(String(x).split(':')[1])||0;
+   // RICHIESTO: una vera scaletta, gradino per gradino di 0,5 (1:0.5, 1:1, 1:1.5...), anche i gradini
+   // senza trade, dal piu' basso al piu' alto usato (fino a 1:10; quelli oltre si aggiungono in coda).
+   const usati=new Map(m.map(([k,a])=>[num(k),a]));
+   if(usati.size){
+    const lo=Math.min(...usati.keys()), hi=Math.max(...usati.keys());
+    for(let v=lo;v<=Math.min(hi,10)+1e-9;v=Math.round((v+0.5)*2)/2)if(!usati.has(v))m.push(['1:'+(Number.isInteger(v)?String(v):v.toFixed(1)),[]]);
+   }
    m.sort((a,b)=>num(a[0])-num(b[0]));
-   const voci=m.map(([k,a])=>{ const x=stat(a); return {l:k,v:a.length,c:'#9085e9',etichetta:a.length+' · '+pct(x.wr),tip:[{v:String(a.length),l:'trade con R:R '+k},{c:POS,l:'win rate '+pct(x.wr)},{l:'P/L '+fmtE(x.pl)}]}; });
+   const voci=m.map(([k,a])=>{ const x=stat(a); return {l:k,v:a.length,c:'#9085e9',etichetta:a.length?(a.length+' · '+pct(x.wr)):'0',tip:a.length?[{v:String(a.length),l:'trade con R:R '+k},{c:POS,l:'win rate '+pct(x.wr)},{l:'P/L '+fmtE(x.pl)}]:[{v:'0',l:'trade con R:R '+k}]}; });
    const c=carta(G,'w6','🪜 Scaletta del rapporto rischio/rendimento','R:R pianificato all\'apertura (stop iniziale e target): quanti trade per gradino e con che win rate.',n++,
     {col:['R:R','Trade','Win rate','P/L'],righe:m.map(([k,a])=>{ const x=stat(a); return [k,String(a.length),pct(x.wr),fmtE(x.pl)]; })});
    graficoOrizz(c,voci); if(!voci.length){} }
