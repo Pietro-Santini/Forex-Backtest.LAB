@@ -52,7 +52,7 @@
 //          v15 = footprint allineato nell'ora 22-23 (via i tick MT5 storici dalle fasce
 //               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v58";
+const CACHE_NAME = "forex-backtest-lab-v59";
 const ASSETS = [
   "./",
   "./app.html",

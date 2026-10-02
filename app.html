@@ -1472,6 +1472,15 @@ setTimeout(function(){
         </div>
         <p class="hint" style="margin-top:8px">Va bene un <b>canale pubblico</b> (<code>t.me/nome</code> o <code>@nome</code>) o il <b>link di invito</b> di un gruppo privato. Per i gruppi privati devi gia' esserci dentro con il tuo account: il ponte non puo' entrare da solo, e non ci prova.</p>
         <p class="hint" style="margin-top:4px"><b>Nessun ordine parte da solo.</b> Il ponte legge e interpreta; l'ordine te lo propone l'app e lo apri tu con una conferma. Un messaggio scritto da una persona puo' essere ambiguo, e fra l'interpretazione e i tuoi soldi deve restare un tuo clic.</p>
+        <div class="fbSettingsSectionTitle" style="margin-top:14px">📱 Syntra (dall'emulatore sul PC)</div>
+        <div id="syntraStatoBox" style="font-size:12.5px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px;margin-bottom:8px">Ponte segnali non collegato.</div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px"><input type="checkbox" id="syntraAttivo" style="width:17px;height:17px;accent-color:var(--fbAccent2)"> <b>Leggi le operazioni condivise su Syntra</b></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+          <label style="font-size:12px">Indirizzo ADB <input id="syntraIndirizzo" class="tgCfgIn" type="text" placeholder="127.0.0.1:5555" style="width:150px"></label>
+          <label style="font-size:12px">adb.exe <input id="syntraAdb" class="tgCfgIn" type="text" placeholder="C:\platform-tools\adb.exe" style="width:230px"></label>
+          <button type="button" id="syntraSalvaBtn" class="miniBtn">Salva</button>
+        </div>
+        <p class="hint" style="margin-top:6px">BlueStacks aperto con Syntra in primo piano e ADB attivo (Impostazioni → Avanzate). Il ponte legge le schede <b>FX/IDX, Crypto e Azioni</b>, apre da solo "Vedi dettagli TP/SL" e passa ogni operazione nuova come segnale: la "sala" è <b>Syntra · nome utente</b>. Gli utenti compaiono nella tabella dell'apertura automatica, dove si accendono uno per uno. Le operazioni già presenti quando il lettore parte non vengono aperte.</p>
       </div>
       <div data-gensettings-panel="notion" style="display:none">
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Ogni trade del Trade Journal arriva da solo nel tuo Notion, nella dashboard della sua sessione (Storico, Live, Storico Prop Firm, Live Prop Firm) e, per i conti MT5, in una dashboard dedicata a ciascun conto.</div>
@@ -4880,6 +4889,7 @@ const GRAFICO_LS={
  fbl_griglia_visibile:()=>{ try{ updateGridVisibleBtn(); draw(); }catch(e){} },
  fbl_capital_22_23:()=>{ try{ fblCapitalSeraAggiornaUi(); liveSessionPhase=null; }catch(e){} },
  fbl_binance_attivo:()=>{ try{ binanceAggiornaUi(); }catch(e){} },
+ fb_syntra_utenti:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppiSyntra=g; tgAutoDisegna(); } }catch(e){} },
  fb_tg_avvicinamento_pct:null,
  fb_tg_suono_id:v=>{ try{ const el=$('tgSuonoSelect'); if(el&&[...el.options].some(o=>o.value===v))el.value=v; }catch(e){} },
  fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} }
@@ -22361,7 +22371,47 @@ function tgAggiornaSetup(m){
   dim.title='Il numero di telefono e\' salvato su questo dispositivo e non viene piu\' chiesto. Premi per toglierlo.';
  }
 }
+// Utenti di Syntra visti dal ponte: nell'apertura automatica sono "sale" come quelle di Telegram
+// ("Syntra · nome"), ma NON fanno parte dell'elenco delle sale Telegram (che si rimanda al ponte).
+let tgGruppiSyntra=[];
+try{ const g=JSON.parse(localStorage.getItem('fb_syntra_utenti')||'null'); if(Array.isArray(g))tgGruppiSyntra=g; }catch(e){}
+function tgSaleTutte(){ return (Array.isArray(tgGruppi)?tgGruppi:[]).concat(tgGruppiSyntra.filter(n=>tgGruppi.indexOf(n)<0)); }
+let syntraStatoUltimo=null, syntraCampiToccati=false;
+function syntraDisegna(){
+ const sy=syntraStatoUltimo, box=$('syntraStatoBox');
+ if(box){
+  if(!sy)box.textContent='Ponte segnali non collegato: lo stato di Syntra arriva da lì.';
+  else if(!sy.attivo)box.textContent='Lettore Syntra spento.';
+  else if(sy.errore)box.innerHTML='⚠️ '+escapeHtmlText(sy.errore);
+  else box.innerHTML=(sy.collegato?'<b style="color:#7fdc9a">Collegato all\'emulatore</b>':'Collegamento all\'emulatore…')
+   +(sy.ultimo_giro?(' · ultimo giro '+new Date(sy.ultimo_giro*1000).toLocaleTimeString('it-IT')):'')
+   +'<br>Utenti visti: '+((sy.utenti||[]).length?escapeHtmlText(sy.utenti.join(', ')):'nessuno ancora');
+ }
+ if(sy&&!syntraCampiToccati){
+  if($('syntraAttivo'))$('syntraAttivo').checked=!!sy.attivo;
+  if($('syntraIndirizzo'))$('syntraIndirizzo').value=sy.indirizzo||'';
+  if($('syntraAdb'))$('syntraAdb').value=sy.adb||'';
+ }
+}
+['syntraIndirizzo','syntraAdb'].forEach(id=>$(id)?.addEventListener('input',()=>{ syntraCampiToccati=true; }));
+function syntraManda(){
+ syntraCampiToccati=false;
+ const ok=tgInvia({azione:'syntra_config',attivo:!!$('syntraAttivo')?.checked,
+  indirizzo:($('syntraIndirizzo')?.value||'').trim(),adb:($('syntraAdb')?.value||'').trim()});
+ if(!ok)appAlert('Il ponte dei segnali non è collegato: accendilo dalla sezione Telegram qui sopra, poi riprova.');
+}
+$('syntraAttivo')?.addEventListener('change',syntraManda);
+$('syntraSalvaBtn')?.addEventListener('click',syntraManda);
 function tgApplicaStato(m){
+ if(m.syntra&&typeof m.syntra==='object'){
+  syntraStatoUltimo=m.syntra;
+  const nuovi=(m.syntra.utenti||[]).map(u=>'Syntra · '+u);
+  // Si aggiungono e basta: un utente che oggi non ha operazioni a schermo resta configurato.
+  let cambiato=false;
+  nuovi.forEach(n=>{ if(tgGruppiSyntra.indexOf(n)<0){ tgGruppiSyntra.push(n); cambiato=true; } });
+  if(cambiato){ try{ localStorage.setItem('fb_syntra_utenti',JSON.stringify(tgGruppiSyntra)); }catch(e){} try{ tgAutoDisegna(); }catch(e){} }
+  try{ syntraDisegna(); }catch(e){}
+ }
  if(Array.isArray(m.chat)){
    tgGruppi=m.chat; tgRenderGruppi();
    // Copia locale dell'elenco sale: condivisa con gli altri dispositivi (vedi GRAFICO_LS) e
@@ -23674,7 +23724,7 @@ function tgNormSala(v){
   .normalize('NFKD').replace(/[^a-z0-9]/g,'');
 }
 function tgChiaveSala(voce){
- const elenco=(Array.isArray(tgGruppi)?tgGruppi:[]).map(String).concat(Object.keys(tgAuto.sale||{}));
+ const elenco=tgSaleTutte().map(String).concat(Object.keys(tgAuto.sale||{}));
  const esatta=voce&&voce.sala!=null?String(voce.sala):'';
  if(esatta&&elenco.indexOf(esatta)>=0)return esatta;
  const titolo=String((voce&&voce.chat)||'');
@@ -23880,6 +23930,7 @@ function tgAutoDisegna(){
  const corpo=$('tgAutoSale');
  if(!corpo)return;
  corpo.innerHTML='';
+ const tgGruppi=tgSaleTutte();   // sale Telegram + utenti Syntra
  if(!tgGruppi.length){
   const tr=document.createElement('tr'), td=document.createElement('td');
   td.colSpan=5; td.className='tgCfgNota';
@@ -23948,7 +23999,7 @@ function tgAutoDisegna(){
  });
  const riep=$('tgAutoRiepilogo');
  if(riep){
-  const accese=tgGruppi.filter(n=>tgAuto.sale[n]&&tgAuto.sale[n].attivo);
+  const accese=tgSaleTutte().filter(n=>tgAuto.sale[n]&&tgAuto.sale[n].attivo);
   const freno=(tgAuto.perditaAttiva!==false)
    ?('si ferma oltre il <b>'+tgAuto.perditaMaxGiorno+'%</b> di perdita giornaliera')
    :'<b>nessuno spegnimento</b> per la perdita giornaliera';
