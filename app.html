@@ -8880,9 +8880,9 @@ function reset(){
  $('status').textContent=rows.length?`Dataset pronto: ${rows.length.toLocaleString('it-IT')} candele. La prima candela è visibile.`:'Carica il CSV per iniziare.';
 }
 function formatRR(ratio){
- // Formato richiesto tipo "1/2", "1/3", "1/5": rischio sempre normalizzato a 1.
- const r=Math.round(ratio*100)/100;
- return `1/${r%1===0?r.toFixed(0):r.toFixed(2)}`;
+ // Formato richiesto tipo "1/2", "1/3", "1/5": rischio sempre normalizzato a 1, a passi di 0,5
+ // (stessa regola di Notion, vedi rrRapportoTesto).
+ return rrRapportoTesto(ratio,'/');
 }
 // P/L LIVE del riquadro in alto: SOMMA di TUTTE le posizioni aperte in questa sessione, sia
 // quella sull'asset a grafico ora sia le altre aperte in background su asset diversi — non
@@ -9017,25 +9017,33 @@ function updateLivePL(){
 // Solo per le chiuse (Journal, tooltip sul grafico, Notion): mentre si prepara o si gestisce
 // un'operazione aperta il valore resta esatto, perche' li' serve per decidere dove mettere i livelli.
 // Sotto 0,25 il mezzo punto darebbe "1:0": si mostra il valore vero.
-function rrArrotondato(entry,sl,tp){
- if(![entry,sl,tp].map(Number).every(Number.isFinite))return null;
- const risk=Math.abs(Number(entry)-Number(sl)), reward=Math.abs(Number(tp)-Number(entry));
- if(!(risk>0))return null;
- const r=reward/risk;
+// RICHIESTO (come su Notion, ora in TUTTA l'app): il rapporto rischio/rendimento si mostra a passi
+// di 0,5 -> 1:0.5, 1:1, 1:1.5, 1:2, 1:2.5... (sotto 0,25 resta il valore con due decimali).
+function rrArrotondaRapporto(r){
+ r=Number(r); if(!Number.isFinite(r)||r<0)return null;
  if(r<0.25)return Math.round(r*100)/100;
  return Math.round(r*2+1e-9)/2;
 }
-function rrArrotondatoTesto(entry,sl,tp,sep){
- const r=rrArrotondato(entry,sl,tp);
+function rrRapportoTesto(r,sep){
+ r=rrArrotondaRapporto(r);
  if(r==null)return '—';
  const txt=Number.isInteger(r)?String(r):(r>=0.25&&Math.abs(r*2-Math.round(r*2))<1e-9?r.toFixed(1):r.toFixed(2));
  return '1'+(sep||':')+txt;
 }
+function rrArrotondato(entry,sl,tp){
+ if(![entry,sl,tp].map(Number).every(Number.isFinite))return null;
+ const risk=Math.abs(Number(entry)-Number(sl)), reward=Math.abs(Number(tp)-Number(entry));
+ if(!(risk>0))return null;
+ return rrArrotondaRapporto(reward/risk);
+}
+function rrArrotondatoTesto(entry,sl,tp,sep){
+ const r=rrArrotondato(entry,sl,tp);
+ if(r==null)return '—';
+ return rrRapportoTesto(r,sep);
+}
 function riskRewardLabel(entry,sl,tp){
  if(![entry,sl,tp].every(Number.isFinite))return '—';
- const risk=Math.abs(entry-sl), reward=Math.abs(tp-entry);
- if(risk<=0)return '—';
- return '1:'+(reward/risk).toFixed(2);
+ return rrArrotondatoTesto(entry,sl,tp,':');
 }
 // Una posizione è "a breakeven o oltre" (Stop Profit) quando lo Stop Loss ATTUALE è stato
 // spostato dal lato del rischio a quello del guadagno rispetto all'entrata: per un BUY,
@@ -14347,7 +14355,7 @@ function draw(){
        tooltipLines:[
          `Lottaggio: ${pos.lots!=null?pos.lots.toFixed(2)+' lot':'—'}`,
          `Aperto P&L: ${Number.isFinite(liveVal)?euro(liveVal):'—'}`,
-         `Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`
+         `Rapporto rischio/rendimento: ${rr!=null?rrRapportoTesto(rr):'—'}`
        ]
      });
      // Linea tratteggiata con freccia che segue il prezzo attuale, come su TradingView: avanza
@@ -14537,7 +14545,7 @@ function draw(){
        lots:getLotSize(),
        alwaysShowTooltip:true,
        pad,cw,n,start,w,y,
-       tooltipLines:[`Anteprima ordine`,`Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`]
+       tooltipLines:[`Anteprima ordine`,`Rapporto rischio/rendimento: ${rr!=null?rrRapportoTesto(rr):'—'}`]
      });
    }
  }
@@ -14593,7 +14601,7 @@ function draw(){
        lots:getLotSizePending(),
        alwaysShowTooltip:true,
        pad,cw,n,start,w,y,
-       tooltipLines:[`Anteprima ordine pendente (${pendingOrderKind})`,`Rapporto rischio/rendimento: ${rr!=null?rr.toFixed(2):'—'}`]
+       tooltipLines:[`Anteprima ordine pendente (${pendingOrderKind})`,`Rapporto rischio/rendimento: ${rr!=null?rrRapportoTesto(rr):'—'}`]
      });
    }
  }
@@ -23801,12 +23809,12 @@ function tgCfgDisegnaRiepilogo(piano){
  if(piano.senzaLivelli){
   const d=document.createElement('div'); d.className='tgCfgAllarme';
   d.textContent='La sala non ha dato né stop né target: stop al '+tgRischioSenzaSl(A)+'% del conto (calcolato dall\'app) e target al '+tgTpSenzaNullaPct(A)
-   +'% della distanza dello stop ('+tgFmt(piano.tp[0])+', rapporto 1:'+(piano.rr!=null?piano.rr.toFixed(2):'?')+').';
+   +'% della distanza dello stop ('+tgFmt(piano.tp[0])+', rapporto '+(piano.rr!=null?rrRapportoTesto(piano.rr):'1:?')+').';
   box.appendChild(d);
  }else if(piano.tpCalcolato){
   const d=document.createElement('div'); d.className='tgCfgAllarme';
   d.textContent='La sala non ha dato il take profit. Al '+tgBeSenzaTpPct(A)+'% della distanza dello stop lo stop va a pareggio; il target è un ulteriore '
-   +tgTpExtraPct(A)+'% più in là ('+tgFmt(piano.tp[0])+', rapporto 1:'+(piano.rr!=null?piano.rr.toFixed(2):'?')+'). Per ogni stop pieno servono '
+   +tgTpExtraPct(A)+'% più in là ('+tgFmt(piano.tp[0])+', rapporto '+(piano.rr!=null?rrRapportoTesto(piano.rr):'1:?')+'). Per ogni stop pieno servono '
    +(piano.rr?(1/piano.rr).toFixed(1):'?')+' target.';
   box.appendChild(d);
  }
@@ -25665,10 +25673,10 @@ async function tgEseguiSegnale(voce,opzioni){
  r.push('Stop loss: '+tgFmt(p.sl)+' su tutte'+(p.slCalcolato
    ?(' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Con '+p.lotti.toFixed(2)+' lot per posizione, se scatta si perde al massimo il '+p.pct.toFixed(2)+'% scelto.'):''));
  r.push(p.senzaLivelli
-   ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non ha dato né stop né target. Target al '+tgTpSenzaNullaPct(A)+'% della distanza dello stop (rapporto 1:'+(p.rr!=null?p.rr.toFixed(2):'?')+').')
+   ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non ha dato né stop né target. Target al '+tgTpSenzaNullaPct(A)+'% della distanza dello stop (rapporto '+(p.rr!=null?rrRapportoTesto(p.rr):'1:?')+').')
    : p.tpCalcolato
    ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Quando il prezzo percorre il '+tgBeSenzaTpPct(A)
-      +'% della distanza dello stop, lo stop va a pareggio; il target è un ulteriore '+tgTpExtraPct(A)+'% più in là (rapporto 1:'+(p.rr!=null?p.rr.toFixed(2):'?')+').')
+      +'% della distanza dello stop, lo stop va a pareggio; il target è un ulteriore '+tgTpExtraPct(A)+'% più in là (rapporto '+(p.rr!=null?rrRapportoTesto(p.rr):'1:?')+').')
    : p.tp.length
    ? ('Take profit: '+p.tp.map(tgFmt).join('  ·  ')+'  (uno per posizione)')
    : 'Nessun take profit: una sola posizione, con il solo stop loss');
