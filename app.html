@@ -24214,11 +24214,18 @@ async function tgAutoValuta(voce,conto){
    const eq=Number(krakenConto.simulazione.equity);
    const spazio=Math.min(eq-Number(prop.pavimento),prop.limite_giorno!=null?eq-Number(prop.limite_giorno):Infinity);
    const perdita=Math.abs(piano.entry-piano.sl)*piano.lotti*piano.n;
+   // Gli stop gia' aperti contano dal prezzo ATTUALE: l'equity comprende gia' il loro P/L aperto
+   // (contarli dall'entrata conterebbe due volte la parte di perdita gia' avvenuta).
+   const mark={}; ((krakenPosizioni&&krakenPosizioni.posizioni)||[]).forEach(p=>{ mark[p.simbolo]=Number(p.mark); });
    const aperti=Object.values(tgStrategie||{}).filter(st=>st&&st.conto==='kraken')
-    .reduce((s,st)=>s+Math.max(0,(st.side==='BUY'?st.entry-st.sl:st.sl-st.entry))*(Number(st.quantitaStop)||0),0);
-   if(Number.isFinite(spazio)&&perdita+aperti>=spazio*0.95)
+    .reduce((s,st)=>{ const m=Number.isFinite(mark[st.simbolo])?mark[st.simbolo]:st.entry;
+     return s+Math.max(0,(st.side==='BUY'?m-st.sl:st.sl-m))*(Number(st.quantitaStop)||0); },0);
+   // Commissioni di entrata e uscita (taker 0,05% per lato): anche loro contano per Kraken Prop.
+   const commissioni=piano.lotti*piano.n*piano.entry*0.001;
+   if(Number.isFinite(spazio)&&perdita+aperti+commissioni>spazio)
     return no('Prop Firm Kraken: allo stop si perderebbero '+perdita.toFixed(0)+' USD'+(aperti>0?(' (+'+aperti.toFixed(0)+' degli stop già aperti)'):'')
-     +', ma prima della violazione restano '+Math.max(0,spazio).toFixed(0)+' USD: abbassa il rischio della sala');
+     +', ma prima della violazione restano '+Math.max(0,spazio).toFixed(0)+' USD'
+     +((prop.limite_giorno!=null&&eq-Number(prop.limite_giorno)<=eq-Number(prop.pavimento))?' (il limite di oggi riparte alle 00:30 UTC)':' (drawdown massimo)'));
   }
   const regole=tgAutoRegolePerSegnale(d.cfg||{},piano.tp.length);
   const avvicinamento=(d.avvicinamento>0)?{pct:d.avvicinamento}:null;
