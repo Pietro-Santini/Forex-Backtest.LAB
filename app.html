@@ -37308,7 +37308,7 @@ function valuta(s,serie){
  if(slPreso)esito=k?('TP'+k+' poi SL'):'SL';
  else if(tps.length&&k>=tps.length)esito='tutti i TP';
  else esito=(scaduto?'scaduto':'in corso')+(k?(' (TP'+k+')'):'');
- return Object.assign(base,{esito,raggiunti:k,slPreso,ambiguo,tFill:ser[fill].t,entry,tFine:fine,
+ return Object.assign(base,{esito,raggiunti:k,slPreso,ambiguo,tFill:ser[fill].t,entry,tFine:fine,mercato:!!(s.a_mercato||!isFinite(e1)),
   valutato:sl!=null&&(slPreso||k>0||(tps.length&&k>=tps.length)||scaduto),aperto:!finiti&&!scaduto});
 }
 function riepilogo(ris){
@@ -37387,6 +37387,40 @@ function mostraRisultato(sala,sym,ris,r){
  vai.addEventListener('click',async()=>{ const ov=$('fblCronoOverlay'); if(ov)ov.style.display='none'; try{ await tgPortaAGrafico(sym); }catch(e){} try{ draw(); }catch(e){} });
  box.appendChild(vai);
 }
+// RICHIESTO: a grafico l'entrata (e quindi entry, TP e SL) parte dalla candela VERA del timeframe
+// scelto nella barra del periodo. La valutazione usa candele da 5 minuti o da 1 ora (le uniche con
+// anni di storico): qui si ritrova il punto esatto sulle candele a grafico - la candela del
+// messaggio per un'entrata a mercato, la prima che tocca il prezzo d'entrata per le altre - e la
+// candela in cui lo stop o l'ultimo TP preso vengono toccati davvero. Si ricalcola a ogni cambio di
+// timeframe (e quando arrivano nuove candele), non a ogni disegno.
+function ancore(r){
+ const chiave=currentTF+'|'+rows.length+'|'+(rows.length?rows[0].date:'');
+ if(r.__anc&&r.__anc.k===chiave)return r.__anc;
+ const buy=r.dir!=='SELL', N=rows.length;
+ const tocca=(j,p)=>j>=0&&j<N&&p!=null&&isFinite(p)&&((Number(rows[j].low)<=p&&Number(rows[j].high)>=p)
+   ||(j>0&&(Number(rows[j-1].close)-p)*(Number(rows[j].open)-p)<0));   // anche un salto oltre il prezzo
+ // TP e stop: raggiunti O superati (per un BUY il TP con il massimo, lo stop con il minimo)
+ const supera=(j,p,versoAlto)=>j>=0&&j<N&&p!=null&&isFinite(p)&&(versoAlto?Number(rows[j].high)>=p:Number(rows[j].low)<=p);
+ let a=rowIndexContainingTime(r.ts);
+ if(a!=null&&!r.mercato){
+  // entrata non a mercato: la prima candela, dal messaggio, che tocca il prezzo d'entrata
+  let trovata=null; const lim=r.tFill+3600e3;
+  for(let j=a;j<N&&parseDateTime(rows[j].date)<=lim;j++){ if(tocca(j,r.entry)){ trovata=j; break; } }
+  a=trovata!=null?trovata:rowIndexContainingTime(r.tFill);
+ }
+ let b=null;
+ if(a!=null&&r.tFine!=null){
+  // la candela dell'evento che chiude il segnale: stop, oppure l'ultimo TP preso
+  const livello=r.slPreso?r.sl:(r.raggiunti?r.tps[r.raggiunti-1]:null);
+  const da=Math.max(a,rowIndexContainingTime(r.tFine-3600e3)||a), lim=r.tFine+3600e3;
+  const versoAlto=r.slPreso?!buy:buy;
+  if(livello!=null){ for(let j=da;j<N&&parseDateTime(rows[j].date)<=lim;j++){ if(supera(j,livello,versoAlto)){ b=j; break; } } }
+  if(b==null)b=rowIndexContainingTime(r.tFine);
+ }
+ r.__anc={k:chiave,a,b:b!=null?Math.max(b,a):null};
+ return r.__anc;
+}
+window.fblCronoAncore=ancore;
 // ---------- disegno a grafico (chiamato da draw(), dopo i trade chiusi)
 window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!vista.mostra||!vista.sala||!currentAssetKey)return;
@@ -37396,7 +37430,7 @@ window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
  ctx.save(); ctx.font='10px Inter, system-ui, sans-serif';
  ris.forEach((r,i)=>{
   if(r.tFill==null)return;
-  const a=rowIndexContainingTime(r.tFill); const b=r.tFine!=null?rowIndexContainingTime(r.tFine):(rows.length-1);
+  const an=ancore(r); const a=an.a; const b=an.b!=null?an.b:(rows.length-1);
   if(a==null||b==null||a>idx||b<start-1||a>fine)return;
   const bb=Math.min(b,idx), x1=Math.max(pad.l,xFor(a)), x2=Math.min(w-pad.r,xFor(Math.max(bb,a+1)));
   if(x2<=pad.l||x1>=w-pad.r)return;
