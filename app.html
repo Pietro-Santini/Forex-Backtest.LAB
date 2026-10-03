@@ -1451,6 +1451,9 @@ setTimeout(function(){
           <button type="button" id="tgAutoBtn" class="toolBtn" style="flex:1;min-width:200px">⚡ Configura apertura automatica</button>
         </div>
         <div class="fbOptRow" style="margin-bottom:10px;gap:8px">
+          <button type="button" class="toolBtn fblCronoBtn" style="flex:1;min-width:200px" title="Tutti i segnali della sala (Telegram) o dell'utente (Syntra), a grafico, con il win rate totale e per livello di TP">📜 Cronologia delle sale: segnali a grafico e win rate per TP</button>
+        </div>
+        <div class="fbOptRow" style="margin-bottom:10px;gap:8px">
           <button type="button" id="fblRemotoBtn" class="toolBtn" style="flex:1;min-width:200px">📱 Accesso da altri dispositivi</button>
         </div>
         <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">SUONO QUANDO ARRIVA UN SEGNALE</div>
@@ -14382,6 +14385,7 @@ function draw(){
    }
  }
  if(positionsVisible)drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal);
+ try{ if(typeof fblCronoDisegna==='function')fblCronoDisegna(ctx,y,lo,hi,pad,cw,n,start,w); }catch(e){}   // cronologia della sala (vedi CRONOLOGIA DELLE SALE)
  // Rettangolo di evidenziazione dell'operazione scelta con "Vai a grafico" nel Trade
  // Journal: copre l'intera altezza del grafico dall'apertura alla chiusura, con una
  // casella riepilogativa (durata, pip, R/R) agganciata in alto.
@@ -23005,6 +23009,7 @@ function tgCollega(){
  ws.onmessage=ev=>{
    let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
    if(m.tipo==='stato'){ tgApplicaStato(m); return; }
+   if(m.tipo==='storico_sala'){ try{ fblCronoRicevi(m); }catch(e){} return; }
    if(m.tipo==='battito'){
      // Il battito porta solo collegato/errore, e prima veniva buttato via: era il secondo motivo per
      // cui, dopo aver confermato il codice, bisognava premere "Ricontrolla" per vedersi collegati.
@@ -37126,6 +37131,351 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
   localStorage.setItem(INSTALL_DONE_KEY,'1');
 }
 </script>
+<!-- ===================== CRONOLOGIA DELLE SALE SEGNALI =====================
+     RICHIESTO: "per ogni sala, la cronologia di tutte le operazioni a grafico con i diversi TP, per
+     asset e in tutto il tempo: leggere tutti i segnali del gruppo Telegram e dell'utente Syntra,
+     metterli a grafico e calcolare il win rate totale e quello dei vari livelli di TP, suddivisi
+     nella dashboard. A grafico le linee dei TP e dello SL, con le caselle TP-SL attivabili."
+     I segnali li legge il ponte (storico_sale.py); gli esiti si calcolano QUI sulle candele vere
+     dell'asset (MT5 o Binance), non su quello che la sala dice di aver preso. -->
+<div id="fblCronoOverlay" class="fbModalOverlay" style="display:none">
+ <div class="fbModalBox fbModalBoxWide" style="max-width:980px">
+  <div class="fbModalHeader">
+   <h3>📜 Cronologia delle sale segnali</h3>
+   <button type="button" id="fblCronoChiudi" class="toolBtn fbBackBtn" style="padding:3px 10px;font-size:11px">Indietro</button>
+  </div>
+  <div class="fbModalBody">
+   <div class="fbOptRow" style="gap:8px;align-items:flex-end;flex-wrap:wrap">
+    <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8b96a5;font-weight:700">SALA
+     <select id="fblCronoSala" style="min-width:220px"></select></label>
+    <button type="button" id="fblCronoLeggi" class="toolBtn active">📥 Leggi tutta la cronologia</button>
+    <button type="button" id="fblCronoDaCapo" class="miniBtn" style="width:auto" title="Rilegge la sala dal primo messaggio (dopo un aggiornamento del riconoscimento dei segnali)">↺ Rileggi da capo</button>
+   </div>
+   <div id="fblCronoStato" class="tgCfgNota" style="margin:8px 0"></div>
+   <div id="fblCronoAsset"></div>
+   <div id="fblCronoRisultato" style="margin-top:10px"></div>
+   <div class="fbOptRow" style="gap:16px;margin-top:10px;flex-wrap:wrap">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="fblCronoMostra" checked> Mostra i segnali a grafico (linee entrata, SL e TP)</label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="fblCronoCaselle"> Caselle TP-SL</label>
+   </div>
+   <p class="hint" style="margin-top:8px">Come si valuta un segnale: dalla candela dopo il messaggio, l'entrata scatta quando il prezzo tocca il livello della sala (entro 24 ore, se no «non attivato»; «a mercato» = subito). Da lì si guarda quali TP vengono toccati <b>prima dello stop originale</b>, fino a 30 giorni. Se nella stessa candela ci sono sia lo stop che un nuovo TP non si può sapere cosa è venuto prima: si conta lo stop (prudente) e il segnale è segnato «ambiguo». Lo spostamento a pareggio deciso dalla sala non viene simulato: il win rate per livello dice quanto spesso il prezzo arriva a quel TP.</p>
+  </div>
+ </div>
+</div>
+<script>
+(function(){
+const LS_ESITI='fbl_crono_esiti', LS_VISTA='fbl_crono_vista';
+const C={sala:'',segnali:{},letti:{},richiesta:0,asset:null,risultati:{},inCorso:false};
+// Quale sala/asset e' a grafico, e le spunte.
+let vista={sala:'',asset:'',mostra:true,caselle:false};
+try{ Object.assign(vista,JSON.parse(localStorage.getItem(LS_VISTA)||'{}')); }catch(e){}
+function salvaVista(){ try{ localStorage.setItem(LS_VISTA,JSON.stringify(vista)); }catch(e){} }
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct=v=>v==null||!isFinite(v)?'—':v.toFixed(1)+'%';
+function sale(){
+ const tg=(typeof tgGruppi!=='undefined'&&Array.isArray(tgGruppi))?tgGruppi.filter(g=>!/^Syntra · /.test(g)):[];
+ const sy=(typeof tgGruppiSyntra!=='undefined'&&Array.isArray(tgGruppiSyntra))?tgGruppiSyntra:[];
+ return {tg,sy};
+}
+function riempiSale(){
+ const sel=$('fblCronoSala'); if(!sel)return; const cur=sel.value||vista.sala;
+ sel.textContent=''; const {tg,sy}=sale();
+ const gruppo=(nome,lista)=>{ if(!lista.length)return; const og=document.createElement('optgroup'); og.label=nome; lista.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; og.appendChild(o); }); sel.appendChild(og); };
+ gruppo('Sale Telegram',tg); gruppo('Utenti Syntra',sy);
+ if(!sel.options.length){ const o=document.createElement('option'); o.value=''; o.textContent='Nessuna sala: aggiungila in Sala segnali'; sel.appendChild(o); }
+ if([...sel.options].some(o=>o.value===cur))sel.value=cur;
+}
+function stato(t,err){ const e=$('fblCronoStato'); if(e){ e.textContent=t; e.style.color=err?'#ff8a8a':''; } }
+// ---------- richiesta al ponte
+window.fblCronoLeggi=function(daCapo){
+ const sala=$('fblCronoSala')?.value; if(!sala){ stato('Scegli una sala.',true); return; }
+ C.sala=sala; C.richiesta=Date.now();
+ const ok=(typeof tgInvia==='function')&&tgInvia({azione:'storico_sala',sala,richiesta:C.richiesta,da_capo:!!daCapo});
+ if(!ok){ stato('Il ponte dei segnali non è collegato: accendilo in Collegamento/Modalità → Sala segnali.',true); return; }
+ C.inCorso=true;
+ stato(daCapo?'Rileggo la sala dal primo messaggio… (con molti messaggi può volerci qualche minuto)':'Leggo la cronologia della sala… (la prima volta tutti i messaggi, poi solo quelli nuovi)');
+};
+// Risposta del ponte (chiamata dal canale dei segnali, vedi tgCollega).
+window.fblCronoRicevi=function(m){
+ if(!m||m.richiesta!==C.richiesta)return;
+ if(m.avanzamento){ stato('Letti '+Number(m.letti).toLocaleString('it-IT')+' messaggi, trovati '+m.trovati+' segnali…'); return; }
+ C.inCorso=false;
+ if(!m.ok){ stato('Cronologia non letta: '+(m.errore||'errore'),true); return; }
+ const segs=(m.segnali||[]).filter(s=>s&&isFinite(Number(s.ts)));
+ C.segnali[m.sala]=segs;
+ // copia senza il testo (piu' leggera) per riaprire la cronologia senza rileggere
+ try{ localStorage.setItem('fbl_crono_seg:'+m.sala,JSON.stringify(segs.map(s=>{ const c=Object.assign({},s); delete c.testo; return c; }).slice(-5000))); }catch(e){}
+ stato(segs.length+' segnali nella cronologia di '+m.sala+(m.letti?(' ('+Number(m.letti).toLocaleString('it-IT')+' messaggi nuovi letti ora)'):'')+'.'+(m.nota?(' '+m.nota):''));
+ disegnaAsset();
+};
+function segnaliSala(sala){
+ if(C.segnali[sala])return C.segnali[sala];
+ try{ const v=JSON.parse(localStorage.getItem('fbl_crono_seg:'+sala)||'null'); if(Array.isArray(v)){ C.segnali[sala]=v; return v; } }catch(e){}
+ return null;
+}
+// ---------- elenco per asset
+async function gruppiPerAsset(segs){
+ const perStr=new Map(); segs.forEach(s=>{ const k=String(s.strumento).toUpperCase(); if(!perStr.has(k))perStr.set(k,[]); perStr.get(k).push(s); });
+ const out=new Map();
+ for(const [str,lista] of perStr){
+  let sym=null; try{ sym=await tgAssetPerStrumento(str); }catch(e){}
+  const k=sym||('?'+str);
+  if(!out.has(k))out.set(k,{sym,strumenti:new Set(),segnali:[]});
+  const g=out.get(k); g.strumenti.add(str); g.segnali.push(...lista);
+ }
+ return [...out.values()].sort((a,b)=>b.segnali.length-a.segnali.length);
+}
+async function disegnaAsset(){
+ const box=$('fblCronoAsset'); if(!box)return;
+ const sala=$('fblCronoSala')?.value; const segs=sala?segnaliSala(sala):null;
+ box.textContent='';
+ if(!segs){ box.innerHTML='<div class="hint">Premi «Leggi tutta la cronologia».</div>'; return; }
+ if(!segs.length){ box.innerHTML='<div class="hint">Nessun segnale riconosciuto in questa sala.</div>'; return; }
+ const gruppi=await gruppiPerAsset(segs);
+ const t=document.createElement('table'); t.className='posTable'; t.style.width='100%';
+ t.innerHTML='<thead><tr><th>Asset</th><th>Segnali</th><th>Dal</th><th>Al</th><th>Ultimo esito calcolato</th><th></th></tr></thead>';
+ const tb=document.createElement('tbody'); const es=leggiEsiti();
+ gruppi.forEach(g=>{
+  const tr=document.createElement('tr');
+  const ts=g.segnali.map(s=>Number(s.ts)), r=g.sym&&es[sala]&&es[sala][g.sym];
+  [g.sym||('non trovato: '+[...g.strumenti].join(', ')),String(g.segnali.length),new Date(Math.min(...ts)).toLocaleDateString('it-IT'),new Date(Math.max(...ts)).toLocaleDateString('it-IT'),
+   r?('win rate '+pct(r.wr)+' su '+r.valutati+' · '+new Date(r.at).toLocaleDateString('it-IT')):'—'].forEach(v=>{ const td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
+  const td=document.createElement('td');
+  if(g.sym){ const b=document.createElement('button'); b.type='button'; b.className='miniBtn'; b.style.width='auto'; b.textContent='📊 Analizza e mostra a grafico';
+   b.addEventListener('click',()=>analizza(sala,g.sym,g.segnali,b)); td.appendChild(b); }
+  tr.appendChild(td); tb.appendChild(tr);
+ });
+ t.appendChild(tb); const sc=document.createElement('div'); sc.className='tableScroll'; sc.style.maxHeight='240px'; sc.appendChild(t); box.appendChild(sc);
+}
+// ---------- candele per la valutazione: le piu' fini che coprono il periodo
+async function candele(sym,daMs){
+ const conv=a=>a.map(r=>({t:typeof r.time==='number'?r.time*1000:parseDateTime(r.date),o:+r.open,h:+r.high,l:+r.low,c:+r.close})).filter(r=>isFinite(r.t)&&isFinite(r.h)&&isFinite(r.l)).sort((x,y)=>x.t-y.t);
+ const serie=[];
+ let bn=null; try{ bn=binanceSymbolForAsset(sym); }catch(e){}
+ if(bn){
+  const quante=Math.min(200000,Math.ceil((Date.now()-daMs)/300000)+100);
+  serie.push(conv(await binanceKlines(bn,'5m',quante)));
+  if(serie[0].length&&serie[0][0].t>daMs)serie.push(conv(await binanceKlines(bn,'1h',Math.min(100000,Math.ceil((Date.now()-daMs)/3600000)+50))));
+  return {serie,fonte:'Binance Futures'};
+ }
+ if(typeof mt5Connected!=='undefined'&&mt5Connected){
+  const res=await resolveMt5SymbolForAsset(sym);
+  if(res){
+   for(const [tf,count] of [['M5',200000],['H1',200000]]){
+    try{ const r=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(res)+'&timeframe='+tf+'&count='+count)); const j=await r.json(); if(r.ok)serie.push(conv(j.candles||[])); }catch(e){}
+    if(serie.length&&serie[serie.length-1].length&&serie[serie.length-1][0].t<=daMs)break;
+   }
+   if(serie.length)return {serie,fonte:'MT5 ('+res+')'};
+  }
+ }
+ if(sym===currentAssetKey&&Array.isArray(rows)&&rows.length){ serie.push(conv(rows)); return {serie,fonte:'candele a grafico'}; }
+ throw new Error('servono le candele di '+sym+': collega MT5 (o porta l\'asset a grafico) e riprova');
+}
+function primoIndice(arr,t){ let lo=0,hi=arr.length; while(lo<hi){ const m=(lo+hi)>>1; if(arr[m].t<t)lo=m+1; else hi=m; } return lo; }
+const GIORNO=864e5;
+// ---------- valutazione di un segnale sulle candele
+function valuta(s,serie){
+ const ts=Number(s.ts), buy=String(s.direzione).toUpperCase()!=='SELL';
+ const tps=(s.tp||[]).map(Number).filter(isFinite);
+ const sl=s.sl!=null&&isFinite(Number(s.sl))?Number(s.sl):null;
+ const base={ts,dir:buy?'BUY':'SELL',sl,tps,entrataSala:s.entrata};
+ // la serie piu' fine che contiene il momento del segnale
+ const ser=serie.find(a=>a.length&&a[0].t<=ts&&a[a.length-1].t>=ts)||serie.find(a=>a.length&&a[0].t>ts&&a[0].t-ts<GIORNO);
+ if(!ser)return Object.assign(base,{esito:'senza dati',raggiunti:0});
+ let i=primoIndice(ser,ts+1); if(i>=ser.length)return Object.assign(base,{esito:'senza dati',raggiunti:0});
+ // entrata
+ let fill=null, entry=null;
+ const e1=Number(s.entrata), e2=s.entrata_max!=null?Number(s.entrata_max):e1;
+ if(s.a_mercato||!isFinite(e1)){ fill=i; entry=ser[i].o; }
+ else{
+  const zl=Math.min(e1,isFinite(e2)?e2:e1), zh=Math.max(e1,isFinite(e2)?e2:e1);
+  for(let j=i;j<ser.length&&ser[j].t<=ts+GIORNO;j++){ if(ser[j].l<=zh&&ser[j].h>=zl){ fill=j; entry=Math.min(Math.max(ser[j].o,zl),zh); break; } }
+  if(fill==null)return Object.assign(base,{esito:'non attivato',raggiunti:0,tFine:ts+GIORNO});
+ }
+ let k=0, slPreso=false, ambiguo=false, fine=null;
+ for(let j=fill;j<ser.length&&ser[j].t<=ser[fill].t+30*GIORNO;j++){
+  const c=ser[j];
+  const slQui=sl!=null&&(buy?c.l<=sl:c.h>=sl);
+  let nuovi=0; while(k+nuovi<tps.length&&(buy?c.h>=tps[k+nuovi]:c.l<=tps[k+nuovi]))nuovi++;
+  if(slQui){ if(nuovi)ambiguo=true; slPreso=true; fine=c.t; break; }
+  k+=nuovi;
+  if(tps.length&&k>=tps.length){ fine=c.t; break; }
+  fine=c.t;
+ }
+ const finiti=slPreso||(tps.length&&k>=tps.length);
+ const scaduto=!finiti&&fine!=null&&fine>=ser[fill].t+30*GIORNO-GIORNO;
+ let esito;
+ if(slPreso)esito=k?('TP'+k+' poi SL'):'SL';
+ else if(tps.length&&k>=tps.length)esito='tutti i TP';
+ else esito=(scaduto?'scaduto':'in corso')+(k?(' (TP'+k+')'):'');
+ return Object.assign(base,{esito,raggiunti:k,slPreso,ambiguo,tFill:ser[fill].t,entry,tFine:fine,mercato:!!(s.a_mercato||!isFinite(e1)),
+  valutato:sl!=null&&(slPreso||k>0||(tps.length&&k>=tps.length)||scaduto),aperto:!finiti&&!scaduto});
+}
+function riepilogo(ris){
+ const v=ris.filter(r=>r.valutato);
+ const vinti=v.filter(r=>r.raggiunti>0).length;
+ const maxTp=Math.max(0,...v.map(r=>r.tps.length));
+ const tp=[]; for(let j=1;j<=maxTp;j++){ const con=v.filter(r=>r.tps.length>=j); tp.push({liv:j,tot:con.length,hit:con.filter(r=>r.raggiunti>=j).length}); }
+ return {n:ris.length,valutati:v.length,vinti,wr:v.length?vinti/v.length*100:null,tp,
+  nonAttivati:ris.filter(r=>r.esito==='non attivato').length,senzaDati:ris.filter(r=>r.esito==='senza dati').length,
+  senzaSl:ris.filter(r=>r.sl==null).length,ambigui:ris.filter(r=>r.ambiguo).length,aperti:ris.filter(r=>r.aperto&&r.raggiunti===0).length,at:Date.now()};
+}
+function leggiEsiti(){ try{ return JSON.parse(localStorage.getItem(LS_ESITI)||'{}')||{}; }catch(e){ return {}; } }
+window.fblCronoEsiti=leggiEsiti;
+async function analizza(sala,sym,segs,btn){
+ if(btn){ btn.disabled=true; btn.textContent='⏳ scarico le candele…'; }
+ try{
+  const daMs=Math.min(...segs.map(s=>Number(s.ts)))-GIORNO;
+  const {serie,fonte}=await candele(sym,daMs);
+  const ris=segs.slice().sort((a,b)=>a.ts-b.ts).map(s=>valuta(s,serie));
+  const r=riepilogo(ris); r.fonte=fonte;
+  C.risultati[sala+'|'+sym]=ris;
+  const es=leggiEsiti(); (es[sala]=es[sala]||{})[sym]=r; try{ localStorage.setItem(LS_ESITI,JSON.stringify(es)); }catch(e){}
+  try{ localStorage.setItem('fbl_crono_ris:'+sala+'|'+sym,JSON.stringify(ris.slice(-4000))); }catch(e){}
+  vista.sala=sala; vista.asset=sym; salvaVista();
+  mostraRisultato(sala,sym,ris,r);
+  try{ draw(); }catch(e){}
+ }catch(e){ stato('Analisi non riuscita: '+e.message,true); }
+ finally{ if(btn){ btn.disabled=false; btn.textContent='📊 Analizza e mostra a grafico'; } disegnaAsset(); }
+}
+function risultatiDi(sala,sym){
+ const k=sala+'|'+sym; if(C.risultati[k])return C.risultati[k];
+ try{ const v=JSON.parse(localStorage.getItem('fbl_crono_ris:'+k)||'null'); if(Array.isArray(v)){ C.risultati[k]=v; return v; } }catch(e){}
+ return null;
+}
+function mostraRisultato(sala,sym,ris,r){
+ const box=$('fblCronoRisultato'); if(!box)return; box.textContent='';
+ const h=document.createElement('div'); h.style.cssText='font-weight:700;font-size:14px;margin-bottom:6px';
+ h.textContent=sala+' · '+sym+' — candele: '+(r.fonte||''); box.appendChild(h);
+ const k=document.createElement('div'); k.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:10px';
+ [['Win rate totale',pct(r.wr),'almeno il TP1 prima dello stop'],['Segnali',String(r.n),'nella cronologia'],['Valutati',String(r.valutati),'con stop e risultato'],
+  ['Non attivati',String(r.nonAttivati),'entrata mai toccata in 24 h'],['Senza stop',String(r.senzaSl),'non valutabili'],['Ambigui',String(r.ambigui),'stop e TP nella stessa candela']].forEach(([a,b,c])=>{
+  const d=document.createElement('div'); d.style.cssText='background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px';
+  const x=document.createElement('div'); x.style.cssText='font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase'; x.textContent=a;
+  const y=document.createElement('div'); y.style.cssText="font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:700;margin-top:3px"; y.textContent=b;
+  const z=document.createElement('div'); z.style.cssText='font-size:10.5px;color:#6b7280'; z.textContent=c;
+  d.appendChild(x); d.appendChild(y); d.appendChild(z); k.appendChild(d); });
+ box.appendChild(k);
+ // win rate per livello di TP: barre orizzontali
+ const tit=document.createElement('div'); tit.className='hint'; tit.style.cssText='font-weight:700;margin:4px 0'; tit.textContent='WIN RATE PER LIVELLO DI TP'; box.appendChild(tit);
+ r.tp.forEach(l=>{
+  const p=l.tot?l.hit/l.tot*100:0;
+  const row=document.createElement('div'); row.style.cssText='display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px';
+  const a=document.createElement('span'); a.style.cssText='width:44px;color:#cdd6e0;font-weight:700'; a.textContent='TP'+l.liv;
+  const bar=document.createElement('div'); bar.style.cssText='flex:1;height:14px;background:#141b24;border-radius:4px;overflow:hidden';
+  const fill=document.createElement('div'); fill.style.cssText='height:100%;width:0;background:#2fbf71;border-radius:0 4px 4px 0;transition:width .8s cubic-bezier(.2,.7,.2,1)'; bar.appendChild(fill);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{ fill.style.width=p.toFixed(1)+'%'; }));
+  const v=document.createElement('span'); v.style.cssText="width:150px;font-family:'JetBrains Mono',monospace;color:#e8edf3"; v.textContent=pct(l.tot?p:null)+' · '+l.hit+'/'+l.tot;
+  row.appendChild(a); row.appendChild(bar); row.appendChild(v); box.appendChild(row);
+ });
+ // elenco dei segnali
+ const t=document.createElement('table'); t.className='posTable'; t.style.width='100%';
+ t.innerHTML='<thead><tr><th>Data</th><th>Side</th><th>Entrata</th><th>SL</th><th>TP</th><th>TP presi</th><th>Esito</th></tr></thead>';
+ const tb=document.createElement('tbody');
+ ris.slice().reverse().forEach(x=>{
+  const tr=document.createElement('tr');
+  [new Date(x.ts).toLocaleString('it-IT',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}),x.dir,
+   x.entry!=null?fmtPriceA(x.entry,sym):(x.entrataSala!=null?fmtPriceA(x.entrataSala,sym):'—'),x.sl!=null?fmtPriceA(x.sl,sym):'—',
+   x.tps.map(v=>fmtPriceA(v,sym)).join(' / ')||'—',x.tps.length?(x.raggiunti+'/'+x.tps.length):'—',x.esito+(x.ambiguo?' (ambiguo)':'')].forEach((v,i)=>{
+   const td=document.createElement('td'); td.textContent=v;
+   if(i===6)td.style.color=x.slPreso&&!x.raggiunti?'#ff8a8a':(x.raggiunti?'#7fdc9a':'#8b96a5');
+   tr.appendChild(td); });
+  tb.appendChild(tr);
+ });
+ t.appendChild(tb); const sc=document.createElement('div'); sc.className='tableScroll'; sc.style.maxHeight='300px'; sc.style.marginTop='10px'; sc.appendChild(t); box.appendChild(sc);
+ const vai=document.createElement('button'); vai.type='button'; vai.className='toolBtn active'; vai.style.marginTop='10px'; vai.textContent='📈 Porta '+sym+' a grafico';
+ vai.addEventListener('click',async()=>{ const ov=$('fblCronoOverlay'); if(ov)ov.style.display='none'; try{ await tgPortaAGrafico(sym); }catch(e){} try{ draw(); }catch(e){} });
+ box.appendChild(vai);
+}
+// RICHIESTO: a grafico l'entrata (e quindi entry, TP e SL) parte dalla candela VERA del timeframe
+// scelto nella barra del periodo. La valutazione usa candele da 5 minuti o da 1 ora (le uniche con
+// anni di storico): qui si ritrova il punto esatto sulle candele a grafico - la candela del
+// messaggio per un'entrata a mercato, la prima che tocca il prezzo d'entrata per le altre - e la
+// candela in cui lo stop o l'ultimo TP preso vengono toccati davvero. Si ricalcola a ogni cambio di
+// timeframe (e quando arrivano nuove candele), non a ogni disegno.
+function ancore(r){
+ const chiave=currentTF+'|'+rows.length+'|'+(rows.length?rows[0].date:'');
+ if(r.__anc&&r.__anc.k===chiave)return r.__anc;
+ const buy=r.dir!=='SELL', N=rows.length;
+ const tocca=(j,p)=>j>=0&&j<N&&p!=null&&isFinite(p)&&((Number(rows[j].low)<=p&&Number(rows[j].high)>=p)
+   ||(j>0&&(Number(rows[j-1].close)-p)*(Number(rows[j].open)-p)<0));   // anche un salto oltre il prezzo
+ // TP e stop: raggiunti O superati (per un BUY il TP con il massimo, lo stop con il minimo)
+ const supera=(j,p,versoAlto)=>j>=0&&j<N&&p!=null&&isFinite(p)&&(versoAlto?Number(rows[j].high)>=p:Number(rows[j].low)<=p);
+ let a=rowIndexContainingTime(r.ts);
+ if(a!=null&&!r.mercato){
+  // entrata non a mercato: la prima candela, dal messaggio, che tocca il prezzo d'entrata
+  let trovata=null; const lim=r.tFill+3600e3;
+  for(let j=a;j<N&&parseDateTime(rows[j].date)<=lim;j++){ if(tocca(j,r.entry)){ trovata=j; break; } }
+  a=trovata!=null?trovata:rowIndexContainingTime(r.tFill);
+ }
+ let b=null;
+ if(a!=null&&r.tFine!=null){
+  // la candela dell'evento che chiude il segnale: stop, oppure l'ultimo TP preso
+  const livello=r.slPreso?r.sl:(r.raggiunti?r.tps[r.raggiunti-1]:null);
+  const da=Math.max(a,rowIndexContainingTime(r.tFine-3600e3)||a), lim=r.tFine+3600e3;
+  const versoAlto=r.slPreso?!buy:buy;
+  if(livello!=null){ for(let j=da;j<N&&parseDateTime(rows[j].date)<=lim;j++){ if(supera(j,livello,versoAlto)){ b=j; break; } } }
+  if(b==null)b=rowIndexContainingTime(r.tFine);
+ }
+ r.__anc={k:chiave,a,b:b!=null?Math.max(b,a):null};
+ return r.__anc;
+}
+window.fblCronoAncore=ancore;
+// ---------- disegno a grafico (chiamato da draw(), dopo i trade chiusi)
+window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
+ if(!vista.mostra||!vista.sala||!currentAssetKey)return;
+ const ris=risultatiDi(vista.sala,currentAssetKey); if(!ris||!ris.length)return;
+ const xFor=ri=>pad.l+(ri-start+.5)*cw/n;
+ const fine=Math.max(start,0)+n+2;
+ ctx.save(); ctx.font='10px Inter, system-ui, sans-serif';
+ ris.forEach((r,i)=>{
+  if(r.tFill==null)return;
+  const an=ancore(r); const a=an.a; const b=an.b!=null?an.b:(rows.length-1);
+  if(a==null||b==null||a>idx||b<start-1||a>fine)return;
+  const bb=Math.min(b,idx), x1=Math.max(pad.l,xFor(a)), x2=Math.min(w-pad.r,xFor(Math.max(bb,a+1)));
+  if(x2<=pad.l||x1>=w-pad.r)return;
+  if(vista.caselle&&(r.sl!=null||r.tps.length)){
+   try{ drawTpSlZoneBox(ctx,{ownerKey:'crono:'+i,originIdx:a,entry:r.entry,sl:r.sl,tp:r.tps.length?r.tps[r.tps.length-1]:null,pad,cw,n,start,w,y,fixedSpan:Math.max(1,bb-a),noHandle:true,assetKey:currentAssetKey,hidePills:true}); }catch(e){}
+  }
+  const linea=(p,col,dash,lw)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; const yy=y(p); ctx.strokeStyle=col; ctx.lineWidth=lw||1; ctx.setLineDash(dash||[]); ctx.beginPath(); ctx.moveTo(x1,yy); ctx.lineTo(x2,yy); ctx.stroke(); };
+  const etichetta=(p,testo,col)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; ctx.setLineDash([]); ctx.fillStyle=col; ctx.fillText(testo,x2+3,y(p)+3.5); };
+  linea(r.entry,'rgba(232,237,243,0.85)',[4,3],1.2);
+  linea(r.sl,'#e05252',[],1.3); etichetta(r.sl,r.slPreso?'SL ✗':'SL','#ff8a8a');
+  r.tps.forEach((t,j)=>{ const preso=j<r.raggiunti; linea(t,preso?'#2fbf71':'rgba(139,150,165,0.7)',preso?[]:[3,3],preso?1.3:1); if(fblEtichetteTpSlVisibili())etichetta(t,'TP'+(j+1)+(preso?' ✓':''),preso?'#7fdc9a':'#8b96a5'); });
+  // freccia d'entrata
+  if(r.entry!=null&&r.entry>=lo&&r.entry<=hi){ const xa=xFor(a), ya=y(r.entry); ctx.setLineDash([]); ctx.fillStyle=r.dir==='SELL'?'#e05252':'#3ea6ff'; ctx.beginPath();
+   if(r.dir==='SELL'){ ctx.moveTo(xa-5,ya-9); ctx.lineTo(xa+5,ya-9); ctx.lineTo(xa,ya-2); } else { ctx.moveTo(xa-5,ya+9); ctx.lineTo(xa+5,ya+9); ctx.lineTo(xa,ya+2); } ctx.fill(); }
+ });
+ ctx.setLineDash([]); ctx.restore();
+};
+// ---------- apertura e comandi
+window.fblCronoApri=function(){
+ const ov=$('fblCronoOverlay'); if(!ov)return;
+ try{ if(document.getElementById('fblStatOverlay')?.style.display==='block')fblStatChiudi(); }catch(e){}   // dalla pagina Statistiche: si apre sopra
+ riempiSale(); const sel=$('fblCronoSala'); if(vista.sala&&sel&&[...sel.options].some(o=>o.value===vista.sala))sel.value=vista.sala;
+ if($('fblCronoMostra'))$('fblCronoMostra').checked=vista.mostra!==false;
+ if($('fblCronoCaselle'))$('fblCronoCaselle').checked=!!vista.caselle;
+ stato(''); $('fblCronoRisultato').textContent='';
+ disegnaAsset();
+ const sala=sel&&sel.value; if(sala&&vista.asset){ const ris=risultatiDi(sala,vista.asset), r=(leggiEsiti()[sala]||{})[vista.asset]; if(ris&&r)mostraRisultato(sala,vista.asset,ris,r); }
+ ov.style.display='flex';
+};
+fblDelega('click',ev=>{
+ const t=ev.target; if(!t||!t.closest)return;
+ if(t.closest('#fblCronoBtn,.fblCronoBtn'))return fblCronoApri();
+ if(t.closest('#fblCronoChiudi')){ const ov=$('fblCronoOverlay'); if(ov)ov.style.display='none'; return; }
+ if(t.closest('#fblCronoLeggi'))return fblCronoLeggi(false);
+ if(t.closest('#fblCronoDaCapo'))return fblCronoLeggi(true);
+});
+fblDelega('change',ev=>{
+ const id=ev.target&&ev.target.id;
+ if(id==='fblCronoSala'){ $('fblCronoRisultato').textContent=''; disegnaAsset(); }
+ if(id==='fblCronoMostra'){ vista.mostra=ev.target.checked; salvaVista(); try{ draw(); }catch(e){} }
+ if(id==='fblCronoCaselle'){ vista.caselle=ev.target.checked; salvaVista(); try{ draw(); }catch(e){} }
+});
+})();
+</script>
+
 <!-- ===================== STATISTICHE (dashboard completa) =====================
      RICHIESTO: "accanto ai conti una pagina tutta nuova con una dashboard completa: andamento del
      conto, torte, journal settimanale e mensile, numero dei trade, scaletta del rapporto
@@ -37637,6 +37987,23 @@ function disegna(animato){
    [['settimana','Settimanale'],['mese','Mensile']].forEach(([g,l],i)=>{ const b=document.createElement('button'); b.type='button'; b.className='fsTab'+(i?'':' on'); b.style.marginLeft='0'; b.textContent=l;
     b.addEventListener('click',()=>{ sw.querySelectorAll('.fsTab').forEach(x=>x.classList.remove('on')); b.classList.add('on'); mostra(g); }); sw.appendChild(b); });
    c.corpo.appendChild(sw); c.corpo.appendChild(box); mostra('settimana'); }
+ // cronologia delle sale: win rate totale e per livello di TP (dai segnali, non dai tuoi trade)
+ { const es=(typeof window.fblCronoEsiti==='function')?window.fblCronoEsiti():{};
+   const voci=[]; Object.keys(es).forEach(sala=>Object.keys(es[sala]||{}).forEach(asset=>{ if(F.sala&&sala!==F.sala)return; if(F.asset&&asset!==F.asset)return; voci.push({sala,asset,r:es[sala][asset]}); }));
+   const maxTp=Math.max(0,...voci.map(v=>(v.r.tp||[]).length));
+   const col=['Sala','Asset','Segnali','Valutati','Win rate'].concat(Array.from({length:maxTp},(_,j)=>'TP'+(j+1)));
+   const righeT=voci.map(v=>[v.sala,v.asset,String(v.r.n),String(v.r.valutati),pct(v.r.wr)].concat(Array.from({length:maxTp},(_,j)=>{ const l=(v.r.tp||[])[j]; return l&&l.tot?pct(l.hit/l.tot*100)+' ('+l.hit+'/'+l.tot+')':'—'; })));
+   const c=carta(G,'w12','📡 Sale segnali: win rate totale e per livello di TP','Dalla cronologia di ogni sala (tutti i segnali, valutati sulle candele vere). Rispetta i filtri Sala e Asset. Per aggiornarla: Cronologia delle sale → Analizza.',n++,{col,righe:righeT});
+   const apri=document.createElement('button'); apri.type='button'; apri.className='fsTab fblCronoBtn'; apri.textContent='📜 Apri cronologia'; apri.style.marginLeft='6px'; c.c.querySelector('h4').appendChild(apri);
+   if(!voci.length){ vuoto(c.corpo,'Nessuna sala analizzata (o nessuna con questi filtri): apri la cronologia, leggi una sala e premi «Analizza».'); }
+   else{
+    const agg=[]; for(let j=0;j<maxTp;j++){ let h=0,t=0; voci.forEach(v=>{ const l=(v.r.tp||[])[j]; if(l){ h+=l.hit; t+=l.tot; } }); agg.push({h,t}); }
+    let vt=0,vv=0; voci.forEach(v=>{ vt+=v.r.valutati||0; vv+=v.r.vinti||0; });
+    const barre=[{l:'Totale (TP1+)',v:vt?vv/vt*100:0,c:ACC,etichetta:pct(vt?vv/vt*100:null)+' · '+vv+'/'+vt,tip:[{v:pct(vt?vv/vt*100:null),l:'segnali con almeno il TP1 prima dello stop'},{l:vv+' su '+vt+' valutati'}]}]
+     .concat(agg.map((a,j)=>({l:'TP'+(j+1),v:a.t?a.h/a.t*100:0,c:POS,etichetta:pct(a.t?a.h/a.t*100:null)+' · '+a.h+'/'+a.t,tip:[{v:pct(a.t?a.h/a.t*100:null),l:'TP'+(j+1)+' raggiunto prima dello stop'},{l:a.h+' su '+a.t+' segnali con almeno '+(j+1)+' TP'}]})));
+    graficoOrizz(c,barre);
+    c.corpo.appendChild(tabellaHtml(col,righeT));
+   } }
  ultimaFirma=firma();
 }
 function firma(){ try{ return trades.length+'|'+trades.reduce((a,t)=>a+(Number(t&&t.pl)||0),0).toFixed(2)+'|'+trades.map(t=>t&&t.strategy||'').join(','); }catch(e){ return ''; } }
