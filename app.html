@@ -22524,9 +22524,25 @@ let tgUltimoAvvio=0;
 // Il motivo VERO per cui il ponte non e' partito (dal servizio locale, con le ultime righe del
 // diario del ponte): prima si vedeva solo "prova a riavviarlo" e niente altro.
 let tgUltimoErroreAvvio='';
+// BUG SEGNALATO: "i due curl rispondono" ma l'app dice "servizio locale non raggiungibile". I
+// servizi sono accesi: e' il BROWSER che blocca le chiamate dal sito verso il PC. Chrome ed Edge
+// chiedono il permesso "Accesso alla rete locale" (app e servizi su questo dispositivo); se e'
+// stato bloccato, o il popup e' stato chiuso, ogni chiamata a 127.0.0.1 fallisce senza dire perche'.
+// Lo stato del permesso lo legge fblPermessoReteLocale() (sezione ACCESSO DA ALTRI DISPOSITIVI).
+async function fblDiagnosiLocale(){
+ const host=(typeof fblHost==='function')?fblHost():'127.0.0.1';
+ if(host!=='127.0.0.1'&&host!=='localhost')return '';
+ const stato=await fblPermessoReteLocale();
+ const sblocco=' Se la voce non c\'è o la richiesta non compare più: nella stessa schermata «Reimposta autorizzazioni» e ricarica; in ultimo chrome://flags → «Local Network Access Checks» → Disabled → Relaunch.';
+ if(stato==='denied')return 'IL BROWSER STA BLOCCANDO L\'ACCESSO AL PC: il permesso «Accesso alla rete locale» per questo sito è negato. Clicca l\'icona a sinistra dell\'indirizzo → Impostazioni sito → «Accesso alla rete locale» (o «App e servizi su questo dispositivo») → Consenti, poi ricarica la pagina.'+sblocco;
+ if(stato==='prompt')return 'Il browser deve ancora chiederti il permesso «Accesso alla rete locale»: ricarica la pagina e, quando compare la richiesta, premi Consenti.'+sblocco;
+ const mobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent||'')||(navigator.maxTouchPoints>1&&/Macintosh/.test(navigator.userAgent||''));
+ if(mobile)return 'Sei su telefono o tablet: 127.0.0.1 è il telefono stesso, non il PC. In Collegamento/Modalità → Accesso da altri dispositivi inserisci l\'indirizzo Tailscale del PC.';
+ return 'Se dal Prompt dei comandi «curl http://127.0.0.1:8000/health» risponde, il blocco è nel browser: permesso «Accesso alla rete locale» per questo sito (icona a sinistra dell\'indirizzo → Impostazioni sito → Consenti) oppure un blocco pubblicità (uBlock e simili bloccano le chiamate dei siti verso il PC: disattivalo per questo sito).'+sblocco;
+}
 async function tgMostraDiarioPonte(){
  const r=await fetchMt5WithTimeout('/segnali-log?righe=120',{method:'GET'},8000);
- if(!r||!r.ok){ await appAlert('Diario non leggibile: il servizio locale sulla porta 8000 (ForexBacktestLAB.exe) non risponde'+(r&&r.message?(' ('+r.message+')'):'')+'.\n\nSenza quello il ponte dei segnali non può essere avviato dall\'app.'); return; }
+ if(!r||!r.ok){ const dg=await fblDiagnosiLocale(); await appAlert('Diario non leggibile: il servizio locale sulla porta 8000 (ForexBacktestLAB.exe) non risponde all\'app'+(r&&r.message?(' ('+r.message+')'):'')+'.\n\n'+(dg||'Senza quello il ponte dei segnali non può essere avviato dall\'app.')); return; }
  const t=(r.data&&r.data.testo)||'(vuoto: il ponte non è mai stato avviato da questa versione)';
  await appAlert('Diario del ponte dei segnali\n'+((r.data&&r.data.file)||'')+'\n\n'+t.slice(-6000));
 }
@@ -22545,6 +22561,7 @@ async function tgAssicuraPonte(){
    return true;
   }
   tgUltimoErroreAvvio=(r&&r.message)||'servizio locale (porta 8000) non raggiungibile: ForexBacktestLAB.exe non è in esecuzione';
+  try{ const dg=await fblDiagnosiLocale(); if(dg&&/non raggiungibile/i.test(tgUltimoErroreAvvio))tgUltimoErroreAvvio+=' — '+dg; }catch(e){}
   tgStato('Non sono riuscito ad avviarlo da solo: '+tgUltimoErroreAvvio+'. Premi «📄 Diario del ponte» per vedere cosa è successo.','err');
   return false;
  }catch(e){
