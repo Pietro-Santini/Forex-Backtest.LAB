@@ -86,6 +86,7 @@ input,select,button{width:100%;padding:10px;border-radius:8px;border:1px solid #
 .quickTradeRiskBox input{width:40px;min-width:0;text-align:center;background:transparent;border:none;color:#e8edf3;font-size:12px;font-weight:800;font-family:inherit;padding:2px 0;border-bottom:1px dashed #3a4757;-moz-appearance:textfield}
 .quickTradeRiskBox input::-webkit-outer-spin-button,.quickTradeRiskBox input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .quickTradeRiskBox input:focus{outline:none;border-bottom:1px solid #3ea6ff}
+.quickRiskReale{font-weight:800;white-space:nowrap;color:#7fdc9a}.quickRiskReale:empty{display:none}.quickRiskReale.sopra{color:#ffb35c}
 .quickLotCalcBtn{width:300px;max-width:60vw;height:30px;border-radius:6px;background:#1f7a52;border:1px solid #2a9d6d;color:#eafff3;font-size:12px;font-weight:800;letter-spacing:.4px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;font-family:inherit}
 .quickLotCalcBtn:hover{background:#238a5c}
 .quickTradeControlsRow{display:flex;gap:6px}
@@ -1395,6 +1396,15 @@ setTimeout(function(){
         <div id="krakenPosizioniBox" style="font-size:12px;line-height:1.5;color:#cdd6e0;margin-bottom:8px"></div>
         <div style="display:flex;flex-direction:column;gap:6px;max-width:460px">
           <select id="krakenAmbiente" class="toolSelect"><option value="simulato">Conto SIMULATO (prezzi veri di Kraken, soldi finti)</option><option value="reale">Conto REALE Kraken Futures</option></select>
+          <div id="krakenContiBox" style="display:flex;flex-direction:column;gap:6px;margin-bottom:4px">
+            <div style="font-size:12px;font-weight:700;color:#8b96a5">CONTI DI PROVA (salvati sul PC)</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+              <select id="krakenContoSel" class="toolSelect" style="flex:1;min-width:200px"><option value="">premi Collega per vedere i conti</option></select>
+              <button type="button" id="krakenContoNuovoBtn" class="miniBtn" style="width:auto">➕ Nuovo</button>
+              <button type="button" id="krakenContoRinominaBtn" class="miniBtn" style="width:auto">✏️ Rinomina</button>
+              <button type="button" id="krakenContoEliminaBtn" class="miniBtn" style="width:auto">🗑️ Elimina</button>
+            </div>
+          </div>
           <div id="krakenSimBox" style="display:flex;flex-direction:column;gap:6px">
             <select id="krakenSimTipo" class="toolSelect">
               <option value="libero">Conto libero (saldo a scelta, leva 2x)</option>
@@ -3166,6 +3176,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <span>RISCHIO</span>
        <input id="quickRiskVal" type="number" step=".1" min="0" value="1">
        <span>%</span>
+       <span id="quickRiskReale" class="quickRiskReale" title="Rischio vero del lotto scritto nella barra: quanto perdi se scatta lo stop loss, in % del saldo del conto scelto"></span>
      </div>
      <button id="quickLotCalcBtn" type="button" class="quickLotCalcBtn" title="Calcola e applica il lottaggio consigliato in base a Stop Loss e Rischio % (come APPLICA LOTTAGGIO CONSIGLIATO)">🖩 LOTT. 🖩</button>
      <div id="quickTradeControlsRow" class="quickTradeControlsRow">
@@ -8971,7 +8982,8 @@ function updateQuickTradeBar(){
  // scenario "si resetta ad ogni carattere digitato, in modo del tutto deterministico" segnalato.
  // isQuickFieldFocused() confronta invece con l'activeElement del document CUI L'ELEMENTO
  // APPARTIENE DAVVERO (el.ownerDocument), corretto sia a grafico agganciato sia staccato.
- if(lotsEl && !isQuickFieldFocused(lotsEl))lotsEl.value=quickLotsTargetValue().toFixed(2);
+ if(lotsEl && !isQuickFieldFocused(lotsEl))lotsEl.value=fmtLottiQuick(quickLotsTargetValue());
+ try{ aggiornaRischioRealeQuick(); }catch(e){}
  const riskEl=$('quickRiskVal');
  const riskSrc=$(quickPendingConfirmActive?'riskPending':'risk');
  if(riskEl && !isQuickFieldFocused(riskEl) && riskSrc)riskEl.value=riskSrc.value;
@@ -14386,7 +14398,8 @@ function draw(){
    }
  }
  if(positionsVisible)drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal);
- try{ if(typeof fblCronoDisegna==='function')fblCronoDisegna(ctx,y,lo,hi,pad,cw,n,start,w); }catch(e){}   // cronologia della sala (vedi CRONOLOGIA DELLE SALE)
+ try{ if(typeof fblCronoDisegna==='function')fblCronoDisegna(ctx,y,lo,hi,pad,cw,n,start,w); }catch(e){}
+ try{ if(typeof krakenDisegnaGrafico==='function')krakenDisegnaGrafico(ctx,y,lo,hi,pad,cw,n,start,w); }catch(e){}   // posizioni Kraken (vedi KRAKEN: TRADE JOURNAL, GRAFICO)   // cronologia della sala (vedi CRONOLOGIA DELLE SALE)
  // Rettangolo di evidenziazione dell'operazione scelta con "Vai a grafico" nel Trade
  // Journal: copre l'intera altezza del grafico dall'apertura alla chiusura, con una
  // casella riepilogativa (durata, pip, R/R) agganciata in alto.
@@ -16515,6 +16528,13 @@ setTimeout(()=>{ try{ fblEtichetteTpSlUi(); }catch(e){} },500);
 function drawTpSlZoneBox(ctx,opts){
  const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,alwaysShowTooltip}=opts;
  const hidePills=opts.hidePills||!fblEtichetteTpSlVisibili();
+ // Bozza d'ordine col conto Kraken: guadagno/perdita in USD sulle monete (1 lotto = 1 moneta), non forex in €.
+ const usdMonete=/^kraken:/.test(String(ownerKey||''))||(/^draft:/.test(String(ownerKey||''))&&typeof krakenModoOrdini==='function'&&krakenModoOrdini());
+ const soldiLivello=(liv,segno)=>{
+  if(usdMonete&&liv===tp&&Number.isFinite(opts.importoTp))return ` • +${opts.importoTp.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})} $`;
+  if(!Number.isFinite(lots))return '';
+  if(usdMonete){ const v=Math.abs(liv-entry)*lots; return ` • ${segno}${v.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})} $`; }
+  const v=euroAtLevel(entry,liv,lots,assetKey); return v!=null?` • ${segno}${euro(v)}`:''; };
  if(!Number.isFinite(entry)||!Number.isFinite(originIdx))return null;
  const hasSl=Number.isFinite(sl), hasTp=Number.isFinite(tp);
  if(!hasSl&&!hasTp)return null;
@@ -16570,11 +16590,10 @@ function drawTpSlZoneBox(ctx,opts){
      // sbagliati/a zero.
      const pipsVal=(tp-entry)/pipSizeForAsset(assetKey);
      // Anteprima guadagno in € se il TP viene raggiunto (richiede un lottaggio noto).
-     const tpEuro=Number.isFinite(lots)?euroAtLevel(entry,tp,lots,assetKey):null;
-     const tpEuroTxt=tpEuro!=null?` • +${euro(tpEuro)}`:'';
+     const tpEuroTxt=soldiLivello(tp,'+');
      // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
      // candele al suo interno) — richiesto esplicitamente.
-     drawZonePill(ctx,xRight+4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${tpEuroTxt}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
+     drawZonePill(ctx,xRight+4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
    }
  }
  if(hasSl){
@@ -16601,9 +16620,8 @@ function drawTpSlZoneBox(ctx,opts){
      // posizione, mai quelli dello strumento a schermo ora.
      const pipsVal=(sl-entry)/pipSizeForAsset(assetKey);
      // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
-     const slEuro=Number.isFinite(lots)?euroAtLevel(entry,sl,lots,assetKey):null;
-     const slEuroTxt=slEuro!=null?` • ${stopProfit?'+':'-'}${euro(slEuro)}`:'';
-     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)}) ${fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
+     const slEuroTxt=soldiLivello(sl,stopProfit?'+':'-');
+     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
    }
  }
  // Separatore tratteggiato bianco all'entrata (come la linea centrale dello strumento
@@ -16879,6 +16897,83 @@ function computeRRRatio(){
  if(risk<=0)return null;
  return reward/risk;
 }
+// ---- RICHIESTO: "la barra degli ordini dentro al grafico deve calcolare correttamente la % di
+// rischio con il proprio lottaggio, calcolare il lotto quando metto TP e SL a grafico ed eseguire
+// gli ordini pendenti, tutto da quel pannello". Col conto Kraken scelto sopra la dashboard il
+// calcolo NON e' quello forex (saldo del backtest/MT5, contratto da 100.000): saldo del conto
+// Kraken in USD, 1 lotto = 1 moneta, arrotondato al passo del contratto (BTC 0,0001, ...).
+function krakenModoOrdini(){ try{ return !!(liveModeActive&&fblContoVista==='kraken'); }catch(e){ return false; } }
+var krakenInfoAsset={};
+function krakenBaseCorrente(){ let s=''; try{ s=binanceSymbolForAsset(currentAssetKey||$('market')?.value||'')||''; }catch(e){} return s?s.replace(/(USDT|USDC|USD|EUR)$/,''):''; }
+function krakenInfoCorrente(){
+ const b=krakenBaseCorrente(); if(!b)return null;
+ const v=krakenInfoAsset[b];
+ if((!v||Date.now()-v.at>600000)&&!(v&&v.inCorso)&&krakenContoPronto()){
+  krakenInfoAsset[b]=Object.assign({},v||{at:0},{inCorso:true});
+  krakenBridge('/strumento/'+encodeURIComponent(b)).then(r=>{
+   krakenInfoAsset[b]=r.ok?Object.assign({},r.data,{at:Date.now()}):{at:Date.now()-540000,errore:r.message};   // errore: riprova fra un minuto
+   try{ refreshRiskSuggestion(); refreshRiskSuggestionPending(); updateQuickTradeBar(); }catch(e){}
+  });
+ }
+ return v&&v.step?v:null;
+}
+function krakenPassoLotti(){ const i=krakenInfoCorrente(); return Number(i&&i.step)||0.001; }
+function krakenDecLotti(){ const m=String(krakenPassoLotti()).split('.')[1]; return m?Math.min(8,m.length):0; }
+function krakenLottiArrotonda(q){ const p=krakenPassoLotti(); return Number((Math.floor(q/p+1e-9)*p).toFixed(krakenDecLotti())); }
+function fmtLottiQuick(v){ v=Number(v); if(!Number.isFinite(v))return '—'; return krakenModoOrdini()?v.toFixed(krakenDecLotti()):v.toFixed(2); }
+function importoRischio(s){ return s&&s.valuta==='USD'?(Number(s.riskAmount).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $'):euro(s.riskAmount); }
+function krakenLottiConsigliati(entry,slVal,riskPct){
+ const saldo=Number(krakenConto&&krakenConto.saldo);
+ if(!(saldo>0)||!Number.isFinite(entry)||!Number.isFinite(slVal))return null;
+ const dist=Math.abs(entry-slVal); if(!(dist>0))return null;
+ const riskAmount=saldo*riskPct/100;
+ let q=riskAmount/dist, cappedByMargin=false;
+ // mai piu' monete di quante il margine disponibile (alla leva del conto) ne regga
+ const disp=Number(krakenConto.disponibile);
+ if(disp>0&&entry>0){ const cap=disp*krakenLeva()/entry*0.98; if(q>cap){ q=cap; cappedByMargin=true; } }
+ const info=krakenInfoCorrente(), min=Number(info&&info.min)||krakenPassoLotti();
+ q=krakenLottiArrotonda(q);
+ const sottoMinimo=q<min-1e-12;
+ if(sottoMinimo)q=Number(min.toFixed(krakenDecLotti()));
+ return {lots:q,riskAmount,dist,slVal,riskPct,cappedByMargin,sottoMinimo,valuta:'USD',kraken:true};
+}
+// Rischio VERO del lotto scritto: quanto si perde allo stop, in % del saldo del conto scelto.
+function rischioRealeLotto(entry,sl,lots){
+ if(!Number.isFinite(entry)||!Number.isFinite(sl)||!(lots>0)||entry===sl)return null;
+ if(krakenModoOrdini()){
+  const saldo=Number(krakenConto&&krakenConto.saldo); if(!(saldo>0))return null;
+  const perdita=Math.abs(entry-sl)*lots;
+  return {pct:perdita/saldo*100,riskAmount:perdita,valuta:'USD'};
+ }
+ const v=euroAtLevel(entry,sl,lots), saldo=realizedBalanceNow();
+ if(v==null||!(saldo>0))return null;
+ return {pct:v/saldo*100,riskAmount:v,valuta:'EUR'};
+}
+function aggiornaRischioRealeQuick(){
+ const el=$('quickRiskReale'); if(!el)return;
+ let entry,sl,lots,obiettivo;
+ if(quickPendingConfirmActive){
+  const pe=num($('pendingEntry')?.value); entry=Number.isFinite(pe)?pe:currentPrice();
+  sl=num($('slPending')?.value); lots=getLotSizePending(); obiettivo=num($('riskPending')?.value);
+ }else{
+  entry=currentPrice(); sl=active?NaN:num($('sl')?.value); lots=getLotSize(); obiettivo=num($('risk')?.value);
+ }
+ const r=rischioRealeLotto(entry,sl,lots);
+ if(!r){ el.textContent=''; el.title='Metti lo stop loss (📍 SL) per vedere il rischio vero del lotto scritto.'; return; }
+ el.textContent='= '+r.pct.toFixed(2)+'%';
+ el.classList.toggle('sopra',Number.isFinite(obiettivo)&&r.pct>obiettivo*1.05);
+ el.title='Con '+fmtLottiQuick(lots)+(krakenModoOrdini()?' monete':' lot')+' e lo stop a '+fmtPrice(sl)+' rischi '+importoRischio(r)+' = '+r.pct.toFixed(2)+'% del saldo'
+  +(krakenModoOrdini()?(' di '+krakenNome()):'')+'.';
+}
+// Stop o target messo sul grafico (anche trascinato): il lotto si ricalcola da solo dal rischio %.
+function autoLottoDaGrafico(pending){
+ const s=pending?computeSuggestedLotsPending():computeSuggestedLots();
+ if(!s)return '';
+ $(pending?'lotsPending':'lots').value=s.lots;
+ try{ updateQuickTradeBar(); }catch(e){}
+ try{ if(pending)refreshSlTpEuroPreviewPending(); else refreshSlTpEuroPreview(); }catch(e){}
+ return ' Lotto: '+fmtLottiQuick(s.lots)+(s.kraken?' monete':' lot')+' (rischio '+s.riskPct.toFixed(2)+'% = '+importoRischio(s)+(s.sottoMinimo?', ⚠️ minimo del contratto: il rischio vero e\' più alto':'')+(s.cappedByMargin?', ridotto dal margine':'')+').';
+}
 function computeSuggestedLots(){
  const riskPct=num($('risk')?.value);
  if(!Number.isFinite(riskPct)||riskPct<=0)return null;
@@ -16895,6 +16990,7 @@ function computeSuggestedLots(){
  if(!Number.isFinite(entry))return null;
  const slVal=active?active.sl:num($('sl')?.value);
  if(!Number.isFinite(slVal))return null;
+ if(krakenModoOrdini())return krakenLottiConsigliati(entry,slVal,riskPct);
  const dist=Math.abs(entry-slVal);
  if(dist<=0)return null;
  const balance=realizedBalanceNow();
@@ -16923,7 +17019,7 @@ function refreshRiskSuggestion(){
    if(actions)actions.style.display='none';
    return;
  }
- box.innerHTML=`Rischiando <strong>${s.riskPct.toFixed(2)}%</strong> del saldo (${euro(s.riskAmount)}) con SL a ${fmtPrice(s.slVal)}, il lottaggio consigliato è <strong>${s.lots.toFixed(2)}</strong> lot.`+
+ box.innerHTML=`Rischiando <strong>${s.riskPct.toFixed(2)}%</strong> del saldo (${importoRischio(s)}) con SL a ${fmtPrice(s.slVal)}, il lottaggio consigliato è <strong>${fmtLottiQuick(s.lots)}</strong> ${s.kraken?'monete ('+krakenNome()+')':'lot'}.${s.sottoMinimo?' ⚠️ È il minimo del contratto: il rischio vero è più alto.':''}`+
    (s.cappedByMargin?' Ridotto rispetto al puro calcolo del rischio perché il margine libero disponibile alla leva corrente non ne permette di più.':'')+
    ` È solo un consiglio: puoi comunque modificare il campo Lottaggio come preferisci.`;
  if(actions)actions.style.display='block';
@@ -16939,6 +17035,7 @@ function computeSuggestedLotsPending(){
  if(!Number.isFinite(entry))return null;
  const slVal=num($('slPending')?.value);
  if(!Number.isFinite(slVal))return null;
+ if(krakenModoOrdini())return krakenLottiConsigliati(entry,slVal,riskPct);
  const dist=Math.abs(entry-slVal);
  if(dist<=0)return null;
  const balance=realizedBalanceNow();
@@ -16963,7 +17060,7 @@ function refreshRiskSuggestionPending(){
    if(actions)actions.style.display='none';
    return;
  }
- box.innerHTML=`Rischiando <strong>${s.riskPct.toFixed(2)}%</strong> del saldo (${euro(s.riskAmount)}) con SL a ${fmtPrice(s.slVal)}, il lottaggio consigliato per l'ordine pendente è <strong>${s.lots.toFixed(2)}</strong> lot.`+
+ box.innerHTML=`Rischiando <strong>${s.riskPct.toFixed(2)}%</strong> del saldo (${importoRischio(s)}) con SL a ${fmtPrice(s.slVal)}, il lottaggio consigliato per l'ordine pendente è <strong>${fmtLottiQuick(s.lots)}</strong> ${s.kraken?'monete ('+krakenNome()+')':'lot'}.${s.sottoMinimo?' ⚠️ È il minimo del contratto: il rischio vero è più alto.':''}`+
    (s.cappedByMargin?' Ridotto rispetto al puro calcolo del rischio perché il margine libero disponibile alla leva corrente non ne permette di più.':'')+
    ` È solo un consiglio: puoi comunque modificare il campo Lottaggio come preferisci.`;
  if(actions)actions.style.display='block';
@@ -17057,7 +17154,7 @@ function setTradeLevel(type,value,source='input'){
      $('tpPending').value=fmtPrice(defaults.tp);
    }
    refreshRiskSuggestionPending();
-   $('status').textContent=`Prezzo di entrata dell'ordine pendente impostato a ${fmtPrice(value)}.`;
+   $('status').textContent=`Prezzo di entrata dell'ordine pendente impostato a ${fmtPrice(value)}.`+autoLottoDaGrafico(true);
    draw();
    return;
  }
@@ -17070,7 +17167,7 @@ function setTradeLevel(type,value,source='input'){
  if(type==='SL_PENDING'||type==='TP_PENDING'){
    if(type==='SL_PENDING')$('slPending').value=fmtPrice(value); else $('tpPending').value=fmtPrice(value);
    refreshRiskSuggestionPending();
-   $('status').textContent=`${type==='SL_PENDING'?'Stop Loss':'Take Profit'} dell'ordine pendente impostato a ${fmtPrice(value)}.`;
+   $('status').textContent=`${type==='SL_PENDING'?'Stop Loss':'Take Profit'} dell'ordine pendente impostato a ${fmtPrice(value)}.`+autoLottoDaGrafico(true);
    draw();
    return;
  }
@@ -17082,7 +17179,7 @@ function setTradeLevel(type,value,source='input'){
  if(!active){
    if(type==='SL')$('sl').value=fmtPrice(value); else $('tp').value=fmtPrice(value);
    refreshRiskSuggestion();
-   $('status').textContent=`${levelLabel(type)} preimpostato a ${fmtPrice(value)} (si applica quando apri la posizione o crei l'ordine pendente).`;
+   $('status').textContent=`${levelLabel(type)} preimpostato a ${fmtPrice(value)} (si applica quando apri la posizione o crei l'ordine pendente).`+autoLottoDaGrafico(false);
    draw();
    return;
  }
@@ -17848,6 +17945,9 @@ function createPendingOrder(side){
  const lots=getLotSizePending();
  const kind=pendingOrderKind;
  const asset=$('market')?.value||'';
+ // Conto Kraken scelto sopra la dashboard: l'ordine pendente lo tiene il programma sul PC e lo
+ // apre su Kraken (mercato + stop + take profit) quando il prezzo arriva all'entrata.
+ if(krakenModoOrdini()){ krakenOrdinePendente(side,kind,entry,sl,tp,lots); return; }
  // Con MT5 collegato, l'ordine pendente è VERO (vedi placeRealMt5PendingOrder) invece che
  // simulato: le due cose restano sempre separate, mai mescolate (stesso principio già seguito
  // per BUY/SELL a mercato).
@@ -18827,14 +18927,16 @@ function quickLotsTargetValue(){ return quickPendingConfirmActive?getLotSizePend
 function quickAdjustLots(delta){
  let next=Math.round((quickLotsTargetValue()+delta)*100)/100;
  if(next<0.01)next=0.01;
- $(quickLotsTargetId()).value=next.toFixed(2);
+ // Kraken: si sale/scende di un passo del contratto (1 lotto = 1 moneta)
+ if(krakenModoOrdini()){ const p=krakenPassoLotti(); next=Math.max(p,krakenLottiArrotonda(quickLotsTargetValue()+Math.sign(delta)*p+p*1e-6)); }
+ $(quickLotsTargetId()).value=fmtLottiQuick(next);
  updateQuickTradeBar();
  try{ if(quickPendingConfirmActive)refreshRiskSuggestionPending(); else refreshRiskSuggestion(); }catch(e){}
 }
 $('quickLotsUp')?.addEventListener('click',()=>quickAdjustLots(0.01));
 $('quickLotsDown')?.addEventListener('click',()=>quickAdjustLots(-0.01));
-$('lots')?.addEventListener('input',()=>{ if(quickPendingConfirmActive)return; const el=$('quickLotsVal'); if(el && !isQuickFieldFocused(el))el.value=getLotSize().toFixed(2); });
-$('lotsPending')?.addEventListener('input',()=>{ if(!quickPendingConfirmActive)return; const el=$('quickLotsVal'); if(el && !isQuickFieldFocused(el))el.value=getLotSizePending().toFixed(2); });
+$('lots')?.addEventListener('input',()=>{ if(quickPendingConfirmActive)return; const el=$('quickLotsVal'); if(el && !isQuickFieldFocused(el))el.value=fmtLottiQuick(getLotSize()); });
+$('lotsPending')?.addEventListener('input',()=>{ if(!quickPendingConfirmActive)return; const el=$('quickLotsVal'); if(el && !isQuickFieldFocused(el))el.value=fmtLottiQuick(getLotSizePending()); });
 // Campo lottaggio ora editabile a mano direttamente nella barra rapida (richiesto
 // esplicitamente): #lots (o #lotsPending, in composizione ordine pendente) resta comunque
 // l'UNICA fonte di verità, qui ci limitiamo a rispecchiarci sopra appena l'utente scrive/
@@ -18842,7 +18944,8 @@ $('lotsPending')?.addEventListener('input',()=>{ if(!quickPendingConfirmActive)r
 $('quickLotsVal')?.addEventListener('input',()=>{
  const v=num($('quickLotsVal').value);
  if(Number.isFinite(v)&&v>0){
-   $(quickLotsTargetId()).value=Math.round(v*100)/100;
+   $(quickLotsTargetId()).value=krakenModoOrdini()?v:Math.round(v*100)/100;
+   try{ aggiornaRischioRealeQuick(); }catch(e){}
    if(quickPendingConfirmActive){
      try{ refreshRiskSuggestionPending(); }catch(e){}
      try{ refreshSlTpEuroPreviewPending(); }catch(e){}
@@ -18855,10 +18958,10 @@ $('quickLotsVal')?.addEventListener('input',()=>{
 $('quickLotsVal')?.addEventListener('change',()=>{
  // Alla conferma (blur/invio) normalizziamo il valore mostrato: minimo 0.01, 2 decimali.
  let v=num($('quickLotsVal').value);
- if(!Number.isFinite(v)||v<0.01)v=0.01;
- v=Math.round(v*100)/100;
+ if(krakenModoOrdini()){ const p=krakenPassoLotti(); v=Number.isFinite(v)?Math.max(p,krakenLottiArrotonda(v+p*1e-6)):p; }
+ else{ if(!Number.isFinite(v)||v<0.01)v=0.01; v=Math.round(v*100)/100; }
  $(quickLotsTargetId()).value=v;
- $('quickLotsVal').value=v.toFixed(2);
+ $('quickLotsVal').value=fmtLottiQuick(v);
  if(quickPendingConfirmActive){
    try{ refreshRiskSuggestionPending(); }catch(e){}
    try{ refreshSlTpEuroPreviewPending(); }catch(e){}
@@ -18877,6 +18980,7 @@ $('quickRiskVal')?.addEventListener('input',()=>{
  if(Number.isFinite(v)&&v>=0){
    $(quickPendingConfirmActive?'riskPending':'risk').value=v;
    try{ if(quickPendingConfirmActive)refreshRiskSuggestionPending(); else refreshRiskSuggestion(); }catch(e){}
+   try{ aggiornaRischioRealeQuick(); }catch(e){}
  }
 });
 $('risk')?.addEventListener('input',()=>{
@@ -21406,7 +21510,7 @@ $('applySuggestedLotPending')?.addEventListener('click',()=>{
  const s=computeSuggestedLotsPending();
  if(!s)return;
  $('lotsPending').value=s.lots;
- $('status').textContent=`Lottaggio dell'ordine pendente impostato a ${s.lots.toFixed(2)} lot (consigliato per rischiare ${s.riskPct.toFixed(2)}%).`;
+ $('status').textContent=`Lottaggio dell'ordine pendente impostato a ${fmtLottiQuick(s.lots)} ${s.kraken?'monete':'lot'} (consigliato per rischiare ${s.riskPct.toFixed(2)}%).`;
 });
 $('setEntryBtn').addEventListener('click',()=>{
  // Il tasto ENTRY SUL GRAFICO NON proietta più subito sul grafico: si limita ad espandere i
@@ -21553,7 +21657,7 @@ $('applySuggestedLot').addEventListener('click',()=>{
  $('lots').value=s.lots;
  // Anche qui: MAI su una posizione già aperta, solo sul PROSSIMO ordine (vedi nota sopra su
  // refreshTradeRiskModel/casella Lottaggio).
- $('status').textContent=`Lottaggio impostato a ${s.lots.toFixed(2)} lot (consigliato per rischiare ${s.riskPct.toFixed(2)}%).`;
+ $('status').textContent=`Lottaggio impostato a ${fmtLottiQuick(s.lots)} ${s.kraken?'monete':'lot'} (consigliato per rischiare ${s.riskPct.toFixed(2)}%).`;
  update();
 });
 $('market')?.addEventListener('change',applyInstrument);
@@ -34052,7 +34156,8 @@ function krakenNome(){
  const c=krakenConto;
  if(!c||c.ambiente!=='simulato')return 'Kraken';
  const pr=c.simulazione&&c.simulazione.prop;
- return pr?('Kraken PROP simulato '+pr.nome):'Kraken simulato';
+ const nome=c.conto_nome?(' «'+c.conto_nome+'»'):'';
+ return (pr?('Kraken PROP simulato '+pr.nome):'Kraken simulato')+nome;
 }
 var krakenStorico=null, krakenStoricoAt=0;
 async function krakenBridge(percorso,corpo){
@@ -34284,7 +34389,8 @@ async function krakenOrdineManuale(side){
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
- if(!c||!c.collegato||!ps.length){ box.style.display='none'; box.textContent=''; return; }
+ const pend=(c&&c.collegato&&krakenPendenti)||[];
+ if(!c||!c.collegato||(!ps.length&&!pend.length)){ box.style.display='none'; box.textContent=''; return; }
  box.style.display='';
  const fmt=v=>Number.isFinite(Number(v))?Number(v).toLocaleString('it-IT',{maximumFractionDigits:6}):'—';
  const usd=v=>(Number(v)>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
@@ -34310,13 +34416,293 @@ function krakenPosPannello(){
  });
  tab.appendChild(tb);
  const sc=document.createElement('div'); sc.className='tableScroll'; sc.appendChild(tab);
- box.textContent=''; box.appendChild(t); box.appendChild(sc);
+ box.textContent=''; if(ps.length){ box.appendChild(t); box.appendChild(sc); }
+ if(pend.length){
+  const t2=document.createElement('div'); t2.className='label'; t2.style.margin='8px 0 4px'; t2.textContent='⏱️ Ordini pendenti '+krakenNome()+' (li tiene il programma sul PC)';
+  const tab2=document.createElement('table'); tab2.className='posTable';
+  tab2.innerHTML='<thead><tr><th>Contratto</th><th>Tipo</th><th>Side</th><th>Quantità</th><th>Entrata</th><th>SL</th><th>TP</th><th></th></tr></thead>';
+  const tb2=document.createElement('tbody');
+  pend.forEach(o=>{
+   const tr=document.createElement('tr');
+   [o.simbolo,o.tipo,o.lato,fmt(o.quantita),fmt(o.entrata),fmt(o.sl),(o.tp||[]).map(fmt).join(' / ')||'—'].forEach(v=>{ const td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
+   const td=document.createElement('td'); const b=document.createElement('button'); b.type='button'; b.className='miniBtn'; b.style.width='auto'; b.textContent='Annulla';
+   b.addEventListener('click',async()=>{
+    b.disabled=true; b.textContent='⏳';
+    const r=await krakenBridge('/pendente/annulla',{id:o.id});
+    $('status').textContent=r.ok?('⏱️ Ordine pendente '+o.tipo+' '+o.lato+' '+o.simbolo+' annullato.'):('Non annullato: '+r.message);
+    krakenPendentiAt=0; await krakenLeggiPendenti(); krakenPosPannello(); try{ draw(); }catch(e){}
+   });
+   td.appendChild(b); tr.appendChild(td); tb2.appendChild(tr);
+  });
+  tab2.appendChild(tb2);
+  const sc2=document.createElement('div'); sc2.className='tableScroll'; sc2.appendChild(tab2);
+  box.appendChild(t2); box.appendChild(sc2);
+ }
 }
+// ===================== KRAKEN: TRADE JOURNAL, GRAFICO, CONTI DI PROVA =====================
+// RICHIESTO: "la posizione aperta con il conto Kraken a grafico con le righe TP e SL come in MT5, con
+// R/R e margine; quando si chiude va nel Trade Journal; piu' conti di prova salvati".
+let krakenEurUsd=null, krakenEurUsdAt=0;
+async function krakenCambioEur(){
+ // Il conto Kraken e' in USD, il Trade Journal in euro: si converte al cambio del momento (Binance).
+ if(krakenEurUsd&&Date.now()-krakenEurUsdAt<3600e3)return krakenEurUsd;
+ for(const u of ['https://api.binance.com/api/v3/ticker/price?symbol=EURUSDT','https://data-api.binance.vision/api/v3/ticker/price?symbol=EURUSDT']){
+  try{ const r=await fetch(u,{cache:'no-store'}); const j=await r.json(); const v=Number(j&&j.price); if(v>0.5&&v<2){ krakenEurUsd=v; krakenEurUsdAt=Date.now(); return v; } }catch(e){}
+ }
+ return krakenEurUsd;
+}
+// La chiusura di un segnale Kraken diventa un trade del Trade Journal. I numeri veri vengono dalle
+// esecuzioni del conto (simulato): quelle con l'etichetta del segnale (fbl_<gruppo>), piu' le
+// chiusure "a mano" senza etichetta sullo stesso contratto dopo l'apertura.
+async function krakenRegistraChiusura(id,st){
+ if(!st||st.giornale)return;
+ st.giornale=true;
+ const pref=('fbl_'+(st.gruppo||id)).slice(0,40);
+ let fills=[];
+ if(krakenConto&&krakenConto.ambiente==='simulato'){
+  try{ await krakenLeggiStorico(); }catch(e){}
+  const altri=Object.values(tgStrategie||{}).filter(x=>x&&x!==st&&x.conto==='kraken'&&x.simbolo===st.simbolo).length;
+  fills=(krakenStorico||[]).filter(x=>x&&x.tipo!=='funding'&&Number(x.ts)>=(st.creato||0)-60000&&
+   (String(x.cliOrdId||'').startsWith(pref)||(!x.cliOrdId&&!altri&&x.simbolo===st.simbolo&&Number(x.pnl)!==0)));
+ }
+ const chiusure=fills.filter(x=>Number(x.pnl)!==0||String(x.cliOrdId||'').match(/_(tp\d+|sl)$/));
+ const segno=st.side==='BUY'?1:-1;
+ let plUsd, exit, stimato=false, ultimo=null;
+ if(chiusure.length){
+  const q=chiusure.reduce((a,x)=>a+Number(x.quantita||0),0);
+  exit=q>0?chiusure.reduce((a,x)=>a+Number(x.prezzo)*Number(x.quantita||0),0)/q:Number(chiusure[chiusure.length-1].prezzo);
+  plUsd=fills.reduce((a,x)=>a+(Number(x.pnl)||0)-(Number(x.commissione)||0),0);
+  ultimo=chiusure.slice().sort((a,b)=>a.ts-b.ts).pop();
+ }else{
+  // Conto reale (lo storico delle esecuzioni non arriva all'app) o esecuzioni non trovate: stima.
+  stimato=true;
+  const mk=((krakenPosizioni&&krakenPosizioni.posizioni)||[]).find(p=>p.simbolo===st.simbolo);
+  exit=Number(mk&&mk.mark)||Number(st.sl)||Number(st.entry);
+  plUsd=(exit-Number(st.entry))*segno*(Number(st.quantita)||0);
+ }
+ const entry=Number(st.entry);
+ const tipo=String(ultimo&&ultimo.tipo||'');
+ let result='Manuale';
+ if(/take/i.test(tipo))result='TP';
+ else if(/stop/i.test(tipo)){ const ex=Number(ultimo.prezzo); result=Math.abs(ex-entry)<=entry*0.0002?'BE':((ex-entry)*segno>0?'SP':'SL'); }
+ else if(/liquid/i.test(tipo))result='Liquidazione';
+ else if(!ultimo&&stimato)result=(plUsd>=0?'TP':'SL');
+ const cambio=await krakenCambioEur();
+ const plEur=cambio?plUsd/cambio:plUsd;
+ const saldo=Number(krakenConto&&krakenConto.saldo)||0;
+ const tChiusura=ultimo?Number(ultimo.ts):Date.now();
+ const t={id:Date.now()+Math.random(),asset:st.sym||('BINANCE:'+String(st.simbolo||'').replace(/^PF_/,'').replace(/USD$/,'').replace('XBT','BTC')+'USDT'),
+  side:st.side,entry,exit,sl:Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):Number(st.sl),rrSl:Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):Number(st.sl),
+  tp:(st.tps&&st.tps.length)?Number(st.tps[st.tps.length-1]):null,lots:Number(st.quantita)||0,
+  pl:Math.round(plEur*100)/100,pct:saldo>0?plUsd/saldo*100:0,pips:0,result,account:'kraken',mode:'live',
+  closedAt:new Date(tChiusura).toISOString(),startTime:Number(st.creato)||tChiusura,openTF:currentTF,closeTF:currentTF,
+  tgSala:(st.sala&&st.sala!=='Manuale')?st.sala:undefined,krakenConto:krakenNome(),krakenSimbolo:st.simbolo,
+  plUsd:Math.round(plUsd*100)/100,valutaConto:'USD',cambioEurUsd:cambio||null,plStimato:stimato||undefined,
+  chiusureParziali:chiusure.length||undefined};
+ trades.push(t);
+ try{ journalStrategyOptionsDirty=true; }catch(e){}
+ try{ scheduleSave(); }catch(e){}
+ try{ update(); draw(); }catch(e){}
+ $('status').textContent='📒 '+krakenNome()+': '+st.side+' '+st.simbolo+' chiuso ('+result+') '+(plUsd>=0?'+':'')+plUsd.toFixed(2)+' $'
+  +(cambio?(' = '+(plEur>=0?'+':'')+euro(plEur)):'')+' — scritto nel Trade Journal'+(stimato?' (P/L stimato)':'')+'.';
+}
+// Le posizioni Kraken a grafico, come quelle MT5: casella Target/Stop con le righe dei TP, R/R,
+// P/L e margine. Il grafico delle cripto e' quello di Binance: i livelli si spostano della piccola
+// differenza fra i due prezzi (Binance - mark Kraken), cosi' cadono sulle candele giuste; le
+// etichette mostrano i prezzi VERI di Kraken.
+function krakenBaseDaSimbolo(sim){ return String(sim||'').toUpperCase().replace(/^(PF|PI|FF|FI)_/,'').replace(/USD$/,'').replace(/^XBT/,'BTC'); }
+window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
+ if(!krakenConto||!krakenConto.collegato||!currentAssetKey)return;
+ let bn=''; try{ bn=binanceSymbolForAsset(currentAssetKey)||''; }catch(e){}
+ if(!bn)return;
+ const base=bn.replace(/(USDT|USDC|USD)$/,'');
+ const ps=((krakenPosizioni&&krakenPosizioni.posizioni)||[]).filter(p=>krakenBaseDaSimbolo(p.simbolo)===base);
+ // Ordini pendenti Kraken: entrata tratteggiata + SL/TP, con etichetta (i prezzi sono quelli del grafico)
+ const pend=(krakenPendenti||[]).filter(o=>krakenBaseDaSimbolo(o.simbolo)===base);
+ if(pend.length){
+  ctx.save(); ctx.font='bold 10px Inter, system-ui, sans-serif';
+  const riga=(v,col,dash,txt)=>{ if(!Number.isFinite(v)||v<lo||v>hi)return; const yy=y(v);
+   ctx.strokeStyle=col; ctx.setLineDash(dash); ctx.lineWidth=1.2; ctx.beginPath(); ctx.moveTo(pad.l,yy); ctx.lineTo(w-pad.r,yy); ctx.stroke(); ctx.setLineDash([]);
+   const tw=ctx.measureText(txt).width+8, x=pad.l+8; ctx.fillStyle=col; ctx.fillRect(x,yy-8,tw,16); ctx.fillStyle='#fff'; ctx.fillText(txt,x+4,yy+4); };
+  pend.forEach(o=>{
+   const col=o.lato==='BUY'?'#3b82f6':'#e0524f';
+   riga(Number(o.entrata),col,[6,4],'⏱️ '+o.tipo+' '+o.lato+' '+o.quantita+' @ '+o.entrata);
+   riga(Number(o.sl),'#c0392b',[3,3],'SL '+o.sl+' (pendente)');
+   (o.tp||[]).forEach((t,j)=>riga(Number(t),'#1f8f55',[3,3],'TP'+((o.tp.length>1)?(j+1):'')+' '+t+' (pendente)'));
+  });
+  ctx.restore();
+ }
+ if(!ps.length)return;
+ const usd=v=>(v>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
+ const prezzo=currentPrice();
+ ps.forEach(p=>{
+  const mark=Number(p.mark), entry=Number(p.entrata);
+  const off=(Number.isFinite(prezzo)&&mark>0&&Math.abs(prezzo-mark)<mark*0.02)?(prezzo-mark):0;
+  const st=Object.values(tgStrategie||{}).filter(x=>x&&x.conto==='kraken'&&x.simbolo===p.simbolo).sort((a,b)=>a.creato-b.creato)[0];
+  const t0=st?Number(st.creato):null;
+  let origine=t0?rowIndexContainingTime(t0):null;
+  if(origine==null)origine=Math.max(0,(rows.length||1)-20);
+  if(origine>idx)return;
+  const sl=Number.isFinite(Number(p.sl))?Number(p.sl):(st?Number(st.sl):NaN);
+  const tps=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+  const buy=String(p.lato).toUpperCase().startsWith('B')||String(p.lato).toLowerCase()==='long';
+  const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
+  const slIni=st&&Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):sl;
+  const rr=Number.isFinite(slIni)&&Number.isFinite(tpLontano)?rrArrotondatoTesto(entry,slIni,tpLontano):'—';
+  const margine=Number(p.quantita)*mark/(krakenLeva()||1);
+  const stopProfit=Number.isFinite(sl)&&(buy?sl>=entry:sl<=entry);
+  const box=drawTpSlZoneBox(ctx,{ownerKey:'kraken:'+p.simbolo,originIdx:origine,entry:entry+off,sl:Number.isFinite(sl)?sl+off:null,
+   tp:Number.isFinite(tpLontano)?tpLontano+off:null,pad,cw,n,start,w,y,noHandle:true,assetKey:currentAssetKey,lots:Number(p.quantita)||null,stopProfit,
+   importoTp:(p.tp||[]).reduce((a,x)=>a+Math.abs(Number(x.prezzo)-entry)*(Number(x.quantita)||0),0)||undefined,
+   keepPaceIdx:idx,
+   tooltipLines:['🐙 '+krakenNome()+' · '+(buy?'BUY':'SELL')+' '+p.quantita+' '+p.simbolo,
+    'Entrata '+entry+' · SL '+(Number.isFinite(sl)?sl:'—')+' · TP '+(tps.join(' / ')||'—'),
+    'P/L '+usd(Number(p.pnl)||0)+' · R/R '+rr,'Margine usato '+usd(margine).replace('+','')+' (leva '+krakenLeva()+'x)']});
+  // TP intermedi (chiusure parziali): righe sottili con il loro numero
+  if(box&&tps.length>1){
+   ctx.save(); ctx.font='10px Inter, system-ui, sans-serif';
+   tps.forEach((t,j)=>{ const yy=y(t+off); if(t+off<lo||t+off>hi)return; ctx.strokeStyle='rgba(47,191,113,0.85)'; ctx.setLineDash([4,3]); ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(box.xOrigin,yy); ctx.lineTo(box.xRight,yy); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle='#7fdc9a'; ctx.fillText('TP'+(j+1),box.xOrigin+3,yy-3); });
+   ctx.restore();
+  }
+  // etichetta sempre visibile sull'entrata: P/L live, R/R e margine
+  if(box&&entry+off>=lo&&entry+off<=hi){
+   try{ drawZonePill(ctx,box.xRight+4,box.yEntry,'🐙 '+usd(Number(p.pnl)||0)+' · R/R '+rr+' · margine '+usd(margine).replace('+',''),(Number(p.pnl)||0)>=0?'#1f6f4a':'#7a3030','#ffffff',undefined,w-pad.r); }catch(e){}
+  }
+ });
+};
+// Conti di prova: elenco, nuovo, scegli, rinomina, elimina (sul PC, simulati/).
+let krakenConti=null;
+async function krakenLeggiConti(){
+ const r=await krakenBridge('/conti');
+ if(r.ok&&r.data)krakenConti=r.data;
+ krakenDisegnaConti();
+ return krakenConti;
+}
+function krakenDisegnaConti(){
+ const sel=$('krakenContoSel'); if(!sel)return;
+ const lista=(krakenConti&&krakenConti.conti)||[];
+ const att=krakenConti&&krakenConti.attivo;
+ sel.textContent='';
+ if(!lista.length){ const o=document.createElement('option'); o.value=''; o.textContent='nessun conto di prova (premi Collega)'; sel.appendChild(o); return; }
+ lista.forEach(c=>{ const o=document.createElement('option'); o.value=c.id;
+  o.textContent=c.nome+' — '+(Number.isFinite(Number(c.saldo))?Number(c.saldo).toLocaleString('it-IT',{maximumFractionDigits:0})+' $':'')+(c.prop?(' · prop '+c.prop):'')+(c.posizioni?(' · '+c.posizioni+' aperte'):'');
+  if(c.id===att)o.selected=true; sel.appendChild(o); });
+}
+async function krakenDopoCambioConto(msg){
+ tgSalvaStrategie&&tgSalvaStrategie();
+ await krakenAggiornaConto(); await krakenLeggiPosizioni(); await krakenLeggiStorico(); await krakenLeggiConti();
+ try{ krakenDisegnaConto(); update(); draw(); }catch(e){}
+ if(msg)$('status').textContent=msg;
+}
+fblDelega('change',async ev=>{
+ if(!(ev.target&&ev.target.id==='krakenContoSel'))return;
+ const id=ev.target.value; if(!id)return;
+ const r=await krakenBridge('/conti/scegli',{id});
+ if(!r.ok){ await appAlert('Conto non cambiato: '+r.message); return; }
+ krakenConti=r.data; await krakenDopoCambioConto('🐙 Conto di prova attivo: '+(((r.data.conti||[]).find(c=>c.id===id)||{}).nome||id)+'.');
+});
+fblDelega('click',async ev=>{
+ const b=ev.target&&ev.target.closest&&ev.target.closest('#krakenContoNuovoBtn,#krakenContoRinominaBtn,#krakenContoEliminaBtn'); if(!b)return;
+ const sel=$('krakenContoSel'), id=sel&&sel.value;
+ if(b.id==='krakenContoNuovoBtn'){
+  const n=((krakenConti&&krakenConti.conti)||[]).length+1;
+  const nome=await appPrompt('Nome del nuovo conto di prova (tipo e saldo sono quelli scelti qui sotto):',{defaultValue:'Conto prova '+n,title:'🐙 Nuovo conto di prova'});
+  if(nome==null)return;
+  const tipo=$('krakenSimTipo')?.value||'libero';
+  const corpo=tipo==='libero'?{nome,saldo_iniziale:Number($('krakenSimSaldo')?.value)||10000}:{nome,prop_piano:tipo,saldo_iniziale:Number($('krakenPropCapitale')?.value)||5000,leva:10};
+  const r=await krakenBridge('/conti/nuovo',corpo);
+  if(!r.ok){ await appAlert('Conto non creato: '+r.message); return; }
+  await krakenDopoCambioConto('🐙 Creato e attivo: '+((r.data.conto||{}).nome||nome)+'.');
+ }else if(b.id==='krakenContoRinominaBtn'&&id){
+  const v=((krakenConti&&krakenConti.conti)||[]).find(c=>c.id===id);
+  const nome=await appPrompt('Nuovo nome del conto:',{defaultValue:(v&&v.nome)||'',title:'🐙 Rinomina'});
+  if(!nome)return;
+  const r=await krakenBridge('/conti/rinomina',{id,nome}); if(r.ok){ krakenConti=r.data; await krakenDopoCambioConto(); }
+ }else if(b.id==='krakenContoEliminaBtn'&&id){
+  const v=((krakenConti&&krakenConti.conti)||[]).find(c=>c.id===id);
+  if(!await appConfirm('Eliminare il conto di prova «'+((v&&v.nome)||id)+'»?\n\nLe sue posizioni e il suo storico non si vedranno più (il file resta sul PC con il nome .eliminato).',{title:'🐙 Elimina conto',okLabel:'Elimina',cancelLabel:'Annulla'}))return;
+  const r=await krakenBridge('/conti/elimina',{id});
+  if(!r.ok){ await appAlert('Non eliminato: '+r.message); return; }
+  krakenConti=r.data; await krakenDopoCambioConto('🐙 Conto eliminato.');
+ }
+});
+// RICHIESTO: al prossimo accesso il conto Kraken scelto e' gia' li'. Se l'ultima volta la dashboard
+// era su Kraken, ci si torna da soli (con le posizioni a grafico).
+setTimeout(()=>{ try{ if(fblContoVista==='kraken'&&!liveModeActive)fblContoScegli('kraken'); else if(fblContoVista==='kraken'){ krakenAggiornaConto(); krakenLeggiPosizioni(); } }catch(e){} },3500);
 async function krakenLeggiPosizioni(){
  const r=await krakenBridge('/posizioni');
  if(r.ok){ krakenPosizioni=r.data; krakenPosizioniAt=Date.now(); }
+ try{ await krakenLeggiPendenti(); }catch(e){}
  try{ krakenDisegnaConto(); }catch(e){}
  return r.ok?krakenPosizioni:null;
+}
+// ===================== KRAKEN: ORDINI PENDENTI (dalla barra ordini del grafico) =====================
+// Li tiene il programma sul PC (/kraken/pendente): scattano anche ad app chiusa, finche' il PC e'
+// acceso. Quando uno scatta il ponte apre il segnale con il SUO gruppo: l'app lo prende in carico
+// come un segnale (stop, take profit, chiusura nel Trade Journal) alla prima lettura.
+var krakenPendenti=[], krakenPendentiAt=0;
+async function krakenLeggiPendenti(){
+ if(Date.now()-krakenPendentiAt<1500)return krakenPendenti;
+ krakenPendentiAt=Date.now();
+ const r=await krakenBridge('/pendenti');
+ if(!r.ok)return krakenPendenti;
+ const lista=(r.data&&r.data.pendenti)||[];
+ krakenPendenti=lista.filter(o=>o.stato==='attesa');
+ let presi={}; try{ presi=JSON.parse(localStorage.getItem('fbl_kraken_pend_presi')||'{}')||{}; }catch(e){}
+ for(const o of lista){
+  if(o.preso||o.stato==='attesa')continue;
+  if(presi[o.id]){ krakenBridge('/pendente/preso',{id:o.id}); continue; }   // gia' preso: mai due volte nel journal
+  presi[o.id]=Date.now();
+  try{ const lim=Date.now()-30*86400000; Object.keys(presi).forEach(k=>{ if(presi[k]<lim)delete presi[k]; }); localStorage.setItem('fbl_kraken_pend_presi',JSON.stringify(presi)); }catch(e){}
+  const gruppo=o.gruppo||o.id;
+  if(o.stato==='eseguito'&&o.risultato&&!tgStrategie[gruppo]){
+   const d=o.risultato, tps=(o.tp||[]).map(Number);
+   tgStrategie[gruppo]={conto:'kraken',sala:'Pendente',simbolo:d.simbolo||o.simbolo,sym:'BINANCE:'+krakenBaseDaSimbolo(o.simbolo)+'USDT',side:o.lato,
+    entry:Number(d.entrata)||Number(o.prezzo_scatto)||Number(o.entrata),tps,regole:[],fatte:[],creato:Math.round(Number(o.il)*1000)||Date.now(),
+    quantita:Number(d.quantita)||Number(o.quantita),quota:Number(o.quantita)/Math.max(1,tps.length),
+    tpIds:(d.tp||[]).map(x=>({indice:Number(x.indice),id:String(x.id),quantita:Number(x.quantita)})),
+    stopId:d.sl&&d.sl.id!=null?String(d.sl.id):null,quantitaStop:Number(d.quantita)||Number(o.quantita),
+    avvicinamento:null,sl:Number(o.sl),slIniziale:Number(o.sl),contoId:(krakenConto&&krakenConto.conto_id)||null,gruppo};
+   tgSalvaStrategie();
+   $('status').textContent='⏱️ '+krakenNome()+': ordine pendente '+o.tipo+' '+o.lato+' '+o.simbolo+' eseguito a ~'+(Number(d.entrata)||o.prezzo_scatto)+', stop '+o.sl+(tps.length?(', target '+tps.join(' / ')):'')+'.';
+   try{ playOrderSound(); }catch(e){}
+  }else if(o.stato==='annullato'||o.stato==='errore'){
+   $('status').textContent='⏱️ '+krakenNome()+': ordine pendente '+o.tipo+' '+o.lato+' '+o.simbolo+' NON eseguito: '+(o.motivo||o.stato)+'.';
+  }
+  krakenBridge('/pendente/preso',{id:o.id});
+ }
+ return krakenPendenti;
+}
+async function krakenOrdinePendente(side,kind,entry,sl,tp,lots){
+ const b=krakenBaseCorrente();
+ if(!b){ $('status').textContent='🐙 Il conto Kraken negozia solo cripto: scegli una cripto a grafico, oppure passa al conto MT5.'; return false; }
+ if(!krakenContoPronto())await krakenAggiornaConto();
+ if(!krakenContoPronto()){ $('status').textContent='🐙 Kraken non è collegato: Impostazioni → Kraken.'; return false; }
+ if(!Number.isFinite(sl)){ $('status').textContent='🐙 Metti lo stop loss dell\'ordine pendente (📍 SL sul grafico): su Kraken nessun ordine parte senza.'; return false; }
+ const ri=await krakenBridge('/strumento/'+encodeURIComponent(b));
+ if(!ri.ok){ $('status').textContent='🐙 «'+b+'» non disponibile su Kraken Futures: '+ri.message; return false; }
+ const info=ri.data, passo=Number(info.step)||0.0001, minimo=Number(info.min)||passo;
+ krakenInfoAsset[b]=Object.assign({},info,{at:Date.now()});
+ const q=Number((Math.floor(lots/passo+1e-9)*passo).toFixed(8));
+ if(!(q>=minimo-1e-12)){ $('status').textContent='🐙 Quantità '+lots+' sotto il minimo di '+info.simbolo+' ('+minimo+').'; return false; }
+ const leva=krakenLeva(), margine=q*entry/leva, rischio=Math.abs(entry-sl)*q, saldo=Number(krakenConto.saldo);
+ const reale=krakenConto.ambiente==='reale';
+ const ok=await appConfirm((reale?'ORDINE PENDENTE VERO su Kraken (soldi veri).\n\n':'Ordine pendente sul '+krakenNome()+'.\n\n')
+  +kind+' '+side+' '+q+' '+info.simbolo+' a '+fmtPrice(entry)
+  +'\nStop loss '+fmtPrice(sl)+' · Take profit '+(Number.isFinite(tp)?fmtPrice(tp):'nessuno')
+  +'\nRischio allo stop ~'+rischio.toFixed(2)+' USD'+(saldo>0?(' ('+(rischio/saldo*100).toFixed(2)+'% del saldo)'):'')+' · margine ~'+margine.toFixed(2)+' USD (leva '+leva+'x)'
+  +'\n\nLo tiene il programma sul PC: quando il prezzo mark di Kraken arriva a '+fmtPrice(entry)+' apre a mercato con stop e target. Funziona anche ad app chiusa, NON a PC spento.',
+  {title:'🐙 Kraken · ordine pendente',okLabel:'Crea',cancelLabel:'Annulla'});
+ if(!ok)return false;
+ const gruppo='pd'+Date.now().toString(36)+Math.floor(Math.random()*1000).toString(36);
+ const r=await krakenBridge('/pendente',{simbolo:info.simbolo,lato:side,tipo:kind,entrata:entry,sl,tp:Number.isFinite(tp)?[tp]:[],quantita:q,gruppo});
+ if(!r.ok){ $('status').textContent='🐙 Ordine pendente non creato: '+r.message; return false; }
+ $('pendingEntry').value=''; $('slPending').value=''; $('tpPending').value='';
+ krakenPendentiAt=0; await krakenLeggiPendenti();
+ try{ krakenDisegnaConto(); draw(); update(); }catch(e){}
+ $('status').textContent='⏱️ '+krakenNome()+': ordine pendente '+kind+' '+side+' '+q+' '+info.simbolo+' a '+fmtPrice(entry)+' creato. Scatta da solo quando il prezzo ci arriva.';
+ return true;
 }
 fblDelega('change',ev=>{
  const t=ev.target; if(!t)return;
@@ -34402,7 +34788,8 @@ setInterval(()=>{
   if(Date.now()-krakenStoricoAt>10000)krakenLeggiStorico().then(()=>{ try{ applyKrakenStatsToPanel(); }catch(e){} });
  }
  const haPos=((krakenPosizioni&&krakenPosizioni.posizioni)||[]).length>0;   // posizioni Kraken a schermo: si aggiornano sempre
- if(!strategie&&!scheda&&!krakenOrdiniAttivi()&&!haPos)return;
+ const haPend=(krakenPendenti||[]).length>0;   // ordini pendenti in attesa: si guarda se sono scattati
+ if(!strategie&&!scheda&&!krakenOrdiniAttivi()&&!haPos&&!haPend)return;
  if(strategie||scheda||Date.now()-krakenPosizioniAt>(haPos?5000:15000)){
   krakenLeggiPosizioni().then(()=>{ try{ krakenStrategieValuta(); }catch(e){} });
  }
@@ -34425,7 +34812,9 @@ async function krakenEseguiSegnale(voce,o){
   quantita:Number(d.quantita)||p.lotti*p.n,quota:p.lotti,
   tpIds:(d.tp||[]).map(x=>({indice:Number(x.indice),id:String(x.id),quantita:Number(x.quantita)})),
   stopId:d.sl&&d.sl.id!=null?String(d.sl.id):null,quantitaStop:Number(d.quantita)||p.lotti*p.n,
-  avvicinamento:o.avvicinamento?{pct:Number(o.avvicinamento.pct),fatto:false}:null,sl:p.sl};
+  avvicinamento:o.avvicinamento?{pct:Number(o.avvicinamento.pct),fatto:false}:null,sl:p.sl,
+  // Per il Trade Journal e per il grafico: stop iniziale (R:R), conto di prova su cui e' aperta.
+  slIniziale:p.sl,contoId:(krakenConto&&krakenConto.conto_id)||null,gruppo};
  tgSalvaStrategie();
  voce.stato='eseguito'; voce.aperte=p.n; voce.automatico=true;
  voce.eseguito={il:Date.now(),sym:o.sym,side:p.side,lotti:p.lotti,sl:p.sl,slCalcolato:!!p.slCalcolato,tp:p.tp.slice(0,p.n),
@@ -34455,17 +34844,22 @@ async function krakenStrategieValuta(){
  for(const id of Object.keys(tgStrategie)){
   const st=tgStrategie[id];
   if(!st||st.conto!=='kraken')continue;
+  // Ogni conto di prova ha le SUE posizioni: una strategia di un altro conto non si tocca (altrimenti
+  // sembrerebbe chiusa e finirebbe nel journal). Quelle di prima dei conti multipli sono del conto 1.
+  if(krakenConto&&krakenConto.conto_id&&(st.contoId||'conto-1')!==krakenConto.conto_id&&krakenConto.ambiente==='simulato')continue;
   if(krakenPosizioniAt<=(st.creato||0)+500)continue;          // lettura piu' vecchia del segnale
   const tpAperti=(st.tpIds||[]).filter(t=>aperti.has(t.id));
   const stopAperto=st.stopId!=null&&aperti.has(String(st.stopId));
   if(!stopAperto){
    if(tpAperti.length)await krakenBridge('/annulla',{ids:tpAperti.map(t=>t.id)});
+   try{ await krakenRegistraChiusura(id,st); }catch(e){ console.warn('[Kraken] journal non scritto',e); }
    delete tgStrategie[id]; tgSalvaStrategie();
    if(tpAperti.length)$('status').textContent='🛑 '+krakenNome()+' '+st.simbolo+' (segnale di '+String(st.sala||'')+'): stop eseguito, tolti i take profit rimasti.';
    continue;
   }
   if((st.tpIds||[]).length&&!tpAperti.length){
    await krakenBridge('/annulla',{ids:[st.stopId]});
+   try{ await krakenRegistraChiusura(id,st); }catch(e){ console.warn('[Kraken] journal non scritto',e); }
    delete tgStrategie[id]; tgSalvaStrategie();
    $('status').textContent='🎯 '+krakenNome()+' '+st.simbolo+' (segnale di '+String(st.sala||'')+'): tutti i take profit eseguiti.';
    continue;
@@ -34493,7 +34887,7 @@ async function krakenStrategieValuta(){
   const ridurre=rimasta<st.quantitaStop-1e-12;
   if(spostare||ridurre){
    const sl=spostare?nuovoSl:st.sl;
-   const r=await krakenBridge('/sl',{simbolo:st.simbolo,sl,stop_id:st.stopId,quantita:rimasta,lato:st.side});
+   const r=await krakenBridge('/sl',{simbolo:st.simbolo,sl,stop_id:st.stopId,quantita:rimasta,lato:st.side,gruppo:id});
    if(r.ok&&r.data&&r.data.sl){
     st.stopId=String(r.data.sl.id); st.sl=sl; st.quantitaStop=rimasta;
     if(spostare)$('status').textContent='🛡️ '+krakenNome()+' '+st.simbolo+' (segnale di '+String(st.sala||'')+'): '+motivo+', stop portato a '+sl+'.';
