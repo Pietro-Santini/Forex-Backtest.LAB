@@ -26,3 +26,5 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   un indice, riceveva `true`. Test: `journal_kraken.test.mjs`.
 - **Pulsanti e schede che "non funzionavano" nella finestra PIP** — risolto — ascoltatori delegati
   solo su `document`. Ora `fblDelega()`.
+- **Test del ponte che usavano la rete vera** — risolto 2026-10-05 — `laboratorio/ponte/_percorsi.py`
+  — il simulatore scaricava i prezzi di Kraken; ora rete esterna bloccata nei test.
