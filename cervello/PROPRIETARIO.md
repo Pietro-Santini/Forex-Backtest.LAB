@@ -22,3 +22,14 @@ Solo il modo di lavorare: niente dati personali (il repository è pubblico).
 ## Cerchi aperti da ricordargli
 - Collaudo sul PC: ordine pendente LIMIT sul conto Kraken simulato fino al Trade Journal (chiesto
   il 4 ottobre 2026, non ancora fatto).
+
+## Contesto attività (aggiornato 6 ottobre 2026)
+- Il proprietario fa già network marketing con un'azienda: è contesto, **non una priorità** del
+  progetto in questo momento.
+- **Nessuna promessa di guadagno**, mai: né nell'app, né nelle pagine, né nei testi per il
+  pubblico.
+- Ha parlato con un commercialista della distribuzione dello strumento; manca la parte
+  **antiriciclaggio**, che verificherà con uno specialista del settore trading. In attesa del suo
+  esito: nessuna funzione di pagamento o raccolta di denaro dagli utenti.
+- Prima della ricezione dei segnali e dell'apertura automatica, l'utente deve dare un consenso
+  informato ai rischi (vedi app v86).

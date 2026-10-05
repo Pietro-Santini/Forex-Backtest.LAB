@@ -28,3 +28,6 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   solo su `document`. Ora `fblDelega()`.
 - **Test del ponte che usavano la rete vera** — risolto 2026-10-05 — `laboratorio/ponte/_percorsi.py`
   — il simulatore scaricava i prezzi di Kraken; ora rete esterna bloccata nei test.
+- **Segnali e apertura dai segnali senza consenso informato** — risolto app v86 — consenso a due
+  livelli (`consensoRischi('segnali'|'esecuzione')`), registrato con data e versione, sincronizzato
+  sull'account; l'apertura automatica si ferma se manca. Test: `laboratorio/app/consenso.test.mjs`.

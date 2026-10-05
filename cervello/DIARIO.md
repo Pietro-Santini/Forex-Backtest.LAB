@@ -7,3 +7,5 @@ Formato: data — chi — cosa — esito collaudo — commit.
 - 2026-10-05 — impianto — primo Setup costruito da GitHub (94 MB, collaudo librerie ponte ok);
   release automatica pronta (scatta su main); collaudo GitHub rosso→verde (test del ponte usavano
   la rete vera) — verde — 026b3ee
+- 2026-10-06 — Claude — memoria aggiornata (contesto attività, antiriciclaggio in sospeso);
+  consenso informato ai rischi prima di segnali e apertura dai segnali (app v86) — verde
