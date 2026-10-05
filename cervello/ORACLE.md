@@ -35,3 +35,9 @@ I costi e i limiti del piano gratuito Oracle vanno verificati sul conto Oracle d
 ## Regole che restano (finché il proprietario non decide altrimenti)
 - Chiavi Kraken **reali**: solo sul PC di casa. Sul server solo il conto simulato.
 - Sessione Telegram: non sul server finché non si decide la fase 2.
+
+## Decisioni del proprietario (6 ottobre 2026)
+- MT5: strada **C, ibrida** (MT5 resta sul PC di casa).
+- Server Oracle: **da creare** (macchina ARM gratuita) → procedura passo passo.
+- Sessione Telegram: **sì, sul server Oracle** (regola aggiornata in `REGOLE.md`).
+- Chiavi Kraken reali: restano sul PC (nessuna decisione diversa).

@@ -8,7 +8,9 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
 - **Mai chiavi API nel repository, nel cloud o nei messaggi.** Le chiavi Kraken stanno solo sul PC
   del proprietario (segreto cifrato con DPAPI) e non tornano mai all'app.
 - **Mai permessi di prelievo** su nessuna chiave.
-- **La sessione Telegram non va mai nel cloud** né nel repository.
+- **La sessione Telegram** non va mai nel repository né in servizi di terzi. Può stare **solo sul
+  server Oracle del proprietario** (deciso il 6 ottobre 2026): disco del server, raggiungibile solo
+  via Tailscale, mai copiata altrove.
 - Nessuna VPN o documento di un altro paese per aggirare restrizioni.
 
 ## Pubblicazione

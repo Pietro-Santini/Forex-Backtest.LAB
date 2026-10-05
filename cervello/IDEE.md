@@ -32,3 +32,16 @@ A = blocca o confonde un neofita; B = migliora molto; C = rifinitura.
   solo per Windows; BlueStacks per Syntra). Ogni modifica va provata almeno a schermo grande e
   da telefono (`avvio.test.mjs` lo fa già). Un ponte per Mac/Linux senza MT5 (solo Kraken e
   Telegram) è fattibile: da valutare dopo i lavori A. — proprietario — da valutare
+
+## Progetti open source proposti dal proprietario (6 ottobre 2026)
+Non sono il "cervello" (quello è memoria + test): sono **motori** per analisi e strategie. Uno per
+bisogno, provato su Oracle, mai collegato a ordini veri senza approvazione.
+| Progetto | Cosa fa davvero | Ruolo possibile qui | Licenza | Priorità |
+|---|---|---|---|---|
+| Kronos (shiyu-coder) | modello che prevede candele (OHLCV) | agente "analisi": previsioni da confrontare con il backtest | MIT | B |
+| Vibe-Trading (HKUDS) | agenti AI: ricerca, codice di strategia, backtest, ordini simulati | idee e struttura per gli agenti di strategia | MIT | B |
+| Freqtrade | bot cripto con backtest e ottimizzazione | motore di backtest delle strategie cripto | GPL-3: attenzione se si distribuisce | C |
+| NautilusTrader | motore professionale di backtest e live | alternativa a Freqtrade, più pesante | LGPL-3 | C |
+| skfolio | ottimizzazione di portafoglio e rischio | ripartire il rischio fra sale e strategie | BSD-3 | C |
+| Hummingbot | market making e arbitraggio | poco pertinente (qui si seguono segnali) | Apache-2.0 | scartato per ora |
+Prima di tutti: server Oracle base e test sui segnali (lavori A).
