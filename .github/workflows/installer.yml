@@ -1,0 +1,53 @@
+# Costruisce il Setup di Forex Backtest LAB su un PC Windows di GitHub: nessun PC di casa serve.
+# Il risultato (ForexBacktestLAB_Setup.exe) si scarica dalla pagina Actions -> questa esecuzione ->
+# "Artifacts". Parte da solo quando cambiano i sorgenti dell'installer o l'app, oppure a mano
+# (Actions -> Installer Windows -> Run workflow).
+name: Installer Windows
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "installer_build/**"
+      - "app.html"
+      - "sw.js"
+      - ".github/workflows/installer.yml"
+
+jobs:
+  setup:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # build_exe.bat e' lo stesso script che si lancia a mano sul PC. "< NUL" fa passare i "pause".
+      - name: Exe con PyInstaller (build_exe.bat)
+        shell: cmd
+        run: |
+          call installer_build\build_exe.bat < NUL
+          if not exist installer_build\dist\ForexBacktestLAB.exe exit /b 1
+          if not exist installer_build\dist\Mt5FeedServer.exe exit /b 1
+          if not exist installer_build\dist\SegnaliBridge.exe exit /b 1
+
+      - name: Collaudo librerie del ponte segnali
+        if: always()
+        shell: cmd
+        run: if exist installer_build\collaudo_ponte.txt type installer_build\collaudo_ponte.txt
+
+      - name: Setup con Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc installer_build\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForexBacktestLAB_Setup
+          path: installer_build/Output/ForexBacktestLAB_Setup.exe
+          retention-days: 30

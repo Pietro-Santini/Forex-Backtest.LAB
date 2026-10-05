@@ -27,3 +27,14 @@ Il file è di testo semplice, con a capo Windows (CRLF).
   vecchia.
 - Il sito (GitHub Pages) si aggiorna da `main`. Prima di dire che una versione è online,
   controlla `CACHE_NAME` su `origin/main`.
+
+## Memoria, collaudo e agenti
+
+- `cervello/` è la memoria del progetto: leggere `cervello/LEGGIMI.md` e `cervello/REGOLE.md`
+  prima di lavorare, aggiornarlo alla fine (bug, lezioni, idee, diario).
+- `bash laboratorio/collauda.sh` deve essere verde prima di proporre o pubblicare una modifica.
+  Ogni bug corretto ha il suo test in `laboratorio/`.
+- Agenti in `.claude/agents/`: `regista` (coordina e consiglia), `collaudatore`,
+  `cacciatore-instabilita`, `sentinella-sicurezza`, `guida-neofita`.
+- I sorgenti dell'installer sono in `installer_build/` (app.html e sw.js si copiano dalla
+  cartella principale). Il Setup lo costruisce GitHub: flusso "Installer Windows".
