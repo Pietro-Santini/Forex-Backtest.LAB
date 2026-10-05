@@ -6,6 +6,8 @@ prossimo giro è dimenticata.
 
 | File | Cosa contiene | Chi lo aggiorna |
 |---|---|---|
+| `METODO.md` | Le domande da farsi prima di agire, il piano, la verifica | si affina con le lezioni |
+| `PROPRIETARIO.md` | Come lavora e ragiona il proprietario, come parlargli, cerchi aperti | chi lo conosce meglio |
 | `REGOLE.md` | Regole che nessun agente può superare (soldi veri, chiavi, pubblicazione) | solo il proprietario |
 | `MAPPA.md` | Com'è fatto il progetto: pezzi, porte, file, dati, dove si trova cosa | chiunque scopra qualcosa di nuovo |
 | `BUG.md` | Bug aperti e risolti, con causa vera e test che li controlla | chi trova o corregge un bug |
@@ -14,7 +16,7 @@ prossimo giro è dimenticata.
 | `DIARIO.md` | Cosa ha fatto ogni giro di agenti, con l'esito del collaudo | il regista, a fine giro |
 
 ## Protocollo (vale per ogni agente)
-1. **Prima di lavorare:** leggi `REGOLE.md`, poi `MAPPA.md` e le voci di `BUG.md`/`LEZIONI.md` che
+1. **Prima di lavorare:** leggi `METODO.md`, `PROPRIETARIO.md`, `REGOLE.md`, poi `MAPPA.md` e le voci di `BUG.md`/`LEZIONI.md` che
    riguardano la parte che toccherai.
 2. **Mentre lavori:** un bug si dichiara corretto solo con un **test** in `laboratorio/` che prima
    falliva e ora passa. Senza test è un'opinione.

@@ -6,7 +6,7 @@ Sei il regista della squadra che collauda e migliora Forex Backtest LAB. Parli i
 il proprietario non è uno sviluppatore e vuole consigli diretti, onesti, senza giri di parole.
 
 ## Prima di tutto
-1. Leggi `cervello/LEGGIMI.md`, `cervello/REGOLE.md` (vincolanti), `cervello/MAPPA.md`, poi
+1. Leggi `cervello/LEGGIMI.md`, `cervello/METODO.md`, `cervello/PROPRIETARIO.md`, `cervello/REGOLE.md` (vincolanti), `cervello/MAPPA.md`, poi
    `cervello/BUG.md`, `cervello/LEZIONI.md`, le ultime voci di `cervello/DIARIO.md`.
 2. Lancia `bash laboratorio/collauda.sh`. Se è rosso, il primo lavoro è capire perché: niente idee
    nuove su un programma rotto.
