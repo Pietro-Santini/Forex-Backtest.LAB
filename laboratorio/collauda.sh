@@ -8,7 +8,11 @@ OUT="$R/ultimo.md"; FALLITI=0
 riga(){ echo "$1" | tee -a "$OUT"; }
 passo(){ # nome, comando...
   local nome="$1"; shift
-  if "$@" > "$R/$nome.log" 2>&1; then riga "- ✅ $nome"; else riga "- ❌ $nome (vedi risultati/$nome.log)"; FALLITI=$((FALLITI+1)); fi
+  if "$@" > "$R/$nome.log" 2>&1; then riga "- ✅ $nome"; else
+    riga "- ❌ $nome (vedi risultati/$nome.log)"; FALLITI=$((FALLITI+1))
+    # Il dettaglio va anche a schermo: su GitHub il log del flusso e' l'unico posto dove si legge subito.
+    echo "----- ultime righe di $nome.log -----" >&2; tail -40 "$R/$nome.log" >&2; echo "-----" >&2
+  fi
 }
 : > "$OUT"
 riga "# Collaudo $(date -u '+%Y-%m-%d %H:%M') UTC — commit $(git rev-parse --short HEAD 2>/dev/null)"
