@@ -27,3 +27,8 @@ A = blocca o confonde un neofita; B = migliora molto; C = rifinitura.
   livelli e strategie e li **mostra e spiega**; si discutono col proprietario e si provano sul
   backtest prima di qualunque uso. Mai ordini automatici da queste analisi senza approvazione. — da
   valutare dopo i due punti sopra
+- **[B] Ogni piattaforma** — l'app è già una pagina web (PWA): gira su Windows, Mac, Linux,
+  Android e iPhone/iPad dal browser. Il pezzo legato a Windows è il programma sul PC (MT5 esiste
+  solo per Windows; BlueStacks per Syntra). Ogni modifica va provata almeno a schermo grande e
+  da telefono (`avvio.test.mjs` lo fa già). Un ponte per Mac/Linux senza MT5 (solo Kraken e
+  Telegram) è fattibile: da valutare dopo i lavori A. — proprietario — da valutare

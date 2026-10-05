@@ -4,3 +4,6 @@ Formato: data — chi — cosa — esito collaudo — commit.
 
 - 2026-10-05 — impianto iniziale — creati cervello, laboratorio (11 test ponte + interprete + 6
   test app), flussi GitHub Collaudo e Installer Windows, agenti — collaudo verde
+- 2026-10-05 — impianto — primo Setup costruito da GitHub (94 MB, collaudo librerie ponte ok);
+  release automatica pronta (scatta su main); collaudo GitHub rosso→verde (test del ponte usavano
+  la rete vera) — verde — 026b3ee
