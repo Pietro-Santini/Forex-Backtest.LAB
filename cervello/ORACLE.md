@@ -41,3 +41,10 @@ I costi e i limiti del piano gratuito Oracle vanno verificati sul conto Oracle d
 - Server Oracle: **da creare** (macchina ARM gratuita) → procedura passo passo.
 - Sessione Telegram: **sì, sul server Oracle** (regola aggiornata in `REGOLE.md`).
 - Chiavi Kraken reali: restano sul PC (nessuna decisione diversa).
+
+## Stato (7 ottobre 2026)
+- Server creato: AMD gratuita, Ubuntu 26.04, Docker; servizi `ponte` (8000) e `segnali` (8769) attivi,
+  pubblicati su Tailscale (`pietro.tail83d918.ts.net`); sessione Telegram copiata da un avvio
+  manuale precedente in `/srv/fbl/dati/segnali`.
+- App v87: impostazione "Server sempre acceso" (Kraken e segnali al server, MT5 al PC).
+- Da verificare dal proprietario: pagina /health dal PC (rifiuto senza chiave), Telegram ripreso.

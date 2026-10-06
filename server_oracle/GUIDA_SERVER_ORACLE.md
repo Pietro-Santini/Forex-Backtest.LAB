@@ -111,8 +111,13 @@ ottobre 2026). Il primo collegamento (api_id, api_hash, codice di verifica) si f
 puntata al server, come si fa oggi col PC.
 
 ## 6. Collegare l'app al server
-Nell'app servirà indicare l'indirizzo del server e la chiave: è il prossimo passo di sviluppo
-(oggi l'app usa un solo indirizzo, quello del PC).
+Nell'app (v87 o successiva): **Collegamento/Modalità → sezione "Server sempre acceso (Oracle)"**.
+1. "Nome del server": quello stampato alla fine dello script (es. `nome.tail1234.ts.net`).
+2. "Chiave del server": quella stampata dallo script.
+3. **Prova il server** → deve dire "✅ Server raggiungibile". Poi **Salva il server**.
+Da quel momento Kraken (conto simulato) e sale segnali passano dal server; MT5 resta sul computer.
+Il dispositivo deve avere Tailscale acceso, con lo stesso account del server. Va fatto su ogni
+dispositivo (PC, telefono, tablet): la chiave non viaggia da sola tra un dispositivo e l'altro.
 
 ## Aggiornare il server
 Sul server, rilancia `bash prepara_server.sh`: scarica la versione nuova e riavvia i servizi.

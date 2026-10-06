@@ -3454,6 +3454,20 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        Lascia <b>127.0.0.1</b> quando usi l'app sul computer stesso.
      </div>
      <div id="fblRemotoEsito" class="tgCfgRiep"></div>
+
+     <div class="tgCfgSez">Server sempre acceso (Oracle)</div>
+     <div class="tgCfgNota" style="margin-bottom:8px">Se hai il server, <b>Kraken</b> (conto simulato) e le <b>sale segnali</b> passano da lì e restano attivi anche a PC spento. <b>MT5</b> resta sul computer. Lascia vuoto per usare solo il computer.</div>
+     <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+       <label class="tgCfgCampo">Nome del server
+         <input id="fblServerCampo" class="tgCfgIn" type="text" placeholder="server.tail1234.ts.net" autocapitalize="off" autocorrect="off" spellcheck="false" style="width:230px"></label>
+       <label class="tgCfgCampo">Chiave del server
+         <input id="fblServerChiaveCampo" class="tgCfgIn" type="text" placeholder="quella stampata da prepara_server.sh" style="width:210px"></label>
+     </div>
+     <div class="fbOptRow" style="margin-top:8px;gap:8px">
+       <button type="button" id="fblServerProva" class="miniBtn">Prova il server</button>
+       <button type="button" id="fblServerSalva" class="miniBtn">Salva il server</button>
+     </div>
+     <div id="fblServerEsito" class="tgCfgRiep"></div>
    </div>
    <div class="fbModalFooter">
      <button type="button" id="fblRemotoProva" class="miniBtn">Prova il collegamento</button>
@@ -22674,7 +22688,7 @@ async function tgImpostaAttivo(acceso){
   tgScollega();
   // Spegnere deve spegnere DAVVERO: il ponte e' un processo senza finestra, e lasciarlo acceso
   // vorrebbe dire costringere ad andarlo a chiudere da Gestione attivita' (e' successo).
-  try{
+  if(!fblServer())try{
    const r=await fetchMt5WithTimeout('/segnali-stop',{method:'POST'},10000);
    if(r&&r.ok&&r.data&&r.data.ancora_attivo){
     tgStato('Collegamento spento in app. Il ponte però risponde ancora: era stato avviato fuori dall\'app, chiudilo da lì.','err');
@@ -22720,6 +22734,7 @@ async function tgMostraDiarioPonte(){
 }
 fblDelega('click',ev=>{ if(ev.target&&ev.target.closest&&ev.target.closest('#tgDiarioBtn'))tgMostraDiarioPonte(); });
 async function tgAssicuraPonte(){
+ if(fblServer())return true;   // sul server il ponte e' sempre acceso (Docker, riavvio automatico)
  if(tgAvvioInCorso)return false;
  // Gia' in piedi? Nessuno lo avvia due volte.
  if(tgWs&&tgWs.readyState===1)return true;
@@ -23197,11 +23212,14 @@ function tgInvia(oggetto){
 function tgCollega(){
  if(!tgAttivo()){ tgAggiornaInterruttore(); return; } // interruttore spento: nessuna presa, punto
  const porta=tgPortNow();
- if(tgWs&&tgWsPorta===porta&&(tgWs.readyState===0||tgWs.readyState===1))return;
+ const dove=fblServer()?('server:'+fblServer()):porta;
+ if(tgWs&&tgWsPorta===dove&&(tgWs.readyState===0||tgWs.readyState===1))return;
  try{ if(tgWs){ tgWs.onclose=null; tgWs.close(); } }catch(e){}
- tgWs=null; tgWsPorta=porta;
+ tgWs=null; tgWsPorta=dove;
  let ws;
- try{ ws=new WebSocket(fblConChiave(fblBaseUrl(porta).replace(/^http/,'ws')+'/ws/segnali')); }
+ const indirizzoWs=fblServer()?fblServerConChiave(fblServerUrl(8769).replace(/^https/,'wss')+'/ws/segnali')
+   :fblConChiave(fblBaseUrl(porta).replace(/^http/,'ws')+'/ws/segnali');
+ try{ ws=new WebSocket(indirizzoWs); }
  catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
  tgWs=ws;
  tgStato('Collegamento al ponte…');
@@ -25324,6 +25342,48 @@ $('fblRemotoRigenera')?.addEventListener('click',async ()=>{
    body:JSON.stringify({rete:!!$('fblRemotoAttivo')?.checked,rigenera_chiave:true})},8000);
  if(r&&r.ok){ fblRemotoLeggi(); $('fblRemotoEsito').textContent='Chiave cambiata.'; }
 });
+function fblServerCampiLeggi(){
+ if($('fblServerCampo'))$('fblServerCampo').value=fblServer();
+ if($('fblServerChiaveCampo'))$('fblServerChiaveCampo').value=fblServerChiave();
+}
+function fblServerCampiValidi(){
+ const host=fblNormalizzaHost($('fblServerCampo')?.value);
+ const chiave=($('fblServerChiaveCampo')?.value||'').trim();
+ if(host&&!/\.ts\.net$/.test(host)){
+  $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Non valido.</b> Serve il <b>nome</b> del server: finisce con <b>.ts.net</b> (lo stampa prepara_server.sh).';
+  return null;
+ }
+ if(host&&!chiave){ $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Manca la chiave del server.</b>'; return null; }
+ return {host,chiave};
+}
+$('fblServerProva')?.addEventListener('click',async ()=>{
+ const v=fblServerCampiValidi(); if(!v||!v.host)return;
+ $('fblServerEsito').textContent='Provo…';
+ try{
+  const r=await fetch('https://'+v.host+':8000/health?chiave='+encodeURIComponent(v.chiave),{cache:'no-store'});
+  const d=await r.json().catch(()=>({}));
+  if(r.ok&&d.servizio==='server-oracle'){
+   $('fblServerEsito').innerHTML='✅ Server raggiungibile: Kraken '+escapeHtmlText(String(d.kraken||''))+', MT5 '+(d.mt5?'sì':'no (resta sul computer)')+'.';
+  }else{
+   $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Il server risponde ma rifiuta:</b> '+escapeHtmlText(String(d.detail||('errore '+r.status)))+'.';
+  }
+ }catch(e){
+  $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Server non raggiungibile.</b> Tailscale è acceso su questo dispositivo, con lo stesso account del server?';
+ }
+});
+$('fblServerSalva')?.addEventListener('click',()=>{
+ const v=fblServerCampiValidi(); if(!v)return;
+ try{
+  if(v.host){ localStorage.setItem(FBL_SERVER_KEY,v.host); localStorage.setItem(FBL_SERVER_CHIAVE_KEY,v.chiave); }
+  else{ localStorage.removeItem(FBL_SERVER_KEY); localStorage.removeItem(FBL_SERVER_CHIAVE_KEY); }
+ }catch(e){}
+ fblServerCampiLeggi();
+ $('fblServerEsito').textContent=v.host?('Salvato: Kraken e segnali passano da '+v.host+'.'):'Server tolto: tutto torna sul computer.';
+ try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
+ try{ if(typeof tgAttivo==='function'&&tgAttivo()&&typeof tgCollega==='function')tgCollega(); }catch(e){}
+ try{ krakenAggiornaConto(); }catch(e){}
+});
+try{ fblServerCampiLeggi(); }catch(e){}
 $('fblRemotoSalva')?.addEventListener('click',()=>{
  const host=fblNormalizzaHost($('fblHostCampo')?.value)||'127.0.0.1';
  const chiave=($('fblChiaveCampo')?.value||'').trim();
@@ -26823,6 +26883,33 @@ function fblChiave(){
  try{ return (localStorage.getItem(FBL_CHIAVE_KEY)||'').trim(); }catch(e){ return ''; }
 }
 function fblRemoto(){ return fblHost()!=='127.0.0.1'&&fblHost()!=='localhost'; }
+// ===================== SERVER SEMPRE ACCESO (Oracle) =====================
+// RICHIESTO: "rendere possibile far girare tutto su Oracle" - strada ibrida (cervello/ORACLE.md):
+// MT5 resta sul PC (indirizzo qui sopra), Kraken simulato e ponte dei segnali Telegram stanno sul
+// server, raggiunto con Tailscale (https://nome.xxxx.ts.net:8000 e :8769) e con la SUA chiave.
+// Vuoto = come prima, tutto sul PC.
+const FBL_SERVER_KEY='fbl_server_host';
+const FBL_SERVER_CHIAVE_KEY='fbl_server_chiave';
+function fblServer(){ try{ return (localStorage.getItem(FBL_SERVER_KEY)||'').trim(); }catch(e){ return ''; } }
+function fblServerChiave(){ try{ return (localStorage.getItem(FBL_SERVER_CHIAVE_KEY)||'').trim(); }catch(e){ return ''; } }
+function fblServerUrl(porta){ return 'https://'+fblServer()+':'+porta; }
+function fblServerConChiave(url){
+ const k=fblServerChiave();
+ return k?url+(url.indexOf('?')>=0?'&':'?')+'chiave='+encodeURIComponent(k):url;
+}
+async function fetchServerWithTimeout(path,options,timeoutMs){
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),Math.max(timeoutMs||0,30000));
+ try{
+  const res=await fetch(fblServerConChiave(fblServerUrl(8000)+path),{...(options||{}),signal:controller.signal});
+  let data=null; try{ data=await res.json(); }catch(e){}
+  if(!res.ok)return {ok:false,message:(data&&data.detail)?data.detail:('Errore HTTP '+res.status)};
+  return {ok:true,data};
+ }catch(e){
+  return {ok:false,message:e.name==='AbortError'?'Il server non ha risposto in tempo.'
+   :'Server non raggiungibile su '+fblServerUrl(8000)+' (Tailscale acceso su questo dispositivo?).'};
+ }finally{ clearTimeout(timer); }
+}
 // Dal PC si parla in http con 127.0.0.1. Da qualunque altro dispositivo SOLO attraverso Tailscale
 // Serve, che risponde in https sul nome del PC con le stesse porte: https://nome-pc.xxxx.ts.net:8000.
 // Il sito e' in https, quindi e' anche l'unica combinazione che il browser lascia passare.
@@ -34234,6 +34321,7 @@ function krakenNome(){
 }
 var krakenStorico=null, krakenStoricoAt=0;
 async function krakenBridge(percorso,corpo){
+ if(fblServer())return fetchServerWithTimeout('/kraken'+percorso,corpo===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)},30000);
  return fetchMt5WithTimeout('/kraken'+percorso,corpo===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)},30000);
 }
 async function krakenAggiornaConto(){

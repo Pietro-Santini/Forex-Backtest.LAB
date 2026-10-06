@@ -13,3 +13,5 @@ Formato: data — chi — cosa — esito collaudo — commit.
   dati nel volume, Docker, prepara_server.sh, guida); 6 test del server; collaudo GitHub con Docker
 - 2026-10-06 — Claude — PR #6 unita (sito su v86, prima release automatica); Setup 1.0.73 e
   release con la numerazione v1.0.NN del proprietario — verde
+- 2026-10-07 — Claude — server Oracle avviato dal proprietario (Docker, Tailscale); app v87 con il
+  server per Kraken e segnali; Setup 1.0.74 — verde
