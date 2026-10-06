@@ -85,7 +85,11 @@ Alla fine stampa:
 
 Tienili per il punto 6. La chiave non va mandata a nessuno, nemmeno a Claude.
 
-Finché il lavoro non è unito a `main`, lancia lo script con il ramo di lavoro:
+**Finché il lavoro non è unito a `main`** lo script non è su `main`: scaricalo e lancialo dal
+ramo di lavoro, al posto dei due comandi sopra:
+```
+curl -fsSLO https://raw.githubusercontent.com/Pietro-Santini/Forex-Backtest.LAB/ccr-40c44692-qdmdmj/server_oracle/prepara_server.sh
+```
 ```
 FBL_RAMO=ccr-40c44692-qdmdmj bash prepara_server.sh
 ```
