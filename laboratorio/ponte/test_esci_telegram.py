@@ -45,7 +45,12 @@ def test_esci_chiude_la_sessione_e_dimentica_il_numero():
     assert esito["tipo"] == "uscito" and esito["ok"] and esito["logout"]
     assert finto.uscito and finto.chiuso
     assert not os.path.exists(sessione + ".session")
-    assert json.load(open(sb.FILE_CONFIG, encoding="utf-8")).get("telefono") is None
+    cfg = json.load(open(sb.FILE_CONFIG, encoding="utf-8"))
+    assert cfg.get("telefono") is None
+    # RICHIESTO: uscendo si perdono solo numero e sessione; sale e credenziali restano, cosi'
+    # al rientro (numero + codice) tornano tutte le sale salvate.
+    assert cfg["chat"] == ["a"] and cfg["api_id"] == 1 and cfg["api_hash"] == "x" * 32
+    assert asyncio.run(sb._stato_chat())["chat"] == ["a"]
     assert sb.STATO["uscito"] is True and sb.STATO["collegato"] is False
     assert sb._CLIENT is None
 
