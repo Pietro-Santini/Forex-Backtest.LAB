@@ -13,6 +13,7 @@
 | Interprete segnali | `segnali_telegram/parser_segnali.py` | Trasforma il testo di un messaggio in strumento/direzione/entrata/SL/TP |
 | Accesso remoto | `accesso_condiviso.py` | Solo Tailscale; chiave di accesso per le richieste non locali |
 | Installer | `installer_build/installer.iss` (Inno Setup) + `build_exe.bat` (PyInstaller) | Costruito da GitHub: flusso **Installer Windows** |
+| Server Oracle | `server_oracle/` (Docker, `prepara_server.sh`, guida) | Kraken simulato + pendenti (8000) e segnali Telegram (8769) su Linux; MT5 resta sul PC |
 | Banco di prova | `laboratorio/` | `collauda.sh`: sintassi, ponte Python, interprete, app nel browser |
 
 ## Catena degli ordini

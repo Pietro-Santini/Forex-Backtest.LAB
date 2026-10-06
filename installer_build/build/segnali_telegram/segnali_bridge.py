@@ -115,7 +115,12 @@ def _scrivibile(cartella: str) -> bool:
 # dietro la configurazione che c'e' gia'.
 CARTELLA_RICADUTA = os.path.join(
     os.environ.get("APPDATA") or os.path.expanduser("~"), "ForexBacktestLAB", "segnali")
-if not _scrivibile(CARTELLA_DATI):
+# Server Oracle (server_oracle/): configurazione e sessione stanno nella cartella dei dati del
+# server (volume che sopravvive agli aggiornamenti), indicata da FBL_SEGNALI_DATI. Sul PC non c'e'.
+if os.environ.get("FBL_SEGNALI_DATI"):
+    CARTELLA_DATI = os.environ["FBL_SEGNALI_DATI"]
+    os.makedirs(CARTELLA_DATI, exist_ok=True)
+elif not _scrivibile(CARTELLA_DATI):
     _origine = os.path.join(CARTELLA_DATI, "configurazione.json")
     try:
         os.makedirs(CARTELLA_RICADUTA, exist_ok=True)

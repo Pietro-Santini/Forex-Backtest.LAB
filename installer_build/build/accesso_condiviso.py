@@ -51,7 +51,12 @@ MESSAGGI_RIFIUTO = {
 
 
 def percorso_accesso() -> str:
-    """Il file accanto all'eseguibile; dai sorgenti, risalendo dalla cartella dello script."""
+    """Il file accanto all'eseguibile; dai sorgenti, risalendo dalla cartella dello script.
+
+    Sul server Oracle (server_oracle/) il file sta nella cartella dei dati: lo indica FBL_ACCESSO_FILE.
+    """
+    if os.environ.get("FBL_ACCESSO_FILE"):
+        return os.environ["FBL_ACCESSO_FILE"]
     if getattr(sys, "frozen", False):
         base = os.path.dirname(os.path.abspath(sys.executable))
     else:

@@ -22,7 +22,7 @@ jobs:
           node-version: "22"
       - name: Librerie
         run: |
-          pip install -q pytest fastapi pydantic
+          pip install -q pytest fastapi pydantic httpx
           cd laboratorio && npm install --no-audit --no-fund && npx playwright install --with-deps chromium
       - name: Collaudo
         run: bash laboratorio/collauda.sh
@@ -35,3 +35,25 @@ jobs:
           name: collaudo
           path: laboratorio/risultati/
           retention-days: 14
+
+  server_oracle:
+    # Il pacchetto del server Oracle: l'immagine si costruisce, i due servizi partono, il ponte
+    # risponde e rifiuta chi arriva "via Tailscale" senza chiave.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Immagine e avvio
+        run: |
+          sudo mkdir -p /srv/fbl/dati
+          docker compose -f server_oracle/docker-compose.yml up -d --build
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8000/health && break; sleep 2; done
+          echo
+          curl -fsS http://127.0.0.1:8000/health | grep -q '"servizio":"server-oracle"'
+          curl -fsS http://127.0.0.1:8769/health | grep -q '"ok":true'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 100.1.2.3' -H 'Host: server.tail.ts.net' http://127.0.0.1:8000/health)
+          test "$code" = "403"
+          echo "server Oracle: ok (senza chiave via Tailscale -> $code)"
+      - name: Log dei servizi
+        if: always()
+        run: docker compose -f server_oracle/docker-compose.yml logs --tail 50
