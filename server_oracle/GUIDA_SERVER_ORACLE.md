@@ -34,7 +34,19 @@ Le macchine ARM gratuite sono esaurite in quella zona: capita spesso. In ordine:
    risorse Always Free restano gratuite. Prima imposta un **budget con avviso a 1 €**
    (Billing → Budgets) per non avere sorprese.
 
+### Se la macchina non ha "Public IP address" (solo l'IP privato)
+Senza IP pubblico non ci entri dal PC e il server non scarica niente. Si aggiunge senza rifarla:
+1. Compute → Instances → la tua macchina → in basso **Attached VNICs** → clicca la VNIC.
+2. In basso **IPv4 Addresses** → tre puntini ⋮ sulla riga dell'IP privato → **Edit**.
+3. "Public IP type": **Ephemeral public IP** → **Update**. Il numero compare nella pagina della macchina.
+
+Se "Ephemeral public IP" non si può scegliere, la macchina è in una rete privata: Networking →
+Virtual cloud networks → **Start VCN Wizard** → **Create VCN with Internet Connectivity**, poi
+ricrea la macchina scegliendo quella rete e la sua **public subnet**.
+
 ## 3. Entrare nel server (dal PC Windows)
+`ubuntu` è il nome dell'utente del server e resta così; al posto di INDIRIZZO-IP-PUBBLICO va solo il
+numero (es. `ubuntu@130.61.45.78`).
 Nel Prompt dei comandi, dalla cartella dove hai salvato la chiave (es. `Download`):
 
 ```
@@ -44,6 +56,15 @@ cd /d %USERPROFILE%\Downloads
 ssh -i nome-della-chiave.key ubuntu@INDIRIZZO-IP-PUBBLICO
 ```
 Alla domanda "Are you sure you want to continue connecting" scrivi `yes`.
+
+Se Windows risponde **"UNPROTECTED PRIVATE KEY FILE"**, dalla stessa cartella:
+```
+icacls nome-della-chiave.key /inheritance:r
+```
+```
+icacls nome-della-chiave.key /grant:r "%USERNAME%:R"
+```
+e rilancia il comando `ssh`. Quando vedi `ubuntu@fbl-server:~$` sei dentro il server.
 
 ## 4. Preparare tutto (sul server)
 Una riga alla volta:
