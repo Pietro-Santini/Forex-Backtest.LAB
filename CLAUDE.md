@@ -27,6 +27,9 @@ Il file è di testo semplice, con a capo Windows (CRLF).
   vecchia.
 - Il sito (GitHub Pages) si aggiorna da `main`. Prima di dire che una versione è online,
   controlla `CACHE_NAME` su `origin/main`.
+- Decisione del proprietario: ogni lavoro si salva sul ramo e si pubblica **anche su `main`**
+  automaticamente, ma solo con `bash laboratorio/collauda.sh` verde (lo impone l'hook
+  `guardia_git.py`). Dopo la pubblicazione, controllare `CACHE_NAME` su `origin/main`.
 
 ## Memoria, collaudo e agenti
 

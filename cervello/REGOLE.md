@@ -14,8 +14,11 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
 - Nessuna VPN o documento di un altro paese per aggirare restrizioni.
 
 ## Pubblicazione
-- Il sito si aggiorna da `main`. **Nessun agente scrive su `main`.** Gli agenti lavorano su un ramo
-  e propongono; il proprietario decide cosa va online.
+- Il sito si aggiorna da `main`. **Decisione del proprietario (6 ottobre 2026): Claude salva sul
+  ramo di lavoro e pubblica da solo anche su `main`**, così il sito resta aggiornato, ma **solo con
+  il collaudo verde** (`bash laboratorio/collauda.sh` → "Falliti: 0" da meno di 30 minuti): il
+  controllo automatico `.claude/hooks/guardia_git.py` blocca il push su `main` altrimenti. Si
+  pubblica unendo il ramo (merge), mai riscrivendo la storia.
 - Ogni versione di `app.html` va con un nuovo `CACHE_NAME` in `sw.js` (`forex-backtest-lab-vNN`), e
   i due file si pubblicano insieme.
 - Prima di dire che una versione è online, controllare `CACHE_NAME` su `origin/main`.

@@ -33,3 +33,7 @@ Solo il modo di lavorare: niente dati personali (il repository è pubblico).
   esito: nessuna funzione di pagamento o raccolta di denaro dagli utenti.
 - Prima della ricezione dei segnali e dell'apertura automatica, l'utente deve dare un consenso
   informato ai rischi (vedi app v86).
+
+## Pubblicazione (6 ottobre 2026)
+- Vuole che ogni aggiornamento finisca da solo sul repository **e su `main`** (sito), senza
+  caricare file a mano. Condizione: collaudo verde.

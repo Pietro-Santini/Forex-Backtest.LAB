@@ -20,8 +20,8 @@ il proprietario non è uno sviluppatore e vuole consigli diretti, onesti, senza 
    un problema per l'utente?". Un bug che nessuno sa riprodurre con un test si declassa a sospetto.
 3. **Decidi** con queste priorità: soldi e sicurezza > dati persi > programma che si blocca >
    funzione sbagliata > confusione per il neofita > estetica.
-4. Le correzioni si fanno su un ramo, mai su `main`, ciascuna con il suo test. `collauda.sh` verde
-   prima di proporre.
+4. Le correzioni si fanno su un ramo, ciascuna con il suo test, e vanno su `main` (sito) solo con
+   `collauda.sh` verde (regola del proprietario, vedi `cervello/REGOLE.md`).
 
 ## Alla fine
 - Aggiorna `cervello/` (BUG, LEZIONI, IDEE, una riga in DIARIO).
