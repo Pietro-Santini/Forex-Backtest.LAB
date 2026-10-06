@@ -1505,12 +1505,12 @@ setTimeout(function(){
           <button type="button" id="tgToggleBtn" class="toolBtn" style="flex:1;min-width:150px">Collegamento: —</button>
         </div>
         <div class="fbOptRow" style="margin-bottom:10px">
-          <button type="button" id="tgDimenticaTelBtn" class="miniBtn" style="display:none">Dimentica il numero salvato</button>
+          <button type="button" id="tgDimenticaTelBtn" class="miniBtn" style="display:none">Esci da Telegram (dimentica il numero)</button>
         </div>
          <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">ACCESSO A TELEGRAM</div>
         <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
            <span id="tgTelefonoSalvatoLbl" style="flex:1;min-width:150px;font-size:12px;color:#8b96a5">Numero non ancora salvato.</span>
-           <button type="button" id="tgTelefonoForgetBtn" class="miniBtn" style="width:auto;display:none" title="Togli il numero salvato su questo browser: al prossimo accesso te lo richiede">&#129529; Dimentica il numero</button>
+           <button type="button" id="tgTelefonoForgetBtn" class="miniBtn" style="width:auto;display:none" title="Esce da Telegram e dimentica il numero: per rientrare servono di nuovo numero e codice">&#129529; Esci da Telegram</button>
         </div>
         <p class="hint" style="margin:0 0 10px">Il numero viene ricordato <b>su questo browser</b> (nessun server) solo dopo un accesso riuscito, e dall'accesso successivo viene mandato da solo: il popup non ricompare piu'. Il <b>codice di verifica non viene mai salvato</b> - e' monouso e scade in pochi minuti, tenerlo non servirebbe a niente. A non farlo richiedere ogni volta e' il ponte sul PC, che conserva la sua sessione Telegram in un file locale.</p>
         <div class="hint" style="margin:0 0 6px;font-weight:700;letter-spacing:.3px">SALE SEGNALI</div>
@@ -22853,6 +22853,29 @@ function tgAggiornaTelefonoUI(){
                       :'Numero non ancora salvato: te lo chiede al primo accesso.';
  if(b)b.style.display=v?'':'none';
 }
+// RICHIESTO: "dimentica il numero" deve SCOLLEGARE da Telegram, e per riattivare si devono
+// chiedere numero e codice. Il ponte fa il logout vero (la sessione non vale piu' nemmeno per
+// Telegram), cancella sessione e numero; qui si dimentica il numero e si spegne il collegamento.
+// Riaccendendo, il ponte riparte da zero e l'app mostra i popup di numero e codice.
+let tgUscitaAttesa=null;
+async function tgEsciDaTelegram(){
+ const ok=await appConfirm('Uscire da Telegram su questo ponte?\n\nLa sessione viene chiusa e il numero dimenticato. Le sale smettono di arrivare finché non ti ricolleghi: premendo di nuovo «Collegamento» ti verranno chiesti numero di telefono e codice di Telegram.',
+  {title:'Esci da Telegram',okLabel:'Esci',cancelLabel:'Annulla'});
+ if(!ok)return false;
+ tgDimenticaTelefono();
+ let esito=null;
+ if(tgWs&&tgWs.readyState===1){
+  esito=await new Promise(risolvi=>{
+   const t=setTimeout(()=>{ tgUscitaAttesa=null; risolvi(null); },15000);
+   tgUscitaAttesa=m=>{ clearTimeout(t); tgUscitaAttesa=null; risolvi(m); };
+   if(!tgInvia({azione:'esci_telegram'})){ clearTimeout(t); tgUscitaAttesa=null; risolvi(null); }
+  });
+ }
+ await tgImpostaAttivo(false);
+ if(esito&&esito.ok)tgStato('Uscito da Telegram: sessione e numero cancellati. Per rientrare premi «Collegamento»: ti chiederà numero e codice.');
+ else tgStato('Numero dimenticato su questo dispositivo, ma il ponte non ha confermato l\'uscita (non era raggiungibile): la sua sessione Telegram potrebbe essere ancora attiva. Ricollegati e ripeti.','err');
+ return !!(esito&&esito.ok);
+}
 function tgDimenticaTelefono(){
  try{ localStorage.removeItem(TG_TEL_KEY); }catch(e){}
  tgTelefonoInAttesa=''; tgTelefonoAutoInvii=0;
@@ -22995,7 +23018,7 @@ function tgAggiornaSetup(m){
  const dim=$('tgDimenticaTelBtn');
  if(dim){
   dim.style.display=(m&&m.telefono_salvato)?'inline-block':'none';
-  dim.title='Il numero di telefono e\' salvato su questo dispositivo e non viene piu\' chiesto. Premi per toglierlo.';
+  dim.title='Esce da Telegram su questo ponte e dimentica il numero: per rientrare servono di nuovo numero e codice.';
  }
 }
 // Utenti di Syntra visti dal ponte: nell'apertura automatica sono "sale" come quelle di Telegram
@@ -23228,6 +23251,7 @@ function tgCollega(){
    let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
    if(m.tipo==='stato'){ tgApplicaStato(m); return; }
    if(m.tipo==='storico_sala'){ try{ fblCronoRicevi(m); }catch(e){} return; }
+   if(m.tipo==='uscito'){ try{ if(tgUscitaAttesa)tgUscitaAttesa(m); }catch(e){} return; }
    if(m.tipo==='battito'){
      // Il battito porta solo collegato/errore, e prima veniva buttato via: era il secondo motivo per
      // cui, dopo aver confermato il codice, bisognava premere "Ricontrolla" per vedersi collegati.
@@ -23311,10 +23335,7 @@ $('tgAddBtn')?.addEventListener('click',()=>{
  if(!tgInvia({azione:'scrivi_chat',chat:tgGruppi}))tgStato('Ponte non collegato: la modifica non è stata salvata.','err');
 });
 $('tgNewGroup')?.addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('tgAddBtn')?.click(); } });
-$('tgTelefonoForgetBtn')?.addEventListener('click',()=>{
- tgDimenticaTelefono();
- tgStato('Numero dimenticato su questo browser: al prossimo accesso te lo richiede.');
-});
+$('tgTelefonoForgetBtn')?.addEventListener('click',()=>{ tgEsciDaTelegram(); });
 $('tgSuonoSelect')?.addEventListener('change',()=>{
  try{ localStorage.setItem(TG_SUONO_KEY,$('tgSuonoSelect').value); }catch(e){}
 });
@@ -23588,10 +23609,7 @@ $('tgSalvaCredBtn')?.addEventListener('click',async ()=>{
  if(idEl)idEl.value=''; if(hashEl)hashEl.value='';
  tgStato('Chiavi inviate al ponte: restano su questo dispositivo.');
 });
-$('tgDimenticaTelBtn')?.addEventListener('click',()=>{
- if(!tgInvia({azione:'dimentica_telefono'})){ tgStato('Ponte non raggiungibile.','err'); return; }
- tgStato('Numero dimenticato: al prossimo collegamento verra\' richiesto.');
-});
+$('tgDimenticaTelBtn')?.addEventListener('click',()=>{ tgEsciDaTelegram(); });
 tgAggiornaInterruttore();
 window.addEventListener('resize',()=>{
  if(!tgPannelloAperto())return;

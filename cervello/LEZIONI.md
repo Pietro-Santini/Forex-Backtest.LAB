@@ -30,3 +30,9 @@
     senza Docker): far controllare `lsb_release -d` appena dentro il server.
 13. **Prima di inventare una numerazione, guardare quella che c'è.** Le release del proprietario
     erano già `v1.0.NN`: la mia `app-v86-setup-1.0.8` faceva sembrare il Setup più vecchio.
+14. **Prima di avviare un servizio su un server "nuovo", guardare chi tiene già la porta.** Sul
+    server Oracle un vecchio `forex-bridge.service` (systemd) occupava 127.0.0.1:8769 e il
+    container `segnali` ripartiva in tondo con "porta occupata". `ss -ltnp | grep 8769` lo dice
+    subito.
+15. **"Dimentica il numero" deve voler dire "esci".** Togliere solo il numero lasciava la
+    sessione Telegram attiva: il proprietario si aspettava di essere scollegato.

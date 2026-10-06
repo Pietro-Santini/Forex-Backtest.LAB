@@ -31,3 +31,6 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 - **Segnali e apertura dai segnali senza consenso informato** — risolto app v86 — consenso a due
   livelli (`consensoRischi('segnali'|'esecuzione')`), registrato con data e versione, sincronizzato
   sull'account; l'apertura automatica si ferma se manca. Test: `laboratorio/app/consenso.test.mjs`.
+- **"Dimentica il numero" non scollegava da Telegram** — risolto app v88 — ora "Esci da Telegram":
+  il ponte fa il logout, cancella sessione e numero; ricollegandosi chiede numero e codice.
+  Test: `laboratorio/app/esci_telegram.test.mjs`, `laboratorio/ponte/test_esci_telegram.py`.

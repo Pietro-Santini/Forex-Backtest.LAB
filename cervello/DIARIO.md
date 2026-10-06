@@ -15,3 +15,5 @@ Formato: data — chi — cosa — esito collaudo — commit.
   release con la numerazione v1.0.NN del proprietario — verde
 - 2026-10-07 — Claude — server Oracle avviato dal proprietario (Docker, Tailscale); app v87 con il
   server per Kraken e segnali; Setup 1.0.74 — verde
+- 2026-10-07 — Claude — app v88 "Esci da Telegram" (logout vero, sessione e numero cancellati,
+  rientro con numero e codice); Setup 1.0.75 — verde

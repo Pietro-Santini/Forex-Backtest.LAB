@@ -605,6 +605,8 @@ async def sorgente_telegram() -> None:
     client = TelegramClient(nome_sessione, int(api_id), str(api_hash),
                             connection_retries=None, retry_delay=5, auto_reconnect=True,
                             request_retries=10)
+    global _CLIENT, _FILE_SESSIONE
+    _CLIENT, _FILE_SESSIONE = client, nome_sessione
 
     _log(True, "collegamento a Telegram...")
     # NIENTE client.start(): quella chiede numero e codice sulla CONSOLE, e costringerebbe a
@@ -950,6 +952,53 @@ _accesso.installa_controllo_chiave(app, percorsi_liberi=("/prova",))
 # Il task della sorgente Telegram, tenuto da parte per poterlo far ripartire quando l'elenco dei
 # gruppi cambia dall'app: senza, ogni modifica richiederebbe di chiudere e riaprire il ponte.
 _task_sorgente: Optional[asyncio.Task] = None
+# Il collegamento Telegram in uso e il suo file di sessione: servono per USCIRE davvero.
+_CLIENT = None
+_FILE_SESSIONE: Optional[str] = None
+
+
+async def esci_da_telegram() -> dict:
+    """RICHIESTO: "dimentica il numero" deve scollegare davvero da Telegram; per rientrare si
+    richiedono numero e codice. Si ferma l'ascolto, si fa il logout (la sessione non vale piu'
+    nemmeno sui server di Telegram), si cancella il file di sessione e il numero salvato.
+    L'ascolto NON riparte da solo: riparte quando l'app si ricollega (vedi "leggi_chat")."""
+    global _task_sorgente, _CLIENT
+    if _task_sorgente and not _task_sorgente.done():
+        _task_sorgente.cancel()
+        try:
+            await _task_sorgente
+        except (asyncio.CancelledError, Exception):
+            pass
+    uscito_da_telegram = False
+    if _CLIENT is not None:
+        try:
+            if not _CLIENT.is_connected():
+                await _CLIENT.connect()
+            if await _CLIENT.is_user_authorized():
+                uscito_da_telegram = bool(await _CLIENT.log_out())
+        except Exception as e:  # rete giu': la sessione si cancella comunque qui sotto
+            _log(True, "logout da Telegram non riuscito (%s): cancello comunque la sessione" % e.__class__.__name__)
+        try:
+            await _CLIENT.disconnect()
+        except Exception:
+            pass
+        _CLIENT = None
+    nome = _FILE_SESSIONE or os.path.join(CARTELLA_DATI, str((carica_configurazione() or {}).get("sessione") or "sessione_segnali"))
+    for f in (nome + ".session", nome + ".session-journal"):
+        try:
+            os.remove(f)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            _log(True, "non riesco a cancellare %s: %s" % (f, e))
+    err = salva_configurazione({"telefono": None})
+    STATO["collegato"] = False
+    STATO["uscito"] = True
+    STATO["errore"] = "scollegato da Telegram: per rientrare premi Collegamento e inserisci numero e codice"
+    ACCESSO["serve"] = None
+    ACCESSO["errore"] = None
+    _log(True, "uscito da Telegram: sessione e numero cancellati")
+    return {"tipo": "uscito", "ok": err is None, "logout": uscito_da_telegram, "errore": err}
 
 
 async def riavvia_sorgente() -> None:
@@ -1358,10 +1407,9 @@ async def ws_segnali(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"tipo": "salvato", "ok": ok, "errore": err}))
                 await websocket.send_text(json.dumps(await _stato_chat()))
                 continue
-            if azione == "dimentica_telefono":
-                # Cambio di numero, o dispositivo passato a qualcun altro: si toglie e basta.
-                err = salva_configurazione({"telefono": None})
-                await websocket.send_text(json.dumps({"tipo": "salvato", "ok": err is None, "errore": err}))
+            if azione in ("esci_telegram", "dimentica_telefono"):
+                # Cambio di numero, o dispositivo passato a qualcun altro: si esce da Telegram.
+                await websocket.send_text(json.dumps(await esci_da_telegram()))
                 await websocket.send_text(json.dumps(await _stato_chat()))
                 continue
             if azione == "syntra_config":
@@ -1395,6 +1443,9 @@ async def ws_segnali(websocket: WebSocket):
                                                    bool(m.get("da_capo"))))
                 continue
             if azione == "leggi_chat":
+                if STATO.get("uscito") and not STATO["sim"]:
+                    STATO["uscito"] = False
+                    await riavvia_sorgente()   # niente sessione e niente numero: li chiede all'app
                 await websocket.send_text(json.dumps(await _stato_chat()))
             elif azione == "scrivi_chat":
                 nuove = [str(c).strip() for c in (m.get("chat") or []) if str(c).strip()]
