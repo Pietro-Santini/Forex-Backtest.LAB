@@ -36,3 +36,5 @@
     subito.
 15. **"Dimentica il numero" deve voler dire "esci".** Togliere solo il numero lasciava la
     sessione Telegram attiva: il proprietario si aspettava di essere scollegato.
+16. **Una guida che dice "sezione X" deve nominare ogni pulsante da premere per arrivarci.** "Prova
+    il server" era dietro "Accesso da altri dispositivi", un nome che non c'entrava col server.

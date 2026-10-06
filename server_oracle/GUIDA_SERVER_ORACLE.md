@@ -111,7 +111,10 @@ ottobre 2026). Il primo collegamento (api_id, api_hash, codice di verifica) si f
 puntata al server, come si fa oggi col PC.
 
 ## 6. Collegare l'app al server
-Nell'app (v87 o successiva): **Collegamento/Modalità → sezione "Server sempre acceso (Oracle)"**.
+Nell'app (v87 o successiva): **🔌 Collegamento/Modalità → pulsante "📱 Accesso da altri dispositivi
+(e server Oracle)" → scorri fino in fondo → sezione "Server sempre acceso (Oracle)"**.
+Se la sezione non c'è, l'app è ancora una versione vecchia: chiudila e riaprila (o ricarica la pagina)
+finché in fondo al menu non compare la versione nuova.
 1. "Nome del server": quello stampato alla fine dello script (es. `nome.tail1234.ts.net`).
 2. "Chiave del server": quella stampata dallo script.
 3. **Prova il server** → deve dire "✅ Server raggiungibile". Poi **Salva il server**.

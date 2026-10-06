@@ -58,3 +58,23 @@ test('impostazioni: nome .ts.net obbligatorio, chiave obbligatoria, vuoto = tutt
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+// "il tasto Prova il server non lo vedo": era in fondo a una finestra il cui pulsante parlava solo
+// di "altri dispositivi". Il pulsante deve nominare il server e portare alla sezione.
+test('il pulsante del menu porta a «Prova il server»', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async () => {
+      const b = document.getElementById('fblRemotoBtn');
+      const testo = b.textContent;
+      await fblRemotoApri();
+      const p = document.getElementById('fblServerProva');
+      return {testo, dentro: document.getElementById('fblRemotoOverlay').contains(p),
+              aperta: document.getElementById('fblRemotoOverlay').style.display};
+    });
+    assert.match(r.testo, /server Oracle/);
+    assert.equal(r.dentro, true);
+    assert.equal(r.aperta, 'flex');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});

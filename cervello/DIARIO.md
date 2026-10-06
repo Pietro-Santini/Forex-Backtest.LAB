@@ -17,3 +17,5 @@ Formato: data — chi — cosa — esito collaudo — commit.
   server per Kraken e segnali; Setup 1.0.74 — verde
 - 2026-10-07 — Claude — app v88 "Esci da Telegram" (logout vero, sessione e numero cancellati,
   rientro con numero e codice); Setup 1.0.75 — verde
+- 2026-10-07 — Claude — app v89: pulsante "Accesso da altri dispositivi e server Oracle" (il
+  proprietario non trovava "Prova il server"); guida corretta; Setup 1.0.76 — verde
