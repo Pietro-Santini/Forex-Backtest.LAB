@@ -48,3 +48,9 @@ I costi e i limiti del piano gratuito Oracle vanno verificati sul conto Oracle d
   manuale precedente in `/srv/fbl/dati/segnali`.
 - App v87: impostazione "Server sempre acceso" (Kraken e segnali al server, MT5 al PC).
 - Da verificare dal proprietario: pagina /health dal PC (rifiuto senza chiave), Telegram ripreso.
+
+## Ingrandire (7 ottobre 2026)
+- Il proprietario vuole più memoria e disco, in vista di MT5 sul server.
+- Micro AMD = 1 GB fisso. ARM gratuita = tanta memoria ma **niente MT5**. AMD Flex = MT5 sotto
+  Wine provabile, ma a pagamento. Passaggi in `server_oracle/GUIDA_SERVER_ORACLE.md`.
+- La decisione su MT5 (strada e conto demo/reale) è stata rimandata dal proprietario.

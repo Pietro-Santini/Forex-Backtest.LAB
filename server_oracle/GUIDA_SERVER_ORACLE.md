@@ -125,6 +125,33 @@ dispositivo (PC, telefono, tablet): la chiave non viaggia da sola tra un disposi
 ## Aggiornare il server
 Sul server, rilancia `bash prepara_server.sh`: scarica la versione nuova e riavvia i servizi.
 
+## Ingrandire il server (memoria e disco)
+La macchina gratuita AMD `VM.Standard.E2.1.Micro` ha **1 GB fisso**: non si allarga. Per avere più
+memoria si cambia forma (shape); il disco invece si allarga sulla stessa macchina.
+
+### Disco (gratis fino a 200 GB in tutto)
+1. Compute → Instances → `fbl-server` → **Boot volume** → clicca il volume → **Edit**.
+2. "Volume size": per esempio **100** GB → **Save changes**. Se Oracle mostra dei comandi
+   "rescan", copiali ed eseguili sul server.
+3. Sul server: `sudo reboot`, aspetta un minuto, rientra con `ssh` e controlla con `df -h /`.
+   Ubuntu allarga la partizione da solo all'avvio. Se `df -h /` mostra ancora la misura vecchia:
+   `lsblk` (per vedere il nome del disco, di solito `sda`), poi `sudo growpart /dev/sda 1` e
+   `sudo resize2fs /dev/sda1`.
+
+### Memoria: due strade
+- **Gratis: macchina ARM** `VM.Standard.A1.Flex` (fino a 4 OCPU e 24 GB nel piano gratuito).
+  Non si passa da AMD ad ARM con "Edit shape": si crea una **macchina nuova** (Ubuntu, ARM), si
+  lancia `prepara_server.sh`, si copia la cartella `/srv/fbl/dati` dalla vecchia e si aggiorna nell'app
+  il nome del server. **MT5 su ARM non gira.** Se dice "Out of capacity", vedi il punto 2.
+- **A pagamento: AMD più grande** sulla stessa macchina (resta tutto: dati, Tailscale, sessione).
+  Serve l'account **Pay As You Go** e, prima, un **budget con avviso** (Billing → Budgets).
+  Compute → Instances → `fbl-server` → **More actions → Edit** → **Edit shape** → AMD →
+  `VM.Standard.E4.Flex` (o E5) → scegli OCPU e memoria (per MT5 sotto Wine almeno 1 OCPU e
+  4–8 GB) → **Save**. La macchina si riavvia da sola; i servizi Docker ripartono da soli. Il costo
+  lo mostra Oracle nella stessa schermata: controllalo lì.
+  Se E4/E5 non compare nell'elenco, Oracle non permette il cambio da Micro su quella macchina:
+  serve una macchina nuova come per l'ARM.
+
 ## Sicurezza
 - Nessuna porta del server è aperta su internet per l'app: i servizi ascoltano solo in locale e
   arrivano ai tuoi dispositivi tramite Tailscale, con la chiave.
