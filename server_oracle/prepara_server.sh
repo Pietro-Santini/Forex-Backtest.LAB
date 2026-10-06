@@ -18,7 +18,13 @@ if [ "$(awk '/MemTotal/{print $2}' /proc/meminfo)" -lt 2000000 ] && ! swapon --s
 fi
 
 echo "== 1) Docker"
-command -v docker >/dev/null || { curl -fsSL https://get.docker.com | sudo sh; sudo usermod -aG docker "$USER"; }
+if ! command -v docker >/dev/null; then
+  # Il programma ufficiale di Docker a volte non riconosce subito l'Ubuntu appena uscito: in quel
+  # caso si usa Docker dei pacchetti Ubuntu (docker.io + compose v2).
+  curl -fsSL https://get.docker.com | sudo sh || { sudo apt-get update -q && sudo apt-get install -y -q docker.io docker-compose-v2; }
+  sudo usermod -aG docker "$USER"
+fi
+sudo docker compose version >/dev/null 2>&1 || sudo apt-get install -y -q docker-compose-v2
 
 echo "== 2) Tailscale"
 command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
