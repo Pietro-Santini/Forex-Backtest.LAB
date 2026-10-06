@@ -28,3 +28,5 @@
     premere Change image.
 12. **Ubuntu sì, ma 24.04.** Nell'elenco delle immagini Oracle c'è anche la 20.04 (fuori supporto,
     senza Docker): far controllare `lsb_release -d` appena dentro il server.
+13. **Prima di inventare una numerazione, guardare quella che c'è.** Le release del proprietario
+    erano già `v1.0.NN`: la mia `app-v86-setup-1.0.8` faceva sembrare il Setup più vecchio.

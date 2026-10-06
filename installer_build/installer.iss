@@ -15,7 +15,7 @@
 ; ============================================================================
 
 #define MyAppName "Forex Backtest LAB"
-#define MyAppVersion "1.0.8"
+#define MyAppVersion "1.0.73"
 #define MyAppPublisher "Pietro Santini"
 #define MyAppExeName "ForexBacktestLAB.exe"
 

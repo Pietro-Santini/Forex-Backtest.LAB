@@ -11,3 +11,5 @@ Formato: data — chi — cosa — esito collaudo — commit.
   consenso informato ai rischi prima di segnali e apertura dai segnali (app v86) — verde
 - 2026-10-06 — Claude — pacchetto server Oracle (ponte senza MT5 solo simulato, ponte segnali con
   dati nel volume, Docker, prepara_server.sh, guida); 6 test del server; collaudo GitHub con Docker
+- 2026-10-06 — Claude — PR #6 unita (sito su v86, prima release automatica); Setup 1.0.73 e
+  release con la numerazione v1.0.NN del proprietario — verde
