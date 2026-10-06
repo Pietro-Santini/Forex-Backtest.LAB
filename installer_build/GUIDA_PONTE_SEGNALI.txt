@@ -1,0 +1,241 @@
+FOREX BACKTEST LAB - PONTE DEI SEGNALI (Telegram + Syntra + sale segnali)
+Guida passo passo e soluzione di "Ponte non raggiungibile su 127.0.0.1:8769"
+Aggiornata: 4 ottobre 2026 (installer v71, app v84)
+==========================================================================
+
+COME E' FATTA LA CATENA (3 pezzi, tutti sul PC)
+------------------------------------------------
+1. L'APP (nel browser, sito o PWA).
+2. ForexBacktestLAB.exe  -> servizio locale, porta 8000. Parte da solo
+   all'accensione di Windows. E' LUI che avvia il ponte dei segnali quando
+   l'app glielo chiede ("Provo a riavviarlo...").
+3. SegnaliBridge.exe     -> il PONTE DEI SEGNALI, porta 8769. Nessuna
+   finestra. Si collega a Telegram (api_id e api_hash) e legge Syntra da
+   BlueStacks (via ADB).
+
+"Ponte non raggiungibile su 127.0.0.1:8769" vuol dire che il pezzo 3 non e'
+acceso. Se "Provo a riavviarlo" non porta a niente, il problema e' nel
+pezzo 2 (spento) oppure il pezzo 3 parte e si chiude subito.
+Dalla v68 (installer) il motivo si legge nell'app: Collegamento/Modalita' -> Sala
+segnali -> pulsante "Diario del ponte".
+
+
+PASSO 0 - AGGIORNARE IL PROGRAMMA SUL PC
+----------------------------------------
+Il lavoro si fa sempre nella TUA cartella "installer_build" (quella con
+dentro build_exe.bat, installer.iss e la sottocartella build). Il nome non
+cambia con le versioni: lo zip nuovo si estrae DENTRO questa cartella,
+sovrascrivendo i file (rispondi "Sostituisci i file nella destinazione").
+La sottocartella venv che c'e' gia' resta: non serve cancellarla.
+
+Come aprire il Prompt dei comandi GIA' nella cartella giusta (senza dover
+sapere il percorso):
+  1. Apri la cartella installer_build in Esplora file.
+  2. Clicca sulla barra dell'indirizzo in alto, cancella il testo, scrivi
+     cmd e premi Invio.
+  Si apre il Prompt dei comandi gia' posizionato li'.
+
+Poi scrivi:
+
+   build_exe.bat
+
+Alla fine in installer_build\dist ci sono ForexBacktestLAB.exe,
+Mt5FeedServer.exe e SegnaliBridge.exe, e il punto 4 deve scrivere
+"SegnaliBridge.exe: tutte le librerie presenti".
+Poi apri installer.iss con Inno Setup e premi Compila: trovi
+Output\ForexBacktestLAB_Setup.exe. Chiudi l'app, esegui il Setup
+(sovrascrive la versione vecchia), riavvia il PC (o riapri l'app).
+
+
+PASSO 1 - CONTROLLARE I DUE SERVIZI
+-----------------------------------
+Prompt dei comandi, da QUALUNQUE cartella:
+
+   curl http://127.0.0.1:8000/health
+   curl http://127.0.0.1:8769/health
+
+- 8000 risponde (testo che inizia con {) -> il servizio locale c'e'.
+- 8000 NON risponde ("Failed to connect") -> il servizio locale e' spento:
+  avvialo con doppio click su ForexBacktestLAB.exe nella cartella di
+  installazione (di solito C:\Program Files\Forex Backtest LAB), poi in
+  app premi "Ricontrolla".
+- 8769 risponde -> il ponte e' acceso: se l'app dice ancora "non
+  raggiungibile", controlla in app la porta (Sala segnali) e che il sito
+  sia aperto con http://127.0.0.1 o con l'indirizzo Tailscale giusto.
+
+Chi tiene occupata la porta 8769 (se il ponte "non parte" perche' ce n'e'
+gia' uno vecchio appeso):
+
+   netstat -ano | findstr :8769
+
+L'ultimo numero e' il PID. Per chiuderlo (metti il tuo numero):
+
+   taskkill /PID 12345 /F
+
+
+PASSO 2 - LEGGERE IL MOTIVO
+---------------------------
+In app: Collegamento/Modalita' -> Sala segnali -> "Diario del ponte".
+Oppure dal Prompt dei comandi:
+
+   type "%APPDATA%\ForexBacktestLAB\segnali\ponte_segnali.log"
+
+Le righe in fondo dicono cosa e' successo.
+
+
+PASSO 3 - AVVIARE IL PONTE A MANO PER VEDERE L'ERRORE IN DIRETTA
+----------------------------------------------------------------
+Se il diario non basta, avvia il ponte dai sorgenti (serve Python, che hai
+gia' per build_exe.bat). Apri il Prompt dei comandi nella cartella
+installer_build (vedi PASSO 0: barra dell'indirizzo, cmd, Invio) e scrivi:
+
+   cd build\segnali_telegram
+   pip install -r requirements.txt
+   python segnali_bridge.py
+
+La finestra resta aperta e scrive tutto. Errori tipici:
+- "la porta 8769 e' gia' occupata"  -> PASSO 1, netstat e taskkill.
+- "manca la libreria telethon"      -> pip install telethon
+- "No module named ..."             -> pip install -r requirements.txt
+- "api_id/api_hash mancanti"        -> in app: Sala segnali -> Prima
+                                      configurazione (my.telegram.org ->
+                                      API development tools).
+Attenzione: avviato cosi' il ponte usa configurazione e sessione della
+cartella dei sorgenti, non quelle del programma installato. Telegram ti
+chiedera' di nuovo il codice. Serve solo per la diagnosi: chiudi la
+finestra (Ctrl+C) e torna al ponte installato.
+
+Prova senza Telegram (verifica che il ponte in se' funzioni):
+
+   python segnali_bridge.py --sim
+
+e in un secondo Prompt dei comandi:
+
+   curl http://127.0.0.1:8769/health
+
+Deve rispondere "modalita":"simulatore".
+
+
+PASSO 4 - COLLEGARE TELEGRAM (prima volta o dopo un cambio di numero)
+--------------------------------------------------------------------
+1. my.telegram.org -> accedi col tuo numero -> API development tools ->
+   crea un'applicazione (nome qualsiasi) -> copia api_id e api_hash.
+2. App -> Collegamento/Modalita' -> Sala segnali -> scheda Telegram ->
+   "Prima configurazione": incolla api_id e api_hash -> Salva.
+3. Premi "Collegamento": l'app chiede numero (con +39) e il codice che
+   arriva su Telegram (ed eventualmente la password della verifica in due
+   passaggi). Il codice non viene mai salvato.
+4. Aggiungi le sale: t.me/nome, @nome o link di invito di un gruppo in cui
+   sei gia' dentro.
+Configurazione e sessione stanno sul PC in
+%APPDATA%\ForexBacktestLAB\segnali (se la cartella del programma non e'
+scrivibile) oppure accanto a SegnaliBridge.exe. Non vanno mai online.
+
+
+PASSO 5 - COLLEGARE SYNTRA
+--------------------------
+1. BlueStacks 5 installato, Syntra installata e con accesso fatto.
+2. BlueStacks -> Impostazioni -> Avanzate -> "Android Debug Bridge (ADB)"
+   ACCESO. Annota l'indirizzo (di solito 127.0.0.1:5555).
+3. adb: NON serve scaricarlo. Il ponte usa quello che BlueStacks 5 ha gia'
+   (HD-Adb.exe, nella cartella di BlueStacks). Solo se Syntra non si collega
+   puoi indicarne uno a mano nel campo adb.exe dell'app.
+4. App -> Sala segnali -> scheda Syntra: Indirizzo ADB 127.0.0.1:5555,
+   campo adb.exe vuoto, Salva, poi spunta "Leggi le
+   operazioni condivise su Syntra". Con "Apri da solo BlueStacks e
+   Syntra" il ponte avvia BlueStacks se e' chiuso.
+5. Gli utenti compaiono nell'elenco Syntra: diventano sale solo se li
+   aggiungi tu (anche a mano, col campo "nome utente").
+Syntra funziona solo se il PONTE e' acceso (PASSO 1): e' lui che la legge.
+
+
+PROBLEMI GIA' INCONTRATI E SOLUZIONE
+------------------------------------
+D: Deve funzionare per gli altri utenti senza problemi dopo il Setup.
+R: Cosa fa il Setup dalla v71, sul PC di un utente qualunque (senza Python):
+   - installa i tre programmi, che contengono gia' tutte le librerie;
+   - prima di installare CHIUDE quelli vecchi in esecuzione (prima restava
+     il ponte vecchio se si premeva "ignora");
+   - li avvia da solo e li rimette in avvio automatico con Windows;
+   - Syntra usa l'adb di BlueStacks: niente da scaricare.
+   Cosa resta da fare all'utente, e non si puo' togliere:
+   - Windows SmartScreen/antivirus possono avvisare al primo avvio (il
+     programma non ha una firma digitale a pagamento): "Ulteriori
+     informazioni" -> "Esegui comunque";
+   - il browser chiede "Accesso alla rete locale": premere Consenti;
+   - Telegram: api_id e api_hash da my.telegram.org, poi numero e codice;
+   - Syntra: BlueStacks 5 con ADB acceso (Impostazioni -> Avanzate).
+
+D: I curl rispondono, il ponte e' "collegato" a Telegram, il permesso del
+   browser e' "granted", ma l'app dice "Ponte non raggiungibile su
+   127.0.0.1:8769" e nella Console del browser compare
+   "WebSocket connection to 'ws://127.0.0.1:8769/ws/segnali' failed"
+   (codice 1006).
+R: Era un errore nel ponte delle versioni v67, v68 e v69: il canale
+   WebSocket dell'app (/ws/segnali) era agganciato alla funzione sbagliata e
+   ogni collegamento veniva rifiutato (403), mentre /health rispondeva.
+   Corretto nella v70: ricostruisci l'installer (PASSO 0) e reinstalla.
+   Il collaudo di build_exe.bat (punto 4) ora controlla anche questo canale.
+   Prova in Console dopo l'aggiornamento:
+      var w=new WebSocket('ws://127.0.0.1:8769/ws/segnali'); w.onopen=()=>console.log('WS OK')
+   Deve scrivere WS OK.
+
+D: Il collegamento non andava perche' mancavano le librerie (pip install).
+   Gli altri utenti avranno lo stesso problema?
+R: No, dalla v69. Gli utenti NON installano librerie: il Setup installa
+   SegnaliBridge.exe, che le contiene gia' tutte (telethon, fastapi,
+   uvicorn, websockets). Il problema nasceva cosi': il Setup si poteva
+   creare anche SENZA SegnaliBridge.exe e allora il programma ripiegava sui
+   sorgenti .py con il Python del PC, senza librerie.
+   Dalla v69:
+   - installer.iss si rifiuta di creare il Setup se manca
+     SegnaliBridge.exe o Mt5FeedServer.exe;
+   - build_exe.bat collauda SegnaliBridge.exe (punto 4) e si ferma se
+     manca una libreria, scrivendo quale in collaudo_ponte.txt;
+   - avviando i sorgenti (avvia_segnali.bat, o il ripiego automatico) le
+     librerie mancanti si installano da sole con pip (serve internet).
+   Per installarle a mano sul TUO PC (solo per usare i sorgenti):
+      (Prompt dei comandi aperto in installer_build, vedi PASSO 0)
+      cd build\segnali_telegram
+      python -m pip install -r requirements.txt
+
+D: I due curl (8000 e 8769) rispondono, ma l'app dice "servizio locale sulla
+   porta 8000 non risponde" / "ponte non raggiungibile".
+R: I servizi sono accesi: e' il BROWSER che blocca le chiamate dal sito
+   verso il PC. Chrome ed Edge chiedono il permesso "Accesso alla rete
+   locale" (o "App e servizi su questo dispositivo"); se e' stato negato o
+   la richiesta e' stata chiusa, ogni chiamata a 127.0.0.1 fallisce.
+   1. Sul sito dell'app clicca l'icona a sinistra dell'indirizzo ->
+      Impostazioni sito -> "Accesso alla rete locale" -> Consenti.
+      Ricarica la pagina.
+   2. Se la voce non c'e' o la richiesta non compare: stessa schermata ->
+      "Reimposta autorizzazioni", ricarica e premi Consenti quando compare.
+   3. Blocchi pubblicita' (uBlock Origin e simili): disattivali per il sito
+      dell'app, alcuni filtri bloccano le chiamate dei siti verso il PC.
+   4. Ultima strada (solo sul tuo browser): scrivi chrome://flags (o
+      edge://flags), cerca "Local Network Access Checks", metti Disabled,
+      premi Relaunch.
+   Prova che toglie ogni dubbio: apri in una scheda
+   http://127.0.0.1:8000/health (deve rispondere), poi sul sito dell'app
+   premi F12 -> Console e scrivi:
+      fetch('http://127.0.0.1:8000/health').then(r=>r.text()).then(console.log)
+   Se nella Console compare un errore, il blocco e' nel browser.
+   Dalla v83 l'app riconosce questo caso e lo scrive nel messaggio.
+   Se usi telefono o tablet: 127.0.0.1 e' il telefono stesso, serve
+   l'indirizzo Tailscale del PC (Accesso da altri dispositivi).
+
+D: L'app dice "Ponte non raggiungibile su 127.0.0.1:8769. Provo a
+   riavviarlo..." e non succede nulla.
+R: Il ponte non e' acceso e l'app non e' riuscita ad avviarlo. PASSO 1
+   (8000 acceso?), poi PASSO 2 (diario). Dalla v68 (installer) l'app scrive anche il
+   motivo accanto al messaggio.
+
+D: Ho aggiornato i file del ponte ma si comporta come prima.
+R: Un ponte vecchio e' rimasto acceso sulla porta 8769: netstat -ano |
+   findstr :8769 e taskkill /PID numero /F, poi in app "Ricontrolla".
+   Dopo ogni aggiornamento dei .py serve ricostruire l'installer (PASSO 0).
+
+D: Il ponte va solo se il PC e' acceso?
+R: Si'. Per H24 serve un PC (o mini PC) sempre acceso o un server; la
+   cronologia Telegram si recupera comunque alla riaccensione, i segnali
+   Syntra persi a PC spento no.

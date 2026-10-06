@@ -1,0 +1,46 @@
+# Strix: agenti AI che cercano vulnerabilita' nel progetto (https://github.com/usestrix/strix).
+# Si lancia SOLO A MANO (Actions -> Strix sicurezza -> Run workflow): ogni giro consuma token del
+# modello AI scelto. Servono due segreti del repository (Settings -> Secrets and variables ->
+# Actions): STRIX_LLM (es. "anthropic/<modello>") e LLM_API_KEY (la chiave di quel fornitore).
+# OmniRoute sul PC di casa da qui NON si raggiunge: per usarlo c'e' laboratorio/pc/strix_con_omniroute.bat.
+name: Strix sicurezza
+
+on:
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: "quick (veloce) o deep (approfondito, costa di piu')"
+        default: quick
+
+jobs:
+  strix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Controllo segreti
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "$STRIX_LLM" ] || [ -z "$LLM_API_KEY" ]; then
+            echo "Mancano i segreti STRIX_LLM e LLM_API_KEY: vedi il commento in cima a questo file."; exit 1; fi
+      - name: Installa Strix
+        run: curl -sSL https://strix.ai/install | bash
+      - name: Scansione
+        env:
+          STRIX_LLM: ${{ secrets.STRIX_LLM }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          strix -n -t ./ --scan-mode "${{ inputs.modo }}" --instruction "Progetto: app di trading (app.html) e ponte locale Python (installer_build/build). Priorita': XSS da testo esterno (messaggi delle sale segnali), endpoint del ponte senza autenticazione, fughe di chiavi API, esecuzione di ordini non voluti. Non contattare servizi esterni reali." 2>&1 | tee strix_rapporto.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: strix-rapporto
+          path: |
+            strix_rapporto.txt
+            strix_runs/
+          retention-days: 30

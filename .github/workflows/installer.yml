@@ -1,0 +1,107 @@
+# Costruisce il Setup di Forex Backtest LAB su un PC Windows di GitHub: nessun PC di casa serve.
+# Il risultato (ForexBacktestLAB_Setup.exe) si scarica dalla pagina Actions -> questa esecuzione ->
+# "Artifacts". Parte da solo quando cambiano i sorgenti dell'installer o l'app, oppure a mano
+# (Actions -> Installer Windows -> Run workflow).
+name: Installer Windows
+
+on:
+  workflow_dispatch:
+    inputs:
+      pubblica:
+        description: "Crea anche la release su GitHub (si')"
+        type: boolean
+        default: false
+  push:
+    paths:
+      - "installer_build/**"
+      - "app.html"
+      - "sw.js"
+      - ".github/workflows/installer.yml"
+
+jobs:
+  setup:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # build_exe.bat e' lo stesso script che si lancia a mano sul PC. "< NUL" fa passare i "pause".
+      - name: Exe con PyInstaller (build_exe.bat)
+        shell: cmd
+        run: |
+          call installer_build\build_exe.bat < NUL
+          if not exist installer_build\dist\ForexBacktestLAB.exe exit /b 1
+          if not exist installer_build\dist\Mt5FeedServer.exe exit /b 1
+          if not exist installer_build\dist\SegnaliBridge.exe exit /b 1
+
+      - name: Collaudo librerie del ponte segnali
+        if: always()
+        shell: cmd
+        run: if exist installer_build\collaudo_ponte.txt type installer_build\collaudo_ponte.txt
+
+      - name: Setup con Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc installer_build\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ForexBacktestLAB_Setup
+          path: installer_build/Output/ForexBacktestLAB_Setup.exe
+          retention-days: 30
+
+  # Release automatica: per ogni versione arrivata su main (o a mano con "pubblica"). Nome dalla
+  # versione dell'app (CACHE_NAME di sw.js) e del Setup (installer.iss); allegati: il Setup e lo zip
+  # dei sorgenti dell'installer; descrizione scritta da sola con commit e file aggiunti/cambiati/tolti
+  # rispetto alla release precedente.
+  release:
+    needs: setup
+    if: github.ref == 'refs/heads/main' || inputs.pubblica
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: ForexBacktestLAB_Setup
+          path: uscita
+      - name: Nome, note e allegati
+        id: info
+        run: |
+          APP=$(grep -o 'forex-backtest-lab-v[0-9]*' sw.js | head -1 | sed 's/.*-//')
+          SETUP=$(grep -o 'MyAppVersion "[^"]*"' installer_build/installer.iss | cut -d'"' -f2)
+          TAG="app-${APP}-setup-${SETUP}"
+          git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && TAG="${TAG}-${GITHUB_RUN_NUMBER}"
+          PREC=$(git describe --tags --abbrev=0 --match 'app-v*' 2>/dev/null || true)
+          RANGE=${PREC:+$PREC..}HEAD
+          {
+            echo "## Forex Backtest LAB — app ${APP}, Setup ${SETUP}"
+            echo
+            echo "Scarica **ForexBacktestLAB_Setup.exe** qui sotto e installalo: il Setup chiude da solo i programmi vecchi."
+            echo "Windows può avvisare (SmartScreen) perché il programma non è firmato: \"Ulteriori informazioni\" → \"Esegui comunque\"."
+            echo
+            echo "### Cosa è cambiato${PREC:+ rispetto a $PREC}"
+            git log --no-merges --pretty='- %s' $RANGE | head -60
+            echo
+            echo "### File"
+            git diff --name-status ${PREC:-$(git rev-list --max-parents=0 HEAD | tail -1)} HEAD | awk '{ s=$1; f=$NF; if(s~/^A/)a=a"- ➕ "f"\n"; else if(s~/^D/)d=d"- ➖ "f"\n"; else m=m"- ✏️ "f"\n" } END{ printf "**Aggiunti**\n%s\n**Cambiati**\n%s\n**Tolti**\n%s", (a?a:"- nessuno\n"), (m?m:"- nessuno\n"), (d?d:"- nessuno\n") }' | head -120
+          } > note.md
+          cd installer_build && zip -qr ../uscita/installer_build_sorgenti.zip . -x 'venv/*' 'dist/*' 'Output/*' && cd ..
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "titolo=Forex Backtest LAB — app ${APP} · Setup ${SETUP}" >> "$GITHUB_OUTPUT"
+      - name: Crea la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.info.outputs.tag }}" uscita/ForexBacktestLAB_Setup.exe uscita/installer_build_sorgenti.zip \
+            --target "$GITHUB_SHA" --title "${{ steps.info.outputs.titolo }}" --notes-file note.md

@@ -5004,8 +5004,9 @@ const GRAFICO_LS={
  fb_tg_auto:v=>{ try{ tgAutoFx=tgAutoDaSalvato(JSON.parse(v)||{}); if(tgAutoFamUi!=='cr')tgAuto=tgAutoFx; }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
  fb_tg_auto_cripto:v=>{ try{ tgAutoCr=tgAutoDaSalvato(JSON.parse(v)||{}); if(tgAutoFamUi==='cr')tgAuto=tgAutoCr; }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
  fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
- fb_tg_attivo:v=>{ try{ if(v==='1'){ tgAggiornaInterruttore(); tgCollega(); } else { tgScollega(); tgAggiornaInterruttore(); } }catch(e){} },
+ fb_tg_attivo:v=>{ try{ if(v==='1'){ tgAggiornaInterruttore(); if(consensoValido('segnali'))tgCollega(); } else { tgScollega(); tgAggiornaInterruttore(); } }catch(e){} },
  fb_tg_rischio_totale:null,
+ fbl_consensi_rischi:null,
  fbl_registrazione_on:()=>{ try{ if($('fblRegAttiva'))$('fblRegAttiva').checked=fblRegAttivaNow(); registratoreSincronizza(true).then(()=>registratoreDisegna()); }catch(e){} },
  fbl_etichette_tpsl:()=>{ try{ fblEtichetteTpSlUi(); draw(); }catch(e){} },
  fbl_griglia_visibile:()=>{ try{ updateGridVisibleBtn(); draw(); }catch(e){} },
@@ -22594,9 +22595,76 @@ let tgWs=null, tgWsPorta=null, tgUltimoId=0, tgRiconnT=null;
 // da "non me l'hai ancora chiesto". Solo nel terzo caso l'app chiede qualcosa (vedi la domanda
 // dopo il collegamento a MT5); una volta risposto non si ripresenta piu'.
 const TG_ATTIVO_KEY='fb_tg_attivo';
+
+// ===================== CONSENSO INFORMATO AI RISCHI (segnali e apertura dai segnali) =====================
+// RICHIESTO: "prima di attivare l'acquisizione dei segnali e la modalita' prendi il segnale e apri,
+// avvertenze e un pulsante con cui il cliente dichiara di conoscere il rischio". Due livelli:
+//  - 'segnali'    : ricevere e vedere i segnali delle sale;
+//  - 'esecuzione' : aprire posizioni dai segnali, a mano o in automatico.
+// Ogni casella va spuntata. Il consenso si registra con data, versione del testo e dispositivo, in
+// locale e sull'account (voce sincronizzata fbl_consensi_rischi). Cambia il testo -> cambia la
+// versione -> il consenso va ridato. TESTO DA FAR VERIFICARE AL LEGALE: non sostituisce le
+// autorizzazioni eventualmente richieste per il servizio.
+const CONSENSO_VERSIONE='2026-10-06';
+const CONSENSO_KEY='fbl_consensi_rischi';
+const CONSENSO_TESTI={
+ segnali:{titolo:'⚠️ Prima di ricevere i segnali',voci:[
+  'I segnali arrivano da sale e utenti <b>terzi</b>: non sono prodotti da questa app né da chi l\'ha sviluppata. L\'app li legge e li mostra, ma <b>non li verifica e non li garantisce</b>.',
+  'I segnali <b>non sono consulenza finanziaria</b> né raccomandazioni personalizzate per la mia situazione.',
+  'Il trading con la leva (forex, CFD, cripto) ha un <b>rischio elevato</b>: posso perdere rapidamente denaro, fino all\'intero capitale.',
+  'Ho letto le pagine <a href="rischi-finanziari.html" target="_blank" rel="noopener">Rischi finanziari</a> e <a href="termini.html" target="_blank" rel="noopener">Termini di servizio</a>.'
+ ]},
+ esecuzione:{titolo:'⚠️ Prima di aprire posizioni dai segnali',voci:[
+  'Ogni posizione aperta da un segnale, <b>a mano o in automatico</b>, è aperta sul <b>mio conto</b>, per <b>mia scelta</b> e sotto la <b>mia esclusiva responsabilità</b>.',
+  'Possono succedere errori che non dipendono da me: messaggio letto male, ritardi, prezzi diversi da quelli del segnale, programma sul PC spento, connessione o broker non disponibili. Posso perdere <b>più di quanto avevo previsto</b>.',
+  '<b>Nessuno mi promette o garantisce guadagni.</b> I risultati passati di una sala non dicono nulla su quelli futuri.',
+  'So che conviene provare prima sul <b>conto simulato o demo</b>, e che posso spegnere l\'apertura automatica in qualunque momento.',
+  'In apertura automatica gli ordini partono <b>senza che io li veda prima</b>: i freni (tetti, stop della perdita giornaliera) riducono il rischio ma non lo eliminano.',
+  'Approvo specificamente le clausole sulla <b>limitazione di responsabilità</b> dei <a href="termini.html#responsabilita" target="_blank" rel="noopener">Termini di servizio</a> e della pagina <a href="rischi-finanziari.html#responsabilita-utente" target="_blank" rel="noopener">Rischi finanziari</a>.'
+ ]}
+};
+function consensiLeggi(){ try{ return JSON.parse(localStorage.getItem(CONSENSO_KEY)||'{}')||{}; }catch(e){ return {}; } }
+function consensoValido(tipo){ const c=consensiLeggi()[tipo]; return !!(c&&c.versione===CONSENSO_VERSIONE&&c.accettato); }
+function consensoRegistra(tipo){
+ const tutti=consensiLeggi();
+ tutti[tipo]={accettato:true,versione:CONSENSO_VERSIONE,il:new Date().toISOString(),voci:CONSENSO_TESTI[tipo].voci.length,
+  dispositivo:String(navigator.userAgent||'').slice(0,160)};
+ try{ localStorage.setItem(CONSENSO_KEY,JSON.stringify(tutti)); }catch(e){}
+ // Sull'account subito: la scansione periodica, la prima volta che una voce compare, la registra
+ // soltanto senza mandarla.
+ try{ if(graficoAttivo){ const k='ls|'+CONSENSO_KEY; graficoVisto[k]=graficoJson(JSON.stringify(tutti)); graficoT[k]=Math.max(Date.now(),(graficoT[k]||0)+1); graficoSalvaT(); graficoDaInviare.add(k); graficoProgrammaInvio(); } }catch(e){}
+}
+// Mostra le avvertenze e risolve true solo se TUTTE le caselle sono spuntate e si preme Accetto.
+// 'esecuzione' richiede anche il consenso 'segnali' (lo chiede prima, se manca).
+async function consensoRischi(tipo){
+ if(tipo==='esecuzione'&&!consensoValido('segnali')&&!(await consensoRischi('segnali')))return false;
+ if(consensoValido(tipo))return true;
+ const T=CONSENSO_TESTI[tipo];
+ return await new Promise(risolvi=>{
+  const ov=document.createElement('div'); ov.id='fblConsensoOverlay';
+  ov.style.cssText='position:fixed;inset:0;z-index:2147483000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+  const box=document.createElement('div');
+  box.style.cssText='background:#10161d;color:#e8edf3;border:1px solid #2b3541;border-radius:12px;max-width:620px;width:100%;max-height:92vh;overflow:auto;padding:18px 18px 14px;box-sizing:border-box;font-size:14px;line-height:1.45';
+  box.innerHTML='<div style="font-size:18px;font-weight:800;margin-bottom:6px">'+T.titolo+'</div>'
+   +'<div style="color:#9aa7b8;margin-bottom:12px">Leggi e spunta ogni punto. Senza tutte le spunte la funzione resta spenta.</div>'
+   +T.voci.map((v,i)=>'<label style="display:flex;gap:10px;align-items:flex-start;margin:0 0 10px;cursor:pointer"><input type="checkbox" data-consenso="'+i+'" style="width:18px;height:18px;flex:0 0 auto;margin-top:2px;accent-color:#3ea6ff"><span>'+v+'</span></label>').join('')
+   +'<div style="color:#7f8b99;font-size:12px;margin:6px 0 12px">Il consenso viene registrato con data e versione del testo ('+CONSENSO_VERSIONE+') su questo dispositivo e sul tuo account.</div>'
+   +'<div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap"><button type="button" data-azione="no" style="padding:9px 16px;border-radius:8px;border:1px solid #3a4757;background:transparent;color:#e8edf3;cursor:pointer">Non accetto</button>'
+   +'<button type="button" data-azione="si" disabled style="padding:9px 16px;border-radius:8px;border:none;background:#1f7a52;color:#fff;font-weight:800;cursor:pointer;opacity:.45">Ho letto e accetto</button></div>';
+  box.querySelectorAll('a').forEach(a=>{ a.style.color='#3ea6ff'; a.style.textDecoration='underline'; });
+  ov.appendChild(box); document.body.appendChild(ov);
+  const si=box.querySelector('[data-azione="si"]'), caselle=[...box.querySelectorAll('[data-consenso]')];
+  const aggiorna=()=>{ const tutte=caselle.every(c=>c.checked); si.disabled=!tutte; si.style.opacity=tutte?'1':'.45'; };
+  caselle.forEach(c=>c.addEventListener('change',aggiorna));
+  const fine=v=>{ ov.remove(); risolvi(v); };
+  box.querySelector('[data-azione="no"]').addEventListener('click',()=>fine(false));
+  si.addEventListener('click',()=>{ if(!caselle.every(c=>c.checked))return; consensoRegistra(tipo); fine(true); });
+ });
+}
 function tgAttivo(){ try{ return localStorage.getItem(TG_ATTIVO_KEY)==='1'; }catch(e){ return false; } }
 function tgGiaDeciso(){ try{ return localStorage.getItem(TG_ATTIVO_KEY)!=null; }catch(e){ return false; } }
 async function tgImpostaAttivo(acceso){
+ if(acceso&&!(await consensoRischi('segnali'))){ tgAggiornaInterruttore(); tgStato('Collegamento non acceso: senza il consenso ai rischi i segnali non si ricevono.','err'); return; }
  try{ localStorage.setItem(TG_ATTIVO_KEY,acceso?'1':'0'); }catch(e){}
  if(acceso){
   tgAggiornaInterruttore();
@@ -24066,6 +24134,7 @@ $('tgConfigApri')?.addEventListener('click',async ()=>{
    ? {pct:Number(tgCfg.avvicinamento.pct)} : null;
  const piano=tgCfgPiano();
  tgChiudiConfigurazione();      // il popup si chiude: da qui in poi comanda la conferma
+ if(!(await consensoRischi('esecuzione'))){ $('status').textContent='Posizione non aperta: serve il consenso ai rischi dell\'apertura dai segnali.'; return; }
  await tgEseguiSegnale(dati.voce,{sym:dati.sym,piano,regole,avvicinamento});
 });
 
@@ -24765,6 +24834,7 @@ $('tgAutoOverlay')?.addEventListener('mousedown',ev=>{ if(ev.target===$('tgAutoO
 $('tgAutoAttivo')?.addEventListener('change',async ()=>{
  const A=tgAuto;   // la scheda (Forex o Cripto) su cui si e' cliccato, anche se la conferma tarda
  const acceso=!!$('tgAutoAttivo').checked;
+ if(acceso&&!(await consensoRischi('esecuzione'))){ $('tgAutoAttivo').checked=false; return; }
  if(acceso){
   // Una conferma esplicita prima di accendere: da qui in poi degli ordini veri partono senza che
   // nessuno li guardi, ed e' giusto che questo passaggio costi un clic in piu'.
@@ -24898,6 +24968,9 @@ async function tgAutoValuta(voce,conto){
   }
   return;
  }
+ // Senza il consenso ai rischi dell'apertura dai segnali non si apre nulla (neanche se l'apertura
+ // automatica e' arrivata accesa da un altro dispositivo), e il segnale non si prenota.
+ if(!consensoValido('esecuzione')){ voce.autoMotivo='manca il consenso ai rischi dell\'apertura dai segnali (riaccendi l\'apertura automatica e accetta le avvertenze)'; try{ tgRenderPannello(); }catch(e){} return; }
  // Con la configurazione condivisa, PC, tablet e telefono hanno tutti l'apertura automatica accesa:
  // senza questo controllo ognuno aprirebbe le SUE posizioni sullo stesso conto (doppie).
  if(!await tgRivendicaSegnale(voce)){
