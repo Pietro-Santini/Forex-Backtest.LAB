@@ -15,7 +15,8 @@ schermata è diversa da come è scritto qui, segui quella di Oracle.
 ## 2. La macchina
 1. Menu → Compute → Instances → **Create instance**.
 2. Nome: `fbl-server`.
-3. Image: **Ubuntu** (24.04).
+3. Image: premi **Change image** → **Ubuntu** → **Canonical Ubuntu 24.04** (la predefinita è
+   Oracle Linux: con quella lo script non funziona).
 4. Shape: **Ampere** → `VM.Standard.A1.Flex`, 2 OCPU e 12 GB di memoria (dentro il gratuito).
 5. Networking: lascia quello proposto, con indirizzo IP pubblico.
 6. SSH keys: **Generate a key pair for me** → scarica **la chiave privata** e tienila al sicuro
@@ -65,6 +66,14 @@ icacls nome-della-chiave.key /inheritance:r
 icacls nome-della-chiave.key /grant:r "%USERNAME%:R"
 ```
 e rilancia il comando `ssh`. Quando vedi `ubuntu@fbl-server:~$` sei dentro il server.
+
+Se risponde **"Permission denied (publickey,gssapi-keyex,gssapi-with-mic)"**:
+- probabilmente la macchina è **Oracle Linux** e non Ubuntu (l'immagine predefinita): prova
+  `ssh -i nome-della-chiave.key opc@INDIRIZZO-IP-PUBBLICO`. Se entra, ricrea la macchina con
+  **Change image → Ubuntu 24.04** (la guida e lo script sono per Ubuntu): Terminate, poi Create.
+- se non entra nemmeno `opc`, la chiave non è quella di questa macchina: serve il file `.key`
+  (non `.key.pub`) scaricato quando hai creato **questa** istanza.
+- macchina ricreata con lo stesso IP: prima dell'ssh, `ssh-keygen -R INDIRIZZO-IP-PUBBLICO`.
 
 ## 4. Preparare tutto (sul server)
 Una riga alla volta:
