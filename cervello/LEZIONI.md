@@ -21,3 +21,5 @@
    prezzi veri appena creato: nel contenitore Kraken non si raggiunge, su GitHub sì, e il prezzo
    reale faceva scattare i TP finti. Ora `laboratorio/ponte/_percorsi.py` blocca ogni connessione
    non locale. Un test non deve mai dipendere da internet.
+10. **Oracle gratuito: "Out of capacity" sulla ARM è normale.** Non insistere a vuoto: forma più
+    piccola, altro availability domain, oppure la AMD Micro gratuita (con swap) per partire subito.

@@ -9,6 +9,14 @@ RAMO="${FBL_RAMO:-main}"
 DIR=/srv/fbl/progetto
 DATI=/srv/fbl/dati
 
+echo "== 0) Memoria"
+# Macchina piccola (es. la AMD gratuita da 1 GB): 2 GB di swap, altrimenti Docker e i due servizi
+# rischiano di restare senza memoria durante l'installazione.
+if [ "$(awk '/MemTotal/{print $2}' /proc/meminfo)" -lt 2000000 ] && ! swapon --show | grep -q .; then
+  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile >/dev/null && sudo swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+fi
+
 echo "== 1) Docker"
 command -v docker >/dev/null || { curl -fsSL https://get.docker.com | sudo sh; sudo usermod -aG docker "$USER"; }
 

@@ -22,8 +22,17 @@ schermata è diversa da come è scritto qui, segui quella di Oracle.
    (è la chiave del server: non va mandata a nessuno).
 7. Create. Dopo un paio di minuti lo stato è "Running": annota il **Public IP address**.
 
-Se compare "Out of capacity", riprova più tardi o in un altro "availability domain": succede con le
-macchine gratuite.
+### Se compare "Out of capacity for shape VM.Standard.A1.Flex"
+Le macchine ARM gratuite sono esaurite in quella zona: capita spesso. In ordine:
+1. **Più piccola:** 1 OCPU e 6 GB (bastano per questo server) e riprova.
+2. **Altro availability domain:** se la regione ne ha più di uno (AD-1, AD-2, AD-3), prova gli
+   altri. Milano ne ha uno solo; Francoforte tre.
+3. **Piano B, subito:** la macchina **AMD gratuita** `VM.Standard.E2.1.Micro` (1 OCPU, 1 GB) di
+   solito è disponibile. Per questo server basta: lo script aggiunge da solo 2 GB di swap. Più
+   avanti si può passare alla ARM senza perdere niente (si rilancia lo script sulla nuova).
+4. **Pay As You Go:** passare l'account a pagamento a consumo sblocca spesso la capacità ARM; le
+   risorse Always Free restano gratuite. Prima imposta un **budget con avviso a 1 €**
+   (Billing → Budgets) per non avere sorprese.
 
 ## 3. Entrare nel server (dal PC Windows)
 Nel Prompt dei comandi, dalla cartella dove hai salvato la chiave (es. `Download`):
