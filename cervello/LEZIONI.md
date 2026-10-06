@@ -26,3 +26,5 @@
 11. **Oracle: l'immagine predefinita è Oracle Linux, non Ubuntu.** Utente `opc`, non `ubuntu`;
     "Permission denied (publickey,gssapi-...)" con `ubuntu@` è il segnale. La guida ora dice di
     premere Change image.
+12. **Ubuntu sì, ma 24.04.** Nell'elenco delle immagini Oracle c'è anche la 20.04 (fuori supporto,
+    senza Docker): far controllare `lsb_release -d` appena dentro il server.

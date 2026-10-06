@@ -17,6 +17,8 @@ schermata è diversa da come è scritto qui, segui quella di Oracle.
 2. Nome: `fbl-server`.
 3. Image: premi **Change image** → **Ubuntu** → **Canonical Ubuntu 24.04** (la predefinita è
    Oracle Linux: con quella lo script non funziona).
+   Nell'elenco delle versioni scegli proprio **24.04**: la 20.04 non riceve più aggiornamenti di
+   sicurezza gratuiti e Docker non la supporta più. Una volta dentro, `lsb_release -d` deve dire 24.04.
 4. Shape: **Ampere** → `VM.Standard.A1.Flex`, 2 OCPU e 12 GB di memoria (dentro il gratuito).
 5. Networking: lascia quello proposto, con indirizzo IP pubblico.
 6. SSH keys: **Generate a key pair for me** → scarica **la chiave privata** e tienila al sicuro
