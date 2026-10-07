@@ -54,3 +54,24 @@ I costi e i limiti del piano gratuito Oracle vanno verificati sul conto Oracle d
 - Micro AMD = 1 GB fisso. ARM gratuita = tanta memoria ma **niente MT5**. AMD Flex = MT5 sotto
   Wine provabile, ma a pagamento. Passaggi in `server_oracle/GUIDA_SERVER_ORACLE.md`.
 - La decisione su MT5 (strada e conto demo/reale) è stata rimandata dal proprietario.
+
+## Porta unica (7 ottobre 2026)
+
+Deciso dal proprietario: dal telefono si scrive **solo** il nome e la chiave del **server**, mai
+piu' quelli del computer. MT5 pero' gira sul PC e sul server non ci sara' mai (la libreria
+MetaTrader5 esiste solo per Windows), quindi il **PC si presenta al server**:
+
+- `POST /registra-al-server` sul PC (solo da 127.0.0.1): legge il proprio nome Tailscale e la
+  propria chiave e li manda al server. Niente di nuovo da scrivere a mano.
+- `POST /pc/registra` sul server: salva `{host, chiave}` in `/dati/pc.json`. Sopravvive al
+  riavvio del contenitore.
+- `GET /pc` e `GET /health` dicono se un computer e' registrato. **La chiave del PC non esce dal
+  server**: al telefono non serve.
+- `/pc/<percorso>` sul server gira la richiesta al PC con la sua chiave: e' la strada che funziona
+  anche quando il telefono il PC non lo vede da solo.
+
+Scelte fatte entrambe, come chiesto: il telefono puo' andare **diretto** al PC (piu' veloce,
+indirizzo chiesto al server) **oppure** passare dal server. In nessuno dei due casi si scrive
+niente a mano.
+
+Prove: `laboratorio/ponte/test_porta_unica.py` (5).
