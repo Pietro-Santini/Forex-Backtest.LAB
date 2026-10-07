@@ -13,6 +13,19 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Le barre dei grafici disegnate SOPRA i nomi** (profitto per strategia, per sala, per asset) —
+  risolto app v97 — `graficoOrizz` disegnava le barre negative normali e le ribaltava con un
+  `transform` SVG (`translate(...) scale(-1,1)`). Ma l'animazione CSS `fsGrowX` scrive anch'essa
+  sul transform e lo SOSTITUISCE: finita l'animazione la barra perdeva spostamento e ribaltamento
+  e ricompariva nell'angolo in alto a sinistra, sopra il nome della prima riga. Si vedeva solo con
+  valori negativi e carta stretta. Ora le barre negative si disegnano alle coordinate vere
+  (`hbarPath(...,sinistra)`), senza nessun transform.
+  Test: `laboratorio/app/grafici_statistiche.test.mjs` (3, 5 rossi prima).
+- **«Accesso a Telegram interrotto, premi di nuovo Collegamento»** — migliorato app v97 — il
+  comportamento era gia' giusto (col numero salvato si rimanda il codice; senza, si richiede prima
+  il numero) ma non lo diceva, e restava una richiesta a meta' in sospeso. Ora il messaggio dice
+  cosa accadra' al prossimo tentativo e lo stato si azzera.
+  Test: `laboratorio/ponte/test_accesso_interrotto.py` (3).
 - **Trade Journal di Kraken vuoto per le chiusure avvenute a app chiusa** — risolto app v94 — le
   righe le scriveva l'app nel momento della chiusura (`krakenRegistraChiusura`). Con il server
   sempre acceso le posizioni si chiudono anche a app chiusa - cioe' proprio il caso per cui il

@@ -623,6 +623,16 @@ async def sorgente_telegram() -> None:
         # Numero gia' salvato su QUESTO dispositivo: non lo si richiede ad ogni accesso. Resta nel
         # file locale, come tutto il resto.
         telefono_salvato = _telefono_valido(cfg.get("telefono"))
+
+        def _cosa_succede_dopo() -> str:
+            """Cosa accadra' premendo di nuovo Collegamento. Dirlo toglie l'unica cosa che rende
+            fastidioso un accesso non riuscito: non sapere se bisognera' riscrivere il numero."""
+            if telefono_salvato:
+                return ("Il tuo numero e' gia' salvato su questo dispositivo: premendo di nuovo "
+                        "Collegamento ti rimando subito il codice su Telegram e si riapre la "
+                        "finestra per scriverlo.")
+            return ("Premendo di nuovo Collegamento ti chiedo prima il numero di telefono, "
+                    "poi il codice che Telegram ti manda.")
         for tentativo in range(5):
             if telefono_salvato and tentativo == 0:
                 grezzo = telefono_salvato
@@ -630,8 +640,10 @@ async def sorgente_telegram() -> None:
             else:
                 grezzo = await _accesso_attendi("telefono")
             if grezzo is None:
-                STATO["errore"] = ("accesso a Telegram interrotto: nessun numero ricevuto. "
-                                   "Premi di nuovo Collegamento per riprovare.")
+                # Niente richiesta a meta' in sospeso: il prossimo tentativo deve ripartire pulito.
+                ACCESSO["serve"] = None
+                STATO["errore"] = ("Accesso a Telegram non completato: il numero di telefono non e' "
+                                   "arrivato. " + _cosa_succede_dopo())
                 return
             telefono = _telefono_valido(grezzo)
             if not telefono:
@@ -659,8 +671,12 @@ async def sorgente_telegram() -> None:
         for tentativo in range(3):
             codice = await _accesso_attendi("codice")
             if not codice:
-                STATO["errore"] = ("accesso a Telegram interrotto: nessun codice ricevuto. "
-                                   "Premi di nuovo Collegamento per riprovare.")
+                # Il codice lo manda Telegram su un altro dispositivo: capita di non farcela in
+                # tempo, o di chiudere la finestra per andarlo a leggere. Non e' un guasto, e il
+                # messaggio non deve farlo sembrare tale.
+                ACCESSO["serve"] = None
+                STATO["errore"] = ("Accesso a Telegram non completato: il codice non e' arrivato. "
+                                   + _cosa_succede_dopo())
                 return
             try:
                 await client.sign_in(telefono, codice, phone_code_hash=invio.phone_code_hash)
