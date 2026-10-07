@@ -13,6 +13,14 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **«Installa i pacchetti aggiuntivi» chiesto a chi li ha gia' installati** — risolto app v90 —
+  `mt5StartLoginFlow()` provava `/health` UNA volta sola e, se non rispondeva, mostrava il passo 1,
+  che e' la schermata dell'installazione. Ma `/health` muto quasi sempre vuol dire che il servizio
+  non ha finito di partire (parte da solo; su un PC appena acceso ci mette qualche secondo). La
+  procedura precedente (`mt5StartLoginFlowLegacy`) aspettava con `waitForBridgeHealthy(20000)`:
+  quella nuova aveva perso l'attesa. Ora aspetta, e se il servizio ha gia' risposto almeno una
+  volta su questo PC (`fxbt_ponteGiaVisto`) la schermata dice «non risponde» con «Riprova», non
+  «installa». Test: `laboratorio/app/pacchetti.test.mjs`.
 - **WebSocket segnali 403 ("ponte non raggiungibile")** — risolto v70 — `segnali_bridge.py` — il
   decoratore `@app.websocket("/ws/segnali")` era finito sopra `_manda_storico`. Controllo: `--verifica`.
 - **Barra ordini con Kraken: rischio e lotto col modello forex** — risolto app v85 — usava saldo

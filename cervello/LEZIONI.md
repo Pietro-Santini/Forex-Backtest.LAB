@@ -38,3 +38,16 @@
     sessione Telegram attiva: il proprietario si aspettava di essere scollegato.
 16. **Una guida che dice "sezione X" deve nominare ogni pulsante da premere per arrivarci.** "Prova
     il server" era dietro "Accesso da altri dispositivi", un nome che non c'entrava col server.
+
+- **`app.html` ha a capo Windows (CRLF).** Uno script di modifica che cerca blocchi su piu' righe
+  scritti con `
+` non trova mai niente e l'assert boccia senza spiegare perche'. Convertire gli
+  a capo del blocco cercato prima di cercarlo.
+- **Nei test, «non risponde mai» si scrive `Infinity`, non `999`.** Con l'attesa accorciata si
+  fanno oltre mille tentativi in pochi secondi: un 999 viene raggiunto davvero e la prova che
+  doveva fallire riesce, dicendo il falso.
+- **Le variabili lette da `localStorage` all'avvio della pagina** non cambiano se il test scrive
+  nel deposito dopo il caricamento: va impostata anche la variabile in memoria.
+- **Su Windows `python3` puo' essere il segnaposto del Microsoft Store**, un interprete diverso da
+  quello con le librerie: il collaudo bocciava senza motivo. `collauda.sh` ora sceglie
+  l'interprete che ha davvero pytest.
