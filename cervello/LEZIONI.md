@@ -68,3 +68,8 @@
 
 - **Il bug era in `installer_build/build/segnali_telegram/requirements.txt` vs `collaudo.yml`.**
   `pip install fastapi` senza `uvicorn` fa fallire l'import di `segnali_bridge` prima di ogni test.
+- **Una chiave di deduplicazione non si ricava mai da un nome che l'utente puo' cambiare.** Al
+  primo rinomina tutte le chiavi cambiano e tornano tutti i doppioni. Si usa l'identificativo.
+- **Lo script di modifica salva solo alla fine: se un passo fallisce, NON ha scritto niente.** E'
+  voluto (niente mezze modifiche), ma le righe "ok" gia' stampate ingannano: dopo un errore vanno
+  rifatte TUTTE le sostituzioni, non solo quella fallita.
