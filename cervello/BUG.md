@@ -13,6 +13,15 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Collegamento/Modalita' chiedeva due indirizzi e due chiavi** — risolto app v93 — dal telefono
+  si scriveva nome e chiave del computer E nome e chiave del server, e la chiave del computer si
+  ricopiava a mano da una parte all'altra. Ora si scrive solo il **server**: il computer si
+  presenta da solo (`/registra-al-server` -> `/pc/registra`), e gli ordini MT5 il server li gira
+  al PC. In cima tre righe - ordini, grafico, segnali - che si aggiornano da sole ogni 6 secondi
+  finche' la schermata e' aperta, e si fermano alla chiusura.
+  Test: `laboratorio/app/porta_unica.test.mjs` (5), `laboratorio/ponte/test_porta_unica.py` (5).
+  Trovato dal test: togliendo il blocco dei campi era sparito anche `fblRemotoEsito`, dove
+  finiscono i messaggi di Salva e Prova — `fblRemotoApri` scoppiava all'apertura.
 - **Il collaudo su GitHub era rosso dal 6 ottobre e nessuno se n'era accorto** — risolto 7 ottobre
   2026 — `.github/workflows/collaudo.yml` installava `fastapi` ma non `uvicorn`, e
   `segnali_bridge.py` esce gia' all'import ("Mancano le librerie"): i test del ponte non partivano
