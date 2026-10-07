@@ -615,6 +615,15 @@ input[type=number],.fbLevelsTable td,.fbPickerSym,#openPositions td,#mt5OpenPosi
 /* Cosa risponde adesso: tre righe, un pallino per colore. Si legge in un secondo quale dei tre
    servizi non c'e', che e' la domanda vera quando qualcosa non va. */
 /* Le cifre del rendimento: grandi, poche, con sotto cosa vogliono dire. */
+/* La strategia: una riga per TP, con quanto ci si mette sopra e dove va lo stop quando arriva. */
+.fblStrat{display:flex;flex-direction:column;gap:5px;margin:6px 0 10px}
+.fblStrat .modo{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:4px}
+.fblStrat .riga{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;
+  background:var(--fbPanel);border:1px solid var(--fbLine);border-radius:8px;padding:6px 9px}
+.fblStrat .riga b{min-width:36px;color:var(--fbAccent)}
+.fblStrat input[type=number]{width:72px}
+.fblStrat select{min-width:150px}
+.fblStrat .eti{color:var(--fbMuted);font-size:11px}
 .fblRendCifre{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
 .fblRendCifre .c{flex:1 1 130px;background:var(--fbPanel);border:1px solid var(--fbLine);
   border-radius:9px;padding:9px 11px}
@@ -24436,6 +24445,112 @@ function tgStrategiaValuta(){
  if(cambiato)tgSalvaStrategie();
 }
 
+// ===================== STRATEGIA DI ESECUZIONE (una sola, per prove e per aperture vere) =====================
+// RICHIESTO dal proprietario (7 ottobre 2026): poter impostare la strategia PRIMA di calcolare il
+// rendimento di una sala, per trovare quella giusta provandone diverse; percentuali diverse per
+// ogni TP; e poter scegliere fra "una posizione per TP" e "una posizione sola chiusa a pezzi".
+// Lo stesso modello vale per le aperture automatiche (Telegram e Syntra): se la simulazione usasse
+// regole sue, si proverebbe una strategia e se ne eseguirebbe un'altra.
+const FBL_MAX_TP=5;
+
+// La strategia prudente, quella che si propone a chi non ha ancora scelto: pesi uguali, e dal
+// secondo TP in poi lo stop al pareggio. Non promette niente, non rischia dopo il primo guadagno.
+function fblStrategiaPrudente(){
+ return {modo:'posizioni', quote:[], regole:['','entrata','1','2','3']};
+}
+function fblStrategiaNormalizza(cfg,quantiTp){
+ const n=Math.max(1,Math.min(Number(quantiTp)||1,FBL_MAX_TP));
+ const c=Object.assign(fblStrategiaPrudente(),cfg||{});
+ const modo=(c.modo==='parziali')?'parziali':'posizioni';
+ // Le quote: se non ci sono, o non bastano, si dividono in parti uguali. Normalizzate a 1, cosi'
+ // scrivere 40/30/20/10 o 4/3/2/1 e' la stessa cosa: conta il rapporto, non la somma.
+ let q=(Array.isArray(c.quote)?c.quote:[]).slice(0,n).map(v=>Math.max(0,Number(v)||0));
+ while(q.length<n)q.push(0);
+ let tot=q.reduce((a,b)=>a+b,0);
+ if(!(tot>0)){ q=new Array(n).fill(1/n); }
+ else q=q.map(v=>v/tot);
+ const regole=[];
+ for(let i=0;i<n;i++){
+  const r=String(((c.regole||[])[i]!=null?c.regole[i]:''));
+  // "sposta lo stop al TP n" ha senso solo se quel TP e' PRIMA di quello appena preso: spostarlo
+  // a un livello non ancora raggiunto vorrebbe dire chiudere subito in perdita... o in guadagno
+  // mai raggiunto. Le regole impossibili si ignorano invece di fingere che valgano.
+  regole.push((r==='entrata'||(/^[1-9]$/.test(r)&&Number(r)<=i))?r:'');
+ }
+ return {modo,quote:q,regole,tp:n};
+}
+window.fblStrategiaNormalizza=fblStrategiaNormalizza;
+
+// Dove va lo stop dopo aver preso il TP numero (indice+1).
+function fblStrategiaNuovoStop(regola,entry,tps){
+ if(regola==='entrata')return entry;
+ if(/^[1-9]$/.test(String(regola||''))){
+  const v=Number(tps[Number(regola)-1]);
+  return isFinite(v)?v:null;
+ }
+ return null;
+}
+
+// Simula UN segnale sulle candele, con la strategia scelta. Torna il guadagno in multipli del
+// rischio iniziale (R), piu' il dettaglio di cosa e' successo.
+//
+// La stessa convenzione del resto della cronologia: se nella stessa candela ci sono sia lo stop
+// sia un TP nuovo non si puo' sapere cosa e' venuto prima, e si conta lo stop (prudente), con il
+// segnale marcato "ambiguo". Fingere l'ordine piu' comodo gonfierebbe ogni risultato.
+function fblSimulaStrategia(seg,ser,cfg){
+ const numero=v=>(v!=null&&v!==''&&isFinite(Number(v)))?Number(v):NaN;
+ const buy=String(seg.dir||seg.direzione||'BUY').toUpperCase()!=='SELL';
+ const verso=buy?1:-1;
+ const tps=(seg.tps||seg.tp||[]).map(numero).filter(v=>isFinite(v)).slice(0,FBL_MAX_TP);
+ const slIniziale=numero(seg.sl);
+ const entry=numero(seg.entry);
+ if(!isFinite(entry)||!isFinite(slIniziale)||!tps.length)return null;
+ const rischio=Math.abs(entry-slIniziale);
+ if(!(rischio>0))return null;
+
+ const st=fblStrategiaNormalizza(cfg,tps.length);
+ const inizio=Number(seg.tFill||seg.ts)||0;
+ let stop=slIniziale, R=0, rimasto=1, presi=0, ambiguo=false, chiuse=[];
+ let uscita=null, fine=null;
+
+ const dentro=(ser||[]).filter(c=>Number(c.t)>=inizio);
+ for(let j=0;j<dentro.length;j++){
+  const c=dentro[j];
+  fine=c.t;
+  const stopQui=isFinite(stop)&&(buy?c.l<=stop:c.h>=stop);
+  let nuovi=0;
+  while(presi+nuovi<tps.length&&(buy?c.h>=tps[presi+nuovi]:c.l<=tps[presi+nuovi]))nuovi++;
+  if(stopQui){
+   if(nuovi)ambiguo=true;
+   // Tutto quello che resta esce allo stop di adesso: puo' essere una perdita, un pareggio o
+   // addirittura un guadagno, se la strategia lo aveva gia' spostato oltre l'entrata.
+   R+=rimasto*((stop-entry)*verso/rischio);
+   uscita=stop; rimasto=0;
+   break;
+  }
+  for(let k=0;k<nuovi;k++){
+   const idx=presi+k;
+   const quota=st.quote[idx]||0;
+   const guadagno=Math.abs(tps[idx]-entry)/rischio;
+   R+=quota*guadagno;
+   rimasto-=quota;
+   chiuse.push({tp:idx+1,quota,R:quota*guadagno,prezzo:tps[idx],t:c.t});
+   const nuovoStop=fblStrategiaNuovoStop(st.regole[idx],entry,tps);
+   // Lo stop si muove solo in avanti: una regola che lo riportasse indietro aumenterebbe il
+   // rischio dopo aver gia' incassato, che non e' mai quello che si vuole.
+   if(nuovoStop!=null&&isFinite(nuovoStop)&&(buy?nuovoStop>stop:nuovoStop<stop))stop=nuovoStop;
+  }
+  presi+=nuovi;
+  if(presi>=tps.length){ uscita=tps[tps.length-1]; rimasto=0; break; }
+ }
+ const aperta=rimasto>1e-9;
+ return {R:Math.round(R*1e6)/1e6, presi, chiuse, ambiguo, aperta, stopFinale:stop,
+         uscita, tFine:fine, entry, rischio, modo:st.modo,
+         esito: aperta?('in corso'+(presi?(' (TP'+presi+')'):''))
+               : (presi>=tps.length?'tutti i TP':(presi?('TP'+presi+' poi stop'):'stop'))};
+}
+window.fblSimulaStrategia=fblSimulaStrategia;
+
 // ===================== APERTURA AUTOMATICA DELLE POSIZIONI =====================
 // Qui i segnali possono diventare ordini senza che nessuno li guardi. Tre freni, decisi insieme
 // all'utente, e tutti e tre con un motivo pratico:
@@ -38137,6 +38252,12 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
       <input id="fblRendRischio" type="number" min="0.1" max="20" step="0.1" value="1" style="width:110px"></label>
      <button type="button" id="fblRendCalcola" class="toolBtn active">📈 Calcola</button>
     </div>
+    <div class="tgCfgNota" style="margin-top:10px;margin-bottom:4px">
+     <b>La strategia.</b> Cambiala e ricalcola: è il modo per scoprire quale funziona davvero su
+     questa sala, invece di indovinarla. Quello che imposti qui è lo stesso modello che l'app usa
+     per aprire da sola le posizioni.
+    </div>
+    <div id="fblStrategiaUi"></div>
     <div id="fblRendRiepilogo" class="fblRendCifre"></div>
     <canvas id="fblRendGrafico" height="190" style="width:100%;margin-top:10px;border:1px solid var(--fbLine);border-radius:9px;background:#0b1016"></canvas>
     <div id="fblRendNota" class="tgCfgNota" style="margin-top:6px"></div>
@@ -38152,7 +38273,7 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
 <script>
 (function(){
 const LS_ESITI='fbl_crono_esiti', LS_VISTA='fbl_crono_vista';
-const C={sala:'',segnali:{},letti:{},richiesta:0,asset:null,risultati:{},inCorso:false};
+const C={sala:'',segnali:{},letti:{},richiesta:0,asset:null,risultati:{},serie:{},inCorso:false};
 // Quale sala/asset e' a grafico, e le spunte.
 let vista={sala:'',asset:'',mostra:true,caselle:false};
 try{ Object.assign(vista,JSON.parse(localStorage.getItem(LS_VISTA)||'{}')); }catch(e){}
@@ -38321,6 +38442,9 @@ async function analizza(sala,sym,segs,btn){
  try{
   const daMs=Math.min(...segs.map(s=>Number(s.ts)))-GIORNO;
   const {serie,fonte}=await candele(sym,daMs);
+  // Le candele si tengono: senza, provare una strategia diversa vorrebbe dire riscaricarle ogni
+  // volta, e provarne dieci diventerebbe impraticabile proprio quando serve.
+  C.serie[sala+'|'+sym]=serie;
   const ris=segs.slice().sort((a,b)=>a.ts-b.ts).map(s=>valuta(s,serie));
   const r=riepilogo(ris); r.fonte=fonte;
   C.risultati[sala+'|'+sym]=ris;
@@ -38378,13 +38502,25 @@ function rendRisultatoR(x){
 }
 
 // La curva: ogni segnale rischia la stessa PERCENTUALE del capitale di quel momento.
-function rendCurva(ris,capitale,rischioPct){
+// `serie` e `strategia` sono facoltativi: senza, si usa il conto semplice (quanti TP sono stati
+// presi prima dello stop originale). Con le candele si rigioca il segnale con la strategia vera,
+// e i due numeri POSSONO essere diversi - e' tutto il punto: con lo stop al pareggio un segnale
+// che tornava indietro non perde piu'.
+function rendCurva(ris,capitale,rischioPct,serie,strategia){
  const ordinati=(ris||[]).slice().filter(x=>x&&x.valutato).sort((a,b)=>(a.tFill||a.ts||0)-(b.tFill||b.ts||0));
  let cap=capitale, picco=capitale, ddMax=0;
  const punti=[{t:ordinati.length?(ordinati[0].tFill||ordinati[0].ts):Date.now(),cap}];
  let vinte=0, perse=0, usate=0, sommaR=0;
  ordinati.forEach(x=>{
-  const R=rendRisultatoR(x);
+  let R=null;
+  if(serie&&strategia){
+   // Si rigioca il segnale sulle candele, con la strategia scelta.
+   const ser=(serie||[]).find(a=>a&&a.length&&a[a.length-1].t>=(x.tFill||x.ts));
+   const sim=ser?fblSimulaStrategia(x,ser,strategia):null;
+   if(sim&&!sim.aperta)R=sim.R;      // una posizione ancora aperta non si conta
+  }else{
+   R=rendRisultatoR(x);
+  }
   if(R==null)return;
   usate++; sommaR+=R;
   if(R>0)vinte++; else if(R<0)perse++;
@@ -38422,6 +38558,55 @@ function rendDisegnaGrafico(punti){
  g.lineTo(X(punti.length-1),pad+h); g.lineTo(X(0),pad+h); g.closePath(); g.fill();
 }
 
+// ---------- la strategia da provare su questa sala
+const LS_STRAT='fbl_crono_strategia';
+function stratLeggi(sala){
+ let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
+ return d[sala]||null;
+}
+function stratSalva(sala,cfg){
+ let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
+ d[sala]=cfg; try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
+}
+// Quanti TP ha davvero questa sala: non si mostrano cinque righe se i segnali ne hanno due.
+function stratQuantiTp(ris){
+ return Math.max(1,Math.min(5,Math.max(0,...(ris||[]).map(x=>(x&&x.tps&&x.tps.length)||0))));
+}
+function stratDallaUi(n){
+ const q=[],r=[];
+ for(let i=0;i<n;i++){
+  q.push(Number($('fblStratQ'+i)?.value)||0);
+  r.push(String($('fblStratR'+i)?.value||''));
+ }
+ return {modo:($('fblStratModo')?.value==='parziali')?'parziali':'posizioni',quote:q,regole:r};
+}
+function stratDisegna(sala,ris){
+ const box=$('fblStrategiaUi'); if(!box)return;
+ const n=stratQuantiTp(ris);
+ const cfg=fblStrategiaNormalizza(stratLeggi(sala)||{},n);
+ const salvata=stratLeggi(sala);
+ // Le quote si mostrano in percentuale leggibile: normalizzate sono 0,333 e nessuno le scrive cosi'.
+ const quotePct=(salvata&&Array.isArray(salvata.quote)&&salvata.quote.length>=n)
+   ? salvata.quote.slice(0,n) : cfg.quote.map(v=>Math.round(v*1000)/10);
+ let h='<div class="fblStrat"><div class="modo">'
+  +'<label class="eti" style="display:flex;flex-direction:column;gap:3px">COME SI ESEGUE'
+  +'<select id="fblStratModo">'
+  +'<option value="posizioni"'+(cfg.modo==='posizioni'?' selected':'')+'>una posizione per ogni TP</option>'
+  +'<option value="parziali"'+(cfg.modo==='parziali'?' selected':'')+'>una posizione sola, chiusa a pezzi</option>'
+  +'</select></label></div>';
+ for(let i=0;i<n;i++){
+  h+='<div class="riga"><b>TP'+(i+1)+'</b>'
+   +'<span class="eti">quota</span><input type="number" id="fblStratQ'+i+'" min="0" step="1" value="'+(quotePct[i]!=null?quotePct[i]:0)+'"><span class="eti">%</span>'
+   +'<span class="eti">· quando arriva, lo stop va a</span><select id="fblStratR'+i+'">'
+   +'<option value="">dov\'è</option>'
+   +'<option value="entrata"'+(cfg.regole[i]==='entrata'?' selected':'')+'>pareggio (entrata)</option>';
+  for(let j=1;j<=i;j++)h+='<option value="'+j+'"'+(cfg.regole[i]===String(j)?' selected':'')+'>TP'+j+'</option>';
+  h+='</select></div>';
+ }
+ h+='</div>';
+ box.innerHTML=h;
+}
+
 function rendCalcola(){
  const sala=$('fblCronoSala')?.value||'';
  const sym=vista.asset||'';
@@ -38432,7 +38617,14 @@ function rendCalcola(){
  const capitale=Math.max(1,Number($('fblRendCapitale')?.value)||10000);
  const rischio=Math.max(0.01,Number($('fblRendRischio')?.value)||1);
  rendSalva(capitale,rischio);
- const c=rendCurva(ris,capitale,rischio);
+ // I comandi della strategia si disegnano una volta sola: ridisegnarli a ogni calcolo
+ // cancellerebbe quello che si sta scrivendo.
+ if(!$('fblStratModo'))stratDisegna(sala,ris);
+ const nTp=stratQuantiTp(ris);
+ const strategia=$('fblStratModo')?stratDallaUi(nTp):null;
+ if(strategia)stratSalva(sala,strategia);
+ const serie=C.serie[sala+'|'+sym]||null;
+ const c=rendCurva(ris,capitale,rischio,serie,strategia);
  const eur=v=>'€'+Math.round(v).toLocaleString('it-IT');
  const cifra=(v,e,cl)=>'<div class="c"><div class="v '+(cl||'')+'">'+v+'</div><div class="e">'+e+'</div></div>';
  const su=c.resa>=0;
@@ -38448,7 +38640,9 @@ function rendCalcola(){
   +'di quel momento (fisso in percentuale, non in euro: è quello che produce la crescita composta). '
   +'La posizione si divide in parti uguali fra i TP della sala, come fa l\'app quando apre da un segnale. '
   +'I segnali senza stop, non attivati o ancora aperti restano fuori. '
-  +'<b>Lo spostamento a pareggio non è simulato</b>: qui si misura la sala, non quanto bene la si gestisce.';
+  +((C.serie[sala+'|'+sym]&&$('fblStratModo'))
+    ? '<b>Con la strategia qui sopra</b>: ogni segnale è stato rigiocato candela per candela, quote dei TP e spostamento dello stop compresi.'
+    : '<b>Senza strategia</b>: le candele non sono in memoria. Premi «Analizza e mostra a grafico» e ricalcola.');
 }
 window.fblRendCalcola=rendCalcola;
 window.fblCronoRendR=rendRisultatoR;      // esposte per il collaudo: sono il conto dei soldi
