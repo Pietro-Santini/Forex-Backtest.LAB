@@ -116,15 +116,35 @@ def pc_dove():
     return {"ok": True, "registrato": True, "host": d["host"], "visto": d.get("visto")}
 
 
+# Le tre porte del PC, tutte raggiungibili attraverso il server. Non solo la 8000: il GRAFICO sta
+# sulla 8001 e i segnali sulla 8769, e dal telefono non hanno nessun'altra strada - e' il motivo
+# per cui dal telefono il grafico diceva "nessuna risposta" mentre ordini e segnali andavano.
+# Solo queste tre: il server non deve diventare un passaggio verso una porta qualsiasi del PC.
+PORTE_PC = (8000, 8001, 8769)
+
+
+@app.api_route("/pc/{porta:int}/{percorso:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def pc_inoltra_porta(porta: int, percorso: str, request: Request):
+    """Gira al PC una richiesta su una delle tre porte."""
+    if porta not in PORTE_PC:
+        raise HTTPException(status_code=400, detail="Porta non prevista: %s" % porta)
+    return await _inoltra(porta, percorso, request)
+
+
 @app.api_route("/pc/{percorso:path}", methods=["GET", "POST", "PUT", "DELETE"])
 async def pc_inoltra(percorso: str, request: Request):
+    """Senza porta si intende la 8000 (ordini): com'era prima, per non rompere nulla."""
+    return await _inoltra(8000, percorso, request)
+
+
+async def _inoltra(porta: int, percorso: str, request: Request):
     """Gira al PC una richiesta arrivata dal telefono, mettendoci la chiave del PC."""
     d = _leggi_pc()
     if not d.get("host"):
         raise HTTPException(status_code=503, detail="Nessun computer registrato su questo server.")
     import httpx
     from fastapi.responses import Response
-    url = "https://%s:8000/%s" % (d["host"], percorso)
+    url = "https://%s:%d/%s" % (d["host"], porta, percorso)
     parametri = dict(request.query_params)
     parametri["chiave"] = d.get("chiave", "")
     try:
@@ -147,7 +167,8 @@ def health():
     return {"ok": True, "servizio": "server-oracle", "mt5": False, "kraken": "simulato",
             "accesso_remoto": bool(accesso.carica_accesso().get("rete")),
             # Col telefono si sa gia' se aspettarsi MT5, senza una seconda domanda.
-            "pc": {"registrato": bool(pc.get("host")), "host": pc.get("host", ""), "visto": pc.get("visto")}}
+            "pc": {"registrato": bool(pc.get("host")), "host": pc.get("host", ""),
+                   "visto": pc.get("visto"), "porte": list(PORTE_PC)}}
 
 
 if __name__ == "__main__":

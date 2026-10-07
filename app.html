@@ -25673,7 +25673,8 @@ function fblServiziElenco(){
  return [
   {chiave:'ordini', nome:'Ordini', dove: srv?'computer, tramite il server':'computer',
    url: srv?perServer(8000,'/pc/health'):fblConChiave(fblBaseUrl(8000)+'/health')},
-  {chiave:'grafico', nome:'Grafico', dove:'computer',
+  {chiave:'grafico', nome:'Grafico',
+   dove: (srv&&fblPonteLocaleVivo===false)?'computer, tramite il server':'computer',
    url: fblConChiave(fblBaseUrl(8001)+'/health')},
   {chiave:'segnali', nome:'Segnali', dove: srv?'server':'computer',
    url: srv?perServer(8769,'/health'):fblConChiave(fblBaseUrl(8769)+'/health')}
@@ -25688,7 +25689,8 @@ async function fblProvaUno(v,timeoutMs){
   const ms=Math.round(((performance&&performance.now)?performance.now():Date.now())-t0);
   if(r.ok)return {...v,ok:true,ms,esito:'risponde'};
   if(r.status===403)return {...v,ok:false,ms,esito:'rifiutato: chiave'};
-  if(r.status===502||r.status===503)return {...v,ok:false,ms,esito:'computer spento'};
+  if(r.status===503)return {...v,ok:false,ms,esito:'nessun computer registrato'};
+  if(r.status===502)return {...v,ok:false,ms,esito:'il computer non risponde'};
   return {...v,ok:false,ms,esito:'errore '+r.status};
  }catch(e){
   const ms=Math.round(((performance&&performance.now)?performance.now():Date.now())-t0);
@@ -27226,14 +27228,53 @@ async function fetchServerWithTimeout(path,options,timeoutMs){
 // Dal PC si parla in http con 127.0.0.1. Da qualunque altro dispositivo SOLO attraverso Tailscale
 // Serve, che risponde in https sul nome del PC con le stesse porte: https://nome-pc.xxxx.ts.net:8000.
 // Il sito e' in https, quindi e' anche l'unica combinazione che il browser lascia passare.
+// IL PONTE LOCALE C'E' O NO?
+// Sul computer il ponte risponde su 127.0.0.1 ed e' la strada piu' veloce. Sul telefono quello
+// stesso indirizzo e' il telefono stesso, dove non c'e' niente: li' bisogna passare dal server.
+// L'app non puo' saperlo da sola guardando l'indirizzo (sono identici): lo CHIEDE, una volta, e
+// se lo ricorda. Si ricontrolla ogni minuto, cosi' un ponte appena acceso viene ripreso.
+let fblPonteLocaleVivo=null, fblPonteLocaleAt=0, fblPonteLocaleInCorso=null;
+function fblPonteLocale(){ return fblPonteLocaleVivo===true; }
+async function fblControllaPonteLocale(){
+ if(fblPonteLocaleInCorso)return fblPonteLocaleInCorso;
+ if(fblPonteLocaleVivo!==null&&Date.now()-fblPonteLocaleAt<60000)return fblPonteLocaleVivo;
+ fblPonteLocaleInCorso=(async()=>{
+  let vivo=false;
+  try{
+   const c=new AbortController();
+   const t=setTimeout(()=>c.abort(),2500);
+   const r=await fetch('http://127.0.0.1:8000/health',{signal:c.signal});
+   clearTimeout(t);
+   vivo=!!(r&&r.ok);
+  }catch(e){ vivo=false; }
+  const cambiato=(fblPonteLocaleVivo!==vivo);
+  fblPonteLocaleVivo=vivo; fblPonteLocaleAt=Date.now(); fblPonteLocaleInCorso=null;
+  // Cambiando strada vanno rifatti gli indirizzi: tutti i punti che li concatenano continuano a
+  // funzionare senza toccarli.
+  if(cambiato){ try{ fblAggiornaIndirizzi(); }catch(e){} }
+  return vivo;
+ })();
+ return fblPonteLocaleInCorso;
+}
 function fblBaseUrl(porta,host){
  const h=(host!=null?host:fblHost());
  const locale=(h==='127.0.0.1'||h==='localhost');
+ // Dal telefono il ponte locale non c'e': le tre porte del computer si raggiungono passando dal
+ // server, che gira la richiesta. Sul computer invece si va diretti, che e' piu' veloce e non fa
+ // viaggiare i dati del grafico fino al server e ritorno.
+ if(locale&&host==null&&fblServer()&&fblPonteLocaleVivo===false){
+  return fblServerUrl(8000)+'/pc/'+porta;
+ }
  return (locale?'http://':'https://')+h+':'+porta;
 }
 // La chiave va come parametro nell'indirizzo e non come intestazione: cosi' vale anche per i
 // WebSocket, che intestazioni personalizzate non ne accettano.
 function fblConChiave(url){
+ // Se l'indirizzo punta al SERVER (perche' il ponte locale non c'e', vedi fblBaseUrl) ci vuole la
+ // chiave del server, non quella del computer. Sta qui, nel punto unico da cui passano tutte le
+ // chiamate: metterla nei singoli punti vorrebbe dire dimenticarsene in qualcuno.
+ const srv=fblServer();
+ if(srv&&String(url).indexOf('https://'+srv+':8000/pc/')===0)return fblServerConChiave(url);
  const k=fblChiave();
  if(!k||!fblRemoto())return url;
  return url+(url.indexOf('?')>=0?'&':'?')+'chiave='+encodeURIComponent(k);
@@ -32706,6 +32747,9 @@ function fblAggiornaIndirizzi(){
  MT5_BRIDGE_URL=fblBaseUrl(8000);
  MT5_FEED_URL=fblBaseUrl(8001);
 }
+// Si chiede subito se il ponte locale c'e': da questo dipende se le tre porte del computer si
+// raggiungono dirette (sul computer) o passando dal server (dal telefono).
+try{ fblControllaPonteLocale(); }catch(e){}
 // symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
 // (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
 // dati irraggiungibile (va MAI messo in cache in modo permanente, si ritenta al giro successivo).
