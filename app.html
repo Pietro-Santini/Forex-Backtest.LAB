@@ -3424,9 +3424,14 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  <div class="tableScroll"><table class="posTable"><thead><tr><th>#</th><th>Sessione</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table></div>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
- <!-- RICHIESTO: le posizioni del conto Kraken si vedono qui accanto a quelle MT5, qualunque sia il
-      conto scelto sopra la dashboard (MT5 e Kraken lavorano insieme). -->
- <div id="krakenPosPanel" style="display:none;margin-top:10px"></div>
+</div>
+
+<!-- RICHIESTO dal proprietario (7 ottobre 2026): le posizioni Kraken NON devono stare nella stessa
+     casella di quelle MetaTrader. Sono due conti diversi, con valute e contratti diversi: metterle
+     insieme invita a sommare numeri che non si sommano. Riquadro separato, stesse colonne. -->
+<div class="panel" id="krakenPosPanelWrap" style="display:none">
+ <div class="label" id="krakenPosTitolo">🐙 Posizioni Kraken</div>
+ <div id="krakenPosPanel"></div>
 </div>
 
 <div class="panel" id="mt5PosPanel" style="display:none">
@@ -34948,33 +34953,114 @@ async function krakenOrdineManuale(side){
  return true;
 }
 // Posizioni Kraken nella sezione "Posizioni aperte" della pagina principale.
+// Quale posizione Kraken e' evidenziata. Sulle posizioni dell'app «Seleziona» dice su quale
+// agiscono le caselle SL/TP del grafico; per Kraken quel collegamento non c'e' ancora, quindi qui
+// serve a evidenziarla - e il titolo del pulsante lo dice invece di prometterlo e basta.
+var krakenSelezionata='';
+// Dal contratto Kraken all'asset dell'app: PF_XBTUSD -> BTC -> l'asset che a grafico ha BTC.
+function krakenVaiAGrafico(simbolo){
+ const base=krakenBaseDaSimbolo(simbolo);
+ let trovato='';
+ try{
+  const sel=$('market');
+  if(sel)for(const o of sel.options){
+   let bn=''; try{ bn=binanceSymbolForAsset(o.value)||''; }catch(e){}
+   if(bn&&bn.replace(/(USDT|USDC|USD)$/,'')===base){ trovato=o.value; break; }
+  }
+ }catch(e){}
+ if(!trovato){ $('status').textContent='Non trovo a grafico un asset per '+simbolo+'.'; return; }
+ krakenSelezionata=simbolo;
+ try{ if($('market').value!==trovato){ $('market').value=trovato; $('market').dispatchEvent(new Event('change')); } }catch(e){}
+ try{ scrollToChart(); }catch(e){}
+ try{ krakenPosPannello(); draw(); }catch(e){}
+}
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
  const pend=(c&&c.collegato&&krakenPendenti)||[];
- if(!c||!c.collegato||(!ps.length&&!pend.length)){ box.style.display='none'; box.textContent=''; return; }
- box.style.display='';
+ const wrap=$('krakenPosPanelWrap');
+ if(!c||!c.collegato||(!ps.length&&!pend.length)){
+  box.textContent=''; if(wrap)wrap.style.display='none'; return;
+ }
+ if(wrap)wrap.style.display='';
+ const tit=$('krakenPosTitolo');
+ if(tit)tit.textContent='🐙 Posizioni '+krakenNome()+(c.ambiente==='reale'?' (soldi veri)':'');
  const fmt=v=>Number.isFinite(Number(v))?Number(v).toLocaleString('it-IT',{maximumFractionDigits:6}):'—';
  const usd=v=>(Number(v)>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
+ // Il titolo lo scrive il riquadro esterno: qui ne uscirebbe un secondo identico.
  const t=document.createElement('div');
- t.innerHTML='<div class="label" style="margin-bottom:4px">🐙 Posizioni '+escapeHtmlText(krakenNome())+(c.ambiente==='reale'?' <span style="color:#ff8a8a">(soldi veri)</span>':'')+'</div>';
+ if(c.ambiente==='reale')t.innerHTML='<div class="hint" style="color:#ff8a8a;margin-bottom:4px">Conto con soldi veri.</div>';
  const tab=document.createElement('table'); tab.className='posTable';
- tab.innerHTML='<thead><tr><th>Contratto</th><th>Side</th><th>Quantità</th><th>Entry</th><th>SL</th><th>TP</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>';
+ // Le stesse colonne della tabella MetaTrader, nello stesso ordine: passando dall'una all'altra
+ // non si deve reimparare dove sta cosa.
+ tab.innerHTML='<thead><tr><th>#</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th>'
+  +'<th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>';
  const tb=document.createElement('tbody');
- ps.forEach(p=>{
+ ps.forEach((p,i)=>{
   const tr=document.createElement('tr');
-  const celle=[p.simbolo,p.lato,fmt(p.quantita),fmt(p.entrata),p.sl!=null?fmt(p.sl):'—',(p.tp||[]).map(x=>fmt(x.prezzo)).join(' / ')||'—',fmt(p.mark)];
+  const buy=String(p.lato).toUpperCase().startsWith('B')||String(p.lato).toLowerCase()==='long';
+  const entry=Number(p.entrata), mark=Number(p.mark);
+  const sl=Number.isFinite(Number(p.sl))?Number(p.sl):NaN;
+  const tps=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+  const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
+  // Lo stop usato per il R/R e' quello di APERTURA, non quello di adesso: altrimenti portandolo
+  // a pareggio il rapporto diventerebbe infinito e non direbbe piu' niente sul rischio preso.
+  const st=Object.values(tgStrategie||{}).filter(x=>x&&x.conto==='kraken'&&x.simbolo===p.simbolo)
+            .sort((a,b)=>a.creato-b.creato)[0];
+  const slIni=st&&Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):sl;
+  const rr=(Number.isFinite(slIni)&&Number.isFinite(tpLontano))?rrArrotondatoTesto(entry,slIni,tpLontano):'—';
+  const margine=Number(p.quantita)*mark/(krakenLeva()||1);
+  // Stop gia' a pareggio o oltre: non e' piu' un rischio, e va detto.
+  const stopProfit=Number.isFinite(sl)&&(buy?sl>=entry:sl<=entry);
+  const selezionata=(krakenSelezionata===p.simbolo);
+  if(selezionata)tr.className='focused';
+  const celle=[String(i+1),p.simbolo,p.lato,fmt(entry),
+   Number.isFinite(sl)?(fmt(sl)+(stopProfit?' 🔒SP':'')):'—',
+   tps.map(fmt).join(' / ')||'—', rr, fmt(p.quantita),
+   usd(margine).replace('+',''), fmt(mark)];
   celle.forEach(v=>{ const td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
   const tdp=document.createElement('td'); tdp.textContent=usd(p.pnl); tdp.className=Number(p.pnl)>=0?'liveProfit':'liveLoss'; tr.appendChild(tdp);
-  const tdb=document.createElement('td'); const b=document.createElement('button'); b.type='button'; b.className='miniBtn'; b.style.width='auto'; b.textContent='Chiudi';
-  b.addEventListener('click',async()=>{
+
+  const tdb=document.createElement('td');
+  const pulsante=(testo,titolo,attivo)=>{
+   const b=document.createElement('button'); b.type='button';
+   b.className='miniBtn'+(attivo?' active':''); b.style.width='auto'; b.textContent=testo;
+   if(titolo)b.title=titolo;
+   tdb.appendChild(b); return b;
+  };
+
+  pulsante('📍 Vai a grafico','Passa all\'asset di questo contratto e mostra la posizione')
+   .addEventListener('click',()=>krakenVaiAGrafico(p.simbolo));
+
+  pulsante(selezionata?'✓ Selezionata':'Seleziona',
+   'Evidenzia questa posizione, a grafico e in tabella',selezionata)
+   .addEventListener('click',()=>{
+    krakenSelezionata=(krakenSelezionata===p.simbolo)?'':p.simbolo;
+    krakenPosPannello(); try{ draw(); }catch(e){}
+   });
+
+  const bBe=pulsante(stopProfit?'✓ BE':'BE','Sposta lo stop al prezzo di entrata (pareggio)',stopProfit);
+  bBe.addEventListener('click',async()=>{
+   if(!Number.isFinite(entry))return;
+   if(!await appConfirm('Spostare lo stop di '+p.lato+' '+p.quantita+' '+p.simbolo+' al prezzo di entrata ('+fmt(entry)+')?\n\nDa quel momento la posizione non può più chiudere in perdita.',
+     {title:'🐙 Kraken · pareggio',okLabel:'Sposta',cancelLabel:'Annulla'}))return;
+   bBe.disabled=true; bBe.textContent='⏳';
+   const r=await krakenBridge('/sl',{simbolo:p.simbolo,prezzo:entry});
+   $('status').textContent=r.ok?('🐙 '+p.simbolo+': stop portato a pareggio ('+fmt(entry)+').')
+                               :('🐙 Stop non spostato: '+r.message);
+   krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
+  });
+
+  const bX=pulsante('Chiudi','Chiude a mercato tutta la posizione'); bX.classList.add('danger');
+  bX.addEventListener('click',async()=>{
    if(!await appConfirm('Chiudere a mercato tutta la posizione '+p.lato+' '+p.quantita+' '+p.simbolo+' su '+krakenNome()+'?\n\nVengono tolti anche il suo stop e i suoi take profit.',{title:'🐙 Kraken',okLabel:'Chiudi',cancelLabel:'Annulla'}))return;
-   b.disabled=true; b.textContent='⏳';
+   bX.disabled=true; bX.textContent='⏳';
    const r=await krakenBridge('/chiudi',{simbolo:p.simbolo});
    $('status').textContent=r.ok?('🐙 '+krakenNome()+': posizione '+p.simbolo+' chiusa.'):('🐙 Chiusura non riuscita: '+r.message);
    await krakenLeggiPosizioni(); krakenAggiornaConto(); krakenLeggiStorico();
   });
-  tdb.appendChild(b); tr.appendChild(tdb); tb.appendChild(tr);
+
+  tr.appendChild(tdb); tb.appendChild(tr);
  });
  tab.appendChild(tb);
  const sc=document.createElement('div'); sc.className='tableScroll'; sc.appendChild(tab);
@@ -35179,6 +35265,27 @@ async function krakenRegistraChiusura(id,st){
 // differenza fra i due prezzi (Binance - mark Kraken), cosi' cadono sulle candele giuste; le
 // etichette mostrano i prezzi VERI di Kraken.
 function krakenBaseDaSimbolo(sim){ return String(sim||'').toUpperCase().replace(/^(PF|PI|FF|FI)_/,'').replace(/USD$/,'').replace(/^XBT/,'BTC'); }
+// LO SCOSTAMENTO SI CONGELA, NON SI RICALCOLA.
+// Il grafico mostra i prezzi di Binance, Kraken esegue ai suoi: fra i due c'e' una piccola
+// differenza, e per disegnare le linee al punto giusto la si compensa. Ma ricalcolarla a ogni
+// disegno vuol dire che le linee di SL e TP SEGUONO IL PREZZO invece di restare ferme - che e'
+// esattamente il contrario di quello che una linea di stop deve fare, e rende impossibile capire
+// dove si chiudera' davvero la posizione. Segnalato dal proprietario il 7 ottobre 2026.
+// Si calcola UNA volta, quando la posizione compare, e da li' resta quella.
+const krakenScostamenti={};
+function krakenScostamento(chiave,prezzo,mark){
+ if(krakenScostamenti[chiave]!==undefined)return krakenScostamenti[chiave];
+ // Solo se le due quotazioni sono vicine: oltre il 2% non e' una differenza fra mercati, e'
+ // un'altra cosa (asset sbagliato, prezzo vecchio) e compensarla sposterebbe le linee a caso.
+ const off=(Number.isFinite(prezzo)&&mark>0&&Math.abs(prezzo-mark)<mark*0.02)?(prezzo-mark):0;
+ krakenScostamenti[chiave]=off;
+ return off;
+}
+// Le posizioni chiuse non devono lasciare scostamenti vecchi: alla riapertura dello stesso
+// contratto si ripartirebbe da un valore calcolato chissa' quando.
+function krakenScostamentiPulisci(chiaviVive){
+ Object.keys(krakenScostamenti).forEach(k=>{ if(chiaviVive.indexOf(k)<0)delete krakenScostamenti[k]; });
+}
 window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!krakenConto||!krakenConto.collegato||!currentAssetKey)return;
  let bn=''; try{ bn=binanceSymbolForAsset(currentAssetKey)||''; }catch(e){}
@@ -35203,9 +35310,12 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!ps.length)return;
  const usd=v=>(v>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
  const prezzo=currentPrice();
+ // La chiave comprende l'entrata: una posizione nuova sullo stesso contratto ricalcola, una
+ // posizione che resta aperta tiene il suo scostamento.
+ krakenScostamentiPulisci(ps.map(p=>'kraken:'+p.simbolo+':'+Number(p.entrata)));
  ps.forEach(p=>{
   const mark=Number(p.mark), entry=Number(p.entrata);
-  const off=(Number.isFinite(prezzo)&&mark>0&&Math.abs(prezzo-mark)<mark*0.02)?(prezzo-mark):0;
+  const off=krakenScostamento('kraken:'+p.simbolo+':'+entry,prezzo,mark);
   const st=Object.values(tgStrategie||{}).filter(x=>x&&x.conto==='kraken'&&x.simbolo===p.simbolo).sort((a,b)=>a.creato-b.creato)[0];
   const t0=st?Number(st.creato):null;
   let origine=t0?rowIndexContainingTime(t0):null;

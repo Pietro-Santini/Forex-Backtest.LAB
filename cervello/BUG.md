@@ -13,6 +13,17 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Linee SL e TP delle posizioni Kraken che seguivano il prezzo** — risolto app v100 —
+  `krakenDisegnaGrafico` compensava la differenza fra i prezzi del grafico (Binance) e quelli di
+  Kraken con uno scostamento **ricalcolato a ogni disegno**: muovendosi il prezzo si muoveva anche
+  lo scostamento, e con lui le linee. Una linea di stop che insegue il prezzo non dice piu' dove
+  chiudera' la posizione. Ora si calcola una volta, alla comparsa della posizione, e si butta
+  quando la posizione si chiude. Test: `laboratorio/app/kraken_linee.test.mjs` (4).
+- **Posizioni Kraken nella stessa casella di quelle MetaTrader** — risolto app v100 — riquadro
+  separato, con le stesse colonne di MT5 (asset, side, entry, SL, TP, R/R, lotti, margine, prezzo
+  corrente, P/L live) e i pulsanti «vai a grafico», «seleziona», «BE», «chiudi». Il R/R usa lo stop
+  di APERTURA: con quello di adesso, portandolo a pareggio diventerebbe infinito.
+  Test: `laboratorio/app/kraken_posizioni.test.mjs` (6).
 - **Dal telefono il grafico diceva «nessuna risposta»** — risolto app v98 + server — il grafico sta
   sulla porta 8001 del PC, ma il server girava al PC solo la 8000: dal telefono non aveva nessuna
   strada. Ora il server gira tutte e tre le porte previste (`/pc/<porta>/<percorso>`, solo
