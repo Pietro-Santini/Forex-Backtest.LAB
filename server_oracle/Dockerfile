@@ -4,7 +4,7 @@
 FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 APPDATA=/dati FBL_ACCESSO_FILE=/dati/accesso_remoto.json FBL_SEGNALI_DATI=/dati/segnali
 WORKDIR /fbl
-RUN pip install --no-cache-dir fastapi uvicorn websockets pydantic telethon
+RUN pip install --no-cache-dir fastapi uvicorn websockets pydantic telethon httpx
 COPY installer_build/build /fbl/installer_build/build
 COPY server_oracle /fbl/server_oracle
 VOLUME ["/dati"]

@@ -1098,6 +1098,60 @@ def accesso_remoto_stato(request: Request):
             "tailscale": _accesso.stato_tailscale()}
 
 
+@app.post("/registra-al-server")
+def registra_al_server(body: dict, request: Request):
+    """Il PC si presenta al server: «mi chiamo cosi' su Tailscale, si entra con questa chiave».
+
+    RICHIESTO dal proprietario (7 ottobre 2026): dal telefono si scrive SOLO il nome del server.
+    Perche' valga anche per MT5 - che gira qui, non sul server, e sul server non ci sara' mai - il
+    server deve sapere dov'e' questo computer. Glielo diciamo da qui, dove il nome Tailscale e la
+    chiave si sanno gia': cosi' non c'e' niente di nuovo da scrivere a mano.
+
+    La chiamata parte dall'app aperta SU QUESTO PC (l'unica a conoscere la chiave del server,
+    perche' l'ha scritta l'utente), e per questo si accetta solo da qui.
+    """
+    _solo_dal_pc(request, "La registrazione al server si fa")
+    server = str((body or {}).get("server") or "").strip().lower().rstrip("/")
+    chiave_server = str((body or {}).get("chiave_server") or "").strip()
+    if not server.endswith(".ts.net"):
+        raise HTTPException(status_code=400, detail="Serve il nome del server (finisce con .ts.net).")
+    if not chiave_server:
+        raise HTTPException(status_code=400, detail="Serve la chiave del server.")
+
+    ts = _accesso.stato_tailscale()
+    mio_nome = str(ts.get("nome") or "").strip().lower()
+    if not mio_nome.endswith(".ts.net"):
+        raise HTTPException(status_code=400, detail=(
+            "Questo computer non ha ancora un nome Tailscale: accendi Tailscale qui, poi riprova "
+            "(stato: %s)." % ("non installato" if not ts.get("installato")
+                              else ("spento" if not ts.get("attivo") else "senza nome"))))
+    if not ACCESSO_REMOTO.get("rete"):
+        raise HTTPException(status_code=400, detail=(
+            "Prima accendi «Consenti l'accesso dagli altri miei dispositivi»: senza, il server "
+            "busserebbe a una porta che non apre."))
+
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    corpo = json.dumps({"host": mio_nome, "chiave": ACCESSO_REMOTO.get("chiave", "")}).encode("utf-8")
+    url = "https://%s:8000/pc/registra?chiave=%s" % (server, urllib.parse.quote(chiave_server))
+    req = urllib.request.Request(url, data=corpo, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            esito = json.loads(r.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as e:
+        dettaglio = ""
+        try:
+            dettaglio = (json.loads(e.read().decode("utf-8") or "{}") or {}).get("detail") or ""
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail="Il server ha rifiutato: " + (dettaglio or str(e)))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=(
+            "Server non raggiungibile da questo computer (%s). Tailscale e' acceso qui?" % e))
+    return {"ok": True, "host": mio_nome, "server": server, "risposta": esito}
+
+
 @app.post("/accesso-remoto")
 def accesso_remoto_imposta(body: dict, request: Request):
     """Accende o spegne l'accesso: la chiave richiesta E le tre regole di Tailscale Serve insieme.
