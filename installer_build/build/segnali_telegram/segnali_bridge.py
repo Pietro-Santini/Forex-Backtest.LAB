@@ -1301,7 +1301,8 @@ def _firma_stato() -> tuple:
             tuple(STATO.get("syntra_utenti") or []), STATO.get("syntra_notifiche"))
 
 
-async def _manda_storico(websocket: WebSocket, sala: str, richiesta, da_capo: bool) -> None:
+async def _manda_storico(websocket: WebSocket, sala: str, richiesta, da_capo: bool,
+                         mesi: Optional[int] = None) -> None:
     async def manda(d: dict) -> None:
         try:
             await websocket.send_text(json.dumps({"tipo": "storico_sala", "sala": sala, "richiesta": richiesta, **d}))
@@ -1329,7 +1330,7 @@ async def _manda_storico(websocket: WebSocket, sala: str, richiesta, da_capo: bo
                 except Exception as e:
                     raise RuntimeError("sala non raggiungibile con questo account (%s)" % e.__class__.__name__)
             _log(True, "cronologia di %s: lettura%s" % (sala, " da capo" if da_capo else ""))
-            r = await storico_sale.leggi_telegram(client, ent, sala, interpreta, avanzamento, da_capo)
+            r = await storico_sale.leggi_telegram(client, ent, sala, interpreta, avanzamento, da_capo, mesi)
             _log(True, "cronologia di %s: %d messaggi nuovi letti, %d segnali in tutto" % (sala, r["letti"], len(r["segnali"])))
         await manda({"ok": True, **r})
     except Exception as e:
@@ -1439,8 +1440,13 @@ async def ws_segnali(websocket: WebSocket):
             if azione == "storico_sala":
                 # RICHIESTO: cronologia di TUTTI i segnali di una sala (Telegram) o di un utente
                 # Syntra. Gira a parte: puo' durare minuti e i segnali dal vivo non devono aspettare.
+                # `mesi`: quanto indietro andare. Senza, si legge tutto come prima.
+                try:
+                    _mesi = int(m.get("mesi") or 0) or None
+                except Exception:
+                    _mesi = None
                 asyncio.create_task(_manda_storico(websocket, str(m.get("sala") or ""), m.get("richiesta"),
-                                                   bool(m.get("da_capo"))))
+                                                   bool(m.get("da_capo")), _mesi))
                 continue
             if azione == "leggi_chat":
                 if STATO.get("uscito") and not STATO["sim"]:
