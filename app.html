@@ -35005,6 +35005,53 @@ function krakenVaiAGrafico(simbolo){
  try{ scrollToChart(); }catch(e){}
  try{ krakenPosPannello(); draw(); }catch(e){}
 }
+// SPOSTARE LO STOP DI UNA POSIZIONE KRAKEN.
+// Il ponte mette prima il nuovo e poi toglie il vecchio: mai un istante senza protezione.
+async function krakenSpostaSl(p){
+ const attuale=Number.isFinite(Number(p.sl))?Number(p.sl):'';
+ const buy=String(p.lato).toUpperCase().startsWith('B');
+ const v=await appPrompt('Nuovo stop loss per '+p.lato+' '+p.quantita+' '+p.simbolo+
+   '\n\nEntrata '+p.entrata+' · prezzo adesso '+p.mark+
+   '\nPer una posizione '+(buy?'in acquisto lo stop sta SOTTO':'in vendita lo stop sta SOPRA')+' il prezzo.',
+   {title:'🐙 Sposta lo stop',defaultValue:String(attuale),okLabel:'Sposta'});
+ if(v===null||String(v).trim()==='')return;
+ const prezzo=Number(String(v).replace(',','.'));
+ if(!Number.isFinite(prezzo)||prezzo<=0){ $('status').textContent='🐙 Prezzo non valido.'; return; }
+ // Dalla parte sbagliata lo stop chiuderebbe la posizione all'istante: meglio dirlo prima.
+ const mark=Number(p.mark);
+ if(Number.isFinite(mark)&&(buy?prezzo>=mark:prezzo<=mark)){
+  if(!await appConfirm('Questo stop e\' gia\' oltre il prezzo di adesso ('+mark+'): la posizione si chiuderebbe subito.\n\nProcedo lo stesso?',
+    {title:'🐙 Attenzione',okLabel:'Sposta',cancelLabel:'Annulla',danger:true}))return;
+ }
+ const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:prezzo});
+ $('status').textContent=r.ok?('🐙 '+p.simbolo+': stop spostato a '+prezzo+'.')
+                             :('🐙 Stop non spostato: '+r.message);
+ krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
+}
+// SPOSTARE I TARGET. Si danno tutti insieme, separati da «/»: spostarne uno solo vorrebbe dire
+// sapere quale ordine corrisponde a quale target, e dopo qualche modifica quella corrispondenza
+// non e' piu' affidabile.
+async function krakenSpostaTp(p){
+ const attuali=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+ const buy=String(p.lato).toUpperCase().startsWith('B');
+ const v=await appPrompt('Target per '+p.lato+' '+p.quantita+' '+p.simbolo+
+   '\n\nUno o piu\' prezzi separati da «/». Lascia vuoto per togliere tutti i target.'+
+   '\nLa quantita\' si divide fra i target, in parti uguali.'+
+   '\n\nEntrata '+p.entrata+' · prezzo adesso '+p.mark+
+   '\nPer una posizione '+(buy?'in acquisto i target stanno SOPRA':'in vendita i target stanno SOTTO')+' il prezzo.',
+   {title:'🐙 Sposta i target',defaultValue:attuali.join(' / '),okLabel:'Applica'});
+ if(v===null)return;
+ const prezzi=String(v).split('/').map(x=>Number(String(x).trim().replace(',','.')))
+   .filter(x=>Number.isFinite(x)&&x>0);
+ if(String(v).trim()!==''&&!prezzi.length){ $('status').textContent='🐙 Nessun prezzo valido.'; return; }
+ const storti=prezzi.filter(x=>buy?x<=Number(p.entrata):x>=Number(p.entrata));
+ if(storti.length&&!await appConfirm('Alcuni target ('+storti.join(', ')+') sono dalla parte della perdita rispetto all\'entrata ('+p.entrata+').\n\nProcedo lo stesso?',
+   {title:'🐙 Attenzione',okLabel:'Applica',cancelLabel:'Annulla',danger:true}))return;
+ const r=await krakenBridge('/tp',{simbolo:p.simbolo,tp:prezzi});
+ $('status').textContent=r.ok?('🐙 '+p.simbolo+': target '+(prezzi.length?prezzi.join(' / '):'tolti')+'.')
+                             :('🐙 Target non cambiati: '+r.message);
+ krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
+}
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
@@ -35049,7 +35096,20 @@ function krakenPosPannello(){
    Number.isFinite(sl)?(fmt(sl)+(stopProfit?' 🔒SP':'')):'—',
    tps.map(fmt).join(' / ')||'—', rr, fmt(p.quantita),
    usd(margine).replace('+',''), fmt(mark)];
-  celle.forEach(v=>{ const td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
+  celle.forEach((v,col)=>{
+   const td=document.createElement('td'); td.textContent=v;
+   // SL e TP (colonne 4 e 5) si possono spostare, ma solo sulla posizione SELEZIONATA: cosi' un
+   // clic distratto sulla tabella non puo' toccare lo stop di un'altra posizione.
+   if(selezionata&&(col===4||col===5)){
+    td.style.cursor='pointer';
+    td.style.textDecoration='underline dotted';
+    td.title=(col===4?'Clicca per spostare lo stop':'Clicca per cambiare i target');
+    td.addEventListener('click',()=>{ (col===4?krakenSpostaSl:krakenSpostaTp)(p); });
+   }else if(col===4||col===5){
+    td.title='Seleziona questa posizione per poter spostare stop e target';
+   }
+   tr.appendChild(td);
+  });
   const tdp=document.createElement('td'); tdp.textContent=usd(p.pnl); tdp.className=Number(p.pnl)>=0?'liveProfit':'liveLoss'; tr.appendChild(tdp);
 
   const tdb=document.createElement('td');
@@ -35064,7 +35124,9 @@ function krakenPosPannello(){
    .addEventListener('click',()=>krakenVaiAGrafico(p.simbolo));
 
   pulsante(selezionata?'✓ Selezionata':'Seleziona',
-   'Evidenzia questa posizione, a grafico e in tabella',selezionata)
+   selezionata?'Selezionata: le celle SL e TP si possono cliccare per spostarle'
+              :'Evidenzia a grafico, e permette di spostare stop e target cliccando le loro celle',
+   selezionata)
    .addEventListener('click',()=>{
     krakenSelezionata=(krakenSelezionata===p.simbolo)?'':p.simbolo;
     krakenPosPannello(); try{ draw(); }catch(e){}
@@ -35076,7 +35138,7 @@ function krakenPosPannello(){
    if(!await appConfirm('Spostare lo stop di '+p.lato+' '+p.quantita+' '+p.simbolo+' al prezzo di entrata ('+fmt(entry)+')?\n\nDa quel momento la posizione non può più chiudere in perdita.',
      {title:'🐙 Kraken · pareggio',okLabel:'Sposta',cancelLabel:'Annulla'}))return;
    bBe.disabled=true; bBe.textContent='⏳';
-   const r=await krakenBridge('/sl',{simbolo:p.simbolo,prezzo:entry});
+   const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:entry});
    $('status').textContent=r.ok?('🐙 '+p.simbolo+': stop portato a pareggio ('+fmt(entry)+').')
                                :('🐙 Stop non spostato: '+r.message);
    krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}

@@ -348,6 +348,12 @@ def _ordini(c: Client, simbolo: Optional[str] = None) -> list:
             if not simbolo or o.get("symbol", "").upper() == simbolo.upper()]
 
 
+def _e_tp(o: dict) -> bool:
+    """Un take profit, su Kraken, e' un ordine limite "reduce only": non c'e' un tipo apposta."""
+    return (str(o.get("orderType") or o.get("type") or "").lower().startswith("lmt")
+            or "limit" in str(o.get("orderType") or "").lower()) and bool(o.get("reduceOnly"))
+
+
 def _e_stop(o: dict) -> bool:
     return str(o.get("orderType", "")).lower() in ("stop", "stp")
 
@@ -409,6 +415,12 @@ class Segnale(BaseModel):
     tp: List[float]
     sl: float
     gruppo: Optional[str] = None
+
+
+class SpostaTp(BaseModel):
+    simbolo: str
+    tp: List[float] = []               # tutti i target, in ordine: lista vuota = toglili tutti
+    gruppo: Optional[str] = None       # il segnale: gli ordini nuovi portano la sua etichetta
 
 
 class SpostaSl(BaseModel):
@@ -967,6 +979,61 @@ def sposta_sl(corpo: SpostaSl):
                     except KrakenErrore:
                         pass
             return {"ok": True, "sl": nuovo}
+        except KrakenErrore as e:
+            raise _errore_http(e)
+
+
+@router.post("/tp")
+def sposta_tp(corpo: SpostaTp):
+    """Rifa' i take profit di una posizione: nuovi prezzi, vecchi ordini via.
+
+    I target si danno TUTTI insieme (lista di prezzi): spostarne uno solo vorrebbe dire sapere
+    quale ordine corrisponde a quale target, e dopo qualche modifica quella corrispondenza non e'
+    piu' affidabile. Rifarli tutti e' piu' semplice da capire e da verificare.
+    La quantita' si divide in parti uguali, l'ultima prende il resto: cosi' la somma torna sempre
+    esatta e non resta un pezzo di posizione senza target.
+    """
+    c = _cliente()
+    s = _norm(corpo.simbolo)
+    with _lock:
+        try:
+            q = _posizione(c, s)
+            if q == 0:
+                raise HTTPException(status_code=409, detail="nessuna posizione aperta su %s" % s)
+            info = c.strumento(s)
+            chiusura = "sell" if q > 0 else "buy"
+            prezzi = [float(p) for p in (corpo.tp or []) if p is not None]
+            # Un target dalla parte sbagliata chiuderebbe la posizione all'istante, in perdita.
+            for p in prezzi:
+                if (q > 0 and p <= 0) or (q < 0 and p <= 0):
+                    raise HTTPException(status_code=400, detail="prezzo del target non valido: %s" % p)
+            vecchi = [o.get("order_id") for o in _ordini(c, s) if _e_tp(o)]
+            nuovi = []
+            if prezzi:
+                totale = abs(q)
+                n = len(prezzi)
+                q1 = _giu(totale / n, info["step"])
+                if q1 <= 0:
+                    raise HTTPException(status_code=400, detail=(
+                        "la posizione (%s) non si puo' dividere in %d target: sotto il passo minimo di %s"
+                        % (totale, n, s)))
+                for i, prezzo in enumerate(prezzi):
+                    qi = q1 if i < n - 1 else round(totale - q1 * (n - 1), _dec(info["step"]))
+                    if qi <= 0:
+                        continue
+                    o = _invia(c, orderType="lmt", symbol=s, side=chiusura, size=qi,
+                               limitPrice=_vicino(prezzo, info["tick"]), reduceOnly="true",
+                               cliOrdId=(("fbl_" + corpo.gruppo)[:36] + "_tp%d" % (i + 1)) if corpo.gruppo else None)
+                    nuovi.append({"indice": i + 1, "id": o.get("order_id"),
+                                  "prezzo": _vicino(prezzo, info["tick"]), "quantita": qi})
+            # Prima i nuovi, poi via i vecchi: mai un istante senza target per un errore di rete.
+            for o in vecchi:
+                if o not in [x["id"] for x in nuovi]:
+                    try:
+                        c.chiama("POST", "/api/v3/cancelorder", {"order_id": o})
+                    except KrakenErrore:
+                        pass
+            return {"ok": True, "tp": nuovi}
         except KrakenErrore as e:
             raise _errore_http(e)
 
