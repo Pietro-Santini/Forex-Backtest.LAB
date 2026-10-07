@@ -45,3 +45,37 @@ bisogno, provato su Oracle, mai collegato a ordini veri senza approvazione.
 | skfolio | ottimizzazione di portafoglio e rischio | ripartire il rischio fra sale e strategie | BSD-3 | C |
 | Hummingbot | market making e arbitraggio | poco pertinente (qui si seguono segnali) | Apache-2.0 | scartato per ora |
 Prima di tutti: server Oracle base e test sui segnali (lavori A).
+
+## Progetto futuro: server Windows dedicato, con piu' utenti (7 ottobre 2026)
+
+Proposto dal proprietario. Oggi la strada e' ibrida: MT5 sul computer di casa, Kraken e segnali sul
+server Oracle (Linux). L'idea e' un **server Windows nel cloud** dove gira TUTTO - MT5 col suo
+terminale, il ponte, Syntra, Telegram - e a cui **anche altri utenti** possono chiedere grafico e
+segnali, senza tenere acceso un computer.
+
+Perche' ha senso: toglie l'unico pezzo che oggi obbliga ad avere il PC acceso. La catena di adesso
+e' `terminale MT5 -> ponte sul PC (8001) -> server -> telefono`; li' diventerebbe tutta dentro una
+macchina sola, e Syntra smetterebbe di essere l'eccezione che funziona solo su Windows.
+
+**Cosa va deciso prima di cominciare** - sono le domande che decidono se il progetto e' di una
+settimana o di tre mesi:
+
+1. **Un MT5 per utente o uno solo condiviso?** Un terminale MT5 e' legato a un conto. Piu' utenti
+   veri vogliono dire piu' terminali sulla stessa macchina (memoria, licenze, finestre) oppure un
+   terminale solo in sola lettura per i dati, con gli ordini che restano sul conto di ciascuno.
+   E' la domanda che cambia tutto il resto.
+2. **Chi entra, e come si tiene separato da chi?** Oggi la chiave e' una sola e l'accesso passa da
+   Tailscale, cioe' dai dispositivi di una persona. Con piu' utenti servono identita' separate,
+   dati separati e un modo per non far vedere a uno le posizioni di un altro.
+3. **Soldi veri di altre persone.** `cervello/REGOLE.md` oggi vieta i conti reali agli agenti.
+   Ospitare ordini di terzi e' un'altra categoria di responsabilita': va deciso dal proprietario,
+   non dato per scontato.
+4. **Costi.** Windows nel cloud si paga ogni mese (licenza + macchina), al contrario della ARM
+   gratuita di Oracle. Va messo in conto prima, non scoperto dopo.
+5. **La sessione Telegram di chi?** Una per utente, con i vincoli di `REGOLE.md`.
+
+**Cosa e' gia' pronto e non va rifatto**: il server come porta unica (`/pc/<porta>/<percorso>`, con
+il canale dal vivo), il controllo della chiave condiviso fra i tre servizi, e il modello di
+strategia unico (`fblSimulaStrategia`) usato sia per le prove sia per le aperture.
+
+Stato: **idea, non pianificata.** Vedi `cervello/ORACLE.md` per la strada attuale.
