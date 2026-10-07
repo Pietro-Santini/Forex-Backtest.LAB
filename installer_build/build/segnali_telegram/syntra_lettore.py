@@ -616,6 +616,18 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
     """Gira per sempre. `consegna(segnale, utente, quando_ms)` e' la funzione del ponte.
     Modalita' "notifiche" (predefinita, RICHIESTO): resta sulla pagina Notifiche di Syntra.
     Modalita' "schede": il giro sulle linguette FX/IDX, Crypto, Azioni (come prima)."""
+    # SYNTRA GIRA SOLO SUL COMPUTER. Legge l'app Android dentro BlueStacks attraverso ADB: su un
+    # server Linux non c'e' ne' BlueStacks ne' Windows, e nessun percorso potra' mai esistere.
+    # Prima si tentava lo stesso e usciva "[Errno 2] No such file or directory" con un percorso di
+    # Windows, che manda a cercare un file mancante invece di dire la cosa vera - ed e' successo
+    # davvero appena il ponte dei segnali e' stato spostato sul server.
+    import os as _os
+    if _os.name != "nt":
+        stato["syntra"] = ("Syntra funziona solo sul computer: legge l'app Android dentro "
+                           "BlueStacks, che su un server Linux non c'e'. Le sale Telegram "
+                           "funzionano dal server; per Syntra tieni acceso il ponte sul computer.")
+        log("Syntra non parte: " + stato["syntra"])
+        return
     # adb trovato da solo (quello di BlueStacks, HD-Adb.exe): l'utente non deve scaricare niente.
     try:
         import avvio_bluestacks as _ab

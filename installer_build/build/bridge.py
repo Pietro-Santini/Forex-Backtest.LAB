@@ -1147,8 +1147,18 @@ def registra_al_server(body: dict, request: Request):
             pass
         raise HTTPException(status_code=502, detail="Il server ha rifiutato: " + (dettaglio or str(e)))
     except Exception as e:
+        # IL NOME PROVATO VA DETTO. Senza, un nome scritto male e un Tailscale spento danno lo
+        # stesso messaggio, e si cerca il guasto dalla parte sbagliata: e' successo davvero il
+        # 7 ottobre 2026, e per scoprirlo e' servito chiamare il ponte da fuori.
+        if "getaddrinfo" in str(e) or "Name or service not known" in str(e):
+            raise HTTPException(status_code=502, detail=(
+                "Il nome \"%s\" non esiste su questa rete: quasi sempre e' un carattere sbagliato. "
+                "Il nome giusto lo stampa prepara_server.sh, oppure si legge sul server con "
+                "`tailscale status`. (Se invece il nome e' giusto, controlla che Tailscale sia "
+                "acceso su questo computer.)" % server))
         raise HTTPException(status_code=502, detail=(
-            "Server non raggiungibile da questo computer (%s). Tailscale e' acceso qui?" % e))
+            "Server \"%s\" non raggiungibile da questo computer (%s). Tailscale e' acceso qui?"
+            % (server, e)))
     return {"ok": True, "host": mio_nome, "server": server, "risposta": esito}
 
 

@@ -13,6 +13,22 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Dal telefono il grafico diceva «nessuna risposta»** — risolto app v98 + server — il grafico sta
+  sulla porta 8001 del PC, ma il server girava al PC solo la 8000: dal telefono non aveva nessuna
+  strada. Ora il server gira tutte e tre le porte previste (`/pc/<porta>/<percorso>`, solo
+  8000/8001/8769) e l'app capisce da sola se il ponte locale c'e' (sul computer) o no (sul
+  telefono) chiedendolo una volta e ricontrollando ogni minuto. **La chiave giusta la mette
+  `fblConChiave`**, che riconosce l'indirizzo del server: metterla nei singoli punti avrebbe
+  voluto dire dimenticarsene in qualcuno.
+  **Resta aperto**: i tick dal vivo passano da WebSocket, che il server non gira ancora. Dal
+  telefono il grafico si disegna con lo storico ma non si muove da solo.
+- **«computer spento» detto anche quando nessun computer era registrato** — risolto app v98 — 502 e
+  503 sono due cose diverse che si risolvono in modi opposti, e avere lo stesso messaggio ha fatto
+  cercare un guasto che non c'era. Test: `porta_unica.test.mjs`.
+- **Syntra sul server: «[Errno 2] No such file or directory: C:\platform-toolsdb.exe»** —
+  risolto — spostando il ponte dei segnali sul server (Linux), Syntra tentava lo stesso di aprire
+  ADB con un percorso di Windows. Ora dice la verita': Syntra legge BlueStacks sul computer e sul
+  server non puo' funzionare (gia' previsto in ORACLE.md, fase 4).
 - **Le barre dei grafici disegnate SOPRA i nomi** (profitto per strategia, per sala, per asset) —
   risolto app v97 — `graficoOrizz` disegnava le barre negative normali e le ribaltava con un
   `transform` SVG (`translate(...) scale(-1,1)`). Ma l'animazione CSS `fsGrowX` scrive anch'essa

@@ -65,8 +65,8 @@ test('le tre righe dicono quale pezzo manca, non solo "non funziona"', async () 
     const r = await pagina.evaluate(async () => {
       localStorage.setItem('fbl_server_host', 'srv.tail1.ts.net');
       localStorage.setItem('fbl_server_chiave', 'K');
-      // Il caso vero: il server c'è (Kraken e segnali rispondono) ma il computer è spento, quindi
-      // gli ordini no. Il server lo dice con un 502, non fingendo che vada tutto bene.
+      // Il caso vero: il server c'è (Kraken e segnali rispondono) ma il computer non risponde,
+      // quindi gli ordini no. Il server lo dice con un 502, non fingendo che vada tutto bene.
       window.fetch = async (u) => String(u).includes('/pc/')
         ? {ok:false, status:502} : {ok:true, status:200};
       const esiti = await fblServiziControlla();
@@ -78,9 +78,13 @@ test('le tre righe dicono quale pezzo manca, non solo "non funziona"', async () 
       };
     });
     assert.equal(r.righe, 3);
-    assert.equal(r.verdi, 2, 'grafico e segnali rispondono');
-    assert.equal(r.rossi, 1, 'solo gli ordini no');
-    assert.equal(r.esiti.find(x => x.nome === 'Ordini').esito, 'computer spento');
+    // Dal telefono anche il GRAFICO passa dal computer (porta 8001, girata dal server): se il
+    // computer non risponde restano in piedi solo i segnali, che stanno sul server. È la realtà,
+    // e il riquadro deve dirla invece di mostrare un verde consolatorio.
+    assert.equal(r.verdi, 1, 'solo i segnali, che stanno sul server');
+    assert.equal(r.rossi, 2, 'ordini e grafico dipendono tutti e due dal computer');
+    assert.equal(r.esiti.find(x => x.nome === 'Ordini').esito, 'il computer non risponde');
+    assert.equal(r.esiti.find(x => x.nome === 'Grafico').esito, 'il computer non risponde');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -97,6 +101,31 @@ test('chiudendo la schermata si smette di controllare', async () => {
     });
     // Continuare a bussare a schermata chiusa consumerebbe batteria e dati del telefono.
     assert.deepEqual(r, {acceso:true, spento:true, chiusa:'none'});
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('«nessun computer registrato» non si confonde con «il computer non risponde»', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async () => {
+      localStorage.setItem('fbl_server_host', 'srv.tail1.ts.net');
+      localStorage.setItem('fbl_server_chiave', 'K');
+      const out = {};
+      // 503: il server c'è ma nessun computer si è ancora presentato. Si risolve premendo Salva
+      // sul computer — niente a che vedere con un computer spento. Chiamarle allo stesso modo ha
+      // fatto cercare un guasto che non c'era (segnalato dal proprietario, 7 ottobre 2026).
+      window.fetch = async (u) => String(u).includes('/pc/') ? {ok:false, status:503} : {ok:true, status:200};
+      out.nonRegistrato = (await fblServiziControlla()).find(x => x.nome === 'Ordini').esito;
+      // 502: il computer è registrato ma non risponde davvero.
+      window.fetch = async (u) => String(u).includes('/pc/') ? {ok:false, status:502} : {ok:true, status:200};
+      out.nonRisponde = (await fblServiziControlla()).find(x => x.nome === 'Ordini').esito;
+      return out;
+    });
+    assert.equal(r.nonRegistrato, 'nessun computer registrato');
+    assert.equal(r.nonRisponde, 'il computer non risponde');
+    assert.notEqual(r.nonRegistrato, r.nonRisponde,
+      'due situazioni che si risolvono in modi opposti non possono avere lo stesso messaggio');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
