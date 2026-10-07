@@ -13,6 +13,16 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Sul telefono l'app resta ferma sul logo** — risolto app v91 — `sw.js` — MISURATO: `app.html`
+  pesa 4,03 MB e ci mette 3,2 s a scaricarsi da un computer con rete veloce (su dati mobili molto
+  di piu'). Il service worker chiedeva SEMPRE la rete, con `cache: 'no-store'` che salta apposta
+  anche la cache del browser, e si decideva a mostrare la copia salvata solo dopo 4 secondi
+  (`RISERVA_MS`): con un file da 4 MB quell'attesa c'era praticamente sempre, e i 4 MB si
+  riscaricavano a ogni apertura. Ora la copia salvata si mostra SUBITO e la rete aggiorna dietro
+  (senza `no-store`: con l'ETag l'aggiornamento e' una domanda da pochi byte). Quando arriva una
+  versione nuova la pagina lo dice con un avviso e un pulsante «Ricarica», invece di ricaricarsi
+  da sola mentre si guarda una posizione aperta.
+  Test: `laboratorio/app/avvio_cache.test.mjs` (6, rossi prima).
 - **«Installa i pacchetti aggiuntivi» chiesto a chi li ha gia' installati** — risolto app v90 —
   `mt5StartLoginFlow()` provava `/health` UNA volta sola e, se non rispondeva, mostrava il passo 1,
   che e' la schermata dell'installazione. Ma `/health` muto quasi sempre vuol dire che il servizio
