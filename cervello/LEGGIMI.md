@@ -14,6 +14,7 @@ prossimo giro è dimenticata.
 | `LEZIONI.md` | Errori di ragionamento già fatti e come non rifarli | chi sbaglia (e se ne accorge) |
 | `IDEE.md` | Idee per estetica, semplicità, leggerezza, guide per neofiti | chiunque, con priorità |
 | `DIARIO.md` | Cosa ha fatto ogni giro di agenti, con l'esito del collaudo | il regista, a fine giro |
+| `CONSEGNA.md` | **Da leggere per primo se riprendi il lavoro senza aver visto le sessioni precedenti**: com'e' fatto il sistema, cosa e' stato fatto, cosa manca | chi consegna il lavoro |
 
 ## Protocollo (vale per ogni agente)
 1. **Prima di lavorare:** leggi `METODO.md`, `PROPRIETARIO.md`, `REGOLE.md`, poi `MAPPA.md` e le voci di `BUG.md`/`LEZIONI.md` che
