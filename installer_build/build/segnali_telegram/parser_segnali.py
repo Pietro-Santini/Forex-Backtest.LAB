@@ -42,12 +42,57 @@ ALIAS_STRUMENTI: Dict[str, str] = {
     "NAS100": "NAS100", "NASDAQ": "NAS100", "US100": "NAS100", "USTEC": "NAS100", "USTEC100": "NAS100",
     "SPX500": "SPX500", "SP500": "SPX500", "US500": "SPX500", "SPX": "SPX500",
     "GER40": "GER40", "DAX": "GER40", "DE40": "GER40",
-    # cripto
-    "BTC": "BTCUSD", "BITCOIN": "BTCUSD", "BTCUSD": "BTCUSD", "BTC/USD": "BTCUSD", "BTCUSDT": "BTCUSD",
-    "ETH": "ETHUSD", "ETHEREUM": "ETHUSD", "ETHUSD": "ETHUSD", "ETH/USD": "ETHUSD",
+    # cripto: si generano piu' sotto, da CRIPTO
     # energia
     "OIL": "USOIL", "USOIL": "USOIL", "WTI": "USOIL", "CRUDE": "USOIL",
 }
+
+# CRIPTO: si generano, invece di elencare a mano ogni forma di ogni moneta.
+# Le sale scrivono la stessa moneta in molti modi - SOL, SOLUSD, SOLUSDT, SOL/USD, SOLPERP - e una
+# forma dimenticata vuol dire un segnale non riconosciuto, in silenzio. Aggiungere una moneta qui
+# e' una riga: il nome esteso serve perche' certe sale scrivono "BITCOIN" o "SOLANA" per esteso.
+CRIPTO: Dict[str, List[str]] = {
+    "BTC": ["BITCOIN", "XBT", "XBTUSD"],
+    "ETH": ["ETHEREUM"],
+    "SOL": ["SOLANA"],
+    "XRP": ["RIPPLE"],
+    "ADA": ["CARDANO"],
+    "DOGE": ["DOGECOIN"],
+    "BNB": ["BINANCECOIN"],
+    "LTC": ["LITECOIN"],
+    "AVAX": ["AVALANCHE"],
+    "LINK": ["CHAINLINK"],
+    "DOT": ["POLKADOT"],
+    "MATIC": ["POLYGON"],
+    "TRX": ["TRON"],
+    "ATOM": ["COSMOS"],
+    "UNI": ["UNISWAP"],
+    "NEAR": [],
+    "APT": ["APTOS"],
+    "ARB": ["ARBITRUM"],
+    "OP": ["OPTIMISM"],
+    "INJ": ["INJECTIVE"],
+    "SUI": [],
+    "TON": ["TONCOIN"],
+    "FIL": ["FILECOIN"],
+    "ETC": [],
+    "XLM": ["STELLAR"],
+    "HBAR": ["HEDERA"],
+    "AAVE": [],
+    "SHIB": ["SHIBAINU"],
+    "PEPE": [],
+    "ICP": [],
+    "VET": ["VECHAIN"],
+}
+for _moneta, _nomi in CRIPTO.items():
+    _std = _moneta + "USD"
+    # Le forme in cui una sala puo' scriverla. "PERP" perche' sui futures si scrive spesso cosi'.
+    _forme = [_moneta, _std, _moneta + "USDT", _moneta + "USDC", _moneta + "/USD", _moneta + "/USDT",
+              _moneta + "PERP", _moneta + "-USD", _moneta + "USD.P"]
+    for _n in _nomi:
+        _forme += [_n, _n + "USD", _n + "USDT"]
+    for _f in _forme:
+        ALIAS_STRUMENTI.setdefault(_f.upper(), _std)
 
 # Coppie forex: si generano dalle valute, invece di elencarne 28 a mano.
 VALUTE = ["EUR", "USD", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD"]

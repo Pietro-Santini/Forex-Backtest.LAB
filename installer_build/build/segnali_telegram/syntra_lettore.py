@@ -623,10 +623,14 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
     # davvero appena il ponte dei segnali e' stato spostato sul server.
     import os as _os
     if _os.name != "nt":
-        stato["syntra"] = ("Syntra funziona solo sul computer: legge l'app Android dentro "
-                           "BlueStacks, che su un server Linux non c'e'. Le sale Telegram "
-                           "funzionano dal server; per Syntra tieni acceso il ponte sul computer.")
-        log("Syntra non parte: " + stato["syntra"])
+        # IN `syntra_errore`, non in una chiave nostra: e' quella che l'app mostra. Scritto altrove,
+        # il messaggio non arriva a nessuno e l'app resta "attiva, nessun errore, nessuna sala".
+        stato["syntra_errore"] = ("Syntra funziona solo sul computer: legge l'app Android dentro "
+                                  "BlueStacks, che su un server Linux non c'e'. Le sale Telegram "
+                                  "funzionano dal server; per Syntra tieni acceso il ponte sul "
+                                  "computer.")
+        stato["syntra_collegato"] = False
+        log("Syntra non parte: " + stato["syntra_errore"])
         return
     # adb trovato da solo (quello di BlueStacks, HD-Adb.exe): l'utente non deve scaricare niente.
     try:
@@ -644,6 +648,10 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
     primo = True
     ultimo_rientro = time.time()
     ultimo_controllo_app = 0.0
+    # Quante volte di fila la pagina Notifiche non si e' trovata. Serve a due cose: dirlo (prima
+    # restava tutto zitto) e, dopo un po', riaprire Syntra - perche' se la pagina non si trova
+    # l'emulatore e' su qualcos'altro, e tirare giu' la lista non serve a niente.
+    mancate = 0
     while True:
         try:
             # Ogni 30 s: BlueStacks aperto e Syntra davanti (se l'avvio automatico e' acceso).
@@ -668,14 +676,41 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
                     primo = False
             else:
                 riapri = time.time() - ultimo_rientro > RIAPRI_OGNI_S
-                if not primo:
+                # L'aggiornamento NON dipende piu' da `primo`: dipende dall'aver trovato la pagina
+                # almeno una volta. Legato a `primo`, un inventario mai concluso fermava per sempre
+                # l'aggiornamento della lista.
+                if not primo or mancate:
                     await aggiorna_notifiche(adb, stato, log, riapri)
                     if riapri:
                         ultimo_rientro = time.time()
                 lette = await giro_notifiche(adb, visti_notifiche, primo, log, stato)
-                if primo and stato.get("syntra_notifiche") == "ok":
-                    log("Syntra: %d notifiche gia' presenti (non aperte). In ascolto delle nuove." % len(visti_notifiche))
-                    primo = False
+                if stato.get("syntra_notifiche") == "ok":
+                    if primo:
+                        log("Syntra: %d notifiche gia' presenti (non aperte). In ascolto delle nuove." % len(visti_notifiche))
+                        primo = False
+                    if mancate:
+                        log("Syntra: pagina Notifiche ritrovata dopo %d tentativi" % mancate)
+                    mancate = 0
+                    stato["syntra_errore"] = None
+                else:
+                    # NON si resta zitti: prima lo stato diceva "collegato, nessun errore" mentre
+                    # il robot girava a vuoto.
+                    mancate += 1
+                    stato["syntra_errore"] = ("pagina Notifiche di Syntra non trovata (%d giri). "
+                                              "Aprila a mano in Syntra, o controlla che "
+                                              "l'emulatore non sia su un'altra schermata." % mancate)
+                    if mancate % 10 == 0:
+                        log("Syntra: " + stato["syntra_errore"])
+                    # Dopo un po' di tentativi la pagina non si trova perche' Syntra e' su
+                    # qualcos'altro (login, aggiornamento, schermata di avvio): si riapre l'app,
+                    # invece di continuare a cercare un'icona che non c'e'.
+                    if mancate % 20 == 0:
+                        log("Syntra: riapro l'app nell'emulatore")
+                        try:
+                            await adb.apri_syntra()
+                            await asyncio.sleep(6)
+                        except Exception as e:
+                            log("Syntra: non sono riuscito a riaprirla (%s)" % e)
                 for s in lette:
                     await _consegna_scheda(s, visti, consegna, log, stato)
             stato["syntra_ultimo_giro"] = time.time()

@@ -25999,10 +25999,23 @@ const TG_GRUPPI_ASSET=[
  ['US30','DJI','DOW','DOWJONES','WALLSTREET'],
  ['SPX500','US500','SP500','SPX','USA500'],
  ['GER40','DE40','DAX','GERMANY40'],
- ['BTCUSD','BITCOIN','BTC','BTCUSDT'],
- ['ETHUSD','ETHEREUM','ETH'],
  ['USOIL','OIL','WTI','CRUDE','OILCRUDE','CRUDEOIL']
 ];
+// LE CRIPTO si generano, invece di elencare a mano ogni forma di ogni moneta: la moneta sola
+// (SOL), la coppia (SOLUSD), quella dei futures (SOLUSDT, SOLPERP) e il nome per esteso (SOLANA).
+// Lo stesso elenco sta nel ponte (CRIPTO in parser_segnali.py): aggiungere una moneta vuol dire
+// una riga qui e una la'.
+const TG_CRIPTO={BTC:['BITCOIN','XBT'],ETH:['ETHEREUM'],SOL:['SOLANA'],XRP:['RIPPLE'],
+ ADA:['CARDANO'],DOGE:['DOGECOIN'],BNB:['BINANCECOIN'],LTC:['LITECOIN'],AVAX:['AVALANCHE'],
+ LINK:['CHAINLINK'],DOT:['POLKADOT'],MATIC:['POLYGON'],TRX:['TRON'],ATOM:['COSMOS'],
+ UNI:['UNISWAP'],NEAR:[],APT:['APTOS'],ARB:['ARBITRUM'],OP:['OPTIMISM'],INJ:['INJECTIVE'],
+ SUI:[],TON:['TONCOIN'],FIL:['FILECOIN'],ETC:[],XLM:['STELLAR'],HBAR:['HEDERA'],AAVE:[],
+ SHIB:['SHIBAINU'],PEPE:[],ICP:[],VET:['VECHAIN']};
+Object.keys(TG_CRIPTO).forEach(function(moneta){
+ const g=[moneta+'USD',moneta,moneta+'USDT',moneta+'USDC',moneta+'PERP'];
+ TG_CRIPTO[moneta].forEach(function(n){ g.push(n); g.push(n+'USD'); });
+ TG_GRUPPI_ASSET.push(g);
+});
 function tgNorm(v){ return String(v||'').toUpperCase().replace(/[^A-Z0-9]/g,''); }
 // I nomi da provare per una parola arrivata dalla sala: prima lei (ha sempre la precedenza), poi
 // gli altri nomi del suo gruppo. Senza duplicati, cosi' l'ordine di prova resta prevedibile.
@@ -39250,7 +39263,16 @@ const fmtE0=v=>{ try{ return euro(v); }catch(e){ return v.toFixed(2)+' €'; } }
 const pct=v=>v==null||!isFinite(v)?'—':v.toFixed(1)+'%';
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const SESS={backtest:'Storico',live:'Live',backtest_propfirm:'Storico · Prop Firm',live_propfirm:'Live · Prop Firm'};
-function contoDi(t){ if(t.mt5Ticket!=null)return 'MT5 '+(t.mt5Login?String(t.mt5Login):'(conto sconosciuto)'); return SESS[t.mode]||String(t.mode||'Storico'); }
+// Il nome del conto di un trade. KRAKEN PER PRIMO: le sue righe hanno `mode:'live'` e nessun
+// ticket MT5, quindi prima finivano sotto "Live" insieme ai trade simulati della sessione Live.
+function contoDi(t){
+ if(t&&(t.account==='kraken'||t.krakenConto||t.krakenChiave))
+  return '🐙 Kraken '+String((t.krakenConto||'conto')).replace(/^🐙\s*/,'');
+ if(t.mt5Ticket!=null)return 'MT5 '+(t.mt5Login?String(t.mt5Login):'(conto sconosciuto)');
+ return SESS[t.mode]||String(t.mode||'Storico');
+}
+// Di quale famiglia e' un conto. Serve a non sommare quello che non si somma.
+function eKraken(nomeConto){ return String(nomeConto||'').indexOf('🐙 Kraken')===0; }
 function esito(t){ try{ return esitoOperazione(t); }catch(e){ const p=Number(t.pl); return !isFinite(p)||Math.abs(p)<0.005?'BE':(p>0?'WIN':'LOSS'); } }
 function rrPiano(t){ try{ const v=rrArrotondatoTesto(Number(t.entry),Number(t.rrSl??t.sl),Number(t.tp),':'); return v==='—'?null:v; }catch(e){ return null; } }
 function rReale(t){
@@ -39273,7 +39295,50 @@ function righe(){
 }
 function giorno0(ms){ const d=new Date(ms); d.setHours(0,0,0,0); return d.getTime(); }
 function filtra(rs){
- return rs.filter(r=>(F.da==null||r.tc>=F.da)&&(F.a==null||r.tc<F.a)&&(!F.conto||r.conto===F.conto)&&(!F.asset||r.asset===F.asset)&&(!F.sala||r.sala===F.sala)&&(!F.strat||r.strat===F.strat));
+ // Il conto: oltre al nome preciso, due famiglie intere.
+ const conto=r=>{
+  if(!F.conto)return true;                       // tutto, Forex e Kraken insieme
+  if(F.conto==='__forex')return !eKraken(r.conto);
+  if(F.conto==='__kraken')return eKraken(r.conto);
+  return r.conto===F.conto;
+ };
+ return rs.filter(r=>(F.da==null||r.tc>=F.da)&&(F.a==null||r.tc<F.a)&&conto(r)&&(!F.asset||r.asset===F.asset)&&(!F.sala||r.sala===F.sala)&&(!F.strat||r.strat===F.strat));
+}
+// IL MENU DEI CONTI, a famiglie. Forex e Kraken in due gruppi, ognuno con la sua voce "tutti":
+// cosi' si guarda un mondo per volta senza dover selezionare i conti a uno a uno. La voce che
+// somma tutto resta, in fondo, scritta per quello che e'.
+function opzioniConto(valori){
+ const el=document.getElementById('fsConto'); if(!el)return;
+ const cur=el.value;
+ el.textContent='';
+ const forex=valori.filter(v=>!eKraken(v)), kraken=valori.filter(eKraken);
+ const validi=[''];
+ const voce=(dove,valore,testo)=>{
+  const o=document.createElement('option'); o.value=valore; o.textContent=testo;
+  dove.appendChild(o); validi.push(valore);
+ };
+ const gruppo=(nome)=>{ const g=document.createElement('optgroup'); g.label=nome; el.appendChild(g); return g; };
+ // Senza Kraken il menu resta quello di prima: niente gruppi per un solo mondo.
+ if(!kraken.length){
+  const o0=document.createElement('option'); o0.value=''; o0.textContent='Tutti i conti'; el.appendChild(o0);
+  forex.forEach(v=>voce(el,v,v));
+ }else{
+  const o0=document.createElement('option'); o0.value='__forex'; o0.textContent='Tutti i conti Forex';
+  el.appendChild(o0); validi.push('__forex');
+  if(forex.length){ const g=gruppo('Forex e sessioni'); forex.forEach(v=>voce(g,v,v)); }
+  const gk=gruppo('Kraken (futures cripto, in dollari)');
+  voce(gk,'__kraken','Tutti i conti Kraken');
+  kraken.forEach(v=>voce(gk,v,v));
+  const g2=gruppo('Insieme');
+  voce(g2,'','Tutti (Forex + Kraken)');
+ }
+ // QUALE VOCE RESTA SCELTA. Chi non ha mai toccato il filtro, e ha anche Kraken, parte dal solo
+ // Forex: meglio una vista giusta e piu' stretta che una somma fra mondi diversi decisa da noi.
+ // Chi invece ha scelto a mano - anche «Tutti (Forex + Kraken)» - si tiene la sua scelta.
+ const scelto=el.dataset.fsContoScelto==='1';
+ let voluto=cur;
+ if(!scelto&&cur===''&&kraken.length)voluto='__forex';
+ el.value=validi.includes(voluto)?voluto:(kraken.length?'__forex':'');
 }
 function opzioni(sel,valori,tutti){
  const el=document.getElementById(sel); if(!el)return; const cur=el.value;
@@ -39421,11 +39486,32 @@ function graficoAndamento(card,rs){
  });
  hit.addEventListener('pointerleave',()=>{ cross.setAttribute('opacity',0); dot.setAttribute('opacity',0); nascondiTip(); });
 }
+// LA TENDENZA: retta dei minimi quadrati sui valori dei periodi. Torna null quando non c'e'
+// niente da dire - meno di tre periodi, oppure valori tutti identici (pendenza zero, che e' una
+// riga piatta e non una tendenza). Separata dal disegno perche' e' l'unico pezzo con dei conti
+// dentro, e si prova senza aprire un grafico.
+function tendenzaLineare(valori){
+ // `Number(null)` e' 0, non NaN: convertire e poi filtrare lascerebbe passare i periodi vuoti
+ // come pareggi, e ogni buco tirerebbe la retta verso lo zero. Si scartano PRIMA di convertire.
+ const v=(valori||[]).filter(x=>x!=null&&x!==''&&Number.isFinite(Number(x))).map(Number);
+ if(v.length<3)return null;
+ const n=v.length;
+ // Le x sono gli indici 0..n-1: i periodi sono in fila e distano uno.
+ const mx=(n-1)/2, my=v.reduce((a,b)=>a+b,0)/n;
+ let num=0, den=0;
+ for(let i=0;i<n;i++){ num+=(i-mx)*(v[i]-my); den+=(i-mx)*(i-mx); }
+ if(!(den>0))return null;
+ const pendenza=num/den;
+ return {pendenza,inizio:my+pendenza*(0-mx),fine:my+pendenza*((n-1)-mx)};
+}
 // 2) barre divergenti (profitto per periodo): verde sopra lo zero, rosso sotto
 function graficoBarreDiv(card,voci,opz){
  const W=card.w,H=opz&&opz.h||230,pl=48,pr=8,pt=12,pb=26; if(!voci.length)return vuoto(card.corpo);
  const s=svg(W,H); card.corpo.appendChild(s);
- const sc=scalaNice(Math.min(0,...voci.map(v=>v.v)),Math.max(0,...voci.map(v=>v.v)),4);
+ const tend=(opz&&opz.tendenza===false)?null:tendenzaLineare(voci.map(v=>v.v));
+ // La retta entra nella scala: calcolata dopo, uscirebbe dal grafico o si vedrebbe tagliata.
+ const estremi=voci.map(v=>v.v).concat(tend?[tend.inizio,tend.fine]:[]);
+ const sc=scalaNice(Math.min(0,...estremi),Math.max(0,...estremi),4);
  const Y=v=>pt+(sc.hi-v)/(sc.hi-sc.lo)*(H-pt-pb);
  const g=el('g',{class:'grid'},s); sc.ticks.forEach(v=>{ el('line',{x1:pl,x2:W-pr,y1:Y(v),y2:Y(v)},g); txt(s,pl-6,Y(v)+3.5,compatto(v),{'text-anchor':'end',class:'num'}); });
  const slot=(W-pl-pr)/voci.length, bw=Math.max(2,Math.min(38,slot-2));
@@ -39438,6 +39524,20 @@ function graficoBarreDiv(card,voci,opz){
   if(i%passo===0)txt(s,x+bw/2,H-8,v.l,{'text-anchor':'middle'});
  });
  el('line',{x1:pl,x2:W-pr,y1:Y(0),y2:Y(0),class:'axis0'},s);
+ if(tend){
+  // Dal centro della prima barra al centro dell'ultima: la retta copre i periodi che esistono, non
+  // i bordi del disegno.
+  const xA=pl+slot/2, xB=pl+(voci.length-1)*slot+slot/2;
+  const su=tend.pendenza>=0;
+  const colore=su?POS:NEG;
+  el('line',{x1:xA,y1:Y(tend.inizio),x2:xB,y2:Y(tend.fine),stroke:colore,'stroke-width':2,
+   'stroke-dasharray':'6 4','stroke-linecap':'round',opacity:.85},s);
+  // Quanto migliora (o peggiora) ogni periodo: la pendenza e' esattamente quello.
+  const q=(su?'+':'−')+compatto(Math.abs(tend.pendenza));
+  const et=txt(s,xB,Math.max(pt+10,Math.min(H-pb-4,Y(tend.fine)-8)),'tendenza '+q+'/periodo',
+   {'text-anchor':'end',class:'num'});
+  et.style.fill=colore; et.style.fontWeight='700';
+ }
 }
 // 3) barre verticali semplici (conteggi)
 function graficoBarre(card,voci,colore,opz){
@@ -39546,7 +39646,7 @@ function disegna(animato){
  ov.classList.toggle('anim',!!animato); TIPS.clear(); tipSeq=0;
  const tutte=righe();
  const uniq=(f)=>[...new Set(tutte.map(f))].sort((a,b)=>a.localeCompare(b));
- opzioni('fsConto',uniq(r=>r.conto),'Tutti i conti'); opzioni('fsAsset',uniq(r=>r.asset),'Tutti gli asset');
+ opzioniConto(uniq(r=>r.conto)); opzioni('fsAsset',uniq(r=>r.asset),'Tutti gli asset');
  opzioni('fsSala',uniq(r=>r.sala),'Tutte le sale'); opzioni('fsStrat',uniq(r=>r.strat),'Tutte le strategie');
  F.conto=document.getElementById('fsConto').value; F.asset=document.getElementById('fsAsset').value; F.sala=document.getElementById('fsSala').value; F.strat=document.getElementById('fsStrat').value;
  const rs=filtra(tutte), st=stat(rs);
@@ -39570,6 +39670,21 @@ function disegna(animato){
  kpi('R medio realizzato',st.rMed==null?NaN:st.rMed,rPassi,(st.rMed||0)>=0?'pos':'neg','risultato in multipli del rischio (passi di 0,5)',5);
  kpi('Pip totali',st.pips,v=>(v>=0?'+':'')+v.toFixed(1),st.pips>=0?'pos':'neg','media vincita '+fmtE(st.avgW),6);
  kpi('Max drawdown',st.dd,v=>fmtE(v),'neg','media perdita '+fmtE(st.avgL),7);
+ // QUANDO I DUE MONDI SONO NELLO STESSO NUMERO, si scrive. Il P/L Kraken e' in dollari convertiti
+ // in euro al cambio del giorno, su un capitale che non e' quello dei conti forex: la somma si puo'
+ // fare, ma non vuol dire quasi niente, e un totale senza avviso e' un numero che inganna.
+ (function avvisoMisto(){
+  const vecchio=document.getElementById('fsMisto'); if(vecchio)vecchio.remove();
+  const kr=rs.some(r=>eKraken(r.conto)), fx=rs.some(r=>!eKraken(r.conto));
+  if(!(kr&&fx))return;
+  const d=document.createElement('div'); d.id='fsMisto'; d.className='fsEmpty';
+  d.style.cssText='margin:0 0 10px;border-color:#e8c34a55;color:#e8c34a;text-align:left';
+  d.textContent='⚠️ Questi numeri sommano i conti Forex e i futures cripto di Kraken: valute, '
+   +'capitali e dimensioni diverse. Per leggerli separati scegli «Tutti i conti Forex» o '
+   +'«Tutti i conti Kraken» nel filtro Conto.';
+  const K=document.getElementById('fsKpis');
+  if(K&&K.parentNode)K.parentNode.insertBefore(d,K.nextSibling);
+ })();
  const G=document.getElementById('fsGrid'); G.textContent=''; let n=0;
  const plTip=(nome,a)=>{ const x=stat(a); return [{v:fmtE(x.pl),l:nome},{c:POS,l:x.n+' trade · win rate '+pct(x.wr)},{c:NEG,l:'loss rate '+pct(x.lr)}]; };
  // andamento
@@ -39583,7 +39698,7 @@ function disegna(animato){
  { const g=F.gran; const m=[...raggruppa(rs,r=>chiavePeriodo(r.tc,g))].sort((a,b)=>a[0]-b[0]);
    const voci=m.map(([k,a])=>({l:etichettaPeriodo(k,g,true),v:a.reduce((x,r)=>x+r.pl,0),tip:plTip(etichettaPeriodo(k,g,false),a)}));
    const nomi={ora:'ora per ora',giorno:'giorno per giorno',settimana:'settimana per settimana',mese:'mese per mese'};
-   const c=carta(G,'w8','💶 Profitto '+nomi[g],'P/L netto per periodo (cambia il raggruppamento nei filtri: ora, giorno, settimana, mese).',n++,{col:['Periodo','Trade','P/L'],righe:m.map(([k,a])=>[etichettaPeriodo(k,g,false),String(a.length),fmtE(a.reduce((x,r)=>x+r.pl,0))]).reverse()});
+   const c=carta(G,'w8','💶 Profitto '+nomi[g],'P/L netto per periodo (cambia il raggruppamento nei filtri: ora, giorno, settimana, mese). La linea tratteggiata è la tendenza: dice se i risultati stanno migliorando o peggiorando, e di quanto a ogni periodo.',n++,{col:['Periodo','Trade','P/L'],righe:m.map(([k,a])=>[etichettaPeriodo(k,g,false),String(a.length),fmtE(a.reduce((x,r)=>x+r.pl,0))]).reverse()});
    graficoBarreDiv(c,voci); }
  // giorno della settimana
  { const nomi=['Lun','Mar','Mer','Gio','Ven','Sab','Dom']; const m=raggruppa(rs,r=>(new Date(r.tc).getDay()+6)%7);
@@ -39694,16 +39809,23 @@ window.fblStatApri=function(){
  requestAnimationFrame(()=>disegna(true));
 };
 window.fblStatChiudi=function(){ const ov=OV(); if(!ov)return; aperto=false; ov.style.display='none'; nascondiTip(); document.body.style.overflow=''; };
+// I pezzi con dei CONTI dentro, fuori dalla chiusura: il resto di questo modulo disegna, e si
+// controlla guardando il disegno, ma questi tre decidono dei numeri e vanno provati sui numeri.
+// In un oggetto solo, per non aggiungere tre nomi globali.
+window.fblStatCalcoli={contoDi,eKraken,tendenzaLineare};
 document.addEventListener('click',ev=>{
  const t=ev.target; if(!t||!t.closest)return;
  if(t.closest('#fsCloseBtn'))return fblStatChiudi();
  const ch=t.closest('#fsPresets .fsChip'); if(ch){ impostaPreset(ch.dataset.p); salvaFiltri(); disegna(true); return; }
- if(t.closest('#fsReset')){ impostaPreset('tutto'); ['fsConto','fsAsset','fsSala','fsStrat'].forEach(id=>{ document.getElementById(id).value=''; }); salvaFiltri(); disegna(true); return; }
+ if(t.closest('#fsReset')){ impostaPreset('tutto'); ['fsConto','fsAsset','fsSala','fsStrat'].forEach(id=>{ document.getElementById(id).value=''; });
+  delete document.getElementById('fsConto').dataset.fsContoScelto;
+  salvaFiltri(); disegna(true); return; }
  if(t.closest('#fblStatBtn'))fblStatApri();
 });
 document.addEventListener('change',ev=>{
  const id=ev.target&&ev.target.id; if(!id||!/^fs/.test(id))return;
  if(id==='fsDa'||id==='fsA')leggiDate();
+ if(id==='fsConto')ev.target.dataset.fsContoScelto='1';   // scelto a mano: non si tocca piu'
  if(id==='fsGran')F.gran=ev.target.value;
  salvaFiltri(); disegna(true);
 });

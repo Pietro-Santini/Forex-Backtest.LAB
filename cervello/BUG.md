@@ -122,3 +122,24 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 - **"Dimentica il numero" non scollegava da Telegram** — risolto app v88 — ora "Esci da Telegram":
   il ponte fa il logout, cancella sessione e numero; ricollegandosi chiede numero e codice.
   Test: `laboratorio/app/esci_telegram.test.mjs`, `laboratorio/ponte/test_esci_telegram.py`.
+- **Nessuna criptovaluta veniva riconosciuta nella pagina di prova** — risolto app v104 — le monete
+  riconosciute erano due (BTC, ETH) e non in tutte le forme (`BTCUSDT` si', `ETHUSDT` no). Ora si
+  generano da un elenco di 31 monete, in **due** posti: `CRIPTO` in `parser_segnali.py` (il ponte
+  normalizza `SOL`, `SOLUSDT`, `SOLANA`, `SOLPERP` in `SOLUSD`) e `TG_CRIPTO` in `app.html` (i
+  gruppi di sinonimi con cui l'app ritrova l'asset dal broker). Aggiungere una moneta = una riga di
+  qua e una di la'. Test: `test_parser.py` (sezione CRIPTOVALUTE), `laboratorio/app/cripto_gruppi.test.mjs`.
+- **Syntra smetteva di aggiornare la pagina e non rilevava piu' le sale** — risolto app v104 — due
+  difetti, tutti e due silenziosi. (1) `primo` diventava False solo quando la pagina Notifiche
+  veniva trovata: se al primo giro non si trovava, da li' in avanti `aggiorna_notifiche` non veniva
+  piu' chiamata (sta sotto `if not primo`) e ogni notifica veniva segnata come vista senza essere
+  consegnata — con lo stato che diceva "collegato, nessun errore". Ora l'aggiornamento non dipende
+  da `primo`, i tentativi a vuoto si contano e si dicono in `syntra_errore`, e dopo 20 giri Syntra
+  viene riaperta nell'emulatore. (2) Il messaggio "Syntra non funziona su Linux" finiva in
+  `stato["syntra"]`, una chiave che l'app non legge: ora in `syntra_errore`.
+  Test: `laboratorio/ponte/test_syntra_blocco.py` (4 dei 6 fallivano prima della correzione).
+- **I trade Kraken finivano nel conto "Live" delle statistiche** — risolto app v104 — `contoDi()`
+  guardava solo `mt5Ticket`; le righe Kraken (`account:'kraken'`, `mode:'live'`) diventavano "Live"
+  insieme ai trade simulati, e non erano separabili nemmeno a mano. Ora si chiamano
+  `🐙 Kraken <conto>`, il menu ha due famiglie («Tutti i conti Forex» / «Tutti i conti Kraken»),
+  si parte dal solo Forex e la somma fra i due mondi resta possibile ma con un avviso scritto.
+  Test: `laboratorio/app/dashboard_conti.test.mjs`.

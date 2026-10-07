@@ -167,6 +167,11 @@ librerie» — i test del ponte **non partivano affatto**. Ora le librerie si pr
 | **v97** | Barre dei grafici non più sopra i nomi; accesso Telegram che dice cosa farà al prossimo tentativo |
 | **v98** | **Dal telefono funziona anche il grafico** (porta 8001 girata dal server); «computer spento» separato da «nessun computer registrato»; Syntra dice la verità quando gira su Linux |
 | **v99** | **Prezzi dal vivo dal telefono** (canali WebSocket girati dal server); pulsante «Pagina di prova» che si apre all'indirizzo giusto |
+| **v100** | Linee TP/SL di Kraken **ferme** (prima avanzavano col prezzo); posizioni Kraken in un riquadro **separato** da MT5, con le stesse colonne e i pulsanti «vai a grafico», «seleziona», «BE» |
+| **v101** | TP automatico **1:1** quando si apre senza target; prima di confermare si vede **l'entrata media e la dimensione totale** che risulteranno dalla fusione |
+| **v102** | Si **seleziona** una posizione Kraken e si **spostano TP e SL** (nuovo `POST /tp` sul ponte: su Kraken un target è un ordine limite «reduce only», quindi si mette il nuovo **prima** di togliere il vecchio) |
+| **v103** | **Percentuale di investimento per ogni TP**, in tutte le sale. Il modo non si sceglie: sul forex ogni target è una posizione sua, sulle cripto è una posizione sola che ogni target chiude in **parte** — è come funzionano i due mercati, e l'app lo scrive |
+| **v104** | **Le criptovalute si riconoscono** (prima nessuna, nemmeno nella pagina di prova); **Syntra non si blocca più** in silenzio; **conti Kraken separati dai Forex** nelle statistiche, con **linea di tendenza** sulle barre del profitto |
 
 Più: **server come porta unica** (registrazione del PC + inoltro) e **automatismi** (guardia dei
 segreti, controllo del `CACHE_NAME`, skill `modifica-app` e `pubblica`, agente
@@ -216,22 +221,17 @@ Segnalato dal proprietario, **mai riprodotto**. Non è chiaro se riguardi le cas
 posizioni aperte o la spunta «Caselle TP-SL» nella cronologia delle sale. **Prima chiedere quale
 delle due**, poi riprodurre, poi correggere.
 
-### 3. Dashboard, due cose
-
-- **Scelta dei conti Kraken** tenuti separati dai conti Forex: non si possono sommare, sono valori
-  di natura diversa.
-- **Linea di tendenza** del P/L giorno per giorno, oltre alle barre già presenti
-  (carta «💶 Profitto giorno per giorno» nella pagina Statistiche).
-
-### 4. Già corretto nel codice, serve un Setup nuovo per arrivare all'utente
+### 3. Già corretto nel codice, serve un Setup nuovo per arrivare all'utente
 
 Il ponte diceva «Server non raggiungibile» **senza dire quale nome aveva provato**: un nome scritto
 male e Tailscale spento davano lo stesso messaggio. Ora il messaggio contiene il nome. Serve
 ricostruire `ForexBacktestLAB.exe`.
 
-### 5. Limiti noti (non difetti) — vedi `cervello/BUG.md`
+### 4. Limiti noti (non difetti) — vedi `cervello/BUG.md`
 
 - **Syntra funziona solo col ponte sul computer**: legge BlueStacks via ADB, su Linux non esiste.
+  Da v104 l'app **lo dice**: prima il messaggio finiva in una chiave che l'app non legge, e si
+  vedeva «Syntra attiva, nessun errore, nessuna sala».
 - **Ordini pendenti Kraken** di un conto di prova non attivo non vengono controllati.
 - **Eseguibili non firmati**: Windows SmartScreen avvisa all'installazione.
 - **Telegram, Syntra e MT5 non si collaudano nel cloud**: servono sessione, BlueStacks, Windows.

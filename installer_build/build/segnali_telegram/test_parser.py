@@ -162,5 +162,37 @@ esito = bool(r) and 50.0 not in (r["take_profit"] or [])
 OK = OK and esito
 print("  una percentuale non diventa un target".ljust(44), "ok" if esito else "PROBLEMA")
 
+# CRIPTOVALUTE
+# SEGNALATO dal proprietario (7 ottobre 2026): «nella pagina prova sale segnali, quando vado a
+# inserire una criptovaluta non viene riconosciuta. Qualsiasi criptovaluta metto.»
+# L'elenco a mano aveva due monete e non tutte le loro forme: BTCUSDT c'era, ETHUSDT no.
+print("\nCRIPTOVALUTE")
+for testo, atteso in [
+    ("BTCUSD BUY 80000\nSL 79000\nTP 82000", "BTCUSD"),
+    ("ETHUSDT SELL 2500\nSL 2600\nTP 2400", "ETHUSD"),      # la forma che mancava
+    ("LONG SOL 180\nSL 170\nTP 200", "SOLUSD"),              # la moneta sola
+    ("BUY SOLANA 180\nSL 170\nTP 200", "SOLUSD"),            # il nome per esteso
+    ("SELL DOGE/USD 0.2\nSL 0.21\nTP 0.18", "DOGEUSD"),      # con la barra
+    ("BUY AVAXPERP 30\nSL 28\nTP 34", "AVAXUSD"),            # come si scrive sui futures
+    ("XRPUSDT BUY 2.1\nSL 2.0\nTP 2.3", "XRPUSD"),
+    ("SHIB BUY 0.00002\nSL 0.000019\nTP 0.000022", "SHIBUSD"),  # prezzi piccolissimi
+]:
+    r = interpreta(testo)
+    esito = bool(r) and r["strumento"] == atteso
+    OK = OK and esito
+    nome = testo.split("\n")[0][:30]
+    print(("  " + nome).ljust(46),
+          "ok" if esito else ("PROBLEMA: %s invece di %s" % (r["strumento"] if r else None, atteso)))
+
+# Le cripto non devono aver rotto il resto: oro e forex passavano da qui prima.
+for testo, atteso in [("XAUUSD BUY 4100\nSL 4080\nTP 4150", "XAUUSD"),
+                      ("EURUSD SELL 1.08\nSL 1.09\nTP 1.07", "EURUSD"),
+                      ("GOLD BUY 4100\nSL 4080\nTP 4150", "XAUUSD")]:
+    r = interpreta(testo)
+    esito = bool(r) and r["strumento"] == atteso
+    OK = OK and esito
+    print(("  (non rotto) " + testo.split("\n")[0][:24]).ljust(46),
+          "ok" if esito else "PROBLEMA: %s invece di %s" % (r["strumento"] if r else None, atteso))
+
 print("\nESITO:", "tutto ok" if OK else "ci sono problemi")
 sys.exit(0 if OK else 1)

@@ -78,3 +78,25 @@
   l'errore dice solo "0 occorrenze": si finisce a dubitare del testo invece che del modo in
   cui e' arrivato. **Gli script di modifica si scrivono come file e si lanciano**, mai
   incollati in un heredoc.
+- **`Number(null)` e' 0, non NaN** (terza volta che costa un difetto). Convertire e *poi* filtrare
+  con `Number.isFinite` lascia passare i valori mancanti travestiti da zero: nella linea di
+  tendenza ogni periodo vuoto diventava un pareggio e tirava la retta verso il basso. Si scarta
+  **prima** di convertire. L'ha trovato un test scritto apposta per questo caso, non la lettura
+  del codice.
+- **Un messaggio onesto scritto nella chiave sbagliata non esiste.** Il controllo "Syntra non
+  funziona su Linux" scriveva in `stato["syntra"]`, ma l'app mostra `syntra_errore`: dal server
+  l'app diceva "attiva, nessun errore, nessuna sala". Quando si aggiunge un avviso, si verifica
+  **chi lo legge**, non solo che venga scritto.
+- **Un elenco scritto a mano e' una lista di cose che prima o poi mancano.** Le criptovalute
+  riconosciute erano due (BTC, ETH) e nemmeno in tutte le loro forme: `BTCUSDT` c'era, `ETHUSDT`
+  no. Le coppie forex erano gia' generate "invece di elencarne 28 a mano": era la stessa
+  situazione, trattata in due modi diversi nello stesso file.
+- **Lo stesso dato normalizzato in due posti si sistema in due posti.** Il ponte riconosceva la
+  moneta, l'app doveva poi ritrovare l'asset dai suoi gruppi di sinonimi: correggerne uno solo
+  avrebbe dato il risultato peggiore, segnale riconosciuto e poi scartato piu' avanti con un
+  messaggio diverso.
+- **Una condizione d'avvio che non si chiude mai blocca tutto il giro.** In Syntra `primo`
+  ("non ho ancora fatto l'inventario") diventava False solo se la pagina Notifiche veniva trovata;
+  se non si trovava al primo giro, da li' in poi la pagina non si aggiornava **piu'** e nessuna
+  notifica veniva consegnata - con lo stato che diceva "collegato, nessun errore". Ogni stato
+  d'avvio deve avere una via d'uscita, e il fallimento va **detto**.
