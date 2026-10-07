@@ -829,17 +829,23 @@ window.fblSchermataRiprova=function(testo){
   +'<div style="font-size:14px;font-weight:700;margin-bottom:6px">Connessione non riuscita</div>'
   +'<div style="font-size:13px;color:#a7b1bf;line-height:1.5;margin-bottom:16px"></div>'
   +'<button id="fbl-riprova-btn" style="width:100%;padding:12px;border-radius:8px;border:1px solid #3ea6ff;background:#277d5a;color:#fff;font-weight:700;cursor:pointer;font-size:14px">🔄 Riprova</button>'
+  // Senza rete non si resta fermi: il backtest lavora su dati che stanno gia' qui. Richiesto
+  // esplicitamente dal proprietario. Il conto alla rovescia si ferma, altrimenti ricaricherebbe
+  // la pagina mentre si sta lavorando.
+  +'<button id="fbl-backtest-btn" style="width:100%;padding:11px;border-radius:8px;border:1px solid #2c3a4f;background:transparent;color:#cdd6e0;font-weight:600;cursor:pointer;font-size:13px;margin-top:8px">📊 Continua solo in backtest</button>'
   +'<div id="fbl-riprova-conto" style="font-size:12px;color:#8b96a5;margin-top:10px"></div></div>';
  ov.querySelector('div > div:nth-child(3)').textContent=testo;
  const btn=document.getElementById('fbl-riprova-btn');
- btn.addEventListener('click',()=>{ btn.disabled=true; btn.textContent='Ricarico…'; location.reload(); });
+ btn.addEventListener('click',()=>{ btn.disabled=true; btn.textContent='Ricarico…'; window.fblRicarica(); });
+ const bt=document.getElementById('fbl-backtest-btn');
+ if(bt)bt.addEventListener('click',()=>window.fblAvviaSoloBacktest());
  // E riprova comunque da sola: la rete spesso torna in pochi secondi.
  let resto=15;
  const conto=document.getElementById('fbl-riprova-conto');
  const scrivi=()=>{ conto.textContent=resto>0?('Nuovo tentativo automatico tra '+resto+' s'):'Ricarico…'; };
  scrivi();
  clearInterval(window.__fblRiprovaT);
- window.__fblRiprovaT=setInterval(()=>{ resto--; scrivi(); if(resto<=0){ clearInterval(window.__fblRiprovaT); location.reload(); } },1000);
+ window.__fblRiprovaT=setInterval(()=>{ resto--; scrivi(); if(resto<=0){ clearInterval(window.__fblRiprovaT); window.fblRicarica(); } },1000);
 };
 // RIENTRO SENZA SCHERMATA DI CARICAMENTO (RICHIESTO: "se esco anche pochi secondi e rientro mi rifa'
 // sempre il caricamento"). Quando il telefono chiude la scheda in background la pagina riparte da zero
@@ -858,14 +864,76 @@ window.fblSchermataRiprova=function(testo){
   }
  }catch(e){}
 })();
-// Caricamento che non finisce mai: dopo 25 secondi con la schermata di attesa ancora su, si offre
-// Riprova invece di lasciare l'utente davanti a una rotella che gira.
-setTimeout(function(){
+// C'E' DAVVERO INTERNET? `navigator.onLine` non lo sa: dice solo che esiste una scheda di rete
+// attaccata a qualcosa. Su un telefono agganciato a una Wi-Fi che non naviga risponde "si" e manda
+// l'app ad aspettare un collegamento che non arrivera' mai. Si chiede invece un file piccolo del
+// sito stesso: se torna, internet c'e' per davvero.
+window.fblRicarica=function(){ location.reload(); };
+window.fblInternetVero=async function(ms){
+ if(navigator.onLine===false)return false;        // questo e' l'unico caso in cui ci si puo' fidare
+ try{
+  const c=new AbortController();
+  const t=setTimeout(()=>c.abort(),ms||4000);
+  // cache:'no-store' perche' una risposta presa dalla cache direbbe "c'e' internet" anche da spenti.
+  const r=await fetch('manifest.json?p='+Date.now(),{signal:c.signal,cache:'no-store'});
+  clearTimeout(t);
+  return !!(r&&r.ok);
+ }catch(e){ return false; }
+};
+// SOLO BACKTEST, SENZA COLLEGAMENTI.
+// RICHIESTO ESPLICITAMENTE: «se si vuole fare solamente backtest senza accedere a capital.com, mt5
+// o kraken, l'applicazione si avvia automaticamente solo per fare backtest; poi se si ha internet
+// allora si puo' accedere, solo pero' se la verifica dice che si e' effettivamente connessi».
+// Il backtest lavora su dati che stanno gia' sul dispositivo: non ha nessun bisogno della rete, e
+// restare fermi davanti a una rotella mentre si potrebbe gia' lavorare non ha senso.
+window.fblSoloBacktest=false;
+window.fblAvviaSoloBacktest=function(){
+ window.fblSoloBacktest=true;
  const ov=document.getElementById('auth-check-overlay');
- if(ov&&ov.isConnected&&ov.style.display!=='none'&&ov.querySelector('.loadingSpinner')&&!document.getElementById('fbl-riprova-btn')){
-  window.fblSchermataRiprova('Il collegamento sta impiegando troppo tempo: di solito è la rete (Wi-Fi o dati deboli, VPN). Controlla la connessione e riprova.');
- }
-},25000);
+ if(ov)ov.style.display='none';
+ clearInterval(window.__fblRiprovaT);
+ if(document.getElementById('fblBadgeBacktest'))return;
+ const b=document.createElement('div');
+ b.id='fblBadgeBacktest';
+ b.style.cssText='position:fixed;left:50%;transform:translateX(-50%);top:8px;z-index:99998;'
+  +'display:flex;align-items:center;gap:9px;background:#1a2230;border:1px solid #2c3a4f;'
+  +'border-radius:999px;padding:5px 12px;font-size:12px;color:#cdd6e0;max-width:94vw;'
+  +'font-family:Inter,Arial,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.45)';
+ b.innerHTML='<span>📊 Solo backtest — nessun collegamento</span>'
+  +'<button type="button" id="fblBadgeAccedi" style="padding:3px 10px;border-radius:999px;'
+  +'border:1px solid #3ea6ff;background:transparent;color:#9fd3ff;cursor:pointer;font-size:11.5px">Accedi</button>';
+ document.body.appendChild(b);
+ document.getElementById('fblBadgeAccedi').addEventListener('click',async function(){
+  const t=this; t.disabled=true; t.textContent='Controllo…';
+  // Si controlla PRIMA di mandare al login: senza internet si finirebbe su una pagina che non
+  // carica, perdendo anche il lavoro di backtest in corso.
+  if(await window.fblInternetVero(5000)){ window.fblRicarica(); return; }
+  t.disabled=false; t.textContent='Accedi';
+  b.querySelector('span').textContent='📊 Solo backtest — internet ancora non raggiungibile';
+ });
+};
+// Caricamento che non finisce mai. Prima si aspettavano 25 secondi buoni davanti a una rotella;
+// adesso, se la verifica dice che internet non c'e', e' inutile aspettare: si propone subito di
+// lavorare in backtest. Con internet si lascia piu' tempo, perche' li' il ritardo e' plausibile.
+(function sorveglia(){
+ const ancoraFerma=()=>{
+  const ov=document.getElementById('auth-check-overlay');
+  return !!(ov&&ov.isConnected&&ov.style.display!=='none'&&ov.querySelector('.loadingSpinner')
+            &&!document.getElementById('fbl-riprova-btn'));
+ };
+ setTimeout(async function(){
+  if(!ancoraFerma())return;
+  if(!await window.fblInternetVero(3500)){
+   if(!ancoraFerma())return;
+   window.fblSchermataRiprova('Internet non raggiungibile. Il backtest però funziona lo stesso: '
+    +'lavora sui dati già su questo dispositivo.');
+   return;
+  }
+  setTimeout(function(){
+   if(ancoraFerma())window.fblSchermataRiprova('Il collegamento sta impiegando troppo tempo: di solito è la rete (Wi-Fi o dati deboli, VPN). Controlla la connessione e riprova.');
+  },18000);
+ },6000);
+})();
 </script>
 
 <script type="module">

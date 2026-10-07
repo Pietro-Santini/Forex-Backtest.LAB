@@ -13,6 +13,17 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Il collaudo su GitHub era rosso dal 6 ottobre e nessuno se n'era accorto** — risolto 7 ottobre
+  2026 — `.github/workflows/collaudo.yml` installava `fastapi` ma non `uvicorn`, e
+  `segnali_bridge.py` esce gia' all'import ("Mancano le librerie"): i test del ponte non partivano
+  proprio. Ora le librerie si prendono da `requirements.txt`, il file che le dichiara. Controllo:
+  `gh run list --workflow=collaudo.yml`.
+- **Niente da fare mentre internet non c'e'** — risolto app v92 — l'avvio aspettava il
+  collegamento e dopo 25 secondi offriva solo «Riprova», mentre il backtest lavora su dati gia'
+  presenti sul dispositivo. Ora c'e' `fblInternetVero()` (prova davvero, non si fida di
+  `navigator.onLine`, che su una Wi-Fi che non naviga dice "si") e «Continua solo in backtest»,
+  con un contrassegno in alto e un «Accedi» che porta al login **solo** se la verifica dice che
+  internet c'e'. Test: `laboratorio/app/solo_backtest.test.mjs`.
 - **Sul telefono l'app resta ferma sul logo** — risolto app v91 — `sw.js` — MISURATO: `app.html`
   pesa 4,03 MB e ci mette 3,2 s a scaricarsi da un computer con rete veloce (su dati mobili molto
   di piu'). Il service worker chiedeva SEMPRE la rete, con `cache: 'no-store'` che salta apposta
