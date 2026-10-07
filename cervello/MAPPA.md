@@ -38,3 +38,18 @@ app → `ForexBacktestLAB.exe` (8000) → MT5 / Kraken. Segnali: app → 8000 `/
 - Finestra PIP: gli ascoltatori vanno registrati con `fblDelega()` e cercati con `$$tutti()`,
   altrimenti nella finestra staccata non funzionano.
 - Trade chiusi: array `trades`, salvati con `scheduleSave()`.
+
+## Automatismi di Claude Code (7 ottobre 2026)
+
+| Dove | Cosa fa |
+|---|---|
+| `.claude/hooks/guardia_git.py` | blocca push forzati e `reset --hard`; su `main` pretende il collaudo verde da meno di 30 minuti **e** il `CACHE_NAME` alzato quando `app.html` cambia |
+| `.claude/hooks/guardia_segreti.py` | blocca `git add`/`git commit -a` se fra i file in arrivo ce n'e' uno che sembra una chiave, un token o una sessione |
+| `.claude/hooks/dopo_modifica.py` | dopo ogni modifica ad `app.html` controlla che si compili |
+| `.claude/skills/modifica-app/` | come si modifica `app.html` senza romperlo, con `sostituisci.py` |
+| `.claude/skills/pubblica/` | la catena di pubblicazione, in ordine. Solo il proprietario la lancia |
+| `.claude/agents/collaudatore-online.md` | collauda l'avvio vero: sito https, accesso, service worker, rete che va e viene |
+| `.mcp.json` | server MCP di GitHub: esito dei flussi, log dei fallimenti, release |
+
+La cartella di lavoro sul Desktop ha finalmente un `.gitignore`: era un repository git senza
+commit, senza remote e **senza esclusioni**, con dentro chiavi API e codici di recupero in chiaro.

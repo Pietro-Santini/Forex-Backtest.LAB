@@ -51,3 +51,11 @@
 - **Su Windows `python3` puo' essere il segnaposto del Microsoft Store**, un interprete diverso da
   quello con le librerie: il collaudo bocciava senza motivo. `collauda.sh` ora sceglie
   l'interprete che ha davvero pytest.
+- **`subprocess.run(..., text=True)` su Windows decodifica con la codifica locale (cp1252).** Su
+  `app.html` scoppia dentro un thread di lettura: l'eccezione non arriva al chiamante, il
+  risultato resta vuoto e il controllo **non blocca mai**. Passare sempre
+  `encoding="utf-8", errors="replace"`. Un controllo che fallisce in silenzio e' peggio di un
+  controllo assente, perche' si crede di essere protetti: provare sempre anche il caso che DEVE
+  bloccare, non solo quello che deve passare.
+- **Meglio chiedere a git se un file e' cambiato (`git diff --quiet`) che leggerlo e confrontarlo.**
+  Su un file da 4 MB e' piu' veloce e non c'e' nessun problema di codifica.
