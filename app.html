@@ -34931,15 +34931,46 @@ async function krakenOrdineManuale(side){
  // Anteprima troppo stretta (asset senza storico a grafico): stop all'1% dal prezzo, mai attaccato.
  if(slAuto&&!(Math.abs(entry-sl)>=entry*0.002))sl=Number((side==='BUY'?entry*0.99:entry*1.01).toFixed(Math.max(0,String(Number(info.tick)||1).split('.')[1]?.length||0)));
  if(!Number.isFinite(sl)||!(side==='BUY'?sl<entry:sl>entry)){ $('status').textContent='🐙 Metti uno stop loss nella casella SL: su Kraken nessun ordine parte senza.'; return false; }
+ // TARGET AUTOMATICO A 1:1 (richiesto dal proprietario, 7 ottobre 2026): con la casella TP vuota
+ // il target si mette alla stessa distanza dello stop, dall'altra parte. Una posizione senza
+ // target resta aperta finche' non la si guarda; con un 1:1 almeno ha una fine, e si puo' sempre
+ // spostare dopo. L'1:1 non e' un consiglio: e' il punto di partenza piu' neutro possibile.
+ let tpAuto=false;
+ if(!Number.isFinite(tp)){
+  const dist=Math.abs(entry-sl);
+  const dec=Math.max(0,String(Number(info.tick)||1).split('.')[1]?.length||0);
+  const grezzo=Number(((side==='BUY')?(entry+dist):(entry-dist)).toFixed(dec));
+  if(Number.isFinite(grezzo)&&(side==='BUY'?grezzo>entry:grezzo<entry)){ tp=grezzo; tpAuto=true; }
+ }
  const passo=Number(info.step)||0.0001, minimo=Number(info.min)||passo;
  const q=Math.floor((getLotSize()+1e-12)/passo)*passo;
  if(!(q>=minimo-1e-12)){ $('status').textContent='🐙 Quantità '+getLotSize()+' sotto il minimo di '+info.simbolo+' ('+minimo+').'; return false; }
  const nozionale=q*entry, leva=krakenLeva(), margine=nozionale/leva;
  if(Number(krakenConto.disponibile)>0&&margine>Number(krakenConto.disponibile)){ $('status').textContent='🐙 Margine insufficiente: servono '+margine.toFixed(0)+' USD (leva '+leva+'x), disponibili '+Number(krakenConto.disponibile).toFixed(0)+'.'; return false; }
  const reale=krakenConto.ambiente==='reale';
+ // FUSIONE. Kraken Futures tiene UNA posizione netta per contratto: aprendone una seconda sullo
+ // stesso contratto, le due si fondono e il prezzo d'ingresso diventa la media pesata. Succede
+ // anche sul conto simulato, perche' rispecchia quello vero. Non e' un difetto, ma va detto
+ // PRIMA: dopo, l'entrata e' cambiata e lo stop messo prima si trova a una distanza diversa da
+ // quella che si era scelta - cioe' il rischio e' cambiato senza toccare niente.
+ let avvisoFusione='';
+ const giaAperta=((krakenPosizioni&&krakenPosizioni.posizioni)||[]).find(p=>p.simbolo===info.simbolo);
+ if(giaAperta){
+  const qv=Math.abs(Number(giaAperta.quantita))||0, ev=Number(giaAperta.entrata);
+  const stessoLato=String(giaAperta.lato).toUpperCase().startsWith(side.charAt(0));
+  if(qv>0&&Number.isFinite(ev)&&stessoLato){
+   const media=(qv*ev+q*entry)/(qv+q);
+   avvisoFusione='\n\nATTENZIONE: su '+info.simbolo+' hai gia '+giaAperta.lato+' '+qv+' a '+fmtPrice(ev)+'.'
+    +'\nKraken tiene una sola posizione per contratto: le due si fondono.'
+    +'\nDopo avrai '+side+' '+Number((qv+q).toFixed(8))+' con entrata media '+fmtPrice(media)+','
+    +'\ne lo stop resta agganciato al contratto, non a questa operazione.';
+  }
+ }
  const ok=await appConfirm((reale?'ORDINE VERO su Kraken (soldi veri).\n\n':'Ordine sul '+krakenNome()+'.\n\n')
   +side+' '+q+' '+info.simbolo+' a mercato (~'+entry+')\nValore '+nozionale.toFixed(2)+' USD · margine ~'+margine.toFixed(2)+' USD (leva '+leva+'x)'
-  +'\nStop loss '+sl+(slAuto?' (anteprima dell\'app: la casella SL era vuota)':'')+'\nTake profit '+(Number.isFinite(tp)?tp:'nessuno')
+  +'\nStop loss '+sl+(slAuto?' (anteprima dell\'app: la casella SL era vuota)':'')
+  +'\nTake profit '+(Number.isFinite(tp)?(tp+(tpAuto?' (1:1 automatico: la casella TP era vuota)':'')):'nessuno')
+  +avvisoFusione
   +'\nRischio allo stop ~'+(Math.abs(entry-sl)*q).toFixed(2)+' USD',{title:'🐙 Kraken',okLabel:'Invia',cancelLabel:'Annulla'});
  if(!ok)return false;
  const voce={chat:'Manuale',segnale:{}};

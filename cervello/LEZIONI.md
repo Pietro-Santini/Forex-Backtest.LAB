@@ -73,3 +73,8 @@
 - **Lo script di modifica salva solo alla fine: se un passo fallisce, NON ha scritto niente.** E'
   voluto (niente mezze modifiche), ma le righe "ok" gia' stampate ingannano: dopo un errore vanno
   rifatte TUTTE le sostituzioni, non solo quella fallita.
+- **Gli heredoc di bash, in questo ambiente, mangiano UN livello di backslash** anche fra
+  apici singoli. Uno script che cerca blocchi contenenti `\n` o `\'` non combacia piu', e
+  l'errore dice solo "0 occorrenze": si finisce a dubitare del testo invece che del modo in
+  cui e' arrivato. **Gli script di modifica si scrivono come file e si lanciano**, mai
+  incollati in un heredoc.
