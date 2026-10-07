@@ -411,10 +411,13 @@ class Configura(BaseModel):
 class Segnale(BaseModel):
     simbolo: str                 # PF_XBTUSD (o la moneta: BTC)
     lato: str                    # BUY / SELL
-    quantita_per_tp: float       # quantita' di ogni quota, in monete
+    quantita_per_tp: float       # quantita' di ogni quota, in monete (usata se quantita_tp e' vuoto)
     tp: List[float]
     sl: float
     gruppo: Optional[str] = None
+    # Chiusura parziale a percentuale: una quantita' per ogni target, invece di parti uguali.
+    # Facoltativo: senza, si divide in parti uguali come si e' sempre fatto.
+    quantita_tp: List[float] = []
 
 
 class SpostaTp(BaseModel):
@@ -716,10 +719,23 @@ def _apri(c, corpo: Segnale) -> dict:
                 raise HTTPException(status_code=409, detail="Su %s c'e' gia' una posizione %s: un segnale opposto la ridurrebbe invece di aprirne una sua." % (s, "LONG" if attuale > 0 else "SHORT"))
             info = c.strumento(s)
             n = max(1, len(corpo.tp))
-            q1 = _giu(corpo.quantita_per_tp, info["step"])
-            if q1 < info["min"] or q1 <= 0:
-                raise HTTPException(status_code=400, detail="quantita' per take profit %s sotto il minimo di %s (%s)" % (corpo.quantita_per_tp, s, info["min"]))
-            totale = round(q1 * n, _dec(info["step"]))
+            # Quantita' per ogni target. Con `quantita_tp` ognuno ha la sua (chiusura parziale a
+            # percentuale); senza, parti uguali come prima.
+            quote = [_giu(float(q), info["step"]) for q in (corpo.quantita_tp or [])][:n]
+            if quote and len(quote) == n and all(q > 0 for q in quote):
+                sotto = [q for q in quote if q < info["min"]]
+                if sotto:
+                    raise HTTPException(status_code=400, detail=(
+                        "una quota (%s) e' sotto il minimo di %s (%s): con queste percentuali il "
+                        "lotto non basta per tutti i target" % (sotto[0], s, info["min"])))
+                totale = round(sum(quote), _dec(info["step"]))
+                q1 = quote[0]
+            else:
+                quote = []
+                q1 = _giu(corpo.quantita_per_tp, info["step"])
+                if q1 < info["min"] or q1 <= 0:
+                    raise HTTPException(status_code=400, detail="quantita' per take profit %s sotto il minimo di %s (%s)" % (corpo.quantita_per_tp, s, info["min"]))
+                totale = round(q1 * n, _dec(info["step"]))
             etichetta = ("fbl_" + (corpo.gruppo or str(int(time.time()))))[:40]
             st = _invia(c, orderType="mkt", symbol=s, side=apertura, size=totale, cliOrdId=etichetta + "_in")
             entrata = None
@@ -738,7 +754,12 @@ def _apri(c, corpo: Segnale) -> dict:
                 raise HTTPException(status_code=502, detail="Stop loss rifiutato da Kraken (%s): quota del segnale chiusa subito per sicurezza (%s)." % (e.messaggio, esito))
             tp_ordini, tp_errori = [], []
             for i, prezzo in enumerate(corpo.tp):
-                q = q1 if i < n - 1 else round(totale - q1 * (n - 1), _dec(info["step"]))
+                # L'ultimo prende il resto: cosi' la somma torna esatta e non resta un pezzo di
+                # posizione senza target, qualunque siano gli arrotondamenti.
+                if quote:
+                    q = quote[i] if i < n - 1 else round(totale - sum(quote[:n - 1]), _dec(info["step"]))
+                else:
+                    q = q1 if i < n - 1 else round(totale - q1 * (n - 1), _dec(info["step"]))
                 try:
                     o = _invia(c, orderType="lmt", symbol=s, side=chiusura, size=q, limitPrice=_vicino(prezzo, info["tick"]),
                                reduceOnly="true", cliOrdId="%s_tp%d" % (etichetta, i + 1))
