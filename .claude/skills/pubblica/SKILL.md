@@ -85,6 +85,18 @@ gh run watch
 
 Senza `gh`: Actions → «Installer Windows» → Run workflow, spuntando «Crea anche la release».
 
+## 6-bis. Controllare il collaudo SU GITHUB
+
+Il collaudo verde sul PC **non dice niente** su quello di GitHub: le librerie installate sono
+diverse. Dal 6 al 7 ottobre 2026 il flusso e' rimasto rosso a ogni push, e nessuno se n'e' accorto.
+
+```bash
+gh run list --workflow=collaudo.yml --limit 3
+```
+
+Se e' rosso: `gh run view <id> --log-failed`. Finche' non e' verde, la versione **non** e' da
+considerare pubblicata bene.
+
 ## 7. Aggiornare il cervello
 
 Prima di considerare finito (`cervello/LEGGIMI.md`):

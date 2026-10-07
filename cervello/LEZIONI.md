@@ -59,3 +59,12 @@
   bloccare, non solo quello che deve passare.
 - **Meglio chiedere a git se un file e' cambiato (`git diff --quiet`) che leggerlo e confrontarlo.**
   Su un file da 4 MB e' piu' veloce e non c'e' nessun problema di codifica.
+- **Collaudo verde sul PC non vuol dire verde su GitHub.** Dal 6 al 7 ottobre 2026 il flusso
+  Collaudo e' rimasto rosso a ogni push senza che nessuno guardasse: sul PC le librerie c'erano,
+  nel flusso no. Dopo ogni pubblicazione: `gh run list --workflow=collaudo.yml --limit 3`.
+- **Le librerie di un servizio si installano dal file che le dichiara** (`requirements.txt`), non
+  elencandole a mano nel flusso: l'elenco a mano resta indietro al primo import nuovo, e il
+  programma esce all'avvio con "Mancano le librerie" invece di dire quale manca.
+
+- **Il bug era in `installer_build/build/segnali_telegram/requirements.txt` vs `collaudo.yml`.**
+  `pip install fastapi` senza `uvicorn` fa fallire l'import di `segnali_bridge` prima di ogni test.
