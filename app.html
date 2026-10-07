@@ -3424,9 +3424,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  <div class="tableScroll"><table class="posTable"><thead><tr><th>#</th><th>Sessione</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table></div>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
- <!-- RICHIESTO: le posizioni del conto Kraken si vedono qui accanto a quelle MT5, qualunque sia il
-      conto scelto sopra la dashboard (MT5 e Kraken lavorano insieme). -->
- <div id="krakenPosPanel" style="display:none;margin-top:10px"></div>
 </div>
 
 <div class="panel" id="mt5PosPanel" style="display:none">
@@ -3436,6 +3433,9 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  <tbody id="mt5OpenPositions"></tbody></table></div>
  <div id="noMt5Positions" class="hint">Nessuna posizione reale aperta su questo conto MT5.</div>
 </div>
+
+<!-- Kraken e MT5 sono conti distinti: le loro posizioni non condividono mai lo stesso riquadro. -->
+<div class="panel" style="display:none" id="krakenPosPanel"></div>
 
 <div class="panel">
  <div class="label">Ordini pendenti</div>
@@ -3535,8 +3535,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <div class="tgCfgNota" style="margin-top:6px">Finché è spento, il computer risponde solo a sé stesso. Acceso, lo raggiungono i dispositivi del tuo account <b>Tailscale</b> — e <b>solo</b> con la chiave qui sotto.</div>
        <div id="fblRemotoIndirizzi" class="tgCfgRiep" style="margin-top:10px"></div>
        <div id="fblMuro" class="fblMuro" style="display:none"></div>
-       <!-- La chiave di questo computer non si mostra e non si ricopia piu' da nessuna parte: al
-            server la manda il computer stesso, e al telefono non serve saperla. -->
+       <div style="margin-top:12px;padding:10px;background:#1e2837;border:1px solid #3d5066;border-radius:6px">
+         <div style="font-size:12px;color:#9aa8b8;margin-bottom:6px"><b>Chiave del PC</b> (per grafico MT5 e ordini dal telefono)</div>
+         <div style="display:flex;align-items:center;gap:8px">
+           <code id="fblRemotoChiaveVal" style="font-family:monospace;font-size:13px;color:#f0c674;word-break:break-all;flex:1">—</code>
+           <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('fblRemotoChiaveVal').textContent).then(()=>this.textContent='Copiato!').catch(()=>{})" style="padding:4px 10px;font-size:11px;cursor:pointer;background:#2a3a4a;border:1px solid #4a5a6a;border-radius:4px;color:#e0e8f0">Copia</button>
+         </div>
+       </div>
        <div id="fblRegistrazione" class="tgCfgRiep" style="margin-top:10px"></div>
      </div>
 
@@ -25389,6 +25394,8 @@ async function fblRemotoLeggi(){
   }
   const d=r.data||{};
   if($('fblRemotoAttivo'))$('fblRemotoAttivo').checked=!!d.rete;
+  // Mostra la chiave locale del PC per i dispositivi mobili
+  if($('fblRemotoChiaveVal'))$('fblRemotoChiaveVal').textContent=d.chiave||'(nessuna)';
   try{ fblTsDisegna(d); }catch(e){ console.log('[Accesso remoto] stato di Tailscale non mostrato:',e); }
   try{ fblGuidaDisegna(); }catch(e){}
   if(ind){
@@ -34947,7 +34954,9 @@ async function krakenOrdineManuale(side){
  krakenAggiornaConto();
  return true;
 }
-// Posizioni Kraken nella sezione "Posizioni aperte" della pagina principale.
+// Posizioni Kraken nel loro riquadro dedicato: i conti Kraken e MT5 non vanno mescolati.
+let krakenPosizioneSelezionata=null;
+function krakenAssetDaSimbolo(simbolo){ return 'BINANCE:'+krakenBaseDaSimbolo(simbolo)+'USDT'; }
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
@@ -34959,14 +34968,26 @@ function krakenPosPannello(){
  const t=document.createElement('div');
  t.innerHTML='<div class="label" style="margin-bottom:4px">🐙 Posizioni '+escapeHtmlText(krakenNome())+(c.ambiente==='reale'?' <span style="color:#ff8a8a">(soldi veri)</span>':'')+'</div>';
  const tab=document.createElement('table'); tab.className='posTable';
- tab.innerHTML='<thead><tr><th>Contratto</th><th>Side</th><th>Quantità</th><th>Entry</th><th>SL</th><th>TP</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>';
+ tab.innerHTML='<thead><tr><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>';
  const tb=document.createElement('tbody');
  ps.forEach(p=>{
   const tr=document.createElement('tr');
-  const celle=[p.simbolo,p.lato,fmt(p.quantita),fmt(p.entrata),p.sl!=null?fmt(p.sl):'—',(p.tp||[]).map(x=>fmt(x.prezzo)).join(' / ')||'—',fmt(p.mark)];
+  const tps=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+  const buy=String(p.lato).toUpperCase().startsWith('B')||String(p.lato).toLowerCase()==='long';
+  const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
+  const rr=riskRewardLabel(Number(p.entrata),Number(p.sl),tpLontano);
+  const margine=Number(p.quantita)*Number(p.mark)/(krakenLeva()||1);
+  const celle=[krakenAssetDaSimbolo(p.simbolo),p.lato,fmt(p.entrata),p.sl!=null?fmt(p.sl):'—',tps.map(fmt).join(' / ')||'—',rr,fmt(p.quantita),usd(margine).replace('+',''),fmt(p.mark)];
   celle.forEach(v=>{ const td=document.createElement('td'); td.textContent=v; tr.appendChild(td); });
   const tdp=document.createElement('td'); tdp.textContent=usd(p.pnl); tdp.className=Number(p.pnl)>=0?'liveProfit':'liveLoss'; tr.appendChild(tdp);
-  const tdb=document.createElement('td'); const b=document.createElement('button'); b.type='button'; b.className='miniBtn'; b.style.width='auto'; b.textContent='Chiudi';
+  const tdb=document.createElement('td');
+  const vai=document.createElement('button'); vai.type='button'; vai.className='miniBtn'; vai.style.width='auto'; vai.textContent='📍 Vai a grafico';
+  vai.addEventListener('click',()=>krakenVaiAGrafico(p)); tdb.appendChild(vai);
+  const seleziona=document.createElement('button'); seleziona.type='button'; seleziona.className='miniBtn'+(krakenPosizioneSelezionata===p.simbolo?' active':''); seleziona.style.width='auto'; seleziona.textContent=krakenPosizioneSelezionata===p.simbolo?'✓ Selezionata':'Seleziona';
+  seleziona.addEventListener('click',()=>krakenSelezionaPosizione(p)); tdb.appendChild(seleziona);
+  const be=document.createElement('button'); be.type='button'; be.className='miniBtn'+(Number(p.sl)===Number(p.entrata)?' active':''); be.style.width='auto'; be.textContent=Number(p.sl)===Number(p.entrata)?'✓ BE':'BE'; be.title='Porta lo Stop Loss al prezzo di entrata sul conto Kraken simulato';
+  be.addEventListener('click',()=>krakenPortaBe(p)); tdb.appendChild(be);
+  const b=document.createElement('button'); b.type='button'; b.className='miniBtn danger'; b.style.width='auto'; b.textContent='Chiudi';
   b.addEventListener('click',async()=>{
    if(!await appConfirm('Chiudere a mercato tutta la posizione '+p.lato+' '+p.quantita+' '+p.simbolo+' su '+krakenNome()+'?\n\nVengono tolti anche il suo stop e i suoi take profit.',{title:'🐙 Kraken',okLabel:'Chiudi',cancelLabel:'Annulla'}))return;
    b.disabled=true; b.textContent='⏳';
@@ -35000,6 +35021,45 @@ function krakenPosPannello(){
   const sc2=document.createElement('div'); sc2.className='tableScroll'; sc2.appendChild(tab2);
   box.appendChild(t2); box.appendChild(sc2);
  }
+}
+function krakenSelezionaPosizione(p){
+ const chiave=String(p&&p.simbolo||'');
+ if(!chiave)return;
+ krakenPosizioneSelezionata=krakenPosizioneSelezionata===chiave?null:chiave;
+ zoneStatsOpenKey=krakenPosizioneSelezionata?('kraken:'+krakenPosizioneSelezionata):null;
+ krakenPosPannello(); draw();
+ $('status').textContent=krakenPosizioneSelezionata?'🐙 Posizione '+p.simbolo+' selezionata: dettagli visibili sul grafico.':'🐙 Posizione Kraken deselezionata.';
+}
+async function krakenVaiAGrafico(p){
+ const asset=krakenAssetDaSimbolo(p.simbolo);
+ await fblContoScegli('kraken');
+ if(fblContoEffettivo()!=='kraken')return;
+ if(($('market')?.value||'')!==asset){
+  applyAssetSelection(asset); applyInstrument(); suspendChartFeed('vai a grafico Kraken -> '+asset);
+  try{ await loadLiveHistoryFromBinance(asset); }finally{ resumeChartFeed(); }
+ }
+ if(!rows.length){ $('status').textContent='Nessun grafico disponibile per '+asset+'.'; return; }
+ const tps=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+ followLatest=true; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+ fitVerticalRangeToWindow([Number(p.entrata),Number(p.sl),...tps]);
+ krakenPosizioneSelezionata=String(p.simbolo); zoneStatsOpenKey='kraken:'+p.simbolo;
+ krakenPosPannello(); draw(); update(); scrollToChart();
+ $('status').textContent='🐙 '+p.simbolo+' mostrata a grafico con i livelli dell’ordine Kraken.';
+}
+async function krakenPortaBe(p){
+ if(!krakenConto||krakenConto.ambiente!=='simulato'){
+  $('status').textContent='🐙 BE disponibile solo sul conto Kraken simulato.';
+  return;
+ }
+ const entry=Number(p.entrata); if(!Number.isFinite(entry)||!(entry>0))return;
+ if(!await appConfirm('Portare lo Stop Loss di '+p.lato+' '+p.simbolo+' al pareggio ('+entry+')?',{title:'🐙 Kraken',okLabel:'BE',cancelLabel:'Annulla'}))return;
+ const coppia=Object.entries(tgStrategie||{}).filter(([,st])=>st&&st.conto==='kraken'&&st.simbolo===p.simbolo).sort((a,b)=>a[1].creato-b[1].creato)[0];
+ const id=coppia&&coppia[0], st=coppia&&coppia[1];
+ const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:entry,stop_id:st&&st.stopId,quantita:Number(st&&st.quantitaStop)||Number(p.quantita),lato:p.lato,gruppo:id});
+ if(!r.ok){ $('status').textContent='🐙 Stop non portato a BE: '+r.message; return; }
+ if(st){ st.sl=entry; st.beMarkerSl=entry; tgSalvaStrategie(); }
+ $('status').textContent='⚖️ '+p.simbolo+': Stop Loss portato a pareggio ('+entry+').';
+ await krakenLeggiPosizioni(); draw();
 }
 // ===================== KRAKEN: TRADE JOURNAL, GRAFICO, CONTI DI PROVA =====================
 // RICHIESTO: "la posizione aperta con il conto Kraken a grafico con le righe TP e SL come in MT5, con
@@ -35175,9 +35235,9 @@ async function krakenRegistraChiusura(id,st){
   +(cambio?(' = '+(plEur>=0?'+':'')+euro(plEur)):'')+' — scritto nel Trade Journal'+(stimato?' (P/L stimato)':'')+'.';
 }
 // Le posizioni Kraken a grafico, come quelle MT5: casella Target/Stop con le righe dei TP, R/R,
-// P/L e margine. Il grafico delle cripto e' quello di Binance: i livelli si spostano della piccola
-// differenza fra i due prezzi (Binance - mark Kraken), cosi' cadono sulle candele giuste; le
-// etichette mostrano i prezzi VERI di Kraken.
+// P/L e margine. Entry, SL e TP sono i prezzi dell'ordine Kraken: non si traslano mai col prezzo
+// Binance del grafico, altrimenti sembrerebbe un trailing non richiesto e il livello non sarebbe
+// più quello che chiude davvero la posizione.
 function krakenBaseDaSimbolo(sim){ return String(sim||'').toUpperCase().replace(/^(PF|PI|FF|FI)_/,'').replace(/USD$/,'').replace(/^XBT/,'BTC'); }
 window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!krakenConto||!krakenConto.collegato||!currentAssetKey)return;
@@ -35202,10 +35262,8 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
  }
  if(!ps.length)return;
  const usd=v=>(v>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
- const prezzo=currentPrice();
  ps.forEach(p=>{
   const mark=Number(p.mark), entry=Number(p.entrata);
-  const off=(Number.isFinite(prezzo)&&mark>0&&Math.abs(prezzo-mark)<mark*0.02)?(prezzo-mark):0;
   const st=Object.values(tgStrategie||{}).filter(x=>x&&x.conto==='kraken'&&x.simbolo===p.simbolo).sort((a,b)=>a.creato-b.creato)[0];
   const t0=st?Number(st.creato):null;
   let origine=t0?rowIndexContainingTime(t0):null;
@@ -35219,8 +35277,8 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
   const rr=Number.isFinite(slIni)&&Number.isFinite(tpLontano)?rrArrotondatoTesto(entry,slIni,tpLontano):'—';
   const margine=Number(p.quantita)*mark/(krakenLeva()||1);
   const stopProfit=Number.isFinite(sl)&&(buy?sl>=entry:sl<=entry);
-  const box=drawTpSlZoneBox(ctx,{ownerKey:'kraken:'+p.simbolo,originIdx:origine,entry:entry+off,sl:Number.isFinite(sl)?sl+off:null,
-   tp:Number.isFinite(tpLontano)?tpLontano+off:null,pad,cw,n,start,w,y,noHandle:true,assetKey:currentAssetKey,lots:Number(p.quantita)||null,stopProfit,
+  const box=drawTpSlZoneBox(ctx,{ownerKey:'kraken:'+p.simbolo,originIdx:origine,entry,sl:Number.isFinite(sl)?sl:null,
+   tp:Number.isFinite(tpLontano)?tpLontano:null,pad,cw,n,start,w,y,noHandle:true,assetKey:currentAssetKey,lots:Number(p.quantita)||null,stopProfit,
    importoTp:(p.tp||[]).reduce((a,x)=>a+Math.abs(Number(x.prezzo)-entry)*(Number(x.quantita)||0),0)||undefined,
    keepPaceIdx:idx,
    tooltipLines:['🐙 '+krakenNome()+' · '+(buy?'BUY':'SELL')+' '+p.quantita+' '+p.simbolo,
@@ -35229,12 +35287,12 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
   // TP intermedi (chiusure parziali): righe sottili con il loro numero
   if(box&&tps.length>1){
    ctx.save(); ctx.font='10px Inter, system-ui, sans-serif';
-   tps.forEach((t,j)=>{ const yy=y(t+off); if(t+off<lo||t+off>hi)return; ctx.strokeStyle='rgba(47,191,113,0.85)'; ctx.setLineDash([4,3]); ctx.lineWidth=1;
+   tps.forEach((t,j)=>{ const yy=y(t); if(t<lo||t>hi)return; ctx.strokeStyle='rgba(47,191,113,0.85)'; ctx.setLineDash([4,3]); ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(box.xOrigin,yy); ctx.lineTo(box.xRight,yy); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle='#7fdc9a'; ctx.fillText('TP'+(j+1),box.xOrigin+3,yy-3); });
    ctx.restore();
   }
   // etichetta sempre visibile sull'entrata: P/L live, R/R e margine
-  if(box&&entry+off>=lo&&entry+off<=hi){
+  if(box&&entry>=lo&&entry<=hi){
    try{ drawZonePill(ctx,box.xRight+4,box.yEntry,'🐙 '+usd(Number(p.pnl)||0)+' · R/R '+rr+' · margine '+usd(margine).replace('+',''),(Number(p.pnl)||0)>=0?'#1f6f4a':'#7a3030','#ffffff',undefined,w-pad.r); }catch(e){}
   }
  });

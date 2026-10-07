@@ -52,7 +52,7 @@
 //          v15 = footprint allineato nell'ora 22-23 (via i tick MT5 storici dalle fasce
 //               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v99";
+const CACHE_NAME = "forex-backtest-lab-v101";
 const ASSETS = [
   "./",
   "./app.html",
@@ -79,31 +79,13 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// MOSTRA SUBITO, AGGIORNA DIETRO.
-//
-// MISURATO il 7 ottobre 2026: app.html pesa 4,03 MB e ci mette 3,2 secondi a scaricarsi da un
-// computer con rete veloce. Su dati mobili sono 7-30 secondi, piu' il tempo di interpretare 4 MB
-// di codice sul processore del telefono. Segnalato dal proprietario: sul telefono l'app "resta
-// ferma sul logo".
-//
-// Come si faceva prima: si chiedeva SEMPRE la rete, con `cache: 'no-store'` che salta apposta
-// anche la cache del browser, e la copia salvata si mostrava solo dopo RISERVA_MS = 4 secondi di
-// attesa. Con un file da 4 MB quei 4 secondi di schermata vuota c'erano quasi sempre, e i 4 MB si
-// riscaricavano a ogni apertura - anche alla decima.
-//
-// Adesso: se una copia c'e', si mostra SUBITO; la rete continua per conto suo e aggiorna la copia
-// per la volta dopo. La primissima apertura scarica comunque (non c'e' alternativa), ma da li' in
-// poi l'app si apre all'istante, anche con la rete lenta o assente.
-//
-// E una correzione appena pubblicata? Arriva lo stesso: il download che continua dietro rinfresca
-// la copia, e CACHE_NAME con skipWaiting fa il resto. Se la versione nuova arriva mentre l'app e'
-// in uso, la pagina lo DICE invece di ricaricarsi da sola: ricaricare di colpo mentre si guarda
-// una posizione aperta sarebbe peggio del problema che risolve.
-//
-// Niente piu' `cache: 'no-store'`: GitHub Pages manda l'ETag, quindi l'aggiornamento di sfondo di
-// solito e' una domanda da pochi byte ("e' cambiato?") invece di 4 MB di dati mobili.
-function rispostaSubitoPoiAggiorna(request) {
-  const rete = fetch(request)
+// RETE CON RISERVA (segnalato: sul telefono, a ogni ritorno nell'app, la pagina da quasi 4 MB
+// restava bianca finche' non era riscaricata tutta). Resta network-first - un app.html appena
+// pubblicato arriva subito - ma se la rete non risponde entro RISERVA_MS e in cache c'e' una copia,
+// si mostra SUBITO quella; il download continua comunque e aggiorna la cache per la volta dopo.
+const RISERVA_MS = 4000;
+function rispostaConRiserva(request) {
+  const rete = fetch(request, { cache: 'no-store' })
     .then((response) => {
       if (response && response.status === 200) {
         const clone = response.clone();
@@ -111,16 +93,15 @@ function rispostaSubitoPoiAggiorna(request) {
       }
       return response;
     });
-  return caches.match(request).then((salvata) => {
-    if (salvata) {
-      // La copia c'e': si parte subito. Un errore di rete adesso non deve diventare un errore
-      // della pagina, che e' gia' stata servita.
-      rete.catch(() => {});
-      return salvata;
-    }
-    // Prima apertura in assoluto: non c'e' niente da mostrare, si aspetta la rete.
-    return rete.catch(() => caches.match(request).then((c) => c || Promise.reject(new Error('offline'))));
+  const riserva = new Promise((resolve) => {
+    setTimeout(() => {
+      caches.match(request).then((c) => { if (c) resolve(c); });
+    }, RISERVA_MS);
   });
+  return Promise.race([
+    rete.catch(() => caches.match(request).then((c) => c || Promise.reject(new Error('offline')))),
+    riserva
+  ]);
 }
 
 self.addEventListener("fetch", (event) => {
@@ -137,22 +118,18 @@ self.addEventListener("fetch", (event) => {
     /\.(html|js|css|json|png|ico|svg|webmanifest|woff2?)$/i.test(url.pathname);
   if (!statico) return;
 
-  event.respondWith(rispostaSubitoPoiAggiorna(event.request));
-});
-
-// LA VERSIONE NUOVA E' PRONTA: lo si dice, non si ricarica di nascosto.
-//
-// Con "mostra subito" una pagina gia' aperta continua a usare la copia vecchia finche' non la si
-// riapre. Va benissimo per l'avvio, ma chi ha appena pubblicato una correzione deve poterla
-// vedere senza indovinare quando. Quando un service worker NUOVO prende il controllo (CACHE_NAME
-// diverso) lo si comunica alle pagine aperte: ci pensa app.html a mostrare un avviso con
-// "Ricarica". Ricaricare da soli, magari mentre si sta guardando una posizione aperta, sarebbe
-// peggio del problema che risolve.
-self.addEventListener("activate", (event) => {
-  event.waitUntil((async () => {
-    const pagine = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-    for (const p of pagine) {
-      try { p.postMessage({ tipo: "versione-nuova", cache: CACHE_NAME }); } catch (e) {}
-    }
-  })());
+  event.respondWith(
+    // NETWORK-FIRST: prova sempre la rete per prima (così un app.html appena pubblicato arriva
+    // SUBITO al prossimo caricamento, non "al giro dopo"); solo se la rete fallisce davvero
+    // (offline, o richiesta momentaneamente irraggiungibile) si ripiega sulla copia in cache.
+    //
+    // {cache:'no-store'} AGGIUNTO — "network-first" qui sopra descrive solo la strategia del
+    // service worker (cache delle *Cache API* propria), ma fetch() di per sé rispetta ANCHE la
+    // cache HTTP del browser: senza questa opzione, questa richiesta "verso la rete" poteva
+    // comunque tornare una risposta presa dalla cache-disco di Chrome (se ancora "fresca" secondo
+    // l'euristica del browser) SENZA toccare davvero la rete — proprio il bug per cui un fix
+    // pubblicato non arrivava a chi ricaricava con F5 invece di CTRL+SHIFT+R. Ora bypassa sempre
+    // anche quella, in coppia con gli header no-cache lato server (vedi bridge.py, serve_app()).
+    rispostaConRiserva(event.request)
+  );
 });
