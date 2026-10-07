@@ -14,7 +14,7 @@ QUI = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(os.path.dirname(QUI), "installer_build", "build")
 sys.path.insert(0, os.environ.get("FBL_BUILD") or BUILD)
 
-from fastapi import FastAPI, HTTPException, Request  # noqa: E402
+from fastapi import FastAPI, HTTPException, Request, WebSocket  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 import accesso_condiviso as accesso  # noqa: E402
@@ -159,6 +159,62 @@ async def _inoltra(porta: int, percorso: str, request: Request):
         # Il PC spento e' la cosa piu' probabile, e va detta cosi': non e' un guasto del server.
         raise HTTPException(status_code=502,
                             detail="Il computer non risponde (acceso? Tailscale attivo?): %s" % e)
+
+
+@app.websocket("/pc/{porta}/{percorso:path}")
+async def pc_inoltra_ws(websocket: WebSocket, porta: int, percorso: str):
+    """Gira al PC anche un canale WebSocket.
+
+    Serve per i PREZZI DAL VIVO: il terminale MT5 sta sul computer, il ponte li' li legge sulla
+    porta 8001 e li manda su un canale WebSocket. Senza questo passaggio, dal telefono il grafico
+    si disegna con lo storico ma non si muove - ed e' meta' del motivo per cui si guarda un
+    grafico. La catena e': terminale MT5 -> ponte sul computer -> server -> telefono.
+    Il controllo della chiave va fatto QUI: il controllo HTTP le WebSocket non le vede.
+    """
+    if porta not in PORTE_PC:
+        await websocket.close(code=4400)
+        return
+    if not accesso.websocket_autorizzato(websocket):
+        await websocket.close(code=4403)
+        return
+    d = _leggi_pc()
+    if not d.get("host"):
+        await websocket.close(code=4404)       # nessun computer registrato
+        return
+
+    import asyncio
+    import urllib.parse
+
+    import websockets
+
+    parametri = dict(websocket.query_params)
+    parametri["chiave"] = d.get("chiave", "")      # al PC serve la SUA chiave, non quella del server
+    url = "wss://%s:%d/%s?%s" % (d["host"], porta, percorso, urllib.parse.urlencode(parametri))
+    await websocket.accept()
+    try:
+        async with websockets.connect(url, open_timeout=20, ping_interval=20) as pc:
+            async def verso_pc():
+                while True:
+                    await pc.send(await websocket.receive_text())
+
+            async def verso_telefono():
+                while True:
+                    await websocket.send_text(await pc.recv())
+
+            # Il primo dei due che finisce chiude anche l'altro: un canale mezzo aperto terrebbe
+            # in vita una connessione al PC che non legge piu' nessuno.
+            fatti, restanti = await asyncio.wait(
+                [asyncio.create_task(verso_pc()), asyncio.create_task(verso_telefono())],
+                return_when=asyncio.FIRST_COMPLETED)
+            for t in restanti:
+                t.cancel()
+    except Exception:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 @app.get("/health")
