@@ -1817,7 +1817,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            stessi, il codice JS che lo usa non cambia. -->
       <div id="mt5BridgeHelp" style="display:none;font-size:12px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px">
         <div id="mt5BridgeStepTitle" style="display:none;font-weight:700;color:#e8edf3;margin-bottom:6px">Passo 1 di 3 — Installa i pacchetti aggiuntivi</div>
-        <div>Il servizio necessario per il collegamento a MT5 non risulta ancora attivo su questo PC. Non è un'app da aprire: una volta installato parte da solo, in automatico e senza finestre — dovrai solo installarlo una volta sola.</div>
+        <div id="mt5BridgeStepTesto">Il servizio necessario per il collegamento a MT5 non risulta ancora attivo su questo PC. Non è un'app da aprire: una volta installato parte da solo, in automatico e senza finestre — dovrai solo installarlo una volta sola.</div>
         <button type="button" id="mt5DownloadDesktopAppBtn" class="toolBtn" style="width:100%">⬇️ avvia download dei pacchetti</button>
         <button type="button" id="mt5BridgeContinueBtn" class="toolBtn" style="width:100%;background:#277d5a;border-color:#3ea6ff;margin-top:6px">✅ Fatto, ho installato — continua</button>
         <div id="mt5BridgeContinueResult" style="display:none"></div>
@@ -27748,6 +27748,16 @@ let mt5MonitorOnly=false, mt5PositionsLastOkAt=0;
 // disinstallato, bridge non ancora acceso), il fallback mt5NoTerminalHelp/mt5BridgeHelp esistente
 // scatta comunque, quindi saltare il gate qui non toglie nessuna sicurezza, solo un passaggio
 // ridondante per chi ha già dimostrato di avercelo.
+// Su QUESTO PC il servizio ha gia' risposto almeno una volta? Se si', i pacchetti ci sono: un
+// /health muto vuol dire che non e' ancora partito, non che manchi qualcosa da installare.
+const PONTE_VISTO_KEY='fxbt_ponteGiaVisto';
+let pontGiaVisto=false;
+try{ pontGiaVisto=localStorage.getItem(PONTE_VISTO_KEY)==='1'; }catch(e){}
+function segnaPonteVisto(){
+ if(pontGiaVisto)return;
+ pontGiaVisto=true;
+ try{ localStorage.setItem(PONTE_VISTO_KEY,'1'); }catch(e){}
+}
 let mt5TerminalConfirmedBefore=false;
 try{ mt5TerminalConfirmedBefore=localStorage.getItem('fxbt_mt5TerminalConfirmed')==='1'; }catch(e){}
 function markMt5TerminalConfirmed(){
@@ -36213,15 +36223,44 @@ async function mt5AdvanceFromStep1(){
  if($('mt5LoginModalOverlay').style.display==='none')return;
  mt5ShowStepVisible(installed?3:2);
 }
+// Cambia le parole del passo 1 a seconda di cosa sta davvero succedendo. Le due situazioni si
+// somigliano (il servizio non risponde) ma la cosa da fare e' opposta: installare, oppure solo
+// aspettare. Dirle con le stesse parole manda a reinstallare chi ha solo acceso il PC.
+function mt5Passo1Parole(giaInstallato){
+ const titolo=$('mt5BridgeStepTitle'), testo=$('mt5BridgeStepTesto');
+ const scarica=$('mt5DownloadDesktopAppBtn'), avanti=$('mt5BridgeContinueBtn');
+ if(giaInstallato){
+  if(titolo)titolo.textContent='Passo 1 di 3 — Il servizio non risponde';
+  if(testo)testo.innerHTML='I pacchetti su questo computer <b>risultano già installati</b>: il servizio '
+   +'però non sta ancora rispondendo. Quasi sempre vuol dire che non ha finito di partire — '
+   +'succede quando il computer è appena stato acceso. Aspetta qualche secondo e premi «Riprova».';
+  // Il download resta raggiungibile, ma non e' piu' la cosa da fare: non deve stare per primo.
+  if(scarica)scarica.textContent='Scarica di nuovo i pacchetti (solo se il problema resta)';
+  if(avanti)avanti.textContent='🔄 Riprova adesso';
+ }else{
+  if(titolo)titolo.textContent='Passo 1 di 3 — Installa i pacchetti aggiuntivi';
+  if(testo)testo.textContent='Il servizio necessario per il collegamento a MT5 non risulta ancora attivo su questo PC. '
+   +'Non è un\'app da aprire: una volta installato parte da solo, in automatico e senza finestre — dovrai solo installarlo una volta sola.';
+  if(scarica)scarica.textContent='⬇️ avvia download dei pacchetti';
+  if(avanti)avanti.textContent='✅ Fatto, ho installato — continua';
+ }
+}
 async function mt5StartLoginFlow(){
  mt5WizardShownSteps=false; mt5WizardMode=false;
  mt5ShowWizardStep(0);
  $('mt5WizardChecking').style.display='block';
  $('mt5BridgeContinueResult').style.display='none';
- $('mt5BridgeContinueBtn').textContent='✅ Fatto, ho installato — continua';
- const health=await fetchMt5WithTimeout('/health',{method:'GET'},10000);
+ // SI ASPETTA, riprovando: il servizio parte da solo ma su un PC appena acceso ci mette qualche
+ // secondo. Arrendersi al primo tentativo e' esattamente il motivo per cui l'app chiedeva di
+ // installare pacchetti gia' installati. Chi ha gia' visto il servizio qui merita piu' pazienza:
+ // sta solo aspettando un avvio, non una installazione.
+ const health=await waitForBridgeHealthy(pontGiaVisto?20000:10000,()=>{
+  const el=$('mt5WizardChecking');
+  if(el)el.textContent='🔎 Attendo che il servizio di questo PC risponda… (parte da solo, può volerci qualche secondo)';
+ });
  if($('mt5LoginModalOverlay').style.display==='none')return;
- if(!health.ok){ mt5ShowStepVisible(1); return; }
+ if(!health.ok){ mt5Passo1Parole(pontGiaVisto); mt5ShowStepVisible(1); return; }
+ segnaPonteVisto();
  await mt5AdvanceFromStep1();
 }
 async function mt5StartLoginFlowLegacy(){
@@ -36613,8 +36652,9 @@ $('mt5BridgeContinueBtn').addEventListener('click',async()=>{
  resEl.style.display='none';
  const r=await waitForBridgeHealthy(20000);
  $('mt5BridgeContinueBtn').disabled=false;
- $('mt5BridgeContinueBtn').textContent='✅ Fatto, ho installato — continua';
+ $('mt5BridgeContinueBtn').textContent=pontGiaVisto?'🔄 Riprova adesso':'✅ Fatto, ho installato — continua';
  if(r.ok){
+   segnaPonteVisto();
    // Bridge acceso: passo 1 superato, si passa al passo 2 (la domanda su MT5).
    if(mt5WizardMode){ await mt5AdvanceFromStep1(); }
    else{
