@@ -13,6 +13,16 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Trade Journal di Kraken vuoto per le chiusure avvenute a app chiusa** — risolto app v94 — le
+  righe le scriveva l'app nel momento della chiusura (`krakenRegistraChiusura`). Con il server
+  sempre acceso le posizioni si chiudono anche a app chiusa - cioe' proprio il caso per cui il
+  server esiste - e quelle righe non nascevano per nessuno; su un dispositivo nuovo il giornale
+  mostrava solo cio' che quel dispositivo aveva visto. Ora `krakenRicostruisciGiornale()` le
+  ricava dallo storico del server (gia' persistente, fino a 2000 esecuzioni), seguendo la
+  posizione netta per simbolo. Niente doppioni: ogni riga porta una chiave ricavata dal dato del
+  server (`kr:<conto_id>:<simbolo>:<ts>`), e la riga scritta dal vivo porta la stessa.
+  **conto_id e non il nome**: il nome si puo' rinominare, e al primo rinomina sarebbero tornati
+  tutti doppioni. Test: `laboratorio/app/giornale_kraken.test.mjs` (5).
 - **Collegamento/Modalita' chiedeva due indirizzi e due chiavi** — risolto app v93 — dal telefono
   si scriveva nome e chiave del computer E nome e chiave del server, e la chiave del computer si
   ricopiava a mano da una parte all'altra. Ora si scrive solo il **server**: il computer si

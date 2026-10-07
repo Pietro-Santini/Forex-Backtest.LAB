@@ -34524,11 +34524,22 @@ async function krakenBridge(percorso,corpo){
  if(fblServer())return fetchServerWithTimeout('/kraken'+percorso,corpo===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)},30000);
  return fetchMt5WithTimeout('/kraken'+percorso,corpo===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(corpo)},30000);
 }
+let krakenGiornaleFatto='';
 async function krakenAggiornaConto(){
  const r=await krakenBridge('/stato');
  krakenConto=r.ok?r.data:{configurato:false,collegato:false,errore:r.message,bridgeAssente:true};
  krakenConto.__at=Date.now();
  try{ krakenDisegnaConto(); }catch(e){}
+ // Il conto vive sul server anche a app chiusa: si va a vedere cosa e' successo nel frattempo e
+ // si rimettono nel giornale le operazioni che nessun dispositivo ha visto chiudersi.
+ // Una volta per conto, non a ogni aggiornamento di stato (che gira ogni pochi secondi).
+ try{
+  const chi=(krakenConto&&krakenConto.collegato&&krakenConto.ambiente==='simulato')?krakenContoId():'';
+  if(chi&&krakenGiornaleFatto!==chi){
+   krakenGiornaleFatto=chi;
+   krakenRicostruisciGiornale().catch(e=>console.log('[Kraken] giornale non ricostruito:',e));
+  }
+ }catch(e){}
  return krakenConto;
 }
 function krakenContoPronto(){ return !!(krakenConto&&krakenConto.collegato); }
@@ -34812,6 +34823,107 @@ async function krakenCambioEur(){
  }
  return krakenEurUsd;
 }
+// ===================== TRADE JOURNAL DI KRAKEN, RICOSTRUITO DAL SERVER =====================
+// Le righe del giornale nascevano solo se l'app era aperta nel momento della chiusura. Con il
+// server sempre acceso le posizioni si chiudono anche a app chiusa: quelle righe non nascevano
+// per nessuno, e su un dispositivo nuovo il giornale era vuoto.
+// Lo storico del server ha tutto: si ricostruisce da li'.
+//
+// La chiave di una riga si ricava dal DATO DEL SERVER (conto + simbolo + momento della chiusura),
+// mai dal momento in cui l'app se n'e' accorta: due dispositivi che guardano lo stesso conto
+// devono arrivare alla stessa chiave, altrimenti il giornale si riempie di doppioni.
+function krakenChiaveRiga(conto,simbolo,ts){ return 'kr:'+conto+':'+simbolo+':'+Math.round(Number(ts)||0); }
+// L'IDENTIFICATIVO del conto, non il suo nome: il nome si puo' rinominare, e al primo rinomina
+// tutte le chiavi cambierebbero e il giornale si riempirebbe di doppioni di operazioni gia' li'.
+function krakenContoId(){
+ try{ return String((krakenConto&&(krakenConto.conto_id||krakenConto.conto_nome))||'conto'); }
+ catch(e){ return 'conto'; }
+}
+
+// Dalle esecuzioni alle operazioni chiuse. Si segue la posizione netta simbolo per simbolo: le
+// esecuzioni che la ingrandiscono fanno media del prezzo d'ingresso, quelle che la riducono
+// chiudono (anche solo in parte) e producono una riga.
+function krakenOperazioniChiuse(storico){
+ const perSimbolo={}, fuori=[];
+ (storico||[]).slice().filter(x=>x&&x.tipo!=='funding').sort((a,b)=>Number(a.ts)-Number(b.ts)).forEach(x=>{
+  const sym=String(x.simbolo||''); if(!sym)return;
+  const q=Math.abs(Number(x.quantita)||0); if(!(q>0))return;
+  const segno=(String(x.lato||'').toLowerCase()==='buy')?1:-1;
+  const p=perSimbolo[sym]||(perSimbolo[sym]={q:0,prezzo:0,da:0});
+  if(p.q===0||Math.sign(p.q)===segno){
+   // Apertura, o aggiunta alla posizione: il prezzo d'ingresso diventa la media pesata.
+   const tot=Math.abs(p.q)+q;
+   p.prezzo=tot>0?((Math.abs(p.q)*p.prezzo)+(q*Number(x.prezzo)))/tot:Number(x.prezzo);
+   if(p.q===0)p.da=Number(x.ts);
+   p.q+=segno*q;
+   return;
+  }
+  // Riduzione o chiusura: esce una riga del giornale.
+  const chiusa=Math.min(Math.abs(p.q),q);
+  fuori.push({simbolo:sym, side:p.q>0?'BUY':'SELL', entry:p.prezzo, exit:Number(x.prezzo),
+    quantita:chiusa, pl:(Number(x.pnl)||0)-(Number(x.commissione)||0),
+    ts:Number(x.ts), da:p.da||Number(x.ts), tipo:String(x.tipo||''), cliOrdId:x.cliOrdId||null});
+  p.q+=segno*q;
+  if(Math.abs(p.q)<1e-12){ p.q=0; p.prezzo=0; p.da=0; }
+  else if(Math.sign(p.q)===segno){ p.prezzo=Number(x.prezzo); p.da=Number(x.ts); }   // si e' girata
+ });
+ return fuori;
+}
+
+function krakenEsitoDa(tipo,entry,exit,side){
+ const t=String(tipo||'');
+ if(/take/i.test(t))return 'TP';
+ if(/liquid/i.test(t))return 'Liquidazione';
+ if(/stop/i.test(t)){
+  if(Math.abs(exit-entry)<=entry*0.0002)return 'BE';
+  return ((exit-entry)*(side==='BUY'?1:-1)>0)?'SP':'SL';
+ }
+ return 'Manuale';
+}
+
+// Rimette nel giornale quello che e' successo mentre l'app era chiusa. Non tocca le righe che ci
+// sono gia': le riconosce dalla chiave.
+async function krakenRicostruisciGiornale(){
+ if(!krakenConto||krakenConto.ambiente!=='simulato')return 0;
+ const conto=krakenContoId();
+ try{ await krakenLeggiStorico(); }catch(e){ return 0; }
+ if(!Array.isArray(krakenStorico)||!krakenStorico.length)return 0;
+ const gia=new Set();
+ (trades||[]).forEach(t=>{ if(t&&t.krakenChiave)gia.add(t.krakenChiave); });
+ const cambio=await krakenCambioEur();
+ const saldo=Number(krakenConto&&krakenConto.saldo)||0;
+ let aggiunte=0;
+ krakenOperazioniChiuse(krakenStorico).forEach(op=>{
+  const chiave=krakenChiaveRiga(conto,op.simbolo,op.ts);
+  if(gia.has(chiave))return;
+  gia.add(chiave);
+  const plEur=cambio?op.pl/cambio:op.pl;
+  trades.push({
+   id:'kr'+op.ts+Math.random(), krakenChiave:chiave,
+   asset:'BINANCE:'+String(op.simbolo).replace(/^PF_/,'').replace(/USD$/,'').replace('XBT','BTC')+'USDT',
+   side:op.side, entry:op.entry, exit:op.exit, sl:null, rrSl:null, tp:null,
+   lots:op.quantita, pl:Math.round(plEur*100)/100, pct:saldo>0?op.pl/saldo*100:0, pips:0,
+   result:krakenEsitoDa(op.tipo,op.entry,op.exit,op.side),
+   account:'kraken', mode:'live',
+   closedAt:new Date(op.ts).toISOString(), startTime:op.da,
+   openTF:currentTF, closeTF:currentTF,
+   krakenConto:conto, krakenSimbolo:op.simbolo,
+   // Si vede che non e' stata registrata dal vivo: utile quando i numeri sembrano strani.
+   krakenRicostruita:true
+  });
+  aggiunte++;
+ });
+ if(aggiunte){
+  // L'ordine conta: il giornale si legge per data, e le righe ritrovate sono di prima.
+  trades.sort((a,b)=>parseDateTime(a.closedAt)-parseDateTime(b.closedAt));
+  try{ save(); }catch(e){}
+  try{ renderTrades&&renderTrades(); }catch(e){}
+  try{ update(); }catch(e){}
+  console.log('[Kraken] giornale: '+aggiunte+' operazioni ritrovate sul server');
+ }
+ return aggiunte;
+}
+
 // La chiusura di un segnale Kraken diventa un trade del Trade Journal. I numeri veri vengono dalle
 // esecuzioni del conto (simulato): quelle con l'etichetta del segnale (fbl_<gruppo>), piu' le
 // chiusure "a mano" senza etichetta sullo stesso contratto dopo l'apertura.
@@ -34852,7 +34964,12 @@ async function krakenRegistraChiusura(id,st){
  const plEur=cambio?plUsd/cambio:plUsd;
  const saldo=Number(krakenConto&&krakenConto.saldo)||0;
  const tChiusura=ultimo?Number(ultimo.ts):Date.now();
- const t={id:Date.now()+Math.random(),asset:st.sym||('BINANCE:'+String(st.simbolo||'').replace(/^PF_/,'').replace(/USD$/,'').replace('XBT','BTC')+'USDT'),
+ // La stessa chiave che userebbe la ricostruzione dal server: senza, la prossima ricostruzione
+ // aggiungerebbe un doppione della riga appena scritta.
+ const t={id:Date.now()+Math.random(),
+  krakenChiave:(ultimo&&krakenConto&&krakenConto.ambiente==='simulato')
+   ?krakenChiaveRiga(krakenContoId(),st.simbolo,Number(ultimo.ts)):undefined,
+  asset:st.sym||('BINANCE:'+String(st.simbolo||'').replace(/^PF_/,'').replace(/USD$/,'').replace('XBT','BTC')+'USDT'),
   side:st.side,entry,exit,sl:Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):Number(st.sl),rrSl:Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):Number(st.sl),
   tp:(st.tps&&st.tps.length)?Number(st.tps[st.tps.length-1]):null,lots:Number(st.quantita)||0,
   pl:Math.round(plEur*100)/100,pct:saldo>0?plUsd/saldo*100:0,pips:0,result,account:'kraken',mode:'live',
