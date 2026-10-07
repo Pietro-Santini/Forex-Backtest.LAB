@@ -161,7 +161,10 @@ async def _inoltra(porta: int, percorso: str, request: Request):
                             detail="Il computer non risponde (acceso? Tailscale attivo?): %s" % e)
 
 
-@app.websocket("/pc/{porta}/{percorso:path}")
+# `{porta:int}` nel percorso, non solo nell'annotazione: senza, la porta arriva come TESTO
+# ("8001") e il confronto con i numeri qui sotto fallisce sempre, chiudendo il canale subito.
+# Il grafico dal vivo non si sarebbe mosso, senza nessun errore visibile.
+@app.websocket("/pc/{porta:int}/{percorso:path}")
 async def pc_inoltra_ws(websocket: WebSocket, porta: int, percorso: str):
     """Gira al PC anche un canale WebSocket.
 

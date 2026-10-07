@@ -105,3 +105,61 @@ def test_se_il_pc_non_risponde_lo_dice_senza_accusare_il_server(server, monkeypa
     r = cli.get("/pc/health")
     assert r.status_code == 502
     assert "computer non risponde" in r.json()["detail"]
+
+
+def test_il_server_gira_la_porta_giusta(server, monkeypatch):
+    """Ogni porta del PC ha la sua strada: 8000 ordini, 8001 grafico, 8769 segnali.
+
+    Il grafico sta sulla 8001: finche' il server girava solo la 8000, dal telefono il grafico
+    diceva "nessuna risposta" e non c'era modo di accorgersi del perche'.
+    """
+    mod, cli = server
+    cli.post("/pc/registra", json={"host": "casa-pc.tail1.ts.net", "chiave": "k"})
+
+    import httpx
+    visti = []
+
+    class ClienteFinto:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def request(self, metodo, url, **kw):
+            visti.append(url)
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(httpx, "AsyncClient", ClienteFinto)
+
+    cli.get("/pc/8001/health")
+    cli.get("/pc/8769/health")
+    cli.get("/pc/health")            # senza porta = ordini, com'era prima
+    assert visti == ["https://casa-pc.tail1.ts.net:8001/health",
+                     "https://casa-pc.tail1.ts.net:8769/health",
+                     "https://casa-pc.tail1.ts.net:8000/health"]
+
+
+def test_una_porta_non_prevista_si_rifiuta(server):
+    """Il server non deve diventare un passaggio verso una porta qualunque del PC."""
+    _, cli = server
+    cli.post("/pc/registra", json={"host": "casa-pc.tail1.ts.net", "chiave": "k"})
+    assert cli.get("/pc/22/health").status_code == 400
+    assert cli.get("/pc/3389/health").status_code == 400
+
+
+def test_il_canale_dal_vivo_riceve_la_porta_come_numero(server):
+    """I prezzi al millisecondo passano da un WebSocket, e la porta deve arrivare NUMERO.
+
+    Scritta senza `:int` nel percorso arriverebbe come testo ("8001"), il confronto con le porte
+    previste fallirebbe sempre e il canale verrebbe chiuso subito: il grafico resterebbe fermo
+    senza nessun errore visibile.
+    """
+    mod, _ = server
+    rotte = [r for r in mod.app.routes if "/pc/" in getattr(r, "path", "") and "porta" in getattr(r, "path", "")]
+    ws = [r for r in rotte if r.__class__.__name__ == "APIWebSocketRoute"]
+    assert ws, "manca la rotta WebSocket verso il PC"
+    assert "{porta:int}" in ws[0].path, "la porta del canale dal vivo deve essere un numero: " + ws[0].path
