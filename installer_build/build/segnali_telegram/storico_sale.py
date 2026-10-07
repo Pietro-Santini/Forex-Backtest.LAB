@@ -68,17 +68,35 @@ def _salva(percorso: str, dati: dict) -> None:
 # ----------------------------------------------------------------------------- Telegram
 async def leggi_telegram(client, entita, sala: str, interpreta: Callable[[str], Optional[dict]],
                          avanzamento: Optional[Callable[[int, int], None]] = None,
-                         da_capo: bool = False) -> dict:
-    """Tutti i segnali della sala, dal primo messaggio. Restituisce {segnali, letti, nuovi}."""
+                         da_capo: bool = False, mesi: Optional[int] = None) -> dict:
+    """I segnali della sala. Restituisce {segnali, letti, nuovi, da_data}.
+
+    `mesi` RICHIESTO dal proprietario (7 ottobre 2026): «quando premo leggi tutta la cronologia
+    devo poter scegliere un periodo di tempo: un mese, due mesi, cinque mesi, un anno, due anni».
+    Su una sala con anni di messaggi la lettura completa dura parecchi minuti: quasi sempre
+    interessa l'ultimo pezzo, e aspettare tutto il resto e' tempo buttato.
+
+    Con un periodo si riparte sempre da zero (non si "aggiunge" a una memoria che copriva un
+    intervallo diverso: i conti non tornerebbero e nessuno saprebbe perche').
+    """
     percorso = _nome_file(sala, "tg_")
-    memoria = {} if da_capo else _carica(percorso)
+    parziale = mesi is not None and int(mesi) > 0
+    memoria = {} if (da_capo or parziale) else _carica(percorso)
     segnali: List[dict] = list(memoria.get("segnali") or [])
     ultimo_id = int(memoria.get("ultimo_id") or 0)
     letti = 0
     nuovi = 0
+    da_data = None
+    opzioni = {}
+    if parziale:
+        from datetime import datetime, timedelta, timezone
+        da_data = datetime.now(timezone.utc) - timedelta(days=int(mesi) * 30)
+        # Con reverse=True, offset_date vuol dire "dai messaggi DOPO questa data in poi".
+        opzioni["offset_date"] = da_data
+        ultimo_id = 0
     # reverse=True: dal piu' vecchio al piu' nuovo, cosi' la memoria resta in ordine e, se la
     # lettura si interrompe, quello che e' gia' stato letto e' valido e si riprende da li'.
-    async for m in client.iter_messages(entita, reverse=True, min_id=ultimo_id):
+    async for m in client.iter_messages(entita, reverse=True, min_id=ultimo_id, **opzioni):
         letti += 1
         testo = getattr(m, "message", None) or ""
         if testo.strip():
@@ -99,9 +117,13 @@ async def leggi_telegram(client, entita, sala: str, interpreta: Callable[[str], 
             if avanzamento:
                 avanzamento(letti, len(segnali))
             await asyncio.sleep(0)
-    memoria = {"sala": sala, "ultimo_id": ultimo_id, "segnali": segnali, "aggiornato": time.time()}
+    memoria = {"sala": sala, "ultimo_id": ultimo_id, "segnali": segnali, "aggiornato": time.time(),
+               # Fin dove arriva questa memoria: senza, una lettura "ultimi 2 mesi" verrebbe poi
+               # allungata da una lettura normale e nessuno saprebbe piu' cosa copre davvero.
+               "da_data": da_data.timestamp() * 1000.0 if da_data else None}
     _salva(percorso, memoria)
-    return {"segnali": segnali, "letti": letti, "nuovi": nuovi}
+    return {"segnali": segnali, "letti": letti, "nuovi": nuovi,
+            "da_data": memoria["da_data"], "parziale": parziale}
 
 
 # ----------------------------------------------------------------------------- Syntra
