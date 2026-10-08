@@ -26128,8 +26128,16 @@ function fblServiziElenco(){
  const srv=fblServer();
  const perServer=(porta,percorso)=>fblServerConChiave(fblServerUrl(porta)+percorso);
  return [
-  {chiave:'ordini', nome:'Ordini', dove: srv?'computer, tramite il server':'computer',
-   url: srv?perServer(8000,'/pc/health'):fblConChiave(fblBaseUrl(8000)+'/health')},
+  // RICHIESTO dal sintomo: il pallino verde deve dire che funziona QUELLO che usa la sezione
+  // MT5, non una rotta scelta qui. Prima provava il server per conto suo e restava verde mentre
+  // MT5 andava altrove: un controllo che conferma una cosa diversa da quella che si sta usando
+  // e' peggio di nessun controllo, perche' manda a cercare il guasto dove non e'.
+  {chiave:'ordini', nome:'Ordini',
+   dove: fblOrdiniVia==='server'?'computer, tramite il server'
+        :fblOrdiniVia==='diretto'?'computer, in diretta'
+        :fblOrdiniVia==='locale'?'questo computer'
+        :(srv?'computer, tramite il server':'computer'),
+   url: fblConChiave(fblUrlOrdini()+'/health')},
   {chiave:'grafico', nome:'Grafico',
    // Quello che c'e' scritto e' la strada che si sta USANDO davvero, non quella che si suppone.
    dove: fblGraficoVia==='server'?'computer, tramite il server'
@@ -26184,6 +26192,10 @@ async function fblServiziControlla(){
   try{
    const g=esiti.find(x=>x.chiave==='grafico');
    if(g&&!g.ok&&!fblStradaInCorso)fblScegliStradaGrafico();
+   // Stessa cosa per gli ordini: se la strada in uso non risponde se ne cerca un'altra, invece
+   // di restare appesi a quella di prima fino alla prossima ricarica della pagina.
+   const o=esiti.find(x=>x.chiave==='ordini');
+   if(o&&!o.ok&&!fblOrdiniInCorso)fblScegliStradaOrdini();
   }catch(e){}
   esiti.forEach(x=>fblLog('servizio '+x.nome+' ('+x.dove+'): '+x.esito+' in '+x.ms+' ms'));
   return esiti;
@@ -27764,6 +27776,49 @@ async function fblRisponde(url,ms){
   clearTimeout(t); return !!(r&&r.ok);
  }catch(e){ return false; }
 }
+// QUALE STRADA PER GLI ORDINI (porta 8000: MT5, posizioni, apertura e chiusura). Le stesse tre
+// del grafico: 'locale' (siamo sul computer), 'diretto' (indirizzo del computer scritto a mano,
+// che risponde) oppure 'server' (il server inoltra al computer).
+//
+// Perche' esiste. Prima l'indirizzo lo decideva `fblBaseUrl(8000)`, che passa dal server SOLO se
+// il campo "computer" e' vuoto. Bastava un indirizzo rimasto scritto da prima - un computer
+// vecchio, un nome cambiato - e dal telefono tutte le chiamate di MT5 andavano li', senza
+// nemmeno provare il server. Il grafico no, perche' dalla v105 la sua strada se la prova: da qui
+// il sintomo che non tornava, cioe' grafico e segnali che funzionavano e la sola sezione MT5
+// morta, con il pannello dei servizi tutto verde perche' il server lo provava per conto suo.
+let fblOrdiniVia=null, fblOrdiniInCorso=null;
+function fblUrlOrdini(){
+ if(fblOrdiniVia==='locale')return 'http://127.0.0.1:8000';
+ if(fblOrdiniVia==='diretto')return 'https://'+fblHost()+':8000';
+ if(fblOrdiniVia==='server')return fblServerUrl(8000)+'/pc/8000';
+ return fblBaseUrl(8000);   // strada non ancora scelta: quella di prima
+}
+async function fblScegliStradaOrdini(){
+ if(fblOrdiniInCorso)return fblOrdiniInCorso;
+ fblOrdiniInCorso=(async()=>{
+  try{
+   await fblControllaPonteLocale();
+   if(fblPonteLocaleVivo===true){ fblOrdiniVia='locale'; return 'locale'; }
+   fblOrdiniVia=null;
+   // L'indirizzo del computer scritto a mano si prova, non si crede sulla parola: se non
+   // risponde (computer spento, nome vecchio, chiave che non torna) non deve bloccare tutto.
+   if(fblRemoto()&&await fblRisponde(fblConChiave('https://'+fblHost()+':8000/health'))){
+    fblOrdiniVia='diretto'; return 'diretto';
+   }
+   if(fblServer()&&await fblRisponde(fblServerConChiave(fblServerUrl(8000)+'/pc/8000/health'))){
+    fblOrdiniVia='server'; return 'server';
+   }
+   // Niente ha risposto. Col server impostato si punta comunque li': e' la strada prevista, ed e'
+   // quella che sa dire "il computer non risponde" invece di un errore di rete senza indizi.
+   if(fblServer()){ fblOrdiniVia='server'; return null; }
+   return null;
+  }finally{
+   fblOrdiniInCorso=null;
+   try{ fblAggiornaIndirizzi(); }catch(e){}
+  }
+ })();
+ return fblOrdiniInCorso;
+}
 // Si prova, non si indovina. L'ordine conta: la strada dritta e' piu' corta di un passaggio, e per
 // dei prezzi al millisecondo quel passaggio si sente.
 let fblStradaInCorso=null;
@@ -27814,7 +27869,7 @@ function fblConChiave(url){
 }
 // `let` e non `const`: cambiando l'indirizzo dalle impostazioni questi due vanno rifatti, e tutti
 // i punti che li concatenano continuano a funzionare senza toccarli.
-let MT5_BRIDGE_URL=fblBaseUrl(8000);
+let MT5_BRIDGE_URL=fblUrlOrdini();
 // App desktop (bridge + MT5, installata via ForexBacktestLAB_Setup.exe): un sito NON può mai
 // avviare programmi o installare librerie da solo (bloccato dalla sicurezza del browser), quindi
 // quando il bridge locale non risponde offriamo due scorciatoie invece di lasciare solo un
@@ -27859,10 +27914,12 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
    :(p.startsWith('/order')||p.startsWith('/connect')||p.startsWith('/mt5-launch'))?60000
    :30000;
  timeoutMs=Math.max(timeoutMs||0,floorMs);
+ // L'indirizzo si chiede ADESSO: la strada puo' essere cambiata da quando la pagina si e' aperta.
+ const base=fblUrlOrdini();
  const controller=new AbortController();
  const timer=setTimeout(()=>controller.abort(),timeoutMs);
  try{
-   const res=await fetch(fblConChiave(MT5_BRIDGE_URL+path),{...(options||{}),signal:controller.signal});
+   const res=await fetch(fblConChiave(base+path),{...(options||{}),signal:controller.signal});
    let data=null;
    try{ data=await res.json(); }catch(e){ /* risposta senza corpo JSON valido */ }
    if(!res.ok)return {ok:false,message:(data&&data.detail)?data.detail:('Errore HTTP '+res.status)};
@@ -27871,7 +27928,7 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
    if(e.name==='AbortError'){
      return {ok:false,message:`MT5 non ha risposto entro ${(timeoutMs/1000).toFixed(0)}s. Causa più probabile: nel terminale MT5 è aperta una finestra di conferma manuale dell'operazione (Strumenti → Opzioni → scheda Trading → disattiva "Richiedi conferma delle operazioni"/"Confirm requests"), oppure il "Trading algoritmico" non è attivo (pulsante in alto nella barra degli strumenti, deve essere verde).`};
    }
-   return {ok:false,message:'Bridge locale non raggiungibile su '+MT5_BRIDGE_URL+'.'};
+   return {ok:false,message:'Bridge locale non raggiungibile su '+base+'.'};
  }finally{
    clearTimeout(timer);
  }
@@ -33277,7 +33334,7 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
 // struttura dati (csvLibrary[0].rows) che già scrive loadLiveHistoryFromCapital.
 let MT5_FEED_URL=fblUrlGrafico();
 function fblAggiornaIndirizzi(){
- MT5_BRIDGE_URL=fblBaseUrl(8000);
+ MT5_BRIDGE_URL=fblUrlOrdini();
  // Il canale dal vivo nasce da qui: `MT5_FEED_URL.replace(/^http/,'ws')`. Con la strada del server
  // diventa wss://<server>:8000/pc/8001/ws/..., che fblConChiave riconosce e firma con la chiave
  // del server - non con quella del computer, che dal telefono non c'e'.
@@ -33287,6 +33344,8 @@ function fblAggiornaIndirizzi(){
 // raggiungono dirette (sul computer) o passando dal server (dal telefono). Per il grafico si prova
 // anche la strada: dritta al computer se risponde, altrimenti dal server.
 try{ fblScegliStradaGrafico(); }catch(e){}
+// E anche quella degli ordini: senza, MT5 restava appeso all'indirizzo indovinato all'avvio.
+try{ fblScegliStradaOrdini(); }catch(e){}
 // symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
 // (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
 // dati irraggiungibile (va MAI messo in cache in modo permanente, si ritenta al giro successivo).
@@ -37283,13 +37342,13 @@ async function connectToMt5BridgeCorpo(creds){
    // La chiave: dal PC non serve, dal tablet (via Tailscale) si'. Mancava solo qui e in /disconnect,
    // le uniche due chiamate al ponte che non passano da fetchMt5WithTimeout: dal tablet il login
    // al conto rispondeva "Chiave d'accesso mancante o errata".
-   res=await fetch(fblConChiave(MT5_BRIDGE_URL+'/connect'),{
+   res=await fetch(fblConChiave(fblUrlOrdini()+'/connect'),{
      method:'POST',
      headers:{'Content-Type':'application/json'},
      body:JSON.stringify({login:Number(creds.login),password:creds.password,server:creds.server})
    });
  }catch(e){
-   return {ok:false,message:'Bridge locale non raggiungibile su '+MT5_BRIDGE_URL+'. Controlla che sia acceso sul tuo PC (uvicorn bridge:app --reload --port 8000).'};
+   return {ok:false,message:'Bridge locale non raggiungibile su '+fblUrlOrdini()+'. Controlla che sia acceso sul tuo PC (uvicorn bridge:app --reload --port 8000).'};
  }
  let data=null;
  try{ data=await res.json(); }catch(e){ /* risposta senza corpo JSON valido */ }
@@ -37312,9 +37371,9 @@ async function disconnectFromMt5Bridge(){
  if(fblRemoto())return {ok:true,data:{status:'disconnected',soloQuestoDispositivo:true}};
  let res;
  try{
-   res=await fetch(fblConChiave(MT5_BRIDGE_URL+'/disconnect'),{method:'POST'});
+   res=await fetch(fblConChiave(fblUrlOrdini()+'/disconnect'),{method:'POST'});
  }catch(e){
-   return {ok:false,message:'Bridge locale non raggiungibile su '+MT5_BRIDGE_URL+'.'};
+   return {ok:false,message:'Bridge locale non raggiungibile su '+fblUrlOrdini()+'.'};
  }
  let data=null;
  try{ data=await res.json(); }catch(e){ /* risposta senza corpo JSON valido */ }
@@ -37343,7 +37402,7 @@ window.addEventListener('pagehide', ()=>{
  // Solo sul PC. Chiudere o ricaricare la pagina sul TABLET non deve spegnere MT5 e il ponte sul
  // computer: basterebbe un refresh per perdere tutto, senza modo di riaccenderlo da remoto.
  if(fblRemoto())return;
- try{ navigator.sendBeacon(MT5_BRIDGE_URL+'/disconnect'); }catch(e){}
+ try{ navigator.sendBeacon(fblUrlOrdini()+'/disconnect'); }catch(e){}
 });
 // Esposta su window per lo stesso motivo di window.syncFullStatusToFirebase (vedi più in alto in
 // questo file): i pulsanti "Esci" vivono in un altro <script type="module"> separato, eseguito
@@ -37483,6 +37542,9 @@ async function mt5StartLoginFlow(){
  mt5ShowWizardStep(0);
  $('mt5WizardChecking').style.display='block';
  $('mt5BridgeContinueResult').style.display='none';
+ // Prima di dire "il computer non risponde" si guarda da quale strada ci si arriva adesso. Senza
+ // questo, il popup giudicava in base all'indirizzo indovinato all'avvio della pagina.
+ try{ await fblScegliStradaOrdini(); }catch(e){}
  // SI ASPETTA, riprovando: il servizio parte da solo ma su un PC appena acceso ci mette qualche
  // secondo. Arrendersi al primo tentativo e' esattamente il motivo per cui l'app chiedeva di
  // installare pacchetti gia' installati. Chi ha gia' visto il servizio qui merita piu' pazienza:

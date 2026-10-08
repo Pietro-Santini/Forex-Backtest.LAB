@@ -3,6 +3,16 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **MT5 non si collegava dal telefono, con tutto verde** - risolto v108 - 8 ottobre 2026:
+  l'indirizzo degli ordini (porta 8000) veniva INDOVINATO da `fblBaseUrl(8000)`, che passa dal
+  server solo col campo "computer" vuoto. Con un indirizzo rimasto scritto da prima, dal telefono
+  tutte le chiamate di MT5 ci andavano dritte e il server non veniva nemmeno provato. Il grafico
+  no, perche' dalla v105 la sua strada se la prova: da qui il sintomo che non tornava, grafico e
+  segnali che funzionavano e la sola sezione MT5 morta. E il pannello «Cosa risponde adesso»
+  restava verde perche' la riga Ordini provava una rotta SUA (`/pc/health`) invece di quella in
+  uso. Ora la strada degli ordini si prova come quella del grafico (`fblScegliStradaOrdini`), il
+  pannello prova l'indirizzo vero, e il popup di MT5 la riscegli prima di dire che non risponde.
+  Test: `laboratorio/app/strada_ordini.test.mjs`.
 - **Ordini pendenti Kraken fermi a PC spento** — limite — `kraken_ordini.py` — li tiene il ponte sul
   PC. Senza un server sempre acceso non si risolve.
 - **Pendenti di un conto di prova non attivo non controllati** — limite — `controlla_pendenti()`

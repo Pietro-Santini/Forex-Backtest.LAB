@@ -36,3 +36,7 @@ Formato: data — chi — cosa — esito collaudo — commit.
   correzione dell'emoji ora gira davvero sul server. Il primo tentativo era rimasto a meta': il
   filtro che nascondeva la chiave d'accesso usciva sul titolo del passo 4 e il build non partiva -
   sorgenti nuovi, contenitori vecchi, exit code 0 bugiardo. Vedi la trappola in memoria. - verde
+- 2026-10-08 - Claude - app v108: MT5 dal telefono. La strada degli ordini si prova invece di
+  indovinarla, e il pannello dei servizi prova l'indirizzo che la sezione MT5 usa davvero (prima
+  era verde su una rotta diversa). Trovato riproducendo il telefono nel laboratorio con la rete
+  vera verso il server. 3 test nuovi - verde

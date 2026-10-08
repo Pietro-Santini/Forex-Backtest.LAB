@@ -39,7 +39,11 @@ test('col server impostato, gli ordini passano dal server e non dal computer', a
     const ordini = r.find(x => x.nome === 'Ordini');
     // MT5 gira sul PC, ma il telefono non deve saperne l'indirizzo: ci pensa il server a girare
     // la richiesta. È tutto il senso della "porta unica".
-    assert.equal(ordini.url, 'https://srv.tail1.ts.net:8000/pc/health?chiave=K%261');
+    // La porta è scritta per esteso (`/pc/8000/`) e non più sottintesa (`/pc/`) da quando la riga
+    // «Ordini» prova l'indirizzo che la sezione MT5 usa DAVVERO invece di una rotta sua: è la
+    // correzione della v108, dove il pallino restava verde mentre MT5 andava altrove. Stessa
+    // destinazione sul server (senza porta si intende la 8000), detta in modo esplicito.
+    assert.equal(ordini.url, 'https://srv.tail1.ts.net:8000/pc/8000/health?chiave=K%261');
     assert.match(ordini.dove, /tramite il server/);
     assert.equal(r.find(x => x.nome === 'Segnali').url, 'https://srv.tail1.ts.net:8769/health?chiave=K%261');
     assert.deepEqual(errori, []);
