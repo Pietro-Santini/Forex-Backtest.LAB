@@ -3922,6 +3922,10 @@ function journalMt5AccountColor(login){
 function journalOrigineHtml(t){
  if(t&&t.mt5Ticket!=null&&!t.tgSala)mt5ApplicaSegnale(t);
  if(t&&t.tgSala)return journalSsBadgeHtml(t).trim();
+ // Stessa regola della tabella delle posizioni: se ci sono i segni di un segnale ma manca il
+ // nome, si dice che manca. "Manuale" qui vorrebbe dire che l'hai aperta tu.
+ if(t&&(t.tgGruppo||t.tgSegnaleId||t.tgTpIndice!=null))
+  return '<span title="Operazione aperta da un segnale, ma il nome della sala non è arrivato" style="color:#e8c34a;white-space:nowrap">📡 sala non riconosciuta</span>';
  return '<span title="Operazione aperta da te" style="color:#9ca3af;white-space:nowrap">👤 Manuale</span>';
 }
 function journalSsBadgeHtml(t){
@@ -3936,23 +3940,248 @@ function journalSsBadgeHtml(t){
    +'" style="display:inline-flex;align-items:center;gap:4px;padding:1px 5px;border-radius:5px;border:1px solid #5eead4;color:#5eead4;font-weight:700;font-size:10px;white-space:nowrap;max-width:100%">'
    +'<span style="letter-spacing:.06em">SS</span><span style="font-weight:600;color:#a7f3e8">📡 '+escapeHtmlLite(corto)+'</span></span>';
 }
+// IL NOME DELLA SALA DI UN SEGNALE, IN UN POSTO SOLO.
+// Il ponte ne manda due, e sono cose diverse: `chat` e' il titolo del gruppo su Telegram, quello
+// leggibile; `sala` e' la voce ESATTA dell'elenco nelle impostazioni (@nome, link t.me, id), ed e'
+// quella con cui l'app riconosce una sala fra quelle accese. Prima ogni punto del programma ne
+// sceglieva uno per conto suo: da qui sia le operazioni senza sala, sia lo stesso gruppo che
+// compariva con due nomi diversi in due schermate.
+// Ordine: il titolo se c'e', altrimenti la voce configurata, altrimenti chi ha scritto.
+// Non torna MAI vuoto: senza nome l'operazione verrebbe mostrata come aperta a mano.
+const FBL_SALA_IGNOTA='Sala non riconosciuta';
+// IL REGISTRO DEI NOMI DELLE SALE.
+// Una sala ha due nomi e sono due cose diverse: la voce scritta nelle impostazioni (@nome, link,
+// id) serve a RICONOSCERLA, il titolo del gruppo serve a LEGGERLA. Qui si tiene il collegamento
+// fra le due, cosi' ogni schermata puo' mostrare sempre lo stesso nome senza che si tocchi il
+// modo in cui le sale vengono riconosciute e confrontate.
+// RICHIESTO: «lo stesso identico nome ovunque, nel pannello dei segnali, nella dashboard, nel
+// profitto per sala, nella configurazione automatica, nel rendimento. Non puo' cambiare».
+const FBL_SALE_NOMI_KEY='fbl_sale_nomi';
+let fblSaleNomi={};
+try{ fblSaleNomi=JSON.parse(localStorage.getItem(FBL_SALE_NOMI_KEY)||'{}')||{}; }catch(e){ fblSaleNomi={}; }
+function fblSalaChiave(nome){ return String(nome==null?'':nome).trim().toLowerCase(); }
+// Si impara dai segnali che arrivano: ognuno porta tutti e due i nomi.
+function fblRegistraNomeSala(voce){
+ try{
+  if(!voce)return;
+  const titolo=String(voce.chat||'').trim();
+  if(!titolo)return;
+  let cambiato=false;
+  [voce.sala,voce.chat].forEach(k=>{
+   const c=fblSalaChiave(k);
+   if(c&&fblSaleNomi[c]!==titolo){ fblSaleNomi[c]=titolo; cambiato=true; }
+  });
+  // Oltre 500 sale si riparte: e' un elenco di etichette, non un archivio.
+  if(cambiato){
+   const ch=Object.keys(fblSaleNomi);
+   if(ch.length>500)fblSaleNomi={};
+   try{ localStorage.setItem(FBL_SALE_NOMI_KEY,JSON.stringify(fblSaleNomi)); }catch(e){}
+  }
+ }catch(e){}
+}
+// IL nome da mostrare. Qualunque delle due forme si abbia in mano, esce sempre la stessa.
+// Se il titolo non si e' ancora visto passare, si mostra quello che c'e': meglio la voce
+// configurata che un vuoto.
+// I titoli che arrivano dal ponte, in blocco: chiave configurata -> titolo del gruppo.
+function fblRegistraTitoliSale(titoli){
+ if(!titoli||typeof titoli!=='object')return;
+ let cambiato=false;
+ Object.keys(titoli).forEach(chiave=>{
+  const titolo=String(titoli[chiave]==null?'':titoli[chiave]).trim();
+  const c=fblSalaChiave(chiave);
+  if(!c||!titolo)return;
+  if(fblSaleNomi[c]!==titolo){ fblSaleNomi[c]=titolo; cambiato=true; }
+  const ct=fblSalaChiave(titolo);
+  if(ct&&fblSaleNomi[ct]!==titolo){ fblSaleNomi[ct]=titolo; cambiato=true; }
+ });
+ if(cambiato){
+  try{ localStorage.setItem(FBL_SALE_NOMI_KEY,JSON.stringify(fblSaleNomi)); }catch(e){}
+  // Le schermate gia' a video devono cambiare nome subito, non alla prossima apertura.
+  try{ tgAutoDisegna(); }catch(e){}
+  try{ tgRenderGruppi(); }catch(e){}
+ }
+}
+function fblSalaEtichetta(nome){
+ const s=String(nome==null?'':nome).trim();
+ if(!s)return '';
+ return fblSaleNomi[fblSalaChiave(s)]||s;
+}
+// Due nomi indicano la stessa sala? Serve per confrontare cio' che e' scritto sulle operazioni
+// con cio' che e' scritto nelle impostazioni, che possono essere le due forme diverse.
+function fblStessaSala(a,b){
+ const x=fblSalaChiave(a), y=fblSalaChiave(b);
+ if(!x||!y)return false;
+ if(x===y)return true;
+ return fblSalaEtichetta(a).toLowerCase()===fblSalaEtichetta(b).toLowerCase();
+}
+// A QUALE SEGNALE APPARTIENE UNA POSIZIONE APERTA A MANO.
+// Quando l'app non apre da sola (tetto raggiunto, freno della giornata, margine) il segnale resta
+// nel pannello e lo si apre a mano dalla barra ordini del grafico. Quella posizione viene dallo
+// stesso segnale: dire che l'hai aperta tu la toglie dal profitto per sala e dal win rate per
+// sala, cioe' dai numeri con cui decidi di quale sala fidarti.
+// Le condizioni sono strette e valgono tutte insieme, perche' il danno di sbagliare sala e' peggio
+// del danno di non attribuirla: attribuirne una a una sala che non c'entra falsa i suoi numeri in
+// positivo o in negativo senza che si veda. Fra piu' candidati vince il piu' recente, che e'
+// quello che hai appena letto.
+const FBL_ATTRIBUZIONE_MS=2*3600000;   // due ore: oltre, non e' piu' "quel segnale di prima"
+function fblSegnaleDaAttribuire(asset,side){
+ try{
+  if(!asset||!side||typeof tgSegnaliRicevuti==='undefined'||!Array.isArray(tgSegnaliRicevuti))return null;
+  const ora=Date.now();
+  let migliore=null, quando=-1;
+  tgSegnaliRicevuti.forEach(v=>{
+   if(!v||!v.segnale)return;
+   // Gia' aperto dall'app, o messo via a mano: non e' in attesa di essere aperto.
+   if(v.stato&&v.stato!=='nuovo')return;
+   const s=v.segnale;
+   if(String(s.direzione||'').toUpperCase()!==String(side).toUpperCase())return;
+   const t=Number(v.ricevuto_ms||v.quando||0);
+   if(!Number.isFinite(t)||t<=0||ora-t>FBL_ATTRIBUZIONE_MS)return;
+   // Lo strumento della sala e l'asset dell'app si scrivono in modi diversi: "OANDA:XAU/USD"
+   // e "XAUUSD" sono lo stesso mercato. Il confronto guarda solo lettere e cifre.
+   if(!fblStessoStrumento(s.strumento,asset))return;
+   if(t>quando){ quando=t; migliore=v; }
+  });
+  return migliore;
+ }catch(e){ return null; }
+}
+// Due nomi di strumento indicano lo stesso mercato? Si confrontano le sole lettere e cifre, senza
+// prefissi di borsa e senza separatori: "OANDA:XAU/USD" e "XAUUSD" sono la stessa cosa.
+function fblStessoStrumento(a,b){
+ const pulisci=s=>String(s||'').toUpperCase().replace(/^[A-Z]+:/,'').replace(/[^A-Z0-9]/g,'');
+ const x=pulisci(a), y=pulisci(b);
+ return !!x&&!!y&&(x===y||x.indexOf(y)===0||y.indexOf(x)===0);
+}
+// Attacca alla posizione la sala del segnale che le corrisponde, se ce n'e' uno. Non tocca niente
+// se la posizione ha gia' una provenienza (aperta dal pannello o in automatico).
+function fblAttribuisciSegnale(pos){
+ try{
+  if(!pos||pos.tgSala||pos.tgGruppo||pos.tgSegnaleId)return pos;
+  const voce=fblSegnaleDaAttribuire(pos.asset,pos.side);
+  if(!voce)return pos;
+  pos.tgSala=fblNomeSala(voce);
+  pos.tgSegnaleId=voce.id;
+  pos.tgAMano=true;        // aperta a mano DOPO quel segnale: il perche' si legge nella targhetta
+  if(pos.mt5Ticket!=null&&typeof mt5RicordaSegnale==='function')
+   mt5RicordaSegnale(pos.mt5Ticket,{tgSala:pos.tgSala,tgSegnaleId:pos.tgSegnaleId});
+ }catch(e){}
+ return pos;
+}
+function fblNomeSala(voce){
+ if(!voce)return '';
+ const candidati=[voce.chat,voce.sala,voce.canale,voce.gruppo,voce.autore];
+ for(let i=0;i<candidati.length;i++){
+  const s=String(candidati[i]==null?'':candidati[i]).trim();
+  if(s)return s;
+ }
+ return FBL_SALA_IGNOTA;
+}
 // RICHIESTO: nella casella delle posizioni aperte si deve leggere SUBITO se la posizione l'ha
 // aperta una sala segnali o un utente Syntra, senza passare col mouse e senza aprire il Journal:
 // e' il modo di distinguere a colpo d'occhio le proprie operazioni da quelle di altri.
 // Syntra ha la sua icona e il suo nome accorciato ("Syntra · CrownPips" -> "CrownPips"): il
 // prefisso e' uguale per tutti e ruberebbe spazio a quello che cambia.
 function fblOrigineBadgeHtml(p){
- const nome=(p&&p.tgSala)?String(p.tgSala):'';
- if(!nome)return ' <span title="Aperta da te, a mano" style="color:#9ca3af;white-space:nowrap">👤 tu</span>';
+ const nome=(p&&p.tgSala)?String(p.tgSala).trim():'';
+ // "tu" si scrive solo se NON c'e' nessuna traccia di un segnale. Se la traccia c'e' ma il nome
+ // della sala si e' perso per strada, lo si dice: e' un'informazione mancante, non un'operazione
+ // tua. Attribuirla a te falserebbe anche il profitto per sala.
+ const daSegnale=!!(p&&(nome||p.tgGruppo||p.tgSegnaleId||p.tgTpIndice!=null));
+ if(!daSegnale)return ' <span title="Aperta da te, a mano" style="color:#9ca3af;white-space:nowrap">👤 tu</span>';
+ if(!nome)return ' <span title="Aperta da un segnale, ma il nome della sala non è arrivato: l\'operazione non è tua." style="display:inline-flex;align-items:center;gap:3px;padding:1px 5px;border-radius:5px;border:1px solid #e8c34a;color:#e8c34a;font-weight:700;font-size:10px;white-space:nowrap">📡 sala non riconosciuta</span>';
  const syntra=(typeof syntraEUtente==='function')&&syntraEUtente(nome);
  const breve=syntra?nome.replace(/^Syntra · /,''):nome;
  const corto=breve.length>20?breve.slice(0,19)+'…':breve;
  const dett=[nome];
  if(p.tgTpIndice)dett.push('posizione del take profit n. '+p.tgTpIndice);
- const spiega=(syntra?'Aperta da un segnale di un utente Syntra: ':'Aperta da un segnale della sala: ')+dett.join(' — ');
+ const spiega=(p&&p.tgAMano)
+  ? ('Aperta da te a mano, sul segnale di: '+dett.join(' — ')+'. L\'app non l\'aveva aperta da sola.')
+  : ((syntra?'Aperta da un segnale di un utente Syntra: ':'Aperta da un segnale della sala: ')+dett.join(' — '));
  return ' <span title="'+escapeHtmlLite(spiega)+'" style="display:inline-flex;align-items:center;gap:3px;padding:1px 5px;border-radius:5px;border:1px solid '
   +(syntra?'#7dd3fc;color:#7dd3fc':'#5eead4;color:#5eead4')
   +';font-weight:700;font-size:10px;white-space:nowrap;max-width:100%">'+(syntra?'📱':'📡')+' '+escapeHtmlLite(corto)+'</span>';
+}
+// Quanto possono distare due entrate per essere ancora "lo stesso ingresso". Non un numero
+// scritto a mano: dieci ordini aperti di fila riempiono a prezzi leggermente diversi, e quanto
+// sia "leggermente" dipende dallo strumento - tre punti sull'oro sono niente, sull'euro-dollaro
+// sono un'enormita'. La misura naturale e' la distanza fra entrata e stop di QUELLA operazione:
+// le posizioni di uno stesso segnale hanno lo stesso stop, e quella distanza dice quanto vale un
+// movimento li' dentro. Senza stop si ripiega su mezzo millesimo del prezzo.
+const FBL_POS_QUOTA_STOP=0.15;     // un sesto della distanza dallo stop
+const FBL_POS_QUOTA_PREZZO=0.0005; // 0,05% del prezzo, quando lo stop non c'e'
+const FBL_POS_FINESTRA_MS=3*60000; // tre minuti: il tempo che ci vuole ad aprirne una fila
+function fblTolleranzaEntrata(p){
+ const entry=Number(p&&p.entry);
+ const sl=Number(p&&(p.rrSl!=null?p.rrSl:p.sl));
+ if(Number.isFinite(entry)&&Number.isFinite(sl)&&Math.abs(entry-sl)>0)return Math.abs(entry-sl)*FBL_POS_QUOTA_STOP;
+ if(Number.isFinite(entry)&&entry!==0)return Math.abs(entry)*FBL_POS_QUOTA_PREZZO;
+ return 0;
+}
+// L'entrata di un gruppo: un prezzo solo se coincidono, altrimenti da quanto a quanto. Scrivere
+// il prezzo della prima e basta nasconderebbe proprio la cosa che l'utente vuole sapere, cioe'
+// che i riempimenti non sono andati tutti allo stesso prezzo.
+function fblEntrataGruppo(dati,asset){
+ const prezzi=dati.map(d=>Number(d.p.entry)).filter(Number.isFinite);
+ if(!prezzi.length)return '—';
+ const lo=Math.min(...prezzi), hi=Math.max(...prezzi);
+ if(lo===hi)return fmtPriceA(lo,asset);
+ return fmtPriceA(lo,asset)+' – '+fmtPriceA(hi,asset);
+}
+function fblOrarioApertura(p){
+ const t=Number(p&&p.startTime);
+ return Number.isFinite(t)?t:null;
+}
+// Raggruppa le posizioni della stessa sala, stesso asset e stessa direzione.
+// Due regole, in quest'ordine:
+//  1. se due posizioni portano il codice del segnale che le ha aperte (tgGruppo), comanda quello:
+//     stesso segnale = stesso gruppo, SEMPRE, e segnali diversi non si mescolano mai, nemmeno se
+//     i prezzi coincidono. E' un'informazione certa, e batte qualunque stima;
+//  2. per le posizioni che quel codice non ce l'hanno (adottate da MetaTrader, o aperte da una
+//     versione vecchia), si guarda quanto distano fra loro per prezzo e per orario.
+// L'ampiezza TOTALE del gruppo resta dentro la tolleranza: cosi' dieci riempimenti leggermente
+// crescenti non si trascinano via uno dopo l'altro fino a unire cose che non c'entrano.
+function fblPosRaggruppa(righe){
+ const gruppi=[]; const secchi=new Map();
+ righe.forEach(r=>{
+  const p=r.item;
+  if(!(p&&p.tgSala&&Number.isFinite(Number(p.entry)))){ gruppi.push({chiave:null,righe:[r]}); return; }
+  const k=[r.sessionKey,String(p.tgSala),String(p.asset||''),String(p.side||'')].join('|');
+  if(!secchi.has(k))secchi.set(k,[]);
+  secchi.get(k).push(r);
+ });
+ secchi.forEach((lista,k)=>{
+  lista.sort((a,b)=>Number(a.item.entry)-Number(b.item.entry));
+  let corrente=null;
+  lista.forEach(r=>{
+   const p=r.item, e=Number(p.entry), t=fblOrarioApertura(p);
+   if(corrente&&fblPosStessoIngresso(corrente,p,e,t)){
+    corrente.righe.push(r);
+    corrente.min=Math.min(corrente.min,e); corrente.max=Math.max(corrente.max,e);
+    if(t!=null)corrente.t0=(corrente.t0==null)?t:Math.min(corrente.t0,t);
+    return;
+   }
+   corrente={chiave:k+'|'+(p.tgGruppo?('g:'+p.tgGruppo):('p:'+p.id)),gruppoSegnale:p.tgGruppo||null,
+             righe:[r],min:e,max:e,t0:t,tol:fblTolleranzaEntrata(p)};
+   gruppi.push(corrente);
+  });
+ });
+ return gruppi;
+}
+function fblPosStessoIngresso(gruppo,p,entrata,orario){
+ const suo=p.tgGruppo||null;
+ // Segnali diversi: mai insieme, qualunque cosa dicano prezzo e orologio.
+ if(gruppo.gruppoSegnale&&suo&&gruppo.gruppoSegnale!==suo)return false;
+ // Stesso segnale: sempre insieme, anche se il riempimento e' andato lontano o e' arrivato tardi
+ // (un ordine in attesa puo' scattare molto dopo gli altri).
+ if(gruppo.gruppoSegnale&&suo&&gruppo.gruppoSegnale===suo)return true;
+ // Uno dei due ha un codice e l'altro no: non si indovina, restano separati.
+ if(gruppo.gruppoSegnale||suo)return false;
+ if(!Number.isFinite(entrata))return false;
+ const tol=Math.max(gruppo.tol,fblTolleranzaEntrata(p));
+ if(!(tol>0))return false;
+ if(Math.max(gruppo.max,entrata)-Math.min(gruppo.min,entrata)>tol)return false;
+ if(gruppo.t0!=null&&orario!=null&&Math.abs(orario-gruppo.t0)>FBL_POS_FINESTRA_MS)return false;
+ return true;
 }
 // Quali gruppi di posizioni sono aperti (mostrati uno per uno) invece che riuniti in una riga.
 // Vive in memoria: e' uno stato di lettura, non una preferenza da ritrovare dopo giorni.
@@ -7579,7 +7808,68 @@ function parseDateTime(value){
   _parseDateTimeCache.set(value,hit);
   return hit;
 }
+// Due cifre e quattro cifre lette dai codici dei caratteri: niente sottostringhe, niente Number().
+// Tornano -1 se non sono cifre, cosi' qualunque forma inattesa finisce nel percorso lento.
+function _cifre2(s,i){
+  const a=s.charCodeAt(i)-48, b=s.charCodeAt(i+1)-48;
+  return (a>=0&&a<=9&&b>=0&&b<=9)?a*10+b:-1;
+}
+function _cifre4(s,i){
+  const a=s.charCodeAt(i)-48,b=s.charCodeAt(i+1)-48,c=s.charCodeAt(i+2)-48,d=s.charCodeAt(i+3)-48;
+  return (a>=0&&a<=9&&b>=0&&b<=9&&c>=0&&c<=9&&d>=0&&d<=9)?a*1000+b*100+c*10+d:-1;
+}
+// PRESTAZIONI: quasi tutte le date delle candele hanno una fra due forme sole - ISO
+// ("2026-10-08T06:30:00.000Z", le candele dal vivo) e MetaTrader ("2024.01.01 12:00", i CSV).
+// Per quelle si leggono i numeri a mano, invece di passare da un'espressione regolare e da
+// Date.parse, che devono essere pronti a qualsiasi cosa e costano di conseguenza.
+// REGOLA DA NON TRADIRE: il risultato dev'essere IDENTICO a quello di prima, non "quasi".
+// Per questo tutto cio' che non e' esattamente una di quelle due forme torna `undefined` e
+// prosegue nel percorso di sempre: una data interpretata in un fuso diverso sposterebbe candele,
+// entrate e marcatori, e sarebbe un danno silenzioso. Prove in `laboratorio/app/date_veloci.test.mjs`.
+function _parseDateTimeVeloce(v){
+  const n=v.length;
+  if(n<16)return undefined;
+  const y=_cifre4(v,0); if(y<0)return undefined;
+  const s1=v.charCodeAt(4), s2=v.charCodeAt(7);
+  // "-" per ISO, "." per MetaTrader. I due separatori devono essere uguali fra loro.
+  if(!((s1===45&&s2===45)||(s1===46&&s2===46)))return undefined;
+  const mo=_cifre2(v,5), d=_cifre2(v,8); if(mo<0||d<0)return undefined;
+  const s3=v.charCodeAt(10); if(s3!==84&&s3!==32)return undefined;      // "T" oppure spazio
+  if(v.charCodeAt(13)!==58)return undefined;                            // i due punti dell'ora
+  const h=_cifre2(v,11), mi=_cifre2(v,14); if(h<0||mi<0)return undefined;
+  let i=16, sec=0;
+  if(n>i&&v.charCodeAt(i)===58){ sec=_cifre2(v,17); if(sec<0)return undefined; i=19; }
+  let ms=0, aveaMs=false;
+  if(n>i&&v.charCodeAt(i)===46){
+    let k=i+1, quante=0, val=0;
+    while(k<n&&quante<3){ const c=v.charCodeAt(k)-48; if(c<0||c>9)break; val=val*10+c; k++; quante++; }
+    if(!quante)return undefined;
+    while(k<n){ const c=v.charCodeAt(k)-48; if(c<0||c>9)break; k++; }    // cifre oltre la terza: ignorate
+    while(quante<3){ val*=10; quante++; }
+    ms=val; i=k; aveaMs=true;
+  }
+  if(i===n){
+    // Nessun fuso scritto. ATTENZIONE: oggi questa forma passa dall'espressione regolare SOLO se
+    // non ha i millisecondi; con i millisecondi cade in Date.parse, che la legge nel fuso del
+    // DISPOSITIVO. Due letture diverse: qui si riproduce la prima e si lascia la seconda al
+    // percorso lento, invece di uniformarle di nascosto.
+    if(aveaMs)return undefined;
+    return zonedTimeToUtc(y,mo,d,h,mi,sec,CSV_SOURCE_TZ);
+  }
+  // "Z" finale: e' gia' UTC, come lo leggerebbe Date.parse. Solo la maiuscola, che e' l'unica
+  // che lo standard garantisce.
+  if(i===n-1&&v.charCodeAt(i)===90)return Date.UTC(y,mo-1,d,h,mi,sec)+ms;
+  return undefined;                                   // fusi espliciti (+02:00) e tutto il resto
+}
 function _parseDateTimeUncached(value){
+  if(!value) return NaN;
+  if(typeof value==='string'){
+    const veloce=_parseDateTimeVeloce(value);
+    if(veloce!==undefined)return veloce;
+  }
+  return _parseDateTimeLento(value);
+}
+function _parseDateTimeLento(value){
   if(!value) return NaN;
   let v=String(value).trim();
   // BUG RISOLTO ("il punto di apertura di una posizione aperta in Live sembra spostarsi/
@@ -7708,10 +7998,14 @@ function journalOpenAtLabel(t){
 // cache (invalidata solo quando cambia l'array `rows`, es. cambio timeframe) e le eventuali
 // date non valide vengono interpolate dai vicini validi, così la scala resta sempre quella
 // reale in ms.
-let rowsTimeCache=null, rowsTimeCacheRef=null;
+let rowsTimeCache=null, rowsTimeCacheRef=null, rowsTimeCacheTutteValide=false;
 function getRowsTimestamps(){
  if(rowsTimeCacheRef===rows && rowsTimeCache)return rowsTimeCache;
- const ts=rows.map(r=>parseDateTime(r.date));
+ // Si converte senza passare dalla cache per stringa: qui le date sono tutte diverse e vengono
+ // lette una volta sola (il risultato se lo tiene questa funzione, vedi rowsTimeCache sotto).
+ // Riempire la mappa con centomila voci sarebbe lavoro e memoria spesi per zero riusi.
+ const ts=new Array(rows.length);
+ for(let i=0;i<rows.length;i++){ const d=rows[i]&&rows[i].date; ts[i]=d?_parseDateTimeUncached(d):NaN; }
  // Interpola/estrapola le eventuali date non valide usando i vicini validi più prossimi,
  // così l'array risulta sempre completamente valido se esistono almeno 2 date valide.
  const validIdx=[]; for(let i=0;i<ts.length;i++) if(Number.isFinite(ts[i])) validIdx.push(i);
@@ -7726,7 +8020,18 @@ function getRowsTimestamps(){
    }
  }
  rowsTimeCache=ts; rowsTimeCacheRef=rows;
+ // Sono tutte valide? La domanda se la faceva chartGeometry a ogni chiamata, con un `every` su
+ // tutto l'array: su centomila candele e' una scansione intera per ogni disegno. La risposta
+ // dipende solo da questo array, che qui e' appena stato costruito: si risponde una volta sola.
+ rowsTimeCacheTutteValide=ts.length>=2;
+ if(rowsTimeCacheTutteValide)for(let i=0;i<ts.length;i++){ if(!Number.isFinite(ts[i])){ rowsTimeCacheTutteValide=false; break; } }
  return ts;
+}
+// Vero se ogni candela del dataset ha un istante valido: senza, le conversioni tempo<->posizione
+// ripiegano sull'indice di candela (vedi chartGeometry).
+function getRowsTimestampsTutteValide(){
+ getRowsTimestamps();
+ return rowsTimeCacheTutteValide;
 }
 // Oltre ai soliti OHLC, ogni candela aggregata porta con sé `tClose`: il timestamp reale
 // (in ms, granularità m1) dell'ULTIMO minuto che ha contribuito a quella candela. Serve da
@@ -8540,9 +8845,18 @@ async function getLinkedFileHandle(){
 const _euroFmt=new Intl.NumberFormat('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:2});
 function euro(n){return _euroFmt.format(n)}
 // Numero di decimali per i prezzi: scelto dall'utente tramite il menù a tendina "Decimali prezzo".
+// PRESTAZIONI: si rilegge una volta per disegno, non una volta per prezzo. Il menu viene scritto
+// anche da codice (scheda dello strumento, ripristino della sessione) SENZA scatenare l'evento
+// change, quindi una cache legata all'evento direbbe il falso: si azzera invece all'inizio di
+// ogni draw() e di ogni update(), che sono i due momenti in cui i prezzi vengono riscritti.
+// Cosi' la cache non puo' sopravvivere a un cambio: dura quanto un disegno.
+let _decimaliCache=null;
+function fblScadeDecimali(){ _decimaliCache=null; }
 function getDecimals(){
+ if(_decimaliCache!==null)return _decimaliCache;
  const v=Math.round(num($('decimals')?.value));
- return Number.isFinite(v)?Math.max(0,Math.min(8,v)):5;
+ _decimaliCache=Number.isFinite(v)?Math.max(0,Math.min(8,v)):5;
+ return _decimaliCache;
 }
 function fmtPrice(v){
  if(v==null||!Number.isFinite(Number(v)))return '—';
@@ -9365,6 +9679,7 @@ function refreshJournalStrategyFilterOptions(){
  journalStrategyOptionsDirty=false;
 }
 function update(){
+ fblScadeDecimali();
  // STEP 2: controllo delle regole Prop Firm ad OGNI tick del grafico (update() viene già
  // chiamata da tutti i punti richiesti: avanzamento replay storico, tick Live, apertura e
  // chiusura di un trade) — un solo punto d'aggancio invece di sparpagliare la chiamata.
@@ -9597,16 +9912,7 @@ function update(){
    // sola, con il P/L live SOMMATO; un pulsante accanto al numero le apre una per una. Capita
    // sempre con un segnale a piu' target: tre o quattro righe identiche tranne il take profit,
    // che da sole riempiono la tabella e nascondono tutto il resto.
-   const posChiave=({item:p,sessionKey})=>(p&&p.tgSala&&Number.isFinite(Number(p.entry)))
-     ? [sessionKey,String(p.tgSala),String(p.asset||''),String(p.side||''),Number(p.entry).toPrecision(12)].join('|')
-     : null;
-   const posGruppi=[]; const posPerChiave=new Map();
-   allPosRows.forEach(r=>{
-     const k=posChiave(r);
-     if(k==null){ posGruppi.push({chiave:null,righe:[r]}); return; }
-     if(!posPerChiave.has(k)){ const g={chiave:k,righe:[]}; posPerChiave.set(k,g); posGruppi.push(g); }
-     posPerChiave.get(k).righe.push(r);
-   });
+   const posGruppi=fblPosRaggruppa(allPosRows);
    let posNum=0;
    const posHtml=posGruppi.map(g=>{
      if(g.chiave==null||g.righe.length<2)return posRigaDati(g.righe[0],++posNum).html;
@@ -9631,7 +9937,7 @@ function update(){
      const gotoG=`<button class="miniBtn" data-gotoasset-pos-session="${primo.sessionKey}" data-gotoasset-pos="${p0.id}" title="Porta questo gruppo a grafico">📍 Vai a grafico</button>`;
      return `<tr class="fblPosGruppo"><td><button class="miniBtn" data-posgruppo="${escapeHtmlLite(g.chiave)}" title="${titoloBtn}" style="padding:0 6px;min-width:0">${etichetta}</button> ${++posNum}</td>`
        +`<td>${primo.modeTag}${fblOrigineBadgeHtml(p0)} <span style="color:#8b96a5;font-size:10px;white-space:nowrap">${dati.length} posizioni</span></td>`
-       +`<td>${a0}</td><td>${p0.side}</td><td>${fmtPriceA(p0.entry,a0)}</td>`
+       +`<td>${a0}</td><td>${p0.side}</td><td>${fblEntrataGruppo(dati,a0)}</td>`
        +`<td>${slTxt.join(' / ')||'—'}</td><td>${tpTxt.join(' / ')||'—'}</td>`
        +`<td title="Il rapporto rischio/rendimento cambia da posizione a posizione: aprilo per vederli">—</td>`
        +`<td>${somma('lots').toFixed(2)}</td><td>${euro(somma('margine'))}</td>`
@@ -10237,7 +10543,24 @@ function romeDayLabel(day){ const d=new Date(day*86400000); return String(d.getU
 function darkenHex(hex,f){ const m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m)return hex; const n=parseInt(m[1],16); const c=v=>Math.round(v*(1-f)).toString(16).padStart(2,'0'); return '#'+c((n>>16)&255)+c((n>>8)&255)+c(n&255); }
 // Costruisce le istanze (giorno o giorno+sessione) con i loro intervalli di candele [a,b], con b
 // mai oltre la candela attuale: è ciò che fa crescere ogni profilo col passare del tempo.
+//
+// PRESTAZIONI: il calcolo vero sta in vpIndIstanzeCalcola qui sotto e NON e' cambiato. Qui c'e'
+// solo la memoria di cosa ha risposto l'ultima volta. Il risultato dipende da tre cose e basta:
+// l'array delle candele, fino a che candela siamo arrivati, e i parametri dell'indicatore.
+// Finche' quelle non cambiano la risposta e' identica, e rifarla sessanta volte al secondo mentre
+// si trascina il grafico e' lavoro buttato. La memoria sta sull'indicatore stesso: due profili
+// diversi (giornaliero e per sessioni) non si pestano i piedi.
+// Chi la usa legge soltanto (vedi il ciclo che disegna gli istogrammi): nessuno modifica le
+// istanze, quindi restituire sempre lo stesso array e' sicuro.
 function vpIndBuildInstances(ind){
+ const chiave=rows.length+'|'+idx+'|'+JSON.stringify(ind&&ind.params||{});
+ const avuto=ind&&ind.__vpIstanze;
+ if(avuto&&avuto.ref===rows&&avuto.chiave===chiave)return avuto.out;
+ const out=vpIndIstanzeCalcola(ind);
+ if(ind)ind.__vpIstanze={ref:rows,chiave,out};
+ return out;
+}
+function vpIndIstanzeCalcola(ind){
  const out=[];
  if(!rows.length||idx==null||idx<0)return out;
  const ts=getRowsTimestamps();
@@ -13265,6 +13588,7 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
  // l'estensione delle caselline dice gia' dove finisce, un contorno sarebbe rumore.
 }
 function draw(){
+ fblScadeDecimali();
  if(!liveModeActive){ try{ fblRegStoricoSync(); }catch(e){} }
  // Annuncia l'asset a grafico ORA alle altre finestre PIP (solo se cambiato dall'ultima volta —
  // vedi anotherWindowOwnsAssetEvaluation()/broadcastAssetAnnounce() più sopra nel file): usato
@@ -15199,7 +15523,7 @@ function chartGeometry(){
  // tutto diversa da quella reale: cambiando timeframe si poteva così passare dall'una
  // all'altra da un frame all'altro, ed è quello che faceva "muovere" linee e rettangoli).
  const ts=getRowsTimestamps();
- const tsOk=ts.length>=2 && ts.every(Number.isFinite);
+ const tsOk=getRowsTimestampsTutteValide();
  function timeFromDataPos(globalPos){ // posizione ASSOLUTA nell'intero dataset `rows`, può essere frazionaria
    if(!tsOk)return globalPos; // fallback estremo: nessuna data valida nel dataset intero
    let i=Math.floor(globalPos); if(i<0)i=0; if(i>ts.length-2)i=ts.length-2;
@@ -19053,6 +19377,7 @@ async function placeRealMt5Order(side,forz){
    // di spostamento dello stop e all'etichetta SS nel Trade Journal. Viaggia con la posizione,
    // quindi finisce da solo anche nel trade chiuso (trades.push({...pos,...})).
    if(forz&&forz.meta){ Object.assign(pos,forz.meta); mt5RicordaSegnale(ticket,forz.meta); }
+   else fblAttribuisciSegnale(pos);   // aperta a mano: cerca il segnale a cui appartiene
    pos.rrSl=pos.sl;
    positions.push(pos);
    // Richiesto esplicitamente: dopo l'apertura la posizione NON resta selezionata — niente
@@ -19138,6 +19463,7 @@ function openMarketTrade(side,forz){
  // valore, anche se in seguito si sposta lo SL (es. a breakeven o oltre, verso il TP). Si
  // aggiorna solo se si sposta il TP, perché lì si usa sempre il valore attuale di pos.tp.
  if(forz&&forz.meta)Object.assign(pos,forz.meta); // vedi nota in placeRealMt5Order
+ else fblAttribuisciSegnale(pos);   // aperta a mano: cerca il segnale a cui appartiene
  pos.rrSl=pos.sl;
  positions.push(pos);
  // Richiesto esplicitamente (stesso comportamento già applicato alle posizioni reali MT5):
@@ -23429,6 +23755,11 @@ $('syntraSalvaBtn')?.addEventListener('click',syntraManda);
 // di Syntra: quello del server gira su Linux e direbbe "non puo' funzionare", cancellando lo stato
 // vero che arriva dal computer.
 function tgApplicaStato(m,fonte){
+ // I titoli delle sale, mandati dal ponte: li risolve lui su Telegram quando si mette in ascolto,
+ // per OGNI voce dell'elenco configurato. Cosi' il nome leggibile c'e' da subito anche per le sale
+ // che non hanno ancora mandato niente, che altrimenti resterebbero scritte come "@nome" o come
+ // un link in mezzo a nomi veri.
+ try{ fblRegistraTitoliSale(m&&m.titoli); }catch(e){}
  if(fonte==='syntra'){
   // Da questo ponte interessa Syntra e basta: non ha sale Telegram, non ha account, non ha accesso.
   if(m.syntra&&typeof m.syntra==='object'){
@@ -23602,10 +23933,12 @@ function tgMessaggioSegnali(ev,fonte){
      // notifica e senza apertura automatica. Restano leggibili nel pannello.
      if(tgEtaSegnaleMs(m)>TG_SEGNALE_VALIDO_MS){
       m.stato='scaduto';
+      fblRegistraNomeSala(m);
       tgSegnaliRicevuti.push(m); tgSfoltisci();
       try{ tgAggiornaPulsante(); if(tgPannelloAperto())tgRenderPannello(); }catch(e){}
       return;
      }
+     fblRegistraNomeSala(m);
      tgSegnaliRicevuti.push(m);
      tgSfoltisci();
      tgSuonaSegnale();
@@ -24025,7 +24358,7 @@ function tgRenderPannello(){
   top.className='tgCardTop';
   const sala=document.createElement('span');
   sala.style.cssText='font-weight:700;color:#cdd6e0';
-  sala.textContent=String(voce.chat||'sala sconosciuta');
+  sala.textContent=fblSalaEtichetta(fblNomeSala(voce))||'sala sconosciuta';
   top.appendChild(sala);
   top.appendChild(document.createTextNode('·'));
   top.appendChild(document.createTextNode(tgOra(voce.ricevuto_ms)));
@@ -24241,7 +24574,7 @@ function tgCfgDisegna(){
  const seg=tgCfg.voce.segnale;
  const testata=$('tgConfigTestata');
  if(testata){
-  testata.textContent='Sala: '+String(tgCfg.voce.chat||'—')+'   ·   '+tgCfg.side+' '+String(seg.strumento||'')
+  testata.textContent='Sala: '+(fblSalaEtichetta(fblNomeSala(tgCfg.voce))||'—')+'   ·   '+tgCfg.side+' '+String(seg.strumento||'')
    +' su '+tgCfg.sym+'   ·   entrata al prezzo di adesso: '+tgFmt(currentPrice())
    +(mt5Connected?'   ·   ORDINI VERI su MT5':'   ·   posizioni simulate');
  }
@@ -24703,7 +25036,11 @@ function tgStrategiaValuta(){
 // ogni TP; e poter scegliere fra "una posizione per TP" e "una posizione sola chiusa a pezzi".
 // Lo stesso modello vale per le aperture automatiche (Telegram e Syntra): se la simulazione usasse
 // regole sue, si proverebbe una strategia e se ne eseguirebbe un'altra.
-const FBL_MAX_TP=5;
+// Quanti take profit al massimo puo' avere una strategia. Era 5, ma le sale con sei, otto o dieci
+// target esistono, e sopra il quinto la strategia li ignorava in silenzio: la simulazione del
+// rendimento diceva allora un numero piu' basso del vero, senza dirlo. Dieci e' lo stesso tetto
+// della strategia universale dell'apertura automatica, cosi' i due posti non si contraddicono.
+const FBL_MAX_TP=10;
 
 // La strategia prudente, quella che si propone a chi non ha ancora scelto: pesi uguali, e dal
 // secondo TP in poi lo stop al pareggio. Non promette niente, non rischia dopo il primo guadagno.
@@ -25400,7 +25737,10 @@ function tgAutoDisegna(){
   tdOk.appendChild(sp); tr.appendChild(tdOk);
   // nome
   const tdN=document.createElement('td');
-  tdN.textContent=nome; tdN.style.wordBreak='break-all';
+  // Il nome LEGGIBILE: la riga resta legata alla voce configurata (`nome`), che e' quella con cui
+  // la sala viene riconosciuta, ma a schermo si vede lo stesso nome di tutte le altre schermate.
+  tdN.textContent=fblSalaEtichetta(nome); tdN.style.wordBreak='break-all';
+  if(fblSalaEtichetta(nome)!==nome)tdN.title='Nelle impostazioni è scritta come: '+nome;
   tr.appendChild(tdN);
   // rischio
   const tdR=document.createElement('td');
@@ -25455,8 +25795,8 @@ function tgAutoDisegna(){
   riep.innerHTML=accese.length
    ? ('<b>'+accese.length+(accese.length===1?' sala aperta in automatico':' sale aperte in automatico')+'</b>: '
       +(uni
-        ? (accese.join(', ')+'<br>Strategia universale: '+u.rischio+'%, max '+u.maxPosizioni+' per sala, '+tgAutoRiassuntoRegole(u))
-        : accese.map(n=>n+' ('+tgAutoSala(n).rischio+'%, max '+tgAutoSala(n).maxPosizioni+', '+tgAutoRiassuntoRegole(tgAutoSala(n))+')').join('<br>'))
+        ? (accese.map(fblSalaEtichetta).join(', ')+'<br>Strategia universale: '+u.rischio+'%, max '+u.maxPosizioni+' per sala, '+tgAutoRiassuntoRegole(u))
+        : accese.map(n=>fblSalaEtichetta(n)+' ('+tgAutoSala(n).rischio+'%, max '+tgAutoSala(n).maxPosizioni+', '+tgAutoRiassuntoRegole(tgAutoSala(n))+')').join('<br>'))
       +'<br>Tetto complessivo <b>'+tgAuto.maxGlobali+'</b> posizioni · '+freno
       +' · ignora i segnali in ritardo di oltre <b>'+tgAutoEtaMaxS()+' s</b>.')
    : 'Nessuna sala accesa: non verrà aperto niente da solo.';
@@ -26827,7 +27167,7 @@ async function tgEseguiSegnale(voce,opzioni){
    voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
    break;
   }
-  const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:String(voce.chat||''),tgSegnaleId:voce.id};
+  const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id};
   // Ordine limite/stop della sala: ordine PENDENTE al suo prezzo (vero su MT5, simulato altrimenti).
   if(p.pendente){
    if(reale){
@@ -26865,7 +27205,7 @@ async function tgEseguiSegnale(voce,opzioni){
   // posizioni riadottate dal conto MT5 sono oggetti nuovi, senza l'etichetta del gruppo, e senza
   // i ticket non ci sarebbe modo di riconoscerle. Vedi tgStrategiaRiaggancia().
   const mie=positions.filter(x=>x&&x.tgGruppo===gruppo);
-  tgStrategie[gruppo]={sala:String(voce.chat||''),sym,side:p.side,entry:p.entry,
+  tgStrategie[gruppo]={sala:fblNomeSala(voce),sym,side:p.side,entry:p.entry,
     tps:p.tp.slice(0,aperte),regole:regole.filter(reg=>reg.quando<=aperte),fatte:[],creato:Date.now(),
     tickets:mie.map(x=>x.mt5Ticket).filter(t=>t!=null).map(String).concat(ticketPendenti,ticketAperti),
     ids:mie.map(x=>x.id).filter(v=>v!=null),
@@ -36274,7 +36614,7 @@ async function krakenEseguiSegnale(voce,o){
   return false;
  }
  const d=r.data||{};
- tgStrategie[gruppo]={conto:'kraken',sala:String(voce.chat||''),simbolo:d.simbolo||o.simbolo,sym:o.sym,side:p.side,
+ tgStrategie[gruppo]={conto:'kraken',sala:fblNomeSala(voce),simbolo:d.simbolo||o.simbolo,sym:o.sym,side:p.side,
   entry:Number(d.entrata)||p.entry,tps:p.tp.slice(0,p.n),regole:o.regole||[],fatte:[],creato:Date.now(),
   quantita:Number(d.quantita)||p.lotti*p.n,quota:p.lotti,
   tpIds:(d.tp||[]).map(x=>({indice:Number(x.indice),id:String(x.id),quantita:Number(x.quantita)})),
@@ -39171,7 +39511,10 @@ function sale(){
 function riempiSale(){
  const sel=$('fblCronoSala'); if(!sel)return; const cur=sel.value||vista.sala;
  sel.textContent=''; const {tg,sy}=sale();
- const gruppo=(nome,lista)=>{ if(!lista.length)return; const og=document.createElement('optgroup'); og.label=nome; lista.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; og.appendChild(o); }); sel.appendChild(og); };
+ // Il valore resta la voce configurata (serve a chiedere la cronologia al ponte), il testo e' il
+ // nome leggibile: lo stesso che si vede in tutte le altre schermate.
+ const etichetta=v=>{ try{ return (typeof fblSalaEtichetta==='function'?fblSalaEtichetta(v):v)||v; }catch(e){ return v; } };
+ const gruppo=(nome,lista)=>{ if(!lista.length)return; const og=document.createElement('optgroup'); og.label=nome; lista.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=etichetta(v); og.appendChild(o); }); sel.appendChild(og); };
  gruppo('Sale Telegram',tg); gruppo('Utenti Syntra',sy);
  if(!sel.options.length){ const o=document.createElement('option'); o.value=''; o.textContent='Nessuna sala: aggiungila in Sala segnali'; sel.appendChild(o); }
  if([...sel.options].some(o=>o.value===cur))sel.value=cur;
@@ -39469,8 +39812,27 @@ function stratSalva(sala,cfg){
  d[sala]=cfg; try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
 }
 // Quanti TP ha davvero questa sala: non si mostrano cinque righe se i segnali ne hanno due.
-function stratQuantiTp(ris){
- return Math.max(1,Math.min(5,Math.max(0,...(ris||[]).map(x=>(x&&x.tps&&x.tps.length)||0))));
+// QUANTI TARGET HA DAVVERO QUESTA SALA.
+// RICHIESTO: il numero di target da configurare dev'essere quello massimo che la sala ha usato
+// nella sua storia. Prima si guardavano solo i segnali dell'asset analizzato in quel momento: una
+// sala che su oro manda due target e su indici ne manda cinque si configurava con due righe, e le
+// altre tre sparivano senza che nessuno lo dicesse.
+// Si guarda quindi la cronologia INTERA della sala, su tutti gli asset; i risultati analizzati
+// restano come ripiego, per quando la cronologia non e' ancora stata letta.
+function stratQuantiTp(ris,sala){
+ let max=0;
+ try{
+  const segs=sala?segnaliSala(sala):null;
+  if(segs&&segs.length)segs.forEach(sg=>{
+   // ATTENZIONE: Number(null) fa 0, che e' un numero finito. Un target vuoto sarebbe stato
+   // contato come un target vero, e la strategia avrebbe mostrato una riga in piu' del dovuto.
+   // E' la stessa trappola gia' pagata altrove in questo file (vedi rendRisultatoR).
+   const quanti=((sg&&sg.tp)||[]).filter(v=>v!=null&&v!==''&&Number.isFinite(Number(v))).length;
+   if(quanti>max)max=quanti;
+  });
+ }catch(e){}
+ if(!max)(ris||[]).forEach(x=>{ const q=(x&&x.tps&&x.tps.length)||0; if(q>max)max=q; });
+ return Math.max(1,Math.min(FBL_MAX_TP,max));
 }
 function stratDallaUi(n){
  const q=[],r=[];
@@ -39482,7 +39844,7 @@ function stratDallaUi(n){
 }
 function stratDisegna(sala,ris){
  const box=$('fblStrategiaUi'); if(!box)return;
- const n=stratQuantiTp(ris);
+ const n=stratQuantiTp(ris,sala);
  const cfg=fblStrategiaNormalizza(stratLeggi(sala)||{},n);
  const salvata=stratLeggi(sala);
  // Le quote si mostrano in percentuale leggibile: normalizzate sono 0,333 e nessuno le scrive cosi'.
@@ -39533,7 +39895,7 @@ fblDelega('change',ev=>{
  if(!(ev.target&&ev.target.id==='fblStratModo'))return;
  const sala=$('fblCronoSala')?.value||''; if(!sala)return;
  const ris=(vista.asset?risultatiDi(sala,vista.asset):null)||[];
- const n=stratQuantiTp(ris);
+ const n=stratQuantiTp(ris,sala);
  // Si salva prima: cosi' le percentuali appena scritte non si perdono nel passaggio.
  stratSalva(sala,stratDallaUi(n));
  stratDisegna(sala,ris);
@@ -39553,7 +39915,7 @@ function rendCalcola(){
  // I comandi della strategia si disegnano una volta sola: ridisegnarli a ogni calcolo
  // cancellerebbe quello che si sta scrivendo.
  if(!$('fblStratModo'))stratDisegna(sala,ris);
- const nTp=stratQuantiTp(ris);
+ const nTp=stratQuantiTp(ris,sala);
  const strategia=$('fblStratModo')?stratDallaUi(nTp):null;
  if(strategia)stratSalva(sala,strategia);
  const serie=C.serie[sala+'|'+sym]||null;
@@ -39626,6 +39988,9 @@ function rendAggancia(){
 window.fblRendCalcola=rendCalcola;
 window.fblCronoRendR=rendRisultatoR;      // esposte per il collaudo: sono il conto dei soldi
 window.fblCronoRendCurva=rendCurva;
+// Quanti target ha la sala: decide quante righe ha la strategia, quindi quanto rende la
+// simulazione. Sbagliarlo in meno taglia i target in fondo senza dirlo.
+window.stratQuantiTp=stratQuantiTp;
 // I valori scelti si ritrovano alla riapertura, senza riscriverli ogni volta.
 (function(){
  const i=rendImposta();
@@ -39928,7 +40293,10 @@ function righe(){
   let tc=NaN; try{ tc=parseDateTime(t.closedAt); }catch(e){}
   if(!isFinite(tc))tc=Number(new Date(t.closedAt));
   if(!isFinite(tc))return;
-  out.push({i,t,tc,to:Number(t.startTime),pl,pips:Number(t.pips)||0,asset:String(t.asset||'?'),sala:t.tgSala?String(t.tgSala):'Manuale',
+  // Lo stesso nome di tutte le altre schermate: un'operazione salvata con la voce configurata
+  // (@nome) e una salvata col titolo del gruppo devono finire nella STESSA riga, non in due.
+  const nomeSala=t.tgSala?((typeof fblSalaEtichetta==='function'&&fblSalaEtichetta(t.tgSala))||String(t.tgSala)):'Manuale';
+  out.push({i,t,tc,to:Number(t.startTime),pl,pips:Number(t.pips)||0,asset:String(t.asset||'?'),sala:nomeSala,
    strat:t.strategy?String(t.strategy):'Senza strategia',conto:contoDi(t),esito:esito(t),rr:rrPiano(t),R:rReale(t),side:String(t.side||'').toUpperCase()});
  });
  return out.sort((a,b)=>a.tc-b.tc);
@@ -40472,7 +40840,10 @@ function disegna(animato){
    c.corpo.appendChild(sw); c.corpo.appendChild(box); mostra('giorno'); }
  // cronologia delle sale: win rate totale e per livello di TP (dai segnali, non dai tuoi trade)
  { const es=(typeof window.fblCronoEsiti==='function')?window.fblCronoEsiti():{};
-   const voci=[]; Object.keys(es).forEach(sala=>Object.keys(es[sala]||{}).forEach(asset=>{ if(F.sala&&sala!==F.sala)return; if(F.asset&&asset!==F.asset)return; voci.push({sala,asset,r:es[sala][asset]}); }));
+   // `sala` qui e' la chiave con cui la cronologia e' stata salvata (la voce configurata): a
+   // schermo si mostra il nome leggibile, lo stesso delle altre schermate.
+   const nomeDi=s=>{ try{ return (typeof fblSalaEtichetta==='function'&&fblSalaEtichetta(s))||String(s); }catch(e){ return String(s); } };
+   const voci=[]; Object.keys(es).forEach(sala=>Object.keys(es[sala]||{}).forEach(asset=>{ if(F.sala&&!((typeof fblStessaSala==='function')?fblStessaSala(sala,F.sala):sala===F.sala))return; if(F.asset&&asset!==F.asset)return; voci.push({sala:nomeDi(sala),chiaveSala:sala,asset,r:es[sala][asset]}); }));
    const maxTp=Math.max(0,...voci.map(v=>(v.r.tp||[]).length));
    const col=['Sala','Asset','Segnali','Valutati','Win rate'].concat(Array.from({length:maxTp},(_,j)=>'TP'+(j+1)));
    const righeT=voci.map(v=>[v.sala,v.asset,String(v.r.n),String(v.r.valutati),pct(v.r.wr)].concat(Array.from({length:maxTp},(_,j)=>{ const l=(v.r.tp||[])[j]; return l&&l.tot?pct(l.hit/l.tot*100)+' ('+l.hit+'/'+l.tot+')':'—'; })));

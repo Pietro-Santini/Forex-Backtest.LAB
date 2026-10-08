@@ -224,7 +224,7 @@ BACHECA = Bacheca()
 # quando Telegram sta su un altro ponte (il server) e qui si vuole soltanto Syntra, che puo' girare
 # unicamente sul computer.
 STATO = {"verbose": True, "sim": False, "solo_syntra": False,
-         "chat": [], "collegato": False, "errore": None}
+         "chat": [], "titoli": {}, "collegato": False, "errore": None}
 
 
 def _modalita() -> str:
@@ -777,6 +777,12 @@ async def sorgente_telegram() -> None:
                 sala_per_id[_tg_utils.get_peer_id(ent)] = c
             except Exception:
                 pass
+            # Il titolo del gruppo serve anche all'app: e' il nome LEGGIBILE della sala, mentre
+            # `c` e' la voce che l'utente ha scritto nelle impostazioni (@nome, link, id). Senza
+            # questo collegamento l'app mostra la voce configurata in una schermata e il titolo in
+            # un'altra, per la stessa sala. Si impara qui per TUTTE le sale - anche per quelle che
+            # non hanno ancora mandato nessun segnale, che altrimenti resterebbero senza nome.
+            STATO["titoli"][c] = nome
             _log(True, "in ascolto su: %s" % nome)
         except Exception as e:
             _log(True, "NON raggiungibile: %s (%s). Sei dentro a questo gruppo?" % (c, e.__class__.__name__))
@@ -1083,6 +1089,7 @@ async def leggi_chat():
     cfg = carica_configurazione() or {}
     return {
         "chat": cfg.get("chat") or [],
+        "titoli": STATO["titoli"],
         "credenziali_presenti": bool(cfg.get("api_id") and cfg.get("api_hash")),
         "collegato": STATO["collegato"],
         "errore": STATO["errore"],
@@ -1310,6 +1317,7 @@ async def health():
         "modalita": _modalita(),
         "collegato": STATO["collegato"],
         "chat": STATO["chat"],
+        "titoli": STATO["titoli"],
         "errore": STATO["errore"],
     })
     return r
@@ -1320,6 +1328,7 @@ async def _stato_chat() -> dict:
     return {
         "tipo": "stato",
         "chat": cfg.get("chat") or [],
+        "titoli": STATO["titoli"],
         "credenziali_presenti": bool(cfg.get("api_id") and cfg.get("api_hash")),
         "collegato": STATO["collegato"],
         "errore": STATO["errore"],

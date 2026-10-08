@@ -3,6 +3,27 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Operazioni segnate come aperte da te, che non erano tue** - risolto v109 - 8 ottobre 2026:
+  il nome della sala veniva preso solo da `voce.chat` (il titolo del gruppo), ma il ponte ne manda
+  DUE - `chat` e `sala`, la voce esatta scritta nelle impostazioni. Senza titolo la posizione
+  nasceva senza sala, e senza sala veniva mostrata come aperta a mano. Peggio: quelle che l'app
+  non apre da sola (tetto, freno, margine) il proprietario le apre dalla barra ordini, e da li'
+  non c'era nessun legame col segnale. Ora `fblNomeSala` non torna mai vuoto, «tu» si scrive solo
+  se non c'e' NESSUNA traccia di un segnale, e una posizione aperta a mano cerca il segnale a cui
+  appartiene (stesso asset, stessa direzione, entro due ore, non gia' eseguito).
+  Un'operazione attribuita a te sparisce dal profitto per sala: non era estetica.
+  Test: `laboratorio/app/origine_operazioni.test.mjs`, `attribuzione_segnale.test.mjs`.
+- **Le posizioni di uno stesso ingresso non si raggruppavano** - risolto v109 - 8 ottobre 2026:
+  si univano solo con l'entrata IDENTICA, e dieci ordini non si aprono tutti allo stesso prezzo.
+  Ora comanda il codice del segnale quando c'e'; dove manca, tolleranza proporzionata alla
+  distanza entrata-stop di quella operazione (non un numero fisso: tre punti sull'oro sono niente,
+  sull'euro-dollaro sono un'enormita') piu' una finestra di tre minuti.
+  Test: `laboratorio/app/gruppi_posizioni.test.mjs`.
+- **La stessa sala con due nomi diversi in due schermate** - risolto v109 - 8 ottobre 2026: la
+  tabella dell'apertura automatica mostrava la voce configurata, le operazioni il titolo del
+  gruppo. Ora il ponte manda i titoli di TUTTE le sale appena si mette in ascolto (li risolveva
+  gia' e li buttava via dopo averli scritti nel diario) e l'app li usa ovunque.
+  Si riconosce con la chiave, si mostra con il titolo. Test: `laboratorio/app/nomi_sale.test.mjs`.
 - **MT5 non si collegava dal telefono, con tutto verde** - risolto v108 - 8 ottobre 2026:
   l'indirizzo degli ordini (porta 8000) veniva INDOVINATO da `fblBaseUrl(8000)`, che passa dal
   server solo col campo "computer" vuoto. Con un indirizzo rimasto scritto da prima, dal telefono

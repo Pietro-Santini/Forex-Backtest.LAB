@@ -117,3 +117,13 @@
 - **`sys.stdout` sotto pytest e' di pytest.** Sostituirlo da un test non funziona (la cattura lo
   rimette) e i test falliscono per il motivo sbagliato. Se una funzione deve essere provata,
   l'informazione che le serve si passa come parametro invece di leggerla da una variabile globale.
+- **Misurare prima, sempre.** L'8 ottobre 2026 il proprietario segnala l'app lenta. L'ipotesi
+  ovvia erano i 35 cicli automatici e `update()` che rifa' le tabelle: misurati, costavano 3,6 ms
+  in tutto. Il tempo stava altrove e in posti che nessuno avrebbe indovinato - meta' del primo
+  disegno a convertire le date delle candele, un `ts.every(...)` su centomila elementi dentro
+  `chartGeometry` a ogni disegno, i profili volumi che riscorrevano giorni di candele sessanta
+  volte al secondo. Con la CPU rallentata sei volte (telefono) i numeri si leggono; su un computer
+  tutto sembra a posto e non si trova niente.
+- **Una cache si giudica da quando NON risponde.** Le due memorie aggiunte al disegno hanno i
+  test sul caso in cui l'ingresso cambia, non su quello in cui resta uguale: una cache che
+  risponde con roba vecchia e' peggio del lavoro che risparmia.

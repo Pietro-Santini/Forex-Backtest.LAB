@@ -40,3 +40,9 @@ Formato: data — chi — cosa — esito collaudo — commit.
   indovinarla, e il pannello dei servizi prova l'indirizzo che la sezione MT5 usa davvero (prima
   era verde su una rotta diversa). Trovato riproducendo il telefono nel laboratorio con la rete
   vera verso il server. 3 test nuovi - verde
+- 2026-10-08 - Claude - app v109, sette passi concordati a voce col proprietario: prestazioni
+  (date delle candele lette a mano, decimali una volta per disegno, due memorie nel disegno -
+  primo disegno da 3241 a 1060 ms e trascinamento da 50 a 24 ms per immagine su telefono),
+  raggruppamento delle posizioni con codice del segnale e tolleranza, origine delle operazioni,
+  un solo nome di sala ovunque (col ponte che manda i titoli), numero di target preso dalla
+  storia della sala e tetto da 5 a 10. 32 test nuovi in 6 file - verde
