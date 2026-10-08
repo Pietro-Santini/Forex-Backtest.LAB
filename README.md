@@ -4,6 +4,11 @@ Web app per il **backtesting manuale di strategie di trading**: riproduce i dati
 
 > Progetto personale sviluppato da [Pietro Santini](https://www.linkedin.com/in/pietro-santini-2766aa277/), in fase di pre-lancio.
 
+> **Riprendi il lavoro da qui.** Chi subentra — persona o agente AI — legga per primo
+> [`cervello/CONSEGNA.md`](cervello/CONSEGNA.md): che cos'e' il sistema, a cosa e' collegato
+> (server, Firebase, pagamenti, mercati), che cosa e' stato fatto, che cosa manca e con che
+> regole si lavora. Il resto della memoria del progetto sta in [`cervello/`](cervello/).
+
 <!-- Aggiungere qui 2-3 screenshot: replay del grafico, pannello ordini, Prop Firm Mode -->
 
 ---
