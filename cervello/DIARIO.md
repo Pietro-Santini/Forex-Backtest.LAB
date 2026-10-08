@@ -19,3 +19,15 @@ Formato: data — chi — cosa — esito collaudo — commit.
   rientro con numero e codice); Setup 1.0.75 — verde
 - 2026-10-07 — Claude — app v89: pulsante "Accesso da altri dispositivi e server Oracle" (il
   proprietario non trovava "Prova il server"); guida corretta; Setup 1.0.76 — verde
+- 2026-10-08 - Claude - app v106 pubblicata (ponte dei segnali che non muore su una emoji, Syntra
+  con --solo-syntra) - verde - 1a3eaf5
+- 2026-10-08 - Claude - app v107, quindici richieste del proprietario in un colpo: popup dei
+  pacchetti MT5 solo su computer; conti Kraken sincronizzati (Aggiorna li rilegge, Scollega non li
+  nasconde, Collega non e' piu' verde a riposo); via il Diario del ponte; "Pagina di prova" ->
+  "Segnale manuale" in entrambe le sessioni; sale selezionabili nella dashboard dei win rate;
+  journal e trade per periodo anche giornalieri; trade per fascia oraria; win rate degli Esiti
+  senza i pareggi; sala/utente Syntra scritti nelle posizioni aperte e posizioni raggruppate per
+  entrata con P/L sommato; interruttore per le sole linee delle posizioni; grafico del rendimento
+  scorrevole con i numeri che seguono; metodologia della strategia (una posizione per TP oppure
+  una sola chiusa a pezzi) nella cronologia e nell'apertura automatica, cripto escluse -
+  8 test nuovi (laboratorio/app/richieste_8ott.test.mjs) - verde
