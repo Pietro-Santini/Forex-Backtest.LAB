@@ -444,6 +444,22 @@ body.pf-blood-effect .pf-danger-blink{animation:pfDangerBlink 1s step-start infi
    resta sempre contenuta nei bordi dello schermo. */
 .tableScroll{width:100%;overflow-x:auto}
 .posTable tr.focused td{background:#132018}
+/* Il menu delle operazioni a blocco: un <details> invece di una tendina costruita a mano, cosi'
+   si apre e si chiude da solo e funziona anche col solo tocco. */
+.fblBlocco{position:relative;display:inline-block}
+.fblBlocco summary{list-style:none}
+.fblBlocco summary::-webkit-details-marker{display:none}
+.fblBloccoVoci{position:absolute;z-index:40;top:100%;left:0;margin-top:4px;min-width:280px;
+  background:#0b1117;border:1px solid #2b3541;border-radius:9px;padding:6px;
+  box-shadow:0 12px 30px rgba(0,0,0,.55);max-height:60vh;overflow:auto}
+.fblBloccoVoci button{display:block;width:100%;text-align:left;background:none;border:none;
+  color:#e8edf3;font-size:12.5px;padding:7px 9px;border-radius:6px;cursor:pointer;font-family:inherit}
+.fblBloccoVoci button:hover{background:#17212e}
+.fblBloccoVoci button[disabled]{color:#5b6573;cursor:default}
+.fblBloccoVoci button[disabled]:hover{background:none}
+.fblBloccoVoci .sep{border-top:1px solid #202832;margin:5px 2px}
+.fblBloccoVoci .tit{font-size:10.5px;color:#6b7280;font-weight:700;letter-spacing:.4px;
+  text-transform:uppercase;padding:6px 9px 2px}
 /* RICHIESTO: le posizioni della stessa sala alla stessa entrata si riuniscono in una riga sola.
    La riga del gruppo si stacca un po' dallo sfondo; quelle dentro al gruppo rientrano, cosi' si
    capisce a occhio che appartengono a quella sopra. */
@@ -3447,7 +3463,15 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 </div>
 
 <div class="panel">
- <div class="label">Posizioni aperte</div>
+ <div class="label" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">Posizioni aperte
+   <!-- RICHIESTO: le operazioni a blocco come su MetaTrader 5. Un pulsante solo che apre l'elenco:
+        ogni voce dice quante posizioni tocca e con che risultato, e chiede conferma. Sono soldi
+        veri: nessuna di queste voci fa qualcosa senza che si veda prima cosa sta per succedere. -->
+   <details id="fblBloccoMenu" class="fblBlocco">
+     <summary class="miniBtn" style="display:inline-flex;width:auto;cursor:pointer">⚡ Operazioni a blocco</summary>
+     <div class="fblBloccoVoci" id="fblBloccoVoci"></div>
+   </details>
+ </div>
  <div class="tableScroll"><table class="posTable"><thead><tr><th>#</th><th>Sessione</th><th>Asset</th><th>Side</th><th>Entry</th><th>SL</th><th>TP</th><th>R/R</th><th>Lotti</th><th>Margine</th><th>Prezzo corrente</th><th>P/L live</th><th></th></tr></thead>
  <tbody id="openPositions"></tbody></table></div>
  <div id="noPositions" class="hint">Nessuna posizione aperta.</div>
@@ -4215,6 +4239,107 @@ function fblPosStessoIngresso(gruppo,p,entrata,orario){
  if(gruppo.t0!=null&&orario!=null&&Math.abs(orario-gruppo.t0)>FBL_POS_FINESTRA_MS)return false;
  return true;
 }
+// ===================== OPERAZIONI A BLOCCO (stile MetaTrader 5) =====================
+// Chiudere tante posizioni insieme e' comodo e pericoloso nella stessa misura: per questo ogni
+// voce del menu dice PRIMA quante posizioni tocca e quanto fa il loro risultato, e chiede
+// conferma. Niente scorciatoie silenziose.
+// Il prezzo di chiusura: per una posizione REALE lo decide il broker (si chiude a mercato), per
+// una simulata serve il prezzo di quell'asset. Se non lo si ha, quella posizione NON si chiude e
+// lo si dice: chiuderla a un prezzo inventato sarebbe peggio che non chiuderla.
+function fblPrezzoChiusura(p){
+ try{
+  if(p&&p.asset&&p.asset===currentAssetKey){ const c=currentPrice(); if(Number.isFinite(c))return c; }
+  const v=(typeof livePriceByAsset!=='undefined')?livePriceByAsset[p&&p.asset]:null;
+  if(Number.isFinite(Number(v)))return Number(v);
+ }catch(e){}
+ return null;
+}
+function fblPlCorrente(p){
+ try{
+  if(p&&p.mt5Ticket!=null&&typeof mt5RealProfit==='function'){
+   const v=mt5RealProfit(p.mt5Ticket);
+   if(v!=null&&Number.isFinite(Number(v)))return Number(v)+(Number(mt5RealSwap(p.mt5Ticket))||0);
+  }
+  const prezzo=fblPrezzoChiusura(p);
+  if(prezzo==null)return null;
+  return calculateForexPL(p.side,p.entry,prezzo,p.lots,p.asset);
+ }catch(e){ return null; }
+}
+// Le posizioni su cui un'operazione a blocco puo' agire: quelle della sessione a schermo, come il
+// pulsante Chiudi di ogni riga.
+function fblPosizioniBlocco(){
+ try{ return (positions||[]).filter(p=>p&&p.lots); }catch(e){ return []; }
+}
+async function fblChiudiBlocco(quali,descrizione){
+ const lista=fblPosizioniBlocco().filter(quali);
+ if(!lista.length){ $('status').textContent='Nessuna posizione da chiudere: '+descrizione+'.'; return; }
+ if(typeof blockedByPropFirmNews==='function'&&blockedByPropFirmNews())return;
+ let somma=0, ignoti=0;
+ lista.forEach(p=>{ const v=fblPlCorrente(p); if(v==null)ignoti++; else somma+=v; });
+ const reali=lista.filter(p=>p.mt5Ticket!=null).length;
+ const righe=[descrizione+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.'];
+ righe.push('Risultato di adesso: '+((somma>=0?'+':'')+euro(somma))+(ignoti?(' (di '+(lista.length-ignoti)+' su '+lista.length+': delle altre non si ha il prezzo adesso)'):''));
+ if(reali)righe.push(reali+(reali===1?' e' : ' sono')+' REALE sul conto MT5: la chiusura e\' vera, non una simulazione.');
+ if(!await appConfirm(righe.join('\n\n'),{title:'⚡ Chiudi a blocco',okLabel:'Chiudi '+lista.length,cancelLabel:'Annulla'}))return;
+ let fatte=0, saltate=0;
+ for(const p of lista){
+  try{
+   if(p.mt5Ticket!=null){ await closeMt5PositionReal(p,'MANUAL'); fatte++; continue; }
+   const prezzo=fblPrezzoChiusura(p);
+   if(prezzo==null){ saltate++; continue; }
+   closeTrade('MANUAL',prezzo,p); fatte++;
+  }catch(e){ saltate++; }
+ }
+ try{ draw(); update(); }catch(e){}
+ $('status').textContent='⚡ Chiuse '+fatte+(fatte===1?' posizione':' posizioni')
+   +(saltate?(' · '+saltate+' non chiuse: manca il prezzo di quell\'asset in questo momento (portalo a grafico e riprova)'):'');
+}
+// Il menu si ricostruisce ogni volta che lo si apre: asset e numeri devono essere quelli di
+// adesso, non quelli di quando la pagina e' stata caricata.
+function fblBloccoCostruisci(){
+ const box=$('fblBloccoVoci'); if(!box)return;
+ box.textContent='';
+ const lista=fblPosizioniBlocco();
+ const voce=(testo,quali,descr)=>{
+  const b=document.createElement('button'); b.type='button';
+  const quante=lista.filter(quali).length;
+  b.textContent=testo+'  ('+quante+')';
+  if(!quante)b.disabled=true;
+  else b.addEventListener('click',async()=>{ const d=$('fblBloccoMenu'); if(d)d.open=false; await fblChiudiBlocco(quali,descr); });
+  box.appendChild(b);
+ };
+ const titolo=t=>{ const d=document.createElement('div'); d.className='tit'; d.textContent=t; box.appendChild(d); };
+ const riga=()=>{ const d=document.createElement('div'); d.className='sep'; box.appendChild(d); };
+ if(!lista.length){
+  const d=document.createElement('div'); d.className='tit'; d.textContent='Nessuna posizione aperta'; box.appendChild(d);
+  return;
+ }
+ titolo('Tutte');
+ voce('Chiudi tutte le posizioni',()=>true,'tutte le posizioni');
+ riga(); titolo('Per risultato');
+ voce('Chiudi quelle in guadagno',p=>{ const v=fblPlCorrente(p); return v!=null&&v>0; },'le posizioni in guadagno');
+ voce('Chiudi quelle in perdita',p=>{ const v=fblPlCorrente(p); return v!=null&&v<0; },'le posizioni in perdita');
+ riga(); titolo('Per direzione');
+ voce('Chiudi tutte le BUY',p=>String(p.side).toUpperCase()==='BUY','tutte le posizioni BUY');
+ voce('Chiudi tutte le SELL',p=>String(p.side).toUpperCase()==='SELL','tutte le posizioni SELL');
+ // Un asset alla volta, con dentro la direzione: e' la parte che su MetaTrader si usa di piu'.
+ const assets=[...new Set(lista.map(p=>String(p.asset||'')).filter(Boolean))].sort();
+ if(assets.length){
+  riga(); titolo('Un asset alla volta');
+  assets.forEach(a=>{
+   voce('Chiudi '+a,p=>String(p.asset||'')===a,'tutte le posizioni su '+a);
+   voce('   └ solo '+a+' BUY',p=>String(p.asset||'')===a&&String(p.side).toUpperCase()==='BUY','le posizioni BUY su '+a);
+   voce('   └ solo '+a+' SELL',p=>String(p.asset||'')===a&&String(p.side).toUpperCase()==='SELL','le posizioni SELL su '+a);
+  });
+ }
+}
+fblDelega('toggle',ev=>{ if(ev.target&&ev.target.id==='fblBloccoMenu'&&ev.target.open)fblBloccoCostruisci(); },true);
+// Un clic fuori chiude il menu: altrimenti resta aperto sopra la tabella e copre le righe.
+document.addEventListener('click',ev=>{
+ const d=$('fblBloccoMenu'); if(!d||!d.open)return;
+ if(ev.target&&ev.target.closest&&ev.target.closest('#fblBloccoMenu'))return;
+ d.open=false;
+});
 // Quali gruppi di posizioni sono aperti (mostrati uno per uno) invece che riuniti in una riga.
 // Vive in memoria: e' uno stato di lettura, non una preferenza da ritrovare dopo giorni.
 const fblPosGruppiAperti=new Set();
@@ -39800,8 +39925,12 @@ function rendCurva(ris,capitale,rischioPct,serie,strategia){
 function rendDisegnaGrafico(punti,iMirino){
  const cv=$('fblRendGrafico'); if(!cv)return;
  const dpr=Math.min(3,window.devicePixelRatio||1);
- const L=cv.clientWidth||600, A=Number(cv.getAttribute('height'))||190;
- cv.width=Math.round(L*dpr); cv.height=Math.round(A*dpr);
+ const L=Math.max(1,cv.clientWidth||600), A=Number(cv.getAttribute('height'))||190;
+ const lw=Math.round(L*dpr), lh=Math.round(A*dpr);
+ // LAMPEGGIO BIANCO: riassegnare width/height rialloca il canvas e lo CANCELLA. Facendolo a ogni
+ // movimento del dito lo si prende a meta' strada, e quel disegno diventa bianco. Si tocca solo
+ // se la misura e' cambiata davvero - stessa lezione gia' imparata nel disegno del grafico.
+ if(cv.width!==lw||cv.height!==lh){ cv.width=lw; cv.height=lh; }
  const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
  g.clearRect(0,0,L,A);
  if(!punti||punti.length<2){ g.fillStyle='#55606e'; g.font='12px Inter,Arial'; g.fillText('Niente da disegnare.',10,24); return; }
@@ -40027,26 +40156,68 @@ function rendAggancia(){
  if(rendAgganciato)return;
  const cv=$('fblRendGrafico'); if(!cv)return;
  rendAgganciato=true;
- cv.style.cursor='crosshair'; cv.style.touchAction='none';
- const indiceDa=ev=>{
-  if(!rendVista||!rendVista.curva)return null;
+ cv.style.cursor='crosshair';
+ // 'pan-y' e non 'none': il dito che scorre in VERTICALE continua a far scorrere la pagina, come
+ // si aspetta chiunque. Con 'none' il grafico si mangiava anche quello e sembrava piantato.
+ cv.style.touchAction='pan-y';
+ let rett=null, attivo=false, chiesto=null, ultimaX=0;
+ const misura=()=>{ rett=cv.getBoundingClientRect(); };
+ // IL RETTANGOLO SI MISURA UNA VOLTA PER GESTO, non a ogni movimento. I numeri sopra il grafico
+ // cambiano mentre si scorre, e cambiando possono spostare il grafico di qualche pixel: se si
+ // rimisurasse ogni volta, il dito si ritroverebbe su un punto diverso da quello che sta
+ // toccando. E' quello che faceva saltare il mirino a caso.
+ const indiceDa=x=>{
+  if(!rendVista||!rendVista.curva||!rett||!rett.width)return null;
   const punti=rendVista.curva.punti||[]; if(punti.length<2)return null;
-  const r=cv.getBoundingClientRect(); if(!r.width)return null;
-  const pad=16, dentro=r.width-pad*2;
-  const q=(ev.clientX-r.left-pad)/(dentro>0?dentro:1);
+  const pad=16, dentro=Math.max(1,rett.width-pad*2);
+  const q=(x-rett.left-pad)/dentro;
   return Math.max(0,Math.min(punti.length-1,Math.round(q*(punti.length-1))));
  };
- const muovi=ev=>{ const i=indiceDa(ev); if(i==null)return; ev.preventDefault(); rendVista.i=i; rendMostraCifre(); };
- cv.addEventListener('pointermove',muovi);
- cv.addEventListener('pointerdown',muovi);
- // Togliendo il dito (o uscendo col mouse) si torna al totale: e' il numero che interessa di
- // piu', e lasciarlo fermo a metà cronologia sarebbe una trappola.
- const lascia=()=>{ if(!rendVista)return; rendVista.i=null; rendMostraCifre(); };
- cv.addEventListener('pointerleave',lascia);
- cv.addEventListener('pointercancel',lascia);
+ // Si ridisegna al massimo una volta per immagine, non a ogni evento: un dito che si muove manda
+ // decine di eventi al secondo, e ridisegnare per ognuno e' il lavoro che fa scattare tutto.
+ const aggiorna=x=>{
+  ultimaX=x;
+  if(chiesto)return;
+  chiesto=requestAnimationFrame(()=>{
+   chiesto=null;
+   const i=indiceDa(ultimaX);
+   if(i==null||!rendVista||rendVista.i===i)return;   // stesso punto: niente da rifare
+   rendVista.i=i; rendMostraCifre();
+  });
+ };
+ cv.addEventListener('pointerdown',ev=>{
+  misura(); attivo=true;
+  // Il gesto appartiene al grafico finche' il dito non si alza: cosi' non lo ruba nessun altro
+  // elemento sotto, e non si perde il movimento uscendo dal bordo.
+  try{ cv.setPointerCapture(ev.pointerId); }catch(e){}
+  aggiorna(ev.clientX);
+ });
+ cv.addEventListener('pointermove',ev=>{
+  // Col mouse si scorre anche solo passandoci sopra, come su TradingView.
+  if(ev.pointerType==='mouse'&&!attivo){ misura(); aggiorna(ev.clientX); return; }
+  if(!attivo)return;
+  ev.preventDefault();   // solo DOPO aver preso il dito: prima lo scorrimento resta libero
+  aggiorna(ev.clientX);
+ });
+ // Alzando il dito (o uscendo col mouse) si torna al totale: e' il numero che interessa di piu',
+ // e lasciarlo fermo a meta' cronologia sarebbe una trappola.
+ const lascia=ev=>{
+  attivo=false;
+  try{ if(ev&&ev.pointerId!=null&&cv.hasPointerCapture&&cv.hasPointerCapture(ev.pointerId))cv.releasePointerCapture(ev.pointerId); }catch(e){}
+  if(chiesto){ cancelAnimationFrame(chiesto); chiesto=null; }
+  if(!rendVista||rendVista.i===null)return;
+  rendVista.i=null; rendMostraCifre();
+ };
  cv.addEventListener('pointerup',lascia);
+ cv.addEventListener('pointercancel',lascia);
+ cv.addEventListener('pointerleave',ev=>{ if(!attivo)lascia(ev); });
 }
 window.fblRendCalcola=rendCalcola;
+// Per il collaudo dello scorrimento: preparare una curva finta e leggere su che punto si e'. Lo
+// scorrimento col dito e' la cosa che si e' rotta su telefono, e dal di fuori non si vede altro.
+window.fblRendProva=function(curva,capitale){ rendVista={curva,capitale:capitale||10000,i:null}; rendAggancia(); rendMostraCifre(); };
+window.fblRendPunto=function(){ return rendVista?rendVista.i:undefined; };
+window.fblCronoRendDisegna=rendDisegnaGrafico;
 window.fblCronoRendR=rendRisultatoR;      // esposte per il collaudo: sono il conto dei soldi
 window.fblCronoRendCurva=rendCurva;
 // Quanti target ha la sala: decide quante righe ha la strategia, quindi quanto rende la

@@ -53,3 +53,8 @@ Formato: data — chi — cosa — esito collaudo — commit.
   Verificato con una prova che la resa della sala tiene conto dello spostamento dello stop, e
   che senza candele in memoria NON lo fa (ora la nota sotto il grafico lo dice a chiare lettere).
   2 test nuovi, 3 aggiornati alla decisione nuova - verde
+- 2026-10-08 - Claude - app v111: risolto il bug del grafico del rendimento al tocco (segnalato
+  dal proprietario) e passo 14, le operazioni a blocco sulle posizioni aperte in stile
+  MetaTrader 5: tutte, in guadagno, in perdita, per direzione, e un asset alla volta con dentro
+  buy e sell. Ogni voce dice quante posizioni tocca e con che risultato, e chiede conferma.
+  10 test nuovi - verde

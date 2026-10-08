@@ -3,6 +3,17 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Il grafico del rendimento si bloccava e lampeggiava bianco al tocco** - risolto v111 -
+  8 ottobre 2026, segnalato su telefono e tablet. Quattro difetti nello scorrimento introdotto
+  con la v107: (1) il canvas veniva RIALLOCATO a ogni movimento del dito - riassegnare
+  width/height lo cancella, e su un telefono lo si prende a meta' strada: ecco il bianco;
+  (2) il rettangolo del canvas si rimisurava a ogni movimento, ma i numeri sopra il grafico
+  cambiano mentre si scorre e lo spostano - il dito finiva su un punto diverso da quello che
+  toccava, ed e' il «salta a caso»; (3) `touchAction:'none'` si mangiava anche lo scorrimento
+  verticale della pagina; (4) si ridisegnava a ogni evento invece che a ogni immagine.
+  Ora: canvas toccato solo se la misura cambia, rettangolo misurato UNA volta per gesto,
+  'pan-y', presa del puntatore e ridisegno una volta per immagine.
+  Test: `laboratorio/app/rendimento_scorrimento.test.mjs`.
 - **Operazioni segnate come aperte da te, che non erano tue** - risolto v109 - 8 ottobre 2026:
   il nome della sala veniva preso solo da `voce.chat` (il titolo del gruppo), ma il ponte ne manda
   DUE - `chat` e `sala`, la voce esatta scritta nelle impostazioni. Senza titolo la posizione
