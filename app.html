@@ -3956,6 +3956,38 @@ const FBL_SALA_IGNOTA='Sala non riconosciuta';
 // modo in cui le sale vengono riconosciute e confrontate.
 // RICHIESTO: «lo stesso identico nome ovunque, nel pannello dei segnali, nella dashboard, nel
 // profitto per sala, nella configurazione automatica, nel rendimento. Non puo' cambiare».
+// QUANTI TARGET USA DAVVERO UNA SALA. Si impara dai segnali che arrivano: ogni segnale dice
+// quanti target porta, e di una sala interessa il MASSIMO che ha mai mandato.
+// RICHIESTO: «il software deve capire automaticamente quante posizioni ha aperto al massimo quella
+// sala, perche' non puoi mettere gli stessi livelli di TP a una sala che ne apre due e a una che
+// ne apre dieci».
+const FBL_SALE_TARGET_KEY='fbl_sale_target';
+let fblSaleTarget={};
+try{ fblSaleTarget=JSON.parse(localStorage.getItem(FBL_SALE_TARGET_KEY)||'{}')||{}; }catch(e){ fblSaleTarget={}; }
+function fblRegistraTargetSala(voce){
+ try{
+  if(!voce||!voce.segnale)return;
+  // ATTENZIONE: Number(null) fa 0, che e' finito. Un target vuoto non e' un target.
+  const quanti=((voce.segnale.take_profit)||[]).filter(v=>v!=null&&v!==''&&Number.isFinite(Number(v))).length;
+  if(!quanti)return;
+  [voce.sala,voce.chat].forEach(k=>{
+   const c=fblSalaChiave(k); if(!c)return;
+   if(!(fblSaleTarget[c]>=quanti)){ fblSaleTarget[c]=quanti; }
+  });
+  try{ localStorage.setItem(FBL_SALE_TARGET_KEY,JSON.stringify(fblSaleTarget)); }catch(e){}
+ }catch(e){}
+}
+// Quante righe di target mostrare per questa sala. Nell'ordine: cio' che si e' visto arrivare,
+// poi la cronologia letta nella schermata delle sale, poi il minimo di sempre.
+function fblTargetDiSala(nome,minimo,massimo){
+ const min=Math.max(1,Number(minimo)||1), max=Math.max(min,Number(massimo)||TG_AUTO_UNI_TP);
+ let q=0;
+ const c=fblSalaChiave(nome);
+ if(c&&fblSaleTarget[c]>0)q=fblSaleTarget[c];
+ if(!q){ try{ if(typeof stratQuantiTp==='function')q=stratQuantiTp([],nome)||0; }catch(e){} }
+ if(!q||q<=1)q=min;
+ return Math.max(min,Math.min(max,q));
+}
 const FBL_SALE_NOMI_KEY='fbl_sale_nomi';
 let fblSaleNomi={};
 try{ fblSaleNomi=JSON.parse(localStorage.getItem(FBL_SALE_NOMI_KEY)||'{}')||{}; }catch(e){ fblSaleNomi={}; }
@@ -23933,12 +23965,12 @@ function tgMessaggioSegnali(ev,fonte){
      // notifica e senza apertura automatica. Restano leggibili nel pannello.
      if(tgEtaSegnaleMs(m)>TG_SEGNALE_VALIDO_MS){
       m.stato='scaduto';
-      fblRegistraNomeSala(m);
+      fblRegistraNomeSala(m); fblRegistraTargetSala(m);
       tgSegnaliRicevuti.push(m); tgSfoltisci();
       try{ tgAggiornaPulsante(); if(tgPannelloAperto())tgRenderPannello(); }catch(e){}
       return;
      }
-     fblRegistraNomeSala(m);
+     fblRegistraNomeSala(m); fblRegistraTargetSala(m);
      tgSegnaliRicevuti.push(m);
      tgSfoltisci();
      tgSuonaSegnale();
@@ -25066,7 +25098,7 @@ function fblStrategiaNormalizza(cfg,quantiTp){
   // mai raggiunto. Le regole impossibili si ignorano invece di fingere che valgano.
   regole.push((r==='entrata'||(/^[1-9]$/.test(r)&&Number(r)<=i))?r:'');
  }
- return {modo,quote:q,regole,tp:n};
+ return {modo,equa:!!(c&&c.equa),quote:q,regole,tp:n};
 }
 window.fblStrategiaNormalizza=fblStrategiaNormalizza;
 
@@ -25289,13 +25321,10 @@ function tgAutoQuotePerSegnale(cfg,quantiTp){
 // quelle che punterebbero a un target inesistente.
 function tgAutoRegolePerSegnale(cfg,quantiTp){
  const fuori=[];
- // RICHIESTO: con «una posizione sola, chiusa a pezzi» lo stop non si sposta target per target -
- // la posizione e' una e lo stop e' il suo. Qui si taglia anche se nella configurazione fosse
- // rimasta una regola di prima (un file salvato con l'altra metodologia, o arrivato da un altro
- // dispositivo): chi esegue deve obbedire alla metodologia scelta, non a cosa e' rimasto scritto.
- // Nota: sulle cripto la metodologia non si applica (vedi tgAutoCostruisciRegole), quindi la loro
- // configurazione resta su 'posizioni' e lo stop continua a spostarsi come ha sempre fatto.
- if(tgAutoModo(cfg)==='parziali')return fuori;
+ // Lo spostamento dello stop vale in TUTTE E DUE le metodologie. Era stato tolto dalla chiusura
+ // parziale; il proprietario l'ha richiesto indietro, e ha ragione: con una posizione sola lo stop
+ // e' uno solo, e spostarlo a ogni chiusura e' proprio il modo di mettere al sicuro quello che
+ // resta aperto.
  (cfg.regole||[]).slice(0,quantiTp).forEach((scelta,i)=>{
   const quando=i+1;
   if(!scelta)return;
@@ -25320,8 +25349,9 @@ function tgAutoRiassuntoRegole(cfg){
  // Sulle cripto la posizione e' una sola con chiusure parziali E lo stop si sposta: si dicono
  // entrambe le cose, perche' sono entrambe vere.
  if(tgAutoModoCriptoFisso())return 'chiusure parziali '+pezzi+' · '+spost;
- // Con le chiusure parziali non ci sono spostamenti da riassumere: conta la percentuale.
- if(tgAutoModo(cfg)==='parziali')return 'chiusure parziali '+pezzi;
+ // Anche con le chiusure parziali lo stop si sposta (decisione del proprietario, 8 ottobre 2026):
+ // il riassunto deve dire tutte e due le cose, altrimenti nasconde meta' della strategia.
+ if(tgAutoModo(cfg)==='parziali')return 'chiusure parziali '+pezzi+' · '+spost;
  return 'una posizione per TP · '+spost;
 }
 // Giorno di calendario locale: il freno vale "fino a domani", e domani comincia a mezzanotte.
@@ -25528,8 +25558,8 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
  tit.innerHTML=parziali
   ? ('Per ogni take profit: <b>quanta parte della posizione si chiude</b> a quel livello'+(dove?' ('+dove+')':'')
      +'. La posizione è <b>una sola</b> e il resto continua: con 20% su TP1, al primo target si chiude un quinto '
-     +'e l\'80% resta aperto verso TP2. Qui <b>non</b> si scegli dove va lo stop target per target: la posizione '
-     +'è una, e lo stop è il suo (si può comunque portare a pareggio in anticipo, qui sotto).')
+     +'e l\'80% resta aperto verso TP2. La posizione è una, quindi lo stop è <b>uno solo</b>: '
+     +'spostarlo a un target già raggiunto mette al sicuro tutto quello che resta aperto.')
   : ('Per ogni take profit: <b>quanto del rischio</b> ci si mette sopra, e <b>dove va lo stop</b> '
      +'quando quel target arriva'+(dove?' ('+dove+')':'')+'. Lo stop si può portare solo a un livello '
      +'<b>già raggiunto</b>: mandarlo più avanti lo metterebbe oltre il prezzo, e la posizione chiuderebbe subito.');
@@ -25628,14 +25658,21 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
  // scorciatoie
  const scorc=document.createElement('div');
  scorc.style.cssText='display:flex;gap:8px;flex-wrap:wrap;margin-top:9px';
- if(parziali){
-  // Con le chiusure parziali non ci sono stop da spostare: le scorciatoie utili sono sulle
-  // percentuali. «Prudente» qui non vorrebbe dire niente, e un pulsante che non fa niente e'
-  // peggio di un pulsante che non c'e'.
-  const bUguali=document.createElement('button');
-  bUguali.type='button'; bUguali.className='miniBtn'; bUguali.textContent='Parti uguali';
-  bUguali.title='Svuota le percentuali: ogni target chiude la stessa parte della posizione';
-  bUguali.addEventListener('click',()=>{ cfg.quote=new Array(quanti).fill(0); tgAutoSalva(); tgAutoDisegna(); });
+ // Lo spostamento dello stop vale in TUTTE E DUE le metodologie (il proprietario l'ha richiesto
+ // indietro dopo averlo tolto dalle chiusure parziali): con una posizione sola lo stop e' uno, e
+ // spostarlo a ogni chiusura e' proprio il modo di mettere al sicuro cio' che resta aperto.
+ // Quindi queste due scorciatoie servono sempre.
+ const bPrud=document.createElement('button');
+ bPrud.type='button'; bPrud.className='miniBtn'; bPrud.textContent='Prudente';
+ bPrud.title='Il primo target porta a pareggio, poi ogni target sposta lo stop al precedente';
+ bPrud.addEventListener('click',()=>{ cfg.regole=tgAutoRegolePrudenti(quanti); cfg.avvicinamento=70; tgAutoSalva(); tgAutoDisegna(); });
+ const bNiente=document.createElement('button');
+ bNiente.type='button'; bNiente.className='miniBtn'; bNiente.textContent='Nessuno spostamento';
+ bNiente.addEventListener('click',()=>{ cfg.regole=new Array(quanti).fill(''); cfg.avvicinamento=0; tgAutoSalva(); tgAutoDisegna(); });
+ scorc.appendChild(bPrud); scorc.appendChild(bNiente);
+ // Questa invece ha senso solo se le percentuali si scrivono a mano: con la distribuzione equa
+ // sono gia' tutte uguali, e un pulsante che non cambia niente e' peggio di un pulsante assente.
+ if(!tgAutoEqua(cfg)){
   const bDavanti=document.createElement('button');
   bDavanti.type='button'; bDavanti.className='miniBtn'; bDavanti.textContent='Più sul primo target';
   bDavanti.title='50% al primo target, poi sempre meno: incassa presto e lascia correre il resto';
@@ -25646,16 +25683,7 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
    if(resto>0)q[quanti-1]+=resto;
    cfg.quote=q; tgAutoSalva(); tgAutoDisegna();
   });
-  scorc.appendChild(bUguali); scorc.appendChild(bDavanti);
- }else{
-  const bPrud=document.createElement('button');
-  bPrud.type='button'; bPrud.className='miniBtn'; bPrud.textContent='Prudente';
-  bPrud.title='Il primo target porta a pareggio, poi ogni target sposta lo stop al precedente';
-  bPrud.addEventListener('click',()=>{ cfg.regole=tgAutoRegolePrudenti(quanti); cfg.avvicinamento=70; tgAutoSalva(); tgAutoDisegna(); });
-  const bNiente=document.createElement('button');
-  bNiente.type='button'; bNiente.className='miniBtn'; bNiente.textContent='Nessuno spostamento';
-  bNiente.addEventListener('click',()=>{ cfg.regole=new Array(quanti).fill(''); cfg.avvicinamento=0; tgAutoSalva(); tgAutoDisegna(); });
-  scorc.appendChild(bPrud); scorc.appendChild(bNiente);
+  scorc.appendChild(bDavanti);
  }
  tdD.appendChild(scorc);
 }
@@ -25781,7 +25809,9 @@ function tgAutoDisegna(){
    const tdD=document.createElement('td');
    tdD.colSpan=5;
    tdD.style.cssText='background:#0a0f16;padding:10px 12px';
-   tgAutoCostruisciRegole(tdD,cfg,TG_AUTO_MAX_TP,'di questa sala');
+   // RICHIESTO: non gli stessi livelli per tutte. Una sala che manda due target si configura con
+   // due righe, una che ne manda dieci con dieci.
+   tgAutoCostruisciRegole(tdD,cfg,fblTargetDiSala(nome,2,TG_AUTO_UNI_TP),'di questa sala');
    trD.appendChild(tdD);
    corpo.appendChild(trD);
   }
@@ -39835,12 +39865,16 @@ function stratQuantiTp(ris,sala){
  return Math.max(1,Math.min(FBL_MAX_TP,max));
 }
 function stratDallaUi(n){
+ const equa=!!$('fblStratEqua')?.checked;
  const q=[],r=[];
  for(let i=0;i<n;i++){
-  q.push(Number($('fblStratQ'+i)?.value)||0);
+  // Con la distribuzione equa le caselle non ci sono: la quota la si scrive qui, uguale per
+  // tutti. Si scrive davvero, invece di lasciarla "vuota = parti uguali", cosi' chi esegue
+  // riceve dei numeri espliciti e non deve indovinare.
+  q.push(equa?Math.round(10000/n)/100:(Number($('fblStratQ'+i)?.value)||0));
   r.push(String($('fblStratR'+i)?.value||''));
  }
- return {modo:($('fblStratModo')?.value==='parziali')?'parziali':'posizioni',quote:q,regole:r};
+ return {modo:($('fblStratModo')?.value==='parziali')?'parziali':'posizioni',equa,quote:q,regole:r};
 }
 function stratDisegna(sala,ris){
  const box=$('fblStrategiaUi'); if(!box)return;
@@ -39850,40 +39884,62 @@ function stratDisegna(sala,ris){
  // Le quote si mostrano in percentuale leggibile: normalizzate sono 0,333 e nessuno le scrive cosi'.
  const quotePct=(salvata&&Array.isArray(salvata.quote)&&salvata.quote.length>=n)
    ? salvata.quote.slice(0,n) : cfg.quote.map(v=>Math.round(v*1000)/10);
- // RICHIESTO: le due metodologie sono due cose diverse, e la seconda non ha lo spostamento
- // dello stop target per target. «Una posizione per ogni TP» e' la strategia universale: si
- // apre tutto il segnale e ogni posizione si chiude al suo target, con lo stop che si puo'
- // spostare man mano. «Una posizione sola, chiusa a pezzi» e' la chiusura parziale: la
- // posizione e' una, e a ogni livello se ne chiude una percentuale - il resto continua.
+ // Le due metodologie. «Una posizione per ogni TP» e' la strategia universale: si apre tutto il
+ // segnale e ogni posizione si chiude al suo target. «Chiusura parziale»: la posizione e' una
+ // sola e a ogni livello se ne chiude una percentuale, il resto continua.
+ // In TUTTE E DUE si puo' decidere dove va lo stop a ogni target: con una posizione sola lo stop
+ // e' uno, e spostarlo mette al sicuro quello che resta aperto.
  const parziali=cfg.modo==='parziali';
+ const equa=!!cfg.equa;
+ const quotaUguale=Math.round(10000/n)/100;
  let h='<div class="fblStrat"><div class="modo">'
   +'<label class="eti" style="display:flex;flex-direction:column;gap:3px">COME SI ESEGUE'
   +'<select id="fblStratModo">'
   +'<option value="posizioni"'+(cfg.modo==='posizioni'?' selected':'')+'>una posizione per ogni TP</option>'
-  +'<option value="parziali"'+(parziali?' selected':'')+'>una posizione sola, chiusa a pezzi</option>'
-  +'</select></label></div>'
+  +'<option value="parziali"'+(parziali?' selected':'')+'>chiusura parziale (una posizione sola)</option>'
+  +'</select></label>'
+  +'<label class="eti" style="display:flex;align-items:center;gap:6px;margin-left:14px;cursor:pointer">'
+  +'<input type="checkbox" id="fblStratEqua"'+(equa?' checked':'')+'> distribuzione equa</label>'
+  +'</div>'
   +'<div class="eti" style="flex:1 1 100%;line-height:1.5;margin:2px 0 6px">'
   +(parziali
-    ? 'La posizione e\' <b>una sola</b>: a ogni target se ne chiude la percentuale che scrivi, e il resto resta aperto. Scrivendo 20% su TP1, al primo target chiudi un quinto e l\'80% continua verso TP2. Qui non si sceglie dove va lo stop target per target: la posizione e\' una, e lo stop e\' il suo.'
-    : 'Si apre <b>una posizione per ogni target</b> del segnale (la strategia universale): ognuna ha la sua quota del rischio e si chiude al suo target, e quando un target arriva lo stop delle altre si puo\' spostare.')
-  +'</div>';
+    ? 'La posizione e\' <b>una sola</b>: a ogni target se ne chiude una parte e il resto continua.'
+    : 'Si apre <b>una posizione per ogni target</b> del segnale: ognuna ha la sua quota del rischio e si chiude al suo target.')
+  +' '
+  +(equa
+    ? ('<b>Distribuzione equa accesa</b>: la quota totale si divide in parti uguali, '+quotaUguale+'% a testa su '+n+(n===1?' target':' target')+'. Con 4 target sarebbe il 25% ciascuno, con 5 il 20%. Spegnila per scrivere tu ogni percentuale.')
+    : '<b>Distribuzione equa spenta</b>: scrivi tu quanto vale ogni target. Accendendola si dividono in parti uguali.')
+  +'</div>'
+  // RICHIESTO: va detto, perche' la casella accanto al target si legge male. La percentuale dice
+  // QUANTO pesa quel target, non dove finisce lo stop: se non scegli uno spostamento, allo
+  // scattare di quel target lo stop resta esattamente dov'e'.
+  +'<div class="eti" style="flex:1 1 100%;line-height:1.5;margin:0 0 8px;color:#8b96a5">'
+  +'La percentuale dice <b>quanto pesa</b> quel target, non dove va lo stop. Lo stop si muove solo '
+  +'se lo scegli nella casella accanto: lasciandola su «dov\'è», quando quel target arriva lo stop '
+  +'non si sposta di un millimetro.</div>';
  for(let i=0;i<n;i++){
   h+='<div class="riga"><b>TP'+(i+1)+'</b>'
-   +'<span class="eti">'+(parziali?'chiudo il':'quota')+'</span><input type="number" id="fblStratQ'+i+'" min="0" step="1" value="'+(quotePct[i]!=null?quotePct[i]:0)+'"><span class="eti">%</span>';
+   +'<span class="eti">'+(parziali?'chiudo il':'quota')+'</span>';
+  if(equa){
+   h+='<span class="eti" style="font-weight:700;color:#cdd6e0">'+quotaUguale+'%</span>';
+  }else{
+   h+='<input type="number" id="fblStratQ'+i+'" min="0" step="1" value="'+(quotePct[i]!=null?quotePct[i]:0)+'"><span class="eti">%</span>';
+  }
   if(parziali){
    // Quanto resta aperto dopo questo livello: e' il numero che si vuole sapere scrivendo le
    // percentuali, e a mente non viene.
-   let usato=0; for(let j=0;j<=i;j++)usato+=Math.max(0,Number(quotePct[j])||0);
-   const tot=quotePct.reduce((a,v)=>a+Math.max(0,Number(v)||0),0);
+   const valori=equa?new Array(n).fill(quotaUguale):quotePct;
+   let usato=0; for(let j=0;j<=i;j++)usato+=Math.max(0,Number(valori[j])||0);
+   const tot=valori.reduce((a,v)=>a+Math.max(0,Number(v)||0),0);
    const resta=tot>0?Math.max(0,100-usato/tot*100):0;
-   h+='<span class="eti">· dopo questo livello resta aperto il '+resta.toFixed(0)+'%</span>';
-  }else{
-   h+='<span class="eti">· quando arriva, lo stop va a</span><select id="fblStratR'+i+'">'
-    +'<option value="">dov\'è</option>'
-    +'<option value="entrata"'+(cfg.regole[i]==='entrata'?' selected':'')+'>pareggio (entrata)</option>';
-   for(let j=1;j<=i;j++)h+='<option value="'+j+'"'+(cfg.regole[i]===String(j)?' selected':'')+'>TP'+j+'</option>';
-   h+='</select>';
+   h+='<span class="eti">· resta aperto il '+resta.toFixed(0)+'%</span>';
   }
+  // RICHIESTO (passo 10): lo spostamento dello stop c'e' in tutte e due le metodologie.
+  h+='<span class="eti">· lo stop va a</span><select id="fblStratR'+i+'">'
+   +'<option value="">dov\'è</option>'
+   +'<option value="entrata"'+(cfg.regole[i]==='entrata'?' selected':'')+'>pareggio (entrata)</option>';
+  for(let j=1;j<=i;j++)h+='<option value="'+j+'"'+(cfg.regole[i]===String(j)?' selected':'')+'>TP'+j+'</option>';
+  h+='</select>';
   h+='</div>';
  }
  h+='</div>';
@@ -39892,7 +39948,7 @@ function stratDisegna(sala,ris){
 // Cambiando metodologia la tabella sotto cambia forma (sparisce o torna la colonna dello stop):
 // va ridisegnata subito, altrimenti si resta a guardare i comandi di prima.
 fblDelega('change',ev=>{
- if(!(ev.target&&ev.target.id==='fblStratModo'))return;
+ if(!(ev.target&&(ev.target.id==='fblStratModo'||ev.target.id==='fblStratEqua')))return;
  const sala=$('fblCronoSala')?.value||''; if(!sala)return;
  const ris=(vista.asset?risultatiDi(sala,vista.asset):null)||[];
  const n=stratQuantiTp(ris,sala);
@@ -39933,8 +39989,13 @@ function rendCalcola(){
   +'La posizione si divide in parti uguali fra i TP della sala, come fa l\'app quando apre da un segnale. '
   +'I segnali senza stop, non attivati o ancora aperti restano fuori. '
   +((C.serie[sala+'|'+sym]&&$('fblStratModo'))
-    ? '<b>Con la strategia qui sopra</b>: ogni segnale è stato rigiocato candela per candela, quote dei TP e spostamento dello stop compresi.'
-    : '<b>Senza strategia</b>: le candele non sono in memoria. Premi «Analizza e mostra a grafico» e ricalcola.');
+    ? ('<b>Lo spostamento dello stop è conteggiato.</b> Ogni segnale è stato rigiocato candela per '
+      +'candela con la strategia qui sopra: le percentuali su ogni target e, a ogni target raggiunto, '
+      +'lo stop spostato dove hai scelto. Cambia una di quelle caselle e ricalcola: il risultato cambia, '
+      +'ed è proprio quello il motivo per cui si prova.')
+    : ('⚠️ <b>Lo spostamento dello stop NON è conteggiato</b>: senza le candele in memoria si può solo '
+      +'contare quanti target sono stati raggiunti prima dello stop iniziale. Premi «Analizza e mostra '
+      +'a grafico» qui sopra e poi ricalcola: da quel momento la strategia viene rigiocata davvero.'));
 }
 // Quale curva e' a schermo, e su quale punto si sta scorrendo (null = la fine, cioe' tutto).
 let rendVista=null, rendAgganciato=false;

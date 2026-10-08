@@ -46,3 +46,10 @@ Formato: data — chi — cosa — esito collaudo — commit.
   raggruppamento delle posizioni con codice del segnale e tolleranza, origine delle operazioni,
   un solo nome di sala ovunque (col ponte che manda i titoli), numero di target preso dalla
   storia della sala e tetto da 5 a 10. 32 test nuovi in 6 file - verde
+- 2026-10-08 - Claude - app v110, passi 8-12 della scaletta: distribuzione equa, «chiusura
+  parziale» col nome giusto, lo spostamento dello stop RIMESSO anche nelle chiusure parziali
+  (decisione cambiata dal proprietario), le stesse scelte dentro l'apertura automatica, e ogni
+  sala con le sue righe di target - imparate dai segnali che arrivano, non uguali per tutte.
+  Verificato con una prova che la resa della sala tiene conto dello spostamento dello stop, e
+  che senza candele in memoria NON lo fa (ora la nota sotto il grafico lo dice a chiare lettere).
+  2 test nuovi, 3 aggiornati alla decisione nuova - verde

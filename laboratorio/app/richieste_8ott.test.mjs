@@ -8,7 +8,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
 
-test('la metodologia «chiusure parziali» toglie davvero gli spostamenti dello stop', async () => {
+test('lo spostamento dello stop vale in tutte e due le metodologie', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(() => {
@@ -26,7 +26,11 @@ test('la metodologia «chiusure parziali» toglie davvero gli spostamenti dello 
       };
     });
     assert.deepEqual(r.posizioni, [{quando:2,dove:'entrata'},{quando:3,dove:1},{quando:4,dove:2}]);
-    assert.deepEqual(r.parziali, [], 'con le chiusure parziali nessuno spostamento arriva a chi esegue');
+    // DECISIONE CAMBIATA dal proprietario (8 ottobre 2026): nella v107 le chiusure parziali
+    // non avevano lo spostamento dello stop. L'ha richiesto indietro, e ha ragione - proprio
+    // perche' la posizione e' una sola, spostare quello stop a un target gia' raggiunto mette
+    // al sicuro tutto quello che resta aperto.
+    assert.deepEqual(r.parziali, r.posizioni, 'lo stop si sposta anche con una posizione sola chiusa a pezzi');
     assert.deepEqual(r.vecchia, r.posizioni, 'una configurazione vecchia non cambia comportamento');
     assert.equal(r.modoVuoto, 'posizioni');
     assert.equal(r.modoScritto, 'parziali');
@@ -52,7 +56,7 @@ test('il riassunto della strategia dice quale metodologia è in uso', async () =
     assert.match(r.a, /pareggio/);
     assert.match(r.b, /chiusure parziali/);
     assert.match(r.b, /20\/30\/50%/);
-    assert.doesNotMatch(r.b, /pareggio/, 'con le parziali non si riassume uno spostamento che non c\'è');
+    assert.match(r.b, /pareggio/, 'anche con le parziali lo stop si sposta: il riassunto deve dirlo');
     assert.match(r.c, /chiusure parziali/);
     assert.match(r.c, /pareggio/, 'sulle cripto lo stop si sposta comunque');
     assert.deepEqual(errori, []);
