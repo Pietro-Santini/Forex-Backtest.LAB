@@ -15,7 +15,11 @@
 ; ============================================================================
 
 #define MyAppName "Forex Backtest LAB"
-#define MyAppVersion "1.0.77"
+; LA VERSIONE SEGUE QUELLA DELL'APP: app vNN -> Setup 1.0.NN. Il flusso "Installer Windows"
+; la riscrive da sw.js (unica fonte: il CACHE_NAME) prima di compilare, cosi' non puo' restare
+; indietro. Il numero qui sotto serve a chi compila a mano: prima era rimasto fermo a 1.0.77
+; mentre uscivano quattro Setup diversi, tutti con lo stesso nome.
+#define MyAppVersion "1.0.105"
 #define MyAppPublisher "Pietro Santini"
 #define MyAppExeName "ForexBacktestLAB.exe"
 

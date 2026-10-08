@@ -3540,8 +3540,20 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <div class="tgCfgNota" style="margin-top:6px">Finché è spento, il computer risponde solo a sé stesso. Acceso, lo raggiungono i dispositivi del tuo account <b>Tailscale</b> — e <b>solo</b> con la chiave qui sotto.</div>
        <div id="fblRemotoIndirizzi" class="tgCfgRiep" style="margin-top:10px"></div>
        <div id="fblMuro" class="fblMuro" style="display:none"></div>
-       <!-- La chiave di questo computer non si mostra e non si ricopia piu' da nessuna parte: al
-            server la manda il computer stesso, e al telefono non serve saperla. -->
+       <!-- LA CHIAVE DI QUESTO COMPUTER. Al server la manda il computer da solo, e per ordini e
+            segnali al telefono non serve saperla. Serve invece per il GRAFICO quando il telefono
+            parla direttamente con questo computer, perche' e' lui a rispondere. -->
+       <div id="fblChiavePc" class="tgCfgRiep" style="margin-top:10px;display:none">
+        <div style="font-weight:700;margin-bottom:4px">Chiave di questo computer</div>
+        <div class="tgCfgNota" style="margin:0 0 8px">Serve solo per vedere il <b>grafico</b> dal telefono
+         o dal tablet, insieme al nome qui sopra. Per ordini e segnali basta il server.
+         Trattala come una password: chi ce l'ha, insieme al tuo account Tailscale, può mandare ordini.</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+         <code id="fblChiavePcVal" style="font-family:ui-monospace,Consolas,monospace;font-size:13px;color:#e8c34a;word-break:break-all;flex:1 1 180px;filter:blur(5px);transition:filter .15s">—</code>
+         <button type="button" class="miniBtn" style="width:auto" id="fblChiavePcMostra">Mostra</button>
+         <button type="button" class="miniBtn" style="width:auto" id="fblChiavePcCopia">Copia</button>
+        </div>
+       </div>
        <div id="fblRegistrazione" class="tgCfgRiep" style="margin-top:10px"></div>
      </div>
 
@@ -25424,6 +25436,45 @@ async function fblRemotoApri(){
   try{ fblRegistraAlServer(); }catch(e){}
  }
 }
+// Il riquadro della chiave del PC. Coperta finche' non si preme "Mostra": una chiave scritta in
+// chiaro in una pagina aperta sul monitor e' una chiave che si legge da sopra la spalla, o in una
+// foto dello schermo mandata per chiedere aiuto.
+let fblChiavePcTesto='';
+function fblChiavePcMostra(chiave){
+ const box=$('fblChiavePc'), val=$('fblChiavePcVal'); if(!box||!val)return;
+ fblChiavePcTesto=String(chiave||'');
+ if(!fblChiavePcTesto){ box.style.display='none'; return; }
+ box.style.display='';
+ val.textContent=fblChiavePcTesto;
+}
+fblDelega('click',ev=>{
+ const t=ev.target; if(!t||!t.closest)return;
+ if(t.closest('#fblChiavePcMostra')){
+  const val=$('fblChiavePcVal'), b=t.closest('#fblChiavePcMostra');
+  const coperta=val.style.filter!=='none';
+  val.style.filter=coperta?'none':'blur(5px)';
+  b.textContent=coperta?'Nascondi':'Mostra';
+  return;
+ }
+ if(t.closest('#fblChiavePcCopia')){
+  const b=t.closest('#fblChiavePcCopia');
+  // Senza appunti (pagina non sicura, permesso negato) si seleziona il testo: copiare a mano
+  // resta possibile, invece di un pulsante che non fa niente e non lo dice.
+  const fatto=()=>{ b.textContent='Copiata'; setTimeout(()=>{ b.textContent='Copia'; },1500); };
+  try{
+   navigator.clipboard.writeText(fblChiavePcTesto).then(fatto).catch(()=>fblSelezionaTesto($('fblChiavePcVal'),b));
+  }catch(e){ fblSelezionaTesto($('fblChiavePcVal'),b); }
+  return;
+ }
+});
+function fblSelezionaTesto(el,bottone){
+ try{
+  el.style.filter='none';
+  const r=document.createRange(); r.selectNodeContents(el);
+  const s=window.getSelection(); s.removeAllRanges(); s.addRange(r);
+  if(bottone)bottone.textContent='Copiala a mano';
+ }catch(e){}
+}
 async function fblRemotoLeggi(){
  const ind=$('fblRemotoIndirizzi');
  try{
@@ -25439,6 +25490,10 @@ async function fblRemotoLeggi(){
   }
   const d=r.data||{};
   if($('fblRemotoAttivo'))$('fblRemotoAttivo').checked=!!d.rete;
+  // La chiave si vede solo da QUESTO computer: la pagina la chiede al suo stesso ponte, che
+  // risponde alle richieste locali. Da un altro dispositivo questo riquadro resta chiuso, perche'
+  // la risposta non arriva - ed e' giusto cosi', non e' una chiave da girare in giro.
+  fblChiavePcMostra(d.chiave||'');
   try{ fblTsDisegna(d); }catch(e){ console.log('[Accesso remoto] stato di Tailscale non mostrato:',e); }
   try{ fblGuidaDisegna(); }catch(e){}
   if(ind){
@@ -25744,8 +25799,12 @@ function fblServiziElenco(){
   {chiave:'ordini', nome:'Ordini', dove: srv?'computer, tramite il server':'computer',
    url: srv?perServer(8000,'/pc/health'):fblConChiave(fblBaseUrl(8000)+'/health')},
   {chiave:'grafico', nome:'Grafico',
-   dove: (srv&&fblPonteLocaleVivo===false)?'computer, tramite il server':'computer',
-   url: fblConChiave(fblBaseUrl(8001)+'/health')},
+   // Quello che c'e' scritto e' la strada che si sta USANDO davvero, non quella che si suppone.
+   dove: fblGraficoVia==='server'?'computer, tramite il server'
+        :fblGraficoVia==='diretto'?'computer, in diretta'
+        :'computer',
+   url: fblGraficoVia==='server'?fblServerConChiave(fblServerUrl(8000)+'/pc/8001/health')
+                                :fblConChiave(fblBaseUrl(8001)+'/health')},
   {chiave:'segnali', nome:'Segnali', dove: srv?'server':'computer',
    url: srv?perServer(8769,'/health'):fblConChiave(fblBaseUrl(8769)+'/health')}
  ];
@@ -25788,6 +25847,12 @@ async function fblServiziControlla(){
   // Tutti e tre insieme: in fila sarebbero 18 secondi davanti a una schermata che sembra ferma.
   const esiti=await Promise.all(elenco.map(x=>fblProvaUno(x,6000)));
   fblServiziDisegna(esiti);
+  // Il grafico non risponde dalla strada che stiamo usando: si riprova a sceglierla (dritta al
+  // computer, oppure dal server). Al giro dopo il pallino dira' com'e' andata.
+  try{
+   const g=esiti.find(x=>x.chiave==='grafico');
+   if(g&&!g.ok&&!fblStradaInCorso)fblScegliStradaGrafico();
+  }catch(e){}
   esiti.forEach(x=>fblLog('servizio '+x.nome+' ('+x.dove+'): '+x.esito+' in '+x.ms+' ms'));
   return esiti;
  }finally{ fblServiziInCorso=false; }
@@ -27351,6 +27416,43 @@ async function fblControllaPonteLocale(){
   return vivo;
  })();
  return fblPonteLocaleInCorso;
+}
+// QUALE STRADA PER IL GRAFICO: 'locale' (siamo sul computer), 'diretto' (telefono che parla
+// dritto col computer via Tailscale, serve la chiave DI QUEL COMPUTER) oppure 'server' (il server
+// inoltra alla porta 8001 del computer). null = nessuna delle due risponde.
+let fblGraficoVia=null;
+function fblUrlGrafico(){
+ if(fblGraficoVia==='server')return fblServerUrl(8000)+'/pc/8001';
+ return fblBaseUrl(8001);
+}
+async function fblRisponde(url,ms){
+ try{
+  const c=new AbortController(); const t=setTimeout(()=>c.abort(),ms||4000);
+  const r=await fetch(url,{signal:c.signal,cache:'no-store'});
+  clearTimeout(t); return !!(r&&r.ok);
+ }catch(e){ return false; }
+}
+// Si prova, non si indovina. L'ordine conta: la strada dritta e' piu' corta di un passaggio, e per
+// dei prezzi al millisecondo quel passaggio si sente.
+let fblStradaInCorso=null;
+async function fblScegliStradaGrafico(){
+ if(fblStradaInCorso)return fblStradaInCorso;
+ fblStradaInCorso=(async()=>{
+  try{
+   await fblControllaPonteLocale();
+   if(fblPonteLocaleVivo===true){ fblGraficoVia='locale'; return 'locale'; }
+   fblGraficoVia=null;                       // azzerata: fblUrlGrafico deve dare la strada dritta
+   if(await fblRisponde(fblConChiave(fblBaseUrl(8001)+'/health'))){ fblGraficoVia='diretto'; return 'diretto'; }
+   if(fblServer()&&await fblRisponde(fblServerConChiave(fblServerUrl(8000)+'/pc/8001/health'))){
+    fblGraficoVia='server'; return 'server';
+   }
+   return null;
+  }finally{
+   fblStradaInCorso=null;
+   try{ fblAggiornaIndirizzi(); }catch(e){}
+  }
+ })();
+ return fblStradaInCorso;
 }
 function fblBaseUrl(porta,host){
  const h=(host!=null?host:fblHost());
@@ -32841,14 +32943,18 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
 // VWAP, disegni, SL/TP delle posizioni simulate) legge da `rows`/`baseRows` esattamente come
 // sempre: non richiede NESSUNA modifica, perché questo modulo scrive nella stessa identica
 // struttura dati (csvLibrary[0].rows) che già scrive loadLiveHistoryFromCapital.
-let MT5_FEED_URL=fblBaseUrl(8001);
+let MT5_FEED_URL=fblUrlGrafico();
 function fblAggiornaIndirizzi(){
  MT5_BRIDGE_URL=fblBaseUrl(8000);
- MT5_FEED_URL=fblBaseUrl(8001);
+ // Il canale dal vivo nasce da qui: `MT5_FEED_URL.replace(/^http/,'ws')`. Con la strada del server
+ // diventa wss://<server>:8000/pc/8001/ws/..., che fblConChiave riconosce e firma con la chiave
+ // del server - non con quella del computer, che dal telefono non c'e'.
+ MT5_FEED_URL=fblUrlGrafico();
 }
 // Si chiede subito se il ponte locale c'e': da questo dipende se le tre porte del computer si
-// raggiungono dirette (sul computer) o passando dal server (dal telefono).
-try{ fblControllaPonteLocale(); }catch(e){}
+// raggiungono dirette (sul computer) o passando dal server (dal telefono). Per il grafico si prova
+// anche la strada: dritta al computer se risponde, altrimenti dal server.
+try{ fblScegliStradaGrafico(); }catch(e){}
 // symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
 // (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
 // dati irraggiungibile (va MAI messo in cache in modo permanente, si ritenta al giro successivo).
