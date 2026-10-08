@@ -612,6 +612,15 @@ async def prepara_emulatore(adb: Adb, cfg: dict, log: Callable[[str], None], sta
         stato["syntra_bluestacks"] = "emulatore non pronto: %s" % e
 
 
+def sistema_windows() -> bool:
+    """Siamo su Windows? Separata apposta: il collaudo deve poter provare il giro anche su Linux.
+
+    Fingere `os.name` dal test non si puo' - lo guardano anche pathlib e shutil, e cambiarlo rompe
+    pytest. Questa funzione invece si sostituisce senza conseguenze.
+    """
+    return os.name == "nt"
+
+
 async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato: dict) -> None:
     """Gira per sempre. `consegna(segnale, utente, quando_ms)` e' la funzione del ponte.
     Modalita' "notifiche" (predefinita, RICHIESTO): resta sulla pagina Notifiche di Syntra.
@@ -621,8 +630,7 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
     # Prima si tentava lo stesso e usciva "[Errno 2] No such file or directory" con un percorso di
     # Windows, che manda a cercare un file mancante invece di dire la cosa vera - ed e' successo
     # davvero appena il ponte dei segnali e' stato spostato sul server.
-    import os as _os
-    if _os.name != "nt":
+    if not sistema_windows():
         # IN `syntra_errore`, non in una chiave nostra: e' quella che l'app mostra. Scritto altrove,
         # il messaggio non arriva a nessuno e l'app resta "attiva, nessun errore, nessuna sala".
         stato["syntra_errore"] = ("Syntra funziona solo sul computer: legge l'app Android dentro "

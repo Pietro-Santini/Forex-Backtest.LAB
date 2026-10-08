@@ -37,6 +37,12 @@ class Adb:
 
 def _gira(monkeypatch, quanti_giri, trovata_dal_giro=None, mancate_prima=0):
     """Fa girare `ciclo` per `quanti_giri` e torna (aggiornamenti, stato, adb)."""
+    # SU LINUX `ciclo` ESCE SUBITO (Syntra legge BlueStacks via ADB: su un server non c'e'), quindi
+    # il giro non partirebbe e questi test non vedrebbero niente: verdi sul PC, rossi su GitHub -
+    # ed e' andata esattamente cosi'. Qui interessa il giro, non il sistema.
+    # Si sostituisce la FUNZIONE, non `os.name`: quello lo guardano anche pathlib e shutil, e
+    # cambiarlo rompe pytest stesso.
+    monkeypatch.setattr(s, "sistema_windows", lambda: True)
     adb = Adb()
     stato = {}
     aggiornamenti = []
@@ -115,9 +121,7 @@ def test_tutto_bene_dal_primo_giro_resta_come_prima(monkeypatch):
 
 def test_su_linux_lo_dice_dove_l_app_lo_legge(monkeypatch):
     """Difetto introdotto col messaggio stesso: finiva in una chiave che l'app non guarda."""
-    monkeypatch.setattr(s.os, "name", "posix", raising=False)
-    import os as _o
-    monkeypatch.setattr(_o, "name", "posix")
+    monkeypatch.setattr(s, "sistema_windows", lambda: False)
     stato = {"syntra_collegato": True}
     asyncio.run(s.ciclo({}, lambda *a: None, lambda m: None, stato))
     assert "BlueStacks" in (stato.get("syntra_errore") or ""), \
