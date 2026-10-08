@@ -143,3 +143,20 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   `🐙 Kraken <conto>`, il menu ha due famiglie («Tutti i conti Forex» / «Tutti i conti Kraken»),
   si parte dal solo Forex e la somma fra i due mondi resta possibile ma con un avviso scritto.
   Test: `laboratorio/app/dashboard_conti.test.mjs`.
+- **Il ponte dei segnali moriva su una emoji** — risolto v106 — 7 ottobre 2026, 16:29:
+  `UnicodeEncodeError: 'charmap' codec can't encode character '✅'` in `_log`, console cp1252.
+  Da quel momento niente piu' segnali, ne' Telegram ne' Syntra, e nessuno lo ha riacceso. Ora
+  `_scrivibile()` riduce il testo a cio' che la console sa scrivere (l'emoji diventa `?`) e `_log`
+  non puo' sollevare nulla. Test: `laboratorio/ponte/test_diario_emoji.py`.
+- **Syntra non partiva piu' da quando i segnali sono sul server** — risolto v106 — il ponte sul
+  computer lo accendeva l'app con `/segnali-launch`, e con un server configurato non lo accende
+  piu'. Ma Syntra vive li' (legge BlueStacks via ADB). Ora i ponti sono DUE: Telegram sul server,
+  Syntra sul computer avviata con `--solo-syntra`, che non tocca Telegram — avviare qui la sorgente
+  Telegram vorrebbe dire chiedere il codice per un account gia' collegato sul server. I segnali dei
+  due finiscono nella stessa bacheca; lo stato di Syntra lo scrive solo il ponte di Syntra.
+  Test: `laboratorio/ponte/test_solo_syntra.py`, `laboratorio/app/due_ponti_segnali.test.mjs`.
+- **Il grafico dal telefono non passava mai dal server** — risolto v105 — dei tre servizi era
+  l'unico senza `srv ?`: usava `fblBaseUrl(8001)`, che va al server solo col campo "computer" vuoto.
+  Con un indirizzo vecchio rimasto scritto, ordini e segnali lo ignoravano e il grafico ci sbatteva.
+  Ora si prova: prima dritto al computer (una tappa in meno per i prezzi al millisecondo), poi dal
+  server; e c'e' scritto quale strada e' in uso. Test: `laboratorio/app/strada_grafico.test.mjs`.

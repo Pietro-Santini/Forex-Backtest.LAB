@@ -23269,16 +23269,30 @@ function syntraDisegna(){
 ['syntraIndirizzo','syntraAdb','syntraBluestacks'].forEach(id=>$(id)?.addEventListener('input',()=>{ syntraCampiToccati=true; }));
 function syntraManda(){
  syntraCampiToccati=false;
- const ok=tgInvia({azione:'syntra_config',attivo:!!$('syntraAttivo')?.checked,
+ const ok=tgInviaSyntra({azione:'syntra_config',attivo:!!$('syntraAttivo')?.checked,
   indirizzo:($('syntraIndirizzo')?.value||'').trim(),adb:($('syntraAdb')?.value||'').trim(),
   avvio_automatico:!!$('syntraAvvio')?.checked,riduci:!!$('syntraRiduci')?.checked,bluestacks:($('syntraBluestacks')?.value||'').trim()});
- if(!ok)appAlert('Il ponte dei segnali non è collegato: accendilo dalla sezione Telegram qui sopra, poi riprova.');
+ if(!ok)appAlert(tgSyntraSeparata()
+  ? 'Il lettore di Syntra su questo computer non è ancora collegato: sto provando ad avviarlo, riprova fra qualche secondo.'
+  : 'Il ponte dei segnali non è collegato: accendilo dalla sezione Telegram qui sopra, poi riprova.');
 }
 $('syntraAttivo')?.addEventListener('change',syntraManda);
 ['syntraAvvio','syntraRiduci'].forEach(id=>$(id)?.addEventListener('change',syntraManda));
 $('syntraSalvaBtn')?.addEventListener('click',syntraManda);
-function tgApplicaStato(m){
- if(m.syntra&&typeof m.syntra==='object'){
+// `fonte`: da quale dei due ponti arriva questo stato. Lo stato di Syntra lo scrive SOLO il ponte
+// di Syntra: quello del server gira su Linux e direbbe "non puo' funzionare", cancellando lo stato
+// vero che arriva dal computer.
+function tgApplicaStato(m,fonte){
+ if(fonte==='syntra'){
+  // Da questo ponte interessa Syntra e basta: non ha sale Telegram, non ha account, non ha accesso.
+  if(m.syntra&&typeof m.syntra==='object'){
+   syntraStatoUltimo=m.syntra;
+   (m.syntra.utenti||[]).forEach(u=>syntraVisto('Syntra · '+u));
+   try{ syntraDisegna(); }catch(e){}
+  }
+  return;
+ }
+ if(m.syntra&&typeof m.syntra==='object'&&!tgSyntraSeparata()){
   syntraStatoUltimo=m.syntra;
   // RICHIESTO: un utente nuovo NON diventa sala da solo. Il ponte dice chi ha visto; qui lo si
   // annota fra i "visti" (elenco in Sala segnali → Syntra) e basta: sala lo diventa solo con
@@ -23354,29 +23368,66 @@ function tgInvia(oggetto){
  try{ if(tgWs&&tgWs.readyState===1){ tgWs.send(JSON.stringify(oggetto)); return true; } }catch(e){}
  return false;
 }
+// Le cose di SYNTRA vanno al ponte di Syntra, quando e' separato: la configurazione deve arrivare
+// a chi legge davvero l'emulatore. Mandata all'altro si salverebbe nel posto sbagliato e il lettore
+// non partirebbe mai - l'interruttore si muove e non succede niente.
+function tgInviaSyntra(oggetto){
+ if(tgSyntraSeparata()){
+  try{ if(tgWsSyntra&&tgWsSyntra.readyState===1){ tgWsSyntra.send(JSON.stringify(oggetto)); return true; } }catch(e){}
+  try{ tgSyntraCollega(); }catch(e){}
+  return false;
+ }
+ return tgInvia(oggetto);
+}
 // Un solo canale con il ponte: i segnali arrivano, i comandi partono. Si e' scelto il WebSocket e
 // non fetch() perche' in prova una fetch() verso 127.0.0.1 veniva rifiutata dalla pagina mentre il
 // WebSocket verso lo stesso indirizzo funzionava - ed e' la stessa via gia' usata per Binance e
 // per il DOM di MT5.
-function tgCollega(){
- if(!tgAttivo()){ tgAggiornaInterruttore(); return; } // interruttore spento: nessuna presa, punto
- const porta=tgPortNow();
- const dove=fblServer()?('server:'+fblServer()):porta;
- if(tgWs&&tgWsPorta===dove&&(tgWs.readyState===0||tgWs.readyState===1))return;
- try{ if(tgWs){ tgWs.onclose=null; tgWs.close(); } }catch(e){}
- tgWs=null; tgWsPorta=dove;
+// IL PONTE DI SYNTRA, quando e' separato da quello di Telegram. Vero solo sul computer: Syntra
+// legge l'app Android dentro BlueStacks, e dal telefono non c'e' niente da leggere.
+let tgWsSyntra=null, tgSyntraRiconnT=null, tgSyntraAvvioA=0;
+function tgSyntraSeparata(){ return !!(fblServer()&&fblPonteLocaleVivo===true); }
+// Accende il ponte di Syntra su questo computer e ci si collega. Non tocca Telegram: parte con
+// --solo-syntra proprio per quello.
+async function tgSyntraCollega(){
+ if(!tgSyntraSeparata())return;
+ if(!tgAttivo())return;
+ if(tgWsSyntra&&(tgWsSyntra.readyState===0||tgWsSyntra.readyState===1))return;
+ // Avviarlo e' una richiesta al servizio locale: non piu' di una al minuto, altrimenti a ogni
+ // caduta lo si tempesterebbe.
+ if(Date.now()-tgSyntraAvvioA>60000){
+  tgSyntraAvvioA=Date.now();
+  try{ await fetchMt5WithTimeout('/segnali-launch',
+    {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({solo_syntra:true})},20000); }
+  catch(e){}
+ }
  let ws;
- const indirizzoWs=fblServer()?fblServerConChiave(fblServerUrl(8769).replace(/^https/,'wss')+'/ws/segnali')
-   :fblConChiave(fblBaseUrl(porta).replace(/^http/,'ws')+'/ws/segnali');
- try{ ws=new WebSocket(indirizzoWs); }
- catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
- tgWs=ws;
- tgStato('Collegamento al ponte…');
- ws.onopen=()=>{ tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'}); };
- ws.onmessage=ev=>{
+ // Sempre 127.0.0.1, mai il server: questo ponte e' qui. L'indirizzo si costruisce come l'altro,
+ // passando l'host esplicito, cosi' l'instradamento verso il server non entra in mezzo.
+ try{ ws=new WebSocket(fblConChiave(fblBaseUrl(tgPortNow(),'127.0.0.1').replace(/^http/,'ws')+'/ws/segnali')); }
+ catch(e){ return; }
+ tgWsSyntra=ws;
+ ws.onopen=()=>{ try{ ws.send(JSON.stringify({azione:'leggi_chat'})); }catch(e){} };
+ ws.onmessage=ev=>tgMessaggioSegnali(ev,'syntra');
+ ws.onerror=()=>{};
+ ws.onclose=()=>{
+  if(tgWsSyntra!==ws)return;
+  tgWsSyntra=null;
+  clearTimeout(tgSyntraRiconnT);
+  tgSyntraRiconnT=setTimeout(()=>{ try{ tgSyntraCollega(); }catch(e){} },10000);
+ };
+}
+// I MESSAGGI DEL PONTE DEI SEGNALI, da qualunque dei due arrivino.
+// `fonte`: 'principale' (Telegram, dal server o dal computer) oppure 'syntra' (il ponte acceso sul
+// computer solo per leggere l'app Syntra nell'emulatore). I segnali passano per la stessa strada -
+// stessa bacheca, stessa scadenza, stessa apertura automatica - perche' per chi guarda sono la
+// stessa cosa; cambia solo da dove arrivano.
+function tgMessaggioSegnali(ev,fonte){
    let m; try{ m=JSON.parse(ev.data); }catch(e){ return; }
-   if(m.tipo==='stato'){ tgApplicaStato(m); return; }
+   if(m.tipo==='stato'){ tgApplicaStato(m,fonte); return; }
    if(m.tipo==='storico_sala'){ try{ fblCronoRicevi(m); }catch(e){} return; }
+   // Da qui in giu' sono cose di Telegram: il ponte di Syntra non ha ne' account ne' accesso.
+   if(fonte==='syntra'&&(m.tipo==='uscito'||m.tipo==='battito'))return;
    if(m.tipo==='uscito'){ try{ if(tgUscitaAttesa)tgUscitaAttesa(m); }catch(e){} return; }
    if(m.tipo==='battito'){
      // Il battito porta solo collegato/errore, e prima veniva buttato via: era il secondo motivo per
@@ -23423,7 +23474,25 @@ function tgCollega(){
      console.log('[Segnali] '+m.segnale.direzione+' '+m.segnale.strumento
        +' conf '+m.segnale.confidenza+'%'+(m.segnale.avvisi.length?(' AVVISI: '+m.segnale.avvisi.join('; ')):''));
    }
- };
+}
+function tgCollega(){
+ if(!tgAttivo()){ tgAggiornaInterruttore(); return; } // interruttore spento: nessuna presa, punto
+ const porta=tgPortNow();
+ const dove=fblServer()?('server:'+fblServer()):porta;
+ if(tgWs&&tgWsPorta===dove&&(tgWs.readyState===0||tgWs.readyState===1))return;
+ try{ if(tgWs){ tgWs.onclose=null; tgWs.close(); } }catch(e){}
+ tgWs=null; tgWsPorta=dove;
+ let ws;
+ const indirizzoWs=fblServer()?fblServerConChiave(fblServerUrl(8769).replace(/^https/,'wss')+'/ws/segnali')
+   :fblConChiave(fblBaseUrl(porta).replace(/^http/,'ws')+'/ws/segnali');
+ try{ ws=new WebSocket(indirizzoWs); }
+ catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
+ tgWs=ws;
+ tgStato('Collegamento al ponte…');
+ ws.onopen=()=>{ tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'}); };
+ ws.onmessage=ev=>tgMessaggioSegnali(ev,'principale');
+ // Il ponte di Syntra e' un'altra cosa e sta altrove: si apre insieme, non al posto di questo.
+ try{ tgSyntraCollega(); }catch(e){}
  ws.onerror=()=>{};
  ws.onclose=()=>{
    if(tgWs!==ws)return;
@@ -38753,7 +38822,11 @@ window.fblCronoLeggi=function(daCapo){
  // Il periodo scelto: su una sala con anni di messaggi leggere tutto dura minuti, e quasi
  // sempre interessa solo l'ultimo pezzo.
  const mesi=Number($('fblCronoPeriodo')?.value||0)||0;
- const ok=(typeof tgInvia==='function')&&tgInvia({azione:'storico_sala',sala,richiesta:C.richiesta,da_capo:!!daCapo,mesi});
+ // Ogni ponte ha lo storico delle SUE sale: quello di Syntra sta sul computer, quello delle sale
+ // Telegram sul server. Chiesto all'altro, tornerebbe vuoto senza spiegare perche'.
+ const verso=(typeof syntraEUtente==='function'&&syntraEUtente(sala)&&typeof tgInviaSyntra==='function')
+   ? tgInviaSyntra : tgInvia;
+ const ok=(typeof verso==='function')&&verso({azione:'storico_sala',sala,richiesta:C.richiesta,da_capo:!!daCapo,mesi});
  if(!ok){ stato('Il ponte dei segnali non è collegato: accendilo in Collegamento/Modalità → Sala segnali.',true); return; }
  C.inCorso=true;
  const quanto=mesi?('degli ultimi '+(mesi===12?'12 mesi':(mesi===24?'2 anni':mesi+' mes'+(mesi===1?'e':'i')))):'';

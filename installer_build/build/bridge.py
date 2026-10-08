@@ -877,8 +877,15 @@ def _assicura_librerie_segnali(interprete: str, cartella: str) -> None:
 
 
 @app.post("/segnali-launch")
-def segnali_launch():
+def segnali_launch(corpo: dict | None = None):
+    """Accende il ponte dei segnali su questo computer.
+
+    `solo_syntra`: il ponte legge SOLO l'app Syntra nell'emulatore e non tocca Telegram. Si usa
+    quando Telegram gira gia' su un altro ponte (il server), e qui serve solo Syntra - che puo'
+    girare unicamente sul computer, perche' legge BlueStacks con ADB.
+    """
     global _processo_segnali
+    solo_syntra = bool((corpo or {}).get("solo_syntra"))
     if _porta_occupata(PORTA_SEGNALI):
         return {"ok": True, "gia_attivo": True, "messaggio": "Il ponte dei segnali era gia' avviato."}
 
@@ -887,7 +894,7 @@ def segnali_launch():
     cartella = None
     exe = _trova_exe_segnali()
     if exe:
-        comando = [exe]
+        comando = [exe] + (["--solo-syntra"] if solo_syntra else [])
         cartella = os.path.dirname(exe)
     else:
         # Ripiego per la cartella di sviluppo: i sorgenti, con il Python del sistema.
@@ -906,7 +913,7 @@ def segnali_launch():
                        "SegnaliBridge.exe. Reinstalla l'applicazione, oppure installa Python "
                        "da python.org.",
             )
-        comando = [interprete, script]
+        comando = [interprete, script] + (["--solo-syntra"] if solo_syntra else [])
         cartella = os.path.dirname(script)
         # RICHIESTO ("mancavano le librerie, per questo il collegamento non andava"): coi sorgenti
         # il ponte usa il Python del PC, che puo' non avere telethon & co. Si controlla e, se manca

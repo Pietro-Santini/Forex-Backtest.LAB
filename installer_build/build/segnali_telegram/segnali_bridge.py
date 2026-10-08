@@ -145,9 +145,32 @@ TG_VIVO: Dict[str, object] = {"client": None, "ent": {}}
 STORICO_MAX = 50
 
 
+def _scrivibile(testo: str, codifica: str = "") -> str:
+    """Il testo, ridotto a quello che la console di questo computer sa scrivere.
+
+    Su Windows la console usa cp1252: 256 caratteri, nessuna emoji. I messaggi delle sale ne sono
+    pieni (spunte, frecce, semafori), e una sola emoji faceva morire il ponte dentro `print`.
+    """
+    # La codifica si puo' passare: cosi' il collaudo prova il caso vero (cp1252) senza dover
+    # falsificare sys.stdout, che sotto pytest e' gia' suo e non si lascia sostituire.
+    codifica = codifica or getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        testo.encode(codifica)
+        return testo
+    except (UnicodeEncodeError, LookupError):
+        # I caratteri che non ci stanno diventano "?": si perde un disegnino, non il programma.
+        return testo.encode(codifica, "replace").decode(codifica, "replace")
+
+
 def _log(attivo: bool, *parti) -> None:
-    if attivo:
-        print(time.strftime("[%H:%M:%S]"), *parti, flush=True)
+    if not attivo:
+        return
+    # SCRIVERE NEL DIARIO NON PUO' FAR CADERE IL PONTE. Leggere i segnali e' il lavoro; la riga di
+    # diario e' un di piu', e un di piu' non deve mai portarsi via il lavoro.
+    try:
+        print(time.strftime("[%H:%M:%S]"), *(_scrivibile(str(p)) for p in parti), flush=True)
+    except Exception:
+        pass
 
 
 class Bacheca:
@@ -197,7 +220,18 @@ class Bacheca:
 
 
 BACHECA = Bacheca()
-STATO = {"verbose": True, "sim": False, "chat": [], "collegato": False, "errore": None}
+# `solo_syntra`: questo ponte legge SOLO l'app Syntra nell'emulatore e non tocca Telegram. Serve
+# quando Telegram sta su un altro ponte (il server) e qui si vuole soltanto Syntra, che puo' girare
+# unicamente sul computer.
+STATO = {"verbose": True, "sim": False, "solo_syntra": False,
+         "chat": [], "collegato": False, "errore": None}
+
+
+def _modalita() -> str:
+    """Come si chiama quello che sta facendo questo ponte. Lo legge anche l'app."""
+    if STATO.get("solo_syntra"):
+        return "solo-syntra"
+    return "simulatore" if STATO["sim"] else "telegram"
 
 # Cosa sta aspettando l'accesso a Telegram, e cosa e' andato storto l'ultima volta. L'app legge
 # questi due campi nello stato e apre il popup giusto: numero, codice, o password della verifica
@@ -894,9 +928,14 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def _ciclo(_app):
     global _task_sorgente
-    _task_sorgente = asyncio.create_task(
-        sorgente_simulatore() if STATO["sim"] else _sorgente_telegram_sempre()
-    )
+    # In "solo Syntra" la sorgente Telegram NON parte: la sessione e' sull'altro ponte, e accenderla
+    # qui vorrebbe dire chiedere numero e codice per un account gia' collegato altrove.
+    if STATO.get("solo_syntra"):
+        _log(True, "modalita' solo Syntra: Telegram non viene toccato da questo ponte")
+    else:
+        _task_sorgente = asyncio.create_task(
+            sorgente_simulatore() if STATO["sim"] else _sorgente_telegram_sempre()
+        )
     avvia_syntra()
     try:
         yield
@@ -1031,6 +1070,8 @@ async def riavvia_sorgente() -> None:
     # farebbero aprire all'app un popup che non serve piu' a nessuno.
     ACCESSO["serve"] = None
     ACCESSO["errore"] = None
+    if STATO.get("solo_syntra"):
+        return      # qui Telegram non c'e' per scelta: non lo si fa ripartire da una riconfigurazione
     _task_sorgente = asyncio.create_task(
         sorgente_simulatore() if STATO["sim"] else _sorgente_telegram_sempre()
     )
@@ -1045,7 +1086,7 @@ async def leggi_chat():
         "credenziali_presenti": bool(cfg.get("api_id") and cfg.get("api_hash")),
         "collegato": STATO["collegato"],
         "errore": STATO["errore"],
-        "modalita": "simulatore" if STATO["sim"] else "telegram",
+        "modalita": _modalita(),
     }
 
 
@@ -1266,7 +1307,7 @@ async def health():
     r = await BACHECA.riepilogo()
     r.update({
         "ok": True,
-        "modalita": "simulatore" if STATO["sim"] else "telegram",
+        "modalita": _modalita(),
         "collegato": STATO["collegato"],
         "chat": STATO["chat"],
         "errore": STATO["errore"],
@@ -1282,7 +1323,7 @@ async def _stato_chat() -> dict:
         "credenziali_presenti": bool(cfg.get("api_id") and cfg.get("api_hash")),
         "collegato": STATO["collegato"],
         "errore": STATO["errore"],
-        "modalita": "simulatore" if STATO["sim"] else "telegram",
+        "modalita": _modalita(),
         # Cosa aspetta l'accesso in questo momento: l'app apre il popup giusto e rimanda la
         # risposta sullo stesso canale (azioni accesso_telefono / accesso_codice / accesso_password).
         "accesso_serve": ACCESSO["serve"],
@@ -1567,11 +1608,15 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Ponte segnali Telegram per Forex Backtest LAB")
     ap.add_argument("--porta", type=int, default=PORTA_DEFAULT)
     ap.add_argument("--sim", action="store_true", help="simulatore: nessun Telegram necessario")
+    ap.add_argument("--solo-syntra", action="store_true",
+                    help="legge solo Syntra nell'emulatore e non tocca Telegram "
+                         "(da usare quando Telegram gira su un altro ponte)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
     STATO["verbose"] = not args.quiet
     STATO["sim"] = args.sim
+    STATO["solo_syntra"] = args.solo_syntra
 
     # Solo ASCII in queste righe: la console di Windows usa cp1252 e un carattere fuori tabella
     # fa morire il programma prima ancora di partire. Gia' successo su un altro ponte.
@@ -1580,7 +1625,10 @@ def main() -> None:
     print("=" * 70)
     print("  L'app si collega a:  ws://127.0.0.1:%d/ws/segnali" % args.porta)
     print("  Stato:               http://127.0.0.1:%d/health" % args.porta)
-    if args.sim:
+    if args.solo_syntra:
+        print("  MODALITA' SOLO SYNTRA: legge l'app Syntra nell'emulatore.")
+        print("                        Telegram NON viene toccato da questo ponte.")
+    elif args.sim:
         print("  MODALITA' SIMULATORE: i messaggi sono inventati.")
     else:
         print("  Chat lette da:       %s" % FILE_CONFIG)

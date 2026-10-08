@@ -100,3 +100,20 @@
   se non si trovava al primo giro, da li' in poi la pagina non si aggiornava **piu'** e nessuna
   notifica veniva consegnata - con lo stato che diceva "collegato, nessun errore". Ogni stato
   d'avvio deve avere una via d'uscita, e il fallimento va **detto**.
+- **Il testo che arriva da fuori non si stampa mai come viene.** Il 7 ottobre 2026 alle 16:29 il
+  ponte dei segnali e' MORTO per una spunta verde: `UnicodeEncodeError: 'charmap' codec can't
+  encode character '✅'` dentro `_log`. La console di Windows e' cp1252 (256 caratteri, nessuna
+  emoji) e le sale segnali di emoji sono piene — quindi non era un caso raro, era il caso normale:
+  bastava aspettare. Il file *sapeva gia'* del problema (c'era il commento "solo ASCII in queste
+  righe, gia' successo su un altro ponte") ma proteggeva il testo NOSTRO, lasciando scoperto quello
+  che arriva da fuori, che e' l'unico che non si controlla.
+- **Una riga di diario non deve poter fermare il lavoro.** Stesso episodio: scrivere nel log e' un
+  di piu', leggere i segnali e' il lavoro. Ogni `print` o scrittura di diario su testo altrui va in
+  `try/except`, altrimenti un accessorio si porta via il servizio.
+- **Un servizio che qualcuno accendeva e nessuno accende piu'.** `/segnali-launch` lo chiamava
+  l'app; da quando c'e' il server, `tgAssicuraPonte` risponde "c'e' gia'" e non lo accende. Il
+  ponte era morto da ore e niente lo diceva. Spostando un servizio altrove, va sempre chiesto: **chi
+  avviava quello di prima, e cosa ci girava dentro che non si e' spostato?**
+- **`sys.stdout` sotto pytest e' di pytest.** Sostituirlo da un test non funziona (la cattura lo
+  rimette) e i test falliscono per il motivo sbagliato. Se una funzione deve essere provata,
+  l'informazione che le serve si passa come parametro invece di leggerla da una variabile globale.
