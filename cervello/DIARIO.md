@@ -146,3 +146,7 @@ Formato: data — chi — cosa — esito collaudo — commit.
   dal vivo non puo' piu' essere attribuito all'asset sbagliato durante un cambio.
   Test: interruttori_posizioni.test.mjs, test_syntra_audcad.py (aggiunto anche a collauda.sh,
   dove non sarebbe mai girato). - verde - Falliti: 0
+- 2026-10-09 - Claude - app v124: le orizzontali di prezzo solo sulle posizioni aperte, non piu'
+  sui trade chiusi (segnalato dal proprietario). Il test e' costato tre tentativi e la lezione
+  sta in LEZIONI.md: passava sia prima sia dopo, perche' le operazioni finte cadevano fuori
+  dalla finestra visibile e non venivano disegnate affatto. - verde - Falliti: 0

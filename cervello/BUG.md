@@ -3,6 +3,14 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Le righe di prezzo comparivano anche sulle operazioni chiuse** - risolto v124 -
+  9 ottobre 2026, segnalato dal proprietario: «vedo centinaia di righe, esce fuori un bordello».
+  L'interruttore del passo 22 disegnava le orizzontali di apertura E chiusura dentro
+  `drawClosedTradeMarkers`, cioe' per ogni trade concluso: con uno storico lungo sono due righe
+  per operazione che attraversano tutto il grafico. Ora restano solo sulle posizioni APERTE,
+  dove dicono a che prezzo si e' entrati su qualcosa di ancora vivo; su una conclusa non
+  aggiungevano nulla, perche' ci sono gia' freccia e casella.
+  Test: `laboratorio/app/interruttori_posizioni.test.mjs` (prima rosso: 20 righe da 10 operazioni).
 - **Il grafico del rendimento si bloccava e lampeggiava bianco al tocco** - risolto v111 -
   8 ottobre 2026, segnalato su telefono e tablet. Quattro difetti nello scorrimento introdotto
   con la v107: (1) il canvas veniva RIALLOCATO a ogni movimento del dito - riassegnare

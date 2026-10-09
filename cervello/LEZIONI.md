@@ -157,3 +157,9 @@
   ramo inghiottiva l'errore: il sintomo era «la funzione non viene chiamata», mentre veniva chiamata
   e falliva. Nei finti dei test vanno definiti **tutti** i contenitori, e un'eccezione inattesa deve
   arrivare al test invece di essere assorbita. — 9 ottobre 2026.
+- **Un test sul disegno va prima visto fallire, e poi gli si chiede perche' passava.** Il 9
+  ottobre 2026 il test sulle righe di prezzo era verde sia col difetto sia senza: le operazioni
+  finte stavano agli indici 10-30 mentre a schermo c'erano i 100-399, quindi non veniva disegnato
+  niente e l'assenza delle righe non dimostrava nulla. Chi prova un disegno deve mettere nel test
+  una **prova di controllo** - «questa roba viene disegnata davvero?» - altrimenti misura il
+  vuoto e lo scambia per una conferma.
