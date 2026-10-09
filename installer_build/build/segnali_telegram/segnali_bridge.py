@@ -1352,7 +1352,8 @@ async def _stato_chat() -> dict:
                    "bluestacks": (cfg.get("syntra") or {}).get("bluestacks") or "",
                    "stato_bluestacks": STATO.get("syntra_bluestacks"),
                    "modalita": STATO.get("syntra_modalita") or "notifiche",
-                   "notifiche": STATO.get("syntra_notifiche")},
+                   "notifiche": STATO.get("syntra_notifiche"),
+                   "profilo": STATO.get("syntra_profilo")},
     }
 
 
@@ -1364,7 +1365,8 @@ def _firma_stato() -> tuple:
     """
     return (ACCESSO["serve"], ACCESSO["errore"], STATO["collegato"], STATO["errore"],
             tuple(STATO["chat"]), bool(STATO.get("syntra_collegato")), STATO.get("syntra_errore"),
-            tuple(STATO.get("syntra_utenti") or []), STATO.get("syntra_notifiche"))
+            tuple(STATO.get("syntra_utenti") or []), STATO.get("syntra_notifiche"),
+            STATO.get("syntra_profilo"))
 
 
 async def _manda_storico(websocket: WebSocket, sala: str, richiesta, da_capo: bool,
@@ -1382,9 +1384,34 @@ async def _manda_storico(websocket: WebSocket, sala: str, richiesta, da_capo: bo
         if not sala:
             raise ValueError("manca la sala")
         if sala.startswith("Syntra · "):
+            # Passi 15/16 — la cronologia di un utente Syntra è la sua STORIA COMPLETA, letta dal
+            # robot sul PROFILO (toccando il nome in alto a destra di una sua scheda). Si chiede la
+            # lettura mettendo una richiesta nello stato condiviso col lettore, si aspetta che
+            # finisca (può durare qualche decina di secondi), poi si risponde con l'archivio.
+            utente = sala[len("Syntra · "):].strip()
+            try:
+                pagine = max(2, min(12, int(mesi))) if mesi else 5
+            except Exception:
+                pagine = 5
+            richiesta_stato = {"utente": utente, "pagine": pagine, "pronto": False}
+            STATO["syntra_leggi_profilo"] = richiesta_stato
+            _log(True, "cronologia di %s: lettura del profilo (fino a %d schermate)" % (sala, pagine))
+            scaduto = False
+            for _ in range(60):
+                if richiesta_stato.get("pronto"):
+                    break
+                if not STATO.get("syntra_collegato"):
+                    raise RuntimeError("il lettore Syntra non è collegato: controlla l'emulatore nelle Impostazioni")
+                await asyncio.sleep(1)
+            else:
+                scaduto = True
             r = storico_sale.leggi_syntra(sala)
-            r["nota"] = ("Per Syntra la cronologia parte da quando il ponte archivia i segnali letti: "
-                         "l'app Syntra non ha uno storico da sfogliare.")
+            if scaduto:
+                r["nota"] = ("Il profilo non ha risposto in tempo: ecco quello che era già archiviato. "
+                             "Riprova quando l'emulatore è libero.")
+            else:
+                r["nota"] = ("Storia completa di %s letta dal profilo: %d operazioni lette, %d in archivio."
+                             % (utente, richiesta_stato.get("lette") or 0, len(r.get("segnali") or [])))
         else:
             client = TG_VIVO.get("client")
             if client is None or STATO.get("sim"):

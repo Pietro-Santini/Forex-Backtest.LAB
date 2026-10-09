@@ -38,6 +38,7 @@ import asyncio
 import os
 import re
 import subprocess
+import storico_sale
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -291,6 +292,9 @@ def leggi_schermata(xml_testo: str) -> dict:
             if (sc["utente"] is None and fd and "\n" not in fd and fd.strip().lower() not in NON_UTENTE
                     and f.get("clickable") == "true" and fx1 > x1 + larghezza * 0.6 and fy1 - y1 < 80):
                 sc["utente"] = fd.strip()
+                # Dove toccare per aprire il PROFILO di quell'utente (il nome, in alto a destra
+                # della scheda). Serve ai Passi 15/16: da lì si scorre la storia completa.
+                sc["utente_xy"] = ((fx1 + fx2) // 2, (fy1 + fy2) // 2)
         schede.append(sc)
     return {"linguette": linguette, "schede": schede}
 
@@ -573,6 +577,77 @@ async def _consegna_scheda(s: dict, visti: set, consegna: Callable, log: Callabl
     await consegna(seg, s["utente"], quando)
 
 
+async def leggi_profilo(adb: Adb, utente: str, pagine: int, log: Callable[[str], None],
+                        stato: dict) -> List[dict]:
+    """Passi 15/16 — la STORIA COMPLETA di un utente Syntra.
+
+    Si tocca il nome dell'utente (nodo cliccabile in alto a destra di una sua scheda), si apre il
+    PROFILO e si scorre per `pagine` schermate: ogni scheda letta è un'operazione passata. Si torna
+    indietro da soli, lasciando l'emulatore come prima. NON tocca la pagina delle notifiche.
+    """
+    # 1) Trova il nome cliccabile di quell'utente e aprilo.
+    punto = None
+    for _ in range(4):
+        lettura = leggi_schermata(await adb.schermata())
+        for sc in lettura["schede"]:
+            if sc.get("utente") == utente and sc.get("utente_xy"):
+                punto = sc["utente_xy"]
+                break
+        if punto:
+            break
+        # Non c'è in questa schermata: risali alla lista e riprova.
+        try:
+            if not await _alla_lista(adb):
+                break
+        except Exception:
+            break
+        await asyncio.sleep(0.6)
+    if not punto:
+        log("Syntra: profilo di %s: nome non trovato sullo schermo" % utente)
+        return []
+    await adb.tocca(*punto)
+    await asyncio.sleep(1.2)
+
+    # 2) Scorre il profilo e raccoglie tutte le schede (una voce sola per operazione).
+    trovate: Dict[str, dict] = {}
+    for pagina in range(max(1, pagine)):
+        lettura = leggi_schermata(await adb.schermata())
+        schede = lettura["schede"]
+        for sc in schede:
+            if (sc.get("utente") or utente) != utente:
+                continue
+            trovate[chiave(sc)] = sc
+        # Il dettaglio TP/SL serve per l'esito: si apre dove manca, una scheda per volta.
+        for _ in range(6):
+            da_aprire = [sc for sc in schede
+                         if (sc.get("utente") or utente) == utente
+                         and sc.get("toggle") and not chiusa(sc)
+                         and not sc.get("tp") and sc.get("sl") is None]
+            if not da_aprire:
+                break
+            await adb.tocca(*da_aprire[0]["toggle"])
+            await asyncio.sleep(0.6)
+            lettura = leggi_schermata(await adb.schermata())
+            schede = lettura["schede"]
+            for sc in schede:
+                if (sc.get("utente") or utente) != utente:
+                    continue
+                trovate[chiave(sc)] = sc
+        if pagina < pagine - 1 and schede:
+            x1, y1, x2, y2 = schede[0]["bounds"]
+            basso = max(sc["bounds"][3] for sc in schede)
+            await adb.scorri((x1 + x2) // 2, basso - 20, y1 + 40)
+            await asyncio.sleep(0.6)
+    # 3) Indietro: si torna alla pagina di prima.
+    try:
+        await adb.indietro()
+        await asyncio.sleep(0.4)
+    except Exception:
+        pass
+    log("Syntra: profilo di %s: %d operazioni lette" % (utente, len(trovate)))
+    return list(trovate.values())
+
+
 async def prepara_emulatore(adb: Adb, cfg: dict, log: Callable[[str], None], stato: dict) -> None:
     """RICHIESTO: BlueStacks e Syntra si aprono da soli, ridotti a icona (vedi avvio_bluestacks.py)."""
     import avvio_bluestacks as ab
@@ -670,7 +745,40 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
             stato["syntra_collegato"] = True
             stato["syntra_errore"] = None
             stato["syntra_modalita"] = modalita
-            if modalita == "schede":
+            # Passi 15/16 — se l'app ha chiesto la cronologia di un utente Syntra, questo giro legge
+            # il PROFILO (non le notifiche). Va prima di tutto: mentre si legge il profilo la pagina
+            # delle notifiche non si tocca (vincolo richiesto dal proprietario).
+            richiesta_profilo = stato.get("syntra_leggi_profilo")
+            if richiesta_profilo and not richiesta_profilo.get("pronto"):
+                utente_p = str(richiesta_profilo.get("utente") or "")
+                stato["syntra_profilo"] = "lettura del profilo di %s..." % utente_p
+                try:
+                    schede_p = await leggi_profilo(adb, utente_p, pagine, log, stato)
+                except Exception as e:
+                    schede_p = []
+                    log("Syntra: lettura del profilo di %s non riuscita: %s" % (utente_p, e))
+                quante_p = 0
+                for sc_p in (schede_p or []):
+                    if (sc_p.get("utente") or utente_p) != utente_p:
+                        continue
+                    seg_p = segnale(sc_p)
+                    if not seg_p:
+                        continue
+                    try:
+                        storico_sale.archivia_syntra("Syntra · %s" % utente_p, seg_p, time.time() * 1000.0)
+                        quante_p += 1
+                    except Exception:
+                        pass
+                # L'utente entra tra i conosciuti anche se l'archivio era vuoto.
+                utenti_p = stato.setdefault("syntra_utenti", [])
+                if utente_p and utente_p not in utenti_p:
+                    utenti_p.append(utente_p)
+                richiesta_profilo["lette"] = len(schede_p or [])
+                richiesta_profilo["registrate"] = quante_p
+                richiesta_profilo["pronto"] = True
+                stato["syntra_profilo"] = "profilo di %s: %d operazioni lette" % (utente_p, len(schede_p or []))
+                log("Syntra: profilo di %s: %d operazioni lette, %d archiviate" % (utente_p, len(schede_p or []), quante_p))
+            elif modalita == "schede":
                 for s in await giro(adb, schede, pagine, log):
                     if primo:
                         if s.get("utente") and segnale(s) is not None:

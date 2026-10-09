@@ -66,6 +66,19 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
      Test di regressione: `laboratorio/app/asse_prezzi_zoom.test.mjs` (3 casi: asse→zoom e mai linea;
      COB/SVP→pan e mai zoom; striscia ancorata al bordo). Prima **3 rossi**, ora **3 verdi**.
      Versione `v117` / `1.0.117`. Diagnosi con sub-agente `ses_ee167238effehZDhGCaq5hoW1w`.
+  8. **NUOVO — FATTO**: Passi **15/16** — **storia completa di un utente Syntra** (versione `v119` /
+     `1.0.119`). Il robot, su richiesta del ponte, **tocca il nome** in alto a destra di una scheda
+     (nuovo `utente_xy` salvato da `leggi_schermata`), apre il **profilo**, scorre le pagine e raccoglie
+     le operazioni (`leggi_profilo`). Vincolo rispettato: **mentre legge il profilo NON sfiora la pagina
+     Notifiche** (ramo dedicato in `ciclo`, prima di tutto il resto) e le operazioni lette **NON** vanno
+     in bacheca (niente aperture): si **ARCHIVIANO** con `storico_sale.archivia_syntra`, cosi' l'app le
+     mostra nella cronologia gia' condivisa della sala `Syntra · <utente>`. Lato ponte, `_manda_storico`
+     per le sale Syntra mette una richiesta in `STATO["syntra_leggi_profilo"]`, **aspetta** che il robot
+     finisca (max 60 s, con messaggio chiaro se l'emulatore non e' collegato), poi risponde con l'archivio
+     aggiornato; `_stato_chat`/`_firma_stato` espongono anche `syntra_profilo` (cosa fa il robot adesso).
+     Cronologia e resa sono **gia' condivise** in `app.html` (nessuna modifica all'app per questo passo).
+     Test: `laboratorio/ponte/test_profilo_syntra.py` (4 casi; prima **rossi**, ora **4/4 verdi**).
+     Collaudo completo **verde** (`Falliti: 0`). Diagnosi con sub-agenti (mappa 15/16 e mappa 18-24).
 
 ## Passa parola (messaggi)
 - `MESSAGGI/01-mappa-segnali.md` — mappa completa della pipeline segnali: parser Python, costruzione
@@ -85,6 +98,11 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
   filtro non è realizzato. **Attivato**: ora è `laboratorio/app/filtro_doppioni.test.mjs`.
 - `laboratorio/app/filtro_doppioni_auto.test.mjs` — test d'innesto del filtro sul `tgAutoDecidi` VERO
   (2 casi). Prima rossi (il gancio non c'era), ora **2/2 verdi**.
+- `MESSAGGI/04-profilo-syntra.md` — Passi **15/16**: progetto realizzato della storia completa di un
+  utente Syntra (robot: `utente_xy` + `leggi_profilo` + ramo in `ciclo`; ponte: `_manda_storico`,
+  `_stato_chat`, `_firma_stato`), vincoli, test e come ricontrollare a mano.
+- `laboratorio/ponte/test_profilo_syntra.py` — test dei Passi 15/16 (4 casi; prima rossi, ora
+  **4/4 verdi**). Nota: negli XML sintetici i `\n` dei `content-desc` vanno scritti come `&#10;`.
 
 ## Decisioni prese
 - Apertura automatica: **solo il computer**. Telefono/tablet mostrano il segnale, aprono a mano.
