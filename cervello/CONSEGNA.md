@@ -4,7 +4,7 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v122**, Setup **1.0.122**, server Oracle allineato a `main`.
+Stato alla scrittura: app **v123**, Setup **1.0.123**, server Oracle **da riallineare** (`segnali_bridge.py` è cambiato coi passi 15/16, v119).
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
@@ -259,7 +259,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 ---
 
-## 5. Che cosa è stato fatto (storia recente, v106 → v122)
+## 5. Che cosa è stato fatto (storia recente, v106 → v123)
 
 | Versione | Che cosa |
 |---|---|
@@ -279,6 +279,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 | **v120** | **Passi 18/19**: a grafico dalla cronologia, ogni linea di TP si ferma alla candela in cui **quel** livello è stato colpito, lo stop alla sua, e una spunta ✓ compare a sinistra del punto; se lo stop non è stato preso la sua linea prende la lunghezza dell'ultima di TP |
 | **v121** | **Passo 20**: a grafico dalla cronologia lo stop diventa una **scala** quando la strategia lo sposta (TP preso → pareggio/TP1/…): segmento orizzontale a ogni livello, salto verticale, **X** dove viene colpito, etichetta **«Stop P»**. Se non si sposta resta la linea piatta «SL». `fblSimulaStrategia` registra `storicoStop`/`stopColpito`, `fblCronoStopPath` costruisce il percorso |
 | **v122** | **Passo 21 — la resa deve restare ferma**: il grafico del rendimento non si zooma piu' da solo al passaggio del mouse né lascia lo schermo bianco. Il gesto di zoom (pinch da trackpad / CTRL+rotellina) sopra la cronologia è bloccato; la larghezza con cui si disegna la resa è **fissa** e si ricalcola solo su un vero `resize` della finestra; il minimo/massimo della curva si calcola a ciclo (su serie lunghe `Math.min(...)` può fallire e lasciare il canvas bianco) |
+| **v123** | **Passo 22 — mostra/nascondi posizioni e linee**: due interruttori piu' fini, entrambi in *Impostazioni → Style*. Uno spegne **solo le linee che uniscono la freccia di apertura a quella di chiusura** (segmento tratteggiato apertura→chiusura per i trade conclusi, apertura→prezzo attuale per quelli aperti); l'altro SOLO le **orizzontali di prezzo** di apertura e chiusura. Le linee TP/SL, le frecce e le caselle non vengono toccate. Le due scelte si sincronizzano fra i dispositivi |
 
 ### Le prestazioni (v109–v111), perché è istruttivo
 
@@ -309,7 +310,7 @@ un computer non si vede niente. Vedi `LEZIONI.md`.
 
 Il lavoro procede su una **scaletta concordata a voce** col proprietario:
 l'8 ottobre 2026 i primi 18 passi, il 9 ottobre i passi 18–24. I passi
-1–16 sono fatti. Restano i passi 17 e 18–24, in quest'ordine:
+13–22 sono fatti. Restano i passi 23 e 24, in quest'ordine:
 
 ### Passo 13 — Instradamento su Capital.com *(FATTO, v113)*
 Se una sala manda un segnale su uno strumento che **non esiste né su Kraken né su MT5** (un'azione,
@@ -400,13 +401,25 @@ sparpagliamento `Math.min(...)` su serie lunghe può fallire e lasciare il canva
 opzionale c'era già (il mirino col pallino e la data sotto). Test: `laboratorio/app/resa_ferma.test.mjs`
 (2, prima rossi).
 
-### Passo 22 — Mostra/nascondi posizioni e linee
+### Passo 22 — Mostra/nascondi posizioni e linee *(FATTO, v123)*
 Sul grafico (non le linee TP/SL):
 - pulsante **mostra/nascondi posizioni**: le linee che uniscono la freccia
   di apertura a quella di chiusura;
 - pulsante **mostra/nascondi linea**: le linee di prezzo di apertura e
   chiusura;
 - i filtri vanno anche nelle **impostazioni dello style**.
+
+**FATTO (v123)**: due interruttori nuovi e più fini degli esistenti («posizioni» e «linee
+posizioni»), entrambi nel pannello **⚙️ Impostazioni → Style**, sezione «📍 Posizioni sul grafico».
+(1) `fblConnettoriVisibili()` (`localStorage['fbl_connettori']`) spegne **solo** la linea
+tratteggiata che unisce la freccia di apertura a quella di chiusura: il segmento `apertura→chiusura`
+dei trade conclusi (`drawClosedTradeMarkers`) e `apertura→prezzo attuale` delle posizioni aperte
+(`drawOpenTradeProgress`). (2) `fblLineePrezzoVisibili()` (`localStorage['fbl_linee_prezzo']`) spegne
+**solo** le orizzontali di prezzo: quella di apertura di una posizione aperta e le due di apertura e
+chiusura di un trade concluso (nuove, prima non c'erano). Le linee TP/SL, le frecce e le caselle
+colorate **non** vengono toccate. Le due scelte sono persistite, mostrate con `.active`, e
+sincronizzate fra i dispositivi via `GRAFICO_LS`. Test: `laboratorio/app/interruttori_posizioni.test.mjs`
+(1, prima rosso).
 
 ### Passo 23 — Selezione della posizione sul grafico
 - Selezionando una posizione (dalla lista, o toccando un suo TP/SL) si

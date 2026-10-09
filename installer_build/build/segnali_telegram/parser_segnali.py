@@ -329,8 +329,18 @@ def _strumento_in(riga: str) -> Optional[str]:
 
     L'ordine conta: senza di esso "XAUUSD" verrebbe riconosciuto come "XAU" e "USTEC100" come
     "USTEC", producendo uno strumento diverso da quello scritto.
+
+    Le sale scrivono le coppie forex con spazi e barra: "AUD / CAD". Comprimo spazi e barre
+    prima di cercare, cosi' "AUD / CAD" diventa "AUDCAD" e viene riconosciuto.
     """
     t = _normalizza(riga)
+    # Variante con spazi e barre compressi: "AUD / CAD" -> "AUDCAD". Nella forma compressa i
+    # confini di parola sono quindi persi ("AUDCADSELL..."), quindi si usa SOLO il confine
+    # sinistro: basta a evitare che "USOIL" scatti dentro "HOUSOIL" (la "O" prima lo blocca).
+    t_comp = re.sub(r"[\s/]+", "", t)
+    for alias in sorted(ALIAS_STRUMENTI, key=len, reverse=True):
+        if re.search(r"(?<![A-Z0-9])" + re.escape(alias), t_comp):
+            return ALIAS_STRUMENTI[alias]
     for alias in sorted(ALIAS_STRUMENTI, key=len, reverse=True):
         # confine di parola su entrambi i lati: evita che "USOIL" scatti dentro "HOUSOIL"
         if re.search(r"(?<![A-Z0-9])" + re.escape(alias) + r"(?![A-Z0-9])", t):

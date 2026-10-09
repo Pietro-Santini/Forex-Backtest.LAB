@@ -30,7 +30,7 @@ riga ""
 passo sintassi_app node laboratorio/strumenti/sintassi_app.mjs
 passo versione_sw bash -c 'grep -q "forex-backtest-lab-v[0-9]*\"" sw.js'
 passo ponte_python "$PY" -m pytest -q laboratorio/ponte
-passo interprete_segnali bash -c 'cd installer_build/build/segnali_telegram && "$0" test_parser.py && "$0" test_formati_reali.py' "$PY"
+passo interprete_segnali bash -c 'cd installer_build/build/segnali_telegram && "$0" test_parser.py && "$0" test_formati_reali.py && "$0" test_syntra_audcad.py' "$PY"
 passo app_browser bash -c 'cd laboratorio && node --test --test-concurrency=1 app/*.test.mjs'
 grep -h "AVVISO" "$R"/*.log 2>/dev/null | sort -u | sed 's/^/- ⚠️ /' >> "$OUT"
 riga ""

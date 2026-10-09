@@ -136,3 +136,13 @@ Formato: data — chi — cosa — esito collaudo — commit.
   scrollbar-gutter:stable. In piu' il minimo/massimo della curva si calcola a ciclo (lo sparpagliamento
   Math.min(...) su serie lunghe puo' fallire e lasciare il canvas bianco). app v122 / Setup 1.0.122.
   Test: laboratorio/app/resa_ferma.test.mjs (2, prima rossi). - verde - Falliti: 0
+- 2026-10-09 - Claude - app v123: passo 22, due interruttori piu' fini in Impostazioni -> Style.
+  Uno spegne SOLO la linea tratteggiata fra la freccia di apertura e quella di chiusura
+  (apertura->prezzo attuale per le posizioni ancora aperte), l'altro SOLO le orizzontali di
+  prezzo di apertura e chiusura. Linee TP/SL, frecce e caselle non si toccano; le due scelte si
+  sincronizzano fra i dispositivi. Nello stesso giro: il parser riconosce le coppie scritte con
+  spazi e barra ("AUD / CAD"), che Syntra usa e che prima venivano scartate in silenzio; e
+  `rowsAssetKey` separa l'asset delle candele CARICATE da quello selezionato, cosi' il prezzo
+  dal vivo non puo' piu' essere attribuito all'asset sbagliato durante un cambio.
+  Test: interruttori_posizioni.test.mjs, test_syntra_audcad.py (aggiunto anche a collauda.sh,
+  dove non sarebbe mai girato). - verde - Falliti: 0
