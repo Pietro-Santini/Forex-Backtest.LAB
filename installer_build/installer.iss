@@ -19,7 +19,7 @@
 ; la riscrive da sw.js (unica fonte: il CACHE_NAME) prima di compilare, cosi' non puo' restare
 ; indietro. Il numero qui sotto serve a chi compila a mano: prima era rimasto fermo a 1.0.77
 ; mentre uscivano quattro Setup diversi, tutti con lo stesso nome.
-#define MyAppVersion "1.0.119"
+#define MyAppVersion "1.0.120"
 #define MyAppPublisher "Pietro Santini"
 #define MyAppExeName "ForexBacktestLAB.exe"
 

@@ -284,3 +284,10 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   **senza** toccare la pagina Notifiche e **senza** metterle in bacheca. Lato ponte, `_manda_storico`
   chiede la lettura e aspetta (max 60 s). Test: `laboratorio/ponte/test_profilo_syntra.py` (4, prima
   rossi). *Limite noto*: la lettura richiede l'emulatore collegato e può durare fino a un minuto.
+- **Le linee TP/SL della cronologia finivano tutte alla stessa candela** — risolto app v120 —
+  9 ottobre 2026 — PASSI 18/19: `valuta` teneva solo il conteggio dei TP (`raggiunti`) e un unico
+  `tFine`, quindi il disegno non sapeva SU QUALE candela ogni livello fosse scattato. Ora registra
+  `tpT` (tempo di ogni TP) e `slT` (tempo dello stop); `fblCronoAncore` calcola `tpEnd[]`/`slEnd`;
+  `fblCronoDisegna` ferma ogni linea sulla sua candela e mette la **spunta ✓ a sinistra** del punto
+  in cui un TP è stato preso. Se lo stop non è preso, la sua linea prende la lunghezza dell'ultima
+  di TP. Test: `laboratorio/app/cronologia_linee.test.mjs` (3, prima rossi).

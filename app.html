@@ -40056,12 +40056,14 @@ function valuta(s,serie){
   for(let j=i;j<ser.length&&ser[j].t<=ts+GIORNO;j++){ if(ser[j].l<=zh&&ser[j].h>=zl){ fill=j; entry=Math.min(Math.max(ser[j].o,zl),zh); break; } }
   if(fill==null)return Object.assign(base,{esito:'non attivato',raggiunti:0,tFine:ts+GIORNO});
  }
- let k=0, slPreso=false, ambiguo=false, fine=null;
+ let k=0, slPreso=false, ambiguo=false, fine=null, slT=null;
+ const tpT=[];   // PASSO 18: la candela (tempo) in cui OGNI TP e' stato colpito
  for(let j=fill;j<ser.length&&ser[j].t<=ser[fill].t+30*GIORNO;j++){
   const c=ser[j];
   const slQui=sl!=null&&(buy?c.l<=sl:c.h>=sl);
   let nuovi=0; while(k+nuovi<tps.length&&(buy?c.h>=tps[k+nuovi]:c.l<=tps[k+nuovi]))nuovi++;
-  if(slQui){ if(nuovi)ambiguo=true; slPreso=true; fine=c.t; break; }
+  if(slQui){ if(nuovi)ambiguo=true; slPreso=true; slT=c.t; fine=c.t; break; }
+  for(let q=0;q<nuovi;q++)tpT[k+q]=c.t;   // il TP k+q e' stato preso su QUESTA candela
   k+=nuovi;
   if(tps.length&&k>=tps.length){ fine=c.t; break; }
   fine=c.t;
@@ -40073,7 +40075,8 @@ function valuta(s,serie){
  else if(tps.length&&k>=tps.length)esito='tutti i TP';
  else esito=(scaduto?'scaduto':'in corso')+(k?(' (TP'+k+')'):'');
  return Object.assign(base,{esito,raggiunti:k,slPreso,ambiguo,tFill:ser[fill].t,entry,tFine:fine,mercato:!!(s.a_mercato||!isFinite(e1)),
-  valutato:sl!=null&&(slPreso||k>0||(tps.length&&k>=tps.length)||scaduto),aperto:!finiti&&!scaduto});
+  valutato:sl!=null&&(slPreso||k>0||(tps.length&&k>=tps.length)||scaduto),aperto:!finiti&&!scaduto,
+  tpT, slT});
 }
 function riepilogo(ris){
  const v=ris.filter(r=>r.valutato);
@@ -40569,10 +40572,24 @@ function ancore(r){
   if(livello!=null){ for(let j=da;j<N&&parseDateTime(rows[j].date)<=lim;j++){ if(supera(j,livello,versoAlto)){ b=j; break; } } }
   if(b==null)b=rowIndexContainingTime(r.tFine);
  }
- r.__anc={k:chiave,a,b:b!=null?Math.max(b,a):null};
+ // PASSO 18/19: ogni linea si ferma alla PROPRIA candela, non tutte a quella dell'evento finale.
+ //  - ogni TP preso si ferma sulla candela in cui quel livello e' stato colpito (r.tpT, dal valutatore);
+ //  - lo stop si ferma sulla candela in cui e' stato preso (r.slT); se NON e' stato preso la sua linea
+ //    prende la lunghezza dell'ultima linea di TP disegnata (passo 19), cioe' l'evento finale.
+ const bFin=(b!=null)?Math.max(b,a):null;
+ const indAnc=t=>(t!=null&&isFinite(t))?rowIndexContainingTime(t):null;
+ let tpEnd=null, slEnd=null;
+ if(a!=null&&Array.isArray(r.tps)&&r.tps.length&&r.tpT){
+  tpEnd=r.tps.map((t,j)=>{ const e=(j<(r.raggiunti||0)&&Array.isArray(r.tpT))?indAnc(r.tpT[j]):null; return e!=null?Math.max(e,a):null; });
+ }
+ const ultimoTp=(Array.isArray(tpEnd)&&tpEnd.length&&tpEnd[tpEnd.length-1]!=null)?tpEnd[tpEnd.length-1]:(bFin!=null?bFin:a);
+ if(r.slPreso){ const e=indAnc(r.slT); slEnd=(e!=null)?Math.max(e,a):(bFin!=null?bFin:a); }
+ else{ slEnd=(ultimoTp!=null)?ultimoTp:(bFin!=null?bFin:a); }
+ r.__anc={k:chiave,a,b:bFin,tpEnd,slEnd};
  return r.__anc;
 }
 window.fblCronoAncore=ancore;
+window.fblCronoValuta=valuta;
 // ---------- disegno a grafico (chiamato da draw(), dopo i trade chiusi)
 window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!vista.mostra||!vista.sala||!currentAssetKey)return;
@@ -40589,11 +40606,18 @@ window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
   if(vista.caselle&&(r.sl!=null||r.tps.length)){
    try{ drawTpSlZoneBox(ctx,{ownerKey:'crono:'+i,originIdx:a,entry:r.entry,sl:r.sl,tp:r.tps.length?r.tps[r.tps.length-1]:null,pad,cw,n,start,w,y,fixedSpan:Math.max(1,bb-a),noHandle:true,assetKey:currentAssetKey,hidePills:true}); }catch(e){}
   }
-  const linea=(p,col,dash,lw)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; const yy=y(p); ctx.strokeStyle=col; ctx.lineWidth=lw||1; ctx.setLineDash(dash||[]); ctx.beginPath(); ctx.moveTo(x1,yy); ctx.lineTo(x2,yy); ctx.stroke(); };
-  const etichetta=(p,testo,col)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; ctx.setLineDash([]); ctx.fillStyle=col; ctx.fillText(testo,x2+3,y(p)+3.5); };
-  linea(r.entry,'rgba(232,237,243,0.85)',[4,3],1.2);
-  linea(r.sl,'#e05252',[],1.3); etichetta(r.sl,r.slPreso?'SL ✗':'SL','#ff8a8a');
-  r.tps.forEach((t,j)=>{ const preso=j<r.raggiunti; linea(t,preso?'#2fbf71':'rgba(139,150,165,0.7)',preso?[]:[3,3],preso?1.3:1); if(fblEtichetteTpSlVisibili())etichetta(t,'TP'+(j+1)+(preso?' ✓':''),preso?'#7fdc9a':'#8b96a5'); });
+  // PASSO 18/19: ogni linea si ferma alla candela in cui il SUO livello e' stato colpito; lo stop,
+  // quando non e' stato preso, prende la lunghezza dell'ultima linea di TP disegnata.
+  const xFine=ri=>Math.min(w-pad.r,xFor(Math.max(ri,a+1)));
+  const linea=(p,col,dash,lw,xe)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; const yy=y(p); ctx.strokeStyle=col; ctx.lineWidth=lw||1; ctx.setLineDash(dash||[]); ctx.beginPath(); ctx.moveTo(x1,yy); ctx.lineTo(xe!=null?xe:x2,yy); ctx.stroke(); };
+  const etichetta=(p,testo,col,xe)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; ctx.setLineDash([]); ctx.fillStyle=col; ctx.fillText(testo,(xe!=null?xe:x2)+3,y(p)+3.5); };
+  linea(r.entry,'rgba(232,237,243,0.85)',[4,3],1.2,x2);
+  const xSl=(an.slEnd!=null)?xFine(an.slEnd):x2;
+  linea(r.sl,'#e05252',[],1.3,xSl); etichetta(r.sl,r.slPreso?'SL ✗':'SL','#ff8a8a',xSl);
+  r.tps.forEach((t,j)=>{ const preso=j<r.raggiunti; const ei=(preso&&an.tpEnd&&an.tpEnd[j]!=null)?an.tpEnd[j]:null; const xe=(ei!=null)?xFine(ei):x2;
+   linea(t,preso?'#2fbf71':'rgba(139,150,165,0.7)',preso?[]:[3,3],preso?1.3:1,xe);
+   if(fblEtichetteTpSlVisibili())etichetta(t,'TP'+(j+1)+(preso?' ✓':''),preso?'#7fdc9a':'#8b96a5',xe);
+   if(preso&&ei!=null&&t>=lo&&t<=hi){ ctx.setLineDash([]); ctx.fillStyle='#7fdc9a'; ctx.font='11px Inter, system-ui, sans-serif'; ctx.fillText('✓',xe-10,y(t)-3); ctx.font='10px Inter, system-ui, sans-serif'; } });
   // freccia d'entrata
   if(r.entry!=null&&r.entry>=lo&&r.entry<=hi){ const xa=xFor(a), ya=y(r.entry); ctx.setLineDash([]); ctx.fillStyle=r.dir==='SELL'?'#e05252':'#3ea6ff'; ctx.beginPath();
    if(r.dir==='SELL'){ ctx.moveTo(xa-5,ya-9); ctx.lineTo(xa+5,ya-9); ctx.lineTo(xa,ya-2); } else { ctx.moveTo(xa-5,ya+9); ctx.lineTo(xa+5,ya+9); ctx.lineTo(xa,ya+2); } ctx.fill(); }

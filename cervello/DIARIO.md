@@ -113,3 +113,10 @@ Formato: data — chi — cosa — esito collaudo — commit.
 - 2026-10-09 - agenti - Passo 17: memoria riportata al vero. CONSEGNA allineata a
   v119 (storia v113->v119, passi 13/15/16 chiusi, mappa di app.html a ~41.500
   righe), diario e registro bug completati, MAPPA e IDEE aggiornate. - verde
+- 2026-10-09 - agenti - Passi 18/19: linee TP/SL della cronologia a grafico. Ora valuta registra la
+  candela di colpimento di OGNI TP (tpT) e quella dello stop (slT); fblCronoAncore le traduce in
+  indici a grafico (tpEnd, slEnd); fblCronoDisegna disegna ogni linea fino alla SUA candela (non
+  piu' tutte fino all'evento finale) e stampa una spunta a SINISTRA del punto in cui un TP e' stato
+  preso. Se lo stop non e' stato preso, la sua linea prende la lunghezza dell'ultima di TP. app v120
+  / Setup 1.0.120. Test: laboratorio/app/cronologia_linee.test.mjs (3, prima rossi). - verde -
+  Falliti: 0

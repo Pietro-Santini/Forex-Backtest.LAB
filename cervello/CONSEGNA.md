@@ -4,7 +4,7 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v119**, Setup **1.0.119**, server Oracle allineato a `main`.
+Stato alla scrittura: app **v120**, Setup **1.0.120**, server Oracle allineato a `main`.
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
@@ -259,7 +259,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 ---
 
-## 5. Che cosa è stato fatto (storia recente, v106 → v119)
+## 5. Che cosa è stato fatto (storia recente, v106 → v120)
 
 | Versione | Che cosa |
 |---|---|
@@ -277,6 +277,8 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 | **v117** | La **barra dell'asse dei prezzi** fa **solo zoom** (non sposta più per sbaglio TP/SL o pendenti sotto il dito); le colonne **COB/SVP** non zoomano più; l'**apertura automatica** dei segnali la fa **solo il computer** (telefono/tablet mostrano il segnale e aprono a mano) |
 | **v118** | **Capital.com nella barra dei conti**: pulsante 💹 tra Kraken e Storico; gli ordini **manuali** su Capital.com sono **simulati**, mai un ordine a MT5 |
 | **v119** | **Passi 15/16 — storia completa di un utente Syntra**: il robot tocca il nome in alto a destra di una scheda, apre il **profilo**, scorre e legge tutte le operazioni, e le **archivia** nella cronologia della sala `Syntra · <utente>` (mai in bacheca, senza toccare la pagina Notifiche). Il ponte `_manda_storico` chiede la lettura e aspetta che finisca |
+
+| **v120** | **Passi 18/19**: a grafico dalla cronologia, ogni linea di TP si ferma alla candela in cui **quel** livello è stato colpito, lo stop alla sua, e una spunta ✓ compare a sinistra del punto; se lo stop non è stato preso la sua linea prende la lunghezza dell'ultima di TP |
 
 ### Le prestazioni (v109–v111), perché è istruttivo
 
@@ -336,21 +338,29 @@ le operazioni; il ramo dedicato in `ciclo` le **archivia** nella cronologia dell
 aspetta che finisca (max 60 s, con messaggio chiaro se l'emulatore non è collegato).
 Test: `laboratorio/ponte/test_profilo_syntra.py` (4, prima rossi).
 
-### Passo 17 — Cervello e memoria *(in corso)*
+### Passo 17 — Cervello e memoria *(FATTO, v119/v120)*
 Aggiornare i documenti a ogni giro. Questo file ne fa parte. È la manutenzione della memoria:
 `cervello/` e `laboratorio/coordinamento/` vanno riportati allo stato vero a ogni giro (diario, bug,
 lezioni, mappa, consegna e bacheca), altrimenti chi riprende legge cose vecchie.
 
-### Passo 18 — Linee TP/SL «fino alla candela colpita»
+### Passo 18 — Linee TP/SL «fino alla candela colpita» *(FATTO, v120)*
 Portando a grafico le operazioni di una sala dalla cronologia, le linee
 di TP e SL **non continuano fino a oggi**: si fermano alla candela in
 cui il livello è stato colpito. Accanto, **alla sinistra** del punto in
 cui un TP è stato preso, una **spunta di conferma**. Le linee restano
 ferme dove hanno incontrato la candela di riferimento: non oltre.
 
-### Passo 19 — SL non colpito: lunghezza dell'ultimo TP
+**FATTO (v120)**: `valuta` ora registra `tpT` (tempo di colpimento di ogni TP) e `slT` (tempo dello
+stop); `fblCronoAncore` traduce quei tempi in `tpEnd[]` e `slEnd`; `fblCronoDisegna` disegna ogni
+linea fino alla sua candela e stampa la **spunta ✓** a sinistra del punto in cui un TP è stato preso.
+Test: `laboratorio/app/cronologia_linee.test.mjs` (3, prima rossi).
+
+### Passo 19 — SL non colpito: lunghezza dell'ultimo TP *(FATTO, v120)*
 Se lo stop loss **non viene preso**, la sua linea ha la stessa lunghezza
 dell'ultima linea di TP disegnata: più ordine, e si vede meglio.
+
+**FATTO (v120)**: quando `slPreso` è falso, `slEnd` prende la fine dell'ultima linea di TP disegnata
+(l'evento finale `b`); lo stop e l'ultimo TP finiscono così sullo stesso punto. Test come sopra.
 
 ### Passo 20 — Stop loss mobile a grafico
 La strategia può prevedere: TP1 → SL fermo, TP2 → SL a break even,
