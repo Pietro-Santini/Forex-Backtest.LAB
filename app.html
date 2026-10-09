@@ -989,7 +989,7 @@ window.fblAvviaSoloBacktest=function(){
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged, onIdTokenChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
   const firebaseConfig = {
@@ -1130,19 +1130,6 @@ window.fblAvviaSoloBacktest=function(){
         await setDoc(doc(db,"users",this.uid,"data","grafico"), { v:1, voci, at: serverTimestamp() }, { merge:true });
         return true;
       }catch(e){ console.warn("Salvataggio disegni condivisi fallito:", e); return false; }
-    },
-    // UN SEGNALE = UN SOLO DISPOSITIVO (vedi tgRivendicaSegnale): il primo dispositivo che scrive
-    // users/{uid}/data/tgx_<id> lo apre; gli altri trovano il documento gia' li' e si fermano.
-    // Transazione: due dispositivi nello stesso istante non possono vincere entrambi.
-    async segnaleRivendica(id, dev){
-      if(!this.uid) return true;
-      const ref = doc(db,"users",this.uid,"data","tgx_"+id);
-      return await runTransaction(db, async tx => {
-        const s = await tx.get(ref);
-        if (s.exists()) return (s.data() || {}).dev === dev;
-        tx.set(ref, { dev, at: serverTimestamp() });
-        return true;
-      });
     },
     async graficoLeggi(){
       if(!this.uid) return null;
@@ -4138,6 +4125,10 @@ function fblNomeSala(voce){
 // Syntra ha la sua icona e il suo nome accorciato ("Syntra · CrownPips" -> "CrownPips"): il
 // prefisso e' uguale per tutti e ruberebbe spazio a quello che cambia.
 function fblOrigineBadgeHtml(p){
+ // Come il Trade Journal (journalOrigineHtml): una posizione MT5 ricostruita dal conto porta solo
+ // il ticket. Se la sala non e' ancora sull'oggetto, la si recupera dalla memoria dei ticket:
+ // altrimenti questa colonna la mostrerebbe come aperta a mano ("tu") mentre il Journal la conosce.
+ if(p&&p.mt5Ticket!=null&&!p.tgSala)mt5ApplicaSegnale(p);
  const nome=(p&&p.tgSala)?String(p.tgSala).trim():'';
  // "tu" si scrive solo se NON c'e' nessuna traccia di un segnale. Se la traccia c'e' ma il nome
  // della sala si e' perso per strada, lo si dice: e' un'informazione mancante, non un'operazione
@@ -4238,6 +4229,74 @@ function fblPosStessoIngresso(gruppo,p,entrata,orario){
  if(Math.max(gruppo.max,entrata)-Math.min(gruppo.min,entrata)>tol)return false;
  if(gruppo.t0!=null&&orario!=null&&Math.abs(orario-gruppo.t0)>FBL_POS_FINESTRA_MS)return false;
  return true;
+}
+// ===================== FILTRO ANTI-DOPPIONI DEI SEGNALI =====================
+// La stessa idea di ingresso puo' arrivare due volte - dalla stessa sala o da sale diverse, e con
+// parole del tutto diverse ("BUY GOLD 4120 SL 4100 TP 4140" e "oro long 4119,8 target 4140"). Il
+// testo non basta: qui si confrontano i NUMERI. Due segnali sono lo STESSO trade se hanno
+// strumento uguale (normalizzato), stessa DIREZIONE (un SELL su un BUY aperto e' un'inversione, non
+// un doppione), stessa fascia di ENTRATA e stessi TAKE PROFIT, entro la tolleranza naturale
+// dell'operazione (meta' di fblTolleranzaEntrata, piu' stretta). Progetto:
+// laboratorio/coordinamento/MESSAGGI/03-progetto-filtro-doppioni.md.
+function fblDedupTp(v){
+ // I target arrivano in forme diverse: scalare (positions/pendingOrders), array di numeri
+ // (tgStrategie.tps, segnale.take_profit), array di oggetti {prezzo} (Kraken). Qui si riducono a una
+ // lista di numeri ordinata.
+ if(v==null)return [];
+ const a=Array.isArray(v)?v:[v];
+ return a.map(x=>Number(x&&x.prezzo!=null?x.prezzo:x)).filter(Number.isFinite).sort((p,q)=>p-q);
+}
+// L'elemento gia' presente (posizione, ordine pendente, voce di tgStrategie, posizione Kraken) ha lo
+// stesso ingresso del segnale in arrivo? I nomi dei campi cambiano, il confronto no.
+function fblDedupStesso(seg,cand){
+ if(!seg||!cand)return false;
+ const side=String(seg.direzione||'').toUpperCase();
+ const cside=String(cand.side||cand.lato||'').toUpperCase();
+ if(!side||side!==cside)return false;
+ const nomi=[cand.asset,cand.sym,cand.simbolo,cand.strumento].filter(Boolean);
+ if(!nomi.some(n=>fblStessoStrumento(seg.strumento,n)))return false;
+ const entry=Number(cand.entry!=null?cand.entry:cand.entrata);
+ const entrata=Number(seg.entrata);
+ if(!Number.isFinite(entry)||!Number.isFinite(entrata))return false;
+ const tol=Math.abs(fblTolleranzaEntrata(cand))*0.5;
+ if(!(tol>0))return false;
+ if(Math.abs(entrata-entry)>tol)return false;
+ const stp=Array.isArray(seg.take_profit)?seg.take_profit.map(Number).filter(Number.isFinite).sort((p,q)=>p-q):[];
+ if(stp.length){
+  // Con i target scritti servono TUTTI e coincidenti: target diversi = un altro trade.
+  const ctp=fblDedupTp(cand.tps!=null?cand.tps:cand.tp);
+  if(ctp.length!==stp.length)return false;
+  if(!ctp.every((v,i)=>Math.abs(v-stp[i])<=tol))return false;
+ }
+ return true;
+}
+// Vuoto se il segnale NON e' un doppione; altrimenti la frase che dice dove/chi l'ha gia' aperto.
+function fblDedupMotivo(voce){
+ const seg=voce&&voce.segnale;
+ if(!seg||!seg.strumento||!seg.direzione)return '';
+ const st=String(voce.sottotipo||'');
+ if(st==='aggiunta'||st==='seconda_entrata')return '';   // esenzioni volute: non sono doppioni
+ const lista=(x)=>Array.isArray(x)?x:[];
+ for(const p of lista(positions))
+  if(fblDedupStesso(seg,p))
+   return 'lo stesso trade è già aperto'+(p.tgSala?(' dalla sala «'+p.tgSala+'»'):(p.mt5Ticket!=null?' su questo conto MT5':' a mano'));
+ for(const o of lista(pendingOrders))
+  if(fblDedupStesso(seg,o))
+   return 'lo stesso trade è già in attesa'+(o.tgSala?(' dalla sala «'+o.tgSala+'»'):'');
+ const strats=(typeof tgStrategie!=='undefined'&&tgStrategie)?tgStrategie:{};
+ for(const k in strats){
+  const s=strats[k];
+  if(s&&fblDedupStesso(seg,s))
+   return 'lo stesso trade è già aperto'+(s.sala?(' dalla sala «'+s.sala+'»'):(s.conto==='kraken'?' su Kraken':''));
+ }
+ try{
+  const kp=(typeof krakenPosizioni!=='undefined'&&krakenPosizioni&&Array.isArray(krakenPosizioni.posizioni))?krakenPosizioni.posizioni:[];
+  for(const k of kp) if(fblDedupStesso(seg,k))return 'lo stesso trade è già aperto su Kraken';
+ }catch(e){}
+ for(const v of lista(tgSegnaliRicevuti))
+  if(v&&v.stato==='eseguito'&&v.segnale&&fblDedupStesso(seg,v.segnale))
+   return 'lo stesso trade è già eseguito'+(v.chat?(' dalla sala «'+v.chat+'»'):'');
+ return '';
 }
 // ===================== OPERAZIONI A BLOCCO (stile MetaTrader 5) =====================
 // Chiudere tante posizioni insieme e' comodo e pericoloso nella stessa misura: per questo ogni
@@ -4353,6 +4412,7 @@ function journalSessionBadgeHtml(t,tags){
  const base=tags[t.mode]||'📼 Storico';
  const ss='';   // la sala segnali ha ora la sua colonna "Origine" (journalOrigineHtml)
  if(t.mt5Ticket==null){
+   if(t.account==='capital')return '💹 <span style="color:#8b96a5">Capital.com</span>'+ss;
    return (t.mode==='live'?'🔴 Live <span style="color:#8b96a5">Capital.com</span>':base)+ss;
  }
  const pf=t.mode==='live_propfirm'?'🛡️ ':'';
@@ -15364,8 +15424,10 @@ function draw(){
  })();
  try{ drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,{bg:chartBg,grid:gridColorStrong,text:lineSecondary}); }catch(e){ console.warn('COB/SVP',e); }
  try{
-   const _ex=cobSvpExtraWidth(w);
-   const _pz=document.getElementById('priceAxisZone'); if(_pz&&_pz.style.right!==_ex+'px')_pz.style.right=_ex+'px';
+   // La striscia di zoom della scala prezzi va ancorata al BORDO destro, dove la scala e' disegnata
+   // (priceAxisX = w-76): NON va spostata della larghezza delle colonne COB/SVP, altrimenti ne copre
+   // una parte e trascinandoci sopra si zoomerebbe la scala invece di spostare il grafico.
+   const _pz=document.getElementById('priceAxisZone'); if(_pz&&_pz.style.right!=='0px')_pz.style.right='0px';
    const _tz=document.getElementById('timeAxisZone'); if(_tz&&_tz.style.right!==pad.r+'px')_tz.style.right=pad.r+'px';
  }catch(e){}
  // Etichette di riferimento sulla scala prezzi (bordo destro) per ENTRY/TP/SL di ogni
@@ -21280,11 +21342,25 @@ chartEl.addEventListener('pointerdown',e=>{
  // --- Zoom verticale stile TradingView: trascina sulla scala prezzi (bordo destro).
  // Funziona anche da tablet/touch con un dito solo: qui blocchiamo lo scroll pagina,
  // ovunque altro nel grafico invece la pagina deve poter scorrere normalmente. ---
- if(isOnCobSvpBand(e.clientX))return; // colonne COB/SVP: nessuno zoom, nessun pan, nessun disegno
+ // Colonne COB/SVP: sono una lettura, non un comando. Mai zoom (lo zoom e' SOLO sulla striscia
+ // dell'asse prezzi, piu' esterna), mai una linea spostata, mai un disegno. Con mouse/penna si
+ // trascina il grafico (pan); col dito si lascia fare al flusso normale dei tocchi (un dito scorre,
+ // due dita spostano), cosi' anche qui la scala non cambia per sbaglio.
+ if(isOnCobSvpBand(e.clientX)){
+   if(drawTool!=='cursor'||placingTradeLevel)return;
+   if(e.pointerType!=='touch'){
+     e.preventDefault();
+     panDrag=true; panStartX=e.clientX; panStartY=e.clientY; panStartViewEnd=viewEnd; freezeViewIfNeeded(); panStartScale=currentDisplayScale(); panStartPriceLo=viewPriceLo; panStartPriceHi=viewPriceHi;
+     chartEl.setPointerCapture?.(e.pointerId);
+     return;
+   }
+ }
  // Temporal VP 3D: va valutato PRIMA di ogni altra cosa, altrimenti trascinarlo farebbe
  // scorrere il grafico sotto invece di spostare o ruotare il modello.
  if(tvp3dPointerDown(e))return;
- if(!placingTradeLevel && drawTool==='cursor' && isOnPriceAxis(e.clientX) && !tradeLevelHit(e.clientX,e.clientY)){
+ // L'asse prezzi ha UNA sola funzione: zoomare la vista. Anche se sotto il dito c'e' una linea
+ // TP/SL o la linea di un ordine pendente, da qui non la si sposta MAI: si esce prima del drag linee.
+ if(!placingTradeLevel && drawTool==='cursor' && isOnPriceAxis(e.clientX)){
    e.preventDefault();
    if(e.pointerType==='touch')setChartTouchAction(true);
    priceAxisDrag={startY:e.clientY,startFactor:priceZoomFactor};
@@ -23450,8 +23526,17 @@ function fblEMobile(){
   const ua=navigator.userAgent||'';
   if(/Android|iPhone|iPad|iPod|Windows Phone/i.test(ua))return true;
   if(/Macintosh/.test(ua)&&Number(navigator.maxTouchPoints)>1)return true;   // iPad che si dichiara Mac
-  // Tablet Android/Windows in modalita' desktop: nessun mouse e schermo da tablet.
-  if(Number(navigator.maxTouchPoints)>1&&window.matchMedia&&matchMedia('(pointer:coarse)').matches&&window.innerWidth<=1366)return true;
+  // Tablet/telefono Android o Windows in modalita' desktop: la User-Agent
+  // mente (il browser si presenta come computer), ma l'hardware no.
+  // Nessun mouse (puntatore grossolano) + touch + schermo da tablet =
+  // dispositivo mobile. ATTENZIONE: basta UNA punta (maxTouchPoints=1):
+  // un telefono cosi' ne ha anche una sola, e chiederne due lascia
+  // passare proprio il caso peggiore.
+  if(Number(navigator.maxTouchPoints)>0&&window.matchMedia&&matchMedia('(pointer:coarse)').matches&&window.innerWidth<=1366)return true;
+  // Client Hints: il sistema operativo si conosce da solo anche quando
+  // la User-Agent e' quella di un computer (Chrome su Android in
+  // "modalita' desktop").
+  try{ if(navigator.userAgentData&&navigator.userAgentData.mobile===true)return true; }catch(e){}
   return false;
  }catch(e){ return false; }
 }
@@ -25514,6 +25599,77 @@ function tgContoPerSegnale(seg){
  return mt5Connected?'mt5':'sim';
 }
 function tgContoDiPosizione(p){ return mt5Connected?'mt5':'sim'; }   // le posizioni Kraken non stanno in positions[]
+
+// PASSO 13 — Accende la connessione a Capital.com DA SOLA, coi dati di accesso già salvati, SENZA
+// aprire nessun modulo di login. Serve all'apertura automatica: lì non c'è nessuno davanti allo
+// schermo. Se non ci sono credenziali salvate (o la connessione fallisce) torna false: il segnale
+// NON si tenta, resta solo segnalato nel pannello.
+async function tgCapitalAccendiInSilenzio(){
+ if(capitalSessionTokens)return true;
+ try{
+  const autoCreds=await tryAutoLoadLiveCreds();
+  if(!autoCreds)return false;
+  const result=await connectToCapitalCom(autoCreds);
+  if(result&&result.ok){
+   liveCredsDraft=autoCreds;
+   capitalSessionTokens={cst:result.cst,securityToken:result.securityToken};
+   return true;
+  }
+ }catch(e){}
+ return false;
+}
+
+// PASSO 13 — Su quale conto va DAVVERO un segnale. Come tgContoPerSegnale, ma con un terzo caso:
+// lo strumento non è né su Kraken né su MT5 e Capital.com lo conosce -> 'capital'. La connessione
+// si accende da sola (in silenzio); se non c'è, NON si tenta e resta il conto di prima. È
+// asincrona perché deve CHIEDERE a MT5 e a Capital.com, non indovinare.
+async function tgContoEffettivoPerSegnale(seg){
+ const base=tgContoPerSegnale(seg);
+ if(base!=='mt5')return base;                 // Kraken o simulato: niente da decidere qui
+ const strumento=seg&&seg.strumento;
+ // Le cripto vivono su Kraken/Binance, mai su Capital.com: resolveMt5SymbolForAsset le tratterebbe
+ // come "MT5 non le ha" e le dirotterebbe a torto.
+ try{ if(binanceSymbolForAsset(strumento))return base; }catch(e){}
+ let sym=await tgAssetPerStrumento(strumento);
+ if(!sym){
+  if(!await tgCapitalAccendiInSilenzio())return base;
+  sym=await tgAssetPerStrumento(strumento);
+  if(!sym)return base;
+ }
+ let suMt5;
+ try{ suMt5=await resolveMt5SymbolForAsset(sym); }catch(e){ suMt5=undefined; }
+ // null = "MT5 non ce l'ha" (definitivo). undefined = errore di rete: nel dubbio si resta su MT5.
+ return (suMt5===null)?'capital':base;
+}
+
+// PASSO 13 — Apre DAVVERO una posizione simulata su Capital.com. MAI un ordine a MT5: il broker
+// non ha quello strumento. Stesso modello di krakenEseguiSegnale, ma la posizione vive in
+// positions[] come una normale posizione simulata, marcata account:'capital' per il Trade Journal,
+// e segue i prezzi con lo stream di Capital.com anche senza essere quella a grafico.
+async function tgCapitalEseguiSegnale(voce,o){
+ const p=o.piano;
+ const gruppo='sg'+Date.now().toString(36)+Math.floor(Math.random()*1000).toString(36);
+ let aperte=0;
+ for(let i=0;i<p.n;i++){
+  const tp=(i<p.tp.length)?p.tp[i]:null;
+  const pos={id:Date.now()+Math.random(),asset:o.sym,side:p.side,entry:p.entry,sl:p.sl,
+   tp:(Number.isFinite(tp)?tp:null),origin:'MARKET',lots:p.lotti,risk:0,dist:0,hasRiskModel:false,
+   start:idx,startTime:Date.now(),openTF:currentTF,marginUsed:Number(p.margine)||0,account:'capital',
+   tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id};
+  pos.rrSl=pos.sl;
+  positions.push(pos);
+  aperte++;
+ }
+ if(liveModeActive){ try{ refreshLiveStreamSubscriptions(); }catch(e){} }
+ voce.stato='eseguito'; voce.aperte=aperte; voce.automatico=true;
+ voce.eseguito={il:Date.now(),sym:o.sym,side:p.side,lotti:p.lotti,sl:p.sl,slCalcolato:!!p.slCalcolato,
+  tp:p.tp.slice(0,p.n),tpCalcolato:!!p.tpCalcolato,reale:false,conto:'capital',pendente:false,entry:p.entry};
+ voce.autoMotivo=null;
+ try{ tgAggiornaPulsante(); tgRenderPannello(); }catch(e){}
+ try{ $('status').textContent='📡 Segnale di '+String(voce.chat||'')+': aperto su Capital.com '+p.side+' '+o.sym+' '+aperte
+  +(aperte===1?' posizione simulata':' posizioni simulate')+', stop '+p.sl+'.'; }catch(e){}
+ return true;
+}
 function tgAutoAperte(sala,conto){
  // Kraken: le posizioni non stanno in positions[], si contano dalle strategie (quote ancora aperte).
  if(conto==='kraken'){
@@ -25604,6 +25760,10 @@ function tgAutoDecidi(voce){
  const cfg=(cfgSala&&tgAutoUniAttiva(A))?Object.assign({},tgAutoUni(A),{attivo:cfgSala.attivo}):cfgSala;
  if(!cfg)return no('la sala «'+sala+'» non corrisponde a nessuna voce dell\'elenco sale ('+(chiave||'?')+'): controlla il nome in Collegamento/Modalità → Sala segnali');
  if(!cfg.attivo)return no('la sala «'+sala+'» non ha l\'apertura automatica spuntata');
+ // Filtro anti-doppioni: la stessa idea di ingresso arrivata due volte (anche da un'altra sala, anche
+ // con parole diverse) non apre una seconda posizione. Vedi fblDedupMotivo.
+ const dup=fblDedupMotivo(voce);
+ if(dup)return no('doppione: '+dup+'. Da sola non apro una seconda volta.');
  // Un raddoppio dedotto non si apre mai da solo: e' gia' un'interpretazione, e sommarla a
  // un'apertura senza controllo sarebbe due incertezze una sopra l'altra.
  if(voce.sottotipo==='aggiunta')return no('è un raddoppio dedotto: va confermato a mano');
@@ -26087,6 +26247,10 @@ function tgMetaNota(sym){
 }
 async function tgAutoValuta(voce,conto){
  const A=tgAutoPerSimbolo(voce&&voce.segnale&&voce.segnale.strumento);
+ // Il simbolo del grafico del segnale. Dichiarato qui perche' lo usano SIA il ramo Capital.com (che
+ // viene prima nella lettura) SIA il ramo MT5: dichiararlo piu' sotto faceva assegnare il ramo
+ // Capital.com a una variabile non ancora inizializzata, e l'apertura automatica andava in errore.
+ let sym=null;
  // Syntra, notifica "ordine in attesa ATTIVATO": serve solo a Kraken (dove i pendenti non si
  // piazzano, quindi si apre a mercato ora). Su MT5 il pendente e' gia' stato piazzato quando e'
  // arrivata la notifica "IN ATTESA": riaprirlo sarebbe un doppione.
@@ -26107,15 +26271,21 @@ async function tgAutoValuta(voce,conto){
  // Senza il consenso ai rischi dell'apertura dai segnali non si apre nulla (neanche se l'apertura
  // automatica e' arrivata accesa da un altro dispositivo), e il segnale non si prenota.
  if(!consensoValido('esecuzione')){ voce.autoMotivo='manca il consenso ai rischi dell\'apertura dai segnali (riaccendi l\'apertura automatica e accetta le avvertenze)'; try{ tgRenderPannello(); }catch(e){} return; }
- // Con la configurazione condivisa, PC, tablet e telefono hanno tutti l'apertura automatica accesa:
- // senza questo controllo ognuno aprirebbe le SUE posizioni sullo stesso conto (doppie).
- if(!await tgRivendicaSegnale(voce)){
-  voce.autoMotivo='aperto automaticamente da un altro dispositivo collegato al tuo account';
+ // L'apertura automatica dei segnali la fa SOLO il computer, che ha la precedenza: e' li' che stanno
+ // MT5, i conti e le chiavi. Non si guarda piu' cosa hanno fatto gli altri dispositivi: se il segnale
+ // va aperto in automatico, si apre e basta (prima si chiedeva al cloud "chi arriva primo" e il PC
+ // poteva perdere la contesa, restando senza posizione con un avviso di "altro dispositivo").
+ // Telefono e tablet non aprono da soli: mostrano il segnale, e lo si apre a mano.
+ if(!tgSonoIlComputer()){
+  voce.autoMotivo='l\'apertura automatica dei segnali la fa il computer (dove sono MT5 e i conti): da qui puoi aprirlo a mano';
   try{ tgRenderPannello(); }catch(e){}
   return;
  }
  const seg=voce.segnale;
- conto=conto||tgContoPerSegnale(seg);
+ if(!conto)conto=tgContoPerSegnale(seg);
+ // PASSO 13: se il conto sarebbe MT5 ma il broker NON ha questo strumento (mentre Capital.com
+ // sì), il segnale va su Capital.com. Qui la decisione può essere asincrona: si chiede davvero.
+ if(conto==='mt5')conto=await tgContoEffettivoPerSegnale(seg);
  // Conto Kraken (segnali cripto): prezzo, passo e minimo dal contratto Kraken, saldo in USD.
  if(conto==='kraken'){
   const no=m=>{ voce.autoMotivo=m; try{ tgRenderPannello(); }catch(e){} };
@@ -26170,10 +26340,33 @@ async function tgAutoValuta(voce,conto){
   await krakenEseguiSegnale(voce,{sym:symG,simbolo:info.simbolo,piano,regole,avvicinamento});
   return;
  }
+ // PASSO 13 — CONTO CAPITAL.COM: strumento che MT5 non ha (azioni, indici...). Prezzo da
+ // Capital.com, posizione SIMULATA in positions[]: mai un ordine vero a MT5, che quel simbolo non
+ // lo conosce. Anche qui senza portare il grafico sull'asset del segnale.
+ if(conto==='capital'){
+  const no=m=>{ voce.autoMotivo=m; try{ tgRenderPannello(); }catch(e){} };
+  sym=await tgAssetPerStrumento(seg.strumento);
+  if(!sym)return no('asset «'+seg.strumento+'» non trovato');
+  // Il prezzo lo dà Capital.com: se l'asset è già a grafico si usa quello, altrimenti l'ultima
+  // quotazione Capital.com. NON tgPrezzoSenzaGrafico, che parla solo con MT5.
+  let prezzo=null;
+  try{
+   if(currentAssetKey===sym&&Number.isFinite(currentPrice()))prezzo=currentPrice();
+   else{ const r=await fetchLatestPriceRest(sym); if(r&&Number.isFinite(r.price))prezzo=r.price; }
+  }catch(e){}
+  if(!Number.isFinite(prezzo))return no('Capital.com non ha ancora un prezzo per «'+seg.strumento+'»: segnale lasciato nel pannello');
+  const piano=tgPiano(seg,sym,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo,
+   quote:tgAutoQuotePerSegnale(d.cfg,Math.max(1,(seg.take_profit||[]).length))});
+  if(piano.problemi&&piano.problemi.length)return no(piano.problemi.join('; '));
+  if(piano.pendente)return no('ordine '+piano.kind+' a '+tgFmt(piano.entry)+': su Capital.com per ora si aprono solo segnali a mercato');
+  voce.autoMotivo=null;
+  await tgCapitalEseguiSegnale(voce,{sym,piano});
+  return;
+ }
  // CONTO MT5: il segnale si apre SENZA portare il grafico sul suo asset. Prezzo dal conto, ordini
  // sull'asset del segnale: chi sta guardando un altro grafico non se lo vede cambiare sotto gli
  // occhi, e un segnale non aspetta che il grafico abbia finito di caricare quello precedente.
- let sym=null, prezzo=null, senzaGrafico=false;
+ let prezzo=null, senzaGrafico=false;
  if(conto==='mt5'){
   sym=await tgAssetPerStrumento(seg.strumento);
   if(sym&&tgMetaNota(sym)){
@@ -26202,30 +26395,14 @@ async function tgAutoValuta(voce,conto){
  voce.autoMotivo=null;
  await tgEseguiSegnale(voce,{sym,piano,regole,avvicinamento,automatico:true,senzaGrafico});
 }
-// Identificativo di questo dispositivo (resta lo stesso fra un avvio e l'altro).
-function fblIdDispositivo(){
- try{
-  let v=localStorage.getItem('fbl_id_dispositivo');
-  if(!v){ v=Date.now().toString(36)+Math.random().toString(36).slice(2,10); localStorage.setItem('fbl_id_dispositivo',v); }
-  return v;
- }catch(e){ return 'sconosciuto'; }
-}
-// Chi apre questo segnale? Il primo dispositivo che lo rivendica sul cloud. Senza account (o con il
-// cloud irraggiungibile per 8 s) decide la posizione: apre solo il dispositivo che sta sul PC con
-// MT5, cosi' un telefono senza rete non raddoppia mai quello che il PC ha gia' aperto.
-async function tgRivendicaSegnale(voce){
- const c=window.fxbtCloud;
- if(!c||!c.uid||typeof c.segnaleRivendica!=='function')return true;
- const grezzo=String(voce.id!=null?voce.id:((voce.chat||'')+'|'+(voce.quando||voce.data||'')+'|'+((voce.segnale&&voce.segnale.testo)||voce.testo||'')));
- let id=grezzo.replace(/[^A-Za-z0-9_-]/g,'_');
- if(id.length>120){ let h=0; for(let i=0;i<grezzo.length;i++)h=(h*31+grezzo.charCodeAt(i))|0; id=id.slice(0,100)+'_'+(h>>>0).toString(36); }
- try{
-  return await Promise.race([c.segnaleRivendica(id,fblIdDispositivo()),new Promise((_,no)=>setTimeout(()=>no(new Error('tempo scaduto')),8000))]);
- }catch(e){
-  console.warn('[Segnali] rivendicazione sul cloud non riuscita ('+((e&&e.message)||e)+'): apre solo il PC con MT5.');
-  return !fblRemoto();
- }
-}
+// Chi apre in automatico i segnali: SOLO il computer. "Computer" vuol dire due cose insieme: non
+// sono un dispositivo collegato da fuori (fblRemoto) e non sono un telefono o tablet (fblEMobile).
+// Da soli non bastano: con il server, un telefono puo' avere scritto l'indirizzo del server e non
+// quello del PC, quindi fblRemoto() da' falso; e un computer non ha touch. Insieme lo identificano.
+// Il computer ha la precedenza e NON controlla gli altri dispositivi: se il segnale va aperto in
+// automatico, lo apre e basta (niente piu' prenotazione sul cloud: era quella che faceva perdere il
+// segnale al PC quando un altro dispositivo arrivava primo).
+function tgSonoIlComputer(){ return !fblRemoto()&&!fblEMobile(); }
 // Nell'automatico il cambio di asset non puo' passare da una domanda: non c'e' nessuno a
 // rispondere. Si cambia e basta, e se non riesce il segnale torna manuale.
 async function tgPreparaAssetAutomatico(voce){
@@ -27297,6 +27474,10 @@ async function tgEseguiSegnale(voce,opzioni){
  // Nell'apertura automatica non c'e' nessuno davanti allo schermo: la conferma si salta, ma
  // tutto il resto (freni, calcolo del rischio, controlli sui livelli) e' identico.
  const automatico=!!(opzioni&&opzioni.automatico);
+ // Filtro anti-doppioni (solo manuale): se sembra lo stesso trade già aperto, lo si dice nel
+ // riepilogo e la conferma resta esplicita. In automatico il filtro scatta prima, in tgAutoDecidi.
+ const dupManuale=automatico?'':fblDedupMotivo(voce);
+ if(dupManuale)r.push('ATTENZIONE: '+dupManuale+'. Apri SOLO se vuoi davvero raddoppiare.');
  const ok=automatico?true:await appConfirm((reale?'Confermi l\'invio di ORDINI VERI':'Confermi l\'apertura')
    +' dal segnale di '+String(voce.chat||'una sala')+'?\n\n'+r.join('\n')
    +'\n\n'+(reale?'Verranno eseguiti subito sul conto MT5 collegato: non e\' una simulazione.':'Sono posizioni simulate.'));
@@ -29425,6 +29606,10 @@ function mt5ApplicaSegnale(obj){
 // sulla candela che contiene quell'istante, qualunque sia il timeframe a schermo.
 function mt5AllineaApertura(p,rp){
  if(!p||!rp)return false;
+ // La sala (dal ticket) va applicata SEMPRE, anche quando l'orario del broker qui sotto non e'
+ // utilizzabile: l'etichetta non dipende dall'ancoraggio della candela, e perderla mostrerebbe
+ // la posizione come aperta a mano.
+ mt5ApplicaSegnale(p);
  const ms=Number(rp.time)*1000;
  // Nel futuro = servizio vecchio senza correzione del fuso: meglio l'ancoraggio di prima.
  if(!(ms>0)||ms>Date.now()+5000)return false;
@@ -38005,7 +38190,10 @@ function mt5Passo1Parole(giaInstallato){
  // RICHIESTO: su telefono e tablet i pacchetti non si installano e non servono - il servizio vive
  // sul computer. Offrire un download che non si puo' nemmeno eseguire manda a cercare la soluzione
  // dove non c'e': qui l'unica cosa vera e' l'indirizzo del computer (o del server).
- if(fblEMobile()){
+ // fblRemoto() vale anche con la chiave EREDITATA di prima del 7 ottobre (l'indirizzo
+ // del computer scritto a mano, che sta solo sui telefoni): se c'e', siamo
+ // su un altro dispositivo, e i pacchetti non si installano di sicuro.
+ if(fblEMobile()||fblRemoto()){
   if(titolo)titolo.textContent='Il computer non risponde';
   if(testo)testo.innerHTML='Il collegamento a MetaTrader 5 lo fa il <b>computer</b>: da telefono o tablet '
    +'non c’è niente da installare. Controlla che il computer sia acceso e che in '
@@ -38463,7 +38651,10 @@ $('mt5DownloadTerminalBtn').addEventListener('click',()=>{
 // ===== Gate "hai installato MT5?" prima dei campi di login (vedi mt5TerminalGate in HTML) =====
 $('mt5GateNoBtn').addEventListener('click',()=>{
  $('mt5GateResult').style.display='none';
- $('mt5GateDownload').style.display='block';
+ // Il terminale MT5 si installa sul COMPUTER: da telefono/tablet (o da
+ // qualsiasi dispositivo che non sia il computer) il pulsante di
+ // download non puo' fare niente, meglio non mostrarlo.
+ $('mt5GateDownload').style.display=(fblEMobile()||fblRemoto())?'none':'block';
 });
 $('mt5GateDownloadBtn').addEventListener('click',()=>{
  window.open(MT5_TERMINAL_DOWNLOAD_URL,'_blank','noopener');
@@ -38495,6 +38686,14 @@ $('mt5GateYesBtn').addEventListener('click',async()=>{
    $('mt5GateYesBtn').disabled=false;
    $('mt5GateNoBtn').disabled=false;
    resultEl.style.display='none';
+   // Il ponte puo' morire mentre si e' al gate (e' successo: il servizio
+   // si e' impallato restando in vita). Le parole del passo 1 vanno
+   // adattate PRIMA di mostrarlo: senza questo si vede il testo statico
+   // "Installa i pacchetti aggiuntivi" col pulsante di download, anche
+   // su telefono/tablet (dove non si installa niente) e anche sul
+   // computer quando i pacchetti ci sono gia'. Stessa situazione di
+   // mt5StartLoginFlow.
+   mt5Passo1Parole(pontGiaVisto);
    mt5ShowStepVisible(1);
    return;
  }
@@ -38511,8 +38710,12 @@ $('mt5GateYesBtn').addEventListener('click',async()=>{
    mt5ShowStepVisible(3); // non richiedere più questo gate su questo PC d'ora in poi
  }else{
    resultEl.style.color='#e0857a';
-   resultEl.textContent='❌ L\'app MT5 non è presente su questo dispositivo. Vuoi procedere con l\'installazione? Usa il pulsante di download qui sotto, poi clicca di nuovo "Sì, è installato".';
-   $('mt5GateDownload').style.display='block';
+   const suAltroDispositivo=(fblEMobile()||fblRemoto());
+   resultEl.textContent=suAltroDispositivo
+    ?'❌ Il terminale MT5 non è installato sul COMPUTER a cui sei collegato: installalo lì (è un programma per Windows, non un\'app per telefono o tablet). Poi premi di nuovo "Sì, è installato".'
+    :'❌ L\'app MT5 non è presente su questo dispositivo. Vuoi procedere con l\'installazione? Usa il pulsante di download qui sotto, poi clicca di nuovo "Sì, è installato".';
+   // Come sopra: scaricare un .exe ha senso solo sul computer.
+   $('mt5GateDownload').style.display=suAltroDispositivo?'none':'block';
  }
 });
 $('mt5GateLaunchBtn').addEventListener('click',async()=>{
@@ -40505,11 +40708,16 @@ const SESS={backtest:'Storico',live:'Live',backtest_propfirm:'Storico · Prop Fi
 function contoDi(t){
  if(t&&(t.account==='kraken'||t.krakenConto||t.krakenChiave))
   return '🐙 Kraken '+String((t.krakenConto||'conto')).replace(/^🐙\s*/,'');
+ // PASSO 13: le posizioni aperte dai segnali su strumenti che MT5 non ha vivono su Capital.com,
+ // simulate. Sono una famiglia a parte, come Kraken: vanno PRIMA del ripiego su «Live», con cui
+ // altrimenti si confonderebbero (sono anche loro mode:'live' e senza ticket MT5).
+ if(t&&t.account==='capital')return '💹 Capital.com';
  if(t.mt5Ticket!=null)return 'MT5 '+(t.mt5Login?String(t.mt5Login):'(conto sconosciuto)');
  return SESS[t.mode]||String(t.mode||'Storico');
 }
 // Di quale famiglia e' un conto. Serve a non sommare quello che non si somma.
 function eKraken(nomeConto){ return String(nomeConto||'').indexOf('🐙 Kraken')===0; }
+function eCapital(nomeConto){ return String(nomeConto||'').indexOf('💹 Capital.com')===0; }
 function esito(t){ try{ return esitoOperazione(t); }catch(e){ const p=Number(t.pl); return !isFinite(p)||Math.abs(p)<0.005?'BE':(p>0?'WIN':'LOSS'); } }
 function rrPiano(t){ try{ const v=rrArrotondatoTesto(Number(t.entry),Number(t.rrSl??t.sl),Number(t.tp),':'); return v==='—'?null:v; }catch(e){ return null; } }
 function rReale(t){
@@ -40538,8 +40746,9 @@ function filtra(rs){
  // Il conto: oltre al nome preciso, due famiglie intere.
  const conto=r=>{
   if(!F.conto)return true;                       // tutto, Forex e Kraken insieme
-  if(F.conto==='__forex')return !eKraken(r.conto);
+  if(F.conto==='__forex')return !eKraken(r.conto)&&!eCapital(r.conto);
   if(F.conto==='__kraken')return eKraken(r.conto);
+  if(F.conto==='__capital')return eCapital(r.conto);
   return r.conto===F.conto;
  };
  return rs.filter(r=>(F.da==null||r.tc>=F.da)&&(F.a==null||r.tc<F.a)&&conto(r)&&(!F.asset||r.asset===F.asset)&&(!F.sala||r.sala===F.sala)&&(!F.strat||r.strat===F.strat));
@@ -40551,34 +40760,44 @@ function opzioniConto(valori){
  const el=document.getElementById('fsConto'); if(!el)return;
  const cur=el.value;
  el.textContent='';
- const forex=valori.filter(v=>!eKraken(v)), kraken=valori.filter(eKraken);
+ const kraken=valori.filter(eKraken), capital=valori.filter(eCapital);
+ const forex=valori.filter(v=>!eKraken(v)&&!eCapital(v));
  const validi=[''];
  const voce=(dove,valore,testo)=>{
   const o=document.createElement('option'); o.value=valore; o.textContent=testo;
   dove.appendChild(o); validi.push(valore);
  };
  const gruppo=(nome)=>{ const g=document.createElement('optgroup'); g.label=nome; el.appendChild(g); return g; };
- // Senza Kraken il menu resta quello di prima: niente gruppi per un solo mondo.
- if(!kraken.length){
+ // Senza famiglie a parte (Kraken/Capital.com) il menu resta quello di prima: niente gruppi per
+ // un solo mondo.
+ const famiglie=kraken.length+capital.length;
+ if(!famiglie){
   const o0=document.createElement('option'); o0.value=''; o0.textContent='Tutti i conti'; el.appendChild(o0);
   forex.forEach(v=>voce(el,v,v));
  }else{
   const o0=document.createElement('option'); o0.value='__forex'; o0.textContent='Tutti i conti Forex';
   el.appendChild(o0); validi.push('__forex');
   if(forex.length){ const g=gruppo('Forex e sessioni'); forex.forEach(v=>voce(g,v,v)); }
-  const gk=gruppo('Kraken (futures cripto, in dollari)');
-  voce(gk,'__kraken','Tutti i conti Kraken');
-  kraken.forEach(v=>voce(gk,v,v));
+  if(kraken.length){
+   const gk=gruppo('Kraken (futures cripto, in dollari)');
+   voce(gk,'__kraken','Tutti i conti Kraken');
+   kraken.forEach(v=>voce(gk,v,v));
+  }
+  if(capital.length){
+   const gc=gruppo('Capital.com (posizioni simulate)');
+   voce(gc,'__capital','Tutti i conti Capital.com');
+   capital.forEach(v=>voce(gc,v,v));
+  }
   const g2=gruppo('Insieme');
-  voce(g2,'','Tutti (Forex + Kraken)');
+  voce(g2,'','Tutti i conti');
  }
  // QUALE VOCE RESTA SCELTA. Chi non ha mai toccato il filtro, e ha anche Kraken, parte dal solo
  // Forex: meglio una vista giusta e piu' stretta che una somma fra mondi diversi decisa da noi.
  // Chi invece ha scelto a mano - anche «Tutti (Forex + Kraken)» - si tiene la sua scelta.
  const scelto=el.dataset.fsContoScelto==='1';
  let voluto=cur;
- if(!scelto&&cur===''&&kraken.length)voluto='__forex';
- el.value=validi.includes(voluto)?voluto:(kraken.length?'__forex':'');
+ if(!scelto&&cur===''&&famiglie)voluto='__forex';
+ el.value=validi.includes(voluto)?voluto:(famiglie?'__forex':'');
 }
 function opzioni(sel,valori,tutti){
  const el=document.getElementById(sel); if(!el)return; const cur=el.value;
@@ -41166,7 +41385,7 @@ window.fblStatChiudi=function(){ const ov=OV(); if(!ov)return; aperto=false; ov.
 // I pezzi con dei CONTI dentro, fuori dalla chiusura: il resto di questo modulo disegna, e si
 // controlla guardando il disegno, ma questi tre decidono dei numeri e vanno provati sui numeri.
 // In un oggetto solo, per non aggiungere tre nomi globali.
-window.fblStatCalcoli={contoDi,eKraken,tendenzaLineare};
+window.fblStatCalcoli={contoDi,eKraken,eCapital,tendenzaLineare};
 document.addEventListener('click',ev=>{
  const t=ev.target; if(!t||!t.closest)return;
  if(t.closest('#fsCloseBtn'))return fblStatChiudi();

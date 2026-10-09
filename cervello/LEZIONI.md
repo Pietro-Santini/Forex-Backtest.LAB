@@ -127,3 +127,27 @@
 - **Una cache si giudica da quando NON risponde.** Le due memorie aggiunte al disegno hanno i
   test sul caso in cui l'ingresso cambia, non su quello in cui resta uguale: una cache che
   risponde con roba vecchia e' peggio del lavoro che risparmia.
+- **Un servizio può essere vivo come processo e morto come porta.** Il 9 ottobre
+  il ponte degli ordini: il processo c'era, il log finiva con 200 OK di pochi
+  minuti prima, ma `netstat -ano` non mostrava NESSUN ascolto su 8000 (grafico e
+  segnali invece ascoltavano). Un hang silenzioso lascia il processo in vita senza
+  nessun errore da leggere: il log dice "va tutto bene" perché l'ultima riga a
+  buon fine risale a prima del blocco. Chi dice "il servizio non risponde" va
+  creduto e verificato sulla PORTA (`netstat -ano | findstr :8000`), non sul
+  processo e non sul log. E il riavvio è rimedio sufficiente: l'exe a ogni avvio
+  fa piazza pulita delle istanze vecchie di sé e del feed.
+- **Nel test, aspetta quello che SPARISCE, non quello che resta.** Nel gate MT5
+  il titolo del passo 1 è visibile anche al passo 2: attendere che "compaia"
+  fa leggere lo schermo una ventina di secondi prima del vero esito. Il segnale
+  giusto è la chiusura del gate (display diverso da `flex`), che avviene solo
+  quando il flusso cambia davvero passo.
+- **`resolveMt5SymbolForAsset` ritorna `null` ANCHE per le cripto** — in cima ha
+  `if(binanceAssetKey(asset))return null;`, quindi quel `null` vuol dire due cose diverse:
+  «MT5 non ce l'ha» e «è una cripto, non guardare qui». Chi lo legge come la sola prima cosa
+  («MT5 non ce l'ha, vado su un altro mercato») dirotta a torto le cripto. Prima di usarlo come
+  prova, escludere esplicitamente gli asset cripto. Copre il caso
+  `laboratorio/app/capital_instradamento.test.mjs`. — 9 ottobre 2026.
+- **Un esito che dipende da una CHIAMATA (a MT5, a Capital.com) non si decide in una funzione
+  sincrona:** l'unica risposta possibile sarà quella di ripiego, e sembrerà una scelta. Se la
+  decisione deve chiedere, la funzione va resa asincrona, e la si mette dove l'`await` è già
+  ammesso (qui `tgAutoValuta`, non `tgContoPerSegnale`). — 9 ottobre 2026.

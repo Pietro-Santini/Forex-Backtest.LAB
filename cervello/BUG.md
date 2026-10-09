@@ -202,3 +202,51 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Con un indirizzo vecchio rimasto scritto, ordini e segnali lo ignoravano e il grafico ci sbatteva.
   Ora si prova: prima dritto al computer (una tappa in meno per i prezzi al millisecondo), poi dal
   server; e c'e' scritto quale strada e' in uso. Test: `laboratorio/app/strada_grafico.test.mjs`.
+- **«Installa i pacchetti aggiuntivi» compariva ancora su telefono e tablet** —
+  risolto app v112 — 9 ottobre 2026. Due buchi con la stessa conseguenza:
+  (1) il gate «hai già installato MT5?» (passo 2) cadeva sul passo 1 col testo
+  STATICO dell'installazione (`mt5ShowStepVisible(1)` senza `mt5Passo1Parole`)
+  quando il bridge smetteva di rispondere mentre si era al gate — esattamente
+  cosa fa un ponte impallato — mostrando «Installa i pacchetti aggiuntivi» col
+  pulsante di download su QUALSIASI dispositivo, e lo stesso testo statico anche
+  sul computer quando i pacchetti c'erano già; (2) `fblEMobile()` non riconosceva
+  un telefono con il browser in «modalità desktop»: la User-Agent mente e il
+  controllo chiedeva `maxTouchPoints > 1` (un telefono così ne ha anche solo 1).
+  Ora il gate adatta le parole prima di mostrare il passo 1
+  (`mt5Passo1Parole(pontGiaVisto)`), `fblEMobile()` guarda l'hardware (touch —
+  anche di una sola punta — + puntatore grossolano + schermo piccolo) e i Client
+  Hints del sistema operativo, e la condizione vale anche per `fblRemoto()`
+  (la chiave ereditata `fb_indirizzo_ponte`, scritta solo sui telefoni prima del
+  7 ottobre). Il pulsante «Scarica MetaTrader 5» del gate non compare più fuori
+  dal computer, e il suo messaggio dice che il terminale si installa sul COMPUTER.
+  Test: `laboratorio/app/pacchetti_mobile.test.mjs` (4 test, 3 fallivano prima).
+- **Segnale su un asset che vive solo su Capital.com mandato a MT5** — risolto app v113 —
+  9 ottobre 2026. PASSO 13. Con MT5 collegato, il segnale di una sala su uno strumento che non
+  esiste né su Kraken né su MT5 (un'azione, un indice) veniva comunque mandato a MT5 come ORDINE
+  VERO, con l'epic di Capital.com come simbolo: il broker quel simbolo non lo conosce e lo
+  rifiuta, la posizione non si apriva e il segnale restava «eseguito» a metà.
+  Catena del difetto (righe di `app.html` PRIMA della correzione): `tgContoPerSegnale` (25518)
+  ritornava solo `'kraken' | 'mt5' | 'sim'`; `tgAssetPerStrumento` (26940) trovava GIÀ l'epic su
+  Capital.com (26976-26979); `tgEseguiSegnale` (27234) procedeva con `reale=!!mt5Connected`;
+  `openMarketTrade` (19565) dirottava a `placeRealMt5Order`, che fa `POST /order/market` (19473)
+  con quel simbolo. Capital.com nell'app è di sola LETTURA: nessun endpoint per inviare ordini
+  (l'unica POST è il login `/api/v1/session`), le posizioni «Capital.com» sono simulate in app
+  (`positions.push`).
+  CAUSA VERA: la decisione del conto stava in una funzione SINCRONA (`tgContoPerSegnale`) che non
+  poteva né chiedere a MT5 se conosce lo strumento né accendere la connessione a Capital.com:
+  l'unico esito possibile era `'mt5'`.
+  CORREZIONE: nuova `tgContoEffettivoPerSegnale(seg)` ASINCRONA che, se il conto sarebbe `'mt5'`,
+  chiede a `resolveMt5SymbolForAsset` se il broker ha lo strumento (`null` = «non ce l'ha»,
+  definitivo; `undefined` = errore di rete, nel dubbio si resta su MT5) e in tal caso accende
+  Capital.com in silenzio (`tgCapitalAccendiInSilenzio`, coi dati salvati, senza aprire moduli) e
+  ritorna `'capital'` se Capital.com conosce l'epic. Nuovo ramo `conto==='capital'` in
+  `tgAutoValuta` (prezzo da Capital.com via `fetchLatestPriceRest`, `tgPiano`, apertura con
+  `tgCapitalEseguiSegnale`). `tgCapitalEseguiSegnale` apre posizioni SIMULATE in `positions[]`
+  marcate `account:'capital'`: MAI un ordine a MT5. Capital.com diventa poi una FAMIGLIA A PARTE
+  nel Trade Journal: `contoDi` ritorna `'💹 Capital.com'` per `account==='capital'`, nuovo helper
+  `eCapital`, gruppo dedicato in `opzioniConto`, filtro `__capital`, badge in
+  `journalSessionBadgeHtml`.
+  Test: `laboratorio/app/capital_instradamento.test.mjs` — 5 test: (1) MT5 non ha lo strumento ma
+  Capital sì → conto `'capital'`; (2) se MT5 lo ha → resta `'mt5'`; (3) senza connessione a
+  Capital.com non si tenta; (4) l'esecutore apre simulato e a MT5 arrivano 0 ordini; (5) nel
+  Journal Capital.com è famiglia a parte, non «Live». Prima della correzione i 5 test erano rossi.

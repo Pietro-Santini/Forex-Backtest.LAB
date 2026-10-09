@@ -58,13 +58,12 @@ test('apertura automatica: chiede segnali + esecuzione; senza consenso non apre 
     await pagina.evaluate(PREPARA);
     // freno: segnale da aprire ma nessun consenso -> non si apre e lo dice
     const freno = await pagina.evaluate(async () => {
-      tgAutoDecidi = () => ({apri:true}); let rivendicato = false; tgRivendicaSegnale = async () => { rivendicato = true; return true; };
+      tgAutoDecidi = () => ({apri:true});
       const voce = {segnale:{strumento:'BTCUSD'}};
       await tgAutoValuta(voce, 'kraken');
-      return {motivo: voce.autoMotivo || '', rivendicato};
+      return {motivo: voce.autoMotivo || ''};
     });
     assert.match(freno.motivo, /consenso/);
-    assert.equal(freno.rivendicato, false);
     // accensione dal pannello: prima le 4 avvertenze dei segnali, poi le 6 dell'esecuzione
     await pagina.evaluate(() => { const c = $('tgAutoAttivo'); c.checked = true; c.dispatchEvent(new Event('change')); });
     await pagina.waitForSelector('#fblConsensoOverlay');

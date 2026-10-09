@@ -4,7 +4,7 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v111**, Setup **1.0.111**, server Oracle allineato a `main`.
+Stato alla scrittura: app **v112**, Setup **1.0.112**, server Oracle allineato a `main`.
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
@@ -259,7 +259,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 ---
 
-## 5. Che cosa è stato fatto (storia recente, v106 → v111)
+## 5. Che cosa è stato fatto (storia recente, v106 → v112)
 
 | Versione | Che cosa |
 |---|---|
@@ -269,6 +269,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 | **v109** | **Prestazioni** (sotto), origine delle operazioni, raggruppamento con tolleranza, un solo nome di sala ovunque, numero di target dalla storia della sala |
 | **v110** | Distribuzione equa, «chiusura parziale» col nome giusto, spostamento dello stop rimesso anche nelle chiusure parziali, le stesse scelte nell'apertura automatica, ogni sala con i suoi target |
 | **v111** | Risolto il bug del grafico della resa al tocco; **operazioni a blocco** in stile MetaTrader 5 |
+| **v112** | Il popup «installa i pacchetti aggiuntivi» non esiste più fuori dal computer: il gate MT5 non cadeva più sul passo 1 col testo statico (il ponte può morire mentre si è al gate), `fblEMobile()` riconosce anche il telefono in «modalità desktop» (User-Agent da computer, touch anche di una sola punta), il download di MetaTrader 5 esce dal gate su telefono/tablet |
 
 ### Le prestazioni (v109–v111), perché è istruttivo
 
@@ -297,8 +298,9 @@ un computer non si vede niente. Vedi `LEZIONI.md`.
 
 ## 6. Che cosa manca
 
-Il lavoro procede su una **scaletta concordata a voce** col proprietario l'8 ottobre 2026, in 18
-passi. I passi 1–12 e 14 sono fatti. Restano:
+Il lavoro procede su una **scaletta concordata a voce** col proprietario:
+l'8 ottobre 2026 i primi 18 passi, il 9 ottobre i passi 18–24. I passi
+1–12 e 14 sono fatti. Restano i passi 13, 15, 16, 17 e 18–24, in quest'ordine:
 
 ### Passo 13 — Instradamento su Capital.com
 Se una sala manda un segnale su uno strumento che **non esiste né su Kraken né su MT5** (un'azione,
@@ -323,6 +325,58 @@ reinstallazione sul PC.
 
 ### Passo 17 — Cervello e memoria
 Aggiornare i documenti a ogni giro. Questo file ne fa parte.
+
+### Passo 18 — Linee TP/SL «fino alla candela colpita»
+Portando a grafico le operazioni di una sala dalla cronologia, le linee
+di TP e SL **non continuano fino a oggi**: si fermano alla candela in
+cui il livello è stato colpito. Accanto, **alla sinistra** del punto in
+cui un TP è stato preso, una **spunta di conferma**. Le linee restano
+ferme dove hanno incontrato la candela di riferimento: non oltre.
+
+### Passo 19 — SL non colpito: lunghezza dell'ultimo TP
+Se lo stop loss **non viene preso**, la sua linea ha la stessa lunghezza
+dell'ultima linea di TP disegnata: più ordine, e si vede meglio.
+
+### Passo 20 — Stop loss mobile a grafico
+La strategia può prevedere: TP1 → SL fermo, TP2 → SL a break even,
+TP3 → SL al TP1, e così via. Il grafico deve mostrare **gli spostamenti**:
+- SL colpito subito (prima di ogni TP): la linea resta al livello originale;
+- TP preso: la linea dello SL si sposta al livello previsto (break even,
+  TP1, …);
+- dove lo SL viene **colpito**: una **X**;
+- quando lo SL si è spostato, l'etichetta non dice più «SL» ma **«Stop P»**
+  (stop profit, per non scrivere troppo).
+
+### Passo 21 — Grafico della resa: schermo bianco e zoom
+Due difetti da eliminare (da riprodurre, controllare e testare prima
+di consegnare — non deve esistere):
+- scorrendo indietro nella resa, a volte la schermata **si pianta e
+  diventa bianca**;
+- il grafico **si zooma da solo** al passaggio del mouse: deve restare
+  fermo.
+Opzionale: un pallino di riferimento sulla linea, con la data del punto
+in cui ci si trova scritta sotto.
+
+### Passo 22 — Mostra/nascondi posizioni e linee
+Sul grafico (non le linee TP/SL):
+- pulsante **mostra/nascondi posizioni**: le linee che uniscono la freccia
+  di apertura a quella di chiusura;
+- pulsante **mostra/nascondi linea**: le linee di prezzo di apertura e
+  chiusura;
+- i filtri vanno anche nelle **impostazioni dello style**.
+
+### Passo 23 — Selezione della posizione sul grafico
+- Selezionando una posizione (dalla lista, o toccando un suo TP/SL) si
+  vede **solo la sua linea** di apertura/chiusura, escluse le altre;
+- il tasto «seleziona» **si disattiva da solo** quando si clicca fuori
+  dal grafico;
+- la **linea orizzontale del punto di apertura** è cliccabile: seleziona
+  la posizione direttamente a grafico, non solo dalla lista.
+
+### Passo 24 — Spostare TP/SL dal grafico
+Con la posizione selezionata, il pulsante **TP/SL** permette di spostare
+TP e SL di quella posizione. Cliccando un punto vuoto del grafico:
+deselezione totale, tutto torna normale.
 
 ### Limiti noti, non difetti
 

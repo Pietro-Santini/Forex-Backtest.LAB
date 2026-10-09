@@ -58,3 +58,34 @@ Formato: data — chi — cosa — esito collaudo — commit.
   MetaTrader 5: tutte, in guadagno, in perdita, per direzione, e un asset alla volta con dentro
   buy e sell. Ogni voce dice quante posizioni tocca e con che risultato, e chiede conferma.
   10 test nuovi - verde
+- 2026-10-09 - Claude - prima il guasto vivo, poi la richiesta del proprietario.
+  Il ponte degli ordini si era impallato verso le 01:59: il processo
+  ForexBacktestLAB era ancora in lista e il log finiva con 200 OK di pochi
+  minuti prima, ma la porta 8000 non ascoltava piu' (grafico 8001 e segnali
+  8769 invece si') - da lì "la connessione a ordini dà problemi" e il telefono,
+  che passa dal server, non seguiva piu' MT5. Basta riavviare l'exe: a ogni
+  avvio uccide le istanze vecchie di sé e di Mt5FeedServer e riparte pulito.
+  Poi app v112, chiesta a voce: il popup «scarica i pacchetti aggiuntivi» non
+  deve esistere su telefono e tablet. Due buchi (vedi BUG.md): il gate cadeva
+  sul passo 1 col testo statico quando il ponte moriva mentre si era al gate, e
+  fblEMobile() non vedeva il telefono in «modalità desktop». Il download di
+  MetaTrader 5 esce dal gate su ogni dispositivo che non sia il computer.
+  4 test nuovi (laboratorio/app/pacchetti_mobile.test.mjs) - verde
+- 2026-10-09 - agenti - passo 13 della scaletta, l'instradamento su Capital.com
+  app v113 / Setup 1.0.113. Con MT5 collegato, il segnale di una sala su uno
+  strumento che non esiste ne' su Kraken ne' su MT5 (azione, indice) finiva
+  mandato a MT5 come ordine vero con l'epic di Capital.com, e il broker lo
+  rifiutava. Ora c'e' tgContoEffettivoPerSegnale (asincrona) che chiede a MT5
+  se ha lo strumento e, se non ce l'ha, accende Capital.com da sola (in
+  silenzio, senza moduli) e apre li' una posizione SIMULATA, mai un ordine a
+  MT5. Le posizioni Capital.com sono una famiglia a parte nel Trade Journal
+  ('💹 Capital.com'), come Kraken. Prima il test che fallisce: nuovo file
+  laboratorio/app/capital_instradamento.test.mjs, 5 test che prima erano rossi
+  e ora passano; sintassi dell'app pulita. Versioni alzate: sw.js CACHE_NAME a
+  forex-backtest-lab-v113 e installer_build/installer.iss MyAppVersion a
+  1.0.113. Nota di metodo: il lavoro e' stato preparato facendo esplorare il
+  codice a tre agenti indipendenti in parallelo e poi confrontando le loro
+  letture con la fonte. La lezione e' che gli agenti servono a non fidarsi di
+  una sola lettura, ma la verifica vera resta sempre il file e il test. Non e'
+  stato pubblicato nulla: tutto resta non committato in attesa del via del
+  proprietario.
