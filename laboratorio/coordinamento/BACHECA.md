@@ -79,6 +79,11 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
      Cronologia e resa sono **gia' condivise** in `app.html` (nessuna modifica all'app per questo passo).
      Test: `laboratorio/ponte/test_profilo_syntra.py` (4 casi; prima **rossi**, ora **4/4 verdi**).
      Collaudo completo **verde** (`Falliti: 0`). Diagnosi con sub-agenti (mappa 15/16 e mappa 18-24).
+  9. **NUOVO — FATTO**: **Passo 17** — memoria riportata al vero. `CONSEGNA.md` allineata a `v119`
+     (storia `v113`→`v119`, Passi 13/15/16 segnati fatti, mappa di `app.html` a ~41.500 righe),
+     `DIARIO.md` completato, `BUG.md` con i difetti dell'ondata 1 e i Passi 15/16, una lezione in
+     `LEZIONI.md`, `MAPPA.md`/`IDEE.md` aggiornate, `ORACLE.md` avverte che il server Oracle va
+     riallineato (`prepara_server.sh`) perché `segnali_bridge.py` è cambiato con la v119.
 
 ## Passa parola (messaggi)
 - `MESSAGGI/01-mappa-segnali.md` — mappa completa della pipeline segnali: parser Python, costruzione
@@ -112,6 +117,6 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
   avviso + conferma esplicita.
 
 ## Coda di lavoro
-- Passi 15, 16, 17, poi 18 → 24 (uno alla volta).
+- **Passi 18 → 24** (uno alla volta). I Passi 13, 15, 16 e 17 sono fatti.
 - A fine percorso: documento separato con (1) elenco di TUTTE le modifiche per passo/file/funzione e
   (2) guida passo-passo per collaudare il tutto dentro il programma.

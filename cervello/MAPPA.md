@@ -3,7 +3,7 @@
 ## I pezzi
 | Pezzo | Dove | Cosa fa |
 |---|---|---|
-| App | `app.html` (~38.500 righe, un solo file) | Tutto il programma nel browser: grafico, backtest, ordini, Trade Journal, statistiche, sale segnali |
+| App | `app.html` (~41.500 righe / 4,2 MB, un solo file) | Tutto il programma nel browser: grafico, backtest, ordini, Trade Journal, statistiche, sale segnali |
 | Service worker | `sw.js` | Cache dell'app per telefono/tablet. `CACHE_NAME` cambia a ogni versione |
 | Sito | GitHub Pages da `main` | `index.html` (presentazione), `login.html`, `app.html`, pagine legali |
 | Ponte ordini | `installer_build/build/bridge.py` → `ForexBacktestLAB.exe`, porta **8000** | Ordini MT5, Kraken (`/kraken/*`), registratore, libreria CSV, avvio degli altri servizi |
@@ -31,9 +31,12 @@ app → `ForexBacktestLAB.exe` (8000) → MT5 / Kraken. Segnali: app → 8000 `/
   `#quickTradeCluster` (`updateQuickTradeBar`, `quickAdjustLots`).
 - Rischio e lotto: `computeSuggestedLots()`, `computeSuggestedLotsPending()`; Kraken:
   `krakenModoOrdini()`, `krakenLottiConsigliati()`, `rischioRealeLotto()`, `autoLottoDaGrafico()`.
-- Conto scelto sopra la dashboard: `fblContoVista` (`'mt5'|'kraken'|'storico'`), `fblContoScegli()`.
+- Conto scelto sopra la dashboard: `fblContoVista` (`'mt5'|'kraken'|'capital'|'storico'`),
+  `fblContoScegli()`, `fblContoEffettivo`.
 - Kraken: `krakenBridge()`, `krakenAggiornaConto()`, `krakenLeggiPosizioni()`, `krakenStrategieValuta()`,
   `krakenRegistraChiusura()` (Trade Journal), `krakenDisegnaGrafico()`, `krakenLeggiPendenti()`.
+- Capital.com: `capitalOrdineManuale()`, `tgCapitalEseguiSegnale()`, `resolveCapitalEpic()`,
+  `ensureCapitalConnected()` — prezzi dal vivo e posizioni **simulate**, mai ordini veri.
 - Sale segnali: `tgStrategie`, `tgEseguiSegnale()`, `tgAutoInCoda()`, cronologia `fblCrono*`.
 - Finestra PIP: gli ascoltatori vanno registrati con `fblDelega()` e cercati con `$$tutti()`,
   altrimenti nella finestra staccata non funzionano.

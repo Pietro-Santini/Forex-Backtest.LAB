@@ -9,7 +9,7 @@ A = blocca o confonde un neofita; B = migliora molto; C = rifinitura.
   proprietario — da fare
 - **[A] Glossario** (lotto, pip, SL, TP, R:R, margine, leva, pendente LIMIT/STOP) raggiungibile da
   ogni etichetta. — proprietario — da fare
-- **[B] Spezzare app.html** in più file: 38.500 righe in un file solo sono la prima causa di
+- **[B] Spezzare app.html** in più file: ~41.500 righe in un file solo sono la prima causa di
   instabilità e di lentezza nelle modifiche. — regista — da valutare (lavoro grosso)
 - **[B] Indicatore "ponte sul PC acceso/spento"** sempre visibile quando il conto scelto ne ha
   bisogno. — da fare

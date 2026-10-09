@@ -89,3 +89,27 @@ Formato: data — chi — cosa — esito collaudo — commit.
   una sola lettura, ma la verifica vera resta sempre il file e il test. Non e'
   stato pubblicato nulla: tutto resta non committato in attesa del via del
   proprietario.
+- 2026-10-09 - agenti - ONDATA 1 della scaletta, in un colpo solo e con piu' agenti in
+  parallelo. Apertura automatica dei segnali: la fa SOLO il computer (telefono e
+  tablet mostrano il segnale e aprono a mano). Corretto l'errore latente del passo
+  13: nel ramo Capital di tgAutoValuta si usava sym prima della dichiarazione (TDZ)
+  e l'apertura automatica Capital.com andava in errore. Filtro anti-doppioni dei
+  segnali (v116): stesso strumento, direzione, fascia d'entrata e target non aprono
+  una seconda posizione - in automatico blocca, a mano avvisa e chiede conferma.
+  Attribuzione della sala nella tabella posizioni allineata al Trade Journal (v115),
+  cosi' la STESSA posizione mostra la stessa sala e non piu' 'tu'. L'asse dei prezzi
+  e le colonne COB/SVP non zoomano piu' per errore (v117). Capital.com nella barra
+  dei conti (v118): ordini MANUALI simulati, mai a MT5. Test nuovi:
+  apertura_solo_computer, filtro_doppioni (+_auto), attribuzione_mt5,
+  asse_prezzi_zoom, capital_manuale. Pubblicato: commit 86f6293 (v117) e 560f95b
+  (v118) - verde - Falliti: 0
+- 2026-10-09 - agenti - Passi 15/16: storia completa di un utente Syntra. Il robot
+  tocca il nome in alto a destra di una scheda, apre il profilo, scorre e legge
+  tutte le operazioni, e le ARCHIVIA nella cronologia della sala 'Syntra · <utente>'
+  (mai in bacheca, senza toccare la pagina Notifiche). Il ponte _manda_storico per
+  le sale Syntra chiede la lettura e aspetta che finisca (max 60 s). app v119 /
+  Setup 1.0.119. Test: laboratorio/ponte/test_profilo_syntra.py (4, prima rossi) -
+  verde - Falliti: 0 - 6fc0a5b
+- 2026-10-09 - agenti - Passo 17: memoria riportata al vero. CONSEGNA allineata a
+  v119 (storia v113->v119, passi 13/15/16 chiusi, mappa di app.html a ~41.500
+  righe), diario e registro bug completati, MAPPA e IDEE aggiornate. - verde

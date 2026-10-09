@@ -151,3 +151,9 @@
   sincrona:** l'unica risposta possibile sarà quella di ripiego, e sembrerà una scelta. Se la
   decisione deve chiedere, la funzione va resa asincrona, e la si mette dove l'`await` è già
   ammesso (qui `tgAutoValuta`, non `tgContoPerSegnale`). — 9 ottobre 2026.
+- **Un finto che solleva prima di stampare sembra un ramo che non chiama.** Nel test del profilo
+  Syntra il finto `leggi_profilo` moriva su una variabile `chiamate` mai dichiarata (`NameError`
+  valutato negli argomenti della `print`, quindi **prima** della stampa) e l'`except Exception` del
+  ramo inghiottiva l'errore: il sintomo era «la funzione non viene chiamata», mentre veniva chiamata
+  e falliva. Nei finti dei test vanno definiti **tutti** i contenitori, e un'eccezione inattesa deve
+  arrivare al test invece di essere assorbita. — 9 ottobre 2026.

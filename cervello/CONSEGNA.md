@@ -4,7 +4,7 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v112**, Setup **1.0.112**, server Oracle allineato a `main`.
+Stato alla scrittura: app **v119**, Setup **1.0.119**, server Oracle allineato a `main`.
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
@@ -259,7 +259,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 ---
 
-## 5. Che cosa è stato fatto (storia recente, v106 → v112)
+## 5. Che cosa è stato fatto (storia recente, v106 → v119)
 
 | Versione | Che cosa |
 |---|---|
@@ -270,6 +270,13 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 | **v110** | Distribuzione equa, «chiusura parziale» col nome giusto, spostamento dello stop rimesso anche nelle chiusure parziali, le stesse scelte nell'apertura automatica, ogni sala con i suoi target |
 | **v111** | Risolto il bug del grafico della resa al tocco; **operazioni a blocco** in stile MetaTrader 5 |
 | **v112** | Il popup «installa i pacchetti aggiuntivi» non esiste più fuori dal computer: il gate MT5 non cadeva più sul passo 1 col testo statico (il ponte può morire mentre si è al gate), `fblEMobile()` riconosce anche il telefono in «modalità desktop» (User-Agent da computer, touch anche di una sola punta), il download di MetaTrader 5 esce dal gate su telefono/tablet |
+
+| **v113** | **Passo 13 — instradamento su Capital.com**: se una sala manda un segnale su uno strumento che non esiste né su Kraken né su MT5 (azione, indice), l'app lo cerca su Capital.com e apre lì una posizione **simulata** — mai più un ordine vero a MT5 con l'epic di Capital.com. Nuova `tgContoEffettivoPerSegnale` (asincrona); Capital.com diventa una **famiglia a parte** nel Trade Journal (`💹 Capital.com`) |
+| **v115** | **Attribuzione della sala**: la tabella delle posizioni e il Trade Journal dicono la **stessa** sala per la stessa posizione (sparito il `👤 tu` dove c'era un segnale MT5) |
+| **v116** | **Filtro anti-doppioni dei segnali**: stesso strumento, direzione, fascia d'entrata e target non aprono una seconda posizione. In automatico **blocca**, a mano **avvisa e chiede conferma**. Esenti «aggiunta» e «seconda entrata» |
+| **v117** | La **barra dell'asse dei prezzi** fa **solo zoom** (non sposta più per sbaglio TP/SL o pendenti sotto il dito); le colonne **COB/SVP** non zoomano più; l'**apertura automatica** dei segnali la fa **solo il computer** (telefono/tablet mostrano il segnale e aprono a mano) |
+| **v118** | **Capital.com nella barra dei conti**: pulsante 💹 tra Kraken e Storico; gli ordini **manuali** su Capital.com sono **simulati**, mai un ordine a MT5 |
+| **v119** | **Passi 15/16 — storia completa di un utente Syntra**: il robot tocca il nome in alto a destra di una scheda, apre il **profilo**, scorre e legge tutte le operazioni, e le **archivia** nella cronologia della sala `Syntra · <utente>` (mai in bacheca, senza toccare la pagina Notifiche). Il ponte `_manda_storico` chiede la lettura e aspetta che finisca |
 
 ### Le prestazioni (v109–v111), perché è istruttivo
 
@@ -300,17 +307,17 @@ un computer non si vede niente. Vedi `LEZIONI.md`.
 
 Il lavoro procede su una **scaletta concordata a voce** col proprietario:
 l'8 ottobre 2026 i primi 18 passi, il 9 ottobre i passi 18–24. I passi
-1–12 e 14 sono fatti. Restano i passi 13, 15, 16, 17 e 18–24, in quest'ordine:
+1–16 sono fatti. Restano i passi 17 e 18–24, in quest'ordine:
 
-### Passo 13 — Instradamento su Capital.com
+### Passo 13 — Instradamento su Capital.com *(FATTO, v113)*
 Se una sala manda un segnale su uno strumento che **non esiste né su Kraken né su MT5** (un'azione,
-un indice), l'app deve cercarlo su Capital.com e aprirlo lì. Se non lo trova da nessuna parte non
-apre niente, ma il segnale resta segnalato nel pannello.
-**Da verificare per primo**: che cosa sa fare davvero il collegamento a Capital.com nell'app di
-oggi. Potrebbe essere solo lettura prezzi, e in quel caso il lavoro è molto più grande di così.
+un indice), l'app lo cerca su Capital.com e lo apre lì. Se non lo trova da nessuna parte non apre
+niente, ma il segnale resta segnalato nel pannello. Il collegamento a Capital.com nell'app è di
+**sola lettura prezzi**: le posizioni «Capital.com» sono **simulate** in app, mai un ordine vero.
+Test: `laboratorio/app/capital_instradamento.test.mjs` (5).
 
-### Passi 15 e 16 — Storico di un utente Syntra
-Oggi di Syntra si leggono solo le notifiche nuove. Serve poter scegliere un nome utente e vederne
+### Passi 15 e 16 — Storico di un utente Syntra *(FATTI, v119)*
+Oggi di Syntra si leggevano solo le notifiche nuove. Serve poter scegliere un nome utente e vederne
 la storia completa, **identica a quella delle sale Telegram**: operazioni raggruppate per asset,
 win rate per asset e totale, resa, con lo stesso selettore di periodo.
 
@@ -323,8 +330,16 @@ delle notifiche**, altrimenti va in confusione. Riprende quando ha finito.
 Questi due passi vivono in `segnali_bridge.py`, quindi richiedono un **Setup nuovo** e una
 reinstallazione sul PC.
 
-### Passo 17 — Cervello e memoria
-Aggiornare i documenti a ogni giro. Questo file ne fa parte.
+**FATTO (v119)**: realizzati lato robot e ponte. `leggi_profilo` tocca il nome, apre il profilo e legge
+le operazioni; il ramo dedicato in `ciclo` le **archivia** nella cronologia della sala `Syntra ·
+<utente>` senza toccare la pagina Notifiche (vincolo rispettato); `_manda_storico` chiede la lettura e
+aspetta che finisca (max 60 s, con messaggio chiaro se l'emulatore non è collegato).
+Test: `laboratorio/ponte/test_profilo_syntra.py` (4, prima rossi).
+
+### Passo 17 — Cervello e memoria *(in corso)*
+Aggiornare i documenti a ogni giro. Questo file ne fa parte. È la manutenzione della memoria:
+`cervello/` e `laboratorio/coordinamento/` vanno riportati allo stato vero a ogni giro (diario, bug,
+lezioni, mappa, consegna e bacheca), altrimenti chi riprende legge cose vecchie.
 
 ### Passo 18 — Linee TP/SL «fino alla candela colpita»
 Portando a grafico le operazioni di una sala dalla cronologia, le linee
@@ -468,13 +483,14 @@ Aggiornare `cervello/`: `BUG.md` (causa vera + test), `LEZIONI.md` (regola prati
 
 | Righe (circa) | Che cosa |
 |---|---|
-| 30–810 | CSS |
+| 30–860 | CSS |
 | 870–1300 | modulo Firebase: accesso, abbonamento, stato sessione — **qui si decide se l'app parte** |
 | 1300–3750 | markup, 26 finestre (`…Overlay`) |
-| 3750–38800 | il programma: grafico, indicatori, ordini, conti, sale segnali, collegamenti |
-| 38800–39400 | cronologia delle sale segnali e rendimento di una sala |
-| 39400–41200 | pagina Statistiche |
+| 3750–39840 | il programma: grafico, indicatori, ordini, conti, sale segnali, collegamenti |
+| 39840–40720 | cronologia delle sale segnali e rendimento di una sala |
+| 40720–41500 | pagina Statistiche |
 
 Famiglie di funzioni, riconoscibili dal nome: `tg…` sale segnali · `fbl…` collegamenti, server,
 nomi delle sale, posizioni raggruppate · `kraken…` conto cripto · `mt5…` ponte e ordini veri ·
-`footprint…`, `vp…`, `tvp3d…` indicatori di volume · `strat…`, `rend…` strategia e resa di una sala.
+`footprint…`, `vp…`, `tvp3d…` indicatori di volume · `strat…`, `rend…` strategia e resa di una sala ·
+`capital…`, `tgCapital…` conto e ordini Capital.com (simulati).

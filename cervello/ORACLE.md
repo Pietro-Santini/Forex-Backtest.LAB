@@ -75,3 +75,10 @@ indirizzo chiesto al server) **oppure** passare dal server. In nessuno dei due c
 niente a mano.
 
 Prove: `laboratorio/ponte/test_porta_unica.py` (5).
+
+## Aggiornamenti da fare sul server (9 ottobre 2026)
+- Il **Passo 15/16** (v119) ha modificato `segnali_telegram/segnali_bridge.py` e `syntra_lettore.py`:
+  per averlo sul server Oracle serve `cd /srv/fbl/progetto/server_oracle && bash prepara_server.sh`.
+  Il robot Syntra gira sul **PC** (BlueStacks), ma il ponte che riceve la richiesta di storico è sul
+  server: finché il server non è aggiornato, chiedere la storia di un utente Syntra dal telefono non
+  funziona. Da eseguire (e verificare) alla prossima sessione di lavoro.
