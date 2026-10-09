@@ -37,7 +37,9 @@ app → `ForexBacktestLAB.exe` (8000) → MT5 / Kraken. Segnali: app → 8000 `/
   `krakenRegistraChiusura()` (Trade Journal), `krakenDisegnaGrafico()`, `krakenLeggiPendenti()`.
 - Capital.com: `capitalOrdineManuale()`, `tgCapitalEseguiSegnale()`, `resolveCapitalEpic()`,
   `ensureCapitalConnected()` — prezzi dal vivo e posizioni **simulate**, mai ordini veri.
-- Sale segnali: `tgStrategie`, `tgEseguiSegnale()`, `tgAutoInCoda()`, cronologia `fblCrono*`.
+- Sale segnali: `tgStrategie`, `tgEseguiSegnale()`, `tgAutoInCoda()`, cronologia `fblCrono*`
+  (`fblCronoValuta`, `fblCronoAncore`, `fblCronoStopPath`, `fblCronoDisegna`; la strategia di una sala
+  sta in `localStorage['fbl_crono_strategia']`, letta con `stratLeggi`).
 - Finestra PIP: gli ascoltatori vanno registrati con `fblDelega()` e cercati con `$$tutti()`,
   altrimenti nella finestra staccata non funzionano.
 - Trade chiusi: array `trades`, salvati con `scheduleSave()`.

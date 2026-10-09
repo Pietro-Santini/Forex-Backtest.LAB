@@ -25347,7 +25347,10 @@ function fblSimulaStrategia(seg,ser,cfg){
  const st=fblStrategiaNormalizza(cfg,tps.length);
  const inizio=Number(seg.tFill||seg.ts)||0;
  let stop=slIniziale, R=0, rimasto=1, presi=0, ambiguo=false, chiuse=[];
- let uscita=null, fine=null;
+ let uscita=null, fine=null, stopColpito=false;
+ // PASSO 20: il percorso dello stop (tempo + livello), per disegnarlo a grafico: parte dallo stop
+ // iniziale e si allunga a ogni spostamento deciso dalla strategia.
+ const storicoStop=[{t:inizio,p:slIniziale}];
 
  const dentro=(ser||[]).filter(c=>Number(c.t)>=inizio);
  for(let j=0;j<dentro.length;j++){
@@ -25361,7 +25364,7 @@ function fblSimulaStrategia(seg,ser,cfg){
    // Tutto quello che resta esce allo stop di adesso: puo' essere una perdita, un pareggio o
    // addirittura un guadagno, se la strategia lo aveva gia' spostato oltre l'entrata.
    R+=rimasto*((stop-entry)*verso/rischio);
-   uscita=stop; rimasto=0;
+   uscita=stop; rimasto=0; stopColpito=true;
    break;
   }
   for(let k=0;k<nuovi;k++){
@@ -25374,14 +25377,14 @@ function fblSimulaStrategia(seg,ser,cfg){
    const nuovoStop=fblStrategiaNuovoStop(st.regole[idx],entry,tps);
    // Lo stop si muove solo in avanti: una regola che lo riportasse indietro aumenterebbe il
    // rischio dopo aver gia' incassato, che non e' mai quello che si vuole.
-   if(nuovoStop!=null&&isFinite(nuovoStop)&&(buy?nuovoStop>stop:nuovoStop<stop))stop=nuovoStop;
+   if(nuovoStop!=null&&isFinite(nuovoStop)&&(buy?nuovoStop>stop:nuovoStop<stop)){ stop=nuovoStop; storicoStop.push({t:c.t,p:stop}); }
   }
   presi+=nuovi;
   if(presi>=tps.length){ uscita=tps[tps.length-1]; rimasto=0; break; }
  }
  const aperta=rimasto>1e-9;
  return {R:Math.round(R*1e6)/1e6, presi, chiuse, ambiguo, aperta, stopFinale:stop,
-         uscita, tFine:fine, entry, rischio, modo:st.modo,
+         uscita, tFine:fine, entry, rischio, modo:st.modo, stopColpito, storicoStop,
          esito: aperta?('in corso'+(presi?(' (TP'+presi+')'):''))
                : (presi>=tps.length?'tutti i TP':(presi?('TP'+presi+' poi stop'):'stop'))};
 }
@@ -40590,12 +40593,31 @@ function ancore(r){
 }
 window.fblCronoAncore=ancore;
 window.fblCronoValuta=valuta;
+// PASSO 20: il percorso dello stop per il disegno. Rigioca il segnale con la strategia della sala e
+// torna i punti (tempo, livello) piu' se lo stop e' stato colpito. Se lo stop NON si e' mai mosso
+// torna null: in quel caso il disegno usa la linea piatta di sempre (etichetta «SL»).
+window.fblCronoStopPath=function(r,cfg,serie){
+ if(!r||!isFinite(Number(r.entry))||!isFinite(Number(r.sl))||!Array.isArray(r.tps)||!r.tps.length)return null;
+ const inizio=(r.tFill!=null?r.tFill:r.ts)||0;
+ const ser=(serie||[]).find(a=>a&&a.length&&a[a.length-1].t>=inizio);
+ if(!ser)return null;
+ let sim=null;
+ try{ sim=fblSimulaStrategia({direzione:r.dir||'BUY',tps:r.tps,sl:r.sl,entry:r.entry,tFill:inizio},ser,cfg); }catch(e){ return null; }
+ if(!sim)return null;
+ const base=(Array.isArray(sim.storicoStop)&&sim.storicoStop.length)?sim.storicoStop.slice():[{t:inizio,p:Number(r.sl)}];
+ const muovato=base.some(q=>Math.abs(Number(q.p)-Number(r.sl))>1e-9);
+ if(!muovato)return null;   // nessuno spostamento: si disegna la linea piatta di sempre
+ const ultimo=base[base.length-1];
+ if(sim.tFine!=null&&sim.tFine>ultimo.t)base.push({t:sim.tFine,p:Number(ultimo.p)});
+ return {punti:base.map(q=>({t:Number(q.t),p:Number(q.p)})), stopColpito:!!sim.stopColpito, muovato:true, esito:sim.esito};
+};
 // ---------- disegno a grafico (chiamato da draw(), dopo i trade chiusi)
 window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!vista.mostra||!vista.sala||!currentAssetKey)return;
  const ris=risultatiDi(vista.sala,currentAssetKey); if(!ris||!ris.length)return;
  const xFor=ri=>pad.l+(ri-start+.5)*cw/n;
  const fine=Math.max(start,0)+n+2;
+ const serieStop=C.serie[(vista.sala||'')+'|'+currentAssetKey]||null;   // PASSO 20: per lo stop mobile
  ctx.save(); ctx.font='10px Inter, system-ui, sans-serif';
  ris.forEach((r,i)=>{
   if(r.tFill==null)return;
@@ -40612,8 +40634,24 @@ window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
   const linea=(p,col,dash,lw,xe)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; const yy=y(p); ctx.strokeStyle=col; ctx.lineWidth=lw||1; ctx.setLineDash(dash||[]); ctx.beginPath(); ctx.moveTo(x1,yy); ctx.lineTo(xe!=null?xe:x2,yy); ctx.stroke(); };
   const etichetta=(p,testo,col,xe)=>{ if(p==null||!isFinite(p)||p<lo||p>hi)return; ctx.setLineDash([]); ctx.fillStyle=col; ctx.fillText(testo,(xe!=null?xe:x2)+3,y(p)+3.5); };
   linea(r.entry,'rgba(232,237,243,0.85)',[4,3],1.2,x2);
-  const xSl=(an.slEnd!=null)?xFine(an.slEnd):x2;
-  linea(r.sl,'#e05252',[],1.3,xSl); etichetta(r.sl,r.slPreso?'SL ✗':'SL','#ff8a8a',xSl);
+  // PASSO 20: se la strategia sposta lo stop, la linea e' una SCALA con una X dove viene colpito e
+  // l'etichetta «Stop P»; se non si sposta, resta la linea piatta di sempre.
+  let stopPerc=null;
+  try{ if(serieStop)stopPerc=fblCronoStopPath(r,stratLeggi(vista.sala),serieStop); }catch(e){}
+  if(stopPerc&&stopPerc.punti&&stopPerc.punti.length>1){
+   const xi=t=>Math.max(x1,xFine(rowIndexContainingTime(t)));
+   const pp=stopPerc.punti.map(q=>({x:xi(q.t),y:y(q.p)}));
+   ctx.setLineDash([]); ctx.strokeStyle='#e05252'; ctx.lineWidth=1.3; ctx.beginPath();
+   ctx.moveTo(pp[0].x,pp[0].y);
+   for(let k=1;k<pp.length;k++){ ctx.lineTo(pp[k].x,pp[k-1].y); ctx.lineTo(pp[k].x,pp[k].y); }
+   ctx.stroke();
+   const uP=stopPerc.punti[stopPerc.punti.length-1], uX=pp[pp.length-1].x;
+   etichetta(uP.p,'Stop P','#ff8a8a',uX);
+   if(stopPerc.stopColpito){ const x=pp[pp.length-1].x, yy=pp[pp.length-1].y; ctx.strokeStyle='#ff6b6b'; ctx.lineWidth=1.8; ctx.beginPath(); ctx.moveTo(x-4,yy-4); ctx.lineTo(x+4,yy+4); ctx.moveTo(x-4,yy+4); ctx.lineTo(x+4,yy-4); ctx.stroke(); }
+  }else{
+   const xSl=(an.slEnd!=null)?xFine(an.slEnd):x2;
+   linea(r.sl,'#e05252',[],1.3,xSl); etichetta(r.sl,r.slPreso?'SL ✗':'SL','#ff8a8a',xSl);
+  }
   r.tps.forEach((t,j)=>{ const preso=j<r.raggiunti; const ei=(preso&&an.tpEnd&&an.tpEnd[j]!=null)?an.tpEnd[j]:null; const xe=(ei!=null)?xFine(ei):x2;
    linea(t,preso?'#2fbf71':'rgba(139,150,165,0.7)',preso?[]:[3,3],preso?1.3:1,xe);
    if(fblEtichetteTpSlVisibili())etichetta(t,'TP'+(j+1)+(preso?' ✓':''),preso?'#7fdc9a':'#8b96a5',xe);

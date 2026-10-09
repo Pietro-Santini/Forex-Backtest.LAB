@@ -120,3 +120,9 @@ Formato: data — chi — cosa — esito collaudo — commit.
   preso. Se lo stop non e' stato preso, la sua linea prende la lunghezza dell'ultima di TP. app v120
   / Setup 1.0.120. Test: laboratorio/app/cronologia_linee.test.mjs (3, prima rossi). - verde -
   Falliti: 0
+- 2026-10-09 - agenti - Passo 20 (v121): lo stop mobile a grafico. fblSimulaStrategia registra il
+  percorso dello stop (storicoStop) e se e' stato colpito (stopColpito); fblCronoStopPath rigioca il
+  segnale con la strategia della sala e torna i punti (tempo, livello) o null se lo stop non si e'
+  mosso; fblCronoDisegna disegna lo stop a SCALA (segmento a ogni livello + salto verticale), la X
+  dove viene colpito e l'etichetta «Stop P» quando si e' spostato. app v121 / Setup 1.0.121. Test:
+  laboratorio/app/stop_mobile.test.mjs (3, prima rossi). - verde - Falliti: 0

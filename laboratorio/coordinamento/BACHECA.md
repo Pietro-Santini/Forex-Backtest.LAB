@@ -88,6 +88,11 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
       `fblCronoAncore` → `tpEnd[]`/`slEnd`; `fblCronoDisegna` ferma ogni linea sulla sua candela e
       stampa la spunta ✓ a sinistra dei TP presi; stop non preso = lunghezza dell'ultima di TP. Test
       `laboratorio/app/cronologia_linee.test.mjs` (3). Collaudo completo **verde**. Prossimi: Passo 20.
+  11. **NUOVO — FATTO**: **Passo 20 — stop mobile a grafico** (app v121). `fblSimulaStrategia` registra
+      `storicoStop`/`stopColpito`; `fblCronoStopPath` rigioca il segnale con la strategia della sala e
+      torna il percorso (o `null` se lo stop non si muove); `fblCronoDisegna` disegna lo stop a **scala**
+      con la **X** dove è colpito e l'etichetta **«Stop P»**. Test `laboratorio/app/stop_mobile.test.mjs`
+      (3). Collaudo completo **verde**. Prossimo: Passo 21 (schermo bianco + zoom del grafico della resa).
 
 ## Passa parola (messaggi)
 - `MESSAGGI/01-mappa-segnali.md` — mappa completa della pipeline segnali: parser Python, costruzione
@@ -121,6 +126,6 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
   avviso + conferma esplicita.
 
 ## Coda di lavoro
-- **Passi 20 → 24** (uno alla volta). I Passi 13, 15, 16, 17, 18 e 19 sono fatti.
+- **Passi 21 → 24** (uno alla volta). I Passi 13, 15, 16, 17, 18, 19 e 20 sono fatti.
 - A fine percorso: documento separato con (1) elenco di TUTTE le modifiche per passo/file/funzione e
   (2) guida passo-passo per collaudare il tutto dentro il programma.

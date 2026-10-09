@@ -4,7 +4,7 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v120**, Setup **1.0.120**, server Oracle allineato a `main`.
+Stato alla scrittura: app **v121**, Setup **1.0.121**, server Oracle allineato a `main`.
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
@@ -259,7 +259,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 ---
 
-## 5. Che cosa è stato fatto (storia recente, v106 → v120)
+## 5. Che cosa è stato fatto (storia recente, v106 → v121)
 
 | Versione | Che cosa |
 |---|---|
@@ -280,7 +280,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 | **v120** | **Passi 18/19**: a grafico dalla cronologia, ogni linea di TP si ferma alla candela in cui **quel** livello è stato colpito, lo stop alla sua, e una spunta ✓ compare a sinistra del punto; se lo stop non è stato preso la sua linea prende la lunghezza dell'ultima di TP |
 
-### Le prestazioni (v109–v111), perché è istruttivo
+| **v121** | **Passo 20**: a grafico lo stop è una **scala** quando la strategia lo sposta (pareggio, TP1…): segmento a ogni livello, **X** dove viene colpito, etichetta **«Stop P»**. `fblSimulaStrategia` registra `storicoStop`/`stopColpito`; `fblCronoStopPath` ricostruisce il percorso; senza spostamenti resta la linea piatta «SL» |\n\n| **v121** | **Passo 20**: a grafico dalla cronologia lo stop diventa una **scala** quando la strategia lo sposta (TP preso → pareggio/TP1/…): segmento orizzontale a ogni livello, salto verticale, **X** dove viene colpito, etichetta **«Stop P»**. Se non si sposta resta la linea piatta «SL». `fblSimulaStrategia` registra `storicoStop`/`stopColpito`, `fblCronoStopPath` costruisce il percorso |\n\n### Le prestazioni (v109–v111), perché è istruttivo
 
 Il proprietario segnala l'app lenta. L'ipotesi ovvia erano i 35 cicli automatici e `update()` che
 rifà le tabelle: **misurati, costavano 3,6 ms in tutto**. Il tempo stava in posti che nessuno
@@ -362,7 +362,7 @@ dell'ultima linea di TP disegnata: più ordine, e si vede meglio.
 **FATTO (v120)**: quando `slPreso` è falso, `slEnd` prende la fine dell'ultima linea di TP disegnata
 (l'evento finale `b`); lo stop e l'ultimo TP finiscono così sullo stesso punto. Test come sopra.
 
-### Passo 20 — Stop loss mobile a grafico
+### Passo 20 — Stop loss mobile a grafico *(FATTO, v121)*
 La strategia può prevedere: TP1 → SL fermo, TP2 → SL a break even,
 TP3 → SL al TP1, e così via. Il grafico deve mostrare **gli spostamenti**:
 - SL colpito subito (prima di ogni TP): la linea resta al livello originale;
@@ -371,6 +371,13 @@ TP3 → SL al TP1, e così via. Il grafico deve mostrare **gli spostamenti**:
 - dove lo SL viene **colpito**: una **X**;
 - quando lo SL si è spostato, l'etichetta non dice più «SL» ma **«Stop P»**
   (stop profit, per non scrivere troppo).
+
+**FATTO (v121)**: `fblSimulaStrategia` ora registra `storicoStop` (i punti tempo+livello dello
+stop) e `stopColpito`; `fblCronoStopPath` rigioca il segnale con la strategia della sala e torna il
+percorso, oppure `null` se lo stop non si è mai mosso; `fblCronoDisegna` disegna lo stop come una
+**scala** (segmento orizzontale a ogni livello + salto verticale), mette la **X** dove viene colpito e
+l'etichetta **«Stop P»** quando si è spostato (altrimenti resta la linea piatta «SL»). Test:
+`laboratorio/app/stop_mobile.test.mjs` (3, prima rossi).
 
 ### Passo 21 — Grafico della resa: schermo bianco e zoom
 Due difetti da eliminare (da riprodurre, controllare e testare prima
