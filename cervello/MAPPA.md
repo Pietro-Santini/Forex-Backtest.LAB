@@ -40,6 +40,9 @@ app → `ForexBacktestLAB.exe` (8000) → MT5 / Kraken. Segnali: app → 8000 `/
 - Sale segnali: `tgStrategie`, `tgEseguiSegnale()`, `tgAutoInCoda()`, cronologia `fblCrono*`
   (`fblCronoValuta`, `fblCronoAncore`, `fblCronoStopPath`, `fblCronoDisegna`; la strategia di una sala
   sta in `localStorage['fbl_crono_strategia']`, letta con `stratLeggi`).
+- Grafico della resa (`rendDisegnaGrafico`): la **larghezza di disegno è fissa** (`rendVista.larg`) e si
+  ricalcola solo su un vero `resize`, così non si rialloca né si riscala mentre si passa il mouse; il
+  gesto di zoom (pinch/CTRL+rotellina) è bloccato dalla cronologia.
 - Finestra PIP: gli ascoltatori vanno registrati con `fblDelega()` e cercati con `$$tutti()`,
   altrimenti nella finestra staccata non funzionano.
 - Trade chiusi: array `trades`, salvati con `scheduleSave()`.

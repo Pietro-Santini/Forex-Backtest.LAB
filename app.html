@@ -653,6 +653,12 @@ input[type=number],.fbLevelsTable td,.fbPickerSym,#openPositions td,#mt5OpenPosi
 .fblRendCifre .v.su{color:#4ecb83}
 .fblRendCifre .v.giu{color:#ff7b78}
 .fblRendCifre .e{font-size:10.5px;color:var(--fbMuted);margin-top:2px;line-height:1.35}
+/* PASSO 21: il grafico della resa deve restare FERMO. Il gesto di zoom (pinch da trackpad = 'wheel'
+   con ctrlKey) sopra la cronologia non deve zoomare la pagina, e la comparsa della barra di
+   scorrimento non deve cambiare la larghezza del contenuto (riscalava il grafico). */
+#fblCronoOverlay{touch-action:pan-y}
+#fblRendGrafico{touch-action:pan-y}
+#fblCronoOverlay .fbModalBody{scrollbar-gutter:stable}
 .fblServizi{display:flex;flex-direction:column;gap:5px;margin-bottom:12px}
 .fblServizi .riga{display:flex;align-items:center;gap:9px;font-size:12px;
   background:var(--fbPanel);border:1px solid var(--fbLine);border-radius:8px;padding:7px 10px}
@@ -40195,7 +40201,13 @@ function rendCurva(ris,capitale,rischioPct,serie,strategia){
 function rendDisegnaGrafico(punti,iMirino){
  const cv=$('fblRendGrafico'); if(!cv)return;
  const dpr=Math.min(3,window.devicePixelRatio||1);
- const L=Math.max(1,cv.clientWidth||600), A=Number(cv.getAttribute('height'))||190;
+ // PASSO 21: la LARGHEZZA si prende una volta e resta ferma finche' la finestra non cambia
+ // davvero. Mentre si scorre cambiano i numeri sopra il grafico, e possono spostare il riquadro di
+ // qualche pixel (o far comparire la barra di scorrimento): riprendendo la larghezza a ogni disegno
+ // il canvas si riallocava (= lampo bianco) e la curva si riscalava da sola. Vedi il listener
+ // 'resize' piu' sotto, l'unico autorizzato a cambiarla.
+ if(rendVista&&!rendVista.larg){ const cw=cv.clientWidth; if(cw>1)rendVista.larg=cw; }
+ const L=(rendVista&&rendVista.larg)?rendVista.larg:Math.max(1,cv.clientWidth||600), A=Number(cv.getAttribute('height'))||190;
  const lw=Math.round(L*dpr), lh=Math.round(A*dpr);
  // LAMPEGGIO BIANCO: riassegnare width/height rialloca il canvas e lo CANCELLA. Facendolo a ogni
  // movimento del dito lo si prende a meta' strada, e quel disegno diventa bianco. Si tocca solo
@@ -40204,7 +40216,11 @@ function rendDisegnaGrafico(punti,iMirino){
  const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
  g.clearRect(0,0,L,A);
  if(!punti||punti.length<2){ g.fillStyle='#55606e'; g.font='12px Inter,Arial'; g.fillText('Niente da disegnare.',10,24); return; }
- const vals=punti.map(p=>p.cap), min=Math.min(...vals), max=Math.max(...vals);
+ // Senza lo sparpagliamento (...vals): su una serie molto lunga 'Math.min(...)' puo' superare il
+ // limite di argomenti e fallire, lasciando il canvas appena ripulito e quindi BIANCO.
+ let min=Infinity, max=-Infinity;
+ for(let k=0;k<punti.length;k++){ const v=Number(punti[k].cap); if(isFinite(v)){ if(v<min)min=v; if(v>max)max=v; } }
+ if(!isFinite(min)||!isFinite(max)){ min=0; max=1; }
  const pad=16, h=A-pad*2, w=L-pad*2;
  const ampiezza=(max-min)||1;
  const X=i=>pad+(i/(punti.length-1))*w;
@@ -40430,6 +40446,10 @@ function rendAggancia(){
  // 'pan-y' e non 'none': il dito che scorre in VERTICALE continua a far scorrere la pagina, come
  // si aspetta chiunque. Con 'none' il grafico si mangiava anche quello e sembrava piantato.
  cv.style.touchAction='pan-y';
+ // PASSO 21: la rotellina di ZOOM (Ctrl/⌘ — e' come Chrome consegna il pinch da trackpad) sopra il
+ // grafico non deve zoomare la pagina: qui il grafico deve restare fermo. La rotellina normale continua
+ // a scorrere la finestra.
+ cv.addEventListener('wheel',e=>{ if(e.ctrlKey||e.metaKey)e.preventDefault(); },{passive:false});
  let rett=null, attivo=false, chiesto=null, ultimaX=0;
  const misura=()=>{ rett=cv.getBoundingClientRect(); };
  // IL RETTANGOLO SI MISURA UNA VOLTA PER GESTO, non a ogni movimento. I numeri sopra il grafico
@@ -40487,6 +40507,9 @@ window.fblRendCalcola=rendCalcola;
 // scorrimento col dito e' la cosa che si e' rotta su telefono, e dal di fuori non si vede altro.
 window.fblRendProva=function(curva,capitale){ rendVista={curva,capitale:capitale||10000,i:null}; rendAggancia(); rendMostraCifre(); };
 window.fblRendPunto=function(){ return rendVista?rendVista.i:undefined; };
+// PASSO 21: unico punto in cui la larghezza del disegno della resa si ricalcola: un vero resize della
+// finestra. Cosi' il grafico segue la finestra ma non "si zooma da solo" mentre si scorre.
+window.addEventListener('resize',()=>{ if(rendVista&&rendVista.curva){ rendVista.larg=0; rendMostraCifre(); } });
 window.fblCronoRendDisegna=rendDisegnaGrafico;
 window.fblCronoRendR=rendRisultatoR;      // esposte per il collaudo: sono il conto dei soldi
 window.fblCronoRendCurva=rendCurva;

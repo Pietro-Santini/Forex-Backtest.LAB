@@ -126,3 +126,13 @@ Formato: data — chi — cosa — esito collaudo — commit.
   mosso; fblCronoDisegna disegna lo stop a SCALA (segmento a ogni livello + salto verticale), la X
   dove viene colpito e l'etichetta «Stop P» quando si e' spostato. app v121 / Setup 1.0.121. Test:
   laboratorio/app/stop_mobile.test.mjs (3, prima rossi). - verde - Falliti: 0
+- 2026-10-09 - agenti - Passo 21 (v122): il grafico della resa deve restare fermo. Due cause, due
+  rimedi: (1) il gesto di zoom (pinch da trackpad = evento wheel con ctrlKey) sopra la cronologia non
+  era bloccato, quindi la pagina si zoomava: ora #fblCronoOverlay e #fblRendGrafico hanno
+  touch-action:pan-y e il canvas blocca ctrl/meta+rotellina (la rotellina normale scorre ancora). (2)
+  la larghezza con cui si disegna la resa si riprendeva a ogni disegno: passando il mouse il riquadro
+  si spostava di qualche pixel e il canvas veniva riallocato (lampo bianco) e la curva riscalata. Ora
+  la larghezza e' fissa e si ricalcola solo su un vero resize della finestra; .fbModalBody ha
+  scrollbar-gutter:stable. In piu' il minimo/massimo della curva si calcola a ciclo (lo sparpagliamento
+  Math.min(...) su serie lunghe puo' fallire e lasciare il canvas bianco). app v122 / Setup 1.0.122.
+  Test: laboratorio/app/resa_ferma.test.mjs (2, prima rossi). - verde - Falliti: 0

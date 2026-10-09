@@ -93,6 +93,13 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
       torna il percorso (o `null` se lo stop non si muove); `fblCronoDisegna` disegna lo stop a **scala**
       con la **X** dove è colpito e l'etichetta **«Stop P»**. Test `laboratorio/app/stop_mobile.test.mjs`
       (3). Collaudo completo **verde**. Prossimo: Passo 21 (schermo bianco + zoom del grafico della resa).
+  12. **NUOVO — FATTO**: **Passo 21 — la resa deve restare ferma** (app v122). Il gesto di zoom (pinch
+      da trackpad / CTRL+rotellina) sopra la cronologia è bloccato (`touch-action:pan-y` +
+      `preventDefault` su `ctrl`/`⌘`+rotellina); la larghezza di disegno della resa è **fissa** e si
+      ricalcola solo su un vero `resize` (prima si riprendeva a ogni disegno: passando il mouse il
+      canvas veniva riallocato = lampo bianco, e la curva si riscalava); `.fbModalBody` ha
+      `scrollbar-gutter:stable`; il minimo/massimo della curva si calcola a ciclo. Test
+      `laboratorio/app/resa_ferma.test.mjs` (2). Collaudo completo **verde**. Prossimo: Passo 22.
 
 ## Passa parola (messaggi)
 - `MESSAGGI/01-mappa-segnali.md` — mappa completa della pipeline segnali: parser Python, costruzione
@@ -126,6 +133,6 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
   avviso + conferma esplicita.
 
 ## Coda di lavoro
-- **Passi 21 → 24** (uno alla volta). I Passi 13, 15, 16, 17, 18, 19 e 20 sono fatti.
+- **Passi 22 → 24** (uno alla volta). I Passi 13, 15, 16, 17, 18, 19, 20 e 21 sono fatti.
 - A fine percorso: documento separato con (1) elenco di TUTTE le modifiche per passo/file/funzione e
   (2) guida passo-passo per collaudare il tutto dentro il programma.

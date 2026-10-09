@@ -4,7 +4,7 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v121**, Setup **1.0.121**, server Oracle allineato a `main`.
+Stato alla scrittura: app **v122**, Setup **1.0.122**, server Oracle allineato a `main`.
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
@@ -259,7 +259,7 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 
 ---
 
-## 5. Che cosa è stato fatto (storia recente, v106 → v121)
+## 5. Che cosa è stato fatto (storia recente, v106 → v122)
 
 | Versione | Che cosa |
 |---|---|
@@ -270,17 +270,17 @@ In `.claude/hooks/` ci sono tre controlli (`guardia_git.py`, `guardia_segreti.py
 | **v110** | Distribuzione equa, «chiusura parziale» col nome giusto, spostamento dello stop rimesso anche nelle chiusure parziali, le stesse scelte nell'apertura automatica, ogni sala con i suoi target |
 | **v111** | Risolto il bug del grafico della resa al tocco; **operazioni a blocco** in stile MetaTrader 5 |
 | **v112** | Il popup «installa i pacchetti aggiuntivi» non esiste più fuori dal computer: il gate MT5 non cadeva più sul passo 1 col testo statico (il ponte può morire mentre si è al gate), `fblEMobile()` riconosce anche il telefono in «modalità desktop» (User-Agent da computer, touch anche di una sola punta), il download di MetaTrader 5 esce dal gate su telefono/tablet |
-
 | **v113** | **Passo 13 — instradamento su Capital.com**: se una sala manda un segnale su uno strumento che non esiste né su Kraken né su MT5 (azione, indice), l'app lo cerca su Capital.com e apre lì una posizione **simulata** — mai più un ordine vero a MT5 con l'epic di Capital.com. Nuova `tgContoEffettivoPerSegnale` (asincrona); Capital.com diventa una **famiglia a parte** nel Trade Journal (`💹 Capital.com`) |
 | **v115** | **Attribuzione della sala**: la tabella delle posizioni e il Trade Journal dicono la **stessa** sala per la stessa posizione (sparito il `👤 tu` dove c'era un segnale MT5) |
 | **v116** | **Filtro anti-doppioni dei segnali**: stesso strumento, direzione, fascia d'entrata e target non aprono una seconda posizione. In automatico **blocca**, a mano **avvisa e chiede conferma**. Esenti «aggiunta» e «seconda entrata» |
 | **v117** | La **barra dell'asse dei prezzi** fa **solo zoom** (non sposta più per sbaglio TP/SL o pendenti sotto il dito); le colonne **COB/SVP** non zoomano più; l'**apertura automatica** dei segnali la fa **solo il computer** (telefono/tablet mostrano il segnale e aprono a mano) |
 | **v118** | **Capital.com nella barra dei conti**: pulsante 💹 tra Kraken e Storico; gli ordini **manuali** su Capital.com sono **simulati**, mai un ordine a MT5 |
 | **v119** | **Passi 15/16 — storia completa di un utente Syntra**: il robot tocca il nome in alto a destra di una scheda, apre il **profilo**, scorre e legge tutte le operazioni, e le **archivia** nella cronologia della sala `Syntra · <utente>` (mai in bacheca, senza toccare la pagina Notifiche). Il ponte `_manda_storico` chiede la lettura e aspetta che finisca |
-
 | **v120** | **Passi 18/19**: a grafico dalla cronologia, ogni linea di TP si ferma alla candela in cui **quel** livello è stato colpito, lo stop alla sua, e una spunta ✓ compare a sinistra del punto; se lo stop non è stato preso la sua linea prende la lunghezza dell'ultima di TP |
+| **v121** | **Passo 20**: a grafico dalla cronologia lo stop diventa una **scala** quando la strategia lo sposta (TP preso → pareggio/TP1/…): segmento orizzontale a ogni livello, salto verticale, **X** dove viene colpito, etichetta **«Stop P»**. Se non si sposta resta la linea piatta «SL». `fblSimulaStrategia` registra `storicoStop`/`stopColpito`, `fblCronoStopPath` costruisce il percorso |
+| **v122** | **Passo 21 — la resa deve restare ferma**: il grafico del rendimento non si zooma piu' da solo al passaggio del mouse né lascia lo schermo bianco. Il gesto di zoom (pinch da trackpad / CTRL+rotellina) sopra la cronologia è bloccato; la larghezza con cui si disegna la resa è **fissa** e si ricalcola solo su un vero `resize` della finestra; il minimo/massimo della curva si calcola a ciclo (su serie lunghe `Math.min(...)` può fallire e lasciare il canvas bianco) |
 
-| **v121** | **Passo 20**: a grafico lo stop è una **scala** quando la strategia lo sposta (pareggio, TP1…): segmento a ogni livello, **X** dove viene colpito, etichetta **«Stop P»**. `fblSimulaStrategia` registra `storicoStop`/`stopColpito`; `fblCronoStopPath` ricostruisce il percorso; senza spostamenti resta la linea piatta «SL» |\n\n| **v121** | **Passo 20**: a grafico dalla cronologia lo stop diventa una **scala** quando la strategia lo sposta (TP preso → pareggio/TP1/…): segmento orizzontale a ogni livello, salto verticale, **X** dove viene colpito, etichetta **«Stop P»**. Se non si sposta resta la linea piatta «SL». `fblSimulaStrategia` registra `storicoStop`/`stopColpito`, `fblCronoStopPath` costruisce il percorso |\n\n### Le prestazioni (v109–v111), perché è istruttivo
+### Le prestazioni (v109–v111), perché è istruttivo
 
 Il proprietario segnala l'app lenta. L'ipotesi ovvia erano i 35 cicli automatici e `update()` che
 rifà le tabelle: **misurati, costavano 3,6 ms in tutto**. Il tempo stava in posti che nessuno
@@ -379,7 +379,7 @@ percorso, oppure `null` se lo stop non si è mai mosso; `fblCronoDisegna` disegn
 l'etichetta **«Stop P»** quando si è spostato (altrimenti resta la linea piatta «SL»). Test:
 `laboratorio/app/stop_mobile.test.mjs` (3, prima rossi).
 
-### Passo 21 — Grafico della resa: schermo bianco e zoom
+### Passo 21 — Grafico della resa: schermo bianco e zoom *(FATTO, v122)*
 Due difetti da eliminare (da riprodurre, controllare e testare prima
 di consegnare — non deve esistere):
 - scorrendo indietro nella resa, a volte la schermata **si pianta e
@@ -388,6 +388,17 @@ di consegnare — non deve esistere):
   fermo.
 Opzionale: un pallino di riferimento sulla linea, con la data del punto
 in cui ci si trova scritta sotto.
+
+**FATTO (v122)**: due cause, due rimedi. (1) Il gesto di zoom (pinch da trackpad = evento `wheel`
+con `ctrlKey`) sopra la cronologia non era bloccato: ora `#fblCronoOverlay` e `#fblRendGrafico` hanno
+`touch-action:pan-y` e il canvas blocca `ctrl`/`⌘`+rotellina (la rotellina normale scorre ancora). (2)
+La larghezza con cui si disegna la resa si riprendeva a ogni disegno: passando il mouse il riquadro
+si spostava di qualche pixel e il canvas veniva riallocato (= lampo bianco) e la curva riscalata. Ora
+la larghezza è **fissa** e si ricalcola solo su un vero `resize` della finestra; `.fbModalBody` ha
+`scrollbar-gutter:stable`. Difesa in più: il minimo/massimo della curva si calcola a ciclo (lo
+sparpagliamento `Math.min(...)` su serie lunghe può fallire e lasciare il canvas bianco). Il pallino
+opzionale c'era già (il mirino col pallino e la data sotto). Test: `laboratorio/app/resa_ferma.test.mjs`
+(2, prima rossi).
 
 ### Passo 22 — Mostra/nascondi posizioni e linee
 Sul grafico (non le linee TP/SL):
