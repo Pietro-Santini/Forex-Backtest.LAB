@@ -2985,6 +2985,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  <span style="font-size:12px;color:#8b96a5;font-weight:700;letter-spacing:.3px">CONTO</span>
  <button type="button" class="miniBtn fblContoBtn" data-conto="mt5" style="width:auto;padding:4px 12px">🖥️ MT5 <span class="fblContoPunto"></span></button>
  <button type="button" class="miniBtn fblContoBtn" data-conto="kraken" style="width:auto;padding:4px 12px">🐙 Kraken <span class="fblContoPunto"></span></button>
+ <button type="button" class="miniBtn fblContoBtn" data-conto="capital" style="width:auto;padding:4px 12px">💹 Capital.com <span class="fblContoPunto"></span></button>
  <button type="button" class="miniBtn fblContoBtn" data-conto="storico" style="width:auto;padding:4px 12px">📼 Storico</button>
  <span id="fblContoNota" style="font-size:11.5px;color:#8b96a5;flex:1;min-width:180px"></span>
  <button type="button" id="fblStatBtn" class="miniBtn" style="width:auto;padding:5px 14px;border-color:#2dd4bf;color:#5eead4;font-weight:700" title="Dashboard completa: andamento, torte, journal settimanale/mensile, R:R, strategie, sale…">📊 Statistiche</button>
@@ -19620,6 +19621,10 @@ function openMarketTrade(side,forz){
  // RICHIESTO: gli ordini manuali vanno sul conto scelto sopra la dashboard (MT5 / Kraken /
  // Storico). `forz` (apertura automatica dei segnali) decide da se' il conto: non si tocca.
  if(!forz&&liveModeActive&&fblContoVista==='kraken'){ return krakenOrdineManuale(side); }
+ // Conto Capital.com scelto: gli ordini MANUALI aprono una posizione SIMULATA su Capital.com,
+ // MAI un ordine vero a MT5 (il broker non ha quell'asset, e lo rifiuterebbe). Va PRIMA del ramo
+ // MT5, e solo per gli ordini manuali (!forz): l'apertura automatica sceglie il conto da sola.
+ if(!forz&&liveModeActive&&fblContoVista==='capital'){ return capitalOrdineManuale(side); }
  // Con MT5 collegato, BUY/SELL eseguono un ordine VERO (vedi placeRealMt5Order) invece di
  // aprire una posizione simulata: le due cose restano sempre separate, mai mescolate.
  // In Storico (conto "Storico" scelto) gli ordini manuali sono del backtest, anche se MT5 resta
@@ -36063,17 +36068,19 @@ async function krakenLeggiStorico(){
 //  - MT5: modalita' Live con i dati veri del conto MT5 (serve MT5 collegato);
 //  - Kraken: modalita' Live, dashboard dal conto Kraken (simulato o reale), BUY/SELL su Kraken;
 //  - Storico: replay dei CSV, ordini del backtest (MT5 e Kraken restano attivi in background).
-var fblContoVista=(()=>{ try{ const v=localStorage.getItem('fbl_conto_vista'); return (v==='kraken'||v==='storico'||v==='mt5')?v:'mt5'; }catch(e){ return 'mt5'; } })();
+var fblContoVista=(()=>{ try{ const v=localStorage.getItem('fbl_conto_vista'); return (v==='kraken'||v==='storico'||v==='capital'||v==='mt5')?v:'mt5'; }catch(e){ return 'mt5'; } })();
 function fblContoEffettivo(){
  if(!liveModeActive)return 'storico';
- return fblContoVista==='kraken'?'kraken':'mt5';
+ if(fblContoVista==='kraken')return 'kraken';
+ if(fblContoVista==='capital')return 'capital';
+ return 'mt5';
 }
 function fblContoDisegna(){
  const eff=fblContoEffettivo();
  $$tutti('.fblContoBtn').forEach(b=>{
   b.classList.toggle('active',b.dataset.conto===eff);
   const punto=b.querySelector('.fblContoPunto'); if(!punto)return;
-  let on=false; try{ on=b.dataset.conto==='mt5'?!!mt5Connected:krakenContoPronto(); }catch(e){}
+  let on=false; try{ on=b.dataset.conto==='mt5'?!!mt5Connected:(b.dataset.conto==='capital'?!!capitalSessionTokens:krakenContoPronto()); }catch(e){}
   punto.textContent=on?'●':'○'; punto.style.color=on?'#4ecb83':'#6b7684';
   punto.title=on?'collegato':'non collegato';
  });
@@ -36081,6 +36088,7 @@ function fblContoDisegna(){
  let t='';
  if(eff==='storico')t='Backtest sui CSV.'+(()=>{ const a=[]; try{ if(mt5Connected)a.push('MT5'); if(krakenContoPronto())a.push(krakenNome()); }catch(e){} return a.length?(' In background restano collegati: '+a.join(' e ')+'.'):''; })();
  else if(eff==='kraken')t=(()=>{ let x=krakenNome(); try{ if(krakenConto&&krakenConto.ambiente==='reale')x+=' — SOLDI VERI'; }catch(e){} return x+': BUY/SELL vanno su Kraken (solo cripto).'; })();
+ else if(eff==='capital')t='💹 Capital.com: BUY/SELL aprono posizioni SIMULATE su questo conto (azioni, indici).';
  else t=(()=>{ try{ return mt5Connected?'MT5: BUY/SELL vanno sul conto MT5.':'MT5 non collegato: ordini simulati finché non lo colleghi.'; }catch(e){ return ''; } })();
  n.textContent=t;
 }
@@ -36100,6 +36108,15 @@ async function fblContoScegli(c){
   krakenLeggiPosizioni(); krakenLeggiStorico().then(()=>{ try{ update(); }catch(e){} });
   let cr=false; try{ cr=!!binanceSymbolForAsset(currentAssetKey); }catch(e){}
   if(!cr)$('status').textContent='🐙 Conto Kraken: scegli una cripto (es. BTCUSDT) per operare. Gli altri asset restano su MT5.';
+ }else if(c==='capital'){
+  // Conto Capital.com: serve una sessione (le stesse credenziali già usate altrove). Se non c'è,
+  // si prova ad accenderla; se ancora non c'è NON si cambia conto, così non si resta "su Capital"
+  // senza connessione. Capital.com è per gli ordini MANUALI su azioni/indici, sempre simulati.
+  if(!capitalSessionTokens){ try{ await ensureCapitalConnected('Accedi a Capital.com per usare questo conto negli ordini manuali (azioni, indici).'); }catch(e){} }
+  if(!capitalSessionTokens){ $('status').textContent='💹 Capital.com non è collegato: apri Impostazioni → Capital.com e accedi, poi scegli di nuovo il conto.'; fblContoDisegna(); return; }
+  fblContoVista='capital';
+  if(!liveModeActive)await switchAccountMode(true);
+  try{ refreshLiveStreamSubscriptions(); }catch(e){}
  }
  try{ localStorage.setItem('fbl_conto_vista',fblContoVista); }catch(e){}
  fblContoDisegna();
@@ -36229,6 +36246,50 @@ async function krakenOrdineManuale(side){
  $('status').textContent='🐙 '+krakenNome()+': '+side+' '+q+' '+info.simbolo+' aperto, stop '+sl+(Number.isFinite(tp)?(', target '+tp):'')+'.'+note;
  try{ clearDraftTradeLevelFields(); }catch(e){}
  krakenAggiornaConto();
+ return true;
+}
+// ORDINE MANUALE SU CAPITAL.COM (barra conti → 💹 Capital.com). Apre una posizione SIMULATA,
+// esattamente come l'app fa con gli ordini del backtest: vive in positions[] marcata
+// account:'capital' (famiglia a parte nel Trade Journal) e prende il prezzo da Capital.com.
+// NON manda NIENTE a MT5: Capital.com è il conto scelto e l'asset (un'azione, un indice) MT5
+// probabilmente non ce l'ha nemmeno.
+async function capitalOrdineManuale(side){
+ const sym=currentAssetKey||$('market')?.value||'';
+ if(!capitalSessionTokens){ $('status').textContent='💹 Capital.com non è collegato: scegli di nuovo il conto 💹 Capital.com per accedere.'; return false; }
+ // Prezzo: se a grafico c'è già (asset con storico) si usa quello; altrimenti lo si chiede a
+ // Capital.com per quell'epic.
+ let entry=currentPrice();
+ if(!Number.isFinite(Number(entry))){
+  let epic=''; try{ epic=await resolveCapitalEpic(sym); }catch(e){}
+  if(epic){ const r=await fetchLatestPriceRest(epic); if(r&&Number.isFinite(Number(r.price)))entry=Number(r.price); }
+ }
+ entry=Number(entry);
+ if(!Number.isFinite(entry)||entry<=0){ $('status').textContent='💹 Prezzo di «'+(sym||'nessun asset')+'» non disponibile da Capital.com.'; return false; }
+ let sl=num($('sl').value), tp=num($('tp').value), ignoredNote='';
+ const err=validateTradeLevel(side,entry,sl,tp);
+ if(err){
+  const slBad=Number.isFinite(sl)&&validateTradeLevel(side,entry,sl,NaN);
+  const tpBad=Number.isFinite(tp)&&validateTradeLevel(side,entry,NaN,tp);
+  if(slBad){ sl=NaN; ignoredNote+=' (SL precedente ignorato: non era compatibile con un '+side+')'; }
+  if(tpBad){ tp=NaN; ignoredNote+=' (TP precedente ignorato: non era compatibile con un '+side+')'; }
+ }
+ const lots=getLotSize();
+ const pos={id:Date.now()+Math.random(),asset:sym,side,entry,
+  sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,origin:'MARKET',
+  lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:Date.now(),openTF:currentTF,
+  marginUsed:marginForLots(lots,entry),account:'capital'};
+ const defaults=defaultSlTpFor(entry,side);
+ if(pos.sl==null){ pos.sl=defaults.sl; pos.slAuto=true; }
+ if(pos.tp==null){ pos.tp=defaults.tp; pos.tpAuto=true; }
+ fblAttribuisciSegnale(pos);
+ pos.rrSl=pos.sl;
+ positions.push(pos);
+ active=null;
+ clearDraftTradeLevelFields();
+ if(liveModeActive){ try{ refreshLiveStreamSubscriptions(); }catch(e){} }
+ try{ playOrderSound(); }catch(e){}
+ $('status').textContent=`💹 Capital.com (simulato): ${side} ${lots} ${sym} aperto a ${entry}. SL/TP in anteprima sul grafico: trascinali per confermarli.${ignoredNote}`;
+ try{ syncTradeLevels(); draw(); update(); }catch(e){}
  return true;
 }
 // Posizioni Kraken nella sezione "Posizioni aperte" della pagina principale.

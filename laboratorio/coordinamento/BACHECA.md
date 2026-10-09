@@ -6,6 +6,10 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
 ## Regole della squadra
 - **Un solo scrittore su `app.html`**: il coordinatore. Gli agenti non toccano mai `app.html`.
 - Gli agenti di esplorazione sono **sola lettura** su tutto il resto.
+- **Sub-agenti SEMPRE, e da rilanciare**: ogni fronte di lavoro comincia (e riprende) con un giro di
+  sub-agenti di esplorazione. Se la sessione si **compatta** o si interrompe, i sub-agenti vanno
+  **rilanciati** prima di proseguire: niente lavoro "a memoria". *(Regola chiesta dal proprietario,
+  9 ottobre 2026.)*
 - Il **passa parola** sta nella cartella `MESSAGGI/`: ogni agente riceve nei propri compiti i messaggi
   già prodotti (estratti), così le informazioni passano da un agente all'altro senza che si pestino i piedi.
 - Ogni report di agente viene archiviato qui dal coordinatore come `MESSAGGI/NN-<tema>.md`.
@@ -30,7 +34,14 @@ Gli altri agenti lo LEGGONO prima di cominciare e **non** lo modificano.
      Progetto: `MESSAGGI/03`. Test: `laboratorio/app/filtro_doppioni.test.mjs` (7 casi; prima rossi,
      ora **7/7 verdi**) e test d'innesto `laboratorio/app/filtro_doppioni_auto.test.mjs` (2 casi sul
      `tgAutoDecidi` VERO, prima rossi, ora **2/2 verdi**).
-  4. **NUOVO**: apertura **MANUALE** su Capital.com (barra conti). *Da fare* → `MESSAGGI/02`.
+  4. **NUOVO — RISOLTO**: apertura **MANUALE** su Capital.com (barra conti, versione `v118` / `1.0.118`).
+     Pulsante 💹 Capital.com tra Kraken e Storico; `fblContoVista/Effettivo/Disegna/Scegli` conoscono
+     'capital' (pallino dalla **sua** sessione, non da Kraken); `openMarketTrade` dirotta al conto
+     Capital.com **PRIMA** del ramo MT5 (solo manuale): MAI un ordine vero a MT5; nuova
+     `capitalOrdineManuale(side)` apre posizioni SIMULATE `account:'capital'` col prezzo del grafico o
+     di Capital.com. 8 sostituzioni via `sostituisci.py` (piano `MESSAGGI/02`).
+     Test: `laboratorio/app/capital_manuale.test.mjs` (5 casi; prima **4 rossi**, ora **5/5 verdi**).
+     Collaudo completo **verde** (`Falliti: 0`).
   5. **NUOVO**: difetto **(D)** attribuzione (`👤 tu` nella colonna "Sessione") → **RISOLTO** (versione
      `v115` / `1.0.115`). Causa vera, provata con numeri: la tabella delle posizioni usa
      `fblOrigineBadgeHtml`, che NON recuperava la sala dal ticket MT5, mentre il Trade Journal
