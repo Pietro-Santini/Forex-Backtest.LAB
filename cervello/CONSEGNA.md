@@ -4,7 +4,11 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v123**, Setup **1.0.123**, server Oracle **da riallineare** (`segnali_bridge.py` è cambiato coi passi 15/16, v119).
+Stato alla scrittura: app **v124**, Setup **1.0.124**, server Oracle **allineato** (riportato a `main`
+il 9 ottobre 2026; verificata nel contenitore la correzione del parser sulle coppie con la barra).
+
+> Per **pubblicare** un aggiornamento — sito, computer, server — e per capire **come funziona il
+> collaudo**, la procedura passo passo sta in [`PUBBLICARE.md`](PUBBLICARE.md).
 
 > Prima di toccare qualunque cosa: `cervello/REGOLE.md` (regole non negoziabili),
 > `cervello/METODO.md`, `cervello/MAPPA.md`, e le voci di `cervello/BUG.md` sulla parte che tocchi.
