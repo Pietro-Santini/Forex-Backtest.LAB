@@ -104,6 +104,29 @@ prova('il filtro EMA toglie segnali (il parametro agisce davvero)', () => {
   assert.ok(gann(e.calc.signals) < gann(c.signals), gann(e.calc.signals) + ' vs ' + gann(c.signals));
 });
 
+// --- Inversione (Pine: strategy.entry con position_size <= 0 / >= 0 inverte la posizione) ---
+// Senza questa regola l'app entrava SOLO da piatta e usciva in modo diverso da TradingView.
+// Qui TP e SL sono lontanissimi e il break-even e' spento: l'unica via d'uscita e' il segnale
+// contrario, quindi ogni trade deve chiudersi con motivo REV e il successivo deve nascere subito,
+// allo stesso prezzo, dal lato opposto. Se l'inversione sparisce, REV e' vuoto e il test e' rosso.
+prova('INVERSIONE: un segnale contrario chiude e gira la posizione opposta come il Pine', () => {
+  const r = nuovo({ useEmaFilter: false, useBe: false, tpAtr: 50, slAtrMult: 50, useGannSl: false });
+  def.compute(rows, rows.length - 1, r);
+  const rev = r.calc.trades.filter(t => t.exitReason === 'REV');
+  assert.ok(rev.length > 3, 'nessuna inversione prodotta dalla serie di prova: ' + rev.length);
+  const trades = r.calc.trades;
+  let coppie = 0;
+  for (let k = 0; k + 1 < trades.length; k++) {
+    if (trades[k].exitReason !== 'REV') continue;
+    const dopo = trades[k + 1];
+    assert.equal(dopo.entryIndex, trades[k].exitIndex, 'il trade dopo l\'inversione deve nascere sulla stessa candela');
+    assert.equal(dopo.entryPrice, trades[k].exitPrice, 'prezzo di inversione diverso: il Pine gira alla stessa chiusura');
+    assert.notEqual(dopo.side, trades[k].side, 'dopo un\'inversione si deve girare di lato');
+    coppie++;
+  }
+  assert.ok(coppie > 3, 'troppe poche inversioni verificate: ' + coppie);
+});
+
 // ---- disegno: contesto finto che conta ----
 function disegna(indic, da = 0, a = rows.length - 1) {
   const n = { stroke: 0, fill: 0, text: 0, textList: [] };

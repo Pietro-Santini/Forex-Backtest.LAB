@@ -151,3 +151,17 @@ Formato: data — chi — cosa — esito collaudo — commit.
   sta in LEZIONI.md: passava sia prima sia dopo, perche' le operazioni finte cadevano fuori
   dalla finestra visibile e non venivano disegnate affatto. - verde - Falliti: 0
 - 2026-10-10 - Claude - app v125: nuovo indicatore nativo "Gann 21.7 Profit Factor (4h)" in INDICATOR_DEFS (gann217), personalizzabile dal pannello impostazioni. Test: laboratorio/app/indicatore_gann217.test.mjs (prima rosso senza l'indicatore). Nello stesso giro corretto laboratorio/app/rendimento_scorrimento.test.mjs, che era rosso su main (anche su GitHub): usava il margine 16 del vecchio canvas invece del 10 dell'SVG (pl/pr di rendDisegnaGrafico), e dava 2 invece di 0 a sinistra e 98 invece di 100 a destra. L'app non cambia. - verde - Falliti: 0
+- 2026-10-10 - Claude - (non pubblicato) Pannello "Testa strategia" dentro l'app, che gira sulle candele
+  GIA' CARICATE (CSV o live). Motore isolato come funzione pura `fblTestaStrategiaDiCandele(rows,cfg)`
+  fra i marcatori `// ==== TESTA-STRATEGIA: motore (estraibile) ====` ... `// ==== TESTA-STRATEGIA: fine motore ====`
+  (estraibile e provabile senza browser); interfaccia fra `// ==== TESTA-STRATEGIA: interfaccia ====` ...
+  `// ==== TESTA-STRATEGIA: fine interfaccia ====`. Due punti d'innesto: Impostazioni del grafico
+  (tab "Testa strategia") e fondo del pannello Statistiche/Dashboard. Strategia: trend-following (Gann 3
+  su SMA di max/min) + filtro EMA200, stop iniziale 2 ATR, trailing 3 ATR, sizing per rischio %.
+  PROTEZIONI DEL CONTO per le prop: rischio per trade (0,5% di partenza -> una singola operazione non
+  puo' avvicinarsi al 5%), interruttore sul conto (stop al 5% di drawdown dal massimo) e limite di
+  perdita giornaliera (3%). Verdetto onesto: la strategia funziona sull'ORO solo in 1D (rischio 0,5%:
+  +11,2%, PF 2,31, DD max 3,12%; peggior singola operazione 0,81%), NON in 4h/1h; sulla CRYPTO
+  (serie sintetica 24/7, i CSV BTC/SOL caricati sono VUOTI) funziona su 1D e 4h (BTC 1D a 0,5%: +16,4%,
+  PF 3,17, DD 0,90%). Test: laboratorio/app/testa_strategia.test.mjs (12 prove, prima rosse). CACHE_NAME
+  e MyAppVersion alzati insieme a CACHE_NAME (app v126 / Setup 1.0.126) e pubblicato su main col via del proprietario. - verde - Falliti: 0
