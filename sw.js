@@ -54,7 +54,7 @@
 //          v125 = nuovo indicatore "Gann 21.7 Profit Factor (4h)" nativo in INDICATOR_DEFS,
 //               personalizzabile dal pannello impostazioni (34 parametri)
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v126";
+const CACHE_NAME = "forex-backtest-lab-v127";
 const ASSETS = [
   "./",
   "./app.html",

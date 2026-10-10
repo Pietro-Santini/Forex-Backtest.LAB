@@ -10694,10 +10694,23 @@ function fblTestaStrategiaDiCandele(rows, cfg) {
     ddStopPct: 0, perditaGiornoPct: 0, ...(cfg || {}),
   };
   const n = rows.length;
+
+  // Tempo di una candela. L'app porta il campo `date` (stringa, es. "2022.01.03 00:00" oppure ISO)
+  // e il suo lettore e' `fblTempoRiga`. Fuori dall'app (collaudo) le serie di prova usano `time`
+  // numerico. Questo copre tutti i casi senza mai chiamare `new Date(NaN)`, che lancia.
+  const tempo = (r) => {
+    if (!r) return NaN;
+    if (typeof fblTempoRiga === 'function') { try { const t = fblTempoRiga(r); if (Number.isFinite(t)) return t; } catch (e) { /* non disponibile */ } }
+    if (Number.isFinite(r.time)) return r.time;
+    if (Number.isFinite(r.tClose)) return r.tClose;
+    if (r.date != null) { const t = Date.parse(String(r.date).trim().replace(/\./g, '-').replace(' ', 'T')); if (Number.isFinite(t)) return t; }
+    return NaN;
+  };
+
   const vuoto = {
     trades: [], capitale: p.capitale, finale: p.capitale, resa: 0, pf: 0, win: 0,
     usate: 0, vinte: 0, perse: 0, sommaR: 0, ddMax: 0, interrotto: false,
-    punti: [{ t: n ? rows[0].time : 0, cap: p.capitale }], perAnno: [],
+    punti: [{ t: n ? tempo(rows[0]) : 0, cap: p.capitale }], perAnno: [],
   };
   if (n < 5) return vuoto;
 
@@ -10772,10 +10785,10 @@ function fblTestaStrategiaDiCandele(rows, cfg) {
 
   // --- esecuzione ---
   const trades = [];
-  const punti = [{ t: rows[0].time, cap: p.capitale }];
+  const punti = [{ t: tempo(rows[0]), cap: p.capitale }];
   let pos = null, cap = p.capitale, picco = p.capitale, ddMax = 0, vinte = 0, perse = 0, sommaR = 0, gw = 0, gl = 0;
   let bloccato = false, giornoCorrente = null, capGiorno = p.capitale;
-  const giorno = (t) => new Date(t).toISOString().slice(0, 10);
+  const giorno = (t) => (Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : '');
 
   const chiudi = (i, prezzo, motivo) => {
     const dir = pos.lato === 'long' ? 1 : -1;
@@ -10786,13 +10799,13 @@ function fblTestaStrategiaDiCandele(rows, cfg) {
     cap += cap * (p.rischio / 100) * R;
     if (cap > picco) picco = cap;
     const dd = picco > 0 ? ((picco - cap) / picco) * 100 : 0; if (dd > ddMax) ddMax = dd;
-    punti.push({ t: rows[i].time, cap });
+    punti.push({ t: tempo(rows[i]), cap });
     pos = null;
   };
 
   for (let i = 1; i < n; i++) {
     const r = rows[i], a = atr[i];
-    const g = giorno(r.time);
+    const g = giorno(tempo(r));
     if (g !== giornoCorrente) { giornoCorrente = g; capGiorno = cap; }
 
     // Interruttore sul conto: raggiunto il drawdown massimo, chiudo tutto e smetto.
@@ -10842,7 +10855,9 @@ function fblTestaStrategiaDiCandele(rows, cfg) {
 
   const perAnno = {};
   for (const t of trades) {
-    const y = new Date(rows[t.iEntrata].time).getUTCFullYear();
+    const tEnt = tempo(rows[t.iEntrata]);
+    if (!Number.isFinite(tEnt)) continue;
+    const y = new Date(tEnt).getUTCFullYear();
     (perAnno[y] = perAnno[y] || []).push(t.R);
   }
   return {

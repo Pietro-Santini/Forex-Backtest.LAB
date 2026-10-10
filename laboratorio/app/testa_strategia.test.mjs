@@ -144,5 +144,39 @@ prova('limite di perdita giornaliera: raggiunto, niente nuove aperture quel gior
   assert.ok(con.ddMax <= senza.ddMax, 'drawdown peggiorato: ' + con.ddMax + ' vs ' + senza.ddMax);
 });
 
+// --- le candele dell'app hanno `date` (stringa MT5), non `time`: il motore deve leggerle ---
+function salitaConDate(n) {
+  let px = 100, s = 12345; const rnd = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const p2 = (x) => String(x).padStart(2, '0');
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const cyc = i % 40, drift = cyc < 30 ? 0.9 : -1.4;
+    const c = px + drift + (rnd() - 0.5) * 0.7, o = px;
+    const d = new Date(1750000000000 + i * 14400000);
+    out.push({
+      date: d.getUTCFullYear() + '.' + p2(d.getUTCMonth() + 1) + '.' + p2(d.getUTCDate()) + ' ' + p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()),
+      open: o, high: Math.max(o, c) + rnd() * 0.25, low: Math.min(o, c) - rnd() * 0.25, close: c, volume: 0,
+    });
+    px = c;
+  }
+  return out;
+}
+
+prova('candele con `date` (come nell\'app) invece di `time`: il motore le legge, non lancia errori', () => {
+  const r = motore(salitaConDate(400), BASE);
+  assert.ok(r.usate >= 5, 'troppo pochi trade sulle candele con `date`: ' + r.usate);
+  assert.equal(r.perAnno.length, 1, 'la data non viene letta: anni calcolati = ' + r.perAnno.length);
+  assert.ok(Number.isFinite(r.punti[0].t), 'il primo punto della curva non ha un tempo valido');
+});
+
+prova('CONTROLLO: una candela senza `time` ne\' `date` non fa esplodere il motore', () => {
+  const dati = salitaConDate(200);
+  delete dati[100].date;
+  let r;
+  assert.doesNotThrow(() => { r = motore(dati, BASE); }, 'il motore deve ignorare una candela senza data');
+  assert.ok(r && Number.isFinite(r.finale), 'il risultato deve essere comunque calcolato');
+});
+
 console.log('\nFalliti:', falliti);
+
 process.exit(falliti ? 1 : 0);

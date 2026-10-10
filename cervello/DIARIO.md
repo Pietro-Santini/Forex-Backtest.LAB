@@ -165,3 +165,10 @@ Formato: data — chi — cosa — esito collaudo — commit.
   (serie sintetica 24/7, i CSV BTC/SOL caricati sono VUOTI) funziona su 1D e 4h (BTC 1D a 0,5%: +16,4%,
   PF 3,17, DD 0,90%). Test: laboratorio/app/testa_strategia.test.mjs (12 prove, prima rosse). CACHE_NAME
   e MyAppVersion alzati insieme a CACHE_NAME (app v126 / Setup 1.0.126) e pubblicato su main col via del proprietario. - verde - Falliti: 0
+- 2026-10-11 - Claude - app v127 (pubblicato su main): corretto il difetto "Errore nel motore: Invalid
+  time value" del pannello "Testa strategia" (segnalato dal proprietario). Causa vera: il motore
+  leggeva `rows[i].time`, ma le candele caricate nell'app portano il campo `date` (stringa, es.
+  "2022.01.03 00:00"), quindi `new Date(undefined).toISOString()` lanciava. Rimedio: un lettore unico
+  `tempo(r)` che usa `fblTempoRiga` (lo stesso dell'app) e, fuori dall'app, ripiega su `time`/`tClose`/
+  `date`; `giorno()` e la tabella per anno ora reggono anche una data mancante. Test:
+  laboratorio/app/testa_strategia.test.mjs (2 prove nuove, prima rosse con lo stesso errore). - verde - Falliti: 0

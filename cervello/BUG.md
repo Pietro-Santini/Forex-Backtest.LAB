@@ -299,3 +299,9 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   `fblCronoDisegna` ferma ogni linea sulla sua candela e mette la **spunta ✓ a sinistra** del punto
   in cui un TP è stato preso. Se lo stop non è preso, la sua linea prende la lunghezza dell'ultima
   di TP. Test: `laboratorio/app/cronologia_linee.test.mjs` (3, prima rossi).
+- **Il pannello "Testa strategia" dava "Errore nel motore: Invalid time value"** — risolto app v127 —
+  11 ottobre 2026: il motore leggeva `rows[i].time`, ma le candele caricate nell'app hanno il campo
+  `date` (stringa, es. "2022.01.03 00:00"); `new Date(undefined).toISOString()` lancia. Ora un lettore
+  unico `tempo(r)` usa `fblTempoRiga` (lo stesso dell'app) e, fuori dall'app, ripiega su `time`/`tClose`/
+  `date`; `giorno()` e la tabella per anno reggono anche una data mancante. Test:
+  `laboratorio/app/testa_strategia.test.mjs` (2, prima rossi con lo stesso errore).
