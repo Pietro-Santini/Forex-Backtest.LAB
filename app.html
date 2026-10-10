@@ -3250,6 +3250,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <option value="tvp3d">Temporal Volume Profile 3D</option>
      <option value="vp_daily">Profili volumetrici giornalieri</option>
      <option value="vp_sessions">Profili volumetrici delle sessioni</option>
+     <option value="gann217">Gann 21.7 Profit Factor (4h)</option>
    </select></span>
    <button id="openCustomScriptBtn" class="toolBtn" title="Incolla un codice in stile Pine Script (TradingView) e applicalo come indicatore personalizzato">🧩 Codice personalizzato</button>
  </div>
@@ -12311,6 +12312,270 @@ const INDICATOR_DEFS={
    }
  }
  ,
+ gann217:{
+   label:'Gann 21.7 Profit Factor (4h)',
+   defaultParams:()=>({
+     gannLength:3, useEmaFilter:true, emaLen:200, useCandle:true, solidThr:0.5,
+     adxMax:0,
+     useVolEntry:true, volLookback:20, volMaLen:20, volMult:2.0, volCloseThr:0.65, volUseMacro:false,
+     useReversalEntry:true, revLookback:20, revVolMult:1.5, revRejectThr:0.6, revUseMacro:false,
+     tpAtr:0.3, commPct:0.075, costMult:3.0, useFixedTarget:false, targetProfitPct:0.5,
+     slAtrMult:3.5, useGannSl:true,
+     useBe:true, beAtrTrigger:0.3, beLockAtr:0.0, useGannRunner:false, letWinnersRun:false,
+     basePosPct:100.0, streakN:2, cutFactor:0.5,
+     leverage:50.0,
+     showGannLine:true, showRawShapes:true, showMarkers:true, showLabels:true, showDebug:false
+   }),
+   compute(rows,upToIdx,ind){
+     const p=ind.params;
+     if(!ind.calc||ind.calc.builtTo===undefined)ind.calc={builtTo:-1};
+     const c=ind.calc;
+     if(!c.init){
+       c.init=true;
+       c.gannTrend=[]; c.gannLine=[]; c.emaArr=[]; c.atrArr=[]; c.adxArr=[];
+       c.rawVolLong=[]; c.rawVolShort=[]; c.rawRevLong=[]; c.rawRevShort=[];
+       c.blocked=[]; // {index, side, reason}
+       c.signals=[]; c.trades=[]; c.position=null; c.lossStreak=0; c.trend=1;
+       c.emaPrev=NaN;
+       c.atrState={prev:NaN,warmSum:0,warmCount:0};
+       c.dmi={ tr:{prev:NaN,warmSum:0,warmCount:0}, plus:{prev:NaN,warmSum:0,warmCount:0}, minus:{prev:NaN,warmSum:0,warmCount:0}, dx:{prev:NaN,warmSum:0,warmCount:0} };
+     }
+     function sma(i,len,field){ if(i<len-1)return NaN; let s=0; for(let k=i-len+1;k<=i;k++)s+=rows[k][field]; return s/len; }
+     function highestField(i,len,offset,field){ const end=i-offset,start=end-len+1; if(start<0)return NaN; let m=-Infinity; for(let k=start;k<=end;k++)if(rows[k][field]>m)m=rows[k][field]; return m; }
+     function lowestField(i,len,offset,field){ const end=i-offset,start=end-len+1; if(start<0)return NaN; let m=Infinity; for(let k=start;k<=end;k++)if(rows[k][field]<m)m=rows[k][field]; return m; }
+     function rmaStep(state,value,len){ if(!Number.isFinite(value))return NaN; if(!Number.isFinite(state.prev)){ state.warmSum+=value; state.warmCount++; if(state.warmCount===len){ state.prev=state.warmSum/len; return state.prev; } return NaN; } state.prev=(state.prev*(len-1)+value)/len; return state.prev; }
+
+     const roundTripPct=(2*p.commPct)/100;
+
+     for(let i=c.builtTo+1;i<=upToIdx;i++){
+       const r=rows[i], prevR=i>0?rows[i-1]:null;
+
+       const smaHigh=sma(i,p.gannLength,'high'), smaLow=sma(i,p.gannLength,'low');
+       if(i>=2){
+         const smaHighPrev1=sma(i-1,p.gannLength,'high'), smaHighPrev2=sma(i-2,p.gannLength,'high');
+         const smaLowPrev1=sma(i-1,p.gannLength,'low'), smaLowPrev2=sma(i-2,p.gannLength,'low');
+         const crossOverHigh=r.close>smaHighPrev1 && rows[i-1].close<=smaHighPrev2;
+         const crossUnderLow=r.close<smaLowPrev1 && rows[i-1].close>=smaLowPrev2;
+         if(crossOverHigh)c.trend=1; else if(crossUnderLow)c.trend=-1;
+       }
+       const prevTrend=i>0?c.gannTrend[i-1]:c.trend;
+       c.gannTrend[i]=c.trend;
+       c.gannLine[i]=c.trend===1?smaLow:smaHigh;
+
+       let emaVal=NaN;
+       if(p.useEmaFilter && i>=p.emaLen-1){
+         if(!Number.isFinite(c.emaPrev)){ let s=0; for(let k=i-p.emaLen+1;k<=i;k++)s+=rows[k].close; emaVal=s/p.emaLen; }
+         else{ const k=2/(p.emaLen+1); emaVal=r.close*k+c.emaPrev*(1-k); }
+         c.emaPrev=emaVal;
+       }
+       c.emaArr[i]=emaVal;
+
+       const tr=prevR?Math.max(r.high-r.low,Math.abs(r.high-prevR.close),Math.abs(r.low-prevR.close)):(r.high-r.low);
+       const atrVal=rmaStep(c.atrState,tr,14);
+       c.atrArr[i]=atrVal;
+
+       let plusDM=0,minusDM=0;
+       if(prevR){ const up=r.high-prevR.high, down=prevR.low-r.low; plusDM=(up>down&&up>0)?up:0; minusDM=(down>up&&down>0)?down:0; }
+       const trRmaDmi=rmaStep(c.dmi.tr,tr,14);
+       const plusDmRma=rmaStep(c.dmi.plus,plusDM,14);
+       const minusDmRma=rmaStep(c.dmi.minus,minusDM,14);
+       let dx=NaN;
+       if(Number.isFinite(trRmaDmi)&&trRmaDmi>0&&Number.isFinite(plusDmRma)&&Number.isFinite(minusDmRma)){
+         const plusDI=100*plusDmRma/trRmaDmi, minusDI=100*minusDmRma/trRmaDmi, sum=plusDI+minusDI;
+         dx=sum>0?100*Math.abs(plusDI-minusDI)/sum:0;
+       }
+       const adxVal=rmaStep(c.dmi.dx,dx,14);
+       c.adxArr[i]=adxVal;
+
+       const macroBull=!p.useEmaFilter||(Number.isFinite(emaVal)&&r.close>emaVal);
+       const macroBear=!p.useEmaFilter||(Number.isFinite(emaVal)&&r.close<emaVal);
+       const candleRange=r.high-r.low;
+       const solidBull=!p.useCandle||(candleRange>0&&(r.close-r.low)/candleRange>=p.solidThr);
+       const solidBear=!p.useCandle||(candleRange>0&&(r.high-r.close)/candleRange>=p.solidThr);
+       const regimeOk=p.adxMax<=0||(Number.isFinite(adxVal)&&adxVal<=p.adxMax);
+
+       const flipUp=c.gannTrend[i]===1&&prevTrend===-1;
+       const flipDown=c.gannTrend[i]===-1&&prevTrend===1;
+
+       const gannLongSig=flipUp&&macroBull&&solidBull&&regimeOk;
+       const gannShortSig=flipDown&&macroBear&&solidBear&&regimeOk;
+
+       if(p.showDebug){
+         if(flipUp&&!gannLongSig){
+           const reason=!macroBull?'trend EMA':!solidBull?'candela non solida':'ADX fuori range';
+           c.blocked.push({index:i,side:'long',reason});
+         }
+         if(flipDown&&!gannShortSig){
+           const reason=!macroBear?'trend EMA':!solidBear?'candela non solida':'ADX fuori range';
+           c.blocked.push({index:i,side:'short',reason});
+         }
+       }
+
+       const volMa=sma(i,p.volMaLen,'volume');
+       const hhPrev=highestField(i,p.volLookback,1,'high'), llPrev=lowestField(i,p.volLookback,1,'low');
+       let volLongRaw=false,volShortRaw=false,volLongSig=false,volShortSig=false;
+       if(Number.isFinite(hhPrev)&&Number.isFinite(llPrev)&&Number.isFinite(volMa)){
+         const volSpike=r.volume>volMa*p.volMult;
+         const vrange=r.high-r.low;
+         const volStrongUp=vrange>0&&(r.close-r.low)/vrange>=p.volCloseThr;
+         const volStrongDown=vrange>0&&(r.high-r.close)/vrange>=p.volCloseThr;
+         volLongRaw=r.close>hhPrev&&volSpike&&volStrongUp;
+         volShortRaw=r.close<llPrev&&volSpike&&volStrongDown;
+         volLongSig=p.useVolEntry&&volLongRaw&&(!p.volUseMacro||macroBull);
+         volShortSig=p.useVolEntry&&volShortRaw&&(!p.volUseMacro||macroBear);
+       }
+       c.rawVolLong[i]=volLongRaw; c.rawVolShort[i]=volShortRaw;
+
+       const highestIncl=highestField(i,p.revLookback,0,'high'), lowestIncl=lowestField(i,p.revLookback,0,'low');
+       let revLongRaw=false,revShortRaw=false,revLongSig=false,revShortSig=false;
+       if(Number.isFinite(highestIncl)&&Number.isFinite(lowestIncl)&&Number.isFinite(volMa)){
+         const isNewHigh=r.high>=highestIncl, isNewLow=r.low<=lowestIncl;
+         const revVolSpike=r.volume>volMa*p.revVolMult;
+         const vrange=r.high-r.low;
+         const rejectDown=vrange>0&&(r.high-r.close)/vrange>=p.revRejectThr;
+         const rejectUp=vrange>0&&(r.close-r.low)/vrange>=p.revRejectThr;
+         revShortRaw=isNewHigh&&revVolSpike&&rejectDown;
+         revLongRaw=isNewLow&&revVolSpike&&rejectUp;
+         revLongSig=p.useReversalEntry&&revLongRaw&&(!p.revUseMacro||macroBull);
+         revShortSig=p.useReversalEntry&&revShortRaw&&(!p.revUseMacro||macroBear);
+       }
+       c.rawRevLong[i]=revLongRaw; c.rawRevShort[i]=revShortRaw;
+
+       const longCondition=gannLongSig||volLongSig||revLongSig;
+       const shortCondition=gannShortSig||volShortSig||revShortSig;
+       let sigSide=null,sigSource=null;
+       if(longCondition){ sigSide='long'; sigSource=gannLongSig?'GANN':(volLongSig?'VOL':'REV'); }
+       else if(shortCondition){ sigSide='short'; sigSource=gannShortSig?'GANN':(volShortSig?'VOL':'REV'); }
+       if(sigSide)c.signals.push({index:i,side:sigSide,source:sigSource});
+
+       if(c.position){
+         const pos=c.position;
+         let exitPrice=null,exitReason=null;
+         const tpHit=pos.side==='long'?r.high>=pos.tp:r.low<=pos.tp;
+         const slHit=pos.side==='long'?r.low<=pos.sl:r.high>=pos.sl;
+         if(tpHit&&slHit){ const dTp=Math.abs(r.open-pos.tp),dSl=Math.abs(r.open-pos.sl); if(dSl<=dTp){exitPrice=pos.sl;exitReason='SL';}else{exitPrice=pos.tp;exitReason='TP';} }
+         else if(tpHit){exitPrice=pos.tp;exitReason='TP';}
+         else if(slHit){exitPrice=pos.sl;exitReason='SL';}
+         if(exitPrice!=null){
+           const gross=pos.side==='long'?(exitPrice-pos.entryPrice)/pos.entryPrice:(pos.entryPrice-exitPrice)/pos.entryPrice;
+           const pnlPct=(gross-roundTripPct)*100;
+           c.trades.push({side:pos.side,source:pos.source,entryIndex:pos.entryIndex,entryPrice:pos.entryPrice,exitIndex:i,exitPrice:exitPrice,exitReason:exitReason,pnlPct:pnlPct,tp:pos.tp,sl:pos.sl});
+           c.lossStreak=pnlPct<0?c.lossStreak+1:0;
+           c.position=null;
+         }else if(p.useBe){
+           const a=Number.isFinite(atrVal)?atrVal:0;
+           if(pos.side==='long'){
+             if(!pos.beOn&&r.high>=pos.entryPrice+a*p.beAtrTrigger){ pos.beOn=true; pos.sl=Math.max(pos.sl,pos.entryPrice+a*p.beLockAtr); if(p.letWinnersRun)pos.tp=Infinity; }
+             if(p.useGannRunner&&pos.beOn&&Number.isFinite(c.gannLine[i])){ const ns=Math.max(pos.sl,c.gannLine[i]); if(ns>pos.sl)pos.sl=ns; }
+           }else{
+             if(!pos.beOn&&r.low<=pos.entryPrice-a*p.beAtrTrigger){ pos.beOn=true; pos.sl=Math.min(pos.sl,pos.entryPrice-a*p.beLockAtr); if(p.letWinnersRun)pos.tp=-Infinity; }
+             if(p.useGannRunner&&pos.beOn&&Number.isFinite(c.gannLine[i])){ const ns=Math.min(pos.sl,c.gannLine[i]); if(ns<pos.sl)pos.sl=ns; }
+           }
+         }
+       }
+
+       if(!c.position&&sigSide){
+         const a=Number.isFinite(atrVal)?atrVal:0;
+         const close=r.close;
+         const slDist=a*p.slAtrMult;
+         const tpDist=p.useFixedTarget?close*(p.targetProfitPct/100):Math.max(a*p.tpAtr,close*roundTripPct*p.costMult);
+         let sl,tp;
+         if(sigSide==='long'){ tp=close+tpDist; sl=(p.useGannSl&&Number.isFinite(c.gannLine[i]))?Math.min(close-slDist,c.gannLine[i]):close-slDist; }
+         else{ tp=close-tpDist; sl=(p.useGannSl&&Number.isFinite(c.gannLine[i]))?Math.max(close+slDist,c.gannLine[i]):close+slDist; }
+         const sizeMult=c.lossStreak>=p.streakN?p.cutFactor:1;
+         const liqPrice=sigSide==='long'?close*(1-1/p.leverage):close*(1+1/p.leverage);
+         c.position={side:sigSide,source:sigSource,entryIndex:i,entryPrice:close,sl:sl,tp:tp,beOn:false,sizePct:p.basePosPct*sizeMult,liqPrice:liqPrice};
+       }
+     }
+     c.builtTo=upToIdx;
+   },
+   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
+     const c=ind.calc; if(!c)return;
+     const p=ind.params;
+     ctx.save();
+
+     if(p.showGannLine!==false&&c.gannLine&&c.gannLine.length){
+       const from=Math.max(1,dataStart-1), to=Math.min(rows.length-1,dataEnd+1);
+       let started=false;
+       for(let i=from;i<=to;i++){
+         const v=c.gannLine[i];
+         if(!Number.isFinite(v)){ started=false; continue; }
+         const prevV=c.gannLine[i-1];
+         if(started&&Number.isFinite(prevV)){
+           ctx.beginPath();
+           ctx.strokeStyle=c.gannTrend[i]===1?'#2ecc71':'#e05b64';
+           ctx.lineWidth=2;
+           ctx.moveTo(xAbs(i-1),y(prevV)); ctx.lineTo(xAbs(i),y(v)); ctx.stroke();
+         }
+         started=true;
+       }
+     }
+
+     function drawLevel(i1,i2,price,color){
+       if(!Number.isFinite(price))return;
+       const x1=xAbs(Math.max(i1,dataStart-1)), x2=xAbs(Math.min(i2,dataEnd+1));
+       const yy=y(price);
+       ctx.save(); ctx.strokeStyle=color; ctx.setLineDash([4,3]); ctx.lineWidth=1;
+       ctx.beginPath(); ctx.moveTo(x1,yy); ctx.lineTo(x2,yy); ctx.stroke(); ctx.restore();
+     }
+     if(p.showLabels!==false&&c.trades&&c.trades.length){
+       for(let k=0;k<c.trades.length;k++){
+         const t=c.trades[k];
+         if(t.exitIndex<dataStart-2||t.entryIndex>dataEnd+2)continue;
+         drawLevel(t.entryIndex,t.exitIndex,t.tp,'#2ecc71');
+         drawLevel(t.entryIndex,t.exitIndex,t.sl,'#e05b64');
+       }
+     }
+     if(p.showLabels!==false&&c.position&&c.position.entryIndex<=dataEnd+2){
+       drawLevel(c.position.entryIndex,dataEnd,c.position.tp,'#2ecc71');
+       drawLevel(c.position.entryIndex,dataEnd,c.position.sl,'#e05b64');
+     }
+
+     function tri(px,py,up,color){
+       ctx.beginPath(); ctx.fillStyle=color;
+       if(up){ ctx.moveTo(px,py-5); ctx.lineTo(px-4,py+4); ctx.lineTo(px+4,py+4); }
+       else{ ctx.moveTo(px,py+5); ctx.lineTo(px-4,py-4); ctx.lineTo(px+4,py-4); }
+       ctx.closePath(); ctx.fill();
+     }
+     if(p.showRawShapes!==false){
+       for(let i=Math.max(0,dataStart-1);i<=Math.min(rows.length-1,dataEnd+1);i++){
+         const r=rows[i], px=xAbs(i);
+         if(c.rawVolLong[i])tri(px,y(r.low)+10,true,'#00e5ff');
+         if(c.rawVolShort[i])tri(px,y(r.high)-10,false,'#e040fb');
+         if(c.rawRevLong[i])tri(px,y(r.low)+10,true,'#ffeb3b');
+         if(c.rawRevShort[i])tri(px,y(r.high)-10,false,'#ff9800');
+       }
+     }
+
+     if(p.showMarkers!==false&&c.signals&&c.signals.length){
+       for(let k=0;k<c.signals.length;k++){
+         const s=c.signals[k];
+         if(s.index<dataStart-1||s.index>dataEnd+1)continue;
+         const r=rows[s.index], px=xAbs(s.index), up=s.side==='long';
+         const py=up?y(r.low)+20:y(r.high)-20;
+         tri(px,py,up,up?'#2ecc71':'#e05b64');
+         if(p.showLabels!==false){
+           ctx.font='10px system-ui,sans-serif'; ctx.fillStyle=up?'#2ecc71':'#e05b64'; ctx.textAlign='center';
+           ctx.fillText(s.side.toUpperCase()+' ['+s.source+']', px, up?py+14:py-10);
+         }
+       }
+     }
+
+     if(p.showDebug&&c.blocked&&c.blocked.length){
+       for(let k=0;k<c.blocked.length;k++){
+         const b=c.blocked[k];
+         if(b.index<dataStart-1||b.index>dataEnd+1)continue;
+         const r=rows[b.index], px=xAbs(b.index);
+         const py=b.side==='long'?y(r.high)-24:y(r.low)+24;
+         ctx.font='9px system-ui,sans-serif'; ctx.fillStyle='rgba(150,150,150,0.9)'; ctx.textAlign='center';
+         ctx.fillText('x '+b.side+' bloccato ('+b.reason+')', px, py);
+       }
+     }
+
+     ctx.restore();
+   }
+ }
+ ,
  // "Convertito con AI": non passa dal mini-interprete Pine-like, ma esegue direttamente il
  // codice compute/render ottenuto (fuori da qui, vedi modulo "🤖 Converti con un assistente
  // AI") da un assistente esterno. Compilato UNA volta con new Function() e tenuto in cache
@@ -13006,7 +13271,41 @@ function openIndicatorSettingsModal(ind){
      paramsRow.appendChild(mkNum('Opacità %','opacity',5,100));
    }else if(ind.key==='vp_daily'||ind.key==='vp_sessions'){
      buildVpIndicatorSettings(paramsRow,ind);
-   }else if(ind.key==='sr_breaks'){
+   }else if(ind.key==='gann217'){
+   paramsRow.appendChild(mkNum('Periodo Gann','gannLength',1,50));
+   paramsRow.appendChild(mkCheck('Filtro EMA macro','useEmaFilter',true));
+   paramsRow.appendChild(mkNum('Periodo EMA','emaLen',2,500));
+   paramsRow.appendChild(mkCheck('Filtro candela solida','useCandle',true));
+   paramsRow.appendChild(mkNum('Soglia candela solida','solidThr',0,1,0.05));
+   paramsRow.appendChild(mkNum('ADX massimo (0=off)','adxMax',0,100,1));
+   paramsRow.appendChild(mkCheck('Canale Volume Breakout','useVolEntry',true));
+   paramsRow.appendChild(mkNum('Lookback breakout','volLookback',2,200));
+   paramsRow.appendChild(mkNum('Periodo media volume','volMaLen',1,200));
+   paramsRow.appendChild(mkNum('Moltiplicatore spike volume','volMult',1,10,0.1));
+   paramsRow.appendChild(mkNum('Soglia chiusura in range (VOL)','volCloseThr',0,1,0.05));
+   paramsRow.appendChild(mkCheck('Canale Reversal/Climax','useReversalEntry',true));
+   paramsRow.appendChild(mkNum('Lookback reversal','revLookback',2,200));
+   paramsRow.appendChild(mkNum('Moltiplicatore spike volume (REV)','revVolMult',1,10,0.1));
+   paramsRow.appendChild(mkNum('Soglia rigetto estremo','revRejectThr',0,1,0.05));
+   paramsRow.appendChild(mkNum('TP x ATR','tpAtr',0.05,10,0.05));
+   paramsRow.appendChild(mkNum('Commissione per lato %','commPct',0,1,0.005));
+   paramsRow.appendChild(mkNum('TP minimo x costo round-trip','costMult',0,10,0.5));
+   paramsRow.appendChild(mkNum('SL x ATR','slAtrMult',0.5,20,0.1));
+   paramsRow.appendChild(mkCheck('Limita SL alla linea Gann','useGannSl',true));
+   paramsRow.appendChild(mkCheck('Break-even attivo','useBe',true));
+   paramsRow.appendChild(mkNum('BE trigger (x ATR profitto)','beAtrTrigger',0.05,10,0.05));
+   paramsRow.appendChild(mkNum('BE profitto bloccato (x ATR)','beLockAtr',0,10,0.02));
+   paramsRow.appendChild(mkCheck('Trailing con linea Gann','useGannRunner',false));
+   paramsRow.appendChild(mkNum('Size base (% equity)','basePosPct',1,100,1));
+   paramsRow.appendChild(mkNum('Streak perdite per ridurre size','streakN',1,20));
+   paramsRow.appendChild(mkNum('Moltiplicatore size dopo streak','cutFactor',0.1,1,0.1));
+   paramsRow.appendChild(mkNum('Leva (solo per label/liquidazione)','leverage',1,500,1));
+   paramsRow.appendChild(mkCheck('Mostra linea Gann','showGannLine',true));
+   paramsRow.appendChild(mkCheck('Mostra triangoli canali grezzi','showRawShapes',true));
+   paramsRow.appendChild(mkCheck('Mostra marker di ingresso','showMarkers',true));
+   paramsRow.appendChild(mkCheck('Mostra etichette dettagliate','showLabels',true));
+   paramsRow.appendChild(mkCheck('Debug: mostra flip bloccati','showDebug',false));
+  }else if(ind.key==='sr_breaks'){
      paramsRow.appendChild(mkNum('Sinistra','leftBars',1,200));
      paramsRow.appendChild(mkNum('Destra','rightBars',1,200));
      paramsRow.appendChild(mkNum('Soglia vol.','volumeThresh',0,1000));

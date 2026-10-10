@@ -53,7 +53,7 @@ test('il dito segue il punto dove sta, e alzandolo si torna al totale', async ()
     const r = await pagina.evaluate(async () => {
       const cv = document.getElementById('fblRendGrafico');
       const b = cv.getBoundingClientRect();
-      const pad = 16, dentro = b.width - pad * 2;
+      const pad = 10, dentro = b.width - pad * 2; // 10 = pl/pr di rendDisegnaGrafico e indiceDa (SVG); il 16 era del vecchio canvas
       const tocca = (tipo, frazione) => cv.dispatchEvent(new PointerEvent(tipo, {
         pointerId: 1, pointerType: 'touch', bubbles: true, cancelable: true,
         clientX: b.left + pad + dentro * frazione, clientY: b.top + b.height / 2
@@ -87,7 +87,7 @@ test('il mirino non salta se i numeri sopra il grafico cambiano altezza', async 
     const r = await pagina.evaluate(async () => {
       const cv = document.getElementById('fblRendGrafico');
       const b = cv.getBoundingClientRect();
-      const pad = 16, dentro = b.width - pad * 2;
+      const pad = 10, dentro = b.width - pad * 2; // 10 = pl/pr di rendDisegnaGrafico e indiceDa (SVG); il 16 era del vecchio canvas
       const tocca = (tipo, frazione) => cv.dispatchEvent(new PointerEvent(tipo, {
         pointerId: 1, pointerType: 'touch', bubbles: true, cancelable: true,
         clientX: b.left + pad + dentro * frazione, clientY: b.top + b.height / 2

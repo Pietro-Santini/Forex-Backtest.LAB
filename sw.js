@@ -51,8 +51,10 @@
 //               all'ultimo); server predefinito MetaQuotes-Demo
 //          v15 = footprint allineato nell'ora 22-23 (via i tick MT5 storici dalle fasce
 //               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
+//          v125 = nuovo indicatore "Gann 21.7 Profit Factor (4h)" nativo in INDICATOR_DEFS,
+//               personalizzabile dal pannello impostazioni (34 parametri)
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v124";
+const CACHE_NAME = "forex-backtest-lab-v125";
 const ASSETS = [
   "./",
   "./app.html",

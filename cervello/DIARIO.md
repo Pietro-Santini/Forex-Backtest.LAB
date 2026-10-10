@@ -150,3 +150,4 @@ Formato: data — chi — cosa — esito collaudo — commit.
   sui trade chiusi (segnalato dal proprietario). Il test e' costato tre tentativi e la lezione
   sta in LEZIONI.md: passava sia prima sia dopo, perche' le operazioni finte cadevano fuori
   dalla finestra visibile e non venivano disegnate affatto. - verde - Falliti: 0
+- 2026-10-10 - Claude - app v125: nuovo indicatore nativo "Gann 21.7 Profit Factor (4h)" in INDICATOR_DEFS (gann217), personalizzabile dal pannello impostazioni. Test: laboratorio/app/indicatore_gann217.test.mjs (prima rosso senza l'indicatore). Nello stesso giro corretto laboratorio/app/rendimento_scorrimento.test.mjs, che era rosso su main (anche su GitHub): usava il margine 16 del vecchio canvas invece del 10 dell'SVG (pl/pr di rendDisegnaGrafico), e dava 2 invece di 0 a sinistra e 98 invece di 100 a destra. L'app non cambia. - verde - Falliti: 0

@@ -163,3 +163,4 @@
   niente e l'assenza delle righe non dimostrava nulla. Chi prova un disegno deve mettere nel test
   una **prova di controllo** - «questa roba viene disegnata davvero?» - altrimenti misura il
   vuoto e lo scambia per una conferma.
+- **Un test che ricalcola le coordinate di un grafico con costanti proprie (margini, larghezze) si rompe quando cambia il disegno.** Il test della resa usava il margine del vecchio canvas (16) dopo il passaggio all'SVG (10): il collaudo e' rimasto rosso su main e su GitHub senza che nessuno guardasse, e la tolleranza di ±2 degli altri test nascondeva lo scarto. Quando si cambia un disegno, si cercano i test che ne ricalcolano le misure. - 10 ottobre 2026.
