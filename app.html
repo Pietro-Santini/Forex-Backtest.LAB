@@ -2232,7 +2232,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <button type="button" id="chartSettingsTabHeatmap" class="fbSettingsNavItem" data-settings-tab="heatmap">🌡️ Heatmap</button>
          <button type="button" id="chartSettingsTabRegistrazione" class="fbSettingsNavItem" data-settings-tab="registrazione">⏺️ Registrazione</button>
          <button type="button" id="chartSettingsTabAudio" class="fbSettingsNavItem" data-settings-tab="audio">🔊 Audio</button>
-          <button type="button" id="chartSettingsTabTesta" class="fbSettingsNavItem" data-settings-tab="testastrategia">🧠 Testa strategia</button>
          <!-- RICHIESTO ESPLICITAMENTE: "il pulsante dentro al grafico live/mt5 lo inseriamo
               all'interno delle impostazioni direttamente dentro al grafico" — spostato qui dentro
               come voce di navigazione in fondo (prima era un pulsante a sé nella toolbar del
@@ -2713,9 +2712,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            </div>
            <div id="regGiorniBox" style="font-size:12.5px;line-height:1.5;color:#cdd6e0;max-height:360px;overflow:auto"></div>
          </div>
-         <div data-settings-panel="testastrategia" style="display:none">
-            <div class="fblTest" data-testa-strategia></div>
-          </div>
           <div data-settings-panel="audio" style="display:none">
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Suono "order filled": apertura/chiusura di una posizione e scatto di un ordine pendente. Con MT5 collegato suona anche per operazioni fatte dal terminale MT5 o da un altro dispositivo, ma solo se avvengono MENTRE l'app è aperta e collegata — mai per posizioni/chiusure già esistenti che l'app ritrova all'apertura o dopo un aggiornamento della pagina.</div>
         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
@@ -3254,7 +3250,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <option value="tvp3d">Temporal Volume Profile 3D</option>
      <option value="vp_daily">Profili volumetrici giornalieri</option>
      <option value="vp_sessions">Profili volumetrici delle sessioni</option>
-     <option value="gann217">Gann 21.7 Profit Factor (4h)</option>
    </select></span>
    <button id="openCustomScriptBtn" class="toolBtn" title="Incolla un codice in stile Pine Script (TradingView) e applicalo come indicatore personalizzato">🧩 Codice personalizzato</button>
  </div>
@@ -10671,354 +10666,6 @@ function currentDisplayScale(){
 // incrementale (`calc`) che si estende mano a mano che avanza `idx`, senza dover
 // ricalcolare tutto lo storico ad ogni frame.
 let activeIndicators=[];
-// ==== TESTA-STRATEGIA: motore (estraibile) ====
-// Motore del "Testa strategia" — trend-following Gann con filtro EMA, ATR, stop iniziale,
-// trailing (chandelier), capitalizzazione per rischio % e PROTEZIONI del conto
-// (interruttore sul drawdown massimo + limite di perdita giornaliera). Gira su candele caricate.
-//
-// PROTEGGE IL CONTO COSI':
-//  - rischio % per trade => perdita di UNA operazione limitata a quella % (lo stop e' a initK ATR);
-//  - ddStopPct: se il conto scende di questa % dal suo massimo, chiude la posizione aperta e STOP.
-//  - perditaGiornoPct: se in un giorno il conto perde oltre questa %, non apre piu' quel giorno.
-//
-// config: gannLength, useEmaFilter, emaLen, useCandle, solidThr, adxMax (0=spento),
-//         initK (stop iniziale in ATR), trailK (trailing in ATR, 0=spento), useFlip,
-//         rischio (% capitale per trade), capitale, commPct (% prezzo, andata+ritorno),
-//         ddStopPct (0=spento), perditaGiornoPct (0=spento)
-// Ritorna: { trades, capitale, finale, resa, pf, win, usate, vinte, perse, sommaR, ddMax, punti, perAnno, interrotto }
-
-function fblTestaStrategiaDiCandele(rows, cfg) {
-  const p = {
-    gannLength: 3, useEmaFilter: false, emaLen: 200, useCandle: false, solidThr: 0.6, adxMax: 0,
-    initK: 2, trailK: 3, useFlip: true, rischio: 1, capitale: 10000, commPct: 0.075,
-    ddStopPct: 0, perditaGiornoPct: 0, ...(cfg || {}),
-  };
-  const n = rows.length;
-
-  // Tempo di una candela. L'app porta il campo `date` (stringa, es. "2022.01.03 00:00" oppure ISO)
-  // e il suo lettore e' `fblTempoRiga`. Fuori dall'app (collaudo) le serie di prova usano `time`
-  // numerico. Questo copre tutti i casi senza mai chiamare `new Date(NaN)`, che lancia.
-  const tempo = (r) => {
-    if (!r) return NaN;
-    if (typeof fblTempoRiga === 'function') { try { const t = fblTempoRiga(r); if (Number.isFinite(t)) return t; } catch (e) { /* non disponibile */ } }
-    if (Number.isFinite(r.time)) return r.time;
-    if (Number.isFinite(r.tClose)) return r.tClose;
-    if (r.date != null) { const t = Date.parse(String(r.date).trim().replace(/\./g, '-').replace(' ', 'T')); if (Number.isFinite(t)) return t; }
-    return NaN;
-  };
-
-  const vuoto = {
-    trades: [], capitale: p.capitale, finale: p.capitale, resa: 0, pf: 0, win: 0,
-    usate: 0, vinte: 0, perse: 0, sommaR: 0, ddMax: 0, interrotto: false,
-    punti: [{ t: n ? tempo(rows[0]) : 0, cap: p.capitale }], perAnno: [],
-  };
-  if (n < 5) return vuoto;
-
-  // --- ATR (RMA 14) ---
-  const atr = new Array(n).fill(NaN);
-  let aSum = 0;
-  for (let i = 0; i < n; i++) {
-    const r = rows[i], q = rows[i - 1];
-    const tr = i === 0 ? r.high - r.low : Math.max(r.high - r.low, Math.abs(r.high - q.close), Math.abs(r.low - q.close));
-    if (i < 14) { aSum += tr; if (i === 13) atr[i] = aSum / 14; }
-    else atr[i] = (atr[i - 1] * 13 + tr) / 14;
-  }
-
-  // --- medie di Gann: SMA del massimo / del minimo ---
-  const sh = new Array(n).fill(NaN), sl = new Array(n).fill(NaN);
-  let sH = 0, sL = 0;
-  for (let i = 0; i < n; i++) {
-    sH += rows[i].high; sL += rows[i].low;
-    if (i >= p.gannLength) { sH -= rows[i - p.gannLength].high; sL -= rows[i - p.gannLength].low; }
-    if (i >= p.gannLength - 1) { sh[i] = sH / p.gannLength; sl[i] = sL / p.gannLength; }
-  }
-
-  // --- filtro EMA (facoltativo) ---
-  const ema = new Array(n).fill(NaN);
-  if (p.useEmaFilter) {
-    let ePrev = NaN;
-    for (let i = 0; i < n; i++) {
-      if (i < p.emaLen - 1) continue;
-      if (!Number.isFinite(ePrev)) { let s = 0; for (let k = i - p.emaLen + 1; k <= i; k++) s += rows[k].close; ema[i] = s / p.emaLen; }
-      else ema[i] = rows[i].close * (2 / (p.emaLen + 1)) + ePrev * (1 - 2 / (p.emaLen + 1));
-      ePrev = ema[i];
-    }
-  }
-
-  // --- ADX (facoltativo) ---
-  const adx = new Array(n).fill(NaN);
-  if (p.adxMax > 0) {
-    let trR = 0, pR = 0, mR = 0, aT = 0, aP = 0, aM = 0, aDx = 0;
-    for (let i = 1; i < n; i++) {
-      const r = rows[i], q = rows[i - 1];
-      const up = r.high - q.high, dn = q.low - r.low;
-      const pdm = up > dn && up > 0 ? up : 0, mdm = dn > up && dn > 0 ? dn : 0;
-      const tr = Math.max(r.high - r.low, Math.abs(r.high - q.close), Math.abs(r.low - q.close));
-      if (i <= 14) { aT += tr; aP += pdm; aM += mdm; if (i === 14) { trR = aT / 14; pR = aP / 14; mR = aM / 14; } }
-      else { trR = (trR * 13 + tr) / 14; pR = (pR * 13 + pdm) / 14; mR = (mR * 13 + mdm) / 14; }
-      if (i >= 28 && trR > 0) {
-        const pdi = 100 * pR / trR, mdi = 100 * mR / trR, s = pdi + mdi, dx = s > 0 ? 100 * Math.abs(pdi - mdi) / s : 0;
-        aDx = i === 28 ? dx : (aDx * 13 + dx) / 14;
-        adx[i] = aDx;
-      }
-    }
-  }
-
-  // --- segnali ---
-  const segnale = new Array(n).fill(0);
-  let trend = 0;
-  for (let i = 1; i < n; i++) {
-    const r = rows[i], q = rows[i - 1];
-    const prev = trend;
-    if (Number.isFinite(sh[i]) && Number.isFinite(sl[i]) && Number.isFinite(sh[i - 1]) && Number.isFinite(sl[i - 1])) {
-      if (r.close > sh[i] && q.close <= sh[i - 1]) trend = 1;
-      else if (r.close < sl[i] && q.close >= sl[i - 1]) trend = -1;
-    }
-    if (trend === 0 || trend === prev) continue;
-    const bull = trend === 1;
-    const macro = !p.useEmaFilter || (Number.isFinite(ema[i]) && (bull ? r.close > ema[i] : r.close < ema[i]));
-    const rng = r.high - r.low;
-    const solida = !p.useCandle || (rng > 0 && (bull ? (r.close - r.low) / rng : (r.high - r.close) / rng) >= p.solidThr);
-    const regime = p.adxMax <= 0 || (Number.isFinite(adx[i]) && adx[i] <= p.adxMax);
-    if (macro && solida && regime) segnale[i] = trend;
-  }
-
-  // --- esecuzione ---
-  const trades = [];
-  const punti = [{ t: tempo(rows[0]), cap: p.capitale }];
-  let pos = null, cap = p.capitale, picco = p.capitale, ddMax = 0, vinte = 0, perse = 0, sommaR = 0, gw = 0, gl = 0;
-  let bloccato = false, giornoCorrente = null, capGiorno = p.capitale;
-  const giorno = (t) => (Number.isFinite(t) ? new Date(t).toISOString().slice(0, 10) : '');
-
-  const chiudi = (i, prezzo, motivo) => {
-    const dir = pos.lato === 'long' ? 1 : -1;
-    const R = ((prezzo - pos.entrata) * dir) / pos.rischio - pos.costoR;
-    trades.push({ iEntrata: pos.iEntrata, iUscita: i, lato: pos.lato, entrata: pos.entrata, uscita: prezzo, rischio: pos.rischio, R, motivo });
-    sommaR += R;
-    if (R > 0) { vinte++; gw += R; } else if (R < 0) { perse++; gl += -R; }
-    cap += cap * (p.rischio / 100) * R;
-    if (cap > picco) picco = cap;
-    const dd = picco > 0 ? ((picco - cap) / picco) * 100 : 0; if (dd > ddMax) ddMax = dd;
-    punti.push({ t: tempo(rows[i]), cap });
-    pos = null;
-  };
-
-  for (let i = 1; i < n; i++) {
-    const r = rows[i], a = atr[i];
-    const g = giorno(tempo(r));
-    if (g !== giornoCorrente) { giornoCorrente = g; capGiorno = cap; }
-
-    // Interruttore sul conto: raggiunto il drawdown massimo, chiudo tutto e smetto.
-    if (!bloccato && p.ddStopPct > 0 && picco > 0 && ((picco - cap) / picco) * 100 >= p.ddStopPct) {
-      bloccato = true;
-      if (pos) chiudi(i, r.close, 'stop-conto');
-    }
-
-    if (pos) {
-      if (p.useFlip && Number.isFinite(sh[i]) && Number.isFinite(sl[i])) {
-        const flip = pos.lato === 'long' ? r.close < sl[i] : r.close > sh[i];
-        if (flip) chiudi(i, r.close, 'flip');
-      }
-      if (pos) {
-        if (p.trailK > 0 && Number.isFinite(a) && Number.isFinite(pos.stop)) {
-          pos.stop = pos.lato === 'long' ? Math.max(pos.stop, pos.picco - p.trailK * a) : Math.min(pos.stop, pos.picco + p.trailK * a);
-        }
-        if (Number.isFinite(pos.stop)) {
-          if (pos.lato === 'long' && r.low <= pos.stop) chiudi(i, Math.min(r.open, pos.stop), 'stop');
-          else if (pos.lato === 'short' && r.high >= pos.stop) chiudi(i, Math.max(r.open, pos.stop), 'stop');
-        }
-      }
-      if (pos) {
-        if (pos.lato === 'long') { if (r.high > pos.picco) pos.picco = r.high; }
-        else { if (r.low < pos.picco) pos.picco = r.low; }
-        continue;
-      }
-      continue;
-    }
-    if (bloccato) continue;
-
-    // Limite di perdita giornaliera: raggiunto, niente nuove aperture fino a domani.
-    if (p.perditaGiornoPct > 0 && capGiorno > 0 && ((cap - capGiorno) / capGiorno) * 100 <= -p.perditaGiornoPct) continue;
-
-    if (!segnale[i - 1] || !Number.isFinite(a)) continue;
-    const lato = segnale[i - 1] === 1 ? 'long' : 'short';
-    const k = p.initK > 0 ? p.initK : 1;
-    const rischio = k * a;
-    if (!(rischio > 0)) continue;
-    const costoR = 2 * (p.commPct / 100) * r.open / rischio;
-    pos = {
-      iEntrata: i, lato, entrata: r.open, picco: r.open, rischio, costoR,
-      stop: lato === 'long' ? r.open - rischio : r.open + rischio,
-    };
-  }
-  if (pos) chiudi(n - 1, rows[n - 1].close, 'fine-dati');
-
-  const perAnno = {};
-  for (const t of trades) {
-    const tEnt = tempo(rows[t.iEntrata]);
-    if (!Number.isFinite(tEnt)) continue;
-    const y = new Date(tEnt).getUTCFullYear();
-    (perAnno[y] = perAnno[y] || []).push(t.R);
-  }
-  return {
-    trades, capitale: p.capitale, finale: cap,
-    resa: p.capitale > 0 ? ((cap - p.capitale) / p.capitale) * 100 : 0,
-    pf: gl ? gw / gl : (gw > 0 ? Infinity : 0),
-    win: trades.length ? (100 * vinte) / trades.length : 0,
-    usate: trades.length, vinte, perse, sommaR, ddMax, interrotto: bloccato, punti,
-    perAnno: Object.keys(perAnno).sort().map(y => {
-      const rs = perAnno[y];
-      return { anno: +y, n: rs.length, win: 100 * rs.filter(x => x > 0).length / rs.length, sommaR: rs.reduce((s, x) => s + x, 0) };
-    }),
-  };
-}
-// ==== TESTA-STRATEGIA: fine motore ====
-
-// ==== TESTA-STRATEGIA: interfaccia ====
-// Interfaccia del "Testa strategia".
-// Va INCOLLATA dentro il grande <script> classico di app.html (quello che contiene `rows`),
-// cosi' l'IIFE vede le variabili lessicali `rows`, `currentTF` e `fblTestaStrategiaDiCandele`
-// (NON sono su window). Costruisce il pannello dentro ogni contenitore [data-testa-strategia].
-//
-// Priorita': PROTEGGERE IL CONTO. I valori di partenza sono prudenti (rischio 0,5% per trade,
-// interruttore sul conto al 5%, limite di perdita giornaliera al 3%): nessuna operazione puo'
-// perdere il 5% di una prop. L'utente puo' cambiarli.
-(function () {
-  if (typeof document === 'undefined') return;
-
-  const PREDEF = {
-    gannLength: 3, useEmaFilter: true, emaLen: 200, useCandle: false, solidThr: 0.6, adxMax: 0,
-    initK: 2, trailK: 3, useFlip: true, rischio: 0.5, capitale: 10000, commPct: 0.075,
-    ddStopPct: 5, perditaGiornoPct: 3,
-  };
-
-  function candele() {
-    try { if (typeof rows !== 'undefined' && Array.isArray(rows)) return rows; } catch (e) { /* non ancora definita */ }
-    try { if (Array.isArray(window.rows)) return window.rows; } catch (e2) { /* niente */ }
-    return [];
-  }
-  function tf() { try { return typeof currentTF !== 'undefined' ? currentTF : window.currentTF; } catch (e) { return window.currentTF; } }
-  function motoreF() { try { return typeof fblTestaStrategiaDiCandele === 'function' ? fblTestaStrategiaDiCandele : window.fblTestaStrategiaDiCandele; } catch (e) { return window.fblTestaStrategiaDiCandele; } }
-  function nf(v, d) { const x = parseFloat(v); return Number.isFinite(x) ? x : d; }
-
-  function disegna(cv, punti, capitale) {
-    const w = cv.clientWidth || 600, h = cv.height;
-    if (cv.width !== w) cv.width = w;
-    const ctx = cv.getContext('2d');
-    ctx.clearRect(0, 0, w, h);
-    if (!punti || punti.length < 2) { ctx.fillStyle = '#8892a0'; ctx.font = '12px system-ui,sans-serif'; ctx.fillText('nessun trade da disegnare', 8, 18); return; }
-    let mn = Infinity, mx = -Infinity;
-    for (const p of punti) { if (p.cap < mn) mn = p.cap; if (p.cap > mx) mx = p.cap; }
-    if (mx === mn) mx = mn + 1;
-    const x = (i) => 6 + (w - 12) * (i / (punti.length - 1));
-    const y = (v) => h - 6 - (h - 16) * ((v - mn) / (mx - mn));
-    ctx.strokeStyle = '#2a3040'; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(0, y(capitale)); ctx.lineTo(w, y(capitale)); ctx.stroke();
-    ctx.strokeStyle = punti[punti.length - 1].cap >= punti[0].cap ? '#26a69a' : '#ef5350';
-    ctx.lineWidth = 1.5; ctx.beginPath();
-    punti.forEach((p, i) => { const px = x(i), py = y(p.cap); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); });
-    ctx.stroke();
-  }
-
-  function monta(cont) {
-    cont.innerHTML = ''
-      + '<div class="fblTestTitolo">Testa strategia</div>'
-      + '<div class="fblTestInfo"></div>'
-      + '<div class="fblTestCampi">'
-      + '  <label>Gann <input type="number" data-p="gannLength" min="2" max="30" value="' + PREDEF.gannLength + '"></label>'
-      + '  <label>Stop ATR <input type="number" data-p="initK" min="0" step="0.5" value="' + PREDEF.initK + '"></label>'
-      + '  <label>Trail ATR <input type="number" data-p="trailK" min="0" step="0.5" value="' + PREDEF.trailK + '"></label>'
-      + '  <label>Rischio % <input type="number" data-p="rischio" min="0" step="0.1" value="' + PREDEF.rischio + '"></label>'
-      + '  <label>Stop conto % <input type="number" data-p="ddStopPct" min="0" step="0.5" value="' + PREDEF.ddStopPct + '"></label>'
-      + '  <label>Max perdita/giorno % <input type="number" data-p="perditaGiornoPct" min="0" step="0.5" value="' + PREDEF.perditaGiornoPct + '"></label>'
-      + '  <label>Capitale <input type="number" data-p="capitale" min="100" step="100" value="' + PREDEF.capitale + '"></label>'
-      + '  <label>Fee % <input type="number" data-p="commPct" min="0" step="0.01" value="' + PREDEF.commPct + '"></label>'
-      + '  <label class="fblTestChk"><input type="checkbox" data-p="useEmaFilter"' + (PREDEF.useEmaFilter ? ' checked' : '') + '> EMA <input type="number" data-p="emaLen" min="5" step="10" value="' + PREDEF.emaLen + '"></label>'
-      + '  <label class="fblTestChk"><input type="checkbox" data-p="useFlip"' + (PREDEF.useFlip ? ' checked' : '') + '> Chiudi al flip</label>'
-      + '  <button type="button" data-azione="esegui">Esegui test</button>'
-      + '</div>'
-      + '<div class="fblTestNota">Protezione conto: una singola operazione rischia circa la "% Rischio" del conto. "Stop conto" e "Max perdita/giorno" fermano le aperture quando si esagera.</div>'
-      + '<div class="fblTestCifre"></div>'
-      + '<canvas class="fblTestGrafico" height="170"></canvas>'
-      + '<div class="fblTestAnni"></div>';
-
-    const infoEl = cont.querySelector('.fblTestInfo');
-    const aggiornaInfo = () => {
-      infoEl.textContent = 'Sulle candele caricate: ' + candele().length + ' candele' + (tf() ? ' · TF ' + tf() : '');
-    };
-
-    const leggiCfg = () => {
-      const c = { ...PREDEF };
-      for (const el of cont.querySelectorAll('[data-p]')) {
-        const k = el.getAttribute('data-p');
-        c[k] = el.type === 'checkbox' ? el.checked : nf(el.value, PREDEF[k]);
-      }
-      return c;
-    };
-
-    function esegui() {
-      aggiornaInfo();
-      const cv = cont.querySelector('.fblTestGrafico');
-      const cifreEl = cont.querySelector('.fblTestCifre');
-      const anniEl = cont.querySelector('.fblTestAnni');
-      const dati = candele();
-      if (dati.length < 30) {
-        cifreEl.innerHTML = '<span class="fblTestKo">Servono almeno 30 candele caricate (adesso: ' + dati.length + ').</span>';
-        anniEl.innerHTML = ''; disegna(cv, null, 1); return;
-      }
-      let r;
-      try { r = motoreF()(dati, leggiCfg()); }
-      catch (e) { cifreEl.innerHTML = '<span class="fblTestKo">Errore nel motore: ' + (e && e.message) + '</span>'; return; }
-      const pf = r.pf === Infinity ? '∞' : r.pf.toFixed(2);
-      const cls = r.resa >= 0 ? 'fblTestOk' : 'fblTestKo';
-      cifreEl.innerHTML = ''
-        + '<span class="' + cls + '">' + (r.resa >= 0 ? '+' : '') + r.resa.toFixed(1) + '%</span>'
-        + '<span>PF ' + pf + '</span>'
-        + '<span>Win ' + r.win.toFixed(0) + '%</span>'
-        + '<span>Trade ' + r.usate + '</span>'
-        + '<span class="fblTestDD">MaxDD ' + r.ddMax.toFixed(2) + '%</span>'
-        + '<span>Finale ' + r.finale.toFixed(0) + '</span>'
-        + (r.interrotto ? '<span class="fblTestKo">⛔ CONTO FERMATO (soglia raggiunta)</span>' : '');
-      disegna(cv, r.punti, r.capitale);
-      anniEl.innerHTML = r.perAnno.length
-        ? '<table class="fblTestTabella"><thead><tr><th>Anno</th><th>Trade</th><th>Somma R</th><th>Win</th></tr></thead><tbody>'
-          + r.perAnno.map(a => '<tr><td>' + a.anno + '</td><td>' + a.n + '</td><td>' + a.sommaR.toFixed(2) + '</td><td>' + a.win.toFixed(0) + '%</td></tr>').join('')
-          + '</tbody></table>'
-        : '';
-    }
-
-    aggiornaInfo();
-    cont.querySelector('[data-azione="esegui"]').addEventListener('click', esegui);
-  }
-
-  function avvia() {
-    const stile = document.getElementById('fblTestStile');
-    if (!stile) {
-      const s = document.createElement('style'); s.id = 'fblTestStile';
-      s.textContent = ''
-        + '.fblTest{padding:12px 14px;border-top:1px solid #2a3040}'
-        + '.fblTestTitolo{font-weight:600;font-size:15px;margin-bottom:2px}'
-        + '.fblTestInfo{color:#8892a0;font-size:12px;margin-bottom:10px}'
-        + '.fblTestNota{color:#8892a0;font-size:11.5px;margin-bottom:10px}'
-        + '.fblTestCampi{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-bottom:10px}'
-        + '.fblTestCampi label{font-size:12px;color:#c8ced8;display:flex;align-items:center;gap:5px}'
-        + '.fblTestCampi input[type=number]{width:70px}'
-        + '.fblTestCampi button{padding:6px 14px;border-radius:6px;border:1px solid #3a6ea5;background:#2a4e7a;color:#fff;cursor:pointer}'
-        + '.fblTestCifre{display:flex;flex-wrap:wrap;gap:14px;font-size:14px;font-weight:600;margin-bottom:8px}'
-        + '.fblTestOk{color:#26a69a}.fblTestKo{color:#ef5350}.fblTestDD{color:#f0b429}'
-        + '.fblTestGrafico{width:100%;background:#151922;border:1px solid #2a3040;border-radius:6px;display:block}'
-        + '.fblTestTabella{border-collapse:collapse;font-size:12px;margin-top:8px}'
-        + '.fblTestTabella th,.fblTestTabella td{border:1px solid #2a3040;padding:2px 8px;text-align:right}'
-        + '.fblTestTabella th{color:#8892a0;font-weight:500}';
-      document.head.appendChild(s);
-    }
-    document.querySelectorAll('[data-testa-strategia]').forEach(monta);
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', avvia);
-  else avvia();
-})();
-// ==== TESTA-STRATEGIA: fine interfaccia ====
 
 // RICHIESTO ESPLICITAMENTE (bug: "passando da MT5 a Storico gli indicatori non vengono salvati / li
 // copia e li duplica in Storico"): gli indicatori erano UN solo elenco globale condiviso da tutte le
@@ -12665,282 +12312,6 @@ const INDICATOR_DEFS={
    }
  }
  ,
- gann217:{
-   label:'Gann 21.7 Profit Factor (4h)',
-   defaultParams:()=>({
-     gannLength:3, useEmaFilter:true, emaLen:200, useCandle:true, solidThr:0.5,
-     adxMax:0,
-     useVolEntry:true, volLookback:20, volMaLen:20, volMult:2.0, volCloseThr:0.65, volUseMacro:false,
-     useReversalEntry:true, revLookback:20, revVolMult:1.5, revRejectThr:0.6, revUseMacro:false,
-     tpAtr:0.3, commPct:0.075, costMult:3.0, useFixedTarget:false, targetProfitPct:0.5,
-     slAtrMult:3.5, useGannSl:true,
-     useBe:true, beAtrTrigger:0.3, beLockAtr:0.0, useGannRunner:false, letWinnersRun:false,
-     basePosPct:100.0, streakN:2, cutFactor:0.5,
-     leverage:50.0,
-     showGannLine:true, showRawShapes:true, showMarkers:true, showLabels:true, showDebug:false
-   }),
-   compute(rows,upToIdx,ind){
-     const p=ind.params;
-     if(!ind.calc||ind.calc.builtTo===undefined)ind.calc={builtTo:-1};
-     const c=ind.calc;
-     if(!c.init){
-       c.init=true;
-       c.gannTrend=[]; c.gannLine=[]; c.emaArr=[]; c.atrArr=[]; c.adxArr=[];
-       c.rawVolLong=[]; c.rawVolShort=[]; c.rawRevLong=[]; c.rawRevShort=[];
-       c.blocked=[]; // {index, side, reason}
-       c.signals=[]; c.trades=[]; c.position=null; c.lossStreak=0; c.trend=1;
-       c.emaPrev=NaN;
-       c.atrState={prev:NaN,warmSum:0,warmCount:0};
-       c.dmi={ tr:{prev:NaN,warmSum:0,warmCount:0}, plus:{prev:NaN,warmSum:0,warmCount:0}, minus:{prev:NaN,warmSum:0,warmCount:0}, dx:{prev:NaN,warmSum:0,warmCount:0} };
-     }
-     function sma(i,len,field){ if(i<len-1)return NaN; let s=0; for(let k=i-len+1;k<=i;k++)s+=rows[k][field]; return s/len; }
-     function highestField(i,len,offset,field){ const end=i-offset,start=end-len+1; if(start<0)return NaN; let m=-Infinity; for(let k=start;k<=end;k++)if(rows[k][field]>m)m=rows[k][field]; return m; }
-     function lowestField(i,len,offset,field){ const end=i-offset,start=end-len+1; if(start<0)return NaN; let m=Infinity; for(let k=start;k<=end;k++)if(rows[k][field]<m)m=rows[k][field]; return m; }
-     function rmaStep(state,value,len){ if(!Number.isFinite(value))return NaN; if(!Number.isFinite(state.prev)){ state.warmSum+=value; state.warmCount++; if(state.warmCount===len){ state.prev=state.warmSum/len; return state.prev; } return NaN; } state.prev=(state.prev*(len-1)+value)/len; return state.prev; }
-
-     const roundTripPct=(2*p.commPct)/100;
-
-     for(let i=c.builtTo+1;i<=upToIdx;i++){
-       const r=rows[i], prevR=i>0?rows[i-1]:null;
-
-       const smaHigh=sma(i,p.gannLength,'high'), smaLow=sma(i,p.gannLength,'low');
-       if(i>=2){
-         const smaHighPrev1=sma(i-1,p.gannLength,'high'), smaHighPrev2=sma(i-2,p.gannLength,'high');
-         const smaLowPrev1=sma(i-1,p.gannLength,'low'), smaLowPrev2=sma(i-2,p.gannLength,'low');
-         const crossOverHigh=r.close>smaHighPrev1 && rows[i-1].close<=smaHighPrev2;
-         const crossUnderLow=r.close<smaLowPrev1 && rows[i-1].close>=smaLowPrev2;
-         if(crossOverHigh)c.trend=1; else if(crossUnderLow)c.trend=-1;
-       }
-       const prevTrend=i>0?c.gannTrend[i-1]:c.trend;
-       c.gannTrend[i]=c.trend;
-       c.gannLine[i]=c.trend===1?smaLow:smaHigh;
-
-       let emaVal=NaN;
-       if(p.useEmaFilter && i>=p.emaLen-1){
-         if(!Number.isFinite(c.emaPrev)){ let s=0; for(let k=i-p.emaLen+1;k<=i;k++)s+=rows[k].close; emaVal=s/p.emaLen; }
-         else{ const k=2/(p.emaLen+1); emaVal=r.close*k+c.emaPrev*(1-k); }
-         c.emaPrev=emaVal;
-       }
-       c.emaArr[i]=emaVal;
-
-       const tr=prevR?Math.max(r.high-r.low,Math.abs(r.high-prevR.close),Math.abs(r.low-prevR.close)):(r.high-r.low);
-       const atrVal=rmaStep(c.atrState,tr,14);
-       c.atrArr[i]=atrVal;
-
-       let plusDM=0,minusDM=0;
-       if(prevR){ const up=r.high-prevR.high, down=prevR.low-r.low; plusDM=(up>down&&up>0)?up:0; minusDM=(down>up&&down>0)?down:0; }
-       const trRmaDmi=rmaStep(c.dmi.tr,tr,14);
-       const plusDmRma=rmaStep(c.dmi.plus,plusDM,14);
-       const minusDmRma=rmaStep(c.dmi.minus,minusDM,14);
-       let dx=NaN;
-       if(Number.isFinite(trRmaDmi)&&trRmaDmi>0&&Number.isFinite(plusDmRma)&&Number.isFinite(minusDmRma)){
-         const plusDI=100*plusDmRma/trRmaDmi, minusDI=100*minusDmRma/trRmaDmi, sum=plusDI+minusDI;
-         dx=sum>0?100*Math.abs(plusDI-minusDI)/sum:0;
-       }
-       const adxVal=rmaStep(c.dmi.dx,dx,14);
-       c.adxArr[i]=adxVal;
-
-       const macroBull=!p.useEmaFilter||(Number.isFinite(emaVal)&&r.close>emaVal);
-       const macroBear=!p.useEmaFilter||(Number.isFinite(emaVal)&&r.close<emaVal);
-       const candleRange=r.high-r.low;
-       const solidBull=!p.useCandle||(candleRange>0&&(r.close-r.low)/candleRange>=p.solidThr);
-       const solidBear=!p.useCandle||(candleRange>0&&(r.high-r.close)/candleRange>=p.solidThr);
-       const regimeOk=p.adxMax<=0||(Number.isFinite(adxVal)&&adxVal<=p.adxMax);
-
-       const flipUp=c.gannTrend[i]===1&&prevTrend===-1;
-       const flipDown=c.gannTrend[i]===-1&&prevTrend===1;
-
-       const gannLongSig=flipUp&&macroBull&&solidBull&&regimeOk;
-       const gannShortSig=flipDown&&macroBear&&solidBear&&regimeOk;
-
-       if(p.showDebug){
-         if(flipUp&&!gannLongSig){
-           const reason=!macroBull?'trend EMA':!solidBull?'candela non solida':'ADX fuori range';
-           c.blocked.push({index:i,side:'long',reason});
-         }
-         if(flipDown&&!gannShortSig){
-           const reason=!macroBear?'trend EMA':!solidBear?'candela non solida':'ADX fuori range';
-           c.blocked.push({index:i,side:'short',reason});
-         }
-       }
-
-       const volMa=sma(i,p.volMaLen,'volume');
-       const hhPrev=highestField(i,p.volLookback,1,'high'), llPrev=lowestField(i,p.volLookback,1,'low');
-       let volLongRaw=false,volShortRaw=false,volLongSig=false,volShortSig=false;
-       if(Number.isFinite(hhPrev)&&Number.isFinite(llPrev)&&Number.isFinite(volMa)){
-         const volSpike=r.volume>volMa*p.volMult;
-         const vrange=r.high-r.low;
-         const volStrongUp=vrange>0&&(r.close-r.low)/vrange>=p.volCloseThr;
-         const volStrongDown=vrange>0&&(r.high-r.close)/vrange>=p.volCloseThr;
-         volLongRaw=r.close>hhPrev&&volSpike&&volStrongUp;
-         volShortRaw=r.close<llPrev&&volSpike&&volStrongDown;
-         volLongSig=p.useVolEntry&&volLongRaw&&(!p.volUseMacro||macroBull);
-         volShortSig=p.useVolEntry&&volShortRaw&&(!p.volUseMacro||macroBear);
-       }
-       c.rawVolLong[i]=volLongRaw; c.rawVolShort[i]=volShortRaw;
-
-       const highestIncl=highestField(i,p.revLookback,0,'high'), lowestIncl=lowestField(i,p.revLookback,0,'low');
-       let revLongRaw=false,revShortRaw=false,revLongSig=false,revShortSig=false;
-       if(Number.isFinite(highestIncl)&&Number.isFinite(lowestIncl)&&Number.isFinite(volMa)){
-         const isNewHigh=r.high>=highestIncl, isNewLow=r.low<=lowestIncl;
-         const revVolSpike=r.volume>volMa*p.revVolMult;
-         const vrange=r.high-r.low;
-         const rejectDown=vrange>0&&(r.high-r.close)/vrange>=p.revRejectThr;
-         const rejectUp=vrange>0&&(r.close-r.low)/vrange>=p.revRejectThr;
-         revShortRaw=isNewHigh&&revVolSpike&&rejectDown;
-         revLongRaw=isNewLow&&revVolSpike&&rejectUp;
-         revLongSig=p.useReversalEntry&&revLongRaw&&(!p.revUseMacro||macroBull);
-         revShortSig=p.useReversalEntry&&revShortRaw&&(!p.revUseMacro||macroBear);
-       }
-       c.rawRevLong[i]=revLongRaw; c.rawRevShort[i]=revShortRaw;
-
-       const longCondition=gannLongSig||volLongSig||revLongSig;
-       const shortCondition=gannShortSig||volShortSig||revShortSig;
-       let sigSide=null,sigSource=null;
-       if(longCondition){ sigSide='long'; sigSource=gannLongSig?'GANN':(volLongSig?'VOL':'REV'); }
-       else if(shortCondition){ sigSide='short'; sigSource=gannShortSig?'GANN':(volShortSig?'VOL':'REV'); }
-       if(sigSide)c.signals.push({index:i,side:sigSide,source:sigSource});
-
-       if(c.position){
-         const pos=c.position;
-         let exitPrice=null,exitReason=null;
-         const tpHit=pos.side==='long'?r.high>=pos.tp:r.low<=pos.tp;
-         const slHit=pos.side==='long'?r.low<=pos.sl:r.high>=pos.sl;
-         if(tpHit&&slHit){ const dTp=Math.abs(r.open-pos.tp),dSl=Math.abs(r.open-pos.sl); if(dSl<=dTp){exitPrice=pos.sl;exitReason='SL';}else{exitPrice=pos.tp;exitReason='TP';} }
-         else if(tpHit){exitPrice=pos.tp;exitReason='TP';}
-         else if(slHit){exitPrice=pos.sl;exitReason='SL';}
-         if(exitPrice!=null){
-           const gross=pos.side==='long'?(exitPrice-pos.entryPrice)/pos.entryPrice:(pos.entryPrice-exitPrice)/pos.entryPrice;
-           const pnlPct=(gross-roundTripPct)*100;
-           c.trades.push({side:pos.side,source:pos.source,entryIndex:pos.entryIndex,entryPrice:pos.entryPrice,exitIndex:i,exitPrice:exitPrice,exitReason:exitReason,pnlPct:pnlPct,tp:pos.tp,sl:pos.sl});
-           c.lossStreak=pnlPct<0?c.lossStreak+1:0;
-           c.position=null;
-         }else if(p.useBe){
-           const a=Number.isFinite(atrVal)?atrVal:0;
-           if(pos.side==='long'){
-             if(!pos.beOn&&r.high>=pos.entryPrice+a*p.beAtrTrigger){ pos.beOn=true; pos.sl=Math.max(pos.sl,pos.entryPrice+a*p.beLockAtr); if(p.letWinnersRun)pos.tp=Infinity; }
-             if(p.useGannRunner&&pos.beOn&&Number.isFinite(c.gannLine[i])){ const ns=Math.max(pos.sl,c.gannLine[i]); if(ns>pos.sl)pos.sl=ns; }
-           }else{
-             if(!pos.beOn&&r.low<=pos.entryPrice-a*p.beAtrTrigger){ pos.beOn=true; pos.sl=Math.min(pos.sl,pos.entryPrice-a*p.beLockAtr); if(p.letWinnersRun)pos.tp=-Infinity; }
-             if(p.useGannRunner&&pos.beOn&&Number.isFinite(c.gannLine[i])){ const ns=Math.min(pos.sl,c.gannLine[i]); if(ns<pos.sl)pos.sl=ns; }
-           }
-         }
-       }
-
-       // Inversione: nel Pine l'entrata e' condizionata a strategy.position_size <= 0 (long)
-       // / >= 0 (short): se e aperta una posizione OPPOSTA al segnale, il Pine la chiude al
-       // prezzo di mercato e apre subito la nuova. Prima l'app entrava SOLO da piatta e
-       // ignorava le inversioni, quindi usciva/rientrava in modo diverso dal Pine.
-       if(sigSide&&c.position&&c.position.side!==sigSide){
-         const pos=c.position;
-         const gross=pos.side==='long'?(r.close-pos.entryPrice)/pos.entryPrice:(pos.entryPrice-r.close)/pos.entryPrice;
-         const pnlPct=(gross-roundTripPct)*100;
-         c.trades.push({side:pos.side,source:pos.source,entryIndex:pos.entryIndex,entryPrice:pos.entryPrice,exitIndex:i,exitPrice:r.close,exitReason:'REV',pnlPct:pnlPct,tp:pos.tp,sl:pos.sl});
-         c.lossStreak=pnlPct<0?c.lossStreak+1:0;
-         c.position=null;
-       }
-       if(!c.position&&sigSide){
-         const a=Number.isFinite(atrVal)?atrVal:0;
-         const close=r.close;
-         const slDist=a*p.slAtrMult;
-         const tpDist=p.useFixedTarget?close*(p.targetProfitPct/100):Math.max(a*p.tpAtr,close*roundTripPct*p.costMult);
-         let sl,tp;
-         if(sigSide==='long'){ tp=close+tpDist; sl=(p.useGannSl&&Number.isFinite(c.gannLine[i]))?Math.min(close-slDist,c.gannLine[i]):close-slDist; }
-         else{ tp=close-tpDist; sl=(p.useGannSl&&Number.isFinite(c.gannLine[i]))?Math.max(close+slDist,c.gannLine[i]):close+slDist; }
-         const sizeMult=c.lossStreak>=p.streakN?p.cutFactor:1;
-         const liqPrice=sigSide==='long'?close*(1-1/p.leverage):close*(1+1/p.leverage);
-         c.position={side:sigSide,source:sigSource,entryIndex:i,entryPrice:close,sl:sl,tp:tp,beOn:false,sizePct:p.basePosPct*sizeMult,liqPrice:liqPrice};
-       }
-     }
-     c.builtTo=upToIdx;
-   },
-   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h){
-     const c=ind.calc; if(!c)return;
-     const p=ind.params;
-     ctx.save();
-
-     if(p.showGannLine!==false&&c.gannLine&&c.gannLine.length){
-       const from=Math.max(1,dataStart-1), to=Math.min(rows.length-1,dataEnd+1);
-       let started=false;
-       for(let i=from;i<=to;i++){
-         const v=c.gannLine[i];
-         if(!Number.isFinite(v)){ started=false; continue; }
-         const prevV=c.gannLine[i-1];
-         if(started&&Number.isFinite(prevV)){
-           ctx.beginPath();
-           ctx.strokeStyle=c.gannTrend[i]===1?'#2ecc71':'#e05b64';
-           ctx.lineWidth=2;
-           ctx.moveTo(xAbs(i-1),y(prevV)); ctx.lineTo(xAbs(i),y(v)); ctx.stroke();
-         }
-         started=true;
-       }
-     }
-
-     function drawLevel(i1,i2,price,color){
-       if(!Number.isFinite(price))return;
-       const x1=xAbs(Math.max(i1,dataStart-1)), x2=xAbs(Math.min(i2,dataEnd+1));
-       const yy=y(price);
-       ctx.save(); ctx.strokeStyle=color; ctx.setLineDash([4,3]); ctx.lineWidth=1;
-       ctx.beginPath(); ctx.moveTo(x1,yy); ctx.lineTo(x2,yy); ctx.stroke(); ctx.restore();
-     }
-     if(p.showLabels!==false&&c.trades&&c.trades.length){
-       for(let k=0;k<c.trades.length;k++){
-         const t=c.trades[k];
-         if(t.exitIndex<dataStart-2||t.entryIndex>dataEnd+2)continue;
-         drawLevel(t.entryIndex,t.exitIndex,t.tp,'#2ecc71');
-         drawLevel(t.entryIndex,t.exitIndex,t.sl,'#e05b64');
-       }
-     }
-     if(p.showLabels!==false&&c.position&&c.position.entryIndex<=dataEnd+2){
-       drawLevel(c.position.entryIndex,dataEnd,c.position.tp,'#2ecc71');
-       drawLevel(c.position.entryIndex,dataEnd,c.position.sl,'#e05b64');
-     }
-
-     function tri(px,py,up,color){
-       ctx.beginPath(); ctx.fillStyle=color;
-       if(up){ ctx.moveTo(px,py-5); ctx.lineTo(px-4,py+4); ctx.lineTo(px+4,py+4); }
-       else{ ctx.moveTo(px,py+5); ctx.lineTo(px-4,py-4); ctx.lineTo(px+4,py-4); }
-       ctx.closePath(); ctx.fill();
-     }
-     if(p.showRawShapes!==false){
-       for(let i=Math.max(0,dataStart-1);i<=Math.min(rows.length-1,dataEnd+1);i++){
-         const r=rows[i], px=xAbs(i);
-         if(c.rawVolLong[i])tri(px,y(r.low)+10,true,'#00e5ff');
-         if(c.rawVolShort[i])tri(px,y(r.high)-10,false,'#e040fb');
-         if(c.rawRevLong[i])tri(px,y(r.low)+10,true,'#ffeb3b');
-         if(c.rawRevShort[i])tri(px,y(r.high)-10,false,'#ff9800');
-       }
-     }
-
-     if(p.showMarkers!==false&&c.signals&&c.signals.length){
-       for(let k=0;k<c.signals.length;k++){
-         const s=c.signals[k];
-         if(s.index<dataStart-1||s.index>dataEnd+1)continue;
-         const r=rows[s.index], px=xAbs(s.index), up=s.side==='long';
-         const py=up?y(r.low)+20:y(r.high)-20;
-         tri(px,py,up,up?'#2ecc71':'#e05b64');
-         if(p.showLabels!==false){
-           ctx.font='10px system-ui,sans-serif'; ctx.fillStyle=up?'#2ecc71':'#e05b64'; ctx.textAlign='center';
-           ctx.fillText(s.side.toUpperCase()+' ['+s.source+']', px, up?py+14:py-10);
-         }
-       }
-     }
-
-     if(p.showDebug&&c.blocked&&c.blocked.length){
-       for(let k=0;k<c.blocked.length;k++){
-         const b=c.blocked[k];
-         if(b.index<dataStart-1||b.index>dataEnd+1)continue;
-         const r=rows[b.index], px=xAbs(b.index);
-         const py=b.side==='long'?y(r.high)-24:y(r.low)+24;
-         ctx.font='9px system-ui,sans-serif'; ctx.fillStyle='rgba(150,150,150,0.9)'; ctx.textAlign='center';
-         ctx.fillText('x '+b.side+' bloccato ('+b.reason+')', px, py);
-       }
-     }
-
-     ctx.restore();
-   }
- }
- ,
  // "Convertito con AI": non passa dal mini-interprete Pine-like, ma esegue direttamente il
  // codice compute/render ottenuto (fuori da qui, vedi modulo "🤖 Converti con un assistente
  // AI") da un assistente esterno. Compilato UNA volta con new Function() e tenuto in cache
@@ -13636,41 +13007,7 @@ function openIndicatorSettingsModal(ind){
      paramsRow.appendChild(mkNum('Opacità %','opacity',5,100));
    }else if(ind.key==='vp_daily'||ind.key==='vp_sessions'){
      buildVpIndicatorSettings(paramsRow,ind);
-   }else if(ind.key==='gann217'){
-   paramsRow.appendChild(mkNum('Periodo Gann','gannLength',1,50));
-   paramsRow.appendChild(mkCheck('Filtro EMA macro','useEmaFilter',true));
-   paramsRow.appendChild(mkNum('Periodo EMA','emaLen',2,500));
-   paramsRow.appendChild(mkCheck('Filtro candela solida','useCandle',true));
-   paramsRow.appendChild(mkNum('Soglia candela solida','solidThr',0,1,0.05));
-   paramsRow.appendChild(mkNum('ADX massimo (0=off)','adxMax',0,100,1));
-   paramsRow.appendChild(mkCheck('Canale Volume Breakout','useVolEntry',true));
-   paramsRow.appendChild(mkNum('Lookback breakout','volLookback',2,200));
-   paramsRow.appendChild(mkNum('Periodo media volume','volMaLen',1,200));
-   paramsRow.appendChild(mkNum('Moltiplicatore spike volume','volMult',1,10,0.1));
-   paramsRow.appendChild(mkNum('Soglia chiusura in range (VOL)','volCloseThr',0,1,0.05));
-   paramsRow.appendChild(mkCheck('Canale Reversal/Climax','useReversalEntry',true));
-   paramsRow.appendChild(mkNum('Lookback reversal','revLookback',2,200));
-   paramsRow.appendChild(mkNum('Moltiplicatore spike volume (REV)','revVolMult',1,10,0.1));
-   paramsRow.appendChild(mkNum('Soglia rigetto estremo','revRejectThr',0,1,0.05));
-   paramsRow.appendChild(mkNum('TP x ATR','tpAtr',0.05,10,0.05));
-   paramsRow.appendChild(mkNum('Commissione per lato %','commPct',0,1,0.005));
-   paramsRow.appendChild(mkNum('TP minimo x costo round-trip','costMult',0,10,0.5));
-   paramsRow.appendChild(mkNum('SL x ATR','slAtrMult',0.5,20,0.1));
-   paramsRow.appendChild(mkCheck('Limita SL alla linea Gann','useGannSl',true));
-   paramsRow.appendChild(mkCheck('Break-even attivo','useBe',true));
-   paramsRow.appendChild(mkNum('BE trigger (x ATR profitto)','beAtrTrigger',0.05,10,0.05));
-   paramsRow.appendChild(mkNum('BE profitto bloccato (x ATR)','beLockAtr',0,10,0.02));
-   paramsRow.appendChild(mkCheck('Trailing con linea Gann','useGannRunner',false));
-   paramsRow.appendChild(mkNum('Size base (% equity)','basePosPct',1,100,1));
-   paramsRow.appendChild(mkNum('Streak perdite per ridurre size','streakN',1,20));
-   paramsRow.appendChild(mkNum('Moltiplicatore size dopo streak','cutFactor',0.1,1,0.1));
-   paramsRow.appendChild(mkNum('Leva (solo per label/liquidazione)','leverage',1,500,1));
-   paramsRow.appendChild(mkCheck('Mostra linea Gann','showGannLine',true));
-   paramsRow.appendChild(mkCheck('Mostra triangoli canali grezzi','showRawShapes',true));
-   paramsRow.appendChild(mkCheck('Mostra marker di ingresso','showMarkers',true));
-   paramsRow.appendChild(mkCheck('Mostra etichette dettagliate','showLabels',true));
-   paramsRow.appendChild(mkCheck('Debug: mostra flip bloccati','showDebug',false));
-  }else if(ind.key==='sr_breaks'){
+   }else if(ind.key==='sr_breaks'){
      paramsRow.appendChild(mkNum('Sinistra','leftBars',1,200));
      paramsRow.appendChild(mkNum('Destra','rightBars',1,200));
      paramsRow.appendChild(mkNum('Soglia vol.','volumeThresh',0,1000));
@@ -20877,7 +20214,14 @@ $('tf').addEventListener('change',()=>{
    // bucket e i tick nuovi aggiunti dallo streaming a un'altra, mischiate insieme.
    const asset=$('market')?.value;
    if(asset && asset!=='custom'){
-     withLoadingOverlay('Cambio timeframe Live…', ()=>loadLiveHistoryFromCapital(asset,{tfChangeSpanMinutes:visibleRealMinutes,tfChangeOldTF:oldTF,vistaFoto}));
+// BUG RISOLTO ("cambiando timeframe, disegni/linee/posizioni/indicatori si staccano dalle
+// candele, soprattutto a mercato chiuso"): qui si chiamava SEMPRE Capital.com. Se il grafico
+// stava mostrando MT5, il cambio timeframe sostituiva la serie MT5 con quella Capital.com
+// (range e orari diversi) e, a mercato chiuso, RIACCENDEVA lo streaming Capital.com creando
+// candele finte. Ora si ricarica dalla STESSA fonte del file a grafico.
+const __sorgenteTf=fblSorgenteLivePerCambioTf(csvLibrary[0]&&csvLibrary[0].id, liveSessionPhaseNow(), mt5Connected);
+const __optsTf={tfChangeSpanMinutes:visibleRealMinutes,tfChangeOldTF:oldTF,vistaFoto};
+withLoadingOverlay('Cambio timeframe Live…', ()=>__sorgenteTf==='mt5'?loadLiveHistoryFromMt5(asset,__optsTf):loadLiveHistoryFromCapital(asset,__optsTf));
    }
    $('tf').blur();
    return;
@@ -31985,9 +31329,21 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // MULTI-EPIC: oltre all'epic a grafico ora, restano sottoscritti anche gli epic di tutte le
  // posizioni aperte/ordini pendenti su ALTRI asset, così il loro prezzo (e quindi P/L, SL/TP,
  // attivazione pendenti) continua ad aggiornarsi anche mentre si guarda un asset diverso.
- capitalWsPrimaryEpic=epic;
- lastPrimaryEpicPrice=null; // evita di applicare per uno stesso istante il prezzo dell'asset lasciato
- lastChartUpdateAt=Date.now(); // la candela è appena stata ricostruita da zero: non è "ferma"
+// BUG RISOLTO ("a mercato chiuso lo streaming Capital.com si riaccende e crea candele finte"):
+// lo storico si carica SEMPRE (serve per disegnare il grafico a mercato chiuso), ma il canale dei
+// prezzi va aperto SOLO se la fase oraria lo consente — a mercato chiuso NON lo e' (stesso
+// identico comportamento del ramo MT5, vedi loadLiveHistoryFromMt5).
+if(liveSessionPhaseNow()==='closed'){
+  capitalWsPrimaryEpic=null;
+  lastPrimaryEpicPrice=null;
+  lastChartUpdateAt=Date.now();
+  liveHistoryReadyAt=Date.now();
+  if(liveModeActive)await refreshLiveStreamSubscriptions();
+  return;
+}
+capitalWsPrimaryEpic=epic;
+lastPrimaryEpicPrice=null; // evita di applicare per uno stesso istante il prezzo dell'asset lasciato
+lastChartUpdateAt=Date.now(); // la candela è appena stata ricostruita da zero: non è "ferma"
  // Baseline del bucket "adesso" per il rilevamento del cambio candela (vedi
  // lastSeenCandleBucketStart sopra): appena ricaricato da qui, NON deve scattare un resync
  // aggiuntivo al giro successivo del timer solo perché non aveva ancora visto questo bucket.
@@ -34572,9 +33928,17 @@ function applyLivePriceToChart(price,timestamp,opts){
    console.log(`[ChartFeed] scartato prezzo ${price} di "${opts.fromAsset}": a grafico c'e' "${currentAssetKey}".`);
    return false;
  }
- // RICHIESTO ESPLICITAMENTE ("si deve comportare esattamente come il terminale MT5"): a mercato
- // chiuso (23:00-00:00 e weekend, con MT5 collegato) nessun prezzo tocca il grafico.
- if(liveSessionPhaseNow()==='closed')return false;
+// RICHIESTO ESPLICITAMENTE ("si deve comportare esattamente come il terminale MT5"): a mercato
+// chiuso (23:00-00:00 e weekend, con MT5 collegato) nessun prezzo tocca il grafico.
+if(liveSessionPhaseNow()==='closed')return false;
+// BUG RISOLTO ("a mercato chiuso il grafico fa comunque candele finte fino alle 02:00"): la riga
+// qui sopra blocca solo quando MT5 e' collegato (la "fase" e' 'closed' soltanto in quel caso). Se
+// il collegamento MT5 cade, la fase diventa 'free' e nessun controllo fermava piu' i prezzi: con
+// l'ultimo prezzo ancora in memoria il grafico continuava a creare candele a mercato chiuso. Qui il
+// calendario dell'asset (Capital.com/MT5) diventa l'autorita': se dice CHIUSO, nessun prezzo crea o
+// modifica candele, qualunque sia la fonte. La fascia serale Capital.com (22-23) resta permessa
+// perche' li' il mercato dell'asset risulta aperto.
+try{ const __smc=statoMercato(currentAssetKey,Date.now()); if(__smc&&__smc.chiuso&&liveSessionPhaseNow()!=='capital')return false; }catch(e){}
  const file=csvLibrary[0];
  if(!file)return false;
  const bucketMs=(currentTF||1)*60000;
@@ -35395,12 +34759,20 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // pensa il gestore orari (liveSessionTick) a passare a Capital.com 22-23 o a fermare tutto.
  {
    const __ph=liveSessionPhaseNow();
-   if(__ph==='capital'||__ph==='closed'){
-     liveSessionPhase=null; // forza il gestore a riapplicare la fase al prossimo secondo
-     if(liveModeActive)refreshLiveStreamSubscriptions();
-     if(__footprintAssetChanged)footprintBackfillMt5(resolved,asset);
-     return;
-   }
+if(__ph==='capital'||__ph==='closed'){
+  // BUG RISOLTO (gemello di liveSessionFreezeMt5): anche ricaricando lo storico MT5 in fascia
+  // Capital.com o a mercato chiuso, MT5 NON deve restare proprietario della candela — altrimenti,
+  // cambiando timeframe in fascia 22-23, la candela smetterebbe di proseguire con Capital.com
+  // (startLiveRefreshTimer esce se mt5ActiveSymbol e' valorizzato).
+  mt5ActiveSymbol=null;
+  liveSessionPhase=null; // forza il gestore a riapplicare la fase al prossimo secondo
+  if(liveModeActive){
+    if(__ph==='capital'){ try{ startLiveRefreshTimer(); }catch(e){} }
+    refreshLiveStreamSubscriptions();
+  }
+  if(__footprintAssetChanged)footprintBackfillMt5(resolved,asset);
+  return;
+}
  }
  connectMt5Stream(resolved);
  connectMt5OrderBook(resolved);
@@ -37965,8 +37337,24 @@ function stopMt5RefreshTimer(){
 // Le crypto (24/7) sono escluse, così come la modalità senza MT5 (solo Capital.com).
 const LIVE_MT5_CLOSE_MIN=22*60, LIVE_CAPITAL_UNTIL_MIN=23*60;
 const OFFSESSION_ROWS_KEY='fxbt_offsession_rows_v1';
+// FBL:TESTA-SORGENTE-LIVE:INIZIO
+function fblSorgenteLivePerCambioTf(fileId, fase, mt5Connesso){
+  // Al cambio timeframe in Live non si deve MAI cambiare fonte di nascosto: si ricarica lo storico
+  // dalla STESSA fonte che sta gia' disegnando il grafico.
+  //   - file "mt5_live_*"     -> 'mt5'
+  //   - file "capital_live_*" -> 'capital'
+  //   - nessun file (avvio)   -> 'mt5' se MT5 e' collegato, altrimenti 'capital'
+  // La fase oraria NON cambia la fonte scelta: decide solo se quella fonte puo' accendere lo
+  // streaming (lo fanno i due caricatori, che a mercato chiuso caricano lo storico ma NON aprono
+  // lo stream). Tenuto puro e senza dipendenze per poterlo collaudare fuori dal browser.
+  const id=String(fileId||'');
+  if(/^mt5_live_/.test(id))return 'mt5';
+  if(/^capital_live_/.test(id))return 'capital';
+  return mt5Connesso?'mt5':'capital';
+}
+// FBL:TESTA-SORGENTE-LIVE:FINE
 function liveScheduleAppliesNow(){
- try{ return !!(liveModeActive&&mt5Connected&&currentAssetKey&&!binanceSymbolForAsset(currentAssetKey)); }catch(e){ return false; }
+  try{ return !!(liveModeActive&&mt5Connected&&currentAssetKey&&!binanceSymbolForAsset(currentAssetKey)); }catch(e){ return false; }
 }
 // RICHIESTO: la fascia 22-23 con Capital.com si accende e si spegne (Impostazioni grafico → Style,
 // e accanto al menu MT5 in Collegamento/Modalita'). Spenta: dalle 22 il grafico resta fermo fino
@@ -38162,17 +37550,29 @@ async function liveSessionFreezeMt5(ph){
    let epic=null;
    try{ epic=await resolveCapitalEpic(currentAssetKey); }catch(e){}
    if(liveSessionPhaseNow()!=='capital')return;
-   capitalWsPrimaryEpic=epic||null;
-   lastLiveTickAt=0;
-   lastChartUpdateAt=Date.now();
-   try{ await refreshLiveStreamSubscriptions(); }catch(e){}
+// BUG RISOLTO ("dalle 22 alle 23 non prosegue davvero con Capital.com"): mt5ActiveSymbol
+// restava valorizzato e il timer Capital.com non veniva riavviato, quindi i tick Capital.com
+// arrivavano ma NON toccavano mai la candela (startLiveRefreshTimer esce subito se
+// mt5ActiveSymbol e' valorizzato). Ora MT5 rilascia la proprieta' del grafico e il timer
+// Capital.com riparte: la candela prosegue con Capital.com fino alle 23.
+mt5ActiveSymbol=null;
+capitalWsPrimaryEpic=epic||null;
+lastLiveTickAt=0;
+lastSeenCandleBucketStart=null;
+lastChartUpdateAt=Date.now();
+try{ startLiveRefreshTimer(); }catch(e){}
+try{ await refreshLiveStreamSubscriptions(); }catch(e){}
    $('status').textContent=epic
      ?'🌙 22:00 — MT5 ha chiuso la sessione: grafico salvato. Fino alle 23:00 la candela prosegue con i dati Capital.com.'
      :'🌙 MT5 ha chiuso la sessione e questo asset non è disponibile su Capital.com: grafico salvato e fermo fino alla riapertura.';
- }else{
-   capitalWsPrimaryEpic=null;
-   $('status').textContent='🌙 Mercato chiuso: grafico salvato e fermo. Si ricollega da solo a MT5 alla riapertura (00:00).';
- }
+}else{
+  // Nessuna fonte viva aggiorna la candela: MT5 resta non-proprietario e Capital.com non e'
+  // nemmeno sottoscritto (a mercato chiuso nessun prezzo deve toccare il grafico).
+  mt5ActiveSymbol=null;
+  capitalWsPrimaryEpic=null;
+  lastSeenCandleBucketStart=null;
+  $('status').textContent='🌙 Mercato chiuso: grafico salvato e fermo. Si ricollega da solo a MT5 alla riapertura (00:00).';
+}
  try{ update(); draw(); }catch(e){}
 }
 // RIAPERTURA (00:00): conto MT5 ricollegato se nella notte si e' perso, storico ricaricato, timer
@@ -41583,7 +40983,6 @@ fblDelega('change',ev=>{
   </div>
   <div class="fsKpis" id="fsKpis"></div>
   <div class="fsGrid" id="fsGrid"></div>
-  <div id="testaStrategiaBox" class="fblTest" data-testa-strategia></div>
  </div>
 </div>
 <div id="fblStatTip"></div>

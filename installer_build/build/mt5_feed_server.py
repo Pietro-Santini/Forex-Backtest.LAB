@@ -164,13 +164,36 @@ def _ensure_initialized():
         )
 
 
+# BUG RISOLTO ("a mercato chiuso e/o cambiando timeframe candele, disegni, linee, posizioni e
+# indicatori si staccavano": le candele cambiavano BASE DEI TEMPI quando la serie veniva ricaricata,
+# cosi' i disegni — agganciati al tempo, d.p1.time -> candela con rowIndexNearTime — finivano su
+# un'altra candela): questo scarto veniva calcolato da UN SOLO tick, quello del simbolo richiesto. A
+# mercato APERTO quel tick e' fresco (pochi secondi) e lo scarto e' giusto; a mercato CHIUSO lo
+# stesso tick e' vecchio di ore, quindi "tick.time - adesso" NON e' piu' lo scarto del broker ma
+# "scarto - tempo trascorso" (es. -51h) e /history spostava TUTTE le candele nel futuro: la serie
+# cambiava base dei tempi e disegni/posizioni/indicatori si staccavano. Ora si riusa l'ULTIMO SCARTO
+# BUONO misurato con un tick FRESCO (stessa idea di _offset_server_cache() in bridge.py, che infatti
+# protegge gia' /positions). Un tick e' "fresco" solo se ne e' arrivato uno NUOVO da poco: durante la
+# sessione i tick scorrono di continuo, a mercato chiuso lo STESSO tick resta fermo per ore. NON si
+# usa il valore del residuo per capirlo: a mercato chiuso "scarto - tempo trascorso" puo' comunque
+# cadere vicino a un multiplo del quarto d'ora e sembrare valido.
+_last_good_server_offset_seconds = None
+_ultimo_tick_time = None          # il tick.time piu' recente MAI visto (per capire se i tick scorrono)
+_ultimo_tick_time_istante = 0.0   # quando l'abbiamo visto la prima volta (orologio locale)
+_FINESTRA_TICK_FRESCO_S = 300     # oltre 5 min senza tick nuovi il tick e' "fermo" (mercato chiuso)
+
+
 def _server_time_offset_seconds(tick) -> int:
     """Stessa identica logica di _server_time_offset_seconds() in bridge.py (vedi lì il
     commento completo): l'orologio del server del broker spesso non è UTC. Calcoliamo lo scarto
     da un tick REALE appena letto (copre quindi anche l'ora legale) e lo sottraiamo da ogni
-    timestamp prima di restituirlo, arrotondato al minuto per eliminare il jitter di rete/IPC."""
+    timestamp prima di restituirlo, arrotondato al minuto per eliminare il jitter di rete/IPC.
+
+    A mercato CHIUSO il tick e' vecchio di ore: in quel caso NON si ricalcola lo scarto, si riusa
+    l'ultimo scarto buono (vedi il commento sopra _last_good_server_offset_seconds)."""
+    global _last_good_server_offset_seconds, _ultimo_tick_time, _ultimo_tick_time_istante
     if tick is None or not getattr(tick, "time", None):
-        return 0
+        return _last_good_server_offset_seconds if _last_good_server_offset_seconds is not None else 0
     # ARROTONDATO AL QUARTO D'ORA, non piu' al minuto (SEGNALATO: "sul telefono le candele si
     # fermano dopo un po' e si muovono solo a fine candela"). tick.time e' l'ora dell'ULTIMO tick:
     # a mercato calmo puo' essere vecchio di oltre 30 s, e l'arrotondamento al minuto dava uno scarto
@@ -179,9 +202,22 @@ def _server_time_offset_seconds(tick) -> int:
     # (o mezz'ore): al quarto d'ora il risultato e' lo stesso con un tick vecchio fino a 7 minuti e
     # con l'orologio del PC sbagliato di qualche minuto.
     try:
-        return round((tick.time - time.time()) / 900) * 900
+        ora = time.time()
+        tick_time = tick.time
+        if _ultimo_tick_time is None or tick_time > _ultimo_tick_time:
+            _ultimo_tick_time = tick_time
+            _ultimo_tick_time_istante = ora
+        fresco = (ora - _ultimo_tick_time_istante) <= _FINESTRA_TICK_FRESCO_S
+        if not fresco and _last_good_server_offset_seconds is not None:
+            # Mercato chiuso (tick fermo da oltre _FINESTRA_TICK_FRESCO_S): il residuo NON e' lo
+            # scarto del broker, non ci si fida. Si riusa l'ultimo scarto buono.
+            return _last_good_server_offset_seconds
+        scarto = int(round((tick_time - ora) / 900) * 900)
+        if fresco:
+            _last_good_server_offset_seconds = scarto
+        return scarto
     except Exception:
-        return 0
+        return _last_good_server_offset_seconds if _last_good_server_offset_seconds is not None else 0
 
 
 def _resolve_symbol(symbol: str) -> Optional[str]:

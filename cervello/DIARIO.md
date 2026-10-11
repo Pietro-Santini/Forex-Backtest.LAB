@@ -172,3 +172,29 @@ Formato: data — chi — cosa — esito collaudo — commit.
   `tempo(r)` che usa `fblTempoRiga` (lo stesso dell'app) e, fuori dall'app, ripiega su `time`/`tClose`/
   `date`; `giorno()` e la tabella per anno ora reggono anche una data mancante. Test:
   laboratorio/app/testa_strategia.test.mjs (2 prove nuove, prima rosse con lo stesso errore). - verde - Falliti: 0
+- 2026-10-11 - Claude - app v128 (NON pubblicata: aspetto il via del proprietario). Due cose.
+  (A) GUASTO "a mercato chiuso e/o cambiando timeframe candele, disegni, linee, posizioni e indicatori
+  si staccavano" (segnalato dal proprietario con rapporto console): tre cause, tutte corrette.
+  Il cambio timeframe in Live ora ricarica dalla STESSA fonte del file a grafico (funzione pura
+  `fblSorgenteLivePerCambioTf` fra marcatori `FBL:TESTA-SORGENTE-LIVE`); il caricatore Capital.com
+  carica lo storico ma NON accende lo streaming a mercato chiuso (come gia' faceva quello MT5); in
+  fascia 22-23 MT5 rilascia la proprieta' della candela (`mt5ActiveSymbol=null`) e riparte il timer
+  Capital.com, cosi' la candela prosegue davvero fino alle 23 e a 00:00 riprende MT5. In piu' una
+  guardia di calendario in `applyLivePriceToChart`: a mercato chiuso nessun prezzo fa candele, nemmeno
+  se MT5 si scollega. Test: laboratorio/app/sorgente_live.test.mjs (6 prove, prima rosse).
+  (B) RIMOZIONE della sezione "Testa strategia" (backtest) su richiesta del proprietario: via la voce
+  Impostazioni, il pannello, il motore `fblTestaStrategiaDiCandele`, l'interfaccia, il riquadro in
+  Dashboard e il collaudo `laboratorio/app/testa_strategia.test.mjs`. Restano (non sono la stessa cosa):
+  colonna/filtro "Strategia" del Journal, carta "Profitto per strategia" e la strategia di spostamento
+  dello stop dei segnali. Controlli: sintassi_app.mjs (5 script, 0 errori); nessun riferimento residuo a
+  `fblTestaStrategia`/`data-testa-strategia` in app.html.
+  (C) RIMOZIONE dell'indicatore "Gann 21.7 Profit Factor (4h)" (`gann217`) su richiesta del proprietario
+  ("togliamo anche l'indicatore gann non ci facciamo piu' nulla"): via la voce `+ Aggiungi indicatore`, il
+  blocco in `INDICATOR_DEFS` (compute + segnali + disegno) e il ramo del pannello impostazioni; cancellato
+  il collaudo `laboratorio/app/indicatore_gann217.test.mjs`. Un `gann217` salvato in una sessione viene
+  scartato in caricamento (`hydrateIndicators` filtra le chiavi assenti da `INDICATOR_DEFS`), quindi nessun
+  crash. Controlli: sintassi_app.mjs (5 script, 0 errori); collaudo app 215/215. In piu' rimosso un ABBOZZO
+  NON tracciato `laboratorio/app/posizioni_kraken.test.mjs` (7 ottobre), superato dai committati
+  `kraken_posizioni.test.mjs` e `kraken_linee.test.mjs`: era rosso perche' chiedeva il contrario della
+  richiesta del proprietario (niente colonna `#` nella tabella Kraken, niente scostamento una-tantum).
+  - verde - Falliti: 0

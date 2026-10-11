@@ -305,3 +305,38 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   unico `tempo(r)` usa `fblTempoRiga` (lo stesso dell'app) e, fuori dall'app, ripiega su `time`/`tClose`/
   `date`; `giorno()` e la tabella per anno reggono anche una data mancante. Test:
   `laboratorio/app/testa_strategia.test.mjs` (2, prima rossi con lo stesso errore).
+- **A mercato chiuso e/o cambiando timeframe candele, disegni, linee, posizioni e indicatori si
+  staccavano dalle candele** — risolto app v128 — 11 ottobre 2026: il rapporto console del proprietario
+  (domenica 00:07 UTC, mercato chiuso) mostrava candele create fino a `2026-10-11T00:00Z`, cioe' a
+  orologio reale mentre la fase riportata era `"closed"`, e nessun errore di disegno
+  (`errorePosizioneMax=0`, `errorePixelMax=0`): il guasto era nella **fonte**, non nel disegno. Tre
+  cause distinte. (1) Il **cambio timeframe in Live** chiamava SEMPRE `loadLiveHistoryFromCapital()`,
+  anche quando il grafico mostrava MT5: la serie veniva sostituita e, a mercato chiuso, lo streaming
+  Capital.com si riaccendeva. Ora la fonte si sceglie dal FILE a grafico con la funzione pura
+  `fblSorgenteLivePerCambioTf` (`mt5_live_*` -> MT5, `capital_live_*` -> Capital.com, avvio ->
+  MT5 se collegato). (2) Il caricatore Capital.com accendeva sempre lo streaming (nessuna guardia
+  `'closed'`), mentre quello MT5 si fermava: ora anche Capital.com carica lo storico ma NON apre i
+  prezzi a mercato chiuso. (3) In fascia 22-23 (`liveSessionFreezeMt5('capital')`) MT5 restava
+  **proprietario della candela** (`mt5ActiveSymbol` valorizzato) e il timer Capital.com restava fermo:
+  i tick arrivavano ma non toccavano mai la candela ("22-23 non funziona in realta'"). Ora MT5 rilascia
+  la proprieta' e il timer Capital.com riparte; a 00:00 `fblRiaperturaMt5()` riprende MT5. In piu' una
+  **guardia di calendario** in `applyLivePriceToChart`: se il calendario dell'asset dice CHIUSO nessun
+  prezzo crea/modifica candele **anche se MT5 si scollega** (prima la "fase" diventava `'free'` e
+  l'ultimo prezzo in memoria continuava a fare candele). La fascia 22-23 resta permessa perche' li' il
+  mercato dell'asset risulta aperto. Test: `laboratorio/app/sorgente_live.test.mjs` (6, prima rossi).
+- **La sezione "Testa strategia" (backtest) e' stata RIMOSSA** — app v128 — 11 ottobre 2026: su
+  richiesta del proprietario ("togli il test della strategia, e' inutile, profitti che durano anni…
+  togli la sezione strategie in generale"). Rimossi: la voce nelle Impostazioni del grafico, il
+  pannello, il motore `fblTestaStrategiaDiCandele`, l'interfaccia e il riquadro in fondo alla
+  Dashboard, piu' il collaudo `laboratorio/app/testa_strategia.test.mjs`. **NON** toccate (sono cose
+  diverse): la colonna/filtro "Strategia" del Trade Journal, la carta "Profitto per strategia" della
+  Dashboard e la strategia di spostamento dello stop dei segnali (`fblSimulaStrategia`,
+  `localStorage['fbl_crono_strategia']`).
+- **L'indicatore "Gann 21.7 Profit Factor (4h)" (`gann217`) e' stato RIMOSSO** — app v128 — 11 ottobre
+  2026: su richiesta del proprietario ("togliamo anche l'indicatore gann non ci facciamo piu' nulla").
+  Rimossi da `app.html`: la voce `+ Aggiungi indicatore` nel menu, il blocco definizione in
+  `INDICATOR_DEFS` (compute + segnali + disegno, il piu' grosso del file) e il ramo
+  `if(ind.key==='gann217')` del pannello impostazioni; cancellato il collaudo
+  `laboratorio/app/indicatore_gann217.test.mjs`. Nessun'altra parte dell'app usa l'indicatore. Un
+  `gann217` eventualmente salvato in una sessione viene scartato in caricamento da `hydrateIndicators`
+  (filtra le chiavi non presenti in `INDICATOR_DEFS`), quindi nessun crash.
