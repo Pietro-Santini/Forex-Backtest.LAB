@@ -1475,6 +1475,10 @@ window.fblAvviaSoloBacktest=function(){
           <button id="liveModeSwitch" class="miniBtn" title="Passa tra modalità Storico (replay CSV) e Live (Capital.com)">📼 Storico</button>
           <button id="liveChangeAccountBtn" class="miniBtn" style="display:none" title="Cambia le credenziali Live salvate o la cartella dove sono salvate">🔁 Cambia account</button>
         </div>
+        <div class="fbOptRow" style="margin-top:10px">
+          <label style="flex:none;min-width:110px">SL automatico a breakeven</label>
+          <input type="checkbox" id="fblSlAutoAttivo" class="fblSlAutoToggle" style="margin-left:4px;width:auto" title="Se attivo, sposta lo SL a breakeven (entry) dopo che la posizione tocca il primo TP">
+        </div>
       </div>
       <div data-gensettings-panel="mt5" style="display:none">
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Connetti/disconnetti l'account MT5, oppure gestisci gli account MT5 salvati.</div>
@@ -5001,6 +5005,14 @@ function checkPropFirmRules(){
   if(totalLoss>maxDrawdownLimit){
     triggerPropFirmViolation('max',{ initialCapital:propFirmChallengeInitialCapital, equityNow, totalLoss, maxDrawdownLimit, totalLossPct });
     return;
+  }
+  // Nuovo: check obiettivo profitto - se equity > capitale iniziale + X%, prop sbloccata
+  const propTargetPct = 10; // obiettivo default: 10% di profitto sul capitale iniziale
+  const profitPct = (equityNow - propFirmChallengeInitialCapital) / propFirmChallengeInitialCapital * 100;
+  if(profitPct >= propTargetPct && !propFirmViolation){
+    // Mostra messaggio prop sbloccata
+    $('status').textContent = '🎯 Obiettivo Prop Firm raggiunto! Il conto è sbloccato per il finanziamento.';
+    // Puoi aggiungere qui ulteriore logica: chiudere la modalità, salvare lo stato, ecc.
   }
 }
 // STEP 4, punto 4: mostra Daily Drawdown / Max Drawdown correnti (in % del rispettivo limite,
@@ -18597,7 +18609,7 @@ function evaluate(){
    }
    let sl=false,tp=false;
    // Difesa aggiuntiva: uno SL/TP <=0 non è mai un prezzo reale valido (nessun asset quota a
-   // zero o sotto) — anche se validateTradeLevel() ora impedisce di impostarlo, qui lo
+   /// TEST MODIFICA
    // ignoriamo comunque per non chiudere mai una posizione a un prezzo mostruoso per errore
    // (es. dati di sessione salvati da prima di questo fix).
    const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
@@ -33657,6 +33669,10 @@ function parseRestSnapshotMs(v){
 // Vero solo se il timestamp e' credibile rispetto all'orologio locale: se l'orologio del PC e'
 // sfasato di ore rispetto al server, meglio ignorare il confronto che scartare dati buoni.
 function restStampUsable(atMs){ return Number.isFinite(atMs)&&Math.abs(Date.now()-atMs)<300000; }
+
+// Nuovo: restStampRecente garantisce che il timestamp della candela REST sia "oggi"
+// (finestra di 2 minuti). Evita che una candela vecchia di 24h venga trattata come fresca.
+function restStampRecente(atMs){ return Number.isFinite(atMs)&&Math.abs(Date.now()-atMs)<120000; }
 async function fetchLatestPriceRest(epic){
  if(!capitalSessionTokens||!epic)return null;
  try{
@@ -33669,7 +33685,11 @@ async function fetchLatestPriceRest(epic){
    const p=(body&&Array.isArray(body.prices))?body.prices[body.prices.length-1]:null;
    const price=p&&p.closePrice?p.closePrice.bid:null;
    if(!Number.isFinite(price))return null;
-   return {price,atMs:parseRestSnapshotMs(p.snapshotTimeUTC||p.snapshotTime)};
+   const atMs=parseRestSnapshotMs(p.snapshotTimeUTC||p.snapshotTime);
+   // Applichiamo una guardia di freschezza: se il timestamp e' vecchio di piu' di 2 minuti,
+   // non restituiamo il dato (il timer di refresh lo riproverà tra un attimo).
+   if(!restStampRecente(atMs))return null;
+   return {price,atMs};
  }catch(e){ return null; }
 }
 function startLiveRefreshTimer(){
@@ -37245,7 +37265,10 @@ function gcSorgente(){
 async function gcUltimaBarraCapital(epic){
  const r=await fetchLatestPriceRest(epic);
  if(!r||!Number.isFinite(r.price))return null;
- const atMs=Number.isFinite(r.atMs)?r.atMs:Math.floor(Date.now()/60000)*60000;
+ // Guardia di freschezza: se il timestamp restituito da fetchLatestPriceRest non e' recente
+// (oltre 2 minuti), non applichiamo il prezzo per evitare di mostrare valori stantii di 24h.
+if(!restStampRecente(r.atMs))return null;
+const atMs=r.atMs;
  return {atMs,open:r.price,high:r.price,low:r.price,close:r.price,vol:0};
 }
 async function guardianoCandeleMt5(){
