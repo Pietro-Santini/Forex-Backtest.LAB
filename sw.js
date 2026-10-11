@@ -58,7 +58,7 @@
 //               candele "saltavano" nel futuro). Il servizio candele ora scarta gli scarti
 //               impossibili e ricorda quello buono su disco fra un riavvio e l'altro.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v129";
+const CACHE_NAME = "forex-backtest-lab-v130";
 const ASSETS = [
   "./",
   "./app.html",
