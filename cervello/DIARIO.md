@@ -198,3 +198,22 @@ Formato: data — chi — cosa — esito collaudo — commit.
   `kraken_posizioni.test.mjs` e `kraken_linee.test.mjs`: era rosso perche' chiedeva il contrario della
   richiesta del proprietario (niente colonna `#` nella tabella Kraken, niente scostamento una-tantum).
   - verde - Falliti: 0
+- 2026-10-11 - Claude - server candele v129 (NON pubblicata: aspetto il via del proprietario). Il guasto
+  "a mercato chiuso i disegni si staccano / la chiusura e' saltata alle 3" NON era risolto dalla v128.
+  Causa alla radice, provata sul PC: la v128 riusava l'ultimo scarto buono, ma se `Mt5FeedServer.exe`
+  PARTE quando il mercato e' GIA' chiuso il PRIMO tick che vede e' fermo da ore e veniva creduto fresco
+  (non c'e' un "prima"), quindi `/history` calcolava `scarto = tick.time - adesso = -90000 s` (−25 h) e
+  spostava tutte le candele nel futuro, cambiando la base dei tempi e staccando i disegni. Prova diretta:
+  `GET /history?symbol=EURUSD&timeframe=M1&count=3` sul servizio installato dava `offset=-90000`; il
+  valore giusto e' `+10800` (broker MetaQuotes-Demo, UTC+3 a ottobre: ultima candela broker
+  `2026-10-09 23:59` = `20:59 UTC` di venerdi', chiusura settimanale del forex). Rimedi in
+  `mt5_feed_server.py` E in `bridge.py` (che sbagliava le posizioni allo stesso modo): (1) uno scarto
+  fuori dall'intervallo dei fusi reali (~-14h..+14h) non si usa MAI (-25h non e' un fuso, e' un tick
+  fermo); (2) lo scarto buono si salva su disco (`offset_orologio.json` accanto all'eseguibile) e si
+  rilegge al riavvio; (3) un tick fermo non sovrascrive lo scarto noto (un valore diverso si accetta solo
+  se i tick stanno scorrendo = mercato vivo, cosi' il cambio d'ora legale passa subito). Il file di
+  stato e' stato seminato a mano con +10800 sulla macchina installata, perche' all'installazione il
+  mercato e' chiuso e lo scarto non e' misurabile. Test: `laboratorio/ponte/test_scarto_orologio.py`
+  (+3 prove) e nuovo `laboratorio/ponte/test_scarto_orologio_bridge.py` (3 prove), prima rossi (-90000 e
+  `_file_scarto` inesistente), ora verdi. Copie allineate anche in `applicazione/installer_build/build/`.
+  CACHE_NAME v129 / Setup 1.0.129.

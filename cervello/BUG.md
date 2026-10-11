@@ -340,3 +340,21 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   `laboratorio/app/indicatore_gann217.test.mjs`. Nessun'altra parte dell'app usa l'indicatore. Un
   `gann217` eventualmente salvato in una sessione viene scartato in caricamento da `hydrateIndicators`
   (filtra le chiavi non presenti in `INDICATOR_DEFS`), quindi nessun crash.
+- **A mercato chiuso il servizio candele spostava TUTTO di ~25 ore ("la chiusura e' saltata alle 3")
+  — risolto server v129 — 11 ottobre 2026**: la v128 aveva aggiunto il riuso dell'ultimo scarto buono,
+  ma NON bastava. Se `Mt5FeedServer.exe` PARTE quando il mercato e' GIA' chiuso (riavvio del PC nel
+  weekend), il PRIMO tick che vede e' fermo da ore ma veniva creduto fresco (non c'e' un "prima"), cosi'
+  `/history` calcolava `scarto = tick.time - adesso = -90000 s` (−25 h) e spostava tutte le candele nel
+  futuro: la serie cambiava base dei tempi e i disegni si staccavano. Provato sul PC: `GET
+  /history?symbol=EURUSD&timeframe=M1&count=3` sul servizio installato dava `offset=-90000` invece di
+  `+10800` (broker MetaQuotes-Demo, UTC+3: ultima candela broker `2026-10-09 23:59` = `20:59 UTC` di
+  venerdi', chiusura settimanale del forex). Tre rimedi in `mt5_feed_server.py` (e in `bridge.py`, che
+  sbagliava le posizioni allo stesso modo): (1) uno scarto **fuori dall'intervallo dei fusi reali**
+  (~−14 h..+14 h) non si usa MAI — `-25 h` non e' un fuso, e' un tick fermo; (2) lo scarto buono si
+  **salva su disco** (`offset_orologio.json` accanto al programma, stessa cartella di `Mt5FeedServer.log`)
+  e si rilegge al riavvio; (3) un tick **fermo** non sovrascrive lo scarto noto (un valore diverso si
+  accetta solo se i tick stanno scorrendo = mercato vivo, cosi' il cambio d'ora legale passa subito). Il
+  file e' stato anche **seminato a mano** sulla macchina del proprietario con `+10800`, perche' al
+  momento dell'installazione il mercato e' chiuso e il servizio non potrebbe misurare lo scarto. Test:
+  `laboratorio/ponte/test_scarto_orologio.py` (+3) e `laboratorio/ponte/test_scarto_orologio_bridge.py`
+  (3), prima rossi (`-90000`, `_file_scarto` inesistente).

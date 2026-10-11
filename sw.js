@@ -53,8 +53,12 @@
 //               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 //          v125 = nuovo indicatore "Gann 21.7 Profit Factor (4h)" nativo in INDICATOR_DEFS,
 //               personalizzabile dal pannello impostazioni (34 parametri)
+//          v129 = candele/disegni a mercato chiuso: lo scarto orologio broker<->UTC non si
+//               ricalcola piu' da un tick fermo (capitava partendo a weekend chiuso: le
+//               candele "saltavano" nel futuro). Il servizio candele ora scarta gli scarti
+//               impossibili e ricorda quello buono su disco fra un riavvio e l'altro.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v128";
+const CACHE_NAME = "forex-backtest-lab-v129";
 const ASSETS = [
   "./",
   "./app.html",

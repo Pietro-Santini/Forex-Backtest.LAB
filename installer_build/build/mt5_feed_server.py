@@ -174,33 +174,98 @@ def _ensure_initialized():
 # cambiava base dei tempi e disegni/posizioni/indicatori si staccavano. Ora si riusa l'ULTIMO SCARTO
 # BUONO misurato con un tick FRESCO (stessa idea di _offset_server_cache() in bridge.py, che infatti
 # protegge gia' /positions). Un tick e' "fresco" solo se ne e' arrivato uno NUOVO da poco: durante la
-# sessione i tick scorrono di continuo, a mercato chiuso lo STESSO tick resta fermo per ore. NON si
-# usa il valore del residuo per capirlo: a mercato chiuso "scarto - tempo trascorso" puo' comunque
-# cadere vicino a un multiplo del quarto d'ora e sembrare valido.
+# sessione i tick scorrono di continuo, a mercato chiuso lo STESSO tick resta fermo per ore.
+#
+# SECONDO GIRO (SEGNALATO di nuovo: "la posizione dei disegni non e' stata risolta, adesso la
+# chiusura e' saltata alle 3"): la versione precedente NON bastava. Se il processo PARTE quando il
+# mercato e' GIA' chiuso, il PRIMO tick che vede e' fermo da ore ma veniva creduto fresco (e' il
+# primo: non c'e' nessun "prima"), quindi lo scarto tornava "-25h" e le candele finivano di nuovo
+# nel futuro/spostate. Rimedi, tre, indipendenti:
+#   1. UNO SCARTO IMPOSSIBILE NON SI USA MAI. I fusi dei broker reali stanno in ~[-14h, +14h];
+#      "-25h" non e' un fuso, e' un tick fermo. Cosi' anche il primissimo tick, se e' vecchio di
+#      ore, non avvelena lo scarto.
+#   2. LO SCARTO BUONO SI SALVA SU DISCO (offset_orologio.json accanto al programma) e si rilegge
+#      al riavvio: chi riapre il PC a mercato chiuso non riparte da zero.
+#   3. UN TICK FERMO NON SOVRASCRIVE LO SCARTO NOTO: un valore plausibile ma diverso da quello noto
+#      viene accettato solo se i tick stanno scorrendo (mercato vivo) - cosi' un cambio d'ora legale
+#      passa subito, ma un tick fermo di un weekend no.
+_OFFSET_ARROTONDAMENTO_S = 900    # scarti dei broker: ore intere o mezze ore
+_OFFSET_TOLLERANZA_S = 300        # un tick "fresco" e' entro 5 min da un multiplo del quarto d'ora
+_OFFSET_MIN_S = -14 * 3600        # fusi dei broker reali: mai oltre ~-14h...
+_OFFSET_MAX_S = 14 * 3600         # ...ne' oltre ~+14h
+_FINESTRA_TICK_FRESCO_S = 300     # oltre 5 min senza tick nuovi il tick e' "fermo" (mercato chiuso)
+_NOME_FILE_SCARTO = "offset_orologio.json"
+
 _last_good_server_offset_seconds = None
 _ultimo_tick_time = None          # il tick.time piu' recente MAI visto (per capire se i tick scorrono)
 _ultimo_tick_time_istante = 0.0   # quando l'abbiamo visto la prima volta (orologio locale)
-_FINESTRA_TICK_FRESCO_S = 300     # oltre 5 min senza tick nuovi il tick e' "fermo" (mercato chiuso)
+_scarto_su_disco_letto = False    # lo scarto salvato si legge una volta sola, al primo uso
+
+
+def _cartella_stato():
+    """Dove tenere lo stato che deve sopravvivere ai riavvii (lo scarto orologio). Accanto
+    all'eseguibile quando il programma e' impacchettato (stessa cartella di Mt5FeedServer.log),
+    altrimenti accanto a questo file. FBL_DATI la forza (usata dai test e dal server Oracle)."""
+    forzata = os.environ.get("FBL_DATI")
+    if forzata:
+        return forzata
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _file_scarto():
+    return os.path.join(_cartella_stato(), _NOME_FILE_SCARTO)
+
+
+def _scarto_plausibile(scarto) -> bool:
+    """Uno scarto e' plausibile solo se sta nell'intervallo dei fusi dei broker reali. Serve a
+    scartare il "tick fermo" (che a mercato chiuso da' -25h, -51h...): NON e' un fuso."""
+    return _OFFSET_MIN_S <= scarto <= _OFFSET_MAX_S
+
+
+def _carica_scarto_su_disco():
+    """Legge una volta sola lo scarto salvato. File mancante o corrotto (o uno scarto non plausibile
+    scritto da una versione precedente) = si riparte senza: meglio che fidarsi di un valore assurdo."""
+    global _last_good_server_offset_seconds, _scarto_su_disco_letto
+    if _scarto_su_disco_letto:
+        return
+    _scarto_su_disco_letto = True
+    if _last_good_server_offset_seconds is not None:
+        return
+    try:
+        with open(_file_scarto(), "r", encoding="utf-8") as f:
+            salvato = int(json.load(f).get("offset_seconds"))
+    except Exception:
+        return
+    if _scarto_plausibile(salvato):
+        _last_good_server_offset_seconds = salvato
+
+
+def _salva_scarto_su_disco(scarto):
+    """Scrive lo scarto buono accanto al programma per i riavvii a mercato chiuso. Se non si puo'
+    scrivere (cartella in sola lettura) si continua con la sola memoria, senza far fallire /history."""
+    try:
+        os.makedirs(_cartella_stato(), exist_ok=True)
+        with open(_file_scarto(), "w", encoding="utf-8") as f:
+            json.dump({"offset_seconds": int(scarto), "misurato_il": int(time.time())}, f)
+    except Exception:
+        pass
 
 
 def _server_time_offset_seconds(tick) -> int:
     """Stessa identica logica di _server_time_offset_seconds() in bridge.py (vedi lì il
     commento completo): l'orologio del server del broker spesso non è UTC. Calcoliamo lo scarto
     da un tick REALE appena letto (copre quindi anche l'ora legale) e lo sottraiamo da ogni
-    timestamp prima di restituirlo, arrotondato al minuto per eliminare il jitter di rete/IPC.
+    timestamp prima di restituirlo, arrotondato al quarto d'ora per eliminare il jitter di
+    rete/IPC e il tick a meta' minuto (gli scarti dei broker sono ore intere o mezze ore).
 
     A mercato CHIUSO il tick e' vecchio di ore: in quel caso NON si ricalcola lo scarto, si riusa
-    l'ultimo scarto buono (vedi il commento sopra _last_good_server_offset_seconds)."""
+    l'ultimo scarto buono (in memoria o riletto dal disco, vedi i commenti sopra)."""
     global _last_good_server_offset_seconds, _ultimo_tick_time, _ultimo_tick_time_istante
+    _carica_scarto_su_disco()
     if tick is None or not getattr(tick, "time", None):
         return _last_good_server_offset_seconds if _last_good_server_offset_seconds is not None else 0
-    # ARROTONDATO AL QUARTO D'ORA, non piu' al minuto (SEGNALATO: "sul telefono le candele si
-    # fermano dopo un po' e si muovono solo a fine candela"). tick.time e' l'ora dell'ULTIMO tick:
-    # a mercato calmo puo' essere vecchio di oltre 30 s, e l'arrotondamento al minuto dava uno scarto
-    # sbagliato di un minuto intero - le candele "saltavano" avanti di un minuto e il telefono
-    # scartava i prezzi fino al ricaricamento di fine candela. Gli scarti dei broker sono ore intere
-    # (o mezz'ore): al quarto d'ora il risultato e' lo stesso con un tick vecchio fino a 7 minuti e
-    # con l'orologio del PC sbagliato di qualche minuto.
     try:
         ora = time.time()
         tick_time = tick.time
@@ -208,14 +273,25 @@ def _server_time_offset_seconds(tick) -> int:
             _ultimo_tick_time = tick_time
             _ultimo_tick_time_istante = ora
         fresco = (ora - _ultimo_tick_time_istante) <= _FINESTRA_TICK_FRESCO_S
-        if not fresco and _last_good_server_offset_seconds is not None:
-            # Mercato chiuso (tick fermo da oltre _FINESTRA_TICK_FRESCO_S): il residuo NON e' lo
-            # scarto del broker, non ci si fida. Si riusa l'ultimo scarto buono.
-            return _last_good_server_offset_seconds
-        scarto = int(round((tick_time - ora) / 900) * 900)
-        if fresco:
-            _last_good_server_offset_seconds = scarto
-        return scarto
+        residuo = tick_time - ora
+        scarto = int(round(residuo / _OFFSET_ARROTONDAMENTO_S) * _OFFSET_ARROTONDAMENTO_S)
+        # 1. SCARTO IMPOSSIBILE (tick fermo da ore = fuso assurdo): mai usarlo. E' il rimedio al
+        #    "partenza a mercato chiuso": il primissimo tick non puo' piu' dare -25h.
+        if not _scarto_plausibile(scarto):
+            return _last_good_server_offset_seconds if _last_good_server_offset_seconds is not None else 0
+        # tick troppo lontano da un multiplo del quarto d'ora: e' rumore (orologio del PC storto di
+        # oltre 5 min) o un tick a meta' candela, non una misura nuova su cui fare affidamento.
+        if abs(residuo - scarto) > _OFFSET_TOLLERANZA_S:
+            return _last_good_server_offset_seconds if _last_good_server_offset_seconds is not None else 0
+        # 2./3. Misura credibile: la si accetta se non c'e' ancora un riferimento, se CONFERMA il
+        # riferimento, o se il mercato e' VIVO (tick in movimento). Un tick fermo che da' un valore
+        # diverso da quello noto NON lo sovrascrive.
+        if _last_good_server_offset_seconds is None or scarto == _last_good_server_offset_seconds or fresco:
+            if scarto != _last_good_server_offset_seconds:
+                _last_good_server_offset_seconds = scarto
+                _salva_scarto_su_disco(scarto)
+            return scarto
+        return _last_good_server_offset_seconds
     except Exception:
         return _last_good_server_offset_seconds if _last_good_server_offset_seconds is not None else 0
 

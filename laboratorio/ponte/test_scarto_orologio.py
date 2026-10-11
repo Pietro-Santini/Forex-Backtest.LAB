@@ -84,3 +84,48 @@ def test_un_tick_nuovo_aggiorna_lo_scarto(feed, monkeypatch):
     # Passa molto tempo (mercato chiuso) e poi arriva un tick NUOVO con uno scarto diverso (+2h).
     ore[0] += 5 * 3600
     assert feed._server_time_offset_seconds(Tick(ore[0] + 2 * 3600)) == 2 * 3600
+
+
+def test_a_avvio_a_mercato_chiuso_non_si_usa_un_tick_fermo(feed, monkeypatch):
+    """SEGNALATO: "la chiusura e' saltata alle 3". Il processo parte quando il mercato e' GIA'
+    chiuso, quindi il PRIMO tick che vede e' fermo da ore. Non lo si deve credere fresco solo
+    perche' e' il primo: "tick.time - adesso" sarebbe -25h (settimana chiusa) e le candele
+    finirebbero nel futuro. Uno scarto di -25h NON e' un fuso orario reale, e' un tick fermo.
+    """
+    ore = [1_000_000.0]
+    monkeypatch.setattr(feed.time, "time", lambda: ore[0])
+    tick_fermo = Tick(ore[0] + 3 * 3600 - 28 * 3600)  # broker UTC+3, ultimo tick ~28h fa
+    scarto = feed._server_time_offset_seconds(tick_fermo)
+    assert abs(scarto) <= 14 * 3600, (
+        "uno scarto di -25h non e' un fuso orario reale: e' un tick fermo, non va usato"
+    )
+
+
+def test_lo_scarto_buono_si_ricorda_su_disco_dopo_un_riavvio(feed, monkeypatch):
+    """Un riavvio del servizio a mercato chiuso non deve perdere lo scarto buono: va riletto dal
+    disco (accanto al programma), altrimenti si riparte da zero/assurdo finche' il mercato non riapre."""
+    import importlib
+    import json as _json
+
+    with open(feed._file_scarto(), "w", encoding="utf-8") as f:
+        _json.dump({"offset_seconds": 3 * 3600}, f)
+
+    importlib.reload(feed)  # simula il riavvio del servizio
+
+    ore = [1_000_000.0]
+    monkeypatch.setattr(feed.time, "time", lambda: ore[0])
+    tick_fermo = Tick(ore[0] + 3 * 3600 - 28 * 3600)  # mercato chiuso: tick fermo
+    assert feed._server_time_offset_seconds(tick_fermo) == 3 * 3600
+
+
+def test_lo_scarto_misurato_viene_salvato_su_disco(feed, monkeypatch):
+    """Uno scarto misurato con un tick fresco (mercato aperto) viene scritto su disco, cosi' un
+    riavvio a mercato chiuso non lo perde."""
+    ore = [1_000_000.0]
+    monkeypatch.setattr(feed.time, "time", lambda: ore[0])
+    assert feed._server_time_offset_seconds(Tick(ore[0] + 3 * 3600)) == 3 * 3600
+
+    import json as _json
+
+    with open(feed._file_scarto(), "r", encoding="utf-8") as f:
+        assert int(_json.load(f)["offset_seconds"]) == 3 * 3600

@@ -1542,6 +1542,68 @@ def _server_time_offset_seconds(tick) -> int:
 # tenuto in memoria per poterlo riusare quando, in quel momento, nessun simbolo sta quotando
 # (mercato chiuso, weekend) e quindi nessun tick è abbastanza recente per rimisurarlo.
 _last_good_server_offset = None
+# Stessa difesa di mt5_feed_server.py (vedi lì il commento lungo): se il processo PARTE a mercato
+# già chiuso, il PRIMO tick utile è fermo da ore ma verrebbe creduto fresco, e "freshest - adesso"
+# NON è lo scarto del broker ma "scarto - tempo trascorso" (es. -25h). "-25h" non è un fuso reale:
+# va scartato. In più lo scarto buono si salva su disco e si rilegge al riavvio.
+_OFFSET_TOLLERANZA_S = 300        # un tick "fresco" e' entro 5 min da un multiplo del quarto d'ora
+_OFFSET_MIN_S = -14 * 3600        # fusi dei broker reali: mai oltre ~-14h...
+_OFFSET_MAX_S = 14 * 3600         # ...ne' oltre ~+14h
+_FINESTRA_TICK_FRESCO_S = 300     # oltre 5 min senza tick nuovi il tick e' "fermo" (mercato chiuso)
+_NOME_FILE_SCARTO = "offset_orologio.json"
+_ultimo_tick_time = None          # il tick.time piu' recente MAI visto (per capire se i tick scorrono)
+_ultimo_tick_time_istante = 0.0   # quando l'abbiamo visto la prima volta (orologio locale)
+_scarto_su_disco_letto = False    # lo scarto salvato si legge una volta sola, al primo uso
+
+
+def _cartella_stato():
+    """Cartella dello stato che sopravvive ai riavvii. Accanto all'eseguibile quando impacchettato
+    (stessa cartella di ForexBacktestLAB.log), altrimenti accanto a questo file; FBL_DATI la forza."""
+    forzata = os.environ.get("FBL_DATI")
+    if forzata:
+        return forzata
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _file_scarto():
+    return os.path.join(_cartella_stato(), _NOME_FILE_SCARTO)
+
+
+def _scarto_plausibile(scarto) -> bool:
+    """Uno scarto e' plausibile solo se sta nell'intervallo dei fusi dei broker reali. Serve a
+    scartare il "tick fermo" (che a mercato chiuso da' -25h, -51h...): NON e' un fuso."""
+    return _OFFSET_MIN_S <= scarto <= _OFFSET_MAX_S
+
+
+def _carica_scarto_su_disco():
+    """Legge una volta sola lo scarto salvato. File mancante, corrotto o non plausibile = si
+    riparte senza: meglio che fidarsi di un valore assurdo."""
+    global _last_good_server_offset, _scarto_su_disco_letto
+    if _scarto_su_disco_letto:
+        return
+    _scarto_su_disco_letto = True
+    if _last_good_server_offset is not None:
+        return
+    try:
+        with open(_file_scarto(), "r", encoding="utf-8") as f:
+            salvato = int(json.load(f).get("offset_seconds"))
+    except Exception:
+        return
+    if _scarto_plausibile(salvato):
+        _last_good_server_offset = salvato
+
+
+def _salva_scarto_su_disco(scarto):
+    """Scrive lo scarto buono accanto al programma per i riavvii a mercato chiuso. Se non si puo'
+    scrivere si continua con la sola memoria, senza far fallire le posizioni."""
+    try:
+        os.makedirs(_cartella_stato(), exist_ok=True)
+        with open(_file_scarto(), "w", encoding="utf-8") as f:
+            json.dump({"offset_seconds": int(scarto), "misurato_il": int(time.time())}, f)
+    except Exception:
+        pass
 
 
 def _estimate_server_offset_seconds(preferred_symbols=()):
@@ -1559,7 +1621,7 @@ def _estimate_server_offset_seconds(preferred_symbols=()):
     intere) e accettato solo se il tick è davvero fresco (residuo <= 5 min: un tick vecchio ha un
     residuo casuale); altrimenti si riusa l'ultimo scarto buono già misurato in questo processo,
     e solo in mancanza di tutto si ricade sul valore arrotondato "best effort" (mai un'eccezione)."""
-    global _last_good_server_offset
+    global _last_good_server_offset, _ultimo_tick_time, _ultimo_tick_time_istante
     now = time.time()
     names = []
     for sym in preferred_symbols:
@@ -1585,16 +1647,28 @@ def _estimate_server_offset_seconds(preferred_symbols=()):
         t = getattr(tick, "time", 0) if tick is not None else 0
         if t and (freshest is None or t > freshest):
             freshest = t
+    _carica_scarto_su_disco()
     if freshest is None:
         return _last_good_server_offset if _last_good_server_offset is not None else 0
+    # (fix "partenza a mercato chiuso") i tick scorrono solo a mercato aperto: se il piu' recente e'
+    # fermo da oltre la finestra, il mercato e' chiuso e "freshest - adesso" NON e' lo scarto del
+    # broker ma "scarto - tempo trascorso" (es. -25h): un valore del genere NON e' un fuso reale.
+    if _ultimo_tick_time is None or freshest > _ultimo_tick_time:
+        _ultimo_tick_time = freshest
+        _ultimo_tick_time_istante = now
+    vivo = (now - _ultimo_tick_time_istante) <= _FINESTRA_TICK_FRESCO_S
     raw = freshest - now
     rounded = int(round(raw / 1800.0)) * 1800
-    if abs(raw - rounded) <= 300:
-        _last_good_server_offset = rounded
+    if not _scarto_plausibile(rounded) or abs(raw - rounded) > _OFFSET_TOLLERANZA_S:
+        # scarto impossibile o tick lontano da un multiplo: e' un tick fermo, non un fuso. Si riusa
+        # l'ultimo scarto buono (in memoria o letto dal disco), mai quello assurdo.
+        return _last_good_server_offset if _last_good_server_offset is not None else 0
+    if _last_good_server_offset is None or rounded == _last_good_server_offset or vivo:
+        if rounded != _last_good_server_offset:
+            _last_good_server_offset = rounded
+            _salva_scarto_su_disco(rounded)
         return rounded
-    if _last_good_server_offset is not None:
-        return _last_good_server_offset
-    return rounded
+    return _last_good_server_offset
 
 
 @app.get("/positions")
