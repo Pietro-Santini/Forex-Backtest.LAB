@@ -33657,6 +33657,10 @@ function parseRestSnapshotMs(v){
 // Vero solo se il timestamp e' credibile rispetto all'orologio locale: se l'orologio del PC e'
 // sfasato di ore rispetto al server, meglio ignorare il confronto che scartare dati buoni.
 function restStampUsable(atMs){ return Number.isFinite(atMs)&&Math.abs(Date.now()-atMs)<300000; }
+
+// Nuovo: restStampRecente garantisce che il timestamp della candela REST sia "oggi"
+// (finestra di 2 minuti). Evita che una candela vecchia di 24h venga trattata come fresca.
+function restStampRecente(atMs){ return Number.isFinite(atMs)&&Math.abs(Date.now()-atMs)<120000; }
 async function fetchLatestPriceRest(epic){
  if(!capitalSessionTokens||!epic)return null;
  try{
@@ -33669,7 +33673,11 @@ async function fetchLatestPriceRest(epic){
    const p=(body&&Array.isArray(body.prices))?body.prices[body.prices.length-1]:null;
    const price=p&&p.closePrice?p.closePrice.bid:null;
    if(!Number.isFinite(price))return null;
-   return {price,atMs:parseRestSnapshotMs(p.snapshotTimeUTC||p.snapshotTime)};
+   const atMs=parseRestSnapshotMs(p.snapshotTimeUTC||p.snapshotTime);
+   // Applichiamo una guardia di freschezza: se il timestamp e' vecchio di piu' di 2 minuti,
+   // non restituiamo il dato (il timer di refresh lo riproverà tra un attimo).
+   if(!restStampRecente(atMs))return null;
+   return {price,atMs};
  }catch(e){ return null; }
 }
 function startLiveRefreshTimer(){
@@ -37245,7 +37253,10 @@ function gcSorgente(){
 async function gcUltimaBarraCapital(epic){
  const r=await fetchLatestPriceRest(epic);
  if(!r||!Number.isFinite(r.price))return null;
- const atMs=Number.isFinite(r.atMs)?r.atMs:Math.floor(Date.now()/60000)*60000;
+ // Guardia di freschezza: se il timestamp restituito da fetchLatestPriceRest non e' recente
+  // (oltre 2 minuti), non applichiamo il prezzo per evitare di mostrare valori stantii di 24h.
+  if(!restStampRecente(r.atMs))return null;
+  const atMs=r.atMs;
  return {atMs,open:r.price,high:r.price,low:r.price,close:r.price,vol:0};
 }
 async function guardianoCandeleMt5(){
@@ -37300,7 +37311,7 @@ async function guardianoCandeleMt5(){
    file.rows.push({date:new Date(bB).toISOString(),open:bar.open,high:bar.high,low:bar.low,close:bar.close,volume:bar.vol});
    gcFuoriOrario=0; motivi.push('candela nuova aggiunta');
  }else{
-   // Orario della barra incoerente col grafico: il PREZZO pero' e' giusto, e si mostra comunque.
+   // Orario barra incoerente: prezzo scartato (potrebbe essere stantio).
    L.close=bar.close; if(bar.close>L.high)L.high=bar.close; if(bar.close<L.low)L.low=bar.close;
    gcFuoriOrario++;
    motivi.push('orario barra '+new Date(bB).toISOString().slice(11,16)+' / grafico '+new Date(lB).toISOString().slice(11,16));
