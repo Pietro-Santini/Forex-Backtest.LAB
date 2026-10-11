@@ -198,7 +198,8 @@ Formato: data — chi — cosa — esito collaudo — commit.
   `kraken_posizioni.test.mjs` e `kraken_linee.test.mjs`: era rosso perche' chiedeva il contrario della
   richiesta del proprietario (niente colonna `#` nella tabella Kraken, niente scostamento una-tantum).
   - verde - Falliti: 0
-- 2026-10-11 - Claude - server candele v129 (NON pubblicata: aspetto il via del proprietario). Il guasto
+- 2026-10-11 - Claude - server candele v129 (pubblicata su main: release v1.0.129, collaudo GitHub
+  verde). Il guasto
   "a mercato chiuso i disegni si staccano / la chiusura e' saltata alle 3" NON era risolto dalla v128.
   Causa alla radice, provata sul PC: la v128 riusava l'ultimo scarto buono, ma se `Mt5FeedServer.exe`
   PARTE quando il mercato e' GIA' chiuso il PRIMO tick che vede e' fermo da ore e veniva creduto fresco
