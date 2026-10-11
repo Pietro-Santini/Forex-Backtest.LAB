@@ -33783,7 +33783,7 @@ function startLiveRefreshTimer(){
    if(capitalWsPrimaryEpic && staleMs>4000){
      const __reqAt=Date.now();
      const rest=await fetchLatestPriceRest(capitalWsPrimaryEpic);
-     const restPrice=rest?rest.price:null;
+     const restPrice=(rest&&Number.isFinite(rest.price))?fblCapitalSeraAllinea(rest.price,currentAssetKey):(rest?rest.price:null);
      if(Number.isFinite(restPrice)){
        // Due rifiuti, entrambi contro lo stesso sbaglio: scrivere nella candela un prezzo PIU'
        // VECCHIO di quello gia' applicato, facendola rimbalzare fra due valori.
@@ -34018,8 +34018,10 @@ function applyLiveTick(p){
  // eventuali tick già "in volo" prima che disconnectCapitalStream() avesse effetto: nessun prezzo
  // deve toccare candela/SL/TP finché non arrivano i dati freschi da REST.
  if(!liveModeActive || liveCandleFrozen || chartFeedSuspended)return;
- const price=p.bid; // prezzo bid: stessa convenzione già usata per le barre storiche caricate via REST
+ let price=p.bid; // prezzo bid: stessa convenzione già usata per le barre storiche caricate via REST
  if(!Number.isFinite(price) || !Number.isFinite(p.timestamp))return;
+ // Fascia 22-23: prezzo Capital.com riportato al livello MT5 (vedi fblCapitalSeraAllinea).
+ if(p.epic===capitalWsPrimaryEpic)price=fblCapitalSeraAllinea(price,epicToAsset[p.epic]||currentAssetKey);
  if(p.epic===capitalWsPrimaryEpic)lastLiveTickAt=Date.now(); // "prova di vita" per il watchdog
  const asset=epicToAsset[p.epic];
  const prevPrice=asset?livePriceByAsset[asset]:null;
@@ -37411,6 +37413,35 @@ fblDelega('change',e=>{
  liveSessionPhase=null; // si rivaluta subito la fascia oraria con la nuova scelta
 },true);
 setTimeout(fblCapitalSeraAggiornaUi,0);
+// FIX "22-23 con Capital.com si sputtana tutto": MT5 e Capital.com NON quotano lo stesso identico
+// prezzo (stesso indice ma contratto/scadenza/broker diversi: es. +40/50 punti di scarto su US500).
+// Alle 22:00 la candela passa da MT5 a Capital.com e quello scarto diventa un salto enorme
+// (candele a 4118-4145 con il prezzo MT5 a 4186). Qui si misura lo scarto UNA volta per asset e per
+// sera (ultima chiusura MT5 sul grafico - primo prezzo Capital.com) e lo si somma a ogni prezzo
+// Capital.com usato in fascia 22-23: la candela prosegue dal livello MT5 con i MOVIMENTI Capital.com.
+var fblCapSeraOffset={k:null,v:0};
+function fblCapitalSeraAllinea(price,asset){
+ try{
+   if(!Number.isFinite(price))return price;
+   if(liveSessionPhaseNow()!=='capital')return price;
+   const a=asset||currentAssetKey;
+   const k=a+'|'+romeDayAndMinute(Date.now()).day;
+   if(fblCapSeraOffset.k!==k){
+     let v=0;
+     const file=csvLibrary[0];
+     const last=file&&file.rows&&file.rows.length?file.rows[file.rows.length-1]:null;
+     const ref=last?Number(last.close):NaN;
+     const lastT=last?parseDateTime(last.date):NaN;
+     // riferimento valido solo se l'ultima candela MT5 e' recente (max 3 ore) e lo scarto e' plausibile (<10%)
+     if(Number.isFinite(ref)&&Number.isFinite(lastT)&&(Date.now()-lastT)<3*3600000&&Math.abs(ref-price)<Math.abs(price)*0.10){
+       v=ref-price;
+     }
+     fblCapSeraOffset={k:k,v:v};
+     console.log('[Capital 22-23] scarto MT5-Capital.com su "'+a+'": '+v.toFixed(2)+' (ref MT5 '+ref+' / Capital '+price+')');
+   }
+   return price+fblCapSeraOffset.v;
+ }catch(e){ return price; }
+}
 function liveSessionPhaseAt(t){
  const dm=romeDayAndMinute(t);
  const wd=((dm.day+4)%7+7)%7; // 0=domenica … 6=sabato
