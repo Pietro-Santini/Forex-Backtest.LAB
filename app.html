@@ -34684,7 +34684,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // Candele costruite con Capital.com nella fascia 22-23 (MT5 non le ha): restano sul grafico anche
  // dopo la riapertura e dopo un riavvio dell'app, mai sostituite né spostate.
  {
-   const __off=liveOffSessionRowsFor(asset);
+   const __off=fblAllineaRigheSera(liveOffSessionRowsFor(asset),mergedRows);
    if(__off.length){
      const byT=new Map();
      mergedRows.forEach(r=>{ const t=parseDateTime(r.date); if(Number.isFinite(t))byT.set(t,r); });
@@ -37591,6 +37591,39 @@ function liveOffSessionSaveRows(){
    Object.keys(all).forEach(kk=>{ if(!all[kk]||!all[kk].length)delete all[kk]; });
    localStorage.setItem(OFFSESSION_ROWS_KEY,JSON.stringify(all));
  }catch(e){}
+}
+// FIX "buco fra le 22 e le 23 dopo la riapertura": le candele Capital.com salvate nelle sere
+// precedenti sono rimaste al LORO livello di prezzo (diverso da MT5 di decine di punti). Qui ogni
+// "blocco serale" (righe separate da piu' di 3 ore dalle altre) viene riportato al livello MT5:
+// scarto = ultima chiusura MT5 prima del blocco - apertura della prima candela del blocco. Se il
+// blocco e' gia' allineato lo scarto e' ~0 e non cambia nulla (operazione ripetibile senza effetti).
+function fblAllineaRigheSera(off,mt5rows){
+ try{
+   if(!off||!off.length||!mt5rows||!mt5rows.length)return off||[];
+   const tOf=r=>parseDateTime(r.date);
+   const blocchi=[]; let cur=null, prevT=null;
+   off.forEach(r=>{
+     const t=tOf(r); if(!Number.isFinite(t))return;
+     if(!cur||t-prevT>3*3600000){ cur=[]; blocchi.push(cur); }
+     cur.push(r); prevT=t;
+   });
+   const out=[];
+   blocchi.forEach(b=>{
+     const t0=tOf(b[0]);
+     // ricerca binaria: ultima riga MT5 con tempo < t0 (le righe MT5 sono in ordine di tempo)
+     let lo=0,hi=mt5rows.length-1,idx=-1;
+     while(lo<=hi){ const mid=(lo+hi)>>1; const tm=tOf(mt5rows[mid]); if(!Number.isFinite(tm)){ idx=-1; break; } if(tm<t0){ idx=mid; lo=mid+1; } else hi=mid-1; }
+     let off0=0;
+     if(idx>=0){
+       const rm=mt5rows[idx], tm=tOf(rm);
+       const ref=Number(rm.close), op=Number(b[0].open);
+       if(Number.isFinite(ref)&&Number.isFinite(op)&&(t0-tm)<=3*3600000&&Math.abs(ref-op)<Math.abs(op)*0.10)off0=ref-op;
+     }
+     if(Math.abs(off0)<1e-9){ b.forEach(r=>out.push(r)); return; }
+     b.forEach(r=>out.push({date:r.date,open:Number(r.open)+off0,high:Number(r.high)+off0,low:Number(r.low)+off0,close:Number(r.close)+off0,volume:r.volume||0}));
+   });
+   return out;
+ }catch(e){ return off||[]; }
 }
 function liveOffSessionRowsFor(asset){
  try{
