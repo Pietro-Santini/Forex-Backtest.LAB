@@ -70,8 +70,15 @@
 //               + segnali senza take profit e senza stop loss: eliminati (non si aprono da soli,
 //               via dal pannello); segnali con il target ma SENZA stop loss: non si aprono in
 //               automatico ma restano nel pannello per l'apertura a mano.
+//          v134 = apertura automatica: la colonna STRATEGIA (accanto a "Max pos.") e la strategia
+//               universale ora si aprono con un MENU' A TENDINA che mostra SOLO la configurazione
+//               (cosa succede a ogni take profit e dove va lo stop); il riassunto non sta piu' sul
+//               pulsante e resta solo nel box in fondo. Aprendo il menu' di una sala le altre
+//               restano dove sono. Tolto il campo "Senza stop e senza target". Corretto anche un
+//               errore latente: la funzione tgAutoEqua, usata per la scorciatoia "Piu' sul primo
+//               target", non era mai stata definita.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v133";
+const CACHE_NAME = "forex-backtest-lab-v134";
 const ASSETS = [
   "./",
   "./app.html",

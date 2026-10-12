@@ -739,6 +739,12 @@ select.tgCfgIn{cursor:pointer;padding-right:4px}
   border-radius:var(--fbRadius);padding:10px 12px;font-size:12px;line-height:1.65;color:#cdd6e0}
 .tgCfgRiep b{color:var(--fbText)}
 .tgCfgRiep .grande{font-size:13px;color:var(--fbAccent);font-weight:700}
+/* Menù a tendina della Strategia (apertura automatica): un pannello flottante ancorato al
+   pulsante premuto. Copre la tabella invece di allungarla: così aprire la configurazione di una
+   sala non sposta né fa sparire le altre. */
+.tgStratPop{position:fixed;z-index:96;background:linear-gradient(180deg,#111720,#0b1117);
+  border:1px solid var(--fbLine2);border-radius:12px;box-shadow:0 22px 60px rgba(0,0,0,.7);
+  padding:10px 12px;max-height:72vh;overflow-y:auto;width:min(600px,calc(100vw - 20px))}
 .tgCfgAllarme{margin-top:9px;font-size:11.5px;line-height:1.5;color:#ffcf8b;
   background:rgba(224,160,66,.1);border:1px solid rgba(224,160,66,.32);border-radius:8px;padding:7px 9px}
 .tgRes{position:absolute;right:0;bottom:0;width:18px;height:18px;cursor:nwse-resize;touch-action:none;background:linear-gradient(135deg,transparent 48%,var(--fbLine2) 48%,var(--fbLine2) 60%,transparent 60%,transparent 72%,var(--fbLine2) 72%,var(--fbLine2) 84%,transparent 84%)}
@@ -3709,8 +3715,6 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input id="tgAutoBeSenzaTp" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % dello stop</label>
        <label class="tgCfgCampo" title="Il target sta questa percentuale della distanza dello stop OLTRE il punto di pareggio. Con 20% + 10% il target è al 30%: rapporto 1:0,3.">e target un ulteriore
          <input id="tgAutoTpExtra" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % più in là</label>
-       <label class="tgCfgCampo" title="Quando la sala non dà né stop loss né take profit (es. 'Gold SELL 4162 - TP e SL nel VIP', 'BUY NOW'): stop all'1% del conto (campo 'Senza stop della sala') e target a questa percentuale della distanza dello stop, senza pareggio anticipato.">Senza stop e senza target: target al
-         <input id="tgAutoTpSenzaNulla" class="tgCfgIn tgCfgNum" type="number" min="5" max="500" step="5" style="width:70px"> % dello stop</label>
      </div>
      <div class="tgCfgNota" style="margin-top:7px">Il tetto complessivo vince sempre su quelli delle singole sale. Quando un limite è raggiunto il segnale <b>non viene buttato</b>: finisce nel pannello, da valutare a mano.</div>
 
@@ -3732,7 +3736,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <th style="width:38px">Auto</th><th>Sala</th>
        <th style="width:92px">Rischio</th><th style="width:78px">Max pos.</th><th>Strategia</th>
      </tr></thead><tbody id="tgAutoSale"></tbody></table>
-     <div class="tgCfgNota" style="margin-top:7px" id="tgAutoSaleNota">Ogni sala ha il suo rischio e il suo tetto: si accendono solo quelle di cui ti fidi. «Prudente» porta lo stop a pareggio al primo target e poi lo sposta al target precedente, come nella configurazione manuale.</div>
+     <div class="tgCfgNota" style="margin-top:7px" id="tgAutoSaleNota">Ogni sala ha il suo rischio e il suo tetto: si accendono solo quelle di cui ti fidi. Il menù <b>Strategia</b> di ogni sala apre la configurazione: cosa succede a ogni take profit e dove va lo stop.</div>
 
      <div id="tgAutoRiepilogo" class="tgCfgRiep"></div>
    </div>
@@ -25803,6 +25807,7 @@ function tgAutoSalva(){
 if(tgAutoCrNuova)tgAutoSalva();
 function tgAutoMostraFam(fam){
  tgAutoFamUi=fam==='cr'?'cr':'fx'; tgAuto=tgAutoDi(tgAutoFamUi);
+ try{ tgAutoChiudiStrat(); }catch(e){}
  try{ localStorage.setItem('fbl_tg_auto_scheda',tgAutoFamUi); }catch(e){}
  $$tutti('[data-tgautofam]').forEach(b=>b.classList.toggle('active',b.dataset.tgautofam===tgAutoFamUi));
  const t=$('tgAutoFamNota');
@@ -25887,6 +25892,16 @@ function tgAutoQuotePerSegnale(cfg,quantiTp){
  const tot=q.reduce((a,b)=>a+b,0);
  if(!(tot>0))return new Array(n).fill(1/n);
  return q.map(v=>v/tot);
+}
+// Le percentuali su ogni target sono tutte uguali (o nessuna scritta)? Serve alla scorciatoia
+// "Più sul primo target", che ha senso solo quando l'utente ha differenziato a mano. E' una
+// funzione che la configurazione cercava gia' ma che nessuno aveva definito: senza, aprire il
+// dettaglio andava in errore.
+function tgAutoEqua(cfg){
+ const q=(cfg&&Array.isArray(cfg.quote))?cfg.quote.map(v=>Number(v)||0):[];
+ const nz=q.filter(v=>v>0);
+ if(!nz.length)return true;
+ return nz.every(v=>v===nz[0]);
 }
 // Le regole della sala, tagliate sul numero di target che il segnale ha DAVVERO, e ripulite da
 // quelle che punterebbero a un target inesistente.
@@ -26168,7 +26183,10 @@ function tgAutoSpegniPerOggi(motivo,A){
 
 // Le caselle "quando arriva il take profit n. X -> porta lo stop a", il pareggio anticipato e le
 // scorciatoie. Le stesse per una sala (sei target) e per la strategia universale (dieci).
-function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
+function tgAutoCostruisciRegole(tdD,cfg,quanti,dove,ridisegna){
+ // Chi la chiama decide come ridisegnare: nella modale si ridisegna tutto (tgAutoDisegna), nel
+ // menù a tendina si ridisegna solo il pannello, così resta aperto mentre si sceglie.
+ if(typeof ridisegna!=='function')ridisegna=tgAutoDisegna;
  // RICHIESTO: la metodologia si scegli anche qui, non solo nella cronologia delle sale, perche'
  // qui si decide come si apre davvero. Sulle cripto non c'e' scelta: le posizioni si fondono in
  // una, quindi esistono solo le chiusure parziali.
@@ -26198,7 +26216,7 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
    if(modo===v)o.selected=true;
    selModo.appendChild(o);
   });
-  selModo.addEventListener('change',()=>{ tgAutoModoImposta(cfg,selModo.value,quanti); tgAutoSalva(); tgAutoDisegna(); });
+  selModo.addEventListener('change',()=>{ tgAutoModoImposta(cfg,selModo.value,quanti); tgAutoSalva(); ridisegna(); });
   rigaModo.appendChild(selModo);
  }
  tdD.appendChild(rigaModo);
@@ -26251,7 +26269,7 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
    if(!Array.isArray(cfg.quote))cfg.quote=[];
    while(cfg.quote.length<quanti)cfg.quote.push(0);
    cfg.quote[k-1]=Math.max(0,Number(q.value)||0);
-   tgAutoSalva(); tgAutoDisegna();
+   tgAutoSalva(); ridisegna();
   });
   riga.appendChild(q);
   const pc=document.createElement('span');
@@ -26283,7 +26301,7 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
     if(String(cfg.regole[k-1]||'')===v)o.selected=true;
     sel.appendChild(o);
    });
-   sel.addEventListener('change',()=>{ cfg.regole[k-1]=sel.value; tgAutoSalva(); tgAutoDisegna(); });
+   sel.addEventListener('change',()=>{ cfg.regole[k-1]=sel.value; tgAutoSalva(); ridisegna(); });
    riga.appendChild(sel);
   }
   tdD.appendChild(riga);
@@ -26301,7 +26319,7 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
  avv.className='tgCfgIn tgCfgNum'; avv.style.width='72px';
  avv.value=cfg.avvicinamento;
  avv.title='0 = mai. Con 70, lo stop va a pareggio quando il prezzo ha percorso il 70% fra entrata e primo target.';
- avv.addEventListener('change',()=>{ const v=Number(avv.value); if(v>=0&&v<=100)cfg.avvicinamento=v; tgAutoSalva(); tgAutoDisegna(); });
+ avv.addEventListener('change',()=>{ const v=Number(avv.value); if(v>=0&&v<=100)cfg.avvicinamento=v; tgAutoSalva(); ridisegna(); });
  rigaAvv.appendChild(avv);
  rigaAvv.appendChild(document.createTextNode(' %  (0 = mai)'));
  tdD.appendChild(rigaAvv);
@@ -26315,10 +26333,10 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
  const bPrud=document.createElement('button');
  bPrud.type='button'; bPrud.className='miniBtn'; bPrud.textContent='Prudente';
  bPrud.title='Il primo target porta a pareggio, poi ogni target sposta lo stop al precedente';
- bPrud.addEventListener('click',()=>{ cfg.regole=tgAutoRegolePrudenti(quanti); cfg.avvicinamento=70; tgAutoSalva(); tgAutoDisegna(); });
+ bPrud.addEventListener('click',()=>{ cfg.regole=tgAutoRegolePrudenti(quanti); cfg.avvicinamento=70; tgAutoSalva(); ridisegna(); });
  const bNiente=document.createElement('button');
  bNiente.type='button'; bNiente.className='miniBtn'; bNiente.textContent='Nessuno spostamento';
- bNiente.addEventListener('click',()=>{ cfg.regole=new Array(quanti).fill(''); cfg.avvicinamento=0; tgAutoSalva(); tgAutoDisegna(); });
+ bNiente.addEventListener('click',()=>{ cfg.regole=new Array(quanti).fill(''); cfg.avvicinamento=0; tgAutoSalva(); ridisegna(); });
  scorc.appendChild(bPrud); scorc.appendChild(bNiente);
  // Questa invece ha senso solo se le percentuali si scrivono a mano: con la distribuzione equa
  // sono gia' tutte uguali, e un pulsante che non cambia niente e' peggio di un pulsante assente.
@@ -26331,7 +26349,7 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
    q[0]=50;
    for(let j=1;j<quanti;j++){ const v=Math.max(1,Math.round(resto/2)); q[j]=v; resto-=v; }
    if(resto>0)q[quanti-1]+=resto;
-   cfg.quote=q; tgAutoSalva(); tgAutoDisegna();
+   cfg.quote=q; tgAutoSalva(); ridisegna();
   });
   scorc.appendChild(bDavanti);
  }
@@ -26339,16 +26357,71 @@ function tgAutoCostruisciRegole(tdD,cfg,quanti,dove){
 }
 // --- Interfaccia del popup. L'elenco delle sale e' quello vero del ponte (tgGruppi): cosi' non
 // si puo' configurare l'automatico per una sala che non si sta nemmeno ascoltando.
-// Una sola sala alla volta mostra il dettaglio delle regole: con otto sale aperte insieme la
-// tabella diventerebbe illeggibile.
-let tgAutoApertaSala=null;
+// La strategia di una sala (o quella universale) si apre in un MENU' A TENDINA: un pannello
+// flottante ancorato al pulsante, che copre la tabella invece di allungarla. Cosi' aprire la
+// configurazione di una sala non sposta ne' fa sparire le altre, e il riassunto resta solo in fondo.
+let tgAutoPop=null;        // il pannello aperto, se c'e'
+let tgAutoPopChiave=null;  // a chi appartiene: 'uni', oppure il nome della sala
+let tgAutoPopInfo=null;    // cosa disegna: {cfg,quanti,dove}
+function tgAutoChiudiStrat(){
+ if(tgAutoPop){ try{ tgAutoPop.remove(); }catch(e){} }
+ tgAutoPop=null; tgAutoPopChiave=null; tgAutoPopInfo=null;
+}
+function tgAutoRiempiStrat(){
+ if(!tgAutoPop||!tgAutoPopInfo)return;
+ const info=tgAutoPopInfo;
+ tgAutoPop.innerHTML='';
+ const int=document.createElement('div');
+ int.style.cssText='background:#0a0f16;padding:10px 12px;border-radius:6px';
+ // Dentro al pannello si ridisegna solo il pannello (e si aggiorna il riepilogo in fondo): la
+ // tabella non si tocca, e il pannello resta aperto mentre si sceglie.
+ tgAutoCostruisciRegole(int,info.cfg,info.quanti,info.dove,()=>{ try{ tgAutoDisegna(); }catch(e){} tgAutoRiempiStrat(); try{ tgAutoPosizionaPop(tgAutoAncoraPop()); }catch(e){} });
+ tgAutoPop.appendChild(int);
+}
+function tgAutoAncoraPop(){
+ return tgAutoPopChiave?([...document.querySelectorAll('[data-tgstrat]')].find(b=>b.dataset.tgstrat===tgAutoPopChiave)||null):null;
+}
+function tgAutoPosizionaPop(btn){
+ if(!tgAutoPop||!btn)return;
+ const r=btn.getBoundingClientRect();
+ const w=tgAutoPop.offsetWidth, h=tgAutoPop.offsetHeight;
+ let top=r.bottom+6;
+ if(top+h>window.innerHeight-8)top=Math.max(8,r.top-6-h);
+ let left=Math.min(r.left,window.innerWidth-w-8);
+ if(left<8)left=8;
+ tgAutoPop.style.left=left+'px'; tgAutoPop.style.top=top+'px';
+}
+function tgAutoApriStrat(chiave,btn,cfg,quanti,dove){
+ if(tgAutoPop&&tgAutoPopChiave===chiave){ tgAutoChiudiStrat(); return; }
+ tgAutoChiudiStrat();
+ const c=document.createElement('div');
+ c.className='tgStratPop';
+ document.body.appendChild(c);
+ tgAutoPop=c; tgAutoPopChiave=chiave; tgAutoPopInfo={cfg,quanti,dove};
+ tgAutoRiempiStrat();
+ tgAutoPosizionaPop(btn);
+}
+// Il menù si chiude cliccando fuori o ripremendo il pulsante. Se la tabella scorre sotto, invece di
+// chiuderlo lo si riposiziona sul pulsante: cosi' non sparisce mentre si scorre.
+document.addEventListener('mousedown',ev=>{
+ if(!tgAutoPop)return;
+ if(tgAutoPop.contains(ev.target))return;
+ if(ev.target&&ev.target.closest&&ev.target.closest('[data-tgstrat]'))return;
+ tgAutoChiudiStrat();
+},true);
+document.addEventListener('scroll',ev=>{
+ if(!tgAutoPop)return;
+ if(tgAutoPop.contains(ev.target))return;
+ const btn=tgAutoAncoraPop();
+ if(btn&&btn.isConnected)tgAutoPosizionaPop(btn); else tgAutoChiudiStrat();
+},true);
+window.addEventListener('resize',()=>{ if(tgAutoPop)tgAutoPosizionaPop(tgAutoAncoraPop()); });
 function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
  if($('tgAutoRischioSenzaSl'))$('tgAutoRischioSenzaSl').value=tgRischioSenzaSl();
  if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
  if($('tgAutoTpExtra'))$('tgAutoTpExtra').value=tgTpExtraPct();
- if($('tgAutoTpSenzaNulla'))$('tgAutoTpSenzaNulla').value=tgTpSenzaNullaPct();
  if($('tgAutoPerdita')){ $('tgAutoPerdita').value=tgAuto.perditaMaxGiorno; $('tgAutoPerdita').disabled=tgAuto.perditaAttiva===false; }
  if($('tgAutoPerditaAttiva'))$('tgAutoPerditaAttiva').checked=tgAuto.perditaAttiva!==false;
  if($('tgAutoEtaMax'))$('tgAutoEtaMax').value=tgAutoEtaMaxS();
@@ -26362,10 +26435,16 @@ function tgAutoDisegna(){
   boxUni.innerHTML='';
   boxUni.style.display=uni?'':'none';
   if(uni){
-   const cont=document.createElement('div');
-   cont.style.cssText='background:#0a0f16;padding:10px 12px;border-radius:6px';
-   tgAutoCostruisciRegole(cont,u,TG_AUTO_UNI_TP,'vale per tutte le sale');
-   boxUni.appendChild(cont);
+   // Anche la strategia universale si apre con un menù a tendina: il pulsante non dice il
+   // riassunto, apre soltanto la configurazione (il riassunto resta nel box in fondo).
+   const aperto=tgAutoPopChiave==='uni'&&!!tgAutoPop;
+   const apri=document.createElement('button');
+   apri.type='button'; apri.className='miniBtn'; apri.dataset.tgstrat='uni';
+   apri.style.cssText='padding:5px 10px;white-space:nowrap';
+   apri.textContent=(aperto?'▾ ':'▸ ')+'Strategia universale';
+   apri.title='Apri la configurazione della strategia universale: cosa succede a ogni take profit e dove va lo stop';
+   apri.addEventListener('click',()=>tgAutoApriStrat('uni',apri,u,TG_AUTO_UNI_TP,'vale per tutte le sale'));
+   boxUni.appendChild(apri);
   }
  }
  if($('tgAutoSaleNota'))$('tgAutoSaleNota').style.opacity=uni?'0.5':'';
@@ -26437,34 +26516,23 @@ function tgAutoDisegna(){
   mi.title='Quante posizioni di questa sala possono restare aperte insieme';
   mi.addEventListener('change',()=>{ const v=Math.round(Number(mi.value)); if(v>0)cfg.maxPosizioni=Math.min(20,v); tgAutoSalva(); tgAutoDisegna(); });
   tdM.appendChild(mi); tr.appendChild(tdM);
-  // strategia: un pulsante con il riassunto, che apre la riga di dettaglio qui sotto
+  // strategia: un MENU' A TENDINA. Il pulsante non porta il riassunto (che resta solo nel box in
+  // fondo): apre la configurazione di questa sala in un pannello flottante, che non sposta le altre.
   const tdS=document.createElement('td');
   const apri=document.createElement('button');
-  apri.type='button'; apri.className='miniBtn';
-  apri.style.cssText='margin-right:0;padding:4px 9px;max-width:100%;white-space:normal;text-align:left';
+  const aperto=!uni&&!!tgAutoPop&&tgAutoPopChiave===nome;
+  apri.type='button'; apri.className='miniBtn'; apri.dataset.tgstrat=nome;
+  apri.style.cssText='margin-right:0;padding:4px 9px;max-width:100%;white-space:nowrap;text-align:left';
   apri.disabled=!cfg.attivo||uni;
-  apri.textContent=uni?'strategia universale':((tgAutoApertaSala===nome?'▾ ':'▸ ')+tgAutoRiassuntoRegole(cfg));
-  apri.title=uni?'La strategia universale è accesa: vale quella, per tutte le sale':'Imposta dove va lo stop a ogni take profit di questa sala';
+  apri.textContent=uni?'—':((aperto?'▾ ':'▸ ')+'Strategia');
+  apri.title=uni?'La strategia universale è accesa: vale quella, per tutte le sale'
+                :'Apri la configurazione della strategia di questa sala: cosa succede a ogni take profit e dove va lo stop';
   apri.addEventListener('click',()=>{
-   tgAutoApertaSala=(tgAutoApertaSala===nome)?null:nome;
-   tgAutoDisegna();
+   tgAutoApriStrat(nome,apri,cfg,fblTargetDiSala(nome,2,TG_AUTO_UNI_TP),'di questa sala');
   });
   tdS.appendChild(apri);
   tr.appendChild(tdS);
   corpo.appendChild(tr);
-
-  // --- riga di dettaglio: una casella per take profit
-  if(tgAutoApertaSala===nome&&cfg.attivo&&!uni){
-   const trD=document.createElement('tr');
-   const tdD=document.createElement('td');
-   tdD.colSpan=5;
-   tdD.style.cssText='background:#0a0f16;padding:10px 12px';
-   // RICHIESTO: non gli stessi livelli per tutte. Una sala che manda due target si configura con
-   // due righe, una che ne manda dieci con dieci.
-   tgAutoCostruisciRegole(tdD,cfg,fblTargetDiSala(nome,2,TG_AUTO_UNI_TP),'di questa sala');
-   trD.appendChild(tdD);
-   corpo.appendChild(trD);
-  }
  });
  const riep=$('tgAutoRiepilogo');
  if(riep){
@@ -26485,13 +26553,14 @@ function tgAutoDisegna(){
 function tgApriAuto(){
  const ov=$('tgAutoOverlay'); if(!ov)return;
  let f='fx'; try{ f=localStorage.getItem('fbl_tg_auto_scheda')==='cr'?'cr':'fx'; }catch(e){}
+ tgAutoChiudiStrat();
  tgAutoMostraFam(f);
  ov.style.display='flex';
 }
 $('tgAutoBtn')?.addEventListener('click',tgApriAuto);
-$('tgAutoCloseBtn')?.addEventListener('click',()=>{ const ov=$('tgAutoOverlay'); if(ov)ov.style.display='none'; });
-$('tgAutoFattoBtn')?.addEventListener('click',()=>{ const ov=$('tgAutoOverlay'); if(ov)ov.style.display='none'; });
-$('tgAutoOverlay')?.addEventListener('mousedown',ev=>{ if(ev.target===$('tgAutoOverlay'))$('tgAutoOverlay').style.display='none'; });
+$('tgAutoCloseBtn')?.addEventListener('click',()=>{ const ov=$('tgAutoOverlay'); if(ov)ov.style.display='none'; tgAutoChiudiStrat(); });
+$('tgAutoFattoBtn')?.addEventListener('click',()=>{ const ov=$('tgAutoOverlay'); if(ov)ov.style.display='none'; tgAutoChiudiStrat(); });
+$('tgAutoOverlay')?.addEventListener('mousedown',ev=>{ if(ev.target===$('tgAutoOverlay')){ $('tgAutoOverlay').style.display='none'; tgAutoChiudiStrat(); } });
 $('tgAutoAttivo')?.addEventListener('change',async ()=>{
  const A=tgAuto;   // la scheda (Forex o Cripto) su cui si e' cliccato, anche se la conferma tarda
  const acceso=!!$('tgAutoAttivo').checked;
@@ -26513,11 +26582,6 @@ $('tgAutoAttivo')?.addEventListener('change',async ()=>{
 $('tgAutoBeSenzaTp')?.addEventListener('change',()=>{
  const v=Number($('tgAutoBeSenzaTp').value);
  if(v>0)tgAuto.beSenzaTpPct=Math.min(500,v);
- tgAutoSalva(); tgAutoDisegna();
-});
-$('tgAutoTpSenzaNulla')?.addEventListener('change',()=>{
- const v=Number($('tgAutoTpSenzaNulla').value);
- if(v>0)tgAuto.tpSenzaNullaPct=Math.min(500,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoTpExtra')?.addEventListener('change',()=>{
@@ -26548,7 +26612,7 @@ $('tgAutoEtaMax')?.addEventListener('change',()=>{
 });
 $('tgAutoUniAttiva')?.addEventListener('change',()=>{
  tgAutoUni().attivo=!!$('tgAutoUniAttiva').checked;
- tgAutoApertaSala=null;
+ tgAutoChiudiStrat();
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoUniRischio')?.addEventListener('change',()=>{
