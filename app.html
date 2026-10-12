@@ -5792,7 +5792,25 @@ function graficoApplica(k,valore){
  if(k.startsWith('ind|')){
    const mode=k.slice(4);
    if(!(mode in indicatorsByMode))return true;
-   indicatorsByMode[mode]=serializeIndicators(valore);
+   const remoto=serializeIndicators(valore);
+   // UNIONE, non sostituzione. La condivisione fra dispositivi manda l'elenco COMPLETO degli
+   // indicatori e chi scrive per ultimo vince: se un altro dispositivo (es. il telefono che
+   // gira ancora in cache una versione senza l'ultimo indicatore, come l'Order Block) risponde
+   // con la sua lista SENZA l'indicatore appena aggiunto qui, una semplice sostituzione lo
+   // cancellerebbe dal grafico nel giro di pochi secondi — era il bug "l'OB si toglie da solo".
+   // Regole dell'unione:
+   //  - per lo stesso id vince la voce remota (parametri aggiornati dall'altro dispositivo);
+   //  - gli indicatori presenti SOLO qui (aggiunti in questa sessione) vengono tenuti in coda,
+   //    quindi una voce vecchia/stale non può MAI far sparire un indicatore;
+   //  - limite noto e voluto: una cancellazione fatta su UN solo dispositivo non si propaga agli
+   //    altri (serve il consenso a eliminarlo anche lì); senza questa regola un'eliminazione
+   //    remota di un indicatore che qui esiste ancora verrebbe scambiata per una voce vecchia.
+   const perId=new Map();
+   remoto.forEach(ri=>{ if(ri&&ri.id!=null)perId.set(String(ri.id),ri); });
+   const locale=Array.isArray(indicatorsByMode[mode])?indicatorsByMode[mode]:(mode===currentMode()?serializeIndicators(activeIndicators):[]);
+   const tenuti=[];
+   (locale||[]).forEach(li=>{ if(li&&li.id!=null&&!perId.has(String(li.id)))tenuti.push(li); });
+   indicatorsByMode[mode]=serializeIndicators([...perId.values(),...tenuti]);
    if(mode===currentMode()){
      activeIndicators=hydrateIndicators(indicatorsByMode[mode]);
      try{ renderActiveIndicatorsUI(); }catch(e){}
@@ -26110,15 +26128,19 @@ function tgAutoDecidi(voce){
  // Un raddoppio dedotto non si apre mai da solo: e' gia' un'interpretazione, e sommarla a
  // un'apertura senza controllo sarebbe due incertezze una sopra l'altra.
  if(voce.sottotipo==='aggiunta')return no('è un raddoppio dedotto: va confermato a mano');
- // Senza stop e senza target l'app si inventa i livelli (1% del conto, target al 50%): lo fa solo
- // se la sala ha scritto BUY/SELL in lettere. Un razzo o un pallino verde non sono un ordine.
- if(!tgC(seg.stop_loss)&&!(seg.take_profit||[]).length&&!tgDirezioneScritta(seg))
-   return no('nessuno stop, nessun target e nessun BUY/SELL scritto: non è un segnale da aprire da solo');
+ // Senza stop e senza target il segnale non ha NE' protezione NE' obiettivo: non e' un ordine da
+ // aprire da solo, e si elimina (non resta nemmeno nel pannello, perche' non c'e' nulla da fare a
+ // mano). Si elimina anche se contiene BUY/SELL scritto: senza livelli non c'e' un piano.
+ if(!tgC(seg.stop_loss)&&!(seg.take_profit||[]).length)
+   return {apri:false,motivo:'segnale senza stop loss e senza take profit: eliminato',elimina:true};
+ // RICHIESTO: un segnale con il target ma SENZA stop loss non si apre in automatico. Lo stop non
+ // va inventato dal rischio in automatico (tgStopCalcolato resta per l'apertura a MANO): la sala
+ // deve dare una protezione esplicita, altrimenti il segnale resta nel pannello e si apre a mano.
+ if(!tgC(seg.stop_loss))
+   return no('senza stop loss la sala non dà una protezione esplicita: non lo apro da solo, resta qui per l\'apertura manuale');
  // tgC e non Number.isFinite: Number(null) vale 0, che e' finito - un segnale SENZA stop loss
  // sarebbe passato per buono e aperto in automatico senza protezione. E' la stessa trappola
  // gia' presa sull'entrata a fascia, e qui costerebbe molto di piu'.
- // Senza stop della sala lo calcola l'app dal rischio scelto (vedi tgStopCalcolato): mai una
- // posizione senza protezione, ma nemmeno un segnale buttato solo perche' la sala non lo scrive.
  // I tetti: prima quello della sala, poi quello complessivo, che vince sempre.
  const conto=tgContoPerSegnale(seg);
  const apertePerSala=tgAutoAperte(sala,conto), aperteTotali=tgAutoAperte(null,conto);
@@ -26605,6 +26627,9 @@ async function tgAutoValuta(voce,conto){
  try{ d=tgAutoDecidi(voce); }catch(e){ return; }
  if(d.spegni){ tgAutoSpegniPerOggi(d.motivo,A); }
  if(!d.apri){
+  // Eliminato: il segnale (senza stop e senza target) non ha nulla da fare ne' in automatico
+  // ne' a mano: si toglie dal pannello. Non si passa da autoMotivo: la scheda non c'e' piu'.
+  if(d.elimina){ try{ tgEliminaSegnale(voce); }catch(e){} return; }
   if(A.attivo&&d.motivo&&d.motivo!=='apertura automatica spenta'){
    voce.autoMotivo=d.motivo;   // finisce nella scheda del pannello
    try{ tgRenderPannello(); }catch(e){}

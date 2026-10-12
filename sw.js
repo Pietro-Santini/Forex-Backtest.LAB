@@ -61,8 +61,17 @@
 //               (niente piu' salto di decine di punti alle 22) e le candele 22-23 gia' salvate
 //               si riallineano alla riapertura; cronologia sale: stop a pareggio prima del TP1
 //               (percentuale del cammino verso il TP1) nel calcolo della resa.
+//          v133 = fix "l'Order Block si toglie da solo": la condivisione fra dispositivi manda
+//               l'elenco COMPLETO degli indicatori di una sessione; se un altro dispositivo (es.
+//               il telefono con la versione vecchia in cache) rispondeva con la sua lista senza
+//               l'OB, la sostituzione lo cancellava dal grafico in pochi secondi. Ora l'arrivo di
+//               una voce remota fa un'UNIONE: per lo stesso indicatore (stesso id) vince la voce
+//               remota, ma gli indicatori presenti solo su questo dispositivo vengono TENUTI.
+//               + segnali senza take profit e senza stop loss: eliminati (non si aprono da soli,
+//               via dal pannello); segnali con il target ma SENZA stop loss: non si aprono in
+//               automatico ma restano nel pannello per l'apertura a mano.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v132";
+const CACHE_NAME = "forex-backtest-lab-v133";
 const ASSETS = [
   "./",
   "./app.html",
