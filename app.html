@@ -2292,6 +2292,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <polygon points="17,19 13,12 21,12" fill="#e0524f"/>
        </svg> <span>Mostra/nascondi posizioni sul grafico</span></button></div>
            <p class="hint" style="margin:-4px 0 12px">Nasconde o mostra le linee entrata/SL/TP delle posizioni aperte e le frecce delle posizioni chiuse. Gli ordini pendenti restano visibili.</p>
+            <!-- PASSO 22: nuovo interruttore "posizioni chiuse": mostra/nascondi posizioni chiuse con frecce e linee -->
+            <div class="fbOptRow"><button id="togglePosizioniChiuseBtn" type="button" class="toolBtn active" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Mostra/nascondi posizioni chiuse sul grafico (frecce apertura/chiusura, linee orizzontali TP/SL, connettori). Se spento: sole posizioni attive."><svg viewBox="0 0 24 24" width="18" height="18"><rect x="5.4" y="12" width="3.2" height="6" fill="#3b82f6"/><polygon points="7,5 3,12 11,12" fill="#3b82f6"/><line x1="12" y1="5" x2="12" y2="19" stroke="#3b82f6" stroke-dasharray="4 2"/><polygon points="17,19 13,12 21,12" fill="#e0524f"/><line x1="12" y1="5" x2="12" y2="19" stroke="#e0524f" stroke-dasharray="4 2"/></svg> <span>Mostra/nascondi posizioni chiuse</span></button></div>
            <!-- RICHIESTO: con tante posizioni aperte il grafico si riempie di linee e non si legge
                 piu'. Questo pulsante toglie SOLO le linee (entrata, SL, TP) e le frecce di
                 apertura/chiusura: le caselle colorate TP/SL e le etichette Target/Stop restano,
@@ -5002,6 +5004,66 @@ function checkPropFirmRules(){
   if(totalLoss>maxDrawdownLimit){
     triggerPropFirmViolation('max',{ initialCapital:propFirmChallengeInitialCapital, equityNow, totalLoss, maxDrawdownLimit, totalLossPct });
     return;
+  }
+}
+// Prop Firm di sessione: regole 5%/10% drawdown e pop-up "Prop firm sbloccata"
+// per la modalità sessione della cronologia sale
+function checkPropFirmSessione(){
+  if(!isPropFirmMode) return; // prop firm globale non attiva
+  const sala=$('fblCronoSala')?.value||'';
+  if(!sala) return;
+  const segnale=vista.asset||'';
+  if(!segnale) return;
+  const ris=risultatiDi(sala,segnale);
+  if(!ris||!ris.length) return;
+  // Usa le regole prop firm della sessione (stesse del MT5 Live prop firm)
+  // Daily drawdown 5%
+  const dailyLossLimit=propFirmChallengeInitialCapital*0.05;
+  const dailyLoss=propFirmChallengeInitialCapital-(ris[ris.length-1].capitaleCorrente||ris[ris.length-1].capitaleInitiale||0);
+  const dailyLossPct=dailyLoss/propFirmChallengeInitialCapital*100;
+  // Maximum drawdown 10%
+  const maxDrawdownLimit=propFirmChallengeInitialCapital*0.10;
+  const totalLoss=propFirmChallengeInitialCapital-(ris[ris.length-1].capitaleCorrente||ris[ris.length-1].capitaleInitiale||0);
+  const totalLossPct=totalLoss/propFirmChallengeInitialCapital*100;
+  // Aggiorna display
+  updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct);
+  // Controlla violazioni
+  if(dailyLoss>dailyLossLimit){
+    showPropFirmSbloccataAlert('daily', { dailyStartBalance:propFirmChallengeInitialCapital, equityNow:ris[ris.length-1].capitaleCorrente||ris[ris.length-1].capitaleInitiale||0, dailyLoss, dailyLossLimit, dailyLossPct });
+    return;
+  }
+  if(totalLoss>maxDrawdownLimit){
+    showPropFirmSbloccataAlert('max', { initialCapital:propFirmChallengeInitialCapital, equityNow:ris[ris.length-1].capitaleCorrente||ris[ris.length-1].capitaleInitiale||0, totalLoss, maxDrawdownLimit, totalLossPct });
+    return;
+  }
+}
+// Mostra pop-up "Prop firm sbloccata" quando si raggiunge l'obiettivo
+function showPropFirmSbloccataAlert(tipo, dati){
+  const msg = tipo=== 'daily'
+    ? `⚠️ Prop firm violata! Drawdown giornaliero superato: ${dati.dailyLossPct.toFixed(1)}% (limite 5%). La prop sarebbe finita.`
+    : `⚠️ Prop firm violata! Drawdown massimo superato: ${dati.totalLossPct.toFixed(1)}% (limite 10%). La prop sarebbe finite.`;
+  if(confirm(msg + '\n\nPremi "OK" per continuare.')){
+    // Utente conferma - può continuare
+  }else{
+    // Utente annulla - reset o altre azioni
+  }
+}
+// Quando si raggiunge l'obiettivo della prop firm → messaggio "Prop sbloccata"
+function checkPropFirmObiettivoRaggiunto(){
+  if(!isPropFirmMode) return;
+  const sala=$('fblCronoSala')?.value||'';
+  if(!sala) return;
+  const segnale=vista.asset||'';
+  if(!segnale) return;
+  const ris=risultatiDi(sala,segnale);
+  if(!ris||!ris.length) return;
+  // Se l'equity ha raggiunto/l'exceded il target della prop firm
+  const capitaleObiettivo=propFirmChallengeInitialCapital * 1.10; // esempio: +10% obiettivo
+  const ultima=ris[ris.length-1];
+  if(ultima && (ultima.capitaleCorrente||ultima.capitaleInitiale||0) >= capitaleObiettivo){
+    alert('🎉 Prop firm sbloccata! Hai raggiunto l\'obiettivo della sessione.\n\nLe regole del 5% di drawdown non valgono più (non ci sono più limiti di perdita).');
+    // Dopo lo sblocco, disabilita i controlli prop firm per questa sessione
+    // (puoi reimpostare isPropFirmMode o flag specifici per la sessione)
   }
 }
 // STEP 4, punto 4: mostra Daily Drawdown / Max Drawdown correnti (in % del rispettivo limite,
@@ -17622,11 +17684,23 @@ function fblEtichetteTpSlVisibili(){ try{ return localStorage.getItem('fbl_etich
 // senza portarsi via le caselle colorate e le etichette. E' il caso di chi tiene molte posizioni
 // aperte insieme: le linee attraversano tutto il grafico e si sovrappongono, le caselle no.
 function fblLineePosVisibili(){ try{ return localStorage.getItem('fbl_linee_pos')!=='0'; }catch(e){ return true; } }
+// Nuovo: mostra/nascondi posizioni chiuse sul grafico (in aggiunta alle posizioni aperte)
+// Se acceso: mostra tutte le posizioni (aperte e chiuse) con frecce, linee orizzontali TP/SL, connettori
+// Se spento: mostra SOLO posizioni aperte (frecce, linea di congiunzione e linee orizzontali delle attive)
+function fblPosizioniChiuseVisibili(){ try{ return localStorage.getItem('fbl_posizioni_chiuse')!=='0'; }catch(e){ return true; } }
 function fblLineePosUi(){
  const b=$('toggleLineePosBtn'); if(!b)return;
  const on=fblLineePosVisibili();
  b.classList.toggle('active',on); b.style.opacity=on?'1':'.45';
  b.title=on?'Nascondi le linee e le frecce delle posizioni (caselle TP/SL ed etichette restano)':'Mostra le linee e le frecce delle posizioni';
+}
+// Nuovo: pulsante Mostra/nascondi posizioni chiuse UI
+function updateTogglePosizioniChiuseBtn(){
+  const btn=$('togglePosizioniChiuseBtn'); if(!btn)return;
+  const on=fblPosizioniChiuseVisibili();
+  btn.classList.toggle('active',on);
+  btn.style.opacity=on?'1':'.45';
+  btn.title=on?'Nascondi posizioni chiuse sul grafico (frecce apertura/chiusura, linee orizzontali TP/SL, connettori)':'Mostra posizioni chiuse sul grafico (frecce apertura/chiusura, linee orizzontali TP/SL, connettori)';
 }
 fblDelega('click',ev=>{
  const b=ev.target&&ev.target.closest&&ev.target.closest('#toggleLineePosBtn'); if(!b)return;
@@ -25829,7 +25903,7 @@ function tgAutoRegolePrudenti(quanti){
 // STRATEGIA UNIVERSALE (RICHIESTA): una configurazione sola - regole per dieci take profit, rischio
 // e massimo posizioni per sala - che, accesa, sostituisce quella di ogni sala. Delle sale resta solo
 // la spunta "Auto": da quali aprire lo decidi ancora sala per sala.
-const TG_AUTO_UNI_TP=10;
+const TG_AUTO_UNI_TP=15;
 function tgAutoUni(A){
  A=A||tgAuto;
  if(!A.universale||typeof A.universale!=='object')
