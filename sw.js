@@ -78,7 +78,7 @@
 //               errore latente: la funzione tgAutoEqua, usata per la scorciatoia "Piu' sul primo
 //               target", non era mai stata definita.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v134";
+const CACHE_NAME = "forex-backtest-lab-v135";
 const ASSETS = [
   "./",
   "./app.html",

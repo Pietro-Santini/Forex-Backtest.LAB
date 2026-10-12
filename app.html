@@ -3497,6 +3497,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
  <div id="replayControlsRow" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
    <button id="back">◀ INDIETRO</button><button id="next">AVANTI ▶</button>
  </div>
+ <!-- REPLAY IN LIVE (richiesto esplicitamente): visibile SOLO in Live. "🔁 Replay" fa scegliere il
+      punto (trascinando il grafico e rilasciando, oppure scrivendo giorno/ora e premendo Vai) e da
+      lì fa riavanzare candela per candela come nel backtest, mentre i dati live continuano ad
+      arrivare in background. "⏹ STOP" compare solo mentre il replay è attivo e riporta in diretta. -->
+ <div id="liveReplayBar" style="display:none;margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
+   <button id="liveReplayBtn" class="primary" style="width:auto;flex:none">🔁 Replay</button>
+   <button id="liveReplayStopBtn" class="danger" style="width:auto;flex:none;display:none">⏹ STOP</button>
+   <span id="liveReplayMsg" class="sub" style="flex:1;min-width:110px"></span>
+   <input id="liveReplayDateTime" type="datetime-local" step="60" style="width:auto;flex:none" title="Scegli giorno e ora da cui iniziare il replay">
+   <button id="liveReplayGoBtn" class="miniBtn" style="flex:none" title="Inizia il replay dal giorno e dall'ora scritti a sinistra">Vai</button>
+ </div>
  <div class="hintRow"><span class="qtip">?<span class="qtipBubble">Puoi trascinare direttamente il grafico con mouse o dito sia in orizzontale (avanti/indietro nel tempo, anche oltre l'ultima candela) sia in verticale (per spostare la vista sui prezzi), senza limiti. Trascina invece sulla scala prezzi (a destra) per restringere/allargare la vista verticale, come su TradingView. Da tastiera: CTRL + rotellina sul grafico zooma orizzontalmente (candele visibili), SHIFT + rotellina zooma verticalmente (scala prezzi) — entrambi illimitati. Muovi il mouse o la penna sul grafico per vedere il mirino con il prezzo puntato.</span></span> Come navigare il grafico</div>
 </div>
 
@@ -3855,6 +3866,13 @@ fblDelega('click',function(e){
 },true);
 
 let rows=[], baseRows=[], rowsAssetKey='', csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, zoneWidthDrag=null;
+// REPLAY IN LIVE (richiesto esplicitamente): in Live si può "tornare indietro nel tempo" e
+// riavanzare candela per candela come nel backtest, mentre i dati live continuano ad arrivare in
+// background. liveReplayActive=true: masterTime/idx sono CONGELATI sul punto scelto e NESSUNA
+// forzatura all'ultima candela deve più spostarli (vedi applyLivePriceToChart e i caricatori).
+// liveReplaySelecting=true: modalità "scegli il punto" (si trascina il grafico e si rilascia sul
+// punto; liveReplayGuideClientX è la x del dito/mouse, per disegnare la guida verticale).
+let liveReplayActive=false, liveReplaySelecting=false, liveReplayGuideClientX=null;
 // ===================================================================
 // FINESTRE PIP AGGIUNTIVE (multi-monitor): PIP_SLOT identifica QUESTA istanza della pagina.
 // slot 0 = finestra principale (comportamento identico a sempre, invariato: sessione salvata su
@@ -10597,7 +10615,7 @@ function maxViewEnd(){
 const LIVE_FUTURE_MARGIN_FRACTION=0.12;
 function getViewWindow(){
  const n=getVisibleCount();
- const liveMargin=liveModeActive?n*LIVE_FUTURE_MARGIN_FRACTION:0;
+ const liveMargin=(liveModeActive&&!liveReplayActive)?n*LIVE_FUTURE_MARGIN_FRACTION:0;
  const end=Math.max(0,Math.min(maxViewEnd(),viewEnd+liveMargin));
  const start=end-n+1;
  const dataEnd=Math.min(idx,Math.ceil(end));
@@ -13716,6 +13734,30 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
      const openIsSell=t.side==='SELL';
      drawTradeArrow(ctx,xOpen,yOpen,openIsSell?'down':'up',openIsSell?TRADE_ARROW_RED:TRADE_ARROW_BLUE);
    }
+   // REPLAY IN LIVE: se al punto di replay il trade era ANCORA APERTO (apertura già raggiunta,
+   // chiusura ancora nel futuro), mostra l'andamento del profitto dall'apertura fino alla candela
+   // corrente, come una posizione viva (richiesto: "verranno aperte e visualizzate solo quando si
+   // arriva al punto in cui la posizione è stata aperta e con lo sviluppo dell'andamento del
+   // profitto"). Vale SOLO in Live: in Storico il comportamento resta identico a prima.
+   if(!closeReached && liveModeActive && openIdx<=idx){
+     const curP=currentPrice();
+     if(Number.isFinite(curP)){
+       const xNow=xForIndex(idx), yNow=y(curP);
+       const nowOnScreen=curP>=lo&&curP<=hi&&xNow>=pad.l-1&&xNow<=w-pad.r+1;
+       if(openOnScreen||nowOnScreen){
+         const inProfit=calculateForexPL(t.side,t.entry,curP,t.lots||1)>=0;
+         ctx.save();
+         ctx.setLineDash([6,5]);
+         ctx.strokeStyle=inProfit?TRADE_ARROW_BLUE:TRADE_ARROW_RED;
+         ctx.lineWidth=1.4;
+         ctx.globalAlpha=0.85;
+         ctx.beginPath();ctx.moveTo(xOpen,yOpen);ctx.lineTo(xNow,yNow);ctx.stroke();
+         ctx.setLineDash([]);
+         ctx.globalAlpha=1;
+         ctx.restore();
+       }
+     }
+   }
    if(closeOnScreen){
      const priceWentDown=t.exit<t.entry;
      drawTradeArrow(ctx,xClose,yClose,priceWentDown?'up':'down',priceWentDown?TRADE_ARROW_BLUE:TRADE_ARROW_RED);
@@ -15955,6 +15997,22 @@ function draw(){
        ctx.textAlign='left';ctx.textBaseline='alphabetic';
      }
      ctx.restore();
+   }
+ }
+ // REPLAY IN LIVE: guida verticale mentre si sceglie il punto (vedi avviaSelezioneReplayLive).
+ // Segue il dito/mouse; al rilascio la candela sotto la guida diventa il punto di replay. Tenuta
+ // separata dal mirino normale perché deve restare visibile anche durante il trascinamento/pan.
+ if(liveReplaySelecting){
+   const gx=Number.isFinite(liveReplayGuideClientX)?liveReplayGuideClientX:(crosshair?crosshair.x:NaN);
+   if(Number.isFinite(gx)){
+     const rectR=c.getBoundingClientRect();
+     const relXR=gx-rectR.left;
+     if(relXR>=pad.l && relXR<=w-pad.r){
+       ctx.save();
+       ctx.setLineDash([5,4]);ctx.strokeStyle='#3ea6ff';ctx.lineWidth=1.5;
+       ctx.beginPath();ctx.moveTo(relXR,pad.t);ctx.lineTo(relXR,h-pad.b);ctx.stroke();
+       ctx.restore();
+     }
    }
  }
  try{ disegnaStatoMercato(ctx,w,h,pad,chartBg,lineColor); }catch(e){}
@@ -18859,7 +18917,12 @@ function evaluate(){
  // funzione per il resto non tocca (le chiude il broker).
  const ownPositions=positions.filter(belongsToCurrentAsset).filter(p=>p.mt5Ticket==null);
  if(!ownPositions.length){ try{ tgStrategiaValuta(); }catch(e){} return; }
- const r=rows[idx];
+ // REPLAY IN LIVE: in Live la valutazione SL/TP resta SEMPRE agganciata all'ultima candela VERA
+ // (il "presente"), non al punto di replay. Così, mentre si rivede il passato, le posizioni
+ // simulate e gli ordini pendenti continuano a essere gestiti in tempo reale in background
+ // (scelta esplicita del proprietario). In Live normale idx coincide già con l'ultima candela,
+ // quindi il comportamento non cambia; cambia solo durante il replay.
+ const r=liveModeActive?rows[rows.length-1]:rows[idx];
  const rowTime=parseDateTime(r.date);
  [...ownPositions].forEach(pos=>{
    // Il gate va fatto sul tempo reale della candela di apertura (pos.startTime), non
@@ -18998,7 +19061,10 @@ function activatePendingOrder(p){
 }
 function checkPendingOrders(){
  if(!pendingOrders.length)return;
- const r=rows[idx];
+ // REPLAY IN LIVE: come in evaluate(), in Live gli ordini pendenti si attivano sulla candela
+ // VERA più recente, mai sul punto di replay (altrimenti un ordine si attiverebbe a un prezzo
+ // storico). Vedi il commento gemello in evaluate().
+ const r=liveModeActive?rows[rows.length-1]:rows[idx];
  if(!r)return;
  // Un ordine pendente si attiva quando il range (low..high) della candela corrente
  // tocca il prezzo di entrata scelto, esattamente come per SL/TP. Si controllano SOLO gli
@@ -19152,6 +19218,8 @@ function forward(){
  // spostato manualmente il grafico altrove (followLatest=false) restiamo dove si trova,
  // così può continuare a rivedere la cronologia mentre il replay prosegue sotto.
  if(followLatest)viewEnd=idx;
+ // REPLAY IN LIVE: raggiunta l'ultima candela vera il replay è finito, si torna in diretta da soli.
+ if(liveReplayActive && idx>=rows.length-1){ esciReplayLive(); return; }
  if(idx>=rows.length-1)$('status').textContent='Fine dello storico.';
  else if(positions.length)$('status').textContent=`Candela ${idx+1}/${rows.length} • ${positions.length} posizion${positions.length>1?'i':'e'} aperta/e.`;
  draw();update();
@@ -29186,7 +29254,9 @@ function playAlarmSound(soundId){
 //    attraversa — tracciato con d.lastSide ('above'/'below'), aggiornato ad ogni candela.
 function checkAlarmLines(){
  if(!rows||!rows.length||idx==null||idx<0||idx>=rows.length)return;
- const r=rows[idx];
+ // REPLAY IN LIVE: come per SL/TP, gli allarmi si valutano sull'ultima candela VERA, mai sul punto
+ // di replay (altrimenti ri-suonerebbero per attraversamenti già avvenuti nel passato).
+ const r=liveModeActive?rows[rows.length-1]:rows[idx];
  if(!r||!Number.isFinite(r.low)||!Number.isFinite(r.high))return;
  const lines=(drawings||[]).filter(d=>d&&d.type==='alarmline');
  if(!lines.length)return;
@@ -31650,7 +31720,10 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
      preserved.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
    }
  }
- masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ // REPLAY IN LIVE: durante il replay masterTime/idx restano CONGELATI sul punto scelto (i dati
+ // live continuano comunque ad aggiornare baseRows). Senza questo guard, ogni risincronizzazione
+ // (es. rollover di candela) riporterebbe la vista all'ultima candela, buttando via il replay.
+ if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
  // RICHIESTO ESPLICITAMENTE: subito dopo aver ricostruito lo storico per l'asset a grafico,
@@ -34399,7 +34472,7 @@ try{ const __smc=statoMercato(currentAssetKey,Date.now()); if(__smc&&__smc.chius
  // Live la candela in corso restava tagliata a quell'istante e si muoveva solo al ricaricamento
  // di fine candela. In Live i dati arrivano SEMPRE fino all'ultimo prezzo; spostare il grafico
  // cambia solo quale parte si guarda (viewEnd), non fin dove arrivano i dati.
- if(followLatest||liveModeActive)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+ if(!liveReplayActive&&(followLatest||liveModeActive))masterTime=closeTimeOf(baseRows[baseRows.length-1]);
  rebuildRows();
  if(followLatest)viewEnd=idx;
  return true;
@@ -35160,7 +35233,10 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
      preserved.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
    }
  }
- masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ // REPLAY IN LIVE: durante il replay masterTime/idx restano CONGELATI sul punto scelto (i dati
+ // live continuano comunque ad aggiornare baseRows). Senza questo guard, ogni risincronizzazione
+ // (es. rollover di candela) riporterebbe la vista all'ultima candela, buttando via il replay.
+ if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
  scanHistoricalSlTpTouches();
@@ -36420,7 +36496,10 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
    conservata.offsetFromEnd=Math.max(0,Math.round(conservata.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
   if(Number.isFinite(opts.tfChangeSpanMinutes))conservata.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
  }
- masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+ // REPLAY IN LIVE: durante il replay masterTime/idx restano CONGELATI sul punto scelto (i dati
+ // live continuano comunque ad aggiornare baseRows). Senza questo guard, ogni risincronizzazione
+ // (es. rollover di candela) riporterebbe la vista all'ultima candela, buttando via il replay.
+ if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
  scanHistoricalSlTpTouches();
@@ -37758,7 +37837,7 @@ async function guardianoCandeleMt5(){
  else{ lastPrimaryEpicPrice=bar.close; lastPrimaryEpicPriceAsset=currentAssetKey; livePriceByAsset[currentAssetKey]=bar.close; }
  try{
    rebuildBaseRowsFromLibrary();
-   masterTime=closeTimeOf(baseRows[baseRows.length-1]); // in Live sempre fino all'ultimo prezzo (vedi applyLivePriceToChart)
+   if(!liveReplayActive)masterTime=closeTimeOf(baseRows[baseRows.length-1]); // in Live sempre fino all'ultimo prezzo (vedi applyLivePriceToChart)
    rebuildRows();
    if(followLatest)viewEnd=idx;
    if(sorgente==='mt5')lastMt5ChartUpdateAt=Date.now(); else lastChartUpdateAt=Date.now();
@@ -39059,6 +39138,107 @@ function openLiveLoginModal(prefill){
 function closeLiveLoginModal(){
  $('liveLoginModalOverlay').style.display='none';
 }
+// ===================== REPLAY IN LIVE =====================
+// "Torna indietro nel tempo" mentre si è in Live: congela il grafico su un punto passato e lo fa
+// riavanzare candela per candela come nel backtest, mentre i dati live continuano ad arrivare in
+// background (baseRows). Vedi la spiegazione sulle variabili liveReplayActive/liveReplaySelecting
+// in cima al file e i guard nei caricatori/applyLivePriceToChart.
+// "GG/MM HH:MM" nel fuso orario mostrato dal grafico (stesso di assi e mirino).
+function liveReplayStamp(t){
+  try{
+    const p=tzParts(t);
+    return `${String(p.day).padStart(2,'0')}/${String(p.month).padStart(2,'0')} ${String(p.hour).padStart(2,'0')}:${String(p.minute).padStart(2,'0')}`;
+  }catch(e){ return ''; }
+}
+// Valore per il campo datetime-local (ora LOCALE del dispositivo, stessa convenzione con cui
+// new Date(valore) lo ritrasforma in istante).
+function liveReplayInputValue(t){
+  const d=new Date(t), p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+// Candela sotto una x dello schermo (scelta col trascinamento): stessa geometria del mirino.
+// Restituisce l'istante (ms) della candela più vicina, o null se fuori dall'area di plot.
+function liveReplayTimeFromClientX(clientX){
+  try{
+    const g=chartGeometry(); if(!g)return null;
+    const relX=clientX-g.rect.left;
+    if(relX<g.pad.l-2||relX>g.rect.width-g.pad.r+2)return null;
+    const nc=g.nearestCandle(relX);
+    if(!nc||!nc.row)return null;
+    const t=Number.isFinite(nc.time)?nc.time:parseDateTime(nc.row.date);
+    return Number.isFinite(t)?t:null;
+  }catch(e){ return null; }
+}
+// Entra in modalità "scegli il punto": si trascina il grafico e si rilascia sul punto desiderato.
+function avviaSelezioneReplayLive(){
+  if(!liveModeActive)return;
+  liveReplaySelecting=true; liveReplayGuideClientX=null;
+  const inp=$('liveReplayDateTime');
+  if(inp&&Number.isFinite(masterTime))inp.value=liveReplayInputValue(masterTime);
+  updateLiveReplayUI(); draw();
+  try{ $('status').textContent='🔁 Replay: trascina il grafico fino al punto e rilascia (oppure scrivi giorno e ora e premi Vai).'; }catch(e){}
+}
+// Fa partire DAVVERO il replay da un istante: congela masterTime/idx lì e mostra i comandi di
+// avanzamento (◀ ▶ PLAY). I dati live continuano ad arrivare in background.
+function avviaReplayLive(t){
+  if(!liveModeActive||!Number.isFinite(t))return;
+  liveReplaySelecting=false; liveReplayGuideClientX=null;
+  liveReplayActive=true;
+  masterTime=t;
+  rebuildRows();
+  followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+  const inp=$('liveReplayDateTime');
+  if(inp)inp.value=liveReplayInputValue(masterTime);
+  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+  updateLiveReplayUI();
+  draw();update();
+  try{ $('status').textContent=`🔁 Replay dal ${liveReplayStamp(masterTime)} • candela ${idx+1}/${rows.length}. Avanza con ◀ ▶ o PLAY, esci con ⏹ STOP.`; }catch(e){}
+}
+// Esce dal replay e torna in diretta (tasto STOP). Le posizioni simulate e gli ordini pendenti
+// sono SEMPRE rimasti agganciati all'ultima candela vera durante il replay (vedi evaluate()), quindi
+// non c'è nulla da "recuperare": basta riportare la vista all'ultima candela.
+function esciReplayLive(){
+  const era=liveReplayActive;
+  liveReplayActive=false; liveReplaySelecting=false; liveReplayGuideClientX=null;
+  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+  if(baseRows.length)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+  rebuildRows();
+  followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+  updateLiveReplayUI();
+  draw();update();
+  if(era)try{ $('status').textContent='⏹ Replay terminato: sei di nuovo in diretta.'; }catch(e){}
+}
+// Mostra/nascondi la barra Replay e i comandi di avanzamento. La barra è visibile SOLO in Live; il
+// tasto STOP compare solo mentre la scelta del punto o il replay sono attivi; le frecce ◀ ▶ + PLAY
+// (+ velocità) compaiono in Live solo durante il replay (in Live normale restano nascoste).
+function updateLiveReplayUI(){
+  const bar=$('liveReplayBar'); if(bar)bar.style.display=liveModeActive?'flex':'none';
+  const stop=$('liveReplayStopBtn'); if(stop)stop.style.display=(liveReplayActive||liveReplaySelecting)?'inline-block':'none';
+  const btn=$('liveReplayBtn'); if(btn)btn.style.display=(liveReplayActive||liveReplaySelecting)?'none':'inline-block';
+  const msg=$('liveReplayMsg'); if(msg)msg.textContent=liveReplaySelecting?'Trascina sul grafico e rilascia sul punto…':(liveReplayActive?'Replay attivo':'');
+  const pipHistArrows=$('pipHistBackBtn')?.parentElement;
+  if(pipHistArrows)pipHistArrows.style.display=(liveModeActive&&!liveReplayActive)?'none':'flex';
+  const replayRow=$('replayControlsRow');
+  if(replayRow&&liveModeActive)replayRow.style.display=liveReplayActive?'grid':'none';
+}
+$('liveReplayBtn')?.addEventListener('click',()=>{ avviaSelezioneReplayLive(); });
+$('liveReplayStopBtn')?.addEventListener('click',()=>{ esciReplayLive(); });
+$('liveReplayGoBtn')?.addEventListener('click',()=>{
+  const inp=$('liveReplayDateTime');
+  const t=inp?new Date(inp.value).getTime():NaN;
+  if(Number.isFinite(t))avviaReplayLive(t);
+});
+// Scelta del punto col trascinamento: la guida segue il dito/mouse, il punto si fissa al rilascio.
+$('chart')?.addEventListener('pointermove',e=>{
+  if(!liveReplaySelecting)return;
+  liveReplayGuideClientX=e.clientX; draw();
+},{passive:true});
+$('chart')?.addEventListener('pointerup',e=>{
+  if(!liveReplaySelecting)return;
+  const t=liveReplayTimeFromClientX(e.clientX);
+  if(Number.isFinite(t))avviaReplayLive(t);
+  else{ liveReplaySelecting=false; liveReplayGuideClientX=null; updateLiveReplayUI(); draw(); }
+});
 function updateLiveModeUI(){
  try{ fblContoDisegna(); }catch(e){}
  // RICHIESTO ESPLICITAMENTE: in Live, se il conto MT5 è collegato accanto al pallino rosso compare
@@ -39108,6 +39288,10 @@ function updateLiveModeUI(){
  // mostrare barre non veritiere.
  const volOpt=$('indicatorSelect')?.querySelector('option[value="volume_default"]');
  if(volOpt){ volOpt.disabled=!liveModeActive; volOpt.hidden=!liveModeActive; }
+ // REPLAY IN LIVE: fuori dal Live il replay non ha più senso (si torna allo Storico/replay CSV),
+ // quindi lo stato viene azzerato; in ogni caso la barra e i comandi vanno riallineati.
+ if(!liveModeActive){ liveReplayActive=false; liveReplaySelecting=false; liveReplayGuideClientX=null; }
+ updateLiveReplayUI();
 }
 $('liveModeSwitch').addEventListener('click',async()=>{
  if(liveModeActive){
