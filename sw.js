@@ -78,7 +78,14 @@
 //               errore latente: la funzione tgAutoEqua, usata per la scorciatoia "Piu' sul primo
 //               target", non era mai stata definita.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v136";
+//          v136 = perfezionamenti Replay Live (barra Replay in PIP/finestra separata, gradiente
+//               stile TradingView Bar Replay durante la scelta del punto, posizioni reali ancora
+//               aperte nascoste in replay coi soli trade rivelati e ricostruzione dei livelli,
+//               toggle "posizioni chiuse" senza orizzontali di prezzo).
+//          v137 = P/L delle posizioni reali MT5 identico al terminale: ovunque (etichetta sul
+//               grafico, casella TP/SL, box "P/L Live", tabelle) si usa profit+swap+commissione
+//               della fotografia del bridge, non piu' un ricalcolo col prezzo di un'altra fonte.
+const CACHE_NAME = "forex-backtest-lab-v137";
 const ASSETS = [
   "./",
   "./app.html",
