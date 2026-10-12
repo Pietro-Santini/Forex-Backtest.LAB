@@ -25402,7 +25402,12 @@ function fblStrategiaNormalizza(cfg,quantiTp){
   // mai raggiunto. Le regole impossibili si ignorano invece di fingere che valgano.
   regole.push((r==='entrata'||(/^[1-9]$/.test(r)&&Number(r)<=i))?r:'');
  }
- return {modo,equa:!!(c&&c.equa),quote:q,regole,tp:n};
+ // Pareggio anticipato (RICHIESTO, cronologia sale): prima del TP1, quando il prezzo ha percorso
+ // pct% della distanza entrata->TP1, lo stop va al pareggio. Spento finche' non lo si accende.
+ const avvIn=(c&&c.avv&&typeof c.avv==='object')?c.avv:{};
+ const avvPct=Number(avvIn.pct);
+ const avv={attivo:!!avvIn.attivo,pct:(isFinite(avvPct)&&avvPct>=10&&avvPct<=100)?avvPct:70};
+ return {modo,equa:!!(c&&c.equa),quote:q,regole,tp:n,avv};
 }
 window.fblStrategiaNormalizza=fblStrategiaNormalizza;
 
@@ -25440,6 +25445,9 @@ function fblSimulaStrategia(seg,ser,cfg){
  // PASSO 20: il percorso dello stop (tempo + livello), per disegnarlo a grafico: parte dallo stop
  // iniziale e si allunga a ogni spostamento deciso dalla strategia.
  const storicoStop=[{t:inizio,p:slIniziale}];
+ // Pareggio anticipato: livello a cui scatta (frazione del cammino entrata->TP1).
+ const livAvv=(st.avv&&st.avv.attivo)?(entry+(tps[0]-entry)*(st.avv.pct/100)):NaN;
+ let beFatto=false;
 
  const dentro=(ser||[]).filter(c=>Number(c.t)>=inizio);
  for(let j=0;j<dentro.length;j++){
@@ -25468,11 +25476,18 @@ function fblSimulaStrategia(seg,ser,cfg){
    // rischio dopo aver gia' incassato, che non e' mai quello che si vuole.
    if(nuovoStop!=null&&isFinite(nuovoStop)&&(buy?nuovoStop>stop:nuovoStop<stop)){ stop=nuovoStop; storicoStop.push({t:c.t,p:stop}); }
   }
+  // Pareggio anticipato: il livello e' stato toccato in questa candela -> da QUI lo stop e' a
+  // pareggio (vale dalla candela dopo: se nella stessa candela tocca anche lo stop vecchio, conta
+  // lo stop vecchio, come per tutta la cronologia). Solo in avanti: mai peggiorare uno stop.
+  if(!beFatto&&isFinite(livAvv)&&(buy?c.h>=livAvv:c.l<=livAvv)){
+   beFatto=true;
+   if(buy?entry>stop:entry<stop){ stop=entry; storicoStop.push({t:c.t,p:stop}); }
+  }
   presi+=nuovi;
   if(presi>=tps.length){ uscita=tps[tps.length-1]; rimasto=0; break; }
  }
  const aperta=rimasto>1e-9;
- return {R:Math.round(R*1e6)/1e6, presi, chiuse, ambiguo, aperta, stopFinale:stop,
+ return {R:Math.round(R*1e6)/1e6, presi, chiuse, ambiguo, aperta, stopFinale:stop, beAnticipato:beFatto,
          uscita, tFine:fine, entry, rischio, modo:st.modo, stopColpito, storicoStop,
          esito: aperta?('in corso'+(presi?(' (TP'+presi+')'):''))
                : (presi>=tps.length?'tutti i TP':(presi?('TP'+presi+' poi stop'):'stop'))};
@@ -25559,10 +25574,10 @@ function tgAutoRegolePrudenti(quanti){
  for(let i=0;i<(quanti||TG_AUTO_MAX_TP);i++)r.push(i===0?'entrata':String(i));
  return r;
 }
-// STRATEGIA UNIVERSALE (RICHIESTA): una configurazione sola - regole per dieci take profit, rischio
+// STRATEGIA UNIVERSALE (RICHIESTA): una configurazione sola - regole per quindici take profit, rischio
 // e massimo posizioni per sala - che, accesa, sostituisce quella di ogni sala. Delle sale resta solo
 // la spunta "Auto": da quali aprire lo decidi ancora sala per sala.
-const TG_AUTO_UNI_TP=10;
+const TG_AUTO_UNI_TP=15;
 function tgAutoUni(A){
  A=A||tgAuto;
  if(!A.universale||typeof A.universale!=='object')
@@ -40526,7 +40541,9 @@ function stratDallaUi(n){
   q.push(equa?Math.round(10000/n)/100:(Number($('fblStratQ'+i)?.value)||0));
   r.push(String($('fblStratR'+i)?.value||''));
  }
- return {modo:($('fblStratModo')?.value==='parziali')?'parziali':'posizioni',equa,quote:q,regole:r};
+ const avvPct=Number($('fblStratAvvPct')?.value);
+ const avv={attivo:!!$('fblStratAvvAttivo')?.checked,pct:(isFinite(avvPct)&&avvPct>=10&&avvPct<=100)?avvPct:70};
+ return {modo:($('fblStratModo')?.value==='parziali')?'parziali':'posizioni',equa,quote:q,regole:r,avv};
 }
 function stratDisegna(sala,ris){
  const box=$('fblStrategiaUi'); if(!box)return;
@@ -40569,6 +40586,19 @@ function stratDisegna(sala,ris){
   +'La percentuale dice <b>quanto pesa</b> quel target, non dove va lo stop. Lo stop si muove solo '
   +'se lo scegli nella casella accanto: lasciandola su «dov\'è», quando quel target arriva lo stop '
   +'non si sposta di un millimetro.</div>';
+ // RICHIESTO: stop a pareggio PRIMA di aver preso il TP1, deciso come percentuale del cammino.
+ // Cosi' un segnale che arriva vicino al TP1 e poi torna indietro non finisce in perdita ma a
+ // pareggio, e i risultati cambiano: serve a scegliere la strategia giusta per ogni sala.
+ h+='<div class="riga" style="flex-wrap:wrap"><label class="eti" style="display:flex;align-items:center;gap:6px;cursor:pointer">'
+  +'<input type="checkbox" id="fblStratAvvAttivo"'+(cfg.avv.attivo?' checked':'')+'> <b>Stop a pareggio prima del TP1</b></label>'
+  +'<span class="eti">· quando il prezzo percorre il</span>'
+  +'<input type="number" id="fblStratAvvPct" min="10" max="100" step="5" value="'+cfg.avv.pct+'"><span class="eti">%</span>'
+  +'<span class="eti">della distanza fra entrata e TP1</span>'
+  +'<div class="eti" style="flex:1 1 100%;line-height:1.5;margin:2px 0 8px;color:#8b96a5">'
+  +(cfg.avv.attivo
+    ? 'Acceso: appena il prezzo copre il <b>'+cfg.avv.pct+'%</b> della strada fra entrata e TP1, lo stop passa all\'entrata. Se poi torna indietro il segnale chiude a <b>pareggio</b> invece che in perdita. Dopo il TP1 vale la strategia qui sotto. Se nella stessa candela il prezzo tocca anche lo stop iniziale, si conta lo stop (prudente).'
+    : 'Spento: lo stop resta dov\'è finché non scatta il TP1. Accendilo per provare a quale percentuale lo stop a pareggio conviene su questa sala, poi premi Calcola.')
+  +'</div></div>';
  for(let i=0;i<n;i++){
   h+='<div class="riga"><b>TP'+(i+1)+'</b>'
    +'<span class="eti">'+(parziali?'chiudo il':'quota')+'</span>';
@@ -40600,6 +40630,14 @@ function stratDisegna(sala,ris){
 // Cambiando metodologia la tabella sotto cambia forma (sparisce o torna la colonna dello stop):
 // va ridisegnata subito, altrimenti si resta a guardare i comandi di prima.
 fblDelega('change',ev=>{
+ if(ev.target&&(ev.target.id==='fblStratAvvAttivo'||ev.target.id==='fblStratAvvPct')){
+  const salaA=$('fblCronoSala')?.value||''; if(!salaA)return;
+  const risA=(vista.asset?risultatiDi(salaA,vista.asset):null)||[];
+  stratSalva(salaA,stratDallaUi(stratQuantiTp(risA,salaA)));
+  stratDisegna(salaA,risA);   // aggiorna il testo che spiega cosa fa
+  try{ rendCalcola(); }catch(e){}
+  return;
+ }
  if(!(ev.target&&(ev.target.id==='fblStratModo'||ev.target.id==='fblStratEqua')))return;
  const sala=$('fblCronoSala')?.value||''; if(!sala)return;
  const ris=(vista.asset?risultatiDi(sala,vista.asset):null)||[];

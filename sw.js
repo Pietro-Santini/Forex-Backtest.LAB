@@ -53,10 +53,14 @@
 //               di Capital.com); linee TP/SL/entrata evidenziate mentre si premono
 //          v125 = nuovo indicatore "Gann 21.7 Profit Factor (4h)" nativo in INDICATOR_DEFS,
 //               personalizzabile dal pannello impostazioni (34 parametri)
-//          v130 = candele/disegni a mercato chiuso: lo scarto orologio broker<->UTC non si
+//          v129 = candele/disegni a mercato chiuso: lo scarto orologio broker<->UTC non si
 //               ricalcola piu' da un tick fermo (capitava partendo a weekend chiuso: le
 //               candele "saltavano" nel futuro). Il servizio candele ora scarta gli scarti
 //               impossibili e ricorda quello buono su disco fra un riavvio e l'altro.
+//          v130 = grafico Live 22-23: i prezzi Capital.com vengono riportati al livello MT5
+//               (niente piu' salto di decine di punti alle 22) e le candele 22-23 gia' salvate
+//               si riallineano alla riapertura; cronologia sale: stop a pareggio prima del TP1
+//               (percentuale del cammino verso il TP1) nel calcolo della resa.
 // ---------------------------------------------------------------------------
 const CACHE_NAME = "forex-backtest-lab-v130";
 const ASSETS = [
