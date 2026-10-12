@@ -14,7 +14,10 @@
 //  4. si avanza candela per candela con forward(); arrivati all'ultima candela si esce da soli;
 //  5. guardia di riga: i 5 punti che in Live riporterebbero masterTime all'ultima candela sono
 //     tutti protetti da liveReplayActive (senza di questi ogni risincronizzazione butterebbe via
-//     il replay durante un rollover).
+//     il replay durante un rollover);
+//  6. durante il replay le posizioni REALI aperte spariscono dal grafico, i trade rivelati
+//     mostrano la ricostruzione dei livelli (entry/TP/SL da bordo a bordo) e in diretta le chiuse
+//     tornano nascoste (interruttore spento di default).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -189,4 +192,109 @@ test('5) guardie anti-reset del replay presenti nei 5 punti critici', () => {
             'evaluate, checkPendingOrders e checkAlarmLines usano l\'ultima candela vera in Live');
   assert.ok(APP.includes('function updateLiveReplayUI(){'), 'esiste updateLiveReplayUI');
   assert.ok(APP.includes('id="liveReplayBar"'), 'la barra Replay è nel markup');
+});
+
+test('6) in replay: posizioni reali nascoste, trade rivelati con ricostruzione livelli', async () => {
+  // RICHIESTE ESPLICITE:
+  //  - in modalità replay le posizioni REALI ancora aperte spariscono dal grafico (linee,
+  //    etichette target/stop/stop profit, caselle e P/L) e riappaiono solo tornando in diretta;
+  //  - i trade rivelati dal replay (apertura raggiunta: openIdx<=idx) mostrano la ricostruzione
+  //    del posizionamento: le linee orizzontali dei loro livelli (entry, TP, SL / Stop Profit),
+  //    da bordo a bordo, come chiesto per il "riavvolgimento".
+  //  - le orizzontali dei trade chiusi NON dipendono dall'interruttore "posizioni chiuse" durante
+  //    il replay; in diretta (interruttore spento di default) spariscono e le chiuse non si vedono.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate((JS) => {
+      const R = JSON.parse(JS);
+      // Conteggio delle righe orizzontali che attraversano TUTTO il grafico (bordo sinistro →
+      // bordo destro, a y costante): il metodo usato per le righe di prezzo negli altri test.
+      const proto = CanvasRenderingContext2D.prototype;
+      const vM = proto.moveTo, vL = proto.lineTo, vS = proto.stroke;
+      let ultimo = null, intere = 0, larghezza = 0;
+      const righe = [];
+      proto.moveTo = function (x, y) { ultimo = {x1: x, y1: y}; return vM.apply(this, arguments); };
+      proto.lineTo = function (x, y) { if (ultimo) { ultimo.x2 = x; ultimo.y2 = y; } return vL.apply(this, arguments); };
+      proto.stroke = function () {
+        if (ultimo && ultimo.x2 != null && Math.abs(ultimo.y1 - ultimo.y2) < 0.5
+            && ultimo.x1 < 25 && (ultimo.x2 - ultimo.x1) > larghezza * 0.9) {
+          intere++;
+          righe.push({y1: Math.round(ultimo.y1 * 10) / 10, x1: Math.round(ultimo.x1), x2: Math.round(ultimo.x2),
+                      a: this.globalAlpha, c: String(this.strokeStyle || '')});
+        }
+        ultimo = null;
+        return vS.apply(this, arguments);
+      };
+      let righeVuoto = [], righeLivelli = [], righeAperta = [], righeDiretta = [];
+      const conta = (tag) => {
+        intere = 0; righe.length = 0;
+        draw();
+        if (tag === 'V') righeVuoto = righe.slice();
+        if (tag === 'L') righeLivelli = righe.slice();
+        if (tag === 'A') righeAperta = righe.slice();
+        if (tag === 'D') righeDiretta = righe.slice();
+        return intere;
+      };
+
+      currentTF = 1; liveModeActive = true;
+      currentAssetKey = 'TESTX'; if (typeof rowsAssetKey !== 'undefined') rowsAssetKey = 'TESTX';
+      baseRows = R; rows = R; idx = 2; viewEnd = 2;
+      masterTime = closeTimeOf(R[2]); slTpScanDoneForAsset = 'TESTX';
+      larghezza = (document.getElementById('chart').clientWidth || 800) - 40;
+      positions = []; active = null; trades = [];
+
+      avviaReplayLive(parseDateTime(R[0].date));   // il grafico è sul passato: idx = 0
+      // Scala verticale fissa e nota (97–103): così i 3 livelli scelti del trade rivelato stanno
+      // tutti dentro il range e il test è deterministico (l'auto-fit del replay, altrimenti,
+      // apre una finestra ~±1.1 attorno al prezzo che taglia fuori i livelli più lontani).
+      followLatest = false; viewPriceLo = 97; viewPriceHi = 103; priceZoomFactor = 1;
+      const vuoto = conta('V');
+
+      // Trade CHIUSO nel passato (09:00 → 09:02) la cui apertura è già stata raggiunta dal
+      // replay (openIdx 0 <= idx 0): si vedono i 3 livelli ricostruiti (entry, TP, SL).
+      const t0 = parseDateTime(R[0].date), t2 = parseDateTime(R[2].date);
+      trades = [{id: 'T1', asset: 'TESTX', side: 'BUY', mode: 'live', mt5Ticket: null,
+                 entry: 100, exit: 100.2, sl: 99.5, tp: 101.5, rrSl: 99.5, lots: 0.1, result: 'Loss',
+                 pips: 10, pl: 10, pct: 0.5, account: 1000, strategy: '',
+                 startTime: t0, closedAt: new Date(t2).toISOString()}];
+      const livelli = conta('L');
+
+      // Posizione APERTA reale (same scala, entry 100.5 dentro la zoom): durante il replay
+      // NON deve comparire, quindi la lista delle righe nuove resta identica a quella dei soli
+      // livelli rivelati. SL/TP messi fuori portata (80/200) così l'eventuale evaluate() di
+      // STOP non la chiude.
+      positions = [{id: 'P1', asset: 'TESTX', side: 'BUY', entry: 100.5, sl: 80, tp: 200, rrSl: 80,
+                    lots: 0.1, start: 1, startTime: t0 + 60000, marginUsed: 10}];
+      const conAperta = conta('A');
+
+      esciReplayLive();                    // STOP: si torna in diretta
+      // In diretta ri-fissa la scala (98–103, così l'entry dell'aperta, 100.5, rientra a schermo)
+      // perché esciReplayLive riattiva followLatest e l'auto-fit la rifarebbe da sé.
+      followLatest = false; viewPriceLo = 98; viewPriceHi = 103; priceZoomFactor = 1;
+      const inDiretta = conta('D');   // l'aperta torna (riga di entrata), le chiuse (interruttore off) no
+
+      proto.moveTo = vM; proto.lineTo = vL; proto.stroke = vS;
+      const kw = (r) => r.y1 + '|' + r.a + '|' + r.c;
+      const diff = (A, B) => B.filter(b => !A.some(a => kw(a) === kw(b))).map(kw);
+      return {
+        extraL: diff(righeVuoto, righeLivelli),
+        extraA: diff(righeVuoto, righeAperta),
+        extraD: diff(righeVuoto, righeDiretta),
+      };
+    }, TRE_CANDELE_JS);
+    // extraL: righe piene NUOVE (y+alpha+colore) rispetto al grafico vuoto. La ricostruzione
+    // disegna le 3 linee dei livelli (entry, TP, SL) con alpha 0.6 e i suoi colori → ognuna è
+    // una riga distinta; la griglia di prezzo ha alpha/colori diversi e non interferisce.
+    assert.equal(r.extraL.length, 3,
+      'il trade rivelato mostra la ricostruzione: entry, TP e SL da bordo a bordo. extraL=' + JSON.stringify(r.extraL));
+    assert.ok(r.extraL.some(k => k.includes('#2fbf71')),
+      'tra i livelli ricostruiti c\'è anche la linea del TP (verde): ' + JSON.stringify(r.extraL));
+    assert.ok(r.extraL.some(k => k.includes('#3b82f6')),
+      'tra i livelli ricostruiti c\'è anche la linea dell\'entry (blu): ' + JSON.stringify(r.extraL));
+    assert.equal(r.extraA.length, r.extraL.length,
+      'durante il replay la posizione REALE aperta non aggiunge nessuna riga (restano solo i livelli rivelati): extraA=' + JSON.stringify(r.extraA));
+    assert.equal(r.extraD.length, 1,
+      'tornati in diretta, della posizione aperta resta la sua riga di entrata (le chiuse, interruttore spento, spariscono del tutto): extraD=' + JSON.stringify(r.extraD));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
 });
