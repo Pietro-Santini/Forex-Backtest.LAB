@@ -48,9 +48,9 @@ test('una sala con piu di cinque target non viene piu troncata', async () => {
       window.__metti('Sala Enorme', [new Array(20).fill(0).map((_, i) => i + 1)]);
       return {otto: stratQuantiTp([], 'Sala Generosa'), tanti: stratQuantiTp([], 'Sala Enorme'), tetto: FBL_MAX_TP};
     }, METTI.toString());
-    assert.equal(r.tetto, 10, 'il tetto dei target deve essere dieci, come la strategia universale');
+    assert.equal(r.tetto, 15, 'il tetto dei target deve essere quindici, come la strategia universale');
     assert.equal(r.otto, 8, 'otto target devono restare otto, non cinque');
-    assert.equal(r.tanti, 10, 'oltre il tetto ci si ferma al tetto, non si sbaglia');
+    assert.equal(r.tanti, 15, 'oltre il tetto ci si ferma al tetto, non si sbaglia');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

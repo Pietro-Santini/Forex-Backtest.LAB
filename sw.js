@@ -62,7 +62,7 @@
 //               si riallineano alla riapertura; cronologia sale: stop a pareggio prima del TP1
 //               (percentuale del cammino verso il TP1) nel calcolo della resa.
 // ---------------------------------------------------------------------------
-const CACHE_NAME = "forex-backtest-lab-v130";
+const CACHE_NAME = "forex-backtest-lab-v131";
 const ASSETS = [
   "./",
   "./app.html",

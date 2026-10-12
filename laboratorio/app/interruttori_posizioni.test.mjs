@@ -48,12 +48,13 @@ test('due interruttori separano le linee apertura/chiusura dalle linee di prezzo
   } finally { await browser.close(); }
 });
 
-// SEGNALATO dal proprietario (9 ottobre 2026): con l'interruttore acceso comparivano le
-// orizzontali di prezzo anche delle operazioni GIA' CHIUSE. Con uno storico lungo sono centinaia
-// di righe che attraversano tutto il grafico: «esce fuori un bordello».
-// Devono esserci solo sulle posizioni APERTE, dove dicono a che prezzo si e' entrati su
-// un'operazione ancora viva. Su una conclusa non aggiungono niente: ci sono gia' frecce e casella.
-test('le orizzontali di prezzo si vedono solo sulle posizioni aperte, mai sui trade chiusi', async () => {
+// PUNTO 6 (richiesto dal proprietario): un interruttore NUOVO, "posizioni chiuse a grafico",
+// decide se vedere anche le operazioni GIA' CHIUSE. Di base e' SPENTO: a grafico resta solo cio'
+// che e' ancora aperto. Acceso, le chiuse tornano con frecce, linea che le congiunge e orizzontali
+// di entrata, uscita, TP e SL.
+// RICHIESTA PRECEDENTE (resta valida): le orizzontali di PREZZO (la riga del prezzo di entrata,
+// da bordo a bordo) dipendono dal loro interruttore, che ne toglie esattamente una.
+test('le posizioni chiuse compaiono solo col loro interruttore, e le righe di prezzo restano sulle aperte', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(() => {
@@ -97,7 +98,9 @@ test('le orizzontali di prezzo si vedono solo sulle posizioni aperte, mai sui tr
       const vuoto = conta();
       const trattiVuoto = tuttiTratti();
 
-      // a) dieci operazioni CHIUSE, nessuna aperta
+      // a) dieci operazioni CHIUSE, nessuna aperta. Di base l'interruttore delle posizioni chiuse
+      //    e' SPENTO: non devono comparire affatto a grafico.
+      localStorage.setItem('fbl_posizioni_chiuse', '0');
       trades = [];
       for (let i = 0; i < 10; i++) trades.push({
         id: 'T' + i, asset: 'TEST:ASSET', side: i % 2 ? 'BUY' : 'SELL',
@@ -107,10 +110,14 @@ test('le orizzontali di prezzo si vedono solo sulle posizioni aperte, mai sui tr
         // disegnate affatto, e il test passerebbe per il motivo sbagliato.
         startTime: t0 + (150 + i * 10) * 60000, closedAt: new Date(t0 + (170 + i * 10) * 60000).toISOString()
       });
-      const soloChiuse = conta() - vuoto;
-      // CONTROLLO: le operazioni chiuse devono essere disegnate davvero (frecce, casella,
-      // connettori). Se non lo fossero, l'assenza delle righe di prezzo non direbbe niente.
-      const chiuseDisegnate = tuttiTratti() - trattiVuoto;
+      const chiuseSpente = tuttiTratti() - trattiVuoto;
+
+      // a2) le STESSE operazioni, con l'interruttore ACCESO: si vedono (frecce, casella,
+      //     connettori) e mostrano anche le loro orizzontali di entrata/uscita/TP/SL (Punto 6).
+      localStorage.setItem('fbl_posizioni_chiuse', '1');
+      const soloChiuseAccese = conta() - vuoto;
+      const chiuseAccese = tuttiTratti() - trattiVuoto;
+      localStorage.setItem('fbl_posizioni_chiuse', '0');
 
       // b) una posizione APERTA, nessuna chiusa
       trades = [];
@@ -124,12 +131,14 @@ test('le orizzontali di prezzo si vedono solo sulle posizioni aperte, mai sui tr
       localStorage.setItem('fbl_linee_prezzo', '1');
 
       proto.moveTo = vM; proto.lineTo = vL; proto.stroke = vS;
-      return {soloChiuse, conAperta, apertaSpenta, chiuseDisegnate};
+      return {chiuseSpente, chiuseAccese, soloChiuseAccese, conAperta, apertaSpenta};
     });
-    assert.ok(r.chiuseDisegnate > 0,
-      'le operazioni chiuse non vengono disegnate affatto: cosi il test non proverebbe niente');
-    assert.equal(r.soloChiuse, 0,
-      'dieci operazioni chiuse hanno aggiunto ' + r.soloChiuse + ' righe di prezzo al grafico: non devono essercene');
+    assert.equal(r.chiuseSpente, 0,
+      'di base le operazioni chiuse non devono comparire a grafico (interruttore spento)');
+    assert.ok(r.chiuseAccese > 0,
+      'con l interruttore acceso le operazioni chiuse devono essere disegnate davvero');
+    assert.ok(r.soloChiuseAccese > 0,
+      'con l interruttore acceso le chiuse mostrano anche le loro orizzontali (Punto 6): ' + r.soloChiuseAccese);
     // Una posizione aperta disegna anche altre orizzontali che partono da sinistra (le TP/SL
     // della sua casella), e dipendono da altri interruttori. Quello che si misura qui e' la
     // DIFFERENZA: spegnendo questo interruttore deve sparire esattamente UNA riga, quella del
