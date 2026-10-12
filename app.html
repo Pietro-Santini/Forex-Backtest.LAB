@@ -3273,6 +3273,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <option value="ema_ind">Moving Average Exponential [EMA]</option>
      <option value="bsl_ssl_fvg">Buyside &amp; Sellside Liquidity + Aligned FVGs [LuxAlgo]</option>
      <option value="ict_reversal_setup">ICT Reversal Setup [Quant]</option>
+     <option value="order_blocks">Order Blocks (OB)</option>
      <option value="tvp3d">Temporal Volume Profile 3D</option>
      <option value="vp_daily">Profili volumetrici giornalieri</option>
      <option value="vp_sessions">Profili volumetrici delle sessioni</option>
@@ -12387,8 +12388,140 @@ const INDICATOR_DEFS={
        ctx.restore();
      }
    }
- }
- ,
+ },
+ order_blocks:{
+   label:'Order Blocks (OB)',
+   // RICHIESTO ESPLICITAMENTE: due regole di rilevamento, scegliibili dalle impostazioni:
+   //   - "struttura" (ICT/LuxAlgo): l'OB nasce quando il prezzo CHIUDE oltre l'ultimo pivot
+   //     confermato (rottura di struttura). La zona e' la candela ORIGINE del movimento, cioe'
+   //     quella con il minimo piu' basso (rialzista) / massimo piu' alto (ribassista) fra il
+   //     pivot e la candela di rottura.
+   //   - "impulso": l'OB e' l'ultima candela di colore OPPOSTO prima di N candele decise
+   //     consecutive (corpo >= impulsoCorpoPct% dell'ampiezza), senza alcuna rottura richiesta.
+   //   - "entrambe": le unisce. Cosi' l'utente puo' tenere la regola classica ICT, quella semplice,
+   //     o tutte e due, senza dover cambiare indicatore.
+   // MITIGAZIONE (richiesta): quando il prezzo torna a TOCCARE la zona, la zona "si spegne":
+   // il rettangolo si FERMA alla candela del tocco e viene ridisegnato in grigio/sfumato.
+   // TETTO MASSIMO di zone: si disegnano solo le ultime "maxZone" (impostabile), per non
+   // affollare il grafico su periodi lunghi.
+   defaultParams:()=>({
+     regola:'entrambe', pivotLen:5, impulsoCandele:3, impulsoCorpoPct:60, maxZone:20,
+     mitigazione:true, mostraMitigate:true, estensione:0, opacita:16, mostraEtichetta:true,
+     bullColor:'#26d07c', bearColor:'#f23645', mitigColor:'#6b7683', textColor:'#ffffff'
+   }),
+   compute(rows, upToIdx, ind){
+     const p=ind.params, st=ind.calc;
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+       st.zones=[]; st.lastPH=NaN; st.lastPHBar=null; st.lastPL=NaN; st.lastPLBar=null;
+       st.bRun=0; st.sRun=0; st.bOpp=null; st.sOpp=null;
+     }
+     const L=Math.max(1,p.pivotLen|0);
+     const reg=p.regola||'entrambe';
+     const usaStrut=(reg==='struttura'||reg==='entrambe');
+     const usaImp=(reg==='impulso'||reg==='entrambe');
+     const N=Math.max(2,p.impulsoCandele|0);
+     const corpoPct=Math.min(100,Math.max(1,Number(p.impulsoCorpoPct)||60))/100;
+     const isBullC=r=>r.close>r.open, isBearC=r=>r.close<r.open;
+     const forte=(r,dir)=>{ const range=r.high-r.low; if(!(range>0))return false;
+       if(Math.abs(r.close-r.open)/range<corpoPct)return false;
+       return dir>0?isBullC(r):isBearC(r); };
+     // La zona e' la candela origine del movimento: mai la candela della rottura stessa.
+     const creaOB=(fromBar,toBar,dir)=>{
+       if(fromBar==null||fromBar<0)return null;
+       const fine=Math.max(fromBar, toBar-1);
+       let best=fromBar;
+       for(let k=fromBar;k<=fine;k++){ if(dir>0){ if(rows[k].low<rows[best].low)best=k; } else { if(rows[k].high>rows[best].high)best=k; } }
+       const o=rows[best]; if(!o)return null;
+       return {dir:dir>0?'bull':'bear', x1:best, creato:toBar, top:o.high, bottom:o.low, mitigated:false, mitIdx:null, src:'struttura'};
+     };
+     for(let i=st.builtTo+1;i<=upToIdx;i++){
+       const r=rows[i]; if(!r)continue;
+       if(usaStrut){
+         // ta.pivothigh/pivotlow: il pivot si conferma L barre dopo (cand = i-L).
+         const cand=i-L;
+         if(cand-L>=0){
+           let isHigh=true,isLow=true; const hv=rows[cand].high, lv=rows[cand].low;
+           for(let k=cand-L;k<=cand+L;k++){ if(k===cand)continue;
+             if(rows[k].high>hv)isHigh=false; if(rows[k].low<lv)isLow=false;
+             if(!isHigh&&!isLow)break; }
+           if(isHigh){ st.lastPH=hv; st.lastPHBar=cand; }
+           if(isLow){ st.lastPL=lv; st.lastPLBar=cand; }
+         }
+         if(i>=1 && Number.isFinite(st.lastPH) && rows[i-1].close<=st.lastPH && r.close>st.lastPH){
+           const z=creaOB(st.lastPHBar,i,1); if(z)st.zones.push(z);
+         }
+         if(i>=1 && Number.isFinite(st.lastPL) && rows[i-1].close>=st.lastPL && r.close<st.lastPL){
+           const z=creaOB(st.lastPLBar,i,-1); if(z)st.zones.push(z);
+         }
+       }
+       if(usaImp){
+         if(forte(r,1)){
+           if(st.bRun===0){ if(i>=1 && isBearC(rows[i-1])){ st.bRun=1; st.bOpp=i-1; } }
+           else st.bRun++;
+           if(st.bRun===N){ const o=rows[st.bOpp]; st.zones.push({dir:'bull',x1:st.bOpp,creato:i,top:o.high,bottom:o.low,mitigated:false,mitIdx:null,src:'impulso'}); }
+         } else st.bRun=0;
+         if(forte(r,-1)){
+           if(st.sRun===0){ if(i>=1 && isBullC(rows[i-1])){ st.sRun=1; st.sOpp=i-1; } }
+           else st.sRun++;
+           if(st.sRun===N){ const o=rows[st.sOpp]; st.zones.push({dir:'bear',x1:st.sOpp,creato:i,top:o.high,bottom:o.low,mitigated:false,mitIdx:null,src:'impulso'}); }
+         } else st.sRun=0;
+       }
+       if(p.mitigazione){
+         for(let q=0;q<st.zones.length;q++){
+           const z=st.zones[q];
+           if(z.mitigated || i<=z.creato)continue; // il tocco non vale sulla candela che la crea
+           if(z.dir==='bull'){ if(r.low<=z.top){ z.mitigated=true; z.mitIdx=i; } }
+           else { if(r.high>=z.bottom){ z.mitigated=true; z.mitIdx=i; } }
+         }
+       }
+       // Tetto di memoria: le zone non ancora mitigate possono vivere a lungo, ma oltre un certo
+       // numero (proporzionato al tetto visibile) le piu' vecchie non servono piu' a nulla.
+       const cap=Math.max(500,(Number(p.maxZone)||20)*5);
+       if(st.zones.length>cap)st.zones.splice(0, st.zones.length-cap);
+     }
+     st.builtTo=upToIdx;
+   },
+   render(ctx,ind,rows,dataStart,dataEnd,xAbs,y){
+     const st=ind.calc, p=ind.params;
+     if(!st||st.builtTo<0)return;
+     const maxZone=Math.max(1,Number(p.maxZone)||20);
+     const opac=Math.max(0,Math.min(100,Number(p.opacita)||16))/100;
+     const est=Math.max(0,Number(p.estensione)||0);
+     const visibili=st.zones.filter(z=>z.x1<=dataEnd+2).slice(-maxZone);
+     if(!visibili.length)return;
+     ctx.save();
+     ctx.font=scaledFont('9px system-ui,sans-serif');
+     ctx.textBaseline='top'; ctx.textAlign='left';
+     for(const z of visibili){
+       const mitigata=!!z.mitigated;
+       if(mitigata && !p.mostraMitigate)continue;
+       const x1raw=Math.max(z.x1, dataStart-2);
+       // Mitigata: il rettangolo SI FERMA alla candela del tocco. Non mitigata: si estende a
+       // destra (fino al bordo visibile, piu' l'eventuale estensione in barre).
+       const x2raw=mitigata&&z.mitIdx!=null ? z.mitIdx : (dataEnd+est);
+       const xa=xAbs(x1raw), xb=xAbs(x2raw);
+       if(xb<=xa)continue;
+       const col=mitigata?(p.mitigColor||'#6b7683'):(z.dir==='bull'?(p.bullColor||'#26d07c'):(p.bearColor||'#f23645'));
+       const yT=y(z.top), yB=y(z.bottom);
+       const top=Math.min(yT,yB), hh=Math.max(1,Math.abs(yB-yT));
+       ctx.fillStyle=hexToRgba(col, mitigata?opac*0.55:opac);
+       ctx.fillRect(xa, top, xb-xa, hh);
+       ctx.strokeStyle=hexToRgba(col, mitigata?0.3:0.65); ctx.lineWidth=1;
+       ctx.strokeRect(xa, top, xb-xa, hh);
+       if(p.mostraEtichetta){
+         const lbl=(z.dir==='bull'?'OB+':'OB-')+(mitigata?' \u2713':'');
+         ctx.fillStyle=col;
+         ctx.fillText(lbl, xa+3, top+3);
+         // Registrato per i pallini Absorption/Rejection del footprint: un pallino non deve
+         // finire sopra l'etichetta della zona.
+         const w=ctx.measureText(lbl).width;
+         labelPlacements.push({x:xa+2,y:top+2,w:w+4,h:12});
+       }
+     }
+     ctx.restore();
+   }
+ },
  // "Convertito con AI": non passa dal mini-interprete Pine-like, ma esegue direttamente il
  // codice compute/render ottenuto (fuori da qui, vedi modulo "🤖 Converti con un assistente
  // AI") da un assistente esterno. Compilato UNA volta con new Function() e tenuto in cache
@@ -13139,6 +13272,24 @@ function openIndicatorSettingsModal(ind){
      paramsRow.appendChild(mkColor('Bull','bullColor'));
      paramsRow.appendChild(mkColor('Bear','bearColor'));
      paramsRow.appendChild(mkColor('Testo','textColor'));
+   }else if(ind.key==='order_blocks'){
+     paramsRow.appendChild(mkSelect('Regola','regola',['struttura','impulso','entrambe']));
+     if(ind.params.regola==='struttura'||ind.params.regola==='entrambe'){
+       paramsRow.appendChild(mkNum('Pivot Length','pivotLen',1,200));
+     }
+     if(ind.params.regola==='impulso'||ind.params.regola==='entrambe'){
+       paramsRow.appendChild(mkNum('Candele impulso','impulsoCandele',2,10));
+       paramsRow.appendChild(mkNum('Corpo min. %','impulsoCorpoPct',10,100));
+     }
+     paramsRow.appendChild(mkNum('Max zone','maxZone',1,200));
+     paramsRow.appendChild(mkCheck('Mitigazione (spegni al tocco)','mitigazione'));
+     paramsRow.appendChild(mkCheck('Mostra zone mitigate','mostraMitigate'));
+     paramsRow.appendChild(mkNum('Estensione (barre)','estensione',0,500));
+     paramsRow.appendChild(mkNum('Opacità %','opacita',0,100));
+     paramsRow.appendChild(mkCheck('Etichetta','mostraEtichetta'));
+     paramsRow.appendChild(mkColor('OB+','bullColor'));
+     paramsRow.appendChild(mkColor('OB-','bearColor'));
+     paramsRow.appendChild(mkColor('Mitigata','mitigColor'));
    }
    body.appendChild(paramsRow);
    // --- Setup salvati (preset) per questo tipo di indicatore -------------------------
@@ -32478,6 +32629,62 @@ fbGuideRegister('ind_tvp3d',{
    +'centesimo: la profondità rende difficile leggere un prezzo esatto, ed è normale. Per il prezzo '
    +'preciso usa il profilo piatto o il footprint; il 3D serve a dirti su quale zona vale la pena '
    +'guardarli.'
+});
+
+// --- Order Blocks (OB) ----------------------------------------------------------------------
+// Aggiunto su richiesta esplicita: due regole di rilevamento scegliibili, mitigazione al tocco,
+// tetto massimo di zone. La guida spiega proprio i tre comandi che non si indovinano da soli.
+fbGuideRegister('ind_order_blocks',{
+ icon:'\u{1F9F1}',
+ title:'Come si legge e come si imposta un Order Block (OB)',
+ intro:'<p>Un <b>order block</b> è l\'ultima zona in cui il prezzo si è fermato prima di partire '
+   +'con decisione: si disegna come un rettangolo attorno alla candela che ha "acceso" il '
+   +'movimento. È la zona dove, se il prezzo ci torna, ci si aspetta una reazione: leggilo come '
+   +'domanda e offerta rimaste in sospeso.</p>'
+   +'<p>Due rettangoli non sono la stessa cosa: <b>verde sotto</b> = OB di domanda (rialzo atteso), '
+   +'<b>rosso sopra</b> = OB di offerta (ribasso atteso). Più il rettangolo è vicino al prezzo, più '
+   +'è "fresco" e conta.</p>',
+ settings:[
+  {name:'Regola di rilevamento: struttura · impulso · entrambe',
+   what:'Decide <b>quando</b> nasce un order block. È la scelta che cambia il significato di tutto '
+     +'il disegno, non il suo aspetto.',
+   how:'<b>Struttura</b> è la regola classica (ICT/LuxAlgo): l\'OB nasce solo quando il prezzo '
+     +'<b>chiude oltre un massimo/minimo confermato</b>, cioè quando rompe davvero la struttura. '
+     +'Meno zone, ma più significative. <b>Impulso</b> è la regola semplice: l\'OB è l\'ultima '
+     +'candela di colore opposto prima di alcune candele decise, <b>anche senza rottura</b>. Più '
+     +'zone, utili per vedere dove il prezzo ha accelerato. <b>Entrambe</b> le unisce: è la scelta '
+     +'da cui partire, poi si restringe se il grafico è troppo affollato.'},
+  {name:'Mitigazione (spegni al tocco) · Mostra zone mitigate',
+   what:'Cosa succede a una zona quando il prezzo ci torna dentro. Richiesto esplicitamente: la '
+     +'zona <b>si ferma e si spegne</b>.',
+   how:'Con la mitigazione accesa, appena il prezzo <b>tocca</b> la zona il rettangolo smette di '
+     +'allungarsi (si ferma lì) e viene ridisegnato in <b>grigio/sfumato</b>: quella zona ha già '
+     +'"fatto il suo lavoro" e non è più un riferimento fresco. Con <b>Mostra zone mitigate</b> '
+     +'spento le zone mitigate spariscono del tutto, per lasciare solo le zone ancora valide. Se '
+     +'spegni la mitigazione, le zone restano piene anche dopo il tocco — utile solo per studiare '
+     +'a posteriori fin dove arrivava la zona.'},
+  {name:'Max zone · Estensione · Opacità · colore mitigata',
+   what:'Quanto e come si disegna: quante zone al massimo, quanto si allungano a destra, quanto '
+     +'sono trasparenti e di che colore diventa una zona mitigata.',
+   how:'<b>Max zone</b> è il tetto: si disegnano solo le ultime N zone (le più recenti), così su '
+     +'periodi lunghi il grafico non si riempie di rettangoli. <b>Estensione</b> sono le barre di '
+     +'cui la zona si allunga oltre l\'ultima candela (0 = fino al bordo destro del grafico). '
+     +'<b>Opacità</b> bassa (10-20%) è quella giusta: le zone devono fare da sfondo alle candele, '
+     +'non coprirle. <b>Mitigata</b> è il colore delle zone spente: tienilo grigio, così l\'occhio '
+     +'distingue al volo le zone ancora valide da quelle consumate.'},
+  {name:'Pivot Length · Candele impulso · Corpo minimo %',
+   what:'I parametri di taratura delle due regole: quanto è "larga" la struttura e quanto deve '
+     +'essere decisa una candela per contare come impulso.',
+   how:'<b>Pivot Length</b> (regola struttura) è quante candele a sinistra e a destra servono per '
+     +'confermare un massimo/minimo: valori bassi (3-5) reagiscono prima, valori alti (10-15) '
+     +'ignorano il rumore e segnano solo la struttura importante. <b>Candele impulso</b> e <b>Corpo '
+     +'minimo %</b> (regola impulso) decidono cosa è una spinta: 3 candele con corpo almeno al 60% '
+     +'dell\'ampiezza è un buon punto di partenza. Alza il corpo minimo se vedi troppe zone deboli.'}
+ ],
+ note:'L\'order block <b>non è un segnale di ingresso</b>: è una zona dove <i>guardare</i> cosa fa '
+   +'il prezzo. Da solo non dice nulla sulla direzione futura: serve a scegliere dove mettere '
+   +'l\'occhio (e, se lavori a livelli, dove cercano conferma altri strumenti come il footprint o '
+   +'le rotture di struttura).'
 });
 
 fbGuideRegister('footprint',{
