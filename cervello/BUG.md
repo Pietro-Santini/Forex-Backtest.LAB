@@ -3,6 +3,30 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **In replay Live il PLAY non aggiornava la candela** - risolto v144 - 13 ottobre 2026, segnalato
+  dal proprietario. `getViewWindow` riservava la colonna extra per la candela in formazione solo
+  se `!liveModeActive`: durante il replay-Live restava 0, la candela all'indice idx+1 cadeva oltre
+  il bordo dell'area di disegno e il clip di `draw()` la tagliava. L'etichetta sull'asse prezzi
+  invece si disegna FUORI dal clip e continuava ad aggiornarsi: si vedeva la casellina colorata
+  muoversi e il corpo della candela fermo. Ora lo spazio si riserva anche con `liveReplayActive`.
+  Test: `laboratorio/app/replay_live.test.mjs` 7).
+- **Nel timer MT5 draw() girava anche in replay** - risolto v144 - trovato rileggendo il lavoro
+  del giro precedente: `if(!liveReplayActive)update();draw();` - senza graffe solo `update()` sta
+  dentro l'if, `draw()` e' un'istruzione a se' e girava sempre. Il ramo Capital.com, scritto con le
+  graffe, era corretto: lo stesso commento sopra due righe diverse e' il modo piu' facile di non
+  accorgersene. Test: asserzione statica nel 5) di `replay_live.test.mjs`.
+- **La prop firm della cronologia si misurava sul capitale gia' cresciuto** - risolto v144 -
+  13 ottobre 2026, segnalato dal proprietario. `fblPropDedicataConta` partiva dall'ultimo punto
+  PRIMA della data di apertura: su una sala che da 10.000 era arrivata a 20.000, il pop-up «Prop
+  firm sbloccata» mostrava 20.000 come capitale all'apertura, e la prop non era piu' confrontata
+  col conto versato. Ora la base e' sempre il CONTO INIZIALE del campo e la curva dopo l'apertura
+  si riporta su quel conto (percentuali identiche, euro e obiettivo +10% riferiti al conto vero).
+  Nello stesso giro: la data di apertura non restava piu' quella della prova precedente.
+  Test: `laboratorio/app/prop_firm_cronologia.test.mjs`.
+- **Gli indicatori nascosti pesavano come quelli accesi** - risolto v144 - nel ciclo di `draw()`
+  `def.compute()` stava FUORI dalla guardia `if(!ind.hidden)`, che proteggeva solo `def.render()`:
+  spegnere l'occhio nascondeva l'indicatore ma non ne toglieva il costo. Test:
+  `laboratorio/app/indicatori_nascosti.test.mjs`.
 - **Le righe di prezzo comparivano anche sulle operazioni chiuse** - risolto v124 -
   9 ottobre 2026, segnalato dal proprietario: «vedo centinaia di righe, esce fuori un bordello».
   L'interruttore del passo 22 disegnava le orizzontali di apertura E chiusura dentro

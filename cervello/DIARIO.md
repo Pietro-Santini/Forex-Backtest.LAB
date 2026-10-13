@@ -151,3 +151,34 @@ Formato: data — chi — cosa — esito collaudo — commit.
   sta in LEZIONI.md: passava sia prima sia dopo, perche' le operazioni finte cadevano fuori
   dalla finestra visibile e non venivano disegnate affatto. - verde - Falliti: 0
 - 2026-10-10 - Claude - app v125: nuovo indicatore nativo "Gann 21.7 Profit Factor (4h)" in INDICATOR_DEFS (gann217), personalizzabile dal pannello impostazioni. Test: laboratorio/app/indicatore_gann217.test.mjs (prima rosso senza l'indicatore). Nello stesso giro corretto laboratorio/app/rendimento_scorrimento.test.mjs, che era rosso su main (anche su GitHub): usava il margine 16 del vecchio canvas invece del 10 dell'SVG (pl/pr di rendDisegnaGrafico), e dava 2 invece di 0 a sinistra e 98 invece di 100 a destra. L'app non cambia. - verde - Falliti: 0
+- 2026-10-14 - Claude - app v144 / Setup 1.0.144. Cinque lavori in un giro.
+  (1) REPLAY IN LIVE, chiusura dei difetti visti dal proprietario: col PLAY la candela si forma
+  davvero a schermo (getViewWindow riserva la colonna extra anche con liveReplayActive: prima lo
+  spazio non c'era e il clip di draw() tagliava via il corpo, si muoveva solo l'etichetta
+  dell'asse); via la casellina verde/rossa dalla candela in formazione; posizioni reali, ordini
+  pendenti, disegni ed etichette dell'asse si rivelano solo quando il replay raggiunge il loro
+  momento (posRevealedInReplay, createdAt sugli ordini); COB e SVP spenti in replay; il conto
+  alla rovescia scorre col moltiplicatore (replayForm.sub su replaySecondsPerBar); i timer da 1 s
+  non ridisegnano piu'. CORRETTO QUI un difetto del giro precedente: nel timer MT5 le graffe
+  mancavano (`if(!liveReplayActive)update();draw();`), quindi draw() girava comunque.
+  Test: replay_live.test.mjs 7) + asserzioni statiche nel 5).
+  (2) PROP FIRM DELLA CRONOLOGIA SALE: il riferimento e' SEMPRE il conto iniziale scritto nel
+  campo, non il capitale a cui la sala era arrivata il giorno dell'apertura (la curva dopo
+  l'apertura si riporta su quel conto: le percentuali non cambiano, gli euro e l'obiettivo +10%
+  si'); la data di apertura torna vuota ogni volta che si ACCENDE l'interruttore e quando si
+  conferma il pop-up «Prop firm sbloccata» (solo se il pop-up veniva da qui: lo stesso pulsante
+  lo usano anche MT5 reale e Kraken). Test: prop_firm_cronologia.test.mjs (6 nuovi).
+  (3) APERTURA AUTOMATICA, SU QUALI CONTI MT5: nuova sezione nella configurazione. Si spuntano i
+  conti su cui le sale possono aprire da sole (nessuna spunta = come prima, il conto collegato) e
+  tre interruttori: passa da sola al conto scelto, apri su tutti i conti scelti, torna al conto
+  che stavi guardando. Il cambio passa da connectToMt5Bridge, cioe' dalla stessa strada della
+  tendina dei conti (mt5AttivaConto mette da parte le posizioni degli altri conti).
+  Test: conti_automatici.test.mjs (10, prima rossi).
+  (4) INDICATORI NASCOSTI: non vengono piu' calcolati (prima si saltava solo il disegno, e dieci
+  indicatori spenti costavano come dieci accesi). Riaccendendoli il calcolo incrementale recupera
+  da solo. Test: indicatori_nascosti.test.mjs (3).
+  (5) FOOTPRINT A SCALA UNIFORME, in sostituzione delle righe fisse per candela: tolto
+  footprintResliceFisse, il passo e' uno solo per tutto il grafico (quello dei bucket), quindi una
+  candela corta mostra meno righe e una lunga di piu', tutte alte uguali e con lo stesso testo.
+  Test: footprint_globale.test.mjs (3 nuovi, al posto dei 2 sulle righe fisse).
+  - verde - Falliti: 0

@@ -76,3 +76,105 @@ test('se non c\'e\' nessuna operazione dopo l\'apertura, lo dice invece di inven
   );
   assert.equal(r.vuoto, true);
 });
+
+// ---------------------------------------------------------------------------------------------
+// RICHIESTO dal proprietario: il riferimento della prop e' il CONTO INIZIALE scritto nel campo,
+// non il capitale a cui la sala era arrivata il giorno dell'apertura. Prima si partiva dall'ultimo
+// punto PRIMA dell'apertura: il pop-up "Prop firm sbloccata" mostrava quindi un capitale gia'
+// gonfiato dai guadagni di mesi precedenti, e la prop non era piu' confrontata col conto versato.
+test('il capitale di partenza e\' il CONTO INIZIALE, non quello a cui la sala era arrivata', async () => {
+  // La sala era arrivata a 20.000 partendo da 10.000. La prop si apre dopo: deve ripartire da
+  // 10.000, non da 20.000.
+  const r = await conta(
+    [{t:U(1,12), cap:20000}, {t:U(2,12), cap:20000}, {t:U(3,12), cap:18800}],
+    10000, U(2,0)
+  );
+  assert.equal(r.base, 10000, 'il capitale all\'apertura deve essere il conto iniziale scelto');
+});
+
+test('riportando la curva sul conto iniziale il VERDETTO non cambia: cambiano gli euro', async () => {
+  // Stessa curva del test qui sopra: -6% in una giornata resta -6%, e la prop sarebbe finita
+  // quel giorno. Le percentuali sono rapporti, quindi non dipendono dal conto di partenza: e'
+  // esattamente il motivo per cui si puo' riportare la curva sul conto iniziale senza falsare
+  // niente. L'unica cosa che cambia e' il numero in euro mostrato all'utente.
+  const r = await conta(
+    [{t:U(1,12), cap:20000}, {t:U(2,12), cap:20000}, {t:U(3,12), cap:18800}],
+    10000, U(2,0)
+  );
+  assert.equal(r.esito, 'finita');
+  assert.equal(r.esitoData, '2026-01-03');
+  assert.ok(Math.abs(r.maxDDGiorno - 6) < 0.001, 'il drawdown del giorno resta il 6%');
+  assert.ok(Math.abs(r.profFinale + 6) < 0.001, 'il profitto dall\'apertura resta -6%');
+});
+
+test('anche l\'obiettivo +10% si misura sul conto iniziale', async () => {
+  // Dal giorno dell'apertura il conto sale del 10% (da 30.000 a 33.000 sulla curva vera): con il
+  // conto iniziale di 10.000 l'obiettivo e' 11.000, e si raggiunge nello stesso giorno.
+  const r = await conta(
+    [{t:U(1,12), cap:30000}, {t:U(2,12), cap:33000}],
+    10000, U(2,0)
+  );
+  assert.equal(r.esito, 'sbloccata');
+  assert.equal(r.base, 10000);
+  assert.equal(r.esitoData, '2026-01-02');
+});
+
+// ---------------------------------------------------------------------------------------------
+// RICHIESTO dal proprietario: accendendo l'interruttore della prop dedicata, la data e ora di
+// apertura torna a ZERO. Prima restava quella dell'ultima prova, e riaccendendo la prop si vedeva
+// subito il verdetto di allora (sbloccata / finita) senza aver scelto niente.
+test('accendendo la prop dedicata la data di apertura torna vuota', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const att = document.getElementById('fblCronoPfAtt');
+      const dt = document.getElementById('fblCronoPfData');
+      dt.value = '2026-01-02T08:00';          // la data della prova precedente
+      att.checked = true;                      // si accende adesso
+      att.dispatchEvent(new Event('change', {bubbles:true}));
+      return {data: dt.value, salvato: localStorage.getItem('fbl_prop_sala:' + (document.getElementById('fblCronoSala').value||''))};
+    });
+    assert.equal(r.data, '', 'la data deve tornare vuota, da riscrivere');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('spegnendo la prop la data NON viene toccata: si spegne, non si cancella una scelta', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const att = document.getElementById('fblCronoPfAtt');
+      const dt = document.getElementById('fblCronoPfData');
+      dt.value = '2026-01-02T08:00';
+      att.checked = false;
+      att.dispatchEvent(new Event('change', {bubbles:true}));
+      return dt.value;
+    });
+    assert.equal(r, '2026-01-02T08:00');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// RICHIESTO: il pulsante "Ho capito - il limite del 5% non vale piu'" azzera la data di apertura,
+// ma SOLO se il pop-up veniva dalla cronologia delle sale (lo stesso pulsante lo usano anche la
+// Prop Firm su conto MT5 reale e quella di Kraken).
+test('il pulsante del pop-up «sbloccata» chiede l\'azzeramento della data', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const prima = typeof window.fblPropDedicataAzzeraApertura;
+      // Senza il segno "il pop-up viene da qui" non deve azzerare niente: la Prop Firm generale
+      // non c'entra con la cronologia delle sale.
+      const senzaSegno = window.fblPropDedicataAzzeraApertura();
+      let chiamate = 0;
+      window.fblPropDedicataAzzeraApertura = () => { chiamate++; return true; };
+      document.getElementById('pfSbloccataOkBtn').click();
+      return {prima, senzaSegno, chiamate, chiuso: document.getElementById('pfSbloccataOverlay').style.display};
+    });
+    assert.equal(r.prima, 'function', 'la cronologia deve esporre l\'azzeramento della data');
+    assert.equal(r.senzaSegno, false, 'un pop-up che non viene dalla cronologia non deve azzerare la data');
+    assert.equal(r.chiamate, 1, 'premendo "Ho capito" si deve chiedere l\'azzeramento');
+    assert.equal(r.chiuso, 'none', 'il pop-up si chiude comunque');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
