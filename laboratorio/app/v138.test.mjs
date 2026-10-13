@@ -12,7 +12,8 @@
 //     moltiplicatore dei DATI 1x-2x-3x-4x-5x-10x-15x-20x-25x-30x, applicato subito se cambi
 //     durante il play.
 //  E) freno notizie nell'apertura automatica: sezione nel popup, stato di default, helper
-//     tgAutoNotiziaRossaVicina (gravità+paesi+finestra minuti) e gate in tgAutoValuta che
+//     tgAutoNotiziaRossaVicina (gravità+paesi+finestra minuti, con minuti PRIMA e DOPO separati e
+//     pulsante paesi ON/OFF), migrazione dal vecchio campo unico, e gate in tgAutoValuta che
 //     sospende l'apertura senza buttare il segnale.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -271,7 +272,7 @@ test('C4) la casella TP/SL della bozza resta visibile anche col riempimento spen
   } finally { await browser.close(); }
 });
 
-test('D) play fluido: la candela si forma e forward() la rivela; moltiplicatore 1x-30x sui dati', async () => {
+test('D) play fluido: la candela si forma al secondo; il moltiplicatore accelera i secondi di mercato', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(async (JS) => {
@@ -286,46 +287,46 @@ test('D) play fluido: la candela si forma e forward() la rivela; moltiplicatore 
       $('speed').value = '1';
       $('play').click();                          // ▶ avvia il loop fluido (50ms/frame)
 
-      await new Promise(rz => setTimeout(rz, 130));               // a 1x la candela NON è ancora completa
+      // RICHIESTO: a 1x si avanza 1 SECONDO di mercato al secondo. Su 1m servono 60s per candela,
+      // quindi dopo ~1,4s la formazione è appena iniziata (replayForm.sub=1) e idx NON è avanzato.
+      await new Promise(rz => setTimeout(rz, 1400));
       const durante1x = {
         timer: !!timer, form: !!replayForm,
         idx: idx,
+        secondiFormati: replayForm ? replayForm.sub : 0,
         status: $('status').textContent,
       };
 
       $('speed').value = '30'; $('speed').dispatchEvent(new Event('change'));   // cambio moltiplicatore DURANTE il play
-      await new Promise(rz => setTimeout(rz, 300));
+      // 30x = 30 secondi di mercato al secondo: in 3s ~90s, quindi almeno una candela (60s) completa.
+      await new Promise(rz => setTimeout(rz, 3000));
       const durante30x = { timer: !!timer, idx: idx };
 
-      // Attendi la fine dello storico (o timeout): il play esce da solo.
-      const tEnd = Date.now();
-      while (timer && Date.now() - tEnd < 4000) await new Promise(rz => setTimeout(rz, 60));
-      const fine = {
-        timer: !!timer,
-        play: $('play').textContent,
-        idx: idx,
-        ultima: idx === rows.length - 1,
-      };
-      return {opzioni, durante1x, durante30x, fine};
+      $('play').click();                               // ferma il play (toggle ▶ STOP)
+      await new Promise(rz => setTimeout(rz, 60));
+      const fermato = { timer: !!timer, play: $('play').textContent };
+      return {opzioni, durante1x, durante30x, fermato, perBar: replaySecondsPerBar()};
     }, QUARANTA_CANDELE_JS);
     assert.deepEqual(r.opzioni,
       ['1=1x','2=2x','3=3x','4=4x','5=5x','10=10x','15=15x','20=20x','25=25x','30=30x'],
-      'la select Velocità è il moltiplicatore dei dati 1x..30x richiesto');
+      'la select Velocità è il moltiplicatore dei secondi di mercato 1x..30x richiesto');
+    assert.equal(r.perBar, 60, 'su 1m una candela vale 60 secondi di mercato');
     assert.ok(r.durante1x.timer && r.durante1x.form, 'durante il play esiste la candela in formazione');
-    assert.ok(r.durante1x.idx <= 3, 'a 1x l\'avanzamento è fluido (una candela alla volta): idx=' + r.durante1x.idx);
-    assert.ok(String(r.durante1x.status).includes('Replay fluido'), 'lo status parla di replay fluido: ' + r.durante1x.status);
-    assert.ok(r.durante30x.idx >= 12, 'cambiando a 30x DURANTE il play i dati scorrono molto più veloci: idx=' + r.durante30x.idx);
-    assert.deepEqual(r.fine, {timer:false, play:'▶ PLAY', idx:39, ultima:true}, 'a fine storico il play esce da solo e torna ▶ PLAY');
+    assert.equal(r.durante1x.idx, 2, 'a 1x in 1,4s non si è ancora completata una candela (ne servono 60): idx=' + r.durante1x.idx);
+    assert.ok(r.durante1x.secondiFormati >= 1, 'la formazione ha già svelato almeno 1 secondo di mercato');
+    assert.ok(String(r.durante1x.status).includes('s/s'), 'lo status parla di secondi di mercato al secondo: ' + r.durante1x.status);
+    assert.ok(r.durante30x.idx >= 3, 'cambiando a 30x DURANTE il play i secondi scorrono molto più veloci (candela completata): idx=' + r.durante30x.idx);
+    assert.deepEqual(r.fermato, {timer:false, play:'▶ PLAY'}, 'premendo di nuovo ▶ STOP il play si ferma e torna ▶ PLAY');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
 
 test('E) freno notizie: sezione, default, helper con gravità/paesi/finestra e gate nel flusso', async () => {
   // 1) presenze statiche (come il test 5 di replay_live): markup e gate nel flusso.
-  for (const id of ['tgAutoNewsAttiva','tgAutoNewsMin','tgAutoNewsHigh','tgAutoNewsMedium','tgAutoNewsPaesi','tgAutoNewsPaesiTutte'])
+  for (const id of ['tgAutoNewsAttiva','tgAutoNewsMinPre','tgAutoNewsMinPost','tgAutoNewsHigh','tgAutoNewsMedium','tgAutoNewsLow','tgAutoNewsPaesi','tgAutoNewsPaesiTutte'])
     assert.ok(APP.includes('id="' + id + '"'), 'il markup del freno notizie contiene #' + id);
-  assert.ok(APP.includes('newsAttiva:false,newsMin:15,newsSeverita:{High:true,Medium:false},newsPaesi:null'),
-            'i default del freno notizie sono: spento, 15 minuti, solo notizie alte, tutti i paesi');
+  assert.ok(APP.includes('newsAttiva:false,newsMinPre:15,newsMinPost:15,newsSeverita:{High:true,Medium:false},newsPaesi:null'),
+            'i default del freno notizie sono: spento, 15 minuti prima e 15 dopo, solo notizie alte, tutti i paesi');
   assert.ok(APP.includes('if(A.attivo&&A.newsAttiva){'), 'il gate del freno notizie è in tgAutoValuta');
   assert.ok(APP.includes("voce.autoMotivo='sospesa dal freno notizie: "), 'il segnale sospeso resta col motivo "sospesa dal freno notizie"');
 
@@ -334,36 +335,63 @@ test('E) freno notizie: sezione, default, helper con gravità/paesi/finestra e g
   try{
     const r = await pagina.evaluate(() => {
       const def = tgAutoVuoto();
-      const A = {newsMin: 15, newsSeverita: {High:true}, newsPaesi: null};
       const ora = Date.now();
+      // Una notizia ALTA appena passata (5 minuti fa) e una BASSA.
       newsEvents = [
         {impact:'High', country:'US', date:new Date(ora - 5*60000).toISOString(), title:'  Nonfarm   Payrolls  '},
         {impact:'Low',  country:'US', date:new Date(ora - 3*60000).toISOString(), title:'Sondaggio'},
       ];
-      const vicinaAlta = tgAutoNotiziaRossaVicina(A);
-      const soloMedia = tgAutoNotiziaRossaVicina({newsMin:15, newsSeverita:{Medium:true}, newsPaesi:null});
-      const soloRegnoUnito = tgAutoNotiziaRossaVicina({newsMin:15, newsSeverita:{High:true}, newsPaesi:{GB:true}});
-      const lontano = tgAutoNotiziaRossaVicina({newsMin:1, newsSeverita:{High:true}, newsPaesi:null});   // finestra 1 min: nessuna
+      // Minuti PRIMA e DOPO separati: una notizia passata da 5 minuti scatta solo con un "dopo"
+      // abbastanza largo; col solo "prima" no, perché è già passata.
+      const vicinaDopo = tgAutoNotiziaRossaVicina({newsMinPre:0, newsMinPost:15, newsSeverita:{High:true}, newsPaesi:null});
+      const lontanoDopo = tgAutoNotiziaRossaVicina({newsMinPre:0, newsMinPost:1, newsSeverita:{High:true}, newsPaesi:null});
+      const soloPrimaPassata = tgAutoNotiziaRossaVicina({newsMinPre:15, newsMinPost:0, newsSeverita:{High:true}, newsPaesi:null});
+      // Il vecchio campo unico resta valido per le configurazioni salvate prima di questa modifica.
+      const legacy = tgAutoNotiziaRossaVicina({newsMin:15, newsSeverita:{High:true}, newsPaesi:null});
+      // Gravità e paese si applicano alla stessa finestra.
+      const soloMedia = tgAutoNotiziaRossaVicina({newsMinPre:0, newsMinPost:15, newsSeverita:{Medium:true}, newsPaesi:null});
+      const soloRegnoUnito = tgAutoNotiziaRossaVicina({newsMinPre:0, newsMinPost:15, newsSeverita:{High:true}, newsPaesi:{GB:true}});
+      // Notizia ALTA fra 10 minuti: scatta col "prima" largo, non con quello stretto.
+      newsEvents = [{impact:'High', country:'US', date:new Date(ora + 10*60000).toISOString(), title:'CPI'}];
+      const vicinaPrima = tgAutoNotiziaRossaVicina({newsMinPre:15, newsMinPost:0, newsSeverita:{High:true}, newsPaesi:null});
+      const futuraLontana = tgAutoNotiziaRossaVicina({newsMinPre:1, newsMinPost:0, newsSeverita:{High:true}, newsPaesi:null});
+      // Paesi: il pulsante "Tutti i paesi" è ON/OFF (tutti -> nessuno -> tutti).
+      newsEvents = [
+        {impact:'High', country:'US', date:new Date(ora - 5*60000).toISOString(), title:'A'},
+        {impact:'High', country:'GB', date:new Date(ora - 5*60000).toISOString(), title:'B'},
+      ];
       const listaPaesi = newsCountriesForAuto ? newsCountriesForAuto() : [];
-      const senzaEventi = (newsEvents = []) && tgAutoNotiziaRossaVicina(A);
+      tgAuto.newsPaesi = null;
+      $('tgAutoNewsPaesiTutte').click();
+      const paesiDopoPrimoClic = JSON.parse(JSON.stringify(tgAuto.newsPaesi));
+      $('tgAutoNewsPaesiTutte').click();
+      const paesiDopoSecondoClic = tgAuto.newsPaesi;
+      const senzaEventi = (newsEvents = []) && tgAutoNotiziaRossaVicina({newsMinPre:0, newsMinPost:15, newsSeverita:{High:true}, newsPaesi:null});
       // Il checkbox scrive sullo stato della famiglia attiva.
       $('tgAutoNewsAttiva').checked = true;
       $('tgAutoNewsAttiva').dispatchEvent(new Event('change'));
       return {
-        def: {attiva: def.newsAttiva, min: def.newsMin, sev: def.newsSeverita, paesi: def.newsPaesi},
-        vicinaAlta, soloMedia, soloRegnoUnito, lontano, senzaEventi,
+        def: {attiva: def.newsAttiva, pre: def.newsMinPre, post: def.newsMinPost, sev: def.newsSeverita, paesi: def.newsPaesi},
+        vicinaDopo, lontanoDopo, soloPrimaPassata, legacy, soloMedia, soloRegnoUnito,
+        vicinaPrima, futuraLontana, senzaEventi,
         attivatoDalCheckbox: tgAuto.newsAttiva,
-        listaPaesi,
+        listaPaesi, paesiDopoPrimoClic, paesiDopoSecondoClic,
       };
     });
-    assert.deepEqual(r.def, {attiva:false, min:15, sev:{High:true,Medium:false}, paesi:null}, 'default del freno notizie come richiesto');
-    assert.ok(r.vicinaAlta && r.vicinaAlta.includes('Nonfarm'), 'la notizia alta nella finestra scatta il freno: ' + r.vicinaAlta);
-    assert.ok(r.lontano === null, 'con finestra di 1 minuto nessuna notizia è vicina');
+    assert.deepEqual(r.def, {attiva:false, pre:15, post:15, sev:{High:true,Medium:false}, paesi:null}, 'default del freno notizie come richiesto');
+    assert.ok(r.vicinaDopo && r.vicinaDopo.includes('Nonfarm'), 'la notizia alta passata da 5 min scatta col "dopo" a 15: ' + r.vicinaDopo);
+    assert.ok(r.lontanoDopo === null, 'con "dopo" a 1 minuto una notizia di 5 minuti fa non è più vicina');
+    assert.equal(r.soloPrimaPassata, null, 'col solo "prima" una notizia già passata non sospende');
+    assert.ok(r.legacy && r.legacy.includes('Nonfarm'), 'il vecchio campo unico "newsMin" resta valido');
     assert.equal(r.soloMedia, null, 'una notizia Alta non scatta se sono filtrate solo le Medie');
     assert.equal(r.soloRegnoUnito, null, 'una notizia USA non scatta se è filtrato solo il Regno Unito');
+    assert.ok(r.vicinaPrima && r.vicinaPrima.includes('CPI'), 'una notizia fra 10 minuti scatta col "prima" a 15');
+    assert.equal(r.futuraLontana, null, 'col "prima" a 1 minuto una notizia fra 10 non è ancora vicina');
     assert.equal(r.senzaEventi, null, 'senza eventi il freno non scatta');
     assert.equal(r.attivatoDalCheckbox, true, 'la spunta accende/spegne lo stato del freno nella scheda attiva');
-    assert.deepEqual(r.listaPaesi, ['US'], 'la lista dei paesi si popola dagli eventi ricevuti');
+    assert.deepEqual(r.listaPaesi, ['GB','US'], 'la lista dei paesi si popola dagli eventi ricevuti');
+    assert.deepEqual(r.paesiDopoPrimoClic, {GB:false,US:false}, 'il primo clic del pulsante deseleziona tutti i paesi');
+    assert.equal(r.paesiDopoSecondoClic, null, 'il secondo clic riseleziona tutti i paesi');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

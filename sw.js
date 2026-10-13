@@ -94,7 +94,35 @@
 //               automatica delle posizioni") si apre anche in modalita' PIP, dentro la finestra
 //               separata (prima finiva nella pagina principale, restando invisibile), e rientra
 //               con essa.
-const CACHE_NAME = "forex-backtest-lab-v139";
+//          v140 = posizioni sul grafico alla MT5: cliccando una posizione aperta SOLO quella
+//               resta nei suoi colori (entrata BUY/SELL e caselle Target/Stop); tutte le altre
+//               passano in grigio spento, cosi' le loro linee non si confondono con quella
+//               selezionata. Senza selezione restano colorate come prima.
+//          v141 = replay AL SECONDO (richiesto: il moltiplicatore #speed sono secondi di mercato
+//               avanzati per ogni secondo reale, 1x = tempo reale, non piu' "candele"); il
+//               "blocco" rosso/verde che si accumulava in formazione e' sparito (ridisegno
+//               completo ad ogni aggiornamento, cosi' restano aggiornati anche entry/TP/SL e il
+//               P/L mano a mano); footprint: con le righe-per-candela impostate le N righe
+//               coprono TUTTA l'ampiezza della candela (alta-bassa); cliccando fuori dopo aver
+//               spostato i TP/SL di una posizione selezionata le caselle SL/TP si svuotano
+//               (niente piu' anteprima di un ordine inesistente); il box P/L Live (#livePL)
+//               resta nella pagina principale anche in PIP/finestra separata.
+//          v142 = cambio stile footprint al tocco SEMPRE garantito: l'area sensibile e' una fascia
+//               che parte SOPRA l'alta della candela (non di fianco, dove stanno numeri/caselline),
+//               cosi' bid/ask -> delta -> volume si puo' cambiare toccando qualsiasi candela, anche
+//               minuscola o senza tick registrati. Inoltre: selezionando una posizione si vedono
+//               SOLO le sue linee TP/SL con le etichette; le caselle TP/SL delle altre posizioni
+//               spariscono del tutto (prima restavano in grigio spento) e ricompaiono cliccando
+//               fuori sul grafico, in un punto vuoto.
+//          v143 = apertura automatica: il freno notizie di Forex Factory e' ora configurabile per
+//               intero. I minuti di sospensione PRIMA e DOPO la notizia sono due campi separati
+//               (es. 0 prima e 30 dopo, oppure 30 e 30); si sceglie gravita' per gravita' (alta/
+//               rossa, media, bassa) se quella notizia sospende o no; si scelgono i paesi/valute.
+//               Il pulsante "Tutti i paesi" e' un ON/OFF: primo clic li seleziona tutti, secondo
+//               clic li deseleziona tutti. Il riepilogo mostra il freno acceso con la sua finestra
+//               e il filtro. L'interfaccia non veniva mai riempita: ora i filtri salvati si
+//               rivedono aprendo il pannello.
+const CACHE_NAME = "forex-backtest-lab-v143";
 const ASSETS = [
   "./",
   "./app.html",
