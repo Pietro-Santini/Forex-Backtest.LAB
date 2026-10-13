@@ -85,7 +85,7 @@
 //          v137 = P/L delle posizioni reali MT5 identico al terminale: ovunque (etichetta sul
 //               grafico, casella TP/SL, box "P/L Live", tabelle) si usa profit+swap+commissione
 //               della fotografia del bridge, non piu' un ricalcolo col prezzo di un'altra fonte.
-const CACHE_NAME = "forex-backtest-lab-v137";
+const CACHE_NAME = "forex-backtest-lab-v138";
 const ASSETS = [
   "./",
   "./app.html",
