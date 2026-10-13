@@ -122,7 +122,24 @@
 //               clic li deseleziona tutti. Il riepilogo mostra il freno acceso con la sua finestra
 //               e il filtro. L'interfaccia non veniva mai riempita: ora i filtri salvati si
 //               rivedono aprendo il pannello.
-const CACHE_NAME = "forex-backtest-lab-v143";
+//          v144 = replay in Live: col PLAY la candela si forma davvero a schermo (prima lo spazio
+//               a destra non veniva riservato e il corpo della candela restava tagliato fuori);
+//               via la casellina verde/rossa sulla candela in formazione; posizioni, ordini
+//               pendenti, disegni ed etichette dell'asse si rivelano solo quando il replay
+//               raggiunge il loro momento; COB e SVP restano spenti; il conto alla rovescia
+//               della candela scorre col moltiplicatore di velocita'; i pannelli sotto al
+//               grafico non inseguono piu' il presente mentre si guarda il passato.
+//               Cronologia delle sale: la prop firm dedicata si misura SEMPRE sul conto
+//               iniziale scelto (non sul capitale a cui la sala era arrivata), la data di
+//               apertura torna vuota ogni volta che si accende l'interruttore e quando si
+//               conferma il pop-up «Prop firm sbloccata».
+//               Apertura automatica: si scelgono i CONTI MT5 su cui le sale possono aprire da
+//               sole, con tre interruttori - passa da sola al conto scelto, apri su tutti i
+//               conti scelti, torna al conto che stavi guardando.
+//               Indicatori nascosti: non vengono piu' calcolati (il grafico torna leggero).
+//               Footprint a SCALA UNIFORME: stesso passo di riga per tutte le candele, quindi
+//               una candela corta mostra meno righe e una lunga di piu', tutte alte uguali.
+const CACHE_NAME = "forex-backtest-lab-v144";
 const ASSETS = [
   "./",
   "./app.html",

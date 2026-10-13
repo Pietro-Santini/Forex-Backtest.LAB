@@ -17,7 +17,11 @@
 //     il replay durante un rollover);
 //  6. durante il replay le posizioni REALI aperte spariscono dal grafico, i trade rivelati
 //     mostrano la ricostruzione dei livelli (entry/TP/SL da bordo a bordo) e in diretta le chiuse
-//     tornano nascoste (interruttore spento di default).
+//     tornano nascoste (interruttore spento di default);
+//  7. col PLAY in corso dentro il replay-Live si riserva la colonna extra a destra dove la
+//     candela si forma (era il bug "in replay Live il PLAY non aggiorna la candela": lo spazio
+//     non c'era e il corpo della candela veniva ritagliato dal clip), e il conto alla rovescia
+//     della candela scorre col MOLTIPLICATORE di velocita' invece che con l'orologio vero.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -192,6 +196,19 @@ test('5) guardie anti-reset del replay presenti nei 5 punti critici', () => {
             'evaluate, checkPendingOrders e checkAlarmLines usano l\'ultima candela vera in Live');
   assert.ok(APP.includes('function updateLiveReplayUI(){'), 'esiste updateLiveReplayUI');
   assert.ok(APP.includes('id="liveReplayBar"'), 'la barra Replay è nel markup');
+  // --- aggiunte: le altre cose che in replay NON devono inseguire il presente ---
+  assert.ok(APP.includes('const replaySlot=(followLatest&&timer&&(!liveModeActive||liveReplayActive)&&idx<rows.length-1)?1:0;'),
+            'la colonna extra della candela in formazione serve anche nel replay-Live');
+  assert.ok(APP.includes('try{ return !liveReplayActive && cobSvpEnabledNow()'),
+            'COB e SVP (book e profilo di adesso) restano spenti durante il replay');
+  // I due timer da 1 secondo (Capital.com e MT5) non devono ridisegnare durante il replay: senza
+  // le graffe, draw() restava FUORI dall'if e i pannelli tornavano a inseguire il presente.
+  assert.ok((APP.split('if(!liveReplayActive){ update(); draw(); }').length-1)>=2,
+            'i timer da 1 s non devono aggiornare/ridisegnare durante il replay (graffe comprese)');
+  assert.ok(!/if\(!liveReplayActive\)update\(\);draw\(\);/.test(APP),
+            'nessun timer deve avere draw() fuori dalla guardia del replay');
+  assert.ok(APP.includes('function posRevealedInReplay(pos){'),
+            'una posizione reale si mostra solo quando il replay ha raggiunto la sua apertura');
 });
 
 test('6) in replay: posizioni reali nascoste, trade rivelati con ricostruzione livelli', async () => {
@@ -295,6 +312,53 @@ test('6) in replay: posizioni reali nascoste, trade rivelati con ricostruzione l
       'durante il replay la posizione REALE aperta non aggiunge nessuna riga (restano solo i livelli rivelati): extraA=' + JSON.stringify(r.extraA));
     assert.equal(r.extraD.length, 1,
       'tornati in diretta, della posizione aperta resta la sua riga di entrata (le chiuse, interruttore spento, spariscono del tutto): extraD=' + JSON.stringify(r.extraD));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+test('7) col PLAY in replay-Live: colonna extra per la candela in formazione e countdown col moltiplicatore', async () => {
+  // RICHIESTE ESPLICITE, nate da due difetti visti dal proprietario:
+  //  - "in REPLAY LIVE il tasto PLAY non aggiorna la candela": lo spazio a destra dove la candela
+  //    si forma veniva riservato solo in Storico, quindi in replay-Live la candela in formazione
+  //    (indice idx+1) cadeva oltre il bordo dell'area di disegno e il clip la tagliava via. Si
+  //    vedeva muoversi solo l'etichetta sull'asse (che sta fuori dal clip), non il corpo.
+  //  - il conto alla rovescia della candela deve scorrere col MOLTIPLICATORE di velocità: a 10x
+  //    scende di 10 secondi per ogni secondo vero, come la candela che si forma.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate((JS) => {
+      const R = JSON.parse(JS);
+      currentTF = 1; liveModeActive = true;
+      currentAssetKey = 'TESTX';
+      baseRows = R; rows = R; idx = 2; viewEnd = 2;
+      masterTime = closeTimeOf(R[2]);
+      slTpScanDoneForAsset = 'TESTX'; positions = [];
+      avviaReplayLive(parseDateTime(R[0].date));   // idx 0, followLatest true, viewEnd 0
+      const fermo = getViewWindow();               // PLAY non premuto: nessuna colonna extra
+      timer = setInterval(() => {}, 1000000);      // PLAY in corso (il loop vero non serve)
+      const inPlay = getViewWindow();
+      // Il conto alla rovescia: 1 minuto per candela (TF 1), 10 secondi già consumati → 0:50.
+      replayForm = {idx: 1, sub: 10, path: [], fp: {}, vol: 0};
+      const a10 = fmtCandleCountdown();
+      replayForm = {idx: 1, sub: 0, path: [], fp: {}, vol: 0};
+      const a0 = fmtCandleCountdown();
+      replayForm = {idx: 1, sub: 60, path: [], fp: {}, vol: 0};
+      const aFine = fmtCandleCountdown();
+      replayForm = null;
+      const senzaFormazione = fmtCandleCountdown();
+      clearInterval(timer); timer = null;
+      return {fermo: {end: fermo.end, dataEnd: fermo.dataEnd},
+              inPlay: {end: inPlay.end, dataEnd: inPlay.dataEnd},
+              a10, a0, aFine, senzaFormazione, perBar: replaySecondsPerBar()};
+    }, TRE_CANDELE_JS);
+    assert.equal(r.fermo.end, 0, 'senza PLAY il bordo destro resta sulla candela del replay');
+    assert.equal(r.inPlay.end, 1, 'col PLAY si riserva UNA colonna extra: è lì che la candela si forma');
+    assert.equal(r.fermo.dataEnd, 0, 'nessuna candela vera in più viene mostrata');
+    assert.equal(r.inPlay.dataEnd, 0, 'nemmeno col PLAY: lo spazio è vuoto, non è una candela rivelata');
+    assert.equal(r.perBar, 60, 'su TF 1 una candela vale 60 secondi di replay');
+    assert.equal(r.a10, '0:50', '10 secondi consumati sui 60 → manca 0:50');
+    assert.equal(r.a0, '1:00', 'appena nata la candela manca un minuto intero');
+    assert.equal(r.aFine, '0:00', 'a fine candela il conto arriva a zero, non va negativo');
+    assert.equal(r.senzaFormazione, '1:00', 'senza candela in formazione si mostra la durata piena');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

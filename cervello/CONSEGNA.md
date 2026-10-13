@@ -4,7 +4,9 @@ Questo documento serve a chi riprende il lavoro **senza aver visto le sessioni p
 persona o agente AI. Dice che cos'è il sistema, com'è fatto, a che cosa è collegato, dove sta
 andando, che cosa è stato fatto, che cosa manca e con che regole si lavora.
 
-Stato alla scrittura: app **v124**, Setup **1.0.124**, server Oracle **allineato** (riportato a `main`
+Stato alla scrittura: app **v144**, Setup **1.0.144** (il corpo di questo documento e' stato
+scritto alla v124: per le novita' dalla v125 alla v144 vedi il registro in cima a `sw.js` e
+`cervello/DIARIO.md`). Server Oracle **allineato** (riportato a `main`
 il 9 ottobre 2026; verificata nel contenitore la correzione del parser sulle coppie con la barra).
 
 > Per **pubblicare** un aggiornamento — sito, computer, server — e per capire **come funziona il

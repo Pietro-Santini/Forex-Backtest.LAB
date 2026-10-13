@@ -55,46 +55,76 @@ test('il ciclo stile (bidask→delta→volume) funziona e resta scelto', async (
   } finally { await browser.close(); }
 });
 
-test('righe fisse: esattamente N righe per candela, senza perdere volume', async () => {
+
+// ============================== SCALA UNIFORME DEL FOOTPRINT ==============================
+// RICHIESTO dal proprietario, in sostituzione delle "righe fisse per candela": il passo di riga
+// deve essere UNO SOLO per tutto il grafico (in pip e quindi in pixel). Conseguenza voluta: una
+// candela corta mostra POCHE righe, una lunga NE MOSTRA MOLTE, e le caselline restano alte uguali
+// in tutta la vista — con la stessa dimensione del testo.
+// Prima si riaggregava la griglia DENTRO ogni candela in un numero fisso di fasce
+// (footprintResliceFisse): due caselline affiancate potevano valere 3 pip e 40 pip, i numeri non
+// erano confrontabili fra candele e il testo ballava.
+//
+// Come si prova che il test serve: rimettendo la riaggregazione per candela, il primo test va
+// rosso perché entrambe le candele chiedono lo stesso numero di righe.
+
+// Disegna una candela di footprint su un canvas vero e restituisce i livelli di prezzo che la
+// funzione ha DAVVERO chiesto di convertire in pixel: da quelli si leggono le righe disegnate.
+const DISEGNA = (nRighe) => {
+  // Passo 1 e livelli interi: le chiavi delle righe tornano identiche passando da testo a numero
+  // (come nei bucket veri) e i bordi a mezzo passo sono esatti, senza polvere di virgola mobile.
+  const passo = 1;                          // il passo globale, lo stesso per tutte le candele
+  const base = 100;
+  const fp = {step: passo, rows: {}};
+  for (let k = 0; k < nRighe; k++) fp.rows[base + k * passo] = {buy: 5 + k, sell: 4};
+  // Alta/bassa (e apertura/chiusura) sui bordi esatti della prima e dell'ultima riga, così gli
+  // unici livelli chiesti sono i bordi delle righe e il conto si legge senza ambiguità.
+  const lo = base - passo / 2, hi = base + (nRighe - 0.5) * passo;
+  const r = {open: lo, close: hi, high: hi, low: lo, volume: 1};
+  const chiesti = [];
+  const yFn = p => { chiesti.push(p); return 900 - (p - base) * 10; };
+  const ctx = document.createElement('canvas').getContext('2d');
+  drawFootprintCandle(ctx, r, 300, 60, yFn, fp, '#ffffff', 'bidask', {up:'#26a69a', down:'#ef5350', passo:60});
+  const liv = [...new Set(chiesti)].sort((a, b) => a - b);
+  const salti = [];
+  for (let i = 1; i < liv.length; i++) salti.push(liv[i] - liv[i - 1]);
+  return {bordi: liv.length, salti, passo};
+};
+
+test('scala uniforme: una candela lunga mostra PIU\' righe di una corta', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
-    const r = await pagina.evaluate(() => {
-      const fp = {step:0.0001, rows:{}};
-      for (let k = 0; k < 7; k++) fp.rows[(1.0 + k * 0.0001).toFixed(4)] = {buy: 10 + k, sell: 5 + k};
-      const n20 = footprintResliceFisse(fp, 20);
-      const n5 = footprintResliceFisse(fp, 5);
-      const somma = o => Object.values(o.rows).reduce((s, c) => s + (c.buy || 0) + (c.sell || 0), 0);
-      return {n20: Object.keys(n20.rows).length, n5: Object.keys(n5.rows).length,
-        vol20: somma(n20), volOrig: somma(fp)};
-    });
-    assert.equal(r.n20, 20, 'la candela deve avere esattamente 20 righe');
-    assert.equal(r.n5, 5);
-    assert.equal(r.vol20, r.volOrig, 'le righe si riaggregano: il volume totale resta identico');
+    const r = await pagina.evaluate((d) => {
+      const f = eval('(' + d + ')');
+      return {corta: f(4), lunga: f(40)};
+    }, DISEGNA.toString());
+    // N righe disegnate = N+1 bordi (le righe sono attaccate e condividono i bordi).
+    assert.equal(r.corta.bordi, 5, 'una candela da 4 righe deve disegnarne 4, non un numero fisso');
+    assert.equal(r.lunga.bordi, 41, 'una candela da 40 righe deve disegnarne 40');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
 
-test('righe fisse: con alta/bassa della candela le N righe coprono TUTTA l\'ampiezza', async () => {
+test('scala uniforme: il passo fra le righe e\' lo STESSO su candele diverse', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
-    const r = await pagina.evaluate(() => {
-      // Candela ampia (0.9995→1.0015) ma scambi reali solo in una banda stretta (1.0000→1.0006):
-      // senza il fix le 20 righe si addensavano solo sulla banda scambiata, non sulla candela.
-      const fp = {step:0.0001, rows:{}};
-      for (let k = 0; k < 7; k++) fp.rows[(1.0 + k * 0.0001).toFixed(4)] = {buy: 10 + k, sell: 5 + k};
-      const barLo = 0.9995, barHi = 1.0015;
-      const o = footprintResliceFisse(fp, 20, barLo, barHi);
-      const lv = Object.keys(o.rows).map(Number).sort((a, b) => a - b);
-      const somma = x => Object.values(x.rows).reduce((s, c) => s + (c.buy || 0) + (c.sell || 0), 0);
-      return {n: lv.length, minimo: lv[0], massimo: lv[lv.length - 1], step: o.step, vol: somma(o), volOrig: somma(fp)};
+    const r = await pagina.evaluate((d) => {
+      const f = eval('(' + d + ')');
+      return {corta: f(4), lunga: f(40)};
+    }, DISEGNA.toString());
+    [['corta', r.corta], ['lunga', r.lunga]].forEach(([nome, o]) => {
+      o.salti.forEach(s => assert.ok(Math.abs(s - o.passo) < 1e-12,
+        'sulla candela ' + nome + ' tutte le righe devono essere alte uguali (passo ' + o.passo + ', trovato ' + s + ')'));
     });
-    assert.equal(r.n, 20, 'devono restare esattamente 20 righe');
-    const passo = (1.0015 - 0.9995) / 20;
-    assert.ok(Math.abs(r.step - passo) < 1e-12, 'il passo deve valere (alta-bassa)/N');
-    // 20 fasce da barLo a barHi: la prima riga parte da barLo, l'ultima arriva a barHi.
-    assert.ok(r.minimo < 0.9995 + passo && r.minimo > 0.9995, 'la prima riga parte dal basso della candela');
-    assert.ok(r.massimo < 1.0015 && r.massimo > 1.0015 - passo, 'l\'ultima riga arriva all\'alto della candela');
-    assert.equal(r.vol, r.volOrig, 'le righe si riaggregano: il volume totale resta identico');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('la riaggregazione per candela non esiste piu\'', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(() => typeof window.footprintResliceFisse);
+    assert.equal(r, 'undefined', 'il regrigliato dentro la singola candela e\' stato tolto: il passo e\' uno solo');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
