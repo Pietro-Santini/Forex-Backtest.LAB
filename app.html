@@ -21279,6 +21279,10 @@ function restoreChartToMainPage(){
  if(floatingDoc){
    try{
      [...floatingDoc.querySelectorAll('.fbModalOverlay')].forEach(ov=>document.body.appendChild(ov));
+     // Stesso trattamento per il menù della strategia dell'apertura automatica, che non è un
+     // .fbModalOverlay: se era aperto nella finestra separata va riportato a casa, altrimenti
+     // sparirebbe con essa (e il riferimento resterebbe a un nodo morto).
+     if(typeof tgAutoPop!=='undefined'&&tgAutoPop&&tgAutoPop.ownerDocument===floatingDoc){ document.body.appendChild(tgAutoPop); try{ tgAutoPosizionaPop(tgAutoAncoraPop()); }catch(e){} }
    }catch(e){ console.log('[Popup] rientro overlay fallito:',e); }
  }
  lastInteractionDoc=document;
@@ -21370,6 +21374,9 @@ async function openFloatingChart(){
  // Senza questo, un click dentro la finestra separata non verrebbe mai registrato e ogni popup
  // finirebbe sulla pagina principale (vedi trackPopupInteractions/popupHostDoc).
  trackPopupInteractions(floatingDoc);
+ // Il menù della strategia dell'apertura automatica deve poter vivere/chiudersi anche qui (in PIP
+ // si apre in questa finestra, non in quella principale): aggancia i suoi gestori a questo document.
+ try{ tgAutoAgganciaPopSuDoc(floatingDoc,floatingWin); }catch(e){}
  lastInteractionDoc=floatingDoc;
  floatingDoc.body.style.margin='0';
  floatingDoc.body.style.background='#0b1016';
@@ -26904,44 +26911,67 @@ function tgAutoRiempiStrat(){
  tgAutoCostruisciRegole(int,info.cfg,info.quanti,info.dove,()=>{ try{ tgAutoDisegna(); }catch(e){} tgAutoRiempiStrat(); try{ tgAutoPosizionaPop(tgAutoAncoraPop()); }catch(e){} });
  tgAutoPop.appendChild(int);
 }
+// RICHIESTO ESPLICITAMENTE: il menù della strategia deve comparire anche in modalità PIP. Va
+// quindi creato nel documento della pagina che ospita il pulsante premuto — in PIP la finestra
+// separata — e non sempre in quella principale, dove resterebbe invisibile (a differenza del
+// pannello "Apertura automatica", che è un .fbModalOverlay e viene instradato da solo, questo
+// menù vive nel documento e non segue .chartWrap). Ancoraggio, chiusura al clic fuori e
+// riposizionamento allo scorrimento seguono lo stesso documento (vedi tgAutoAgganciaPopSuDoc).
 function tgAutoAncoraPop(){
- return tgAutoPopChiave?([...document.querySelectorAll('[data-tgstrat]')].find(b=>b.dataset.tgstrat===tgAutoPopChiave)||null):null;
+ if(!tgAutoPopChiave)return null;
+ const cerca=doc=>{ try{ return [...doc.querySelectorAll('[data-tgstrat]')].find(b=>b.dataset.tgstrat===tgAutoPopChiave)||null; }catch(e){ return null; } };
+ const own=tgAutoPop&&tgAutoPop.ownerDocument;
+ return (own?cerca(own):null)||cerca(document)||(floatingDoc?cerca(floatingDoc):null);
 }
 function tgAutoPosizionaPop(btn){
  if(!tgAutoPop||!btn)return;
+ // Le misure sono quelle della finestra in cui vive il menù (in PIP: la finestra separata).
+ const win=(tgAutoPop.ownerDocument&&tgAutoPop.ownerDocument.defaultView)||window;
  const r=btn.getBoundingClientRect();
  const w=tgAutoPop.offsetWidth, h=tgAutoPop.offsetHeight;
  let top=r.bottom+6;
- if(top+h>window.innerHeight-8)top=Math.max(8,r.top-6-h);
- let left=Math.min(r.left,window.innerWidth-w-8);
+ if(top+h>win.innerHeight-8)top=Math.max(8,r.top-6-h);
+ let left=Math.min(r.left,win.innerWidth-w-8);
  if(left<8)left=8;
  tgAutoPop.style.left=left+'px'; tgAutoPop.style.top=top+'px';
 }
 function tgAutoApriStrat(chiave,btn,cfg,quanti,dove){
  if(tgAutoPop&&tgAutoPopChiave===chiave){ tgAutoChiudiStrat(); return; }
  tgAutoChiudiStrat();
- const c=document.createElement('div');
+ const doc=(btn&&btn.ownerDocument)||popupHostDoc()||document;
+ const c=doc.createElement('div');
  c.className='tgStratPop';
- document.body.appendChild(c);
+ (doc.body||document.body).appendChild(c);
  tgAutoPop=c; tgAutoPopChiave=chiave; tgAutoPopInfo={cfg,quanti,dove};
  tgAutoRiempiStrat();
  tgAutoPosizionaPop(btn);
 }
 // Il menù si chiude cliccando fuori o ripremendo il pulsante. Se la tabella scorre sotto, invece di
 // chiuderlo lo si riposiziona sul pulsante: cosi' non sparisce mentre si scorre.
-document.addEventListener('mousedown',ev=>{
+function tgAutoPopMousedown(ev){
  if(!tgAutoPop)return;
  if(tgAutoPop.contains(ev.target))return;
  if(ev.target&&ev.target.closest&&ev.target.closest('[data-tgstrat]'))return;
  tgAutoChiudiStrat();
-},true);
-document.addEventListener('scroll',ev=>{
+}
+function tgAutoPopScroll(ev){
  if(!tgAutoPop)return;
  if(tgAutoPop.contains(ev.target))return;
  const btn=tgAutoAncoraPop();
  if(btn&&btn.isConnected)tgAutoPosizionaPop(btn); else tgAutoChiudiStrat();
-},true);
-window.addEventListener('resize',()=>{ if(tgAutoPop)tgAutoPosizionaPop(tgAutoAncoraPop()); });
+}
+function tgAutoPopResize(){ if(tgAutoPop)tgAutoPosizionaPop(tgAutoAncoraPop()); }
+// I gestori vanno agganciati a ENTRAMBE le pagine: in modalità PIP il menù vive nella finestra
+// separata, che riceve i propri eventi (clic fuori, scorrimento) — quelli registrati sulla pagina
+// principale non arriverebbero mai. La finestra separata si aggiunge in openFloatingChart().
+function tgAutoAgganciaPopSuDoc(doc,win){
+ if(!doc||doc.__fbTgStratPopTracked)return;
+ doc.__fbTgStratPopTracked=true;
+ doc.addEventListener('mousedown',tgAutoPopMousedown,true);
+ doc.addEventListener('scroll',tgAutoPopScroll,true);
+ (win||doc.defaultView||window).addEventListener('resize',tgAutoPopResize);
+}
+tgAutoAgganciaPopSuDoc(document,window);
 function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;

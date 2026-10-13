@@ -85,7 +85,16 @@
 //          v137 = P/L delle posizioni reali MT5 identico al terminale: ovunque (etichetta sul
 //               grafico, casella TP/SL, box "P/L Live", tabelle) si usa profit+swap+commissione
 //               della fotografia del bridge, non piu' un ricalcolo col prezzo di un'altra fonte.
-const CACHE_NAME = "forex-backtest-lab-v138";
+//          v138 = replay/posizioni: le orizzontali di entry/TP/SL si vedono SOLO finche' la
+//               posizione e' aperta; P/L live in PIP anche in finestra separata; selezione/
+//               deselezione delle posizioni e tasti TP/SL sulla posizione selezionata (o sulla
+//               bozza); play del replay fluido con moltiplicatore 1x-30x applicato ai dati;
+//               freno notizie rosse di Forex Factory con filtri per paese e gravita'.
+//          v139 = apertura automatica: il menu' della Strategia (dentro il pannello "Apertura
+//               automatica delle posizioni") si apre anche in modalita' PIP, dentro la finestra
+//               separata (prima finiva nella pagina principale, restando invisibile), e rientra
+//               con essa.
+const CACHE_NAME = "forex-backtest-lab-v139";
 const ASSETS = [
   "./",
   "./app.html",
