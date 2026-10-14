@@ -448,3 +448,42 @@ Formato: data — chi — cosa — esito collaudo — commit.
   sfalsano) e la costruzione del footprint in replay. Trovato per ora un indizio e un difetto
   vicino: fblAllineaRigheSera() e liveOffSessionRowsFor() sono CODICE MORTO (definite, mai
   chiamate), quindi le candele serali salvate in OFFSESSION_ROWS_KEY non vengono mai riusate.
+
+## 15 ottobre 2026 - v150: Syntra, il profilo che non leggeva niente
+  SEGNALATO: "il robot fa la procedura giusta - classifica, utente, profilo - pero' una volta sul
+  profilo non esegue piu' nulla", e l'app riceveva "0 operazioni lette, 3 in archivio".
+  LA CAUSA, un cane che si morde la coda: leggi_schermata() riconosce una scheda SOLO se contiene
+  la riga "Entrata:", che c'e' solo a dettaglio APERTO. Sul profilo le operazioni arrivano CHIUSE.
+  I pulsanti "Vedi dettagli TP/SL" venivano pero' cercati DENTRO le schede gia' riconosciute
+  (sc["toggle"]): nessuna scheda riconosciuta -> nessun pulsante -> niente da espandere -> niente
+  da riconoscere. E lo scorrimento si calcolava dall'ingombro delle schede, quindi senza schede non
+  avveniva nemmeno: si restava fermi sulla stessa schermata per tutte le pagine previste.
+  (1) trova_espansori() cerca i pulsanti NELL'ALBERO INTERO, e si espande una posizione per volta
+  dall'alto in basso finche' ce ne sono; ci si ferma da soli se un tocco non cambia piu' niente.
+  (2) Si scorre anche senza schede riconosciute (due terzi di schermo), ma dopo tre schermate vuote
+  di fila ci si ferma: non e' la pagina che pensiamo di avere davanti.
+  (3) Si smette quando due schermate di fila mostrano le stesse operazioni (stessa idea gia' usata
+  per la classifica).
+  (4) Il profilo ha il suo tetto di schermate: 60, non le 2 del giro delle notifiche - a fermarlo
+  deve essere il PERIODO chiesto, non un numero deciso a tavolino.
+  (5) syntra_viva(): se l'app e' stata chiusa a forza si riapre. Il controllo che esisteva gira
+  ogni 30 s nel ciclo principale, ma un profilo si legge in MINUTI dentro un solo giro di quel
+  ciclo, quindi proprio mentre serviva non arrivava mai. Serve anche a non toccare lo schermo AL
+  BUIO: con Syntra morta, un tocco a coordinate fisse preme quello che c'e' sotto.
+  Test: ponte/test_profilo_espansione.py (9), con un emulatore finto che si comporta come quello
+  vero: classifica, poi profilo, schede chiuse che si aprono al tocco.
+
+## 15 ottobre 2026 - v150 (seconda parte): il TP1 anche su Kraken e nella cronologia
+  SEGNALATO con un caso vero (SELL BNB/USD da 730, target 725-720-711-702): a grafico "TP1" stava
+  a 702 e "TP4" a 725, al contrario. In v147 l'ordinamento era stato messo sui segnali Telegram, ma
+  restavano TRE punti che si costruivano la lista da soli: la tabella delle posizioni Kraken, il
+  loro disegno a grafico, e la cronologia delle sale.
+  La causa: il ponte Kraken manda i take profit ordinati per PREZZO crescente, sempre, qualunque
+  sia il lato (kraken_ordini.py: sorted(tps, key=prezzo)). Su un SELL il primo della lista e' quindi
+  il piu' lontano dall'entrata.
+  Nella cronologia non era solo un'etichetta: i TP raggiunti si contano scorrendo quella lista IN
+  ORDINE (`while(... c.h>=tps[k+nuovi] ...)`), quindi l'ordine sbagliato falsava il conteggio, il
+  win rate per TP e tutte le statistiche della pagina - non solo le scritte a grafico.
+  Lezione, la stessa di stamattina in un'altra forma: corretto un punto, vanno cercati gli altri
+  che fanno la stessa cosa invece di fidarsi che fosse l'unico.
+  Test: tp_in_ordine.test.mjs (6, erano 4).
