@@ -1689,6 +1689,14 @@ window.fblAvviaSoloBacktest=function(){
           <input id="syntraNuovoUtente" type="text" placeholder="nome utente Syntra (es. CrownPips)" style="flex:1;min-width:180px">
           <button type="button" id="syntraAggiungiBtn" class="miniBtn" style="margin-left:8px">+ Aggiungi</button>
         </div>
+        <!-- RICHIESTO ESPLICITAMENTE: utenti da ESCLUDERE. Un segnale di un utente escluso non
+             viene nemmeno riconosciuto come segnale: non entra nel pannello, non suona, non apre
+             niente. L'utente resta comunque nell'elenco qui sopra, da dove si puo' riammettere. -->
+        <div class="fbOptRow" style="margin-top:8px">
+          <input id="syntraEscludiNuovo" type="text" placeholder="utente da escludere (es. CrownPips)" style="flex:1;min-width:180px">
+          <button type="button" id="syntraEscludiBtn" class="miniBtn" style="margin-left:8px">🚫 Escludi</button>
+        </div>
+        <p class="hint" style="margin-top:4px">Un utente <b>escluso</b> non manda piu' niente: i suoi messaggi non vengono riconosciuti come segnali e vengono lasciati passare. Resta nell'elenco qui sopra con la spunta <b>🚫 Escluso</b>, da togliere quando lo si vuole riammettere. La scelta si ricorda, anche dopo aver chiuso l'app.</p>
         <p class="hint" style="margin-top:4px">Un utente nuovo <b>non diventa sala da solo</b>: i suoi segnali arrivano nel pannello "!" con il pulsante <b>«Aggiungi utente come sala segnali»</b>. Finché non lo aggiungi, niente si apre in automatico dai suoi segnali.</p>
         <p class="hint" style="margin-top:6px">BlueStacks aperto con Syntra in primo piano e ADB attivo (Impostazioni → Avanzate). Il ponte resta sulla pagina <b>Notifiche</b> di Syntra (se non c'è la apre da solo): per ogni notifica nuova di un ordine (IN ATTESA, ATTIVATO...) apre il dettaglio, legge entrata, TP e SL e la passa come segnale; «Scambio concluso», «Target hit», «Vinto», «Perso» sono solo informazioni e non aprono niente. «ATTIVATO» apre a mercato solo su Kraken (su MT5 il pendente è già piazzato dall'«IN ATTESA»): la "sala" è <b>Syntra · nome utente</b>. Gli utenti compaiono nella tabella dell'apertura automatica, dove si accendono uno per uno, solo dopo averli aggiunti come sala (qui sotto o dal pannello del segnale). Le operazioni già presenti quando il lettore parte non vengono aperte.</p>
         </div>
@@ -4037,6 +4045,26 @@ function journalMt5AccountColor(login){
 // RICHIESTO ESPLICITAMENTE: colonna "Origine" del Trade Journal - aperta a mano dall'utente
 // oppure da una sala segnali, e QUALE sala (nome del gruppo). Per le posizioni MT5 la sala si
 // ritrova anche dopo una ricarica, dal numero di ticket (vedi mt5ApplicaSegnale).
+// RICHIESTO ESPLICITAMENTE: una sala (o un utente Syntra) puo' mandare segnali sia su Forex sia
+// su cripto. Guardando la tabella delle posizioni aperte o il Trade Journal si deve capire a colpo
+// d'occhio su che tipo di asset si sta operando, senza dover riconoscere il simbolo.
+// La famiglia si ricava dall'ASSET, non da un campo salvato: cosi' vale anche per le operazioni
+// aperte prima di oggi, e non puo' mai essere in disaccordo con lo strumento vero. E' la stessa
+// regola che decide quale delle due apertura automatiche vale per quel segnale (tgFamDaSimbolo).
+function fblFamigliaAsset(asset){
+ try{ return (typeof tgFamDaSimbolo==='function')?tgFamDaSimbolo(asset):'fx'; }catch(e){ return 'fx'; }
+}
+function fblFamigliaBadgeHtml(asset){
+ if(!asset)return '';
+ const cr=fblFamigliaAsset(asset)==='cr';
+ const col=cr?'#f0b90b':'#7aa7ff';
+ const testo=cr?'🪙 Cripto':'💱 Forex';
+ const tit=cr
+  ? 'Criptovalute: questo segnale segue la strategia CRIPTO dell\'apertura automatica (conto Kraken o simulato)'
+  : 'Forex, indici e azioni: questo segnale segue la strategia FOREX dell\'apertura automatica (conto MT5, Capital.com o simulato)';
+ return ' <span title="'+escapeHtmlLite(tit)+'" style="display:inline-flex;align-items:center;gap:3px;padding:1px 5px;border-radius:5px;border:1px solid '
+   +col+';color:'+col+';font-weight:700;font-size:10px;white-space:nowrap">'+testo+'</span>';
+}
 function journalOrigineHtml(t){
  if(t&&t.mt5Ticket!=null&&!t.tgSala)mt5ApplicaSegnale(t);
  if(t&&t.tgSala)return journalSsBadgeHtml(t).trim();
@@ -4045,6 +4073,10 @@ function journalOrigineHtml(t){
  if(t&&(t.tgGruppo||t.tgSegnaleId||t.tgTpIndice!=null))
   return '<span title="Operazione aperta da un segnale, ma il nome della sala non è arrivato" style="color:#e8c34a;white-space:nowrap">📡 sala non riconosciuta</span>';
  return '<span title="Operazione aperta da te" style="color:#9ca3af;white-space:nowrap">👤 Manuale</span>';
+}
+// L'origine PIU' la famiglia dell'asset: e' quello che finisce nella colonna «Origine» del Journal.
+function journalOrigineEFamigliaHtml(t){
+ return journalOrigineHtml(t)+fblFamigliaBadgeHtml(t&&t.asset);
 }
 function journalSsBadgeHtml(t){
  if(!t||!t.tgSala)return '';
@@ -4457,9 +4489,49 @@ async function fblChiudiBlocco(quali,descrizione){
   }catch(e){ saltate++; }
  }
  try{ draw(); update(); }catch(e){}
- $('status').textContent='⚡ Chiuse '+fatte+(fatte===1?' posizione':' posizioni')
+ // RICHIESTO: finito, si vede QUANTO ha reso la chiusura, non solo quante posizioni sono state
+ // chiuse. Il numero e' il risultato calcolato un attimo prima di chiudere: per le posizioni REALI
+ // il prezzo finale lo decide il broker, quindi puo' scostarsi di poco - e lo si dice invece di
+ // far credere che sia un consuntivo al centesimo.
+ const esito=(ignoti<lista.length)
+   ? (' · risultato '+((somma>=0?'+':'')+euro(somma))+(reali?' (indicativo: sulle reali il prezzo finale lo fa il broker)':''))
+   : '';
+ $('status').textContent='⚡ Chiuse '+fatte+(fatte===1?' posizione':' posizioni')+esito
    +(saltate?(' · '+saltate+' non chiuse: manca il prezzo di quell\'asset in questo momento (portalo a grafico e riprova)'):'');
 }
+// ===================== GRUPPI DI POSIZIONI: BE E CHIUDI (RICHIESTO) =====================
+// Un segnale con cinque target apre cinque posizioni, che nella tabella stanno in una riga sola.
+// Da li' si devono poter fare le due cose che si fanno davvero su un gruppo: portare TUTTI gli
+// stop a pareggio, e chiudere TUTTO in un colpo vedendo quanto ha reso.
+// Quali posizioni stanno in ogni gruppo: si rifa' ad ogni update(), perche' i gruppi cambiano
+// appena una posizione nasce o si chiude. La chiave e' quella di fblPosRaggruppa.
+const fblPosGruppiIds=new Map();
+// Tutti gli stop del gruppo a pareggio. La conferma dice quante sono e quante sono REALI: su un
+// conto vero questo sposta stop veri.
+async function fblGruppoPareggio(g){
+ const ids=(g&&g.ids)||[];
+ const lista=(positions||[]).filter(p=>p&&ids.indexOf(String(p.id))>=0);
+ if(!lista.length){ $('status').textContent='Nessuna posizione aperta in questo gruppo.'; return; }
+ const reali=lista.filter(p=>p.mt5Ticket!=null).length;
+ const righe=['Gruppo '+g.descr+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.',
+   'Lo stop di ognuna va al suo pareggio esatto (profitto netto 0,00, commissioni e swap compresi).'];
+ if(reali)righe.push(reali+(reali===1?' e\' REALE':' sono REALI')+' sul conto MT5: lo stop si sposta davvero sul conto.');
+ if(!await appConfirm(righe.join('\n\n'),{title:'\u2696\ufe0f Stop a pareggio',okLabel:'Sposta '+lista.length,cancelLabel:'Annulla'}))return;
+ let fatte=0;
+ lista.forEach(p=>{ try{ applyBreakevenToPosition(p); fatte++; }catch(e){} });
+ try{ draw(); update(); }catch(e){}
+ $('status').textContent='\u2696\ufe0f Stop a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')+' del gruppo '+g.descr+'.';
+}
+fblDelega('click',async ev=>{
+ const t=ev.target&&ev.target.closest&&ev.target.closest('[data-posgruppo-be],[data-posgruppo-chiudi]');
+ if(!t)return;
+ const be=t.hasAttribute('data-posgruppo-be');
+ const k=t.getAttribute(be?'data-posgruppo-be':'data-posgruppo-chiudi');
+ const g=fblPosGruppiIds.get(k);
+ if(!g||!g.ids.length){ $('status').textContent='Questo gruppo non c\'e\' piu\': aggiorna la tabella.'; return; }
+ if(be)await fblGruppoPareggio(g);
+ else await fblChiudiBlocco(p=>p&&g.ids.indexOf(String(p.id))>=0,'Gruppo '+g.descr);
+});
 // Il menu si ricostruisce ogni volta che lo si apre: asset e numeri devono essere quelli di
 // adesso, non quelli di quando la pagina e' stata caricata.
 function fblBloccoCostruisci(){
@@ -5797,6 +5869,8 @@ const GRAFICO_LS={
  fbl_kraken_leva:()=>{ try{ krakenDisegnaConto(); }catch(e){} },
  fb_syntra_utenti:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppiSyntra=g; tgAutoDisegna(); syntraUtentiDisegna(); } }catch(e){} },
  fb_syntra_visti:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ syntraVisti=g; syntraUtentiDisegna(); } }catch(e){} },
+ // RICHIESTO: l'esclusione si ricorda, e vale su tutti i dispositivi come il resto dell'elenco.
+ fb_syntra_esclusi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ syntraEsclusi=g; syntraUtentiDisegna(); } }catch(e){} },
  fb_tg_avvicinamento_pct:null,
  fb_tg_suono_id:v=>{ try{ const el=$('tgSuonoSelect'); if(el&&[...el.options].some(o=>o.value===v))el.value=v; }catch(e){} },
  fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} },
@@ -10305,7 +10379,7 @@ function update(){
      const zoneToggleTitle='Clicca per mostrare/nascondere il colore delle caselle TP/SL sul grafico (le linee restano visibili)';
      // RICHIESTO: la sala (o l'utente Syntra) scritta nella riga. Sta nella colonna "Sessione",
      // accanto all'etichetta della sessione: e' l'unica colonna che parla di provenienza.
-     const html=`<tr class="${isCurrentRow&&p===active?'focused':''}${figlia?' fblPosFiglia':''}"><td>${figlia?'↳ ':''}${numero}</td><td>${modeTag}${fblOrigineBadgeHtml(p)}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPriceA(p.entry,posAsset)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${slCellTxt}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${fmtPriceA(p.tp,posAsset)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
+     const html=`<tr class="${isCurrentRow&&p===active?'focused':''}${figlia?' fblPosFiglia':''}"><td>${figlia?'↳ ':''}${numero}</td><td>${modeTag}${fblOrigineBadgeHtml(p)}${fblFamigliaBadgeHtml(posAsset)}</td><td>${posAsset}</td><td>${p.side}</td><td>${fmtPriceA(p.entry,posAsset)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${slCellTxt}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${fmtPriceA(p.tp,posAsset)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
      `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTagPlain} / ${posAsset} e mostra questa posizione a grafico">${p.mt5Ticket!=null?'Vai a Grafico':'📍 Vai a grafico'}</button>${actionsCell}</td></tr>`;
      return {html,pl:plLive,lots:Number(p.lots)||0,margine:Number(p.marginUsed||0),prezzo:posPrice,p,sessionKey,modeTag};
    };
@@ -10314,6 +10388,7 @@ function update(){
    // sempre con un segnale a piu' target: tre o quattro righe identiche tranne il take profit,
    // che da sole riempiono la tabella e nascondono tutto il resto.
    const posGruppi=fblPosRaggruppa(allPosRows);
+   fblPosGruppiIds.clear();   // i gruppi di ADESSO: vedi i pulsanti BE/Chiudi piu' sotto
    let posNum=0;
    const posHtml=posGruppi.map(g=>{
      if(g.chiave==null||g.righe.length<2)return posRigaDati(g.righe[0],++posNum).html;
@@ -10336,14 +10411,25 @@ function update(){
        ?'Riunisci le '+dati.length+' posizioni in una riga sola (P/L sommato)'
        :'Mostra una per una le '+dati.length+' posizioni di questo gruppo';
      const gotoG=`<button class="miniBtn" data-gotoasset-pos-session="${primo.sessionKey}" data-gotoasset-pos="${p0.id}" title="Porta questo gruppo a grafico">📍 Vai a grafico</button>`;
+     // RICHIESTO: sul gruppo si deve poter fare in un colpo quello che si farebbe una per una —
+     // tutti gli stop a pareggio, oppure chiudere tutto vedendo quanto ha reso. Solo sulla
+     // sessione a schermo: le altre tre sessioni non hanno le loro posizioni in `positions`, e un
+     // pulsante che non puo' funzionare e' peggio di un pulsante che non c'e'.
+     const gruppoAgibile=(primo.sessionKey===currentMode());
+     if(gruppoAgibile)fblPosGruppiIds.set(g.chiave,{ids:dati.map(d=>String(d.p.id)),
+       descr:(p0.tgSala?String(p0.tgSala):'senza sala')+' \u00b7 '+p0.side+' '+a0});
+     const azioniG=gruppoAgibile
+       ?`<button class="miniBtn" data-posgruppo-be="${escapeHtmlLite(g.chiave)}" title="Porta a pareggio lo stop di tutte e ${dati.length} le posizioni di questo gruppo">⚖️ BE</button>`
+        +`<button class="miniBtn danger" data-posgruppo-chiudi="${escapeHtmlLite(g.chiave)}" title="Chiudi tutte e ${dati.length} le posizioni di questo gruppo in un colpo, con il risultato">Chiudi tutte</button>`
+       :'';
      return `<tr class="fblPosGruppo"><td><button class="miniBtn" data-posgruppo="${escapeHtmlLite(g.chiave)}" title="${titoloBtn}" style="padding:0 6px;min-width:0">${etichetta}</button> ${++posNum}</td>`
-       +`<td>${primo.modeTag}${fblOrigineBadgeHtml(p0)} <span style="color:#8b96a5;font-size:10px;white-space:nowrap">${dati.length} posizioni</span></td>`
+       +`<td>${primo.modeTag}${fblOrigineBadgeHtml(p0)}${fblFamigliaBadgeHtml(a0)} <span style="color:#8b96a5;font-size:10px;white-space:nowrap">${dati.length} posizioni</span></td>`
        +`<td>${a0}</td><td>${p0.side}</td><td>${fblEntrataGruppo(dati,a0)}</td>`
        +`<td>${slTxt.join(' / ')||'—'}</td><td>${tpTxt.join(' / ')||'—'}</td>`
        +`<td title="Il rapporto rischio/rendimento cambia da posizione a posizione: aprilo per vederli">—</td>`
        +`<td>${somma('lots').toFixed(2)}</td><td>${euro(somma('margine'))}</td>`
        +`<td>${primo.prezzo!=null?fmtPriceA(primo.prezzo,a0):'—'}</td>`+plCellG
-       +`<td>${gotoG}</td></tr>`
+       +`<td>${gotoG}${azioniG}</td></tr>`
        +(aperto?dati.map(d=>d.html).join(''):'');
    }).join('');
    aggiornaTbody($('openPositions'),posHtml);
@@ -10452,7 +10538,7 @@ function update(){
    // #journal (vedi listener 'change' più sotto nello script), come già per jumptrade/deltrade.
    const strategyOptionsHtml='<option value="">—</option>'+tradeStrategies.map(s=>`<option value="${escapeHtmlLite(s)}"${t.strategy===s?' selected':''}>${escapeHtmlLite(s)}</option>`).join('');
    const strategyCell=`<td><select class="journalStrategySelect" data-strategy-trade="${i}" title="Strategia usata in questa operazione" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:100px">${strategyOptionsHtml}</select></td>`;
-   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td class="journalClosedCell" data-open-label="${escapeHtmlLite(journalOpenAtLabel(t))}">${journalClosedAtLabel(t.closedAt)}</td><td>${tAsset}</td><td>${modeTag}</td><td>${journalOrigineHtml(t)}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPriceA(t.entry,t.asset)}</td><td>${journalSlTxt}</td><td>${fmtPriceA(t.tp,t.asset)}</td><td>${rrArrotondatoTesto(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPriceA(t.exit,t.asset)}</td><td>${t.result}</td>`+
+   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td class="journalClosedCell" data-open-label="${escapeHtmlLite(journalOpenAtLabel(t))}">${journalClosedAtLabel(t.closedAt)}</td><td>${tAsset}</td><td>${modeTag}</td><td>${journalOrigineEFamigliaHtml(t)}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPriceA(t.entry,t.asset)}</td><td>${journalSlTxt}</td><td>${fmtPriceA(t.tp,t.asset)}</td><td>${rrArrotondatoTesto(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPriceA(t.exit,t.asset)}</td><td>${t.result}</td>`+
    strategyCell+
    `<td class="${t.pips>=0?'liveProfit':'liveLoss'}">${(t.pips>=0?'+':'')+t.pips.toFixed(1)}</td>`+
    `<td class="${t.pl>=0?'liveProfit':'liveLoss'}">${(t.pl>=0?'+':'')+euro(t.pl)}</td>`+
@@ -14047,8 +14133,59 @@ function footprintShowPocNow(){ const el=$('footprintShowPoc'); return el?!!el.c
 // dimensione del testo ballava. Il numero scelto in Impostazioni resta, ma ora vuol dire "quante
 // righe su una candela di ampiezza TIPICA": e' da li' che si ricava il passo unico (vedi
 // footprintAutoRowPipsFor), lo stesso che usano gia' zone zero-print, VPOC e heatmap.
+// RICHIESTO ESPLICITAMENTE ("il footprint e gli istogrammi devono stare SOLO a fianco alla
+// candela, non sopra o sotto"): le righe nascono dai TICK, e un tick puo' cadere fuori dall'alta e
+// dalla bassa della candela disegnata - le candele arrivano dall'OHLC del broker, i tick dal feed,
+// e in piu' l'arrotondamento al passo sposta il livello fino a mezza riga. Finche' si rifaceva la
+// griglia dentro ogni candela quelle righe venivano schiacciate dentro per forza; con la scala
+// uniforme restano al loro posto sulla griglia globale - giusto - ma vanno RIPORTATE DENTRO la
+// candela, non buttate via: si sommano alla riga di bordo, cosi' il volume resta tutto e il
+// disegno non esce dalla candela. Il passo NON cambia: le righe restano alte uguali ovunque.
+// SECONDO MOTIVO, segnalato insieme al primo ("ci sono piu' livelli di footprint, mentre invece
+// deve esserci soltanto un livello"): ogni bucket si porta dietro il passo con cui e' stato
+// costruito (footprintApplyTickToBuckets lo salva in bucket.step) e il disegno usava QUELLO. Due
+// candele costruite con passi diversi - succede dopo un cambio del passo automatico, e sempre con
+// le celle gia' aggregate che arrivano dal backup cloud di un altro dispositivo, dove il passo era
+// un altro - finivano cosi' sullo stesso grafico con righe alte in modo diverso: la "scala
+// uniforme" saltava ed era tutto sparpagliato. Qui il passo GLOBALE vince sempre: un bucket con un
+// passo diverso viene riportato su quella griglia prima di disegnarlo.
+function footprintDentroLaCandela(fp,r,stepGlobale){
+ const passoBucket=Number(fp&&fp.step);
+ const step=(Number(stepGlobale)>0)?Number(stepGlobale):passoBucket;
+ if(!(step>0)||!fp.rows)return fp;
+ const lo=Number(r&&r.low), hi=Number(r&&r.high);
+ if(!(Number.isFinite(lo)&&Number.isFinite(hi)&&hi>=lo))return fp;
+ // Prima e ultima riga della griglia GLOBALE che cadono dentro la candela: non si inventa una
+ // griglia nuova, si prendono i due estremi di quella che c'e' gia'.
+ const kLo=Math.round(lo/step), kHi=Math.round(hi/step);
+ let daRifare=(passoBucket!==step);
+ if(!daRifare){
+  for(const q in fp.rows){ const k=Math.round(Number(q)/step); if(k<kLo||k>kHi){ daRifare=true; break; } }
+ }
+ if(!daRifare)return fp;   // caso normale: non si tocca niente e non si copia niente
+ const rows={};
+ for(const q in fp.rows){
+  const src=fp.rows[q];
+  let k=Math.round(Number(q)/step);
+  if(k<kLo)k=kLo; else if(k>kHi)k=kHi;
+  const dst=rows[k*step]||(rows[k*step]={});
+  for(const p in src){ if(typeof src[p]==='number')dst[p]=(dst[p]||0)+src[p]; }
+ }
+ return {step,rows};
+}
+window.footprintDentroLaCandela=footprintDentroLaCandela;   // provabile dal laboratorio
 function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
  opt=opt||{};
+ // Niente righe sopra o sotto la candela, e un passo solo per tutto il grafico: vedi
+ // footprintDentroLaCandela qui sopra. Il passo globale arriva da draw() (calcolato una volta per
+ // tutte le candele); se non arriva si ricava qui, cosi' la funzione resta usabile da sola.
+ if(fp&&fp.rows){
+  // Chi disegna sa qual e' il passo globale e lo passa (draw() lo calcola una volta per tutte le
+  // candele, la formazione del replay passa il suo). Se non arriva NON si va a indovinare
+  // dall'asset a grafico: si usa quello del bucket, e resta il solo confinamento alla candela.
+  const _stepG=Number(opt.stepGlobale);
+  fp=footprintDentroLaCandela(fp,r,(_stepG>0)?_stepG:Number(fp.step));
+ }
  // Il passo e' quello con cui i bucket sono stati costruiti (footprintStepForAsset): uno solo per
  // tutto il grafico. Qui non si riaggrega piu' niente.
  const step=fp.step;
@@ -14419,6 +14556,9 @@ function draw(){
  const _footprintImbAlpha=footprintImbalanceOpacityNow();
  const _FOOTPRINT_MIN_BW=footprintMinBwNow();
  const bw=Math.max(2,Math.min(_footprintOn?90:12,cw/n*.62));
+ // Il passo UNICO di tutte le righe del footprint in questo giro di disegno (scala uniforme):
+ // calcolato una volta per tutte le candele, non bucket per bucket.
+ const _footprintStepGlobale=(()=>{ try{ return footprintStepForAsset(currentAssetKey)||0; }catch(e){ return 0; } })();
  const _cc=currentCandleColors();
  // Pre-pass: un'unica lista, in ordine cronologico, con posizione x e footprint reale (o null) di
  // OGNI candela visibile — costruita UNA volta, poi riusata sia per le zone zero-print (che devono
@@ -14829,19 +14969,28 @@ function draw(){
      let _hTop=Math.min(y(r.high),y(r.low)), _hBot=Math.max(y(r.high),y(r.low));
      if(fp&&fp.rows)Object.keys(fp.rows).forEach(lv=>{ const a=y(Number(lv)+fp.step/2), b2=y(Number(lv)-fp.step/2); _hTop=Math.min(_hTop,a,b2); _hBot=Math.max(_hBot,a,b2); });
      footprintCellHitRects.push({xxLeft:xx-bw/2,xxRight:xx+bw/2,yTop:_hTop,yBot:_hBot});
-     // RICHIESTO ESPLICITAMENTE: fascia del CAMBIO STILE, stessa colonna della candela ma estesa
-     // SOPRA l'alta (dove non c'è nulla da cliccare) e appena sotto la bassa. Così basta toccare
-     // "sopra la candela" per far passare bid/ask -> delta -> volume, sempre, anche su candele
-     // minuscole o senza tick. La colonna NON si allarga a destra/sinistra (richiesto: sopra, non
-     // di fianco), quindi non ruba i click a numeri/caselline/disegni accanto alla candela.
-     const _sAbove=Math.max(18,Math.round(bw*1.4));
-     const _colL=Math.min(xx-bw/2,xx+bw/2), _colR=Math.max(xx-bw/2,xx+bw/2);
-     footprintStyleHitRects.push({xxLeft:_colL,xxRight:_colR,yTop:_hTop-_sAbove,yBot:_hBot+6});
+     // FASCIA DEL CAMBIO STILE — RICHIESTO ESPLICITAMENTE, due volte, perche' la prima versione
+     // non bastava: "il cambio di stile deve funzionare al clic su TUTTE le candele, anche quelle
+     // passate, in qualsiasi timeframe e per tutti gli asset".
+     // Perche' prima mancava il bersaglio: la fascia era larga quanto il CORPO della candela
+     // (bw = 62% della colonna, con un tetto di 12 px senza footprint) e alta quanto la candela
+     // piu' 18 px sopra e 6 sotto. Misurato nel banco di prova: 9 px per 45. Il meccanismo
+     // funzionava su ogni candela - il difetto non era "solo quella di adesso non risponde" - ma
+     // un bersaglio di 9 px si prende solo per fortuna, e col dito su un tablet mai: restava
+     // sempre il 38% di colonna morta fra una candela e l'altra, e sotto/sopra niente.
+     // Ora la fascia e' TUTTA la colonna della candela (cw/n: nessun vuoto fra una e l'altra) e in
+     // altezza si allarga sopra e sotto di almeno 22 px, o dell'altezza della candela se e' piu'
+     // grande. Resta comunque legata al prezzo DI QUELLA CANDELA: lontano dalle candele il grafico
+     // non viene toccato, e le precedenze (posizioni, caselle TP/SL, livelli, disegni) restano
+     // quelle di prima - vedi i controlli nel gestore del tocco (fpTocco).
+     const _slot=Math.max(bw,cw/n);
+     const _margine=Math.max(22,Math.round(_hBot-_hTop));
+     footprintStyleHitRects.push({xxLeft:xx-_slot/2,xxRight:xx+_slot/2,yTop:_hTop-_margine,yBot:_hBot+_margine});
    }
    if(fp){
      // SCALA UNIFORME: niente piu' `righeFisse`/`barLo`/`barHi` (servivano a rifare la griglia
      // dentro ogni candela). Il passo e' unico per tutto il grafico, vedi drawFootprintCandle.
-     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle,{up:_cc.up,down:_cc.down,passo:cw/n});
+     drawFootprintCandle(ctx,r,xx,bw,y,fp,lineColor,_footprintStyle,{up:_cc.up,down:_cc.down,passo:cw/n,stepGlobale:_footprintStepGlobale});
      // RICHIESTO ESPLICITAMENTE: SOLO in stile Bid/Ask (mai in Delta o Volume, dove le caselline
      // mostrano già rispettivamente il delta o il volume riga per riga — questo numero sopra la
      // candela ripeterebbe la stessa informazione già a schermo) si scrive sopra alla candela un
@@ -15959,7 +16108,11 @@ function draw(){
  }
  // Current market price: close of the latest available candle in the selected timeframe.
  if(rows.length && rows[idx] && Number.isFinite(Number(rows[idx].close))){
-   const currentClose=Number(rows[idx].close);
+   // In REPLAY, mentre la candela successiva si forma, il prezzo di adesso e' quello della
+   // formazione: linea ed etichetta si muovono con lei, come dal vivo (vedi
+   // replayPrezzoFormazione). Fuori dal replay resta la chiusura dell'ultima candela, come prima.
+   const _formaOra=replayPrezzoFormazione();
+   const currentClose=Number.isFinite(_formaOra)?_formaOra:Number(rows[idx].close);
    if(currentClose>=lo && currentClose<=hi){
      ctx.save();
      ctx.setLineDash([8,6]);
@@ -20842,7 +20995,12 @@ function replayAvviaFormazione(targetIdx){
  const perBar=replaySecondsPerBar();
  const path=replaySintesiPath(r,perBar+1);
  if(!path)return null;
- return {idx:targetIdx,sub:1,path,fp:{},vol:Number(r.volume)||0};
+ // RICHIESTO: in replay il footprint si vede e AVANZA aggiornamento dopo aggiornamento, come dal
+ // vivo. Le righe della candela in formazione nascono quindi sulla STESSA griglia globale delle
+ // candele vere (footprintStepForAsset), con le stesse celle: cosi' si possono disegnare con lo
+ // stesso disegnatore (drawFootprintCandle) invece che con un istogramma tutto loro.
+ const step=(()=>{ try{ const s=footprintStepForAsset(currentAssetKey); return (s>0)?s:0; }catch(e){ return 0; } })();
+ return {idx:targetIdx,sub:1,path,fp:{step,rows:{}},vol:Number(r.volume)||0};
 }
 // Percorso sintetico dentro la candela: open → max → min → close (niente candele future).
 function replaySintesiPath(r,N){
@@ -20860,18 +21018,26 @@ function replaySintesiPath(r,N){
  return p;
 }
 // Accumula su f.fp la fetta di volume della posizione `sub` (livelli fra path[sub-1] e path[sub+1]).
+// Le righe vanno sulla GRIGLIA GLOBALE del footprint (f.fp.step), nelle stesse celle delle candele
+// vere: il lato (comprato/venduto) lo decide la direzione del movimento in questo secondo, come fa
+// la tick-rule sul dato vero. Senza un passo noto (footprint mai calcolato per questo asset) non si
+// accumula niente e la candela in formazione resta una candela semplice.
 function replaySubAccumulo(f){
  if(!f.path||!f.path.length)return;
+ const step=Number(f.fp&&f.fp.step);
+ if(!(step>0)||!f.fp.rows)return;
  const perBar=Math.max(1,f.path.length-1);
  const a=f.path[Math.max(0,f.sub-1)];
  const b=f.path[Math.min(f.path.length-1,f.sub+1)];
  const lo=Math.min(a,b),hi=Math.max(a,b);
  const vol=f.vol/perBar;
- const livelli=Math.max(1,Math.min(64,Math.round(perBar/2)));
- for(let k=0;k<livelli;k++){
-  const pr=lo+(hi-lo)*(k+0.5)/livelli;
-  const q=pr.toFixed(5);
-  f.fp[q]=(f.fp[q]||0)+vol/livelli;
+ const aggr=(b>a)?1:((b<a)?-1:0);
+ const kLo=Math.round(lo/step), kHi=Math.round(hi/step);
+ const quante=Math.max(1,kHi-kLo+1);
+ const fetta=vol/quante;
+ for(let k=kLo;k<=kHi;k++){
+  const cell=f.fp.rows[k*step]||(f.fp.rows[k*step]=footprintNewCell());
+  footprintAddToCell(cell,aggr>=0?1:-1,fetta,aggr,fetta);
  }
 }
 // Disegno dell'anteprima di formazione: si disegna DOPO draw(), nello spazio vuoto oltre
@@ -20891,37 +21057,53 @@ function replayDisegnaFormazione(f){
  const cur=f.path[kMax];
  const xc=g.xLocal(f.idx);
  const padH=w-pad.l-pad.r;
- const bw=Math.max(2,Math.min(_footprintMinBwRep()?90:12,padH*.62));
+ // BUG SEGNALATO ("rimane quel blocco verde e il blocco rosso"): la larghezza si calcolava su
+ // padH*.62, cioe' il 62% di TUTTA l'area del grafico, invece che sulla larghezza di UNA candela.
+ // Con il footprint acceso il tetto e' 90 px, quindi usciva un rettangolo largo 90 px accanto a
+ // candele larghe 12: non sembrava una candela che si forma, sembrava un blocco. Ora e' la stessa
+ // identica formula delle candele vere in draw(): `cw/n*.62` con lo stesso tetto.
+ const nSlot=(()=>{ try{ return Math.max(1,getViewWindow().n); }catch(e){ return 1; } })();
+ const bw=Math.max(2,Math.min(_footprintMinBwRep()?90:12,padH/nSlot*.62));
  const x0=xc-bw/2,x1=xc+bw/2;
  const plotTop=pad.t,plotBot=pad.t+Math.max(0,h-pad.t-pad.b);
  ctx.save();
  ctx.beginPath();ctx.rect(pad.l,plotTop,Math.max(1,padH),Math.max(1,plotBot-plotTop));ctx.clip();
- const lineContrast=chartLineContrastColor(currentChartBgColor());
- ctx.strokeStyle=lineContrast;ctx.lineWidth=1;ctx.globalAlpha=0.35;
- ctx.beginPath();ctx.moveTo(xc,g.y(hiF));ctx.lineTo(xc,g.y(loF));ctx.stroke();
- ctx.globalAlpha=1;
+ // RICHIESTO: la candela in formazione deve avere l'ASPETTO delle altre, non un verde/rosso suo.
+ // Prima erano due colori fissi (#2e8b57/#d64545) mentre le candele vere usano quelli scelti in
+ // Style: accanto a candele blu e bianche il blocco verde/rosso sembrava un'altra cosa. E lo
+ // stoppino si disegnava col colore del testo al 35% di opacita', cioe' quasi invisibile: ora e'
+ // pieno e del colore del corpo, esattamente come su una candela vera.
+ const _ccRep=(()=>{ try{ return currentCandleColors(); }catch(e){ return {up:'#2e8b57',down:'#d64545'}; } })();
  const up=cur>=f.path[0];
- const bodyCol=up?'#2e8b57':'#d64545';
+ const bodyCol=up?(_ccRep.up||'#2e8b57'):(_ccRep.down||'#d64545');
+ // La candela "com'e' adesso": apertura vera, chiusura = prezzo di questo secondo, massimo e minimo
+ // toccati finora. E' quella che si disegna, identica a come verra' disegnata una volta rivelata.
+ const rOra={date:r.date,open:f.path[0],high:hiF,low:loF,close:cur,volume:Number(r.volume)||0};
+ // RICHIESTO ESPLICITAMENTE ("anche in replay si deve vedere il footprint, ricalcolato, che avanza
+ // aggiornamento dopo aggiornamento"): col footprint acceso la candela in formazione si disegna con
+ // lo STESSO disegnatore delle candele vere, non piu' con un istogramma tutto suo fatto di
+ // trattini. Le righe sono gia' sulla griglia globale (vedi replaySubAccumulo), quindi caselline,
+ // numeri, profilo e POC sono quelli di sempre e crescono un secondo alla volta.
+ const _fpRighe=(f.fp&&f.fp.rows)?Object.keys(f.fp.rows).length:0;
+ if(_footprintMinBwRep()&&_fpRighe&&bw>=footprintMinBwNow()){
+  try{
+   drawFootprintCandle(ctx,rOra,xc,bw,g.y,f.fp,chartLineContrastColor(currentChartBgColor()),
+     footprintStyleNow(),{up:_ccRep.up,down:_ccRep.down,passo:padH/nSlot,stepGlobale:f.fp.step});
+   ctx.restore();
+   return;
+  }catch(e){ /* footprint non disegnabile: si ricade sulla candela semplice qui sotto */ }
+ }
+ ctx.strokeStyle=bodyCol;ctx.fillStyle=bodyCol;ctx.lineWidth=1;
+ ctx.beginPath();ctx.moveTo(xc,g.y(hiF));ctx.lineTo(xc,g.y(loF));ctx.stroke();
  const yTop=Math.min(g.y(f.path[0]),g.y(cur)),yBot=Math.max(g.y(f.path[0]),g.y(cur));
  ctx.fillStyle=bodyCol;
  ctx.fillRect(x0+1,yTop,Math.max(0,bw-2),Math.max(1,yBot-yTop));
  ctx.strokeStyle=bodyCol;ctx.lineWidth=1;
  ctx.strokeRect(x0+0.5,yTop,Math.max(0,bw-1),Math.max(1,yBot-yTop));
- if(f.fp&&Object.keys(f.fp).length){
-  ctx.globalAlpha=0.85;
-  let maxV=0; for(const q in f.fp)if(f.fp[q]>maxV)maxV=f.fp[q];
-  if(maxV>0){ for(const q in f.fp){
-   const pr=Number(q); if(!Number.isFinite(pr))continue;
-   const yy=g.y(pr);
-   const len=(f.fp[q]/maxV)*(bw-6);
-   ctx.fillStyle=bodyCol;
-   ctx.fillRect(xc-bw/2+1,yy-1,Math.max(0,len),2);
-  } }
-  ctx.globalAlpha=1;
- }
- ctx.strokeStyle=bodyCol;ctx.lineWidth=1;ctx.setLineDash([3,3]);
- ctx.beginPath();ctx.moveTo(pad.l,g.y(cur));ctx.lineTo(w-pad.r,g.y(cur));ctx.stroke();
- ctx.setLineDash([]);
+ // RICHIESTO ESPLICITAMENTE: via anche la riga tratteggiata colorata all'altezza del prezzo in
+ // formazione ("un'altra linea aggiuntiva che fa vedere l'evoluzione della candela"). Non serve
+ // piu': adesso e' la LINEA DEL PREZZO PRINCIPALE, quella bianca tratteggiata con l'etichetta
+ // sull'asse, a seguire la candela mentre si forma (vedi replayPrezzoFormazione() in draw()).
  ctx.restore();
  // RICHIESTO ESPLICITAMENTE: NIENTE casellina verde/rossa (etichetta-asse) sulla candela in
  // formazione durante il replay. Si vede SOLO il movimento della candela (corpo + stoppino),
@@ -20929,6 +21111,22 @@ function replayDisegnaFormazione(f){
  // positivo/negativo mentre in realtà era solo il prezzo di formazione; resta fuori dal replay.
 }
 function _footprintMinBwRep(){ try{ return footprintEnabledNow()&&footprintStyleNow()!=='hollow'; }catch(e){ return false; } }
+// BUG SEGNALATO ("la linea del prezzo bianca rimane fissa, ferma"): durante il replay la linea del
+// prezzo corrente e la sua etichetta restavano inchiodate alla chiusura dell'ultima candela
+// RIVELATA, mentre la candela successiva si formava sotto gli occhi. Il prezzo "di adesso", in
+// replay, e' quello della formazione: questa funzione lo dice (null fuori dal replay o fra una
+// candela e l'altra, e allora vale la chiusura vera come sempre).
+// In try/catch perche' draw() sta molto piu' in alto nel file di `replayForm`: un disegno molto
+// precoce prenderebbe un errore di uso prima dell'inizializzazione.
+function replayPrezzoFormazione(){
+ try{
+  if(!replayForm||!replayForm.path||!replayForm.path.length)return null;
+  if(replayForm.idx!==idx+1)return null;   // formazione di un'altra candela: non c'entra
+  const k=Math.max(0,Math.min(replayForm.path.length-1,replayForm.sub));
+  const v=Number(replayForm.path[k]);
+  return Number.isFinite(v)?v:null;
+ }catch(e){ return null; }
+}
 // Cambiare il moltiplicatore mentre il play è in corso si applica al frame successivo
 // (il tick legge la select a ogni frame): nessun riavvio necessario.
 // Pulsante "›" sopra al grafico: nasconde/mostra INSIEME i pulsanti "📊 Indicatori", "🗂️
@@ -24886,6 +25084,29 @@ try{ const g=JSON.parse(localStorage.getItem('fb_syntra_utenti')||'null'); if(Ar
 // Utenti visti (dal ponte o dai segnali arrivati) ma non per forza aggiunti come sala.
 let syntraVisti=[];
 try{ const g=JSON.parse(localStorage.getItem('fb_syntra_visti')||'null'); if(Array.isArray(g))syntraVisti=g; }catch(e){}
+// RICHIESTO ESPLICITAMENTE: gli utenti Syntra che NON devono mandare segnali. Un messaggio di uno
+// di loro non viene nemmeno riconosciuto come segnale (vedi tgMessaggioSegnali): non entra nel
+// pannello, non suona e non apre niente. L'utente resta comunque nell'elenco (syntraVisto() viene
+// chiamato lo stesso, prima del controllo), cosi' si puo' riammettere con una spunta.
+// Il confronto non guarda maiuscole/minuscole ne' il prefisso "Syntra · ": l'app Syntra scrive il
+// nome come le pare, e una esclusione che non scatta per una lettera maiuscola sarebbe peggio di
+// nessuna esclusione.
+let syntraEsclusi=[];
+try{ const g=JSON.parse(localStorage.getItem('fb_syntra_esclusi')||'null'); if(Array.isArray(g))syntraEsclusi=g; }catch(e){}
+function syntraChiaveUtente(nome){ return String(nome||'').replace(/^Syntra\s*·\s*/i,'').trim().toLowerCase(); }
+function syntraEscluso(nome){
+ const k=syntraChiaveUtente(nome);
+ return !!k&&syntraEsclusi.some(x=>syntraChiaveUtente(x)===k);
+}
+function syntraEsclusiSalva(){ try{ localStorage.setItem('fb_syntra_esclusi',JSON.stringify(syntraEsclusi)); }catch(e){} }
+function syntraEscludi(nome,si){
+ const k=syntraChiaveUtente(nome); if(!k)return;
+ const dentro=syntraEsclusi.some(x=>syntraChiaveUtente(x)===k);
+ if(si&&!dentro)syntraEsclusi.push(String(nome));
+ if(!si&&dentro)syntraEsclusi=syntraEsclusi.filter(x=>syntraChiaveUtente(x)!==k);
+ syntraEsclusiSalva();
+ try{ syntraUtentiDisegna(); }catch(e){}
+}
 function syntraEUtente(nome){ return /^Syntra · /.test(String(nome||'')); }
 function syntraEAggiunto(nome){ return tgGruppiSyntra.indexOf(String(nome))>=0; }
 function syntraVisto(nome){
@@ -24937,7 +25158,19 @@ function syntraUtentiDisegna(){
   st.style.cssText='font-size:11px;font-weight:700;color:'+(sala?'#7fdc9a':'#8b96a5');
   st.textContent=sala?'sala segnali':'non aggiunto';
   riga.appendChild(n); riga.appendChild(st);
-  if(sala){
+  // RICHIESTO: la spunta per ESCLUDERE questo utente. Escluso, i suoi messaggi non vengono
+  // nemmeno riconosciuti come segnali — quindi le spunte dell'apertura automatica non hanno piu'
+  // niente da decidere e si nascondono, invece di restare li' a promettere qualcosa.
+  const fuori=syntraEscluso(nome);
+  if(fuori){ riga.style.borderColor='#6b3030'; riga.style.opacity='.78'; st.textContent='escluso'; st.style.color='#ff9a9a'; }
+  const labX=document.createElement('label');
+  labX.style.cssText='display:flex;align-items:center;gap:4px;font-size:11.5px;cursor:pointer;color:'+(fuori?'#ff9a9a':'#8b96a5');
+  labX.title='Escluso: i messaggi di questo utente non vengono riconosciuti come segnali. Non entrano nel pannello, non suonano e non aprono niente.';
+  const cbX=document.createElement('input'); cbX.type='checkbox'; cbX.checked=fuori;
+  cbX.addEventListener('change',()=>syntraEscludi(nome,cbX.checked));
+  labX.appendChild(cbX); labX.appendChild(document.createTextNode('🚫 Escluso'));
+  riga.appendChild(labX);
+  if(sala&&!fuori){
    // Una spunta per strategia: ⚡ Forex (forex/indici/azioni) e ⚡ Cripto.
    [['fx','⚡ Forex'],['cr','⚡ Cripto']].forEach(([f,et])=>{
     const A=tgAutoDi(f);
@@ -24973,6 +25206,17 @@ function syntraAggiungiDaCampo(){
  syntraAggiungiSala(gia||k,false); c.value='';
  $('status').textContent='📱 '+(gia||k)+' aggiunto alle sale segnali Syntra. L\'apertura automatica la accendi con ⚡ Forex / ⚡ Cripto.';
 }
+// RICHIESTO: si puo' escludere anche un utente che non e' ancora comparso nell'elenco, scrivendone
+// il nome. Viene ricordato lo stesso: appena manda qualcosa, lo si lascia passare.
+function syntraEscludiDaCampo(){
+ const c=$('syntraEscludiNuovo'); if(!c)return;
+ const nome=String(c.value||'').trim().replace(/^Syntra\s*·\s*/i,'').replace(/^@/,'');
+ if(!nome){ c.focus(); return; }
+ syntraEscludi('Syntra · '+nome,true); c.value='';
+ $('status').textContent='🚫 '+nome+' escluso: i suoi messaggi non verranno piu\' riconosciuti come segnali.';
+}
+fblDelega('click',ev=>{ if(ev.target&&ev.target.closest&&ev.target.closest('#syntraEscludiBtn'))syntraEscludiDaCampo(); });
+fblDelega('keydown',ev=>{ if(ev.key==='Enter'&&ev.target&&ev.target.id==='syntraEscludiNuovo'){ ev.preventDefault(); syntraEscludiDaCampo(); } });
 fblDelega('click',ev=>{ if(ev.target&&ev.target.closest&&ev.target.closest('#syntraAggiungiBtn'))syntraAggiungiDaCampo(); });
 fblDelega('keydown',ev=>{ if(ev.key==='Enter'&&ev.target&&ev.target.id==='syntraNuovoUtente'){ ev.preventDefault(); syntraAggiungiDaCampo(); } });
 function tgSaleTutte(){ return (Array.isArray(tgGruppi)?tgGruppi:[]).concat(tgGruppiSyntra.filter(n=>tgGruppi.indexOf(n)<0)); }
@@ -25186,7 +25430,12 @@ function tgMessaggioSegnali(ev,fonte){
    if(m.tipo==='segnale'&&m.segnale){
      tgUltimoId=m.id||tgUltimoId;
      m.stato='nuovo';
+     // L'utente entra SEMPRE nell'elenco, anche se escluso: e' da li' che lo si riammette.
      try{ syntraVisto(m.chat); }catch(e){}
+     // RICHIESTO ESPLICITAMENTE: un utente escluso non manda segnali. Il messaggio non viene
+     // riconosciuto come segnale e si passa avanti: niente pannello, niente suono, niente
+     // apertura automatica. Vale anche per le sale Telegram scritte nell'elenco degli esclusi.
+     try{ if(syntraEscluso(m.chat))return; }catch(e){}
      m.arrivoLocale_ms=Date.now();   // con eta_ms: eta' vera senza fidarsi dell'orologio di questo dispositivo
      // RICHIESTO: un segnale vale UN minuto. Riaprendo l'app il ponte rimanda gli ultimi segnali:
      // quelli piu' vecchi di un minuto entrano gia' disattivati (scaduti), senza suono, senza
@@ -41778,6 +42027,11 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
      <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8b96a5;font-weight:700">RISCHIO PER SEGNALE (%)
       <input id="fblRendRischio" type="number" min="0.1" max="20" step="0.1" value="1" style="width:110px"></label>
      <button type="button" id="fblRendCalcola" class="toolBtn active">📈 Calcola</button>
+     <!-- RICHIESTO: quello che si e' provato qui (rischio per segnale, metodologia, percentuali su
+          ogni target, spostamenti dello stop) si porta con un clic nella strategia che l'app usa
+          per aprire da sola i segnali DI QUESTA SALA. Senza, bisognava ricopiarla a mano nella
+          finestra dell'apertura automatica, e una copia a mano prima o poi diverge. -->
+     <button type="button" id="fblRendSalvaStrategia" class="toolBtn" title="Porta questo setup (rischio, metodologia, percentuali e spostamenti dello stop) nella strategia dell'apertura automatica di questa sala">💾 Salva come strategia della sala</button>
     </div>
     <div class="tgCfgNota" style="margin-top:10px;margin-bottom:4px">
      <b>La strategia.</b> Cambiala e ricalcola: è il modo per scoprire quale funziona davvero su
@@ -41814,22 +42068,67 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
     </div>
     <div id="fblRendProp" style="display:none;margin-top:8px"></div>
    </div>
-   <div class="fbOptRow" style="gap:16px;margin-top:10px;flex-wrap:wrap">
+   <div class="fbOptRow" style="gap:16px;margin-top:10px;flex-wrap:wrap;align-items:center">
     <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="fblCronoMostra" checked> Mostra i segnali a grafico (linee entrata, SL e TP)</label>
     <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="fblCronoCaselle"> Caselle TP-SL</label>
+    <!-- RICHIESTO: si porta a grafico col pulsante «Analizza e mostra a grafico» della tabella
+         qui sopra, e si toglie con questo. Vale solo su QUESTO dispositivo. -->
+    <button type="button" id="fblCronoTogli" class="miniBtn" style="width:auto;padding:3px 10px" title="Toglie dal grafico i segnali della sala portata a grafico su questo dispositivo">🚫 Togli dal grafico</button>
    </div>
+   <div class="tgCfgNota" id="fblCronoAGraficoNota" style="margin-top:6px"></div>
    <p class="hint" style="margin-top:8px">Come si valuta un segnale: dalla candela dopo il messaggio, l'entrata scatta quando il prezzo tocca il livello della sala (entro 24 ore, se no «non attivato»; «a mercato» = subito). Da lì si guarda quali TP vengono toccati <b>prima dello stop originale</b>, fino a 30 giorni. Se nella stessa candela ci sono sia lo stop che un nuovo TP non si può sapere cosa è venuto prima: si conta lo stop (prudente) e il segnale è segnato «ambiguo». Lo spostamento a pareggio deciso dalla sala non viene simulato: il win rate per livello dice quanto spesso il prezzo arriva a quel TP.</p>
   </div>
  </div>
 </div>
 <script>
 (function(){
-const LS_ESITI='fbl_crono_esiti', LS_VISTA='fbl_crono_vista';
+const LS_ESITI='fbl_crono_esiti';
+// RICHIESTO ESPLICITAMENTE: quello che si porta a grafico dalla cronologia deve restare su QUESTO
+// dispositivo. Dal PC non deve comparire sul tablet, dal tablet non deve comparire sul telefono.
+// La chiave di salvataggio porta quindi dentro un numero di dispositivo, generato una volta sola
+// qui: cosi' nemmeno una copia integrale della memoria del browser fatta da un altro dispositivo
+// potrebbe accendere il grafico di questo. (Vedi anche il controllo sull'asset in fblCronoDisegna:
+// e' quello che impediva alla cronologia di ricomparire da sola quando il grafico cambiava asset
+// per una sincronizzazione arrivata da fuori.)
+function fblDispositivoId(){
+ try{
+  let v=localStorage.getItem('fbl_dispositivo_id');
+  if(!v){ v=Math.random().toString(36).slice(2,10)+Date.now().toString(36); localStorage.setItem('fbl_dispositivo_id',v); }
+  return v;
+ }catch(e){ return 'locale'; }
+}
+const LS_VISTA='fbl_crono_vista:'+fblDispositivoId();
 const C={sala:'',segnali:{},letti:{},richiesta:0,asset:null,risultati:{},serie:{},inCorso:false};
 // Quale sala/asset e' a grafico, e le spunte.
 let vista={sala:'',asset:'',mostra:true,caselle:false};
 try{ Object.assign(vista,JSON.parse(localStorage.getItem(LS_VISTA)||'{}')); }catch(e){}
 function salvaVista(){ try{ localStorage.setItem(LS_VISTA,JSON.stringify(vista)); }catch(e){} }
+// Toglie dal grafico quello che c'e' adesso. Non cancella i risultati analizzati: si rimettono a
+// grafico con «Analizza e mostra a grafico», senza riscaricare le candele.
+function togliDalGrafico(){
+ vista.sala=''; vista.asset=null; salvaVista();
+ aggiornaAGraficoNota();
+ try{ draw(); }catch(e){}
+}
+// Dice, in italiano, cosa c'e' a grafico ADESSO su questo dispositivo - e che resta qui.
+function aggiornaAGraficoNota(){
+ const b=$('fblCronoTogli'), n=$('fblCronoAGraficoNota');
+ const ciSta=!!(vista.sala&&vista.asset);
+ if(b)b.disabled=!ciSta;
+ if(!n)return;
+ n.innerHTML=ciSta
+  ? ('A grafico: <b>'+esc(vista.asset)+'</b> della sala <b>'+esc((typeof fblSalaEtichetta==='function'&&fblSalaEtichetta(vista.sala))||vista.sala)+'</b>. '
+    +'Resta <b>solo su questo dispositivo</b>: su tablet e telefono non compare. Cambiando sala sparisce da sola.')
+  : 'Niente a grafico. Premi <b>«Analizza e mostra a grafico»</b> nella tabella qui sopra: i segnali compaiono <b>solo su questo dispositivo</b>.';
+}
+fblDelega('click',ev=>{ if(ev.target&&ev.target.closest&&ev.target.closest('#fblCronoTogli'))togliDalGrafico(); });
+// Esposte per il collaudo (come fblCronoEsiti/fblCronoAncore qui sotto): la cronologia vive dentro
+// il suo blocco, e senza questi ganci non si potrebbe provare da fuori ne' che quello che va a
+// grafico resta su questo dispositivo, ne' che il pulsante lo toglie davvero.
+window.fblCronoVista=function(nuova){ if(nuova&&typeof nuova==='object'){ Object.assign(vista,nuova); salvaVista(); aggiornaAGraficoNota(); } return Object.assign({},vista); };
+window.fblCronoTogliDalGrafico=togliDalGrafico;
+window.fblCronoChiaveVista=function(){ return LS_VISTA; };
+window.fblCronoSalvaStrategia=salvaStrategiaNellaSala;
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>v==null||!isFinite(v)?'—':v.toFixed(1)+'%';
 function sale(){
@@ -42014,6 +42313,7 @@ async function analizza(sala,sym,segs,btn){
   const es=leggiEsiti(); (es[sala]=es[sala]||{})[sym]=r; try{ localStorage.setItem(LS_ESITI,JSON.stringify(es)); }catch(e){}
   try{ localStorage.setItem('fbl_crono_ris:'+sala+'|'+sym,JSON.stringify(ris.slice(-4000))); }catch(e){}
   vista.sala=sala; vista.asset=sym; salvaVista();
+  aggiornaAGraficoNota();
   mostraRisultato(sala,sym,ris,r);
   // Il rendimento si rifa' con i segnali appena analizzati: riaprendo la cronologia dopo qualche
   // giorno, il grafico tiene conto da solo di quello che e' successo nel frattempo.
@@ -42075,8 +42375,15 @@ function rendCurva(ris,capitale,rischioPct,serie,strategia){
  // RICHIESTO: scorrendo il grafico, i numeri sopra devono aggiornarsi a quel momento. Il modo
  // onesto di farlo e' che ogni punto si porti dietro i conti di allora: ricalcolarli al volo
  // mentre si scorre vorrebbe dire rifare la curva a ogni pixel, e non tornerebbero identici.
- const punti=[{t:ordinati.length?(ordinati[0].tFill||ordinati[0].ts):Date.now(),cap,usate:0,vinte:0,perse:0,sommaR:0,ddMax:0}];
+ const punti=[{t:ordinati.length?(ordinati[0].tFill||ordinati[0].ts):Date.now(),cap,usate:0,vinte:0,perse:0,sommaR:0,ddMax:0,ddGiorno:0}];
  let vinte=0, perse=0, usate=0, sommaR=0;
+ // RICHIESTO: accanto al calo massimo dal punto piu' alto serve anche il massimo calo GIORNALIERO
+ // - quanto si e' persi nella giornata peggiore, dal saldo con cui quella giornata era cominciata.
+ // E' il numero che conta su una prop firm (il limite del 5% e' giornaliero), e dice una cosa
+ // diversa dal drawdown totale: una sala puo' non essere mai scesa molto dal picco e avere comunque
+ // una giornata storta che una prop non perdona. Il giorno e' quello di Roma (cetDateKey), lo
+ // stesso usato dalla prop dedicata qui sotto.
+ let giornoK=null, giornoStart=capitale, ddGiorno=0;
  ordinati.forEach(x=>{
   let R=null;
   if(serie&&strategia){
@@ -42090,13 +42397,19 @@ function rendCurva(ris,capitale,rischioPct,serie,strategia){
   if(R==null)return;
   usate++; sommaR+=R;
   if(R>0)vinte++; else if(R<0)perse++;
+  // Il saldo con cui comincia la giornata: serve PRIMA di applicare questa operazione.
+  const t=x.tFill||x.ts||Date.now();
+  let k=null; try{ k=cetDateKey(t); }catch(e){ k=null; }
+  if(k!==giornoK){ giornoK=k; giornoStart=cap; }
   cap+=cap*(rischioPct/100)*R;
   if(cap>picco)picco=cap;
   const dd=picco>0?(picco-cap)/picco*100:0;
   if(dd>ddMax)ddMax=dd;
-  punti.push({t:x.tFill||x.ts||Date.now(),cap,usate,vinte,perse,sommaR,ddMax});
+  const ddG=giornoStart>0?(giornoStart-cap)/giornoStart*100:0;
+  if(ddG>ddGiorno)ddGiorno=ddG;
+  punti.push({t,cap,usate,vinte,perse,sommaR,ddMax,ddGiorno});
  });
- return {punti,finale:cap,usate,vinte,perse,sommaR,ddMax,
+ return {punti,finale:cap,usate,vinte,perse,sommaR,ddMax,ddGiorno,
          resa:capitale>0?(cap-capitale)/capitale*100:0};
 }
 
@@ -42475,6 +42788,58 @@ function fblPropDedicataAggiorna(c,capitale){
   +cifra(String(numGiorni),'giorni controllati dopo l\'apertura')
   +'</div>'+statoHtml;
 }
+// RICHIESTO ESPLICITAMENTE: il setup provato qui sopra diventa la strategia con cui l'app apre da
+// sola i segnali di QUESTA sala. Si copia tutto quello che e' stato scelto - rischio per segnale,
+// metodologia (una posizione per target / chiusura parziale), distribuzione equa, percentuali su
+// ogni target, dove va lo stop a ogni target - dentro la configurazione dell'apertura automatica
+// della sala, quella che si apre dal menu «Strategia» della sua riga.
+// La famiglia la decide l'ASSET analizzato: le due apertura automatiche (Forex/indici/azioni e
+// Cripto) sono separate, e scrivere in tutt'e due sovrascriverebbe una scelta che l'utente puo'
+// aver fatto apposta diversa.
+async function salvaStrategiaNellaSala(){
+ const sala=$('fblCronoSala')?.value||'';
+ const sym=vista.asset||'';
+ if(!sala||!sym){ stato('Prima analizza una sala e un asset: il setup si salva su quello.',true); return; }
+ const ris=risultatiDi(sala,sym);
+ if(!ris||!ris.length){ stato('Nessun risultato da cui prendere il setup: premi «Analizza e mostra a grafico».',true); return; }
+ if(!$('fblStratModo')){ stato('La strategia non e\' ancora a schermo: premi «Calcola».',true); return; }
+ const n=stratQuantiTp(ris,sala);
+ const cfgCrono=stratDallaUi(n);
+ stratSalva(sala,cfgCrono);                       // resta anche qui, per riaprire la cronologia
+ const rischio=Math.max(0.01,Math.min(20,Number($('fblRendRischio')?.value)||1));
+ let fam='fx'; try{ fam=tgFamDaSimbolo(sym); }catch(e){}
+ const etichettaFam=(fam==='cr')?'Cripto':'Forex, indici e azioni';
+ const A=tgAutoDi(fam);
+ const nome=(typeof fblSalaEtichetta==='function'&&fblSalaEtichetta(sala))||sala;
+ const righe=['Strategia di «'+nome+'» ('+etichettaFam+'):',
+  'rischio per segnale '+rischio+'%',
+  cfgCrono.modo==='parziali'?'chiusura parziale (una posizione sola)':'una posizione per ogni target',
+  cfgCrono.equa?'distribuzione equa fra i target':'percentuali scritte a mano: '+cfgCrono.quote.map(v=>v+'%').join(' / '),
+  'spostamenti dello stop: '+(cfgCrono.regole.map((r,i)=>r?('TP'+(i+1)+'\u2192'+(r==='entrata'?'pareggio':'TP'+r)):null).filter(Boolean).join(' \u00b7 ')||'nessuno')];
+ const avvisi=['Sovrascrive la strategia che questa sala ha adesso nell\'apertura automatica.'];
+ try{ if(tgAutoUniAttiva(A))avvisi.push('ATTENZIONE: la «strategia universale» di '+etichettaFam+' e\' ACCESA, e finche\' resta accesa vale lei per tutte le sale. Questa strategia verra\' salvata lo stesso, ma non avra\' effetto finche\' non la spegni.'); }catch(e){}
+ if(!await appConfirm(righe.join('\n')+'\n\n'+avvisi.join('\n\n'),
+   {title:'\ud83d\udcbe Salva come strategia della sala',okLabel:'Salva',cancelLabel:'Annulla'}))return;
+ // tgAutoSala() lavora sulla configurazione MOSTRATA (`tgAuto`): si passa a quella della famiglia
+ // giusta e si rimette dov'era, come fa gia' l'elenco degli utenti Syntra.
+ const prima=tgAuto;
+ tgAuto=A;
+ try{
+  const cfg=tgAutoSala(sala);
+  cfg.rischio=rischio;
+  cfg.modo=(cfgCrono.modo==='parziali')?'parziali':'posizioni';
+  cfg.equa=!!cfgCrono.equa;
+  // Le quote restano in percentuale: tgAutoQuotePerSegnale() le normalizza da sola, quindi
+  // 40/30/20/10 e 4/3/2/1 valgono uguale.
+  cfg.quote=cfgCrono.quote.slice();
+  const reg=cfgCrono.regole.slice();
+  while(reg.length<TG_AUTO_MAX_TP)reg.push('');
+  cfg.regole=reg;
+ }finally{ tgAuto=prima; }
+ tgAutoSalva();
+ try{ tgAutoDisegna(); }catch(e){}
+ stato('\ud83d\udcbe Setup salvato nella strategia di «'+nome+'» ('+etichettaFam+'): lo ritrovi nel menu «Strategia» della sua riga, in \u26a1 Configura apertura automatica.');
+}
 function rendCalcola(){
  const sala=$('fblCronoSala')?.value||'';
  const sym=vista.asset||'';
@@ -42536,6 +42901,9 @@ function rendMostraCifre(){
   +cifra(((p.usate?(p.sommaR/p.usate):0)).toFixed(2)+'R','guadagno medio per operazione, in multipli del rischio')
   +cifra((p.vinte||0)+' / '+(p.perse||0),      'in guadagno / in perdita')
   +cifra('−'+(p.ddMax||0).toFixed(1)+'%',      'calo massimo dal punto più alto', (p.ddMax||0)>0?'giu':'')
+  // RICHIESTO: accanto al calo dal punto piu' alto, la giornata peggiore. E' il numero che una
+  // prop firm guarda per prima (il suo limite e' giornaliero).
+  +cifra('−'+(p.ddGiorno||0).toFixed(1)+'%',   'massimo calo in una sola giornata', (p.ddGiorno||0)>0?'giu':'')
   +cifra(fine?'fine':quando,                   fine?'stai guardando tutta la cronologia (scorri il grafico per tornare indietro)':('operazione n. '+(p.usate||0)+' · '+quando));
  rendDisegnaGrafico(punti,fine?null:i);
 }
@@ -42757,6 +43125,12 @@ window.fblCronoStopPath=function(r,cfg,serie){
 // ---------- disegno a grafico (chiamato da draw(), dopo i trade chiusi)
 window.fblCronoDisegna=function(ctx,y,lo,hi,pad,cw,n,start,w){
  if(!vista.mostra||!vista.sala||!currentAssetKey)return;
+ // RICHIESTO: a grafico va SOLO la sala/asset che e' stata portata a grafico su QUESTO
+ // dispositivo. Prima bastava che l'asset a grafico avesse dei risultati salvati per quella sala:
+ // cambiando asset - anche per una sincronizzazione arrivata da un altro dispositivo - la
+ // cronologia ricompariva da sola su un grafico che nessuno aveva chiesto. Senza vista.asset
+ // (cioe' dopo «Togli dal grafico», o dopo un cambio di sala) non si disegna niente.
+ if(currentAssetKey!==vista.asset)return;
  const ris=risultatiDi(vista.sala,currentAssetKey); if(!ris||!ris.length)return;
  const xFor=ri=>pad.l+(ri-start+.5)*cw/n;
  const fine=Math.max(start,0)+n+2;
@@ -42815,6 +43189,7 @@ window.fblCronoApri=function(){
  fblPropDedicataPopola(); // PUNTO 4: rimette l'interruttore e la data di apertura di questa sala
  stato(''); $('fblCronoRisultato').textContent='';
  disegnaAsset();
+ aggiornaAGraficoNota();
  const sala=sel&&sel.value; if(sala&&vista.asset){ const ris=risultatiDi(sala,vista.asset), r=(leggiEsiti()[sala]||{})[vista.asset]; if(ris&&r)mostraRisultato(sala,vista.asset,ris,r); }
  ov.style.display='flex';
 };
@@ -42823,12 +43198,16 @@ fblDelega('click',ev=>{
  if(t.closest('#fblCronoBtn,.fblCronoBtn'))return fblCronoApri();
  if(t.closest('#fblCronoChiudi')){ const ov=$('fblCronoOverlay'); if(ov)ov.style.display='none'; return; }
  if(t.closest('#fblRendCalcola'))return rendCalcola();
+ if(t.closest('#fblRendSalvaStrategia')){ salvaStrategiaNellaSala(); return; }
  if(t.closest('#fblCronoLeggi'))return fblCronoLeggi(false);
  if(t.closest('#fblCronoDaCapo'))return fblCronoLeggi(true);
 });
 fblDelega('change',ev=>{
  const id=ev.target&&ev.target.id;
- if(id==='fblCronoSala'){ $('fblCronoRisultato').textContent=''; vista.asset=null; salvaVista(); rendReset(); fblPropDedicataPopola(); disegnaAsset(); }
+ // RICHIESTO: analizzando un'ALTRA sala, quella di prima sparisce da sola dal grafico. Prima si
+ // azzerava solo vista.asset e la sala restava: bastava che il grafico tornasse su un asset con
+ // dei risultati salvati per rivederla comparire.
+ if(id==='fblCronoSala'){ $('fblCronoRisultato').textContent=''; togliDalGrafico(); rendReset(); fblPropDedicataPopola(); disegnaAsset(); }
  if(id==='fblCronoMostra'){ vista.mostra=ev.target.checked; salvaVista(); try{ draw(); }catch(e){} }
  if(id==='fblCronoCaselle'){ vista.caselle=ev.target.checked; salvaVista(); try{ draw(); }catch(e){} }
 });
@@ -43422,6 +43801,33 @@ function disegna(animato){
  })();
  const G=document.getElementById('fsGrid'); G.textContent=''; let n=0;
  const plTip=(nome,a)=>{ const x=stat(a); return [{v:fmtE(x.pl),l:nome},{c:POS,l:x.n+' trade · win rate '+pct(x.wr)},{c:NEG,l:'loss rate '+pct(x.lr)}]; };
+ // RICHIESTO ESPLICITAMENTE: passando sopra una sala, oltre al profitto, al numero di trade, al
+ // win rate e al loss rate si devono vedere anche la RESA in percentuale, il GUADAGNO MEDIO per
+ // operazione, il R/R e il CALO MASSIMO. Sono i quattro numeri che dicono se una sala vale la pena
+ // al di la' del totale in euro: due sale con lo stesso profitto possono avere un rischio per
+ // operazione e una discesa peggiore completamente diversi.
+ //  - resa: la somma di quanto ogni operazione ha reso sul conto di quel momento (il campo `pct`
+ //    del Trade Journal). Non e' il rendimento composto del conto, ed e' detto cosi' com'e';
+ //  - R/R: i multipli di rischio REALMENTE incassati in media (rReale). Se non si conoscono - una
+ //    operazione senza stop non ha un rischio da cui misurare - si ripiega sul rapporto fra
+ //    vincita media e perdita media, che si puo' sempre calcolare, e lo si dice;
+ //  - calo massimo: la discesa piu' profonda del P/L cumulato di QUELLA sala, dal suo punto piu'
+ //    alto (stat().dd).
+ const plTipSala=(nome,a)=>{
+  const x=stat(a);
+  const resa=a.reduce((s,r)=>s+(Number(r.t&&r.t.pct)||0),0);
+  const medio=x.n?x.pl/x.n:0;
+  const rr=(x.rMed!=null&&isFinite(x.rMed))
+    ? (x.rMed>=0?'+':'')+x.rMed.toFixed(2)+'R in media (incassati)'
+    : ((x.avgL<0)?((x.avgW/Math.abs(x.avgL)).toFixed(2)+' vincita media / perdita media'):'—');
+  return [{v:fmtE(x.pl),l:nome},
+   {c:POS,l:x.n+' trade · win rate '+pct(x.wr)},
+   {c:NEG,l:'loss rate '+pct(x.lr)},
+   {l:'resa '+(resa>=0?'+':'')+resa.toFixed(2)+'% sul conto'},
+   {l:'in media '+fmtE(medio)+' a operazione'},
+   {l:'R/R '+rr},
+   {c:NEG,l:'calo massimo '+fmtE(x.dd)}];
+ };
  // andamento
  { const c=carta(G,'w8','📈 Andamento del conto','P/L cumulato trade dopo trade (al netto). Passa sopra per leggere ogni trade.',n++,
     {col:['Chiusura','Asset','P/L','Cumulato'],righe:(()=>{ let cu=0; return rs.map(r=>{ cu+=r.pl; return [new Date(r.tc).toLocaleString('it-IT'),r.asset,fmtE(r.pl),fmtE(cu)]; }).reverse(); })()});
@@ -43507,8 +43913,8 @@ function disegna(animato){
  torta('📡 Sale segnali più usate','Quota di trade per sala (Manuale = aperti a mano).','sala',ordSala,'sala');
  // sale: profitto
  { const m=[...raggruppa(rs,r=>r.sala)].sort((a,b)=>stat(b[1]).pl-stat(a[1]).pl);
-   const voci=m.map(([k,a])=>{ const x=stat(a); return {l:k,v:x.pl,c:x.pl>=0?POS:NEG,etichetta:fmtE(x.pl),tip:plTip(k,a)}; });
-   const c=carta(G,'w4','🏆 Profitto per sala','Le sale che ti fanno guadagnare (e perdere).',n++,{col:['Sala','Trade','Win rate','P/L'],righe:m.map(([k,a])=>{ const x=stat(a); return [k,String(x.n),pct(x.wr),fmtE(x.pl)]; })});
+   const voci=m.map(([k,a])=>{ const x=stat(a); return {l:k,v:x.pl,c:x.pl>=0?POS:NEG,etichetta:fmtE(x.pl),tip:plTipSala(k,a)}; });
+   const c=carta(G,'w4','🏆 Profitto per sala','Le sale che ti fanno guadagnare (e perdere). Passa sopra una sala: resa in percentuale, guadagno medio per operazione, R/R e calo massimo.',n++,{col:['Sala','Trade','Win rate','Resa','Medio','R/R','Calo max','P/L'],righe:m.map(([k,a])=>{ const x=stat(a); const resa=a.reduce((s,r)=>s+(Number(r.t&&r.t.pct)||0),0); const rr=(x.rMed!=null&&isFinite(x.rMed))?((x.rMed>=0?'+':'')+x.rMed.toFixed(2)+'R'):((x.avgL<0)?(x.avgW/Math.abs(x.avgL)).toFixed(2):'—'); return [k,String(x.n),pct(x.wr),(resa>=0?'+':'')+resa.toFixed(2)+'%',fmtE(x.n?x.pl/x.n:0),rr,fmtE(x.dd),fmtE(x.pl)]; })});
    graficoOrizz(c,voci,{divergente:true}); }
  // asset
  { const m=[...raggruppa(rs,r=>r.asset)].sort((a,b)=>stat(b[1]).pl-stat(a[1]).pl);

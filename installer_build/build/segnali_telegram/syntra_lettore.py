@@ -57,6 +57,147 @@ SCHEDE_NOTE = ("FX/IDX", "Azioni", "Crypto", "Synth")
 NON_UTENTE = {"discreto", "buono", "ottimo", "scarso", "eccellente", "impostazione magica",
               "vedi dettagli tp/sl", "r/r"}
 STATI_CHIUSI = ("chiuso", "chiusa", "annullat", "cancellat", "scadut", "hit", "closed", "cancel")
+# SEGNALATO dal proprietario (14 ottobre 2026): "alcune volte arrivano dei segnali dove legge RR.
+# Quello sarebbe il rischio/rendimento, non deve leggere quello. Per capire l'asset deve leggere
+# quello che e' situato in alto a sinistra della casella".
+# Com'era: l'asset si prendeva con due regole deboli - la prima riga che conteneva "/" (va bene per
+# EUR/USD, non per BTCUSDT o per un'azione) e, se non bastava, il PRIMO testo in ordine di documento
+# nella meta' sinistra sopra i 220 px. "RR" sta in alto a sinistra, e' corto e non ha "/": passava.
+# Ora: (1) un elenco di etichette che non sono MAI un asset, (2) un controllo di forma (niente
+# numeri, niente rapporti come 1:2, almeno due lettere), (3) fra i candidati validi si prende il
+# piu' in ALTO e, a pari altezza, il piu' a SINISTRA - cioe' esattamente quello che ha chiesto.
+NON_ASSET = {
+    "rr", "r/r", "r:r", "rischio/rendimento", "risk/reward",
+    "sl", "tp", "entrata", "uscita", "prezzo", "lotto", "lotti", "pips", "pip",
+    "vedi dettagli tp/sl", "dettagli configurazione", "impostazione magica", "notifiche",
+    "acquisto", "compra", "buy", "long", "vendita", "vendi", "sell", "short",
+    "a mercato", "esecuzione a mercato", "mercato", "market",
+    "discreto", "buono", "ottimo", "scarso", "eccellente",
+    "in attesa", "attivo", "attiva", "aperto", "aperta", "in corso", "chiuso", "chiusa",
+    "annullato", "annullata", "scaduto", "scaduta", "vinto", "perso", "target hit",
+}
+# Forma di un simbolo: lettere e cifre, eventualmente separate da / o - e spazi ("AUD / CAD",
+# "EUR/USD", "US 30", "NAS100", "BTCUSDT"). Niente due punti, niente virgole, niente segni: e' li'
+# che cadono "1:2", "2.5", "+50 pips".
+RE_ASSET_FORMA = re.compile(r"^[A-Za-z0-9]+(?:\s*[/\-]?\s*[A-Za-z0-9]+)*$")
+
+
+def asset_valido(testo: Optional[str]) -> bool:
+    """Vero se questo testo puo' essere il simbolo di un'operazione."""
+    r = (testo or "").strip()
+    if not r or "\n" in r or not (2 <= len(r) <= 20):
+        return False
+    rl = r.lower().rstrip(":")
+    if rl in NON_ASSET:
+        return False
+    if rl.startswith(("tp ", "tp#", "tp:", "sl ", "sl:", "ordine ", "entrata", "uscita")):
+        return False
+    if sum(1 for c in r if c.isalpha()) < 2:      # "1:2", "2.5", "80285", "+50"
+        return False
+    return bool(RE_ASSET_FORMA.match(r))
+
+
+# RICHIESTO dal proprietario (14 ottobre 2026): "Syntra deve funzionare perfettamente, senza
+# problemi di riconoscimento utente, asset, prezzi, cronologia".
+# IL MODO: ogni riga si riconosce da quello che DICE, non da dove sta scritta. La posizione resta
+# solo come spareggio fra due candidati ugualmente validi. Prima era il contrario - "il primo testo
+# in alto a sinistra", "il nodo nella meta' destra" - ed e' per questo che bastava una scheda fatta
+# un po' diversa (una cripto, un'azione) per leggere la cosa sbagliata senza accorgersene.
+RE_SOLO_NUMERO = re.compile(r"^[-+]?[\d.,\s]+$")
+ETICHETTE_PREZZO = ("entrata", "uscita", "prezzo", "entry", "price")
+
+
+def tipo_riga(testo: Optional[str]) -> str:
+    """Che cos'e' questa riga? Una sola parola, per poterci ragionare sopra.
+
+    data | lato | tipo | etichetta | prezzo | tp | sl | stato | qualita | rr | comando | icona |
+    numero | asset | altro | vuota
+    """
+    r = (testo or "").strip()
+    if not r:
+        return "vuota"
+    if "\n" in r:
+        if RE_TP.match(r):
+            return "tp"
+        if RE_SL.match(r):
+            return "sl"
+        return "blocco"
+    rl = r.lower().rstrip(":")
+    if RE_DATA.match(r) or RE_DATA_NOTIFICA.match(r):
+        return "data"
+    if _lato(r):
+        return "lato"
+    if rl.startswith("ordine ") or rl in ("a mercato", "esecuzione a mercato", "mercato", "market"):
+        return "tipo"
+    if rl in ETICHETTE_PREZZO:
+        return "etichetta"
+    if rl.startswith("tp") and (len(rl) <= 5 or rl[2:3].isdigit() or rl[2:3] in " #"):
+        return "tp"
+    if rl in ("sl", "stop", "stop loss"):
+        return "sl"
+    if rl in ("rr", "r/r", "r:r", "rischio/rendimento", "risk/reward"):
+        return "rr"
+    if rl in ("discreto", "buono", "ottimo", "scarso", "eccellente"):
+        return "qualita"
+    if rl in ("in attesa", "attivo", "attiva", "aperto", "aperta", "in corso", "chiuso", "chiusa",
+              "annullato", "annullata", "scaduto", "scaduta", "vinto", "perso") or "hit" in rl:
+        return "stato"
+    if rl in ("vedi dettagli tp/sl", "dettagli configurazione", "impostazione magica", "notifiche",
+              "cancella tutto", "classifica"):
+        return "comando"
+    if len(r) == 1:
+        return "icona"
+    if RE_SOLO_NUMERO.match(r):
+        return "numero"
+    if asset_valido(r):
+        return "asset"
+    return "altro"
+
+
+def scegli_utente(nodi, larghezza: int, asset: Optional[str], y_data: Optional[int]) -> Optional[str]:
+    """Il nome di chi ha condiviso l'operazione.
+
+    Si scartano PRIMA tutte le righe che sono qualcos'altro (data, lato, stato, voto, RR, comandi,
+    numeri, l'asset stesso): quello che resta in alto e' il nome. Fra piu' candidati vince quello
+    piu' a destra, perche' e' li' che Syntra lo scrive - ma la posizione non puo' piu' far scegliere
+    da sola una riga che e' palesemente un'altra cosa.
+    """
+    a = (asset or "").strip().lower()
+    candidati = []
+    for d, b, _ in nodi:
+        r = (d or "").strip()
+        if not r or "\n" in r:
+            continue
+        if r.lower() == a:
+            continue
+        if tipo_riga(r) not in ("altro", "asset"):
+            continue
+        if y_data is not None and b[1] > y_data + 40:
+            continue                      # il nome sta in alto, sopra (o accanto a) la data
+        candidati.append((-b[0], b[1], r))
+    if not candidati:
+        return None
+    candidati.sort()
+    return candidati[0][2]
+
+
+def scegli_asset(nodi, larghezza: int, y_limite: Optional[int] = None) -> Optional[str]:
+    """L'asset e' il testo IN ALTO A SINISTRA della casella (richiesto esplicitamente).
+    Fra tutti i testi validi della meta' sinistra si prende il piu' in alto; a pari altezza, il piu'
+    a sinistra. `nodi` sono triple (testo, bounds, cliccabile)."""
+    candidati = []
+    for d, b, _ in nodi:
+        if not asset_valido(d):
+            continue
+        if b[0] > larghezza * 0.5:                # meta' destra: li' c'e' il nome utente
+            continue
+        if y_limite is not None and b[1] > y_limite:
+            continue
+        candidati.append((b[1], b[0], d.strip()))
+    if not candidati:
+        return None
+    candidati.sort()
+    return candidati[0][2]
 
 
 def numero(s: str) -> Optional[float]:
@@ -106,9 +247,23 @@ def data_ms(testo: str, adesso: Optional[float] = None) -> Optional[float]:
 
 
 def data_notifica_ms(testo: str) -> Optional[float]:
-    """'2 Oct 2026, 10:44 AM' -> millisecondi (ora del PC)."""
-    m = RE_DATA_NOTIFICA.match((testo or "").strip())
+    """'2 Oct 2026, 10:44 AM' -> millisecondi (ora del PC).
+
+    SEGNALATO dal proprietario (14 ottobre 2026): "c'e' un utente, Gino, che ogni giorno manda
+    segnali cripto e non lo rileva mai". Una delle due cause e' qui: si accettava SOLO la forma con
+    l'anno di quattro cifre. La stessa app scrive le date anche senza anno ("2 ott, 10:44 AM", la
+    forma che usa nelle schede), e in quel caso qui tornava None - con le conseguenze spiegate
+    sopra la riga dell'eta' in leggi_notifiche_dalla_pagina. Ora si prova anche quella forma, e
+    l'anno mancante e' quello di adesso.
+    """
+    t = (testo or "").strip()
+    m = RE_DATA_NOTIFICA.match(t)
     if not m:
+        # Senza anno: la stessa forma delle schede ("23 set, 2:00 PM"). data_ms() la sa gia' leggere
+        # e sceglie l'anno piu' sensato (se il giorno e' nel futuro, e' dell'anno scorso).
+        senza_anno = data_ms(t)
+        if senza_anno is not None:
+            return senza_anno
         return None
     g, mese_t, anno, h, mi, ampm = m.groups()
     mese = MESI.get(mese_t.lower()[:3])
@@ -144,21 +299,31 @@ def leggi_notifiche(xml_testo: str) -> dict:
         d = n.get("content-desc") or ""
         descs.add(d)
         righe = [r.strip() for r in d.split("\n") if r.strip()]
-        if len(righe) < 2 or "|" not in righe[1] or not RE_DATA_NOTIFICA.match(righe[0]):
+        # Una notifica si riconosce dalla riga con le BARRE ("EUR/USD | ACQUISTA | IN ATTESA | Di
+        # Gino"): e' quella che porta i dati. La data e' sopra, ma NON si pretende piu' che stia
+        # esattamente sulla prima riga ne' che abbia l'anno: Syntra la scrive in piu' modi, e
+        # pretendere una forma sola faceva sparire notifiche intere senza dire niente.
+        i_barre = next((k for k in range(min(4, len(righe))) if "|" in righe[k]), None)
+        if i_barre is None or len(righe) < 2:
             continue
-        parti = [x.strip() for x in righe[1].split("|") if x.strip()]
+        riga_data = next((r for r in righe[:i_barre + 1] if data_notifica_ms(r) is not None), None)
+        parti = [x.strip() for x in righe[i_barre].split("|") if x.strip()]
+        if len(parti) < 2:
+            continue
         utente = None
         if parti and parti[-1].lower().startswith("di "):
             utente = parti.pop()[3:].strip()
         x1, y1, x2, y2 = _bounds(n)
+        descrizione = righe[i_barre + 1] if len(righe) > i_barre + 1 else ""
         prezzo = None
-        m = re.search(r"@\s*([-\d.,]+)", righe[2] if len(righe) > 2 else "")
+        m = re.search(r"@\s*([-\d.,]+)", descrizione)
         if m:
             prezzo = numero(m.group(1))
-        notifiche.append({"id": d, "data": righe[0], "quando": data_notifica_ms(righe[0]),
+        notifiche.append({"id": d, "data": riga_data or righe[0],
+                          "quando": data_notifica_ms(riga_data) if riga_data else None,
                           "asset": parti[0] if parti else None, "lato": _lato(parti[1]) if len(parti) > 1 else None,
                           "evento": " | ".join(parti[2:]).lower(), "utente": utente, "prezzo": prezzo,
-                          "descrizione": righe[2] if len(righe) > 2 else "",
+                          "descrizione": descrizione,
                           "centro": ((x1 + x2) // 2, (y1 + y2) // 2), "alta": y2 - y1})
     return {"e_notifiche": "Notifiche" in descs and "Cancella tutto" in descs, "notifiche": notifiche}
 
@@ -214,23 +379,38 @@ def leggi_dettaglio(xml_testo: str) -> Optional[dict]:
                     sc["entrata"] = numero(d2)
                     break
             continue
+        # PREZZI IN DUE NODI: su certe schermate l'etichetta e il numero non stanno nello stesso
+        # nodo ("TP #1:" e, a parte, "80335 (+50 pips)"). Le due espressioni qui sopra pretendono
+        # etichetta e numero INSIEME, quindi li' non trovavano niente e il segnale usciva senza
+        # target ne' stop - cioe' veniva scartato. Stesso trattamento gia' usato per "Entrata".
+        t = tipo_riga(r)
+        if t in ("tp", "sl") and not RE_TP.match(d) and not RE_SL.match(d):
+            for d2, _, _ in nodi[i + 1:]:
+                if not d2:
+                    continue
+                v = numero(d2.split("(")[0])
+                if v is None:
+                    break
+                if t == "sl":
+                    sc["sl"] = v
+                else:
+                    m2 = re.search(r"(\d+)", rl)
+                    sc["tp"][int(m2.group(1)) if m2 else (len(sc["tp"]) + 1)] = v
+                break
+            continue
         if rl in ("in attesa", "attivo", "attiva", "aperto", "aperta", "in corso", "chiuso", "chiusa",
                   "annullato", "annullata", "scaduto", "scaduta", "vinto", "perso") or "hit" in rl:
             sc["stato"] = (sc["stato"] + " " + r).strip()
             continue
-        if sc["asset"] is None and "/" in r and "\n" not in r and len(r) <= 20:
-            sc["asset"] = r
-            continue
-        # utente: in alto a destra, sopra la data
-        if (sc["utente"] is None and "\n" not in r and rl not in NON_UTENTE and b[0] > larghezza * 0.6
-                and b[1] < 260 and (y_data is None or b[1] < y_data)):
-            sc["utente"] = r
-    if sc["asset"] is None:
-        # azioni o asset senza "/": il primo testo dopo il titolo che non e' una lettera d'icona
-        for d, b, _ in nodi:
-            if d and d != "Dettagli configurazione" and len(d) >= 2 and "\n" not in d and b[1] < 220 and b[0] < larghezza * 0.5:
-                sc["asset"] = d.strip()
-                break
+        # L'asset NON si decide qui riga per riga (era la regola del "/" che lasciava passare
+        # "RR" sulle schede senza barra): si sceglie dopo, per posizione, con scegli_asset().
+        # L'utente NON si decide piu' qui riga per riga: si sceglie dopo, con scegli_utente(),
+        # scartando prima tutto quello che e' palesemente un'altra cosa.
+    # L'ASSET: il testo piu' in alto a sinistra della casella (vedi scegli_asset). Se si conosce
+    # l'altezza della data, non si guarda piu' in basso di li': l'asset sta sempre sopra.
+    sc["asset"] = scegli_asset(nodi, larghezza, y_data)
+    if sc["utente"] is None:
+        sc["utente"] = scegli_utente(nodi, larghezza, sc["asset"], y_data)
     return sc
 
 
@@ -255,9 +435,13 @@ def leggi_schermata(xml_testo: str) -> dict:
         for i, r in enumerate(righe):
             if sc["data"] is None and RE_DATA.match(r):
                 sc["data"] = r
-                # l'asset e' la riga prima della data (prima ancora c'e' la lettera dell'icona)
-                if i >= 1:
-                    sc["asset"] = righe[i - 1]
+                # L'asset e' sopra la data (prima ancora c'e' la lettera dell'icona). Si risale
+                # fino alla prima riga che PUO' essere un simbolo: certe schede infilano "RR" (il
+                # rischio/rendimento) fra l'asset e la data, e veniva preso per il simbolo.
+                for j in range(i - 1, -1, -1):
+                    if asset_valido(righe[j]):
+                        sc["asset"] = righe[j]
+                        break
             rl = r.lower()
             if rl in ("acquisto", "compra", "buy", "long"):
                 sc["lato"] = "BUY"
@@ -311,6 +495,10 @@ def chiave(sc: dict) -> str:
 def segnale(sc: dict, attivazione: bool = False) -> Optional[dict]:
     """Scheda -> segnale nello stesso formato del lettore dei messaggi (parser_segnali.interpreta).
     attivazione=True: notifica "ordine in attesa ATTIVATO" -> segnale a mercato, marcato."""
+    # Ultima rete: un simbolo che non ha la forma di un simbolo non diventa un segnale. Meglio
+    # nessun segnale che un ordine su "RR".
+    if sc.get("asset") and not asset_valido(sc["asset"]):
+        return None
     if not sc.get("asset") or not sc.get("lato") or sc.get("entrata") is None:
         return None
     if sc.get("sl") is None and not sc.get("tp"):
@@ -512,7 +700,16 @@ async def giro_notifiche(adb: Adb, visti: set, primo: bool, log: Callable[[str],
             if evento_informativo(nt["evento"]):
                 log("Syntra info: %s %s %s di %s (%s)" % (nt["asset"], nt["lato"], nt["evento"].upper(), nt["utente"], nt["descrizione"]))
                 continue
-            if time.time() * 1000.0 - (nt["quando"] or 0) > NOTIFICA_MAX_ETA_MS:
+            # BUG SEGNALATO ("un utente che manda segnali ogni giorno e non lo rileva mai"):
+            # `nt["quando"] or 0` trasformava una data NON LETTA in "1 gennaio 1970", cioe' in una
+            # notifica vecchissima - e veniva scartata SEMPRE, in silenzio. Una notifica di cui non
+            # si riesce a leggere la data e' una notifica di cui non si sa l'eta': siccome arriva
+            # qui solo se e' NUOVA per noi (l'insieme `visti` la protegge dai doppioni), la si
+            # tratta come recente e la si apre. Meglio aprirne una di troppo che perderne una.
+            if nt["quando"] is None:
+                log("Syntra: notifica con la data in un formato che non conosco (la apro lo stesso): %s"
+                    % nt["id"].replace("\n", " / "))
+            elif time.time() * 1000.0 - nt["quando"] > NOTIFICA_MAX_ETA_MS:
                 log("Syntra: notifica vecchia ignorata: %s" % nt["id"].replace("\n", " / "))
                 continue
             nuova = nt

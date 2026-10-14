@@ -139,7 +139,61 @@
 //               Indicatori nascosti: non vengono piu' calcolati (il grafico torna leggero).
 //               Footprint a SCALA UNIFORME: stesso passo di riga per tutte le candele, quindi
 //               una candela corta mostra meno righe e una lunga di piu', tutte alte uguali.
-const CACHE_NAME = "forex-backtest-lab-v144";
+//          v145 = replay: la candela in formazione e' una CANDELA, non piu' un blocco. La sua
+//               larghezza si calcolava sul 62% di TUTTA l'area del grafico invece che di una
+//               colonna, quindi col footprint acceso usciva un rettangolo largo 90 px accanto a
+//               candele larghe 12; e usava due colori fissi verde/rosso invece di quelli scelti
+//               in Style, con lo stoppino quasi invisibile. Inoltre la linea del prezzo
+//               principale (bianca, con l'etichetta sull'asse) ora SEGUE la candela mentre si
+//               forma: prima restava ferma sulla chiusura dell'ultima candela rivelata e il
+//               movimento si vedeva solo da una riga tratteggiata in piu', ora tolta.
+//               Footprint: le righe stanno SOLO a fianco della candela - quelle che i tick
+//               mettevano sopra o sotto l'alta/bassa si sommano alla riga di bordo invece di
+//               uscire dalla candela - e il passo e' uno solo per tutto il grafico: un bucket
+//               costruito con un passo diverso (cambio del passo automatico, celle aggregate
+//               arrivate dal backup cloud di un altro dispositivo) viene riportato sulla
+//               griglia prima di disegnarlo, invece di mostrare righe alte in modo diverso da
+//               candela a candela. In replay la candela in formazione ha il suo footprint vero,
+//               sulla stessa griglia e con lo stesso disegnatore delle altre: cresce un secondo
+//               alla volta insieme alla candela.
+//               Cronologia delle sale: quello che si porta a grafico resta su QUESTO
+//               dispositivo (dal PC non compare su tablet e telefono, e viceversa), si toglie
+//               col pulsante «Togli dal grafico» e sparisce da solo cambiando sala. In piu' un
+//               pulsante porta il setup provato sulla resa (rischio, metodologia, percentuali,
+//               spostamenti dello stop) dentro la strategia dell'apertura automatica di quella
+//               sala, invece di doverla ricopiare a mano.
+//               Syntra: un campo per ESCLUDERE gli utenti. Un messaggio di un utente escluso
+//               non viene nemmeno riconosciuto come segnale - niente pannello, niente suono,
+//               niente apertura automatica - ma l'utente resta nell'elenco, da dove si
+//               riammette con una spunta. La scelta si ricorda e vale su tutti i dispositivi.
+//               Posizioni aperte e Trade Journal dicono ora se l'operazione e' su Forex/indici/
+//               azioni oppure su Cripto: la stessa regola che decide quale delle due strategie
+//               automatiche vale per quel segnale.
+//               Gruppi di posizioni: due pulsanti sulla riga del gruppo - BE porta a pareggio
+//               lo stop di tutte, Chiudi le chiude tutte in un colpo dicendo quanto hanno reso.
+//               Cambio stile del footprint al clic: ora la fascia sensibile e' TUTTA la colonna
+//               della candela (prima solo il corpo: 9 px per 45 nel banco di prova, con il 38%
+//               di colonna morta fra una candela e l'altra), alta quanto la candela piu' almeno
+//               22 px sopra e sotto. Vale su ogni candela, anche le passate, a qualunque zoom e
+//               timeframe.
+//               Syntra: l'asset si legge IN ALTO A SINISTRA della casella e "RR" (il
+//               rischio/rendimento) non viene piu' scambiato per un simbolo - prima la regola
+//               era "la prima riga con una barra", che sulle schede senza barra (cripto,
+//               azioni) lasciava passare qualunque cosa stesse in alto a sinistra.
+//               Resa della sala: accanto al calo massimo dal punto piu' alto c'e' ora anche il
+//               massimo calo in una sola giornata - il numero che una prop firm guarda per primo.
+//               Dashboard, profitto per sala: resa in percentuale, guadagno medio per
+//               operazione, R/R e calo massimo, sia nel riquadro al passaggio del mouse sia
+//               nella tabella della carta.
+//               Syntra, lettore rifatto nel modo di riconoscere le cose: ogni riga si classifica
+//               da quello che DICE (data, lato, stato, voto, RR, comandi, numeri), non da dove
+//               sta scritta; la posizione resta solo come spareggio. Corretti: le notifiche con
+//               la data senza anno (sparivano), le notifiche con una data non riconosciuta (che
+//               venivano dichiarate 'vecchie' e buttate SEMPRE, in silenzio - il motivo per cui
+//               un utente che manda segnali ogni giorno non veniva mai rilevato), e i prezzi
+//               scritti con etichetta e numero in due nodi separati (il segnale usciva senza
+//               target ne' stop, quindi veniva scartato).
+const CACHE_NAME = "forex-backtest-lab-v145";
 const ASSETS = [
   "./",
   "./app.html",
