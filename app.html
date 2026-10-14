@@ -39001,6 +39001,12 @@ function krakenPosPannello(){
   const sl=Number.isFinite(krakenPrezzo(p.sl))?krakenPrezzo(p.sl):krakenPrezzo(st&&st.sl);
   let tps=(p.tp||[]).map(x=>krakenPrezzo(x&&x.prezzo)).filter(Number.isFinite);
   if(!tps.length&&st&&Array.isArray(st.tps))tps=st.tps.map(krakenPrezzo).filter(Number.isFinite);
+  // ORDINE DI ARRIVO, non di prezzo (vedi tgTpInOrdine). Il ponte manda i take profit ordinati per
+  // PREZZO crescente, sempre, qualunque sia il lato: su un SELL il primo della lista e' quindi il
+  // piu' LONTANO dall'entrata, e a grafico compariva etichettato "TP1" mentre il piu' vicino
+  // diventava l'ultimo. Segnalato dal proprietario su un SELL BNB/USD da 730 con target 725, 720,
+  // 711, 702: a schermo TP1 stava a 702 e TP4 a 725, esattamente al contrario.
+  tps=tgTpInOrdine(tps,buy?'BUY':'SELL');
   const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
   // Lo stop usato per il R/R e' quello di APERTURA, non quello di adesso: altrimenti portandolo
   // a pareggio il rapporto diventerebbe infinito e non direbbe piu' niente sul rischio preso.
@@ -39364,6 +39370,12 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
   let tps=(p.tp||[]).map(x=>krakenPrezzo(x&&x.prezzo)).filter(Number.isFinite);
   if(!tps.length&&st&&Array.isArray(st.tps))tps=st.tps.map(krakenPrezzo).filter(Number.isFinite);
   const buy=String(p.lato).toUpperCase().startsWith('B')||String(p.lato).toLowerCase()==='long';
+  // ORDINE DI ARRIVO, non di prezzo (vedi tgTpInOrdine). Il ponte manda i take profit ordinati per
+  // PREZZO crescente, sempre, qualunque sia il lato: su un SELL il primo della lista e' quindi il
+  // piu' LONTANO dall'entrata, e a grafico compariva etichettato "TP1" mentre il piu' vicino
+  // diventava l'ultimo. Segnalato dal proprietario su un SELL BNB/USD da 730 con target 725, 720,
+  // 711, 702: a schermo TP1 stava a 702 e TP4 a 725, esattamente al contrario.
+  tps=tgTpInOrdine(tps,buy?'BUY':'SELL');
   const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
   const slIni=st&&Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):sl;
   const rr=Number.isFinite(slIni)&&Number.isFinite(tpLontano)?rrArrotondatoTesto(entry,slIni,tpLontano):'—';
@@ -43001,7 +43013,14 @@ const GIORNO=864e5;
 // ---------- valutazione di un segnale sulle candele
 function valuta(s,serie){
  const ts=Number(s.ts), buy=String(s.direzione).toUpperCase()!=='SELL';
- const tps=(s.tp||[]).map(Number).filter(isFinite);
+ // IN ORDINE DI ARRIVO: il TP1 e' il piu' vicino all'entrata, comunque la sala li abbia scritti.
+ // Qui non e' solo un'etichetta: poco piu' sotto si contano i TP raggiunti scorrendo QUESTA lista
+ // in ordine (`while(... c.h>=tps[k+nuovi] ...)`). Con la lista nell'ordine di scrittura della
+ // sala - che a volte va dal piu' lontano al piu' vicino - quel conteggio sbaglia, e con lui il
+ // win rate per TP e tutte le statistiche della cronologia, non solo le scritte a grafico.
+ const tps=(typeof tgTpInOrdine==='function')
+   ? tgTpInOrdine(s.tp,buy?'BUY':'SELL')
+   : (s.tp||[]).map(Number).filter(isFinite);
  const sl=s.sl!=null&&isFinite(Number(s.sl))?Number(s.sl):null;
  const base={ts,dir:buy?'BUY':'SELL',sl,tps,entrataSala:s.entrata};
  // la serie piu' fine che contiene il momento del segnale

@@ -100,3 +100,36 @@ test('il rifiuto dello stop dice QUALE numero sta guardando', () => {
   assert.match(src, /const rifMercato=\(Number\.isFinite\(mercato\)&&mercato!==entry\)/,
     'e si deve mostrare anche il prezzo di mercato vero, quando è diverso');
 });
+
+test('anche su Kraken e nella cronologia il TP1 e il piu vicino all entrata', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      // IL CASO VERO segnalato: SELL BNB/USD da 730, target 725 - 720 - 711 - 702.
+      // Il ponte Kraken manda i take profit ordinati per PREZZO crescente, sempre, qualunque sia
+      // il lato: su un SELL il primo della lista e quindi il piu LONTANO. A grafico compariva
+      // "TP1" a 702 e "TP4" a 725, esattamente al contrario.
+      const dalPonte = [702, 711, 720, 725];     // come arrivano: prezzo crescente
+      const inOrdine = tgTpInOrdine(dalPonte, 'SELL');
+      // E la cronologia conta i TP raggiunti scorrendo la lista IN ORDINE: con l ordine sbagliato
+      // sbaglia il conteggio, non solo l etichetta.
+      const buy = tgTpInOrdine([1.11, 1.12, 1.15], 'BUY');
+      return {primo: inOrdine[0], ultimo: inOrdine[inOrdine.length - 1], inOrdine, buy};
+    });
+    assert.equal(r.primo, 725, 'il TP1 di un SELL da 730 e 725, non 702');
+    assert.equal(r.ultimo, 702, 'e il TP4 e 702, il piu lontano');
+    assert.deepEqual(r.inOrdine, [725, 720, 711, 702]);
+    assert.deepEqual(r.buy, [1.11, 1.12, 1.15], 'su un BUY il piu vicino e il piu basso');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('nessun punto che numera i TP si costruisce la lista per conto suo', () => {
+  const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
+  // I due disegni Kraken (tabella e grafico) e la cronologia delle sale devono passare tutti
+  // dallo stesso ordinamento: sono i tre punti che scrivono "TP1", "TP2"...
+  const usi = src.match(/tps=tgTpInOrdine\(tps,buy\?'BUY':'SELL'\)/g) || [];
+  assert.equal(usi.length, 2, 'tabella e grafico delle posizioni Kraken: ' + usi.length);
+  assert.match(src, /\? tgTpInOrdine\(s\.tp,buy\?'BUY':'SELL'\)/,
+    'la cronologia delle sale deve ordinare prima di contare i TP raggiunti');
+});

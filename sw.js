@@ -306,7 +306,36 @@
 //               colonna Conto conteneva la stringa 'kraken', che passata a euro() diventava
 //               "NaN €". Ora i pip si calcolano come per ogni altra operazione e il conto e' il
 //               saldo vero, convertito in euro come il P/L della stessa riga.
-const CACHE_NAME = "forex-backtest-lab-v149";
+//          v150 = SYNTRA, LA STORIA DI UN UTENTE (serve il reinstaller: gira nel ponte). Il robot
+//               arrivava sul profilo giusto e poi non faceva piu' niente: "0 operazioni lette".
+//               Un cane che si morde la coda: una scheda si riconosce solo se contiene la riga
+//               "Entrata:", che compare solo a dettaglio APERTO, ma sul profilo le operazioni
+//               arrivano CHIUSE - e i pulsanti per aprirle venivano cercati DENTRO le schede gia'
+//               riconosciute. Nessuna scheda, nessun pulsante, niente da espandere, niente da
+//               riconoscere. Ora i pulsanti si cercano nell'albero intero e le posizioni si aprono
+//               una per una, dall'alto in basso, fino al periodo chiesto.
+//               Lo scorrimento si calcolava dall'ingombro delle schede: senza schede non avveniva
+//               nemmeno, e si restava fermi sulla stessa schermata per tutte le pagine previste.
+//               Ora si scorre lo stesso, e dopo tre schermate senza riconoscere niente ci si ferma
+//               invece di insistere dentro l'app di qualcun altro.
+//               Il profilo ha il suo tetto di schermate (60, non 2 come il giro delle notifiche):
+//               a fermarlo deve essere il periodo o il fondo della pagina, non un numero deciso a
+//               tavolino.
+//               E se Syntra viene chiusa a forza, si riapre: il controllo che c'era gira ogni 30
+//               secondi nel ciclo principale, ma la lettura di un profilo dura minuti dentro un
+//               solo giro di quel ciclo, quindi proprio mentre serviva non arrivava mai. Serve
+//               anche a non toccare lo schermo AL BUIO: con Syntra morta, un tocco a coordinate
+//               fisse preme quello che si trova sotto, dentro l'app di qualcun altro.
+//               Sempre v150: TP1 = IL PIU' VICINO ALL'ENTRATA ANCHE SU KRAKEN E NELLA CRONOLOGIA.
+//               In v147 era stato corretto per i segnali Telegram, ma restavano tre punti che si
+//               costruivano la lista per conto loro. Il ponte Kraken manda i take profit ordinati
+//               per PREZZO crescente, sempre, qualunque sia il lato: su un SELL il primo della
+//               lista e' il piu' LONTANO. Su un SELL BNB/USD da 730 con target 725-720-711-702, a
+//               grafico compariva "TP1" a 702 e "TP4" a 725, al contrario. Nella cronologia delle
+//               sale non era nemmeno solo un'etichetta: i TP raggiunti si contano scorrendo quella
+//               lista IN ORDINE, quindi con l'ordine sbagliato sbagliavano il conteggio, il win
+//               rate per TP e tutte le statistiche.
+const CACHE_NAME = "forex-backtest-lab-v150";
 const ASSETS = [
   "./",
   "./app.html",

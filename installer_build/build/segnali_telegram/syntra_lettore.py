@@ -397,6 +397,55 @@ def leggi_classifica(xml_testo: str) -> dict:
     return {"e_classifica": e_classifica, "voce": voce, "righe": righe}
 
 
+RE_ESPANDI = re.compile(r"^\s*vedi dettagli", re.I)
+
+
+def trova_espansori(xml_testo: str) -> List[Tuple[int, int]]:
+    """I pulsanti «Vedi dettagli TP/SL» presenti sullo schermo, dall'alto in basso.
+
+    SEGNALATO dal proprietario: "il robot fa la procedura giusta, va in classifica, cerca l'utente,
+    entra nel profilo... pero' una volta che va sul profilo non esegue piu' nulla" - e l'app
+    riceveva "storia completa letta dal profilo, 0 operazioni lette".
+    LA CAUSA, ed e' un cane che si morde la coda: leggi_schermata() riconosce una scheda SOLO se il
+    suo testo contiene la riga "Entrata:", che compare solo a dettaglio APERTO. Sul profilo di un
+    utente le operazioni arrivano CHIUSE. I pulsanti per aprirle venivano pero' cercati DENTRO le
+    schede gia' riconosciute (sc["toggle"]): nessuna scheda riconosciuta, nessun pulsante trovato,
+    niente da espandere, quindi niente da riconoscere. Si girava a vuoto per tutte le pagine
+    previste e si usciva con zero operazioni.
+    Qui i pulsanti si cercano NELL'ALBERO INTERO, che e' l'unico posto dove esistono prima di aver
+    riconosciuto qualcosa. Non si richiede clickable="true": l'etichetta spesso e' figlia del nodo
+    che riceve davvero il tocco, ed e' lo stesso motivo per cui leggi_schermata non lo richiede.
+    """
+    try:
+        radice = ET.fromstring(xml_testo)
+    except Exception:
+        return []
+    out = []
+    for n in radice.iter("node"):
+        d = (n.get("content-desc") or "")
+        if not RE_ESPANDI.match(d):
+            continue
+        x1, y1, x2, y2 = _bounds(n)
+        if x2 <= x1 or y2 <= y1:
+            continue
+        out.append(((x1 + x2) // 2, (y1 + y2) // 2))
+    out.sort(key=lambda p: p[1])
+    return out
+
+
+def misura_schermo(xml_testo: str) -> Tuple[int, int]:
+    """Larghezza e altezza dello schermo, dal nodo piu' esterno. Servono per scorrere anche quando
+    non si e' riconosciuta nessuna scheda: senza, lo scorrimento si calcolava dall'ingombro delle
+    schede e quindi non avveniva proprio - si restava fermi sulla stessa schermata."""
+    try:
+        radice = ET.fromstring(xml_testo)
+    except Exception:
+        return (0, 0)
+    larg = max((_bounds(n)[2] for n in radice.iter("node")), default=0)
+    alt = max((_bounds(n)[3] for n in radice.iter("node")), default=0)
+    return (larg, alt)
+
+
 def e_pagina_profilo(xml_testo: str) -> bool:
     """Siamo dentro "Info sul fornitore di setup"?"""
     try:
@@ -908,6 +957,39 @@ async def cerca_in_classifica(adb: Adb, utente: str, log: Callable[[str], None],
     return None
 
 
+async def syntra_viva(adb: Adb, log: Callable[[str], None], tentativi: int = 2) -> bool:
+    """Syntra e' davanti? Se non c'e' piu', la si riapre e si aspetta che torni.
+
+    RICHIESTO dal proprietario: "a volte l'applicazione di Syntra viene chiusa forzatamente e non
+    viene riaperta".
+    Il controllo che esisteva gira nel ciclo principale ogni 30 secondi - ma la lettura di un
+    profilo dura MINUTI dentro un solo giro di quel ciclo, quindi proprio mentre serve non arriva
+    mai. Qui si guarda prima di ogni schermata del profilo.
+    E serve a una seconda cosa, altrettanto importante: NON TOCCARE LO SCHERMO AL BUIO. Se Syntra
+    e' morta e davanti c'e' qualcos'altro, un tocco a coordinate fisse preme qualunque cosa si
+    trovi li' sotto, dentro l'app di qualcun altro.
+    """
+    for i in range(max(1, tentativi)):
+        try:
+            if await adb.syntra_davanti():
+                return True
+        except Exception:
+            # Non si riesce nemmeno a chiedere chi e' davanti: si prosegue come si faceva prima,
+            # senza bloccare tutto per un controllo accessorio.
+            return True
+        log("Syntra: l'app non e' in primo piano (chiusa?): la riapro")
+        try:
+            await adb.apri_syntra()
+        except Exception as e:
+            log("Syntra: riapertura non riuscita: %s" % e)
+            return False
+        await asyncio.sleep(3.0 + i * 2.0)
+    try:
+        return await adb.syntra_davanti()
+    except Exception:
+        return True
+
+
 async def leggi_profilo(adb: Adb, utente: str, pagine: int, log: Callable[[str], None],
                         stato: dict, da_ms: Optional[float] = None) -> List[dict]:
     """Passi 15/16 — la STORIA COMPLETA di un utente Syntra.
@@ -944,45 +1026,80 @@ async def leggi_profilo(adb: Adb, utente: str, pagine: int, log: Callable[[str],
             log("Syntra: la scheda di %s non si e' aperta" % utente)
             return []
 
-    # 2) Scorre il profilo e raccoglie tutte le schede (una voce sola per operazione).
+    # 2) Si scorre il profilo dall'alto in basso, ESPANDENDO una per una tutte le posizioni, fino
+    #    al periodo chiesto (richiesto esplicitamente: "inizia a scorrere verso il basso e a vedere
+    #    tutte le posizioni, a espandere tutte le posizioni una per una fino al periodo scelto").
     trovate: Dict[str, dict] = {}
+    vuote_di_fila = 0
+    firme = set()
     for pagina in range(max(1, pagine)):
-        lettura = leggi_schermata(await adb.schermata())
-        schede = lettura["schede"]
+        # L'app potrebbe non esserci piu': prima di toccare qualunque cosa si controlla.
+        if not await syntra_viva(adb, log):
+            log("Syntra: profilo di %s interrotto: l'app non e' tornata in primo piano" % utente)
+            break
+        xml = await adb.schermata()
+        # ESPANSIONE, una posizione per volta, dall'alto in basso. Si va avanti finche' ci sono
+        # pulsanti «Vedi dettagli»; ci si ferma da soli se un tocco non cambia piu' niente, cosi'
+        # un pulsante che non risponde non blocca il giro.
+        for _ in range(16):
+            esp = trova_espansori(xml)
+            if not esp:
+                break
+            prima = xml
+            await adb.tocca(*esp[0])
+            await asyncio.sleep(0.7)
+            xml = await adb.schermata()
+            if xml == prima:
+                log("Syntra: il dettaglio non si apre: vado avanti con quello che c'e'")
+                break
+        schede = leggi_schermata(xml)["schede"]
         for sc in schede:
             if (sc.get("utente") or utente) != utente:
                 continue
             trovate[chiave(sc)] = sc
-        # Il dettaglio TP/SL serve per l'esito: si apre dove manca, una scheda per volta.
-        for _ in range(6):
-            da_aprire = [sc for sc in schede
-                         if (sc.get("utente") or utente) == utente
-                         and sc.get("toggle") and not chiusa(sc)
-                         and not sc.get("tp") and sc.get("sl") is None]
-            if not da_aprire:
+        if not schede:
+            vuote_di_fila += 1
+            log("Syntra: profilo di %s: nessuna operazione riconosciuta nella schermata %d"
+                % (utente, pagina + 1))
+            # Tre schermate di fila senza riconoscere niente: non e' la pagina che pensiamo di
+            # avere davanti. Insistere a scorrere dentro l'app di qualcun altro non ha senso.
+            if vuote_di_fila >= 3:
+                log("Syntra: profilo di %s: mi fermo, questa non sembra la pagina dei setup" % utente)
                 break
-            await adb.tocca(*da_aprire[0]["toggle"])
-            await asyncio.sleep(0.6)
-            lettura = leggi_schermata(await adb.schermata())
-            schede = lettura["schede"]
-            for sc in schede:
-                if (sc.get("utente") or utente) != utente:
-                    continue
-                trovate[chiave(sc)] = sc
-        # IL PERIODO (richiesto: "fino a quando vede che e' arrivato al periodo prestabilito"):
-        # sotto a ogni scheda c'e' la sua data. Quando TUTTE quelle a schermo sono piu' vecchie del
-        # periodo chiesto si smette di scorrere: piu' giu' c'e' solo roba ancora piu' vecchia.
+        else:
+            vuote_di_fila = 0
+        # IL PERIODO: sotto a ogni scheda c'e' la sua data. Quando TUTTE quelle a schermo sono piu'
+        # vecchie del periodo chiesto si smette: piu' giu' c'e' solo roba ancora piu' vecchia.
         if da_ms is not None and schede:
             date = [data_ms(sc.get("data") or "") for sc in schede]
             note = [d for d in date if d is not None]
             if note and max(note) < da_ms:
                 log("Syntra: profilo di %s: arrivato al periodo chiesto, mi fermo" % utente)
                 break
-        if pagina < pagine - 1 and schede:
+        # FONDO DELLA PAGINA: se due schermate di fila mostrano le stesse identiche operazioni si
+        # e' arrivati in fondo, e continuare a scorrere e' tempo buttato (stessa idea gia' usata
+        # per scorrere la classifica).
+        firma = "|".join(sorted(chiave(sc) for sc in schede))
+        if schede and firma in firme:
+            log("Syntra: profilo di %s: la pagina non scorre piu', mi fermo" % utente)
+            break
+        if schede:
+            firme.add(firma)
+        if pagina >= pagine - 1:
+            break
+        # SCORRIMENTO. Con le schede riconosciute si usa il loro ingombro; SENZA, si scorre lo
+        # stesso di due terzi di schermo invece di restare fermi sulla stessa schermata fino alla
+        # fine del giro - che e' esattamente quello che succedeva prima.
+        if schede:
             x1, y1, x2, y2 = schede[0]["bounds"]
             basso = max(sc["bounds"][3] for sc in schede)
             await adb.scorri((x1 + x2) // 2, basso - 20, y1 + 40)
-            await asyncio.sleep(0.6)
+        else:
+            larg, alt = misura_schermo(xml)
+            if alt < 200:
+                break
+            await adb.scorri(max(1, larg // 2), int(alt * 0.80), int(alt * 0.25))
+        await asyncio.sleep(0.6)
     # 3) Indietro: si torna alla pagina di prima.
     try:
         await adb.indietro()
@@ -1106,7 +1223,13 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
                     except Exception:
                         _mesi = 0
                     _da = (time.time() - _mesi * 30 * 86400) * 1000.0 if _mesi > 0 else None
-                    schede_p = await leggi_profilo(adb, utente_p, pagine, log, stato, _da)
+                    # QUANTE SCHERMATE scorrere sul profilo. Non e' `pagine` (che vale 2 ed e' il
+                    # giro delle NOTIFICHE): con due schermate non si arriva da nessuna parte, ed e'
+                    # una delle ragioni per cui la storia tornava vuota o quasi. Qui il tetto e'
+                    # alto apposta perche' a fermare il giro deve essere il PERIODO chiesto (o il
+                    # fondo della pagina), non un numero deciso a tavolino.
+                    _pagine_profilo = int(cfg.get("pagine_profilo") or 60)
+                    schede_p = await leggi_profilo(adb, utente_p, _pagine_profilo, log, stato, _da)
                 except Exception as e:
                     schede_p = []
                     log("Syntra: lettura del profilo di %s non riuscita: %s" % (utente_p, e))
