@@ -232,7 +232,42 @@
 //               pubblicato di recente la lettura moriva prima di cominciare. E il terminale MT5
 //               viene ridotto a icona dopo ogni collegamento o cambio di conto, invece di
 //               riaprirsi a tutto schermo ogni volta.
-const CACHE_NAME = "forex-backtest-lab-v146";
+//          v147 = REPLAY e posizioni. Col play acceso, entrata, stop, target, P/L e connettore
+//               seguono ora la candela IN FORMAZIONE, al ritmo del moltiplicatore scelto: prima
+//               passavano tutti da currentPrice(), cioe' la chiusura dell'ultima candela
+//               COMPIUTA, un numero che dentro la formazione non cambia mai - percio' facevano
+//               un salto secco una volta per candela invece di muoversi. Anche il bordo destro
+//               delle caselle Target/Stop avanza con la frazione di candela svelata.
+//               E ogni posizione RICORDA I SUOI SPOSTAMENTI: una riga per ogni volta che
+//               entrata, stop o target sono cambiati. In replay si rivedono quindi i livelli
+//               COM'ERANO in quel momento - lo stop alzato tre volte si rivede alzare tre volte -
+//               invece di quelli di adesso disegnati sopra candele di ieri. La traccia si scrive
+//               in un punto solo, dentro draw(), perche' stop e target vengono cambiati da dieci
+//               strade diverse (trascinamento, tabella, pareggio, trailing, allineamento MT5, e
+//               il terminale MT5 stesso da fuori dall'app) e draw() e' il punto che tutte
+//               attraversano. In replay il P/L non e' piu' il netto del terminale MT5: quello e'
+//               il profitto di ADESSO, e a grafico si sta guardando un altro momento.
+//               Sempre v147: LA CANDELA IN FORMAZIONE NON LAMPEGGIA PIU'. Era un ritocco dipinto
+//               DOPO draw() e solo dal battito del replay: ogni altro ridisegno (il mirino, il
+//               pannello, e forward() ad ogni candela completata) ridipingeva il grafico senza di
+//               lei. Piu' si alzava il moltiplicatore piu' spesso le candele si completavano, e
+//               piu' spesso il grafico veniva dipinto "senza": per questo peggiorava accelerando.
+//               Ora la disegna draw() stesso: non esiste piu' un modo di dipingere il grafico
+//               senza. Il play non si "blocca" piu' sulle schede in secondo piano: si misura
+//               l'orologio vero invece di dare per scontati 50 ms a battito (i browser rallentano
+//               i timer delle schede nascoste a uno al secondo). E ai moltiplicatori alti non
+//               scatta piu': le candele completate dentro un giro si valutano tutte ma si
+//               disegnano una volta sola alla fine, invece di un ridisegno intero ciascuna.
+//               TP1 = il piu' VICINO all'entrata, comunque la sala li scriva. Non c'era nessun
+//               ordinamento: si teneva l'ordine di scrittura, quindi una sala che elenca dal piu'
+//               lontano al piu' vicino faceva diventare TP1 l'ultimo obiettivo - e la strategia
+//               sposta gli stop "quando il prezzo raggiunge il take profit n.1", quindi li
+//               spostava nel momento sbagliato. Un target mancante nel messaggio non diventa piu'
+//               un take profit a prezzo zero.
+//               Il rifiuto di un segnale con lo stop dalla parte sbagliata ora dice QUALE numero
+//               sta guardando: chiamava "prezzo di adesso" l'entrata scritta dalla sala in un
+//               ordine pendente, e faceva cercare un errore nei prezzi che non c'era.
+const CACHE_NAME = "forex-backtest-lab-v147";
 const ASSETS = [
   "./",
   "./app.html",
