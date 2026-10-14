@@ -13989,8 +13989,13 @@ function drawOpenTradeProgress(ctx,pos,y,lo,hi,pad,cw,n,start,w,dimmed){
  const openIdx=rowIndexContainingTime(openTime);
  if(openIdx==null||openIdx>idx)return;
  const xForIndex=ri=>pad.l+(ri-start+.5)*cw/n;
- const xOpen=xForIndex(openIdx), xNow=xForIndex(idx);
- const price=currentPrice();
+ // Durante il replay il "adesso" e' la candela IN FORMAZIONE (idx+1) al prezzo svelato finora,
+ // non la chiusura dell'ultima candela compiuta: il connettore arriva quindi fino a lei e si
+ // muove ad ogni aggiornamento, al ritmo del moltiplicatore scelto. Fuori dal replay, come prima.
+ const inFormazione=!!(replayForm&&replayForm.idx===idx+1);
+ const nowIdx=inFormazione?replayForm.idx:idx;
+ const xOpen=xForIndex(openIdx), xNow=xForIndex(nowIdx);
+ const price=prezzoMostratoOra();
  if(!Number.isFinite(price))return;
  const yOpen=y(pos.entry), yNow=y(price);
  const openOnScreen=pos.entry>=lo&&pos.entry<=hi&&xOpen>=pad.l-1&&xOpen<=w-pad.r+1;
@@ -14400,6 +14405,10 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
 }
 function draw(){
  fblScadeDecimali();
+ // La memoria degli spostamenti dei livelli si aggiorna QUI, il punto che tutte le strade che
+ // cambiano uno stop o un target attraversano subito dopo averlo cambiato: vedi il commento
+ // lungo sopra posStoriaSegna(). Costa un confronto di tre numeri per posizione aperta.
+ try{ posStoriaAggiornaTutte(); }catch(e){}
  if(!liveModeActive){ try{ fblRegStoricoSync(); }catch(e){} }
  // Annuncia l'asset a grafico ORA alle altre finestre PIP (solo se cambiato dall'ultima volta —
  // vedi anotherWindowOwnsAssetEvaluation()/broadcastAssetAnnounce() più sopra nel file): usato
@@ -15688,9 +15697,13 @@ function draw(){
  // "Mostra/nascondi posizioni" sotto il selettore timeframe (positionsVisible).
  // Disegnate SOLO le posizioni DELL'ASSET a grafico ora: quelle di altri asset hanno prezzi
  // su una scala diversa e non avrebbero senso su QUESTO grafico.
- // REPLAY IN LIVE: in modalità replay le posizioni REALI ancora aperte spariscono dal grafico
- // (linee di entrata, etichette target/stop/stop profit, caselle TP/SL e P/L live) — restano
- // visibili solo i trade rivelati dal replay (vedi drawClosedTradeMarkers), richiesto esplicito.
+ // REPLAY: una posizione si vede da quando il replay ARRIVA alla sua candela di apertura (vedi
+ // posRevealedInReplay) e da lì in poi resta, con tutto il suo corredo — linea di entrata,
+ // etichette, caselle Target/Stop e P/L — che avanza insieme alla candela in formazione.
+ // E I LIVELLI SONO QUELLI DI ALLORA, non quelli di adesso (richiesto esplicitamente: "devono
+ // visualizzarsi gli spostamenti mano a mano, si deve ricordare ogni movimento"): entrata, stop
+ // e target vengono riletti dalla memoria degli spostamenti all'istante che si sta mostrando
+ // (posLivelliAlTempo). Così, rivedendo un trade, si rivede anche lo stop che veniva alzato.
  // La posizione selezionata (active) è "accesa": se appartiene a QUESTO grafico, tutte le altre
  // passano in grigio (stile MT5). Se la selezione è di un altro asset (non disegnata qui) non si
  // spegne niente. Con nessuna selezione (active null) restano tutte nei loro colori.
@@ -15699,11 +15712,18 @@ function draw(){
  // sopra posSelezionata. Una posizione scelta e poi chiusa (o di un altro asset) non deve
  // continuare a nascondere le altre: si dimentica da sola qui.
  if(posSelezionata&&!positions.includes(posSelezionata))posSelezionata=null;
+ // Un solo calcolo per giro di disegno, condiviso da tutte le posizioni: l'istante che il grafico
+ // sta mostrando (null fuori dal replay, vedi replayMomentoMostrato).
+ const momentoMostrato=replayMomentoMostrato();
  const activeOnChart=!!posSelezionata&&positions.includes(posSelezionata)&&drawableOnCurrentChart(posSelezionata);
  if(positionsVisible)
  positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(pos=>{
    const isFocused=pos===active;
    const dimmed=activeOnChart&&pos!==posSelezionata;
+   // I livelli da disegnare: quelli in forza all'istante mostrato (in replay) o quelli di adesso
+   // (replayMomentoMostrato() === null, cioè Live che corre o Storico fermo).
+   const livStorici=posLivelliAlTempo(pos,momentoMostrato);
+   const slStorico=livStorici.sl, tpStorico=livStorici.tp;
    const sideColor=pos.side==='BUY'?'#2fbf71':'#e05252';
    // Calcolato una volta sola per candela di apertura, usato sia dalla freccia sia dalla
    // casella Target/Stop qui sotto (che deve restare disponibile anche quando l'entrata è
@@ -15772,8 +15792,10 @@ function draw(){
    if(openIdx!=null){
      const isDraggingSl=isFocused && previewTradeLevel && previewTradeLevel.type==='SL';
      const isDraggingTp=isFocused && previewTradeLevel && previewTradeLevel.type==='TP';
-     const liveSl=isDraggingSl && previewTradeLevel.price!=null?previewTradeLevel.price:pos.sl;
-     const liveTp=isDraggingTp && previewTradeLevel.price!=null?previewTradeLevel.price:pos.tp;
+     // Il livello trascinato ADESSO con il dito/mouse vince sempre (si deve vedere dove lo si sta
+     // portando); altrimenti vale quello in forza all'istante mostrato.
+     const liveSl=isDraggingSl && previewTradeLevel.price!=null?previewTradeLevel.price:slStorico;
+     const liveTp=isDraggingTp && previewTradeLevel.price!=null?previewTradeLevel.price:tpStorico;
      // "Aperto P&L" della casella TP/SL: stesso punto UNICO dell'etichetta accanto alla freccia
      // (posLivePL) — per una posizione reale è il netto reale del terminale (profit+swap+
      // commissione), non un ricalcolo locale col prezzo di un'altra fonte dati.
@@ -15802,7 +15824,10 @@ function draw(){
        pad,cw,n,start,w,y,
        // La casella non deve restare "indietro" rispetto all'ultima candela finché la
        // posizione resta aperta — vedi il commento su keepPaceIdx dentro drawTpSlZoneBox.
-       keepPaceIdx:idx,
+       // In replay ci si aggiunge la FRAZIONE di candela già svelata: così il bordo destro
+       // avanza insieme alla formazione, al ritmo del moltiplicatore, invece di fare un salto
+       // di una candela intera ogni volta che una si chiude.
+       keepPaceIdx:idx+replayFrazioneBarra(),
        tooltipLines:[
          `Lottaggio: ${pos.lots!=null?pos.lots.toFixed(2)+' lot':'—'}`,
          `Aperto P&L: ${Number.isFinite(liveVal)?euro(liveVal):'—'}`,
@@ -16073,6 +16098,20 @@ function draw(){
      });
    }
  }
+ // LA CANDELA IN FORMAZIONE (replay col play acceso) SI DISEGNA QUI, DENTRO draw().
+ //
+ // SEGNALATO: "la candela che si sta formando lampeggia - si accende e si spegne ad ogni
+ // aggiornamento; quelle gia' completate vanno bene, il problema e' l'ultima".
+ // LA CAUSA: era un RITOCCO applicato DOPO draw(), e lo applicava solo il battito del replay.
+ // Qualunque altro ridisegno - e ce ne sono tanti: il mirino che segue il mouse, un prezzo dal
+ // vivo, il pannello che si aggiorna, e soprattutto forward() ogni volta che una candela si
+ // completa - ridipingeva il grafico SENZA di lei, e la candela spariva fino al battito dopo.
+ // Col moltiplicatore alto le candele si completano di continuo, quindi quei ridisegni "senza"
+ // diventavano continui: ecco perche' lampeggiava di piu' proprio accelerando.
+ // Disegnandola qui non esiste piu' nessun modo di dipingere il grafico senza di lei: chiunque
+ // chiami draw(), per qualunque motivo, la trova gia' dentro. Sta in fondo all'area protetta,
+ // quindi resta ritagliata dentro il grafico come tutto il resto e non tocca le scale.
+ try{ if(replayForm&&replayForm.idx===idx+1)replayDisegnaFormazione(replayForm); }catch(e){}
  // --- Fine zona di protezione: da qui in poi si torna a disegnare su tutto il canvas (le
  // caselle di prezzo corrente/mirino DEVONO comparire sopra la scala prezzo, quindi non vanno
  // ritagliate). Prima però ridisegniamo le due strisce delle scale (prezzo a destra, tempo in
@@ -16117,9 +16156,14 @@ function draw(){
    ownPositionsAxis.forEach(pos=>{
      const entryColor=pos.side==='BUY'?'#2fbf71':'#e05252';
      const entryFg=pos.side==='BUY'?'#04170d':'#ffffff';
+     // Anche le etichette sul bordo destro seguono i livelli DI ALLORA: altrimenti, rivedendo in
+     // replay un trade il cui stop e' stato alzato tre volte, la linea a grafico mostrerebbe lo
+     // stop di quel momento e l'etichetta sulla scala quello di adesso - due numeri diversi per
+     // la stessa cosa, nello stesso disegno.
+     const axLiv=posLivelliAlTempo(pos,momentoMostrato);
      if(pos.entry!=null && pos.entry>=lo && pos.entry<=hi)drawPriceAxisTag(ctx,y,pos.entry,fmtPrice(pos.entry),entryColor,entryFg,pad,w,h);
-     if(Number.isFinite(pos.tp) && pos.tp>=lo && pos.tp<=hi)drawPriceAxisTag(ctx,y,pos.tp,fmtPrice(pos.tp),'#2fbf71','#04170d',pad,w,h);
-     if(Number.isFinite(pos.sl) && pos.sl>=lo && pos.sl<=hi)drawPriceAxisTag(ctx,y,pos.sl,fmtPrice(pos.sl),'#e05252','#ffffff',pad,w,h);
+     if(Number.isFinite(axLiv.tp) && axLiv.tp>=lo && axLiv.tp<=hi)drawPriceAxisTag(ctx,y,axLiv.tp,fmtPrice(axLiv.tp),'#2fbf71','#04170d',pad,w,h);
+     if(Number.isFinite(axLiv.sl) && axLiv.sl>=lo && axLiv.sl<=hi)drawPriceAxisTag(ctx,y,axLiv.sl,fmtPrice(axLiv.sl),'#e05252','#ffffff',pad,w,h);
    });
  }
  // Current market price: close of the latest available candle in the selected timeframe.
@@ -18407,13 +18451,118 @@ function mt5RealNet(ticket){
 // divario visto ("+208 in app" contro "+190 su MT5"). Una posizione "solo riferimento" (MT5
 // scollegato, mostrata sui prezzi Capital.com) e una SIMULATA continuano invece col calcolo
 // locale corrente, perché lì non esiste (o non è fresco) il dato del broker.
+// ===================== IL REPLAY E LE POSIZIONI =====================
+// RICHIESTO ESPLICITAMENTE: "in modalita' replay, quando avanza il grafico col tasto play, le
+// linee delle posizioni devono essere sincronizzate alla velocita' di aggiornamento selezionata;
+// devono vedersi tutte le linee di entry, TP e stop loss con i relativi valori di guadagno/
+// perdita; e devono vedersi gli spostamenti mano a mano: si deve ricordare OGNI movimento".
+//
+// Tre funzioni rispondono a tre domande diverse, e vanno tenute distinte:
+//   - CHE PREZZO si sta mostrando adesso (prezzoMostratoOra);
+//   - CHE ISTANTE si sta mostrando adesso (replayMomentoMostrato);
+//   - QUANTO della candela in formazione e' stato svelato (replayFrazioneBarra).
+//
+// PERCHE' prima le posizioni restavano immobili per tutta la formazione di una candela: ogni cosa
+// qui dentro passava da currentPrice(), che e' rows[idx].close - la chiusura dell'ultima candela
+// COMPIUTA. Dentro la formazione quel numero non cambia mai, quindi P/L, connettore e bordo delle
+// caselle facevano un salto secco una volta per candela invece di seguire il moltiplicatore.
+// Il prezzo in formazione, invece, avanza di un passo per ogni secondo di mercato svelato: e'
+// esattamente la "velocita' di aggiornamento selezionata".
+function prezzoMostratoOra(){
+ const p=replayPrezzoFormazione();
+ return Number.isFinite(p)?p:currentPrice();
+}
+// L'istante mostrato a grafico, in millisecondi, SOLO quando si sta rivedendo un momento che non
+// e' adesso. null = "adesso" (Live che corre, o Storico fermo): nessun viaggio nel tempo, i
+// livelli delle posizioni sono quelli correnti e non c'e' niente da ricostruire.
+function replayMomentoMostrato(){
+ if(replayForm&&replayForm.idx===idx+1){
+  const t=parseDateTime(rows[replayForm.idx]&&rows[replayForm.idx].date);
+  if(Number.isFinite(t))return t+Math.max(0,Number(replayForm.sub)||0)*1000;
+ }
+ if(liveReplayActive&&Number.isFinite(masterTime))return masterTime;
+ return null;
+}
+// Quanta parte della candela in formazione e' stata svelata (0..1). Serve a far avanzare il bordo
+// destro delle caselle Target/Stop CON la formazione invece che a scatti di una candela intera.
+function replayFrazioneBarra(){
+ if(!(replayForm&&replayForm.idx===idx+1))return 0;
+ const perBar=replaySecondsPerBar();
+ return Math.max(0,Math.min(1,(Number(replayForm.sub)||0)/Math.max(1,perBar)));
+}
+// LA MEMORIA DEGLI SPOSTAMENTI ("si deve ricordare ogni movimento che e' stato fatto").
+// Ogni posizione porta con se' la propria storia: una riga per ogni momento in cui entrata, stop
+// o target sono cambiati. Serve al replay - che deve far rivedere i livelli COM'ERANO in quel
+// momento, non come sono adesso - ed e' l'unico posto dove quell'informazione esiste: fino a ieri
+// uno stop spostato tre volte lasciava solo il suo valore finale, e dei tre spostamenti non
+// restava traccia da nessuna parte.
+//
+// SI REGISTRA IN UN PUNTO SOLO, dentro draw(), confrontando i livelli con l'ultima riga scritta.
+// E' deliberato: lo stop e il target di una posizione vengono cambiati da almeno dieci strade
+// diverse (trascinamento a grafico, modifica a mano nella tabella, pareggio automatico,
+// trailing della strategia, allineamento con MT5, e il terminale MT5 stesso che li muove da
+// fuori dall'app). Appendere la riga in ognuna di quelle strade vorrebbe dire dimenticarsene in
+// qualcuna - e' gia' successo tre volte in questo file con lo stesso schema - mentre draw() e' il
+// punto che TUTTE attraversano subito dopo aver cambiato qualcosa.
+const POS_STORIA_MAX=400;
+function posStoriaSegna(pos,quando){
+ if(!pos)return null;
+ if(!Array.isArray(pos.storiaLivelli))pos.storiaLivelli=[];
+ const S=pos.storiaLivelli;
+ // ATTENZIONE: Number(null) fa 0, e 0 passa Number.isFinite. Senza il controllo esplicito su
+ // null/'' un livello assente diventerebbe il prezzo zero e un istante assente l'istante zero,
+ // cioe' il 1970 - lo STESSO inganno che nel lettore Syntra teneva per "vecchia" ogni notifica
+ // con la data illeggibile. Qui si guarda prima se il valore c'e', e solo poi se e' un numero.
+ const nL=v=>{ if(v===null||v===undefined||v==='')return null; const x=Number(v); return Number.isFinite(x)?x:null; };
+ const e=nL(pos.entry), s=nL(pos.sl), t=nL(pos.tp);
+ const ultimo=S.length?S[S.length-1]:null;
+ if(ultimo&&ultimo.entry===e&&ultimo.sl===s&&ultimo.tp===t)return null;  // niente di nuovo
+ // La PRIMA riga e' datata all'apertura della posizione, non all'istante in cui questo codice
+ // l'ha vista per la prima volta: altrimenti, rivedendo in replay le candele precedenti, una
+ // posizione aperta ieri sembrerebbe senza livelli fino ad oggi.
+ let q=nL(quando);
+ if(q==null&&!S.length){ try{ q=nL(openReferenceTimeForPos(pos)); }catch(err){} }
+ if(q==null)q=Date.now();
+ // Due livelli spostati nello stesso istante (succede: pareggio = stop e target insieme)
+ // restano una riga sola, invece di due righe con la stessa data.
+ if(ultimo&&ultimo.t===q){ ultimo.entry=e; ultimo.sl=s; ultimo.tp=t; return ultimo; }
+ const riga={t:q,entry:e,sl:s,tp:t};
+ S.push(riga);
+ if(S.length>POS_STORIA_MAX)S.splice(0,S.length-POS_STORIA_MAX);
+ return riga;
+}
+function posStoriaAggiornaTutte(){
+ if(!Array.isArray(positions))return;
+ for(const p of positions){ try{ posStoriaSegna(p); }catch(e){} }
+}
+// I livelli in forza a un certo istante. Senza istante (o senza storia: posizioni aperte prima
+// che questa memoria esistesse) si risponde con quelli di adesso, cioe' come si e' sempre fatto.
+function posLivelliAlTempo(pos,tMs){
+ const ora={entry:pos?pos.entry:null,sl:pos?pos.sl:null,tp:pos?pos.tp:null};
+ const S=Array.isArray(pos&&pos.storiaLivelli)?pos.storiaLivelli:null;
+ // tMs null = "adesso" (fuori dal replay): stesso inganno di Number(null)===0 spiegato sopra,
+ // e qui costava caro - senza il controllo esplicito, fuori dal replay si sarebbero disegnati
+ // per sempre i livelli di APERTURA invece di quelli attuali.
+ if(!S||!S.length||tMs===null||tMs===undefined||!Number.isFinite(Number(tMs)))return ora;
+ const t=Number(tMs);
+ let scelta=null;
+ for(const r of S){ if(Number(r.t)<=t)scelta=r; else break; }
+ // Prima del primo movimento registrato valgono i livelli di apertura, non quelli di adesso.
+ if(!scelta)scelta=S[0];
+ return {entry:scelta.entry!=null?scelta.entry:ora.entry,sl:scelta.sl,tp:scelta.tp};
+}
 function posLivePL(pos){
  if(!pos)return null;
- if(pos.mt5Ticket!=null&&!isMt5ReferenceOnly(pos)){
+ // IN REPLAY il numero del terminale MT5 non c'entra niente: e' il profitto di ADESSO, al prezzo
+ // di adesso, mentre a grafico si sta rivedendo un altro momento. Si ricalcola quindi sul prezzo
+ // che il replay sta mostrando (richiesto: i valori di guadagno/perdita devono seguire
+ // l'avanzamento). Fuori dal replay resta il netto reale del terminale, come prima.
+ const rivedendo=replayMomentoMostrato()!=null;
+ if(pos.mt5Ticket!=null&&!isMt5ReferenceOnly(pos)&&!rivedendo){
   const net=mt5RealNet(pos.mt5Ticket);
   if(net!=null)return net;
  }
- const price=currentPrice();
+ const price=prezzoMostratoOra();
  if(!Number.isFinite(price)||pos.lots==null)return null;
  return calculateForexPL(pos.side,pos.entry,price,pos.lots,pos.asset||currentAssetKey);
 }
@@ -19710,7 +19859,7 @@ function createPendingOrder(side){
  checkPendingOrders();
  draw();update();
 }
-function forward(){
+function forward(silenzioso){
  if(!rows.length)return;
  // Se l'utente non ha zoomato orizzontalmente a mano, il numero di candele visibili si
  // ricalcola ad ogni passo avanti: così il ridimensionamento automatico prosegue mentre
@@ -19750,11 +19899,21 @@ function forward(){
  if(liveReplayActive && idx>=rows.length-1){ esciReplayLive(); return; }
  if(idx>=rows.length-1)$('status').textContent='Fine dello storico.';
  else if(positions.length)$('status').textContent=`Candela ${idx+1}/${rows.length} • ${positions.length} posizion${positions.length>1?'i':'e'} aperta/e.`;
- draw();update();
+ // `silenzioso`: non ridisegnare e non aggiornare il pannello adesso. Lo usa SOLO il battito del
+ // replay, che in un giro solo puo' completare piu' candele di fila (moltiplicatore alto): senza
+ // questo, ognuna faceva un draw() e un update() completi: dieci candele in un giro = venti
+ // ricalcoli dell'intero grafico in un battito, ed e' da li' che venivano gli scatti e i blocchi
+ // ai moltiplicatori alti. Le valutazioni (evaluate/checkPendingOrders, qui sopra) continuano a
+ // girare per OGNI candela, come prima: a saltare e' solo il disegno, che il battito fa una volta
+ // sola alla fine. Chi chiama forward() senza argomenti non cambia di niente.
+ if(!silenzioso){ draw();update(); }
  // RICHIESTO ESPLICITAMENTE: avanti/indietro (qui e su #back più sotto) sincronizzati su tutte le
  // finestre PIP aperte — vedi broadcastChartTimeSync() più sopra nel file. Copre anche il PLAY
- // automatico, che richiama forward() a intervalli regolari (vedi startPlayInterval()).
- if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump)broadcastChartTimeSync(masterTime);
+ // automatico, che richiama forward() a intervalli regolari (vedi startPlayInterval()). Nei giri
+ // SILENZIOSI del replay l'annuncio non parte: lo manda il battito una volta sola, alla fine,
+ // altrimenti dieci candele completate in un giro diventerebbero dieci annunci a tutte le
+ // finestre affiancate.
+ if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump&&!silenzioso)broadcastChartTimeSync(masterTime);
 }
 // Il CSV storico può essere caricato SOLO dopo aver scelto un ASSET (coppia di valute):
 // blocchiamo l'apertura stessa della finestra di selezione file al click, così l'utente
@@ -21015,10 +21174,36 @@ function replayAdvanceSteps(accumMs,elapsedMs,mult){
  return {steps,accumMs:total-steps*1000};
 }
 function replayMultSel(){ return Math.max(1,Math.min(30,Math.round(num($('speed').value)||1))); }
+// Millisecondi REALI passati dall'ultimo battito.
+//
+// SEGNALATO: "l'aggiornamento col tasto play a volte si blocca, soprattutto a moltiplicatore
+// alto, e deve continuare a girare anche se siamo su un'altra scheda".
+// LA CAUSA: si dava per scontato che fra un battito e l'altro passassero esattamente
+// REPLAY_FRAME_MS (50 ms). Non e' vero quasi mai, e sulle schede NON in primo piano i browser
+// rallentano apposta i timer a un battito al secondo o meno: ogni battito avanzava comunque
+// 50 ms di mercato ma ne passavano 1000 di orologio, cioe' venti volte piu' lento. Visto da
+// fuori, il replay "si era bloccato". Guardando l'orologio vero, invece, un battito che arriva
+// in ritardo porta con se' tutto il tempo che ha accumulato, e il ritmo resta quello scelto.
+//
+// Il tetto serve a non tentare di recuperare in un colpo solo un'assenza lunghissima (computer
+// sospeso, scheda ferma per minuti): con 30x, cinque secondi di arretrato sono gia' 150 candele
+// da svelare in un giro. Oltre quella soglia il replay riparte da dove si trova invece di
+// bloccare la pagina per secondi.
+const REPLAY_ARRETRATO_MAX_MS=5000;
+let replayUltimoBattitoMs=0;
+function replayElapsedMs(){
+ const ora=(typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
+ const prima=replayUltimoBattitoMs||ora;
+ replayUltimoBattitoMs=ora;
+ const passati=ora-prima;
+ if(!(passati>0))return 0;
+ return Math.min(REPLAY_ARRETRATO_MAX_MS,passati);
+}
 function startPlayInterval(){
  if(timer){clearInterval(timer);timer=null;}
  replayForm=null;
  replayMsAccum=0;
+ replayUltimoBattitoMs=0;   // il primo giro non deve ereditare il tempo del play precedente
  timer=setInterval(replayAnimTick,REPLAY_FRAME_MS);
 }
 function replayAnimTick(){
@@ -21028,29 +21213,36 @@ function replayAnimTick(){
   try{ draw(); }catch(e){}
   return;
  }
- // Quanti SECONDI di mercato svelare in questo frame: N secondi per ogni secondo reale
- // (moltiplicatore #speed), accumulati frazionariamente per un ritmo esatto a qualunque fps.
- const _adv=replayAdvanceSteps(replayMsAccum,REPLAY_FRAME_MS,replayMultSel());
+ // Quanti SECONDI di mercato svelare in questo giro: N secondi per ogni secondo reale
+ // (moltiplicatore #speed), accumulati frazionariamente per un ritmo esatto a qualunque cadenza.
+ // SI MISURA L'OROLOGIO, non si da' per scontata la cadenza nominale dell'intervallo: vedi
+ // replayElapsedMs() qui sotto, e' la correzione del "a volte si blocca", soprattutto quando la
+ // scheda non e' quella in primo piano.
+ const _adv=replayAdvanceSteps(replayMsAccum,replayElapsedMs(),replayMultSel());
  replayMsAccum=_adv.accumMs;
  let step=_adv.steps;
- if(step<=0)return; // nessun secondo pieno in questo frame: il ritmo resta "al secondo"
+ if(step<=0)return; // nessun secondo pieno in questo giro: il ritmo resta "al secondo"
  const perBar=replaySecondsPerBar();
  if(!replayForm)replayForm=replayAvviaFormazione(idx+1);
+ let candeleCompletate=0;
+ // Il tetto ai giri del ciclo serve solo a non restare incastrati qui dentro per sempre se
+ // qualcosa va storto: deve crescere con gli step richiesti, altrimenti dopo una pausa lunga
+ // (scheda nascosta) butterebbe via proprio gli step che servono a recuperare. Prima era 96
+ // fisso, qualunque fosse l'arretrato.
+ const tettoGiri=step+8;
  let guard=0;
- while(replayForm&&step>0&&guard++<96){
+ while(replayForm&&step>0&&guard++<tettoGiri){
   if(replayForm.sub>=perBar){
-   // Formazione completata: la candela diventa VERA con forward() (draw+update+valutazioni)
-   // e gli step residui del frame proseguono subito sulla candela SUCCESSIVA — è questo che
-   // fa del moltiplicatore 1x-30x un vero acceleratore dei DATI (a 30x si completano più
-   // candele nello stesso frame). Prima qui si usciva col return: gli step residui venivano
-   // buttati via e ogni frame completava al massimo UNA candela a qualunque moltiplicatore.
+   // Formazione completata: la candela diventa VERA con forward() e gli step residui del giro
+   // proseguono subito sulla candela SUCCESSIVA — è questo che fa del moltiplicatore 1x-30x un
+   // vero acceleratore dei DATI (a 30x si completano più candele nello stesso giro).
+   // forward(true) = SILENZIOSO: valuta tutto (SL/TP, ordini pendenti) ma non ridisegna. Il
+   // disegno si fa una volta sola, in fondo. Prima ogni candela completata si portava dietro un
+   // draw() e un update() interi, ed e' da li' che venivano gli scatti ai moltiplicatori alti.
    replayForm=null;
-   forward();
-   if(idx>=rows.length-1){
-    clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';replayForm=null;
-    try{ draw(); }catch(e){}
-    return;
-   }
+   forward(true);
+   candeleCompletate++;
+   if(idx>=rows.length-1){ replayFerma(); return; }
    replayForm=replayAvviaFormazione(idx+1);
    continue;
   }
@@ -21058,27 +21250,30 @@ function replayAnimTick(){
   replaySubAccumulo(replayForm);
   replayForm.sub++;
  }
- if(!replayForm)return;
- if(replayForm.sub>=perBar){
+ if(replayForm&&replayForm.sub>=perBar){
   // Bordo: step esaurito proprio a soglia — completa comunque la candela e prosegue.
   replayForm=null;
-  forward();
-  if(idx>=rows.length-1){
-   clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';replayForm=null;
-   try{ draw(); }catch(e){}
-   return;
-  }
+  forward(true);
+  candeleCompletate++;
+  if(idx>=rows.length-1){ replayFerma(); return; }
   if(timer&&idx<rows.length-1)replayForm=replayAvviaFormazione(idx+1);
-  return;
  }
- // RIDISEGNO COMPLETO ad ogni aggiornamento (RICHIESTO): prima l'anteprima si sovrapponeva al
- // canvas senza ripulirlo, quindi corpo e stoppino in formazione si accumulavano frame dopo
- // frame in un blocco rosso/verde pieno (il "bug di visualizzazione" segnalato). Un draw()
- // completo prima dell'anteprima ripulisce il canvas e in più tiene aggiornati "mano a mano"
- // (ogni secondo) TP/SL/entry delle posizioni, P/L live e i livelli ricostruiti in replay.
- try{ draw(); }catch(e){}
- replayDisegnaFormazione(replayForm);
- const s=$('status'); if(s)try{ s.textContent=`Replay ${replayMultSel()}x (${replayMultSel()}s/s) • candela ${idx+1}/${rows.length} • formo la ${idx+2} (secondo ${Math.min(perBar,replayForm.sub)}/${perBar}).`; }catch(e){}
+ // UN SOLO RIDISEGNO PER GIRO, e dentro c'e' gia' la candela in formazione (vedi draw()): il
+ // grafico non viene mai presentato senza di lei, quindi non puo' piu' lampeggiare. Il pannello
+ // si aggiorna solo se qualcosa e' davvero cambiato di candela.
+ try{ draw(); if(candeleCompletate)update(); }catch(e){}
+ if(candeleCompletate&&!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump){
+  try{ broadcastChartTimeSync(masterTime); }catch(e){}
+ }
+ const s=$('status');
+ if(s&&replayForm)try{ s.textContent=`Replay ${replayMultSel()}x (${replayMultSel()}s/s) • candela ${idx+1}/${rows.length} • formo la ${idx+2} (secondo ${Math.min(perBar,replayForm.sub)}/${perBar}).`; }catch(e){}
+}
+// Fine del replay: si ferma il battito e si ridisegna pulito, una volta sola.
+function replayFerma(){
+ if(timer){ clearInterval(timer); timer=null; }
+ const b=$('play'); if(b)b.textContent='▶ PLAY';
+ replayForm=null;
+ try{ draw();update(); }catch(e){}
 }
 function replayAvviaFormazione(targetIdx){
  const r=rows[targetIdx]; if(!r)return null;
@@ -25984,7 +26179,7 @@ function tgRenderPannello(){
       :'non indicata');
   card.appendChild(tgRiga('Entrata della sala: '+entrataSala+'   ·   Stop loss: '
    +(tgC(seg.stop_loss)?tgFmt(seg.stop_loss):'non dato dalla sala (lo calcola l\'app dal rischio scelto)')));
-  const tps=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
+  const tps=tgTpInOrdine(seg.take_profit,seg.direzione);
   card.appendChild(tgRiga(tps.length
    ? (tps.length+(tps.length===1?' take profit: ':' take profit: ')+tps.map(tgFmt).join('  ·  ')
       +'   →   '+tps.length+(tps.length===1?' posizione':' posizioni'))
@@ -26090,7 +26285,7 @@ async function tgApriConfigurazione(voce){
  }
  const sym=await tgPreparaAsset(voce);
  if(!sym)return;
- const tps=(seg.take_profit||[]).map(Number).filter(Number.isFinite);
+ const tps=tgTpInOrdine(seg.take_profit,seg.direzione);
  tgCfg={
   voce, sym,
   side:String(seg.direzione||'').toUpperCase(),
@@ -26121,6 +26316,34 @@ function tgAvvPctRicordata(){
 // Il prezzo a cui scatta il pareggio anticipato: una frazione del cammino fra entrata e primo
 // target. Si ragiona sulla DISTANZA e non sul prezzo, cosi' la stessa percentuale vale identica
 // su oro, forex e indici - che hanno scale completamente diverse.
+// I TAKE PROFIT IN ORDINE DI ARRIVO: il TP1 e' SEMPRE quello che il prezzo tocca per primo.
+//
+// RICHIESTO dal proprietario: "se una sala scrive i TP in ordine crescente li numera bene, ma li
+// deve numerare bene anche al contrario. Non mi puo' chiamare TP1 quello piu' lontano: il TP1 e'
+// sempre quello piu' vicino all'entrata, indipendentemente da come la sala li ha scritti".
+//
+// PRIMA si teneva l'ordine di SCRITTURA della sala, e basta: nessun ordinamento, da nessuna parte.
+// Una sala che scrive dal piu' lontano al piu' vicino - cosa comune, molte le elencano in ordine di
+// ambizione - faceva diventare TP1 l'ultimo obiettivo. E la numerazione non e' solo un'etichetta:
+// e' quella che la strategia usa per decidere "quando il prezzo raggiunge il take profit n.1,
+// sposta lo stop a...", quindi l'ordine sbagliato sposta gli stop nel momento sbagliato.
+//
+// L'ordine giusto non dipende da nessun prezzo di mercato: per un BUY i target stanno sopra
+// l'entrata, quindi il primo che si tocca e' il piu' BASSO; per un SELL stanno sotto, quindi e' il
+// piu' ALTO. Basta la direzione.
+function tgTpInOrdine(lista,direzione){
+ // ATTENZIONE, terza volta con lo stesso inganno (vedi cervello/LEZIONI.md): Number(null) fa 0, e
+ // 0 passa Number.isFinite. Un target mancante nel messaggio della sala diventava cosi' un take
+ // profit a PREZZO ZERO, che per giunta si piazza sempre per primo nell'ordinamento di un BUY - ed
+ // e' esattamente il difetto gia' corretto dentro validateTradeLevel, dove uno zero valeva come
+ // "raggiunto da qualunque candela". Qui si guarda prima se il valore c'e', e solo dopo se e' un
+ // numero; e un prezzo <= 0 non e' un target, qualunque cosa sia scritta nel messaggio.
+ const grezzi=Array.isArray(lista)?lista:[lista];
+ const v=grezzi.filter(x=>x!==null&&x!==undefined&&x!=='').map(Number)
+               .filter(x=>Number.isFinite(x)&&x>0);
+ const compra=String(direzione||'').toUpperCase()!=='SELL';
+ return v.sort((a,b)=>compra?a-b:b-a);
+}
 function tgLivelloAvvicinamento(entry,tp1,pct){
  if(!Number.isFinite(entry)||!Number.isFinite(tp1))return NaN;
  const q=Number(pct);
@@ -29119,7 +29342,7 @@ function tgPiano(seg,sym,pctForzata,opz){
  }
  let slCalcolato=false, lottiFissi=null;
  if(!tgC(seg.stop_loss)){
-  const tuttiTp=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!validateTradeLevel(side,entry,NaN,v));
+  const tuttiTp=tgTpInOrdine(seg.take_profit,side).filter(v=>!validateTradeLevel(side,entry,NaN,v));
   const nTp=Math.max(1,Math.min(maxN,tuttiTp.length));
   // Automatico (pctForzata = rischio della sala): senza stop si usa il rischio dedicato.
   const pctTmp=((Number.isFinite(pctForzata)&&pctForzata>0)?tgRischioSenzaSl(A):tgRischioTotale())/parti;
@@ -29130,9 +29353,22 @@ function tgPiano(seg,sym,pctForzata,opz){
  // Se il prezzo ha GIA' superato lo stop loss, quel segnale e' morto: aprirlo vorrebbe dire
  // nascere oltre il proprio stop. Non si "aggiusta", si rifiuta.
  if(validateTradeLevel(side,entry,sl,NaN)){
-  return {problemi:['lo stop loss della sala ('+tgFmt(sl)+') e\' dalla parte sbagliata rispetto al prezzo di adesso ('+tgFmt(entry)+'): il prezzo lo ha gia\' superato, il segnale non e\' piu\' valido']};
+  // SEGNALATO dal proprietario ("IMPOSSIBILE, il prezzo e' a 4090"): il messaggio chiamava
+  // "prezzo di adesso" il numero `entry`, che per un ordine PENDENTE non e' affatto il mercato -
+  // e' il prezzo scritto dalla sala. Leggendo "prezzo di adesso (4085.00)" con l'oro a 4090 si va
+  // a cercare un errore nei prezzi che non c'e'. Ora si dice esattamente che numero si sta
+  // guardando, si mostrano ENTRAMBI (entrata e mercato) e si dice da che parte dovrebbe stare lo
+  // stop, cosi' si capisce al volo se a sbagliare e' la sala o l'app.
+  const dove=side==='BUY'?'sotto':'sopra';
+  const rifEntrata=pendente?('entrata '+kind+' della sala '+tgFmt(entry)):('entrata a mercato '+tgFmt(entry));
+  const rifMercato=(Number.isFinite(mercato)&&mercato!==entry)?(', prezzo di adesso '+tgFmt(mercato)):'';
+  return {problemi:['lo stop loss della sala ('+tgFmt(sl)+') e\' dalla parte sbagliata: per un '
+    +side+' deve stare '+dove+' all\'entrata ('+rifEntrata+rifMercato+'). Cosi\' com\'e\', la '
+    +'posizione nascerebbe gia\' oltre il proprio stop: il segnale non e\' valido']};
  }
- const tutti=(seg.take_profit||[]).map(Number).filter(Number.isFinite).filter(v=>!lontano(v,20));
+ // In ordine di arrivo (vedi tgTpInOrdine): e' questo che decide quale posizione e' la "n.1" e
+ // quindi quando la strategia sposta gli stop delle altre.
+ const tutti=tgTpInOrdine(seg.take_profit,side).filter(v=>!lontano(v,20));
  // Un take profit che il prezzo ha gia' passato non ha senso come posizione a se': aprirla
  // significherebbe nascere oltre il proprio obiettivo. Si scartano quelli, non tutto il segnale.
  let tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));

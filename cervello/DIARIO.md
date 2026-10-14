@@ -340,3 +340,63 @@ Formato: data — chi — cosa — esito collaudo — commit.
   prima si riapriva a tutto schermo ogni volta. Il tentativo non puo' far fallire il collegamento:
   se non riesce lo dice nella risposta (terminale_ridotto / terminale_ridotto_detail).
   Test: ponte/test_profilo_syntra.py (8, era 5), ponte/test_mt5_finestra.py (4, nuovo).
+
+## 14 ottobre 2026 - v147: il replay e le posizioni
+  RICHIESTO: "in modalita' replay, quando avanza col play, le linee delle posizioni devono essere
+  sincronizzate alla velocita' di aggiornamento selezionata; devono vedersi entry, TP e stop loss
+  con i relativi valori di guadagno/perdita; e devono vedersi gli spostamenti mano a mano: si deve
+  ricordare ogni movimento che e' stato fatto".
+  (1) NON SEGUIVANO L'AVANZAMENTO. P/L, connettore e bordo delle caselle Target/Stop passavano
+  tutti da currentPrice(), che e' rows[idx].close: la chiusura dell'ultima candela COMPIUTA.
+  Dentro la formazione quel numero non cambia mai, quindi facevano un salto secco una volta per
+  candela qualunque fosse il moltiplicatore. Ora leggono prezzoMostratoOra() (il prezzo svelato
+  finora, lo stesso che muove la linea bianca da ieri) e keepPaceIdx porta la FRAZIONE di candela
+  svelata, cosi' il bordo destro avanza con la formazione invece di scattare.
+  (2) DEGLI SPOSTAMENTI NON RESTAVA TRACCIA DA NESSUNA PARTE. Una posizione portava solo i livelli
+  ATTUALI: uno stop alzato tre volte lasciava il valore finale, e rivedendo quel trade in replay si
+  vedeva lo stop di oggi su candele di ieri. Ogni posizione ora tiene storiaLivelli (una riga per
+  movimento, tetto 400) e il disegno rilegge i livelli in forza all'istante mostrato
+  (posLivelliAlTempo): linee, etichette, caselle e etichette sulla scala prezzi, tutte dalla stessa
+  fonte. Si registra IN UN PUNTO SOLO, in testa a draw(): stop e target vengono cambiati da dieci
+  strade diverse (trascinamento, tabella, pareggio, trailing, allineamento MT5, e il terminale MT5
+  stesso da fuori dall'app) e draw() e' il punto che tutte attraversano subito dopo. La storia
+  viaggia con la posizione nel salvataggio, quindi sopravvive al ricaricamento.
+  (3) In replay il P/L non e' piu' il netto del terminale MT5: quello e' il profitto di ADESSO, al
+  prezzo di adesso, mentre a grafico si sta guardando un altro momento.
+  BUG MIO, preso dal test: Number(null) fa 0 e passa Number.isFinite, quindi "nessun istante"
+  diventava l'istante zero (1970) e fuori dal replay si disegnavano per sempre i livelli di
+  APERTURA. Stesso inganno del `nt["quando"] or 0` del lettore Syntra, in un'altra lingua.
+  Test: replay_posizioni.test.mjs (5).
+
+## 14 ottobre 2026 - v147 (seconda parte): il lampeggio, e il TP1
+  (1) LA CANDELA IN FORMAZIONE LAMPEGGIAVA. Segnalato: "si accende e si spegne subito, ad ogni
+  aggiornamento; quelle completate vanno bene, il problema e' l'ultima". LA CAUSA: era un RITOCCO
+  applicato DOPO draw(), e lo applicava solo il battito del replay. Ogni altro ridisegno - il
+  mirino, il pannello, e soprattutto forward() ad ogni candela completata - ridipingeva il grafico
+  SENZA di lei. Piu' si alzava il moltiplicatore, piu' spesso le candele si completavano, piu'
+  spesso il grafico veniva dipinto "senza": ecco perche' peggiorava accelerando. Ora la disegna
+  draw() stesso, in fondo all'area protetta: non esiste piu' un modo di dipingere il grafico senza.
+  (2) IL PLAY CHE "A VOLTE SI BLOCCA", soprattutto su un'altra scheda. Il battito dava per scontati
+  50 ms fra un giro e l'altro; sulle schede non in primo piano i browser rallentano i timer a uno
+  al secondo, quindi si avanzavano 50 ms di mercato ogni 1000 di orologio - venti volte piu' lento,
+  che visto da fuori e' "bloccato". Ora si misura l'orologio vero (replayElapsedMs), con un tetto a
+  5 secondi per non tentare di recuperare un'assenza lunghissima in un colpo solo.
+  (3) SCATTI AI MOLTIPLICATORI ALTI: ogni candela completata dentro un giro si portava dietro un
+  draw() e un update() interi. forward(true) ora e' silenzioso (valuta tutto, non disegna) e il
+  battito disegna una volta sola alla fine.
+  Test: replay_fluido.test.mjs (4). L'invariante provata non e' "quante volte lampeggia" (non si
+  saprebbe contare): e' che nessun draw() puo' concludersi senza la candela in formazione.
+  (4) IL TP1 E' SEMPRE IL PIU' VICINO ALL'ENTRATA. Richiesto: "se una sala scrive i TP al
+  contrario li deve numerare bene lo stesso". Non c'era NESSUN ordinamento: si teneva l'ordine di
+  scrittura della sala. Il caso vero (oro): TP 4130, 4115, 4096, 4092, 4088 su un BUY a 4085 -
+  TP1 diventava 4130, l'ultimo obiettivo. E non e' un'etichetta: la strategia sposta gli stop
+  "quando il prezzo raggiunge il take profit n.1". Ora tgTpInOrdine() ordina per direzione (BUY
+  crescente, SELL decrescente) ed e' l'unica strada: pannello, finestra di configurazione e
+  apertura vera passano tutte di li'.
+  (5) IL RIFIUTO DELLO STOP DICEVA IL NUMERO SBAGLIATO. Segnalato: "IMPOSSIBILE, il prezzo e' a
+  4090". Il messaggio chiamava "prezzo di adesso" il valore `entry`, che per un ordine PENDENTE e'
+  il prezzo scritto dalla sala, non il mercato. Ora dice quale numero sta guardando, mostra anche
+  il mercato vero quando e' diverso, e dice da che parte dovrebbe stare lo stop. Il controllo in
+  se' restava giusto: su quel segnale di prova lo stop (4175) era davvero sopra l'entrata di un
+  BUY, cioe' dalla parte sbagliata.
+  Test: tp_in_ordine.test.mjs (4).

@@ -182,3 +182,27 @@
   (14 ottobre 2026, `active`.) Appena acquista il secondo significato, ogni riassegnazione
   automatica diventa una scelta che nessuno ha fatto - e il difetto sembra casuale, perche' scatta
   quando cambia qualcos'altro. Due significati, due variabili.
+
+- **`Number(null)` fa 0, e 0 passa `Number.isFinite`.** (14 ottobre 2026, seconda volta con un
+  altro vestito: la prima era `nt["quando"] or 0` nel lettore Syntra, dove una data illeggibile
+  diventava il 1970 e la notifica veniva buttata come "vecchia".) Un valore ASSENTE che diventa
+  zero non da' errore e non si vede: diventa una data del 1970, un prezzo di zero, un istante
+  valido. Prima si guarda se il valore c'e' (`===null`, `===undefined`, `===''`), e solo dopo se
+  e' un numero. Il controllo "e' un numero finito" non sa distinguere niente da zero.
+  TERZA VOLTA, 14 ottobre 2026: un take profit mancante nel messaggio di una sala diventava un
+  target a PREZZO ZERO - e in un BUY lo zero si piazza pure primo nell'ordinamento, cioe' diventa
+  il TP1. Dove si leggono prezzi che arrivano da fuori, il filtro non e' "e' finito" ma "c'e', ed
+  e' maggiore di zero".
+
+- **Un disegno "sovrapposto dopo" lampeggia: o lo fa il disegnatore, o non esiste.** (14 ottobre
+  2026, la candela in formazione del replay.) Era dipinta DOPO draw(), e solo dal battito del
+  replay: ogni altro ridisegno la cancellava. Il difetto peggiorava accelerando - piu' eventi,
+  piu' ridisegni "senza" - ed e' la stessa forma gia' vista tre volte in questo file: agganciarsi
+  a UNA strada invece che al punto che tutte attraversano. Se una cosa deve esserci sempre, deve
+  stare dentro la funzione che disegna, non in un ritocco di chi l'ha chiamata.
+- **Un timer non dice quanto tempo e' passato: lo dice l'orologio.** (14 ottobre 2026, il play che
+  "si bloccava" sulle schede in secondo piano.) setInterval(f,50) NON garantisce 50 ms: i browser
+  rallentano apposta i timer delle schede nascoste a uno al secondo o meno. Chi avanza "di un
+  tanto per battito" invece che "del tempo davvero passato" rallenta di venti volte senza che
+  niente segnali un errore. Si misura performance.now(), con un tetto per non tentare di
+  recuperare in un colpo solo un'assenza lunghissima.
