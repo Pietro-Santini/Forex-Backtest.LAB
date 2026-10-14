@@ -164,3 +164,11 @@
   una **prova di controllo** - «questa roba viene disegnata davvero?» - altrimenti misura il
   vuoto e lo scambia per una conferma.
 - **Un test che ricalcola le coordinate di un grafico con costanti proprie (margini, larghezze) si rompe quando cambia il disegno.** Il test della resa usava il margine del vecchio canvas (16) dopo il passaggio all'SVG (10): il collaudo e' rimasto rosso su main e su GitHub senza che nessuno guardasse, e la tolleranza di ±2 degli altri test nascondeva lo scarto. Quando si cambia un disegno, si cercano i test che ne ricalcolano le misure. - 10 ottobre 2026.
+
+- **"Non funziona a volte" su una cosa che si clicca: misura il bersaglio PRIMA di cercare il bug
+  nella logica.** (14 ottobre 2026, cambio stile del footprint.) Il proprietario segnalava che il
+  cambio stile funzionava solo sulla candela di adesso. Riprodotto nel banco di prova, rispondeva
+  su tutte: la logica era giusta da sempre. L'area sensibile era 9 px per 45, con il 38% di
+  colonna morta fra una candela e l'altra - impossibile da prendere col dito. Un test che tocca
+  UN punto scelto bene passa anche con un bersaglio inutilizzabile: il test giusto tocca tutte le
+  candele, i bordi, e controlla che fra una zona sensibile e l'altra non restino vuoti.

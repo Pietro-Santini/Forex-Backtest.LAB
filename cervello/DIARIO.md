@@ -182,3 +182,106 @@ Formato: data — chi — cosa — esito collaudo — commit.
   candela corta mostra meno righe e una lunga di piu', tutte alte uguali e con lo stesso testo.
   Test: footprint_globale.test.mjs (3 nuovi, al posto dei 2 sulle righe fisse).
   - verde - Falliti: 0
+- 2026-10-14 - Claude - app v145 / Setup 1.0.145. Segnalato dal proprietario con due foto: in
+  replay "rimane quel blocco verde e il blocco rosso" e "la linea del prezzo bianca rimane
+  fissa, ferma". Due difetti veri, nessuno dei quali era un problema di avanzamento:
+  (1) in replayDisegnaFormazione la larghezza del corpo era
+  `Math.min(tetto, padH*.62)`, cioe' il 62% di TUTTA l'area del grafico invece che di UNA
+  colonna. Col footprint acceso il tetto e' 90 px: usciva un rettangolo largo 90 accanto a
+  candele larghe 12 - un blocco, non una candela. Ora e' la stessa formula di draw(),
+  `cw/n*.62`. Nello stesso punto: colori presi da currentCandleColors() invece dei due fissi
+  #2e8b57/#d64545 (accanto a candele blu e bianche sembrava un'altra cosa) e stoppino pieno del
+  colore del corpo invece che al 35% di opacita'.
+  (2) la linea del prezzo corrente, con la sua etichetta sull'asse, usava sempre
+  rows[idx].close, cioe' la chiusura dell'ultima candela RIVELATA: in replay restava ferma
+  mentre la candela successiva si formava, e il movimento si vedeva solo da una riga
+  tratteggiata colorata disegnata in piu' ("un'altra linea aggiuntiva"). Ora c'e'
+  replayPrezzoFormazione(): in replay la linea principale segue la formazione, e la riga
+  tratteggiata in piu' e' stata tolta perche' diceva la stessa cosa due volte.
+  Test: replay_live.test.mjs 8) e 9), provati rossi rimettendo il vecchio codice. - verde - Falliti: 0
+  Nello stesso giro (v145), footprint - segnalato con una foto: "ci sono piu' livelli di
+  footprint, mentre invece deve esserci soltanto un livello, e' tutto sparpagliato... devono
+  essere visualizzati soltanto a fianco alla candela e non sopra, sotto". Due cause distinte:
+  (a) le righe nascono dai TICK e possono cadere FUORI dall'alta/bassa della candela disegnata
+  (candele dall'OHLC del broker, tick dal feed, piu' l'arrotondamento al passo che sposta fino a
+  mezza riga). Finche' c'era footprintResliceFisse venivano schiacciate dentro per forza; tolto
+  quello (v144, scala uniforme) sono rimaste fuori. Ora footprintDentroLaCandela le riporta
+  dentro SOMMANDOLE alla riga di bordo: il volume non si perde e il disegno non esce.
+  (b) ogni bucket si porta dietro il passo con cui e' stato costruito (bucket.step) e il disegno
+  usava QUELLO: due candele costruite con passi diversi - dopo un cambio del passo automatico, e
+  sempre con le celle gia' aggregate che arrivano dal backup cloud di un ALTRO dispositivo, dove
+  il passo era un altro - finivano sullo stesso grafico con righe alte in modo diverso. E' il
+  "piu' livelli" della segnalazione. Ora il passo GLOBALE vince: draw() lo calcola una volta
+  (_footprintStepGlobale) e lo passa, e un bucket con un passo diverso viene riportato su quella
+  griglia prima di essere disegnato.
+  E il footprint vive anche in REPLAY (richiesto): la candela in formazione accumula le sue righe
+  sulla STESSA griglia globale, con le stesse celle (replayAvviaFormazione + replaySubAccumulo), e
+  si disegna con lo stesso drawFootprintCandle delle candele vere invece che con l'istogramma di
+  trattini che aveva prima: cresce un secondo alla volta insieme alla candela.
+  Test: footprint_scala_unica.test.mjs (6, nuovo; il quarto va rosso togliendo il confinamento).
+  Ancora nella v145, cinque richieste del proprietario in un giro.
+  (1) CRONOLOGIA DELLE SALE A GRAFICO: resta su QUESTO dispositivo. Due cose la facevano
+  viaggiare: fblCronoDisegna guardava solo vista.sala e l'asset A GRAFICO (e l'asset a grafico si
+  sincronizza fra i dispositivi), quindi bastava finire su un asset con dei risultati salvati per
+  quella sala e ricompariva da sola; e la chiave di salvataggio era uguale su tutti. Ora si
+  disegna solo se currentAssetKey===vista.asset e la chiave e' fbl_crono_vista:<idDispositivo>.
+  In piu': pulsante «Togli dal grafico», e il cambio di sala toglie da solo quella di prima
+  (prima azzerava solo vista.asset e la sala restava).
+  (2) PULSANTE «Salva come strategia della sala» nella resa: porta rischio, metodologia,
+  distribuzione equa, percentuali e spostamenti dello stop dentro tgAuto.sale[sala] della famiglia
+  dell'asset analizzato (le due apertura automatiche sono separate: scrivere in tutt'e due
+  sovrascriverebbe una scelta fatta apposta). Avvisa se la strategia universale e' accesa.
+  (3) SYNTRA, UTENTI ESCLUSI: syntraEsclusi + syntraEscluso(), controllati in tgMessaggioSegnali
+  SUBITO DOPO syntraVisto() - cosi' il messaggio non diventa un segnale ma l'utente entra lo
+  stesso nell'elenco, da dove si riammette. Confronto senza maiuscole e senza il prefisso
+  «Syntra · »: una esclusione che non scatta per una lettera e' peggio di nessuna esclusione.
+  (4) FAMIGLIA DELL'ASSET nelle posizioni aperte e nel Trade Journal (fblFamigliaBadgeHtml):
+  ricavata dall'asset con tgFamDaSimbolo, non da un campo salvato, cosi' vale anche per le
+  operazioni vecchie e non puo' mai essere in disaccordo con lo strumento vero.
+  (5) GRUPPI DI POSIZIONI: pulsanti BE e Chiudi sulla riga del gruppo. BE usa
+  applyBreakevenToPosition su tutte; Chiudi riusa fblChiudiBlocco (che gia' chiede conferma
+  dicendo quante sono e quanto fanno) e ora dice anche a chiusura avvenuta QUANTO ha reso. Solo
+  sulla sessione a schermo: le altre tre non hanno le loro posizioni in `positions`.
+  Test: cronologia_locale (4), strategia_dalla_resa (2), syntra_esclusi (3), famiglia_asset (2),
+  gruppi_be_chiudi (4).
+  Ancora v145, quarta tornata.
+  (a) SEGNALE "ENTRY @ 176.755" di EasyForexPips che il proprietario dava per non riconosciuto:
+  provato, il parser DI QUESTO REPO lo legge bene, @ compreso, in tutte le varianti (spazi
+  insecabili, CRLF, ENTRY@176.755, ENTRY: @ ..., virgola decimale). Non c'era niente da
+  correggere: il parser che gira sul computer e' quello del SETUP, non quello del repo - serve
+  reinstallare. Il caso e' entrato lo stesso in test_formati_reali.py come guard-rail.
+  ATTENZIONE: nello scriverlo ho aggiunto una classe unittest DOPO il sys.exit finale del file:
+  codice morto che non girava mai. Tolta. In quel file i casi si aggiungono a CASI, non come
+  classi.
+  (b) SYNTRA, "legge RR come asset": l'asset si prendeva con due regole deboli (la prima riga con
+  una barra, e come ripiego il PRIMO testo in ordine di documento nella meta' sinistra). "RR" sta
+  in alto a sinistra, e' corto e non ha barra: passava. Ora asset_valido() (elenco di etichette
+  che non sono mai un simbolo + controllo di forma: niente numeri, niente 1:2, almeno due lettere)
+  e scegli_asset() che prende il piu' in ALTO e, a pari altezza, il piu' a SINISTRA - come chiesto.
+  In piu' una rete di sicurezza in segnale(): un simbolo senza forma di simbolo non diventa un
+  ordine. Effetto collaterale utile: le schede CRIPTO senza barra (BTCUSDT) ora trovano l'asset.
+  (c) RESA DELLA SALA: anche il massimo calo in una sola giornata, accanto al calo dal picco.
+  (d) DASHBOARD, profitto per sala: resa %, guadagno medio, R/R e calo massimo nel riquadro e in
+  tabella.
+  Test: test_formati_reali.py (+1 caso), ponte/test_syntra_asset.py (7, nuovo),
+  resa_drawdown_giornaliero (3), sala_metriche (3).
+  DA FARE, chiesto e NON fatto in questo giro: cronologia Syntra via Classifica (navigazione
+  nell'app), cripto non rilevate dalle notifiche (serve un dump XML vero: syntra_diagnosi.py),
+  storico Syntra locale dentro la pagina della cronologia, profilo volumetrico che salta sabato e
+  domenica sugli asset che chiudono nel weekend, e il setup chiavi-in-mano per un utente nuovo.
+  Quinta tornata v145 - SYNTRA, rifatto il modo di riconoscere le cose. Il proprietario ha chiesto
+  che "funzioni perfettamente, senza problemi di riconoscimento utente, asset, prezzi,
+  cronologia". La causa comune di tutti i difetti era la stessa: si riconosceva per POSIZIONE
+  ("il primo testo in alto a sinistra", "il nodo nella meta' destra"), e bastava una scheda
+  fatta un po' diversa - una cripto, un'azione - per leggere la cosa sbagliata senza accorgersene.
+  Ora c'e' tipo_riga(): ogni riga si classifica da quello che DICE (data, lato, tipo, etichetta,
+  tp, sl, stato, qualita, rr, comando, icona, numero, asset), e la posizione resta solo come
+  spareggio fra due candidati ugualmente validi. Su quello poggiano scegli_asset() e
+  scegli_utente(). Corretti nello stesso giro i due difetti che facevano sparire i segnali cripto
+  (data senza anno, e `or 0` che trasformava una data ignota in "vecchissima") e i prezzi con
+  etichetta e numero in nodi separati. Test: ponte/test_syntra_notifiche.py (5, nuovo),
+  ponte/test_syntra_asset.py (12, era 7).
+  AVVIATO E NON FINITO: server_oracle/multiutente.py - la base del punto A (piu' utenti sullo
+  stesso server, col PC che apre LUI il canale verso il server invece di farsi chiamare via
+  Tailscale, che per il PC di un altro utente non si puo' fare). Il modulo c'e' ed e' commentato,
+  ma NON e' ancora collegato a ponte_server.py ne' all'app: non cambia niente di quello che gira.

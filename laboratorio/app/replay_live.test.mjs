@@ -362,3 +362,118 @@ test('7) col PLAY in replay-Live: colonna extra per la candela in formazione e c
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+// ====================== LA CANDELA IN FORMAZIONE E' UNA CANDELA ======================
+// SEGNALATO dal proprietario con due foto: "in modalità replay l'aggiornamento della singola
+// candela non funziona, rimane quel blocco verde e il blocco rosso... la linea del prezzo bianca
+// rimane fissa, ferma... fa vedere con un'altra linea aggiuntiva l'evoluzione della candela".
+// Due difetti veri:
+//  a) la larghezza del corpo in formazione si calcolava su `padH*.62`, cioè il 62% di TUTTA
+//     l'area del grafico invece che di UNA candela: col footprint acceso il tetto è 90 px, quindi
+//     usciva un rettangolo largo 90 accanto a candele larghe 12 — un blocco, non una candela;
+//  b) la linea del prezzo corrente (e la sua etichetta sull'asse) restava inchiodata alla
+//     chiusura dell'ultima candela RIVELATA, mentre la candela successiva si formava sotto gli
+//     occhi: il prezzo di adesso, in replay, è quello della formazione.
+//
+// Come si prova che i test servono: rimettendo `padH*.62` il primo va rosso (corpo più largo di
+// una candela intera), e togliendo replayPrezzoFormazione() dalla linea del prezzo il secondo va
+// rosso (l'etichetta resta sulla chiusura vecchia).
+
+// Sessanta candele m1, così la finestra ha abbastanza colonne da rendere una candela molto più
+// stretta del vecchio tetto di 90 px.
+const SESSANTA = () => {
+  const R = [];
+  let p = 100;
+  for (let i = 0; i < 60; i++) {
+    const o = p, c = p + (i % 7 === 0 ? -0.4 : 0.3);
+    R.push({date: new Date(Date.UTC(2026, 9, 8, 9, i)).toISOString(),
+            open: o, high: Math.max(o, c) + 0.2, low: Math.min(o, c) - 0.2, close: c, volume: 10});
+    p = c;
+  }
+  currentTF = 1; liveModeActive = true;
+  currentAssetKey = 'TESTX'; if (typeof rowsAssetKey !== 'undefined') rowsAssetKey = 'TESTX';
+  baseRows = R; rows = R; idx = 59; viewEnd = 59;
+  masterTime = closeTimeOf(R[59]); slTpScanDoneForAsset = 'TESTX';
+  positions = []; active = null; trades = [];
+  avviaReplayLive(parseDateTime(R[30].date));     // punto di replay a metà storico
+  // Footprint acceso: è la condizione in cui il difetto si vedeva (tetto 90 px invece di 12).
+  const fe = document.getElementById('footprintEnabled'); if (fe) fe.checked = true;
+  return R;
+};
+
+test('8) la candela in formazione e\' larga come le altre, non un blocco', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate((d) => {
+      eval('(' + d + ')')();
+      // La formazione della candela successiva, a metà strada.
+      const rr = rows[idx + 1];
+      const path = replaySintesiPath(rr, replaySecondsPerBar() + 1);
+      replayForm = {idx: idx + 1, sub: Math.floor(path.length / 2), path, fp: {}, vol: 0};
+      // Quanto è larga UNA candela nella finestra attuale.
+      const g = chartGeometry();
+      const larghezzaUtile = document.getElementById('chart').clientWidth - g.pad.l - g.pad.r;
+      const colonna = larghezzaUtile / getViewWindow().n;
+      // Si intercetta il riempimento del corpo (l'unico fillRect: il footprint della formazione
+      // è vuoto, fp:{}).
+      const proto = CanvasRenderingContext2D.prototype, vFR = proto.fillRect;
+      const corpi = [];
+      proto.fillRect = function (x, y, w, h) { corpi.push({x, y, w, h}); return vFR.apply(this, arguments); };
+      draw();
+      corpi.length = 0;                      // interessa solo quello che disegna la formazione
+      replayDisegnaFormazione(replayForm);
+      proto.fillRect = vFR;
+      return {corpi, colonna, tetto: 90};
+    }, SESSANTA.toString());
+    assert.equal(r.corpi.length, 1, 'la formazione deve disegnare UN corpo solo: ' + JSON.stringify(r.corpi));
+    const corpo = r.corpi[0];
+    assert.ok(corpo.w > 0, 'il corpo deve avere una larghezza');
+    assert.ok(corpo.w <= r.colonna,
+      'il corpo in formazione (' + corpo.w.toFixed(1) + ' px) non puo\' essere piu\' largo di una candela ('
+      + r.colonna.toFixed(1) + ' px)');
+    // La prova che il difetto vero sarebbe stato preso: con la vecchia formula qui uscivano 90 px.
+    assert.ok(r.colonna < r.tetto, 'in questa finestra una candela e\' piu\' stretta del vecchio tetto di 90 px');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('9) la linea del prezzo principale segue la candela mentre si forma', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate((d) => {
+      eval('(' + d + ')')();
+      const rr = rows[idx + 1];
+      const path = replaySintesiPath(rr, replaySecondsPerBar() + 1);
+      const sub = Math.floor(path.length / 2);
+      replayForm = {idx: idx + 1, sub, path, fp: {}, vol: 0};
+      const prezzoFormazione = replayPrezzoFormazione();
+      // L'etichetta del prezzo corrente sta nella scala a destra, centrata a priceAxisX(w)+3+35.
+      const w = document.getElementById('chart').clientWidth;
+      const xEtichetta = priceAxisX(w) + 3 + 35;
+      const proto = CanvasRenderingContext2D.prototype, vFT = proto.fillText;
+      const testi = [];
+      proto.fillText = function (t, x, y) { testi.push({t: String(t), x}); return vFT.apply(this, arguments); };
+      draw();
+      proto.fillText = vFT;
+      const sulLabel = testi.filter(t => Math.abs(t.x - xEtichetta) < 2).map(t => t.t);
+      // Senza formazione in corso deve tornare alla chiusura vera.
+      replayForm = null;
+      const senzaFormazione = replayPrezzoFormazione();
+      // Formazione di un'ALTRA candela: non c'entra, non deve spostare il prezzo.
+      replayForm = {idx: idx + 5, sub, path, fp: {}, vol: 0};
+      const altraCandela = replayPrezzoFormazione();
+      return {prezzoFormazione, attesoPath: path[sub], sulLabel,
+              chiusuraVecchia: fmtPrice(Number(rows[idx].close)),
+              etichettaAttesa: fmtPrice(path[sub]), senzaFormazione, altraCandela};
+    }, SESSANTA.toString());
+    assert.equal(r.prezzoFormazione, r.attesoPath, 'il prezzo di adesso in replay e\' quello della formazione');
+    assert.equal(r.senzaFormazione, null, 'senza formazione in corso vale la chiusura vera, come prima');
+    assert.equal(r.altraCandela, null, 'la formazione di un\'altra candela non deve spostare il prezzo');
+    assert.ok(r.sulLabel.includes(r.etichettaAttesa),
+      'l\'etichetta sull\'asse deve mostrare il prezzo in formazione (' + r.etichettaAttesa + '), trovato: '
+      + JSON.stringify(r.sulLabel));
+    assert.ok(!r.sulLabel.includes(r.chiusuraVecchia) || r.etichettaAttesa === r.chiusuraVecchia,
+      'non deve restare ferma sulla chiusura dell\'ultima candela rivelata (' + r.chiusuraVecchia + ')');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});

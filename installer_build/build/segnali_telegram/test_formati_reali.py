@@ -27,6 +27,23 @@ TP2:  110.972
      {"strumento": "AUDJPY", "direzione": "BUY", "entrata": 110.129,
       "stop_loss": 109.735, "take_profit": [110.502, 110.972]}),
 
+    # SEGNALATO il 14 ottobre 2026: "queste posizioni non riesce a rilevarle, c'e' il @ che gli da'
+    # fastidio". Provato: il parser le legge, @ compreso. Il caso resta qui come guard-rail - se
+    # qualcuno tocca la ricerca dell'entrata, va rosso. (Se sul computer il segnale non viene letto,
+    # il parser che gira li' non e' questo: il ponte usa i file del Setup, non quelli del repo.)
+    ("EasyForexPips (spazi dopo la chiocciola)", """🔵🔵13 OCTOBER  FREE signal forecast: EURJPY 
+
+EURJPY BUY 
+
+ENTRY @  176.755
+SL:  176.371
+
+TP1:  177.098
+TP2:  177.552
+TP3: 177.931""",
+     {"strumento": "EURJPY", "direzione": "BUY", "entrata": 176.755,
+      "stop_loss": 176.371, "take_profit": [177.098, 177.552, 177.931]}),
+
     # ------------------------------------------------------------------ Billionaire Forex Trading
     ("Billionaire (range d'entrata)", """#XAUUSD SELL 4141-4144
 

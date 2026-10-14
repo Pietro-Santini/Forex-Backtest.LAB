@@ -3,6 +3,68 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Syntra: un utente che manda segnali ogni giorno non veniva MAI rilevato** - risolto v145 -
+  14 ottobre 2026, segnalato dal proprietario ("le operazioni crypto non vengono acquisite, c'e'
+  Gino che manda segnali ogni giorno e non lo rileva mai"). Due cause, tutte e due silenziose:
+  (1) una notifica veniva riconosciuta solo se la data stava sulla PRIMA riga e aveva l'anno di
+  quattro cifre; la stessa app scrive le date anche senza anno. (2) Peggio: `nt["quando"] or 0` -
+  una data NON LETTA diventava 0, cioe' il 1 gennaio 1970, e il controllo sull'eta' la dichiarava
+  "vecchia" sempre, scartandola senza dire niente. Ora la data si legge in piu' forme e una data
+  sconosciuta NON vuol dire vecchia: la notifica si apre lo stesso (l'insieme `visti` basta gia' a
+  non riaprire le stesse). Test: `laboratorio/ponte/test_syntra_notifiche.py`.
+  LEZIONE: `x or 0` su un valore che puo' essere None e che poi si confronta con un tempo e' una
+  trappola: trasforma "non lo so" in "vecchissimo".
+- **Syntra: segnali senza target ne' stop, quindi scartati** - risolto v145 - le due espressioni
+  che leggono TP e SL pretendevano etichetta e numero NELLO STESSO nodo ("TP #1:
+80335"). Dove
+  l'app li scrive in due nodi separati non trovavano niente, il segnale usciva senza livelli e
+  veniva buttato. Ora c'e' il ripiego gia' usato per "Entrata": etichetta, poi il primo numero.
+  Test: `laboratorio/ponte/test_syntra_asset.py`.
+- **Il cambio stile del footprint non si prendeva sulle candele passate** - risolto v145 -
+  14 ottobre 2026, segnalato due volte dal proprietario ("deve funzionare su TUTTE le candele, in
+  qualsiasi timeframe e per tutti gli asset, rendilo definitivo"). LA DIAGNOSI SBAGLIATA sarebbe
+  stata "il gestore guarda solo la candela di adesso": riprodotto nel banco di prova, il
+  meccanismo rispondeva su OGNI candela. Il difetto era il BERSAGLIO: la fascia sensibile era
+  larga quanto il CORPO della candela (bw, cioe' il 62% della colonna, con un tetto di 12 px senza
+  footprint) e alta quanto la candela piu' 18 px sopra e 6 sotto - misurati 9 px per 45. Un
+  bersaglio cosi' si prende per fortuna, col dito su un tablet mai, e fra una colonna e l'altra
+  restava il 38% di spazio morto. Ora la fascia e' tutta la colonna (cw/n) e si allarga sopra e
+  sotto di almeno 22 px, restando comunque legata al prezzo di QUELLA candela (lontano dalle
+  candele il grafico non viene toccato) e con le precedenze di prima (posizioni, caselle TP/SL,
+  livelli, disegni). Test: `laboratorio/app/footprint_tocco_stile.test.mjs`, che ora prova OGNI
+  candela a schermo, i due bordi della colonna e due zoom diversi: e' quello il guard-rail che
+  impedisce al difetto di tornare.
+  LEZIONE: quando una cosa "non funziona a volte", misurare il bersaglio prima di cercare il bug
+  nella logica. Qui la logica era giusta da sempre.
+- **Footprint sparpagliato: righe fuori dalla candela e righe alte in modo diverso** - risolto
+  v145 - 14 ottobre 2026, segnalato con una foto. Due cause insieme: (a) le righe nascono dai tick
+  e possono cadere fuori dall'alta/bassa della candela, e tolto `footprintResliceFisse` (v144)
+  nessuno le riportava piu' dentro; (b) il disegno usava il passo salvato DENTRO ogni bucket
+  (`bucket.step`), quindi bucket costruiti con passi diversi - dopo un cambio del passo
+  automatico, e sempre con le celle aggregate che arrivano dal backup cloud di un altro
+  dispositivo - davano righe alte in modo diverso sullo stesso grafico. Ora
+  `footprintDentroLaCandela` fa tutt'e due le cose: riporta le righe dentro la candela sommandole
+  al bordo (niente volume perso) e riporta il bucket sulla griglia del passo GLOBALE, che draw()
+  calcola una volta sola. Test: `laboratorio/app/footprint_scala_unica.test.mjs`.
+- **In replay il footprint non si vedeva formarsi** - risolto v145 - la candela in formazione
+  accumulava il volume in una mappa sua (`f.fp[prezzo]=numero`, livelli non sulla griglia) e lo
+  disegnava come trattini orizzontali. Ora accumula celle vere sulla griglia globale e si disegna
+  con lo stesso `drawFootprintCandle` delle altre candele. LIMITE ONESTO che resta: per le candele
+  gia' rivelate il footprint c'e' solo dove i tick erano stati registrati davvero - andando
+  indietro oltre il log dei tick non c'e' niente da mostrare, e non si inventa.
+- **In replay la candela in formazione era un blocco verde/rosso** - risolto v145 - 14 ottobre
+  2026, segnalato con due foto. `replayDisegnaFormazione` calcolava la larghezza del corpo su
+  `padH*.62` (il 62% di tutta l'area del grafico) invece che su una colonna: col footprint acceso
+  il tetto e' 90 px, quindi accanto a candele larghe 12 usciva un rettangolo largo 90. Non era un
+  problema di avanzamento - la candela si formava davvero, ma larga nove volte tanto. Ora la
+  formula e' quella delle candele vere, `cw/n*.62`, e colori e stoppino sono quelli di Style.
+  Test: `laboratorio/app/replay_live.test.mjs` 8).
+- **In replay la linea del prezzo restava ferma** - risolto v145 - stessa segnalazione. La linea
+  del prezzo corrente e l'etichetta sull'asse usavano sempre `rows[idx].close`, cioe' la chiusura
+  dell'ultima candela RIVELATA: durante la formazione non si muovevano, e il prezzo che saliva e
+  scendeva si vedeva solo da una riga tratteggiata colorata disegnata apposta. Ora
+  `replayPrezzoFormazione()` da' il prezzo della formazione e la linea principale lo segue; la
+  riga tratteggiata in piu' e' stata tolta. Test: `laboratorio/app/replay_live.test.mjs` 9).
 - **In replay Live il PLAY non aggiornava la candela** - risolto v144 - 13 ottobre 2026, segnalato
   dal proprietario. `getViewWindow` riservava la colonna extra per la candela in formazione solo
   se `!liveModeActive`: durante il replay-Live restava 0, la candela all'indice idx+1 cadeva oltre
