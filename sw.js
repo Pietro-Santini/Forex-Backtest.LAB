@@ -292,7 +292,21 @@
 //               si puo' caricare lo si dice.
 //               E la casella Target/Stop non sparisce piu' quando la candela di apertura non e'
 //               nello storico caricato: entrata, stop e target sono prezzi, esistono comunque.
-const CACHE_NAME = "forex-backtest-lab-v148";
+//          v149 = KRAKEN: UNA STRATEGIA CHE SPOSTA LO STOP NON E' UNA STRATEGIA CHIUSA. Appena un
+//               take profit viene colpito la strategia sposta lo stop - e' il suo mestiere - e
+//               spostarlo vuol dire cancellare l'ordine e piazzarne uno nuovo: per un istante il
+//               vecchio id non c'e' piu' e il nuovo non e' ancora nella fotografia degli ordini.
+//               Un giro del controllo con la fotografia di PRIMA concludeva "stop eseguito":
+//               cancellava i take profit rimasti, scriveva una chiusura nel Journal e buttava la
+//               strategia. Da fuori: dopo il primo TP sparivano stop e target, e i TP successivi
+//               venivano tolti da Kraken. Ora una lettura piu' vecchia dell'ultima nostra mossa
+//               non decide niente: si aspetta il giro dopo.
+//               E la riga di Journal di una chiusura Kraken ha numeri veri: i pip erano scritti
+//               ZERO fissi (nel Journal si leggeva "+0.0" per qualunque operazione cripto) e la
+//               colonna Conto conteneva la stringa 'kraken', che passata a euro() diventava
+//               "NaN €". Ora i pip si calcolano come per ogni altra operazione e il conto e' il
+//               saldo vero, convertito in euro come il P/L della stessa riga.
+const CACHE_NAME = "forex-backtest-lab-v149";
 const ASSETS = [
   "./",
   "./app.html",

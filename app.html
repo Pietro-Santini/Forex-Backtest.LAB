@@ -39260,7 +39260,17 @@ async function krakenRegistraChiusura(id,st){
   asset:st.sym||('BINANCE:'+String(st.simbolo||'').replace(/^PF_/,'').replace(/USD$/,'').replace('XBT','BTC')+'USDT'),
   side:st.side,entry,exit,sl:Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):Number(st.sl),rrSl:Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):Number(st.sl),
   tp:(st.tps&&st.tps.length)?Number(st.tps[st.tps.length-1]):null,lots:Number(st.quantita)||0,
-  pl:Math.round(plEur*100)/100,pct:saldo>0?plUsd/saldo*100:0,pips:0,result,account:'kraken',mode:'live',
+  // PIP: erano scritti ZERO fissi, e nel Journal si leggeva "+0.0" per qualunque operazione
+  // cripto (segnalato: "i pip non me li ha calcolati, mi segna 0.0"). Si calcolano come per ogni
+  // altra operazione, con i decimali VERI dell'asset (pipSizeForAsset dentro pipsFromPrice).
+  // CONTO: era la stringa 'kraken'. La colonna "Conto" del Journal la passa a euro(), e una
+  // stringa non e' un numero: in tabella compariva "NaN €" (segnalato). Quel campo, in ogni altra
+  // operazione, e' il SALDO del conto dopo la chiusura - qui lo si scrive davvero, convertito in
+  // euro come il P/L della stessa riga. Che il conto sia Kraken si sa gia' da krakenConto e
+  // krakenChiave, che infatti sono quello che guarda la dashboard.
+  pl:Math.round(plEur*100)/100,pct:saldo>0?plUsd/saldo*100:0,
+  pips:pipsFromPrice(st.side,entry,exit,st.sym||('BINANCE:'+String(st.simbolo||'').replace(/^PF_/,'').replace(/USD$/,'').replace('XBT','BTC')+'USDT')),
+  result,account:(cambio&&saldo>0)?Math.round(saldo/cambio*100)/100:(saldo>0?Math.round(saldo*100)/100:null),mode:'live',
   closedAt:new Date(tChiusura).toISOString(),startTime:Number(st.creato)||tChiusura,openTF:currentTF,closeTF:currentTF,
   tgSala:(st.sala&&st.sala!=='Manuale')?st.sala:undefined,krakenConto:krakenNome(),krakenSimbolo:st.simbolo,
   plUsd:Math.round(plUsd*100)/100,valutaConto:'USD',cambioEurUsd:cambio||null,plStimato:stimato||undefined,
@@ -39684,6 +39694,20 @@ async function krakenStrategieValuta(){
   // sembrerebbe chiusa e finirebbe nel journal). Quelle di prima dei conti multipli sono del conto 1.
   if(krakenConto&&krakenConto.conto_id&&(st.contoId||'conto-1')!==krakenConto.conto_id&&krakenConto.ambiente==='simulato')continue;
   if(krakenPosizioniAt<=(st.creato||0)+500)continue;          // lettura piu' vecchia del segnale
+  // ...NE' piu' vecchia dell'ultima volta che siamo stati NOI a cambiare i suoi ordini.
+  //
+  // SEGNALATO dal proprietario: "avevo 4 TP, ha preso il primo e ha chiuso; da li' in poi stop e
+  // target spariti e nel journal una riga che non torna".
+  // LA CORSA: appena un take profit viene colpito, la strategia SPOSTA LO STOP - ed e' proprio
+  // quello che deve fare. Spostarlo vuol dire cancellare l'ordine di stop e piazzarne uno nuovo,
+  // quindi per un istante il vecchio id non c'e' piu' e il nuovo non e' ancora nella fotografia
+  // degli ordini aperti. Se in quell'istante arriva un giro di questo controllo con la fotografia
+  // di PRIMA, `stopAperto` risulta falso e il codice qui sotto conclude "lo stop e' stato
+  // eseguito": cancella i take profit rimasti, scrive una chiusura nel journal e BUTTA la
+  // strategia. Da fuori: dopo il primo TP sparisce tutto, e i TP 2-3-4 vengono tolti da Kraken.
+  // La fotografia deve essere piu' recente dell'ultima nostra mossa, altrimenti non dice niente
+  // su cosa e' successo davvero: si aspetta il giro dopo.
+  if(Number.isFinite(Number(st.toccatoAt))&&krakenPosizioniAt<=Number(st.toccatoAt)+1500)continue;
   const tpAperti=(st.tpIds||[]).filter(t=>aperti.has(t.id));
   const stopAperto=st.stopId!=null&&aperti.has(String(st.stopId));
   if(!stopAperto){
@@ -39726,6 +39750,9 @@ async function krakenStrategieValuta(){
    const r=await krakenBridge('/sl',{simbolo:st.simbolo,sl,stop_id:st.stopId,quantita:rimasta,lato:st.side,gruppo:id});
    if(r.ok&&r.data&&r.data.sl){
     st.stopId=String(r.data.sl.id); st.sl=sl; st.quantitaStop=rimasta;
+    // Da adesso, finche' non arriva una fotografia degli ordini piu' recente di questo istante,
+    // nessuno puo' dire se lo stop e' "sparito" perche' eseguito o perche' l'abbiamo spostato noi.
+    st.toccatoAt=Date.now();
     if(spostare)$('status').textContent='🛡️ '+krakenNome()+' '+st.simbolo+' (segnale di '+String(st.sala||'')+'): '+motivo+', stop portato a '+sl+'.';
    }else console.warn('[Kraken] stop non aggiornato:',r.message);
   }

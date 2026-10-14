@@ -427,3 +427,24 @@ Formato: data — chi — cosa — esito collaudo — commit.
   libreria, e CONTROLLA il risultato con rowsAssetKey.
   (d) In piu': la casella Target/Stop non e' piu' chiusa dentro `if(openIdx!=null)`.
   Test: kraken_mobile.test.mjs (7).
+
+## 14 ottobre 2026 - v149: Kraken, lo stop spostato scambiato per uno stop eseguito
+  SEGNALATO (BNBUSD, SELL da 734.95, quattro TP): "ha preso il primo e ha chiuso in parziale; i pip
+  mi segna 0.0, il conto mi dice NaN, e adesso non vedo piu' ne' stop loss ne' TP".
+  (1) LA CORSA. krakenStrategieValuta decide "stop eseguito" guardando se st.stopId e' ancora fra
+  gli ordini aperti. Ma appena un TP viene colpito la strategia SPOSTA lo stop, e spostarlo vuol
+  dire cancellare l'ordine e piazzarne un altro: per un istante il vecchio id non c'e' piu' e il
+  nuovo non e' ancora nella fotografia. Un giro con la fotografia di PRIMA cancellava i TP rimasti,
+  scriveva la chiusura e cancellava la strategia - ed e' esattamente quello che e' successo dopo il
+  primo TP. Ora st.toccatoAt segna l'istante della nostra mossa e una lettura piu' vecchia di
+  quella non puo' decidere niente.
+  (2) `pips:0` scritto fisso nella riga di Journal: "+0.0" per qualunque operazione cripto. Ora si
+  calcola con pipsFromPrice e i decimali veri dell'asset.
+  (3) `account:'kraken'` - ma quella colonna passa da euro(), e una stringa non e' un numero: in
+  tabella si leggeva "NaN EUR". Ora e' il saldo vero convertito in euro, come il P/L della riga.
+  Che il conto sia Kraken si sa gia' da krakenConto/krakenChiave (quello che guarda la dashboard).
+  Test: kraken_journal.test.mjs (3).
+  RESTA APERTO, non ancora risolto: il comportamento a mercato chiuso (posizioni e footprint che si
+  sfalsano) e la costruzione del footprint in replay. Trovato per ora un indizio e un difetto
+  vicino: fblAllineaRigheSera() e liveOffSessionRowsFor() sono CODICE MORTO (definite, mai
+  chiamate), quindi le candele serali salvate in OFFSESSION_ROWS_KEY non vengono mai riusate.
