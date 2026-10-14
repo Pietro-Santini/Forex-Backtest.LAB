@@ -267,7 +267,32 @@
 //               Il rifiuto di un segnale con lo stop dalla parte sbagliata ora dice QUALE numero
 //               sta guardando: chiamava "prezzo di adesso" l'entrata scritta dalla sala in un
 //               ordine pendente, e faceva cercare un errore nei prezzi che non c'era.
-const CACHE_NAME = "forex-backtest-lab-v147";
+//          v148 = SALE E NOTIZIE IMPORTANTI: nuova carta nella dashboard della resa. Quali sale
+//               rendono di piu' (e di meno) quando escono i dati a gravita' rossa, con il
+//               confronto fra la stessa sala sulle notizie e fuori - una sala puo' guadagnare di
+//               piu' sulle notizie solo perche' opera di piu', e il totale da solo non lo
+//               direbbe. Conta un'operazione APERTA entro mezz'ora da un dato che tocca una
+//               valuta del suo asset. Le notizie importanti si archiviano man mano che arrivano
+//               (il calendario e' solo l'ultima fotografia, e viene sostituita): la statistica
+//               parte da questa versione piu' la settimana gia' nota, e si riempie col tempo.
+//               POSIZIONI KRAKEN SU TELEFONO E TABLET: tornano stop e target. Il disegno li
+//               prendeva dagli ordini VERI presenti su Kraken e, quando li' non ci sono (ogni
+//               volta che a gestirli e' l'app), ripiegava sulle strategie - che pero' sono di
+//               proposito del solo dispositivo che ha aperto la posizione. Sul telefono quella
+//               voce non c'era: niente stop, niente target, solo l'entrata e il P/L. Ora i
+//               LIVELLI si pubblicano in una voce condivisa che gli altri dispositivi usano solo
+//               per disegnare; il motore delle strategie resta dov'era.
+//               E uno stop ASSENTE non diventa piu' uno stop a PREZZO ZERO (il ponte manda null,
+//               e Number(null) fa 0): la casella non copre piu' mezzo grafico.
+//               "VAI A GRAFICO" non fallisce piu' in silenzio: i quattro punti che saltano a
+//               grafico chiamavano tutti Capital.com, che su un telefono non ha sessione (le
+//               credenziali si leggono da una cartella del computer) e usciva senza dire niente -
+//               il menu mostrava il nuovo asset, il grafico restava col vecchio. Ora la fonte si
+//               sceglie una volta sola, c'e' il ripiego sulla libreria storica, e se proprio non
+//               si puo' caricare lo si dice.
+//               E la casella Target/Stop non sparisce piu' quando la candela di apertura non e'
+//               nello storico caricato: entrata, stop e target sono prezzi, esistono comunque.
+const CACHE_NAME = "forex-backtest-lab-v148";
 const ASSETS = [
   "./",
   "./app.html",

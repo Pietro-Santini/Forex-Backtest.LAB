@@ -193,6 +193,11 @@
   target a PREZZO ZERO - e in un BUY lo zero si piazza pure primo nell'ordinamento, cioe' diventa
   il TP1. Dove si leggono prezzi che arrivano da fuori, il filtro non e' "e' finito" ma "c'e', ed
   e' maggiore di zero".
+  QUARTA VOLTA, stesso giorno: il ponte manda `sl: null` per una posizione Kraken senza ordine
+  di stop, e quel null diventava uno STOP A PREZZO ZERO - la casella partiva dall'entrata e
+  arrivava a zero, coprendo mezzo grafico. Quattro volte in un giorno sono un segnale: dove si
+  leggono prezzi che arrivano da fuori si passa da una funzione che dice "c'e' ed e' un prezzo",
+  non da Number() piu' Number.isFinite.
 
 - **Un disegno "sovrapposto dopo" lampeggia: o lo fa il disegnatore, o non esiste.** (14 ottobre
   2026, la candela in formazione del replay.) Era dipinta DOPO draw(), e solo dal battito del
@@ -206,3 +211,10 @@
   tanto per battito" invece che "del tempo davvero passato" rallenta di venti volte senza che
   niente segnali un errore. Si misura performance.now(), con un tetto per non tentare di
   recuperare in un colpo solo un'assenza lunghissima.
+
+- **Se una cosa si vede solo sul dispositivo che l'ha creata, il dato e' nel posto sbagliato.**
+  (14 ottobre 2026, stop e target delle posizioni Kraken.) Il motore che AGISCE puo' - e a volte
+  deve - restare su un dispositivo solo: due che muovono lo stesso stop fanno danni. Ma quello che
+  si GUARDA deve stare dove lo guardano tutti. Quando un disegno ripiega su uno stato locale,
+  chiedersi sempre: su un altro dispositivo questo stato esiste? Se no, pubblicare i soli dati che
+  servono a mostrarlo, in sola lettura.

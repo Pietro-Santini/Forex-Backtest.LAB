@@ -400,3 +400,30 @@ Formato: data — chi — cosa — esito collaudo — commit.
   se' restava giusto: su quel segnale di prova lo stop (4175) era davvero sopra l'entrata di un
   BUY, cioe' dalla parte sbagliata.
   Test: tp_in_ordine.test.mjs (4).
+
+## 14 ottobre 2026 - v148: sale sulle notizie, e Kraken sui dispositivi mobili
+  (1) SALE SULLE NOTIZIE IMPORTANTI (richiesto): nuova carta nella dashboard. Per ogni sala, le
+  operazioni APERTE entro mezz'ora da un dato a gravita' rossa che tocca una valuta del suo asset,
+  con il confronto fra quella sala sulle notizie e la stessa sala fuori: e' il confronto a
+  rispondere alla domanda, perche' una sala puo' guadagnare di piu' sulle notizie solo perche'
+  opera di piu'. Serviva un ARCHIVIO: newsEvents e' l'ultima fotografia del calendario e viene
+  sostituita ad ogni aggiornamento, quindi le notizie importanti si conservano man mano che
+  arrivano (stessa idea dell'archivio footprint). Limite detto: parte da questa versione.
+  Test: sale_notizie.test.mjs (5), compreso il disegno vero della carta.
+  (2) POSIZIONI KRAKEN SU TELEFONO E TABLET (segnalato): "non mi mostra piu' TP e SL, solo
+  l'entrata e il P/L; e vai a grafico non carica l'asset". TRE difetti diversi.
+  (a) I livelli si prendono dagli ordini veri su Kraken e, quando li' non ci sono - sempre, se a
+  gestirli e' l'app - si ripiegava su tgStrategie, che e' DI PROPOSITO del solo dispositivo che ha
+  aperto ("e' stato, non configurazione", sta scritto accanto a GRAFICO_LS). Sul telefono quella
+  voce non esiste. Ora i LIVELLI si pubblicano in fb_kraken_livelli, condivisa e in sola lettura
+  per chi la riceve: il motore delle strategie resta dov'era, perche' due dispositivi che muovono
+  lo stesso stop sarebbero peggio del problema.
+  (b) `sl: null` dal ponte diventava uno stop a PREZZO ZERO (Number(null) fa 0): quarta volta con
+  questo inganno. Ora krakenPrezzo() chiede che il valore ci sia e sia maggiore di zero.
+  (c) "Vai a grafico": tutti e quattro i punti chiamavano loadLiveHistoryFromCapital, che comincia
+  con `if(!capitalSessionTokens)return;` - e su un telefono quella sessione non c'e'. Usciva in
+  silenzio: niente errore, niente candele, il menu sul nuovo asset e il grafico sul vecchio. Ora
+  caricaStoricoPerSaltoAGrafico() sceglie la fonte come il cambio timeframe, ripiega sulla
+  libreria, e CONTROLLA il risultato con rowsAssetKey.
+  (d) In piu': la casella Target/Stop non e' piu' chiusa dentro `if(openIdx!=null)`.
+  Test: kraken_mobile.test.mjs (7).
