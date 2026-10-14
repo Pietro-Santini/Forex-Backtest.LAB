@@ -487,3 +487,28 @@ Formato: data — chi — cosa — esito collaudo — commit.
   Lezione, la stessa di stamattina in un'altra forma: corretto un punto, vanno cercati gli altri
   che fanno la stessa cosa invece di fidarsi che fosse l'unico.
   Test: tp_in_ordine.test.mjs (6, erano 4).
+
+## 15 ottobre 2026 - v151: ordini pendenti a grafico, e il margine su Kraken
+  (1) ORDINI PENDENTI (richiesto): l'etichetta a grafico diceva lato, tipo e prezzo ma non QUANTO -
+  per saperlo bisognava aprire la tabella. Ora c'e' il lottaggio. E scegliendo una posizione gli
+  ordini pendenti si spengono come le altre posizioni: le loro righe di stop e target spariscono
+  del tutto (attraversano tutto il grafico, ed erano proprio quelle che impedivano di leggere la
+  posizione scelta), l'entrata resta spenta. Si riusa activeOnChart, la stessa identica condizione
+  delle posizioni: non una seconda regola scritta a parte.
+  Test: ordini_pendenti_grafico.test.mjs (4).
+  (2) KRAKEN, IL MARGINE. Segnalato: "conto da 10.000, nella sala ho impostato il 2%: come mai ha
+  usato 5.839 di margine?". NON era un errore di calcolo, ed e' importante che resti scritto: il 2%
+  e' il RISCHIO (quanto si perde allo stop), la quantita' esce da li' (rischio diviso la distanza
+  dallo stop) e il margine e' una conseguenza di prezzo e leva. Con stop a 10 punti su 730: 20
+  monete, 14.600 di valore, 7.300 di margine a leva 2x. Stop stretto + leva bassa = molto margine
+  per poco rischio.
+  Mancava il modo di metterci un tetto: ora c'e' "Margine massimo per operazione, % del conto",
+  rispettato dal lottaggio consigliato e dai segnali. Sui segnali il piano viene RICALCOLATO con un
+  rischio ridotto della stessa proporzione, cosi' minimi del contratto e fette per ogni target
+  restano coerenti invece di essere aggiustati a posteriori; la riduzione si legge nella scheda del
+  segnale, mai in silenzio. 100% = nessun tetto, come prima.
+  VERIFICATO, perche' era la domanda vera: la formula del rischio e' GIA' la stessa di MT5 -
+  importo di rischio diviso la perdita per unita' (MT5: riskAmount/lossPerLot, Kraken:
+  riskAmount/dist, dove dist e' la perdita per una moneta). A cambiare e' solo cosa vale "una
+  unita'". C'e' un test che lo fissa, cosi' le due strade non possono divergere in silenzio.
+  Test: kraken_margine.test.mjs (5).

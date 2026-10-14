@@ -1567,6 +1567,7 @@ window.fblAvviaSoloBacktest=function(){
         </div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px;margin-top:10px"><input type="checkbox" id="krakenOrdiniAttivi" style="width:17px;height:17px;accent-color:var(--fbAccent2)"> <b>Apri i segnali cripto sul conto Kraken</b> (spento: vanno su MT5)</label>
         <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin-top:6px">Leva massima del conto <input id="krakenLeva" class="tgCfgIn tgCfgNum" type="number" min="1" max="50" step="1" style="width:60px">x <span class="hint" style="margin:0">(in UE per i clienti al dettaglio è 2x: serve a scartare prima i segnali con margine insufficiente)</span></label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;margin-top:6px">Margine massimo per operazione <input id="krakenMargineMax" class="tgCfgIn tgCfgNum" type="number" min="1" max="100" step="1" style="width:60px">% del conto <span class="hint" style="margin:0">(il rischio scelto è quanto perdi allo stop; il MARGINE è quanto capitale resta impegnato. Con uno stop stretto e la leva bassa delle cripto, un rischio del 2% può chiedere metà conto di margine: qui si mette il tetto)</span></label>
         <p class="hint" style="margin:8px 0 0"><b>Conto simulato</b>: lo tiene il programma sul PC con i prezzi veri dei Futures Kraken (spread, commissioni e funding compresi), anche ad app chiusa. Il conto <b>Prop</b> segue le regole di Kraken Prop: perdita giornaliera 3% del saldo alle 00:30 UTC, drawdown massimo, obiettivo; tutto sull'equity con le posizioni aperte. Toccata una soglia le posizioni si chiudono e il conto è violato; raggiunto l'obiettivo si passa al conto finanziato.</p>
         <p class="hint" style="margin:6px 0 0">Conto <b>reale</b>: le chiavi si inseriscono <b>dal PC</b>: vanno al programma sul PC (cifrate con Windows) e non tornano mai nell'app né sul cloud. Su Kraken Futures crea la chiave con accesso <b>"Full access"/ordini</b> e lettura, <b>mai prelievi</b>.</p>
         <p class="hint" style="margin:6px 0 0">Ogni segnale cripto apre una quota con il <b>suo</b> stop e una chiusura parziale per take profit. Più segnali sullo stesso simbolo vanno bene, se nella stessa direzione. Se Kraken rifiuta lo stop, la quota del segnale viene chiusa subito.</p>
@@ -5875,6 +5876,7 @@ const GRAFICO_LS={
  fbl_binance_attivo:()=>{ try{ binanceAggiornaUi(); }catch(e){} },
  fbl_kraken_ordini:()=>{ try{ krakenDisegnaConto(); }catch(e){} },
  fbl_kraken_leva:()=>{ try{ krakenDisegnaConto(); }catch(e){} },
+ fbl_kraken_margine_max:()=>{ try{ krakenDisegnaConto(); }catch(e){} try{ refreshRiskSuggestion(); }catch(e){} },
  fb_syntra_utenti:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppiSyntra=g; tgAutoDisegna(); syntraUtentiDisegna(); } }catch(e){} },
  fb_syntra_visti:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ syntraVisti=g; syntraUtentiDisegna(); } }catch(e){} },
  // RICHIESTO: l'esclusione si ricorda, e vale su tutti i dispositivi come il resto dell'elenco.
@@ -15935,20 +15937,33 @@ function draw(){
    // vengono saltate per non duplicare la stessa informazione due volte sullo stesso grafico.
    const isHighlightedPending=String(p.id)===String(highlightedPendingOrderId);
    const showPendingZoneBox=isHighlightedPending && (p.sl!=null||p.tp!=null);
+   // RICHIESTO: scegliendo una posizione a grafico, "deve mettere in grigio anche gli ordini
+   // pendenti e togliere le linee orizzontali dei loro TP e stop loss".
+   // Le linee di stop e target di un ordine pendente attraversano TUTTO il grafico da un bordo
+   // all'altro: sono proprio quelle che impediscono di leggere la posizione che si e' scelta.
+   // L'entrata resta, spenta, perche' serve a sapere che quell'ordine e' li' in attesa.
+   // `activeOnChart` e' la stessa identica condizione usata dalle posizioni aperte: una posizione
+   // scelta DALL'UTENTE su QUESTO grafico (vedi posSelezionata).
+   const pendSpento=activeOnChart;
    if(p.entry!=null && p.entry>=lo && p.entry<=hi && !(previewTradeLevel && previewTradeLevel.type===`pending:${p.id}:entry`)){
-     const entryColor=entryLineColor(p.entry,p.kind||'LIMIT');
+     const entryColor=pendSpento?TRADE_DIM_GREY:entryLineColor(p.entry,p.kind||'LIMIT');
      ctx.save();
      ctx.setLineDash([3,5]);
      ctx.strokeStyle=entryColor;
      ctx.lineWidth=1.4;
-     ctx.globalAlpha=0.85;
+     ctx.globalAlpha=pendSpento?0.45:0.85;
      ctx.beginPath();ctx.moveTo(pad.l,y(p.entry));ctx.lineTo(w-pad.r,y(p.entry));ctx.stroke();
      ctx.setLineDash([]);
      ctx.fillStyle=entryColor;
      ctx.font=scaledFont('bold 10px Arial');
      ctx.textAlign='left';
      {
-       const txt=p.side+' '+(p.kind||'LIMIT')+' '+fmtPrice(p.entry), tw=ctx.measureText(txt).width, boxH=13;
+       // RICHIESTO: "per gli ordini limite sul grafico mi deve far vedere comunque il lottaggio
+       // prescelto di quella posizione". Prima l'etichetta diceva lato, tipo e prezzo, ma non
+       // QUANTO: per decidere se lasciarlo li' o cancellarlo bisognava aprire la tabella.
+       // Stessa forma dell'etichetta di una posizione aperta (lato + lottaggio).
+       const lotTxt=Number.isFinite(Number(p.lots))?(' '+fmtLottiQuick(Number(p.lots))):'';
+       const txt=p.side+' '+(p.kind||'LIMIT')+lotTxt+' '+fmtPrice(p.entry), tw=ctx.measureText(txt).width, boxH=13;
        const adjY=placeLabelY(pad.l+4,tw+8,y(p.entry)-6-11,boxH,pad.t,h-pad.b);
        ctx.fillText(txt,pad.l+6,adjY+11);
      }
@@ -15957,6 +15972,9 @@ function draw(){
    }
    [[p.sl,'SL','#e05b64'],[p.tp,'TP','#55c28b']].forEach(([v,label,color])=>{
      if(showPendingZoneBox)return;
+     // Con una posizione scelta, queste righe non si disegnano affatto (richiesto): sono linee da
+     // un bordo all'altro del grafico, e sono la ragione per cui la posizione scelta non si legge.
+     if(pendSpento)return;
      if(v==null||!Number.isFinite(v)||v<lo||v>hi)return;
      if(previewTradeLevel && previewTradeLevel.type===`pending:${p.id}:${label.toLowerCase()}`)return;
      ctx.save();
@@ -15999,6 +16017,9 @@ function draw(){
      const box=drawTpSlZoneBox(ctx,{
        ownerKey:'pendingHighlight:'+hp.id,originIdx:idx,entry:hp.entry,sl:hp.sl,tp:hp.tp,
        lots:hp.lots,assetKey:hp.asset,fixedSpan:26,noHandle:true,
+       // Stessa regola delle altre posizioni: scelta una posizione, questa resta visibile ma
+       // spenta, senza il riempimento colorato (vedi dimmed dentro drawTpSlZoneBox).
+       dimmed:activeOnChart,
        // Ha già una propria "X" dedicata (pendingHighlightCloseBtnRect, gestita a parte):
        // le statistiche restano sempre visibili qui, senza il gate click/X generico.
        alwaysShowTooltip:true,
@@ -18744,15 +18765,24 @@ function krakenLottiConsigliati(entry,slVal,riskPct){
  if(!(saldo>0)||!Number.isFinite(entry)||!Number.isFinite(slVal))return null;
  const dist=Math.abs(entry-slVal); if(!(dist>0))return null;
  const riskAmount=saldo*riskPct/100;
- let q=riskAmount/dist, cappedByMargin=false;
+ let q=riskAmount/dist, cappedByMargin=false, oltreTetto=false;
  // mai piu' monete di quante il margine disponibile (alla leva del conto) ne regga
  const disp=Number(krakenConto.disponibile);
  if(disp>0&&entry>0){ const cap=disp*krakenLeva()/entry*0.98; if(q>cap){ q=cap; cappedByMargin=true; } }
+ // ...e mai piu' del MARGINE che l'utente ha deciso di impegnare in una operazione (vedi
+ // krakenMargineMaxPct): e' un tetto suo, piu' stretto di quello del broker.
+ const tetto=krakenMargineTetto();
+ if(tetto!=null&&entry>0&&krakenMargineMaxPct()<100){
+  const capUtente=tetto*krakenLeva()/entry;
+  if(q>capUtente){ q=capUtente; oltreTetto=true; }
+ }
  const info=krakenInfoCorrente(), min=Number(info&&info.min)||krakenPassoLotti();
  q=krakenLottiArrotonda(q);
  const sottoMinimo=q<min-1e-12;
  if(sottoMinimo)q=Number(min.toFixed(krakenDecLotti()));
- return {lots:q,riskAmount,dist,slVal,riskPct,cappedByMargin,sottoMinimo,valuta:'USD',kraken:true};
+ const margine=(entry>0&&krakenLeva()>0)?(q*entry/krakenLeva()):null;
+ return {lots:q,riskAmount,dist,slVal,riskPct,cappedByMargin,sottoMinimo,oltreTetto,margine,
+         margineMaxPct:krakenMargineMaxPct(),valuta:'USD',kraken:true};
 }
 // Rischio VERO del lotto scritto: quanto si perde allo stop, in % del saldo del conto scelto.
 function rischioRealeLotto(entry,sl,lots){
@@ -18838,6 +18868,8 @@ function refreshRiskSuggestion(){
  }
  box.innerHTML=`Rischiando <strong>${s.riskPct.toFixed(2)}%</strong> del saldo (${importoRischio(s)}) con SL a ${fmtPrice(s.slVal)}, il lottaggio consigliato è <strong>${fmtLottiQuick(s.lots)}</strong> ${s.kraken?'monete ('+krakenNome()+')':'lot'}.${s.sottoMinimo?' ⚠️ È il minimo del contratto: il rischio vero è più alto.':''}`+
    (s.cappedByMargin?' Ridotto rispetto al puro calcolo del rischio perché il margine libero disponibile alla leva corrente non ne permette di più.':'')+
+   (s.oltreTetto?(' Ridotto per restare entro il <strong>'+s.margineMaxPct+'%</strong> di margine per operazione che hai scelto: il rischio vero è quindi più basso del '+s.riskPct.toFixed(2)+'% richiesto.'):'')+
+   (Number.isFinite(s.margine)?(' Margine impegnato: <strong>'+s.margine.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $</strong> (leva '+krakenLeva()+'x).'):'')+
    ` È solo un consiglio: puoi comunque modificare il campo Lottaggio come preferisci.`;
  if(actions)actions.style.display='block';
 }
@@ -18879,6 +18911,8 @@ function refreshRiskSuggestionPending(){
  }
  box.innerHTML=`Rischiando <strong>${s.riskPct.toFixed(2)}%</strong> del saldo (${importoRischio(s)}) con SL a ${fmtPrice(s.slVal)}, il lottaggio consigliato per l'ordine pendente è <strong>${fmtLottiQuick(s.lots)}</strong> ${s.kraken?'monete ('+krakenNome()+')':'lot'}.${s.sottoMinimo?' ⚠️ È il minimo del contratto: il rischio vero è più alto.':''}`+
    (s.cappedByMargin?' Ridotto rispetto al puro calcolo del rischio perché il margine libero disponibile alla leva corrente non ne permette di più.':'')+
+   (s.oltreTetto?(' Ridotto per restare entro il <strong>'+s.margineMaxPct+'%</strong> di margine per operazione che hai scelto: il rischio vero è quindi più basso del '+s.riskPct.toFixed(2)+'% richiesto.'):'')+
+   (Number.isFinite(s.margine)?(' Margine impegnato: <strong>'+s.margine.toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $</strong> (leva '+krakenLeva()+'x).'):'')+
    ` È solo un consiglio: puoi comunque modificare il campo Lottaggio come preferisci.`;
  if(actions)actions.style.display='block';
 }
@@ -28392,14 +28426,47 @@ async function tgAutoValuta(voce,conto){
   // netta per contratto e un segnale opposto la ridurrebbe invece di aprirne una sua.
   const opposto=Object.values(tgStrategie||{}).find(st=>st&&st.conto==='kraken'&&st.simbolo===info.simbolo&&st.side!==String(seg.direzione||'').toUpperCase());
   if(opposto)return no('su '+info.simbolo+' è aperto un segnale '+opposto.side+' (di '+opposto.sala+'): uno opposto sullo stesso contratto si annullerebbe con quello');
-  const piano=tgPiano(seg,symG,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo:info.prezzo,
+  const opzPiano={maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo:info.prezzo,
    // Le percentuali scelte per questa sala: su Kraken diventano le fette che ogni target chiude.
    quote:tgAutoQuotePerSegnale(d.cfg,Math.max(1,(seg.take_profit||[]).length)),
-   saldo:Number(krakenConto.saldo)||0,valore:(a,b,l)=>Math.abs(a-b)*l,passo:Number(info.step)||0.0001,minimo:Number(info.min)||Number(info.step)||0.0001,valuta:'USD'});
+   saldo:Number(krakenConto.saldo)||0,valore:(a,b,l)=>Math.abs(a-b)*l,passo:Number(info.step)||0.0001,minimo:Number(info.min)||Number(info.step)||0.0001,valuta:'USD'};
+  let piano=tgPiano(seg,symG,d.rischio,opzPiano);
   if(piano.problemi&&piano.problemi.length)return no(piano.problemi.join('; '));
   if(piano.pendente)return no('ordine '+piano.kind+' a '+tgFmt(piano.entry)+': su Kraken per ora si aprono solo segnali a mercato');
-  // Margine: con la leva massima del conto (in UE per i clienti al dettaglio 2x) una posizione con
-  // lo stop stretto puo' richiedere piu' margine di quello disponibile. Meglio dirlo che farsi rifiutare.
+  // IL TETTO DI MARGINE SCELTO DALL'UTENTE (richiesto: "quando arrivano i segnali dobbiamo far
+  // decidere quanto margine utilizzare").
+  // Il rischio della sala e' quanto si perde ALLO STOP; il margine e' tutt'altra cosa: con uno stop
+  // stretto e la leva bassa delle cripto, un rischio del 2% puo' chiedere meta' conto di margine -
+  // ed e' esattamente quello che e' stato segnalato (conto da 10.000, rischio 2%, margine 5.839).
+  // Qui, se il margine sfora il tetto, NON si ritoccano i numeri a mano: si RICALCOLA il piano con
+  // un rischio ridotto della stessa proporzione, cosi' tutto il resto (minimi del contratto, fette
+  // per ogni target, "entro rischio") resta coerente invece di essere aggiustato a posteriori.
+  let margineRidotto=null;
+  {
+   const tetto=krakenMargineTetto();
+   const mNow=piano.lotti*piano.n*piano.entry/(krakenLeva()||1);
+   if(tetto!=null&&krakenMargineMaxPct()<100&&mNow>tetto&&mNow>0){
+    const fattore=tetto/mNow;
+    const ridotto=tgPiano(seg,symG,d.rischio*fattore,opzPiano);
+    if(ridotto&&!(ridotto.problemi&&ridotto.problemi.length)){
+     margineRidotto={da:d.rischio,a:d.rischio*fattore,tetto};
+     piano=ridotto;
+     // Lo si SCRIVE nella scheda del segnale: una posizione aperta con meno rischio di quello
+     // scelto deve dire perche', altrimenti domani sembra che il rischio della sala non funzioni -
+     // che e' esattamente il dubbio da cui e' nata questa funzione.
+     try{
+      voce.autoMotivo='rischio ridotto dal '+d.rischio+'% al '+(d.rischio*fattore).toFixed(2)
+        +'% per restare entro il tetto di margine del '+krakenMargineMaxPct()+'% del conto ('
+        +tetto.toFixed(0)+' USD): con questo stop il rischio pieno avrebbe impegnato '
+        +mNow.toFixed(0)+' USD di margine';
+     }catch(e){}
+    }else{
+     return no('servirebbero '+mNow.toFixed(0)+' USD di margine (leva '+krakenLeva()+'x), oltre il tetto del '
+       +krakenMargineMaxPct()+'% del conto che hai scelto ('+tetto.toFixed(0)+' USD): con uno stop cosi\' stretto '
+       +'il rischio del '+d.rischio+'% non ci sta. Alza il tetto del margine, oppure lascia perdere questo segnale');
+    }
+   }
+  }
   const nozionale=piano.lotti*piano.n*piano.entry, leva=krakenLeva(), margine=nozionale/leva;
   if(Number(krakenConto.disponibile)>0&&margine>Number(krakenConto.disponibile))
    return no('margine insufficiente su Kraken: la posizione vale '+nozionale.toFixed(0)+' USD, con leva '+leva+'x servono '+margine.toFixed(0)+' USD, disponibili '+Number(krakenConto.disponibile).toFixed(0)+' (stop troppo stretto per questo conto)');
@@ -38541,6 +38608,31 @@ var krakenConto=null;          // ultimo /kraken/stato
 var krakenPosizioni=null;      // ultimo /kraken/posizioni
 var krakenPosizioniAt=0;
 function krakenOrdiniAttivi(){ try{ return localStorage.getItem('fbl_kraken_ordini')==='1'; }catch(e){ return false; } }
+// QUANTO MARGINE si e' disposti a impegnare in UNA operazione, in percentuale del conto.
+//
+// RICHIESTO dal proprietario: "quando arrivano i segnali dobbiamo far decidere quanto margine
+// utilizzare... ho un conto da 10.000 e ho impostato il 2%, come mai ha usato 5.839 di margine?".
+//
+// PERCHE' SUCCEDE, ed e' giusto che succeda: il 2% della sala e' il RISCHIO, cioe' quanto si perde
+// SE ARRIVA LO STOP - non il margine. La quantita' esce da li': rischio in soldi diviso la
+// distanza dallo stop. Con un conto da 10.000 e un rischio del 2% si rischiano 200; se lo stop
+// dista 10 punti su un prezzo di 730, servono 20 monete, che valgono 14.600 - e a leva 2x sono
+// 7.300 di margine. Stop stretto e leva bassa (le cripto in UE sono 2x) = molto margine per poco
+// rischio. Il conto non e' in pericolo per 200, ma resta quasi tutto impegnato.
+// Questo tetto e' la risposta: il rischio resta quello scelto finche' ci sta, e quando il margine
+// sforerebbe il tetto la quantita' si riduce - dicendolo, mai in silenzio.
+// 100 = nessun tetto, cioe' esattamente come si comportava prima.
+const KRAKEN_MARGINE_MAX_KEY='fbl_kraken_margine_max';
+function krakenMargineMaxPct(){
+ let v=NaN; try{ v=Number(localStorage.getItem(KRAKEN_MARGINE_MAX_KEY)); }catch(e){}
+ return (Number.isFinite(v)&&v>0)?Math.min(100,v):100;
+}
+// Il tetto in soldi (USD) per una operazione sul conto Kraken, o null se non si sa il saldo.
+function krakenMargineTetto(){
+ const saldo=Number(krakenConto&&krakenConto.saldo);
+ if(!(saldo>0))return null;
+ return saldo*krakenMargineMaxPct()/100;
+}
 function krakenLeva(){
  // Conto simulato: la leva la decide il conto (libero 2x, prop 10x come Kraken Prop).
  if(krakenConto&&krakenConto.ambiente==='simulato'&&Number(krakenConto.leva)>=1)return Number(krakenConto.leva);
@@ -38596,6 +38688,7 @@ function krakenDisegnaConto(){
  const segno=v=>(Number(v)>=0?'+':'')+usd(v);
  if($('krakenOrdiniAttivi'))$('krakenOrdiniAttivi').checked=krakenOrdiniAttivi();
  if($('krakenLeva')&&document.activeElement!==$('krakenLeva'))$('krakenLeva').value=krakenLeva();
+ if($('krakenMargineMax')&&document.activeElement!==$('krakenMargineMax'))$('krakenMargineMax').value=krakenMargineMaxPct();
  const box=$('krakenContoBox'); if(!box){ return; }
  const c=krakenConto;
  if(c&&c.collegato&&$('krakenAmbiente')&&!krakenFormToccato)$('krakenAmbiente').value=c.ambiente==='reale'?'reale':'simulato';
@@ -39543,6 +39636,7 @@ fblDelega('change',ev=>{
  if(t.id==='krakenOrdiniAttivi'){ try{ localStorage.setItem('fbl_kraken_ordini',t.checked?'1':'0'); }catch(e){} }
  if(t.id==='krakenAmbiente'||t.id==='krakenSimTipo'){ krakenFormToccato=true; try{ krakenFormUi(); }catch(e){} }
  if(t.id==='krakenLeva'){ const v=Number(t.value); if(v>=1){ try{ localStorage.setItem('fbl_kraken_leva',String(Math.min(50,v))); }catch(e){} } }
+ if(t.id==='krakenMargineMax'){ const v=Number(t.value); if(v>0){ try{ localStorage.setItem(KRAKEN_MARGINE_MAX_KEY,String(Math.min(100,v))); }catch(e){} try{ refreshRiskSuggestion(); }catch(e){} } }
 },true);
 fblDelega('click',async ev=>{
  const b=ev.target&&ev.target.closest&&ev.target.closest('#krakenCollegaBtn,#krakenScollegaBtn,#krakenAggiornaBtn,#krakenAzzeraBtn,#krakenPropBtn');

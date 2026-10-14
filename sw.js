@@ -335,7 +335,23 @@
 //               sale non era nemmeno solo un'etichetta: i TP raggiunti si contano scorrendo quella
 //               lista IN ORDINE, quindi con l'ordine sbagliato sbagliavano il conteggio, il win
 //               rate per TP e tutte le statistiche.
-const CACHE_NAME = "forex-backtest-lab-v150";
+//          v151 = ORDINI PENDENTI A GRAFICO: l'etichetta dice anche QUANTO (il lottaggio), e
+//               scegliendo una posizione gli ordini pendenti si spengono con le altre - le loro
+//               righe di stop e target, che attraversano tutto il grafico da un bordo all'altro,
+//               spariscono del tutto. L'entrata resta, spenta: serve a sapere che l'ordine e' li'.
+//               KRAKEN, IL MARGINE LO DECIDI TU. Il rischio scelto nella sala e' quanto si perde
+//               ALLO STOP, non il margine: con un conto da 10.000 e il 2%, se lo stop dista 10
+//               punti su un prezzo di 730 servono 20 monete, cioe' 14.600 di valore, che a leva 2x
+//               sono 7.300 di margine. Il calcolo era corretto - stop stretto e leva bassa (le
+//               cripto in UE sono 2x) chiedono molto margine per poco rischio - ma niente
+//               permetteva di metterci un tetto. Ora c'e': "Margine massimo per operazione, % del
+//               conto" nelle impostazioni Kraken, rispettato sia dal lottaggio consigliato nella
+//               barra sia dai segnali automatici. Sui segnali il piano viene RICALCOLATO con un
+//               rischio ridotto della stessa proporzione (non ritoccato a posteriori), e la
+//               riduzione si legge nella scheda del segnale. 100% = nessun tetto, come prima.
+//               Il margine impegnato ora si legge nel riquadro del lottaggio consigliato, accanto
+//               al rischio: erano due numeri diversi e se ne vedeva uno solo.
+const CACHE_NAME = "forex-backtest-lab-v151";
 const ASSETS = [
   "./",
   "./app.html",
