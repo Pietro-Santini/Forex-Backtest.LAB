@@ -193,7 +193,46 @@
 //               un utente che manda segnali ogni giorno non veniva mai rilevato), e i prezzi
 //               scritti con etichetta e numero in due nodi separati (il segnale usciva senza
 //               target ne' stop, quindi veniva scartato).
-const CACHE_NAME = "forex-backtest-lab-v145";
+//          v146 = due difetti della selezione delle posizioni. Una posizione si "sceglieva da
+//               sola" e faceva sparire le caselle di tutte le altre: `active` faceva due
+//               mestieri - la posizione su cui lavorano le caselle SL/TP, riassegnata dall'app in
+//               cinque punti (cambio asset, chiusura, ripristino di sessione, adozione dal conto
+//               MT5), e la posizione SCELTA, che nasconde le altre. Ora sono due cose separate:
+//               nasconde le altre solo `posSelezionata`, che la mette un clic dell'utente e la
+//               toglie un clic sul vuoto. E col DITO il tocco su un punto vuoto deseleziona come
+//               col mouse e con la penna: il gestore usciva prima per il touch e il blocco della
+//               deselezione non veniva mai raggiunto.
+//               E le bandiere delle notizie si vedono anche su telefono e tablet: il polling che
+//               le scarica partiva solo da due strade, nessuna delle quali esiste su un telefono
+//               (il passaggio a Live fatto a mano, e la riconnessione a Capital.com dopo un
+//               refresh, che legge le credenziali da una cartella del computer). Ora si allinea
+//               da solo allo stato, dal punto che tutte le strade attraversano.
+//               Colonne COB e SVP: stesso aspetto su ogni asset. Il passo delle righe non viene
+//               piu' dall'impostazione del FOOTPRINT (tarata sull'altezza di una candela, che non
+//               c'entra con una scaletta di liquidita'): si decide in pixel e si arrotonda a un
+//               passo tondo dello strumento. Prima su EUR/USD uscivano righe altissime, su
+//               XAU/USD fitte, e sulle cripto staccate una dall'altra perche' il passo era cosi'
+//               fine che i livelli del book cadevano in bin sparsi. Le barre sono anche attaccate
+//               (bordi arrotondati al pixel, niente altezza ridotta di 1 px).
+//               Footprint: ARCHIVIO delle candele passate. Si conservano le celle gia' aggregate
+//               al minuto (non i tick, troppi), su IndexedDB una chiave per asset e per giorno,
+//               per 60 giorni: da li' si costruisce qualunque timeframe sommando i minuti. Prima
+//               il footprint si rifaceva solo dal log dei tick, che ha un tetto e scarta i piu'
+//               vecchi: passando a 4 ore o a un giorno restavano solo le ultime candele.
+//               Posizione selezionata: delle ALTRE restano le linee di stop e target con le loro
+//               etichette, in grigio - prima sparivano del tutto - mentre il riempimento colorato
+//               resta solo a quella scelta. Cliccando sul vuoto torna tutto.
+//               Cronologia delle sale: accanto al pulsante «Analizza e mostra a grafico», mentre
+//               scarica, un cerchietto che si riempie con la percentuale e dice cosa sta
+//               scaricando.
+//               PONTE (serve il reinstaller): la storia di un utente Syntra si prende dalla
+//               CLASSIFICA - linguetta in fondo, si scorre fino all'utente, si entra nel suo
+//               profilo, si scorrono i setup espandendo i dettagli TP/SL fino al periodo chiesto.
+//               Prima si cercava il nome su una sua scheda gia' a schermo: se non aveva
+//               pubblicato di recente la lettura moriva prima di cominciare. E il terminale MT5
+//               viene ridotto a icona dopo ogni collegamento o cambio di conto, invece di
+//               riaprirsi a tutto schermo ogni volta.
+const CACHE_NAME = "forex-backtest-lab-v146";
 const ASSETS = [
   "./",
   "./app.html",

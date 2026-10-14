@@ -3,6 +3,45 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Colonne COB/SVP con righe di altezza diversa da asset a asset, e staccate sulle cripto** -
+  risolto v146 - 14 ottobre 2026, segnalato con tre foto (EUR/USD, XAU/USD, BTC/USDT). Il passo
+  delle righe veniva da `footprintStepForAsset`, cioe' dall'impostazione del FOOTPRINT: pip per
+  "altezza riga", un numero tarato sull'altezza di una CANDELA. Una scaletta di liquidita' non
+  c'entra niente con l'altezza di una candela, e quel passo cambia da strumento a strumento in modo
+  tutto suo: su EUR/USD usciva una riga da una decina di pixel, su XAU un paio, e sulle cripto era
+  cosi' fine rispetto all'intervallo di prezzo che i livelli del book finivano in bin sparsi, coi
+  buchi in mezzo. Ora il passo si decide in PIXEL (COB_SVP_RIGA_PX) e si arrotonda a un passo tondo
+  dello strumento (1/2/5 x 10^n volte il pip, con le soglie geometriche). In piu' i bordi sono
+  arrotondati al pixel e le barre hanno l'altezza piena: era quel mezzo pixel a farle sembrare
+  staccate. Test: `laboratorio/app/cob_svp_scala.test.mjs`.
+- **Le bandiere delle notizie non si vedevano su telefono e tablet** - risolto v146 - 14 ottobre
+  2026. Le bandiere si disegnano solo se `newsEvents` ha qualcosa dentro, e quello si riempie solo
+  col POLLING - che partiva da due strade sole: il passaggio Storico->Live fatto a mano, e la
+  riconnessione automatica a Capital.com dopo un refresh. La seconda sul telefono NON PUO'
+  avvenire: legge le credenziali da una cartella del computer (File System Access API, che su
+  telefono e tablet non esiste). In Live da telefono newsEvents restava vuoto per sempre. Nota: lo
+  stesso difetto era gia' stato corretto una volta sul PC, ma aggiungendo la chiamata in QUEL ramo
+  - una cura che vale solo per la strada che si conosce. Ora newsPollingSincronizza() allinea il
+  polling allo stato, ed e' chiamata da updateLiveModeUI(), l'unico punto che tutte le strade
+  attraversano. Test: `laboratorio/app/notizie_altri_dispositivi.test.mjs`.
+- **Una posizione si "selezionava da sola" e nascondeva le altre** - risolto v146 - 14 ottobre
+  2026, segnalato dal proprietario ("da un momento all'altro, in maniera casuale, viene
+  visualizzata la singola operazione; noi non abbiamo premuto niente"). `active` faceva DUE
+  mestieri: la posizione su cui lavorano le caselle SL/TP - che l'app riassegna DA SOLA in cinque
+  punti, tutti con la stessa riga `active = l'ultima posizione di questo asset` (cambio asset,
+  chiusura di una posizione, ripristino di sessione, adozione dal conto MT5) - e, dalla v142,
+  anche la posizione SCELTA, quella che fa sparire le caselle di tutte le altre. Finche' il
+  mestiere era uno solo nessuno se ne accorgeva; col secondo, ogni riassegnazione automatica
+  diventa una selezione che l'utente non ha fatto, e sembra che succeda "a caso" perche' succede
+  quando cambia qualcos'altro. Ora c'e' `posSelezionata`, che mette solo un clic e toglie solo un
+  clic sul vuoto. Test: `laboratorio/app/selezione_posizioni.test.mjs`.
+  LEZIONE: quando una variabile che l'app riassegna da sola acquista un SECONDO significato
+  "deciso dall'utente", vanno separate. Il difetto che ne esce sembra casuale e non lo e'.
+- **Col dito il tocco sul vuoto non deselezionava (serviva la penna)** - risolto v146 - il gestore
+  di pointerup del grafico esce prima per `pointerType==='touch'`, e il blocco della deselezione
+  stava DOPO quell'uscita: col dito non ci si arrivava mai. E' lo stesso identico difetto gia'
+  pagato una volta sulla stessa uscita anticipata (il cambio stile del footprint). Ora il blocco e'
+  una funzione, `fblClickSuVuoto()`, chiamata da tutti e due i rami.
 - **Syntra: un utente che manda segnali ogni giorno non veniva MAI rilevato** - risolto v145 -
   14 ottobre 2026, segnalato dal proprietario ("le operazioni crypto non vengono acquisite, c'e'
   Gino che manda segnali ogni giorno e non lo rileva mai"). Due cause, tutte e due silenziose:

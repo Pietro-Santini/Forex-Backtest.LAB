@@ -2,15 +2,21 @@
 // EVIDENZIATA e resta nei suoi colori (entrata BUY/SELL + caselle TP/SL), mentre le ALTRE posizioni
 // passano in grigio (TRADE_DIM_GREY = #8b96a5) sulla sola riga di entrata.
 //
-// AGGIORNATO (ultima richiesta esplicita): con una posizione selezionata si vedono SOLO le sue
-// linee TP/SL con le etichette; le caselle TP/SL delle altre posizioni NON vengono più disegnate
-// affatto (prima erano solo grigie) — grafico più ordinato e preciso. Cliccando fuori sul vuoto
-// (active null) le caselle di tutte ricompaiono come prima.
+// AGGIORNATO DUE VOLTE. La v142 fece sparire del tutto le caselle TP/SL delle altre posizioni; il
+// 14 ottobre 2026 il proprietario ha chiesto di tornare a vederle, ma SPENTE: «vengano messe in
+// grigio anche le linee dello stop e del target, insieme alle etichette, così ci rendiamo conto di
+// dove sono posizionati gli altri livelli; le caselle invece vengono disattivate momentaneamente e
+// resta colorata solo quella della posizione selezionata». Cliccando (o toccando) sul vuoto torna
+// tutto come prima.
+//
+// E la selezione è quella dell'UTENTE (posSelezionata, che la mette solo un clic), non `active`:
+// `active` l'app la riassegna da sola in cinque punti, e finché contava lei una posizione sembrava
+// "selezionarsi da sola". Vedi selezione_posizioni.test.mjs.
 //
 // Con due posizioni BUY dello stesso asset (entrate/livelli ben distinti) selezionarne una deve:
 //  - lasciare verde (#2fbf71) la SUA riga di entrata e grigia (#8b96a5) quella dell'altra;
-//  - lasciare nei colori scelti le SUE caselle TP (#e8a13b) / SL (#e05252) e NON disegnare affatto
-//    quelle dell'altra posizione (nessuno stroke su quel livello e nessun riquadro cliccabile).
+//  - lasciare nei colori scelti le SUE linee TP (#e8a13b) / SL (#e05252), e disegnare quelle
+//    dell'altra IN GRIGIO — presenti, ma spente, e senza il riempimento colorato.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
@@ -45,7 +51,7 @@ const SPIA_ORIZ = `
   })();
 `;
 
-test('MT5) click su una posizione: solo le sue TP/SL restano sul grafico, le altre spariscono', async () => {
+test('MT5) click su una posizione: la sua resta a colori, le altre vanno in grigio (non spariscono)', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate((o) => {
@@ -71,7 +77,7 @@ test('MT5) click su una posizione: solo le sue TP/SL restano sul grafico, le alt
         {id:'P1', asset:'TESTX', side:'BUY', entry:100.5, sl:99.5, tp:101.5, rrSl:99.5, lots:0.1, start:1, startTime:t0, mt5Ticket:null, marginUsed:10},
         {id:'P2', asset:'TESTX', side:'BUY', entry:102.0, sl:101.0, tp:103.0, rrSl:101.0, lots:0.1, start:1, startTime:t0, mt5Ticket:null, marginUsed:10}
       ];
-      active = null;
+      active = null; posSelezionata = null;
 
       const Y = p => Math.round(chartGeometry().y(p) * 10) / 10;
       const GREY = TRADE_DIM_GREY;                       // '#8b96a5'
@@ -84,9 +90,9 @@ test('MT5) click su una posizione: solo le sue TP/SL restano sul grafico, le alt
 
       const y = {p1e:Y(100.5), p1tp:Y(101.5), p1sl:Y(99.5), p2e:Y(102.0), p2tp:Y(103.0), p2sl:Y(101.0)};
       const senza = cattura();       // nessuna selezione: tutte colorate
-      active = positions[0];         // P1 selezionata
+      focusPosition(positions[0]);   // P1 scelta dall'utente (e' la strada di ogni clic)
       const sel1 = cattura();
-      active = positions[1];         // P2 selezionata
+      focusPosition(positions[1]);   // P2 scelta
       const sel2 = cattura();
 
       spia.proto.moveTo = spia.vM; spia.proto.lineTo = spia.vL; spia.proto.stroke = spia.vS;
@@ -144,7 +150,8 @@ test('MT5) click su una posizione: solo le sue TP/SL restano sul grafico, le alt
     assert.ok(r.senza.p2sl, 'senza selezione lo Stop di P2 ha il colore scelto');
 
     // ---- P1 selezionata: P1 evidenziata, la casella TP/SL di P2 sparisce del tutto. ----
-    assert.deepEqual(r.sel1.keys, ['pos:P1'], 'con P1 selezionata resta SOLO la casella TP/SL di P1');
+    assert.ok(r.sel1.keys.includes('pos:P1') && r.sel1.keys.includes('pos:P2'),
+      'le caselle restano disegnate per tutte: quelle delle altre spente, non sparite');
     assert.ok(r.sel1.p1e, 'con P1 selezionata l\'entry di P1 resta verde');
     assert.equal(r.sel1.p1eGrigia, false, 'con P1 selezionata l\'entry di P1 NON è grigia');
     assert.equal(r.sel1.p2e, false, 'con P1 selezionata l\'entry di P2 NON è più verde');
@@ -153,23 +160,24 @@ test('MT5) click su una posizione: solo le sue TP/SL restano sul grafico, le alt
     assert.ok(r.sel1.p2eGrigia.a < (r.sel1.p1e.a || 1), 'la riga grigia è anche più spenta (alpha minore)');
     assert.ok(r.sel1.p1tp, 'con P1 selezionata il Target di P1 resta nel colore scelto');
     assert.ok(r.sel1.p1sl, 'con P1 selezionata lo Stop di P1 resta nel colore scelto');
-    assert.equal(r.sel1.p2tpColore, null, 'con P1 selezionata il Target di P2 non è disegnato');
-    assert.equal(r.sel1.p2tpGrigio, null, 'con P1 selezionata il Target di P2 non è nemmeno grigio: sparisce');
-    assert.equal(r.sel1.p2slColore, null, 'con P1 selezionata lo Stop di P2 non è disegnato');
-    assert.equal(r.sel1.p2slGrigio, null, 'con P1 selezionata lo Stop di P2 non è nemmeno grigio: sparisce');
+    assert.equal(r.sel1.p2tpColore, null, 'con P1 selezionata il Target di P2 non ha più il suo colore');
+    assert.ok(r.sel1.p2tpGrigio, 'ma il Target di P2 si deve ancora vedere, in grigio');
+    assert.equal(r.sel1.p2slColore, null, 'con P1 selezionata lo Stop di P2 non ha più il suo colore');
+    assert.ok(r.sel1.p2slGrigio, 'ma lo Stop di P2 si deve ancora vedere, in grigio');
 
     // ---- P2 selezionata: speculare. ----
-    assert.deepEqual(r.sel2.keys, ['pos:P2'], 'con P2 selezionata resta SOLO la casella TP/SL di P2');
+    assert.ok(r.sel2.keys.includes('pos:P1') && r.sel2.keys.includes('pos:P2'),
+      'anche qui le caselle restano tutte, spente quelle delle altre');
     assert.ok(r.sel2.p2e, 'con P2 selezionata l\'entry di P2 resta verde');
     assert.equal(r.sel2.p2eGrigia, false, 'con P2 selezionata l\'entry di P2 NON è grigia');
     assert.equal(r.sel2.p1e, false, 'con P2 selezionata l\'entry di P1 NON è più verde');
     assert.ok(r.sel2.p1eGrigia, 'con P2 selezionata l\'entry di P1 è grigia');
     assert.ok(r.sel2.p2tp, 'con P2 selezionata il Target di P2 resta nel colore scelto');
     assert.ok(r.sel2.p2sl, 'con P2 selezionata lo Stop di P2 resta nel colore scelto');
-    assert.equal(r.sel2.p1tpColore, null, 'con P2 selezionata il Target di P1 non è disegnato');
-    assert.equal(r.sel2.p1tpGrigio, null, 'con P2 selezionata il Target di P1 non è nemmeno grigio: sparisce');
-    assert.equal(r.sel2.p1slColore, null, 'con P2 selezionata lo Stop di P1 non è disegnato');
-    assert.equal(r.sel2.p1slGrigio, null, 'con P2 selezionata lo Stop di P1 non è nemmeno grigio: sparisce');
+    assert.equal(r.sel2.p1tpColore, null, 'con P2 selezionata il Target di P1 non ha più il suo colore');
+    assert.ok(r.sel2.p1tpGrigio, 'ma il Target di P1 si deve ancora vedere, in grigio');
+    assert.equal(r.sel2.p1slColore, null, 'con P2 selezionata lo Stop di P1 non ha più il suo colore');
+    assert.ok(r.sel2.p1slGrigio, 'ma lo Stop di P1 si deve ancora vedere, in grigio');
 
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }

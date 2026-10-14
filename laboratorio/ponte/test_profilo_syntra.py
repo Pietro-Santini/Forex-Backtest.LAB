@@ -83,7 +83,7 @@ def _gira_con_profilo(monkeypatch, schede_finte, quanti_giri=2):
     async def consegna(sc, visti, cons, log, st):
         chiamate.append("bacheca")
 
-    async def profilo(a, utente, pagine, log, st):
+    async def profilo(a, utente, pagine, log, st, da_ms=None):
         # VINCOLO: se arriviamo qui, le notifiche NON devono ancora essere state toccate in questo giro.
         print("PROFILO FAKE CHIAMATO", utente, "chiamate=", chiamate, "schede=", schede_finte)
         assert chiamate == [], "letto il profilo DOPO aver toccato le notifiche: %r" % (chiamate,)
@@ -173,20 +173,131 @@ def test_senza_richiesta_non_si_legge_nessun_profilo(monkeypatch):
     assert aggiornamenti, "il giro normale delle notifiche continua come sempre"
 
 
-def test_leggi_profilo_tocca_il_nome_e_restituisce_le_schede(monkeypatch):
-    """PASSO 15. tocca il nome utente (in alto a destra della casella) e torna le sue operazioni."""
+# ====================== LA STRADA DELLA CLASSIFICA ======================
+# RICHIESTO dal proprietario, descritta passo per passo guardando l'app: "per trovare la cronologia
+# dei segnali di quell'utente deve andare su CLASSIFICA, che sta in basso; scorre fino a che non
+# trova l'utente; entra dentro; scorre le posizioni e controlla la data; prende il primo, lo
+# espande, vede i TP, lo stop, l'entrata; e alla fine fa la stessa cosa che fa quella di Telegram".
+#
+# PRIMA NON FUNZIONAVA: si cercava il nome dell'utente su una SUA scheda gia' visibile nel riquadro
+# dei setup. Se non aveva pubblicato di recente - o se si era sulla pagina Notifiche, che e' la
+# modalita' di sempre - quel nome sullo schermo non c'era, e la lettura moriva con "nome non
+# trovato sullo schermo" senza nemmeno cominciare.
+#
+# Le schermate qui sotto ricalcano quelle vere (foto del proprietario del 14 ottobre 2026): la
+# classifica con le righe "nome / alias / XP / Tasso di vincita", e il profilo col titolo "Info sul
+# fornitore di setup" e sotto le schede dei setup.
+
+XML_CLASSIFICA = """<root>
+ <node content-desc="GStrike&#10;GStrike&#10;XP 185&#10;Tasso di vincita 94%&#10;Guadagno&#10;2070+" bounds="[0,200][1500,290]"/>
+ <node content-desc="Cpulser&#10;Cpulser&#10;XP 68&#10;Tasso di vincita 86%&#10;Guadagno&#10;700+" bounds="[0,300][1500,390]"/>
+ <node content-desc="Gino&#10;Gino - SGM FREE&#10;XP 6395&#10;Tasso di vincita 100%&#10;Guadagno&#10;355.43+" bounds="[0,400][1500,490]"/>
+ <node content-desc="Setup" clickable="true" bounds="[100,880][450,930]"/>
+ <node content-desc="Classifica" clickable="true" bounds="[600,880][950,930]"/>
+ <node content-desc="Altro" clickable="true" bounds="[1100,880][1450,930]"/>
+</root>"""
+
+XML_ALTRA_PAGINA = """<root>
+ <node content-desc="Notifiche" bounds="[0,0][400,60]"/>
+ <node content-desc="Cancella tutto" bounds="[1100,0][1500,60]"/>
+ <node content-desc="Setup" clickable="true" bounds="[100,880][450,930]"/>
+ <node content-desc="Classifica" clickable="true" bounds="[600,880][950,930]"/>
+</root>"""
+
+XML_PROFILO = """<root>
+ <node content-desc="Info sul fornitore di setup" bounds="[0,0][1500,60]"/>
+ <node content-desc="Vendita&#10;CKB/USDT&#10;12 ott, 3:27 PM&#10;Ordine a mercato&#10;Entrata:&#10;0.001621&#10;Vinto" bounds="[0,100][1500,400]">
+  <node content-desc="Gino" clickable="true" bounds="[1300,100][1480,140]"/>
+  <node content-desc="TP #1:&#10;0.0016129 (+0.5%)"/>
+  <node content-desc="SL:&#10;0.0019452 (-20%)"/>
+ </node>
+</root>"""
+
+
+class AdbNavigazione:
+    """Emulatore finto che cambia schermata quando lo si tocca, come fa l'app vera."""
+
+    def __init__(self, partenza=XML_ALTRA_PAGINA):
+        self.xml = partenza
+        self.tocchi = []
+        self.scorri_chiamate = 0
+        self.indietro_chiamate = 0
+
+    async def collega(self):
+        pass
+
+    async def apri_syntra(self):
+        pass
+
+    async def syntra_davanti(self):
+        return True
+
+    async def schermata(self):
+        return self.xml
+
+    async def tocca(self, x, y):
+        self.tocchi.append((x, y))
+        if self.xml is XML_CLASSIFICA and 400 <= y <= 490:
+            self.xml = XML_PROFILO          # si e' toccata la riga di Gino
+        elif 880 <= y <= 930 and 600 <= x <= 950:
+            self.xml = XML_CLASSIFICA       # si e' toccata la voce "Classifica" in fondo
+
+    async def scorri(self, x, y1, y2):
+        self.scorri_chiamate += 1
+
+    async def indietro(self):
+        self.indietro_chiamate += 1
+
+
+def test_la_classifica_si_legge_riga_per_riga():
+    pagina = s.leggi_classifica(XML_CLASSIFICA)
+    assert pagina["e_classifica"] is True
+    assert [r["utente"] for r in pagina["righe"]] == ["GStrike", "Cpulser", "Gino"]
+    assert pagina["righe"][2]["alias"] == "Gino - SGM FREE"
+    assert pagina["voce"] is not None, "serve il punto dove toccare «Classifica»"
+
+
+def test_il_nome_si_riconosce_anche_con_l_alias_attaccato():
+    # La classifica scrive "Gino", il profilo "Gino - SGM FREE", l'app lo conosce come "Syntra . Gino".
+    assert s.stesso_utente_syntra("Gino", "Gino - SGM FREE")
+    assert s.stesso_utente_syntra("Syntra · Gino", "Gino")
+    assert s.stesso_utente_syntra("CrownPips", "crownpips")
+    assert not s.stesso_utente_syntra("Gino", "Nate")
+    assert not s.stesso_utente_syntra("", "Gino")
+
+
+def test_il_profilo_si_riconosce_dal_titolo():
+    assert s.e_pagina_profilo(XML_PROFILO) is True
+    assert s.e_pagina_profilo(XML_CLASSIFICA) is False
+
+
+def test_leggi_profilo_passa_dalla_classifica_e_torna_le_schede(monkeypatch):
+    """PASSO: dalla pagina Notifiche si arriva al profilo di Gino passando dalla Classifica."""
     async def _subito(_=0):
         return None
 
     monkeypatch.setattr(s.asyncio, "sleep", _subito)
-    adb = Adb()
-    lette = asyncio.run(s.leggi_profilo(adb, "Mario", 1, lambda m: None, {}))
-    assert adb.tocchi, "deve toccare il nome utente per aprire il profilo"
+    adb = AdbNavigazione()
+    lette = asyncio.run(s.leggi_profilo(adb, "Gino", 1, lambda m: None, {}))
+    assert adb.xml is XML_PROFILO, "doveva finire dentro il profilo"
+    assert len(adb.tocchi) >= 2, "un tocco su «Classifica», uno sulla riga dell'utente"
     assert lette, "deve leggere almeno una scheda dal profilo"
-    assert lette[0]["utente"] == "Mario"
-    assert lette[0]["asset"] == "EURUSD"
-    assert lette[0]["lato"] == "BUY"
-    assert lette[0]["entrata"] == 1.1
+    assert lette[0]["asset"] == "CKB/USDT"
+    assert lette[0]["lato"] == "SELL"
+    assert lette[0]["entrata"] == 0.001621
+    assert lette[0]["tp"] == {1: 0.0016129}
+    assert lette[0]["sl"] == 0.0019452
+
+
+def test_un_utente_che_non_c_e_non_manda_il_robot_a_toccare_a_caso(monkeypatch):
+    async def _subito(_=0):
+        return None
+
+    monkeypatch.setattr(s.asyncio, "sleep", _subito)
+    adb = AdbNavigazione()
+    lette = asyncio.run(s.leggi_profilo(adb, "NonEsiste", 1, lambda m: None, {}))
+    assert lette == [], "senza l'utente non si legge niente"
+    assert adb.xml is not XML_PROFILO, "e non si entra in un profilo a caso"
 
 
 class _WS:
