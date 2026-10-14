@@ -5856,6 +5856,9 @@ const GRAFICO_CAMPI_LOCALI=new Set(['lastSide','armed']);
 // riapplica quando arriva da un altro dispositivo. Le strategie delle posizioni aperte
 // (fb_tg_strategie) restano del dispositivo che le ha aperte: sono stato, non configurazione.
 const GRAFICO_LS={
+ // Solo da leggere: arriva dal dispositivo che ha aperto le posizioni Kraken e serve a disegnarne
+ // stop e target. Non fa partire nessuna strategia qui (vedi krakenLivelliPubblica).
+ fb_kraken_livelli:v=>{ try{ krakenLivelliCondivisi=JSON.parse(v)||{}; }catch(e){ krakenLivelliCondivisi={}; } try{ draw(); }catch(e){} },
  fb_tg_auto:v=>{ try{ tgAutoFx=tgAutoDaSalvato(JSON.parse(v)||{}); if(tgAutoFamUi!=='cr')tgAuto=tgAutoFx; }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
  fb_tg_auto_cripto:v=>{ try{ tgAutoCr=tgAutoDaSalvato(JSON.parse(v)||{}); if(tgAutoFamUi==='cr')tgAuto=tgAutoCr; }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
  fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
@@ -15789,7 +15792,21 @@ function draw(){
    // Se si sta trascinando proprio SL o TP DI QUESTA posizione (previewTradeLevel), la
    // casella NON sparisce più: resta visibile e si aggiorna in diretta con il valore
    // trascinato, esattamente come chiesto.
-   if(openIdx!=null){
+   //
+   // SEGNALATO dal proprietario (telefono e tablet, posizioni del conto Kraken): "non mi mostra
+   // piu' il TP e lo SL. Mi fa vedere l'entrata sul grafico e il P/L, ma nient'altro".
+   // LA CAUSA: tutta questa parte era chiusa dentro `if(openIdx!=null)`, cioe' si disegnava SOLO
+   // se la candela in cui la posizione e' stata aperta si trovava nello storico caricato. Se lo
+   // storico di quell'asset non c'e' - storico corto, asset appena cambiato, o il caso segnalato:
+   // un telefono che non e' riuscito a caricare le candele di quell'asset - openIdx e' nullo e
+   // spariva tutto: casella, linee di stop e target, etichette. La linea dell'ENTRATA invece
+   // restava, perche' le basta che il prezzo sia nella scala visibile: ecco perche' si vedeva
+   // l'entrata e nient'altro.
+   // Entrata, stop e target sono PREZZI: esistono comunque, e sono esattamente quello che si vuole
+   // vedere. Quando la candela di apertura non c'e', la casella si ancora al bordo sinistro della
+   // vista invece di non esistere.
+   {
+     const originBox=(openIdx!=null)?openIdx:start;
      const isDraggingSl=isFocused && previewTradeLevel && previewTradeLevel.type==='SL';
      const isDraggingTp=isFocused && previewTradeLevel && previewTradeLevel.type==='TP';
      // Il livello trascinato ADESSO con il dito/mouse vince sempre (si deve vedere dove lo si sta
@@ -15818,7 +15835,7 @@ function draw(){
       // drawTpSlZoneBox) - cosi' si continua a sapere dove sono i livelli degli altri trade,
       // mentre il colore resta solo a quello scelto. Cliccando sul vuoto torna tutto come prima.
       drawTpSlZoneBox(ctx,{
-       ownerKey:'pos:'+pos.id,originIdx:openIdx,entry:pos.entry,sl:liveSl,tp:liveTp,
+       ownerKey:'pos:'+pos.id,originIdx:originBox,entry:pos.entry,sl:liveSl,tp:liveTp,
        lots:pos.lots,assetKey:pos.asset,stopProfit:isStopProfitLive,
        dimmed,
        pad,cw,n,start,w,y,
@@ -15838,7 +15855,9 @@ function draw(){
      // candela per candela dall'apertura fino ad ORA, e si ferma da sola quando il trade chiude
      // (a quel punto subentra la versione "storica" in drawClosedTradeMarkers). RIPRISTINATA:
      // funzionalità intenzionale, non il bug che sembrava — vedi nota su drawOpenTradeProgress().
-     if(fblLineePosVisibili()&&fblConnettoriVisibili())drawOpenTradeProgress(ctx,pos,y,lo,hi,pad,cw,n,start,w,dimmed);
+     // Il connettore "da dove e' partita a dove sta adesso" ha bisogno della candela di apertura
+     // VERA: senza, non c'e' un "da dove". Lui si', quindi, resta legato a openIdx.
+     if(openIdx!=null&&fblLineePosVisibili()&&fblConnettoriVisibili())drawOpenTradeProgress(ctx,pos,y,lo,hi,pad,cw,n,start,w,dimmed);
    }
  });
  // Frecce di apertura/chiusura + linea tratteggiata per ogni trade già CHIUSO (storico),
@@ -19376,13 +19395,10 @@ async function jumpToTradeOnChart(tradeIndex){
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   suspendChartFeed('vai a grafico -> '+t.asset);
-   try{
-     if(tradeWasLive) await loadLiveHistoryFromCapital(t.asset);
-     else await autoLoadAssetLibrary(t.asset);
-   }finally{ resumeChartFeed(); }
+   const esito=await caricaStoricoPerSaltoAGrafico(t.asset);
+   if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
- if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${t.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'operazione a grafico.`;return;}
+ if(!rows.length){$('status').textContent=`Nessuno storico per ${t.asset||'questo asset'}: non posso mostrare l'operazione a grafico.`;return;}
  const openIdx=rowIndexContainingTime(openReferenceTimeForPos(t));
  const closeIdx=rowIndexContainingTime(closeReferenceTimeForTrade(t));
  if(openIdx==null){$('status').textContent='Impossibile individuare quella candela nello storico attuale.';return;}
@@ -19422,6 +19438,46 @@ async function jumpToTradeOnChart(tradeIndex){
 // asset (come il Trade Journal), quindi da lì si può saltare direttamente all'asset giusto
 // senza doverlo cercare a mano nel menu in alto. Se la posizione/ordine è già sull'asset a
 // grafico ora, non serve alcun cambio: si centra semplicemente la vista su di essa.
+// CARICARE LE CANDELE DI UN ASSET PER UN SALTO A GRAFICO ("Vai a grafico"): una strada sola.
+//
+// SEGNALATO dal proprietario (telefono e tablet, posizioni del conto Kraken): "il pulsante vai a
+// grafico non mi carica l'asset di quella posizione".
+// LA CAUSA: ognuno dei quattro punti che saltano a grafico (posizione, ordine pendente, ordine
+// pendente MT5, operazione del Journal) sceglieva la fonte per conto suo, e tutti e quattro
+// scrivevano la stessa riga: in Live -> loadLiveHistoryFromCapital. Quella funzione comincia con
+// `if(!capitalSessionTokens)return;` - e su un telefono quella sessione NON esiste, perche' le
+// credenziali Capital.com si leggono da una CARTELLA del computer (File System Access API, che su
+// telefono e tablet non c'e'). Usciva quindi in silenzio: nessun errore, nessuna candela nuova. Il
+// menu in alto mostrava gia' il nuovo asset mentre il grafico era rimasto con le candele del
+// vecchio, e da fuori il pulsante sembrava semplicemente non fare niente. E' la stessa forma gia'
+// vista tre volte in questo file: una strada che decide da sola invece di passare dal punto in cui
+// la scelta e' fatta una volta per tutte.
+//
+// Qui la fonte si sceglie come la sceglie il cambio timeframe (fblSorgenteLivePerCambioTf), c'e' un
+// ripiego sulla libreria storica quando la fonte Live non ha potuto lavorare - meglio candele ferme
+// che nessuna candela - e il risultato si CONTROLLA: `rowsAssetKey` dice a quale asset
+// appartengono davvero le candele a schermo, ed e' scritto solo da chi le ha caricate per davvero.
+async function caricaStoricoPerSaltoAGrafico(asset){
+ if(!asset)return {ok:false,motivo:'nessun asset'};
+ suspendChartFeed('vai a grafico -> '+asset);
+ try{
+  if(liveModeActive){
+   let sorgente='capital';
+   try{ sorgente=fblSorgenteLivePerCambioTf(csvLibrary[0]&&csvLibrary[0].id,liveSessionPhaseNow(),mt5Connected); }catch(e){}
+   try{
+    if(sorgente==='mt5')await loadLiveHistoryFromMt5(asset);
+    else await loadLiveHistoryFromCapital(asset);
+   }catch(e){ /* la fonte Live non ce l'ha fatta: si prova con la libreria, qui sotto */ }
+  }
+  if(rowsAssetKey!==asset){
+   try{ await autoLoadAssetLibrary(asset); }catch(e){}
+  }
+ } finally { resumeChartFeed(); }
+ if(rowsAssetKey===asset&&rows.length)return {ok:true};
+ return {ok:false,motivo:liveModeActive
+   ? ('non riesco a caricare le candele di '+asset+' su questo dispositivo: il collegamento dal vivo per quell\'asset non e\' disponibile qui. Aprilo dal computer, oppure aggiungi il suo storico dalla Libreria CSV.')
+   : ('nessuno storico in libreria per '+asset+': aggiungilo da "Libreria storici CSV per asset" per poterlo vedere a grafico.')};
+}
 async function jumpToPositionOnChart(posId){
  const pos=positions.find(p=>String(p.id)===String(posId));
  if(!pos)return;
@@ -19438,13 +19494,10 @@ async function jumpToPositionOnChart(posId){
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   suspendChartFeed('vai a grafico -> '+pos.asset);
-   try{
-     if(liveModeActive) await loadLiveHistoryFromCapital(pos.asset);
-     else await autoLoadAssetLibrary(pos.asset);
-   }finally{ resumeChartFeed(); }
+   const esito=await caricaStoricoPerSaltoAGrafico(pos.asset);
+   if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
- if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${pos.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere la posizione a grafico.`;return;}
+ if(!rows.length){$('status').textContent=`Nessuno storico per ${pos.asset||'questo asset'}: non posso mostrare la posizione a grafico.`;return;}
  focusPosition(pos);
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
  const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
@@ -19471,11 +19524,8 @@ async function jumpToPendingOnChart(orderId){
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   suspendChartFeed('vai a grafico -> '+p.asset);
-   try{
-     if(liveModeActive) await loadLiveHistoryFromCapital(p.asset);
-     else await autoLoadAssetLibrary(p.asset);
-   }finally{ resumeChartFeed(); }
+   const esito=await caricaStoricoPerSaltoAGrafico(p.asset);
+   if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${p.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -19509,11 +19559,8 @@ async function jumpToMt5PendingOnChart(ticket){
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   suspendChartFeed('vai a grafico -> '+asset);
-   try{
-     if(liveModeActive) await loadLiveHistoryFromCapital(asset);
-     else await autoLoadAssetLibrary(asset);
-   }finally{ resumeChartFeed(); }
+   const esito=await caricaStoricoPerSaltoAGrafico(asset);
+   if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
  if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -26644,11 +26691,71 @@ $('tgConfigApri')?.addEventListener('click',async ()=>{
 // segnale si sposta al livello scelto. Il grilletto e' il PREZZO che tocca il livello, non la
 // chiusura della posizione: cosi' la regola vale identica per le posizioni simulate (chiuse
 // dall'app) e per quelle reali (chiuse dal broker, che l'app vede solo dopo).
+// ===== I LIVELLI DELLE POSIZIONI KRAKEN, VISIBILI DA TUTTI I DISPOSITIVI =====
+//
+// SEGNALATO dal proprietario: "sul telefono e sul tablet, delle posizioni del conto Kraken non
+// vedo piu' il TP e lo SL: mi fa vedere l'entrata sul grafico e il P/L live, ma nient'altro".
+//
+// LA CAUSA: il disegno delle posizioni Kraken prende stop e target dalla posizione COSI' COME LA
+// RACCONTA KRAKEN (p.sl, p.tp: gli ordini veri presenti sull'exchange) e, quando li' non ci sono -
+// e non ci sono ogni volta che a gestirli e' l'app invece dell'exchange - ripiega su tgStrategie.
+// Ma tgStrategie e' DI PROPOSITO del solo dispositivo che ha aperto la posizione: sta scritto
+// accanto a GRAFICO_LS, "sono stato, non configurazione". Su un telefono che quella posizione non
+// l'ha aperta la voce non esiste: stop e target restavano NaN, e drawTpSlZoneBox con nessuno dei
+// due livelli non disegna niente - ne' casella, ne' linee, ne' etichette. L'entrata invece si
+// vedeva lo stesso (la disegna un'altra parte) e il P/L arriva dal ponte: ecco il "solo entrata
+// e P/L".
+//
+// LA CURA, senza toccare quell'invariante: il MOTORE delle strategie resta del dispositivo che ha
+// aperto (due dispositivi che muovono lo stesso stop sarebbero un guaio peggiore del problema), ma
+// i LIVELLI da mostrare si pubblicano in una voce condivisa, che gli altri dispositivi usano SOLO
+// per disegnare. Chi riceve non muove niente: legge.
+const KRAKEN_LIVELLI_KEY='fb_kraken_livelli';
+let krakenLivelliCondivisi={};
+try{ krakenLivelliCondivisi=JSON.parse(localStorage.getItem(KRAKEN_LIVELLI_KEY)||'{}')||{}; }catch(e){ krakenLivelliCondivisi={}; }
+function krakenLivelliDaStrategie(){
+ const out={};
+ Object.values(tgStrategie||{}).forEach(x=>{
+  if(!x||x.conto!=='kraken'||!x.simbolo)return;
+  const k=String(x.simbolo), creato=Number(x.creato)||0;
+  // Il disegno usa la strategia piu' VECCHIA di quel simbolo: si pubblica la stessa, altrimenti
+  // i due dispositivi mostrerebbero livelli diversi per la stessa posizione.
+  if(out[k]&&Number(out[k].creato)<=creato)return;
+  out[k]={creato,sl:Number(x.sl),slIniziale:Number(x.slIniziale),
+          tps:(Array.isArray(x.tps)?x.tps.map(Number).filter(v=>Number.isFinite(v)&&v>0):[])};
+ });
+ return out;
+}
+function krakenLivelliPubblica(){
+ try{
+  const v=krakenLivelliDaStrategie();
+  const txt=JSON.stringify(v);
+  if(txt===localStorage.getItem(KRAKEN_LIVELLI_KEY))return false;
+  localStorage.setItem(KRAKEN_LIVELLI_KEY,txt);
+  krakenLivelliCondivisi=v;
+  return true;
+ }catch(e){ return false; }
+}
+// I livelli da DISEGNARE per una posizione Kraken: prima la strategia di questo dispositivo (se
+// l'ha aperta lui, e' lei che comanda), altrimenti quella pubblicata dal dispositivo che l'ha
+// aperta. Torna null se non si sa niente: allora non si disegna niente, che e' corretto.
+function krakenStrategiaPerDisegno(simbolo){
+ const k=String(simbolo||'');
+ const locale=Object.values(tgStrategie||{})
+   .filter(x=>x&&x.conto==='kraken'&&x.simbolo===k)
+   .sort((a,b)=>a.creato-b.creato)[0];
+ if(locale)return locale;
+ const remoto=krakenLivelliCondivisi&&krakenLivelliCondivisi[k];
+ return remoto||null;
+}
 const TG_STRATEGIE_KEY='fb_tg_strategie';
 let tgStrategie={};
 try{ tgStrategie=JSON.parse(localStorage.getItem(TG_STRATEGIE_KEY)||'{}')||{}; }catch(e){ tgStrategie={}; }
 function tgSalvaStrategie(){
  try{ localStorage.setItem(TG_STRATEGIE_KEY,JSON.stringify(tgStrategie)); }catch(e){}
+ // Il punto che TUTTE le modifiche alle strategie attraversano: e' qui che si aggiorna la copia
+ // condivisa dei livelli Kraken, non in ognuna delle strade che le cambiano.
+ try{ krakenLivelliPubblica(); }catch(e){}
 }
 // Uno stop si sposta solo in avanti, mai indietro: se e' gia' piu' avanti di dove lo porterebbe la
 // regola, resta dov'e'. Spostarlo indietro vorrebbe dire aumentare il rischio di una posizione che
@@ -30910,6 +31017,9 @@ async function refreshNewsFeed(){
      if(res.ok&&res.data&&Array.isArray(res.data.events)){
        newsEvents=res.data.events;
        newsFetchedAt=Date.now();
+       // Ogni calendario che passa di qui lascia qualcosa nell'archivio: e' l'unico momento in cui
+       // le notizie esistono, e domani questa stessa lista sara' gia' stata sostituita.
+       try{ notizieArchivioAggiungi(newsEvents); }catch(e){}
      }
      // Se il bridge non risponde o dà errore: NON tocchiamo newsEvents (si tiene l'ultima
      // copia buona, o resta vuota se non ne abbiamo mai avuta una) — mai un errore visibile
@@ -30956,6 +31066,103 @@ function newsPollingSincronizza(){
   if(typeof liveModeActive!=='undefined'&&liveModeActive){ if(!newsPollTimer)startNewsPolling(); }
   else stopNewsPolling();
  }catch(e){ /* allo start puo' arrivare prima delle variabili: al giro dopo si allinea */ }
+}
+// ===================== L'ARCHIVIO DELLE NOTIZIE =====================
+// RICHIESTO dal proprietario: "una statistica delle sale segnali piu' profittevoli nei momenti in
+// cui arrivano le notizie, quelle in rosso, cosi' si vede chi prende piu' operazioni con queste
+// notizie e chi invece e' meno profittevole".
+//
+// PERCHE' SERVE UN ARCHIVIO: `newsEvents` e' l'ULTIMA fotografia del calendario (la settimana in
+// corso), e viene sostituita ad ogni aggiornamento. Per dire se un trade chiuso tre settimane fa
+// e' nato sotto una notizia importante, quella notizia bisogna averla conservata: il calendario di
+// oggi non sa piu' niente di allora. Stessa idea dell'archivio del footprint.
+// LIMITE, detto com'e': l'archivio parte da qui. Alla prima accensione raccoglie la settimana in
+// corso (tanto da' il calendario) e da li' in avanti cresce da solo, quindi la statistica diventa
+// significativa dopo qualche settimana di uso - non racconta il passato che non ha visto.
+const NOTIZIE_ARCHIVIO_KEY='fbl_notizie_archivio';
+const NOTIZIE_ARCHIVIO_MAX=3000;        // ~ un anno di eventi importanti, poche centinaia di KB
+const NOTIZIE_ARCHIVIO_GIORNI=400;
+let notizieArchivio=null;               // {chiave -> {t,cur,imp,tit}}, caricato alla prima richiesta
+function notizieArchivioCarica(){
+ if(notizieArchivio)return notizieArchivio;
+ notizieArchivio={};
+ try{
+  const g=JSON.parse(localStorage.getItem(NOTIZIE_ARCHIVIO_KEY)||'[]');
+  if(Array.isArray(g))g.forEach(e=>{ const k=notizieChiave(e); if(k)notizieArchivio[k]=e; });
+ }catch(e){ notizieArchivio={}; }
+ return notizieArchivio;
+}
+function notizieChiave(e){
+ const t=Number(e&&e.t);
+ if(!Number.isFinite(t))return '';
+ return t+'|'+String(e.cur||'')+'|'+String(e.tit||'').slice(0,40);
+}
+function notizieArchivioSalva(){
+ try{
+  const ora=Date.now(), limite=ora-NOTIZIE_ARCHIVIO_GIORNI*86400000;
+  let v=Object.values(notizieArchivioCarica()).filter(e=>Number(e.t)>=limite);
+  // Se si sfora il tetto si buttano le piu' VECCHIE: la statistica guarda sempre il periodo
+  // scelto nei filtri, che parte da adesso e va indietro.
+  if(v.length>NOTIZIE_ARCHIVIO_MAX)v=v.sort((a,b)=>a.t-b.t).slice(v.length-NOTIZIE_ARCHIVIO_MAX);
+  localStorage.setItem(NOTIZIE_ARCHIVIO_KEY,JSON.stringify(v));
+  notizieArchivio=null;   // si rilegge al prossimo giro, cosi' la memoria resta allineata al salvato
+ }catch(e){ /* archivio pieno o memoria negata: la statistica si riduce, l'app no */ }
+}
+// Mette da parte gli eventi appena arrivati dal calendario. Si conservano SOLO quelli importanti
+// (rossi e arancioni): i "Low" sono rumore e riempirebbero l'archivio per niente.
+function notizieArchivioAggiungi(eventi){
+ if(!Array.isArray(eventi)||!eventi.length)return 0;
+ const A=notizieArchivioCarica();
+ let nuovi=0;
+ for(const ev of eventi){
+  if(!ev)continue;
+  const imp=String(ev.impact||'');
+  if(imp!=='High'&&imp!=='Medium')continue;
+  let t=NaN;
+  try{ t=Date.parse(ev.date||ev.time||''); }catch(e){}
+  if(!Number.isFinite(t))continue;
+  const e={t,cur:String(ev.country||'').toUpperCase(),imp,tit:String(ev.title||'').slice(0,80)};
+  const k=notizieChiave(e);
+  if(k&&!A[k]){ A[k]=e; nuovi++; }
+ }
+ if(nuovi)notizieArchivioSalva();
+ return nuovi;
+}
+// Le valute toccate da un asset. Il calendario parla per VALUTA (USD, EUR, GBP...), gli asset si
+// chiamano EURUSD, XAUUSD, BTCUSDT: per sapere se una notizia riguarda un trade bisogna tradurre.
+function fblValuteDiAsset(asset){
+ const s=String(asset||'').toUpperCase().replace(/[^A-Z]/g,'');
+ if(s.length<6)return [];
+ // Le stablecoin sono dollari: una notizia sul dollaro tocca BTCUSDT quanto BTCUSD.
+ const pulito=s.replace(/(USDT|USDC|BUSD)$/,'USD');
+ const base=pulito.slice(0,pulito.length-3), quote=pulito.slice(-3);
+ const out=[];
+ if(quote)out.push(quote);
+ // Oro e argento si muovono sulle notizie del dollaro, non su quelle di "XAU": la parte base si
+ // tiene lo stesso (serve a chi segue le materie prime) ma non e' lei a fare la coppia.
+ if(base&&base.length<=4&&base!==quote)out.push(base);
+ return out;
+}
+// La notizia importante sotto cui e' nata questa operazione, se c'e'. `quando` e' il momento
+// dell'APERTURA: e' li' che si decide, non alla chiusura.
+const NOTIZIA_FINESTRA_MIN=30;   // mezz'ora prima e mezz'ora dopo l'uscita del dato
+function fblNotiziaImportanteVicina(quando,asset,soloRosse){
+ const t=Number(quando);
+ if(!Number.isFinite(t))return null;
+ const valute=fblValuteDiAsset(asset);
+ const finestra=NOTIZIA_FINESTRA_MIN*60000;
+ const A=notizieArchivioCarica();
+ let miglior=null;
+ for(const k in A){
+  const e=A[k];
+  if(soloRosse&&e.imp!=='High')continue;
+  if(Math.abs(Number(e.t)-t)>finestra)continue;
+  // "All" sono gli eventi globali (summit, discorsi): toccano tutti.
+  if(e.cur&&e.cur!=='ALL'&&valute.length&&!valute.includes(e.cur))continue;
+  // Fra due notizie nella stessa finestra vince la piu' vicina al momento dell'apertura.
+  if(!miglior||Math.abs(Number(e.t)-t)<Math.abs(Number(miglior.t)-t))miglior=e;
+ }
+ return miglior;
 }
 const NEWS_IMPACT_COLOR={Low:'#8a97a8',Medium:'#f0a83c',High:'#e0524f'};
 function newsImpactColor(impact){ return NEWS_IMPACT_COLOR[impact]||NEWS_IMPACT_COLOR.Low; }
@@ -38787,13 +38994,16 @@ function krakenPosPannello(){
   const tr=document.createElement('tr');
   const buy=String(p.lato).toUpperCase().startsWith('B')||String(p.lato).toLowerCase()==='long';
   const entry=Number(p.entrata), mark=Number(p.mark);
-  const sl=Number.isFinite(Number(p.sl))?Number(p.sl):NaN;
-  const tps=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+  // Stesso difetto del grafico, stessa cura: senza la strategia di QUESTO dispositivo la tabella
+  // mostrava stop e target vuoti su telefono e tablet. Si legge anche quella pubblicata da chi ha
+  // aperto la posizione.
+  const st=krakenStrategiaPerDisegno(p.simbolo);
+  const sl=Number.isFinite(krakenPrezzo(p.sl))?krakenPrezzo(p.sl):krakenPrezzo(st&&st.sl);
+  let tps=(p.tp||[]).map(x=>krakenPrezzo(x&&x.prezzo)).filter(Number.isFinite);
+  if(!tps.length&&st&&Array.isArray(st.tps))tps=st.tps.map(krakenPrezzo).filter(Number.isFinite);
   const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
   // Lo stop usato per il R/R e' quello di APERTURA, non quello di adesso: altrimenti portandolo
   // a pareggio il rapporto diventerebbe infinito e non direbbe piu' niente sul rischio preso.
-  const st=Object.values(tgStrategie||{}).filter(x=>x&&x.conto==='kraken'&&x.simbolo===p.simbolo)
-            .sort((a,b)=>a.creato-b.creato)[0];
   const slIni=st&&Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):sl;
   const rr=(Number.isFinite(slIni)&&Number.isFinite(tpLontano))?rrArrotondatoTesto(entry,slIni,tpLontano):'—';
   const margine=Number(p.quantita)*mark/(krakenLeva()||1);
@@ -39066,6 +39276,18 @@ async function krakenRegistraChiusura(id,st){
 // P/L e margine. Il grafico delle cripto e' quello di Binance: i livelli si spostano della piccola
 // differenza fra i due prezzi (Binance - mark Kraken), cosi' cadono sulle candele giuste; le
 // etichette mostrano i prezzi VERI di Kraken.
+// Un prezzo che arriva dal ponte: o c'e' ed e' un prezzo vero, o non c'e'.
+//
+// QUARTA VOLTA con lo stesso inganno in questo file (vedi cervello/LEZIONI.md): Number(null) fa 0,
+// e 0 passa Number.isFinite. Il ponte manda `sl: null` ogni volta che su Kraken non esiste un
+// ordine di stop - cosa normalissima quando a gestire lo stop e' l'app - e qui quel null diventava
+// uno STOP A PREZZO ZERO: la casella Target/Stop partiva dall'entrata e arrivava a zero, cioe'
+// copriva tutto il grafico, e il livello mostrato era 0.
+function krakenPrezzo(v){
+ if(v===null||v===undefined||v==='')return NaN;
+ const x=Number(v);
+ return (Number.isFinite(x)&&x>0)?x:NaN;
+}
 function krakenBaseDaSimbolo(sim){ return String(sim||'').toUpperCase().replace(/^(PF|PI|FF|FI)_/,'').replace(/USD$/,'').replace(/^XBT/,'BTC'); }
 // LO SCOSTAMENTO SI CONGELA, NON SI RICALCOLA.
 // Il grafico mostra i prezzi di Binance, Kraken esegue ai suoi: fra i due c'e' una piccola
@@ -39118,13 +39340,19 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
  ps.forEach(p=>{
   const mark=Number(p.mark), entry=Number(p.entrata);
   const off=krakenScostamento('kraken:'+p.simbolo+':'+entry,prezzo,mark);
-  const st=Object.values(tgStrategie||{}).filter(x=>x&&x.conto==='kraken'&&x.simbolo===p.simbolo).sort((a,b)=>a.creato-b.creato)[0];
+  // Non piu' solo le strategie di QUESTO dispositivo: anche quelle pubblicate da chi ha aperto la
+  // posizione (vedi krakenStrategiaPerDisegno). E' la correzione del "sul telefono vedo solo
+  // l'entrata e il P/L".
+  const st=krakenStrategiaPerDisegno(p.simbolo);
   const t0=st?Number(st.creato):null;
   let origine=t0?rowIndexContainingTime(t0):null;
   if(origine==null)origine=Math.max(0,(rows.length||1)-20);
   if(origine>idx)return;
-  const sl=Number.isFinite(Number(p.sl))?Number(p.sl):(st?Number(st.sl):NaN);
-  const tps=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
+  const sl=Number.isFinite(krakenPrezzo(p.sl))?krakenPrezzo(p.sl):(st?krakenPrezzo(st.sl):NaN);
+  // I target veri sull'exchange vengono prima; se li gestisce l'app (e quindi su Kraken ordini non
+  // ce ne sono) valgono quelli della strategia - di questo dispositivo o pubblicati dall'altro.
+  let tps=(p.tp||[]).map(x=>krakenPrezzo(x&&x.prezzo)).filter(Number.isFinite);
+  if(!tps.length&&st&&Array.isArray(st.tps))tps=st.tps.map(krakenPrezzo).filter(Number.isFinite);
   const buy=String(p.lato).toUpperCase().startsWith('B')||String(p.lato).toLowerCase()==='long';
   const tpLontano=tps.length?(buy?Math.max(...tps):Math.min(...tps)):NaN;
   const slIni=st&&Number.isFinite(Number(st.slIniziale))?Number(st.slIniziale):sl;
@@ -44440,6 +44668,61 @@ function disegna(animato){
    const voci=m.map(([k,a])=>{ const x=stat(a); return {l:k,v:x.pl,c:x.pl>=0?POS:NEG,etichetta:fmtE(x.pl),tip:plTipSala(k,a)}; });
    const c=carta(G,'w4','🏆 Profitto per sala','Le sale che ti fanno guadagnare (e perdere). Passa sopra una sala: resa in percentuale, guadagno medio per operazione, R/R e calo massimo.',n++,{col:['Sala','Trade','Win rate','Resa','Medio','R/R','Calo max','P/L'],righe:m.map(([k,a])=>{ const x=stat(a); const resa=a.reduce((s,r)=>s+(Number(r.t&&r.t.pct)||0),0); const rr=(x.rMed!=null&&isFinite(x.rMed))?((x.rMed>=0?'+':'')+x.rMed.toFixed(2)+'R'):((x.avgL<0)?(x.avgW/Math.abs(x.avgL)).toFixed(2):'—'); return [k,String(x.n),pct(x.wr),(resa>=0?'+':'')+resa.toFixed(2)+'%',fmtE(x.n?x.pl/x.n:0),rr,fmtE(x.dd),fmtE(x.pl)]; })});
    graficoOrizz(c,voci,{divergente:true}); }
+ // sale sulle notizie importanti
+ // RICHIESTO dal proprietario: "una statistica delle sale segnali piu' profittevoli nei momenti in
+ // cui arrivano le notizie, quelle in rosso... cosi' si calcola anche chi prende piu' operazioni
+ // con queste notizie e chi invece e' meno profittevole".
+ // Un'operazione conta come "sulla notizia" se e' stata APERTA entro mezz'ora dall'uscita di un
+ // dato a gravita' ROSSA che tocca una delle valute del suo asset (vedi fblNotiziaImportanteVicina).
+ // Il momento che conta e' l'apertura: e' li' che si decide, non alla chiusura.
+ // Il confronto con il "fuori notizia" della STESSA sala e' il numero che risponde davvero alla
+ // domanda: una sala puo' guadagnare di piu' sulle notizie solo perche' opera di piu', e il totale
+ // da solo non lo direbbe.
+ {
+  const evDi=new Map();
+  rs.forEach(r=>{
+   const quando=Number.isFinite(r.to)?r.to:r.tc;
+   let ev=null; try{ ev=fblNotiziaImportanteVicina(quando,r.asset,true); }catch(e){}
+   if(ev)evDi.set(r,ev);
+  });
+  const dentro=rs.filter(r=>evDi.has(r));
+  const fuoriPerSala=new Map([...raggruppa(rs.filter(r=>!evDi.has(r)),r=>r.sala)]);
+  const medioFuori=k=>{ const a=fuoriPerSala.get(k); if(!a||!a.length)return null; const x=stat(a); return x.n?x.pl/x.n:0; };
+  const m=[...raggruppa(dentro,r=>r.sala)].sort((a,b)=>stat(b[1]).pl-stat(a[1]).pl);
+  const tipNot=(k,a)=>{
+   const x=stat(a), med=x.n?x.pl/x.n:0, mf=medioFuori(k);
+   const out=[{v:fmtE(x.pl),l:k+' - sulle notizie rosse'},
+              {c:POS,l:x.n+' trade · win rate '+pct(x.wr)},
+              {l:'in media '+fmtE(med)+' a operazione'}];
+   if(mf!=null){
+    out.push({l:'fuori dalle notizie: '+fmtE(mf)+' a operazione'});
+    const d=med-mf;
+    out.push({c:d>=0?POS:NEG,l:(d>=0?'+':'')+fmtE(d)+' a operazione rispetto a quando non ci sono notizie'});
+   }else out.push({l:'nessuna operazione fuori dalle notizie: niente confronto'});
+   const ev=evDi.get(a[0]);
+   if(ev)out.push({l:'es. '+(ev.tit||'notizia')+(ev.cur?(' ('+ev.cur+')'):'')});
+   return out;
+  };
+  const voci=m.map(([k,a])=>{ const x=stat(a); return {l:k,v:x.pl,c:x.pl>=0?POS:NEG,etichetta:fmtE(x.pl),tip:tipNot(k,a)}; });
+  const righeTab=m.map(([k,a])=>{
+   const x=stat(a), med=x.n?x.pl/x.n:0, mf=medioFuori(k);
+   const d=(mf!=null)?(med-mf):null;
+   return [k,String(x.n),pct(x.wr),fmtE(med),(mf!=null?fmtE(mf):'—'),(d!=null?((d>=0?'+':'')+fmtE(d)):'—'),fmtE(x.pl)];
+  });
+  const descr='Le sale che rendono di piu\' (e di meno) quando escono i dati a gravita\' ROSSA. '
+   +'Conta un\'operazione APERTA entro '+NOTIZIA_FINESTRA_MIN+' minuti dall\'uscita di un dato che tocca una '
+   +'valuta del suo asset. La colonna "Medio fuori" e\' la stessa sala quando notizie non ce ne sono: '
+   +'e\' il confronto che dice davvero chi sa lavorarci. '
+   +'L\'archivio delle notizie parte da questa versione (piu\' la settimana che il calendario gia\' '
+   +'conosceva), quindi si riempie col tempo.';
+  const c=carta(G,'w6','📰 Sale sulle notizie importanti',descr,n++,
+   {col:['Sala','Trade su notizia','Win rate','Medio su notizia','Medio fuori','Differenza','P/L su notizia'],righe:righeTab});
+  // Senza sale da mostrare ci pensa graficoOrizz, che scrive gia' il suo "niente con questi
+  // filtri": aggiungerci un controllo a parte qui significava passargli la cosa sbagliata
+  // (carta() torna {c,corpo,w}, non un nodo) e far saltare TUTTA la dashboard, non solo questa
+  // carta. Il collaudo l'ha preso: otto test di schermate che non c'entravano niente.
+  graficoOrizz(c,voci,{divergente:true});
+ }
  // asset
  { const m=[...raggruppa(rs,r=>r.asset)].sort((a,b)=>stat(b[1]).pl-stat(a[1]).pl);
    const voci=m.slice(0,12).map(([k,a])=>{ const x=stat(a); return {l:k,v:x.pl,c:x.pl>=0?POS:NEG,etichetta:fmtE(x.pl),tip:plTip(k,a)}; });
