@@ -3913,6 +3913,10 @@ fblDelega('click',function(e){
  }
 },true);
 
+// `posSelezionata`: la posizione SCELTA DALL'UTENTE con un clic - l'unica che fa sparire le
+// caselle delle altre. Niente a che vedere con `active`, che l'app riassegna da sola: il perche'
+// della separazione e' spiegato per esteso sopra fblClickSuVuoto().
+let posSelezionata=null;
 let rows=[], baseRows=[], rowsAssetKey='', csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, zoneWidthDrag=null;
 // REPLAY IN LIVE (richiesto esplicitamente): in Live si può "tornare indietro nel tempo" e
 // riavanzare candela per candela come nel backtest, mentre i dati live continuano ad arrivare in
@@ -5802,6 +5806,7 @@ function flushDrawingsOnExit(){
    // transazione IndexedDB già aperta anche a pagina in chiusura — il salvataggio debounced a
    // 800ms durante la sessione normale resta comunque la vera rete di sicurezza.
    saveFootprintTicksNow();
+   saveFootprintArchivioNow();
    // Stesso identico discorso per il log dello storico order book (heatmap) — vedi
    // orderBookHistoryDirty/saveOrderBookHistoryNow() più sopra nel file.
    saveOrderBookHistoryNow();
@@ -6436,6 +6441,7 @@ async function saveLightStateNow(){
  // sincrono su localStorage (potenzialmente troppo grande) — vedi footprintTicksDirty più sotto
  // nel file, che evita di riscriverlo quando non c'è nulla di nuovo.
  saveFootprintTicksNow();
+ saveFootprintArchivioNow();
  // Log grezzo dello storico order book (heatmap): stesso identico schema, stesso giro debounced —
  // vedi orderBookHistoryDirty/saveOrderBookHistoryNow() più sopra nel file.
  saveOrderBookHistoryNow();
@@ -15688,11 +15694,16 @@ function draw(){
  // La posizione selezionata (active) è "accesa": se appartiene a QUESTO grafico, tutte le altre
  // passano in grigio (stile MT5). Se la selezione è di un altro asset (non disegnata qui) non si
  // spegne niente. Con nessuna selezione (active null) restano tutte nei loro colori.
- const activeOnChart=!!active&&positions.includes(active)&&drawableOnCurrentChart(active);
+ // Le caselle delle ALTRE posizioni spariscono solo quando una posizione e' stata scelta
+ // DALL'UTENTE (posSelezionata), non quando `active` e' cambiata da sola: vedi il commento lungo
+ // sopra posSelezionata. Una posizione scelta e poi chiusa (o di un altro asset) non deve
+ // continuare a nascondere le altre: si dimentica da sola qui.
+ if(posSelezionata&&!positions.includes(posSelezionata))posSelezionata=null;
+ const activeOnChart=!!posSelezionata&&positions.includes(posSelezionata)&&drawableOnCurrentChart(posSelezionata);
  if(positionsVisible)
  positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(pos=>{
    const isFocused=pos===active;
-   const dimmed=activeOnChart&&!isFocused;
+   const dimmed=activeOnChart&&pos!==posSelezionata;
    const sideColor=pos.side==='BUY'?'#2fbf71':'#e05252';
    // Calcolato una volta sola per candela di apertura, usato sia dalla freccia sia dalla
    // casella Target/Stop qui sotto (che deve restare disponibile anche quando l'entrata è
@@ -15779,7 +15790,12 @@ function draw(){
       // tutto (non più solo in grigio spento), per un grafico più ordinato e preciso. dimmed è vero
       // esattamente per le "altre" (activeOnChart && !isFocused): cliccando fuori sul vuoto
       // (active=null) dimmed torna falso per tutte e le caselle riappaiono come prima.
-      if(!dimmed)drawTpSlZoneBox(ctx,{
+      // RICHIESTO ESPLICITAMENTE (correzione della v142, che le faceva sparire del tutto): le
+      // altre posizioni NON spariscono piu'. Si disegnano "spente" - linee di stop e target in
+      // grigio, con le loro etichette, senza il riempimento colorato (vedi fillVisible dentro
+      // drawTpSlZoneBox) - cosi' si continua a sapere dove sono i livelli degli altri trade,
+      // mentre il colore resta solo a quello scelto. Cliccando sul vuoto torna tutto come prima.
+      drawTpSlZoneBox(ctx,{
        ownerKey:'pos:'+pos.id,originIdx:openIdx,entry:pos.entry,sl:liveSl,tp:liveTp,
        lots:pos.lots,assetKey:pos.asset,stopProfit:isStopProfitLive,
        dimmed,
@@ -16642,7 +16658,7 @@ function tradeLevelHit(clientX,clientY,activate){
    // semplice passaggio del mouse/dito usato altrove solo per decidere l'icona del cursore o
    // se bloccare lo scroll — altrimenti la sola posizione del mouse selezionerebbe/cambierebbe
    // "active" in continuazione, senza alcun click.
-   if(activate && active!==posHit.pos){ active=posHit.pos; syncTradeLevels(); refreshTradeLevelUI(); update(); }
+   if(activate && active!==posHit.pos){ active=posHit.pos; posSelezionata=posHit.pos; syncTradeLevels(); refreshTradeLevelUI(); update(); }
    return posHit.type;
  }
  if(!active && insideZoneBox(idx,'draft:market')){
@@ -18137,7 +18153,11 @@ function drawTpSlZoneBox(ctx,opts){
   // "nascondi le caselle TP/SL" (tpSlZoneFillVisible) disattivato — così chi imposta i livelli
   // vede davvero cosa sta facendo. Appena la posizione si apre o l'ordine viene piazzato la
   // bozza sparisce e le caselle reali ('pos:'...) tornano a seguire il toggle globale.
-  const fillVisible=(typeof ownerKey==='string'&&ownerKey.startsWith('draft:'))||(tpSlZoneFillVisible&&!tpSlZoneFillHiddenByOwner[ownerKey]);
+  // RICHIESTO ESPLICITAMENTE: quando un'altra posizione e' selezionata, di questa devono restare
+  // le LINEE di stop e target con le loro etichette - in grigio, cosi' si continua a vedere dove
+  // stanno i livelli - ma NON la casella colorata: il colore resta solo alla posizione scelta.
+  // Quindi `dimmed` spegne il riempimento, mai la linea (che infatti non e' mai dipesa da questo).
+  const fillVisible=!dimmed&&((typeof ownerKey==='string'&&ownerKey.startsWith('draft:'))||(tpSlZoneFillVisible&&!tpSlZoneFillHiddenByOwner[ownerKey]));
  const zoneOpacity=currentZoneOpacity();
  ctx.save();
  let yTp=null,ySl=null;
@@ -18848,8 +18868,78 @@ function syncTradeLevels(){
  tradeSLLine=active.sl!=null?{side:active.side,type:'SL',price:active.sl,index:idx}:null;
  tradeTPLine=active.tp!=null?{side:active.side,type:'TP',price:active.tp,index:idx}:null;
 }
+// RICHIESTO ESPLICITAMENTE: un clic (o un TOCCO) su un punto vuoto del grafico rimette visibili
+// tutte le posizioni. Era scritto dentro il gestore di pointerup, DOPO l'uscita anticipata che
+// quel gestore fa per il dito: col dito non ci si arrivava mai, e la deselezione funzionava solo
+// col mouse o con la penna (segnalato dal proprietario). Ora e' una funzione, chiamata da tutti e
+// due i rami - e' lo stesso difetto gia' corretto una volta per il cambio stile del footprint, su
+// quella stessa uscita anticipata.
+// SEGNALATO dal proprietario: "da un momento all'altro, in maniera tutta casuale, viene
+// visualizzata la singola operazione a grafico: e' come se venisse selezionata da sola, e si vedono
+// solo il suo prezzo di entrata, lo stop e il TP. Noi non abbiamo premuto niente".
+// LA CAUSA: `active` fa DUE mestieri diversi.
+//   1) e' la posizione su cui lavorano le caselle SL/TP della barra, e l'app la riassegna DA SOLA
+//      in continuazione - al cambio asset, quando una posizione si chiude, al ripristino di una
+//      sessione, quando si adotta una posizione dal conto MT5 (sono cinque punti nel file, tutti
+//      con la stessa riga: `active = l'ultima posizione di questo asset`);
+//   2) dalla v142 e' ANCHE la posizione "scelta", quella che fa sparire le caselle di tutte le
+//      altre.
+// Finche' il mestiere era solo il primo nessuno se ne accorgeva. Col secondo, ogni riassegnazione
+// automatica diventa una selezione che l'utente non ha fatto - ed e' esattamente il difetto
+// segnalato: sembra che si selezioni da sola, "a caso", perche' succede quando cambia qualcos'altro.
+// LA CORREZIONE: il secondo mestiere si stacca. `posSelezionata` la imposta SOLO un gesto
+// dell'utente (un clic sulla posizione a grafico, o il suo pulsante nella tabella: vedi
+// focusPosition) e la toglie SOLO un clic sul vuoto. `active` continua a fare il suo primo mestiere
+// come sempre, e nessuna riassegnazione automatica nasconde piu' niente.
+// (la variabile sta in cima al file, accanto ad `active`: la usa anche draw())
+function fblClickSuVuoto(e){
+ {
+  const moved=chartDownXY?Math.hypot(e.clientX-chartDownXY.x,e.clientY-chartDownXY.y):99;
+  if(moved<4){
+   const rectC=chartEl.getBoundingClientRect();
+   const relX0=e.clientX-rectC.left, relY0=e.clientY-rectC.top;
+   // SELEZIONE PRIORITARIA (richiesto esplicitamente): la freccia/riga di apertura di una
+   // posizione APERTA (openPosHitRects) vince sulla casella TP/SL, che in quei punti
+   // coinciderebbe e mangerebbe il click — prima cliccando la freccia non si selezionava mai
+   // (la casella della posizione copriva anche lì). La casella resta cliccabile altrove
+   // (apre le statistiche) e il click sul vuoto continua a deselezionare tutto.
+   const posHitR=openPosHitRects.find(r=>relX0>=r.x1&&relX0<=r.x2&&relY0>=r.y1&&relY0<=r.y2);
+   if(posHitR){
+    if(active!==posHitR.pos)focusPosition(posHitR.pos);
+   }else{
+    const hitDraw=hitTestDrawings(e.clientX,e.clientY,true);
+    const hitZone=zoneBoxHitRects.some(r=>relX0>=r.xOrigin&&relX0<=r.xRight&&relY0>=r.yMin&&relY0<=r.yMax);
+    const hitFp=footprintCellHitRects.some(r=>relX0>=r.xxLeft&&relX0<=r.xxRight&&relY0>=r.yTop&&relY0<=r.yBot);
+    if(!hitDraw&&!hitZone&&!hitFp){
+     const hitClosed=closedTradeHitSegments.some(s=>distToSegment(relX0,relY0,s.x1,s.y1,s.x2,s.y2)<=CLOSED_TRADE_HIT_TOL);
+     const hitNews=newsDotHitRects.some(n=>Math.hypot(relX0-n.x,relY0-n.y)<=n.r+2);
+     const hitVp=vpIndHitRects.some(h=>relX0>=h.x1&&relX0<=h.x2&&relY0>=h.y1&&relY0<=h.y2);
+     const hitLevel=tradeLevelHit(e.clientX,e.clientY,false)!==null;
+     const hitAxis=isOnPriceAxis(e.clientX);
+     if(!hitClosed&&!hitNews&&!hitVp&&!hitLevel&&!hitAxis){
+      if(active||posSelezionata||selectedDrawing||selectedClosedTradeIds.size){
+       active=null;posSelezionata=null;selectedDrawing=null;
+       try{ selectedClosedTradeIds.clear(); }catch(err){}
+       // RICHIESTO ESPLICITAMENTE: cliccando fuori (grafico vuoto) dopo aver selezionato una
+       // posizione e averne spostato/modificato TP e SL, le caselle SL/TP — che refreshTradeLevelUI()
+       // aveva riempito con i valori della posizione — NON devono restare lì a fare da bozza di un
+       // NUOVO ordine. Senza questa riga l'app le considerava "prossima posizione a mercato/ordine
+       // pendente" e continuava a disegnare l'anteprima con le caselle TP/SL di una posizione che
+       // non esiste (il bug segnalato); l'utente doveva svuotarle a mano.
+       clearDraftTradeLevelFields();
+       syncTradeLevels();refreshTradeLevelUI();updateTradeLevelArmUI();
+       draw();update();
+      }
+     }
+    }
+   }
+  }
+  chartDownXY=null;
+ }
+}
 function focusPosition(pos){
  active=pos;
+ posSelezionata=pos;   // e' un gesto dell'utente: QUESTA e' una selezione vera
  syncTradeLevels();
  refreshTradeLevelUI();
  draw();update();
@@ -23182,6 +23272,14 @@ chartEl.addEventListener('pointerup',e=>{
  // solo se il dito non si e' spostato, altrimenti era un trascinamento del grafico.
  if(e.pointerType==='touch'){
    touchPoints.delete(e.pointerId);
+   // SEGNALATO dal proprietario: "sul tablet e sul telefono, toccando il grafico in un punto
+   // vuoto col DITO non avviene la deselezione; me lo fa fare solo con la penna". Il motivo e'
+   // proprio questa uscita anticipata: col dito il gestore finiva qui e il blocco della
+   // deselezione, che sta piu' sotto, non veniva mai raggiunto. Con penna e mouse invece si
+   // arrivava in fondo. Ora si chiama prima di uscire, con lo stesso criterio (conta solo se il
+   // dito non si e' spostato: altrimenti era un trascinamento del grafico).
+   // Solo quando si stacca l'ULTIMO dito: a due dita si sta facendo zoom o pan, non un tocco.
+   if(touchPoints.size===0)fblClickSuVuoto(e);
    if(touchPoints.size<2){twoFingerPan=false;if(touchPoints.size===0)setChartTouchAction(false);}
    chartEl.releasePointerCapture?.(e.pointerId);
    return;
@@ -23266,49 +23364,7 @@ chartEl.addEventListener('pointerup',e=>{
  // Così i pulsanti SL/TP della barra agiscono SOLO sulla posizione scelta di proposito; senza
  // nessuna selezione definiscono i livelli della NUOVA posizione/ordine pendente — mai su una
  // posizione rimasta "attiva" per errore.
- {
-  const moved=chartDownXY?Math.hypot(e.clientX-chartDownXY.x,e.clientY-chartDownXY.y):99;
-  if(moved<4){
-   const rectC=chartEl.getBoundingClientRect();
-   const relX0=e.clientX-rectC.left, relY0=e.clientY-rectC.top;
-   // SELEZIONE PRIORITARIA (richiesto esplicitamente): la freccia/riga di apertura di una
-   // posizione APERTA (openPosHitRects) vince sulla casella TP/SL, che in quei punti
-   // coinciderebbe e mangerebbe il click — prima cliccando la freccia non si selezionava mai
-   // (la casella della posizione copriva anche lì). La casella resta cliccabile altrove
-   // (apre le statistiche) e il click sul vuoto continua a deselezionare tutto.
-   const posHitR=openPosHitRects.find(r=>relX0>=r.x1&&relX0<=r.x2&&relY0>=r.y1&&relY0<=r.y2);
-   if(posHitR){
-    if(active!==posHitR.pos)focusPosition(posHitR.pos);
-   }else{
-    const hitDraw=hitTestDrawings(e.clientX,e.clientY,true);
-    const hitZone=zoneBoxHitRects.some(r=>relX0>=r.xOrigin&&relX0<=r.xRight&&relY0>=r.yMin&&relY0<=r.yMax);
-    const hitFp=footprintCellHitRects.some(r=>relX0>=r.xxLeft&&relX0<=r.xxRight&&relY0>=r.yTop&&relY0<=r.yBot);
-    if(!hitDraw&&!hitZone&&!hitFp){
-     const hitClosed=closedTradeHitSegments.some(s=>distToSegment(relX0,relY0,s.x1,s.y1,s.x2,s.y2)<=CLOSED_TRADE_HIT_TOL);
-     const hitNews=newsDotHitRects.some(n=>Math.hypot(relX0-n.x,relY0-n.y)<=n.r+2);
-     const hitVp=vpIndHitRects.some(h=>relX0>=h.x1&&relX0<=h.x2&&relY0>=h.y1&&relY0<=h.y2);
-     const hitLevel=tradeLevelHit(e.clientX,e.clientY,false)!==null;
-     const hitAxis=isOnPriceAxis(e.clientX);
-     if(!hitClosed&&!hitNews&&!hitVp&&!hitLevel&&!hitAxis){
-      if(active||selectedDrawing||selectedClosedTradeIds.size){
-       active=null;selectedDrawing=null;
-       try{ selectedClosedTradeIds.clear(); }catch(err){}
-       // RICHIESTO ESPLICITAMENTE: cliccando fuori (grafico vuoto) dopo aver selezionato una
-       // posizione e averne spostato/modificato TP e SL, le caselle SL/TP — che refreshTradeLevelUI()
-       // aveva riempito con i valori della posizione — NON devono restare lì a fare da bozza di un
-       // NUOVO ordine. Senza questa riga l'app le considerava "prossima posizione a mercato/ordine
-       // pendente" e continuava a disegnare l'anteprima con le caselle TP/SL di una posizione che
-       // non esiste (il bug segnalato); l'utente doveva svuotarle a mano.
-       clearDraftTradeLevelFields();
-       syncTradeLevels();refreshTradeLevelUI();updateTradeLevelArmUI();
-       draw();update();
-      }
-     }
-    }
-   }
-  }
-  chartDownXY=null;
- }
+ fblClickSuVuoto(e);
  panDrag=false;
  chartEl.releasePointerCapture?.(e.pointerId);
 });
@@ -30642,6 +30698,29 @@ function startNewsPolling(){
 function stopNewsPolling(){
  if(newsPollTimer){clearInterval(newsPollTimer);newsPollTimer=null;}
 }
+// SEGNALATO dal proprietario (14 ottobre 2026): "sugli altri dispositivi, telefono e tablet, le
+// bandiere delle notizie in fondo alla linea temporale non vengono visualizzate".
+// LA CAUSA: le bandiere si disegnano solo se `newsEvents` ha qualcosa dentro, e `newsEvents` si
+// riempie solo se gira il POLLING. Il polling pero' partiva da DUE strade sole, e nessuna delle due
+// esiste su un telefono:
+//   1) il passaggio Storico -> Live fatto a mano (switchAccountMode);
+//   2) la riconnessione automatica a Capital.com dopo un ricaricamento di pagina - che sul telefono
+//      non puo' avvenire, perche' legge le credenziali da una CARTELLA del computer (File System
+//      Access API, che su telefono e tablet non esiste).
+// Risultato: in Live da telefono `newsEvents` restava vuoto per sempre, e senza eventi non si
+// disegna nessuna bandiera. Sul PC lo stesso difetto era gia' stato corretto una volta, ma a mano,
+// aggiungendo la chiamata in quel preciso ramo della riconnessione: una cura che vale solo per la
+// strada che si conosce.
+// LA CURA VERA: non dipendere piu' da chi chiama cosa. Qui il polling si ALLINEA allo stato - in
+// Live acceso, fuori spento - ed e' idempotente, quindi la si puo' chiamare quante volte si vuole.
+// La chiama updateLiveModeUI(), cioe' l'unico punto che TUTTE le strade attraversano, compreso il
+// ripristino della sessione all'avvio (che e' la strada del telefono).
+function newsPollingSincronizza(){
+ try{
+  if(typeof liveModeActive!=='undefined'&&liveModeActive){ if(!newsPollTimer)startNewsPolling(); }
+  else stopNewsPolling();
+ }catch(e){ /* allo start puo' arrivare prima delle variabili: al giro dopo si allinea */ }
+}
 const NEWS_IMPACT_COLOR={Low:'#8a97a8',Medium:'#f0a83c',High:'#e0524f'};
 function newsImpactColor(impact){ return NEWS_IMPACT_COLOR[impact]||NEWS_IMPACT_COLOR.Low; }
 // Bandiera emoji per il campo "country" del feed (è un codice valuta, es. "USD" — vedi il
@@ -33209,6 +33288,112 @@ function footprintSenzaTickMt5FuoriFase(log,assetKey){
 // debounced a 800ms di saveLightStateNow(), mai da quello sincrono su localStorage) lo scrive su
 // IndexedDB solo se il flag è acceso, poi lo spegne — così un mercato silenzioso non genera
 // scritture inutili, ma nessun tick osservato va mai perso a un refresh/chiusura pagina.
+// ============ ARCHIVIO DEL FOOTPRINT: le candele passate non si perdono piu' ============
+// RICHIESTO ESPLICITAMENTE: "nel footprint le candele passate, anche di giorni, devono restare
+// salvate... se passiamo a un timeframe da 4 ore o un giorno vediamo solo le ultime due candele.
+// Bisogna conservare tutti i dati che arrivano dal footprint. Assolutamente."
+// PERCHE' SUCCEDEVA: il footprint si ricostruiva SEMPRE dal log dei tick grezzi, che ha un tetto di
+// FOOTPRINT_MAX_TICKS_PER_ASSET tick e scarta i piu' vecchi (FIFO). Su uno strumento movimentato
+// quel tetto copre poche ore: passando a 4h o a 1D restavano solo le ultime candele, perche' i tick
+// delle precedenti erano gia' stati buttati per fare spazio ai nuovi.
+// COSA SI CONSERVA: non i tick (sarebbero troppi), ma le CELLE GIA' AGGREGATE AL MINUTO - cioe'
+// esattamente le caselline che si rivedono a schermo. Un minuto occupa poche centinaia di byte, e
+// da li' si costruisce QUALUNQUE timeframe sommando i minuti che ci stanno dentro: un'ora sono 60
+// minuti, una candela giornaliera 1440. Le righe si ri-aggregano sul passo del momento, cosa che il
+// disegno sa gia' fare (vedi footprintDentroLaCandela).
+// DOVE: IndexedDB, una chiave per ASSET e per GIORNO. Cosi' il salvataggio tocca solo il giorno in
+// corso, invece di riscrivere mesi di storia a ogni manciata di tick.
+// QUANTO: FOOTPRINT_ARCHIVIO_GIORNI giorni. Oltre, i giorni vecchi si lasciano andare: tenere tutto
+// per sempre vorrebbe dire riempire il disco di chi usa l'app tutti i giorni, e nessuno guarda il
+// footprint di tre mesi fa riga per riga.
+const FOOTPRINT_ARCHIVIO_GIORNI=60;
+const FOOTPRINT_ARCHIVIO_MINUTO=60000;
+let footprintArchivio={};                       // asset -> { minuto(ms) -> {step, rows} }
+let footprintArchivioSporchi=new Set();         // "asset|giorno" da riscrivere
+let footprintArchivioCaricati=new Set();        // "asset|giorno" gia' letti da IndexedDB
+function footprintArchivioGiorno(t){
+ // Giorno in UTC: una chiave che non cambia se cambia il fuso del dispositivo.
+ try{ return new Date(Number(t)).toISOString().slice(0,10); }catch(e){ return '?'; }
+}
+function footprintArchivioChiave(assetKey,giorno){ return 'fpArc:'+assetKey+':'+giorno; }
+// Aggiunge UN tick al minuto a cui appartiene. Stessa forma di cella del resto del footprint, cosi'
+// le due strade (archivio e tick in memoria) si sommano senza conversioni.
+function footprintArchivioAggiungi(assetKey,price,timestamp,side,weight,step,aggr,vol){
+ if(!assetKey||!(step>0)||!Number.isFinite(price)||!Number.isFinite(timestamp))return;
+ const minuto=Math.floor(timestamp/FOOTPRINT_ARCHIVIO_MINUTO)*FOOTPRINT_ARCHIVIO_MINUTO;
+ const perAsset=footprintArchivio[assetKey]||(footprintArchivio[assetKey]={});
+ let b=perAsset[minuto];
+ if(!b||b.step!==step)b=perAsset[minuto]={step,rows:{}};
+ const lv=Math.round(price/step)*step;
+ const cell=b.rows[lv]||(b.rows[lv]=footprintNewCell());
+ footprintAddToCell(cell,side,weight,(aggr===undefined?side:aggr),vol);
+ footprintArchivioSporchi.add(assetKey+'|'+footprintArchivioGiorno(minuto));
+}
+// Versa nei bucket del timeframe CORRENTE tutti i minuti archiviati precedenti a `finoA`
+// (tipicamente il primo tick ancora in memoria: da li' in poi comanda il log, che e' piu' preciso).
+// Torna quanti minuti ha versato.
+function footprintArchivioVersaNeiBucket(assetKey,step,finoA){
+ const arc=footprintArchivio[assetKey];
+ if(!arc||!(step>0))return 0;
+ let quanti=0;
+ for(const m in arc){
+  const t=Number(m);
+  if(!Number.isFinite(t)||!(t<finoA))continue;
+  const b=arc[m];
+  if(!b||!b.rows)continue;
+  const inizio=footprintBucketStart(t);
+  let dst=footprintByBucket[inizio];
+  if(!dst||dst.step!==step)dst=footprintByBucket[inizio]={step,rows:{}};
+  for(const q in b.rows){
+   const src=b.rows[q];
+   const lv=Math.round(Number(q)/step)*step;     // ri-aggregato sul passo di adesso
+   const cell=dst.rows[lv]||(dst.rows[lv]=footprintNewCell());
+   cell.buy+=Number(src.buy)||0;
+   cell.sell+=Number(src.sell)||0;
+   if(cell.askVol===undefined){ cell.askVol=0; cell.bidVol=0; cell.trades=0; }
+   cell.askVol+=Number(src.askVol)||0;
+   cell.bidVol+=Number(src.bidVol)||0;
+   cell.trades+=Number(src.trades)||0;
+  }
+  quanti++;
+ }
+ return quanti;
+}
+// Legge da IndexedDB i giorni che mancano per questo asset. Torna true se ha portato qualcosa di
+// nuovo (e allora chi ha chiamato rifa' i bucket e ridisegna).
+async function footprintArchivioAssicura(assetKey){
+ if(!assetKey)return false;
+ let nuovi=false;
+ const oggi=Date.now();
+ for(let g=0;g<FOOTPRINT_ARCHIVIO_GIORNI;g++){
+  const giorno=footprintArchivioGiorno(oggi-g*86400000);
+  const segno=assetKey+'|'+giorno;
+  if(footprintArchivioCaricati.has(segno))continue;
+  footprintArchivioCaricati.add(segno);
+  let dati=null;
+  try{ dati=await idbGet(footprintArchivioChiave(assetKey,giorno)); }catch(e){ dati=null; }
+  if(!dati||typeof dati!=='object')continue;
+  const perAsset=footprintArchivio[assetKey]||(footprintArchivio[assetKey]={});
+  for(const m in dati){ if(!perAsset[m]){ perAsset[m]=dati[m]; nuovi=true; } }
+ }
+ return nuovi;
+}
+// Scrive i giorni toccati. Solo quelli: la storia vecchia non si riscrive mai.
+async function saveFootprintArchivioNow(){
+ if(!footprintArchivioSporchi.size)return;
+ const daFare=[...footprintArchivioSporchi];
+ footprintArchivioSporchi.clear();
+ for(const segno of daFare){
+  const i=segno.lastIndexOf('|');
+  const assetKey=segno.slice(0,i), giorno=segno.slice(i+1);
+  const arc=footprintArchivio[assetKey];
+  if(!arc)continue;
+  const delGiorno={};
+  for(const m in arc){ if(footprintArchivioGiorno(Number(m))===giorno)delGiorno[m]=arc[m]; }
+  try{ await idbPut(footprintArchivioChiave(assetKey,giorno),delGiorno); }
+  catch(e){ footprintArchivioSporchi.add(segno); }   // riprova al prossimo giro
+ }
+}
 let footprintTicksDirty=false;
 async function saveFootprintTicksNow(){
  if(!footprintTicksDirty)return;
@@ -33693,23 +33878,48 @@ function drawFootprintVpocLine(ctx,w,h,pad,dataArr,yFn,lo,hi){
  ctx.textBaseline='alphabetic'; ctx.textAlign='left';
  ctx.restore();
 }
+// Il passo "tondo" piu' vicino a quello voluto: 1, 2 o 5 volte una potenza di dieci, contate in
+// PIP quando il pip si conosce. Serve a non tagliare a meta' i prezzi veri: i livelli di un book
+// stanno su multipli del tick, e un bin storto li spalmerebbe su due righe.
+function cobSvpPassoTondo(voluto,pip){
+ const unita=(pip>0)?pip:1;
+ if(!(voluto>0))return unita;
+ const n=voluto/unita;
+ const exp=Math.pow(10,Math.floor(Math.log10(Math.max(1e-9,n))));
+ const m=n/exp;
+ // Le soglie sono i punti di mezzo GEOMETRICI della scaletta 1-2-5-10 (1,41 / 3,16 / 7,07),
+ // non quelli aritmetici: su una scala di questo tipo e' la distanza in rapporto che conta, ed
+ // e' quella che decide se un passo 'sembra' piu' vicino a 5 o a 10.
+ const scelto=(m<=1.4142)?1:(m<=3.1623)?2:(m<=7.0711)?5:10;
+ return scelto*exp*unita;
+}
+// Quanto deve essere alta una riga delle colonne COB/SVP, in pixel. Sottile: sono una scaletta di
+// liquidita', non una tabella di numeri - si leggono a colpo d'occhio dalla forma, come su Bookmap.
+const COB_SVP_RIGA_PX=6;
 function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
  const chartBg=theme.bg, gridColorStrong=theme.grid, lineSecondary=theme.text;
  if(!cobSvpActiveNow())return;
  const colW=cobSvpColWidth(w), extra=colW*2;
  const cobX=w-pad.r, svpX=cobX+colW; // subito a sinistra della scala prezzi, non ai bordi
  const ch=h-pad.t-pad.b;
- // Passo delle righe: quello del footprint (pip × "Altezza riga" footprint), raddoppiato finché
- // ogni riga non è alta almeno 4px — con lo zoom indietro le righe si accorpano invece di
- // diventare un'unica macchia illeggibile.
+ // SEGNALATO dal proprietario con tre foto (EUR/USD, XAU/USD, BTC/USDT): "su XAU le linee sono
+ // fitte, quindi giuste; su EUR/USD sono larghissime; sulle cripto sono staccate una dall'altra".
+ // LA CAUSA: il passo delle righe era quello del FOOTPRINT (pip x "altezza riga"), che e' tarato
+ // sull'altezza di una CANDELA - una cosa che non c'entra niente con una scaletta di liquidita' - e
+ // che cambia da asset a asset in modo tutto suo. Su EUR/USD usciva una riga da una decina di
+ // pixel (le "candele larghissime"), su XAU un paio (fitte, giuste), e sulle cripto il passo era
+ // cosi' fine rispetto all'intervallo di prezzo che i livelli del book finivano in bin sparsi, con
+ // i buchi in mezzo.
+ // LA CURA: il passo si decide in PIXEL. Si prende quello che da' righe alte circa
+ // COB_SVP_RIGA_PX, arrotondato a un passo tondo dell'asset: cosi' le due colonne hanno lo stesso
+ // aspetto su qualunque strumento, e le righe risultano attaccate perche' il bin e' abbastanza
+ // largo da raccogliere livelli consecutivi invece di lasciarne vuoti in mezzo.
  const pip=pipSizeForAsset(currentAssetKey);
- let base=footprintStepForAsset(currentAssetKey);
- if(!(base>0))base=(pip>0?pip:range/200);
- const pxPer=base/range*ch;
- const mult=pxPer>=4?1:Math.ceil(4/Math.max(1e-9,pxPer));
- const step=base*mult;
+ const step=cobSvpPassoTondo(range/Math.max(1,ch)*COB_SVP_RIGA_PX,pip);
  const binOf=p=>Math.round(p/step);
- const rowGeom=k=>{ const yTop=y((k+0.5)*step), yBot=y((k-0.5)*step); return {yTop,yBot,h:Math.max(1,yBot-yTop)}; };
+ // Bordi ARROTONDATI al pixel: due righe vicine condividono cosi' lo stesso bordo esatto, senza
+ // la riga chiara di mezzo pixel che le faceva sembrare staccate.
+ const rowGeom=k=>{ const yTop=Math.round(y((k+0.5)*step)), yBot=Math.round(y((k-0.5)*step)); return {yTop,yBot,h:Math.max(1,yBot-yTop)}; };
  const kLo=binOf(lo)-1, kHi=binOf(hi)+1;
  const BID='#2fbf71', ASK='#e05252';
  ctx.save();
@@ -33733,7 +33943,8 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
    const isAsk=o.ask>=o.bid, v=isAsk?o.ask:o.bid;
    const len=cobMax>0?Math.max(1.5,v/cobMax*barMax):0;
    ctx.fillStyle=hexToRgba(isAsk?ASK:BID,0.85);
-   ctx.fillRect(cobX+2,g.yTop+0.5,len,Math.max(1,g.h-1));
+   // Altezza PIENA della riga (prima -1 px): e' quel pixel a far sembrare le righe staccate.
+   ctx.fillRect(cobX+2,g.yTop,len,g.h);
    if(showNums(k)){ ctx.fillStyle='#e8edf3'; ctx.fillText(fmtCompactVol(v),cobX+colW-3,(g.yTop+g.yBot)/2); }
  });
  // --- SVP: volume scambiato nella sessione (giorno) per livello ---
@@ -33749,8 +33960,8 @@ function drawCobSvpColumns(ctx,w,h,pad,y,lo,hi,range,theme){
    const g=rowGeom(k);
    const len=svpMax>0?Math.max(1.5,tot/svpMax*barMax):0;
    const sellLen=len*(o.sell/tot);
-   ctx.fillStyle=hexToRgba(ASK,0.85); ctx.fillRect(svpX+2,g.yTop+0.5,sellLen,Math.max(1,g.h-1));
-   ctx.fillStyle=hexToRgba(BID,0.85); ctx.fillRect(svpX+2+sellLen,g.yTop+0.5,len-sellLen,Math.max(1,g.h-1));
+   ctx.fillStyle=hexToRgba(ASK,0.85); ctx.fillRect(svpX+2,g.yTop,sellLen,g.h);
+   ctx.fillStyle=hexToRgba(BID,0.85); ctx.fillRect(svpX+2+sellLen,g.yTop,len-sellLen,g.h);
    if(showNums(k)){ ctx.fillStyle='#e8edf3'; ctx.fillText(fmtCompactVol(tot),svpX+colW-3,(g.yTop+g.yBot)/2); }
  });
  ctx.shadowBlur=0; ctx.shadowColor='transparent';
@@ -34836,17 +35047,31 @@ function footprintBucketStart(timestamp){
 // cambio timeframe, cambio dei comandi. Un solo punto invece di ricordarsene a ogni chiamante.
 function footprintRebuildBucketsForCurrentAsset(){
  try{ __footprintRebuildBuckets(); }finally{ try{ footprintUpdateRowPipsUI(); }catch(e){} }
+ // I giorni passati stanno su IndexedDB, che si legge in modo asincrono: al primo colpo si vede
+ // quello che c'e' gia' in memoria, un attimo dopo anche la storia. Senza questo, su un timeframe
+ // grande si vedrebbero solo le ultime candele - il difetto segnalato.
+ try{
+  const _a=currentAssetKey;
+  footprintArchivioAssicura(_a).then(nuovi=>{
+   if(nuovi&&_a===currentAssetKey){ try{ __footprintRebuildBuckets(); draw(); }catch(e){} }
+  }).catch(()=>{});
+ }catch(e){}
 }
 function __footprintRebuildBuckets(){
  footprintByBucket={};
  if(!liveModeActive&&fblRegStoricoPer(currentAssetKey)){ fblRegFootprintRicostruisci(); return; }
  const log=footprintTickLogByAsset[currentAssetKey];
+ const step=footprintStepForAsset(currentAssetKey);
+ // L'ARCHIVIO per primo, ma SOLO fino al primo tick ancora in memoria: da li' in poi comanda il
+ // log, che e' il dato piu' fine. Cosi' i minuti coperti da tutti e due non si contano due volte.
+ const primoTick=(log&&log.length&&Number.isFinite(Number(log[0].t)))?Number(log[0].t):Infinity;
+ const daArchivio=(step>0)?footprintArchivioVersaNeiBucket(currentAssetKey,step,primoTick):0;
  if(log&&log.length){
-   const step=footprintStepForAsset(currentAssetKey);
    if(!(step>0))return;
    for(let i=0;i<log.length;i++)footprintApplyTickToBuckets(log[i].price,log[i].t,log[i].side,log[i].weight,step,log[i].aggr,log[i].vol);
    return;
  }
+ if(daArchivio)return;   // niente tick in memoria, ma la storia c'e': basta quella
  // Nessun log tick locale per questo asset (dispositivo/browser nuovo, IndexedDB vuoto): se il
  // backup cloud aveva celle già aggregate per questo asset, le usiamo come fallback di sola
  // lettura — meglio delle candele vuote, anche se copre solo le ultime
@@ -35004,6 +35229,14 @@ function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  // torna sopra, vedi footprintRebuildBucketsForCurrentAsset() richiamata al cambio asset).
  // Solo in Live: in Storico il grafico mostra il passato e i tick registrati in sottofondo non
  // vanno mescolati alle sue candele (restano nel log, per quando si torna in Live).
+ // L'ARCHIVIO (vedi footprintArchivioAggiungi): ogni tick, di QUALUNQUE asset seguito e in
+ // qualunque modalita', finisce anche nel minuto a cui appartiene. E' questo che fa sopravvivere
+ // il footprint delle candele passate al tetto del log dei tick, e che riempie le candele da 4 ore
+ // o da un giorno invece di lasciarne solo le ultime due.
+ try{
+   const stepArc=footprintStepForAsset(assetKey);
+   if(stepArc>0)footprintArchivioAggiungi(assetKey,price,timestamp,side,w,stepArc,undefined,w);
+ }catch(e){}
  if(assetKey===currentAssetKey&&liveModeActive){
    const step=footprintStepForAsset(assetKey);
    if(step>0)footprintApplyTickToBuckets(price,timestamp,side,w,step);
@@ -37035,9 +37268,13 @@ let binanceStoricoInVolo=null, binanceStoricoInVoloAsset=null;
 // con l'orologio avanti di qualche secondo non deve aprire candele in anticipo.
 function binanceAdesso(){ return Date.now()+binanceScartoMs; }
 
-async function binanceKlines(simbolo,intervallo,quante,fineMs){
+// `onAvanzamento(fatte,volute)`: chiamata dopo ogni blocco scaricato. Serve al cerchietto di
+// avanzamento della cronologia delle sale (richiesto: "una percentuale, almeno si rende conto di
+// quanto deve aspettare"). Parametro in coda e facoltativo: chi non lo passa non cambia di niente.
+async function binanceKlines(simbolo,intervallo,quante,fineMs,onAvanzamento){
  const tutte=[];
  let fine=fineMs||null;
+ try{ if(onAvanzamento)onAvanzamento(0,quante); }catch(e){}
  while(tutte.length<quante){
   const lim=Math.min(1500,quante-tutte.length);
   let blocco=null;
@@ -37051,6 +37288,7 @@ async function binanceKlines(simbolo,intervallo,quante,fineMs){
   }
   if(!Array.isArray(blocco)||!blocco.length)break;
   tutte.unshift(...blocco);
+  try{ if(onAvanzamento)onAvanzamento(tutte.length,quante); }catch(e){}
   if(blocco.length<lim)break;
   fine=Number(blocco[0][0])-1;
  }
@@ -39430,6 +39668,7 @@ async function liveSessionFreezeMt5(ph){
  // 1) "Fotografia" del grafico: stato, footprint e book salvati subito.
  try{ saveLightStateNow(); }catch(e){}
  try{ saveFootprintTicksNow(); }catch(e){}
+ try{ saveFootprintArchivioNow(); }catch(e){}
  try{ saveOrderBookHistoryNow(); }catch(e){}
  liveOffSessionSaveRows();
  // 2) MT5 smette di aggiornare (il collegamento al conto resta: posizioni e ordini non si toccano).
@@ -40544,6 +40783,9 @@ $('chart')?.addEventListener('pointerup',e=>{
 });
 function updateLiveModeUI(){
  try{ fblContoDisegna(); }catch(e){}
+ // Le notizie si scaricano quando si e' in Live, da qualunque strada ci si sia arrivati: vedi
+ // newsPollingSincronizza(). E' qui perche' questo e' l'unico punto che tutte le strade passano.
+ try{ newsPollingSincronizza(); }catch(e){}
  // RICHIESTO ESPLICITAMENTE: in Live, se il conto MT5 è collegato accanto al pallino rosso compare
  // anche il monitor (🔴 Live 🖥️); in Live con solo Capital.com resta il solo pallino rosso.
  let _mt5On=false; try{ _mt5On=!!mt5Connected; }catch(e){}
@@ -42129,6 +42371,8 @@ window.fblCronoVista=function(nuova){ if(nuova&&typeof nuova==='object'){ Object
 window.fblCronoTogliDalGrafico=togliDalGrafico;
 window.fblCronoChiaveVista=function(){ return LS_VISTA; };
 window.fblCronoSalvaStrategia=salvaStrategiaNellaSala;
+window.fblCronoAvanzamentoCrea=avanzamentoCrea;      // provabili dal laboratorio
+window.fblCronoAvanzamentoAggiorna=avanzamentoAggiorna;
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct=v=>v==null||!isFinite(v)?'—':v.toFixed(1)+'%';
 function sale(){
@@ -42222,24 +42466,40 @@ async function disegnaAsset(){
  t.appendChild(tb); const sc=document.createElement('div'); sc.className='tableScroll'; sc.style.maxHeight='240px'; sc.appendChild(t); box.appendChild(sc);
 }
 // ---------- candele per la valutazione: le piu' fini che coprono il periodo
-async function candele(sym,daMs){
+// `avanti(frazione,che)`: dice a che punto e' lo scaricamento (0..1) e cosa sta scaricando. E' il
+// cerchietto accanto al pulsante (richiesto esplicitamente): su una sala con anni di storia questo
+// scarico dura, e senza una percentuale non si capisce se sta lavorando o se e' piantato.
+async function candele(sym,daMs,avanti){
+ const dire=(f,che)=>{ try{ if(avanti)avanti(Math.max(0,Math.min(1,f)),che); }catch(e){} };
  const conv=a=>a.map(r=>({t:typeof r.time==='number'?r.time*1000:parseDateTime(r.date),o:+r.open,h:+r.high,l:+r.low,c:+r.close})).filter(r=>isFinite(r.t)&&isFinite(r.h)&&isFinite(r.l)).sort((x,y)=>x.t-y.t);
  const serie=[];
  let bn=null; try{ bn=binanceSymbolForAsset(sym); }catch(e){}
  if(bn){
   const quante=Math.min(200000,Math.ceil((Date.now()-daMs)/300000)+100);
-  serie.push(conv(await binanceKlines(bn,'5m',quante)));
-  if(serie[0].length&&serie[0][0].t>daMs)serie.push(conv(await binanceKlines(bn,'1h',Math.min(100000,Math.ceil((Date.now()-daMs)/3600000)+50))));
+  // Due passate al massimo: la prima (5m) vale la meta' del cerchio, la seconda (1h) l'altra meta'.
+  serie.push(conv(await binanceKlines(bn,'5m',quante,null,(f,t)=>dire(f/Math.max(1,t)*0.5,'candele da 5 minuti'))));
+  dire(0.5,'candele da 5 minuti');
+  if(serie[0].length&&serie[0][0].t>daMs){
+   const q2=Math.min(100000,Math.ceil((Date.now()-daMs)/3600000)+50);
+   serie.push(conv(await binanceKlines(bn,'1h',q2,null,(f,t)=>dire(0.5+f/Math.max(1,t)*0.5,'candele da un\'ora'))));
+  }
+  dire(1,'candele pronte');
   return {serie,fonte:'Binance Futures'};
  }
  if(typeof mt5Connected!=='undefined'&&mt5Connected){
   const res=await resolveMt5SymbolForAsset(sym);
   if(res){
-   for(const [tf,count] of [['M5',200000],['H1',200000]]){
+   // Qui lo scarico e' una richiesta sola per timeframe: l'avanzamento e' per passi, non per
+   // blocchi - e si dice cosi' com'e', invece di far finta di sapere a che punto e'.
+   const passi=[['M5',200000],['H1',200000]];
+   for(let i=0;i<passi.length;i++){
+    const [tf,count]=passi[i];
+    dire(i/passi.length,'candele '+tf+' da MT5');
     try{ const r=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(res)+'&timeframe='+tf+'&count='+count)); const j=await r.json(); if(r.ok)serie.push(conv(j.candles||[])); }catch(e){}
+    dire((i+1)/passi.length,'candele '+tf+' da MT5');
     if(serie.length&&serie[serie.length-1].length&&serie[serie.length-1][0].t<=daMs)break;
    }
-   if(serie.length)return {serie,fonte:'MT5 ('+res+')'};
+   if(serie.length){ dire(1,'candele pronte'); return {serie,fonte:'MT5 ('+res+')'}; }
   }
  }
  if(sym===currentAssetKey&&Array.isArray(rows)&&rows.length){ serie.push(conv(rows)); return {serie,fonte:'candele a grafico'}; }
@@ -42299,11 +42559,39 @@ function riepilogo(ris){
 }
 function leggiEsiti(){ try{ return JSON.parse(localStorage.getItem(LS_ESITI)||'{}')||{}; }catch(e){ return {}; } }
 window.fblCronoEsiti=leggiEsiti;
+// RICHIESTO ESPLICITAMENTE: accanto al pulsante, mentre scarica, un cerchietto che si riempie con
+// la percentuale - "almeno cosi' si rende conto di quanto tempo deve aspettare". Si crea accanto al
+// pulsante premuto e sparisce da solo quando ha finito: nessun ingombro fisso nella pagina.
+function avanzamentoCrea(btn){
+ if(!btn||!btn.parentNode)return null;
+ const box=document.createElement('span');
+ box.className='fblAvanz';
+ box.style.cssText='display:inline-flex;align-items:center;gap:5px;margin-left:7px;vertical-align:middle';
+ box.innerHTML='<svg width="22" height="22" viewBox="0 0 22 22" style="flex:none">'
+  +'<circle cx="11" cy="11" r="9" fill="none" stroke="#2b3541" stroke-width="2.5"></circle>'
+  +'<circle class="arco" cx="11" cy="11" r="9" fill="none" stroke="#3ea6ff" stroke-width="2.5"'
+  +' stroke-linecap="round" transform="rotate(-90 11 11)" stroke-dasharray="56.5" stroke-dashoffset="56.5"></circle>'
+  +'</svg><span class="num" style="font-size:11px;font-weight:700;color:#cdd6e0;min-width:30px">0%</span>'
+  +'<span class="che" style="font-size:10.5px;color:#8b96a5"></span>';
+ btn.parentNode.appendChild(box);
+ return box;
+}
+function avanzamentoAggiorna(box,frazione,che){
+ if(!box)return;
+ const pct=Math.max(0,Math.min(100,Math.round((Number(frazione)||0)*100)));
+ const C=2*Math.PI*9;
+ const arco=box.querySelector('.arco');
+ if(arco)arco.setAttribute('stroke-dashoffset',(C*(1-pct/100)).toFixed(1));
+ const n=box.querySelector('.num'); if(n)n.textContent=pct+'%';
+ const c=box.querySelector('.che'); if(c)c.textContent=che||'';
+}
 async function analizza(sala,sym,segs,btn){
  if(btn){ btn.disabled=true; btn.textContent='⏳ scarico le candele…'; }
+ const avanz=avanzamentoCrea(btn);
  try{
   const daMs=Math.min(...segs.map(s=>Number(s.ts)))-GIORNO;
-  const {serie,fonte}=await candele(sym,daMs);
+  const {serie,fonte}=await candele(sym,daMs,(f,che)=>avanzamentoAggiorna(avanz,f,che));
+  if(avanz)avanzamentoAggiorna(avanz,1,'valuto i segnali…');
   // Le candele si tengono: senza, provare una strategia diversa vorrebbe dire riscaricarle ogni
   // volta, e provarne dieci diventerebbe impraticabile proprio quando serve.
   C.serie[sala+'|'+sym]=serie;
@@ -42320,7 +42608,7 @@ async function analizza(sala,sym,segs,btn){
   try{ rendCalcola(); }catch(e){ console.log('[Cronologia] rendimento non calcolato:',e); }
   try{ draw(); }catch(e){}
  }catch(e){ stato('Analisi non riuscita: '+e.message,true); }
- finally{ if(btn){ btn.disabled=false; btn.textContent='📊 Analizza e mostra a grafico'; } disegnaAsset(); }
+ finally{ if(avanz)avanz.remove(); if(btn){ btn.disabled=false; btn.textContent='📊 Analizza e mostra a grafico'; } disegnaAsset(); }
 }
 function risultatiDi(sala,sym){
  const k=sala+'|'+sym; if(C.risultati[k])return C.risultati[k];

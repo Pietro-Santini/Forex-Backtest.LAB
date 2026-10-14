@@ -168,6 +168,63 @@ def _try_reenable_autotrading():
     return None  # inviato senza eccezioni: il chiamante rilegge subito trade_allowed per conferma
 
 
+def _finestra_mt5():
+    """La finestra del terminale MT5, o None. Stessa ricerca usata per il trading algoritmico:
+    si guarda sia il TITOLO sia il NOME-CLASSE, perche' Windows a volte nasconde il titolo di una
+    finestra che gira con privilegi diversi dai nostri, mentre il nome-classe resta leggibile."""
+    try:
+        from pywinauto import Desktop
+        for w in Desktop(backend="win32").windows():
+            try:
+                titolo = w.window_text()
+            except Exception:
+                titolo = ""
+            try:
+                classe = w.class_name()
+            except Exception:
+                classe = ""
+            testo = f"{titolo} {classe}".lower()
+            if "metatrader" in testo or "metaquotes" in testo:
+                return w
+    except Exception:
+        return None
+    return None
+
+
+def riduci_terminale_a_icona():
+    """RICHIESTO dal proprietario: "quando ci si collega all'account MT5, e anche quando si passa da
+    un account all'altro, non deve aprirsi ogni volta il terminale a tutto schermo: forziamolo
+    ridotto a icona, cosi' resta nascosto e lavora in background".
+
+    Il terminale DEVE restare aperto - e' lui che esegue gli ordini, il pacchetto Python ci parla
+    soltanto - ma non deve prendersi lo schermo. Qui lo si manda giu' nella barra delle
+    applicazioni, nient'altro.
+
+    Ritorna None se e' andata, altrimenti una stringa che dice dove si e' fermata: come per il
+    trading algoritmico, un tentativo che non riesce NON deve far fallire il collegamento - al
+    massimo la finestra resta aperta, che e' esattamente com'era prima.
+    """
+    try:
+        import pywinauto  # noqa: F401
+    except Exception as e:
+        return f"pywinauto non installato ({e}): la finestra resta come l'ha aperta MT5"
+    w = _finestra_mt5()
+    if w is None:
+        return "nessuna finestra riconoscibile come MT5 da ridurre a icona"
+    try:
+        # Gia' ridotta: non si tocca. Rifarlo su una finestra gia' giu' su alcuni sistemi la
+        # riporta su, che e' l'opposto di quello che serve.
+        if hasattr(w, "is_minimized") and w.is_minimized():
+            return None
+    except Exception:
+        pass
+    try:
+        w.minimize()
+        return None
+    except Exception as e:
+        return f"minimize() sulla finestra MT5 non riuscito: {e}"
+
+
 # ===================== CHIUSURA COMPLETA ALLA DISCONNESSIONE/CHIUSURA PAGINA =====================
 # Richiesto esplicitamente: "non è un'app, è un servizio" — quando l'utente disconnette (pulsante
 # Disconnetti) o chiude semplicemente la pagina app.html, deve sparire TUTTO: la sessione IPC con
@@ -1261,6 +1318,11 @@ def connect(body: ConnectRequest):
     # assume che il tentativo sia riuscito. autofix_detail spiega ESATTAMENTE dove si è fermato
     # (o resta None se non c'era nulla da fare / il tentativo è stato inviato senza errori).
     autofix_detail = _try_reenable_autotrading()
+    # RICHIESTO: subito dopo (e DOPO il tentativo sul trading algoritmico, che ha bisogno della
+    # finestra attiva per mandarle Ctrl+E) il terminale torna giu' nella barra delle applicazioni.
+    # Vale sia al primo collegamento sia a ogni cambio di conto: /connect passa di qui tutte e due
+    # le volte.
+    riduci_detail = riduci_terminale_a_icona()
     term = mt5.terminal_info()
     algo_trading = bool(term.trade_allowed) if term is not None else None
     # Catturato qui (connessione appena riuscita, term già letto sopra) per la chiusura precisa
@@ -1281,6 +1343,10 @@ def connect(body: ConnectRequest):
         # Mostrato dall'app SOLO se algo_trading è ancora False: se è tornato già acceso da solo
         # (o il tentativo non era nemmeno necessario), il dettaglio non serve.
         "algo_trading_autofix_detail": (None if algo_trading else autofix_detail),
+        # RICHIESTO: il terminale resta ridotto a icona. Se non ci si riesce lo si dice, invece
+        # di lasciare la finestra aperta senza spiegare perche'.
+        "terminale_ridotto": (riduci_detail is None),
+        "terminale_ridotto_detail": riduci_detail,
     }
 
 

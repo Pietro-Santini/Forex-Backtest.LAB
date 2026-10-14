@@ -285,3 +285,58 @@ Formato: data — chi — cosa — esito collaudo — commit.
   stesso server, col PC che apre LUI il canale verso il server invece di farsi chiamare via
   Tailscale, che per il PC di un altro utente non si puo' fare). Il modulo c'e' ed e' commentato,
   ma NON e' ancora collegato a ponte_server.py ne' all'app: non cambia niente di quello che gira.
+- 2026-10-14 - Claude - app v146 / Setup 1.0.146. Due difetti della selezione delle posizioni,
+  segnalati insieme. (1) Una posizione si sceglieva da sola e nascondeva le altre: `active` faceva
+  due mestieri (vedi BUG.md). Separato in `posSelezionata`, che la mette solo un clic. (2) Col dito
+  il tocco sul vuoto non deselezionava: il gestore di pointerup esce prima per il touch e il blocco
+  stava dopo. Estratto in fblClickSuVuoto() e chiamato da tutti e due i rami - stesso difetto gia'
+  pagato sulla stessa uscita anticipata col cambio stile del footprint, ed e' la seconda volta:
+  quella uscita anticipata e' un posto in cui vale la pena guardare ogni volta che qualcosa
+  "funziona col mouse ma non col dito".
+  Test: selezione_posizioni.test.mjs (4; tre vanno rossi col vecchio codice, il quarto - il clic
+  che seleziona davvero - resta verde perche' quello funzionava gia').
+  Nella stessa v146: le bandiere delle notizie non si vedevano su telefono e tablet. Il polling
+  partiva solo da due strade, nessuna delle quali esiste su un telefono (vedi BUG.md). Corretto
+  allineando il polling allo stato invece che alla strada percorsa. E' la terza volta in due giorni
+  che il difetto e' della stessa forma: una cosa agganciata a UNA strada invece che al punto che
+  tutte le strade attraversano (prima l'uscita anticipata del pointerup, due volte).
+  Test: notizie_altri_dispositivi.test.mjs (3; due vanno rossi senza la correzione).
+  Ancora v146: colonne COB/SVP. Il passo delle righe arrivava dall'impostazione del footprint, che
+  e' tarata sull'altezza di una candela: da qui righe altissime su EUR/USD, fitte su XAU, sparse
+  sulle cripto. Ora si decide in pixel e si arrotonda a un passo tondo dello strumento, cosi' le
+  colonne hanno lo stesso aspetto ovunque. Test: cob_svp_scala.test.mjs (4).
+  NOTA per il futuro: a questa densita' i numeri dentro le colonne (showNums, soglia 10 px) non
+  compaiono piu'. E' voluto - su XAU, che il proprietario ha indicato come "giusto", non si
+  vedevano gia' - ma se li rivuole servira' un'impostazione per l'altezza di riga, non il ritorno
+  al passo del footprint.
+  Ancora v146, tre cose. (1) ARCHIVIO DEL FOOTPRINT: il footprint si ricostruiva sempre dal log
+  dei tick, che ha un tetto di 150.000 tick per asset e scarta i piu' vecchi: su 4h o 1D restavano
+  solo le ultime candele. Ora si conservano le celle gia' aggregate AL MINUTO (poche centinaia di
+  byte l'una) su IndexedDB, una chiave per asset e per giorno, per 60 giorni; da li' si costruisce
+  qualunque timeframe sommando i minuti, ri-aggregati sul passo del momento. L'archivio vale fino
+  al primo tick ancora in memoria, poi comanda il log: niente doppi conteggi.
+  Test: footprint_archivio.test.mjs (5).
+  (2) POSIZIONE SELEZIONATA: delle altre restano le linee di stop e target con le etichette, in
+  grigio (prima sparivano del tutto, v142), mentre il riempimento colorato resta solo a quella
+  scelta. drawTpSlZoneBox sapeva gia' disegnare 'spento': bastava smettere di saltarla e spegnere
+  il riempimento quando dimmed. I test di selezione_posizioni sono stati riscritti sulla sonda
+  nuova (quante posizioni vengono disegnate in grigio) perche' quella vecchia misurava il
+  comportamento superato.
+  (3) CRONOLOGIA: cerchietto di avanzamento accanto al pulsante mentre scarica le candele, con la
+  percentuale vera (binanceKlines ora dice quanti blocchi ha preso) e cosa sta scaricando.
+  Test: cronologia_avanzamento.test.mjs (3).
+  Ancora v146, due cose sul PONTE (girano dal Setup, non dal repo: serve il reinstaller).
+  (1) SYNTRA, LA STRADA DELLA CLASSIFICA. Il proprietario ha descritto la procedura guardando
+  l'app e ha mandato le foto: Classifica (in fondo) -> si scorre fino all'utente -> si entra nel
+  profilo ('Info sul fornitore di setup') -> si scorrono i setup espandendo 'Vedi dettagli TP/SL'
+  fino al periodo chiesto. Prima leggi_profilo cercava il nome su una SUA scheda gia' visibile nel
+  riquadro dei setup: se non aveva pubblicato di recente - o se si era sulle Notifiche, che e' la
+  modalita' predefinita - quel nome a schermo non c'era e la lettura moriva con 'nome non trovato'.
+  Aggiunte leggi_classifica(), e_pagina_profilo(), stesso_utente_syntra() (la classifica scrive
+  'Gino', il profilo 'Gino - SGM FREE', l'app 'Syntra . Gino'), apri_classifica() e
+  cerca_in_classifica() che smette di scorrere quando la pagina non cambia piu'. I due test del
+  profilo sono stati riscritti sulla strada nuova, con XML che ricalcano le foto vere.
+  (2) IL TERMINALE MT5 SI RIDUCE A ICONA dopo ogni /connect (primo collegamento e cambio conto):
+  prima si riapriva a tutto schermo ogni volta. Il tentativo non puo' far fallire il collegamento:
+  se non riesce lo dice nella risposta (terminale_ridotto / terminale_ridotto_detail).
+  Test: ponte/test_profilo_syntra.py (8, era 5), ponte/test_mt5_finestra.py (4, nuovo).

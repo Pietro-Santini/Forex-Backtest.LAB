@@ -328,6 +328,87 @@ def leggi_notifiche(xml_testo: str) -> dict:
     return {"e_notifiche": "Notifiche" in descs and "Cancella tutto" in descs, "notifiche": notifiche}
 
 
+# ===================== LA STRADA DELLA CLASSIFICA (RICHIESTO) =====================
+# Il proprietario ha descritto, passo per passo, come si fa a mano: "per trovare la cronologia dei
+# segnali di quell'utente deve andare su CLASSIFICA, che sta in basso; scorre fino a che non trova
+# l'utente; entra dentro; scorre le posizioni e controlla la data; prende il primo, lo espande, vede
+# i TP, lo stop, l'entrata; e alla fine fa la stessa cosa che fa quella di Telegram".
+# PERCHE' PRIMA NON FUNZIONAVA: leggi_profilo cercava il nome dell'utente su una SUA SCHEDA gia'
+# visibile nel riquadro dei setup. Se quell'utente non aveva pubblicato di recente - o se si era
+# sulla pagina Notifiche, che e' la modalita' predefinita - quel nome sullo schermo non c'era, e la
+# lettura finiva prima di cominciare con "nome non trovato sullo schermo".
+# Ora la strada e' quella vera: la linguetta Classifica in fondo, la riga dell'utente, il suo
+# profilo. Le tre pagine si riconoscono da quello che SCRIVONO, non da dove stanno:
+#   - la Classifica ha le righe con "Tasso di vincita";
+#   - il profilo ha il titolo "Info sul fornitore di setup";
+#   - le schede del profilo sono le stesse schede di sempre (leggi_schermata).
+TITOLO_PROFILO = "Info sul fornitore di setup"
+VOCE_CLASSIFICA = "Classifica"
+RE_TASSO = re.compile(r"tasso di vincita", re.I)
+
+
+def _nome_confrontabile(v: str) -> str:
+    """Il nome come si confronta: niente prefisso, niente maiuscole, niente spazi o punteggiatura.
+    Serve perche' la classifica scrive "Gino" e il profilo "Gino - SGM FREE", e l'app lo conosce
+    come "Syntra . Gino"."""
+    s = str(v or "").replace("\u00b7", " ")
+    s = re.sub(r"^\s*syntra\s*", "", s, flags=re.I)
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def stesso_utente_syntra(a: str, b: str) -> bool:
+    """Vero se i due nomi sono la stessa persona. Il confronto sta da una parte sola, cosi' una
+    riga "Gino - SGM FREE" trova "Gino" e viceversa, senza inventare somiglianze fra nomi diversi."""
+    na, nb = _nome_confrontabile(a), _nome_confrontabile(b)
+    if not na or not nb:
+        return False
+    return na == nb or na.startswith(nb) or nb.startswith(na)
+
+
+def leggi_classifica(xml_testo: str) -> dict:
+    """La pagina Classifica: e' quella giusta? e le righe, con il punto da toccare.
+
+    Una riga si riconosce dal fatto che contiene "Tasso di vincita": e' l'unica cosa che hanno tutte
+    e che non ha nient'altro nella pagina. Il nome e' la prima riga del nodo (nelle foto: il nome
+    grande, poi il nome utente, poi XP e il tasso)."""
+    radice = ET.fromstring(xml_testo)
+    nodi = [(n.get("content-desc") or "", _bounds(n), n.get("clickable") == "true") for n in radice.iter("node")]
+    voce = None
+    righe = []
+    for d, b, cl in nodi:
+        t = (d or "").strip()
+        if not t:
+            continue
+        if t == VOCE_CLASSIFICA and cl:
+            voce = ((b[0] + b[2]) // 2, (b[1] + b[3]) // 2)
+            continue
+        if not RE_TASSO.search(t):
+            continue
+        parti = [r.strip() for r in t.split("\n") if r.strip()]
+        if not parti:
+            continue
+        nome = parti[0]
+        if RE_TASSO.search(nome):          # un nodo che contiene SOLO l'etichetta: non e' una riga
+            continue
+        righe.append({"utente": nome, "alias": parti[1] if len(parti) > 1 else "",
+                      "testo": t, "centro": ((b[0] + b[2]) // 2, (b[1] + b[3]) // 2),
+                      "alta": b[3] - b[1]})
+    e_classifica = bool(righe)
+    return {"e_classifica": e_classifica, "voce": voce, "righe": righe}
+
+
+def e_pagina_profilo(xml_testo: str) -> bool:
+    """Siamo dentro "Info sul fornitore di setup"?"""
+    try:
+        radice = ET.fromstring(xml_testo)
+    except Exception:
+        return False
+    for n in radice.iter("node"):
+        if (n.get("content-desc") or "").strip() == TITOLO_PROFILO:
+            return True
+    return False
+
+
 def leggi_dettaglio(xml_testo: str) -> Optional[dict]:
     """Pagina "Dettagli configurazione" aperta da una notifica: stessi dati della scheda, ma in nodi
     separati. Restituisce una scheda nello stesso formato di leggi_schermata (stessa chiave)."""
@@ -774,36 +855,94 @@ async def _consegna_scheda(s: dict, visti: set, consegna: Callable, log: Callabl
     await consegna(seg, s["utente"], quando)
 
 
+async def apri_classifica(adb: Adb, log: Callable[[str], None]) -> bool:
+    """Porta l'app sulla pagina Classifica. Torna True se ci siamo.
+
+    Prima un passo indietro: se si e' dentro il dettaglio di una notifica, la barra in fondo non
+    c'e'. Poi si cerca la voce "Classifica" e la si tocca. Non si tocca mai nient'altro.
+    """
+    for tentativo in range(3):
+        xml = await adb.schermata()
+        pagina = leggi_classifica(xml)
+        if pagina["e_classifica"]:
+            return True
+        if pagina["voce"]:
+            await adb.tocca(*pagina["voce"])
+            await asyncio.sleep(1.2)
+            if leggi_classifica(await adb.schermata())["e_classifica"]:
+                return True
+        if tentativo < 2:
+            try:
+                await adb.indietro()
+            except Exception:
+                pass
+            await asyncio.sleep(0.8)
+    return False
+
+
+async def cerca_in_classifica(adb: Adb, utente: str, log: Callable[[str], None],
+                              scorrimenti: int = 14) -> Optional[Tuple[int, int]]:
+    """Scorre la classifica fino a trovare la riga di questo utente. Torna il punto da toccare.
+
+    Si scorre finche' la pagina CAMBIA: quando due scorrimenti di fila mostrano le stesse righe
+    vuol dire che si e' arrivati in fondo, e insistere non serve a niente.
+    """
+    viste = set()
+    for giro_n in range(max(1, scorrimenti)):
+        pagina = leggi_classifica(await adb.schermata())
+        righe = pagina["righe"]
+        for r in righe:
+            if stesso_utente_syntra(r["utente"], utente) or stesso_utente_syntra(r["alias"], utente):
+                log("Syntra: %s trovato nella classifica (riga «%s»)" % (utente, r["utente"]))
+                return r["centro"]
+        firma = "|".join(r["utente"] for r in righe)
+        if not righe or firma in viste:
+            break                      # fondo raggiunto, o pagina che non scorre piu'
+        viste.add(firma)
+        alto = min(r["centro"][1] for r in righe)
+        basso = max(r["centro"][1] for r in righe)
+        if basso - alto < 20:
+            break
+        await adb.scorri(righe[0]["centro"][0], basso, alto)
+        await asyncio.sleep(0.8)
+    return None
+
+
 async def leggi_profilo(adb: Adb, utente: str, pagine: int, log: Callable[[str], None],
-                        stato: dict) -> List[dict]:
+                        stato: dict, da_ms: Optional[float] = None) -> List[dict]:
     """Passi 15/16 — la STORIA COMPLETA di un utente Syntra.
 
     Si tocca il nome dell'utente (nodo cliccabile in alto a destra di una sua scheda), si apre il
     PROFILO e si scorre per `pagine` schermate: ogni scheda letta è un'operazione passata. Si torna
     indietro da soli, lasciando l'emulatore come prima. NON tocca la pagina delle notifiche.
     """
-    # 1) Trova il nome cliccabile di quell'utente e aprilo.
-    punto = None
-    for _ in range(4):
-        lettura = leggi_schermata(await adb.schermata())
-        for sc in lettura["schede"]:
-            if sc.get("utente") == utente and sc.get("utente_xy"):
-                punto = sc["utente_xy"]
-                break
-        if punto:
-            break
-        # Non c'è in questa schermata: risali alla lista e riprova.
-        try:
-            if not await _alla_lista(adb):
-                break
-        except Exception:
-            break
-        await asyncio.sleep(0.6)
+    # 1) LA STRADA DELLA CLASSIFICA (richiesto esplicitamente, passo per passo dal proprietario):
+    #    indietro per uscire da dove si e', poi la linguetta "Classifica" in fondo, poi si scorre
+    #    fino a trovare l'utente e si entra nella sua scheda.
+    #    Prima si cercava il nome su una SUA scheda gia' visibile nel riquadro dei setup: se non
+    #    aveva pubblicato di recente - o se si era sulle Notifiche, che e' la modalita' di sempre -
+    #    quel nome sullo schermo non c'era e la lettura moriva li'.
+    if not await apri_classifica(adb, log):
+        log("Syntra: non trovo la linguetta «%s» in fondo allo schermo" % VOCE_CLASSIFICA)
+        return []
+    punto = await cerca_in_classifica(adb, utente, log)
     if not punto:
-        log("Syntra: profilo di %s: nome non trovato sullo schermo" % utente)
+        log("Syntra: %s non si trova nella classifica (scorsa fino in fondo)" % utente)
+        try:
+            await adb.indietro()
+        except Exception:
+            pass
         return []
     await adb.tocca(*punto)
-    await asyncio.sleep(1.2)
+    await asyncio.sleep(1.4)
+    if not e_pagina_profilo(await adb.schermata()):
+        # Il tocco non ha aperto il profilo: si riprova una volta, poi si lascia stare invece di
+        # andare avanti a toccare cose a caso dentro l'app di qualcun altro.
+        await adb.tocca(*punto)
+        await asyncio.sleep(1.4)
+        if not e_pagina_profilo(await adb.schermata()):
+            log("Syntra: la scheda di %s non si e' aperta" % utente)
+            return []
 
     # 2) Scorre il profilo e raccoglie tutte le schede (una voce sola per operazione).
     trovate: Dict[str, dict] = {}
@@ -830,6 +969,15 @@ async def leggi_profilo(adb: Adb, utente: str, pagine: int, log: Callable[[str],
                 if (sc.get("utente") or utente) != utente:
                     continue
                 trovate[chiave(sc)] = sc
+        # IL PERIODO (richiesto: "fino a quando vede che e' arrivato al periodo prestabilito"):
+        # sotto a ogni scheda c'e' la sua data. Quando TUTTE quelle a schermo sono piu' vecchie del
+        # periodo chiesto si smette di scorrere: piu' giu' c'e' solo roba ancora piu' vecchia.
+        if da_ms is not None and schede:
+            date = [data_ms(sc.get("data") or "") for sc in schede]
+            note = [d for d in date if d is not None]
+            if note and max(note) < da_ms:
+                log("Syntra: profilo di %s: arrivato al periodo chiesto, mi fermo" % utente)
+                break
         if pagina < pagine - 1 and schede:
             x1, y1, x2, y2 = schede[0]["bounds"]
             basso = max(sc["bounds"][3] for sc in schede)
@@ -950,7 +1098,15 @@ async def ciclo(cfg: dict, consegna: Callable, log: Callable[[str], None], stato
                 utente_p = str(richiesta_profilo.get("utente") or "")
                 stato["syntra_profilo"] = "lettura del profilo di %s..." % utente_p
                 try:
-                    schede_p = await leggi_profilo(adb, utente_p, pagine, log, stato)
+                    # `mesi` lo manda l'app insieme alla richiesta (la stessa tendina PERIODO della
+                    # cronologia delle sale): 0 o assente = tutta la storia che si riesce a leggere.
+                    _mesi = 0
+                    try:
+                        _mesi = int(richiesta_profilo.get("mesi") or 0)
+                    except Exception:
+                        _mesi = 0
+                    _da = (time.time() - _mesi * 30 * 86400) * 1000.0 if _mesi > 0 else None
+                    schede_p = await leggi_profilo(adb, utente_p, pagine, log, stato, _da)
                 except Exception as e:
                     schede_p = []
                     log("Syntra: lettura del profilo di %s non riuscita: %s" % (utente_p, e))

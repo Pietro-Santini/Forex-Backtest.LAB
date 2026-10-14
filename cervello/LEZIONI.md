@@ -172,3 +172,13 @@
   colonna morta fra una candela e l'altra - impossibile da prendere col dito. Un test che tocca
   UN punto scelto bene passa anche con un bersaglio inutilizzabile: il test giusto tocca tutte le
   candele, i bordi, e controlla che fra una zona sensibile e l'altra non restino vuoti.
+
+- **"Funziona col mouse ma non col dito": guarda le uscite anticipate del gestore di pointerup.**
+  (14 ottobre 2026, seconda volta.) Quel gestore esce presto per `pointerType==='touch'`, e tutto
+  quello che sta scritto DOPO quell'uscita col dito non succede mai. E' gia' capitato col cambio
+  stile del footprint e poi con la deselezione delle posizioni. Quando una cosa deve valere per
+  tutti i puntatori, si scrive in una funzione e la si chiama da tutti i rami.
+- **Una variabile che l'app riassegna da sola non puo' anche voler dire "scelto dall'utente".**
+  (14 ottobre 2026, `active`.) Appena acquista il secondo significato, ogni riassegnazione
+  automatica diventa una scelta che nessuno ha fatto - e il difetto sembra casuale, perche' scatta
+  quando cambia qualcos'altro. Due significati, due variabili.
