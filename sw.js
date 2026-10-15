@@ -461,7 +461,18 @@
 //               CORREGGE ANCHE LA v155: la guardia della fascia 22-23 non aveva mai fermato un
 //               solo tick (dalla v131 quella fascia non esiste piu'), e il suo test non poteva
 //               accorgersene perche' leggeva il testo del codice invece di misurarne l'effetto.
-const CACHE_NAME = "forex-backtest-lab-v157";
+//          v158 = "INSTALLA I PACCHETTI" NON SI PROPONE PIU' DOVE QUEI PACCHETTI NON SI POSSONO
+//               INSTALLARE. Segnalato: "quando faccio l'accesso a un nuovo dispositivo e vado ad
+//               aggiungere un account di MT5 mi compare il messaggio dell'installazione dei
+//               pacchetti, io comunque al server sono collegato". Un controllo per telefoni e
+//               tablet c'era gia', ma riconosce il dispositivo dalla User-Agent e dal touch - e
+//               la User-Agent mente, di proposito, ogni volta che il browser e' in "modalita'
+//               desktop". Ora alla domanda si risponde con un fatto invece che con un indizio: il
+//               Setup e' un installatore Windows, e il sistema operativo il browser lo sa senza
+//               doverlo indovinare. Dove non e' Windows - tablet in modalita' desktop, iPad che
+//               si dichiara Mac, Mac vero - non si propone piu' ne' la schermata ne' il download.
+//               Sul computer Windows non cambia niente.
+const CACHE_NAME = "forex-backtest-lab-v158";
 const ASSETS = [
   "./",
   "./app.html",
