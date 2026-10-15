@@ -108,14 +108,19 @@ test('le celle SL e TP si cliccano solo sulla posizione selezionata', async () =
   try{
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
+      // SI CERCANO LE COLONNE PER NOME, non per numero: è la stessa fragilità che l'app aveva
+      // dentro (i clic legati alle colonne 4 e 5 scritte a mano). Aggiungendo la colonna
+      // «Origine» ogni numero è scivolato di un posto, e il test misurava la cella sbagliata.
       const celle = () => [...document.querySelectorAll('#krakenPosPanel tbody tr:first-child td')];
+      const nomi = [...document.querySelectorAll('#krakenPosPanel th')].map(t => t.textContent.trim());
+      const iSl = nomi.indexOf('SL'), iTp = nomi.indexOf('TP');
       const conSelezione = celle().map(td => td.style.cursor);
       krakenSelezionata = '';           // deselezionata
       krakenPosPannello();
       const senzaSelezione = celle().map(td => td.style.cursor);
       return {
-        slSelezionata: conSelezione[4], tpSelezionata: conSelezione[5],
-        slDeselezionata: senzaSelezione[4], tpDeselezionata: senzaSelezione[5]
+        slSelezionata: conSelezione[iSl], tpSelezionata: conSelezione[iTp],
+        slDeselezionata: senzaSelezione[iSl], tpDeselezionata: senzaSelezione[iTp]
       };
     }, PREPARA.toString());
     assert.equal(r.slSelezionata, 'pointer');

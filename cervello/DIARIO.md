@@ -540,3 +540,55 @@ Formato: data — chi — cosa — esito collaudo — commit.
   alternativi nello stesso if, quindi non e' una promessa in un commento ma la forma del codice.
   NOTA DI METODO: su app.html (4,6 MB) non si usa assert.match - quando fallisce stampa l'INTERO
   file e il messaggio vero si perde. Si prova la condizione e si scrive a mano cosa mancava.
+
+## 15 ottobre 2026 - v153: i segnali cripto su Kraken, origine e tipo, conti chiusi
+  (1) SEGNALE CRIPTO APERTO SU CAPITAL.COM invece che su Kraken (segnalato). DUE buchi:
+  (a) krakenOrdiniAttivi() partiva SPENTA; da spenta tgContoPerSegnale ricadeva su 'mt5', e
+  tgContoEffettivoPerSegnale, non trovando lo strumento su MT5, dirottava su 'capital'. Ora parte
+  accesa (il valore '0' scritto a mano resta rispettato).
+  (b) Tutto il riconoscimento delle cripto passava da binanceSymbolForAsset(), cioe' da una TABELLA
+  DI NOMI: una moneta scritta in una forma non prevista non risultava cripto per niente. Ora, prima
+  di dirottare, si chiede a Kraken se ha quel contratto - fonte autorevole invece di un elenco da
+  mantenere. Si chiede solo per gli strumenti che POTREBBERO esserlo (fblTipoAsset = cripto o
+  "azione", il mucchio dell'ignoto): un primo tentativo basato sulla LUNGHEZZA del nome sbagliava
+  due volte - lasciava passare le coppie di valute e fermava proprio le monete dal nome lungo.
+  Test: segnali_cripto_su_kraken.test.mjs (4).
+  (2) ORIGINE E TIPO: colonna "Origine" negli ordini pendenti (entrambe le righe) e nelle posizioni
+  Kraken; famiglia dello strumento (forex/cripto/materia prima/indice/azione) anche nel Journal.
+  fblTipoAsset() e' separata da fblFamigliaAsset(): la prima dice COS'E', la seconda sceglie la
+  strategia dell'apertura automatica (due famiglie, non cinque) e non va confusa.
+  Nella tabella Kraken i clic su SL/TP erano legati ai numeri di colonna 4 e 5 scritti a mano:
+  aggiungendo una colonna sarebbero scivolati. Ora ogni cella si numera da sola.
+  Test: tipo_asset.test.mjs (5).
+  (3) CONTI CHIUSI (richiesto): i conti MT5 non piu' salvati restano consultabili in un gruppo loro
+  ma escono da ogni vista "insieme". Il controllo che conta: con l'elenco dei conti VUOTO non si
+  dichiara chiuso niente - all'avvio e' vuoto, e senza quella riga la dashboard si svuoterebbe.
+  Test: conti_chiusi.test.mjs (3).
+  (4) Andamento del conto: nel riquadro si legge anche il capitale dopo quell'operazione.
+
+## 15 ottobre 2026 - v153 (seconda parte): la barra degli ordini dentro al grafico
+  (1) RICHIESTO: "trasportiamo il sistema sulla barra degli ordini, e a fianco a SL e TP il campo
+  del valore, cosi' l'utente puo' anche cancellarlo; il pannello sulla pagina madre non serve piu'".
+  PRIMA di toccare ho MISURATO: i campi di quel pannello non sono un duplicato, sono lo stato che
+  legge tutta l'app - $('sl') 17 volte, $('tp') 15, $('pendingEntry') 23, $('slPending') 22,
+  $('tpPending') 20. Cancellare il pannello avrebbe rotto anche la barra nel grafico, che ci scrive
+  dentro. Quindi: i campi veri restano la fonte di verita', e nella barra si aggiungono due caselle
+  che si RISPECCHIANO sopra - esattamente lo schema gia' usato da lottaggio e rischio. Svuotare la
+  casella toglie il livello (e' il motivo per cui e' stata chiesta).
+  Lo specchio si aggiorna da refreshSlTpEuroPreview(), il punto che TUTTE le strade attraversano
+  quando stop o target cambiano - anche il trascinamento sul grafico, che non fa scattare eventi.
+  (2) Interruttore in Style per gli ordini pendenti a grafico (richiesto). Spento: nessuna riga,
+  nessuna casella in evidenza. Acceso di base, com'era prima.
+  (3) Colonna "Origine" anche nelle posizioni MT5: un test tiene ferme le due tabelle come gemelle,
+  e aggiungerla solo a Kraken lo avrebbe rotto - giustamente.
+  (4) DIFETTO LATENTE trovato dal collaudo: krakenConto poteva diventare null (r.ok vero ma r.data
+  vuoto) e la riga dopo moriva con "Cannot set properties of null", a ogni giro, in silenzio. Non
+  l'ha creato questa versione: accendendo di base i segnali cripto su Kraken quella strada ha
+  cominciato a essere percorsa, e il difetto e' saltato fuori.
+  (5) QUATTRO TEST aggiornati perche' misuravano comportamenti che il proprietario ha chiesto di
+  cambiare (l'oro ora e' "materia prima", le tabelle hanno una colonna in piu'). Due di quelli
+  leggevano le celle PER NUMERO: riscritti per nome di colonna - e' la stessa fragilita' che ho
+  tolto dall'app poche ore prima, e si era ripresentata nei test.
+  NOTA DI METODO: mai mettere EMOJI nelle ancore degli script di modifica. Nel sorgente dello
+  script l'emoji va scritta come escape, e l'escape non e' il carattere: l'ancora non trova niente.
+  Mi e' costato quattro tentativi a vuoto oggi.
