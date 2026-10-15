@@ -238,3 +238,20 @@
   muovevano, cioe' esattamente lo scenario in cui l'utente non puo' accorgersi che qualcosa non
   torna. Quando due pezzi devono stare d'accordo, non si scrivono due controlli uguali: si scrive
   una funzione che risponde, e la chiamano tutti.
+
+- **"In corso" non e' uno stato: e' quello che si scrive quando non si sa.** (15 ottobre 2026, il
+  ponte dei segnali che "rimaneva escluso per sempre".) Tre punti dell'app dicevano che qualcosa
+  stava succedendo - la frase di stato, l'etichetta dell'interruttore, il semaforo del server - e
+  nessuno dei tre lo sapeva: il primo era un ramo di scarto in fondo a una catena di `else if`, il
+  secondo era scritto a mano come contrario di "collegato", il terzo provava una porta sola e
+  concludeva sulle altre. Nel frattempo il ponte mandava la risposta giusta in un campo che nessuno
+  leggeva. Un'attesa senza fine e' peggio di un errore: un errore manda a cercare, "in corso" dice
+  di aspettare. Dove si scrive uno stato, o lo si sa o si dice che non lo si sa - e si dice da
+  quanto, perche' e' il "da quanto" che distingue un'attesa da un blocco.
+
+- **Un semaforo verde deve coprire tutto quello che promette, o promettere di meno.** (15 ottobre
+  2026, "Prova il server".) Provava la porta 8000 e scriveva "Server raggiungibile": i segnali
+  stanno sulla 8769 e non venivano mai toccati. Chi legge quel verde smette di cercare li' - quindi
+  un controllo parziale non e' "meglio di niente", e' peggio, perche' sposta la ricerca altrove.
+  O si provano tutti i servizi che la frase lascia intendere, o la frase deve dire quale si e'
+  provato.

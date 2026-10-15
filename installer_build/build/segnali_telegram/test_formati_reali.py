@@ -204,6 +204,40 @@ Target4: $ 85182
 SL : $ 79469""",
      {"strumento": "BTCUSD", "direzione": "BUY", "entrata": 80958.0, "stop_loss": 79469.0,
       "take_profit": [81547.0, 82890.0, 84045.0, 85182.0]}),
+    # ------------------------------------------------- sala "Segnali" (Telegram, scrive in italiano)
+    # NB sul nome: GANNFAN non e' la sala, e' la STRATEGIA scritta in fondo al messaggio
+    # ("GANNFAN - Gann-21.9 Trend Rider V-4h"). La sala e' il gruppo Telegram, e si chiama
+    # "Segnali": il nome della sala l'app lo prende dal titolo del gruppo, mai dal testo del
+    # messaggio. Correzione del proprietario, 15 ottobre 2026.
+    # Segnalato dal proprietario (15 ottobre 2026): "controlla se questi ordini vengono compresi ed
+    # eseguiti; long sta per buy, short sta per sell". Il messaggio mandato (SOLUSD) il lettore lo
+    # capiva gia' al 100%. Ma provando le varianti della STESSA sala e' saltato fuori un difetto
+    # serio: con le migliaia all'italiana "Entrata: 80.958,50" diventava 80.958 - mille volte meno
+    # del vero - perche' il punto delle migliaia veniva preso per un decimale e il ",50" riletto
+    # come un numero a se'. Su BTC e ETH, dove le migliaia ci sono sempre, TUTTI i prezzi del
+    # messaggio uscivano sbagliati. Vedi _valore() in parser_segnali.py.
+    ("Segnali: LONG con virgola decimale (reale)", """\U0001F7E2 LONG SOLUSD
+Entrata: 105,91
+Stop loss: 96,13 (\u22129,23%)
+Take profit: 106,66 (+0,71%)
+GANNFAN \u00b7 Gann-21.9 Trend Rider V-4h""",
+     {"strumento": "SOLUSD", "direzione": "BUY", "entrata": 105.91, "stop_loss": 96.13,
+      "take_profit": [106.66]}),
+    ("Segnali: LONG con le migliaia all'italiana", """\U0001F7E2 LONG BTCUSD
+Entrata: 80.958,50
+Stop loss: 79.469,00 (\u22121,84%)
+Take profit: 83.000,00 (+2,52%)
+GANNFAN \u00b7 Gann-21.9 Trend Rider V-4h""",
+     {"strumento": "BTCUSD", "direzione": "BUY", "entrata": 80958.50, "stop_loss": 79469.0,
+      "take_profit": [83000.0]}),
+    ("Segnali: SHORT = SELL, due target", """\U0001F534 SHORT ETHUSD
+Entrata: 3.210,40
+Stop loss: 3.380,00 (+5,28%)
+Take profit 1: 3.100,00 (\u22123,44%)
+Take profit 2: 2.980,00 (\u22127,18%)
+GANNFAN \u00b7 Gann-21.9 Trend Rider V-4h""",
+     {"strumento": "ETHUSD", "direzione": "SELL", "entrata": 3210.40, "stop_loss": 3380.0,
+      "take_profit": [3100.0, 2980.0]}),
     ("buy limit con ENTRY (reale)", "XAUUSD buy LIMIT\n\nENTRY 4190\nSL 4185\nTP 4200",
      {"direzione": "BUY", "strumento": "XAUUSD", "entrata": 4190.0, "tipo_ordine": "limit", "stop_loss": 4185.0, "take_profit": [4200.0]}),
     ("sell-limit con @ (reale)", """🔵🔵30 SEPTEMBER FREE signal forecast: GBPAUD 

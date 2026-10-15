@@ -472,7 +472,28 @@
 //               doverlo indovinare. Dove non e' Windows - tablet in modalita' desktop, iPad che
 //               si dichiara Mac, Mac vero - non si propone piu' ne' la schermata ne' il download.
 //               Sul computer Windows non cambia niente.
-const CACHE_NAME = "forex-backtest-lab-v158";
+//          v159 = I SEGNALI CHE NON ARRIVAVANO: due cause, tutte e due trovate stasera.
+//               (1) LO STATO DEL PONTE MENTIVA. Segnalato dal telefono: "il ponte Telegram
+//               rimane escluso per sempre, anche se il server dice che il collegamento e'
+//               stabilito; non prende i segnali e non esegue ordini, zero". Non c'era nessuno
+//               stato: una catena di else if con un ramo di scarto in fondo, "collegamento a
+//               Telegram in corso...", dove cadeva tutto quello che non si riconosceva - compreso
+//               un ponte che DICHIARA di non occuparsi di Telegram (modalita' solo-syntra, perche'
+//               i ponti sono due). L'app quel campo non lo guardava. Ora lo stato lo da' una
+//               funzione sola (tgStatoVero) e dice quale dei casi veri e': solo-Syntra, in attesa
+//               del numero o del codice, ponte muto, errore del ponte, oppure da quanto tempo
+//               Telegram non si aggancia. Anche l'etichetta dell'interruttore smette di scrivere
+//               "accesso in corso" quando nessun accesso e' in corso. E "Prova il server" prova
+//               TUTTE E DUE le porte che promette: la 8000 (Kraken e ordini) e la 8769 (segnali),
+//               che prima non veniva mai toccata - da cui il verde che non voleva dire niente.
+//               (2) I PREZZI CON LE MIGLIAIA ALL'ITALIANA ERANO SBAGLIATI DI MILLE VOLTE.
+//               Provando una sala che scrive in italiano: "Entrata: 105,91" si leggeva benissimo,
+//               ma "Entrata: 80.958,50" diventava 80.958, perche' il punto delle migliaia veniva
+//               preso per un decimale e il ",50" riletto come un numero a se'. Su BTC e ETH ogni
+//               prezzo del messaggio - entrata, stop e target - usciva sbagliato. Ora se ci sono
+//               sia il punto sia la virgola, l'ULTIMO dei due e' il decimale: vale per 80.958,50
+//               e per 80,958.50 senza doverli distinguere.
+const CACHE_NAME = "forex-backtest-lab-v159";
 const ASSETS = [
   "./",
   "./app.html",
