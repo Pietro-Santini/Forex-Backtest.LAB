@@ -512,3 +512,31 @@ Formato: data — chi — cosa — esito collaudo — commit.
   riskAmount/dist, dove dist e' la perdita per una moneta). A cambiare e' solo cosa vale "una
   unita'". C'e' un test che lo fissa, cosi' le due strade non possono divergere in silenzio.
   Test: kraken_margine.test.mjs (5).
+
+## 15 ottobre 2026 - v152: Kraken ancorato alla candela vera, Syntra che non si ferma al primo
+  (1) POSIZIONI KRAKEN STACCATE DALLE CANDELE (segnalato con foto: "il punto d'entrata non combacia
+  con le candele, la posizione e' stata aperta in una parte dove il grafico non l'ha toccata").
+  LA CAUSA stava nel PONTE, non nel disegno: /kraken/posizioni non diceva quando la posizione era
+  stata aperta. Kraken lo manda in "fillTime" ma non veniva letto, quindi l'app ripiegava sulla
+  data di creazione della STRATEGIA (che su un altro dispositivo non esiste) e in ultimo su "venti
+  candele prima della fine" - un punto qualunque. Ora il ponte manda aperta_ms, e anche il conto
+  simulato si segna l'istante di apertura (e lo rinnova quando la posizione si gira dall'altra
+  parte, perche' quella e' una posizione nuova).
+  Tornano anche la FRECCIA di apertura e la LINEA fino al prezzo di adesso, che per le posizioni
+  Kraken non erano mai state disegnate. Si disegnano SOLO con l'orario vero (origineVera): con un
+  ripiego indicherebbero una candela a caso, che e' peggio di non indicarne nessuna.
+  (2) "VAI A GRAFICO" PORTA ANCHE SUL CONTO (richiesto): fblContoDiOperazione() riconosce da com'e'
+  fatta se un'operazione e' Kraken, MT5 o Capital, e fblVaiAlContoDi() porta l'app li' prima di
+  caricare l'asset (dopo vorrebbe dire caricarlo due volte). Una simulata non cambia niente: non
+  appartiene a nessun conto vero. Test: conto_al_salto.test.mjs (3).
+  (3) SYNTRA: IL DETTAGLIO CHE APRE UNA PAGINA. Segnalato: "apre la prima posizione, legge i valori
+  e basta". Toccare "Vedi dettagli TP/SL" spesso non espande sul posto: apre una PAGINA A SE'. Da
+  li' non c'erano piu' pulsanti da toccare, si leggeva quell'unica operazione, e alla schermata dopo
+  la pagina era sempre quella: due letture uguali = "non scorre piu'", e via. Ora si riconosce il
+  caso (e_pagina_profilo dopo il tocco), si legge quella pagina, si torna indietro e si riprende
+  dalla posizione seguente; se il tasto indietro non riporta sul profilo ci si ferma invece di
+  toccare al buio. Test: ponte/test_profilo_espansione.py (13, erano 9), compreso un test ad ALBERO
+  (ast) che fissa il vincolo "mentre legge la cronologia non tocca le notifiche": i due rami sono
+  alternativi nello stesso if, quindi non e' una promessa in un commento ma la forma del codice.
+  NOTA DI METODO: su app.html (4,6 MB) non si usa assert.match - quando fallisce stampa l'INTERO
+  file e il messaggio vero si perde. Si prova la condizione e si scrive a mano cosa mancava.
