@@ -778,3 +778,42 @@ Formato: data — chi — cosa — esito collaudo — commit.
   i numeri che non sono prezzi (e' nato da "XAUUSD entrata 4" con l'oro a 4000), non contro gli
   stop larghi.
   Test: lottaggio_base.test.mjs (5), con i numeri dell'esempio dentro.
+
+## 15 ottobre 2026 - v161: tre richieste della lista, chiuse
+  (1) APERTURA AUTOMATICA, DUE INTERRUTTORI. Richiesto: "dobbiamo avere all'interno delle
+  impostazioni dell'apertura automatica dei tasti che attivano o disattivano la posizione senza
+  stop della sala, stessa cosa per il take profit".
+  Prima la risposta era sempre si', calcolandoli: lo stop dal rischio dedicato, il target da una
+  percentuale della distanza dello stop. Sono due INVENZIONI dell'app, non due numeri della sala, e
+  chi non le voleva se ne accorgeva a posizione aperta. Ora, spenti, quel segnale non si apre da
+  solo: resta nel pannello e il motivo e' scritto. Predefiniti ACCESI - spegnerli di nascosto
+  vorrebbe dire smettere di aprire segnali che prima si aprivano.
+  Valgono SOLO per l'automatico, e il confine e' quello gia' in uso per il rischio dedicato
+  (pctForzata valorizzata = la percentuale arriva dalla sala): a mano ogni segnale si configura
+  come si vuole, ed e' una scelta cosciente.
+  Richiesto anche "togliamo il piu' in la', che non serve": l'etichetta diceva "e target un
+  ulteriore X % piu' in la'", che e' una formula che non dice rispetto a cosa. Ora: "e target a
+  X % oltre il pareggio". Il numero resta - serve a sapere dove va il target calcolato.
+  (2) UNA X PER TOGLIERE UN ASSET DALL'ELENCO. Richiesto: "nel pop-up della ricerca dell'asset,
+  accanto alla sezione asset disponibili, dobbiamo avere la possibilita' con una X di togliere quel
+  asset dall'elenco".
+  Si e' scelta una LISTA DI TOLTI, non "cancello la voce", e la ragione e' precisa: l'elenco e'
+  fatto di due cose diverse - le voci scritte nella pagina (quelle di sempre) e gli asset salvati
+  cercandoli. Cancellare funziona solo sui secondi: una voce della pagina tornerebbe al primo
+  ricaricamento e l'utente la vedrebbe riapparire senza capire perche'. Ricordare quali sono stati
+  tolti copre tutti e due i casi con una regola sola.
+  Due protezioni: la X non c'e' sull'asset a GRAFICO (e la funzione lo rifiuta comunque - una
+  regola che vive solo nel disegno di un pulsante e' una regola che si perde al primo altro punto
+  che chiama quella funzione), e un asset tolto tempo fa RICOMPARE se ci si arriva lo stesso, per
+  esempio saltando al grafico da una posizione vecchia: meglio vederlo che avere un grafico aperto
+  su qualcosa che il menu giura non esistere.
+  Si torna indietro ricercandolo e sceglendolo. Sincronizzato fra i dispositivi (GRAFICO_LS).
+  (3) KRAKEN FRA LE SESSIONI DEL TRADE JOURNAL. Richiesto: "nel Trade Journal dobbiamo inserire
+  anche come sessione e conto anche quella di Kraken". Kraken non e' una "modalita'" (non e' un
+  valore di t.mode) ma un CONTO: si riconosce con fblContoDiOperazione, la stessa funzione che usa
+  tutto il resto dell'app. Scriverne una seconda versione qui avrebbe voluto dire avere due idee
+  diverse di "operazione su Kraken" e accorgersene il giorno che non coincidono.
+  Conseguenza voluta: "Live Capital.com" non si prende piu' le Kraken, che pure hanno mode 'live'
+  perche' sono nate con la sessione Live accesa. Chi filtra Capital.com vuole quelle di
+  Capital.com.
+  Test: apri_senza_livelli.test.mjs (6), asset_tolti.test.mjs (5), journal_filtro_kraken.test.mjs (5).
