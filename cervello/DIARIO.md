@@ -701,3 +701,43 @@ Formato: data — chi — cosa — esito collaudo — commit.
   e il messaggio ora lo dice.
   Test: pacchetti_non_windows.test.mjs (4), con i quattro di pacchetti_mobile.test.mjs che
   restano verdi - compreso quello che pretende che su Windows la schermata ci sia ancora.
+
+## 15 ottobre 2026 - v159: i segnali che non arrivavano (due cause, nessuna delle due dove si guardava)
+  SEGNALATO dal telefono, con foto: "il ponte Telegram rimane escluso per sempre, anche se il
+  server dice che il collegamento e' stabilito. Non puo' esistere che dica che e' collegato e poi
+  non si riesca a connettere. E infatti non prende i segnali dalle sale e non esegue ordini, zero".
+  PRIMA CAUSA - LO STATO MENTIVA, in tre punti diversi e tutti e tre per lo stesso motivo: nessuno
+  sapeva davvero cosa stesse succedendo, e tutti e tre tiravano a indovinare l'ottimismo.
+    - la frase di stato era una catena di `else if` con un ramo di scarto in fondo: "Ponte avviato,
+      collegamento a Telegram in corso...". Ci cadeva dentro TUTTO quello che non rientrava nei
+      quattro casi previsti - compreso il caso in cui il ponte manda `modalita: 'solo-syntra'`,
+      cioe' dichiara di non toccare Telegram per scelta (i ponti sono due: Telegram sul server,
+      Syntra sul computer - vedi CONSEGNA.md v106). L'app quel campo non lo guardava nemmeno;
+    - l'etichetta dell'interruttore scriveva "accesso in corso..." come semplice contrario di
+      "collegato", senza che nessun accesso fosse in corso;
+    - "Prova il server" provava SOLO la porta 8000 e poi scriveva "Server raggiungibile". I segnali
+      stanno sulla 8769, un altro servizio: quella porta non veniva mai toccata. Un semaforo verde
+      che copre meta' impianto manda a cercare il guasto dove non e'.
+  Ora la domanda la fa una funzione sola, tgStatoVero(), e la risposta e' uno dei casi VERI:
+  solo-Syntra, in attesa di numero/codice/password, ponte muto, errore del ponte, oppure "risponde
+  ma Telegram non si aggancia da N minuti" con la conseguenza scritta accanto. "Prova il server"
+  prova tutte e due le porte e dice di ognuna com'e' andata, modalita' compresa.
+  LA REGOLA: non si scrive mai che qualcosa "e' in corso" se non lo si sa. Un'attesa senza fine non
+  e' uno stato, e' una bugia che impedisce di cercare.
+  SECONDA CAUSA, trovata mentre si provava una richiesta diversa ("controlla se questi ordini
+  vengono compresi"): i prezzi con le MIGLIAIA all'italiana uscivano sbagliati di mille volte.
+  "Entrata: 105,91" si leggeva benissimo, ma "Entrata: 80.958,50" diventava 80.958 - il punto delle
+  migliaia preso per un decimale, e il ",50" riletto come un numero a se' che finiva fra i "target
+  fuori scala". Su BTC e ETH, dove le migliaia ci sono sempre, entrata, stop e TUTTI i target
+  uscivano sbagliati: l'ordine o veniva rifiutato dal broker o sarebbe passato a un prezzo che non
+  c'entrava niente. E' quasi certamente il motivo per cui il BTC segnalato il giorno prima "non era
+  mai arrivato".
+  LA REGOLA, che non ha bisogno di sapere da che paese arriva il messaggio: se ci sono sia il punto
+  sia la virgola, l'ULTIMO dei due e' il decimale e l'altro separa le migliaia - vale per
+  "80.958,50" e per "80,958.50" senza distinguerli. Resta ambiguo, e si lascia com'era, un
+  separatore solo seguito da tre cifre ("1.234"): nessuna regola puo' deciderlo guardando il numero.
+  Test: stato_ponte_segnali.test.mjs (6); tre casi nuovi nei formati reali del lettore (la sala si
+  chiama "Segnali" - GANNFAN e' la STRATEGIA scritta in fondo al messaggio, correzione del
+  proprietario; il nome della sala l'app lo prende dal titolo del gruppo, mai dal testo).
+  DA RICORDARE: il lettore che gira sul server e sul PC usa i file del SETUP, non quelli del repo.
+  La correzione dei prezzi arriva ai segnali veri solo reinstallando il ponte.

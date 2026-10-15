@@ -25359,8 +25359,18 @@ function tgAggiornaInterruttore(m){
  // Tre stati, non due: spento, acceso ma non ancora dentro Telegram, e collegato davvero. Il
  // secondo e' quello in cui l'accesso e' a meta': mostrarlo come "collegato" farebbe credere che i
  // segnali stiano gia' arrivando.
+ // "accesso in corso" era scritto a mano come contrario di "collegato": lo diceva anche quando
+ // nessun accesso era in corso, ed e' meta' del motivo per cui il difetto e' rimasto nascosto.
+ // Ora lo chiede a tgStatoVero, lo stesso posto da cui viene la frase qui sotto: due scritte che
+ // si contraddicevano erano due pezzi di codice che indovinavano separatamente.
+ const vero=tgCollegatoTelegram?null:tgStatoVero(tgUltimoStato);
+ const inSospeso=vero?(vero.chiave==='aggancio'?'accesso in corso…'
+                      :vero.chiave==='accesso'?'Telegram aspetta una risposta'
+                      :vero.chiave==='solo-syntra'?'qui Telegram non è acceso'
+                      :vero.chiave==='muto'?'il ponte non risponde'
+                      :'Telegram non agganciato'):'';
  b.textContent=!acceso?'Collegamento: spento'
-   :(tgCollegatoTelegram?'Collegamento: COLLEGATO':'Collegamento: acceso, accesso in corso…');
+   :(tgCollegatoTelegram?'Collegamento: COLLEGATO':('Collegamento: acceso, '+inSospeso));
  b.classList.toggle('active',acceso&&tgCollegatoTelegram);
  b.title=!acceso
    ? 'Il collegamento al ponte e\' spento: nessun segnale arriva. Premi per accenderlo.'
@@ -25385,6 +25395,67 @@ let tgCollegamentoChiesto=false;
 // I segnali arrivati e non ancora valutati. Il pannello che li mostra e li fa confermare e' il
 // passo successivo: qui si tengono da parte, cosi' quando arrivera' avra' gia' i suoi dati.
 let tgSegnaliRicevuti=[];
+// CHE COSA STA FACENDO DAVVERO IL PONTE DEI SEGNALI. Una domanda, una risposta, usata sia dalla
+// frase di stato sia dall'etichetta dell'interruttore.
+//
+// SEGNALATO dal proprietario, dal telefono: "il ponte Telegram rimane escluso per sempre, anche se
+// il server dice che il collegamento e' stabilito. Non puo' esistere che dica che e' collegato e
+// poi non si riesca a connettere. E infatti non prende i segnali dalle sale e non esegue ordini".
+//
+// LA CAUSA: non c'era nessuno stato. C'era una catena di `else if` che finiva in un ramo di
+// scarto - "Ponte avviato, collegamento a Telegram in corso..." - dove cadeva TUTTO quello che non
+// rientrava nei quattro casi previsti. Fra le cose che ci cadevano dentro c'e' il caso in cui il
+// ponte dice chiaro e tondo di non occuparsi di Telegram: manda `modalita: 'solo-syntra'`
+// (i ponti sono due, Telegram sul server e Syntra sul computer - vedi cervello/CONSEGNA.md) e
+// l'app quel campo non lo guardava nemmeno. Il ponte diceva "qui Telegram e' spento per scelta" e
+// l'app traduceva "collegamento in corso", per sempre.
+// E l'etichetta dell'interruttore faceva lo stesso di suo: "accesso in corso..." era scritto a
+// mano come contrario di "collegato", senza che nessun accesso fosse in corso.
+//
+// LA REGOLA, da qui in poi: non si scrive mai che qualcosa "e' in corso" se non lo si sa. Se il
+// ponte non risponde si dice che non risponde; se risponde e Telegram non si aggancia si dice da
+// quanto tempo. Un'attesa senza fine non e' uno stato: e' una bugia che impedisce di cercare.
+let tgNonAgganciatoDa=0;      // da quando il ponte risponde ma Telegram non e' dentro
+function tgStatoVero(m){
+ const sale=(tgGruppi&&tgGruppi.length)||0;
+ if(!m||typeof m!=='object')return {chiave:'muto',tono:'err',
+   frase:'Il ponte dei segnali non ha ancora risposto: finché tace non arriva nessun segnale.'};
+ if(m.collegato){ tgNonAgganciatoDa=0;
+   return {chiave:'collegato',tono:'ok',frase:'Collegato a Telegram. Sale in ascolto: '+sale+'.'}; }
+ if(m.modalita==='simulatore')return {chiave:'simulatore',tono:'ok',
+   frase:'Ponte attivo in MODALITA SIMULATORE: i messaggi sono inventati, servono solo a provare la catena.'};
+ // IL CASO CHE MANCAVA, ed e' quello del telefono: questo ponte non tocca Telegram per scelta.
+ if(m.modalita==='solo-syntra')return {chiave:'solo-syntra',tono:'err',
+   frase:'Questo ponte legge SOLO Syntra: Telegram qui non viene acceso, quindi da qui le sale '
+     +'Telegram non arrivano. Il ponte di Telegram è un altro — quello sul server — e va raggiunto '
+     +'sulla porta 8769 del server (Collegamento → Accesso da altri dispositivi).'};
+ if(!m.credenziali_presenti)return {chiave:'credenziali',tono:'err',
+   frase:'Ponte attivo, ma mancano le credenziali Telegram: vanno messe in configurazione.json sul PC '
+     +'(api_id e api_hash da my.telegram.org). Non si inseriscono da qui.'};
+ if(m.errore)return {chiave:'errore',tono:'err',frase:'Il ponte dice: '+m.errore};
+ // Qui il ponte risponde e Telegram non e' dentro. Si dice COSA manca, quando si sa.
+ if(m.accesso_serve){
+  const cosa=m.accesso_serve==='telefono'?'il numero di telefono'
+           :m.accesso_serve==='codice'?'il codice di verifica'
+           :m.accesso_serve==='password'?'la password della verifica in due passaggi'
+           :String(m.accesso_serve);
+  return {chiave:'accesso',tono:'err',
+    frase:'Telegram sta aspettando '+cosa+': finché non glielo dai, i segnali non arrivano.'};
+ }
+ if(!tgNonAgganciatoDa)tgNonAgganciatoDa=Date.now();
+ const secondi=Math.round((Date.now()-tgNonAgganciatoDa)/1000);
+ // I primi venti secondi un'attesa e' davvero un'attesa: il ponte si sta agganciando.
+ if(secondi<20)return {chiave:'aggancio',tono:'',frase:'Ponte avviato, collegamento a Telegram in corso…'};
+ // Dopo, no. Si dice da quanto, e cosa guardare.
+ return {chiave:'fermo',tono:'err',
+   frase:'Il ponte risponde ma Telegram non si aggancia da '
+     +(secondi>=120?(Math.round(secondi/60)+' minuti'):(secondi+' secondi'))
+     +(m.telefono_salvato===false
+        ? '. Il numero non è salvato e il ponte non lo sta chiedendo: quasi sempre vuol dire che la '
+          +'sessione Telegram sta su un altro ponte.'
+        : '. Controlla il registro del ponte sul server.')
+     +' Finché resta così non arriva nessun segnale e nessun ordine parte.'};
+}
 function tgStato(testo,tipo){
  const el=$('tgStatusBox'); if(!el)return;
  el.textContent=testo;
@@ -25794,6 +25865,12 @@ $('syntraSalvaBtn')?.addEventListener('click',syntraManda);
 // `fonte`: da quale dei due ponti arriva questo stato. Lo stato di Syntra lo scrive SOLO il ponte
 // di Syntra: quello del server gira su Linux e direbbe "non puo' funzionare", cancellando lo stato
 // vero che arriva dal computer.
+// L'ultimo stato arrivato dal ponte di Telegram (non da quello di Syntra): lo legge l'etichetta
+// dell'interruttore, che viene disegnata anche fuori dall'arrivo di un messaggio.
+// VAR e non LET di proposito: tgAggiornaInterruttore() sta PIU' SOPRA in questo stesso blocco e
+// la legge. Con let, una chiamata che arrivasse prima di questa riga morirebbe nella zona morta
+// temporale; con var la variabile esiste gia', vuota, ed e' esattamente il caso 'non so ancora'.
+var tgUltimoStato=null;
 function tgApplicaStato(m,fonte){
  // I titoli delle sale, mandati dal ponte: li risolve lui su Telegram quando si mette in ascolto,
  // per OGNI voce dell'elenco configurato. Cosi' il nome leggibile c'e' da subito anche per le sale
@@ -25817,6 +25894,7 @@ function tgApplicaStato(m,fonte){
   (m.syntra.utenti||[]).forEach(u=>syntraVisto('Syntra · '+u));
   try{ syntraDisegna(); }catch(e){}
  }
+ tgUltimoStato=m;
  if(Array.isArray(m.chat)){
    tgGruppi=m.chat; tgRenderGruppi();
    // Copia locale dell'elenco sale: condivisa con gli altri dispositivi (vedi GRAFICO_LS) e
@@ -25832,17 +25910,11 @@ function tgApplicaStato(m,fonte){
    if(m.collegato)tgAccessoConcluso();
  }
  tgAggiornaInterruttore(m);
- if(m.modalita==='simulatore'){
-   tgStato('Ponte attivo in MODALITA SIMULATORE: i messaggi sono inventati, servono solo a provare la catena.','ok');
- }else if(!m.credenziali_presenti){
-   tgStato('Ponte attivo, ma mancano le credenziali Telegram: vanno messe in configurazione.json sul PC (api_id e api_hash da my.telegram.org). Non si inseriscono da qui.','err');
- }else if(m.errore){
-   tgStato('Il ponte dice: '+m.errore,'err');
- }else if(m.collegato){
-   tgStato('Collegato a Telegram. Sale in ascolto: '+(tgGruppi.length||0)+'.','ok');
- }else{
-   tgStato('Ponte avviato, collegamento a Telegram in corso…');
- }
+ // La catena di "else if" che stava qui e' diventata tgStatoVero(): aveva un ramo di scarto in
+ // fondo che diceva "in corso" a tutto quello che non riconosceva, compreso un ponte che dichiara
+ // di non occuparsi di Telegram. Ora la domanda e' una sola e la risposta la da' un posto solo.
+ const st=tgStatoVero(m);
+ tgStato(st.frase,st.tono);
 }
 // RICHIESTO ESPLICITAMENTE: all'arrivo di un segnale parte un suono, scelto fra gli stessi delle
 // linee Alarm (quelli di default e quelli caricati dall'utente). Non si duplica niente: si riusano
@@ -29198,17 +29270,49 @@ function fblServerCampiValidi(){
 $('fblServerProva')?.addEventListener('click',async ()=>{
  const v=fblServerCampiValidi(); if(!v||!v.host)return;
  $('fblServerEsito').textContent='Provo…';
- try{
-  const r=await fetch('https://'+v.host+':8000/health?chiave='+encodeURIComponent(v.chiave),{cache:'no-store'});
-  const d=await r.json().catch(()=>({}));
-  if(r.ok&&d.servizio==='server-oracle'){
-   $('fblServerEsito').innerHTML='✅ Server raggiungibile: Kraken '+escapeHtmlText(String(d.kraken||''))+', MT5 '+(d.mt5?'sì':'no (resta sul computer)')+'.';
-  }else{
-   $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Il server risponde ma rifiuta:</b> '+escapeHtmlText(String(d.detail||('errore '+r.status)))+'.';
-  }
- }catch(e){
+ // SI PROVANO TUTTE E DUE LE PORTE CHE IL SERVER PROMETTE, non solo la prima.
+ //
+ // SEGNALATO dal proprietario: "il server dice che il collegamento e' stabilito e poi i segnali
+ // non arrivano". Aveva ragione, e la colpa era di questa riga: si provava SOLO la 8000 (Kraken e
+ // il passaggio degli ordini) e poi si scriveva "Server raggiungibile", punto. I segnali stanno
+ // sulla 8769, che e' un altro servizio: quella porta non veniva mai toccata. Un semaforo verde
+ // che copre meta' impianto e' peggio di nessun semaforo, perche' manda a cercare il guasto dove
+ // non e'.
+ const provaPorta=async (porta,percorso)=>{
+  try{
+   const r=await fetch('https://'+v.host+':'+porta+percorso+'?chiave='+encodeURIComponent(v.chiave),{cache:'no-store'});
+   const d=await r.json().catch(()=>({}));
+   return {ok:r.ok,stato:r.status,d};
+  }catch(e){ return {ok:false,stato:0,d:{},rete:true}; }
+ };
+ const [base,segn]=await Promise.all([provaPorta(8000,'/health'),provaPorta(8769,'/health')]);
+ if(base.rete){
   $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Server non raggiungibile.</b> Tailscale è acceso su questo dispositivo, con lo stesso account del server?';
+  return;
  }
+ if(!(base.ok&&base.d.servizio==='server-oracle')){
+  $('fblServerEsito').innerHTML='<b style="color:#ff7b78">Il server risponde ma rifiuta:</b> '+escapeHtmlText(String(base.d.detail||('errore '+base.stato)))+'.';
+  return;
+ }
+ const righe=['✅ <b>Kraken e ordini</b> (porta 8000): risponde. Kraken '+escapeHtmlText(String(base.d.kraken||''))
+   +', MT5 '+(base.d.mt5?'sì':'no (resta sul computer)')+'.'];
+ if(segn.rete){
+  righe.push('❌ <b>Segnali</b> (porta 8769): nessuna risposta. È un servizio a parte: può essere spento, '
+    +'o non esposto su Tailscale. Finché tace non arriva nessun segnale dalle sale.');
+ }else if(!segn.ok){
+  righe.push('❌ <b>Segnali</b> (porta 8769): risponde ma rifiuta (errore '+segn.stato+').'
+    +(segn.stato===403?' La chiave del server non va bene per questo servizio.':''));
+ }else{
+  const mod=String(segn.d.modalita||'');
+  const coll=!!segn.d.collegato;
+  righe.push((coll?'✅':'⚠️')+' <b>Segnali</b> (porta 8769): risponde'
+    +(mod?(', modalità <b>'+escapeHtmlText(mod)+'</b>'):'')
+    +(coll?', collegato a Telegram.'
+          :(mod==='solo-syntra'
+            ? '. Questo ponte NON tocca Telegram: le sale Telegram da qui non arrivano.'
+            : '. Risponde ma Telegram non è agganciato: i segnali non arrivano.')));
+ }
+ $('fblServerEsito').innerHTML=righe.join('<br>');
 });
 $('fblServerSalva')?.addEventListener('click',()=>{
  const v=fblServerCampiValidi(); if(!v)return;

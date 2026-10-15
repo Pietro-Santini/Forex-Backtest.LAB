@@ -268,21 +268,70 @@ def _normalizza(testo: str) -> str:
     return t
 
 
+def _valore(grezzo: str) -> Optional[float]:
+    """Un numero scritto come lo scrive una persona, in qualunque convenzione.
+
+    SEGNALATO dal proprietario (15 ottobre 2026) mentre provava una sala che scrive in italiano:
+    "Entrata: 105,91" veniva letto benissimo, ma "Entrata: 80.958,50" diventava **80.958** - un
+    prezzo mille volte piu' piccolo del vero. Il punto delle migliaia veniva preso per un punto
+    decimale e il ",50" buttato via (anzi: riletto come un secondo numero, "50", che finiva fra i
+    target "fuori scala"). Su BTC o ETH, dove le migliaia ci sono sempre, ogni prezzo del
+    messaggio - entrata, stop e target - usciva sbagliato di un fattore 1000.
+
+    LA REGOLA, che non ha bisogno di sapere da che paese arriva il messaggio:
+      - se ci sono SIA il punto SIA la virgola, l'ULTIMO dei due e' il decimale e l'altro separa
+        le migliaia. Vale per "80.958,50" (italiano) e per "80,958.50" (inglese), senza doverli
+        distinguere;
+      - se lo stesso separatore compare piu' di una volta sono per forza le migliaia
+        ("1.234.567");
+      - se ce n'e' uno solo e' il decimale ("105,91", "105.91").
+
+    RESTA AMBIGUO, e si lascia com'e': un separatore solo seguito da esattamente tre cifre
+    ("1.234") puo' essere milleduecentotrentaquattro o uno-virgola-duecentotrentaquattro, e NESSUNA
+    regola puo' deciderlo guardando il numero. Indovinare qui vorrebbe dire sbagliare in silenzio;
+    si tiene la lettura di prima (decimale) perche' e' quella con cui tutte le sale gia' lette
+    funzionano.
+    """
+    g = str(grezzo or "").strip()
+    if not g:
+        return None
+    if "." in g and "," in g:
+        if g.rfind(",") > g.rfind("."):
+            g = g.replace(".", "").replace(",", ".")     # 80.958,50
+        else:
+            g = g.replace(",", "")                       # 80,958.50
+    elif g.count(",") > 1:
+        g = g.replace(",", "")                           # 1,234,567
+    elif g.count(".") > 1:
+        g = g.replace(".", "")                           # 1.234.567
+    else:
+        g = g.replace(",", ".")                          # 105,91
+    try:
+        return float(g)
+    except ValueError:
+        return None
+
+
+# Un numero intero, oppure con le migliaia separate, oppure con i decimali, oppure tutte e due.
+# La prima alternativa (con almeno un gruppo di migliaia) va provata per prima, altrimenti
+# "80.958,50" verrebbe troncato a "80". Il (?!\d) in fondo impedisce di fermarsi a meta' numero.
+_RE_NUMERO = r"(?<![\w#])(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,6})?|\d{1,9}(?:[.,]\d{1,6})?)(?!\d)"
+
+
 def _numeri(testo: str) -> List[float]:
-    """Tutti i numeri di una riga, virgola decimale compresa.
+    """Tutti i numeri di una riga: virgola decimale e separatore delle migliaia compresi.
 
     Scarta quelli attaccati a un % o preceduti da # (sono percentuali e numeri d'ordine, non
     prezzi): lasciarli passare significherebbe prendere "TP 50%" per un target a 50.
     """
     out = []
-    for m in re.finditer(r"(?<![\w#])(\d{1,7}(?:[.,]\d{1,6})?)", testo):
+    for m in re.finditer(_RE_NUMERO, testo):
         dopo = testo[m.end():m.end() + 1]
         if dopo == "%":
             continue
-        try:
-            out.append(float(m.group(1).replace(",", ".")))
-        except ValueError:
-            pass
+        v = _valore(m.group(1))
+        if v is not None:
+            out.append(v)
     return out
 
 
