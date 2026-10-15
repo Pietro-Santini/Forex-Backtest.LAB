@@ -255,3 +255,21 @@
   un controllo parziale non e' "meglio di niente", e' peggio, perche' sposta la ricerca altrove.
   O si provano tutti i servizi che la frase lascia intendere, o la frase deve dire quale si e'
   provato.
+
+- **Un numero senza la sua unita' di misura e' un malinteso che aspetta.** (15 ottobre 2026, il
+  "5%" delle sale segnali.) La casella diceva "5" e la colonna "Rischio", ma chi la compilava
+  pensava "metto dentro il 5% del conto" mentre il codice calcolava "posso perdere il 5% del
+  conto": sullo stesso segnale, 4,16 lotti contro 18,51. Nessuno dei due era un errore di
+  programmazione - era un errore di LETTURA, reso possibile dall'interfaccia. La differenza si
+  vedeva solo a posizione aperta, nel margine impegnato, e infatti e' arrivata come "come mai ha
+  usato 5.839 euro?". Dove un numero puo' voler dire due cose, l'unita' di misura si mette
+  ATTACCATA al numero e si lascia scegliere: non in una schermata di impostazioni, non in una nota,
+  non nel nome della colonna.
+
+- **Un limite scritto per un mercato va riletto quando ne arriva un altro.** (15 ottobre 2026, lo
+  stop al 22% su SOL.) Il controllo "questo stop e' lontanissimo, non e' un prezzo vero" era al 20%
+  per tutti, e andava benissimo finche' c'erano solo forex e oro. Sulle cripto rifiutava segnali
+  perfettamente normali, in silenzio e prima di ogni altro calcolo - tanto che il difetto e' saltato
+  fuori solo scrivendo i test per un'altra cosa. Quando si aggiunge una famiglia di strumenti non
+  bastano i listini e le conversioni: vanno ripassate anche tutte le SOGLIE scritte addosso alla
+  famiglia di prima.
