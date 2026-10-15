@@ -406,7 +406,17 @@
 //               del controllo periodico moriva in silenzio. Non l'ha creato questa versione: l'ha
 //               scoperto, perche' accendendo di base i segnali cripto su Kraken quella strada ha
 //               cominciato a essere percorsa davvero.
-const CACHE_NAME = "forex-backtest-lab-v153";
+//          v154 = IL PANNELLO DEGLI ORDINI SULLA PAGINA SPARISCE. Gli ordini si aprono dalla barra
+//               dentro al grafico - a mercato e pendenti - e quel riquadro non serviva piu'.
+//               E' NASCOSTO, non cancellato: i suoi campi non sono un duplicato di quelli della
+//               barra, sono la MEMORIA dell'applicazione (li legge mezzo programma, dal lottaggio
+//               consigliato all'apertura vera) e la barra ci scrive sopra. Cancellarli avrebbe
+//               rotto proprio la barra che li ha sostituiti.
+//               Verificato prima di nascondere: chiudere una posizione si fa dal suo pulsante
+//               nella tabella, e chiudere a blocchi dal menu "Operazioni a blocco" - che offre
+//               piu' del vecchio "CHIUDI TUTTE" (tutte, in guadagno, in perdita, per direzione,
+//               per asset).
+const CACHE_NAME = "forex-backtest-lab-v154";
 const ASSETS = [
   "./",
   "./app.html",
