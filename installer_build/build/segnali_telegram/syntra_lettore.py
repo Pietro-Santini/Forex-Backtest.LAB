@@ -1038,20 +1038,52 @@ async def leggi_profilo(adb: Adb, utente: str, pagine: int, log: Callable[[str],
             log("Syntra: profilo di %s interrotto: l'app non e' tornata in primo piano" % utente)
             break
         xml = await adb.schermata()
-        # ESPANSIONE, una posizione per volta, dall'alto in basso. Si va avanti finche' ci sono
-        # pulsanti «Vedi dettagli»; ci si ferma da soli se un tocco non cambia piu' niente, cosi'
-        # un pulsante che non risponde non blocca il giro.
-        for _ in range(16):
+        # APRI UNA POSIZIONE, LEGGILA, TORNA INDIETRO, PASSA ALLA SUCCESSIVA.
+        #
+        # SEGNALATO dal proprietario: "apre la prima posizione, legge i valori di quella posizione e
+        # basta, e poi chiude". LA CAUSA: toccare «Vedi dettagli TP/SL» non sempre espande la scheda
+        # SUL POSTO - spesso apre una PAGINA A SE'. Da li' in poi non c'erano piu' pulsanti da
+        # toccare (il giro di espansione finiva), si leggeva quell'unica operazione, e alla schermata
+        # dopo la "pagina" era sempre quella: due letture uguali di fila = "non scorre piu'", e via.
+        # Ora si riconosce il caso: se dopo il tocco non siamo piu' sul profilo, quella pagina si
+        # LEGGE e poi si torna indietro, riprendendo dalla posizione seguente.
+        fatti = 0
+        for _ in range(24):
             esp = trova_espansori(xml)
-            if not esp:
+            if fatti >= len(esp):
                 break
             prima = xml
-            await adb.tocca(*esp[0])
-            await asyncio.sleep(0.7)
+            await adb.tocca(*esp[fatti])
+            await asyncio.sleep(0.8)
             xml = await adb.schermata()
+            if not e_pagina_profilo(xml):
+                # Pagina a se': si prende tutto quello che c'e' (il dettaglio porta entrata, stop e
+                # target, che e' esattamente cio' che serve) e si torna sul profilo.
+                for sc in leggi_schermata(xml)["schede"]:
+                    trovate[chiave(sc)] = sc
+                try:
+                    d = leggi_dettaglio(xml)
+                except Exception:
+                    d = None
+                if d:
+                    trovate[chiave(d)] = d
+                try:
+                    await adb.indietro()
+                except Exception:
+                    pass
+                await asyncio.sleep(1.0)
+                xml = await adb.schermata()
+                fatti += 1
+                if not e_pagina_profilo(xml):
+                    # Non si e' tornati dove si era: non si insiste a toccare al buio.
+                    log("Syntra: non sono tornato sul profilo di %s: mi fermo qui" % utente)
+                    break
+                continue
             if xml == prima:
                 log("Syntra: il dettaglio non si apre: vado avanti con quello che c'e'")
                 break
+            # Espansa sul posto: il suo pulsante sparisce dall'elenco, quindi `fatti` resta dov'e'
+            # e il giro dopo prende la prossima.
         schede = leggi_schermata(xml)["schede"]
         for sc in schede:
             if (sc.get("utente") or utente) != utente:

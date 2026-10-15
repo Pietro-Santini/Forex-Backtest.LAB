@@ -351,7 +351,26 @@
 //               riduzione si legge nella scheda del segnale. 100% = nessun tetto, come prima.
 //               Il margine impegnato ora si legge nel riquadro del lottaggio consigliato, accanto
 //               al rischio: erano due numeri diversi e se ne vedeva uno solo.
-const CACHE_NAME = "forex-backtest-lab-v151";
+//          v152 = POSIZIONI KRAKEN ANCORATE ALLA CANDELA VERA. Il ponte non diceva QUANDO una
+//               posizione era stata aperta (Kraken lo manda in "fillTime", non veniva letto):
+//               l'app ripiegava sulla data della strategia - che su un altro dispositivo non
+//               esiste - e in ultimo su "venti candele prima della fine", cioe' un punto qualunque.
+//               L'entrata finiva sopra candele che quel prezzo non l'avevano mai toccato. Ora il
+//               ponte manda aperta_ms (anche il conto simulato) e la casella sta dove deve.
+//               E tornano la FRECCIA di apertura e la LINEA fino al prezzo di adesso, come per le
+//               posizioni MT5: si disegnano solo quando l'orario e' quello vero, perche' con un
+//               ripiego indicherebbero una candela a caso.
+//               "VAI A GRAFICO" PORTA ANCHE SUL CONTO GIUSTO: un'operazione cripto riporta sul
+//               conto Kraken, una forex su MT5, dalla tabella delle posizioni come dal Trade
+//               Journal. Il conto decide la FONTE dei prezzi: guardare una posizione Kraken col
+//               conto MT5 davanti vuol dire leggere i suoi livelli sopra candele di un'altra
+//               fonte. Il conto si cambia PRIMA di caricare l'asset, per non caricarlo due volte.
+//               SYNTRA (serve il reinstaller): il tocco su "Vedi dettagli TP/SL" spesso non
+//               espande sul posto, APRE UNA PAGINA A SE'. Da li' non c'erano piu' pulsanti, si
+//               leggeva quell'unica operazione e il giro finiva: "apre la prima posizione, la
+//               legge, e poi basta". Ora quella pagina si legge, si torna indietro e si riprende
+//               dalla posizione seguente, fino al periodo scelto.
+const CACHE_NAME = "forex-backtest-lab-v152";
 const ASSETS = [
   "./",
   "./app.html",

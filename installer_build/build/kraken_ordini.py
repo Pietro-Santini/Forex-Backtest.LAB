@@ -70,6 +70,23 @@ FILE_CONTI = os.path.join(CARTELLA_CONTI, "conti.json")
 import kraken_simulato as _sim
 
 router = APIRouter(prefix="/kraken")
+
+
+def _ms_iso(v) -> Optional[float]:
+    """La data che manda Kraken (ISO 8601, es. "2026-10-14T21:03:11.123Z") in millisecondi.
+
+    Serve per dire all'app QUANDO una posizione e' stata aperta: senza, il grafico deve indovinare
+    e disegna la casella in un punto qualunque, staccata dalle candele.
+    None se manca o non si legge: meglio nessun orario che uno inventato - l'app sa gia' come
+    comportarsi quando non lo sa."""
+    if not v:
+        return None
+    t = str(v).strip().replace("Z", "+00:00")
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(t).timestamp() * 1000.0
+    except Exception:
+        return None
 _lock = threading.Lock()
 # Nomi delle monete diversi su Kraken.
 ALIAS = {"BTC": "XBT"}
@@ -692,6 +709,12 @@ def posizioni():
                 stop = float(o.get("stopPrice") or 0)
         out.append({"simbolo": s, "lato": lato, "quantita": q, "entrata": entrata, "mark": mark,
                     "pnl": (mark - entrata) * q * (1 if lato == "BUY" else -1),
+                    # QUANDO e' stata aperta (millisecondi). Kraken lo manda in "fillTime"; l'app lo
+                    # usa per ancorare la posizione alla candela giusta invece di indovinare - senza
+                    # di questo la casella finiva in un punto qualunque del grafico, staccata dalle
+                    # candele, e non si potevano disegnare ne' la freccia di apertura ne' la linea
+                    # che la collega al prezzo di adesso.
+                    "aperta_ms": _ms_iso(p.get("fillTime")),
                     "tp": sorted(tps, key=lambda x: x["prezzo"]), "sl": stop, "stops": stops})
     # Tutti gli ordini aperti per numero: l'app riconosce quelli di ogni segnale.
     aperti = [o.get("order_id") for o in ordini]

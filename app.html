@@ -19421,6 +19421,10 @@ async function jumpToTradeOnChart(tradeIndex){
  // chiusura, quindi riflette la sessione REALE in cui quel trade è avvenuto, non quella attuale.
  const ok=await ensureSessionActive(t.mode||'backtest');
  if(!ok)return; // login Capital.com richiesto: si potrà ripremere "Vai a grafico" dopo essersi collegati
+ // ...e sul conto su cui quell'operazione e' stata presa davvero: un'operazione cripto riporta sul
+ // conto Kraken, una forex su MT5. Senza, si guardavano i suoi livelli sopra le candele di
+ // un'altra fonte e i numeri non combaciavano (richiesto esplicitamente).
+ await fblVaiAlContoDi(t);
  const tradeWasLive=(t.mode==='live'||t.mode==='live_propfirm');
  const currentAsset=$('market')?.value||'';
  if(t.asset && currentAsset!==t.asset){
@@ -19512,10 +19516,44 @@ async function caricaStoricoPerSaltoAGrafico(asset){
    ? ('non riesco a caricare le candele di '+asset+' su questo dispositivo: il collegamento dal vivo per quell\'asset non e\' disponibile qui. Aprilo dal computer, oppure aggiungi il suo storico dalla Libreria CSV.')
    : ('nessuno storico in libreria per '+asset+': aggiungilo da "Libreria storici CSV per asset" per poterlo vedere a grafico.')};
 }
+// A QUALE CONTO APPARTIENE un'operazione: 'kraken', 'mt5', 'capital', oppure null (simulata).
+//
+// RICHIESTO dal proprietario: "se premo su una posizione Kraken, o su un'operazione cripto nel
+// trade journal, deve passare al conto Kraken da solo; e viceversa, su una posizione forex deve
+// caricare il conto MT5. Deve riconoscere dove e' stata presa, cosi' il grafico e i numeri
+// combaciano".
+//
+// PERCHE' CONTA davvero: il conto scelto decide la FONTE dei prezzi del grafico e dove finirebbe
+// un ordine. Guardare una posizione Kraken con il conto MT5 davanti vuol dire leggere i suoi
+// livelli sopra candele di un'altra fonte - due numeri che non torneranno mai.
+// null = operazione simulata o di backtest: non si cambia niente, perche' non appartiene a nessun
+// conto vero e cambiare conto sarebbe un effetto collaterale che nessuno ha chiesto.
+function fblContoDiOperazione(x){
+ if(!x)return null;
+ if(x.krakenConto!=null||x.krakenChiave!=null||x.krakenSimbolo!=null
+    ||x.account==='kraken'||x.conto==='kraken')return 'kraken';
+ if(x.mt5Ticket!=null||x.mt5Login!=null)return 'mt5';
+ if(x.account==='capital'||x.conto==='capital')return 'capital';
+ return null;
+}
+// Porta l'app sul conto di quell'operazione, se serve. Non blocca il salto a grafico se il conto
+// non si riesce a cambiare (es. Kraken non collegato): fblContoScegli lo dice gia' da solo nella
+// barra di stato, e vedere il grafico resta meglio che non vedere niente.
+async function fblVaiAlContoDi(x){
+ const c=fblContoDiOperazione(x);
+ if(!c)return false;
+ try{ if(fblContoVista===c&&liveModeActive)return false; }catch(e){}
+ try{ await fblContoScegli(c); }catch(e){}
+ try{ return fblContoVista===c; }catch(e){ return false; }
+}
 async function jumpToPositionOnChart(posId){
  const pos=positions.find(p=>String(p.id)===String(posId));
  if(!pos)return;
  clearClosedTradeHighlight();
+ // Prima il CONTO giusto (vedi fblVaiAlContoDi), poi l'asset: cambiare conto ricarica il grafico,
+ // quindi farlo dopo vorrebbe dire caricare l'asset due volte - e per un istante vedere i livelli
+ // della posizione sopra le candele della fonte sbagliata.
+ await fblVaiAlContoDi(pos);
  const currentAsset=$('market')?.value||'';
  if(pos.asset && currentAsset!==pos.asset){
    applyAssetSelection(pos.asset);
@@ -38998,7 +39036,10 @@ async function capitalOrdineManuale(side){
 // serve a evidenziarla - e il titolo del pulsante lo dice invece di prometterlo e basta.
 var krakenSelezionata='';
 // Dal contratto Kraken all'asset dell'app: PF_XBTUSD -> BTC -> l'asset che a grafico ha BTC.
-function krakenVaiAGrafico(simbolo){
+async function krakenVaiAGrafico(simbolo){
+ // Dalla tabella delle posizioni Kraken si va SEMPRE sul conto Kraken: e' da li' che si sta
+ // guardando, e il grafico deve mostrare la stessa fonte di prezzi con cui quei numeri sono nati.
+ try{ if(fblContoVista!=='kraken'||!liveModeActive)await fblContoScegli('kraken'); }catch(e){}
  const base=krakenBaseDaSimbolo(simbolo);
  let trovato='';
  try{
@@ -39453,8 +39494,22 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
   // posizione (vedi krakenStrategiaPerDisegno). E' la correzione del "sul telefono vedo solo
   // l'entrata e il P/L".
   const st=krakenStrategiaPerDisegno(p.simbolo);
-  const t0=st?Number(st.creato):null;
-  let origine=t0?rowIndexContainingTime(t0):null;
+  // QUANDO e' stata aperta davvero.
+  //
+  // SEGNALATO dal proprietario: "il punto d'entrata non combacia con le candele... la posizione e'
+  // stata aperta in una parte dove il grafico non l'ha toccata".
+  // LA CAUSA: il ponte non diceva l'orario di apertura (Kraken lo manda in "fillTime", ma non
+  // veniva letto), quindi qui si ripiegava sulla data di creazione della STRATEGIA - che su un
+  // altro dispositivo non esiste nemmeno - e in ultimo su "venti candele prima della fine", cioe'
+  // un punto qualunque. L'entrata veniva cosi' disegnata sopra candele che quel prezzo non l'hanno
+  // mai toccato, ed era impossibile capire dove la posizione fosse davvero nata.
+  // Ordine di preferenza: l'orario VERO dell'exchange, poi la strategia, e solo come ultima
+  // risorsa il ripiego - che pero' adesso si sa di essere un ripiego (origineVera), e per questo
+  // non si disegnano la freccia e il connettore: meglio non dirlo che dirlo sbagliato.
+  const apertaMs=Number(p.aperta_ms);
+  const t0=(Number.isFinite(apertaMs)&&apertaMs>0)?apertaMs:(st?Number(st.creato):null);
+  let origine=(Number.isFinite(t0)&&t0>0)?rowIndexContainingTime(t0):null;
+  const origineVera=origine!=null;
   if(origine==null)origine=Math.max(0,(rows.length||1)-20);
   if(origine>idx)return;
   const sl=Number.isFinite(krakenPrezzo(p.sl))?krakenPrezzo(p.sl):(st?krakenPrezzo(st.sl):NaN);
@@ -39481,6 +39536,30 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
    tooltipLines:['🐙 '+krakenNome()+' · '+(buy?'BUY':'SELL')+' '+p.quantita+' '+p.simbolo,
     'Entrata '+entry+' · SL '+(Number.isFinite(sl)?sl:'—')+' · TP '+(tps.join(' / ')||'—'),
     'P/L '+usd(Number(p.pnl)||0)+' · R/R '+rr,'Margine usato '+usd(margine).replace('+','')+' (leva '+krakenLeva()+'x)']});
+  // LA FRECCIA DI APERTURA E IL CONNETTORE, come per le posizioni MT5 (richiesto: "non viene
+  // visualizzata la freccettina di apertura della posizione, la linea di intermezzo tra il punto di
+  // apertura e il prezzo corrente, e l'altra freccettina").
+  // Si disegnano SOLO quando si sa davvero dove la posizione e' nata: con l'orario ripiegato
+  // indicherebbero una candela a caso, che e' peggio di non indicarne nessuna.
+  if(origineVera){
+   const xOpen=pad.l+(origine-start+.5)*cw/n, xNow=pad.l+(idx-start+.5)*cw/n;
+   const pEntrata=entry+off;
+   const pAdesso=Number.isFinite(prezzo)?prezzo:(mark+off);
+   const yOpen=y(pEntrata), yNow=y(pAdesso);
+   const inGuadagno=(buy?(pAdesso-pEntrata):(pEntrata-pAdesso))>=0;
+   const col=inGuadagno?TRADE_ARROW_BLUE:TRADE_ARROW_RED;
+   const dentro=(v,x)=>v>=lo&&v<=hi&&x>=pad.l-1&&x<=w-pad.r+1;
+   if(dentro(pEntrata,xOpen)||dentro(pAdesso,xNow)){
+    ctx.save();
+    ctx.setLineDash([6,5]); ctx.strokeStyle=col; ctx.lineWidth=1.4; ctx.globalAlpha=0.85;
+    ctx.beginPath(); ctx.moveTo(xOpen,yOpen); ctx.lineTo(xNow,yNow); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1; ctx.restore();
+   }
+   // Apertura: stessa convenzione delle posizioni MT5 - BUY blu verso l'alto, SELL rossa in giu'.
+   if(dentro(pEntrata,xOpen))try{ drawTradeArrow(ctx,xOpen,yOpen,buy?'up':'down',buy?TRADE_ARROW_BLUE:TRADE_ARROW_RED); }catch(e){}
+   // Dov'e' adesso: la punta segue la direzione in cui il prezzo si e' mosso, come a grafico.
+   if(dentro(pAdesso,xNow))try{ drawTradeArrow(ctx,xNow,yNow,pAdesso<pEntrata?'up':'down',col); }catch(e){}
+  }
   // TP intermedi (chiusure parziali): righe sottili con il loro numero
   if(box&&tps.length>1){
    ctx.save(); ctx.font='10px Inter, system-ui, sans-serif';

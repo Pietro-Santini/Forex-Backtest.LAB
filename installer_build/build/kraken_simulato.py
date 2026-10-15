@@ -203,7 +203,10 @@ class Simulatore:
     def _esegui(self, sym, lato, q, prezzo, maker, tipo, cli=None, ts=None):
         """Applica un eseguito (lato buy/sell, quantita' q>0) alla posizione netta."""
         segno = 1 if lato == "buy" else -1
-        p = self.s["posizioni"].get(sym) or {"q": 0.0, "entrata": prezzo}
+        # QUANDO e' stata aperta. Serve all'app per ancorare la posizione alla candela giusta:
+        # senza, il grafico deve indovinare, e disegna la casella in un punto qualunque (segnalato
+        # dal proprietario: "il punto d'entrata non combacia con le candele").
+        p = self.s["posizioni"].get(sym) or {"q": 0.0, "entrata": prezzo, "aperta": time.time() * 1000.0}
         vecchia = p["q"]
         nuova = vecchia + segno * q
         pnl = 0.0
@@ -215,6 +218,7 @@ class Simulatore:
             pnl = (prezzo - p["entrata"]) * chiusa * (1 if vecchia > 0 else -1)
             if abs(nuova) > 1e-12 and (nuova > 0) != (vecchia > 0):
                 p["entrata"] = prezzo        # girata dall'altra parte
+                p["aperta"] = time.time() * 1000.0   # ...ed e' una posizione nuova, non quella di prima
         comm = q * prezzo * (COMMISSIONE_MAKER if maker else COMMISSIONE_TAKER)
         self.s["saldo"] += pnl - comm
         self.s["commissioni"] += comm
@@ -470,6 +474,18 @@ class Simulatore:
                 self._salva()
             return r
 
+    @staticmethod
+    def _iso_apertura(ms):
+        """Millisecondi -> ISO 8601, lo stesso formato del campo "fillTime" di Kraken: cosi' il
+        resto del ponte legge un campo solo, senza sapere se il conto e' simulato o reale."""
+        try:
+            v = float(ms)
+        except Exception:
+            return None
+        if not (v > 0):
+            return None
+        return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(v / 1000.0)) + ".000Z"
+
     def _api(self, percorso, params):
         if percorso == "/api/v3/accounts":
             pnl = self._pnl_aperto()
@@ -480,7 +496,11 @@ class Simulatore:
                 "availableMargin": max(0.0, eq - usato), "initialMargin": usato}}}
         if percorso == "/api/v3/openpositions":
             return {"result": "success", "openPositions": [
-                {"symbol": sym, "side": "long" if p["q"] > 0 else "short", "size": abs(p["q"]), "price": p["entrata"]}
+                {"symbol": sym, "side": "long" if p["q"] > 0 else "short", "size": abs(p["q"]),
+                 "price": p["entrata"],
+                 # Stesso nome e stesso formato del campo vero di Kraken (ISO 8601), cosi' il resto
+                 # del ponte non deve sapere se il conto e' simulato o reale.
+                 "fillTime": self._iso_apertura(p.get("aperta"))}
                 for sym, p in self.s["posizioni"].items()]}
         if percorso == "/api/v3/openorders":
             return {"result": "success", "openOrders": [

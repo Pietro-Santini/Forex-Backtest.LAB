@@ -196,3 +196,119 @@ def test_il_periodo_ferma_lo_scorrimento():
     assert futuro is not None
     asyncio.run(s.leggi_profilo(adb, "Mario", 10, righe.append, {}, futuro + 86400000))
     assert any("periodo chiesto" in r for r in righe), righe
+
+
+# --------------------------------------------------------------------------------------------
+# IL CASO VERO SEGNALATO: toccare "Vedi dettagli TP/SL" non espande sul posto, APRE UNA PAGINA.
+#
+# "Apre la prima posizione, legge i valori di quella posizione e basta, e poi chiude." Da quella
+# pagina non ci sono piu' pulsanti da toccare, si leggeva quell'unica operazione, e alla schermata
+# dopo la pagina era sempre la stessa: due letture uguali di fila = "non scorre piu'", e via.
+def _dettaglio(i):
+    return ('<root><node bounds="[0,0][1000,1800]"/>'
+            '<node content-desc="Vendita&#10;EURUSD&#10;%d set, 2:00 PM&#10;Entrata:&#10;1.1%d" '
+            'bounds="[0,100][1000,400]">'
+            '<node content-desc="TP #1:&#10;1.09"/><node content-desc="SL:&#10;1.12"/>'
+            '</node></root>') % (i, i)
+
+
+class AdbPagina(AdbFinto):
+    """Come quello vero: il tocco sul pulsante APRE una pagina a se', e si torna con indietro."""
+
+    def __init__(self, pagine=1):
+        super().__init__(pagine=pagine)
+        self.dentro = None
+        self.indietri = 0
+
+    async def schermata(self):
+        if self.fase == "classifica":
+            return XML_CLASSIFICA
+        if self.dentro is not None:
+            return _dettaglio(self.pagina * 10 + self.dentro)
+        return self._profilo()
+
+    async def tocca(self, x, y):
+        if self.fase == "classifica":
+            self.fase = "profilo"
+            return
+        if self.dentro is not None:
+            return                      # dentro il dettaglio non si tocca nulla
+        self.tocchi.append((x, y))
+        for i in range(3):
+            if 100 + i * 50 + 20 <= y <= 100 + i * 50 + 45:
+                self.dentro = i          # si apre la pagina di QUELLA posizione
+
+    async def indietro(self):
+        self.indietri += 1
+        self.dentro = None               # si torna sul profilo, dove si era
+
+
+def test_il_dettaglio_che_apre_una_pagina_non_ferma_il_giro():
+    adb = AdbPagina()
+    righe = []
+    lette = asyncio.run(s.leggi_profilo(adb, "Mario", 1, righe.append, {}, None))
+    assert len(lette) == 3, "tutte e tre le posizioni, non solo la prima: %s" % righe
+    assert len(adb.tocchi) == 3, "una per volta: tre aperture"
+    assert adb.indietri >= 3, "e dopo ognuna si torna indietro: %d" % adb.indietri
+    for sc in lette:
+        assert sc["entrata"] is not None, "di ognuna si leggono i parametri"
+
+
+def test_con_le_pagine_di_dettaglio_si_scorre_lo_stesso_fino_in_fondo():
+    adb = AdbPagina(pagine=3)
+    lette = asyncio.run(s.leggi_profilo(adb, "Mario", 10, lambda r: None, {}, None))
+    assert len(lette) == 9, "tre schermate da tre posizioni, aperte una per una"
+
+
+def test_se_non_si_torna_sul_profilo_ci_si_ferma_invece_di_toccare_al_buio():
+    class NonTorna(AdbPagina):
+        async def indietro(self):
+            self.indietri += 1          # il tasto non fa niente: si resta nel dettaglio
+
+    adb = NonTorna()
+    righe = []
+    lette = asyncio.run(s.leggi_profilo(adb, "Mario", 3, righe.append, {}, None))
+    assert len(lette) >= 1, "quello che si e' letto si tiene"
+    assert len(adb.tocchi) == 1, "ma non si continua a toccare a caso: %s" % adb.tocchi
+    assert any("non sono tornato sul profilo" in r for r in righe), righe
+
+
+def test_mentre_legge_la_cronologia_non_tocca_le_notifiche():
+    """VINCOLO RICHIESTO: "quando sta estrapolando la cronologia deve bloccare momentaneamente la
+    ricerca di nuove posizioni nelle notifiche; finito, riparte da sola".
+
+    Non si prova con una regex ma con l'ALBERO del codice: la lettura del profilo e il giro delle
+    notifiche devono stare su due rami ALTERNATIVI dello stesso `if`, cosi' nello stesso giro non
+    possono avvenire tutte e due - e non e' una promessa scritta in un commento, e' la forma del
+    codice. Il giro dopo, finita la cronologia, la condizione e' falsa e le notifiche riprendono.
+    """
+    import ast
+    import inspect
+
+    albero = ast.parse(inspect.getsource(s))
+    ciclo = next(n for n in ast.walk(albero)
+                 if isinstance(n, ast.AsyncFunctionDef) and n.name == "ciclo")
+
+    def chiama(nodo, nome):
+        return any(isinstance(c, ast.Call) and
+                   ((isinstance(c.func, ast.Name) and c.func.id == nome) or
+                    (isinstance(c.func, ast.Attribute) and c.func.attr == nome))
+                   for c in ast.walk(nodo))
+
+    trovato = False
+    for nodo in ast.walk(ciclo):
+        if not isinstance(nodo, ast.If):
+            continue
+        if not chiama(nodo.test if nodo.test else nodo, "get") and "richiesta_profilo" not in ast.dump(nodo.test):
+            continue
+        legge_profilo = any(chiama(x, "leggi_profilo") for x in nodo.body)
+        if not legge_profilo:
+            continue
+        trovato = True
+        # Nel ramo della cronologia non si toccano le notifiche...
+        assert not any(chiama(x, "giro_notifiche") or chiama(x, "aggiorna_notifiche")
+                       for x in nodo.body), "la cronologia non deve toccare le notifiche"
+        # ...e le notifiche stanno nel ramo ALTERNATIVO (orelse), quindi si escludono a vicenda.
+        assert any(chiama(x, "giro_notifiche") for x in nodo.orelse), \
+            "le notifiche devono stare sul ramo alternativo, non accanto"
+    assert trovato, "non ho trovato il ramo che legge il profilo dentro ciclo()"
