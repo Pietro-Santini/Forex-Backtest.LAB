@@ -592,3 +592,18 @@ Formato: data — chi — cosa — esito collaudo — commit.
   NOTA DI METODO: mai mettere EMOJI nelle ancore degli script di modifica. Nel sorgente dello
   script l'emoji va scritta come escape, e l'escape non e' il carattere: l'ancora non trova niente.
   Mi e' costato quattro tentativi a vuoto oggi.
+
+## 15 ottobre 2026 - v154: via il pannello degli ordini dalla pagina
+  RICHIESTO: "visto che ora si aprono gli ordini dalla barra dentro al grafico, il pannello sulla
+  pagina madre non serve piu'".
+  NASCOSTO, non cancellato, e il perche' e' tutto: i campi di quel pannello (#lots #risk #sl #tp e
+  i gemelli pendenti) non sono un duplicato della barra, sono LA MEMORIA dell'app - $('sl') letto
+  17 volte, $('pendingEntry') 23, $('slPending') 22 - e la barra ci scrive sopra. Cancellarli
+  avrebbe rotto proprio la barra che li ha sostituiti.
+  VERIFICATO PRIMA: avevo detto al proprietario che mancavano i campi dell'ordine pendente e la
+  scelta LIMIT/STOP nel grafico. Mi ha corretto, e aveva ragione: ci sono gia' (il pulsante che
+  crea l'ordine pendente, il selettore LIMIT/STOP accanto, la conferma), e l'entrata si fissa
+  cliccando sul grafico. Avevo cercato dei CAMPI DI TESTO e non avevo visto i pulsanti.
+  E le chiusure: una posizione dal suo pulsante nella tabella, a blocchi dal menu "Operazioni a
+  blocco" - che offre piu' del vecchio "CHIUDI TUTTE" (per risultato, direzione, asset).
+  Test: pannello_ordini_nascosto.test.mjs (4), che tiene fermo l'invariante "invisibili ma vivi".
