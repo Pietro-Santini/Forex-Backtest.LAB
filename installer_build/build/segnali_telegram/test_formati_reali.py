@@ -186,6 +186,24 @@ OK = True
 print("Formati REALI delle sale seguite\n")
 # Segnalato dall'utente: target a fascia abbreviata e stop loss non dichiarato ("VIP GROUP").
 CASI = list(CASI) + [
+    # Segnalato dal proprietario (15 ottobre 2026): "questa sala ha mandato un BTC con tutto -
+    # entrata, quattro target e stop - perche' non e' arrivata come segnale?". Il lettore lo legge
+    # perfettamente (confidenza 100%): il caso resta qui a dimostrarlo, cosi' se un giorno smette
+    # di leggerlo lo si sa subito. Particolarita' tutte insieme: lo strumento con la BARRA
+    # (BTC/USD), lo spazio PRIMA dei due punti ("Entry :"), il simbolo del DOLLARO staccato dal
+    # numero, e i target scritti "Target1:" invece di "TP1:".
+    ("BTC con Target1..4 e dollaro staccato (reale)", """BTC/USD BUY 
+
+Entry : $ 80958
+
+Target1: $ 81547
+Target2: $ 82890
+Target3: $ 84045
+Target4: $ 85182
+
+SL : $ 79469""",
+     {"strumento": "BTCUSD", "direzione": "BUY", "entrata": 80958.0, "stop_loss": 79469.0,
+      "take_profit": [81547.0, 82890.0, 84045.0, 85182.0]}),
     ("buy limit con ENTRY (reale)", "XAUUSD buy LIMIT\n\nENTRY 4190\nSL 4185\nTP 4200",
      {"direzione": "BUY", "strumento": "XAUUSD", "entrata": 4190.0, "tipo_ordine": "limit", "stop_loss": 4185.0, "take_profit": [4200.0]}),
     ("sell-limit con @ (reale)", """🔵🔵30 SEPTEMBER FREE signal forecast: GBPAUD 

@@ -416,7 +416,18 @@
 //               nella tabella, e chiudere a blocchi dal menu "Operazioni a blocco" - che offre
 //               piu' del vecchio "CHIUDI TUTTE" (tutte, in guadagno, in perdita, per direzione,
 //               per asset).
-const CACHE_NAME = "forex-backtest-lab-v154";
+//          v155 = FOOTPRINT "A STRATI" QUANDO SI FERMA IL MERCATO: trovata la causa. Dalle 22 alle
+//               23 il prezzo Capital.com viene spostato per agganciarsi al livello MT5 (i due non
+//               quotano lo stesso identico prezzo, e senza quello scarto la candela salterebbe di
+//               decine di punti alle 22:00 in punto). Quello spostamento pero' si applicava SOLO
+//               all'asset a grafico: un asset della watchlist non a grafico registrava nel
+//               footprint il prezzo GREZZO, e lo stesso asset - quando era a grafico - lo
+//               registrava SPOSTATO. Nel suo registro finivano due livelli diversi per lo stesso
+//               prezzo, a decine di punti l'uno dall'altro: disegnati insieme sono le due bande
+//               staccate che si vedevano. Ora in quell'ora il footprint degli asset NON a grafico
+//               si ferma: si perde un'ora di dati di sottofondo, si evita un footprint che
+//               racconta due prezzi diversi per lo stesso istante.
+const CACHE_NAME = "forex-backtest-lab-v155";
 const ASSETS = [
   "./",
   "./app.html",
