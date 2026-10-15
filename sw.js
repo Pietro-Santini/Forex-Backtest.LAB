@@ -509,7 +509,25 @@
 //               tetto "questo non e' un prezzo vero" era 20% per tutti, e uno stop al 22,5% su una
 //               cripto lo sforava. Ora sulle cripto e' 40%, altrove resta 20%: quel tetto serve
 //               contro i numeri che non sono prezzi, non contro gli stop larghi.
-const CACHE_NAME = "forex-backtest-lab-v160";
+//          v161 = TRE RICHIESTE DELLA LISTA, CHIUSE.
+//               (1) APERTURA AUTOMATICA, DUE INTERRUTTORI: "apri anche senza lo stop della sala" e
+//               "apri anche senza il target della sala". Prima la risposta era sempre si',
+//               calcolandoli - e sono due invenzioni dell'app, non due numeri della sala: chi non
+//               le voleva se ne accorgeva a posizione aperta. Spenti, quel segnale non si apre da
+//               solo e resta nel pannello, da valutare a mano, dicendo perche'. Predefiniti
+//               ACCESI, cioe' il comportamento di sempre. Valgono solo per l'automatico: a mano si
+//               configura quello che si vuole. E via la formula oscura "% piu' in la'": ora dice
+//               "% oltre il pareggio", che e' la stessa cosa detta in modo leggibile.
+//               (2) UNA X PER TOGLIERE UN ASSET DALL'ELENCO, nel popup della ricerca. Non cancella
+//               niente - storico, posizioni e statistiche restano - e si torna indietro: basta
+//               ricercare quell'asset e sceglierlo. Non compare sui risultati di una ricerca (non
+//               sono nell'elenco) ne' sull'asset a grafico adesso. La scelta vale su tutti i
+//               dispositivi.
+//               (3) KRAKEN FRA LE SESSIONI DEL TRADE JOURNAL. Mancava, e le operazioni sulle
+//               cripto si potevano solo cercare a occhio. Kraken non e' una "modalita'" ma un
+//               CONTO: si riconosce con la stessa funzione che usa tutto il resto dell'app, e di
+//               conseguenza "Live Capital.com" non se le prende piu'.
+const CACHE_NAME = "forex-backtest-lab-v161";
 const ASSETS = [
   "./",
   "./app.html",
