@@ -625,3 +625,26 @@ Formato: data — chi — cosa — esito collaudo — commit.
   Sono due cose diverse da questa, e vanno misurate a parte.
   Aggiunto ai formati reali il BTC con "Target1..4" e il dollaro staccato (segnalato: "perche' non
   e' arrivato come segnale?"). Il lettore lo capisce al 100%: il caso resta li' a dimostrarlo.
+
+## 15 ottobre 2026 - v156: su Kraken il lottaggio si adatta al margine che c'e'
+  SEGNALATO: "l'applicazione mi sta dicendo che il margine e' insufficiente su Kraken; io ho messo
+  il 5% del capitale, quindi devi basare il lottaggio in base alla disposizione del nostro conto".
+  Aveva ragione. Il codice RIFIUTAVA il segnale ("servono 12.568 USD, disponibili 8.803") anche
+  quando una posizione piu' piccola ci sarebbe stata benissimo. Il rischio scelto e' un TETTO, non
+  una quota da spendere per forza: se con quel rischio la posizione non ci sta, si apre quella che
+  ci sta - dicendolo - invece di non aprire niente.
+  COME: due tetti e vale il piu' stretto, quello scelto dall'utente (krakenMargineTetto) e quello
+  davvero disponibile sul conto meno un filo di sicurezza (disponibile * 0.98 - Kraken rifiuta al
+  pelo). Il piano si RICALCOLA con tgPiano() e un rischio ridotto della stessa proporzione, non si
+  ritoccano i numeri a mano: cosi' minimi del contratto, fette per ogni target ed "entro rischio"
+  restano coerenti fra loro.
+  E DOPO SI CONTROLLA. Ricalcolare non garantisce di rientrare: con un contratto dal lotto minimo
+  alto il piano ridotto puo' sforare lo stesso. Solo se anche quello non ci sta si rifiuta, e il
+  messaggio dice QUALE dei due tetti non si e' potuto rispettare - "il tetto del 5% che hai
+  scelto" oppure "il margine disponibile sul conto": sono due problemi con due rimedi diversi.
+  La riduzione finisce in voce.autoMotivo, scritta nella scheda del segnale: una posizione aperta
+  con meno rischio di quello scelto deve dire perche', altrimenti domani sembra che il rischio
+  della sala non funzioni - che e' esattamente il dubbio da cui e' nata questa funzione.
+  Test: kraken_margine.test.mjs sale a 6 (il nuovo copre proprio il caso segnalato: tetto del
+  conto piu' stretto di quello scelto, e si apre ridotto invece di rifiutare).
+  RESTA APERTO, invariato: le POSIZIONI sfalsate a mercato chiuso e il footprint in replay.

@@ -427,7 +427,24 @@
 //               staccate che si vedevano. Ora in quell'ora il footprint degli asset NON a grafico
 //               si ferma: si perde un'ora di dati di sottofondo, si evita un footprint che
 //               racconta due prezzi diversi per lo stesso istante.
-const CACHE_NAME = "forex-backtest-lab-v155";
+//          v156 = IL LOTTAGGIO SU KRAKEN SI ADATTA AL MARGINE CHE C'E'. Prima, se con il rischio
+//               scelto la posizione non entrava nel margine, il segnale veniva RIFIUTATO
+//               ("margine insufficiente: servono 12.568 USD, disponibili 8.803") anche quando una
+//               posizione piu' piccola ci sarebbe stata benissimo. Segnalato dal proprietario:
+//               "io ho messo il 5% del capitale, devi basare il lottaggio sulla disponibilita'
+//               del nostro conto". Il rischio scelto e' un TETTO, non una quota da spendere per
+//               forza. Ora si guardano DUE tetti e vale il piu' stretto - quello scelto da te
+//               (margine massimo per operazione) e quello che il conto ha davvero disponibile,
+//               meno un filo di sicurezza - e il piano si RICALCOLA con un rischio ridotto della
+//               stessa proporzione, invece di ritoccare i numeri a mano: cosi' minimi del
+//               contratto, fette per ogni target ed "entro rischio" restano coerenti fra loro.
+//               Dopo il ricalcolo si CONTROLLA che il piano ridotto ci stia davvero (con un
+//               contratto dal minimo alto puo' non starci comunque) e solo allora si rifiuta,
+//               dicendo quale dei due tetti non e' stato possibile rispettare. La riduzione
+//               finisce scritta nella scheda del segnale: una posizione aperta con meno rischio
+//               di quello scelto deve dire perche', altrimenti domani sembra che il rischio della
+//               sala non funzioni.
+const CACHE_NAME = "forex-backtest-lab-v156";
 const ASSETS = [
   "./",
   "./app.html",

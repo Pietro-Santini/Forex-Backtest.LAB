@@ -116,3 +116,20 @@ test('il tetto di margine esiste, si salva, si condivide e vale anche per i segn
   assert.match(src, /voce\.autoMotivo='rischio ridotto dal '/,
     'e la riduzione si deve leggere nella scheda del segnale');
 });
+
+test('il lottaggio si adatta al margine disponibile invece di rifiutare', () => {
+  const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
+  const c = (re, cosa) => assert.ok(re.test(src), 'manca: ' + cosa);
+  // SEGNALATO: "mi dice margine insufficiente, servono 12.568, disponibili 8.803. Ma io ho messo
+  // il 5% del capitale: devi basare il lottaggio sulla disponibilita' del conto". Il rischio
+  // scelto e un TETTO, non una quota da spendere: se non ci sta, si apre cio che ci sta.
+  c(/const tettoConto=\(disp>0\)\?disp\*0\.98:null;/,
+    'il margine disponibile del conto deve fare da tetto, non da rifiuto');
+  c(/const tetto=tetti\.length\?Math\.min\(\.\.\.tetti\):null;/,
+    'fra il tetto scelto e quello del conto vale il piu stretto');
+  // E il piano ridotto si CONTROLLA: con un lotto minimo alto puo non starci comunque.
+  c(/if\(buono&&mRid>0&&mRid<=tetto\*1\.001\)/,
+    'si deve verificare che il piano ridotto ci stia davvero');
+  c(/const quale=\(tettoTuo!=null&&tetto===tettoTuo\)/,
+    'e il messaggio deve dire QUALE dei due tetti ha fatto da limite');
+});
