@@ -28653,29 +28653,51 @@ async function tgAutoValuta(voce,conto){
   // Qui, se il margine sfora il tetto, NON si ritoccano i numeri a mano: si RICALCOLA il piano con
   // un rischio ridotto della stessa proporzione, cosi' tutto il resto (minimi del contratto, fette
   // per ogni target, "entro rischio") resta coerente invece di essere aggiustato a posteriori.
+  // IL LOTTAGGIO SI ADATTA AL MARGINE CHE C'E'. Due tetti, e vale il piu' stretto:
+  //   - quello che hai scelto tu  (krakenMargineMaxPct, "margine massimo per operazione");
+  //   - quello che il conto ha davvero disponibile, meno un filo di sicurezza.
+  //
+  // SEGNALATO dal proprietario: "mi dice margine insufficiente, servono 12.568 USD, disponibili
+  // 8.803. Ma io ho messo il 5% del capitale: devi basare il lottaggio sulla disponibilita' del
+  // nostro conto". Aveva ragione: qui si RIFIUTAVA il segnale invece di aprirlo piu' piccolo.
+  // Il rischio scelto e' un TETTO, non una quota da spendere per forza: se con quel rischio la
+  // posizione non ci sta, si apre quella che ci sta - dicendolo - invece di non aprire niente.
+  //
+  // Il piano si RICALCOLA con un rischio ridotto della stessa proporzione (non si ritoccano i
+  // numeri a mano): cosi' minimi del contratto, fette per ogni target ed "entro rischio" restano
+  // coerenti fra loro. E dopo si CONTROLLA che il piano ridotto ci stia davvero: con un contratto
+  // dal minimo alto puo' non starci comunque, e in quel caso si rifiuta - ma dicendo quale dei due
+  // tetti non e' stato possibile rispettare.
   let margineRidotto=null;
   {
-   const tetto=krakenMargineTetto();
-   const mNow=piano.lotti*piano.n*piano.entry/(krakenLeva()||1);
-   if(tetto!=null&&krakenMargineMaxPct()<100&&mNow>tetto&&mNow>0){
+   const margineDi=p=>(p&&p.lotti&&p.n&&p.entry)?(p.lotti*p.n*p.entry/(krakenLeva()||1)):0;
+   const tettoTuo=(krakenMargineMaxPct()<100)?krakenMargineTetto():null;
+   const disp=Number(krakenConto.disponibile);
+   const tettoConto=(disp>0)?disp*0.98:null;   // il filo di sicurezza: Kraken rifiuta al pelo
+   const tetti=[tettoTuo,tettoConto].filter(v=>v!=null&&v>0);
+   const tetto=tetti.length?Math.min(...tetti):null;
+   const mNow=margineDi(piano);
+   if(tetto!=null&&mNow>tetto&&mNow>0){
+    const quale=(tettoTuo!=null&&tetto===tettoTuo)?('il tetto del '+krakenMargineMaxPct()+'% che hai scelto')
+                                                 :'il margine disponibile sul conto';
     const fattore=tetto/mNow;
     const ridotto=tgPiano(seg,symG,d.rischio*fattore,opzPiano);
-    if(ridotto&&!(ridotto.problemi&&ridotto.problemi.length)){
-     margineRidotto={da:d.rischio,a:d.rischio*fattore,tetto};
+    const buono=ridotto&&!(ridotto.problemi&&ridotto.problemi.length);
+    const mRid=buono?margineDi(ridotto):0;
+    if(buono&&mRid>0&&mRid<=tetto*1.001){
+     margineRidotto={da:d.rischio,a:d.rischio*fattore,tetto,margine:mRid};
      piano=ridotto;
      // Lo si SCRIVE nella scheda del segnale: una posizione aperta con meno rischio di quello
-     // scelto deve dire perche', altrimenti domani sembra che il rischio della sala non funzioni -
-     // che e' esattamente il dubbio da cui e' nata questa funzione.
+     // scelto deve dire perche', altrimenti domani sembra che il rischio della sala non funzioni.
      try{
       voce.autoMotivo='rischio ridotto dal '+d.rischio+'% al '+(d.rischio*fattore).toFixed(2)
-        +'% per restare entro il tetto di margine del '+krakenMargineMaxPct()+'% del conto ('
-        +tetto.toFixed(0)+' USD): con questo stop il rischio pieno avrebbe impegnato '
-        +mNow.toFixed(0)+' USD di margine';
+        +'% per stare dentro '+quale+' ('+tetto.toFixed(0)+' USD): con questo stop il rischio pieno '
+        +'avrebbe impegnato '+mNow.toFixed(0)+' USD di margine. Aperta con '+mRid.toFixed(0)+' USD';
      }catch(e){}
     }else{
-     return no('servirebbero '+mNow.toFixed(0)+' USD di margine (leva '+krakenLeva()+'x), oltre il tetto del '
-       +krakenMargineMaxPct()+'% del conto che hai scelto ('+tetto.toFixed(0)+' USD): con uno stop cosi\' stretto '
-       +'il rischio del '+d.rischio+'% non ci sta. Alza il tetto del margine, oppure lascia perdere questo segnale');
+     return no('con questo stop servirebbero '+mNow.toFixed(0)+' USD di margine (leva '+krakenLeva()
+       +'x), oltre '+quale+' ('+tetto.toFixed(0)+' USD), e nemmeno riducendo il rischio la posizione '
+       +'ci sta: il contratto ha un lotto minimo troppo grande per questo conto');
     }
    }
   }
