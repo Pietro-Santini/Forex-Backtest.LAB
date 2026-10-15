@@ -1,56 +1,44 @@
-// IL FOOTPRINT NON PUÒ REGISTRARE DUE PREZZI DIVERSI PER LO STESSO ISTANTE.
+// CORREZIONE DELLA v155, scritta qui perché non succeda di nuovo.
 //
-// SEGNALATO dal proprietario, con foto: «il footprint lo ha caricato a pezzoni, a strati; tutto
-// questo quando si ferma il mercato, poi quando riprende torna a visualizzarsi correttamente».
+// La v155 diceva di aver risolto il footprint «a pezzoni, a strati» fermando la registrazione
+// nella fascia serale 22-23. NON HA MAI FERMATO UN SOLO TICK: dalla v131 liveSessionPhaseAt()
+// non restituisce più 'capital' (a mercato chiuso il grafico si ferma e basta, non prosegue su
+// Capital.com), quindi la condizione `liveSessionPhaseNow()!=='capital'` era sempre vera.
 //
-// LA CAUSA: dalle 22 alle 23 il prezzo Capital.com viene spostato per agganciarsi al livello MT5
-// (fblCapitalSeraAllinea) — i due non quotano lo stesso identico prezzo, e senza quello scarto la
-// candela farebbe un salto di decine di punti alle 22:00 in punto.
-// Ma quello spostamento si applica SOLO all'asset a grafico. Un asset della watchlist non a
-// grafico riceveva il prezzo GREZZO; lo stesso asset, quando era a grafico, lo riceveva SPOSTATO.
-// Nel suo registro finivano due livelli diversi per lo stesso prezzo, a decine di punti l'uno
-// dall'altro: disegnati insieme sono le due bande staccate della foto.
+// E il collaudo non poteva accorgersene, perché i test della v155 leggevano il TESTO del codice
+// («c'è scritta questa riga?») invece di misurarne l'effetto. Un test così dimostra che il codice
+// è stato scritto, non che serve a qualcosa.
+//
+// La causa vera è in laboratorio/app/mercato_chiuso.test.mjs: il calendario dell'asset, che ora
+// vale per le candele, per il footprint e per il prezzo che valuta le posizioni — uno solo.
+// Qui restano i due invarianti di questa zona che sono ancora veri e vale la pena tenere fermi.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {apriApp, RADICE} from './aiuti.mjs';
 
-test('lo scarto della sera si applica SOLO nella sua fascia', async () => {
+test('la fascia serale 22-23 non esiste più: nessuna ora può restituire "capital"', async () => {
+  // È il fatto che ha reso inerte la v155. Se un domani qualcuno rimettesse quella fascia, questo
+  // test si accorge subito che un pezzo di app torna a dipendere da uno stato che era morto.
   const {browser, pagina, errori} = await apriApp();
   try{
-    const r = await pagina.evaluate(() => {
-      // Fuori dalla fascia il prezzo non si tocca: è la garanzia che lo scarto non "sporchi"
-      // nient'altro.
-      const origFase = liveSessionPhaseNow;
-      liveSessionPhaseNow = () => 'mt5';
-      const fuori = fblCapitalSeraAllinea(4100, 'XAUUSD');
-      liveSessionPhaseNow = () => 'closed';
-      const chiuso = fblCapitalSeraAllinea(4100, 'XAUUSD');
-      liveSessionPhaseNow = origFase;
-      return {fuori, chiuso};
+    const fasi = await pagina.evaluate(() => {
+      const viste = new Set();
+      // Una settimana intera, minuto per minuto: ogni fase che l'app può davvero assumere.
+      const base = Date.UTC(2026, 9, 12); // lunedì
+      for(let m=0; m<7*24*60; m++) viste.add(liveSessionPhaseAt(base + m*60000));
+      return [...viste].sort();
     });
-    assert.equal(r.fuori, 4100, 'in orario MT5 il prezzo resta quello vero');
-    assert.equal(r.chiuso, 4100, 'a mercato chiuso idem');
+    assert.ok(!fasi.includes('capital'),
+      'liveSessionPhaseAt non può restituire "capital": fasi trovate = ' + fasi.join(','));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
 
-test('nella fascia 22-23 il footprint di un asset NON a grafico si ferma', () => {
-  const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
-  const c = (re, cosa) => assert.ok(re.test(src), 'manca: ' + cosa);
-  // È il punto preciso: il ramo degli asset in background registrava il prezzo GREZZO, mentre
-  // quello a grafico registra lo stesso prezzo SPOSTATO.
-  c(/if\(asset && isAssetInWatchlist\(asset\) && liveSessionPhaseNow\(\)!=='capital'\)/,
-    'il footprint di sottofondo deve fermarsi nella fascia 22-23');
-  // E lo scarto resta applicato all'asset a grafico, che è il motivo per cui esiste.
-  c(/if\(p\.epic===capitalWsPrimaryEpic\)price=fblCapitalSeraAllinea\(price,/,
-    'lo scarto sull asset a grafico non si tocca');
-});
-
-test('le due righe del footprint leggono la stessa variabile price', () => {
-  // Se un domani qualcuno rimettesse il prezzo grezzo in una delle due, tornerebbero le bande.
-  // Qui si fissa che il prezzo registrato è SEMPRE quello della variabile già corretta.
+test('le due registrazioni del footprint passano dalla stessa variabile price', () => {
+  // Questo invariante della v155 è ancora buono: se un domani una delle due righe usasse un
+  // prezzo diverso dall'altra, lo stesso asset finirebbe registrato a due livelli diversi.
   const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
   const righe = src.match(/footprintRegisterTick\(price,Date\.now\(\),asset,undefined,'capital'\)/g) || [];
   assert.equal(righe.length, 2,

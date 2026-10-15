@@ -444,7 +444,24 @@
 //               finisce scritta nella scheda del segnale: una posizione aperta con meno rischio
 //               di quello scelto deve dire perche', altrimenti domani sembra che il rischio della
 //               sala non funzioni.
-const CACHE_NAME = "forex-backtest-lab-v156";
+//          v157 = A MERCATO CHIUSO SI FERMA TUTTO, NON SOLO IL DISEGNO. Segnalato: "posizioni e
+//               footprint sfalsati a mercato chiuso". Erano due sintomi della stessa cosa: tre
+//               pezzi dell'app rispondevano in tre modi diversi alla domanda "il mercato di
+//               questo asset e' fermo adesso?". Le candele lo chiedevano al calendario
+//               dell'asset e si fermavano; il footprint lo chiedeva solo se MT5 era collegato,
+//               e senza MT5 non lo chiedeva a nessuno; il prezzo che valuta le posizioni non lo
+//               chiedeva affatto. Misurato: a mercato chiuso le candele ferme a 4105 e il prezzo
+//               che calcola il P/L gia' a 4130, con il P/L passato da -150 a -400 senza che una
+//               sola candela lo mostrasse. E, peggio, un tick sotto lo stop faceva CHIUDERE la
+//               posizione di un asset in sottofondo a un prezzo che il grafico non ha mai avuto
+//               (misurato: da 1 posizione aperta a 0). Ora l'autorita' e' una sola,
+//               fblMercatoFermoOra: se non si disegna la candela, non si registra il tick e non
+//               si muove il prezzo che valuta le posizioni. Le cripto non chiudono mai e in
+//               Storico/replay non cambia niente.
+//               CORREGGE ANCHE LA v155: la guardia della fascia 22-23 non aveva mai fermato un
+//               solo tick (dalla v131 quella fascia non esiste piu'), e il suo test non poteva
+//               accorgersene perche' leggeva il testo del codice invece di misurarne l'effetto.
+const CACHE_NAME = "forex-backtest-lab-v157";
 const ASSETS = [
   "./",
   "./app.html",

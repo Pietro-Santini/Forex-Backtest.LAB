@@ -218,3 +218,23 @@
   si GUARDA deve stare dove lo guardano tutti. Quando un disegno ripiega su uno stato locale,
   chiedersi sempre: su un altro dispositivo questo stato esiste? Se no, pubblicare i soli dati che
   servono a mostrarlo, in sola lettura.
+
+- **Un test che legge il testo del codice dimostra che l'hai scritto, non che serve.** (15 ottobre
+  2026, la v155 sul footprint "a strati".) La correzione c'era, il test la trovava nel sorgente,
+  il collaudo era verde - e non fermava un solo tick, perche' la condizione dipendeva da uno stato
+  ('capital') che dalla v131 non esiste piu'. Tre test verdi su una correzione inerte. Dove si
+  corregge un COMPORTAMENTO, il test deve mettere il programma nella situazione segnalata e
+  guardare cosa cambia: il prezzo si e' mosso? la posizione si e' chiusa? il tick e' finito nel
+  registro? Un `assert` su una regex del sorgente serve solo a tenere fermo un invariante di forma
+  (due chiamate che devono usare la stessa variabile), mai a dimostrare un effetto.
+  E prima di correggere: misurare. Il banco che ha trovato la causa vera ci ha messo dieci minuti,
+  e ha anche scoperto una cosa che nessuno cercava - a mercato chiuso uno stop poteva SCATTARE.
+
+- **Se la stessa domanda ha tre risposte, prima o poi due sono sbagliate.** (15 ottobre 2026, il
+  comportamento a mercato chiuso.) "Il mercato di questo asset e' fermo adesso?" era chiesta dalle
+  candele al calendario dell'asset, dal footprint a liveSessionPhaseAt - ma solo con MT5 collegato
+  - e dal prezzo che valuta le posizioni a nessuno. Erano tre regole scritte in tre momenti
+  diversi, ognuna giusta per chi l'aveva scritta. Il risultato: il grafico fermo e i numeri che si
+  muovevano, cioe' esattamente lo scenario in cui l'utente non puo' accorgersi che qualcosa non
+  torna. Quando due pezzi devono stare d'accordo, non si scrivono due controlli uguali: si scrive
+  una funzione che risponde, e la chiamano tutti.
