@@ -35936,16 +35936,15 @@ function footprintApplyTickToBuckets(price,timestamp,side,weight,step,aggr,vol){
 // mostra già le sue candele — vedi tzParts()), non un fuso fisso indipendente da quello a schermo.
 function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  if(!Number.isFinite(price)||!Number.isFinite(timestamp)||!assetKey)return;
- if(mt5Connected&&source){
-   // Stesso calendario del grafico (vedi liveSessionPhaseAt): MT5 fino alle 22, Capital.com
-   // 22-23, nulla 23-24 e nel weekend. Le crypto (24/7) ne sono escluse.
-   if(!binanceSymbolForAsset(assetKey)){
-     const ph=liveSessionPhaseAt(timestamp);
-     if(ph==='closed')return;
-     if(ph==='capital'){ if(source!=='capital')return; }
-     else if(source!=='mt5')return;
-   }
- }
+ // STESSO CALENDARIO DELLE CANDELE (vedi fblMercatoFermoOra): se in questo istante non si
+ // disegna una candela, non si registra nemmeno un tick. Prima tutto questo cancello stava dentro
+ // `if(mt5Connected)`: col grafico su Capital.com e MT5 staccato non restava NESSUN controllo, e
+ // il footprint continuava a registrare prezzi per minuti in cui non esiste nessuna candela
+ // sotto. Disegnati, sono le bande staccate della foto ("a pezzoni, a strati").
+ if(source&&fblMercatoFermoOra(assetKey,timestamp))return;
+ // Con MT5 collegato vale in piu' la regola della fonte: i tick buoni sono i suoi, non quelli di
+ // Capital.com che arriverebbero in parallelo sullo stesso asset.
+ if(source&&mt5Connected&&!binanceSymbolForAsset(assetKey)&&source!=='mt5')return;
  const w=(Number.isFinite(weight)&&weight>0)?weight:1;
  const log=footprintTickLogByAsset[assetKey]||(footprintTickLogByAsset[assetKey]=[]);
  const prev=log.length?log[log.length-1]:null;
@@ -36764,6 +36763,15 @@ function applyLiveTick(p){
  if(p.epic===capitalWsPrimaryEpic)price=fblCapitalSeraAllinea(price,epicToAsset[p.epic]||currentAssetKey);
  if(p.epic===capitalWsPrimaryEpic)lastLiveTickAt=Date.now(); // "prova di vita" per il watchdog
  const asset=epicToAsset[p.epic];
+ // MERCATO CHIUSO: il tick si ferma QUI, prima di toccare qualunque cosa. Non e' solo il disegno:
+ // piu' sotto questo stesso prezzo scrive livePriceByAsset (che e' quello con cui si calcola il
+ // P/L a schermo) e passa da evaluateLiveBackgroundAsset, che puo' CHIUDERE una posizione sullo
+ // stop o far scattare un ordine pendente. A mercato chiuso tutto questo non deve succedere, e
+ // prima succedeva: le candele erano gia' bloccate piu' a valle, il resto no.
+ // Il controllo e' DOPO lastLiveTickAt apposta: il tick e' arrivato davvero, e il watchdog deve
+ // continuare a sapere che lo stream e' vivo - altrimenti a mercato chiuso si riconnetterebbe in
+ // continuazione credendo di averlo perso.
+ if(asset&&fblMercatoFermoOra(asset,p.timestamp))return;
  const prevPrice=asset?livePriceByAsset[asset]:null;
  if(asset)livePriceByAsset[asset]=price;
  // METADATI AUTOMATICI: spread REALE dal payload live, quando Capital.com lo include (offer/ask
@@ -36790,23 +36798,14 @@ function applyLiveTick(p){
    // l'utente non ha scelto di seguire. Rispetta già da solo l'orario MT5/Capital.com/blackout
    // (vedi footprintRegisterTick()) perché quella logica è generica, non legata all'asset a
    // grafico ora.
-   // FASCIA 22-23: QUI NON SI REGISTRA NIENTE, e la ragione e' precisa.
-   //
-   // SEGNALATO dal proprietario: "il footprint lo ha caricato a pezzoni, a strati; tutto questo
-   // quando si ferma il mercato, poi quando riprende torna a visualizzarsi correttamente".
-   // LA CAUSA: dalle 22 alle 23 il prezzo Capital.com viene spostato per agganciarsi al livello
-   // MT5 (vedi fblCapitalSeraAllinea) - MT5 e Capital.com non quotano lo stesso identico prezzo, e
-   // senza quello scarto la candela farebbe un salto di decine di punti alle 22:00 in punto.
-   // Quello spostamento pero' si applica SOLO all'asset a grafico (il controllo e' qualche riga
-   // piu' su, `p.epic===capitalWsPrimaryEpic`). Un asset della watchlist che NON e' a grafico
-   // riceveva quindi il prezzo GREZZO, e lo stesso asset, registrato a grafico in un altro
-   // momento, lo riceveva SPOSTATO: nel suo registro finivano due livelli diversi per lo stesso
-   // prezzo, a decine di punti l'uno dall'altro. Disegnati insieme, sono le due bande staccate
-   // che si vedono nella foto.
-   // Si sceglie la coerenza: in quell'ora il footprint degli asset NON a grafico si ferma. Si
-   // perde un'ora di dati di sottofondo su quegli asset; si evita un footprint che racconta due
-   // prezzi diversi per lo stesso istante - che e' peggio che non averlo.
-   if(asset && isAssetInWatchlist(asset) && liveSessionPhaseNow()!=='capital')
+   // CORREZIONE DELLA v155, detta chiaramente. Qui c'era `liveSessionPhaseNow()!=='capital'`,
+   // messo per fermare il footprint nella fascia serale 22-23. Non ha mai fermato un solo tick:
+   // dalla v131 liveSessionPhaseAt() non restituisce piu' 'capital' (a mercato chiuso il grafico
+   // si ferma e basta), quindi quella condizione era sempre vera. La diagnosi era sbagliata e il
+   // collaudo non poteva accorgersene, perche' il test leggeva il testo del codice invece di
+   // misurarne l'effetto. La causa vera e' dentro footprintRegisterTick: il calendario dell'asset.
+   // Qui si chiama e basta: chi decide se quel tick si registra e' una funzione sola, per tutti.
+   if(asset && isAssetInWatchlist(asset))
     footprintRegisterTick(price,Date.now(),asset,undefined,'capital');
    update();
    return;
@@ -40487,6 +40486,36 @@ function statoMercato(asset,t){
    return {chiuso:true,apreAt,fonte:'mt5'};
  }
  return null;
+}
+// UNA SOLA DOMANDA, UNA SOLA RISPOSTA: "in questo istante il mercato di questo asset e' fermo?"
+//
+// Prima questa domanda aveva TRE risposte diverse a seconda di chi la faceva, e si vedeva:
+//   - le CANDELE la chiedevano a statoMercato() (il calendario dell'asset) -> si fermavano;
+//   - il FOOTPRINT la chiedeva a liveSessionPhaseAt(), ma solo dentro `if(mt5Connected)`: senza
+//     MT5 collegato non la chiedeva a nessuno -> continuava a registrare;
+//   - il PREZZO CHE VALUTA LE POSIZIONI non la chiedeva affatto -> continuava a muoversi.
+// Misurato sul banco, a mercato chiuso: candele ferme a 4105, prezzo che valuta le posizioni a
+// 4130, P/L passato da -150 a -400 senza che una sola candela lo mostrasse. E, peggio, lo stop di
+// una posizione su un asset in sottofondo poteva SCATTARE su quel prezzo (vedi
+// evaluateLiveBackgroundAsset): un'operazione chiusa a un prezzo che il grafico non ha mai avuto.
+//
+// SEGNALATO dal proprietario: "il comportamento a mercato chiuso - posizioni e footprint
+// sfalsati". Erano due sintomi della stessa cosa: tre pezzi dell'app con tre calendari diversi.
+// Da qui in poi il calendario e' uno solo. Se non si disegna la candela, non si registra il tick
+// e non si muove il prezzo che valuta le posizioni.
+//
+// Le cripto non chiudono mai, e in Storico/replay non si blocca niente (statoMercato() torna null
+// se non siamo in Live: li' il tempo lo decide il replay, non l'orologio).
+function fblMercatoFermoOra(asset,t){
+ if(!asset)return false;
+ try{ if(binanceSymbolForAsset(asset))return false; }catch(e){}
+ if(!liveModeActive)return false;
+ const quando=Number.isFinite(t)?t:Date.now();
+ // Con MT5 collegato comanda l'orario con cui l'app lo segue (fino alle 22, poi fermo).
+ if(mt5Connected){ try{ if(liveSessionPhaseAt(quando)==='closed')return true; }catch(e){} }
+ // Sempre, MT5 o no: il calendario vero dello strumento, quando Capital.com ce l'ha dato.
+ try{ const st=statoMercato(asset,quando); if(st&&st.chiuso)return true; }catch(e){}
+ return false;
 }
 function durataTesto(ms){
  const s=Math.max(0,Math.floor(ms/1000));

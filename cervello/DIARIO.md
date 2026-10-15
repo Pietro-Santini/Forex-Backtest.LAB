@@ -648,3 +648,35 @@ Formato: data — chi — cosa — esito collaudo — commit.
   Test: kraken_margine.test.mjs sale a 6 (il nuovo copre proprio il caso segnalato: tetto del
   conto piu' stretto di quello scelto, e si apre ridotto invece di rifiutare).
   RESTA APERTO, invariato: le POSIZIONI sfalsate a mercato chiuso e il footprint in replay.
+
+## 15 ottobre 2026 - v157: a mercato chiuso si ferma tutto, non solo il disegno
+  SEGNALATO: "il comportamento a mercato chiuso - posizioni e footprint sfalsati". Due sintomi,
+  una causa sola: TRE pezzi dell'app rispondevano in tre modi diversi alla stessa domanda, "il
+  mercato di questo asset e' fermo adesso?".
+    - le CANDELE la chiedevano a statoMercato(), il calendario vero dello strumento -> si fermavano;
+    - il FOOTPRINT la chiedeva a liveSessionPhaseAt(), ma tutto il cancello stava dentro
+      `if(mt5Connected)`: col grafico su Capital.com e MT5 staccato non la chiedeva a nessuno;
+    - il PREZZO CHE VALUTA LE POSIZIONI (livePriceByAsset) non la chiedeva affatto.
+  MISURATO PRIMA DI TOCCARE IL CODICE, su banco (scratchpad/misura_chiusura*.mjs):
+    - candele ferme a 4105, prezzo che valuta le posizioni gia' a 4130, P/L da -150 a -400 senza
+      che una sola candela lo mostrasse;
+    - candela rifiutata (false) e tick footprint registrato lo stesso (0 -> 1): ecco gli "strati",
+      livelli di prezzo per minuti in cui non esiste nessuna candela sotto;
+    - e il pezzo grosso: un tick a 4080, sotto lo stop a 4090, su un asset in SOTTOFONDO faceva
+      scattare lo stop (1 posizione aperta -> 0). Un'operazione chiusa a un prezzo che il grafico
+      non ha mai avuto. Non era un difetto estetico.
+  LA CORREZIONE: una funzione sola, fblMercatoFermoOra(asset,t), accanto a statoMercato che ne e'
+  la fonte. La usano il footprint e il tick in arrivo (che si ferma PRIMA di scrivere il prezzo e
+  prima di evaluateLiveBackgroundAsset, dove stanno stop e ordini pendenti). Il controllo sta dopo
+  lastLiveTickAt apposta: il tick e' arrivato davvero e il watchdog deve saperlo, altrimenti a
+  mercato chiuso si riconnetterebbe in continuazione credendo di aver perso lo stream.
+  Cripto escluse (non chiudono mai) e Storico/replay intatti (li' il tempo lo decide il replay).
+  Test: mercato_chiuso.test.mjs (5). Il terzo e' il piu' importante: a mercato APERTO il prezzo si
+  muove e lo stop scatta - la correzione non deve spegnere il motore.
+
+  CORREGGE ANCHE LA v155, e va detto. La v155 sosteneva di aver risolto il footprint "a strati"
+  fermando la registrazione nella fascia serale 22-23. Non ha mai fermato un solo tick: dalla
+  v131 liveSessionPhaseAt() non restituisce piu' 'capital', quindi quella condizione era sempre
+  vera. Il collaudo non poteva accorgersene perche' i test leggevano il TESTO del codice invece di
+  misurarne l'effetto. footprint_sera.test.mjs e' stato riscritto: ora prova che la fascia non
+  esiste (una settimana intera, minuto per minuto) invece di cercare una riga nel sorgente.
