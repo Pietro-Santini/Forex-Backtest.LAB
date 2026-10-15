@@ -680,3 +680,24 @@ Formato: data — chi — cosa — esito collaudo — commit.
   vera. Il collaudo non poteva accorgersene perche' i test leggevano il TESTO del codice invece di
   misurarne l'effetto. footprint_sera.test.mjs e' stato riscritto: ora prova che la fascia non
   esiste (una settimana intera, minuto per minuto) invece di cercare una riga nel sorgente.
+
+## 15 ottobre 2026 - v158: niente "installa i pacchetti" dove non si installa niente
+  SEGNALATO: "quando faccio l'accesso a un nuovo dispositivo e vado ad aggiungere un account di
+  MT5, mi compare il messaggio dell'installazione dei pacchetti per il servizio MT5, io comunque
+  al server sono collegato. Risolviamo questo bug sui dispositivi mobili".
+  COSA C'ERA GIA': il 9 ottobre quel popup era gia' stato tolto da telefoni e tablet, con
+  fblEMobile() - che riconosce il dispositivo dalla User-Agent e dal touch. Ma la User-Agent mente
+  di proposito quando il browser e' in "modalita' desktop", e in quel caso fblEMobile() dice "e' un
+  computer", fblRemoto() dice "l'indirizzo e' ancora locale", e la schermata torna fuori.
+  LA SCELTA: smettere di indovinare dove c'e' una risposta certa. Il Setup e' un installatore
+  Windows (installer_build/installer.iss): se qui non e' Windows, quei pacchetti non si installano
+  e basta. Il sistema operativo il browser lo dichiara nei Client Hints
+  (navigator.userAgentData.platform), che la modalita' desktop non cambia; se mancano si guarda la
+  User-Agent. La nuova fblQuiSiInstallaIlServizio() non sostituisce fblEMobile: si aggiunge, come
+  terza strada, e copre anche il Mac - dove il Setup non si esegue comunque.
+  NOTA ONESTA: questo chiude i dispositivi che Windows non sono. Il "server" a cui il proprietario
+  e' collegato e' quello Oracle, che porta Kraken e i segnali ma NON MT5 (MT5 resta sul computer,
+  vedi cervello/ORACLE.md): essere collegati al server non toglie il bisogno del computer acceso,
+  e il messaggio ora lo dice.
+  Test: pacchetti_non_windows.test.mjs (4), con i quattro di pacchetti_mobile.test.mjs che
+  restano verdi - compreso quello che pretende che su Windows la schermata ci sia ancora.
