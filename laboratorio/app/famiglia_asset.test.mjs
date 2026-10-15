@@ -26,7 +26,12 @@ test('cripto e forex si riconoscono a colpo d\'occhio, e la regola e\' la stessa
     }));
     assert.match(r.btc, /Cripto/, 'il bitcoin deve essere segnato come cripto');
     assert.match(r.eur, /Forex/, 'EUR/USD deve essere segnato come forex');
-    assert.match(r.oro, /Forex/, 'l\'oro sta con forex, indici e azioni (non e\' cripto)');
+    // CAMBIATO (richiesto dal proprietario, v153): le famiglie mostrate sono CINQUE — forex,
+    // cripto, materia prima, indice, azione — non più due. L'oro è una MATERIA PRIMA.
+    // Che poi segua la strategia FOREX dell'apertura automatica resta vero, ed è scritto nel
+    // riquadro: sono due domande diverse, e le due righe qui sotto le tengono ferme entrambe.
+    assert.match(r.oro, /Materia prima/, "l'oro è una materia prima, non una coppia di valute");
+    assert.match(r.oro, /strategia FOREX/, "ma per l'apertura automatica segue la strategia forex");
     assert.equal(r.vuoto, '', 'senza asset non si inventa nessuna etichetta');
     assert.equal(r.famBtc, r.autoBtc, 'la famiglia mostrata deve essere la stessa che decide la strategia');
     assert.equal(r.famEur, r.autoEur);

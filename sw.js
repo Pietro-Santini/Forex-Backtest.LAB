@@ -370,7 +370,43 @@
 //               leggeva quell'unica operazione e il giro finiva: "apre la prima posizione, la
 //               legge, e poi basta". Ora quella pagina si legge, si torna indietro e si riprende
 //               dalla posizione seguente, fino al periodo scelto.
-const CACHE_NAME = "forex-backtest-lab-v152";
+//          v153 = I SEGNALI CRIPTO VANNO SU KRAKEN. Segnalato: un segnale cripto aperto su
+//               Capital.com invece che su Kraken. Due buchi, non uno. (1) La spunta "Apri i
+//               segnali cripto sul conto Kraken" partiva SPENTA, e da spenta un segnale cripto
+//               ricadeva sul ramo MT5; se MT5 non aveva quello strumento finiva su Capital.com.
+//               Ora parte ACCESA: chi la spegne di proposito se la vede rispettata. (2) Il
+//               riconoscimento delle cripto stava tutto in una tabella di nomi: una moneta scritta
+//               dalla sala in una forma non prevista non risultava cripto per niente. Ora, prima
+//               di dirottare su Capital.com, si CHIEDE A KRAKEN se ha quel contratto - e' lui la
+//               fonte autorevole, e non c'e' nessun elenco da tenere aggiornato. Se Kraken non e'
+//               collegato il segnale viene rifiutato dicendolo, non dirottato altrove: aprire sul
+//               conto sbagliato e' peggio che non aprire.
+//               ORIGINE E TIPO DI STRUMENTO: colonna "Origine" (da quale sala arriva) negli ordini
+//               pendenti e nelle posizioni Kraken, con la famiglia dello strumento - forex, cripto,
+//               materia prima, indice o azione - anche nel Trade Journal. Nella tabella Kraken i
+//               clic per spostare stop e target erano legati ai numeri di colonna scritti a mano:
+//               ora ogni cella si numera da sola, cosi' aggiungere una colonna non li sposta.
+//               CONTI CHIUSI: i conti MT5 che non ci sono piu' restano consultabili in un gruppo
+//               tutto loro, ma escono da ogni vista "insieme" - non falsano piu' win rate, resa e
+//               totali dei conti che si usano adesso. Con l'elenco dei conti non ancora letto non
+//               si dichiara chiuso niente (altrimenti la dashboard si svuoterebbe da sola).
+//               ANDAMENTO DEL CONTO: passando sopra si legge anche il capitale dopo quella
+//               operazione, preso dal saldo gia' salvato e non ricalcolato.
+//               Sempre v153: STOP E TARGET SI SCRIVONO NELLA BARRA DENTRO AL GRAFICO. Accanto ai
+//               pulsanti SL e TP ci sono i campi del valore: si scrive li', e SVUOTANDO la casella
+//               il livello si toglie. I campi del pannello restano l'unica fonte di verita' (li
+//               leggono piu' di trenta punti del programma): quelli nella barra si rispecchiano
+//               sopra, come gia' fanno lottaggio e rischio.
+//               E un interruttore in Impostazioni -> Style accende e spegne gli ordini pendenti a
+//               grafico: spento non si disegna nessuna loro riga, restano solo nella tabella.
+//               Colonna "Origine" anche nelle posizioni MT5: le due tabelle delle posizioni devono
+//               restare gemelle, ed e' un test del collaudo a tenerlo fermo.
+//               CORRETTO UN DIFETTO LATENTE trovato dal collaudo: krakenConto poteva diventare
+//               null (risposta andata a buon fine ma con il corpo vuoto) e da li' in poi ogni giro
+//               del controllo periodico moriva in silenzio. Non l'ha creato questa versione: l'ha
+//               scoperto, perche' accendendo di base i segnali cripto su Kraken quella strada ha
+//               cominciato a essere percorsa davvero.
+const CACHE_NAME = "forex-backtest-lab-v153";
 const ASSETS = [
   "./",
   "./app.html",

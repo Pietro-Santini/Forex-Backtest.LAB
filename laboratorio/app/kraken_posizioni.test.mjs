@@ -34,8 +34,11 @@ test('le colonne sono le stesse della tabella MetaTrader, nello stesso ordine', 
       const mt5 = [...document.querySelectorAll('#mt5PosPanel th')].map(t => t.textContent.trim());
       return {kraken, mt5};
     }, DUE_POSIZIONI.toString());
+    // CAMBIATO (richiesto, v153): c'e' anche la colonna «Origine», da quale sala arriva la
+    // posizione e che tipo di strumento e'. E' stata aggiunta ANCHE alla tabella MT5 proprio
+    // perche' la riga qui sotto resti vera: le due tabelle devono restare gemelle.
     assert.deepEqual(r.kraken,
-      ['#', 'Asset', 'Side', 'Entry', 'SL', 'TP', 'R/R', 'Lotti', 'Margine', 'Prezzo corrente', 'P/L live', '']);
+      ['#', 'Asset', 'Origine', 'Side', 'Entry', 'SL', 'TP', 'R/R', 'Lotti', 'Margine', 'Prezzo corrente', 'P/L live', '']);
     // Stesse colonne di MT5, tolto il «Ticket» che su Kraken non esiste.
     assert.deepEqual(r.kraken, r.mt5.filter(x => x !== 'Ticket'));
     assert.deepEqual(errori, []);
@@ -87,9 +90,16 @@ test('il rapporto rischio/rendimento usa lo stop di APERTURA, non quello di ades
       eval('(' + p + ')')();
       // Prima riga: entrata 80.000, stop 79.000 (rischio 1.000), target più lontano 86.000
       // (rendimento 6.000) → 1:6.
-      const celle = [...document.querySelectorAll('#krakenPosPanel tbody tr')[0].querySelectorAll('td')]
+      // LE CELLE SI LEGGONO PER NOME DI COLONNA, non per numero. Leggerle per numero è la stessa
+      // fragilità che l'app aveva dentro (i clic su SL/TP legati alle colonne 4 e 5): aggiungendo
+      // una colonna — com'è successo con «Origine» — ogni numero scivola di un posto e il test si
+      // mette a misurare la cella sbagliata.
+      const tab = document.querySelector('#krakenPosPanel table');
+      const nomi = [...tab.querySelectorAll('th')].map(t => t.textContent.trim());
+      const celle = [...tab.querySelectorAll('tbody tr')[0].querySelectorAll('td')]
         .map(t => t.textContent.trim());
-      return {rr: celle[6], lotti: celle[7], margine: celle[8]};
+      const col = n => celle[nomi.indexOf(n)];
+      return {rr: col('R/R'), lotti: col('Lotti'), margine: col('Margine')};
     }, DUE_POSIZIONI.toString());
     assert.equal(r.rr, '1:6');
     assert.equal(r.lotti, '0,25');
