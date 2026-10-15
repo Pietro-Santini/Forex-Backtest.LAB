@@ -607,3 +607,21 @@ Formato: data — chi — cosa — esito collaudo — commit.
   E le chiusure: una posizione dal suo pulsante nella tabella, a blocchi dal menu "Operazioni a
   blocco" - che offre piu' del vecchio "CHIUDI TUTTE" (per risultato, direzione, asset).
   Test: pannello_ordini_nascosto.test.mjs (4), che tiene fermo l'invariante "invisibili ma vivi".
+
+## 15 ottobre 2026 - v155: il footprint "a strati" alla chiusura del mercato
+  SEGNALATO con foto: "il footprint lo ha caricato a pezzoni, a strati; tutto questo quando si
+  ferma il mercato, poi quando riprende torna a visualizzarsi correttamente".
+  LA CAUSA, trovata leggendo chi riceve quale prezzo: nella fascia 22-23 fblCapitalSeraAllinea()
+  sposta il prezzo Capital.com per agganciarlo al livello MT5. Quello spostamento si applica solo
+  se l'epic e' quello A GRAFICO (`p.epic===capitalWsPrimaryEpic`). Il ramo degli asset in
+  background registrava quindi nel footprint il prezzo GREZZO, mentre lo stesso asset a grafico lo
+  registrava SPOSTATO: due livelli per lo stesso prezzo, a decine di punti di distanza, nello
+  stesso registro. Disegnati insieme: due bande staccate.
+  LA SCELTA: coerenza invece di copertura. In quell'ora il footprint degli asset NON a grafico si
+  ferma. Si perde un'ora di dati di sottofondo su quegli asset; si evita un footprint che racconta
+  due prezzi diversi per lo stesso istante, che e' peggio che non averlo.
+  Test: footprint_sera.test.mjs (3).
+  RESTA APERTO: le POSIZIONI sfalsate a mercato chiuso, e la costruzione del footprint in replay.
+  Sono due cose diverse da questa, e vanno misurate a parte.
+  Aggiunto ai formati reali il BTC con "Target1..4" e il dollaro staccato (segnalato: "perche' non
+  e' arrivato come segnale?"). Il lettore lo capisce al 100%: il caso resta li' a dimostrarlo.
