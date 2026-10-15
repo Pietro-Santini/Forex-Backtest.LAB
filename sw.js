@@ -493,7 +493,23 @@
 //               prezzo del messaggio - entrata, stop e target - usciva sbagliato. Ora se ci sono
 //               sia il punto sia la virgola, l'ULTIMO dei due e' il decimale: vale per 80.958,50
 //               e per 80,958.50 senza doverli distinguere.
-const CACHE_NAME = "forex-backtest-lab-v159";
+//          v160 = LA PERCENTUALE DELLE SALE ORA PUO' ESSERE DUE COSE, E LO DICE. Chiesto dal
+//               proprietario con un esempio: "SOL a 120, stop a 93, conto da 10.000, 5% del
+//               capitale: mi deve dare intorno ai 4 lotti". Fatto il conto, quei 4 lotti sono il
+//               VALORE della posizione (500/120 = 4,16), non la perdita: col rischio - che e'
+//               quello che l'app ha sempre fatto - 500 diviso i 27 dollari di stop danno 18,51
+//               lotti, quattro volte e mezzo tanti. Nessuna delle due e' sbagliata, ma non fanno
+//               la stessa cosa: col rischio resta fissa la PERDITA e varia la spesa (ed e' il
+//               motivo del "ho messo il 2% e ha usato 5.839 euro di margine"), con la quota di
+//               capitale resta fissa la SPESA e varia la perdita. Ora ogni sala sceglie quale dei
+//               due, con un menu attaccato alla percentuale - perche' un numero e la sua unita' di
+//               misura separati sono il modo migliore per leggere "5%" e intendere un'altra cosa.
+//               Predefinito: rischio, come prima. Il tetto di margine resta come rete.
+//               TROVATO SCRIVENDO I TEST: quello stesso esempio veniva RIFIUTATO in partenza. Il
+//               tetto "questo non e' un prezzo vero" era 20% per tutti, e uno stop al 22,5% su una
+//               cripto lo sforava. Ora sulle cripto e' 40%, altrove resta 20%: quel tetto serve
+//               contro i numeri che non sono prezzi, non contro gli stop larghi.
+const CACHE_NAME = "forex-backtest-lab-v160";
 const ASSETS = [
   "./",
   "./app.html",

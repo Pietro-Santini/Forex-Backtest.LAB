@@ -3820,9 +3820,10 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div class="tgCfgSez">Sale</div>
      <table class="tgCfgTab"><thead><tr>
        <th style="width:38px">Auto</th><th>Sala</th>
-       <th style="width:92px">Rischio</th><th style="width:78px">Max pos.</th><th>Strategia</th>
+       <th style="width:168px">Percentuale</th><th style="width:78px">Max pos.</th><th>Strategia</th>
      </tr></thead><tbody id="tgAutoSale"></tbody></table>
-     <div class="tgCfgNota" style="margin-top:7px" id="tgAutoSaleNota">Ogni sala ha il suo rischio e il suo tetto: si accendono solo quelle di cui ti fidi. Il menù <b>Strategia</b> di ogni sala apre la configurazione: cosa succede a ogni take profit e dove va lo stop.</div>
+     <div class="tgCfgNota" style="margin-top:7px" id="tgAutoSaleNota">Ogni sala ha la sua percentuale e il suo tetto: si accendono solo quelle di cui ti fidi. Il menù <b>Strategia</b> di ogni sala apre la configurazione: cosa succede a ogni take profit e dove va lo stop.<br>
+      Accanto alla percentuale scegli <b>che cosa</b> è quel numero. <b>Di rischio</b>: è quanto perdi se parte lo stop — la perdita resta fissa e la spesa varia, e con uno stop stretto la posizione diventa grande. <b>Del capitale</b>: è quanto vale la posizione — la spesa resta fissa e varia la perdita. Esempio su SOL a 120 con stop a 93 e conto da 10.000: col 5% <i>di rischio</i> sono 18,51 lotti (perdi 500 allo stop), col 5% <i>del capitale</i> sono 4,16 lotti (posizione da 500, allo stop perdi 112). Sulle cripto funzionano tutte e due; sul <b>forex</b> «del capitale» finisce quasi sempre al lotto minimo, perché un lotto vale 100.000 unità.</div>
 
      <div id="tgAutoRiepilogo" class="tgCfgRiep"></div>
    </div>
@@ -27422,6 +27423,30 @@ let tgAuto=tgAutoFx;
 function tgAutoDi(fam){ return fam==='cr'?tgAutoCr:tgAutoFx; }
 function tgFamDaSimbolo(x){ let c=false; try{ c=!!binanceSymbolForAsset(x); }catch(e){} return c?'cr':'fx'; }
 function tgAutoPerSimbolo(x){ return tgAutoDi(tgFamDaSimbolo(x)); }
+// DUE MODI DI INTENDERE LA PERCENTUALE, e vanno tenuti distinti perche' danno numeri diversi.
+//
+// CHIESTO dal proprietario, con un esempio preciso: "SOL a 120, stop a 93, conto da 10.000 euro,
+// 5% del capitale: mi deve dare intorno ai 4 lotti". Fatto il conto, quei 4 lotti sono il VALORE
+// della posizione (500 / 120 = 4,16), non la perdita possibile: col rischio - che e' quello che
+// l'app ha sempre fatto - 500 euro diviso i 27 dollari di stop danno 18,51 lotti, quattro volte e
+// mezzo tanti. Nessuna delle due e' sbagliata, ma non fanno la stessa cosa:
+//   - 'rischio'  : resta fissa la PERDITA (5% = perdo 500 se parte lo stop) e varia la spesa. Con
+//                  uno stop stretto la posizione diventa enorme - ed e' il motivo del "ho messo il
+//                  2% e ha usato 5.839 euro di margine" segnalato giorni fa: era il rischio, non
+//                  la spesa;
+//   - 'capitale' : resta fissa la SPESA (5% = la posizione vale 500) e varia la perdita. Il
+//                  margine diventa prevedibile, che e' il problema da cui si era partiti.
+//
+// PREDEFINITO 'rischio': cambiare il significato a tutte le sale gia' configurate senza che
+// nessuno l'abbia chiesto vorrebbe dire far aprire a ognuna posizioni diverse da quelle attese.
+// Lo si accende per sala, dove serve.
+//
+// SUL FOREX la quota di capitale vale poco e va detto invece di lasciarlo scoprire: un lotto
+// EURUSD sono 100.000 unita', quindi "posizione da 500 euro" sarebbe 0,005 lotti, sotto il minimo
+// di 0,01 - finirebbe sempre al lotto minimo. Sulle cripto funziona come nell'esempio, perche' li'
+// un lotto e' una moneta.
+function tgBaseLotto(cfg){ return (cfg&&String(cfg.baseLotto||'')==='capitale')?'capitale':'rischio'; }
+function tgBaseLottoNome(b){ return b==='capitale'?'del capitale impiegato':'di rischio'; }
 function tgAutoSalva(){
  try{ localStorage.setItem(TG_AUTO_KEY,JSON.stringify(tgAutoFx)); }catch(e){}
  try{ localStorage.setItem(TG_AUTO_CR_KEY,JSON.stringify(tgAutoCr)); }catch(e){}
@@ -27911,6 +27936,7 @@ function tgAutoDecidi(voce){
  // Quante se ne possono ancora aprire: il piano verra' tagliato a questo numero.
  const spazio=Math.min(maxSala-apertePerSala,maxTot-aperteTotali);
  return {apri:true,A,sala,rischio:Number(cfg.rischio)||1,spazio,
+   base:tgBaseLotto(cfg),
    cfg,avvicinamento:Number(cfg.avvicinamento)||0};
 }
 // Il freno scatta una volta e resta giu' fino a domani.
@@ -28349,9 +28375,21 @@ function tgAutoDisegna(){
   const ri=document.createElement('input');
   ri.type='number'; ri.min='0.1'; ri.max='20'; ri.step='0.1'; ri.className='tgCfgIn tgCfgNum';
   ri.style.width='68px'; ri.value=uni?u.rischio:cfg.rischio; ri.disabled=!cfg.attivo||uni;
-  ri.title='Rischio totale per ogni segnale di questa sala, diviso fra le posizioni che apre';
+  ri.title='Percentuale per ogni segnale di questa sala, divisa fra le posizioni che apre';
   ri.addEventListener('change',()=>{ const v=Number(ri.value); if(v>0)cfg.rischio=Math.min(20,v); tgAutoSalva(); tgAutoDisegna(); });
-  tdR.appendChild(ri); tdR.appendChild(document.createTextNode(' %'));
+  tdR.appendChild(ri); tdR.appendChild(document.createTextNode(' % '));
+  // CHE COSA E' QUEL NUMERO (vedi tgBaseLotto). Sta QUI, attaccato alla percentuale, e non in una
+  // schermata a parte: un numero e la sua unita' di misura separati sono il modo piu' sicuro per
+  // leggere "5%" e intendere un'altra cosa - che e' esattamente quello che e' successo.
+  const bs=document.createElement('select');
+  bs.className='tgCfgIn'; bs.style.width='96px';
+  bs.innerHTML='<option value="rischio">di rischio</option><option value="capitale">del capitale</option>';
+  bs.value=uni?tgBaseLotto(u):tgBaseLotto(cfg);
+  bs.disabled=!cfg.attivo||uni;
+  bs.title='«di rischio»: la percentuale è quanto perdi se parte lo stop (la posizione cresce quando lo stop è stretto).\n'
+    +'«del capitale»: la percentuale è quanto vale la posizione (la spesa resta sempre quella, e varia quanto perdi).';
+  bs.addEventListener('change',()=>{ cfg.baseLotto=(bs.value==='capitale')?'capitale':'rischio'; tgAutoSalva(); tgAutoDisegna(); });
+  tdR.appendChild(bs);
   tr.appendChild(tdR);
   // massimo posizioni
   const tdM=document.createElement('td');
@@ -28734,6 +28772,8 @@ async function tgAutoValuta(voce,conto){
   const opposto=Object.values(tgStrategie||{}).find(st=>st&&st.conto==='kraken'&&st.simbolo===info.simbolo&&st.side!==String(seg.direzione||'').toUpperCase());
   if(opposto)return no('su '+info.simbolo+' è aperto un segnale '+opposto.side+' (di '+opposto.sala+'): uno opposto sullo stesso contratto si annullerebbe con quello');
   const opzPiano={maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo:info.prezzo,
+   // La sala decide se la sua percentuale e' rischio o quota di capitale (vedi tgBaseLotto).
+   base:d.base,
    // Le percentuali scelte per questa sala: su Kraken diventano le fette che ogni target chiude.
    quote:tgAutoQuotePerSegnale(d.cfg,Math.max(1,(seg.take_profit||[]).length)),
    saldo:Number(krakenConto.saldo)||0,valore:(a,b,l)=>Math.abs(a-b)*l,passo:Number(info.step)||0.0001,minimo:Number(info.min)||Number(info.step)||0.0001,valuta:'USD'};
@@ -28840,7 +28880,7 @@ async function tgAutoValuta(voce,conto){
    else{ const r=await fetchLatestPriceRest(sym); if(r&&Number.isFinite(r.price))prezzo=r.price; }
   }catch(e){}
   if(!Number.isFinite(prezzo))return no('Capital.com non ha ancora un prezzo per «'+seg.strumento+'»: segnale lasciato nel pannello');
-  const piano=tgPiano(seg,sym,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo,
+  const piano=tgPiano(seg,sym,d.rischio,{maxN:d.spazio,parti:Number(voce.parti)||1,entroRischio:true,prezzo,base:d.base,
    quote:tgAutoQuotePerSegnale(d.cfg,Math.max(1,(seg.take_profit||[]).length))});
   if(piano.problemi&&piano.problemi.length)return no(piano.problemi.join('; '));
   if(piano.pendente)return no('ordine '+piano.kind+' a '+tgFmt(piano.entry)+': su Capital.com per ora si aprono solo segnali a mercato');
@@ -28877,7 +28917,7 @@ async function tgAutoApriQui(voce,d,seg,conto,spazio){
  const sp=Math.max(1,Math.round(Number(spazio)||Number(d.spazio)||1));
  // Lotto = rischio della sala diviso per le posizioni che si aprono DAVVERO (tagliate sullo spazio
  // rimasto sotto i tetti): la somma delle perdite, se scattano tutti gli stop, e' il rischio scelto.
- const piano=tgPiano(seg,sym,d.rischio,{maxN:sp,parti:Number(voce.parti)||1,entroRischio:true,prezzo:senzaGrafico?prezzo:undefined,
+ const piano=tgPiano(seg,sym,d.rischio,{maxN:sp,parti:Number(voce.parti)||1,entroRischio:true,prezzo:senzaGrafico?prezzo:undefined,base:d.base,
   // Qui ogni target e' una posizione sua: le percentuali decidono quanto grande.
   quote:tgAutoQuotePerSegnale(d.cfg,Math.max(1,(seg.take_profit||[]).length))});
  if(piano.problemi&&piano.problemi.length){
@@ -29856,8 +29896,18 @@ function tgPiano(seg,sym,pctForzata,opz){
   return {problemi:['l\'entrata della sala ('+tgFmt(Number(seg.entrata))+') è a '
     +(Math.abs(Number(seg.entrata)-mercato)/mercato*100).toFixed(1)+'% dal prezzo di '+sym+' ('+tgFmt(mercato)
     +'), oltre il '+maxScarto+'% ammesso: segnale scartato']};
- if(lontano(seg.stop_loss,20))
-  return {problemi:['lo stop loss della sala ('+tgFmt(Number(seg.stop_loss))+') è lontanissimo dal prezzo di '+sym+' ('+tgFmt(mercato)+'): non è un prezzo vero']};
+ // QUANTO PUO' ESSERE LONTANO UNO STOP PRIMA DI NON ESSERE PIU' UN PREZZO. Il tetto era 20% per
+ // tutti, e sulle cripto e' troppo stretto: provando l'esempio del proprietario (SOL a 120 con
+ // stop a 93, cioe' -22,5%) il segnale veniva RIFIUTATO in partenza, prima ancora di arrivare al
+ // lottaggio. Uno stop al 22% su una cripto non e' un errore di battitura: e' un martedi'. Sul
+ // forex invece 20% resta larghissimo, e li' non si tocca niente.
+ // Il tetto serve contro i numeri che non sono prezzi (e' nato da "XAUUSD entrata 4" con l'oro a
+ // 4000), non contro gli stop larghi: si allarga dove il mercato e' largo, non si toglie.
+ const maxStop=/BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB|CRYPTO/i.test(String(sym||''))?40:20;
+ if(lontano(seg.stop_loss,maxStop))
+  return {problemi:['lo stop loss della sala ('+tgFmt(Number(seg.stop_loss))+') è a '
+    +(Math.abs(Number(seg.stop_loss)-mercato)/mercato*100).toFixed(1)+'% dal prezzo di '+sym+' ('+tgFmt(mercato)
+    +'), oltre il '+maxStop+'% ammesso: non è un prezzo vero']};
  // ORDINI LIMITE E STOP (segnalato: "ancora non funzionano"). La sala scrive "BUY LIMIT / ENTRY
  // 4190" o "SELL-LIMIT @1.90699": prima si apriva comunque A MERCATO al prezzo di adesso. Ora
  // diventa un ORDINE PENDENTE al prezzo della sala, e il rischio si calcola da quel prezzo.
@@ -29930,7 +29980,15 @@ function tgPiano(seg,sym,pctForzata,opz){
  // Il lottaggio ha un passo di 0,01: il valore esatto quasi mai ci cade sopra. Si arrotonda per
  // DIFETTO, mai per eccesso: la percentuale scelta e' un tetto, e un tetto non si supera per una
  // questione di arrotondamento. Si rischia un filo meno del richiesto, mai un filo di piu'.
- let lotti=Number((Math.floor((importoTot/n)/perLotto/passoLotto+1e-9)*passoLotto).toFixed(decLotto));
+ // IL DIVISORE E' TUTTA LA DIFFERENZA FRA LE DUE BASI (vedi tgBaseLotto):
+ //   - 'rischio'  : importoTot e' la PERDITA ammessa, e si divide per quanto si perde con un lotto;
+ //   - 'capitale' : importoTot e' il VALORE della posizione, e si divide per quanto vale un lotto.
+ // Tutto il resto del calcolo - i target, le quote, il minimo, l'arrotondamento per difetto -
+ // resta identico: cambia solo cosa si sta dividendo.
+ const baseCap=String(opz.base||'rischio')==='capitale';
+ const perUnita=baseCap?entry:perLotto;
+ if(!(perUnita>0))return {problemi:['non riesco a calcolare quanto vale un lotto su '+sym]};
+ let lotti=Number((Math.floor((importoTot/n)/perUnita/passoLotto+1e-9)*passoLotto).toFixed(decLotto));
  // Stop calcolato dall'app: il lotto e' quello fissato per ricavarlo (vedi tgStopCalcolato).
  if(lottiFissi!=null)lotti=lottiFissi;
  let alMinimo=false;
@@ -29938,13 +29996,16 @@ function tgPiano(seg,sym,pctForzata,opz){
  // superare quello chiesto - e allora va detto chiaramente prima di confermare.
  if(!(lotti>=minimoLotto)){ lotti=minimoLotto; alMinimo=true; }
  let notaRidotte=null;
- if(opz.entroRischio&&alMinimo&&lotti*perLotto*n>importoTot+0.01){
-  // Quante posizioni al lotto minimo stanno dentro al rischio: si tengono i primi target.
-  const k=Math.floor(importoTot/(minimoLotto*perLotto)+1e-9);
-  if(k<1)return {problemi:['anche una sola posizione da '+minimoLotto+(opz.valore?'':' lot')+' rischierebbe '+(opz.valuta?(opz.valuta+' '+(minimoLotto*perLotto).toFixed(2)):euro(minimoLotto*perLotto))
-    +', più del '+pct.toFixed(2)+'% scelto ('+(opz.valuta?(opz.valuta+' '+importoTot.toFixed(2)):euro(importoTot))+'): stop troppo lontano per questo conto']};
+ // Il confronto va fatto sulla STESSA grandezza del tetto: con base 'capitale' il tetto e' un
+ // valore di posizione, non una perdita, e paragonarlo alla perdita direbbe un'altra cosa.
+ if(opz.entroRischio&&alMinimo&&lotti*perUnita*n>importoTot+0.01){
+  // Quante posizioni al lotto minimo ci stanno dentro: si tengono i primi target.
+  const k=Math.floor(importoTot/(minimoLotto*perUnita)+1e-9);
+  if(k<1)return {problemi:['anche una sola posizione da '+minimoLotto+(opz.valore?'':' lot')+(baseCap?' varrebbe ':' rischierebbe ')+(opz.valuta?(opz.valuta+' '+(minimoLotto*perUnita).toFixed(2)):euro(minimoLotto*perUnita))
+    +', più del '+pct.toFixed(2)+'% '+(baseCap?'del capitale':'di rischio')+' scelto ('+(opz.valuta?(opz.valuta+' '+importoTot.toFixed(2)):euro(importoTot))+'): '
+    +(baseCap?'il lotto minimo di questo contratto è troppo grande per questo conto':'stop troppo lontano per questo conto')]};
   if(k<n){
-   notaRidotte='aperte '+k+' posizioni invece di '+n+': con '+minimoLotto+(opz.valore?'':' lot')+' (il minimo) tutte e '+n+' insieme avrebbero superato il rischio scelto';
+   notaRidotte='aperte '+k+' posizioni invece di '+n+': con '+minimoLotto+(opz.valore?'':' lot')+' (il minimo) tutte e '+n+' insieme avrebbero superato '+(baseCap?'il capitale':'il rischio')+' scelto';
    if(tp.length>k)tp=tp.slice(0,k);
    n=k;
   }
@@ -29957,7 +30018,7 @@ function tgPiano(seg,sym,pctForzata,opz){
   const quote=(opz&&Array.isArray(opz.quote)&&opz.quote.length>=n)?opz.quote.slice(0,n):null;
   if(quote&&quote.some(x=>Math.abs(x-1/n)>1e-9)){
    const arrotonda=v=>Number((Math.floor(v/passoLotto+1e-9)*passoLotto).toFixed(decLotto));
-   const grezzi=quote.map(f=>arrotonda(importoTot*f/perLotto));
+   const grezzi=quote.map(f=>arrotonda(importoTot*f/perUnita));
    // Sotto il minimo non si puo' scendere: se una fetta non ci arriva, le quote non sono
    // applicabili con questo lotto e si torna alle parti uguali, dicendolo.
    if(grezzi.every(v=>v>=minimoLotto-1e-12))lottiTp=grezzi;
@@ -29966,7 +30027,11 @@ function tgPiano(seg,sym,pctForzata,opz){
  const rischioReale=lottiTp?lottiTp.reduce((a,v)=>a+v*perLotto,0):lotti*perLotto*n;
  let margine=0;
  try{ margine=lottiTp?lottiTp.reduce((a,v)=>a+marginForLots(v,entry,sym),0):marginForLots(lotti,entry,sym)*n; }catch(e){}
+ // `base` esce nel piano perche' chi lo mostra deve poter scrivere "5% del capitale" invece di
+ // "5% di rischio": sono due frasi diverse, e il rischio reale (rischioReale) resta calcolato
+ // sempre sulla perdita vera, qualunque base sia stata usata per decidere il lottaggio.
  return {side,entry,sl,tp,scartati,n,lotti,lottiTp,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,tpCalcolato,senzaLivelli,
+   base:baseCap?'capitale':'rischio',
    pendente,kind,notaEntrata,notaRidotte,parti,
    rr:(tp.length&&Math.abs(entry-sl)>0)?Math.abs(tp[0]-entry)/Math.abs(entry-sl):null,
    rischioRealePct:(saldo>0?rischioReale/saldo*100:null)};

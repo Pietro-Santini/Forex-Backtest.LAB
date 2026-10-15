@@ -741,3 +741,40 @@ Formato: data — chi — cosa — esito collaudo — commit.
   proprietario; il nome della sala l'app lo prende dal titolo del gruppo, mai dal testo).
   DA RICORDARE: il lettore che gira sul server e sul PC usa i file del SETUP, non quelli del repo.
   La correzione dei prezzi arriva ai segnali veri solo reinstallando il ponte.
+
+## 15 ottobre 2026 - v160: la percentuale delle sale puo' essere rischio o quota di capitale
+  CHIESTO dal proprietario con un esempio preciso: "SOL a 120, stop a 93, conto da 10.000 euro, 5%
+  del capitale: mi deve dare intorno ai 4 lotti. Fammi il calcolo".
+  IL CALCOLO, ed e' quello che ha chiarito tutto:
+    - 5% come RISCHIO    -> 500 / 27 (la distanza dello stop) = 18,51 lotti. Allo stop perdi 500,
+      cioe' il 5% esatto. Posizione da 2.221 USD.
+    - 5% come QUOTA DI CAPITALE -> 500 / 120 (il prezzo) = 4,16 lotti. Posizione da 499 USD. Allo
+      stop perdi 112, cioe' l'1,12%.
+  I "4/5 lotti" che si aspettava sono i secondi. L'app ha sempre fatto i primi (tgPiano:
+  `importoTot = saldo*pct/100` e poi diviso per la perdita di un lotto) - ed e' anche la
+  spiegazione del "ho messo il 2% e ha usato 5.839 euro di margine" segnalato giorni fa: era il
+  rischio, non la spesa, e con uno stop stretto il rischio gonfia la posizione.
+  LA SCELTA, decisa dal proprietario fra tre opzioni: tutte e due, con un interruttore per sala.
+  Predefinito 'rischio', perche' cambiare il significato alle sale gia' configurate senza che
+  nessuno l'abbia chiesto vorrebbe dire far aprire a ognuna posizioni diverse da quelle attese.
+  Il tetto di margine su Kraken resta, come rete di sicurezza sopra tutti e due (sua richiesta).
+  DOVE STA: un menu attaccato alla percentuale, nella riga della sala - non in una schermata a
+  parte. Un numero e la sua unita' di misura separati sono il modo migliore per leggere "5%" e
+  intendere un'altra cosa, che e' esattamente quello che era successo.
+  NEL CODICE cambia una riga sola in sostanza: il DIVISORE. Con 'rischio' si divide per quanto si
+  perde con un lotto, con 'capitale' per quanto vale un lotto. Tutto il resto - target, quote,
+  lotto minimo, arrotondamento per difetto - resta identico. Attenzione pero' al taglio
+  "entroRischio" e alle quote per target: confrontavano con `perLotto`, e con base 'capitale'
+  avrebbero paragonato una perdita a un valore di posizione. Ora usano la stessa grandezza del
+  tetto.
+  SUL FOREX la quota di capitale vale poco, e si dice invece di lasciarlo scoprire: un lotto EURUSD
+  sono 100.000 unita', quindi "posizione da 500 euro" sarebbe 0,005 lotti, sotto il minimo. E'
+  scritto nella nota sotto la tabella.
+
+  TROVATO SCRIVENDO I TEST, e non lo cercava nessuno: quello stesso esempio veniva RIFIUTATO in
+  partenza, prima ancora di arrivare al lottaggio. Il tetto "lo stop e' lontanissimo: non e' un
+  prezzo vero" era 20% per tutti, e lo stop a 93 su 120 e' -22,5%. Su una cripto uno stop al 22%
+  non e' un errore di battitura. Ora il tetto e' 40% sulle cripto e resta 20% altrove: serve contro
+  i numeri che non sono prezzi (e' nato da "XAUUSD entrata 4" con l'oro a 4000), non contro gli
+  stop larghi.
+  Test: lottaggio_base.test.mjs (5), con i numeri dell'esempio dentro.
