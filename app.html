@@ -26923,7 +26923,7 @@ function tgRenderPannello(){
   card.appendChild(tgRiga(tps.length
    ? (tps.length+(tps.length===1?' take profit: ':' take profit: ')+tps.map(tgFmt).join('  ·  ')
       +'   →   '+tps.length+(tps.length===1?' posizione':' posizioni'))
-   : ('Nessun take profit indicato: una posizione; pareggio al '+tgBeSenzaTpPct(tgAutoPerSimbolo(seg.strumento))+'% della distanza dello stop, target un ulteriore '+tgTpExtraPct(tgAutoPerSimbolo(seg.strumento))+'% più in là')));
+   : ('Nessun take profit indicato: una posizione; pareggio al '+tgBeSenzaTpPct(tgAutoPerSimbolo(seg.strumento))+'% della distanza dello stop, target a '+tgTpExtraPct(tgAutoPerSimbolo(seg.strumento))+'% oltre il pareggio')));
 
   // Il riepilogo di cosa e' stato aperto davvero (prezzi reali del piano, non quelli della sala).
   if(voce.stato==='eseguito'&&voce.eseguito){
@@ -27259,8 +27259,8 @@ function tgCfgDisegnaRiepilogo(piano){
   box.appendChild(d);
  }else if(piano.tpCalcolato){
   const d=document.createElement('div'); d.className='tgCfgAllarme';
-  d.textContent='La sala non ha dato il take profit. Al '+tgBeSenzaTpPct(A)+'% della distanza dello stop lo stop va a pareggio; il target è un ulteriore '
-   +tgTpExtraPct(A)+'% più in là ('+tgFmt(piano.tp[0])+', rapporto '+(piano.rr!=null?rrRapportoTesto(piano.rr):'1:?')+'). Per ogni stop pieno servono '
+  d.textContent='La sala non ha dato il take profit. Al '+tgBeSenzaTpPct(A)+'% della distanza dello stop lo stop va a pareggio; il target a '
+   +tgTpExtraPct(A)+'% oltre il pareggio ('+tgFmt(piano.tp[0])+', rapporto '+(piano.rr!=null?rrRapportoTesto(piano.rr):'1:?')+'). Per ogni stop pieno servono '
    +(piano.rr?(1/piano.rr).toFixed(1):'?')+' target.';
   box.appendChild(d);
  }
@@ -27443,21 +27443,58 @@ function posAnagraficaDi(chiave){ return (chiave&&posAnagrafica[chiave])||null; 
 // Scrive un fatto SOLO se non c'e' gia'. Una volta che l'orario di apertura e' noto non cambia
 // piu': riscriverlo a ogni giro vorrebbe dire rincorrere la fonte del momento, che e' esattamente
 // il difetto da cui nasce questa funzione.
-function posAnagraficaSegna(chiave,dati){
+//
+// La regola "chi vince" deve stare QUI e non solo nel punto che chiama, perche' questa funzione e'
+// anche la porta della CONDIVISIONE: l'anagrafica arriva intera dagli altri dispositivi (vedi
+// fbl_pos_anagrafica in GRAFICO_LS) e viene fusa da qui, senza sapere da quale dispositivo viene.
+// Percio' si decide sul valore stesso, dal suo contrassegno `orarioManuale`:
+//   - un fatto "solido" (l'orario VERO dell'exchange, che arriva con `forza`, oppure un valore che
+//     NON dichiara di essere a mano) SUPERA una correzione scritta a mano, e ne toglie il segno;
+//   - una dichiarazione a mano NON scavalca un fatto gia' noto (e non tocca un altro fatto).
+// Cosi' "exchange > mano" vale allo stesso modo in locale e fra i dispositivi: era il difetto della
+// v163, due dispositivi con due ore diverse per la stessa posizione.
+function posAnagraficaSegna(chiave,dati,forza){
  if(!chiave||!dati)return false;
  const v=posAnagrafica[chiave]||(posAnagrafica[chiave]={});
  let cambiato=false;
  ['apertaMs','entry','sala','side'].forEach(c=>{
   const nuovo=dati[c];
   if(nuovo==null||nuovo==='')return;
-  if(c==='apertaMs'||c==='entry'){ const n=Number(nuovo); if(!(Number.isFinite(n)&&n>0))return;
-   if(v[c]===n)return; if(v[c]!=null)return; v[c]=n; cambiato=true; return; }
+  if(c==='apertaMs'||c==='entry'){
+   const n=Number(nuovo); if(!(Number.isFinite(n)&&n>0))return;
+   // `inManuale`: il valore in arrivo dichiara di essere una correzione a mano.
+   const inManuale=(c==='apertaMs')&&!!dati.orarioManuale;
+   if(v[c]===n){ if(c==='apertaMs'&&v.orarioManuale&&!inManuale){ delete v.orarioManuale; cambiato=true; } return; }
+   // `forza` = orario vero dell'exchange; oppure un fatto non-a-mano che incontra una dichiarazione a mano.
+   if(c==='apertaMs'&&(forza||(!inManuale&&v.orarioManuale))){ v[c]=n; delete v.orarioManuale; cambiato=true; return; }
+   if(v[c]!=null)return;                   // una dichiarazione a mano non scavalca un fatto gia' noto
+   v[c]=n; if(c==='apertaMs'&&inManuale)v.orarioManuale=true; cambiato=true; return;
+  }
   if(v[c]===nuovo)return;
   if(v[c]!=null&&c!=='sala')return;
   v[c]=nuovo; cambiato=true;
  });
  if(cambiato){ v.visto=Date.now(); posAnagraficaSalva(); }
  return cambiato;
+}
+// LA CORREZIONE A MANO, quando l'orario vero non c'e' piu'.
+//
+// L'anagrafica si riempie da sola finche' una fonte lo dice (l'orario dell'exchange, o la strategia
+// che l'ha aperta). Una posizione aperta PRIMA che l'anagrafica esistesse, di cui il ponte non manda
+// piu' l'orario, non lo recupera: quel dato non ce l'ha piu' nessuno. L'unico che puo' dirlo e' il
+// proprietario - ed e' un FATTO DICHIARATO DA UNA PERSONA, non una fonte che si rincorre: per questo
+// puo' riscrivere un valore gia' presente, e per questo si MARCA (orarioManuale), cosi' le fonti
+// automatiche non lo riscrivono. L'unica cosa che lo supera e' l'orario VERO dell'exchange, quando
+// (e se) torna a esserci: quello e' un fatto ancora migliore, e lo si scrive con `forza`.
+function posAnagraficaManuale(chiave,apertaMs,extra){
+ if(!chiave)return false;
+ const n=Number(apertaMs);
+ if(!(Number.isFinite(n)&&n>0))return false;
+ const v=posAnagrafica[chiave]||(posAnagrafica[chiave]={});
+ v.apertaMs=n; v.orarioManuale=true;
+ if(extra)posAnagraficaSegna(chiave,extra);   // entry/sala/side, con le loro regole
+ v.visto=Date.now(); posAnagraficaSalva();
+ return true;
 }
 function krakenLivelliDaStrategie(){
  const out={};
@@ -30264,7 +30301,7 @@ async function tgPortaAGrafico(sym){
 // ricava: la perdita, se scatta, e' al massimo il rischio % scelto, sommato su tutte le posizioni.
 // E' un tetto alla perdita, non un livello tecnico: con conti piccoli lo stop viene vicino.
 // SENZA TARGET DELLA SALA (RICHIESTO): quando il prezzo percorre il 20% della distanza dello stop,
-// stop a pareggio; il target sta un ulteriore 10% piu' in la' (30%). Il target si mette SUBITO al
+// stop a pareggio; il target sta a 10% oltre il pareggio (30%). Il target si mette SUBITO al
 // 30% invece di spostarlo dal 20% al 30% al momento giusto: su MT5 il broker chiuderebbe al 20%
 // prima che l'app faccia in tempo a spostarlo. Stesso risultato, senza la corsa contro il broker.
 // SI APRE UN SEGNALE A CUI LA SALA NON HA DATO LO STOP (o il target)?
@@ -30590,7 +30627,7 @@ async function tgEseguiSegnale(voce,opzioni){
    ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non ha dato né stop né target. Target al '+tgTpSenzaNullaPct(A)+'% della distanza dello stop (rapporto '+(p.rr!=null?rrRapportoTesto(p.rr):'1:?')+').')
    : p.tpCalcolato
    ? ('Take profit: '+tgFmt(p.tp[0])+' — CALCOLATO DALL\'APP: la sala non l\'ha dato. Quando il prezzo percorre il '+tgBeSenzaTpPct(A)
-      +'% della distanza dello stop, lo stop va a pareggio; il target è un ulteriore '+tgTpExtraPct(A)+'% più in là (rapporto '+(p.rr!=null?rrRapportoTesto(p.rr):'1:?')+').')
+      +'% della distanza dello stop, lo stop va a pareggio; il target a '+tgTpExtraPct(A)+'% oltre il pareggio (rapporto '+(p.rr!=null?rrRapportoTesto(p.rr):'1:?')+').')
    : p.tp.length
    ? ('Take profit: '+p.tp.map(tgFmt).join('  ·  ')+'  (uno per posizione)')
    : 'Nessun take profit: una sola posizione, con il solo stop loss');
@@ -40011,6 +40048,66 @@ async function krakenSpostaTp(p){
                              :('🐙 Target non cambiati: '+r.message);
  krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
 }
+// UN ORARIO DI APERTURA SOLO, per la tabella e per il grafico.
+//
+// Le stesse due fonti di sempre, in ordine:
+//   1. l'orario VERO dell'exchange (p.aperta_ms): se c'e', e' quello e basta;
+//   2. l'anagrafica: l'orario osservato una volta, oppure quello dichiarato A MANO quando l'orario
+//      vero non c'e' piu' (vedi posAnagraficaManuale);
+//   3. niente: chi chiama decide il ripiego, ma SA di stare ripiegando.
+// Tabella e grafico chiamano QUESTA funzione: non possono raccontare due storie diverse della
+// stessa posizione - era proprio il difetto della v163 (tabella a un'ora, grafico a un'altra).
+// `fonte` dice da dove viene e se e' stato scritto a mano: la cella lo usa per offrire la
+// correzione solo quando non c'e' un orario vero da rispettare.
+function krakenOrarioApertoMs(p){
+ const vero=Number(p&&p.aperta_ms);
+ if(Number.isFinite(vero)&&vero>0)return {ms:vero,fonte:'exchange',manuale:false};
+ const anag=p?posAnagraficaDi('kraken:'+String(p.simbolo||'')+'|'+krakenContoId()):null;
+ const salvato=anag?Number(anag.apertaMs):NaN;
+ if(Number.isFinite(salvato)&&salvato>0){
+  const manuale=!!(anag&&anag.orarioManuale);
+  return {ms:salvato,fonte:manuale?'manuale':'anagrafica',manuale};
+ }
+ return {ms:null,fonte:'ignota',manuale:false};
+}
+// Il popup per dire A MANO quando e' stata aperta una posizione. Si offre solo quando l'orario vero
+// dell'exchange non c'e' (fonte!=='exchange'): se c'e', quello e' un fatto e non si tocca.
+function krakenChiediOrario(p){
+ const or=krakenOrarioApertoMs(p);
+ const attuale=Number.isFinite(or.ms)?or.ms:null;
+ const pre=attuale?liveReplayInputValue(attuale):'';
+ let scelta=null;
+ appConfirm(
+  '<div style="margin-bottom:6px">Quando è stata aperta davvero <b>'+escapeHtmlLite(String(p.simbolo||''))+'</b>?</div>'
+  +'<div style="color:#9ca3af;font-size:12px;margin-bottom:10px">L\'orario vero dell\'exchange non è disponibile: quello che scrivi qui ancora la posizione alla candela giusta, e vale anche sugli altri dispositivi. Se l\'orario vero dovesse tornare, quello vincerà.</div>'
+  +'<input type="datetime-local" step="60" data-role="quando" value="'+escapeHtmlLite(pre)+'" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2b3541;background:#0b1117;color:#e8edf3;font-size:14px;box-sizing:border-box">',
+  {title:'🐙 Kraken · orario di apertura',html:true,danger:false,okLabel:'Salva',cancelLabel:'Annulla',
+   onOk:(overlay)=>{ const q=overlay.querySelector('[data-role="quando"]'); scelta=q?q.value:''; }})
+ .then(async (ok)=>{
+   if(!ok||scelta==null)return;
+   const r=krakenImpostaOrarioManuale(p,scelta);
+   if(!r.ok)await appAlert(r.motivo==='nessun orario'
+     ? 'Scegli un orario nella casella (giorno e ora). La correzione non si può togliere: per cambiarla, indicane un altro.'
+     : 'Orario non valido: usa la casella (giorno e ora).',{title:'🐙 Kraken · orario'});
+ });
+}
+// Scrive la correzione a mano e ridisegna tabella e grafico, cosi' i due restano d'accordo.
+// Restituisce {ok:true,ms}; {ok:false,motivo} se l'orario scritto non si capisce.
+//
+// NON si "toglie": l'anagrafica viaggia fra i dispositivi senza tombstone (una cancellazione qui non
+// arriva agli altri, e al primo riallineamento tornerebbe indietro - vedi la fusione in riceviConfig).
+// Percio' l'unica correzione possibile e' indicare un orario; se serve, se ne indica un altro.
+function krakenImpostaOrarioManuale(p,testo){
+ const chiave='kraken:'+String(p&&p.simbolo||'')+'|'+krakenContoId();
+ const t=String(testo==null?'':testo).trim();
+ if(!t)return {ok:false,motivo:'nessun orario'};
+ const ms=new Date(t).getTime();   // datetime-local: ora LOCALE, come liveReplayInputValue
+ if(!(Number.isFinite(ms)&&ms>0))return {ok:false,motivo:'orario non valido'};
+ posAnagraficaManuale(chiave,ms,{entry:Number(p&&p.entrata)||null,side:String(p&&p.lato||'')||null});
+ krakenPosPannello();
+ try{ draw(); }catch(e){}
+ return {ok:true,ms};
+}
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
@@ -40087,13 +40184,14 @@ function krakenPosPannello(){
       ?'<span title="Non si sa ancora da dove arriva questa posizione: la sua anagrafica non è ancora arrivata su questo dispositivo" style="color:#e8c34a">📡 origine da confermare</span>'
       :'<span title="Posizione aperta da te, non da un segnale" style="color:#9ca3af">Manuale</span>')
     +fblTipoBadgeHtml(p.simbolo)});
-  // L'orario vero dell'exchange se c'e', altrimenti quello salvato nell'anagrafica (v163): e' la
-  // stessa fonte che ancora la posizione alla candela giusta, quindi i due non possono raccontare
-  // cose diverse.
-  {
-   const msEse=Number(p.aperta_ms)>0?Number(p.aperta_ms):((anagP&&Number(anagP.apertaMs)>0)?Number(anagP.apertaMs):null);
-   metti({html:'<span title="'+escapeHtmlLite(fblOrarioEsecuzioneTitolo(msEse))+'">'+escapeHtmlLite(fblOrarioEsecuzione(msEse))+'</span>'});
-  }
+  // L'ORARIO DI APERTURA, da UNA SOLA fonte per tabella e grafico (krakenOrarioApertoMs). Se e' un
+  // orario dichiarato a mano si vede dal suggerimento. E quando l'orario vero dell'exchange non c'e'
+  // la cella si puo' cliccare per dirlo a mano: l'anagrafica si riempie da sola solo da quando
+  // esiste, e una posizione aperta prima non lo recupera altrimenti.
+  const orEse=krakenOrarioApertoMs(p);
+  const colEse=metti({html:'<span title="'+escapeHtmlLite(fblOrarioEsecuzioneTitolo(orEse.ms))
+    +(orEse.fonte==='manuale'?' · orario indicato a mano':'')+'">'+escapeHtmlLite(fblOrarioEsecuzione(orEse.ms))+'</span>',
+    correggibile:orEse.fonte!=='exchange',manuale:orEse.fonte==='manuale'});
   metti(p.lato); metti(fmt(entry));
   const colSl=metti(Number.isFinite(sl)?(fmt(sl)+(stopProfit?' 🔒SP':'')):'—');
   const colTp=metti(tps.map(fmt).join(' / ')||'—');
@@ -40111,6 +40209,16 @@ function krakenPosPannello(){
     td.addEventListener('click',()=>{ (col===colSl?krakenSpostaSl:krakenSpostaTp)(p); });
    }else if(col===colSl||col===colTp){
     td.title='Seleziona questa posizione per poter spostare stop e target';
+   }
+   // L'ORARIO si puo' correggere a mano quando l'orario vero dell'exchange non c'e': quello e' un
+   // fatto che il ponte non manda piu', e senza di esso la posizione resta a "—" (o ancorata alla
+   // data della strategia). Non serve selezionare la posizione: qui non si muove nessun ordine vero.
+   if(col===colEse&&v&&typeof v==='object'&&v.correggibile){
+    td.style.cursor='pointer';
+    td.style.textDecoration='underline dotted';
+    td.title=(v.manuale?'Orario indicato a mano. ':'')
+      +'Clicca per dire quando è stata aperta davvero: l\'orario dell\'exchange non c\'è';
+    td.addEventListener('click',()=>krakenChiediOrario(p));
    }
    tr.appendChild(td);
   });
@@ -40559,17 +40667,19 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
   const anagKey='kraken:'+String(p.simbolo||'')+'|'+krakenContoId();
   const apertaMs=Number(p.aperta_ms);
   // Appena l'orario vero dell'exchange si vede, lo si scrive: e' l'unico momento in cui lo si sa
-  // per certo, e potrebbe non ripresentarsi piu'.
+  // per certo, e potrebbe non ripresentarsi piu'. `forza` anche perche' l'orario vero supera una
+  // eventuale correzione scritta a mano: quella serve proprio quando l'orario vero non c'e'.
   if(Number.isFinite(apertaMs)&&apertaMs>0)
    posAnagraficaSegna(anagKey,{apertaMs,entry:Number(p.entrata)||null,
-     sala:(st&&st.sala&&st.sala!=='Manuale')?st.sala:null,side:String(p.lato||'')||null});
+     sala:(st&&st.sala&&st.sala!=='Manuale')?st.sala:null,side:String(p.lato||'')||null},true);
   else if(st&&Number(st.creato)>0)
    posAnagraficaSegna(anagKey,{apertaMs:Number(st.creato),entry:Number(p.entrata)||null,
      sala:(st.sala&&st.sala!=='Manuale')?st.sala:null,side:String(p.lato||'')||null});
-  const anag=posAnagraficaDi(anagKey);
-  const t0=(Number.isFinite(apertaMs)&&apertaMs>0)?apertaMs
-          :(anag&&Number.isFinite(anag.apertaMs)&&anag.apertaMs>0)?anag.apertaMs
-          :(st?Number(st.creato):null);
+  // La STESSA fonte unica della tabella (krakenOrarioApertoMs): l'orario vero, poi l'anagrafica -
+  // compresa la correzione a mano - e in ultimo la data della strategia. Tabella e grafico non
+  // possono piu' raccontare due ore diverse della stessa posizione.
+  const orApertura=krakenOrarioApertoMs(p);
+  const t0=Number.isFinite(orApertura.ms)?orApertura.ms:(st?Number(st.creato):null);
   let origine=(Number.isFinite(t0)&&t0>0)?rowIndexContainingTime(t0):null;
   const origineVera=origine!=null;
   if(origine==null)origine=Math.max(0,(rows.length||1)-20);

@@ -13,9 +13,7 @@
 // dedicato: automatico = la percentuale arriva dalla sala (pctForzata valorizzata).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import {apriApp, RADICE} from './aiuti.mjs';
+import {apriApp} from './aiuti.mjs';
 
 // Oro a 4100. Il segnale arriva con o senza stop, con o senza target; la percentuale passata
 // come terzo argomento è quella della sala, cioè "siamo in automatico".
@@ -103,13 +101,4 @@ test('a mano gli interruttori non c\'entrano: si configura quello che si vuole',
     assert.equal(r.slCalcolato, true);
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
-});
-
-test('nelle impostazioni non si parla più di "più in là"', () => {
-  // RICHIESTO: «togliamo il più in là, che non serve». Il numero resta (dice dove va il target
-  // calcolato), la formula oscura no.
-  const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
-  const etichetta = src.slice(src.indexOf('id="tgAutoTpExtra"') - 400, src.indexOf('id="tgAutoTpExtra"') + 400);
-  assert.ok(!/più in là/.test(etichetta), 'l\'etichetta del target non deve dire "più in là"');
-  assert.ok(/oltre il pareggio/.test(etichetta), 'deve dire rispetto a cosa è misurato');
 });

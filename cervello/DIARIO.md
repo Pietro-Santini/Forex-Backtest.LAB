@@ -1026,3 +1026,40 @@ Formato: data — chi — cosa — esito collaudo — commit.
   vera e si legge ogni cella SOTTO LA SUA INTESTAZIONE (per nome di colonna, non per numero), e il
   popup si apre davvero. PROVA DI CONTROLLO fatta: rimessi i tre difetti, sono esattamente quei tre
   test a diventare rossi - un test che passa anche senza la correzione non vale niente.
+
+## 16 ottobre 2026 - v167: «oltre il pareggio», e le posizioni Kraken si datano a mano
+
+  (1) «TOGLIAMO IL PIU' IN LA'». Richiesto: «semplicemente devi togliere il testo più in là». La v161
+  aveva riscritto l'ETICHETTA del campo («e target a X % oltre il pareggio») ma TRE riepiloghi che
+  l'utente legge davvero dicevano ancora «un ulteriore X% più in là»: la scheda del segnale nel
+  pannello, il riepilogo della configurazione e la conferma PRIMA DI APRIRE - il momento peggiore,
+  perche' sta per partire un ordine. Il CAMPO e' rimasto: il numero serve, dice dove va il target
+  calcolato. Ora tutti e tre dicono «a X% oltre il pareggio».
+  E' la lezione della v166 applicata subito: il test che difendeva quella frase LEGGEVA IL SORGENTE
+  (cercava «più in là» nel testo di app.html) e non apriva mai le tre schermate. Tolto. Al suo posto
+  oltre_il_pareggio.test.mjs fa parlare le funzioni vere e legge cosa scrivono a schermo.
+
+  (2) L'ORARIO DI UNA POSIZIONE KRAKEN SI PUO' DIRE A MANO. Era la proposta rimasta in sospeso della
+  v163 («va fatta solo se la vuole»): la vuole. Il limite dichiarato allora: l'anagrafica si riempie
+  da quando esiste, e una posizione aperta prima, di cui il ponte non manda piu' l'orario vero, non
+  lo recupera - quel dato non ce l'ha piu' nessuno. Ora la cella «Eseguita» di quella posizione si
+  clicca e si dice quando e' stata aperta.
+  DUE SCELTE:
+    - la correzione si MARCA (orarioManuale) ed e' un fatto DICHIARATO DA UNA PERSONA, non una fonte
+      che si rincorre: per questo puo' riscrivere un valore gia' presente, e per questo le fonti
+      automatiche non la riscrivono. E' l'unica eccezione alla regola «un orario noto non si
+      riscrive», ed e' voluta - con una eccezione DENTRO l'eccezione: l'orario VERO dell'exchange,
+      se torna a esserci, e' un fatto migliore e supera la correzione (le toglie anche il segno);
+    - tabella e grafico leggono la STESSA funzione (krakenOrarioApertoMs): orario vero dell'exchange,
+      poi anagrafica (compresa la correzione), poi niente. Era proprio il difetto della v163 avere la
+      tabella a un'ora e il grafico a un'altra.
+  Se l'orario VERO dell'exchange c'e', la cella NON si tocca: e' un fatto. Serve anche a non far
+  ereditare a una posizione NUOVA (stesso simbolo) una correzione vecchia, perche' la nuova l'orario
+  vero ce l'ha.
+  NON si "toglie" la correzione: l'anagrafica viaggia fra i dispositivi senza tombstone, quindi una
+  cancellazione qui non arriverebbe agli altri e al primo riallineamento tornerebbe indietro -
+  sarebbe una promessa falsa (il rilievo e' venuto dalla revisione). Chi vuole correggere indica un
+  altro orario, e basta.
+  Test: oltre_il_pareggio.test.mjs (3), kraken_orario_manuale.test.mjs (7: la cella, il rifiuto di un
+  orario storto, la fonte unica, l'ancora del GRAFICO alla candela indicata, e l'orario vero che
+  supera la correzione).
