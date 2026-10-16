@@ -601,7 +601,7 @@
 //               pendenti. Quando non si sa si scrive "-", non "adesso": un orario inventato e'
 //               falso e per giunta credibile. Su Kraken la tabella legge la STESSA fonte che
 //               ancora la posizione alla candela, cosi' le due non possono dire cose diverse.
-const CACHE_NAME = "forex-backtest-lab-v166";
+const CACHE_NAME = "forex-backtest-lab-v167";
 const ASSETS = [
   "./",
   "./app.html",

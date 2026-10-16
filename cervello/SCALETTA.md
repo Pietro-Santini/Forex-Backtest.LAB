@@ -8,23 +8,24 @@ e `cervello/LEZIONI.md` (gli errori già pagati).
 
 ---
 
-## 0. Da chiudere subito — v166 non pubblicata
+## 0. Da chiudere subito — v167 non pubblicata
 
-Ramo **`v166-sale-per-famiglia`**, modifiche non committate, collaudo locale in corso.
+La **v166** (sale divise fra forex e cripto + orario di esecuzione nelle quattro tabelle) è
+**pubblicata su `main`** e verde su GitHub (Collaudo e Installer Windows).
 
-Contiene: sale divise fra forex e cripto (popup a selezione multipla + apprendimento dai segnali) e
-l'orario di esecuzione nelle quattro tabelle.
+Ora c'è la **v167**, ramo `v167-oltre-pareggio-orario`: (1) i tre riepiloghi che dicevano ancora «un
+ulteriore X% più in là» ora dicono «a X% oltre il pareggio»; (2) le posizioni Kraken **già aperte** si
+possono **datare a mano** dalla cella «Eseguita» quando l'orario vero dell'exchange non c'è più.
 
-Da fare, in quest'ordine (le prime tre voci sono cambiate dopo la revisione: il collaudo di GitHub
-gira su **ogni push**, non solo su `main`, quindi il verde si prende SUL RAMO - prima di toccare
-`main`):
+Da fare, in quest'ordine (il collaudo di GitHub gira su **ogni push**, non solo su `main`: il verde
+si prende SUL RAMO - prima di toccare `main`):
 
 1. collaudo **locale** verde (su Windows `bash` non è nel PATH: usa Git bash);
 2. `git add -A` e commit in italiano;
-3. `git push origin v166-sale-per-famiglia`;
+3. `git push origin v167-oltre-pareggio-orario`;
 4. aspettare il verde su GitHub (`gh run list --limit 3`) — e se è rosso, scaricare l'artefatto,
    perché il log è troncato: `gh run download <ID>`;
-5. SOLO ORA `git checkout main && git merge --no-ff v166-sale-per-famiglia && git push origin main`;
+5. SOLO ORA `git checkout main && git merge --no-ff v167-oltre-pareggio-orario && git push origin main`;
 6. ricopiare `app.html` nello specchio sul Desktop e committare lì;
 7. controllare di nuovo il collaudo su `main`.
 
@@ -119,17 +120,28 @@ si parla di rendere l'app un programma vero, non una pagina agganciata al browse
 
 ---
 
-## 4. In sospeso: serve una parola del proprietario
+## 4. Risolte nella v167 (16 ottobre 2026)
 
 ### 4.1 «Togliamo il più in là»
-Nella v161 l'etichetta *«e target un ulteriore X % più in là»* è stata **riscritta** in *«e target a
-X % oltre il pareggio»*, ma **il campo è rimasto**. Se intendeva eliminare l'impostazione e non
-solo la formula oscura, va tolta (e con lei `tgTpExtraPct` e i punti che la leggono).
+Fatto. Il campo è rimasto (il numero serve: dice dove va il target calcolato), ma i **tre riepiloghi**
+che dicevano ancora «un ulteriore X% più in là» — la scheda del segnale nel pannello, il riepilogo
+della configurazione e la conferma prima di aprire — ora dicono «a X% oltre il pareggio», come
+l'etichetta dalla v161.
+Test: `laboratorio/app/oltre_il_pareggio.test.mjs` (3). Il vecchio test che **leggeva il sorgente**
+(«più in là» dentro `apri_senza_livelli.test.mjs`) è stato tolto: dimostrava che la frase era scritta,
+non che a schermo si vedesse quella giusta.
 
 ### 4.2 Orario delle posizioni Kraken già aperte
-L'anagrafica (v163) si riempie **da quando esiste**: una posizione aperta prima, di cui il ponte non
-manda più `aperta_ms`, non recupera l'orario — quel dato non ce l'ha più nessuno. Era stata proposta
-una **correzione manuale per singola posizione**: va fatta solo se la vuole.
+Fatto. La cella **«Eseguita»** di una posizione Kraken si clicca e si dice **a mano** quando è stata
+aperta, quando l'orario vero dell'exchange non c'è più (posizioni aperte prima della v163). La
+correzione si **marca** (`orarioManuale`) e le fonti automatiche non la riscrivono; tabella e grafico
+leggono la **stessa** funzione (`krakenOrarioApertoMs`), così non possono raccontare due ore diverse.
+Se l'orario vero dell'exchange c'è la cella non si tocca — è un fatto — e se dovesse **tornare**
+(ponte aggiornato) è lui a vincere, superando la correzione a mano. **Non** si "toglie" la correzione:
+l'anagrafica viaggia senza tombstone, quindi una cancellazione non arriverebbe agli altri e al primo
+riallineamento tornerebbe indietro (sarebbe una promessa falsa). Chi vuole correggere indica un altro
+orario.
+Test: `laboratorio/app/kraken_orario_manuale.test.mjs` (6).
 
 ---
 

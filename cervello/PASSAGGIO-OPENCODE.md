@@ -87,7 +87,8 @@ riallineare lo specchio, controllare GitHub.
 | v163 | **Anagrafica della posizione**: orario e prezzo di apertura salvati e sincronizzati; origine corretta sui dispositivi mobili |
 | v164 | «Salva configurazione» trasferisce **tutta** la strategia; cronologia sale anche dalle impostazioni |
 | v165 | Stop e target di Kraken **trascinabili** (selezione poi trascinamento); correzione del banco di prova |
-| v166 | Sale divise fra forex e cripto; **orario di esecuzione** nelle quattro tabelle — *da pubblicare* |
+| v166 | Sale divise fra forex e cripto; **orario di esecuzione** nelle quattro tabelle |
+| v167 | I riepiloghi dicono «**oltre il pareggio**» e non più «più in là»; le posizioni Kraken **già aperte** si possono **datare a mano** dalla cella «Eseguita» — *da pubblicare* |
 
 ---
 
@@ -127,12 +128,14 @@ riallineare lo specchio, controllare GitHub.
 10. App scaricabile e installabile, sganciata da Chrome, con sezione download su GitHub.
     *(Nota: un installer Windows esiste già in `installer_build/`.)*
 
-### In sospeso, serve una parola del proprietario
+### Risolte nella v167 (16 ottobre 2026)
 
-11. Nella v161 l'etichetta «% più in là» è stata **riscritta** in «% oltre il pareggio» ma il campo
-    è rimasto. Se intendeva eliminare l'impostazione, va tolta.
-12. Le posizioni Kraken **già aperte** non recuperano l'orario perduto: l'anagrafica (v163) si
-    riempie da quando esiste. Si era proposta una correzione manuale per singola posizione.
+11. ~~Nella v161 l'etichetta «% più in là» è stata riscritta in «% oltre il pareggio» ma il campo era
+    rimasto.~~ **Fatto:** il campo è rimasto (il numero serve), ma i tre riepiloghi che dicevano
+    ancora «più in là» ora dicono «oltre il pareggio». Test: `oltre_il_pareggio.test.mjs`.
+12. ~~Le posizioni Kraken già aperte non recuperano l'orario perduto.~~ **Fatto:** la cella «Eseguita»
+    si clicca e l'orario si dice a mano; tabella e grafico leggono la stessa funzione
+    (`krakenOrarioApertoMs`). Test: `kraken_orario_manuale.test.mjs`.
 
 ---
 
