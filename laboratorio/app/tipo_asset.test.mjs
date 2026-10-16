@@ -95,7 +95,11 @@ test('la colonna Origine c è in tutte e tre le tabelle, e le celle restano alli
   assert.equal(celle.length, 2,
     'la cella Origine deve esserci in ENTRAMBE le righe degli ordini pendenti: ' + celle.length);
   // Posizioni Kraken: intestazione e cella.
-  c(/>Origine<\/th>'\r?\n\s*\+'<th>Side<\/th>/, 'intestazione nelle posizioni Kraken');
+  // L'INTENTO: l'intestazione Origine ci dev'essere. NON si pretende più che sia ATTACCATA a
+  // Side: fra le due è stata aggiunta «Eseguita» (v166), ed è giusto che si possano aggiungere
+  // colonne senza far cadere un test che parla d'altro.
+  c(/\+'<th title="Da quale sala segnali arriva la posizione[^"]*">Origine<\/th>'/,
+    'intestazione nelle posizioni Kraken');
   // L'INTENTO, non la forma. Questa riga pretendeva l'espressione esatta della cella
   // (`metti({html:(st&&st.sala?...`) ed e' andata rossa alla prima volta che quella cella e'
   // migliorata davvero - in v163, quando ha imparato a leggere anche l'anagrafica della posizione
