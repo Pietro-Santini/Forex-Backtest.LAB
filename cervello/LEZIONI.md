@@ -287,3 +287,15 @@
   LA REGOLA: tutto cio' che il programma chiede all'AMBIENTE - sistema operativo, fuso orario,
   lingua, dimensione dello schermo, rete - nel banco di prova si DICHIARA. Un banco che eredita
   non misura il programma: misura la macchina su cui e' acceso.
+
+- **Un test che legge il SORGENTE non ha mai visto il programma.** (16 ottobre 2026, v166.) Due dei
+  test nuovi dell'orario contavano quante volte "fblOrarioEsecuzione(...)" compare nel testo di
+  app.html, e uno cercava "p.aperta_ms" fra le righe. Sembravano severi e non misuravano niente: uno
+  si chiamava "e le celle restano allineate" mentre nella riga raggruppata l'orario e l'asset erano
+  SCAMBIATI - contare le celle non dice DOVE stanno. E nessun test apriva il popup che il proprietario
+  aveva chiesto: tutti verdi mentre due richieste su due non funzionavano.
+  LA REGOLA: un test apre il programma e guarda l'EFFETTO - rende la tabella e legge la cella sotto la
+  sua intestazione (per NOME di colonna, non per numero), apre il popup e preme "Salva". Un assert sul
+  testo del codice va bene solo per un invariante di forma, mai per dimostrare un comportamento. E
+  quando si corregge, si prova il test anche AL CONTRARIO: rimesso il difetto, quel test deve
+  diventare rosso. Un test che passa in tutti e due i casi non vale niente.

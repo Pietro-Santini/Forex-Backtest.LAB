@@ -585,7 +585,23 @@
 //               Il prezzo mandato a Kraken toglie lo scostamento del disegno (Kraken e Binance non
 //               quotano identico): senza, lo stop finirebbe spostato di quella differenza.
 //               Fermi sul posto non si chiede niente, e la selezione scade da sola.
-const CACHE_NAME = "forex-backtest-lab-v165";
+//          v166 = LE SALE SI DIVIDONO FRA FOREX E CRIPTO, e nelle tabelle c'e' l'orario di
+//               esecuzione.
+//               (1) Richiesto: "nella sezione cripto verranno messe solo le sale che hanno aperto
+//               almeno una volta un'operazione cripto; non possiamo avere le stesse identiche sale
+//               sia nel forex sia nelle cripto, a meno che una sala non mandi entrambi i segnali".
+//               Due strade che si sommano: la SCELTA dell'utente (un popup a selezione multipla
+//               quando la sala si aggiunge - una delle due, o tutte e due) e quello che la sala
+//               MANDA davvero (ogni segnale aggiunge la sua famiglia). Si aggiunge soltanto, mai
+//               si toglie da sola: una sala che ha mandato una cripto resta nelle cripto anche se
+//               poi manda solo forex, altrimenti sparirebbe una configurazione gia' fatta.
+//               Senza niente di saputo si vede in tutte e due, come prima. Si cambia quando si
+//               vuole dalla riga della sala, e la scelta vale su tutti i dispositivi.
+//               (2) ORARIO DI ESECUZIONE nelle posizioni aperte (app, MT5 e Kraken) e negli ordini
+//               pendenti. Quando non si sa si scrive "-", non "adesso": un orario inventato e'
+//               falso e per giunta credibile. Su Kraken la tabella legge la STESSA fonte che
+//               ancora la posizione alla candela, cosi' le due non possono dire cose diverse.
+const CACHE_NAME = "forex-backtest-lab-v166";
 const ASSETS = [
   "./",
   "./app.html",

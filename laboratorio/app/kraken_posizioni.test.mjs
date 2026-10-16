@@ -38,7 +38,10 @@ test('le colonne sono le stesse della tabella MetaTrader, nello stesso ordine', 
     // posizione e che tipo di strumento e'. E' stata aggiunta ANCHE alla tabella MT5 proprio
     // perche' la riga qui sotto resti vera: le due tabelle devono restare gemelle.
     assert.deepEqual(r.kraken,
-      ['#', 'Asset', 'Origine', 'Side', 'Entry', 'SL', 'TP', 'R/R', 'Lotti', 'Margine', 'Prezzo corrente', 'P/L live', '']);
+      // CAMBIATO di nuovo (richiesto, v166): c'e' anche "Eseguita", l'orario in cui la
+      // posizione e' stata aperta. Aggiunta ANCHE a MT5, come l'Origine, perche' la riga qui
+      // sotto resti vera - ed e' stato proprio questo test a segnalare che su MT5 mancava.
+      ['#', 'Asset', 'Origine', 'Eseguita', 'Side', 'Entry', 'SL', 'TP', 'R/R', 'Lotti', 'Margine', 'Prezzo corrente', 'P/L live', '']);
     // Stesse colonne di MT5, tolto il «Ticket» che su Kraken non esiste.
     assert.deepEqual(r.kraken, r.mt5.filter(x => x !== 'Ticket'));
     assert.deepEqual(errori, []);
@@ -141,6 +144,44 @@ test('senza posizioni il riquadro non occupa spazio', async () => {
       return document.getElementById('krakenPosPanelWrap').style.display;
     });
     assert.equal(r, 'none');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// L'ORARIO DI ESECUZIONE su Kraken (v166): la stessa colonna «Eseguita» delle altre tabelle.
+// Le due fonti sono l'orario vero dell'exchange (aperta_ms) e, se manca, quello salvato
+// nell'anagrafica che ancora la posizione alla candela: è la STESSA che usa il grafico, così
+// tabella e grafico non possono dire due cose diverse della stessa posizione. E quando non si sa,
+// si scrive «—». Questa prova prima leggeva il SORGENTE (cercava «p.aperta_ms» nel testo di
+// app.html): dimostrava che la riga era scritta, non che la tabella mostrasse quell'ora.
+const DUE_ORARI = () => {
+  const ms = Date.now() - 2 * 3600 * 1000;
+  krakenConto = {collegato: true, ambiente: 'simulato', saldo: 10000, conto_id: 'conto-1',
+                 conto_nome: 'Conto prova 1', leva: 5};
+  krakenPosizioni = {posizioni: [
+    {simbolo: 'PF_XBTUSD', lato: 'BUY', quantita: 0.25, entrata: 80000, mark: 81500, sl: 79000,
+     tp: [], pnl: 0, aperta_ms: ms},
+    {simbolo: 'PF_ETHUSD', lato: 'SELL', quantita: 3, entrata: 2500, mark: 2560, sl: 2520,
+     tp: [], pnl: 0}
+  ]};
+  krakenPendenti = [];
+  krakenPosPannello();
+};
+
+test('la colonna «Eseguita» mostra l\'orario, e «—» quando non si sa', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate((p) => {
+      eval('(' + p + ')')();
+      const tab = document.querySelector('#krakenPosPanel table');
+      const nomi = [...tab.querySelectorAll('th')].map(t => t.textContent.trim());
+      const righe = [...tab.querySelectorAll('tbody tr')].map(tr =>
+        [...tr.querySelectorAll('td')].map(td => td.textContent.trim()));
+      const col = (riga, n) => riga[nomi.indexOf(n)];
+      return {conOrario: col(righe[0], 'Eseguita'), senzaOrario: col(righe[1], 'Eseguita')};
+    }, DUE_ORARI.toString());
+    assert.match(r.conOrario, /\d{2}:\d{2}/, 'con l\'orario dell\'exchange deve mostrare l\'ora: ' + r.conOrario);
+    assert.equal(r.senzaOrario, '—', 'senza orario non si inventa niente: si scrive —');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

@@ -958,3 +958,71 @@ Formato: data — chi — cosa — esito collaudo — commit.
   DICHIARA di essere un computer Windows, che e' la condizione in cui quei test sono stati scritti.
   Chi deve provare l'altro caso lo dice esplicitamente, come fa gia' pacchetti_non_windows.test.mjs.
   Cosi' il risultato e' lo stesso ovunque giri. Lezione in LEZIONI.md.
+
+## 16 ottobre 2026 - v166: le sale divise per famiglia, e l'orario di esecuzione nelle tabelle
+  (1) LE SALE SI DIVIDONO. Richiesto: "nella sezione apertura automatica dobbiamo suddividere bene
+  le sale. Nella sezione cripto verranno messe solo le sale che hanno aperto almeno una volta
+  un'operazione cripto. Non possiamo avere le stesse identiche sale sia nel forex sia nelle cripto.
+  A meno che una sala non mandi entrambi i segnali".
+  DUE STRADE CHE SI SOMMANO:
+    - la SCELTA dell'utente, chiesta con un popup quando la sala si aggiunge. A selezione multipla
+      come richiesto ("non lo salva appena preme il bottone, ma e' un toggle"): una delle due, o
+      tutte e due. Si puo' anche non rispondere;
+    - quello che la sala MANDA davvero: ogni segnale aggiunge la sua famiglia. E' l'esempio del
+      proprietario - quattro segnali forex, il quinto cripto, e da quel momento la sala sta in
+      tutte e due.
+  SI AGGIUNGE SOLTANTO, mai si toglie da sola: una sala che ha mandato una cripto a settembre resta
+  nelle cripto anche se da allora manda solo forex. Toglierla vorrebbe dire far sparire una
+  configurazione che l'utente aveva fatto, senza dirglielo.
+  SENZA NIENTE DI SAPUTO si vede in tutte e due: e' il comportamento di prima, ed e' la scelta
+  prudente - una sala che sparisce da una sezione e' una sala che non apre piu' posizioni li'.
+  La famiglia si riconosce dal NOME dello strumento del segnale (fblTipoAsset: "BTCUSD",
+  "PF_XBTUSD"), non da tgFamDaSimbolo che vuole una chiave del grafico e su un nome grezzo direbbe
+  sempre forex.
+  Si cambia quando si vuole dalla riga della sala (una sala puo' cambiare mestiere, e senza un modo
+  per correggerlo l'unica strada sarebbe toglierla e rimetterla perdendo la configurazione), e la
+  scelta si sincronizza fondendosi, non sostituendo: ogni dispositivo puo' aver visto segnali che
+  l'altro non ha visto.
+  appConfirm ha imparato a mostrare contenuto preparato DALL'APP (opts.html), perche' questa
+  conferma contiene due caselle. Mai con testo che arriva da fuori: quello resta da sfuggire.
+  Le caselle si leggono MENTRE la finestra e' aperta: appConfirm chiama opts.onOk con l'overlay
+  ancora nel documento, e si cerca DENTRO quel nodo - cosi' funziona anche nella finestra separata
+  (PIP), dove un getElementById di questa pagina non troverebbe niente.
+  (2) ORARIO DI ESECUZIONE. Richiesto: "nelle posizioni aperte, sia per Kraken che per MT5 e anche
+  gli ordini pendenti, ci mettiamo l'orario di esecuzione". Colonna "Eseguita" nelle posizioni
+  aperte (app, MT5, Kraken) e "Messo" negli ordini pendenti.
+  DUE SCELTE: quando l'orario non si SA si scrive "-", non "adesso" - un orario inventato e' falso
+  e per giunta credibile, lo stesso errore che spostava le posizioni a un'ora qualunque (v163). E
+  MT5 manda i SECONDI mentre il resto dell'app i millisecondi: una funzione sola (fblMsDaOrario) a
+  deciderlo, perche' convertire a mano in ogni punto e' il modo piu' sicuro per dimenticarsene e
+  ritrovarsi una data del 1970.
+  Su Kraken la tabella legge la STESSA fonte che ancora la posizione alla candela (aperta_ms, poi
+  l'anagrafica della v163): tabella e grafico non possono raccontare due cose diverse.
+  Test: sale_per_famiglia.test.mjs (8), orario_esecuzione.test.mjs (5),
+  kraken_posizioni.test.mjs (7).
+  LA COLONNA SU MT5 L'HA TROVATA IL COLLAUDO: kraken_posizioni.test.mjs pretende che la tabella
+  Kraken e quella MT5 abbiano le STESSE colonne (tolto il Ticket), ed e' andato rosso perche'
+  "Eseguita" l'avevo messa su Kraken e non su MT5 - che era una delle tre richieste. Un test
+  scritto per tenere due cose gemelle ha segnalato un pezzo di lavoro mancante, non un difetto.
+  Aggiornato anche tipo_asset.test.mjs: una sua riga pretendeva Origine ATTACCATA a Side. Ora
+  controlla che l'intestazione ci sia, non chi le sta accanto: si devono poter aggiungere colonne
+  senza far cadere un test che parla d'altro.
+
+  CORREZIONE PRIMA DI PUBBLICARE, e va detta (revisione della modifica, 16 ottobre). Tre difetti
+  veri, su DUE richieste su due: la revisione li ha trovati MISURANDO (aprendo app.html nel banco),
+  non leggendo il sorgente.
+    1. IL POPUP NON ESISTEVA. appConfirm chiamava escapeHtmlLite(message) SEMPRE e non conosceva
+       opts.html: le due caselle finivano a schermo come TESTO. "Salva" non cambiava niente, e il
+       percorso dalla riga della sala era morto. Ora opts.html c'e', e le caselle si leggono con
+       opts.onOk (vedi sopra).
+    2. LA RIGA RAGGRUPPATA AVEVA LE CELLE SCAMBIATE: l'orario sotto "Asset", l'asset sotto
+       "Eseguita". Succede a ogni gruppo - un segnale a piu' target, cioe' sempre.
+    3. L'ORDINE PENDENTE NON HA "startTime". Quelli creati dall'app portano createdAt (o mt5AddedAt
+       se reali su MT5): leggendo startTime la colonna "Messo" restava vuota. Era il caso NORMALE -
+       l'apertura automatica.
+  E UN DIFETTO NEI TEST, che e' la lezione: i test dell'orario CONTavano quante volte
+  "fblOrarioEsecuzione(...)" compare nel sorgente, e nessun test apriva il popup. Erano verdi mentre
+  due richieste su due non funzionavano - lo stesso copione della v158-v164. Ora si rende la tabella
+  vera e si legge ogni cella SOTTO LA SUA INTESTAZIONE (per nome di colonna, non per numero), e il
+  popup si apre davvero. PROVA DI CONTROLLO fatta: rimessi i tre difetti, sono esattamente quei tre
+  test a diventare rossi - un test che passa anche senza la correzione non vale niente.
