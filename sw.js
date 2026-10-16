@@ -556,7 +556,22 @@
 //               sostituendosi), e i livelli Kraken pubblicati portano anche il nome della sala.
 //               E dove non si SA, adesso si dice "origine da confermare" invece di "Manuale":
 //               attribuire a te un'operazione di una sala falsa anche il profitto per sala.
-const CACHE_NAME = "forex-backtest-lab-v163";
+//          v164 = "SALVA CONFIGURAZIONE" TRASFERIVA SOLO META' STRATEGIA, e la cronologia delle
+//               sale si apre anche dalle impostazioni del grafico.
+//               IL BUCO: stratDallaUi() calcolava GIA' il pareggio anticipato (torna
+//               avv:{attivo,pct}) e salvaStrategiaNellaSala() non lo copiava. Lo configuravi nella
+//               cronologia, premevi salva, e nella sala non arrivava: nessun errore, nessun
+//               avviso, spariva e basta. Fuori restava anche la base rischio/capitale della v160,
+//               che nella cronologia non esisteva proprio. Trasferiva metodologia, distribuzione,
+//               quote e spostamenti dello stop; il resto no.
+//               Due conversioni rendono il buco facile da rifare, ed e' per questo che ora ci sono
+//               dei test: nella riga della sala l'avvicinamento e' UN NUMERO (0 = spento), nella
+//               cronologia sono DUE campi; e una percentuale senza la sua unita' di misura e' un
+//               numero che la sala interpreta a modo suo.
+//               La cronologia si apre ora anche da Impostazioni grafico, con lo STESSO pulsante
+//               (stessa classe, stesso ascoltatore delegato): due strade diverse per aprire la
+//               stessa cosa divergono senza che nessuno se ne accorga.
+const CACHE_NAME = "forex-backtest-lab-v164";
 const ASSETS = [
   "./",
   "./app.html",
