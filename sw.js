@@ -571,7 +571,21 @@
 //               La cronologia si apre ora anche da Impostazioni grafico, con lo STESSO pulsante
 //               (stessa classe, stesso ascoltatore delegato): due strade diverse per aprire la
 //               stessa cosa divergono senza che nessuno se ne accorga.
-const CACHE_NAME = "forex-backtest-lab-v164";
+//          v165 = STOP E TARGET DELLE POSIZIONI KRAKEN SI TRASCINANO SUL GRAFICO. Segnalato:
+//               "sia dal tablet che dal telefono non riesco a spostare target e stop col dito; con
+//               la penna si', col dito no. Anzi, neanche sul PC me li fa spostare: devono essere
+//               modificabili". La causa era UNA per tutti e tre i casi: le posizioni Kraken non
+//               stanno in positions[] - sono disegnate da un percorso separato - e tradeLevelHit,
+//               la funzione che decide quale linea si sta afferrando, non conteneva un solo
+//               riferimento a Kraken. Non c'era niente da afferrare, con nessun dispositivo.
+//               PRIMA SI SELEZIONA, POI SI TRASCINA (richiesto): il primo tocco seleziona e la
+//               linea si illumina, il secondo trascina. E al rilascio si CHIEDE CONFERMA con il
+//               prezzo vecchio e quello nuovo, perche' qui il rilascio non scrive un numero: manda
+//               un ordine a un exchange. Sono due protezioni diverse e servono tutte e due.
+//               Il prezzo mandato a Kraken toglie lo scostamento del disegno (Kraken e Binance non
+//               quotano identico): senza, lo stop finirebbe spostato di quella differenza.
+//               Fermi sul posto non si chiede niente, e la selezione scade da sola.
+const CACHE_NAME = "forex-backtest-lab-v165";
 const ASSETS = [
   "./",
   "./app.html",

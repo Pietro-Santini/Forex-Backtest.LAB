@@ -23283,6 +23283,28 @@ chartEl.addEventListener('pointerdown',e=>{
    return;
  }
  if(e.pointerType==='touch'){
+    // KRAKEN PRIMA DI TUTTO IL RESTO: le sue linee non passano da tradeLevelHit (vedi
+    // krakenLivelloHit). Senza questo, col dito il tocco finisce nel ramo "punto vuoto" piu' sotto
+    // e la pagina scorre invece di trascinare - ed e' il motivo per cui col dito non si muoveva
+    // niente mentre con la penna sembrava funzionare (la penna non passa da questo ramo).
+   const h=krakenLivelloHit(e.clientX,e.clientY);
+   if(h){
+    e.preventDefault();
+    // PRIMO tocco: si seleziona e basta. Serve un secondo tocco, deliberato, per trascinare.
+    if(!krakenLivelloPronto(h)){
+     krakenLivelloArma(h);
+     draw();
+     $('status').textContent='🐙 '+krakenLivelloEtichetta(h).replace(/^lo |^il /,'').toUpperCase()+' di '+h.simbolo+' selezionato. Premi di nuovo sopra per trascinarlo.';
+     return;
+    }
+    krakenLivelloDrag={simbolo:h.simbolo,tipo:h.tipo,indice:h.indice,scostamento:h.scostamento,prezzoIniziale:h.prezzo};
+    krakenLivelloPreview={simbolo:h.simbolo,tipo:h.tipo,indice:h.indice,prezzo:h.prezzo};
+    chartEl.setPointerCapture?.(e.pointerId);
+    setChartTouchAction(true);   // il dito deve poter andare in verticale senza che la pagina scorra
+    $('status').textContent='Trascina '+krakenLivelloEtichetta(h)+' di '+h.simbolo+'. Al rilascio ti chiedo conferma prima di mandarlo a Kraken.';
+    draw();
+    return;
+   }
     const zoneHitT=zoneHandleHit(e.clientX,e.clientY);
     if(zoneHitT){
       e.preventDefault();
@@ -23370,6 +23392,23 @@ chartEl.addEventListener('pointerdown',e=>{
    // Un solo dito su un punto vuoto del grafico: NON blocchiamo nulla, così la pagina
    // può scorrere normalmente in verticale (richiesta esplicita).
    return;
+ }
+ const h=krakenLivelloHit(e.clientX,e.clientY);
+ if(h){
+  e.preventDefault();
+  // Stessa regola del dito: il primo clic seleziona, il secondo trascina.
+  if(!krakenLivelloPronto(h)){
+   krakenLivelloArma(h);
+   draw();
+   $('status').textContent='🐙 '+krakenLivelloEtichetta(h).replace(/^lo |^il /,'').toUpperCase()+' di '+h.simbolo+' selezionato. Premi di nuovo sopra per trascinarlo.';
+   return;
+  }
+  krakenLivelloDrag={simbolo:h.simbolo,tipo:h.tipo,indice:h.indice,scostamento:h.scostamento,prezzoIniziale:h.prezzo};
+  krakenLivelloPreview={simbolo:h.simbolo,tipo:h.tipo,indice:h.indice,prezzo:h.prezzo};
+  chartEl.setPointerCapture?.(e.pointerId);
+  $('status').textContent='Trascina '+krakenLivelloEtichetta(h)+' di '+h.simbolo+'. Al rilascio ti chiedo conferma prima di mandarlo a Kraken.';
+  draw();
+  return;
  }
  const zoneHitM=zoneHandleHit(e.clientX,e.clientY);
  if(zoneHitM){
@@ -23672,6 +23711,14 @@ chartEl.addEventListener('pointermove',e=>{
    draw();
    return;
  }
+ if(krakenLivelloDrag){
+   // Solo anteprima: il prezzo vero sull'exchange non si tocca finche' non si rilascia E si
+   // conferma. Un ordine che si muove mentre il dito scorre non si puo' annullare.
+   e.preventDefault();
+   const punto=screenToChartPoint(e.clientX,e.clientY);
+   if(punto){ krakenLivelloPreview={...krakenLivelloDrag,prezzo:punto.price}; draw(); }
+   return;
+ }
  if(tradeLevelDrag){
    // Anche qui: durante il trascinamento aggiorniamo solo l'anteprima tratteggiata; il
    // valore vero resta quello precedente finché non si rilascia (pointerup), esattamente
@@ -23852,6 +23899,24 @@ chartEl.addEventListener('pointerup',e=>{
    chartEl.releasePointerCapture?.(e.pointerId);
    if(e.pointerType==='touch')setChartTouchAction(false);
    draw();
+   return;
+ }
+ if(krakenLivelloDrag){
+   const drag=krakenLivelloDrag;
+   const punto=screenToChartPoint(e.clientX,e.clientY);
+   const prezzoGrafico=punto?punto.price:(krakenLivelloPreview?krakenLivelloPreview.prezzo:null);
+   krakenLivelloDrag=null; krakenLivelloPreview=null;
+   krakenLivelloDisarma();   // consumato: per muoverla di nuovo si riseleziona
+   chartEl.releasePointerCapture?.(e.pointerId);
+   if(e.pointerType==='touch')setChartTouchAction(false);
+   draw();
+   // Il prezzo letto sul grafico e' quello di Binance; all'exchange va mandato il SUO prezzo,
+   // togliendo lo scostamento che il disegno aveva applicato (vedi krakenScostamento). Senza
+   // questo passaggio lo stop finirebbe spostato di quanto i due mercati non coincidono.
+   const perKraken=(prezzoGrafico!=null)?(prezzoGrafico-(Number(drag.scostamento)||0)):null;
+   // Fermo sul posto = nessuno spostamento: non si chiede conferma di non fare niente.
+   if(perKraken==null||Math.abs(prezzoGrafico-drag.prezzoIniziale)<1e-9)return;
+   krakenLivelloApplica(drag,perKraken).catch(err=>{ try{ $('status').textContent='🐙 Non riuscito: '+err; }catch(e2){} });
    return;
  }
  if(tradeLevelDrag){
@@ -40149,7 +40214,109 @@ function krakenScostamento(chiave,prezzo,mark){
 function krakenScostamentiPulisci(chiaviVive){
  Object.keys(krakenScostamenti).forEach(k=>{ if(chiaviVive.indexOf(k)<0)delete krakenScostamenti[k]; });
 }
+// TRASCINARE STOP E TARGET DI UNA POSIZIONE KRAKEN.
+//
+// SEGNALATO dal proprietario: "sia dal tablet che dal telefono, sul conto Kraken, non riesco a
+// spostare target e stop con il dito. Con la penna sul tablet si', con il dito no. Anzi, neanche
+// sul PC me li fa spostare: devono essere modificabili".
+//
+// LA CAUSA, una sola per tutti e tre i casi: le posizioni Kraken NON stanno in positions[] - sono
+// disegnate da questo percorso separato - e tradeLevelHit(), la funzione che decide quale linea si
+// sta afferrando, non contiene un solo riferimento a Kraken. Non c'era niente da afferrare, con
+// nessun dispositivo. (La penna "funzionava" su altre linee, non su queste.)
+//
+// PERCHE' UNO STATO SEPARATO e non un ramo dentro tradeLevelHit: quella funzione torna una
+// STRINGA ('SL', 'TP', 'ENTRY'...) e tutta la macchina del trascinamento ragiona su quelle. Una
+// linea Kraken ha bisogno di sapere anche QUALE contratto e QUALE dei target: ci vuole un oggetto.
+// Infilarlo li' dentro vorrebbe dire cambiare il tipo di ritorno in una decina di punti che oggi
+// funzionano - compreso il trascinamento di MT5, che tocca ordini veri. Uno stato parallelo si
+// aggiunge senza toccarli.
+//
+// E LA DIFFERENZA CHE CONTA RISPETTO ALLE ALTRE LINEE: qui il rilascio non "scrive un numero", manda
+// un ordine a un exchange. Quindi il trascinamento mostra solo un'anteprima e al rilascio si CHIEDE
+// conferma con il prezzo vecchio e quello nuovo. Niente doppio tocco per armare: la conferma e'
+// gia' il secondo gesto deliberato, e dice anche cosa sta per succedere - cosa che un doppio tocco
+// non fa.
+let krakenLivelloHitRects=[];     // riempito a ogni disegno: {simbolo,tipo,indice,prezzo,x1,x2,yy}
+let krakenLivelloDrag=null;       // {simbolo,tipo,indice,prezzoIniziale}
+let krakenLivelloPreview=null;    // {simbolo,tipo,indice,prezzo}
+const KRAKEN_LIVELLO_TOLL=14;     // stessa tolleranza delle altre linee: un dito non e' preciso
+function krakenLivelloHit(clientX,clientY){
+ if(!krakenLivelloHitRects.length)return null;
+ const g=chartGeometry(); if(!g)return null;
+ const px=clientX-g.rect.left, py=clientY-g.rect.top;
+ // La piu' VICINA, non la prima che capita: stop e target possono stare a pochi pixel l'uno
+ // dall'altro, e prendere quella sbagliata qui vuol dire spostare l'ordine sbagliato.
+ let migliore=null, dist=KRAKEN_LIVELLO_TOLL+1;
+ krakenLivelloHitRects.forEach(r=>{
+  if(px<r.x1-KRAKEN_LIVELLO_TOLL||px>r.x2+KRAKEN_LIVELLO_TOLL)return;
+  const d=Math.abs(py-r.yy);
+  if(d<=KRAKEN_LIVELLO_TOLL&&d<dist){ dist=d; migliore=r; }
+ });
+ return migliore;
+}
+// PRIMA SI SELEZIONA, POI SI TRASCINA. Richiesto esplicitamente dal proprietario, ed e' la stessa
+// regola che vale per le altre linee del grafico (vedi tradeLevelArma/tradeLevelPronta).
+// Qui conta piu' che altrove: un tocco impreciso su uno stop di Kraken manderebbe un ordine vero.
+// Sono DUE protezioni diverse e servono tutte e due: l'armamento evita di afferrare per sbaglio,
+// la conferma al rilascio dice COSA sta per succedere. Un doppio tocco non dice niente, e una
+// conferma da sola non impedisce di spostare la linea sbagliata.
+// L'armamento SCADE: una linea lasciata "pronta" e dimenticata e' una trappola per il clic dopo.
+const KRAKEN_LIVELLO_ARMA_MS=8000;
+let krakenLivelloArmato=null;     // {chiave, quando}
+function krakenLivelloChiave(h){ return h?(h.simbolo+'|'+h.tipo+'|'+(h.indice==null?'-':h.indice)):''; }
+function krakenLivelloPronto(h){
+ if(!krakenLivelloArmato)return false;
+ if(krakenLivelloArmato.chiave!==krakenLivelloChiave(h))return false;
+ return (Date.now()-krakenLivelloArmato.quando)<=KRAKEN_LIVELLO_ARMA_MS;
+}
+function krakenLivelloArma(h){ krakenLivelloArmato={chiave:krakenLivelloChiave(h),quando:Date.now()}; }
+function krakenLivelloDisarma(){ krakenLivelloArmato=null; }
+function krakenLivelloEtichetta(h){
+ return (h.tipo==='SL')?'lo stop':('il target'+(h.indice!=null?(' n. '+(h.indice+1)):''));
+}
+// Il rilascio: si chiede conferma e si manda al ponte. Le due funzioni che muovono davvero gli
+// ordini (krakenSpostaSl/krakenSpostaTp) restano quelle della tabella: qui si prepara il prezzo e
+// si riusa la stessa strada, invece di scriverne una seconda che un domani diverge.
+async function krakenLivelloApplica(drag,prezzoNuovo){
+ const p=((krakenPosizioni&&krakenPosizioni.posizioni)||[]).find(x=>x&&x.simbolo===drag.simbolo);
+ if(!p){ $('status').textContent='🐙 La posizione non c\u2019e\u0300 piu\u0300: niente spostato.'; return; }
+ if(!(Number.isFinite(prezzoNuovo)&&prezzoNuovo>0)){ $('status').textContent='🐙 Prezzo non valido: niente spostato.'; return; }
+ const dec=(v)=>fmtPriceA(v,currentAssetKey);
+ const buy=String(p.lato).toUpperCase().startsWith('B');
+ const vecchio=(drag.tipo==='SL')?Number(p.sl)
+   :Number(((p.tp||[])[drag.indice]||{}).prezzo);
+ const righe=[krakenLivelloEtichetta(drag).replace(/^lo |^il /,'').toUpperCase()+' di '+p.lato+' '+p.quantita+' '+p.simbolo,
+   'da '+(Number.isFinite(vecchio)?dec(vecchio):'—')+'  a  '+dec(prezzoNuovo),
+   'Entrata '+dec(Number(p.entrata))+' · prezzo adesso '+dec(Number(p.mark))];
+ // Gli stessi controlli della finestra della tabella: uno stop dalla parte sbagliata chiude la
+ // posizione all'istante, e un target dalla parte della perdita non e' un target.
+ const mark=Number(p.mark);
+ if(drag.tipo==='SL'&&Number.isFinite(mark)&&(buy?prezzoNuovo>=mark:prezzoNuovo<=mark))
+  righe.push('\u26a0\ufe0f Questo stop e\u0300 gia\u0300 oltre il prezzo di adesso: la posizione si chiuderebbe subito.');
+ if(drag.tipo==='TP'&&(buy?prezzoNuovo<=Number(p.entrata):prezzoNuovo>=Number(p.entrata)))
+  righe.push('\u26a0\ufe0f Questo target e\u0300 dalla parte della perdita rispetto all\u2019entrata.');
+ if(!await appConfirm(righe.join('\n'),
+   {title:'\ud83d\udc19 Sposta '+krakenLivelloEtichetta(drag),okLabel:'Sposta',cancelLabel:'Annulla'}))return;
+ if(drag.tipo==='SL'){
+  const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:prezzoNuovo});
+  $('status').textContent=r.ok?('🐙 '+p.simbolo+': stop spostato a '+dec(prezzoNuovo)+'.')
+                              :('🐙 Stop non spostato: '+r.message);
+ }else{
+  // I target si mandano TUTTI insieme (vedi krakenSpostaTp): si sostituisce solo quello
+  // trascinato e si rimandano gli altri com'erano.
+  const tutti=(p.tp||[]).map(x=>Number(x.prezzo));
+  if(drag.indice!=null&&drag.indice>=0&&drag.indice<tutti.length)tutti[drag.indice]=prezzoNuovo;
+  const buoni=tutti.filter(v=>Number.isFinite(v)&&v>0);
+  const r=await krakenBridge('/tp',{simbolo:p.simbolo,tp:buoni});
+  $('status').textContent=r.ok?('🐙 '+p.simbolo+': target aggiornati ('+buoni.map(dec).join(' / ')+').')
+                              :('🐙 Target non spostati: '+r.message);
+ }
+ krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
+}
 window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
+ // L'elenco si rifa' a ogni disegno: una linea che non c'e' piu' non deve restare afferrabile.
+ krakenLivelloHitRects=[];
  if(!krakenConto||!krakenConto.collegato||!currentAssetKey)return;
  let bn=''; try{ bn=binanceSymbolForAsset(currentAssetKey)||''; }catch(e){}
  if(!bn)return;
@@ -40240,6 +40407,53 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
    tooltipLines:['🐙 '+krakenNome()+' · '+(buy?'BUY':'SELL')+' '+p.quantita+' '+p.simbolo,
     'Entrata '+entry+' · SL '+(Number.isFinite(sl)?sl:'—')+' · TP '+(tps.join(' / ')||'—'),
     'P/L '+usd(Number(p.pnl)||0)+' · R/R '+rr,'Margine usato '+usd(margine).replace('+','')+' (leva '+krakenLeva()+'x)']});
+  // LA LINEA SELEZIONATA si vede: un alone sul suo tratto, altrimenti "premi di nuovo sopra per
+  // trascinarlo" non dice SU COSA, e al secondo tocco si scopre di aver armato un'altra linea.
+  krakenLivelloHitRects.forEach(z=>{
+   if(z.simbolo!==p.simbolo)return;
+   if(!krakenLivelloArmato||krakenLivelloArmato.chiave!==krakenLivelloChiave(z))return;
+   if(Date.now()-krakenLivelloArmato.quando>KRAKEN_LIVELLO_ARMA_MS)return;
+   ctx.save();
+   ctx.strokeStyle=(z.tipo==='SL')?'#ff7b78':'#5eead4';
+   ctx.lineWidth=5; ctx.globalAlpha=.30;
+   ctx.beginPath(); ctx.moveTo(z.x1,z.yy); ctx.lineTo(z.x2,z.yy); ctx.stroke();
+   ctx.restore();
+  });
+  // L'ANTEPRIMA mentre si trascina: una riga tratteggiata dove finirebbe la linea, col prezzo.
+  // Senza, si trascina alla cieca e si scopre dove si e' arrivati solo nella finestra di conferma.
+  if(krakenLivelloPreview&&krakenLivelloPreview.simbolo===p.simbolo
+     &&Number.isFinite(krakenLivelloPreview.prezzo)
+     &&krakenLivelloPreview.prezzo>=lo&&krakenLivelloPreview.prezzo<=hi){
+   const yy=y(krakenLivelloPreview.prezzo);
+   const col=(krakenLivelloPreview.tipo==='SL')?'#c0392b':'#1f8f55';
+   ctx.save();
+   ctx.strokeStyle=col; ctx.lineWidth=1.6; ctx.setLineDash([6,4]);
+   ctx.beginPath(); ctx.moveTo(pad.l,yy); ctx.lineTo(w-pad.r,yy); ctx.stroke();
+   ctx.setLineDash([]);
+   ctx.font='bold 10px Inter, system-ui, sans-serif';
+   const et=(krakenLivelloPreview.tipo==='SL'?'SL ':'TP ')+fmtPriceA(krakenLivelloPreview.prezzo,currentAssetKey);
+   const tw=ctx.measureText(et).width+10;
+   ctx.fillStyle=col; ctx.fillRect(pad.l+8,yy-9,tw,18);
+   ctx.fillStyle='#fff'; ctx.fillText(et,pad.l+13,yy+4);
+   ctx.restore();
+  }
+  // LE ZONE AFFERRABILI di questa posizione: una per lo stop, una per ogni target. Si registrano
+  // QUI, dove i prezzi e la geometria sono gia' quelli veri del disegno: un hit-test che ricalcola
+  // per conto suo dove dovrebbe stare una linea finisce prima o poi a dire una cosa diversa da
+  // quella che si vede (vedi zoneHandleHit, che per questo condivide zoneBoxXRange col disegno).
+  // Lo scostamento `off` (Kraken e Binance non quotano identico, vedi krakenScostamento) e' GIA'
+  // applicato alla y: si afferra la linea dov'e' disegnata. Il prezzo da mandare all'exchange
+  // viene pero' ricalcolato togliendolo, al rilascio.
+  {
+   const x1=box?box.xOrigin:pad.l, x2=box?box.xRight:(w-pad.r);
+   const segna=(tipo,indice,prezzoGrafico)=>{
+    if(!Number.isFinite(prezzoGrafico)||prezzoGrafico<lo||prezzoGrafico>hi)return;
+    krakenLivelloHitRects.push({simbolo:p.simbolo,tipo,indice,prezzo:prezzoGrafico,
+      scostamento:off,x1,x2,yy:y(prezzoGrafico)});
+   };
+   if(Number.isFinite(sl))segna('SL',null,sl+off);
+   (p.tp||[]).forEach((t,j)=>{ const v=krakenPrezzo(t&&t.prezzo); if(Number.isFinite(v))segna('TP',j,v+off); });
+  }
   // LA FRECCIA DI APERTURA E IL CONNETTORE, come per le posizioni MT5 (richiesto: "non viene
   // visualizzata la freccettina di apertura della posizione, la linea di intermezzo tra il punto di
   // apertura e il prezzo corrente, e l'altra freccettina").

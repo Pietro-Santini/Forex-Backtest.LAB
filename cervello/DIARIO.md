@@ -908,3 +908,53 @@ Formato: data — chi — cosa — esito collaudo — commit.
   ritrovarsi con due comportamenti diversi senza accorgersene - e c'e' un test che tiene fermo
   proprio questo (due pulsanti, UN solo punto di apertura).
   Test: crono_salva_strategia.test.mjs (5).
+
+## 16 ottobre 2026 - v165: stop e target di Kraken si trascinano sul grafico
+  SEGNALATO: "sia dal tablet che dal telefono, sul conto Kraken, non riesco a spostare target e
+  stop con il dito. Con la penna sul tablet si', con il dito no. Anzi, neanche sul PC me li fa
+  spostare: devono essere modificabili".
+  LA CAUSA, una sola per tutti e tre i casi: le posizioni Kraken NON stanno in positions[] - sono
+  disegnate da krakenDisegnaGrafico, un percorso separato - e tradeLevelHit(), la funzione che
+  decide quale linea si sta afferrando, non conteneva un solo riferimento a Kraken. Le caselle
+  erano per giunta disegnate con noHandle:true. Non c'era niente da afferrare, con nessun
+  dispositivo: la penna "funzionava" su altre linee, non su queste.
+  PERCHE' UNO STATO SEPARATO e non un ramo dentro tradeLevelHit: quella funzione torna una STRINGA
+  ('SL','TP','ENTRY'...) e tutta la macchina del trascinamento ragiona su quelle. Una linea Kraken
+  deve dire anche QUALE contratto e QUALE target: ci vuole un oggetto. Infilarlo li' dentro voleva
+  dire cambiare il tipo di ritorno in una decina di punti che funzionano - compreso il
+  trascinamento di MT5, che tocca ordini veri. Uno stato parallelo si aggiunge senza toccarli.
+  DUE PROTEZIONI, e servono tutte e due:
+    - PRIMA SI SELEZIONA, POI SI TRASCINA (richiesto esplicitamente dal proprietario): il primo
+      tocco arma e la linea si illumina, il secondo trascina. Evita di afferrare per sbaglio.
+      L'armamento SCADE dopo 8 secondi: una linea lasciata "pronta" e dimenticata e' una trappola
+      per il clic dopo. E si consuma a spostamento fatto.
+    - AL RILASCIO SI CHIEDE CONFERMA, con prezzo vecchio e nuovo, piu' gli avvisi gia' in uso
+      nella finestra della tabella (stop oltre il prezzo = chiusura immediata; target dalla parte
+      della perdita). Un doppio tocco non dice COSA sta per succedere; una conferma da sola non
+      impedisce di afferrare la linea sbagliata.
+  IL PREZZO MANDATO A KRAKEN toglie lo scostamento che il disegno applica (krakenScostamento:
+  Kraken e Binance non quotano identico). Senza, lo stop finirebbe spostato di quella differenza.
+  Fermi sul posto non si chiede niente: non si conferma di non fare nulla.
+  I target si mandano tutti insieme, come gia' fa la finestra della tabella: si sostituisce solo
+  quello trascinato e si rimandano gli altri com'erano.
+  DUE TRAPPOLE PAGATE SCRIVENDO IL BANCO, e vanno ricordate perche' non si vedono:
+    1. il richiamo a krakenDisegnaGrafico dentro draw() e' avvolto in un try/catch che INGHIOTTE
+       gli errori: un'eccezione li' dentro e' invisibile, draw() non segnala niente e si crede di
+       avere un problema di dati. Per trovarla va chiamata la funzione direttamente;
+    2. una linea fuori dalla scala di prezzo visibile non si disegna - giusto - e quindi non si
+       afferra. Il banco aveva candele strette e misurava zero zone: sembrava un difetto del
+       codice, era il banco a non mostrare quelle linee. E lo scostamento Kraken<->Binance sposta
+       i livelli: con un mark non allineato all'ultima candela il secondo target usciva di scala.
+  Test: kraken_trascina_livelli.test.mjs (6).
+
+  CORREZIONE NELLA STESSA VERSIONE, e va detta: il collaudo su GITHUB era ROSSO dalla v158 alla
+  v164 mentre in locale era verde ogni volta. Quattro test del popup "installa i pacchetti MT5"
+  cadevano la' e non qui. La causa: dalla v158 l'app chiede "questo dispositivo e' Windows?" e
+  quella domanda rispondeva con il sistema operativo di CHI ESEGUE il collaudo - Windows sul PC,
+  Ubuntu su GitHub, dove la schermata non compare mai e i test che la pretendono falliscono.
+  Ho guardato il collaudo locale e pubblicato sette volte credendo fosse verde. Il collaudo che
+  conta e' quello di GitHub.
+  LA CURA non e' aggiustare i quattro test uno per uno: il banco (laboratorio/app/aiuti.mjs) ora
+  DICHIARA di essere un computer Windows, che e' la condizione in cui quei test sono stati scritti.
+  Chi deve provare l'altro caso lo dice esplicitamente, come fa gia' pacchetti_non_windows.test.mjs.
+  Cosi' il risultato e' lo stesso ovunque giri. Lezione in LEZIONI.md.

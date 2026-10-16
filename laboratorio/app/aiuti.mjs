@@ -16,12 +16,33 @@ export const RADICE = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 export const RISULTATI = path.join(RADICE, 'laboratorio', 'risultati');
 fs.mkdirSync(RISULTATI, {recursive:true});
 
-export async function apriApp({larghezza=1300, altezza=850}={}){
+// IL SISTEMA OPERATIVO DEL BANCO E' DICHIARATO, NON EREDITATO.
+//
+// Dalla v158 l'app chiede "questo dispositivo e' Windows?" per decidere se proporre
+// l'installazione dei pacchetti MT5 (il Setup e' un installatore Windows). Quella domanda
+// rispondeva con il sistema operativo di CHI ESEGUE il collaudo: verde sul PC Windows dello
+// sviluppatore, rossa su GitHub che gira su Ubuntu. Quattro test sono rimasti rossi su GitHub per
+// sette versioni mentre in locale erano verdi - e un collaudo che dipende da dove gira non e' un
+// collaudo, e' un'opinione.
+//
+// Qui il banco DICHIARA di essere un computer Windows, che e' la condizione in cui sono stati
+// scritti tutti i test "su un computer". Chi deve provare l'altro caso (telefono, tablet, Mac) lo
+// dice esplicitamente - vedi pacchetti_non_windows.test.mjs, che apre la pagina con la sua
+// piattaforma. Cosi' il risultato e' lo stesso ovunque giri.
+const UA_WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows', userAgent=UA_WINDOWS}={}){
   const opz = {};
   // Nel contenitore cloud Chromium e' gia' installato qui; su GitHub lo installa il flusso.
   for(const p of ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome']) if(fs.existsSync(p)) opz.executablePath = p;
   const browser = await chromium.launch(opz);
-  const pagina = await browser.newPage({viewport:{width:larghezza, height:altezza}});
+  const contesto = await browser.newContext({viewport:{width:larghezza, height:altezza}, userAgent});
+  // I Client Hints non si cambiano con lo userAgent: vanno dichiarati a parte, prima che la
+  // pagina parta (l'app li legge per primi).
+  await contesto.addInitScript(([p]) => {
+    Object.defineProperty(navigator, 'userAgentData', {configurable:true,
+      get: () => (p === null ? undefined : {platform: p, mobile: false, brands: []})});
+  }, [piattaforma]);
+  const pagina = await contesto.newPage();
   const errori = [];
   pagina.on('pageerror', e => errori.push(String(e).slice(0,300)));
   await pagina.route('**', r => r.request().url().startsWith('file://') ? r.continue() : r.abort());
