@@ -880,3 +880,31 @@ Formato: data — chi — cosa — esito collaudo — commit.
   LIMITE DICHIARATO: l'anagrafica si riempie da adesso. Le posizioni gia' aperte di cui il ponte
   non manda piu' l'orario vero non lo recuperano: quel dato non ce l'ha piu' nessuno.
   Test: anagrafica_posizione.test.mjs (7).
+
+## 16 ottobre 2026 - v164: "salva configurazione" trasferiva solo meta' strategia
+  RICHIESTO: "quando andiamo nella cronologia delle sale segnali impostiamo la configurazione di
+  take profit, anche per quanto riguarda il pareggio anticipato - a che punto della strada verso il
+  primo target, la percentuale - e la percentuale di rischio o del capitale a seconda di quella che
+  ha selezionato. Quando premiamo salva configurazione deve trasferire tutto nella strategia di
+  quella sala".
+  IL BUCO, trovato leggendo le due funzioni una accanto all'altra: stratDallaUi() CALCOLAVA GIA' il
+  pareggio anticipato - torna avv:{attivo,pct} - e salvaStrategiaNellaSala() non lo copiava. Lo si
+  configurava nella cronologia, si premeva salva, e nella sala non arrivava: nessun errore, nessun
+  avviso, spariva e basta. Trasferiva metodologia, distribuzione, quote e spostamenti dello stop;
+  restavano fuori il pareggio anticipato e la base rischio/capitale della v160 - che nella
+  cronologia non esisteva nemmeno come campo.
+  PERCHE' ERA FACILE DA SBAGLIARE, e perche' ora ci sono dei test: le due parti parlano due lingue
+  diverse. Nella riga della sala l'avvicinamento e' UN NUMERO dove 0 vuol dire spento; nella
+  cronologia sono DUE campi (una spunta e una percentuale). Chi ha scritto il salvataggio aveva
+  davanti due forme della stessa cosa, e ne ha portata una sola.
+  LA BASE: aggiunta accanto alla percentuale, con lo stesso significato della riga della sala
+  (tgBaseLotto). Salvare una percentuale senza la sua unita' di misura vuol dire mandare alla sala
+  un numero che poi interpreta a modo suo - ed e' esattamente il malinteso da cui e' nata la v160.
+  Predefinito 'rischio', come li': cambiarlo di nascosto farebbe aprire posizioni diverse da quelle
+  attese. La scelta si ricorda fra una riapertura e l'altra, come il capitale e la percentuale.
+  PUNTO 13, nella stessa versione: la cronologia delle sale si apre anche da Impostazioni grafico.
+  NON e' un secondo pulsante con una sua logica: stessa classe .fblCronoBtn, stesso ascoltatore
+  delegato, uno solo. Due strade diverse per aprire la stessa cosa e' il modo migliore per
+  ritrovarsi con due comportamenti diversi senza accorgersene - e c'e' un test che tiene fermo
+  proprio questo (due pulsanti, UN solo punto di apertura).
+  Test: crono_salva_strategia.test.mjs (5).
