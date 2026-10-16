@@ -96,7 +96,16 @@ test('la colonna Origine c è in tutte e tre le tabelle, e le celle restano alli
     'la cella Origine deve esserci in ENTRAMBE le righe degli ordini pendenti: ' + celle.length);
   // Posizioni Kraken: intestazione e cella.
   c(/>Origine<\/th>'\r?\n\s*\+'<th>Side<\/th>/, 'intestazione nelle posizioni Kraken');
-  c(/metti\(\{html:\(st&&st\.sala\?escapeHtmlLite\(String\(st\.sala\)\)/, 'cella Origine su Kraken');
+  // L'INTENTO, non la forma. Questa riga pretendeva l'espressione esatta della cella
+  // (`metti({html:(st&&st.sala?...`) ed e' andata rossa alla prima volta che quella cella e'
+  // migliorata davvero - in v163, quando ha imparato a leggere anche l'anagrafica della posizione
+  // per non scrivere "Manuale" su una posizione di una sala. Quello che deve restare vero e' che
+  // la cella Origine esista e dica DA DOVE arriva la posizione, non come e' scritta.
+  const cellaKraken = src.slice(src.indexOf('ORIGINE: da quale sala arriva la posizione'),
+                                src.indexOf('ORIGINE: da quale sala arriva la posizione') + 1600);
+  assert.ok(cellaKraken.length > 100, 'manca: cella Origine su Kraken');
+  assert.ok(/st&&st\.sala/.test(cellaKraken), 'la cella deve leggere la sala della strategia');
+  assert.ok(/metti\(\{html:/.test(cellaKraken), 'e deve essere una cella della tabella');
   // E i clic su SL/TP non dipendono piu' da numeri scritti a mano: aggiungendo una colonna
   // sarebbero scivolati, e un clic sullo stop avrebbe aperto i target.
   c(/const colSl=metti\(/, 'le colonne Kraken si numerano da sole');

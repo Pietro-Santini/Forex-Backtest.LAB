@@ -844,3 +844,39 @@ Formato: data — chi — cosa — esito collaudo — commit.
   sono nove canvas e quello del grafico e' #chart (col primo che capita si misura zero), e i colori
   arrivano come "rgba(r, g, b, a)" CON GLI SPAZI, col rosso delle candele al ribasso
   (224, 91, 100) vicinissimo a quello degli ask (224, 91, 79).
+
+## 16 ottobre 2026 - v163: l'anagrafica della posizione viaggia con la posizione
+  SEGNALATO: "ho aperto una posizione su Kraken alle 22. Dopo aver aggiornato l'applicazione,
+  chiusa e riaperta, sono andato a riaprire il grafico e la posizione me l'ha messa alle 19:20.
+  Per ogni posizione salva questi dati, sono stra importanti: non possiamo avere un cambio di
+  posizione dentro il grafico, ne' di apertura ne' di chiusura. Deve sempre combaciare con la
+  candela giusta".
+  LA CAUSA: l'ancoraggio provava tre fonti in ordine - l'orario vero dell'exchange (p.aperta_ms),
+  la data della strategia locale, e in ultimo Math.max(0,(rows.length||1)-20), cioe' "venti candele
+  prima della fine". Le prime due vivono in memoria o in una mappa che scade: dopo un riavvio
+  dell'app resta solo la terza, che non e' un orario ma un ripiego. Da li' il salto a un'ora
+  qualunque.
+  LA REGOLA: un fatto osservato una volta si SCRIVE. L'orario e il prezzo di apertura sono fatti
+  successi nel mondo, non stati dell'applicazione: non possono dipendere dal riavvio del programma
+  ne' da quale dispositivo sta guardando. Nuova anagrafica (fbl_pos_anagrafica), salvata e
+  sincronizzata come i livelli Kraken.
+  DUE SCELTE CHE CONTANO:
+    - si scrive solo cio' che si SA: un ripiego non entra mai nell'anagrafica, altrimenti
+      cristallizzerebbe per sempre un orario inventato;
+    - una volta noto, un orario NON si riscrive. Rincorrere la fonte del momento e' esattamente il
+      difetto da cui nasce questa funzione.
+  STESSA FALLA, ALTRO SINTOMO, segnalato nello stesso momento: "per il trade journal e anche sulle
+  colonne di ordini pendenti, posizioni MT5, Kraken, nei dispositivi mobili visualizza sempre
+  l'origine in maniera manuale, cosa che non e' assolutamente vera. Le posizioni aperte dalle sale
+  segnali non le apro io". Le mappe che dicono CHI ha aperto vivevano solo sul dispositivo che
+  l'aveva aperta: fb_mt5_ticket_segnale non era fra le chiavi sincronizzate, e i livelli Kraken
+  pubblicati contenevano sl/slIniziale/tps ma non la sala. E' la lezione gia' scritta in
+  LEZIONI.md il 14 ottobre, applicata a meta'.
+  Ora: ticket MT5 -> sala e anagrafica si sincronizzano, FONDENDOSI invece di sostituirsi (ogni
+  dispositivo puo' aver aperto ticket suoi, una sostituzione secca cancellerebbe quelli dell'altro),
+  e i livelli Kraken portano anche il nome della sala.
+  E dove non si sa si DICE: "origine da confermare" invece di "Manuale". Attribuire a te
+  un'operazione di una sala non e' un dettaglio estetico - falsa il profitto per sala.
+  LIMITE DICHIARATO: l'anagrafica si riempie da adesso. Le posizioni gia' aperte di cui il ponte
+  non manda piu' l'orario vero non lo recuperano: quel dato non ce l'ha piu' nessuno.
+  Test: anagrafica_posizione.test.mjs (7).

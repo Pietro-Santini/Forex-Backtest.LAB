@@ -539,7 +539,24 @@
 //               11 e 11. Effetto utile: se il broker non pubblicasse gli ask si vedrebbero barre
 //               blu SOTTILI invece che piene, e si capirebbe che manca il dato a monte - prima i
 //               due casi erano identici a schermo.
-const CACHE_NAME = "forex-backtest-lab-v162";
+//          v163 = L'ANAGRAFICA DELLA POSIZIONE: orario, prezzo e sala viaggiano con lei.
+//               Segnalato: "ho aperto una posizione su Kraken alle 22; dopo aver aggiornato
+//               l'applicazione, chiusa e riaperta, il grafico me l'ha messa alle 19:20. Per ogni
+//               posizione salva questi dati, sono stra importanti: deve sempre combaciare con la
+//               candela giusta". L'orario veniva da tre posti in ordine di preferenza - quello
+//               vero dell'exchange, la data della strategia locale, e in ultimo "venti candele
+//               prima della fine". I primi due vivono in memoria o in una mappa che scade: dopo
+//               un riavvio restava il terzo, che non e' un orario ma un ripiego. Ora un fatto
+//               osservato una volta si SCRIVE e non si riscrive piu': l'orario e il prezzo di
+//               apertura sono fatti successi nel mondo, non stati dell'applicazione.
+//               STESSA FALLA DALL'ALTRO LATO: "nei dispositivi mobili visualizza sempre l'origine
+//               in maniera manuale, cosa che non e' assolutamente vera". Le mappe che dicono CHI
+//               ha aperto una posizione vivevano solo sul dispositivo che l'aveva aperta: ora il
+//               ticket MT5 -> sala e l'anagrafica si sincronizzano (fondendosi, non
+//               sostituendosi), e i livelli Kraken pubblicati portano anche il nome della sala.
+//               E dove non si SA, adesso si dice "origine da confermare" invece di "Manuale":
+//               attribuire a te un'operazione di una sala falsa anche il profitto per sala.
+const CACHE_NAME = "forex-backtest-lab-v163";
 const ASSETS = [
   "./",
   "./app.html",
