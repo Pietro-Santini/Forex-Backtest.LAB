@@ -817,3 +817,30 @@ Formato: data — chi — cosa — esito collaudo — commit.
   perche' sono nate con la sessione Live accesa. Chi filtra Capital.com vuole quelle di
   Capital.com.
   Test: apri_senza_livelli.test.mjs (6), asset_tolti.test.mjs (5), journal_filtro_kraken.test.mjs (5).
+
+## 16 ottobre 2026 - v162: l'order book profile mostra tutti e due i lati
+  SEGNALATO: "sull'indicatore profilo volumetrico, l'order book profile a sinistra dell'istogramma:
+  le candele a sinistra sono tutte blu, solo una e' rossa. Devono visualizzarsi sia quelle rosse
+  sia quelle dei bid e degli ask".
+  LA CAUSA, una riga sola:
+      ctx.fillStyle = (bidVol[b] >= askVol[b]) ? colBid : colAsk;
+  Una barra per fascia, del colore del lato che aveva prevalso. In una fascia con 100 di bid e 95
+  di ask si vedeva solo blu: quei 95 non esistevano a schermo. Il rosso compariva solo dove gli ask
+  vincevano, e i pari andavano al blu per via del >=.
+  L'ACCUMULO DEI DATI ERA GIUSTO: bucketOrderBookDominanceProfile legge sia bids/asks sia la forma
+  compatta b/a e somma simmetricamente. Il difetto buttava via meta' informazione in fase di
+  DISEGNO, che e' il motivo per cui sembrava un problema di dati mancanti.
+  ORA: la barra resta lunga quanto la liquidita' totale della fascia, ma e' divisa in due pezzi in
+  proporzione - bid attaccato all'asse, ask oltre, ordine sempre uguale cosi' le fasce si possono
+  confrontare a occhio. Un lato presente ma piccolissimo prende almeno un pixel: "c'e' poco" e
+  "non c'e'" sono due cose diverse.
+  MISURATO, non dedotto: stesso banco (book finto con 100 di bid e 90 di ask in ogni fascia) fatto
+  girare sulla v161 e sulla v162. Prima: 11 barre blu, 0 rosse. Dopo: 11 e 11.
+  EFFETTO COLLATERALE UTILE: se il broker non pubblicasse i volumi ask si vedrebbero barre tutte
+  blu ma SOTTILI invece che piene, e si capirebbe subito che manca il dato a monte. Con il disegno
+  di prima "ask assenti" e "ask in minoranza" davano lo stesso identico risultato a schermo.
+  Test: order_book_due_lati.test.mjs (3), che guardano i RETTANGOLI DIPINTI intercettando il
+  contesto del canvas - non il testo del codice. Due trappole pagate scrivendoli: nella pagina ci
+  sono nove canvas e quello del grafico e' #chart (col primo che capita si misura zero), e i colori
+  arrivano come "rgba(r, g, b, a)" CON GLI SPAZI, col rosso delle candele al ribasso
+  (224, 91, 100) vicinissimo a quello degli ask (224, 91, 79).
