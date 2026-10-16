@@ -2185,7 +2185,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="obEnabled"> Mostra Order Book Profile (a sinistra)</label>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore bid <input id="obBidColor" type="color" class="colorPick" value="#2f6fed"></span>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore ask <input id="obAskColor" type="color" class="colorPick" value="#e05b4f"></span>
-         <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Specchia l'istogramma classico (a destra, volume scambiato) con un istogramma a sinistra basato sul book degli ordini REALE letto in questo momento da MT5 (Market Depth): profondità in acquisto (bid, blu) sopra al prezzo attuale e in vendita (ask, rosso) sotto — stessa griglia di prezzo dell'istogramma di destra. Richiede lo streaming Live MT5 attivo e che il broker collegato pubblichi il Market Depth per questo simbolo: se non lo pubblica, qui non appare nulla (mai un book inventato).</span>
+         <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Specchia l'istogramma classico (a destra, volume scambiato) con un istogramma a sinistra basato sul book degli ordini REALE letto da MT5 (Market Depth), sulla stessa griglia di prezzo. Per ogni fascia la barra è lunga quanto la liquidità totale osservata lì e divisa in due: la parte in acquisto (bid, blu) attaccata all'asse e quella in vendita (ask, rosso) oltre. Si vedono sempre tutti e due i lati e quanto pesa ciascuno: una barra tutta blu vuol dire che lì non è mai stato osservato un ask, non che gli ask erano in minoranza. Richiede lo streaming Live MT5 attivo e che il broker collegato pubblichi il Market Depth per questo simbolo: se non lo pubblica, qui non appare nulla (mai un book inventato).</span>
        </div>
        <div class="hint" style="margin:10px 0 6px;font-weight:700;letter-spacing:.3px">LIVELLI</div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
@@ -15668,18 +15668,44 @@ function draw(){
            const obBidCol=d.obBidColor||'#2f6fed', obAskCol=d.obAskColor||'#e05b4f';
            ctx.save();
            ctx.globalAlpha=Math.min(1,strokeAlpha);
+           // TUTTI E DUE I LATI, SEMPRE. Prima la barra era UNA SOLA, del colore del lato che
+           // aveva prevalso nella fascia:
+           //     ctx.fillStyle = (bidVol[b] >= askVol[b]) ? colBid : colAsk;
+           // e quella riga buttava via meta' dell'informazione. In una fascia con 100 di bid e 95
+           // di ask si vedeva solo blu: quei 95 non esistevano a schermo. Il rosso compariva solo
+           // dove gli ask vincevano - e i pari andavano al blu (>=).
+           //
+           // SEGNALATO dal proprietario: "sull'order book profile a sinistra dell'istogramma le
+           // candele sono tutte blu, solo una e' rossa; devono visualizzarsi sia quelle rosse sia
+           // quelle dei bid e degli ask".
+           // Ora la barra della fascia e' lunga quanto il TOTALE (come prima) ma divisa in due
+           // pezzi in proporzione: bid attaccato all'asse, ask verso sinistra. Si legge insieme
+           // quanta liquidita' c'e' in quella fascia E com'e' divisa fra i due lati, che e'
+           // l'informazione vera che porta un book.
+           //
+           // EFFETTO COLLATERALE UTILE, e vale la pena saperlo: se il broker non pubblicasse i
+           // volumi ask, adesso si vedrebbero barre tutte blu ma SOTTILI invece che piene - e si
+           // capirebbe subito che manca il dato a monte. Con il disegno di prima i due casi
+           // (ask assenti / ask in minoranza) erano identici a schermo.
+           const obAlpha=0.55;
            for(let b=0;b<profile.buckets;b++){
-             const total=obDom.bidVol[b]+obDom.askVol[b];
+             const vb=obDom.bidVol[b], va=obDom.askVol[b];
+             const total=vb+va;
              if(total<=0)continue;
              const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
              const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
              const barH=Math.max(1,yBot-yTop-1);
              const px=Math.max(1,total/obDom.maxTotal*maxBarPx);
-             // Un lato solo, quello che ha prevalso nella fascia — mai due barre affiancate come
-             // nella versione precedente: qui non stiamo confrontando "adesso" bid vs ask, stiamo
-             // mostrando CHI ha controllato quella zona di prezzo nel tempo.
-             ctx.fillStyle=hexToRgba(obDom.bidVol[b]>=obDom.askVol[b]?obBidCol:obAskCol,0.55);
-             ctx.fillRect(leftX-px,yTop+0.5,px,barH);
+             // Il pezzo di ogni lato, in proporzione. Un lato presente ma piccolissimo si vede
+             // comunque (almeno un pixel): "c'e' poco" e "non c'e'" sono due cose diverse, ed e'
+             // esattamente la differenza che il disegno di prima nascondeva.
+             let pxBid=(vb>0)?Math.max(1,Math.round(px*vb/total)):0;
+             let pxAsk=(va>0)?Math.max(1,px-pxBid):0;
+             if(vb>0&&va>0&&pxBid+pxAsk>px)pxBid=Math.max(1,px-pxAsk);
+             // Bid attaccato all'asse, ask oltre: l'ordine e' sempre lo stesso in ogni fascia,
+             // altrimenti il confronto fra una fascia e l'altra non si puo' fare a occhio.
+             if(pxBid>0){ ctx.fillStyle=hexToRgba(obBidCol,obAlpha); ctx.fillRect(leftX-pxBid,yTop+0.5,pxBid,barH); }
+             if(pxAsk>0){ ctx.fillStyle=hexToRgba(obAskCol,obAlpha); ctx.fillRect(leftX-pxBid-pxAsk,yTop+0.5,pxAsk,barH); }
            }
            ctx.restore();
          }

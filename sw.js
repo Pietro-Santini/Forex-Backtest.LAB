@@ -527,7 +527,19 @@
 //               cripto si potevano solo cercare a occhio. Kraken non e' una "modalita'" ma un
 //               CONTO: si riconosce con la stessa funzione che usa tutto il resto dell'app, e di
 //               conseguenza "Live Capital.com" non se le prende piu'.
-const CACHE_NAME = "forex-backtest-lab-v161";
+//          v162 = L'ORDER BOOK PROFILE MOSTRA TUTTI E DUE I LATI. Segnalato: "le candele a
+//               sinistra sono tutte blu, solo una e' rossa; devono visualizzarsi sia quelle rosse
+//               sia quelle dei bid e degli ask". La causa era una riga sola del disegno: una barra
+//               per fascia, del colore del lato che aveva prevalso. In una fascia con 100 di bid e
+//               95 di ask si vedeva solo blu - quei 95 non esistevano a schermo - e i pari
+//               andavano al blu. L'accumulo dei dati era ed e' corretto: il difetto buttava via
+//               meta' informazione in fase di disegno. Ora la barra e' lunga quanto la liquidita'
+//               totale della fascia ma divisa in due in proporzione: bid attaccato all'asse, ask
+//               oltre. Misurato sul banco, stesso book finto: prima 11 barre blu e 0 rosse, dopo
+//               11 e 11. Effetto utile: se il broker non pubblicasse gli ask si vedrebbero barre
+//               blu SOTTILI invece che piene, e si capirebbe che manca il dato a monte - prima i
+//               due casi erano identici a schermo.
+const CACHE_NAME = "forex-backtest-lab-v162";
 const ASSETS = [
   "./",
   "./app.html",
