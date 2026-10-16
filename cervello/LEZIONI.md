@@ -273,3 +273,17 @@
   fuori solo scrivendo i test per un'altra cosa. Quando si aggiunge una famiglia di strumenti non
   bastano i listini e le conversioni: vanno ripassate anche tutte le SOGLIE scritte addosso alla
   famiglia di prima.
+
+- **Un collaudo che dipende da dove gira non e' un collaudo, e' un'opinione.** (16 ottobre 2026,
+  quattro test rossi su GitHub per sette versioni.) Dalla v158 l'app chiede "questo dispositivo e'
+  Windows?" per decidere se proporre l'installazione dei pacchetti MT5. Quella domanda rispondeva
+  con il sistema operativo di CHI ESEGUE il collaudo: verde sul PC Windows, rossa su GitHub che
+  gira su Ubuntu. In locale era verde ogni volta, e ogni volta ho pubblicato credendo fosse tutto a
+  posto - mentre su GitHub, che e' quello che vale, era rosso dalla v158 alla v164.
+  DUE ERRORI, e il secondo e' peggiore del primo. Il primo: un test ha ereditato una condizione
+  dall'ambiente invece di dichiararla. Il secondo: ho guardato il collaudo che avevo a portata di
+  mano invece di quello che decide. Quando esistono due collaudi, quello che conta e' sempre
+  l'altro.
+  LA REGOLA: tutto cio' che il programma chiede all'AMBIENTE - sistema operativo, fuso orario,
+  lingua, dimensione dello schermo, rete - nel banco di prova si DICHIARA. Un banco che eredita
+  non misura il programma: misura la macchina su cui e' acceso.
