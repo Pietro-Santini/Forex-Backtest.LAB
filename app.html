@@ -5956,6 +5956,29 @@ const GRAFICO_LS={
  fb_kraken_livelli:v=>{ try{ krakenLivelliCondivisi=JSON.parse(v)||{}; }catch(e){ krakenLivelliCondivisi={}; } try{ draw(); }catch(e){} },
  fb_tg_auto:v=>{ try{ tgAutoFx=tgAutoDaSalvato(JSON.parse(v)||{}); if(tgAutoFamUi!=='cr')tgAuto=tgAutoFx; }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
  fb_tg_auto_cripto:v=>{ try{ tgAutoCr=tgAutoDaSalvato(JSON.parse(v)||{}); if(tgAutoFamUi==='cr')tgAuto=tgAutoCr; }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
+ // QUALE SALA HA APERTO QUALE TICKET MT5. Era una mappa di sole localStorage, non sincronizzata:
+ // sul telefono non arrivava mai, quindi le posizioni aperte dalle sale segnali comparivano come
+ // "Manuale" - cioe' aperte da te. Segnalato dal proprietario, ed e' la stessa falla gia' vista
+ // con i livelli Kraken: se una cosa si vede solo sul dispositivo che l'ha creata, il dato e' nel
+ // posto sbagliato. Si FONDE invece di sostituire: ogni dispositivo puo' aver aperto ticket suoi,
+ // e una sostituzione secca cancellerebbe quelli dell'altro.
+ fb_mt5_ticket_segnale:v=>{
+  try{
+   const a=JSON.parse(v)||{};
+   Object.keys(a).forEach(t=>{ if(!mt5TgMeta[t]&&a[t])mt5TgMeta[t]=a[t]; });
+   try{ localStorage.setItem(MT5_TG_META_KEY,JSON.stringify(mt5TgMeta)); }catch(e){}
+   try{ update(); }catch(e){}
+  }catch(e){}
+ },
+ // L'anagrafica delle posizioni: orario e prezzo di apertura, e chi le ha aperte. Fatti, non
+ // stato - e come i fatti non cambiano, quindi si fondono senza sovrascrivere quelli gia' noti.
+ fbl_pos_anagrafica:v=>{
+  try{
+   const a=JSON.parse(v)||{};
+   Object.keys(a).forEach(k=>{ if(a[k])posAnagraficaSegna(k,a[k]); });
+   try{ draw(); }catch(e){} try{ update(); }catch(e){}
+  }catch(e){}
+ },
  // Gli asset tolti dall'elenco: e' una scelta, non uno stato, e vale su tutti i dispositivi.
  fbl_asset_tolti:v=>{ try{ const a=JSON.parse(v); if(Array.isArray(a)){ assetTolti=new Set(a.map(String)); try{ syncMarketChartSelect(); }catch(e){} try{ renderAssetPicker(); }catch(e){} } }catch(e){} },
  fb_tg_gruppi:v=>{ try{ const g=JSON.parse(v); if(Array.isArray(g)){ tgGruppi=g; tgRenderGruppi(); try{ tgAutoDisegna(); }catch(e){} } }catch(e){} },
@@ -27137,6 +27160,59 @@ $('tgConfigApri')?.addEventListener('click',async ()=>{
 const KRAKEN_LIVELLI_KEY='fb_kraken_livelli';
 let krakenLivelliCondivisi={};
 try{ krakenLivelliCondivisi=JSON.parse(localStorage.getItem(KRAKEN_LIVELLI_KEY)||'{}')||{}; }catch(e){ krakenLivelliCondivisi={}; }
+// L'ANAGRAFICA DI UNA POSIZIONE: i fatti che non devono poter cambiare.
+//
+// SEGNALATO dal proprietario: "ho aperto una posizione su Kraken alle 22. Dopo aver aggiornato
+// l'applicazione, chiusa e riaperta, sono andato a riaprire il grafico e la posizione me l'ha
+// messa alle 19:20. Per ogni posizione salva questi dati, sono stra importanti: non possiamo avere
+// un cambio di posizione dentro il grafico, ne' di apertura ne' di chiusura. Deve sempre combaciare
+// con la candela giusta".
+//
+// LA CAUSA: l'orario di apertura veniva da tre posti, in ordine di preferenza - l'orario vero
+// dell'exchange (p.aperta_ms), poi la data della strategia locale, poi "venti candele prima della
+// fine". I primi due vivono in memoria o in una mappa che scade: dopo un riavvio dell'app restava
+// solo il terzo, che non e' un orario ma un ripiego. Da li' il salto a un'ora qualunque.
+//
+// LA REGOLA: un fatto osservato una volta si SCRIVE. L'orario e il prezzo di apertura di una
+// posizione sono fatti successi nel mondo, non stati dell'applicazione: non possono dipendere dal
+// fatto che il programma sia stato riavviato, ne' da quale dispositivo sta guardando.
+// Si salva (localStorage) e si condivide fra i dispositivi (GRAFICO_LS), come i livelli Kraken.
+// Si scrive solo cio' che si sa DAVVERO: un ripiego non entra mai qui dentro, altrimenti
+// cristallizzerebbe per sempre un orario inventato.
+const POS_ANAGRAFICA_KEY='fbl_pos_anagrafica';
+const POS_ANAGRAFICA_MAX=400;
+let posAnagrafica={};
+try{ posAnagrafica=JSON.parse(localStorage.getItem(POS_ANAGRAFICA_KEY)||'{}')||{}; }catch(e){ posAnagrafica={}; }
+function posAnagraficaSalva(){
+ try{
+  const k=Object.keys(posAnagrafica);
+  if(k.length>POS_ANAGRAFICA_MAX){
+   k.sort((a,b)=>(posAnagrafica[a].visto||0)-(posAnagrafica[b].visto||0))
+    .slice(0,k.length-POS_ANAGRAFICA_MAX).forEach(x=>delete posAnagrafica[x]);
+  }
+  localStorage.setItem(POS_ANAGRAFICA_KEY,JSON.stringify(posAnagrafica));
+ }catch(e){}
+}
+function posAnagraficaDi(chiave){ return (chiave&&posAnagrafica[chiave])||null; }
+// Scrive un fatto SOLO se non c'e' gia'. Una volta che l'orario di apertura e' noto non cambia
+// piu': riscriverlo a ogni giro vorrebbe dire rincorrere la fonte del momento, che e' esattamente
+// il difetto da cui nasce questa funzione.
+function posAnagraficaSegna(chiave,dati){
+ if(!chiave||!dati)return false;
+ const v=posAnagrafica[chiave]||(posAnagrafica[chiave]={});
+ let cambiato=false;
+ ['apertaMs','entry','sala','side'].forEach(c=>{
+  const nuovo=dati[c];
+  if(nuovo==null||nuovo==='')return;
+  if(c==='apertaMs'||c==='entry'){ const n=Number(nuovo); if(!(Number.isFinite(n)&&n>0))return;
+   if(v[c]===n)return; if(v[c]!=null)return; v[c]=n; cambiato=true; return; }
+  if(v[c]===nuovo)return;
+  if(v[c]!=null&&c!=='sala')return;
+  v[c]=nuovo; cambiato=true;
+ });
+ if(cambiato){ v.visto=Date.now(); posAnagraficaSalva(); }
+ return cambiato;
+}
 function krakenLivelliDaStrategie(){
  const out={};
  Object.values(tgStrategie||{}).forEach(x=>{
@@ -27145,7 +27221,13 @@ function krakenLivelliDaStrategie(){
   // Il disegno usa la strategia piu' VECCHIA di quel simbolo: si pubblica la stessa, altrimenti
   // i due dispositivi mostrerebbero livelli diversi per la stessa posizione.
   if(out[k]&&Number(out[k].creato)<=creato)return;
+  // SALA e ORARIO viaggiano insieme ai livelli. Senza, sul telefono la colonna Origine di una
+  // posizione aperta da una sala segnali diceva "Manuale" - cioe' "l'hai aperta tu", che non e'
+  // solo incompleto: e' falso, e falsa anche le statistiche di chi guarda da li'.
+  // (Segnalato dal proprietario: "nei dispositivi mobili visualizza sempre l'origine in maniera
+  // manuale, cosa che non e' assolutamente vera".)
   out[k]={creato,sl:Number(x.sl),slIniziale:Number(x.slIniziale),
+          sala:(x.sala&&x.sala!=='Manuale')?String(x.sala):undefined,
           tps:(Array.isArray(x.tps)?x.tps.map(Number).filter(v=>Number.isFinite(v)&&v>0):[])};
  });
  return out;
@@ -39732,8 +39814,21 @@ function krakenPosPannello(){
   const celle=[]; const metti=v=>{ celle.push(v); return celle.length-1; };
   metti(String(i+1)); metti(p.simbolo);
   // ORIGINE: da quale sala arriva la posizione (se viene da un segnale) e che strumento e'.
-  metti({html:(st&&st.sala?escapeHtmlLite(String(st.sala))
-    :'<span title="Posizione aperta da te, non da un segnale" style="color:#9ca3af">Manuale</span>')
+  // TRE FONTI, in ordine di durata: la strategia di questo dispositivo, quella pubblicata da chi
+  // ha aperto la posizione (le prime due sono gia' dentro krakenStrategiaPerDisegno) e infine
+  // l'ANAGRAFICA, che non scade con le strategie e arriva anche sugli altri dispositivi.
+  // Segnalato dal proprietario: "nei dispositivi mobili visualizza sempre l'origine in maniera
+  // manuale, cosa che non e' assolutamente vera; mi deve scrivere quale sala corrisponde".
+  const anagP=posAnagraficaDi('kraken:'+String(p.simbolo||'')+'|'+krakenContoId());
+  const salaP=(st&&st.sala)?String(st.sala):(anagP&&anagP.sala?String(anagP.sala):'');
+  // "Manuale" si scrive solo quando si SA che non c'e' un segnale dietro. Se semplicemente non lo
+  // sappiamo - nessuna strategia, nessuna anagrafica, magari perche' questo dispositivo e' nuovo -
+  // dirlo "tuo" e' una bugia, e sporca anche il profitto per sala.
+  const sconosciuta=!salaP&&!st&&!anagP;
+  metti({html:(salaP?escapeHtmlLite(salaP)
+    :sconosciuta
+      ?'<span title="Non si sa ancora da dove arriva questa posizione: la sua anagrafica non è ancora arrivata su questo dispositivo" style="color:#e8c34a">📡 origine da confermare</span>'
+      :'<span title="Posizione aperta da te, non da un segnale" style="color:#9ca3af">Manuale</span>')
     +fblTipoBadgeHtml(p.simbolo)});
   metti(p.lato); metti(fmt(entry));
   const colSl=metti(Number.isFinite(sl)?(fmt(sl)+(stopProfit?' 🔒SP':'')):'—');
@@ -40092,8 +40187,23 @@ window.krakenDisegnaGrafico=function(ctx,y,lo,hi,pad,cw,n,start,w){
   // Ordine di preferenza: l'orario VERO dell'exchange, poi la strategia, e solo come ultima
   // risorsa il ripiego - che pero' adesso si sa di essere un ripiego (origineVera), e per questo
   // non si disegnano la freccia e il connettore: meglio non dirlo che dirlo sbagliato.
+  // L'ANAGRAFICA viene PRIMA della strategia e sopravvive al riavvio dell'app (vedi
+  // posAnagraficaSegna): e' il motivo per cui una posizione aperta alle 22 resta alle 22 anche
+  // dopo aver chiuso e riaperto il programma, invece di scivolare sul ripiego.
+  const anagKey='kraken:'+String(p.simbolo||'')+'|'+krakenContoId();
   const apertaMs=Number(p.aperta_ms);
-  const t0=(Number.isFinite(apertaMs)&&apertaMs>0)?apertaMs:(st?Number(st.creato):null);
+  // Appena l'orario vero dell'exchange si vede, lo si scrive: e' l'unico momento in cui lo si sa
+  // per certo, e potrebbe non ripresentarsi piu'.
+  if(Number.isFinite(apertaMs)&&apertaMs>0)
+   posAnagraficaSegna(anagKey,{apertaMs,entry:Number(p.entrata)||null,
+     sala:(st&&st.sala&&st.sala!=='Manuale')?st.sala:null,side:String(p.lato||'')||null});
+  else if(st&&Number(st.creato)>0)
+   posAnagraficaSegna(anagKey,{apertaMs:Number(st.creato),entry:Number(p.entrata)||null,
+     sala:(st.sala&&st.sala!=='Manuale')?st.sala:null,side:String(p.lato||'')||null});
+  const anag=posAnagraficaDi(anagKey);
+  const t0=(Number.isFinite(apertaMs)&&apertaMs>0)?apertaMs
+          :(anag&&Number.isFinite(anag.apertaMs)&&anag.apertaMs>0)?anag.apertaMs
+          :(st?Number(st.creato):null);
   let origine=(Number.isFinite(t0)&&t0>0)?rowIndexContainingTime(t0):null;
   const origineVera=origine!=null;
   if(origine==null)origine=Math.max(0,(rows.length||1)-20);
