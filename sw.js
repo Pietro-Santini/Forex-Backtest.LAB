@@ -601,10 +601,24 @@
 //               pendenti. Quando non si sa si scrive "-", non "adesso": un orario inventato e'
 //               falso e per giunta credibile. Su Kraken la tabella legge la STESSA fonte che
 //               ancora la posizione alla candela, cosi' le due non possono dire cose diverse.
-const CACHE_NAME = "forex-backtest-lab-v167";
+const CACHE_NAME = "forex-backtest-lab-v168";
+// LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
+// elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
+// rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
+// collegamento in alto a sinistra di app.html (che puntava a index.html) dava "pagina non
+// raggiungibile" proprio per questo, e lo stesso sarebbe successo a "Libreria storici CSV per asset"
+// (asset-library.html). Queste sono piccole (13-47 KB): la sola che NON si mette in copia e'
+// index.html, che nel sito e' la pagina di presentazione da 2,4 MB e non serve al funzionamento
+// dell'app. Dentro l'APK index.html e' invece il bootstrap da 660 byte, gia' coperto da "./".
 const ASSETS = [
   "./",
   "./app.html",
+  "./login.html",
+  "./asset-library.html",
+  "./privacy.html",
+  "./termini.html",
+  "./rischi-finanziari.html",
+  "./informativa-bot.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
@@ -668,7 +682,38 @@ function rispostaSubitoPoiAggiorna(request) {
       return salvata;
     }
     // Prima apertura in assoluto: non c'e' niente da mostrare, si aspetta la rete.
-    return rete.catch(() => caches.match(request).then((c) => c || Promise.reject(new Error('offline'))));
+    return rete.catch(() => caches.match(request).then((c) => {
+      if (c) return c;
+      // UNA PAGINA APERTA COL DITO NON DEVE FINIRE SULL'ERRORE CRUDO DEL SISTEMA.
+      // Dentro l'APK (WebView) la navigazione e' l'unico caso in cui la richiesta NON arriva al
+      // server locale: la pagina finiva su "pagina non raggiungibile". Per una NAVIGAZIONE si
+      // risponde con una pagina vera e onesta; per tutto il resto il comportamento resta quello di
+      // prima (un errore), perche' servire una pagina HTML al posto di un .js rotto confonderebbe
+      // soltanto.
+      if (request && request.mode === 'navigate') return paginaNonRaggiungibile();
+      return Promise.reject(new Error('offline'));
+    }));
+  });
+}
+
+// Sta qui (dentro la regione che i test estraggono insieme a rispostaSubitoPoiAggiorna) perche' e'
+// parte della stessa decisione: cosa si risponde quando non c'e' ne' copia ne' rete.
+function paginaNonRaggiungibile() {
+  const pagina = '<!doctype html><html lang="it"><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Pagina non disponibile</title></head>' +
+    '<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;' +
+    'background:#05090c;color:#cbd5e1;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">' +
+    '<div style="max-width:420px;padding:24px;text-align:center">' +
+    '<h1 style="color:#fff;font-size:20px;margin:0 0 8px">Pagina non disponibile</h1>' +
+    '<p style="font-size:14px;line-height:1.6;margin:0 0 18px">Questa pagina non e\' salvata sul ' +
+    'dispositivo e la rete non risponde in questo momento. Riprova fra poco.</p>' +
+    '<a href="./app.html" style="display:inline-block;background:#3ea6ff;color:#04121f;' +
+    'font-weight:700;padding:11px 18px;border-radius:9px;text-decoration:none">Torna all\'app</a>' +
+    '</div></body></html>';
+  return new Response(pagina, {
+    status: 200,
+    headers: {'Content-Type': 'text/html; charset=utf-8'}
   });
 }
 

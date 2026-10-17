@@ -87,6 +87,20 @@ comune, e dà l'impressione che la correzione non funzioni.
 Regola: `app.html` cambiato → `CACHE_NAME` da `vNN` a `vNN+1`. E, per tenere allineata la
 numerazione, anche `MyAppVersion` in `installer_build/installer.iss` passa a `1.0.NN+1`.
 
+**Decisione del 17 ottobre 2026 (da applicare, non ancora in vigore):** la numerazione passa a
+**`2.0.1`**. Non è solo un cambio di cifra — misurato:
+
+- il numero del Setup e il tag della release **si ricavano** da `CACHE_NAME` con
+  `grep -o 'forex-backtest-lab-v[0-9]*'`, che si ferma al primo punto. Scrivere `v2.0.1` fa uscire
+  `APP=2` → Setup `1.0.2`, tag `v1.0.2`: **la versione si abbassa invece di alzarsi**;
+- il passo `versione_sw` del collaudo cerca la forma `-v[0-9]*"`: con `v2.0.1` **fallisce**, quindi
+  il collaudo va rosso e non si pubblica.
+
+Quando si applica, vanno toccati **insieme**: `sw.js` (forma di `CACHE_NAME`),
+`.github/workflows/installer.yml` (grep ~52 e ~92, `SETUP=` ~96, `TAG=` ~97),
+`laboratorio/collauda.sh` (passo `versione_sw`), `installer_build/installer.iss` (`MyAppVersion`).
+Dettagli e misure in `DIARIO.md`, voce del 17 ottobre 2026.
+
 Dopo il push, sul telefono: **ricaricare la pagina**. A volte serve ricaricarla due volte — la
 prima il telefono scarica la versione nuova, la seconda la usa.
 

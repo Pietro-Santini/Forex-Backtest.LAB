@@ -89,3 +89,29 @@ test('il download di sfondo non salta la cache del browser (niente no-store)', (
   assert.doesNotMatch(corpo, /no-store/,
     "con no-store si riscaricano 4 MB a ogni apertura, anche quando il file non e' cambiato");
 });
+
+// UNA PAGINA APERTA COL DITO NON DEVE FINIRE SULL'ERRORE CRUDO DEL SISTEMA.
+//
+// Segnalato dal proprietario (17 ottobre 2026): dentro l'APK il collegamento in alto a sinistra
+// dava "pagina non raggiungibile". Causa misurata: la navigazione e' l'unico caso in cui la
+// richiesta del service worker NON arriva al server locale della WebView; non trovando ne' copia ne'
+// rete, il codice di prima RIFIUTAVA la risposta e il sistema mostrava la sua pagina di errore.
+//
+// Qui si prova la decisione: per una navigazione si risponde una pagina vera (onesta: dice che la
+// pagina non e' disponibile e riporta all'app); per tutto il resto non cambia niente.
+test('navigazione senza rete e senza copia: si risponde una pagina vera, non un errore', async () => {
+  const {fn} = prepara({ritardoRete: -1, inCache: null});
+  const r = await fn({mode: 'navigate', url: 'https://localhost/asset-library.html'});
+  assert.ok(r, 'nessuna risposta: il sistema mostrerebbe la pagina di errore');
+  assert.equal(r.status, 200);
+  assert.match(String(r.headers.get('Content-Type')), /text\/html/);
+  const testo = await r.text();
+  assert.match(testo, /Pagina non disponibile/, 'manca il messaggio per chi legge');
+  assert.match(testo, /href="\.\/app\.html"/, "manca la via d'uscita verso l'app");
+});
+
+test('una risorsa che non e\' una pagina (un .js) continua a fallire come prima', async () => {
+  const {fn} = prepara({ritardoRete: -1, inCache: null});
+  await assert.rejects(() => fn({mode: 'cors', url: 'https://localhost/app.js'}), /offline/,
+    'servire una pagina HTML al posto di un .js confonderebbe soltanto');
+});

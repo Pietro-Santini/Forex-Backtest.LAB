@@ -97,7 +97,8 @@
   import {
     getAuth, onAuthStateChanged,
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
-    GoogleAuthProvider, signInWithPopup, sendEmailVerification, reload,
+    GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
+    sendEmailVerification, reload,
     getAdditionalUserInfo, signOut
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
@@ -106,6 +107,11 @@
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   let skipAutoRedirect = false;
+
+  // APP MOBILE (Capacitor): dentro il WebView nativo i popup di Google vengono bloccati.
+  // Su mobile usiamo percio' il flusso di reindirizzamento (pagina intera) invece del popup.
+  const isCapacitor = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  try { if (sessionStorage.getItem('fblRedirectPending') === '1') skipAutoRedirect = true; } catch(e) {}
 
   // === La tua configurazione Firebase ===
   const firebaseConfig = {
@@ -180,6 +186,32 @@
     await ensureUserProfile(user);
     window.location.replace(DESTINATION);
   });
+
+  // APP MOBILE: al ritorno dal reindirizzamento di Google completiamo l'accesso qui.
+  if (isCapacitor) {
+    (async () => {
+      let pending = false;
+      try { pending = sessionStorage.getItem('fblRedirectPending') === '1'; } catch(e) {}
+      if (!pending) return;
+      try { sessionStorage.removeItem('fblRedirectPending'); } catch(e) {}
+      try {
+        const cred = await getRedirectResult(auth);
+        if (!cred) { skipAutoRedirect = false; return; }
+        const info = getAdditionalUserInfo(cred);
+        await ensureUserProfile(cred.user);
+        if (info && info.isNewUser) {
+          await sendWelcomeEmail(cred.user);
+          showInfo("Benvenuto in Forex Backtest Lab! 🎉 Hai 7 giorni di prova gratuita a partire da ora. Accesso all'app tra qualche secondo...");
+          setTimeout(()=>window.location.replace(DESTINATION), 3000);
+        } else {
+          window.location.replace(DESTINATION);
+        }
+      } catch(e) {
+        skipAutoRedirect = false;
+        showError(traduciErrore(e && e.code));
+      }
+    })();
+  }
 
   // Scrive un documento nella collezione "mail": l'estensione Firebase
   // collegata a Brevo se ne occupa e invia l'email vera e propria.
@@ -259,6 +291,13 @@
     // reindirizza mai da solo durante un login Google: ci pensa questo handler, in entrambi
     // i rami (nuovo utente / utente già esistente).
     skipAutoRedirect = true;
+    if (isCapacitor) {
+      // WebView nativo: niente popup. Si parte con il reindirizzamento; al ritorno
+      // questa stessa pagina rileggera' il risultato con getRedirectResult().
+      try { sessionStorage.setItem('fblRedirectPending', '1'); } catch(e) {}
+      await signInWithRedirect(auth, new GoogleAuthProvider());
+      return;
+    }
     try{
       const cred = await signInWithPopup(auth, new GoogleAuthProvider());
       const info = getAdditionalUserInfo(cred);

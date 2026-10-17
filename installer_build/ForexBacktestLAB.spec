@@ -1,7 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('build/app.html', '.'), ('build/manifest.json', '.'), ('build/icon-192.png', '.'), ('build/icon-512.png', '.'), ('build/apple-touch-icon.png', '.'), ('build/sw.js', '.'), ('build/asset-library.html', '.')]
+datas = [
+    ('build/app.html', '.'),
+    ('build/login.html', '.'),
+    ('build/sw.js', '.'),
+    ('build/manifest.json', '.'),
+    ('build/icon-192.png', '.'),
+    ('build/icon-512.png', '.'),
+    ('build/apple-touch-icon.png', '.'),
+    ('build/asset-library.html', '.'),
+]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('MetaTrader5')
@@ -12,7 +21,6 @@ tmp_ret = collect_all('uvicorn')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('pywinauto')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
-
 
 a = Analysis(
     ['build/bridge.py'],

@@ -30,7 +30,7 @@ cd /d "%~dp0"
 
 REM app.html e sw.js NON stanno in build\ nel repository: si prendono dalla cartella principale
 REM (quella pubblicata sul sito), cosi' sito e programma sul PC sono sempre la stessa versione.
-if exist "%~dp0..\app.html" copy /y "%~dp0..\app.html" "%~dp0build\app.html" >nul
+if exist "%~dp0..\app.html" copy /y "%~dp0..\app.html" "%~dp0build\app.html" >nul`r`nif exist "%~dp0..\login.html" copy /y "%~dp0..\login.html" "%~dp0build\login.html" >nul
 if exist "%~dp0..\sw.js" copy /y "%~dp0..\sw.js" "%~dp0build\sw.js" >nul
 if not exist "%~dp0build\app.html" (
   echo ERRORE: manca build\app.html. Scarica tutto il progetto ^(non solo installer_build^).

@@ -21,6 +21,12 @@ import accesso_condiviso as accesso  # noqa: E402
 import kraken_ordini  # noqa: E402
 
 app = FastAPI(title="Forex Backtest LAB - server")
+# Le chiavi PERSONALI (una per utente, generate al primo accesso) vivono in auth_server.py, nella
+# cartella installer_build/build, che i sys.path qui sopra ha appena messo in testa: e' il posto
+# in cui sta anche accesso_condiviso. Senza queste due righe il telefono non ha nessuna chiave con
+# cui farsi aprire la porta del controllo d'accesso, e /register non esiste nemmeno.
+import auth_server  # noqa: E402
+auth_server.registra_router(app)
 app.add_middleware(CORSMiddleware, **accesso.opzioni_cors())
 accesso.installa_controllo_chiave(app)
 

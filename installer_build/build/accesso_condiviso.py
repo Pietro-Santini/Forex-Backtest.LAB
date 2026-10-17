@@ -49,6 +49,15 @@ MESSAGGI_RIFIUTO = {
     "chiave": "Chiave d'accesso mancante o errata.",
 }
 
+# I due indirizzi che CONSEGNANO le chiavi personali (auth_server.py). Devono restare raggiungibili
+# senza chiave, altrimenti si chiude il cerchio: per ottenere la chiave bisognerebbe gia' averla.
+# Non sono una porta aperta, perche' si difendono da soli:
+#   /register        verifica un token Firebase (quello e' il suo permesso) e senza token valido
+#                    non crea nulla;
+#   /verifica_chiave dice soltanto se una chiave esiste, e non rivela nient'altro.
+# Fuori dal server Oracle questi indirizzi non esistono nemmeno: la regola resta innocua.
+PERCORSI_SENZA_CHIAVE = ("/register", "/verifica_chiave")
+
 
 def percorso_accesso() -> str:
     """Il file accanto all'eseguibile; dai sorgenti, risalendo dalla cartella dello script.
@@ -167,14 +176,48 @@ def chiave_valida(conn, dati: dict) -> bool:
     return bool(attesa) and secrets.compare_digest(str(data), str(attesa))
 
 
+def _chiave_inviata(conn) -> str:
+    try:
+        return str(conn.headers.get("x-fbl-chiave") or conn.query_params.get("chiave") or "")
+    except Exception:
+        return ""
+
+
+def chiave_personale_valida(conn) -> bool:
+    """True se la chiave inviata e' quella personale di un utente registrato.
+
+    Le chiavi personali le distribuisce auth_server.py, che esiste solo sul server Oracle: sul PC
+    il modulo non c'e' e questa funzione dice sempre di no, quindi li' continua a valere la sola
+    chiave condivisa. Gli errori del server Oracle (file illeggibile, utenti assenti) si trattano
+    come "no": un guasto non deve mai trasformarsi in un accesso.
+    """
+    try:
+        import auth_server
+    except Exception:
+        return False
+    data = _chiave_inviata(conn)
+    if not data:
+        return False
+    try:
+        return auth_server.valida_chiave(data) is not None
+    except Exception:
+        return False
+
+
 def motivo_rifiuto(conn) -> Optional[str]:
-    """None se la richiesta puo' passare; altrimenti "spento" o "chiave"."""
+    """None se la richiesta puo' passare; altrimenti "spento" o "chiave".
+
+    Passa chi ha la chiave CONDIVISA (accesso_remoto.json: quella del proprietario) oppure una
+    chiave PERSONALE di un utente registrato (auth_server.py). Le due strade convivono apposta:
+    la chiave condivisa resta quella del PC di casa, le personali sono quelle dei telefoni e dei
+    tablet, che l'app si procura da sola al primo accesso.
+    """
     if richiesta_locale(conn):
         return None
     dati = carica_accesso()
     if not dati.get("rete"):
         return "spento"
-    if not chiave_valida(conn, dati):
+    if not chiave_valida(conn, dati) and not chiave_personale_valida(conn):
         return "chiave"
     return None
 
@@ -197,6 +240,8 @@ def installa_controllo_chiave(app, dati: Optional[dict] = None, percorsi_liberi=
     `percorsi_liberi`: pagine (solo GET) che si aprono anche senza chiave perche' sono loro a
     chiederla, come /prova del servizio segnali. Non contengono dati: ogni chiamata che fanno poi
     passa dal controllo normale, con la chiave inserita.
+    A parte, sempre senza chiave, restano i due indirizzi di PERCORSI_SENZA_CHIAVE: sono loro a
+    consegnare le chiavi personali e si difendono da soli.
     """
     liberi = set(percorsi_liberi or ())
     from fastapi.responses import JSONResponse, Response
@@ -220,6 +265,8 @@ def installa_controllo_chiave(app, dati: Optional[dict] = None, percorsi_liberi=
                     "Access-Control-Max-Age": "600",
                     "Vary": "Origin",
                 })
+            return await call_next(request)
+        if request.url.path in PERCORSI_SENZA_CHIAVE:
             return await call_next(request)
         if request.method == "GET" and request.url.path in liberi:
             return await call_next(request)

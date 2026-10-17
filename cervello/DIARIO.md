@@ -1063,3 +1063,25 @@ Formato: data — chi — cosa — esito collaudo — commit.
   Test: oltre_il_pareggio.test.mjs (3), kraken_orario_manuale.test.mjs (7: la cella, il rifiuto di un
   orario storto, la fonte unica, l'ancora del GRAFICO alla candela indicata, e l'orario vero che
   supera la correzione).
+
+## 17 ottobre 2026 - DECISIONE: la prossima versione e' la 2.0.1 (da applicare, non ora)
+  Richiesto dal proprietario: «d'ora in poi la versione di tutto il programma e del repository andra'
+  alla versione 2.0.1, visto che l'abbiamo resa una vera e propria applicazione». Da applicare alla
+  prossima pubblicazione; richiesta esplicita di limitarsi a registrarla per ora ("salvalo per dopo").
+  ATTENZIONE, MISURATO (provato su file temporanei, non a intuito): il numero del Setup e il tag della
+  release NON si scrivono a mano, si RICAVANO da CACHE_NAME in sw.js con
+  `grep -o 'forex-backtest-lab-v[0-9]*'`, che si ferma al primo carattere non numerico.
+    - v167  -> APP=167, Setup 1.0.167, tag v1.0.167, passo versione_sw PASSA
+    - v2.0.1 -> APP=2,   Setup 1.0.2,   tag v1.0.2,   passo versione_sw FALLISCE
+    - v2-0-1 -> APP=2,   Setup 1.0.2,   tag v1.0.2,   passo versione_sw FALLISCE
+    - v201  -> APP=201,  Setup 1.0.201, tag v1.0.201, passo versione_sw PASSA
+  Quindi mettere "v2.0.1" senza altro NON alza la versione: la ABBASSA a 1.0.2 per il Setup e rende
+  il collaudo rosso (il passo versione_sw cerca la forma `-v[0-9]*"`), bloccando la pubblicazione.
+  Quando si applichera', vanno toccati INSIEME questi punti:
+    (1) sw.js: forma di CACHE_NAME (col punto "2.0.1" va prima corretta la regex; oppure v201 e la
+        2.0.1 resta solo nel nome mostrato);
+    (2) .github/workflows/installer.yml: il grep (~riga 52 e ~92), SETUP="1.0.${APP}" (~96) e TAG (~97);
+    (3) laboratorio/collauda.sh: il passo versione_sw (cerca `-v[0-9]*"`);
+    (4) installer_build/installer.iss: MyAppVersion (che comunque installer.yml riscrive da solo a
+        ogni build con sed, quindi la fonte vera e' CACHE_NAME).
+  La regola operativa e' anche in cervello/PUBBLICARE.md, dove si guarda quando si pubblica.
