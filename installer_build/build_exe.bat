@@ -30,7 +30,14 @@ cd /d "%~dp0"
 
 REM app.html e sw.js NON stanno in build\ nel repository: si prendono dalla cartella principale
 REM (quella pubblicata sul sito), cosi' sito e programma sul PC sono sempre la stessa versione.
-if exist "%~dp0..\app.html" copy /y "%~dp0..\app.html" "%~dp0build\app.html" >nul`r`nif exist "%~dp0..\login.html" copy /y "%~dp0..\login.html" "%~dp0build\login.html" >nul
+REM ATTENZIONE, GIA' COSTATO UN SETUP FALLITO (17 ottobre 2026): qui si scrivono una riga per file.
+REM Un a capo scritto come `r`n e' roba di PowerShell e dentro un .bat NON vuol dire niente: cmd.exe
+REM legge tutta la riga come un comando solo, la copia non avviene, e il controllo qui sotto trova
+REM build\app.html mancante -> "ERRORE: manca build\app.html". Sul PC del proprietario non si vedeva
+REM perche' li' build\app.html era rimasto da una compilazione precedente; su GitHub si parte da una
+REM cartella pulita e si ferma subito. Lo copre laboratorio/app/build_exe_copia.test.mjs.
+if exist "%~dp0..\app.html" copy /y "%~dp0..\app.html" "%~dp0build\app.html" >nul
+if exist "%~dp0..\login.html" copy /y "%~dp0..\login.html" "%~dp0build\login.html" >nul
 if exist "%~dp0..\sw.js" copy /y "%~dp0..\sw.js" "%~dp0build\sw.js" >nul
 if not exist "%~dp0build\app.html" (
   echo ERRORE: manca build\app.html. Scarica tutto il progetto ^(non solo installer_build^).

@@ -1085,3 +1085,62 @@ Formato: data — chi — cosa — esito collaudo — commit.
     (4) installer_build/installer.iss: MyAppVersion (che comunque installer.yml riscrive da solo a
         ogni build con sed, quindi la fonte vera e' CACHE_NAME).
   La regola operativa e' anche in cervello/PUBBLICARE.md, dove si guarda quando si pubblica.
+
+## 17 ottobre 2026 - v168: i pulsanti della landing portano all'app (o all'installazione), e dentro l'app il collegamento in alto a sinistra torna al sito
+
+Due richieste del proprietario, il 17 ottobre 2026.
+
+**«qualsiasi pulsante di index.html collegato ad app.html deve portare all'installazione dell'APK;
+ovvio oggi non esiste ancora e' da implementare; e se ha gia' installato l'applicazione lo riporta
+dentro l'app, collegamento diretto, cosi' ci sganciamo da Chrome».**
+
+**Requisito 1.** I 7 pulsanti della landing (5 che andavano a `login.html`, uno a `app.html`, uno a
+`app.html?buy=license`) non vanno piu' dritti: passano tutti da `window.FBL.apriApp`, nuova porta
+inserita nel `head` di `index.html`. Comportamento **unico per tutti i tre casi**, come scelto dal
+proprietario: Android apre l'app se c'e' e altrimenti tira su l'APK (intent
+`intent://avvia#Intent;scheme=forexbacktestlab;package=...` con `S.browser_fallback_url`); Windows
+tenta la stessa strada e, se non risponde, mostra il riquadro con «Apri l'app», «Scarica
+l'installer» e «Continua col sito web»; iPhone/Mac spiegano che si usa dal browser, **senza offrire
+download che non esistono**.
+La decisione di fondo, scritta nella porta stessa: **un sito non puo' sapere se un'app e'
+installata**, perche' non ha alcun modo di misurarlo. Si sceglie quindi di *provare* ad aprirla e di
+giudicare dopo: se la finestra perde il fuoco nel primo istante, l'app si e' aperta; se no, si offre
+l'installazione. **Nessuna eccezione, sempre con l'uscita «Continua col sito web»** verso la
+destinazione originale del pulsante: un vicolo cieco sarebbe molto peggio di un riquadro in piu'.
+Limite onesto, accettato dal proprietario: su Windows il browser non concede a una pagina di aprire
+un programma da sola, quindi sono due tocchi invece di uno (riquadro, poi «Apri l'app»).
+
+**«dentro l'APK il collegamento in alto a sinistra verso index.html deve funzionare e riportare
+alla pagina web; oggi da' "pagina non raggiungibile"».**
+
+**Requisito 2.** Causa misurata, doppia: dentro l'APK `index.html` **non e' il sito** ma il
+bootstrap locale da 660 byte (`www/index.html`), e la navigazione e' l'**unico** caso in cui la
+richiesta del service worker non arriva al server locale della WebView: non trovando ne' copia ne'
+rete, `rispostaSubitoPoiAggiorna` rifiutava la risposta e il sistema mostrava la sua pagina di
+errore. Correzione in tre punti: `app.html` punta ora all'indirizzo assoluto del sito; `sw.js` passa
+a v168 con tutte le pagine apribili in `ASSETS` (incluso `asset-library.html`, che aveva lo stesso
+difetto) e con una **pagina vera** al posto dell'errore crudo quando a mancare e' una navigazione;
+l'`AndroidManifest.xml` del progetto mobile riceve l'intent-filter dello scheme `forexbacktestlab`,
+senza il quale Android non sa a chi girare la chiamata e riscaricherebbe l'APK anche a chi ce l'ha
+gia' installata (cioe' perderebbe i dati salvati). `index.html` **non** entra in `ASSETS`: nel sito
+sarebbero 2,4 MB di doppia copia e `"./"` la copre gia'.
+
+**Difetto di costruzione trovato alla pubblicazione.** L'Installer Windows su GitHub e' fallito con
+«ERRORE: manca build\app.html»: `installer_build/build_exe.bat` conteneva un a capo in sintassi
+PowerShell (i caratteri `r` e `n` fra due apici rovesciati) dentro una riga `.bat`, per cui la copia
+non avveniva mai; in locale il difetto era mascherato da `build\app.html` rimasto dalle compilazioni
+passate. Vedi `BUG.md`. Ordine tenuto: misura (il test diventa ROSSO e riproduce esattamente il
+messaggio di GitHub), correzione, verde, collaudo intero.
+
+**Collaudo.** Locali: `porta_ingresso.test.mjs` (8), `landing_ingresso.test.mjs` (4, preme i pulsanti
+in Chromium), `collegamento_al_sito.test.mjs` (1), `avvio_cache.test.mjs` (+2 per la navigazione),
+`build_exe_copia.test.mjs` (1). Ognuna delle nuove e' stata vista **diventare rossa** con il codice
+di prima, non solo passare. Collaudo locale completo 5/5 verdi; **su GitHub 5/5 verdi** (collaudo
+9m1s, server_oracle 19s).
+
+**Pubblicazione.** Push su `main`: sito, Setup 1.0.168 e release. L'APK non viene costruito da
+GitHub (il flusso `installer.yml` costruisce solo il Setup Windows): si compila a mano con
+`build_apk.bat` e si carica **sulla release come allegato** con il nome esatto
+`forexbacktestlab.apk`, che e' quello scritto in `URL_APK` nella landing. Scelta del proprietario:
+caricarlo subito dopo la push, accettando una finestra di pochi minuti in cui l'indirizzo dell'APK
+risponde ancora 404.

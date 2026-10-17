@@ -188,6 +188,20 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Il Setup non si costruiva su GitHub: «ERRORE: manca build\app.html. Scarica tutto il progetto
+  (non solo installer_build)»** — risolto v168 — 17 ottobre 2026, scoperto solo alla pubblicazione,
+  non in locale — la riga che copia `app.html` dentro `installer_build\build\` conteneva un a capo
+  scritto `r`n: quella è la sintassi di **PowerShell** per andare a riga nuova, e dentro un `.bat`
+  non significa niente. `cmd.exe` leggeva tutta la riga come un **unico comando storto**, la copia
+  non avveniva mai, e il controllo immediatamente dopo trovava `build\app.html` assente. Non saltava
+  fuori in locale perche' `build\app.html` c'era **gia'** lì da una compilazione precedente, che ha
+  mascherato il difetto: su GitHub si parte da una cartella pulita e lo script si fermava subito.
+  LEZIONE: un `.bat` si scrive e si legge con `cmd.exe`, non con PowerShell — sono due linguaggi
+  diversi e quello della shell corrente vince dentro ogni riga che contengono. Simile a
+  `sintassi_app` per `app.html`, ma non basta leggere il file: qui il test le **esegue** le righe
+  vere con `cmd.exe` su una cartella di prova e guarda se i file arrivano.
+  Test: `laboratorio/app/build_exe_copia.test.mjs` (rosso con la riga rotta, con lo stesso identico
+  messaggio d'errore che appariva su GitHub, poi verde con la riga corretta).
 - **Linee SL e TP delle posizioni Kraken che seguivano il prezzo** — risolto app v100 —
   `krakenDisegnaGrafico` compensava la differenza fra i prezzi del grafico (Binance) e quelli di
   Kraken con uno scostamento **ricalcolato a ogni disegno**: muovendosi il prezzo si muoveva anche
