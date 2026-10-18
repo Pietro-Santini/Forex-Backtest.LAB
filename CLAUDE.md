@@ -22,7 +22,7 @@ Il file è di testo semplice, con a capo Windows (CRLF).
 
 ## Pubblicazione dell'app
 
-- Ogni versione di `app.html` va con un nuovo `CACHE_NAME` in `sw.js` (`forex-backtest-lab-vNN`).
+- Ogni versione di `app.html` va con un nuovo `CACHE_NAME` in `sw.js` (schema `forex-backtest-lab-v2.0.x`, oggi `v2.0.1`).
   I due file si pubblicano sempre insieme, altrimenti telefoni e tablet restano sulla versione
   vecchia.
 - Il sito (GitHub Pages) si aggiorna da `main`. Prima di dire che una versione è online,

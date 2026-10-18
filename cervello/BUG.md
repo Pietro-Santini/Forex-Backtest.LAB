@@ -3,6 +3,26 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Il login con Google su telefono e tablet non veniva mai eseguito** - risolto 2.0.1 - 18
+  ottobre 2026, segnalato con due errori ("Unable to process request due to missing initial state"
+  e "Impossibile raggiungere il sito / Connessione negata da localhost"). DUE cause misurate, tutte
+  e due nella strada del reindirizzamento di Firebase:
+  (1) `capacitor.config.json` non aveva `server.allowNavigation`, e `Bridge.launchIntent` di
+  Capacitor butta nel BROWSER ESTERNO ogni navigazione fuori dall'app: il giro di Google finiva in
+  Chrome (app → firebaseapp.com → accounts.google.com → https://localhost/login.html), e su
+  localhost Chrome non trova nulla. Ora `allowNavigation` contiene "*.firebaseapp.com" e
+  "*.google.com"; il sito resta fuori, perche' il collegamento in alto a sinistra dell'APK deve
+  aprirsi nel browser (test `apk_login_google.test.mjs`).
+  (2) Lo stato del reindirizzamento vive in `sessionStorage`, in memoria del processo: Android
+  uccide la WebView durante la scelta dell'account e al ritorno Firebase butta "missing initial
+  state". Ora il pulsante Google archivia tutto in `localStorage` prima di partire e lo rimette al
+  posto PRIMA di `getRedirectResult`; la bandierina porta l'orario, cosi' un backup scaduto viene
+  consumato e non blocca l'accesso di chi e' gia' loggato. Telefono e tablet usano il
+  reindirizzamento anche nel browser (niente popup); un popup bloccato ripiega sul
+  reindirizzamento. Test: `laboratorio/app/login_stato_google.test.mjs`.
+  In piu', dopo il login sul SITO si torna alla porta d'ingresso (`index.html?dopo=login`) che
+  apre l'app installata o offre l'installazione, con sempre l'uscita "Continua col sito web"
+  verso app.html: test `laboratorio/app/porta_dopo_login.test.mjs`.
 - **Colonne COB/SVP con righe di altezza diversa da asset a asset, e staccate sulle cripto** -
   risolto v146 - 14 ottobre 2026, segnalato con tre foto (EUR/USD, XAU/USD, BTC/USDT). Il passo
   delle righe veniva da `footprintStepForAsset`, cioe' dall'impostazione del FOOTPRINT: pip per

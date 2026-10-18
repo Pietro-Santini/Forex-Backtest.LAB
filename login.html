@@ -111,7 +111,76 @@
   // APP MOBILE (Capacitor): dentro il WebView nativo i popup di Google vengono bloccati.
   // Su mobile usiamo percio' il flusso di reindirizzamento (pagina intera) invece del popup.
   const isCapacitor = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-  try { if (sessionStorage.getItem('fblRedirectPending') === '1') skipAutoRedirect = true; } catch(e) {}
+
+  /* STATO LOGIN GOOGLE: INIZIO
+   ---------------------------------------------------------------------------
+   CAUSA MISURATA (18 ottobre 2026, telefono e tablet): Firebase conserva lo stato
+   del reindirizzamento in sessionStorage, che vive SOLO in memoria del processo.
+   Durante la scelta dell'account Google l'app resta in secondo piano e Android puo'
+   uccidere il processo: al ritorno sessionStorage e' vuoto e Firebase butta
+   "Unable to process request due to missing initial state" — il login non si
+   completa e l'utente resta fermo. Il backup in localStorage, che la morte del
+   processo NON cancella, lo salva: prima di partire si copia tutto li', al ritorno
+   si rimette ogni chiave mancante al suo posto PRIMA di parlare con Firebase.
+
+   La bandierina e' anched essa in localStorage (con il suo orario): in
+   sessionStorage morirebbe insieme allo stato che deve ricordare.
+   --------------------------------------------------------------------------- */
+  const FBL_PENDENTE = 'fblRedirectPending';
+  const FBL_ARCHIVIO = 'fblAuthBackup';
+  const FBL_SCADENZA = 10 * 60 * 1000; // dieci minuti: un giro da Google non dura di piu'
+  function salvaStatoAuth() {
+    try {
+      const copia = {};
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const k = sessionStorage.key(i);
+        copia[k] = sessionStorage.getItem(k);
+      }
+      localStorage.setItem(FBL_ARCHIVIO, JSON.stringify(copia));
+    } catch (e) { /* magazzino pieno o negato: si prova comunque con la sola bandierina */ }
+    try { localStorage.setItem(FBL_PENDENTE, String(Date.now())); } catch (e) {}
+  }
+  function ripristinaStatoAuth() {
+    let pendente = false;
+    try {
+      const v = localStorage.getItem(FBL_PENDENTE);
+      const quando = Number(v);
+      pendente = v !== null && quando > 0 &&
+        Date.now() - quando < FBL_SCADENZA && quando <= Date.now() + 60000;
+    } catch (e) { return false; }
+    if (!pendente) {
+      // Nessun giro in corso (o troppo vecchio per essere uno): la bandierina vecchia
+      // va buttata, altrimenti sopprime l'accesso automatico di chi e' gia' loggato.
+      consumaStatoAuth();
+      return false;
+    }
+    try {
+      const copia = JSON.parse(localStorage.getItem(FBL_ARCHIVIO) || '{}');
+      for (const k in copia) {
+        if (sessionStorage.getItem(k) === null) sessionStorage.setItem(k, copia[k]);
+      }
+    } catch (e) { /* backup illeggibile: si prova con lo stato rimasto */ }
+    return true;
+  }
+  function consumaStatoAuth() {
+    try { localStorage.removeItem(FBL_ARCHIVIO); localStorage.removeItem(FBL_PENDENTE); } catch (e) {}
+  }
+  // Dove andare dopo il login riuscito: dentro l'APP il programma (app.html); sul SITO
+  // la porta d'ingresso (index.html?dopo=login), che apre l'app installata o offre
+  // l'installazione — vedi il seguito di questa funzione e il test porta_dopo_login.
+  function destinazioneLogin(nativa) { return nativa ? 'app.html' : 'index.html?dopo=login'; }
+  /* STATO LOGIN GOOGLE: FINE */
+
+  const loginGoogleInCorso = ripristinaStatoAuth();
+  if (loginGoogleInCorso) skipAutoRedirect = true;
+
+  // Telefono e tablet nel BROWSER (non nell'app): il puntatore e' grossolano, e li' il
+  // popup di Google e' inaffidabile (bloccato o aperto come scheda a parte, e con quello
+  // Firebase perde lo stato). Si usa il reindirizzamento a pagina intera, il flusso che
+  // Google consiglia su mobile.
+  function tocchiGrossi() {
+    try { return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); } catch (e) { return false; }
+  }
 
   // === La tua configurazione Firebase ===
   const firebaseConfig = {
@@ -128,9 +197,12 @@
   const auth = getAuth(app);
   const db = getFirestore(app);
 
-  // Dove andare dopo il login riuscito
-  // (rinominato da index.html ad app.html: index.html ora è la pagina pubblica di presentazione)
-  const DESTINATION = "app.html";
+  // Dove andare dopo il login riuscito (deciso dal proprietario, 18 ottobre 2026):
+  // DENTRO L'APP resta app.html, che e' il programma. SUL SITO non si finisce piu' nel
+  // simulatore nel browser aperto e basta: si torna alla porta d'ingresso della landing
+  // (index.html?dopo=login), che prova subito a passare dentro l'app e, se non c'e',
+  // offre l'installazione — con sempre l'uscita "Continua col sito web" verso app.html.
+  const DESTINATION = destinazioneLogin(isCapacitor);
 
   // Non passiamo più nessun actionCodeSettings a sendEmailVerification():
   // così Firebase invia l'email di conferma con il suo link standard, che
@@ -187,16 +259,22 @@
     window.location.replace(DESTINATION);
   });
 
-  // APP MOBILE: al ritorno dal reindirizzamento di Google completiamo l'accesso qui.
-  if (isCapacitor) {
+  // AL RITORMO dal reindirizzamento di Google (dentro l'APK o nel browser del telefono):
+  // qui si legge il risultato. Lo stato e' gia' stato rimesso al posto da
+  // ripristinaStatoAuth() all'avvio (backup + bandierina in localStorage): senza quel
+  // passo Firebase butta "missing initial state" e il login non parte.
+  if (loginGoogleInCorso) {
     (async () => {
-      let pending = false;
-      try { pending = sessionStorage.getItem('fblRedirectPending') === '1'; } catch(e) {}
-      if (!pending) return;
-      try { sessionStorage.removeItem('fblRedirectPending'); } catch(e) {}
       try {
         const cred = await getRedirectResult(auth);
-        if (!cred) { skipAutoRedirect = false; return; }
+        consumaStatoAuth();
+        if (!cred) {
+          // Il giro da Google e' tornato senza credenziale (annullato o perso per strada):
+          // si dice, invece di lasciare l'utente fermo senza spiegazioni.
+          skipAutoRedirect = false;
+          showError("Accesso con Google non riuscito. Tocca di nuovo «Accedi con Google».");
+          return;
+        }
         const info = getAdditionalUserInfo(cred);
         await ensureUserProfile(cred.user);
         if (info && info.isNewUser) {
@@ -207,6 +285,7 @@
           window.location.replace(DESTINATION);
         }
       } catch(e) {
+        consumaStatoAuth();
         skipAutoRedirect = false;
         showError(traduciErrore(e && e.code));
       }
@@ -291,11 +370,18 @@
     // reindirizza mai da solo durante un login Google: ci pensa questo handler, in entrambi
     // i rami (nuovo utente / utente già esistente).
     skipAutoRedirect = true;
-    if (isCapacitor) {
-      // WebView nativo: niente popup. Si parte con il reindirizzamento; al ritorno
-      // questa stessa pagina rileggera' il risultato con getRedirectResult().
-      try { sessionStorage.setItem('fblRedirectPending', '1'); } catch(e) {}
-      await signInWithRedirect(auth, new GoogleAuthProvider());
+    // TELEFONO, TABLET E APP: SI USA IL REINDIRIZZAMENTO. Prima di partire lo stato
+    // dell'operazione viene archiviato in localStorage, cosi' sopravvive anche se Android
+    // uccide il processo durante la scelta dell'account (vedi STATO LOGIN GOOGLE in cima).
+    if (isCapacitor || tocchiGrossi()) {
+      salvaStatoAuth();
+      try {
+        await signInWithRedirect(auth, new GoogleAuthProvider());
+      } catch(e) {
+        consumaStatoAuth();
+        skipAutoRedirect = false;
+        showError(traduciErrore(e && e.code));
+      }
       return;
     }
     try{
@@ -310,6 +396,15 @@
         window.location.replace(DESTINATION);
       }
     }catch(e){
+      // Il popup e' stato bloccato dal browser: invece di un vicolo cieco si ripiega
+      // subito sul reindirizzamento, che non ha bisogno di finestre apribili.
+      if (e && e.code === "auth/popup-blocked") {
+        salvaStatoAuth();
+        try {
+          await signInWithRedirect(auth, new GoogleAuthProvider());
+          return;
+        } catch(e2) { consumaStatoAuth(); e = e2; }
+      }
       skipAutoRedirect = false; // ripristina il comportamento normale se il login fallisce/viene annullato
       showError(traduciErrore(e.code));
     }
@@ -406,6 +501,9 @@
       "auth/email-already-in-use": "Esiste già un account con questa email. Prova ad accedere invece di crearne uno nuovo.",
       "auth/weak-password": "Password troppo debole (minimo 6 caratteri).",
       "auth/popup-closed-by-user": "Hai chiuso la finestra di Google prima di completare l'accesso.",
+      "auth/popup-blocked": "Il browser ha bloccato la finestra di Google. Consentila per questo sito e riprova.",
+      "auth/invalid-argument": "Accesso con Google non riuscito. Tocca di nuovo «Accedi con Google»; se ricapita, chiudi e riapri la pagina.",
+      "auth/internal-error": "Accesso con Google non riuscito. Tocca di nuovo «Accedi con Google»; se ricapita, chiudi e riapri la pagina.",
       "auth/too-many-requests": "Troppi tentativi. Riprova tra qualche minuto."
     };
     return mappa[code] || ("Errore: " + code);

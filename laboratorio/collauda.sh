@@ -15,6 +15,15 @@ passo(){ # nome, comando...
     riga "- ❌ $nome ($((SECONDS-t0))s, vedi risultati/$nome.log)"; FALLITI=$((FALLITI+1))
     # Il dettaglio va anche a schermo: su GitHub il log del flusso e' l'unico posto dove si legge subito.
     echo "----- ultime righe di $nome.log -----" >&2; tail -40 "$R/$nome.log" >&2; echo "-----" >&2
+    # QUALI test sono falliti, per nome. Misurato il 18 ottobre 2026: la run di GitHub
+    # 39063565232 e' caduta con 1 test su 506 e il log visibile NON conteneva il "not ok"
+    # (GitHub tronca i log lunghi in fondo): senza queste righe un collaudo rosso non
+    # dice mai il nome del colpevole, e bisogna indovinare. Qui il log completo c'e'.
+    if grep -qE '^[[:space:]]*not ok ' "$R/$nome.log" 2>/dev/null; then
+      echo "----- test falliti in $nome.log -----" >&2
+      grep -E '^[[:space:]]*not ok ' "$R/$nome.log" | head -30 >&2
+      echo "-----" >&2
+    fi
   fi
 }
 # Quale Python usare. Su Linux e su GitHub e' python3 e finisce qui. Su Windows python3 puo'
@@ -31,7 +40,7 @@ fi
 riga "# Collaudo $(date -u '+%Y-%m-%d %H:%M') UTC — commit $(git rev-parse --short HEAD 2>/dev/null)"
 riga ""
 passo sintassi_app node laboratorio/strumenti/sintassi_app.mjs
-passo versione_sw bash -c 'grep -q "forex-backtest-lab-v[0-9]*\"" sw.js'
+passo versione_sw bash -c 'grep -q "forex-backtest-lab-v[0-9][0-9.]*\"" sw.js'
 passo ponte_python "$PY" -m pytest -q laboratorio/ponte
 passo interprete_segnali bash -c 'cd installer_build/build/segnali_telegram && "$0" test_parser.py && "$0" test_formati_reali.py && "$0" test_syntra_audcad.py' "$PY"
 # I TEST DEL BROWSER GIRANO IN PARALLELO, quattro file per volta.

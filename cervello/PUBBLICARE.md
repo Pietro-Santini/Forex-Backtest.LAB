@@ -77,29 +77,27 @@ aggiornato.
 L'unica cosa che invalida quella copia è il numero di versione dentro `sw.js`:
 
 ```
-const CACHE_NAME = "forex-backtest-lab-v124";
+const CACHE_NAME = "forex-backtest-lab-v2.0.1";
 ```
 
 **Se cambi `app.html` e non alzi quel numero, sul computer magari vedi la modifica (basta un
 ricarica forzato) ma su telefono e tablet no, e può restare così per giorni.** È l'errore più
 comune, e dà l'impressione che la correzione non funzioni.
 
-Regola: `app.html` cambiato → `CACHE_NAME` da `vNN` a `vNN+1`. E, per tenere allineata la
-numerazione, anche `MyAppVersion` in `installer_build/installer.iss` passa a `1.0.NN+1`.
+Regola: `app.html` cambiato → `CACHE_NAME` al passo successivo. Lo schema, **in vigore dal
+18 ottobre 2026** (decisione del proprietario del 17), è **`2.0.x`**: `forex-backtest-lab-v2.0.1`
+→ `forex-backtest-lab-v2.0.2`, e così via. Anche `MyAppVersion` in
+`installer_build/installer.iss` va tenuto allo stesso numero (`"2.0.1"`): il numero del Setup e
+il tag della release **si ricavano** da `CACHE_NAME`, quindi non si scrivono a mano.
 
-**Decisione del 17 ottobre 2026 (da applicare, non ancora in vigore):** la numerazione passa a
-**`2.0.1`**. Non è solo un cambio di cifra — misurato:
-
-- il numero del Setup e il tag della release **si ricavano** da `CACHE_NAME` con
-  `grep -o 'forex-backtest-lab-v[0-9]*'`, che si ferma al primo punto. Scrivere `v2.0.1` fa uscire
-  `APP=2` → Setup `1.0.2`, tag `v1.0.2`: **la versione si abbassa invece di alzarsi**;
-- il passo `versione_sw` del collaudo cerca la forma `-v[0-9]*"`: con `v2.0.1` **fallisce**, quindi
-  il collaudo va rosso e non si pubblica.
-
-Quando si applica, vanno toccati **insieme**: `sw.js` (forma di `CACHE_NAME`),
-`.github/workflows/installer.yml` (grep ~52 e ~92, `SETUP=` ~96, `TAG=` ~97),
-`laboratorio/collauda.sh` (passo `versione_sw`), `installer_build/installer.iss` (`MyAppVersion`).
-Dettagli e misure in `DIARIO.md`, voce del 17 ottobre 2026.
+Come è arrivato lo schema (applicato il 18 ottobre 2026, misure in `DIARIO.md`): i filtri vecchi
+(`grep -o 'forex-backtest-lab-v[0-9]*'` in `installer.yml` e il passo `versione_sw` del collaudo,
+`-v[0-9]*"`) si fermano al primo punto: con `v2.0.1` avrebbero preso `APP=2` → Setup `1.0.2` e
+tag `v1.0.2` (**la versione si abbassa**), e il collaudo sarebbe andato rosso. Con
+l'applicazione sono diventati `forex-backtest-lab-v[0-9][0-9.]*` in `installer.yml` (grep ~52 e
+~92, `SETUP="${APP}"` ~96, `TAG="v${SETUP}"` ~97, con in più `--match 'v2.0.*'` per
+`git describe`) e in `collauda.sh` (passo `versione_sw`), e `MyAppVersion` si scrive senza il
+prefisso `1.0.`.
 
 Dopo il push, sul telefono: **ricaricare la pagina**. A volte serve ricaricarla due volte — la
 prima il telefono scarica la versione nuova, la seconda la usa.
@@ -110,8 +108,9 @@ prima il telefono scarica la versione nuova, la seconda la usa.
 
 Da fare nella cartella del repository sul computer.
 
-**1. Alza la versione.** In `sw.js`, riga 55 circa, da `...-vNN` a `...-vNN+1`.
-In `installer_build/installer.iss`, riga 22 circa, `MyAppVersion` allo stesso numero.
+**1. Alza la versione.** In `sw.js` (`CACHE_NAME`), da `forex-backtest-lab-v2.0.x` a
+`forex-backtest-lab-v2.0.(x+1)` (oggi `v2.0.1`).
+In `installer_build/installer.iss`, riga 22 circa, `MyAppVersion` allo stesso numero (`"2.0.1"`).
 
 **2. Fai girare il collaudo.** Deve finire con `Falliti: 0`. Dura circa dieci minuti.
 
@@ -128,7 +127,7 @@ anche file che non devono mai finire nel repository.
 
 ```bash
 git add app.html sw.js installer_build/installer.iss cervello/DIARIO.md
-git commit -m "App vNN: che cosa cambia, in italiano"
+git commit -m "v2.0.1: che cosa cambia, in italiano"
 git push origin main
 ```
 
@@ -220,7 +219,7 @@ Il file è `ForexBacktestLAB_Setup.exe`. Si installa sopra la versione precedent
 da solo i programmi vecchi. Windows può avvisare (SmartScreen) perché il programma non è firmato:
 «Ulteriori informazioni» → «Esegui comunque».
 
-Il numero del Setup lo ricava GitHub da `sw.js`: app `v124` → Setup `1.0.124`.
+Il numero del Setup lo ricava GitHub da `sw.js`: app `v2.0.1` → Setup `2.0.1`.
 
 > **Come accorgersi che il Setup è vecchio.** Se una correzione ai programmi del computer «non
 > funziona», prima di cercare il guasto nella rete confronta la data di

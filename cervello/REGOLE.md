@@ -19,7 +19,7 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
   il collaudo verde** (`bash laboratorio/collauda.sh` → "Falliti: 0" da meno di 30 minuti): il
   controllo automatico `.claude/hooks/guardia_git.py` blocca il push su `main` altrimenti. Si
   pubblica unendo il ramo (merge), mai riscrivendo la storia.
-- Ogni versione di `app.html` va con un nuovo `CACHE_NAME` in `sw.js` (`forex-backtest-lab-vNN`), e
+- Ogni versione di `app.html` va con un nuovo `CACHE_NAME` in `sw.js` (schema `forex-backtest-lab-v2.0.x`), e
   i due file si pubblicano insieme.
 - Prima di dire che una versione è online, controllare `CACHE_NAME` su `origin/main`.
 - Niente `git push --force`, niente riscrittura della storia.

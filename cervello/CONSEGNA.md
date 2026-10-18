@@ -223,11 +223,12 @@ PC più vecchio dell'app.
 ### Come si pubblica (obbligatorio, non è uno stile)
 
 1. `bash laboratorio/collauda.sh` deve finire con **`Falliti: 0`**.
-2. **Alzare `CACHE_NAME` in `sw.js`** (`forex-backtest-lab-vNN` → `vNN+1`) ogni volta che cambia
+2. **Alzare `CACHE_NAME` in `sw.js`** (schema `forex-backtest-lab-v2.0.x`, oggi `v2.0.1`:
+   `v2.0.1` → `v2.0.2`) ogni volta che cambia
    `app.html`. È l'unica cosa che fa arrivare l'aggiornamento a telefoni e tablet.
    Nel repository la copia di `sw.js` è **una sola**, nella radice.
-3. Alzare `MyAppVersion` in `installer_build/installer.iss` allo stesso numero (`app vNN` →
-   `Setup 1.0.NN`). Il flusso lo riscrive comunque da `sw.js`, ma chi compila a mano prende questo.
+3. Alzare `MyAppVersion` in `installer_build/installer.iss` allo stesso numero (`app v2.0.1` →
+   `MyAppVersion "2.0.1"`). Il flusso lo riscrive comunque da `sw.js`, ma chi compila a mano prende questo.
 4. Commit e push su `main` (mai riscrivere la storia, mai `--force`).
 5. Verificare che sia online davvero: `git show origin/main:sw.js | grep CACHE_NAME`.
 
