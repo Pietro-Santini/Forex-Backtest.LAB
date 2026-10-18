@@ -1147,7 +1147,7 @@ risponde ancora 404.
 
 ---
 
-## 2026-10-18 � OpenCode � login Google su telefono/tablet: due cause misurate, porta post-login, schema 2.0.1 � collaudo locale 5/5 verde
+## 2026-10-18 — OpenCode — login Google su telefono/tablet: due cause misurate, porta post-login, schema 2.0.1 — collaudo locale 5/5 verde
 
 **Il difetto.** Il proprietario segnala che su telefono e tablet "il login con Google non viene
 eseguito", con due errori visibili: Firebase "Unable to process request due to missing initial
@@ -1156,26 +1156,26 @@ state" e "Impossibile raggiungere il sito / Connessione negata da localhost".
 **Causa 1, misurata sul sorgente nativo.** `capacitor.config.json` non aveva
 `server.allowNavigation`, e `Bridge.launchIntent` (nodo `@capacitor/android`, Bridge.java) butta
 nel BROWSER ESTERNO ogni navigazione verso un host che non sia l'app: "Accedi con Google" dentro
-l'APK partiva per firebaseapp.com dentro Chrome, il giro veniva completato l�, e al ritorno Chrome
-cercava https://localhost � l'indirizzo che dentro la WebView esiste e fuori no. Da li'
+l'APK partiva per firebaseapp.com dentro Chrome, il giro veniva completato là, e al ritorno Chrome
+cercava https://localhost — l'indirizzo che dentro la WebView esiste e fuori no. Da lì
 "Connessione negata da localhost". Correzione: `allowNavigation: ["*.firebaseapp.com",
-"*.google.com"]`. Il sito resta FUORI dalla lista, perche' il collegamento in alto a sinistra
-dell'APK deve aprirsi nel browser � e lo fa per lo stesso meccanismo (test
-`apk_login_google.test.mjs`, che salta in modo visibile su GitHub, dove il progetto APK non c'e').
+"*.google.com"]`. Il sito resta FUORI dalla lista, perché il collegamento in alto a sinistra
+dell'APK deve aprirsi nel browser — e lo fa per lo stesso meccanismo (test
+`apk_login_google.test.mjs`, che salta in modo visibile su GitHub, dove il progetto APK non c'è).
 
 **Causa 2, misurata nel flusso di Firebase.** Lo stato del reindirizzamento vive in
-sessionStorage, in memoria del processo: durante la scelta dell'account Android puo' uccidere la
+sessionStorage, in memoria del processo: durante la scelta dell'account Android può uccidere la
 WebView e al ritorno Firebase butta "missing initial state". Ora il pulsante Google archivia
 tutto in localStorage prima di partire (`salvaStatoAuth`) e, al ritorno, rimette ogni chiave
 mancante al suo posto PRIMA di `getRedirectResult` (`ripristinaStatoAuth`); la bandierina porta
-l'orario, cosi' un backup piu' vecchio di dieci minuti viene consumato e non lascia l'accesso
+l'orario, così un backup più vecchio di dieci minuti viene consumato e non lascia l'accesso
 automatico fermo. Telefono e tablet usano il reindirizzamento anche nel browser (puntatore
 grossolano: niente popup); un popup bloccato ripiega sul reindirizzamento. Test
 `login_stato_google.test.mjs` (10), che simula la morte del processo sui magazzini finti estratti
 da login.html.
 
 **Requisito del proprietario: dopo il login, sul sito, l'APK o l'apertura diretta.** login.html
-sul sito non finisce piu' su app.html ma su `index.html?dopo=login`: la porta d'ingresso della
+sul sito non finisce più su app.html ma su `index.html?dopo=login`: la porta d'ingresso della
 landing si apre da sola (stessa codifica dei pulsanti), con sempre l'uscita "Continua col sito
 web" verso app.html, e la query viene pulita via replaceState. Test `porta_dopo_login.test.mjs` (9).
 
@@ -1190,6 +1190,13 @@ Filtro verificato end-to-end prima del push: APP=2.0.1, TAG=v2.0.1. Aggiornate a
 istruzioni operative che descrivevano lo schema 1.0.NN (PUBBLICARE, SKILL pubblica, CONSEGNA,
 REGOLE, CLAUDE).
 
-**Collaudo.** Locale 5/5 verdi, 528 test 0 falliti (22 in piu'). I due test nuovi sono stati visti
-**diventare rossi** prima della correzione. La sintassi dell'intero modulo di login.html e'
+**Giro storto da ricordare.** La prima stesura di questa voce è stata appesa con `Add-Content` di
+PowerShell, che scrive in CP1252: il flusso Pages di GitHub è andato rosso con "invalid byte
+sequence in UTF-8" su proprio questo file (Jekyll converte anche `cervello/*.md`). Misurato,
+troncato al marcatore, riscritto con l'editor. Un file di testo va toccato con un editor che
+scrive UTF-8, non con comandi di riga che ereditano la codifica della console.
+
+**Collaudo.** Locale 5/5 verdi, 528 test 0 falliti (22 in più). I due test nuovi sono stati visti
+**diventare rossi** prima della correzione. La sintassi dell'intero modulo di login.html è
 verificata a parte con `node --check` (nessun test la compila per intero).
+
