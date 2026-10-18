@@ -1182,6 +1182,13 @@ web" verso app.html, e la query viene pulita via replaceState. Test `porta_dopo_
 **Diagnosi del collaudo rosso su GitHub.** La run 39063565232 era caduta con 1 test su 506 senza
 che il nome risultasse da nessuna parte: GitHub tronca i log lunghi. `collauda.sh`, quando un
 passo fallisce, stampa ora anche le righe "not ok" dal log completo in `laboratorio/risultati/`.
+Con la stampa nuova il nome è saltato fuori (run 39094494504): era `build_exe_copia.test.mjs`,
+che fa eseguire le righe vere di build_exe.bat da cmd.exe — e sul runner di GitHub
+(`ubuntu-latest`) cmd.exe non esiste: "uscita con null" in 7 millisecondi. Era il colpevole anche
+della run rossa dei 506, non era niente di nuovo. Il dettaglio completo si è letto scaricando
+l'artefatto `laboratorio/risultati/` dalla run 39094806171. Correzione: su Linux il test salta
+con motivo visibile (stesso schema del test APK), e il comportamento della copia si prova per
+davvero solo sul Windows del collaudo locale.
 
 **Versione 2.0.1 applicata** (decisione del 17 ottobre): `CACHE_NAME` "forex-backtest-lab-v2.0.1",
 filtri `forex-backtest-lab-v[0-9][0-9.]*` in installer.yml (grep ~52 e ~92, `SETUP="${APP}"`,

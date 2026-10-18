@@ -15,6 +15,12 @@
 // la copia, le mette in una cartella di prova insieme a dei finti app.html/login.html/sw.js, le fa
 // ESEGUIRE da cmd.exe e poi guarda se i file sono arrivati dentro build\. Con la riga rotta
 // fallisce; con la riga giusta passa.
+//
+// GIRA SOLO SU WINDOWS (misurato il 18 ottobre 2026): su GitHub il Collaudo corre su
+// ubuntu-latest, dove cmd.exe non esiste - il test cadeva sempre li' con "uscita con null" in
+// 7 millisecondi, ed era il test di colpa della run rossa 39063565232 (1 su 506). Su Linux
+// salta con un motivo visibile, come il test dell'APK: la copia si prova davvero solo su
+// Windows, cioe' nel collaudo locale del proprietario.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -22,6 +28,10 @@ import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+
+const WINDOWS = process.platform === 'win32';
+const SALTO = 'serve cmd.exe, che su ' + process.platform + ' non esiste: questo comportamento ' +
+  'si prova sul Windows del collaudo locale, non sul runner Linux di GitHub';
 
 const RADICE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BAT = path.join(RADICE, 'installer_build', 'build_exe.bat');
@@ -38,7 +48,8 @@ function bloccoDellaCopia() {
   return righe.slice(0, fine).join('\r\n');
 }
 
-test('build_exe.bat copia app.html, login.html e sw.js dentro build\\ (eseguito davvero)', () => {
+test('build_exe.bat copia app.html, login.html e sw.js dentro build\\ (eseguito davvero)',
+  {skip: WINDOWS ? false : SALTO}, () => {
   const prova = fs.mkdtempSync(path.join(os.tmpdir(), 'fbl-copia-'));
   const IB = path.join(prova, 'installer_build');
   fs.mkdirSync(path.join(IB, 'build'), {recursive: true});
@@ -59,7 +70,7 @@ test('build_exe.bat copia app.html, login.html e sw.js dentro build\\ (eseguito 
       encoding: 'latin1'
     });
   } catch (errore) {
-    uscita = errore.status === undefined ? -1 : errore.status;
+    uscita = errore.status ?? -1;   // con l'exe mancante Node mette null, non undefined
     registro = String(errore.stdout || '') + String(errore.stderr || '');
   }
 
