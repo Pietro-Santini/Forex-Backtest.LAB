@@ -408,7 +408,7 @@ def _proponi_aggiunta(agg: dict, chat: str) -> Optional[dict]:
 
 
 async def accogli_messaggio(testo: str, chat: str, autore: str = "", sala: Optional[str] = None,
-                            quando_ms: Optional[float] = None) -> None:
+                            quando_ms: Optional[float] = None, prova: bool = False) -> None:
     """Punto UNICO in cui un messaggio diventa (o non diventa) un segnale.
 
     Simulatore e Telegram passano entrambi da qui: se domani si aggiunge una terza sorgente,
@@ -434,6 +434,11 @@ async def accogli_messaggio(testo: str, chat: str, autore: str = "", sala: Optio
         "chat": chat,
         "sala": sala,
         "autore": autore,
+        # SEGNALATO (19 ottobre 2026): True SOLO per il segnale scritto a mano nella pagina di
+        # prova (/inietta). L'app lo copia sulla posizione come tgProva e lo scrive sull'etichetta
+        # del grafico, così "sala di prova" non si confonde con una sala vera. Per tutto il resto
+        # (Telegram, Syntra) resta assente e non cambia niente.
+        "prova": bool(prova),
         "testo": str(testo or "").strip(),
         "segnale": segnale,
         "sottotipo": "nuovo",
@@ -1296,7 +1301,7 @@ async def inietta(corpo: dict):
     if not testo.strip():
         return {"riconosciuto": False, "nota": "messaggio vuoto"}
     prima = (await BACHECA.riepilogo())["segnali"]
-    await accogli_messaggio(testo, chat, "Prova manuale")
+    await accogli_messaggio(testo, chat, "Prova manuale", prova=True)
     ultimi = await BACHECA.da(0)
     # Il segnale principale (non la sua eventuale seconda entrata, che viene subito dopo).
     voce = next((v for v in reversed(ultimi) if v.get("sottotipo") != "seconda_entrata"), None)

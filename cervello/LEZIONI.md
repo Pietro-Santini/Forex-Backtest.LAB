@@ -299,3 +299,18 @@
   testo del codice va bene solo per un invariante di forma, mai per dimostrare un comportamento. E
   quando si corregge, si prova il test anche AL CONTRARIO: rimesso il difetto, quel test deve
   diventare rosso. Un test che passa in tutti e due i casi non vale niente.
+
+- **«Ho calcolato il numero giusto» non è «l'utente ha scelto il numero».** (19 ottobre 2026.) Il
+  calcolo del lottaggio consigliato era giusto fin dall'inizio: partiva dallo stop e dal rischio e
+  dava il lotto esatto. Il difetto non stava nel calcolo, stava nel fatto che il risultato finiva
+  **scritto dentro il campo che poi l'ordine legge**. Così l'utente vedeva un lottaggio «già
+  pronto» che non aveva scritto lui, e lo mandava all'ordine al primo click; il rischio vero non
+  era quello scritto nella casella RISCHIO. Il numero non era nemmeno stabile (dipendeva da quale
+  livello fosse stato toccato per ultimo), quindi non si poteva nemmeno correggere a mente.
+  LA REGOLA: un campo che l'utente poi usa per un'azione vera si scrive solo con un'azione sua. Il
+  programma può calcolare, consigliare e mostrarlo in un posto che NON è quello — ma la parola
+  «consigliato» e quella «impostato» non si scambiano, e quando si scambiano l'utente non ha più
+  modo di sapere che cosa sta per mandare. Se proprio si vuole il collegamento automatico, la
+  condizione è che sia il dato di ingresso a cambiare il dato di uscita (l'utente cambia il
+  rischio → il lottaggio si aggiorna, e lo sa perché ha toccato il rischio). Prima di correggere,
+  misurare di quanto il numero si sposta: 0,07 → 0,05 è un difetto che si spiega in tre righe.

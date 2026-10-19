@@ -746,6 +746,12 @@ select.tgCfgIn{cursor:pointer;padding-right:4px}
 .tgCfgSez{margin:16px 0 8px;font-size:10px;font-weight:700;letter-spacing:.14em;
   color:var(--fbAccent);text-transform:uppercase}
 .tgCfgNota{font-size:11.5px;line-height:1.55;color:var(--fbMuted)}
+/* ==== AVVISO COLLEGAMENTO CLOUD (18/10/2026): banner di primo accesso senza server ==== */
+#fblAvvisoCollegamento{position:fixed;top:0;left:0;right:0;z-index:9997;
+  background:#12232b;border-bottom:1px solid #2f6f8a;color:#cfe6f0;
+  padding:10px 14px;font-size:13px;line-height:1.5;
+  box-shadow:0 2px 8px rgba(0,0,0,.4)}
+#fblAvvisoCollegamento .fbl-x{float:right;cursor:pointer;font-weight:700;padding:0 6px;color:#cfe6f0}
 .tgCfgRegola{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:6px 0;font-size:12px;
   color:#cdd6e0;border-bottom:1px solid #1a212c}
 .tgCfgRiep{margin-top:14px;background:var(--fbPanelTeal);border:1px solid var(--fbLine2);
@@ -1178,6 +1184,24 @@ window.fblAvviaSoloBacktest=function(){
       return onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
         cb(snap.exists() ? (snap.data().voci || {}) : {}, !!(snap.metadata && snap.metadata.hasPendingWrites));
       }, e=>{ console.warn("Ascolto disegni condivisi interrotto:", e); if(errCb) errCb(e); });
+    },
+    // COLLEGAMENTO DEL SERVER TRA DISPOSITIVI STESSO ACCOUNT (18/10/2026): users/{uid}/data/
+    // collegamento. Il PC ci scrive host e chiave quando salva il server (fblCollegamentoPubblica,
+    // nello script principale), gli altri dispositivi dello stesso account lo ascoltano
+    // (fblCollegamentoAvvia) e riempiono da soli i propri magazzini: niente più nome e chiave
+    // da digitare a mano, e soprattutto niente più valori da visualizzare in giro.
+    async collegamentoSalva(payload){
+      if(!this.uid) return false;
+      try{
+        await setDoc(doc(db,"users",this.uid,"data","collegamento"), payload, {merge:true});
+        return true;
+      }catch(e){ console.warn("Pubblicazione del collegamento server fallita:", e); return false; }
+    },
+    collegamentoAscolta(cb){
+      if(!this.uid) return ()=>{};
+      return onSnapshot(doc(db,"users",this.uid,"data","collegamento"), snap=>{
+        cb(snap.exists() ? snap.data() : null);
+      }, e=>console.warn("Ascolto del collegamento server interrotto:", e));
     }
   };
 
@@ -1341,6 +1365,33 @@ window.fblAvviaSoloBacktest=function(){
     trialCountdownInterval = setInterval(tick, 60000);
   }
 
+  // COLLEGAMENTO CLOUD (18/10/2026): un solo ascolto per sessione. Al primo documento valido
+  // l'app si registra da sola sul server e l'avviso di primo accesso si spegne; se non arriva
+  // niente resta l'avviso, che dice come si sistemma la cosa (dal computer).
+  let fblCollegamentoAscolto = null;
+  function avviaCollegamentoCloud(user){
+    try{
+      if (fblCollegamentoAscolto || typeof window.fblCollegamentoAvvia !== 'function') return;
+      // Chi ha già il server salvato (il PC in primis) lo pubblica subito sull'account: non
+      // serve risalvare il server a mano dopo questo aggiornamento, e rifarlo è innocuo
+      // (stessi valori, scrittura in merge).
+      try{ window.fblCollegamentoPubblica(window.fxbtCloud, localStorage); }catch(e){}
+      fblCollegamentoAscolto = window.fblCollegamentoAvvia(window.fxbtCloud, localStorage, ()=>{
+        // È arrivato (o si è aggiornato) il collegamento dall'account: l'avviso di primo accesso
+        // si spegne, i campi si aggiornano e questo dispositivo si registra sul server.
+        try{ window.fblCollegamentoAvviso && window.fblCollegamentoAvviso(false); }catch(e){}
+        try{ fblServerCampiLeggi(); }catch(e){}
+        try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
+        try{ if(typeof tgAttivo==='function'&&tgAttivo()&&typeof tgCollega==='function')tgCollega(); }catch(e){}
+        try{ krakenAggiornaConto(); }catch(e){}
+        try{ window.fblRegistraSulServer && window.fblRegistraSulServer(user); }catch(e){}
+      });
+      // Chi non ha ancora il server lo deve sapere: ordini, MT5, Kraken e grafico collegato si
+      // configurano dal computer; backtest e sessione Capital.com funzionano già.
+      window.fblCollegamentoAvviso && window.fblCollegamentoAvviso(window.fblCollegamentoServeAvviso(localStorage));
+    }catch(e){ console.warn('[Collegamento cloud] ascolto non partito:', e); }
+  }
+
   onAuthStateChanged(auth, async (user) => {
     const overlay = document.getElementById("auth-check-overlay");
     const logoutBtn = document.getElementById("logout-btn");
@@ -1370,6 +1421,12 @@ window.fblAvviaSoloBacktest=function(){
         await fblRegistraSulServer(user);
       }
     } catch (e) { /* server non raggiungibile: nessun errore visibile, riprovera' al prossimo avvio */ }
+    // COLLEGAMENTO CLOUD (18/10/2026): si ascolta il documento che il PC pubblica dentro
+    // l'account (users/{uid}/data/collegamento): host e chiave del server arrivano da soli
+    // sugli altri dispositivi dello stesso account. Il primo arrivo sblocca anche il circolo
+    // che teneva fuori i telefoni: fblRegistraSulServer aveva bisogno del nome del server,
+    // che prima arrivava solo digitandolo a mano.
+    avviaCollegamentoCloud(user);
     try {
       const ref = doc(db, "users", user.uid);
       let snap = await getDoc(ref);
@@ -2291,6 +2348,14 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div class="fbSettingsLayout">
        <div class="fbSettingsNav">
          <button type="button" id="chartSettingsTabStyle" class="fbSettingsNavItem active" data-settings-tab="style">🎨 Style</button>
+          <!-- SEGNALATO (19 ottobre 2026): «dobbiamo spostare il pulsante cronologia delle sale
+               nella barra laterale a sinistra sulle impostazioni e quindi toglierla all'interno
+               della sezione style. Deve essere proprio una sezione separata, che pigiamo quel
+               pulsante e ci si apre quello che è il pop-up di sempre». Qui la voce è una sezione
+               SUA (data-settings-tab="cronologia"), non una riga dentro Style. Il pulsante porta
+               la stessa classe .fblCronoBtn e quindi lo stesso ascoltatore delegato di prima: il
+               pop-up che si apre è esattamente quello di sempre, non una copia. -->
+          <button type="button" id="chartSettingsTabCronologia" class="fbSettingsNavItem" data-settings-tab="cronologia">📜 Cronologia</button>
          <button type="button" id="chartSettingsTabNews" class="fbSettingsNavItem" data-settings-tab="news" style="display:none">📰 Notizie</button>
          <button type="button" id="chartSettingsTabAlarm" class="fbSettingsNavItem" data-settings-tab="alarm">🔔 Alarm</button>
          <!-- RICHIESTO ESPLICITAMENTE: sezione dedicata (non più annegata dentro "Style"),
@@ -2380,14 +2445,15 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            <div class="fbOptRow"><button id="toggleLineePrezzoBtn" type="button" class="toolBtn active" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Mostra/nascondi la linea orizzontale del prezzo di entrata, solo per le posizioni ancora aperte. Le linee TP/SL, le frecce e le caselle restano.">➖ <span>Mostra/nascondi linea del prezzo di entrata</span></button></div>
            <!-- PUNTO 6: interruttore "posizioni chiuse a grafico". -->
            <div class="fbOptRow"><button id="togglePosizioniChiuseBtn" type="button" class="toolBtn" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Acceso: oltre alle posizioni aperte si vedono anche quelle chiuse (frecce di apertura e chiusura e la linea tratteggiata tra le due (mai le orizzontali di prezzo)). Spento: a grafico restano SOLO le posizioni attive.">🕰️ <span>Mostra/nascondi posizioni chiuse a grafico</span></button></div>
-           <!-- RICHIESTO dal proprietario: "l'utente puo' avere a disposizione anche all'interno
-                delle impostazioni la cronologia delle sale segnale a grafico e un win rate per TP:
-                trasferisci quel pulsante anche all'interno delle impostazioni".
-                NON e' un secondo pulsante con una sua logica: porta la stessa classe .fblCronoBtn
-                del primo, e l'ascoltatore che apre la finestra e' uno solo e delegato. Due pulsanti
-                con due strade diverse per aprire la stessa cosa e' il modo migliore per ritrovarsi
-                con due comportamenti diversi senza accorgersene. -->
-           <div class="fbOptRow"><button type="button" class="toolBtn fblCronoBtn" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Tutti i segnali della sala (Telegram) o dell'utente (Syntra), a grafico, con il win rate totale e per livello di TP">📜 <span>Cronologia delle sale: segnali a grafico e win rate per TP</span></button></div>
+           <!-- IL PULSANTE DELLA CRONOLOGIA NON E' PIU' QUI.
+                Era una copia (stessa classe .fblCronoBtn, stesso ascoltatore delegato) di quello
+                che sta nella sezione Sala segnali. Il proprietario l'ha tolto di qui: «dobbiamo
+                spostare il pulsante cronologia delle sale nella barra laterale a sinistra sulle
+                impostazioni e quindi toglierla all'interno della sezione style. Deve essere proprio
+                una sezione separata». Ora ha una voce tutta sua nella barra di sinistra (vedi
+                data-settings-panel="cronologia" più in basso): due pulsanti con due strade diverse
+                per aprire la stessa cosa sono il modo migliore per ritrovarsi con due comportamenti
+                diversi senza accorgersene. -->
            <div class="fbOptRow"><button id="toggleOrdiniPendentiBtn" type="button" class="toolBtn" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Acceso: a grafico si vedono gli ordini pendenti con le loro righe di entrata, stop e target. Spento: nessun ordine pendente sul grafico (restano tutti nella loro tabella).">⏳ <span>Mostra/nascondi ordini pendenti a grafico</span></button></div>
            <p class="hint" style="margin:-4px 0 12px"><b>Posizioni chiuse a grafico.</b> <b>Spento</b> (default): a grafico restano <b>solo le posizioni attive</b> — frecce, linea di congiunzione e linee orizzontali delle attive. <b>Acceso</b>: si vedono anche le operazioni <b>concluse</b>, con la <b>freccia di apertura</b>, la <b>freccia di chiusura</b> e la <b>linea tratteggiata</b> tra le due — mai le orizzontali di prezzo, che con uno storico lungo diventerebbero centinaia di righe sovrapposte. Accendilo per rivedere i trade passati; spegni per non avere il grafico coperto di righe.</p>
            <p class="hint" style="margin:-4px 0 12px">Toglie l'<b>orizzontale</b> del prezzo di entrata delle <b>posizioni aperte</b>. Le operazioni già chiuse non hanno mai questa riga: con uno storico lungo sarebbero centinaia di righe sul grafico. Le linee <b>TP/SL</b>, le frecce e le caselle restano invariate.</p>
@@ -2396,7 +2462,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <rect x="2.5" y="5" width="8.5" height="6.5" rx="1.3" fill="#2fae63"/>
          <rect x="13" y="12.5" width="8.5" height="6.5" rx="1.3" fill="#e0524f"/>
        </svg> <span>Mostra/nascondi caselle colorate TP/SL</span></button></div>
-           <div class="fbOptRow"><button id="toggleTpSlEtichetteBtn" type="button" class="toolBtn active" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Mostra/nascondi le etichette Target / Stop / Stop Profit delle operazioni: le linee restano sempre visibili">🏷️ <span>Mostra/nascondi etichette Target / Stop / Stop Profit</span></button></div>
+           <div class="fbOptRow"><button id="toggleTpSlEtichetteBtn" type="button" class="toolBtn active" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Mostra/nascondi le etichette Etichette TP SL stop profit delle operazioni: le linee restano sempre visibili">🏷️ <span>Mostra/nascondi etichette Etichette TP SL stop profit</span></button></div>
            <p class="hint" style="margin:-4px 0 12px">Con tante operazioni aperte le etichette si sovrappongono: nascondile, le <b>linee</b> di Target, Stop e Stop Profit restano sempre a grafico. I dettagli di una posizione si vedono comunque toccando la sua casella.</p>
            <div data-style-panel="zone">
              <div style="display:flex;gap:28px;justify-content:center;padding:6px 0">
@@ -2442,6 +2508,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                <button type="button" id="chartFontScaleResetBtn" class="toolBtn" title="Torna alla dimensione predefinita (100%)">↺ Predefinito</button>
              </div>
              <p class="hint" style="margin-top:6px">Scala tutti i testi disegnati dentro il grafico (prezzi, orari, etichette dei disegni, profili volumetrici, dashboard degli indicatori, caselle TP-SL...). Non modifica il nome dell'asset, i pulsanti della barra degli strumenti né i nomi degli indicatori nella legenda in alto.</p>
+             <div class="fbOptRow">
+               <label style="flex:none;min-width:110px">Interfaccia</label>
+               <span style="display:inline-flex;align-items:center;gap:4px"><input id="fblUiScalaPct" type="number" min="70" max="150" step="5" value="100" style="width:56px" title="Dimensione di testo e pulsanti di tutta la pagina, in percentuale (100% = predefinita). Il grafico resta alla sua misura">%</span>
+               <button type="button" id="fblUiScalaResetBtn" class="toolBtn" title="Torna alla dimensione predefinita (100%)">↺ Predefinito</button>
+             </div>
+             <p class="hint" style="margin-top:6px">Scala testo e pulsanti di <b>tutta la pagina</b> — barre, pannelli e finestre — mentre il grafico resta alla sua misura vera. Si può anche con <b>Ctrl+rotellina</b> sul computer e col <b>pizzico</b> (due dita) su telefono e tablet, sempre al di fuori del grafico: sopra il grafico i gesti continuano a essere del grafico. Su telefono e tablet si parte dall'85% (carattere più piccolo), sul computer dal 100%.</p>
            </div>
          
            <!-- Griglia: spostata qui dentro Style (richiesto esplicitamente), prima era una scheda a sé. Stesso pulsante, stesso id. -->
@@ -2451,6 +2523,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <button id="gridDensityBtn" type="button" class="toolBtn" style="width:auto">▦ Griglia: Media</button>
              <button id="gridVisibleBtn" type="button" class="toolBtn" style="width:auto" title="Mostra o nasconde le linee della griglia (le etichette di prezzo e ora restano)">👁️ Griglia visibile</button>
            </div>
+         </div>
+         <!-- CRONOLOGIA DELLE SALE: la sezione nuova della barra di sinistra (vedi
+              chartSettingsTabCronologia). Un solo pulsante, che apre il pop-up di sempre. -->
+         <div data-settings-panel="cronologia" style="display:none">
+           <div class="fbSettingsSectionTitle" style="margin-top:0;padding-top:0;border-top:none">📜 Cronologia delle sale</div>
+           <div class="fbOptRow"><button type="button" class="toolBtn fblCronoBtn" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Tutti i segnali della sala (Telegram) o dell'utente (Syntra), a grafico, con il win rate totale e per livello di TP">📜 <span>Cronologia delle sale: segnali a grafico e win rate per TP</span></button></div>
+           <p class="hint" style="margin:0">Rilegge tutta la storia di una sala, giudica ogni segnale sulle candele vere (non su quello che la sala dice di aver preso) e dice il win rate totale e per livello di target, più quanto avrebbe reso quel conto con una strategia a scelta.</p>
          </div>
          <div data-settings-panel="news" style="display:none">
            <p class="hint" style="margin:0 0 12px">Pallini lungo la barra del tempo per gli eventi del calendario economico di Forex Factory, colorati per gravità. Disponibile solo sul grafico LIVE (mai in Storico/replay). Clicca un pallino sul grafico per vederne i dettagli.</p>
@@ -3687,8 +3766,9 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
    <div class="fbModalBody">
      <div class="tgCfgNota" style="margin-bottom:12px">
-       Da telefono o tablet c'è <b>una cosa sola</b> da scrivere: nome e chiave del <b>server</b>.
-       Il computer si fa conoscere da solo, e il server sa dove trovarlo anche per gli ordini MT5.
+       Nome e chiave del <b>server</b> si scrivono <b>una volta sola</b>, qui. Gli altri
+       dispositivi dello stesso account Google li ricevono in automatico. Il computer si fa
+       conoscere da solo, e il server sa dove trovarlo anche per gli ordini MT5.
      </div>
 
      <div class="tgCfgSez">Cosa risponde adesso</div>
@@ -3738,9 +3818,9 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div id="fblServerConfigUI">
      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
        <label class="tgCfgCampo">Nome del server
-         <input id="fblServerCampo" class="tgCfgIn" type="text" placeholder="server.tail1234.ts.net" autocapitalize="off" autocorrect="off" spellcheck="false" style="width:230px"></label>
+         <input id="fblServerCampo" class="tgCfgIn" type="password" placeholder="server.tail1234.ts.net" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" style="width:230px"></label>
        <label class="tgCfgCampo">Chiave del server
-         <input id="fblServerChiaveCampo" class="tgCfgIn" type="text" placeholder="quella stampata da prepara_server.sh" style="width:210px"></label>
+         <input id="fblServerChiaveCampo" class="tgCfgIn" type="password" placeholder="quella stampata da prepara_server.sh" autocomplete="off" style="width:210px"></label>
      </div>
      <div class="fbOptRow" style="margin-top:8px;gap:8px">
        <button type="button" id="fblServerProva" class="miniBtn">Prova il server</button>
@@ -3833,7 +3913,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <label class="tgCfgCampo" title="Spuntato: se la sala non dà lo stop loss, l'app ne calcola uno e apre lo stesso. Tolto: quel segnale non si apre da solo e resta nel pannello, da valutare a mano.">
          <input type="checkbox" id="tgAutoApriSenzaSl" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer">
          <b>Apri anche senza lo stop della sala</b>, con rischio
-         <input id="tgAutoRischioSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.1" max="20" step="0.1" style="width:70px"> % del conto</label>
+         <input id="tgAutoRischioSenzaSl" class="tgCfgIn tgCfgNum" type="number" min="0.1" max="100" step="0.1" style="width:70px"> % del conto</label>
        <label class="tgCfgCampo" title="Spuntato: se la sala non dà nessun take profit, l'app ne calcola uno e apre lo stesso. Tolto: quel segnale non si apre da solo e resta nel pannello, da valutare a mano.">
          <input type="checkbox" id="tgAutoApriSenzaTp" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer">
          <b>Apri anche senza il target della sala</b>, con pareggio al
@@ -3866,7 +3946,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <input type="checkbox" id="tgAutoUniAttiva" style="width:17px;height:17px;accent-color:var(--fbAccent2);cursor:pointer">
          <b>Una strategia per tutte le sale</b></label>
        <label class="tgCfgCampo" title="Rischio totale per ogni segnale, uguale per tutte le sale, diviso fra le posizioni che apre">Rischio
-         <input id="tgAutoUniRischio" class="tgCfgIn tgCfgNum" type="number" min="0.1" max="20" step="0.1" style="width:70px"> %</label>
+         <input id="tgAutoUniRischio" class="tgCfgIn tgCfgNum" type="number" min="0.1" max="100" step="0.1" style="width:70px"> %</label>
        <label class="tgCfgCampo" title="Quante posizioni di UNA sala possono restare aperte insieme, uguale per tutte le sale">Massimo posizioni per sala
          <input id="tgAutoUniMax" class="tgCfgIn tgCfgNum" type="number" min="1" max="20" step="1" style="width:70px"></label>
      </div>
@@ -4462,6 +4542,53 @@ function fblOrigineBadgeHtml(p){
  return ' <span title="'+escapeHtmlLite(spiega)+'" style="display:inline-flex;align-items:center;gap:3px;padding:1px 5px;border-radius:5px;border:1px solid '
   +(syntra?'#7dd3fc;color:#7dd3fc':'#5eead4;color:#5eead4')
   +';font-weight:700;font-size:10px;white-space:nowrap;max-width:100%">'+(syntra?'📱':'📡')+' '+escapeHtmlLite(corto)+'</span>';
+}
+// IL NUMERO DEL TARGET E L'ORIGINE: le due cose che l'etichetta a grafico non diceva.
+//
+// SEGNALATO: «vedo tutti i TP con l'etichetta scritto target, e invece no, deve essere scritto TP1,
+// TP2, TP3, eccetera. E a fianco, su ogni target, ci inseriamo l'origine: se è stata una sala
+// segnali, oppure un'operazione manuale, oppure la sala di prova. Perché se no così vedremo soltanto
+// target e stop».
+//
+// LA CAUSA è che l'etichetta diceva una parola sola, "Target", e la parola è la stessa per tutte le
+// posizioni. Con dieci posizioni aperte lo schermo diventa una griglia di "Target" identici: non si
+// distingue il primo dal secondo dal terzo obiettivo della strategia, e non si sa chi ha aperto
+// l'operazione. I due dati per sistemarlo ci sono già, e non si calcola niente di nuovo:
+//   - `tgTpIndice` (1 based) è il numero del take profit che quella posizione sta inseguendo: è lo
+//     stesso che il Trade Journal mostra come "posizione del take profit n. 2";
+//   - `tgSala` è il nome della sala da cui è partita.
+// Nell'etichetta semplicemente non ci finivano.
+//
+// LE QUATTRO ORIGINI, e perché quattro e non tre.
+//   1. sala segnali: c'è il nome → si scrive il nome della sala.
+//   2. sala di prova: il segnale l'hai scritto TU nella pagina di prova e l'hai mandato al pannello.
+//      Il ponte lo marca (segnali_bridge.py, endpoint /inietta: voce.prova=true) e la posizione lo
+//      porta con sé (tgProva). Prima finiva in mezzo alle sale come se fosse una sala vera, perché
+//      il nome che scrivi nella pagina di prova diventa una sala a tutti gli effetti.
+//   3. sala non riconosciuta: c'è la traccia di un segnale ma il nome non è arrivato. NON si
+//      scrive "manuale": sarebbe falso, e falserebbe anche il profitto per sala (vedi il perché
+//      già scritto in fblOrigineBadgeHtml più sopra).
+//   4. operazione manuale: nessuna traccia di segnale → l'hai aperta tu.
+//
+// Il testo è una PAROLA BREVE perché l'etichetta sta sopra il grafico e ne occupa la larghezza: il
+// nome della sala si taglia, e quello intero resta nel suggerimento (title) al passaggio del mouse.
+function fblEtichettaOrigineBreve(p){
+ if(!p)return 'manuale';
+ if(p.tgProva)return 'sala di prova';
+ const nome=String(p.tgSala||'').trim();
+ if(nome){
+  const syntra=(typeof syntraEUtente==='function')&&syntraEUtente(nome);
+  const breve=syntra?nome.replace(/^Syntra · /,''):nome;
+  return breve.length>16?breve.slice(0,15)+'…':breve;
+ }
+ const daSegnale=!!(p.tgGruppo||p.tgSegnaleId||p.tgTpIndice!=null);
+ return daSegnale?'sala non riconosciuta':'manuale';
+}
+// Il numero che va scritto davanti a "TP". `tgTpIndice` è 1 based (TgTpIndice:i+1 nei due punti che
+// aprono le posizioni da una sala); se non c'è, l'operazione è una posizione sola e quindi TP1.
+function fblEtichettaTpBreve(p){
+ const n=Number(p&&p.tgTpIndice);
+ return 'TP'+(Number.isFinite(n)&&n>0?Math.round(n):1);
 }
 // Quanto possono distare due entrate per essere ancora "lo stesso ingresso". Non un numero
 // scritto a mano: dieci ordini aperti di fila riempiono a prezzi leggermente diversi, e quanto
@@ -14088,6 +14215,9 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
      const span=Math.max(1,closeIdx-openIdx);
      drawTpSlZoneBox(ctx,{
        ownerKey:'trade:'+t.id,originIdx:openIdx,entry:t.entry,sl:t.sl,tp:t.tp,
+       // Come per le posizioni aperte: quale TP e di chi. Un trade chiuso porta con sé i metadati
+       // della posizione da cui è nato (trades.push({...pos,...})), quindi qui funziona uguale.
+       tpEtichetta:fblEtichettaTpBreve(t),origine:fblEtichettaOrigineBreve(t),
        lots:t.lots,assetKey:t.asset,stopProfit:isStopProfitLevel(t),
        pad,cw,n,start,w,y,
        fixedSpan:span,
@@ -16097,6 +16227,10 @@ function draw(){
       // mentre il colore resta solo a quello scelto. Cliccando sul vuoto torna tutto come prima.
       drawTpSlZoneBox(ctx,{
        ownerKey:'pos:'+pos.id,originIdx:originBox,entry:pos.entry,sl:liveSl,tp:liveTp,
+       // L'etichetta non dice più solo "Target": dice QUALE target (TP1, TP2, TP3...) e DI CHI è.
+       // I due dati sono già sulla posizione (tgTpIndice / tgSala / tgProva): qui non si calcola
+       // niente, si scrive quello che si sa già — vedi fblEtichettaOrigineBreve più in alto.
+       tpEtichetta:fblEtichettaTpBreve(pos),origine:fblEtichettaOrigineBreve(pos),
        lots:pos.lots,assetKey:pos.asset,stopProfit:isStopProfitLive,
        dimmed,
        pad,cw,n,start,w,y,
@@ -18376,7 +18510,7 @@ function drawNewsHoverPreview(ctx,dot){
 // la candela `originIdx` e una maniglia destra trascinabile (xRight, distanza in candele
 // = getZoneSpan(ownerKey)): due maniglie quadrate blu segnano gli angoli destri, sempre le
 // stesse per Target e Stop, così trascinandole si allargano/restringono IN SINCRO.
-// RICHIESTO: interruttore in Style per le etichette "Target / Stop / Stop Profit" (con dieci, venti
+// RICHIESTO: interruttore in Style per le etichette "TP SL stop profit" (con dieci, venti
 // operazioni si sovrappongono e coprono il grafico). Spente: restano le linee, spariscono le etichette.
 function fblEtichetteTpSlVisibili(){ try{ return localStorage.getItem('fbl_etichette_tpsl')!=='0'; }catch(e){ return true; } }
 // RICHIESTO: le LINEE delle posizioni (entrata, Stop, Target) e le frecce si spengono da sole,
@@ -18403,7 +18537,7 @@ fblDelega('click',ev=>{
  const ora=!fblEtichetteTpSlVisibili();
  try{ localStorage.setItem('fbl_etichette_tpsl',ora?'1':'0'); }catch(e){}
  fblEtichetteTpSlUi(); try{ draw(); }catch(e){}
- $('status').textContent=ora?'🏷️ Etichette Target / Stop / Stop Profit visibili.':'🏷️ Etichette Target / Stop / Stop Profit nascoste: le linee restano a grafico.';
+ $('status').textContent=ora?'🏷️ Etichette TP SL stop profit visibili.':'🏷️ Etichette TP SL stop profit nascoste: le linee restano a grafico.';
 });
 setTimeout(()=>{ try{ fblEtichetteTpSlUi(); }catch(e){} },500);
 // PASSO 22 - due interruttori piu' fini di "posizioni" e "linee posizioni": tolgono dal grafico
@@ -18551,7 +18685,7 @@ function drawTpSlZoneBox(ctx,opts){
      const tpEuroTxt=soldiLivello(tp,'+');
      // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
      // candele al suo interno) — richiesto esplicitamente.
-     drawZonePill(ctx,xRight+4,yTp,`Target: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
+     drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
    }
  }
  if(hasSl){
@@ -18563,7 +18697,12 @@ function drawTpSlZoneBox(ctx,opts){
    // tutto il resto, per non confondersi con la posizione scelta.
    const spColor=dimmed?TRADE_DIM_GREY:(stopProfit?'#3ea6ff':zoneColors.sl);
    const spFill=hexToRgba(spColor,zoneOpacity.sl);
-   const spLabel=stopProfit?'Stop Profit':'Stop';
+   // SEGNALATO (19 ottobre 2026): «togliamo target e stop, inseriamo invece TP e SL». Lo Stop Loss
+   // si chiama SL, e l'unica eccezione è quella detta dal proprietario: «lo stop profit è quello
+   // che deve rimanere. Quindi se lo stop loss si sposta stop profit da SL diventa uno stop profit».
+   // Quando il livello è passato oltre l'entrata l'etichetta continua a dirlo e non si traveste da
+   // SL, che significherebbe il contrario di quello che sta succedendo.
+   const spLabel=stopProfit?'Stop Profit':'SL';
    if(fillVisible){
      ctx.fillStyle=spFill;
      ctx.fillRect(xOrigin,Math.min(yEntry,ySl),xRight-xOrigin,Math.abs(yEntry-ySl)||1);
@@ -18583,7 +18722,7 @@ function drawTpSlZoneBox(ctx,opts){
      const pipsVal=(sl-entry)/pipSizeForAsset(assetKey);
      // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
      const slEuroTxt=soldiLivello(sl,stopProfit?'+':'-');
-     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
+     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${opts.origine?` · ${opts.origine}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
    }
  }
  // Separatore tratteggiato bianco all'entrata (come la linea centrale dello strumento
@@ -19088,14 +19227,41 @@ function aggiornaRischioRealeQuick(){
  el.title='Con '+fmtLottiQuick(lots)+(krakenModoOrdini()?' monete':' lot')+' e lo stop a '+fmtPrice(sl)+' rischi '+importoRischio(r)+' = '+r.pct.toFixed(2)+'% del saldo'
   +(krakenModoOrdini()?(' di '+krakenNome()):'')+'.';
 }
-// Stop o target messo sul grafico (anche trascinato): il lotto si ricalcola da solo dal rischio %.
+// Stop o target messo sul grafico (anche trascinato): il lottaggio NON si tocca, si dice soltanto
+// quanto verrebbe consigliato.
+//
+// RICHIESTA ESPLICITA DEL PROPRIETARIO, che questo codice applica: «il lottaggio viene esclusivamente
+// modificato solo se l'utente preme direttamente dentro la casella e inserisce lui un valore, oppure
+// solo quando ha scritto quello che è il rischio in percentuale e poi clicca il bottone lottaggio
+// [...] e non deve scrivere direttamente quello che è il lottaggio in maniera automatica quando io
+// vado a posizionare quello che è lo stop loss prima di aprire un'operazione. No. Prima posiziono
+// lo stop loss, poi scrivo il rischio, pigio il pulsante e allora a quel punto mi farà vedere il
+// lottaggio consigliato».
+//
+// QUI C'ERA IL DIFETTO, ed è misurabile. La funzione scriveva il numero dentro il campo Lottaggio:
+// posizionando lo stop compariva un lottaggio "già pronto" che l'utente non aveva scelto, e quel
+// numero finiva nell'ordine al primo click. Il rischio vero non era quello scritto nella casella
+// RISCHIO, era quello di un numero apparso da solo. Misurato sul banco (EUR/USD a 1.1000, rischio
+// 1% su 10.000): mettere lo stop a 1.078 portava il campo da 0,07 a 0,05 senza che nessuno avesse
+// premuto niente; sull'ordine pendente da 0,07 a 0,03. Peggio, il numero non era nemmeno stabile:
+// dipendeva da quale livello fosse stato toccato per ultimo, quindi due caselle diverse potevano
+// mostrarlo in momenti diversi.
+//
+// ADESSO calcola il consiglio (serve al messaggio, ed è la base del pulsante che applica) ma non
+// scrive niente. Il campo Lottaggio si cambia in due modi e in due soli, entrambi con un dito
+// dell'utente sopra: scrivendo il numero nella casella, o premendo il pulsante del lottaggio
+// consigliato. "Consigliato" e "impostato" sono due cose diverse, e solo la seconda va nell'ordine.
 function autoLottoDaGrafico(pending){
  const s=pending?computeSuggestedLotsPending():computeSuggestedLots();
  if(!s)return '';
- $(pending?'lotsPending':'lots').value=s.lots;
+ // Il riquadro "quanto perdo/guadagno" e l'indicatore di rischio vero della barra restano
+ // aggiornati: cambiano quando cambia lo stop e descrivono il lottaggio ATTUALE, non quello
+ // consigliato. Sono letture, non scritture.
  try{ updateQuickTradeBar(); }catch(e){}
  try{ if(pending)refreshSlTpEuroPreviewPending(); else refreshSlTpEuroPreview(); }catch(e){}
- return ' Lotto: '+fmtLottiQuick(s.lots)+(s.kraken?' monete':' lot')+' (rischio '+s.riskPct.toFixed(2)+'% = '+importoRischio(s)+(s.sottoMinimo?', ⚠️ minimo del contratto: il rischio vero e\' più alto':'')+(s.cappedByMargin?', ridotto dal margine':'')+').';
+ return ' Consigliato '+fmtLottiQuick(s.lots)+(s.kraken?' monete':' lot')+' per un rischio del '+s.riskPct.toFixed(2)+'% = '+importoRischio(s)
+  +(s.sottoMinimo?', ⚠️ minimo del contratto: il rischio vero è più alto':'')+(s.cappedByMargin?', ridotto dal margine':'')
+  +'. Non è stato impostato: per applicarlo premi il pulsante del lottaggio consigliato.';
 }
 function computeSuggestedLots(){
  const riskPct=num($('risk')?.value);
@@ -20121,7 +20287,7 @@ function activatePendingOrder(p){
    rrSl:p.sl
  };
  // Pendente nato da un segnale: la posizione eredita sala, gruppo e target (strategia, Journal).
- ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
+ ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
  positions.push(pos);
  active=pos;
  playOrderSound();
@@ -24653,6 +24819,156 @@ $('chartFontScaleResetBtn')?.addEventListener('click',()=>{
  if($('chartFontScalePct'))$('chartFontScalePct').value=100;
  applyChartFontScaleFromInput(); draw(); scheduleSave();
 });
+// ===================== SCALA DELL'INTERFACCIA (percentuale, Impostazioni → Stile) =========
+// RICHIESTO dal proprietario (18 ottobre 2026): «dimensioni in percentuale in Impostazioni →
+// Stile; carattere più piccolo sul telefono» e «Ctrl+rotellina su PC, dita su telefono/tablet,
+// per tutta la pagina MA ESCLUSO il grafico». Il trucco è misurato, non inventato: zoom CSS su
+// <body> (con body{zoom:1.5} un overlay position:fixed inset:0 copre il viewport ESATTO e le
+// modali restano centrate; la pagina scorre in verticale; il contenuto ingrandito non viene
+// tagliato ma si adatta per riflusso, come una finestra più stretta). Il grafico NON segue la
+// pagina: #chartWrap riceve il contro-zoom (1/scala) e basta - la larghezza NON va detta a
+// mano: con il contro-zoom il riempimento si riattingua da solo, perché la finestra locale
+// (viewport diviso la scala) si stringe quanto la scala allarga. Misurato nella pagina vera:
+// a 130% il grafico da 1234 px è tornato 1214 (sempre lo stesso posto), mentre la pagina è
+// cresciuta del 30%: l'esclusione chiesta dal proprietario, ottenuta per geometria. Le
+// misure stanno nel test laboratorio/app/scala_ui.test.mjs,
+// che estrae il blocco qui sotto e lo prova per intero, poi apre la pagina vera in Chromium.
+/* SCALA UI: INIZIO — blocco provato per intero da laboratorio/app/scala_ui.test.mjs con
+   magazzino, documento e finestra finti: ogni funzione prende l'ambiente dai suoi parametri. */
+let fblScalaUi=100; // percentuale viva
+const FBL_UI_SCALA_KEY='fbl_ui_scala_pct';
+function fblScalaUiMin(){ return 70; }
+function fblScalaUiMax(){ return 150; }
+function fblScalaUiAttuale(){ return fblScalaUi; }
+function fblScalaUiTocco(nav,fin){
+ // telefono o tablet: il carattere si parte più piccolo. Prima il Client Hint, poi il tocco
+ // grosso - lo stesso criterio del riconoscimento hardware della porta d'ingresso.
+ try{ if(nav&&nav.userAgentData&&nav.userAgentData.mobile===true)return true; }catch(e){}
+ try{ if(fin&&fin.matchMedia&&fin.matchMedia('(pointer: coarse)').matches)return true; }catch(e){}
+ return false;
+}
+function fblScalaUiPredefinita(nav,fin){ return fblScalaUiTocco(nav,fin)?85:100; }
+function fblScalaUiLeggi(mag,nav,fin){
+ // dal magazzino del dispositivo; un valore fuori misura si butta e si riparte dal predefinito
+ let v=NaN;
+ try{ v=Number(mag&&mag.getItem(FBL_UI_SCALA_KEY)); }catch(e){}
+ if(!Number.isFinite(v)||v<fblScalaUiMin()||v>fblScalaUiMax())return fblScalaUiPredefinita(nav,fin);
+ return Math.round(v/5)*5;
+}
+function fblScalaUiAggiornaCampo(doc,v){
+ try{
+  const inp=doc.getElementById('fblUiScalaPct');
+  if(inp)inp.value=String(v);
+ }catch(e){}
+}
+function fblScalaUiApplica(doc,pct){
+ const n=Number(pct);
+ const v=Math.max(fblScalaUiMin(),Math.min(fblScalaUiMax(),Math.round(Number.isFinite(n)?n:fblScalaUiPredefinita())));
+ fblScalaUi=v;
+ const s=v/100;
+ try{ doc.body.style.zoom=(s===1)?'':String(s); }catch(e){}
+ try{
+  const cw=doc.getElementById('chartWrap');
+  // contro-zoom: «tutta la pagina MA ESCLUSO il grafico», parola per parola. La larghezza NON
+  // va detta a mano: con il contro-zoom il riempimento si riattingua da solo, perché la
+  // finestra locale (viewport diviso la scala) si stringe quanto la scala allarga - misurato
+  // nella pagina vera, a 130% il grafico da 1234 px è tornato 1214, cioè sempre allo stesso
+  // posto, mentre la pagina è cresciuta del 30%. (Una larghezza forzata ai px del pannello,
+  // provata prima, lo aveva invece rimpicciolito a 934: il pannello vive nel viewport, che
+  // con lo zoom si stringe - l'errore l'aveva beccato il test.)
+  if(cw)cw.style.zoom=(s===1)?'':String(1/s);
+ }catch(e){}
+ fblScalaUiAggiornaCampo(doc,v);
+ return v;
+}
+function fblScalaUiSalva(mag,pct){
+ try{ mag&&mag.setItem(FBL_UI_SCALA_KEY,String(pct)); }catch(e){}
+}
+function fblScalaUiAdattaGrafico(doc){
+ // Il grafico si ri-aggancia da solo quando la finestra cambia misura: un resize finto gli
+ // basta (lo ascolta la libreria del grafico) e gli toglie l'eventuale ritaglio sul bordo
+ // destro causato dal cambio di misura della colonna. Durante il pizzico non serve: la
+ // chiamata arriva a fine gesto, un resize per ogni movimento sarebbe solo rumore.
+ try{
+  if(fblScalaUi!==100&&doc.defaultView&&typeof doc.defaultView.dispatchEvent==='function'){
+   doc.defaultView.dispatchEvent(new Event('resize'));
+  }
+ }catch(e){}
+}
+function fblScalaUiVaria(mag,doc,delta){
+ const v=fblScalaUiApplica(doc,fblScalaUi+delta);
+ fblScalaUiSalva(mag,v);
+ fblScalaUiAdattaGrafico(doc);
+ return v;
+}
+function fblScalaUiImposta(mag,doc,pct){
+ const v=fblScalaUiApplica(doc,pct);
+ fblScalaUiSalva(mag,v);
+ fblScalaUiAdattaGrafico(doc);
+ return v;
+}
+function fblScalaUiDentroGrafico(target,doc){
+ // Il gesto che comincia sopra il grafico è del grafico: la pagina non si tocca.
+ try{
+  const cw=doc.getElementById('chartWrap');
+  if(!cw||!target||typeof target.closest!=='function')return false;
+  return target.closest('#chartWrap')===cw;
+ }catch(e){ return false; }
+}
+function fblScalaUiGesti(fin,doc,mag){
+ // Ctrl+rotellina (e il pinch del trackpad, che Chrome consegna come wheel+ctrl): la pagina la
+ // zoomiamo noi, in percentuale e ricordata. Sopra il grafico resta come è sempre stato.
+ try{
+  fin.addEventListener('wheel',e=>{
+   if(!(e.ctrlKey||e.metaKey))return;
+   e.preventDefault();
+   if(fblScalaUiDentroGrafico(e.target,doc))return;
+   fblScalaUiVaria(mag,doc,e.deltaY<0?5:-5);
+  },{passive:false});
+ }catch(e){}
+ // Due dita (pizzico) su telefono e tablet: stesso effetto, stessa memoria.
+ let d0=null,s0=100;
+ const dist=t=>{ const dx=t[0].clientX-t[1].clientX, dy=t[0].clientY-t[1].clientY; return Math.sqrt(dx*dx+dy*dy); };
+ try{
+  fin.addEventListener('touchstart',e=>{
+   const t=e.touches;
+   if(t&&t.length===2&&dist(t)>0&&!fblScalaUiDentroGrafico(t[0].target,doc)){ d0=dist(t); s0=fblScalaUi; }
+  },{passive:true});
+  fin.addEventListener('touchmove',e=>{
+   if(d0===null||!e.touches||e.touches.length!==2)return;
+   e.preventDefault();
+   const d=dist(e.touches);
+   if(d>0)fblScalaUiApplica(doc,s0*(d/d0));
+  },{passive:false});
+  const chiudi=()=>{ if(d0!==null){ d0=null; fblScalaUiSalva(mag,fblScalaUi); fblScalaUiAdattaGrafico(doc); } };
+  fin.addEventListener('touchend',chiudi,{passive:true});
+  fin.addEventListener('touchcancel',chiudi,{passive:true});
+ }catch(e){}
+}
+function fblScalaUiAvvia(fin,doc,mag,nav){
+ // Alla carica della pagina: la scala salvata (o 85 sul telefono, 100 sul computer) si applica
+ // subito, e i gesti ci sono da subito.
+ const v=fblScalaUiLeggi(mag,nav,fin);
+ fblScalaUiApplica(doc,v);
+ fblScalaUiGesti(fin,doc,mag);
+ return v;
+}
+/* SCALA UI: FINE */
+// Aggancio: subito, a parse-time, perché questo script sta DOPO il markup (gli elementi esistono
+// già) e il grafico deve trovare il contro-zoom già a posto quando si aggancia.
+try{ fblScalaUiAvvia(window,document,localStorage,navigator); }catch(e){}
+// Il campo in Impostazioni → Stile (stesso pattern di chartFontScalePct qui sopra): il valore
+// però sta nel magazzino del dispositivo, non nella sessione - è una preferenza del device.
+if($('fblUiScalaPct'))$('fblUiScalaPct').value=fblScalaUiAttuale();
+$('fblUiScalaPct')?.addEventListener('input',()=>{
+ const v=num($('fblUiScalaPct')?.value);
+ if(Number.isFinite(v))fblScalaUiImposta(localStorage,document,v);
+});
+$('fblUiScalaResetBtn')?.addEventListener('click',()=>{
+ const d=fblScalaUiPredefinita(navigator,window);
+ if($('fblUiScalaPct'))$('fblUiScalaPct').value=d;
+ fblScalaUiImposta(localStorage,document,d);
+});
 // ===================== MODALE "⚙️ IMPOSTAZIONI" (apertura/chiusura + schede esterne
 // Style/Griglia/Notizie + sotto-schede di Style) — RISTRUTTURATO (RICHIESTO ESPLICITAMENTE):
 // prima erano 3 pulsanti/modali separati (#chartStyleBtn, #gridDensityBtn con modale proprio non
@@ -26601,7 +26917,10 @@ let tgTrascina=null, tgRidim=null;
 function tgRischioTotale(){
  let v=NaN;
  try{ v=Number(localStorage.getItem(TG_RISCHIO_KEY)); }catch(e){}
- return (Number.isFinite(v)&&v>0)?Math.min(20,v):1;
+ // TETTO AL 100% (19 ottobre 2026, richiesta esplicita: «la percentuale sia di rischio che del
+ // capitale può essere impostata fino al 100% e non fino al tetto massimo del 20%»). Prima era 20:
+ // oltre, una sala con target lontani non poteva mai essere aperta con la percentuale che voleva.
+ return (Number.isFinite(v)&&v>0)?Math.min(100,v):1;
 }
 // Un segnale non aperto si disattiva da solo dopo un minuto (aperto: e' gia' "eseguito").
 const TG_SEGNALE_VALIDO_MS=60000;
@@ -27358,7 +27677,7 @@ $('tgCfgRischio')?.addEventListener('input',()=>{
  if(!tgCfg)return;
  const v=Number($('tgCfgRischio').value);
  if(Number.isFinite(v)&&v>0){
-  tgCfg.pct=Math.min(20,v);
+  tgCfg.pct=Math.min(100,v);
   // Ricordato come punto di partenza per il prossimo segnale: chi rischia l'1% lo rischia quasi
   // sempre, e riscriverlo ogni volta e' solo un modo per sbagliarlo prima o poi.
   try{ localStorage.setItem(TG_RISCHIO_KEY,String(tgCfg.pct)); }catch(e){}
@@ -28318,7 +28637,7 @@ async function tgCapitalEseguiSegnale(voce,o){
   const pos={id:Date.now()+Math.random(),asset:o.sym,side:p.side,entry:p.entry,sl:p.sl,
    tp:(Number.isFinite(tp)?tp:null),origin:'MARKET',lots:p.lotti,risk:0,dist:0,hasRiskModel:false,
    start:idx,startTime:Date.now(),openTF:currentTF,marginUsed:Number(p.margine)||0,account:'capital',
-   tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id};
+   tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
   pos.rrSl=pos.sl;
   positions.push(pos);
   aperte++;
@@ -28907,7 +29226,7 @@ function tgAutoDisegna(){
   ri.type='number'; ri.min='0.1'; ri.max='20'; ri.step='0.1'; ri.className='tgCfgIn tgCfgNum';
   ri.style.width='68px'; ri.value=uni?u.rischio:cfg.rischio; ri.disabled=!cfg.attivo||uni;
   ri.title='Percentuale per ogni segnale di questa sala, divisa fra le posizioni che apre';
-  ri.addEventListener('change',()=>{ const v=Number(ri.value); if(v>0)cfg.rischio=Math.min(20,v); tgAutoSalva(); tgAutoDisegna(); });
+  ri.addEventListener('change',()=>{ const v=Number(ri.value); if(v>0)cfg.rischio=Math.min(100,v); tgAutoSalva(); tgAutoDisegna(); });
   tdR.appendChild(ri); tdR.appendChild(document.createTextNode(' % '));
   // CHE COSA E' QUEL NUMERO (vedi tgBaseLotto). Sta QUI, attaccato alla percentuale, e non in una
   // schermata a parte: un numero e la sua unita' di misura separati sono il modo piu' sicuro per
@@ -29029,7 +29348,7 @@ $('tgAutoTpExtra')?.addEventListener('change',()=>{
 });
 $('tgAutoRischioSenzaSl')?.addEventListener('change',()=>{
  const v=Math.round(Number($('tgAutoRischioSenzaSl').value)*10)/10;
- if(v>0)tgAuto.rischioSenzaSl=Math.min(20,v);
+ if(v>0)tgAuto.rischioSenzaSl=Math.min(100,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoMaxGlob')?.addEventListener('change',()=>{
@@ -29063,7 +29382,7 @@ $('tgAutoUniAttiva')?.addEventListener('change',()=>{
 });
 $('tgAutoUniRischio')?.addEventListener('change',()=>{
  const v=Math.round(Number($('tgAutoUniRischio').value)*10)/10;
- if(v>0)tgAutoUni().rischio=Math.min(20,v);
+ if(v>0)tgAutoUni().rischio=Math.min(100,v);
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoUniMax')?.addEventListener('change',()=>{
@@ -29624,22 +29943,26 @@ async function fblRemotoLeggi(){
    // computer" mandava a cercare sul PC un guasto che non c'era, con l'applicazione gia' aperta.
    if(ind)ind.innerHTML='Su <b>questo dispositivo</b> non risponde nessun servizio. '
     +'Se sei <b>sul computer</b>: avvia l\'applicazione. '
-    +'Se sei su <b>telefono o tablet</b> è normale: scrivi indirizzo e chiave in «Su telefono o tablet» qui sotto.';
+    +'Se sei su <b>telefono o tablet</b> è normale: qui non gira l\'applicazione (MT5). Con lo stesso account Google server e chiave arrivano in automatico sotto «📱 Il server».';
    return;
   }
   const d=r.data||{};
   if($('fblRemotoAttivo'))$('fblRemotoAttivo').checked=!!d.rete;
-  // La chiave si vede solo da QUESTO computer: la pagina la chiede al suo stesso ponte, che
-  // risponde alle richieste locali. Da un altro dispositivo questo riquadro resta chiuso, perche'
-  // la risposta non arriva - ed e' giusto cosi', non e' una chiave da girare in giro.
-  fblChiavePcMostra(d.chiave||'');
+  // NE' la chiave NE' il nome del server si mostrano più da nessuna parte (18/10/2026):
+  // «sul pc ancora vedo la chiave e il nome del server! NO! non devono essere visualizzati,
+  // perche' la chiave circola dentro l'account e il server che lo trasmette ai dispositivi».
+  // Il riquadro della chiave resta chiuso (fblChiavePcMostra('') lo nasconde) e tra
+  // dispositivi il collegamento cloud fa da tramite.
+  fblChiavePcMostra('');
   try{ fblTsDisegna(d); }catch(e){ console.log('[Accesso remoto] stato di Tailscale non mostrato:',e); }
   try{ fblGuidaDisegna(); }catch(e){}
   if(ind){
    const nome=((d.tailscale||{}).nome)||'';
+   // Il nome non si scrive più a mano sul tablet: con lo stesso account Google il tablet lo
+   // riceve insieme alla chiave dal collegamento cloud. Qui si dice solo che la strada c'è.
    ind.innerHTML=nome
-    ? 'Sul tablet, come <b>nome del computer</b>, scrivi: <b>'+fbEsc(nome)+'</b>'
-    : 'Il nome da scrivere sul tablet comparirà qui quando Tailscale sarà installato e collegato su questo computer.';
+    ? 'Questo computer è collegato. Sul tablet o telefono, con lo <b>stesso account Google</b>, server e chiave <b>arrivano in automatico</b>: non c\'è nulla da scrivere.'
+    : 'Il collegamento con gli altri dispositivi comparirà qui quando Tailscale sarà installato e collegato su questo computer.';
   }
  }catch(e){ if(ind)ind.textContent='Servizio non raggiungibile: '+(e&&e.message||e); }
 }
@@ -29677,8 +30000,10 @@ function fblTsDisegna(d){
  const righe=porte.map(p=>'• <b>'+p+'</b> '+FBL_NOMI_PORTA[p]+' — '
    +(serve[p]?'raggiungibile in https':'<b style="color:#ff9d7b">non raggiungibile</b>')).join('<br>');
  box.className='fblMuro'+((acceso&&tutte)?' ok':(acceso?' blocca':''));
- box.innerHTML='<b>'+((acceso&&tutte)?'✓ ':'')+'Tailscale collegato.</b> Nome di questo computer: <b>'+fbEsc(ts.nome)+'</b>'
-  +'<div class="fblMuroAzioni"><button type="button" id="fblTsCopiaNome" class="miniBtn">Copia il nome</button></div>'
+ // Il nome di questo computer (che è anche quello che altrove si scriverebbe a mano) non si
+ // mostra più (18/10/2026): lo porta il collegamento cloud a chi ha lo stesso account.
+ // Il bottone «Copia il nome» resta spento: senza nome mostrato non c'è nulla da copiare.
+ box.innerHTML='<b>'+((acceso&&tutte)?'✓ ':'')+'Tailscale collegato.</b>'
   +(acceso
     ? '<div style="margin-top:6px">'+righe+'</div>'
       +(tutte?'':'<div style="margin-top:4px"><b style="color:#ff9d7b">Mancano delle regole.</b> '
@@ -29725,9 +30050,9 @@ function fblPassiTelefono(){
    perche:'Con un account diverso i due dispositivi finiscono in due reti separate e non si vedono.'},
   {t:'Apri il <b>sito di sempre</b> ed entra con il tuo account, come sul computer.',
    perche:'Stesso sito, stesso login: niente indirizzi da ricordare e niente da installare in più.'},
-  {t:'Vai su <b>Collegamento / Modalità</b> → <b>«📱 Accesso da altri dispositivi»</b> e, in <b>«Il server»</b>, scrivi <b>nome</b> e <b>chiave del server</b>. Nient\'altro.',
-   perche:'Del computer non serve più sapere niente: si è già presentato al server da solo, e il server sa dove trovarlo anche per gli ordini MT5.',
-   fatto:()=>{ try{ return /\.ts\.net$/.test(fblNormalizzaHost($('fblServerCampo')?.value))&&!!($('fblServerChiaveCampo')?.value||'').trim(); }catch(e){ return false; } }},
+  {t:'Vai su <b>Collegamento / Modalità</b> → <b>«📱 Accesso da altri dispositivi»</b>: nome e chiave del server <b>arrivano da soli</b> con lo stesso account Google. Non si scrive niente.',
+   perche:'È il computer che si presenta al server da solo, e il server sa dove trovarlo anche per gli ordini MT5. Se qui non arriva nulla, il computer non ha ancora salvato il server (passo 5 lì sopra).',
+   fatto:()=>{ try{ return !!fblServer()&&!!fblServerChiave(); }catch(e){ return false; } }},
   {t:'Premi <b>«Salva»</b>, poi guarda in alto le tre righe: <b>ordini</b>, <b>grafico</b>, <b>segnali</b>.',
    perche:'Si aggiornano da sole ogni pochi secondi. Tre pallini verdi vogliono dire che è tutto a posto; uno rosso dice subito quale pezzo manca, senza indovinare.'},
   {t:'Se il browser chiede di <b>accedere ai dispositivi della rete locale</b>, rispondi <b>Consenti</b>.',
@@ -29768,7 +30093,7 @@ function fblGuidaDisegna(){
  if(aiuto)aiuto.innerHTML='<b>Se «Prova il collegamento» non riesce</b>, quasi sempre è uno di questi: '
   +'Tailscale spento, o con un account diverso, su uno dei due dispositivi (passi 1 e 6); '
   +'l’applicazione chiusa sul computer (passo 3); l’interruttore spento (passo 4); il nome scritto male (passo 8). '
-  +'Se invece risponde <b>«Rifiutato»</b>, il computer c’è ma la chiave non gli torna: ricopiala dal passo 5.';
+  +'Se invece risponde <b>«Rifiutato»</b>, il computer c’è ma la chiave non gli torna: salva di nuovo il server sul computer (passo 5) e gli altri dispositivi la ricevono in automatico.';
 }
 // I segni verdi devono seguire quello che si fa mentre lo si fa, non solo all'apertura.
 ['fblRemotoAttivo','fblServerCampo','fblServerChiaveCampo'].forEach(id=>{
@@ -29807,7 +30132,7 @@ $('fblRemotoAttivo')?.addEventListener('change',async ()=>{
   const nome=((ts.stato||{}).nome)||'';
   if(ts.ok){
    if(es)es.innerHTML=acceso
-    ? '<b style="color:#4ecb83">Acceso.</b> Sul tablet scrivi il nome <b>'+fbEsc(nome)+'</b> e la chiave qui sotto. Non serve riavviare niente.'
+    ? '<b style="color:#4ecb83">Acceso.</b> Sul tablet o telefono, con lo stesso account Google, server e chiave arrivano in automatico. Non serve riavviare niente.'
     : '<b>Spento.</b> Nessun altro dispositivo raggiunge più questo computer.';
   }else if(ts.link){
    // HTTPS non ancora abilitato nella rete Tailscale: e' il caso della prima volta.
@@ -29899,8 +30224,11 @@ $('fblServerSalva')?.addEventListener('click',()=>{
   if(v.host){ localStorage.setItem(FBL_SERVER_KEY,v.host); localStorage.setItem(FBL_SERVER_CHIAVE_KEY,v.chiave); }
   else{ localStorage.removeItem(FBL_SERVER_KEY); localStorage.removeItem(FBL_SERVER_CHIAVE_KEY); }
  }catch(e){}
+ // Il nome e la chiave del server non si mostrano più da nessuna parte (18/10/2026): agli
+ // altri dispositivi dello stesso account passano attraverso il collegamento cloud.
+ try{ fblCollegamentoPubblica(window.fxbtCloud,localStorage); }catch(e){}
  fblServerCampiLeggi();
- $('fblServerEsito').textContent=v.host?('Salvato: Kraken e segnali passano da '+v.host+'.'):'Server tolto: tutto torna sul computer.';
+ $('fblServerEsito').textContent=v.host?'Salvato: Kraken e segnali passano dal server.':'Server tolto: tutto torna sul computer.';
  try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
  try{ if(typeof tgAttivo==='function'&&tgAttivo()&&typeof tgCollega==='function')tgCollega(); }catch(e){}
  try{ krakenAggiornaConto(); }catch(e){}
@@ -29915,9 +30243,11 @@ $('fblRemotoSalva')?.addEventListener('click',async ()=>{
   if(v.host){ localStorage.setItem(FBL_SERVER_KEY,v.host); localStorage.setItem(FBL_SERVER_CHIAVE_KEY,v.chiave); }
   else{ localStorage.removeItem(FBL_SERVER_KEY); localStorage.removeItem(FBL_SERVER_CHIAVE_KEY); }
  }catch(e){}
+ // Anche qui il collegamento cloud porta il server agli altri dispositivi (18/10/2026).
+ try{ fblCollegamentoPubblica(window.fxbtCloud,localStorage); }catch(e){}
  fblServerCampiLeggi();
  $('fblRemotoEsito').innerHTML=v.host
-  ? 'Salvato: Kraken e le sale segnali passano da <b>'+fbEsc(v.host)+'</b>.'
+  ? 'Salvato: Kraken e le sale segnali passano dal server.'
   : 'Server tolto: torna tutto sul computer.';
  // Le prese aperte puntano ancora al vecchio indirizzo: si riaprono.
  try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
@@ -30376,12 +30706,14 @@ function tgTpSenzaNullaPct(A){
 // Il pareggio anticipato si esprime come percentuale della strada verso il target (vedi
 // tgLivelloAvvicinamento): 20% dello stop con target al 30% = 66,7% della strada.
 function tgAvvicinamentoSenzaTp(A){ return tgBeSenzaTpPct(A)/tgTpSenzaTpPct(A)*100; }
-// Rischio quando la sala non da' lo stop (RICHIESTO: 1% del conto di predefinito), al posto del
-// rischio della sala: lo stop e' calcolato dall'app, quindi la perdita massima la decide questo.
+// Rischio quando la sala non da' lo stop: lo stop e' calcolato dall'app, quindi la perdita massima
+// la decide questo numero, non la sala.
+// Tetto portato a 100% il 19 ottobre 2026 insieme a tutti gli altri (era 20%): «la percentuale sia
+// di rischio che del capitale può essere impostata fino al 100%».
 function tgRischioSenzaSl(A){
  A=A||tgAuto;
  const v=Number(A&&A.rischioSenzaSl);
- return (Number.isFinite(v)&&v>0)?Math.min(20,v):1;
+ return (Number.isFinite(v)&&v>0)?Math.min(100,v):1;
 }
 // Lotto per posizione con cui si calcola lo stop quando la sala non lo da': sempre il minimo (0,01),
 // che a parita' di perdita massima mette lo stop il piu' lontano possibile. Il campo per cambiarlo
@@ -30448,14 +30780,23 @@ function tgPiano(seg,sym,pctForzata,opz){
   return {problemi:['l\'entrata della sala ('+tgFmt(Number(seg.entrata))+') è a '
     +(Math.abs(Number(seg.entrata)-mercato)/mercato*100).toFixed(1)+'% dal prezzo di '+sym+' ('+tgFmt(mercato)
     +'), oltre il '+maxScarto+'% ammesso: segnale scartato']};
- // QUANTO PUO' ESSERE LONTANO UNO STOP PRIMA DI NON ESSERE PIU' UN PREZZO. Il tetto era 20% per
- // tutti, e sulle cripto e' troppo stretto: provando l'esempio del proprietario (SOL a 120 con
- // stop a 93, cioe' -22,5%) il segnale veniva RIFIUTATO in partenza, prima ancora di arrivare al
- // lottaggio. Uno stop al 22% su una cripto non e' un errore di battitura: e' un martedi'. Sul
- // forex invece 20% resta larghissimo, e li' non si tocca niente.
- // Il tetto serve contro i numeri che non sono prezzi (e' nato da "XAUUSD entrata 4" con l'oro a
- // 4000), non contro gli stop larghi: si allarga dove il mercato e' largo, non si toglie.
- const maxStop=/BTC|ETH|SOL|XRP|LTC|DOGE|ADA|BNB|CRYPTO/i.test(String(sym||''))?40:20;
+ // QUANTO PUO' ESSERE LONTANO UNO STOP PRIMA DI NON ESSERE PIU' UN PREZZO.
+ //
+ // RICHIESTA DEL PROPRIETARIO (19 ottobre 2026), su un caso reale: «mi arriva un segnale e non me
+ // lo apre perché dice non si può aprire, lo stop loss della sala settato a 0 e a 100% dal prezzo
+ // di SOL/USDT a 0,99, oltre il 20% ammesso, non è un prezzo vero». Il tetto era 40% sulle cripto
+ // e 20% su tutto il resto, e una sala che non dà lo stop (o lo dà a 0) veniva respinta in
+ // partenza, prima ancora di arrivare al lottaggio. Ora il tetto è 100% per TUTTI, cripto e forex:
+ // è la distanza massima che un prezzo può avere da un altro, quindi non esclude più nessuno stop
+ // che sia ancora un prezzo.
+ //
+ // LA DIFESA PER I NUMERI CHE NON SONO PREZZI non è qui: sta sul controllo dell'ENTRATA
+ // (`maxScarto` sopra, 1% e 3%), che è quello che scarta le sciocchezze vere — il caso da cui era
+ // nato questo tetto, «XAUUSD entrata 4 con l'oro a 4000». Un segnale con l'entrata giusta e lo
+ // stop a un valore assurdo ora passa: è il prezzo della richiesta, e va detto al proprietario
+ // perché è una difesa che si è abbassata. Se un giorno serve tornare stretto qui, il posto è
+ // questo numero e non altro.
+ const maxStop=100;
  if(lontano(seg.stop_loss,maxStop))
   return {problemi:['lo stop loss della sala ('+tgFmt(Number(seg.stop_loss))+') è a '
     +(Math.abs(Number(seg.stop_loss)-mercato)/mercato*100).toFixed(1)+'% dal prezzo di '+sym+' ('+tgFmt(mercato)
@@ -30532,7 +30873,9 @@ function tgPiano(seg,sym,pctForzata,opz){
  const scartati=tutti.filter(v=>!!validateTradeLevel(side,entry,NaN,v));
  if(tp.length>maxN)tp=tp.slice(0,maxN);
  let n=Math.max(1,tp.length);
- const pct=((Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(20,pctForzata):tgRischioTotale())/parti;
+ // Tetto 100% (19 ottobre 2026, era 20%): la percentuale con cui si apre una posizione può valere
+ // quanto tutto il capitale, se e' quello che il proprietario ha scritto nella configurazione.
+ const pct=((Number.isFinite(pctForzata)&&pctForzata>0)?Math.min(100,pctForzata):tgRischioTotale())/parti;
  const saldo=saldoConto();
  const importoTot=saldo*pct/100;
  const perLotto=valoreA(entry,sl,1);
@@ -30729,7 +31072,7 @@ async function tgEseguiSegnale(voce,opzioni){
    voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
    break;
   }
-  const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id};
+  const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
   // Ordine limite/stop della sala: ordine PENDENTE al suo prezzo (vero su MT5, simulato altrimenti).
   if(p.pendente){
    if(reale){
@@ -31640,6 +31983,93 @@ async function fblRegistraSulServer(utente){
  }catch(e){}
  return '';
 }
+/* COLLEGAMENTO CLOUD: INIZIO — host e chiave del server girano DENTRO l'account Google
+   (users/{uid}/data/collegamento): chi salva il server sul PC li pubblica, gli altri
+   dispositivi dello stesso account li ricevono da soli. Richiesto dal proprietario il
+   18/10/2026: «sui dispositivi mobili ... non mi trasferisce in automatico la chiave ...
+   sul pc ancora vedo la chiave e il nome del server! NO! non devono essere visualizzati,
+   perche' la chiave circola dentro l'account e il server che lo trasmette ai dispositivi».
+   Tutto qui sotto e' estratto e provato per intero da
+   laboratorio/app/collegamento_cloud.test.mjs, con magazzini e «nuvola» finti: le due
+   chiavi arrivano dal test come parametri. */
+function fblCollegamentoHostValido(host){
+ // Solo nome tailscale, entro la lunghezza di un nome DNS: il documento arriva da un altro
+ // dispositivo, e fidarsi senza controllare e' peggio che non riceverlo affatto.
+ return typeof host==='string'&&host.length>0&&host.length<=255&&/^[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net$/.test(host);
+}
+function fblCollegamentoPrepara(store){
+ // Cosa QUESTO dispositivo puo' pubblicare: solo un collegamento COMPLETO (host E chiave),
+ // altrimenti si ingannerebbe chi lo riceve. Con la memoria negata (modalita' privata) si
+ // ritorna null, che qui significa «niente da pubblicare», non un errore.
+ try{
+  const host=String(store.getItem(FBL_SERVER_KEY)||'').trim();
+  const chiave=String(store.getItem(FBL_SERVER_CHIAVE_KEY)||'').trim();
+  if(!fblCollegamentoHostValido(host)||!chiave||chiave.length>300)return null;
+  return {host,chiave};
+ }catch(e){ return null; }
+}
+function fblCollegamentoRicevi(doc,store){
+ // Un documento dalla nuvola si accetta SOLO intero e ben formato: un mezzo collegamento
+ // sovrascriverebbe uno gia' buono con uno che non funziona. I campi si scrivono alla fine,
+ // mai a metà.
+ try{
+  if(!doc||typeof doc!=='object')return false;
+  const host=String(typeof doc.host==='string'?doc.host:'').trim();
+  const chiave=String(typeof doc.chiave==='string'?doc.chiave:'').trim();
+  if(!fblCollegamentoHostValido(host)||!chiave||chiave.length>300)return false;
+  store.setItem(FBL_SERVER_KEY,host);
+  store.setItem(FBL_SERVER_CHIAVE_KEY,chiave);
+  return true;
+ }catch(e){ return false; }
+}
+function fblCollegamentoServeAvviso(store){
+ // Serve l'avviso di primo accesso finche' il collegamento non e' completo: senza server
+ // questo dispositivo fa solo backtest e sessione Capital.com, e lo deve sapere.
+ return fblCollegamentoPrepara(store)===null;
+}
+function fblCollegamentoPubblica(cloud,store){
+ // Il PC, quando salva il server, lo mette sull'account: da lì in poi tutti gli altri
+ // dispositivi dello stesso account lo ricevono senza digitare niente.
+ try{
+  if(!cloud||typeof cloud.collegamentoSalva!=='function')return false;
+  const p=fblCollegamentoPrepara(store);
+  if(!p)return false;
+  const r=cloud.collegamentoSalva({host:p.host,chiave:p.chiave,aggiornato:Date.now()});
+  if(r&&typeof r.catch==='function')r.catch(e=>console.warn('[Collegamento cloud] pubblicazione fallita:',e));
+  return true;
+ }catch(e){ return false; }
+}
+function fblCollegamentoAvvia(cloud,store,cb){
+ // Si ascolta il proprio account: ogni documento valido riempie il magazzino di QUESTO
+ // dispositivo e accende il segnale (cb) che fa ripartire la registrazione sul server.
+ // Una nuvola che non sa parlare non deve bloccare l'avvio dell'app: si ritorna null e basta.
+ try{
+  if(!cloud||typeof cloud.collegamentoAscolta!=='function')return null;
+  return cloud.collegamentoAscolta(doc=>{
+   try{ if(fblCollegamentoRicevi(doc,store)&&typeof cb==='function')cb(); }catch(e){}
+  });
+ }catch(e){ return null; }
+}
+/* COLLEGAMENTO CLOUD: FINE */
+// L'avviso di primo accesso (il banner in cima). Non fa parte del blocco provato dal test:
+// là si decide se serve (fblCollegamentoServeAvviso), qui si disegna.
+function fblCollegamentoAvviso(acceso){
+ try{
+  let box=document.getElementById('fblAvvisoCollegamento');
+  if(!acceso){ if(box)box.style.display='none'; return; }
+  if(box){ box.style.display='block'; return; }
+  box=document.createElement('div');
+  box.id='fblAvvisoCollegamento';
+  box.innerHTML='<span class="fbl-x" title="Chiudi">×</span>'
+   +'<b>Server non collegato.</b> Ordini, MT5, Kraken e grafico collegato passano dal server, '
+   +'che si salva una volta sola sul computer. Gli altri dispositivi dello <b>stesso account '
+   +'Google</b> lo ricevono in automatico: niente nome e chiave da scrivere. Finché non '
+   +'arriva, <b>backtest e sessione Capital.com</b> funzionano già.';
+  document.body.appendChild(box);
+  const x=box.querySelector('.fbl-x');
+  if(x)x.addEventListener('click',()=>{ box.style.display='none'; });
+ }catch(e){}
+}
 function fblServerConChiave(url){
  const k=fblServerChiave();
  return k?url+(url.indexOf('?')>=0?'&':'?')+'chiave='+encodeURIComponent(k):url;
@@ -31673,7 +32103,7 @@ async function fetchServerWithTimeout(path,options,timeoutMs){
   return {ok:true,data};
  }catch(e){
   return {ok:false,message:e.name==='AbortError'?'Il server non ha risposto in tempo.'
-   :'Server non raggiungibile su '+fblServerUrl(8000)+' (Tailscale acceso su questo dispositivo?).'};
+   :'Server non raggiungibile (Tailscale acceso su questo dispositivo?).'};
  }finally{ clearTimeout(timer); }
 }
 // Dal PC si parla in http con 127.0.0.1. Da qualunque altro dispositivo SOLO attraverso Tailscale
@@ -33553,7 +33983,7 @@ async function fetchMt5Orders(){
            start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
            marginUsed:0,mt5Ticket:triggered.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
          };
-         ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
+         ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
          pos.rrSl=pos.sl;
          mt5AllineaApertura(pos,triggered);
          positions.push(pos);
@@ -34513,6 +34943,11 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
    const newLastRow=mergedLiveRows[mergedLiveRows.length-1];
    console.log('[LiveResync]',{asset,isSameLiveSeries,prevRows:prevLiveFile.rows.length,fetchedRows:liveRows.length,mergedRows:mergedLiveRows.length,prevLast:prevLastRow&&prevLastRow.date,newLast:newLastRow&&newLastRow.date});
  }
+ // STESSA COSA DEL PERCORSO MT5 (vedi il commento più indietro, in __loadLiveHistoryFromMt5Body):
+ // se l'utente ha cambiato asset mentre questa risposta era in arrivo, il documento è vecchio e
+ // non deve scrivere il grafico. Senza questo controllo, cambiando asset con Capital.com si
+ // vedevano i due grafici uno dopo l'altro — e le posizioni fuori scala, per lo stesso motivo.
+ if(asset!==currentAssetKey)return;
  const __tMergeStart=performance.now();
  csvLibrary=[{id:'capital_live_'+asset,name:`Capital.com Live (${epic})`,addedAt:Date.now(),rows:mergedLiveRows}];
  rebuildBaseRowsFromLibrary();
@@ -38178,6 +38613,32 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    $('status').textContent='⚠️ Storico MT5 non scaricato: '+e.message;
    finishAssetSwitchDrawings(asset); // uscita anticipata: ricarica i disegni salvati del nuovo asset PRIMA di sbloccare (mai sovrascriverli)
    return;
+ }
+ // SEGNALATO DAL PROPRIETARIO: «cambiando asset restano TUTTI E DUE i grafici [...] vedremo delle
+ // candele di un asset e delle candele di un altro. No, dobbiamo fare in modo che quando passa
+ // smette di visualizzare l'asset precedente e carica quello che l'utente ha selezionato
+ // successivamente. Mai far comparire due grafici, due asset nello stesso grafico, assolutamente».
+ //
+ // LA CAUSA, qui dentro: la richiesta dello storico è lenta (il server può rispondere in qualche
+ // secondo), e nel frattempo l'utente cambia asset. Quando la risposta vecchia arriva, questa
+ // funzione scriveva le sue candele dentro `csvLibrary` SENZA chiedere se quell'asset è ancora
+ // quello a schermo: il grafico tornava indietro sull'asset precedente, e poi quello nuovo lo
+ // rimandava avanti. Le due risposte si rincorrono e l'utente le vede entrambe.
+ //
+ // E non è solo un difetto di disegno: è anche quello delle posizioni fuori scala. Con il grafico
+ // pieno di dati di un asset e `currentAssetKey` puntato a un altro, le posizioni vengono disegnate
+ // con una scala di prezzi e i dati dell'altra — una BUY su XAUUSD (prezzo oltre 4000) finiva
+ // sulla fascia di AUDCAD (0,98), che è esattamente quanto segnalato.
+ //
+ // LA REGOLA: una risposta che arriva quando l'utente ha già cambiato asset è un documento
+ // vecchio. Si butta via, come si butta via una risposta arrivata fuori sequenza. Non è una
+ // cancellazione di dati: quel caricamento ripartirà comunque, e per l'asset giusto, dalla
+ // richiesta che l'utente ha fatto davvero. Stesso trattamento del `guardianoCandeleMt5` più
+ // sotto, che già fa questo controllo per la singola candela: era lui l'unico ad averlo, lo
+ // storico ne era rimasto senza.
+ if(asset!==currentAssetKey){
+  finishAssetSwitchDrawings(asset); // comunque si libera il blocco del cambio asset
+  return;
  }
  const mt5Rows=(body.candles||[]).map(c=>({
    date:new Date(c.time*1000).toISOString(),
@@ -44126,6 +44587,8 @@ new MutationObserver(muts=>{ muts.forEach(m=>m.addedNodes.forEach(n=>{ if(n.node
 
 <!-- ===== PWA: registrazione service worker (cache offline + installabilità ===== -->
 <script>
+/* PWA AGGIORNAMENTO: INIZIO — blocco provato per intero da laboratorio/app/aggiornamento.test.mjs
+   con finestra, documento e navigator finti; i due test finali aprono la pagina vera in Chromium. */
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     // {updateViaCache:'none'} — CORREZIONE per chi apre l'app da un hosting su cui non
@@ -44145,12 +44608,34 @@ if ('serviceWorker' in navigator) {
       // l'app funziona comunque, semplicemente senza cache offline / install PWA.
     });
   });
-  // VERSIONE NUOVA PRONTA — si dice, non si ricarica di nascosto.
-  // Da quando sw.js mostra subito la copia salvata (per non lasciare il telefono fermo sul logo
-  // davanti a 4 MB da scaricare), una pagina già aperta continua a usare la versione vecchia
-  // finché non la si riapre. Quando arriva quella nuova lo si fa sapere, e la ricarica la decide
-  // chi sta usando l'app: ricaricare da soli mentre si guarda una posizione aperta sarebbe peggio
-  // del problema che risolve.
+
+  // CONTROLLO PERIODICO — il pezzo che mancava, e senza il quale «Disponibile una nuova
+  // versione» NON ARRIVEREBBE MAI: il browser confronta sw.js con quello installato solo
+  // quando una pagina si naviga o quando lo si chiede con registration.update(), e questa
+  // app (pensata per restare aperta ore o giorni) non naviga quasi mai. Si chiede ogni
+  // mezz'ora, ogni volta che la scheda torna in primo piano e ogni volta che torna il fuoco
+  // sulla finestra, con un minuto di tregua per non bombardare la rete a ogni cambio di
+  // finestra. Se una versione nuova esiste, ci pensa sw.js: installa, pulisce le cache
+  // vecchie e manda il messaggio qui sotto.
+  let ultimoControllo = 0;
+  const controllaAggiornamento = () => {
+    if (document.hidden) return;                    // scheda nascusta: non si spreca rete
+    const adesso = Date.now();
+    if (adesso - ultimoControllo < 60000) return;   // un minuto di tregua tra due controlli
+    ultimoControllo = adesso;
+    navigator.serviceWorker.getRegistration()
+      .then((r) => { if (r) r.update(); })
+      .catch(() => {});
+  };
+  setInterval(controllaAggiornamento, 30 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => controllaAggiornamento());
+  window.addEventListener('focus', controllaAggiornamento);
+
+  // VERSIONE NUOVA PRONTA — si dice, non si ricarica di nascosto: ricaricare da soli mentre
+  // si guarda una posizione aperta sarebbe peggio del problema che risolve. Il messaggio
+  // arriva SOLO quando sw.js ha già installato la versione nuova e pulito le cache vecchie,
+  // quindi premere «Aggiorna» basta: la ricarica trova subito i file nuovi e l'app riparte
+  // aggiornata, da sola e senza barre di progresso inventate.
   navigator.serviceWorker.addEventListener('message', (ev) => {
     if (!ev.data || ev.data.tipo !== 'versione-nuova') return;
     if (document.getElementById('fblVersioneNuova')) return;   // una volta sola
@@ -44160,9 +44645,9 @@ if ('serviceWorker' in navigator) {
       + 'display:flex;align-items:center;gap:10px;background:#132018;border:1px solid #2f6b4a;'
       + 'border-radius:10px;padding:9px 12px;font-size:12.5px;color:#e8edf3;max-width:92vw;'
       + 'box-shadow:0 10px 30px rgba(0,0,0,.5)';
-    b.innerHTML = '<span>È pronta una versione aggiornata dell\'app.</span>'
+    b.innerHTML = '<span>Disponibile una nuova versione.</span>'
       + '<button type="button" id="fblVersioneRicarica" style="padding:5px 11px;border-radius:7px;'
-      + 'border:1px solid #3ea6ff;background:#277d5a;color:#fff;font-weight:700;cursor:pointer">Ricarica</button>'
+      + 'border:1px solid #3ea6ff;background:#277d5a;color:#fff;font-weight:700;cursor:pointer">Aggiorna</button>'
       + '<button type="button" id="fblVersionePoi" style="padding:5px 9px;border-radius:7px;'
       + 'border:1px solid #2c3a4f;background:transparent;color:#a7b1bf;cursor:pointer">Più tardi</button>';
     document.body.appendChild(b);
@@ -44170,6 +44655,7 @@ if ('serviceWorker' in navigator) {
     document.getElementById('fblVersionePoi').addEventListener('click', () => b.remove());
   });
 }
+/* PWA AGGIORNAMENTO: FINE */
 
 // ===== Popup personalizzato "Installa l'app" =====
 // Perché serve: Chrome mostra il SUO banner automatico di installazione solo quando decide
@@ -44280,7 +44766,7 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
      <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8b96a5;font-weight:700">CONTO INIZIALE (€)
       <input id="fblRendCapitale" type="number" min="100" step="100" value="10000" style="width:130px"></label>
      <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8b96a5;font-weight:700">PERCENTUALE PER SEGNALE (%)
-      <input id="fblRendRischio" type="number" min="0.1" max="20" step="0.1" value="1" style="width:110px"></label>
+      <input id="fblRendRischio" type="number" min="0.1" max="100" step="0.1" value="1" style="width:110px"></label>
      <!-- La stessa scelta della riga della sala (vedi tgBaseLotto): quel numero e' quanto PERDI
           se parte lo stop, oppure quanto VALE la posizione? Sta qui perche' da qui si salva nella
           strategia della sala, e salvare una percentuale senza la sua unita' di misura vorrebbe
@@ -45124,7 +45610,7 @@ async function salvaStrategiaNellaSala(){
  const n=stratQuantiTp(ris,sala);
  const cfgCrono=stratDallaUi(n);
  stratSalva(sala,cfgCrono);                       // resta anche qui, per riaprire la cronologia
- const rischio=Math.max(0.01,Math.min(20,Number($('fblRendRischio')?.value)||1));
+ const rischio=Math.max(0.01,Math.min(100,Number($('fblRendRischio')?.value)||1));
  // LA BASE e IL PAREGGIO ANTICIPATO mancavano, ed e' proprio quello che non arrivava nella sala.
  // Segnalato dal proprietario: "quando premiamo salva configurazione deve trasferire TUTTO nella
  // strategia di quella sala: come si esegue, la distribuzione, lo stop a pareggio prima del TP1

@@ -1207,3 +1207,50 @@ scrive UTF-8, non con comandi di riga che ereditano la codifica della console.
 **diventare rossi** prima della correzione. La sintassi dell'intero modulo di login.html è
 verificata a parte con `node --check` (nessun test la compila per intero).
 
+## 19 ottobre 2026 - v2.0.3: posizionare lo stop non scrive più il lottaggio
+
+**«il lottaggio viene esclusivamente modificato solo se l'utente preme direttamente dentro la casella
+e inserisce lui un valore, oppure solo quando ha scritto quello che è il rischio in percentuale e poi
+clicca il bottone lottaggio […] non deve scrivere direttamente quello che è il lottaggio in maniera
+automatica quando io vado a posizionare quello che è lo stop loss prima di aprire un'operazione. No.
+Prima posiziono lo stop loss, poi scrivo il rischio, pigio il pulsante e allora a quel punto mi farà
+vedere il lottaggio consigliato.**
+
+**Il difetto, e dove stava.** Non era il calcolo: quello era giusto fin dall'inizio. Il difetto era
+che il risultato finiva **scritto**. La funzione `autoLottoDaGrafico()` chiudeva con
+`$(pending?'lotsPending':'lots').value=s.lots`, e veniva chiamata dai tre punti in cui si posiziona
+un livello **prima** di aprire un ordine: lo stop a mercato (con o senza posizione attiva), lo
+stop/target dell'ordine pendente e l'entrata del pendente. Perciò mettere lo stop faceva comparire
+un lottaggio «già pronto» che l'utente non aveva scelto — e quel numero andava nell'ordine al primo
+click, perché il campo Lottaggio è proprio quello che `openMarketTrade()` e
+`createPendingOrder()` leggono.
+
+**Misurato prima di correggere** (EUR/USD a 1.1000, saldo 10.000, rischio 1%, conto da 0,07 scritto
+a mano): stop a 1.078 → il campo passa a **0,05**. Ordine pendente con stop a 1.073 → **0,03**.
+Nessun click dell'utente, in entrambi i casi.
+
+**Il peggio, che il numero non era nemmeno stabile.** Il campo dipendeva da *quale livello fosse
+stato toccato per ultimo*: mettere lo stop e poi il target restituiva indietro il consiglio del
+target, quindi due caselle diverse mostravano numeri diversi nello stesso momento. Non era un
+valore stabile su cui ragionare, e quindi nemmeno correggibile a mente.
+
+**La correzione.** `autoLottoDaGrafico()` calcola ancora il consiglio — serve al messaggio in basso e
+resta la base del pulsante che applica — ma non scrive niente. Il messaggio è cambiato con la
+parola giusta: prima diceva «Lotto: 0,05 lot (rischio 1,00% = 100,00 $)», adesso dice «**Consigliato**
+0,05 lot per un rischio del 1,00% = 100,00 $. **Non è stato impostato**: per applicarlo premi il
+pulsante del lottaggio consigliato». Restano aggiornati i riquadri che sono **letture** (quanto
+perdo/guadagno, rischio vero del lotto attuale), che descrivono il lottaggio che c'è, non quello
+consigliato.
+
+**Verificato che non restasse nessun altro scrittore.** Un grep su tutto il file trova sei punti che
+scrivono un campo lottaggio, e sono tutti legittimi: la casella e i quattro pulsanti ﹀ / ︿ / ﹂ / ﹁
+(azioni dell'utente), i due pulsanti «APPLICA LOTTAGGIO CONSIGLIATO» (azioni dell'utente), più lo
+specchio che riflette il campo vero dentro la barra del grafico. Nessuna scrittura automatica.
+
+**Test.** `laboratorio/app/lottaggio_solo_su_richiesta.test.mjs`, 5 prove, e sono state **viste
+diventare rosse prima della correzione** (2 su 5, con il numero esatto nel messaggio: «0,05 invece
+di 0,07»). Coprono: lo stop a mercato, il target, lo stop e l'entrata dell'ordine pendente, il
+pulsante che continua ad applicare esattamente il consigliato, il numero scritto a mano che resta, e
+lo stop spostato dopo che la posizione è già aperta.
+
+

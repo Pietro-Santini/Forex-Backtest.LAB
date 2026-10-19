@@ -3,6 +3,34 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **Le candele del grafico erano sfasate di 8h20** - risolto 2.0.2 - 18 ottobre 2026,
+  segnalato con «XAU/USD chiude alle 04:55 su MT5, qui alle 13:15 sull'app». Causa misurata:
+  `_server_time_offset_seconds()` (`mt5_feed_server.py` per le candele, `bridge.py` per
+  posizioni e ordini pendenti) calcolava lo scarto fra orologio server e UTC come
+  `tick.time - time.time()` su QUALUNQUE tick, anche uno lasciato indietro da ore: con la
+  chiusura giornaliera dell'oro il tick aveva 8h20 di età e quella età sostituiva il fuso
+  reale. Ora la misura ha una guardia a 4 livelli: tick fresco → scarto vero (griglia 1800 s
+  dei broker); altro simbolo che quota adesso → il suo orologio fa da misura per tutti;
+  scan Market Watch al più una volta al minuto; altrimenti 0 o l'ultimo scarto buono, mai un
+  numero a caso. Test: `laboratorio/ponte/test_scarto_server.py` (12 prove, con `time` e
+  `MetaTrader5` finti, gira anche su CI Ubuntu).
+- **Il riquadro dell'installazione da telefono sbagliava su certi dispositivi Android** -
+  risolto 2.0.2 - 18 ottobre 2026, `index.html`. Sintomo: «Non c'è una versione installabile
+  per questo dispositivo» su Android, e «resta sul web invece di riaprire l'app» dopo il login.
+  Causa: `piattaforma()` guardava solo `navigator.userAgent`, e certi browser/webview Android
+  non si dichiarano tali — il riquadro cadeva nel ramo «altro» e l'intent verso l'app non
+  partiva mai. Ora, falliti i nomi, si guarda l'hardware (`userAgentData.mobile`, oppure
+  tocco + `pointer:coarse`): quel telefono riceve la porta Android e l'offerta dell'APK.
+  Test: `laboratorio/app/porta_dopo_login.test.mjs` (i tre casi «UA senza nomi»).
+- **Login Google da telefono: pagina «400» di Google al primo accesso** - limite noto, non
+  risolvibile da noi - 18 ottobre 2026, APK. Dopo l'installazione il primo accesso con
+  l'account Google finisce su una pagina di errore **400** mostrata da `accounts.google.com`
+  (si vede nell'indirizzo), non dall'app; premendo «Indietro» e riprovando il login riesce.
+  Causa: la prima apertura interrompe la continuità OAuth di Google (il browser interno
+  dell'APK non ha ancora la sessione pending, e Google rifiuta la richiesta in corso con il
+  suo 4 corposo); al secondo tentativo la sessione c'è e il flusso va a buon fine. Nessun
+  rimedio in codice: è «riprova e funziona», documentato qui perché non sembri un guasto
+  dell'app.
 - **Il login con Google su telefono e tablet non veniva mai eseguito** - risolto 2.0.1 - 18
   ottobre 2026, segnalato con due errori ("Unable to process request due to missing initial state"
   e "Impossibile raggiungere il sito / Connessione negata da localhost"). DUE cause misurate, tutte
@@ -208,6 +236,27 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Nel cloud si collauda l'interprete sui messaggi registrati.
 
 ## Risolti
+- **Posizionare lo Stop Loss scriveva il lottaggio da solo** — risolto 2.0.3 — 19 ottobre 2026,
+  segnalato con «il lottaggio viene esclusivamente modificato solo se l'utente preme direttamente
+  dentro la casella e inserisce lui un valore, oppure solo quando ha scritto quello che è il rischio
+  in percentuale e poi clicca il bottone lottaggio […] e non deve scrivere direttamente quello che è
+  il lottaggio in maniera automatica quando io vado a posizionare quello che è lo stop loss prima di
+  aprire un'operazione». Causa vera: la funzione `autoLottoDaGrafico()`, chiamata dai TRE punti in
+  cui si posiziona un livello prima di aprire un ordine (stop a mercato, stop/target dell'ordine
+  pendente, entrata del pendente), finiva con `$(pending?'lotsPending':'lots').value=s.lots` —
+  cioè scriveva il numero calcolato dentro il campo Lottaggio. A schermo compariva un lottaggio
+  «già pronto» che l'utente non aveva scelto, e quel numero finiva nell'ordine al primo click: il
+  rischio vero non era quello scritto nella casella RISCHIO. MISURATO sul banco (EUR/USD a 1.1000,
+  rischio 1% su 10.000): mettere lo stop a 1.078 portava il campo da **0,07 a 0,05** senza che
+  nessuno avesse premuto niente; sull'ordine pendente da **0,07 a 0,03**. Peggio, il numero non
+  era stabile: dipendeva da quale livello fosse stato toccato per ultimo, quindi due caselle
+  diverse potevano mostrarlo in momenti diversi. Ora la funzione calcola il consiglio (serve al
+  messaggio in basso e resta la base del pulsante che applica) ma **non scrive niente**; il
+  messaggio dice «Consigliato 0,05 lot […] Non è stato impostato». Verificato con un grep su
+  tutto il file: i sei punti rimasti che scrivono un campo lottaggio sono tutti specchi o azioni
+  esplicite (la casella, i quattro pulsanti ﹀/︿/﹂/﹁, i due pulsanti «APPLICA LOTTAGGIO
+  CONSIGLIATO»). Test: `laboratorio/app/lottaggio_solo_su_richiesta.test.mjs` (5 prove, viste
+  rosse prima della correzione).
 - **Il Setup non si costruiva su GitHub: «ERRORE: manca build\app.html. Scarica tutto il progetto
   (non solo installer_build)»** — risolto v168 — 17 ottobre 2026, scoperto solo alla pubblicazione,
   non in locale — la riga che copia `app.html` dentro `installer_build\build\` conteneva un a capo

@@ -97,11 +97,16 @@ test('il rapporto fra le due basi segue la larghezza dello stop', async () => {
   } finally { await browser.close(); }
 });
 
-test('uno stop al 22% su una cripto non è un errore di battitura: si apre', async () => {
-  // SCOPERTO scrivendo questi test: l'esempio del proprietario (SOL a 120, stop a 93 = -22,5%)
-  // veniva RIFIUTATO in partenza, prima ancora di arrivare al lottaggio, perche' il tetto "questo
-  // non e' un prezzo vero" era 20% per tutti. Sulle cripto e' troppo stretto. Ora e' 40% la', 20%
-  // sul resto: il tetto serve contro i numeri che non sono prezzi, non contro gli stop larghi.
+test('uno stop può arrivare al 100% dal prezzo: il tetto non esclude più nessuno stop', async () => {
+  // CAMBIAMENTO DEL 19 OTTOBRE 2026, su richiesta esplicita del proprietario e su un caso reale:
+  // «mi arriva un segnale e non me lo apre perché dice non si può aprire, lo stop loss della sala
+  // settato a 0 e a 100% dal prezzo di SOL/USDT a 0,99, oltre il 20% ammesso, non è un prezzo
+  // vero». Il tetto era 40% sulle cripto e 20% sul resto: una sala che non dà lo stop veniva
+  // respinta in partenza, prima ancora di arrivare al lottaggio.
+  //
+  // Prima questo test diceva il contrario («al 50% no: lì non è più un prezzo») e sarebbe
+  // diventato verde senza accorgersene solo se il tetto fosse rimasto. Ora dice la cosa giusta:
+  // uno stop al 99% è ancora un prezzo, e passa.
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(`{
@@ -109,12 +114,37 @@ test('uno stop al 22% su una cripto non è un errore di battitura: si apre', asy
         {prezzo:120, saldo:10000, valore:(a,b,l)=>Math.abs(a-b)*l,
          passo:0.01, minimo:0.01, valuta:'USD', base:'capitale', entroRischio:true});
       ({cripto22: !fai('BINANCE:SOLUSDT', 93).problemi,
-        cripto50: !!(fai('BINANCE:SOLUSDT', 60).problemi||[]).length,
-        forex22:  !!(fai('XAUUSD', 93).problemi||[]).length})
+        cripto50: !fai('BINANCE:SOLUSDT', 60).problemi,
+        cripto99: !fai('BINANCE:SOLUSDT', 1.2).problemi,
+        forex22:  !fai('XAUUSD', 93).problemi,
+        forex99:  !fai('XAUUSD', 1.2).problemi})
     }`);
     assert.equal(r.cripto22, true, 'uno stop al 22,5% su una cripto deve passare');
-    assert.equal(r.cripto50, true, 'al 50% no: lì non è più un prezzo, ed è a quello che serve il tetto');
-    assert.equal(r.forex22, true, 'sul forex il tetto del 20% resta com’era');
+    assert.equal(r.cripto50, true, 'uno stop al 50% non è più un errore di battitura');
+    assert.equal(r.cripto99, true, 'uno stop al 99% è ancora un prezzo');
+    assert.equal(r.forex22, true, 'sul forex uno stop al 22% passa come prima');
+    assert.equal(r.forex99, true, 'sul forex il tetto ora è 100% come sulle cripto');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('i numeri che NON sono prezzi restano scartati: lo fa il controllo dell\'entrata', async () => {
+  // Il tetto sullo stop è salito a 100%, quindi la difesa contro i numeri assurdi non sta più lì:
+  // sta sul controllo dell'ENTRATA (3% sulle cripto, 1% sul resto). È il caso da cui era nato il
+  // tetto vecchio: «XAUUSD entrata 4 con l'oro a 4000». Qui si prova che quella rete è ancora
+  // viva, altrimenti alzare il tetto avrebbe spento il controllo invece di spostarlo.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(`{
+      const fai = (sym, entrata) => tgPiano({direzione:'BUY', entrata:entrata, stop_loss:110, take_profit:[150]}, sym, 5,
+        {prezzo:120, saldo:10000, valore:(a,b,l)=>Math.abs(a-b)*l,
+         passo:0.01, minimo:0.01, valuta:'USD', base:'capitale', entroRischio:true});
+      ({ingressoLontano: !!(fai('BINANCE:SOLUSDT', 3).problemi||[]).length,
+        ingressoGiusto:  !fai('BINANCE:SOLUSDT', 120).problemi})
+    }`);
+    assert.equal(r.ingressoLontano, true,
+      'un\'entrata lontanissima dal prezzo deve restare scartata: è il controllo che tiene al posto del tetto');
+    assert.equal(r.ingressoGiusto, true, 'un\'entrata al prezzo apre normale');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

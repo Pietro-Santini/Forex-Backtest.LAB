@@ -28,21 +28,34 @@ test('barra Kraken: lotto dal rischio, rischio vero, pendente inviato al ponte',
       const out = {};
       $('risk').value=1; $('lots').value=0.01;
       setTradeLevel('SL',79000);                       // stop a 1000 $ con saldo 10.000 e rischio 1%
+      // REGOLA DEL 19 OTTOBRE: mettere lo stop NON scrive il lottaggio. Prima questo test si
+      // appoggiava a quel comportamento (0,01 -> 0,10 da solo) e sarebbe diventato verde per la
+      // strada sbagliata. Qui si verifica che il campo resti com'è, e che sia il PULSANTE a
+      // trasformare la % di rischio in un lotto.
+      out.lottoDopoStop = Number($('lots').value);
+      $('applySuggestedLot').click();
       out.lotto = Number($('lots').value); out.rischio = $('quickRiskReale').textContent;
       $('quickLotsVal').value='0.2'; $('quickLotsVal').dispatchEvent(new Event('input'));
       out.rischioDoppio = $('quickRiskReale').textContent; out.sopra = $('quickRiskReale').classList.contains('sopra');
       $('sl').value=''; quickPendingConfirmActive=true; pendingOrderKind='LIMIT'; $('riskPending').value=1;
       setTradeLevel('ENTRY',79500); setTradeLevel('SL_PENDING',79000); setTradeLevel('TP_PENDING',81000);
+      // Come sopra: lo stop dell'ordine pendente non deve scrivere il suo lottaggio da solo.
+      out.lottoPendenteDopoStop = Number($('lotsPending').value);
+      $('applySuggestedLotPending').click();          // è il pulsante a scegliere il lotto
       out.lottoPendente = Number($('lotsPending').value);
       confirmPendingOrderFromFields(false); await new Promise(r=>setTimeout(r,300));
       out.inviato = window.__chiamate.filter(c=>c[0]==='/kraken/pendente').map(c=>c[1]);
       out.inAttesa = krakenPendenti.length;
       return out;
     });
+    assert.equal(r.lottoDopoStop, 0.01,
+      'posizionare lo stop ha scritto il lottaggio da solo: era '+r.lottoDopoStop+' invece di 0,01');
     assert.equal(r.lotto, 0.1);
     assert.equal(r.rischio, '= 1.00%');
     assert.equal(r.rischioDoppio, '= 2.00%');
     assert.equal(r.sopra, true);
+    assert.equal(r.lottoPendenteDopoStop, 1,
+      'lo stop del pendente ha scritto il lottaggio da solo: era '+r.lottoPendenteDopoStop+' invece di 1');
     assert.equal(r.lottoPendente, 0.2);
     assert.equal(r.inviato.length, 1);
     assert.deepEqual({lato:r.inviato[0].lato,tipo:r.inviato[0].tipo,entrata:r.inviato[0].entrata,sl:r.inviato[0].sl,tp:r.inviato[0].tp,q:r.inviato[0].quantita},

@@ -601,7 +601,13 @@
 //               pendenti. Quando non si sa si scrive "-", non "adesso": un orario inventato e'
 //               falso e per giunta credibile. Su Kraken la tabella legge la STESSA fonte che
 //               ancora la posizione alla candela, cosi' le due non possono dire cose diverse.
-const CACHE_NAME = "forex-backtest-lab-v2.0.1";
+//               (3) 19 OTTOBRE: posizionare lo STOP non scrive piu' il lOTTAGGIO. Prima, mettere
+//               lo stop (o il target, o l'entrata di un ordine pendente) faceva comparire nel
+//               campo Lottaggio un numero che l'utente non aveva scritto, e quel numero finiva
+//               nell'ordine al primo click. Ora il campo si tocca solo scrivendolo o premendo il
+//               pulsante del lottaggio consigliato; il messaggio dice "Consigliato ... Non e'
+//               stato impostato".
+const CACHE_NAME = "forex-backtest-lab-v2.0.3";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
@@ -624,7 +630,16 @@ const ASSETS = [
   "./icon-512.png"
 ];
 
+/* AGGIORNAMENTO SW: INIZIO — install e activate provati per intero da
+   laboratorio/app/aggiornamento.test.mjs, con caches e clients finti. */
+// ESISTE GIÀ UNA VERSIONE SUL DISPOSITIVO? In una primissima installazione
+// self.registration.active è null; in un AGGIORNAMENTO punta al worker vecchio. È l'unico
+// segnale affidabile per annunciare «versione-nuova» alle pagine aperte SOLO quando è vero:
+// alla prima apertura non c'è nulla di nuovo da dire.
+let aggiornamentoDiVersione = false;
+
 self.addEventListener("install", (event) => {
+  aggiornamentoDiVersione = !!self.registration.active;
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
   );
@@ -638,9 +653,23 @@ self.addEventListener("activate", (event) => {
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       )
     )
+      // L'AVVISO ARRIVA DOPO LA PULIZIA, non prima: quando l'utente preme «Aggiorna» la
+      // pagina si ricarica e caches.match cerca in TUTTE le cache — se le vecchie fossero
+      // ancora lì, la ricarica servirebbe di nuovo il file vecchio. E con includeUncontrolled
+      // l'elenco è completo anche prima del claim: subito dopo l'attivazione le pagine sono
+      // ancora controllate dal worker VECCHIO, e senza questa opzione l'elenco del nuovo
+      // worker sarebbe vuoto — l'avviso non arriverebbe mai a nessuno.
+      .then(() => self.clients.matchAll({includeUncontrolled: true}))
+      .then((clienti) => {
+        if (!aggiornamentoDiVersione) return;   // prima installazione: niente da annunciare
+        clienti.forEach((c) => {
+          try { c.postMessage({tipo: "versione-nuova"}); } catch (e) {}
+        });
+      })
   );
   self.clients.claim();
 });
+/* AGGIORNAMENTO SW: FINE */
 
 // MOSTRA SUBITO, AGGIORNA DIETRO.
 //
