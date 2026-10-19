@@ -40,21 +40,18 @@ test('con il server: Kraken e segnali al server con la sua chiave, ponte non avv
   } finally { await browser.close(); }
 });
 
-test('impostazioni: nome .ts.net obbligatorio, chiave obbligatoria, vuoto = tutto sul PC', async () => {
+test('impostazioni: non ci sono più campi nome/chiave del server', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(() => {
-      const out = {};
-      const salva = (h, k) => { $('fblServerCampo').value = h; $('fblServerChiaveCampo').value = k; $('fblServerSalva').click(); return localStorage.getItem('fbl_server_host'); };
-      localStorage.removeItem('fbl_server_host');
-      out.ip = salva('129.152.3.237', 'x');
-      out.senzaChiave = salva('srv.tail1.ts.net', '');
-      out.ok = salva('https://SRV.tail1.ts.net:8000/', 'chiave1');
-      out.chiave = localStorage.getItem('fbl_server_chiave');
-      out.vuoto = salva('', '');
-      return out;
+      const c = (id) => !!document.getElementById(id);
+      return {
+        campoServer: c('fblServerCampo'),
+        chiaveServer: c('fblServerChiaveCampo'),
+        salvaServer: c('fblServerSalva')
+      };
     });
-    assert.deepEqual(r, {ip:null, senzaChiave:null, ok:'srv.tail1.ts.net', chiave:'chiave1', vuoto:null});
+    assert.deepEqual(r, {campoServer:false, chiaveServer:false, salvaServer:true});
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

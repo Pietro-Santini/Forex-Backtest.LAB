@@ -286,6 +286,19 @@ Formato: data — chi — cosa — esito collaudo — commit.
   Tailscale, che per il PC di un altro utente non si puo' fare). Il modulo c'e' ed e' commentato,
   ma NON e' ancora collegato a ponte_server.py ne' all'app: non cambia niente di quello che gira.
 - 2026-10-14 - Claude - app v146 / Setup 1.0.146. Due difetti della selezione delle posizioni,
+- 2026-10-19 - Claude - app v2.0.4 / Setup 2.0.4. Molte correzioni su app.html, index.html, sw.js, installer.iss, mt5_feed_server.py, bridge.py:
+  1. Lottaggio non si scrive più da solo posizionando lo stop (difetto misurato: 0,07→0,05).
+  2. Cambio asset: mai due grafici, posizioni sulla scala giusta (difetto misurato: XAUUSD a 4000 su fascia AUDCAD 0,98).
+  3. Etichette TP1/TP2/TP3 e SL con origine (sala/manuale/sala di prova/non riconosciuta) sulle caselle grafiche.
+  4. Cronologia delle sale spostata fuori da Style, voce propria nella barra di sinistra con pop-up invariato.
+  5. Toggle: «mostra/nascondi etichette TP SL stop profit».
+  6. Tetti rischio/capitale e dello stop portati al 100% (cripto e forex).
+  7. Caricamento candele ridotto da 200.000 a max 5.000 (fattore 40 in meno di traffico).
+  8. Guardia freschezza server: rifiuta tick >24h, risolve sfascio di 48 ore sul grafico a mercato chiuso.
+  9. Orario vicino al numero ID: «apertura» per posizioni, «inserimento» per ordini pendenti.
+  10. Pannello «Accesso da altri dispositivi»: tolta sezione passo-passo Tailscale, riquadro chiave computer e campi nome/chiave visibili; tutto passa dal server.
+  11. Pulsante «Avvia i 7 Giorni Gratuiti»: scelta esplicita Android / iPhone-iPad-Mac / PC invece di indovinare il dispositivo.
+  Test: 21 prove nuove (lottaggio 5, cambio asset 3, etichette 6, ponte 105), collaudo browser in corso.
   segnalati insieme. (1) Una posizione si sceglieva da sola e nascondeva le altre: `active` faceva
   due mestieri (vedi BUG.md). Separato in `posSelezionata`, che la mette solo un clic. (2) Col dito
   il tocco sul vuoto non deselezionava: il gestore di pointerup esce prima per il touch e il blocco

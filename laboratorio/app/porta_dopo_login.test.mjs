@@ -41,8 +41,9 @@ const IPHONE  = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWeb
 
 // Ambiente come in porta_ingresso.test.mjs, con in piu' l'indirizzo della pagina (search,
 // pathname, hash), history.replaceState e document.readyState: sono le tre cose con cui la
-// porta decide se si e' appena arrivati dal login.
-function ambiente({userAgent, search = '', readyState = 'complete', fuoco = false}){
+// porta decide se si e' appena arrivati dal login. `hardware` finge l'hardware del dispositivo
+// (userAgentData, maxTouchPoints, matchMedia): serve ai test del riconoscimento senza nomi.
+function ambiente({userAgent, search = '', readyState = 'complete', fuoco = false, hardware = {}}){
   const box = {testo: '', azioni: []};
   const attese = [];
   const ascoltatori = [];
@@ -52,6 +53,7 @@ function ambiente({userAgent, search = '', readyState = 'complete', fuoco = fals
     addEventListener: (nome, f) => { if (nome === 'blur' && fuoco) f(); },
     location: {href: '', search, pathname: '/Forex-Backtest.LAB/', hash: ''},
     history: {replaceState: (_s, _t, u) => storicato.push(u)},
+    matchMedia: hardware.matchMedia,
   };
   const nodo = (sel) => sel.endsWith('-t')
     ? {set textContent(v){ box.testo = v; }, get textContent(){ return box.testo; }}
@@ -69,7 +71,9 @@ function ambiente({userAgent, search = '', readyState = 'complete', fuoco = fals
   };
   const esegui = new Function('window', 'document', 'navigator', 'setTimeout',
     PORTA + '; return window.FBL;');
-  const FBL = esegui(finestra, documento, {userAgent}, (f) => { attese.push(f); return attese.length; });
+  const FBL = esegui(finestra, documento,
+    {userAgent, userAgentData: hardware.userAgentData, maxTouchPoints: hardware.maxTouchPoints},
+    (f) => { attese.push(f); return attese.length; });
   return {
     FBL, finestra, box, storicato,
     paginaParsa: () => { documento.readyState = 'complete'; ascoltatori.splice(0).forEach(f => f()); },
@@ -153,4 +157,41 @@ test("parametri altrui non aprono la porta (solo dopo=login)", () => {
   const a = ambiente({userAgent: ANDROID, search: '?altro=1&x=dopo=login'});
   assert.equal(a.finestra.location.href, '',
     "un parametro che CONTIENE la parola dopo=login ha aperto la porta per caso");
+});
+
+// UN UA CHE MENTE NON DEVE PIU' PIANTARE IL TELEFONO SENZA VERSIONE.
+//
+// Richiesto dal proprietario (18 ottobre 2026): sul box installazione del telefono Android
+// compariva «Non c'e' una versione installabile per questo dispositivo». Causa misurata in
+// piattaforma(): guardava SOLO l'User-Agent, e certi browser e webview Android non dicono
+// «Android» (o lo nascondono): il riquadro cadeva nel ramo «altro» e mandava il telefono a
+// installare niente. Il rimedio guarda l'hardware - il flag mobile di userAgentData, oppure
+// tocco + schermo grosso - e questi test lo provano con un UA che mente.
+const SENZA_NOMI = 'Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
+
+test("UA senza nomi ma con userAgentData mobile: la porta android si apre comunque", () => {
+  const a = ambiente({userAgent: SENZA_NOMI, search: '?dopo=login',
+    hardware: {userAgentData: {mobile: true}}});
+  assert.match(a.finestra.location.href, /^intent:\/\/avvia#Intent;/,
+    "un telefono che non si dichiara Android resta senza porta: e' il difetto del box install");
+  assert.match(decodeURIComponent(a.finestra.location.href), /releases\/latest\/download\/[^&]+\.apk/,
+    "l'intento deve cadere sull'APK, che e' l'unica versione installabile del telefono");
+});
+
+test("UA senza nomi e niente userAgentData: tocco + schermo grosso bastano", () => {
+  const a = ambiente({userAgent: SENZA_NOMI, search: '?dopo=login',
+    hardware: {matchMedia: (q) => ({matches: /pointer:\s*coarse/.test(q)}), maxTouchPoints: 5}});
+  a.scatta();
+  assert.ok(a.box.azioni.some(x => /releases\/latest\/download\/[^&]+\.apk/.test(x.href || '')),
+    "il riquadro non propone l'APK a un telefono solo perche' il suo UA non si e' presentato");
+  assert.ok(a.box.azioni.some(x => x.testo === 'Continua col sito web'),
+    "anche a un telefono riconosciuto per hardware deve restare l'uscita verso il sito");
+});
+
+test("un desktop vero resta senza download per telefono: nessun APK a chi ha il mouse", () => {
+  const a = ambiente({userAgent: SENZA_NOMI, search: '?dopo=login',
+    hardware: {matchMedia: () => ({matches: false}), maxTouchPoints: 0}});
+  a.scatta();
+  assert.ok(!a.box.azioni.some(x => /\.apk|installer/i.test(x.testo)),
+    "un PC senza tocco non deve ricevere download per telefono o installer Windows inventati");
 });

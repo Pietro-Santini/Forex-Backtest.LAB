@@ -43,6 +43,8 @@ test("il pulsante della prova gratuita passa dalla porta e offre l'installazione
   try {
     assert.equal(await pagina.locator(RIQUADRO).count(), 0, 'riquadro presente prima di premere');
     await pagina.getByRole('button', {name: /Avvia Prova Gratuita di 7 Giorni/}).first().click();
+    // Il pulsante apre ora un modale di scelta piattaforma: si sceglie PC (Windows)
+    await pagina.getByRole('button', {name: 'PC (Windows)'}).first().click();
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
     // Il pulsante NON deve piu' portare via dalla landing verso login.html.
     assert.ok(pagina.url().includes('index.html'), 'la pagina se n\'e\' andata: ' + pagina.url());
@@ -80,7 +82,13 @@ test('su iPhone non si offre un download che non esiste', async () => {
   const {browser, pagina} = await apriLanding(UA_IPHONE);
   try {
     await pagina.getByRole('button', {name: /Avvia Prova Gratuita di 7 Giorni/}).first().click();
+    // Si apre il modale di scelta piattaforma: su iPhone si sceglie "iPhone, iPad, Mac"
+    // che non offre un download (nessun pacchetto esiste ancora).
+    await pagina.getByRole('button', {name: 'iPhone, iPad, Mac'}).first().click();
+    // Appare il modale con il messaggio di errore: nessun download per iPhone
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
+    const testo = await pagina.locator('#fblInstallBox-t').textContent();
+    assert.ok(/Non c'e' ancora una versione/.test(testo), 'messaggio mancante: ' + testo);
     const pulsanti = (await pagina.locator('#fblInstallBox a').allTextContents()).join(' | ');
     assert.ok(!/apk|installer/i.test(pulsanti), 'propone un download inesistente: ' + pulsanti);
   } finally { await browser.close(); }

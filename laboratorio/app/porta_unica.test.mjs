@@ -23,7 +23,7 @@ test('dalla schermata spariscono i campi e la chiave del computer', async () => 
       };
     });
     assert.deepEqual(r, {nomeComputer:false, chiaveComputer:false, chiaveDaRicopiare:false,
-                         cambiaChiave:false, nomeServer:true, chiaveServer:true, servizi:true});
+                         cambiaChiave:false, nomeServer:false, chiaveServer:false, servizi:true});
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

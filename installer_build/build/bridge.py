@@ -1579,6 +1579,59 @@ def _send_and_check(request: dict):
     return result
 
 
+def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
+    """Lo scarto server/UTC misurato da un epoch di tick SOLO se quell'epoch è davvero fresco,
+    altrimenti None.
+
+    Guardia del 18/10/2026 contro il difetto MISURATO sul grafico: un tick lasciato indietro da
+    8h20 (chiusura giornaliera di XAU/USD alle 04:55 del server, richiesta alle 13:15) veniva
+    usato comunque per calcolare lo scarto, e l'ETÀ del vecchio tick si sommava al fuso orario
+    reale — tutte le candele spostate di 8h20. Gli orologi dei broker cadono su ore o mezz'ore
+    intere (griglia 1800 s): con un epoch fresco il residuo dalla griglia è di secondi (jitter di
+    rete/IPC), con un epoch vecchio l'età si somma e il residuo diventa quasi sempre un numero
+    a caso — basta superare i 5 minuti. Stessa soglia (300 s) di _estimate_server_offset_seconds.
+    """
+    if not epoch:
+        return None
+    try:
+        grezzo = float(epoch) - now
+    except Exception:
+        return None
+    # La guardia deve respingere due cose: (1) un tick il cui residuo dalla griglia di mezz'ora
+    # e' troppo grande (non e' un orologio di broker), e (2) un tick troppo vecchio (eta' > 24h),
+    # perché anche un residuo piccolo puo' essere coincidenza su un tick lasciato indietro da giorni.
+    if abs(grezzo - round(grezzo / 1800.0) * 1800.0) > 300 or abs(grezzo) > 86400:
+        return None
+    # Al quarto d'ora come in mt5_feed_server.py (fix 17/10: al minuto le candele "saltavano").
+    return int(round(grezzo / 900.0)) * 900
+
+
+def _scarto_da_un_simbolo_quiunque(now) -> Optional[int]:
+    """Cerca un epoch fresco fra i simboli in lista (fino a 60): se anche solo UNO sta quotando
+    adesso, il suo orologio serve a misurare lo scarto per TUTTI (sono tutti sullo stesso server
+    broker). Ritorna None se non c'è niente di fresco — qui NON si indovina mai: a differenza di
+    _estimate_server_offset_seconds (deals), che per non lanciare eccezioni ricade sul valore
+    arrotondato "best effort", qui un numero indovinato sposterebbe l'ancoraggio di posizioni e
+    ordini pendenti sulla candela sbagliata."""
+    global _last_good_server_offset
+    try:
+        infos = list(mt5.symbols_get() or ())
+    except Exception:
+        return None
+    freshest = None
+    for info in infos[:60]:
+        try:
+            t = getattr(mt5.symbol_info_tick(info.name), "time", 0) or 0
+        except Exception:
+            continue
+        if t and (freshest is None or t > freshest):
+            freshest = t
+    scarto = _scarto_fresco_da_epoch(freshest, now)
+    if scarto is not None:
+        _last_good_server_offset = scarto
+    return scarto
+
+
 def _server_time_offset_seconds(tick) -> int:
     """BUG RISOLTO ("apro una posizione direttamente su MT5 e la freccia/casella di apertura
     non resta ferma sulla candela giusta: continua a spostarsi verso destra man mano che
@@ -1594,20 +1647,41 @@ def _server_time_offset_seconds(tick) -> int:
     del server (dato da un tick REALE appena letto, non da un valore statico/presunto — copre
     quindi anche l'ora legale) e l'orologio vero di questa macchina, e lo sottraiamo da 'time'
     prima di restituirlo all'app. Arrotondato al minuto: elimina il jitter di rete/IPC senza
-    intaccare la precisione richiesta (le candele sono comunque raggruppate per minuto)."""
-    if tick is None or not getattr(tick, "time", None):
-        return 0
-    try:
-        # Al quarto d'ora come in mt5_feed_server.py: un tick vecchio di oltre 30 s sbagliava di un minuto.
-        return round((tick.time - time.time()) / 900) * 900
-    except Exception:
-        return 0
+    intaccare la precisione richiesta (le candele sono comunque raggruppate per minuto).
+
+    AGGIORNATO 18/10/2026: il vecchio calcolo usava QUALUNQUE tick, anche uno vecchio di ore:
+    l'età del tick si sommava al fuso reale (stesso difetto misurato sul grafico: 8h20). Ora il
+    passo è: (1) il tick passato, ma solo se fresco; (2) l'ultimo scarto buono già misurato in
+    questo processo (_last_good_server_offset, condiviso con _estimate_server_offset_seconds);
+    (3) alla PRIMA chiamata senza memoria, uno scan del Market Watch al massimo una volta al
+    minuto (questa funzione gira a ogni polling di 2s dell'app); (4) se proprio non c'è niente di
+    fresco, 0 (server = UTC) — più sicuro di un numero indovinato, che ancorerebbe la freccia a
+    una candela inventata."""
+    global _last_good_server_offset, _ultima_ricerca_scarto
+    now = time.time()
+    scarto = _scarto_fresco_da_epoch(getattr(tick, "time", None), now)
+    if scarto is not None:
+        _last_good_server_offset = scarto
+        return scarto
+    if _last_good_server_offset is not None:
+        return _last_good_server_offset
+    # Prima misura del processo e tick non fresco: cerca tra gli altri simboli, ma al massimo
+    # una volta al minuto — il polling dell'app chiama questa funzione ogni 2s.
+    if now - _ultima_ricerca_scarto >= 60.0:
+        _ultima_ricerca_scarto = now
+        scarto = _scarto_da_un_simbolo_quiunque(now)
+        if scarto is not None:
+            return scarto
+    return 0
 
 
 # Ultimo scarto server/UTC misurato con un tick FRESCO (vedi _estimate_server_offset_seconds):
 # tenuto in memoria per poterlo riusare quando, in quel momento, nessun simbolo sta quotando
 # (mercato chiuso, weekend) e quindi nessun tick è abbastanza recente per rimisurarlo.
 _last_good_server_offset = None
+# Ultimo scan del Market Watch fatto da _server_time_offset_seconds (epoch time): serve a non
+# rifare 60 chiamate IPC a ogni giro di polling (2s) quando il mercato è chiuso.
+_ultima_ricerca_scarto = 0.0
 
 
 def _estimate_server_offset_seconds(preferred_symbols=()):

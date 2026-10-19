@@ -164,24 +164,103 @@ def _ensure_initialized():
         )
 
 
-def _server_time_offset_seconds(tick) -> int:
-    """Stessa identica logica di _server_time_offset_seconds() in bridge.py (vedi lì il
-    commento completo): l'orologio del server del broker spesso non è UTC. Calcoliamo lo scarto
-    da un tick REALE appena letto (copre quindi anche l'ora legale) e lo sottraiamo da ogni
-    timestamp prima di restituirlo, arrotondato al minuto per eliminare il jitter di rete/IPC."""
-    if tick is None or not getattr(tick, "time", None):
-        return 0
-    # ARROTONDATO AL QUARTO D'ORA, non piu' al minuto (SEGNALATO: "sul telefono le candele si
-    # fermano dopo un po' e si muovono solo a fine candela"). tick.time e' l'ora dell'ULTIMO tick:
-    # a mercato calmo puo' essere vecchio di oltre 30 s, e l'arrotondamento al minuto dava uno scarto
-    # sbagliato di un minuto intero - le candele "saltavano" avanti di un minuto e il telefono
-    # scartava i prezzi fino al ricaricamento di fine candela. Gli scarti dei broker sono ore intere
-    # (o mezz'ore): al quarto d'ora il risultato e' lo stesso con un tick vecchio fino a 7 minuti e
-    # con l'orologio del PC sbagliato di qualche minuto.
+# Ultimo scarto server/UTC misurato con un tick FRESCO in QUESTO processo (vedi
+# _server_time_offset_seconds): tenuto in memoria per poterlo riusare quando, in quel momento,
+# nessun simbolo sta quotando (chiusura quotidiana, notte, fine settimana) e quindi non c'e'
+# niente di fresco da cui rimisurarlo. Stessa riserva che bridge.py tiene per sé.
+_last_good_server_offset = None
+# Pausa (secondi) fra due scandagliamenti del mercato alla ricerca di un tick fresco: /history,
+# /ticks e il loop del WebSocket chiamano lo scarto spesso, e leggere i tick di 60 simboli via
+# IPC non deve girare a ogni chiamata — con lo scarto già misurato in memoria non serve nemmeno.
+_ultima_ricerca_scarto = 0.0
+
+
+def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
+    """Lo scarto orario reale (server - UTC), ma SOLO se quell'epoch e' abbastanza fresco da
+    poterlo misurare davvero; altrimenti None.
+
+    BUG RISOLTO (18 ottobre 2026, MISURATO: XAU/USD chiuso alle 04:55 del server, richiesta
+    alle 13:15 -> l'app mostrava le candele spostate di 8h20): qui dentro si faceva
+    `tick.time - time.time()` senza guardare quant' vecchio fosse quel tick, e l'ETA' del vecchio
+    tick veniva sottratta a ogni candela come se fosse il fuso orario del broker. La guardia e'
+    identica a quella che bridge.py applica da tempo ai soli deals (_estimate_server_offset_
+    seconds, "tick assente o vecchio -> scarto sbagliato"): il vero scarto di un server MT5 cade
+    sempre su ore o mezz'ore intere (EET/EEST: UTC+2/+3, a volte +4 o +5:30), quindi con un tick
+    fresco il residuo dalla griglia di mezz'ora e' di secondi (jitter di rete/IPC); con un tick
+    vecchio l'eta' si somma al residuo e il numero che esce e' un caso quasi sempre a caso — basta
+    superare i 5 minuti di eta' per non misurare piu' niente di vero."""
+    if not epoch:
+        return None
     try:
-        return round((tick.time - time.time()) / 900) * 900
+        grezzo = float(epoch) - now
+        allineato = round(grezzo / 1800.0) * 1800
     except Exception:
-        return 0
+        return None
+    # La guardia deve respingere due cose: (1) un tick il cui residuo dalla griglia di mezz'ora
+    # e' troppo grande (non e' un orologio di broker), e (2) un tick troppo vecchio (eta' > 24h),
+    # perché anche un residuo piccolo puo' essere coincidenza su un tick lasciato indietro da giorni.
+    if abs(grezzo - allineato) > 300 or abs(grezzo) > 86400:
+        return None
+    # Arrotondato al quarto d'ora per continuita' con la correzione del 17/10 ("sul telefono le
+    # candele si fermano dopo un po'"): con il residuo gia' limitato a 5 minuti dalla griglia di
+    # mezz'ora, arrotondare a 900 o a 1800 restituisce lo stesso numero.
+    return int(round(grezzo / 900.0)) * 900
+
+
+def _scarto_da_un_simbolo_quiunque(now) -> Optional[int]:
+    """Cerca un tick fresco fra i simboli in quotazione (prima quelli del Market Watch, poi gli
+    altri, fino a 60): se anche solo UNO sta scambiando adesso, il suo orologio di server vale
+    per TUTTI — tutti gli simboli dello stesso broker hanno lo stesso server, e un solo tick
+    recente basta a misurare lo scarto. Stesso trucco (e stesso tetto di 60 simboli) di
+    _estimate_server_offset_seconds in bridge.py. Ritorna None se non sta quotando nessuno: a
+    quel punto non c'e' proprio niente da misurare."""
+    try:
+        simboli = _mt5_call(mt5.symbols_get) or ()
+    except Exception:
+        return None
+    nomi = [i.name for i in simboli if getattr(i, "visible", False)]
+    if not nomi:
+        nomi = [i.name for i in simboli]
+    migliore = 0
+    for nome in nomi[:60]:
+        try:
+            tick = _mt5_call(mt5.symbol_info_tick, nome)
+        except Exception:
+            continue
+        t = getattr(tick, "time", 0) if tick is not None else 0
+        if t and t > migliore:
+            migliore = t
+    return _scarto_fresco_da_epoch(migliore, now)
+
+
+def _server_time_offset_seconds(tick) -> int:
+    """Stessa identica logica di _server_time_offset_seconds() in bridge.py (vedi lì il commento
+    completo): l'orologio del server del broker spesso non è UTC. Calcoliamo lo scarto da un tick
+    REALE e lo sottraiamo da ogni timestamp prima di restituirlo (copre quindi anche l'ora
+    legale).
+
+    AGGIORNATO 18/10/2026: il tick viene usato SOLO se fresco (vedi _scarto_fresco_da_epoch) — un
+    tick lasciato indietro da ore non misura niente e non deve mai essere scambiato per lo scarto
+    orario (il difetto misurato: 8h20 di eta' spostavano ogni candela di 8h20). Gerarchia:
+    1) il tick appena letto, se fresco; 2) l'ultima misura di questo processo; 3) un tick fresco
+    di un altro simbolo in quotazione (al piu' una volta al minuto); 4) 0 — cioe' l'orologio del
+    server, esattamente come lo mostra il terminale MT5, e in ogni caso lo STESSO valore per
+    candele e per marker: mai un numero indovinato dall'eta' di un vecchio tick."""
+    global _last_good_server_offset, _ultima_ricerca_scarto
+    now = time.time()
+    scarto = _scarto_fresco_da_epoch(getattr(tick, "time", None), now)
+    if scarto is not None:
+        _last_good_server_offset = scarto
+        return scarto
+    if _last_good_server_offset is not None:
+        return _last_good_server_offset
+    if now - _ultima_ricerca_scarto > 60.0:
+        _ultima_ricerca_scarto = now
+        scarto = _scarto_da_un_simbolo_quiunque(now)
+        if scarto is not None:
+            _last_good_server_offset = scarto
+            return scarto
+    return 0
 
 
 def _resolve_symbol(symbol: str) -> Optional[str]:

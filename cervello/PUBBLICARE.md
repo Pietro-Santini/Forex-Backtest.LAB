@@ -77,7 +77,7 @@ aggiornato.
 L'unica cosa che invalida quella copia è il numero di versione dentro `sw.js`:
 
 ```
-const CACHE_NAME = "forex-backtest-lab-v2.0.1";
+const CACHE_NAME = "forex-backtest-lab-v2.0.2";
 ```
 
 **Se cambi `app.html` e non alzi quel numero, sul computer magari vedi la modifica (basta un
@@ -87,7 +87,7 @@ comune, e dà l'impressione che la correzione non funzioni.
 Regola: `app.html` cambiato → `CACHE_NAME` al passo successivo. Lo schema, **in vigore dal
 18 ottobre 2026** (decisione del proprietario del 17), è **`2.0.x`**: `forex-backtest-lab-v2.0.1`
 → `forex-backtest-lab-v2.0.2`, e così via. Anche `MyAppVersion` in
-`installer_build/installer.iss` va tenuto allo stesso numero (`"2.0.1"`): il numero del Setup e
+`installer_build/installer.iss` va tenuto allo stesso numero (`"2.0.2"`): il numero del Setup e
 il tag della release **si ricavano** da `CACHE_NAME`, quindi non si scrivono a mano.
 
 Come è arrivato lo schema (applicato il 18 ottobre 2026, misure in `DIARIO.md`): i filtri vecchi
@@ -109,8 +109,8 @@ prima il telefono scarica la versione nuova, la seconda la usa.
 Da fare nella cartella del repository sul computer.
 
 **1. Alza la versione.** In `sw.js` (`CACHE_NAME`), da `forex-backtest-lab-v2.0.x` a
-`forex-backtest-lab-v2.0.(x+1)` (oggi `v2.0.1`).
-In `installer_build/installer.iss`, riga 22 circa, `MyAppVersion` allo stesso numero (`"2.0.1"`).
+`forex-backtest-lab-v2.0.(x+1)` (oggi `v2.0.2`).
+In `installer_build/installer.iss`, riga 22 circa, `MyAppVersion` allo stesso numero (`"2.0.2"`).
 
 **2. Fai girare il collaudo.** Deve finire con `Falliti: 0`. Dura circa dieci minuti.
 
@@ -127,7 +127,7 @@ anche file che non devono mai finire nel repository.
 
 ```bash
 git add app.html sw.js installer_build/installer.iss cervello/DIARIO.md
-git commit -m "v2.0.1: che cosa cambia, in italiano"
+git commit -m "v2.0.2: che cosa cambia, in italiano"
 git push origin main
 ```
 
@@ -219,7 +219,7 @@ Il file è `ForexBacktestLAB_Setup.exe`. Si installa sopra la versione precedent
 da solo i programmi vecchi. Windows può avvisare (SmartScreen) perché il programma non è firmato:
 «Ulteriori informazioni» → «Esegui comunque».
 
-Il numero del Setup lo ricava GitHub da `sw.js`: app `v2.0.1` → Setup `2.0.1`.
+Il numero del Setup lo ricava GitHub da `sw.js`: app `v2.0.2` → Setup `2.0.2`.
 
 > **Come accorgersi che il Setup è vecchio.** Se una correzione ai programmi del computer «non
 > funziona», prima di cercare il guasto nella rete confronta la data di

@@ -30,7 +30,7 @@ npm install -g playwright && npx playwright install chromium
 
 ## 2. Alzare il `CACHE_NAME`
 
-In `sw.js`, `forex-backtest-lab-v2.0.x` → passo successivo (oggi `v2.0.1` → `v2.0.2`). È l'**unica** cosa che costringe i browser già
+In `sw.js`, `forex-backtest-lab-v2.0.x` → passo successivo (oggi `v2.0.2` → `v2.0.3`). È l'**unica** cosa che costringe i browser già
 usati a buttare via la copia in cache. Senza, la correzione non arriva a nessuno e nessun errore lo
 segnala. Anche questo è imposto dall'hook.
 
@@ -39,7 +39,7 @@ segnala. Anche questo è imposto dall'hook.
 ```bash
 git checkout -b lavoro/<nome-corto>
 git add -A
-git commit -m "v2.0.1: <cosa cambia, dal punto di vista di chi la usa>"
+git commit -m "v2.0.2: <cosa cambia, dal punto di vista di chi la usa>"
 git push -u origin lavoro/<nome-corto>
 ```
 
@@ -50,7 +50,7 @@ nomi di modelli AI (`cervello/REGOLE.md`).
 
 ```bash
 git checkout main
-git merge --no-ff lavoro/<nome-corto> -m "v2.0.1: <stesso titolo>"
+git merge --no-ff lavoro/<nome-corto> -m "v2.0.2: <stesso titolo>"
 git push origin main
 ```
 
@@ -73,7 +73,7 @@ Per fare anche la **release** serve un passaggio in più. Prima alza la versione
 `installer_build/installer.iss`:
 
 ```
-#define MyAppVersion "2.0.1"
+#define MyAppVersion "2.0.2"
 ```
 
 poi, con GitHub CLI:
