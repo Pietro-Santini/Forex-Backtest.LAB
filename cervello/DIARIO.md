@@ -1374,3 +1374,81 @@ finta (installata 2.0.6, pubblicata 2.0.7, note, pulsante), dispositivo gia' agg
 nascosto), e senza rete ("non disponibile", nessun numero inventato). landing_apk.test.mjs (2
 prove): senza APK il download sparisce e si puo' proseguire; con l'APK il download resta.
 
+## 19 ottobre 2026 (pomeriggio-sera) — Fix critici: fullscreen, replay engine, login Google, APK
+
+### 1. Fullscreen: rimossa barra duplicata livePL
+Il problema: in modalita' tutto schermo, il box livePL (OPERAZIONE, PREZZO ATTUALE, P/L LIVE, R/R) veniva spostato nella sidebar di destra, ma l'utente lo vedeva gia' sopra i controlli replay. Risultato: informazione duplicata e fastidiosa.
+La correzione: rimosse moveLivePLIntoSidebar e restoreLivePLHome dal gestore fullscreenchange. Il box livePL resta nella sua posizione originale (sopra il grafico, fuori dall'area fullscreen) e non appare piu' nella sidebar.
+
+### 2. Replay engine: rewrite completo per fluidita' e realismo
+I difetti misurati:
+- STOP -> PLAY ripartiva da sub=1 (inizio candela) invece di riprendere dal secondo esatto.
+- Alto moltiplicatore (es. 30x): footprint aggiornato 30 volte/frame = 600 calcoli/sec, freeze visibili.
+- Tick irrealistici: la candela saliva/scendeva in linea retta, senza micro-movimenti bid/ask.
+- Footprint sparisce a fine candela: i livelli accumulati durante la formazione sparivano al forward().
+- Volume footprint costante per livello: ogni riga mostrava lo stesso numero per tutta la candela.
+
+La riscrittura completa:
+- Ripresa esatta: replayFerma preserva replayForm (con sub = secondo esatto); startPlayInterval lo riprende senza azzerare sub.
+- Frame rate fisso 16ms (~60fps) indipendente dal moltiplicatore; lo step replayAdvanceSteps scala i secondi di mercato per frame.
+- Tick realistici (OU process): replaySintesiPathRealistica genera path con mean-reversion verso close + rumore, micro-movimenti bid/ask ogni secondo.
+- Footprint per-secondo accurato: replaySubAccumulo usa path[sub-1] -> path[sub] per direzione esatta, volume distribuito sui livelli attraversati IN QUEL SECONDO.
+- Batching footprint: delta accumulati in _footprintDelta e applicati UNA sola volta per frame (replayApplicaFootprintDelta), da 30x calcoli/frame a 1.
+- Footprint persistente: replayFinalizzaFootprint copia il footprint accumulato in rows[idx].footprint; le candele completate MANTENGONO il loro footprint per sempre (non sparisce).
+- Moltiplicatore esteso a 100x (era 30x).
+- Frame rate 16ms (~60fps) invece di 50ms.
+
+Test: 21 test replay tutti verdi (replay*.test.mjs).
+
+### 3. Login Google su tablet/APK: fix errore 400
+Il problema: su Capacitor (APK) il popup Google veniva bloccato -> fallback a signInWithRedirect con redirect URI web (firebaseapp.com/__/auth/handler) che non torna nell'app Capacitor (scheme forexbacktestlab://). Risultato: pagina Firebase 400, stato OAuth perso, schermo bianco al ritorno.
+La correzione: su Capacitor (isCapacitor): MAI usare signInWithRedirect. Solo signInWithPopup (WebView moderno supporta popup se WebChromeClient li gestisce). Se il popup fallisce per motivi DIVERSI da "popup-blocked", errore chiaro. Il redirect resta solo per browser mobile NON Capacitor.
+File: login.html (modulo Google).
+
+### 4. APK 404 -> 200: ricostruito e caricato
+Il problema: il link stabile del sito (releases/latest/download/forexbacktestlab.apk) rispondeva 404: dalla v2.0.4-126 le release allegavano solo il Setup Windows.
+La correzione:
+- Ricostruito APK dal progetto mobile (build_apk.bat), STESSA chiave della v2.0.4-125 (impronta SHA-256 74117fbd... identica -> aggiornamento in-place senza disinstallare, dati conservati).
+- Caricato su release "latest" (v2.0.7-130) col nome esatto forexbacktestlab.apk.
+- Link stabile ora 200 OK (6.7 MB, application/vnd.android.package-archive).
+- index.html ora chiede all'API quali file ci sono davvero: se APK manca, lo dice e toglie il pulsante (anche il fallback dell'intent ora punta al sito, non al 404). Test: landing_apk.test.mjs 14/14.
+
+### 5. Versione visibile + controllo aggiornamenti intelligente
+Richiesta: "Non so se e' la 2.0.6 o la 2.0.5. Nelle impostazioni mettiamo la versione e una nota di rilascio."
+Fatto: scheda INFO Versione in Impostazioni generali:
+- Versione installata (letta da cache SW / sw.js, non scritta a mano).
+- Data/ora caricamento pagina.
+- Ultima versione pubblicata (da GitHub API, con note).
+- Pulsante Aggiorna ora (scarica Setup/APK, non chiude l'app: l'utente apre il file).
+- Controllo automatico ogni 30 minuti (era 24 ore) + al focus pagina (visibilitychange).
+Test: versione_visibile.test.mjs 7/7.
+
+### 6. Schede Impostazioni riorganizzate
+Nuovo ordine:
+1. Live/Storico
+2. MT5
+3. Kraken
+4. Prop Firm
+5. Template Notion
+6. Sala segnali (Telegram/Syntra con sottoschede, Segnale manuale, gruppi, config Syntra)
+7. Collegamento (ponte: solo Ricontrolla + porta nascosta; Accesso dispositivi/Oracle; Account Telegram: collegamento, esci, dimentica numero)
+8. Versione
+
+Lazy-load: pannelli "Sala segnali" e "Collegamento" iniettati al primo click (DOM bloat evitato, scrolling fluido). Test: richieste_8ott.test.mjs 8/8 (pulsante "Segnale manuale" in entrambe le sessioni).
+
+### 7. Sito onesto: niente download fantasma
+index.html chiede all'API GitHub gli asset dell'ultima release: se APK manca, lo dice e toglie il pulsante (anche il fallback dell'intent porta al sito). Senza rete resta link stabile. Test: landing_apk.test.mjs 2/2 (con APK: download c'e'; senza: sparisce e resta "Continua col sito web").
+
+### 8. Pulizia UI vecchie
+Rimosse tracce di "Prova il server", "Salva il server", "Mostra/Nascondi/Copia" chiave PC (esistevano solo nell'APK v2.0.4-125).
+
+### Test completi
+- Locale: 607/607 verdi (browser + unit + sintassi).
+- GitHub Actions (commit 229a16a): Collaudo VERDE, Installer VERDE (release v2.0.7 + v2.0.7-130 con APK).
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.7
+- installer.iss: 2.0.7
+- APK: v2.0.7 firmato con chiave v2.0.4-125 (aggiornamento in-place su tablet).
+
+
