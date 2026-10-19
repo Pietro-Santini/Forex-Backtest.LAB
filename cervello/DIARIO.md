@@ -1266,4 +1266,50 @@ di 0,07»). Coprono: lo stop a mercato, il target, lo stop e l'entrata dell'ordi
 pulsante che continua ad applicare esattamente il consigliato, il numero scritto a mano che resta, e
 lo stop spostato dopo che la posizione è già aperta.
 
+## 19 ottobre 2026 — Sync Cloud delle preferenze: watchlist, ricerche e scala vanno sull'account
+
+**Cosa mancava.** La watchlist (stelle), le ricerche salvate del menu ASSET e la scala dell'interfaccia
+restavano chiuse dentro il dispositivo dove le avevi scelte: sul telefono la watchlist era vuota, e la
+scala scelta sul PC non arrivava da nessuna parte. Aggiungere un asset a mano su ogni dispositivo non e'
+"una preferenza", e' un lavoro.
+
+**Come e' fatto.** Stesso schema del collegamento del server, che era gia' collaudato: un documento
+Firestore a parte, `users/{uid}/data/preferenze`, raggiunto da due metodi nuovi del ponte
+(`preferenzeSalva` / `preferenzeAscolta`). Il blocco `SYNC PREFERENZE` (marcato INIZIO/FINE, come i
+blocchi della scala e del collegamento) contiene solo funzioni pure - `fblSyncValidoSimbolo`,
+`fblSyncPrepara`, `fblSyncRicevi`, `fblSyncPubblica`, `fblSyncAvvia` - e ogni funzione prende magazzino
+e nuvola dai suoi parametri. La pubblicazione parte a ogni modifica vera (stellina aggiunta, stellina
+tolta, ricerca salvata, scala cambiata); l'arrivo dal cloud si applica e basta, **non ripubblica**, o i
+due dispositivi si rimbalzerebbero le preferenze all'infinito.
+
+**Le regole di sicurezza del documento.** Un documento che arriva da un altro dispositivo si accetta
+solo intero e ben formato: se la watchlist ha piu' di 10 voci, o anche una sola voce che non e' un
+simbolo valido, o le ricerche non sono valide, si rifiuta tutto e il magazzino resta com'e'. Un dato
+difettoso non deve poter cancellare una preferenza buona. Il simbolo valido ammette anche la barra
+("EUR/USD"): era il difetto misurato dal test, che all'inizio lo rifiutava.
+
+**Test.** `laboratorio/app/sync_preferenze.test.mjs`, 10 prove con magazzino e nuvola finti: pubblica
+quando c'e' qualcosa e non pubblica un documento vuoto (ingannerebbe gli altri), il telefono riceve da
+solo, due dispositivi dello stesso account finiscono uguali, il PC cambia e gli altri seguono, un
+documento difettoso viene rifiutato senza toccare niente, una nuvola muta non blocca l'avvio, e in
+modalita' privata non esplode niente.
+
+**L'incidente.** Per agganciare la pubblicazione della scala ho usato uno script Python che sostituiva
+una stringa in app.html: il pattern era troppo corto e ha trovato la PRIMA occorrenza del file, cioe'
+`<!DOCTYPE html>`. Il documento si era aperto con tre righe di commento e il doctype spezzato. Il
+controllo di sintassi non se ne accorge (gli script restavano validi). Secondo errore nello stesso
+giro: gli script hanno scritto i fine riga in LF mentre il file e' in CRLF, e `git diff --stat` e'
+schizzato a 47.000 righe cambiate per una modifica di 200. Sistemato guardando
+`git diff --ignore-cr-at-eol --stat` (si leggevano le 183 righe vere) e riportando il file a CRLF.
+La lezione sta in LEZIONI.md: su app.html si sostituiscono blocchi interi e unici, e si guarda sempre
+il numero di righe del diff prima di dire "fatto".
+
+**Il secondo difetto, e l'ha trovato il collaudo, non io.** La pubblicazione delle preferenze la
+chiama lo script classico (la stellina, la ricerca salvata, la scala), ma `pubblicaPreferenze` vive
+dentro il modulo Firebase, e un modulo non mette i suoi nomi fra quelli globali. Sulla carta la
+chiamata c'era; nell'app vera valeva `pubblicaPreferenze is not defined` e la stellina andava in
+errore. Il collaudo largo l'ha misurato su un test che toccava la watchlist: 596 su 597. La
+correzione e' la stessa di tutto il resto del file: si espone `window.pubblicaPreferenze` e si chiama
+`window.pubblicaPreferenze && window.pubblicaPreferenze()`, cosi' dallo script classico non parte mai
+un nome che li' non esiste.
 

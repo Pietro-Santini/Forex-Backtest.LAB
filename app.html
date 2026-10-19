@@ -1202,6 +1202,23 @@ window.fblAvviaSoloBacktest=function(){
       return onSnapshot(doc(db,"users",this.uid,"data","collegamento"), snap=>{
         cb(snap.exists() ? snap.data() : null);
       }, e=>console.warn("Ascolto del collegamento server interrotto:", e));
+    },
+    // PREFERENZE TRA DISPOSITIVI STESSO ACCOUNT (sync cloud): users/{uid}/data/preferenze.
+    // Le preferenze scelte su un dispositivo (watchlist, ricerche salvate, scala UI) vanno
+    // sull'account e arrivano da sole agli altri dello stesso account: stesso schema del
+    // collegamento del server, un documento a parte cosi' il bundle di sessione resta pulito.
+    async preferenzeSalva(payload){
+      if(!this.uid) return false;
+      try{
+        await setDoc(doc(db,"users",this.uid,"data","preferenze"), payload, {merge:true});
+        return true;
+      }catch(e){ console.warn("Pubblicazione delle preferenze fallita:", e); return false; }
+    },
+    preferenzeAscolta(cb){
+      if(!this.uid) return ()=>{};
+      return onSnapshot(doc(db,"users",this.uid,"data","preferenze"), snap=>{
+        cb(snap.exists() ? snap.data() : null);
+      }, e=>console.warn("Ascolto delle preferenze interrotto:", e));
     }
   };
 
@@ -1365,32 +1382,78 @@ window.fblAvviaSoloBacktest=function(){
     trialCountdownInterval = setInterval(tick, 60000);
   }
 
-  // COLLEGAMENTO CLOUD (18/10/2026): un solo ascolto per sessione. Al primo documento valido
-  // l\'appp si registra da sola sul server e l'avviso di primo accesso si spegne; se non arriva
-  // niente resta l'avviso, che dice come si sistemma la cosa (dal computer).
-  let fblCollegamentoAscolto = null;
-  function avviaCollegamentoCloud(user){
-    try{
-      if (fblCollegamentoAscolto || typeof window.fblCollegamentoAvvia !== 'function') return;
-      // Chi ha già il server salvato (il PC in primis) lo pubblica subito sull'account: non
-      // serve risalvare il server a mano dopo questo aggiornamento, e rifarlo è innocuo
-      // (stessi valori, scrittura in merge).
-      try{ window.fblCollegamentoPubblica(window.fxbtCloud, localStorage); }catch(e){}
-      fblCollegamentoAscolto = window.fblCollegamentoAvvia(window.fxbtCloud, localStorage, ()=>{
-        // È arrivato (o si è aggiornato) il collegamento dall'account: l'avviso di primo accesso
-        // si spegne, i campi si aggiornano e questo dispositivo si registra sul server.
-        try{ window.fblCollegamentoAvviso && window.fblCollegamentoAvviso(false); }catch(e){}
-        try{ fblServerCampiLeggi(); }catch(e){}
-        try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
-        try{ if(typeof tgAttivo==='function'&&tgAttivo()&&typeof tgCollega==='function')tgCollega(); }catch(e){}
-        try{ krakenAggiornaConto(); }catch(e){}
-        try{ window.fblRegistraSulServer && window.fblRegistraSulServer(user); }catch(e){}
-      });
-      // Chi non ha ancora il server lo deve sapere: ordini, MT5, Kraken e grafico collegato si
-      // configurano dal computer; backtest e sessione Capital.com funzionano già.
-      window.fblCollegamentoAvviso && window.fblCollegamentoAvviso(window.fblCollegamentoServeAvviso(localStorage));
-    }catch(e){ console.warn('[Collegamento cloud] ascolto non partito:', e); }
-  }
+// ===================== COLLEGAMENTO CLOUD (18/10/2026) =====================
+// Un solo ascolto per sessione. Al primo documento valido l\'appp si registra da sola sul server e l'avviso di primo accesso si spegne; se non arriva
+// niente resta l'avviso, che dice come si sistemma la cosa (dal computer).
+let fblCollegamentoAscolto = null;
+let fblSyncAscolto = null;
+function avviaCollegamentoCloud(user){
+  try{
+    if (fblCollegamentoAscolto || typeof window.fblCollegamentoAvvia !== 'function') return;
+    // Chi ha già il server salvato (il PC in primis) lo pubblica subito sull'account: non
+    // serve risalvare il server a mano dopo questo aggiornamento, e rifarlo è innocuo
+    // (stessi valori, scrittura in merge).
+    try{ window.fblCollegamentoPubblica(window.fxbtCloud, localStorage); }catch(e){}
+    fblCollegamentoAscolto = window.fblCollegamentoAvvia(window.fxbtCloud, localStorage, ()=>{
+      // È arrivato (o si è aggiornato) il collegamento dall'account: l'avviso di primo accesso
+      // si spegne, i campi si aggiornano e questo dispositivo si registra sul server.
+      try{ window.fblCollegamentoAvviso && window.fblCollegamentoAvviso(false); }catch(e){}
+      try{ fblServerCampiLeggi(); }catch(e){}
+      try{ if(typeof tgScollega==='function')tgScollega(); }catch(e){}
+      try{ if(typeof tgAttivo==='function'&&tgAttivo()&&typeof tgCollega==='function')tgCollega(); }catch(e){}
+      try{ krakenAggiornaConto(); }catch(e){}
+      try{ window.fblRegistraSulServer && window.fblRegistraSulServer(user); }catch(e){}
+    });
+    // PREFERENZE DAL CLOUD: stesso account, documento a parte (users/{uid}/data/preferenze).
+    // Le preferenze scelte qui (watchlist, ricerche, scala UI) vanno sull'account e quando
+    // arrivano si applicano da sole: niente da toccare a mano su ogni dispositivo.
+    try{ window.fblSyncPubblica(window.fxbtCloud, localStorage); }catch(e){}
+    fblSyncAscolto = window.fblSyncAvvia(window.fxbtCloud, localStorage, ()=>{
+      applicaPreferenzeDalCloud();
+    });
+    // Lo script classico (stellina, ricerca salvata, scala UI) sta fuori da questo modulo e non
+    // vede le sue funzioni: la pubblicazione si raggiunge da li' solo passando da window.
+    window.pubblicaPreferenze = pubblicaPreferenze;
+  }catch(e){ console.warn('[Collegamento cloud] ascolto non partito:', e); }
+}
+// Applica le preferenze appena arrivate (o cambiate) dal cloud: scala UI, watchlist e
+// ricerche salvate. NON ripubblica: applicare non deve far partire un altro giro, o i due
+// dispositivi si rimbalzerebbero le preferenze all'infinito.
+function applicaPreferenzeDalCloud(){
+  try{
+    // Scala UI: il valore arrivato dal cloud si applica alla pagina e al campo impostazioni.
+    const scala=Number(localStorage.getItem(FBL_UI_SCALA_KEY));
+    if(Number.isFinite(scala)&&typeof fblScalaUiApplica==='function'){
+      const v=Math.max(70,Math.min(150,Math.round(scala/5)*5));
+      fblScalaUiApplica(document,v);
+      try{ if($('fblUiScalaPct'))$('fblUiScalaPct').value=String(v); }catch(e){}
+    }
+  }catch(e){}
+  try{
+    // Watchlist: l'elenco arrivato dal cloud diventa quello di questo dispositivo.
+    const wl=JSON.parse(localStorage.getItem(FBL_SYNC_WATCHLIST_KEY)||'[]');
+    if(Array.isArray(wl)&&wl.length&&wl.every(a=>typeof a==='string'&&a)){
+      favoriteAssets=wl.slice(0,10);
+      renderWatchlistList();
+      updateAssetFavToggleBtn();
+      if(liveModeActive)refreshLiveStreamSubscriptions(); else refreshWatchlistBackgroundTracking();
+    }
+  }catch(e){}
+  try{
+    // Ricerche salvate: ogni asset arrivato dal cloud torna nel menu ASSET.
+    const rc=JSON.parse(localStorage.getItem(FBL_SYNC_RICERCHE_KEY)||'[]');
+    if(Array.isArray(rc)&&rc.length){
+      customAssets=rc.filter(a=>a&&typeof a.symbol==='string'&&a.symbol).slice(0,50);
+      customAssets.forEach(a=>{ try{ rememberCustomAsset(a.symbol,a.name,a.type); }catch(e){} });
+    }
+  }catch(e){}
+  try{ saveLightStateNow(); }catch(e){}
+}
+// Pubblica le preferenze di questo dispositivo sull'account: la watchlist, le ricerche e la
+// scala UI correnti. Chiamata a ogni modifica (stellina, ricerca salvata, scala cambiata).
+function pubblicaPreferenze(){
+  try{ window.fblSyncPubblica&&window.fblSyncPubblica(window.fxbtCloud, localStorage); }catch(e){}
+}
 
   onAuthStateChanged(auth, async (user) => {
     const overlay = document.getElementById("auth-check-overlay");
@@ -17742,6 +17805,7 @@ async function addToWatchlist(asset){
  renderWatchlistList();
  updateAssetFavToggleBtn();
  saveLightStateNow();
+  try{ window.pubblicaPreferenze&&window.pubblicaPreferenze(); }catch(e){} // la watchlist e' una preferenza: va anche sull'account
  if(liveModeActive)refreshLiveStreamSubscriptions(); else refreshWatchlistBackgroundTracking();
  return true;
 }
@@ -17752,6 +17816,7 @@ function removeFromWatchlist(asset){
  renderWatchlistList();
  updateAssetFavToggleBtn();
  saveLightStateNow();
+  try{ window.pubblicaPreferenze&&window.pubblicaPreferenze(); }catch(e){} // togliere dalla watchlist cambia la preferenza condivisa
  if(liveModeActive)refreshLiveStreamSubscriptions(); else refreshWatchlistBackgroundTracking();
 }
 function toggleCurrentAssetWatchlist(){
@@ -20558,6 +20623,7 @@ function rememberCustomAsset(symbol,name,type){
     syncMarketChartSelect();
   }
   scheduleSave();
+  try{ window.pubblicaPreferenze&&window.pubblicaPreferenze(); }catch(e){}
 }
 function openAssetPicker(){
   const ov=$('assetPickerOverlay'); if(!ov)return;
@@ -24839,6 +24905,9 @@ function fblScalaUiApplica(doc,pct){
 }
 function fblScalaUiSalva(mag,pct){
  try{ mag&&mag.setItem(FBL_UI_SCALA_KEY,String(pct)); }catch(e){}
+ // SYNC CLOUD: la scala scelta qui va anche sull'account, per arrivare agli altri
+ // dispositivi. Passa da window con la guardia: il test del blocco lo esegue fuori dal browser.
+ try{ window.pubblicaPreferenze&&window.pubblicaPreferenze(); }catch(e){}
 }
 function fblScalaUiAdattaGrafico(doc){
  // Il grafico si ri-aggancia da solo quando la finestra cambia misura: un resize finto gli
@@ -31810,6 +31879,11 @@ function fblRemoto(){ return fblHost()!=='127.0.0.1'&&fblHost()!=='localhost'; }
 // Vuoto = come prima, tutto sul PC.
 const FBL_SERVER_KEY='fbl_server_host';
 const FBL_SERVER_CHIAVE_KEY='fbl_server_chiave';
+// SYNC CLOUD DELLE PREFERENZE (watchlist, ricerche, scala UI): chiavi dedicate, separate dal
+// bundle di sessione (che contiene TUTTO e viene ritagliato per dimensione). Il documento
+// preferenze in cloud resta piccolo e sempre aggiornato. Vedi il blocco SYNC PREFERENZE.
+const FBL_SYNC_WATCHLIST_KEY='fbl_sync_watchlist';
+const FBL_SYNC_RICERCHE_KEY='fbl_sync_ricerche';
 function fblServer(){ try{ return (localStorage.getItem(FBL_SERVER_KEY)||'').trim(); }catch(e){ return ''; } }
 function fblServerChiave(){ try{ return (localStorage.getItem(FBL_SERVER_CHIAVE_KEY)||'').trim(); }catch(e){ return ''; } }
 function fblServerUrl(porta){ return 'https://'+fblServer()+':'+porta; }
@@ -31906,6 +31980,92 @@ function fblCollegamentoAvvia(cloud,store,cb){
  }catch(e){ return null; }
 }
 /* COLLEGAMENTO CLOUD: FINE */
+/* SYNC PREFERENZE: INIZIO — watchlist, ricerche e scala UI girano DENTRO l'account Google
+   (users/{uid}/data/preferenze): le preferenze scelte su un dispositivo arrivano da sole
+   agli altri dello stesso account, come il collegamento del server. Serve perche' la watchlist,
+   le ricerche Capital.com salvate e la scala dell'interfaccia sono PICCOLE e cambiano spesso:
+   un documento loro dedicato le tiene sempre aggiornate, mentre il bundle di sessione (che
+   contiene tutto, viene ritagliato per dimensione e parte solo all'uscita) resta come era.
+   Stesso schema del collegamento: funzioni pure, estratte e provate da
+   laboratorio/app/sync_preferenze.test.mjs con magazzino e nuvola finti. */
+function fblSyncValidoSimbolo(s){
+  // Simbolo d'asset: alfanumerici, trattini, duepunti (coppie tipo "BINANCE:BTCUSDT"),
+  // piu' e punti. Il documento arriva da un altro dispositivo: senza controllo si
+  // sovrascriverebbe una preferenza buona con una che non vale.
+  return typeof s==='string'&&s.length>0&&s.length<=64&&/^[A-Za-z0-9][A-Za-z0-9._:+\/-]*$/.test(s);
+}
+function fblSyncPrepara(store){
+  // Cosa QUESTO dispositivo puo' pubblicare: watchlist, ricerche e scala. Con la memoria
+  // negata (modalita' privata) si ritorna null, che qui significa «niente da pubblicare».
+  try{
+    let wl=[];
+    try{ const d=JSON.parse(store.getItem(FBL_SYNC_WATCHLIST_KEY)||'[]');
+      if(Array.isArray(d))wl=d.filter(fblSyncValidoSimbolo).slice(0,10); }catch(e){}
+    let rc=[];
+    try{ const d=JSON.parse(store.getItem(FBL_SYNC_RICERCHE_KEY)||'[]');
+      if(Array.isArray(d))rc=d.filter(a=>a&&fblSyncValidoSimbolo(a.symbol)
+        &&(!a.name||typeof a.name==='string')&&(!a.type||typeof a.type==='string')).slice(0,50); }catch(e){}
+    let scala=null;
+    try{ const v=Number(store.getItem(FBL_UI_SCALA_KEY));
+      if(Number.isFinite(v)&&v>=70&&v<=150)scala=Math.round(v/5)*5; }catch(e){}
+    if(!wl.length&&!rc.length&&scala===null)return null;
+    return {watchlist:wl, ricerche:rc, scala, aggiornato:Date.now()};
+  }catch(e){ return null; }
+}
+function fblSyncRicevi(doc,store){
+  // Un documento dalla nuvola si accetta SOLO intero e ben formato: un valore difettoso
+  // sovrascriverebbe una preferenza buona con una che non funziona. I campi si scrivono
+  // alla fine, mai a metà.
+  try{
+    if(!doc||typeof doc!=='object')return false;
+    let wl=null;
+    if(Array.isArray(doc.watchlist)){
+      if(doc.watchlist.length>10)return false;
+      const tmp=doc.watchlist.filter(fblSyncValidoSimbolo);
+      if(tmp.length!==doc.watchlist.length)return false;
+      wl=tmp;
+    }
+    let rc=null;
+    if(Array.isArray(doc.ricerche)){
+      if(doc.ricerche.length>50)return false;
+      const tmp=doc.ricerche.filter(a=>a&&fblSyncValidoSimbolo(a.symbol)
+        &&(!a.name||typeof a.name==='string')&&(!a.type||typeof a.type==='string'));
+      if(tmp.length!==doc.ricerche.length)return false;
+      rc=tmp;
+    }
+    let scala=null;
+    if(typeof doc.scala==='number'&&Number.isFinite(doc.scala)&&doc.scala>=70&&doc.scala<=150)scala=Math.round(doc.scala/5)*5;
+    if(wl===null&&rc===null&&scala===null)return false;
+    if(wl!==null)store.setItem(FBL_SYNC_WATCHLIST_KEY,JSON.stringify(wl));
+    if(rc!==null)store.setItem(FBL_SYNC_RICERCHE_KEY,JSON.stringify(rc));
+    if(scala!==null)store.setItem(FBL_UI_SCALA_KEY,String(scala));
+    return true;
+  }catch(e){ return false; }
+}
+function fblSyncPubblica(cloud,store){
+  // Le preferenze di QUESTO dispositivo vanno sull'account: da la' in poi gli altri dispositivi
+  // dello stesso account le ricevono senza toccare niente.
+  try{
+    if(!cloud||typeof cloud.preferenzeSalva!=='function')return false;
+    const p=fblSyncPrepara(store);
+    if(!p)return false;
+    const r=cloud.preferenzeSalva(p);
+    if(r&&typeof r.catch==='function')r.catch(e=>console.warn('[Sync preferenze] pubblicazione fallita:',e));
+    return true;
+  }catch(e){ return false; }
+}
+function fblSyncAvvia(cloud,store,cb){
+  // Si ascolta il proprio account: ogni documento valido riempie il magazzino di QUESTO
+  // dispositivo e accende il segnale (cb) che fa ripartire l'applicazione delle preferenze.
+  // Una nuvola che non sa parlare non deve bloccare l'avvio dell'app: si ritorna null e basta.
+  try{
+    if(!cloud||typeof cloud.preferenzeAscolta!=='function')return null;
+    return cloud.preferenzeAscolta(doc=>{
+      try{ if(fblSyncRicevi(doc,store)&&typeof cb==='function')cb(); }catch(e){}
+    });
+  }catch(e){ return null; }
+}
+/* SYNC PREFERENZE: FINE */
 // L'avviso di primo accesso (il banner in cima). Non fa parte del blocco provato dal test:
 // là si decide se serve (fblCollegamentoServeAvviso), qui si disegna.
 function fblCollegamentoAvviso(acceso){

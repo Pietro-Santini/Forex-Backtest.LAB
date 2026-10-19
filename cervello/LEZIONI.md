@@ -314,3 +314,29 @@
   condizione è che sia il dato di ingresso a cambiare il dato di uscita (l'utente cambia il
   rischio → il lottaggio si aggiorna, e lo sa perché ha toccato il rischio). Prima di correggere,
   misurare di quanto il numero si sposta: 0,07 → 0,05 è un difetto che si spiega in tre righe.
+
+- **Uno script che cerca un pattern corto puo' colpire l'INIZIO del file.** (19 ottobre 2026, Sync
+  Cloud delle preferenze.) Per agganciare la pubblicazione della scala UI ho usato uno script Python
+  che sostituiva una stringa in app.html. Il pattern era corto e poco ancorato, quindi ha trovato la
+  prima occorrenza del file: `<!DOCTYPE html>`. Il documento cominciava con tre righe di commento e il
+  doctype era ridotto a `!DOCTYPE html>`. Il controllo di sintassi degli script era verde lo stesso
+  (quegli script restavano validi): l'avrebbe mostrato solo l'apertura della pagina vera. Nello stesso
+  giro, gli script hanno riscritto i fine riga in LF mentre app.html e' in CRLF, e `git diff --stat` e'
+  passato a 47.000 righe cambiate per una modifica di 200.
+  LA REGOLA: su un file grande come app.html le sostituzioni si ancorano a un blocco INTERO e UNICO (una
+  funzione intera, con il commento che la precede), mai a una stringa corta che puo' comparire anche
+  altrove. E prima di dire "fatto" si guarda `git diff --stat`: se le righe cambiate non assomigliano a
+  quelle che si sono scritte, si e' rotto qualcosa - si torna indietro senza committare. Per separare
+  un vero problema dai soli fine riga, `git diff --ignore-cr-at-eol --stat`.
+
+- **Un nome che esiste "sopra" non esiste "sotto".** (19 ottobre 2026, Sync Cloud delle preferenze.)
+  La pubblicazione delle preferenze la chiama lo script classico, ma la funzione era dichiarata dentro
+  il modulo Firebase: i nomi di un modulo non sono globali. La chiamata c'era, scritta bene, e valeva
+  `pubblicaPreferenze is not defined` nell'app vera - la stellina andava in errore e la preferenza non
+  partiva. A trovarlo e' stato il collaudo largo (un test che toccava la watchlist), non la lettura del
+  codice: a occhio la riga sembrava giusta. Il file ha gia' il modo di passare i confini - `window.` con
+  la guardia `&&` - e vale per ogni chiamata che attraversa modulo e script classico.
+  LA REGOLA: quando si collega uno script classico a un modulo, il nome si prende da `window` e si
+  controlla che ci sia, mai per nome nudo. E il collaudo largo va fatto girare sempre: i test nuovi
+  guardavano solo il blocco isolato, e li' il difetto non si poteva vedere.
+
