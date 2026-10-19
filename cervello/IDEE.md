@@ -3,6 +3,31 @@
 Formato: **[priorità A/B/C] titolo** — perché serve — chi l'ha proposta — stato.
 A = blocca o confonde un neofita; B = migliora molto; C = rifinitura.
 
+- **[A] MT5 che funziona con il PC spento** — oggi MT5 gira sul computer di casa, quindi chi
+  vuole l'app sul telefono **deve tenere acceso il PC**: è l'unico pezzo del prodotto che non
+  funziona "da solo", e il proprietario lo ha detto chiaramente: «È un'applicazione stupenda così
+  strutturata in questo modo e poi dopo cadiamo su questo pezzo». — proprietario (19 ottobre 2026) —
+  **progetto futuro, da dichiarare, non ancora pianificato**.
+  *Perché non è una modifica ma un progetto:* la libreria `MetaTrader5` esiste **solo per Windows**,
+  e per parlare col broker MT5 serve il terminale. Non esiste un'API MT5 "nuvola" ufficiale: finché
+  la piattaforma resta MT5, da qualche parte deve stare un Windows acceso.
+  *Le strade, dalla più solida alla più rischiosa:*
+  1. **VPS del broker** (non nostro): il terminale MT5 gira su una macchina cloud del broker e la
+     libreria Python si collega a quella. È la risposta ufficiale, costa pochi euro al mese al
+     cliente e funziona. Non costa nulla a noi.
+  2. **Nostro server Windows in affitto** (il sogno del proprietario): si affitta una macchina
+     Windows esterna, ci si installa MT5 e **tutti gli utenti** si collegano lì per dati, grafico e
+     ordini. Costa un canone mensile: oggi fuori budget, e comunque da ripartire con utenti paganti
+     o collaborazioni, perché chiedere a tutti una VM non è accettabile (sennò il prodotto «cade
+     su quel pezzo», che è proprio ciò che il proprietario vuole evitare).
+  3. **Wine sul server Oracle**: si può provare (è annotato in `ORACLE.md`) ma non sta sulla Micro
+     da 1 GB, e sulla ARM gratuita servirebbero due livelli di traduzione. Il vero problema non è che
+     non funzioni oggi: è che **si rompe** quando il broker aggiorna il terminale, e lo scopre un
+     utente con ordini aperti.
+  *La strada che regge senza chiedere soldi a nessuno:* MT5 diventa una **scelta**, non il binario.
+  Il default passa ai broker che sono già API vere (Capital.com, Kraken), che funzionano senza PC
+  spento e senza manutenzione; MT5 resta per chi lo vuole, con tre opzioni a scalare (PC proprio
+  acceso, VPS del broker, server in affitto). Chi usa MT5 paga il broker, non noi.
 - **[A] Primo avvio guidato** — chi apre l'app per la prima volta non sa da dove partire (CSV?
   MT5? Kraken?). Tre domande e l'app si configura. — proprietario — da fare
 - **[A] "?" accanto a ogni pannello** — spiegazione in parole semplici di cosa fa e quando usarlo. —
