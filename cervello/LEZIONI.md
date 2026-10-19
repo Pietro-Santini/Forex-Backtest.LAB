@@ -352,3 +352,27 @@
   cercare il nome e contare le definizioni, oppure misurare il comportamento in Chromium. Un difetto
   che nessuno strumento segnala va cercato contando, non leggendo.
 
+- **Un pulsante che scarica non e' un pulsante che funziona: il file va verificato.** (19 ottobre
+  2026, l'APK che rispondeva 404.) Il sito puntava a un indirizzo stabile "latest/download/
+  forexbacktestlab.apk" e per otto release quel file non c'era piu' (dalla v2.0.4-126 le release
+  allegano solo il Setup Windows): ogni tablet finiva su una pagina d'errore GitHub. Nessun test lo
+  vedeva, perche' i test controllavano che il pulsante ci fosse, non che il file esistesse. E il
+  commento nel codice dichiarava il difetto ("oggi risponde 404: il riquadro lo dichiara") mentre il
+  riquadro non lo dichiarava: un commento che descrive una protezione mai scritta e' peggio di
+  nessun commento, perche' mette tranquillo.
+  LA REGOLA: quando una pagina offre un download, o il file e' nel repository insieme alla pagina
+  (e allora c'e' sempre), o lo si verifica prima di offrirlo. L'API delle release dice quali asset
+  esistono: si chiede a quella. E un file di installazione che manca non si "aggiusta" scrivendo
+  "premi qui": si costruisce e si allega.
+
+- **La versione va letta da dove vive, non scritta a mano.** (19 ottobre 2026, scheda Versione.)
+  Il proprietario non poteva sapere se l'app era la 2.0.5 o la 2.0.6: nessuna schermata lo diceva.
+  Scrivere "2.0.6" in una costante avrebbe funzionato fino alla prima dimenticanza al momento del
+  rilascio, e allora la schermata avrebbe mentito con sicurezza. La versione vera sta nella cache
+  del service worker (`forex-backtest-lab-v2.0.6`) e nel sw.js del dispositivo: si legge da li'.
+  E si confronta a NUMERI: "2.0.10" e' piu' nuovo di "2.0.9", mentre l'ordine alfabetico dice il
+  contrario.
+  LA REGOLA: un dato che l'utente usa per decidere (versione, data, stato) si legge dalla fonte che
+  lo produce, non si ricopia. Se la fonte non risponde, si scrive "non disponibile": mai un numero
+  inventato.
+

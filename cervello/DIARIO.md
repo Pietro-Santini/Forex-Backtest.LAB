@@ -1337,3 +1337,40 @@ definizione, con il commento che dice cosa c'era e perche' e' stata tolta.
 (iframe same-origin, come il test del menu Strategia): popup dalla pagina principale, popup dal PIP,
 rientro, copertura automatica dell'osservatore, e uscita dal PIP senza popup appesi.
 
+## 19 ottobre 2026 — L'APK che rispondeva 404, e la versione che si vede
+
+**Il difetto, riferito dal tablet.** «Sul sito, il pulsante scarica l'APK, mi riporta alla pagina
+GitHub con 404.» Misurato con l'API: l'ultima release con l'APK allegato era la v2.0.4-125; dalla
+v2.0.4-126 in poi le release allegano solo il Setup Windows, mentre index.html punta a un indirizzo
+stabile (`releases/latest/download/forexbacktestlab.apk`) che quindi risponde 404. Il commento nel
+sito diceva addirittura «oggi l'APK non e' ancora pubblicato e l'indirizzo risponde 404: il riquadro
+lo dichiara» - ma il riquadro non lo dichiarava affatto.
+
+**La correzione, in due parti.** Primo: l'APK e' stato ricostruito dal progetto mobile (build_apk),
+con la STESSA chiave della v2.0.4-125 (impronta SHA-256 identica, verificata con apksigner): cosi'
+il tablet aggiorna sopra l'app esistente senza disinstallare e senza perdere i dati. E' stato
+caricato sulla release v2.0.6 col nome esatto che il sito si aspetta, e l'indirizzo stabile ora
+risponde 200 con il tipo giusto. Secondo: index.html non offre piu' un download alla cieca. Chiede
+all'API quali file ci sono davvero nell'ultima release e, se l'APK manca, lo dice e toglie quel
+pulsante (anche il "ritiro" dell'intent, che puntava allo stesso file inesistente, ora porta al
+sito). Se la rete non risponde resta il link stabile di sempre. Test: landing_apk.test.mjs, con
+l'API finta e la pagina vera.
+
+**La versione che si vede.** «Io ero alla 2.0.5... non so adesso se e' la versione giusta 2.0.6 o
+e' rimasta quella di prima. Magari nelle impostazioni generali mettiamo una nota di rilascio che fa
+vedere la versione che e' presente sul dispositivo.» Aggiunta la scheda **Versione** nelle
+Impostazioni generali: versione installata, data di caricamento della pagina, ultima versione
+pubblicata, cosa cambia, e un pulsante **Aggiorna ora**. La versione non e' scritta a mano: si legge
+dalla cache del service worker che sta servendo la pagina, oppure dal sw.js presente sul dispositivo
+(nell'APK e' il file incorporato). Il confronto e' numerico (2.0.10 e' piu' nuovo di 2.0.9).
+
+**Perche' il pulsante non era comparso.** Il controllo girava al caricamento e poi ogni 24 ORE: con
+l'app lasciata aperta, la release uscita nel pomeriggio si sarebbe vista solo il giorno dopo. Ora il
+controllo e' ogni 30 minuti e anche quando l'app torna in primo piano.
+
+**Test.** versione_visibile.test.mjs (7 prove): confronto numerico, versione dalla cache, versione
+dal pacchetto quando la cache manca, "sconosciuta" senza nulla (senza errori), pannello con API
+finta (installata 2.0.6, pubblicata 2.0.7, note, pulsante), dispositivo gia' aggiornato (pulsante
+nascosto), e senza rete ("non disponibile", nessun numero inventato). landing_apk.test.mjs (2
+prove): senza APK il download sparisce e si puo' proseguire; con l'APK il download resta.
+
