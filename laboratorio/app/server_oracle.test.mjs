@@ -40,7 +40,10 @@ test('con il server: Kraken e segnali al server con la sua chiave, ponte non avv
   } finally { await browser.close(); }
 });
 
-test('impostazioni: non ci sono più campi nome/chiave del server', async () => {
+// Il pannello e' stato rifatto (18/10/2026): niente nome e chiave da scrivere (il computer si
+// fa conoscere da solo e la chiave non si mostra piu' da nessuna parte), ma deve restare il modo
+// di PROVARE il collegamento: senza quello, «non si collega» resterebbe una sola parola.
+test('impostazioni: niente campi nome/chiave del server, ma resta «Prova il collegamento»', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(() => {
@@ -48,30 +51,35 @@ test('impostazioni: non ci sono più campi nome/chiave del server', async () => 
       return {
         campoServer: c('fblServerCampo'),
         chiaveServer: c('fblServerChiaveCampo'),
-        salvaServer: c('fblServerSalva')
+        salvaVecchio: c('fblServerSalva'),
+        provaCollegamento: c('fblRemotoProva')
       };
     });
-    assert.deepEqual(r, {campoServer:false, chiaveServer:false, salvaServer:true});
+    assert.deepEqual(r, {campoServer:false, chiaveServer:false, salvaVecchio:false, provaCollegamento:true});
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
 
 // "il tasto Prova il server non lo vedo": era in fondo a una finestra il cui pulsante parlava solo
-// di "altri dispositivi". Il pulsante deve nominare il server e portare alla sezione.
-test('il pulsante del menu porta a «Prova il server»', async () => {
+// di "altri dispositivi". Il pulsante del menu deve nominare il server e portare alla sezione, che
+// dentro di se' ha il suo «Prova il collegamento».
+test('il pulsante del menu porta a «Prova il collegamento»', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(async () => {
       const b = document.getElementById('fblRemotoBtn');
       const testo = b.textContent;
       await fblRemotoApri();
-      const p = document.getElementById('fblServerProva');
+      const p = document.getElementById('fblRemotoProva');
       return {testo, dentro: document.getElementById('fblRemotoOverlay').contains(p),
-              aperta: document.getElementById('fblRemotoOverlay').style.display};
+              aperta: document.getElementById('fblRemotoOverlay').style.display,
+              etichetta: p ? p.textContent : ''};
     });
     assert.match(r.testo, /server Oracle/);
     assert.equal(r.dentro, true);
     assert.equal(r.aperta, 'flex');
+    assert.match(r.etichetta, /Prova il collegamento/,
+      'senza un pulsante che prova il collegamento «non si collega» resta una parola sola');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

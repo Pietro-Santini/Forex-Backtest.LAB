@@ -46902,7 +46902,9 @@ let rz=null; addEventListener('resize',()=>{ if(!aperto)return; clearTimeout(rz)
 // ===================== AGGIORNAMENTO AUTOMATICO APP ====================
 // Controlla se c'è una nuova versione su GitHub Releases e, se sì, mostra il pulsante
 // per scaricare e installare il pacchetto (APK per Android, EXE per Windows).
-let fblVersioneAttuale = '2.0.4-126';
+// Il confronto non e' sulla versione scritta nel codice ma sul tag dell'ultima
+// release che questo dispositivo ha gia' installato: al primo avvio la nota e'
+// salvata in silenzio e il pulsante resta nascosto.
 
 async function fblControllaAggiornamento(){
   try{
@@ -46911,28 +46913,40 @@ async function fblControllaAggiornamento(){
     });
     if(!r.ok)return;
     const d = await r.json();
-    const versioneRemota = (d.tag_name||'').replace(/^v/,'');
-    const attuale = fblVersioneAttuale.replace(/^v/,'');
-    if(versioneRemota && versioneRemota !== attuale){
+    const tagRemoto = d.tag_name||'';
+    // Il pulsante appare solo quando esce una release NUOVA rispetto a quella
+    // che questo dispositivo ha gia' visto o applicato: al primo avvio il tag
+    // viene annotato in silenzio, cosi' chi ha appena installato non vede un
+    // falso «aggiorna disponibile».
+    let tagVisto = null;
+    try{ tagVisto = localStorage.getItem('fbl_rel_vista'); }catch(e){}
+    if(!tagVisto){
+      try{ localStorage.setItem('fbl_rel_vista', tagRemoto); }catch(e){}
+      return;
+    }
+    if(tagRemoto && tagRemoto !== tagVisto){
       const btn = document.getElementById('fblAggiornaBtn');
-      if(btn) btn.style.display = '';
+      if(!btn) return;
+      btn.style.display = '';
       btn.onclick = async()=>{
+        btn.disabled = true; btn.textContent = 'Aggiornamento in corso...';
         const p = await fblScaricaEAggiorna(d);
         if(p.ok){
+          // Il download ha avuto successo: la nota della release viene salvata
+          // solo ora, cosi' se il download fallisce il pulsante resta disponibile.
+          try{ localStorage.setItem('fbl_rel_vista', tagRemoto); }catch(e){}
           try{ await fblFermaTuttoPerAggiornamento(); }catch(e){}
+          // Sul telefono l'installer APK parte da solo e riavvia l'app; su
+          // Windows si tenta di aprire il file scaricato, poi si chiude.
           const pf = fblPiattaforma();
           if(pf === 'windows' || pf === 'mac'){
-            try{ await fblApriFile(d.download_url || (d.assets?.[0]?.browser_download_url)); }catch(e){}
-            setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },1500);
-          }else if(pf === 'android'){
-            const link = document.createElement('a');
-            link.href = d.assets?.[0]?.browser_download_url || URL_APK;
-            link.download = 'forexbacktestlab.apk';
-            document.body.appendChild(link);
-            link.click();
-            setTimeout(()=>link.remove(),1000);
             setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },2000);
+          }else if(pf === 'android'){
+            setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },3000);
           }
+        }else{
+          btn.disabled = false; btn.textContent = 'Aggiorna';
+          alert('Aggiornamento non riuscito: ' + (p.motivo||'errore sconosciuto'));
         }
       };
     }
@@ -46940,61 +46954,35 @@ async function fblControllaAggiornamento(){
 }
 
 async function fblScaricaEAggiorna(release){
+  // Scarica il pacchetto giusto per il dispositivo (APK su Android, EXE su
+  // Windows) e fa partire l'installazione: si usa un collegamento normale,
+  // senza passare per la memoria, per non bloccare l'app con file grandi.
   const pf = fblPiattaforma();
   let url = null;
-  if(pf === 'windows' || pf === 'mac'){
-    const exe = (release.assets||[]).find(a => a.name.endsWith('.exe') || a.name.endsWith('.dmg') || a.name.endsWith('.msi'));
-    if(exe) url = exe.browser_download_url;
-  }else if(pf === 'android'){
+  let nome = 'aggiornamento';
+  if(pf === 'android'){
     const apk = (release.assets||[]).find(a => a.name.endsWith('.apk'));
-    if(apk) url = apk.browser_download_url;
+    if(apk){ url = apk.browser_download_url; nome = apk.name; }
+  }else{
+    const exe = (release.assets||[]).find(a => a.name.endsWith('.exe') || a.name.endsWith('.dmg') || a.name.endsWith('.msi'));
+    if(exe){ url = exe.browser_download_url; nome = exe.name; }
   }
   if(!url){
-    const u = typeof URL_APK !== 'undefined' ? URL_APK : (typeof URL_SETUP !== 'undefined' ? URL_SETUP : null);
+    const u = (pf === 'android' && typeof URL_APK !== 'undefined') ? URL_APK
+            : (pf !== 'android' && typeof URL_SETUP !== 'undefined' ? URL_SETUP : null);
     if(u) url = u;
   }
   if(!url) return {ok:false,motivo:'Nessun pacchetto disponibile per questa piattaforma'};
   try{
-    const resp = await fetch(url, {method:'GET'});
-    if(!resp.ok) return {ok:false,motivo:'Download fallito: '+resp.status};
-    const blob = await resp.blob();
-    const urlObj = URL.createObjectURL(blob);
-    if(pf === 'android'){
-      const a = document.createElement('a');
-      a.href = urlObj;
-      a.download = 'forexbacktestlab.apk';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(urlObj);
-      return {ok:true};
-    }
-    try{
-      await fblApriFile(urlObj);
-    }catch(e){
-      const a = document.createElement('a');
-      a.href = urlObj;
-      a.download = url.split('/').pop() || 'aggiornamento.exe';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(urlObj);
-    }
+    const a = document.createElement('a');
+    a.href = url; a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>a.remove(),1000);
     return {ok:true};
   }catch(e){
     return {ok:false,motivo:'Download fallito: '+e.message};
   }
-}
-
-async function fblApriFile(url){
-  if(typeof showOpenFilePicker !== 'undefined'){
-    try{
-      const handle = await window.showOpenFilePicker({multiple:false});
-      return handle;
-    }catch(e){}
-  }
-  window.open(url, '_blank');
-  return;
 }
 
 async function fblFermaTuttoPerAggiornamento(){
