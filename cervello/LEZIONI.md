@@ -340,3 +340,15 @@
   controlla che ci sia, mai per nome nudo. E il collaudo largo va fatto girare sempre: i test nuovi
   guardavano solo il blocco isolato, e li' il difetto non si poteva vedere.
 
+- **Una funzione dichiarata due volte e' una funzione sola: vince l'ultima, e nessuno se ne accorge.**
+  (19 ottobre 2026, popup sulla pagina giusta.) `moveModalToFloatingIfActive` era scritta due volte in
+  app.html. La seconda, piu' in basso, sovrascriveva la prima: il refactoring che instradava i popup
+  nel documento del pulsante premuto era codice morto, e in produzione restava il comportamento
+  vecchio. Nessun errore, nessun avviso: solo un comportamento che non corrispondeva al commento
+  scritto sopra la funzione buona. A trovarlo e' stato il proprietario che segnalava il sintomo, e la
+  sonda in Chromium che lo ha misurato (`daPagina = "pip"`).
+  LA REGOLA: quando una funzione e' dichiarata in piu' punti, NON e' una variante: e' un errore. Se ne
+  tiene una. E il modo per accorgersene non e' leggere il file (a occhio sembrava tutto a posto): e'
+  cercare il nome e contare le definizioni, oppure misurare il comportamento in Chromium. Un difetto
+  che nessuno strumento segnala va cercato contando, non leggendo.
+

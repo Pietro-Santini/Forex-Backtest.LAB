@@ -1313,3 +1313,27 @@ correzione e' la stessa di tutto il resto del file: si espone `window.pubblicaPr
 `window.pubblicaPreferenze && window.pubblicaPreferenze()`, cosi' dallo script classico non parte mai
 un nome che li' non esiste.
 
+## 19 ottobre 2026 — Il popup compare sulla pagina del pulsante che lo hai premuto
+
+**Il difetto misurato.** Con il grafico staccato nella finestra separata (PIP), un popup aperto
+premendo un pulsante nella pagina principale finiva comunque nel PIP, che magari non stavi nemmeno
+guardando. La misura e' stata fatta prima di toccare: una sonda in Chromium con le due finestre vere
+dava `daPagina = "pip"`, cioe' esattamente il contrario della regola chiesta dal proprietario («se lo
+apro dalla pagina principale, sulla principale; se lo apro dal PIP, sul PIP»).
+
+**Perche' succedeva, e il secondo errore.** Il file teneva gia' il documento dell'ultimo tocco
+(`lastInteractionDoc`), ma nessuno lo leggeva per decidere dove mettere il popup: `popupHostDoc()`
+rispondeva sempre "PIP" appena il grafico era staccato. In piu' `moveModalToFloatingIfActive` era
+dichiarata DUE volte nel file: in JavaScript vince l'ultima, quindi la versione nuova (quella che
+instrada nel documento giusto) era di fatto codice morto, e restava attiva la vecchia che spostava
+sempre nel PIP in una sola direzione.
+
+**La correzione.** `popupHostDoc()` guarda `lastInteractionDoc`: il PIP solo se l'ultimo tocco e' li'.
+Una sola `moveModalToFloatingIfActive`, quella che instrada (e sa tornare indietro). Tolta la seconda
+definizione, con il commento che dice cosa c'era e perche' e' stata tolta.
+
+**Test.** `laboratorio/app/popup_pagina_giusta.test.mjs`, visto ROSSO prima della correzione
+(`expected 'principale', actual 'pip'`) e verde dopo. Misura cinque cose con due documenti veri
+(iframe same-origin, come il test del menu Strategia): popup dalla pagina principale, popup dal PIP,
+rientro, copertura automatica dell'osservatore, e uscita dal PIP senza popup appesi.
+

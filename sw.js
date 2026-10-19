@@ -607,7 +607,7 @@
 //               nell'ordine al primo click. Ora il campo si tocca solo scrivendolo o premendo il
 //               pulsante del lottaggio consigliato; il messaggio dice "Consigliato ... Non e'
 //               stato impostato".
-const CACHE_NAME = "forex-backtest-lab-v2.0.5";
+const CACHE_NAME = "forex-backtest-lab-v2.0.6";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
