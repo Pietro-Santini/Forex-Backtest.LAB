@@ -467,3 +467,36 @@
   prima di alzare la versione, e poi non era stato ricopiato: l'APK pubblicato come 2.0.9
   portava dentro la 2.0.8. LA REGOLA: la copia finale si verifica confrontando il file di
   destinazione con quello di partenza (un hash, un numero di versione), non guardandolo.
+
+- Un campo che si applica MENTRE si scrive non si puo' usare. (20 ottobre 2026, la scala
+  dell'interfaccia e il testo del grafico.) I due campi erano agganciati all'evento `input`, che
+  scatta a ogni tasto: con "50" dentro, un backspace lascia "5", e il "5" veniva applicato,
+  schiacciato al tetto minimo e RISCRITTO nel campo. Risultato: dal 50% non si poteva arrivare al
+  30%, perche' il numero cambiava sotto le dita a metà. LA REGOLA: un campo numerico con un tetto
+  si applica a MODIFICA FINITA (`change`: uscita dal campo o Invio), mai a ogni tasto; e il valore
+  svuotato o messo a zero non e' un valore, si rimette quello di prima. Il sintomo da riconoscere
+  e' "non mi fa mettere il numero che voglio", che sembra un problema di validazione e invece e'
+  il momento in cui si applica.
+
+- Un test che chiama un programma esterno dipende da QUALE programma vince nel PATH. (20 ottobre
+  2026, il collaudo della versione dentro l'APK.) Il test leggeva l'APK con `execFileSync('tar',
+  ...)`: con il tar di Windows (System32, che e' bsdtar e sa aprire gli zip) passava, con quello
+  che installa Git (GNU tar) cadeva due volte - legge `C:\...` come se `C` fosse un computer
+  remoto ("Cannot execute remote shell") e comunque non apre gli zip. Stesso file, stesso APK,
+  stesso Windows, esito diverso da una sessione all'altra. E' la lezione 9 un passo piu' in la':
+  non basta che il test non erediti il sistema operativo, non deve nemmeno ereditare il PATH.
+  LA REGOLA: se una libreria del linguaggio puo' fare il lavoro, si usa quella (un APK e' uno zip:
+  si legge con `node:zlib` in quaranta righe, ed e' anche cento volte piu' veloce).
+
+- Un livello spostato non si confronta col passato in cui non c'era. (21 ottobre 2026, la posizione
+  chiusa a un prezzo che il mercato non aveva toccato.) La riscansione dello storico confrontava lo
+  stop di ADESSO con tutte le candele dall'apertura in poi: uno stop portato a pareggio trovava il
+  massimo di tre ore prima e chiudeva. LA REGOLA: quando un valore puo' cambiare nel tempo, ogni
+  confronto col passato deve sapere DA QUANDO quel valore vale; se non lo si sa, nel dubbio non si
+  fa l'azione irreversibile. Il sintomo da riconoscere e' «succede sempre a una riapertura»: vuol
+  dire che a farlo e' qualcosa che gira al ricaricamento, non il tempo reale.
+- Il prezzo che vedi non e' il prezzo che esegue. (21 ottobre 2026, stessa vicenda, parte MT5.) Lo
+  stop di una SELL scatta sull'ASK, i grafici disegnano il BID, e alla pausa giornaliera lo spread
+  si apre di decine di pip: una chiusura «a un prezzo mai toccato» puo' essere regolarissima. Prima
+  di dare la colpa al codice si guarda se il codice poteva anche solo toccare quella posizione: qui
+  non poteva, le posizioni reali sono escluse da entrambe le funzioni che chiudono.

@@ -98,6 +98,7 @@
     getAuth, onAuthStateChanged,
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
     GoogleAuthProvider, signInWithPopup, signInWithRedirect, getRedirectResult,
+    signInWithCredential,
     sendEmailVerification, reload,
     getAdditionalUserInfo, signOut
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -311,6 +312,11 @@
       }
       esitoLetto = true;
       consumaStatoAuth();
+      // NOTA: questo pezzo e' uguale a entraNellApp() del blocco del pulsante Google, e resta
+      // scritto qui di proposito. Questo blocco viene estratto e collaudato DA SOLO
+      // (login_google_esito.test.mjs): se chiamasse una funzione dell'altro blocco, il collaudo
+      // dovrebbe fingerla - e proverebbe il finto invece del vero. Due righe ripetute valgono
+      // meno di un collaudo che non misura piu' niente.
       const info = getAdditionalUserInfo(cred);
       await ensureUserProfile(cred.user);
       if (info && info.isNewUser) {
@@ -422,9 +428,101 @@
   /* SCEGLTA FLUSSO GOOGLE: INIZIO - blocco provato per intero da
      laboratorio/app/login_google_flusso.test.mjs, con Firebase e finestra finti:
      si guarda QUALE strada viene presa, non come e' scritta. */
+  // DOPO L'ACCESSO: uno solo, per tutte e tre le strade (nativa, popup, reindirizzamento).
+  // Prima questo blocco era copiato tre volte: tre copie sono tre comportamenti che possono
+  // divergere, e la strada nuova sarebbe stata la quarta.
+  async function entraNellApp(cred){
+    const info = getAdditionalUserInfo(cred);
+    await ensureUserProfile(cred.user);   // idempotente: sicura anche per chi c'e' gia'
+    if (info && info.isNewUser) {
+      await sendWelcomeEmail(cred.user);
+      showInfo("Benvenuto in Forex Backtest Lab! 🎉 Hai 7 giorni di prova gratuita a partire da ora. Accesso all'app tra qualche secondo...");
+      setTimeout(()=>window.location.replace(DESTINATION), 3000);
+    } else {
+      window.location.replace(DESTINATION);
+    }
+  }
+
+  /* ACCESSO GOOGLE NATIVO (solo nell'app installata): INIZIO
+     ------------------------------------------------------------------------------------
+     PERCHE' ESISTE. Dentro l'app Android il giro di Google NON si puo' fare nella pagina:
+     ne' col popup (la WebView non apre finestre nuove: Firebase resta senza "opener" e
+     risponde 400) ne' col reindirizzamento (misurato il 20 ottobre 2026: dopo la verifica in
+     due passaggi si finiva comunque su una pagina di Google con errore 400, e al ritorno
+     nell'app la rotellina girava a vuoto). Non e' un difetto da aggirare: l'accesso OAuth
+     dentro una WebView incorporata non e' una strada affidabile.
+     COME FUNZIONA ADESSO. Lo fa il sistema operativo, fuori dalla pagina, col plugin nativo
+     (@capacitor-firebase/authentication): Android mostra il suo elenco di account, restituisce
+     un "idToken" di Google, e quel token viene scambiato con Firebase qui nella pagina
+     (signInWithCredential). Nessuna navigazione, nessuna finestra, nessun ritorno da leggere.
+     Il plugin e' configurato con skipNativeAuth, cosi' la sessione vera resta UNA: quella del
+     Firebase della pagina, che e' quello che poi usa tutta l'app.
+     Si chiama dal ponte globale (window.Capacitor.Plugins) e non con un `import`: qui Firebase
+     arriva dalla CDN e nel progetto mobile non c'e' nessun bundler. */
+  function pluginAccessoNativo(){
+    try{
+      const p = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.FirebaseAuthentication;
+      return (p && typeof p.signInWithGoogle === 'function') ? p : null;
+    }catch(e){ return null; }
+  }
+  async function accessoGoogleNativo(plugin){
+    const r = await plugin.signInWithGoogle();
+    const idToken = r && r.credential && r.credential.idToken;
+    if (!idToken) {
+      // Senza token non c'e' niente da scambiare: meglio dirlo che restare a girare.
+      // Il codice NON comincia con "auth/" di proposito: non e' un errore di Firebase, e la
+      // frase che l'utente legge si decide qui dentro, dove il collaudo arriva.
+      const err = new Error('nessun idToken dal plugin nativo');
+      err.code = 'nativo/senza-credenziale';
+      throw err;
+    }
+    // accessToken c'e' solo in alcuni casi: GoogleAuthProvider.credential lo accetta mancante.
+    const accessToken = r.credential.accessToken || undefined;
+    return await signInWithCredential(auth, GoogleAuthProvider.credential(idToken, accessToken));
+  }
+  // GLI ERRORI DEL PLUGIN NATIVO NON SONO QUELLI DI FIREBASE: non hanno un `code` "auth/...",
+  // hanno un messaggio. Con il solo traduciErrore() l'utente leggeva «Errore: undefined»,
+  // cioe' niente - e proprio nel caso che serve riconoscere: quando Android risponde
+  // "DEVELOPER_ERROR" (codice 10) vuol dire che l'impronta SHA-1 o il client OAuth non
+  // corrispondono, ed e' un dato che serve sapere, non da nascondere.
+  // Sta DENTRO il blocco collaudato di proposito: e' la parte che l'utente legge quando
+  // qualcosa va storto, quindi va provata per davvero e non finta.
+  function traduciErroreAccesso(e){
+    const code = e && e.code;
+    if (code && String(code).startsWith("auth/")) return traduciErrore(code);
+    if (code === "nativo/senza-credenziale")
+      return "Google non ha restituito le credenziali dell'accesso. Riprova; se ricapita, " +
+             "controlla di essere connesso a internet.";
+    const msg = String((e && e.message) || "").trim();
+    if (/cancel/i.test(msg) || code === 12501 || String(code) === "12501")
+      return "Accesso annullato: non hai scelto nessun account.";
+    if (/developer_error|^10$/i.test(msg) || String(code) === "10")
+      return "L'app non e' riconosciuta da Google (impronta di firma o client OAuth non corrispondenti). " +
+             "Va sistemata la configurazione del progetto, non e' un problema del tuo account.";
+    if (/network|timeout/i.test(msg))
+      return "Google non risponde: controlla la connessione e riprova.";
+    return msg ? ("Accesso con Google non riuscito: " + msg) : traduciErrore(code);
+  }
+  /* ACCESSO GOOGLE NATIVO: FINE */
+
   async function clickGoogle(){
     clearMsgs();
     skipAutoRedirect = true;
+
+    // NELL'APP INSTALLATA: accesso nativo, e NESSUN ripiego sulla pagina. Ripiegare sul popup
+    // o sul reindirizzamento dentro la WebView vorrebbe dire tornare esattamente nell'errore
+    // 400: se il nativo non riesce si dice perche', e si resta qui.
+    const nativo = isCapacitor ? pluginAccessoNativo() : null;
+    if (nativo) {
+      try {
+        const cred = await accessoGoogleNativo(nativo);
+        await entraNellApp(cred);
+      } catch (e) {
+        skipAutoRedirect = false;
+        showError(traduciErroreAccesso(e));
+      }
+      return;
+    }
 
     // IL POPUP DI FIREBASE NON FUNZIONA DENTRO L'APK. Misurato il 20 ottobre 2026 dal
     // proprietario: "inserisco l'email, inserisco la password, mi manda all'autorizzazione
@@ -464,15 +562,7 @@
     }
     try{
       const cred = await signInWithPopup(auth, new GoogleAuthProvider());
-      const info = getAdditionalUserInfo(cred);
-      await ensureUserProfile(cred.user); // idempotente: sicura anche per un utente già esistente
-      if (info && info.isNewUser) {
-        await sendWelcomeEmail(cred.user);
-        showInfo("Benvenuto in Forex Backtest Lab! 🎉 Hai 7 giorni di prova gratuita a partire da ora. Accesso all'app tra qualche secondo...");
-        setTimeout(()=>window.location.replace(DESTINATION), 3000);
-      } else {
-        window.location.replace(DESTINATION);
-      }
+      await entraNellApp(cred);
     }catch(e){
       // Se il popup è bloccato dal browser, ripiego sul reindirizzamento.
       if (e && e.code === "auth/popup-blocked") {
@@ -593,6 +683,7 @@
     };
     return mappa[code] || ("Errore: " + code);
   }
+
 </script>
 </body>
 </html>

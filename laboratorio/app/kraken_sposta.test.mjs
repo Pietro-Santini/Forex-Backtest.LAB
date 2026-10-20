@@ -1,10 +1,26 @@
-// Selezionare una posizione Kraken e spostarne stop e target.
+// STOP E TARGET DI KRAKEN SI SPOSTANO DAL GRAFICO, NON DALLA TABELLA.
 //
-// RICHIESTO dal proprietario (7 ottobre 2026): «facciamo in modo che nel conto Kraken ci sia la
-// possibilità comunque di selezionare la posizione e di spostare quelli che sono TP e SL».
+// RICHIESTO dal proprietario (20 ottobre 2026): «nelle posizioni kraken ora è in funzione che se
+// clicco sulla tabella delle operazioni sul tp-sl mi fa cambiare il valore del prezzo, invece no
+// non deve farlo».
 //
-// Il campo che il ponte si aspetta è `sl`, non `prezzo`: sbagliarlo non dà errore a schermo, dà
-// uno stop che non si muove. Questi test guardano cosa viene mandato davvero.
+// COM'ERA, E PERCHE' CAMBIA. Il 7 ottobre aveva chiesto di «poter selezionare la posizione e
+// spostare TP e SL», e l'unica strada possibile allora era un clic sulla cella della tabella, che
+// apriva una finestrella in cui si scriveva il prezzo. Il 16 ottobre (v165) è arrivata la strada
+// vera: si seleziona la posizione, si afferra la linea sul grafico e si trascina. Da quel momento
+// il clic in tabella è diventato una SECONDA strada per muovere un ordine reale — e la più facile
+// da premere per sbaglio, perché la tabella si scorre col dito.
+//
+// LA REGOLA ADESSO: le celle SL e TP della tabella non si cliccano e non mandano niente. La cella
+// «Eseguita» invece SI' (v167: l'orario di una posizione aperta prima della v163 si dichiara a
+// mano) — lì non si muove nessun ordine vero, e questi test tengono fermo anche quello, perché
+// togliere il clic sbagliato non deve portarsi via quello giusto.
+//
+// LE DUE GARANZIE PORTATE QUI DAL VECCHIO BANCO. Erano scritte sui due metodi della tabella, che
+// adesso non esistono più; valgono però identiche sulla strada del trascinamento, che è l'unica
+// che manda ordini. Se andassero perdute nessuno se ne accorgerebbe a schermo:
+//   - il ponte legge il campo `sl`: mandargli `prezzo` non dà errore, dà uno stop che non si muove;
+//   - i target si mandano TUTTI insieme: mandando solo quello spostato, gli altri si cancellano.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
@@ -22,112 +38,115 @@ const PREPARA = () => {
   window.appConfirm = async () => true;
   krakenSelezionata = 'PF_XBTUSD';
   krakenPosPannello();
+  // Le celle si cercano PER NOME DI COLONNA, non per numero: aggiungendo una colonna ogni numero
+  // scivola di un posto e il test finisce a misurare la cella sbagliata (già successo con «Origine»).
+  window._cella = (nome) => {
+    const nomi = [...document.querySelectorAll('#krakenPosPanel th')].map(t => t.textContent.trim());
+    const celle = [...document.querySelectorAll('#krakenPosPanel tbody tr:first-child td')];
+    const i = nomi.indexOf(nome);
+    return i < 0 ? null : celle[i];
+  };
 };
 
-const posizione = () => (krakenPosizioni.posizioni[0]);
-
-test('lo stop si manda col campo che il ponte si aspetta', async () => {
+test('le celle SL e TP non si cliccano, nemmeno sulla posizione selezionata', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
-      window.appPrompt = async () => '95';
-      await krakenSpostaSl(krakenPosizioni.posizioni[0]);
+      const sl = window._cella('SL'), tp = window._cella('TP');
+      if (!sl || !tp) return {manca: true};
+      // Se qualcuno ci riattacca un ascoltatore, il clic lo fa scattare e il ponte riceve.
+      sl.click(); tp.click();
+      await new Promise(r => setTimeout(r, 60));
+      return {
+        slCursore: sl.style.cursor, tpCursore: tp.style.cursor,
+        slSottolineato: sl.style.textDecoration, tpSottolineato: tp.style.textDecoration,
+        mandato: window._mandato
+      };
+    }, PREPARA.toString());
+    assert.equal(r.manca, undefined, 'nella tabella Kraken mancano le colonne SL/TP');
+    assert.notEqual(r.slCursore, 'pointer', 'la cella SL non deve invitare al clic');
+    assert.notEqual(r.tpCursore, 'pointer', 'la cella TP non deve invitare al clic');
+    assert.ok(!/underline/.test(r.slSottolineato || ''), 'niente sottolineatura da «cliccami» su SL');
+    assert.ok(!/underline/.test(r.tpSottolineato || ''), 'niente sottolineatura da «cliccami» su TP');
+    assert.deepEqual(r.mandato, [],
+      'un clic sulle celle SL/TP non deve mandare NIENTE al ponte: ' + JSON.stringify(r.mandato));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('la cella SL dice dove si sposta lo stop, invece di non dire niente', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async (p) => {
+      eval('(' + p + ')')();
+      return {sl: window._cella('SL').title, tp: window._cella('TP').title};
+    }, PREPARA.toString());
+    assert.match(r.sl, /grafico/i, 'il suggerimento deve indicare la strada giusta: ' + r.sl);
+    assert.match(r.tp, /grafico/i, 'idem per i target: ' + r.tp);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('la cella «Eseguita» resta cliccabile: togliere il clic sbagliato non porta via quello giusto', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async (p) => {
+      eval('(' + p + ')')();
+      const es = window._cella('Eseguita');
+      return es ? {cursore: es.style.cursor, titolo: es.title} : {manca: true};
+    }, PREPARA.toString());
+    assert.equal(r.manca, undefined, 'manca la colonna «Eseguita»');
+    assert.equal(r.cursore, 'pointer',
+      'l\'orario di una posizione senza orario vero si dichiara a mano (v167): quel clic resta');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('dal grafico lo stop si manda col campo che il ponte si aspetta', async () => {
+  // PORTATO dal vecchio banco: il ponte legge `sl`. Con `prezzo` non si vede nessun errore a
+  // schermo, e lo stop resta dov'era.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async (p) => {
+      eval('(' + p + ')')();
+      await krakenLivelloApplica({simbolo: 'PF_XBTUSD', tipo: 'SL', scostamento: 0}, 95);
       return window._mandato;
     }, PREPARA.toString());
+    assert.equal(r.length, 1, 'una sola chiamata al ponte: ' + JSON.stringify(r));
     assert.equal(r[0].p, '/sl');
-    // Il ponte legge `sl`: con `prezzo` risponderebbe 422 e lo stop resterebbe dov'è.
     assert.deepEqual(r[0].corpo, {simbolo: 'PF_XBTUSD', sl: 95});
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
 
-test('la virgola decimale si accetta: in italiano si scrive così', async () => {
+test('dal grafico i target si mandano TUTTI insieme, non solo quello spostato', async () => {
+  // PORTATO dal vecchio banco: mandando solo il target trascinato, gli altri si cancellano.
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
-      window.appPrompt = async () => '95,5';
-      await krakenSpostaSl(krakenPosizioni.posizioni[0]);
-      return window._mandato[0].corpo.sl;
-    }, PREPARA.toString());
-    assert.equal(r, 95.5);
-    assert.deepEqual(errori, []);
-  } finally { await browser.close(); }
-});
-
-test('annullando non si manda niente', async () => {
-  const {browser, pagina, errori} = await apriApp();
-  try{
-    const r = await pagina.evaluate(async (p) => {
-      eval('(' + p + ')')();
-      window.appPrompt = async () => null;
-      await krakenSpostaSl(krakenPosizioni.posizioni[0]);
-      window.appPrompt = async () => '  ';
-      await krakenSpostaSl(krakenPosizioni.posizioni[0]);
-      window.appPrompt = async () => 'abc';
-      await krakenSpostaSl(krakenPosizioni.posizioni[0]);
-      return window._mandato.length;
-    }, PREPARA.toString());
-    assert.equal(r, 0, 'niente di quello che non è un prezzo deve arrivare al ponte');
-    assert.deepEqual(errori, []);
-  } finally { await browser.close(); }
-});
-
-test('i target si danno tutti insieme, separati da «/»', async () => {
-  const {browser, pagina, errori} = await apriApp();
-  try{
-    const r = await pagina.evaluate(async (p) => {
-      eval('(' + p + ')')();
-      window.appPrompt = async () => '120 / 135 / 150';
-      await krakenSpostaTp(krakenPosizioni.posizioni[0]);
+      // Si trascina il SECONDO target (indice 1) da 130 a 140: il primo deve restare 120.
+      await krakenLivelloApplica({simbolo: 'PF_XBTUSD', tipo: 'TP', indice: 1, scostamento: 0}, 140);
       return window._mandato;
     }, PREPARA.toString());
     assert.equal(r[0].p, '/tp');
-    assert.deepEqual(r[0].corpo, {simbolo: 'PF_XBTUSD', tp: [120, 135, 150]});
+    assert.deepEqual(r[0].corpo, {simbolo: 'PF_XBTUSD', tp: [120, 140]},
+      'il target non trascinato deve essere rimandato com\'era: ' + JSON.stringify(r[0].corpo));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
 
-test('lasciando vuoto si tolgono tutti i target', async () => {
+test('annullando la conferma non si manda niente', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
-      window.appPrompt = async () => '';
-      await krakenSpostaTp(krakenPosizioni.posizioni[0]);
-      return window._mandato[0].corpo;
+      window.appConfirm = async () => false;
+      await krakenLivelloApplica({simbolo: 'PF_XBTUSD', tipo: 'SL', scostamento: 0}, 95);
+      return window._mandato;
     }, PREPARA.toString());
-    assert.deepEqual(r, {simbolo: 'PF_XBTUSD', tp: []});
-    assert.deepEqual(errori, []);
-  } finally { await browser.close(); }
-});
-
-test('le celle SL e TP si cliccano solo sulla posizione selezionata', async () => {
-  const {browser, pagina, errori} = await apriApp();
-  try{
-    const r = await pagina.evaluate(async (p) => {
-      eval('(' + p + ')')();
-      // SI CERCANO LE COLONNE PER NOME, non per numero: è la stessa fragilità che l'app aveva
-      // dentro (i clic legati alle colonne 4 e 5 scritte a mano). Aggiungendo la colonna
-      // «Origine» ogni numero è scivolato di un posto, e il test misurava la cella sbagliata.
-      const celle = () => [...document.querySelectorAll('#krakenPosPanel tbody tr:first-child td')];
-      const nomi = [...document.querySelectorAll('#krakenPosPanel th')].map(t => t.textContent.trim());
-      const iSl = nomi.indexOf('SL'), iTp = nomi.indexOf('TP');
-      const conSelezione = celle().map(td => td.style.cursor);
-      krakenSelezionata = '';           // deselezionata
-      krakenPosPannello();
-      const senzaSelezione = celle().map(td => td.style.cursor);
-      return {
-        slSelezionata: conSelezione[iSl], tpSelezionata: conSelezione[iTp],
-        slDeselezionata: senzaSelezione[iSl], tpDeselezionata: senzaSelezione[iTp]
-      };
-    }, PREPARA.toString());
-    assert.equal(r.slSelezionata, 'pointer');
-    assert.equal(r.tpSelezionata, 'pointer');
-    // Un clic distratto su un'altra riga non deve poter toccare il suo stop.
-    assert.equal(r.slDeselezionata, '');
-    assert.equal(r.tpDeselezionata, '');
+    assert.deepEqual(r, [], 'chi annulla non sposta niente');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
