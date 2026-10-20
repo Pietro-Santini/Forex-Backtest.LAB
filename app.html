@@ -21239,9 +21239,18 @@ async function syncMt5PendingOrderLevels(p){
 // buon fine la registra anche in locale (Trade Journal, come closeTrade() fa per tutte le
 // altre): mai il contrario, per non disallineare mai "chiusa in app" da "ancora aperta sul
 // conto vero".
-async function closeMt5PositionReal(pos,reason){
+// `opz.senzaConferma`: la conferma e' GIA' stata data da chi chiama, e non va richiesta una
+// seconda volta. Serve a due cose, entrambe chieste dal proprietario:
+//  - le chiusure a blocco ("se clicca chiudi x posizioni gli viene fuori soltanto UN messaggio di
+//    conferma"): prima la conferma si ripeteva per ogni posizione reale, quindi con dieci
+//    posizioni erano dieci popup e un "si'" di troppo chiudeva quello che non si voleva;
+//  - la chiusura automatica prima della chiusura del mercato: li' la scelta e' stata fatta
+//    accendendo l'interruttore, e all'ora di chiusura non c'e' nessuno davanti allo schermo a
+//    premere "conferma".
+// Il caso normale (il pulsante Chiudi di una riga) non passa nessuna opzione e continua a chiedere.
+async function closeMt5PositionReal(pos,reason,opz){
  if(!pos||pos.mt5Ticket==null)return false;
- if(!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
+ if(!(opz&&opz.senzaConferma)&&!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
  $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.mt5Ticket})…`;
  const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.mt5Ticket})});
  if(!result.ok){
@@ -29119,6 +29128,44 @@ tdD.appendChild(nota2);
   scorc.appendChild(bDavanti);
  }
  tdD.appendChild(scorc);
+ // CHIUDERE PRIMA CHE CHIUDA IL MERCATO. Sta qui di proposito: questo pannello e' LO STESSO per
+ // la strategia universale e per quella di ogni sala (tgAutoApriStrat passa l'uno o l'altro
+ // oggetto), quindi una riga sola soddisfa "deve stare sia sulla strategia universale che sulle
+ // strategie singole per ogni sala" senza scrivere due interfacce che un domani divergono.
+ const pre=fblChiusuraPreNormalizza(cfg.chiusuraPre);
+ const rigaPre=document.createElement('div');
+ rigaPre.className='tgCfgRegola';
+ rigaPre.style.marginTop='10px';
+ const lab=document.createElement('label');
+ lab.style.cssText='display:flex;align-items:center;gap:6px;flex:1 1 220px;cursor:pointer';
+ const cb=document.createElement('input');
+ cb.type='checkbox'; cb.checked=pre.attivo;
+ cb.title='Al cambio giornata lo spread si apre di decine di pip e lo stop di una vendita si esegue '
+   +'sul prezzo di acquisto: misurati 50 pip su EURCHF contro gli 0,2 abituali. Chiudere prima '
+   +'toglie le posizioni da quella finestra.';
+ lab.appendChild(cb);
+ lab.appendChild(document.createTextNode('Chiudi le posizioni in guadagno prima della chiusura del mercato'));
+ rigaPre.appendChild(lab);
+ const min=document.createElement('input');
+ min.type='number'; min.min='1'; min.max='240'; min.step='1'; min.className='tgCfgIn tgCfgNum';
+ min.style.width='62px'; min.value=pre.minuti; min.disabled=!pre.attivo;
+ min.title='Quanti minuti prima della chiusura';
+ const scrivi=()=>{
+  cfg.chiusuraPre=fblChiusuraPreNormalizza({attivo:cb.checked,minuti:Number(min.value)});
+  tgAutoSalva(); ridisegna();
+ };
+ cb.addEventListener('change',scrivi);
+ min.addEventListener('change',scrivi);
+ rigaPre.appendChild(min);
+ rigaPre.appendChild(document.createTextNode(' minuti prima'));
+ tdD.appendChild(rigaPre);
+ const notaPre=document.createElement('div');
+ notaPre.className='tgCfgNota';
+ notaPre.style.marginTop='4px';
+ notaPre.innerHTML='Si chiudono <b>solo</b> le posizioni in guadagno: una in perdita si lascia correre, '
+  +'perch&eacute; chiuderla vorrebbe dire trasformarla in perdita certa. '
+  +'Le cripto non hanno chiusura, quindi non le riguarda.';
+ tdD.appendChild(notaPre);
 }
 // --- Interfaccia del popup. L'elenco delle sale e' quello vero del ponte (tgGruppi): cosi' non
 // si puo' configurare l'automatico per una sala che non si sta nemmeno ascoltando.
@@ -42148,6 +42195,111 @@ function fblVicinoAllaChiusura(asset,minuti,t){
  const manca=fblMancaAllaChiusura(asset,t);
  return manca!=null&&manca<=m*60000;
 }
+// CHIUDERE DA SOLI PRIMA CHE CHIUDA IL MERCATO.
+//
+// RICHIESTO dal proprietario (21 ottobre 2026), dopo aver visto i tick del rollover: «facciamo in
+// modo nella configurazione delle strategie delle sale che se c'e' una posizione ancora aperta
+// prima di scattare la chiusura del mercato, un minuto prima, se la posizione e' in guadagno,
+// l'utente puo' selezionare se chiudere automaticamente la posizione prima dello scadere della
+// chiusura del mercato. Questo deve stare sia sulla strategia universale che sulle strategie
+// singole per ogni sala».
+//
+// DUE SCELTE, ed entrambe vogliono dire "nel dubbio non si tocca":
+//   - si chiude SOLO se la posizione e' in GUADAGNO. Una posizione in perdita non si chiude per
+//     l'orario: chiuderla vorrebbe dire trasformare in perdita certa quella che poteva ancora
+//     girare, e non e' quello che e' stato chiesto;
+//   - e' SPENTO di predefinito. Chiude posizioni vere: lo si accende sapendo cosa fa.
+function fblChiusuraPreVuota(){ return {attivo:false,minuti:1}; }
+function fblChiusuraPreNormalizza(v){
+ const o=Object.assign(fblChiusuraPreVuota(),v||{});
+ const m=Number(o.minuti);
+ // Il tetto a 240 non e' prudenza spicciola: "chiudi tutto quattro ore prima" e' gia' una scelta
+ // molto larga, e un numero sbagliato di tre cifre in piu' chiuderebbe le posizioni sempre.
+ return {attivo:!!o.attivo,minuti:(Number.isFinite(m)&&m>0&&m<=240)?m:1};
+}
+// Quale impostazione vale per questa posizione: quella della SUA sala se l'ha scelta, altrimenti
+// quella universale. Stessa gerarchia del resto delle strategie.
+// DOVE VIVE L'IMPOSTAZIONE. Nello stesso oggetto che il pannello della strategia gia' scrive e
+// salva (tgAutoSalva): `tgAuto.universale` per quella universale, `tgAuto.sale[nome]` per la
+// singola sala. NON in stratLeggi/stratSalva: quello e' il magazzino della cronologia sale, un'
+// altra cosa - scriverci qui vorrebbe dire salvare dove nessuno legge.
+// LA GERARCHIA: la sala che ha scelto per conto suo vince; altrimenti vale quella universale.
+// Si noti che qui NON si guarda se la strategia universale e' "accesa": quella bandierina decide
+// come si ESEGUONO i segnali, mentre questa e' una protezione, e una protezione accesa una volta
+// sola deve valere per tutto quello che non ha detto il contrario.
+function fblChiusuraPreCfg(pos){
+ try{
+  const fam=(typeof fblFamigliaAsset==='function')?fblFamigliaAsset(pos&&pos.asset):'fx';
+  // Le configurazioni sono DUE, una per famiglia (forex e cripto): si prende quella dell'asset di
+  // questa posizione. Se la cripto non ne ha una sua (tgAutoCr puo' essere nullo) si ripiega su
+  // quella forex, come fa il resto dell'app.
+  let A=null;
+  try{ if(typeof tgAutoDi==='function')A=tgAutoDi(fam); }catch(e){}
+  if(!A)A=tgAutoFx;
+  if(!A)return fblChiusuraPreVuota();
+  const sala=pos&&pos.tgSala;
+  const s=sala&&A.sale&&A.sale[sala];
+  if(s&&s.chiusuraPre&&s.chiusuraPre.attivo!=null)return fblChiusuraPreNormalizza(s.chiusuraPre);
+  const u=(typeof tgAutoUni==='function')?tgAutoUni(A):(A.universale||null);
+  return fblChiusuraPreNormalizza(u&&u.chiusuraPre);
+ }catch(e){}
+ return fblChiusuraPreVuota();
+}
+// Questa posizione va chiusa adesso perche' il mercato sta per chiudere?
+function fblDaChiuderePrimaDellaChiusura(pos,t){
+ if(!pos||!pos.lots)return false;
+ const cfg=fblChiusuraPreCfg(pos);
+ if(!cfg.attivo)return false;
+ if(!fblVicinoAllaChiusura(pos.asset,cfg.minuti,t))return false;
+ const pl=(typeof fblPlCorrente==='function')?fblPlCorrente(pos):null;
+ // Senza un P/L non si sa se e' in guadagno: non si chiude. "Non si sa" non diventa mai "si'".
+ return Number.isFinite(pl)&&pl>0;
+}
+// L'ESECUZIONE. Gira ogni pochi secondi e chiude quello che va chiuso. NON chiede conferma: la
+// scelta e' gia' stata fatta accendendo l'interruttore, e all'ora di chiusura non c'e' nessuno
+// davanti allo schermo. Per questo l'interruttore e' spento di predefinito.
+let fblChiusuraPreUltimoGiro=0;
+async function fblChiusuraPreGiro(t){
+ // SOLO IN LIVE. In Storico si sta rivedendo il passato: chiudere li' una posizione perche'
+ // "sta per chiudere il mercato" non vorrebbe dire niente, e sporcherebbe il backtest.
+ if(!liveModeActive)return 0;
+ const quando=Number.isFinite(t)?t:Date.now();
+ // Ogni 5 secondi basta: la finestra si misura in minuti, e questo giro tocca ordini veri.
+ if(quando-fblChiusuraPreUltimoGiro<5000)return 0;
+ fblChiusuraPreUltimoGiro=quando;
+ let lista=[];
+ try{ lista=(typeof fblPosizioniBlocco==='function')?fblPosizioniBlocco():[]; }catch(e){ return 0; }
+ let fatte=0;
+ for(const pos of lista){
+  try{
+   // Gia' presa in carico da un giro precedente che sta ancora aspettando il broker: la chiusura
+   // reale e' asincrona, e senza questa bandierina il giro dopo la richiederebbe una seconda volta.
+   if(pos.__chiusuraPreInCorso)continue;
+   if(!fblDaChiuderePrimaDellaChiusura(pos,quando))continue;
+   pos.__chiusuraPreInCorso=true;
+   const quanto=(typeof fblPlCorrente==='function')?fblPlCorrente(pos):null;
+   if(pos.mt5Ticket!=null){
+    const ok=await closeMt5PositionReal(pos,'PRE-CHIUSURA',{senzaConferma:true});
+    if(ok)fatte++; else pos.__chiusuraPreInCorso=false;   // non riuscita: si riprovera'
+   }else{
+    const prezzo=(typeof fblPrezzoChiusura==='function')?fblPrezzoChiusura(pos):null;
+    if(prezzo==null){ pos.__chiusuraPreInCorso=false; continue; }
+    closeTrade('PRE-CHIUSURA',prezzo,pos); fatte++;
+   }
+   if(fatte){
+    $('status').textContent='🕛 '+(pos.asset||'')+': chiusa prima della chiusura del mercato con '
+     +((quanto!=null&&quanto>=0?'+':'')+(quanto!=null?euro(quanto):'—'))
+     +'. Al cambio giornata lo spread si apre e lo stop puo’ scattare su un prezzo che il grafico non mostra.';
+   }
+  }catch(e){ try{ pos.__chiusuraPreInCorso=false; }catch(e2){} }
+ }
+ if(fatte){ try{ draw(); update(); }catch(e){} }
+ return fatte;
+}
+// UN GIRO PROPRIO, non agganciato al timer del grafico. Quel timer esce subito quando la sorgente
+// e' MT5 (`if(mt5ActiveSymbol)return;`), cioe' proprio nel caso che questa funzione deve coprire.
+// E deve girare anche a scheda nascosta: il senso e' che funzioni quando NON si sta guardando.
+try{ setInterval(()=>{ try{ fblChiusuraPreGiro(); }catch(e){} },5000); }catch(e){}
 /* CHIUSURA DEL MERCATO: FINE */
 // UNA SOLA DOMANDA, UNA SOLA RISPOSTA: "in questo istante il mercato di questo asset e' fermo?"
 //
@@ -45454,6 +45606,13 @@ function stratSalva(sala,cfg){
  let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
  d[sala]=cfg; try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
 }
+// ESPOSTE SU window APPOSTA. Tutto questo blocco gira dentro una funzione chiusa, quindi i suoi
+// nomi NON sono globali: dall'altro script (quello grosso) `stratLeggi` risulta "non definita" e
+// ogni lettura della strategia di sala fallirebbe in silenzio - sulla carta la chiamata c'e',
+// nell'app vale `undefined`. E' lo stesso inciampo gia' pagato con pubblicaPreferenze, ed e' lo
+// stesso rimedio. Serve a fblChiusuraPreCfg(), che deve sapere se una SALA ha scelto per conto
+// suo di chiudere prima della chiusura del mercato.
+try{ window.stratLeggi=stratLeggi; window.stratSalva=stratSalva; }catch(e){}
 // Quanti TP ha davvero questa sala: non si mostrano cinque righe se i segnali ne hanno due.
 // QUANTI TARGET HA DAVVERO QUESTA SALA.
 // RICHIESTO: il numero di target da configurare dev'essere quello massimo che la sala ha usato
