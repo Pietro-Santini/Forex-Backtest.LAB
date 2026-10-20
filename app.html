@@ -19458,7 +19458,11 @@ function setTradeLevel(type,value,source='input'){
    const [,idStr,field]=type.split(':');
    const p=pendingOrders.find(o=>String(o.id)===idStr);
    if(!p)return;
-   if(field==='entry')p.entry=value; else if(field==='sl')p.sl=value; else if(field==='tp')p.tp=value;
+   if(field==='entry')p.entry=value;
+   // QUANDO il livello e' stato messo: lo legge scanHistoricalSlTpTouches() per non confrontare
+   // mai uno stop spostato con un passato in cui non c'era (difetto del 21 ottobre 2026).
+   else if(field==='sl'){ p.sl=value; p.slAt=Date.now(); }
+   else if(field==='tp'){ p.tp=value; p.tpAt=Date.now(); }
    $('status').textContent=`Ordine pendente ${p.side}: ${field==='entry'?'entrata':field.toUpperCase()} impostata a ${fmtPrice(value)}.`;
    // Come alla creazione: se il nuovo prezzo di entrata cade già dentro la candela
    // attuale, l'ordine si attiva subito invece di restare in attesa di una candela futura.
@@ -19531,7 +19535,7 @@ function setTradeLevel(type,value,source='input'){
    if(err)return $('status').textContent=err;
  }
 
- if(type==='SL')active.sl=value;
+ if(type==='SL'){ active.sl=value; active.slAt=Date.now(); }   // vedi slAt: da quando esiste
  else active.tp=value;
 
  // Risk model is active only once an SL exists.
@@ -20264,7 +20268,27 @@ function scanHistoricalSlTpTouches(){
  if(!ownPositions.length)return;
  ownPositions.forEach(pos=>{
    if(!positions.includes(pos))return; // già chiusa da uno scan precedente in questo stesso giro
-   const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
+   let slOk=Number.isFinite(pos.sl)&&pos.sl>0; const tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
+   // DA QUANDO QUESTO STOP ESISTE. (Difetto misurato il 21 ottobre 2026 su EURCHF, segnalato dal
+   // proprietario: «il mercato non ci è andato, quindi come ha fatto a chiudere?».)
+   // Questa riscansione gira a OGNI ricaricamento dello storico e confronta le candele con lo
+   // stop di ADESSO. Se nel frattempo lo stop e' stato spostato - tipicamente portato a pareggio -
+   // finiva confrontato con un passato in cui quel livello non c'era: la SELL aperta alle 17:10 a
+   // 0,9283 aveva visto il prezzo toccare 0,9285 alle 17:20 (con lo stop ancora lontano, e infatti
+   // allora non successe niente); alle 23:00, dopo una riconnessione, la riscansione ritrovava
+   // quella candela e chiudeva a pareggio. Da fuori: una posizione chiusa a un prezzo che il
+   // mercato non toccava da quando lo stop era li', e sempre a una riapertura.
+   // La candela vale solo se e' successiva a quando lo stop e' stato MESSO.
+   const slDa=Number.isFinite(pos.slAt)?pos.slAt:null;
+   // Posizioni aperte prima di questa correzione: `slAt` non c'e'. Si sa pero' se lo stop e'
+   // stato spostato, confrontandolo con quello di apertura (rrSl, congelato per il R/R). Se e'
+   // stato spostato e non si sa QUANDO, dallo storico non si chiude: chiudere per sbaglio costa
+   // soldi, non chiudere costa che la posizione resta aperta e la si chiude guardandola.
+   if(slOk&&slDa==null){
+     const apertura=Number.isFinite(pos.rrSl)?pos.rrSl:(Number.isFinite(pos.slIniziale)?pos.slIniziale:null);
+     if(apertura!=null&&Math.abs(apertura-pos.sl)>1e-12)slOk=false;
+   }
+   const tpDa=Number.isFinite(pos.tpAt)?pos.tpAt:null;
    if(!slOk&&!tpOk)return; // niente da controllare
    for(let i=0;i<rows.length;i++){
      const r=rows[i];
@@ -20276,13 +20300,16 @@ function scanHistoricalSlTpTouches(){
      }else if(i<=pos.start){
        continue;
      }
+     // ...e in piu': mai valutare una candela precedente a quando il livello e' stato messo.
+     const slVale=slOk&&(slDa==null||!Number.isFinite(rowTime)||rowTime>slDa);
+     const tpVale=tpOk&&(tpDa==null||!Number.isFinite(rowTime)||rowTime>tpDa);
      let sl=false,tp=false;
      if(pos.side==='BUY'){
-       sl=slOk&&r.low<=pos.sl;
-       tp=tpOk&&r.high>=pos.tp;
+       sl=slVale&&r.low<=pos.sl;
+       tp=tpVale&&r.high>=pos.tp;
      }else{
-       sl=slOk&&r.high>=pos.sl;
-       tp=tpOk&&r.low<=pos.tp;
+       sl=slVale&&r.high>=pos.sl;
+       tp=tpVale&&r.low<=pos.tp;
      }
      if(sl||tp){
        const result=sl?closeResultLabel('SL',pos):'TP';
@@ -21129,7 +21156,7 @@ function applyBreakevenToPosition(pos){
  // all'entrata, che invece e' gia' dentro il prezzo di esecuzione: ne usciva un piccolo guadagno.
  const beSl=mt5PrezzoPareggio(pos);
  if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
- pos.sl=beSl;
+ pos.sl=beSl; pos.slAt=Date.now();   // pareggio: da adesso lo stop e' qui, non da prima
  pos.beMarkerSl=beSl; // ricordato per il Trade Journal: se scatta ancora qui, il risultato è "BE" e non un generico "SL"
  if(active===pos){ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }
  draw();update();
@@ -21161,7 +21188,7 @@ async function applyBreakevenToMt5TicketDirect(ticket){
    // arrivava un altro evento a toccarlo: le due tabelle mostravano SL diversi per lo stesso
    // ticket, e il Journal non poteva riconoscere questa chiusura come "BE" (vedi closeResultLabel).
    const trackedPos=positions.find(p=>String(p.mt5Ticket)===String(live.ticket));
-   if(trackedPos){ trackedPos.sl=beSl; trackedPos.beMarkerSl=beSl; draw(); update(); }
+   if(trackedPos){ trackedPos.sl=beSl; trackedPos.slAt=Date.now(); trackedPos.beMarkerSl=beSl; draw(); update(); }
  }else{
    $('status').textContent='⚠️ Spostamento a pareggio non riuscito: '+result.message;
  }
@@ -28117,7 +28144,7 @@ function tgStrategiaValuta(){
       if(!tgStopMigliore(pos.side,pos.sl,be))return;
       const c=Number(r.close);
       if(Number.isFinite(c)&&(pos.side==='BUY'?be>=c:be<=c))return;
-      pos.sl=be;
+      pos.sl=be; pos.slAt=Date.now();   // pareggio dalla strategia della sala
       pos.beMarkerSl=be;
       if(pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
       mosse++;
@@ -28155,7 +28182,7 @@ function tgStrategiaValuta(){
     // Ultima rete: uno stop non puo' finire oltre il prezzo di adesso, o chiuderebbe subito.
     const c=Number(r.close);
     if(Number.isFinite(c)&&(pos.side==='BUY'?nuovo>=c:nuovo<=c))return;
-    pos.sl=nuovo;
+    pos.sl=nuovo; pos.slAt=Date.now();  // stop spostato al raggiungimento di un TP
     pos.beMarkerSl=nuovo; // il Journal potra' dire "BE" invece di un generico "SL"
     if(pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
     spostate++;
@@ -40635,51 +40662,15 @@ async function krakenVaiAGrafico(simbolo){
 }
 // SPOSTARE LO STOP DI UNA POSIZIONE KRAKEN.
 // Il ponte mette prima il nuovo e poi toglie il vecchio: mai un istante senza protezione.
-async function krakenSpostaSl(p){
- const attuale=Number.isFinite(Number(p.sl))?Number(p.sl):'';
- const buy=String(p.lato).toUpperCase().startsWith('B');
- const v=await appPrompt('Nuovo stop loss per '+p.lato+' '+p.quantita+' '+p.simbolo+
-   '\n\nEntrata '+p.entrata+' · prezzo adesso '+p.mark+
-   '\nPer una posizione '+(buy?'in acquisto lo stop sta SOTTO':'in vendita lo stop sta SOPRA')+' il prezzo.',
-   {title:'🐙 Sposta lo stop',defaultValue:String(attuale),okLabel:'Sposta'});
- if(v===null||String(v).trim()==='')return;
- const prezzo=Number(String(v).replace(',','.'));
- if(!Number.isFinite(prezzo)||prezzo<=0){ $('status').textContent='🐙 Prezzo non valido.'; return; }
- // Dalla parte sbagliata lo stop chiuderebbe la posizione all'istante: meglio dirlo prima.
- const mark=Number(p.mark);
- if(Number.isFinite(mark)&&(buy?prezzo>=mark:prezzo<=mark)){
-  if(!await appConfirm('Questo stop e\' gia\' oltre il prezzo di adesso ('+mark+'): la posizione si chiuderebbe subito.\n\nProcedo lo stesso?',
-    {title:'🐙 Attenzione',okLabel:'Sposta',cancelLabel:'Annulla',danger:true}))return;
- }
- const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:prezzo});
- $('status').textContent=r.ok?('🐙 '+p.simbolo+': stop spostato a '+prezzo+'.')
-                             :('🐙 Stop non spostato: '+r.message);
- krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
-}
-// SPOSTARE I TARGET. Si danno tutti insieme, separati da «/»: spostarne uno solo vorrebbe dire
-// sapere quale ordine corrisponde a quale target, e dopo qualche modifica quella corrispondenza
-// non e' piu' affidabile.
-async function krakenSpostaTp(p){
- const attuali=(p.tp||[]).map(x=>Number(x.prezzo)).filter(Number.isFinite);
- const buy=String(p.lato).toUpperCase().startsWith('B');
- const v=await appPrompt('Target per '+p.lato+' '+p.quantita+' '+p.simbolo+
-   '\n\nUno o piu\' prezzi separati da «/». Lascia vuoto per togliere tutti i target.'+
-   '\nLa quantita\' si divide fra i target, in parti uguali.'+
-   '\n\nEntrata '+p.entrata+' · prezzo adesso '+p.mark+
-   '\nPer una posizione '+(buy?'in acquisto i target stanno SOPRA':'in vendita i target stanno SOTTO')+' il prezzo.',
-   {title:'🐙 Sposta i target',defaultValue:attuali.join(' / '),okLabel:'Applica'});
- if(v===null)return;
- const prezzi=String(v).split('/').map(x=>Number(String(x).trim().replace(',','.')))
-   .filter(x=>Number.isFinite(x)&&x>0);
- if(String(v).trim()!==''&&!prezzi.length){ $('status').textContent='🐙 Nessun prezzo valido.'; return; }
- const storti=prezzi.filter(x=>buy?x<=Number(p.entrata):x>=Number(p.entrata));
- if(storti.length&&!await appConfirm('Alcuni target ('+storti.join(', ')+') sono dalla parte della perdita rispetto all\'entrata ('+p.entrata+').\n\nProcedo lo stesso?',
-   {title:'🐙 Attenzione',okLabel:'Applica',cancelLabel:'Annulla',danger:true}))return;
- const r=await krakenBridge('/tp',{simbolo:p.simbolo,tp:prezzi});
- $('status').textContent=r.ok?('🐙 '+p.simbolo+': target '+(prezzi.length?prezzi.join(' / '):'tolti')+'.')
-                             :('🐙 Target non cambiati: '+r.message);
- krakenPosizioniAt=0; await krakenLeggiPosizioni(); krakenPosPannello(); try{ draw(); }catch(e){}
-}
+// LE DUE FINESTRELLE DELLA TABELLA (krakenSpostaSl / krakenSpostaTp) SONO STATE TOLTE il 20
+// ottobre 2026. Chiedevano il nuovo prezzo in un riquadro e lo mandavano al ponte, e si
+// aprivano cliccando le celle SL/TP: «se clicco sulla tabella delle operazioni sul tp-sl mi fa
+// cambiare il valore del prezzo, invece no, non deve farlo» (parole del proprietario). Erano
+// nate il 7 ottobre, quando non c'era altro modo; dalla v165 stop e target si spostano
+// trascinando la linea sul grafico (krakenLivelloApplica), che chiede conferma mostrando da
+// dove a dove, fa gli stessi controlli e ricarica le posizioni allo stesso modo. Tolto il clic,
+// queste due non avevano piu' nessun chiamante: due strade per muovere un ordine vero sono una
+// di troppo, e quella che restava era la piu' facile da premere per sbaglio.
 // UN ORARIO DI APERTURA SOLO, per la tabella e per il grafico.
 //
 // Le stesse due fonti di sempre, in ordine:
@@ -40832,15 +40823,15 @@ function krakenPosPannello(){
   celle.forEach((v,col)=>{
    const td=document.createElement('td');
    if(v&&typeof v==='object'&&v.html!=null)td.innerHTML=v.html; else td.textContent=v;
-   // SL e TP si possono spostare, ma solo sulla posizione SELEZIONATA: cosi' un
-   // clic distratto sulla tabella non puo' toccare lo stop di un'altra posizione.
-   if(selezionata&&(col===colSl||col===colTp)){
-    td.style.cursor='pointer';
-    td.style.textDecoration='underline dotted';
-    td.title=(col===colSl?'Clicca per spostare lo stop':'Clicca per cambiare i target');
-    td.addEventListener('click',()=>{ (col===colSl?krakenSpostaSl:krakenSpostaTp)(p); });
-   }else if(col===colSl||col===colTp){
-    td.title='Seleziona questa posizione per poter spostare stop e target';
+   // SL E TP NON SI CLICCANO. Dal 20 ottobre 2026, su richiesta del proprietario: «se clicco sulla
+   // tabella delle operazioni sul tp-sl mi fa cambiare il valore del prezzo, invece no, non deve
+   // farlo». Il 7 ottobre il clic in tabella era l'unica strada per spostarli; dalla v165 si
+   // afferra la linea sul grafico e si trascina, quindi questo era diventato un SECONDO modo di
+   // muovere un ordine vero - e il piu' facile da premere per sbaglio, perche' la tabella si
+   // scorre col dito. La cella resta un numero da leggere, e dice dove si sposta.
+   if(col===colSl||col===colTp){
+    td.title=(col===colSl?'Lo stop si sposta dal grafico: seleziona la posizione e trascina la linea dello stop.'
+                         :'I target si spostano dal grafico: seleziona la posizione e trascina la linea del target.');
    }
    // L'ORARIO si puo' correggere a mano quando l'orario vero dell'exchange non c'e': quello e' un
    // fatto che il ponte non manda piu', e senza di esso la posizione resta a "—" (o ancorata alla
@@ -41206,9 +41197,13 @@ function krakenLivelloDisarma(){ krakenLivelloArmato=null; }
 function krakenLivelloEtichetta(h){
  return (h.tipo==='SL')?'lo stop':('il target'+(h.indice!=null?(' n. '+(h.indice+1)):''));
 }
-// Il rilascio: si chiede conferma e si manda al ponte. Le due funzioni che muovono davvero gli
-// ordini (krakenSpostaSl/krakenSpostaTp) restano quelle della tabella: qui si prepara il prezzo e
-// si riusa la stessa strada, invece di scriverne una seconda che un domani diverge.
+// Il rilascio: si chiede conferma e si manda al ponte. QUESTA e' l'unica strada che muove stop e
+// target di Kraken (dal 20 ottobre 2026 le finestrelle della tabella sono state tolte: vedi la
+// nota al posto di krakenSpostaSl, piu' sopra).
+// Nota di sincerita' sul commento che stava qui prima: diceva che questa funzione «riusa» quelle
+// della tabella. Non era vero nemmeno quando esistevano - le chiamate al ponte qui sono scritte
+// di nuovo. Era una duplicazione dichiarata come riuso: il modo piu' sicuro per far divergere due
+// strade credendo che siano una.
 async function krakenLivelloApplica(drag,prezzoNuovo){
  const p=((krakenPosizioni&&krakenPosizioni.posizioni)||[]).find(x=>x&&x.simbolo===drag.simbolo);
  if(!p){ $('status').textContent='🐙 La posizione non c\u2019e\u0300 piu\u0300: niente spostato.'; return; }
@@ -41234,8 +41229,10 @@ async function krakenLivelloApplica(drag,prezzoNuovo){
   $('status').textContent=r.ok?('🐙 '+p.simbolo+': stop spostato a '+dec(prezzoNuovo)+'.')
                               :('🐙 Stop non spostato: '+r.message);
  }else{
-  // I target si mandano TUTTI insieme (vedi krakenSpostaTp): si sostituisce solo quello
-  // trascinato e si rimandano gli altri com'erano.
+  // I TARGET SI MANDANO TUTTI INSIEME: si sostituisce solo quello trascinato e si rimandano gli
+  // altri com'erano. Mandare solo quello spostato li cancellerebbe tutti, e spostarne uno per
+  // volta vorrebbe dire sapere quale ordine corrisponde a quale target - corrispondenza che dopo
+  // qualche modifica non e' piu' affidabile. Garantito da kraken_sposta.test.mjs.
   const tutti=(p.tp||[]).map(x=>Number(x.prezzo));
   if(drag.indice!=null&&drag.indice>=0&&drag.indice<tutti.length)tutti[drag.indice]=prezzoNuovo;
   const buoni=tutti.filter(v=>Number.isFinite(v)&&v>0);

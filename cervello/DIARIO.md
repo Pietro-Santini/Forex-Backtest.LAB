@@ -1708,3 +1708,80 @@ proprietario.
 ### Versioni
 - sw.js: forex-backtest-lab-v2.0.11
 - installer.iss: 2.0.11
+
+## 21 ottobre 2026 - lo stop spostato confrontato col passato, e il clic che muoveva ordini dalla tabella
+
+### 1. Una posizione chiusa a un prezzo che il mercato non aveva toccato ⭐
+
+**Segnalato dal proprietario**, con il grafico dell'app e quello di MT5 a confronto (EURCHF,
+20 ottobre): «Come ha fatto ad arrivare il prezzo fino a lassù? Non è stato tracciato [...]
+effettivamente il mercato vero e proprio non ci è arrivato al prezzo di 0,92830. È andato nel senso
+opposto e ha toccato il livello minimo di 0,9247. È più di una volta che mi succede. [...] Lì c'era
+lo stop loss, 2 ha chiuso in perdita e a break even».
+
+**Come è stata trovata.** Leggendo la scala di prezzo del suo grafico: la stella della chiusura sta
+a 0,92830 e **alla stessa ora dello spike delle 23:00**, ma il massimo di quella candela è ~0,92721.
+Quindi non è stata quella candela a far scattare lo stop — `evaluate()` non poteva aver chiuso.
+L'altra funzione che chiude esattamente al prezzo dello stop è `scanHistoricalSlTpTouches()`, che
+gira a **ogni ricaricamento dello storico** (e alle 23:00 c'era stata una riconnessione).
+
+**La causa.** Quella riscansione ripassa tutte le candele e chiude se una qualsiasi ha toccato lo
+stop, con un solo filtro: «candele successive all'APERTURA». Ma lo stop con cui confronta è quello
+di **adesso**, che nel frattempo può essere stato spostato. Nel caso vero: SELL aperta alle 17:10 a
+0,9283; alle 17:2x il prezzo sale a 0,9285 e tocca 0,9283 **davvero**, ma lì lo stop era ancora
+lontano e infatti non successe niente; più tardi lo stop viene portato a pareggio (0,92830); alle
+23:00 la riscansione ritrova la candela delle 17:2x e chiude. Il mercato ci era andato — **tre ore
+prima che lo stop fosse lì**.
+
+**La correzione.** Una candela vale per lo stop solo se è successiva a **quando quello stop è stato
+messo** (`slAt`, scritto adesso da tutti e sei i punti che spostano un livello: pareggio manuale,
+pareggio della strategia, stop spostato al raggiungimento di un TP, modifica dal grafico, modifica
+dalla barra). Per le posizioni aperte **prima** di questa correzione `slAt` non c'è: lì si guarda se
+lo stop è diverso da quello di apertura (`rrSl`, già congelato per il R/R) e, se è stato spostato
+senza sapere quando, **dallo storico non si chiude**. Chiudere per sbaglio costa soldi; non chiudere
+costa che la posizione resta aperta e la si chiude guardandola.
+
+**Test:** `stop_spostato_storico.test.mjs` (4), visti **rossi prima** — la posizione veniva chiusa a
+0,9283 con esito «SP», esattamente il sintomo riferito. Gli altri tre tengono ferme le cose che NON
+devono cambiare: uno stop toccato dopo essere stato messo chiude ancora, uno stop mai spostato si
+comporta come sempre, e una posizione vecchia con lo stop spostato non si chiude.
+
+**Quello che questa correzione NON spiega, detto chiaramente.** Il proprietario ha fatto notare che
+la chiusura è avvenuta **anche sul terminale MT5**. Verificato nel codice: `evaluate()` e la
+riscansione escludono entrambe le posizioni reali (`p.mt5Ticket==null`), quindi l'app non chiude mai
+una posizione MT5 — la chiude il broker e l'app la rispecchia. Questa correzione vale per le
+posizioni **simulate**. Per quella reale la spiegazione tecnica è un'altra: lo stop di una SELL
+scatta sull'**ASK**, mentre i grafici (il nostro e MT5) disegnano il **BID**; alla pausa giornaliera
+delle 23:00 lo spread si apre di decine di pip, e infatti il grafico MT5 mostra proprio lì uno spike
+verticale del bid verso il basso (0,9247) — la firma della rollover. Si verifica dal suo MT5:
+storico operazioni (commento `sl`?) e linea Ask attivata (F8) fra le 23:00 e le 23:30. Dal web non
+si verifica: nessuna fonte pubblica ha il minuto, e tutte pubblicano il bid.
+
+**Da sapere, e segnalato:** la nostra simulazione valuta gli stop **solo sul bid, senza spread**.
+Una posizione simulata sopravvive quindi a eventi che sul reale l'avrebbero chiusa: i risultati del
+simulato sono più ottimistici del reale proprio nei momenti peggiori.
+
+### 2. Su Kraken il clic in tabella non muove più stop e target
+
+**Richiesto:** «nelle posizioni kraken ora è in funzione che se clicco sulla tabella delle
+operazioni sul tp-sl mi fa cambiare il valore del prezzo, invece no non deve farlo».
+
+Il clic sulle celle SL/TP apriva una finestrella e mandava l'ordine al ponte. Era nato il 7 ottobre,
+quando non c'era altro modo; dalla v165 stop e target si spostano **trascinando la linea sul
+grafico**. Era quindi una seconda strada per muovere un ordine vero, e la più facile da premere per
+sbaglio, perché la tabella si scorre col dito. Tolto il clic, le due funzioni (`krakenSpostaSl` /
+`krakenSpostaTp`) non avevano più nessun chiamante: tolte anche quelle, con la nota al loro posto.
+La cella «Eseguita» resta cliccabile (v167: l'orario si dichiara a mano) — lì non si muove nessun
+ordine.
+
+**Due commenti sbagliati corretti nello stesso giro.** Dicevano che il trascinamento «riusa» le
+funzioni della tabella: non è mai stato vero, le chiamate al ponte lì sono scritte di nuovo. Era una
+duplicazione dichiarata come riuso, cioè il modo più sicuro per far divergere due strade credendo
+che siano una.
+
+**Test:** `kraken_sposta.test.mjs` riscritto (6). Le due garanzie del vecchio banco **non sono state
+perse** ma spostate sul trascinamento, che ora è l'unica strada che manda ordini: il ponte legge il
+campo `sl` (con `prezzo` non dà errore, dà uno stop che non si muove) e i target si mandano **tutti
+insieme** (mandando solo quello spostato, gli altri si cancellano).
+
+**Collaudo locale:** 5/5 verdi, 0 falliti.

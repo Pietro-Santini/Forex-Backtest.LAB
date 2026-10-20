@@ -487,3 +487,16 @@
   non basta che il test non erediti il sistema operativo, non deve nemmeno ereditare il PATH.
   LA REGOLA: se una libreria del linguaggio puo' fare il lavoro, si usa quella (un APK e' uno zip:
   si legge con `node:zlib` in quaranta righe, ed e' anche cento volte piu' veloce).
+
+- Un livello spostato non si confronta col passato in cui non c'era. (21 ottobre 2026, la posizione
+  chiusa a un prezzo che il mercato non aveva toccato.) La riscansione dello storico confrontava lo
+  stop di ADESSO con tutte le candele dall'apertura in poi: uno stop portato a pareggio trovava il
+  massimo di tre ore prima e chiudeva. LA REGOLA: quando un valore puo' cambiare nel tempo, ogni
+  confronto col passato deve sapere DA QUANDO quel valore vale; se non lo si sa, nel dubbio non si
+  fa l'azione irreversibile. Il sintomo da riconoscere e' «succede sempre a una riapertura»: vuol
+  dire che a farlo e' qualcosa che gira al ricaricamento, non il tempo reale.
+- Il prezzo che vedi non e' il prezzo che esegue. (21 ottobre 2026, stessa vicenda, parte MT5.) Lo
+  stop di una SELL scatta sull'ASK, i grafici disegnano il BID, e alla pausa giornaliera lo spread
+  si apre di decine di pip: una chiusura «a un prezzo mai toccato» puo' essere regolarissima. Prima
+  di dare la colpa al codice si guarda se il codice poteva anche solo toccare quella posizione: qui
+  non poteva, le posizioni reali sono escluse da entrambe le funzioni che chiudono.
