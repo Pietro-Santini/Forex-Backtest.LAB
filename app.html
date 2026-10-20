@@ -42089,6 +42089,66 @@ function statoMercato(asset,t){
  }
  return null;
 }
+/* CHIUSURA DEL MERCATO: INIZIO - blocco provato da laboratorio/app/chiusura_mercato.test.mjs
+   ------------------------------------------------------------------------------------------
+   PERCHE' ESISTE. Misurato il 21 ottobre 2026 sui tick veri del conto del proprietario, EURCHF,
+   al cambio giornata:
+
+     00:00:42.091   bid 0,92461   ask 0,92961   ->  50,0 pip di spread
+     00:01:28.613   bid 0,92598   ask 0,92903   ->  30,5 pip
+     00:03:17.229   bid 0,92463   ask 0,92963   ->  50,0 pip
+
+   Cinque tick in cinque minuti: il mercato non si muove, SPARISCE. Lo spread normale su quel
+   EURCHF e' 0,2 pip: li' era 250 volte piu' largo. Tre posizioni SELL con stop a 0,92827 sono
+   state chiuse tutte in quell'istante - legittimamente, perche' lo stop di una SELL si esegue
+   sull'ASK (0,92961), mentre il grafico disegna il BID (0,92461) e quindi mostrava il movimento
+   OPPOSTO. Da fuori: "chiuse a un prezzo dove il mercato non e' mai andato".
+   Non c'e' niente da correggere nell'esecuzione: c'e' da NON FARSI TROVARE LI'. Queste funzioni
+   rispondono alla domanda su cui si regge tutto il resto: quanto manca alla chiusura.
+
+   NOTA SULLE CRIPTO: non chiudono mai, quindi qui rispondono null - e chi chiama non deve
+   inventarsi un orario per loro. */
+// Quando chiude il mercato di questo asset, in millisecondi. null = non si sa, oppure e' gia'
+// chiuso (una chiusura "in arrivo" non c'e'), oppure e' un asset che non chiude mai.
+function fblProssimaChiusura(asset,t){
+ if(!asset)return null;
+ const quando=Number.isFinite(t)?t:Date.now();
+ try{ if(binanceSymbolForAsset(asset))return null; }catch(e){}
+ // Prima fonte: il calendario dello strumento, quello che manda il broker.
+ try{
+  const o=orariAsset[asset];
+  if(o&&o.giorni&&Object.keys(o.giorni).length){
+   const iv=orariIntervalli(o,quando);
+   const dentro=iv.find(x=>quando>=x[0]&&quando<x[1]);
+   return dentro?dentro[1]:null;
+  }
+ }catch(e){}
+ // Ripiego: il calendario con cui l'app segue MT5. Si cerca il primo minuto "chiuso" entro un
+ // giorno: oltre non serve, e un ciclo lungo qui gira a ogni secondo.
+ try{
+  if(liveScheduleAppliesNow()&&liveSessionPhaseAt(quando)!=='closed'){
+   for(let k=1;k<=24*60;k++){
+    const tt=Math.floor(quando/60000)*60000+k*60000;
+    if(liveSessionPhaseAt(tt)==='closed')return tt;
+   }
+  }
+ }catch(e){}
+ return null;
+}
+// Quanti millisecondi mancano alla chiusura. null se non si sa.
+function fblMancaAllaChiusura(asset,t){
+ const quando=Number.isFinite(t)?t:Date.now();
+ const c=fblProssimaChiusura(asset,quando);
+ return c==null?null:Math.max(0,c-quando);
+}
+// Siamo nella finestra calda prima della chiusura? `minuti` e' quanto prima.
+function fblVicinoAllaChiusura(asset,minuti,t){
+ const m=Number(minuti);
+ if(!(Number.isFinite(m)&&m>0))return false;
+ const manca=fblMancaAllaChiusura(asset,t);
+ return manca!=null&&manca<=m*60000;
+}
+/* CHIUSURA DEL MERCATO: FINE */
 // UNA SOLA DOMANDA, UNA SOLA RISPOSTA: "in questo istante il mercato di questo asset e' fermo?"
 //
 // Prima questa domanda aveva TRE risposte diverse a seconda di chi la faceva, e si vedeva:
