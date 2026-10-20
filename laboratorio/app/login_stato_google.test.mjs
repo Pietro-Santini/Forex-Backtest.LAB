@@ -139,14 +139,28 @@ test("dopo il completamento il backup si consuma: nessun falso ripristino ai vis
 test("una bandierina troppo vecchia non blocca l'accesso: si butta via", () => {
   const local1 = memoria();
   const f1 = funzioni({session: memoria(), local: local1});
-  // Valore scritto dieci minuti fa (o il '1' della versione precedente, che vale 1970).
-  local1.setItem('fblRedirectPending', String(Date.now() - 11 * 60 * 1000));
+  // Valore scritto un'ora e un minuto fa: oltre la finestra (un'ora, perche' l'approvazione
+  // in due passaggi su un altro dispositivo puo' durare anche una ventina di minuti).
+  local1.setItem('fblRedirectPending', String(Date.now() - 61 * 60 * 1000));
   local1.setItem('fblAuthBackup', '{}');
   const f2 = funzioni({session: memoria(), local: local1});
   assert.equal(f2.ripristinaStatoAuth(), false,
     "una bandierina antica resta li' e sopprime l'accesso automatico di chi e' gia' loggato");
   assert.equal(local1.getItem('fblRedirectPending'), null,
     "la bandierina scaduta deve essere rimossa, non solo ignorata");
+});
+
+test("una bandierina di venti minuti e' ancora valida: l'approvazione in due passaggi puo' durare", () => {
+  const local1 = memoria();
+  const f1 = funzioni({session: memoria(), local: local1});
+  // L'utente e' sul suo telefono ad approvare l'accesso: il giro dura, e la bandierina
+  // non deve scadere sotto gli occhi (misurato il 20 ottobre 2026: con dieci minuti scadeva
+  // mentre l'utente era ancora al lavoro, e il giro ripartiva da capo).
+  local1.setItem('fblRedirectPending', String(Date.now() - 20 * 60 * 1000));
+  local1.setItem('fblAuthBackup', '{}');
+  const f2 = funzioni({session: memoria(), local: local1});
+  assert.equal(f2.ripristinaStatoAuth(), true,
+    "dopo venti minuti il giro e' ancora in corso: la bandierina deve valere");
 });
 
 test("bandierina '1' della vecchia versione (priva di data) viene trattata come scaduta", () => {

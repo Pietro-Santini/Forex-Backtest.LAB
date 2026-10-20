@@ -131,7 +131,9 @@
    --------------------------------------------------------------------------- */
   const FBL_PENDENTE = 'fblRedirectPending';
   const FBL_ARCHIVIO = 'fblAuthBackup';
-  const FBL_SCADENZA = 10 * 60 * 1000; // dieci minuti: un giro da Google non dura di piu'
+  const FBL_SCADENZA = 60 * 60 * 1000; // un'ora: l'approvazione in due passaggi su un altro
+  // dispositivo puo' far durare il giro piu' dei dieci minuti di prima (misurato il 20 ottobre 2026:
+  // con dieci minuti la bandierina scadeva mentre l'utente era ancora sul suo telefono)
   function salvaStatoAuth() {
     try {
       const copia = {};
@@ -257,43 +259,96 @@
       showVerifyGate(user);
       return;
     }
-    if (skipAutoRedirect) return;
+    // Se nel fragmento c'e' ancora la credenziale del giro di accesso, non si lascia la
+    // pagina: la deve leggere il blocco qui sotto (il fragmento puo' arrivare anche DOPO
+    // questo avviso). Se invece il fragmento e' gia' sparito, l'utente e' dentro e si
+    // va nell'app: altrimenti l'app resterebbe ferma sulla pagina di accesso anche
+    // con l'utente gia' autenticato (misurato il 20 ottobre 2026 sull'APK).
+    if (skipAutoRedirect && fblFrammentoConCredenziale()) return;
     await ensureUserProfile(user);
     window.location.replace(DESTINATION);
   });
 
-  // AL RITORMO dal reindirizzamento di Google (dentro l'APK o nel browser del telefono):
-  // qui si legge il risultato. Lo stato e' gia' stato rimesso al posto da
-  // ripristinaStatoAuth() all'avvio (backup + bandierina in localStorage): senza quel
-  // passo Firebase butta "missing initial state" e il login non parte.
-  if (loginGoogleInCorso) {
-    (async () => {
-      try {
-        const cred = await getRedirectResult(auth);
-        consumaStatoAuth();
-        if (!cred) {
-          // Il giro da Google e' tornato senza credenziale (annullato o perso per strada):
-          // si dice, invece di lasciare l'utente fermo senza spiegazioni.
+  // C'e' ancora la credenziale del giro di accesso nel fragmento della pagina?
+  function fblFrammentoConCredenziale(){
+    try { return !!(window.location && window.location.hash && /access_token|id_token/.test(window.location.hash)); }
+    catch(e){ return false; }
+  }
+
+  /* ESITO DEL GIRO DI ACCESSO: INIZIO - blocco provato per intero da
+     laboratorio/app/login_google_esito.test.mjs, con Firebase e finestra finti. */
+  // Il risultato del giro di accesso va letto SEMPRE, e non solo quando la bandierina
+  // "login in corso" dice che il giro e' partito. Motivo, misurato il 20 ottobre 2026
+  // sull'APK: quando Firebase richiama l'app (https://localhost/login.html#...token...), la
+  // WebView puo' cambiare SOLO il fragmento e NON ricaricare la pagina. Il codice della
+  // pagina resta quello di prima, che aveva gia' letto (e svuotato) il risultato: la
+  // credenziale arrivava e nessuno la leggeva. L'app restava sulla pagina di accesso, e al
+  // giro dopo il bandierina faceva ripartire tutto (sul tablet non finiva piu').
+  // Sull'app invece bastava riaprirla: Firebase aveva gia' salvato l'utente, e al
+  // riavvio onAuthStateChanged lo trovava. Percio' "riavvia e ti fa l'accesso" era la
+  // prova che il problema non era l'accesso, ma la LETTURA del risultato.
+  let esitoLetto = false;          // il risultato e' gia' stato letto (non rileggerlo)
+  let giroInLavoro = false;        // una lettura e' gia' in corso
+  let rileggiAppena = false;       // ... e mentre gira ne e' arrivata un'altra: si rilegge dopo
+  async function leggiEsitoAccesso(forza){
+    // "forza" = lo chiamo apposta (hashchange, pageshow, ritorno in primo piano).
+    // Se una lettura e' gia' in corso NON si salta: la richiesta si rimanda a quando
+    // quella finisce. Altrimenti la credenziale che arriva durante la prima lettura
+    // (il fragmento che cambia senza ricaricare la pagina) resterebbe li' per sempre.
+    if (giroInLavoro) { rileggiAppena = true; return false; }
+    giroInLavoro = true;
+    try {
+      const cred = await getRedirectResult(auth);
+      if (!cred) {
+        // Nessuna credenziale nel fragmento: il giro non e' ancora tornato, oppure e' stato
+        // annullato. Se il giro e' proprio finito (annullato dall'utente) si dice.
+        if (forza && loginGoogleInCorso) {
+          consumaStatoAuth();
           skipAutoRedirect = false;
           showError("Accesso con Google non riuscito. Tocca di nuovo «Accedi con Google».");
-          return;
         }
-        const info = getAdditionalUserInfo(cred);
-        await ensureUserProfile(cred.user);
-        if (info && info.isNewUser) {
-          await sendWelcomeEmail(cred.user);
-          showInfo("Benvenuto in Forex Backtest Lab! 🎉 Hai 7 giorni di prova gratuita a partire da ora. Accesso all'app tra qualche secondo...");
-          setTimeout(()=>window.location.replace(DESTINATION), 3000);
-        } else {
-          window.location.replace(DESTINATION);
-        }
-      } catch(e) {
+        return false;
+      }
+      esitoLetto = true;
+      consumaStatoAuth();
+      const info = getAdditionalUserInfo(cred);
+      await ensureUserProfile(cred.user);
+      if (info && info.isNewUser) {
+        await sendWelcomeEmail(cred.user);
+        showInfo("Benvenuto in Forex Backtest Lab! 🎉 Hai 7 giorni di prova gratuita a partire da ora. Accesso all'app tra qualche secondo...");
+        setTimeout(()=>window.location.replace(DESTINATION), 3000);
+      } else {
+        window.location.replace(DESTINATION);
+      }
+      return true;
+    } catch(e) {
+      // Il giro e' finito male: si dice, e non si lascia la bandierina appesa (altrimenti
+      // la prossima visita sembra un accesso in corso e il giro riparte da capo).
+      if (forza) {
         consumaStatoAuth();
         skipAutoRedirect = false;
         showError(traduciErrore(e && e.code));
       }
-    })();
+      return false;
+    } finally {
+      giroInLavoro = false;
+      if (rileggiAppena) { rileggiAppena = false; leggiEsitoAccesso(true); }
+    }
   }
+  // Subito, all'avvio della pagina: e' il caso normale (il ritorno dal giro ricarica la pagina).
+  leggiEsitoAccesso(false);
+  // Il fragmento puo' arrivare SENZA ricaricare la pagina: e' il caso della WebView dell'APK.
+  try { window.addEventListener('hashchange', () => { leggiEsitoAccesso(true); }); } catch(e){}
+  // La pagina puo' tornare dalla cronologia (Android conserva le pagine: bfcache).
+  try { window.addEventListener('pageshow', () => { leggiEsitoAccesso(true); }); } catch(e){}
+  // E l'utente puo' tornare sull'app mentre il giro e' ancora in corso (per esempio l'approvazione
+  // dell'accesso in due passaggi su un altro dispositivo): si rilegge il risultato.
+  try {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && !esitoLetto) leggiEsitoAccesso(true);
+    });
+  } catch(e){}
+  /* ESITO DEL GIRO DI ACCESSO: FINE */
 
   // Scrive un documento nella collezione "mail": l'estensione Firebase
   // collegata a Brevo se ne occupa e invia l'email vera e propria.

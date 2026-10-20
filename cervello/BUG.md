@@ -543,3 +543,29 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   pagina che non e' sua: al riavvio, se la WebView e' su una pagina esterna che non fa parte del
   giro di accesso, si torna alla pagina dell'app (MainActivity). Test:
   `laboratorio/app/login_google_flusso.test.mjs` (8, prima rossi).
+
+- **L'APK proposeva l'aggiornamento anche quando era gia' all'ultima versione** - risolto app
+  v2.0.10 - 20 ottobre 2026: segnalato dal proprietario ("il tasto aggiorna e' sempre presente.
+  Io lo clicco, mi manda il pacchetto di aggiornamento, che e' effettivamente il 2.0.9, e' l'ultimo.
+  [...] c'e' effettivamente la 2.0.9, ma l'applicazione mi dice che c'e' presente una nuova
+  versione"). Causa misurata: l'APK pubblicato conteneva dentro se' uno sw.js con CACHE_NAME
+  "forex-backtest-lab-v2.0.8" (copiato prima di alzare la versione e poi dimenticato). L'app
+  credeva quindi di essere alla 2.0.8, la release era la 2.0.9, e il pulsante restava sempre
+  li'. Correzione: il sw.js dell'APK riallineato al repository e un test che confronta i due
+  numeri sul pacchetto costruito (`laboratorio/app/apk_versione.test.mjs`).
+- **Il login con Google nell'APK finiva con errore 400 e schermata bianca, e sul tablet non
+  finiva piu'** - risolto app v2.0.9 - 20 ottobre 2026: segnalato dal proprietario ("il login
+  riesce, il problema e' che porta sempre sulla pagina di Google con l'errore 400 [...] mi da' tutta
+  schermata bianca"). Due cause distinte, misurate: (1) il popup di Firebase non funziona dentro
+  una WebView (non viene creata la finestra nuova in cui rimandare la credenziale: errore 400), e
+  si usa quindi il reindirizzamento; (2) la credenziale che arrivava con il reindirizzamento non
+  veniva letta, perche' nella WebView il fragmento cambia senza ricaricare la pagina - e l'app
+  restava ferma sulla pagina di accesso (mentre l'accesso era riuscito: bastava riaprire l'app).
+  Correzione: il risultato si legge sempre e si rilegge quando il fragmento arriva, e la
+  bandierina scade dopo un'ora invece che dopo dieci minuti. Test:
+  `laboratorio/app/login_google_esito.test.mjs` (6) e `login_google_flusso.test.mjs` (8).
+- **La scala dell'interfaccia non scendeva sotto il 70%** - risolto app v2.0.10 - 20 ottobre
+  2026: richiesto dal proprietario ("sul telefono il 70% dell'interfaccia e' troppo, posso
+  scendere anche a 60, 50, 10, 15, 20 - e stessa cosa per la dimensione del testo. Non devi avere
+  limiti"). Correzione: il tetto minimo della scala passa a 10% e anche il testo del grafico
+  scende fino al 10% (prima 50%). Test: `laboratorio/app/scala_ui.test.mjs` (17).

@@ -101,10 +101,30 @@ test('la scala salvata si riprende, una scala rovina si butta', () => {
     'il valore si riporta al passo di 5');
   assert.equal(b.fblScalaUiLeggi(fintoMag({'fbl_ui_scala_pct': '999'}), NAV_PC, FIN_PC), 100,
     'oltre il massimo il valore si butta, non si applica');
-  assert.equal(b.fblScalaUiLeggi(fintoMag({'fbl_ui_scala_pct': '10'}), NAV_PC, FIN_PC), 100,
-    'sotto il minimo uguale');
+  assert.equal(b.fblScalaUiLeggi(fintoMag({'fbl_ui_scala_pct': '5'}), NAV_PC, FIN_PC), 100,
+    'sotto il minimo (10) il valore si butta, non si applica');
   assert.equal(b.fblScalaUiLeggi(fintoMag({}), NAV_PC, FIN_PC), 100, 'mai impostato: il predefinito');
   assert.equal(b.fblScalaUiLeggi(fintoMag({}), NAV_PC, FIN_PC), 100);
+});
+
+test('la scala puo\' scendere fino al 10%: sul telefono il 70% era troppo', () => {
+  const b = blocco();
+  const m = mondo();
+  assert.equal(b.fblScalaUiMin(), 10,
+    'il tetto minimo richiesto dal proprietario: si deve poter scendere a 60, 50, 20, 15, 10');
+  for (const v of [60, 50, 20, 15, 10]) {
+    assert.equal(b.fblScalaUiApplica(m.doc, v), v,
+      'la scala ' + v + '% deve poter essere usata: il telefono chiedeva di scendere sotto il 70%');
+  }
+  assert.equal(m.doc.body.style.zoom, '0.1', 'al 10% la pagina si rimpicciolisce davvero');
+  assert.ok(Math.abs(parseFloat(m.cw.style.zoom) - 10) < 1e-9,
+    'il grafico riceve il contro-zoom (10), cosi\' resta alla sua misura');
+  // Il valore salvato e\' quello che l\'utente ha scelto: torna indietro alla riapertura.
+  const mag = fintoMag({});
+  b.fblScalaUiImposta(mag, m.doc, 20);
+  assert.equal(mag.getItem('fbl_ui_scala_pct'), '20', 'il 20% si ricorda per la prossima volta');
+  assert.equal(b.fblScalaUiLeggi(mag, NAV_PC, FIN_PC), 20,
+    'alla riapertura si riparte dal 20%, non dal predefinito');
 });
 
 test('modalità privata: la memoria negata non fa esplodere niente', () => {
@@ -140,11 +160,11 @@ test('a 100 per cento non resta niente appiccicato: zoom e larghezza si spengono
   assert.ok(!m.cw.style.width, 'e nessuna larghezza è stata imposta a mano, a nessuna scala');
 });
 
-test('mai sotto i 70 e sopra i 150 per cento', () => {
+test('mai sotto il 10 e sopra il 150 per cento', () => {
   const b = blocco();
   const m = mondo();
   assert.equal(b.fblScalaUiApplica(m.doc, 300), 150);
-  assert.equal(b.fblScalaUiApplica(m.doc, 10), 70);
+  assert.equal(b.fblScalaUiApplica(m.doc, 1), 10, 'sotto il 10% la scala si ferma al tetto');
 });
 
 test('Ctrl+rotellina fuori dal grafico: la pagina la zooma e il valore si ricorda', () => {
@@ -267,6 +287,31 @@ test('nella pagina vera: la scala salvata si applica alla carica, come al riapri
     }));
     assert.equal(r.zoom, '0.85', 'all\'apertura la scala salvata è già applicata');
     assert.equal(r.campo, '85', 'e il campo di Impostazioni la mostra');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test("nella pagina vera: anche il testo del grafico si puo' ridurre fino al 10%", async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const inp = document.getElementById('chartFontScalePct');
+      if(!inp) return {mancato: true};
+      const fuori = [];
+      for (const v of [50, 20, 15, 10]) {
+        inp.value = String(v);
+        inp.dispatchEvent(new Event('input', {bubbles: true}));
+        fuori.push(Math.round(chartFontScale * 1000) / 1000);
+      }
+      // Sotto il tetto: il valore si ferma al 10%.
+      inp.value = '1';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      return {valori: fuori, sotto: Math.round(chartFontScale * 1000) / 1000};
+    });
+    assert.equal(r.mancato, undefined, 'in Impostazioni -> Stile manca il campo della dimensione del testo del grafico');
+    assert.deepEqual(r.valori, [0.5, 0.2, 0.15, 0.1],
+      'il testo del grafico deve poter scendere fino al 10% (richiesto dal proprietario)');
+    assert.equal(r.sotto, 0.1, 'sotto il 10% il testo si ferma al tetto: non diventa illeggibile');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

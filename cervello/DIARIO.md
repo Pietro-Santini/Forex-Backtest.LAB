@@ -1513,3 +1513,62 @@ Test: login_google_flusso.test.mjs 8/8 (prima rossi).
 ### Versioni
 - sw.js: forex-backtest-lab-v2.0.9
 - installer.iss: 2.0.9
+
+### 11. Il login con Google nell'APK: la credenziale arrivava e nessuno la leggeva
+Richiesta: "il login riesce, il problema e' che porta sempre sulla pagina di Google con l'errore
+400. Solo che stavolta ho chiuso, sono ritornato indietro. Ho chiuso l'applicazione, l'ho riaperta
+e mi ha fatto l'accesso. Mentre invece sul tablet continua a riaprirsi quella che e' la pagina
+verifica in due passaggi e l'accesso con Google."
+
+Misurata la causa vera: quando Firebase richiama l'app (https://localhost/login.html#...token...),
+la WebView puo' cambiare SOLO il fragmento e NON ricaricare la pagina. Il codice della pagina
+resta quello di prima, che aveva gia' letto (e svuotato) il risultato: la credenziale arrivava e
+nessuno la leggeva. L'app restava ferma sulla pagina di accesso, e al giro dopo la bandierina
+"login in corso" faceva ripartire tutto (sul tablet non finiva piu'). Sul telefono bastava riaprire
+l'app: Firebase aveva gia' salvato l'utente, e al riavvio onAuthStateChanged lo trovava - ed e'
+infatti il "riavvia e ti fa l'accesso" che il proprietario aveva descritto era la prova che
+l'accesso andava, a leggerlo no.
+
+Fatto:
+- il risultato del giro si legge SEMPRE (non solo quando la bandierina "login in corso" dice che il
+  giro e' partito) e si rilegge quando il fragmento arriva (hashchange), quando la pagina torna
+  dalla cronologia (pageshow) e quando l'utente torna sull'app (visibilitychange);
+- se due letture si sovrappongono, la seconda non viene saltata ma rimandata: altrimenti la
+  credenziale che arriva durante la prima non verrebbe mai letta (l'ho trovato coi test);
+- la bandierina scade dopo un'ora e non dopo dieci minuti: l'approvazione in due passaggi su un
+  altro dispositivo puo' durare anche una ventina di minuti, e prima scadeva mentre l'utente
+  era ancora al lavoro;
+- se l'utente e' gia' dentro ma il fragmento e' sparito, l'app va nell'app: non resta ferma
+  sulla pagina di accesso con l'utente gia' autenticato.
+
+Test: login_google_esito.test.mjs 6/6 (prima rossi: senza la rilettura al cambio di fragmento
+il test del fragmento che arriva dopo diventa rosso).
+
+### 12. La scala dell'interfaccia si puo' ridurre fino al 10%
+Richiesta: "il 70% dell'interfaccia e' troppo [sul telefono], devo poter scendere anche a 60, 50,
+10, 15, 20. E stessa cosa anche per quanto riguarda la dimensione del testo. Non devi avere
+limiti."
+
+Fatto:
+- il tetto minimo della scala dell'interfaccia (Impostazioni -> Stile) passa dal 70% al 10%: il
+  campo accetta 10, 15, 20, 50, 60... e il valore si ricorda;
+- anche il testo disegnato sul grafico scende fino al 10% (prima il minimo era 50%);
+- sotto il 10% la scala si ferma al tetto: non ha senso scendere al 1%, non si vede piu' niente.
+
+Test: scala_ui.test.mjs 17/17 (prima 15, e il tetto vecchio era 70/50).
+
+### 13. L'APK ora porta dentro la versione del repository
+Misurato: l'APK pubblicato come "v2.0.9" conteneva dentro se' uno sw.js con CACHE_NAME
+"forex-backtest-lab-v2.0.8" (era stato copiato PRIMA di alzare la versione, e poi non era stato
+ricopiato). Conseguenza per l'utente, sul telefono: il pulsante "Aggiorna" era SEMPRE visibile,
+perche' l'app credeva di essere alla 2.0.8 mentre la release era la 2.0.9 - e premendolo proponeva
+di scaricare di nuovo la 2.0.9, per sempre. Sembrava un difetto della logica di versione: era
+invece il pacchetto fuori data.
+
+Fatto: un test confronta il CACHE_NAME del sw.js del repository con quello davvero dentro l'APK
+costruito (laboratorio/app/apk_versione.test.mjs, salta se il progetto mobile non c'e' - sta
+fuori dal repository). Verificato che diventa rosso con il difetto e verde col rimedio.
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.10
+- installer.iss: 2.0.10

@@ -435,3 +435,35 @@
   commento e il codice si contraddicono, il codice ha sbagliato (o il commento): e in ogni caso
   uno dei due mente. Il rimedio non e' scegliere: e' misurare, e scrivere il motivo accanto
   al codice.
+
+- Un risultato che arriva senza ricaricare la pagina va letto quando arriva, non solo una volta
+  all'avvio. (20 ottobre 2026, login con Google nell'APK.) Firebase richiama l'app con la
+  credenziale nel FRAGMENTO (https://localhost/login.html#...token...): dentro la WebView il
+  fragmento puo' cambiare senza che la pagina si ricarichi, e il codice - che aveva gia' letto
+  (e svuotato) il risultato - non lo rileggeva. La credenziale arrivava e nessuno la leggeva.
+  LA REGOLA: quando il risultato di un'operazione viaggia in un URL (fragmento, query, deep
+  link), la lettura non e' "una volta all'avvio": e' "quando arriva". E se due letture si
+  sovrappongono, la seconda non si salta: si rimanda. Il sintomo (l'utente deve riavviare
+  l'app perche' "solo cosi' mi fa l'accesso") dice gia' tutto: l'accesso era riuscito, la LETTURA
+  no.
+
+- Un numero di versione che sta in tre posti va tenuto allineato, e va controllato sul PACCHETTO.
+  (20 ottobre 2026, l'APK che proponeva l'aggiornamento per sempre.) La versione sta in sw.js, in
+  installer.iss e nel sw.js dentro l'APK. Se uno dei tre resta indietro, l'app crede di essere
+  vecchia e propone l'aggiornamento per sempre - e sembra un difetto della logica di versione.
+  LA REGOLA: la versione si verifica dove l'utente la vede, cioe' DENTRO il pacchetto, non
+  solo nella cartella da cui e' partito. Un test che confronta i due numeri (e che salta se il
+  pacchetto non c'e') e' il modo per non ritrovarselo.
+
+- Il minimo di una scala non e' un numero: e' una richiesta. (20 ottobre 2026, la scala
+  dell'interfaccia.) Era stato deciso un tetto del 70% "per non rompere niente", e il
+  proprietario su un telefono non ci leggeva niente: serviva il 50, il 20, il 10. LA REGOLA:
+  quando si mette un tetto, si chiede perche' quel numero e non un altro; e se non c'e' un
+  motivo tecnico (il sotto il 10% non si vede), il tetto si allarga. Un limite messo per
+  prudenza, e non chiesto, diventa un muro.
+
+- La copia dei file in un'altra cartella va FATTA DOPO che il contenuto e' finale, e va
+  verificata. (20 ottobre 2026, stessa vicenda.) Lo sw.js era stato copiato nell'app mobile
+  prima di alzare la versione, e poi non era stato ricopiato: l'APK pubblicato come 2.0.9
+  portava dentro la 2.0.8. LA REGOLA: la copia finale si verifica confrontando il file di
+  destinazione con quello di partenza (un hash, un numero di versione), non guardandolo.
