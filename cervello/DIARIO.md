@@ -1572,3 +1572,139 @@ fuori dal repository). Verificato che diventa rosso con il difetto e verde col r
 ### Versioni
 - sw.js: forex-backtest-lab-v2.0.10
 - installer.iss: 2.0.10
+
+## 20 ottobre 2026 - v2.0.11: l'accesso con Google lo fa il sistema, e i campi si applicano quando hai finito
+
+### 1. Il login con Google nell'APK: terza volta, e stavolta cambiando strada
+
+**Riferito dal proprietario:** «quando installiamo l'applicazione e andiamo a fare il login con
+google ci manda al collegamento con firebase e ci fa mettere email e password, poi ci porta
+all'autenticazione a due fattori, una volta che confermiamo l'autenticazione invece di accedere
+all'applicazione ci rimanda alla pagina web google con errore 400. [...] dopo di che ritorno
+sull'applicazione e rimane ancora in corso l'autenticazione a due fattori che continua a girare la
+rotellina del caricamento ma io l'ho confermato, quindi è un bug, va risolto!»
+
+**Prima misura, e serviva.** Il sospetto comodo era che avesse provato un pacchetto vecchio. Falso,
+e verificato con le date: `www` aggiornato alle 11:09, APK costruito alle **11:10**. Il pacchetto
+che aveva in mano conteneva già la correzione della 2.0.10 — e il test `apk_versione.test.mjs` lo
+conferma da solo. Quindi la correzione non aveva funzionato: non c'era niente da ri-provare.
+
+**La causa, questa volta quella vera.** Dentro la WebView dell'app il giro OAuth di Google non è
+una strada percorribile, in nessuna delle due forme: col **popup** la WebView non crea la finestra
+nuova e Firebase, senza `opener`, non sa a chi restituire la credenziale (400); col
+**reindirizzamento** si finisce comunque su una pagina di Google con errore 400 dopo la verifica in
+due passaggi. Le due correzioni precedenti (v2.0.9: passa al reindirizzamento; v2.0.10: rileggi
+l'esito su hashchange/pageshow/visibilitychange) erano due modi di restare sulla stessa strada
+chiusa. In `capacitor.config.json` c'era perfino `allowNavigation` su `*.google.com`, cioè la
+scelta esplicita di tenere il giro DENTRO la WebView: era il problema, non la soluzione.
+
+**Come funziona adesso.** Lo fa il sistema operativo, fuori dalla pagina: plugin nativo, Android
+mostra il suo elenco di account, restituisce un `idToken`, e il token si scambia con Firebase qui
+nella pagina (`signInWithCredential`). Nessuna navigazione, nessuna finestra, nessun esito da
+rileggere — sparisce per costruzione tutta la classe di difetti delle tre versioni precedenti.
+
+**Il plugin: non quello suggerito.** Il consiglio di partenza era
+`@codetrix-studio/capacitor-google-auth`. Misurato prima di installarlo: ultima versione
+**3.4.0-rc.4** (una release candidate) e `peerDependencies: @capacitor/core ^6.0.0`, mentre il
+progetto è su **Capacitor 8**. Si usa `@capacitor-firebase/authentication` **8.5.2**, che dichiara
+`@capacitor/core >=8.0.0`. Configurato con `skipNativeAuth: true`, così la sessione vera resta UNA
+(quella del Firebase della pagina, che è quella che usa tutta l'app) e non ce ne sono due che
+possono divergere. Si chiama dal ponte globale `window.Capacitor.Plugins` e non con un `import`:
+qui Firebase arriva dalla CDN e nel progetto mobile non c'è nessun bundler.
+
+**Configurazione fatta dal proprietario e verificata.** `google-services.json` in `android/app/`,
+con dentro: pacchetto `com.pietrosantini.forexbacktestlab`, client OAuth **ANDROID** con impronta
+`64d6f827dd7d...` (quindi lo SHA-1 è registrato) e client OAuth **WEB** (quello che serve per
+restituire il token). Gradle era già pronto: `classpath com.google.gms:google-services` c'era, e
+`app/build.gradle` applica il plugin da solo appena il file esiste.
+
+**Nell'app non si ripiega sulla pagina.** Se il nativo non riesce, NON si torna al popup né al
+reindirizzamento: sarebbe ripiegare esattamente nell'errore 400. Si dice cosa è andato storto e si
+resta sulla pagina di accesso. E i messaggi sono stati scritti apposta, perché gli errori del
+plugin **non hanno** un `code` in stile Firebase: con il solo `traduciErrore()` l'utente leggeva
+«Errore: undefined» — e proprio nel caso da riconoscere, "DEVELOPER_ERROR" (impronta di firma o
+client OAuth non corrispondenti), dove un messaggio generico lo manderebbe a cercare il problema
+nel suo account Google per sempre.
+
+**Test:** `login_google_nativo.test.mjs` (11), che estrae il blocco marcato da login.html e lo
+esegue con Firebase, plugin e finestra finti: strada nativa presa, nessun ripiego, token scambiato,
+utente nuovo con email di benvenuto, annullamento, impronta sbagliata, plugin che risponde senza
+token (il caso della rotellina), APK vecchio senza plugin (si torna alla strada di prima), e sul
+computer nulla cambia. Tutti i test del login insieme: **51/51**.
+
+**Un accorpamento rifatto indietro, e la ragione va ricordata.** Il blocco «dopo l'accesso» era
+copiato in tre punti e l'ho accorpato in `entraNellApp()`. Due test di
+`login_google_esito.test.mjs` sono diventati rossi: quel pezzo sta in un **blocco estratto e
+collaudato a parte**, e chiamando una funzione dell'altro blocco il collaudo avrebbe dovuto
+fingerla — provando il finto invece del vero. Le righe sono tornate dove stavano, con il commento
+che spiega perché. Due righe ripetute valgono meno di un collaudo che non misura più niente.
+
+### 2. La scala dell'interfaccia e il testo: si applicano quando hai finito di scrivere
+
+**Riferito:** «l'utente clicca sul valore da modificare, modifica il valore e solo allora, quando
+ha inserito il valore e clicca fuori, viene applicata la modifica, e non mentre la sta inserendo
+[...] se la percentuale è impostata a 50% e l'utente vuole mettere il 30%, l'app non glielo fa
+mettere: quando cancella lo 0 e poi il 5 ripristina automaticamente il valore di 50, oppure se
+inserisce un numero prima del 5 gli porta la scala alla scala massima di 150%».
+
+**La causa.** I due campi (`fblUiScalaPct` e `chartFontScalePct`) erano agganciati all'evento
+`input`, che scatta a OGNI TASTO. Con "50" dentro, un backspace lascia "5": il 5 veniva applicato,
+schiacciato al tetto minimo, e — peggio — `fblScalaUiApplica` **riscrive il campo** col valore
+schiacciato. Il numero cambiava sotto le dita a metà. Il test l'ha fotografato: `actual: '10',
+expected: '5'`.
+
+**La correzione.** Entrambi i campi si applicano su `change` (uscita dal campo o Invio), che è
+anche l'evento che ridispara `STYLE_CLONE_FIELD_IDS`, quindi il ripristino della sessione continua
+a funzionare. Campo svuotato o messo a zero: si rimette il valore di prima, non il minimo e non il
+100%. Il tetto vale ancora, ma solo alla fine (300 → mostra 200).
+
+**Test:** 3 nuovi in `scala_ui.test.mjs`, che rifanno la sequenza 50 → 30 tasto per tasto e sono
+stati visti **rossi prima**. I due test che sparavano `input` sono stati aggiornati a `change`, con
+il commento che dice che il comportamento è cambiato su richiesta: quello che misurano (il campo
+scala la pagina e non il grafico) è rimasto identico.
+
+### 3. Un collaudo che dipendeva dal PATH
+
+`apk_versione.test.mjs` (aggiunto ieri) leggeva l'APK con `execFileSync('tar', ...)`: passava con
+il `tar` di Windows (System32, che è bsdtar e sa aprire gli zip) e cadeva con quello che installa
+Git (GNU tar), che legge `C:\...` come se `C` fosse un computer remoto e comunque non apre gli zip.
+Stesso file, stesso APK, stesso Windows, esito diverso da una sessione all'altra — la lezione 9 un
+passo più in là: non basta che un test non erediti il sistema operativo, non deve ereditare nemmeno
+il PATH. Riscritto per leggere lo zip col solo `node:zlib`: nessun programma esterno, e da due
+chiamate esterne a **8 millisecondi**.
+
+### 4. Android Studio si è aggiornato e ha portato Java 25: l'APK non si compilava più
+
+Alla prima compilazione Gradle è caduto in 4 secondi con `Unsupported class file major version 69`
+(= Java 25). Causa: `build_apk.bat` punta `JAVA_HOME` alla JDK dentro Android Studio
+(`Android Studio\jbr`), e quella JDK è passata a **25.0.3** — mentre il progetto usa Gradle
+**8.14.3**, che non la supporta. Non era colpa del plugin nuovo: era l'aggiornamento di Android
+Studio, avvenuto dopo la compilazione delle 11:10 di stamattina (che infatti era riuscita).
+Sul computer c'era già una JDK **21.0.11** in `C:\Users\pietro\.jdks\jbr-21.0.11`, che è quella
+giusta per Gradle 8.14: `build_apk.bat` ora punta lì, così il prossimo aggiornamento di Android
+Studio non rompe più la compilazione.
+LA REGOLA: una compilazione che prende la JDK da dentro un programma che si aggiorna da solo è una
+compilazione che si rompe da sola. La versione va dichiarata.
+
+### 5. Il token di GitHub fuori dal repository
+
+`API Github.txt` stava nella cartella del repo: non tracciato e **non ignorato**, quindi al primo
+`git add -A` sarebbe finito pubblicato. Controllato su tutti i rami: nella storia non è mai
+entrato, quindi la chiave non è esposta. Spostato in
+`C:\Users\pietro\Documents\credenziali-forex-lab`, e in `.gitignore` è stata messa la rete di
+sicurezza (nome esatto più `*token*.txt`, `*.pem`, `*.p12`, `*.jks`, `*.keystore`), verificando che
+nessun file già tracciato ci cascasse dentro.
+
+### 6. Da sapere: l'APK pubblicato è firmato con la chiave di DEBUG
+
+Misurato: il SHA-256 di `~/.android/debug.keystore` è `74:11:7F:BD:81:6B:...`, lo stesso con cui è
+firmato l'APK della release, e il file allegato alla v2.0.10 è esattamente il
+`ForexBacktestLAB.apk` della cartella `debug` (stessi byte). Quella chiave ha la password pubblica
+«android», è stata creata il 17 ottobre 2026 e Android la rigenera senza avvisare: **se si perde,
+nessuno può più aggiornare l'app sopra quella installata** (bisogna disinstallare, perdendo i
+dati). Va salvata una copia al sicuro e, prima o poi, va fatta una chiave di release vera. Detto al
+proprietario.
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.11
+- installer.iss: 2.0.11

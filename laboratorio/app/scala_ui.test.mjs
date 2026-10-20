@@ -257,7 +257,10 @@ test('nella pagina vera: il campo in Impostazioni → Stile scala la pagina e il
       const cv = document.getElementById('chart');
       const prima = cv ? cv.getBoundingClientRect().width : 0;
       inp.value = '130';
-      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      // 'change', non 'input': dal 20 ottobre 2026 la modifica si applica QUANDO SI ESCE dal
+      // campo, non a ogni tasto (richiesto dal proprietario — vedi i test in fondo al file).
+      // Quello che QUESTO test misura non cambia: il campo scala la pagina e non il grafico.
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
       const cw = document.getElementById('chartWrap');
       const dopo = cv ? cv.getBoundingClientRect().width : 0;
       return {zoomPagina: document.body.style.zoom,
@@ -300,18 +303,141 @@ test("nella pagina vera: anche il testo del grafico si puo' ridurre fino al 10%"
       const fuori = [];
       for (const v of [50, 20, 15, 10]) {
         inp.value = String(v);
-        inp.dispatchEvent(new Event('input', {bubbles: true}));
+        // 'change', non 'input': si applica a modifica finita (vedi i test in fondo al file).
+        inp.dispatchEvent(new Event('change', {bubbles: true}));
         fuori.push(Math.round(chartFontScale * 1000) / 1000);
       }
       // Sotto il tetto: il valore si ferma al 10%.
       inp.value = '1';
-      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
       return {valori: fuori, sotto: Math.round(chartFontScale * 1000) / 1000};
     });
     assert.equal(r.mancato, undefined, 'in Impostazioni -> Stile manca il campo della dimensione del testo del grafico');
     assert.deepEqual(r.valori, [0.5, 0.2, 0.15, 0.1],
       'il testo del grafico deve poter scendere fino al 10% (richiesto dal proprietario)');
     assert.equal(r.sotto, 0.1, 'sotto il 10% il testo si ferma al tetto: non diventa illeggibile');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// ============================================================================================
+// LA MODIFICA SI APPLICA QUANDO HAI FINITO DI SCRIVERE, NON A OGNI TASTO.
+//
+// RICHIESTO dal proprietario (20 ottobre 2026): «l'utente clicca sul valore da modificare,
+// modifica il valore e solo allora, quando ha inserito il valore e clicca fuori, viene applicata
+// la modifica, e non mentre la sta inserendo. Se cancella il valore e lo porta a 0, lui
+// ripristina automaticamente il valore precedente».
+//
+// IL DIFETTO, raccontato da lui con un esempio: «se la percentuale e' impostata a 50% e l'utente
+// vuole mettere il 30%, l'app non glielo fa mettere: quando cancella lo 0 e poi il 5 ripristina
+// automaticamente il valore di 50, oppure se inserisce un numero prima del 5 gli porta la scala
+// alla scala massima di 150%».
+//
+// Succedeva perche' i due campi erano agganciati all'evento 'input', che scatta a OGNI TASTO:
+// con "50" nel campo, un backspace lascia "5", e "5" veniva applicato subito, schiacciato al
+// tetto minimo e RISCRITTO nel campo. Il numero che l'utente stava scrivendo gli veniva cambiato
+// sotto le dita a metà.
+// ============================================================================================
+
+test('scala interfaccia: mentre si scrive non si applica e non si riscrive niente', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const inp = document.getElementById('fblUiScalaPct');
+      if(!inp) return {mancato: true};
+      // Si parte dal 50% dell'esempio del proprietario, per la via pubblica.
+      fblScalaUiImposta(localStorage, document, 50);
+      const partenza = {campo: inp.value, zoom: document.body.style.zoom};
+      // Ora l'utente vuole il 30%. Cancella lo "0": nel campo resta "5".
+      inp.value = '5';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      const dopoBackspace = {campo: inp.value, zoom: document.body.style.zoom};
+      // Scrive il "3" e poi lo "0": passa per "3" e "30".
+      inp.value = '3';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      const dopoTre = {campo: inp.value, zoom: document.body.style.zoom};
+      inp.value = '30';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      const dopoTrenta = {campo: inp.value, zoom: document.body.style.zoom};
+      // Solo adesso clicca fuori.
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
+      return {partenza, dopoBackspace, dopoTre, dopoTrenta,
+              fine: {campo: inp.value, zoom: document.body.style.zoom,
+                     salvato: localStorage.getItem('fbl_ui_scala_pct')}};
+    });
+    assert.equal(r.mancato, undefined, 'in Impostazioni → Stile manca il campo «Interfaccia»');
+    assert.equal(r.partenza.zoom, '0.5', 'si parte dal 50%');
+    // IL CUORE: mentre scrive, il campo resta quello che ha scritto LUI.
+    assert.equal(r.dopoBackspace.campo, '5', 'il "5" intermedio non deve essere riscritto dall\'app');
+    assert.equal(r.dopoBackspace.zoom, '0.5', 'e la pagina non si deve rimpicciolire al tetto minimo');
+    assert.equal(r.dopoTre.campo, '3', 'nemmeno il "3" va riscritto');
+    assert.equal(r.dopoTre.zoom, '0.5');
+    assert.equal(r.dopoTrenta.campo, '30');
+    assert.equal(r.dopoTrenta.zoom, '0.5', 'finche\' non esce dal campo non si applica niente');
+    // E alla fine il 30% che voleva.
+    assert.equal(r.fine.zoom, '0.3', 'uscendo dal campo si applica il 30% che aveva scritto');
+    assert.equal(r.fine.campo, '30');
+    assert.equal(r.fine.salvato, '30', 'e si ricorda');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('scala interfaccia: svuotare il campo rimette il valore di prima, non 0', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const inp = document.getElementById('fblUiScalaPct');
+      fblScalaUiImposta(localStorage, document, 80);
+      inp.value = '';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
+      const vuoto = {campo: inp.value, zoom: document.body.style.zoom};
+      // Anche uno zero esplicito non e' una scala: si torna a quella di prima.
+      inp.value = '0';
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
+      return {vuoto, zero: {campo: inp.value, zoom: document.body.style.zoom}};
+    });
+    assert.equal(r.vuoto.zoom, '0.8', 'il campo svuotato non deve cambiare la pagina');
+    assert.equal(r.vuoto.campo, '80', 'e il campo si ricompila col valore di prima');
+    assert.equal(r.zero.zoom, '0.8', 'zero non e\' una scala');
+    assert.equal(r.zero.campo, '80');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('testo del grafico: si applica a modifica finita, e svuotarlo non lo riporta al 100%', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(() => {
+      const inp = document.getElementById('chartFontScalePct');
+      if(!inp) return {mancato: true};
+      // Si parte dal 50%, a modifica finita.
+      inp.value = '50';
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
+      const partenza = Math.round(chartFontScale * 1000) / 1000;
+      // L'utente vuole il 30%: passa per "5" e per "3".
+      inp.value = '5';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      const dopoBackspace = {scala: Math.round(chartFontScale * 1000) / 1000, campo: inp.value};
+      inp.value = '30';
+      inp.dispatchEvent(new Event('input', {bubbles: true}));
+      const dopoTrenta = Math.round(chartFontScale * 1000) / 1000;
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
+      const fine = Math.round(chartFontScale * 1000) / 1000;
+      // Svuotato: resta quello di prima, non torna al 100%.
+      inp.value = '';
+      inp.dispatchEvent(new Event('change', {bubbles: true}));
+      return {partenza, dopoBackspace, dopoTrenta, fine,
+              vuoto: {scala: Math.round(chartFontScale * 1000) / 1000, campo: inp.value}};
+    });
+    assert.equal(r.mancato, undefined, 'manca il campo della dimensione del testo del grafico');
+    assert.equal(r.partenza, 0.5, 'si parte dal 50%');
+    assert.equal(r.dopoBackspace.scala, 0.5, 'il "5" intermedio non si applica');
+    assert.equal(r.dopoBackspace.campo, '5', 'e non viene riscritto');
+    assert.equal(r.dopoTrenta, 0.5, 'finche\' non esce dal campo non cambia niente');
+    assert.equal(r.fine, 0.3, 'uscendo dal campo si applica il 30%');
+    assert.equal(r.vuoto.scala, 0.3, 'il campo svuotato non riporta il testo al 100%');
+    assert.equal(r.vuoto.campo, '30', 'e il campo si ricompila col valore di prima');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

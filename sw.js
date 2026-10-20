@@ -607,7 +607,14 @@
 //               nell'ordine al primo click. Ora il campo si tocca solo scrivendolo o premendo il
 //               pulsante del lottaggio consigliato; il messaggio dice "Consigliato ... Non e'
 //               stato impostato".
-const CACHE_NAME = "forex-backtest-lab-v2.0.10";
+// v2.0.11 -   L'ACCESSO CON GOOGLE NELL'APP LO FA IL SISTEMA, NON LA PAGINA. Dentro la WebView
+//             dell'APK il giro OAuth non e' affidabile (popup: Firebase senza "opener" -> 400;
+//             reindirizzamento: 400 dopo la verifica in due passaggi, e al ritorno la rotellina
+//             girava a vuoto). Ora lo fa Android col plugin nativo e il token si scambia con
+//             Firebase qui nella pagina. Inoltre: la scala dell'interfaccia e la dimensione del
+//             testo si applicano a MODIFICA FINITA (prima a ogni tasto: dal 50%% non si poteva
+//             arrivare al 30%%, il numero veniva riscritto sotto le dita).
+const CACHE_NAME = "forex-backtest-lab-v2.0.11";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
