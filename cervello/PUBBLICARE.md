@@ -333,3 +333,19 @@ Due regole che vengono da lì:
 > solo, per sempre.
 
 Test che copre il comportamento: `laboratorio/app/aggiornamento_apk.test.mjs`.
+
+### Il progetto Android sta FUORI da questo repository
+
+La cartella `C:\Users\pietro\Desktop\trading\forex-backtest-mobile` (Capacitor: `www/`,
+`android/`, `ios/`) **non è versionata qui**. Le correzioni al progetto Android si perdono
+se non si ricopia il file. Due correzioni recenti da tenere a mente:
+
+- **`android/app/src/main/java/com/pietrosantini/forexbacktestlab/MainActivity.java`**:
+  il User-Agent senza il marcatore "wv" (altrimenti Google rifiuta l'accesso dentro la
+  WebView) e il **watchdog**: al riavvio, se la WebView è rimasta su una pagina esterna
+  che non fa parte del giro di accesso, si torna alla pagina dell'app (senza, l'utente
+  restava con una schermata bianca e non poteva fare niente);
+- **`capacitor.config.json`**: `server.allowNavigation` con `*.firebaseapp.com` e
+  `*.google.com`. Sono quelli che **tengono il giro di accesso dentro l'app**: se un host
+  della pagina di accesso non è ammesso, la WebView lo passa al browser di sistema e il
+  ritorno all'app non arriva più.

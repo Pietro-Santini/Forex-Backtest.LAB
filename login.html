@@ -108,8 +108,11 @@
 
   let skipAutoRedirect = false;
 
-  // APP MOBILE (Capacitor): dentro il WebView nativo i popup di Google vengono bloccati.
-  // Su mobile usiamo percio' il flusso di reindirizzamento (pagina intera) invece del popup.
+  // APP MOBILE (Capacitor): dentro il WebView nativo il POPUP di Google non funziona
+  // (non viene creata una finestra nuova: la pagina di Google si apre al posto dell'app e
+  // Firebase va in errore 400 - misurato il 20 ottobre 2026). Si usa perciò il flusso di
+  // reindirizzamento (pagina intera), che invece è una normale navigazione e torna
+  // nell'app. Vedi la nota lunga sul pulsante Google, più in basso.
   const isCapacitor = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
   /* STATO LOGIN GOOGLE: INIZIO
@@ -361,16 +364,49 @@
   });
 
   // --- GOOGLE ---
-  document.getElementById("google-signin-btn").addEventListener("click", async ()=>{
+  /* SCEGLTA FLUSSO GOOGLE: INIZIO - blocco provato per intero da
+     laboratorio/app/login_google_flusso.test.mjs, con Firebase e finestra finti:
+     si guarda QUALE strada viene presa, non come e' scritta. */
+  async function clickGoogle(){
     clearMsgs();
     skipAutoRedirect = true;
-    // SU CAPACITOR (APK): il reindirizzamento (signInWithRedirect) NON funziona,
-    // perché Firebase usa redirect URI web (firebaseapp.com/__/auth/handler) che
-    // non torna nell'app Capacitor (scheme forexbacktestlab://).
-    // Si usa SEMPRE il popup. Il WebView Android moderno supporta i popup
-    // se WebChromeClient li gestisce (il nostro build lo fa).
-    // SU BROWSER MOBILE (non Capacitor): popup primo, fallback a redirect se bloccato.
-    const usaSoloPopup = isCapacitor;
+
+    // IL POPUP DI FIREBASE NON FUNZIONA DENTRO L'APK. Misurato il 20 ottobre 2026 dal
+    // proprietario: "inserisco l'email, inserisco la password, mi manda all'autorizzazione
+    // da un altro dispositivo, e quando do l'autorizzazione mi torna con errore 400".
+    //
+    // Il perché: il popup di Firebase è una FINESTRA NUOVA (window.open). Dentro una WebView
+    // Android quella finestra non viene creata: la pagina di Google si apre al posto dell'app
+    // e Firebase, trovandosi senza "opener", non sa a chi restituire la credenziale - e
+    // risponde con l'errore 400. Non è un problema di rete né di account: è il popup.
+    //
+    // Il REINDIRIZZAMENTO invece funziona, perché è una normale navigazione: la WebView
+    // apre la pagina di Google, l'utente fa il login, Firebase torna a richiamare l'app
+    // (l'indirizzo di ritorno e' proprio questa pagina, https://localhost/login.html, che
+    // Firebase conosce perché "localhost" è fra i domini autorizzati del progetto) e qui
+    // getRedirectResult() legge la credenziale.
+    //
+    // Nell'APK il giro di Google resta DENTRO l'app: "accounts.google.com" e
+    // "*.firebaseapp.com" sono già fra gli host ammessi (capacitor.config.json), quindi
+    // la WebView non li passa al browser di sistema.
+    //
+    // Sul computer il popup resta il primo tentativo (è più scorrevole); il
+    // reindirizzamento è il ripiego se il browser lo blocca. Sul telefono nel browser
+    // (non nell'app) il reindirizzamento è il primo tentativo: il popup sui browser
+    // mobili è inaffidabile (e fa perdere a Firebase lo stato del giro).
+    const usaRedirect = isCapacitor || tocchiGrossi();
+    if (usaRedirect) {
+      salvaStatoAuth();   // lo stato del giro va salvato PRIMA di partire (vedi la nota sopra)
+      try {
+        await signInWithRedirect(auth, new GoogleAuthProvider());
+        return;            // la pagina cambia: qui non si torna mai
+      } catch (e) {
+        consumaStatoAuth();
+        skipAutoRedirect = false;
+        showError(traduciErrore(e && e.code));
+        return;
+      }
+    }
     try{
       const cred = await signInWithPopup(auth, new GoogleAuthProvider());
       const info = getAdditionalUserInfo(cred);
@@ -383,20 +419,20 @@
         window.location.replace(DESTINATION);
       }
     }catch(e){
-      // Se il popup è bloccato dal browser (non Capacitor), ripiego sul reindirizzamento.
-      if (!usaSoloPopup && e && e.code === "auth/popup-blocked") {
+      // Se il popup è bloccato dal browser, ripiego sul reindirizzamento.
+      if (e && e.code === "auth/popup-blocked") {
         salvaStatoAuth();
         try {
           await signInWithRedirect(auth, new GoogleAuthProvider());
           return;
         } catch(e2) { consumaStatoAuth(); e = e2; }
       }
-      // Su Capacitor: niente redirect. Se il popup fallisce per ALTRI motivi,
-      // l'errore è mostrato chiaramente (es. rete, cancellazione utente).
       skipAutoRedirect = false;
       showError(traduciErrore(e.code));
     }
-  });
+  }
+  document.getElementById("google-signin-btn").addEventListener("click", clickGoogle);
+  /* SCEGLTA FLUSSO GOOGLE: FINE */
 
   // --- VERIFY GATE ---
   document.getElementById("verify-recheck-btn").addEventListener("click", async ()=>{

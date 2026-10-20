@@ -529,3 +529,17 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   passa al browser di sistema dove il file viene scaricato davvero; il tag si annota e l'app si
   chiude solo DOPO l'installazione, non prima; il build number viene tolto prima del confronto.
   Test: `laboratorio/app/aggiornamento_apk.test.mjs` (4, prima rossi).
+
+- **Nell'APK l'accesso con Google finiva con errore 400 e schermata bianca** - risolto app v2.0.9 -
+  20 ottobre 2026: segnalato dal proprietario ("inserisco l'email, inserisco la password, poi mi
+  manda all'autorizzazione da un altro dispositivo, e quando do l'autorizzazione si ricollega con la
+  pagina web e mi manda sempre con errore 400 [...] mi dà tutta schermata bianca"). Causa misurata:
+  il pulsante usava il POPUP di Firebase, che dentro la WebView dell'APK non ha la finestra nuova in
+  cui rimandare la credenziale (Firebase risponde 400), e inoltre lasciava l'app a meta giro
+  ("verifica in due passaggi" che non finiva) e, al secondo tentativo, la WebView restava sulla
+  pagina di errore (schermata bianca). Correzione: nell'APK e sul telefono nel browser si usa il
+  REINDIRIZZAMENTO (una normale navigazione, che torna nell'app); sul computer il popup resta, col
+  reindirizzamento come ripiego se il browser lo blocca. In piu' l'app non resta piu' ferma su una
+  pagina che non e' sua: al riavvio, se la WebView e' su una pagina esterna che non fa parte del
+  giro di accesso, si torna alla pagina dell'app (MainActivity). Test:
+  `laboratorio/app/login_google_flusso.test.mjs` (8, prima rossi).

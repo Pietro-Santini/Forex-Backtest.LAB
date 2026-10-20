@@ -1482,3 +1482,34 @@ falso segnala un aggiornamento).
 ### Versioni
 - sw.js: forex-backtest-lab-v2.0.8
 - installer.iss: 2.0.8
+
+### 10. Il login con Google nell'APK funziona (e non lascia piu' schermata bianca)
+Richiesta: "ho sempre problemi con l'accesso con Google [...] mi manda sempre con errore 400 [...]
+Quando la verifico mi porta sulla pagina web, mi dà quell'errore. [...] quando stavolta premo il
+pulsante Google mi dà tutta schermata bianca".
+
+Misurata la causa: il popup di Firebase è una FINESTRA NUOVA (window.open). Dentro la WebView
+dell'APK quella finestra non viene creata: la pagina di Google si apre al posto dell'app e
+Firebase, trovandosi senza "opener", non sa a chi restituire la credenziale - e risponde con
+l'errore 400. Non era rete, né account, né versione: era il popup.
+
+Fatto:
+- nell'APK e sul telefono nel browser si usa il REINDIRIZZAMENTO (pagina intera): la WebView apre
+  Google, l'utente fa il login, Firebase richiama l'app (l'indirizzo di ritorno è questa pagina
+  stessa, https://localhost/login.html, e "localhost" è fra i domini autorizzati del progetto) e
+  qui getRedirectResult() legge la credenziale. Il giro resta DENTRO l'app perché
+  "accounts.google.com" e "*.firebaseapp.com" sono già fra gli host ammessi;
+- sul computer il popup resta il primo tentativo, col reindirizzamento come ripiego;
+- lo stato del giro viene salvato prima di partire (il processo può morire durante la scelta
+  dell'account: era già previsto, ma solo per il percorso del reindirizzamento);
+- l'app non resta più ferma su una pagina che non è sua: al riavvio, se la WebView è su una
+  pagina esterna che non fa parte del giro di accesso, si torna alla pagina dell'app
+  (MainActivity.java);
+- il blocco del pulsante Google è diventato un blocco marcato ("SCEGLTA FLUSSO GOOGLE"), provato
+  per intero con Firebase e finestra finti.
+
+Test: login_google_flusso.test.mjs 8/8 (prima rossi).
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.9
+- installer.iss: 2.0.9

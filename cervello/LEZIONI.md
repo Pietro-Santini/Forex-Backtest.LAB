@@ -412,3 +412,26 @@
   non e' parte del numero (i prefissi, i suffissi), altrimenti il confronto e' un confronto fra
   due cose diverse. E il confronto delle versioni e' numerico, mai fra stringhe: "2.0.10" e'
   piu' nuovo di "2.0.9".
+
+- Il popup di Firebase non funziona dentro una WebView, e li' muore con un errore che sembra
+  un altro problema. (20 ottobre 2026, "l'accesso con Google nell'app mi da errore 400".) Il
+  popup di Firebase e' una FINESTRA NUOVA (window.open). Dentro la WebView dell'APK quella
+  finestra non viene creata: la pagina di Google si apre al posto dell'app e Firebase,
+  trovandosi senza "opener", non sa a chi restituire la credenziale - e risponde 400. Il
+  sintomo che si vede ("errore 400", "verifica in due passaggi" che non finisce, "schermata
+  bianca al secondo tentativo") sembra un problema di rete, di account o di versione: non lo e'.
+  LA REGOLA: una libreria che usa una finestra va provata nell'ambiente in cui vive davvero. Il
+  reindirizzamento invece e' una normale navigazione e funziona: la WebView apre Google, l'utente
+  fa il login, Firebase richiama l'app (l'indirizzo di ritorno e' la pagina stessa) e li' la
+  credenziale viene letta. Nell'APK il giro resta DENTRO l'app solo se gli host della pagina di
+  accesso sono fra quelli ammessi (capacitor.config.json, allowNavigation): altrimenti la WebView
+  li passa al browser di sistema e il ritorno non arriva piu'.
+
+- Un pulsante che "non funziona" va guardato nel posto dove viene premuto, non dove e' scritto.
+  (20 ottobre 2026, stesso lavoro.) Per mesi il codice diceva "su Capacitor il popup, il
+  reindirizzamento non funziona" - e il commento sopra diceva esattamente il contrario
+  ("su mobile usiamo il reindirizzamento"). Il commento era quello giusto: la riga sotto
+  aveva fatto il contrario, e per un motivo che al momento sembrava buono. LA REGOLA: quando un
+  commento e il codice si contraddicono, il codice ha sbagliato (o il commento): e in ogni caso
+  uno dei due mente. Il rimedio non e' scegliere: e' misurare, e scrivere il motivo accanto
+  al codice.
