@@ -294,3 +294,42 @@ push, poi `bash prepara_server.sh` sul server. Nessun Setup.
 
 **In dubbio**: guarda la tabella al punto 2. Se il file sta in quella catena, il server va
 aggiornato; se non lo fai, continuerà a girare il codice vecchio senza dirtelo.
+
+---
+
+## 9. L'APK (l'app Android): una quarta destinazione
+
+L'app per telefono e tablet è un **APK** costruito con Capacitor (cartella `www/` copiata dentro
+l'app Android). È una destinazione **separata** dal sito: cambiare `app.html` sul repository
+**non** cambia l'app già installata sui telefoni. Per farlo arrivare lì serve:
+
+1. copiare i file aggiornati in `www/` (lo fa `aggiorna_www.bat`);
+2. ricompilare l'APK (`build_apk.bat`: `gradlew assembleDebug` + firma);
+3. allegare l'APK alla release di GitHub (il nome atteso è `forexbacktestlab.apk`, così
+   l'indirizzo stabile `releases/latest/download/forexbacktestlab.apk` continua a funzionare);
+4. **firmare con la stessa chiave di prima** (la `debug.keystore`): con una chiave diversa
+   Android non accetta l'installazione sopra l'app vecchia e l'utente deve disinstallarla.
+
+### Come l'APK riceve gli aggiornamenti (dal 20 ottobre 2026)
+
+Nell'APK la pagina gira in una **WebView**, e li' un download con l'attributo `download`
+**non scarica niente**: la WebView di Capacitor non mette nessun `DownloadListener`, e il
+pacchetto semplicemente non parte. Per questo l'app, quando riconosce di essere dentro l'APK,
+**non usa il download diretto**: apre il pacchetto come **navigazione** verso l'indirizzo
+esterno, e Capacitor lo passa al browser di sistema. Lì il file viene scaricato davvero e
+Android chiede se installarlo.
+
+Due regole che vengono da lì:
+
+- il **tag della release non si annota** finché l'utente non ha installato (e l'app non si
+  chiude): il pulsante «Aggiorna» deve restare premibile;
+- il **numerino di build** che sta nel tag (`v2.0.8-132`) non è un numero di versione: va tolto
+  prima di confrontarlo con la versione installata, altrimenti il pulsante comparirebbe anche
+  subito dopo l'installazione.
+
+> **La transizione va fatta a mano, una volta sola.** L'APK vecchio ha il download rotto, quindi
+> non può scaricare da sé il pacchetto nuovo: l'utente prende l'APK nuovo dalla pagina del
+> sito (o dalla release su GitHub) e lo installa. Da quel momento l'APK nuovo si aggiorna da
+> solo, per sempre.
+
+Test che copre il comportamento: `laboratorio/app/aggiornamento_apk.test.mjs`.

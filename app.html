@@ -47115,6 +47115,19 @@ let rz=null; addEventListener('resize',()=>{ if(!aperto)return; clearTimeout(rz)
 // release che questo dispositivo ha gia' installato: al primo avvio la nota e'
 // salvata in silenzio e il pulsante resta nascosto.
 
+// E' l'APK (la WebView di Capacitor dentro l'app Android) o no?
+// Serve per una cosa sola: dentro l'APK il download con l'attributo "download"
+// NON funziona (il file non parte e l'utente resta con la versione vecchia),
+// mentre la WebView, se le si fa NAVIGARE verso un indirizzo esterno, apre il
+// browser di sistema e li' il pacchetto viene scaricato davvero.
+function fblEAppCapacitor(){
+  try{
+    return !!(typeof window!=='undefined' && window.Capacitor
+      && typeof window.Capacitor.getPlatform==='function'
+      && window.Capacitor.getPlatform()==='android');
+  }catch(e){ return false; }
+}
+
 function fblMostraPulsanteAggiorna(release, tagRemoto){
   const btn=document.getElementById('fblAggiornaBtn');
   if(!btn)return null;
@@ -47129,13 +47142,22 @@ async function fblApplicaAggiornamento(release, tagRemoto, btn){
   btn.disabled=true; btn.textContent='Aggiornamento in corso...';
   const p=await fblScaricaEAggiorna(release);
   if(p.ok){
-    try{ localStorage.setItem('fbl_rel_vista',tagRemoto); }catch(e){}
-    try{ await fblFermaTuttoPerAggiornamento(); }catch(e){}
-    const pf=fblPiattaforma();
-    if(pf==='windows'||pf==='mac'){
-      setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },2000);
-    }else if(pf==='android'){
-      setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },3000);
+    // Aperto nel browser di sistema: l'utente deve ancora scaricare e installare il
+    // pacchetto, quindi il tag NON si annota e l'app NON si chiude (chiudere la
+    // appmetterebbe la schermata di download sotto, e il pulsante "Aggiorna"
+    // deve restare li' finche' la versione nuova non e' davvero installata).
+    if(!p.apertoEsterno){
+      try{ localStorage.setItem('fbl_rel_vista',tagRemoto); }catch(e){}
+      try{ await fblFermaTuttoPerAggiornamento(); }catch(e){}
+      const pf=fblPiattaforma();
+      if(pf==='windows'||pf==='mac'){
+        setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },2000);
+      }else if(pf==='android'){
+        setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },3000);
+      }
+    }else{
+      btn.disabled=false; btn.textContent='\u2b07\ufe0f Aggiorna';
+      try{ $('status').textContent='⬇️ Aggiornamento: il pacchetto si sta scaricando nel browser. Aprilo e installa la versione nuova.'; }catch(e){}
     }
   }else{
     btn.disabled=false; btn.textContent='\u2b07\ufe0f Aggiorna';
@@ -47165,31 +47187,17 @@ async function fblControllaAggiornamento(forza){
     // del service worker o dal sw.js incorporato). Se non si conosce, resta il confronto col tag
     // gia' visto di prima. Con `forza` (pulsante \u00abControlla aggiornamenti\u00bb) si guarda comunque.
     const nuova = installata
-      ? fblConfrontaVersioni(String(tagRemoto).replace(/^v/,''), installata) > 0
+      ? fblConfrontaVersioni(fblVersioneDaTag(tagRemoto), installata) > 0
       : (tagRemoto !== tagVisto);
     if(tagRemoto && nuova){
       const btn = fblMostraPulsanteAggiorna(d, tagRemoto);
       if(!btn) return;
       btn.onclick = async()=>{
-        btn.disabled = true; btn.textContent = 'Aggiornamento in corso...';
-        const p = await fblScaricaEAggiorna(d);
-        if(p.ok){
-          // Il download ha avuto successo: la nota della release viene salvata
-          // solo ora, cosi' se il download fallisce il pulsante resta disponibile.
-          try{ localStorage.setItem('fbl_rel_vista', tagRemoto); }catch(e){}
-          try{ await fblFermaTuttoPerAggiornamento(); }catch(e){}
-          // Sul telefono l'installer APK parte da solo e riavvia l'app; su
-          // Windows si tenta di aprire il file scaricato, poi si chiude.
-          const pf = fblPiattaforma();
-          if(pf === 'windows' || pf === 'mac'){
-            setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },2000);
-          }else if(pf === 'android'){
-            setTimeout(()=>{ try{ navigator.app?.exitApp?.(); }catch(e){} try{ window.close(); }catch(e){} },3000);
-          }
-        }else{
-          btn.disabled = false; btn.textContent = 'Aggiorna';
-          alert('Aggiornamento non riuscito: ' + (p.motivo||'errore sconosciuto'));
-        }
+        // Stessa strada di sempre (fblApplicaAggiornamento): cosi' valgono anche
+        // le sue regole, e in particolare nell'APK il tag NON si annota e l'app
+        // non si chiude (il pacchetto si scarica nel browser, ma l'utente deve
+        // ancora installarlo).
+        await fblApplicaAggiornamento(d, tagRemoto, btn);
       };
     }
   }catch(e){ console.warn('Aggiornamento non disponibile:', e); }
@@ -47215,6 +47223,28 @@ async function fblScaricaEAggiorna(release){
     if(u) url = u;
   }
   if(!url) return {ok:false,motivo:'Nessun pacchetto disponibile per questa piattaforma'};
+  // NELL'APK (WebView di Capacitor) il trucco del link con l'attributo "download"
+  // non funziona: la WebView non scarica niente, l'utente resta con la versione
+  // vecchia e non lo vede neppure. Quello che funziona e' la NAVIGAZIONE verso
+  // l'indirizzo esterno: Capacitor apre il browser di sistema (che non e' in
+  // allowNavigation), li' il pacchetto viene scaricato davvero e Android chiede
+  // se installarlo.
+  if(fblEAppCapacitor()){
+    try{
+      // Un link SENZA l'attributo "download": e' una navigazione, e la WebView di
+      // Capacitor la passa al browser di sistema (che non e' fra gli host ammessi
+      // dentro l'app). Li' il pacchetto viene scaricato davvero e Android chiede
+      // se installarlo. Con "download" invece la WebView non scarica niente.
+      const a = document.createElement('a');
+      a.href = url; a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(()=>a.remove(),1000);
+      return {ok:true, apertoEsterno:true, motivo:'Pacchetto aperto nel browser di sistema'};
+    }catch(e){
+      try{ window.location.href = url; return {ok:true, apertoEsterno:true, motivo:'Pacchetto aperto nel browser di sistema'}; }catch(e2){}
+    }
+  }
   try{
     const a = document.createElement('a');
     a.href = url; a.download = nome;
@@ -47276,6 +47306,13 @@ function fblVersioneDaChiavi(chiavi){
   }
   return migliore;
 }
+// Il tag di una release e' "v2.0.7-131": c'e' il numero di build (il contatore delle
+// esecuzioni) DOPO il trattino. Per confrontare con la versione installata ("2.0.7")
+// il numero di build va tolto: se restasse, "2.0.7-131" sembrerebbe sempre piu' nuovo
+// di "2.0.7" e il pulsante "Aggiorna" comparirebbe anche subito dopo l'installazione.
+function fblVersioneDaTag(tag){
+  return String(tag||'').replace(/^v/,'').replace(/-\d+$/,'');
+}
 async function fblVersioneInstallata(){
   try{
     if(typeof caches!=='undefined'&&caches.keys){
@@ -47329,7 +47366,7 @@ async function fblAggiornaPannelloVersione(forza){
     return {installata,remota:'',nuova:false,errore:true};
   }
   rem.textContent=rel.tagRaw||rel.tag;
-  const nuova=!installata||fblConfrontaVersioni(rel.tag,installata)>0;
+  const nuova=!installata||fblConfrontaVersioni(fblVersioneDaTag(rel.tag),installata)>0;
   if(stato)stato.textContent=nuova?"(c'e' una versione nuova)":"(sei all'ultima versione)";
   if(note){
     if(rel.note){note.style.display='';note.textContent='Cosa cambia in questa versione:\n'+rel.note.slice(0,1200);}

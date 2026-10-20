@@ -516,3 +516,16 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   `fblCronoDisegna` ferma ogni linea sulla sua candela e mette la **spunta ✓ a sinistra** del punto
   in cui un TP è stato preso. Se lo stop non è preso, la sua linea prende la lunghezza dell'ultima
   di TP. Test: `laboratorio/app/cronologia_linee.test.mjs` (3, prima rossi).
+
+- **Nell'APK il pacchetto di aggiornamento non arrivava mai** - risolto app v2.0.8 - 20 ottobre 2026:
+  segnalato dal proprietario ("l'applicazione sui dispositivi mobili non riesce a ricevere il
+  pacchetto di aggiornamento della versione"). Il pulsante "Aggiorna" compariva, ma il pacchetto
+  non partiva: dentro l'APK la pagina gira in una WebView (Capacitor) e li' il download con
+  l'attributo `download` non scarica niente (la WebView di Capacitor non mette nessun
+  `DownloadListener`), quindi il file spariva senza nessun errore. Difetto minore collegato: il
+  numero di build nel tag della release (`v2.0.7-131`) veniva confrontato come numero di
+  versione, e il pulsante "Aggiorna" compariva anche subito dopo l'installazione. Correzione:
+  nell'APK il pacchetto si apre come **navigazione** (link senza `download`), che Capacitor
+  passa al browser di sistema dove il file viene scaricato davvero; il tag si annota e l'app si
+  chiude solo DOPO l'installazione, non prima; il build number viene tolto prima del confronto.
+  Test: `laboratorio/app/aggiornamento_apk.test.mjs` (4, prima rossi).

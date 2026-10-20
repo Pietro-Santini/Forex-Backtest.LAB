@@ -806,7 +806,9 @@ def mt5_launch():
             detail=f"Impossibile avviare il terminale MT5: {mt5.last_error()} — controlla che non ci sia "
                    f"nessuna finestra/popup aperta in primo piano nel terminale (es. \"Apri un Conto\").",
         )
-    return {"ok": True}
+    # Riduci il terminale a icona dopo l'avvio
+    riduci_detail = riduci_terminale_a_icona()
+    return {"ok": True, "terminale_ridotto": (riduci_detail is None), "terminale_ridotto_detail": riduci_detail}
 
 
 # =====================================================================================

@@ -389,3 +389,26 @@
 - Un pulsante che scarica non e' un pulsante che funziona: il file va verificato. (19 ottobre 2026, l'APK che rispondeva 404.) Il sito puntava a un indirizzo stabile "latest/download/forexbacktestlab.apk" e per otto release quel file non c'era piu' (dalla v2.0.4-126 le release allegano solo il Setup Windows): ogni tablet finiva su una pagina d'errore GitHub. Nessun test lo vedeva, perche' i test controllavano che il pulsante ci fosse, non che il file esistesse. E il commento nel codice dichiarava il difetto ("oggi risponde 404: il riquadro lo dichiara") mentre il riquadro non lo dichiarava: un commento che descrive una protezione mai scritta e' peggio di nessun commento, perche' mette tranquillo. LA REGOLA: quando una pagina offre un download, o il file e' nel repository insieme alla pagina (e allora c'e' sempre), o lo si verifica prima di offrirlo. L'API delle release dice quali asset esistono: si chiede a quella. E un file di installazione che manca non si "aggiusta" scrivendo "premi qui": si costruisce e si allega.
 
 
+
+- Nell'app dentro l'APK un download con l'attributo "download" non SCARICA niente: la WebView di
+  Capacitor non mette nessun DownloadListener, e il pacchetto semplicemente non parte. (20 ottobre
+  2026, "sul telefono non arriva la nuova versione".) Il meccanismo di aggiornamento era scritto
+  e funzionava sul computer: un <a href="..." download> su cui si fa click. Nella WebView
+  dell'app Android quel click viene ignorato, e l'utente - che aveva visto comparire il pulsante
+  "Aggiorna" - restava con la versione vecchia senza capire perche'. Il collaudo non lo
+  vedeva: il test misurava che il click sull'ancora fosse avvenuto, e in Chromium il click
+  avviene. LA REGOLA: il comportamento di un download si misura nel DOPPIO ambiente in cui
+  vive, non solo in quello in cui si sviluppa. Il trucco che funziona nella WebView e' la
+  NAVIGAZIONE verso l'indirizzo esterno: Capacitor apre il browser di sistema (l'host non e'
+  fra quelli ammessi dentro l'app), li' il file viene scaricato davvero e Android chiede se
+  installarlo. E chi non ha ancora installato non e' aggiornato: per quello il tag della
+  release si annota solo DOPO, e il pulsante "Aggiorna" resta premibile.
+
+- Il numero di build nel tag della release non e' un numero di versione. (20 ottobre 2026, stesso
+  lavoro.) Il tag e' "v2.0.7-131": il "-131" e' il contatore delle esecuzioni del flusso di
+  pubblicazione, non la versione. Confrontato cosi' com'era, "2.0.7-131" sembrava sempre piu'
+  nuovo di "2.0.7" e il pulsante "Aggiorna" compariva anche subito dopo l'installazione, su
+  ogni dispositivo. LA REGOLA: un numero che si confronta con un altro va ripulito da cio' che
+  non e' parte del numero (i prefissi, i suffissi), altrimenti il confronto e' un confronto fra
+  due cose diverse. E il confronto delle versioni e' numerico, mai fra stringhe: "2.0.10" e'
+  piu' nuovo di "2.0.9".

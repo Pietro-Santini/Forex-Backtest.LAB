@@ -1452,3 +1452,33 @@ Rimosse tracce di "Prova il server", "Salva il server", "Mostra/Nascondi/Copia" 
 - APK: v2.0.7 firmato con chiave v2.0.4-125 (aggiornamento in-place su tablet).
 
 
+
+### 9. L'APK riceve davvero il pacchetto di aggiornamento
+Richiesta: "l'applicazione sui dispositivi mobili non riesce a ricevere il pacchetto di aggiornamento
+della versione... non puo' essere che un dispositivo mobile non gli arriva la nuova versione pronta da
+scaricare dopo una nuova versione lanciata".
+
+Misurata la causa: dentro l'APK la pagina gira in una WebView (Capacitor), e li' il download con
+l'attributo "download" NON funziona - la WebView di Capacitor non mette nessun DownloadListener, e
+il pacchetto non parte. Il pulsante "Aggiorna" compariva, il click non produceva niente, e
+l'utente restava con la versione vecchia senza accorgersene. Il collaudo non lo vedeva: il test
+guardava che il click sull'ancora fosse avvenuto, e in Chromium avviene.
+
+Fatto:
+- nell'APK il pacchetto si apre come NAVIGAZIONE (link senza l'attributo "download"): Capacitor
+  passa l'indirizzo esterno al browser di sistema, li' il file viene scaricato e Android chiede se
+  installarlo. Nel browser normale il download diretto resta (li' funziona);
+- nell'APK il tag della release NON si annota e l'app non si chiude: l'utente deve ancora
+  installare, quindi il pulsante "Aggiorna" resta premibile finche' la versione nuova non e' li';
+- il numero di build nel tag ("v2.0.7-131") non viene piu' confrontato come numero di versione:
+  se no', il pulsante compariva anche subito dopo l'installazione (2.0.7-131 sembra piu' nuovo di 2.0.7);
+- un solo percorso per l'aggiornamento (fblApplicaAggiornamento), cosi' le regole valgono per
+  entrambi i pulsanti (header e scheda Versione).
+
+Test: aggiornamento_apk.test.mjs 4/4 (nell'APK il pacchetto si apre come navigazione, il tag non si
+annota e il pulsante resta premibile; nel browser il download diretto resta; il build number non
+falso segnala un aggiornamento).
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.8
+- installer.iss: 2.0.8
