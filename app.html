@@ -15110,8 +15110,9 @@ function draw(){
  // zoneStatsOpenKey/zoneClickCandidateKey).
  zoneBoxHitRects=[];
  openPosHitRects=[];
- // Ripopolata più sotto, durante il disegno vero e proprio delle candele footprint — vedi
- // footprintCellClickCandidate/click-to-cycle-stile nel pointerdown/pointerup del canvas.
+ // Ripopolata più sotto, durante il disegno vero e proprio delle candele footprint. La usano:
+ // il rifiuto di deselezionare quando si clicca una candela, e la precedenza della candela
+ // sulla casella Target/Stop nel cambio stile (vedi fpTocco).
  footprintCellHitRects=[];
  footprintStyleHitRects=[];
  // Riquadri del Temporal VP 3D: stesso schema, ripopolati dal suo render() in questo giro.
@@ -16406,7 +16407,21 @@ function draw(){
  const activeOnChart=!!posSelezionata&&positions.includes(posSelezionata)&&drawableOnCurrentChart(posSelezionata);
  if(positionsVisible)
  positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(pos=>{
-   const isFocused=pos===active;
+   // CHI E' "IN EVIDENZA" LO DECIDE L'UTENTE, NON UNA RIASSEGNAZIONE AUTOMATICA.
+   // SEGNALATO: «non tocco assolutamente nulla sul grafico e a un certo punto mi seleziona in
+   // automatico una posizione». La parte che nascondeva le ALTRE posizioni era gia' stata
+   // staccata da `active` (vedi la nota lunga su posSelezionata piu' sotto), ma l'enfasi - linea
+   // piu' spessa, etichetta in grassetto, opacita' piena - era rimasta legata ad `active`, che
+   // l'app riassegna da sola in cinque punti: al cambio asset, quando una posizione si chiude,
+   // quando se ne apre una (anche da una sala segnali), al ripristino di sessione, quando si
+   // adotta una posizione dal conto MT5. Ognuna di quelle riassegnazioni accendeva l'evidenza su
+   // una posizione che l'utente non aveva scelto - e da fuori si legge come «si e' selezionata da
+   // sola».
+   // `isAttiva` resta `active`: serve al trascinamento, che lavora sempre sulla posizione delle
+   // caselle SL/TP. `isFocused` - cioe' l'aspetto - segue `posSelezionata`, che la impostano solo
+   // un clic sulla posizione o il suo pulsante nella tabella.
+   const isAttiva=pos===active;
+   const isFocused=pos===posSelezionata;
    const dimmed=activeOnChart&&pos!==posSelezionata;
    // I livelli da disegnare: quelli in forza all'istante mostrato (in replay) o quelli di adesso
    // (replayMomentoMostrato() === null, cioè Live che corre o Storico fermo).
@@ -16492,8 +16507,11 @@ function draw(){
    // vista invece di non esistere.
    {
      const originBox=(openIdx!=null)?openIdx:start;
-     const isDraggingSl=isFocused && previewTradeLevel && previewTradeLevel.type==='SL';
-     const isDraggingTp=isFocused && previewTradeLevel && previewTradeLevel.type==='TP';
+     // Il trascinamento lavora sulla posizione ATTIVA (quella delle caselle SL/TP), non su
+     // quella "in evidenza": sono due cose diverse da quando l'evidenza segue la scelta
+     // dell'utente - vedi isAttiva/isFocused sopra.
+     const isDraggingSl=isAttiva && previewTradeLevel && previewTradeLevel.type==='SL';
+     const isDraggingTp=isAttiva && previewTradeLevel && previewTradeLevel.type==='TP';
      // Il livello trascinato ADESSO con il dito/mouse vince sempre (si deve vedere dove lo si sta
      // portando); altrimenti vale quello in forza all'istante mostrato.
      const liveSl=isDraggingSl && previewTradeLevel.price!=null?previewTradeLevel.price:slStorico;
@@ -18617,7 +18635,6 @@ let footprintCellHitRects=[];
 // della candela, così anche una candela minuscola o senza tick registrati resta SEMPRE toccabile e
 // fa passare bid/ask -> delta -> volume. Vedi il pointerdown del canvas (cambio stile garantito).
 let footprintStyleHitRects=[];
-let footprintCellClickCandidate=null;
 // Il cambio stile al tocco/clic vive in un ascoltatore dedicato: vedi FOOTPRINT: TOCCO/CLIC SU UNA CANDELA.
 // Ricorda l'ultimo VERO click (ownerKey+istante) su una casella Target/Stop di una posizione
 // APERTA ('pos:'+id): se il click successivo cade sulla STESSA casella entro ZONE_DBLCLICK_MS,
@@ -19855,15 +19872,29 @@ function fblClickSuVuoto(e){
     if(active!==posHitR.pos)focusPosition(posHitR.pos);
    }else{
     const hitDraw=hitTestDrawings(e.clientX,e.clientY,true);
-    const hitZone=zoneBoxHitRects.some(r=>relX0>=r.xOrigin&&relX0<=r.xRight&&relY0>=r.yMin&&relY0<=r.yMax);
+    // COSA TRATTIENE LA SELEZIONE, E COSA NO.
+    // SEGNALATO dal proprietario: «basta che premo in qualunque parte del grafico dove non e'
+    // contenuta una candela, dove non e' contenuta una riga che collega l'apertura e la chiusura
+    // di una posizione, e che non tocco le righe di TP, SL, entry e stop profit: per il resto,
+    // qualsiasi punto del grafico mi deseleziona». E in piu': «per toccare fuori intendo anche
+    // sopra un indicatore - l'indicatore non e' un oggetto che si puo' premere, e' un oggetto
+    // solo di visualizzazione».
+    // DUE GUARDIE TOLTE, ed erano esattamente le due che descriveva:
+    //  - la CASELLA Target/Stop (zoneBoxHitRects): e' un rettangolo che va dall'entrata fino ad
+    //    adesso e puo' coprire mezzo grafico. Finche' bloccava la deselezione, per deselezionare
+    //    bisognava andare a cercare il vuoto fuori da quel rettangolo - «tutta la parte destra»;
+    //  - gli INDICATORI (vpIndHitRects): un indicatore si guarda, non si preme.
+    // Restano a trattenere la selezione solo le cose che l'utente ha elencato: le candele
+    // (hitFp), la riga apertura-chiusura (hitClosed), le righe TP/SL/entry/stop profit (hitLevel)
+    // - piu' i disegni (hitDraw), che sono oggetti selezionabili a pieno titolo, le notizie
+    // (hanno un loro popup) e la scala prezzi, che sta fuori dall'area del grafico.
     const hitFp=footprintCellHitRects.some(r=>relX0>=r.xxLeft&&relX0<=r.xxRight&&relY0>=r.yTop&&relY0<=r.yBot);
-    if(!hitDraw&&!hitZone&&!hitFp){
+    if(!hitDraw&&!hitFp){
      const hitClosed=closedTradeHitSegments.some(s=>distToSegment(relX0,relY0,s.x1,s.y1,s.x2,s.y2)<=CLOSED_TRADE_HIT_TOL);
      const hitNews=newsDotHitRects.some(n=>Math.hypot(relX0-n.x,relY0-n.y)<=n.r+2);
-     const hitVp=vpIndHitRects.some(h=>relX0>=h.x1&&relX0<=h.x2&&relY0>=h.y1&&relY0<=h.y2);
      const hitLevel=tradeLevelHit(e.clientX,e.clientY,false)!==null;
      const hitAxis=isOnPriceAxis(e.clientX);
-     if(!hitClosed&&!hitNews&&!hitVp&&!hitLevel&&!hitAxis){
+     if(!hitClosed&&!hitNews&&!hitLevel&&!hitAxis){
       if(active||posSelezionata||selectedDrawing||selectedClosedTradeIds.size){
        active=null;posSelezionata=null;selectedDrawing=null;
        try{ selectedClosedTradeIds.clear(); }catch(err){}
@@ -24371,15 +24402,11 @@ chartEl.addEventListener('pointerdown',e=>{
    const hitBox=zoneBoxHitRects.find(r=>relXc>=r.xOrigin&&relXc<=r.xRight&&relYc>=r.yMin&&relYc<=r.yMax);
    zoneClickCandidateKey=hitBox?hitBox.ownerKey:null;
  }
- // Stessa idea, per il click-to-cycle-stile sopra una candela footprint (bid/ask -> delta ->
- // volume -> bid/ask, vedi footprintCellClickCandidate nel pointerup): niente se il click cade
- // già su una casella Target/Stop qui sopra (quella resta prioritaria, più specifica dell'intera
- // candela footprint su cui è disegnata).
- {
-   const rectC=chartEl.getBoundingClientRect();
-   const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
-   footprintCellClickCandidate=!zoneClickCandidateKey&&footprintCellHitRects.some(r=>relXc>=r.xxLeft&&relXc<=r.xxRight&&relYc>=r.yTop&&relYc<=r.yBot);
- }
+ // TOLTO il secondo meccanismo per il cambio stile: `footprintCellClickCandidate` veniva
+ // calcolato qui a ogni pointerdown (con il suo giro di controlli sui rettangoli) e poi
+ // azzerato al pointercancel, ma NESSUNO lo leggeva al pointerup - il cambio stile passa tutto
+ // da fpTocco. Due strade per lo stesso gesto, di cui una morta, sono il modo piu' sicuro di
+ // far sembrare casuale un comportamento: chi legge non sa quale delle due stia guardando.
  // Stessa idea, per la linea tratteggiata di un trade GIÀ CHIUSO: un click su di essa
  // seleziona/deseleziona quel trade (multi-selezione, vedi selectedClosedTradeIds), sempre
  // solo se il rilascio avviene senza un vero trascinamento (vedi pointerup più sotto).
@@ -24918,7 +24945,6 @@ chartEl.addEventListener('pointercancel',e=>{
  zoneClickCandidateKey=null;
  closedTradeClickCandidateId=null;
  vpVwapClickCandidate=null;
- footprintCellClickCandidate=false;
  if(touchDrawDrag){
    // Gesto di disegno-a-trascinamento interrotto (es. il sistema toglie il focus a metà
    // trascinamento): annulliamo il disegno in corso invece di crearlo a metà, così non
@@ -25301,10 +25327,19 @@ chartEl.addEventListener('pointerdown',e=>{
    const r=chartEl.getBoundingClientRect();
    const x=e.clientX-r.left, y=e.clientY-r.top;
    if(!footprintStyleHitRects.some(c=>x>=c.xxLeft&&x<=c.xxRight&&y>=c.yTop&&y<=c.yBot))return;
-   // Se il tocco cade sulla freccia/riga di apertura di una posizione aperta, vince la selezione
-   // della posizione (gestore principale): non si cambia lo stile del footprint.
+   // LA REGOLA DELLE PRECEDENZE: UN BERSAGLIO SOTTILE E MIRATO VINCE, UN RIEMPIMENTO LARGO NO.
+   // Chi lavora con l'order flow cambia vista decine di volte al minuto, e il cambio stile deve
+   // funzionare SEMPRE su una candela (richiesto: «non puo' avere bug»). La freccia di una
+   // posizione, una linea TP/SL e un disegno sono bersagli di pochi pixel che si prendono di
+   // proposito: continuano a vincere. La casella Target/Stop no: e' un rettangolo che va
+   // dall'entrata a adesso e puo' coprire decine di candele - tenerla prioritaria su tutta la sua
+   // area voleva dire che, con una posizione aperta, il cambio stile moriva in silenzio su mezzo
+   // grafico. Adesso, DENTRO la casella, se il tocco e' sul corpo o sullo stoppino della candela
+   // vince la candela; sul resto della casella (il riempimento vuoto) vince la casella, che apre
+   // le sue statistiche.
+   const _suCandela=footprintCellHitRects.some(c=>x>=c.xxLeft&&x<=c.xxRight&&y>=c.yTop&&y<=c.yBot);
    if(openPosHitRects.some(p=>x>=p.x1&&x<=p.x2&&y>=p.y1&&y<=p.y2))return;
-   if(zoneBoxHitRects.some(z=>x>=z.xOrigin&&x<=z.xRight&&y>=z.yMin&&y<=z.yMax))return;
+   if(!_suCandela&&zoneBoxHitRects.some(z=>x>=z.xOrigin&&x<=z.xRight&&y>=z.yMin&&y<=z.yMax))return;
    if(tradeLevelHit(e.clientX,e.clientY))return;
    const sh=hitTestDrawings(e.clientX,e.clientY,false);
    if(sh&&sh.drawing&&!sh.drawing.locked)return;
@@ -25315,8 +25350,16 @@ chartEl.addEventListener('pointerup',e=>{
  const t=fpTocco;
  if(!t||t.id!==e.pointerId)return;
  fpTocco=null;
- if(Math.hypot(e.clientX-t.x,e.clientY-t.y)>(t.dito?10:4))return;   // era un trascinamento
- if(performance.now()-t.t>700)return;                                  // pressione lunga: non e' un tocco
+ // QUANTO PUO' SCIVOLARE UN TOCCO. Dieci pixel sono la tolleranza di un mouse, non di un dito:
+ // su un telefono un tocco deciso si sposta facilmente di piu' (la soglia di sistema su Android e'
+ // 8dp, che su uno schermo moderno fa 16-24 px reali), e ogni volta che la superava il cambio
+ // stile non avveniva - senza dire niente. Il mouse resta a 4 px, dove e' giusto: li' uno
+ // spostamento di 5 px e' un trascinamento voluto.
+ if(Math.hypot(e.clientX-t.x,e.clientY-t.y)>(t.dito?16:4))return;      // era un trascinamento
+ // E QUANTO PUO' DURARE. 700 ms stavano stretti a un tocco col dito, che e' piu' lento del clic:
+ // sul grafico non c'e' nessuna azione legata alla pressione lunga (si disattiva solo il menu del
+ // browser), quindi allungare la finestra col dito non toglie niente a nessuno.
+ if(performance.now()-t.t>(t.dito?1200:700))return;                    // pressione lunga: non e' un tocco
  if(shapeDrag||tradeLevelDrag||zoneWidthDrag||twoFingerPan)return;
  footprintCicloStile();
 },true);
