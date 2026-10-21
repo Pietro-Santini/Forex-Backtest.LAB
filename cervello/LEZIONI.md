@@ -560,3 +560,39 @@
   il totale del conto. Stimarla avrebbe prodotto un altro "pareggio" che non pareggia. Scritto
   nella conferma: "lo stop va sul PREZZO DI ENTRATA, la commissione dello scambio non e' compresa".
   Un limite dichiarato e' utilizzabile; un limite nascosto dietro una parola rassicurante no.
+
+- Un test che misura la finestra «come viene fuori dal banco» misura una situazione che sul
+  dispositivo vero non esiste. (21 ottobre 2026, i pulsanti dentro il grafico.) Il banco diceva
+  ZERO sovrapposizioni fra i gruppi flottanti, e il proprietario le vedeva: nel banco meta' di
+  quei gruppi e' NASCOSTA (barra del replay, legenda degli indicatori, barra degli strumenti), e
+  qtAutoLayout si scansava da due su sei. La misura va fatta nella condizione del difetto - i
+  gruppi accesi, la scala al 130% - non in quella comoda.
+
+- Un numero scritto a mano in un layout vale finche' quello che gli sta sopra non cresce.
+  (21 ottobre 2026, capitolo del telefono.) Tre nello stesso punto, tutti con la stessa forma di
+  errore: `top:46px` per la seconda riga di pulsanti (giusto se la prima sta su UNA riga: sul
+  telefono va a capo e diventa alta 86), `top:86px` per la legenda degli indicatori, e un elenco
+  fisso di due gruppi da cui scansarsi su sei esistenti. Si misura e si impila, non si indovina.
+
+- Una scala applicata con `zoom` moltiplica le misure DOPO che il CSS le ha calcolate, e nessuna
+  regola CSS la puo' leggere. (21 ottobre 2026, i popup fuori dallo schermo.) `max-height:88vh`
+  con lo zoom al 130% diventa il 114% dello schermo: 812 x 0,88 x 1,3 = 929, cioe' i 117 px di
+  sforo misurati. La scala va DICHIARATA al CSS (una variabile, qui --fblZoom) e i limiti devono
+  dividerci. Corollario: una regola che annulla un limite (`max-width:none`) "perche' tanto ci
+  pensa il contenitore" lascia crescere il riquadro appena un figlio ha una larghezza minima
+  propria.
+
+- Una riga che scorre, su un telefono, non si vede che scorre. (21 ottobre 2026.) Le schede delle
+  impostazioni sforavano di 109 px senza scorrimento: quelle oltre il bordo erano IRRAGGIUNGIBILI.
+  Ma la cura non e' aggiungere lo scorrimento: e' far stare le cose. Vanno a capo le schede, e la
+  riga di comandi del grafico ci sta perche' il pulsante piu' largo perde la scritta e resta
+  l'icona (388 px -> 275, in 293 disponibili). Lo scorrimento resta solo come valvola.
+
+- Una modifica «di buon senso» che non si misura e' una scommessa. (21 ottobre 2026.) Annullare
+  tutte le larghezze minime dentro i popup (`min-width:0`) sembrava la pulizia giusta: ha portato
+  gli sfori da 0 a 3 sullo schermo da 375 px. Misurato e rimesso indietro nello stesso giro.
+
+- Quando due cose non ci stanno nello stesso posto, quale cede NON si deduce dal codice: si chiede.
+  (21 ottobre 2026, la barra delle operazioni sul telefono.) 360 px di barra in 309 px di grafico:
+  una delle due deve lasciare il bordo alto. Misurare dice che il conflitto esiste e quanto vale;
+  dire chi vince e' del proprietario, e ha scelto la barra in cima con i pulsanti a icone.

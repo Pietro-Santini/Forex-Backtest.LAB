@@ -181,12 +181,18 @@ test('in replay a grafico si vedono i livelli DI ALLORA, non quelli di adesso', 
         {t: istanteMostrato + 50000, entry: 100, sl: 99.9, tp: 100.6}
       ];
       p.sl = 99.9;
-      // Si spiano le etichette sulla scala dei prezzi: sono il modo più diretto di sapere a che
-      // prezzo il disegno ha messo lo stop in questo giro.
-      const originale = drawPriceAxisTag;
+      // SI SPIA LA CASELLA TARGET/STOP, NON PIU' LA SCALA PREZZI. Fino al 21 ottobre 2026 qui si
+      // spiava drawPriceAxisTag, cioè i cartellini sul bordo destro: erano il modo più diretto di
+      // sapere a che prezzo il disegno aveva messo lo stop. Quei cartellini di target e stop sono
+      // stati TOLTI su richiesta del proprietario (sul telefono coprivano i numeri della scala),
+      // quindi quella spia adesso non vedrebbe più niente e il test sarebbe verde misurando il
+      // vuoto. L'INTENTO NON CAMBIA: in replay si devono disegnare i livelli DI ALLORA. Si guarda
+      // dove lo stop è ancora scritto, cioè la casella Target/Stop a grafico, che riceve gli
+      // stessi livelli dalla stessa fonte (posLivelliAlTempo).
+      const originale = drawTpSlZoneBox;
       const prezzi = [];
-      drawPriceAxisTag = function(ctx, y, prezzo){ prezzi.push(Number(prezzo));
-                                                   return originale.apply(this, arguments); };
+      drawTpSlZoneBox = function(ctx, o){ if (o) { prezzi.push(Number(o.sl)); prezzi.push(Number(o.tp)); }
+                                          return originale.apply(this, arguments); };
       let inReplay = [], adesso = [];
       try{
         replayForm = {idx: idx + 1, sub: 10, path: [100, 100.1, 100.2],
@@ -194,7 +200,7 @@ test('in replay a grafico si vedono i livelli DI ALLORA, non quelli di adesso', 
         prezzi.length = 0; draw(); inReplay = prezzi.slice();
         replayForm = null;
         prezzi.length = 0; draw(); adesso = prezzi.slice();
-      } finally { drawPriceAxisTag = originale; }
+      } finally { drawTpSlZoneBox = originale; }
       return {inReplay, adesso};
     }, PREPARA.toString());
     assert.ok(r.inReplay.includes(99),

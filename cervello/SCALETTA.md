@@ -112,16 +112,38 @@ c'è ancora** prima di rimetterci mano.
 
 ---
 
-## 3. Capitolo 4 — il telefono
+## 3. Capitolo 4 - il telefono (CHIUSO il 21 ottobre 2026)
 
-- **dentro il grafico i pulsanti stanno uno sopra l'altro**, e la barra a comparsa per aprire
-  posizioni deve stare **sempre attaccata al bordo alto**;
-- i **popup non devono mai oltrepassare il bordo dello schermo** (visto sulle strategie);
-- il **testo non deve mai uscire dal popup** (impostazioni e collegamento compresi);
-- i popup devono **adattarsi al contenuto**: quello della cronologia sale è troppo piccolo;
-- la **linea apertura↔chiusura** deve restare visibile anche con zoom largo (gli estremi fuori
-  schermo: nel codice la linea è già «sempre visibile», ma quel «sempre» parla dell'hover);
-- via i **cartellini TP/SL** dalla barra dei prezzi.
+Tutti e sei i punti fatti, e **misurati**: un banco apre i 24 popup in quattro condizioni
+(375x812, 320x568, orizzontale, e 375x812 con l'interfaccia al 130%) e misura di quanto il
+riquadro esce dallo schermo e di quanto il contenuto esce dal riquadro.
+
+- **i pulsanti dentro il grafico si sovrapponevano** -> `qtAutoLayout` si scansava da due gruppi
+  su sei, e sotto c'erano tre numeri scritti a mano (`top:46px` per la seconda riga, `top:86px`
+  per la legenda, l'elenco fisso dei gruppi). Ora e' una pila calcolata dall'alto;
+- **la barra per aprire posizioni al bordo alto** -> fatta. La barra e' 360 px e il grafico su un
+  telefono ne ha 309: **scelta del proprietario** fra tre possibilita', «barra in cima e pulsanti
+  ridotti a icone su una riga sola». Per far stare i sei comandi in 293 px, «DATA RANDOM» perde
+  la scritta e resta l'icona (388 px -> 275);
+- **i popup oltre il bordo dello schermo** -> era la SCALA: a 100% non sforava nessuno, al 130%
+  sforavano di 117 px sotto e 73 di lato, e i peggiori erano le due finestre delle strategie.
+  `max-height:88vh` viene moltiplicato dallo zoom del body dopo il calcolo; ora la scala si
+  dichiara al CSS (`--fblZoom`) e i limiti ci dividono. **Zero sfori in tutte e quattro le
+  condizioni**;
+- **il testo fuori dal popup** -> la striscia delle schede sforava di 109 px e quelle oltre il
+  bordo erano **irraggiungibili** (ora vanno a capo); la voce «Collegamento/Modalita'» sforava di
+  43 px (ora va a capo). Restano tre popup dove una **tabella** e' piu' larga dello spazio su uno
+  schermo da 320 px: ora scorre dentro il popup invece di spingerlo fuori dallo schermo;
+- **popup adattati al contenuto** -> sul telefono usano il 96% dell'altezza invece dell'88%
+  (quasi cento pixel di schermo che restavano vuoti);
+- **la linea apertura<->chiusura con lo zoom largo** -> si disegnava solo se un'estremita' era a
+  schermo; ora il segmento si taglia sul riquadro e si disegna il pezzo visibile. Erano **quattro**
+  i punti con lo stesso difetto;
+- **via i cartellini TP/SL dalla scala prezzi** -> fatto, resta quello dell'entrata. Target e stop
+  restano sulle linee e nella casella Target/Stop.
+
+Test: `popup_bordi` (5), `grafico_pulsanti_telefono` (7), `linea_apertura_chiusura` (3),
+`scala_prezzi_cartellini` (2), piu' `replay_posizioni` spostato sulla casella Target/Stop.
 
 ---
 

@@ -2183,3 +2183,137 @@ insegna solo a cambiarlo di nuovo.
 una risposta giusta alla domanda sbagliata: la domanda non era «come allontano lo stop dalla
 forbice», era «quando NON si deve piazzare quello stop». La seconda si risolve senza togliere un
 centesimo a nessuno.
+## 21 ottobre 2026 - Capitolo 4: il telefono. Sei punti, e quasi tutti erano un numero scritto a mano
+
+### Il metodo, prima dei difetti ⭐
+
+Nessuno di questi sei punti è stato corretto guardando: sono stati **misurati**. Un piccolo banco
+apre tutti e 24 i popup in una finestra da telefono, in quattro condizioni (375x812, 320x568,
+orizzontale 812x375, e 375x812 con l'interfaccia al 130%), e per ognuno chiede due cose: di quanto
+il riquadro esce dallo schermo, e di quanto il contenuto esce dal riquadro. Lo stesso per i gruppi
+di pulsanti dentro il grafico.
+
+È servito perché **l'impressione era sbagliata in entrambe le direzioni**: dove il proprietario
+vedeva i popup uscire dallo schermo, a scala 100% non uscivano affatto; e dove il banco diceva
+«nessuna sovrapposizione fra i pulsanti», sul telefono vero se ne vedevano.
+
+### 1. I popup che escono dallo schermo: era la SCALA ⭐
+
+«I popup non devono mai oltrepassare il bordo dello schermo (visto sulle strategie).»
+
+A scala 100% non ne usciva nemmeno uno. **Al 130% sforavano di 117 px sotto il bordo e fino a 73
+px di lato**, e i due che sforavano di più erano `tgAutoOverlay` e `tgConfigOverlay`: le finestre
+delle **strategie**, esattamente dove lui l'aveva visto.
+
+Il 117 non è un numero casuale, ed è quello che ha indicato la causa: `max-height:88vh` viene
+calcolato sull'altezza vera della finestra e **poi** moltiplicato dallo zoom del body — 812 × 0,88
+× 1,3 = 929, cioè 117 px oltre lo schermo. La scala dell'interfaccia è `zoom` sul body, e **nessuna
+regola CSS può leggere lo zoom**: ora `fblScalaUiApplica` la scrive in una variabile (`--fblZoom`) e
+i limiti dei popup ci dividono.
+
+La seconda metà della causa stava nelle regole per telefono, che facevano l'opposto di quel che
+promettevano: `width:95vw!important;max-width:none`. Il `95vw` moltiplicato per la scala fa il 123%
+dello schermo, e `max-width:none` togliendo il limite lasciava anche crescere il riquadro oltre la
+sua larghezza, spinto da una casella con una larghezza minima propria.
+
+**Dopo: zero sfori in tutte e quattro le condizioni.**
+
+### 2. Il testo che esce dal popup: 109 px, e le schede erano irraggiungibili ⭐
+
+«Il testo non deve mai uscire dal popup (impostazioni e collegamento compresi).»
+
+Due difetti, e il primo era **grave, non estetico**: la striscia delle schede delle impostazioni
+(`.fbModalTabs`) sforava di **109 px**, senza andare a capo e senza scorrere. Le schede oltre il
+bordo non erano brutte: erano **impossibili da premere**. Ora vanno a capo — e vanno a capo invece
+di scorrere per un motivo preciso: *una riga che scorre, su un telefono, non si vede che scorre, e
+le schede nascoste non le cerca nessuno.*
+
+Il secondo era letteralmente la voce che lui ha nominato: **«🔌 Collegamento/Modalità»** è più larga
+della colonna (132 px fissi) e aveva `white-space:nowrap`, quindi il testo finiva fuori dal popup —
+43 px, misurati. Adesso va a capo: una voce su due righe si legge, una voce tagliata no.
+
+**Quello che resta, detto perché non sembri dimenticato:** in tre popup una **tabella** (le sale, le
+regole) è più larga dello spazio disponibile su uno schermo da 320 px — 389 px in 264. Una tabella
+non si stringe sotto le sue colonne: ora **scorre dentro il popup**, invece di spingere il riquadro
+fuori dallo schermo come prima.
+
+**Un tentativo tolto perché peggiorava.** Annullare tutte le larghezze minime dentro i popup
+(`min-width:0`) sembrava la pulizia giusta: ha portato gli sfori da 0 a 3 sullo schermo da 375 px.
+Misurato, e rimesso indietro. *Una modifica «di buon senso» che non si misura è una scommessa.*
+
+### 3. I popup troppo piccoli
+
+«Quello della cronologia sale è troppo piccolo.» Sul telefono un popup si fermava all'88%
+dell'altezza: su 812 px sono quasi cento pixel di schermo lasciati vuoti mentre il contenuto scorre
+in uno spazio più piccolo del necessario. Sul telefono ora usa il **96%**.
+
+### 4. La linea apertura↔chiusura con lo zoom largo ⭐
+
+Il perché era scritto nel codice: la linea si disegnava solo se **almeno una delle due estremità**
+era dentro la vista. Con lo zoom stretto sulle candele, un'operazione durata a lungo ha l'apertura
+fuori a sinistra e la chiusura fuori a destra: nessuna delle due è a schermo, e il segmento che
+attraversa tutto il grafico non veniva disegnato affatto. Il commento sopra diceva «SEMPRE
+visibile», ma quel «sempre» parlava dell'hover.
+
+Ora il segmento si **taglia sul riquadro** del grafico e si disegna il pezzo che si vede. Tagliare
+non è un dettaglio: lasciando passare il segmento intero, il tratteggio finirebbe sopra la scala
+prezzi e la barra del tempo. Il clic per selezionare un trade usa lo stesso pezzo tagliato, così
+non si può selezionare un'operazione in un punto dove non si vede nessuna linea.
+
+**Erano QUATTRO**, i punti con lo stesso difetto: trade chiusi, trade ancora aperto in replay-Live,
+`drawOpenTradeProgress`, e le posizioni dell'altro conto. Correggerne uno avrebbe fatto credere che
+il difetto fosse chiuso.
+
+### 5. Via i cartellini TP/SL dalla scala prezzi
+
+Su uno schermo da telefono quella striscia è alta pochi millimetri: con tre o quattro posizioni
+aperte i cartellini diventavano una colonna di rettangoli uno sull'altro, che copriva i numeri della
+scala — l'unica cosa per cui la scala serve. Resta l'**entrata** (una riga per posizione, ed è il
+riferimento da cui si legge tutto il resto); target e stop restano sulle loro linee e nella casella
+Target/Stop, col prezzo scritto.
+
+**Un test è stato spostato, non aggiustato.** `replay_posizioni` spiava proprio quei cartellini per
+verificare che in replay si disegnino i livelli DI ALLORA: con i cartellini via, sarebbe diventato
+verde misurando il vuoto. L'intento è lo stesso, la spia si è spostata sulla casella Target/Stop,
+che riceve gli stessi livelli dalla stessa fonte — e nel commento c'è scritto perché.
+
+### 6. I pulsanti dentro il grafico, e una decisione che non era mia ⭐
+
+Il banco diceva zero sovrapposizioni. Il motivo è che **nel banco metà dei gruppi è nascosta**
+(barra del replay, legenda degli indicatori, barra degli strumenti): si vedono sul telefono vero, in
+Live. E `qtAutoLayout` si scansava da **due gruppi su sei**.
+
+Sotto, **tre numeri scritti a mano**, tutti con la stessa forma di errore — valgono finché le righe
+sopra non crescono:
+- `top:46px` nel markup per la seconda riga di pulsanti (vale se la prima sta su una riga: sul
+  telefono va a capo e diventa alta 86 px, e la seconda le finisce **sopra**);
+- `top:86px` nel CSS per la legenda degli indicatori;
+- l'elenco fisso dei due gruppi da cui scansarsi.
+
+Ora è una **pila calcolata** dall'alto, misurando.
+
+**La decisione che ho chiesto invece di prendere.** La barra delle operazioni è 360 px; il grafico,
+su un telefono, ne ha 309. Sulla stessa riga non ci stanno: qualcuno deve cedere il bordo alto, e
+non è una cosa che si deduce dal codice. Il proprietario ha scelto: **barra in cima, pulsanti
+ridotti a icone su una riga sola.**
+
+Per farla diventare vera quella riga sola, i sei comandi chiedevano 388 px in 293 disponibili. Il
+più largo era «🎲 DATA RANDOM» con la scritta (125 px): sul telefono resta la sola icona, e con il
+selettore dell'asset accorciato il totale scende a 275 px. **Una riga sola vera** — tutti i comandi
+si vedono e si premono — invece di una riga con dentro uno scorrimento che nasconde metà dei
+pulsanti, che sarebbe stata la stessa trappola delle schede delle impostazioni.
+
+### Test
+`popup_bordi.test.mjs` (5), `grafico_pulsanti_telefono.test.mjs` (7),
+`linea_apertura_chiusura.test.mjs` (3), `scala_prezzi_cartellini.test.mjs` (2), più
+`replay_posizioni.test.mjs` spostato sulla casella Target/Stop.
+
+**La verifica del rosso, su tutti.** Con il file di prima: 3 su 5 rossi per i popup, 4 su 4 per i
+pulsanti, 3 su 3 per la linea, 1 su 2 per i cartellini. I test che sono rimasti verdi anche senza la
+correzione sono le prove di controllo — e sono scritte per restare verdi.
+
+### La lezione ⭐
+**Un test che misura la finestra «come viene fuori dal banco» misura una situazione che sul telefono
+non esiste.** Le sovrapposizioni dentro il grafico erano invisibili al collaudo perché i gruppi che
+si sovrappongono, nel banco, sono spenti. La misura va fatta nella condizione del difetto — i gruppi
+accesi, la scala al 130% — non in quella comoda.
