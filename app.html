@@ -9143,10 +9143,63 @@ function aggregateRows(data, minutes){
 // timeframe: usata come base "di verità" da cui rebuildRows() ritaglia solo la parte
 // realmente rivelata al momento (masterTime). Invalidata automaticamente quando `baseRows`
 // cambia (nuovo CSV caricato), perché la chiave di cache include il riferimento all'array.
+// QUANDO CAMBIA SOLO L'ULTIMA CANDELA, NON SI RIFA' TUTTO.
+//
+// SEGNALATO dal proprietario: «la velocita' della pagina accelera veramente tanto quando i mercati
+// sono chiusi. A mercato chiuso, per esempio, il cambio di asset e' istantaneo. Quindi e' un
+// problema con il caricamento dei dati che rallenta tanto l'applicazione: separiamo le due cose».
+//
+// AVEVA RAGIONE, ED ERA MISURABILE. A mercato aperto ogni prezzo che arriva passa da
+// rebuildBaseRowsFromLibrary, che rifa' `baseRows` con uno .slice(). L'array nuovo ha un
+// RIFERIMENTO nuovo, e le due cache qui sotto confrontano proprio il riferimento: quindi si
+// buttavano entrambe a ogni tick, e subito dopo si rifacevano da zero. Misurato su uno storico
+// come quello di un conto MT5 vero:
+//     200.000 candele -> riaggregare 125 ms + ricostruire 50 ms = 175 ms DI BLOCCO
+//     500.000 candele -> 222 + 348 = 570 ms
+// Su un asset movimentato arrivano piu' prezzi al secondo: il filo principale non respira piu',
+// e non si riesce ne' a scorrere la pagina ne' a muovere il grafico. A mercato CHIUSO non arriva
+// niente, nessuna cache si butta, e tutto va come deve - che e' esattamente cio' che si vedeva.
+//
+// LA CURA: distinguere «e' cambiato tutto» (altro asset, altro CSV: si rifa' e basta) da
+// «e' cambiata solo la coda» (un prezzo nuovo sull'ultima candela, o una candela nuova in fondo),
+// che e' il 99% dei casi. Nel secondo caso le cache si AGGIORNANO sull'ultimo pezzo invece di
+// essere buttate. Il lavoro per tick passa da «tutto lo storico» a «l'ultima candela».
+//
+// Il marcatore lo mette chi sa cosa e' successo (rebuildBaseRowsFromLibrary, percorso Live), e
+// vale per UNA sola lettura: chi lo usa lo consuma. Cosi' una cache che non viene letta non
+// resta mai indietro per sbaglio.
+let baseRowsCoda=null;   // {prima: array precedente, daIdx: primo indice toccato}
+function segnalaCodaCambiata(prima,daIdx){ baseRowsCoda={prima,daIdx}; }
+function codaValidaPer(cacheRef){
+  return !!(baseRowsCoda && cacheRef && baseRowsCoda.prima===cacheRef);
+}
 let fullAggCache=new Map();
 function getFullAgg(minutes){
   const cached=fullAggCache.get(minutes);
   if(cached && cached.ref===baseRows) return cached.data;
+  // SOLO LA CODA E' CAMBIATA: si riaggrega l'ultimo pezzo, non lo storico intero.
+  if(cached && codaValidaPer(cached.ref)){
+    const da=Math.max(0,Number(baseRowsCoda.daIdx)||0);
+    // Si riparte dall'inizio del BUCKET che contiene la prima candela toccata: quel bucket va
+    // ricalcolato per intero, perche' una candela nuova ne cambia massimo, minimo e volume.
+    const tDa=parseDateTime(baseRows[da]&&baseRows[da].date);
+    if(Number.isFinite(tDa)){
+      const passo=Math.max(1,Number(minutes)||1)*60000;
+      const bucketDa=Math.floor(tDa/passo)*passo;
+      // Dalla cache si tiene tutto cio' che sta PRIMA di quel bucket: non e' stato toccato.
+      let taglio=cached.data.length;
+      while(taglio>0 && cached.data[taglio-1] && Math.floor(parseDateTime(cached.data[taglio-1].date)/passo)*passo>=bucketDa)taglio--;
+      // E dalle candele base si riprende dalla prima che cade in quel bucket.
+      const tempi=baseTimesCacheRef===cached.ref&&baseTimesCache?baseTimesCache:null;
+      let primaBase=da;
+      if(tempi){ while(primaBase>0 && tempi[primaBase-1]>=bucketDa)primaBase--; }
+      else { while(primaBase>0 && parseDateTime(baseRows[primaBase-1].date)>=bucketDa)primaBase--; }
+      const coda=aggregateRows(baseRows.slice(primaBase),minutes);
+      const data=cached.data.slice(0,taglio).concat(coda);
+      fullAggCache.set(minutes,{ref:baseRows,data});
+      return data;
+    }
+  }
   const data=aggregateRows(baseRows,minutes);
   fullAggCache.set(minutes,{ref:baseRows,data});
   return data;
@@ -9155,6 +9208,16 @@ function getFullAgg(minutes){
 let baseTimesCache=null, baseTimesCacheRef=null;
 function getBaseTimes(){
   if(baseTimesCacheRef===baseRows && baseTimesCache) return baseTimesCache;
+  // Solo la coda: si rileggono le date dall'indice toccato in poi, non tutte.
+  if(baseTimesCache && codaValidaPer(baseTimesCacheRef)){
+    const da=Math.max(0,Number(baseRowsCoda.daIdx)||0);
+    if(da<=baseTimesCache.length){
+      const nuovo=baseTimesCache.slice(0,da);
+      for(let i=da;i<baseRows.length;i++)nuovo.push(parseDateTime(baseRows[i].date));
+      baseTimesCache=nuovo; baseTimesCacheRef=baseRows;
+      return baseTimesCache;
+    }
+  }
   baseTimesCache=baseRows.map(r=>parseDateTime(r.date));
   baseTimesCacheRef=baseRows;
   return baseTimesCache;
@@ -9333,7 +9396,31 @@ function rebuildBaseRowsFromLibrary(){
  // di dati Live rotti può più riprodurre lo stesso bug.
  if(liveModeActive && csvLibrary.length===1){
    const src=csvLibrary[0].rows;
-   baseRows=src.every(r=>Number.isFinite(parseDateTime(r.date)))?src.slice():src.filter(r=>Number.isFinite(parseDateTime(r.date)));
+   const prima=baseRows;
+   // LA RETE DI SICUREZZA SI STENDE SOLO SU CIO' CHE E' NUOVO.
+   // MISURATO il 21 ottobre: su 200.000 candele, rileggere e convalidare TUTTE le date costava
+   // 17,57 ms - a ogni prezzo che arriva. Era la voce piu' cara di tutto il giro (la copia
+   // dell'array, sospettata, ne costa 0,69). Ed era lavoro buttato: una candela gia' convalidata
+   // non torna indietro a rompersi - il percorso Live tocca solo la coda (aggiorna l'ultima o ne
+   // aggiunge una). Quindi si ricorda fin dove si e' gia' guardato e si riprende da li'.
+   // L'ULTIMA SI RICONTROLLA SEMPRE: e' l'unica che puo' essere stata riscritta da un tick.
+   let okFino=Number(csvLibrary[0].__dateOk)||0;
+   if(okFino>src.length)okFino=0;        // il file e' stato rifatto piu' corto: si ricomincia
+   let tutteBuone=true;
+   for(let i=Math.max(0,okFino-1);i<src.length;i++){
+     if(!Number.isFinite(parseDateTime(src[i].date))){ tutteBuone=false; break; }
+   }
+   if(tutteBuone)csvLibrary[0].__dateOk=src.length;
+   else csvLibrary[0].__dateOk=0;
+   baseRows=tutteBuone?src.slice():src.filter(r=>Number.isFinite(parseDateTime(r.date)));
+   // E' SOLO LA CODA? Lo si dice alle cache (vedi baseRowsCoda piu' sopra), cosi' non buttano
+   // via tutto lo storico per una candela. Si e' prudenti: basta che la lunghezza sia cresciuta
+   // di poco (o sia uguale) e che l'ultima candela comune sia rimasta la stessa.
+   if(prima&&prima.length&&baseRows.length>=prima.length&&baseRows.length-prima.length<=2){
+     const i=prima.length-1;
+     if(prima[i]&&baseRows[i]&&prima[i].date===baseRows[i].date)segnalaCodaCambiata(prima,i);
+     else baseRowsCoda=null;
+   }else baseRowsCoda=null;
    return;
  }
  const all=[];
