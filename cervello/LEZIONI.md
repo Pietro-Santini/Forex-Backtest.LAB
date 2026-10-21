@@ -510,12 +510,22 @@
   apre lo spread" si MISURA dai dati che passano gia' davanti, non si stima a mente. Il sintomo da
   riconoscere e' "chiuso a un prezzo dove il mercato non e' mai andato".
 
-- Uno stop al pareggio esatto e' uno stop dentro la forbice. (21 ottobre 2026, stessa vicenda.)
-  Il pareggio era stato reso ESATTO apposta, togliendo lo spread "perche' ne usciva un piccolo
-  guadagno": il risultato era uno stop a un decimo di pip dall'entrata (0,92827 contro 0,92828),
-  che al primo allargamento viene preso con certezza. LA REGOLA: un livello di protezione va messo
-  FUORI dal rumore che lo circonda, non sul punto esatto; e quando si toglie un margine, si
-  controlla cosa resta a proteggere.
+- Uno stop al pareggio esatto puo' stare dentro la forbice: il rimedio e' NON PIAZZARLO, non
+  spostarlo. (21 ottobre 2026 - e questa lezione e' stata scritta sbagliata e corretta nella
+  stessa giornata, quindi vale il doppio.)
+  Il fatto: due SELL EURCHF aperte a 0,92828 avevano lo stop a 0,92827 (un decimo di pip), messo
+  li' dal pareggio, e il rollover le ha prese quando lo spread si e' aperto a 50 pip.
+  PRIMA VERSIONE DI QUESTA LEZIONE, SBAGLIATA: "un livello di protezione va messo FUORI dal rumore
+  che lo circonda" - e quindi al pareggio era stato aggiunto un margine pari allo spread. Il
+  proprietario ha misurato il risultato: «sposta le posizioni a break-even, ma perdono ugualmente
+  meno 2 euro».
+  LA REGOLA VERA: quando una protezione costa, NON si fa pagare al nome della cosa che protegge.
+  Il margine era una risposta giusta alla domanda sbagliata - non "come allontano lo stop dalla
+  forbice", ma "quando NON si deve piazzare quello stop". La seconda si risolve senza togliere un
+  centesimo a nessuno: il prezzo resta esatto (netto 0,00) e chi lo piazza si RIFIUTA quando
+  cadrebbe dentro la forbice, lasciando al suo posto lo stop di prima, che e' piu' lontano.
+  COROLLARIO: un pulsante che si chiama "pareggio" e lascia meno due euro non e' una protezione
+  con un piccolo costo, e' un'etichetta che mente - e chi la legge decide basandosi su quella.
 
 - Prima di dare la colpa al codice, guardare se il codice poteva anche solo TOCCARE quella cosa.
   (21 ottobre 2026.) La prima diagnosi era un difetto vero, ma non c'entrava con il caso segnalato:
@@ -535,3 +545,18 @@
   valutazione degli stop sulle vendite era quasi scoperta - proprio il lato che aveva fatto perdere
   i soldi. Un collaudo che non si accorge di un cambiamento del genere non sta proteggendo quella
   parte: e' un'informazione da leggere, non un sollievo.
+
+- Una protezione messa su una sola delle strade fa credere di essere protetti su tutte.
+  (21 ottobre 2026, il pareggio.) Al pareggio una posizione ci arriva da quattro parti: il pulsante
+  della tabella delle posizioni, il pulsante BE della tabella MT5, la strategia della sala
+  all'avvicinamento al target e la regola "stop all'entrata" al raggiungimento di un TP. Metterci
+  il controllo solo sulla prima avrebbe lasciato il difetto vivo nelle altre tre. Si cercano TUTTI
+  i punti che fanno la stessa cosa (qui: tutte le chiamate a mt5PrezzoPareggio) prima di dichiarare
+  chiusa una correzione.
+
+- Quando un dato non c'e', si dichiara il limite invece di inventare il numero.
+  (21 ottobre 2026, il pareggio su Kraken.) Lo stop a pareggio su Kraken va sul prezzo d'entrata e
+  basta: la commissione dello scambio non arriva all'app posizione per posizione, il ponte da' solo
+  il totale del conto. Stimarla avrebbe prodotto un altro "pareggio" che non pareggia. Scritto
+  nella conferma: "lo stop va sul PREZZO DI ENTRATA, la commissione dello scambio non e' compresa".
+  Un limite dichiarato e' utilizzabile; un limite nascosto dietro una parola rassicurante no.

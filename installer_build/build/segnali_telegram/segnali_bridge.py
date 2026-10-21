@@ -1124,6 +1124,42 @@ async def scrivi_chat(corpo: dict):
     return {"ok": True, "chat": nuove}
 
 
+@app.get("/syntra-cartella")
+async def leggi_cartella_syntra():
+    """La cartella di BlueStacks configurata adesso, per mostrarla nell'app.
+
+    SEGNALATO dal proprietario (21 ottobre 2026): «ora il programma mi dice di selezionare la
+    cartella syntra ma non me la fa selezionare». Nell'app c'erano un campo e un pulsante «Scegli
+    cartella» senza NESSUN gestore: il campo non veniva letto e il pulsante non faceva niente.
+    Il pulsante, per di piu', non avrebbe mai potuto funzionare: un browser non conosce il percorso
+    reale di una cartella (showDirectoryPicker restituisce un riferimento, non "C:\\..."), quindi da
+    li' non sarebbe mai uscito un percorso da dare a questo ponte. L'unica strada e' che il percorso
+    si INCOLLI nell'app e arrivi qui.
+    """
+    cfg = carica_configurazione() or {}
+    return {"ok": True, "cartella": str(cfg.get("bluestacks") or "")}
+
+
+@app.post("/syntra-cartella")
+async def scrivi_cartella_syntra(corpo: dict):
+    """Imposta la cartella di BlueStacks usata dal lettore Syntra.
+
+    Si UNISCE a configurazione.json (vedi salva_configurazione): quel file contiene anche le
+    credenziali di Telegram e l'elenco delle sale, e riscriverlo da zero le cancellerebbe.
+    Una cartella che non esiste si rifiuta subito: scoprirlo al prossimo avvio dell'emulatore, con
+    un errore che parla d'altro, sarebbe molto peggio che dirlo adesso.
+    Stringa vuota = «non so dov'e', cercala da solo», che e' il comportamento di sempre.
+    """
+    cartella = str((corpo or {}).get("cartella") or "").strip().strip('"')
+    if cartella and not os.path.isdir(cartella):
+        return {"ok": False, "errore": "la cartella non esiste: %s" % cartella}
+    errore = salva_configurazione({"bluestacks": cartella})
+    if errore:
+        return {"ok": False, "errore": errore}
+    _log(STATO["verbose"], "cartella BlueStacks aggiornata dall'app: %s" % (cartella or "(automatica)"))
+    return {"ok": True, "cartella": cartella}
+
+
 # =====================================================================================
 # PAGINA DI PROVA — iniettare un segnale a mano, senza aspettare Telegram
 # =====================================================================================
@@ -1505,6 +1541,40 @@ async def ws_segnali(websocket: WebSocket):
                             await riavvia_sorgente()
                     await websocket.send_text(json.dumps({"tipo": "salvato", "ok": ok, "errore": err}))
                 await websocket.send_text(json.dumps(await _stato_chat()))
+                continue
+            if azione == "cartella_syntra":
+                # LA CARTELLA DI BLUESTACKS, scritta dall'app.
+                #
+                # SEGNALATO dal proprietario (21 ottobre 2026): «ora il programma mi dice di
+                # selezionare la cartella syntra ma non me la fa selezionare». Nell'app c'erano un
+                # campo e un pulsante «Scegli cartella» senza NESSUN gestore: il campo non veniva
+                # letto e il pulsante non faceva niente. E quel pulsante non avrebbe mai potuto
+                # funzionare: un browser non conosce il percorso reale di una cartella
+                # (showDirectoryPicker restituisce un riferimento, non "C:\..."). L'unica strada e'
+                # che il percorso si INCOLLI e arrivi qui.
+                #
+                # Si passa da qui e non da una chiamata HTTP perche' questa e' la stessa strada che
+                # usano le credenziali: funziona anche quando l'app parla col ponte attraverso il
+                # server, dove una chiamata a 127.0.0.1 non arriverebbe mai.
+                cartella = str(m.get("cartella") or "").strip().strip('"')
+                if cartella and not os.path.isdir(cartella):
+                    # Rifiutata subito: scoprirlo al prossimo avvio dell'emulatore, con un errore
+                    # che parla d'altro, sarebbe molto peggio che dirlo adesso.
+                    await websocket.send_text(json.dumps({
+                        "tipo": "cartella_syntra", "ok": False,
+                        "errore": "la cartella non esiste: %s" % cartella, "cartella": cartella}))
+                    continue
+                err = salva_configurazione({"bluestacks": cartella})
+                if err is None:
+                    _log(True, "cartella BlueStacks aggiornata dall'app: %s" % (cartella or "(automatica)"))
+                await websocket.send_text(json.dumps({
+                    "tipo": "cartella_syntra", "ok": err is None, "errore": err, "cartella": cartella}))
+                continue
+            if azione == "leggi_cartella_syntra":
+                _cfg = carica_configurazione() or {}
+                await websocket.send_text(json.dumps({
+                    "tipo": "cartella_syntra", "ok": True, "errore": None,
+                    "cartella": str(_cfg.get("bluestacks") or "")}))
                 continue
             if azione in ("esci_telegram", "dimentica_telefono"):
                 # Cambio di numero, o dispositivo passato a qualcun altro: si esce da Telegram.

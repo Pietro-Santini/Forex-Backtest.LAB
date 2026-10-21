@@ -1,345 +1,190 @@
 # Scaletta — cosa manca da fare
 
-Aggiornata il **20 ottobre 2026**, dopo le richieste del proprietario e l'allineamento al
-repository (v2.0.10 pubblicata, collaudo GitHub verde).
+Aggiornata il **21 ottobre 2026** (v2.0.13). Ordine: prima quello che **fa perdere soldi o fa
+fallire un'operazione**, poi quello che **era funzionante e non lo è più**, poi il **telefono
+inusabile**, poi la **sincronizzazione**, poi le **funzioni nuove**.
 
-Ordine: prima quello che **fa perdere soldi o fa fallire un'operazione**, poi quello che **era
-funzionante e non lo è più**, poi il **telefono inusabile**, poi la **sincronizzazione**, poi le
-**funzioni nuove**.
+Prima di toccare qualcosa: `cervello/PASSAGGIO-OPENCODE.md` e `cervello/LEZIONI.md`.
 
-Prima di toccare qualcosa: `cervello/PASSAGGIO-OPENCODE.md` (dove sta il progetto, come si lavora)
-e `cervello/LEZIONI.md` (gli errori già pagati).
-
----
-
-## 0. Stato al 20 ottobre 2026
-
-| | |
-|---|---|
-| Versione pubblicata | **2.0.10** (`sw.js` + `installer.iss` allineati) |
-| Ramo | `main`, ultimo commit `7a037fc` |
-| Collaudo GitHub | **verde** (Collaudo + Installer Windows), 629/629 in locale |
-| Specchio sul Desktop | **fermo alla v166** — da riallineare |
-
-⚠️ **`API Github.txt` sta nella cartella del repo, non tracciato e NON in `.gitignore`.** Al primo
-`git add -A` finirebbe dentro. Va aggiunta la riga `API Github.txt` a `.gitignore` (i ganci di
-sicurezza non girano in tutte le sessioni: va controllato a mano cosa entra in git).
+**COME SI COMMITTA** (deciso dal proprietario il 21 ottobre): si committa **a capitolo chiuso**,
+non a ogni modifica — «altrimenti troppi commit e aggiornamenti facciamo». Si lavora sul ramo con
+il collaudo verde a ogni passo, e si pubblica una volta sola per capitolo.
 
 ---
 
-## 1. Già corretto — DA PROVARE SUL DISPOSITIVO, non da rifare
+## 1. Capitolo 2 — soldi e operazioni (quasi chiuso)
 
-Tre difetti segnalati dal proprietario sono stati corretti fra la 2.0.8 e la 2.0.10. Vanno
-**provati sul telefono/tablet con la 2.0.10 installata** prima di rimetterci mano.
+### 1.1 Kraken: la data di apertura delle posizioni cripto
 
-### 1.1 Login Google nell'APK: errore 400 e verifica in due passaggi che non finisce
+**Correzione importante alla premessa.** All'inizio era stata segnalata come «le aperture cripto
+falliscono», e la scaletta elencava i quattro motivi per cui il ponte può rifiutare. Il
+proprietario ha poi chiarito (21 ottobre): «in realtà le posizioni le apre tranquillamente, è solo
+il discorso della data di apertura che va risolto». Le quattro cause di rifiuto non c'entravano.
 
-Corretto in **v2.0.9** e **v2.0.10**. Due cause misurate, entrambe diverse da quelle ipotizzate:
+**Il sintomo vero** è quello già segnalato il 16 ottobre: «ho aperto una posizione su Kraken alle
+ore 22, sono andato a riaprire il grafico e la posizione me l'ha messa alle 19.20».
 
-- il popup di Firebase è una **finestra nuova** (`window.open`) e la WebView dell'APK non la crea:
-  Google si apriva al posto dell'app, Firebase restava senza `opener` e rispondeva **400**. Ora
-  nell'APK (e sul telefono nel browser) si usa il **reindirizzamento a pagina intera**;
-- la credenziale **arrivava e nessuno la leggeva**: al ritorno
-  (`https://localhost/login.html#...token...`) la WebView cambia **solo il frammento** senza
-  ricaricare, e il risultato era già stato letto e svuotato — di qui la rotellina che girava per
-  sempre. Ora si rilegge su `hashchange`, `pageshow` e `visibilitychange`, la bandierina scade dopo
-  **un'ora** (l'approvazione su un altro dispositivo può richiedere venti minuti) e due letture
-  sovrapposte non si annullano.
+**Misurato il 21 ottobre, e nel codice di oggi la catena è intera:**
 
-Test: `login_google_flusso.test.mjs` (8), `login_google_esito.test.mjs` (6),
-`login_stato_google.test.mjs` (13).
+```
+simulatore   "aperta" (ms)  ->  _iso_apertura()  ->  "fillTime" (ISO, il nome di Kraken vero)
+ponte        _ms_iso()      ->  "aperta_ms"
+app          krakenOrarioApertoMs() lo preferisce a tutto: è un fatto
+```
 
-**Se dopo la prova sulla 2.0.10 ancora non va**, allora si prende la strada del **login nativo**
-(`@codetrix-studio/capacitor-google-auth`). Serve il proprietario: `google-services.json` dal
-pannello Firebase e l'impronta **SHA-1 `64d6f827dd7db6be65b53a5972c80c8436437e31`** da registrare
-sul progetto. Da non fare prima della prova: è un pezzo nativo in più da mantenere.
+Verificato anche che il ponte **installato** sul PC del proprietario è del 21 ottobre, quindi
+contiene la correzione (arrivata con la v152). Quando `aperta_ms` manca, l'app ripiega
+sull'anagrafica — cioè su **quando ha visto** la posizione la prima volta: ed è esattamente così
+che una posizione aperta alle 22 finisce alle 19:20. Non è un orario sbagliato, è l'orario di un
+altro evento.
 
-### 1.2 L'APK non riceveva il pacchetto di aggiornamento
+**Quindi: le posizioni aperte da ora devono avere l'orario giusto.** Quelle aperte PRIMA della
+v152 non ce l'hanno e non possono recuperarlo: per loro c'è la cella «Eseguita», che si clicca e
+si dichiara l'orario a mano (v167).
 
-Corretto in **v2.0.8** (dentro la WebView un link con `download` non scarica niente: ora
-l'indirizzo si apre come navigazione e Android chiede se installare) e in **v2.0.10** (l'APK
-pubblicato conteneva un `sw.js` con il numero di versione vecchio, quindi il pulsante «Aggiorna»
-restava acceso per sempre; ora c'è `apk_versione.test.mjs` che confronta i due numeri sul pacchetto
-davvero costruito).
+Test aggiunti: `laboratorio/ponte/test_kraken_orario_apertura.py` (4) — l'orario arriva fino in
+fondo, non cambia quando si aggiunge alla stessa posizione, riparte se la posizione si capovolge,
+e una posizione vecchia senza orario risponde «non lo so» invece di inventarne uno.
 
-### 1.3 La scala dell'interfaccia scende fino al 10%
+**Da verificare sul vivo:** aprire una posizione cripto e guardare la colonna «Eseguita». Se
+mostra ancora «—», c'è un caso vero da misurare e i test sono già pronti a dire dove si rompe.
 
-Corretto in **v2.0.10**: il tetto minimo passa dal 70% al **10%**, e anche il testo disegnato sul
-grafico scende fino al 10% (prima si fermava al 50%). Test: `scala_ui.test.mjs` (17).
+### Fatto nel capitolo 2
+- clic su TP/SL nella tabella Kraken che cambiava il prezzo → tolto (si trascina dal grafico);
+- **una conferma sola** per chiusura multipla e «CHIUDI TUTTE»;
+- **operazioni a blocco su Kraken** (chiudi tutte / in guadagno / in perdita / per lato / per
+  contratto, più stop a pareggio su tutte);
+- **il conto segue l'asset**: cripto → Kraken, forex/indici/azioni/oro → MT5, anche da «vai a
+  grafico» (dove però il conto della POSIZIONE vince sempre).
 
----
+### 1.2 Il pareggio è zero — chiuso il 21 ottobre, dopo un errore mio
 
-## 2. Priorità 1 — soldi e operazioni che falliscono
+Segnalato dal proprietario: «il programma sposta le posizioni a break-even, ma perdono ugualmente
+meno 2 euro». La causa era una mia correzione della stessa mattina: per difendere lo stop dal
+cambio giornata avevo aggiunto al pareggio **un margine pari allo spread**. Un pulsante che si
+chiama «pareggio» e lascia meno due euro non è una protezione con un piccolo costo: è un'etichetta
+che mente.
 
-### 2.1 Kraken: le aperture delle posizioni cripto falliscono ⭐
+**Com'è adesso:** il prezzo di pareggio è di nuovo **esatto** (netto 0,00, commissioni di andata e
+ritorno e swap compresi, arrotondamento al tick sempre a favore di chi ha la posizione), e la
+difesa dal rollover si è spostata dove non costa niente — chi piazza lo stop **si rifiuta** quando
+quello stop cadrebbe dentro la forbice fra compra e vendi, e lo dice. Così lo stop che c'era prima,
+che è **più lontano**, resta a fare il suo lavoro.
 
-**Riferito:** «attenzione con la sincronizzazione corretta della apertura delle posizioni kraken
-per le crypto, falliscono». E: **deve sparire la configurazione manuale** dell'apertura di una
-posizione cripto.
+Il rifiuto è su **tutte e quattro** le strade del pareggio: pulsante della tabella (da cui passa
+anche il BE di gruppo), pulsante BE della tabella «Posizioni MT5» (che legge il preventivo vero,
+bid/ask), strategia della sala all'avvicinamento al primo target, regola «stop all'entrata». Nelle
+due automatiche il rifiuto è silenzioso e si riprova da solo al giro dopo.
 
-Da misurare per prima cosa *quale* passo fallisce (richiesta al ponte, scostamento, margine,
-lottaggio) prima di correggere: è il punto che muove ordini.
-
-### 2.2 Kraken: il clic sul TP/SL in tabella cambia il prezzo — non deve
-
-**Riferito:** «nelle posizioni kraken ora è in funzione che se clicco sulla tabella delle
-operazioni sul tp-sl mi fa cambiare il valore del prezzo, invece no, non deve farlo».
-
-Il TP/SL si sposta **dal grafico** (v165), non per un clic in tabella: un clic involontario su una
-cella non può modificare un ordine vero.
-
-### 2.3 Chiusura di più posizioni: una sola conferma, non una per posizione
-
-**Riferito:** «se clicca chiudi x posizioni gli viene fuori soltanto un messaggio di conferma per
-la chiusura di tutte», e lo stesso per le **operazioni in blocco**.
-
-Oggi la conferma si ripete per ogni posizione: con dieci posizioni sono dieci popup, e un «sì» di
-troppo chiude quello che non si voleva.
-
-### 2.4 Cambio conto automatico per tipo di asset ⭐
-
-**Riferito:** forex, indici e azioni → conto **MT5**; cripto → conto **Kraken**. «questo deve
-avvenire pure con i pulsanti vai al grafico delle posizioni aperte».
-
-Misurato: `fblVaiAlContoDi()` **esiste già** ed è richiamata solo da due punti (il salto a grafico
-da una posizione, `app.html:19907` e `:20036`). Manca l'aggancio al **cambio asset**.
-`fblTipoAsset()` riconosce già le cinque famiglie.
-
-### 2.5 Operazioni in blocco anche per le posizioni Kraken
-
-**Riferito:** «dobbiamo inserire il pulsante operazioni a blocco anche per le posizioni kraken».
-
-Oggi il blocco esiste per il Journal (`journalBulkDeleteBtn`) e per le posizioni dell'app, non per
-Kraken.
+**Limite dichiarato, su Kraken:** lì lo stop a pareggio va sul prezzo d'entrata e basta, perché la
+commissione dello scambio non arriva all'app posizione per posizione. Scritto nella conferma invece
+di stimarlo.
 
 ---
 
-## 3. Priorità 2 — funzioni che c'erano e non funzionano più
+## 2. Capitolo 3 — funzioni che c'erano e non vanno più
 
-### 3.1 Syntra: il robot non scansiona più ⭐⭐
+### 2.1 Syntra: il robot non scansiona più ⭐⭐
+**Quattro cose insieme:** (1) non esegue più la scansione; (2) chiede di selezionare la cartella
+Syntra ma non la fa selezionare (`syntraFolderPick`); (3) mostra la **porta** Syntra, che
+all'utente non deve risalire; (4) non mostra più i **nomi utente** Syntra già inseriti.
+**Resta aperto anche il difetto di prima:** la cronologia si ferma alla prima operazione; deve
+scorrere, espandere, leggere, controllare la data e ripetere fino al periodo scelto; e per tornare
+a cercare nuovi ordini deve **ripremere «setup» in basso a sinistra** (dalla classifica non basta).
+→ `installer_build/build/segnali_telegram/syntra_lettore.py`. ⚠️ **Richiede di ricostruire e
+reinstallare il ponte.**
 
-**Riferito, quattro cose insieme:**
+### 2.2 Caricamento del grafico al cambio asset ⭐
+«Non deve mai visualizzarsi il nome dell'asset se prima ancora non è stato caricato il grafico, la
+rotellina continuerà a girare fin quando non è avvenuta l'esatta sincronizzazione.» Più la
+**percentuale** di caricamento, e il popup che compare **nella finestra PIP** quando il grafico è
+staccato.
 
-1. il robot **non esegue più la scansione**;
-2. chiede di **selezionare la cartella Syntra** ma non la fa selezionare (`syntraFolderPick`,
-   `app.html:1883`);
-3. **mostra la porta Syntra**: non deve — «fa tutto da solo il server e pc, all'utente queste
-   informazioni non devono risalire»;
-4. **non mostra più i nomi utente Syntra** inseriti prima (`fb_syntra_utenti`,
-   `syntraUtentiDisegna()`).
+### 2.3 Freeze e scatti dopo gli aggiornamenti
+Da **misurare**, non da indovinare: profilo del browser su scorrimento pagina, grafico e replay, e
+conteggio delle richieste di rete in quei momenti. Il proprietario sospetta la connettività — e il
+21 ottobre il suo PC ha davvero perso la rete di colpo (ping al router 100% perso), quindi il
+sospetto ha una base.
 
-Dove: `installer_build/build/segnali_telegram/syntra_lettore.py` e il pannello Syntra in
-`app.html`. ⚠️ **Richiede di ricostruire e reinstallare il ponte**: va detto al proprietario e va
-mandato lo zip.
-
-**Resta aperto anche il difetto di prima** (mai chiuso): la cronologia si ferma alla prima
-operazione. Deve scorrere giù, espandere la seconda, leggere i valori, passare alla successiva
-controllando **sempre la data**, fino al **periodo scelto**; e alla fine, per tornare a cercare
-nuovi ordini, deve **ripremere «setup» in basso a sinistra** (accanto a «classifica») — è da lì che
-si arriva a «notifiche» in alto a destra. La classifica **non basta**.
-Test esistenti: `laboratorio/ponte/test_profilo_espansione.py` (13).
-
-### 3.2 Caricamento del grafico al cambio asset ⭐
-
-**Riferito:** «non deve mai visualizzarsi il nome dell'asset se prima ancora non è stato caricato
-il grafico, la rotellina continuerà a girare fin quando non è avvenuta l'esatta sincronizzazione
-del grafico per quel asset e vengono caricati tutti i dati».
-
-Insieme alla richiesta già in lista: l'indicatore di caricamento deve mostrare la **percentuale**,
-e con il grafico staccato il popup deve comparire **nella finestra PIP** (esiste già il criterio:
-`popupTargetDoc()` / `moveModalToFloatingIfActive`, sistemato il 19 ottobre).
-
-### 3.3 Freeze e scatti dopo gli aggiornamenti
-
-**Riferito:** «dopo gli aggiornamenti l'applicazione inizia a laggare e scattare nel movimento a
-scorrimento di tutta la pagina e all'interno del grafico, anche in modalità replay, ma io penso che
-sia un problema a monte di connettività».
-
-**Da misurare, non da indovinare**: profilo del browser su scorrimento pagina, scorrimento grafico
-e replay, e conteggio delle richieste di rete in quei momenti. L'ipotesi della connettività va
-confermata o scartata con un numero prima di toccare il disegno.
-
-### 3.4 Footprint in replay
-
-Mai affrontato. Il motore del replay è stato riscritto il 19 ottobre (ripresa esatta dallo STOP, 60
-fps, footprint che non sparisce più a fine candela, 100x): va verificato **se il difetto c'è
-ancora** prima di rimetterci mano.
+### 2.4 Footprint in replay
+Mai affrontato. Il motore del replay è stato riscritto il 19 ottobre: va verificato **se il difetto
+c'è ancora** prima di rimetterci mano.
 
 ---
 
-## 4. Priorità 3 — il telefono
+## 3. Capitolo 4 — il telefono
 
-### 4.1 Dentro il grafico i pulsanti stanno uno sopra l'altro
-
-**Riferito:** «sul tablet è accettabile, sul telefono no, specialmente dobbiamo intervenire sulla
-visualizzazione interna del grafico perché i pulsanti sono uno sopra l'altro, la barra in alto per
-aprire posizioni a comparsa deve **sempre stare attaccata al bordo alto del grafico**».
-
-### 4.2 I popup non devono mai oltrepassare il bordo dello schermo
-
-**Riferito:** «mai». Visto sui popup della **configurazione delle strategie**.
-
-### 4.3 Il testo non deve mai oltrepassare il bordo del popup
-
-Valido per **tutti** i popup, impostazioni e collegamento/modalità compresi.
-
-### 4.4 I popup devono adattarsi al contenuto
-
-**Riferito:** per la **cronologia delle sale** il popup è troppo piccolo per il testo che contiene:
-va allargato di conseguenza.
-
-### 4.5 La linea apertura↔chiusura sempre visibile, anche con zoom largo
-
-**Riferito:** «deve essere sempre visibile anche se abbiamo fatto uno zoom largo più della
-visualizzazione del punto di apertura e il punto di chiusura (importante)».
-
-Nel codice la linea tratteggiata è già dichiarata «SEMPRE visibile» (`app.html:14297`), ma lì si
-parla dell'hover: il caso da correggere è quello con **gli estremi fuori dallo schermo**.
-
-### 4.6 Via i cartellini TP/SL dalla barra dei prezzi
-
-**Riferito:** «nella barra dei prezzi togliamo i cartellini disegnati dei tp-sl, danno solo
-fastidio».
+- **dentro il grafico i pulsanti stanno uno sopra l'altro**, e la barra a comparsa per aprire
+  posizioni deve stare **sempre attaccata al bordo alto**;
+- i **popup non devono mai oltrepassare il bordo dello schermo** (visto sulle strategie);
+- il **testo non deve mai uscire dal popup** (impostazioni e collegamento compresi);
+- i popup devono **adattarsi al contenuto**: quello della cronologia sale è troppo piccolo;
+- la **linea apertura↔chiusura** deve restare visibile anche con zoom largo (gli estremi fuori
+  schermo: nel codice la linea è già «sempre visibile», ma quel «sempre» parla dell'hover);
+- via i **cartellini TP/SL** dalla barra dei prezzi.
 
 ---
 
-## 5. Priorità 4 — sincronizzazione fra PC e dispositivi mobili
+## 4. Capitolo 5 — sincronizzazione e credenziali
 
-### 5.1 Stile e impostazioni dal PC al telefono
+### 4.1 Fatto
+Le impostazioni seguono l'account: footprint (stile e righe), profili indicatori, decimali per
+asset, strategie delle sale, nomi e target delle sale, periodi della dashboard — oltre a watchlist,
+ricerche e scala che già viaggiavano. **I segreti no**, ed è garantito da un test.
 
-**Riferito:** «l'account google non riporta gli stessi style e setting del pc sui dispositivi
-mobili»; e «devono essere ricordate tutte le configurazioni di style, impostazioni footprint
-heatmap eccetera: devono prendere queste informazioni dalla configurazione del pc».
+### 4.2 Resta: le credenziali e la cartella
+Le credenziali stanno in una **cartella scelta dall'utente**, e il riferimento a quella cartella
+perde il permesso quando l'app si riavvia. Il meccanismo per riconcederlo esiste
+(`fblChiediPermessoFile` / `unlockFilesBanner`) ma non è evidente: l'app sembra semplicemente
+vuota. Serve un pulsante chiaro nei pannelli Capital.com e MT5, con scritto che **le credenziali
+restano sul dispositivo e non passano mai dal server**.
 
-Il 19 ottobre è entrato il **Sync Cloud delle preferenze** (watchlist, ricerche salvate, scala
-interfaccia) su `users/{uid}/data/preferenze`: lo schema esiste e funziona, va **esteso** alle
-impostazioni di stile, footprint e heatmap.
-
-⚠️ Il **footprint e la heatmap della watchlist** sono un caso a parte e **architetturale**: quei
-dati vivono per dispositivo (IndexedDB, `footprintArchivio`) e sono molti. Qui si sincronizzano le
-**impostazioni**; copiare tutto l'archivio è un'altra decisione, da prendere a parte.
-
-### 5.2 Le credenziali restano dentro l'app del dispositivo
-
-**Riferito:** «i dispositivi mobili quando effettuano la connessione con capital.com e mt5, le
-credenziali devono rimanere dentro all'applicazione del dispositivo mobile, a meno che non si
-disinstalla l'applicazione: i dati di accesso vengono cancellati per sicurezza».
-
-Cioè: **non** sul cloud con le preferenze. Vale la regola del progetto: nessuna credenziale nel
-repo e nessuna nella nuvola.
+### 4.3 Da sapere: tre porte d'ingresso, tre magazzini
+L'app si apre dal sito (`github.io`), dal servizio locale (`127.0.0.1:8000`, lo serve `bridge.py`)
+e dall'APK (`localhost`). Il browser tiene i dati **separati per indirizzo**: chi cambia porta
+d'ingresso trova tutto vuoto senza aver perso niente. La sincronizzazione sopra è la cura che
+funziona comunque; ridurre le porte d'ingresso a una sarebbe la cura alla radice.
 
 ---
 
-## 6. Priorità 5 — funzioni nuove
+## 5. Capitolo 6 — funzioni nuove
 
-### 6.1 TP/SL della barra agganciati alla posizione selezionata ⭐
-
-**Riferito:** cliccando una posizione a grafico (quindi selezionandola) i pulsanti **TP e SL della
-barra delle operazioni si collegano a quella singola posizione**, per poterli spostare.
-Deselezionando, i due pulsanti tornano a configurare **una nuova apertura**. Se si clicca il
-pulsante SL/TP per una nuova apertura e poi si clicca **in un punto vuoto** del grafico,
-l'impostazione si annulla: TP/SL tornano a **0** e il **preview sparisce**. «tutto questo sistema
-deve essere apportato anche per la parte delle criptovalute collegate al conto Kraken».
-
-Esiste già `posSelezionata` (`app.html:4116`) e il trascinamento dei livelli Kraken (v165).
-
-### 6.2 Ordini pendenti: spostare entrata, TP e SL
-
-**Riferito:** «quando abbiamo piazzato ordini pendenti dobbiamo avere la possibilità di spostare
-sia l'entrata che i vari tp con sl».
-
-Esiste già il trascinamento della **bozza** dell'ordine prima di piazzarlo (`app.html:16513`,
-`:16546`): manca su un ordine **già piazzato**.
-
-### 6.3 Ordini pendenti nella strategia delle sale e nella strategia universale
-
-**Riferito:** il setting degli ordini pendenti va dentro il **popup strategia della sala** e nella
-**strategia universale**. Le due metodologie di esecuzione del segnale restano:
-**una posizione per ogni TP** (senza la strategia universale) oppure **una posizione sola con
-chiusura parziale**.
-
-Con due **freni** di sicurezza, entrambi selezionabili:
-
-- se non scatta entro **X tempo**, l'ordine pendente si cancella da solo;
-- se l'ordine limite non viene attivato e il prezzo **supera N TP**, l'ordine si cancella da solo.
-
-E tutto questo va riportato anche nella **lista di configurazione della cronologia delle sale** e
-nella loro resa.
-
-### 6.4 Riordino di Collegamento/Modalità, con la scheda «Collegamento»
-
-**Riferito**, e **ancora da fare**: misurato oggi, le schede sono tornate a
-`live, mt5, binance, propfirm, notion, collegamento, versione` — senza Kraken e senza «Sala
-segnali».
-
-Ordine richiesto, con un pulsante in più **tutto a destra**:
-
-1. Live/Storico (sessione Capital.com) — 2. MT5 — 3. **Kraken** — 4. Prop Firm —
-5. Template Notion — 6. **Sala segnali** — 7. **Collegamento**.
-
-Dentro **Collegamento** vanno spostati:
-
-- la casella di visualizzazione del collegamento a Telegram e **sala in ascolto**;
-- il pulsante **Ricontrolla** (resta); la **porta del ponte deve sparire** dalla vista
-  dell'utente (oggi `id="tgPort"` è già `display:none`, `app.html:1780`: va tolta del tutto);
-- il pulsante **accesso da altri dispositivi e server Oracle**;
-- il pulsante di **collegamento a Telegram**, **«esci da Telegram / dimentica il numero»** e tutto
-  il percorso del **nuovo utente** (verifica del numero e il resto).
-
-⚠️ Attenzione: questo lavoro era già stato tentato e **lasciato a metà** (schede senza pannello,
-pannelli duplicati, `liveModeSwitch` tolto dall'HTML ma ancora agganciato da JavaScript: l'app
-andava in errore al caricamento e si perdevano 49 ascoltatori, fra cui tutto il menù MT5 e tutta la
-Prop Firm). Il controllo di sintassi **non se ne accorge**. Il collaudo deve **aprire il popup e
-cliccare ogni scheda**, verificando che compaia esattamente un pannello.
-
-### 6.5 Aggiornamento «classico» su Windows
-
-**Riferito:** «scarica il pacchetto, chiude i processi, lancia l'aggiornamento e poi installa,
-togliendo il vecchio pacchetto di installazione».
-
-Sul **mobile** il giro è già stato sistemato (§1.2). Sul **computer** oggi l'app scarica il Setup e
-lascia all'utente l'apertura del file: mancano la **chiusura dei processi**, l'avvio
-dell'installazione e la **rimozione del pacchetto vecchio**.
-
----
-
-## 7. Richieste di prima, ancora aperte (non ripetute, non dimenticate)
-
+- **TP/SL della barra agganciati alla posizione selezionata**; deselezionando tornano a configurare
+  una nuova apertura; clic nel vuoto → si annulla (TP/SL a 0, preview via). Anche su Kraken.
+- **Ordini pendenti**: spostare entrata, TP e SL di un ordine **già piazzato** (oggi si trascina
+  solo la bozza prima di piazzarlo).
+- **Ordini pendenti nella strategia** di sala e universale, con due **freni**: cancella se non
+  scatta entro X tempo; cancella se il prezzo supera N TP. Riportato anche nella cronologia sale.
+- **Riordino delle schede** di Collegamento/Modalità: Live/Storico, MT5, **Kraken**, Prop Firm,
+  Notion, **Sala segnali**, **Collegamento** (con dentro: casella Telegram e sala in ascolto,
+  Ricontrolla, accesso altri dispositivi/Oracle, collegamento Telegram, esci/dimentica numero e il
+  percorso del nuovo utente). La **porta del ponte** deve sparire dalla vista.
+  ⚠️ Già tentato una volta e lasciato a metà: schede senza pannello, pannelli duplicati,
+  `liveModeSwitch` tolto dall'HTML ma ancora agganciato — l'app andava in errore al caricamento e
+  si perdevano 49 ascoltatori (menù MT5 e Prop Firm compresi). Il controllo di sintassi **non se ne
+  accorge**: il collaudo deve aprire il popup e cliccare ogni scheda.
+- **Aggiornamento «classico» su Windows**: chiudere i processi, installare, togliere il pacchetto
+  vecchio (sul mobile il giro è già sistemato).
 - **Multi-selezione dei conti** nella dashboard statistiche.
-- **Cancellazione di un conto che purga tutto**, con avviso esplicito: *«attenzione, se elimini il
-  conto eliminerai anche le sue statistiche»*.
-- **Pulsante «Chiudi» a grafico** con popup: chiusura **a mercato** oppure **parziale**, con la
-  percentuale scelta dall'utente.
+- **Cancellazione di un conto** che purga tutto, con avviso che si perdono le statistiche.
+- **Pulsante «Chiudi» a grafico** con chiusura a mercato o parziale a percentuale scelta.
 
 ---
 
-## 8. Rinviate dal proprietario — non farle se non le richiede
-
-- **Integrazione Discord**: notifica sul gruppo a ogni modifica, con la richiesta che l'ha
-  originata; canale «idee» con sondaggio che, se la maggioranza approva, fa partire la richiesta.
-  Parole sue: «questa sarà una modifica che faremo più avanti, non adesso».
-- **App sganciata da Chrome**: in parte superata — oggi esistono il Setup Windows e l'APK Android,
-  con i pulsanti sulla landing; **iOS è ancora da completare**.
-
----
-
-## 9. Cosa serve dal proprietario
-
-1. **Installare la 2.0.10 su telefono e tablet** e dire se login Google, aggiornamento e scala al
-   10% funzionano: tre voci della lista dipendono da questa risposta (§1).
-2. Solo **se il login ancora non va**: `google-services.json` dal pannello Firebase e la
-   registrazione dell'impronta SHA-1 `64d6f827...` (§1.1).
-3. Sapere che **Syntra e il ponte** richiedono di **ricostruire e reinstallare il Setup** (§3.1).
+## 6. Rinviate dal proprietario — non farle se non le richiede
+- **Discord**: notifica dei commit, canale idee con sondaggio.
+- **iOS**: l'app per Android e Windows c'è; iOS è ancora da completare.
+- **Spread sull'ENTRATA degli acquisti in simulazione**: oggi si modella solo sull'uscita delle
+  vendite. Chiuderlo sposta l'entrata di tutti i backtest passati: è una decisione, non una
+  correzione.
 
 ---
 
-## 10. Promemoria che valgono per ogni punto
-
-- **Si misura prima di correggere.** Quasi ogni voce del diario racconta una causa trovata
-  misurando, non indovinando — e più volte la causa non era dove si guardava.
-- **Ogni correzione ha un test**, e il test guarda il **comportamento**, non una stringa nel
-  sorgente. Un test che conta quante volte una funzione compare nel file non dice **dove** sta.
-- **Conta il collaudo di GitHub**, non quello locale, e il verde si prende **sul ramo** prima di
-  toccare `main`.
+## 7. Promemoria che valgono per ogni punto
+- **Si misura prima di correggere**, e più volte la causa non era dove si guardava.
+- **Ogni correzione ha un test**, e il test guarda il **comportamento**.
+- **Conta il collaudo di GitHub**, e il verde si prende **sul ramo** prima di toccare `main`.
 - Modifiche fuori da `app.html` (ponte, installer) → **ricostruire il Setup** e avvisare.
+- Un collaudo **non deve toccare niente fuori da sé**: il 21 ottobre apriva WebSocket veri verso il
+  ponte del proprietario e gli interrompeva il collegamento MT5 mentre operava.
 - Italiano ovunque; niente identificativi di modello; nessuna chiave API nel repo; soldi veri mai.

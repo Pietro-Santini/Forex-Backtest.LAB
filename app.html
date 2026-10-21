@@ -1872,16 +1872,29 @@ function pubblicaPreferenze(){
         <div id="syntraStatoBox" style="font-size:12.5px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px;margin-bottom:8px">Ponte segnali non collegato.</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px"><input type="checkbox" id="syntraAttivo" style="width:17px;height:17px;accent-color:var(--fbAccent2)"> <b>Leggi le operazioni condivise su Syntra</b></label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12.5px;margin-top:8px"><input type="checkbox" id="syntraAvvio" checked style="width:16px;height:16px;accent-color:var(--fbAccent2)"> Apri da solo BlueStacks e Syntra se sono chiusi (nessun tocco a mano)</label>
+        <!-- PORTA E «SCEGLI CARTELLA»: TOLTE il 21 ottobre 2026.
+             La PORTA, su richiesta del proprietario: «mi viene visualizzata la porta syntra ma a me
+             non interessa, fa tutto da solo il server e pc, all'utente queste informazioni non
+             devono risalire». Nessuno la leggeva: era scritta li' e basta.
+             «SCEGLI CARTELLA» non poteva funzionare, e non era collegata a nulla: un browser NON
+             puo' conoscere il percorso reale di una cartella (showDirectoryPicker restituisce un
+             riferimento, non "C:\..."), quindi da li' non sarebbe mai potuto uscire un percorso da
+             dare al ponte. Un pulsante che promette una cosa impossibile e' peggio di un pulsante
+             assente: il proprietario infatti scriveva «mi dice di selezionare la cartella syntra ma
+             non me la fa selezionare». Resta il campo dove il percorso si INCOLLA. -->
         <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
-           <label style="flex:none;min-width:110px">Porta Syntra</label>
-           <input id="syntraPort" type="number" min="1024" max="65535" value="8770" style="width:80px">
-           <button type="button" id="syntraRefreshBtn" class="miniBtn" style="margin-left:10px">↻ Ricontrolla</button>
+           <label style="flex:none;min-width:110px" title="La cartella di BlueStacks sul PC. Si incolla: il browser non puo' leggerla da solo.">Cartella BlueStacks</label>
+           <input id="syntraFolder" class="tgCfgIn" type="text" placeholder="incolla il percorso, es. C:\Program Files\BlueStacks_nxt" style="flex:1;min-width:220px">
+           <button type="button" id="syntraRefreshBtn" class="miniBtn" style="width:auto">↻ Ricontrolla</button>
         </div>
-        <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
-           <label style="flex:none;min-width:110px">Cartella Syntra</label>
-           <input id="syntraFolder" class="tgCfgIn" type="text" placeholder="es. C:\\Syntra" style="flex:1;min-width:220px">
-           <button type="button" id="syntraFolderPick" class="miniBtn" style="width:auto">Scegli cartella</button>
-        </div>
+        <!-- GLI UTENTI SYNTRA GIA' VISTI. Questo contenitore era stato CANCELLATO per sbaglio dal
+             commit 31d9fe3 (quello dell'APK e della scheda Versione): la funzione che lo riempie,
+             syntraUtentiDisegna(), e' rimasta e continuava a essere chiamata, ma trovava
+             `box` nullo e usciva alla prima riga. Da fuori: «non mi fa piu' visualizzare i nomi
+             utenti di syntra precedentemente inseriti», senza nessun errore da nessuna parte.
+             Un contenitore che sparisce non rompe niente: smette solo di mostrare. -->
+        <div class="hint" style="margin:10px 0 4px;font-weight:700;letter-spacing:.3px">UTENTI SYNTRA VISTI</div>
+        <div id="syntraUtentiList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
         <p class="hint" style="margin-top:8px">L'emulatore Syntra gira su BlueStacks (Android) sul PC. Il ponte legge il database locale dell'emulatore e manda i segnali all'app. Non serve un account: Syntra condivide le operazioni via codice utente.</p>
         </div>
         <p class="hint" style="margin:0 0 10px">Il numero viene ricordato <b>su questo browser</b> (nessun server) solo dopo un accesso riuscito, e dall'accesso successivo viene mandato da solo: il popup non ricompare più. Il <b>codice di verifica non viene mai salvato</b> - è monouso e scade in pochi minuti, tenerlo non servirebbe a niente. A non farlo richiedere ogni volta è il ponte sul PC, che conserva la sua sessione Telegram in un file locale.</p>
@@ -4804,21 +4817,45 @@ function fblPlCorrente(p){
 function fblPosizioniBlocco(){
  try{ return (positions||[]).filter(p=>p&&p.lots); }catch(e){ return []; }
 }
-async function fblChiudiBlocco(quali,descrizione){
- const lista=fblPosizioniBlocco().filter(quali);
- if(!lista.length){ $('status').textContent='Nessuna posizione da chiudere: '+descrizione+'.'; return; }
- if(typeof blockedByPropFirmNews==='function'&&blockedByPropFirmNews())return;
+// LA CONFERMA, UNA SOLA, PER UN ELENCO DI POSIZIONI.
+// Estratta perche' la usano in due: le operazioni a blocco e il pulsante CHIUDI TUTTE. Prima il
+// pulsante CHIUDI TUTTE non chiedeva NIENTE e si appoggiava alle conferme singole di ogni
+// posizione reale - tanto che il messaggio di stato diceva «per quelle REALI su MT5, conferma la
+// chiusura nel popup comparso». Due strade che chiedono in due modi diversi sono due strade che
+// un domani divergono: ora la domanda e' una, e dice sempre le stesse tre cose (quante, quanto
+// rendono adesso, e quante sono REALI).
+// Restituisce {ok,somma,ignoti,reali}: non solo la risposta, anche i numeri gia' calcolati per
+// farla. Il messaggio finale ("chiuse N, risultato X") li vuole, e ricalcolarli dopo darebbe un
+// numero DIVERSO - a quel punto le posizioni sono chiuse e il loro P/L "di adesso" non esiste piu'.
+async function fblConfermaChiusuraLista(lista,descrizione,titolo){
  let somma=0, ignoti=0;
  lista.forEach(p=>{ const v=fblPlCorrente(p); if(v==null)ignoti++; else somma+=v; });
  const reali=lista.filter(p=>p.mt5Ticket!=null).length;
  const righe=[descrizione+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.'];
  righe.push('Risultato di adesso: '+((somma>=0?'+':'')+euro(somma))+(ignoti?(' (di '+(lista.length-ignoti)+' su '+lista.length+': delle altre non si ha il prezzo adesso)'):''));
- if(reali)righe.push(reali+(reali===1?' e' : ' sono')+' REALE sul conto MT5: la chiusura e\' vera, non una simulazione.');
- if(!await appConfirm(righe.join('\n\n'),{title:'⚡ Chiudi a blocco',okLabel:'Chiudi '+lista.length,cancelLabel:'Annulla'}))return;
+ // «3 sono REALE» era quello che si leggeva prima: il numero si accordava, il sostantivo no.
+ if(reali)righe.push(reali+(reali===1?' è REALE':' sono REALI')+' sul conto MT5: la chiusura è vera, non una simulazione.');
+ const ok=await appConfirm(righe.join('\n\n'),
+   {title:titolo||'⚡ Chiudi a blocco',okLabel:'Chiudi '+lista.length,cancelLabel:'Annulla'});
+ return {ok:!!ok,somma,ignoti,reali};
+}
+async function fblChiudiBlocco(quali,descrizione){
+ const lista=fblPosizioniBlocco().filter(quali);
+ if(!lista.length){ $('status').textContent='Nessuna posizione da chiudere: '+descrizione+'.'; return; }
+ if(typeof blockedByPropFirmNews==='function'&&blockedByPropFirmNews())return;
+ const conferma=await fblConfermaChiusuraLista(lista,descrizione);
+ if(!conferma.ok)return;
+ const {somma,ignoti,reali}=conferma;
  let fatte=0, saltate=0;
  for(const p of lista){
   try{
-   if(p.mt5Ticket!=null){ await closeMt5PositionReal(p,'MANUAL'); fatte++; continue; }
+   // UNA CONFERMA SOLA. Richiesto: «se clicca chiudi x posizioni gli viene fuori soltanto un
+   // messaggio di conferma per la chiusura di tutte». La conferma del blocco e' gia' stata data
+   // qui sopra: senza `senzaConferma`, closeMt5PositionReal ne chiedeva un'altra per OGNI
+   // posizione reale - con dieci posizioni, dieci popup, e un "si'" di troppo chiudeva quello
+   // che non si voleva. Le simulate non chiedevano niente, quindi il difetto si vedeva solo sul
+   // conto MT5 reale.
+   if(p.mt5Ticket!=null){ await closeMt5PositionReal(p,'MANUAL',{senzaConferma:true}); fatte++; continue; }
    const prezzo=fblPrezzoChiusura(p);
    if(prezzo==null){ saltate++; continue; }
    closeTrade('MANUAL',prezzo,p); fatte++;
@@ -4850,14 +4887,16 @@ async function fblGruppoPareggio(g){
  if(!lista.length){ $('status').textContent='Nessuna posizione aperta in questo gruppo.'; return; }
  const reali=lista.filter(p=>p.mt5Ticket!=null).length;
  const righe=['Gruppo '+g.descr+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.',
-   'Lo stop di ognuna va al suo pareggio con un margine pari allo spread (commissioni e swap compresi): '
-   +'al pareggio esatto lo stop starebbe DENTRO la forbice, e al primo allargamento verrebbe preso.'];
+   'Lo stop di ognuna va al suo pareggio esatto: profitto netto 0,00, commissioni e swap compresi.'];
  if(reali)righe.push(reali+(reali===1?' e\' REALE':' sono REALI')+' sul conto MT5: lo stop si sposta davvero sul conto.');
  if(!await appConfirm(righe.join('\n\n'),{title:'\u2696\ufe0f Stop a pareggio',okLabel:'Sposta '+lista.length,cancelLabel:'Annulla'}))return;
- let fatte=0;
- lista.forEach(p=>{ try{ applyBreakevenToPosition(p); fatte++; }catch(e){} });
+ let fatte=0, rifiutate=0;
+ lista.forEach(p=>{ try{ if(applyBreakevenToPosition(p)===false)rifiutate++; else fatte++; }catch(e){} });
  try{ draw(); update(); }catch(e){}
- $('status').textContent='\u2696\ufe0f Stop a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')+' del gruppo '+g.descr+'.';
+ // Si contano quelle spostate DAVVERO: annunciare cinque spostamenti e averne fatti zero e'
+ // peggio che non annunciare niente.
+ $('status').textContent='\u2696\ufe0f Stop a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')+' del gruppo '+g.descr
+   +(rifiutate?(" · "+rifiutate+(rifiutate===1?" lasciata come stava":" lasciate come stavano")+": il pareggio cadrebbe dentro la forbice."):".");
 }
 fblDelega('click',async ev=>{
  const t=ev.target&&ev.target.closest&&ev.target.closest('[data-posgruppo-be],[data-posgruppo-chiudi]');
@@ -6260,7 +6299,40 @@ const GRAFICO_LS={
  fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} },
  // RICHIESTO: la scelta dei conti MT5 per le aperture automatiche si condivide come il resto
  // della configurazione (il PC con MT5 vince su telefono/tablet, vedi graficoSeme).
- fb_tg_auto_conti:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoConti=tgAutoContiDaSalvato(o); }catch(e){} try{ tgAutoDisegna(); }catch(e){} }
+ fb_tg_auto_conti:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoConti=tgAutoContiDaSalvato(o); }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
+ // ===== LE IMPOSTAZIONI SEGUONO L'ACCOUNT, NON IL DISPOSITIVO =====
+ // RICHIESTO dal proprietario: «con i dispositivi mobili devono essere ricordate tutte le
+ // configurazioni di style, impostazioni footprint heatmap eccetera: devono prendere queste
+ // informazioni dalla configurazione del pc».
+ // E c'e' un secondo motivo, emerso il 21 ottobre: l'app si apre da indirizzi diversi (il sito,
+ // il servizio locale, l'APK) e il browser tiene un magazzino SEPARATO per ogni indirizzo. Quello
+ // che viaggia sull'account torna da solo anche quando si cambia porta d'ingresso; quello che
+ // vive solo in localStorage sembra sparito.
+ //
+ // COSA NON ENTRA QUI, E NON DEVE ENTRARCI MAI: credenziali, chiavi, numeri di telefono,
+ // indirizzi di server, sessioni. Quelle restano sul dispositivo per scelta esplicita del
+ // proprietario - «le credenziali rimangono sul dispositivo, non circolano online». E nemmeno la
+ // geometria delle finestre: la disposizione buona su un telefono non lo e' su un monitor.
+ fbl_footprint_style:v=>{
+  try{ if($('footprintStyle')&&(v==='bidask'||v==='delta'||v==='volume'))$('footprintStyle').value=v; }catch(e){}
+  try{ draw(); }catch(e){}
+ },
+ fbl_footprint_rows_target:v=>{
+  try{ const n=Number(v); if(Number.isFinite(n)&&n>=4&&n<=40&&$('footprintAutoRowsTarget'))$('footprintAutoRowsTarget').value=String(n); }catch(e){}
+  try{ draw(); }catch(e){}
+ },
+ // I profili degli indicatori: l'elenco si ridisegna da solo alla prossima apertura del menu,
+ // quindi qui basta che il valore sia arrivato.
+ fbl_profili_indicatori:()=>{},
+ // Decimali scelti per ogni asset: cambiano come si LEGGONO i prezzi, quindi si ridisegna.
+ fbl_decimali_per_asset:()=>{ try{ draw(); update(); }catch(e){} },
+ // Le strategie delle sale (quelle della cronologia) e i nomi/target delle sale: sono scelte, non
+ // dati del dispositivo, e rifarle a mano su ogni dispositivo e' lavoro.
+ fbl_crono_strategia:()=>{},
+ fbl_sale_nomi:()=>{ try{ tgRenderPannello(); }catch(e){} },
+ fbl_sale_target:()=>{ try{ tgRenderPannello(); }catch(e){} },
+ // Periodi scelti nella dashboard delle statistiche.
+ fb_dash_periodi:()=>{}
 };
 function graficoLsLeggi(nome){ try{ return localStorage.getItem(nome); }catch(e){ return null; } } // stato dell'allarme sul singolo dispositivo, non si condivide
 let graficoT={};               // chiave -> istante dell'ultima modifica nota su questo dispositivo
@@ -6585,12 +6657,34 @@ async function idbGet(key){
 // dallo script di login/STEP 0a) sia disponibile E che il primo controllo di login sia
 // concluso: i due script partono in ordine non garantito, quindi non possiamo assumere che
 // window.fxbtCloud esista già quando questo script classico parte.
+// ASPETTA, MA NON PER SEMPRE, E RALLENTANDO.
+//
+// MISURATO il 21 ottobre 2026, cercando la causa del «dopo gli aggiornamenti l'applicazione
+// inizia a laggare e scattare»: con la pagina ferma, l'app aveva 27 timer attivi per un totale di
+// 77,6 risvegli al secondo - e SESSANTASEI venivano da qui. Questa attesa controllava ogni 30
+// millisecondi (33 volte al secondo) se Firebase fosse pronto, e smetteva solo quando arrivava.
+// SENZA RETE Firebase non arriva mai: i due timer restavano a battere per sempre, impedendo al
+// browser di stare fermo. Il proprietario sospettava «un problema a monte di connettivita'», ed
+// era vero - ma non nel modo che immaginava: non e' la rete lenta a far scattare il grafico, e'
+// l'app che, quando la rete manca, si mette a girare a vuoto.
+//
+// Adesso: parte veloce (30 ms, cosi' all'avvio normale non si perde niente), rallenta fino a
+// mezzo secondo, e dopo trenta secondi si ARRENDE restituendo null. Tutti e quattro i punti che
+// la chiamano sanno gia' cosa fare senza nuvola - uno di loro aveva perfino una corsa contro un
+// timeout di 20 secondi, messa li' proprio perche' questa poteva non tornare mai.
 function waitForFxbtCloud(){
  return new Promise(resolve=>{
    if(window.fxbtCloud){ window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); return; }
-   const t=setInterval(()=>{
-     if(window.fxbtCloud){ clearInterval(t); window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); }
-   },30);
+   const inizio=Date.now();
+   let attesa=30;
+   const giro=()=>{
+     if(window.fxbtCloud){ window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); return; }
+     // Trenta secondi: oltre, la nuvola non sta arrivando. Meglio dirlo che restare in attesa.
+     if(Date.now()-inizio>30000){ resolve(null); return; }
+     attesa=Math.min(500,Math.round(attesa*1.5));
+     setTimeout(giro,attesa);
+   };
+   setTimeout(giro,attesa);
  });
 }
 async function idbClearAll(){
@@ -19789,7 +19883,11 @@ function removeTradeRecordAt(i){
  trades.splice(i,1);
  if(highlightedTrade&&highlightedTrade.tradeIndex===i)highlightedTrade=null;
 }
-function closeAllPositions(reason){
+// `opz.senzaConferma`: la conferma e' gia' stata chiesta da chi chiama, UNA SOLA VOLTA per tutte
+// (vedi il pulsante CHIUDI TUTTE). Senza, ogni posizione REALE apriva il suo popup: il messaggio
+// di stato arrivava perfino a dire «per quelle REALI su MT5, conferma la chiusura nel popup
+// comparso», cioe' il difetto era scritto nell'interfaccia.
+function closeAllPositions(reason,opz){
  // Si possono chiudere subito (con un prezzo corretto) solo le posizioni DELL'ASSET a grafico
  // ora: per le posizioni di altri asset non abbiamo un prezzo live valido in questo momento,
  // quindi restano aperte finché non si passa sul loro grafico.
@@ -19798,12 +19896,20 @@ function closeAllPositions(reason){
  // REALMENTE verificato via tick (mai rows[idx].close, che durante l'avvio può ancora
  // appartenere a un CSV Storico di tutt'altro asset).
  const price=liveModeActive?livePriceByAsset[currentAssetKey]:currentPrice();
+ // Le chiusure REALI sono asincrone: si raccolgono le promesse e si restituiscono, cosi' chi
+ // chiama puo' aspettare la fine prima di scrivere il messaggio di riepilogo. Senza, il messaggio
+ // veniva scritto subito e poi SOVRASCRITTO da quello dell'ultima posizione chiusa: a schermo
+ // restava «Posizione ... chiusa DAVVERO su MT5», e di quante ne erano state chiuse in tutto non
+ // si sapeva piu' niente.
+ const attese=[];
  [...ownPositions].forEach(p=>{
-   // Posizione REALE: si chiude sul conto MT5 (con conferma) e SOLO se va a buon fine si
-   // giornalizza in locale — mai chiuderla qui in locale con un prezzo indovinato.
-   if(p.mt5Ticket!=null){ closeMt5PositionReal(p,reason); return; }
+   // Posizione REALE: si chiude sul conto MT5 e SOLO se va a buon fine si giornalizza in locale —
+   // mai chiuderla qui in locale con un prezzo indovinato. La conferma la chiede chi ci chiama,
+   // una sola volta per tutte (vedi opz.senzaConferma).
+   if(p.mt5Ticket!=null){ attese.push(closeMt5PositionReal(p,reason,opz&&opz.senzaConferma?{senzaConferma:true}:undefined)); return; }
    closeTrade(reason,Number.isFinite(price)?price:p.entry,p);
  });
+ return Promise.all(attese).catch(()=>{});
 }
 // Bottone "Vai a grafico" nel Trade Journal: sposta la vista sulla candela in cui quel
 // trade è stato APERTO (usa lo stesso "match per timestamp reale" delle frecce, così
@@ -20021,12 +20127,44 @@ function fblContoDiOperazione(x){
  if(x.account==='capital'||x.conto==='capital')return 'capital';
  return null;
 }
+// IL CONTO CHE VA CON QUESTO ASSET.
+//
+// RICHIESTO dal proprietario: «se clicchiamo un asset appartenente al mondo forex, indici,
+// azioni mi si ricollega in automatico al conto mt5, mentre se passo a una criptovaluta mi fa il
+// passaggio automatico al conto kraken; e' importante, mi raccomando, questo deve avvenire pure
+// con i pulsanti vai al grafico delle posizioni aperte».
+//
+// La domanda e' diversa da quella di fblContoDiOperazione, che guarda i campi di una POSIZIONE
+// (su che conto e' stata aperta). Qui si guarda l'ASSET, e la risposta e' quella del mercato: le
+// cripto si operano su Kraken, tutto il resto su MT5. L'oro e' una materia prima ma si opera su
+// MT5 come il forex - e' lo stesso criterio che fblFamigliaAsset usa per le strategie.
+// Un tipo che non si riconosce risponde null: meglio non cambiare niente che cambiare a caso.
+function fblContoDiAsset(asset){
+ if(!asset)return null;
+ let tipo=''; try{ tipo=fblTipoAsset(asset); }catch(e){}
+ if(tipo==='cripto')return 'kraken';
+ if(tipo==='forex'||tipo==='indice'||tipo==='azione'||tipo==='materia')return 'mt5';
+ return null;
+}
+// Cambia conto in base all'asset, se serve. Restituisce true se il conto e' stato cambiato.
+async function fblContoPerAsset(asset){
+ // In Storico non c'e' nessun conto da seguire: i conti sono una cosa del Live.
+ try{ if(!liveModeActive)return false; }catch(e){ return false; }
+ const c=fblContoDiAsset(asset);
+ if(!c)return false;
+ try{ if(fblContoVista===c)return false; }catch(e){}
+ try{ await fblContoScegli(c); }catch(e){}
+ try{ return fblContoVista===c; }catch(e){ return false; }
+}
 // Porta l\'appp sul conto di quell'operazione, se serve. Non blocca il salto a grafico se il conto
 // non si riesce a cambiare (es. Kraken non collegato): fblContoScegli lo dice gia' da solo nella
 // barra di stato, e vedere il grafico resta meglio che non vedere niente.
 async function fblVaiAlContoDi(x){
  const c=fblContoDiOperazione(x);
- if(!c)return false;
+ // Se dai campi della posizione non si capisce su che conto sta (capita per le simulate, che non
+ // portano ne' ticket MT5 ne' riferimenti Kraken), si ripiega sul tipo dell'ASSET: era la
+ // richiesta esplicita, «questo deve avvenire pure con i pulsanti vai al grafico».
+ if(!c)return await fblContoPerAsset(x&&x.asset);
  try{ if(fblContoVista===c&&liveModeActive)return false; }catch(e){}
  try{ await fblContoScegli(c); }catch(e){}
  try{ return fblContoVista===c; }catch(e){ return false; }
@@ -21036,7 +21174,7 @@ $('marketChart')?.addEventListener('change',()=>{
  $('market').dispatchEvent(new Event('change'));
  $('marketChart').blur();
 });
-$('market')?.addEventListener('change',()=>{
+$('market')?.addEventListener('change',async()=>{
  const v=$('market').value;
  syncMarketChartSelect();
  if(v==='capital_search'){ handleCapitalManualAssetSearch(); return; }
@@ -21055,6 +21193,15 @@ $('market')?.addEventListener('change',()=>{
  // (rettangolo, frecce, riquadro durata/lottaggio) — vedi clearClosedTradeHighlight().
  clearClosedTradeHighlight();
  if(!v || v==='custom') return;
+ // IL CONTO SEGUE L'ASSET, e si cambia PRIMA di caricare lo storico. Richiesto: cripto -> Kraken,
+ // forex/indici/azioni -> MT5. L'ordine conta: cambiare conto ricarica il grafico, quindi farlo
+ // dopo vorrebbe dire caricare l'asset due volte e, per un istante, vedere le candele della fonte
+ // sbagliata - e' lo stesso motivo per cui jumpToPositionOnChart sceglie il conto per primo.
+ try{ await fblContoPerAsset(v); }catch(e){}
+ // IL GRAFICO SI COPRE FINCHE' I DATI NON SONO QUELLI DI QUESTO ASSET. Senza, per qualche secondo
+ // si legge il nome NUOVO sopra le candele VECCHIE: non e' un ritardo, e' una cosa falsa scritta
+ // a schermo, e in quei secondi si puo' decidere qualcosa guardandola.
+ try{ fblCaricamentoMostra(v,0); }catch(e){}
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
  // ORDINE RICHIESTO ESPLICITAMENTE: prima si ferma TUTTO l'aggiornamento del grafico (timer da
@@ -21064,11 +21211,23 @@ $('market')?.addEventListener('change',()=>{
  // in cui il timer applicava all'asset NUOVO il prezzo del VECCHIO (vedi chartFeedSuspended).
  if(liveModeActive){
    suspendChartFeed('cambio asset -> '+v);
-   Promise.resolve(loadLiveHistoryFromCapital(v)).catch(e=>{
+   Promise.resolve(loadLiveHistoryFromCapital(v)).then(()=>{
+     // Storico arrivato e candele ricostruite: due passi su tre. Il terzo (il prezzo dal vivo) lo
+     // chiude resumeChartFeed, che e' il momento in cui il grafico torna davvero in diretta.
+     try{ fblCaricamentoMostra(v,2); }catch(e){}
+   }).catch(e=>{
      console.log('[ChartFeed] caricamento storico fallito al cambio asset:',e);
-   }).finally(resumeChartFeed);
+     // Se e' fallito, il riquadro non deve restare li' a girare per sempre: si toglie e si dice.
+     try{ fblCaricamentoFine(); }catch(e2){}
+     try{ $('status').textContent='Non sono riuscito a caricare lo storico di '+v+'.'; }catch(e2){}
+   }).finally(()=>{
+     resumeChartFeed();
+     try{ fblCaricamentoFine(); }catch(e){}
+   });
  }
- else autoLoadAssetLibrary(v);
+ else Promise.resolve(autoLoadAssetLibrary(v)).catch(()=>{}).finally(()=>{
+   try{ fblCaricamentoFine(); }catch(e){}
+ });
 });
 $('assetFavToggleBtn')?.addEventListener('click',toggleCurrentAssetWatchlist);
 $('watchlistModalCloseBtn')?.addEventListener('click',closeWatchlistModal);
@@ -21156,22 +21315,39 @@ function computeBreakevenSl(entry,side,spread){
 // BE su una posizione tracciata in positions[] (simulata, o reale aperta/mostrata come riga
 // standard): aggiorna subito il campo SL locale e, se reale, la specchia sul conto MT5 —
 // stesso identico meccanismo già usato per un trascinamento manuale della linea SL.
+// Restituisce true se lo stop e' stato spostato, false se no: fblGruppoPareggio conta su
+// questo per dire quante ne ha spostate DAVVERO.
 function applyBreakevenToPosition(pos){
- if(!pos)return;
- // Pareggio PIU' UN MARGINE pari allo spread: vedi la nota lunga su mt5PrezzoPareggio. Fino al
- // 21 ottobre 2026 qui andava il pareggio ESATTO, e si e' visto cosa comporta: due SELL EURCHF
- // aperte a 0,92828 avevano lo stop a 0,92827 - un decimo di pip - e il cambio giornata se le e'
- // prese. Lo stop di una vendita si esegue sull'ask: al pareggio esatto sta dentro la forbice.
+ if(!pos)return false;
+ // IL PAREGGIO E' ZERO (vedi la nota lunga su mt5PrezzoPareggio): profitto netto 0,00, commissioni
+ // e swap compresi. Se viene colpito, il risultato e' zero - non "quasi".
  const beSl=mt5PrezzoPareggio(pos);
- if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
+ if(!Number.isFinite(beSl)){ $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.'; return false; }
+ // ...MA NON SI PIAZZA SE CADREBBE DENTRO LA FORBICE. Uno stop piu' vicino al prezzo di quanto sia
+ // larga la forbice fra compra e vendi viene preso al primo allargamento, qualunque cosa faccia il
+ // mercato: e' successo il 20 ottobre a due SELL EURCHF con lo stop a un decimo di pip
+ // dall'entrata, portate li' proprio dal pareggio. Non si sposta e si dice perche': cosi' lo stop
+ // di prima - che e' piu' lontano - resta a fare il suo lavoro.
+ const spazio=fblPareggioTroppoVicino(pos,beSl);
+ if(spazio.vicino){
+  const pip=(()=>{ try{ return pipSizeForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ return 0; } })();
+  const inPip=(n)=>(pip>0?(Math.round(n/pip*10)/10+' pip'):fmtPrice(n));
+  pos.bePareggioRifiutatoIl=Date.now();
+  $('status').textContent='⚖️ Pareggio NON spostato: cadrebbe a '+inPip(spazio.distanza)
+   +' dal prezzo, dentro la forbice del cambio giornata (~'+inPip(spazio.forbice)+'). '
+   +'Uno stop li\' verrebbe preso al primo allargamento anche senza che il mercato si muova: '
+   +'meglio lasciare quello che c\'e\' e riprovare quando il prezzo si e\' allontanato.';
+  return false;
+ }
  pos.sl=beSl; pos.slAt=Date.now();   // pareggio: da adesso lo stop e' qui, non da prima
  pos.beMarkerSl=beSl; // ricordato per il Trade Journal: se scatta ancora qui, il risultato è "BE" e non un generico "SL"
  if(active===pos){ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }
  draw();update();
  $('status').textContent=pos.mt5Ticket!=null
-   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: pareggio piu' un margine pari allo spread, commissioni e swap compresi) — sincronizzo sul conto MT5…`
+   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap) — sincronizzo sul conto MT5…`
    :`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}).`;
  if(pos.mt5Ticket!=null)syncMt5PositionLevels(pos);
+ return true;
 }
 // BE da bottone "BE" nella tabella dedicata "🖥️ Posizioni MT5": qui il ticket può NON essere
 // tracciato in positions[] (posizione aperta fuori dall\'app), quindi si parla direttamente col
@@ -21179,8 +21355,17 @@ function applyBreakevenToPosition(pos){
 async function applyBreakevenToMt5TicketDirect(ticket){
  const live=mt5RealPositions.find(p=>String(p.ticket)===String(ticket));
  if(!live)return;
- const beSl=mt5PrezzoPareggio({entry:Number(live.price_open),side:live.side,mt5Ticket:live.ticket});
+ const finta={asset:live.symbol,entry:Number(live.price_open),side:live.side,mt5Ticket:live.ticket};
+ const beSl=mt5PrezzoPareggio(finta);
  if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
+ // Stesso rifiuto del pulsante nella tabella delle posizioni: uno stop dentro la forbice e'
+ // uno stop regalato. Qui il prezzo di chiusura si legge dal preventivo vero: un acquisto si
+ // chiude sul bid, una vendita sull'ask.
+ const oraQui=Number(live.side==='BUY'?live.bid:live.ask);
+ const spazio=fblPareggioTroppoVicino(finta,beSl,oraQui);
+ if(spazio.vicino)return $('status').textContent='⚖️ Pareggio NON spostato su '+live.symbol+' (ticket '+live.ticket+'): '
+   +'cadrebbe dentro la forbice fra compra e vendi, e verrebbe preso al primo allargamento. '
+   +"Lo stop attuale resta dove sta: riprova quando il prezzo si è allontanato.";
  if(!await appConfirm(`Spostare DAVVERO lo Stop Loss di ${live.side} ${live.symbol} (ticket ${live.ticket}) a pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap) sul conto MT5 collegato?`))return;
  $('status').textContent=`Spostamento a pareggio in corso sul conto MT5 (ticket ${live.ticket})…`;
  const result=await fetchMt5WithTimeout('/order/modify',{
@@ -21698,12 +21883,33 @@ $('close').onclick=async()=>{
  $('status').textContent=`Trade chiuso al prezzo ${price} • risultato ${currentPL>=0?'+':''}${euro(currentPL)}.`;
  draw();update();
 };
-$('closeAll').onclick=()=>{
+$('closeAll').onclick=async()=>{
  if(!positions.length)return $('status').textContent='Nessuna posizione aperta.';
  if(blockedByPropFirmNews())return; // STEP 2
- const hasReal=positions.some(p=>p.mt5Ticket!=null);
- closeAllPositions('MANUAL');
- $('status').textContent=hasReal?'Posizioni simulate chiuse. Per quelle REALI su MT5, conferma la chiusura nel popup comparso.':'Tutte le posizioni sono state chiuse.';
+ // UNA CONFERMA SOLA, come per le operazioni a blocco. Prima questo pulsante non chiedeva niente
+ // e si appoggiava alle conferme singole delle posizioni reali: con cinque posizioni MT5 erano
+ // cinque popup in fila, e il messaggio di stato lo diceva pure («conferma la chiusura nel popup
+ // comparso»). Richiesto dal proprietario: «se clicca chiudi x posizioni gli viene fuori soltanto
+ // un messaggio di conferma per la chiusura di tutte».
+ // L'elenco e' lo stesso che chiudera' closeAllPositions: solo l'asset a grafico, perche' per gli
+ // altri non c'e' un prezzo valido adesso. Dirlo nella domanda evita la sorpresa di vederne
+ // restare aperte alcune.
+ const lista=positions.filter(belongsToCurrentAsset);
+ if(!lista.length)return $('status').textContent='Nessuna posizione aperta su '+(currentAssetKey||'questo asset')+'.';
+ const altre=positions.length-lista.length;
+ const descr='Chiudi tutte le posizioni su '+(currentAssetKey||'questo asset')
+   +(altre?(' (le '+altre+' di altri asset restano aperte: si chiudono dal loro grafico)'):'');
+ const conferma=await fblConfermaChiusuraLista(lista,descr,'⚡ Chiudi tutte le posizioni');
+ if(!conferma.ok)return;
+ // Si ASPETTA che le chiusure reali siano finite: altrimenti questo messaggio verrebbe scritto
+ // subito e poi sovrascritto da quello dell'ultima posizione chiusa.
+ await closeAllPositions('MANUAL',{senzaConferma:true});
+ const esito=(conferma.ignoti<lista.length)
+   ? (' · risultato '+((conferma.somma>=0?'+':'')+euro(conferma.somma))
+      +(conferma.reali?' (indicativo: sulle reali il prezzo finale lo fa il broker)':''))
+   : '';
+ $('status').textContent='⚡ Chiuse '+lista.length+(lista.length===1?' posizione':' posizioni')+' su '+(currentAssetKey||'')+esito+'.'
+   +(altre?(' Restano aperte le '+altre+' di altri asset: si chiudono dal loro grafico.'):'');
  draw();update();
 };
 // Chiudi/Modifica SL-TP dalla tabella dedicata "🖥️ Posizioni MT5": parlano DAVVERO col bridge,
@@ -21995,8 +22201,9 @@ function replayAnimTick(){
    // forward(true) = SILENZIOSO: valuta tutto (SL/TP, ordini pendenti) ma non ridisegna. Il
    // disegno si fa una volta sola, in fondo. Prima ogni candela completata si portava dietro un
    // draw() e un update() interi, ed e' da li' che venivano gli scatti ai moltiplicatori alti.
-   // La candela e' completata: il buffer delta della formazione finita va perso
-   // (la nuova formazione avra' il suo buffer).
+   // La candela e' completata: il footprint accumulato si DEPOSITA (non si butta piu',
+   // vedi replayFinalizzaFootprint), poi il buffer della formazione finita si azzera.
+   try{ replayFinalizzaFootprint(replayForm); }catch(e){}
    replayForm=null;
    forward(true);
    candeleCompletate++;
@@ -22010,6 +22217,9 @@ function replayAnimTick(){
  }
  if(replayForm&&replayForm.sub>=perBar){
   // Bordo: step esaurito proprio a soglia — completa comunque la candela e prosegue.
+  // Anche qui il footprint si deposita: e' la stessa candela completata, solo per un'altra
+  // strada, e dimenticarsene qui avrebbe lasciato il difetto vivo a moltiplicatori alti.
+  try{ replayFinalizzaFootprint(replayForm); }catch(e){}
   replayForm=null;
   forward(true);
   candeleCompletate++;
@@ -22083,6 +22293,47 @@ function replaySubAccumulo(f){
   const cell=f.fp.rows[k*step]||(f.fp.rows[k*step]=footprintNewCell());
   footprintAddToCell(cell,aggr>=0?1:-1,fetta,aggr,fetta);
  }
+}
+// IL FOOTPRINT DELLA CANDELA APPENA COMPLETATA NON SI BUTTA.
+//
+// SEGNALATO dal proprietario fra i «due pezzi grossi»: il footprint in replay. MISURATO il 21
+// ottobre: mentre la candela si forma il footprint cresce e si vede; nell'istante in cui la
+// candela diventa vera spariva. Non era un difetto di disegno - era scritto nel codice, e il
+// commento lo diceva pure: «la candela e' completata: il buffer delta della formazione finita va
+// perso». Il buffer veniva azzerato (replayForm=null) senza che nessuno lo depositasse da
+// nessuna parte, quindi la candela completata nasceva senza footprint.
+// (Nota per chi legge il diario: la voce del 19 ottobre dichiarava una funzione
+// `replayFinalizzaFootprint` che copiava il footprint in rows[idx].footprint. Quella funzione nel
+// file non c'era: il footprint delle candele completate in replay non e' mai stato salvato.)
+//
+// Qui si deposita nella STESSA memoria delle candele vere (footprintByBucket), con la stessa
+// griglia e le stesse celle: da quel momento la candela del replay ha un footprint
+// indistinguibile da quello di una candela dal vivo, e lo tiene.
+function replayFinalizzaFootprint(f){
+ try{
+  if(!f||!f.fp||!(f.fp.step>0)||!f.fp.rows)return false;
+  const r=rows[f.idx]; if(!r)return false;
+  const t=parseDateTime(r.date); if(!Number.isFinite(t))return false;
+  const chiavi=Object.keys(f.fp.rows);
+  if(!chiavi.length)return false;
+  const bucketStart=footprintBucketStart(t);
+  let bucket=footprintByBucket[bucketStart];
+  if(!bucket||bucket.step!==f.fp.step)bucket=footprintByBucket[bucketStart]={step:f.fp.step,rows:{}};
+  chiavi.forEach(k=>{
+   const src=f.fp.rows[k]; if(!src)return;
+   const dst=bucket.rows[k]||(bucket.rows[k]=footprintNewCell());
+   // Si SOMMA, non si sostituisce. In replay-Live i tick veri continuano ad arrivare e possono
+   // aver gia' scritto su questa candela: sovrascrivere butterebbe dati veri per metterci quelli
+   // ricostruiti, che e' esattamente il contrario di quello che serve.
+   dst.buy+=Number(src.buy)||0;
+   dst.sell+=Number(src.sell)||0;
+   if(dst.askVol===undefined){ dst.askVol=0; dst.bidVol=0; dst.trades=0; }
+   dst.askVol+=Number(src.askVol)||0;
+   dst.bidVol+=Number(src.bidVol)||0;
+   dst.trades+=Number(src.trades)||0;
+  });
+  return true;
+ }catch(e){ return false; }
 }
 // Disegno dell'anteprima di formazione: si disegna DOPO draw(), nello spazio vuoto oltre
 // l'ultima candela, senza toccare il rendering normale né i dati veri (solo estetica).
@@ -22977,16 +23228,17 @@ function fblMiniDashAggiorna(){
  const el=$('fblMiniDash'); if(!el||!el.isConnected)return;
  const testo=id=>{ const e=$(id); return e?(e.textContent||'').trim()||'—':'—'; };
  let pl=null; try{ pl=floatingPL(); }catch(e){}
- const aperte=(positions||[]).filter(p=>p&&!p.closed);
- let op='nessuna';
+ // NIENTE RIGA «OPERAZIONE». Tolta il 21 ottobre 2026 su richiesta del proprietario: «togliamo
+ // operazione, non serve visualizzarlo li', anche perche' ne abbiamo piu' di una, quindi ce ne
+ // visualizzerebbe solo una e non avrebbe senso». Era proprio cosi': mostrava la prima posizione
+ // (o l'ultima dell'asset a grafico) e accanto un «(+3)» - un dato che con quattro posizioni
+ // aperte non dice niente di utile e fa credere che quella sia LA posizione. Il P/L live qui
+ // sotto, invece, e' la somma di tutte: quello ha senso per tutte le posizioni insieme.
+ // Tolto anche il calcolo che la riempiva: lasciarlo sarebbe stato lavoro fatto per nessuno.
  let kr=false; try{ kr=fblContoEffettivo()==='kraken'; }catch(e){}
- if(kr){
-  const ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
-  pl=krakenConto&&Number.isFinite(Number(krakenConto.pnl_aperto))?Number(krakenConto.pnl_aperto):null;
-  if(ps.length){ const p=ps[0]; op=String(p.lato||'').toUpperCase()+' '+p.quantita+' '+p.simbolo+(ps.length>1?' (+'+(ps.length-1)+')':''); }
- }else if(aperte.length){ const p=aperte.find(x=>x.asset===currentAssetKey)||aperte[aperte.length-1]; op=(p.side||'')+' '+(p.lots!=null?p.lots+' ':'')+(p.asset||'')+(aperte.length>1?' (+'+(aperte.length-1)+')':''); }
+ if(kr)pl=krakenConto&&Number.isFinite(Number(krakenConto.pnl_aperto))?Number(krakenConto.pnl_aperto):null;
  const colore=Number.isFinite(pl)?(pl>=0?'#7fdc9a':'#ff8a8a'):'#cdd6e0';
- const righe=[['Operazione',escapeHtmlText(op)],['P/L live','<b style="color:'+colore+'">'+(Number.isFinite(pl)?((pl>=0?'+':'')+(kr?(pl.toFixed(2)+' $'):euro(pl))):'—')+'</b>'],
+ const righe=[['P/L live','<b style="color:'+colore+'">'+(Number.isFinite(pl)?((pl>=0?'+':'')+(kr?(pl.toFixed(2)+' $'):euro(pl))):'—')+'</b>'],
   ['Capitale',escapeHtmlText(testo('mCapital'))],['Win rate',escapeHtmlText(testo('mWR'))],['Loss rate',escapeHtmlText(testo('mLR'))],['Margine libero',escapeHtmlText(testo('mMargin'))]];
  const html=righe.map(([k,v])=>'<span style="color:#8b96a5">'+k+'</span><span style="text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+v+'</span>').join('');
  if(el.innerHTML!==html)el.innerHTML=html;
@@ -26899,6 +27151,20 @@ function tgMessaggioSegnali(ev,fonte){
      if(!m.ok)tgStato('Non sono riuscito a salvare: '+(m.errore||'errore sconosciuto'),'err');
      return;
    }
+   // LA CARTELLA DI BLUESTACKS, dal ponte. Il campo si riempie con quello che il ponte ha
+   // davvero in configurazione, non con quello che l'utente ha scritto: cosi' si vede se e'
+   // stata accettata. Se non si scrive mentre l'utente sta digitando (syntraCampiToccati).
+   if(m.tipo==='cartella_syntra'){
+     const el=$('syntraFolder');
+     if(el&&!syntraCampiToccati&&typeof m.cartella==='string')el.value=m.cartella;
+     if(m.ok===false)tgStato('Cartella BlueStacks non salvata: '+(m.errore||'errore sconosciuto'),'err');
+     else if(m.cartella!==undefined&&syntraCampiToccati){
+       syntraCampiToccati=false;
+       tgStato(m.cartella?('Cartella BlueStacks salvata sul ponte: '+m.cartella)
+                         :'Cartella BlueStacks tolta: il ponte la cerca da solo.');
+     }
+     return;
+   }
    if(m.tipo==='segnale'&&m.segnale){
      tgUltimoId=m.id||tgUltimoId;
      m.stato='nuovo';
@@ -26961,7 +27227,12 @@ function tgCollega(){
  catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
  tgWs=ws;
  tgStato('Collegamento al ponte…');
- ws.onopen=()=>{ tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'}); };
+ ws.onopen=()=>{
+  tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'});
+  // ...e si chiede anche dov'e' BlueStacks, cosi' il campo mostra quello che il ponte ha DAVVERO
+  // invece di restare vuoto e far credere che non sia configurata.
+  tgInvia({azione:'leggi_cartella_syntra'});
+ };
  ws.onmessage=ev=>tgMessaggioSegnali(ev,'principale');
  // Il ponte di Syntra e' un'altra cosa e sta altrove: si apre insieme, non al posto di questo.
  try{ tgSyntraCollega(); }catch(e){}
@@ -27284,6 +27555,30 @@ $('tgSalvaCredBtn')?.addEventListener('click',async ()=>{
  tgStato('Chiavi inviate al ponte: restano su questo dispositivo.');
 });
 $('tgDimenticaTelBtn')?.addEventListener('click',()=>{ tgEsciDaTelegram(); });
+// LA CARTELLA DI BLUESTACKS. Il percorso si INCOLLA: un browser non puo' leggerlo da una
+// finestra di scelta (showDirectoryPicker restituisce un riferimento, non "C:\..."), ed e' per
+// questo che il vecchio pulsante «Scegli cartella» non poteva funzionare ed e' stato tolto.
+// Si manda al ponte, che la scrive nella sua configurazione: l'app non tiene niente.
+$('syntraFolder')?.addEventListener('input',()=>{ syntraCampiToccati=true; });
+$('syntraFolder')?.addEventListener('change',async ()=>{
+ const el=$('syntraFolder'); if(!el)return;
+ syntraCampiToccati=true;
+ if(!tgAttivo()){ tgStato('Il ponte dei segnali e\' spento: accendilo per salvare la cartella.','err'); return; }
+ if(!(tgWs&&tgWs.readyState===1)){ await tgAssicuraPonte(); tgCollega(); }
+ for(let i=0;i<20&&!(tgWs&&tgWs.readyState===1);i++)await new Promise(r=>setTimeout(r,250));
+ if(!tgInvia({azione:'cartella_syntra',cartella:(el.value||'').trim()}))
+  tgStato('Ponte non raggiungibile: la cartella non e\' stata salvata.','err');
+});
+// «Ricontrolla»: si richiede al ponte quello che sa adesso (stato e cartella). Prima questo
+// pulsante non aveva nessun gestore: era un pulsante che non faceva niente.
+$('syntraRefreshBtn')?.addEventListener('click',async ()=>{
+ syntraCampiToccati=false;
+ if(!tgAttivo()){ tgStato('Il ponte dei segnali e\' spento.','err'); return; }
+ if(!(tgWs&&tgWs.readyState===1)){ await tgAssicuraPonte(); tgCollega(); }
+ for(let i=0;i<20&&!(tgWs&&tgWs.readyState===1);i++)await new Promise(r=>setTimeout(r,250));
+ if(!tgInvia({azione:'leggi_cartella_syntra'}))tgStato('Ponte non raggiungibile.','err');
+ else tgStato('Richiesto al ponte lo stato di Syntra.');
+});
 tgAggiornaInterruttore();
 window.addEventListener('resize',()=>{
  if(!tgPannelloAperto())return;
@@ -28159,6 +28454,9 @@ function tgStrategiaValuta(){
       // SOTTO l'entrata reale (segnalato: entrate 4172.72/4172.60, stop a 4172.23).
       const be=mt5PrezzoPareggio(pos);
       if(!tgStopMigliore(pos.side,pos.sl,be))return;
+      // Dentro la forbice non si mette: qui nessuno sta guardando, e al prossimo giro si
+      // riprova da solo quando il prezzo si e' allontanato.
+      if(fblPareggioTroppoVicino(pos,be).vicino)return;
       const c=Number(r.close);
       if(Number.isFinite(c)&&(pos.side==='BUY'?be>=c:be<=c))return;
       pos.sl=be; pos.slAt=Date.now();   // pareggio dalla strategia della sala
@@ -28170,7 +28468,7 @@ function tgStrategiaValuta(){
      cambiato=true;
      if(mosse){
       $('status').textContent='🛡️ Segnale di '+String(st.sala||'')+': percorso il '+st.avvicinamento.pct
-       +'% verso il primo target, stop portato a pareggio (con un margine pari allo spread) su '+mosse
+       +'% verso il primo target, stop portato a pareggio (profitto netto 0,00) su '+mosse
        +(mosse===1?' posizione':' posizioni')+'.';
       try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
       draw(); update();
@@ -28196,6 +28494,8 @@ function tgStrategiaValuta(){
     // significherebbe farla risultare chiusa a un livello piu' basso del target che ha raggiunto.
     if(Number.isFinite(pos.tp)&&Math.abs(pos.tp-livelloGrilletto)<1e-9)return;
     if(!tgStopMigliore(pos.side,pos.sl,nuovo))return;
+    // Se la regola porta lo stop AL PAREGGIO, vale il rifiuto di sempre: dentro la forbice no.
+    if(reg.dove==='entrata'&&fblPareggioTroppoVicino(pos,nuovo).vicino)return;
     // Ultima rete: uno stop non puo' finire oltre il prezzo di adesso, o chiuderebbe subito.
     const c=Number(r.close);
     if(Number.isFinite(c)&&(pos.side==='BUY'?nuovo>=c:nuovo<=c))return;
@@ -28208,7 +28508,7 @@ function tgStrategiaValuta(){
    cambiato=true;
    if(spostate){
     $('status').textContent='🛡️ Strategia del segnale di '+String(st.sala||'')+': raggiunto il take profit n. '
-     +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (con un margine pari allo spread)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
+     +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (profitto netto 0,00)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
     try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
     draw(); update();
    }
@@ -32163,8 +32463,12 @@ function fblSyncPrepara(store){
       if(Array.isArray(d))rc=d.filter(a=>a&&fblSyncValidoSimbolo(a.symbol)
         &&(!a.name||typeof a.name==='string')&&(!a.type||typeof a.type==='string')).slice(0,50); }catch(e){}
     let scala=null;
+    // Da 10, non da 70. Il tetto minimo e' sceso al 10% nella v2.0.10 («sul telefono il 70%
+    // dell'interfaccia e' troppo») ma QUESTO controllo era rimasto al vecchio minimo: una scala
+    // al 30% scelta sul telefono non veniva mai pubblicata, e se arrivava da un altro dispositivo
+    // veniva rifiutata. Il difetto non si vedeva: semplicemente la scala non seguiva l'account.
     try{ const v=Number(store.getItem(FBL_UI_SCALA_KEY));
-      if(Number.isFinite(v)&&v>=70&&v<=150)scala=Math.round(v/5)*5; }catch(e){}
+      if(Number.isFinite(v)&&v>=10&&v<=150)scala=Math.round(v/5)*5; }catch(e){}
     if(!wl.length&&!rc.length&&scala===null)return null;
     return {watchlist:wl, ricerche:rc, scala, aggiornato:Date.now()};
   }catch(e){ return null; }
@@ -32191,7 +32495,9 @@ function fblSyncRicevi(doc,store){
       rc=tmp;
     }
     let scala=null;
-    if(typeof doc.scala==='number'&&Number.isFinite(doc.scala)&&doc.scala>=70&&doc.scala<=150)scala=Math.round(doc.scala/5)*5;
+    // Da 10, come in fblSyncPrepara: con il vecchio minimo di 70 una scala al 30% arrivata da un
+    // altro dispositivo veniva scartata in silenzio.
+    if(typeof doc.scala==='number'&&Number.isFinite(doc.scala)&&doc.scala>=10&&doc.scala<=150)scala=Math.round(doc.scala/5)*5;
     if(wl===null&&rc===null&&scala===null)return false;
     if(wl!==null)store.setItem(FBL_SYNC_WATCHLIST_KEY,JSON.stringify(wl));
     if(rc!==null)store.setItem(FBL_SYNC_RICERCHE_KEY,JSON.stringify(rc));
@@ -33643,20 +33949,29 @@ function mt5AllineaApertura(p,rp){
 //
 // `opz.senzaMargine`: il pareggio nudo, per chi deve MOSTRARE il numero invece di piazzarci uno
 // stop sopra.
-function mt5PrezzoPareggio(pos,opz){
+// IL PAREGGIO E' ZERO. NON QUASI ZERO.
+//
+// SEGNALATO dal proprietario (21 ottobre 2026): «il programma sposta le posizioni a break-even,
+// ma perdono ugualmente meno 2 euro. Bisogna fare in modo che qualsiasi posizione spostata a
+// break-even venga accertato che sia effettivamente il risultato di 0 euro».
+//
+// ANDATA E RITORNO, e vale la pena scriverlo perche' non si rifaccia il giro. Poche ore prima, per
+// evitare che il cambio giornata prendesse lo stop (misurato: spread da 0,2 a 50 pip, tre SELL
+// chiuse), qui era stato aggiunto un margine pari allo spread. Cosi' lo stop sopravvive
+// all'allargamento - ma se viene colpito si perde circa uno spread. Il proprietario ha visto
+// esattamente quello: un «pareggio» che perde. E ha ragione: un pareggio che perde non e' un
+// pareggio, e un nome che mente e' peggio di una protezione in meno.
+//
+// Le due esigenze sono in conflitto solo finche' si cerca di risolverle con lo STESSO numero. La
+// soluzione non e' spostare il pareggio: e' NON METTERLO quando cadrebbe dentro la forbice. Il
+// prezzo resta quello esatto (profitto netto zero, commissioni e swap compresi); chi lo piazza
+// controlla prima che ci sia spazio - vedi fblPareggioTroppoVicino e applyBreakevenToPosition.
+function mt5PrezzoPareggio(pos){
  if(!pos||!Number.isFinite(Number(pos.entry)))return NaN;
  const entry=Number(pos.entry);
- const margine=()=>{
-  if(opz&&opz.senzaMargine)return 0;
-  let sp=0;
-  try{ sp=spreadCostForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ sp=0; }
-  return (Number.isFinite(sp)&&sp>0)?sp:0;
- };
- // Dalla parte da cui lo stop puo' essere preso: sotto per un acquisto, sopra per una vendita.
- const allarga=(p)=>{ const m=margine(); if(!m)return p; return pos.side==='BUY'?(p-m):(p+m); };
- if(pos.mt5Ticket==null)return allarga(entry);   // simulata: lo spread e' gia' dentro l'entrata
+ if(pos.mt5Ticket==null)return entry;   // simulata: lo spread e' gia' dentro l'entrata
  const rp=(mt5RealPositions||[]).find(x=>String(x.ticket)===String(pos.mt5Ticket));
- if(!rp)return allarga(entry);
+ if(!rp)return entry;
  const vp=Number(rp.valore_punto);
  const comm=Number(rp.commission), swap=Number(rp.swap);
  const costi=(Number.isFinite(comm)?2*comm:0)+(Number.isFinite(swap)?swap:0);   // negativo = costo
@@ -33665,9 +33980,6 @@ function mt5PrezzoPareggio(pos,opz){
   const dist=-costi/vp;                       // quanto deve muoversi il prezzo per ripagare i costi
   prezzo=pos.side==='BUY'?entry+dist:entry-dist;
  }
- // Il margine PRIMA dell'arrotondamento al passo dello strumento, cosi' il risultato resta un
- // prezzo valido per il broker.
- prezzo=allarga(prezzo);
  const pt=Number(rp.point);
  if(pt>0){
   const passi=prezzo/pt;
@@ -33675,6 +33987,34 @@ function mt5PrezzoPareggio(pos,opz){
   const dg=Number(rp.digits); if(Number.isFinite(dg))prezzo=Number(prezzo.toFixed(dg));
  }
  return prezzo;
+}
+// UNO STOP DENTRO LA FORBICE E' UNO STOP REGALATO.
+//
+// Restituisce {vicino, distanza, forbice}. `vicino` vuol dire: fra il prezzo di adesso e il
+// pareggio c'e' meno spazio della forbice fra compra e vendi - quindi quello stop verrebbe preso
+// al primo allargamento, qualunque cosa faccia il mercato. E' esattamente quello che e' successo
+// il 20 ottobre: due SELL EURCHF aperte a 0,92828 con lo stop a 0,92827 (UN DECIMO di pip),
+// portate li' dal pareggio, prese alle 00:00:42 quando lo spread si e' aperto a 50 pip.
+// La forbice di riferimento e' quella del ROLLOVER quando la si conosce (misurata, vedi
+// fblSpreadRolloverPips), perche' e' quella che conta per sopravvivere alla notte.
+function fblPareggioTroppoVicino(pos,prezzoBe,prezzoOra){
+ const fuori={vicino:false,distanza:null,forbice:null};
+ try{
+  if(!pos||!Number.isFinite(prezzoBe))return fuori;
+  // Il prezzo si puo' passare: nella tabella MT5 il preventivo vero (bid/ask) e' sotto mano ed e'
+  // piu' affidabile di quello a grafico.
+  const prezzo=Number.isFinite(Number(prezzoOra))?Number(prezzoOra)
+    :((typeof fblPrezzoChiusura==='function')?fblPrezzoChiusura(pos):null);
+  if(!(Number.isFinite(prezzo)&&prezzo>0))return fuori;   // non si sa: non si blocca niente
+  const asset=(pos&&pos.asset)||currentAssetKey;
+  let passo=0; try{ passo=pipSizeForAsset(asset); }catch(e){}
+  let forbice=0;
+  try{ forbice=(passo>0)?(fblSpreadRolloverPips(asset)*passo):spreadCostForAsset(asset); }catch(e){}
+  if(!(forbice>0))return fuori;
+  // Distanza dal lato da cui lo stop puo' essere preso.
+  const distanza=(pos.side==='BUY')?(prezzo-prezzoBe):(prezzoBe-prezzo);
+  return {vicino:distanza<forbice,distanza,forbice};
+ }catch(e){ return fuori; }
 }
 function saveMt5OpenAnchorsToStorage(){
  try{
@@ -35249,6 +35589,9 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // (es. rollover di candela) riporterebbe la vista all'ultima candela, buttando via il replay.
  if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
+ // PRIMO PASSO FATTO: lo storico e' arrivato. Da qui in poi `rows` appartiene a questo asset, ed
+ // e' il momento esatto in cui la percentuale puo' dire "un terzo" senza raccontare balle.
+ try{ if(typeof fblCaricamentoAsset!=='undefined'&&fblCaricamentoAsset)fblCaricamentoMostra(fblCaricamentoAsset,1); }catch(e){}
  rebuildRows();
  // RICHIESTO ESPLICITAMENTE: subito dopo aver ricostruito lo storico per l'asset a grafico,
  // prima ancora di ridisegnare, controlliamo se nel frattempo (app chiusa, disconnessione
@@ -37749,6 +38092,88 @@ let lastPrimaryEpicPriceAsset=null;
 let chartFeedSuspended=false, chartFeedSuspendReason='';
 // Spegne ogni sorgente che puo' toccare la candela, e svuota lo stato volatile del prezzo. Da
 // chiamare SINCRONAMENTE prima di qualunque await che porti a un cambio di asset.
+/* CARICAMENTO ASSET: INIZIO - blocco provato da laboratorio/app/caricamento_asset.test.mjs
+   ------------------------------------------------------------------------------------------
+   RICHIESTO dal proprietario (21 ottobre 2026): «non deve mai visualizzarsi il nome dell'asset se
+   prima ancora non è stato caricato il grafico; la rotellina continuerà a girare fin quando non è
+   avvenuta l'esatta sincronizzazione del grafico per quel asset e vengono caricati tutti i dati».
+   E prima ancora: l'indicatore deve mostrare la PERCENTUALE, e con il grafico staccato deve
+   comparire NELLA FINESTRA SEPARATA, non sulla pagina principale che non si sta guardando.
+
+   IL DIFETTO vero: cambiando asset il nome nuovo compare subito nel selettore, ma le candele sono
+   ancora quelle VECCHIE - si legge "EURUSD" sopra il grafico dell'oro. Non e' un ritardo: e' una
+   cosa falsa scritta a schermo, e per qualche secondo si puo' prendere una decisione guardandola.
+   La cura e' coprire il grafico finche' i dati non sono quelli giusti.
+
+   LA PERCENTUALE E' VERA. Niente barre inventate che corrono da sole (altrove in questo file c'e'
+   scritto, giustamente, "senza barre di progresso inventate"): la percentuale conta i PASSI
+   davvero completati del caricamento, e ogni passo dice cosa sta facendo. Se un passo si pianta,
+   la percentuale si pianta li' - ed e' un'informazione, non un difetto. */
+const FBL_CARICAMENTO_PASSI=['Scarico lo storico','Ricostruisco le candele','Aggancio il prezzo dal vivo'];
+let fblCaricamentoAsset=null, fblCaricamentoPasso=0;
+// Il documento in cui vive il grafico ADESSO: in modalita' PIP e' la finestra separata. Si guarda
+// dove sta #chartWrap, non si indovina.
+function fblCaricamentoDoc(){
+ try{ if(floatingDoc&&floatingDoc.getElementById('chartWrap'))return floatingDoc; }catch(e){}
+ return document;
+}
+function fblCaricamentoBox(crea){
+ const doc=fblCaricamentoDoc();
+ let el=doc.getElementById('fblCaricamentoAsset');
+ if(el||!crea)return el;
+ const dove=doc.getElementById('chartWrap')||doc.body;
+ if(!dove)return null;
+ el=doc.createElement('div');
+ el.id='fblCaricamentoAsset';
+ el.style.cssText='position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;'
+  +'align-items:center;justify-content:center;gap:10px;background:rgba(8,13,20,.93);'
+  +'backdrop-filter:blur(2px);font-family:Inter,system-ui,Arial,sans-serif;color:#e8edf3';
+ el.innerHTML='<div style="width:34px;height:34px;border:3px solid #24313f;border-top-color:#3ea6ff;'
+  +'border-radius:50%;animation:fblGira .9s linear infinite"></div>'
+  +'<div id="fblCaricamentoTitolo" style="font-size:14px;font-weight:700"></div>'
+  +'<div id="fblCaricamentoPasso" style="font-size:12px;color:#9fb0c0"></div>'
+  +'<div style="width:min(260px,60%);height:5px;background:#1a2430;border-radius:3px;overflow:hidden">'
+  +'<div id="fblCaricamentoBarra" style="height:100%;width:0;background:#3ea6ff;transition:width .2s"></div></div>';
+ // L'animazione va messa nel documento che ospita il riquadro: in PIP il foglio di stile della
+ // pagina principale non arriva.
+ if(!doc.getElementById('fblCaricamentoStile')){
+  const st=doc.createElement('style');
+  st.id='fblCaricamentoStile';
+  st.textContent='@keyframes fblGira{to{transform:rotate(360deg)}}';
+  (doc.head||doc.body).appendChild(st);
+ }
+ try{ if(getComputedStyle(dove).position==='static')dove.style.position='relative'; }catch(e){}
+ dove.appendChild(el);
+ return el;
+}
+function fblCaricamentoMostra(asset,passo){
+ fblCaricamentoAsset=String(asset||'');
+ fblCaricamentoPasso=Math.max(0,Math.min(FBL_CARICAMENTO_PASSI.length,Number(passo)||0));
+ const el=fblCaricamentoBox(true); if(!el)return;
+ const doc=el.ownerDocument;
+ const pct=Math.round(fblCaricamentoPasso/FBL_CARICAMENTO_PASSI.length*100);
+ const t=doc.getElementById('fblCaricamentoTitolo');
+ const p=doc.getElementById('fblCaricamentoPasso');
+ const b=doc.getElementById('fblCaricamentoBarra');
+ if(t)t.textContent='Carico '+fblCaricamentoAsset+'… '+pct+'%';
+ if(p)p.textContent=FBL_CARICAMENTO_PASSI[Math.min(fblCaricamentoPasso,FBL_CARICAMENTO_PASSI.length-1)]+'…';
+ if(b)b.style.width=pct+'%';
+ el.style.display='flex';
+}
+// Avanza di un passo. Si chiama quando un passo e' DAVVERO finito, non a tempo.
+function fblCaricamentoAvanza(){
+ if(fblCaricamentoAsset==null)return;
+ fblCaricamentoMostra(fblCaricamentoAsset,fblCaricamentoPasso+1);
+}
+function fblCaricamentoFine(){
+ fblCaricamentoAsset=null; fblCaricamentoPasso=0;
+ // Si toglie da ENTRAMBI i documenti: il grafico puo' essere stato staccato o riattaccato mentre
+ // caricava, e un riquadro rimasto nell'altra finestra coprirebbe il grafico per sempre.
+ [document,(typeof floatingDoc!=='undefined'&&floatingDoc)?floatingDoc:null].forEach(doc=>{
+  try{ const el=doc&&doc.getElementById('fblCaricamentoAsset'); if(el)el.remove(); }catch(e){}
+ });
+}
+/* CARICAMENTO ASSET: FINE */
 function suspendChartFeed(reason){
   chartFeedSuspended=true; chartFeedSuspendReason=reason||'';
   try{ stopLiveRefreshTimer(); }catch(e){}
@@ -40817,6 +41242,106 @@ function krakenImpostaOrarioManuale(p,testo){
  try{ draw(); }catch(e){}
  return {ok:true,ms};
 }
+// ===================== OPERAZIONI A BLOCCO SU KRAKEN =====================
+// RICHIESTO dal proprietario: «dobbiamo inserire il pulsante operazioni a blocco anche per le
+// posizioni kraken». C'era per le posizioni dell'app e per il Journal, non qui - e su Kraken le
+// posizioni di un segnale sono spesso tre o quattro insieme, cioe' proprio il caso in cui serve.
+// VALE LA STESSA REGOLA DELLE ALTRE: una conferma sola per tutte, mai una per posizione.
+function krakenPosizioniBlocco(){
+ try{ return ((krakenPosizioni&&krakenPosizioni.posizioni)||[]).filter(p=>p&&p.simbolo); }catch(e){ return []; }
+}
+async function krakenConfermaBlocco(ps,descr,okLabel,nota){
+ let somma=0, ignoti=0;
+ ps.forEach(p=>{ const v=Number(p.pnl); if(Number.isFinite(v))somma+=v; else ignoti++; });
+ const soldi=v=>(v>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
+ const righe=[descr+': '+ps.length+(ps.length===1?' posizione':' posizioni')+' su '+krakenNome()+'.'];
+ if(ignoti<ps.length)righe.push('Risultato di adesso: '+soldi(somma)+(ignoti?(' (di '+(ps.length-ignoti)+' su '+ps.length+')'):''));
+ if(nota)righe.push(nota);
+ if(krakenConto&&krakenConto.ambiente==='reale')
+  righe.push('Conto con SOLDI VERI: quello che succede qui e\' reale, non una simulazione.');
+ return await appConfirm(righe.join('\n\n'),
+   {title:'🐙 '+krakenNome()+' · operazioni a blocco',okLabel:(okLabel||'Procedi')+' '+ps.length,cancelLabel:'Annulla'});
+}
+async function krakenBloccoChiudi(quali,descr){
+ const ps=krakenPosizioniBlocco().filter(quali);
+ if(!ps.length){ $('status').textContent='🐙 Nessuna posizione da chiudere: '+descr+'.'; return; }
+ if(!await krakenConfermaBlocco(ps,descr,'Chiudi'))return;
+ let fatte=0, errori=[];
+ for(const p of ps){
+  try{
+   const r=await krakenBridge('/chiudi',{simbolo:p.simbolo});
+   if(r&&r.ok)fatte++; else errori.push(p.simbolo+': '+((r&&r.message)||'non riuscita'));
+  }catch(e){ errori.push(p.simbolo+': '+String(e&&e.message||e)); }
+ }
+ $('status').textContent='🐙 Chiuse '+fatte+(fatte===1?' posizione':' posizioni')
+   +(errori.length?(' · non riuscite: '+errori.join(' · ')):'')+'.';
+ krakenPosizioniAt=0;
+ try{ await krakenLeggiPosizioni(); krakenAggiornaConto(); krakenLeggiStorico(); }catch(e){}
+ krakenPosPannello(); try{ draw(); }catch(e){}
+}
+async function krakenBloccoPareggio(quali,descr){
+ const ps=krakenPosizioniBlocco().filter(quali).filter(p=>Number.isFinite(Number(p.entrata)));
+ if(!ps.length){ $('status').textContent='🐙 Nessuna posizione da portare a pareggio: '+descr+'.'; return; }
+ // DIFFERENZA DA MT5, E VA DETTA: qui il pareggio e' il prezzo di entrata e basta. La
+ // commissione dello scambio non arriva all'app posizione per posizione (il ponte da' solo il
+ // totale del conto), quindi metterla nel prezzo vorrebbe dire inventarsi un numero. Meglio
+ // scriverlo nella conferma che far credere uno zero che non c'e'.
+ if(!await krakenConfermaBlocco(ps,descr+" · stop a pareggio","Sposta","Lo stop va sul PREZZO DI ENTRATA. La commissione dello scambio non è compresa: Kraken non la comunica per singola posizione, e l'app non inventa numeri."))return;
+ let fatte=0, errori=[];
+ for(const p of ps){
+  try{
+   const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:Number(p.entrata)});
+   if(r&&r.ok)fatte++; else errori.push(p.simbolo+': '+((r&&r.message)||'non riuscita'));
+  }catch(e){ errori.push(p.simbolo+': '+String(e&&e.message||e)); }
+ }
+ $('status').textContent='🐙 Stop portato a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')
+   +(errori.length?(' · non riuscite: '+errori.join(' · ')):'')+'.';
+ krakenPosizioniAt=0;
+ try{ await krakenLeggiPosizioni(); }catch(e){}
+ krakenPosPannello(); try{ draw(); }catch(e){}
+}
+// Il menu, costruito sulle posizioni che ci sono davvero adesso: non si offre «chiudi le SHORT»
+// se short non ce ne sono.
+function krakenBloccoMenu(ps){
+ const d=document.createElement('details');
+ d.className='fblBlocco'; d.id='krakenBloccoMenu';
+ d.style.cssText='margin:4px 0 6px';
+ const s=document.createElement('summary');
+ s.className='miniBtn'; s.style.cssText='display:inline-block;cursor:pointer';
+ s.textContent='⚡ Operazioni a blocco';
+ s.title='Agisce su piu\' posizioni insieme, con una sola conferma';
+ d.appendChild(s);
+ const m=document.createElement('div');
+ m.style.cssText='position:absolute;z-index:50;background:#0d141d;border:1px solid #26323f;'
+  +'border-radius:8px;padding:6px;min-width:230px;box-shadow:0 10px 30px rgba(0,0,0,.5)';
+ const voce=(testo,quali,descr,cosa)=>{
+  const b=document.createElement('button');
+  b.type='button'; b.className='drawTemplateMenuItem';
+  b.style.cssText='display:block;width:100%;text-align:left;padding:5px 8px';
+  b.textContent=testo;
+  b.addEventListener('click',async()=>{ d.open=false; await (cosa==='be'?krakenBloccoPareggio:krakenBloccoChiudi)(quali,descr); });
+  m.appendChild(b);
+ };
+ const titolo=(t)=>{ const h=document.createElement('div'); h.className='hint';
+  h.style.cssText='padding:4px 8px 2px;font-weight:700;letter-spacing:.3px'; h.textContent=t; m.appendChild(h); };
+ titolo('Chiudi');
+ voce('Chiudi tutte',()=>true,'Tutte le posizioni');
+ voce('Chiudi quelle in guadagno',p=>Number(p.pnl)>0,'Le posizioni in guadagno');
+ voce('Chiudi quelle in perdita',p=>Number(p.pnl)<0,'Le posizioni in perdita');
+ const lati=[...new Set(ps.map(p=>String(p.lato||'').toUpperCase()).filter(Boolean))];
+ if(lati.length>1){
+  lati.forEach(l=>voce('Chiudi tutte le '+l,p=>String(p.lato||'').toUpperCase()===l,'Le posizioni '+l));
+ }
+ const simboli=[...new Set(ps.map(p=>String(p.simbolo||'')).filter(Boolean))].sort();
+ if(simboli.length>1){
+  titolo('Un contratto alla volta');
+  simboli.forEach(sim=>voce('Chiudi '+sim,p=>String(p.simbolo||'')===sim,'Le posizioni su '+sim));
+ }
+ titolo('Stop');
+ voce('Stop a pareggio su tutte',()=>true,'Tutte le posizioni','be');
+ d.appendChild(m);
+ return d;
+}
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
@@ -40978,7 +41503,8 @@ function krakenPosPannello(){
  });
  tab.appendChild(tb);
  const sc=document.createElement('div'); sc.className='tableScroll'; sc.appendChild(tab);
- box.textContent=''; if(ps.length){ box.appendChild(t); box.appendChild(sc); }
+ box.textContent='';
+ if(ps.length){ box.appendChild(t); box.appendChild(krakenBloccoMenu(ps)); box.appendChild(sc); }
  if(pend.length){
   const t2=document.createElement('div'); t2.className='label'; t2.style.margin='8px 0 4px'; t2.textContent='⏱️ Ordini pendenti '+krakenNome()+' (li tiene il programma sul PC)';
   const tab2=document.createElement('table'); tab2.className='posTable';
@@ -45111,6 +45637,28 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (ev) => {
     if (!ev.data || ev.data.tipo !== 'versione-nuova') return;
     if (document.getElementById('fblVersioneNuova')) return;   // una volta sola
+    // SE L'AGGIORNAMENTO L'HAI CHIESTO TU, NON TI SI CHIEDE UNA SECONDA VOLTA.
+    //
+    // SEGNALATO (21 ottobre 2026): «ho premuto il tasto aggiorna, sono stato reindirizzato alla
+    // pagina per scaricare il pacchetto, eseguito il download, sono tornato all'applicazione,
+    // l'ho riaperta, ma il tasto aggiorna era sempre presente. Ho dovuto premere il pulsante in
+    // basso "aggiorna pagina" e solo allora l'ha riconosciuta come aggiornata».
+    // Perche' succedeva: installato il pacchetto nuovo, la pagina continua a essere servita dal
+    // service worker VECCHIO finche' non si ricarica. Il pannello Versione legge il numero da
+    // quella copia, quindi vede ancora la versione vecchia e tiene acceso il pulsante. Il
+    // "popup in basso" era l'unico modo di uscirne, e andava cercato.
+    // Ora: se l'utente aveva premuto "Aggiorna" (fbl_aggiornamento_atteso), appena la versione
+    // nuova e' pronta si ricarica DA SOLI. In tutti gli altri casi resta la striscia da premere:
+    // ricaricare di nascosto mentre si guarda una posizione aperta sarebbe peggio del problema.
+    let chiesto = 0;
+    try { chiesto = Number(localStorage.getItem('fbl_aggiornamento_atteso')) || 0; } catch (e) {}
+    // Sette giorni: oltre, quell'intenzione non e' piu' di questo aggiornamento.
+    if (chiesto && (Date.now() - chiesto) < 7 * 86400000) {
+      try { localStorage.removeItem('fbl_aggiornamento_atteso'); } catch (e) {}
+      try { document.getElementById('status').textContent = '⬇️ Versione nuova pronta: ricarico l\'app…'; } catch (e) {}
+      setTimeout(() => { try { location.reload(); } catch (e) {} }, 600);
+      return;
+    }
     const b = document.createElement('div');
     b.id = 'fblVersioneNuova';
     b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:100000;'
@@ -47542,6 +48090,11 @@ function fblMostraPulsanteAggiorna(release, tagRemoto){
 }
 async function fblApplicaAggiornamento(release, tagRemoto, btn){
   if(!btn)return;
+  // SI RICORDA CHE L'AGGIORNAMENTO L'HAI CHIESTO TU. Serve dopo, quando il pacchetto nuovo e'
+  // installato e il service worker lo segnala: a quel punto l'app ricarica da sola invece di
+  // lasciare acceso il pulsante «Aggiorna» finche' non si trova la striscia in basso.
+  // Vedi il gestore del messaggio 'versione-nuova'.
+  try{ localStorage.setItem('fbl_aggiornamento_atteso',String(Date.now())); }catch(e){}
   btn.disabled=true; btn.textContent='Aggiornamento in corso...';
   const p=await fblScaricaEAggiorna(release);
   if(p.ok){

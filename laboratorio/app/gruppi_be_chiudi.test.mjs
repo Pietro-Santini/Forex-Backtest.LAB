@@ -72,18 +72,17 @@ test('BE porta a pareggio lo stop di TUTTE le posizioni del gruppo', async () =>
               marcate: positions.filter(x => x.beMarkerSl != null).length};
     }, PREPARA.toString());
     assert.deepEqual(r.slPrima, [99, 99, 99, 99, 99]);
-    // DAL 21 OTTOBRE 2026 il pareggio lascia un margine pari allo spread, dalla parte da cui lo
-    // stop puo' essere preso (per un acquisto: sotto l'entrata). Prima questo test pretendeva lo
-    // stop ESATTAMENTE sull'entrata, ed e' proprio cio' che non si fa piu': uno stop al pareggio
-    // esatto sta DENTRO la forbice e al primo allargamento viene preso. Il 21 ottobre due SELL
-    // EURCHF con lo stop a un decimo di pip dall'entrata sono state chiuse cosi', al rollover.
-    // Quello che questo test misura NON cambia: ogni stop finisce sul pareggio della SUA
-    // posizione, non su un unico valore per tutto il gruppo.
-    assert.ok(r.spread > 0, 'il banco ha senso solo se lo strumento ha uno spread: ' + r.spread);
-    assert.deepEqual(r.slDopo, r.entrate.map(e => e - r.spread),
-      'ogni stop deve finire sul pareggio della SUA posizione, con il margine dello spread');
-    assert.ok(r.slDopo.every((v, i) => v !== r.entrate[i]),
-      'e NON esattamente sull\'entrata: la' + ' starebbe dentro lo spread');
+    // IL PAREGGIO E' ZERO, E QUESTO NUMERO E' ANDATO E TORNATO IN GIORNATA. Vale la pena dirlo
+    // perche' non si rifaccia il giro: il 21 ottobre, per difendere lo stop dal cambio giornata
+    // (misurato: spread da 0,2 a 50 pip), al pareggio era stato aggiunto un margine pari allo
+    // spread. Il proprietario ha visto il risultato e l'ha detto in una riga: «sposta le
+    // posizioni a break-even, ma perdono ugualmente meno 2 euro». Un pareggio che perde non e' un
+    // pareggio, e un nome che mente e' peggio di una protezione in meno.
+    // La difesa dal rollover NON e' sparita: si e' spostata dove non costa niente. Il prezzo resta
+    // quello esatto, e chi lo piazza si RIFIUTA di metterlo quando cadrebbe dentro la forbice
+    // (vedi fblPareggioTroppoVicino): meglio tenere lo stop di prima, che e' piu' lontano.
+    assert.deepEqual(r.slDopo, r.entrate,
+      'ogni stop deve finire sul pareggio della SUA posizione: zero, non quasi zero');
     assert.equal(r.marcate, 5, 'il Journal deve poter riconoscere queste chiusure come «BE», non come un generico stop');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }

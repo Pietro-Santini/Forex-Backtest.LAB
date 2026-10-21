@@ -1880,3 +1880,306 @@ avviso), `spread_uscita_vendite.test.mjs` (4). Collaudo locale 5/5 verdi, 0 fall
 ### Versioni
 - sw.js: forex-backtest-lab-v2.0.12
 - installer.iss: 2.0.12
+
+## 21 ottobre 2026 - v2.0.13: capitolo 2 chiuso, e tre cose che il proprietario ha segnalato mentre si lavorava
+
+### 1. Il collaudo interrompeva il collegamento MT5 del proprietario ⭐
+
+**Segnalato:** «mentre modifichi non mi chiudere e aprire il terminale MT5, perché quasi per ogni
+modifica che fai mi interrompi il processo di collegamento con MT5, e quindi devo stare sempre a
+installare i pacchetti aggiuntivi per far ripartire l'applicazione».
+
+**La causa, trovata guardando il banco e non il codice dell'app.** `aiuti.mjs` bloccava tutte le
+richieste **HTTP** (`pagina.route`) tranne `file://` — ma **non i WebSocket**: Playwright li
+instrada a parte. E l'app, appena parte, ne apre verso il feed MT5 (porta 8001) e verso il ponte
+dei segnali (8769), che sul computer del proprietario sono **vivi e attaccati al suo terminale**.
+Un collaudo intero apre la pagina centinaia di volte: centinaia di connessioni e disconnessioni
+sul ponte che in quel momento gli stava eseguendo gli ordini.
+
+**La correzione.** Il `WebSocket` viene sostituito con uno finto *prima* che la pagina parta
+(`addInitScript`): non si connette mai, e l'app non se ne accorge perché il caso «stream che non
+si aggancia» lo gestisce già. Verificato dal vivo: nessuna connessione, zero errori di pagina.
+LA REGOLA: un collaudo non deve poter toccare niente fuori da sé. Bloccare l'HTTP non basta, se
+restano aperti altri canali.
+
+### 2. Il pulsante «Aggiorna» che non si spegneva
+
+**Segnalato:** «ho premuto aggiorna, mi ha reindirizzato alla pagina per scaricare il pacchetto,
+eseguito il download, sono tornato all'applicazione, l'ho riaperta, ma il tasto aggiorna era
+sempre presente. Ho dovuto premere il pulsante in basso "aggiorna pagina" e solo allora l'ha
+riconosciuta come aggiornata».
+
+**La causa.** Installato il pacchetto nuovo, la pagina continua a essere servita dal service
+worker **vecchio** finché non si ricarica: il pannello Versione legge il numero da quella copia,
+quindi vede ancora la versione vecchia e tiene acceso il pulsante. Quella striscia in basso era
+l'unica via d'uscita, e andava trovata.
+
+**La correzione.** L'app si ricorda che l'aggiornamento **l'hai chiesto tu**
+(`fbl_aggiornamento_atteso`): quando il service worker segnala che la versione nuova è pronta,
+ricarica da sola. Negli altri casi resta la striscia da premere — ricaricare di nascosto mentre si
+guarda una posizione aperta sarebbe peggio del problema che risolve.
+
+### 3. «Spariscono pure gli asset watchlist» dopo l'aggiornamento
+
+**La diagnosi, che cambia la natura del problema.** Non è una cancellazione. Il browser tiene un
+magazzino **separato per ogni indirizzo**, e questa app si apre da **tre porte d'ingresso**: il
+sito (`github.io`), il servizio locale che la serve su `127.0.0.1:8000` (vedi `bridge.py`), e
+l'APK (`localhost`). Per il browser sono **tre applicazioni diverse**, ognuna con la sua
+watchlist, le sue impostazioni e il suo collegamento alla cartella delle credenziali. Chi cambia
+porta d'ingresso trova tutto vuoto — ma non ha perso niente.
+
+**La cura, che funziona comunque.** Esteso il meccanismo di sincronizzazione che già esisteva
+(`GRAFICO_LS`) invece di costruirne un secondo: ora seguono l'account anche le impostazioni del
+**footprint** (stile e righe), i **profili degli indicatori**, i **decimali per asset**, le
+**strategie delle sale**, **nomi e target delle sale** e i **periodi della dashboard**. Era anche
+una richiesta esplicita: «con i dispositivi mobili devono essere ricordate tutte le configurazioni
+di style, impostazioni footprint heatmap eccetera».
+
+**L'altra metà della regola, ed è quella che si promette all'utente.** Credenziali, chiave del
+ponte, numero di telefono, chiave e indirizzo del server **non** ci vanno: «le credenziali
+rimangono sul dispositivo e non circolano online». C'è un test che diventa rosso se qualcuno
+aggiunge una chiave del genere all'elenco, anche solo per comodità — un commento si ignora, un
+test rosso no.
+
+**Difetto trovato per strada.** La sincronizzazione accettava la scala dell'interfaccia solo fra
+**70 e 150**, ma dalla v2.0.10 il minimo è **10** (chiesto: «sul telefono il 70% è troppo»). Una
+scala al 30% scelta sul telefono non veniva mai pubblicata, e se arrivava da un altro dispositivo
+veniva scartata **in silenzio**: nessun errore, semplicemente la scala non seguiva l'account.
+
+### 4. Capitolo 2 — soldi e operazioni
+
+**Una conferma sola per le chiusure multiple.** Il difetto non era nelle funzioni di blocco —
+quelle una conferma la chiedevano — ma **dentro al ciclo**: `closeMt5PositionReal` apriva un popup
+suo per OGNI posizione reale. Con le simulate non succedeva, ed è per questo che sembrava
+capriccioso: si vedeva solo sul conto MT5 vero. Il pulsante CHIUDI TUTTE era messo peggio: non
+chiedeva **nessuna** conferma complessiva e si appoggiava a quelle singole — il messaggio di stato
+arrivava a dire «per quelle REALI su MT5, conferma la chiusura nel popup comparso», cioè il
+difetto era scritto nell'interfaccia. Ora la domanda è una, dice quante sono e quanto rendono, e
+dichiara che le posizioni di altri asset restano aperte. Il test ha scovato anche un errore di
+lingua vecchio: con tre posizioni si leggeva «3 sono REALE».
+
+**Operazioni a blocco su Kraken.** Chiudi tutte / in guadagno / in perdita / per lato / un
+contratto alla volta, più lo stop a pareggio su tutte. Una conferma sola, e il pareggio manda
+**l'entrata di ogni posizione**: un valore unico per tutte metterebbe lo stop di qualcuna dalla
+parte sbagliata, chiudendola all'istante.
+
+**Il conto segue l'asset.** Cripto → Kraken, forex/indici/azioni → MT5, e l'oro su MT5 pur essendo
+una materia prima (stesso criterio di `fblFamigliaAsset`: due risposte diverse alla stessa domanda
+sarebbero una trappola). Il cambio avviene **prima** di caricare lo storico, altrimenti l'asset si
+carica due volte e per un istante si vedono le candele della fonte sbagliata. Funziona anche dai
+pulsanti «vai a grafico», con una precedenza che va ricordata: **il conto della posizione vince
+sempre su quello dell'asset** — una posizione aperta davvero su MT5 su BTC porta su MT5.
+
+**Via «Operazione» dal riquadro a schermo intero.** Mostrava la prima posizione con accanto un
+«(+3)», facendo credere che fosse LA posizione. Tolto anche il calcolo che la riempiva. Il P/L
+live resta: quello è la somma di tutte.
+
+### Resta aperto nel capitolo 2
+**2.1, le aperture cripto su Kraken che falliscono.** Serve dal proprietario la frase che l'app
+scrive sotto il segnale quando rifiuta: le cause possibili sono quattro (posizione opposta già
+aperta, quota sotto il minimo dello strumento, quantità per TP sotto il minimo, stop rifiutato da
+Kraken) e sono quattro correzioni diverse. Indovinare, su un punto che muove ordini, costa soldi.
+
+### Test
+`chiusura_una_conferma.test.mjs` (5), `kraken_blocco.test.mjs` (7), `sync_impostazioni.test.mjs`
+(4), `conto_per_asset.test.mjs` (6). Collaudo locale 5/5 verdi, 0 falliti.
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.13
+- installer.iss: 2.0.13
+
+## 21 ottobre 2026 - Capitolo 3: Syntra, caricamento del grafico, footprint in replay, e la causa misurata del freeze
+
+### 1. Il pannello Syntra era in gran parte interfaccia morta ⭐
+
+Il proprietario aveva segnalato quattro cose in una riga: «il robot non esegue più la scansione, il
+programma mi dice di selezionare la cartella syntra ma non me la fa selezionare, in più mi viene
+visualizzata la porta syntra ma a me non interessa, non mi fa più visualizzare nemmeno i nomi
+utenti di syntra precedentemente inseriti».
+
+**Tre cause diverse, tutte silenziose, trovate nel sorgente.**
+
+**Gli utenti: una regressione.** Il contenitore `<div id="syntraUtentiList">` era stato
+**cancellato** dal commit `31d9fe3` (quello dell'APK e della scheda Versione) — danno collaterale
+del riordino delle schede. La funzione che lo riempie, `syntraUtentiDisegna()`, è rimasta e
+continuava a essere chiamata, ma trovava `box` nullo e usciva alla prima riga. Nessun errore da
+nessuna parte: semplicemente non compariva più niente. *Un contenitore che sparisce non rompe:
+smette di mostrare.*
+
+**La cartella: nata morta, e impossibile per costruzione.** Campo e pulsante «Scegli cartella»
+erano stati aggiunti dal commit `229a16a` con NESSUN gestore. E quel pulsante non avrebbe mai
+potuto funzionare: **un browser non conosce il percorso reale di una cartella**
+(`showDirectoryPicker` restituisce un riferimento, non `C:\...`), quindi da lì non sarebbe mai
+uscito un percorso da dare al ponte. Tolto il pulsante (prometteva l'impossibile), resta il campo
+dove il percorso si **incolla**, e il ponte ha ora il modo di riceverlo: azione `cartella_syntra`
+sul WebSocket — la stessa strada delle credenziali, che funziona anche quando l'app parla col ponte
+attraverso il server, dove una chiamata a 127.0.0.1 non arriverebbe mai.
+Due garanzie, con i test: si **unisce** a configurazione.json invece di riscriverlo (lì dentro ci
+sono api_id e api_hash, e per riaverli si rifà tutto il giro su my.telegram.org), e una cartella
+che non esiste si **rifiuta subito** invece di farla scoprire al prossimo avvio dell'emulatore con
+un errore che parla d'altro. Gestite anche le virgolette di «Copia come percorso» di Windows: senza
+toglierle si leggeva «la cartella non esiste» con la cartella sotto gli occhi.
+
+**La porta: tolta.** Mostrata e mai letta da nessuno. Anche «Ricontrolla» era un pulsante senza
+gestore: ora chiede davvero al ponte.
+
+⚠️ Tocca il ponte: **richiede di ricostruire e reinstallare il Setup**.
+
+### 2. Il grafico si copre finché i dati non sono quelli di quell'asset
+
+«Non deve mai visualizzarsi il nome dell'asset se prima ancora non è stato caricato il grafico; la
+rotellina continuerà a girare fin quando non è avvenuta l'esatta sincronizzazione.»
+
+**Il difetto non era la lentezza.** Cambiando asset il nome nuovo compariva subito nel selettore
+mentre le candele erano ancora quelle vecchie: si leggeva «EURCHF» sopra il grafico dell'oro. Non è
+un ritardo, è **una cosa falsa scritta a schermo**, e in quei secondi ci si può decidere guardandola.
+
+**La percentuale è vera.** Conta i tre passi davvero completati — storico arrivato → candele
+ricostruite → prezzo agganciato — e non scorre da sola a tempo. Altrove in questo file c'è scritto,
+giustamente, «senza barre di progresso inventate». Se un passo si pianta, la percentuale si pianta
+lì: è un'informazione, non un difetto.
+Tre cose tenute ferme dai test, perché sono i modi in cui un indicatore di caricamento fa danni: se
+il caricamento **fallisce** il riquadro si toglie (altrimenti il grafico resta coperto e l'app
+sembra bloccata); chiamarlo due volte **non crea due riquadri**; con il grafico staccato compare
+**nella finestra PIP**, perché guarda dove vive `chartWrap` invece di indovinare — e alla fine si
+toglie da entrambe le finestre, nel caso il grafico sia stato staccato mentre caricava.
+
+### 3. Footprint in replay: era scritto nel codice ⭐
+
+Uno dei «due pezzi grossi», mai affrontato. Non era un difetto di disegno: nel punto in cui la
+candela si chiude c'era scritto
+
+> «la candela e' completata: il buffer delta della formazione finita va perso»
+
+e il buffer veniva azzerato (`replayForm=null`) senza che nessuno lo depositasse da nessuna parte.
+Da fuori: il footprint cresce mentre la candela si forma e sparisce nell'istante in cui la candela
+diventa vera.
+
+Ora si deposita nella **stessa memoria delle candele vere** (`footprintByBucket`), con la stessa
+griglia e le stesse celle. Tre scelte, con i test: si **somma** e non sovrascrive (in replay-Live i
+tick veri continuano ad arrivare su quella candela, e sostituirli con quelli ricostruiti sarebbe il
+contrario di ciò che serve); una candela **senza volume non crea un contenitore vuoto** (che farebbe
+disegnare un footprint piatto invece di nessun footprint); e l'aggancio è provato **sul giro vero
+del replay**, in **due** punti, perché la candela si completa per due strade diverse e dimenticarne
+una avrebbe lasciato il difetto vivo ai moltiplicatori alti.
+
+**Nota sul diario, e vale come lezione.** La voce del 19 ottobre dichiarava: «footprint persistente:
+`replayFinalizzaFootprint` copia il footprint accumulato in `rows[idx].footprint`». **Quella
+funzione nel file non c'era.** Il footprint delle candele completate in replay non è mai stato
+salvato, nonostante il diario dicesse di sì — e nessuno dei 21 test del replay lo toccava.
+*Una voce di diario non è una prova che una cosa esista: lo è un test.*
+
+### 4. Il freeze: la connettività c'entrava, ma al contrario ⭐
+
+«Dopo gli aggiornamenti l'applicazione inizia a laggare e scattare [...] ma io penso che sia un
+problema a monte di connettività.»
+
+**Misurato, con la pagina ferma e senza rete: 27 timer attivi, 77,6 risvegli al secondo.** E
+**sessantasei** venivano da una sola funzione: `waitForFxbtCloud()` controllava **ogni 30
+millisecondi** se Firebase fosse pronto, e smetteva solo quando arrivava. Senza rete Firebase non
+arriva mai, quindi due attese restavano a battere **per sempre**, impedendo al browser di stare
+fermo.
+
+Il sospetto del proprietario era giusto, ma la direzione era l'opposta: **non è la rete lenta a far
+scattare il grafico — è l'app che, quando la rete manca, si mette a girare a vuoto.**
+
+Ora l'attesa parte veloce (30 ms, così all'avvio normale non si perde niente), **rallenta** fino a
+mezzo secondo e dopo trenta secondi **si arrende** restituendo null. Tutti e quattro i punti che la
+chiamano sanno già cosa fare senza nuvola — uno aveva perfino una corsa contro un timeout di 20
+secondi, messa lì proprio perché questa poteva non tornare mai.
+
+**Misurato dopo: 16,3 risvegli al secondo invece di 77,6. Il 79% in meno.**
+
+Due misure su cosa NON è il problema, per non cercarlo dalla parte sbagliata: **30 cambi asset di
+fila non lasciano dietro niente** (zero timer e zero ascoltatori in più: la perdita classica, su
+quella strada, non c'è), e un disegno del grafico costa **0,01 ms**. Non è promesso che il freeze
+sia sparito — quello che succede sul PC del proprietario con rete vera, MT5 collegato e sale attive
+non è riproducibile sul banco — ma una causa misurata è stata tolta, ed era la più grossa.
+
+### Test
+`pannello_syntra.test.mjs` (6), `test_cartella_syntra.py` (5), `caricamento_asset.test.mjs` (5),
+`replay_footprint.test.mjs` (5), `attesa_nuvola.test.mjs` (4),
+`test_kraken_orario_apertura.py` (4). Collaudo locale 5/5 verdi, 0 falliti.
+## 21 ottobre 2026 - Il pareggio è zero: un numero andato e tornato nella stessa giornata
+
+### Quello che ho sbagliato, detto per primo ⭐
+
+La mattina del 21 ottobre, per difendere lo stop dal cambio giornata, ho aggiunto al prezzo di
+pareggio **un margine pari allo spread**. Il ragionamento sembrava buono: lo stop di una vendita si
+esegue sull'ask, al pareggio esatto sta dentro la forbice, e il rollover lo prende. Tolto il
+pareggio esatto, tolto il problema.
+
+Il proprietario ha misurato il risultato in una riga: **«sposta le posizioni a break-even, ma
+perdono ugualmente meno 2 euro»**.
+
+Aveva ragione, e il difetto non era nei numeri: era nel **nome**. Un pulsante che si chiama
+«pareggio» e lascia meno due euro non è una protezione con un piccolo costo — è un'etichetta che
+mente. E un'etichetta che mente è peggio di una protezione in meno, perché chi la legge prende
+decisioni basandosi su quella. La richiesta è arrivata esplicita: «bisogna fare in modo che
+qualsiasi posizione viene spostata a break-even venga accertata che allo spostamento sia
+effettivamente il risultato di 0 euro».
+
+### La correzione: prezzo esatto, e il rifiuto dove non costa niente
+
+Il margine è stato tolto. Il prezzo di pareggio è di nuovo quello esatto: distanza × valore del
+punto = commissioni di **andata e ritorno** + swap già maturato, con l'arrotondamento al tick
+sempre dalla parte di chi ha la posizione. Un test lo verifica **facendo il conto del conto**:
+3 di commissione per lato, 2 di swap, valore punto 10000 → netto 0,00, e mai sotto zero.
+
+La difesa dal rollover non è sparita: si è **spostata dove non costa niente**. Chi piazza lo stop di
+pareggio adesso **si rifiuta** quando quello stop cadrebbe dentro la forbice fra compra e vendi
+(`fblPareggioTroppoVicino`): non lo sposta, e **dice perché**. Il risultato è migliore del margine
+in entrambi i modi che contano — il pareggio resta un pareggio vero, e lo stop che c'era prima è
+**più lontano** di quello nuovo, quindi lasciarlo dov'è protegge di più che spostarlo.
+
+È esattamente il caso misurato: due SELL EURCHF aperte a 0,92828 con lo stop a 0,92827 — un decimo
+di pip — prese alle 00:00:42 quando lo spread si è aperto a 50 pip. Con il rifiuto, quello stop non
+sarebbe mai stato messo lì.
+
+### Tutte le strade del pareggio, non solo quella del pulsante
+
+Il rifiuto è su **tutte e quattro** le strade da cui una posizione arriva al pareggio, perché
+metterlo su una sola avrebbe lasciato il difetto vivo nelle altre e sarebbe stato peggio: una
+protezione a metà fa credere di essere protetti sempre.
+
+1. il pulsante nella tabella delle posizioni (`applyBreakevenToPosition`), da cui passa anche il
+   **pulsante BE del gruppo**;
+2. il pulsante BE nella tabella «Posizioni MT5», che parla col ponte e non ha un oggetto locale:
+   lì il prezzo di chiusura si legge dal **preventivo vero** (un acquisto si chiude sul bid, una
+   vendita sull'ask) invece di indovinarlo dal grafico;
+3. la strategia delle sale quando il prezzo si avvicina al primo target;
+4. la regola «stop all'entrata» al raggiungimento di un TP.
+
+Nelle due automatiche il rifiuto è **silenzioso e si riprova da solo**: nessuno sta guardando, e al
+giro dopo, se il prezzo si è allontanato, lo stop va a posto.
+
+**Due cose sistemate di conseguenza, perché il rifiuto le avrebbe rese bugiarde.**
+`applyBreakevenToPosition` adesso **dice se ha spostato o no**, e il pulsante del gruppo conta solo
+quelle spostate davvero: altrimenti avrebbe annunciato «stop a pareggio su 5 posizioni» dopo averne
+spostate zero. E il ricalcolo automatico che segue lo swap (lo stop si riaggiusta quando i costi
+cambiano, per restare a zero) è stato **lasciato come era di proposito**: lì lo stop è già al
+pareggio, e bloccarne l'aggiornamento quando il prezzo è vicino lo lascerebbe fermo su un pareggio
+vecchio che non vale più zero — il contrario di quel che serve.
+
+### Su Kraken il pareggio è il prezzo d'entrata, e adesso lo dice
+
+Sulle posizioni Kraken lo stop a pareggio va sul prezzo di entrata e basta. La commissione dello
+scambio **non arriva all'app posizione per posizione** (il ponte dà solo il totale del conto),
+quindi metterla nel prezzo vorrebbe dire inventarsi un numero. Preferito scriverlo nella conferma:
+«lo stop va sul PREZZO DI ENTRATA, la commissione dello scambio non è compresa». Un limite
+dichiarato è utilizzabile; un limite nascosto dietro la parola «pareggio» no — è lo stesso errore
+del margine, da un'altra porta.
+
+### Test
+`rollover_spread.test.mjs` cresciuto a 10: il conto netto a zero, il rifiuto sul caso EURCHF, e
+soprattutto **il pulsante vero** — si chiama `applyBreakevenToPosition` e si guarda il campo `sl`
+dopo, perché il modo in cui questa correzione potrebbe fallire sul serio è un rifiuto che lo stop
+lo sposta comunque. `gruppi_be_chiudi.test.mjs` riportato al pareggio esatto, con scritto dentro
+**perché il numero atteso è cambiato due volte**: un test che cambia valore senza spiegare perché
+insegna solo a cambiarlo di nuovo.
+
+### La lezione ⭐
+**Quando una protezione costa, non si fa pagare al nome della cosa che protegge.** Il margine era
+una risposta giusta alla domanda sbagliata: la domanda non era «come allontano lo stop dalla
+forbice», era «quando NON si deve piazzare quello stop». La seconda si risolve senza togliere un
+centesimo a nessuno.
