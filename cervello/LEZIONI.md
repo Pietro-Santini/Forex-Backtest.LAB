@@ -596,3 +596,15 @@
   (21 ottobre 2026, la barra delle operazioni sul telefono.) 360 px di barra in 309 px di grafico:
   una delle due deve lasciare il bordo alto. Misurare dice che il conflitto esiste e quanto vale;
   dire chi vince e' del proprietario, e ha scelto la barra in cima con i pulsanti a icone.
+
+- Un elenco vuoto non e' un dato cancellato. (21 ottobre 2026, le credenziali.) Il proprietario
+  segnalava «all'aggiornamento le credenziali spariscono»: il file CSV era sempre al suo posto, e
+  quello che si perdeva a ogni riavvio del browser era il PERMESSO di leggere quella cartella -
+  revocato dal browser, impossibile da conservare. Prima di credere al sintomo, chiedersi cosa
+  esattamente e' andato perso: una perdita di dati si ripara reinserendo, un permesso con un clic,
+  e dirlo all'utente vale piu' di qualunque correzione.
+
+- Un ramo di uscita anticipata dentro un test lo rende verde anche quando la correzione non c'e'.
+  (21 ottobre 2026, cartella_credenziali.) Due test uscivano subito se il browser non sapeva
+  collegare una cartella (`if(!supportsFS)return`). Controllato nel banco che supportsFS sia true,
+  cioe' che quel ramo NON scatti: senza quella verifica erano due verdi sul vuoto.

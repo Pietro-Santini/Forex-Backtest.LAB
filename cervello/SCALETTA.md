@@ -154,7 +154,21 @@ Le impostazioni seguono l'account: footprint (stile e righe), profili indicatori
 asset, strategie delle sale, nomi e target delle sale, periodi della dashboard — oltre a watchlist,
 ricerche e scala che già viaggiavano. **I segreti no**, ed è garantito da un test.
 
-### 4.2 Resta: le credenziali e la cartella
+### 4.2 Le credenziali e la cartella (FATTO il 21 ottobre 2026)
+
+**Non venivano cancellate.** Il CSV e' sempre rimasto dove l'utente l'ha messo: a ogni riavvio del
+browser si perde il PERMESSO di leggere quella cartella, e senza permesso l'elenco dei conti e'
+vuoto - che da fuori si legge come «cancellate». In piu' `getMt5CredsDirHandle` tornava `null` in
+silenzio mentre quello di Capital.com mostrava gia' il banner: l'asimmetria toglieva la
+spiegazione nel caso piu' frequente.
+
+Adesso, nella scheda Live: lo **stato vero** delle due cartelle (collegata / da riconfermare / non
+ancora scelta), un pulsante **Ricollega la cartella** che compare solo quando serve e che
+riconferma il permesso **e rilegge i conti**, e la **nota**: le credenziali stanno in un CSV sul
+dispositivo, non passano mai dal server e non vengono sincronizzate sull'account.
+Test: `cartella_credenziali.test.mjs` (5).
+
+### 4.2b Com'era (per capire il perche')
 Le credenziali stanno in una **cartella scelta dall'utente**, e il riferimento a quella cartella
 perde il permesso quando l'app si riavvia. Il meccanismo per riconcederlo esiste
 (`fblChiediPermessoFile` / `unlockFilesBanner`) ma non è evidente: l'app sembra semplicemente

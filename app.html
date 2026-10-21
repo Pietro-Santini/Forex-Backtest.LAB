@@ -1696,6 +1696,30 @@ function pubblicaPreferenze(){
           <button id="liveModeSwitch" class="miniBtn" title="Passa tra modalità Storico (replay CSV) e Live (Capital.com)">📼 Storico</button>
           <button id="liveChangeAccountBtn" class="miniBtn" style="display:none" title="Cambia le credenziali Live salvate o la cartella dove sono salvate">🔁 Cambia account</button>
         </div>
+        <!-- LA CARTELLA DELLE CREDENZIALI, DETTA A CHIARE LETTERE.
+             RICHIESTO dal proprietario: «c'e' il pulsante di scegli la cartella sul dispositivo per
+             salvare le credenziali, facciamo in modo di salvarlo... cosi' si spiega anche che le
+             credenziali rimangono sul dispositivo e non circolano online».
+             Il meccanismo per riconfermare il permesso esisteva gia' (fblChiediPermessoFile), ma
+             compariva solo quando qualcosa andava a cercare la cartella: da fuori l'app sembrava
+             semplicemente VUOTA - nessun conto salvato, nessun motivo visibile. Qui il motivo e'
+             scritto e il pulsante c'e' sempre. -->
+        <div id="fblCredCartellaBox" style="margin-top:14px;padding-top:12px;border-top:1px solid #263041">
+          <div style="font-size:12.5px;font-weight:700;color:#e8edf3;margin-bottom:6px">🔐 Cartella delle credenziali</div>
+          <div id="fblCredCartellaStato" style="font-size:12px;color:#8b96a5;margin-bottom:8px">Controllo…</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+            <button type="button" id="fblCredRicollega" class="miniBtn" title="Riconferma al browser l'accesso alla cartella dove sono salvate le credenziali di Capital.com e MT5">🔓 Ricollega la cartella</button>
+          </div>
+          <div class="hint" style="font-size:11.5px;line-height:1.55;background:#10261c;border:1px solid #1f4634;border-radius:7px;padding:9px 10px;color:#9ad9b8">
+            <b>Le credenziali restano sul tuo dispositivo.</b> Capital.com e MT5 salvano utente,
+            password e server in un file CSV nella cartella che scegli tu, su questo computer:
+            <b>non passano mai dal server</b>, non vengono sincronizzate sull'account e non escono
+            da qui — nemmeno quando l'app parla col ponte o col server remoto, che non le chiede e
+            non le riceve. Il browser, per sicurezza, <b>dimentica il permesso</b> su quella
+            cartella a ogni riavvio: e' l'unico motivo per cui l'elenco dei conti puo' sembrare
+            vuoto. Il pulsante qui sopra lo riconferma, e non serve reinserire niente.
+          </div>
+        </div>
       </div>
 
       
@@ -43631,12 +43655,101 @@ async function removeMt5AccountFromHandle(handle,creds){
 // Ritorna l'handle della cartella credenziali MT5 già collegata (se il permesso è ancora
 // valido), altrimenti null. Va chiamata da dentro un click dell'utente, come l'equivalente
 // Capital.com sopra.
+// ===================== LA CARTELLA DELLE CREDENZIALI: STATO E RICOLLEGAMENTO =====================
+//
+// RICHIESTO dal proprietario: «quando segui l'aggiornamento mi succede che le credenziali di
+// capital.com, MT5 e tutto quello che c'entra con le credenziali spariscono... facciamo in modo di
+// salvarlo, cosi' si spiega anche che le credenziali rimangono sul dispositivo e non circolano
+// online».
+//
+// NON ERANO SPARITE. Il file CSV e' sempre stato dove l'utente l'ha messo: quello che l'app perde
+// a ogni riavvio del browser e' il PERMESSO di leggere quella cartella - lo revoca il browser, per
+// sicurezza, e non c'e' modo di tenerlo. Senza permesso l'elenco dei conti e' vuoto, e da fuori
+// si legge come «le credenziali sono state cancellate».
+//
+// Due cose, quindi: dire lo stato vero (collegata / da riconfermare / non collegata) e dare UN
+// pulsante che lo riconferma. Il pulsante deve stare dentro un click dell'utente: requestPermission
+// senza un gesto non chiede niente e risponde no.
+const FBL_CRED_CARTELLE=[
+ {chiave:'capitalCredsDir',nome:'Capital.com'},
+ {chiave:'mt5CredsDir',nome:'MT5'}
+];
+// Lo stato di una cartella salvata, senza chiedere niente all'utente: 'manca' se non e' mai stata
+// scelta, 'ok' se il permesso c'e' ancora, 'daRiconfermare' se il browser lo ha dimenticato.
+async function fblCredStatoCartella(chiave){
+ try{
+  if(!supportsFS)return 'nonSupportato';
+  const h=await libDirGet(chiave);
+  if(!h)return 'manca';
+  const q=await h.queryPermission({mode:'readwrite'});
+  return q==='granted'?'ok':'daRiconfermare';
+ }catch(e){ return 'manca'; }
+}
+async function fblCredCartellaAggiorna(){
+ const box=$('fblCredCartellaStato');
+ if(!box)return;
+ if(!supportsFS){
+  box.textContent='Questo browser non sa collegare una cartella del dispositivo: le credenziali '
+   +'vanno reinserite a ogni sessione. Su computer, usa Chrome o Edge.';
+  return;
+ }
+ const stati=[];
+ for(const c of FBL_CRED_CARTELLE)stati.push({...c,stato:await fblCredStatoCartella(c.chiave)});
+ const parole={ok:'collegata',daRiconfermare:'da riconfermare',manca:'non ancora scelta'};
+ box.textContent=stati.map(x=>x.nome+': '+(parole[x.stato]||x.stato)).join(' \u00b7 ');
+ // Il pulsante serve solo se c'e' qualcosa da riconfermare: offrirlo quando non ci sono cartelle
+ // salvate prometterebbe una cosa che non puo' fare.
+ const b=$('fblCredRicollega');
+ if(b){
+  const daFare=stati.some(x=>x.stato==='daRiconfermare');
+  b.style.display=daFare?'':'none';
+  b.textContent=daFare?'\u{1f513} Ricollega la cartella':'\u{1f513} Ricollega la cartella';
+ }
+}
+// Riconferma il permesso su TUTTE le cartelle salvate, e poi rilegge quello che c'e' dentro: senza
+// la rilettura il permesso ci sarebbe ma l'elenco dei conti resterebbe vuoto fino al prossimo giro.
+async function fblCredRicollegaCartelle(){
+ const esiti=[];
+ for(const c of FBL_CRED_CARTELLE){
+  try{
+   const h=await libDirGet(c.chiave);
+   if(!h)continue;
+   const ok=await verifyDirPermission(h,'readwrite');
+   esiti.push(c.nome+': '+(ok?'collegata':'negata'));
+   if(ok&&c.chiave==='mt5CredsDir'){ mt5CredsDirHandle=h; }
+   if(ok&&c.chiave==='capitalCredsDir'){ capitalCredsDirHandle=h; }
+  }catch(e){ esiti.push(c.nome+': errore'); }
+ }
+ try{ await refreshMt5AccountsUI(); }catch(e){}
+ try{ const el=$('unlockFilesBanner'); if(el)el.style.display='none'; }catch(e){}
+ await fblCredCartellaAggiorna();
+ $('status').textContent=esiti.length
+  ? ('\u{1f513} Cartella delle credenziali \u2014 '+esiti.join(' \u00b7 ')+'. I dati non hanno mai lasciato il dispositivo.')
+  : 'Nessuna cartella delle credenziali ancora scelta: la si collega salvando le credenziali da Capital.com o MT5.';
+}
+fblDelega('click',ev=>{
+ const b=ev.target&&ev.target.closest&&ev.target.closest('#fblCredRicollega');
+ if(!b)return;
+ fblCredRicollegaCartelle();
+});
+// Lo stato si rinfresca quando si apre il pannello: una scritta vecchia qui direbbe «collegata» su
+// una cartella che il browser ha appena dimenticato.
+fblDelega('click',ev=>{
+ const t=ev.target&&ev.target.closest&&ev.target.closest('[data-gensettings-tab="live"],#genSettingsBtn');
+ if(!t)return;
+ setTimeout(()=>{ try{ fblCredCartellaAggiorna(); }catch(e){} },0);
+});
 async function getMt5CredsDirHandle(){
  if(mt5CredsDirHandle)return mt5CredsDirHandle;
  if(!supportsFS)return null;
  const handle=await libDirGet('mt5CredsDir');
  if(!handle)return null;
  if(await verifyDirPermission(handle,'readwrite')){ mt5CredsDirHandle=handle; return handle; }
+ // PRIMA QUI SI TORNAVA null IN SILENZIO, e l'elenco dei conti MT5 risultava semplicemente vuoto:
+ // nessun errore, nessuna spiegazione, e il proprietario vedeva «le credenziali sono sparite»
+ // dopo ogni aggiornamento. Capital.com il banner lo mostrava gia' (vedi
+ // getCapitalCredsDirHandle): l'asimmetria era solo una dimenticanza.
+ fblChiediPermessoFile('usare i conti MT5 salvati',()=>refreshMt5AccountsUI());
  return null;
 }
 // Rilegge la cartella (se collegata) e aggiorna la cache mt5SavedAccounts + il menu a tendina

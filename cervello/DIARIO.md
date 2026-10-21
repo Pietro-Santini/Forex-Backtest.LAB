@@ -2317,3 +2317,70 @@ correzione sono le prove di controllo — e sono scritte per restare verdi.
 non esiste.** Le sovrapposizioni dentro il grafico erano invisibili al collaudo perché i gruppi che
 si sovrappongono, nel banco, sono spenti. La misura va fatta nella condizione del difetto — i gruppi
 accesi, la scala al 130% — non in quella comoda.
+## 21 ottobre 2026 - Capitolo 5: le credenziali non erano sparite
+
+### La diagnosi, che ribalta il sintomo ⭐
+
+«Quando segui l'aggiornamento mi succede che le credenziali di capital.com, MT5 e tutto quello che
+c'entra con le credenziali spariscono, quindi vengono cancellate.»
+
+**Non venivano cancellate, e non c'entrava l'aggiornamento.** Il file CSV è sempre rimasto nella
+cartella scelta dall'utente, intatto. Quello che l'app perde a ogni riavvio del browser è il
+**permesso** di leggere quella cartella: lo revoca il browser, per sua politica di sicurezza, e non
+esiste modo di conservarlo — è lo stesso motivo per cui nemmeno un sito può tenersi l'accesso a una
+cartella fra una sessione e l'altra.
+
+Senza permesso l'elenco dei conti è vuoto. E un elenco vuoto, da fuori, si legge come
+«cancellati». *Il sintomo era vero; la spiegazione che suggeriva era sbagliata.*
+
+### L'asimmetria che costava la spiegazione
+
+Il meccanismo per riconfermare c'era già (`fblChiediPermessoFile`, con il banner che dice il
+motivo), ma:
+
+- `getCapitalCredsDirHandle()` lo chiamava;
+- **`getMt5CredsDirHandle()` tornava `null` e basta.**
+
+Nessun errore, nessun banner, nessun motivo: i conti MT5 non si vedevano e non c'era niente da
+leggere a schermo. Una dimenticanza di una riga, nel ramo più usato dei due.
+
+### Quello che adesso c'è
+
+Nella scheda Live delle impostazioni, dove la nota ha spazio per essere letta (il menu MT5 è un
+tendina da pochi pixel: ci sarebbe stata una scritta tagliata, che è il difetto del capitolo 4):
+
+**Lo stato vero delle due cartelle** — *collegata* / *da riconfermare* / *non ancora scelta*. Sono
+tre situazioni che portano a tre azioni diverse (non fare niente, premere un pulsante, scegliere una
+cartella): confonderle è il difetto, non la grafica.
+
+**Un pulsante «🔓 Ricollega la cartella»**, che compare **solo quando c'è qualcosa da riconfermare**.
+Offrirlo a chi non ha mai scelto una cartella prometterebbe una cosa che non può fare: premendolo
+non succederebbe niente. E fa **due** cose, non una: riconferma il permesso *e* rilegge i conti —
+senza la rilettura il permesso ci sarebbe ma l'elenco resterebbe vuoto fino al giro successivo, e
+sembrerebbe che il pulsante non funzioni. È la metà che si dimentica.
+
+**La nota sulla privacy**, che è la risposta alla domanda vera («dove finiscono le mie password»):
+utente, password e server stanno in un CSV nella cartella scelta dall'utente, su quel computer; non
+passano mai dal server, non vengono sincronizzati sull'account e non escono da lì nemmeno quando
+l'app parla col ponte o col server remoto — che non le chiede e non le riceve. E dice anche
+**perché sembrano sparite**, altrimenti il pulsante resta misterioso.
+
+### Una verifica sul banco, prima di fidarsi del verde ⭐
+
+Due dei cinque test, dove il browser non sapesse collegare una cartella, uscivano subito senza
+verificare niente (`if (!supportsFS) return {salta: true}`). Un test così è verde anche quando la
+correzione non c'è: misura il vuoto. Controllato nel banco: **`supportsFS: true`**, il ramo di
+uscita non scatta mai e tutte le asserzioni girano davvero.
+
+Verifica del rosso: con il file di prima **5 test su 5 rossi**.
+
+### Test
+`cartella_credenziali.test.mjs` (5): i tre stati distinti, il pulsante che compare solo quando
+serve, il ricollegamento che riconferma **e** rilegge, la nota con le due frasi richieste, e
+getMt5CredsDirHandle che non torna più muto. Collaudo completo: 0 falliti.
+
+### La lezione ⭐
+**Un elenco vuoto non è un dato cancellato.** Prima di credere al sintomo («le credenziali
+spariscono») conviene chiedersi che cosa, esattamente, è andato perso: qui non il file, ma il
+permesso di leggerlo. La differenza cambia tutto — una perdita di dati si ripara reinserendo, un
+permesso si ripara con un clic, e dirlo all'utente vale più di qualunque correzione.
