@@ -2106,6 +2106,9 @@ def get_positions():
             # volume, e cifre/passo del simbolo per arrotondare lo stop dalla parte giusta.
             "commission": _commissione_ingresso(p.ticket),
             "valore_punto": _valore_punto(p.symbol, p.type, p.volume, p.price_open),
+            # Il margine impegnato da QUESTA posizione. Senza, l'app lo mostrava a zero per tutte
+            # le posizioni reali (segnalato: «il margine utilizzato mi da' sempre 0»).
+            "margine": _margine_posizione(p.symbol, p.type, p.volume, p.price_open),
             "digits": _cifre_simbolo(p.symbol)[0],
             "point": _cifre_simbolo(p.symbol)[1],
         })
@@ -2134,6 +2137,43 @@ def _commissione_ingresso(ticket):
 
 
 _valore_punto_cache = {}
+
+
+_margine_cache = {}
+
+
+def _margine_posizione(symbol, tipo, volume, prezzo):
+    """Il margine che il conto ha impegnato per QUESTA posizione.
+
+    SEGNALATO dal proprietario: «il margine utilizzato mi da' sempre 0, bisogna fargli calcolare
+    effettivamente quanto margine e' stato utilizzato da quella singola posizione».
+    Il motivo era che nessuno lo chiedeva: le posizioni adottate dal conto MT5 nascevano con
+    marginUsed:0 nell'app, con tanto di commento che diceva «il margine vero e' quello del conto
+    MT5» - vero, ma non veniva mai letto.
+
+    Lo CALCOLA MT5 (order_calc_margin), non noi: e' il numero del broker, che tiene conto della
+    percentuale di margine del simbolo, della leva del conto e del cambio valuta. Una formula
+    nostra (valore/leva) darebbe un numero plausibile e diverso da quello vero, che e' il modo
+    peggiore di sbagliare - sembra giusto.
+
+    None quando non si sa: l'app mostra «-» invece di inventare uno zero.
+    Ricalcolato al massimo ogni 60 secondi per simbolo/lato/volume, come il valore del punto: il
+    margine di una posizione aperta non cambia, cambia solo col cambio valuta."""
+    chiave = (symbol, tipo, round(float(volume or 0), 4))
+    ora = time.time()
+    c = _margine_cache.get(chiave)
+    if c and ora - c[1] < 60:
+        return c[0]
+    val = None
+    try:
+        ordine = mt5.ORDER_TYPE_BUY if tipo == mt5.POSITION_TYPE_BUY else mt5.ORDER_TYPE_SELL
+        m = mt5.order_calc_margin(ordine, symbol, float(volume), float(prezzo))
+        if m is not None:
+            val = float(m)
+    except Exception:
+        val = None
+    _margine_cache[chiave] = (val, ora)
+    return val
 
 
 def _valore_punto(symbol, tipo, volume, prezzo):

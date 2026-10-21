@@ -641,3 +641,48 @@
   sistema su Android e' 8dp, che su uno schermo moderno fa 16-24 px reali. E un tocco dura di piu'
   di un clic. Dove non c'e' un'azione legata alla pressione lunga, allargare la finestra non toglie
   niente a nessuno.
+
+- Un numero che non torna con quello che si vede davanti e' un numero sbagliato. (21 ottobre 2026,
+  sera.) Contando da riga di comando i backslash rimasti in app.html mi sono tornati 176, poi 378,
+  poi 71: numeri che avrebbero giustificato una sostituzione di massa, cioe' esattamente l'errore
+  che stavo riparando. Erano tutti falsi - la shell mangiava i backslash prima che arrivassero a
+  Python, e stavo contando APOSTROFI. L'ho capito perche' gli esempi stampati accanto ai numeri non
+  avevano nessun backslash. Rifatta la misura da FILE (dove la shell non c'entra): 31 casi veri, e
+  521 escape legittimi dentro stringhe JS che toglierli avrebbe rotto l'app.
+
+- Una sostituzione di massa deve sapere distinguere dove un carattere e' SINTASSI e dove e' TESTO.
+  (21 ottobre 2026.) Uno script del 19 ottobre trasformava `l'app` in `l'app` ovunque, commenti e
+  attributi HTML compresi (dove il backslash non e' un escape: si legge), e in piu' avanzava di 4
+  caratteri invece di 5, riscrivendo l'ultima lettera: 165 parole storpiate in «appp», alcune
+  visibili all'utente. La riparazione ha dovuto fare la distinzione che lo script non faceva.
+
+- Il disordine non e' mai solo disordine. (21 ottobre 2026.) La lamentela del proprietario era sui
+  cinquanta file lasciati sul Desktop; cercando chi li aveva scritti e' saltato fuori che uno di
+  loro aveva storpiato 165 parole dentro app.html, e nessun test se ne era accorto.
+
+- Una correzione che passa i test vecchi non e' fortunata: e' FINITA. (21 ottobre 2026, notte.)
+  Sul robot di Syntra tre tentativi su quattro erano sbagliati, e nessuno dei tre l'ho trovato
+  rileggendo il codice: li ha fermati il banco di prova, ognuno con un test scritto mesi fa per un
+  motivo diverso - il canale che non si apriva, il traffico inutile verso 127.0.0.1 su un telefono
+  (server_oracle: «nessuna chiamata al PC»), la sonda del ponte buttata via quando invece serve a
+  distinguere computer e telefono (due_ponti_segnali). Tutte e tre sarebbero arrivate all'utente
+  senza fare danni evidenti SUBITO.
+
+- Quando un test vecchio diventa rosso, la prima domanda non e' «come lo aggiorno» ma «HA RAGIONE
+  LUI?». (21 ottobre 2026.) Stasera aveva ragione tre volte su quattro. La quarta
+  (caricamento_asset, che pretendeva lo 0% di avanzamento) codificava esattamente il difetto da
+  correggere, e andava aggiornato - scrivendo nel test PERCHE' la regola e' cambiata.
+
+- Due segnali in OR battono un segnale solo, quando ognuno copre un caso che l'altro sbaglia.
+  (21 ottobre 2026, Syntra.) Il ponte locale vivo DIMOSTRA che si e' su un computer, ma non c'e'
+  sempre; la volonta' dell'utente copre il caso in cui il ponte e' spento. Pretendere la sonda era
+  il difetto, ignorarla l'eccesso opposto.
+
+- Una linea che non finisce non racconta niente. (21 ottobre 2026.) La linea di entrata dei segnali
+  arrivava al bordo della vista invece che alla fine dell'operazione: con molti segnali sullo
+  stesso asset il grafico diventava una ragnatela bianca. Ma la cura NON deve accorciare le
+  operazioni ancora vive - e' il caso di controllo che tiene onesta la correzione.
+
+- Una barra di avanzamento ferma a zero sembra un programma bloccato; una ferma a cento dice una
+  cosa falsa. (21 ottobre 2026.) Mai zero mentre qualcosa succede, mai cento DENTRO un passo, ma
+  cento esatto quando i passi sono finiti davvero.

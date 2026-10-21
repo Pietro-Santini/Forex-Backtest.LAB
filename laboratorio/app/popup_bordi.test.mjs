@@ -146,3 +146,60 @@ test('la scala e\' dichiarata al CSS: e\' il punto su cui tutto questo si regge'
   assert.ok(!/\.fbModalBox\{width:95vw!important;max-width:none/.test(src),
     'le regole per telefono non devono piu\' annullare il limite di larghezza');
 });
+
+test('e nemmeno a scale estreme: dal 70% al 250%', async () => {
+  // SEGNALATO di nuovo dal proprietario: «quando effettuo lo zoom i popup non rispettano le linee
+  // di bordo massimo... andiamo a piu' del 100% e i bordi del popup vengono nascosti».
+  // MISURATO nella versione attuale: nessuno sfora, a nessuna di queste scale, ne' su schermo
+  // grande ne' su telefono. La segnalazione descrive la versione precedente alla 2.0.14, dove il
+  // difetto c'era davvero. Questi casi restano qui perche' quella correzione non possa tornare
+  // indietro in silenzio: e' una regola che si rompe cambiando una riga di CSS.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    for (const [w, h] of [[1920, 1080], [375, 812]]) {
+      await pagina.setViewportSize({width: w, height: h});
+      for (const scala of [70, 150, 200, 250]) {
+        const fuori = await pagina.evaluate(({ids, m, s}) => eval('(' + m + ')')(ids, s),
+                                            {ids: POPUP, m: MISURA.toString(), s: scala});
+        assert.deepEqual(fuori, [],
+          'a ' + w + 'x' + h + ' e scala ' + scala + '%: ' + JSON.stringify(fuori));
+      }
+    }
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('il limite tiene anche con dentro un contenuto enorme', async () => {
+  // LA PROVA CHE CONTA DAVVERO. Misurare i popup VUOTI dice poco: la loro dimensione dipende dal
+  // contenuto, e le due finestre delle strategie - quelle che sforavano di piu' - crescono con il
+  // numero di sale e di target. Qui si infila dentro ogni riquadro un figlio da 2400x4000 px e si
+  // guarda se il riquadro si lascia spingere fuori dallo schermo. Se il limite e' scritto bene,
+  // il contenuto scorre dentro e il riquadro non si muove.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    await pagina.setViewportSize({width: 375, height: 812});
+    const fuori = await pagina.evaluate((ids) => {
+      try { fblScalaUiImposta(localStorage, document, 200); } catch(e) {}
+      const out = [];
+      ids.forEach(id => {
+        const ov = document.getElementById(id); if (!ov) return;
+        const box = ov.querySelector('.fbModalBox'); if (!box) return;
+        const prima = ov.style.display; ov.style.display = 'flex';
+        const z = document.createElement('div');
+        z.style.cssText = 'width:2400px;height:4000px';
+        box.appendChild(z);
+        const b = box.getBoundingClientRect();
+        const dx = Math.round(Math.max(0, -b.left) + Math.max(0, b.right - window.innerWidth));
+        const dy = Math.round(Math.max(0, -b.top) + Math.max(0, b.bottom - window.innerHeight));
+        if (dx > 2 || dy > 2) out.push(id + ' dx=' + dx + ' dy=' + dy);
+        box.removeChild(z);
+        ov.style.display = prima;
+      });
+      return out;
+    }, POPUP);
+    assert.deepEqual(fuori, [],
+      'un contenuto grande non deve poter spingere il riquadro fuori dallo schermo: '
+      + JSON.stringify(fuori));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});

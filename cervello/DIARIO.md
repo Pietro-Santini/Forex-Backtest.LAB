@@ -2491,3 +2491,139 @@ correzione» ma «quale versione sta usando».** Tre volte di fila la risposta e
 quarta volta ha smesso di essere una coincidenza ed è diventata la causa da cercare: il canale di
 aggiornamento era rotto, e teneva nascosto tutto il lavoro fatto. Un difetto che blocca la
 consegna vale più di dieci difetti nel prodotto.
+## 21 ottobre 2026 (sera) - Cinquanta file sul Desktop, e il danno che avevano lasciato
+
+### Come e' cominciata
+
+«Come mai hai incominciato a prendere il desktop e a riempirlo di file? Mettili nella cartella
+apposita o eliminali se non servono piu', creano solo confusione.»
+
+Cinquanta script di debug sul Desktop, **tutti datati 19 ottobre** — due giorni prima, non di
+questa sessione (qui gli script vanno nella cartella temporanea della sessione). Spostati in
+`%TEMP%\fbl-script-vecchi-19ottobre`, non cancellati: non si butta roba di qualcun altro.
+
+Ma la lamentela sul disordine ha fatto trovare una cosa piu' seria.
+
+### Il danno: un `i += 4` dove servivano 5 ⭐
+
+`fix_all_apostrofi_final.py` cercava `l'app` dentro le stringhe e lo riscriveva come `l\'app`.
+Poi avanzava:
+
+```python
+result.append("l\\'app")
+i += 4   # "salta l'app (5 char, meno 1 per l'incremento)"
+continue # ...ma il `continue` salta anche l'incremento
+```
+
+`l'app` sono **cinque** caratteri; avanzando di quattro, l'ultima `p` veniva riprocessata e
+riscritta. Risultato: **`l\'appp`**, 165 volte fra `appp` e `appplicazione`.
+
+E non erano solo commenti. Il suggerimento di un pulsante diceva, letteralmente:
+
+> Ricarica l\'app (nell\'appp installata non c'è il pulsante del browser)
+
+Piu' **31 backslash** finiti in commenti e testo HTML, dove non sono escape ma caratteri che si
+vedono.
+
+### Il mio errore di misura, due volte ⭐⭐
+
+Prima di correggere volevo sapere quanti fossero. Ho contato da riga di comando e mi e' tornato
+**176**. Poi, cambiando il filtro, **378**. Poi **71 attributi**. Numeri grossi, che avrebbero
+giustificato una sostituzione di massa su tutto il file — cioe' esattamente l'errore che stavo
+riparando.
+
+**Erano tutti falsi.** La shell mangiava i backslash prima che arrivassero a Python, quindi
+`"\\'"` diventava `"'"` e io stavo contando **apostrofi**.
+
+Me ne sono accorto da un dettaglio: gli esempi stampati accanto ai numeri **non avevano nessun
+backslash**. *Un numero che non torna con quello che si vede davanti e' sempre un numero
+sbagliato.* Rifatta la misura da file — dove la shell non c'entra — i casi veri erano **31**.
+
+E i 521 rimasti sono **escape legittimi dentro stringhe JavaScript**: toglierli avrebbe rotto
+l'app. La differenza fra 521 e 31 e' la differenza fra una riparazione e un disastro.
+
+### Cosa resta a difenderlo
+
+`testo_non_storpiato.test.mjs` (3): niente `appp`, niente backslash nei commenti HTML, e — la
+prova di controllo, la piu' importante — **gli escape veri nelle stringhe JS devono restare**.
+Una pulizia troppo allegra li toglierebbe e l'app non partirebbe nemmeno: il test lo direbbe
+prima. Per non ricadere nell'inganno di sopra, il test costruisce il backslash con
+`String.fromCharCode(92)`, che non passa da nessun escape.
+
+### Le lezioni ⭐
+1. **Un numero che non torna con quello che si vede davanti e' sbagliato.** Non si corregge
+   niente su un conteggio che non si e' guardato in faccia.
+2. **Una sostituzione di massa su un file di 4,7 MB va misurata prima e verificata dopo**, e deve
+   sapere distinguere dove un carattere e' sintassi (una stringa JS) e dove e' testo (un
+   commento, un attributo). Lo script del 19 ottobre non lo distingueva: per questo ha fatto
+   danno in entrambi i sensi.
+3. **Il disordine non e' mai solo disordine.** Cinquanta file fuori posto hanno portato a 165
+   parole storpiate che nessun test copriva.
+## 21 ottobre 2026 (notte) - Tre volte i test hanno fermato una correzione sbagliata
+
+### Il robot di Syntra: due difetti in fila, il secondo nascondeva il primo ⭐⭐
+
+«Ha smesso di funzionare il robot dentro BlueStacks, non verifica piu' le nuove posizioni. Non si
+deve mai fermare, deve sempre rimanere attivo quando l'app gira.»
+
+**Non si era fermato: i suoi comandi finivano dall'altra parte.** I log del server Oracle,
+timbrati mentre lo segnalava, lo dicevano parola per parola:
+
+```
+[19:17:58] lettore Syntra spento
+[19:18:01] lettore Syntra acceso
+[19:18:01] Syntra non parte: funziona solo sul computer, legge l'app Android dentro
+           BlueStacks, che su un server Linux non c'e'.
+```
+
+`tgInviaSyntra` usava il canale locale solo se il ponte locale **risultava** vivo, e altrimenti
+ripiegava su `tgInvia` — che con un server configurato manda **al server**. Il server rifiuta,
+giustamente; ma quel rifiuto l'utente non lo vede: vede un robot fermo.
+
+E il ponte locale risultava morto **per il difetto corretto quella mattina** (si spegneva a ogni
+ricarica della pagina, fino alla v2.0.15). Bastava un aggiornamento per dirottare Syntra e non
+tornare piu' indietro. *Due difetti in fila, di cui il secondo nascondeva il primo.*
+
+### La parte che conta: tre correzioni sbagliate, tre test che le hanno fermate ⭐⭐⭐
+
+| Tentativo | Cosa faceva | Chi l'ha fermato |
+|---|---|---|
+| 1 | Dirottava bene i comandi, ma `tgSyntraCollega` usciva subito: il canale non si apriva mai | il test che avevo appena scritto |
+| 2 | Apriva il canale locale **sempre** che ci fosse un server: su un telefono, un collegamento a 127.0.0.1 ogni 30 s per niente | `server_oracle.test.mjs` — «nessuna chiamata al PC» |
+| 3 | Buttava via la sonda del ponte locale | `due_ponti_segnali.test.mjs` — la usa per distinguere computer e telefono |
+
+La versione finale tiene **i due segnali in OR**: il ponte vivo *dimostra* che questo e' un
+computer (prova positiva), la volonta' dell'utente copre il caso che aveva rotto il robot.
+**Pretendere la sonda era il difetto; ignorarla sarebbe stato l'eccesso opposto.**
+
+Nessuna di quelle tre versioni avrebbe fatto danni evidenti subito. Tutte e tre sarebbero arrivate
+all'utente.
+
+### Le altre quattro, in breve
+
+- **La linea dell'entrata non finiva mai.** Era l'unica rimasta indietro: dal passo 18/19 ogni TP
+  si ferma sulla sua candela e lo stop sulla sua, l'entrata arrivava al bordo della vista. Con
+  molti segnali sullo stesso asset diventa una ragnatela bianca. Ora finisce allo stop preso o
+  all'ultimo TP colpito — e se non e' successo niente arriva ad adesso, perche' li' il
+  prolungamento e' giusto: *quella e' la prova di controllo del test.*
+- **Stop e target automatici per sala.** Verificato PRIMA di scrivere: il calcolo c'era gia'.
+  Mancava *dove* si sceglie (era per famiglia di strumento, non per sala) e il target in pip.
+- **La percentuale ferma a 0%.** Aritmetica: tre passi, `passo/3`, e il primo passo e' lo zero.
+  Ora mai zero (una barra ferma a zero sembra un programma bloccato), mai cento *dentro* un passo
+  (una barra che arriva a 100 e resta li' dice una cosa falsa), ma 100 esatto quando tutti i passi
+  sono finiti — perche' li' e' la verita'. **Anche quella me l'ha fatta correggere un test
+  vecchio**, che pretendeva il 100 alla fine.
+- **Popup e zoom: misurato, non corretto.** 24 riquadri, poi tutti i 27 elementi a sovrapposizione,
+  dal 70% al 250%, su due schermi, e infine con dentro un figlio da 2400x4000 px: nessuno sfora.
+  La segnalazione descrive la v2.0.12. I casi estremi sono finiti nel test permanente.
+
+### La lezione ⭐⭐
+**Una correzione che passa i test vecchi non e' una correzione fortunata: e' una correzione
+finita.** Stasera tre tentativi su quattro erano sbagliati, e nessuno dei tre l'ho trovato
+rileggendo il codice — li ha trovati il banco di prova, ognuno con un test scritto mesi fa per un
+motivo diverso. Il valore di un test non si vede quando lo scrivi; si vede quando ti ferma.
+
+E il corollario: **quando un test vecchio diventa rosso, la prima domanda non e' «come lo
+aggiorno» ma «ha ragione lui?»**. Stasera aveva ragione tre volte su quattro; la quarta
+(`caricamento_asset`, che pretendeva lo 0%) codificava il difetto da correggere, e andava
+aggiornato spiegando perche'.
