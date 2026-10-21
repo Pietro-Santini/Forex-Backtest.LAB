@@ -4850,7 +4850,8 @@ async function fblGruppoPareggio(g){
  if(!lista.length){ $('status').textContent='Nessuna posizione aperta in questo gruppo.'; return; }
  const reali=lista.filter(p=>p.mt5Ticket!=null).length;
  const righe=['Gruppo '+g.descr+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.',
-   'Lo stop di ognuna va al suo pareggio esatto (profitto netto 0,00, commissioni e swap compresi).'];
+   'Lo stop di ognuna va al suo pareggio con un margine pari allo spread (commissioni e swap compresi): '
+   +'al pareggio esatto lo stop starebbe DENTRO la forbice, e al primo allargamento verrebbe preso.'];
  if(reali)righe.push(reali+(reali===1?' e\' REALE':' sono REALI')+' sul conto MT5: lo stop si sposta davvero sul conto.');
  if(!await appConfirm(righe.join('\n\n'),{title:'\u2696\ufe0f Stop a pareggio',okLabel:'Sposta '+lista.length,cancelLabel:'Annulla'}))return;
  let fatte=0;
@@ -20217,12 +20218,15 @@ function evaluate(){
    // ignoriamo comunque per non chiudere mai una posizione a un prezzo mostruoso per errore
    // (es. dati di sessione salvati da prima di questo fix).
    const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
+   // Una VENDITA si chiude comprando all'ask: il livello va confrontato col bid della candela
+   // PIU' lo spread. Vedi la nota su fblSpreadUscita.
+   const sp=fblSpreadUscita(pos);
    if(pos.side==='BUY'){
      sl=slOk && r.low<=pos.sl;
      tp=tpOk && r.high>=pos.tp;
    }else{
-     sl=slOk && r.high>=pos.sl;
-     tp=tpOk && r.low<=pos.tp;
+     sl=slOk && (r.high+sp)>=pos.sl;
+     tp=tpOk && (r.low+sp)<=pos.tp;
    }
    if(sl||tp){const result=sl?closeResultLabel('SL',pos):'TP';closeTrade(result,sl?pos.sl:pos.tp,pos);$('status').textContent=`Trade chiuso a ${result}.`;}
  });
@@ -20304,12 +20308,14 @@ function scanHistoricalSlTpTouches(){
      const slVale=slOk&&(slDa==null||!Number.isFinite(rowTime)||rowTime>slDa);
      const tpVale=tpOk&&(tpDa==null||!Number.isFinite(rowTime)||rowTime>tpDa);
      let sl=false,tp=false;
+     // Stessa regola di evaluate(): una vendita si chiude all'ask (vedi fblSpreadUscita).
+     const sp=fblSpreadUscita(pos);
      if(pos.side==='BUY'){
        sl=slVale&&r.low<=pos.sl;
        tp=tpVale&&r.high>=pos.tp;
      }else{
-       sl=slVale&&r.high>=pos.sl;
-       tp=tpVale&&r.low<=pos.tp;
+       sl=slVale&&(r.high+sp)>=pos.sl;
+       tp=tpVale&&(r.low+sp)<=pos.tp;
      }
      if(sl||tp){
        const result=sl?closeResultLabel('SL',pos):'TP';
@@ -21152,8 +21158,10 @@ function computeBreakevenSl(entry,side,spread){
 // stesso identico meccanismo già usato per un trascinamento manuale della linea SL.
 function applyBreakevenToPosition(pos){
  if(!pos)return;
- // Pareggio ESATTO (profitto netto 0,00): vedi mt5PrezzoPareggio. Prima si sommava lo spread
- // all'entrata, che invece e' gia' dentro il prezzo di esecuzione: ne usciva un piccolo guadagno.
+ // Pareggio PIU' UN MARGINE pari allo spread: vedi la nota lunga su mt5PrezzoPareggio. Fino al
+ // 21 ottobre 2026 qui andava il pareggio ESATTO, e si e' visto cosa comporta: due SELL EURCHF
+ // aperte a 0,92828 avevano lo stop a 0,92827 - un decimo di pip - e il cambio giornata se le e'
+ // prese. Lo stop di una vendita si esegue sull'ask: al pareggio esatto sta dentro la forbice.
  const beSl=mt5PrezzoPareggio(pos);
  if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
  pos.sl=beSl; pos.slAt=Date.now();   // pareggio: da adesso lo stop e' qui, non da prima
@@ -21161,7 +21169,7 @@ function applyBreakevenToPosition(pos){
  if(active===pos){ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }
  draw();update();
  $('status').textContent=pos.mt5Ticket!=null
-   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap) — sincronizzo sul conto MT5…`
+   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: pareggio piu' un margine pari allo spread, commissioni e swap compresi) — sincronizzo sul conto MT5…`
    :`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}).`;
  if(pos.mt5Ticket!=null)syncMt5PositionLevels(pos);
 }
@@ -21239,9 +21247,18 @@ async function syncMt5PendingOrderLevels(p){
 // buon fine la registra anche in locale (Trade Journal, come closeTrade() fa per tutte le
 // altre): mai il contrario, per non disallineare mai "chiusa in app" da "ancora aperta sul
 // conto vero".
-async function closeMt5PositionReal(pos,reason){
+// `opz.senzaConferma`: la conferma e' GIA' stata data da chi chiama, e non va richiesta una
+// seconda volta. Serve a due cose, entrambe chieste dal proprietario:
+//  - le chiusure a blocco ("se clicca chiudi x posizioni gli viene fuori soltanto UN messaggio di
+//    conferma"): prima la conferma si ripeteva per ogni posizione reale, quindi con dieci
+//    posizioni erano dieci popup e un "si'" di troppo chiudeva quello che non si voleva;
+//  - la chiusura automatica prima della chiusura del mercato: li' la scelta e' stata fatta
+//    accendendo l'interruttore, e all'ora di chiusura non c'e' nessuno davanti allo schermo a
+//    premere "conferma".
+// Il caso normale (il pulsante Chiudi di una riga) non passa nessuna opzione e continua a chiedere.
+async function closeMt5PositionReal(pos,reason,opz){
  if(!pos||pos.mt5Ticket==null)return false;
- if(!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
+ if(!(opz&&opz.senzaConferma)&&!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
  $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.mt5Ticket})…`;
  const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.mt5Ticket})});
  if(!result.ok){
@@ -28153,7 +28170,7 @@ function tgStrategiaValuta(){
      cambiato=true;
      if(mosse){
       $('status').textContent='🛡️ Segnale di '+String(st.sala||'')+': percorso il '+st.avvicinamento.pct
-       +'% verso il primo target, stop portato a pareggio (profitto netto 0,00) su '+mosse
+       +'% verso il primo target, stop portato a pareggio (con un margine pari allo spread) su '+mosse
        +(mosse===1?' posizione':' posizioni')+'.';
       try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
       draw(); update();
@@ -28191,7 +28208,7 @@ function tgStrategiaValuta(){
    cambiato=true;
    if(spostate){
     $('status').textContent='🛡️ Strategia del segnale di '+String(st.sala||'')+': raggiunto il take profit n. '
-     +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (profitto netto 0,00)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
+     +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (con un margine pari allo spread)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
     try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
     draw(); update();
    }
@@ -29119,6 +29136,44 @@ tdD.appendChild(nota2);
   scorc.appendChild(bDavanti);
  }
  tdD.appendChild(scorc);
+ // CHIUDERE PRIMA CHE CHIUDA IL MERCATO. Sta qui di proposito: questo pannello e' LO STESSO per
+ // la strategia universale e per quella di ogni sala (tgAutoApriStrat passa l'uno o l'altro
+ // oggetto), quindi una riga sola soddisfa "deve stare sia sulla strategia universale che sulle
+ // strategie singole per ogni sala" senza scrivere due interfacce che un domani divergono.
+ const pre=fblChiusuraPreNormalizza(cfg.chiusuraPre);
+ const rigaPre=document.createElement('div');
+ rigaPre.className='tgCfgRegola';
+ rigaPre.style.marginTop='10px';
+ const lab=document.createElement('label');
+ lab.style.cssText='display:flex;align-items:center;gap:6px;flex:1 1 220px;cursor:pointer';
+ const cb=document.createElement('input');
+ cb.type='checkbox'; cb.checked=pre.attivo;
+ cb.title='Al cambio giornata lo spread si apre di decine di pip e lo stop di una vendita si esegue '
+   +'sul prezzo di acquisto: misurati 50 pip su EURCHF contro gli 0,2 abituali. Chiudere prima '
+   +'toglie le posizioni da quella finestra.';
+ lab.appendChild(cb);
+ lab.appendChild(document.createTextNode('Chiudi le posizioni in guadagno prima della chiusura del mercato'));
+ rigaPre.appendChild(lab);
+ const min=document.createElement('input');
+ min.type='number'; min.min='1'; min.max='240'; min.step='1'; min.className='tgCfgIn tgCfgNum';
+ min.style.width='62px'; min.value=pre.minuti; min.disabled=!pre.attivo;
+ min.title='Quanti minuti prima della chiusura';
+ const scrivi=()=>{
+  cfg.chiusuraPre=fblChiusuraPreNormalizza({attivo:cb.checked,minuti:Number(min.value)});
+  tgAutoSalva(); ridisegna();
+ };
+ cb.addEventListener('change',scrivi);
+ min.addEventListener('change',scrivi);
+ rigaPre.appendChild(min);
+ rigaPre.appendChild(document.createTextNode(' minuti prima'));
+ tdD.appendChild(rigaPre);
+ const notaPre=document.createElement('div');
+ notaPre.className='tgCfgNota';
+ notaPre.style.marginTop='4px';
+ notaPre.innerHTML='Si chiudono <b>solo</b> le posizioni in guadagno: una in perdita si lascia correre, '
+  +'perch&eacute; chiuderla vorrebbe dire trasformarla in perdita certa. '
+  +'Le cripto non hanno chiusura, quindi non le riguarda.';
+ tdD.appendChild(notaPre);
 }
 // --- Interfaccia del popup. L'elenco delle sale e' quello vero del ponte (tgGruppi): cosi' non
 // si puo' configurare l'automatico per una sala che non si sta nemmeno ascoltando.
@@ -33575,12 +33630,33 @@ function mt5AllineaApertura(p,rp){
 // veri: si convertono in distanza di prezzo col valore di un punto calcolato da MT5.
 // Commissione: quella d'ingresso raddoppiata (di norma il broker la carica uguale in uscita).
 // Arrotondamento al passo del simbolo sempre dalla parte del profitto (mai un centesimo sotto).
-function mt5PrezzoPareggio(pos){
+// IL PAREGGIO, PIU' UN MARGINE PARI ALLO SPREAD.
+//
+// Misurato il 21 ottobre 2026 sullo storico MT5 del proprietario: due posizioni SELL EURCHF
+// aperte a 0,92828 avevano lo stop a 0,92827 - UN DECIMO DI PIP - perche' questa funzione
+// restituiva il pareggio ESATTO, e il commento diceva pure che lo spread era stato tolto apposta
+// «perche' ne usciva un piccolo guadagno». Ma lo stop di una vendita si esegue sull'ASK: un
+// pareggio esatto mette lo stop DENTRO la forbice, e al primo allargamento viene preso di certo.
+// Quelle due sono state chiuse alle 00:00:42 con lo spread a 50 pip.
+// Ora lo stop sta un margine di spread PIU' IN LA' dalla parte da cui puo' essere preso. Se viene
+// colpito si perde circa uno spread invece di zero: e' il prezzo per non regalarlo al rollover.
+//
+// `opz.senzaMargine`: il pareggio nudo, per chi deve MOSTRARE il numero invece di piazzarci uno
+// stop sopra.
+function mt5PrezzoPareggio(pos,opz){
  if(!pos||!Number.isFinite(Number(pos.entry)))return NaN;
  const entry=Number(pos.entry);
- if(pos.mt5Ticket==null)return entry;       // simulata: lo spread e' gia' dentro l'entrata
+ const margine=()=>{
+  if(opz&&opz.senzaMargine)return 0;
+  let sp=0;
+  try{ sp=spreadCostForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ sp=0; }
+  return (Number.isFinite(sp)&&sp>0)?sp:0;
+ };
+ // Dalla parte da cui lo stop puo' essere preso: sotto per un acquisto, sopra per una vendita.
+ const allarga=(p)=>{ const m=margine(); if(!m)return p; return pos.side==='BUY'?(p-m):(p+m); };
+ if(pos.mt5Ticket==null)return allarga(entry);   // simulata: lo spread e' gia' dentro l'entrata
  const rp=(mt5RealPositions||[]).find(x=>String(x.ticket)===String(pos.mt5Ticket));
- if(!rp)return entry;
+ if(!rp)return allarga(entry);
  const vp=Number(rp.valore_punto);
  const comm=Number(rp.commission), swap=Number(rp.swap);
  const costi=(Number.isFinite(comm)?2*comm:0)+(Number.isFinite(swap)?swap:0);   // negativo = costo
@@ -33589,6 +33665,9 @@ function mt5PrezzoPareggio(pos){
   const dist=-costi/vp;                       // quanto deve muoversi il prezzo per ripagare i costi
   prezzo=pos.side==='BUY'?entry+dist:entry-dist;
  }
+ // Il margine PRIMA dell'arrotondamento al passo dello strumento, cosi' il risultato resta un
+ // prezzo valido per il broker.
+ prezzo=allarga(prezzo);
  const pt=Number(rp.point);
  if(pt>0){
   const passi=prezzo/pt;
@@ -38129,6 +38208,11 @@ function applyLiveTick(p){
  // valore assente se il payload non lo include.
  if(asset){
    const ofr=Number(p.ofr??p.ask??p.offer);
+   // SPREAD DEL CAMBIO GIORNATA: si guarda QUI, prima della strozzatura dei 5 secondi qui sotto.
+   // Al rollover i tick sono rarissimi - sul conto del proprietario, cinque in cinque minuti - e
+   // scartarne uno vuol dire perdere proprio la misura che serve. La funzione guarda da sola se
+   // siamo nella finestra giusta, quindi fuori da li' non costa niente.
+   try{ fblSpreadRolloverOsserva(asset,price,ofr,p.timestamp); }catch(e){}
    if(Number.isFinite(ofr)&&(Date.now()-(__assetSpreadLastCapturedAt[asset]||0)>5000)){
      __assetSpreadLastCapturedAt[asset]=Date.now();
      const __meta=metaFromBidAsk(price,ofr,asset);
@@ -38187,8 +38271,10 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
    // Difesa aggiuntiva: mai chiudere su uno SL/TP <=0 (prezzo non reale) — vedi commento
    // analogo in evaluate().
    const slOk=Number.isFinite(pos.sl)&&pos.sl>0, tpOk=Number.isFinite(pos.tp)&&pos.tp>0;
+   // Stessa regola di evaluate(): una vendita si chiude all'ask (vedi fblSpreadUscita).
+   const sp=fblSpreadUscita(pos);
    if(pos.side==='BUY'){ sl=slOk&&price<=pos.sl; tp=tpOk&&price>=pos.tp; }
-   else{ sl=slOk&&price>=pos.sl; tp=tpOk&&price<=pos.tp; }
+   else{ sl=slOk&&(price+sp)>=pos.sl; tp=tpOk&&(price+sp)<=pos.tp; }
    if(sl||tp)closeTrade(sl?'SL':'TP',sl?pos.sl:pos.tp,pos);
  });
  // Attivazione ordini pendenti "in background": NON possiamo usare activatePendingOrder()
@@ -42148,6 +42234,233 @@ function fblVicinoAllaChiusura(asset,minuti,t){
  const manca=fblMancaAllaChiusura(asset,t);
  return manca!=null&&manca<=m*60000;
 }
+// CHIUDERE DA SOLI PRIMA CHE CHIUDA IL MERCATO.
+//
+// RICHIESTO dal proprietario (21 ottobre 2026), dopo aver visto i tick del rollover: «facciamo in
+// modo nella configurazione delle strategie delle sale che se c'e' una posizione ancora aperta
+// prima di scattare la chiusura del mercato, un minuto prima, se la posizione e' in guadagno,
+// l'utente puo' selezionare se chiudere automaticamente la posizione prima dello scadere della
+// chiusura del mercato. Questo deve stare sia sulla strategia universale che sulle strategie
+// singole per ogni sala».
+//
+// DUE SCELTE, ed entrambe vogliono dire "nel dubbio non si tocca":
+//   - si chiude SOLO se la posizione e' in GUADAGNO. Una posizione in perdita non si chiude per
+//     l'orario: chiuderla vorrebbe dire trasformare in perdita certa quella che poteva ancora
+//     girare, e non e' quello che e' stato chiesto;
+//   - e' SPENTO di predefinito. Chiude posizioni vere: lo si accende sapendo cosa fa.
+function fblChiusuraPreVuota(){ return {attivo:false,minuti:1}; }
+function fblChiusuraPreNormalizza(v){
+ const o=Object.assign(fblChiusuraPreVuota(),v||{});
+ const m=Number(o.minuti);
+ // Il tetto a 240 non e' prudenza spicciola: "chiudi tutto quattro ore prima" e' gia' una scelta
+ // molto larga, e un numero sbagliato di tre cifre in piu' chiuderebbe le posizioni sempre.
+ return {attivo:!!o.attivo,minuti:(Number.isFinite(m)&&m>0&&m<=240)?m:1};
+}
+// Quale impostazione vale per questa posizione: quella della SUA sala se l'ha scelta, altrimenti
+// quella universale. Stessa gerarchia del resto delle strategie.
+// DOVE VIVE L'IMPOSTAZIONE. Nello stesso oggetto che il pannello della strategia gia' scrive e
+// salva (tgAutoSalva): `tgAuto.universale` per quella universale, `tgAuto.sale[nome]` per la
+// singola sala. NON in stratLeggi/stratSalva: quello e' il magazzino della cronologia sale, un'
+// altra cosa - scriverci qui vorrebbe dire salvare dove nessuno legge.
+// LA GERARCHIA: la sala che ha scelto per conto suo vince; altrimenti vale quella universale.
+// Si noti che qui NON si guarda se la strategia universale e' "accesa": quella bandierina decide
+// come si ESEGUONO i segnali, mentre questa e' una protezione, e una protezione accesa una volta
+// sola deve valere per tutto quello che non ha detto il contrario.
+function fblChiusuraPreCfg(pos){
+ try{
+  const fam=(typeof fblFamigliaAsset==='function')?fblFamigliaAsset(pos&&pos.asset):'fx';
+  // Le configurazioni sono DUE, una per famiglia (forex e cripto): si prende quella dell'asset di
+  // questa posizione. Se la cripto non ne ha una sua (tgAutoCr puo' essere nullo) si ripiega su
+  // quella forex, come fa il resto dell'app.
+  let A=null;
+  try{ if(typeof tgAutoDi==='function')A=tgAutoDi(fam); }catch(e){}
+  if(!A)A=tgAutoFx;
+  if(!A)return fblChiusuraPreVuota();
+  const sala=pos&&pos.tgSala;
+  const s=sala&&A.sale&&A.sale[sala];
+  if(s&&s.chiusuraPre&&s.chiusuraPre.attivo!=null)return fblChiusuraPreNormalizza(s.chiusuraPre);
+  const u=(typeof tgAutoUni==='function')?tgAutoUni(A):(A.universale||null);
+  return fblChiusuraPreNormalizza(u&&u.chiusuraPre);
+ }catch(e){}
+ return fblChiusuraPreVuota();
+}
+// Questa posizione va chiusa adesso perche' il mercato sta per chiudere?
+function fblDaChiuderePrimaDellaChiusura(pos,t){
+ if(!pos||!pos.lots)return false;
+ const cfg=fblChiusuraPreCfg(pos);
+ if(!cfg.attivo)return false;
+ if(!fblVicinoAllaChiusura(pos.asset,cfg.minuti,t))return false;
+ const pl=(typeof fblPlCorrente==='function')?fblPlCorrente(pos):null;
+ // Senza un P/L non si sa se e' in guadagno: non si chiude. "Non si sa" non diventa mai "si'".
+ return Number.isFinite(pl)&&pl>0;
+}
+// L'ESECUZIONE. Gira ogni pochi secondi e chiude quello che va chiuso. NON chiede conferma: la
+// scelta e' gia' stata fatta accendendo l'interruttore, e all'ora di chiusura non c'e' nessuno
+// davanti allo schermo. Per questo l'interruttore e' spento di predefinito.
+let fblChiusuraPreUltimoGiro=0;
+async function fblChiusuraPreGiro(t){
+ // SOLO IN LIVE. In Storico si sta rivedendo il passato: chiudere li' una posizione perche'
+ // "sta per chiudere il mercato" non vorrebbe dire niente, e sporcherebbe il backtest.
+ if(!liveModeActive)return 0;
+ const quando=Number.isFinite(t)?t:Date.now();
+ // Ogni 5 secondi basta: la finestra si misura in minuti, e questo giro tocca ordini veri.
+ if(quando-fblChiusuraPreUltimoGiro<5000)return 0;
+ fblChiusuraPreUltimoGiro=quando;
+ let lista=[];
+ try{ lista=(typeof fblPosizioniBlocco==='function')?fblPosizioniBlocco():[]; }catch(e){ return 0; }
+ let fatte=0;
+ for(const pos of lista){
+  try{
+   // Gia' presa in carico da un giro precedente che sta ancora aspettando il broker: la chiusura
+   // reale e' asincrona, e senza questa bandierina il giro dopo la richiederebbe una seconda volta.
+   if(pos.__chiusuraPreInCorso)continue;
+   if(!fblDaChiuderePrimaDellaChiusura(pos,quando))continue;
+   pos.__chiusuraPreInCorso=true;
+   const quanto=(typeof fblPlCorrente==='function')?fblPlCorrente(pos):null;
+   if(pos.mt5Ticket!=null){
+    const ok=await closeMt5PositionReal(pos,'PRE-CHIUSURA',{senzaConferma:true});
+    if(ok)fatte++; else pos.__chiusuraPreInCorso=false;   // non riuscita: si riprovera'
+   }else{
+    const prezzo=(typeof fblPrezzoChiusura==='function')?fblPrezzoChiusura(pos):null;
+    if(prezzo==null){ pos.__chiusuraPreInCorso=false; continue; }
+    closeTrade('PRE-CHIUSURA',prezzo,pos); fatte++;
+   }
+   if(fatte){
+    $('status').textContent='🕛 '+(pos.asset||'')+': chiusa prima della chiusura del mercato con '
+     +((quanto!=null&&quanto>=0?'+':'')+(quanto!=null?euro(quanto):'—'))
+     +'. Al cambio giornata lo spread si apre e lo stop puo’ scattare su un prezzo che il grafico non mostra.';
+   }
+  }catch(e){ try{ pos.__chiusuraPreInCorso=false; }catch(e2){} }
+ }
+ if(fatte){ try{ draw(); update(); }catch(e){} }
+ return fatte;
+}
+// UN GIRO PROPRIO, non agganciato al timer del grafico. Quel timer esce subito quando la sorgente
+// e' MT5 (`if(mt5ActiveSymbol)return;`), cioe' proprio nel caso che questa funzione deve coprire.
+// E deve girare anche a scheda nascosta: il senso e' che funzioni quando NON si sta guardando.
+try{ setInterval(()=>{ try{ fblChiusuraPreGiro(); }catch(e){} },5000); }catch(e){}
+
+// QUANTO SI APRE LO SPREAD AL CAMBIO GIORNATA — MISURATO, NON INDOVINATO.
+//
+// Il numero del 21 ottobre 2026 (EURCHF): 0,2 pip di spread normale, 50 pip alle 00:00:42. Una
+// stima scritta a mano sarebbe stata sbagliata di due ordini di grandezza. Il dato pero' passa
+// davanti all'app a ogni tick: basta guardarlo nel momento giusto e ricordarselo.
+// Si tiene il PEGGIO visto nella mezz'ora attorno a una chiusura, per asset. Il peggio e non la
+// media, perche' serve a dire "il tuo stop e' dentro la forbice": e la forbice che conta e' quella
+// larga, non quella tipica.
+const FBL_SPREAD_ROLL_KEY='fbl_spread_rollover';
+let fblSpreadRoll={};
+try{ fblSpreadRoll=JSON.parse(localStorage.getItem(FBL_SPREAD_ROLL_KEY)||'{}')||{}; }catch(e){ fblSpreadRoll={}; }
+function fblSpreadRolloverOsserva(asset,bid,ask,t){
+ if(!asset)return;
+ const b=Number(bid), a=Number(ask);
+ if(!(b>0&&a>0&&a>b))return;
+ const quando=Number.isFinite(t)?t:Date.now();
+ const manca=fblMancaAllaChiusura(asset,quando);
+ // La mezz'ora prima della chiusura: lo spread si apre gradualmente, non di colpo all'istante.
+ if(manca==null||manca>30*60000)return;
+ let passo=0; try{ passo=pipSizeForAsset(asset); }catch(e){}
+ if(!(passo>0))return;
+ const pips=Math.round(((a-b)/passo)*10)/10;
+ const prec=fblSpreadRoll[asset];
+ // Si tiene il peggio, ma non per sempre: dopo due mesi quel numero parla di un altro mercato.
+ const vecchio=prec&&Number.isFinite(prec.il)&&(quando-prec.il)>60*86400000;
+ if(prec&&!vecchio&&Number.isFinite(prec.pips)&&prec.pips>=pips)return;
+ fblSpreadRoll[asset]={pips,il:quando};
+ try{ localStorage.setItem(FBL_SPREAD_ROLL_KEY,JSON.stringify(fblSpreadRoll)); }catch(e){}
+}
+function fblSpreadRolloverPips(asset){
+ const m=fblSpreadRoll&&fblSpreadRoll[asset];
+ if(m&&Number.isFinite(m.pips)&&m.pips>0)return m.pips;
+ // Finche' un rollover non si e' visto: una stima DICHIARATA, venti volte lo spread normale e
+ // comunque non meno di dieci pip. Sul caso misurato (EURCHF, tipico 1,0) darebbe 20 contro i 50
+ // veri: sbagliata per difetto, quindi prudente nella direzione giusta - avvisa di meno, non di
+ // piu'. Appena l'app vede un rollover vero, questo numero non serve piu'.
+ let tipico=1; try{ tipico=typicalSpreadPipsForAsset(asset); }catch(e){}
+ return Math.max(10,(Number.isFinite(tipico)?tipico:1)*20);
+}
+// Le posizioni il cui stop sta DENTRO la forbice del rollover: quelle che il cambio giornata puo'
+// prendere anche se il mercato non si muove.
+function fblPosizioniARischioChiusura(asset,t){
+ const out=[];
+ try{
+  let passo=0; try{ passo=pipSizeForAsset(asset); }catch(e){}
+  if(!(passo>0))return out;
+  const forbice=fblSpreadRolloverPips(asset)*passo;
+  const lista=(typeof fblPosizioniBlocco==='function')?fblPosizioniBlocco():[];
+  lista.forEach(p=>{
+   if(!p||String(p.asset||'')!==String(asset))return;
+   const sl=Number(p.sl);
+   if(!(Number.isFinite(sl)&&sl>0))return;
+   const prezzo=(typeof fblPrezzoChiusura==='function')?fblPrezzoChiusura(p):null;
+   if(!(Number.isFinite(prezzo)&&prezzo>0))return;
+   // Quanto dista lo stop dalla parte da cui puo' essere preso.
+   const dist=(p.side==='BUY')?(prezzo-sl):(sl-prezzo);
+   if(dist<=forbice)out.push({pos:p,dist,forbice});
+  });
+ }catch(e){}
+ return out;
+}
+// L'AVVISO. Un quarto d'ora prima della chiusura, se c'e' qualcosa da perdere, lo dice - e lo dice
+// anche con una notifica del browser, perche' a quell'ora la scheda e' quasi sempre in secondo
+// piano. Una volta sola per ogni chiusura: non si martella.
+const FBL_AVVISO_CHIUSURA_MIN=15;
+let fblAvvisoChiusuraFatto={};
+function fblAvvisoChiusuraGiro(t){
+ if(!liveModeActive)return 0;
+ const quando=Number.isFinite(t)?t:Date.now();
+ let lista=[];
+ try{ lista=(typeof fblPosizioniBlocco==='function')?fblPosizioniBlocco():[]; }catch(e){ return 0; }
+ const assets=[...new Set(lista.map(p=>String((p&&p.asset)||'')).filter(Boolean))];
+ let detti=0;
+ assets.forEach(asset=>{
+  const chiusura=fblProssimaChiusura(asset,quando);
+  if(chiusura==null)return;
+  if(chiusura-quando>FBL_AVVISO_CHIUSURA_MIN*60000)return;
+  if(fblAvvisoChiusuraFatto[asset]===chiusura)return;     // gia' detto per QUESTA chiusura
+  const rischio=fblPosizioniARischioChiusura(asset,quando);
+  if(!rischio.length)return;
+  fblAvvisoChiusuraFatto[asset]=chiusura;
+  const minuti=Math.max(1,Math.round((chiusura-quando)/60000));
+  const forbice=Math.round(fblSpreadRolloverPips(asset)*10)/10;
+  const misurato=!!(fblSpreadRoll&&fblSpreadRoll[asset]);
+  const testo=asset+': fra '+minuti+(minuti===1?' minuto':' minuti')+' chiude il mercato, e '
+   +rischio.length+(rischio.length===1?' posizione ha lo stop':' posizioni hanno lo stop')
+   +' dentro la forbice del cambio giornata (~'+forbice+' pip'+(misurato?' misurati qui':' stimati')+'). '
+   +'Lo stop di una vendita si esegue sul prezzo di acquisto: puo’ scattare senza che il grafico ci arrivi.';
+  try{ $('status').textContent='🕛 '+testo; }catch(e){}
+  try{
+   if(typeof Notification!=='undefined'&&Notification.permission==='granted')
+    new Notification('🕛 Chiusura del mercato — Forex Backtest LAB',{body:testo,tag:'fxbt-chiusura-'+asset});
+  }catch(e){}
+  detti++;
+ });
+ return detti;
+}
+try{ setInterval(()=>{ try{ fblAvvisoChiusuraGiro(); }catch(e){} },30000); }catch(e){}
+
+// LO SPREAD NELLA SIMULAZIONE: una vendita si chiude sull'ASK, non sul prezzo del grafico.
+//
+// Il grafico (il nostro e quello di MT5) disegna il BID. Chi ha comprato chiude VENDENDO, cioe'
+// al bid: per lui il grafico dice gia' la verita'. Chi ha venduto chiude COMPRANDO, cioe'
+// all'ASK, che sta sempre piu' in alto di tutto lo spread. Finora la simulazione confrontava
+// stop e target delle vendite col bid, quindi le vendite sopravvivevano a eventi che sul conto
+// vero le avrebbero chiuse - ed e' esattamente quello che e' successo il 21 ottobre 2026: tre
+// SELL chiuse dal broker a 0,92827 mentre il bid stava a 0,92461. In backtest, quella notte, non
+// sarebbe successo niente: i risultati del simulato risultano migliori del reale proprio nei
+// momenti peggiori.
+//
+// Resta una cosa fuori, e va detta invece di nasconderla: qui si modella lo spread sull'USCITA
+// delle vendite, non sull'ENTRATA degli acquisti (che in simulazione entrano al prezzo del
+// grafico invece che all'ask). In Modalita' Prop Firm l'entrata lo spread ce l'ha gia'
+// (applySpreadToEntry), quindi li' il giro e' completo; fuori, la simulazione resta ottimista
+// sugli acquisti quanto lo era prima - non di piu'.
+function fblSpreadUscita(pos){
+ if(!pos||pos.side==='BUY')return 0;   // l'acquisto si chiude al bid: il grafico e' gia' quello
+ let sp=0;
+ try{ sp=spreadCostForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ sp=0; }
+ return (Number.isFinite(sp)&&sp>0)?sp:0;
+}
 /* CHIUSURA DEL MERCATO: FINE */
 // UNA SOLA DOMANDA, UNA SOLA RISPOSTA: "in questo istante il mercato di questo asset e' fermo?"
 //
@@ -45454,6 +45767,13 @@ function stratSalva(sala,cfg){
  let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
  d[sala]=cfg; try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
 }
+// ESPOSTE SU window APPOSTA. Tutto questo blocco gira dentro una funzione chiusa, quindi i suoi
+// nomi NON sono globali: dall'altro script (quello grosso) `stratLeggi` risulta "non definita" e
+// ogni lettura della strategia di sala fallirebbe in silenzio - sulla carta la chiamata c'e',
+// nell'app vale `undefined`. E' lo stesso inciampo gia' pagato con pubblicaPreferenze, ed e' lo
+// stesso rimedio. Serve a fblChiusuraPreCfg(), che deve sapere se una SALA ha scelto per conto
+// suo di chiudere prima della chiusura del mercato.
+try{ window.stratLeggi=stratLeggi; window.stratSalva=stratSalva; }catch(e){}
 // Quanti TP ha davvero questa sala: non si mostrano cinque righe se i segnali ne hanno due.
 // QUANTI TARGET HA DAVVERO QUESTA SALA.
 // RICHIESTO: il numero di target da configurare dev'essere quello massimo che la sala ha usato

@@ -500,3 +500,38 @@
   si apre di decine di pip: una chiusura «a un prezzo mai toccato» puo' essere regolarissima. Prima
   di dare la colpa al codice si guarda se il codice poteva anche solo toccare quella posizione: qui
   non poteva, le posizioni reali sono escluse da entrambe le funzioni che chiudono.
+
+- Il prezzo che vedi non e' il prezzo che esegue, e la differenza si apre proprio quando fa male.
+  (21 ottobre 2026, il rollover di EURCHF.) I grafici disegnano il BID; lo stop di una VENDITA si
+  esegue sull'ASK. Al cambio giornata lo spread passa da 0,2 a 50 pip - misurati sui tick veri - e
+  una posizione viene chiusa a un prezzo che il grafico non mostra MAI, anzi mentre il grafico va
+  nella direzione opposta. LA REGOLA: ovunque si confronti un livello con un prezzo (stop, target,
+  avvisi, simulazione) bisogna sapere QUALE lato della forbice conta; e un numero come "quanto si
+  apre lo spread" si MISURA dai dati che passano gia' davanti, non si stima a mente. Il sintomo da
+  riconoscere e' "chiuso a un prezzo dove il mercato non e' mai andato".
+
+- Uno stop al pareggio esatto e' uno stop dentro la forbice. (21 ottobre 2026, stessa vicenda.)
+  Il pareggio era stato reso ESATTO apposta, togliendo lo spread "perche' ne usciva un piccolo
+  guadagno": il risultato era uno stop a un decimo di pip dall'entrata (0,92827 contro 0,92828),
+  che al primo allargamento viene preso con certezza. LA REGOLA: un livello di protezione va messo
+  FUORI dal rumore che lo circonda, non sul punto esatto; e quando si toglie un margine, si
+  controlla cosa resta a proteggere.
+
+- Prima di dare la colpa al codice, guardare se il codice poteva anche solo TOCCARE quella cosa.
+  (21 ottobre 2026.) La prima diagnosi era un difetto vero, ma non c'entrava con il caso segnalato:
+  la posizione era reale su MT5, ed evaluate() e scanHistoricalSlTpTouches() escludono entrambe le
+  posizioni con mt5Ticket. Bastava leggere quel filtro per sapere che la causa stava altrove.
+  L'ha fatto notare il proprietario, non io: "MT5 dovrebbe essere indipendente dall'applicazione".
+
+- Un test che diventa rosso dopo una correzione VOLUTA non si aggiusta di nascosto.
+  (21 ottobre 2026, gruppi_be_chiudi.) Pretendeva lo stop esattamente sull'entrata, cioe' il
+  comportamento che si era appena deciso di cambiare. Si aggiorna il numero atteso, si tiene
+  l'intento (ogni stop sul pareggio della SUA posizione, non un valore unico per il gruppo) e si
+  SCRIVE nel commento perche' e' cambiato: altrimenti fra un mese sembra che qualcuno l'abbia
+  piegato per farlo passare.
+
+- Quanti test cadono dopo una modifica dice quanto quella parte era coperta. (21 ottobre 2026.)
+  Modellare lo spread sull'uscita delle vendite ha fatto cadere UN solo test: segno che la
+  valutazione degli stop sulle vendite era quasi scoperta - proprio il lato che aveva fatto perdere
+  i soldi. Un collaudo che non si accorge di un cambiamento del genere non sta proteggendo quella
+  parte: e' un'informazione da leggere, non un sollievo.

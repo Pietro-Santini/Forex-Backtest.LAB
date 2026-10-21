@@ -614,7 +614,16 @@
 //             Firebase qui nella pagina. Inoltre: la scala dell'interfaccia e la dimensione del
 //             testo si applicano a MODIFICA FINITA (prima a ogni tasto: dal 50%% non si poteva
 //             arrivare al 30%%, il numero veniva riscritto sotto le dita).
-const CACHE_NAME = "forex-backtest-lab-v2.0.11";
+// v2.0.12 -  IL CAMBIO GIORNATA NON TI PRENDE PIU' DI SORPRESA. Misurato sui tick veri del conto
+//            (EURCHF, 00:00:42): bid 0,92461 e ask 0,92961, cioe' 50 pip di spread contro gli 0,2
+//            abituali. Lo stop di una vendita si esegue sull'ASK: tre posizioni chiuse mentre il
+//            grafico del bid mostrava il movimento opposto. Ora: (1) avviso un quarto d'ora prima
+//            se uno stop sta dentro la forbice; (2) la forbice si MISURA per asset invece di
+//            indovinarla; (3) il pareggio lascia un margine pari allo spread, invece di mettere lo
+//            stop a un decimo di pip dall'entrata; (4) in simulazione una vendita si chiude
+//            sull'ask, non sul prezzo del grafico. E le posizioni in guadagno si possono chiudere
+//            da sole prima della chiusura, scegliendolo nella strategia della sala o universale.
+const CACHE_NAME = "forex-backtest-lab-v2.0.12";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
