@@ -623,7 +623,15 @@
 //            stop a un decimo di pip dall'entrata; (4) in simulazione una vendita si chiude
 //            sull'ask, non sul prezzo del grafico. E le posizioni in guadagno si possono chiudere
 //            da sole prima della chiusura, scegliendolo nella strategia della sala o universale.
-const CACHE_NAME = "forex-backtest-lab-v2.0.12";
+// v2.0.13 -  CAPITOLO 2 (soldi e operazioni) e i lavori della notte. Il collaudo non tocca piu'
+//            il ponte MT5 del proprietario (apriva WebSocket veri verso le sue porte 8001/8769,
+//            centinaia di volte per giro, interrompendogli il collegamento mentre operava); il
+//            pulsante «Aggiorna» si spegne da solo dopo l'aggiornamento; UNA conferma sola per
+//            le chiusure multiple (prima ogni posizione REALE apriva il suo popup); operazioni a
+//            blocco anche su Kraken; via «Operazione» dal riquadro a schermo intero; le
+//            impostazioni (footprint, indicatori, decimali, strategie sale) seguono l'account,
+//            i segreti no; e il conto segue l'asset: cripto -> Kraken, forex/indici/azioni -> MT5.
+const CACHE_NAME = "forex-backtest-lab-v2.0.13";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

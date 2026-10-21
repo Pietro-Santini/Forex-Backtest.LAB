@@ -1872,16 +1872,29 @@ function pubblicaPreferenze(){
         <div id="syntraStatoBox" style="font-size:12.5px;line-height:1.5;color:#cdd6e0;background:#1a2230;border:1px solid #2c3a4f;border-radius:7px;padding:10px;margin-bottom:8px">Ponte segnali non collegato.</div>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px"><input type="checkbox" id="syntraAttivo" style="width:17px;height:17px;accent-color:var(--fbAccent2)"> <b>Leggi le operazioni condivise su Syntra</b></label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:12.5px;margin-top:8px"><input type="checkbox" id="syntraAvvio" checked style="width:16px;height:16px;accent-color:var(--fbAccent2)"> Apri da solo BlueStacks e Syntra se sono chiusi (nessun tocco a mano)</label>
+        <!-- PORTA E «SCEGLI CARTELLA»: TOLTE il 21 ottobre 2026.
+             La PORTA, su richiesta del proprietario: «mi viene visualizzata la porta syntra ma a me
+             non interessa, fa tutto da solo il server e pc, all'utente queste informazioni non
+             devono risalire». Nessuno la leggeva: era scritta li' e basta.
+             «SCEGLI CARTELLA» non poteva funzionare, e non era collegata a nulla: un browser NON
+             puo' conoscere il percorso reale di una cartella (showDirectoryPicker restituisce un
+             riferimento, non "C:\..."), quindi da li' non sarebbe mai potuto uscire un percorso da
+             dare al ponte. Un pulsante che promette una cosa impossibile e' peggio di un pulsante
+             assente: il proprietario infatti scriveva «mi dice di selezionare la cartella syntra ma
+             non me la fa selezionare». Resta il campo dove il percorso si INCOLLA. -->
         <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
-           <label style="flex:none;min-width:110px">Porta Syntra</label>
-           <input id="syntraPort" type="number" min="1024" max="65535" value="8770" style="width:80px">
-           <button type="button" id="syntraRefreshBtn" class="miniBtn" style="margin-left:10px">↻ Ricontrolla</button>
+           <label style="flex:none;min-width:110px" title="La cartella di BlueStacks sul PC. Si incolla: il browser non puo' leggerla da solo.">Cartella BlueStacks</label>
+           <input id="syntraFolder" class="tgCfgIn" type="text" placeholder="incolla il percorso, es. C:\Program Files\BlueStacks_nxt" style="flex:1;min-width:220px">
+           <button type="button" id="syntraRefreshBtn" class="miniBtn" style="width:auto">↻ Ricontrolla</button>
         </div>
-        <div class="fbOptRow" style="margin-bottom:6px;gap:8px">
-           <label style="flex:none;min-width:110px">Cartella Syntra</label>
-           <input id="syntraFolder" class="tgCfgIn" type="text" placeholder="es. C:\\Syntra" style="flex:1;min-width:220px">
-           <button type="button" id="syntraFolderPick" class="miniBtn" style="width:auto">Scegli cartella</button>
-        </div>
+        <!-- GLI UTENTI SYNTRA GIA' VISTI. Questo contenitore era stato CANCELLATO per sbaglio dal
+             commit 31d9fe3 (quello dell'APK e della scheda Versione): la funzione che lo riempie,
+             syntraUtentiDisegna(), e' rimasta e continuava a essere chiamata, ma trovava
+             `box` nullo e usciva alla prima riga. Da fuori: «non mi fa piu' visualizzare i nomi
+             utenti di syntra precedentemente inseriti», senza nessun errore da nessuna parte.
+             Un contenitore che sparisce non rompe niente: smette solo di mostrare. -->
+        <div class="hint" style="margin:10px 0 4px;font-weight:700;letter-spacing:.3px">UTENTI SYNTRA VISTI</div>
+        <div id="syntraUtentiList" style="display:flex;flex-direction:column;gap:6px;margin-bottom:6px"></div>
         <p class="hint" style="margin-top:8px">L'emulatore Syntra gira su BlueStacks (Android) sul PC. Il ponte legge il database locale dell'emulatore e manda i segnali all'app. Non serve un account: Syntra condivide le operazioni via codice utente.</p>
         </div>
         <p class="hint" style="margin:0 0 10px">Il numero viene ricordato <b>su questo browser</b> (nessun server) solo dopo un accesso riuscito, e dall'accesso successivo viene mandato da solo: il popup non ricompare più. Il <b>codice di verifica non viene mai salvato</b> - è monouso e scade in pochi minuti, tenerlo non servirebbe a niente. A non farlo richiedere ogni volta è il ponte sul PC, che conserva la sua sessione Telegram in un file locale.</p>
@@ -6642,12 +6655,34 @@ async function idbGet(key){
 // dallo script di login/STEP 0a) sia disponibile E che il primo controllo di login sia
 // concluso: i due script partono in ordine non garantito, quindi non possiamo assumere che
 // window.fxbtCloud esista già quando questo script classico parte.
+// ASPETTA, MA NON PER SEMPRE, E RALLENTANDO.
+//
+// MISURATO il 21 ottobre 2026, cercando la causa del «dopo gli aggiornamenti l'applicazione
+// inizia a laggare e scattare»: con la pagina ferma, l'app aveva 27 timer attivi per un totale di
+// 77,6 risvegli al secondo - e SESSANTASEI venivano da qui. Questa attesa controllava ogni 30
+// millisecondi (33 volte al secondo) se Firebase fosse pronto, e smetteva solo quando arrivava.
+// SENZA RETE Firebase non arriva mai: i due timer restavano a battere per sempre, impedendo al
+// browser di stare fermo. Il proprietario sospettava «un problema a monte di connettivita'», ed
+// era vero - ma non nel modo che immaginava: non e' la rete lenta a far scattare il grafico, e'
+// l'app che, quando la rete manca, si mette a girare a vuoto.
+//
+// Adesso: parte veloce (30 ms, cosi' all'avvio normale non si perde niente), rallenta fino a
+// mezzo secondo, e dopo trenta secondi si ARRENDE restituendo null. Tutti e quattro i punti che
+// la chiamano sanno gia' cosa fare senza nuvola - uno di loro aveva perfino una corsa contro un
+// timeout di 20 secondi, messa li' proprio perche' questa poteva non tornare mai.
 function waitForFxbtCloud(){
  return new Promise(resolve=>{
    if(window.fxbtCloud){ window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); return; }
-   const t=setInterval(()=>{
-     if(window.fxbtCloud){ clearInterval(t); window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); }
-   },30);
+   const inizio=Date.now();
+   let attesa=30;
+   const giro=()=>{
+     if(window.fxbtCloud){ window.fxbtCloud.ready.then(()=>resolve(window.fxbtCloud)); return; }
+     // Trenta secondi: oltre, la nuvola non sta arrivando. Meglio dirlo che restare in attesa.
+     if(Date.now()-inizio>30000){ resolve(null); return; }
+     attesa=Math.min(500,Math.round(attesa*1.5));
+     setTimeout(giro,attesa);
+   };
+   setTimeout(giro,attesa);
  });
 }
 async function idbClearAll(){
@@ -21161,6 +21196,10 @@ $('market')?.addEventListener('change',async()=>{
  // dopo vorrebbe dire caricare l'asset due volte e, per un istante, vedere le candele della fonte
  // sbagliata - e' lo stesso motivo per cui jumpToPositionOnChart sceglie il conto per primo.
  try{ await fblContoPerAsset(v); }catch(e){}
+ // IL GRAFICO SI COPRE FINCHE' I DATI NON SONO QUELLI DI QUESTO ASSET. Senza, per qualche secondo
+ // si legge il nome NUOVO sopra le candele VECCHIE: non e' un ritardo, e' una cosa falsa scritta
+ // a schermo, e in quei secondi si puo' decidere qualcosa guardandola.
+ try{ fblCaricamentoMostra(v,0); }catch(e){}
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
  // ORDINE RICHIESTO ESPLICITAMENTE: prima si ferma TUTTO l'aggiornamento del grafico (timer da
@@ -21170,11 +21209,23 @@ $('market')?.addEventListener('change',async()=>{
  // in cui il timer applicava all'asset NUOVO il prezzo del VECCHIO (vedi chartFeedSuspended).
  if(liveModeActive){
    suspendChartFeed('cambio asset -> '+v);
-   Promise.resolve(loadLiveHistoryFromCapital(v)).catch(e=>{
+   Promise.resolve(loadLiveHistoryFromCapital(v)).then(()=>{
+     // Storico arrivato e candele ricostruite: due passi su tre. Il terzo (il prezzo dal vivo) lo
+     // chiude resumeChartFeed, che e' il momento in cui il grafico torna davvero in diretta.
+     try{ fblCaricamentoMostra(v,2); }catch(e){}
+   }).catch(e=>{
      console.log('[ChartFeed] caricamento storico fallito al cambio asset:',e);
-   }).finally(resumeChartFeed);
+     // Se e' fallito, il riquadro non deve restare li' a girare per sempre: si toglie e si dice.
+     try{ fblCaricamentoFine(); }catch(e2){}
+     try{ $('status').textContent='Non sono riuscito a caricare lo storico di '+v+'.'; }catch(e2){}
+   }).finally(()=>{
+     resumeChartFeed();
+     try{ fblCaricamentoFine(); }catch(e){}
+   });
  }
- else autoLoadAssetLibrary(v);
+ else Promise.resolve(autoLoadAssetLibrary(v)).catch(()=>{}).finally(()=>{
+   try{ fblCaricamentoFine(); }catch(e){}
+ });
 });
 $('assetFavToggleBtn')?.addEventListener('click',toggleCurrentAssetWatchlist);
 $('watchlistModalCloseBtn')?.addEventListener('click',closeWatchlistModal);
@@ -22122,8 +22173,9 @@ function replayAnimTick(){
    // forward(true) = SILENZIOSO: valuta tutto (SL/TP, ordini pendenti) ma non ridisegna. Il
    // disegno si fa una volta sola, in fondo. Prima ogni candela completata si portava dietro un
    // draw() e un update() interi, ed e' da li' che venivano gli scatti ai moltiplicatori alti.
-   // La candela e' completata: il buffer delta della formazione finita va perso
-   // (la nuova formazione avra' il suo buffer).
+   // La candela e' completata: il footprint accumulato si DEPOSITA (non si butta piu',
+   // vedi replayFinalizzaFootprint), poi il buffer della formazione finita si azzera.
+   try{ replayFinalizzaFootprint(replayForm); }catch(e){}
    replayForm=null;
    forward(true);
    candeleCompletate++;
@@ -22137,6 +22189,9 @@ function replayAnimTick(){
  }
  if(replayForm&&replayForm.sub>=perBar){
   // Bordo: step esaurito proprio a soglia — completa comunque la candela e prosegue.
+  // Anche qui il footprint si deposita: e' la stessa candela completata, solo per un'altra
+  // strada, e dimenticarsene qui avrebbe lasciato il difetto vivo a moltiplicatori alti.
+  try{ replayFinalizzaFootprint(replayForm); }catch(e){}
   replayForm=null;
   forward(true);
   candeleCompletate++;
@@ -22210,6 +22265,47 @@ function replaySubAccumulo(f){
   const cell=f.fp.rows[k*step]||(f.fp.rows[k*step]=footprintNewCell());
   footprintAddToCell(cell,aggr>=0?1:-1,fetta,aggr,fetta);
  }
+}
+// IL FOOTPRINT DELLA CANDELA APPENA COMPLETATA NON SI BUTTA.
+//
+// SEGNALATO dal proprietario fra i «due pezzi grossi»: il footprint in replay. MISURATO il 21
+// ottobre: mentre la candela si forma il footprint cresce e si vede; nell'istante in cui la
+// candela diventa vera spariva. Non era un difetto di disegno - era scritto nel codice, e il
+// commento lo diceva pure: «la candela e' completata: il buffer delta della formazione finita va
+// perso». Il buffer veniva azzerato (replayForm=null) senza che nessuno lo depositasse da
+// nessuna parte, quindi la candela completata nasceva senza footprint.
+// (Nota per chi legge il diario: la voce del 19 ottobre dichiarava una funzione
+// `replayFinalizzaFootprint` che copiava il footprint in rows[idx].footprint. Quella funzione nel
+// file non c'era: il footprint delle candele completate in replay non e' mai stato salvato.)
+//
+// Qui si deposita nella STESSA memoria delle candele vere (footprintByBucket), con la stessa
+// griglia e le stesse celle: da quel momento la candela del replay ha un footprint
+// indistinguibile da quello di una candela dal vivo, e lo tiene.
+function replayFinalizzaFootprint(f){
+ try{
+  if(!f||!f.fp||!(f.fp.step>0)||!f.fp.rows)return false;
+  const r=rows[f.idx]; if(!r)return false;
+  const t=parseDateTime(r.date); if(!Number.isFinite(t))return false;
+  const chiavi=Object.keys(f.fp.rows);
+  if(!chiavi.length)return false;
+  const bucketStart=footprintBucketStart(t);
+  let bucket=footprintByBucket[bucketStart];
+  if(!bucket||bucket.step!==f.fp.step)bucket=footprintByBucket[bucketStart]={step:f.fp.step,rows:{}};
+  chiavi.forEach(k=>{
+   const src=f.fp.rows[k]; if(!src)return;
+   const dst=bucket.rows[k]||(bucket.rows[k]=footprintNewCell());
+   // Si SOMMA, non si sostituisce. In replay-Live i tick veri continuano ad arrivare e possono
+   // aver gia' scritto su questa candela: sovrascrivere butterebbe dati veri per metterci quelli
+   // ricostruiti, che e' esattamente il contrario di quello che serve.
+   dst.buy+=Number(src.buy)||0;
+   dst.sell+=Number(src.sell)||0;
+   if(dst.askVol===undefined){ dst.askVol=0; dst.bidVol=0; dst.trades=0; }
+   dst.askVol+=Number(src.askVol)||0;
+   dst.bidVol+=Number(src.bidVol)||0;
+   dst.trades+=Number(src.trades)||0;
+  });
+  return true;
+ }catch(e){ return false; }
 }
 // Disegno dell'anteprima di formazione: si disegna DOPO draw(), nello spazio vuoto oltre
 // l'ultima candela, senza toccare il rendering normale né i dati veri (solo estetica).
@@ -27027,6 +27123,20 @@ function tgMessaggioSegnali(ev,fonte){
      if(!m.ok)tgStato('Non sono riuscito a salvare: '+(m.errore||'errore sconosciuto'),'err');
      return;
    }
+   // LA CARTELLA DI BLUESTACKS, dal ponte. Il campo si riempie con quello che il ponte ha
+   // davvero in configurazione, non con quello che l'utente ha scritto: cosi' si vede se e'
+   // stata accettata. Se non si scrive mentre l'utente sta digitando (syntraCampiToccati).
+   if(m.tipo==='cartella_syntra'){
+     const el=$('syntraFolder');
+     if(el&&!syntraCampiToccati&&typeof m.cartella==='string')el.value=m.cartella;
+     if(m.ok===false)tgStato('Cartella BlueStacks non salvata: '+(m.errore||'errore sconosciuto'),'err');
+     else if(m.cartella!==undefined&&syntraCampiToccati){
+       syntraCampiToccati=false;
+       tgStato(m.cartella?('Cartella BlueStacks salvata sul ponte: '+m.cartella)
+                         :'Cartella BlueStacks tolta: il ponte la cerca da solo.');
+     }
+     return;
+   }
    if(m.tipo==='segnale'&&m.segnale){
      tgUltimoId=m.id||tgUltimoId;
      m.stato='nuovo';
@@ -27089,7 +27199,12 @@ function tgCollega(){
  catch(e){ tgStato('Non riesco ad aprire il collegamento al ponte sulla porta '+porta+'.','err'); return; }
  tgWs=ws;
  tgStato('Collegamento al ponte…');
- ws.onopen=()=>{ tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'}); };
+ ws.onopen=()=>{
+  tgInvia({ultimo_id:tgUltimoId,azione:'leggi_chat'});
+  // ...e si chiede anche dov'e' BlueStacks, cosi' il campo mostra quello che il ponte ha DAVVERO
+  // invece di restare vuoto e far credere che non sia configurata.
+  tgInvia({azione:'leggi_cartella_syntra'});
+ };
  ws.onmessage=ev=>tgMessaggioSegnali(ev,'principale');
  // Il ponte di Syntra e' un'altra cosa e sta altrove: si apre insieme, non al posto di questo.
  try{ tgSyntraCollega(); }catch(e){}
@@ -27412,6 +27527,30 @@ $('tgSalvaCredBtn')?.addEventListener('click',async ()=>{
  tgStato('Chiavi inviate al ponte: restano su questo dispositivo.');
 });
 $('tgDimenticaTelBtn')?.addEventListener('click',()=>{ tgEsciDaTelegram(); });
+// LA CARTELLA DI BLUESTACKS. Il percorso si INCOLLA: un browser non puo' leggerlo da una
+// finestra di scelta (showDirectoryPicker restituisce un riferimento, non "C:\..."), ed e' per
+// questo che il vecchio pulsante «Scegli cartella» non poteva funzionare ed e' stato tolto.
+// Si manda al ponte, che la scrive nella sua configurazione: l'app non tiene niente.
+$('syntraFolder')?.addEventListener('input',()=>{ syntraCampiToccati=true; });
+$('syntraFolder')?.addEventListener('change',async ()=>{
+ const el=$('syntraFolder'); if(!el)return;
+ syntraCampiToccati=true;
+ if(!tgAttivo()){ tgStato('Il ponte dei segnali e\' spento: accendilo per salvare la cartella.','err'); return; }
+ if(!(tgWs&&tgWs.readyState===1)){ await tgAssicuraPonte(); tgCollega(); }
+ for(let i=0;i<20&&!(tgWs&&tgWs.readyState===1);i++)await new Promise(r=>setTimeout(r,250));
+ if(!tgInvia({azione:'cartella_syntra',cartella:(el.value||'').trim()}))
+  tgStato('Ponte non raggiungibile: la cartella non e\' stata salvata.','err');
+});
+// «Ricontrolla»: si richiede al ponte quello che sa adesso (stato e cartella). Prima questo
+// pulsante non aveva nessun gestore: era un pulsante che non faceva niente.
+$('syntraRefreshBtn')?.addEventListener('click',async ()=>{
+ syntraCampiToccati=false;
+ if(!tgAttivo()){ tgStato('Il ponte dei segnali e\' spento.','err'); return; }
+ if(!(tgWs&&tgWs.readyState===1)){ await tgAssicuraPonte(); tgCollega(); }
+ for(let i=0;i<20&&!(tgWs&&tgWs.readyState===1);i++)await new Promise(r=>setTimeout(r,250));
+ if(!tgInvia({azione:'leggi_cartella_syntra'}))tgStato('Ponte non raggiungibile.','err');
+ else tgStato('Richiesto al ponte lo stato di Syntra.');
+});
 tgAggiornaInterruttore();
 window.addEventListener('resize',()=>{
  if(!tgPannelloAperto())return;
@@ -35383,6 +35522,9 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // (es. rollover di candela) riporterebbe la vista all'ultima candela, buttando via il replay.
  if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
+ // PRIMO PASSO FATTO: lo storico e' arrivato. Da qui in poi `rows` appartiene a questo asset, ed
+ // e' il momento esatto in cui la percentuale puo' dire "un terzo" senza raccontare balle.
+ try{ if(typeof fblCaricamentoAsset!=='undefined'&&fblCaricamentoAsset)fblCaricamentoMostra(fblCaricamentoAsset,1); }catch(e){}
  rebuildRows();
  // RICHIESTO ESPLICITAMENTE: subito dopo aver ricostruito lo storico per l'asset a grafico,
  // prima ancora di ridisegnare, controlliamo se nel frattempo (app chiusa, disconnessione
@@ -37883,6 +38025,88 @@ let lastPrimaryEpicPriceAsset=null;
 let chartFeedSuspended=false, chartFeedSuspendReason='';
 // Spegne ogni sorgente che puo' toccare la candela, e svuota lo stato volatile del prezzo. Da
 // chiamare SINCRONAMENTE prima di qualunque await che porti a un cambio di asset.
+/* CARICAMENTO ASSET: INIZIO - blocco provato da laboratorio/app/caricamento_asset.test.mjs
+   ------------------------------------------------------------------------------------------
+   RICHIESTO dal proprietario (21 ottobre 2026): «non deve mai visualizzarsi il nome dell'asset se
+   prima ancora non è stato caricato il grafico; la rotellina continuerà a girare fin quando non è
+   avvenuta l'esatta sincronizzazione del grafico per quel asset e vengono caricati tutti i dati».
+   E prima ancora: l'indicatore deve mostrare la PERCENTUALE, e con il grafico staccato deve
+   comparire NELLA FINESTRA SEPARATA, non sulla pagina principale che non si sta guardando.
+
+   IL DIFETTO vero: cambiando asset il nome nuovo compare subito nel selettore, ma le candele sono
+   ancora quelle VECCHIE - si legge "EURUSD" sopra il grafico dell'oro. Non e' un ritardo: e' una
+   cosa falsa scritta a schermo, e per qualche secondo si puo' prendere una decisione guardandola.
+   La cura e' coprire il grafico finche' i dati non sono quelli giusti.
+
+   LA PERCENTUALE E' VERA. Niente barre inventate che corrono da sole (altrove in questo file c'e'
+   scritto, giustamente, "senza barre di progresso inventate"): la percentuale conta i PASSI
+   davvero completati del caricamento, e ogni passo dice cosa sta facendo. Se un passo si pianta,
+   la percentuale si pianta li' - ed e' un'informazione, non un difetto. */
+const FBL_CARICAMENTO_PASSI=['Scarico lo storico','Ricostruisco le candele','Aggancio il prezzo dal vivo'];
+let fblCaricamentoAsset=null, fblCaricamentoPasso=0;
+// Il documento in cui vive il grafico ADESSO: in modalita' PIP e' la finestra separata. Si guarda
+// dove sta #chartWrap, non si indovina.
+function fblCaricamentoDoc(){
+ try{ if(floatingDoc&&floatingDoc.getElementById('chartWrap'))return floatingDoc; }catch(e){}
+ return document;
+}
+function fblCaricamentoBox(crea){
+ const doc=fblCaricamentoDoc();
+ let el=doc.getElementById('fblCaricamentoAsset');
+ if(el||!crea)return el;
+ const dove=doc.getElementById('chartWrap')||doc.body;
+ if(!dove)return null;
+ el=doc.createElement('div');
+ el.id='fblCaricamentoAsset';
+ el.style.cssText='position:absolute;inset:0;z-index:40;display:flex;flex-direction:column;'
+  +'align-items:center;justify-content:center;gap:10px;background:rgba(8,13,20,.93);'
+  +'backdrop-filter:blur(2px);font-family:Inter,system-ui,Arial,sans-serif;color:#e8edf3';
+ el.innerHTML='<div style="width:34px;height:34px;border:3px solid #24313f;border-top-color:#3ea6ff;'
+  +'border-radius:50%;animation:fblGira .9s linear infinite"></div>'
+  +'<div id="fblCaricamentoTitolo" style="font-size:14px;font-weight:700"></div>'
+  +'<div id="fblCaricamentoPasso" style="font-size:12px;color:#9fb0c0"></div>'
+  +'<div style="width:min(260px,60%);height:5px;background:#1a2430;border-radius:3px;overflow:hidden">'
+  +'<div id="fblCaricamentoBarra" style="height:100%;width:0;background:#3ea6ff;transition:width .2s"></div></div>';
+ // L'animazione va messa nel documento che ospita il riquadro: in PIP il foglio di stile della
+ // pagina principale non arriva.
+ if(!doc.getElementById('fblCaricamentoStile')){
+  const st=doc.createElement('style');
+  st.id='fblCaricamentoStile';
+  st.textContent='@keyframes fblGira{to{transform:rotate(360deg)}}';
+  (doc.head||doc.body).appendChild(st);
+ }
+ try{ if(getComputedStyle(dove).position==='static')dove.style.position='relative'; }catch(e){}
+ dove.appendChild(el);
+ return el;
+}
+function fblCaricamentoMostra(asset,passo){
+ fblCaricamentoAsset=String(asset||'');
+ fblCaricamentoPasso=Math.max(0,Math.min(FBL_CARICAMENTO_PASSI.length,Number(passo)||0));
+ const el=fblCaricamentoBox(true); if(!el)return;
+ const doc=el.ownerDocument;
+ const pct=Math.round(fblCaricamentoPasso/FBL_CARICAMENTO_PASSI.length*100);
+ const t=doc.getElementById('fblCaricamentoTitolo');
+ const p=doc.getElementById('fblCaricamentoPasso');
+ const b=doc.getElementById('fblCaricamentoBarra');
+ if(t)t.textContent='Carico '+fblCaricamentoAsset+'… '+pct+'%';
+ if(p)p.textContent=FBL_CARICAMENTO_PASSI[Math.min(fblCaricamentoPasso,FBL_CARICAMENTO_PASSI.length-1)]+'…';
+ if(b)b.style.width=pct+'%';
+ el.style.display='flex';
+}
+// Avanza di un passo. Si chiama quando un passo e' DAVVERO finito, non a tempo.
+function fblCaricamentoAvanza(){
+ if(fblCaricamentoAsset==null)return;
+ fblCaricamentoMostra(fblCaricamentoAsset,fblCaricamentoPasso+1);
+}
+function fblCaricamentoFine(){
+ fblCaricamentoAsset=null; fblCaricamentoPasso=0;
+ // Si toglie da ENTRAMBI i documenti: il grafico puo' essere stato staccato o riattaccato mentre
+ // caricava, e un riquadro rimasto nell'altra finestra coprirebbe il grafico per sempre.
+ [document,(typeof floatingDoc!=='undefined'&&floatingDoc)?floatingDoc:null].forEach(doc=>{
+  try{ const el=doc&&doc.getElementById('fblCaricamentoAsset'); if(el)el.remove(); }catch(e){}
+ });
+}
+/* CARICAMENTO ASSET: FINE */
 function suspendChartFeed(reason){
   chartFeedSuspended=true; chartFeedSuspendReason=reason||'';
   try{ stopLiveRefreshTimer(); }catch(e){}
