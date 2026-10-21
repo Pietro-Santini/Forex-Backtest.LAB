@@ -608,3 +608,36 @@
   (21 ottobre 2026, cartella_credenziali.) Due test uscivano subito se il browser non sapeva
   collegare una cartella (`if(!supportsFS)return`). Controllato nel banco che supportsFS sia true,
   cioe' che quel ramo NON scatti: senza quella verifica erano due verdi sul vuoto.
+
+- Quando l'utente segnala un difetto GIA' CORRETTO, la domanda giusta non e' «dove ho sbagliato
+  la correzione» ma «quale versione sta usando». (21 ottobre 2026.) Tre volte di fila la risposta
+  era quella - conferma unica delle chiusure, riquadro di caricamento, break-even negativo: tutte
+  gia' pubblicate, tutte descritte fedelmente com'erano nella v2.0.12 che lui aveva in mano. La
+  quarta volta ha smesso di essere una coincidenza ed e' diventata la causa da cercare: il canale
+  di aggiornamento era rotto (il ponte serviva app.html congelato dentro l'eseguibile) e teneva
+  nascosto tutto il lavoro fatto. UN DIFETTO CHE BLOCCA LA CONSEGNA VALE PIU' DI DIECI DIFETTI NEL
+  PRODOTTO. Come si verifica, invece di discutere: `git show <tag>:app.html | grep <la correzione>`.
+
+- Un aggiornatore che sbaglia e' peggio di nessun aggiornatore. (21 ottobre 2026.) Tre regole, e
+  ognuna nasce da un modo concreto di fare danno: LA COPPIA O NIENTE (app.html e sw.js insieme,
+  altrimenti un'app nuova dichiara una versione vecchia e il pulsante Aggiorna non si spegne piu');
+  MAI INDIETRO (una cache di un proxy non deve retrocedere l'app di chi la sta usando); SI
+  CONTROLLA CHE SIA DAVVERO L'APP (su GitHub Pages una pagina 404 arriva con HTTP 200).
+
+- Prima di correggere quello che l'utente vede nel Gestione attivita', guardare i NUMERI che ha
+  mandato. (21 ottobre 2026.) «Due processi Mt5FeedServer, penso che il lag derivi da questo»: 72 K
+  + 93.820 K. Un processo da 72 K non fa lavoro - e' l'avviatore di PyInstaller in modalita'
+  onefile, che mostra sempre due processi per programma. Sospetto chiuso senza scrivere una riga.
+  (Il doppione VERO era un altro, e si evita chiedendo alla porta se qualcuno risponde gia'.)
+
+- Un bersaglio SOTTILE E MIRATO si prende il clic; un RIEMPIMENTO LARGO no. (21 ottobre 2026, tre
+  difetti con una causa sola.) La casella Target/Stop e' un rettangolo che va dall'entrata fino ad
+  adesso: dandole la precedenza su tutta la sua area si uccidevano, in silenzio e su mezzo grafico,
+  sia la deselezione sia il cambio stile del footprint. Una linea TP/SL, una freccia, un disegno,
+  una candela sono bersagli che si prendono di proposito: quelli vincono.
+
+- La tolleranza di un tocco col dito non e' quella di un clic col mouse. (21 ottobre 2026.) Dieci
+  pixel di scivolamento annullavano il cambio stile sul telefono, senza dire niente: la soglia di
+  sistema su Android e' 8dp, che su uno schermo moderno fa 16-24 px reali. E un tocco dura di piu'
+  di un clic. Dove non c'e' un'azione legata alla pressione lunga, allargare la finestra non toglie
+  niente a nessuno.

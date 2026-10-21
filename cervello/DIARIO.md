@@ -2384,3 +2384,110 @@ getMt5CredsDirHandle che non torna più muto. Collaudo completo: 0 falliti.
 spariscono») conviene chiedersi che cosa, esattamente, è andato perso: qui non il file, ma il
 permesso di leggerlo. La differenza cambia tutto — una perdita di dati si ripara reinserendo, un
 permesso si ripara con un clic, e dirlo all'utente vale più di qualunque correzione.
+## 21 ottobre 2026 - v2.0.15: il tappo che bloccava tutto, e due cause misurate
+
+### Il difetto che nascondeva gli altri ⭐⭐
+
+Per mezza giornata il proprietario mi ha segnalato difetti che erano **già corretti e pubblicati**:
+la conferma unica sulle chiusure a blocco, il riquadro di caricamento che resta fino a fine
+sincronizzazione, lo stesso riquadro nella finestra PIP. Ogni volta ho verificato sul tag
+pubblicato invece di fidarmi, e ogni volta la risposta era la stessa: **lui descriveva fedelmente
+la versione che aveva in mano.** Era fermo alla v2.0.12.
+
+La causa non era il meccanismo web, che è fatto bene (`updateViaCache:'none'`, controllo ogni
+mezz'ora, ricarica automatica se l'utente ha premuto «Aggiorna»). Era **il ponte**: aperta
+dall'icona del desktop, la pagina non viene dal sito — la serve `bridge.py`, e la serviva da
+`sys._MEIPASS`, cioè la cartella temporanea dove PyInstaller estrae i file **congelati dentro
+l'eseguibile al momento della compilazione**.
+
+Quella copia è immutabile per costruzione. Il service worker, il pannello Versione e il pulsante
+«Aggiorna» lavoravano tutti su un file che nessun aggiornamento web poteva toccare: l'unico modo
+di aggiornare era reinstallare il Setup. Da qui «ogni aggiornamento non arriva», «dice che
+aggiorna e poi la versione non cambia», «devo reinstallare il pacchetto».
+
+**Ora il ponte scarica `app.html` e `sw.js` dal sito** in una cartella scrivibile e serve quella
+copia. Tre regole, perché un aggiornatore che sbaglia è peggio di nessun aggiornatore:
+
+1. **La coppia o niente.** I due file si sostituiscono insieme: `sw.js` porta il numero che il
+   pannello legge, quindi un `app.html` nuovo con un `sw.js` vecchio terrebbe «Aggiorna» acceso
+   per sempre — *lo stesso difetto segnalato, da un'altra porta*.
+2. **Mai indietro.** Una versione più vecchia (cache di un proxy, rollback) non sostituisce quella
+   installata: retrocedere l'app di chi la sta usando sarebbe un danno fatto dall'aggiornatore.
+3. **Si controlla che sia davvero l'app.** Su GitHub Pages una pagina «404» arriva con HTTP 200.
+
+Senza rete resta la copia installata: l'app parte sempre. E `/health` adesso **dichiara** quale
+versione sta servendo e da dove — il difetto più lungo di questo progetto è stato un utente che
+usava una versione vecchia senza saperlo.
+
+### Il grafico che «salta a marzo»: una moltiplicazione senza tetto ⭐
+
+«Ho cambiato il timeframe da un'ora, sono passato a un minuto, siamo il 21 di ottobre, mi è andato
+al 12 marzo. In maniera proprio totalmente casuale.»
+
+**Non era casuale.** La regola era «conserva la stessa finestra di tempo reale»: sensata in
+apparenza, ma da 1h a 1m moltiplica per 60. Misurato su uno storico come quello di un conto MT5
+vero (marzo → oggi), partendo da una vista a 1h:
+
+| Candele su 1h | Candele di 1m dopo il cambio | Bordo sinistro |
+|---|---|---|
+| 60 | 3.600 | 19 ottobre |
+| 600 | 36.000 | 26 settembre |
+| 2.000 | 120.000 | 30 luglio |
+| 5.000 | **300.000** | **27 marzo** |
+
+E sotto il primo difetto, un secondo: **il centro non veniva rispettato.** `viewEnd` restava
+incollato all'ultima candela (misurato: 321.870 in tutti e cinque i casi), quindi la finestra era
+ancorata a destra e il bordo sinistro scappava indietro di mesi.
+
+La cura: un **tetto** legato ai pixel disponibili — oltre quel punto una candela è più sottile di
+un pixel e non significa niente. Sotto il tetto la finestra di tempo si conserva esattamente come
+prima (e un test tiene fermo che 1m → 5m non cambi di una virgola); sopra, si tiene il centro.
+In più: se si stava guardando il **bordo live**, lì si resta — il centro di una vista che finisce
+«adesso» è mezza finestra fa, e riportarcisi lascerebbe l'ultima candela fuori schermo proprio a
+chi guardava il prezzo di adesso.
+
+Applicato a **tutte e cinque** le strade che ricalcolano la finestra, non a una. Misurato dopo:
+1.234 candele invece di 300.000, centrate dove si stava guardando. Lo stesso numero spiega la
+lentezza al cambio timeframe segnalata a parte.
+
+### Chi si prende un clic sul grafico: una regola per tre difetti ⭐
+
+Tre segnalazioni diverse, una causa sola.
+
+- «Mi seleziona in automatico una posizione senza che io tocchi nulla.» La parte che *nascondeva*
+  le altre era già stata staccata da `active`, ma **l'enfasi** (linea spessa, grassetto) era
+  rimasta legata ad `active`, che l'app riassegna da sola in cinque punti — fra cui l'apertura e
+  la chiusura automatica di una posizione da una sala segnali.
+- «Se tocco fuori deve deselezionare, anche sopra un indicatore: l'indicatore è un oggetto solo di
+  visualizzazione.» Due guardie lo impedivano: la **casella Target/Stop** (un rettangolo
+  dall'entrata fino ad adesso, che copre mezzo grafico) e gli **indicatori** del profilo volumi.
+- «Il cambio stile del footprint non può avere bug.» La stessa casella Target/Stop aveva la
+  precedenza su tutta la sua area; la tolleranza del tocco era quella di un mouse (10 px, 700 ms)
+  e non di un dito; e c'erano **due meccanismi per lo stesso gesto, di cui uno morto**.
+
+**La regola, scritta una volta per tutte e tre:** un bersaglio **sottile e mirato** si prende il
+clic (una linea TP/SL, la freccia di una posizione, un disegno, una candela); un **riempimento
+largo** no.
+
+### Due risposte che hanno tolto lavoro invece di aggiungerlo ⭐
+
+**I processi «doppi» non sono doppioni.** Il proprietario ha mandato la schermata del Gestione
+attività: due `Mt5FeedServer.exe`, due `ForexBacktestLABDesktop.exe`. Gli eseguibili sono costruiti
+*onefile* (`EXE()` senza `COLLECT`), e lì PyInstaller mostra **sempre** due processi per programma:
+un avviatore che scompatta in una cartella temporanea, e il processo vero. I suoi stessi numeri lo
+dicevano: 72 K + 93.820 K, 68 K + 15.016 K. Un sospetto in meno per il lag, senza scrivere una
+riga.
+
+*Il doppione vero però esisteva, ed era un altro*: il controllo che evita due servizi dati
+conosceva solo i processi avviati da quella istanza del ponte, quindi dopo un ponte morto male ne
+partiva un secondo che non prendeva nemmeno la porta. Ora si chiede alla porta.
+
+**Il break-even «che chiude in negativo» e la conferma multipla** erano la v2.0.12. Verificato
+diffando i tag pubblicati, non a memoria.
+
+### La lezione ⭐
+**Quando l'utente segnala un difetto già corretto, la domanda giusta non è «dove ho sbagliato la
+correzione» ma «quale versione sta usando».** Tre volte di fila la risposta era quella — e la
+quarta volta ha smesso di essere una coincidenza ed è diventata la causa da cercare: il canale di
+aggiornamento era rotto, e teneva nascosto tutto il lavoro fatto. Un difetto che blocca la
+consegna vale più di dieci difetti nel prodotto.

@@ -1,226 +1,157 @@
-# Scaletta — cosa manca da fare
+# Scaletta - cosa manca da fare
 
-Aggiornata il **21 ottobre 2026** (v2.0.13). Ordine: prima quello che **fa perdere soldi o fa
-fallire un'operazione**, poi quello che **era funzionante e non lo è più**, poi il **telefono
-inusabile**, poi la **sincronizzazione**, poi le **funzioni nuove**.
+Aggiornata il **21 ottobre 2026**, dopo la v2.0.15.
 
-Prima di toccare qualcosa: `cervello/PASSAGGIO-OPENCODE.md` e `cervello/LEZIONI.md`.
+**COME SI LEGGE.** Un punto e' FATTO solo quando esiste un test che prima falliva e ora passa, e
+il collaudo completo e' verde. Prima di toccare qualcosa: `cervello/PASSAGGIO-OPENCODE.md` e
+`cervello/LEZIONI.md`.
 
-**COME SI COMMITTA** (deciso dal proprietario il 21 ottobre): si committa **a capitolo chiuso**,
-non a ogni modifica — «altrimenti troppi commit e aggiornamenti facciamo». Si lavora sul ramo con
-il collaudo verde a ogni passo, e si pubblica una volta sola per capitolo.
+**COME SI COMMITTA** (deciso dal proprietario il 21 ottobre): a capitolo chiuso, non a ogni
+modifica - «altrimenti troppi commit e aggiornamenti facciamo».
 
----
-
-## 1. Capitolo 2 — soldi e operazioni (quasi chiuso)
-
-### 1.1 Kraken: la data di apertura delle posizioni cripto
-
-**Correzione importante alla premessa.** All'inizio era stata segnalata come «le aperture cripto
-falliscono», e la scaletta elencava i quattro motivi per cui il ponte può rifiutare. Il
-proprietario ha poi chiarito (21 ottobre): «in realtà le posizioni le apre tranquillamente, è solo
-il discorso della data di apertura che va risolto». Le quattro cause di rifiuto non c'entravano.
-
-**Il sintomo vero** è quello già segnalato il 16 ottobre: «ho aperto una posizione su Kraken alle
-ore 22, sono andato a riaprire il grafico e la posizione me l'ha messa alle 19.20».
-
-**Misurato il 21 ottobre, e nel codice di oggi la catena è intera:**
+**UNA VERIFICA CHE VIENE PRIMA DI TUTTE.** Se il proprietario segnala un difetto che risulta gia'
+corretto, prima di rimetterci le mani si controlla QUALE VERSIONE sta usando:
 
 ```
-simulatore   "aperta" (ms)  ->  _iso_apertura()  ->  "fillTime" (ISO, il nome di Kraken vero)
-ponte        _ms_iso()      ->  "aperta_ms"
-app          krakenOrarioApertoMs() lo preferisce a tutto: è un fatto
+git show v2.0.12:app.html | grep "la correzione"
 ```
 
-Verificato anche che il ponte **installato** sul PC del proprietario è del 21 ottobre, quindi
-contiene la correzione (arrivata con la v152). Quando `aperta_ms` manca, l'app ripiega
-sull'anagrafica — cioè su **quando ha visto** la posizione la prima volta: ed è esattamente così
-che una posizione aperta alle 22 finisce alle 19:20. Non è un orario sbagliato, è l'orario di un
-altro evento.
-
-**Quindi: le posizioni aperte da ora devono avere l'orario giusto.** Quelle aperte PRIMA della
-v152 non ce l'hanno e non possono recuperarlo: per loro c'è la cella «Eseguita», che si clicca e
-si dichiara l'orario a mano (v167).
-
-Test aggiunti: `laboratorio/ponte/test_kraken_orario_apertura.py` (4) — l'orario arriva fino in
-fondo, non cambia quando si aggiunge alla stessa posizione, riparte se la posizione si capovolge,
-e una posizione vecchia senza orario risponde «non lo so» invece di inventarne uno.
-
-**Da verificare sul vivo:** aprire una posizione cripto e guardare la colonna «Eseguita». Se
-mostra ancora «—», c'è un caso vero da misurare e i test sono già pronti a dire dove si rompe.
-
-### Fatto nel capitolo 2
-- clic su TP/SL nella tabella Kraken che cambiava il prezzo → tolto (si trascina dal grafico);
-- **una conferma sola** per chiusura multipla e «CHIUDI TUTTE»;
-- **operazioni a blocco su Kraken** (chiudi tutte / in guadagno / in perdita / per lato / per
-  contratto, più stop a pareggio su tutte);
-- **il conto segue l'asset**: cripto → Kraken, forex/indici/azioni/oro → MT5, anche da «vai a
-  grafico» (dove però il conto della POSIZIONE vince sempre).
-
-### 1.2 Il pareggio è zero — chiuso il 21 ottobre, dopo un errore mio
-
-Segnalato dal proprietario: «il programma sposta le posizioni a break-even, ma perdono ugualmente
-meno 2 euro». La causa era una mia correzione della stessa mattina: per difendere lo stop dal
-cambio giornata avevo aggiunto al pareggio **un margine pari allo spread**. Un pulsante che si
-chiama «pareggio» e lascia meno due euro non è una protezione con un piccolo costo: è un'etichetta
-che mente.
-
-**Com'è adesso:** il prezzo di pareggio è di nuovo **esatto** (netto 0,00, commissioni di andata e
-ritorno e swap compresi, arrotondamento al tick sempre a favore di chi ha la posizione), e la
-difesa dal rollover si è spostata dove non costa niente — chi piazza lo stop **si rifiuta** quando
-quello stop cadrebbe dentro la forbice fra compra e vendi, e lo dice. Così lo stop che c'era prima,
-che è **più lontano**, resta a fare il suo lavoro.
-
-Il rifiuto è su **tutte e quattro** le strade del pareggio: pulsante della tabella (da cui passa
-anche il BE di gruppo), pulsante BE della tabella «Posizioni MT5» (che legge il preventivo vero,
-bid/ask), strategia della sala all'avvicinamento al primo target, regola «stop all'entrata». Nelle
-due automatiche il rifiuto è silenzioso e si riprova da solo al giro dopo.
-
-**Limite dichiarato, su Kraken:** lì lo stop a pareggio va sul prezzo d'entrata e basta, perché la
-commissione dello scambio non arriva all'app posizione per posizione. Scritto nella conferma invece
-di stimarlo.
+Il 21 ottobre e' successo tre volte di fila (conferma unica delle chiusure, riquadro di
+caricamento, break-even negativo): erano tutte gia' pubblicate, e lui descriveva fedelmente la
+v2.0.12 che aveva in mano. La causa vera era il canale di aggiornamento rotto - vedi v2.0.15.
 
 ---
 
-## 2. Capitolo 3 — funzioni che c'erano e non vanno più
+## 1. Da fare - difetti con la causa gia' trovata
 
-### 2.1 Syntra: il robot non scansiona più ⭐⭐
-**Quattro cose insieme:** (1) non esegue più la scansione; (2) chiede di selezionare la cartella
-Syntra ma non la fa selezionare (`syntraFolderPick`); (3) mostra la **porta** Syntra, che
-all'utente non deve risalire; (4) non mostra più i **nomi utente** Syntra già inseriti.
-**Resta aperto anche il difetto di prima:** la cronologia si ferma alla prima operazione; deve
-scorrere, espandere, leggere, controllare la data e ripetere fino al periodo scelto; e per tornare
-a cercare nuovi ordini deve **ripremere «setup» in basso a sinistra** (dalla classifica non basta).
-→ `installer_build/build/segnali_telegram/syntra_lettore.py`. ⚠️ **Richiede di ricostruire e
-reinstallare il ponte.**
+### 1.1 Trade Journal che sparisce dopo aggiornamenti e reinstallazioni
+Segnalato: «non rimane salvato in memoria nel trade journal e sparisce alla prossima installazione
+del programma o aggiornamento». CAUSA TROVATA: le operazioni vivono in localStorage+IndexedDB
+(separati per indirizzo d'ingresso: sito, 127.0.0.1 del ponte, localhost dell'APK), e la copia sul
+cloud si scrive SOLO su `pagehide` - cioe' nell'istante in cui la pagina viene distrutta, quando
+una scrittura su Firestore puo' non arrivare mai. All'avvio il cloud viene letto solo se in locale
+non c'e' niente. CURA: scrivere il journal sul cloud QUANDO CAMBIA (un'operazione che si chiude e'
+un evento raro), piu' la scrittura all'uscita forzata.
 
-### 2.2 Caricamento del grafico al cambio asset ⭐
-«Non deve mai visualizzarsi il nome dell'asset se prima ancora non è stato caricato il grafico, la
-rotellina continuerà a girare fin quando non è avvenuta l'esatta sincronizzazione.» Più la
-**percentuale** di caricamento, e il popup che compare **nella finestra PIP** quando il grafico è
-staccato.
+### 1.2 Cambio asset: si vede ancora l'asset precedente
+Segnalato: «viene visualizzato ancora il grafico precedente, le posizioni, il prezzo dell'asset
+precedente, mentre ha caricato l'asset selezionato». Da verificare dopo la v2.0.15: il riquadro di
+caricamento fino a sincronizzazione completa (anche in PIP) e' della v2.0.13, che il proprietario
+non aveva.
 
-### 2.3 Freeze e scatti dopo gli aggiornamenti
-Da **misurare**, non da indovinare: profilo del browser su scorrimento pagina, grafico e replay, e
-conteggio delle richieste di rete in quei momenti. Il proprietario sospetta la connettività — e il
-21 ottobre il suo PC ha davvero perso la rete di colpo (ping al router 100% perso), quindi il
-sospetto ha una base.
-
-### 2.4 Footprint in replay
-Mai affrontato. Il motore del replay è stato riscritto il 19 ottobre: va verificato **se il difetto
-c'è ancora** prima di rimetterci mano.
+### 1.3 Margine utilizzato sempre a 0
+Nelle tabelle posizioni aperte, Kraken e MT5: va calcolato il margine vero di ogni singola
+posizione.
 
 ---
 
-## 3. Capitolo 4 - il telefono (CHIUSO il 21 ottobre 2026)
+## 2. Da fare - difetti da misurare
 
-Tutti e sei i punti fatti, e **misurati**: un banco apre i 24 popup in quattro condizioni
-(375x812, 320x568, orizzontale, e 375x812 con l'interfaccia al 130%) e misura di quanto il
-riquadro esce dallo schermo e di quanto il contenuto esce dal riquadro.
+### 2.1 Degrado delle prestazioni nel tempo
+«Appena installato era fluidissimo, zero freeze, tre schede aperte senza problemi. Dopo un po'
+incominciava a calare». INDIZIO CHE VALE PIU' DI OGNI ALTRO: una cosa che parte veloce e peggiora
+NON e' un costo fisso - e' una PERDITA che si accumula (timer, ascoltatori, dati in memoria che
+crescono). Si trova misurando la stessa cosa due volte a distanza di tempo, non leggendo il codice.
+La v2.0.13 ha gia' tolto 66 risvegli al secondo su 77,6; questo e' un altro difetto.
 
-- **i pulsanti dentro il grafico si sovrapponevano** -> `qtAutoLayout` si scansava da due gruppi
-  su sei, e sotto c'erano tre numeri scritti a mano (`top:46px` per la seconda riga, `top:86px`
-  per la legenda, l'elenco fisso dei gruppi). Ora e' una pila calcolata dall'alto;
-- **la barra per aprire posizioni al bordo alto** -> fatta. La barra e' 360 px e il grafico su un
-  telefono ne ha 309: **scelta del proprietario** fra tre possibilita', «barra in cima e pulsanti
-  ridotti a icone su una riga sola». Per far stare i sei comandi in 293 px, «DATA RANDOM» perde
-  la scritta e resta l'icona (388 px -> 275);
-- **i popup oltre il bordo dello schermo** -> era la SCALA: a 100% non sforava nessuno, al 130%
-  sforavano di 117 px sotto e 73 di lato, e i peggiori erano le due finestre delle strategie.
-  `max-height:88vh` viene moltiplicato dallo zoom del body dopo il calcolo; ora la scala si
-  dichiara al CSS (`--fblZoom`) e i limiti ci dividono. **Zero sfori in tutte e quattro le
-  condizioni**;
-- **il testo fuori dal popup** -> la striscia delle schede sforava di 109 px e quelle oltre il
-  bordo erano **irraggiungibili** (ora vanno a capo); la voce «Collegamento/Modalita'» sforava di
-  43 px (ora va a capo). Restano tre popup dove una **tabella** e' piu' larga dello spazio su uno
-  schermo da 320 px: ora scorre dentro il popup invece di spingerlo fuori dallo schermo;
-- **popup adattati al contenuto** -> sul telefono usano il 96% dell'altezza invece dell'88%
-  (quasi cento pixel di schermo che restavano vuoti);
-- **la linea apertura<->chiusura con lo zoom largo** -> si disegnava solo se un'estremita' era a
-  schermo; ora il segmento si taglia sul riquadro e si disegna il pezzo visibile. Erano **quattro**
-  i punti con lo stesso difetto;
-- **via i cartellini TP/SL dalla scala prezzi** -> fatto, resta quello dell'entrata. Target e stop
-  restano sulle linee e nella casella Target/Stop.
+### 2.2 Fluidita' del replay
+«Carica bene la candela, poi si blocca, salta a due successive, riprende, si ferma, salta a tre»,
+e peggiora salendo col moltiplicatore. Il proprietario sospetta un blocco a monte quando arrivano
+dati dal server.
 
-Test: `popup_bordi` (5), `grafico_pulsanti_telefono` (7), `linea_apertura_chiusura` (3),
-`scala_prezzi_cartellini` (2), piu' `replay_posizioni` spostato sulla casella Target/Stop.
+### 2.3 I pacchetti di installazione si accumulano
+Trenta o quaranta file nella cartella Download invece di uno sostituito. NOTA: il nome del file lo
+decide l'app, ma a scaricarlo e' il browser di sistema, che aggiunge (1), (2), (3)... Una pagina
+web non puo' sostituire un file nella cartella Download. La scelta (nome con la versione dentro,
+oppure altra strada) e' da fare col proprietario.
 
 ---
 
-## 4. Capitolo 5 — sincronizzazione e credenziali
+## 3. Da fare - funzioni nuove
 
-### 4.1 Fatto
-Le impostazioni seguono l'account: footprint (stile e righe), profili indicatori, decimali per
-asset, strategie delle sale, nomi e target delle sale, periodi della dashboard — oltre a watchlist,
-ricerche e scala che già viaggiavano. **I segreti no**, ed è garantito da un test.
+### 3.1 Apertura immediata al prezzo corrente (soldi veri)
+Quando arriva un segnale su un asset diverso da quello a grafico, la posizione deve aprirsi SUBITO
+al prezzo corrente di quell'asset, senza aspettare il caricamento del grafico: «sono quei secondi,
+magari un minuto, che ci fanno perdere l'apertura precisa». Vale per cripto, forex, indici, azioni.
+TERRENO GIA' PRONTO: `placeRealMt5Order` accetta un asset non a grafico con il prezzo indicativo
+(`forz.sym`/`forz.prezzo`), e c'e' un commit «ordini MT5 senza cambiare grafico». Da verificare se
+il flusso dei segnali aspetta comunque il caricamento.
 
-### 4.2 Le credenziali e la cartella (FATTO il 21 ottobre 2026)
+### 3.2 Livelli comuni del segnale: rischio o capitale
+Nel pulsante «apri N posizioni», accanto al rischio totale, la stessa scelta che c'e' nelle
+strategie: rischio basato sullo stop loss, oppure quanto capitale investire. Cambia molto per le
+cripto.
 
-**Non venivano cancellate.** Il CSV e' sempre rimasto dove l'utente l'ha messo: a ogni riavvio del
-browser si perde il PERMESSO di leggere quella cartella, e senza permesso l'elenco dei conti e'
-vuoto - che da fuori si legge come «cancellate». In piu' `getMt5CredsDirHandle` tornava `null` in
-silenzio mentre quello di Capital.com mostrava gia' il banner: l'asimmetria toglieva la
-spiegazione nel caso piu' frequente.
+### 3.3 Strisce di vicinanza nella lista posizioni
+A destra di ogni riga (Kraken e MT5), una striscia verticale quando la posizione e' al 10% dal
+livello: verde TP, rossa SL, azzurra stop profit. TP e SL si misurano dall'ENTRATA; lo stop profit
+dall'ULTIMO TP RAGGIUNTO. Percentuale modificabile e spegnibile in Style, in una nuova sezione
+«Posizioni». Default acceso. Come l'app MT5 per telefono, che la mette a sinistra: qui a destra.
 
-Adesso, nella scheda Live: lo **stato vero** delle due cartelle (collegata / da riconfermare / non
-ancora scelta), un pulsante **Ricollega la cartella** che compare solo quando serve e che
-riconferma il permesso **e rilegge i conti**, e la **nota**: le credenziali stanno in un CSV sul
-dispositivo, non passano mai dal server e non vengono sincronizzate sull'account.
-Test: `cartella_credenziali.test.mjs` (5).
+### 3.4 Il margine dello spread solo intorno alla chiusura del mercato
+Il pareggio resta ZERO (vedi la v2.0.13 e la lezione sul pareggio), ma nella fase di chiusura e
+riapertura del mercato si puo' adottare il margine dello spread, tornando al pareggio esatto quando
+il mercato si e' stabilizzato. Con un interruttore nelle impostazioni.
 
-### 4.2b Com'era (per capire il perche')
-Le credenziali stanno in una **cartella scelta dall'utente**, e il riferimento a quella cartella
-perde il permesso quando l'app si riavvia. Il meccanismo per riconcederlo esiste
-(`fblChiediPermessoFile` / `unlockFilesBanner`) ma non è evidente: l'app sembra semplicemente
-vuota. Serve un pulsante chiaro nei pannelli Capital.com e MT5, con scritto che **le credenziali
-restano sul dispositivo e non passano mai dal server**.
+### 3.5 Replay: le cose chieste il 21 ottobre
+- le posizioni aperte in replay devono mostrare l'andamento del P/L come dal vivo (c'era, e' stato
+  tolto);
+- premendo di nuovo replay si deve poter scegliere un'altra data senza uscire dalla modalita'
+  (un pulsante «nuova posizione»);
+- fermando l'avanzamento a meta' candela si resta a meta' candela, non si torna al suo inizio;
+- cambiando asset si esce automaticamente dal replay e si carica l'ultimo prezzo.
 
-### 4.3 Da sapere: tre porte d'ingresso, tre magazzini
-L'app si apre dal sito (`github.io`), dal servizio locale (`127.0.0.1:8000`, lo serve `bridge.py`)
-e dall'APK (`localhost`). Il browser tiene i dati **separati per indirizzo**: chi cambia porta
-d'ingresso trova tutto vuoto senza aver perso niente. La sincronizzazione sopra è la cura che
-funziona comunque; ridurre le porte d'ingresso a una sarebbe la cura alla radice.
+### 3.6 Sezione «Sale segnali» separata da «Collegamento»
+Cronologia, configurazione dell'apertura automatica e tutto quello che riguarda le sale va spostato
+dalla scheda Collegamento a una sezione sua, come era prima.
 
----
-
-## 5. Capitolo 6 — funzioni nuove
-
-- **TP/SL della barra agganciati alla posizione selezionata**; deselezionando tornano a configurare
-  una nuova apertura; clic nel vuoto → si annulla (TP/SL a 0, preview via). Anche su Kraken.
-- **Ordini pendenti**: spostare entrata, TP e SL di un ordine **già piazzato** (oggi si trascina
-  solo la bozza prima di piazzarlo).
-- **Ordini pendenti nella strategia** di sala e universale, con due **freni**: cancella se non
-  scatta entro X tempo; cancella se il prezzo supera N TP. Riportato anche nella cronologia sale.
-- **Riordino delle schede** di Collegamento/Modalità: Live/Storico, MT5, **Kraken**, Prop Firm,
-  Notion, **Sala segnali**, **Collegamento** (con dentro: casella Telegram e sala in ascolto,
-  Ricontrolla, accesso altri dispositivi/Oracle, collegamento Telegram, esci/dimentica numero e il
-  percorso del nuovo utente). La **porta del ponte** deve sparire dalla vista.
-  ⚠️ Già tentato una volta e lasciato a metà: schede senza pannello, pannelli duplicati,
-  `liveModeSwitch` tolto dall'HTML ma ancora agganciato — l'app andava in errore al caricamento e
-  si perdevano 49 ascoltatori (menù MT5 e Prop Firm compresi). Il controllo di sintassi **non se ne
-  accorge**: il collaudo deve aprire il popup e cliccare ogni scheda.
-- **Aggiornamento «classico» su Windows**: chiudere i processi, installare, togliere il pacchetto
-  vecchio (sul mobile il giro è già sistemato).
-- **Multi-selezione dei conti** nella dashboard statistiche.
-- **Cancellazione di un conto** che purga tutto, con avviso che si perdono le statistiche.
-- **Pulsante «Chiudi» a grafico** con chiusura a mercato o parziale a percentuale scelta.
+### 3.7 Le altre, dalla scaletta originaria
+- barra TP/SL legata alla posizione scelta;
+- ordini pendenti trascinabili sul grafico;
+- ordini pendenti nelle strategie di sala e universale, con i due freni;
+- aggiornamento Windows classico;
+- dashboard multi-conto con selezione;
+- cancellazione conto che pulisce tutto;
+- «Chiudi» nel grafico con chiusura parziale;
+- doppioni di id nel markup: `tgApiId` e `tgApiHash` compaiono due volte.
 
 ---
 
-## 6. Rinviate dal proprietario — non farle se non le richiede
-- **Discord**: notifica dei commit, canale idee con sondaggio.
-- **iOS**: l'app per Android e Windows c'è; iOS è ancora da completare.
-- **Spread sull'ENTRATA degli acquisti in simulazione**: oggi si modella solo sull'uscita delle
-  vendite. Chiuderlo sposta l'entrata di tutti i backtest passati: è una decisione, non una
-  correzione.
+## 4. Fatto, in ordine di pubblicazione
+
+**v2.0.15** - l'app si aggiorna da sola anche aperta dall'icona (era il ponte a servirla congelata
+dentro l'eseguibile: e' il difetto che teneva nascosto tutto il lavoro fatto); il grafico non salta
+piu' al cambio timeframe (una moltiplicazione senza tetto: 300.000 candele e il bordo a marzo);
+una regola sola per tre difetti di clic (deselezione che non avveniva dentro la casella Target/Stop
+e sopra gli indicatori, enfasi che si accendeva da sola, cambio stile del footprint che moriva in
+silenzio su mezzo grafico).
+
+**v2.0.14** - il telefono (popup mai fuori dallo schermo: era la scala al 130%; schede delle
+impostazioni raggiungibili; barra operazioni al bordo alto; linea apertura-chiusura con lo zoom
+largo; cartellini TP/SL via dalla scala prezzi); la cartella delle credenziali (non erano sparite:
+si perdeva il PERMESSO di leggerle); MT5 che non si stacca piu' agli aggiornamenti (spegnimento
+con grazia).
+
+**v2.0.13** - il pareggio e' zero; operazioni a blocco e una conferma sola; il conto segue l'asset;
+Syntra; caricamento del grafico al cambio asset; footprint in replay; 66 risvegli al secondo tolti.
+
+**v2.0.12** - avviso prima della chiusura, forbice del rollover misurata, vendite che si chiudono
+sull'ask, chiusura automatica delle posizioni in guadagno.
 
 ---
 
-## 7. Promemoria che valgono per ogni punto
-- **Si misura prima di correggere**, e più volte la causa non era dove si guardava.
-- **Ogni correzione ha un test**, e il test guarda il **comportamento**.
-- **Conta il collaudo di GitHub**, e il verde si prende **sul ramo** prima di toccare `main`.
-- Modifiche fuori da `app.html` (ponte, installer) → **ricostruire il Setup** e avvisare.
-- Un collaudo **non deve toccare niente fuori da sé**: il 21 ottobre apriva WebSocket veri verso il
-  ponte del proprietario e gli interrompeva il collegamento MT5 mentre operava.
-- Italiano ovunque; niente identificativi di modello; nessuna chiave API nel repo; soldi veri mai.
+## 5. Rinviate dal proprietario - non farle se non le richiede
+
+(invariate rispetto alla scaletta precedente)
+
+---
+
+## 6. Promemoria che valgono per ogni punto
+
+- **Si misura prima di correggere.** Il 21 ottobre ha evitato due correzioni inutili (i processi
+  «doppi» che non erano doppioni) e ha trovato due cause esatte (il salto del timeframe, i popup
+  fuori dallo schermo al 130%).
+- **Una correzione si dichiara fatta solo con un test che prima falliva.** Si verifica mettendo da
+  parte il file corretto e rimettendo quello di prima: il test DEVE diventare rosso.
+- **Quando si tocca `bridge.py` o un file sotto `installer_build/build/`, serve il Setup nuovo** -
+  e va detto. Vedi `cervello/PUBBLICARE.md`.
