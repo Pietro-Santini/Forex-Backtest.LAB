@@ -7473,7 +7473,9 @@ window.addEventListener('pagehide', ()=>{
       window.fxbtCloud.saveKeepalive(trimTradesForCloudBudget(bundle,FIRESTORE_KEEPALIVE_MAX_BYTES));
     }catch(e){}
   }
-  syncFullStatusToFirebase('pagehide');
+  // FORZATA: e' l'ultima occasione di salvare: farsela saltare dal limite di frequenza
+  // (quattro secondi) vorrebbe dire perdere l'ultimo pezzo di sessione proprio alla chiusura.
+  syncFullStatusToFirebase('pagehide',true);
 });
 // "Uscita dall'account": vedi il pulsante logout-btn/blocked-logout-btn più in alto nel file,
 // che chiama window.syncFullStatusToFirebase('logout') PRIMA di eseguire davvero il signOut —
@@ -19954,6 +19956,37 @@ function resetMt5SoundBaseline(){
  mt5SoundSeenPendingTickets=new Set();
  mt5SoundPositionsBaselineDone=false;
 }
+// IL TRADE JOURNAL VA NEL CLOUD QUANDO CAMBIA, NON SOLO QUANDO LA PAGINA MUORE.
+//
+// SEGNALATO dal proprietario: «non rimane salvato in memoria nel trade journal e sparisce alla
+// prossima installazione del programma o aggiornamento».
+//
+// LA CAUSA, letta nel codice. Le operazioni vivono in localStorage e IndexedDB, che il browser
+// tiene SEPARATI PER INDIRIZZO D'INGRESSO: il sito, il 127.0.0.1 del ponte e il localhost
+// dell'APK sono tre magazzini diversi. La copia che segue l'ACCOUNT - quella su Firestore - si
+// scriveva solo su 'pagehide' e sul logout. E 'pagehide' e' l'istante in cui la pagina viene
+// distrutta: una scrittura asincrona li' puo' non arrivare mai a destinazione.
+// Al riavvio, se in locale non c'e' niente (indirizzo diverso dopo un aggiornamento), si legge il
+// cloud - ma nel cloud la copia poteva non essere mai stata scritta. Journal vuoto.
+//
+// ADESSO si scrive anche QUANDO CAMBIA. Un'operazione che si chiude e' un evento raro - pochi al
+// giorno - quindi non c'e' il rischio di tempeste di scritture che aveva portato, giustamente, a
+// togliere il salvataggio dal giro dell'autosalvataggio (che gira ogni ~800 ms).
+// L'ATTESA SERVE: una chiusura a blocco chiama closeTrade dieci volte di fila, e senza di essa
+// sarebbero dieci scritture per un fatto solo. Con l'attesa diventa UNA, dopo l'ultima chiusura.
+let FBL_CLOUD_TRADE_ATTESA_MS=8000;
+let _cloudTradeTimer=null;
+function fblCloudSalvaTradeJournal(){
+ try{
+  if(_cloudTradeTimer)clearTimeout(_cloudTradeTimer);
+  _cloudTradeTimer=setTimeout(()=>{
+    _cloudTradeTimer=null;
+    // `force`: la scrittura di un'operazione chiusa non deve mai essere saltata dal limite di
+    // frequenza - e' esattamente il dato che non si puo' perdere.
+    try{ syncFullStatusToFirebase('trade-chiuso',true); }catch(e){}
+  },FBL_CLOUD_TRADE_ATTESA_MS);
+ }catch(e){}
+}
 function closeTrade(reason,price,pos,realLevels,silent,veri){
  pos=pos||active;
  if(!pos)return;
@@ -20029,6 +20062,9 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // di MT5 la curva segue quello (il saldo del broker va solo nella colonna "Conto" del Journal,
  // la curva resta sul capitale dell\'appp per non avere salti).
  equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
+ // Il Trade Journal e' cambiato: va anche nel cloud, che e' l'unica copia che segue l'account
+ // attraverso aggiornamenti, reinstallazioni e cambi di indirizzo d'ingresso.
+ fblCloudSalvaTradeJournal();
  update();
 }
 // Elimina UN SOLO trade dal Trade Journal (richiesto dall'utente): a differenza di RESET
