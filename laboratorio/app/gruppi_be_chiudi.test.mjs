@@ -68,10 +68,22 @@ test('BE porta a pareggio lo stop di TUTTE le posizioni del gruppo', async () =>
       const slPrima = positions.map(x => x.sl);
       await fblGruppoPareggio(fblPosGruppiIds.get(chiavi[0]));
       return {slPrima, slDopo: positions.map(x => x.sl), entrate: positions.map(x => x.entry),
+              spread: spreadCostForAsset('EURUSD'),
               marcate: positions.filter(x => x.beMarkerSl != null).length};
     }, PREPARA.toString());
     assert.deepEqual(r.slPrima, [99, 99, 99, 99, 99]);
-    assert.deepEqual(r.slDopo, r.entrate, 'ogni stop deve finire sul pareggio della SUA posizione');
+    // DAL 21 OTTOBRE 2026 il pareggio lascia un margine pari allo spread, dalla parte da cui lo
+    // stop puo' essere preso (per un acquisto: sotto l'entrata). Prima questo test pretendeva lo
+    // stop ESATTAMENTE sull'entrata, ed e' proprio cio' che non si fa piu': uno stop al pareggio
+    // esatto sta DENTRO la forbice e al primo allargamento viene preso. Il 21 ottobre due SELL
+    // EURCHF con lo stop a un decimo di pip dall'entrata sono state chiuse cosi', al rollover.
+    // Quello che questo test misura NON cambia: ogni stop finisce sul pareggio della SUA
+    // posizione, non su un unico valore per tutto il gruppo.
+    assert.ok(r.spread > 0, 'il banco ha senso solo se lo strumento ha uno spread: ' + r.spread);
+    assert.deepEqual(r.slDopo, r.entrate.map(e => e - r.spread),
+      'ogni stop deve finire sul pareggio della SUA posizione, con il margine dello spread');
+    assert.ok(r.slDopo.every((v, i) => v !== r.entrate[i]),
+      'e NON esattamente sull\'entrata: la' + ' starebbe dentro lo spread');
     assert.equal(r.marcate, 5, 'il Journal deve poter riconoscere queste chiusure come «BE», non come un generico stop');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }

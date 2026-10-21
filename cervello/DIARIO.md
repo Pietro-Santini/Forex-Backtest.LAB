@@ -1785,3 +1785,98 @@ campo `sl` (con `prezzo` non dà errore, dà uno stop che non si muove) e i targ
 insieme** (mandando solo quello spostato, gli altri si cancellano).
 
 **Collaudo locale:** 5/5 verdi, 0 falliti.
+
+## 21 ottobre 2026 - v2.0.12: il cambio giornata non ti prende più di sorpresa
+
+### Da dove nasce: una domanda del proprietario a cui la prima risposta era sbagliata
+
+Aveva mandato due grafici a confronto, il nostro e quello di MT5: «il mercato non ci è arrivato a
+0,92830, è andato nel senso opposto fino a 0,9247. È più di una volta che mi succede».
+
+La prima diagnosi (la riscansione dello storico che confronta uno stop spostato col passato) era un
+difetto **vero**, ed è stato corretto — ma **non spiegava quel caso**, e lui l'ha fatto notare:
+«questo però come fa a chiuderlo anche sul terminale MT5? MT5 dovrebbe essere indipendente
+dall'applicazione». Aveva ragione: `evaluate()` e la riscansione escludono entrambe le posizioni
+reali (`mt5Ticket`), quindi l'app non chiude mai una posizione MT5.
+
+Ha chiesto di verificare sul web. Dal web **non si poteva**: nessuna fonte pubblica ha il minuto, e
+tutte pubblicano il **bid**. Si poteva dal suo MT5, e ci sono voluti due tentativi: la spunta
+«Mostra linea Ask» disegna solo una riga al prezzo di adesso (istruzione sbagliata, data da me);
+lo storico vero sta in **Simboli → Ticks**. Da lì sono usciti i numeri che hanno chiuso la
+questione:
+
+```
+2026.10.21 00:00:42.091   bid 0,92461   ask 0,92961   ->  50,0 pip
+2026.10.21 00:01:28.613   bid 0,92598   ask 0,92903   ->  30,5 pip
+2026.10.21 00:03:17.229   bid 0,92463   ask 0,92963   ->  50,0 pip
+```
+
+Cinque tick in cinque minuti, con lo spread **250 volte** il normale (0,2 pip). Lo stop era a
+0,92827: l'ask lo ha superato di 13 pip. Il bid dello stesso tick è 0,92461, cioè esattamente il
+«minimo di 0,9247» che aveva visto. **Lo spike verso il basso e la chiusura a 0,92827 non sono due
+cose diverse: sono lo stesso tick.**
+
+Nessun difetto, né dell'app né di MT5: lo stop di una vendita si esegue sull'ASK, e i grafici
+disegnano il BID. Non si può impedire al broker di eseguire — si può **non farsi trovare lì**.
+(Da sapere: il conto è su MetaQuotes-Demo, server dimostrativo generico. 50 pip su EURCHF non è un
+numero da broker vero: l'evento è più violento del reale, la meccanica è identica.)
+
+### Le quattro cose fatte, più quella chiesta dopo
+
+**1. Avviso prima della chiusura.** Un quarto d'ora prima, se ci sono posizioni con lo stop dentro
+la forbice del rollover, lo dice: messaggio di stato **e notifica del browser**, perché a quell'ora
+la scheda è in secondo piano. Una volta sola per ogni chiusura (se martellasse si smetterebbe di
+leggerlo); niente se lo stop è lontano, se si è in Storico o se non ci sono posizioni.
+
+**2. La forbice si misura, non si indovina.** Il dato passa davanti all'app a ogni tick: ora lo
+guarda nella mezz'ora attorno a una chiusura e si ricorda **il peggio visto** per asset (non la
+media: serve a dire «il tuo stop è dentro», e conta quella larga). Due dettagli non ovvi: la misura
+sta **prima** della strozzatura dei 5 secondi, perché al rollover i tick sono rarissimi e scartarne
+uno vuol dire perdere proprio la misura che serve; e dopo due mesi il valore scade, perché
+parlerebbe di un altro mercato. Finché un rollover non si è visto si usa una stima **dichiarata**
+(venti volte lo spread normale, minimo 10 pip): sul caso misurato darebbe 20 contro 50, cioè
+sbagliata per difetto — prudente nella direzione giusta, avvisa di meno e non di più.
+
+**3. Il pareggio lascia lo spread.** Due delle tre posizioni di quella notte avevano lo stop a
+**0,92827 contro un'entrata di 0,92828**: un decimo di pip. Lo metteva lì il nostro pareggio, e il
+commento nel codice diceva pure che lo spread era stato tolto apposta «perché ne usciva un piccolo
+guadagno». Ma lo stop di una vendita si esegue sull'ask: un pareggio esatto sta **dentro** la
+forbice, e al primo allargamento viene preso di certo. Ora lo stop sta un margine pari allo spread
+più in là. Corretto **dentro `mt5PrezzoPareggio`**, da cui passano tutti e cinque i punti che
+portano uno stop a pareggio (a mano, dalla strategia, al raggiungimento di un TP, in blocco,
+dal ticket MT5): correggerne uno solo avrebbe lasciato gli altri quattro col difetto. Aggiornati
+anche i messaggi che dicevano «profitto netto 0,00», che adesso sarebbe falso.
+
+**4. Lo spread nella simulazione.** Una vendita si chiude comprando all'**ask**. Prima la
+simulazione confrontava stop e target delle vendite col bid: rifacendo quella notte in backtest non
+sarebbe successo niente, cioè il simulato risultava migliore del reale **proprio nei momenti
+peggiori**. Applicato nei tre punti che valutano gli stop (`evaluate`,
+`evaluateLiveBackgroundAsset`, `scanHistoricalSlTpTouches`) con **una funzione sola**
+(`fblSpreadUscita`) perché non possano divergere.
+Quello che resta fuori, detto invece che nascosto: si modella lo spread sull'**uscita delle
+vendite**, non sull'**entrata degli acquisti** (che in simulazione entrano al prezzo del grafico).
+In Modalità Prop Firm l'entrata lo spread ce l'ha già, quindi lì il giro è completo; fuori, la
+simulazione resta ottimista sugli acquisti **quanto lo era prima** — non di più. Chiuderlo sposta
+l'entrata di tutti i backtest passati: è una decisione del proprietario, non una correzione.
+
+**5. Chiusura automatica prima della chiusura** (richiesta dopo l'analisi): vedi la voce
+precedente — strategia universale e di ogni sala, solo posizioni in guadagno, spenta di predefinito.
+
+### Un test rosso che era giusto fosse rosso
+
+`gruppi_be_chiudi.test.mjs` pretendeva lo stop di pareggio **esattamente sull'entrata**: è
+precisamente ciò che non si fa più. Aggiornato alla regola nuova, mantenendo quello che davvero
+misura (ogni stop sul pareggio della SUA posizione, non un valore unico per il gruppo) e scrivendo
+nel commento perché il numero atteso è cambiato.
+
+**E un segnale da non ignorare:** per il punto 4 è caduto **un solo** test. Vuol dire che il
+collaudo copriva poco la valutazione degli stop sulle **vendite** — il lato che ha fatto perdere i
+soldi. I quattro test nuovi coprono quel buco.
+
+### Test
+`rollover_spread.test.mjs` (8: misura della forbice, stima dichiarata, pareggio col margine,
+avviso), `spread_uscita_vendite.test.mjs` (4). Collaudo locale 5/5 verdi, 0 falliti.
+
+### Versioni
+- sw.js: forex-backtest-lab-v2.0.12
+- installer.iss: 2.0.12
