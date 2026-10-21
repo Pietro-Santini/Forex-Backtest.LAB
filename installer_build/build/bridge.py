@@ -307,12 +307,101 @@ def _try_close_mt5_terminal():
                 pass  # nessun processo con quel nome, taskkill assente, o altro: mai far fallire /disconnect per questo
 
 
+# ===================== SPEGNIMENTO CON GRAZIA =====================
+#
+# SEGNALATO dal proprietario, due volte: «ogni minimo aggiornamento io devo sempre riavviare
+# l'applicazione e il pacchetto di installazione per poter continuare a inviare ordini, ricevere
+# segnali eccetera. Questo non puo' succedere, perche' se effettuo un aggiornamento e non sono a
+# casa, non posso avviare il pacchetto sul PC».
+#
+# LA CAUSA, e non erano i test. L'app, uscendo, manda un beacon a /disconnect, e /disconnect
+# spegne MT5, il terminale, il processo dei dati e questo stesso processo. Ma l'evento del browser
+# che fa partire quel beacon ('pagehide') scatta ANCHE per una semplice ricarica: aggiornare la
+# pagina era indistinguibile dal chiuderla. Il commento in app.html lo dichiarava perfino come
+# «limite onesto, non aggirabile lato browser» - ed e' vero che dal browser non si distingue, ma
+# la decisione non va presa li': va presa QUI, dove si puo' aspettare e vedere se qualcuno torna.
+#
+# LA REGOLA: «la pagina e' andata via» non vuol dire «spegniti». Si avvia un conto alla rovescia;
+# se un client torna a farsi vedere - e una ricarica torna in un paio di secondi - lo spegnimento
+# si ANNULLA. Se invece la pagina e' stata chiusa per davvero, nessuno torna e allo scadere si
+# spegne tutto come prima: nessun processo lasciato acceso a sua insaputa, che era il motivo per
+# cui questo spegnimento era stato chiesto.
+#
+# COMPATIBILITA' NELLE DUE DIREZIONI, di proposito: la grazia si chiede con `?grazia=1`, quindi
+# un'app vecchia con un ponte nuovo si comporta come sempre (spegnimento immediato), e un'app
+# nuova con un ponte vecchio pure (il parametro viene ignorato). Nessuna delle due combinazioni
+# si rompe mentre gli aggiornamenti si rincorrono.
+SECONDI_DI_GRAZIA = 90
+_grazia_timer = None
+_grazia_lock = threading.Lock()
+
+
+def _spegni_tutto_adesso():
+    """Quello che /disconnect ha sempre fatto: MT5, terminale, processo dati, e questo processo."""
+    global mt5_connected
+    try:
+        mt5.shutdown()
+    except Exception:
+        pass
+    mt5_connected = False
+    try:
+        _try_close_mt5_terminal()
+    except Exception:
+        pass
+    try:
+        _stop_mt5_feed_server()
+    except Exception:
+        pass
+    print("[Ponte] Nessun client e' tornato: spengo MT5 e il servizio.")
+    os._exit(0)
+
+
+def _programma_spegnimento(secondi=SECONDI_DI_GRAZIA):
+    global _grazia_timer
+    with _grazia_lock:
+        if _grazia_timer is not None:
+            _grazia_timer.cancel()
+        _grazia_timer = threading.Timer(secondi, _spegni_tutto_adesso)
+        _grazia_timer.daemon = True
+        _grazia_timer.start()
+    print("[Ponte] La pagina e' andata via: spengo fra %d secondi, "
+          "a meno che non torni qualcuno." % secondi)
+
+
+def _annulla_spegnimento():
+    """Chiamata a OGNI richiesta: se c'era uno spegnimento in attesa, qualcuno e' tornato."""
+    global _grazia_timer
+    with _grazia_lock:
+        if _grazia_timer is None:
+            return False
+        _grazia_timer.cancel()
+        _grazia_timer = None
+    print("[Ponte] Un client e' tornato: spegnimento annullato, il collegamento MT5 resta.")
+    return True
+
+
+def spegnimento_in_attesa():
+    """Solo per i test e per /health: c'e' un conto alla rovescia in corso?"""
+    with _grazia_lock:
+        return _grazia_timer is not None
+
+
 app = FastAPI(title="Forex Backtest LAB — Bridge MT5")
 
 # CORS aperto: l'app gira su GitHub Pages (dominio diverso da localhost), quindi il
 # browser deve poter chiamare questo bridge da lì. In seguito si potrà restringere
 # a solo l'origine reale dell'app, se si vuole irrigidire la sicurezza.
 app.add_middleware(CORSMiddleware, **_accesso.opzioni_cors())   # vedi opzioni_cors(): rete privata
+
+
+@app.middleware("http")
+async def _torna_qualcuno(request: Request, call_next):
+    # Il segnale di "la pagina e' tornata" non va inventato: e' una richiesta qualsiasi. L'app, a
+    # pagina caricata, interroga /health e il resto entro un attimo. Si esclude solo la richiesta
+    # di spegnimento stessa, che altrimenti annullerebbe il conto alla rovescia che sta chiedendo.
+    if not request.url.path.rstrip("/").endswith("/disconnect"):
+        _annulla_spegnimento()
+    return await call_next(request)
 
 # Stato minimo: sappiamo solo se siamo attualmente collegati a un terminale MT5.
 mt5_connected = False
@@ -1360,6 +1449,13 @@ def disconnect(request: Request):
     if not _accesso.richiesta_locale(request):
         raise HTTPException(status_code=403, detail="MT5 e il servizio si spengono dal computer. "
                                                     "Dal tablet puoi chiudere la pagina: sul PC resta tutto acceso.")
+    # LA PAGINA SE NE VA: non e' detto che stia chiudendo. Con `?grazia=1` (il beacon di
+    # 'pagehide', che scatta anche per una semplice ricarica) si aspetta: vedi SPEGNIMENTO CON
+    # GRAZIA sopra. Senza il parametro - i pulsanti "Esci" e "Disconnetti", dove l'intenzione e'
+    # dichiarata - si spegne subito, come ha sempre fatto.
+    if request.query_params.get("grazia") in ("1", "true", "si"):
+        _programma_spegnimento()
+        return {"status": "spegnimento_programmato", "secondi": SECONDI_DI_GRAZIA}
     mt5.shutdown()
     mt5_connected = False
     _try_close_mt5_terminal()
