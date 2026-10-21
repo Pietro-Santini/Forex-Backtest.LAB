@@ -10980,7 +10980,7 @@ function update(){
      const zoneToggleTitle='Clicca per mostrare/nascondere il colore delle caselle TP/SL sul grafico (le linee restano visibili)';
      // RICHIESTO: la sala (o l'utente Syntra) scritta nella riga. Sta nella colonna "Sessione",
      // accanto all'etichetta della sessione: e' l'unica colonna che parla di provenienza.
-     const html=`<tr class="${isCurrentRow&&p===active?'focused':''}${figlia?' fblPosFiglia':''}"><td>${figlia?'↳ ':''}${numero}</td><td>${modeTag}${fblOrigineBadgeHtml(p)}${fblFamigliaBadgeHtml(posAsset)}</td><td>${posAsset}</td><td title="${escapeHtmlLite(fblOrarioEsecuzioneTitolo(p.openTime||p.startTime))}">${escapeHtmlLite(fblOrarioEsecuzione(p.openTime||p.startTime))}</td><td>${p.side}</td><td>${fmtPriceA(p.entry,posAsset)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${slCellTxt}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${fmtPriceA(p.tp,posAsset)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${euro(p.marginUsed||0)}</td>`+curPriceCell+plCell+
+     const html=`<tr class="${isCurrentRow&&p===active?'focused':''}${figlia?' fblPosFiglia':''}"><td>${figlia?'↳ ':''}${numero}</td><td>${modeTag}${fblOrigineBadgeHtml(p)}${fblFamigliaBadgeHtml(posAsset)}</td><td>${posAsset}</td><td title="${escapeHtmlLite(fblOrarioEsecuzioneTitolo(p.openTime||p.startTime))}">${escapeHtmlLite(fblOrarioEsecuzione(p.openTime||p.startTime))}</td><td>${p.side}</td><td>${fmtPriceA(p.entry,posAsset)}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${slCellTxt}</td><td class="slTpZoneToggleCell" title="${zoneToggleTitle}">${fmtPriceA(p.tp,posAsset)}</td><td>${riskRewardLabel(p.entry,p.rrSl??p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td><td>${Number.isFinite(Number(p.marginUsed))&&Number(p.marginUsed)>0?euro(Number(p.marginUsed)):'–'}</td>`+curPriceCell+plCell+
      `<td><button class="miniBtn" data-gotoasset-pos-session="${sessionKey}" data-gotoasset-pos="${p.id}" title="Passa a ${modeTagPlain} / ${posAsset} e mostra questa posizione a grafico">${p.mt5Ticket!=null?'Vai a Grafico':'📍 Vai a grafico'}</button>${actionsCell}</td></tr>`;
      return {html,pl:plLive,lots:Number(p.lots)||0,margine:Number(p.marginUsed||0),prezzo:posPrice,p,sessionKey,modeTag};
    };
@@ -19396,6 +19396,21 @@ function floatingPL(){
    }
    return (price==null)?s:s+calculateForexPL(p.side,p.entry,price,p.lots,p.asset||currentAssetKey);
  },0);
+}
+// IL MARGINE DI UNA POSIZIONE REALE LO DICE IL BROKER, NON UNA NOSTRA FORMULA.
+//
+// SEGNALATO dal proprietario: «il margine utilizzato mi da' sempre 0: bisogna fargli calcolare
+// effettivamente quanto margine e' stato utilizzato da quella singola posizione».
+// NON ERA CALCOLATO MALE: non veniva chiesto a nessuno. Le posizioni adottate dal conto MT5
+// nascevano con marginUsed:0, con accanto un commento che diceva «il margine vero e' quello del
+// conto MT5» - vero, ma nessuno andava a leggerlo.
+// Ora il ponte lo fa calcolare a MT5 (order_calc_margin): tiene conto della percentuale di
+// margine del simbolo, della leva del conto e del cambio valuta. Una formula nostra darebbe un
+// numero plausibile e diverso da quello vero, che e' il modo peggiore di sbagliare.
+// `null` quando il ponte non lo sa: meglio un trattino che uno zero inventato.
+function fblMargineReale(rp){
+ const v=Number(rp&&rp.margine);
+ return Number.isFinite(v)&&v>=0?v:null;
 }
 function usedMargin(){ return positions.reduce((s,p)=>s+(p.marginUsed||0),0); }
 // Collegati a MT5 (Live normale, vedi mt5StatsActive): equity/margine libero/saldo sono quelli
@@ -34557,6 +34572,9 @@ async function fetchMt5Positions(){
          // (trascinando la casella o modificandolo), mai cancellato in automatico da un polling.
          const rpNow=result.data.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
          if(rpNow&&mt5AllineaApertura(p,rpNow))mt5AperturaRiallineata=true;
+         // Il margine arriva dal ponte, che lo fa calcolare a MT5: si riallinea qui come SL e TP,
+         // cosi' vale anche per le posizioni adottate prima che il ponte lo sapesse dire.
+         if(rpNow){ const mg=fblMargineReale(rpNow); if(mg!=null&&p.marginUsed!==mg)p.marginUsed=mg; }
          if(rpNow){
            const rpSl=rpNow.sl!=null?Number(rpNow.sl):null;
            const rpTp=rpNow.tp!=null?Number(rpNow.tp):null;
@@ -34737,7 +34755,7 @@ async function fetchMt5Positions(){
              origin:'MARKET',
              lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
              start:realOpenIdx!=null?realOpenIdx:0,startTime:realOpenMs,openTF:currentTF,
-             marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
+             marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
            };
            mt5AllineaApertura(pos,rp);
            applyLocalSlTpDefaultsIfMissing(pos);
@@ -34768,7 +34786,7 @@ async function fetchMt5Positions(){
          origin:'MARKET',
          lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
          start:realOpenIdx!=null?realOpenIdx:(rows[idx]?idx:0),startTime:realOpenMs,openTF:currentTF,
-         marginUsed:0,mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
+         marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
        };
        mt5AllineaApertura(pos,rp);
        const hadRealSlTp=pos.sl!=null&&pos.tp!=null;
@@ -34841,7 +34859,7 @@ async function fetchMt5Orders(){
            origin:'PENDING',kind:p.kind||'LIMIT',
            lots:Number(triggered.volume)||p.lots,risk:0,dist:0,hasRiskModel:false,
            start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
-           marginUsed:0,mt5Ticket:triggered.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
+           marginUsed:fblMargineReale(triggered),mt5Ticket:triggered.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
          };
          ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
          pos.rrSl=pos.sl;
