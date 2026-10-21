@@ -434,6 +434,186 @@ def _app_base_dir():
 _BASE_DIR = _app_base_dir()
 _APP_HTML_PATH = os.path.join(_BASE_DIR, "app.html")
 
+# ===================== L'APP SI AGGIORNA DA SOLA, ANCHE APERTA DALL'ICONA =====================
+#
+# SEGNALATO dal proprietario piu' volte: «ogni aggiornamento non arriva», «dice che aggiorna e poi
+# la versione non cambia», «devo reinstallare il pacchetto». E si vedeva anche di riflesso: mi ha
+# segnalato come difetti tre cose che erano gia' state corrette e pubblicate.
+#
+# LA CAUSA, e non era il meccanismo web (quello e' fatto bene: updateViaCache:'none', controllo
+# ogni mezz'ora, ricarica automatica se l'utente ha premuto Aggiorna). Era QUESTO file: aperta
+# dall'icona, la pagina non viene dal sito - la serve il ponte, e la serviva da `sys._MEIPASS`,
+# cioe' la cartella temporanea dove PyInstaller estrae i file CONGELATI DENTRO L'ESEGUIBILE al
+# momento della compilazione. Quella copia non la cambia nessun aggiornamento web, per
+# costruzione: l'unico modo di aggiornarla era reinstallare il Setup. Il service worker, il
+# pannello Versione e il pulsante Aggiorna lavoravano tutti su un file immutabile.
+#
+# ADESSO: all'avvio il ponte scarica app.html e sw.js dal sito pubblicato in una cartella
+# scrivibile, e serve quella copia se e' valida e piu' recente. Senza rete, o se il download non
+# convince, resta la copia congelata: l'app parte sempre.
+#
+# TRE REGOLE, perche' un aggiornatore che sbaglia e' peggio di nessun aggiornatore:
+#  1. LA COPPIA O NIENTE. app.html e sw.js si sostituiscono insieme: sw.js porta il numero di
+#     versione che il pannello legge, quindi un app.html nuovo con un sw.js vecchio farebbe dire
+#     all'app di essere vecchia e terrebbe acceso il pulsante Aggiorna per sempre - esattamente
+#     il difetto segnalato, da un'altra porta.
+#  2. MAI INDIETRO. Se la versione scaricata e' piu' VECCHIA di quella congelata, si tiene la
+#     congelata: una rete che risponde con una copia vecchia (cache di un proxy) non deve
+#     retrocedere l'applicazione di chi la usa.
+#  3. SI CONTROLLA CHE SIA UN'APP. Un file da 200 byte che dice "404" ha HTTP 200 su certi
+#     hosting: si accetta solo un app.html grande e chiuso da </html>, e un sw.js con CACHE_NAME.
+SITO_APP = "https://pietro-santini.github.io/Forex-Backtest.LAB/"
+_FILE_AGGIORNABILI = ("app.html", "sw.js")
+
+
+def _cartella_app_aggiornata():
+    """Cartella scrivibile dove tenere la copia aggiornata. Accanto all'eseguibile quando si
+    puo' (cosi' si vede, e si cancella a mano se qualcosa va storto), altrimenti nei dati
+    locali dell'utente: Program Files e' di sola lettura per un utente normale."""
+    candidate = []
+    if getattr(sys, "frozen", False):
+        candidate.append(os.path.join(os.path.dirname(sys.executable), "app_aggiornata"))
+    candidate.append(os.path.join(os.environ.get("LOCALAPPDATA")
+                                  or os.path.expanduser("~"),
+                                  "ForexBacktestLAB", "app_aggiornata"))
+    for c in candidate:
+        try:
+            os.makedirs(c, exist_ok=True)
+            prova = os.path.join(c, ".prova")
+            with open(prova, "w", encoding="utf-8") as f:
+                f.write("ok")
+            os.remove(prova)
+            return c
+        except Exception:
+            continue
+    return None
+
+
+_CARTELLA_APP = _cartella_app_aggiornata()
+
+
+def _versione_da_sw(testo):
+    """Il numero di versione come lo scrive sw.js: forex-backtest-lab-v2.0.14 -> (2,0,14)."""
+    import re
+    m = re.search(r"forex-backtest-lab-v([0-9][0-9.]*)", testo or "")
+    if not m:
+        return None
+    try:
+        return tuple(int(x) for x in m.group(1).split("."))
+    except Exception:
+        return None
+
+
+def _versione_di(cartella):
+    try:
+        with open(os.path.join(cartella, "sw.js"), encoding="utf-8") as f:
+            return _versione_da_sw(f.read())
+    except Exception:
+        return None
+
+
+def _coppia_valida(cartella):
+    """La cartella contiene un'app servibile? (regola 3, piu' la coppia completa)"""
+    try:
+        html = os.path.join(cartella, "app.html")
+        swj = os.path.join(cartella, "sw.js")
+        if not (os.path.exists(html) and os.path.exists(swj)):
+            return False
+        if os.path.getsize(html) < 500 * 1024:
+            return False
+        with open(html, encoding="utf-8", errors="ignore") as f:
+            f.seek(max(0, os.path.getsize(html) - 4096))
+            if "</html>" not in f.read():
+                return False
+        with open(swj, encoding="utf-8", errors="ignore") as f:
+            if "CACHE_NAME" not in f.read():
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def percorso_app(nome):
+    """Il file da servire: la copia aggiornata quando e' valida e non piu' vecchia di quella
+    congelata, altrimenti la congelata. Chiamata a ogni richiesta: niente stato da invalidare."""
+    base = os.path.join(_BASE_DIR, nome)
+    if not _CARTELLA_APP or not _coppia_valida(_CARTELLA_APP):
+        return base
+    nuova, vecchia = _versione_di(_CARTELLA_APP), _versione_di(_BASE_DIR)
+    if nuova and vecchia and nuova < vecchia:
+        return base                      # regola 2: mai indietro
+    agg = os.path.join(_CARTELLA_APP, nome)
+    return agg if os.path.exists(agg) else base
+
+
+def scarica_app_aggiornata(timeout=20):
+    """Scarica la coppia dal sito. Restituisce (esito, messaggio). Scrive solo se TUTTA la coppia
+    e' arrivata ed e' valida: si scarica in file temporanei e si rinomina alla fine (regola 1)."""
+    if not _CARTELLA_APP:
+        return False, "nessuna cartella scrivibile per la copia aggiornata"
+    temporanei = {}
+    try:
+        for nome in _FILE_AGGIORNABILI:
+            req = urllib.request.Request(SITO_APP + nome,
+                                         headers={"Cache-Control": "no-cache",
+                                                  "Pragma": "no-cache"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                if getattr(r, "status", 200) != 200:
+                    return False, "%s: HTTP %s" % (nome, getattr(r, "status", "?"))
+                dati = r.read()
+            tmp = os.path.join(_CARTELLA_APP, nome + ".tmp")
+            with open(tmp, "wb") as f:
+                f.write(dati)
+            temporanei[nome] = tmp
+        # Validazione sui file temporanei, PRIMA di sostituire quelli buoni.
+        prova = os.path.join(_CARTELLA_APP, ".prova_coppia")
+        os.makedirs(prova, exist_ok=True)
+        for nome, tmp in temporanei.items():
+            os.replace(tmp, os.path.join(prova, nome))
+        if not _coppia_valida(prova):
+            return False, "la copia scaricata non sembra l'app (dimensione o contenuto)"
+        scaricata = _versione_di(prova)
+        congelata = _versione_di(_BASE_DIR)
+        if scaricata and congelata and scaricata < congelata:
+            return False, "dal sito e' arrivata la %s, piu' vecchia della %s installata: tengo quella installata" % (
+                ".".join(map(str, scaricata)), ".".join(map(str, congelata)))
+        for nome in _FILE_AGGIORNABILI:
+            os.replace(os.path.join(prova, nome), os.path.join(_CARTELLA_APP, nome))
+        try:
+            os.rmdir(prova)
+        except Exception:
+            pass
+        return True, "app aggiornata alla %s" % (".".join(map(str, scaricata)) if scaricata else "versione dal sito")
+    except Exception as e:
+        return False, "%s" % e
+    finally:
+        for tmp in temporanei.values():
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+
+def _aggiorna_app_in_sottofondo():
+    """All'avvio, in un thread a parte: il ponte deve partire subito anche senza rete."""
+    ok, msg = scarica_app_aggiornata()
+    print("[AppAggiornata] %s" % msg)
+
+
+def versione_servita():
+    """Che versione sta servendo il ponte, e da dove: lo dice /health, cosi' non si deve
+    indovinare guardando lo schermo."""
+    agg = bool(_CARTELLA_APP and _coppia_valida(_CARTELLA_APP))
+    sorgente = _CARTELLA_APP if (agg and percorso_app("sw.js").startswith(str(_CARTELLA_APP))) else _BASE_DIR
+    v = _versione_di(sorgente)
+    return {
+        "versione": ".".join(map(str, v)) if v else None,
+        "da": "copia aggiornata" if sorgente == _CARTELLA_APP else "copia installata",
+        "cartella_aggiornamenti": _CARTELLA_APP,
+    }
+
+
 
 # ===================== AVVIO AUTOMATICO DEL SERVIZIO DATI MT5 (mt5_feed_server.py) =====
 # app.html, quando un conto MT5 è collegato, prende il grafico (storico+candela in corso) da un
@@ -498,6 +678,19 @@ def _kill_stale_instances():
             pass  # taskkill assente, nessun processo con quel nome, o altro: mai bloccare l'avvio per questo
 
 
+def _servizio_gia_vivo(porta, timeout=0.4):
+    """C'e' gia' qualcuno in ascolto su questa porta del computer? Una connessione TCP e basta:
+    piu' veloce e piu' affidabile di una richiesta HTTP, e non importa CHI risponde - se la porta
+    e' presa, avviarne un altro non serve comunque a niente."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
+            return s.connect_ex(("127.0.0.1", int(porta))) == 0
+    except Exception:
+        return False
+
+
 def _start_mt5_feed_server():
     """Best-effort, non blocca mai l'avvio di QUESTO bridge se qualcosa non va (file mancante,
     porta 8001 già occupata da un'istanza precedente non chiusa bene, ecc.): l'esecuzione ordini
@@ -509,6 +702,19 @@ def _start_mt5_feed_server():
     global _mt5_feed_proc
     if _mt5_feed_proc is not None and _mt5_feed_proc.poll() is None:
         return  # già in esecuzione (es. riconnessione senza riavviare tutto il bridge)
+    # NON SE NE AVVIA UN SECONDO SE UNO RISPONDE GIA'.
+    # Il controllo qui sopra conosce solo i processi avviati da QUESTA istanza del ponte: se un
+    # ponte precedente e' morto male (chiuso di forza, crash, spegnimento a meta'), il suo
+    # servizio dati resta vivo e questo ne lancerebbe un altro - che per di piu' non riuscirebbe
+    # nemmeno a prendere la porta 8001. Un processo in piu' che non serve a niente, e un sospetto
+    # in piu' quando si cerca la causa di un rallentamento.
+    # Nota su cosa NON e' un doppione: gli eseguibili sono "onefile", quindi nel Gestione
+    # attivita' ogni programma compare SEMPRE due volte (un avviatore da poche decine di K e il
+    # processo vero). Quello e' normale e non consuma niente: il doppione vero e' quello che
+    # questo controllo evita.
+    if _servizio_gia_vivo(8001):
+        print("[Mt5Feed] servizio dati MT5 gia' attivo sulla porta 8001: non ne avvio un altro.")
+        return
     target = _mt5_feed_server_exe_path()
     if not target:
         print("[Mt5Feed] Mt5FeedServer.exe/mt5_feed_server.py non trovato accanto al bridge: "
@@ -571,7 +777,7 @@ _NO_CACHE_HEADERS = {
 
 @app.get("/")
 def serve_app():
-    if not os.path.exists(_APP_HTML_PATH):
+    if not os.path.exists(percorso_app("app.html")):
         raise HTTPException(
             status_code=500,
             detail=f"app.html non trovato in \"{_BASE_DIR}\" — per l'uso in sviluppo questa "
@@ -579,7 +785,7 @@ def serve_app():
                    f"doppio click/il lanciatore .bat); per l'installer, app.html va copiato "
                    f"nella stessa cartella di bridge.py PRIMA di creare l'eseguibile.",
         )
-    return FileResponse(_APP_HTML_PATH, headers=_NO_CACHE_HEADERS)
+    return FileResponse(percorso_app("app.html"), headers=_NO_CACHE_HEADERS)
 
 
 @app.get("/sw.js")
@@ -587,7 +793,9 @@ def serve_service_worker():
     """Rotta dedicata (invece di lasciarlo alla StaticFiles generica più sotto) SOLO per poter
     forzare gli header no-cache di cui sopra: è il file la cui staleness fa più danno di tutti,
     vedi il commento sopra _NO_CACHE_HEADERS."""
-    sw_path = os.path.join(_BASE_DIR, "sw.js")
+    # La copia aggiornata, se c'e': sw.js porta il numero di versione che il pannello legge,
+    # quindi va SEMPRE dalla stessa parte di app.html - vedi la regola della coppia sopra.
+    sw_path = percorso_app("sw.js")
     if not os.path.exists(sw_path):
         raise HTTPException(status_code=404, detail="sw.js non trovato")
     return FileResponse(sw_path, media_type="application/javascript", headers=_NO_CACHE_HEADERS)
@@ -642,7 +850,20 @@ class ModifyPendingRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # `app` dice QUALE app il ponte sta servendo e da dove l'ha presa. Serve a non indovinare:
+    # il difetto piu' lungo di questo progetto e' stato un utente che usava una versione vecchia
+    # senza saperlo, e segnalava difetti gia' corretti.
+    return {"status": "ok", "app": versione_servita()}
+
+
+@app.post("/aggiorna-app")
+def aggiorna_app(request: Request):
+    """Riscarica subito app.html+sw.js dal sito. Solo dal computer: da remoto non si tocca
+    l'installazione di qualcun altro."""
+    if not _accesso.richiesta_locale(request):
+        raise HTTPException(status_code=403, detail="L'aggiornamento dell'app si chiede dal computer.")
+    ok, msg = scarica_app_aggiornata()
+    return {"ok": ok, "messaggio": msg, "app": versione_servita()}
 
 
 # ===================== NEWS — Calendario economico Forex Factory ========================
@@ -2488,6 +2709,16 @@ def order_modify_pending(body: ModifyPendingRequest):
 # visto che è la cartella di bridge.py stesso), evitiamo di far crashare l'avvio.
 if os.path.isdir(_BASE_DIR):
     app.mount("/", StaticFiles(directory=_BASE_DIR), name="static-assets")
+
+
+# L'aggiornamento dell'app parte qui, in un thread a parte: il ponte deve essere pronto a
+# rispondere subito anche senza rete, e con la rete giu' il download fallisce in silenzio
+# lasciando in uso la copia installata. (Non si usa @app.on_event("startup"), deprecato in
+# FastAPI: un thread demone all'import fa la stessa cosa senza avvisi.)
+try:
+    threading.Thread(target=_aggiorna_app_in_sottofondo, daemon=True).start()
+except Exception as _e:
+    print("[AppAggiornata] non avviato: %s" % _e)
 
 
 if __name__ == "__main__":
