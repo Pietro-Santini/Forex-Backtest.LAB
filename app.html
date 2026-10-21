@@ -11201,6 +11201,46 @@ function getVisibleCount(){
 // si cerca la candela di quell'orario nel nuovo timeframe. Per qualche secondo una sentinella
 // controlla che la vista resti li': se qualcosa la sposta altrove (e l'utente non ha toccato il
 // grafico), la riporta indietro.
+// QUANTE CANDELE HA SENSO MOSTRARE: MAI PIU' DEI PIXEL CHE CI SONO.
+//
+// SEGNALATO dal proprietario: «ho cambiato il timeframe da un'ora, sono passato a un minuto,
+// siamo il 21 di ottobre, mi e' andato al 12 marzo. Cosi', in maniera totalmente casuale. Questo
+// non deve assolutamente avvenire».
+//
+// MISURATO, e non era casuale per niente. La regola era «conserva la stessa finestra di TEMPO
+// REALE»: giusta in apparenza, ma da 1 ora a 1 minuto moltiplica per 60. Con lo storico di un
+// conto MT5 vero (marzo -> oggi), partendo da una vista a 1h:
+//     60 candele -> 3.600 candele di 1m, bordo sinistro 19 ottobre
+//    600 candele -> 36.000, bordo sinistro 26 settembre
+//  2.000 candele -> 120.000, bordo sinistro 30 luglio
+//  5.000 candele -> 300.000, bordo sinistro 27 MARZO
+// E il centro non veniva rispettato: viewEnd restava incollato all'ultima candela (misurato
+// 321.870 in tutti i casi), quindi la finestra era ancorata a destra e il bordo sinistro scappava
+// indietro di mesi. La data che si leggeva era quella.
+//
+// Lo stesso numero spiega la lentezza al cambio timeframe: ricostruire e disegnare una finestra
+// da trecentomila candele costa, e non serve a niente - oltre un certo punto una candela e' piu'
+// sottile di un pixel.
+//
+// IL TETTO: mai piu' candele dei pixel disponibili. Sotto il tetto la finestra di tempo si
+// conserva esattamente come prima (il caso di tutti i giorni, 1m -> 5m -> 15m); sopra, si tiene
+// il CENTRO e si mostra quanto ci sta. Cosi' «resti dove stavi guardando» resta vero, ed e' anche
+// l'unico modo in cui puo' esserlo: una vista larga mesi non mostra dove stavi guardando, mostra
+// tutto.
+function fblTettoCandele(){
+ let px=0;
+ try{ const c=document.getElementById('chart'); px=(c&&(c.clientWidth||c.width))||0; }catch(e){}
+ if(!(px>0))px=1200;                 // prima del primo disegno: una larghezza da schermo normale
+ return Math.max(400,Math.round(px));
+}
+// Il conto completo: la finestra di tempo chiesta, in candele del timeframe di adesso, entro i
+// limiti che la rendono leggibile.
+function fblCandelePerMinuti(minuti,tf,minimo){
+ const grezzo=Math.round(Number(minuti)/(Number(tf)||1));
+ const basso=Math.max(2,Number(minimo)||2);
+ if(!Number.isFinite(grezzo))return basso;
+ return Math.max(basso,Math.min(fblTettoCandele(),grezzo));
+}
 const FBL_VISTA_MIN_CANDELE=12;
 var fblVistaUtenteAt=0, fblVistaSentinellaT=[], fblVistaUltimo=null;
 function fblTempoRiga(r){ if(!r)return NaN; const t=parseDateTime(r.date); return Number.isFinite(t)?t:closeTimeOf(r); }
@@ -11235,15 +11275,22 @@ function fblVistaFotografa(){
  // 1m -> 1H -> 1m tornerebbe con una vista molto piu' larga di quella di partenza).
  let minuti=n*(currentTF||1);
  if(fblVistaUltimo&&fblVistaUtenteAt<fblVistaUltimo.at&&Math.round(visibleCount)===fblVistaUltimo.vc)minuti=fblVistaUltimo.minuti;
- return {tCentro,minuti,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,autoFitWidth,asset:currentAssetKey,fattaAt:Date.now()};
+
+ // STAVI GUARDANDO IL BORDO LIVE? Allora dopo il cambio devi restarci. Il centro da solo non
+ // basta: il centro di una vista che finisce "adesso" e' mezza finestra fa, e riportarsi li'
+ // lascerebbe l'ultima candela fuori schermo proprio a chi stava guardando il prezzo di adesso.
+ // Il bordo live e' l'ULTIMA CANDELA VERA (idx), non maxViewEnd(): quello permette di scorrere
+ // oltre l'ultima candela, nel bianco, e confrontarsi con lui vorrebbe dire «al bordo» quasi mai.
+ const alBordo=(end>=idx-0.5);
+ return {tCentro,minuti,followLatest,alBordo,viewPriceLo,viewPriceHi,priceZoomFactor,autoFitWidth,et:currentAssetKey,fattaAt:Date.now()};
 }
 function fblVistaRipristina(f){
  if(!f||!rows.length||(f.asset&&f.asset!==currentAssetKey))return;
  const tf=currentTF||1;
- visibleCount=Math.max(FBL_VISTA_MIN_CANDELE,Math.round(f.minuti/tf));
+ visibleCount=fblCandelePerMinuti(f.minuti,tf,FBL_VISTA_MIN_CANDELE);
  fblVistaUltimo={minuti:f.minuti,vc:Math.round(visibleCount),at:Date.now()};
  const n=getVisibleCount();
- if(f.followLatest)viewEnd=idx;
+ if(f.followLatest||f.alBordo)viewEnd=idx;
  else viewEnd=Math.max(0,Math.min(maxViewEnd(),fblPosizionePerTempo(f.tCentro)+(n-1)/2));
  followLatest=f.followLatest;
  viewPriceLo=f.viewPriceLo; viewPriceHi=f.viewPriceHi; priceZoomFactor=f.priceZoomFactor;
@@ -22659,7 +22706,7 @@ withLoadingOverlay('Cambio timeframe Live…', ()=>__sorgenteTf==='mt5'?loadLive
    viewEnd=Math.max(0,idx-offsetFromEndNewTF);
  }
  // Stessa finestra di tempo reale, non più lo stesso numero di candele (vedi commento sopra).
- visibleCount=Math.max(2,Math.round(visibleRealMinutes/(currentTF||1)));
+ visibleCount=fblCandelePerMinuti(visibleRealMinutes,currentTF,2);
  // Ancora per ORARIO (non per numero di candele): vedi fblVistaFotografa().
  if(vistaFoto){ fblVistaRipristina(vistaFoto); fblVistaSorveglia(vistaFoto); }
 
@@ -35779,7 +35826,7 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
      preserved.offsetFromEnd=Math.max(0,Math.round(preserved.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
    }
    if(opts&&Number.isFinite(opts.tfChangeSpanMinutes)){
-     preserved.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
+     preserved.visibleCount=fblCandelePerMinuti(opts.tfChangeSpanMinutes,currentTF,2);
    }
  }
  // REPLAY IN LIVE: durante il replay masterTime/idx restano CONGELATI sul punto scelto (i dati
@@ -39605,7 +39652,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
      preserved.offsetFromEnd=Math.max(0,Math.round(preserved.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
    }
    if(opts&&Number.isFinite(opts.tfChangeSpanMinutes)){
-     preserved.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
+     preserved.visibleCount=fblCandelePerMinuti(opts.tfChangeSpanMinutes,currentTF,2);
    }
  }
  // REPLAY IN LIVE: durante il replay masterTime/idx restano CONGELATI sul punto scelto (i dati
@@ -40878,7 +40925,7 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
   conservata={offsetFromEnd:rows.length?((rows.length-1)-viewEnd):0,followLatest,priceZoomFactor,viewPriceLo,viewPriceHi,autoFitWidth,visibleCount};
   if(Number.isFinite(opts.tfChangeSpanMinutes)&&Number.isFinite(opts.tfChangeOldTF)&&opts.tfChangeOldTF>0)
    conservata.offsetFromEnd=Math.max(0,Math.round(conservata.offsetFromEnd*opts.tfChangeOldTF/(currentTF||1)));
-  if(Number.isFinite(opts.tfChangeSpanMinutes))conservata.visibleCount=Math.max(2,Math.round(opts.tfChangeSpanMinutes/(currentTF||1)));
+  if(Number.isFinite(opts.tfChangeSpanMinutes))conservata.visibleCount=fblCandelePerMinuti(opts.tfChangeSpanMinutes,currentTF,2);
  }
  // REPLAY IN LIVE: durante il replay masterTime/idx restano CONGELATI sul punto scelto (i dati
  // live continuano comunque ad aggiornare baseRows). Senza questo guard, ogni risincronizzazione
