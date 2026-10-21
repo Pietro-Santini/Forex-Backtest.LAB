@@ -2000,6 +2000,17 @@ function pubblicaPreferenze(){
           <div>Pagina caricata: <b id="fblVerCaricata">…</b></div>
           <div>Ultima versione pubblicata: <b id="fblVerRemota">…</b> <span id="fblVerStato" class="hint" style="margin:0 0 0 6px"></span></div>
         </div>
+        <div class="fbSettingsSectionTitle" style="margin-top:16px">Prestazioni</div>
+        <div style="font-size:12px;line-height:1.6;color:#9fb0c0;margin-bottom:8px">
+          Se l\'app rallenta, misura <b>adesso</b> e poi <b>di nuovo quando va lenta</b>: quello che
+          cambia fra le due misure dice qual è la causa. Una cosa che parte veloce e peggiora non
+          è un costo fisso, è qualcosa che si accumula.
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button type="button" id="fblMisuraPrestBtn" class="toolBtn active">📈 Misura le prestazioni (5 secondi)</button>
+          <button type="button" id="fblCopiaPrestBtn" class="miniBtn" style="display:none">📋 Copia il risultato</button>
+        </div>
+        <pre id="fblPrestOut" style="display:none;font-size:11.5px;line-height:1.5;color:#cdd6e0;background:#0e141c;border:1px solid #26323f;border-radius:7px;padding:10px;white-space:pre-wrap;margin:0 0 10px"></pre>
         <div id="fblVerNote" style="font-size:12px;line-height:1.55;color:#9fb0c0;background:#141c26;border:1px solid #26323f;border-radius:7px;padding:10px;margin:10px 0 0;white-space:pre-wrap;display:none"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
           <button type="button" id="fblVerControllaBtn" class="miniBtn">🔄 Controlla aggiornamenti</button>
@@ -44018,6 +44029,99 @@ async function maybeAutoLaunchDesktopApp(){
 // avendo spazio per farlo, si scrive nella barra di stato PERCHE', una volta. Se la causa e' uno
 // scorrimento disattivato sulla pagina principale (overflow hidden su html/body fuori dalle
 // finestre PIP), lo si riattiva.
+// ===================== MISURA DELLE PRESTAZIONI, SULLA MACCHINA VERA =====================
+//
+// SEGNALATO dal proprietario: «appena installato il pacchetto il programma era fluidissimo, zero
+// freeze, tre schede aperte senza problemi. Dopo un po' incominciava a calare le prestazioni».
+//
+// QUELL'INDIZIO VALE PIU' DI OGNI ALTRO: una cosa che parte veloce e peggiora NON e' un costo
+// fisso (sarebbe lenta subito) - e' qualcosa che si ACCUMULA. E qualcosa che si accumula si trova
+// misurando la stessa cosa due volte a distanza, non leggendo il codice.
+//
+// PERCHE' LA MISURA STA QUI DENTRO E NON NEL BANCO DI PROVA. Nel banco l'app gira senza rete, con
+// i socket finti e senza MT5: sono state misurate le cose misurabili li' e NON spiegano il
+// rallentamento - ricostruire i bucket del footprint col registro tick pieno al massimo
+// (150.000 tick) costa 28 ms, e update()+draw() con 5.000 operazioni e 30 posizioni costano
+// 3,7 + 6,4 ms. Numeri che crescono, ma non che bloccano. Il difetto vive dove il banco non
+// arriva: nel flusso dati dal vivo. Quindi lo strumento va dove vive il difetto.
+//
+// COSA MISURA, in cinque secondi: i risvegli dei timer al secondo (e' cosi' che si e' trovata la
+// causa del 21 ottobre: 66 risvegli su 77 venivano da un solo controllo ogni 30 ms), il costo
+// medio di un disegno e di un aggiornamento, i fotogrammi saltati (gli "scatti" si vedono qui),
+// la memoria, e quanto si e' accumulato nelle memorie che crescono usando l'app.
+function fblMisuraPrestazioni(secondi){
+ const durata=Math.max(1000,(Number(secondi)||5)*1000);
+ const out=$('fblPrestOut'), btn=$('fblMisuraPrestBtn');
+ if(out){ out.style.display='block'; out.textContent='Misuro per '+(durata/1000)+' secondi… lascia l\'app come la usi di solito.'; }
+ if(btn)btn.disabled=true;
+ return new Promise(resolve=>{
+  // --- i risvegli: si contano avvolgendo i programmatori di timer, e si rimette tutto a posto.
+  let risvegli=0;
+  const st=window.setTimeout, si=window.setInterval;
+  window.setTimeout=function(fn,ms,...a){ return st.call(this,function(){ risvegli++; return typeof fn==='function'?fn.apply(this,arguments):undefined; },ms,...a); };
+  window.setInterval=function(fn,ms,...a){ return si.call(this,function(){ risvegli++; return typeof fn==='function'?fn.apply(this,arguments):undefined; },ms,...a); };
+  // --- il costo di disegno e aggiornamento: si misurano le chiamate VERE, non una simulazione.
+  const veriDraw=window.draw, veriUpdate=window.update;
+  let nD=0,msD=0,nU=0,msU=0;
+  try{ window.draw=function(){ const a=performance.now(); try{ return veriDraw.apply(this,arguments); } finally { msD+=performance.now()-a; nD++; } }; }catch(e){}
+  try{ window.update=function(){ const a=performance.now(); try{ return veriUpdate.apply(this,arguments); } finally { msU+=performance.now()-a; nU++; } }; }catch(e){}
+  // --- i fotogrammi saltati: e' quello che si VEDE come scatto.
+  let frame=0, salti=0, peggiore=0, ultimo=performance.now();
+  let vivo=true;
+  const giro=()=>{
+   if(!vivo)return;
+   const ora=performance.now(), d=ora-ultimo; ultimo=ora; frame++;
+   if(d>50){ salti++; if(d>peggiore)peggiore=Math.round(d); }
+   requestAnimationFrame(giro);
+  };
+  requestAnimationFrame(giro);
+  const t0=performance.now();
+  st.call(window,()=>{
+   vivo=false;
+   window.setTimeout=st; window.setInterval=si;
+   try{ window.draw=veriDraw; }catch(e){}
+   try{ window.update=veriUpdate; }catch(e){}
+   const sec=(performance.now()-t0)/1000;
+   const conta=(o)=>{ try{ return Object.values(o||{}).reduce((n,a)=>n+((a&&a.length)||0),0); }catch(e){ return -1; } };
+   const r={
+    quando:new Date().toLocaleString('it-IT'),
+    versione:(typeof FBL_VERSIONE!=='undefined'?FBL_VERSIONE:($('fblVerCaricata')?$('fblVerCaricata').textContent:'?')),
+    secondi:Math.round(sec*10)/10,
+    risvegliAlSecondo:Math.round(risvegli/sec*10)/10,
+    fotogrammiAlSecondo:Math.round(frame/sec*10)/10,
+    scatti:salti,
+    scattoPeggiore_ms:peggiore,
+    disegni:nD, disegnoMedio_ms:nD?Math.round(msD/nD*100)/100:0,
+    aggiornamenti:nU, aggiornamentoMedio_ms:nU?Math.round(msU/nU*100)/100:0,
+    memoria_MB:(performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576):null),
+    // Le memorie che crescono usando l'app: e' qui che si vede cosa si e' accumulato.
+    tickFootprint:conta(typeof footprintTickLogByAsset!=='undefined'?footprintTickLogByAsset:null),
+    bucketFootprint:(()=>{ try{ return Object.keys(footprintByBucket||{}).length; }catch(e){ return -1; } })(),
+    operazioni:(typeof trades!=='undefined'?trades.length:-1),
+    posizioniAperte:(typeof positions!=='undefined'?positions.length:-1),
+    disegniSalvati:(typeof drawings!=='undefined'?drawings.length:-1),
+    nodiPagina:document.getElementsByTagName('*').length,
+    candele:(typeof rows!=='undefined'?rows.length:-1),
+    modo:(typeof liveModeActive!=='undefined'&&liveModeActive)?'Live':'Storico',
+    mt5:(typeof mt5Connected!=='undefined'&&mt5Connected)?'collegato':'no'
+   };
+   const testo=Object.keys(r).map(k=>k.padEnd(22)+': '+r[k]).join('\n');
+   if(out)out.textContent=testo;
+   const cp=$('fblCopiaPrestBtn'); if(cp)cp.style.display='';
+   if(btn)btn.disabled=false;
+   window.fblUltimaMisuraPrestazioni=r;
+   resolve(r);
+  },durata);
+ });
+}
+fblDelega('click',ev=>{
+ if(ev.target&&ev.target.closest&&ev.target.closest('#fblMisuraPrestBtn')){ fblMisuraPrestazioni(5); return; }
+ const cp=ev.target&&ev.target.closest&&ev.target.closest('#fblCopiaPrestBtn');
+ if(cp){
+  const t=$('fblPrestOut')?$('fblPrestOut').textContent:'';
+  try{ navigator.clipboard.writeText(t); cp.textContent='\u2705 Copiato'; setTimeout(()=>{ cp.textContent='\u{1f4cb} Copia il risultato'; },1500); }catch(e){}
+ }
+});
 (function fblDiagnosiScorrimento(){
  let segnalato=false, ultimoScroll=0;
  // Lo scorrimento di Chrome e' "morbido": parte qualche decina di millisecondi dopo la rotella. Si
