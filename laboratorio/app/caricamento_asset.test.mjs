@@ -38,7 +38,13 @@ test('mentre carica, il grafico è coperto e si legge l\'asset che sta arrivando
     assert.equal(r.manca, undefined, 'il riquadro di caricamento non compare');
     assert.equal(r.dentroGrafico, true, 'deve coprire il GRAFICO, non la pagina');
     assert.match(r.titolo, /EURCHF/, 'deve dire quale asset sta arrivando: ' + r.titolo);
-    assert.match(r.titolo, /0%/, 'e partire da zero: ' + r.titolo);
+    // NON PIU' «partire da zero»: il proprietario ha segnalato che la barra «rimane sempre al
+    // 0% e non aumenta, poi apre e fine li'», e una barra ferma a zero sembra un programma
+    // bloccato. Adesso un passo appena cominciato vale comunque qualcosa (vedi
+    // caricamento_percentuale.test.mjs). Quello che conta e' che dica una percentuale, e che
+    // non sia gia' a meta' strada appena aperta.
+    const pct0 = Number((r.titolo.match(/(\d+)%/) || [])[1]);
+    assert.ok(pct0 > 0 && pct0 < 33, 'appena aperta: piu' + ' di zero ma all inizio: ' + r.titolo);
     assert.match(r.passo, /storico/i, 'e dire cosa sta facendo: ' + r.passo);
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
@@ -63,11 +69,17 @@ test('la percentuale conta i passi veri, uno alla volta', async () => {
       const d = leggi();
       return {a, b, c, d};
     });
-    assert.match(r.a.testo, /0%/);
-    assert.match(r.b.testo, /33%/, 'un passo su tre: ' + r.b.testo);
-    assert.match(r.c.testo, /67%/, 'due su tre: ' + r.c.testo);
-    assert.match(r.d.testo, /100%/, 'tre su tre: ' + r.d.testo);
-    assert.equal(r.b.barra, '33%', 'anche la barra segue i passi veri');
+    // I passi veri restano i tre di prima, e ognuno vale piu' del precedente. Cambia che
+    // DENTRO un passo la barra si muove (prima era immobile fino al passo dopo), quindi si
+    // guarda l'ordine invece di quattro numeri esatti. L'ultimo pero' resta 100 esatto:
+    // quando tutti i passi sono finiti, 100 e' la verita'.
+    const num = t => Number((String(t).match(/(\d+)%/) || [])[1]);
+    const pa = num(r.a.testo), pb = num(r.b.testo), pc = num(r.c.testo), pd = num(r.d.testo);
+    assert.ok(pa > 0, 'mai zero: ' + r.a.testo);
+    assert.ok(pb > pa && pb >= 33, 'un passo su tre: ' + r.b.testo);
+    assert.ok(pc > pb && pc >= 67, 'due su tre: ' + r.c.testo);
+    assert.equal(pd, 100, 'tre su tre: ' + r.d.testo);
+    assert.ok(parseInt(r.b.barra, 10) >= 33, 'anche la barra segue i passi veri: ' + r.b.barra);
     assert.notEqual(r.a.passo, r.b.passo, 'ogni passo dice una cosa diversa');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }

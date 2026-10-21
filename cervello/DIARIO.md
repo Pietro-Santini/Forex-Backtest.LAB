@@ -2491,3 +2491,71 @@ correzione» ma «quale versione sta usando».** Tre volte di fila la risposta e
 quarta volta ha smesso di essere una coincidenza ed è diventata la causa da cercare: il canale di
 aggiornamento era rotto, e teneva nascosto tutto il lavoro fatto. Un difetto che blocca la
 consegna vale più di dieci difetti nel prodotto.
+## 21 ottobre 2026 (sera) - Cinquanta file sul Desktop, e il danno che avevano lasciato
+
+### Come e' cominciata
+
+«Come mai hai incominciato a prendere il desktop e a riempirlo di file? Mettili nella cartella
+apposita o eliminali se non servono piu', creano solo confusione.»
+
+Cinquanta script di debug sul Desktop, **tutti datati 19 ottobre** — due giorni prima, non di
+questa sessione (qui gli script vanno nella cartella temporanea della sessione). Spostati in
+`%TEMP%\fbl-script-vecchi-19ottobre`, non cancellati: non si butta roba di qualcun altro.
+
+Ma la lamentela sul disordine ha fatto trovare una cosa piu' seria.
+
+### Il danno: un `i += 4` dove servivano 5 ⭐
+
+`fix_all_apostrofi_final.py` cercava `l'app` dentro le stringhe e lo riscriveva come `l\'app`.
+Poi avanzava:
+
+```python
+result.append("l\\'app")
+i += 4   # "salta l'app (5 char, meno 1 per l'incremento)"
+continue # ...ma il `continue` salta anche l'incremento
+```
+
+`l'app` sono **cinque** caratteri; avanzando di quattro, l'ultima `p` veniva riprocessata e
+riscritta. Risultato: **`l\'appp`**, 165 volte fra `appp` e `appplicazione`.
+
+E non erano solo commenti. Il suggerimento di un pulsante diceva, letteralmente:
+
+> Ricarica l\'app (nell\'appp installata non c'è il pulsante del browser)
+
+Piu' **31 backslash** finiti in commenti e testo HTML, dove non sono escape ma caratteri che si
+vedono.
+
+### Il mio errore di misura, due volte ⭐⭐
+
+Prima di correggere volevo sapere quanti fossero. Ho contato da riga di comando e mi e' tornato
+**176**. Poi, cambiando il filtro, **378**. Poi **71 attributi**. Numeri grossi, che avrebbero
+giustificato una sostituzione di massa su tutto il file — cioe' esattamente l'errore che stavo
+riparando.
+
+**Erano tutti falsi.** La shell mangiava i backslash prima che arrivassero a Python, quindi
+`"\\'"` diventava `"'"` e io stavo contando **apostrofi**.
+
+Me ne sono accorto da un dettaglio: gli esempi stampati accanto ai numeri **non avevano nessun
+backslash**. *Un numero che non torna con quello che si vede davanti e' sempre un numero
+sbagliato.* Rifatta la misura da file — dove la shell non c'entra — i casi veri erano **31**.
+
+E i 521 rimasti sono **escape legittimi dentro stringhe JavaScript**: toglierli avrebbe rotto
+l'app. La differenza fra 521 e 31 e' la differenza fra una riparazione e un disastro.
+
+### Cosa resta a difenderlo
+
+`testo_non_storpiato.test.mjs` (3): niente `appp`, niente backslash nei commenti HTML, e — la
+prova di controllo, la piu' importante — **gli escape veri nelle stringhe JS devono restare**.
+Una pulizia troppo allegra li toglierebbe e l'app non partirebbe nemmeno: il test lo direbbe
+prima. Per non ricadere nell'inganno di sopra, il test costruisce il backslash con
+`String.fromCharCode(92)`, che non passa da nessun escape.
+
+### Le lezioni ⭐
+1. **Un numero che non torna con quello che si vede davanti e' sbagliato.** Non si corregge
+   niente su un conteggio che non si e' guardato in faccia.
+2. **Una sostituzione di massa su un file di 4,7 MB va misurata prima e verificata dopo**, e deve
+   sapere distinguere dove un carattere e' sintassi (una stringa JS) e dove e' testo (un
+   commento, un attributo). Lo script del 19 ottobre non lo distingueva: per questo ha fatto
+   danno in entrambi i sensi.
+3. **Il disordine non e' mai solo disordine.** Cinquanta file fuori posto hanno portato a 165
+   parole storpiate che nessun test copriva.
