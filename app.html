@@ -4804,21 +4804,45 @@ function fblPlCorrente(p){
 function fblPosizioniBlocco(){
  try{ return (positions||[]).filter(p=>p&&p.lots); }catch(e){ return []; }
 }
-async function fblChiudiBlocco(quali,descrizione){
- const lista=fblPosizioniBlocco().filter(quali);
- if(!lista.length){ $('status').textContent='Nessuna posizione da chiudere: '+descrizione+'.'; return; }
- if(typeof blockedByPropFirmNews==='function'&&blockedByPropFirmNews())return;
+// LA CONFERMA, UNA SOLA, PER UN ELENCO DI POSIZIONI.
+// Estratta perche' la usano in due: le operazioni a blocco e il pulsante CHIUDI TUTTE. Prima il
+// pulsante CHIUDI TUTTE non chiedeva NIENTE e si appoggiava alle conferme singole di ogni
+// posizione reale - tanto che il messaggio di stato diceva «per quelle REALI su MT5, conferma la
+// chiusura nel popup comparso». Due strade che chiedono in due modi diversi sono due strade che
+// un domani divergono: ora la domanda e' una, e dice sempre le stesse tre cose (quante, quanto
+// rendono adesso, e quante sono REALI).
+// Restituisce {ok,somma,ignoti,reali}: non solo la risposta, anche i numeri gia' calcolati per
+// farla. Il messaggio finale ("chiuse N, risultato X") li vuole, e ricalcolarli dopo darebbe un
+// numero DIVERSO - a quel punto le posizioni sono chiuse e il loro P/L "di adesso" non esiste piu'.
+async function fblConfermaChiusuraLista(lista,descrizione,titolo){
  let somma=0, ignoti=0;
  lista.forEach(p=>{ const v=fblPlCorrente(p); if(v==null)ignoti++; else somma+=v; });
  const reali=lista.filter(p=>p.mt5Ticket!=null).length;
  const righe=[descrizione+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.'];
  righe.push('Risultato di adesso: '+((somma>=0?'+':'')+euro(somma))+(ignoti?(' (di '+(lista.length-ignoti)+' su '+lista.length+': delle altre non si ha il prezzo adesso)'):''));
- if(reali)righe.push(reali+(reali===1?' e' : ' sono')+' REALE sul conto MT5: la chiusura e\' vera, non una simulazione.');
- if(!await appConfirm(righe.join('\n\n'),{title:'⚡ Chiudi a blocco',okLabel:'Chiudi '+lista.length,cancelLabel:'Annulla'}))return;
+ // «3 sono REALE» era quello che si leggeva prima: il numero si accordava, il sostantivo no.
+ if(reali)righe.push(reali+(reali===1?' è REALE':' sono REALI')+' sul conto MT5: la chiusura è vera, non una simulazione.');
+ const ok=await appConfirm(righe.join('\n\n'),
+   {title:titolo||'⚡ Chiudi a blocco',okLabel:'Chiudi '+lista.length,cancelLabel:'Annulla'});
+ return {ok:!!ok,somma,ignoti,reali};
+}
+async function fblChiudiBlocco(quali,descrizione){
+ const lista=fblPosizioniBlocco().filter(quali);
+ if(!lista.length){ $('status').textContent='Nessuna posizione da chiudere: '+descrizione+'.'; return; }
+ if(typeof blockedByPropFirmNews==='function'&&blockedByPropFirmNews())return;
+ const conferma=await fblConfermaChiusuraLista(lista,descrizione);
+ if(!conferma.ok)return;
+ const {somma,ignoti,reali}=conferma;
  let fatte=0, saltate=0;
  for(const p of lista){
   try{
-   if(p.mt5Ticket!=null){ await closeMt5PositionReal(p,'MANUAL'); fatte++; continue; }
+   // UNA CONFERMA SOLA. Richiesto: «se clicca chiudi x posizioni gli viene fuori soltanto un
+   // messaggio di conferma per la chiusura di tutte». La conferma del blocco e' gia' stata data
+   // qui sopra: senza `senzaConferma`, closeMt5PositionReal ne chiedeva un'altra per OGNI
+   // posizione reale - con dieci posizioni, dieci popup, e un "si'" di troppo chiudeva quello
+   // che non si voleva. Le simulate non chiedevano niente, quindi il difetto si vedeva solo sul
+   // conto MT5 reale.
+   if(p.mt5Ticket!=null){ await closeMt5PositionReal(p,'MANUAL',{senzaConferma:true}); fatte++; continue; }
    const prezzo=fblPrezzoChiusura(p);
    if(prezzo==null){ saltate++; continue; }
    closeTrade('MANUAL',prezzo,p); fatte++;
@@ -19789,7 +19813,11 @@ function removeTradeRecordAt(i){
  trades.splice(i,1);
  if(highlightedTrade&&highlightedTrade.tradeIndex===i)highlightedTrade=null;
 }
-function closeAllPositions(reason){
+// `opz.senzaConferma`: la conferma e' gia' stata chiesta da chi chiama, UNA SOLA VOLTA per tutte
+// (vedi il pulsante CHIUDI TUTTE). Senza, ogni posizione REALE apriva il suo popup: il messaggio
+// di stato arrivava perfino a dire «per quelle REALI su MT5, conferma la chiusura nel popup
+// comparso», cioe' il difetto era scritto nell'interfaccia.
+function closeAllPositions(reason,opz){
  // Si possono chiudere subito (con un prezzo corretto) solo le posizioni DELL'ASSET a grafico
  // ora: per le posizioni di altri asset non abbiamo un prezzo live valido in questo momento,
  // quindi restano aperte finché non si passa sul loro grafico.
@@ -19798,12 +19826,20 @@ function closeAllPositions(reason){
  // REALMENTE verificato via tick (mai rows[idx].close, che durante l'avvio può ancora
  // appartenere a un CSV Storico di tutt'altro asset).
  const price=liveModeActive?livePriceByAsset[currentAssetKey]:currentPrice();
+ // Le chiusure REALI sono asincrone: si raccolgono le promesse e si restituiscono, cosi' chi
+ // chiama puo' aspettare la fine prima di scrivere il messaggio di riepilogo. Senza, il messaggio
+ // veniva scritto subito e poi SOVRASCRITTO da quello dell'ultima posizione chiusa: a schermo
+ // restava «Posizione ... chiusa DAVVERO su MT5», e di quante ne erano state chiuse in tutto non
+ // si sapeva piu' niente.
+ const attese=[];
  [...ownPositions].forEach(p=>{
-   // Posizione REALE: si chiude sul conto MT5 (con conferma) e SOLO se va a buon fine si
-   // giornalizza in locale — mai chiuderla qui in locale con un prezzo indovinato.
-   if(p.mt5Ticket!=null){ closeMt5PositionReal(p,reason); return; }
+   // Posizione REALE: si chiude sul conto MT5 e SOLO se va a buon fine si giornalizza in locale —
+   // mai chiuderla qui in locale con un prezzo indovinato. La conferma la chiede chi ci chiama,
+   // una sola volta per tutte (vedi opz.senzaConferma).
+   if(p.mt5Ticket!=null){ attese.push(closeMt5PositionReal(p,reason,opz&&opz.senzaConferma?{senzaConferma:true}:undefined)); return; }
    closeTrade(reason,Number.isFinite(price)?price:p.entry,p);
  });
+ return Promise.all(attese).catch(()=>{});
 }
 // Bottone "Vai a grafico" nel Trade Journal: sposta la vista sulla candela in cui quel
 // trade è stato APERTO (usa lo stesso "match per timestamp reale" delle frecce, così
@@ -21698,12 +21734,33 @@ $('close').onclick=async()=>{
  $('status').textContent=`Trade chiuso al prezzo ${price} • risultato ${currentPL>=0?'+':''}${euro(currentPL)}.`;
  draw();update();
 };
-$('closeAll').onclick=()=>{
+$('closeAll').onclick=async()=>{
  if(!positions.length)return $('status').textContent='Nessuna posizione aperta.';
  if(blockedByPropFirmNews())return; // STEP 2
- const hasReal=positions.some(p=>p.mt5Ticket!=null);
- closeAllPositions('MANUAL');
- $('status').textContent=hasReal?'Posizioni simulate chiuse. Per quelle REALI su MT5, conferma la chiusura nel popup comparso.':'Tutte le posizioni sono state chiuse.';
+ // UNA CONFERMA SOLA, come per le operazioni a blocco. Prima questo pulsante non chiedeva niente
+ // e si appoggiava alle conferme singole delle posizioni reali: con cinque posizioni MT5 erano
+ // cinque popup in fila, e il messaggio di stato lo diceva pure («conferma la chiusura nel popup
+ // comparso»). Richiesto dal proprietario: «se clicca chiudi x posizioni gli viene fuori soltanto
+ // un messaggio di conferma per la chiusura di tutte».
+ // L'elenco e' lo stesso che chiudera' closeAllPositions: solo l'asset a grafico, perche' per gli
+ // altri non c'e' un prezzo valido adesso. Dirlo nella domanda evita la sorpresa di vederne
+ // restare aperte alcune.
+ const lista=positions.filter(belongsToCurrentAsset);
+ if(!lista.length)return $('status').textContent='Nessuna posizione aperta su '+(currentAssetKey||'questo asset')+'.';
+ const altre=positions.length-lista.length;
+ const descr='Chiudi tutte le posizioni su '+(currentAssetKey||'questo asset')
+   +(altre?(' (le '+altre+' di altri asset restano aperte: si chiudono dal loro grafico)'):'');
+ const conferma=await fblConfermaChiusuraLista(lista,descr,'⚡ Chiudi tutte le posizioni');
+ if(!conferma.ok)return;
+ // Si ASPETTA che le chiusure reali siano finite: altrimenti questo messaggio verrebbe scritto
+ // subito e poi sovrascritto da quello dell'ultima posizione chiusa.
+ await closeAllPositions('MANUAL',{senzaConferma:true});
+ const esito=(conferma.ignoti<lista.length)
+   ? (' · risultato '+((conferma.somma>=0?'+':'')+euro(conferma.somma))
+      +(conferma.reali?' (indicativo: sulle reali il prezzo finale lo fa il broker)':''))
+   : '';
+ $('status').textContent='⚡ Chiuse '+lista.length+(lista.length===1?' posizione':' posizioni')+' su '+(currentAssetKey||'')+esito+'.'
+   +(altre?(' Restano aperte le '+altre+' di altri asset: si chiudono dal loro grafico.'):'');
  draw();update();
 };
 // Chiudi/Modifica SL-TP dalla tabella dedicata "🖥️ Posizioni MT5": parlano DAVVERO col bridge,
@@ -22977,16 +23034,17 @@ function fblMiniDashAggiorna(){
  const el=$('fblMiniDash'); if(!el||!el.isConnected)return;
  const testo=id=>{ const e=$(id); return e?(e.textContent||'').trim()||'—':'—'; };
  let pl=null; try{ pl=floatingPL(); }catch(e){}
- const aperte=(positions||[]).filter(p=>p&&!p.closed);
- let op='nessuna';
+ // NIENTE RIGA «OPERAZIONE». Tolta il 21 ottobre 2026 su richiesta del proprietario: «togliamo
+ // operazione, non serve visualizzarlo li', anche perche' ne abbiamo piu' di una, quindi ce ne
+ // visualizzerebbe solo una e non avrebbe senso». Era proprio cosi': mostrava la prima posizione
+ // (o l'ultima dell'asset a grafico) e accanto un «(+3)» - un dato che con quattro posizioni
+ // aperte non dice niente di utile e fa credere che quella sia LA posizione. Il P/L live qui
+ // sotto, invece, e' la somma di tutte: quello ha senso per tutte le posizioni insieme.
+ // Tolto anche il calcolo che la riempiva: lasciarlo sarebbe stato lavoro fatto per nessuno.
  let kr=false; try{ kr=fblContoEffettivo()==='kraken'; }catch(e){}
- if(kr){
-  const ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
-  pl=krakenConto&&Number.isFinite(Number(krakenConto.pnl_aperto))?Number(krakenConto.pnl_aperto):null;
-  if(ps.length){ const p=ps[0]; op=String(p.lato||'').toUpperCase()+' '+p.quantita+' '+p.simbolo+(ps.length>1?' (+'+(ps.length-1)+')':''); }
- }else if(aperte.length){ const p=aperte.find(x=>x.asset===currentAssetKey)||aperte[aperte.length-1]; op=(p.side||'')+' '+(p.lots!=null?p.lots+' ':'')+(p.asset||'')+(aperte.length>1?' (+'+(aperte.length-1)+')':''); }
+ if(kr)pl=krakenConto&&Number.isFinite(Number(krakenConto.pnl_aperto))?Number(krakenConto.pnl_aperto):null;
  const colore=Number.isFinite(pl)?(pl>=0?'#7fdc9a':'#ff8a8a'):'#cdd6e0';
- const righe=[['Operazione',escapeHtmlText(op)],['P/L live','<b style="color:'+colore+'">'+(Number.isFinite(pl)?((pl>=0?'+':'')+(kr?(pl.toFixed(2)+' $'):euro(pl))):'—')+'</b>'],
+ const righe=[['P/L live','<b style="color:'+colore+'">'+(Number.isFinite(pl)?((pl>=0?'+':'')+(kr?(pl.toFixed(2)+' $'):euro(pl))):'—')+'</b>'],
   ['Capitale',escapeHtmlText(testo('mCapital'))],['Win rate',escapeHtmlText(testo('mWR'))],['Loss rate',escapeHtmlText(testo('mLR'))],['Margine libero',escapeHtmlText(testo('mMargin'))]];
  const html=righe.map(([k,v])=>'<span style="color:#8b96a5">'+k+'</span><span style="text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+v+'</span>').join('');
  if(el.innerHTML!==html)el.innerHTML=html;
@@ -40817,6 +40875,101 @@ function krakenImpostaOrarioManuale(p,testo){
  try{ draw(); }catch(e){}
  return {ok:true,ms};
 }
+// ===================== OPERAZIONI A BLOCCO SU KRAKEN =====================
+// RICHIESTO dal proprietario: «dobbiamo inserire il pulsante operazioni a blocco anche per le
+// posizioni kraken». C'era per le posizioni dell'app e per il Journal, non qui - e su Kraken le
+// posizioni di un segnale sono spesso tre o quattro insieme, cioe' proprio il caso in cui serve.
+// VALE LA STESSA REGOLA DELLE ALTRE: una conferma sola per tutte, mai una per posizione.
+function krakenPosizioniBlocco(){
+ try{ return ((krakenPosizioni&&krakenPosizioni.posizioni)||[]).filter(p=>p&&p.simbolo); }catch(e){ return []; }
+}
+async function krakenConfermaBlocco(ps,descr,okLabel){
+ let somma=0, ignoti=0;
+ ps.forEach(p=>{ const v=Number(p.pnl); if(Number.isFinite(v))somma+=v; else ignoti++; });
+ const soldi=v=>(v>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
+ const righe=[descr+': '+ps.length+(ps.length===1?' posizione':' posizioni')+' su '+krakenNome()+'.'];
+ if(ignoti<ps.length)righe.push('Risultato di adesso: '+soldi(somma)+(ignoti?(' (di '+(ps.length-ignoti)+' su '+ps.length+')'):''));
+ if(krakenConto&&krakenConto.ambiente==='reale')
+  righe.push('Conto con SOLDI VERI: quello che succede qui e\' reale, non una simulazione.');
+ return await appConfirm(righe.join('\n\n'),
+   {title:'🐙 '+krakenNome()+' · operazioni a blocco',okLabel:(okLabel||'Procedi')+' '+ps.length,cancelLabel:'Annulla'});
+}
+async function krakenBloccoChiudi(quali,descr){
+ const ps=krakenPosizioniBlocco().filter(quali);
+ if(!ps.length){ $('status').textContent='🐙 Nessuna posizione da chiudere: '+descr+'.'; return; }
+ if(!await krakenConfermaBlocco(ps,descr,'Chiudi'))return;
+ let fatte=0, errori=[];
+ for(const p of ps){
+  try{
+   const r=await krakenBridge('/chiudi',{simbolo:p.simbolo});
+   if(r&&r.ok)fatte++; else errori.push(p.simbolo+': '+((r&&r.message)||'non riuscita'));
+  }catch(e){ errori.push(p.simbolo+': '+String(e&&e.message||e)); }
+ }
+ $('status').textContent='🐙 Chiuse '+fatte+(fatte===1?' posizione':' posizioni')
+   +(errori.length?(' · non riuscite: '+errori.join(' · ')):'')+'.';
+ krakenPosizioniAt=0;
+ try{ await krakenLeggiPosizioni(); krakenAggiornaConto(); krakenLeggiStorico(); }catch(e){}
+ krakenPosPannello(); try{ draw(); }catch(e){}
+}
+async function krakenBloccoPareggio(quali,descr){
+ const ps=krakenPosizioniBlocco().filter(quali).filter(p=>Number.isFinite(Number(p.entrata)));
+ if(!ps.length){ $('status').textContent='🐙 Nessuna posizione da portare a pareggio: '+descr+'.'; return; }
+ if(!await krakenConfermaBlocco(ps,descr+' · stop a pareggio','Sposta'))return;
+ let fatte=0, errori=[];
+ for(const p of ps){
+  try{
+   const r=await krakenBridge('/sl',{simbolo:p.simbolo,sl:Number(p.entrata)});
+   if(r&&r.ok)fatte++; else errori.push(p.simbolo+': '+((r&&r.message)||'non riuscita'));
+  }catch(e){ errori.push(p.simbolo+': '+String(e&&e.message||e)); }
+ }
+ $('status').textContent='🐙 Stop portato a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')
+   +(errori.length?(' · non riuscite: '+errori.join(' · ')):'')+'.';
+ krakenPosizioniAt=0;
+ try{ await krakenLeggiPosizioni(); }catch(e){}
+ krakenPosPannello(); try{ draw(); }catch(e){}
+}
+// Il menu, costruito sulle posizioni che ci sono davvero adesso: non si offre «chiudi le SHORT»
+// se short non ce ne sono.
+function krakenBloccoMenu(ps){
+ const d=document.createElement('details');
+ d.className='fblBlocco'; d.id='krakenBloccoMenu';
+ d.style.cssText='margin:4px 0 6px';
+ const s=document.createElement('summary');
+ s.className='miniBtn'; s.style.cssText='display:inline-block;cursor:pointer';
+ s.textContent='⚡ Operazioni a blocco';
+ s.title='Agisce su piu\' posizioni insieme, con una sola conferma';
+ d.appendChild(s);
+ const m=document.createElement('div');
+ m.style.cssText='position:absolute;z-index:50;background:#0d141d;border:1px solid #26323f;'
+  +'border-radius:8px;padding:6px;min-width:230px;box-shadow:0 10px 30px rgba(0,0,0,.5)';
+ const voce=(testo,quali,descr,cosa)=>{
+  const b=document.createElement('button');
+  b.type='button'; b.className='drawTemplateMenuItem';
+  b.style.cssText='display:block;width:100%;text-align:left;padding:5px 8px';
+  b.textContent=testo;
+  b.addEventListener('click',async()=>{ d.open=false; await (cosa==='be'?krakenBloccoPareggio:krakenBloccoChiudi)(quali,descr); });
+  m.appendChild(b);
+ };
+ const titolo=(t)=>{ const h=document.createElement('div'); h.className='hint';
+  h.style.cssText='padding:4px 8px 2px;font-weight:700;letter-spacing:.3px'; h.textContent=t; m.appendChild(h); };
+ titolo('Chiudi');
+ voce('Chiudi tutte',()=>true,'Tutte le posizioni');
+ voce('Chiudi quelle in guadagno',p=>Number(p.pnl)>0,'Le posizioni in guadagno');
+ voce('Chiudi quelle in perdita',p=>Number(p.pnl)<0,'Le posizioni in perdita');
+ const lati=[...new Set(ps.map(p=>String(p.lato||'').toUpperCase()).filter(Boolean))];
+ if(lati.length>1){
+  lati.forEach(l=>voce('Chiudi tutte le '+l,p=>String(p.lato||'').toUpperCase()===l,'Le posizioni '+l));
+ }
+ const simboli=[...new Set(ps.map(p=>String(p.simbolo||'')).filter(Boolean))].sort();
+ if(simboli.length>1){
+  titolo('Un contratto alla volta');
+  simboli.forEach(sim=>voce('Chiudi '+sim,p=>String(p.simbolo||'')===sim,'Le posizioni su '+sim));
+ }
+ titolo('Stop');
+ voce('Stop a pareggio su tutte',()=>true,'Tutte le posizioni','be');
+ d.appendChild(m);
+ return d;
+}
 function krakenPosPannello(){
  const box=$('krakenPosPanel'); if(!box)return;
  const c=krakenConto, ps=(krakenPosizioni&&krakenPosizioni.posizioni)||[];
@@ -40978,7 +41131,8 @@ function krakenPosPannello(){
  });
  tab.appendChild(tb);
  const sc=document.createElement('div'); sc.className='tableScroll'; sc.appendChild(tab);
- box.textContent=''; if(ps.length){ box.appendChild(t); box.appendChild(sc); }
+ box.textContent='';
+ if(ps.length){ box.appendChild(t); box.appendChild(krakenBloccoMenu(ps)); box.appendChild(sc); }
  if(pend.length){
   const t2=document.createElement('div'); t2.className='label'; t2.style.margin='8px 0 4px'; t2.textContent='⏱️ Ordini pendenti '+krakenNome()+' (li tiene il programma sul PC)';
   const tab2=document.createElement('table'); tab2.className='posTable';
@@ -45111,6 +45265,28 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (ev) => {
     if (!ev.data || ev.data.tipo !== 'versione-nuova') return;
     if (document.getElementById('fblVersioneNuova')) return;   // una volta sola
+    // SE L'AGGIORNAMENTO L'HAI CHIESTO TU, NON TI SI CHIEDE UNA SECONDA VOLTA.
+    //
+    // SEGNALATO (21 ottobre 2026): «ho premuto il tasto aggiorna, sono stato reindirizzato alla
+    // pagina per scaricare il pacchetto, eseguito il download, sono tornato all'applicazione,
+    // l'ho riaperta, ma il tasto aggiorna era sempre presente. Ho dovuto premere il pulsante in
+    // basso "aggiorna pagina" e solo allora l'ha riconosciuta come aggiornata».
+    // Perche' succedeva: installato il pacchetto nuovo, la pagina continua a essere servita dal
+    // service worker VECCHIO finche' non si ricarica. Il pannello Versione legge il numero da
+    // quella copia, quindi vede ancora la versione vecchia e tiene acceso il pulsante. Il
+    // "popup in basso" era l'unico modo di uscirne, e andava cercato.
+    // Ora: se l'utente aveva premuto "Aggiorna" (fbl_aggiornamento_atteso), appena la versione
+    // nuova e' pronta si ricarica DA SOLI. In tutti gli altri casi resta la striscia da premere:
+    // ricaricare di nascosto mentre si guarda una posizione aperta sarebbe peggio del problema.
+    let chiesto = 0;
+    try { chiesto = Number(localStorage.getItem('fbl_aggiornamento_atteso')) || 0; } catch (e) {}
+    // Sette giorni: oltre, quell'intenzione non e' piu' di questo aggiornamento.
+    if (chiesto && (Date.now() - chiesto) < 7 * 86400000) {
+      try { localStorage.removeItem('fbl_aggiornamento_atteso'); } catch (e) {}
+      try { document.getElementById('status').textContent = '⬇️ Versione nuova pronta: ricarico l\'app…'; } catch (e) {}
+      setTimeout(() => { try { location.reload(); } catch (e) {} }, 600);
+      return;
+    }
     const b = document.createElement('div');
     b.id = 'fblVersioneNuova';
     b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:100000;'
@@ -47542,6 +47718,11 @@ function fblMostraPulsanteAggiorna(release, tagRemoto){
 }
 async function fblApplicaAggiornamento(release, tagRemoto, btn){
   if(!btn)return;
+  // SI RICORDA CHE L'AGGIORNAMENTO L'HAI CHIESTO TU. Serve dopo, quando il pacchetto nuovo e'
+  // installato e il service worker lo segnala: a quel punto l'app ricarica da sola invece di
+  // lasciare acceso il pulsante «Aggiorna» finche' non si trova la striscia in basso.
+  // Vedi il gestore del messaggio 'versione-nuova'.
+  try{ localStorage.setItem('fbl_aggiornamento_atteso',String(Date.now())); }catch(e){}
   btn.disabled=true; btn.textContent='Aggiornamento in corso...';
   const p=await fblScaricaEAggiorna(release);
   if(p.ok){

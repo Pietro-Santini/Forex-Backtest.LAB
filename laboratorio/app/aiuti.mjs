@@ -42,6 +42,29 @@ export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows
     Object.defineProperty(navigator, 'userAgentData', {configurable:true,
       get: () => (p === null ? undefined : {platform: p, mobile: false, brands: []})});
   }, [piattaforma]);
+  // IL BANCO DI PROVA NON DEVE TOCCARE IL PONTE VERO DEL PROPRIETARIO.
+  //
+  // SEGNALATO (21 ottobre 2026): «mentre modifichi non mi chiudere e aprire il terminale MT5,
+  // perche' quasi per ogni modifica che fai mi interrompi il processo di collegamento con MT5».
+  // Causa: `pagina.route` qui sotto blocca le richieste HTTP, ma NON i WebSocket - Playwright li
+  // instrada a parte. E l'app, appena parte, ne apre verso il feed MT5 (porta 8001) e verso il
+  // ponte dei segnali (8769), che sul computer del proprietario sono VIVI e attaccati al suo
+  // terminale. Un collaudo intero apre la pagina centinaia di volte: centinaia di connessioni e
+  // disconnessioni sul ponte che in quel momento gli sta eseguendo gli ordini.
+  // Qui il WebSocket viene sostituito prima che la pagina parta: nessuna connessione, nessun
+  // errore a schermo (l'app lo tratta come uno stream che non si aggancia, caso che gestisce
+  // gia'). Un collaudo non deve poter toccare niente fuori da se'.
+  await contesto.addInitScript(() => {
+    class WebSocketFinto {
+      constructor(url){ this.url=String(url||''); this.readyState=0; this.bufferedAmount=0;
+        this.onopen=null; this.onmessage=null; this.onerror=null; this.onclose=null; }
+      send(){}
+      close(){ this.readyState=3; try{ this.onclose&&this.onclose({code:1000,reason:'banco di prova'}); }catch(e){} }
+      addEventListener(){} removeEventListener(){} dispatchEvent(){ return false; }
+    }
+    WebSocketFinto.CONNECTING=0; WebSocketFinto.OPEN=1; WebSocketFinto.CLOSING=2; WebSocketFinto.CLOSED=3;
+    try{ Object.defineProperty(window,'WebSocket',{configurable:true,writable:true,value:WebSocketFinto}); }catch(e){}
+  });
   const pagina = await contesto.newPage();
   const errori = [];
   pagina.on('pageerror', e => errori.push(String(e).slice(0,300)));
