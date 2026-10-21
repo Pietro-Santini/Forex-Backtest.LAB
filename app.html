@@ -4887,14 +4887,16 @@ async function fblGruppoPareggio(g){
  if(!lista.length){ $('status').textContent='Nessuna posizione aperta in questo gruppo.'; return; }
  const reali=lista.filter(p=>p.mt5Ticket!=null).length;
  const righe=['Gruppo '+g.descr+': '+lista.length+(lista.length===1?' posizione':' posizioni')+'.',
-   'Lo stop di ognuna va al suo pareggio con un margine pari allo spread (commissioni e swap compresi): '
-   +'al pareggio esatto lo stop starebbe DENTRO la forbice, e al primo allargamento verrebbe preso.'];
+   'Lo stop di ognuna va al suo pareggio esatto: profitto netto 0,00, commissioni e swap compresi.'];
  if(reali)righe.push(reali+(reali===1?' e\' REALE':' sono REALI')+' sul conto MT5: lo stop si sposta davvero sul conto.');
  if(!await appConfirm(righe.join('\n\n'),{title:'\u2696\ufe0f Stop a pareggio',okLabel:'Sposta '+lista.length,cancelLabel:'Annulla'}))return;
- let fatte=0;
- lista.forEach(p=>{ try{ applyBreakevenToPosition(p); fatte++; }catch(e){} });
+ let fatte=0, rifiutate=0;
+ lista.forEach(p=>{ try{ if(applyBreakevenToPosition(p)===false)rifiutate++; else fatte++; }catch(e){} });
  try{ draw(); update(); }catch(e){}
- $('status').textContent='\u2696\ufe0f Stop a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')+' del gruppo '+g.descr+'.';
+ // Si contano quelle spostate DAVVERO: annunciare cinque spostamenti e averne fatti zero e'
+ // peggio che non annunciare niente.
+ $('status').textContent='\u2696\ufe0f Stop a pareggio su '+fatte+(fatte===1?' posizione':' posizioni')+' del gruppo '+g.descr
+   +(rifiutate?(" · "+rifiutate+(rifiutate===1?" lasciata come stava":" lasciate come stavano")+": il pareggio cadrebbe dentro la forbice."):".");
 }
 fblDelega('click',async ev=>{
  const t=ev.target&&ev.target.closest&&ev.target.closest('[data-posgruppo-be],[data-posgruppo-chiudi]');
@@ -21313,22 +21315,39 @@ function computeBreakevenSl(entry,side,spread){
 // BE su una posizione tracciata in positions[] (simulata, o reale aperta/mostrata come riga
 // standard): aggiorna subito il campo SL locale e, se reale, la specchia sul conto MT5 —
 // stesso identico meccanismo già usato per un trascinamento manuale della linea SL.
+// Restituisce true se lo stop e' stato spostato, false se no: fblGruppoPareggio conta su
+// questo per dire quante ne ha spostate DAVVERO.
 function applyBreakevenToPosition(pos){
- if(!pos)return;
- // Pareggio PIU' UN MARGINE pari allo spread: vedi la nota lunga su mt5PrezzoPareggio. Fino al
- // 21 ottobre 2026 qui andava il pareggio ESATTO, e si e' visto cosa comporta: due SELL EURCHF
- // aperte a 0,92828 avevano lo stop a 0,92827 - un decimo di pip - e il cambio giornata se le e'
- // prese. Lo stop di una vendita si esegue sull'ask: al pareggio esatto sta dentro la forbice.
+ if(!pos)return false;
+ // IL PAREGGIO E' ZERO (vedi la nota lunga su mt5PrezzoPareggio): profitto netto 0,00, commissioni
+ // e swap compresi. Se viene colpito, il risultato e' zero - non "quasi".
  const beSl=mt5PrezzoPareggio(pos);
- if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
+ if(!Number.isFinite(beSl)){ $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.'; return false; }
+ // ...MA NON SI PIAZZA SE CADREBBE DENTRO LA FORBICE. Uno stop piu' vicino al prezzo di quanto sia
+ // larga la forbice fra compra e vendi viene preso al primo allargamento, qualunque cosa faccia il
+ // mercato: e' successo il 20 ottobre a due SELL EURCHF con lo stop a un decimo di pip
+ // dall'entrata, portate li' proprio dal pareggio. Non si sposta e si dice perche': cosi' lo stop
+ // di prima - che e' piu' lontano - resta a fare il suo lavoro.
+ const spazio=fblPareggioTroppoVicino(pos,beSl);
+ if(spazio.vicino){
+  const pip=(()=>{ try{ return pipSizeForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ return 0; } })();
+  const inPip=(n)=>(pip>0?(Math.round(n/pip*10)/10+' pip'):fmtPrice(n));
+  pos.bePareggioRifiutatoIl=Date.now();
+  $('status').textContent='⚖️ Pareggio NON spostato: cadrebbe a '+inPip(spazio.distanza)
+   +' dal prezzo, dentro la forbice del cambio giornata (~'+inPip(spazio.forbice)+'). '
+   +'Uno stop li\' verrebbe preso al primo allargamento anche senza che il mercato si muova: '
+   +'meglio lasciare quello che c\'e\' e riprovare quando il prezzo si e\' allontanato.';
+  return false;
+ }
  pos.sl=beSl; pos.slAt=Date.now();   // pareggio: da adesso lo stop e' qui, non da prima
  pos.beMarkerSl=beSl; // ricordato per il Trade Journal: se scatta ancora qui, il risultato è "BE" e non un generico "SL"
  if(active===pos){ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }
  draw();update();
  $('status').textContent=pos.mt5Ticket!=null
-   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: pareggio piu' un margine pari allo spread, commissioni e swap compresi) — sincronizzo sul conto MT5…`
+   ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap) — sincronizzo sul conto MT5…`
    :`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}).`;
  if(pos.mt5Ticket!=null)syncMt5PositionLevels(pos);
+ return true;
 }
 // BE da bottone "BE" nella tabella dedicata "🖥️ Posizioni MT5": qui il ticket può NON essere
 // tracciato in positions[] (posizione aperta fuori dall\'app), quindi si parla direttamente col
@@ -21336,8 +21355,17 @@ function applyBreakevenToPosition(pos){
 async function applyBreakevenToMt5TicketDirect(ticket){
  const live=mt5RealPositions.find(p=>String(p.ticket)===String(ticket));
  if(!live)return;
- const beSl=mt5PrezzoPareggio({entry:Number(live.price_open),side:live.side,mt5Ticket:live.ticket});
+ const finta={asset:live.symbol,entry:Number(live.price_open),side:live.side,mt5Ticket:live.ticket};
+ const beSl=mt5PrezzoPareggio(finta);
  if(!Number.isFinite(beSl))return $('status').textContent='Impossibile calcolare il pareggio: prezzo di apertura non disponibile.';
+ // Stesso rifiuto del pulsante nella tabella delle posizioni: uno stop dentro la forbice e'
+ // uno stop regalato. Qui il prezzo di chiusura si legge dal preventivo vero: un acquisto si
+ // chiude sul bid, una vendita sull'ask.
+ const oraQui=Number(live.side==='BUY'?live.bid:live.ask);
+ const spazio=fblPareggioTroppoVicino(finta,beSl,oraQui);
+ if(spazio.vicino)return $('status').textContent='⚖️ Pareggio NON spostato su '+live.symbol+' (ticket '+live.ticket+'): '
+   +'cadrebbe dentro la forbice fra compra e vendi, e verrebbe preso al primo allargamento. '
+   +"Lo stop attuale resta dove sta: riprova quando il prezzo si è allontanato.";
  if(!await appConfirm(`Spostare DAVVERO lo Stop Loss di ${live.side} ${live.symbol} (ticket ${live.ticket}) a pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap) sul conto MT5 collegato?`))return;
  $('status').textContent=`Spostamento a pareggio in corso sul conto MT5 (ticket ${live.ticket})…`;
  const result=await fetchMt5WithTimeout('/order/modify',{
@@ -28426,6 +28454,9 @@ function tgStrategiaValuta(){
       // SOTTO l'entrata reale (segnalato: entrate 4172.72/4172.60, stop a 4172.23).
       const be=mt5PrezzoPareggio(pos);
       if(!tgStopMigliore(pos.side,pos.sl,be))return;
+      // Dentro la forbice non si mette: qui nessuno sta guardando, e al prossimo giro si
+      // riprova da solo quando il prezzo si e' allontanato.
+      if(fblPareggioTroppoVicino(pos,be).vicino)return;
       const c=Number(r.close);
       if(Number.isFinite(c)&&(pos.side==='BUY'?be>=c:be<=c))return;
       pos.sl=be; pos.slAt=Date.now();   // pareggio dalla strategia della sala
@@ -28437,7 +28468,7 @@ function tgStrategiaValuta(){
      cambiato=true;
      if(mosse){
       $('status').textContent='🛡️ Segnale di '+String(st.sala||'')+': percorso il '+st.avvicinamento.pct
-       +'% verso il primo target, stop portato a pareggio (con un margine pari allo spread) su '+mosse
+       +'% verso il primo target, stop portato a pareggio (profitto netto 0,00) su '+mosse
        +(mosse===1?' posizione':' posizioni')+'.';
       try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
       draw(); update();
@@ -28463,6 +28494,8 @@ function tgStrategiaValuta(){
     // significherebbe farla risultare chiusa a un livello piu' basso del target che ha raggiunto.
     if(Number.isFinite(pos.tp)&&Math.abs(pos.tp-livelloGrilletto)<1e-9)return;
     if(!tgStopMigliore(pos.side,pos.sl,nuovo))return;
+    // Se la regola porta lo stop AL PAREGGIO, vale il rifiuto di sempre: dentro la forbice no.
+    if(reg.dove==='entrata'&&fblPareggioTroppoVicino(pos,nuovo).vicino)return;
     // Ultima rete: uno stop non puo' finire oltre il prezzo di adesso, o chiuderebbe subito.
     const c=Number(r.close);
     if(Number.isFinite(c)&&(pos.side==='BUY'?nuovo>=c:nuovo<=c))return;
@@ -28475,7 +28508,7 @@ function tgStrategiaValuta(){
    cambiato=true;
    if(spostate){
     $('status').textContent='🛡️ Strategia del segnale di '+String(st.sala||'')+': raggiunto il take profit n. '
-     +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (con un margine pari allo spread)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
+     +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (profitto netto 0,00)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
     try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
     draw(); update();
    }
@@ -33916,20 +33949,29 @@ function mt5AllineaApertura(p,rp){
 //
 // `opz.senzaMargine`: il pareggio nudo, per chi deve MOSTRARE il numero invece di piazzarci uno
 // stop sopra.
-function mt5PrezzoPareggio(pos,opz){
+// IL PAREGGIO E' ZERO. NON QUASI ZERO.
+//
+// SEGNALATO dal proprietario (21 ottobre 2026): «il programma sposta le posizioni a break-even,
+// ma perdono ugualmente meno 2 euro. Bisogna fare in modo che qualsiasi posizione spostata a
+// break-even venga accertato che sia effettivamente il risultato di 0 euro».
+//
+// ANDATA E RITORNO, e vale la pena scriverlo perche' non si rifaccia il giro. Poche ore prima, per
+// evitare che il cambio giornata prendesse lo stop (misurato: spread da 0,2 a 50 pip, tre SELL
+// chiuse), qui era stato aggiunto un margine pari allo spread. Cosi' lo stop sopravvive
+// all'allargamento - ma se viene colpito si perde circa uno spread. Il proprietario ha visto
+// esattamente quello: un «pareggio» che perde. E ha ragione: un pareggio che perde non e' un
+// pareggio, e un nome che mente e' peggio di una protezione in meno.
+//
+// Le due esigenze sono in conflitto solo finche' si cerca di risolverle con lo STESSO numero. La
+// soluzione non e' spostare il pareggio: e' NON METTERLO quando cadrebbe dentro la forbice. Il
+// prezzo resta quello esatto (profitto netto zero, commissioni e swap compresi); chi lo piazza
+// controlla prima che ci sia spazio - vedi fblPareggioTroppoVicino e applyBreakevenToPosition.
+function mt5PrezzoPareggio(pos){
  if(!pos||!Number.isFinite(Number(pos.entry)))return NaN;
  const entry=Number(pos.entry);
- const margine=()=>{
-  if(opz&&opz.senzaMargine)return 0;
-  let sp=0;
-  try{ sp=spreadCostForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ sp=0; }
-  return (Number.isFinite(sp)&&sp>0)?sp:0;
- };
- // Dalla parte da cui lo stop puo' essere preso: sotto per un acquisto, sopra per una vendita.
- const allarga=(p)=>{ const m=margine(); if(!m)return p; return pos.side==='BUY'?(p-m):(p+m); };
- if(pos.mt5Ticket==null)return allarga(entry);   // simulata: lo spread e' gia' dentro l'entrata
+ if(pos.mt5Ticket==null)return entry;   // simulata: lo spread e' gia' dentro l'entrata
  const rp=(mt5RealPositions||[]).find(x=>String(x.ticket)===String(pos.mt5Ticket));
- if(!rp)return allarga(entry);
+ if(!rp)return entry;
  const vp=Number(rp.valore_punto);
  const comm=Number(rp.commission), swap=Number(rp.swap);
  const costi=(Number.isFinite(comm)?2*comm:0)+(Number.isFinite(swap)?swap:0);   // negativo = costo
@@ -33938,9 +33980,6 @@ function mt5PrezzoPareggio(pos,opz){
   const dist=-costi/vp;                       // quanto deve muoversi il prezzo per ripagare i costi
   prezzo=pos.side==='BUY'?entry+dist:entry-dist;
  }
- // Il margine PRIMA dell'arrotondamento al passo dello strumento, cosi' il risultato resta un
- // prezzo valido per il broker.
- prezzo=allarga(prezzo);
  const pt=Number(rp.point);
  if(pt>0){
   const passi=prezzo/pt;
@@ -33948,6 +33987,34 @@ function mt5PrezzoPareggio(pos,opz){
   const dg=Number(rp.digits); if(Number.isFinite(dg))prezzo=Number(prezzo.toFixed(dg));
  }
  return prezzo;
+}
+// UNO STOP DENTRO LA FORBICE E' UNO STOP REGALATO.
+//
+// Restituisce {vicino, distanza, forbice}. `vicino` vuol dire: fra il prezzo di adesso e il
+// pareggio c'e' meno spazio della forbice fra compra e vendi - quindi quello stop verrebbe preso
+// al primo allargamento, qualunque cosa faccia il mercato. E' esattamente quello che e' successo
+// il 20 ottobre: due SELL EURCHF aperte a 0,92828 con lo stop a 0,92827 (UN DECIMO di pip),
+// portate li' dal pareggio, prese alle 00:00:42 quando lo spread si e' aperto a 50 pip.
+// La forbice di riferimento e' quella del ROLLOVER quando la si conosce (misurata, vedi
+// fblSpreadRolloverPips), perche' e' quella che conta per sopravvivere alla notte.
+function fblPareggioTroppoVicino(pos,prezzoBe,prezzoOra){
+ const fuori={vicino:false,distanza:null,forbice:null};
+ try{
+  if(!pos||!Number.isFinite(prezzoBe))return fuori;
+  // Il prezzo si puo' passare: nella tabella MT5 il preventivo vero (bid/ask) e' sotto mano ed e'
+  // piu' affidabile di quello a grafico.
+  const prezzo=Number.isFinite(Number(prezzoOra))?Number(prezzoOra)
+    :((typeof fblPrezzoChiusura==='function')?fblPrezzoChiusura(pos):null);
+  if(!(Number.isFinite(prezzo)&&prezzo>0))return fuori;   // non si sa: non si blocca niente
+  const asset=(pos&&pos.asset)||currentAssetKey;
+  let passo=0; try{ passo=pipSizeForAsset(asset); }catch(e){}
+  let forbice=0;
+  try{ forbice=(passo>0)?(fblSpreadRolloverPips(asset)*passo):spreadCostForAsset(asset); }catch(e){}
+  if(!(forbice>0))return fuori;
+  // Distanza dal lato da cui lo stop puo' essere preso.
+  const distanza=(pos.side==='BUY')?(prezzo-prezzoBe):(prezzoBe-prezzo);
+  return {vicino:distanza<forbice,distanza,forbice};
+ }catch(e){ return fuori; }
 }
 function saveMt5OpenAnchorsToStorage(){
  try{
@@ -41183,12 +41250,13 @@ function krakenImpostaOrarioManuale(p,testo){
 function krakenPosizioniBlocco(){
  try{ return ((krakenPosizioni&&krakenPosizioni.posizioni)||[]).filter(p=>p&&p.simbolo); }catch(e){ return []; }
 }
-async function krakenConfermaBlocco(ps,descr,okLabel){
+async function krakenConfermaBlocco(ps,descr,okLabel,nota){
  let somma=0, ignoti=0;
  ps.forEach(p=>{ const v=Number(p.pnl); if(Number.isFinite(v))somma+=v; else ignoti++; });
  const soldi=v=>(v>=0?'+':'')+Number(v).toLocaleString('it-IT',{minimumFractionDigits:2,maximumFractionDigits:2})+' $';
  const righe=[descr+': '+ps.length+(ps.length===1?' posizione':' posizioni')+' su '+krakenNome()+'.'];
  if(ignoti<ps.length)righe.push('Risultato di adesso: '+soldi(somma)+(ignoti?(' (di '+(ps.length-ignoti)+' su '+ps.length+')'):''));
+ if(nota)righe.push(nota);
  if(krakenConto&&krakenConto.ambiente==='reale')
   righe.push('Conto con SOLDI VERI: quello che succede qui e\' reale, non una simulazione.');
  return await appConfirm(righe.join('\n\n'),
@@ -41214,7 +41282,11 @@ async function krakenBloccoChiudi(quali,descr){
 async function krakenBloccoPareggio(quali,descr){
  const ps=krakenPosizioniBlocco().filter(quali).filter(p=>Number.isFinite(Number(p.entrata)));
  if(!ps.length){ $('status').textContent='🐙 Nessuna posizione da portare a pareggio: '+descr+'.'; return; }
- if(!await krakenConfermaBlocco(ps,descr+' · stop a pareggio','Sposta'))return;
+ // DIFFERENZA DA MT5, E VA DETTA: qui il pareggio e' il prezzo di entrata e basta. La
+ // commissione dello scambio non arriva all'app posizione per posizione (il ponte da' solo il
+ // totale del conto), quindi metterla nel prezzo vorrebbe dire inventarsi un numero. Meglio
+ // scriverlo nella conferma che far credere uno zero che non c'e'.
+ if(!await krakenConfermaBlocco(ps,descr+" · stop a pareggio","Sposta","Lo stop va sul PREZZO DI ENTRATA. La commissione dello scambio non è compresa: Kraken non la comunica per singola posizione, e l'app non inventa numeri."))return;
  let fatte=0, errori=[];
  for(const p of ps){
   try{

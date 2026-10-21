@@ -2100,3 +2100,86 @@ non è riproducibile sul banco — ma una causa misurata è stata tolta, ed era 
 `pannello_syntra.test.mjs` (6), `test_cartella_syntra.py` (5), `caricamento_asset.test.mjs` (5),
 `replay_footprint.test.mjs` (5), `attesa_nuvola.test.mjs` (4),
 `test_kraken_orario_apertura.py` (4). Collaudo locale 5/5 verdi, 0 falliti.
+## 21 ottobre 2026 - Il pareggio è zero: un numero andato e tornato nella stessa giornata
+
+### Quello che ho sbagliato, detto per primo ⭐
+
+La mattina del 21 ottobre, per difendere lo stop dal cambio giornata, ho aggiunto al prezzo di
+pareggio **un margine pari allo spread**. Il ragionamento sembrava buono: lo stop di una vendita si
+esegue sull'ask, al pareggio esatto sta dentro la forbice, e il rollover lo prende. Tolto il
+pareggio esatto, tolto il problema.
+
+Il proprietario ha misurato il risultato in una riga: **«sposta le posizioni a break-even, ma
+perdono ugualmente meno 2 euro»**.
+
+Aveva ragione, e il difetto non era nei numeri: era nel **nome**. Un pulsante che si chiama
+«pareggio» e lascia meno due euro non è una protezione con un piccolo costo — è un'etichetta che
+mente. E un'etichetta che mente è peggio di una protezione in meno, perché chi la legge prende
+decisioni basandosi su quella. La richiesta è arrivata esplicita: «bisogna fare in modo che
+qualsiasi posizione viene spostata a break-even venga accertata che allo spostamento sia
+effettivamente il risultato di 0 euro».
+
+### La correzione: prezzo esatto, e il rifiuto dove non costa niente
+
+Il margine è stato tolto. Il prezzo di pareggio è di nuovo quello esatto: distanza × valore del
+punto = commissioni di **andata e ritorno** + swap già maturato, con l'arrotondamento al tick
+sempre dalla parte di chi ha la posizione. Un test lo verifica **facendo il conto del conto**:
+3 di commissione per lato, 2 di swap, valore punto 10000 → netto 0,00, e mai sotto zero.
+
+La difesa dal rollover non è sparita: si è **spostata dove non costa niente**. Chi piazza lo stop di
+pareggio adesso **si rifiuta** quando quello stop cadrebbe dentro la forbice fra compra e vendi
+(`fblPareggioTroppoVicino`): non lo sposta, e **dice perché**. Il risultato è migliore del margine
+in entrambi i modi che contano — il pareggio resta un pareggio vero, e lo stop che c'era prima è
+**più lontano** di quello nuovo, quindi lasciarlo dov'è protegge di più che spostarlo.
+
+È esattamente il caso misurato: due SELL EURCHF aperte a 0,92828 con lo stop a 0,92827 — un decimo
+di pip — prese alle 00:00:42 quando lo spread si è aperto a 50 pip. Con il rifiuto, quello stop non
+sarebbe mai stato messo lì.
+
+### Tutte le strade del pareggio, non solo quella del pulsante
+
+Il rifiuto è su **tutte e quattro** le strade da cui una posizione arriva al pareggio, perché
+metterlo su una sola avrebbe lasciato il difetto vivo nelle altre e sarebbe stato peggio: una
+protezione a metà fa credere di essere protetti sempre.
+
+1. il pulsante nella tabella delle posizioni (`applyBreakevenToPosition`), da cui passa anche il
+   **pulsante BE del gruppo**;
+2. il pulsante BE nella tabella «Posizioni MT5», che parla col ponte e non ha un oggetto locale:
+   lì il prezzo di chiusura si legge dal **preventivo vero** (un acquisto si chiude sul bid, una
+   vendita sull'ask) invece di indovinarlo dal grafico;
+3. la strategia delle sale quando il prezzo si avvicina al primo target;
+4. la regola «stop all'entrata» al raggiungimento di un TP.
+
+Nelle due automatiche il rifiuto è **silenzioso e si riprova da solo**: nessuno sta guardando, e al
+giro dopo, se il prezzo si è allontanato, lo stop va a posto.
+
+**Due cose sistemate di conseguenza, perché il rifiuto le avrebbe rese bugiarde.**
+`applyBreakevenToPosition` adesso **dice se ha spostato o no**, e il pulsante del gruppo conta solo
+quelle spostate davvero: altrimenti avrebbe annunciato «stop a pareggio su 5 posizioni» dopo averne
+spostate zero. E il ricalcolo automatico che segue lo swap (lo stop si riaggiusta quando i costi
+cambiano, per restare a zero) è stato **lasciato come era di proposito**: lì lo stop è già al
+pareggio, e bloccarne l'aggiornamento quando il prezzo è vicino lo lascerebbe fermo su un pareggio
+vecchio che non vale più zero — il contrario di quel che serve.
+
+### Su Kraken il pareggio è il prezzo d'entrata, e adesso lo dice
+
+Sulle posizioni Kraken lo stop a pareggio va sul prezzo di entrata e basta. La commissione dello
+scambio **non arriva all'app posizione per posizione** (il ponte dà solo il totale del conto),
+quindi metterla nel prezzo vorrebbe dire inventarsi un numero. Preferito scriverlo nella conferma:
+«lo stop va sul PREZZO DI ENTRATA, la commissione dello scambio non è compresa». Un limite
+dichiarato è utilizzabile; un limite nascosto dietro la parola «pareggio» no — è lo stesso errore
+del margine, da un'altra porta.
+
+### Test
+`rollover_spread.test.mjs` cresciuto a 10: il conto netto a zero, il rifiuto sul caso EURCHF, e
+soprattutto **il pulsante vero** — si chiama `applyBreakevenToPosition` e si guarda il campo `sl`
+dopo, perché il modo in cui questa correzione potrebbe fallire sul serio è un rifiuto che lo stop
+lo sposta comunque. `gruppi_be_chiudi.test.mjs` riportato al pareggio esatto, con scritto dentro
+**perché il numero atteso è cambiato due volte**: un test che cambia valore senza spiegare perché
+insegna solo a cambiarlo di nuovo.
+
+### La lezione ⭐
+**Quando una protezione costa, non si fa pagare al nome della cosa che protegge.** Il margine era
+una risposta giusta alla domanda sbagliata: la domanda non era «come allontano lo stop dalla
+forbice», era «quando NON si deve piazzare quello stop». La seconda si risolve senza togliere un
+centesimo a nessuno.

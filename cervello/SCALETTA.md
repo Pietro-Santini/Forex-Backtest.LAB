@@ -57,6 +57,29 @@ mostra ancora «—», c'è un caso vero da misurare e i test sono già pronti a
 - **il conto segue l'asset**: cripto → Kraken, forex/indici/azioni/oro → MT5, anche da «vai a
   grafico» (dove però il conto della POSIZIONE vince sempre).
 
+### 1.2 Il pareggio è zero — chiuso il 21 ottobre, dopo un errore mio
+
+Segnalato dal proprietario: «il programma sposta le posizioni a break-even, ma perdono ugualmente
+meno 2 euro». La causa era una mia correzione della stessa mattina: per difendere lo stop dal
+cambio giornata avevo aggiunto al pareggio **un margine pari allo spread**. Un pulsante che si
+chiama «pareggio» e lascia meno due euro non è una protezione con un piccolo costo: è un'etichetta
+che mente.
+
+**Com'è adesso:** il prezzo di pareggio è di nuovo **esatto** (netto 0,00, commissioni di andata e
+ritorno e swap compresi, arrotondamento al tick sempre a favore di chi ha la posizione), e la
+difesa dal rollover si è spostata dove non costa niente — chi piazza lo stop **si rifiuta** quando
+quello stop cadrebbe dentro la forbice fra compra e vendi, e lo dice. Così lo stop che c'era prima,
+che è **più lontano**, resta a fare il suo lavoro.
+
+Il rifiuto è su **tutte e quattro** le strade del pareggio: pulsante della tabella (da cui passa
+anche il BE di gruppo), pulsante BE della tabella «Posizioni MT5» (che legge il preventivo vero,
+bid/ask), strategia della sala all'avvicinamento al primo target, regola «stop all'entrata». Nelle
+due automatiche il rifiuto è silenzioso e si riprova da solo al giro dopo.
+
+**Limite dichiarato, su Kraken:** lì lo stop a pareggio va sul prezzo d'entrata e basta, perché la
+commissione dello scambio non arriva all'app posizione per posizione. Scritto nella conferma invece
+di stimarlo.
+
 ---
 
 ## 2. Capitolo 3 — funzioni che c'erano e non vanno più
