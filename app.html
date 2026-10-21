@@ -20090,12 +20090,44 @@ function fblContoDiOperazione(x){
  if(x.account==='capital'||x.conto==='capital')return 'capital';
  return null;
 }
+// IL CONTO CHE VA CON QUESTO ASSET.
+//
+// RICHIESTO dal proprietario: «se clicchiamo un asset appartenente al mondo forex, indici,
+// azioni mi si ricollega in automatico al conto mt5, mentre se passo a una criptovaluta mi fa il
+// passaggio automatico al conto kraken; e' importante, mi raccomando, questo deve avvenire pure
+// con i pulsanti vai al grafico delle posizioni aperte».
+//
+// La domanda e' diversa da quella di fblContoDiOperazione, che guarda i campi di una POSIZIONE
+// (su che conto e' stata aperta). Qui si guarda l'ASSET, e la risposta e' quella del mercato: le
+// cripto si operano su Kraken, tutto il resto su MT5. L'oro e' una materia prima ma si opera su
+// MT5 come il forex - e' lo stesso criterio che fblFamigliaAsset usa per le strategie.
+// Un tipo che non si riconosce risponde null: meglio non cambiare niente che cambiare a caso.
+function fblContoDiAsset(asset){
+ if(!asset)return null;
+ let tipo=''; try{ tipo=fblTipoAsset(asset); }catch(e){}
+ if(tipo==='cripto')return 'kraken';
+ if(tipo==='forex'||tipo==='indice'||tipo==='azione'||tipo==='materia')return 'mt5';
+ return null;
+}
+// Cambia conto in base all'asset, se serve. Restituisce true se il conto e' stato cambiato.
+async function fblContoPerAsset(asset){
+ // In Storico non c'e' nessun conto da seguire: i conti sono una cosa del Live.
+ try{ if(!liveModeActive)return false; }catch(e){ return false; }
+ const c=fblContoDiAsset(asset);
+ if(!c)return false;
+ try{ if(fblContoVista===c)return false; }catch(e){}
+ try{ await fblContoScegli(c); }catch(e){}
+ try{ return fblContoVista===c; }catch(e){ return false; }
+}
 // Porta l\'appp sul conto di quell'operazione, se serve. Non blocca il salto a grafico se il conto
 // non si riesce a cambiare (es. Kraken non collegato): fblContoScegli lo dice gia' da solo nella
 // barra di stato, e vedere il grafico resta meglio che non vedere niente.
 async function fblVaiAlContoDi(x){
  const c=fblContoDiOperazione(x);
- if(!c)return false;
+ // Se dai campi della posizione non si capisce su che conto sta (capita per le simulate, che non
+ // portano ne' ticket MT5 ne' riferimenti Kraken), si ripiega sul tipo dell'ASSET: era la
+ // richiesta esplicita, «questo deve avvenire pure con i pulsanti vai al grafico».
+ if(!c)return await fblContoPerAsset(x&&x.asset);
  try{ if(fblContoVista===c&&liveModeActive)return false; }catch(e){}
  try{ await fblContoScegli(c); }catch(e){}
  try{ return fblContoVista===c; }catch(e){ return false; }
@@ -21105,7 +21137,7 @@ $('marketChart')?.addEventListener('change',()=>{
  $('market').dispatchEvent(new Event('change'));
  $('marketChart').blur();
 });
-$('market')?.addEventListener('change',()=>{
+$('market')?.addEventListener('change',async()=>{
  const v=$('market').value;
  syncMarketChartSelect();
  if(v==='capital_search'){ handleCapitalManualAssetSearch(); return; }
@@ -21124,6 +21156,11 @@ $('market')?.addEventListener('change',()=>{
  // (rettangolo, frecce, riquadro durata/lottaggio) — vedi clearClosedTradeHighlight().
  clearClosedTradeHighlight();
  if(!v || v==='custom') return;
+ // IL CONTO SEGUE L'ASSET, e si cambia PRIMA di caricare lo storico. Richiesto: cripto -> Kraken,
+ // forex/indici/azioni -> MT5. L'ordine conta: cambiare conto ricarica il grafico, quindi farlo
+ // dopo vorrebbe dire caricare l'asset due volte e, per un istante, vedere le candele della fonte
+ // sbagliata - e' lo stesso motivo per cui jumpToPositionOnChart sceglie il conto per primo.
+ try{ await fblContoPerAsset(v); }catch(e){}
  // In modalità Live lo storico arriva da Capital.com (non dalla libreria CSV locale): al
  // cambio ASSET rifacciamo la /prices per il nuovo strumento.
  // ORDINE RICHIESTO ESPLICITAMENTE: prima si ferma TUTTO l'aggiornamento del grafico (timer da
