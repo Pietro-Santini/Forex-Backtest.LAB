@@ -40,6 +40,23 @@ caricamento fino a sincronizzazione completa (anche in PIP) e' della v2.0.13, ch
 non aveva.
 
 ### 1.3 Margine utilizzato sempre a 0
+FATTO (v2.0.16, solo MT5: su Kraken funzionava gia', confermato dal proprietario).
+
+### 1.4 ~~Robot di Syntra fermo~~ FATTO
+I comandi finivano al server, dove BlueStacks non esiste. Vedi il diario del 21 ottobre notte:
+tre correzioni sbagliate fermate da tre test diversi prima di quella giusta.
+
+### 1.5 ~~Linea di entrata infinita a grafico~~ FATTO
+Finiva al bordo della vista invece che allo stop preso o all'ultimo TP colpito.
+
+### 1.6 ~~Percentuale di caricamento ferma a 0%~~ FATTO
+Era aritmetica: tre passi, passo/3, e il primo passo e' lo zero.
+
+### 1.7 Popup che sforano con lo zoom: MISURATO, NON C'E' PIU'
+Misurati 24 riquadri, poi tutti i 27 elementi a sovrapposizione, dal 70% al 250%, su due
+schermi, e con dentro un figlio da 2400x4000 px: nessuno sfora. La segnalazione descrive la
+v2.0.12. Se ricompare SULLA 2.0.15 o superiore, e' un riquadro fuori da quell'elenco: chiedere
+quale.
 Nelle tabelle posizioni aperte, Kraken e MT5: va calcolato il margine vero di ogni singola
 posizione.
 
@@ -76,6 +93,11 @@ magari un minuto, che ci fanno perdere l'apertura precisa». Vale per cripto, fo
 TERRENO GIA' PRONTO: `placeRealMt5Order` accetta un asset non a grafico con il prezzo indicativo
 (`forz.sym`/`forz.prezzo`), e c'e' un commit «ordini MT5 senza cambiare grafico». Da verificare se
 il flusso dei segnali aspetta comunque il caricamento.
+
+### 3.1-bis ~~Stop e target automatici per sala~~ FATTO (v2.0.16)
+ATTENZIONE per chi legge: il CALCOLO c'era gia' (stop da una perdita massima in euro, target a
+una percentuale della distanza dello stop). Mancava DOVE si sceglie - era per famiglia di
+strumento, non per sala - e il target in PIP. Verificare sempre prima di riscrivere.
 
 ### 3.2 Livelli comuni del segnale: rischio o capitale
 Nel pulsante «apri N posizioni», accanto al rischio totale, la stessa scelta che c'e' nelle
