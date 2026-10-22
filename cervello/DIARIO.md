@@ -2627,3 +2627,65 @@ E il corollario: **quando un test vecchio diventa rosso, la prima domanda non e'
 aggiorno» ma «ha ragione lui?»**. Stasera aveva ragione tre volte su quattro; la quarta
 (`caricamento_asset`, che pretendeva lo 0%) codificava il difetto da correggere, e andava
 aggiornato spiegando perche'.
+
+## 22 ottobre 2026 - L'indizio che valeva piu' di un profilatore
+
+### «A mercato chiuso il cambio asset e' istantaneo» ⭐⭐⭐
+
+Il proprietario l'ha detto di passaggio, come un'osservazione. Era la misura piu' preziosa della
+settimana, e indicava il punto esatto.
+
+A mercato aperto ogni prezzo in arrivo passa da `rebuildBaseRowsFromLibrary`, che rifa' `baseRows`
+con uno `.slice()`. Array nuovo, riferimento nuovo - e le due cache (aggregazione delle candele e
+tempi) confrontano **il riferimento**. Si buttavano entrambe a ogni tick. Su 200.000 candele:
+
+| | per singolo prezzo |
+|---|---|
+| riaggregare tutto | 125 ms |
+| ricostruire | 50 ms |
+| **riconvalidare tutte le date** | **17,6 ms** |
+
+Con l'oro che fa piu' prezzi al secondo, il filo principale non respirava. A mercato chiuso non
+arriva niente, niente si butta, e tutto va: **la differenza che lui vedeva ogni giorno.**
+
+**Misurato dopo: 58 ms -> 2,11 ms per prezzo.** Ventisette volte.
+
+### La voce piu' cara non era quella che sospettavo ⭐
+
+Cercando dove andassero i millisecondi, ero convinto fosse la copia dell'array da 200.000 elementi.
+**0,69 ms.** Era invece la *rete di sicurezza* che riconvalidava tutte le date a ogni prezzo:
+**17,57 ms**, la voce piu' cara e la piu' inutile - una candela gia' convalidata non torna
+indietro a rompersi. Si misura la ripartizione, non si ottimizza il sospettato.
+
+### La prima misura sulla sua macchina
+
+Gli avevo dato uno strumento perche' il difetto non si riproduceva nel banco. Ha funzionato:
+
+```
+disegnoMedio_ms   : 67.22     (nel banco: 4-9 ms)
+scattoPeggiore_ms : 1264      (un blocco di 1,26 secondi)
+tickFootprint     : 197373
+```
+
+Lo scatto da 1.264 ms e' quasi certamente il salvataggio del registro tick: sul banco salvare
+197k tick costa 100 ms, e la sua macchina e' ~10 volte piu' lenta. La cura (salvare a blocchi) e'
+scritta e misurata, pronta in `laboratorio/strumenti/tick_blocchi_DA_APPLICARE.py`.
+
+Per i 67 ms del disegno **non ho indovinato**: ho fatto cronometrare allo strumento i singoli
+pezzi, cosi' la prossima misura lo dira' con un numero. Nel banco il footprint non pesava, contro
+ogni aspettativa - un altro motivo per non tirare a indovinare.
+
+### La consegna a OpenCode
+
+Il proprietario passa il lavoro. Ho scritto `cervello/CONSEGNA-OPENCODE-22-OTTOBRE.md`: cosa e'
+fatto, **nove cose da non toccare con il perche' di ciascuna**, la roadmap nell'ordine che ha
+chiesto, e la specifica dell'effetto «wow» all'apertura - che nel repository **non c'era**,
+cercata in tutti i file di testo, nel codice e nella storia di git.
+
+Analizzando il punto 5 e' saltato fuori un difetto che nessuno aveva visto: **nove id duplicati**
+nel markup, quasi tutti nella zona da riorganizzare. `getElementById` prende il primo, quindi
+meta' di quei controlli e' gia' morta oggi.
+
+### La lezione ⭐
+**Quando l'utente dice «succede QUANDO...», quella e' la variabile da isolare.** Non e' una
+lamentela: e' un esperimento gia' fatto, con il controllo incluso.

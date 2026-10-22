@@ -50,16 +50,29 @@ test('rimette a posto tutto: la misura non deve diventare la causa', async () =>
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(async () => {
+      // Anche i PEZZI del disegno, che lo strumento avvolge per dire quale costa: se restassero
+      // avvolti, ogni singola candela del footprint pagherebbe per sempre il costo della misura.
+      const PEZZI = ['drawClosedTradeMarkers', 'fblCronoDisegna', 'krakenDisegnaGrafico',
+                     'drawFootprintCandle', 'drawTpSlZoneBox'];
+      const primaPezzi = {};
+      PEZZI.forEach(n => { if (typeof window[n] === 'function') primaPezzi[n] = window[n]; });
       const prima = {st: window.setTimeout, si: window.setInterval, d: window.draw, u: window.update};
       await fblMisuraPrestazioni(1);
+      const pezziTornati = Object.keys(primaPezzi).filter(n => window[n] !== primaPezzi[n]);
       return {
         timeout: window.setTimeout === prima.st,
         interval: window.setInterval === prima.si,
         draw: window.draw === prima.d,
-        update: window.update === prima.u
+        update: window.update === prima.u,
+        quantiPezzi: Object.keys(primaPezzi).length,
+        pezziNonTornati: pezziTornati
       };
     });
-    assert.deepEqual(r, {timeout: true, interval: true, draw: true, update: true},
+    assert.ok(r.quantiPezzi > 0, 'il test deve trovarne almeno uno, altrimenti non verifica niente');
+    assert.deepEqual(r.pezziNonTornati, [],
+      'questi pezzi del disegno sono rimasti avvolti dopo la misura: ' + JSON.stringify(r.pezziNonTornati));
+    assert.deepEqual({timeout: r.timeout, interval: r.interval, draw: r.draw, update: r.update},
+      {timeout: true, interval: true, draw: true, update: true},
       'setTimeout, setInterval, draw e update devono tornare esattamente quelli di prima');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
