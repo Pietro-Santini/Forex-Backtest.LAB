@@ -631,7 +631,7 @@
 //            blocco anche su Kraken; via «Operazione» dal riquadro a schermo intero; le
 //            impostazioni (footprint, indicatori, decimali, strategie sale) seguono l'account,
 //            i segreti no; e il conto segue l'asset: cripto -> Kraken, forex/indici/azioni -> MT5.
-const CACHE_NAME = "forex-backtest-lab-v2.0.18";
+const CACHE_NAME = "forex-backtest-lab-v2.0.19";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
