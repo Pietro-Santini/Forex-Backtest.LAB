@@ -233,6 +233,14 @@ file nella cartella Download: non esiste un'API che lo permetta.
 ### 7. Le prestazioni che restano ⭐ il lavoro più utile
 
 **7a. Lo scatto da 1.264 ms — il salvataggio del registro tick.**
+**✅ FATTO il 22 ottobre 2026 (test verdi, collaudo locale verde) — da pubblicare.**
+Realizzato come previsto, con due precisazioni che la misura ha imposto: la forma dei blocchi è
+**compatta** (array tipizzati, 2,5 ms per blocco contro 24,5 ms con gli oggetti) e il tetto si
+rispetta buttando via un **blocco intero** dalla testa (tagliare un tick alla volta lasciava i
+blocchi stalati: lo script lasciato in `scratchpad/` era difettoso). Lo script applicato è
+`laboratorio/strumenti/tick_blocchi_7a.py`; il test è `laboratorio/app/footprint_blocchi.test.mjs`.
+I test obbligatori ci sono tutti (rilettura identica, vecchio formato leggibile, blocco pieno non
+riscritto) più la prova di controllo sul taglio.
 La cura è pronta e misurata: spezzare `footprintTickLogByAsset` in blocchi da 20.000 tick
 (`ftick:<asset>:<n>`) e riscrivere **solo il blocco in coda**, con un indice (`ftickIndice`) e la
 lettura che ricade sul vecchio blob unico se i blocchi non ci sono ancora.
@@ -248,6 +256,13 @@ sotto per i numeri completi. In breve: il disegno si mangia il 78% del tempo, ma
 cronometrati insieme fanno il 3,4%. **Il 96,6% sta nel CORPO di `draw()`**, non nelle funzioni che
 chiama - e il footprint, sospettato numero uno, costa meno di un millisecondo. Il passo successivo
 e' aggiungere cronometri DENTRO draw(), sezione per sezione, e rifare la misura.
+**✅ FATTO il 22 ottobre 2026 (test verdi, collaudo locale verde) — da pubblicare.**
+23 cronometri di sezione dentro `draw()` (spenti di default, accesi solo dalla misura), riportati
+nella misura come `sezioniDelDisegno_ms` e `sezioniTotale_ms`; aggiunti ai pezzi cronometrati anche
+i candidati del cambio asset (`saveFootprintTicksNow`, `footprintRebuildBucketsForCurrentAsset`,
+`caricaStoricoPerSaltoAGrafico`, `binanceKlines`). **La misura vera sulla macchina del proprietario
+va ancora fatta** (pulsante «Misura le prestazioni»): il banco di prova ha disegni da meno di 1 ms
+e non e' il suo carico.
 
 **7c. Il degrado nel tempo** (parte fluido e peggiora). Serve il confronto di due misure, una
 quando va bene e una quando rallenta. Già misurato e **scartato**: il registro tick al suo tetto

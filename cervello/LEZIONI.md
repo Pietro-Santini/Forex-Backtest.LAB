@@ -767,3 +767,29 @@
   una copia aggiornata, il Setup non avrebbe portato niente. La domanda esisteva, la risposta
   era gia' li', e noi scaricavamo lo stesso. Il costo piu' grosso non e' stato scrivere la
   funzione: e' stato accorgersi che la domanda si poteva fare.
+
+- Un test che non puo' diventare rosso non e' un test, e' una rassicurazione. (22 ottobre 2026.)
+  Il primo test del taglio del registro tick faceva il taglio PRIMA di qualsiasi salvataggio,
+  quando lo stato dei blocchi non esiste ancora: togliendo apposta la riga che tiene allineati i
+  blocchi, il test restava VERDE. Il caso vero era il secondo taglio, con il registro gia' sul
+  disco. La prova di controllo non e' una formalita': e' l'unica cosa che distingue un test che
+  guarda da un test che passa.
+
+- Si taglia a blocchi interi, o i blocchi non sono piu' blocchi. (22 ottobre 2026.) Lo script
+  "quasi pronto" della sessione prima tagliava il registro un tick alla volta: il log si sposta di
+  uno, i blocchi pieni restano della stessa lunghezza, il confronto dice "gia' scritto" e sul
+  disco restano blocchi stalati - e il blocco in coda non viene mai scritto. Con una struttura a
+  blocchi numerati, ogni accorciamento dalla testa deve buttare via un blocco INTERO e rinumerare
+  di uno: mezze misure producono dati che sembrano giusti e non lo sono.
+
+- Uno strumento di misura che resta attaccato diventa la causa del rallentamento successivo. (22
+  ottobre 2026.) I 23 cronometri dentro `draw()` costano quasi niente, ma ventitré letture
+  dell'orologio a ogni fotogramma sono comunque un costo che non serve a nessuno fuori dalla
+  misura: si accendono nella misura e si spengono alla fine, e c'e' un test che controlla che da
+  spenti non accumulino niente.
+
+- La prima misura smentisce il sospetto, ed e' per questo che si misura. (22 ottobre 2026.) Due
+  volte su due: il disegno lento non era colpa del salvataggio del footprint (3,4% fra tutti i
+  pezzi cronometrati) ed era invece nel CORPO di `draw()` (96,6%); e il costo non stava in una
+  funzione da ottimizzare ma in 2.100 righe senza cronometri. Il lavoro utile non e' ottimizzare:
+  e' mettere il cronometro nel punto giusto e rifare la misura.

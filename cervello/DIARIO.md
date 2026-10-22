@@ -2837,3 +2837,123 @@ mockava `fetchMt5WithTimeout`, non `fetch`. La sonda e' passata dalla **stessa p
 (`fetchMt5WithTimeout('/health')`), cosi' un solo modo di interrogare il ponte in tutta l'app e i
 test di prima continuano a poter parlare con lui. Una porta nuova e' una porta che nessuno
 conosce: meglio riusare quella che c'e'.
+
+---
+
+## 22 ottobre 2026 (continua) - Lo scatto da un secondo, e la riga che nessuno stava guardando
+
+Il proprietario ha misurato la sua macchina, non il banco di prova: **scatto peggiore 1.264 ms**
+(un secondo e un quarto di blocco), **disegno medio 67,22 ms**, 25,6 fotogrammi al secondo,
+752.683 tick di footprint in memoria. Sono i numeri della sua giornata di lavoro, non di una
+prova: e' da li' che si parte.
+
+### 7a - Il registro dei tick: si scriveva tutto, ogni volta
+
+Lo scatto peggiore era il salvataggio del registro del footprint. Il registro e' grosso (il tetto
+e' 150.000 tick per asset) e **ogni salvataggio riscriveva l'intero registro**, non l'ultimo
+pezzo. Misurato sul banco, 150.000 tick:
+
+| Cosa | Costo |
+|---|---|
+| scrittura di oggi (tutto il registro) | **105 ms** |
+| un blocco da 20.000 tick, con gli oggetti | 24,5 ms |
+| un blocco da 20.000 tick, **in forma compatta** | **2,5 ms** |
+| tutto il registro, in forma compatta | 12 ms |
+| lettura, con gli oggetti | 58 ms |
+| lettura, in forma compatta | 10,6 ms |
+
+Il costo era quasi tutto nella **copia strutturata di centinaia di migliaia di oggetti**. Due cure
+insieme: si scrive solo il blocco in coda (non tutto il registro) e il blocco si scrive in forma
+compatta (quattro numeri per tick, in array tipizzati, invece che come oggetti).
+
+**I blocchi non si spostano.** Ogni blocco ha un numero assoluto: finche' il registro cresce in
+coda, i blocchi pieni non si riscrivono mai. Quando il registro supera il tetto si butta via un
+**blocco intero** dalla testa: cosi' i blocchi restano allineati e non c'e' nessun rinumero.
+L'indice (`ftickIndice`) si scrive **dopo** i blocchi, quindi non puo' puntare a cose che non ci
+sono ancora. Chi aveva il registro nel formato vecchio (un blob unico) lo ritrova: i blocchi hanno
+la precedenza, il blob e' il ripiego, e al primo salvataggio il registro viene riscritto a blocchi
+e il blob cancellato.
+
+**La forma compatta non perde niente**, ed e' controllato per valori, non sperato: istante,
+prezzo, lato e peso ci sono sempre; `aggr`, `vol`, `mode` e `src` ci sono quando servono (con una
+sentinella per dire "non c'e'"); un campo che non si conosce resta **verbatim**. Il footprint
+continua a sapere chi ha comprato e chi ha venduto, come prima.
+
+### Il difetto che era gia' scritto nello script pronto
+
+Lo script che la sessione precedente aveva lasciato in `scratchpad/` era **difettoso**, e il
+difetto era invisibile finche' non lo si guardava da vicino: tagliava il registro **un tick alla
+volta**. Con il log che si sposta di uno, i blocchi "pieni" restano della stessa lunghezza, il
+confronto dice "gia' scritto" e sul disco restano blocchi **stalati** - e il blocco in coda non
+viene mai scritto. Non applicarlo cosi' com'era. La regola che ne esce: **si taglia a blocchi
+interi, o i blocchi non sono piu' blocchi.**
+
+### La prova di controllo che all'inizio non guardava niente
+
+Il primo test del taglio era cieco, e non si vedeva: faceva il taglio **prima** di qualsiasi
+salvataggio, quando lo stato dei blocchi non esiste ancora. Tolto il difetto apposta (la riga che
+rinumera i blocchi), il test restava **verde**: non stava guardando il caso vero. Il caso vero e'
+il **secondo** taglio, con il registro gia' scritto sul disco. Rifatto il test sul ciclo vero, il
+difetto introdotto lo fa diventare **rosso**, e il blocco uscito dalla testa sparisce davvero dal
+disco (il registro non cresce all'infinito).
+
+Un test che non puo' diventare rosso non e' un test: e' una rassicurazione.
+
+### 7b - Il disegno: il 96,6% sta nel corpo di draw()
+
+La consegna lo diceva gia' e la misura lo conferma: il disegno si mangia il 78% del tempo, ma
+tutte le funzioni gia' cronometrate insieme fanno il **3,4%**. Il 96,6% sta nel **corpo** di
+`draw()`, cioe' nel codice che nessuno stava misurando. Quindi il sospetto di partenza era
+sbagliato due volte su due: non e' una funzione da ottimizzare, e' un corpo di 2.100 righe da
+spezzare in sezioni.
+
+Ora dentro `draw()` ci sono **23 cronometri di sezione** (`avvio`, `grigliaTempo`, `heatmap`,
+`candele`, `disegniUtente`, `notizie`, `mirino`... fino a `coda`), e la misura dell'app li
+riporta nel suo risultato: `sezioniDelDisegno_ms` (dal piu' caro al meno caro, costo medio di un
+disegno) e `sezioniTotale_ms`. Alla stessa misura si sono aggiunti i **candidati del cambio
+asset** (i 2.818 ms): `saveFootprintTicksNow`, `footprintRebuildBucketsForCurrentAsset`,
+`caricaStoricoPerSaltoAGrafico`, `binanceKlines`.
+
+**I cronometri sono spenti di default** e si accendono solo durante la misura, che li spegne alla
+fine. Non e' pignoleria: uno strumento di misura che resta attaccato diventa la causa del
+rallentamento successivo. Costa piu' il cronometro dimenticato che il difetto che cercava.
+
+Sul banco di prova il disegno dura meno di un millisecondo (0,9 ms) e i numeri sono sporcati dal
+riscaldamento della macchina virtuale: servono come prova che lo strumento **vede** le sezioni -
+infatti con venti disegni aggiunti `disegniUtente` sale - non come diagnosi. La diagnosi vera la
+fa il proprietario, che ha 67 ms di disegno medio e il carico che solo la sua giornata produce.
+
+### I test, e le prove che sanno diventare rosse
+
+- `laboratorio/app/footprint_blocchi.test.mjs` (4 casi): i blocchi e l'indice esistono, un blocco
+  pieno **non** si riscrive, il giro scrittura/rilettura torna **identico** (con i tick storici
+  che hanno `aggr`, `vol` e `mode`), il vecchio blob si legge ancora, e il taglio sul tetto lascia
+  sul disco esattamente il registro giusto.
+- `laboratorio/app/cronometri_disegno.test.mjs` (3 casi): la somma delle sezioni copre il tempo
+  del disegno (rapporto fra 0,5 e 1,5: se i cronometri dicessero zero, cadrebbe), i cronometri
+  spenti non accumulano niente, e la misura dell'app riporta davvero le sezioni.
+
+Le prove di controllo, eseguite: `prova_controllo_taglio.py` (tolto il rinumero dei blocchi ->
+rosso) e `prova_controllo_cronometri.py` (tolto l'accumulo -> rosso; tolto il riporto nella
+misura -> rosso).
+
+### Una cucitura che ha fatto rumore
+
+La riga del cronometro, messa **fra** `function draw(){` e `fblScadeDecimali();`, ha fatto
+diventare rosso `replay_posizioni`: quel test cerca il testo del sorgente e pretende
+`fblScadeDecimali();` come prima istruzione. Il comportamento era intatto. La cura non e' stata
+toccare il test ma **spostare la mia riga sotto** `fblScadeDecimali();`: la prima istruzione resta
+la prima. (Il test resta fragile per costruzione - legge il testo - e un giorno andra' riscritto
+sul comportamento: oggi non era il suo turno.)
+
+### La lezione
+
+**Si misura prima di correggere, e la prima misura spesso smentisce il sospetto.** Due volte su
+due, qui: non era il salvataggio del footprint a spiegare il disegno lento (era il 3,4%), e non
+era una funzione da ottimizzare ma il corpo di `draw()`. Il lavoro utile non e' stato ottimizzare:
+e' stato mettere i cronometri nel posto giusto e **rifare la misura**.
+
+E la seconda: **un difetto scritto in uno script pronto resta un difetto**, anche se lo script e'
+"quasi finito". Il taglio a un tick alla volta sarebbe passato inosservato per mesi: si sarebbe
+visto solo come "il footprint a volte si rimescola".
+
