@@ -569,3 +569,45 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   scendere anche a 60, 50, 10, 15, 20 - e stessa cosa per la dimensione del testo. Non devi avere
   limiti"). Correzione: il tetto minimo della scala passa a 10% e anche il testo del grafico
   scende fino al 10% (prima 50%). Test: `laboratorio/app/scala_ui.test.mjs` (17).
+- **La finestra separata (PIP) si mostrava come una pagina web: barra delle informazioni del sito
+  con "about:blank", nessun titolo, nessuna icona, e il logo dell'app che mancava** - risolto app
+  v2.0.21 - 22 ottobre 2026 (da pubblicare): segnalato dal proprietario ("in modalita' pip viene
+  mostrata la barra delle informazioni del sito, con about blank, e quella deve essere tolta [...]
+  deve essere una seconda schermata della STESSA applicazione, non un qualcosa collegato via web
+  [...] la finestra non ha il logo come la pagina madre"). Causa misurata: la finestra veniva
+  aperta con `window.open('')` su una pagina **vuota**, quindi il browser la trattava come una
+  pagina web qualsiasi (e non come una finestra del programma). Correzione: si prova prima la
+  **Document Picture-in-Picture nativa** (finestra senza barra del browser, senza indirizzo,
+  con lo STESSO documento dentro: misurato dentro la finestra 0 script, un solo canvas e il
+  motore inesistente, quindi un solo cervello e nessun doppio ordine); se l'API non c'e' si cade
+  sul popup di prima, ma con l'icona dell'app nel titolo e una barra interna col logo e il nome
+  "BacktestLAB FOREX EDITION". Scartata di proposito la seconda istanza dell'app (`?pipSlot=N`):
+  aprirebbe un secondo collegamento a MT5/Capital.com. Test:
+  `laboratorio/app/pip_finestra.test.mjs` (2).
+- **Il puntatore del mouse nel grafico della finestra separata era sfasato in X e in Y** - risolto
+  app v2.0.21 - 22 ottobre 2026 (da pubblicare): segnalato dal proprietario ("il puntatore e'
+  sfasato di posizione sia dell'asse X che dell'asse Y: io punto il mouse sopra il grafico e la
+  posizione effettiva e' spostata in alto a sinistra"). Causa misurata: con la scala UI al 130%
+  il canvas era **950 px di layout contro 730 px a schermo** e il mirino cadeva 78 px a sinistra e
+  55 px in alto; il mirino, da solo, era giusto (scarto -1/-1 px: arrotondamento). La causa vera
+  era il **contro-zoom** della scala UI: sta sul `#chartWrap` e viaggia col nodo quando il grafico
+  si sposta in un'altra finestra, dove il `body` invece non e' zoomato - il grafico si
+  rimpiccioliva senza che nessuno lo misurasse (il disegno e la lettura del puntatore parlavano
+  di due grafici diversi). Correzione: il contro-zoom si toglie quando il grafico cambia finestra
+  e si rimette al rientro; l'invariante tenuta in test e' `clientWidth == rect.width`. Test:
+  `laboratorio/app/pip_puntatore.test.mjs` (2).
+- **La riga del gruppo delle posizioni non aveva la striscia di vicinanza, e per questo aveva una
+  colonna in meno: tutte le colonne erano spostate a sinistra** - risolto app v2.0.21 - 22
+  ottobre 2026 (da pubblicare): segnalato dal proprietario ("la linea in fondo a destra di ogni
+  posizione deve essere visualizzata anche all'interno dei gruppi [...] se c'e' una posizione che
+  e' piu' vicina allo stop profit mi visualizza il cartellino blu, se invece e' piu' vicina a una
+  linea del tipo TP mi visualizzera' quella che e' il cartellino verde, e allo stesso tempo, se e'
+  la piu' vicina a uno stop loss [...] il cartellino rosso"). Causa misurata: la riga del gruppo
+  generava **14 celle invece di 15** (mancava proprio la cella della striscia), quindi non era un
+  difetto di colore ma una colonna assente. Correzione: dentro il gruppo ogni singola operazione
+  mostra il **proprio** cartellino, e sulla riga aggregata c'e' il cartellino della posizione
+  **piu' vicina** a un livello (blu = stop a profitto, verde = take profit, rosso = stop loss),
+  con nel titolo il numero della posizione dentro il gruppo ("Posizione 2 di 3: ..."); per
+  scegliere la piu' vicina `fblStrisciaPosizione` restituisce adesso anche la percentuale (`perc`:
+  0 = livello gia' superato, cioe' il caso piu' urgente). Test:
+  `laboratorio/app/gruppi_striscia.test.mjs` (2).

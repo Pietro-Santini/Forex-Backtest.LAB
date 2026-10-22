@@ -793,3 +793,24 @@
   pezzi cronometrati) ed era invece nel CORPO di `draw()` (96,6%); e il costo non stava in una
   funzione da ottimizzare ma in 2.100 righe senza cronometri. Il lavoro utile non e' ottimizzare:
   e' mettere il cronometro nel punto giusto e rifare la misura.
+
+- Una finestra aperta su una pagina vuota mostra la barra del browser, non quella dell'app. (22
+  ottobre 2026.) La finestra "PIP" era un `window.open('')` su una pagina VUOTA: percio' il
+  browser la mostrava come un sito qualsiasi, con "about:blank" in alto e senza logo. Non era un
+  difetto di stile: era una pagina web. La domanda da porsi non e' "come nascondo la barra", ma
+  "sto aprendo una pagina o sto aprendo l'app?" - e la risposta e' cambiata con la Document
+  Picture-in-Picture nativa, che contiene lo STESSO documento (misurato: 0 script e un solo
+  canvas dentro, cioe' un solo cervello e nessun doppio ordine).
+
+- Uno zoom che viaggia col nodo e' uno zoom che nessuno misura. (22 ottobre 2026.) Il contro-zoom
+  della scala UI sta sul `#chartWrap` e lo segue quando il grafico si sposta in un'altra
+  finestra, dove il body invece NON e' zoomato: il grafico si rimpiccioliva (misurato: 950 px
+  di layout contro 730 px a schermo) e il puntatore finiva 78 px a sinistra e 55 px in alto. La
+  regola che resta: **quello che disegni dev'essere quello che si vede** (`clientWidth ==
+  rect.width`), e va tenuta in un test, perche' nessuno la guarda a occhio.
+
+- Una colonna che manca sposta tutte le altre. (22 ottobre 2026.) La riga del gruppo delle
+  posizioni non aveva la striscia di vicinanza, e percio' aveva 14 celle invece di 15: tutte le
+  colonne della riga erano spostate a sinistra. Il sintomo che il proprietario aveva descritto
+  ("i cartellini mancano") era la conseguenza, non la causa: quando una tabella e' disallineata,
+  la domanda giusta non e' "che colore deve avere questa cella", ma "quante colonne ci sono".

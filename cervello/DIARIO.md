@@ -2957,3 +2957,121 @@ E la seconda: **un difetto scritto in uno script pronto resta un difetto**, anch
 "quasi finito". Il taglio a un tick alla volta sarebbe passato inosservato per mesi: si sarebbe
 visto solo come "il footprint a volte si rimescola".
 
+## 22 ottobre 2026 (continua) - La finestra PIP, il puntatore e i cartellini dei gruppi
+
+Tre richieste del proprietario nella stessa giornata, tutte e tre misurate prima di essere
+toccate.
+
+### La finestra non era una finestra dell'app
+
+La richiesta: «in modalita' pip viene mostrata la barra delle informazioni del sito, con about
+blank, e quella deve essere tolta ... deve essere una seconda schermata della STESSA
+applicazione, non e' un qualcosa collegato via web ... me ne accorgo anche dal fatto che la
+finestra non ha il logo come la pagina madre».
+
+La causa era una riga: la finestra veniva aperta con `window.open('')` su una pagina **VUOTA**.
+Percio' il browser la mostrava come una pagina web qualsiasi: la barra delle informazioni del
+sito in alto che diceva "about:blank", nessun titolo, nessuna icona. Non era un difetto di
+stile: era una pagina web, non l'app.
+
+La correzione: prima la **Document Picture-in-Picture nativa** (Chrome/Edge) - una finestra
+vera, SENZA barra del browser, SENZA indirizzo, SENZA "about:blank", che contiene lo STESSO
+documento. Quindi stesso stato e stesso motore per costruzione: nessuna copia, nessuna
+sincronizzazione, nessun doppio collegamento al conto. Misurato dentro la finestra: **0 script,
+1 solo canvas, il motore non esiste** (`typeof positions === 'undefined'`) - cioe' un solo
+cervello, mai due ordini.
+
+Se l'API non c'e' (o il browser la rifiuta) si cade sul popup di prima, ma con l'icona
+dell'app nel titolo e una **barra interna col logo e il nome "BacktestLAB FOREX EDITION"**: se
+anche il fallback si vede come l'app, il proprietario non vede piu' una pagina web.
+
+Scartata di proposito la seconda istanza completa dell'app (`?pipSlot=N`): aprirebbe un secondo
+collegamento a MT5/Capital.com, con il rischio di ordini duplicati (`EXTRA_PIP_WINDOWS_ENABLED`
+e' disattivato per lo stesso motivo).
+
+### Il puntatore: 78 px a sinistra e 55 px in alto
+
+La richiesta: «il puntatore e' sfasato di posizione sia dell'asse X che dell'asse Y: io punto il
+mouse sopra il grafico e la posizione effettiva e' spostata in alto a sinistra».
+
+Misura (Chromium, finestra staccata, scala UI 130%): il canvas era **950 px di layout contro 730
+px a schermo**, e il mirino disegnato cadeva 78 px a sinistra e 55 px in alto rispetto al mouse.
+Il mirino, da solo, era giusto (scarto -1/-1 px: arrotondamento). Il difetto non era il
+mirino: era la **scala del canvas**.
+
+La causa: la scala UI funziona cosi' - il `body` della pagina e' zoomato (`zoom: 1.3`) e il
+`#chartWrap` porta il **contro-zoom** (`1/1.3`) per restare della sua dimensione. Il contro-zoom
+**viaggia col nodo** quando il grafico si sposta in un'altra finestra, ma in quella finestra il
+body NON e' zoomato (e non deve esserlo: la finestra e' gia' a grandezza schermo). Il
+contro-zoom, da solo, rimpicciolisce il grafico senza che nessuno lo misuri: il disegno e la
+lettura del puntatore parlavano di due grafici diversi.
+
+La correzione: quando il grafico cambia finestra il contro-zoom si toglie, e al rientro si
+rimette. L'invariante da tenere, e da mettere in test: **`clientWidth == rect.width`**, cioe' il
+layout e' quello che si vede.
+
+### I cartellini: alla riga del gruppo mancava una colonna intera
+
+La richiesta: «la linea in fondo a destra di ogni posizione deve essere visualizzata anche
+all'interno dei gruppi ... se c'e' una posizione che e' piu' vicina allo stop profit mi
+visualizza il cartellino blu, se invece e' piu' vicina a una linea del tipo TP mi visualizzera'
+quella che e' il cartellino verde, e allo stesso tempo, se e' la piu' vicina a uno stop loss ...
+il cartellino rosso».
+
+La riga del gruppo **non aveva affatto la striscia**, e percio' aveva 14 celle invece di 15:
+tutte le sue celle erano spostate di una colonna a sinistra (quello che si vedeva era una
+tabella disallineata; la striscia era solo il sintomo).
+
+Ora: dentro il gruppo ogni singola operazione mostra il **proprio** cartellino; sulla riga del
+gruppo c'e' il cartellino della posizione **piu' vicina a un livello** (blu = stop a profitto,
+verde = take profit, rosso = stop loss), e nel titolo il numero della posizione dentro il gruppo
+("Posizione 2 di 3: ..."), cosi' si sa QUALE posizione guardare. Per scegliere la piu' vicina,
+`fblStrisciaPosizione` restituisce adesso anche la percentuale (`perc`): 0 vuol dire che il
+livello e' gia' stato superato, cioe' il caso piu' urgente.
+
+### I test (6) e la prova che sanno diventare rossi
+
+- `laboratorio/app/pip_finestra.test.mjs` (2 casi): la finestra e' la Picture-in-Picture
+  NATIVA (la stessa di `documentPictureInPicture.window`) e ha dentro la barra col logo e il
+  nome; senza l'API la finestra di riserva mostra lo stesso logo e l'icona dell'app.
+- `laboratorio/app/pip_puntatore.test.mjs` (2 casi): con la scala UI al 130% il grafico nella
+  finestra ha `clientWidth == rect.width` e il mirino disegnato (misurato sui PIXEL, non letto
+  nel sorgente) cade sotto il mouse in X e in Y; al rientro il contro-zoom torna com'era.
+- `laboratorio/app/gruppi_striscia.test.mjs` (2 casi): la riga del gruppo ha il cartellino della
+  posizione piu' vicina (tre scenari: verde, blu, rosso), il titolo dice quale posizione e',
+  la riga ha tante celle quante l'intestazione, e ogni posizione mantiene il suo cartellino.
+
+La prova di controllo, eseguita con il `app.html` **originale**: tutti e sei i test vanno
+ROSSI, e con i numeri giusti - «14 celle invece di 15», «il grafico nella finestra e' piu'
+piccolo a schermo che in layout (950 contro 730.78)», «nella finestra separata il contro-zoom
+deve essere tolto».
+
+Il collaudo completo: **839 test, 838 verdi, 1 rosso**. L'unico rosso NON e' di questo capitolo:
+e' `apk_versione.test.mjs`, che confronta la versione dentro l'APK (2.0.19) con quella del
+repository (2.0.20). L'APK sul computer del proprietario e' stato costruito alle 7:14 del 22
+ottobre, **prima** del rilascio delle 2.0.20 (12:20): quindi era gia' rosso al rilascio delle
+2.0.20 e non dipende da niente di qui. Su GitHub quel test viene **saltato** (il progetto
+mobile sta fuori dal repository), ed e' il collaudo di GitHub che conta.
+
+Una cosa emersa durante la prova: il CSS dell'app ha `input,select,button{width:100%}`, quindi
+il pulsante di chiusura della barra si allargava a tutta la finestra (misurati 1092 px) e il
+nome dell'app andava a capo (barra alta 51 px invece di 29). Due ritocchi (`width:auto` e
+`white-space:nowrap`) e la barra torna come si deve: logo 20 px, nome su una riga, pulsante
+27 px.
+
+### La lezione
+
+**Una finestra aperta su una pagina vuota mostra la barra del browser, non quella dell'app.** La
+lamentela «si vede about:blank» non era cosmetica: stava dicendo che la finestra staccata era
+una PAGINA WEB e non una seconda schermata del programma. La correzione non era nascondere una
+barra (quella e' del browser e non si nasconde), era smettere di aprire una pagina web.
+
+**Uno zoom che viaggia col nodo e' uno zoom che nessuno misura.** Il contro-zoom della scala UI
+e' giusto nella pagina e sbagliato nella finestra: stesso nodo, due scale diverse, e il
+puntatore finisce sempre su un altro grafico. La regola che resta e' semplice: **quello che
+disegni deve essere quello che si vede** (`clientWidth == rect.width`).
+
+E la terza: **una colonna che manca sposta tutte le altre.** La riga del gruppo non aveva la
+striscia, e quello che si vedeva era una tabella disallineata. Il cartellino era solo il
+sintomo; il difetto era una cella in meno.
+

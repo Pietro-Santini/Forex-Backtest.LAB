@@ -268,6 +268,39 @@ e non e' il suo carico.
 quando va bene e una quando rallenta. Già misurato e **scartato**: il registro tick al suo tetto
 costa 28 ms da ricostruire, `update()` e `draw()` con 5.000 operazioni costano 3,7 e 6,4 ms.
 
+### ✅ 8. Le tre richieste NUOVE del 22 ottobre — FATTE (da pubblicare)
+
+Non erano nella roadmap: sono arrivate dopo, dal proprietario, e si chiudono tutte e tre qui.
+
+**8a. La finestra PIP senza la barra «about:blank», e come seconda finestra dell'app.**
+«deve essere una seconda schermata della STESSA applicazione, non un qualcosa collegato via
+web ... la finestra non ha il logo come la pagina madre». La finestra era un `window.open('')` su
+una pagina **vuota**: il browser la mostrava come una pagina web (barra delle informazioni del
+sito con «about:blank», nessun titolo, nessuna icona). Ora si usa prima la **Document
+Picture-in-Picture nativa**: finestra senza barra del browser, senza indirizzo, con lo STESSO
+documento dentro (misurato dentro la finestra: **0 script, un solo canvas, il motore non
+esiste** → un solo cervello, nessun doppio ordine). Fallback: il popup di prima, ma con l'icona
+dell'app nel titolo e una **barra interna col logo e il nome «BacktestLAB FOREX EDITION»**.
+Scartata di proposito la seconda istanza completa (`?pipSlot=N`): aprirebbe un secondo
+collegamento a MT5/Capital.com.
+
+**8b. Il puntatore sfasato in X e Y nel grafico.** Misurato: il canvas era **950 px di layout
+contro 730 px a schermo** (scala UI 130%), il mirino cadeva 78 px a sinistra e 55 px in alto. La
+causa è il **contro-zoom** della scala UI: sta sul `#chartWrap` e viaggia col nodo nella finestra
+staccata, dove il body invece non è zoomato → il grafico si rimpiccioliva senza che nessuno lo
+misurasse. Ora il contro-zoom si toglie quando il grafico cambia finestra e si rimette al
+rientro; l'invariante tenuta in test è **`clientWidth == rect.width`**.
+
+**8c. I cartellini di vicinanza anche sulla riga dei gruppi.** La riga del gruppo **non aveva la
+striscia** e per questo aveva 14 celle invece di 15 (tutte le colonne spostate a sinistra). Ora
+ogni posizione del gruppo ha il **proprio** cartellino e la riga del gruppo ha quello della
+posizione **più vicina** a un livello (blu = stop a profitto, verde = TP, rosso = SL), con nel
+titolo il numero della posizione dentro il gruppo.
+
+Test: `laboratorio/app/pip_finestra.test.mjs`, `laboratorio/app/pip_puntatore.test.mjs`,
+`laboratorio/app/gruppi_striscia.test.mjs` (6 casi, con la prova di controllo: con il file
+originale vanno tutti rossi).
+
 ---
 
 ## 7-bis. LE MISURE VERE DEL 22 OTTOBRE (sulla macchina del proprietario)

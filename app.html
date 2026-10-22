@@ -11187,7 +11187,7 @@ function update(){
        +`<td title="Il rapporto rischio/rendimento cambia da posizione a posizione: aprilo per vederli">—</td>`
        +`<td>${somma('lots').toFixed(2)}</td><td>${euro(somma('margine'))}</td>`
        +`<td>${primo.prezzo!=null?fmtPriceA(primo.prezzo,a0):'—'}</td>`+plCellG
-       +`<td>${gotoG}${azioniG}</td></tr>`
+       +`<td>${gotoG}${azioniG}</td>`+fblStrisciaGruppoCellaHtml(dati)+`</tr>`
        +(aperto?dati.map(d=>d.html).join(''):'');
    }).join('');
    aggiornaTbody($('openPositions'),posHtml);
@@ -19689,13 +19689,13 @@ function fblStrisciaPosizione(p){
  if(inProfitto){
   const da=Number.isFinite(Number(p.ultimoTp))?Number(p.ultimoTp):null;
   const q=da!=null?vicino(da,sl):vicino(entry,sl);
-  if(q!=null)return {colore:'#4bb3e8',titolo:'Vicina allo stop a profitto'+(da!=null?' (misurata dall\'ultimo target raggiunto)':'')+': manca il '+q+'%'};
+  if(q!=null)return {colore:'#4bb3e8',perc:q,titolo:'Vicina allo stop a profitto'+(da!=null?' (misurata dall\'ultimo target raggiunto)':'')+': manca il '+q+'%'};
  }
  const qSl=inProfitto?null:vicino(entry,sl);
  const qTp=vicino(entry,tp);
  // Se sono vicini tutti e due vince il piu' vicino: e' quello che succede per primo.
- if(qSl!=null&&(qTp==null||qSl<=qTp))return {colore:'#e05252',titolo:'Vicina allo stop loss: manca il '+qSl+'%'};
- if(qTp!=null)return {colore:'#2fbf71',titolo:'Vicina al take profit: manca il '+qTp+'%'};
+ if(qSl!=null&&(qTp==null||qSl<=qTp))return {colore:'#e05252',perc:qSl,titolo:'Vicina allo stop loss: manca il '+qSl+'%'};
+ if(qTp!=null)return {colore:'#2fbf71',perc:qTp,titolo:'Vicina al take profit: manca il '+qTp+'%'};
  return null;
 }
 // La cella da attaccare in fondo a una riga, uguale nelle due tabelle: restano gemelle.
@@ -19704,6 +19704,25 @@ function fblStrisciaCellaHtml(p){
  if(!st)return '<td class="fblStrisciaCella"></td>';
  return '<td class="fblStrisciaCella" title="'+String(st.titolo).replace(/"/g,'&quot;')+'">'
    +'<span class="fblStriscia" style="background:'+st.colore+'"></span></td>';
+}
+// LA STRISCIA DELLA RIGA DI GRUPPO. La riga del gruppo non ha una posizione unica, ma una
+// cosa sola conta: quale delle sue posizioni sta per toccare un livello per prima. Si sceglie
+// quella con la percentuale piu' bassa (la piu' vicina) e se ne mostra il cartellino (blu =
+// stop a profitto, verde = take profit, rosso = stop loss), con il numero della posizione
+// dentro il gruppo: cosi' si sa QUALE posizione guardare.
+function fblStrisciaGruppoCellaHtml(dati){
+ let best=null;
+ (dati||[]).forEach((d,i)=>{
+  const p=d&&d.p; if(!p)return;
+  const st=fblStrisciaPosizione({side:p.side,entry:p.entry,sl:p.sl,tp:p.tp,prezzo:d.prezzo,ultimoTp:p.ultimoTpRaggiunto});
+  if(!st)return;
+  const perc=Number.isFinite(st.perc)?st.perc:0;
+  if(!best||perc<best.perc)best={st:st,perc:perc,i:i};
+ });
+ if(!best)return '<td class="fblStrisciaCella"></td>';
+ const chi='Posizione '+(best.i+1)+' di '+(dati.length)+': '+String(best.st.titolo);
+ return '<td class="fblStrisciaCella" title="'+chi.replace(/"/g,'&quot;')+'">'
+  +'<span class="fblStriscia" style="background:'+best.st.colore+'"></span></td>';
 }
 function usedMargin(){ return positions.reduce((s,p)=>s+(p.marginUsed||0),0); }
 // Collegati a MT5 (Live normale, vedi mt5StatsActive): equity/margine libero/saldo sono quelli
@@ -23166,7 +23185,7 @@ function panBy(amount){
 // popup va spostato/ridimensionato a mano (anche su un secondo monitor): niente
 // "always-on-top" automatico, ma resta comunque visibile insieme alla pagina principale finché
 // non lo copri o lo minimizzi tu.
-let floatingWin=null, floatingHomeParent=null, floatingHomeNext=null;
+let floatingWin=null, floatingHomeParent=null, floatingHomeNext=null, floatingWinPip=false;
 // Finestre PIP AGGIUNTIVE (2ª/3ª/4ª, vedi PIP_SLOT più sopra nel file): a differenza di
 // floatingWin qui sopra (che stacca lo STESSO grafico), ognuna di queste è una vera, nuova
 // finestra del browser con una copia COMPLETA e indipendente di questa stessa pagina
@@ -23468,9 +23487,17 @@ function restoreChartToMainPage(){
  }
  lastInteractionDoc=document;
  if(wrap && floatingHomeParent){
-   if(floatingHomeNext&&floatingHomeNext.parentNode===floatingHomeParent)floatingHomeParent.insertBefore(wrap,floatingHomeNext);
-   else floatingHomeParent.appendChild(wrap);
+  if(floatingHomeNext&&floatingHomeNext.parentNode===floatingHomeParent)floatingHomeParent.insertBefore(wrap,floatingHomeNext);
+  else floatingHomeParent.appendChild(wrap);
  }
+ // La finestra staccata aveva fatto del #chartWrap un blocco flessibile ("flex:1", altezza
+ // automatica) per stare sotto la barra col logo: qui si rimette com'era (l'altezza la
+ // decide il CSS).
+ try{ wrap.style.flex=''; wrap.style.minHeight=''; wrap.style.height=''; }catch(e){}
+ // LA SCALA UI: al rientro il grafico torna nel documento principale, il cui body e' zoomato:
+ // il contro-zoom sul #chartWrap va rimesso, altrimenti il grafico resta sfasato (troppo
+ // grande) e il puntatore torna a puntare il punto sbagliato.
+ try{ if(typeof fblScalaUiApplica==='function')fblScalaUiApplica(document,fblScalaUi); }catch(e){}
  floatingDoc=null; floatingWin=null;
  updateFloatCornerButtons();
  window.removeEventListener('resize',draw);
@@ -23533,25 +23560,80 @@ function enableManualResize(win){
  doc.addEventListener('mouseup',onUp);
  doc.addEventListener('mouseleave',onUp);
 }
+// La barra in alto della finestra staccata: il LOGO e il nome dell'APP. Serve a una cosa
+// sola - che la finestra si VEDA come l'app e non come una pagina web (la lamentela era
+// proprio questa: "la finestra non ha il logo come la pagina madre"). Non e' un browser che
+// mostra un sito: e' la stessa app, in una seconda finestra.
+function fblPipBarCrea(doc){
+ try{
+  if(!doc||!doc.body||doc.getElementById('fblPipBar'))return null;
+  const bar=doc.createElement('div');
+  bar.id='fblPipBar';
+  bar.style.cssText='display:flex;align-items:center;gap:9px;padding:4px 10px;background:#0b1016;border-bottom:1px solid #2b3541;flex:none;user-select:none';
+  const img=doc.createElement('img');
+  img.src=new URL('icon-192.png',location.href).href;
+  img.alt='BacktestLAB';
+  img.style.cssText='width:20px;height:20px;border-radius:5px;object-fit:cover;flex:none;box-shadow:0 2px 8px rgba(62,166,255,.25)';
+  const nome=doc.createElement('span');
+  // NB: il CSS dell'app ha "input,select,button{width:100%}" e i testi che vanno a capo: senza
+  // questi due ritocchi il pulsante di chiusura si allargava a tutta la finestra (1092 px
+  // misurati) e il nome dell'app andava su due righe (barra alta 51 px invece di 28).
+  nome.style.cssText='white-space:nowrap;flex:none;line-height:1.2';
+  nome.innerHTML='<span style="font-weight:800;font-size:13px;color:#e8edf3;letter-spacing:-.02em">Backtest<span style="color:#3ea6ff">LAB</span></span>'
+   +'<span style="font-size:9px;letter-spacing:.2em;color:#7f8b9a;font-weight:700;margin-left:8px">FOREX EDITION</span>';
+  const chiudi=doc.createElement('button');
+  chiudi.type='button';
+  chiudi.textContent='\u2715';
+  chiudi.title='Chiudi la finestra e riporta il grafico alla pagina principale';
+  chiudi.style.cssText='margin-left:auto;width:auto;flex:none;background:transparent;border:1px solid #2b3541;color:#8b96a5;border-radius:6px;cursor:pointer;font-size:11px;padding:1px 8px;line-height:1.4';
+  chiudi.addEventListener('click',()=>{ try{ if(floatingWin&&!floatingWin.closed)floatingWin.close(); }catch(e){} });
+  bar.appendChild(img); bar.appendChild(nome); bar.appendChild(chiudi);
+  doc.body.insertBefore(bar,doc.body.firstChild);
+  return bar;
+ }catch(e){ return null; }
+}
 async function openFloatingChart(){
  const wrap=document.querySelector('.chartWrap');
  if(!wrap)return;
  floatingHomeParent=wrap.parentNode;
  floatingHomeNext=wrap.nextSibling;
- // Richiesto esplicitamente: niente Document Picture-in-Picture nativa, sempre un popup
- // normale (window.open) — resta comunque lo stesso identico programma/stato della pagina
- // principale (si sposta il nodo DOM, non se ne crea una copia), quindi grafico e dati restano
- // sempre allineati senza bisogno di alcuna sincronizzazione dedicata. Va solo spostato/
- // ridimensionato a mano (anche su un secondo monitor): niente "always-on-top" automatico.
- floatingWin=window.open('','forexFloatingChart','width=900,height=600');
+ // LA FINESTRA SEPARATA (PIP): una VERA finestra dell'app, non una pagina web.
+ // Prima era un popup su una pagina VUOTA (window.open('')): il browser lo mostrava come una
+ // pagina qualsiasi, con la barra delle informazioni del sito in alto che diceva "about:blank"
+ // e senza titolo ne' icona dell'app - non sembrava piu' l'app, sembrava un sito. Ora si prova
+ // prima la Document Picture-in-Picture nativa (Chrome/Edge): finestra SENZA barra, SENZA
+ // indirizzo, SENZA "about:blank", che contiene lo STESSO documento - quindi stesso stato e
+ // stesso motore: nessuna seconda copia, nessun doppio collegamento al conto. Se l'API non c'e'
+ // o il browser la rifiuta, si cade sul popup di prima (con icona dell'app e barra col logo).
+ let pipNativa=false;
+ try{
+  if(window.documentPictureInPicture&&typeof window.documentPictureInPicture.requestWindow==='function'){
+   const w=await window.documentPictureInPicture.requestWindow({width:900,height:600});
+   if(w&&w.document){ floatingWin=w; pipNativa=true; }
+  }
+ }catch(e){ floatingWin=null; }
  if(!floatingWin){
+  floatingWin=window.open('','forexFloatingChart','width=900,height=600');
+  if(!floatingWin){
    $('status').textContent="Impossibile aprire la finestra separata: controlla che il browser non blocchi i popup per questa pagina.";
    floatingHomeParent=null; floatingHomeNext=null;
    return;
+  }
  }
- floatingWin.document.title='Grafico — Forex Backtest Lab';
+ floatingWinPip=pipNativa;
+ try{ floatingWin.document.title='Forex Backtest Lab'; }catch(e){}
  floatingDoc=floatingWin.document;
  copyStylesInto(floatingDoc);
+ // Icona dell'app nella barra del titolo (solo nel popup: la finestra Picture-in-Picture
+ // nativa non ha barra del titolo). Cosi' anche il fallback mostra il logo, non una pagina
+ // anonima.
+ try{
+  const link=floatingDoc.createElement('link');
+  link.rel='icon'; link.type='image/png'; link.href=new URL('icon-192.png',location.href).href;
+  floatingDoc.head.appendChild(link);
+ }catch(e){}
+ // La barra con il logo e il nome dell'app dentro la finestra: e' cio' che mancava.
+ fblPipBarCrea(floatingDoc);
  // Senza questo, un click dentro la finestra separata non verrebbe mai registrato e ogni popup
  // finirebbe sulla pagina principale (vedi trackPopupInteractions/popupHostDoc).
  trackPopupInteractions(floatingDoc);
@@ -23562,8 +23644,21 @@ async function openFloatingChart(){
  floatingDoc.body.style.margin='0';
  floatingDoc.body.style.background='#0b1016';
  floatingDoc.body.style.height='100vh';
+ // La finestra e' gia' a grandezza schermo: il grafico sta sotto la barra col logo.
+ floatingDoc.body.style.display='flex';
+ floatingDoc.body.style.flexDirection='column';
  floatingDoc.body.appendChild(wrap);
- wrap.style.height='100%';
+ // IL CONTRO-ZOOM DELLA SCALA UI: sta sul #chartWrap (perche' il body della pagina e' zoomato)
+ // e VIAGGIA col nodo quando il grafico si sposta in un'altra finestra. Ma in quella finestra il
+ // body NON e' zoomato - e non deve esserlo: la finestra e' gia' a grandezza schermo. Il
+ // contro-zoom, da solo, rimpicciolisce il grafico senza che nessuno lo misuri, e il
+ // puntatore finisce per puntare un punto DIVERSO da quello indicato (misurato: 950 px di
+ // layout contro 730 px a schermo, con il mirino 78 px a sinistra e 55 px in alto). Qui il
+ // contro-zoom si toglie; al rientro (restoreChartToMainPage) si rimette.
+ try{ wrap.style.zoom=''; }catch(e){}
+ wrap.style.flex='1 1 auto';
+ wrap.style.minHeight='0';
+ wrap.style.height='auto';
  // Stessa sidebar dello schermo intero: gli strumenti di disegno seguono il grafico nella
  // finestra separata, così non serve più guardare la pagina principale per disegnare.
  moveDrawToolbarIntoSidebar(floatingDoc);
@@ -23587,12 +23682,14 @@ async function openFloatingChart(){
  // senza questa riga funzionavano SOLO nella pagina principale, mai nella finestra separata
  // (vedi il commento su handleDrawingKeyboardShortcuts).
  floatingWin.addEventListener('keydown',handleDrawingKeyboardShortcuts);
- enableManualResize(floatingWin);
+ if(!floatingWinPip)enableManualResize(floatingWin); // la finestra PiP nativa si ridimensiona da sola (le maniglie coprirebbero il bordo)
  // pagehide scatta sia quando l'utente chiude la finestra separata manualmente, sia quando
  // richiamiamo noi floatingWin.close() dal pulsante "Rientra".
  floatingWin.addEventListener('pagehide',restoreChartToMainPage,{once:true});
  updateFloatCornerButtons();
- $('status').textContent='Grafico spostato nella finestra separata: trascina i bordi/angoli della finestra per ridimensionarla quanto vuoi, oppure spostala pure su un altro monitor.';
+ $('status').textContent=floatingWinPip
+  ? 'Grafico spostato nella finestra Picture-in-Picture: una finestra vera dell\'app, senza barra e senza indirizzo. Ridimensionala dal bordo e spostala pure su un altro monitor.'
+  : 'Grafico spostato nella finestra separata: trascina i bordi/angoli della finestra per ridimensionarla quanto vuoi, oppure spostala pure su un altro monitor.';
  draw();
 }
 let livePLHomeParent=null, livePLHomeNext=null;
