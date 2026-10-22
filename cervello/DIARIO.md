@@ -2739,4 +2739,25 @@ vero, in un browser vero, e pretende **zero** id ripetuti. Ha anche la **prova d
 crea un id duplicato apposta e verifica che il controllo lo veda, e che torni pulito quando
 sparisce. Un test che non puo' diventare rosso non dimostra niente.
 
-Collaudo completo: **Falliti: 0**.
+### «Le cose delle sale vanno nella sezione Sale segnali»
+
+Risolti i duplicati (obbligatorio prima di spostare), ho creato una nuova scheda **Sale
+segnali** accanto a Collegamento. Nella sezione **Collegamento** restano solo ponte, accesso
+da altri dispositivi, account Telegram e prima configurazione; nella sezione **Sale segnali**
+sono finite cronologia, apertura automatica, pannello segnali, elenco delle sale Telegram
+e tutta la sezione Syntra. Le schede Telegram/Syntra che scelgono da quale fonte arrivano i
+segnali sono rimaste identiche, ma sono state spostate insieme alle sale.
+
+I pezzi sono stati **spostati** (le righe copiate dal loro posto e rimosse dall'altro),
+non riscritti: emoji, trattini lunghi e commenti sono rimasti byte per byte. Uno script
+(`laboratorio/strumenti/sale_segnali_pannello.py`) si e' occupato dell'assemblaggio con
+controlli: i segnaposto devono essere dove ci si aspetta, ogni id deve restare una volta sola,
+i `<div>` devono bilanciarsi, le due sezioni devono essere sorelle e in ordine.
+
+Il test (`laboratorio/app/sale_segnali.test.mjs`) misura **dove sta ciascun controllo** con
+`closest()` e **cosa succede** premendo i pulsanti spostati: «Apri il pannello dei segnali»
+e «Configura apertura automatica» aprono ancora i loro pannelli. Ha anche la prova di
+controllo: niente doppioni, le due sezioni non stanno una dentro l'altra.
+
+Titolo del popup semplificato in «Impostazioni generali» (coerente con il contenuto). Collaudo
+completo: **Falliti: 0**.
