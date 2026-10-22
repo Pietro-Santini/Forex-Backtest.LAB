@@ -320,6 +320,15 @@ def symbol_check(symbol: str):
             "resolved_symbol": symbol,
             "digits": info.digits,
             "point": info.point,
+            # DIMENSIONE DEL CONTRATTO E PASSI DEL VOLUME.
+            # Servono a sapere QUANTO VALE un lotto su questo strumento. Senza, l'app che
+            # apre un segnale su un asset mai visto doveva caricarne il grafico intero solo
+            # per scoprirlo - fino a 15 secondi di attesa su un'operazione che si voleva
+            # immediata (segnalato: «sono quei secondi, magari un minuto, che ci fanno
+            # perdere l'apertura precisa»). Qui costano una lettura e arrivano subito.
+            "contract_size": getattr(info, "trade_contract_size", None),
+            "volume_min": getattr(info, "volume_min", None),
+            "volume_step": getattr(info, "volume_step", None),
             "candidates": [],
         }
     all_symbols = _mt5_call(mt5.symbols_get) or []

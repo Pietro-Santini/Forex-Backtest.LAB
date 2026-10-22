@@ -30630,6 +30630,42 @@ async function tgPrezzoSenzaGrafico(sym){
 function tgMetaNota(sym){
  try{ return !!(INSTRUMENTS[sym]||(assetAutoMeta[sym]&&Number.isFinite(assetAutoMeta[sym].decimals))); }catch(e){ return false; }
 }
+// I DATI DEL SIMBOLO SI CHIEDONO AL PONTE, NON SI SCARICA UN GRAFICO PER AVERLI.
+//
+// CHIESTO dal proprietario: «quando arriva un nuovo segnale su un asset diverso da quello
+// visualizzato, prima di caricare il grafico la cosa primaria deve essere il prezzo con cui si
+// trova al momento quell'asset. Almeno cosi' apre subito la posizione... sennò sono quei secondi,
+// magari anche un minuto, che ci fanno perdere l'apertura precisa».
+//
+// COSA C'ERA GIA': l'apertura senza grafico esiste ed e' la strada principale (tgAutoApriQui).
+// MA si fermava davanti a tgMetaNota(): se i decimali e la dimensione del contratto di
+// quell'asset non erano ancora noti - cioe' proprio quando il segnale arriva su uno strumento
+// che non si stava guardando - si ricadeva su tgPortaAGrafico, che carica il grafico e ASPETTA
+// fino a 15 secondi. Il controllo era giusto: senza quei numeri il lotto si calcolerebbe con
+// quelli di EUR/USD, ed e' un errore sui soldi. Sbagliato era il modo di procurarseli.
+//
+// Ora si chiedono a mt5_feed_server (/symbol-check), che li legge da MT5 in una richiesta sola.
+// SE NON ARRIVANO COMPLETI NON SI PROCEDE: si torna alla strada lenta col grafico. Meglio
+// aspettare che aprire una posizione con il contratto sbagliato.
+async function tgImparaMetaDalPonte(sym){
+ if(!sym||tgMetaNota(sym))return tgMetaNota(sym);
+ try{
+  const res=await resolveMt5SymbolForAsset(sym);
+  if(!res)return false;
+  const r=await fetch(fblConChiave(MT5_FEED_URL+'/symbol-check?symbol='+encodeURIComponent(res)),{cache:'no-store'});
+  if(!r.ok)return false;
+  const d=await r.json();
+  if(!d||!d.found)return false;
+  const dec=Number(d.digits), cs=Number(d.contract_size);
+  // LA COPPIA O NIENTE: i decimali da soli farebbero passare il controllo lasciando la dimensione
+  // del contratto sbagliata - cioe' esattamente il danno che il controllo doveva evitare.
+  if(!Number.isFinite(dec)||!(cs>0))return false;
+  recordAssetAutoMeta(sym,{decimals:dec,contractSize:cs,
+    minDeal:Number.isFinite(Number(d.volume_min))&&Number(d.volume_min)>0?Number(d.volume_min):undefined,
+    locked:true},'mt5/symbol-check');
+  return tgMetaNota(sym);
+ }catch(e){ return false; }
+}
 async function tgAutoValuta(voce,conto){
  const A=tgAutoPerSimbolo(voce&&voce.segnale&&voce.segnale.strumento);
  // Il simbolo del grafico del segnale. Dichiarato qui perche' lo usano SIA il ramo Capital.com (che
@@ -30854,7 +30890,11 @@ async function tgAutoApriQui(voce,d,seg,conto,spazio){
  let sym=null, prezzo=null, senzaGrafico=false;
  if(conto==='mt5'){
   sym=await tgAssetPerStrumento(seg.strumento);
-  if(sym&&tgMetaNota(sym)){
+  // Se i dati del simbolo non si conoscono, si provano a chiedere al ponte PRIMA di arrendersi
+  // al grafico: e' una richiesta contro quindici secondi di attesa.
+  let meta=sym?tgMetaNota(sym):false;
+  if(sym&&!meta)meta=await tgImparaMetaDalPonte(sym);
+  if(sym&&meta){
    prezzo=await tgPrezzoSenzaGrafico(sym);
    senzaGrafico=Number.isFinite(prezzo);
   }
