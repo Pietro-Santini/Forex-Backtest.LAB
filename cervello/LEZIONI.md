@@ -814,3 +814,27 @@
   colonne della riga erano spostate a sinistra. Il sintomo che il proprietario aveva descritto
   ("i cartellini mancano") era la conseguenza, non la causa: quando una tabella e' disallineata,
   la domanda giusta non e' "che colore deve avere questa cella", ma "quante colonne ci sono".
+- Un metro confrontato con se stesso non misura niente. (22 ottobre 2026.) Il fermo di una
+  posizione non si mette se cade dentro la forbice del cambio giornata; il margine di chiusura
+  E' quella forbice; quindi il fermo col margine non era mai "troppo vicino" e il margine non
+  sarebbe mai scattato. Il difetto non era nel numero del margine, era nel metro: due cose
+  uguali non si possono confrontare per capire se una e' abbastanza lontana. Il metro giusto
+  era lo spread ORDINARIO (lo stop non deve essere preso dal primo allargamento), mentre per il
+  pareggio esatto resta la forbice.
+
+- Lo stato che si aggiorna prima del conto e' una bugia. (22 ottobre 2026.) Il giro del pareggio
+  scriveva lo stop nel campo locale PRIMA di sapere se il ponte lo avesse accettato: se il
+  broker rifiutava, l'app mostrava uno stop che sul conto non c'era. E il tentativo non era
+  tracciato, quindi il giro successivo riprovava due secondi dopo, per sempre. Ora lo stato
+  cambia solo se il conto ha preso lo stop, e il tentativo (anche quello fallito) fa scadere
+  cinque minuti prima di riprovare.
+
+- Un tentativo senza tempo e' un tentativo ogni due secondi. (22 ottobre 2026.) Tracciare
+  l'ultimo tentativo serve a una cosa sola: dire al giro dopo "hai gia' provato, aspetta", e per
+  dirlo serve il tempo iniettato. Senza tempo iniettato il test non puo' provare niente, e per
+  farlo passare si finisce col premere i tasti dell'app all'ora giusta.
+
+- Un prezzo che viene da una somma in virgola mobile non e' un prezzo. (22 ottobre 2026.)
+  1,08500 + 0,00500 fa 1,0899999999999999: uno stop cosi' non e' un prezzo che il broker possa
+  accettare. Le somme vanno arrotondate alla griglia del prezzo dello strumento, come gia'
+  faceva il pareggio esatto.

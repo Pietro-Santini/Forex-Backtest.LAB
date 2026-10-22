@@ -3075,3 +3075,132 @@ E la terza: **una colonna che manca sposta tutte le altre.** La riga del gruppo 
 striscia, e quello che si vedeva era una tabella disallineata. Il cartellino era solo il
 sintomo; il difetto era una cella in meno.
 
+## 22 ottobre 2026 (continua) - Il margine dello spread solo intorno alla chiusura del mercato
+
+Il punto 4 della consegna: «il pareggio resta **zero** nelle condizioni normali, ma nella fase di
+chiusura e riapertura del mercato si adotta il margine dello spread, tornando al pareggio esatto
+quando il mercato si e' stabilizzato. **Con un interruttore nelle impostazioni.**»
+
+### La richiesta e il prezzo che era gia' stato pagato
+
+Il 21 ottobre la stessa protezione era gia' stata fatta male, e il proprietario l'aveva pagata:
+«sposta le posizioni a break-even, ma perdono ugualmente meno 2 euro». Il margine di allora era
+lo **spread tipico** (circa un pip), e soprattutto la sua etichetta diceva "pareggio" mentre il
+fermo non era un pareggio: un'etichetta che mente e' peggio di una protezione in meno.
+
+Prima di toccare niente ho rimesso le misure sul tavolo, perche' sono loro a decidere la
+direzione:
+
+- Il 21 ottobre, EURCHF al cambio giornata: bid 0,92461 / ask 0,92961 alle 00:00:42 ->
+  **50,0 pip** di spread. Cinque tick in cinque minuti, e lo spread 250 volte piu' largo del
+  normale.
+- Il fermo di una SELL si esegue sull'**ASK**, e quello di un BUY sul **BID**. Al cambio giornata
+  l'ask sale e il bid scende: e' il lato che si allarga a prendere il fermo.
+- Il fermo "al pareggio esatto" di una posizione appena aperta sta **dentro la forbice**: per
+  questo il 21 ottobre la risposta era stata RIFIUTARE (regola che resta).
+
+Tre conseguenze, e sono le uniche tre cose che il capitolo decide:
+
+1. **Il margine deve valere la forbice del cambio giornata (50 pip misurati), non lo spread
+   tipico.** Con lo spread tipico (~0,6 pip) il fermo resterebbe dentro la forbice: il margine
+   non proteggerebbe niente. E' la stessa ragione per cui il margine della v2.0.12 non ha mai
+   salvato niente.
+2. **La direzione e' dalla parte da cui il fermo puo' essere preso, e non dalla parte dell'entrata.**
+   BUY: il fermo scende (pareggio esatto MENO il margine). SELL: il fermo sale (pareggio esatto
+   PIU' il margine). E' la direzione del vecchio `allarga` della v2.0.12, ed e' la stessa della
+   distanza che l'app gia' calcola per capire se un fermo e' in pericolo
+   (`dist = BUY ? prezzo-sl : sl-prezzo`).
+3. **Il costo del margine e' reale e va detto.** Per una SELL il fermo col margine sta SOPRA
+   l'entrata: se viene preso, si chiude in perdita di quanto e' il margine. Non e' un pareggio e
+   non si chiama "pareggio": per questo il segno del Trade Journal resta il **pareggio esatto**,
+   cosi' il Journal dice "BE" solo quando il fermo e' davvero al pareggio, e il messaggio del
+   pulsante dice «pareggio + margine di chiusura».
+
+### La finestra
+
+La finestra e' quella che l'app gia' conosce: mezz'ora prima della chiusura e mezz'ora dopo la
+riapertura (`FBL_MARGINE_CHIUSURA_MIN=30`, `FBL_MARGINE_RIAPERTURA_MIN=30`). Il mercato chiuso
+NON e' dentro la finestra: li' dentro nessuno puo' eseguire un ordine, e il margine starebbe a
+fare danno per un'ora intera senza proteggere niente.
+
+L'interruttore e' nelle impostazioni (sezione «Chiusura mercato»), `fblMargineChiusura`, salvato in
+`fbl_margine_chiusura`, **acceso di default**.
+
+### Tre difetti che ho trovato in quello che avevo scritto io
+
+Il meccanismo non e' nato al primo colpo: e' nato al terzo tentativo, e i due tentativi sbagliati
+hanno insegnato tre cose.
+
+**1. Il metro del «troppo vicino» era sbagliato per il margine.** Il fermo non si mette se
+cadrebbe dentro la forbice del cambio giornata - e la forbice e' esattamente il margine.
+Confrontarli tra loro significa confrontare la forbice con se stessa: il margine non sarebbe
+mai «abbastanza lontano» e **il margine non scatterebbe mai**. Il metro giusto per il margine e'
+lo spread **ORDINARIO** (lo stop non deve trovarsi cosi' vicino al prezzo da essere preso al primo
+allargamento); per il pareggio esatto resta la forbice, cioe' la regola del 21 ottobre. E il
+ritorno al pareggio esatto usa lo spread ordinario perche' a quel punto il mercato si e'
+stabilizzato: se usasse la forbice, il margine non andrebbe mai via.
+
+**2. Lo stato locale mentiva, e insisteva ogni due secondi.** Il giro scriveva lo stop nel
+campo locale **prima** di sapere se il conto lo avesse preso: se il ponte rifiuta, l'app
+mostrava uno stop che sul conto non c'era. E il tentativo non era tracciato, quindi il giro
+successivo (due secondi dopo) riprovava e riprovava. Ora: il tentativo si traccia PRIMA (anche
+se fallisce), lo stato si aggiorna **solo** se il conto ha preso lo stop, e si riprova ogni
+**cinque minuti**.
+
+**3. Il prezzo del fermo non era un prezzo.** 1,08500 + 0,00500 fa 1,0899999999999999 in
+virgola mobile: uno stop cosi' non e' un prezzo che il broker possa accettare. Ora il fermo
+col margine viene arrotondato alle cifre del prezzo dello strumento, come gia' faceva
+`mt5PrezzoPareggio` per il pareggio esatto.
+
+**4. L'attesa dei cinque minuti c'era solo da un lato.** Il giro gira dentro il polling MT5,
+che passa ogni due secondi. L'attesa era scritta per il ramo «allontana il fermo», ma non per il
+ramo «riporta il fermo al pareggio esatto»: se il conto rifiutava quest'ultimo, il giro dopo
+riprovava due secondi dopo, per tutta la sessione. Lo stesso difetto che avevo appena corretto
+per un ramo, ripetuto nell'altro. Ora c'e' un punto solo che decide «ora non si insiste», e
+tutti e due i rami lo usano.
+
+### I test (9) e la prova che sanno diventare rossi
+
+`laboratorio/app/margine_chiusura.test.mjs` - 8 casi, tutti con il **tempo iniettato** (nessun
+test dipende dall'ora vera della macchina):
+
+1. la finestra: dentro prima della chiusura, dentro dopo la riapertura, fuori in orario normale,
+   spenta a mercato chiuso (e i bordi esatti: trenta minuti esatti sono ancora dentro);
+2. fuori dalla finestra il pareggio e' esatto; dentro, il fermo si allontana di **50 pip** (il
+   numero dichiarato, non una stima: `0,0050` su EURUSD);
+3. la SELL sposta il fermo **sopra**, il BUY **sotto**: dalla parte da cui puo' essere preso;
+4. l'interruttore spento: mai margine, nemmeno dentro la finestra; riacceso: il margine torna;
+5. la macchina a stati: pareggio -> margine nella finestra; finita la finestra -> ritorno al
+   pareggio esatto; fermo spostato a mano -> non si tocca e il segno del margine sparisce; mercato
+   chiuso -> non si sposta niente;
+6. una posizione **simulata** non riceve mai il margine (lo spread e' gia' dentro l'entrata);
+7. il giro: sposta lo stop sul conto, e se il conto **rifiuta** lo stato locale non mente e il
+   ponte non viene chiamato ogni due secondi ma ogni cinque minuti;
+8. il pulsante BE: dentro la finestra mette il fermo col margine, ma il segno del Journal resta il
+   pareggio esatto; fuori dalla finestra continua a valere la regola del 21 ottobre (il fermo
+   dentro la forbice viene rifiutato);
+9. il **ritorno** al pareggio esatto, se il conto rifiuta, aspetta cinque minuti come l'altro:
+   il fermo locale resta quello col margine (la verita') e il ponte non viene chiamato ogni due
+   secondi.
+
+La prova di controllo, eseguita con il `app.html` **di prima del capitolo 4**: **9 test su 9
+rossi** (`fblPareggioChiusuraGiro is not defined`, e il pulsante che metteva 1,08500 invece di
+1,08000). Il test misura il comportamento, non cerca una stringa nel sorgente. E per il difetto
+numero 4 la prova e' stata fatta togliendo solo quella riga: **8 verdi e 1 rosso** (quello che
+controlla il ritorno), con il messaggio giusto: «il ponte e' stato chiamato una volta sola».
+
+### La lezione
+
+**Un metro confrontato con se stesso non misura niente.** Il fermo non si mette se sta dentro la
+forbice; il margine E' la forbice; quindi il fermo col margine non era mai "troppo vicino" e il
+margine non sarebbe mai scattato. Il difetto non era nel numero del margine, era nel metro: due
+cose uguali non si possono confrontare per capire se una e' abbastanza lontana.
+
+**Lo stato locale che si aggiorna prima del conto e' una bugia.** Se il ponte rifiuta, l'app
+mostrava uno stop che il broker non aveva. Il fermo che l'app dice e' il fermo che il conto ha:
+se i due non coincidono, si dice che non coincide.
+
+**Un tentativo senza tempo e' un tentativo ogni due secondi.** Tracciare il tentativo serve a
+una cosa sola: dire al giro successivo «hai gia' provato, aspetta». E il tempo va iniettato,
+altrimenti il test non puo' provare niente (e per farlo passare si finisce col premere i tasti
+dell'app a ora di pranzo).

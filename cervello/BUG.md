@@ -611,3 +611,30 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   scegliere la piu' vicina `fblStrisciaPosizione` restituisce adesso anche la percentuale (`perc`:
   0 = livello gia' superato, cioe' il caso piu' urgente). Test:
   `laboratorio/app/gruppi_striscia.test.mjs` (2).
+- **Il margine di chiusura non sarebbe mai scattato: il metro era confrontato con se stesso** —
+  risolto 2.0.21 (da pubblicare) — 22 ottobre 2026, `app.html` (punto 4 della consegna). Sintoma:
+  il margine dello spread intorno alla chiusura del mercato non partiva mai. Causa misurata: la
+  regola che rifiuta uno stop «troppo vicino» confrontava la distanza fermo/prezzo con la
+  **forbice del cambio giornata**, e il margine E' quella forbice: confrontarli significa
+  confrontare la forbice con se stessa, quindi il fermo col margine non era mai «abbastanza
+  lontano». Correzione: il metro del margine è lo spread **ordinario** (`fblSpreadNormalePrezzo`),
+  mentre per il pareggio esatto resta la forbice (la regola del 21 ottobre, che non si tocca).
+  Test: `laboratorio/app/margine_chiusura.test.mjs` (8 casi, tempo iniettato).
+- **Lo stop scritto in app prima che il conto lo avesse preso, e il giro che riprovava ogni due
+  secondi** — risolto 2.0.21 (da pubblicare) — 22 ottobre 2026, `app.html` (punto 4 della consegna).
+  Sintoma: se il ponte rifiutava lo spostamento dello stop, l'app mostrava comunque lo stop
+  nuovo (che sul conto non c'era) e riprovava a ogni giro del polling MT5 (ogni 2 secondi).
+  Causa misurata: il giro scriveva `pos.sl`/`pos.beChiusura` senza sapere il risultato della
+  chiamata al ponte, e il tentativo non era tracciato da nessuna parte. Correzione: il tentativo
+  si traccia **prima** (in `pos.beChiusuraTentativo`), lo stato locale si aggiorna **solo** se il
+  conto ha preso lo stop, e il giro successivo aspetta **cinque minuti**. La stessa attesa mancava
+  nel ramo «ritorno al pareggio esatto»: se il conto rifiutava quello, il giro riprovava due
+  secondi dopo, per tutta la sessione. Test: i casi 7 e 9 di
+  `laboratorio/app/margine_chiusura.test.mjs` (il ponte finto che rifiuta).
+- **Il fermo col margine non era un prezzo** — risolto 2.0.21 (da pubblicare) — 22 ottobre 2026,
+  `app.html` (punto 4 della consegna). Sintoma: lo stop calcolato per la SELL era
+  `1,0899999999999999` (1,08500 + 0,00500 in virgola mobile) e andava al broker così com'era.
+  Causa misurata: la somma del pareggio esatto e del margine non veniva arrotondata alla griglia
+  del prezzo. Correzione: il fermo col margine viene arrotondato alle cifre del prezzo che dice
+  il conto MT5 (come già faceva `mt5PrezzoPareggio` per il pareggio esatto). Test: il caso 3 di
+  `laboratorio/app/margine_chiusura.test.mjs` (la SELL a 1,09000 esatto).

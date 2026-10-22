@@ -399,7 +399,7 @@ disegno (14 disegni in quella misura). Candidati, in ordine di probabilita':
    chiedere al proprietario quanto storico di footprint gli serve davvero: se bastano le ultime
    48 ore, il tetto puo' scendere di molto e la memoria con lui.
 
-### 4. Il margine dello spread solo intorno alla chiusura del mercato
+### ✅ 4. Il margine dello spread solo intorno alla chiusura del mercato — FATTO (da pubblicare)
 
 **Richiesta:** il pareggio resta **zero** nelle condizioni normali, ma nella fase di chiusura e
 riapertura del mercato si adotta il margine dello spread, tornando al pareggio esatto quando il
@@ -410,6 +410,37 @@ mercato si è stabilizzato. **Con un interruttore nelle impostazioni.**
 già `fblPareggioTroppoVicino` e il rifiuto quando lo stop cadrebbe dentro la forbice. La finestra
 «chiusura/riapertura» è già conosciuta dall'app: cerca l'avviso prima della chiusura mercato e la
 misura della forbice del rollover (v2.0.12).
+
+**Come è stato fatto — le tre decisioni che contano:**
+
+1. **Il margine vale la forbice del cambio giornata (50 pip misurati il 21 ottobre), non lo spread
+   tipico.** Con lo spread tipico (~0,6 pip) il fermo resterebbe dentro la forbice: il margine non
+   proteggerebbe niente. È la stessa ragione per cui il margine della v2.0.12 non ha mai salvato
+   niente.
+2. **La direzione è dalla parte da cui il fermo può essere preso, non dalla parte dell'entrata:**
+   BUY → il fermo scende (pareggio esatto − margine), SELL → il fermo sale (pareggio esatto +
+   margine). È la direzione del vecchio `allarga` della v2.0.12.
+3. **Il costo del margine è reale e va detto:** per una SELL il fermo col margine sta *sopra*
+   l'entrata, quindi se viene preso si chiude in perdita di quanto è il margine. Non si chiama
+   «pareggio»: il segno del Trade Journal resta il **pareggio esatto**, così il Journal dice «BE»
+   solo quando il fermo è davvero al pareggio.
+
+**Quattro difetti trovati in quello che avevo scritto io** (lezione: si misura anche il proprio
+lavoro): il metro del «troppo vicino» confrontava il margine con la forbice, cioè la forbice con
+sé stessa → **il margine non sarebbe mai scattato**; lo stato locale si aggiornava **prima** che
+il conto prendesse lo stop (e riprovava ogni due secondi); il fermo calcolato non era un prezzo
+(`1,0899999999999999`); l'attesa dei cinque minuti c'era solo in un ramo dei due.
+
+**Cosa c'è nell'app:** il fermo col margine nella finestra di chiusura/riapertura (30 minuti prima
+della chiusura e 30 dopo la riapertura; **a mercato chiuso la finestra è spenta**), il ritorno al
+pareggio esatto quando il mercato si stabilizza, l'interruttore nelle impostazioni (sezione
+«Chiusura mercato», `fblMargineChiusura`, **acceso di default**), il giro automatico dentro il
+polling MT5 (che aspetta **cinque minuti** dopo un tentativo, anche fallito, e non mente sullo
+stato locale se il ponte rifiuta). Gli stop spostati a mano non si toccano mai; le posizioni
+simulate non ricevono mai il margine.
+
+Test: `laboratorio/app/margine_chiusura.test.mjs` (9 casi, tempo iniettato), con la prova di
+controllo: con il `app.html` di prima del capitolo, **9 test su 9 rossi**.
 
 ### 2. Il replay
 
