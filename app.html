@@ -1995,7 +1995,7 @@ function pubblicaPreferenze(){
           <button type="button" id="fblVerControllaBtn" class="miniBtn">🔄 Controlla aggiornamenti</button>
           <button type="button" id="fblVerAggiornaBtn" class="miniBtn" style="display:none;background:#277d5a;border-color:#3ea6ff;color:#fff">⬇️ Aggiorna ora</button>
         </div>
-        <div class="hint" style="margin-top:8px">Se la versione installata non &egrave; quella appena pubblicata, premi <b>Aggiorna ora</b> (oppure ricarica la pagina): l'app scarica il pacchetto nuovo e si riavvia. La versione qui sopra &egrave; letta dal pacchetto che sta servendo la pagina, non scritta a mano.</div>
+        <div class="hint" style="margin-top:8px">Se la versione installata non &egrave; quella appena pubblicata, premi <b>Aggiorna ora</b> (oppure ricarica la pagina). Se il pacchetto di installazione serve davvero, l&rsquo;app lo scarica e si riavvia; se invece il programma gi&agrave; installato sul computer aggiorna l&rsquo;app da solo, il pulsante ricarica soltanto la pagina &mdash; cos&igrave; in Download non si accumula un pacchetto a ogni versione. La versione qui sopra &egrave; letta dal pacchetto che sta servendo la pagina, non scritta a mano.</div>
         <div class="hint" style="margin-top:6px">Perch&egrave; l'app a volte si aggiorna da sola, senza che tu prema niente: &egrave; il <b>service worker</b> (il file sw.js), che tiene la copia dell'app nel dispositivo. Ogni tanto, e ogni volta che riapri l'app, controlla in silenzio se sul sito c&rsquo;&egrave; una versione nuova e, se c&rsquo;&egrave;, la scarica e la prepara per la prossima apertura. Il pulsante qui sotto serve solo quando la nuova versione deve entrare <b>subito</b> (per esempio un pacchetto nuovo da installare, che l&rsquo;app da sola non pu&ograve; installare).</div>
       </div>
     </div>
@@ -45153,10 +45153,30 @@ async function mt5AdvanceFromStep1(){
  if($('mt5LoginModalOverlay').style.display==='none')return;
  mt5ShowStepVisible(installed?3:2);
 }
+// L'APP QUI E' GIA' AGGIORNATA?
+//
+// Il proprietario: «30-40 file nella cartella Download invece di uno sostituito». Quando i
+// pacchetti sono gia' installati e l'app qui e' gia' aggiornata, riscaricare il pacchetto non
+// porta niente (il programma sa aggiornarsi da solo): si risparmia il file.
+//
+// Il confronto e' quello del pannello Versione (versione installata contro ultima pubblicata),
+// ma la release si prende SOLO dalla memoria: il controllo automatico la tiene aggiornata e qui
+// non si chiede la rete (l'utente sta aspettando che qualcosa si muova). Se la release non e'
+// nota non si nasconde niente: meglio un file in piu' che un modo per reinstallare perso.
+async function fblAppQuiGiaAggiornata(){
+  try{
+    if(typeof fblUltimaRelease==='undefined'||!fblUltimaRelease||!fblUltimaRelease.tag)return false;
+    const remota=fblVersioneDaTag(fblUltimaRelease.tag);
+    if(!remota)return false;
+    const installata=await fblVersioneInstallata();
+    if(!installata)return false;
+    return fblConfrontaVersioni(remota,installata)<=0;
+  }catch(e){ return false; }
+}
 // Cambia le parole del passo 1 a seconda di cosa sta davvero succedendo. Le due situazioni si
 // somigliano (il servizio non risponde) ma la cosa da fare e' opposta: installare, oppure solo
 // aspettare. Dirle con le stesse parole manda a reinstallare chi ha solo acceso il PC.
-function mt5Passo1Parole(giaInstallato){
+async function mt5Passo1Parole(giaInstallato){
  const titolo=$('mt5BridgeStepTitle'), testo=$('mt5BridgeStepTesto');
  const scarica=$('mt5DownloadDesktopAppBtn'), avanti=$('mt5BridgeContinueBtn');
  // RICHIESTO: su telefono e tablet i pacchetti non si installano e non servono - il servizio vive
@@ -45186,8 +45206,22 @@ function mt5Passo1Parole(giaInstallato){
   if(testo)testo.innerHTML='I pacchetti su questo computer <b>risultano già installati</b>: il servizio '
    +'però non sta ancora rispondendo. Quasi sempre vuol dire che non ha finito di partire — '
    +'succede quando il computer è appena stato acceso. Aspetta qualche secondo e premi «Riprova».';
-  // Il download resta raggiungibile, ma non e' piu' la cosa da fare: non deve stare per primo.
-  if(scarica)scarica.textContent='Scarica di nuovo i pacchetti (solo se il problema resta)';
+  // IL DOWNLOAD SPARE IL FILE: se anche l'app qui è già aggiornata, riscaricare il pacchetto
+  // non cambierebbe niente (il programma sa aggiornarsi da solo) e aggiungerebbe un file alla
+  // cartella Download a ogni richiesta. Il pulsante sparisce; resta un link per reinstallarlo a
+  // mano se il problema è un altro (vedi fblAppQuiGiaAggiornata).
+  if(await fblAppQuiGiaAggiornata()){
+    if(scarica)scarica.style.display='none';
+    if(testo)testo.innerHTML='I pacchetti su questo computer <b>risultano già installati</b> e '
+      +'l\'app qui è <b>già aggiornata</b>: riscaricarli non cambierebbe niente e aggiungerebbe solo '
+      +'un file alla cartella Download. Quasi sempre vuol dire che il computer è appena stato acceso '
+      +'e il servizio non ha ancora fatto in tempo a partire: <b>riavvia il computer</b> e premi '
+      +'«Riprova». Se il problema resta, l\'installatore si può riscaricare a mano dalla '
+      +'<a href="'+DESKTOP_APP_DOWNLOAD_URL+'" target="_blank" rel="noopener">pagina delle versioni</a>.';
+  }else{
+    // Il download resta raggiungibile, ma non e' piu' la cosa da fare: non deve stare per primo.
+    if(scarica)scarica.textContent='Scarica di nuovo i pacchetti (solo se il problema resta)';
+  }
   if(avanti)avanti.textContent='🔄 Riprova adesso';
  }else{
   if(titolo)titolo.textContent='Passo 1 di 3 — Installa i pacchetti aggiuntivi';
@@ -45214,7 +45248,7 @@ async function mt5StartLoginFlow(){
   if(el)el.textContent='🔎 Attendo che il servizio di questo PC risponda… (parte da solo, può volerci qualche secondo)';
  });
  if($('mt5LoginModalOverlay').style.display==='none')return;
- if(!health.ok){ mt5Passo1Parole(pontGiaVisto); mt5ShowStepVisible(1); return; }
+ if(!health.ok){ await mt5Passo1Parole(pontGiaVisto); mt5ShowStepVisible(1); return; }
  segnaPonteVisto();
  await mt5AdvanceFromStep1();
 }
@@ -45780,7 +45814,7 @@ $('mt5GateYesBtn').addEventListener('click',async()=>{
    // su telefono/tablet (dove non si installa niente) e anche sul
    // computer quando i pacchetti ci sono gia'. Stessa situazione di
    // mt5StartLoginFlow.
-   mt5Passo1Parole(pontGiaVisto);
+   await mt5Passo1Parole(pontGiaVisto);
    mt5ShowStepVisible(1);
    return;
  }
@@ -49315,17 +49349,109 @@ function fblEAppCapacitor(){
   }catch(e){ return false; }
 }
 
-function fblMostraPulsanteAggiorna(release, tagRemoto){
+// ===================== IL PACCHETTO SERVE, O BASTA RICARICARE LA PAGINA? =====================
+//
+// SEGNALATO dal proprietario: «30-40 file nella cartella Download invece di uno sostituito».
+// La catena, tutta vera: ogni release pubblica un Setup nuovo -> il pulsante «Aggiorna» lo
+// scarica -> il browser di sistema lo mette in Download con lo stesso nome e un suffisso (1),
+// (2), (3)... Non e' un difetto del browser, e non si puo' evitare: una pagina web non puo'
+// sostituire un file nella cartella dell'utente (non esiste un'API che lo permetta). Il difetto
+// e' nostro: il pulsante scarica TUTTO il pacchetto anche quando non serve niente di tutto.
+//
+// LA MISURA (22 ottobre, v2.0.20): il ponte scarica da se' una COPIA AGGIORNATA di app.html e
+// sw.js e serve quella, invece di quella congelata dentro l'eseguibile. Lo dichiara in /health,
+// nel campo app.da. Quindi:
+//   - app.da = 'copia aggiornata' -> il programma installato SA aggiornarsi da solo. Il Setup
+//     non porterebbe niente di nuovo: scaricarlo e' solo un file in piu'.
+//   - app.da = 'copia installata' -> il programma e' troppo vecchio per aggiornarsi e sta
+//     servendo la copia congelata: il Setup serve davvero.
+//   - il ponte non risponde -> non si puo' sapere: si scarica per sicurezza (la via che non
+//     lascia nessuno indietro).
+//
+// La domanda non la facciamo a caso: la risposta la da' il ponte, che e' l'unico che sa quale
+// delle due copie sta servendo. E su Android il pacchetto scaricato e' l'app stessa (l'APK),
+// quindi li' si scarica sempre.
+//
+// Il pulsante resta quello di prima, ma cambia quello che FA: se il pacchetto non serve,
+// ricarica la pagina (chiedendo prima al ponte di riscaricare l'app, se c'e') invece di
+// scaricare un Setup che non cambia niente.
+let fblPianoAggiornamentoCache=null;
+async function fblPianoAggiornamento(){
+  const ora=Date.now();
+  if(fblPianoAggiornamentoCache&&(ora-fblPianoAggiornamentoCache.quando)<60000)return fblPianoAggiornamentoCache.piano;
+  const pf=fblPiattaforma();
+  let piano, appPonte=null;
+  if(pf==='android'){
+    piano={serve:true,motivo:'su Android il pacchetto scaricato e\' l\'app stessa'};
+  }else if(pf!=='windows'&&pf!=='mac'){
+    piano={serve:false,motivo:'qui l\'app si aggiorna da sola: il pacchetto del computer non serve a nulla'};
+  }else{
+    piano={serve:true,motivo:'non si e\' potuto sapere se il programma installato si aggiorna da solo: per sicurezza si scarica il pacchetto'};
+    const app=await fblPonteCheCopiaServe();
+    if(app&&app.versione){
+      appPonte=app;
+      piano=(app.da==='copia aggiornata')
+        ? {serve:false,motivo:'il programma installato aggiorna l\'app da solo: il pacchetto non serve'}
+        : {serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+    }
+  }
+  piano.app=appPonte;
+  fblPianoAggiornamentoCache={quando:ora,piano};
+  return piano;
+}
+// UNA domanda sola al ponte locale: quale copia dell'app sta servendo adesso?
+// Si passa dalla stessa porta di sempre (fetchMt5WithTimeout), cosi' c'e' un solo modo di
+// interrogare il ponte in tutta l'app: se il programma e' spento la connessione viene rifiutata
+// subito (su localhost una porta chiusa risponde all'istante) e la risposta e' «non so», che
+// vuol dire: per sicurezza si scarica il pacchetto.
+async function fblPonteCheCopiaServe(){
+  try{
+    const h=await fetchMt5WithTimeout('/health',{},4000);
+    const app=h&&h.ok&&h.data&&h.data.app;
+    return app?app:null;
+  }catch(e){ return null; }
+}
+// Ricaricare la pagina passa SEMPRE di qui: cosi' si puo' guardare se l'aggiornamento e'
+// avvenuto senza ricaricare davvero la pagina (il collaudo non deve ricaricare nulla).
+function fblRicaricaPagina(){
+  try{ location.reload(); }catch(e){}
+}
+// Il pulsante dice quello che farà, non quello che farebbe: il nome cambia con la decisione.
+function fblEtichettaAggiorna(piano){
+  return (piano&&piano.serve)?'\u2b07\ufe0f Aggiorna':'\U0001f504 Aggiorna l\'app';
+}
+async function fblMostraPulsanteAggiorna(release, tagRemoto){
   const btn=document.getElementById('fblAggiornaBtn');
   if(!btn)return null;
   btn.style.display='';
-  btn.textContent='\u2b07\ufe0f Aggiorna';
+  const piano=await fblPianoAggiornamento();
+  btn.textContent=fblEtichettaAggiorna(piano);
   btn.disabled=false;
   btn.onclick=()=>fblApplicaAggiornamento(release,tagRemoto,btn);
   return btn;
 }
 async function fblApplicaAggiornamento(release, tagRemoto, btn){
   if(!btn)return;
+  // PRIMA DI TUTTO: il pacchetto di installazione serve davvero? Se il programma installato
+  // aggiorna l'app da solo, scaricare il Setup aggiungerebbe un file alla cartella Download a
+  // ogni versione senza cambiare niente: si ricarica la pagina e basta. Vedi
+  // fblPianoAggiornamento() per la misura.
+  const piano=await fblPianoAggiornamento();
+  if(!piano.serve){
+    try{ btn.disabled=true; btn.textContent='Aggiorno l\'app…'; }catch(e){}
+    // Si chiede al ponte di riscaricare l'app: e' lui che serve la pagina, e lui sa farlo da
+    // solo (quella richiesta si puo' fare solo dal computer: da remoto non si tocca
+    // l'installazione di qualcun altro).
+    try{ await fetch(fblConChiave(fblUrlOrdini()+'/aggiorna-app'),{method:'POST'}); }catch(e){}
+    // SI RICORDA CHE L'AGGIORNAMENTO L'HAI CHIESTO TU. Serve dopo, quando il service worker
+    // segnala che la versione nuova e' pronta: a quel punto l'app ricarica da sola invece di
+    // lasciare acceso il pulsante «Aggiorna» finche' non si trova la striscia in basso.
+    // Vedi il gestore del messaggio 'versione-nuova'.
+    try{ localStorage.setItem('fbl_aggiornamento_atteso',String(Date.now())); }catch(e){}
+    try{ $('status').textContent='\U0001f504 Aggiorno l\'app e ricarico la pagina…'; }catch(e){}
+    fblRicaricaPagina();
+    return;
+  }
   // SI RICORDA CHE L'AGGIORNAMENTO L'HAI CHIESTO TU. Serve dopo, quando il pacchetto nuovo e'
   // installato e il service worker lo segnala: a quel punto l'app ricarica da sola invece di
   // lasciare acceso il pulsante «Aggiorna» finche' non si trova la striscia in basso.
@@ -49617,29 +49743,36 @@ async function fblAggiornaPannelloVersione(forza){
   // nessun aggiornamento web puo' toccarla. Dirgli «sei all'ultima versione» era sbagliato; ma
   // anche dirgli solo «c'e' una versione nuova» non basta, perche' premere Aggiorna non servirebbe
   // a niente: va detto che serve il Setup, e perche'.
-  try{
-    const h=await fetchMt5WithTimeout('/health',{},4000);
-    const app=h&&h.ok&&h.data&&h.data.app;
-    if(app&&app.versione){
-      const servita=String(app.versione);
-      const indietro=fblConfrontaVersioni(fblVersioneDaTag(rel.tag),servita)>0;
-      if(indietro&&note){
-        note.style.display='';
-        note.textContent='⚠️ Il ponte su questo computer sta servendo la versione '+servita
-          +' ('+(app.da||'copia installata')+'), mentre la pubblicata è '+fblVersioneDaTag(rel.tag)+'.\n\n'
-          +(app.da==='copia installata'
-            ? 'Vuol dire che sta usando l\'app CONGELATA dentro il programma installato: nessun '
-              +'aggiornamento della pagina può cambiarla. Serve installare il Setup nuovo UNA volta; '
-              +'da lì in poi l\'app si aggiornerà da sola.'
-            : 'Il ponte ha scaricato una copia aggiornata ma è rimasta indietro: riavvia il '
-              +'programma sul computer, oppure installa il Setup nuovo.')
-          +'\n\n'+(note.textContent||'');
-      }
+  // IL PIANO DELL'AGGIORNAMENTO: si chiede al ponte quale copia dell'app sta servendo (e' lui
+  // l'unico che lo sa) e si decide se il pacchetto di installazione serve davvero. Vedi
+  // fblPianoAggiornamento(): la ragione e' la stessa dei 30-40 file nella cartella Download.
+  const pianoAggiornamento=await fblPianoAggiornamento();
+  const app=pianoAggiornamento&&pianoAggiornamento.app;
+  if(app&&app.versione){
+    const servita=String(app.versione);
+    const indietro=fblConfrontaVersioni(fblVersioneDaTag(rel.tag),servita)>0;
+    if(indietro&&note){
+      note.style.display='';
+      note.textContent='⚠️ Il ponte su questo computer sta servendo la versione '+servita
+        +' ('+(app.da||'copia installata')+'), mentre la pubblicata è '+fblVersioneDaTag(rel.tag)+'.\n\n'
+        +(app.da==='copia installata'
+          ? 'Vuol dire che sta usando l\'app CONGELATA dentro il programma installato: nessun '
+            +'aggiornamento della pagina può cambiarla. Serve installare il Setup nuovo UNA volta; '
+            +'da lì in poi l\'app si aggiornerà da sola.'
+          : 'Il ponte ha scaricato una copia aggiornata ma è rimasta indietro: riavvia il '
+            +'programma sul computer, oppure installa il Setup nuovo.')
+        +'\n\n'+(note.textContent||'');
     }
-  }catch(e){}
+  }
+  // E IL PULSANTE DICE QUELLO CHE FARÀ. Se il pacchetto non serve (il programma sul computer
+  // aggiorna l'app da solo), il pulsante ricarica la pagina: scaricare il Setup aggiungerebbe un
+  // file alla cartella Download a ogni versione, senza cambiare niente.
   if(btn){
     btn.style.display=nuova?'':'none';
-    if(nuova)btn.onclick=()=>fblApplicaAggiornamento(rel.release,rel.tagRaw||('v'+rel.tag),btn);
+    if(nuova){
+      btn.textContent=fblEtichettaAggiorna(pianoAggiornamento);
+      btn.onclick=()=>fblApplicaAggiornamento(rel.release,rel.tagRaw||('v'+rel.tag),btn);
+    }
   }
   if(nuova)fblMostraPulsanteAggiorna(rel.release,rel.tagRaw||('v'+rel.tag));
   return {installata,remota:rel.tag,nuova};

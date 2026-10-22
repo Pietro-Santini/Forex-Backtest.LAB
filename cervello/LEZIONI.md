@@ -744,3 +744,26 @@
   2026.) Quando e' il ponte a servire una copia congelata, il pulsante non puo' funzionare: il
   pannello deve dire CHE COSA sta succedendo e che serve il Setup. Un messaggio giusto ma inutile
   fa perdere piu' tempo di un messaggio assente.
+- Una porta nuova per interrogare il ponte e' una porta che nessuno conosce. (22 ottobre 2026.)
+  Per decidere se il pacchetto di installazione serviva, ho scritto una sonda con una `fetch`
+  sua (3 secondi, AbortController). Il test di prima, `versione_due_numerazioni`, e' diventato
+  rosso: mockava `fetchMt5WithTimeout`, non `fetch`. La sonda e' passata dalla STESSA porta di
+  sempre (`fetchMt5WithTimeout('/health')`) e il test e' tornato verde senza toccarlo. Quando
+  serve una domanda nuova al ponte, si passa dalla porta che c'e': i test di prima devono
+  continuare a poter parlare con lui, e il tempo di attesa deve restare quello gia' pensato
+  (su localhost un servizio spento rifiuta la connessione all'istante: il timeout e' solo un
+  soffitto, non un'attesa).
+
+- Un pulsante che scarica una cosa inutile non e' un pulsante, e' un distributore di file. (22
+  ottobre 2026.) «30-40 file nella cartella Download invece di uno sostituito»: ogni release
+  pubblicata scaricava un Setup, e ogni Setup era un file in piu'. Il nome con il suffisso
+  `(1)`, `(2)` lo mette il BROWSER (una pagina web non puo' sostituire un file nella cartella
+  dell'utente), ma il file lo scaricavano NOI, e lo scaricavamo anche quando non serviva a
+  niente: il programma installato gia' sapeva aggiornarsi da solo. Prima di litigare con il
+  nome del file, bisogna chiedersi se il file serve.
+
+- Il prodotto spesso sa gia' la risposta: e' il prodotto che non se la chiede. (22 ottobre 2026.)
+  Il ponte dichiarava gia' in `/health` quale copia dell'app stava servendo (`app.da`): se e'
+  una copia aggiornata, il Setup non avrebbe portato niente. La domanda esisteva, la risposta
+  era gia' li', e noi scaricavamo lo stesso. Il costo piu' grosso non e' stato scrivere la
+  funzione: e' stato accorgersi che la domanda si poteva fare.
