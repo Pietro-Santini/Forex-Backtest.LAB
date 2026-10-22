@@ -41,7 +41,12 @@ test('le colonne sono le stesse della tabella MetaTrader, nello stesso ordine', 
       // CAMBIATO di nuovo (richiesto, v166): c'e' anche "Eseguita", l'orario in cui la
       // posizione e' stata aperta. Aggiunta ANCHE a MT5, come l'Origine, perche' la riga qui
       // sotto resti vera - ed e' stato proprio questo test a segnalare che su MT5 mancava.
-      ['#', 'Asset', 'Origine', 'Eseguita', 'Side', 'Entry', 'SL', 'TP', 'R/R', 'Lotti', 'Margine', 'Prezzo corrente', 'P/L live', '']);
+      // CAMBIATO di nuovo (richiesto): in fondo c'e' la STRISCIA DI VICINANZA - verde vicino al
+      // target, rossa vicino allo stop, azzurra vicino allo stop a profitto. E' senza intestazione
+      // (il secondo '') perche' e' un segnale a colpo d'occhio, non una colonna da leggere.
+      // Aggiunta a ENTRAMBE le tabelle, come l'Origine e l'Eseguita prima di lei, perche' la riga
+      // qui sotto resti vera.
+      ['#', 'Asset', 'Origine', 'Eseguita', 'Side', 'Entry', 'SL', 'TP', 'R/R', 'Lotti', 'Margine', 'Prezzo corrente', 'P/L live', '', '']);
     // Stesse colonne di MT5, tolto il «Ticket» che su Kraken non esiste.
     assert.deepEqual(r.kraken, r.mt5.filter(x => x !== 'Ticket'));
     assert.deepEqual(errori, []);

@@ -64,6 +64,12 @@ posizione.
 
 ## 2. Da fare - difetti da misurare
 
+### 2.0 ~~A mercato aperto la pagina rallenta~~ FATTO (v2.0.17) - IL PIU' GROSSO
+L'indizio del proprietario («a mercato chiuso il cambio asset e' istantaneo») indicava il punto
+esatto: ogni prezzo in arrivo buttava le cache delle candele aggregate e dei tempi, costringendo
+a riaggregare tutto lo storico. MISURATO: 58 ms di blocco PER OGNI PREZZO su 200.000 candele,
+diventati 2,11 ms. Vedi cache_coda_live.test.mjs.
+
 ### 2.1 Degrado delle prestazioni nel tempo
 «Appena installato era fluidissimo, zero freeze, tre schede aperte senza problemi. Dopo un po'
 incominciava a calare». INDIZIO CHE VALE PIU' DI OGNI ALTRO: una cosa che parte veloce e peggiora
@@ -86,7 +92,14 @@ oppure altra strada) e' da fare col proprietario.
 
 ## 3. Da fare - funzioni nuove
 
-### 3.1 Apertura immediata al prezzo corrente (soldi veri)
+### 3.1 ~~Apertura immediata al prezzo corrente~~ FATTO (v2.0.18)
+L'apertura senza grafico ESISTEVA gia' ed era la strada principale. Si fermava davanti a
+tgMetaNota(): senza decimali e dimensione del contratto si ricadeva su tgPortaAGrafico, che
+aspetta fino a 15 secondi. Ora quei numeri si chiedono a /symbol-check in una richiesta sola.
+LA REGOLA: se non arrivano TUTTI, non si procede - meglio aspettare che aprire col contratto
+sbagliato. Vecchio titolo della voce, per storia:
+
+### 3.1-vecchio Apertura immediata al prezzo corrente (soldi veri)
 Quando arriva un segnale su un asset diverso da quello a grafico, la posizione deve aprirsi SUBITO
 al prezzo corrente di quell'asset, senza aspettare il caricamento del grafico: «sono quei secondi,
 magari un minuto, che ci fanno perdere l'apertura precisa». Vale per cripto, forex, indici, azioni.
@@ -104,7 +117,13 @@ Nel pulsante «apri N posizioni», accanto al rischio totale, la stessa scelta c
 strategie: rischio basato sullo stop loss, oppure quanto capitale investire. Cambia molto per le
 cripto.
 
-### 3.3 Strisce di vicinanza nella lista posizioni
+### 3.3 ~~Strisce di vicinanza nella lista posizioni~~ FATTO (v2.0.18)
+Ultima colonna a destra in entrambe le tabelle, Style -> Posizioni per spegnerle e per la
+percentuale. TP e stop si misurano DALL'ENTRATA, lo stop a profitto DALL'ULTIMO TARGET
+RAGGIUNTO: misurarli dal prezzo di adesso darebbe una striscia sempre accesa. Gli ordini
+pendenti non la ricevono. Vecchia voce:
+
+### 3.3-vecchio Strisce di vicinanza nella lista posizioni
 A destra di ogni riga (Kraken e MT5), una striscia verticale quando la posizione e' al 10% dal
 livello: verde TP, rossa SL, azzurra stop profit. TP e SL si misurano dall'ENTRATA; lo stop profit
 dall'ULTIMO TP RAGGIUNTO. Percentuale modificabile e spegnibile in Style, in una nuova sezione
