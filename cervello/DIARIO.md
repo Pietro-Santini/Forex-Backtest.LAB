@@ -2689,3 +2689,54 @@ meta' di quei controlli e' gia' morta oggi.
 ### La lezione ⭐
 **Quando l'utente dice «succede QUANDO...», quella e' la variabile da isolare.** Non e' una
 lamentela: e' un esperimento gia' fatto, con il controllo incluso.
+
+## 22 ottobre 2026 (continua) - Otto id duplicati, e meta' dei controlli erano morti
+
+### Il conto, rifatto due volte
+
+La consegna diceva «nove id duplicati». Ho rifatto il conto e il numero e' un altro, ma non
+perche' la consegna sbagliasse: perche' **contare sul testo non e' contare sul DOM**.
+
+```
+nel testo del file : 13 id ripetuti
+nel DOM vero       :  8 id ripetuti  (tutti x2)
+```
+
+Cinque dei tredici non esistevano: uno stava dentro un commento HTML, tre dentro stringhe
+JavaScript, e uno viene **creato a runtime** sostituendo il primo (il codice rimpiazza tutto
+il contenuto di un contenitore, quindi ne resta uno solo).
+
+### Cosa facevano davvero i duplicati
+
+`getElementById` restituisce **il primo**. Quindi:
+
+| id | copie | cosa succedeva |
+|---|---|---|
+| `tgToggleBtn` | 2 | il secondo pulsante «Collegamento: -» non cambiava mai testo e non reagiva |
+| `tgSetupBox` | 2 | la seconda schermata di prima configurazione era irraggiungibile |
+| `tgApiId` / `tgApiHash` | 2 | la seconda casella api_id/api_hash non accettava scrittura |
+| `tgSalvaCredBtn` | 2 | il secondo «Salva su questo dispositivo» era finto |
+| `tgDimenticaTelBtn` | 2 | il secondo «Esci da Telegram» restava nascosto |
+| `tgTelefonoSalvatoLbl` / `tgTelefonoForgetBtn` | 2 | la seconda riga del numero salvato era morta |
+
+Non era un difetto di stile: erano **controlli fantasma**, e spostando il primo blocco in
+un'altra sezione si sarebbe «acceso» il secondo, cambiando il comportamento in modo
+inesplicabile. Per questo la consegna chiedeva di risolverli **prima** di spostare.
+
+### La regola, e il test che la rende permanente
+
+**Si tiene il PRIMO e si butta il SECONDO** (il primo e' quello che il codice usa davvero).
+
+La cancellazione l'ho fatta con uno script (`laboratorio/strumenti/togli_dup_id.py`) e non a
+mano: il file ha 46.000 righe, i blocchi contengono trattini lunghi ed emoji, e i due blocchi
+erano **identici** - a mano il rischio di cancellare quello vivo era reale. Lo script, prima
+di scrivere, verifica che ogni blocco da togliere contenga davvero l'id atteso, che la copia
+viva stia prima, e dopo aver scritto che ogni id esista **una volta sola**. Se il file e'
+cambiato sotto i piedi, esce e non tocca niente.
+
+Il test che lo protegge per sempre (`laboratorio/app/id_univoci.test.mjs`) conta sul DOM
+vero, in un browser vero, e pretende **zero** id ripetuti. Ha anche la **prova di controllo**:
+crea un id duplicato apposta e verifica che il controllo lo veda, e che torni pulito quando
+sparisce. Un test che non puo' diventare rosso non dimostra niente.
+
+Collaudo completo: **Falliti: 0**.

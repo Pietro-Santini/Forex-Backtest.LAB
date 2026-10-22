@@ -715,6 +715,15 @@
   ce n'erano NOVE, quasi tutti nella zona da riorganizzare: getElementById prende il primo, quindi
   meta' di quei controlli era gia' morta senza che nessuno se ne fosse accorto. Spostando il primo
   si «accende» il secondo, e il comportamento cambia in modo inspiegabile.
+  **E si contano sul DOM VIVO, non sul testo del file.** (22 ottobre 2026, stessa giornata.) Nel
+  testo del sorgente ne sembrano TREDICI: cinque pero' non esistono - uno sta dentro un commento,
+  tre dentro stringhe JavaScript, e uno viene creato a runtime sostituendo il primo (il codice
+  rimpiazza tutto il contenuto del contenitore, quindi ne resta uno solo). Nel DOM vero i
+  duplicati erano OTTO, tutti `x2`. Un conto fatto sul testo sbaglia: fa perdere tempo a cercare
+  duplicati che non ci sono, e fa sfuggire quelli che ci sono. La regola quando si trova un
+  duplicato: **si tiene il PRIMO e si butta il SECONDO** (il primo e' quello che `getElementById`
+  restituisce, e quindi quello che il codice usa davvero). Con un test che conta sul DOM: tre
+  righe, e protegge per sempre.
 
 - Due numerazioni diverse non si confrontano a numeri. (22 ottobre 2026.) Il pannello diceva
   «Versione installata: 167 - Ultima pubblicata: v2.0.19 (sei all'ultima versione)»: 167 e' la
