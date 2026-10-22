@@ -686,3 +686,32 @@
 - Una barra di avanzamento ferma a zero sembra un programma bloccato; una ferma a cento dice una
   cosa falsa. (21 ottobre 2026.) Mai zero mentre qualcosa succede, mai cento DENTRO un passo, ma
   cento esatto quando i passi sono finiti davvero.
+
+- Un indizio dell'utente puo' valere piu' di un profilatore. (22 ottobre 2026.) «La velocita' della
+  pagina accelera veramente tanto quando i mercati sono chiusi» non era un'impressione: era una
+  misura, e indicava il punto esatto. A mercato aperto ogni prezzo buttava le cache dell'aggregazione
+  (confrontano il RIFERIMENTO dell'array, e il percorso Live ne crea uno nuovo a ogni tick): 58 ms
+  di blocco per ogni singolo prezzo su 200.000 candele, diventati 2,11. Quando l'utente dice
+  «succede QUANDO...», quella e' la variabile da isolare.
+
+- La voce piu' cara di un giro non e' quasi mai quella che si sospetta. (22 ottobre 2026.) Cercando
+  il costo per tick sospettavo la copia dell'array: 0,69 ms. Era invece la RETE DI SICUREZZA che
+  riconvalidava tutte le 200.000 date a ogni prezzo: 17,57 ms. Si misura la ripartizione, non si
+  ottimizza il sospettato.
+
+- Uno strumento di misura deve rimettere a posto tutto quello che tocca. (22 ottobre 2026.) Se
+  restassero avvolti setTimeout, draw, update e i pezzi del disegno, ogni disegno pagherebbe per
+  sempre il costo della misura: il rallentamento peggiorerebbe PROPRIO dopo averlo misurato. C'e'
+  un test che lo tiene fermo, ed elenca anche i pezzi.
+
+- Due salvataggi identici su Firestore costano come due diversi. (22 ottobre 2026.) Si paga a
+  scrittura e a byte: confrontare una firma del contenuto con quella dell'ultima scrittura RIUSCITA
+  toglie lo spreco piu' facile. Due trappole evitate: vale anche per le scritture «forzate» (force
+  scavalca il limite di frequenza, non autorizza a pagare due volte), e la firma si aggiorna solo
+  DOPO il successo - aggiornarla prima vorrebbe dire credere di aver salvato, cioe' un risparmio
+  pagato coi dati.
+
+- Prima di spostare pezzi di interfaccia, contare gli id duplicati. (22 ottobre 2026.) Nel markup
+  ce n'erano NOVE, quasi tutti nella zona da riorganizzare: getElementById prende il primo, quindi
+  meta' di quei controlli era gia' morta senza che nessuno se ne fosse accorto. Spostando il primo
+  si «accende» il secondo, e il comportamento cambia in modo inspiegabile.
