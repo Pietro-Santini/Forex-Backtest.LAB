@@ -112,6 +112,9 @@ candele               : 50000
 posizioniAperte       : 28
 ```
 
+**AGGIORNAMENTO del 22 ottobre, pomeriggio: i tick sono diventati 752.683, la memoria 721 MB, e il
+cambio asset blocca per 2.818 ms. Tutto misurato: vedi la sezione 7-bis.**
+
 **Lo scatto da 1.264 ms è quasi certamente il salvataggio del registro tick** (sul banco: 100 ms
 per 197k tick, e la sua macchina è ~10× più lenta). La cura è scritta sotto, al punto 7 della
 roadmap: **salvare il registro a blocchi**, riscrivendo solo quello in coda. Il codice è già
@@ -240,14 +243,113 @@ già scritte, `fblTickLeggiBlocchi()`, e la lettura all'avvio che prova prima i 
 **Test obbligatori:** rileggere dopo aver scritto dà lo stesso registro; il vecchio formato si
 legge ancora; un blocco pieno non viene riscritto.
 
-**7b. I 67 ms per disegno.** Nel banco lo stesso scenario costa 4-9 ms, quindi la differenza è
-**quello che c'è disegnato sopra**. Lo strumento ora cronometra i singoli pezzi: **fai fare una
-misura al proprietario e guarda `pezziDelDisegno_ms`**, poi lavora sul più caro. Non ottimizzare a
-caso: nel banco il footprint non pesava, contro ogni aspettativa.
+**7b. Il costo del disegno - MISURATO, e il sospetto era sbagliato.** Vedi la sezione 7-bis piu'
+sotto per i numeri completi. In breve: il disegno si mangia il 78% del tempo, ma tutti i pezzi
+cronometrati insieme fanno il 3,4%. **Il 96,6% sta nel CORPO di `draw()`**, non nelle funzioni che
+chiama - e il footprint, sospettato numero uno, costa meno di un millisecondo. Il passo successivo
+e' aggiungere cronometri DENTRO draw(), sezione per sezione, e rifare la misura.
 
 **7c. Il degrado nel tempo** (parte fluido e peggiora). Serve il confronto di due misure, una
 quando va bene e una quando rallenta. Già misurato e **scartato**: il registro tick al suo tetto
 costa 28 ms da ricostruire, `update()` e `draw()` con 5.000 operazioni costano 3,7 e 6,4 ms.
+
+---
+
+## 7-bis. LE MISURE VERE DEL 22 OTTOBRE (sulla macchina del proprietario)
+
+Queste non sono stime: sono tre misure prese con lo strumento dentro l'app, sul computer dove il
+difetto vive. **Leggile prima di toccare le prestazioni**, perché smentiscono due sospetti che
+sembravano ovvi.
+
+### Il ponte si aggiorna da solo: confermato
+
+```json
+{"status":"ok","app":{"versione":"2.0.19","da":"copia aggiornata",
+ "cartella_aggiornamenti":"C:\\Users\\pietro\\AppData\\Local\\Programs\\Forex Backtest LAB\\app_aggiornata"}}
+```
+
+`"da": "copia aggiornata"` vuol dire che il ponte ha scaricato `app.html` e `sw.js` dal sito e sta
+servendo quelli. **L'aggiornatore della v2.0.15 funziona.** Da qui in poi le modifiche ad
+`app.html` arrivano senza reinstallare: serve il Setup solo per `bridge.py` e
+`mt5_feed_server.py`.
+
+### Misura 1 — muovendo il grafico
+
+```
+secondi               : 5
+fotogrammiAlSecondo   : 27.5          (dovrebbero essere ~60)
+scatti                : 19
+scattoPeggiore_ms     : 267
+disegni               : 121
+disegnoMedio_ms       : 32.04
+aggiornamenti         : 70
+aggiornamentoMedio_ms : 2.6           ← update() NON e' piu' un problema
+memoria_MB            : 721           ← era 111 due ore prima
+tickFootprint         : 752683        ← erano 197.373
+bucketFootprint       : 3193
+operazioni            : 760
+candele               : 50000
+pezziDelDisegno_ms    : drawClosedTradeMarkers=131  krakenDisegnaGrafico=1  drawFootprintVpocLine=1
+pezziTotale_ms        : 133
+```
+
+### Misura 2 — cambiando asset
+
+```
+fotogrammiAlSecondo   : 21.1
+scatti                : 5
+scattoPeggiore_ms     : 2818          ← un blocco di QUASI TRE SECONDI
+disegni               : 14
+disegnoMedio_ms       : 53.32
+aggiornamenti         : 34
+aggiornamentoMedio_ms : 2.46
+memoria_MB            : 667
+pezziDelDisegno_ms    : drawClosedTradeMarkers=15
+```
+
+### Cosa dicono questi numeri ⭐ (la parte che conta)
+
+**1. Il costo NON e' nei pezzi che credevo.** In 5 secondi il disegno e' costato
+`121 x 32,04 = 3.877 ms`, cioe' il **78% del tempo**. Ma tutti i pezzi cronometrati insieme fanno
+**133 ms: il 3,4%**. `drawClosedTradeMarkers` e' il piu' caro dei tre e fa 1,1 ms per disegno -
+**non e' lui**. E `drawFootprintCandle` non compare affatto: costa meno di un millisecondo, quindi
+**il footprint e' innocente**, contro ogni aspettativa (era il sospettato numero uno).
+
+> **Il 96,6% del costo sta nel CORPO di `draw()`**, non nelle funzioni che chiama: il giro sulle
+> candele visibili, la griglia, la scala dei prezzi, gli indicatori disegnati in linea.
+> **E' li' che va guardato**, e il modo giusto e' aggiungere altri cronometri DENTRO draw()
+> (sezione per sezione) e rifare la misura, non ottimizzare a intuito.
+
+**2. `update()` non e' piu' un problema.** 2,6 ms e 2,46 ms nelle due misure, contro i 21,47 di
+quella presa col grafico vuoto. Quel 21,47 era un caso particolare (nessuna candela), e non va
+inseguito.
+
+**3. La memoria e' esplosa: 111 MB -> 721 MB in due ore**, e i tick del footprint sono passati da
+197.373 a **752.683**. Il tetto e' `FOOTPRINT_MAX_TICKS_PER_ASSET = 150.000` **per asset**: con
+cinque asset visitati si arriva proprio li'. Sono i due numeri che crescono insieme, e vanno
+guardati insieme: 721 MB di memoria significano pressione sul raccoglitore, e ogni raccolta e'
+uno scatto.
+
+**4. Il cambio asset blocca per 2.818 ms.** E' il difetto piu' grosso rimasto, e non e' il
+disegno (14 disegni in quella misura). Candidati, in ordine di probabilita':
+- il salvataggio del registro tick su IndexedDB: **750.000 tick** da copiare (vedi 7a: con 197.000
+  costava gia' ~1,2 s su questa macchina, e ora sono quasi quattro volte tanti);
+- la ricostruzione dei bucket del footprint per il nuovo asset;
+- la lettura dello storico del nuovo asset.
+**Il modo per distinguerli:** cronometrare `saveFootprintTicksNow`,
+`footprintRebuildBucketsForCurrentAsset` e il caricatore dello storico - si aggiungono all'elenco
+`PEZZI_UPD` dentro `fblMisuraPrestazioni` e si rifa' la misura cambiando asset.
+
+### L'ordine giusto per lavorarci
+
+1. **7a — il registro tick a blocchi** (`tick_blocchi_DA_APPLICARE.py`). Con 750.000 tick e'
+   diventato ancora piu' urgente di quando e' stato scritto: e' il candidato numero uno per i
+   2.818 ms del cambio asset, e si risolve senza toccare il disegno.
+2. **Altri cronometri dentro `draw()`**, poi una misura nuova. Senza, si ottimizza al buio: la
+   prima misura ha gia' smentito due sospetti su due.
+3. **Il tetto dei tick per asset.** 150.000 x 5 asset = 750.000 oggetti in memoria. Vale la pena
+   chiedere al proprietario quanto storico di footprint gli serve davvero: se bastano le ultime
+   48 ore, il tetto puo' scendere di molto e la memoria con lui.
 
 ### 4. Il margine dello spread solo intorno alla chiusura del mercato
 

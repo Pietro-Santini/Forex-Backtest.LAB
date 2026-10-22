@@ -113,3 +113,23 @@ test('quello che non si sa resta vuoto, non diventa zero', async () => {
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+test('una misura presa a vuoto lo dice, invece di sembrare una vittoria', async () => {
+  // SUCCESSO DAVVERO il 22 ottobre: una misura con il grafico vuoto ha dato 88 fotogrammi al
+  // secondo e zero scatti, e sembrava che il rallentamento fosse sparito. Non si era disegnato
+  // niente. Una misura presa a vuoto non dice che va tutto bene: dice che non c'era niente da
+  // fare - e confonderle fa smettere di cercare proprio quando si era sulla strada giusta.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async () => {
+      rows = []; baseRows = [];
+      const vuota = await fblMisuraPrestazioni(1);
+      return {avviso: vuota.ATTENZIONE || null, candele: vuota.candele};
+    });
+    assert.equal(r.candele, 0, 'si parte da un grafico vuoto');
+    assert.ok(r.avviso, 'con il grafico vuoto la misura deve avvisare, non tacere');
+    assert.match(r.avviso, /VUOTO/,
+      'e deve dire PERCHE\' non vale: ' + r.avviso);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});

@@ -715,3 +715,23 @@
   ce n'erano NOVE, quasi tutti nella zona da riorganizzare: getElementById prende il primo, quindi
   meta' di quei controlli era gia' morta senza che nessuno se ne fosse accorto. Spostando il primo
   si «accende» il secondo, e il comportamento cambia in modo inspiegabile.
+
+- Due numerazioni diverse non si confrontano a numeri. (22 ottobre 2026.) Il pannello diceva
+  «Versione installata: 167 - Ultima pubblicata: v2.0.19 (sei all'ultima versione)»: 167 e' la
+  VECCHIA numerazione (un contatore), 2.0.19 la nuova, e a numeri 167 batte 2 al primo pezzo.
+  L'app concludeva che l'installata fosse piu' nuova della pubblicata. Lo stesso confronto aveva
+  un SECONDO mestiere che nessuno guardava - scegliere quale cache del service worker e' la piu'
+  recente - e sceglieva la vecchia: ecco perche' l'app servita restava indietro MENTRE il pannello
+  dichiarava di essere aggiornata. Un difetto solo, due sintomi, e il secondo spiegava il primo.
+
+- Quando una cosa funziona su un dispositivo e non sull'altro, la differenza E' la causa.
+  (22 ottobre 2026.) «Sui dispositivi mobili funziona bene, solo per il PC non funzionava»: sul
+  telefono l'app arriva dal sito o dall'APK e il service worker si aggiorna normalmente; sul
+  computer la serve il PONTE, e un ponte anteriore alla v2.0.15 serve l'sw.js CONGELATO
+  nell'eseguibile - che non cambia mai, quindi il browser non vede nessun aggiornamento, per
+  sempre. La frase del proprietario conteneva gia' la risposta.
+
+- Dire «c'e' una versione nuova» non basta se premere Aggiorna non serve a niente. (22 ottobre
+  2026.) Quando e' il ponte a servire una copia congelata, il pulsante non puo' funzionare: il
+  pannello deve dire CHE COSA sta succedendo e che serve il Setup. Un messaggio giusto ma inutile
+  fa perdere piu' tempo di un messaggio assente.

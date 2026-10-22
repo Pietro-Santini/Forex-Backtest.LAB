@@ -44678,8 +44678,17 @@ function fblMisuraPrestazioni(secondi){
  const PEZZI=['drawClosedTradeMarkers','fblCronoDisegna','krakenDisegnaGrafico','drawFootprintCandle',
               'drawFootprintVpocLine','drawTpSlZoneBox','drawOpenTradeProgress','drawNewsMarkers',
               'drawDrawings','drawIndicators','drawHeatmap','drawOrderBook'];
+ // E I PEZZI DELL'AGGIORNAMENTO, che e' un'altra cosa dal disegno e si paga lo stesso.
+ // MISURATO sulla seconda misura del proprietario (22 ottobre, 07:58): aggiornamento medio
+ // 21,47 ms con il grafico VUOTO (candele: 0, disegni: 0). Nel banco, con i suoi stessi numeri -
+ // 578 operazioni, 34 posizioni, 19 disegni - lo stesso update() costa 4,56 ms. La differenza e'
+ // troppo grande per essere solo la macchina, quindi va spezzata anche questa.
+ const PEZZI_UPD=['updateLivePL','updateQuickTradeBar','syncMarketChartSelect','refreshRiskSuggestion',
+                  'refreshSlTpEuroPreview','refreshSlTpEuroPreviewPending','checkPropFirmRules',
+                  'applyMt5AccountStatsToPanel','applyKrakenStatsToPanel','statsTrades',
+                  'krakenPosPannello','renderPositionsTable','fblScadeDecimali'];
  const veriPezzi={}, costoPezzi={};
- PEZZI.forEach(nome=>{
+ PEZZI.concat(PEZZI_UPD).forEach(nome=>{
   try{
    const f=window[nome];
    if(typeof f!=='function')return;
@@ -44758,6 +44767,17 @@ function fblMisuraPrestazioni(secondi){
     r.pezziDelDisegno_ms=cari.map(x=>x[0]+'='+x[1]).join('  ');
     r.pezziTotale_ms=cari.reduce((s2,x)=>s2+x[1],0);
    }
+   // SE LA MISURA NON VALE, LO DEVE DIRE LEI.
+   // Successo davvero il 22 ottobre: una misura presa con il grafico VUOTO ha dato 88 fotogrammi
+   // al secondo e zero scatti, e sembrava che il rallentamento fosse sparito. Non si era
+   // disegnato niente - `candele` e `disegni` erano a zero. Una misura presa a vuoto non dice
+   // che va tutto bene: dice che non c'era niente da fare. Confonderle fa smettere di cercare
+   // proprio quando si era sulla strada giusta.
+   const avvisi=[];
+   if(!r.candele)avvisi.push('il grafico era VUOTO (nessuna candela): questa misura non dice niente sul disegno');
+   else if(!r.disegni)avvisi.push('non si e\' disegnato niente in questi secondi: muovi il grafico mentre misuri');
+   if(r.modo!=='Live')avvisi.push('non eri in Live: il carico vero arriva coi dati dal mercato');
+   if(avvisi.length)r.ATTENZIONE=avvisi.join(' · ');
    const testo=Object.keys(r).map(k=>k.padEnd(22)+': '+r[k]).join('\n');
    if(out)out.textContent=testo;
    const cp=$('fblCopiaPrestBtn'); if(cp)cp.style.display='';
@@ -49486,7 +49506,30 @@ function fblPiattaforma(){
 // vive davvero - la cache del service worker che sta servendo la pagina, oppure il sw.js presente sul
 // dispositivo (nell'APK e' il file incorporato).
 const fblCaricataIl = new Date();
+// LE DUE NUMERAZIONI NON SI POSSONO CONFRONTARE A NUMERI.
+//
+// SEGNALATO dal proprietario con la schermata sotto gli occhi: «mi dice che l'applicazione e'
+// all'ultima versione mentre invece ancora non lo e'... mi dice v2.0.19 ma in realta' mancano
+// le cose della 2.0.18 e 2.0.19, manca proprio il tasto delle prestazioni». Il pannello
+// scriveva: «Versione installata: 167 - Ultima pubblicata: v2.0.19 (sei all'ultima versione)».
+//
+// LA CAUSA: 167 e' la VECCHIA numerazione (un contatore che saliva di uno a ogni consegna),
+// 2.0.19 la NUOVA (maggiore.minore.correzione). Confrontandole a numeri, 167 batte 2 al primo
+// pezzo, quindi l'app concludeva che l'installata fosse PIU' NUOVA della pubblicata e diceva
+// «sei all'ultima versione» a chi era indietro di dieci versioni.
+// E lo stesso confronto sceglie anche QUALE cache del service worker e' la piu' recente
+// (fblVersioneDaChiavi): con tutte e due presenti, sceglieva la vecchia - ed e' il motivo per
+// cui l'app servita restava indietro mentre il pannello dichiarava di essere aggiornata.
+//
+// LA REGOLA, che e' un fatto di questo progetto e non un'euristica: chi ha un numero SOLO (e
+// grande) sta sulla vecchia numerazione, ed e' sempre indietro rispetto a una con i punti.
+function fblVecchiaNumerazione(v){
+  const p=String(v||'').trim().split('.');
+  return p.length===1 && (parseInt(p[0],10)||0)>=50;
+}
 function fblConfrontaVersioni(a,b){
+  const va=fblVecchiaNumerazione(a), vb=fblVecchiaNumerazione(b);
+  if(va!==vb)return va?-1:1;   // la numerazione nuova vince sempre sulla vecchia
   const pa=String(a||'').split('.').map(n=>parseInt(n,10)||0);
   const pb=String(b||'').split('.').map(n=>parseInt(n,10)||0);
   for(let i=0;i<Math.max(pa.length,pb.length);i++){
@@ -49514,6 +49557,24 @@ function fblVersioneDaTag(tag){
 async function fblVersioneInstallata(){
   try{
     if(typeof caches!=='undefined'&&caches.keys){
+      const chiavi=await caches.keys();
+      // PULIZIA DELLE CACHE DELLA VECCHIA NUMERAZIONE.
+      // sw.js cancella le cache vecchie quando si ATTIVA, ma sul computer il service worker
+      // nuovo puo' non attivarsi mai: li' la pagina la serve il ponte, e un ponte anteriore
+      // alla v2.0.15 serve l'sw.js CONGELATO nell'eseguibile, che non cambia mai - quindi il
+      // browser non vede nessun aggiornamento. Sul telefono non succede, ed e' esattamente
+      // quello che il proprietario ha osservato: «sui dispositivi mobili funziona bene, solo
+      // per il PC non funzionava».
+      // Se c'e' una cache della numerazione NUOVA, quelle della vecchia non servono piu' a
+      // nessuno: si tolgono, cosi' il pannello smette di leggere la versione sbagliata.
+      try{
+        const nuove=chiavi.filter(k=>/^forex-backtest-lab-v/.test(k)&&!fblVecchiaNumerazione(String(k).replace('forex-backtest-lab-v','')));
+        if(nuove.length){
+          const vecchie=chiavi.filter(k=>/^forex-backtest-lab-v/.test(k)&&fblVecchiaNumerazione(String(k).replace('forex-backtest-lab-v','')));
+          await Promise.all(vecchie.map(k=>caches.delete(k).catch(()=>{})));
+          if(vecchie.length)console.log('[Versione] tolte '+vecchie.length+' cache della vecchia numerazione: '+vecchie.join(', '));
+        }
+      }catch(e){}
       const v=fblVersioneDaChiavi(await caches.keys());
       if(v)return v;
     }
@@ -49570,6 +49631,38 @@ async function fblAggiornaPannelloVersione(forza){
     if(rel.note){note.style.display='';note.textContent='Cosa cambia in questa versione:\n'+rel.note.slice(0,1200);}
     else{note.style.display='none';note.textContent='';}
   }
+  // SE E' IL PONTE A SERVIRE UNA COPIA VECCHIA, LO SI DICE - CON LE PAROLE GIUSTE.
+  //
+  // SEGNALATO dal proprietario: «non capisco perche' il computer mi dice sempre che
+  // l'applicazione e' stata portata all'ultima versione mentre invece ancora non lo e'... non gli
+  // arriva il pacchetto di installazione vero e proprio ma una finta che gli fa credere di essere
+  // aggiornato». E poi: «sui dispositivi mobili funziona bene, solo per il PC non funzionava».
+  //
+  // IL PERCHE', che prima restava invisibile: sul computer la pagina la serve il ponte. Un ponte
+  // anteriore alla v2.0.15 serve l'app CONGELATA dentro l'eseguibile, e quella non cambia mai -
+  // nessun aggiornamento web puo' toccarla. Dirgli «sei all'ultima versione» era sbagliato; ma
+  // anche dirgli solo «c'e' una versione nuova» non basta, perche' premere Aggiorna non servirebbe
+  // a niente: va detto che serve il Setup, e perche'.
+  try{
+    const h=await fetchMt5WithTimeout('/health',{},4000);
+    const app=h&&h.ok&&h.data&&h.data.app;
+    if(app&&app.versione){
+      const servita=String(app.versione);
+      const indietro=fblConfrontaVersioni(fblVersioneDaTag(rel.tag),servita)>0;
+      if(indietro&&note){
+        note.style.display='';
+        note.textContent='⚠️ Il ponte su questo computer sta servendo la versione '+servita
+          +' ('+(app.da||'copia installata')+'), mentre la pubblicata è '+fblVersioneDaTag(rel.tag)+'.\n\n'
+          +(app.da==='copia installata'
+            ? 'Vuol dire che sta usando l\'app CONGELATA dentro il programma installato: nessun '
+              +'aggiornamento della pagina può cambiarla. Serve installare il Setup nuovo UNA volta; '
+              +'da lì in poi l\'app si aggiornerà da sola.'
+            : 'Il ponte ha scaricato una copia aggiornata ma è rimasta indietro: riavvia il '
+              +'programma sul computer, oppure installa il Setup nuovo.')
+          +'\n\n'+(note.textContent||'');
+      }
+    }
+  }catch(e){}
   if(btn){
     btn.style.display=nuova?'':'none';
     if(nuova)btn.onclick=()=>fblApplicaAggiornamento(rel.release,rel.tagRaw||('v'+rel.tag),btn);

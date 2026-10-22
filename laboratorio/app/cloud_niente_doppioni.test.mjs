@@ -98,7 +98,14 @@ test('il consumo si vede nella misura delle prestazioni', () => {
   // Senza numeri, il consumo si scopre solo dalla bolletta.
   const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
   const i = src.indexOf('function fblMisuraPrestazioni');
-  const f = src.slice(i, i + 6000);
+  assert.ok(i > 0, 'la funzione di misura deve esistere');
+  // Fino alla funzione SUCCESSIVA, non una finestra a lunghezza fissa: dentro la misura il
+  // codice cresce (ci sono appena entrati i pezzi dell'aggiornamento e l'avviso sulle misure
+  // prese a vuoto) e una finestra corta smetterebbe di vedere quello che cerca - e' gia'
+  // successo due volte in questa sessione.
+  const dentro = src.slice(i);
+  const fine = dentro.search(new RegExp('\\r?\\n(async )?function '));
+  const f = dentro.slice(0, fine > 0 ? fine : 12000);
   assert.match(f, /cloudScritture/, 'quante scritture sono partite');
   assert.match(f, /cloudSaltate/, 'quante sono state risparmiate');
   assert.match(f, /cloudUltimoPeso_KB/, 'e quanto pesa l\'ultima fotografia mandata');
