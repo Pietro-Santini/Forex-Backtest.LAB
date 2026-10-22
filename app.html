@@ -7400,6 +7400,10 @@ if(tradingChannel){
 // schermo) o si sta chiudendo/ricaricando — mai durante il trading attivo.
 let lastFirebaseSyncAt=0;
 const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più eventi scattano insieme
+// Quanto si e' mandato davvero su Firebase, e cosa. Serve a due cose: non riscrivere una
+// fotografia identica (vedi la nota lunga in syncFullStatusToFirebase) e poterlo DIRE nella
+// misura delle prestazioni, cosi' il consumo si guarda invece di immaginarlo.
+let fblCloudUltimaFirma=null, fblCloudUltimoPeso=0, fblCloudScritture=0, fblCloudSaltate=0;
 // CORREZIONE ESPLICITA DELL'UTENTE ("problemi di caricamento delle vecchie posizioni nel trade
 // journal"): il bundle mandato a Firestore includeva SEMPRE l'intero array `trades` per intero
 // (mai tagliato: in locale "resta lo storico completo di sempre", giustamente) dentro un
@@ -7459,7 +7463,45 @@ async function syncFullStatusToFirebase(reason,force){
    bundle.assetChartViews=assetChartViews; // ultima candela vista, per asset e per sessione
    bundle.footprintCells=footprintCollectCloudAggregate(); // backup footprint cloud (celle aggregate, non il log tick grezzo — vedi footprintCollectCloudAggregate())
    const trimmedBundle=trimTradesForCloudBudget(bundle,FIRESTORE_DOC_MAX_BYTES);
+   // NON SI RISCRIVE QUELLO CHE NON E' CAMBIATO.
+   //
+   // CHIESTO dal proprietario: «facciamo in modo di pesare il meno possibile anche il passaggio
+   // di dati con Firebase, perche' sennò sforiamo i livelli massimi di utilizzo gratuiti e
+   // dovremmo iniziare a pagare per le richieste e lo scambio di dati».
+   //
+   // IL CONTO CHE SI PAGA: ogni salvataggio manda l'INTERO pacchetto di sessione - conto,
+   // posizioni, Trade Journal, disegni, ultima candela vista per asset, celle del footprint - e
+   // si avvicina al tetto di 1 MB per documento. Il prezzo di Firestore e' per SCRITTURA e per
+   // BYTE trasferito, quindi due salvataggi identici costano come due diversi: pagare due volte
+   // per la stessa fotografia e' lo spreco piu' facile da togliere.
+   //
+   // COME: si confrontano il peso e una firma del contenuto con quelli dell'ultima scrittura
+   // andata a buon fine. Uguali = non si scrive, e lo si dice nel registro invece di restare
+   // zitti (un salvataggio saltato in silenzio sembra un salvataggio perso).
+   // La firma e' una somma rotolante sui caratteri: costa un passaggio sul testo e non un
+   // calcolo crittografico, che qui non serve - deve distinguere due fotografie, non resistere a
+   // un attacco.
+   let testo='';
+   try{ testo=JSON.stringify(trimmedBundle); }catch(e){ testo=''; }
+   const firma=(()=>{
+    if(!testo)return null;
+    let h=5381;
+    for(let i=0;i<testo.length;i++)h=((h*33)^testo.charCodeAt(i))>>>0;
+    return testo.length+':'+h;
+   })();
+   // Vale ANCHE per le scritture forzate: `force` serve a scavalcare il limite di frequenza
+   // (quattro secondi), non a pagare due volte la stessa fotografia. E la firma si aggiorna solo
+   // DOPO una scrittura riuscita, quindi un tentativo fallito viene comunque rifatto.
+   if(firma && firma===fblCloudUltimaFirma){
+    fblCloudSaltate++;
+    console.log('[Cloud] niente da mandare ('+reason+'): identico all\'ultimo salvataggio, '
+      +Math.round(testo.length/1024)+' KB risparmiati');
+    return;
+   }
    await window.fxbtCloud.save(trimmedBundle);
+   fblCloudUltimaFirma=firma;
+   fblCloudUltimoPeso=testo?testo.length:0;
+   fblCloudScritture++;
  }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
 }
@@ -44574,6 +44616,29 @@ function fblMisuraPrestazioni(secondi){
  const out=$('fblPrestOut'), btn=$('fblMisuraPrestBtn');
  if(out){ out.style.display='block'; out.textContent='Misuro per '+(durata/1000)+' secondi… lascia l\'app come la usi di solito.'; }
  if(btn)btn.disabled=true;
+ // QUALE PEZZO DEL DISEGNO COSTA.
+ //
+ // La prima misura del proprietario (22 ottobre, sulla sua macchina) ha dato: disegno medio
+ // 67,22 ms, 25,6 fotogrammi al secondo, scatto peggiore 1.264 ms. Nel banco di prova lo stesso
+ // scenario - 50.000 candele, 197.373 tick di footprint, 28 posizioni, 577 operazioni - costa
+ // 4-9 ms: dieci volte meno. La differenza non e' la macchina soltanto, e' quello che c'e'
+ // DISEGNATO SOPRA: linee di tendenza, riquadri di struttura, decine di livelli di segnali con
+ // le loro etichette, le bandierine delle notizie, 28 riquadri di posizione.
+ // Invece di indovinare quale di questi pesa, si misurano uno per uno: la prossima misura lo
+ // dira' con un numero. Si avvolgono solo le funzioni che ESISTONO, cosi' l'elenco puo' cambiare
+ // senza rompere niente.
+ const PEZZI=['drawClosedTradeMarkers','fblCronoDisegna','krakenDisegnaGrafico','drawFootprintCandle',
+              'drawFootprintVpocLine','drawTpSlZoneBox','drawOpenTradeProgress','drawNewsMarkers',
+              'drawDrawings','drawIndicators','drawHeatmap','drawOrderBook'];
+ const veriPezzi={}, costoPezzi={};
+ PEZZI.forEach(nome=>{
+  try{
+   const f=window[nome];
+   if(typeof f!=='function')return;
+   veriPezzi[nome]=f; costoPezzi[nome]=0;
+   window[nome]=function(){ const a=performance.now(); try{ return f.apply(this,arguments); } finally { costoPezzi[nome]+=performance.now()-a; } };
+  }catch(e){}
+ });
  return new Promise(resolve=>{
   // --- i risvegli: si contano avvolgendo i programmatori di timer, e si rimette tutto a posto.
   let risvegli=0;
@@ -44601,6 +44666,9 @@ function fblMisuraPrestazioni(secondi){
    window.setTimeout=st; window.setInterval=si;
    try{ window.draw=veriDraw; }catch(e){}
    try{ window.update=veriUpdate; }catch(e){}
+   // Si rimettono a posto anche i pezzi del disegno: vale la stessa regola di sopra - uno
+   // strumento di misura che resta attaccato diventa la causa del rallentamento successivo.
+   Object.keys(veriPezzi).forEach(nome=>{ try{ window[nome]=veriPezzi[nome]; }catch(e){} });
    const sec=(performance.now()-t0)/1000;
    const conta=(o)=>{ try{ return Object.values(o||{}).reduce((n,a)=>n+((a&&a.length)||0),0); }catch(e){ return -1; } };
    const r={
@@ -44623,8 +44691,25 @@ function fblMisuraPrestazioni(secondi){
     nodiPagina:document.getElementsByTagName('*').length,
     candele:(typeof rows!=='undefined'?rows.length:-1),
     modo:(typeof liveModeActive!=='undefined'&&liveModeActive)?'Live':'Storico',
-    mt5:(typeof mt5Connected!=='undefined'&&mt5Connected)?'collegato':'no'
+    mt5:(typeof mt5Connected!=='undefined'&&mt5Connected)?'collegato':'no',
+    // IL CONSUMO DI FIREBASE, che si paga a scrittura e a byte: quante volte si e' scritto da
+    // quando l'app e' aperta, quante si e' evitato perche' non era cambiato niente, e quanto
+    // pesa l'ultima fotografia mandata. Senza questi numeri il consumo si scopre solo dalla
+    // bolletta.
+    cloudScritture:(typeof fblCloudScritture!=='undefined')?fblCloudScritture:null,
+    cloudSaltate:(typeof fblCloudSaltate!=='undefined')?fblCloudSaltate:null,
+    cloudUltimoPeso_KB:(typeof fblCloudUltimoPeso!=='undefined'&&fblCloudUltimoPeso)?Math.round(fblCloudUltimoPeso/1024):null
    };
+   // I pezzi del disegno, dal piu' caro al meno caro e solo quelli che sono costati qualcosa:
+   // un elenco di zeri non aiuta nessuno a leggere.
+   const cari=Object.keys(costoPezzi)
+     .map(nome=>[nome,Math.round(costoPezzi[nome])])
+     .filter(x=>x[1]>=1)
+     .sort((a,b)=>b[1]-a[1]);
+   if(cari.length){
+    r.pezziDelDisegno_ms=cari.map(x=>x[0]+'='+x[1]).join('  ');
+    r.pezziTotale_ms=cari.reduce((s2,x)=>s2+x[1],0);
+   }
    const testo=Object.keys(r).map(k=>k.padEnd(22)+': '+r[k]).join('\n');
    if(out)out.textContent=testo;
    const cp=$('fblCopiaPrestBtn'); if(cp)cp.style.display='';
