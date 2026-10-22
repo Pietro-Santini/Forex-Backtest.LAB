@@ -442,7 +442,7 @@ simulate non ricevono mai il margine.
 Test: `laboratorio/app/margine_chiusura.test.mjs` (9 casi, tempo iniettato), con la prova di
 controllo: con il `app.html` di prima del capitolo, **9 test su 9 rossi**.
 
-### 2. Il replay
+### ✅ 2. Il replay — parzialmente fatto (3 e 4 chiusi, 1 e 2 verificati)
 
 Quattro richieste distinte, tutte dal proprietario:
 
@@ -454,6 +454,12 @@ Quattro richieste distinte, tutte dal proprietario:
    minuti, mancano 3 minuti alla chiusura, si preme stop → deve restare lì, non ricominciare dal
    minuto 15.
 4. **Cambiando asset si esce automaticamente dal replay** e si carica l'ultimo prezzo.
+
+**Stato (2.0.21+):** il punto 1 era già coperto dal test `replay_posizioni.test.mjs` (5 casi); il
+punto 2 è stato fatto (tasto Replay disponibile durante il replay, rinominato «Nuova posizione»);
+il punto 3 è stato fatto (STOP conserva la formazione, PLAY riprende dal punto esatto —
+`replay_stop.test.mjs`); il punto 4 è stato fatto (cambio asset chiama `esciReplayLive()` —
+`replay_asset.test.mjs`). Tutti e tre i fix nuovi hanno la prova di controllo.
 
 **Dove guardare:** `replayAnimTick()` (riga ~22678, cadenza `REPLAY_FRAME_MS=50`),
 `replayAvviaFormazione()`, `replayForm`, `liveReplayActive` (riga ~4246).
