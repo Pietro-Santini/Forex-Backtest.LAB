@@ -2828,12 +2828,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              <input type="file" id="alarmCustomSoundInput" accept="audio/*" style="flex:1 1 100%">
            </div>
            <div id="alarmCustomSoundList" style="display:flex;flex-direction:column;gap:6px;margin-top:8px"></div>
-           <div class="fbSettingsSectionTitle">🌐 Notifiche del browser</div>
+           <div class="fbSettingsSectionTitle">🔔 Notifiche push</div>
            <div class="fbOptRow" style="flex-wrap:wrap;row-gap:8px">
-             <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="alarmWebNotifCheckbox"> Mostra anche una notifica del browser (oltre al suono)</label>
+             <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="alarmWebNotifCheckbox"> Mostra anche una notifica push (oltre al suono)</label>
            </div>
            <div id="alarmNotifPermissionRow" style="display:none;align-items:center;gap:10px;margin-top:6px">
-             <button type="button" id="alarmNotifPermissionBtn" class="toolBtn" style="width:auto">🔔 Attiva notifiche browser</button>
+             <button type="button" id="alarmNotifPermissionBtn" class="toolBtn" style="width:auto">🔔 Attiva notifiche push</button>
              <span id="alarmNotifPermissionStatus" class="hint"></span>
            </div>
          </div>
@@ -18078,7 +18078,9 @@ function apriOpzioniAllarme(d){
    d.afterActionPropria=q('dopo').value||null;
    d.soundId=q('suono').value||null;
    const n=q('notifica').value; d.notificaPropria=(n==='si')?true:(n==='no'?false:null);
-   if(n==='si'&&typeof Notification!=='undefined'&&Notification.permission==='default'){ try{ Notification.requestPermission(); }catch(e){} }
+   // Notifiche push della via unica (fblNotificaChiediPermesso): nell'app chiede al telefono,
+   // nel browser chiede il permesso alla Notification API.
+   if(n==='si'){ try{ fblNotificaChiediPermesso(); }catch(e){} }
    d.color=q('colore').value||d.color;
    const sp=Math.round(Number(q('spessore').value)); if(sp>=1&&sp<=8)d.lineWidth=sp;
    scheduleSave(); renderAlarmsList(); chiudi();
@@ -26297,15 +26299,83 @@ function renderAlarmCustomSoundList(){
    box.appendChild(row);
  });
 }
+// NOTIFICHE PUSH, UNA SOLA VIA PER TUTTO (richiesto esplicitamente: nel telefono arrivano come
+// notifiche dell'APP, non come notifiche "del browser"): nell'app Android (Capacitor) si passa
+// da @capacitor/local-notifications; nei browser (PC) si usa la Notification API di sempre.
+// I tre usi si trovano qui sotto: il permesso, l'allarme della linea (triggerAlarmLine) e
+// l'avviso della chiusura del giro (fblAvvisoChiusuraGiro) - cosi' ogni modifica fatta qui vale
+// per tutti e i contesti restano uguali.
+// Il plugin di Capacitor arriva dal progetto mobile (forex-backtest-mobile): finche' l'APK non
+// viene ricostruito con la nuova dipendenza, qui la via Capacitor semplicemente NON esiste e
+// si resta su quella del browser, senza errori.
+function fblNotificaPushOra(){
+ try{
+  if(typeof fblEAppCapacitor==='function'&&fblEAppCapacitor()){
+   return (window.Capacitor&&window.Capacitor.Plugins&&window.Capacitor.Plugins.LocalNotifications)||null;
+  }
+ }catch(e){}
+ return null;
+}
+// Chiede il permesso (una volta sola: il sistema lo ricorda). true se ora e' concesso.
+async function fblNotificaChiediPermesso(){
+ const push=fblNotificaPushOra();
+ if(push){
+  try{
+   let st=null;
+   try{ st=await push.checkPermissions(); }catch(e){}
+   if(st&&st.granted)return true;
+   if(typeof push.requestPermissions==='function'){
+    const r=await push.requestPermissions();
+    // Versioni diverse del plugin rispondono in forme diverse: accettiamo tutte.
+    return !!(r&&(r.granted||(r.receive&&r.receive==='granted')||(r.post&&r.post==='granted')));
+   }
+   return false;
+  }catch(e){ return false; }
+ }
+ if(typeof Notification==='undefined')return false;
+ if(Notification.permission==='granted')return true;
+ if(Notification.permission==='denied')return false;
+ try{ return (await Notification.requestPermission())==='granted'; }catch(e){ return false; }
+}
+// Mostra la notifica (quando il permesso c'e' gia'). Non lancia mai: per progettazione.
+async function fblNotificaMostra(titolo,corpo,tag){
+ const push=fblNotificaPushOra();
+ if(push){
+  try{
+   const id=fblNotificaIdDaTag(tag);
+   await push.schedule({notifications:[{id,title:titolo,body:corpo||''}]});
+  }catch(e){}
+  return;
+ }
+ if(typeof Notification!=='undefined'&&Notification.permission==='granted'){
+  try{ new Notification(titolo,{body:corpo||'',tag:tag||undefined}); }catch(e){}
+ }
+}
+function fblNotificaIdDaTag(tag){
+ if(!tag)return (Date.now()%2000000000)|0;
+ let x=7;
+ for(let i=0;i<tag.length;i++)x=(x*31+tag.charCodeAt(i))|0;
+ return (x>>>0)%2000000000;
+}
 function updateAlarmNotifPermissionUI(){
  const row=$('alarmNotifPermissionRow'); if(!row)return;
- const supported=typeof Notification!=='undefined';
- row.style.display=(alarmWebNotifEnabled&&supported&&Notification.permission!=='granted')?'flex':'none';
+ const push=fblNotificaPushOra();
  const statusEl=$('alarmNotifPermissionStatus');
- if(statusEl){
-   statusEl.textContent=!supported?'Il browser non supporta le notifiche.':
-     Notification.permission==='denied'?'Notifiche bloccate dal browser: riattivale dalle impostazioni del sito.':
-     'Permesso richiesto per mostrare le notifiche del browser.';
+ const aggiorna=(granted)=>{
+  if(granted){ row.style.display='none'; return; }
+  row.style.display=alarmWebNotifEnabled?'flex':'none';
+  if(statusEl)statusEl.textContent=push
+   ?'Le notifiche le mostra l\'app sul telefono: attivale col tasto qui sotto.'
+   :(typeof Notification==='undefined'?'Il browser non supporta le notifiche.'
+    :(Notification.permission==='denied'?'Il permesso non e\' stato concesso: riprova, oppure riattivalo dalle impostazioni.'
+     :'Permesso richiesto per mostrare le notifiche.'));
+ };
+ if(!alarmWebNotifEnabled){ row.style.display='none'; return; }
+ if(push){
+  try{ push.checkPermissions().then(s=>aggiorna(!!(s&&s.granted))).catch(()=>aggiorna(false)); }
+  catch(e){ aggiorna(false); }
+ }else{
+  aggiorna(typeof Notification!=='undefined'&&Notification.permission==='granted');
  }
 }
 function syncAlarmSettingsModalFromState(){
@@ -26368,13 +26438,11 @@ $('alarmWebNotifCheckbox')?.addEventListener('change',()=>{
  alarmWebNotifEnabled=!!$('alarmWebNotifCheckbox').checked;
  saveAlarmPrefs();
  updateAlarmNotifPermissionUI();
- if(alarmWebNotifEnabled&&typeof Notification!=='undefined'&&Notification.permission==='default'){
-   Notification.requestPermission().then(()=>updateAlarmNotifPermissionUI());
- }
+ // La via unica: nell'app chiede al telefono (Capacitor), nel browser alla Notification API.
+ if(alarmWebNotifEnabled){ try{ fblNotificaChiediPermesso().then(()=>updateAlarmNotifPermissionUI()); }catch(e){} }
 });
 $('alarmNotifPermissionBtn')?.addEventListener('click',()=>{
- if(typeof Notification==='undefined')return;
- Notification.requestPermission().then(()=>updateAlarmNotifPermissionUI());
+ try{ fblNotificaChiediPermesso().then(()=>updateAlarmNotifPermissionUI()); }catch(e){}
 });
 // ===================== MODALE "⚙️ IMPOSTAZIONI GENERALI" (RICHIESTO ESPLICITAMENTE: un solo
 // popup a destra della toolbar che raccoglie modalità Live/Storico+credenziali, account MT5 e
@@ -34170,11 +34238,9 @@ function triggerAlarmLine(d,price){
  const notificaQui=(d.notificaPropria===true||d.notificaPropria===false)?d.notificaPropria:alarmWebNotifEnabled;
  const assetLabel=currentAssetKey||$('market')?.value||'';
  $('status').textContent=`🔔 Allarme: ${assetLabel} ha raggiunto ${fmtPrice(price)}.`;
- if(notificaQui&&typeof Notification!=='undefined'&&Notification.permission==='granted'){
-   try{
-     new Notification('🔔 Allarme prezzo — Forex Backtest LAB',{ body:`${assetLabel||'Asset'} ha raggiunto ${fmtPrice(price)}`, tag:'fxbt-alarm-'+d.id });
-   }catch(e){}
- }
+ // Notifiche push della via unica: nell'app arrivano come notifiche del telefono (Capacitor),
+ // nel browser come Notification (fblNotificaMostra decide da sola).
+ if(notificaQui){ try{ fblNotificaMostra('🔔 Allarme prezzo — Forex Backtest LAB', (assetLabel||'Asset')+' ha raggiunto '+fmtPrice(price), 'fxbt-alarm-'+d.id); }catch(e){} }
  d.triggered=true;
  // RICHIESTO ESPLICITAMENTE: dopo lo squillo, l'allarme si disattiva (resta a grafico, spento e
  // riattivabile) oppure viene eliminato definitivamente — scelto per QUESTO allarme al momento
@@ -44684,10 +44750,8 @@ function fblAvvisoChiusuraGiro(t){
    +' dentro la forbice del cambio giornata (~'+forbice+' pip'+(misurato?' misurati qui':' stimati')+'). '
    +'Lo stop di una vendita si esegue sul prezzo di acquisto: puo’ scattare senza che il grafico ci arrivi.';
   try{ $('status').textContent='🕛 '+testo; }catch(e){}
-  try{
-   if(typeof Notification!=='undefined'&&Notification.permission==='granted')
-    new Notification('🕛 Chiusura del mercato — Forex Backtest LAB',{body:testo,tag:'fxbt-chiusura-'+asset});
-  }catch(e){}
+  // Notifiche push della via unica (fblNotificaMostra), come l'allarme di linea.
+  try{ fblNotificaMostra('🕛 Chiusura del mercato — Forex Backtest LAB', testo, 'fxbt-chiusura-'+asset); }catch(e){}
   detti++;
  });
  return detti;
