@@ -838,3 +838,30 @@
   1,08500 + 0,00500 fa 1,0899999999999999: uno stop cosi' non e' un prezzo che il broker possa
   accettare. Le somme vanno arrotondate alla griglia del prezzo dello strumento, come gia'
   faceva il pareggio esatto.
+
+- Un'ancora e' precisa solo nella scala in cui l'hai presa. (23 ottobre 2026.) Le punte dei
+  disegni giacciono su un istante che, nel TF in cui sono state disegnate, era l'apertura di una
+  candela; ad altra aggregazione (5m/15m/1H) l'istante resta reale MA non e' piu' apertura di
+  nessuna candela, e la punta slitta fino a quasi una candela. Ogni volta che una scala cambia
+  (timeframe, aggregazione, risoluzione) cio' che e' ancorato va riagganciato alla candela piu'
+  vicina DELLA NUOVA scala: non basta che il tempo sia "vero", deve restare agganciato al
+  contenitore.
+
+- Un dato messo nel sacchetto unico si sposta con chi lo porta. (23 ottobre 2026.) Lo zoom
+  viaggiava nel pacchetto di sessione che va anche al cloud: si muoveva da una macchina
+  all'altra senza che nessuno l'avesse deciso. Quando si raccoglie uno "stato", ogni campo va
+  deciso esplicitamente: o e' della SESSIONE (deve viaggiare) o e' del DISPOSITIVO (qui un
+  localStorage separato, e lontano dal pacchetto). Il punto unico di passaggio
+  (`trimTradesForCloudBudget`: e' lui l'UNICO che scrive in cloud, report e keepalive) e' il
+  posto giusto dove applicare la regola, e clonando: un oggetto che prepari per l'invio NON deve
+  cancellare i campi dell'originale che resta in memoria.
+
+- Un'interruzione puo' riporre i file a meta' capitolo: il commit va verificato, non presunto.
+  (23 ottobre 2026.) A capitolo zoom finito (patch, test verdi 3/3, commit dato per buono da
+  almeno 20 secondi) un ripristino del checkpoint della conversazione ha riportato i file a meta'
+  capitolo: app.html con la patch, il commit sparito (neppure nel reflog), il test cancellato e
+  pure metà dei file d'aiuto in Temp. Il collaudo che girava e' uscito verde, perche' misurava
+  altro. La regola: dopo ogni interruzione o ripristino, PRIMA di continuare devono essere
+  verificate e documentate le condizioni di base (`git log`, `git status`, che il file del test
+  ci sia davvero): un commit presunto e' un capitolo chiuso una volta doppia.
+

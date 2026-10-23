@@ -638,3 +638,30 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   del prezzo. Correzione: il fermo col margine viene arrotondato alle cifre del prezzo che dice
   il conto MT5 (come già faceva `mt5PrezzoPareggio` per il pareggio esatto). Test: il caso 3 di
   `laboratorio/app/margine_chiusura.test.mjs` (la SELL a 1,09000 esatto).
+
+- **Le forme al grafico slittavano al cambio Time Frame** - risolto (da pubblicare) - 23 ottobre
+  2026, commit `06d401b`, `app.html`. Sintoma: «cambio TF e trend, quadrati e linee slittano
+  rispetto alle candele». Causa misurata: le punte dei disegni sono ancorate a un Istante reale
+  (ms) che nel TF vecchio era l'apertura di una candela; al cambio TF le candele diventano bucket
+  aggregati (5m/15m/1H da M1) e quell'istante non e' piu' l'apertura di nessuna candela: la punta
+  slitta in mezzo alla candela (fino a quasi una larghezza intera) e l'inclinazione si riscrive.
+  Correzione: `fblDisegniRiAgganciaAlTf()` riaggancia ogni punto alla candela del TF attuale piu'
+  vicina (ricerca binaria su `rows`), lo stesso aggancio che il punto aveva al momento del
+  disegno; la chiamano SOLO i veri cambi TF (il listener del timeframe in storico e i tre percorsi
+  Live Capital/MT5/Binance con `opts.tfChangeSpanMinutes`), cosi' le risincronizzazioni periodiche
+  dello stesso TF non toccano niente. Test: `laboratorio/app/disegni_cambio_tf.test.mjs` (2, con
+  prova di controllo: prima della cura 10:07 NON e' apertura di una candela 5m).
+- **Lo zoom si sincronizzava tra macchine** - risolto (da pubblicare) - 23 ottobre 2026, commit
+  `a844e4c`, `app.html`. Sintoma: aprendo l'app su un'altra macchina arrivava lo zoom di quella
+  prima, e alla sincronizzazione successiva scappava pure lo zoom scelto qui. Causa misurata:
+  lo zoom (priceZoomFactor, viewPriceLo/Hi) viaggiava nel pacchetto di sessione
+  (`collectLightSessionState`) destinato ANCHE al cloud, e `assetChartViews` portava pure lo zoom
+  orizzontale e l'autogamma. Correzione: lo zoom di QUESTA macchina vive in un localStorage
+  separato (`fbl_zoom_dispositivo`, aggiornato ad ogni salvataggio) e non entra piu' nel
+  pacchetto; `trimTradesForCloudBudget` (unico punto di passaggio delle scritture cloud: report
+  intero e keepalive) lo separa clonando senza toccare la memoria locale; chi applica uno stato
+  remoto legge lo zoom solo dal file del proprio dispositivo, con semina una tantum dal pacchetto
+  vecchio per non perdere lo zoom al primo avvio dopo l'aggiornamento. Le ancore di posizione
+  (masterTime/viewEnd) viaggiano come prima. Test: `laboratorio/app/zoom_dispositivo.test.mjs`
+  (3: pacchetto pulito, memoria intatta, pacchetto vecchio ignorato).
+

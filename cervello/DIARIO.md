@@ -3204,3 +3204,68 @@ se i due non coincidono, si dice che non coincide.
 una cosa sola: dire al giro successivo «hai gia' provato, aspetta». E il tempo va iniettato,
 altrimenti il test non puo' provare niente (e per farlo passare si finisce col premere i tasti
 dell'app a ora di pranzo).
+
+## 23 ottobre 2026 - Le ancore seguono la scala (disegni al cambio TF), lo zoom resta di una macchina, e un capitolo perso che e' tornato
+
+### I capitoli della mattina, gia' committati
+
+(riassunto per non rifare: tutti committati, tutti con test)
+- «Aggiorna» acceso a torto, wow che partiva nei test (`navigator.webdriver`), apertura
+  fuori contesto: `533b648`;
+- quattro correzioni segnalate dal proprietario: `f3bafc2`;
+- le sale eliminate fuori dalla card win-rate (con prova di controllo col ponte spento):
+  `238207e`;
+- le notifiche push rinnovate (via unica `fblNotificaMostra`/`fblNotificaChiediPermesso`/
+  `fblNotificaPushOra`, plugin Capacitor nell'app Android, Notification API nei browser):
+  `da2dd91`.
+
+### Le forme slittavano al cambio Time Frame (`06d401b`)
+
+Segnalato: «cambio TF e trend, quadrati e linee slittano rispetto alle candele». La diagnosi
+misurata della sessione precedente aveva gia' detto la causa: le punte sono ancorate a un
+ISTANTE (ms) che nel TF in cui il disegno era nato era l'apertura di una candela; ad aggregazione
+diversa (5m/15m/1H) l'istante resta un tempo vero MA non e' piu' l'apertura di nessuna candela:
+la punta giace in mezzo al bucket, fino a quasi una larghezza intera, e l'inclinazione cambia.
+La cura: `fblDisegniRiAgganciaAlTf()` riaggancia ogni punto (p1, p2 e le serie di punti) alla
+candela del TF attuale piu' vicina, con ricerca binaria sui tempi di `rows` (`getRowsTimestamps`):
+lo stesso aggancio che il punto aveva al momento del disegno. Tre e non due i percorsi Live che
+lo chiamano: Capital, MT5 e BINANCE (scoperta facendo i probe sull'unicita' degli anchor:
+c'era un quarto percorso che la diagnosi non aveva visto), con il guard
+`opts.tfChangeSpanMinutes` cosi' le risincronizzazioni periodiche dello stesso TF non toccano
+le ancore, che restano esatte. Test: `disegni_cambio_tf.test.mjs` (2), che cambia TF dal
+controllo VERO (`$('tf')` + `change`) e con la prova di controllo: prima della cura 10:07 NON
+e' apertura di una candela 5m.
+
+### Lo zoom si spostava tra macchine (`a844e4c`)
+
+Richiesto: «lo zoom non deve sincronizzarsi tra macchine». Causa misurata: lo zoom
+(priceZoomFactor, viewPriceLo/Hi) viaggiava nel pacchetto di sessione destinato ANCHE al cloud
+(`collectLightSessionState`), e `assetChartViews` portava pure zoom orizzontale e autogamma:
+aprendo l'app su un'altra macchina arrivava lo zoom di quella prima, e alla sincronizzazione
+successiva scappava quello scelto qui. La cura sta nel punto unico: `trimTradesForCloudBudget`
+e' l'UNICO passaggio di ogni scrittura cloud (report intero e keepalive), e li' lo zoom si
+separa clonando (l'originale resta vivo): lo zoom del dispositivo vive in un localStorage
+apposta (`fbl_zoom_dispositivo`, sempre fresco ad ogni salvataggio), lo stato remoto NON lo
+porta piu', e chi lo applica lo legge solo dal proprio dispositivo — con una semina una tantum
+dal pacchetto vecchio, che protegge l'utente dal perdere lo zoom al primo avvio dopo
+l'aggiornamento. Le ancore di posizione (masterTime/viewEnd) viaggiano ancora. Test:
+`zoom_dispositivo.test.mjs` (3: pacchetto pulito, memoria intatta, pacchetto vecchio ignorato).
+
+### Il capitolo che e' sparito, e la lezione
+
+Fra il test 3/3 verde e il collaudo, un ripristino del checkpoint della conversazione ha
+riportato repo e file a META' capitolo zoom: la patch in app.html, il commit sparito (neppure
+nel reflog), il test cancellato, metà dei file d'aiuto in Temp. Il collaudo che girava in
+parallelo e' uscito verde perche' misurava altro. Recupero: riapplicata la rilettura
+anti-refuso (con il `const e` di `fblZoomNonViaggia` corretto in `let`, che oggi il test stesso
+ha tirato fuori), il test riscritto, commit `a844e4c` e verificato che PERSISTE (git log
+richiamato dopo 20 secondi). La lezione e' in LEZIONI: dopo un'interruzione, il commit va
+verificato, non presunto.
+
+### Misure di fine giornata
+
+- Suite locale completa: 857/857 (prima del recupero) e il collaudo `collauda.sh` verde
+  Falliti: 0; nuovo collaudo completo sul commit recuperato in attesa della release.
+- Commits ancora da spingere per la v2.0.25: `533b648`, `f3bafc2`, `238207e`, `da2dd91`,
+  `06d401b`, `a844e4c`.
+
