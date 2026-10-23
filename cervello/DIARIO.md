@@ -3279,7 +3279,25 @@ ha tirato fuori), il test riscritto, commit `a844e4c` e verificato che PERSISTE 
 richiamato dopo 20 secondi). La lezione e' in LEZIONI: dopo un'interruzione, il commit va
 verificato, non presunto.
 
+### Il tasto che esplode il gruppo, il tocco che seleziona, il titolo giusto (`4b8d306`)
+
+Tre richieste in un capitolo. La misura del difetto e' venuta dal banco dei PointerEvent
+sintetici: (a) il raggruppamento non aveva invertitore; (b) cliccando la casella LARGA la
+selezione si scriveva e si SPEGNEVA nello stesso gesto — fblClickSuVuoto la rispazzava,
+perche' la casella e' uno dei "vuoti" (regola vecchia e giusta: un rettangolo largo mezzo
+grafico non trattiene la deselezione); (c) la pillola dell'etichetta sta sulla STESSA
+altezza della linea TP/SL: era il controllo dei livelli a selezionare (senza statistiche).
+Cura: #explodeTpSlEtichetteBtn (localStorage 'fbl_etichette_esplose'; con l'esplosione la
+mappa dei gruppi non si costruisce), hit-rect delle etichette dato da drawZonePill che ora
+restituisce il rettangolo VERO (dopo lo spostamento anti-sovrapposizione), candidato
+scritto PRIMA del hit dei livelli, al pointerup fermo seleziona e apre le statistiche, e
+in fblClickSuVuoto l'etichetta non e' piu' vuoto. Titolo del popup del Collegamento:
+Impostazioni di sistema (8 occorrenze). Test: etichette_esplodi_tocco.test.mjs (3) e
+impostazioni_sistema.test.mjs (2). La soglia "gesto fermo" usa chartDownXY e non
+panStartX: i rami che armano un trascinamento ritornano prima di armare il pan.
+
 ### Misure di fine giornata
+
 
 - Suite locale completa: 857/857 (prima del recupero) e il collaudo `collauda.sh` verde
   Falliti: 0; nuovo collaudo completo sul commit recuperato in attesa della release.

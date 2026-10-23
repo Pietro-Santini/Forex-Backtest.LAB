@@ -675,5 +675,27 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   posizioni, origine comune, accumulo della perdita sugli SL); durante il trascinamento di un
   livello il raggruppamento si stacca. Test: `laboratorio/app/etichette_raggruppate.test.mjs`
   (3).
+- **Il gruppo delle etichette non s'esplodeva, e il tocco sull'etichetta non selezionava** -
+  risolto (da pubblicare) - 23 ottobre 2026, `app.html`. Sintomi (tre richieste in un capitolo):
+  «un pulsante che ci esplode tutte le etichette», «selezionare una posizione anche toccando
+  l'etichetta tp-sl-stop profit», e il popup del Collegamento/Modalità intitolato
+  «Impostazioni generali» invece di «Impostazioni di sistema». Causa misurata col banco dei
+  PointerEvent sintetici: (a) il raggruppamento era una strada sola, senza invertitore;
+  (b) la casella LARGA apre le statistiche e DESELEZIONA pure, perché è nella lista dei
+  «vuoti» di `fblClickSuVuoto` (richiesta vecchia del proprietario: un rettangolo largo mezzo
+  grafico non deve trattenere la selezione), quindi ogni selezione scritta al pointerup della
+  casella veniva rispazzata nello stesso gesto; (c) la pillola dell'etichetta sta sulla STESSA
+  altezza della linea TP/SL, e il controllo dei livelli la mangiava, selezionando la posizione
+  senza aprire le statistiche. Correzioni: invertitore `#explodeTpSlEtichetteBtn` accanto a
+  «Mostra/nascondi etichette» (scelta in localStorage `fbl_etichette_esplose`; con l'esplosione
+  la mappa dei gruppi non si costruisce e ogni casella si disegna sua); hit-rect propri delle
+  etichette (`tpSlPillHitRects`, riempito da `drawZonePill` che ora restituisce il rettangolo
+  VERO dopo lo spostamento anti-sovrapposizione), candidato che al pointerdown si scrive PRIMA
+  del hit dei livelli (la linea, sulla stessa y, lo mangerebbe) e al pointerup, se il gesto è
+  fermo, SELEZIONA la posizione e apre le statistiche; in `fblClickSuVuoto` l'etichetta non è
+  più «vuoto» (trattiene la selezione), la casella larga resta «vuoto» com'era voluto allora;
+  titolo del popup rinominato in tutte le 8 occorrenze. Test: `etichette_esplodi_tocco.test.mjs`
+  (3: scompatta/ricompone, tocco sull'etichetta del gruppo seleziona il rappresentante e apre
+  le statistiche, tocco su TP2 scompattata seleziona p2) e `impostazioni_sistema.test.mjs` (2).
 
 

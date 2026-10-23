@@ -141,6 +141,28 @@ Deve dire il numero nuovo. Il sito si aggiorna da solo entro un minuto o due.
 
 **6. Sul telefono**: ricarica la pagina (se serve, due volte).
 
+**7. L'APK va SEMPRE compilato e caricato nella release.** Regola fissa del proprietario
+(«mi raccomando sempre il file apk aggiornato e inserito nella release»): il rilascio non è
+finito se il pacchetto Android non è già là. Dalla cartella del progetto Capacitor (che sta
+fuori dal repository, vedi punto 9):
+
+```powershell
+cd C:\Users\pietro\Desktop\trading\forex-backtest-mobile
+.\aggiorna_www.bat   # copia i file del repository dentro www/ e fa npx cap sync android
+.\build_apk.bat      # compila e firma; lascia android\app\build\outputs\apk\debug\ForexBacktestLAB.apk
+```
+
+Poi si verifica la versione dentro l'APK (`node --test laboratorio/app/apk_versione.test.mjs`,
+deve essere verde) e si carica il pacchetto **nella release creata dal workflow Installer**,
+col nome di asset storico `forexbacktestlab.apk`:
+
+```bash
+gh release upload v2.0.<n> <progetto>\android\app\build\outputs\apk\debug\ForexBacktestLAB.apk --clobber
+gh release view v2.0.<n> --json assets --jq ".assets[].name"
+```
+
+L'elenco degli asset deve mostrare, per lo stesso tag: Setup, zip e APK, tutti e tre.
+
 ---
 
 ## 5. Procedura B — aggiornare il server Oracle

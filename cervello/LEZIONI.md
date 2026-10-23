@@ -865,3 +865,16 @@
   verificate e documentate le condizioni di base (`git log`, `git status`, che il file del test
   ci sia davvero): un commit presunto e' un capitolo chiuso una volta doppia.
 
+- Prima di aggiungere un gesto, misura CHI lo sta prendendo già. (23 ottobre 2026.) Il tocco
+  sull'etichetta TP/SL pareva "un click sulla casella": tre proprietari lo contendevano e il
+  banco (PointerEvent sintetici + sonda) l'ha mostrato: la pillola sta sulla STESSA altezza
+  della linea TP/SL, e il controllo dei livelli (che seleziona senza aprire le statistiche)
+  la mangiava; la casella LARGA invece era il "vuoto" che deseleziona, richiesta vecchia e
+  ancora valida. La cura non è raccogliere il gesto in un solo posto: è scegliere il
+  BERSAGLIO STRETTO (l'etichetta, che seleziona e apre le statistiche) e lasciare il
+  RETTANGOLO LARGO alla regola del vuoto. Appendice strumentale: la soglia "è stato un
+  trascinamento?" va misurata con `chartDownXY` (impostata a OGNI pointerdown) e NON con
+  `panStartX`: i rami che armano un trascinamento (linee, livelli) ritornano PRIMA di armare
+  il pan, e al loro rilascio `panStartX` vale ancora il gesto precedente — direbbe
+  "trascinamento" a un click fermo.
+
