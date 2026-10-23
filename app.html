@@ -16763,8 +16763,28 @@ function draw(){
  // sta mostrando (null fuori dal replay, vedi replayMomentoMostrato).
  const momentoMostrato=replayMomentoMostrato();
  const activeOnChart=!!posSelezionata&&positions.includes(posSelezionata)&&drawableOnCurrentChart(posSelezionata);
- if(positionsVisible)
- positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(pos=>{
+  // LE ETICHETTE TP/SL SOVRAPPOSTE SI RAGGRUPPANO (vedi la nota a fianco di
+  // fblChiaveCaselleTpSl): mappa costruita UNA volta per draw, con gli stessi numeri che la
+  // casella usera' davvero (span compreso, stesso modo di calcolarli al giro qui sotto).
+  // Durante il trascinamento di un livello il raggruppamento si stacca: le caselle non
+  // coincidono piu' mentre il dito porta il prezzo, e ognuna si vede da sola come prima.
+  let gruppiCaselleTpSl=null;
+  if(!previewTradeLevel){
+    gruppiCaselleTpSl=new Map();
+    positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(p=>{
+      const liv=posLivelliAlTempo(p,momentoMostrato);
+      const apT=openReferenceTimeForPos(p), apI=rowIndexContainingTime(apT);
+      const sp=effectiveZoneSpan('pos:'+p.id,(apI!=null)?apI:start,idx+replayFrazioneBarra());
+      const k=fblChiaveCaselleTpSl(p.asset,p.entry,liv.sl,liv.tp,apT,sp);
+      let g=gruppiCaselleTpSl.get(k); if(!g){g={membri:[],sl:liv.sl,tp:liv.tp};gruppiCaselleTpSl.set(k,g);}
+      g.membri.push(p);
+    });
+    const soliGruppi=new Map();
+    gruppiCaselleTpSl.forEach((g,k)=>{ if(g.membri.length>1){g.dati=fblDatiGruppoCaselle(g.membri,g.sl,g.tp);soliGruppi.set(k,g);} });
+    gruppiCaselleTpSl=soliGruppi;
+  }
+  if(positionsVisible)
+  positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(pos=>{
    // CHI E' "IN EVIDENZA" LO DECIDE L'UTENTE, NON UNA RIASSEGNAZIONE AUTOMATICA.
    // SEGNALATO: «non tocco assolutamente nulla sul grafico e a un certo punto mi seleziona in
    // automatico una posizione». La parte che nascondeva le ALTRE posizioni era gia' stata
@@ -16895,14 +16915,30 @@ function draw(){
       // grigio, con le loro etichette, senza il riempimento colorato (vedi fillVisible dentro
       // drawTpSlZoneBox) - cosi' si continua a sapere dove sono i livelli degli altri trade,
       // mentre il colore resta solo a quello scelto. Cliccando sul vuoto torna tutto come prima.
+      // Il gruppo delle caselle coincidenti (vedi la nota su fblChiaveCaselleTpSl): UNA sola
+      // casella viene disegnata — dalla PRIMA posizione del gruppo — con l'etichetta raggruppata
+      // (numero di posizioni, origine comune e accumulo della perdita sugli SL). Le altre si
+      // saltano SOLO qui: la linea d'entrata e la freccia restano per tutte, e i membri del
+      // gruppo hanno entry/apertura identiche per costruzione, quindi il resto che coincide
+      // coincide davvero (nessuna linea si perde a schermo).
+      const grpCasTpSl=gruppiCaselleTpSl?gruppiCaselleTpSl.get(fblChiaveCaselleTpSl(pos.asset,pos.entry,slStorico,tpStorico,openTimeForZone,effectiveZoneSpan('pos:'+pos.id,originBox,idx+replayFrazioneBarra()))):null;
+      if(grpCasTpSl&&grpCasTpSl.membri[0]!==pos)return;
+      // Con il gruppo l'"spenta" (dimmed) vale per TUTTA la casella raggruppata: si spegne solo
+      // se NESSUNA delle posizioni del gruppo è quella selezionata.
+      const dimGrp=grpCasTpSl?(activeOnChart&&!grpCasTpSl.membri.includes(posSelezionata)):dimmed;
       drawTpSlZoneBox(ctx,{
        ownerKey:'pos:'+pos.id,originIdx:originBox,entry:pos.entry,sl:liveSl,tp:liveTp,
        // L'etichetta non dice più solo "Target": dice QUALE target (TP1, TP2, TP3...) e DI CHI è.
        // I due dati sono già sulla posizione (tgTpIndice / tgSala / tgProva): qui non si calcola
        // niente, si scrive quello che si sa già — vedi fblEtichettaOrigineBreve più in alto.
-       tpEtichetta:fblEtichettaTpBreve(pos),origine:fblEtichettaOrigineBreve(pos),
+       // Nel gruppo il numero della singola sparisce (l'obiettivo del gruppo è uno solo) e
+       // l'origine diventa l'origine comune; i numeri e «×N» arrivano da infogruppo qui sotto.
+       tpEtichetta:grpCasTpSl?'TP':fblEtichettaTpBreve(pos),
+       origine:grpCasTpSl?grpCasTpSl.dati.origine:fblEtichettaOrigineBreve(pos),
        lots:pos.lots,assetKey:pos.asset,stopProfit:isStopProfitLive,
-       dimmed,
+       dimmed:dimGrp,
+       // I numeri dell'etichetta raggruppata (uso dentro drawTpSlZoneBox): null fuori dal gruppo.
+       infogruppo:grpCasTpSl?{num:grpCasTpSl.dati.num,slTot:grpCasTpSl.dati.slTot,tpTot:grpCasTpSl.dati.tpTot}:null,
        pad,cw,n,start,w,y,
        // La casella non deve restare "indietro" rispetto all'ultima candela finché la
        // posizione resta aperta — vedi il commento su keepPaceIdx dentro drawTpSlZoneBox.
@@ -19315,6 +19351,38 @@ fblDelega('click',ev=>{
  $('status').textContent=ora?'\u23F3 Ordini pendenti visibili a grafico, con le loro righe di entrata, stop e target.':'\u23F3 Ordini pendenti nascosti dal grafico (restano tutti nella loro tabella).';
 });
 setTimeout(()=>{ try{ fblInterruttoriPosizioniUi(); }catch(e){} },500);
+// RAGGRUPPAMENTO DELLE ETICHETTE TP/SL SOVRAPPOSTE (23 ottobre 2026). Chiesto: «quando piu'
+// posizioni hanno la stessa casella un'etichetta sola, che mostra il numero di posizioni,
+// l'origine e l'accumulo della perdita per gli SL». La casella si disegna per OGNI posizione:
+// nel gruppo di un segnale (stessa sala, N posizioni aperte insieme con entrata/stop/target
+// identici) le N caselle coincidono e le N etichette si scrivono una sopra l'altra — e le
+// "TP1/TP2/TP3" diverse sembrano obiettivi diversi mentre e' lo stesso obiettivo diviso in tagli.
+// La chiave di coincidenza e' la casella INTERA: stesso asset, stesso punto d'apertura, stessi
+// livelli e stessa larghezza a schermo (lo span risolto): si raggruppano solo le caselle che
+// davvero coincidono, tutto il resto resta com'era.
+function fblChiaveCaselleTpSl(assetKey,entry,sl,tp,aperturaT,span){
+  return [assetKey,entry!=null?String(entry):'null',sl!=null?String(sl):'null',
+    tp!=null?String(tp):'null',aperturaT!=null?String(aperturaT):'null',
+    span!=null?String(span):'null'].join('|');
+}
+// I numeri dell'etichetta raggruppata, calcolati UNA volta per gruppo: quante posizioni sono,
+// da chi arrivano (una sola origine se tutte uguali, "miste" altrimenti) e quanto perdono IN
+// TOTALE se lo stop prende tutte. L'"accumulo della perdita" NON e' la perdita della sola
+// posizione disegnata: e' la somma su tutto il gruppo (e per il TP vale l'attesa: il totale
+// e' il guadagno collettivo). euroAtLevel e' lo stesso metro delle caselle singole.
+function fblDatiGruppoCaselle(membri,sl,tp){
+  const prima=membri[0];
+  let origine=fblEtichettaOrigineBreve(prima);
+  for(const m of membri){ if(fblEtichettaOrigineBreve(m)!==origine){origine='miste';break;} }
+  let slTot=0,tpTot=0;
+  for(const m of membri){
+    const dp=(typeof euroAtLevel==='function')?euroAtLevel(m.entry,sl,m.lots,m.asset||currentAssetKey):null;
+    if(dp!=null)slTot+=dp;
+    const gd=(typeof euroAtLevel==='function')?euroAtLevel(m.entry,tp,m.lots,m.asset||currentAssetKey):null;
+    if(gd!=null)tpTot+=gd;
+  }
+  return {num:membri.length,origine,slTot,tpTot};
+}
 function drawTpSlZoneBox(ctx,opts){
  const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,alwaysShowTooltip}=opts;
  const hidePills=opts.hidePills||!fblEtichetteTpSlVisibili();
@@ -19355,6 +19423,11 @@ function drawTpSlZoneBox(ctx,opts){
  // un'altra lo è): in quel caso le caselle Target/Stop passano al grigio spento, così le loro linee
  // non si confondono con quelle (colorate) della posizione scelta.
  const dimmed=!!opts.dimmed;
+ // Etichetta raggruppata (opts.infogruppo): esiste solo per le caselle coincidenti del gruppo.
+ // Con lei i soldi dell'etichetta diventano i TOTALE del gruppo e in coda compare «×N»: porta
+ // esattamente quello che ha chiesto il proprietario (numero di posizioni, origine, accumulo
+ // della perdita per gli SL e, per coerenza, il guadagno collettivo per i TP).
+ const grp=opts.infogruppo||null;
  const zoneColors=dimmed?{tp:TRADE_DIM_GREY,sl:TRADE_DIM_GREY}:currentZoneColors();
  // Visibilità del riempimento colorato: il pulsante globale (tpSlZoneFillVisible) E il doppio
  // click sulla singola casella (tpSlZoneFillHiddenByOwner, solo per posizioni APERTE 'pos:')
@@ -19399,10 +19472,10 @@ function drawTpSlZoneBox(ctx,opts){
      // sbagliati/a zero.
      const pipsVal=(tp-entry)/pipSizeForAsset(assetKey);
      // Anteprima guadagno in € se il TP viene raggiunto (richiede un lottaggio noto).
-     const tpEuroTxt=soldiLivello(tp,'+');
+     const tpEuroTxt=grp?` • +${euro(grp.tpTot)}`:soldiLivello(tp,'+');
      // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
      // candele al suo interno) — richiesto esplicitamente.
-     drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
+     drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grp?` · ×${grp.num}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
    }
  }
  if(hasSl){
@@ -19438,8 +19511,8 @@ function drawTpSlZoneBox(ctx,opts){
      // posizione, mai quelli dello strumento a schermo ora.
      const pipsVal=(sl-entry)/pipSizeForAsset(assetKey);
      // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
-     const slEuroTxt=soldiLivello(sl,stopProfit?'+':'-');
-     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${opts.origine?` · ${opts.origine}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
+     const slEuroTxt=grp?` • ${stopProfit?'+':'-'}${euro(grp.slTot)}`:soldiLivello(sl,stopProfit?'+':'-');
+     drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grp?` · ×${grp.num}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
    }
  }
  // Separatore tratteggiato bianco all'entrata (come la linea centrale dello strumento
