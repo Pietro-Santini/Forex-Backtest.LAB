@@ -334,6 +334,7 @@ def _try_close_mt5_terminal():
 SECONDI_DI_GRAZIA = 90
 _grazia_timer = None
 _grazia_lock = threading.Lock()
+_mt5_order_lock = threading.Lock()
 
 
 def _spegni_tutto_adesso():
@@ -2546,7 +2547,8 @@ def order_market(body: OrderRequest):
     if body.tp:
         request["tp"] = body.tp
 
-    result = _send_trying_fillings(request)
+    with _mt5_order_lock:
+     result = _send_trying_fillings(request)
     return {"ticket": result.order, "deal": result.deal, "price": result.price, "volume": result.volume}
 
 
