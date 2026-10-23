@@ -6878,6 +6878,55 @@ function applyStyleCloneFields(fields){
 function stripMt5TrackedForSave(list){
  return Array.isArray(list)?list.filter(p=>p&&p.mt5Ticket==null):list;
 }
+// ZOOM PER DISPOSITIVO (richiesto: «lo zoom non deve sincronizzarsi tra macchine»).
+// Lo zoom (asse dei prezzi, candele visibili, autogamma) prima viaggiava nel pacchetto di
+// sessione (collectLightSessionState) destinato anche al cloud: aprendo l'app su un'altra
+// macchina arrivava lo zoom di quella prima, e alla sincronizzazione successiva scappava pure
+// lo zoom scelto qui. Ora lo zoom di QUESTA macchina vive in un localStorage separato
+// (fbl_zoom_dispositivo), resta fresco ad ogni salvataggio e NON entra nel pacchetto: chi
+// riceve uno stato remoto (o riavvia la macchina) mantiene lo zoom che aveva lui.
+function fblZoomDispositivoSalva(){
+ try{
+  localStorage.setItem('fbl_zoom_dispositivo',JSON.stringify({priceZoomFactor,viewPriceLo,viewPriceHi,visibleCount,autoFitWidth}));
+ }catch(e){}
+}
+function fblZoomDispositivoLeggi(){
+ try{
+  const z=JSON.parse(localStorage.getItem('fbl_zoom_dispositivo')||'null');
+  if(z&&typeof z==='object')return z;
+ }catch(e){}
+ return {};
+}
+// Toglie lo zoom da un pacchetto che sta per salire in CLOUD, senza toccare l'originale:
+// dentro assetChartViews le viste stanno a due livelli (modalita' + asset), si gira tutto e
+// si clona piano piano; il resto del pacchetto rimane identico.
+function fblZoomNonViaggia(bundle){
+ if(!bundle||typeof bundle!=='object')return bundle;
+ const senza={...bundle};
+ delete senza.priceZoomFactor; delete senza.viewPriceLo; delete senza.viewPriceHi;
+ const v=senza.assetChartViews;
+ if(v&&typeof v==='object'){
+  const c={};
+  Object.keys(v).forEach(k=>{
+   const m=v[k];
+   if(m&&typeof m==='object'){
+    const cm={};
+    Object.keys(m).forEach(kk=>{
+     let e=m[kk];
+     if(e&&typeof e==='object'){
+      e={...e};
+      delete e.priceZoomFactor; delete e.viewPriceLo; delete e.viewPriceHi;
+      delete e.visibleCount; delete e.autoFitWidth;
+     }
+     cm[kk]=e;
+    });
+    c[k]=cm;
+   }else c[k]=m;
+  });
+  senza.assetChartViews=c;
+ }
+ return senza;
+}
 function collectLightSessionState(){
  // La posizione "active" (selezionata) va azzerata nel salvataggio se era proprio una
  // posizione REALE appena esclusa qui sopra — altrimenti resterebbe un riferimento "orfano"
@@ -6898,12 +6947,15 @@ function collectLightSessionState(){
  mirrorCurrentDrawingsIntoAssetDrawings();
  stashIndicatorsForMode(currentMode());
  // `drawings` "piatto" coerente con la mappa per asset anche nel mezzo di un cambio asset.
+ // ZOOM PER DISPOSITIVO: si aggiorna sempre il valore di QUESTA macchina (unico posto dove
+ // lo zoom vive; nel pacchetto di sessione non entra, vedi il campo della lista qui sotto).
+ fblZoomDispositivoSalva();
  const _flatDrawings=(currentAssetKey&&assetSwitchInProgress)?(((assetDrawings[currentMode()]||{})[currentAssetKey])||[]):drawings;
  return {
    version:SESSION_VERSION,
    savedAt:Date.now(),
    fields:Object.fromEntries(SESSION_CONFIG_FIELD_IDS.map(id=>[id,$(id)?$(id).value:undefined])),
-   currentTF,idx,viewEnd,masterTime,followLatest,viewPriceLo,viewPriceHi,priceZoomFactor,
+   currentTF,idx,viewEnd,masterTime,followLatest, // lo zoom NON entra nel pacchetto: vedi fblZoomDispositivoSalva
    gridSpacingIdx,drawDashedDefault,drawDottedDefault,anchorSnap,straightLockToggle,positionsVisible,tpSlZoneFillVisible,volProfileMode,linesMode,drawingLayerVisible,
    footprintEnabled,footprintRowPips,footprintImbalanceEnabled,footprintArEnabled,footprintAutoRow,footprintShowCandle,footprintShowBars,footprintShowPoc,
    positions:stripMt5TrackedForSave(positions),active:activeIsReal?null:active,
@@ -7440,6 +7492,11 @@ let fblCloudUltimaFirma=null, fblCloudUltimoPeso=0, fblCloudScritture=0, fblClou
 const FIRESTORE_DOC_MAX_BYTES=900*1024; // margine di sicurezza sotto il tetto reale di 1MiB di Firestore
 const FIRESTORE_KEEPALIVE_MAX_BYTES=56*1024; // margine sotto il tetto di ~64KB imposto dal browser per fetch keepalive
 function trimTradesForCloudBudget(bundle,maxBytes){
+ // ZOOM PER DISPOSITIVO (richiesto): questo e' l'UNICO punto di passaggio di ogni scrittura
+ // verso il cloud (report intero e keepalive): prima di misurare/tagliare si leva lo zoom —
+ // verticale del pacchetto e, per ogni asset dentro assetChartViews, orizzontale e autogamma.
+ // fblZoomNonViaggia clona e non tocca l'originale: lo zoom resta vivo nella memoria locale.
+ bundle=fblZoomNonViaggia(bundle);
  let json;
  try{ json=JSON.stringify(bundle); }catch(e){ return bundle; }
  if(json.length<=maxBytes)return bundle;
@@ -7630,8 +7687,21 @@ function applyLightSessionState(state){
  // ricostruite dal chiamante usando l'idx salvato come fallback (vedi initSession()).
  masterTime=Number.isFinite(state.masterTime)?state.masterTime:null;
  followLatest=state.followLatest!==false;
- viewPriceLo=state.viewPriceLo??null; viewPriceHi=state.viewPriceHi??null;
- priceZoomFactor=state.priceZoomFactor||1;
+  // ZOOM PER DISPOSITIVO (vedi collectLightSessionState): questi valori NON si leggono dal
+  // pacchetto, nemmeno se un salvataggio VECCHIO li porta. PRIMO avvio dopo questa funzione:
+  // se il file per dispositivo non esiste ancora, si semina dall'eventuale pacchetto vecchio
+  // (che ancora lo portava), cosi' lo zoom di partenza resta quello che l'utente aveva su
+  // QUESTA macchina; da qui in poi vive solo qui e vince sempre lui.
+  let zd=fblZoomDispositivoLeggi();
+  try{
+   if(!localStorage.getItem('fbl_zoom_dispositivo')&&Number.isFinite(Number(state.priceZoomFactor))&&Number(state.priceZoomFactor)>0){
+    localStorage.setItem('fbl_zoom_dispositivo',JSON.stringify({priceZoomFactor:Number(state.priceZoomFactor),viewPriceLo:state.viewPriceLo??null,viewPriceHi:state.viewPriceHi??null}));
+    zd=fblZoomDispositivoLeggi();
+   }
+  }catch(e){}
+  viewPriceLo=Number.isFinite(zd.viewPriceLo)?zd.viewPriceLo:null;
+  viewPriceHi=Number.isFinite(zd.viewPriceHi)?zd.viewPriceHi:null;
+  priceZoomFactor=Number.isFinite(zd.priceZoomFactor)&&zd.priceZoomFactor>0?zd.priceZoomFactor:1;
  gridSpacingIdx=state.gridSpacingIdx??0;
  drawDashedDefault=!!state.drawDashedDefault;
  drawDottedDefault=!!state.drawDottedDefault;
@@ -9924,10 +9994,16 @@ function applyChartViewForAsset(asset){
  if(saved){
    viewEnd=Number.isFinite(saved.viewEnd)?Math.max(0,Math.min(saved.viewEnd,rows.length-1)):idx;
    followLatest=saved.followLatest!==false;
-   priceZoomFactor=saved.priceZoomFactor||1;
-   viewPriceLo=saved.viewPriceLo??null; viewPriceHi=saved.viewPriceHi??null;
+   // ZOOM PER DISPOSITIVO: la memoria per-asset LOCALE se lo sa lo offre (tornare su un asset
+   // restituisce lo zoom che l'utente qui aveva su quello asset); se la memoria viene dal
+   // pacchetto CLOUD senza zoom (vedi trimTradesForCloudBudget), resta lo zoom di QUESTA
+   // macchina (fblZoomDispositivoLeggi). Nulla arriva da un'altra macchina.
+   const zd=fblZoomDispositivoLeggi();
+   priceZoomFactor=(Number.isFinite(saved.priceZoomFactor)&&saved.priceZoomFactor>0)?saved.priceZoomFactor:((Number.isFinite(zd.priceZoomFactor)&&zd.priceZoomFactor>0)?zd.priceZoomFactor:1);
+   viewPriceLo=Number.isFinite(saved.viewPriceLo)?saved.viewPriceLo:(Number.isFinite(zd.viewPriceLo)?zd.viewPriceLo:null);
+   viewPriceHi=Number.isFinite(saved.viewPriceHi)?saved.viewPriceHi:(Number.isFinite(zd.viewPriceHi)?zd.viewPriceHi:null);
    autoFitWidth=saved.autoFitWidth!==false;
-   visibleCount=Number.isFinite(saved.visibleCount)?saved.visibleCount:idealVisibleCount();
+   visibleCount=Number.isFinite(saved.visibleCount)?saved.visibleCount:((Number.isFinite(zd.visibleCount)&&zd.visibleCount>0)?zd.visibleCount:idealVisibleCount());
  }else{
    viewEnd=idx;
    priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
