@@ -2550,6 +2550,80 @@ def order_market(body: OrderRequest):
     return {"ticket": result.order, "deal": result.deal, "price": result.price, "volume": result.volume}
 
 
+@app.post("/order/market/batch")
+def order_market_batch(body: dict):
+    """Apre N ordini a mercato in sequenza (thread-safe) in una sola chiamata HTTP.
+
+    Body: {symbol, side, volume, sl?, tps: [tp1, tp2, ...], comment?}
+    Restituisce: {tickets: [ticket1, ...], aperti: N, rifiutato: bool}
+    Si ferma al primo rifiuto (come faceva il ciclo nell'app): le posizioni gia'
+    aperte restano aperte, le successive non vengono tentate.
+    """
+    if not mt5_connected:
+        raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
+    _ensure_trading_allowed()
+    symbol = body.get("symbol")
+    side = str(body.get("side", "")).upper()
+    if side not in ("BUY", "SELL"):
+        raise HTTPException(status_code=400, detail="side deve essere 'BUY' o 'SELL'.")
+    volume = body.get("volume")
+    if not (isinstance(volume, (int, float)) and volume > 0):
+        raise HTTPException(status_code=400, detail="Volume non valido.")
+    tps = body.get("tps") or [None]
+    if not isinstance(tps, list) or not tps:
+        tps = [None]
+    sl = body.get("sl")
+    comment = (body.get("comment") or "ForexBacktestLAB")[:31]
+
+    info = _ensure_symbol(symbol)
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        raise HTTPException(status_code=500, detail=f"Impossibile leggere la quotazione di {symbol}: {mt5.last_error()}")
+
+    order_type = mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL
+    price = tick.ask if side == "BUY" else tick.bid
+    volume = _round_volume(info, volume)
+
+    tickets = []
+    aperti = 0
+    rifiutato = False
+    for tp in tps:
+        request = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": volume,
+            "type": order_type,
+            "price": price,
+            "deviation": 20,
+            "magic": 20260910,
+            "comment": comment,
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": _pick_filling_mode(info),
+        }
+        if sl:
+            request["sl"] = sl
+        if tp:
+            request["tp"] = tp
+
+        try:
+            result = _send_trying_fillings(request)
+        except HTTPException:
+            rifiutato = True
+            break
+        except Exception as e:
+            rifiutato = True
+            break
+
+        if result is None:
+            rifiutato = True
+            break
+        tickets.append(result.order)
+        aperti += 1
+
+    return {"tickets": tickets, "aperti": aperti, "rifiutato": rifiutato, "price": price}
+
+
+
 @app.post("/order/close")
 def order_close(body: CloseRequest):
     """Chiude DAVVERO (in tutto o in parte) la posizione col ticket indicato."""

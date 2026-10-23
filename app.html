@@ -32497,49 +32497,63 @@ async function tgEseguiSegnale(voce,opzioni){
  const ticketPendenti=[];
  // Apertura senza grafico (conto MT5): gli ordini portano il LORO asset, il grafico non conta.
  const senzaGrafico=!!(opzioni&&opzioni.senzaGrafico&&reale);
- const ticketAperti=[];
- for(let i=0;i<p.n;i++){
-  const tp=(i<p.tp.length)?p.tp[i]:null;
-  // L'asset a grafico e' quello su cui partono gli ordini: se nel frattempo e' cambiato (un
-  // altro segnale, un clic dell'utente) ci si ferma invece di aprire sulla cosa sbagliata.
-  if(!senzaGrafico&&currentAssetKey!==sym){
-   console.log('[Segnali] asset cambiato durante l\'apertura ('+currentAssetKey+' invece di '+sym+'): mi fermo');
-   voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
-   break;
+  const ticketAperti=[];
+ // MT5 (senzaGrafico): gli ordini vengono lanciati TUTTI INSIEME invece di uno alla volta.
+ // Il bridge li processa in sequenza (MT5 non e' thread-safe, il lock _mt5_order_lock serializza),
+ // ma l'app non resta bloccata ad aspettare e le posizioni appaiono insieme invece che a distanza
+ // di secondi. Il totale e' lo stesso, ma sparisce il ritardo fra una posizione e l'altra.
+ if(senzaGrafico){
+  const metas=[];
+  const tps=[];
+  for(let i=0;i<p.n;i++){
+   tps.push((i<p.tp.length)?p.tp[i]:null);
+   metas.push({tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova});
   }
-  const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
-  // Ordine limite/stop della sala: ordine PENDENTE al suo prezzo (vero su MT5, simulato altrimenti).
+  // Ordini pendenti: batch.
   if(p.pendente){
-   if(reale){
-    const t=await placeRealMt5PendingOrder(p.side,p.kind,p.entry,p.sl,tp,p.lotti,sym,{senzaConferma:true,meta});
-    if(!t)break;
+   const risultati=await Promise.all(tps.map((tp,i)=>placeRealMt5PendingOrder(p.side,p.kind,p.entry,p.sl,tp,p.lotti,sym,{senzaConferma:true,meta:metas[i]}).catch(e=>{console.log('[Segnali] ordine pendente fallito:',e);return null;})));
+   for(let i=0;i<risultati.length;i++){
+    const t=risultati[i];
+    if(!t){ console.log('[Segnali] ordine pendente rifiutato, mi fermo'); break; }
     if(t!==true)ticketPendenti.push(String(t));
-   }else{
+    aperte++;
+   }
+  }else{
+   // Ordini a mercato: batch.
+   const risultati=await Promise.all(tps.map((tp,i)=>placeRealMt5Order(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta:metas[i],sym,prezzo:p.entry,ritornaTicket:true}).catch(e=>{console.log('[Segnali] apertura fallita:',e);return false;})));
+   for(let i=0;i<risultati.length;i++){
+    const esito=risultati[i];
+    if(esito===false||!esito){ console.log('[Segnali] apertura rifiutata, mi fermo'); break; }
+    aperte++;
+    if(esito!==true)ticketAperti.push(String(esito));
+   }
+  }
+ }else{
+  // Simulato (senza rete): loop sequenziale, veloce come prima.
+  for(let i=0;i<p.n;i++){
+   const tp=(i<p.tp.length)?p.tp[i]:null;
+   if(currentAssetKey!==sym){
+    console.log('[Segnali] asset cambiato durante l\'apertura ('+currentAssetKey+' invece di '+sym+'): mi fermo');
+    voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
+    break;
+   }
+   const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
+   if(p.pendente){
     pendingOrders.push({id:Date.now()+Math.random(),createdAt:Date.now(),asset:sym,side:p.side,kind:p.kind,entry:p.entry,
      sl:p.sl,tp:Number.isFinite(tp)?tp:null,lots:p.lotti,...meta});
     try{ if(liveModeActive)refreshLiveStreamSubscriptions(); }catch(e){}
+    aperte++;
+    continue;
    }
-   aperte++;
-   continue;
+   const prima=positions.length;
+   let esito;
+   try{
+    esito=await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta});
+   }catch(e){ console.log('[Segnali] apertura fallita:',e); break; }
+   if(esito===false)break;
+   if(positions.length>prima)aperte++; else break;
   }
-  const prima=positions.length;
-  let esito;
-  try{
-   esito=senzaGrafico
-    ?await placeRealMt5Order(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta,sym,prezzo:p.entry,ritornaTicket:true})
-    :await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta});
-  }
-  catch(e){ console.log('[Segnali] apertura fallita:',e); break; }
-  if(esito===false)break;
-  if(senzaGrafico){
-   if(!esito)break;
-   aperte++;
-   if(esito!==true)ticketAperti.push(String(esito));
-   continue;
-  }
-  if(positions.length>prima)aperte++; else break;
- }
- if(aperte&&(regole.length||avvicinamento)){
+ }if(aperte&&(regole.length||avvicinamento)){
   // La strategia sopravvive alla chiusura della pagina (sta in localStorage) e deve poter
   // RITROVARE le sue posizioni quando l\'app riapre. Per questo si porta dietro i ticket: le
   // posizioni riadottate dal conto MT5 sono oggetti nuovi, senza l'etichetta del gruppo, e senza
