@@ -9405,6 +9405,44 @@ function rebuildRows(){
   }
   idx=bIdx;
 }
+// AL CAMBIO TIME FRAME I DISEGNI NON DEVONO SFASARSI (richiesto dal proprietario).
+// Gli ancoraggi dei disegni sono a TEMPO reale (ms) + prezzo: cambiando TF le candele diventano
+// bucket piu' larghi/stretti, e un'ancora all'istante che era l'APERTURA di una candela del TF
+// vecchio non e' piu' l'apertura di una candela del TF nuovo: la punta slitta dentro la candela
+// (fino a quasi una larghezza intera) e l'inclinazione resta sbagliata. Qui si riaggancia ogni
+// punto alla candela del TF attuale piu' vicina (ricerca binaria sui tempi di rows), lo stesso
+// aggancio che il punto aveva al momento del disegno. La chiamano SOLO i veri cambi TF:
+// nello storico il listener di #tf, in Live i percorsi Capital/MT5/Binance quando ricevono
+// opts.tfChangeSpanMinutes; le risincronizzazioni periodiche dello stesso TF non toccano niente
+// (un'ancora a tempo reale restando nello stesso TF e' esatta com'e').
+function fblDisegniRiAgganciaAlTf(){
+ try{
+  const ts=getRowsTimestamps();
+  if(!ts||ts.length<2)return;
+  const vicino=(t)=>{
+   let lo=0,hi=ts.length-1;
+   if(t<=ts[0])return ts[0];
+   if(t>=ts[hi])return ts[hi];
+   while(hi-lo>1){ const m=(lo+hi)>>1; if(ts[m]<=t)lo=m; else hi=m; }
+   return (t-ts[lo]<=ts[hi]-t)?ts[lo]:ts[hi];
+  };
+  const riaggancia=(p)=>{
+   if(!p)return;
+   const t=Number(p.time);
+   if(!Number.isFinite(t))return;
+   const n=vicino(t);
+   if(n!==t)p.time=n;
+  };
+  let toccati=0;
+  (Array.isArray(drawings)?drawings:[]).forEach(d=>{
+   const prima=JSON.stringify([d.p1,d.p2]);
+   riaggancia(d.p1); riaggancia(d.p2);
+   if(Array.isArray(d.points))d.points.forEach(riaggancia);
+   if(JSON.stringify([d.p1,d.p2])!==prima)toccati++;
+  });
+  if(toccati){ try{ scheduleSave(); }catch(e){} }
+ }catch(e){}
+}
 function parseCSV(txt){
  const lines=txt.trim().split(/\r?\n/).filter(Boolean); if(!lines.length)return[];
  const delim=lines[0].includes(';')?';':',';
@@ -23194,6 +23232,9 @@ withLoadingOverlay('Cambio timeframe Live…', ()=>__sorgenteTf==='mt5'?loadLive
  // Così 1m -> 5m -> 15m -> 1H mantiene esattamente lo stesso prezzo/istante di mercato,
  // e tornando indietro a m1 si ritrova esattamente lo stesso identico prezzo di chiusura.
  rebuildRows();
+ // AL CAMBIO TF i disegni si riaggrappano alle candele del TF nuovo (helper sopra): senza, la
+ // punta slitta fino a quasi una candela intera e l'inclinazione resta sbagliata.
+ fblDisegniRiAgganciaAlTf();
  if(followLatest){
    // L'utente stava già seguendo il bordo "adesso": resta lì, comportamento invariato.
    viewEnd=idx;
@@ -37139,6 +37180,10 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // e' il momento esatto in cui la percentuale puo' dire "un terzo" senza raccontare balle.
  try{ if(typeof fblCaricamentoAsset!=='undefined'&&fblCaricamentoAsset)fblCaricamentoMostra(fblCaricamentoAsset,1); }catch(e){}
  rebuildRows();
+ // AL CAMBIO TF i disegni si riaggrappano alle candele del TF nuovo (helper sopra). Il guard
+ // serve: opts.tfChangeSpanMinutes arriva SOLO dal listener di #tf, cosi' le risincronizzazioni
+ // periodiche dello stesso TF (rollover candela...) non toccano i disegni, come sempre.
+ if(opts&&Number.isFinite(opts.tfChangeSpanMinutes))fblDisegniRiAgganciaAlTf();
  // RICHIESTO ESPLICITAMENTE: subito dopo aver ricostruito lo storico per l'asset a grafico,
  // prima ancora di ridisegnare, controlliamo se nel frattempo (app chiusa, disconnessione
  // lunga...) SL o TP sono già stati toccati da una candela intermedia mai valutata — vedi
@@ -41195,6 +41240,8 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
+ // AL CAMBIO TF (solo allora: opts.tfChangeSpanMinutes) i disegni si riaggrappano al TF nuovo.
+ if(opts&&Number.isFinite(opts.tfChangeSpanMinutes))fblDisegniRiAgganciaAlTf();
  scanHistoricalSlTpTouches();
  if(preserved){
    viewEnd=Math.max(0,(rows.length-1)-preserved.offsetFromEnd);
@@ -42468,6 +42515,8 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
  if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
+ // AL CAMBIO TF (solo allora: opts.tfChangeSpanMinutes) i disegni si riaggrappano al TF nuovo.
+ if(opts&&Number.isFinite(opts.tfChangeSpanMinutes))fblDisegniRiAgganciaAlTf();
  scanHistoricalSlTpTouches();
  if(conservata){
   viewEnd=Math.max(0,(rows.length-1)-conservata.offsetFromEnd);
