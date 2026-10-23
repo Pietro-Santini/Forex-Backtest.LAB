@@ -227,6 +227,6 @@ test('la memoria si aggiorna nel punto che tutte le strade attraversano', () => 
   assert.match(src, /function posLivePL\(pos\)\{[\s\S]{0,900}?const price=prezzoMostratoOra\(\);/,
     'posLivePL deve leggere il prezzo mostrato, non la chiusura dell ultima candela');
   // E in replay non si usa il netto del terminale MT5 (è il profitto di ADESSO).
-  assert.match(src, /const rivedendo=replayMomentoMostrato\(\)!=null;/,
-    'in replay il netto reale MT5 va escluso');
+  assert.match(src, /const rivedendo=replayMomentoMostrato\(\)!=null\|\|/,
+    'in replay il netto reale MT5 va escluso (anche in replay storico)');
 });
