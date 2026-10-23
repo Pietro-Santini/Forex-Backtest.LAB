@@ -3251,6 +3251,23 @@ dal pacchetto vecchio, che protegge l'utente dal perdere lo zoom al primo avvio 
 l'aggiornamento. Le ancore di posizione (masterTime/viewEnd) viaggiano ancora. Test:
 `zoom_dispositivo.test.mjs` (3: pacchetto pulito, memoria intatta, pacchetto vecchio ignorato).
 
+### Le etichette TP/SL si scrivevano una sopra l'altra (`e231310`)
+
+Richiesto: «quando piu' posizioni hanno la stessa casella, si raggruppano in un'unica etichetta
+che mostra il numero di posizioni, l'origine e l'accumulo della perdita per gli SL». La misura
+del difetto: tre posizioni dello stesso segnale (stessa sala, entrata/stop/target identici)
+scrivevano a schermo TRE etichette alle stesse coordinate — TP1, TP2, TP3 impilate, e il test
+nuovo lanciato PRIMA della cura le contava tre (3 != 1). La cura: le caselle con chiave INTERA
+identica (asset, punto d'apertura, entrata, stop, target e larghezza a schermo) si disegnano UNA
+volta sola, dalla prima posizione del gruppo, con un'unica etichetta che dice «×3», l'origine
+della sala (o «miste» se le posizioni del gruppo arrivano da origini diverse) e, sugli SL,
+l'accumulo della perdita del gruppo — la somma con euroAtLevel, lo stesso metro delle caselle
+singole; per coerenza anche i soldi del TP diventano il totale del gruppo (la cifra di UNA
+posizione sola avrebbe mentito sull'etichetta di tre). Il trascinamento di un livello stacca il
+raggruppamento: durante il drag ogni posizione si vede da sola. Una posizione sola e i target
+DIVERSI restano esattamente come prima (i sei test di etichette_tp_sl.test.mjs non hanno
+bisogno di nulla). Test: `etichette_raggruppate.test.mjs` (3).
+
 ### Il capitolo che e' sparito, e la lezione
 
 Fra il test 3/3 verde e il collaudo, un ripristino del checkpoint della conversazione ha

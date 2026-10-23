@@ -664,4 +664,16 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   vecchio per non perdere lo zoom al primo avvio dopo l'aggiornamento. Le ancore di posizione
   (masterTime/viewEnd) viaggiano come prima. Test: `laboratorio/app/zoom_dispositivo.test.mjs`
   (3: pacchetto pulito, memoria intatta, pacchetto vecchio ignorato).
+- **Le etichette TP/SL sovrapposte si impilavano** - risolto (da pubblicare) - 23 ottobre
+  2026, commit `e231310`, `app.html`. Sintoma: nel gruppo di un segnale (stessa sala, N
+  posizioni con entrata/stop/target identici) le N caselle TP/SL coincidono e le N etichette si
+  scrivono una sopra l'altra: TP1/TP2/TP3 impilati e non si leggono. Causa: la casella si
+  disegna per OGNI posizione (`drawTpSlZoneBox` una chiamata ciascuna) e un'etichetta non sa di
+  avere sorelle gemelle sotto. Correzione: a ogni draw una mappa dei gruppi con la chiave della
+  casella INTERA (asset, punto d'apertura, livelli, span risolto); le caselle gemelle si
+  disegnano una volta sola, dalla prima posizione del gruppo, con un'unica etichetta (numero di
+  posizioni, origine comune, accumulo della perdita sugli SL); durante il trascinamento di un
+  livello il raggruppamento si stacca. Test: `laboratorio/app/etichette_raggruppate.test.mjs`
+  (3).
+
 
