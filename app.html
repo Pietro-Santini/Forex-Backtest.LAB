@@ -4123,6 +4123,8 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 
      <div class="tgCfgSez">Livelli comuni a tutte le posizioni</div>
      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+       <label class="tgCfgCampo" title="Lascialo vuoto per aprire a mercato al prezzo di adesso. Inserisci un prezzo per aprire un ordine limite o stop a quel prezzo.">Prezzo di apertura
+         <input id="tgCfgEntry" class="tgCfgIn tgCfgNum" type="number" step="any" placeholder="mercato"></label>
        <label class="tgCfgCampo">Stop loss
          <input id="tgCfgSl" class="tgCfgIn tgCfgNum" type="number" step="any"></label>
        <label class="tgCfgCampo">Rischio totale
@@ -28679,8 +28681,9 @@ async function tgApriConfigurazione(voce){
  tgCfg={
   voce, sym,
   side:String(seg.direzione||'').toUpperCase(),
-  sl:Number(seg.stop_loss),
-  pct:tgRischioTotale(),
+   sl:Number(seg.stop_loss),
+   entry:Number.isFinite(Number(seg.entrata))?Number(seg.entrata):NaN,
+   pct:tgRischioTotale(),
   righe:tps.map(v=>({tp:v,attivo:true})),
   regole:tps.map(()=>''),
   // Pareggio anticipato: spento finche' non lo si accende, come ogni cosa che muove uno stop.
@@ -28688,8 +28691,9 @@ async function tgApriConfigurazione(voce){
  };
  if($('tgCfgAvvAttivo'))$('tgCfgAvvAttivo').checked=false;
  if($('tgCfgAvvPct'))$('tgCfgAvvPct').value=tgCfg.avvicinamento.pct;
- if($('tgCfgSl'))$('tgCfgSl').value=Number.isFinite(tgCfg.sl)?tgCfg.sl:'';
- if($('tgCfgRischio'))$('tgCfgRischio').value=tgCfg.pct;
+  if($('tgCfgEntry'))$('tgCfgEntry').value=Number.isFinite(Number(seg.entrata))?seg.entrata:'';
+  if($('tgCfgSl'))$('tgCfgSl').value=Number.isFinite(tgCfg.sl)?tgCfg.sl:'';
+  if($('tgCfgRischio'))$('tgCfgRischio').value=tgCfg.pct;
  tgCfgDisegna();
  const ov=$('tgConfigOverlay');
  if(ov)ov.style.display='flex';
@@ -28748,7 +28752,9 @@ function tgCfgTpAttivi(){
 // e l'utente confermerebbe numeri che non ha letto.
 function tgCfgPiano(){
  if(!tgCfg)return {problemi:['configurazione non aperta']};
- return tgPiano({direzione:tgCfg.side,stop_loss:tgCfg.sl,take_profit:tgCfgTpAttivi()},tgCfg.sym,tgCfg.pct);
+ const entryVal=$('tgCfgEntry')?Number($('tgCfgEntry').value):NaN;
+ const prezzoInserito=Number.isFinite(entryVal)&&entryVal>0?entryVal:undefined;
+ return tgPiano({direzione:tgCfg.side,stop_loss:tgCfg.sl,take_profit:tgCfgTpAttivi(),entrata:prezzoInserito},tgCfg.sym,tgCfg.pct,{prezzo:prezzoInserito});
 }
 function tgCfgDisegna(){
  if(!tgCfg)return;
@@ -28966,6 +28972,7 @@ function tgCfgRegoleEffettive(){
   return null; // regola rimasta orfana dopo che il suo target di destinazione e' stato tolto
  }).filter(Boolean);
 }
+$('tgCfgEntry')?.addEventListener('change',()=>{ if(!tgCfg)return; const v=Number($('tgCfgEntry').value); tgCfg.entry=Number.isFinite(v)&&v>0?v:NaN; tgCfgDisegna(); });
 $('tgCfgSl')?.addEventListener('change',()=>{ if(!tgCfg)return; const v=Number($('tgCfgSl').value); if(Number.isFinite(v)&&v>0)tgCfg.sl=v; tgCfgDisegna(); });
 $('tgCfgRischio')?.addEventListener('input',()=>{
  if(!tgCfg)return;
@@ -32248,7 +32255,18 @@ function tgPiano(seg,sym,pctForzata,opz){
   else if(tipoOrd==='limit'){ notaEntrata='il prezzo è già oltre l\'entrata limite della sala ('+tgFmt(e)+'): aperto a mercato, a un prezzo migliore'; }
   else return {problemi:['entrata STOP a '+tgFmt(e)+' già superata dal prezzo ('+tgFmt(entry)+'): la rottura è già avvenuta, non la inseguo']};
  }
- let slCalcolato=false, lottiFissi=null;
+  // PREZZO DI APERTURA INSERITO DALL'UTENTE (nuovo campo nel popup): se l'utente ha scritto un
+  // prezzo, l'ordine diventa pendente a quel prezzo invece che a mercato. Il tipo (limit o stop)
+  // si deduce dalla direzione rispetto al prezzo di adesso.
+  if(Number.isFinite(opz&&opz.prezzo)&&opz.prezzo>0&&opz.prezzo!==entry){
+   const e=Number(opz.prezzo);
+   const piazzabile=side==='BUY'?(e<entry?true:e>entry?true:true):(e>entry?true:e<entry?true:true);
+   // limit: BUY sotto il prezzo attuale, SELL sopra. stop: il contrario.
+   const eLimit=side==='BUY'?e<entry:e>entry;
+   pendente=true; kind=eLimit?'LIMIT':'STOP'; entry=e;
+   notaEntrata='prezzo di apertura scelto dall\'utente: '+tgFmt(e);
+  }
+  let slCalcolato=false, lottiFissi=null;
  // Automatico = la percentuale arriva dalla sala (pctForzata). Solo li' valgono i due interruttori.
  const inAutomatico=(Number.isFinite(pctForzata)&&pctForzata>0);
  if(!tgC(seg.stop_loss)){
