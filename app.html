@@ -4135,7 +4135,11 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
 
      <div class="tgCfgSez">Livelli comuni a tutte le posizioni</div>
      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
-       <label class="tgCfgCampo" title="Lascialo vuoto per aprire a mercato al prezzo di adesso. Inserisci un prezzo per aprire un ordine limite o stop a quel prezzo.">Prezzo di apertura
+       <label class="tgCfgCampo" style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none">
+         <input type="checkbox" id="tgCfgEntryOn" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer;flex:none">
+         <span>cambia prezzo di entrata (ordine limite)</span>
+       </label>
+       <label id="tgCfgEntryBox" class="tgCfgCampo" style="display:none" title="Lascialo vuoto per aprire a mercato al prezzo di adesso. Inserisci un prezzo per aprire un ordine limite o stop a quel prezzo. Regola: il tuo prezzo deve stare dalla stessa parte dei take profit, altrimenti e' un ordine contrario alla direzione del segnale e non si puo' aprire.">Prezzo di apertura
          <input id="tgCfgEntry" class="tgCfgIn tgCfgNum" type="number" step="any" placeholder="mercato"></label>
        <label class="tgCfgCampo">Stop loss
          <input id="tgCfgSl" class="tgCfgIn tgCfgNum" type="number" step="any"></label>
@@ -8016,6 +8020,10 @@ function drawingTypeLabel(type){
 // così il PROSSIMO disegno creato (tramite styleFromUI, già esistente) userà automaticamente
 // questo stile, senza dover toccare nessun altro codice di creazione dei disegni.
 function applyTemplateStyleToUI(t){
+ // Scelta ESPLICITA dell'utente (modello salvato oppure "Stile predefinito"): da qui in poi
+ // vale QUESTO come default per i prossimi disegni. Eventuali catastici di selezione si
+ // buttano, cosi' non ripristinano uno stile piu' vecchio sopra quello appena scelto.
+ try{ _toolbarDaSelezione=false; _toolbarBackupStile=null; }catch(e){}
  if($('drawColor'))$('drawColor').value=t.color||defaultColorFor(t.type);
  if($('drawWidth'))$('drawWidth').value=t.lineWidth||2;
  if($('drawOpacity'))$('drawOpacity').value=Math.round((t.opacity!=null?t.opacity:1)*100);
@@ -10203,6 +10211,10 @@ function defaultColorFor(type){
  return type==='extendedline'?'#c77dff':type==='fib'?'#8b96a5':(type==='vwap'||type==='vpfixed'||type==='vpanchor')?'#3ea6ff':type==='alarmline'?'#ff5c5c':'#e8c34a';
 }
 function styleFromUI(type){
+ // Parte 2 della correzione dell'opacita' "appiccicata": se la toolbar al momento mostra lo
+ // stile copiato dal disegno selezionato, si ripristina PRIMA di leggere, cosi' il disegno
+ // nuovo nasce con lo stile che c'era prima della selezione (mai con quello del disegno).
+ try{ ripristinaStileToolbarDaSelezione(); }catch(e){}
  const opacity=Math.max(0,Math.min(100,Number($('drawOpacity')?.value)))/100;
  const fillOpacity=Math.max(0,Math.min(100,Number($('drawFillOpacity')?.value)))/100;
  return {
@@ -11068,7 +11080,12 @@ function update(){
    // Richiesto esplicitamente: rimosso il pulsante "✏️ SL/TP" (non serve più) — restano solo
    // BE e Chiudi. modifyMt5TicketFromTable() più sotto resta definita ma non più agganciata a
    // nessun pulsante qui.
-   `<td><button class="miniBtn" data-mt5-be="${p.ticket}" title="Sposta DAVVERO lo Stop Loss al pareggio (spread attuale incluso) sul conto MT5">BE</button><button class="miniBtn danger" data-mt5-close="${p.ticket}" title="Chiude DAVVERO questa posizione sul conto MT5">Chiudi</button></td></tr>`;
+   `<td><button class="miniBtn" data-mt5-be="${p.ticket}" title="Sposta DAVVERO lo Stop Loss al pareggio (spread attuale incluso) sul conto MT5">BE</button><button class="miniBtn danger" data-mt5-close="${p.ticket}" title="Chiude DAVVERO questa posizione sul conto MT5">Chiudi</button></td>`
+    // LA STRISCIA DI VICINANZA, ultima colonna a destra: vedi fblStrisciaPosizione. Anche la
+    // tabella MT5 la mostra ora: l'intestazione aveva gia' la colonna, ma le righe non mettevano
+    // la cella e restava vuota. Il prezzo e' quello della riga (price_current), cosi' striscia e
+    // numeri raccontano lo stesso istante; entry = price_open, come in tabella.
+    + fblStrisciaCellaHtml({side:p.side,entry:p.price_open,sl:p.sl,tp:p.tp,prezzo:Number(p.price_current),ultimoTp:p.ultimoTpRaggiunto}) + `</tr>`;
  }).join('');
  if($('mt5PosPanel'))$('mt5PosPanel').style.display=(mt5Connected||mt5MonitorOnly||mt5RealPositions.length)?'block':'none';
  if($('mt5PosStatus')){
@@ -18162,8 +18179,41 @@ function showDrawSettingsTouchBtn(clientX,clientY,d){
  b.style.top=Math.max(8,clientY-58)+'px';
 }
 function hideDrawSettingsTouchBtn(){ if(_drawSettingsTouchBtn)_drawSettingsTouchBtn.style.display='none'; _drawSettingsTouchTarget=null; _drawSettingsTouchAt=null; }
+// DIFETTO SEGNALATO («l'opacità messa su un disegno rimane anche sul disegno successivo:
+// traccio la linea, metto opacità 0, la prossima trend line / linea di allarme / Fibonacci nasce
+// invisibile»): selezionando un disegno, syncDrawStyleUI copia il SUO stile (opacità compresa)
+// nei controlli della toolbar; il disegno NUOVO legge quei valori con styleFromUI(). Così lo
+// stile "di quel disegno" diventava default del prossimo.
+// LA REGOLA DEL PROPRIETARIO: le modifiche di stile valgono SOLO per quel disegno; il prossimo
+// disegno nasce con i valori che c'erano PRIMA della selezione (scelti dall'utente o standard).
+// Il meccanismo: alla prima selezione si fa un catastico dello stile già presente nella toolbar;
+// quando non c'è più una selezione (o quando la toolbar si legge per creare un disegno) si
+// ripristina il catastico. Se a cambiare i valori è stato l'UTENTE a toolbar (niente selezione),
+// non sono più "roba di un disegno": si toglie il catastico, valgono quelli messi da lui.
+let _toolbarDaSelezione=false, _toolbarBackupStile=null;
+function toolbarValore(id,predef){
+ const el=$(id); return el?String(el.value):predef;
+}
+function ripristinaStileToolbarDaSelezione(){
+ if(!_toolbarDaSelezione)return;
+ _toolbarDaSelezione=false;
+ const b=_toolbarBackupStile; _toolbarBackupStile=null;
+ if(!b)return;
+ if($('drawColor'))$('drawColor').value=b.color;
+ if($('drawWidth'))$('drawWidth').value=b.lineWidth;
+ if($('drawOpacity'))$('drawOpacity').value=b.opacity;
+ if($('drawFillColor'))$('drawFillColor').value=b.fillColor;
+ if($('drawFillOpacity'))$('drawFillOpacity').value=b.fillOpacity;
+ updateDrawStyleVisibility();
+}
 function syncDrawStyleUI(d){
  if(!d)return;
+ // Catastico SOLO alla prima selezione di fila: se già si guardava un disegno e si passa a un
+ // altro, il catastico resta quello di PRIMA di tutta la catena, non del disegno precedente.
+ if(!_toolbarDaSelezione){
+  _toolbarBackupStile={color:toolbarValore('drawColor',''),lineWidth:toolbarValore('drawWidth','2'),opacity:toolbarValore('drawOpacity','100'),fillColor:toolbarValore('drawFillColor',''),fillOpacity:toolbarValore('drawFillOpacity','12')};
+  _toolbarDaSelezione=true;
+ }
  if($('drawColor'))$('drawColor').value=d.color||defaultColorFor(d.type);
  if($('drawWidth'))$('drawWidth').value=d.lineWidth||2;
  if($('drawOpacity'))$('drawOpacity').value=Math.round((d.opacity!=null?d.opacity:1)*100);
@@ -18171,21 +18221,21 @@ function syncDrawStyleUI(d){
  if($('drawFillOpacity'))$('drawFillOpacity').value=Math.round((d.fillOpacity!=null?d.fillOpacity:.12)*100);
  updateDrawStyleVisibility();
 }
-function deselectDrawing(){ hideDrawSettingsTouchBtn(); if(selectedDrawing){selectedDrawing=null;updateDrawStyleVisibility();draw();} }
+function deselectDrawing(){ hideDrawSettingsTouchBtn(); if(selectedDrawing){selectedDrawing=null; ripristinaStileToolbarDaSelezione(); updateDrawStyleVisibility();draw();} }
 function removeSelectedDrawing(){
  if(!selectedDrawing)return $('status').textContent='Nessun disegno selezionato.';
  pushHistory();
  drawings=drawings.filter(d=>d!==selectedDrawing);
  if(hoverDrawing===selectedDrawing)hoverDrawing=null;
  closeDrawTextEditor&&closeDrawTextEditor();
- selectedDrawing=null;updateDrawStyleVisibility();draw();
+ selectedDrawing=null; ripristinaStileToolbarDaSelezione(); updateDrawStyleVisibility();draw();
  $('status').textContent='Disegno eliminato.';
  scheduleSave();
 }
 function removeAllDrawings(){
  if(!drawings.length)return $('status').textContent='Nessun disegno da rimuovere.';
  pushHistory();
- drawings=[];selectedDrawing=null;hoverDrawing=null;
+ drawings=[];selectedDrawing=null;hoverDrawing=null; ripristinaStileToolbarDaSelezione();
  closeDrawTextEditor&&closeDrawTextEditor();
  draw();
  $('status').textContent='Tutti i disegni sono stati rimossi.';
@@ -26700,7 +26750,7 @@ function removeDrawingInstance(d){
  pushHistory();
  drawings=drawings.filter(x=>x!==d);
  if(hoverDrawing===d)hoverDrawing=null;
- if(selectedDrawing===d){ closeDrawTextEditor&&closeDrawTextEditor(); selectedDrawing=null; updateDrawStyleVisibility(); }
+ if(selectedDrawing===d){ closeDrawTextEditor&&closeDrawTextEditor(); selectedDrawing=null; ripristinaStileToolbarDaSelezione(); updateDrawStyleVisibility(); }
  if(vpModalTarget===d)closeVpSettingsModal();
  draw();
  scheduleSave();
@@ -28705,6 +28755,13 @@ async function tgApriConfigurazione(voce){
  };
  if($('tgCfgAvvAttivo'))$('tgCfgAvvAttivo').checked=false;
  if($('tgCfgAvvPct'))$('tgCfgAvvPct').value=tgCfg.avvicinamento.pct;
+  // Il checkbox decide se il campo prezzo si vede: un segnale con l'entrata indicata dalla
+  // sala lo ha spuntato e precompilato; per aprire a mercato il campo resta nascosto e vuoto.
+  if($('tgCfgEntryOn')){
+   const conOrdine=Number.isFinite(Number(seg.entrata));
+   $('tgCfgEntryOn').checked=conOrdine;
+   if($('tgCfgEntryBox'))$('tgCfgEntryBox').style.display=conOrdine?'':'none';
+  }
   if($('tgCfgEntry'))$('tgCfgEntry').value=Number.isFinite(Number(seg.entrata))?seg.entrata:'';
   if($('tgCfgSl'))$('tgCfgSl').value=Number.isFinite(tgCfg.sl)?tgCfg.sl:'';
   if($('tgCfgRischio'))$('tgCfgRischio').value=tgCfg.pct;
@@ -28768,7 +28825,40 @@ function tgCfgPiano(){
  if(!tgCfg)return {problemi:['configurazione non aperta']};
  const entryVal=$('tgCfgEntry')?Number($('tgCfgEntry').value):NaN;
  const prezzoInserito=Number.isFinite(entryVal)&&entryVal>0?entryVal:undefined;
- return tgPiano({direzione:tgCfg.side,stop_loss:tgCfg.sl,take_profit:tgCfgTpAttivi(),entrata:prezzoInserito},tgCfg.sym,tgCfg.pct,{prezzo:prezzoInserito});
+ const piano=tgPiano({direzione:tgCfg.side,stop_loss:tgCfg.sl,take_profit:tgCfgTpAttivi(),entrata:prezzoInserito},tgCfg.sym,tgCfg.pct,{prezzo:prezzoInserito});
+ // RICHIESTA ESPLICITA del proprietario (ordine limite nel popup segnali): se il prezzo di
+ // apertura inserito sta dalla parte opposta rispetto ai take profit attivi, l'ordine e'
+ // CONTRARIO alla direzione del segnale (es. BUY con i target sotto all'entrata, SELL con i
+ // target sopra). In quel caso: messaggio d'errore e il tasto "Apri le posizioni" resta
+ // disabilitato (arriva dal ramo "Non si puo' aprire" del riepilogo) finche' non corregge.
+ // I TP si leggono da tgCfgTpAttivi(), non da piano.tp: tgPiano sposta i target "gia' superati"
+ // in .scartati (e piano.tp resta vuoto), ma il difetto di configurazione resta un difetto.
+ const coerenza=tgValidaEntrataVsTp(prezzoInserito,$('tgCfgSl')?Number($('tgCfgSl').value):NaN,tgCfg.side,tgCfgTpAttivi());
+ if(coerenza){
+  const giaP=Array.isArray(piano.problemi)?piano.problemi:[];
+  piano.problemi=giaP.concat([coerenza]);
+ }
+ return piano;
+}
+// Il controllo richiesto, in una funzione sola: ritorna il testo del problema, o '' se la
+// configurazione e' coerente. BUY: tutti i TP attivi devono stare SOPRA l'entrata e lo stop
+// SOTTO; SELL l'opposto. Il prezzo di mercato decide solo se l'ordine sara' limite o stop, non
+// la coerenza: un'entrata sotto al mercato con i target ancora piu' sotto = ordine contrario
+// ai target, e va bloccato.
+function tgValidaEntrataVsTp(entry,sl,side,tps){
+ if(!entry)return '';
+ if(!Array.isArray(tps)||!tps.length)return '';
+ const compra=String(side||'').toUpperCase()!=='SELL';
+ const sbagliaUnTp=(tp)=>Number.isFinite(tp)&&tp>0&&(compra?tp<=entry:tp>=entry);
+ if(tps.some(sbagliaUnTp)){
+  return "Il prezzo di apertura ("+tgFmt(entry)+") e' incoerente con la direzione dei take profit"
+   +" (devono stare "+(compra?'sopra':'sotto')+"): correggi il prezzo di apertura o i target prima di aprire.";
+ }
+ if(Number.isFinite(sl)&&sl>0){
+  const slContrario=compra?(sl>=entry):(sl<=entry);
+  if(slContrario)return "Lo stop loss ("+tgFmt(sl)+") sta dalla parte sbagliata rispetto al prezzo di apertura ("+tgFmt(entry)+"): correggilo prima di aprire.";
+ }
+ return '';
 }
 function tgCfgDisegna(){
  if(!tgCfg)return;
@@ -28987,6 +29077,16 @@ function tgCfgRegoleEffettive(){
  }).filter(Boolean);
 }
 $('tgCfgEntry')?.addEventListener('change',()=>{ if(!tgCfg)return; const v=Number($('tgCfgEntry').value); tgCfg.entry=Number.isFinite(v)&&v>0?v:NaN; tgCfgDisegna(); });
+$('tgCfgEntryOn')?.addEventListener('change',()=>{
+ if(!tgCfg)return;
+ // Il checkbox governa il campo: spuntato = campo visibile (ordine limite/stop a quel prezzo);
+ // senza spunta = apertura a mercato, il campo si nasconde e si svuota (e la validazione
+ // entrata-verso-target non c'e' piu', perche' non c'e' un prezzo inserito).
+ const on=$('tgCfgEntryOn').checked, box=$('tgCfgEntryBox'), inp=$('tgCfgEntry');
+ if(box)box.style.display=on?'':'none';
+ if(!on&&inp)inp.value='';
+ tgCfgDisegna();
+});
 $('tgCfgSl')?.addEventListener('change',()=>{ if(!tgCfg)return; const v=Number($('tgCfgSl').value); if(Number.isFinite(v)&&v>0)tgCfg.sl=v; tgCfgDisegna(); });
 $('tgCfgRischio')?.addEventListener('input',()=>{
  if(!tgCfg)return;
@@ -50143,7 +50243,7 @@ function fblRicaricaPagina(){
 }
 // Il pulsante dice quello che farà, non quello che farebbe: il nome cambia con la decisione.
 function fblEtichettaAggiorna(piano){
-  return (piano&&piano.serve)?'\u2b07\ufe0f Aggiorna':'\U0001f504 Aggiorna l\'app';
+  return (piano&&piano.serve)?'\u2b07\ufe0f Aggiorna':'\u{1F504} Aggiorna l\'app';
 }
 async function fblMostraPulsanteAggiorna(release, tagRemoto){
   const btn=document.getElementById('fblAggiornaBtn');
@@ -50173,7 +50273,7 @@ async function fblApplicaAggiornamento(release, tagRemoto, btn){
     // lasciare acceso il pulsante «Aggiorna» finche' non si trova la striscia in basso.
     // Vedi il gestore del messaggio 'versione-nuova'.
     try{ localStorage.setItem('fbl_aggiornamento_atteso',String(Date.now())); }catch(e){}
-    try{ $('status').textContent='\U0001f504 Aggiorno l\'app e ricarico la pagina…'; }catch(e){}
+    try{ $('status').textContent='\u{1F504} Aggiorno l\'app e ricarico la pagina\u2026'; }catch(e){}
     fblRicaricaPagina();
     return;
   }
@@ -50242,6 +50342,13 @@ async function fblControllaAggiornamento(forza){
         // ancora installarlo).
         await fblApplicaAggiornamento(d, tagRemoto, btn);
       };
+    }else if(installata && tagRemoto){
+      // SEGNALATO dal proprietario: «il tasto aggiorna rimane anche dopo aver aggiornato
+      // l'applicazione». Qui si mostrava il pulsante quando la versione era nuova, ma non si
+      // nascondeva MAI quando lo sai diventata uguale. La versione installata e' nota e non e'
+      // piu' precedente alla pubblicata: il pulsante in alto torna spento, come a riposo.
+      const btn=document.getElementById('fblAggiornaBtn');
+      if(btn){ btn.style.display='none'; btn.disabled=false; }
     }
   }catch(e){ console.warn('Aggiornamento non disponibile:', e); }
 }
@@ -50506,7 +50613,7 @@ async function fblAggiornaPannelloVersione(forza){
 $('fblVerControllaBtn')?.addEventListener('click',()=>{
   const b=$('fblVerControllaBtn');
   if(b){b.disabled=true;b.textContent='Controllo\u2026';}
-  fblAggiornaPannelloVersione(true).finally(()=>{ if(b){b.disabled=false;b.textContent='\U0001F504 Controlla aggiornamenti';} });
+  fblAggiornaPannelloVersione(true).finally(()=>{ if(b){b.disabled=false;b.textContent='\u{1F504} Controlla aggiornamenti';} });
 });
 
 setTimeout(()=>{ fblControllaAggiornamento(); },3000);
