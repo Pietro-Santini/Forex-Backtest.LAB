@@ -2582,6 +2582,18 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              lo stop a profitto <b>dall\'ultimo target raggiunto</b>. Come l\'app di MT5 per telefono,
              che le mette a sinistra: qui stanno a destra.
            </div>
+            <div class="fbSettingsSectionTitle" style="margin-top:14px">Effetto di apertura</div>
+            <div class="fbOptRow">
+              <label style="flex:none;min-width:110px" title="L'animazione del grafico che si disegna da solo nei primi secondi dell'app. Si vede solo alla prima apertura della giornata, mai con posizioni aperte, e si salta con un clic o un tasto.">Effetto wow</label>
+              <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+                <input type="checkbox" id="fblWow" checked>
+                mostra l'animazione all'apertura
+              </label>
+            </div>
+            <div class="hint" style="margin:-4px 0 10px">
+              Si vede una sola volta per sessione, mai se ci sono posizioni aperte, e si salta con
+              un clic, un tocco o un tasto qualsiasi. Spegnendolo qui non costa nulla.
+            </div>
             <div class="fbSettingsSectionTitle">🕒 Chiusura mercato</div>
             <div class="fbOptRow">
               <label style="flex:none;min-width:110px" title="Intorno alla chiusura e alla riapertura del mercato, lo stop a pareggio viene allontanato di uno spread, cosi' il cambio giornata non lo prende; quando il mercato si stabilizza lo stop torna al pareggio esatto">Margine di chiusura</label>
@@ -50503,6 +50515,91 @@ setInterval(()=>{ fblControllaAggiornamento(); },30*60*1000);
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible')fblControllaAggiornamento();
 });
+const WOW_KEY = 'fbl_wow_session';
+function fblWowAttivo(){ try{ const el=document.getElementById('fblWow'); if(el)return !!el.checked; }catch(e){} try{ return localStorage.getItem('fbl_wow')!=='0'; }catch(e){ return true; } }
+function fblWowDevePartire(){
+  try{
+    if(!fblWowAttivo()) return false;
+    if(sessionStorage.getItem(WOW_KEY)) return false;
+    try{ if(Array.isArray(positions)&&positions.length>0) return false; }catch(e){}
+    try{ if(Array.isArray(trades)&&trades.some(t=>!t.closedAt&&!t.exit)) return false; }catch(e){}
+    if(document.visibilityState!=='visible') return false;
+    return true;
+  }catch(e){ return false; }
+}
+function fblWowLancia(){
+  if(!fblWowDevePartire()) return;
+  const ov=document.getElementById('wowOverlay');
+  const canvas=document.getElementById('wowCanvas');
+  if(!ov||!canvas) return;
+  sessionStorage.setItem(WOW_KEY,'1');
+  ov.style.display='block';
+  const ctx=canvas.getContext('2d');
+  let W=canvas.width=window.innerWidth, H=canvas.height=window.innerHeight;
+  window.addEventListener('resize',()=>{ W=canvas.width=window.innerWidth; H=canvas.height=window.innerHeight; });
+  const N=60;
+  const candles=[];
+  let price=100;
+  for(let i=0;i<N;i++){ const o=price; const c=o+(Math.random()-.45)*0.8; const hi=Math.max(o,c)+Math.random()*0.3; const lo=Math.min(o,c)-Math.random()*0.3; candles.push({o,c,hi,lo}); price=c; }
+  const minP=Math.min(...candles.map(c=>c.lo)), maxP=Math.max(...candles.map(c=>c.hi));
+  const pad={l:40,r:60,t:40,b:60};
+  const cw=(W-pad.l-pad.r)/N, ch=H-pad.t-pad.b;
+  const y=p=>pad.t+ch*(1-(p-minP)/(maxP-minP));
+  let skipped=false;
+  function skip(){ skipped=true; }
+  ov.addEventListener('click',skip);
+  window.addEventListener('keydown',skip,{once:true});
+  ov.addEventListener('touchstart',skip,{passive:true});
+  const t0=performance.now();
+  const DUR=1500;
+  function frame(now){
+    if(skipped||now-t0>=DUR){ dissolvi(); return; }
+    const elapsed=now-t0;
+    const n=Math.min(N, Math.floor(elapsed/12)+1);
+    ctx.fillStyle='#0e141c'; ctx.fillRect(0,0,W,H);
+    const rows=Math.floor((elapsed/DUR)*8);
+    ctx.fillStyle='#1a2230'; ctx.font='10px monospace';
+    for(let r=0;r<rows;r++){ const p=minP+(maxP-minP)*r/7; ctx.fillRect(W-pad.r+4, y(p)-1, pad.r-8, 2); ctx.fillStyle='#5b6775'; ctx.fillText(p.toFixed(2), W-pad.r+8, y(p)+3); ctx.fillStyle='#1a2230'; }
+    for(let i=0;i<n;i++){
+      const c=candles[i], x=pad.l+i*cw;
+      const isUp=c.c>=c.o;
+      ctx.strokeStyle=isUp?'#2fbf71':'#e05252'; ctx.fillStyle=isUp?'#2fbf71':'#e05252';
+      ctx.lineWidth=1;
+      ctx.beginPath(); ctx.moveTo(x+cw/2,y(c.lo)); ctx.lineTo(x+cw/2,y(c.hi)); ctx.stroke();
+      ctx.fillRect(x+1, Math.min(y(c.o),y(c.c)), cw-2, Math.abs(y(c.o)-y(c.c))||1);
+    }
+    if(elapsed>DUR-300){
+      const prog=(elapsed-(DUR-300))/300;
+      const last=candles[N-1];
+      const tpY=y(last.c+0.5), slY=y(last.c-0.5);
+      ctx.setLineDash([4,4]);
+      ctx.strokeStyle='#2fbf71'; ctx.lineWidth=1.5; ctx.globalAlpha=prog;
+      ctx.beginPath(); ctx.moveTo(pad.l, tpY); ctx.lineTo(pad.l+prog*(W-pad.l-pad.r), tpY); ctx.stroke();
+      ctx.strokeStyle='#e05252';
+      ctx.beginPath(); ctx.moveTo(pad.l, slY); ctx.lineTo(pad.l+prog*(W-pad.l-pad.r), slY); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+    }
+    if(elapsed>DUR-400){
+      const nm=document.getElementById('wowNome');
+      if(nm){ nm.style.opacity=String((elapsed-(DUR-400))/400); }
+    }
+    requestAnimationFrame(frame);
+  }
+  function dissolvi(){
+    ov.style.transition='opacity .2s'; ov.style.opacity='0';
+    setTimeout(()=>{ ov.style.display='none'; ov.style.opacity='1'; ov.style.transition=''; },200);
+    const nm=document.getElementById('wowNome'); if(nm) nm.style.opacity='0';
+  }
+  requestAnimationFrame(frame);
+}
+window.addEventListener('load',()=>{ setTimeout(fblWowLancia, 100); });
+
 </script>
 
+<!-- ===== EFFETTO WOW ALL'APERTURA ===== -->
+<div id="wowOverlay" style="display:none;position:fixed;inset:0;z-index:99999;background:#0e141c;cursor:pointer;overflow:hidden">
+  <canvas id="wowCanvas" style="position:absolute;inset:0;width:100%;height:100%"></canvas>
+  <div id="wowNome" style="position:absolute;bottom:24px;left:0;right:0;text-align:center;font-size:14px;font-weight:600;color:#8b96a5;opacity:0;transition:opacity .3s;pointer-events:none">BacktestLAB FOREX EDITION</div>
+  <div id="wowSalta" style="position:absolute;top:12px;right:16px;font-size:11px;color:#5b6775;opacity:.6;pointer-events:none">clicca per saltare</div>
+</div>
 </body></html>
