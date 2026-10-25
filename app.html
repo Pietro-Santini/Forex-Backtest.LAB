@@ -20639,6 +20639,7 @@ function fblCloudSalvaTradeJournal(){
 function closeTrade(reason,price,pos,realLevels,silent,veri){
  pos=pos||active;
  if(!pos)return;
+ if(liveReplayActive && pos.mt5Ticket!=null){ $('status').textContent='In replay non si chiudono posizioni reali su MT5: solo le posizioni simulate del replay.'; return; }
  const lots=pos.lots||getLotSize();
  // BUG RISOLTO: senza l'asset esplicito, calculateForexPL usava lo strumento SELEZIONATO ORA
  // sul grafico ($('market').value) invece di quello REALE della posizione — se si chiudeva una
@@ -20663,7 +20664,7 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // in fetchMt5Positions() che ormai non le adotta più in Storico), ma qui forziamo comunque il
  // ramo Live corretto come ultima rete di sicurezza, qualunque fosse la sessione a schermo nel
  // momento esatto della chiusura.
- const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):currentMode();
+ const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):(pos.historical?(isPropFirmMode?'backtest_propfirm':'backtest'):currentMode());
  // RICHIESTO ESPLICITAMENTE: ogni operazione reale MT5 porta con sé il NUMERO DI CONTO su cui è
  // stata eseguita (Journal separato per conto, statistiche mai sommate fra conti MT5 diversi).
  const acctTag=pos.mt5Ticket!=null?(pos.mt5Login?{mt5Login:String(pos.mt5Login),mt5Server:pos.mt5Server||''}:currentMt5AccountTag()):{};
@@ -20710,7 +20711,7 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // l'equity curve è un'unica timeline continua del conto, non una per asset. Con il profitto vero
  // di MT5 la curva segue quello (il saldo del broker va solo nella colonna "Conto" del Journal,
  // la curva resta sul capitale dell\'app per non avere salti).
- equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
+ if(!pos.historical) equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
  // Il Trade Journal e' cambiato: va anche nel cloud, che e' l'unica copia che segue l'account
  // attraverso aggiornamenti, reinstallazioni e cambi di indirizzo d'ingresso.
  fblCloudSalvaTradeJournal();
@@ -20745,20 +20746,22 @@ async function deleteTrade(i){
 function removeTradeRecordAt(i){
  const t=trades[i]; if(!t)return;
  const mode=t.mode||'backtest';
- const modeTrades=trades.filter(x=>x.mode===mode);
- const filteredIdx=modeTrades.indexOf(t);
- const baseline=statsBaselineByMode[mode]||0;
- if(filteredIdx<baseline){
-   statsBaselineByMode[mode]=baseline-1;
- }else{
-   const eqIdx=(filteredIdx-baseline)+1; // equity[0] è il capitale iniziale della modalità
-   if(mode===currentMode()){
-     if(eqIdx>0&&eqIdx<equity.length)equity.splice(eqIdx,1);
-   }else{
-     const snap=sessionByMode[mode];
-     if(snap&&Array.isArray(snap.equity)&&eqIdx>0&&eqIdx<snap.equity.length){
-       snap.equity=snap.equity.slice();
-       snap.equity.splice(eqIdx,1);
+ if(!t.historical){
+   const modeTrades=trades.filter(x=>(x.mode||'backtest')===mode && !x.historical);
+   const filteredIdx=modeTrades.indexOf(t);
+   const baseline=statsBaselineByMode[mode]||0;
+   if(filteredIdx<baseline && filteredIdx>=0){
+     statsBaselineByMode[mode]=baseline-1;
+   }else if(filteredIdx>=baseline){
+     const eqIdx=(filteredIdx-baseline)+1; // equity[0] è il capitale iniziale della modalità
+     if(mode===currentMode()){
+       if(eqIdx>0&&eqIdx<equity.length)equity.splice(eqIdx,1);
+     }else{
+       const snap=sessionByMode[mode];
+       if(snap&&Array.isArray(snap.equity)&&eqIdx>0&&eqIdx<snap.equity.length){
+         snap.equity=snap.equity.slice();
+         snap.equity.splice(eqIdx,1);
+       }
      }
    }
  }
@@ -21372,7 +21375,8 @@ function activatePendingOrder(p){
    // che si sta guardando dopo (vedi openReferenceTimeForPos()).
    marginUsed:requiredMargin,
    // "Congela" lo SL di apertura per l'R/R (vedi nota identica in openMarketTrade()).
-   rrSl:p.sl
+   rrSl:p.sl,
+   historical:!!p.historical
  };
  // Pendente nato da un segnale: la posizione eredita sala, gruppo e target (strategia, Journal).
  ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
@@ -21480,7 +21484,7 @@ function createPendingOrder(side){
  // Con MT5 collegato, l'ordine pendente è VERO (vedi placeRealMt5PendingOrder) invece che
  // simulato: le due cose restano sempre separate, mai mescolate (stesso principio già seguito
  // per BUY/SELL a mercato).
- if(mt5Connected){
+ if(mt5Connected && !liveReplayActive){
    placeRealMt5PendingOrder(side,kind,entry,Number.isFinite(sl)?sl:null,Number.isFinite(tp)?tp:null,lots,asset);
    $('pendingEntry').value='';
    $('slPending').value='';
@@ -21494,7 +21498,8 @@ function createPendingOrder(side){
    // nascoste in replay.
    createdAt:Date.now(),
    asset,
-   side,kind,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,lots
+   side,kind,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,lots,
+   historical:!!liveReplayActive
  });
  // Svuota Entry/SL/TP dell'ordine pendente dopo la conferma riuscita: pronte per impostarne
  // uno nuovo senza dover cancellare a mano i valori precedenti. Lottaggio e rischio % restano
@@ -22517,7 +22522,7 @@ function openMarketTrade(side,forz){
  // aprire una posizione simulata: le due cose restano sempre separate, mai mescolate.
  // In Storico (conto "Storico" scelto) gli ordini manuali sono del backtest, anche se MT5 resta
  // collegato in background.
- if(mt5Connected&&(forz||liveModeActive)){ return placeRealMt5Order(side,forz); }
+ if(mt5Connected&&(forz||liveModeActive)&&!liveReplayActive){ return placeRealMt5Order(side,forz); }
  if(blockedByPropFirmNews())return; // STEP 2: conto chiuso per violazione, o notizia macro simulata in corso
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
  const market=rows[idx];
@@ -22559,7 +22564,8 @@ function openMarketTrade(side,forz){
    side,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,origin:'MARKET',
    lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(market.date),
    openTF:currentTF, // vedi nota in activatePendingOrder()
-   marginUsed:requiredMargin
+   marginUsed:requiredMargin,
+   historical:!!liveReplayActive
  };
  // Anteprima automatica SL/TP: se l'utente non aveva già scritto un valore nelle caselle,
  // mostriamo subito due linee SL/TP di default (equidistanti dall'entrata) già trascinabili
@@ -30424,7 +30430,8 @@ async function tgCapitalEseguiSegnale(voce,o){
   const tp=(i<p.tp.length)?p.tp[i]:null;
   const pos={id:Date.now()+Math.random(),asset:o.sym,side:p.side,entry:p.entry,sl:p.sl,
    tp:(Number.isFinite(tp)?tp:null),origin:'MARKET',lots:p.lotti,risk:0,dist:0,hasRiskModel:false,
-   start:idx,startTime:Date.now(),openTF:currentTF,marginUsed:Number(p.margine)||0,account:'capital',
+   start:idx,startTime:liveReplayActive?replayMomentoMostrato():Date.now(),openTF:currentTF,marginUsed:Number(p.margine)||0,account:'capital',
+   historical:!!liveReplayActive,
    tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
   pos.rrSl=pos.sl;
   positions.push(pos);
@@ -40809,7 +40816,7 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
      id:Date.now()+Math.random(),
      asset,side:p.side,entry:applySpreadToEntry(p.side,p.entry,asset),sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
      lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:0,startTime:p.startTime||Date.now(),
-     openTF:currentTF,marginUsed:requiredMargin
+     openTF:currentTF,marginUsed:requiredMargin,historical:!!p.historical
    };
    positions.push(pos);
    playOrderSound();
@@ -45599,8 +45606,8 @@ async function fblCredsDbSet(key,value){
 }
 // Mappa nome-file ↔ chiave IndexedDB
 function fblCredsKeyPerFile(nome){
-  if(nome===MT5_ACCOUNTS_FILE) return 'mt5Accounts';
-  if(nome===MT5_CREDS_FILE) return 'mt5Creds';
+  if(typeof MT5_ACCOUNTS_FILE!=='undefined' && nome===MT5_ACCOUNTS_FILE) return 'mt5Accounts';
+  if(typeof MT5_CREDS_FILE!=='undefined' && nome===MT5_CREDS_FILE) return 'mt5Creds';
   if(typeof CAPITAL_CREDS_FILE!=='undefined' && nome===CAPITAL_CREDS_FILE) return 'capitalCreds';
   return null;
 }
