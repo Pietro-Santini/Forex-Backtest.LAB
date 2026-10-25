@@ -9734,6 +9734,11 @@ async function libDirPut(key,value){
 }
 let libraryRootHandle=null, libraryRootHandleChecked=false;
 const supportsFS=!!window.showDirectoryPicker;
+// Versione del bundle, iniettata dal build mobile (aggiorna_www.bat) a partire dal CACHE_NAME di
+// sw.js. Sul web/PWA resta il segnaposto e la versione si legge da sw.js; sul mobile (bundle
+// file://, nessun service worker) e' l'unica fonte affidabile, altrimenti fblVersioneInstallata()
+// restituisce '' e il pulsante «Aggiorna» resta acceso per sempre.
+const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21409,6 +21414,7 @@ function checkPendingOrders(){
 // syncMt5PendingOrderLevels). Se scatta per davvero, fetchMt5Orders() lo rileva e lo adotta come
 // posizione standard.
 async function placeRealMt5PendingOrder(side,kind,entry,sl,tp,lots,asset,opz){
+  if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine pendente reale viene inviato a MT5.'; return null; }
  opz=opz||{};
  if(!asset){ $('status').textContent='Seleziona prima un ASSET.'; return null; }
  if(!(lots>0)){ $('status').textContent='Lottaggio non valido.'; return null; }
@@ -22360,6 +22366,7 @@ async function closeMt5PositionReal(pos,reason,opz){
 // specificato" - percio' diventa NaN e NON viene rimpiazzato dal TP automatico qui sotto.
 // Restituisce true/false: chi apre N posizioni in fila deve potersi fermare alla prima rifiutata.
 async function placeRealMt5Order(side,forz){
+  if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
  // forz.sym: ordine su un asset che non e' a grafico (apertura automatica dei segnali), con il
  // prezzo indicativo in forz.prezzo. Senza, tutto come sempre: l'asset a grafico.
  const symbol=(forz&&forz.sym)||currentAssetKey||$('market')?.value||'';
@@ -45475,7 +45482,10 @@ async function writeCapitalCredsToHandle(handle,creds){
 // (o il suo rinnovo dopo un riavvio del browser) richiede un "gesto utente" per funzionare.
 async function getCapitalCredsDirHandle(){
  if(capitalCredsDirHandle)return capitalCredsDirHandle;
- if(!supportsFS)return null;
+ if(!supportsFS){
+   capitalCredsDirHandle=fblMobileCredsHandle();
+   return capitalCredsDirHandle;
+ }
  const handle=await libDirGet('capitalCredsDir');
  if(!handle)return null;
  if(await verifyDirPermission(handle,'readwrite')){ capitalCredsDirHandle=handle; return handle; }
@@ -45548,6 +45558,84 @@ async function removeMt5AccountFromHandle(handle,creds){
 // Ritorna l'handle della cartella credenziali MT5 già collegata (se il permesso è ancora
 // valido), altrimenti null. Va chiamata da dentro un click dell'utente, come l'equivalente
 // Capital.com sopra.
+// ===================== ARCHIVIO LOCALE DELLE CREDENZIALI (mobile) =====================
+// Su mobile (Capacitor) la File System Access API non esiste (supportsFS=false): non si può
+// scegliere una cartella. Le credenziali si salvano quindi in un archivio IndexedDB interno
+// all'app, che sopravvive agli aggiornamenti. Per non riscrivere tutta la logica di lettura/
+// scrittura (che usa handle.getFileHandle/createWritable), si fornisce un handle "virtuale"
+// che implementa la stessa interfaccia minima, appoggiandosi a IndexedDB.
+const FBL_CREDS_DB_NAME='FxbtCredsDB';
+const FBL_CREDS_DB_VERSION=1;
+const FBL_CREDS_STORE='kv';
+function fblCredsDbOpen(){
+  return new Promise((resolve,reject)=>{
+    const req=indexedDB.open(FBL_CREDS_DB_NAME,FBL_CREDS_DB_VERSION);
+    req.onupgradeneeded=()=>{ if(!req.result.objectStoreNames.contains(FBL_CREDS_STORE)) req.result.createObjectStore(FBL_CREDS_STORE,{keyPath:'key'}); };
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error);
+  });
+}
+async function fblCredsDbGet(key){
+  try{
+    const db=await fblCredsDbOpen();
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(FBL_CREDS_STORE,'readonly');
+      const req=tx.objectStore(FBL_CREDS_STORE).get(key);
+      req.onsuccess=()=>resolve(req.result?req.result.value:undefined);
+      req.onerror=()=>reject(req.error);
+    });
+  }catch(e){ return undefined; }
+}
+async function fblCredsDbSet(key,value){
+  try{
+    const db=await fblCredsDbOpen();
+    return await new Promise((resolve,reject)=>{
+      const tx=db.transaction(FBL_CREDS_STORE,'readwrite');
+      tx.objectStore(FBL_CREDS_STORE).put({key,value});
+      tx.oncomplete=()=>resolve(true);
+      tx.onerror=()=>reject(tx.error);
+    });
+  }catch(e){ console.warn('Archivio credenziali locale: scrittura fallita',e); return false; }
+}
+// Mappa nome-file ↔ chiave IndexedDB
+function fblCredsKeyPerFile(nome){
+  if(nome===MT5_ACCOUNTS_FILE) return 'mt5Accounts';
+  if(nome===MT5_CREDS_FILE) return 'mt5Creds';
+  if(typeof CAPITAL_CREDS_FILE!=='undefined' && nome===CAPITAL_CREDS_FILE) return 'capitalCreds';
+  return null;
+}
+function fblMobileFileHandle(nome){
+  const chiave=fblCredsKeyPerFile(nome);
+  return {
+    name:nome, kind:'file',
+    async getFile(){
+      const v = chiave ? await fblCredsDbGet(chiave) : undefined;
+      const testo = (v===undefined||v===null) ? '' : (typeof v==='string'?v:JSON.stringify(v));
+      return new Blob([testo],{type:'application/json'});
+    },
+    async createWritable(){
+      let buffer='';
+      return {
+        async write(data){ buffer += (typeof data==='string' ? data : (data&&typeof data.toString==='function'?data.toString():'')); },
+        async close(){
+          if(!chiave) return;
+          let parsed=null;
+          try{ parsed=JSON.parse(buffer); }catch(e){ parsed=buffer; }
+          await fblCredsDbSet(chiave,parsed);
+        }
+      };
+    }
+  };
+}
+function fblMobileCredsHandle(){
+  return {
+    name:'Archivio locale (interno all\'app)',
+    kind:'directory',
+    async getFileHandle(nome,opts){ return fblMobileFileHandle(nome); },
+    async queryPermission(){ return 'granted'; },
+    async requestPermission(){ return 'granted'; },
+  };
+}
 // ===================== LA CARTELLA DELLE CREDENZIALI: STATO E RICOLLEGAMENTO =====================
 //
 // RICHIESTO dal proprietario: «quando segui l'aggiornamento mi succede che le credenziali di
@@ -45571,7 +45659,10 @@ const FBL_CRED_CARTELLE=[
 // scelta, 'ok' se il permesso c'e' ancora, 'daRiconfermare' se il browser lo ha dimenticato.
 async function fblCredStatoCartella(chiave){
  try{
-  if(!supportsFS)return 'nonSupportato';
+  if(!supportsFS){
+    if(fblEMobile())return 'ok';
+    return 'nonSupportato';
+  }
   const h=await libDirGet(chiave);
   if(!h)return 'manca';
   const q=await h.queryPermission({mode:'readwrite'});
@@ -45582,9 +45673,13 @@ async function fblCredCartellaAggiorna(){
  const box=$('fblCredCartellaStato');
  if(!box)return;
  if(!supportsFS){
-  box.textContent='Questo browser non sa collegare una cartella del dispositivo: le credenziali '
-   +'vanno reinserite a ogni sessione. Su computer, usa Chrome o Edge.';
-  return;
+   if(fblEMobile()){
+     box.textContent='Credenziali: archivio interno all\'app (IndexedDB) - sopravvive agli aggiornamenti, non serve scegliere una cartella.';
+   }else{
+     box.textContent='Questo browser non sa collegare una cartella del dispositivo: le credenziali '
+      +'vanno reinserite a ogni sessione. Su computer, usa Chrome o Edge.';
+   }
+   return;
  }
  const stati=[];
  for(const c of FBL_CRED_CARTELLE)stati.push({...c,stato:await fblCredStatoCartella(c.chiave)});
@@ -45634,7 +45729,11 @@ fblDelega('click',ev=>{
 });
 async function getMt5CredsDirHandle(){
  if(mt5CredsDirHandle)return mt5CredsDirHandle;
- if(!supportsFS)return null;
+ if(!supportsFS){
+   // Mobile: archivio interno IndexedDB, nessuna cartella da scegliere.
+   mt5CredsDirHandle=fblMobileCredsHandle();
+   return mt5CredsDirHandle;
+ }
  const handle=await libDirGet('mt5CredsDir');
  if(!handle)return null;
  if(await verifyDirPermission(handle,'readwrite')){ mt5CredsDirHandle=handle; return handle; }
@@ -46373,7 +46472,10 @@ async function mt5Passo1Parole(giaInstallato){
    +'<b>Collegamento &rarr; Accesso da altri dispositivi</b> ci sia il suo indirizzo (con Tailscale acceso '
    +'sullo stesso account). Poi riprova.';
   if(scarica)scarica.style.display='none';
-  if(avanti){ avanti.style.display='block'; avanti.textContent='🔄 Riprova adesso'; }
+  if(avanti){ avanti.style.display='block';
+    if(fblEMobile()){ avanti.textContent='📝 Inserisci credenziali (salva nell\'app)'; avanti.onclick=()=>{ try{ mt5ShowStepVisible(3); }catch(e){} }; }
+    else { avanti.textContent='🔄 Riprova adesso'; avanti.onclick=null; }
+  }
   return;
  }
  if(scarica)scarica.style.display='block';
@@ -47086,7 +47188,7 @@ $('mt5LoginSubmitBtn').addEventListener('click',async()=>{
  }
  $('mt5LoginSubmitBtn').disabled=false;
  $('mt5LoginSubmitBtn').textContent='Connetti';
- if(!result.ok){
+ if(!result.ok && !(fblEMobile() && /non raggiungibile/i.test(result.message||''))){
    errEl.textContent='⚠️ '+result.message;
    errEl.style.display='block';
    // Messaggio specifico impostato da connectToMt5Bridge() quando il fetch fallisce per
@@ -47105,19 +47207,20 @@ $('mt5LoginSubmitBtn').addEventListener('click',async()=>{
    return; // bridge irraggiungibile o credenziali sbagliate: non salviamo né chiudiamo il popup
  }
  let saved=false;
- if(supportsFS){
+ if(true){
    try{
      let handle=await getMt5CredsDirHandle();
-     if(!handle){
-       // Primo salvataggio: chiediamo la cartella (gesto utente presente, siamo dentro un click).
+     if(!handle && supportsFS){
+       // Primo salvataggio su desktop: chiediamo la cartella (gesto utente presente).
        handle=await window.showDirectoryPicker({id:'fxbt-mt5-creds',mode:'readwrite'});
        await libDirPut('mt5CredsDir',handle);
        mt5CredsDirHandle=handle;
      }
-     // STEP B: si aggiunge alla lista (o si aggiorna se login+server esistono già), non si
-     // sovrascrive più un unico file come nello STEP A.
-     mt5SavedAccounts=await upsertMt5AccountInHandle(handle,creds);
-     saved=true;
+     if(handle){
+       // STEP B: si aggiunge alla lista (o si aggiorna se login+server esistono già).
+       mt5SavedAccounts=await upsertMt5AccountInHandle(handle,creds);
+       saved=true;
+     }
    }catch(e){ console.warn('Salvataggio conto MT5 su cartella locale non riuscito:',e); }
  }
  mt5CredsDraft=creds;
@@ -47279,17 +47382,18 @@ $('liveLoginSubmitBtn').addEventListener('click',async()=>{
    return; // credenziali sbagliate o connessione impossibile: non salviamo né chiudiamo il popup
  }
  let saved=false;
- if(supportsFS){
+ if(true){
    try{
      let handle=await getCapitalCredsDirHandle();
-     if(!handle){
-       // Primo salvataggio: chiediamo la cartella (gesto utente presente, siamo dentro un click).
+     if(!handle && supportsFS){
        handle=await window.showDirectoryPicker({id:'fxbt-capital-creds',mode:'readwrite'});
        await libDirPut('capitalCredsDir',handle);
        capitalCredsDirHandle=handle;
      }
-     await writeCapitalCredsToHandle(handle,creds);
-     saved=true;
+     if(handle){
+       await writeCapitalCredsToHandle(handle,creds);
+       saved=true;
+     }
    }catch(e){ console.warn('Salvataggio credenziali Live su cartella locale non riuscito:',e); }
  }
  liveCredsDraft=creds;
@@ -50720,11 +50824,15 @@ async function fblControllaAggiornamento(forza){
         // ancora installarlo).
         await fblApplicaAggiornamento(d, tagRemoto, btn);
       };
-    }else if(installata && tagRemoto){
+    }else if(tagRemoto){
       // SEGNALATO dal proprietario: «il tasto aggiorna rimane anche dopo aver aggiornato
       // l'applicazione». Qui si mostrava il pulsante quando la versione era nuova, ma non si
       // nascondeva MAI quando lo sai diventata uguale. La versione installata e' nota e non e'
       // piu' precedente alla pubblicata: il pulsante in alto torna spento, come a riposo.
+      // La condizione NON dipende piu' da `installata` (che su mobile puo' essere '' perche'
+      // caches/fetch non funzionano nel bundle): se la remota non e' nuova, il pulsante si
+      // spegne comunque, e si annota il tag visto per non riproporlo al prossimo avvio.
+      try{ localStorage.setItem('fbl_rel_vista', tagRemoto); }catch(e){}
       const btn=document.getElementById('fblAggiornaBtn');
       if(btn){ btn.style.display='none'; btn.disabled=false; }
     }
@@ -50896,6 +51004,10 @@ async function fblVersioneInstallata(){
       const m=/CACHE_NAME\s*=\s*["']forex-backtest-lab-v([\d.]+)["']/.exec(testo);
       if(m)return m[1];
     }
+  }catch(e){}
+  try{
+    const bundle=(typeof FBL_VERSIONE_BUNDLE!=='undefined')?FBL_VERSIONE_BUNDLE:'';
+    if(/^\d+\.\d+\.\d+$/.test(String(bundle)))return String(bundle);
   }catch(e){}
   return '';
 }
