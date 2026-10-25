@@ -699,3 +699,24 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   le statistiche, tocco su TP2 scompattata seleziona p2) e `impostazioni_sistema.test.mjs` (2).
 
 
+- **Credenziali MT5/Capital.com che spariscono su mobile** - risolto (da pubblicare) - 25
+  ottobre 2026, commit `7f1d9a3`, `app.html`. Sintomo: su telefono/tablet il pulsante
+  «Scegli» (cartella credenziali) non faceva nulla, le credenziali si perdevano a ogni
+  riavvio/aggiornamento, e «Aggiungi nuovo conto» non apriva il popup. Causa misurata:
+  `supportsFS=false` nel WebView Capacitor, quindi `getMt5CredsDirHandle()` tornava `null` e
+  il salvataggio era gated da `if(supportsFS)`. Correzione: archivio IndexedDB interno
+  (`FxbtCredsDB`) con handle virtuale (`getFileHandle`/`createWritable`), salvataggio
+  abilitato su mobile, gate del bridge saltato con pulsante «Inserisci credenziali (salva
+  nell'app)». Test: pacchetti_mobile (verdi), collaudo Falliti 0.
+- **Pulsante «Aggiorna» che resta acceso su mobile** - risolto (da pubblicare) - 25 ottobre
+  2026, commit `7f1d9a3`. Causa: `fblVersioneInstallata()` restituiva '' (caches vuote,
+  fetch sw.js fallito nel bundle), quindi il confronto cadeva sul tag visto (vecchio) e il
+  pulsante non si spegneva mai. Correzione: fallback `FBL_VERSIONE_BUNDLE` iniettato da
+  `aggiorna_www.bat`, e ramo di spegnimento indipendente da `installata`.
+- **Aprire operazioni in replay toccava il conto reale MT5** - risolto (da pubblicare) -
+  25 ottobre 2026, commit `98e7937`, `app.html`. Sintomo: in live replay con MT5 collegato,
+  BUY/SELL non creavano nulla (il guard di placeRealMt5Order bloccava tutto) oppure, se MT5
+  era scollegato, creavano posizioni simulate che finivano nelle statistiche del conto live.
+  Correzione: il ramo reale viene saltato in replay (posizione simulata con mt5Ticket=null e
+  flag historical:true, mode backtest in chiusura, equity invariata, nessuna chiamata al
+  bridge, chiusura posizioni reali bloccata). Test: replay_storico.test.mjs (2).

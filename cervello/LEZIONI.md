@@ -878,3 +878,18 @@
   il pan, e al loro rilascio `panStartX` vale ancora il gesto precedente — direbbe
   "trascinamento" a un click fermo.
 
+
+- In replay il ramo «reale» va bloccato ALL'INGRESSO della funzione, non solo dentro il
+  bridge: altrimenti il guard del bridge (che ritorna false) lascia la funzione chiamante
+  senza posizione, e l'apertura simulata non avviene. Il controllo giusto è «se in replay,
+  vai direttamente al ramo simulato». (25 ottobre 2026, commit 98e7937.)
+- Un flag booleano (`historical`) su una posizione deve essere propagato in TUTTI i punti di
+  `positions.push` (apertura manuale, pendente attivato, segnale Capital.com, attivazione in
+  background), altrimenti i trade "storici" sfuggono ai filtri di statistiche/equity. (25
+  ottobre 2026, revisore.)
+- Quando una posizione non pusha un punto equity (posizione storica), `removeTradeRecordAt`
+  deve ricomputare l'indice solo sulle posizioni che hanno un punto: mescolare i due insiemi
+  desincronizza l'equity curve. (25 ottobre 2026, revisore.)
+- Su mobile (Capacitor WebView) la File System Access API non esiste: le credenziali vanno
+  persistite con un handle virtuale su IndexedDB, non con showDirectoryPicker. (25 ottobre
+  2026, commit 7f1d9a3.)

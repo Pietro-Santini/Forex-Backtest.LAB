@@ -3304,3 +3304,35 @@ panStartX: i rami che armano un trascinamento ritornano prima di armare il pan.
 - Commits ancora da spingere per la v2.0.25: `533b648`, `f3bafc2`, `238207e`, `da2dd91`,
   `06d401b`, `a844e4c`.
 
+
+### Mobile: credenziali che persistono, selezione conto, pulsante Aggiorna (`7f1d9a3`)
+
+Quattro richieste, tutte sul dispositivo mobile (Capacitor/Android):
+- credenziali MT5/Capital.com: archivio interno IndexedDB (`FxbtCredsDB`) con handle
+  virtuale che implementa `getFileHandle`/`createWritable`, così la logica esistente
+  funziona senza riscriverla. `getMt5CredsDirHandle`/`getCapitalCredsDirHandle` restituiscono
+  l'handle virtuale quando `supportsFS` è false. Il selettore cartella resta solo desktop
+  (File System Access non esiste nel WebView). Salvataggio conti abilitato anche su mobile.
+- «Aggiungi nuovo conto»: il gate del bridge desktop si salta per il controllo, ma resta
+  il messaggio «Il computer non risponde» con il pulsante «Inserisci credenziali (salva
+  nell'app)» che porta ai campi (numero conto, password, server) per salvarli anche senza
+  bridge. Il submit salva anche quando il bridge è irraggiungibile su mobile.
+- pulsante «Aggiorna»: `fblVersioneInstallata()` legge anche la versione iniettata nel
+  bundle (`FBL_VERSIONE_BUNDLE`), fonte affidabile nel bundle `file://`; `aggiorna_www.bat`
+  inietta la versione da `sw.js`. Il ramo di spegnimento non dipende più da `installata`.
+- Replay: `placeRealMt5Order`/`placeRealMt5PendingOrder` rifiutano di inviare ordini reali
+  a MT5 durante il replay (nessuna operazione su conto reale).
+
+### Replay: posizioni simulate in modalità storico (`98e7937`)
+
+In live replay (liveReplayActive) BUY/SELL e gli ordini pendenti seguono il ramo simulato
+(non il bridge), la posizione si apre con `mt5Ticket=null`, marcata `historical:true`, senza
+chiamare il bridge. In chiusura il `mode` diventa `backtest`/`backtest_propfirm` (modalità
+storico), `equity` non cresce e `scheduleMt5AccountHistoryRefresh` non scatta. Anche le
+posizioni da segnale Capital.com e gli ordini pendenti attivati in background propagano il
+flag `historical` e usano il tempo di replay. `closeTrade` rifiuta di chiudere posizioni reali
+su MT5 durante il replay. `removeTradeRecordAt` non conta i trade storici nell'indice equity.
+Test: `replay_storico.test.mjs` (2). Correzioni del revisore applicate (propagazione
+uniforme, removeTradeRecordAt, typeof guard su fblCredsKeyPerFile).
+
+Collaudo locale: Falliti 0 (sintassi_app, versione_sw, ponte_python, interprete_segnali, app_browser).
