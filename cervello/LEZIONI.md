@@ -893,3 +893,14 @@
 - Su mobile (Capacitor WebView) la File System Access API non esiste: le credenziali vanno
   persistite con un handle virtuale su IndexedDB, non con showDirectoryPicker. (25 ottobre
   2026, commit 7f1d9a3.)
+- Un file che contiene emoji NON si riscrive con PowerShell 5.1 senza `-Encoding`:
+  `Get-Content -Raw` legge i byte come ANSI, e `Set-Content -Encoding UTF8` risalva un file
+  UTF-8 valido con il testo già rovinato ("ðŸ..."). Il danno è silenzioso: nessun errore, e a
+  occhio nel sorgente sembra tutto a posto. Si misura contando i mojibake e le emoji vere
+  (`\U0001F300-\U0001FAFF`) nel file prodotto — 716 emoji vere e 0 "ðŸ" è la condizione sana.
+  (25 ottobre 2026, APK v2.0.27 con tutte le icone rotte.)
+- Il test giusto per un difetto di codifica non è "il .bat contiene ancora quella riga": è
+  eseguire lo strumento su un campione con emoji e guardare i byte che escono (segnaposto
+  sostituito, emoji intatte, CRLF invariati, nessun BOM). Un test che legge il testo dello
+  script dimostra che l'hai scritto, non che funziona.
+

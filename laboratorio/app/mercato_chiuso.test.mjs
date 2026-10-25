@@ -105,3 +105,103 @@ test('le cripto non chiudono mai, e lo storico non si blocca', async () => {
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+// =====================================================================================
+// IL DIFETTO SEGNALATO DAL PROPRIETARIO («le posizioni si spostano a mercato chiuso»)
+//
+// Le caselle Target/Stop allungavano il bordo destro fino a `idx` (l'ultima candela) a ogni
+// fotogramma, mentre disegni, linee e rettangoli restano ancorati al loro timestamp. A mercato
+// aperto è giusto: la casella accompagna la formazione. A mercato CHIUSO `idx` non deve avanzare
+// — e siccome il refresh live e il guardiano delle candele lo facevano avanzare lo stesso
+// (rollover, watchdog dei 15s, risincronizzazione), la casella scivolava a destra da sola.
+//
+// Qui non si legge il sorgente: si chiama il vero draw() e si guarda cosa consegna alla casella.
+// =====================================================================================
+const PREPARA_GRAFICO = () => {
+  const t0 = Date.now() - 150*60000; let p = 4100; const R = [];
+  for(let i=0;i<150;i++){ const o=p, c=p+Math.sin(i/7)*2; R.push({date:new Date(t0+i*60000).toISOString(),open:o,high:Math.max(o,c)+1,low:Math.min(o,c)-1,close:c,volume:10}); p=c; }
+  R[R.length-1].close = 4100;
+  rows=R; baseRows=R; idx=R.length-1; viewEnd=R.length; currentAssetKey='XAUUSD';
+  csvLibrary=[{id:'xau',rows:R}];
+  liveModeActive=true; mt5Connected=false; mt5ActiveSymbol=null;
+  capitalWsPrimaryEpic='XAUUSD_EPIC'; epicToAsset['XAUUSD_EPIC']='XAUUSD';
+  positions=[{id:1,side:'BUY',entry:4100,sl:4090,tp:4200,lots:0.1,asset:'XAUUSD',mt5Ticket:null,
+              origin:'MANUAL',startTime:t0+100*60000,openTF:1}];
+};
+// Cosa draw() consegna davvero alla casella della posizione.
+const MISURA_CASELLA = () => {
+  const originale = drawTpSlZoneBox; let presa = null;
+  drawTpSlZoneBox = function(ctx, o){
+    if(o && String(o.ownerKey).indexOf('pos:')===0) presa = {origine:o.originIdx, passo:o.keepPaceIdx};
+  };
+  try { draw(); } finally { drawTpSlZoneBox = originale; }
+  return presa;
+};
+
+test('la casella della posizione non insegue l\'indice quando il mercato è chiuso', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(`(${PREPARA_GRAFICO})();
+      const misura = ${MISURA_CASELLA.toString()};
+      delete orariAsset['XAUUSD'];                       // mercato APERTO
+      const aperto = misura();
+      idx = 165; viewEnd = 166;                          // la formazione avanza
+      const apertoAvanti = misura();
+      (${CHIUDI_MERCATO})();                             // ora il mercato è CHIUSO
+      idx = 149; viewEnd = 150;                          // si torna all'ultima candela vera
+      const chiuso = misura();
+      idx = 165; viewEnd = 166;                          // e l'indice avanza lo stesso (rollover)
+      const chiusoAvanti = misura();
+      ({aperto, apertoAvanti, chiuso, chiusoAvanti, fermo: fblMercatoFermoOra('XAUUSD', Date.now())})`);
+    assert.equal(r.fermo, true, 'il banco deve davvero avere il mercato chiuso');
+    assert.ok(r.aperto && r.chiuso, 'la casella della posizione deve essere disegnata: ' + JSON.stringify(r));
+    assert.ok(r.aperto.passo > r.aperto.origine,
+      'a mercato aperto la casella accompagna la formazione: ' + JSON.stringify(r.aperto));
+    assert.ok(r.apertoAvanti.passo > r.aperto.passo,
+      'a mercato aperto il bordo destro avanza con le candele: ' + JSON.stringify([r.aperto, r.apertoAvanti]));
+    assert.equal(r.chiuso.passo, r.chiuso.origine,
+      'a mercato chiuso il bordo destro resta sull\'apertura: ' + JSON.stringify(r.chiuso));
+    assert.equal(r.chiusoAvanti.passo, r.chiuso.passo,
+      'e non si muove nemmeno se l\'indice avanza: ' + JSON.stringify([r.chiuso, r.chiusoAvanti]));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// Il refresh live, ogni volta che vede una candela nuova, ricarica lo storico intero (e quel
+// ricaricamento è ciò che faceva avanzare idx/viewEnd a mercato chiuso). La guardia sta nel ramo
+// di rollover: qui si misura il segno che lascia — `lastSeenCandleBucketStart` — e quante volte
+// viene davvero chiamato il ricaricamento.
+test('a mercato chiuso il refresh live non ricarica lo storico; a mercato aperto sì', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(`(async () => {
+      (${PREPARA_GRAFICO})();
+      const chiamate = [];
+      const originale = loadLiveHistoryFromCapital;
+      loadLiveHistoryFromCapital = async (a) => { chiamate.push(String(a)); };
+      const giro = async () => {
+        chiamate.length = 0;
+        lastSeenCandleBucketStart = 0;      // come se fosse passata una candela intera
+        candleRolloverResyncAt = 0; liveCandleFrozen = false;
+        startLiveRefreshTimer();
+        await new Promise(res => setTimeout(res, 4200));
+        stopLiveRefreshTimer();
+        return {ricariche: chiamate.length, segno: lastSeenCandleBucketStart};
+      };
+      try {
+        (${CHIUDI_MERCATO})();
+        const chiuso = await giro();
+        delete orariAsset['XAUUSD'];
+        const aperto = await giro();
+        return {chiuso, aperto};
+      } finally { loadLiveHistoryFromCapital = originale; stopLiveRefreshTimer(); }
+    })()`);
+    assert.equal(r.chiuso.ricariche, 0,
+      'a mercato chiuso nessun ricaricamento dello storico: ' + JSON.stringify(r.chiuso));
+    assert.equal(r.chiuso.segno, 0,
+      'e il ramo di rollover non deve nemmeno scattare: ' + JSON.stringify(r.chiuso));
+    assert.ok(r.aperto.ricariche > 0,
+      'a mercato aperto il rollover deve continuare a ricaricare: ' + JSON.stringify(r.aperto));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});

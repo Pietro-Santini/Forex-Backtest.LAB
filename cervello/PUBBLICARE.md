@@ -153,7 +153,21 @@ cd C:\Users\pietro\Desktop\trading\forex-backtest-mobile
 ```
 
 Poi si verifica la versione dentro l'APK (`node --test laboratorio/app/apk_versione.test.mjs`,
-deve essere verde) e si carica il pacchetto **nella release creata dal workflow Installer**,
+deve essere verde) **e che le icone siano ancora se stesse**:
+
+```bash
+python strumenti/controlla_icone_apk.py     # deve dire "ESITO: OK"
+```
+
+Questo secondo controllo non è un vezzo. Il 25 ottobre 2026 l'APK v2.0.27 è stato pubblicato
+con **tutte** le icone accanto ai testi trasformate in lettere strane ("ðŸ...", "â€”"): dentro
+il pacchetto `app.html` aveva 800 "ðŸ", 1965 "â€" e zero emoji vere. Causa: l'iniezione della
+versione in `aggiorna_www.bat` rileggeva l'HTML con la codifica ANSI di PowerShell. Il Desktop
+era sano — quindi provando l'app sul PC non si vedeva niente — e il collaudo guarda il
+repository, non il pacchetto Android. Se lo strumento dice KO, **non si carica**: si rigenera
+`www/` con `aggiorna_www.bat` e si ricompila.
+
+Poi si carica il pacchetto **nella release creata dal workflow Installer**,
 col nome di asset storico `forexbacktestlab.apk`:
 
 ```bash

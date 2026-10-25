@@ -713,7 +713,26 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   fetch sw.js fallito nel bundle), quindi il confronto cadeva sul tag visto (vecchio) e il
   pulsante non si spegneva mai. Correzione: fallback `FBL_VERSIONE_BUNDLE` iniettato da
   `aggiorna_www.bat`, e ramo di spegnimento indipendente da `installata`.
-- **Aprire operazioni in replay toccava il conto reale MT5** - risolto (da pubblicare) -
+- **Icone accanto ai testi diventate lettere strane nell'APK** - risolto (da pubblicare) - 25
+  ottobre 2026, `aggiorna_www.bat`, `strumenti/inietta_versione.py`. Sintomo segnalato dal
+  proprietario: «tutte le icone nei testi adesso mi dà tutti simboli di lettere strane».
+  Misurato sull'`app.html` DENTRO l'APK v2.0.27: 800 "ðŸ", 1965 "â€", 4852 "Ã", ZERO emoji
+  vere; lo stesso file sul Desktop era sano. Causa: l'iniezione della versione usava
+  `(Get-Content app.html -Raw) | Set-Content -Encoding UTF8`; in Windows PowerShell 5.1
+  `Get-Content` senza `-Encoding` legge i byte come ANSI (Windows-1252) e risalva il testo
+  rovinato, con BOM. Correzione: iniezione fatta da uno script Python con UTF-8 esplicito,
+  `newline=''` (CRLF intatti) e nessun BOM. Test: `iniezione_versione.test.mjs` (2), che
+  esegue lo strumento su un file con emoji e controlla i byte in uscita.
+- **Posizioni che si spostano a mercato chiuso** - risolto (da pubblicare) - 25 ottobre 2026,
+  `app.html`. Sintomo: nel fine settimana le caselle Target/Stop "avanzavano" nel grafico
+  mentre disegni e rettangoli restavano fermi. Causa misurata: il bordo destro della casella
+  seguiva `idx` a ogni fotogramma (`keepPaceIdx:idx+replayFrazioneBarra()`), e a mercato chiuso
+  `idx`/`viewEnd` avanzavano lo stesso per tre strade: rollover del refresh live, watchdog dei
+  15s che ricaricava lo storico, guardiano candele MT5. Correzione: guardia
+  `fblMercatoFermoOra` in tutte e tre, e `keepPaceIdx` fermo su `originBox` a mercato chiuso.
+  Test: `mercato_chiuso.test.mjs` (7, di cui 2 nuovi che misurano il disegno vero e il
+  ricaricamento dello storico).
+
   25 ottobre 2026, commit `98e7937`, `app.html`. Sintomo: in live replay con MT5 collegato,
   BUY/SELL non creavano nulla (il guard di placeRealMt5Order bloccava tutto) oppure, se MT5
   era scollegato, creavano posizioni simulate che finivano nelle statistiche del conto live.

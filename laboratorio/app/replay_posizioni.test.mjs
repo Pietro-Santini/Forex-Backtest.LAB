@@ -220,9 +220,10 @@ test('la memoria si aggiorna nel punto che tutte le strade attraversano', () => 
   // stile del footprint) — agganciarsi a UNA strada vuol dire dimenticarsi delle altre.
   assert.match(src, /function draw\(\)\{\r?\n fblScadeDecimali\(\);[\s\S]{0,400}?posStoriaAggiornaTutte\(\)/,
     'posStoriaAggiornaTutte deve essere chiamata in testa a draw()');
-  // Il bordo destro della casella avanza con la frazione di candela svelata, non a scatti.
-  assert.match(src, /keepPaceIdx:idx\+replayFrazioneBarra\(\)/,
-    'la casella Target/Stop deve tenere il passo della formazione');
+  // Il bordo destro della casella avanza con la frazione di candela svelata, non a scatti —
+  // MA a mercato chiuso deve restare fermo (segnalato dal proprietario: le posizioni "avanzavano"
+  // nel fine settimana). Quella regola non si misura leggendo il sorgente: si misura disegnando.
+  // Sta in mercato_chiuso.test.mjs, «la casella della posizione non insegue l'indice».
   // Il P/L non deve più passare da currentPrice().
   assert.match(src, /function posLivePL\(pos\)\{[\s\S]{0,900}?const price=prezzoMostratoOra\(\);/,
     'posLivePL deve leggere il prezzo mostrato, non la chiusura dell ultima candela');
