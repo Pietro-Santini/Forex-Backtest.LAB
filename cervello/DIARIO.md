@@ -3336,3 +3336,26 @@ Test: `replay_storico.test.mjs` (2). Correzioni del revisore applicate (propagaz
 uniforme, removeTradeRecordAt, typeof guard su fblCredsKeyPerFile).
 
 Collaudo locale: Falliti 0 (sintassi_app, versione_sw, ponte_python, interprete_segnali, app_browser).
+
+### Icone rotte nell'APK (codifica UTF-8) e posizioni ferme a mercato chiuso (`13552eb`)
+
+SEGNALATO dal proprietario: «tutte le icone nei testi adesso mi dà tutti simboli di lettere
+strane e non vengono più visualizzate, dopo quest'ultimo aggiornamento». Misurato
+sull'`app.html` DENTRO l'APK v2.0.27: 800 "ðŸ", 1965 "â€", 4852 "Ã", ZERO emoji vere; lo
+stesso file sul Desktop era sano (per questo provando l'app sul PC non si vedeva). Causa:
+`aggiorna_www.bat` iniettava la versione con `(Get-Content -Raw) | Set-Content -Encoding
+UTF8`, e in PowerShell 5.1 `Get-Content` senza `-Encoding` legge i byte come ANSI. Ora
+l'iniezione la fa `strumenti/inietta_versione.py` (UTF-8 esplicito, CRLF intatti, nessun
+BOM), e `strumenti/controlla_icone_apk.py` controlla il pacchetto prima del caricamento
+(aggiunto alla checklist in PUBBLICARE.md, §4 passo 7). Test: `iniezione_versione.test.mjs`
+(2), `icone_apk.test.mjs` (1).
+
+Mercato chiuso: le caselle Target/Stop allungavano il bordo destro seguendo `idx`, e a
+mercato chiuso `idx`/`viewEnd` avanzavano lo stesso per tre strade (rollover del refresh
+live, watchdog dei 15s che ricaricava lo storico, guardiano candele MT5). Guardia
+`fblMercatoFermoOra` in tutte e tre e `keepPaceIdx` fermo su `originBox`. Test:
+`mercato_chiuso.test.mjs` (7, di cui 2 nuovi che misurano il disegno vero e il ricaricamento
+dello storico), `replay_posizioni.test.mjs` aggiornato (via l'assert sul testo).
+
+Collaudo locale: Falliti 0. APK ricompilato, `apk_versione` verde, `controlla_icone_apk.py`
+OK (716 emoji vere, 0 mojibake) e pacchetto ricaricato nella release v2.0.27.
