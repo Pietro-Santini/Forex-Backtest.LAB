@@ -42,3 +42,41 @@ test('dopo l\'aggiornamento col pacchetto esterno il pulsante si spegne', async 
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+test('su computer il pacchetto si scarica e l\'app NON si chiude da sola', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(async () => {
+      const btn = document.getElementById('fblAggiornaBtn');
+      if (!btn) return {errore: 'pulsante assente'};
+      btn.style.display = '';
+      btn.disabled = false;
+      window.fblPianoAggiornamento = async () => ({serve: true, motivo: 'pacchetto richiesto'});
+      // Scaricato DA SOLO dal browser (attributo download): il caso del computer.
+      window.fblScaricaEAggiorna = async () => ({ok: true});
+      // Se l'app provasse a chiudersi, qui si vede (la registriamo).
+      let chiusa = false;
+      window.__chiusa = () => { chiusa = true; };
+      window.navigator.app = {exitApp: () => { chiusa = true; }};
+      const closeVecchio = window.close;
+      window.close = () => { chiusa = true; };
+      try { localStorage.removeItem('fbl_rel_vista'); } catch (e) {}
+      await fblApplicaAggiornamento({tag_name: 'v2.0.30', assets: []}, 'v2.0.30', btn);
+      window.close = closeVecchio;
+      await new Promise(r2 => setTimeout(r2, 300));
+      return {
+        display: btn.style.display,
+        tagVisto: localStorage.getItem('fbl_rel_vista'),
+        stato: (document.getElementById('status') || {}).textContent || '',
+        chiusa,
+      };
+    });
+    assert.ok(!r.errore, 'il pulsante della barra deve esistere: ' + r.errore);
+    assert.equal(r.display, 'none', 'dopo il download il pulsante si spegne: ' + JSON.stringify(r));
+    assert.equal(r.tagVisto, 'v2.0.30', 'e il tag resta annotato: ' + JSON.stringify(r));
+    assert.equal(r.chiusa, false, 'l\'app NON si chiude da sola: l\'utente installa quando vuole');
+    assert.ok(/Download/i.test(r.stato),
+      'lo stato deve dire dove sta il pacchetto e cosa fare: ' + r.stato);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
