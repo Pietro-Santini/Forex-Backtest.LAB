@@ -934,3 +934,26 @@
   cui è stata pensata: una posizione NATA nel replay non può essere chiusa dal prezzo di oggi.
   L'eccezione va scritta accanto alla regola, altrimenti la regola la cancella. (26 ottobre 2026.)
 
+
+## Lezioni del 26 ottobre 2026 (multi-account, P/L, etichette, disegni)
+
+- **Un filtro che protegge i CONTI va applicato allo STESSO modo alle posizioni aperte e ai
+  trade chiusi.** `tradeBelongsToCurrentView()` filtrava per `mt5Login` (conto attivo), ma
+  `positionBelongsToCurrentView()` si fermava a `mt5Ticket!=null`: collegato all'account 1 si
+  vedevano le posizioni dell'account 2. Quando una regola esiste in due punti, una sola copia è
+  sempre la copia sbagliata.
+- **"Il P/L del terminale è diverso" vuol dire quasi sempre: manca lo swap (e la commissione).**
+  Il terminale somma profit+swap+commissione; l'app che somma solo il profit mostra un numero
+  diverso e sembra un errore di calcolo. La differenza si vede subito confrontando i due numeri
+  per la STESSA posizione.
+- **"L'aggiornamento è lento" va misurato in millisecondi, non a sensazione.** Il polling MT5
+  era a 2000 ms: la posizione si aggiornava sì, ma con un ritardo percepito di secondi. Portarlo
+  a 1000 ms ha risolto il disagio senza toccare nient'altro.
+- **Un comportamento che l'utente può spegnere a mano prima o poi viene spento per sbaglio.** Il
+  raggruppamento delle etichette era alternativo a un pulsante: ora è il default e non si può
+  disattivare; lo stato temporaneo (gruppo espanso) si ottiene col click sull'etichetta e si
+  annulla da sé col click sul vuoto, senza lasciare tracce.
+- **Quando un ancoraggio è a TEMPO ASSOLUTO, cambiare scala non deve riscriverlo.** Spostare le
+  ancore dei disegni alla candela del timeframe nuovo più vicina le fa slittare di quasi una
+  candela intera a ogni cambio; la conversione va fatta al momento del DISEGNO (interpolando il
+  timestamp dentro la nuova candela), non riscrivendo il dato salvato.

@@ -3359,3 +3359,30 @@ dello storico), `replay_posizioni.test.mjs` aggiornato (via l'assert sul testo).
 
 Collaudo locale: Falliti 0. APK ricompilato, `apk_versione` verde, `controlla_icone_apk.py`
 OK (716 emoji vere, 0 mojibake) e pacchetto ricaricato nella release v2.0.27.
+
+### Multi-account, P/L come il terminale, etichette raggruppate, disegni fermi (2.0.29, `a334306` + bump `32cb3d0`)
+
+QUATTRO difetti segnalati dal proprietario, tutti misurati prima di correggere.
+
+1. **Due account MT5 mescolati**: collegato all'account 1 si vedevano a grafico anche le
+   posizioni dell'account 2. Causa: `positionBelongsToCurrentView()` accettava qualunque
+   `mt5Ticket!=null` senza confrontare `currentMt5AccountTag()`, mentre il filtro dei trade
+   chiusi lo faceva già. Allineato il filtro delle posizioni aperte a quello dei chiusi.
+2. **P/L live diverso dal terminale**: `floatingPL()` sommava solo `mt5RealProfit()` (profitto di
+   prezzo), senza swap né commissione. Ora usa `mt5RealNet()`, identico al terminale.
+3. **P/L live lento**: polling MT5 da 2000 ms a 1000 ms.
+4. **Etichette e disegni**: rimosso il pulsante "Esplodi etichette" dalle impostazioni — il
+   raggruppamento è ora il comportamento di default sempre attivo, il gruppo si espande al click
+   sull'etichetta ×N e si ricompone al click sul vuoto (`expandedTpSlGroups`). I disegni non si
+   spostano più al cambio di timeframe: `fblDisegniRiAgganciaAlTf()` resa no-op, i timestamp
+   assoluti restano e `dataPosFromTime()` li mappa dentro la candela nuova alla stessa frazione.
+
+Durante il giro, un errore mio di sintassi (graffe perse sostituendo il toggle del gruppo) ha
+fatto cadere l'intera app: tutti i test fallivano con "$ is not defined". Trovato con
+`node --check` sul blocco estratto e con il conteggio delle graffe (3 mancanti). Lezione: quando
+si sostituisce un blocco con script, verificare il bilanciamento delle graffe SUBITO.
+
+Test: `disegni_cambio_tf.test.mjs` e `etichette_esplodi_tocco.test.mjs` riscritti per il nuovo
+comportamento; suite app completa 886/886 verde, locale e su GitHub. APK ricompilato
+(`controlla_icone_apk.py` OK, 713 emoji vere) e Setup caricati nella release v2.0.29; specchio
+Desktop riallineato.
