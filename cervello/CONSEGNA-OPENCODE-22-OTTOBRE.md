@@ -469,6 +469,27 @@ Il motore **misura l'orologio** invece di fidarsi della cadenza nominale: è gi�
 
 ---
 
+## 4-bis. I DATI A CASA NOSTRA (deciso il 26 ottobre)
+
+La bolletta Firebase ha iniziato a salire **con un solo utente**. Il proprietario ha deciso:
+**login e abbonamenti restano a Firebase, l'archiviazione dei dati si sposta sul server Oracle**.
+
+Il progetto completo sta in `cervello/PROGETTO-DATI-NOSTRI.md`: cosa si sposta e cosa no, le
+rotte, perche' SQLite e non MySQL, perche' FastAPI e non PHP, e i cinque passi per passare senza
+perdere niente.
+
+**Le due cose da sapere prima di aprirlo:**
+
+1. **Prima tagliare, poi spostare.** Il documento `session` pesa 305 KB a ogni salvataggio, di
+   cui **194 KB sono `trades`** - lo storico intero rimandato ogni volta, comprese le operazioni
+   di mesi fa. Spostare i dati senza togliere questo vuol dire costruire un'API attorno a uno
+   spreco.
+2. **Serve un numero che non abbiamo:** la ripartizione nella console Firebase fra letture,
+   scritture, traffico e spazio. Cambia cosa si fa per primo, e senza si corregge il sospettato
+   invece del colpevole.
+
+---
+
 ## 5. L'EFFETTO «WOW» ALL'APERTURA — specifica da realizzare
 
 ⚠️ **Nota onesta:** il proprietario ricorda che questa parte era già scritta da OpenCode nel
