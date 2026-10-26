@@ -9494,32 +9494,11 @@ function rebuildRows(){
 // opts.tfChangeSpanMinutes; le risincronizzazioni periodiche dello stesso TF non toccano niente
 // (un'ancora a tempo reale restando nello stesso TF e' esatta com'e').
 function fblDisegniRiAgganciaAlTf(){
- try{
-  const ts=getRowsTimestamps();
-  if(!ts||ts.length<2)return;
-  const vicino=(t)=>{
-   let lo=0,hi=ts.length-1;
-   if(t<=ts[0])return ts[0];
-   if(t>=ts[hi])return ts[hi];
-   while(hi-lo>1){ const m=(lo+hi)>>1; if(ts[m]<=t)lo=m; else hi=m; }
-   return (t-ts[lo]<=ts[hi]-t)?ts[lo]:ts[hi];
-  };
-  const riaggancia=(p)=>{
-   if(!p)return;
-   const t=Number(p.time);
-   if(!Number.isFinite(t))return;
-   const n=vicino(t);
-   if(n!==t)p.time=n;
-  };
-  let toccati=0;
-  (Array.isArray(drawings)?drawings:[]).forEach(d=>{
-   const prima=JSON.stringify([d.p1,d.p2]);
-   riaggancia(d.p1); riaggancia(d.p2);
-   if(Array.isArray(d.points))d.points.forEach(riaggancia);
-   if(JSON.stringify([d.p1,d.p2])!==prima)toccati++;
-  });
-  if(toccati){ try{ scheduleSave(); }catch(e){} }
- }catch(e){}
+ // RIMOSSO: il riaggancio forzato dei disegni al timestamp più vicino della nuova candela
+ // causava sfasamento al cambio timeframe. I disegni mantengono il loro timestamp assoluto
+ // (p.time) e dataPosFromTime() li mappa correttamente alla posizione nel nuovo TF,
+ // preservando esattamente la stessa posizione visiva senza spostarli.
+ return;
 }
 function parseCSV(txt){
  const lines=txt.trim().split(/\r?\n/).filter(Boolean); if(!lines.length)return[];
@@ -16987,6 +16966,7 @@ function draw(){
        dimmed:dimGrp,
        // I numeri dell'etichetta raggruppata (uso dentro drawTpSlZoneBox): null fuori dal gruppo.
        infogruppo:(grpCasTpSl&&!gruppoEspanso)?{num:grpCasTpSl.dati.num,slTot:grpCasTpSl.dati.slTot,tpTot:grpCasTpSl.dati.tpTot}:null,
+       gruppoChiave:grpCasTpSl?chiaveGruppo:null,
        pad,cw,n,start,w,y,
        // La casella non deve restare "indietro" rispetto all'ultima candela finché la
        // posizione resta aperta — vedi il commento su keepPaceIdx dentro drawTpSlZoneBox.
@@ -19448,7 +19428,7 @@ function fblDatiGruppoCaselle(membri,sl,tp){
   return {num:membri.length,origine,slTot,tpTot};
 }
 function drawTpSlZoneBox(ctx,opts){
- const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,alwaysShowTooltip}=opts;
+ const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,alwaysShowTooltip,gruppoChiave}=opts;
  const hidePills=opts.hidePills||!fblEtichetteTpSlVisibili();
  // Le righe tratteggiate di Target e Stop vanno da un bordo all'altro della casella: sono
  // proprio quelle che, con molte posizioni, riempiono il grafico. La casella colorata e le
@@ -19541,6 +19521,8 @@ function drawTpSlZoneBox(ctx,opts){
      // candele al suo interno) — richiesto esplicitamente.
      const pillRectTp=drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grp?` · ×${grp.num}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
      if(pillRectTp)tpSlPillHitRects.push(Object.assign({ownerKey},pillRectTp));
+     // Hit rect per l'etichetta del gruppo (×N): cliccandola il gruppo si espande/contrae
+     if(grp&&gruppoChiave)tpSlPillHitRects.push({ownerKey:'gruppo:'+gruppoChiave,x:pillRectTp.x,y:pillRectTp.y,w:pillRectTp.w,h:pillRectTp.h});
    }
  }
  if(hasSl){
@@ -23514,8 +23496,8 @@ withLoadingOverlay('Cambio timeframe Live…', ()=>__sorgenteTf==='mt5'?loadLive
  // Così 1m -> 5m -> 15m -> 1H mantiene esattamente lo stesso prezzo/istante di mercato,
  // e tornando indietro a m1 si ritrova esattamente lo stesso identico prezzo di chiusura.
  rebuildRows();
- // AL CAMBIO TF i disegni si riaggrappano alle candele del TF nuovo (helper sopra): senza, la
- // punta slitta fino a quasi una candela intera e l'inclinazione resta sbagliata.
+ // AL CAMBIO TF i disegni mantengono il loro timestamp assoluto: dataPosFromTime() li
+ // mappa correttamente alla posizione nel nuovo TF senza spostarli. Nessun sfasamento.
  fblDisegniRiAgganciaAlTf();
  if(followLatest){
    // L'utente stava già seguendo il bordo "adesso": resta lì, comportamento invariato.
@@ -41595,7 +41577,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
- // AL CAMBIO TF (solo allora: opts.tfChangeSpanMinutes) i disegni si riaggrappano al TF nuovo.
+ // AL CAMBIO TF (solo allora: opts.tfChangeSpanMinutes) i disegni si mantengono la posizione assoluta al cambio TF.
  if(opts&&Number.isFinite(opts.tfChangeSpanMinutes))fblDisegniRiAgganciaAlTf();
  scanHistoricalSlTpTouches();
  if(preserved){
@@ -42870,7 +42852,7 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
  if(!liveReplayActive)masterTime=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
  rowsAssetKey=currentAssetKey;
  rebuildRows();
- // AL CAMBIO TF (solo allora: opts.tfChangeSpanMinutes) i disegni si riaggrappano al TF nuovo.
+ // AL CAMBIO TF (solo allora: opts.tfChangeSpanMinutes) i disegni si mantengono la posizione assoluta al cambio TF.
  if(opts&&Number.isFinite(opts.tfChangeSpanMinutes))fblDisegniRiAgganciaAlTf();
  scanHistoricalSlTpTouches();
  if(conservata){
