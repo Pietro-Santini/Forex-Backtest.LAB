@@ -3406,3 +3406,18 @@ dati nostri) con stash + rebase senza perdere nulla.
 Test: pulsante_aggiorna_spento.test.mjs (3), popup_strategia_sala.test.mjs (2),
 aggiornamento_apk.test.mjs (4) verdi; suite completa 886/886. APK e Setup caricati nella
 release v2.0.30; specchio Desktop riallineato.
+
+### In replay i segnali stanno sul conto storico, ordine limite riparato (2.0.31)
+
+DIFETTO GRAVE segnalato dal proprietario: in replay le posizioni dei segnali venivano
+aperte sull'account MT5 reale. Causa misurata: tgEseguiSegnale() usava
+`const reale=!!mt5Connected` senza controllare la sessione. Corretto: ordini veri solo in
+sessione Live, MT5 collegato, fuori dal replay. Aggiunta la guardia del replay alle altre
+cinque funzioni che parlano col bridge (chiusura, modifica, spostamento stop, pareggio):
+difesa a più livelli, perché "assolutamente" non ammette una strada dimenticata.
+
+Secondo difetto: l'ordine limite del popup segnali non piazzava l'ordine pendente —
+apriva a mercato. Causa: il prezzo scelto dall'utente finiva in `entry` e poi il confronto
+`opz.prezzo!==entry` era sempre falso. Corretto col prezzo di mercato salvato da parte.
+
+Test: laboratorio/app/replay_segnali_conto_storico.test.mjs (3 prove nuove).
