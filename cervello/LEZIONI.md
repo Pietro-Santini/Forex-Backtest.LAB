@@ -920,4 +920,17 @@
 - Un test che misura il comportamento trova difetti che la segnalazione non nomina: la quarta
   causa di questo bug (livelli che tornavano indietro) è uscita dal test sul trascinamento,
   non dal racconto del proprietario. (26 ottobre 2026.)
+- Un conto si isola in TUTTI i punti che lo calcolano, non solo nel numero grande in alto:
+  `equityNow`/`freeMargin` (mt5StatsActive), `floatingPL`, `statsTrades`/`closedPL` (win/loss
+  rate), `usedMargin`, il Margin Call e la chiusura SL/TP. Correggerne uno solo lascia il conto
+  mescolato e il difetto sembra risolto perché il numero che si guarda è giusto. (26 ottobre
+  2026, revisione del conto storico in replay: 3 punti su 7 trovati solo così.)
+- Un banco di prova che riusa lo stato globale deve azzerare TUTTO quello che conta, non solo
+  `positions`: con `trades` non azzerato il caso D misurava il +1.000 lasciato dal caso C
+  (11.000 invece di 10.000) e sembrava un difetto del codice. Se un test fallisce solo dopo un
+  altro test, il sospetto numero uno è lo stato condiviso. (26 ottobre 2026.)
+- Quando una scelta del proprietario è documentata come esplicita ("le posizioni simulate
+  continuano a essere gestite in tempo reale in background"), quella scelta vale per il conto a
+  cui è stata pensata: una posizione NATA nel replay non può essere chiusa dal prezzo di oggi.
+  L'eccezione va scritta accanto alla regola, altrimenti la regola la cancella. (26 ottobre 2026.)
 

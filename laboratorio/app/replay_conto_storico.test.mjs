@@ -39,6 +39,7 @@ const PREPARA = ({mt5 = true, live = true, replay = true} = {}) => {
   livePriceByAsset = {'XAUUSD': 4300};   // il feed live continua: adesso il mercato è a 4300
   masterTime = Date.parse(R[80].date);
   positions.length = 0;
+  trades.length = 0;
   // Cattura del testo DAVVERO disegnato sulla tela (etichetta P/L, TP, SL).
   if (!window.__testiPatch) {
     window.__testiPatch = true;
@@ -211,6 +212,121 @@ test('nel conto Storico, con MT5 collegato, la posizione aperta resta a grafico'
 
     assert.equal(r.drawable, true, 'nel conto Storico una posizione simulata non deve essere filtrata via da MT5');
     assert.ok(r.testiEuro.length > 0, 'la posizione deve mostrare i suoi valori sul grafico');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// I CASI TROVATI DAL REVISORE (26 ottobre 2026), tutti misurati prima di correggerli.
+// Il conto storico in replay era ancora mescolato col conto reale, nei due sensi, e il filtro
+// della vista era troppo largo: dopo lo STOP una posizione simulata entrava nel conto MT5.
+// ---------------------------------------------------------------------------------------------
+
+test('in replay il conto storico non contiene i soldi del conto reale, e contiene i propri', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(({prepara}) => {
+      const esiti = {};
+      // A) Una posizione MT5 REALE aperta (+250 di profitto vero): non deve entrare nel capitale storico.
+      eval('(' + prepara + ')()');
+      positions.push({id: 'reale1', asset: 'XAUUSD', side: 'BUY', entry: 4000, lots: 0.1, sl: null, tp: null,
+        start: 80, startTime: Date.parse(rows[80].date), marginUsed: 400, mt5Ticket: 111});
+      esiti.A = {equity: equityNow(), floating: floatingPL(), base: baseCapital()};
+
+      // B) Un'operazione MT5 REALE chiusa a -3.000: non deve togliere soldi al capitale storico.
+      eval('(' + prepara + ')()');
+      trades.push({id: 't1', mode: currentMode(), asset: 'XAUUSD', side: 'BUY', entry: 4000, exit: 3970,
+        lots: 1, pl: -3000, mt5Ticket: 222, mt5Login: '999',
+        startTime: Date.parse(rows[10].date), closeTime: Date.parse(rows[20].date)});
+      esiti.B = {equity: equityNow(), closedPL: closedPL(), base: baseCapital()};
+
+      // C) Un'operazione SIMULATA del replay chiusa a +1.000: deve entrare nel capitale storico.
+      eval('(' + prepara + ')()');
+      trades.push({id: 't2', mode: currentMode(), asset: 'XAUUSD', side: 'BUY', entry: 4080, exit: 4090,
+        lots: 1, pl: 1000, historical: true,
+        startTime: Date.parse(rows[80].date), closeTime: Date.parse(rows[90].date)});
+      esiti.C = {equity: equityNow(), closedPL: closedPL(), base: baseCapital()};
+
+      // D) Il margine libero storico non sconta il margine delle posizioni reali.
+      eval('(' + prepara + ')()');
+      positions.push({id: 'reale2', asset: 'XAUUSD', side: 'BUY', entry: 4000, lots: 0.1, sl: null, tp: null,
+        start: 80, startTime: Date.parse(rows[80].date), marginUsed: 999, mt5Ticket: 333});
+      esiti.D = {margineLibero: freeMargin(), usato: usedMargin()};
+      return esiti;
+    }, {prepara: PREPARA.toString()});
+
+    assert.equal(r.A.equity, r.A.base, 'una posizione MT5 reale non deve entrare nel capitale storico (era ' + r.A.equity + ')');
+    assert.equal(r.A.floating, 0, 'il P/L flottante storico non deve contenere il profitto vero del conto MT5');
+    assert.equal(r.B.equity, r.B.base, 'un\'operazione MT5 reale chiusa non deve togliere soldi al conto storico (era ' + r.B.equity + ')');
+    assert.equal(r.B.closedPL, 0, 'le operazioni reali MT5 non fanno parte del conto storico');
+    assert.equal(r.C.equity, r.C.base + 1000, 'un\'operazione simulata del replay chiusa in utile DEVE entrare nel capitale storico');
+    assert.equal(r.C.closedPL, 1000, 'il risultato delle operazioni simulate deve contare');
+    assert.equal(r.D.usato, 0, 'il margine usato storico non deve contenere quello delle posizioni reali');
+    assert.equal(r.D.margineLibero, r.A.base, 'il margine libero storico non deve scontare il margine del conto reale');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('in replay una posizione nata nel replay non viene chiusa dal prezzo di oggi', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(({prepara}) => {
+      eval('(' + prepara + ')()');
+      slTpScanDoneForAsset = 'XAUUSD';   // come dopo la scansione dello storico in Live
+      openMarketTrade('BUY');
+      const pos = positions[positions.length - 1];
+      pos.tp = pos.entry + 10;           // target raggiungibile SOLO dal prezzo vero di oggi (4300)
+      pos.sl = pos.entry - 10;
+      const prima = {aperte: positions.length, pl: posLivePL(pos), prezzoReplay: prezzoMostratoOra(),
+        prezzoOggi: livePriceByAsset['XAUUSD'], tp: pos.tp};
+      evaluate();
+      return {prima, aperteDopo: positions.length, chiusiDopo: trades.length,
+        candelaDelReplay: rows[80].close, candelaDiOggi: rows[rows.length - 1].close};
+    }, {prepara: PREPARA.toString()});
+
+    assert.equal(r.aperteDopo, r.prima.aperte,
+      'la posizione aperta in replay non deve essere chiusa dalla candela di oggi (' + r.candelaDiOggi +
+      ') mentre il replay è fermo a ' + r.candelaDelReplay);
+    assert.equal(r.chiusiDopo, 0, 'non deve nascere nessun trade chiuso dal prezzo del futuro');
+    assert.equal(r.prima.pl, 0, 'il P/L a grafico è zero al prezzo del replay');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('la vista Live normale resta com\'era: dentro solo le posizioni del conto reale', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(({prepara}) => {
+      // Live normale con MT5 collegato.
+      eval('(' + prepara + ')({mt5: true, live: true, replay: false})');
+      const reale = {id: 'r', asset: 'XAUUSD', side: 'BUY', entry: 4300, lots: 0.1, sl: null, tp: null,
+        start: 80, startTime: Date.parse(rows[80].date), marginUsed: 0, mt5Ticket: 777};
+      const simulata = {id: 's', asset: 'XAUUSD', side: 'BUY', entry: 4300, lots: 0.1, sl: null, tp: null,
+        start: 80, startTime: Date.parse(rows[80].date), marginUsed: 0};
+      const capital = {id: 'c', asset: 'XAUUSD', side: 'BUY', entry: 4300, lots: 0.1, sl: null, tp: null,
+        start: 80, startTime: Date.parse(rows[80].date), marginUsed: 0, historical: false};
+      const live = {reale: positionBelongsToCurrentView(reale), simulata: positionBelongsToCurrentView(simulata),
+        capital: positionBelongsToCurrentView(capital)};
+
+      // In replay: solo quella nata nel replay.
+      liveReplayActive = true;
+      const inReplay = {reale: positionBelongsToCurrentView(reale), simulata: positionBelongsToCurrentView(simulata),
+        capital: positionBelongsToCurrentView(capital)};
+
+      // Dopo lo STOP la posizione nata nel replay non deve entrare nel conto reale.
+      liveReplayActive = false;
+      const nataNelReplay = {id: 'h', asset: 'XAUUSD', side: 'BUY', entry: 4300, lots: 0.1, sl: null, tp: null,
+        start: 80, startTime: Date.parse(rows[80].date), marginUsed: 0, historical: true};
+      return {live, inReplay, dopoStop: positionBelongsToCurrentView(nataNelReplay)};
+    }, {prepara: PREPARA.toString()});
+
+    assert.equal(r.live.reale, true, 'in Live con MT5 collegato la posizione del conto reale si vede');
+    assert.equal(r.live.simulata, false, 'in Live con MT5 collegato una posizione senza ticket non deve entrare (era così prima)');
+    assert.equal(r.live.capital, false, 'in Live con MT5 collegato una posizione Capital.com non deve entrare (era così prima)');
+    assert.equal(r.inReplay.reale, false, 'in replay una posizione reale MT5 non deve comparire sul grafico del passato');
+    assert.equal(r.inReplay.capital, false, 'in replay una posizione reale Capital.com non deve comparire sul grafico del passato');
+    assert.equal(r.inReplay.simulata, false, 'in replay solo le posizioni nate nel replay (historical)');
+    assert.equal(r.dopoStop, false, 'dopo lo STOP una posizione simulata non deve entrare nel conto reale MT5');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
