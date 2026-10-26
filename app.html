@@ -2685,9 +2685,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <rect x="13" y="12.5" width="8.5" height="6.5" rx="1.3" fill="#e0524f"/>
        </svg> <span>Mostra/nascondi caselle colorate TP/SL</span></button></div>
            <div class="fbOptRow"><button id="toggleTpSlEtichetteBtn" type="button" class="toolBtn active" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Mostra/nascondi le etichette di TP, SL e stop profit delle operazioni: le linee restano sempre visibili">🏷️ <span>Mostra/nascondi etichette TP SL stop profit</span></button></div>
-           <div class="fbOptRow"><button id="explodeTpSlEtichetteBtn" type="button" class="toolBtn" style="width:auto;display:inline-flex;align-items:center;gap:8px" title="Esplodi le etichette raggruppate: anche quando più caselle TP/SL coincidono, ogni posizione torna con la sua etichetta (TP1, TP2, ...)">💥 <span>Esplodi etichette raggruppate</span></button></div>
-           <p class="hint" style="margin:-4px 0 12px">Con tante operazioni aperte le etichette si sovrappongono: nascondile, le <b>linee</b> di Target, Stop e Stop Profit restano sempre a grafico. I dettagli di una posizione si vedono comunque toccando la sua casella — e il tocco sull'etichetta <b>seleziona</b> la posizione. Con «<b>Esplodi etichette</b>» il gruppo si scompatta: ogni posizione mostra la sua etichetta anche se le caselle coincidono.</p>
-           <div data-style-panel="zone">
+                                 <div data-style-panel="zone">
              <div style="display:flex;gap:28px;justify-content:center;padding:6px 0">
                <div style="display:flex;flex-direction:column;align-items:center;gap:8px">
                  <span style="font-weight:700;font-size:14px;color:#e8edf3">TP</span>
@@ -11056,8 +11054,11 @@ function positionBelongsToCurrentView(pos){
  if(!liveModeActive)return true;     // conto Storico: il backtest non c'entra con MT5
  if(liveReplayActive)return !!pos.historical;  // replay: SOLO le posizioni nate nel replay
  let conn=false; try{ conn=!!mt5Connected; }catch(e){}
- if(conn)return pos.mt5Ticket!=null;
- return true;
+ if(conn){
+    const login=currentMt5AccountTag().mt5Login;
+    return pos.mt5Ticket!=null&&(!login||String(pos.mt5Login||'')===login);
+  }
+  return true;
 }
 // Comodo: entrambe le condizioni insieme, usato da tutto il disegno del grafico.
 function drawableOnCurrentChart(item){
@@ -16814,7 +16815,7 @@ function draw(){
   // Il pulsante "Esplodi etichette" stacca il raggruppamento: la mappa resta vuota e ogni
   // casella si disegna con la sua etichetta di sempre, anche quando coincidono — niente «×N»,
   // niente soldi totali: i numeri di ogni singola posizione tornano a schermo.
-  if(!previewTradeLevel&&!fblEtichetteEsplose()){
+  if(!previewTradeLevel){
     gruppiCaselleTpSl=new Map();
     positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(p=>{
       const liv=posLivelliAlTempo(p,momentoMostrato);
@@ -16966,8 +16967,10 @@ function draw(){
       // saltano SOLO qui: la linea d'entrata e la freccia restano per tutte, e i membri del
       // gruppo hanno entry/apertura identiche per costruzione, quindi il resto che coincide
       // coincide davvero (nessuna linea si perde a schermo).
-      const grpCasTpSl=gruppiCaselleTpSl?gruppiCaselleTpSl.get(fblChiaveCaselleTpSl(pos.asset,pos.entry,slStorico,tpStorico,openTimeForZone,effectiveZoneSpan('pos:'+pos.id,originBox,idx+replayFrazioneBarra()))):null;
-      if(grpCasTpSl&&grpCasTpSl.membri[0]!==pos)return;
+      const chiaveGruppo=fblChiaveCaselleTpSl(pos.asset,pos.entry,slStorico,tpStorico,openTimeForZone,effectiveZoneSpan('pos:'+pos.id,originBox,idx+replayFrazioneBarra()));
+      const grpCasTpSl=gruppiCaselleTpSl?gruppiCaselleTpSl.get(chiaveGruppo):null;
+      const gruppoEspanso=!!(grpCasTpSl&&expandedTpSlGroups.has(chiaveGruppo));
+      if(grpCasTpSl&&grpCasTpSl.membri[0]!==pos&&!gruppoEspanso)return;
       // Con il gruppo l'"spenta" (dimmed) vale per TUTTA la casella raggruppata: si spegne solo
       // se NESSUNA delle posizioni del gruppo è quella selezionata.
       const dimGrp=grpCasTpSl?(activeOnChart&&!grpCasTpSl.membri.includes(posSelezionata)):dimmed;
@@ -16978,12 +16981,12 @@ function draw(){
        // niente, si scrive quello che si sa già — vedi fblEtichettaOrigineBreve più in alto.
        // Nel gruppo il numero della singola sparisce (l'obiettivo del gruppo è uno solo) e
        // l'origine diventa l'origine comune; i numeri e «×N» arrivano da infogruppo qui sotto.
-       tpEtichetta:grpCasTpSl?'TP':fblEtichettaTpBreve(pos),
-       origine:grpCasTpSl?grpCasTpSl.dati.origine:fblEtichettaOrigineBreve(pos),
+       tpEtichetta:(grpCasTpSl&&!gruppoEspanso)?'TP':fblEtichettaTpBreve(pos),
+       origine:(grpCasTpSl&&!gruppoEspanso)?grpCasTpSl.dati.origine:fblEtichettaOrigineBreve(pos),
        lots:pos.lots,assetKey:pos.asset,stopProfit:isStopProfitLive,
        dimmed:dimGrp,
        // I numeri dell'etichetta raggruppata (uso dentro drawTpSlZoneBox): null fuori dal gruppo.
-       infogruppo:grpCasTpSl?{num:grpCasTpSl.dati.num,slTot:grpCasTpSl.dati.slTot,tpTot:grpCasTpSl.dati.tpTot}:null,
+       infogruppo:(grpCasTpSl&&!gruppoEspanso)?{num:grpCasTpSl.dati.num,slTot:grpCasTpSl.dati.slTot,tpTot:grpCasTpSl.dati.tpTot}:null,
        pad,cw,n,start,w,y,
        // La casella non deve restare "indietro" rispetto all'ultima candela finché la
        // posizione resta aperta — vedi il commento su keepPaceIdx dentro drawTpSlZoneBox.
@@ -19086,6 +19089,9 @@ let zoneStatsOpenKey=null;
 // su quale si è cliccato) — quest'ultimo azzerato e ripopolato ad ogni draw().
 let zoneStatsCloseBtnRect=null;
 let zoneBoxHitRects=[];
+// Gruppi TP/SL espansi dall'utente (click sull'etichetta ×N): quando un gruppo è
+// in questo Set, invece di una sola casella raggruppata si vedono tutte le sotto-etichette.
+let expandedTpSlGroups = new Set();
 // Hit-rect delle posizioni APERTE per il click-to-select (RICHIESTO ESPLICITAMENTE): la
 // freccia di apertura e la riga di apertura (se visibile) rendono la posizione selezionabile
 // cliccandoci sopra. Azzerato e ripopolato ad ogni draw(), stesso schema di zoneBoxHitRects.
@@ -19351,21 +19357,6 @@ fblDelega('click',ev=>{
  $('status').textContent=ora?'🏷️ Etichette TP SL stop profit visibili.':'🏷️ Etichette TP SL stop profit nascoste: le linee restano a grafico.';
 });
 setTimeout(()=>{ try{ fblEtichetteTpSlUi(); }catch(e){} },500);
-// IL PULSANTE "ESPLODI" (richiesto esplicitamente): il raggruppamento resta il comportamento
-// giusto (una sola etichetta per le caselle che coincidono, con «×N» e i soldi totali), ma
-// serve un invertitore: chi vuole vedere ognuna delle posizioni del gruppo da sola — TP1, TP2,
-// TP3 con i loro soldi — preme qui e il gruppo si scompatta; lo ripreme e torna a raggruppare.
-// La scelta resta per QUESTO dispositivo, come i suoi fratelli sopra.
-function fblEtichetteEsplose(){ try{ return localStorage.getItem('fbl_etichette_esplose')==='1'; }catch(e){ return false; } }
-function fblEtichetteEsploseUi(){ const b=$('explodeTpSlEtichetteBtn'); if(b)b.classList.toggle('active',fblEtichetteEsplose()); }
-fblDelega('click',ev=>{
- const b=ev.target&&ev.target.closest&&ev.target.closest('#explodeTpSlEtichetteBtn'); if(!b)return;
- const ora=!fblEtichetteEsplose();
- try{ localStorage.setItem('fbl_etichette_esplose',ora?'1':'0'); }catch(e){}
- fblEtichetteEsploseUi(); try{ draw(); }catch(e){}
- $('status').textContent=ora?'💥 Etichette scompatte: ogni posizione mostra la sua etichetta anche se le caselle coincidono.':'🏷️ Etichette raggruppate di nuovo: le caselle che coincidono tornano in un\'unica etichetta.';
-});
-setTimeout(()=>{ try{ fblEtichetteEsploseUi(); }catch(e){} },500);
 // PASSO 22 - due interruttori piu' fini di "posizioni" e "linee posizioni": tolgono dal grafico
 // SOLO due cose, lasciando tutto il resto. 1) Le linee che uniscono la freccia di apertura a
 // quella di chiusura (segmento tratteggiato apertura->chiusura per i trade conclusi, e
@@ -19954,8 +19945,8 @@ function floatingPL(){
        return Number.isFinite(pxRep)?s+calculateForexPL(p.side,p.entry,pxRep,p.lots,posAsset):s;
      }
      if(p.mt5Ticket!=null){
-       const real=mt5RealProfit(p.mt5Ticket);
-       if(real!=null)return s+real; // fallback sotto solo se manca ancora una fotografia MT5
+       const net=mt5RealNet(p.mt5Ticket);
+       if(net!=null)return s+net; // profit+swap+commission: identico al terminale MT5
      }
      const posAsset=p.asset||currentAssetKey;
      const px=livePriceByAsset[posAsset];
@@ -19971,10 +19962,10 @@ function floatingPL(){
  const price=currentPrice();
  const ownPositions=positions.filter(p=>p.mt5Ticket!=null||belongsToCurrentAsset(p));
  return ownPositions.reduce((s,p)=>{
-   if(p.mt5Ticket!=null){
-     const real=mt5RealProfit(p.mt5Ticket);
-     if(real!=null)return s+real;
-   }
+    if(p.mt5Ticket!=null){
+     const net=mt5RealNet(p.mt5Ticket);
+     if(net!=null)return s+net; // profit+swap+commission
+    }
    return (price==null)?s:s+calculateForexPL(p.side,p.entry,price,p.lots,p.asset||currentAssetKey);
  },0);
 }
@@ -20620,6 +20611,8 @@ function fblClickSuVuoto(e){
      const hitPill=tpSlPillHitRects.some(r=>relX0>=r.x-4&&relX0<=r.x+r.w+4&&relY0>=r.y-4&&relY0<=r.y+r.h+4);
      if(!hitClosed&&!hitNews&&!hitLevel&&!hitAxis&&!hitPill){
       if(active||posSelezionata||selectedDrawing||selectedClosedTradeIds.size){
+        // Cliccando fuori sul vuoto, i gruppi TP/SL espansi tornano raggruppati
+        expandedTpSlGroups.clear();
        active=null;posSelezionata=null;selectedDrawing=null;
        try{ selectedClosedTradeIds.clear(); }catch(err){}
        // RICHIESTO ESPLICITAMENTE: cliccando fuori (grafico vuoto) dopo aver selezionato una
@@ -36906,7 +36899,7 @@ function startMt5PositionsPolling(){
  fetchMt5Orders();
  fetchMt5AccountInfo();
  fetchMt5AccountHistory();
- mt5PositionsPollTimer=setInterval(()=>{ fetchMt5Positions(); fetchMt5Orders(); fetchMt5AccountInfo(); },2000);
+ mt5PositionsPollTimer=setInterval(()=>{ fetchMt5Positions(); fetchMt5Orders(); fetchMt5AccountInfo(); },1000);
  mt5AccountHistoryTimer=setInterval(fetchMt5AccountHistory,30000);
 }
 function stopMt5PositionsPolling(keepSnapshot){
