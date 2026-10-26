@@ -957,3 +957,6 @@
   ancore dei disegni alla candela del timeframe nuovo più vicina le fa slittare di quasi una
   candela intera a ogni cambio; la conversione va fatta al momento del DISEGNO (interpolando il
   timestamp dentro la nuova candela), non riscrivendo il dato salvato.
+
+- **Quando una modifica tocca un comportamento già protetto da un test, il collaudo locale lo prende prima di GitHub.** Spegnere il pulsante "Aggiorna" in tutti i casi ha rotto aggiornamento_apk.test.mjs: nell'APK il pulsante DEVE restare (l'utente installa il pacchetto a mano). La regola è: prima di togliere un comportamento, cercare chi lo misura — il test trovato era la prova che quel comportamento serviva. (26 ottobre 2026.)
+- **Due sessioni sullo stesso repository: verificare SEMPRE git log prima di committare.** Il proprietario aveva pushato due commit che modificavano app.html mentre lavoravo localmente: committare la mia copia avrebbe annullato il suo lavoro. Stash + pull --rebase + stash pop ha salvato entrambi, e il diff residuo è risultato pulito. (26 ottobre 2026.)

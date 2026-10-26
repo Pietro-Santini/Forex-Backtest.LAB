@@ -3386,3 +3386,23 @@ Test: `disegni_cambio_tf.test.mjs` e `etichette_esplodi_tocco.test.mjs` riscritt
 comportamento; suite app completa 886/886 verde, locale e su GitHub. APK ricompilato
 (`controlla_icone_apk.py` OK, 713 emoji vere) e Setup caricati nella release v2.0.29; specchio
 Desktop riallineato.
+
+### Pulsante Aggiorna, menu strategia al centro, versione 2.0.30
+
+1. **Pulsante Aggiorna che non andava via** (su PC): il ramo "pacchetto aperto nel browser
+   esterno" lo RIATTIVAVA invece di spegnerlo. Distinzione fatta per piattaforma — su computer
+   si spegne e il tag si annota; nell'APK resta (l'utente installa a mano, comportamento
+   protetto dal test). Tolta anche la chiusura forzata dell'app dopo il download: ora dice
+   dov'è il pacchetto (Download) e che aggiorna anche il ponte e i servizi.
+   Il LANCIO automatico dell'installazione non è possibile dal browser (lo vieta il browser):
+   richiede un componente sul computer, quindi diventerà effettivo col prossimo Setup.
+2. **Menu della strategia di sala**: centrato nella pagina (era ancorato al pulsante e finiva
+   tagliato dal bordo destro), z-index alzato per la modalità a tutto schermo, e in testa il
+   nome della sala così si riconosce quale strategia si modifica.
+
+Integrato il lavoro del proprietario in parallelo (due commit suoi su app.html e sul progetto
+dati nostri) con stash + rebase senza perdere nulla.
+
+Test: pulsante_aggiorna_spento.test.mjs (3), popup_strategia_sala.test.mjs (2),
+aggiornamento_apk.test.mjs (4) verdi; suite completa 886/886. APK e Setup caricati nella
+release v2.0.30; specchio Desktop riallineato.
