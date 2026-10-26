@@ -174,3 +174,76 @@ aver trovato una tempesta di scritture ogni 1,5 secondi. Era un errore del mio c
 ogni giro contro il primo campione invece che contro il precedente. Rifatta la misura nel modo
 giusto, quel meccanismo era stabile. **Senza i numeri della console si corregge il sospettato, non
 il colpevole.**
+
+---
+
+## 8. LE PRESTAZIONI: non deve rallentare, deve accelerare
+
+Chiesto dal proprietario: «questo rallenta la velocità di carico? Non vorrei mi rallentasse la
+velocità di calcolo di tutta l'applicazione, e se riusciamo rendiamolo ancora più performante di
+come lo è oggi».
+
+**Misurato il 26 ottobre, coi suoi dati veri (760 operazioni chiuse):**
+
+| | |
+|---|---|
+| Pacchetto di sessione | **196 KB** |
+| Serializzarlo (`JSON.stringify`) | **0,40 ms** |
+| Calcolarne la firma anti-doppioni | **0,83 ms** |
+| **Una sola operazione chiusa** | **259 byte** |
+
+### 8.1 Il caricamento NON è sul percorso critico, e deve restarci fuori
+
+Oggi l'app legge **prima la copia locale**: se esiste ed è dell'account giusto, vince quella e il
+cloud non viene nemmeno interrogato (vedi `localMatchesAccount` nel ripristino). Firestore si legge
+**solo** quando in locale non c'è niente: dispositivo nuovo, o cache pulita.
+
+> **REGOLA DA NON VIOLARE:** la nuova API non deve MAI finire sul percorso di avvio quando esiste
+> una copia locale valida. Se qualcuno la mette lì «per avere sempre il dato fresco», l'avvio
+> dipenderà dalla rete e dalla velocità del server — ed è il contrario di quello che è stato
+> chiesto.
+
+**L'avvio diventa anzi più veloce**: sparisce l'import di `firebase-firestore.js`, cioè una
+libreria in meno da scaricare, analizzare ed eseguire a ogni apertura.
+
+### 8.2 Il salvataggio incrementale è il guadagno principale
+
+| | Oggi | Dopo |
+|---|---|---|
+| Un'operazione che si chiude | rimanda **196 KB** (tutto lo storico) | manda **259 byte** |
+
+Settecentocinquanta volte meno dati. E meno dati vuol dire **meno lavoro anche sul filo
+principale del browser**, non solo meno traffico: oggi ogni tentativo di salvataggio paga 1,23 ms
+fra serializzazione e firma sul banco di prova, che sulla macchina del proprietario (misurata ~10
+volte più lenta) fanno **circa 10 ms**. Con 259 byte quel costo sparisce.
+
+### 8.3 Gli ascolti mandano l'avviso, non il contenuto
+
+Oggi, se si tocca qualcosa sul computer, il telefono in ascolto **riscarica 305 KB**. Dopo deve
+ricevere `{nome, versione}` — venti byte — e decidere da sé se gli serve leggere.
+
+È la voce che fa risparmiare di più **e** quella che alleggerisce i dispositivi più deboli.
+
+### 8.4 Il punto dove si potrebbe PERDERE, e come si copre
+
+L'Oracle Micro è **una macchina sola, 1 GB di RAM, CPU condivisa**; Google ha un'infrastruttura
+mondiale. Nei casi normali non si vede, perché i salvataggi sono asincroni e non bloccano niente.
+
+**Ma c'è un caso dove si vedrebbe: il primo avvio su un dispositivo nuovo**, quando non esiste
+copia locale e bisogna scaricare tutto. Lì un server lento significa attesa più lunga.
+
+Come si copre, in ordine:
+1. è un caso raro — una volta per dispositivo;
+2. si mostra il riquadro di caricamento che **esiste già** (`fblCaricamentoMostra`), così l'attesa
+   si vede invece di sembrare un blocco;
+3. si scarica **prima quello che serve subito** (conto e posizioni aperte) e **poi il resto**
+   (Trade Journal storico, disegni): si può operare mentre il resto arriva.
+
+### 8.5 Come si verifica che non sia peggiorato
+
+Lo strumento c'è già: **impostazioni → Versione → «Misura le prestazioni»**. Riporta già
+`cloudScritture`, `cloudSaltate` e `cloudUltimoPeso_KB`.
+
+**Prima di cominciare**, farsi dare dal proprietario una misura di riferimento. **Dopo ogni passo
+della migrazione**, rifarla e confrontare. Se `cloudUltimoPeso_KB` non è crollato, il salvataggio
+incrementale non sta funzionando davvero — e si è spostato lo spreco invece di toglierlo.
