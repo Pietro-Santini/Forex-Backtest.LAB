@@ -15423,7 +15423,14 @@ function drawFootprintCandle(ctx,r,xx,bw,yFn,fp,lineColor,style,opt){
 // I segnalini sono SPENTI di default: il disegno normale non paga niente. Si accendono solo
 // durante la misura (vedi fblMisuraPrestazioni) e si spengono alla fine: uno strumento di
 // misura che resta attaccato diventa la causa del rallentamento successivo.
-let fblSezioniDraw={};      // nome della sezione -> ms accumulati
+let fblSezioniDraw={};
+// CACHE DELLE ZONE ZERO-PRINT (imbalance).
+// MISURATO dal proprietario col pannello prestazioni (26 ottobre 2026): 4,8 fotogrammi al
+// secondo e 276 ms per disegno, di cui 128 ms nella sezione zoneZeroPrint — perche' ad OGNI
+// ridisegno si ri-scansionavano fino a 12000 candele per ricalcolare le stesse zone.
+// Le zone dipendono solo da asset, timeframe, soglia, finestra e contenuto del footprint:
+// se nulla di questo cambia, il risultato di prima si riusa e il disegno torna veloce.
+let _zonePrintCacheKey=null, _zonePrintCacheVal=null;      // nome della sezione -> ms accumulati
 let fblCronoSezioni=false;  // spento di default: il disegno di tutti i giorni non paga niente
 function fblSezFine(nome,t0){
  const ora=performance.now();
@@ -15973,9 +15980,13 @@ function draw(){
    // (168h anche a M1 ≈ 10080 candele) — copre in pratica sempre tutto lo storico footprint REALE
    // disponibile per l'asset, senza scandire per intero uno storico Storico/backtest di anni
    // quando i dati footprint reali coprono comunque un periodo molto più corto.
-   const _ZONE_LOOKBACK_MAX=12000;
+   const _ZONE_LOOKBACK_MAX=2000;
    const _zoneScanStart=Math.max(0,dataStart-_ZONE_LOOKBACK_MAX);
+   const _chiaveZona=[currentAssetKey||'',currentTF,_footprintImbMinRows,_footprintImbMax,
+     _ZONE_LOOKBACK_MAX,dataStart,dataEnd,footprintVersione].join('|');
+   let zones=_zonePrintCacheKey===_chiaveZona?_zonePrintCacheVal:null;
    const _zoneEntries=[];
+   if(zones===null)
    for(let absIdx=_zoneScanStart;absIdx<=dataEnd&&absIdx<rows.length;absIdx++){
      const r=rows[absIdx];
      if(!r)continue;
@@ -15989,8 +16000,11 @@ function draw(){
      const hasReal=!!(real&&Object.keys(real.rows).length);
      _zoneEntries.push({r,xx,xxLeft:xx-bw/2,xxRight:xx+bw/2,fpAR:hasReal?real:null});
    }
-   const zones=footprintBuildZeroPrintZones(_zoneEntries,_footprintImbMinRows)
-     .sort((a,b)=>b.count-a.count).slice(0,_footprintImbMax);
+   if(zones===null){
+     zones=footprintBuildZeroPrintZones(_zoneEntries,_footprintImbMinRows)
+       .sort((a,b)=>b.count-a.count).slice(0,_footprintImbMax);
+     _zonePrintCacheKey=_chiaveZona; _zonePrintCacheVal=zones;
+   }
    ctx.save();
    ctx.globalAlpha=_footprintImbAlpha;
    ctx.fillStyle=_footprintImbColor;
@@ -38003,6 +38017,9 @@ async function fblTickCaricaBlocchi(){
  return out;
 }
 let footprintTicksDirty=false;
+// Versione del contenuto del footprint: si alza ad ogni tick nuovo. Serve alla cache delle
+// zone zero-print (sopra) per sapere quando il risultato salvato non è più buono.
+let footprintVersione=0;
 async function saveFootprintTicksNow(){
  if(!footprintTicksDirty)return;
  footprintTicksDirty=false;
@@ -39817,7 +39834,7 @@ function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  // log dura molto di piu': su BTC arrivano decine di trade al secondo e il tetto per asset si
  // riempirebbe in poche ore, perdendo la traccia degli asset in watchlist.
  if(source==='binance'&&prev&&prev.src==='binance'&&prev.price===price&&Math.floor(prev.t/1000)===Math.floor(timestamp/1000)){
-   prev.weight+=w; footprintTicksDirty=true;
+   prev.weight+=w; footprintTicksDirty=true; footprintVersione++;
    if(assetKey===currentAssetKey&&liveModeActive){ const step=footprintStepForAsset(assetKey); if(step>0)footprintApplyTickToBuckets(price,timestamp,prev.side,w,step); }
    return;
  }
@@ -39830,7 +39847,7 @@ function footprintRegisterTick(price,timestamp,assetKey,weight,source){
  // src: da quale fonte arriva il tick, per poterlo riconoscere dopo (vedi footprintTickMt5FuoriFase).
  log.push({t:timestamp,price,side,weight:w,src:source||undefined});
  fblTickTaglia(assetKey,log);   // il tetto si rispetta buttando via un blocco intero: i blocchi restano allineati
- footprintTicksDirty=true; // vedi saveFootprintTicksNow(): persistito al prossimo giro debounced, non subito
+ footprintTicksDirty=true; footprintVersione++; // vedi saveFootprintTicksNow(): persistito al prossimo giro debounced, non subito
  // Aggiorna anche i bucket già pronti SOLO se questo tick appartiene all'asset a grafico ora — per
  // gli asset "in background" il log basta e avanza (verrà ricostruito in blocco quando/se ci si
  // torna sopra, vedi footprintRebuildBucketsForCurrentAsset() richiamata al cambio asset).
