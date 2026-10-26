@@ -22317,6 +22317,7 @@ function applyBreakevenToPosition(pos,t){
 // tracciato in positions[] (posizione aperta fuori dall\'app), quindi si parla direttamente col
 // bridge invece di passare da un oggetto locale.
 async function applyBreakevenToMt5TicketDirect(ticket,t){
+if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
  const live=mt5RealPositions.find(p=>String(p.ticket)===String(ticket));
  if(!live)return;
  const finta={asset:live.symbol,entry:Number(live.price_open),side:live.side,mt5Ticket:live.ticket};
@@ -22410,6 +22411,7 @@ async function syncMt5PendingOrderLevels(p){
 //    premere "conferma".
 // Il caso normale (il pulsante Chiudi di una riga) non passa nessuna opzione e continua a chiedere.
 async function closeMt5PositionReal(pos,reason,opz){
+if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
  if(!pos||pos.mt5Ticket==null)return false;
  if(!(opz&&opz.senzaConferma)&&!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.asset||''} (${(pos.lots||0).toFixed(2)} lot, ticket ${pos.mt5Ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return false;
  $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.mt5Ticket})…`;
@@ -22886,6 +22888,7 @@ $('closeAll').onclick=async()=>{
 // tramite il ticket reale (non un id della simulazione). Estratte in funzioni a sé perché ora
 // vivono nella tabella dedicata #mt5OpenPositions, separata da quella standard #openPositions.
 async function closeMt5TicketFromTable(mt5CloseTicket){
+if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
  const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5CloseTicket);
  if(!pos)return;
  if(!await appConfirm(`Chiudere DAVVERO la posizione ${pos.side} ${pos.symbol} (${Number(pos.volume).toFixed(2)} lot, ticket ${pos.ticket}) sul conto MT5 collegato? L'operazione è reale e non può essere annullata da qui.`))return;
@@ -22899,6 +22902,7 @@ async function closeMt5TicketFromTable(mt5CloseTicket){
  fetchMt5Positions();
 }
 async function modifyMt5TicketFromTable(mt5ModifyTicket){
+if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
  const pos=mt5RealPositions.find(p=>String(p.ticket)===mt5ModifyTicket);
  if(!pos)return;
  // Stesso stile già usato altrove nell\'app per le conferme delicate (prompt() con il valore
@@ -32740,7 +32744,10 @@ function tgPiano(seg,sym,pctForzata,opz){
  const maxN=(Number(opz.maxN)>=1)?Math.floor(Number(opz.maxN)):Infinity;
  const parti=(Number(opz.parti)>1)?Math.min(10,Math.floor(Number(opz.parti))):1;
  const side=String(seg.direzione||'').toUpperCase();
- let entry=Number.isFinite(opz.prezzo)?Number(opz.prezzo):currentPrice();
+ // Il prezzo di mercato resta da parte: decide se il prezzo scelto dall'utente è diverso
+ // (ordine pendente) oppure no (a mercato).
+ const prezzoMercato=currentPrice();
+ let entry=Number.isFinite(opz.prezzo)?Number(opz.prezzo):prezzoMercato;
  let sl=Number(seg.stop_loss);
  if(side!=='BUY'&&side!=='SELL')return {problemi:['il segnale non dice se comprare o vendere']};
  if(!Number.isFinite(entry))return {problemi:['il grafico non ha ancora un prezzo per '+sym]};
@@ -32799,11 +32806,11 @@ function tgPiano(seg,sym,pctForzata,opz){
   // PREZZO DI APERTURA INSERITO DALL'UTENTE (nuovo campo nel popup): se l'utente ha scritto un
   // prezzo, l'ordine diventa pendente a quel prezzo invece che a mercato. Il tipo (limit o stop)
   // si deduce dalla direzione rispetto al prezzo di adesso.
-  if(Number.isFinite(opz&&opz.prezzo)&&opz.prezzo>0&&opz.prezzo!==entry){
+  if(Number.isFinite(opz&&opz.prezzo)&&opz.prezzo>0&&opz.prezzo!==prezzoMercato){
    const e=Number(opz.prezzo);
    const piazzabile=side==='BUY'?(e<entry?true:e>entry?true:true):(e>entry?true:e<entry?true:true);
    // limit: BUY sotto il prezzo attuale, SELL sopra. stop: il contrario.
-   const eLimit=side==='BUY'?e<entry:e>entry;
+   const eLimit=side==='BUY'?e<prezzoMercato:e>prezzoMercato;
    pendente=true; kind=eLimit?'LIMIT':'STOP'; entry=e;
    notaEntrata='prezzo di apertura scelto dall\'utente: '+tgFmt(e);
   }
@@ -32982,7 +32989,12 @@ async function tgEseguiSegnale(voce,opzioni){
  // Senza stop e senza target: target al 50% dello stop e basta, nessun pareggio anticipato.
  const avvicinamento=p.senzaLivelli?null:p.tpCalcolato?{pct:tgAvvicinamentoSenzaTp(A)}
    :((opzioni&&opzioni.avvicinamento)?opzioni.avvicinamento:null);
- const reale=!!mt5Connected;
+ // IN REPLAY (e in Storico/backtest) le posizioni dei segnali vanno sul conto SIMULATO,
+ // mai sul conto MT5 reale. SEGNALATO dal proprietario (26 ottobre 2026):
+ // «in modalità replay le posizioni non vengono aperte nell'account storico, ma vengono
+ // aperte sull'account MT5. Non può essere».
+ const sessioneLive=(currentMode()==='live'||currentMode()==='live_propfirm');
+ const reale=!!mt5Connected&&sessioneLive&&!liveReplayActive;
  if(!reale&&p.margine>freeMargin()+1e-9){
   await appAlert('Margine non sufficiente per '+p.n+' posizioni da '+p.lotti.toFixed(2)+' lot: servono '+euro(p.margine)+', liberi ce ne sono '+euro(freeMargin())+'.');
   return;
@@ -35862,6 +35874,7 @@ function fblPareggioChiusuraDecide(pos,t){
 // Sposta lo stop sul conto MT5 (bridge) senza la baraonda di messaggi: qui si chiama da solo,
 // ogni due secondi, e non deve riempire la barra di stato.
 async function fblMt5SpostaStop(pos,prezzo){
+if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
  if(!pos||pos.mt5Ticket==null||!Number.isFinite(prezzo))return false;
  try{
   let tp=0;
