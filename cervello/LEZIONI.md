@@ -903,4 +903,21 @@
   eseguire lo strumento su un campione con emoji e guardare i byte che escono (segnaposto
   sostituito, emoji intatte, CRLF invariati, nessun BOM). Un test che legge il testo dello
   script dimostra che l'hai scritto, non che funziona.
+- Un filtro del tipo "se MT5 è collegato, mostra solo le posizioni con `mt5Ticket`" scarta in
+  silenzio **tutte** le posizioni simulate: replay e conto Storico non hanno ticket per
+  costruzione, quindi spariscono dal grafico E dalla tabella senza nessun errore. Prima di un
+  filtro di proprietà va sempre chiesto "questa posizione appartiene a un conto reale?", non
+  "ha un ticket?". (26 ottobre 2026, difetto del P/L in replay.)
+- In replay il prezzo live "di adesso" è il **futuro** rispetto a ciò che si sta guardando.
+  Qualunque funzione che valuti un conto (equity, margine, P/L flottante, "prezzo corrente"
+  in tabella) deve usare il prezzo mostrato, non `livePriceByAsset`: mescolarli fa apparire un
+  capitale storico da 8.481 € al posto di 10.000 € e sembra un errore di calcolo, mentre è un
+  errore di epoca. (26 ottobre 2026.)
+- Uno spostamento fatto durante il replay va datato **all'istante del replay**, non a
+  `Date.now()`: la memoria dei livelli (`posStoriaSegna` / `posLivelliAlTempo`) rilegge i
+  livelli "in forza a quell'istante", e una data nel futuro lascia in vigore il livello vecchio
+  — il trascinamento sembra non funzionare. (26 ottobre 2026.)
+- Un test che misura il comportamento trova difetti che la segnalazione non nomina: la quarta
+  causa di questo bug (livelli che tornavano indietro) è uscita dal test sul trascinamento,
+  non dal racconto del proprietario. (26 ottobre 2026.)
 
