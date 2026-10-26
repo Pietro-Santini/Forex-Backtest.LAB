@@ -20592,9 +20592,10 @@ function fblClickSuVuoto(e){
      const hitAxis=isOnPriceAxis(e.clientX);
      const hitPill=tpSlPillHitRects.some(r=>relX0>=r.x-4&&relX0<=r.x+r.w+4&&relY0>=r.y-4&&relY0<=r.y+r.h+4);
      if(!hitClosed&&!hitNews&&!hitLevel&&!hitAxis&&!hitPill){
+      // Cliccando fuori sul vuoto, i gruppi TP/SL espansi tornano raggruppati: sempre,
+      // anche senza nessuna posizione selezionata (raggruppare non e' deselezionare).
+      expandedTpSlGroups.clear();
       if(active||posSelezionata||selectedDrawing||selectedClosedTradeIds.size){
-        // Cliccando fuori sul vuoto, i gruppi TP/SL espansi tornano raggruppati
-        expandedTpSlGroups.clear();
        active=null;posSelezionata=null;selectedDrawing=null;
        try{ selectedClosedTradeIds.clear(); }catch(err){}
        // RICHIESTO ESPLICITAMENTE: cliccando fuori (grafico vuoto) dopo aver selezionato una
@@ -25073,7 +25074,10 @@ chartEl.addEventListener('pointerdown',e=>{
     {
       const rectC=chartEl.getBoundingClientRect();
       const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
-      const hitPill=tpSlPillHitRects.find(r=>relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
+      // L'etichetta di GRUPPO (×N) ha la precedenza: toccarla espande/contrai il gruppo
+      // (richiesto 26 ottobre 2026), non seleziona la posizione del rappresentante.
+      const hitGruppo=tpSlPillHitRects.find(r=>String(r.ownerKey||'').indexOf('gruppo:')===0&&relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
+      const hitPill=hitGruppo||tpSlPillHitRects.find(r=>relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
       tpSlEtichettaCandidateKey=hitPill?hitPill.ownerKey:null;
     }
     const tradeHit=tradeLevelHit(e.clientX,e.clientY,true);
@@ -25186,7 +25190,10 @@ chartEl.addEventListener('pointerdown',e=>{
  {
   const rectC=chartEl.getBoundingClientRect();
   const relXc=e.clientX-rectC.left, relYc=e.clientY-rectC.top;
-  const hitPill=tpSlPillHitRects.find(r=>relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
+  // L'etichetta di GRUPPO (×N) ha la precedenza: toccarla espande/contrai il gruppo
+  // (richiesto 26 ottobre 2026), non seleziona la posizione del rappresentante.
+  const hitGruppo=tpSlPillHitRects.find(r=>String(r.ownerKey||'').indexOf('gruppo:')===0&&relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
+  const hitPill=hitGruppo||tpSlPillHitRects.find(r=>relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
   tpSlEtichettaCandidateKey=hitPill?hitPill.ownerKey:null;
  }
  const tradeHit=tradeLevelHit(e.clientX,e.clientY,true);
@@ -25723,59 +25730,24 @@ chartEl.addEventListener('pointerup',e=>{
        if(movedEt<4){
          const kEt=String(tpSlEtichettaCandidateKey);
          zoneStatsOpenKey=kEt;
-         if(kEt.indexOf('pos:')===0){
-           const pa=positions.find(p=>'pos:'+p.id===kEt);
-           if(pa&&posSelezionata!==pa)focusPosition(pa); // selezione vera: è un gesto dell'utente
+         // Click sull'etichetta di un GRUPPO (×N): toggle espandi/contrai il gruppo.
+         // Il raggruppamento è sempre attivo (niente più pulsante "Esplodi etichette"):
+         // cliccando sull'etichetta ×N il gruppo si espande (una etichetta per posizione),
+         // ricliccando torna raggruppato. Cliccando fuori sul vuoto torna raggruppato
+         // (visto più sopra in fblClickSuVuoto).
+         if(kEt.indexOf('gruppo:')===0){
+            const chiave=kEt.substring('gruppo:'.length);
+            if(expandedTpSlGroups.has(chiave))expandedTpSlGroups.delete(chiave);
+            else expandedTpSlGroups.add(chiave);
+         } else if(kEt.indexOf('pos:')===0){
+            const pa=positions.find(p=>'pos:'+p.id===kEt);
+            if(pa&&posSelezionata!==pa)focusPosition(pa); // selezione vera: è un gesto dell'utente
          }
-         draw();
-       }
-       tpSlEtichettaCandidateKey=null;
+       draw();
      }
-     fblClickSuVuoto(e);
+     tpSlEtichettaCandidateKey=null;
    }
-   if(touchPoints.size<2){twoFingerPan=false;if(touchPoints.size===0)setChartTouchAction(false);}
-   chartEl.releasePointerCapture?.(e.pointerId);
-   return;
- }
- // Il pointerdown era caduto dentro una casella TP-SL: se il rilascio avviene qui senza un
- // vero trascinamento (pochi pixel di distanza dal punto di partenza del pan), è stato un
- // CLICK — apriamo le sue statistiche P&L/R:R (richiudibili solo con la "X", mai ricliccando
- // altrove). Se invece ci si è davvero spostati, era un pan del grafico: non si apre nulla.
- if(zoneClickCandidateKey!=null){
-   const moved=Math.hypot(e.clientX-panStartX,e.clientY-panStartY);
-   if(moved<4){
-     // CORREZIONE ESPLICITA DELL'UTENTE: tolto il doppio click sulla singola casella TP/SL per
-     // nascondere/mostrare il suo riempimento colorato — resta SOLO il pulsante globale
-     // "nascondi le caselle TP/SL" (tpSlZoneFillVisible) per tutte le posizioni insieme; le
-     // linee TP/SL restano sempre visibili in ogni caso. Un click (singolo o doppio, non importa
-     // più) su una casella apre sempre le sue statistiche P&L/R:R.
-     zoneStatsOpenKey=zoneClickCandidateKey;
-     draw();
-   }
-   zoneClickCandidateKey=null;
- }
- // L'ETICHETTA TP/SL (la pillola a destra della casella): il click (o il tocco) senza
- // trascinamento SELEZIONA la posizione, oltre ad aprire le statistiche P&L/R:R come sulla
- // casella (richiesto esattamente il 23 ottobre 2026). La casella LARGA resta quella di
- // prima: apre le statistiche e deseleziona come un punto vuoto, per non rompere la regola
- // «il click sul vuoto deseleziona» (in fblClickSuVuoto più sotto). L'etichetta invece è un
- // bersaglio stretto e preciso: lì «vuoto» non c'entra. Solo per le posizioni aperte
- // (chiave 'pos:...'): bozze, pendenti e caselle dei trade chiusi non selezionano nulla.
- if(tpSlEtichettaCandidateKey!=null){
-   // La soglia usa chartDownXY (impostata a OGNI pointerdown): sul primo click del mouse la
-   // linea/l'etichetta ARMA il trascinamento e ritorna PRIMA di armare il pan, quindi
-   // panStartX resta al valore di un gesto precedente e direbbe «trascinamento» a torto.
-   const moved=chartDownXY?Math.hypot(e.clientX-chartDownXY.x,e.clientY-chartDownXY.y):99;
-   if(moved<4){
-     const kEt=String(tpSlEtichettaCandidateKey);
-     zoneStatsOpenKey=kEt;
-     if(kEt.indexOf('pos:')===0){
-       const pa=positions.find(p=>'pos:'+p.id===kEt);
-       if(pa&&posSelezionata!==pa)focusPosition(pa); // selezione vera: è un gesto dell'utente
-     }
-     draw();
-   }
-   tpSlEtichettaCandidateKey=null;
+  }
  }
  // RICHIESTO ESPLICITAMENTE: un vero click (non un trascinamento) sopra una candela disegnata in
  // stile footprint fa scorrere lo stile di visualizzazione bid/ask -> delta -> volume -> di nuovo

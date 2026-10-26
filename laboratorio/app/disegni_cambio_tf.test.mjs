@@ -1,28 +1,28 @@
-// AL CAMBIO TIME FRAME I DISEGNI RESTANO SULLE LORO CANDELE.
+// AL CAMBIO TIME FRAME I DISEGNI RESTANO ESATTAMENTE DOVE ERANO.
 //
-// SEGNALATO dal proprietario: «cambio Time Frame e le forme (trend, quadrati, linee) slittano».
+// SEGNALATO dal proprietario (26 ottobre 2026): «i disegni devono rispettare sempre la stessa
+// identica posizione ... non è possibile che ogni volta che cambia time frame si spostano».
 //
-// LA CAUSA (misurata): gli ancoraggi dei disegni sono a TEMPO reale (ms) + prezzo. Cambiando TF
-// le candele diventano bucket aggregati M1→5m/15m/1H con orario = inizio bucket: un'ancora
-// all'istante di apertura di una candela M1 (es. 10:07) nel TF nuovo (5m) non e' l'apertura di
-// NESSUNA candela (i bucket sono 10:05, 10:10…): la punta slitta in mezzo alla candela, fino a
-// quasi una larghezza intera, e l'inclinazione si riscrive.
+// STORIA del difetto: gli ancoraggi dei disegni sono a TEMPO reale (ms) + prezzo. Il vecchio
+// rimedio (fblDisegniRiAgganciaAlTf) spostava ogni punto al timestamp della candela del TF
+// nuovo più vicina: 10:07 diventava 10:05 o 10:10, e il disegno VISIVAMENTE slittava di quasi
+// una candela intera a ogni cambio TF — proprio il difetto che il rimedio voleva curare.
 //
-// LA CURA: al cambio TF ogni punto si riaggrappa alla candela del TF attuale piu' vicina
-// (fblDisegniRiAgganciaAlTf), l'aggancio che aveva al momento del disegno. La chiamano SOLO i
-// veri cambi TF: il listener di #tf in storico, e i percorsi Live (Capital/MT5/Binance) quando
-// ricevono opts.tfChangeSpanMinutes. PROVA DI CONTROLLO: senza cura la punta 10:07 NON e'
-// un'apertura di candela 5m — qui sotto si misura proprio prima (non allineata) e dopo
-// (allineata), e che l'aiuto non tocchi niente quando non serve (idempotente, e a TF 1 immobile).
+// LA CURA DEFINITIVA: i disegni mantengono il loro timestamp ASSOLUTO (p.time non viene mai
+// toccato). dataPosFromTime() li mappa già correttamente nella serie del nuovo TF: 10:07 a TF 5m
+// cade DENTRO la candela 10:05-10:10, alla stessa posizione relativa (2/5 della candela), quindi
+// la punta resta visivamente dov'era. Qui si misura: stessi timestamp prima e dopo il cambio TF
+// vero (attraverso il listener di #tf), stessi prezzi, e la posizione frazionaria coerente
+// (7 minuti dall'inizio = 1.4 bucket da 5 minuti).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
 
-test('cambio TF: le ancore dei disegni cadono su candele del nuovo TF, prezzi immutati', async () => {
+test('cambio TF: i disegni non si spostano (timestamp e prezzi immutati)', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(() => {
-      // Storico M1: 40 candele da 10:00 a 10:38 (tempo aperta candela = t), listo a 100.
+      // Storico M1: 40 candele da 10:00 a 10:39 (tempo aperta candela = t), listo a 100.
       const t0 = Date.UTC(2026, 0, 5, 10, 0);
       const R = [];
       for (let k = 0; k < 40; k++){
@@ -31,43 +31,47 @@ test('cambio TF: le ancore dei disegni cadono su candele del nuovo TF, prezzi im
       }
       rows = R; baseRows = R; currentTF = 1; idx = 10; viewEnd = R.length - 1;
       masterTime = Date.parse(R[10].date);
-      // Un trend a mano: punta A sull'apertura della candela 7 (10:07: M1, NON bucket 5m),
-      // punta B sull'apertura della candela 17 (10:17). Prezzi che il riaggancio non tocca.
+      // Un trend a mano: punta A sull'apertura della candela 7 (10:07), punta B sulla 17 (10:17).
       drawings = [{tipo: 'trend', p1: {time: Date.parse(R[7].date), price: 100}, p2: {time: Date.parse(R[17].date), price: 101}}];
       const prima = JSON.parse(JSON.stringify(drawings[0]));
-      // come sta dopo il riaggancio a TF 1: un'ancora M1 e' gia' apertura di candela M1: non move.
-      fblDisegniRiAgganciaAlTf();
-      const aTf1 = JSON.parse(JSON.stringify(drawings[0]));
-      // CAMBIO TF VERO dal controllo del grafico (attraverso il listener di #tf)
+      // Cambio TF VERO dal controllo del grafico (attraverso il listener di #tf)
       $('tf').value = '5';
       $('tf').dispatchEvent(new Event('change'));
-      const tempi = getRowsTimestamps();
-      const setOff = new Set(tempi);
-      const dopo = {p1: drawings[0].p1, p2: drawings[0].p2};
+      const dopo = {p1: {time: drawings[0].p1.time, price: drawings[0].p1.price},
+                    p2: {time: drawings[0].p2.time, price: drawings[0].p2.price}};
+      // La posizione VISIVA: il timestamp assoluto del disegno cade DENTRO la candela del nuovo
+      // TF che lo contiene, alla stessa frazione di prima. 10:07 a TF 5m sta tra la candela che
+      // apre 10:05 (indice 1) e quella che apre 10:10 (indice 2), al 40% (2 minuti su 5).
+      const ts = getRowsTimestamps();
+      let indiceCandela = -1, frazione = 0;
+      for (let i = 0; i < ts.length - 1; i++) {
+        if (dopo.p1.time >= ts[i] && dopo.p1.time < ts[i + 1]) {
+          indiceCandela = i;
+          frazione = (dopo.p1.time - ts[i]) / (ts[i + 1] - ts[i]);
+          break;
+        }
+      }
       return {
-        prima,
-        aTf1,
-        dopo,
+        prima, dopo,
         candele5m: rows.length,
-        allineate: setOff,
-        p1allineata: setOff.has(dopo.p1.time),
-        p2allineata: setOff.has(dopo.p2.time),
-        p1primaAllineata: setOff.has(prima.p1.time),
+        tempoInvariato: dopo.p1.time === prima.p1.time && dopo.p2.time === prima.p2.time,
         prezziOk: dopo.p1.price === 100 && dopo.p2.price === 101,
-        aggrappate: JSON.stringify([aTf1.p1.time, aTf1.p2.time]) === JSON.stringify([prima.p1.time, prima.p2.time])
+        indiceCandela,
+        frazione,
       };
     });
-    assert.ok(r.aggrappate, 'a TF 1 le ancore M1 sono gia\' su candele: non si toccano: ' + JSON.stringify(r));
     assert.ok(r.candele5m === 8, '40 candele M1 diventano 8 candele da 5m: ' + JSON.stringify({c: r.candele5m}));
-    assert.ok(!r.p1primaAllineata, 'IL DIFETTO, misurato: 10:07 NON e\' apertura di una candela 5m: ' + JSON.stringify(r));
-    assert.ok(r.p1allineata && r.p2allineata, 'DOPO il cambio TF entrambe le punte stanno su candele 5m: ' + JSON.stringify(r));
-    assert.equal(r.prima.p1.price, r.dopo.p1.price, 'il prezzo delle ancore non si tocca: ' + JSON.stringify(r));
-    assert.equal(r.prima.p2.price, r.dopo.p2.price, 'il prezzo delle ancore (B) non si tocca: ' + JSON.stringify(r));
+    assert.ok(r.tempoInvariato, 'I TIMESTAMP NON SI TOCCANO: ' + JSON.stringify({prima: r.prima, dopo: r.dopo}));
+    assert.ok(r.prezziOk, 'i prezzi delle ancore restano immutati: ' + JSON.stringify(r));
+    // La posizione visiva è coerente: 10:07 cade nella candela 5m che apre alle 10:05 (indice 1),
+    // al 40% dentro (2 minuti su 5). Nessuno slittamento: la punta resta dov'era.
+    assert.equal(r.indiceCandela, 1, '10:07 cade nella candela 5m che apre 10:05 (indice 1): ' + JSON.stringify(r));
+    assert.ok(Math.abs(r.frazione - 0.4) < 0.01, 'e al 40% dentro quella candela (2 min su 5): ' + JSON.stringify(r));
     assert.equal(errori.length, 0, 'errori console: ' + errori.join(' | '));
   } finally { await browser.close(); }
 });
 
-test('CON PROVA DI CONTROLLO: senza il riaggancio la punta resta staccata dalle candele 5m', async () => {
+test('CON PROVA DI CONTROLLO: il timestamp resta 10:07 anche a TF 5m (mai agganciato alle candele)', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(() => {
@@ -80,14 +84,17 @@ test('CON PROVA DI CONTROLLO: senza il riaggancio la punta resta staccata dalle 
       rows = R; baseRows = R; currentTF = 1; idx = 10; viewEnd = R.length - 1;
       masterTime = Date.parse(R[10].date);
       drawings = [{tipo: 'trend', p1: {time: Date.parse(R[7].date), price: 100}}];
-      // Cambio TF SENZA cura: solo rebuildRows (esattamente una cura sbagliata o assente).
+      // Cambio TF: solo rebuildRows, senza nessuna riscrittura dei timestamp.
       currentTF = 5; rebuildRows();
       const setOff = new Set(getRowsTimestamps());
       return {p1: drawings[0].p1, allineata: setOff.has(drawings[0].p1.time)};
     });
-    assert.ok(!r.allineata, 'senza cura 10:07 resta NON apertura di candela 5m (il difetto): ' + JSON.stringify(r));
+    // 10:07 NON è apertura di una candela 5m (le aperture sono 10:00, 10:05, 10:10...): e va
+    // bene così — il disegno resta al suo istante assoluto, visualizzato DENTRO la candela
+    // che lo contiene da dataPosFromTime, senza mai slittare alle candele vicine.
+    assert.ok(!r.allineata, 'il timestamp resta il suo, non viene agganciato alle aperture 5m: ' + JSON.stringify(r));
     assert.ok(r.p1.time === Date.parse(new Date(Date.UTC(2026, 0, 5, 10, 7)).toISOString()),
-      'l\'istante del difetto resta 10:07: ' + JSON.stringify(r));
+      'l\'istante del disegno resta 10:07: ' + JSON.stringify(r));
     assert.equal(errori.length, 0, 'errori console: ' + errori.join(' | '));
   } finally { await browser.close(); }
 });
