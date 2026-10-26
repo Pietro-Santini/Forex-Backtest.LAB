@@ -3421,3 +3421,18 @@ apriva a mercato. Causa: il prezzo scelto dall'utente finiva in `entry` e poi il
 `opz.prezzo!==entry` era sempre falso. Corretto col prezzo di mercato salvato da parte.
 
 Test: laboratorio/app/replay_segnali_conto_storico.test.mjs (3 prove nuove).
+
+### Prestazioni misurate e primo taglio (2.0.31)
+
+MISURATO dal proprietario col pannello prestazioni: 4,8 fotogrammi al secondo, 276 ms per
+disegno, 25 scatti (peggiore 437 ms), 1.350 MB, 1.042.311 tick footprint, 50.244 candele.
+
+Le sezioni hanno indicato il colpevole: zoneZeroPrint 128 ms su 276. Rifaceva 12.000
+candele di zone a OGNI ridisegno. Messa in cache (invalidation su asset/timeframe/soglia/
+finestra/versione del footprint) e lookback ridotto a 2.000.
+
+Prossimo passo, già indicato dalla misura: disegniUtente (84 ms) e indicatori (46 ms), e il
+tetto dei tick footprint (150.000 per asset: 7 asset = 1 milione di tick, da decidere col
+proprietario quanto storico tenere).
+
+Test: misura_prestazioni, cronometri_disegno, footprint_blocchi (12 prove) verdi.
