@@ -2,6 +2,32 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-10-28 — OpenCode — CAPITOLO GRAFICO CHIUSO (replay + etichette + gesti + modalità backtest):
+  1. **Etichette TP/SL raggruppate per LINEA DI PREZZO**: la regola era l'identità dell'intera
+     casella, quindi due posizioni riempite in istanti diversi non coincidevano mai (misurato:
+     4 posizioni sullo stesso target davano 4 etichette sovrapposte). Aggiunto il raggruppamento
+     per riga di pixel, con Target e Stop contati separatamente; solo il "capo fila" scrive
+     l'etichetta, la linea del livello resta per tutte.
+  2. **Il click col mouse sull'etichetta non faceva niente** (doppia causa: il toggle era solo nel
+     ramo touch, e l'etichetta ×N è disegnata dentro la striscia dell'asse prezzi, quindi il mouse
+     finiva nello zoom verticale). Ora l'etichetta ha la precedenza sullo zoom e mouse/penna fanno
+     come il dito. La ricomposizione al click sul vuoto ora ridisegna sempre.
+  3. **Gesti**: pagina normale → 1 dito scorre la pagina, 2 dita spostano il grafico; schermo
+     intero e finestra staccata/PIP → 1 dito sposta il grafico (prima non era possibile: il
+     pointermove del ramo touch usciva subito), 2 dita fanno ZOOM ISOLATO per asse.
+  4. **MODALITÀ BACKTEST nel replay**: pulsante «🧪 Modalità backtest» tra «Nuova posizione» e lo
+     STOP; accesa, le posizioni dell'account MT5 non vengono caricate (filtro sul punto di adozione,
+     non un nascondiglio) e a grafico entra solo ciò che si apre da lì in poi; nuovo disegno con
+     freccia, linea al prezzo del momento e prezzi di apertura/chiusura; rettangolino «Modalità
+     backtest attiva» sopra il posto del riquadro «mercato chiuso» (non si sovrappongono) con
+     l'informazione al passaggio del mouse; stesso interruttore in Impostazioni → 🔁 Replay.
+  5. **Disegni**: verificato che NON si spostano (ancorati a timestamp assoluto + prezzo),
+     corretto il commento che descriveva il comportamento vecchio, e aggiunto il test che mancava
+     sul cambio di asset. Resta annotato: il tipo `vpfixed` cambia il proprio p2.time al cambio di
+     timeframe (scelta dichiarata nel codice, non un difetto).
+  13 nuovi test (3 etichette, 4 gesti, 4 modalità backtest, 2 disegni) — collaudo app 913 test,
+  0 fallimenti — commit 0da4c5b + 3dd2237 (v2.0.36)
+
 - 2026-10-05 — impianto iniziale — creati cervello, laboratorio (11 test ponte + interprete + 6
   test app), flussi GitHub Collaudo e Installer Windows, agenti — collaudo verde
 - 2026-10-05 — impianto — primo Setup costruito da GitHub (94 MB, collaudo librerie ponte ok);
