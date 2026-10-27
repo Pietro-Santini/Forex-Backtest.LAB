@@ -16,6 +16,14 @@ sys.path.insert(0, os.environ.get("FBL_BUILD") or BUILD)
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+import sqlite3  # noqa: E402
+try:
+    from google.oauth2 import id_token as _fb_id_token
+    from google.auth.transport import requests as _fb_requests
+    _FB_AUTH_OK = True
+except Exception:
+    _FB_AUTH_OK = False
+
 
 import accesso_condiviso as accesso  # noqa: E402
 import kraken_ordini  # noqa: E402
@@ -33,6 +41,11 @@ accesso.installa_controllo_chiave(app)
 
 @app.middleware("http")
 async def _solo_simulato(request: Request, call_next):
+    # Le rotte /dati usano il token Firebase (Authorization: Bearer), non la chiave
+    # condivisa del server: bypassano il controllo chiave, che viene dopo di qui
+    # (LIFO: l'ultimo middleware aggiunto esegue per primo).
+    if request.url.path.startswith("/dati/"):
+        return await call_next(request)
     # Regola: sul server niente chiavi reali. /kraken/configura con ambiente diverso da "simulato"
     # non passa, qualunque cosa mandi l'app.
     if request.method == "POST" and request.url.path == "/kraken/configura":
@@ -225,6 +238,250 @@ async def pc_inoltra_ws(websocket: WebSocket, porta: int, percorso: str):
         except Exception:
             pass
 
+
+
+# =====================================================================
+# PASSO 2 DEL PROGETTO DATI NOSTRI (27 ottobre 2026): verifica del token
+# Firebase sul server. Il client manda "Authorization: Bearer <ID token>" e
+# il server lo verifica (firma JWT contro le chiavi pubbliche di Google,
+# scadenza, aud = PROJECT_ID) e ne ricava l'uid. Da li' uid e' la chiave di
+# tutto: nessuna rotta accetta un uid dal client.
+#
+# L'ID del progetto viene da app.html (firebaseConfig.projectId):
+# "forex-backtest-lab" (numero progetto 808053062225).
+# =====================================================================
+FIREBASE_PROJECT_ID = os.environ.get("FBL_FIREBASE_PROJECT_ID", "forex-backtest-lab")
+FBL_DATI_DB = os.path.join(os.environ.get("FBL_DATI") or "/dati", "dati_utenti.db")
+
+
+def _db_conn():
+    try: os.makedirs(os.path.dirname(FBL_DATI_DB), exist_ok=True)
+    except Exception: pass
+    conn = sqlite3.connect(FBL_DATI_DB, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("""CREATE TABLE IF NOT EXISTS documenti (
+        uid TEXT NOT NULL,
+        nome TEXT NOT NULL,
+        contenuto TEXT NOT NULL,
+        versione INTEGER NOT NULL DEFAULT 1,
+        aggiornato INTEGER NOT NULL,
+        PRIMARY KEY (uid, nome)
+    );""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS trades (
+        uid TEXT NOT NULL,
+        lista TEXT NOT NULL,
+        aggiornato INTEGER NOT NULL,
+        PRIMARY KEY (uid)
+    );""")
+    conn.commit()
+    return conn
+
+
+def verifica_token_firebase(token: str):
+    """Restituisce l'uid se il token e' valido, altrimenti None. Mai fidarsi di
+    un uid mandato dal client: e' una dichiarazione, non una prova."""
+    if not token or not _FB_AUTH_OK:
+        return None
+    try:
+        info = _fb_id_token.verify_firebase_token(
+            token, _fb_requests.Request(), audience=FIREBASE_PROJECT_ID)
+        # verify_firebase_token puo' restituire None se il token non e' valido
+        if not info:
+            return None
+        # il claim 'sub' e' l'uid dell'utente (a volte 'user_id' in token vecchi)
+        uid = info.get("sub") or info.get("user_id")
+        # controllo aggiuntivo: issuer e audience
+        iss = info.get("iss", "")
+        if not iss.startswith("https://securetoken.google.com/"):
+            return None
+        if info.get("aud") != FIREBASE_PROJECT_ID:
+            return None
+        return uid
+    except Exception:
+        return None
+
+
+def _uid_da_richiesta(request: Request):
+    """Estrae e verifica il Bearer token. Restituisce l'uid o solleva 401."""
+    auth = request.headers.get("authorization", "") or ""
+    if not auth.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Token Firebase mancante.")
+    uid = verifica_token_firebase(auth[7:].strip())
+    if not uid:
+        raise HTTPException(status_code=401, detail="Token Firebase non valido o scaduto.")
+    return uid
+
+
+from fastapi import Depends
+
+
+async def _uid_dep(request: Request):
+    return _uid_da_richiesta(request)
+
+
+# ===================== ROTTE /dati =====================
+# Passo 2: le rotte ESISTONO e sono protette dal token. L'app non le usa ancora
+# (fxbtCloud continua a scrivere su Firestore): si attivano nel passo 3, dopo
+# il doppio scritto. Ogni rotta scrive in SQLite sul volume /dati.
+@app.get("/dati/{nome}")
+def dati_leggi(nome: str, uid: str = Depends(_uid_dep)):
+    if nome not in ("session", "grafico", "collegamento", "preferenze"):
+        raise HTTPException(status_code=400, detail="Nome documento non previsto.")
+    conn = _db_conn()
+    try:
+        cur = conn.execute("SELECT contenuto, versione, aggiornato FROM documenti WHERE uid=? AND nome=?",
+                           (uid, nome))
+        r = cur.fetchone()
+        if not r:
+            return {"ok": True, "nome": nome, "contenuto": None, "versione": 0, "aggiornato": None}
+        import json as _j
+        return {"ok": True, "nome": nome, "contenuto": _j.loads(r[0]), "versione": r[1], "aggiornato": r[2]}
+    finally:
+        conn.close()
+
+
+@app.put("/dati/{nome}")
+def dati_scrivi(nome: str, corpo: dict, uid: str = Depends(_uid_dep)):
+    if nome not in ("session", "grafico", "collegamento", "preferenze"):
+        raise HTTPException(status_code=400, detail="Nome documento non previsto.")
+    import json as _j
+    import time as _t
+    contenuto = corpo.get("contenuto") if isinstance(corpo, dict) else None
+    if contenuto is None:
+        raise HTTPException(status_code=400, detail="Manca il campo 'contenuto'.")
+    conn = _db_conn()
+    try:
+        cur = conn.execute("SELECT versione FROM documenti WHERE uid=? AND nome=?", (uid, nome))
+        r = cur.fetchone()
+        nuova_versione = (r[0] + 1) if r else 1
+        conn.execute("INSERT INTO documenti (uid,nome,contenuto,versione,aggiornato) VALUES (?,?,?,?,?) "
+                     "ON CONFLICT(uid,nome) DO UPDATE SET contenuto=excluded.contenuto, versione=excluded.versione, aggiornato=excluded.aggiornato",
+                     (uid, nome, _j.dumps(contenuto, ensure_ascii=False), nuova_versione, int(_t.time() * 1000)))
+        conn.commit()
+        return {"ok": True, "nome": nome, "versione": nuova_versione}
+    finally:
+        conn.close()
+
+
+@app.patch("/dati/{nome}")
+def dati_fondi(nome: str, corpo: dict, uid: str = Depends(_uid_dep)):
+    # Fusione: i campi mandati sovrascrivono, gli altri restano. Equivale a setDoc(...,{merge:true}).
+    if nome not in ("session", "grafico", "collegamento", "preferenze"):
+        raise HTTPException(status_code=400, detail="Nome documento non previsto.")
+    import json as _j
+    import time as _t
+    campi = corpo.get("contenuto") if isinstance(corpo, dict) else None
+    if not isinstance(campi, dict):
+        raise HTTPException(status_code=400, detail="Il campo 'contenuto' deve essere un oggetto.")
+    conn = _db_conn()
+    try:
+        cur = conn.execute("SELECT contenuto, versione FROM documenti WHERE uid=? AND nome=?", (uid, nome))
+        r = cur.fetchone()
+        if r:
+            try:
+                vecchio = _j.loads(r[0])
+                if not isinstance(vecchio, dict): vecchio = {}
+            except Exception:
+                vecchio = {}
+            vecchio.update(campi)
+            nuova_versione = r[1] + 1
+        else:
+            vecchio = campi
+            nuova_versione = 1
+        conn.execute("INSERT INTO documenti (uid,nome,contenuto,versione,aggiornato) VALUES (?,?,?,?,?) "
+                     "ON CONFLICT(uid,nome) DO UPDATE SET contenuto=excluded.contenuto, versione=excluded.versione, aggiornato=excluded.aggiornato",
+                     (uid, nome, _j.dumps(vecchio, ensure_ascii=False), nuova_versione, int(_t.time() * 1000)))
+        conn.commit()
+        return {"ok": True, "nome": nome, "versione": nuova_versione}
+    finally:
+        conn.close()
+
+
+@app.post("/dati/trades/aggiungi")
+def dati_trades_aggiungi(corpo: dict, uid: str = Depends(_uid_dep)):
+    # Salvataggio incrementale: aggiunge solo le operazioni nuove, senza riscrivere il resto.
+    # Lato client manda {"operazioni": [...]}.
+    ops = corpo.get("operazioni") if isinstance(corpo, dict) else None
+    if not isinstance(ops, list):
+        raise HTTPException(status_code=400, detail="Manca il campo 'operazioni' (lista).")
+    import json as _j
+    import time as _t
+    conn = _db_conn()
+    try:
+        cur = conn.execute("SELECT lista, versione FROM trades WHERE uid=?", (uid,))
+        r = cur.fetchone()
+        if r:
+            try: lista = _j.loads(r[0])
+            except Exception: lista = []
+            if not isinstance(lista, list): lista = []
+            # Append-only: aggiungo solo quelle che non ci sono gia' (confronto per valore).
+            visti = set(_j.dumps(o, sort_keys=True, ensure_ascii=False) for o in lista)
+            for o in ops:
+                chiave = _j.dumps(o, sort_keys=True, ensure_ascii=False)
+                if chiave not in visti:
+                    lista.append(o); visti.add(chiave)
+            versione = r[1] + 1
+        else:
+            lista = list(ops)
+            versione = 1
+        conn.execute("INSERT INTO trades (uid,lista,aggiornato) VALUES (?,?,?) "
+                     "ON CONFLICT(uid) DO UPDATE SET lista=excluded.lista, aggiornato=excluded.aggiornato",
+                     (uid, _j.dumps(lista, ensure_ascii=False), int(_t.time() * 1000)))
+        conn.commit()
+        return {"ok": True, "aggiunte": len(ops), "totale": len(lista), "versione": versione}
+    finally:
+        conn.close()
+
+
+@app.get("/dati/trades")
+def dati_trades_leggi(uid: str = Depends(_uid_dep)):
+    import json as _j
+    conn = _db_conn()
+    try:
+        cur = conn.execute("SELECT lista, aggiornato FROM trades WHERE uid=?", (uid,))
+        r = cur.fetchone()
+        if not r:
+            return {"ok": True, "lista": [], "aggiornato": None}
+        try: lista = _j.loads(r[0])
+        except Exception: lista = []
+        if not isinstance(lista, list): lista = []
+        return {"ok": True, "lista": lista, "aggiornato": r[1]}
+    finally:
+        conn.close()
+
+
+@app.websocket("/dati/ascolta")
+async def dati_ascolta(websocket: WebSocket):
+    """Ascolto in tempo reale: manda SOLO {nome, versione}, mai il contenuto.
+    Il client decide se leggere. Cosi' un dispositivo che ha gia' quella versione
+    non scarica niente - ed e' esattamente lo spreco che oggi si paga a Firestore."""
+    # 1) autenticazione: il token arriva come query param (il WebSocket non ha header
+    #    Authorization comodi in tutti i browser). Il client manda ?token=<idToken>.
+    token = websocket.query_params.get("token", "")
+    uid = verifica_token_firebase(token)
+    if not uid:
+        await websocket.close(code=4403)
+        return
+    await websocket.accept()
+    try:
+        # invia la lista iniziale dei documenti presenti per questo utente
+        conn = _db_conn()
+        rows = conn.execute("SELECT nome, versione FROM documenti WHERE uid=?", (uid,)).fetchall()
+        conn.close()
+        for nome, versione in rows:
+            await websocket.send_text(__import__("json").dumps({"nome": nome, "versione": versione}))
+        # resta in ascolto: il client legge quando vuole. Qui non pushiamo niente di nostro
+        # perche' non abbiamo un meccanismo di notifica cross-processo in questo passo;
+        # il client fa polling leggero o rilegge al cambio di visibilita'.
+        while True:
+            await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 @app.get("/health")
 def health():

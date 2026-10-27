@@ -8,7 +8,7 @@ ENV PYTHONUNBUFFERED=1 APPDATA=/dati FBL_ACCESSO_FILE=/dati/accesso_remoto.json 
 # perche' l'app smette di collegarsi.
 ENV FBL_UTENTI_FILE=/dati/utenti_server.json
 WORKDIR /fbl
-RUN pip install --no-cache-dir fastapi uvicorn websockets pydantic telethon httpx
+RUN pip install --no-cache-dir fastapi uvicorn websockets pydantic telethon httpx google-auth
 COPY installer_build/build /fbl/installer_build/build
 COPY server_oracle /fbl/server_oracle
 VOLUME ["/dati"]

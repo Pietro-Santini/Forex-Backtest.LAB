@@ -266,6 +266,11 @@ def installa_controllo_chiave(app, dati: Optional[dict] = None, percorsi_liberi=
                     "Vary": "Origin",
                 })
             return await call_next(request)
+        # Rotte /dati: usano il token Firebase (Authorization: Bearer), non la chiave
+        # condivisa del server. Bypassano il controllo chiave, che viene verificato
+        # dentro la rotta stessa tramite verifica_token_firebase().
+        if request.url.path.startswith("/dati/"):
+            return await call_next(request)
         if request.url.path in PERCORSI_SENZA_CHIAVE:
             return await call_next(request)
         if request.method == "GET" and request.url.path in liberi:
