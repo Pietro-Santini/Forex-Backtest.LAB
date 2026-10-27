@@ -56,7 +56,7 @@ test('ma appena cambia qualcosa si scrive', async () => {
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
       let n = 0;
-      saveLightStateToLocalStorageNow = () => ({version: SESSION_VERSION, trades: new Array(n).fill(0).map((_, i) => ({id: i}))});
+      saveLightStateToLocalStorageNow = () => ({version: SESSION_VERSION, posizioni: new Array(n).fill(0).map((_, i) => ({id: i}))});
       await syncFullStatusToFirebase('prima', true);
       n = 1;                                    // si chiude un'operazione
       await syncFullStatusToFirebase('dopo', true);
