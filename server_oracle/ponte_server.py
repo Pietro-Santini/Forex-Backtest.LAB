@@ -323,6 +323,72 @@ async def _uid_dep(request: Request):
 # Passo 2: le rotte ESISTONO e sono protette dal token. L'app non le usa ancora
 # (fxbtCloud continua a scrivere su Firestore): si attivano nel passo 3, dopo
 # il doppio scritto. Ogni rotta scrive in SQLite sul volume /dati.
+# ===================== CHI STA ASCOLTANDO, E COME LO SI AVVISA =====================
+#
+# PASSO 4 del progetto dati (cervello/PROGETTO-DATI-NOSTRI.md). Il WebSocket c'era gia', ma il
+# codice stesso dichiarava il buco: «qui non pushiamo niente di nostro perche' non abbiamo un
+# meccanismo di notifica cross-processo». Senza quello, l'ascolto mandava l'elenco iniziale e poi
+# restava muto: scrivendo dal computer, il telefono non lo sapeva. Non era un ascolto, era una
+# sincronizzazione sola andata.
+#
+# PERCHE' BASTA LA MEMORIA, e non serve un meccanismo fra processi: il ponte gira come UN solo
+# processo (vedi docker-compose.yml, `command: python ponte_server.py`, nessun worker multiplo).
+# Tutti i WebSocket di tutti gli utenti stanno nello stesso processo di chi scrive, quindi un
+# dizionario in memoria e' sufficiente e non ha niente da sincronizzare. Se un domani si passasse
+# a piu' processi, QUESTO e' il punto che va rifatto - ed e' scritto qui perche' si sappia dove
+# guardare invece di scoprirlo da un difetto.
+_ascoltatori = {}          # uid -> set di WebSocket
+_loop_principale = None    # il ciclo di eventi, catturato all'avvio
+
+
+@app.on_event("startup")
+async def _cattura_loop():
+    """Le rotte di scrittura sono SINCRONE (def, non async def): FastAPI le esegue in un thread a
+    parte, dove non esiste il ciclo di eventi. Per mandare un messaggio su un WebSocket da li'
+    serve il riferimento al ciclo vero, preso qui una volta sola."""
+    global _loop_principale
+    import asyncio
+    _loop_principale = asyncio.get_running_loop()
+
+
+def _avvisa(uid, nome, versione):
+    """Dice agli altri dispositivi di questo utente che un documento e' cambiato.
+
+    MANDA SOLO {nome, versione}, MAI IL CONTENUTO - ed e' il cuore del risparmio: oggi con
+    Firestore ogni modifica fa riscaricare l'intero documento (305 KB misurati) a ogni dispositivo
+    in ascolto, anche a quello che l'ha appena scritto. Cosi' invece arrivano venti byte, e chi ha
+    gia' quella versione non chiede niente.
+
+    Non solleva mai: un avviso non consegnato non deve far fallire una scrittura che e' gia'
+    andata a buon fine sul disco. Al massimo l'altro dispositivo se ne accorge al prossimo giro.
+    """
+    try:
+        import asyncio, json as _j
+        quali = list(_ascoltatori.get(uid) or ())
+        if not quali or _loop_principale is None:
+            return
+        messaggio = _j.dumps({"nome": nome, "versione": versione})
+
+        async def _manda(ws):
+            try:
+                await ws.send_text(messaggio)
+            except Exception:
+                # Socket morto: si toglie dal registro, altrimenti resta li' per sempre a far
+                # fallire ogni avviso futuro.
+                try:
+                    _ascoltatori.get(uid, set()).discard(ws)
+                except Exception:
+                    pass
+
+        for ws in quali:
+            try:
+                asyncio.run_coroutine_threadsafe(_manda(ws), _loop_principale)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 @app.get("/dati/{nome}")
 def dati_leggi(nome: str, uid: str = Depends(_uid_dep)):
     if nome not in ("session", "grafico", "collegamento", "preferenze"):
@@ -358,6 +424,7 @@ def dati_scrivi(nome: str, corpo: dict, uid: str = Depends(_uid_dep)):
                      "ON CONFLICT(uid,nome) DO UPDATE SET contenuto=excluded.contenuto, versione=excluded.versione, aggiornato=excluded.aggiornato",
                      (uid, nome, _j.dumps(contenuto, ensure_ascii=False), nuova_versione, int(_t.time() * 1000)))
         conn.commit()
+        _avvisa(uid, nome, nuova_versione)
         return {"ok": True, "nome": nome, "versione": nuova_versione}
     finally:
         conn.close()
