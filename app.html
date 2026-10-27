@@ -2641,6 +2641,14 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
                pop-up che si apre è esattamente quello di sempre, non una copia. -->
           <button type="button" id="chartSettingsTabCronologia" class="fbSettingsNavItem" data-settings-tab="cronologia">📜 Cronologia</button>
          <button type="button" id="chartSettingsTabNews" class="fbSettingsNavItem" data-settings-tab="news" style="display:none">📰 Notizie</button>
+         <!-- RICHIESTO ESPLICITAMENTE (27 ottobre 2026): «aggiungiamo un nuovo parametro in
+              impostazioni e la chiameremo replay, dove all'interno attiveremo, disattiveremo
+              quelle che sono magari le posizioni dello storico già effettuate per il momento».
+              È la MODALITÀ BACKTEST del replay: accesa, dentro il replay a grafico ci sono SOLO
+              le posizioni che si aprono da lì in poi, e quelle dell'account MT5 non vengono
+              caricate né disegnate. È lo stesso interruttore del pulsante «🧪 Modalità backtest»
+              nella barra del replay: uno comanda, l'altro mostra. -->
+         <button type="button" id="chartSettingsTabReplay" class="fbSettingsNavItem" data-settings-tab="replay">🔁 Replay</button>
          <button type="button" id="chartSettingsTabAlarm" class="fbSettingsNavItem" data-settings-tab="alarm">🔔 Alarm</button>
          <!-- RICHIESTO ESPLICITAMENTE: sezione dedicata (non più annegata dentro "Style"),
               subito sotto "Alarm" nella navigazione — tutte le impostazioni del footprint
@@ -2668,6 +2676,21 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          <button type="button" id="chartSettingsTabLiveMt5" class="fbSettingsNavItem" title="Collegamento e modalità: Live/Storico, conti MT5, Capital.com, sale segnali Telegram">🔌 Collegamento/Modalità</button>
        </div>
        <div class="fbSettingsDetail">
+         <div data-settings-panel="replay">
+           <div class="fbSettingsSectionTitle">🔁 Replay: modalità backtest</div>
+           <div class="hint" style="margin:-4px 0 10px">Dentro il replay puoi lavorare come sul conto dello storico: accendendo la modalità backtest, a grafico compaiono SOLO le posizioni che apri da lì in poi, con la freccia di apertura, la linea che segue il prezzo del momento e i prezzi di apertura e chiusura. Le posizioni dell'account MT5 non vengono caricate né disegnate. Le operazioni fatte qui non influiscono sulle posizioni in tempo reale.</div>
+           <div class="fbOptRow">
+             <label style="flex:none;min-width:110px" title="Accesa: dentro il replay si vede solo ciò che apri tu, come in un backtest su file CSV. Spenta: nel replay si rivedono anche le posizioni dello storico già effettuate.">Modalità backtest</label>
+             <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+               <input type="checkbox" id="fblBacktestModeChk">
+               attiva il conto dello storico nel replay
+             </label>
+           </div>
+           <div class="fbOptRow">
+             <label style="flex:none;min-width:110px" title="Stesso interruttore, dal vivo: si accende e si spegne anche con il pulsante «🧪 Modalità backtest» nella barra del replay.">Stato attuale</label>
+             <span id="fblBacktestModeStato" class="sub">spento</span>
+           </div>
+         </div>
          <div data-settings-panel="style">
            <!-- rimosso: sezione "Chiusura serale di MT5" (sincronizzazione Capital.com 22-23) -->
            <div class="fbSettingsSectionTitle">📋 Posizioni</div>
@@ -3978,6 +4001,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
       arrivare in background. "⏹ STOP" compare solo mentre il replay è attivo e riporta in diretta. -->
  <div id="liveReplayBar" style="display:none;margin-top:10px;gap:8px;flex-wrap:wrap;align-items:center">
    <button id="liveReplayBtn" class="primary" style="width:auto;flex:none">🔁 Replay</button>
+   <button id="liveBacktestBtn" class="miniBtn" style="width:auto;flex:none;display:none" title="Accendi la modalità backtest: dentro il replay si lavora come sul conto dello storico. Le posizioni dell'account MT5 non vengono caricate né disegnate; restano solo quelle che apri da qui in poi, con freccia di apertura, linea al prezzo del momento e prezzi di apertura/chiusura. Non influisce sulle posizioni in tempo reale.">🧪 Modalità backtest</button>
    <button id="liveReplayStopBtn" class="danger" style="width:auto;flex:none;display:none">⏹ STOP</button>
    <span id="liveReplayMsg" class="sub" style="flex:1;min-width:110px"></span>
    <input id="liveReplayDateTime" type="datetime-local" step="60" style="width:auto;flex:none" title="Scegli giorno e ora da cui iniziare il replay">
@@ -4356,6 +4380,28 @@ let rows=[], baseRows=[], rowsAssetKey='', csvLibrary=[], idx=0, viewEnd=0, mast
 // liveReplaySelecting=true: modalità "scegli il punto" (si trascina il grafico e si rilascia sul
 // punto; liveReplayGuideClientX è la x del dito/mouse, per disegnare la guida verticale).
 let liveReplayActive=false, liveReplaySelecting=false, liveReplayGuideClientX=null;
+// MODALITÀ BACKTEST DENTRO IL REPLAY (richiesto dal proprietario il 27 ottobre 2026).
+// «Deve apparirci un pulsante tra nuova posizione e stop, che venga scritto attivare modalità
+// backtest, che quindi ci riporta al conto dello storico e ci fa fare le operazioni come se
+// fosse un vero e proprio backtest, come un file CSV, quelli che carichiamo noi. Quando è
+// attiva questa modalità, devono sparire dal grafico tutte le posizioni inerenti all'account
+// MT5. Non devono visualizzarsi più, quindi non devono più caricarsi.»
+// Accesa, dentro il replay si lavora come sul conto storico: a grafico c'è SOLO quello che si
+// apre da lì in poi, con la sua freccia di apertura, la linea fino al prezzo del momento e i
+// prezzi di apertura e chiusura. Le posizioni dell'account MT5 reale non vengono né caricate né
+// disegnate. La preferenza è persistita (localStorage) e ha il suo interruttore in
+// Impostazioni → Replay.
+let fblBacktestModeAttivo=false;
+const FBL_BACKTEST_MODE_KEY='fbl_replay_backtest';
+function fblBacktestModeAttivoOra(){ try{ return !!fblBacktestModeAttivo; }catch(e){ return false; } }
+function fblBacktestModeLeggi(){ try{ return localStorage.getItem(FBL_BACKTEST_MODE_KEY)==='1'; }catch(e){ return false; } }
+function fblBacktestModeSalva(v){ try{ fblBacktestModeAttivo=!!v; localStorage.setItem(FBL_BACKTEST_MODE_KEY,v?'1':'0'); }catch(e){} }
+function fblBacktestModeImposta(v){ fblBacktestModeSalva(v); try{ fblBacktestModeUi(); }catch(e){} try{ draw();update(); }catch(e){} }
+// Vero solo quando la modalità backtest sta davvero facendo il suo mestiere: dentro il replay.
+// Fuori dal replay la modalità resta accesa come preferenza ma non cambia niente.
+function fblBacktestModeInUso(){ return fblBacktestModeAttivoOra()&&!!liveReplayActive; }
+// Questa posizione è nata dentro la modalità backtest? È il flag che decide cosa si vede.
+function fblNasceNelBacktest(pos){ try{ return !!(pos&&(pos.backtest===true||pos.backtestMode===true)); }catch(e){ return false; } }
 // ===================================================================
 // FINESTRE PIP AGGIUNTIVE (multi-monitor): PIP_SLOT identifica QUESTA istanza della pagina.
 // slot 0 = finestra principale (comportamento identico a sempre, invariato: sessione salvata su
@@ -9665,21 +9711,18 @@ function rebuildRows(){
   }
   idx=bIdx;
 }
-// AL CAMBIO TIME FRAME I DISEGNI NON DEVONO SFASARSI (richiesto dal proprietario).
-// Gli ancoraggi dei disegni sono a TEMPO reale (ms) + prezzo: cambiando TF le candele diventano
-// bucket piu' larghi/stretti, e un'ancora all'istante che era l'APERTURA di una candela del TF
-// vecchio non e' piu' l'apertura di una candela del TF nuovo: la punta slitta dentro la candela
-// (fino a quasi una larghezza intera) e l'inclinazione resta sbagliata. Qui si riaggancia ogni
-// punto alla candela del TF attuale piu' vicina (ricerca binaria sui tempi di rows), lo stesso
-// aggancio che il punto aveva al momento del disegno. La chiamano SOLO i veri cambi TF:
-// nello storico il listener di #tf, in Live i percorsi Capital/MT5/Binance quando ricevono
-// opts.tfChangeSpanMinutes; le risincronizzazioni periodiche dello stesso TF non toccano niente
-// (un'ancora a tempo reale restando nello stesso TF e' esatta com'e').
+// AL CAMBIO TIME FRAME I DISEGNI NON DEVONO SFASARSI (richiesto dal proprietario, 26 ottobre 2026).
+// Gli ancoraggi dei disegni sono a TEMPO reale (ms) + prezzo, quindi sono GIÀ corretti attraverso
+// il cambio di timeframe: cambiando TF le candele diventano bucket più larghi o più stretti, e
+// dataPosFromTime() colloca l'istante assoluto alla frazione giusta dentro la candela nuova.
+// STORIA DEL DIFETTO, da non ripetere: il rimedio precedente riagganciava ogni punto al timestamp
+// della candela del TF nuovo più vicina (10:07 diventava 10:05 o 10:10), e quello spostamento ERA
+// lo sfasamento lamentato. Da qui la scelta definitiva: NON si tocca nulla, il timestamp assoluto
+// resta e la mappatura lo posiziona esatto. Test: laboratorio/app/disegni_cambio_tf.test.mjs.
 function fblDisegniRiAgganciaAlTf(){
- // RIMOSSO: il riaggancio forzato dei disegni al timestamp più vicino della nuova candela
- // causava sfasamento al cambio timeframe. I disegni mantengono il loro timestamp assoluto
- // (p.time) e dataPosFromTime() li mappa correttamente alla posizione nel nuovo TF,
- // preservando esattamente la stessa posizione visiva senza spostarli.
+ // NESSUN RIAGGANCIO: è la cura, non una dimenticanza. I disegni mantengono il loro timestamp
+ // assoluto (p1.time / p2.time non vengono mai toccati) e dataPosFromTime() li mappa correttamente
+ // nella serie del TF nuovo, preservando esattamente la stessa posizione visiva senza spostarli.
  return;
 }
 function parseCSV(txt){
@@ -11213,7 +11256,14 @@ function positionBelongsToCurrentView(pos){
  // entra nel conto reale. (Il revisore l'ha misurato: senza questo ordine di controlli la
  // simulata restava a grafico in Live, cioè proprio il mescolamento che il filtro deve impedire.)
  if(!liveModeActive)return true;     // conto Storico: il backtest non c'entra con MT5
- if(liveReplayActive)return !!pos.historical;  // replay: SOLO le posizioni nate nel replay
+ if(liveReplayActive){
+   // MODALITÀ BACKTEST accesa (27 ottobre 2026): a grafico entra SOLO ciò che si apre da lì in
+   // poi. Tutto il resto — le posizioni dell'account MT5 reale e quelle aperte prima nel replay —
+   // non si vede più: «devono sparire dal grafico tutte le posizioni inerenti all'account MT5,
+   // non devono visualizzarsi più».
+   if(fblBacktestModeInUso())return fblNasceNelBacktest(pos);
+   return !!pos.historical;  // replay: SOLO le posizioni nate nel replay
+ }
  let conn=false; try{ conn=!!mt5Connected; }catch(e){}
  if(conn){
     const login=currentMt5AccountTag().mt5Login;
@@ -16987,6 +17037,10 @@ function draw(){
   // Durante il trascinamento di un livello il raggruppamento si stacca: le caselle non
   // coincidono piu' mentre il dito porta il prezzo, e ognuna si vede da sola come prima.
   let gruppiCaselleTpSl=null;
+  // Raggruppamento per LINEA DI PREZZO (27 ottobre 2026): due mappe, Target e Stop, con le righe
+  // di pixel su cui cade più di un'etichetta. Dichiara qui, fuori dall'if qui sotto, perché le usa
+  // il ciclo delle posizioni che sta più in basso.
+  let righeEtichetteTp=null, righeEtichetteSl=null;
   // Il pulsante "Esplodi etichette" stacca il raggruppamento: la mappa resta vuota e ogni
   // casella si disegna con la sua etichetta di sempre, anche quando coincidono — niente «×N»,
   // niente soldi totali: i numeri di ogni singola posizione tornano a schermo.
@@ -17003,6 +17057,42 @@ function draw(){
     const soliGruppi=new Map();
     gruppiCaselleTpSl.forEach((g,k)=>{ if(g.membri.length>1){g.dati=fblDatiGruppoCaselle(g.membri,g.sl,g.tp);soliGruppi.set(k,g);} });
     gruppiCaselleTpSl=soliGruppi;
+    // SECONDO LIVELLO DI RAGGRUPPAMENTO: le etichette che cadono sulla STESSA RIGA DI PIXEL
+    // (stessa linea di prezzo) si raggruppano, anche se la casella intera non coincide. È la
+    // richiesta del 27 ottobre 2026 («più posizioni nello stesso prezzo, linea di prezzo →
+    // una sola etichetta»): senza, due posizioni riempite in istanti diversi restano due
+    // etichette sovrapposte. Due mappe separate, Target e Stop, perché i due livelli sono
+    // indipendenti: due posizioni possono condividere il target e avere stop diversi.
+    // Si contano solo le posizioni che DISEGNANO davvero: una posizione coperta da un gruppo
+    // di casella (e non espanso) non disegna la sua etichetta, quindi contarla due volte
+    // darebbe un numero sbagliato sull'etichetta del gruppo.
+    if(gruppiCaselleTpSl&&typeof y==='function'){
+     righeEtichetteTp=new Map(); righeEtichetteSl=new Map();
+     const _disegnaDavvero=(p)=>{
+      const liv0=posLivelliAlTempo(p,momentoMostrato);
+      const apT0=openReferenceTimeForPos(p), apI0=rowIndexContainingTime(apT0);
+      const sp0=effectiveZoneSpan('pos:'+p.id,(apI0!=null)?apI0:start,idx+replayFrazioneBarra());
+      const k0=fblChiaveCaselleTpSl(p.asset,p.entry,liv0.sl,liv0.tp,apT0,sp0);
+      const g0=gruppiCaselleTpSl.get(k0);
+      return !(g0&&g0.membri[0]!==p&&!expandedTpSlGroups.has(k0));
+     };
+     positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).filter(_disegnaDavvero).forEach(p=>{
+      const liv=posLivelliAlTempo(p,momentoMostrato);
+      if(Number.isFinite(liv.tp)){
+       const r=Math.round(y(liv.tp)/FBL_TOLLERANZA_RIGA_ETICHETTA);
+       const v=righeEtichetteTp.get(r); if(v)v.membri.push(p); else righeEtichetteTp.set(r,{membri:[p],livello:liv.tp,chiave:fblChiaveRigaEtichetta(p.asset,'tp',r)});
+      }
+      if(Number.isFinite(liv.sl)){
+       const r=Math.round(y(liv.sl)/FBL_TOLLERANZA_RIGA_ETICHETTA);
+       const v=righeEtichetteSl.get(r); if(v)v.membri.push(p); else righeEtichetteSl.set(r,{membri:[p],livello:liv.sl,chiave:fblChiaveRigaEtichetta(p.asset,'sl',r)});
+      }
+     });
+     // Le righe con una sola etichetta non sono gruppo: toglierle rende il giro dopo leggero
+     // e, soprattutto, lascia identica a com'era ogni etichetta che sta da sola.
+     const soloRighe=(m)=>{ const out=new Map(); m.forEach((v,k)=>{ if(v.membri.length>1)out.set(k,v); }); return out; };
+     righeEtichetteTp=soloRighe(righeEtichetteTp);
+     righeEtichetteSl=soloRighe(righeEtichetteSl);
+    }
   }
   if(positionsVisible)
   positions.filter(drawableOnCurrentChart).filter(posRevealedInReplay).forEach(pos=>{
@@ -17146,6 +17236,27 @@ function draw(){
       const grpCasTpSl=gruppiCaselleTpSl?gruppiCaselleTpSl.get(chiaveGruppo):null;
       const gruppoEspanso=!!(grpCasTpSl&&expandedTpSlGroups.has(chiaveGruppo));
       if(grpCasTpSl&&grpCasTpSl.membri[0]!==pos&&!gruppoEspanso)return;
+      // RAGGRUPPAMENTO PER LINEA DI PREZZO (27 ottobre 2026). La riga di pixel dell'etichetta di
+      // QUESTA posizione, e chi è il "capo fila" della riga: solo lui disegna l'etichetta, gli
+      // altri restano con la loro linea ma senza una scritta sopra (era il quadro da dipinto).
+      // L'espansione è un Set di chiavi-riga: una riga espansa fa ridisegnare tutte le sue
+      // etichette, e la chiave cambia con lo zoom come quella della casella cambia con lo span.
+      // Quando invece c'è il gruppo della casella IDENTICA, le righe non si usano: quel gruppo
+      // ha già la sua etichetta unica con i totali, e applicare anche le righe conterebbe due
+      // volte le stesse posizioni.
+      let rigaTp=null, rigaSl=null, capoTp=true, capoSl=true, chiaveRigaTp=null, chiaveRigaSl=null;
+      if(!grpCasTpSl){
+       if(righeEtichetteTp&&Number.isFinite(liveTp)&&typeof y==='function'){
+        const r=Math.round(y(liveTp)/FBL_TOLLERANZA_RIGA_ETICHETTA);
+        const v=righeEtichetteTp.get(r);
+        if(v){ rigaTp=v; chiaveRigaTp=v.chiave; capoTp=(v.membri[0]===pos)||expandedTpSlGroups.has(v.chiave); }
+       }
+       if(righeEtichetteSl&&Number.isFinite(liveSl)&&typeof y==='function'){
+        const r=Math.round(y(liveSl)/FBL_TOLLERANZA_RIGA_ETICHETTA);
+        const v=righeEtichetteSl.get(r);
+        if(v){ rigaSl=v; chiaveRigaSl=v.chiave; capoSl=(v.membri[0]===pos)||expandedTpSlGroups.has(v.chiave); }
+       }
+      }
       // Con il gruppo l'"spenta" (dimmed) vale per TUTTA la casella raggruppata: si spegne solo
       // se NESSUNA delle posizioni del gruppo è quella selezionata.
       const dimGrp=grpCasTpSl?(activeOnChart&&!grpCasTpSl.membri.includes(posSelezionata)):dimmed;
@@ -17163,6 +17274,18 @@ function draw(){
        // I numeri dell'etichetta raggruppata (uso dentro drawTpSlZoneBox): null fuori dal gruppo.
        infogruppo:(grpCasTpSl&&!gruppoEspanso)?{num:grpCasTpSl.dati.num,slTot:grpCasTpSl.dati.slTot,tpTot:grpCasTpSl.dati.tpTot}:null,
        gruppoChiave:grpCasTpSl?chiaveGruppo:null,
+       // RIGA DI PREZZO CONDIVISA (27 ottobre 2026): il Target e lo Stop si raggruppano per conto
+       // loro, perché sono livelli indipendenti — due posizioni possono condividere il target e
+       // avere stop diversi, o viceversa. I numeri (quante etichette sulla riga e il totale di
+       // quella riga) usano lo stesso metro del gruppo della casella identica.
+       infogruppoTp:rigaTp?fblDatiGruppoCaselle(rigaTp.membri,rigaTp.livello,rigaTp.livello):null,
+       gruppoChiaveTp:rigaTp?chiaveRigaTp:null,
+       infogruppoSl:rigaSl?fblDatiGruppoCaselle(rigaSl.membri,rigaSl.livello,rigaSl.livello):null,
+       gruppoChiaveSl:rigaSl?chiaveRigaSl:null,
+       // Non è il capo fila della riga: la sua etichetta non si disegna. La LINEA del livello
+       // resta, quindi quel prezzo continua a vedersi e a essere cliccabile dalla linea stessa.
+       nascondiPillTp:!!rigaTp&&!capoTp,
+       nascondiPillSl:!!rigaSl&&!capoSl,
        pad,cw,n,start,w,y,
        // La casella non deve restare "indietro" rispetto all'ultima candela finché la
        // posizione resta aperta — vedi il commento su keepPaceIdx dentro drawTpSlZoneBox.
@@ -17792,6 +17915,11 @@ function draw(){
    }
  }
  try{ disegnaStatoMercato(ctx,w,h,pad,chartBg,lineColor); }catch(e){}
+ // RETTANGOLINO "MODALITÀ BACKTEST ATTIVA" (27 ottobre 2026). Sta nella STESSA posizione del
+ // riquadro «mercato chiuso», spostato LEGGERMENTE SOPRA, così i due non si sovrappongono se il
+ // mercato è chiuso (il proprietario l'ha chiesto esplicitamente). Passandoci sopra col mouse
+ // compare l'informazione: la modalità non influisce sulle posizioni in tempo reale.
+ try{ disegnaModalitaBacktest(ctx,w,h,pad); }catch(e){}
  updateDrawTextHint&&updateDrawTextHint();
  _tSez=fblSezFine('coda',_tSez);
 }
@@ -19600,6 +19728,25 @@ setTimeout(()=>{ try{ fblInterruttoriPosizioniUi(); }catch(e){} },500);
 // La chiave di coincidenza e' la casella INTERA: stesso asset, stesso punto d'apertura, stessi
 // livelli e stessa larghezza a schermo (lo span risolto): si raggruppano solo le caselle che
 // davvero coincidono, tutto il resto resta com'era.
+//
+// RAGGRUPPAMENTO PER LINEA DI PREZZO (27 ottobre 2026). La coincidenza dell'intera casella si
+// e' rivelata TROPPO STRETTA per la pulizia del grafico che il proprietario ha chiesto: due
+// posizioni riempite in istanti diversi hanno orario e span diversi, quindi la chiave non
+// coincideva MAI e le etichette finivano accatastate una sotto l'altra dall'anti-sovrapposizione
+// (misurato sul banco: 4 posizioni con lo STESSO target 4200 davano 4 etichette sovrapposte).
+// Ora le etichette si raggruppano anche per RIGA DI PIXEL — la stessa linea di prezzo —
+// separatamente per il Target e per lo Stop, con la tolleranza qui sotto. Le regole di prima
+// restano tutte: durante il trascinamento di un livello il raggruppamento si stacca, una riga
+// con una sola etichetta resta identica a com'era, e il gruppo della casella identica (con i
+// suoi totali) ha la precedenza su quello della riga.
+// Tolleranza in pixel: due etichette che cadono a meno di questo numero di pixel l'una
+// dall'altra sono la stessa linea di prezzo. Il valore è in pixel perché è l'occhio a decidere
+// quando due scritte sono una macchia, non il numero di decimali dello strumento.
+const FBL_TOLLERANZA_RIGA_ETICHETTA=8;
+// Chiave stabile di una riga di etichette: l'asset, il tipo di livello (tp/sl) e il numero di
+// riga. Cambia con lo zoom (la riga è in pixel) esattamente come la chiave della casella cambia
+// con lo span: in entrambi i casi l'espansione vive in memoria e si ricompone da sé.
+function fblChiaveRigaEtichetta(assetKey,tipo,riga){ return tipo+':'+(assetKey||'')+'|'+riga; }
 function fblChiaveCaselleTpSl(assetKey,entry,sl,tp,aperturaT,span){
   return [assetKey,entry!=null?String(entry):'null',sl!=null?String(sl):'null',
     tp!=null?String(tp):'null',aperturaT!=null?String(aperturaT):'null',
@@ -19624,7 +19771,7 @@ function fblDatiGruppoCaselle(membri,sl,tp){
   return {num:membri.length,origine,slTot,tpTot};
 }
 function drawTpSlZoneBox(ctx,opts){
- const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,alwaysShowTooltip,gruppoChiave}=opts;
+ const {ownerKey,originIdx,entry,sl,tp,pad,cw,n,start,w,y,tooltipLines,fixedSpan,noHandle,lots,assetKey,stopProfit,keepPaceIdx,alwaysShowTooltip,gruppoChiave,infogruppoTp,infogruppoSl,gruppoChiaveTp,gruppoChiaveSl,nascondiPillTp,nascondiPillSl}=opts;
  const hidePills=opts.hidePills||!fblEtichetteTpSlVisibili();
  // Le righe tratteggiate di Target e Stop vanno da un bordo all'altro della casella: sono
  // proprio quelle che, con molte posizioni, riempiono il grafico. La casella colorata e le
@@ -19668,6 +19815,16 @@ function drawTpSlZoneBox(ctx,opts){
  // esattamente quello che ha chiesto il proprietario (numero di posizioni, origine, accumulo
  // della perdita per gli SL e, per coerenza, il guadagno collettivo per i TP).
  const grp=opts.infogruppo||null;
+ // RIGA DI PREZZO CONDIVISA (27 ottobre 2026): il gruppo dell'etichetta del Target e quello
+ // dello Stop sono DUE cose separate, perché i due livelli sono indipendenti — due posizioni
+ // possono condividere il target e avere stop diversi. Quando il gruppo non arriva dalle righe
+ // ripiega su quello della casella identica, che porta entrambe le etichette.
+ const grpTp=infogruppoTp||grp||null;
+ const grpSl=infogruppoSl||grp||null;
+ const chiaveGrpTp=gruppoChiaveTp||(grpTp===grp?gruppoChiave:null)||null;
+ const chiaveGrpSl=gruppoChiaveSl||(grpSl===grp?gruppoChiave:null)||null;
+ // Non è il capo fila della sua riga: l'etichetta non si disegna (la linea del livello sì).
+ const pillTpNascosta=!!nascondiPillTp, pillSlNascosta=!!nascondiPillSl;
  const zoneColors=dimmed?{tp:TRADE_DIM_GREY,sl:TRADE_DIM_GREY}:currentZoneColors();
  // Visibilità del riempimento colorato: il pulsante globale (tpSlZoneFillVisible) E il doppio
  // click sulla singola casella (tpSlZoneFillHiddenByOwner, solo per posizioni APERTE 'pos:')
@@ -19704,7 +19861,7 @@ function drawTpSlZoneBox(ctx,opts){
    // CHIARITO ESPLICITAMENTE dall'utente: tpSlZoneFillVisible NON deve toccare questa etichetta
    // (resta sempre visibile) — nasconde SOLO il riempimento colorato sopra (vedi "if(tpSlZoneFillVisible)"
    // poco più sopra), che è la VERA "casella" verde/rossa a cui l'utente si riferisce.
-   if(!hidePills){
+   if(!hidePills&&!pillTpNascosta){
      const pct=entry!==0?((tp-entry)/entry*100):0;
      // Stesso bug/fix di pipsFromPrice() più sopra: i pip della casella Target devono usare i
      // decimali VERI dell'asset di QUESTA posizione (assetKey), non quelli dello strumento a
@@ -19712,13 +19869,14 @@ function drawTpSlZoneBox(ctx,opts){
      // sbagliati/a zero.
      const pipsVal=(tp-entry)/pipSizeForAsset(assetKey);
      // Anteprima guadagno in € se il TP viene raggiunto (richiede un lottaggio noto).
-     const tpEuroTxt=grp?` • +${euro(grp.tpTot)}`:soldiLivello(tp,'+');
+     const tpEuroTxt=grpTp?` • +${euro(grpTp.tpTot)}`:soldiLivello(tp,'+');
      // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
      // candele al suo interno) — richiesto esplicitamente.
-     const pillRectTp=drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grp?` · ×${grp.num}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
+     const pillRectTp=drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grpTp?` · ×${grpTp.num}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
      if(pillRectTp)tpSlPillHitRects.push(Object.assign({ownerKey},pillRectTp));
-     // Hit rect per l'etichetta del gruppo (×N): cliccandola il gruppo si espande/contrae
-     if(grp&&gruppoChiave)tpSlPillHitRects.push({ownerKey:'gruppo:'+gruppoChiave,x:pillRectTp.x,y:pillRectTp.y,w:pillRectTp.w,h:pillRectTp.h});
+     // Hit rect per l'etichetta del gruppo (×N): cliccandola il gruppo si espande/contrae.
+     // Riga di prezzo condivisa: la chiave è quella della RIGA del Target, non della casella.
+     if(grpTp&&chiaveGrpTp)tpSlPillHitRects.push({ownerKey:'gruppo:'+chiaveGrpTp,x:pillRectTp.x,y:pillRectTp.y,w:pillRectTp.w,h:pillRectTp.h});
    }
  }
  if(hasSl){
@@ -19748,15 +19906,17 @@ function drawTpSlZoneBox(ctx,opts){
    }
    // Vedi commento nel blocco Target qui sopra: l'etichetta resta sempre visibile, solo il
    // riempimento colorato è governato da tpSlZoneFillVisible.
-   if(!hidePills){
+   if(!hidePills&&!pillSlNascosta){
      const pct=entry!==0?((sl-entry)/entry*100):0;
      // Vedi commento nel blocco Target qui sopra: stessi decimali VERI dell'asset di questa
      // posizione, mai quelli dello strumento a schermo ora.
      const pipsVal=(sl-entry)/pipSizeForAsset(assetKey);
      // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
-     const slEuroTxt=grp?` • ${stopProfit?'+':'-'}${euro(grp.slTot)}`:soldiLivello(sl,stopProfit?'+':'-');
-     const pillRectSl=drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grp?` · ×${grp.num}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
+     const slEuroTxt=grpSl?` • ${stopProfit?'+':'-'}${euro(grpSl.slTot)}`:soldiLivello(sl,stopProfit?'+':'-');
+     const pillRectSl=drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grpSl?` · ×${grpSl.num}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
      if(pillRectSl)tpSlPillHitRects.push(Object.assign({ownerKey},pillRectSl));
+     // Riga di prezzo condivisa, lato Stop: anche questa etichetta si espande/contrae al click.
+     if(grpSl&&chiaveGrpSl)tpSlPillHitRects.push({ownerKey:'gruppo:'+chiaveGrpSl,x:pillRectSl.x,y:pillRectSl.y,w:pillRectSl.w,h:pillRectSl.h});
    }
  }
  // Separatore tratteggiato bianco all'entrata (come la linea centrale dello strumento
@@ -20790,6 +20950,10 @@ function fblClickSuVuoto(e){
      if(!hitClosed&&!hitNews&&!hitLevel&&!hitAxis&&!hitPill){
       // Cliccando fuori sul vuoto, i gruppi TP/SL espansi tornano raggruppati: sempre,
       // anche senza nessuna posizione selezionata (raggruppare non e' deselezionare).
+      // Ricomposizione misurata (27 ottobre 2026): se non c'era niente di selezionato il Set
+      // veniva svuotato ma il grafico NON veniva ridisegnato, quindi le etichette restavano
+      // espanse a occhio fino al primo tick/pan/zoom. Ora si ridisegna subito, in tutti i casi.
+      const eraGruppoEspanso=expandedTpSlGroups.size>0;
       expandedTpSlGroups.clear();
       if(active||posSelezionata||selectedDrawing||selectedClosedTradeIds.size){
        active=null;posSelezionata=null;selectedDrawing=null;
@@ -20803,7 +20967,7 @@ function fblClickSuVuoto(e){
        clearDraftTradeLevelFields();
        syncTradeLevels();refreshTradeLevelUI();updateTradeLevelArmUI();
        draw();update();
-      }
+      } else if(eraGruppoEspanso){ draw(); }
      }
     }
    }
@@ -21757,7 +21921,7 @@ function createPendingOrder(side){
    createdAt:Date.now(),
    asset,
    side,kind,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,lots,
-   historical:!!liveReplayActive
+   historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso()
  });
  // Svuota Entry/SL/TP dell'ordine pendente dopo la conferma riuscita: pronte per impostarne
  // uno nuovo senza dover cancellare a mano i valori precedenti. Lottaggio e rischio % restano
@@ -22825,7 +22989,7 @@ function openMarketTrade(side,forz){
    lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(market.date),
    openTF:currentTF, // vedi nota in activatePendingOrder()
    marginUsed:requiredMargin,
-   historical:!!liveReplayActive
+   historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso()
  };
  // Anteprima automatica SL/TP: se l'utente non aveva già scritto un valore nelle caselle,
  // mostriamo subito due linee SL/TP di default (equidistanti dall'entrata) già trascinabili
@@ -24797,6 +24961,33 @@ function handleTwoFingerPan(){
  const pts=[...touchPoints.values()];
  const centerX=(pts[0].x+pts[1].x)/2, centerY=(pts[0].y+pts[1].y)/2;
  let changed=false;
+ // SCHERMO INTERO o FINESTRA STACCATA/PIP (27 ottobre 2026): lì DUE DITA = ZOOM, perché il pan a
+ // un dito se l'è già preso quel dito. I DUE ASSI SONO ISOLATI, come richiesto: un pinch fatto in
+ // verticale cambia SOLO lo zoom verticale, uno fatto in orizzontale SOLO quello orizzontale.
+ // Sulla pagina normale due dita restano lo spostamento libero di sempre.
+ // Due dita già vicine all'inizio del gesto restano uno spostamento anche qui (twoFingerCloseMode).
+ if(!_paginaNormaleGrafico()&&!twoFingerCloseMode){
+  const distX=Math.abs(pts[0].x-pts[1].x), distY=Math.abs(pts[0].y-pts[1].y);
+  // ORIZZONTALE: la distanza fra le dita decide quante candele si vedono. Dita che si allontanano
+  // = meno candele = zoom avanti; dita che si avvicinano = più candele = zoom indietro.
+  if(twoFingerStartDistX>1&&Math.abs(distX-twoFingerStartDistX)>2){
+    const kx=distX/twoFingerStartDistX;
+    const nv=Math.max(2,Math.min(2000,Math.round(twoFingerStartVisibleCount/kx)));
+    if(nv!==getVisibleCount()){ visibleCount=nv; changed=true; }
+  }
+  // VERTICALE: la stessa distanza decide la scala dei prezzi. Il fattore è l'inverso della
+  // distanza (un fattore più grande allarga la finestra dei prezzi, quindi è uno zoom indietro).
+  if(twoFingerStartDistY>1&&Math.abs(distY-twoFingerStartDistY)>2){
+    const ky=distY/twoFingerStartDistY;
+    priceZoomFactor=Math.max(PRICE_ZOOM_MIN_FACTOR,twoFingerStartPriceZoomFactor/ky);
+    // La finestra prezzi si ricalcola da sola sul nuovo fattore: azzerarla è il modo in cui
+    // l'app dice "adatta tu", e così il centro non slitta di nascosto.
+    viewPriceLo=null; viewPriceHi=null;
+    changed=true;
+  }
+  if(changed)draw();
+  return;
+ }
 
  // Due dita = SOLO spostamento libero del grafico, mai zoom (richiesta esplicita: lo
  // zoom con due dita è stato tolto del tutto, sia orizzontale che verticale; restano
@@ -25037,19 +25228,24 @@ chartEl.addEventListener('dragstart',e=>e.preventDefault());
 chartEl.addEventListener('pointerover',e=>{ if(e.pointerType==='pen')chartEl.style.touchAction='none'; });
 chartEl.addEventListener('pointerleave',e=>{ if(e.pointerType==='pen'&&!ditaSulGrafico.size)chartEl.style.touchAction='pan-y'; });
 chartEl.addEventListener('pointerdown',e=>{ if(e.pointerType==='pen')chartEl.style.touchAction='none'; },true);
+// PAGINA NORMALE = né schermo intero né finestra staccata/PIP. Lì la regola del proprietario
+// (27 ottobre 2026) è secca: «con un dito scorriamo la pagina, con due dita scorriamo il
+// grafico». Nelle due modalità in cui il grafico occupa lo schermo (schermo intero e PIP) il
+// dito sposta il grafico, quindi lì i blocchi preventivi dello scroll restano attivi.
+const _paginaNormaleGrafico=()=>{ try{ return !document.fullscreenElement&&!(typeof floatingChartActive==='function'&&floatingChartActive()); }catch(e){ return true; } };
 chartEl.addEventListener('touchstart',e=>{
  if(placingTradeLevel){e.preventDefault();return;}
  const t=e.touches&&e.touches[0];
  if(!t)return;
  // Penna (su Android arriva anche come tocco "stylus"): mai scorrimento della pagina.
  if(t.touchType==='stylus'){ e.preventDefault(); return; }
- if(tradeLevelHit(t.clientX,t.clientY)){e.preventDefault();return;}
+ if(tradeLevelHit(t.clientX,t.clientY)){ if(!_paginaNormaleGrafico()){e.preventDefault();return;} }
  if(drawTool==='cursor'){
    // Stiamo per trascinare l'estremità (o il corpo) di un disegno esistente: blocchiamo lo
    // scroll della pagina FIN DA SUBITO, allo stesso modo di come già avviene per SL/TP/ENTRY
    // sopra — altrimenti col dito si rischia di far scorrere la pagina invece di spostare il
    // disegno (il pointerdown/preventDefault più sotto a volte arriva troppo tardi).
-   if(hitTestDrawings(t.clientX,t.clientY))e.preventDefault();
+   if(hitTestDrawings(t.clientX,t.clientY)&&!_paginaNormaleGrafico())e.preventDefault();
  }else{
    // Uno strumento di disegno è attivo: il primo tocco sta per fissare il primo punto e
    // avviare subito il trascinamento del secondo (tocca-trascina-rilascia): blocchiamo lo
@@ -25142,7 +25338,18 @@ chartEl.addEventListener('pointerdown',e=>{
  if(tvp3dPointerDown(e))return;
  // L'asse prezzi ha UNA sola funzione: zoomare la vista. Anche se sotto il dito c'e' una linea
  // TP/SL o la linea di un ordine pendente, da qui non la si sposta MAI: si esce prima del drag linee.
+ // UNA ECCEZIONE (misurata il 27 ottobre 2026): le etichette TP/SL sono disegnate PROPRIO nella
+ // striscia dell'asse prezzi (la pillola parte da xRight+4, e xRight arriva al bordo). Col mouse,
+ // quindi, il click sull'etichetta raggruppata finiva in questo ramo e zoomava la scala invece di
+ // espandere il gruppo: era il motivo per cui «premo e non succede niente». Se sotto il puntatore
+ // c'è un'etichetta, l'etichetta ha la precedenza sullo zoom.
+ let _hitEtichettaTpSl=null;
  if(!placingTradeLevel && drawTool==='cursor' && isOnPriceAxis(e.clientX)){
+   const _rc=chartEl.getBoundingClientRect();
+   const _rx=e.clientX-_rc.left, _ry=e.clientY-_rc.top;
+   _hitEtichettaTpSl=tpSlPillHitRects.find(r=>_rx>=r.x-4&&_rx<=r.x+r.w+4&&_ry>=r.y-4&&_ry<=r.y+r.h+4)||null;
+ }
+ if(!placingTradeLevel && drawTool==='cursor' && isOnPriceAxis(e.clientX) && !_hitEtichettaTpSl){
    e.preventDefault();
    if(e.pointerType==='touch')setChartTouchAction(true);
    priceAxisDrag={startY:e.clientY,startFactor:priceZoomFactor};
@@ -25354,9 +25561,22 @@ chartEl.addEventListener('pointerdown',e=>{
       return;
     }else if(selectedDrawing)deselectDrawing();
    touchPoints.set(e.pointerId,{x:e.clientX,y:e.clientY});
-   if(touchPoints.size>=2)iniziaGestoDueDita(e);
-   // Un solo dito su un punto vuoto del grafico: NON blocchiamo nulla, così la pagina
-   // può scorrere normalmente in verticale (richiesta esplicita).
+   if(touchPoints.size>=2){iniziaGestoDueDita(e);return;}
+   // SCHERMO INTERO o FINESTRA STACCATA/PIP (27 ottobre 2026): lì il grafico occupa tutto lo
+   // schermo, non c'è una pagina da far scorrere, e la regola è l'OPPOSTO di quella della pagina
+   // normale: UN DITO SPOSTA IL GRAFICO, DUE DITA FANNO LO ZOOM. Quindi con un dito solo su un
+   // punto vuoto parte il pan, esattamente come col mouse. Sulla pagina normale invece il dito
+   // non tocca niente, e la pagina scorre.
+   if(!_paginaNormaleGrafico()){
+     e.preventDefault();
+     setChartTouchAction(true);
+     panDrag=true; panStartX=e.clientX; panStartY=e.clientY; panStartViewEnd=viewEnd; freezeViewIfNeeded();
+     panStartScale=currentDisplayScale(); panStartPriceLo=viewPriceLo; panStartPriceHi=viewPriceHi;
+     chartEl.setPointerCapture?.(e.pointerId);
+     return;
+   }
+   // Un solo dito su un punto vuoto del grafico, sulla PAGINA NORMALE: NON blocchiamo nulla,
+   // così la pagina può scorrere normalmente in verticale (richiesta esplicita).
    return;
  }
  const h=krakenLivelloHit(e.clientX,e.clientY);
@@ -25726,6 +25946,26 @@ chartEl.addEventListener('pointermove',e=>{
      if(touchPoints.size>=2){
        e.preventDefault();
        handleTwoFingerPan();
+     } else if(panDrag){
+       // SCHERMO INTERO o FINESTRA STACCATA/PIP (27 ottobre 2026): un dito sposta il grafico,
+       // di tutti e due gli assi. Sulla pagina normale questo ramo non si attiva mai, perché il
+       // dito di lì non avvia il pan (lascia scorrere la pagina).
+       e.preventDefault();
+       crosshair=null;
+       const _w=chartEl.getBoundingClientRect().width;
+       const _vis=getVisibleCount();
+       const _d=(panStartX-e.clientX)/Math.max(1,_w)*_vis;
+       const _next=Math.max(0,Math.min(maxViewEnd(),panStartViewEnd+_d));
+       let _ch=false;
+       if(Math.abs(_next-viewEnd)>0.0001){viewEnd=_next;_ch=true;}
+       if(panStartScale&&panStartPriceLo!=null&&panStartPriceHi!=null){
+         const _dy=e.clientY-panStartY;
+         const _dp=_dy*(panStartScale.range/panStartScale.ch);
+         viewPriceLo=panStartPriceLo+_dp;
+         viewPriceHi=panStartPriceHi+_dp;
+         _ch=true;
+       }
+       if(_ch)draw();
      }
    }
    return;
@@ -25948,6 +26188,30 @@ chartEl.addEventListener('pointerup',e=>{
      tpSlEtichettaCandidateKey=null;
    }
   }
+ }
+ // MOUSE E PENNA (27 ottobre 2026): il toggle dell'etichetta era scritto SOLO nel ramo touch,
+ // quindi col mouse — che è il puntatore del computer del proprietario — premere l'etichetta
+ // raggruppata non faceva niente: non si espandeva e non si aprivano le statistiche. Misurato
+ // sul banco con un puntatore sintetico pointerType:'mouse'. Ora mouse e penna fanno la stessa
+ // cosa del dito, con lo stesso criterio: conta solo se il puntatore non si è spostato, altrimenti
+ // era un trascinamento del grafico.
+ if(e.pointerType!=='touch'&&tpSlEtichettaCandidateKey!=null){
+  const movedEt=chartDownXY?Math.hypot(e.clientX-chartDownXY.x,e.clientY-chartDownXY.y):99;
+  if(movedEt<4){
+   const kEt=String(tpSlEtichettaCandidateKey);
+   zoneStatsOpenKey=kEt;
+   // Riga di prezzo condivisa o casella identica: in tutti e due i casi la chiave inizia con
+   // "gruppo:", e cliccarla espande/contrae quelle etichette.
+   if(kEt.indexOf('gruppo:')===0){
+    const chiave=kEt.substring('gruppo:'.length);
+    if(expandedTpSlGroups.has(chiave))expandedTpSlGroups.delete(chiave); else expandedTpSlGroups.add(chiave);
+   } else if(kEt.indexOf('pos:')===0){
+    const pa=positions.find(p=>'pos:'+p.id===kEt);
+    if(pa&&posSelezionata!==pa)focusPosition(pa); // selezione vera: è un gesto dell'utente
+   }
+   draw();
+  }
+  tpSlEtichettaCandidateKey=null;
  }
  // RICHIESTO ESPLICITAMENTE: un vero click (non un trascinamento) sopra una candela disegnata in
  // stile footprint fa scorrere lo stile di visualizzazione bid/ask -> delta -> volume -> di nuovo
@@ -30664,7 +30928,7 @@ async function tgCapitalEseguiSegnale(voce,o){
   const pos={id:Date.now()+Math.random(),asset:o.sym,side:p.side,entry:p.entry,sl:p.sl,
    tp:(Number.isFinite(tp)?tp:null),origin:'MARKET',lots:p.lotti,risk:0,dist:0,hasRiskModel:false,
    start:idx,startTime:liveReplayActive?replayMomentoMostrato():Date.now(),openTF:currentTF,marginUsed:Number(p.margine)||0,account:'capital',
-   historical:!!liveReplayActive,
+   historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso(),
    tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
   pos.rrSl=pos.sl;
   positions.push(pos);
@@ -36508,7 +36772,11 @@ async function fetchMt5Positions(){
      // fotografia. Un istante di ritardo nell'adottare una posizione DAVVERO esterna (aperta a
      // mano nel terminale mentre, per puro caso, un altro ordine dell\'app è in corso) non è un
      // problema: verrà comunque adottata al giro successivo, 2s dopo.
-     let untrackedRealPositions=mt5OwnMarketOrderInFlight>0?[]:result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
+     // MODALITÀ BACKTEST accesa: le posizioni dell'account MT5 non vengono ADOTTATE, non solo
+     // nascoste (richiesto: «non devono più caricarsi»). Così l'elenco da caricare è vuoto e il
+     // polling successivo non le rimette dentro. Il lavoro in diretta non cambia: quando la
+     // modalità è spenta (o fuori dal replay) si caricano come sempre.
+     let untrackedRealPositions=(mt5OwnMarketOrderInFlight>0||fblBacktestModeInUso())?[]:result.data.filter(rp=>!trackedTickets.has(String(rp.ticket)));
      // Richiesto esplicitamente: in Modalità Prop Firm, una posizione reale già aperta sul conto
      // MT5 PRIMA della creazione di QUESTA Challenge (propFirmChallengeCreatedAt) non va mai
      // adottata QUI — altrimenti, magari già in perdita, verrebbe ri-agganciata subito dopo ogni
@@ -45505,6 +45773,69 @@ function disegnaStatoMercato(ctx,w,h,pad,sfondo,colore){
  ctx.fillText(testo,x+9,y+th/2+1);
  ctx.restore();
 }
+// ================= MODALITÀ BACKTEST DENTRO IL REPLAY (27 ottobre 2026) =================
+// Rettangolino «Modalità backtest attiva»: stessa posizione del riquadro «mercato chiuso», ma
+// spostato LEGGERMENTE SOPRA (la sua altezza più pochi pixel di stacco), così i due non si
+// sovrappongono quando il mercato è chiuso. Passandoci sopra col mouse compare l'informazione,
+// che dice la cosa che conta: la modalità non influisce sulle posizioni in tempo reale.
+let fblBacktestHitRect=null;   // zona sensibile del rettangolino, aggiornata a ogni draw()
+function disegnaModalitaBacktest(ctx,w,h,pad){
+  fblBacktestHitRect=null;
+  if(!fblBacktestModeInUso())return;
+  const testo='🧪 Modalità backtest attiva';
+  ctx.save();
+  ctx.font=scaledFont('bold 12px Arial');
+  const tw=ctx.measureText(testo).width+18, th=24;
+  // Stessa x del riquadro «mercato chiuso»; y = la sua, risalita di un'intera altezza + 6 px.
+  const x=w-pad.r-tw-6, yMercato=h-pad.b-th-8, y=yMercato-th-6;
+  ctx.globalAlpha=.92;
+  ctx.fillStyle='#12283a';
+  if(ctx.roundRect){ ctx.beginPath(); ctx.roundRect(x,y,tw,th,6); ctx.fill(); } else ctx.fillRect(x,y,tw,th);
+  ctx.globalAlpha=1;
+  ctx.strokeStyle='#3ea6ff'; ctx.lineWidth=1;
+  if(ctx.roundRect){ ctx.beginPath(); ctx.roundRect(x+.5,y+.5,tw-1,th-1,6); ctx.stroke(); }
+  ctx.fillStyle='#d7ecff'; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText(testo,x+9,y+th/2+1);
+  ctx.restore();
+  fblBacktestHitRect={x:x,y:y,w:tw,h:th};
+}
+// L'informazione al passaggio del mouse: un fumetto HTML sopra il rettangolino, così si legge
+// comodo (il canvas non sa contenere testo a capo). Creato una volta, tenuto nell'angolo del
+// contenitore del grafico, mai cliccabile (pointer-events:none) per non rubare il tocco.
+(function fblBacktestTipInit(){
+  function crea(){
+    const ospite=document.getElementById('chartMainArea')||document.querySelector('.chartWrap')||document.body;
+    if(!ospite||document.getElementById('fblBacktestTip'))return;
+    const d=document.createElement('div');
+    d.id='fblBacktestTip';
+    d.style.cssText='display:none;position:absolute;z-index:70;max-width:280px;background:#111720;border:1px solid #2b3541;color:#c6ceda;font-size:11.5px;line-height:1.45;padding:9px 11px;border-radius:8px;box-shadow:0 8px 22px rgba(0,0,0,.45);pointer-events:none';
+    d.textContent='Modalità backtest attiva: stai lavorando sul conto dello storico. Le posizioni dell\u2019account MT5 non vengono caricate né disegnate, e le operazioni che apri qui non influiscono sulle posizioni in tempo reale.';
+    ospite.appendChild(d);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',crea); else crea();
+})();
+(function fblBacktestTipHover(){
+  function aggiorna(e){
+    if(e&&e.pointerType==='touch')return;   // col dito il fumetto non serve: non c'è hover
+    const tip=document.getElementById('fblBacktestTip');
+    if(!tip){ return; }
+    if(!fblBacktestHitRect){ tip.style.display='none'; return; }
+    const c=document.getElementById('chart'); if(!c){ tip.style.display='none'; return; }
+    const r=c.getBoundingClientRect();
+    const rx=e.clientX-r.left, ry=e.clientY-r.top, g=fblBacktestHitRect;
+    if(rx>=g.x-2&&rx<=g.x+g.w+2&&ry>=g.y-2&&ry<=g.y+g.h+2){
+      tip.style.left=Math.max(4,Math.min(r.width-292,g.x))+'px';
+      tip.style.top=Math.max(4,g.y-80)+'px';
+      tip.style.display='block';
+    }else tip.style.display='none';
+  }
+  function init(){
+    const c=document.getElementById('chart'); if(!c)return;
+    c.addEventListener('pointermove',aggiorna,{passive:true});
+    c.addEventListener('pointerleave',()=>{ const t=document.getElementById('fblBacktestTip'); if(t)t.style.display='none'; },{passive:true});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init); else init();
+})();
 // Conto alla rovescia vivo anche a grafico fermo (a mercato chiuso nessun prezzo ridisegna), e
 // orari dell'asset a grafico tenuti aggiornati.
 setInterval(()=>{
@@ -47091,6 +47422,9 @@ function esciReplayLive(){
 function updateLiveReplayUI(){
   const bar=$('liveReplayBar'); if(bar)bar.style.display=liveModeActive?'flex':'none';
   const stop=$('liveReplayStopBtn'); if(stop)stop.style.display=(liveReplayActive||liveReplaySelecting)?'inline-block':'none';
+  // MODALITÀ BACKTEST: il pulsante compare solo DENTRO del replay (fuori non c'è niente da
+  // backtestare: sei in diretta). Il suo aspetto dice se è accesa o spenta.
+  fblBacktestModeUi();
    const btn=$('liveReplayBtn'); if(btn){
      // In replay il tasto resta disponibile: premendolo si entra nella scelta di una nuova
      // posizione (avanti o indietro) senza uscire dal replay.
@@ -47105,6 +47439,52 @@ function updateLiveReplayUI(){
 }
 $('liveReplayBtn')?.addEventListener('click',()=>{ avviaSelezioneReplayLive(); });
 $('liveReplayStopBtn')?.addEventListener('click',()=>{ esciReplayLive(); });
+// MODALITÀ BACKTEST (27 ottobre 2026): accesa/spenta dalla barra del replay. Attivandola il
+// replay lavora come il conto dello storico — le posizioni dell'account MT5 non vengono più
+// caricate né disegnate, restano solo quelle aperte da lì in poi.
+$('liveBacktestBtn')?.addEventListener('click',()=>{ fblBacktestModeImposta(!fblBacktestModeAttivoOra()); });
+// Aspetto del pulsante "Modalità backtest": spento = spento; acceso = evidenziato, col testo
+// che dice come si spegne. Nascosto fuori dal replay, perché lì non backtesta nessuno.
+function fblBacktestModeUi(){
+  const b=$('liveBacktestBtn'); if(!b)return;
+  const visibile=!!liveReplayActive||!!liveReplaySelecting;
+  b.style.display=visibile?'inline-block':'none';
+  if(!visibile)return;
+  const on=fblBacktestModeAttivoOra();
+  b.classList.toggle('active',on);
+  b.style.opacity=on?'1':'.7';
+  b.textContent=on?'🧪 Modalità backtest ATTIVA':'🧪 Modalità backtest';
+  b.title=on
+    ? 'Modalità backtest accesa: dentro il replay lavori come sul conto dello storico. Le posizioni dell\'account MT5 non vengono caricate né disegnate; restano solo quelle che apri da qui in poi. Premi di nuovo per spegnerla. Non influisce sulle posizioni in tempo reale.'
+    : 'Accendi la modalità backtest: dentro il replay si lavora come sul conto dello storico. Le posizioni dell\'account MT5 non vengono caricate né disegnate; restano solo quelle che apri da qui in poi, con freccia di apertura, linea al prezzo del momento e prezzi di apertura/chiusura. Non influisce sulle posizioni in tempo reale.';
+}
+// Preferenza letta una volta all'avvio (e l'aspetto del pulsante allineato).
+fblBacktestModeAttivo=fblBacktestModeLeggi();
+setTimeout(()=>{ try{ fblBacktestModeUi(); }catch(e){} },500);
+// Interruttore nelle Impostazioni → Replay: è lo STESSO interruttore del pulsante nella barra
+// del replay, scritto nell'altro verso (dalle impostazioni verso il grafico).
+(function fblBacktestModeImpostazioni(){
+  function rifletti(){
+    const chk=document.getElementById('fblBacktestModeChk'); if(chk)chk.checked=fblBacktestModeAttivoOra();
+    const st=document.getElementById('fblBacktestModeStato');
+    if(st)st.textContent=fblBacktestModeAttivoOra()?'acceso — nel replay vedi solo ciò che apri tu':'spento — nel replay si rivedono anche le posizioni dello storico';
+  }
+  function init(){
+    const chk=document.getElementById('fblBacktestModeChk'); if(!chk)return;
+    chk.addEventListener('change',()=>{
+      fblBacktestModeImposta(chk.checked);
+      rifletti();
+      try{ $('status').textContent=chk.checked
+        ?'🧪 Modalità backtest accesa: dentro il replay lavori come sul conto dello storico.'
+        :'🧪 Modalità backtest spenta: dentro il replay si rivedono anche le posizioni dello storico.'; }catch(e){}
+    });
+    rifletti();
+    // Il pulsante della barra del replay cambia la stessa preferenza: senza questo riflesso lo
+    // stato scritto qui resterebbe indietro fino alla riapertura del pannello.
+    setInterval(rifletti,1000);
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init); else init();
+})();
 $('liveReplayGoBtn')?.addEventListener('click',()=>{
   const inp=$('liveReplayDateTime');
   const t=inp?new Date(inp.value).getTime():NaN;
