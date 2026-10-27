@@ -16,7 +16,7 @@ c'è una stima, è dichiarata come tale con le ipotesi sotto.
 | Letture | **293.000** | 50.000/giorno = ~1.500.000/mese | **20%** — larghi |
 | Scritture | **107.000** | 20.000/giorno = ~600.000/mese | **18%** — larghi |
 | **Larghezza di banda** | **oltre 10 GB** | 10 GiB/mese | **SFORATA** |
-| **Byte archiviati** | **oltre 1 GB** | 1 GiB | **SFORATA** |
+| ~~Byte archiviati~~ | ~~oltre 1 GB~~ | 1 GiB | ❌ **DATO SBAGLIATO** — vedi sotto: sono **10 MB** |
 
 ### La conclusione che cambia tutto
 
@@ -26,23 +26,72 @@ sono dentro il gratuito con ampio margine. A costare sono i **byte**.
 E il motivo è uno solo: **ogni operazione muoveva un documento da 305 KB**, di cui 194 KB erano
 lo storico delle operazioni rimandato per intero ogni volta.
 
-### Il sospetto sull'archiviazione, da verificare
+> ✅ **Questa conclusione e' stata poi CONFERMATA** dal report per SKU (sotto): la banda e'
+> l'unica voce che si paga. **L'archiviazione invece no**: quel numero era sbagliato.
 
-**Oltre 1 GB archiviato per un solo utente, con un documento da 305 KB, non torna.** Un documento
-di quelle dimensioni dovrebbe occupare qualche centinaio di KB, non un gigabyte.
+### AGGIORNAMENTO del 27 ottobre, pomeriggio: la bolletta vera, per SKU
 
-L'ipotesi più probabile: **Firestore indicizza automaticamente ogni campo, array compresi**. Un
-array `trades` con 760 elementi, ognuno con 16 campi, genera **migliaia di voci di indice** — e
-gli indici si pagano come archiviazione. È una trappola classica di Firestore.
+Non piu' ipotesi. Questi sono i costi reali di ottobre, presi dal report di fatturazione Google
+Cloud raggruppato per SKU:
 
-**Come si verifica:** nella console, Firestore → Utilizzo, lo spazio è diviso fra documenti e
-indici. Se gli indici sono la parte grossa, la cura è una riga: **escludere dall'indicizzazione i
-campi array grandi** (Impostazioni → Esenzioni di indice), oppure salvarli come stringa JSON, che
-non viene indicizzata.
+| SKU | Utilizzo | Costo |
+|---|---|---|
+| **Cloud Firestore Internet Data Transfer Out** | **43,86 GiB** | **€3,57** |
+| Secret version replica storage (Secret Manager) | 9,96 mesi-versione | €0,21 |
+| Cloud Run Functions Data Transfer Out | 0,1 GiB | €0,01 |
+| Cloud Firestore Entity Writes | 115.154 | **€0,00** |
+| **Cloud Firestore Storage** | **0,01 GiB** | **€0,00** |
 
-⚠️ Questa è un'ipotesi motivata, non una certezza: va guardata prima di agire.
+**Si paga UNA cosa sola: i byte che escono da Firestore.** 43,86 GiB in 27 giorni, con un solo
+utente: 1,6 GB al giorno.
 
----
+### DUE IPOTESI MIE, SMENTITE ENTRAMBE
+
+**1. Gli indici che gonfiano l'archiviazione: FALSO.** L'archiviazione e' **0,01 GiB** — dieci
+megabyte — e costa **zero**. Il «oltre 1 GB archiviato» scritto piu' sopra in questo stesso
+documento era sbagliato, e con esso tutta la teoria delle esenzioni di indice. **Non fare quel
+lavoro: non servirebbe a niente.**
+
+**2. Il PITR o i backup programmati: FALSO.** Controllata la scheda Disaster recovery: *Recupero
+point-in-time* **disabilitato**, *Backup pianificati* **disabilitati**, nessun backup in elenco.
+
+**Il gradino del 20 ottobre non era un'impostazione accesa quel giorno:** il piano gratuito
+comprende **10 GiB di traffico al mese**. Fino a quella soglia la curva sta a zero; superata —
+intorno al 20 — parte la fatturazione. Era semplicemente il gratuito che finiva.
+
+### PERCHE' IL TRAFFICO E' COSI' ALTO, E PERCHE' E' GIA' RISOLTO
+
+Il conto torna: **9,8K letture al giorno × un documento da 305 KB ≈ 2,9 GB al giorno.** Le
+operazioni sono poche (letture al 15,8% della quota, scritture al 19,8%), ma **ognuna si trascina
+dietro un documento enorme**. Si pagano i byte, non le operazioni — e questo pezzo della diagnosi
+di stamattina era giusto.
+
+**Verificato nel codice a v2.0.35** che la cura e' gia' dentro:
+
+- `trades` e' un documento **separato** da `session` (passo 1);
+- e soprattutto **`trades` NON ha ascoltatori**. I quattro `onSnapshot` stanno su `session`,
+  `grafico` (i disegni condivisi), `collegamento` e `preferenze` — documenti piccoli.
+
+Lo storico da 194 KB **non viene piu' riscaricato da nessun dispositivo, mai.**
+
+### COSA ASPETTARSI, E COSA GUARDARE
+
+La bolletta misura **i 27 giorni passati**, quasi tutti con i dispositivi su versioni vecchie. Il
+traffico cala man mano che i dispositivi passano a v2.0.35, non il giorno in cui si pubblica.
+
+**Il numero da ricontrollare fra una settimana** e' sempre quello: *Firestore Internet Data
+Transfer Out*. Deve scendere **sotto i 10 GiB al mese**, cioe' dentro il gratuito. Se resta sopra,
+il colpevole e' uno dei quattro documenti ascoltati, e si guarda quale.
+
+> ⚠️ Da non ripetere: in questa pagina avevo scritto due diagnosi sbagliate (indici,
+> PITR) prima di guardare il report per SKU. **Il report per SKU e' il primo posto dove guardare,
+> non l'ultimo:** dice il nome esatto della cosa che si paga, e costa due clic.
+
+### Nota minore: Secret Manager, €0,21
+
+9,96 mesi-versione di segreti archiviati, mentre il gratuito ne comprende 6 attive. Sono vecchie
+versioni che si accumulano a ogni rotazione. Due euro e mezzo l'anno: non urgente, ma e' spreco
+puro e si ripulisce distruggendo le versioni vecchie.
 
 ## 2. COSA CAMBIA CON LE MODIFICHE GIÀ FATTE
 

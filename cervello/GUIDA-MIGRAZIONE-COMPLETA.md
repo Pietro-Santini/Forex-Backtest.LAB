@@ -78,11 +78,37 @@ di sicurezza.
 
 - **Immagine:** «Change image» → **Canonical Ubuntu** → **22.04** o **24.04** → «Select image»
 - **Forma:** «Change shape» → scheda **«Ampere»** → **`VM.Standard.A1.Flex`**
-  - **OCPU: 4**
-  - **Memory: 24 GB**
+
+**La scala da scendere, fermandosi al primo che passa** (misurato il 27 ottobre 2026: 3 OCPU/18 GB
+e 2 OCPU/12 GB hanno dato «out of capacity»):
+
+| Tentativo | OCPU | Memoria | Quante volte quella di oggi |
+|---|---|---|---|
+| 1° | 4 | 24 GB | 25× |
+| 2° | 2 | 12 GB | 12× |
+| 3° | **1** | **6 GB** | **6×** |
+
+Qualunque di questi **risolve il problema**: il limite di oggi è la memoria (951 MB), non i core.
+E l'A1.Flex **si ridimensiona a macchina spenta**: partire da 1 OCPU non chiude nessuna porta.
 
 > ⚠️ Deve comparire **«Always Free-eligible»**. Se non c'è, **fermati e dimmelo**: quella
 > configurazione verrebbe fatturata.
+
+### Il tipo di capacità: lasciarlo stare
+
+Sotto «Advanced options» c'è **«Capacity type»**, e quando Oracle dice «out of capacity» viene
+naturale andarlo a cercare. **Non c'è niente da trovare: deve restare «On-demand».**
+
+| Voce | Cosa fa | |
+|---|---|---|
+| **On-demand** | il normale | ✅ **l'unico compreso nel piano gratuito** |
+| Preemptible | Oracle si riprende la macchina **quando vuole** | ❌ si paga, e il ponte non può spegnersi a sorpresa |
+| Capacity reservation | riserva capacità in anticipo | ❌ si paga la riserva anche inutilizzata, e per crearla serve comunque capacità libera |
+| Dedicated host | un host fisico tutto tuo | ❌ centinaia di euro al mese |
+| Compute cluster | rete per calcolo scientifico | ❌ non c'entra, e si paga |
+
+Il piano Always Free copre **solo l'on-demand standard**. Cambiare tipo di capacità significa
+uscire dal gratuito per risolvere un problema di gratuito.
 
 **g) Chiave SSH** — riquadro «Add SSH keys»:
 
@@ -93,7 +119,16 @@ di sicurezza.
 
 **h) Rete** — riquadro «Networking»: verifica che **«Assign a public IPv4 address»** sia su **Yes**.
 
-**i) Disco** — «Boot volume»: lascia il valore predefinito (46-50 GB). Oggi ne usi 7,6.
+**i) Disco** — «Boot volume»: **50 GB**, prestazioni **VPU 10**. Oggi ne usi 7,6.
+
+> ⚠️ **Oracle ti mostrerà «€1,98/mese» per il boot volume. È un falso allarme.** Lo dice Oracle
+> stessa nella riga sotto il totale: *«does not reflect any tier unit pricing»* — quel preventivo
+> calcola i prezzi di listino e **non applica il piano gratuito**.
+>
+> Il piano Always Free comprende **200 GB** di dischi in tutto, a **VPU 10**. Vecchia macchina
+> (~47 GB) + nuova (50 GB) = **97 GB**: sei a metà di quello che hai già incluso.
+>
+> Quello da non superare è **VPU 10**: alzare le prestazioni del disco **si paga davvero**.
 
 **l)** Premi **«Create»**. In un paio di minuti lo stato diventa **Running** (verde).
 
@@ -114,10 +149,16 @@ dominio, non ci sono macchine ARM libere.
 
 In ordine:
 1. **Riprova subito**, premendo di nuovo «Create».
-2. **Cambia dominio di disponibilità** (riquadro «Placement»): AD-1, AD-2, AD-3.
-3. **Riprova a ore diverse** — spesso di notte o presto la mattina.
-4. **Prova con meno:** 2 OCPU e 12 GB. Sono comunque **dodici volte** la memoria di oggi, e si
-   alza dopo senza rifare niente.
+2. **Scendi di taglia**, seguendo la scala del punto 1f: 4→24 → 2→12 → **1→6**. È la mossa che
+   funziona più spesso, perché un pezzo piccolo trova posto dove uno grande non entra.
+3. **Riprova a ore diverse** — tipicamente **di notte o presto la mattina** nel fuso della regione.
+   Un tentativo ogni qualche ora, non serve starci dietro.
+4. **Cambiare dominio di disponibilità** (riquadro «Placement») solo **se ne hai più di uno**.
+   Molte regioni — **compresa la tua** — hanno **solo AD-1**: in quel caso la voce non si può
+   cambiare, e non c'è niente di sbagliato.
+
+> **Se resta bloccata, non è un problema tuo e non è urgente.** Il server di oggi funziona: questa
+> migrazione è un **miglioramento**, non una riparazione. Si riprova domani.
 
 > ❌ **Non accettare l'«Upgrade to Paid»** che Oracle propone proprio in quel momento: risolve la
 > capacità e fa partire la fatturazione, cioè esattamente quello che stiamo evitando.
