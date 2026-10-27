@@ -1,3 +1,16 @@
+## Stato dell'implementazione
+
+- **Passo 1 (salvataggio incrementale) — FATTO il 27 ottobre 2026 (commit in arrivo).**
+  Le operazioni stanno in un documento a parte (`users/{uid}/data/trades`) e si aggiungono con
+  `arrayUnion` (~259 byte per operazione nuova invece di 305 KB). Il documento session non porta
+  piu' lo storico. `load()` unisce i due documenti e resta retrocompatibile. Anche il keepalive
+  manda il documento senza operazioni. La misura riporta `cloudTradesInviati`.
+  Difetto trovato per strada: la firma anti-doppioni non aveva mai funzionato (savedAt:Date.now()
+  cambiava ad ogni raccoglimento) — ora calcola la firma sul contenuto stabile.
+  Test: `laboratorio/app/cloud_incrementale.test.mjs` (3 prove, col comportamento misurato in byte;
+  prova di controllo fatta: rimesso il file vecchio, il test diventa rosso).
+
+
 # I dati a casa nostra: togliere Firestore, tenere login e abbonamenti
 
 Deciso dal proprietario il 26 ottobre 2026, dopo che **la bolletta Firebase ha iniziato a salire

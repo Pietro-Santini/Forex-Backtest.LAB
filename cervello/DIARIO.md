@@ -3436,3 +3436,43 @@ tetto dei tick footprint (150.000 per asset: 7 asset = 1 milione di tick, da dec
 proprietario quanto storico tenere).
 
 Test: misura_prestazioni, cronometri_disegno, footprint_blocchi (12 prove) verdi.
+
+### Passo 1 del progetto dati nostri: salvataggio incrementale (2.0.32)
+
+DATO DECISIVO (console Firebase, 30 giorni, dati del proprietario): letture 293K, scritture
+107K, "larghezza di banda oltre 10 GB" e "byte archiviati oltre 1 GB". Le letture sono 2,7x
+le scritture: ogni modifica viene riscaricata da tutti i dispositivi in ascolto.
+
+Confermato il colpevole: il traffico, causato dai 305 KB rimandati a ogni salvataggio.
+Il progetto diceva: "se e' traffico -> sono i 305 KB per operazione, e il punto 1 li taglia
+da solo". Quindi il passo 1 era la scelta giusta.
+
+COSA CAMBIA:
+- users/{uid}/data/session non porta piu' lo storico operazioni (trades);
+- le operazioni stanno in users/{uid}/data/trades e si aggiungono con arrayUnion: una
+  operazione nuova sono ~259 byte invece della fotografia intera (750 volte meno);
+- load() unisce i due documenti, retrocompatibile con le vecchie scritture;
+- anche il keepalive della chiusura pagina manda il documento senza operazioni;
+- la misura delle prestazioni riporta cloudTradesInviati.
+
+DIFETTO TROVATO E CORRETTO PER STRADA (misurato, non sospettato): la firma
+anti-doppioni non aveva mai funzionato. Lo stato salvato porta savedAt:Date.now(), che
+cambia a OGNI raccoglimento: due fotografie identiche avevano firme diverse e si
+riscrivevano sempre. Ora la firma si calcola sul contenuto stabile (savedAt normalizzato),
+il peso resta quello reale del testo mandato. Regola della consegna intatta: la firma si
+aggiorna solo DOPO una scrittura riuscita, e se le operazioni nuove non si salvano la firma
+non si aggiorna — al giro dopo si riprovano da sole.
+
+INCIDENTE DI SVILUPPO: una sostituzione automatica e' finita nel listener pagehide anziche'
+nella funzione di salvataggio, annidando il codice e rompendo la sintassi ("await is only
+valid in async functions"). Trovato col controllo di sintassi sul blocco estratto, poi
+ripristinate ENTRAMBE le funzioni dall'originale git e riapplicata la modifica con anchor
+verificati unici. Lezione scritta in LEZIONI.md.
+
+Test: laboratorio/app/cloud_incrementale.test.mjs (3 prove, misura in byte, non sul
+sorgente). PROVA DI CONTROLLO fatta: rimesso il file vecchio, il test diventa rosso
+(mandava tutte le 300 operazioni nella keepalive: "trades":300).
+
+Prossimo passo (2): verifica del token Firebase sul server — serve l'ID del progetto
+Firebase e, per la verifica a mano, la chiave pubblica di Google (si legge da
+https://www.googleapis.com/oauth2/v3/certs).

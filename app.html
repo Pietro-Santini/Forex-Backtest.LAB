@@ -1087,7 +1087,7 @@ window.fblAvviaSoloBacktest=function(){
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import { getAuth, onAuthStateChanged, onIdTokenChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFirestore, doc, getDoc, setDoc, onSnapshot, serverTimestamp, arrayUnion } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
   const firebaseConfig = {
@@ -1207,7 +1207,16 @@ window.fblAvviaSoloBacktest=function(){
       if(!this.uid) return null;
       try{
         const snap = await getDoc(doc(db,"users",this.uid,"data","session"));
-        return snap.exists() ? (snap.data().state ?? null) : null;
+        if(!snap.exists()) return null;
+        const state = (snap.data().state ?? null);
+        // SALVATAGGIO INCREMENTALE: se il documento session NON porta piu' le
+        // operazioni, si prendono dal documento a parte. Se le porta ancora
+        // (scritto da una versione di prima), quelle vincono: nessuna perdita.
+        if(state && !Array.isArray(state.trades)){
+          const lista = await this.tradesLeggi();
+          if(Array.isArray(lista) && lista.length) state.trades = lista;
+        }
+        return state;
       }catch(e){ console.warn("Lettura sessione da Firestore fallita:", e); return null; }
     },
     // Ascolto in tempo reale: ogni volta che il documento cambia (anche da un
@@ -1274,6 +1283,39 @@ window.fblAvviaSoloBacktest=function(){
       return onSnapshot(doc(db,"users",this.uid,"data","preferenze"), snap=>{
         cb(snap.exists() ? snap.data() : null);
       }, e=>console.warn("Ascolto delle preferenze interrotto:", e));
+    },
+    // === SALVATAGGIO INCREMENTALE DELLE OPERAZIONI (26 ottobre 2026) ===
+    // Il documento `session` non porta piu' l'intero storico: le operazioni
+    // stanno in un documento a parte e si aggiungono una alla volta con
+    // arrayUnion, che manda SOLO gli elementi nuovi invece di riscrivere tutto.
+    // Rispetta la regola della consegna: la firma si aggiorna solo DOPO una
+    // scrittura riuscita (lo fa il chiamante, qui si risponde vero/falso).
+    async tradesAggiungi(nuove){
+      if(!this.uid) return false;
+      if(!Array.isArray(nuove)||!nuove.length) return true; // niente di nuovo: non e' un fallimento
+      try{
+        // Il documento trades: lista = tutte le operazioni. arrayUnion aggiunge
+        // solo quelle che non ci sono gia' (confronto per valore), quindi un
+        // ritentativo non duplica niente.
+        await setDoc(doc(db,"users",this.uid,"data","trades"),
+          { v:1, lista: arrayUnion(...nuove), at: serverTimestamp() });
+        return true;
+      }catch(e){ console.warn("Salvataggio incrementale delle operazioni fallito:", e); return false; }
+    },
+    // Lettura delle sole operazioni dal documento a parte.
+    async tradesLeggi(){
+      if(!this.uid) return null;
+      try{
+        const s = await getDoc(doc(db,"users",this.uid,"data","trades"));
+        if(!s.exists()) return null;
+        return Array.isArray(s.data().lista) ? s.data().lista : null;
+      }catch(e){ console.warn("Lettura delle operazioni dal cloud fallita:", e); return null; }
+    },
+    // Quante operazioni ci sono gia' nel documento separato: serve a capire
+    // quali sono le NUOVE da mandare, senza rimandare lo storico.
+    async tradesConteggio(){
+      const l = await this.tradesLeggi();
+      return Array.isArray(l) ? l.length : 0;
     }
   };
 
@@ -7483,6 +7525,7 @@ const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più event
 // fotografia identica (vedi la nota lunga in syncFullStatusToFirebase) e poterlo DIRE nella
 // misura delle prestazioni, cosi' il consumo si guarda invece di immaginarlo.
 let fblCloudUltimaFirma=null, fblCloudUltimoPeso=0, fblCloudScritture=0, fblCloudSaltate=0;
+let fblCloudTradesInviati=0; // quante operazioni sono state mandate col salvataggio incrementale
 // CORREZIONE ESPLICITA DELL'UTENTE ("problemi di caricamento delle vecchie posizioni nel trade
 // journal"): il bundle mandato a Firestore includeva SEMPRE l'intero array `trades` per intero
 // (mai tagliato: in locale "resta lo storico completo di sempre", giustamente) dentro un
@@ -7518,9 +7561,9 @@ function trimTradesForCloudBudget(bundle,maxBytes){
  return trimmed;
 }
 async function syncFullStatusToFirebase(reason,force){
- if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non toccano MAI il salvataggio cloud dell'account: vedi PIP_SLOT più sopra
+ if(PIP_SLOT>0)return; // le finestre PIP aggiuntive non toccano MAI il salvataggio cloud dell'account: vedi PIP_SLOT pi├╣ sopra
  if(!(window.fxbtCloud && window.fxbtCloud.uid))return; // non loggato: niente cloud, solo locale
- // NIENTE guardia su baseRows.length qui: subito dopo un cambio sessione l'asset è
+ // NIENTE guardia su baseRows.length qui: subito dopo un cambio sessione l'asset ├¿
  // volutamente vuoto (vedi clearAssetSelectionForSessionSwitch), ma conto/Trade Journal/
  // ultima candela vista per asset restano comunque validi e vanno sincronizzati lo stesso.
  const now=Date.now();
@@ -7528,34 +7571,68 @@ async function syncFullStatusToFirebase(reason,force){
  lastFirebaseSyncAt=now;
  try{
    // BUG RISOLTO ("quando chiudo/aggiorno la pagina senza cambiare asset, la posizione esatta
-   // dove ero arrivato su QUELL'asset non veniva salvata"): assetChartViews[modalità][asset] —
+   // dove ero arrivato su QUELL'asset non veniva salvata"): assetChartViews[modalit├á][asset] ÔÇö
    // la memoria PER ASSET che applyChartViewForAsset() usa per riportarti esattamente dove eri
-   // quando riselezioni quell'asset — veniva aggiornata SOLO quando si cambiava asset o sessione
+   // quando riselezioni quell'asset ÔÇö veniva aggiornata SOLO quando si cambiava asset o sessione
    // (vedi i chiamanti di captureCurrentAssetChartView), MAI mentre si scorreva/zoomava/cambiava
    // timeframe restando sullo STESSO asset. Chiudendo la pagina proprio in quel momento, si
    // mandava su disco/Firebase una fotografia ormai vecchia per l'asset corrente. Fix: si
-   // fotografa SEMPRE la vista corrente PRIMA di leggere assetChartViews qui sotto, così
+   // fotografa SEMPRE la vista corrente PRIMA di leggere assetChartViews qui sotto, cos├¼
    // riflette sempre l'ultimissima posizione vista su quell'asset, qualunque sia stata l'ultima
    // azione fatta.
    captureCurrentAssetChartView(currentMode());
    await flushAssetChartViewsPersist(); // salvataggio LOCALE immediato, PRIMA di mandarlo su Firebase qui sotto
    // Richiesto esplicitamente: si manda su Firebase esattamente il file appena scritto in
    // localStorage (lo si riscrive qui un'ultima volta, sincrono, per essere certi che sia
-   // aggiornatissimo al millisecondo della chiusura/inattività), non una fotografia ricalcolata
+   // aggiornatissimo al millisecondo della chiusura/inattivit├á), non una fotografia ricalcolata
    // a parte che potrebbe in teoria differire.
    const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
    bundle.assetChartViews=assetChartViews; // ultima candela vista, per asset e per sessione
-   bundle.footprintCells=footprintCollectCloudAggregate(); // backup footprint cloud (celle aggregate, non il log tick grezzo — vedi footprintCollectCloudAggregate())
-   const trimmedBundle=trimTradesForCloudBudget(bundle,FIRESTORE_DOC_MAX_BYTES);
+   bundle.footprintCells=footprintCollectCloudAggregate(); // backup footprint cloud (celle aggregate, non il log tick grezzo ÔÇö vedi footprintCollectCloudAggregate())
+         const tradesCompleti=Array.isArray(bundle.trades)?bundle.trades:[];
+   // ===== SALVATAGGIO INCREMENTALE DELLE OPERAZIONI (26 ottobre 2026) =====
+   // MISURATO sulla console Firebase (30 giorni): letture 293K, scritture 107K, "larghezza di
+   // banda oltre 10 GB" e "byte archiviati oltre 1 GB". Il documento session pesava 305 KB a
+   // salvataggio, di cui 194 KB di storico operazioni rimandato per intero ogni volta.
+   // Le operazioni chiuse sono append-only (si aggiungono in coda e non cambiano piu'),
+   // quindi stanno in un documento a parte e si aggiungono con arrayUnion: una operazione
+   // nuova sono ~259 byte invece della fotografia intera. Punto 1 del progetto dati nostri:
+   // "prima tagliare, poi spostare" - toglie il 64% del traffico restando su Firebase.
+   //
+   // MAI UN CAMBIO SECCO: se il documento separato non si sa leggere (modulo piu' vecchio,
+   // rete assente, lettura fallita) si torna al salvataggio COMPLETO, operazioni comprese.
+   // Un risparmio che perde un'operazione chiusa non e' un risparmio.
+   let gia = tradesCompleti.length === 0 ? 0 : -1;
+   if (gia < 0 && typeof window.fxbtCloud.tradesConteggio === 'function') {
+    try { gia = await window.fxbtCloud.tradesConteggio(); } catch (e) { gia = -1; }
+   }
+   if (!(gia >= 0)) {
+    // FALLBACK: fotografia intera, come prima della cura.
+    const completo = trimTradesForCloudBudget(bundle, FIRESTORE_DOC_MAX_BYTES);
+    const testoC = JSON.stringify(completo);
+    const firmaC = firmaDi(testoC);
+    if (firmaC !== null && firmaC === fblCloudUltimaFirma) {
+     fblCloudSaltate++;
+     return;
+    }
+    await window.fxbtCloud.save(completo);
+    fblCloudUltimaFirma = firmaC;
+    fblCloudUltimoPeso = testoC ? testoC.length : 0;
+    fblCloudScritture++;
+    return;
+   }
+   const bundleSenzaTrades = {...bundle};
+   delete bundleSenzaTrades.trades;
+   const trimmedBundle = trimTradesForCloudBudget(bundleSenzaTrades, FIRESTORE_DOC_MAX_BYTES);
    // NON SI RISCRIVE QUELLO CHE NON E' CAMBIATO.
    //
    // CHIESTO dal proprietario: «facciamo in modo di pesare il meno possibile anche il passaggio
-   // di dati con Firebase, perche' sennò sforiamo i livelli massimi di utilizzo gratuiti e
+   // di dati con Firebase, perche' senno' sforiamo i livelli massimi di utilizzo gratuiti e
    // dovremmo iniziare a pagare per le richieste e lo scambio di dati».
    //
    // IL CONTO CHE SI PAGA: ogni salvataggio manda l'INTERO pacchetto di sessione - conto,
-   // posizioni, Trade Journal, disegni, ultima candela vista per asset, celle del footprint - e
-   // si avvicina al tetto di 1 MB per documento. Il prezzo di Firestore e' per SCRITTURA e per
+   // posizioni, Trade Journal, disegni, ultima candela vista per asset, celle del footprint -
+   // e si avvicina al tetto di 1 MB per documento. Il prezzo di Firestore e' per SCRITTURA e per
    // BYTE trasferito, quindi due salvataggi identici costano come due diversi: pagare due volte
    // per la stessa fotografia e' lo spreco piu' facile da togliere.
    //
@@ -7565,45 +7642,69 @@ async function syncFullStatusToFirebase(reason,force){
    // La firma e' una somma rotolante sui caratteri: costa un passaggio sul testo e non un
    // calcolo crittografico, che qui non serve - deve distinguere due fotografie, non resistere a
    // un attacco.
-   let testo='';
-   try{ testo=JSON.stringify(trimmedBundle); }catch(e){ testo=''; }
-   const firma=(()=>{
-    if(!testo)return null;
-    let h=5381;
-    for(let i=0;i<testo.length;i++)h=((h*33)^testo.charCodeAt(i))>>>0;
-    return testo.length+':'+h;
-   })();
+   // La firma si calcola sul contenuto STABILE, non sul testo cosi' com'e': `savedAt:Date.now()`
+   // cambia ad OGNI raccoglimento, quindi due fotografie identiche avrebbero firme diverse e si
+   // riscriverebbe sempre - il proprietario aveva chiesto "identico = non si scrive" e la console
+   // conta lo spreco. Si normalizza savedAt (e solo quello: il resto deve contare).
+   const firmaDi = (t) => {
+    const s = (t || '').replace(/"savedAt":\d+/g, '"savedAt":0');
+    if (!s) return null;
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return s.length + ':' + h;
+   };
+   let testo = '';
+   try { testo = JSON.stringify(trimmedBundle); } catch (e) { testo = ''; }
+   const firma = firmaDi(testo);
    // Vale ANCHE per le scritture forzate: `force` serve a scavalcare il limite di frequenza
    // (quattro secondi), non a pagare due volte la stessa fotografia. E la firma si aggiorna solo
    // DOPO una scrittura riuscita, quindi un tentativo fallito viene comunque rifatto.
-   if(firma && firma===fblCloudUltimaFirma){
+   // Operazioni NUOVE: quelle oltre quante ce ne sono gia' sul cloud. Le operazioni
+   // sono append-only, quindi il cloud e' sempre un prefisso del locale: slice e' corretto
+   // e non perde niente.
+   const tradesNuovi = tradesCompleti.slice(gia);
+   const sessionIdentica = !!(firma && firma === fblCloudUltimaFirma);
+   if (sessionIdentica && !tradesNuovi.length) {
     fblCloudSaltate++;
     console.log('[Cloud] niente da mandare ('+reason+'): identico all\'ultimo salvataggio, '
-      +Math.round(testo.length/1024)+' KB risparmiati');
+      + Math.round(testo.length / 1024) + ' KB risparmiati');
     return;
    }
-   await window.fxbtCloud.save(trimmedBundle);
-   fblCloudUltimaFirma=firma;
-   fblCloudUltimoPeso=testo?testo.length:0;
+   // Il documento session si scrive solo se e' cambiato. La regola della firma RESTA: si
+   // aggiorna solo DOPO una scrittura riuscita, quindi un tentativo fallito viene rifatto.
+   if (!sessionIdentica) {
+    await window.fxbtCloud.save(trimmedBundle);
+    fblCloudUltimaFirma = firma;
+    fblCloudUltimoPeso = testo ? testo.length : 0;
+   }
+   // Le operazioni nuove: se la scrittura fallisce, la firma NON si aggiorna e il conteggio
+   // sul cloud resta vecchio - al giro dopo si riprovano da sole.
+   if (tradesNuovi.length) {
+    const okT = await window.fxbtCloud.tradesAggiungi(tradesNuovi);
+    if (!okT) { console.warn('[Cloud] operazioni nuove non salvate: si riprovano al giro dopo'); return; }
+    fblCloudTradesInviati = (fblCloudTradesInviati || 0) + tradesNuovi.length;
+    console.log('[Cloud] ' + tradesNuovi.length + ' operazioni nuove, '
+      + Math.round(JSON.stringify(tradesNuovi).length / 1024) + ' KB invece della fotografia intera');
+   }
    fblCloudScritture++;
  }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
 }
-// RICHIESTO ESPLICITAMENTE: finché non si esce davvero dall\'app (chiusura/ricarica pagina) o
-// non si esce dall'account, il backup su Firebase NON deve scattare — tutte le azioni nel
+// RICHIESTO ESPLICITAMENTE: finch├® non si esce davvero dall\'app (chiusura/ricarica pagina) o
+// non si esce dall'account, il backup su Firebase NON deve scattare ÔÇö tutte le azioni nel
 // frattempo restano SOLO in locale (localStorage/IndexedDB, vedi scheduleSave()). Per questo
-// NON agganciamo più "visibilitychange" (cambio tab, minimizzazione, schermo bloccato): quello
-// non è "uscire dall\'app", è solo mettere la scheda in background, e prima faceva scattare un
+// NON agganciamo pi├╣ "visibilitychange" (cambio tab, minimizzazione, schermo bloccato): quello
+// non ├¿ "uscire dall\'app", ├¿ solo mettere la scheda in background, e prima faceva scattare un
 // invio a Firebase anche in quel caso. Restano solo i due veri momenti di uscita:
 // "App chiusa"/pagina ricaricata: ultimo tentativo, anche se la scheda si chiude subito dopo.
 // FIX (salvataggio mancante alla chiusura reale, non solo al logout): syncFullStatusToFirebase()
-// scrive su Firestore con l'SDK normale, che è asincrono — se la pagina si chiude DAVVERO (non
-// un semplice refresh) mentre quella scrittura è ancora in volo, il browser la interrompe a
-// metà e si perde (per questo prima sembrava funzionare solo al logout: lì il codice resta
+// scrive su Firestore con l'SDK normale, che ├¿ asincrono ÔÇö se la pagina si chiude DAVVERO (non
+// un semplice refresh) mentre quella scrittura ├¿ ancora in volo, il browser la interrompe a
+// met├á e si perde (per questo prima sembrava funzionare solo al logout: l├¼ il codice resta
 // vivo abbastanza a lungo da completare l'attesa). Per la chiusura vera affianchiamo quindi una
 // seconda scrittura con fetch(...,{keepalive:true}) diretta alle REST API di Firestore, pensata
 // apposta dai browser per sopravvivere alla distruzione della pagina: non va aspettata con
-// await, va solo "lanciata" perché il browser la accodi subito.
+// await, va solo "lanciata" perch├® il browser la accodi subito.
 window.addEventListener('pagehide', ()=>{
   if(window.fxbtCloud && window.fxbtCloud.uid && window.fxbtCloud.saveKeepalive){
     try{
@@ -7611,38 +7712,44 @@ window.addEventListener('pagehide', ()=>{
       // dell'asset attivo PRIMA di leggere assetChartViews, altrimenti una chiusura vera
       // (pagehide, non un semplice logout) manderebbe una posizione ormai vecchia per l'asset
       // che si stava guardando in quel momento. Il salvataggio locale (IndexedDB) viene solo
-      // "lanciato", mai atteso con await: in un vero pagehide la pagina può sparire da un
-      // momento all'altro, quindi non c'è modo di garantire che l'attesa finisca in tempo —
-      // stesso principio già usato qui sotto per l'invio keepalive a Firebase.
+      // "lanciato", mai atteso con await: in un vero pagehide la pagina pu├▓ sparire da un
+      // momento all'altro, quindi non c'├¿ modo di garantire che l'attesa finisca in tempo ÔÇö
+      // stesso principio gi├á usato qui sotto per l'invio keepalive a Firebase.
       captureCurrentAssetChartView(currentMode());
       flushAssetChartViewsPersist();
       const bundle=saveLightStateToLocalStorageNow()||collectLightSessionState();
       bundle.assetChartViews=assetChartViews;
       // NIENTE footprintCells qui: la richiesta keepalive ha un tetto di ~64KB di corpo imposto
-      // dal browser (vedi saveSessionKeepalive più sopra nel file) — le celle footprint da sole
+      // dal browser (vedi saveSessionKeepalive pi├╣ sopra nel file) ÔÇö le celle footprint da sole
       // possono arrivare fino a FOOTPRINT_CLOUD_MAX_BYTES (400KB), quindi le aggiungeremmo qui
       // rischiando di far fallire silenziosamente l'INTERA richiesta keepalive, comprese
       // posizioni/trade/disegni che invece devono sempre arrivare. Il backup footprint cloud lo
       // manda solo syncFullStatusToFirebase() qui sotto, che usa l'SDK normale (setDoc, nessun
-      // tetto di 64KB, solo il limite di 1MB per documento già rispettato da
-      // footprintCollectCloudAggregate()) — se anche quella scrittura async viene interrotta a
-      // metà dalla chiusura pagina, il prossimo avvio la ritenta comunque: IndexedDB locale
+      // tetto di 64KB, solo il limite di 1MB per documento gi├á rispettato da
+      // footprintCollectCloudAggregate()) ÔÇö se anche quella scrittura async viene interrotta a
+      // met├á dalla chiusura pagina, il prossimo avvio la ritenta comunque: IndexedDB locale
       // (footprintTicks) resta comunque la copia vera e non dipende mai da questo invio cloud.
-      // Stesso taglio dei trade più vecchi (vedi trimTradesForCloudBudget sopra) applicato anche
-      // qui, con budget più stretto (~64KB): un Trade Journal ormai grande avrebbe altrimenti
+      // Stesso taglio dei trade pi├╣ vecchi (vedi trimTradesForCloudBudget sopra) applicato anche
+      // qui, con budget pi├╣ stretto (~64KB): un Trade Journal ormai grande avrebbe altrimenti
       // fatto fallire silenziosamente anche QUESTA scrittura keepalive.
-      window.fxbtCloud.saveKeepalive(trimTradesForCloudBudget(bundle,FIRESTORE_KEEPALIVE_MAX_BYTES));
+            // INCREMENTALE: anche qui il documento session va senza operazioni.
+      // Restano in coda su questo dispositivo e vengono mandate dal sync normale, che gira
+      // anche subito prima (sullo stesso pagehide, forza=true). Cosi' il documento session
+      // resta coerente col nuovo formato su tutti i percorsi di scrittura.
+      const bundleSenzaTradesKeepalive={...bundle};
+      delete bundleSenzaTradesKeepalive.trades;
+      window.fxbtCloud.saveKeepalive(trimTradesForCloudBudget(bundleSenzaTradesKeepalive,FIRESTORE_KEEPALIVE_MAX_BYTES));
     }catch(e){}
   }
   // FORZATA: e' l'ultima occasione di salvare: farsela saltare dal limite di frequenza
   // (quattro secondi) vorrebbe dire perdere l'ultimo pezzo di sessione proprio alla chiusura.
   syncFullStatusToFirebase('pagehide',true);
 });
-// "Uscita dall'account": vedi il pulsante logout-btn/blocked-logout-btn più in alto nel file,
-// che chiama window.syncFullStatusToFirebase('logout') PRIMA di eseguire davvero il signOut —
-// esposta su window perché quel pulsante vive in un altro <script type="module"> separato da
+// "Uscita dall'account": vedi il pulsante logout-btn/blocked-logout-btn pi├╣ in alto nel file,
+// che chiama window.syncFullStatusToFirebase('logout') PRIMA di eseguire davvero il signOut ÔÇö
+// esposta su window perch├® quel pulsante vive in un altro <script type="module"> separato da
 // questo (il motore di trading), che gira PRIMA che questo script sia stato eseguito: la
-// funzione viene quindi chiamata solo al click, quando questo script ha già fatto in tempo a
+// funzione viene quindi chiamata solo al click, quando questo script ha gi├á fatto in tempo a
 // definirla, mai al momento in cui quel listener viene registrato.
 window.syncFullStatusToFirebase = syncFullStatusToFirebase;
 
@@ -46092,6 +46199,7 @@ function fblMisuraPrestazioni(secondi){
     // bolletta.
     cloudScritture:(typeof fblCloudScritture!=='undefined')?fblCloudScritture:null,
     cloudSaltate:(typeof fblCloudSaltate!=='undefined')?fblCloudSaltate:null,
+    cloudTradesInviati:(typeof fblCloudTradesInviati!=='undefined')?fblCloudTradesInviati:null,
     cloudUltimoPeso_KB:(typeof fblCloudUltimoPeso!=='undefined'&&fblCloudUltimoPeso)?Math.round(fblCloudUltimoPeso/1024):null
    };
    // I pezzi del disegno, dal piu' caro al meno caro e solo quelli che sono costati qualcosa:
