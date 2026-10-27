@@ -34589,7 +34589,58 @@ const MT5_TERMINAL_DOWNLOAD_URL='https://www.metatrader5.com/en/download';
 // attesa di quel click e non risponde mai, quindi anche il fetch() del browser resta appeso a
 // vita. Questo helper aggiunge un timeout lato browser a TUTTE le chiamate reali (ordini e
 // polling posizioni): oltre la soglia si ottiene un errore chiaro invece di un'attesa infinita.
+// QUANTO CI METTE UN ORDINE, DAL CLIC ALLA RISPOSTA DEL BROKER.
+//
+// E' la lacuna piu' grave trovata facendo i conti del 27 ottobre: in un'app di trading il tempo
+// fra "premo" e "l'ordine c'e'" e' il numero che conta piu' di tutti, e di quello non sapevamo
+// NIENTE. Abbiamo misurato disegni, aggiornamenti, salvataggi, candele - mai la cosa per cui
+// l'app esiste.
+//
+// Il cronometro sta qui perche' `fetchMt5WithTimeout` e' il punto UNICO da cui passa ogni
+// chiamata al ponte: ordini, chiusure, modifiche di stop e target, letture. Misurarlo altrove
+// vorrebbe dire misurarne una parte e crederla il tutto.
+//
+// E' SEMPRE ACCESO, non solo durante la misura: un ordine capita qualche volta al giorno, e se il
+// cronometro partisse solo quando si guarda non si vedrebbe mai niente. Costa due letture
+// dell'orologio per chiamata.
+//
+// SI TIENE ANCHE IL PEGGIORE, non solo la media: su un ordine la media consola e il caso peggiore
+// e' quello che fa perdere i soldi.
+const fblTempiPonte={};
+function fblFamigliaPonte(p){
+ const s=String(p||'').split('?')[0];
+ if(s.startsWith('/order/market'))return 'ordine a mercato';
+ if(s.startsWith('/order/pending'))return 'ordine pendente';
+ if(s.startsWith('/order/close'))return 'chiusura';
+ if(s.startsWith('/order/modify'))return 'modifica stop/target';
+ if(s.startsWith('/order'))return 'ordine (altro)';
+ if(s.startsWith('/positions'))return 'lettura posizioni';
+ if(s.startsWith('/account'))return 'lettura conto';
+ return null;   // il resto non interessa: non si sporca la misura con cose che non si guardano
+}
+function fblSegnaTempoPonte(path,ms,ok){
+ try{
+  const f=fblFamigliaPonte(path);
+  if(!f)return;
+  const t=fblTempiPonte[f]||(fblTempiPonte[f]={n:0,tot:0,peggio:0,falliti:0,ultimo:0});
+  t.n++; t.tot+=ms; t.ultimo=Math.round(ms);
+  if(ms>t.peggio)t.peggio=Math.round(ms);
+  if(!ok)t.falliti++;
+ }catch(e){}
+}
+// Il riassunto leggibile, per la misura delle prestazioni e per chi lo vuole guardare dal vivo.
+function fblTempiPonteTesto(){
+ const righe=[];
+ Object.keys(fblTempiPonte).forEach(f=>{
+  const t=fblTempiPonte[f];
+  if(!t.n)return;
+  righe.push(f+': '+t.n+' volte, media '+Math.round(t.tot/t.n)+' ms, peggiore '+t.peggio+' ms'
+    +(t.falliti?(', '+t.falliti+' non riuscite'):''));
+ });
+ return righe.join(' | ');
+}
 async function fetchMt5WithTimeout(path,options,timeoutMs){
+ const __t0=performance.now(); let __ok=false;
  // RICHIESTO ESPLICITAMENTE ("su un dispositivo più lento dagli tutto il tempo, l'errore solo se
  // c'è davvero un problema"): i vecchi limiti (1,2-1,5 s per il controllo del bridge, 8 s per le
  // letture) erano pensati per un PC veloce — su uno lento il bridge risponde, ma più tardi, e
@@ -34612,6 +34663,7 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
    let data=null;
    try{ data=await res.json(); }catch(e){ /* risposta senza corpo JSON valido */ }
    if(!res.ok)return {ok:false,message:(data&&data.detail)?data.detail:('Errore HTTP '+res.status)};
+   __ok=true;
    return {ok:true,data};
  }catch(e){
    if(e.name==='AbortError'){
@@ -34620,6 +34672,9 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
    return {ok:false,message:'Bridge locale non raggiungibile su '+base+'.'};
  }finally{
    clearTimeout(timer);
+   // Il tempo si registra SEMPRE, anche quando la chiamata fallisce: un ordine che non parte
+   // dopo venti secondi e' un'informazione piu' importante di uno riuscito in mezzo secondo.
+   fblSegnaTempoPonte(p,performance.now()-__t0,__ok);
  }
 }
 // ===================== NOTIZIE FOREX FACTORY (solo grafico LIVE) =====================
@@ -46291,6 +46346,10 @@ function fblMisuraPrestazioni(secondi){
     candele:(typeof rows!=='undefined'?rows.length:-1),
     modo:(typeof liveModeActive!=='undefined'&&liveModeActive)?'Live':'Storico',
     mt5:(typeof mt5Connected!=='undefined'&&mt5Connected)?'collegato':'no',
+    // QUANTO CI METTE UN ORDINE. E' il numero che conta piu' di tutti in un'app di trading, ed
+    // e' l'unico che non avevamo mai misurato. Si tiene anche il PEGGIORE, non solo la media:
+    // su un ordine la media consola, il caso peggiore e' quello che fa perdere i soldi.
+    tempiPonte:(typeof fblTempiPonteTesto==='function'?(fblTempiPonteTesto()||'nessuna chiamata al ponte finora'):null),
     // IL CONSUMO DI FIREBASE, che si paga a scrittura e a byte: quante volte si e' scritto da
     // quando l'app e' aperta, quante si e' evitato perche' non era cambiato niente, e quanto
     // pesa l'ultima fotografia mandata. Senza questi numeri il consumo si scopre solo dalla

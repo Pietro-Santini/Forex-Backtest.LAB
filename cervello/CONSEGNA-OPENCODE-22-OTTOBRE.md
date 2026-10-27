@@ -390,9 +390,13 @@ disegno (14 disegni in quella misura). Candidati, in ordine di probabilita':
 
 ### L'ordine giusto per lavorarci
 
-1. **7a — il registro tick a blocchi** (`tick_blocchi_DA_APPLICARE.py`). Con 750.000 tick e'
-   diventato ancora piu' urgente di quando e' stato scritto: e' il candidato numero uno per i
-   2.818 ms del cambio asset, e si risolve senza toccare il disegno.
+1. ~~**7a — il registro tick a blocchi**~~ **FATTO da OpenCode il 27 ottobre** (blocchi da 20.000
+   tick + tetto temporale di 3 giorni). VERIFICATO con una misura: con 750.000 tick su 5 asset,
+   un tick nuovo costa **9 ms** invece di riscrivere tutto. Resta un solo salvataggio da **676 ms**,
+   il primo di ogni dispositivo, quando i blocchi non esistono ancora su disco.
+   *Ho provato a spalmare anche quello (coda prima, pochi blocchi vecchi per giro) e la misura ha
+   detto che è PEGGIO: un blocco da 670 ms una volta diventava tredici blocchi da 230 ms sparsi
+   nella sessione. Annullato. Non rifarlo senza una misura che dica il contrario.*
 2. **Altri cronometri dentro `draw()`**, poi una misura nuova. Senza, si ottimizza al buio: la
    prima misura ha gia' smentito due sospetti su due.
 3. **Il tetto dei tick per asset.** 150.000 x 5 asset = 750.000 oggetti in memoria. Vale la pena
