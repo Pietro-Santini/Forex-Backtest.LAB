@@ -11,10 +11,30 @@ Tutto quello che serve, dall'inizio alla fine. **👤 = lo fai tu** · **🤖 = 
 | | Oggi | Dopo |
 |---|---|---|
 | Processori | 2 core | fino a **4** |
-| Memoria | **951 MB** — già al 53% con te solo | fino a **24 GB** |
+| Memoria | 951 MB | fino a **24 GB** |
 | Tetto stimato di utenti | 20-50 | **diverse centinaia** |
 
-La memoria è il limite che oggi condiziona tutto. Con 24 GB sparisce.
+> ⚠️ **CORREZIONE del 27 ottobre 2026, misurata sul server vivo.** Qui c'era scritto
+> «951 MB, già al 53% con te solo — la memoria è il limite che oggi condiziona tutto».
+> **E' falso, e aveva letto male il numero.** Misure reali:
+>
+> | | |
+> |---|---|
+> | Memoria **disponibile** | **596 MB su 951** |
+> | Swap usato | 292 MB su 2048 — **1,7 GB mai toccati** |
+> | Carico CPU | **0,06** su 2 core: ferma al 3% |
+> | Uptime | **20 giorni**, nessun riavvio |
+> | Esaurimenti di memoria | **zero** |
+> | L'app vera (ponte + segnali) | **126 MB** |
+>
+> Linux conta come «usata» anche la cache, che si libera da sola: il numero che conta è
+> *available*. I 475 MB occupati erano quasi tutti sistema (Tailscale 84, Docker 43, registro
+> eventi 31, `fwupd` 28, snapd 24), non l'applicazione.
+>
+> **Spenti `fwupd` e messo un tetto al registro eventi si è passati da 476 a 596 MB disponibili,
+> +25%, gratis.** La migrazione ARM resta un miglioramento sensato per il futuro, ma **non sta
+> riparando niente**: non c'è nessuna emergenza, e nessun motivo di accettare scorciatoie a
+> pagamento per ottenerla.
 
 ---
 
@@ -88,7 +108,8 @@ e 2 OCPU/12 GB hanno dato «out of capacity»):
 | 2° | 2 | 12 GB | 12× |
 | 3° | **1** | **6 GB** | **6×** |
 
-Qualunque di questi **risolve il problema**: il limite di oggi è la memoria (951 MB), non i core.
+Qualunque di questi **da' molto piu' respiro** di oggi; il collo di bottiglia e' la memoria, non
+i core (e vedi la correzione piu' sopra: oggi non e' nemmeno stretta).
 E l'A1.Flex **si ridimensiona a macchina spenta**: partire da 1 OCPU non chiude nessuna porta.
 
 > ⚠️ Deve comparire **«Always Free-eligible»**. Se non c'è, **fermati e dimmelo**: quella
@@ -158,7 +179,48 @@ In ordine:
    cambiare, e non c'è niente di sbagliato.
 
 > **Se resta bloccata, non è un problema tuo e non è urgente.** Il server di oggi funziona: questa
-> migrazione è un **miglioramento**, non una riparazione. Si riprova domani.
+> migrazione è un **miglioramento**, non una riparazione.
+
+## NON SERVE PIÙ PREMERE CREATE A MANO — ci pensa il server (dal 27 ottobre 2026)
+
+Premere «Create» a mano una volta ogni tanto non funziona quasi mai: Oracle libera le ARM a
+sprazzi, spesso di notte e per pochi minuti. **Chi riprova ogni minuto e mezzo giorno e notte,
+prima o poi la prende.**
+
+Sul server attuale gira ora un servizio che fa esattamente questo:
+
+| | |
+|---|---|
+| Servizio | `fbl-arm.service` (riparte da solo dopo un riavvio) |
+| Programma | `/srv/fbl/arm/insisti.sh` |
+| Ritmo | un tentativo ogni ~90 secondi |
+| Taglie | **cicla** fra 4/24, 2/12 e 1/6 — prende il meglio che passa |
+| Quando riesce | **si ferma**, scrive `/srv/fbl/arm/RIUSCITO.txt` con l'indirizzo IP, e non prova mai piu' |
+| Registro | `/srv/fbl/arm/tentativi.log` |
+
+**Perche' cicla fra tre taglie:** quando si libera un posto non si sa di che misura sia. Si chiede
+prima la piu' grande e si scende, invece di aspettare esattamente quella che si era decisa.
+
+**Perche' non puo' fare danni:**
+- se riesce **esce** e non crea una seconda macchina;
+- se l'errore **non e'** di capacita' si ferma e lo scrive, invece di martellare a vuoto;
+- ha un tetto di memoria (`MemoryMax=400M`) e `OOMScoreAdjust=800`: se il sistema dovesse
+  liberare memoria, **sacrifica questo e non il ponte degli ordini**. Ne usa 127 MB.
+
+### Come si controlla a che punto e'
+
+```
+systemctl status fbl-arm.service
+tail -5 /srv/fbl/arm/tentativi.log
+cat /srv/fbl/arm/RIUSCITO.txt      # esiste solo quando ce l'ha fatta
+```
+
+### Le credenziali
+
+Servono una **chiave API Oracle** in `~/.oci/chiave-api.pem` e `~/.oci/config` (permessi 600,
+generati dal proprietario il 27 ottobre 2026 — regione `eu-milan-1`). **A migrazione finita la
+chiave API va cancellata dalla console** (Profilo → API keys): e' una credenziale con pieni
+poteri sull'account e non serve piu'.
 
 > ❌ **Non accettare l'«Upgrade to Paid»** che Oracle propone proprio in quel momento: risolve la
 > capacità e fa partire la fatturazione, cioè esattamente quello che stiamo evitando.
