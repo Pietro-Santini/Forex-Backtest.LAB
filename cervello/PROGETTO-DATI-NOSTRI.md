@@ -285,3 +285,14 @@ Lo strumento c'è già: **impostazioni → Versione → «Misura le prestazioni�
 **Prima di cominciare**, farsi dare dal proprietario una misura di riferimento. **Dopo ogni passo
 della migrazione**, rifarla e confrontare. Se `cloudUltimoPeso_KB` non è crollato, il salvataggio
 incrementale non sta funzionando davvero — e si è spostato lo spreco invece di toglierlo.
+
+
+## Stato passo 3 (scrittura in due posti) — FATTO il 27 ottobre 2026 (rilasciato 2.0.35)
+
+L'app scrive ora su Firebase E sul server Oracle (doppio scritto), e legge dal server con fallback
+su Firebase. I metodi aggiunti a fxbtCloud: serverDatiLeggi, serverDatiScrivi, serverDatiFondi,
+serverTradesAggiungi, serverTradesLeggi, serverDatiAscolta (WebSocket). Il caricamento da cloud
+(initSession) prova prima il server Oracle e ricade su Firebase se non configurato o non raggiungibile.
+Il syncFullStatusToFirebase fa il doppio scritto dopo il save su Firebase. Collaudo locale: 895 test,
+0 fallimenti. Il server Oracle (rotte /dati, SQLite, verifica token Firebase) era gia' pronto dal
+passo 2.

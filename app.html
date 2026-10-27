@@ -1316,6 +1316,71 @@ window.fblAvviaSoloBacktest=function(){
     async tradesConteggio(){
       const l = await this.tradesLeggi();
       return Array.isArray(l) ? l.length : 0;
+    },
+    // === SERVER ORACLE (passo 3 del progetto dati nostri) ===
+    // Il server Oracle e' il nuovo archivio: le rotte /dati sono protette dal token
+    // Firebase e usano SQLite. L'app scrive su Firebase E sul server (doppio scritto)
+    // finche' non e' sicura, poi spegnera' Firestore. La funzione fblServerUrl() costruisce
+    // l'URL del server (https://nome.ts.net:8000); cachedIdToken e' il token Firebase tenuto
+    // sempre pronto in memoria.
+    async serverDatiLeggi(nome){
+      if(!this.uid) return null;
+      try{
+        const url=fblServerUrl(8000)+'/dati/'+encodeURIComponent(nome);
+        const r=await fetch(url,{headers:{'Authorization':'Bearer '+(cachedIdToken||'')}});
+        if(!r.ok) return null;
+        const d=await r.json();
+        return (d&&d.ok)?(d.contenuto??null):null;
+      }catch(e){ console.warn('Lettura dal server Oracle fallita:',e); return null; }
+    },
+    async serverDatiScrivi(nome,contenuto){
+      if(!this.uid) return false;
+      try{
+        const url=fblServerUrl(8000)+'/dati/'+encodeURIComponent(nome);
+        const r=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(cachedIdToken||'')},body:JSON.stringify({contenuto})});
+        return r.ok;
+      }catch(e){ console.warn('Scrittura sul server Oracle fallita:',e); return false; }
+    },
+    async serverDatiFondi(nome,campi){
+      if(!this.uid) return false;
+      try{
+        const url=fblServerUrl(8000)+'/dati/'+encodeURIComponent(nome);
+        const r=await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(cachedIdToken||'')},body:JSON.stringify({contenuto:campi})});
+        return r.ok;
+      }catch(e){ console.warn('Fusione sul server Oracle fallita:',e); return false; }
+    },
+    async serverTradesAggiungi(nuove){
+      if(!this.uid) return false;
+      if(!Array.isArray(nuove)||!nuove.length) return true;
+      try{
+        const url=fblServerUrl(8000)+'/dati/trades/aggiungi';
+        const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(cachedIdToken||'')},body:JSON.stringify({operazioni:nuove})});
+        return r.ok;
+      }catch(e){ console.warn('Aggiunta operazioni sul server Oracle fallita:',e); return false; }
+    },
+    async serverTradesLeggi(){
+      if(!this.uid) return null;
+      try{
+        const url=fblServerUrl(8000)+'/dati/trades';
+        const r=await fetch(url,{headers:{'Authorization':'Bearer '+(cachedIdToken||'')}});
+        if(!r.ok) return null;
+        const d=await r.json();
+        return (d&&d.ok&&Array.isArray(d.lista))?d.lista:null;
+      }catch(e){ console.warn('Lettura operazioni dal server Oracle fallita:',e); return null; }
+    },
+    // Ascolto WebSocket: manda SOLO {nome, versione}, mai il contenuto. Il client decide
+    // se leggere. Cosi' un dispositivo che ha gia' quella versione non scarica niente.
+    serverDatiAscolta(cb){
+      if(!this.uid) return ()=>{};
+      let ws=null, chiuso=false;
+      try{
+        const url='wss://'+fblServer()+':8000/dati/ascolta?token='+encodeURIComponent(cachedIdToken||'');
+        ws=new WebSocket(url);
+        ws.onmessage=(ev)=>{ if(chiuso) return; try{ const d=JSON.parse(ev.data); if(d&&d.nome&&typeof cb==='function') cb(d); }catch(e){} };
+        ws.onclose=()=>{ chiuso=true; };
+        ws.onerror=()=>{ chiuso=true; };
+      }catch(e){ console.warn('Ascolto WebSocket server Oracle fallito:',e); }
+      return ()=>{ chiuso=true; try{ if(ws) ws.close(); }catch(e){} };
     }
   };
 
@@ -7619,6 +7684,16 @@ async function syncFullStatusToFirebase(reason,force){
     fblCloudUltimaFirma = firmaC;
     fblCloudUltimoPeso = testoC ? testoC.length : 0;
     fblCloudScritture++;
+   // DOPPIO SCRITTO sul server Oracle (passo 3 del progetto dati nostri): se il server
+   // e' configurato, si scrive anche li', per poter spegnere Firestore progressivamente.
+   // Firebase resta la rete di sicurezza: se il server fallisce, la scrittura su Firebase
+   // e' gia' riuscita e non si perde niente.
+   if(typeof fblServer==='function' && fblServer() && window.fxbtCloud && window.fxbtCloud.uid){
+    try{ await window.fxbtCloud.serverDatiScrivi('session', trimmedBundle); }catch(e){ console.warn('Scrittura session su server Oracle fallita:', e); }
+    if(tradesNuovi.length){
+     try{ await window.fxbtCloud.serverTradesAggiungi(tradesNuovi); }catch(e){ console.warn('Aggiunta operazioni su server Oracle fallita:', e); }
+    }
+   }
     return;
    }
    const bundleSenzaTrades = {...bundle};
@@ -45710,7 +45785,7 @@ async function writeCapitalCredsToHandle(handle,creds){
 // (o il suo rinnovo dopo un riavvio del browser) richiede un "gesto utente" per funzionare.
 async function getCapitalCredsDirHandle(){
  if(capitalCredsDirHandle)return capitalCredsDirHandle;
- if(!supportsFS){
+ if(fblEMobile()||!supportsFS){
    capitalCredsDirHandle=fblMobileCredsHandle();
    return capitalCredsDirHandle;
  }
@@ -45957,8 +46032,10 @@ fblDelega('click',ev=>{
 });
 async function getMt5CredsDirHandle(){
  if(mt5CredsDirHandle)return mt5CredsDirHandle;
- if(!supportsFS){
+ if(fblEMobile()||!supportsFS){
    // Mobile: archivio interno IndexedDB, nessuna cartella da scegliere.
+   // (anche se il browser mobile moderno esponesse showDirectoryPicker, su mobile non si
+   // usa mai la cartella del dispositivo: e' l'archivio interno a persistere per account.)
    mt5CredsDirHandle=fblMobileCredsHandle();
    return mt5CredsDirHandle;
  }
@@ -47917,26 +47994,51 @@ var __initLocalStateSnapshot=null;
    // Account diverso da chi ha scritto il localStorage (o nessun salvataggio locale valido):
    // proviamo Firestore, se l'utente risulta loggato.
    try{
-     if(currentUid&&!_cloudTimedOut){
-       const cloud=await waitForFxbtCloud();
-       const cloudState=await cloud.load();
-       // Un solo blob, come collectLightSessionState(): contiene già tutte e 4 le sessioni
-       // (backtest/live/backtest_propfirm/live_propfirm) dentro sessionByMode, quindi il
-       // ripristino da cloud le riporta tutte insieme, senza bisogno di pacchetti separati.
-       if(cloudState && cloudState.version===SESSION_VERSION){
-         _comeRipristinato='cloud (account '+String(currentUid).slice(0,6)+'…)';
-         savedState=cloudState;
-         if(cloudState.assetChartViews) cloudAssetChartViews=cloudState.assetChartViews;
-         // Fallback footprint da cloud (celle già aggregate, non il log tick grezzo — vedi
-         // footprintCollectCloudAggregate()): usato SOLO per gli asset senza log tick locale in
-         // IndexedDB (dispositivo/browser nuovo). Per gli asset che invece hanno già un log
-         // locale, quello resta sempre la copia "vera" — footprintRebuildBucketsForCurrentAsset()
-         // preferisce il log locale quando c'è.
-         if(cloudState.footprintCells && typeof cloudState.footprintCells==='object'){
-           for(const assetKey in cloudState.footprintCells){
-             if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
-               footprintCloudCellsByAsset[assetKey]=cloudState.footprintCells[assetKey];
+     let cloudState=null;
+     // Prova il server Oracle (se configurato): e' il nuovo archivio.
+     if(typeof fblServer==='function' && fblServer() && window.fxbtCloud && window.fxbtCloud.uid){
+       try{
+         const serverState=await window.fxbtCloud.serverDatiLeggi('session');
+         if(serverState && serverState.version===SESSION_VERSION){
+           cloudState=serverState;
+           _comeRipristinato='server Oracle (account '+String(currentUid).slice(0,6)+'…)';
+           if(serverState.assetChartViews) cloudAssetChartViews=serverState.assetChartViews;
+           if(serverState.footprintCells && typeof serverState.footprintCells==='object'){
+             for(const assetKey in serverState.footprintCells){
+               if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
+                 footprintCloudCellsByAsset[assetKey]=serverState.footprintCells[assetKey];
+             }
            }
+           const serverTrades=await window.fxbtCloud.serverTradesLeggi();
+           if(Array.isArray(serverTrades) && serverTrades.length && (!cloudState.trades || !cloudState.trades.length))
+             cloudState.trades=serverTrades;
+         }
+       }catch(e){ console.warn('Lettura dal server Oracle fallita, fallback su Firebase:', e); cloudState=null; }
+     }
+     // Fallback su Firebase (rete di sicurezza): se il server non e' configurato o non risponde,
+     // si legge da Firebase come prima. L'utente non si accorge di niente.
+     if(!cloudState && currentUid && !_cloudTimedOut){
+       const cloud=await waitForFxbtCloud();
+       const firebaseState=await cloud.load();
+       if(firebaseState && firebaseState.version===SESSION_VERSION){
+         cloudState=firebaseState;
+         _comeRipristinato='cloud (account '+String(currentUid).slice(0,6)+'…)';
+         if(firebaseState.assetChartViews) cloudAssetChartViews=firebaseState.assetChartViews;
+         if(firebaseState.footprintCells && typeof firebaseState.footprintCells==='object'){
+           for(const assetKey in firebaseState.footprintCells){
+             if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
+               footprintCloudCellsByAsset[assetKey]=firebaseState.footprintCells[assetKey];
+           }
+         }
+       }
+     }
+     if(cloudState){
+       savedState=cloudState;
+       if(cloudState.assetChartViews) cloudAssetChartViews=cloudState.assetChartViews;
+       if(cloudState.footprintCells && typeof cloudState.footprintCells==='object'){
+         for(const assetKey in cloudState.footprintCells){
+           if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
+             footprintCloudCellsByAsset[assetKey]=cloudState.footprintCells[assetKey];
          }
        }
      }
