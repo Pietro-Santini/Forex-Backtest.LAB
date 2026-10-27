@@ -52,19 +52,49 @@ Compute → Istanze → Crea istanza:
 spesso. Si riprova a ore diverse, oppure si cambia *dominio di disponibilità* nella stessa
 regione. **Non pagare per aggirarlo**: la capacità si libera.
 
-### Passo 2 — Preparare la macchina nuova
+### Passo 2 — PRIMA I DATI, POI LA PREPARAZIONE (l'ordine conta)
+
+> **Perche' in quest'ordine, ed e' il punto che evita il conflitto piu' insidioso.**
+>
+> La chiave del server NON arriva dal server: e' il PC che prende la coppia {indirizzo, chiave}
+> dalla propria memoria e la PUBBLICA sull'account Google (`fblCollegamentoPubblica`); da li' gli
+> altri dispositivi la ricevono da soli, senza digitare niente.
+>
+> `prepara_server.sh`, su una macchina vuota, **genera una chiave nuova**. Se in quella finestra
+> un dispositivo si collegasse al server nuovo, il PC pubblicherebbe sull'account una coppia che
+> il server non riconosce - e TUTTI i dispositivi si allineerebbero a quella sbagliata, telefono
+> compreso.
+>
+> Mettendo i dati PRIMA, lo script trova `accesso_remoto.json` gia' li' e **non genera niente**
+> (il controllo e' `if [ ! -f "$DATI/accesso_remoto.json" ]`). La chiave non cambia mai, neanche
+> per un minuto, e con lei restano al loro posto `utenti_server.json` (la chiave legata al tuo
+> account Google) e `pc.json`.
+
+**a) Dal tuo PC**, manda la copia sulla macchina nuova:
 
 ```
-ssh -i ssh-key-2026-10-06.key ubuntu@IP-DELLA-NUOVA
+scp -i ssh-key-2026-10-06.key "C:/Users/pietro/Documents/FBL-backup-server/fbl-dati-20261027.tgz" ubuntu@IP-DELLA-NUOVA:/tmp/
+```
+
+**b) Sulla macchina nuova**, mettila al suo posto PRIMA di qualunque altra cosa:
+
+```
+sudo mkdir -p /srv/fbl && sudo chown -R ubuntu /srv/fbl
+sudo tar xzf /tmp/fbl-dati.tgz -C /srv/fbl
+sudo chown -R ubuntu /srv/fbl/dati
+ls -la /srv/fbl/dati/accesso_remoto.json    # deve esistere: e' la prova che la chiave non cambiera'
+```
+
+**c) Solo adesso** si prepara il server:
+
+```
 curl -fsSLO https://raw.githubusercontent.com/Pietro-Santini/Forex-Backtest.LAB/main/server_oracle/prepara_server.sh
 bash prepara_server.sh
 ```
 
-Lo script fa tutto: Docker, Tailscale, progetto, servizi. Alla fine stampa il nome Tailscale
-**nuovo** (probabilmente `pietro-1.tail83d918.ts.net`) e una chiave d'accesso **nuova**.
-
-**Ignora quella chiave:** al passo 4 viene sostituita da quella vecchia, così i dispositivi non
-devono reinserire niente.
+Lo script fa tutto (Docker, Tailscale, progetto, servizi) e alla fine stampa la chiave: **deve
+essere la stessa di oggi**. Se ne stampa una diversa, qualcosa non e' andato al suo posto al
+punto (b): fermati e dimmelo.
 
 ### Passo 3 — Verificare che la nuova macchina funzioni, PRIMA di toccare la vecchia
 
@@ -75,25 +105,10 @@ curl -s http://127.0.0.1:8000/health
 Deve rispondere `{"ok": true, ...}`. Se non risponde, **fermati qui**: la vecchia è ancora viva e
 non hai perso niente.
 
-### Passo 4 — Portare i dati
+### Passo 4 — I dati sono gia' al loro posto
 
-Dal tuo PC (la copia è già pronta e verificata):
-
-```
-scp -i ssh-key-2026-10-06.key "C:/Users/pietro/Documents/FBL-backup-server/fbl-dati-20261027.tgz" ubuntu@IP-DELLA-NUOVA:/tmp/
-```
-
-Poi sulla macchina nuova:
-
-```
-sudo docker compose -f /srv/fbl/progetto/server_oracle/docker-compose.yml down
-sudo tar xzf /tmp/fbl-dati.tgz -C /srv/fbl
-sudo chown -R ubuntu /srv/fbl/dati
-sudo docker compose -f /srv/fbl/progetto/server_oracle/docker-compose.yml up -d
-curl -s http://127.0.0.1:8000/health
-```
-
-Il `down` prima di estrarre serve a non sovrascrivere file mentre qualcuno li sta leggendo.
+Sono stati messi al passo 2, PRIMA di preparare il server: e' quello che impedisce alla chiave
+di cambiare. Qui non c'e' niente da fare.
 
 ### Passo 5 — Provare davvero, con la vecchia ancora accesa
 
@@ -126,7 +141,11 @@ davvero, altrimenti rischi che ti tolgano la ARM nuova invece della vecchia.
 
 ## 4. Cosa NON cambia
 
-- La chiave d'accesso dell'app (la porti con i dati, passo 4)
+- **La chiave d'accesso dell'app**: non viene mai rigenerata, perche' i dati si mettono PRIMA
+  di preparare il server (passo 2). E' la differenza fra una migrazione pulita e un conflitto
+  sull'account Google.
+- **La chiave legata al tuo account Google** (`utenti_server.json`): si porta con i dati, e
+  l'ho riaperta dalla copia per leggerla - c'e' il tuo uid e la tua email.
 - L'indirizzo che i dispositivi hanno salvato (se fai il passo 6)
 - Il PC: continua a registrarsi da solo al server, come fa oggi
 - Firebase: non c'entra niente con questa migrazione
