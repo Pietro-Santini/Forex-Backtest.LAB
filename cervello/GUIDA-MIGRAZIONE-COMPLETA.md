@@ -1,0 +1,238 @@
+# Migrazione del server su Oracle ARM — guida completa
+
+Tutto quello che serve, dall'inizio alla fine. **👤 = lo fai tu** · **🤖 = lo faccio io via SSH**
+
+**Tempo:** ~20 minuti in tutto. **Costo:** zero, è dentro il piano gratuito che hai già.
+
+---
+
+## PERCHÉ LA FACCIAMO
+
+| | Oggi | Dopo |
+|---|---|---|
+| Processori | 2 core | fino a **4** |
+| Memoria | **951 MB** — già al 53% con te solo | fino a **24 GB** |
+| Tetto stimato di utenti | 20-50 | **diverse centinaia** |
+
+La memoria è il limite che oggi condiziona tutto. Con 24 GB sparisce.
+
+---
+
+## LE DUE TRAPPOLE, da leggere prima di toccare qualsiasi cosa
+
+### Trappola 1 — La chiave legata al tuo account Google
+
+L'app **non prende la chiave dal server**: è il tuo PC che pubblica la coppia
+`{indirizzo, chiave}` sull'account Google, e gli altri dispositivi la ricevono da lì.
+
+`prepara_server.sh`, su una macchina vuota, **genera una chiave nuova**. Se in quel momento un
+dispositivo si collegasse al server nuovo, il PC pubblicherebbe sull'account una coppia che il
+server non riconosce, e **tutti i dispositivi si allineerebbero a quella sbagliata**.
+
+> **La cura:** si mettono i dati **PRIMA** di preparare il server. Lo script trova la chiave già
+> lì e non ne genera un'altra. È il passo 3, e l'ordine non va invertito.
+
+### Trappola 2 — Il nome di rete
+
+I dispositivi cercano il server su **`pietro.tail83d918.ts.net`**, salvato su ognuno. Una macchina
+nuova entra in Tailscale con un nome **diverso** (`pietro-1`).
+
+> **La cura:** alla fine si rimuove la vecchia da Tailscale e si **rinomina la nuova `pietro`**.
+> È il passo 7, ed è quello da non saltare.
+
+---
+
+## PRIMA DI COMINCIARE
+
+**🤖 La copia di sicurezza è già fatta e verificata** (riaperta e letta: 38 file, chiave
+d'accesso e chiave dell'account comprese):
+
+```
+C:\Users\pietro\Documents\FBL-backup-server\fbl-dati-20261027.tgz
+```
+
+**👤 Tieni a portata di mano la chiave pubblica**, ti serve al passo 1g:
+
+```
+C:\Users\pietro\Documents\FBL-backup-server\chiave-pubblica-per-oracle.txt
+```
+
+⚠️ **Non spegnere e non cancellare la macchina attuale.** Resta accesa fino alla fine: è la rete
+di sicurezza.
+
+---
+
+# PASSO 1 👤 — Creare l'istanza (console Oracle)
+
+**a)** Vai su **cloud.oracle.com** e accedi.
+
+**b)** Menu ☰ → **Compute** → **Instances**.
+
+**c)** Controlla la **regione** in alto a destra: deve essere la stessa del server di oggi.
+
+**d)** Premi **«Create instance»**.
+
+**e) Nome:** `fbl-arm`
+
+**f) Immagine e forma** — riquadro «Image and shape» → **«Edit»**:
+
+- **Immagine:** «Change image» → **Canonical Ubuntu** → **22.04** o **24.04** → «Select image»
+- **Forma:** «Change shape» → scheda **«Ampere»** → **`VM.Standard.A1.Flex`**
+  - **OCPU: 4**
+  - **Memory: 24 GB**
+
+> ⚠️ Deve comparire **«Always Free-eligible»**. Se non c'è, **fermati e dimmelo**: quella
+> configurazione verrebbe fatturata.
+
+**g) Chiave SSH** — riquadro «Add SSH keys»:
+
+- scegli **«Paste public keys»** (**NON** «Generate a key pair for me»)
+- apri `chiave-pubblica-per-oracle.txt`, copia **tutta la riga**, incollala
+
+> ⚠️ Con una chiave generata da Oracle io non entro più con quella di oggi.
+
+**h) Rete** — riquadro «Networking»: verifica che **«Assign a public IPv4 address»** sia su **Yes**.
+
+**i) Disco** — «Boot volume»: lascia il valore predefinito (46-50 GB). Oggi ne usi 7,6.
+
+**l)** Premi **«Create»**. In un paio di minuti lo stato diventa **Running** (verde).
+
+**m)** Copia il **«Public IP address»** (tipo `140.238.xxx.xxx`).
+
+### 👤 MANDAMI QUESTO
+
+```
+IP: 140.238.xxx.xxx
+```
+
+---
+
+## SE ORACLE DICE «OUT OF CAPACITY»
+
+È il messaggio più comune con le ARM gratuite e **non è un errore tuo**: in quel momento, in quel
+dominio, non ci sono macchine ARM libere.
+
+In ordine:
+1. **Riprova subito**, premendo di nuovo «Create».
+2. **Cambia dominio di disponibilità** (riquadro «Placement»): AD-1, AD-2, AD-3.
+3. **Riprova a ore diverse** — spesso di notte o presto la mattina.
+4. **Prova con meno:** 2 OCPU e 12 GB. Sono comunque **dodici volte** la memoria di oggi, e si
+   alza dopo senza rifare niente.
+
+> ❌ **Non accettare l'«Upgrade to Paid»** che Oracle propone proprio in quel momento: risolve la
+> capacità e fa partire la fatturazione, cioè esattamente quello che stiamo evitando.
+
+---
+
+# PASSO 2 🤖 — Rifaccio la copia, fresca di minuti
+
+Prima di toccare qualunque cosa rifaccio il salvataggio dal server attuale, così la copia è di
+pochi minuti prima e non di ore.
+
+---
+
+# PASSO 3 🤖 — I DATI PRIMA, POI LA PREPARAZIONE
+
+**L'ordine che evita la Trappola 1.** Sulla macchina nuova:
+
+```
+sudo mkdir -p /srv/fbl && sudo chown -R ubuntu /srv/fbl
+sudo tar xzf /tmp/fbl-dati.tgz -C /srv/fbl
+sudo chown -R ubuntu /srv/fbl/dati
+```
+
+Verifico che `accesso_remoto.json` sia al suo posto: è la prova che la chiave **non cambierà**.
+
+**Solo dopo** preparo il server:
+
+```
+bash prepara_server.sh
+```
+
+Lo script installa Docker, Tailscale, il progetto e avvia i servizi. Alla fine stampa la chiave:
+**deve essere identica a quella di oggi**. Se è diversa, mi fermo e te lo dico.
+
+---
+
+# PASSO 4 🤖 — Verifico che risponda
+
+```
+curl -s http://127.0.0.1:8000/health
+```
+
+Deve dare `{"ok": true, ...}`. Controllo anche le rotte `/dati` e che un token falso venga
+rifiutato.
+
+Se qualcosa non va, **mi fermo qui**: la macchina vecchia è ancora accesa e non hai perso niente.
+
+---
+
+# PASSO 5 👤 — Provi tu, con la vecchia ancora accesa
+
+Ti do il nome nuovo (tipo `pietro-1.tail83d918.ts.net`). Nell'app, impostazioni → Collegamento,
+mettilo **temporaneamente** al posto di quello attuale e verifica:
+
+- il pannello **segnali** si collega
+- le posizioni **Kraken** si vedono
+- il **PC** risulta registrato
+
+> **Finché questo non funziona, non spegniamo niente.**
+
+---
+
+# PASSO 6 👤 — Il nome (IL PASSO DA NON SALTARE)
+
+Su **login.tailscale.com** → **Machines**:
+
+1. **rimuovi** la macchina vecchia
+2. **rinomina** la nuova in **`pietro`**
+
+Dopo qualche secondo la nuova risponde su **`pietro.tail83d918.ts.net`** — l'indirizzo che tutti i
+dispositivi hanno già salvato.
+
+**Rimetti quell'indirizzo nell'app** e da lì in poi tutto torna come prima, su ogni dispositivo,
+senza digitare altro.
+
+---
+
+# PASSO 7 👤 — Spegnere la vecchia, ma non cancellarla
+
+Lascia l'istanza vecchia **spenta ma esistente per qualche giorno**. Se salta fuori qualcosa, si
+riaccende in un minuto.
+
+⚠️ Oracle recupera le istanze **inattive** del piano gratuito: quando sei sicuro, **cancellala
+davvero**, altrimenti rischi che ti tolgano la ARM nuova al posto della vecchia.
+
+---
+
+## COSA NON CAMBIA
+
+- **La chiave d'accesso**: non viene mai rigenerata (passo 3)
+- **La chiave legata al tuo account Google** (`utenti_server.json`): si porta con i dati — l'ho
+  riaperta dalla copia per leggerla, c'è il tuo uid e la tua email
+- **L'indirizzo salvato sui dispositivi**: resta valido grazie al passo 6
+- **Il PC**: continua a registrarsi da solo
+- **Firebase**: non c'entra niente con questa migrazione
+- **Conto, posizioni, Trade Journal**: non sono su questo server — stanno su Firestore e in locale.
+  **La migrazione non può toccarli.**
+
+## COME SI TORNA INDIETRO
+
+Fino al passo 6 la macchina vecchia è intatta: rimetti l'indirizzo vecchio nell'app e sei
+esattamente come adesso. Dopo il passo 6, si riaccende la vecchia e si rinomina lei `pietro`.
+
+## COSA NON FARE
+
+- ❌ Spegnere o cancellare la macchina attuale prima del passo 7
+- ❌ Scegliere «Generate a key pair for me» al passo 1g
+- ❌ Accettare l'upgrade a pagamento se compare l'errore di capacità
+- ❌ Cambiare regione
+- ❌ Collegare l'app al server nuovo **prima** del passo 3 (è la Trappola 1)
+
+## DOPO LA MIGRAZIONE
+
+Con 24 GB di memoria il passo successivo naturale è il **backup automatico giornaliero** di
+`/srv/fbl/dati`: sono 348 KB compressi, un mese di copie sta in 10 MB.
+
+Vale soprattutto adesso che su quel disco stanno per arrivare **i dati di tutti gli utenti**
+(`dati_utenti.db`): fino a ieri lì c'era solo configurazione, da domani c'è il conto della gente.
