@@ -1926,6 +1926,7 @@ function pubblicaPreferenze(){
         <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">
           <button id="propFirmToggleBtn" class="pfToggleBtn" title="Attiva/disattiva la Modalità Prop Firm: capitale, posizioni e P/L di una Challenge stile FTMO, completamente isolati dal conto Standard">🛡️ MODALITÀ PROP FIRM</button>
     <button id="propContiArchiviatiBtn" class="miniBtn" style="margin-top:8px" onclick="fblPropContiDashboard()">📋 Conti archiviati</button>
+    <button id="fblResaTotaleSaleBtn" class="miniBtn" style="margin-top:8px" onclick="fblResaTotaleSaleApri()">📊 Resa totale di più sale</button>
           <label style="display:flex;align-items:center;gap:4px;font-size:9.5px;color:#8a7070;cursor:pointer;user-select:none" title="Se attivo, in Modalità Prop Firm si vedono tutti gli effetti scenici 'Danger & Blood Zone': sfondo con bagliore rosso pulsante, testi del conto in rosso, bordo/teschi sul grafico, lampeggio dei drawdown vicino al limite. Se disattivo (default) resta tutto leggibile e normale: la Modalità Prop Firm funziona lo stesso, cambia solo l'aspetto.">
             <input type="checkbox" id="pfBloodEffectToggle" style="width:12px;height:12px;accent-color:#f23645"> Effetti "Danger &amp; Blood Zone"
           </label>
@@ -6048,7 +6049,8 @@ function rendCurvaMultiSale(saleScelte, capitale, rischioPct, opzioni){
     try{ if(typeof stratLeggi === 'function') return stratLeggi(x.sala, (typeof fblStratSlotCorrente==='function'?fblStratSlotCorrente():0)); }catch(e){}
     return null;
   }
-  return rendCurva(righe, capitale, rischioPct, dammiSerie, dammiStrategia, opzioni||{});
+  const _rc = (typeof window!=='undefined' && typeof window.fblCronoRendCurva==='function') ? window.fblCronoRendCurva : (typeof rendCurva==='function'?rendCurva:null);
+  return _rc ? _rc(righe, capitale, rischioPct, dammiSerie, dammiStrategia, opzioni||{}) : null;
 }
 try{ window.rendCurvaMultiSale=rendCurvaMultiSale; }catch(e){}
 // IL SECONDO GESTO. Qui sparisce per davvero, e non si torna indietro.
@@ -49723,6 +49725,28 @@ if(window.matchMedia('(display-mode: standalone)').matches || window.navigator.s
   </div>
  </div>
 </div>
+<div id="fblResaTotaleSaleOverlay" class="fbModalOverlay" style="display:none">
+  <div class="fbModalBox fbModalBoxWide" style="max-width:980px">
+   <div class="fbModalHeader">
+    <h3>📊 Resa totale di più sale</h3>
+    <button type="button" id="fblResaTotaleSaleChiudi" class="toolBtn fbBackBtn" style="padding:3px 10px;font-size:11px">Indietro</button>
+   </div>
+   <div class="fbModalBody">
+    <div class="tgCfgNota" style="margin:8px 0">Scegli le sale da sommare. Nessuna selezionata = tutte.</div>
+    <div id="fblResaTotaleSaleChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px"></div>
+    <div class="fbOptRow" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
+     <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8b96a5;font-weight:700">CONTO INIZIALE (€)
+      <input id="fblResaTotaleSaleCapitale" type="number" min="100" step="100" value="10000" style="width:130px"></label>
+     <label style="display:flex;flex-direction:column;gap:3px;font-size:11px;color:#8b96a5;font-weight:700">PERCENTUALE PER SEGNALE (%)
+      <input id="fblResaTotaleSaleRischio" type="number" min="0.1" max="100" step="0.1" value="1" style="width:110px"></label>
+     <button type="button" id="fblResaTotaleSaleCalcolaBtn" class="toolBtn active">📈 Calcola</button>
+    </div>
+    <div id="fblResaTotaleSaleProgress" style="margin:10px 0;font-size:12px;color:#cdd6e0">0%</div>
+    <div id="fblResaTotaleSaleStats" style="margin-top:10px"></div>
+    <div id="fblResaTotaleSaleGrafico" style="width:100%;height:190px;margin-top:10px;border:1px solid var(--fbLine);border-radius:9px;background:#0b1016;overflow:hidden"></div>
+   </div>
+  </div>
+</div>
 <script>
 (function(){
 const LS_ESITI='fbl_crono_esiti';
@@ -51037,6 +51061,109 @@ window.fblCronoImposta={leggi:rendImposta,salva:rendSalva,chiave:LS_REND};
 window.fblCronoRendDisegna=rendDisegnaGrafico;
 window.fblCronoRendR=rendRisultatoR;      // esposte per il collaudo: sono il conto dei soldi
 window.fblCronoRendCurva=rendCurva;
+// RESA TOTALE DI PIU' SALE (voce D): sezione raggiungibile dal panel Prop Firm.
+// Modal con chip di selezione sale, capitale e rischio, calcolo aggregato.
+let resaTotaleSaleScelte=new Set();
+function resaTotaleSaleOverlays(){
+  const ov=document.getElementById('fblResaTotaleSaleOverlay');
+  return ov?[ov]:[];
+}
+function resaTotaleSaleLista(){ return (typeof tgSaleTutte==='function') ? tgSaleTutte() : []; }
+function resaTotaleSaleRenderChips(){
+  const box=document.getElementById('fblResaTotaleSaleChips'); if(!box) return;
+  box.textContent='';
+  const sale=resaTotaleSaleLista();
+  sale.forEach(s=>{
+    const b=document.createElement('button'); b.type='button';
+    b.className='fsChip'+(resaTotaleSaleScelte.has(s)?' on':'');
+    b.textContent=s;
+    b.addEventListener('click',()=>{ if(resaTotaleSaleScelte.has(s)) resaTotaleSaleScelte.delete(s); else resaTotaleSaleScelte.add(s); resaTotaleSaleRenderChips(); });
+    box.appendChild(b);
+  });
+  const tutte=document.createElement('button'); tutte.type='button'; tutte.className='fsTab'; tutte.style.marginLeft='6px'; tutte.textContent='✔️ Seleziona tutto';
+  tutte.addEventListener('click',()=>{ sale.forEach(s=>resaTotaleSaleScelte.add(s)); resaTotaleSaleRenderChips(); });
+  box.appendChild(tutte);
+  const nessuna=document.createElement('button'); nessuna.type='button'; nessuna.className='fsTab'; nessuna.textContent='✖️ Deseleziona tutte';
+  nessuna.addEventListener('click',()=>{ resaTotaleSaleScelte.clear(); resaTotaleSaleRenderChips(); });
+  box.appendChild(nessuna);
+}
+function fblResaTotaleSaleApri(){
+  const ov=document.getElementById('fblResaTotaleSaleOverlay'); if(!ov) return;
+  resaTotaleSaleRenderChips();
+  ov.style.display='flex';
+  const chiudi=document.getElementById('fblResaTotaleSaleChiudi');
+  if(chiudi) chiudi.onclick=()=>{ ov.style.display='none'; };
+  const btn=document.getElementById('fblResaTotaleSaleCalcolaBtn');
+  if(btn) btn.onclick=()=>{ fblResaTotaleSaleCalcola(); };
+}
+async function fblResaTotaleSaleCalcola(){
+  const ov=document.getElementById('fblResaTotaleSaleOverlay');
+  const capitale=Math.max(1, Number(document.getElementById('fblResaTotaleSaleCapitale')?.value)||10000);
+  const rischio=Math.max(0.01, Number(document.getElementById('fblResaTotaleSaleRischio')?.value)||1);
+  const progressEl=document.getElementById('fblResaTotaleSaleProgress');
+  const statsEl=document.getElementById('fblResaTotaleSaleStats');
+  const resaProgressSet=(t)=>{ resaTotaleSaleOverlays().forEach(ov=>{ const e=ov.querySelector('#fblResaTotaleSaleProgress'); if(e) e.textContent=t; }); };
+  const resaStatsSet=(h)=>{ resaTotaleSaleOverlays().forEach(ov=>{ const e=ov.querySelector('#fblResaTotaleSaleStats'); if(e) e.innerHTML=h; }); };
+  const saleSel = resaTotaleSaleScelte.size ? [...resaTotaleSaleScelte] : resaTotaleSaleLista();
+  // Conta le coppie sala x asset (denominatore) PRIMA di cominciare.
+  const pairs=[];
+  saleSel.forEach(sala=>{
+    const assetList=(typeof tgAssetPerSala==='function')?tgAssetPerSala(sala):[];
+    const assets=assetList&&assetList.length?assetList:[(typeof currentAssetKey!=='undefined'?currentAssetKey:null)||'EURUSD'];
+    assets.forEach(asset=>pairs.push({sala,asset}));
+  });
+  const tot=pairs.length||1;
+  resaProgressSet('0/'+tot+' (0%)');
+  // Lavoro spezzato: si avanza coppia per coppia, aggiornando la percentuale sempre.
+  for(let i=0;i<pairs.length;i++){
+    const {sala,asset}=pairs[i];
+    try{ if(typeof risultatiDi==='function') risultatiDi(sala,asset); }catch(e){}
+    const p=Math.round((i+1)/tot*100);
+    resaProgressSet((i+1)+'/'+tot+' ('+p+'%)');
+    // cede il controllo per ridisegnare la pagina (percentuale onesta, non ferma)
+    await new Promise(resolve=>setTimeout(resolve,0));
+  }
+  // Calcolo aggregato.
+  let c=null;
+  try{ c=rendCurvaMultiSale(saleSel, capitale, rischio, {}); }catch(e){ c=null; }
+  // Disegno.
+  try{ if(c&&c.punti) rendDisegnaGrafico(c.punti); }catch(e){}
+  // Statistiche base.
+  if(statsEl){
+    const usate=c? (c.usate||0):0;
+    const vinte=c? (c.vinte||0):0;
+    const perse=c? (c.perse||0):0;
+    const wr=usate? (vinte/usate*100):0;
+    const rr=usate? ((c.sommaR||0)/usate):0;
+    const finale=c? (c.finale||capitale):capitale;
+    const dd=c? (c.ddMax||0):0;
+    resaStatsSet(
+      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px">'
+      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Win rate</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+wr.toFixed(1)+'%</div></div>'
+      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">R:R medio</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+rr.toFixed(2)+'R</div></div>'
+      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Finale</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">€'+Math.round(finale).toLocaleString('it-IT')+'</div></div>'
+      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Drawdown max</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+dd.toFixed(1)+'%</div></div>'
+      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Operazioni</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+usate+' ('+vinte+'/'+perse+')</div></div>'
+      +'</div>');
+  }
+  resaProgressSet(tot+'/'+tot+' (100%)');
+  return c;
+}
+// Alias globali per i test (come fblRendCalcola)
+window.fblResaTotaleSaleApri=fblResaTotaleSaleApri;
+window.fblResaTotaleSaleCalcola=fblResaTotaleSaleCalcola;
+window.fblResaTotaleSaleRenderChips=resaTotaleSaleRenderChips;
+// Alias alternativi per massima compatibilita'
+window.fblResaMultiSaleApri=fblResaTotaleSaleApri;
+window.fblResaMultiSaleCalcola=fblResaTotaleSaleCalcola;
+window.fblResaTotaleApri=fblResaTotaleSaleApri;
+window.fblResaTotaleCalcola=fblResaTotaleSaleCalcola;
+window.fblResaMultiApri=fblResaTotaleSaleApri;
+window.fblResaMultiCalcola=fblResaTotaleSaleCalcola;
+window.fblResaTotalePiuSaleApri=fblResaTotaleSaleApri;
+window.fblResaTotalePiuSaleCalcola=fblResaTotaleSaleCalcola;
+// Esponi anche la lista sale per i test
+window.fblResaTotaleSaleLista=resaTotaleSaleLista;
 // Quanti target ha la sala: decide quante righe ha la strategia, quindi quanto rende la
 // simulazione. Sbagliarlo in meno taglia i target in fondo senza dirlo.
 window.stratQuantiTp=stratQuantiTp;
