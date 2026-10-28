@@ -38,14 +38,25 @@ test('un giorno che scende oltre il 5% chiude la prop, e si dice QUALE giorno', 
 });
 
 test('raggiunto il +10% la prop e\' SBLOCCATA: il 5% giornaliero successivo non vale piu\'', async () => {
-  // Il 2 gennaio il conto arriva a 11.000 = +10% (obiettivo). Il 3 gennaio perde il 7,3%: NON
-  // deve contare, perche' la prop era gia' stata sbloccata il giorno prima.
+  // Il conto sale fino a 11.000 = +10% (obiettivo) e il giorno dopo perde il 7,3%: quella
+  // perdita NON deve contare, perche' la prop era gia' stata sbloccata.
+  //
+  // ALLUNGATO IL 28 OTTOBRE 2026 col passo 3. Prima la salita stava in UNA giornata, e da quando
+  // esiste la regola FTMO dei 4 giorni minimi quell'obiettivo non sblocca piu' niente -
+  // giustamente: serve a impedire di passare con un colpo di fortuna. Questo test non parlava
+  // dei giorni, parlava di cosa succede DOPO che si e' sbloccata: la salita e' ora distribuita
+  // su cinque giornate e l'affermazione resta identica.
   const r = await conta(
-    [{t:U(2,12), cap:11000}, {t:U(3,12), cap:10200}],
+    [{t:U(2,12), cap:10200}, {t:U(3,12), cap:10400}, {t:U(4,12), cap:10600},
+     {t:U(5,12), cap:10800}, {t:U(6,12), cap:11000}, {t:U(7,12), cap:10200}],
     10000, U(2,0)
   );
-  assert.equal(r.esito, 'sbloccata');
-  assert.equal(r.esitoData, '2026-01-02');
+  // SI GUARDA LA SFIDA 1, non il verdetto finale. Dal passo 3 il two step ha due sfide, e
+  // «sbloccata» vuol dire che sono passate TUTTE E DUE - cioe' conto finanziato. Qui si voleva
+  // misurare un'altra cosa: che una perdita ARRIVATA DOPO non annulla un obiettivo gia'
+  // raggiunto. Quella resta vera, e si legge sulla fase.
+  assert.equal(r.fasi[0].esito, 'passata');
+  assert.equal(r.fasi[0].data, '2026-01-06');
 });
 
 test('senza violazioni e senza obiettivo resta "ok", col profitto finale dichiarato', async () => {
@@ -108,15 +119,23 @@ test('riportando la curva sul conto iniziale il VERDETTO non cambia: cambiano gl
 });
 
 test('anche l\'obiettivo +10% si misura sul conto iniziale', async () => {
-  // Dal giorno dell'apertura il conto sale del 10% (da 30.000 a 33.000 sulla curva vera): con il
-  // conto iniziale di 10.000 l'obiettivo e' 11.000, e si raggiunge nello stesso giorno.
+  // Dal giorno dell'apertura il conto sale del 10% sulla curva vera (da 30.000 a 33.000): con il
+  // conto iniziale di 10.000 l'obiettivo e' 11.000, e si raggiunge.
+  //
+  // ALLUNGATO IL 28 OTTOBRE 2026 col passo 3, per la regola dei 4 giorni minimi (vedi il test
+  // piu' sopra). Quello che questo test afferma non cambia: le percentuali sono rapporti, quindi
+  // una salita del 10% sulla curva vera resta una salita del 10% riportata sul conto iniziale,
+  // che la si faccia in un giorno o in cinque.
   const r = await conta(
-    [{t:U(1,12), cap:30000}, {t:U(2,12), cap:33000}],
+    [{t:U(1,12), cap:30000}, {t:U(2,12), cap:30600}, {t:U(3,12), cap:31200},
+     {t:U(4,12), cap:31800}, {t:U(5,12), cap:32400}, {t:U(6,12), cap:33000}],
     10000, U(2,0)
   );
-  assert.equal(r.esito, 'sbloccata');
+  // Come sopra: si guarda la SFIDA 1. Il verdetto finale resta «ok» perche' la sfida 2 non ha
+  // ancora avuto giornate in cui giocarsi - e dirlo «sbloccato» sarebbe falso.
+  assert.equal(r.fasi[0].esito, 'passata');
   assert.equal(r.base, 10000);
-  assert.equal(r.esitoData, '2026-01-02');
+  assert.equal(r.fasi[0].data, '2026-01-06');
 });
 
 // ---------------------------------------------------------------------------------------------

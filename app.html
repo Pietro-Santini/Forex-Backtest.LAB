@@ -50104,23 +50104,73 @@ function fblPropDedicataConta(punti,capitale,apertoMs){
  let maxDDGiorno=0, maxDDGiornoData=null, maxDDTot=0;
  dopo.forEach(p=>{ const dd=base>0?(base-p.cap)/base*100:0; if(dd>maxDDTot)maxDDTot=dd; });
  giorni.forEach(g=>{ const dd=base>0?(g.start-g.min)/base*100:0; if(dd>maxDDGiorno){ maxDDGiorno=dd; maxDDGiornoData=g.k; } });
- // In ordine, giorno per giorno: prima la perdita della giornata, poi il massimo totale, poi
- // l'obiettivo a fine giornata. Si scorre cronologicamente perche' conta QUALE arriva prima:
- // chi viola il 15 non puo' essere «sbloccato» dal 20.
- let esito='ok', esitoData=null;
- for(const g of giorni){
-  const ddG=base>0?(g.start-g.min)/base*100:0;
-  if(ddG>5){ esito='finita'; esitoData=g.k; break; }
-  // Il massimo totale si controlla QUI DENTRO, sul minimo toccato in giornata, e non alla fine:
-  // cosi' la data che si mostra e' il giorno in cui si e' sfondato davvero, invece del giorno
-  // con la peggior perdita giornaliera - che prima veniva riportato al suo posto, ed era un
-  // giorno diverso.
-  const ddT=base>0?(base-g.min)/base*100:0;
-  if(ddT>10){ esito='finita'; esitoData=g.k; break; }
-  if(g.end>=base*1.10){ esito='sbloccata'; esitoData=g.k; break; }
+ // LE FASI, UNA DOPO L'ALTRA (passo 3, 28 ottobre 2026).
+ //
+ // Prima qui c'era UNA fase sola, col 5% al giorno e il 10% statico scritti dentro: cioe' la
+ // sfida 1 del two step, e nient'altro. Ora le regole arrivano dal preset (FBL_PROP_REGOLE) e
+ // l'elenco `fasi` le percorre tutte - per questo non c'e' nessun `if(oneStep)`: il one step e'
+ // semplicemente un elenco da uno.
+ //
+ // LA SFIDA 2 RIPARTE DAL CAPITALE INIZIALE, non da dove e' arrivata la prima. E' cosi' che fa
+ // FTMO: la verifica non eredita il profitto, ricomincia da capo con un obiettivo piu' basso.
+ // Farla continuare dal conto cresciuto le chiederebbe molto di piu' del 5% vero.
+ const _reg=(typeof FBL_PROP_REGOLE!=='undefined'&&typeof fblPropPresetAttivo==='function')
+   ? FBL_PROP_REGOLE[fblPropPresetAttivo()] : null;
+ const regole=_reg||{fasi:[{nome:'Unica',obiettivo:10}],perditaGiorno:5,perditaTotale:10,
+                     totaleInsegue:false,giorniMinimi:0,costanzaMaxGiorno:0,quotaTrader:80};
+
+ const fasi=[]; let esito='ok', esitoData=null, i0=0;
+ for(let f=0; f<regole.fasi.length; f++){
+  const obiettivo=regole.fasi[f].obiettivo;
+  const giorniFase=giorni.slice(i0);
+  // IL MASSIMO CHE INSEGUE, quando il preset lo chiede. Insegue il saldo di FINE GIORNATA, non
+  // il minimo toccato durante il giorno: sono due cose diverse, e usare il minimo renderebbe la
+  // regola molto piu' severa di quella vera.
+  let piccoChiusura=base;
+  let res={nome:regole.fasi[f].nome,obiettivo,esito:'ok',data:null,giorni:0,giorniMancanti:0};
+  for(let d=0; d<giorniFase.length; d++){
+   const g=giorniFase[d];
+   res.giorni=d+1;
+   const ddG=base>0?(g.start-g.min)/base*100:0;
+   if(ddG>regole.perditaGiorno){ res.esito='finita'; res.data=g.k; break; }
+   const riferimento=regole.totaleInsegue?piccoChiusura:base;
+   const ddT=riferimento>0?(riferimento-g.min)/riferimento*100:0;
+   if(ddT>regole.perditaTotale){ res.esito='finita'; res.data=g.k; break; }
+   // I GIORNI MINIMI: l'obiettivo raggiunto troppo presto non vale. E' la regola che impedisce
+   // di passare con un colpo di fortuna, e senza di lei una curva che fa +10% in due giornate
+   // risulterebbe «sbloccata» mentre FTMO direbbe di no.
+   if(g.end>=base*(1+obiettivo/100)){
+    if(res.giorni>=(regole.giorniMinimi||0)){ res.esito='passata'; res.data=g.k; i0+=d+1; break; }
+    res.giorniMancanti=(regole.giorniMinimi||0)-res.giorni;
+   }
+   if(g.end>piccoChiusura)piccoChiusura=g.end;
+  }
+  fasi.push(res);
+  if(res.esito!=='passata'){ esito=(res.esito==='finita')?'finita':'ok'; esitoData=res.data; break; }
+  esitoData=res.data;
+  // Passate TUTTE le fasi: il conto e' finanziato. «sbloccata» resta il nome di sempre, cosi'
+  // tutto quello che gia' lo legge (il pop-up, le cifre) continua a funzionare identico.
+  if(f===regole.fasi.length-1)esito='sbloccata';
  }
+
+ // LA REGOLA DI COSTANZA si SEGNALA e non boccia: FTMO non la tratta come una violazione
+ // («not a hard breach»). Trattarla come tale sarebbe piu' severi di FTMO, che e' un modo
+ // elegante di dare un risultato sbagliato.
+ let costanzaSuperata=false, migliorGiornoPct=0;
+ if(regole.costanzaMaxGiorno>0){
+  let migliore=0, prec=base;
+  giorni.forEach(g=>{ const guad=g.end-prec; if(guad>migliore)migliore=guad; prec=g.end; });
+  const totale=giorni.length?(giorni[giorni.length-1].end-base):0;
+  if(totale>0){
+   migliorGiornoPct=migliore/totale*100;
+   costanzaSuperata=(migliorGiornoPct>regole.costanzaMaxGiorno);
+  }
+ }
+
  const profFinale=dopo.length&&base>0?((dopo[dopo.length-1].cap-base)/base*100):0;
- return {base,numGiorni:giorni.length,maxDDGiorno,maxDDGiornoData,maxDDTot,esito,esitoData,profFinale};
+ return {base,numGiorni:giorni.length,maxDDGiorno,maxDDGiornoData,maxDDTot,esito,esitoData,profFinale,
+         fasi,preset:regole.nome||null,quotaTrader:regole.quotaTrader,
+         costanzaSuperata,migliorGiornoPct};
 }
 window.fblPropDedicataConta=fblPropDedicataConta; // PUNTO 4: provabile anche dai test del laboratorio
 // Calcola l'esito prop sulla curva `c` (punti della resa). Disegna in #fblRendProp.
