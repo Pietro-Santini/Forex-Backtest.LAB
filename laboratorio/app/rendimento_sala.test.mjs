@@ -66,7 +66,12 @@ test('la crescita è composta: la percentuale è sul capitale di quel momento', 
   try{
     const r = await pagina.evaluate(([seg]) => {
       const vinta = eval('(' + seg + ')')(2, false);     // +2R
-      const c = fblCronoRendCurva([vinta, {...vinta, tFill:2000}], 10000, 10);
+      // COMMISSIONI SPENTE DI PROPOSITO (28 ottobre 2026). Questo test misura l'ARITMETICA della
+      // crescita composta, non i costi: con le commissioni accese il conto finisce a 14.398
+      // invece di 14.400, e due euro di differenza nasconderebbero l'unica cosa che si voleva
+      // vedere. I costi hanno il loro test, in commissioni.test.mjs.
+      const c = fblCronoRendCurva([vinta, {...vinta, tFill:2000}], 10000, 10, null, null,
+                                  {commissioni:false});
       return {finale: Math.round(c.finale), usate: c.usate, vinte: c.vinte,
               resa: Math.round(c.resa * 10) / 10};
     }, [SEGNALE.toString()]);

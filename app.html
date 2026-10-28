@@ -49717,7 +49717,84 @@ function rendRisultatoR(x){
 // presi prima dello stop originale). Con le candele si rigioca il segnale con la strategia vera,
 // e i due numeri POSSONO essere diversi - e' tutto il punto: con lo stop al pareggio un segnale
 // che tornava indietro non perde piu'.
-function rendCurva(ris,capitale,rischioPct,serie,strategia){
+// ===================== LE COMMISSIONI =====================
+//
+// RICHIESTO dal proprietario: «i valori FTMO tipici espressi in percentuale e li impari dal mio
+// conto MT5, quindi insieme».
+//
+// PERCHE' SERVE: lo storico, il replay e il rendimento delle sale non avevano NESSUN costo. Una
+// curva senza commissioni e' ottimista per costruzione, e su una prop firm - dove si decide con
+// un 5% e un 10% - un costo che manca puo' far sembrare passata una sfida che non lo sarebbe.
+// Le commissioni esistevano solo sulle posizioni MT5 vere, cioe' esattamente dove a questo conto
+// non servivano.
+//
+// LA PERCENTUALE E' SUL VALORE DELLA POSIZIONE, PER LATO. Un lotto standard di EURUSD vale
+// 100.000: lo 0,0035% fa 3,50 a lato, cioe' 7 andata e ritorno, che e' l'ordine di grandezza
+// delle commissioni FTMO sul forex. Espresso cosi' il numero non dipende da quanto e' grande la
+// posizione, ed e' il motivo per cui il proprietario l'ha chiesto in percentuale.
+//
+// SONO VALORI TIPICI, NON LA VERITA'. Il broker vero costa quello che costa: per questo, appena
+// ci sono abbastanza operazioni, si impara da quelle (vedi fblCommissioneImparata).
+const FBL_COMMISSIONI_TIPICHE = {
+ forex:   0.0035,   // ~3,50 per lotto standard, a lato
+ metalli: 0.0030,
+ indici:  0.0025,
+ cripto:  0.0400,   // molto piu' alte: si pagano in percentuale sul controvalore
+ altro:   0.0035
+};
+// A quale famiglia appartiene uno strumento. Si guarda il NOME, che e' l'unica cosa che si ha
+// sempre: nello storico e nelle sale non c'e' nessuna anagrafica da interrogare.
+function fblFamigliaStrumento(asset){
+ const a=String(asset||'').toUpperCase();
+ if(/^(XAU|XAG|GOLD|SILVER)/.test(a))return 'metalli';
+ if(/(BTC|ETH|SOL|XRP|DOGE|ADA|LTC)/.test(a))return 'cripto';
+ if(/(US30|US500|NAS|SPX|GER|DAX|UK100|JP225|DJ|NDX)/.test(a))return 'indici';
+ if(/^[A-Z]{6}$/.test(a)||/^[A-Z]{3}\/?[A-Z]{3}/.test(a))return 'forex';
+ return 'altro';
+}
+// QUANTE OPERAZIONI PRIMA DI FIDARSI DEL DATO MISURATO.
+//
+// Un costo medio ricavato da due operazioni sembra piu' preciso del valore tipico e non lo e':
+// basta un'operazione strana per sballarlo, e l'app darebbe un numero sbagliato con l'aria di
+// saperlo. Dieci e' poco per una statistica e abbastanza per una commissione, che da un broker
+// e' quasi sempre la stessa cifra.
+const FBL_COMM_MINIME = 10;
+// Quanto e' costata DAVVERO un'operazione, per lotto. Si guardano solo le operazioni VERE di
+// quello strumento (con un ticket MT5): le simulate non hanno pagato niente a nessuno.
+function fblCommissioneImparata(asset){
+ const a=String(asset||'').toUpperCase();
+ let somma=0, lotti=0, quante=0;
+ try{
+  (trades||[]).forEach(t=>{
+   if(!t||t.mt5Ticket==null)return;
+   if(String(t.asset||'').toUpperCase()!==a)return;
+   const c=Math.abs(Number(t.commission)), l=Math.abs(Number(t.lots));
+   if(!isFinite(c)||!isFinite(l)||l<=0)return;
+   somma+=c; lotti+=l; quante++;
+  });
+ }catch(e){}
+ return (quante>0&&lotti>0)?{perLotto:somma/lotti,quante}:{perLotto:null,quante:0};
+}
+// LA COMMISSIONE DA USARE, e da DOVE viene. La seconda meta' conta quanto la prima: un numero
+// che non dice la sua provenienza non si puo' giudicare.
+function fblCommissionePct(asset){
+ const fam=fblFamigliaStrumento(asset);
+ const imp=fblCommissioneImparata(asset);
+ if(imp.quante>=FBL_COMM_MINIME&&imp.perLotto>0){
+  // Da euro-per-lotto a percentuale: un lotto standard vale 100.000 di valuta base.
+  return {pct:imp.perLotto/100000*100, fonte:'imparata', quante:imp.quante,
+          perLotto:imp.perLotto, famiglia:fam};
+ }
+ return {pct:FBL_COMMISSIONI_TIPICHE[fam]||FBL_COMMISSIONI_TIPICHE.altro, fonte:'tipica',
+         quante:imp.quante, perLotto:null, famiglia:fam};
+}
+try{
+  window.fblCommissionePct=fblCommissionePct;
+  window.fblCommissioneImparata=fblCommissioneImparata;
+  window.fblFamigliaStrumento=fblFamigliaStrumento;
+}catch(e){}
+
+function rendCurva(ris,capitale,rischioPct,serie,strategia,opzioni){
  const ordinati=(ris||[]).slice().filter(x=>x&&x.valutato).sort((a,b)=>(a.tFill||a.ts||0)-(b.tFill||b.ts||0));
  let cap=capitale, picco=capitale, ddMax=0;
  // RICHIESTO: scorrendo il grafico, i numeri sopra devono aggiornarsi a quel momento. Il modo
@@ -49749,7 +49826,27 @@ function rendCurva(ris,capitale,rischioPct,serie,strategia){
   const t=x.tFill||x.ts||Date.now();
   let k=null; try{ k=cetDateKey(t); }catch(e){ k=null; }
   if(k!==giornoK){ giornoK=k; giornoStart=cap; }
-  cap+=cap*(rischioPct/100)*R;
+  // IL COSTO DELL'OPERAZIONE.
+  //
+  // Il valore della posizione si ricava da quello che gia' c'e': si rischia una percentuale del
+  // capitale, e lo stop dice quanta parte del prezzo quel rischio rappresenta. Se lo stop e' lo
+  // 0,45% sotto l'entrata, per rischiare 100 euro bisogna muovere 22.000 euro di posizione - e
+  // la commissione si paga su quei 22.000, non sui 100.
+  //
+  // Due volte: si paga entrando e si paga uscendo.
+  let costo=0;
+  if(!opzioni||opzioni.commissioni!==false){
+   try{
+    const e=Number(x.entry), sl=Number(x.sl);
+    if(isFinite(e)&&isFinite(sl)&&e>0&&e!==sl){
+     const quotaStop=Math.abs(e-sl)/e;                  // lo stop, in frazione di prezzo
+     const rischio=cap*(rischioPct/100);
+     const valore=rischio/quotaStop;                    // quanto si muove davvero
+     costo=valore*(fblCommissionePct(x.asset||x.sym).pct/100)*2;
+    }
+   }catch(err){}
+  }
+  cap+=cap*(rischioPct/100)*R-costo;
   if(cap>picco)picco=cap;
   const dd=picco>0?(picco-cap)/picco*100:0;
   if(dd>ddMax)ddMax=dd;
@@ -50172,6 +50269,7 @@ function fblPropDedicataConta(punti,capitale,apertoMs){
          fasi,preset:regole.nome||null,quotaTrader:regole.quotaTrader,
          costanzaSuperata,migliorGiornoPct};
 }
+window.fblCommissioneImparata=fblCommissioneImparata;
 window.fblPropDedicataConta=fblPropDedicataConta; // PUNTO 4: provabile anche dai test del laboratorio
 // Calcola l'esito prop sulla curva `c` (punti della resa). Disegna in #fblRendProp.
 function fblPropDedicataAggiorna(c,capitale){
