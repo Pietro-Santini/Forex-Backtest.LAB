@@ -224,3 +224,73 @@ test('tornati sulla pagina normale il dito non sposta più il grafico', async ()
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+// IL QUARTO CASO DELLA TABELLA, che mancava (28 ottobre 2026).
+//
+// Gli altri tre test coprono: pagina normale + 1 dito, schermo intero + 1 dito, schermo intero +
+// 2 dita. Restava scoperto proprio «pagina normale + 2 dita», cioè META' DELLA REGOLA sulla
+// pagina normale — e la pagina normale e' esattamente dove il proprietario aveva gia' subito una
+// regressione («con un dito non mi scorre piu' la pagina»). Il codice lo faceva gia': mancava
+// qualcuno che lo difendesse.
+//
+// Due affermazioni in uno, perche' la regola e' doppia:
+//   a) due dita SPOSTANO il grafico;
+//   b) un pizzico NON zooma — «quando ritorniamo alla pagina normale lo zoom non e' piu' presente».
+// La (b) e' la prova di controllo della (a): dimostra che il cancello e' davvero lo schermo
+// intero, e non che il gesto non arriva proprio.
+test('pagina normale: due dita spostano il grafico, e il pizzico NON zooma', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(`(function(){
+      (${PREPARA});
+      // NIENTE schermo intero: e' il punto del test.
+      var p=window.__gesti.punto(0.5,0.5);
+
+      // --- a) DUE DITA CHE SI SPOSTANO INSIEME (la distanza fra loro non cambia: e' un pan) ---
+      var primaPan={viewEnd:viewEnd, vis:getVisibleCount(), zoom:priceZoomFactor};
+      window.__gesti.evPtr('pointerdown',p.x-45,p.y,31,1);
+      window.__gesti.evPtr('pointerdown',p.x+45,p.y,32,2);
+      for(var i=1;i<=6;i++){
+        window.__gesti.evPtr('pointermove',p.x-45+i*20,p.y,31,2);
+        window.__gesti.evPtr('pointermove',p.x+45+i*20,p.y,32,2);
+      }
+      window.__gesti.evPtr('pointerup',p.x-45+120,p.y,31,0);
+      window.__gesti.evPtr('pointerup',p.x+45+120,p.y,32,0);
+      var dopoPan={viewEnd:viewEnd, vis:getVisibleCount(), zoom:priceZoomFactor};
+
+      // --- b) PROVA DI CONTROLLO: due dita che si ALLONTANANO (pizzico vero) ---
+      // Partono a 90px l'una dall'altra, SOPRA la soglia dei 60px sotto la quale l'app tratta il
+      // gesto come spostamento (twoFingerCloseMode): se il cancello dello schermo intero non
+      // funzionasse, questo gesto zoomerebbe per davvero. Non zoomando, il cancello c'e'.
+      priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null; draw();
+      var primaPinch={vis:getVisibleCount(), zoom:priceZoomFactor};
+      window.__gesti.evPtr('pointerdown',p.x-45,p.y,33,1);
+      window.__gesti.evPtr('pointerdown',p.x+45,p.y,34,2);
+      for(var j=1;j<=5;j++){
+        window.__gesti.evPtr('pointermove',p.x-45-j*8,p.y,33,2);
+        window.__gesti.evPtr('pointermove',p.x+45+j*8,p.y,34,2);
+      }
+      window.__gesti.evPtr('pointerup',p.x-85,p.y,33,0);
+      window.__gesti.evPtr('pointerup',p.x+85,p.y,34,0);
+      var dopoPinch={vis:getVisibleCount(), zoom:priceZoomFactor};
+
+      return {primaPan:primaPan, dopoPan:dopoPan, primaPinch:primaPinch, dopoPinch:dopoPinch};
+    })()`);
+
+    // a) due dita spostano
+    assert.ok(Math.abs(r.dopoPan.viewEnd-r.primaPan.viewEnd)>0.5,
+      'in pagina normale DUE dita devono spostare il grafico (viewEnd '+r.primaPan.viewEnd+' -> '+r.dopoPan.viewEnd+')');
+    assert.equal(r.dopoPan.vis, r.primaPan.vis,
+      'lo spostamento a due dita non deve cambiare lo zoom orizzontale');
+    assert.equal(r.dopoPan.zoom, r.primaPan.zoom,
+      'lo spostamento a due dita non deve cambiare lo zoom verticale');
+
+    // b) prova di controllo: il pizzico non zooma
+    assert.equal(r.dopoPinch.vis, r.primaPinch.vis,
+      'in pagina normale il pizzico NON deve zoomare in orizzontale ('+r.primaPinch.vis+' -> '+r.dopoPinch.vis+')');
+    assert.equal(r.dopoPinch.zoom, r.primaPinch.zoom,
+      'in pagina normale il pizzico NON deve zoomare in verticale ('+r.primaPinch.zoom+' -> '+r.dopoPinch.zoom+')');
+
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
