@@ -85,6 +85,33 @@ gh run watch
 
 Senza `gh`: Actions → «Installer Windows» → Run workflow, spuntando «Crea anche la release».
 
+> ⚠️ **Uno solo dei due, non tutti e due.** Se il push ha già fatto partire «Installer Windows»,
+> non lanciarlo anche a mano: due build in corsa provano a creare la stessa release e la seconda
+> muore con `a release with the same tag name already exists` (28 ottobre 2026).
+
+## 6-ter. L'APK: NON si costruisce più a mano (dal 28 ottobre 2026)
+
+Il flusso **APK Android** (`.github/workflows/apk.yml`) parte da solo a ogni **release
+pubblicata**: copia il sito in `www`, inietta la versione, compila `assembleRelease` firmato con
+la chiave di rilascio presa dai Secrets, verifica con `apksigner` che sia davvero firmato, e lo
+allega alla release.
+
+Si controlla soltanto che sia arrivato:
+
+```bash
+gh release view v2.0.XX --json assets --jq '.assets[].name'
+```
+
+Devono comparire **tutti e tre**: `forexbacktestlab.apk`, `ForexBacktestLAB_Setup.exe`,
+`installer_build.zip`. **Se manca l'APK, il collegamento per Android dà 404**: `index.html` punta
+a `releases/latest/download/forexbacktestlab.apk`, e «latest» è appena cambiata. È già successo
+con la 2.0.36 e con la 2.0.37.
+
+> ⚠️ **Non riallegare mai l'APK di una versione precedente.** È un'app Capacitor che si porta
+> dentro tutto il sito (`CACHE_NAME` compreso): darebbe ad Android un'app bloccata alla versione
+> vecchia, che si dichiara da aggiornare e scarica sé stessa all'infinito. Vedi
+> `cervello/GUIDA-APK-AUTOMATICO.md`.
+
 ## 6-bis. Controllare il collaudo SU GITHUB
 
 Il collaudo verde sul PC **non dice niente** su quello di GitHub: le librerie installate sono

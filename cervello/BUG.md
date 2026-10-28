@@ -3,7 +3,7 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
-- **APERTO — Ogni release senza APK rompe il collegamento di scarico per Android** - 28 ottobre
+- **RISOLTO 28 ottobre 2026 — Ogni release senza APK rompeva il collegamento per Android** - 28 ottobre
   2026, trovato pubblicando la 2.0.37. `index.html` riga 3528 punta a
   `releases/latest/download/forexbacktestlab.apk`: appena esce una release NUOVA senza APK
   allegato, quel collegamento da' 404, perche' "latest" e' cambiato. E' gia' successo con la
@@ -23,7 +23,39 @@ Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
   Android Studio. Nessun flusso di GitHub puo' farlo finche' il progetto e la chiave di firma
   non sono disponibili alla CI.
 
-  **La regola, finche' non si automatizza:** ogni volta che si pubblica una versione, **l'APK va
+  **RISOLTO.** Il progetto Capacitor e' nel repo (5,7 MB: fuori node_modules, le build e le copie
+  del sito) e il flusso Release , versione 2.0.37, versionCode 20037
+total 5340
+drwxr-xr-x 1 pietro 197121       0 Oct 28 08:58 .
+drwxr-xr-x 1 pietro 197121       0 Oct 28 08:57 ..
+-rw-r--r-- 1 pietro 197121 5137367 Oct 28 08:57 app.html
+-rw-r--r-- 1 pietro 197121   47138 Oct 28 08:58 asset-library.html
+-rw-r--r-- 1 pietro 197121   16263 Oct 28 08:58 icon-192.png
+-rw-r--r-- 1 pietro 197121   49372 Oct 28 08:58 icon-512.png
+-rw-r--r-- 1 pietro 197121     660 Oct 28 08:58 index.html
+-rw-r--r-- 1 pietro 197121   13854 Oct 28 08:58 informativa-bot.html
+-rw-r--r-- 1 pietro 197121   36876 Oct 28 08:58 login.html
+-rw-r--r-- 1 pietro 197121     756 Oct 28 08:58 manifest.json
+-rw-r--r-- 1 pietro 197121   21817 Oct 28 08:58 privacy.html
+-rw-r--r-- 1 pietro 197121   13916 Oct 28 08:58 rischi-finanziari.html
+-rw-r--r-- 1 pietro 197121   67274 Oct 28 08:58 sw.js
+-rw-r--r-- 1 pietro 197121   22094 Oct 28 08:58 termini.html
+::error::Manca il segreto ANDROID_KEYSTORE_BASE64. Vedi cervello/GUIDA-APK-AUTOMATICO.md, passo 3.
+chiave di firma pronta costruisce l'APK a ogni release pubblicata,
+  firmato con una chiave di rilascio vera presa dai Secrets, con  ricavato da sw.js
+  (2.0.37 -> 20037) invece del vecchio  fisso, e con una verifica  prima di
+  allegarlo. Verificato sulla 2.0.37: il collegamento e' tornato 200, e dentro il pacchetto ci
+  sono versione 2.0.37, emoji sane e nessuna traccia della chiave di debug.
+
+  Due inciampi trovati e corretti costruendolo: Capacitor 8.5.3 pretende **Node 22** (col 20
+   passa con un avviso e poi  muore senza spiegare), e 
+  contiene l'**impronta della chiave di firma** - cambiando chiave, l'accesso con Google si
+  sarebbe rotto con un errore muto. Ora ci sono due impronte registrate su Firebase.
+
+  **Resta un passo manuale UNA VOLTA SOLA:** l'app installata oggi e' firmata col debug, quindi
+  va disinstallata e reinstallata. Dopo, gli aggiornamenti sono automatici per sempre.
+
+  ~~La regola, finche' non si automatizza:~~ ogni volta che si pubblica una versione, **l'APK va
   ricostruito e allegato a QUELLA release**, oppure il collegamento per Android resta rotto. Non
   e' un passo facoltativo della catena di pubblicazione: e' l'unico modo perche' i telefoni
   ricevano l'aggiornamento.
