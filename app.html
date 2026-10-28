@@ -5859,6 +5859,66 @@ function ensurePropFirmDailyBaseline(){
 //    giorno, 10% statico, obiettivo 10%): chi non tocca niente non deve accorgersi di nulla. Ed
 //    e' anche il modo di provarlo - a parita' di impostazioni, i 19 test di adesso devono restare
 //    verdi senza toccarne uno.
+// ===================== IL CICLO DELLA PROP FIRM E' DEL CONTO =====================
+//
+// RICHIESTO dal proprietario (28 ottobre 2026): «il calcolo della prop firm inizia quando
+// aggiungiamo un nuovo conto. Se la chiudiamo correttamente finisce li' e quel conto rimane in
+// esecuzione. Se la perdiamo, i calcoli non li deve piu' fare: deve smettere e dire che il conto
+// e' stato chiuso. E se l'utente apre un nuovo conto demo, ricomincia il ciclo da zero».
+//
+// COM'ERA PRIMA: lo stato stava in sessionByMode, cioe' legato alla SESSIONE (storico, live,
+// storico+prop, live+prop). Cambiando conto MT5 ci si portava dietro la sfida di un altro conto -
+// capitale iniziale, violazione, tutto. Due conti diversi con una sfida sola e' il tipo di
+// confusione che su un conto in gestione costa davvero.
+//
+// I TRE STATI, e sono tre cose diverse:
+//   in_corso   - la sfida si sta giocando: si calcola
+//   chiuso     - persa: NON si calcola piu' niente, e si dice perche'
+//   finanziato - passata: la SFIDA e' finita (non si rigioca), ma il CONTO resta vivo e opera
+const FBL_PROP_CONTI_KEY='fbl_prop_conti';
+// L'IDENTITA' DEL CONTO DEV'ESSERE QUELLA VERA. Se due conti MT5 diversi dessero lo stesso
+// identificativo si mescolerebbero le sfide senza che niente lo dica. Senza MT5 collegato serve
+// comunque un identificativo, perche' la prop si prova anche in simulato.
+function fblPropContoId(){
+ try{
+  const tag=(typeof currentMt5AccountTag==='function')?currentMt5AccountTag():null;
+  if(tag&&tag.mt5Login)return 'mt5:'+tag.mt5Login+'@'+(tag.mt5Server||'');
+ }catch(e){}
+ return 'simulato';
+}
+function _fblPropConti(){
+ try{ return JSON.parse(localStorage.getItem(FBL_PROP_CONTI_KEY)||'{}')||{}; }catch(e){ return {}; }
+}
+function fblPropContoStato(id){
+ const d=_fblPropConti();
+ const v=d[id||fblPropContoId()];
+ // Un conto mai visto NON eredita niente: nasce in corso. E' il punto che il proprietario ha
+ // chiesto esplicitamente - un conto nuovo non deve nascere gia' bocciato.
+ return (v&&v.stato)?v:{stato:'in_corso'};
+}
+function fblPropContoStatoSalva(id,stato){
+ const d=_fblPropConti();
+ d[id||fblPropContoId()]=Object.assign({quando:Date.now()},stato||{});
+ try{ localStorage.setItem(FBL_PROP_CONTI_KEY,JSON.stringify(d)); }catch(e){}
+}
+function fblPropContoAzzera(){ try{ localStorage.removeItem(FBL_PROP_CONTI_KEY); }catch(e){} }
+// SI CALCOLA SOLO MENTRE LA SFIDA E' IN CORSO. Continuare su un conto chiuso produrrebbe numeri
+// che non significano niente - e peggio, sembrerebbero significare qualcosa. Su uno finanziato
+// la sfida e' passata: rigiocarla la farebbe ricominciare da capo ogni volta.
+function fblPropContoCalcola(id){ return fblPropContoStato(id).stato==='in_corso'; }
+// IL CONTO E' VIVO? Chiuso no; in corso e finanziato si'. Sono due domande diverse da
+// «si calcola», ed e' la distinzione che il proprietario ha chiesto: passata la sfida, il conto
+// resta in esecuzione.
+function fblPropContoAttivo(id){ return fblPropContoStato(id).stato!=='chiuso'; }
+try{
+  window.fblPropContoId=fblPropContoId;
+  window.fblPropContoStato=fblPropContoStato;
+  window.fblPropContoStatoSalva=fblPropContoStatoSalva;
+  window.fblPropContoAzzera=fblPropContoAzzera;
+  window.fblPropContoCalcola=fblPropContoCalcola;
+  window.fblPropContoAttivo=fblPropContoAttivo;
+}catch(e){}
+
 const FBL_PROP_REGOLE = {
  'ftmo-1step': {
    nome:'FTMO one step',
@@ -5976,6 +6036,9 @@ try{
 }catch(e){}
 
 function checkPropFirmRules(){
+  // IL CICLO E' DEL CONTO. Se questo conto ha gia' perso o e' gia' finanziato, non si calcola
+  // piu' niente: la sfida e' finita, in un senso o nell'altro.
+  try{ if(typeof fblPropContoCalcola==='function'&&!fblPropContoCalcola())return; }catch(e){}
   if(!isPropFirmMode || propFirmViolation) return; // già chiusa per violazione: non ricontrolliamo più
   // Conto MT5 non idoneo in attesa di una scelta (vedi maybeEvaluatePfMt5Account): regole sospese.
   if(liveModeActive && pfPendingDecisionLogin!=null) return;
@@ -6081,6 +6144,9 @@ function updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct){
 // mostriamo un avviso chiaro nello stato in fondo alla pagina come segnaposto funzionante.
 function triggerPropFirmViolation(rule,details){
   propFirmViolation={rule,...details,timestamp:Date.now(),timestampIso:new Date().toISOString()};
+  // SI SEGNA SUL CONTO, non solo sulla sessione: cosi' resta chiuso anche riaprendo l'app o
+  // cambiando modalita', e un altro conto non se lo porta dietro.
+  try{ fblPropContoStatoSalva(null,{stato:'chiuso',motivo:rule}); }catch(e){}
   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';} // pausa il replay storico
   if(liveModeActive){ disconnectCapitalStream(); stopLiveRefreshTimer(); } // disconnessione Live
   showPropFirmViolationOverlay();
