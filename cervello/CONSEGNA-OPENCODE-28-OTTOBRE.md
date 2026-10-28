@@ -149,48 +149,58 @@ c'è la catena intera e le due strade possibili. La strada giusta è portare la 
 per segnale, finché non dà numeri identici. Quel confronto non è un dettaglio: è l'unico modo
 onesto di dimostrare che il ponte decide come decide la pagina oggi, su soldi veri.
 
-### F. Il profilo volumetrico si sposta al cambio di time frame — ATTENZIONE, è un conflitto
+### F. Il profilo volumetrico si sposta al cambio di time frame — RIPRODOTTO
 
-Segnalato dal proprietario il 28 ottobre 2026, con due schermate (1H e 30m) in cui l'istogramma
-copre tratti diversi:
+Segnalato dal proprietario il 28 ottobre 2026, con i numeri esatti del suo disegno:
 
-> «Al cambio di time frame modifica la posizione. Anche al cambio di time frame deve rispettare
-> quello che è l'ora e fascia dei prezzi. Non può sfalsare in questo modo.»
+| | messo su 1H | dopo il passaggio a 30m |
+|---|---|---|
+| inizio | 22 ott **01:00** · $4.142 | 22 ott **20:00** · $4.048 |
+| fine | 23 ott 17:00 · $3.975 | 23 ott 17:00 · $3.975 — fermo |
 
-**NON correggerlo d'istinto.** Il comportamento che descrive è la conseguenza diretta di una
-richiesta sua precedente, ed è scritta nel codice sopra `vpFixedResolveRange` (circa riga 10940
-di `app.html`):
+**RIPRODOTTO** nel banco di prova, stesso intervallo, candele finte in discesa:
+
+```
+messo su 1H : 41 candele, dal 22 ott 01:00 al 23 ott 17:00
+poi su 30m  : 41 candele, dal 22 ott 21:00 al 23 ott 17:00
+```
+
+(20:00 invece di 21:00 nel caso vero: l'oro ha la pausa giornaliera, le candele finte no.)
+
+**LA CAUSA, confermata:** `vpFixedResolveRange` (circa riga 10940 di `app.html`) tiene fisso il
+NUMERO di candele e lascia muovere il tempo. Tre cose da sapere prima di metterci le mani:
+
+1. **Si muove l'estremo che NON è l'ancora.** `aIdx` viene sempre da `d.p1.time`; l'altro
+   estremo viene ricalcolato da `d.candleCount`. Nel disegno del proprietario `p1` è il punto a
+   destra, per questo si è mosso l'inizio e non la fine. Non cercare un difetto nell'inizio: non
+   c'è, è semplicemente l'estremo libero.
+2. **Il prezzo che cambia NON è un secondo difetto.** L'estensione verticale del profilo viene
+   dalle candele dentro la finestra. Finestra che comincia 20 ore dopo = massimo più basso
+   (4.142 → 4.048). Corretto il tempo, il prezzo torna da solo. Non toccarlo separatamente.
+3. **L'ancora non si corrompe.** Nessuno riscrive `p1.time`, e `rowIndexNearTime()` è a tempo.
+   Solo `d.p2.time` viene riscritto. Tornando al time frame di partenza il disegno torna giusto.
+
+**E QUI STA IL CONFLITTO — non decidere da solo.** Quel comportamento è scritto nel codice come
+richiesta esplicita dello stesso proprietario:
 
 > «RICHIESTO ESPLICITAMENTE: *cambiando timeframe il numero di candele dentro l'istogramma non
 > deve cambiare*»
 
-Per fare questo, **solo** per `vpfixed` («Profilo volume ad intervallo fisso») il numero di
-candele viene fissato al primo disegno e poi mantenuto, e `p2.time` viene **riscritto** a ogni
-cambio TF. Il commento lo dichiara già apertamente: «l'intervallo di TEMPO coperto
-dall'istogramma CAMBIA da solo quando cambi TF». È esattamente il sintomo che ora segnala come
-sbagliato.
+Le due richieste non possono essere vere insieme: a tempo fisso cambia il numero di candele, a
+candele fisse cambia il tempo. È aritmetica, non codice.
 
-**Le due richieste non possono essere vere insieme.** A tempo fisso il numero di candele cambia;
-a candele fisse cambia il tempo. Non esiste una terza strada: è aritmetica, non codice.
+**COSA FARE:** un interruttore nelle impostazioni del profilo — «al cambio di time frame tieni
+fermo: **il tempo** / il numero di candele» — con **il tempo come predefinito**, che è quello
+che chiede adesso. Così nessuna delle due richieste viene cancellata. Con l'interruttore sul
+tempo, `vpFixedResolveRange` deve semplicemente usare `rowIndexNearTime(d.p2.time)` e **non**
+riscrivere `d.p2.time`.
 
-**Cosa fare, nell'ordine:**
+**Il collaudo è già scritto a metà**: il caso qui sopra, in due time frame, è esattamente la
+prova rossa. Serve anche la prova di controllo con l'interruttore sulle candele, se no si
+cancella in silenzio la richiesta vecchia.
 
-1. **Prima stabilire QUALE dei due disegni ha usato.** Sono due cose diverse e si comportano in
-   modo diverso:
-   - `vpanchor` («Profilo volume **ancorato**» — il nome che lui ha usato) parte da `p1.time` via
-     `rowIndexNearTime()`, cioè **è già ancorato al tempo**, e arriva alla candela attuale. Se si
-     sposta *questo*, allora c'è un difetto vero da trovare, e non è il conflitto qui sopra.
-   - `vpfixed` («intervallo fisso») è quello che si sposta **per scelta**.
-   Si riproduce disegnandoli entrambi e cambiando TF: dicono subito quale dei due casi è.
-2. **Se è `vpfixed`**, è una decisione da far prendere a lui, non da prendere al suo posto. La
-   via d'uscita pulita è **un interruttore** nelle impostazioni del profilo («al cambio di time
-   frame tieni fermo: il tempo / il numero di candele»), con il tempo come predefinito — così
-   nessuna delle due richieste viene cancellata.
-3. **Il resto dei disegni è già a posto** e non va toccato: linee, rettangoli e livelli sono
-   ancorati a tempo+prezzo reali tramite `getRowsTimestamps()`, e c'è già una correzione pagata
-   per il caso in cui saltavano (quando una sola data non valida faceva ripiegare TUTTO il
-   grafico su «tempo finto = indice di candela»). Se ricompare un salto **di tutti** i disegni
-   insieme, è di nuovo quella strada, non questa.
+**Non toccare** linee, rettangoli e livelli: sono ancorati a tempo+prezzo reali tramite
+`getRowsTimestamps()`. Se saltano TUTTI insieme è un'altra strada già nota, non questa.
 
 ### G. Pubblicare la 2.0.39 — FATTO
 
