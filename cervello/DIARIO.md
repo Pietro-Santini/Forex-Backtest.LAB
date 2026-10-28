@@ -3536,3 +3536,21 @@ sorgente). PROVA DI CONTROLLO fatta: rimesso il file vecchio, il test diventa ro
 Prossimo passo (2): verifica del token Firebase sul server — serve l'ID del progetto
 Firebase e, per la verifica a mano, la chiave pubblica di Google (si legge da
 https://www.googleapis.com/oauth2/v3/certs).
+
+## 28 ottobre 2026 (sera) — OpenCode — Replay su MT5, profilo volumetrico, wow, rendCurva multi-sala
+
+- **Replay su MT5 (voce A):** `fblPropContoId()` ora distingue tre conti — `mt5:<login>@<server>`,
+  `storico`, `simulato`. In replay (liveReplayActive o modalità storico) vale sempre `storico`,
+  anche con MT5 collegato. Test: `prop_conto_id_tre.test.mjs` (4 prove) + aggiornato
+  `prop_ciclo_conto.test.mjs`.
+- **Profilo volumetrico (voce F):** `vpFixedResolveRange` ora rispetta un interruttore
+  `tfAnchor` ('time' predefinito / 'candles') nelle impostazioni del profilo. In modalità
+  tempo usa `rowIndexNearTime(d.p2.time)` e non riscrive `d.p2.time`. Test: `vp_tf_anchor.test.mjs`.
+- **Effetto wow (voce C):** collegato il filo — `setTimeout(fblWowLancia, 100)` diretto invece
+  del listener `load` che non scattava più.
+- **Resa totale di più sale (voce D):** `rendCurva` ora accetta `serie` e `strategia` come
+  valori (come prima) OPPURE come funzioni che, dato il segnale, restituiscono la serie e la
+  strategia di quel segnale. Con valori costanti il comportamento è identico a oggi.
+- **Dashboard conti archiviati (voce B):** fatto — pulsante "Conti archiviati" nel panel Prop Firm + modal dinamico fblPropContiDashboard().
+- **Voce E (autonomia):** non toccata, come richiesto.
+PY

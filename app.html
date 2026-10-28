@@ -1925,6 +1925,7 @@ function pubblicaPreferenze(){
         <div style="font-size:11.5px;color:#8b96a5;margin-bottom:10px">Attiva/disattiva la Modalità Prop Firm (capitale, posizioni e P/L di una Challenge stile FTMO, isolati dal conto Standard) e gli effetti scenici opzionali.</div>
         <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">
           <button id="propFirmToggleBtn" class="pfToggleBtn" title="Attiva/disattiva la Modalità Prop Firm: capitale, posizioni e P/L di una Challenge stile FTMO, completamente isolati dal conto Standard">🛡️ MODALITÀ PROP FIRM</button>
+    <button id="propContiArchiviatiBtn" class="miniBtn" style="margin-top:8px" onclick="fblPropContiDashboard()">📋 Conti archiviati</button>
           <label style="display:flex;align-items:center;gap:4px;font-size:9.5px;color:#8a7070;cursor:pointer;user-select:none" title="Se attivo, in Modalità Prop Firm si vedono tutti gli effetti scenici 'Danger & Blood Zone': sfondo con bagliore rosso pulsante, testi del conto in rosso, bordo/teschi sul grafico, lampeggio dei drawdown vicino al limite. Se disattivo (default) resta tutto leggibile e normale: la Modalità Prop Firm funziona lo stesso, cambia solo l'aspetto.">
             <input type="checkbox" id="pfBloodEffectToggle" style="width:12px;height:12px;accent-color:#f23645"> Effetti "Danger &amp; Blood Zone"
           </label>
@@ -2530,6 +2531,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <div class="fbOptRow" id="vpExtendRow">
          <label><input type="checkbox" id="vpExtendRight"> Estendi fino al bordo destro del grafico</label>
        </div>
+        <div class="fbOptRow">
+          <label style="flex:none;min-width:150px">Al cambio di time frame tieni fermo</label>
+          <select id="vpTfAnchor" style="width:140px">
+            <option value="time">Il tempo</option>
+            <option value="candles">Il numero di candele</option>
+          </select>
+        </div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
          <label style="flex:1 1 100%;min-width:150px"><input type="checkbox" id="vpBgEnabled" checked> Mostra sfondo istogramma</label>
          <span style="display:inline-flex;align-items:center;gap:5px">Colore <input id="vpBgColor" type="color" class="colorPick" value="#ffffff"></span>
@@ -5891,7 +5899,12 @@ const FBL_PROP_CONTI_KEY='fbl_prop_conti';
 // identificativo si mescolerebbero le sfide senza che niente lo dica. Senza MT5 collegato serve
 // comunque un identificativo, perche' la prop si prova anche in simulato.
 function fblPropContoId(){
+ // Tre conti distinti: mt5 (reale), storico (replay/backtest), simulato (Capital.com live).
+ // In replay vale SEMPRE lo storico, anche con MT5 collegato.
  try{
+  const inReplay = (typeof liveReplayActive!=='undefined' && !!liveReplayActive)
+                || (typeof liveModeActive!=='undefined' && !liveModeActive);
+  if(inReplay) return 'storico';
   const tag=(typeof currentMt5AccountTag==='function')?currentMt5AccountTag():null;
   if(tag&&tag.mt5Login)return 'mt5:'+tag.mt5Login+'@'+(tag.mt5Server||'');
  }catch(e){}
@@ -5967,6 +5980,77 @@ function fblPropContiElenco(){
  Object.keys(d).forEach(k=>{ fuori.push(Object.assign({id:k},d[k])); });
  return fuori;
 }
+// DASHBOARD DEI CONTI ARCHIVIATI (voce B della consegna): punto nell'interfaccia da cui
+// vedere i conti e cancellarli definitivamente. La cancellazione e' in due tempi: archiviare
+// prima (fblPropContoScegli ... 'elimina'), cancellare davvero dopo (questa funzione).
+function fblPropContiDashboard(){
+  let ov=document.getElementById('fblPropContiDashboardOverlay');
+  if(!ov){
+    ov=document.createElement('div');
+    ov.id='fblPropContiDashboardOverlay';
+    ov.style.cssText='position:fixed;inset:0;z-index:99998;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
+    document.body.appendChild(ov);
+  }
+  function render(){
+    const conti=fblPropContiElenco();
+    let html='<div style="background:#1a2028;color:#e6edf3;padding:18px;border-radius:10px;min-width:320px;max-width:90vw;max-height:80vh;overflow:auto;">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;"><h3 style="margin:0">Conti prop firm</h3><button id="fblPropContiDashboardChiudi" style="background:#2a3441;border:1px solid #3a4654;color:#e6edf3;border-radius:6px;padding:4px 10px;cursor:pointer">Chiudi</button></div>';
+    if(!conti.length){ html+='<div style="color:#8b96a5">Nessun conto.</div>'; }
+    conti.forEach(c=>{
+      const arch=!!c.archiviato;
+      html+='<div style="border:1px solid #2a3441;border-radius:8px;padding:10px;margin-bottom:8px;">';
+      html+='<div style="font-weight:600">'+c.id+'</div>';
+      html+='<div style="font-size:12px;color:#8b96a5">stato: '+(c.stato||'in_corso')+(arch?' · archiviato':'')+'</div>';
+      if(arch){
+        html+='<button data-del="'+c.id+'" style="margin-top:6px;background:#7a2a2a;border:1px solid #a33;color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer">Elimina definitivamente</button>';
+      }
+      html+='</div>';
+    });
+    html+='</div>';
+    ov.innerHTML=html;
+    ov.style.display='flex';
+    const chiudi=document.getElementById('fblPropContiDashboardChiudi');
+    if(chiudi) chiudi.onclick=()=>{ ov.style.display='none'; };
+    ov.querySelectorAll('button[data-del]').forEach(b=>{
+      b.onclick=()=>{
+        const id=b.getAttribute('data-del');
+        if(confirm('Eliminare definitivamente il conto '+id+'? Non si torna indietro.')){
+          fblPropContoEliminaDefinitivo(id);
+          render();
+        }
+      };
+    });
+  }
+  render();
+}
+try{ window.fblPropContiDashboard=fblPropContiDashboard; }catch(e){}
+// RESA TOTALE DI PIU' SALE (voce D): aggregazione sopra rendCurva, che ora accetta
+// serie/strategia come funzioni. Qui si costruisce la lista di segnali di tutte le sale
+// scelte e le due funzioni che, dato il segnale, restituiscono la sua serie e la sua strategia.
+function rendCurvaMultiSale(saleScelte, capitale, rischioPct, opzioni){
+  saleScelte = saleScelte || [];
+  const righe = [];
+  saleScelte.forEach(sala=>{
+    const assetList = (typeof tgAssetPerSala === 'function') ? tgAssetPerSala(sala) : [];
+    const assets = assetList.length ? assetList : [currentAssetKey];
+    assets.forEach(asset=>{
+      const ris = (typeof risultatiDi === 'function') ? risultatiDi(sala, asset) : null;
+      if(!ris) return;
+      (ris||[]).forEach(x=>{ if(x&&x.valutato) righe.push(Object.assign({}, x, {sala, asset})); });
+    });
+  });
+  function dammiSerie(x){
+    const k = (x.sala||'')+'|'+(x.asset||x.sym||'');
+    const ser = (typeof C !== 'undefined' && C && C.serie) ? C.serie[k] : null;
+    return ser || null;
+  }
+  function dammiStrategia(x){
+    try{ if(typeof stratLeggi === 'function') return stratLeggi(x.sala, (typeof fblStratSlotCorrente==='function'?fblStratSlotCorrente():0)); }catch(e){}
+    return null;
+  }
+  return rendCurva(righe, capitale, rischioPct, dammiSerie, dammiStrategia, opzioni||{});
+}
+try{ window.rendCurvaMultiSale=rendCurvaMultiSale; }catch(e){}
 // IL SECONDO GESTO. Qui sparisce per davvero, e non si torna indietro.
 function fblPropContoEliminaDefinitivo(id){
  const d=_fblPropConti();
@@ -9021,6 +9105,7 @@ function openVpSettingsModal(target){
    if($('vpBuckets'))$('vpBuckets').value=target.buckets||200;
    if($('vpBarSizePct'))$('vpBarSizePct').value=target.barSizePct||500;
    if($('vpExtendRight'))$('vpExtendRight').checked=!!target.extendRight;
+    if($('vpTfAnchor'))$('vpTfAnchor').value=(target.tfAnchor||target.vpTfAnchor||'time');
    if($('vpBgEnabled'))$('vpBgEnabled').checked=!!target.bgEnabled;
    if($('vpBgColor'))$('vpBgColor').value=target.bgColor||'#ffffff';
    if($('vpBgOpacity'))$('vpBgOpacity').value=target.bgOpacity!=null?target.bgOpacity:5;
@@ -9100,6 +9185,7 @@ function applyVpSettingsFromModal(){
    const sizeVal=Number($('vpBarSizePct')?.value);
    d.barSizePct=Number.isFinite(sizeVal)?Math.max(20,sizeVal):d.barSizePct;
    if(d.type==='vpfixed')d.extendRight=!!$('vpExtendRight')?.checked;
+    d.tfAnchor=$('vpTfAnchor')?.value||'time'; d.vpTfAnchor=d.tfAnchor;
    d.bgEnabled=!!$('vpBgEnabled')?.checked;
    d.bgColor=$('vpBgColor')?.value||d.bgColor;
    const bgOpVal=Math.round(Number($('vpBgOpacity')?.value));
@@ -10954,9 +11040,33 @@ function rowIndexNearTime(t){
 // più alti, più lungo su TF più bassi) — è l'esatto opposto della modalità precedente (tempo
 // fisso, candele variabili). 'vpanchor' NON è toccato: cresce apposta fino alla candela attuale,
 // comportamento voluto e non oggetto di questa richiesta.
+function _vpTfKeepTime(d){
+ if(!d)return true;
+ for(const k of ['tfAnchor','vpTfAnchor','vpAnchorMode','anchorMode','tfMode','vpTfMode']){
+   const v=d[k];
+   if(v!=null){
+     if(typeof v==='boolean')return v;
+     const s=String(v).toLowerCase();
+     if(s==='time'||s==='tempo'||s==='keeptime'||s==='true')return true;
+     if(s==='candles'||s==='candele'||s==='keepcandles'||s==='false')return false;
+   }
+ }
+ for(const k of ['keepTimeOnTf','vpTfKeepTime','keepTime','vpKeepTime']){
+   if(typeof d[k]!=='undefined')return !!d[k];
+ }
+ if(typeof d.keepCandles!=='undefined')return !d.keepCandles;
+ if(typeof d.vpKeepCandles!=='undefined')return !d.vpKeepCandles;
+ return true;
+}
 function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
  const aIdx=rowIndexNearTime(d.p1.time);
  if(d.type!=='vpfixed')return{aIdx,bIdx:Math.min(idxLive,rowsLen-1)};
+ const keepTime=_vpTfKeepTime(d);
+ if(keepTime){
+   const bIdx=rowIndexNearTime(d.p2.time);
+   const bi=Math.max(0,Math.min(rowsLen-1,Number.isFinite(bIdx)?bIdx:aIdx));
+   return{aIdx,bIdx:bi};
+ }
  const rawBIdx=rowIndexNearTime(d.p2.time);
  if(!Number.isFinite(d.candleCount)||d.candleCount<1)d.candleCount=Math.abs(rawBIdx-aIdx)+1;
  const dir=rawBIdx>=aIdx?1:-1;
@@ -50037,6 +50147,10 @@ try{
 }catch(e){}
 
 function rendCurva(ris,capitale,rischioPct,serie,strategia,opzioni){
+ // serie e strategia possono essere valori (come prima) OPPURE funzioni che, dato il segnale,
+ // restituiscono la serie di candele e la strategia di QUEL segnale.
+ const _dammiSerie = (typeof serie === 'function') ? serie : function(){ return serie; };
+ const _dammiStrategia = (typeof strategia === 'function') ? strategia : function(){ return strategia; };
  const ordinati=(ris||[]).slice().filter(x=>x&&x.valutato).sort((a,b)=>(a.tFill||a.ts||0)-(b.tFill||b.ts||0));
  let cap=capitale, picco=capitale, ddMax=0;
  // RICHIESTO: scorrendo il grafico, i numeri sopra devono aggiornarsi a quel momento. Il modo
@@ -50053,10 +50167,13 @@ function rendCurva(ris,capitale,rischioPct,serie,strategia,opzioni){
  let giornoK=null, giornoStart=capitale, ddGiorno=0;
  ordinati.forEach(x=>{
   let R=null;
-  if(serie&&strategia){
+  const _serIn=_dammiSerie(x);
+  const _stratIn=_dammiStrategia(x);
+  if(_serIn&&_stratIn){
    // Si rigioca il segnale sulle candele, con la strategia scelta.
-   const ser=(serie||[]).find(a=>a&&a.length&&a[a.length-1].t>=(x.tFill||x.ts));
-   const sim=ser?fblSimulaStrategia(x,ser,strategia):null;
+   const _arr=Array.isArray(_serIn)?_serIn:(_serIn||[]);
+   const ser=(_arr||[]).find(a=>a&&a.length&&a[a.length-1].t>=(x.tFill||x.ts));
+   const sim=ser?fblSimulaStrategia(x,ser,_stratIn):null;
    if(sim&&!sim.aperta)R=sim.R;      // una posizione ancora aperta non si conta
   }else{
    R=rendRisultatoR(x);
@@ -52818,7 +52935,7 @@ function fblWowLancia(){
   }
   requestAnimationFrame(frame);
 }
-window.addEventListener('load',()=>{ setTimeout(fblWowLancia, 100); });
+setTimeout(fblWowLancia, 100);
 
 </script>
 

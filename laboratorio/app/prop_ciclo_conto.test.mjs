@@ -92,6 +92,7 @@ test('il conto si riconosce dal login MT5, e due login sono due conti', async ()
   // L'identita' dev'essere quella vera del conto, non un numero inventato: se due conti MT5
   // diversi dessero lo stesso identificativo, si mescolerebbero le sfide senza che nulla lo dica.
   const r = await nellApp(`(function(){
+    liveModeActive = true; liveReplayActive = false;
     mt5ContoAttivo = {login:'5057460278', server:'MetaQuotes-Demo'};
     const a = fblPropContoId();
     mt5ContoAttivo = {login:'9999999', server:'MetaQuotes-Demo'};
