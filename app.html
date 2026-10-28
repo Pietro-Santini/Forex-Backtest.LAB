@@ -5809,10 +5809,19 @@ function checkPropFirmRules(){
   const floating=propFirmFloatingPL();
   const equityNow=closedBalance+floating;
 
-  // --- Daily Drawdown 5%: perdita fluttuante + chiusa nella giornata vs saldo apertura giorno ---
-  const dailyLossLimit=propFirmDailyStartBalance*0.05;
+  // --- Daily Drawdown 5%: perdita della giornata, misurata sul CAPITALE INIZIALE --------------
+  // CORRETTO IL 28 OTTOBRE 2026. FTMO dice «Maximum Daily Loss: 5% of the Initial Simulated
+  // Capital»: il limite in euro e' FISSO, e quello che si azzera ogni giorno alle 00:00 CE(S)T
+  // e' il RIFERIMENTO da cui si misura la perdita (propFirmDailyStartBalance), non il limite.
+  //
+  // Prima il limite era il 5% del saldo di apertura di quel giorno, e sbagliava in tutte e due
+  // le direzioni: su un conto da 10.000 salito a 10.800 concedeva 540 euro invece di 500
+  // (lasciava passare giornate che FTMO boccia), e su uno sceso a 9.500 ne concedeva 475
+  // (bocciava giornate che FTMO accetta). La percentuale mostrata nel pannellino ha la stessa
+  // base, se no il «x% / 5%» accanto al pulsante direbbe una cosa e il blocco ne farebbe un'altra.
+  const dailyLossLimit=propFirmChallengeInitialCapital*0.05;
   const dailyLoss=propFirmDailyStartBalance-equityNow; // positivo = in perdita rispetto a stamattina
-  const dailyLossPct=dailyLoss/propFirmDailyStartBalance*100;
+  const dailyLossPct=dailyLoss/propFirmChallengeInitialCapital*100;
   // --- Maximum Drawdown 10%: equity totale vs capitale iniziale della Challenge ---
   const maxDrawdownLimit=propFirmChallengeInitialCapital*0.10;
   const totalLoss=propFirmChallengeInitialCapital-equityNow;
@@ -37326,9 +37335,12 @@ function pfMt5Metrics(){
  const dailyStart=bal-todayNet;
  const dailyLoss=dailyStart-eq, totalLoss=initial-eq;
  return {eq,bal,initial,dailyStart,dailyLoss,totalLoss,
-   dailyLossPct:dailyStart>0?dailyLoss/dailyStart*100:0,
+   // Stessa correzione del 28 ottobre 2026 fatta in checkPropFirmRules: il limite giornaliero
+   // e' il 5% del capitale INIZIALE del conto, non del saldo con cui si e' aperta la giornata.
+   // Qui pesa anche di piu': questi numeri vengono da un conto MT5 vero.
+   dailyLossPct:initial>0?dailyLoss/initial*100:0,
    totalLossPct:initial>0?totalLoss/initial*100:0,
-   dailyLossLimit:dailyStart*0.05, maxDrawdownLimit:initial*0.10,
+   dailyLossLimit:initial*0.05, maxDrawdownLimit:initial*0.10,
    currency:ai.currency||'EUR', login:String(ai.login)};
 }
 function showPfMt5IneligibleModal(html){
@@ -49860,17 +49872,42 @@ function fblPropDedicataConta(punti,capitale,apertoMs){
   else { if(p.cap<cur.min)cur.min=p.cap; }
   cur.end=p.cap;
  });
- let maxDDGiorno=0, maxDDGiornoData=null, peak=base, maxDDTot=0;
- dopo.forEach(p=>{ if(p.cap>peak)peak=p.cap; const dd=peak>0?(peak-p.cap)/peak*100:0; if(dd>maxDDTot)maxDDTot=dd; });
- giorni.forEach(g=>{ const dd=g.start>0?(g.start-g.min)/g.start*100:0; if(dd>maxDDGiorno){ maxDDGiorno=dd; maxDDGiornoData=g.k; } });
- // In ordine: prima la violazione del giorno (>5%), poi l'obiettivo a fine giornata (+10%).
+ // TUTTI E DUE I LIMITI SI MISURANO SUL CAPITALE INIZIALE. Corretto il 28 ottobre 2026 dopo
+ // aver letto le regole vere su ftmo.com/en/trading-objectives: «Maximum Daily Loss: 5% of the
+ // Initial Simulated Capital» e «Maximum Loss: 10% of the Initial Simulated Capital».
+ //
+ // PRIMA ERA SBAGLIATO IN DUE MODI, e tutti e due falsavano ogni simulazione:
+ //
+ // 1) Il limite giornaliero si calcolava sul saldo di apertura DI QUEL GIORNO. Ma in FTMO il
+ //    limite in euro e' FISSO (il 5% del capitale iniziale); quello che si azzera ogni giorno e'
+ //    il RIFERIMENTO da cui si misura la perdita. Con un conto a 10.800 su 10.000 di partenza, la
+ //    vecchia formula concedeva 540 euro invece di 500: lasciava passare giornate che FTMO
+ //    avrebbe bocciato. Con un conto a 9.500 ne concedeva 475: bocciava giornate buone.
+ //
+ // 2) Il massimo totale si misurava DAL PICCO (trailing). Nel two step FTMO e' STATICO: il 10%
+ //    sotto il capitale iniziale, e non si muove. Un conto salito a 10.900 e tornato a 9.800
+ //    risultava «violato» (-10,09% dal picco) pur essendo solo il 2% sotto quello che si era
+ //    versato. Il trailing esiste davvero, ma e' del ONE STEP, e insegue il saldo di FINE
+ //    GIORNATA, non il minimo toccato durante il giorno: e' una terza formula ancora, e arrivera'
+ //    con i preset (vedi cervello/PROGETTO-PROP-FIRM.md).
+ let maxDDGiorno=0, maxDDGiornoData=null, maxDDTot=0;
+ dopo.forEach(p=>{ const dd=base>0?(base-p.cap)/base*100:0; if(dd>maxDDTot)maxDDTot=dd; });
+ giorni.forEach(g=>{ const dd=base>0?(g.start-g.min)/base*100:0; if(dd>maxDDGiorno){ maxDDGiorno=dd; maxDDGiornoData=g.k; } });
+ // In ordine, giorno per giorno: prima la perdita della giornata, poi il massimo totale, poi
+ // l'obiettivo a fine giornata. Si scorre cronologicamente perche' conta QUALE arriva prima:
+ // chi viola il 15 non puo' essere «sbloccato» dal 20.
  let esito='ok', esitoData=null;
  for(const g of giorni){
-  const ddG=g.start>0?(g.start-g.min)/g.start*100:0;
+  const ddG=base>0?(g.start-g.min)/base*100:0;
   if(ddG>5){ esito='finita'; esitoData=g.k; break; }
+  // Il massimo totale si controlla QUI DENTRO, sul minimo toccato in giornata, e non alla fine:
+  // cosi' la data che si mostra e' il giorno in cui si e' sfondato davvero, invece del giorno
+  // con la peggior perdita giornaliera - che prima veniva riportato al suo posto, ed era un
+  // giorno diverso.
+  const ddT=base>0?(base-g.min)/base*100:0;
+  if(ddT>10){ esito='finita'; esitoData=g.k; break; }
   if(g.end>=base*1.10){ esito='sbloccata'; esitoData=g.k; break; }
  }
- if(esito==='ok'&&maxDDTot>10){ esito='finita'; esitoData=maxDDGiornoData||null; }
  const profFinale=dopo.length&&base>0?((dopo[dopo.length-1].cap-base)/base*100):0;
  return {base,numGiorni:giorni.length,maxDDGiorno,maxDDGiornoData,maxDDTot,esito,esitoData,profFinale};
 }
@@ -49914,8 +49951,8 @@ function fblPropDedicataAggiorna(c,capitale){
   statoHtml='<div class="tgCfgNota" style="margin-top:8px;border-left:3px solid #8b96a5;padding-left:10px">🟢 Nessuna violazione nel periodo, ma l\'obiettivo +10% non è stato raggiunto (il conto chiude a '+(profFinale>=0?'+':'')+profFinale.toFixed(2)+'%).</div>';
  }
  box.innerHTML='<div class="fblRendCifre">'
-  +cifra(maxDDGiorno.toFixed(2)+'%','massimo drawdown giornaliero (limite 5%)'+(maxDDGiornoData?(' · '+dataDayIt(maxDDGiornoData)):''),maxDDGiorno>5?'giu':'')
-  +cifra('−'+maxDDTot.toFixed(2)+'%','drawdown massimo totale (limite 10%)',maxDDTot>0?'giu':'')
+  +cifra(maxDDGiorno.toFixed(2)+'%','peggior giornata, sul capitale iniziale (limite 5%)'+(maxDDGiornoData?(' · '+dataDayIt(maxDDGiornoData)):''),maxDDGiorno>5?'giu':'')
+  +cifra('−'+maxDDTot.toFixed(2)+'%','massima discesa sotto il capitale iniziale (limite 10%)',maxDDTot>0?'giu':'')
   +cifra((profFinale>=0?'+':'')+profFinale.toFixed(2)+'%','profitto dall\'apertura della prop (obiettivo +10%)',profFinale<0?'giu':'')
   +cifra(String(numGiorni),'giorni controllati dopo l\'apertura')
   +'</div>'+statoHtml;

@@ -29,6 +29,22 @@ dall'architettura, e lì non c'è da inventare niente.
 
 ---
 
+> ## ✅ PASSO 1 FATTO — 28 ottobre 2026
+>
+> I due errori del capitolo 2 sono **corretti**, in tutti e tre i punti dove stavano:
+> `fblPropDedicataConta()` (le sale), `checkPropFirmRules()` (la sessione) e `pfMt5Metrics()`
+> (il conto MT5 vero).
+>
+> **8 test nuovi**, in `prop_firm_regole_ftmo.test.mjs` e `prop_firm_limite_giornaliero.test.mjs`:
+> 5 erano **rossi prima** della correzione, 3 sono prove di controllo che erano e restano verdi
+> (servono a impedire che "correggere" diventi "non bocciare mai piu' niente").
+>
+> Gli **11 test gia' esistenti passano identici**: i loro numeri cadevano dalla stessa parte con
+> tutte e due le formule, ed e' esattamente per questo che l'errore era sopravvissuto. I casi
+> nuovi sono costruiti apposta perche' le due regole diano verdetti OPPOSTI.
+>
+> **Prossimo:** passo 2, le regole in un oggetto solo con i tre preset.
+
 ## 2. DUE ERRORI VERI, TROVATI CONFRONTANDO COL SITO FTMO
 
 Vanno sistemati **prima** di aggiungere qualsiasi cosa: oggi ogni simulazione prop dà un
