@@ -16,6 +16,19 @@ export const RADICE = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
 export const RISULTATI = path.join(RADICE, 'laboratorio', 'risultati');
 fs.mkdirSync(RISULTATI, {recursive:true});
 
+// LANCIA CHROMIUM COL PERCORSO GIUSTO, dovunque giri il collaudo.
+//
+// Nel contenitore cloud e su GitHub Chromium NON è quello che playwright cerca per conto suo: sta
+// in un percorso preciso (lo installa il flusso). Un `chromium.launch()` senza `executablePath`
+// sul runner cerca il browser sbagliato e può RESTARE APPESO dentro il lancio — ed è esattamente
+// l'appensione che fa cancellare il collaudo di GitHub dal timeout, senza un solo test rosso.
+// Chi ha bisogno di un contesto browser SUO (e non di quello di apriApp) deve passare da qui.
+export function lanciaChromium(){
+  const opz={};
+  for(const p of ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome']) if(fs.existsSync(p)) opz.executablePath=p;
+  return chromium.launch(opz);
+}
+
 // IL SISTEMA OPERATIVO DEL BANCO E' DICHIARATO, NON EREDITATO.
 //
 // Dalla v158 l'app chiede "questo dispositivo e' Windows?" per decidere se proporre

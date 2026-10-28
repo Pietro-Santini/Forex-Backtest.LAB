@@ -23,7 +23,7 @@
 // misura, non un callback.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chromium} from './aiuti.mjs';
+import {lanciaChromium} from './aiuti.mjs';
 
 const PREPARA = () => {
   const t0=Date.now()-300*60000; let p=4161; const R=[];
@@ -39,7 +39,7 @@ const PREPARA = () => {
 
 // Apre la pagina col preparativo del banco (senza, reindirizza a login.html) + il touch vero.
 async function apriConTouch(){
-  const browser = await chromium.launch({});
+  const browser = await lanciaChromium();
   const contesto = await browser.newContext({
     viewport:{width:600, height:760},      // stretto: la pagina è più alta dello schermo
     hasTouch:true,
