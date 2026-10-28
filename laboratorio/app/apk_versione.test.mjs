@@ -21,9 +21,17 @@ import {fileURLToPath} from 'node:url';
 import zlib from 'node:zlib';
 
 const RADICE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const PROGETTO_MOBILE = 'C:\\Users\\pietro\\Desktop\\trading\\forex-backtest-mobile';
-const SALTO = 'il progetto mobile sta fuori dal repository (sul computer del proprietario): ' +
-  'la versione dentro l\'APK si controlla l\u00ec, in locale';
+// DAL 28 OTTOBRE 2026 IL PROGETTO MOBILE STA NEL REPOSITORY, e l'APK lo costruisce GitHub a
+// ogni release (.github/workflows/apk.yml). Qui restano due controlli, e sono due cose diverse:
+//
+//  1. SE sul computer c'e' un APK costruito a mano, la versione dentro dev'essere quella giusta.
+//     Su GitHub non c'e' (le build sono fuori dal repository), quindi li' questo salta.
+//  2. SEMPRE, anche su GitHub: il flusso che costruisce l'APK deve copiare sw.js dal repository
+//     e iniettare la versione. E' li' che il difetto del 20 ottobre non puo' piu' nascere - e un
+//     test che sorveglia solo un file sul computer del proprietario non lo vedrebbe mai.
+const PROGETTO_MOBILE = path.join(RADICE, 'mobile');
+const SALTO = 'nessun APK costruito a mano: ora lo costruisce GitHub a ogni release, e il ' +
+  'controllo che conta e\' quello sul flusso (vedi il test qui sotto)';
 
 function versioneDaTesto(testo) {
   const m = /CACHE_NAME\s*=\s*["']forex-backtest-lab-v([\d.]+)["']/.exec(testo);
@@ -83,14 +91,15 @@ function leggiDallaZip(percorsoZip, finisceCon) {
 }
 
 test('la versione dentro l\'APK e\' la stessa del repository (il pulsante "Aggiorna" deve spegnersi)',
-  {skip: fs.existsSync(PROGETTO_MOBILE) ? false : SALTO}, () => {
+  {skip: fs.existsSync(path.join(PROGETTO_MOBILE, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk')) ? false : SALTO}, () => {
   const swDelRepository = fs.readFileSync(path.join(RADICE, 'sw.js'), 'utf8');
   const versioneRepository = versioneDaTesto(swDelRepository);
   assert.ok(versioneRepository, 'non si legge la versione dal sw.js del repository');
 
   // Il sw.js davvero incorporato nell'APK (non la copia nella cartella www: e' l'APK che
   // l'utente installa, ed e' li' che il difetto si vedeva).
-  const apk = path.join(PROGETTO_MOBILE, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk');
+  // `release` e non piu' `debug`: dal 28 ottobre 2026 si firma con la chiave di rilascio.
+  const apk = path.join(PROGETTO_MOBILE, 'android', 'app', 'build', 'outputs', 'apk', 'release', 'app-release.apk');
   assert.ok(fs.existsSync(apk),
     'non c\'e\' l\'APK costruito in ' + apk + ': compila l\'APK e poi riprova (il collaudo ' +
     'della versione si fa sul pacchetto, non sulla cartella)');
@@ -105,4 +114,21 @@ test('la versione dentro l\'APK e\' la stessa del repository (il pulsante "Aggio
   assert.equal(versioneApk, versioneRepository,
     'l\'APK porta dentro la versione ' + versioneApk + ' e il repository la ' + versioneRepository +
     ': l\'app crede di essere vecchia e propone l\'aggiornamento per sempre');
+});
+
+// IL CONTROLLO CHE VALE ANCHE SU GITHUB: il flusso deve prendere sw.js dal repository e
+// iniettare la versione. Se un domani qualcuno toglie uno di questi due passi, l'APK tornerebbe
+// a portarsi dentro un numero di versione vecchio - e sul telefono ricomparirebbe il pulsante
+// «Aggiorna» che non si spegne mai, esattamente come il 20 ottobre 2026.
+test('il flusso che costruisce l\'APK copia sw.js e inietta la versione', () => {
+  const flusso = fs.readFileSync(path.join(RADICE, '.github', 'workflows', 'apk.yml'), 'utf8');
+  assert.ok(/cp[^\n]*\bsw\.js\b/.test(flusso),
+    'il flusso deve copiare sw.js del repository dentro www: e\' quel file a portare il numero ' +
+    'di versione che l\'app confronta');
+  assert.ok(flusso.includes('inietta_versione.py'),
+    'il flusso deve iniettare la versione in app.html con lo script dedicato (UTF-8 esplicito: ' +
+    'senza, le emoji si rompono dentro l\'APK - successo nella 2.0.27)');
+  assert.ok(flusso.includes('mobile/www-sorgente/index.html'),
+    'il flusso deve copiare anche l\'index.html del mobile: e\' quello che preconfigura ' +
+    'l\'indirizzo del server, e non sta fra i file del sito');
 });
