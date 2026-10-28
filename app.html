@@ -2687,6 +2687,14 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
              </label>
            </div>
            <div class="fbOptRow">
+             <label style="flex:none;min-width:110px" title="Acceso: dentro la modalità backtest resta visibile anche lo storico delle operazioni dell'account MT5. Spento (predefinito): il grafico è pulito, si vede solo quello che apri tu.">Posizioni MT5</label>
+             <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+               <input type="checkbox" id="fblBacktestMt5Chk">
+               mostra anche le posizioni e lo storico di MT5
+             </label>
+           </div>
+           <div class="hint" style="margin:-2px 0 10px">Spento, in modalità backtest spariscono dal grafico <b>tutte</b> le righe dell'account MT5: posizioni aperte, storico, linee di entrata, target e stop. È il senso della modalità &mdash; un backtest pulito, come su un file CSV. Accendilo solo se vuoi confrontare quello che stai provando con quello che il conto ha già fatto.</div>
+           <div class="fbOptRow">
              <label style="flex:none;min-width:110px" title="Stesso interruttore, dal vivo: si accende e si spegne anche con il pulsante «🧪 Modalità backtest» nella barra del replay.">Stato attuale</label>
              <span id="fblBacktestModeStato" class="sub">spento</span>
            </div>
@@ -4400,6 +4408,25 @@ function fblBacktestModeImposta(v){ fblBacktestModeSalva(v); try{ fblBacktestMod
 // Vero solo quando la modalità backtest sta davvero facendo il suo mestiere: dentro il replay.
 // Fuori dal replay la modalità resta accesa come preferenza ma non cambia niente.
 function fblBacktestModeInUso(){ return fblBacktestModeAttivoOra()&&!!liveReplayActive; }
+// SI VOGLIONO VEDERE LE POSIZIONI MT5 ANCHE IN MODALITA' BACKTEST?
+//
+// RICHIESTO dal proprietario (28 ottobre 2026): «quando attiviamo la modalita' backtest non deve
+// farci piu' visualizzare le posizioni dello storico di MT5: le linee di apertura, entry, TP,
+// stop loss, tutto deve sparire. Poi nelle impostazioni mettiamo il pulsante: vuoi visualizzare
+// le posizioni di MT5 in modalita' backtest?».
+//
+// Spenta di default, perche' e' il senso stesso della modalita': un backtest pulito, come su un
+// file CSV. Chi la accende sa cosa sta chiedendo.
+const FBL_BACKTEST_MT5_KEY='fbl_replay_backtest_mostra_mt5';
+function fblBacktestMostraMt5(){ try{ return localStorage.getItem(FBL_BACKTEST_MT5_KEY)==='1'; }catch(e){ return false; } }
+function fblBacktestMostraMt5Imposta(v){
+  try{ localStorage.setItem(FBL_BACKTEST_MT5_KEY,v?'1':'0'); }catch(e){}
+  try{ fblBacktestModeUi(); }catch(e){}
+  try{ draw(); update(); }catch(e){}
+}
+// Nota: non esiste piu' una "fblBacktestSoloSuo". La domanda giusta non e' «si vede solo il
+// mio?» ma «quello di MT5 si vede?», e si fa con fblBacktestMostraMt5(): la differenza e' che la
+// prima suggerisce di NASCONDERE le altre, e nascondendole si nascondevano anche le proprie.
 // Questa posizione è nata dentro la modalità backtest? È il flag che decide cosa si vede.
 function fblNasceNelBacktest(pos){ try{ return !!(pos&&(pos.backtest===true||pos.backtestMode===true)); }catch(e){ return false; } }
 // ===================================================================
@@ -5369,6 +5396,33 @@ function tradeBelongsToCurrentView(t){
  if(!t)return false;
  const m=currentMode();
  if((t.mode||'backtest')!==m)return false;
+ // MODALITA' BACKTEST: sparisce anche lo STORICO, non solo le posizioni aperte.
+ //
+ // SEGNALATO dal proprietario (28 ottobre 2026): «quando attiviamo la modalita' backtest non
+ // deve farci piu' visualizzare le posizioni dello storico di MT5: le linee di apertura, entry,
+ // TP, stop loss, tutto deve sparire».
+ //
+ // LA CAUSA: i filtri sono DUE e separati. Quello delle posizioni APERTE
+ // (positionBelongsToCurrentView) conosceva la modalita' backtest; questo, che decide cosa si
+ // vede delle operazioni GIA' CHIUSE, non l'aveva mai saputo. Risultato: si accendeva il
+ // backtest, le posizioni aperte sparivano, e tutto lo storico restava li' a grafico - cioe'
+ // proprio le righe che sporcano di piu', perche' sono tante e vecchie.
+ //
+ // Funziona perche' un'operazione chiusa eredita i campi della posizione da cui e' nata
+ // (trades.push({...pos,...})), contrassegno del backtest compreso.
+ // «MOSTRA ANCHE MT5», NON «MOSTRA SOLO MT5».
+ //
+ // Qui c'era `if(fblBacktestSoloSuo())return fblNasceNelBacktest(...)`, e con l'interruttore
+ // ACCESO il controllo proseguiva fino alla regola normale - «MT5 collegato: solo le operazioni
+ // di QUEL conto» - che fa sparire le operazioni senza ticket MT5. Cioe' proprio le tue del
+ // backtest: accendere «mostra anche MT5» le avrebbe cancellate dal grafico.
+ //
+ // Scritto cosi' l'intenzione e' esplicita e non si puo' fraintendere: quello che apri tu si
+ // vede SEMPRE (e' il backtest), quello di MT5 solo se l'hai chiesto.
+ if(fblBacktestModeInUso()){
+   if(fblNasceNelBacktest(t))return true;
+   return fblBacktestMostraMt5();
+ }
  if(m==='live'){
    let conn=false; try{ conn=!!mt5Connected; }catch(e){}
    if(conn){
@@ -11270,7 +11324,12 @@ function positionBelongsToCurrentView(pos){
    // poi. Tutto il resto — le posizioni dell'account MT5 reale e quelle aperte prima nel replay —
    // non si vede più: «devono sparire dal grafico tutte le posizioni inerenti all'account MT5,
    // non devono visualizzarsi più».
-   if(fblBacktestModeInUso())return fblNasceNelBacktest(pos);
+   // Stessa regola delle operazioni chiuse (vedi tradeBelongsToCurrentView): la tua sempre,
+   // quella di MT5 solo se l'interruttore e' acceso.
+   if(fblBacktestModeInUso()){
+     if(fblNasceNelBacktest(pos))return true;
+     if(!fblBacktestMostraMt5())return false;
+   }
    return !!pos.historical;  // replay: SOLO le posizioni nate nel replay
  }
  let conn=false; try{ conn=!!mt5Connected; }catch(e){}
@@ -47526,10 +47585,24 @@ setTimeout(()=>{ try{ fblBacktestModeUi(); }catch(e){} },500);
 (function fblBacktestModeImpostazioni(){
   function rifletti(){
     const chk=document.getElementById('fblBacktestModeChk'); if(chk)chk.checked=fblBacktestModeAttivoOra();
+    const mt5=document.getElementById('fblBacktestMt5Chk'); if(mt5)mt5.checked=fblBacktestMostraMt5();
     const st=document.getElementById('fblBacktestModeStato');
     if(st)st.textContent=fblBacktestModeAttivoOra()?'acceso — nel replay vedi solo ciò che apri tu':'spento — nel replay si rivedono anche le posizioni dello storico';
   }
   function init(){
+    // L'interruttore delle posizioni MT5 si collega PRIMA, e per conto suo: vale anche quando
+    // la modalità backtest è spenta (è una preferenza, non uno stato), e se si agganciasse
+    // dentro il blocco qui sotto non esisterebbe finché la casella principale non c'è.
+    const mt5=document.getElementById('fblBacktestMt5Chk');
+    if(mt5&&!mt5.dataset.collegato){
+      mt5.dataset.collegato='1';
+      mt5.addEventListener('change',()=>{
+        fblBacktestMostraMt5Imposta(mt5.checked);
+        try{ $('status').textContent=mt5.checked
+          ?'In modalità backtest resteranno visibili anche le posizioni e lo storico di MT5.'
+          :'🧹 In modalità backtest il grafico mostrerà solo quello che apri tu: niente posizioni né storico MT5.'; }catch(e){}
+      });
+    }
     const chk=document.getElementById('fblBacktestModeChk'); if(!chk)return;
     chk.addEventListener('change',()=>{
       fblBacktestModeImposta(chk.checked);
