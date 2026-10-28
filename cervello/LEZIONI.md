@@ -60,6 +60,20 @@
     "riparato" aggiungendo `ready` come FUNZIONE, mentre l'app ci fa `.then()` sopra: e' una
     PROMESSA. Riparare senza guardare come il pezzo viene usato sposta il difetto, non lo toglie.
 
+21. **Non si spinge MAI un test prima del codice che deve farlo passare.** Scritto un file di
+    test mentre aspettavo un collaudo - per non stare fermo - e' finito nel commit insieme ad
+    altro. L'implementazione e' arrivata dopo, e su GitHub due dei sei test sono caduti: il
+    proprietario ha visto un semaforo rosso che non sapeva spiegare. **In locale un test rosso e'
+    informazione; su GitHub e' solo un allarme rotto.** Se un test si scrive in anticipo, resta
+    fuori dal commit finche' non c'e' il codice - oppure si parcheggia con un nome che il
+    collaudo non raccoglie (`.DA-ATTIVARE.mjs`), come gia' fatto per il preset della prop firm.
+
+22. **Un test che passa SENZA il codice che dovrebbe provare non sta provando niente.** Degli
+    stessi sei test, quattro passavano anche con la vecchia implementazione a slot unico. Non e'
+    una buona notizia: vuol dire che misuravano qualcosa che era gia' vero. Il modo di
+    accorgersene e' guardarli diventare rossi PRIMA, uno per uno - e se uno non diventa rosso,
+    chiedersi che cosa stia davvero affermando.
+
 20. **Dentro le virgolette doppie la shell esegue i backtick. Sempre, dovunque.** Vale in
     `python -c "..."`, in `git commit -m "..."`, in qualunque stringa fra virgolette doppie: ogni
     nome fra backtick diventa un comando eseguito e sostituito col suo risultato, quasi sempre il
