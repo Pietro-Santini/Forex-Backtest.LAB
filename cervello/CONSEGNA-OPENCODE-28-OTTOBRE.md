@@ -149,11 +149,55 @@ c'è la catena intera e le due strade possibili. La strada giusta è portare la 
 per segnale, finché non dà numeri identici. Quel confronto non è un dettaglio: è l'unico modo
 onesto di dimostrare che il ponte decide come decide la pagina oggi, su soldi veri.
 
-### F. Pubblicare la 2.0.39
+### F. Il profilo volumetrico si sposta al cambio di time frame — ATTENZIONE, è un conflitto
 
-Tutto il lavoro della prop firm è su `main` ma **non rilasciato**. Da questa volta serve **anche
-un Setup nuovo**: la correzione del punto 10 è in `bridge.py`, cioè dentro l'eseguibile, e non
-arriva con l'aggiornamento della pagina.
+Segnalato dal proprietario il 28 ottobre 2026, con due schermate (1H e 30m) in cui l'istogramma
+copre tratti diversi:
+
+> «Al cambio di time frame modifica la posizione. Anche al cambio di time frame deve rispettare
+> quello che è l'ora e fascia dei prezzi. Non può sfalsare in questo modo.»
+
+**NON correggerlo d'istinto.** Il comportamento che descrive è la conseguenza diretta di una
+richiesta sua precedente, ed è scritta nel codice sopra `vpFixedResolveRange` (circa riga 10940
+di `app.html`):
+
+> «RICHIESTO ESPLICITAMENTE: *cambiando timeframe il numero di candele dentro l'istogramma non
+> deve cambiare*»
+
+Per fare questo, **solo** per `vpfixed` («Profilo volume ad intervallo fisso») il numero di
+candele viene fissato al primo disegno e poi mantenuto, e `p2.time` viene **riscritto** a ogni
+cambio TF. Il commento lo dichiara già apertamente: «l'intervallo di TEMPO coperto
+dall'istogramma CAMBIA da solo quando cambi TF». È esattamente il sintomo che ora segnala come
+sbagliato.
+
+**Le due richieste non possono essere vere insieme.** A tempo fisso il numero di candele cambia;
+a candele fisse cambia il tempo. Non esiste una terza strada: è aritmetica, non codice.
+
+**Cosa fare, nell'ordine:**
+
+1. **Prima stabilire QUALE dei due disegni ha usato.** Sono due cose diverse e si comportano in
+   modo diverso:
+   - `vpanchor` («Profilo volume **ancorato**» — il nome che lui ha usato) parte da `p1.time` via
+     `rowIndexNearTime()`, cioè **è già ancorato al tempo**, e arriva alla candela attuale. Se si
+     sposta *questo*, allora c'è un difetto vero da trovare, e non è il conflitto qui sopra.
+   - `vpfixed` («intervallo fisso») è quello che si sposta **per scelta**.
+   Si riproduce disegnandoli entrambi e cambiando TF: dicono subito quale dei due casi è.
+2. **Se è `vpfixed`**, è una decisione da far prendere a lui, non da prendere al suo posto. La
+   via d'uscita pulita è **un interruttore** nelle impostazioni del profilo («al cambio di time
+   frame tieni fermo: il tempo / il numero di candele»), con il tempo come predefinito — così
+   nessuna delle due richieste viene cancellata.
+3. **Il resto dei disegni è già a posto** e non va toccato: linee, rettangoli e livelli sono
+   ancorati a tempo+prezzo reali tramite `getRowsTimestamps()`, e c'è già una correzione pagata
+   per il caso in cui saltavano (quando una sola data non valida faceva ripiegare TUTTO il
+   grafico su «tempo finto = indice di candela»). Se ricompare un salto **di tutti** i disegni
+   insieme, è di nuovo quella strada, non questa.
+
+### G. Pubblicare la 2.0.39 — FATTO
+
+~~Tutto il lavoro della prop firm è su `main` ma non rilasciato.~~ **FATTO: la 2.0.39 è stata
+pubblicata il 28 ottobre 2026** (`c892812`), con Setup nuovo — serviva, perché la correzione del
+punto 10 è in `bridge.py`, cioè dentro l'eseguibile, e non arriva aggiornando la pagina.
+Il proprietario deve **installare il Setup**, non solo premere Aggiorna.
 
 ---
 
