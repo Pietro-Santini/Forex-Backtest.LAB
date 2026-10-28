@@ -4372,7 +4372,7 @@ fblDelega('click',function(e){
 // caselle delle altre. Niente a che vedere con `active`, che l\'app riassegna da sola: il perche'
 // della separazione e' spiegato per esteso sopra fblClickSuVuoto().
 let posSelezionata=null;
-let rows=[], baseRows=[], rowsAssetKey='', csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, zoneWidthDrag=null;
+let rows=[], baseRows=[], rowsAssetKey='', csvLibrary=[], idx=0, viewEnd=0, masterTime=null, positions=[], active=null, trades=[], equity=[], history=[], tradeSLLine=null, tradeTPLine=null, pendingOrders=[], timer=null, currentTF=1, panDrag=false, panStartX=0, panStartY=0, panStartViewEnd=0, panStartScale=null, panStartPriceLo=null, panStartPriceHi=null, tradeLevelDrag=null, touchPoints=new Map(), twoFingerPan=false, twoFingerStartX=0, twoFingerStartY=0, twoFingerStartViewEnd=0, twoFingerStartScale=null, twoFingerStartPriceLo=null, twoFingerStartPriceHi=null, twoFingerStartDistX=0, twoFingerStartDistY=0, twoFingerStartVisibleCount=80, twoFingerStartPriceZoomFactor=1, twoFingerCloseMode=false, twoFingerAsse=null, zoneWidthDrag=null;
 // REPLAY IN LIVE (richiesto esplicitamente): in Live si può "tornare indietro nel tempo" e
 // riavanzare candela per candela come nel backtest, mentre i dati live continuano ad arrivare in
 // background. liveReplayActive=true: masterTime/idx sono CONGELATI sul punto scelto e NESSUNA
@@ -24977,16 +24977,58 @@ function handleTwoFingerPan(){
  // Due dita già vicine all'inizio del gesto restano uno spostamento anche qui (twoFingerCloseMode).
  if(!_paginaNormaleGrafico()&&!twoFingerCloseMode){
   const distX=Math.abs(pts[0].x-pts[1].x), distY=Math.abs(pts[0].y-pts[1].y);
+
+  // UN ASSE SOLO PER GESTO, E POI NON SI CAMBIA PIU'.
+  //
+  // SEGNALATO dal proprietario (28 ottobre 2026): «fa sia lo zoom orizzontale che verticale
+  // insieme. Il grafico si muove in tutte le direzioni, si ridimensiona in verticale e in
+  // orizzontale: non va bene. Quando le dita si muovono in verticale non deve assolutamente
+  // muovere l'asse orizzontale, e viceversa».
+  //
+  // LA CAUSA: qui c'erano DUE `if` indipendenti, ognuno con una soglia di 2 pixel. Due dita che
+  // si muovono "in verticale" cambiano comunque la distanza orizzontale di molto piu' di 2
+  // pixel - nessuna mano umana fa un pizzico perfettamente verticale - quindi scattavano
+  // sempre tutti e due. Il commento diceva "i due assi sono isolati": erano solo CALCOLATI
+  // separatamente, che e' il contrario di isolati.
+  //
+  // E PERCHE' IL TEST NON L'AVEVA VISTO: perche' muoveva le dita in verticale PURO, dove
+  // la distanza orizzontale non cambia affatto. Un gesto che a mano non esiste.
+  //
+  // LA REGOLA, quella delle app serie (MT5 compreso): finche' nessuna direzione ha
+  // chiaramente vinto non si zooma NIENTE - meglio fermi un istante che muoversi a caso. Appena
+  // una vince, si blocca per tutto il resto del gesto: da li' in poi l'altra viene ignorata
+  // anche se le dita sbandano, ed e' proprio lo sbandamento il problema da togliere.
+  const spostX=Math.abs(distX-twoFingerStartDistX);
+  const spostY=Math.abs(distY-twoFingerStartDistY);
+  // Un asse si puo' usare solo se all'inizio le dita erano davvero distanziate su di lui: con
+  // distanza quasi zero il rapporto fra "adesso" e "prima" non significherebbe niente (e' una
+  // divisione per zero travestita). Questa guardia c'era gia' prima, e resta.
+  const puoX=twoFingerStartDistX>1, puoY=twoFingerStartDistY>1;
+  if(!twoFingerAsse){
+    // 12 px: abbastanza da non scattare per il tremolio della mano, abbastanza poco da non
+    // far sembrare il grafico bloccato. 1,5 volte: la vincitrice deve vincere DAVVERO, se no
+    // un gesto in diagonale sceglierebbe a caso quello che capita primo per un pixel.
+    const MINIMO=12, QUANTO_DI_PIU=1.5;
+    // Il confronto si fa SOLO fra assi utilizzabili: se uno dei due e' fuori gioco, l'altro non
+    // deve battersi contro un avversario che non potrebbe comunque vincere - altrimenti un
+    // pizzico con le dita allineate non zoomerebbe mai piu' niente.
+    if(puoX&&!puoY){ if(spostX>=MINIMO)twoFingerAsse='x'; }
+    else if(puoY&&!puoX){ if(spostY>=MINIMO)twoFingerAsse='y'; }
+    else if(puoX&&puoY){
+      if(spostX>=MINIMO&&spostX>=spostY*QUANTO_DI_PIU)twoFingerAsse='x';
+      else if(spostY>=MINIMO&&spostY>=spostX*QUANTO_DI_PIU)twoFingerAsse='y';
+    }
+  }
   // ORIZZONTALE: la distanza fra le dita decide quante candele si vedono. Dita che si allontanano
   // = meno candele = zoom avanti; dita che si avvicinano = più candele = zoom indietro.
-  if(twoFingerStartDistX>1&&Math.abs(distX-twoFingerStartDistX)>2){
+  if(twoFingerAsse==='x'&&twoFingerStartDistX>1){
     const kx=distX/twoFingerStartDistX;
     const nv=Math.max(2,Math.min(2000,Math.round(twoFingerStartVisibleCount/kx)));
     if(nv!==getVisibleCount()){ visibleCount=nv; changed=true; }
   }
   // VERTICALE: la stessa distanza decide la scala dei prezzi. Il fattore è l'inverso della
   // distanza (un fattore più grande allarga la finestra dei prezzi, quindi è uno zoom indietro).
-  if(twoFingerStartDistY>1&&Math.abs(distY-twoFingerStartDistY)>2){
+  if(twoFingerAsse==='y'&&twoFingerStartDistY>1){
     const ky=distY/twoFingerStartDistY;
     priceZoomFactor=Math.max(PRICE_ZOOM_MIN_FACTOR,twoFingerStartPriceZoomFactor/ky);
     // La finestra prezzi si ricalcola da sola sul nuovo fattore: azzerarla è il modo in cui
@@ -25160,6 +25202,9 @@ function iniziaGestoDueDita(e){
  // Due dita già vicine tra loro all'inizio del gesto (es. < 60px): trattiamo tutto il gesto come
  // uno spostamento libero (mai zoom), come se si usasse la penna, per tutta la sua durata.
  twoFingerCloseMode=Math.hypot(twoFingerStartDistX,twoFingerStartDistY)<60;
+ // L'asse si sceglie DENTRO il gesto, non prima: qui si azzera, cosi' ogni pizzico riparte
+ // libero e non si porta dietro la direzione di quello precedente.
+ twoFingerAsse=null;
  for(const id of touchPoints.keys())chartEl.setPointerCapture?.(id);
 }
 // ===================== GUARDIA DUE DITA (tablet e telefono) =====================
