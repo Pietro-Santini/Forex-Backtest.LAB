@@ -60,10 +60,22 @@
     "riparato" aggiungendo `ready` come FUNZIONE, mentre l'app ci fa `.then()` sopra: e' una
     PROMESSA. Riparare senza guardare come il pezzo viene usato sposta il difetto, non lo toglie.
 
-20. **I backtick dentro `python -c "..."` li esegue la shell.** Scrivendo la lezione 17 ogni nome
-    di funzione fra backtick e' stato eseguito come comando e sostituito col nulla: il file si e'
-    salvato "con successo" pieno di buchi, e solo rileggendolo si e' visto. Gli script che
-    toccano i file si scrivono SU FILE, mai in una riga di comando fra virgolette doppie.
+20. **Dentro le virgolette doppie la shell esegue i backtick. Sempre, dovunque.** Vale in
+    `python -c "..."`, in `git commit -m "..."`, in qualunque stringa fra virgolette doppie: ogni
+    nome fra backtick diventa un comando eseguito e sostituito col suo risultato, quasi sempre il
+    nulla. Il comando riesce lo stesso, e il buco si vede solo rileggendo.
+
+    **E' successo TRE VOLTE in una giornata** (28 ottobre 2026): scrivendo questa stessa lezione,
+    poi in un messaggio di commit, poi di nuovo in un altro. Una volta la shell ha perfino
+    eseguito `npm ci` e letto un file YAML riga per riga come se fossero comandi. Sapere la
+    regola non basta: serve non averne l'occasione.
+
+    **LE DUE REGOLE SECCHE, senza eccezioni per i messaggi corti:**
+    - gli script che toccano i file si scrivono **su file**, mai in una riga di comando;
+    - i messaggi di commit si passano **sempre** con `git commit -F <file>`, mai con `-m "..."`.
+
+    La tentazione arriva quando il messaggio sembra breve abbastanza da non meritare un file.
+    E' esattamente il momento in cui ricapita.
 
 - **`app.html` ha a capo Windows (CRLF).** Uno script di modifica che cerca blocchi su piu' righe
   scritti con `
