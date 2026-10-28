@@ -3,6 +3,30 @@
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
 ## Aperti / limiti noti
+- **APERTO — Ogni release senza APK rompe il collegamento di scarico per Android** - 28 ottobre
+  2026, trovato pubblicando la 2.0.37. `index.html` riga 3528 punta a
+  `releases/latest/download/forexbacktestlab.apk`: appena esce una release NUOVA senza APK
+  allegato, quel collegamento da' 404, perche' "latest" e' cambiato. E' gia' successo con la
+  2.0.36 ("non e' presente l'apk nella release quindi i dispositivi mobili non trovano il file").
+
+  **Perche' non si risolve copiando l'APK vecchio.** Misurato aprendo il pacchetto: l'APK e'
+  un'app **Capacitor** che si porta dentro TUTTO il sito (`assets/public/app.html`,
+  `assets/public/sw.js`), e `capacitor.config.json` **non ha `server.url`**: carica i file
+  impacchettati, non il sito. Il `CACHE_NAME` dentro l'APK della 2.0.36 dice proprio
+  `forex-backtest-lab-v2.0.36`. Copiarlo nella release nuova darebbe ad Android un'app bloccata
+  alla versione vecchia che si dichiara da aggiornare, offre il download, scarica se' stessa e
+  ricomincia: lo stesso giro a vuoto gia' pagato sul PC con `app.html` congelato dentro
+  l'eseguibile.
+
+  **Perche' non si automatizza oggi:** il progetto Android (Capacitor) **non e' nel repo** - sta
+  solo sul computer del proprietario, ed e' il motivo per cui l'APK si costruisce a mano in
+  Android Studio. Nessun flusso di GitHub puo' farlo finche' il progetto e la chiave di firma
+  non sono disponibili alla CI.
+
+  **La regola, finche' non si automatizza:** ogni volta che si pubblica una versione, **l'APK va
+  ricostruito e allegato a QUELLA release**, oppure il collegamento per Android resta rotto. Non
+  e' un passo facoltativo della catena di pubblicazione: e' l'unico modo perche' i telefoni
+  ricevano l'aggiornamento.
 - **Collegato a un account MT5 si vedevano anche le posizioni dell'altro account** - risolto 2.0.29 - 26 ottobre 2026, segnalato con «se mi collego a un account devo vedere sul grafico soltanto le posizioni di quell'account ... non posso vedere entrambe le posizioni di tutti e due gli account». Causa: `positionBelongsToCurrentView()` con MT5 collegato accettava qualunque posizione con `mt5Ticket!=null`, senza confrontare il login del conto attivo (`currentMt5AccountTag()`), mentre `tradeBelongsToCurrentView()` lo faceva già per i trade chiusi. Ora il filtro delle posizioni aperte è identico a quello dei chiusi.
 - **Il P/L live dell'app era diverso dal terminale MT5** - risolto 2.0.29 - 26 ottobre 2026, segnalato con «andando a vedere sul terminale MT5 vedo il PL Live ed è diverso rispetto a quello che mi mostra qui l'applicazione». Causa: `floatingPL()` sommava `mt5RealProfit()` (solo profitto di prezzo), lasciando fuori swap e commissione che il terminale include. Ora usa `mt5RealNet()` (profit+swap+commissione).
 - **Il P/L live si aggiornava dopo secondi** - risolto 2.0.29 - 26 ottobre 2026, segnalato con «l'aggiornamento è veramente lento, si aggiorna dopo secondi». Causa: il polling delle posizioni MT5 dal bridge era a 2000 ms. Portato a 1000 ms.

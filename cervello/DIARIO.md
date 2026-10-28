@@ -2,6 +2,40 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-10-28 — Claude — **v2.0.37 PUBBLICATA: la prop firm misura i limiti come FTMO**.
+  1. **Il limite giornaliero era sulla base sbagliata**, in TRE funzioni (`checkPropFirmRules`,
+     `pfMt5Metrics`, `fblPropDedicataConta`). FTMO: 5% del CAPITALE INIZIALE, limite fisso in
+     euro, e ogni giorno si azzera solo il riferimento. Noi: 5% del saldo di apertura del giorno.
+     Sbagliava nei due sensi — su 10.000 cresciuti a 10.800 concedeva 540 invece di 500
+     (passavano giornate che FTMO boccia), su 9.500 ne concedeva 475 (bocciava giornate buone).
+  2. **Il massimo totale delle sale era dal PICCO**, ma il two step FTMO e' STATICO al 10% sotto
+     il capitale iniziale: un conto salito a 10.900 e tornato a 9.800 risultava violato pur
+     essendo il 2% sotto il versato.
+  3. **8 test nuovi, 5 rossi prima.** Gli 11 esistenti passano identici — ed e' la spiegazione
+     di come l'errore sia sopravvissuto: i loro numeri cadevano dalla stessa parte con tutte e
+     due le formule. (Lezione 17.)
+  4. **Quarto caso dei gesti**, che mancava: pagina normale + due dita. Controprova fatta
+     rompendo apposta `_paginaNormaleGrafico()`: il test diventa rosso.
+  5. **Riparato un test che falliva solo sotto carico** e bloccava la pubblicazione: il finto
+     cloud di `cloud_incrementale` aveva 5 dei 12 metodi che l'app usa, e nel collaudo completo
+     un timer faceva in tempo a chiamarne uno inesistente. Primo tentativo sbagliato: `ready`
+     messa come funzione mentre e' una promessa. (Lezioni 19 e 20.)
+
+  **Collaudo:** locale `Falliti: 0`; su GitHub **verde**; sito pubblicato; release v2.0.37 creata.
+  **Commit:** `76bc41e` (correzioni + test), `4c83230` (versione 2.0.37).
+
+  **⚠️ LASCIATO APERTO E IMPORTANTE:** la release 2.0.37 **non ha l'APK**, quindi
+  `index.html` → `releases/latest/download/forexbacktestlab.apk` da' **404 adesso**. Verificato
+  che l'APK e' Capacitor e si porta dentro tutto il sito (`CACHE_NAME` 2.0.36 dentro il
+  pacchetto): copiare quello vecchio NON risolve, darebbe ad Android un'app bloccata che si
+  dichiara da aggiornare e scarica se' stessa. Il progetto Android non e' nel repo, quindi
+  l'APK va ricostruito a mano e allegato alla release. Vedi `cervello/BUG.md`.
+
+  Un flusso "Installer Windows" risulta fallito: due build in corsa hanno provato a creare la
+  stessa release e la seconda ha perso (`a release with the same tag name already exists`).
+  Innocuo, ma evitabile: non lanciare `gh workflow run installer.yml` subito dopo un push, che
+  lo fa partire gia' da solo.
+
 - 2026-10-28 — OpenCode — CAPITOLO GRAFICO CHIUSO (replay + etichette + gesti + modalità backtest):
   1. **Etichette TP/SL raggruppate per LINEA DI PREZZO**: la regola era l'identità dell'intera
      casella, quindi due posizioni riempite in istanti diversi non coincidevano mai (misurato:

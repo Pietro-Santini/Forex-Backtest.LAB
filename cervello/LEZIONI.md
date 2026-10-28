@@ -39,6 +39,32 @@
 16. **Una guida che dice "sezione X" deve nominare ogni pulsante da premere per arrivarci.** "Prova
     il server" era dietro "Accesso da altri dispositivi", un nome che non c'entrava col server.
 
+17. **Una regola copiata in tre formule diverge, e i test non se ne accorgono se i numeri cadono
+    dalla stessa parte.** Il limite giornaliero della prop firm viveva in `checkPropFirmRules`,
+    `pfMt5Metrics` e `fblPropDedicataConta`, sbagliato in tutti e tre allo stesso modo: il 5% del
+    saldo di apertura del giorno invece che del capitale iniziale. Undici test lo coprivano e
+    passavano tutti, perche' i loro numeri davano lo stesso verdetto con tutte e due le formule.
+    Per TROVARLO serve un caso costruito apposta perche' le due regole rispondano OPPOSTO; per
+    non RITROVARSELO serve che il numero stia in un posto solo.
+
+18. **Un sorvegliante che muore tace identico a uno che sorveglia.** Un `ssh` dentro un ciclo di
+    sfondo moriva al primo giro (uscita 255, nessuna riga stampata): senza `-n` prova a leggere
+    un ingresso standard che li' non esiste. Il silenzio sembrava "tutto tranquillo". Chi
+    sorveglia non deve MAI uscire per un errore di rete, e deve dire qualcosa anche quando la
+    cosa sorvegliata smette di esistere.
+
+19. **Un doppione finto incompleto non e' piu' semplice: e' rotto piu' tardi.** Il finto cloud di
+    `cloud_incrementale.test.mjs` aveva 5 dei 12 metodi che l'app usa davvero. Da solo passava
+    sempre; nel collaudo completo i processi in parallelo allungavano i tempi e un timer faceva
+    in tempo a chiamarne uno inesistente, bloccando la pubblicazione. E al primo tentativo l'ho
+    "riparato" aggiungendo `ready` come FUNZIONE, mentre l'app ci fa `.then()` sopra: e' una
+    PROMESSA. Riparare senza guardare come il pezzo viene usato sposta il difetto, non lo toglie.
+
+20. **I backtick dentro `python -c "..."` li esegue la shell.** Scrivendo la lezione 17 ogni nome
+    di funzione fra backtick e' stato eseguito come comando e sostituito col nulla: il file si e'
+    salvato "con successo" pieno di buchi, e solo rileggendolo si e' visto. Gli script che
+    toccano i file si scrivono SU FILE, mai in una riga di comando fra virgolette doppie.
+
 - **`app.html` ha a capo Windows (CRLF).** Uno script di modifica che cerca blocchi su piu' righe
   scritti con `
 ` non trova mai niente e l'assert boccia senza spiegare perche'. Convertire gli
