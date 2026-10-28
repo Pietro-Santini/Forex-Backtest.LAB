@@ -58,6 +58,49 @@ dall'architettura, e lì non c'è da inventare niente.
 >
 > **Prossimo:** passo 3 — seconda sfida, giorni minimi, costanza, trailing.
 
+> ## ✅ PASSO 3 FATTO — 28 ottobre 2026
+>
+> Le fasi si percorrono **tutte**: seconda sfida che riparte dal capitale iniziale col 5%,
+> **giorni minimi** (4 nel two step, e si dice quanti ne mancano), **massimo che insegue** il
+> saldo di fine giornata nel one step, **regola di costanza** che segnala e non boccia.
+>
+> Nessun `if(oneStep)` da nessuna parte: è l'elenco `fasi` a fare la differenza.
+>
+> **6 test nuovi** con due prove di controllo incrociate (la stessa curva che il one step boccia,
+> col two step è sana). **Due test vecchi aggiornati** perché descrivevano il mondo a fase unica:
+> raggiungere l'obiettivo non è più «sbloccata», è «sfida 1 passata».
+>
+> **29 test della prop firm, tutti verdi.**
+
+---
+
+## 5-quater. PASSO 4: LE COMMISSIONI — come è disegnato
+
+È il pezzo grosso, e il proprietario ha scelto **tutte e due le strade insieme**: valori FTMO
+tipici **in percentuale**, e **imparati dal conto MT5 vero**.
+
+### Il pezzo che rende fattibile la seconda strada
+
+`bridge.py` (righe ~2567 e ~2646) restituisce già, per ogni operazione MT5 chiusa, la
+**commissione davvero addebitata**, sommata dai suoi *deal*. Non è un'ipotesi: il dato c'è.
+Da lì si ricava il costo medio per lotto, strumento per strumento.
+
+### Le tre decisioni da prendere scrivendolo
+
+**1. Quanti trade servono prima di fidarsi del valore imparato.** Un costo medio ricavato da due
+operazioni è peggio del valore tipico, e nessuno se ne accorgerebbe. Serve una soglia, e va
+**mostrato quale dei due si sta usando** — «imparato da 37 operazioni» contro «valore tipico».
+
+**2. Dove si applicano.** Oggi le commissioni esistono solo sulle posizioni MT5 vere. Vanno
+aggiunte dove oggi non c'è niente: **storico, replay e rendimento delle sale**. È lì che la prop
+firm fa i conti, ed è lì che un risultato senza commissioni è ottimista per costruzione.
+
+**3. Che fine fanno nei numeri già scritti.** Aggiungere un costo cambia tutte le curve già
+mostrate. Non è un difetto — è la ragione per cui si fa — ma va detto chiaramente, se no sembra
+che qualcosa si sia rotto.
+
+---
+
 ## 2. DUE ERRORI VERI, TROVATI CONFRONTANDO COL SITO FTMO
 
 Vanno sistemati **prima** di aggiungere qualsiasi cosa: oggi ogni simulazione prop dà un
