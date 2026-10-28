@@ -5864,15 +5864,70 @@ const FBL_PROP_REGOLE = {
    nome:'FTMO one step',
    fasi:[ {nome:'Unica', obiettivo:10} ],
    perditaGiorno:3, perditaTotale:10, totaleInsegue:true,
-   giorniMinimi:0, costanzaMaxGiorno:50, quotaTrader:90
+   giorniMinimi:0, costanzaMaxGiorno:50, quotaTrader:90,
+   tipoConto:'standard'
  },
  'ftmo-2step': {
    nome:'FTMO two step',
    fasi:[ {nome:'Sfida 1', obiettivo:10}, {nome:'Sfida 2', obiettivo:5} ],
    perditaGiorno:5, perditaTotale:10, totaleInsegue:false,
-   giorniMinimi:4, costanzaMaxGiorno:0, quotaTrader:80
+   giorniMinimi:4, costanzaMaxGiorno:0, quotaTrader:80,
+   tipoConto:'standard'
  }
 };
+// STANDARD O SWING: due conti con le stesse soglie e restrizioni diverse.
+//
+// Lo SWING non ha restrizioni ne' sull'overnight ne' sulle notizie; in cambio la leva scende da
+// 1:100 a 1:30. Senza sapere il tipo di conto, quelle regole non sanno nemmeno se applicarsi - e
+// dire a chi ha uno Swing che non puo' tenere una posizione nel fine settimana sarebbe
+// semplicemente falso.
+const FBL_PROP_TIPI_CONTO = {
+ standard:{nome:'Standard', leva:'1:100', restrizioni:{overnight:true,  notizie:true}},
+ swing:   {nome:'Swing',    leva:'1:30',  restrizioni:{overnight:false, notizie:false}}
+};
+const FBL_PROP_TIPO_KEY='fbl_prop_tipo_conto';
+function fblPropTipoConto(){
+ try{ const t=localStorage.getItem(FBL_PROP_TIPO_KEY); if(FBL_PROP_TIPI_CONTO[t])return t; }catch(e){}
+ return 'standard';
+}
+function fblPropTipoContoImposta(t){
+ if(!FBL_PROP_TIPI_CONTO[t])return false;
+ try{ localStorage.setItem(FBL_PROP_TIPO_KEY,t); }catch(e){}
+ return true;
+}
+// GLI AVVISI, scritti per essere LETTI.
+//
+// RICHIESTO dal proprietario: «deve essere visualizzato all'utente che non puo' effettuare queste
+// cose, altrimenti gli si chiude il conto in gestione».
+//
+// MA NON SONO VIOLAZIONI AUTOMATICHE, ed e' la differenza che conta. FTMO scrive «Violating this
+// rule MAY result in termination»: "may", non "will". I due limiti di perdita li misura il
+// sistema e chiudono il conto all'istante; queste passano da una revisione umana. Trattarle come
+// chiusure automatiche ci renderebbe PIU' SEVERI di FTMO - un conto dichiarato violato che in
+// realta' sarebbe ancora vivo e' un risultato sbagliato, anche se prudente.
+function fblPropAvvisi(){
+ const fuori=[];
+ try{
+  if(typeof isPropFirmMode!=='undefined'&&!isPropFirmMode)return fuori;
+  const t=FBL_PROP_TIPI_CONTO[fblPropTipoConto()];
+  if(!t)return fuori;
+  if(t.restrizioni.overnight)fuori.push({chiave:'overnight',
+    titolo:'Niente posizioni oltre la chiusura',
+    testo:'Sul conto '+t.nome+' le posizioni vanno chiuse prima di ogni pausa di mercato piu\' lunga di '
+         +'due ore, fine settimana compreso. Tenerle aperte PUO\' portare alla chiusura del conto in gestione.'});
+  if(t.restrizioni.notizie)fuori.push({chiave:'notizie',
+    titolo:'Niente operazioni sulle notizie',
+    testo:'Sul conto '+t.nome+' non si apre ne\' si chiude entro due minuti da una notizia macro importante. '
+         +'Farlo PUO\' portare alla chiusura del conto in gestione.'});
+ }catch(e){}
+ return fuori;
+}
+try{
+  window.FBL_PROP_TIPI_CONTO=FBL_PROP_TIPI_CONTO;
+  window.fblPropTipoConto=fblPropTipoConto;
+  window.fblPropTipoContoImposta=fblPropTipoContoImposta;
+  window.fblPropAvvisi=fblPropAvvisi;
+}catch(e){}
 const FBL_PROP_PRESET_KEY='fbl_prop_preset';
 const FBL_PROP_FASE_KEY='fbl_prop_fase';
 function fblPropPresetAttivo(){
@@ -5906,7 +5961,11 @@ function fblPropRegoleAttive(){
    ultimaFase:(i>=r.fasi.length-1),
    perditaGiorno:r.perditaGiorno, perditaTotale:r.perditaTotale,
    totaleInsegue:r.totaleInsegue, giorniMinimi:r.giorniMinimi,
-   costanzaMaxGiorno:r.costanzaMaxGiorno, quotaTrader:r.quotaTrader
+   costanzaMaxGiorno:r.costanzaMaxGiorno, quotaTrader:r.quotaTrader,
+   // Il tipo di conto e' una scelta a parte dal preset: lo stesso two step si puo' fare Standard
+   // o Swing, e cambiano solo le restrizioni.
+   tipoConto:fblPropTipoConto(),
+   restrizioni:(FBL_PROP_TIPI_CONTO[fblPropTipoConto()]||FBL_PROP_TIPI_CONTO.standard).restrizioni
  };
 }
 try{
@@ -6127,8 +6186,20 @@ function propFirmNewsBlackoutLabel(nowMs){
 // `if(blockedByPropFirmNews())return;` in testa alla propria funzione.
 function blockedByPropFirmNews(){
   if(propFirmViolation){ $('status').textContent='🛑 Conto Prop Firm chiuso per violazione: nessuna nuova operazione consentita.'; return true; }
+  // LE NOTIZIE AVVISANO, NON BLOCCANO (28 ottobre 2026).
+  //
+  // Prima questa funzione impediva l'ordine. Ma FTMO non lo impedisce: registra, e semmai rivede
+  // il conto dopo («may result in termination»). Un'app che blocca si comporta diversamente dal
+  // conto vero, e abitua a una protezione che nella realta' non c'e': il giorno del conto in
+  // gestione l'ordine partirebbe davvero.
+  //
+  // Quindi si dice chiaramente cosa si sta facendo, e si lascia decidere a chi opera.
   const blackout=propFirmNewsBlackoutLabel(currentPropFirmNowMs());
-  if(blackout){ $('status').textContent=`🚫 Trading bloccato (regola Prop Firm "No News Trading"): notizia macro simulata delle ${blackout} CET, ±2 minuti.`; return true; }
+  if(blackout){
+   let vale=true;
+   try{ vale=!!(fblPropAvvisi().some(a=>a.chiave==='notizie')); }catch(e){}
+   if(vale)$('status').textContent=`⚠️ Notizia macro delle ${blackout} CET (±2 minuti): sul conto Standard operare adesso PUO’ portare alla chiusura del conto in gestione.`;
+  }
   return false;
 }
 
