@@ -40,7 +40,7 @@ Più, su richiesta successiva del proprietario:
 
 ---
 
-## 2. NOVE COSE DA NON TOCCARE
+## 2. DIECI COSE DA NON TOCCARE
 
 Ognuna è costata ore. Cambiarle senza leggere il perché rimette un difetto già pagato.
 
@@ -81,6 +81,14 @@ come prima — in silenzio.
 
 **9. `skipifsilent` è stato tolto da `installer.iss` di proposito.**
 Senza, l'aggiornamento automatico installerebbe benissimo e lascerebbe l'app **spenta**.
+
+**10. Con MT5 collegato, il ponte NON si spegne quando la pagina se ne va.**
+Non è una grazia più lunga: è **nessuno spegnimento**, e ha la precedenza sulla grazia dei 90
+secondi. La grazia salva la ricarica; non salvava il caso del proprietario, che tiene il ponte
+acceso e il browser chiuso — lì nessuno torna e il ponte si uccideva, portandosi via MT5. Se
+rimetti un conto alla rovescia unico «tanto poi torna qualcuno», torna il difetto: i segnali
+arrivano e gli ordini non partono. Senza MT5 collegato la grazia c'è ancora, ed è giusto che ci
+sia. Vedi [NON-INTERROMPERE-MAI-MT5.md](NON-INTERROMPERE-MAI-MT5.md).
 
 ---
 
@@ -128,9 +136,24 @@ incrementale e non deve fermarsi»*. Il totale va contato **prima** di cominciar
 denominatore non esiste una percentuale onesta, ed è esattamente la causa dell'inciampo già
 pagato con la percentuale di caricamento ferma a 0%.
 
-### E. Pubblicare la 2.0.39
+### E. Autonomia a programma chiuso — e NON è un difetto da sistemare
 
-Tutto il lavoro della prop firm è su `main` ma **non rilasciato**.
+Il proprietario crede che le operazioni girino sul server e che la pagina non serva. **Non è
+così, ed è misurato**: `/order/market`, `/order/close` e `/order/modify` sono chiamati **solo**
+da `app.html`. Il ponte dei segnali non apre nessun ordine; il server legge i segnali e si ferma
+lì. Con la pagina chiusa non parte niente.
+
+Prima di dirgli che funziona, leggi [NON-INTERROMPERE-MAI-MT5.md](NON-INTERROMPERE-MAI-MT5.md):
+c'è la catena intera e le due strade possibili. La strada giusta è portare la decisione dentro
+`bridge.py`, che è un servizio e non muore — e provarla **contro** quella della pagina, segnale
+per segnale, finché non dà numeri identici. Quel confronto non è un dettaglio: è l'unico modo
+onesto di dimostrare che il ponte decide come decide la pagina oggi, su soldi veri.
+
+### F. Pubblicare la 2.0.39
+
+Tutto il lavoro della prop firm è su `main` ma **non rilasciato**. Da questa volta serve **anche
+un Setup nuovo**: la correzione del punto 10 è in `bridge.py`, cioè dentro l'eseguibile, e non
+arriva con l'aggiornamento della pagina.
 
 ---
 

@@ -1818,6 +1818,34 @@ def disconnect(request: Request):
     # GRAZIA sopra. Senza il parametro - i pulsanti "Esci" e "Disconnetti", dove l'intenzione e'
     # dichiarata - si spegne subito, come ha sempre fatto.
     if request.query_params.get("grazia") in ("1", "true", "si"):
+        # UN PONTE COLLEGATO A MT5 NON SI SPEGNE PERCHE' LA PAGINA SE NE E' ANDATA.
+        #
+        # SEGNALATO dal proprietario il 28 ottobre 2026, ed era la TERZA volta sullo stesso
+        # punto: «quando avviene una nuova release mi interrompe il collegamento con MT5. I
+        # segnali mi arrivano pero' non riesce ad aprire le operazioni. Il programma non puo'
+        # interrompere nulla».
+        #
+        # PERCHE' LA GRAZIA DA SOLA NON BASTAVA: i 90 secondi salvano la RICARICA, perche' chi
+        # ricarica torna in due secondi e annulla il conto alla rovescia. Ma se in quel momento
+        # la pagina non e' aperta - ed e' il caso suo: il ponte acceso per gli ordini e il
+        # browser chiuso - nessuno torna, e allo scadere si spegneva tutto. Da fuori si vedeva
+        # esattamente quello che ha descritto: i segnali continuano ad arrivare (li porta un
+        # altro processo) e gli ordini non partono piu'.
+        #
+        # LA REGOLA, e ha la precedenza sulla grazia: collegati a MT5 non si programma NIENTE.
+        # Non una grazia piu' lunga - nessuno spegnimento. Un ponte attaccato a un conto non e'
+        # un processo dimenticato: e' il processo che sta lavorando, e dall'altra parte ci sono
+        # posizioni aperte con il loro stop e il loro target.
+        #
+        # IL MOTIVO ORIGINALE RESTA SODDISFATTO: lo spegnimento automatico era stato chiesto per
+        # non lasciare processi accesi a sua insaputa. Senza MT5 collegato il conto alla
+        # rovescia c'e' ancora (sotto), e li' non c'e' niente da perdere. E con MT5 collegato la
+        # via d'uscita resta DICHIARATA: «Esci» e «Disconnetti» non chiedono la grazia e
+        # spengono tutto subito, come hanno sempre fatto.
+        if mt5_connected:
+            print("[Ponte] La pagina e' andata via, ma MT5 e' collegato: non spengo niente. "
+                  "Per spegnere, «Disconnetti» dall'app.")
+            return {"status": "resta_acceso", "perche": "mt5_collegato"}
         _programma_spegnimento()
         return {"status": "spegnimento_programmato", "secondi": SECONDI_DI_GRAZIA}
     mt5.shutdown()
