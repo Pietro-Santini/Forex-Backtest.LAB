@@ -2276,6 +2276,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
     </div>
     <button id="pfViolationRestartBtn" type="button" style="width:100%;padding:14px;border-radius:10px;border:none;background:linear-gradient(135deg,#f23645,#a30d1a);color:#fff;font-weight:800;font-size:14.5px;letter-spacing:.03em;cursor:pointer;box-shadow:0 4px 20px rgba(242,54,69,.5)">🔁 RICOMINCIA DA CAPO</button>
     <div style="font-size:10.5px;color:#6b5050;margin-top:12px">Riporta il capitale a quello iniziale di questa Challenge e svuota solo i trade di questa sessione dal Trade Journal.</div>
+    <!-- LE DUE STRADE, chieste dal proprietario: «vuoi continuare a utilizzare questo conto per
+         fare pratica ma senza la modalita' prop firm? Oppure vuoi eliminare questo conto e
+         crearne uno nuovo?». Stanno QUI perche' e' dove l'utente si trova quando perde il conto:
+         prima questa schermata diceva solo cosa era andato storto, e lasciava senza una strada. -->
+    <div id="pfSceltaConto" style="margin-top:18px;border-top:1px solid #4a2a2a;padding-top:16px">
+      <div style="font-size:13px;color:#e8d7d7;margin-bottom:12px">E adesso, cosa vuoi fare di questo conto?</div>
+      <button id="pfSceltaPraticaBtn" type="button" style="width:100%;padding:12px;border-radius:10px;border:1px solid #3ea6ff;background:transparent;color:#d7ecff;font-weight:700;font-size:13px;cursor:pointer">Continuo a usarlo per fare pratica, senza prop firm</button>
+      <div style="font-size:10.5px;color:#8a7a7a;margin:6px 0 14px">Il conto resta com&rsquo;&egrave;, con il suo storico. La prop firm si spegne: la sfida &egrave; persa e non si rigioca.</div>
+      <button id="pfSceltaEliminaBtn" type="button" style="width:100%;padding:12px;border-radius:10px;border:1px solid #6b5050;background:transparent;color:#d8c4c4;font-weight:700;font-size:13px;cursor:pointer">Elimino questo conto e ne apro uno nuovo</button>
+      <div style="font-size:10.5px;color:#8a7a7a;margin-top:6px">Il conto viene messo da parte ma <b>resta nella dashboard</b> col suo storico: da l&igrave; potrai cancellarlo davvero quando vorrai. Poi si apre l&rsquo;accesso a un nuovo conto MT5.</div>
+    </div>
   </div>
 </div>
 
@@ -5909,7 +5920,67 @@ function fblPropContoCalcola(id){ return fblPropContoStato(id).stato==='in_corso
 // IL CONTO E' VIVO? Chiuso no; in corso e finanziato si'. Sono due domande diverse da
 // «si calcola», ed e' la distinzione che il proprietario ha chiesto: passata la sfida, il conto
 // resta in esecuzione.
-function fblPropContoAttivo(id){ return fblPropContoStato(id).stato!=='chiuso'; }
+// IL CONTO E' ANCORA USABILE? Fuori uso e' SOLO quello archiviato.
+//
+// Scritto cosi' dopo che un test l'ha corretto: avevo fatto «non chiuso», ma perdere la sfida
+// NON rende il conto inutilizzabile - lo ha chiesto esplicitamente il proprietario, «se sceglie
+// di continuare ad esercitarsi senza la prop firm lo puo' fare tranquillamente». Sono due cose
+// diverse: la SFIDA e' finita, il CONTO no. Confonderle toglierebbe all'utente un conto che
+// funziona benissimo per fare pratica.
+function fblPropContoAttivo(id){ return !fblPropContoStato(id).archiviato; }
+// ===================== CONTO PERSO: COSA VUOI FARNE? =====================
+//
+// RICHIESTO dal proprietario: «per i conti chiusi con la prop firm facciamo in modo che venga
+// fuori un messaggio: vuoi continuare a utilizzare questo conto per fare pratica ma senza la
+// modalita' prop firm? Oppure vuoi eliminare questo conto e crearne uno nuovo?».
+//
+// PERCHE' SERVE: un conto perso restava li' muto, con la schermata di violazione e nient'altro.
+// Chi la guardava non sapeva se quel conto fosse ancora buono per esercitarsi (lo e'), ne' come
+// ricominciare. Due strade dichiarate valgono piu' di una schermata rossa.
+function fblPropContoDaChiedere(id){
+ const st=fblPropContoStato(id);
+ // Si chiede solo a chi ha perso E non ha ancora risposto: ripetere la stessa domanda a chi ha
+ // gia' scelto e' un modo di non ascoltare.
+ return st.stato==='chiuso' && !st.scelta;
+}
+// 'pratica' -> il conto resta usabile per esercitarsi, la prop firm NON ricomincia a calcolare.
+//              La sfida e' persa: fingere il contrario sarebbe peggio che dirlo.
+// 'elimina' -> si ARCHIVIA. Non sparisce: resta nella dashboard col suo storico, e la
+//              cancellazione vera e' un secondo gesto (vedi fblPropContoEliminaDefinitivo).
+//              Un conto che sparisce al primo clic si porta via lo storico delle operazioni, e
+//              quello non torna.
+function fblPropContoScegli(id,scelta){
+ const st=fblPropContoStato(id);
+ if(st.stato!=='chiuso')return false;
+ const s2=Object.assign({},st,{scelta:(scelta==='elimina')?'elimina':'pratica'});
+ if(s2.scelta==='elimina')s2.archiviato=true;
+ fblPropContoStatoSalva(id,s2);
+ // Scegliendo di esercitarsi, la prop firm si spegne da sola: lasciarla accesa su un conto
+ // perso mostrerebbe limiti e drawdown che non governano piu' niente.
+ if(s2.scelta==='pratica'){
+  try{ if(typeof disablePropFirmMode==='function'&&isPropFirmMode)disablePropFirmMode(); }catch(e){}
+ }
+ return true;
+}
+function fblPropContiElenco(){
+ const d=_fblPropConti(); const fuori=[];
+ Object.keys(d).forEach(k=>{ fuori.push(Object.assign({id:k},d[k])); });
+ return fuori;
+}
+// IL SECONDO GESTO. Qui sparisce per davvero, e non si torna indietro.
+function fblPropContoEliminaDefinitivo(id){
+ const d=_fblPropConti();
+ if(!Object.prototype.hasOwnProperty.call(d,id))return false;
+ delete d[id];
+ try{ localStorage.setItem(FBL_PROP_CONTI_KEY,JSON.stringify(d)); }catch(e){}
+ return true;
+}
+try{
+  window.fblPropContoDaChiedere=fblPropContoDaChiedere;
+  window.fblPropContoScegli=fblPropContoScegli;
+  window.fblPropContiElenco=fblPropContiElenco;
+  window.fblPropContoEliminaDefinitivo=fblPropContoEliminaDefinitivo;
+}catch(e){}
 try{
   window.fblPropContoId=fblPropContoId;
   window.fblPropContoStato=fblPropContoStato;
@@ -6157,6 +6228,7 @@ function triggerPropFirmViolation(rule,details){
 // altissimo), quindi blocca già da solo qualunque interazione col resto della pagina.
 function showPropFirmViolationOverlay(){
   const v=propFirmViolation; if(!v)return;
+  try{ fblPropAggiornaSceltaConto(); }catch(e){}
   const ruleLabel=v.rule==='daily'?'Daily Drawdown (5%)':'Maximum Drawdown (10%)';
   $('pfViolationRule').textContent=ruleLabel;
   const ts=new Date(v.timestamp);
@@ -48382,6 +48454,28 @@ const PF_BLOOD_EFFECT_PREF_KEY='forex_lab_pf_blood_effect';
 })();
 // STEP 3: pulsante "RICOMINCIA DA CAPO" nella schermata di violazione a tutta pagina.
 $('pfViolationRestartBtn')?.addEventListener('click', restartPropFirmChallenge);
+// LE DUE STRADE del conto perso. La domanda si fa una volta sola: fblPropContoDaChiedere()
+// smette di chiederla appena si e' risposto.
+$('pfSceltaPraticaBtn')?.addEventListener('click', ()=>{
+  try{ fblPropContoScegli(fblPropContoId(),'pratica'); }catch(e){}
+  try{ hidePropFirmViolationOverlay(); }catch(e){}
+  try{ $('status').textContent='Conto tenuto per fare pratica: la prop firm e\' spenta, il resto funziona come sempre.'; }catch(e){}
+});
+$('pfSceltaEliminaBtn')?.addEventListener('click', ()=>{
+  try{ fblPropContoScegli(fblPropContoId(),'elimina'); }catch(e){}
+  try{ hidePropFirmViolationOverlay(); }catch(e){}
+  // SI RIUSA LA STRADA CHE C'ERA GIA' per accedere a un conto nuovo, invece di inventarne una:
+  // openMt5LoginModal(null) e' la stessa che apre «Accedi a un nuovo conto» dal pannello MT5.
+  try{ if(typeof openMt5LoginModal==='function')openMt5LoginModal(null); }catch(e){}
+  try{ $('status').textContent='Conto messo da parte: lo trovi ancora nella dashboard. Accedi pure a un conto nuovo.'; }catch(e){}
+});
+// La domanda compare solo a chi ha perso e non ha ancora risposto.
+function fblPropAggiornaSceltaConto(){
+  const box=$('pfSceltaConto'); if(!box)return;
+  let chiedere=false;
+  try{ chiedere=fblPropContoDaChiedere(fblPropContoId()); }catch(e){}
+  box.style.display=chiedere?'':'none';
+}
 $('pfSbloccataOkBtn')?.addEventListener('click', ()=>{
  hidePropFirmSbloccata();
  // RICHIESTO: se il pop-up veniva dalla prop dedicata alla cronologia delle sale, confermando si
