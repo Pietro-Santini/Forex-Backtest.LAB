@@ -1,0 +1,92 @@
+apply plugin: 'com.android.application'
+
+// LA VERSIONE ARRIVA DA FUORI, NON E' PIU' SCRITTA QUI.
+//
+// Fino al 28 ottobre 2026 c'era `versionCode 1` fisso. Android decide se un APK e' piu' nuovo
+// guardando QUEL numero, non il nome: con 1 fisso, prima o poi un telefono rifiuta
+// l'aggiornamento dicendo soltanto «app non installata», senza spiegare perche'.
+//
+// Ora li passa chi compila (il flusso di GitHub, da sw.js):
+//   ./gradlew assembleRelease -PfblVersionName=2.0.37 -PfblVersionCode=20037
+// Senza, restano i valori di prima: una compilazione a mano sul computer continua a funzionare
+// esattamente come sempre.
+def fblNome   = project.findProperty('fblVersionName') ?: "1.0"
+def fblNumero = Integer.parseInt((project.findProperty('fblVersionCode') ?: "1").toString())
+
+android {
+    namespace = "com.pietrosantini.forexbacktestlab"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.pietrosantini.forexbacktestlab"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode fblNumero
+        versionName fblNome
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    // LA CHIAVE DI FIRMA ARRIVA DALL'AMBIENTE, MAI DA UN FILE NEL REPO.
+    //
+    // Una chiave messa nel repo e' pubblica per sempre, e chiunque potrebbe firmare un finto
+    // aggiornamento che i telefoni accetterebbero come tuo. Qui si leggono quattro variabili
+    // che su GitHub arrivano dai Secrets (vedi cervello/GUIDA-APK-AUTOMATICO.md).
+    //
+    // Se non ci sono - cioe' quando compili tu sul computer - non si configura niente e tutto
+    // resta come prima: `assembleDebug` continua a funzionare identico.
+    signingConfigs {
+        release {
+            def percorso = System.getenv("ANDROID_KEYSTORE_FILE")
+            if (percorso) {
+                storeFile file(percorso)
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // Si firma SOLO se la chiave c'e' davvero. Senza questa guardia, una compilazione
+            // locale di `release` fallirebbe con un errore su un file che non esiste, invece di
+            // produrre semplicemente un APK non firmato.
+            if (System.getenv("ANDROID_KEYSTORE_FILE")) {
+                signingConfig signingConfigs.release
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
