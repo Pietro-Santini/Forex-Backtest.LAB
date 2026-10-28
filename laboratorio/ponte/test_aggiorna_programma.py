@@ -26,6 +26,25 @@ RADICE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 sys.path.insert(0, os.path.join(RADICE, "installer_build", "build"))
 
 
+def _finge_windows(monkeypatch, bridge):
+    """FINGE DI ESSERE WINDOWS, e serve a far girare questi test anche su Linux.
+
+    `aggiorna_programma` comincia con «se non sei su Windows, esci»: giusto, perche' il pacchetto
+    da installare e' un .exe. Ma vuol dire che su Ubuntu - cioe' sul collaudo di GitHub - ogni
+    test riceveva "vale solo su Windows" invece del comportamento che voleva misurare.
+
+    MISURATO IL 28 OTTOBRE 2026: il collaudo locale era verde (qui Windows c'e' davvero) e quello
+    di GitHub rosso su quattro test. E' esattamente il motivo per cui la catena di pubblicazione
+    dice di guardare TUTTI E DUE: le librerie e il sistema non sono gli stessi, e un test che
+    gira solo dove lo scrivi non sorveglia niente per chiunque altro.
+
+    La logica che conta (mai indietro, il file si controlla prima di lanciarlo) non ha niente di
+    specifico di Windows: puo' e deve essere provata dappertutto. L'unica cosa davvero legata al
+    sistema e' l'avvio dell'installer, e quello nei test e' sempre finto.
+    """
+    monkeypatch.setattr(bridge.os, "name", "nt")
+
+
 def _bridge():
     if "MetaTrader5" not in sys.modules:
         sys.modules["MetaTrader5"] = types.SimpleNamespace(
@@ -53,6 +72,7 @@ def test_non_si_reinstalla_quando_il_programma_e_gia_aggiornato(monkeypatch):
     """REGOLA 1. Se l'eseguibile e' gia' alla versione della pagina, non si scarica niente:
     un aggiornamento che reinstalla ogni volta e' solo un modo lento di non cambiare nulla."""
     bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
     monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.37")
     monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
 
@@ -70,6 +90,7 @@ def test_non_si_torna_a_una_versione_piu_vecchia(monkeypatch):
     pagina (release ritirata, copia di un proxy rimasta indietro). Reinstallare qui
     retrocederebbe un programma che gestisce ordini veri."""
     bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
     monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.40")
     monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
 
@@ -96,6 +117,7 @@ def test_un_file_troppo_piccolo_non_viene_lanciato(monkeypatch):
     """REGOLA 2. Su certi hosting una pagina di errore arriva con HTTP 200: salvata col nome
     giusto e avviata come installer, lascerebbe l'installazione a meta'."""
     bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
     monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.30")
     monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
     monkeypatch.setattr(bridge.urllib.request, "urlopen", _finta_risposta(b"MZ" + b"x" * 5000))
@@ -113,6 +135,7 @@ def test_un_file_che_non_e_un_programma_windows_non_viene_lanciato(monkeypatch):
     """REGOLA 2, seconda meta': la dimensione giusta non basta. Ogni eseguibile di Windows
     comincia con 'MZ': se non c'e', quel file non e' un installer, qualunque cosa pesi."""
     bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
     monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.30")
     monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
     monkeypatch.setattr(bridge.urllib.request, "urlopen",
@@ -133,12 +156,12 @@ def test_PROVA_DI_CONTROLLO_un_pacchetto_buono_viene_lanciato_in_silenzio(monkey
     partire in SILENZIO, perche' un installer che si ferma su una finestra da confermare
     lascerebbe l'utente a guardare un'app che non torna piu'."""
     bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
     monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.30")
     monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
     monkeypatch.setattr(bridge.urllib.request, "urlopen",
                         _finta_risposta(b"MZ" + b"x" * (25 * 1024 * 1024)))
     monkeypatch.setattr(bridge.tempfile, "gettempdir", lambda: str(tmp_path))
-    monkeypatch.setattr(bridge.os, "name", "nt")
 
     lanciati = {}
 
