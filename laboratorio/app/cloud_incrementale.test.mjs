@@ -18,6 +18,45 @@ import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
 
 // 760 operazioni chiuse, ognuna della forma descritta nel progetto (~259 byte).
+
+// UN FINTO CLOUD SOLO, PER TUTTI I TEST DI QUESTO FILE.
+//
+// Il 28 ottobre 2026 questo file ha fatto cadere il collaudo DUE VOLTE nella stessa giornata, e
+// la seconda e' stata colpa della riparazione della prima: ogni test si costruiva il SUO finto
+// cloud coi soli metodi che gli servivano, io ne ho completato uno e ho lasciato l'altro
+// identico a prima. Due copie dello stesso finto divergono sempre: qui sono bastate otto ore.
+//
+// PERCHE' UN FINTO INCOMPLETO FA CADERE IL COLLAUDO E NON IL TEST DA SOLO: nel banco Firebase non
+// carica, quindi `window.fxbtCloud` non esiste e `Object.assign({}, undefined, {...})` produce un
+// oggetto coi soli metodi scritti a mano. Se mentre il finto e' montato un timer dell'app chiama
+// uno dei metodi mancanti, parte un TypeError che il test raccoglie in `errori`. Da solo il test
+// e' troppo veloce perche' il timer faccia in tempo; nel collaudo completo, coi processi in
+// parallelo che allungano tutto, ci riesce.
+//
+// QUI DENTRO C'E' TUTTO quello che l'app chiama su fxbtCloud. Se ne nasce uno nuovo si aggiunge
+// una volta sola, e vale per ogni test del file. I singoli test passano solo le loro SPIE.
+const MONTA_FINTO_CLOUD = `window.__montaFintoCloud = function(spie){
+  var vero = window.fxbtCloud;
+  window.fxbtCloud = Object.assign({}, vero, {
+    uid: 'UTENTE-DI-PROVA',
+    // ATTENZIONE: "ready" e' una PROMESSA, non una funzione: l'app fa fxbtCloud.ready.then(...)
+    // (app.html righe 6975 e 6979). Messa come funzione, ".then" sarebbe di nuovo undefined e
+    // l'errore resterebbe identico - e' l'errore che ho fatto al primo tentativo di riparazione.
+    ready: Promise.resolve(true),
+    call: async function(){ return null; },
+    graficoSalva: async function(){ return true; },
+    serverDatiLeggi: async function(){ return null; },
+    serverDatiScrivi: async function(){ return true; },
+    serverTradesLeggi: async function(){ return []; },
+    serverTradesAggiungi: async function(){ return true; },
+    save: async function(){ return true; },
+    saveKeepalive: function(){ return true; },
+    tradesAggiungi: async function(){ return true; },
+    tradesConteggio: async function(){ return 0; }
+  }, spie || {});
+  return vero;
+};`;
+
 const OPERAZIONI = (n) => Array.from({length: n}, (_, i) => ({
   id: 't' + i, side: i % 2 ? 'BUY' : 'SELL', asset: 'XAUUSD',
   entry: 4000 + (i % 100), exit: 4000 + (i % 100) + (i % 2 ? 5 : -5),
@@ -29,6 +68,7 @@ const OPERAZIONI = (n) => Array.from({length: n}, (_, i) => ({
 test('il salvataggio cloud non manda piu\' lo storico operazioni: manda solo le nuove', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
+    await pagina.evaluate(MONTA_FINTO_CLOUD);
     const r = await pagina.evaluate(async (numOperazioni) => {
       // 760 operazioni nello stato, come sul computer del proprietario.
       trades = Array.from({length: numOperazioni}, (_, i) => ({
@@ -42,9 +82,9 @@ test('il salvataggio cloud non manda piu\' lo storico operazioni: manda solo le 
       // Firebase non carica (nessuna rete), quindi fxbtCloud non esiste: lo si mette su
       // misura — è esattamente l'oggetto che syncFullStatusToFirebase() chiama.
       const viste = {save: null, saveKeepalive: null, aggiungi: null, conteggioChiesto: 0};
-      const cloudVero = window.fxbtCloud;
-      window.fxbtCloud = Object.assign({}, cloudVero, {
-        uid: 'UTENTE-DI-PROVA',
+      // Le SPIE di questo test: registrano cosa arriverebbe DAVVERO a Firestore. Tutto il resto
+      // del finto cloud lo mette __montaFintoCloud (vedi in cima al file).
+      const cloudVero = window.__montaFintoCloud({
         save: async (stato) => {
           viste.save = {trades: Array.isArray(stato && stato.trades) ? stato.trades.length : null,
                        byte: JSON.stringify(stato).length};
@@ -55,35 +95,12 @@ test('il salvataggio cloud non manda piu\' lo storico operazioni: manda solo le 
                             byte: JSON.stringify(nuove).length};
           return true;
         },
-        // Sul cloud ce ne sono gia' 750: le nuove da mandare sono 10, non 760.
         tradesConteggio: async () => { viste.conteggioChiesto++; return 750; },
         saveKeepalive: (stato) => {
           viste.saveKeepalive = {trades: Array.isArray(stato && stato.trades) ? stato.trades.length : null,
                                  byte: JSON.stringify(stato).length};
           return true;
         },
-        // GLI ALTRI METODI, che questo test non spia ma l'app usa lo stesso.
-        //
-        // Senza di loro il finto cloud ne era SPROVVISTO: `cloudVero` qui sopra e' undefined
-        // (nel banco Firebase non carica), quindi Object.assign copiava solo quelli scritti a
-        // mano. Bastava che un timer dell'app ne chiamasse uno mentre il finto era montato per
-        // ottenere «Cannot read properties of undefined (reading 'then')», che finisce in
-        // `errori` e fa cadere l'ultima asserzione.
-        //
-        // Da solo il test passava SEMPRE; falliva solo nel collaudo completo, dove i processi in
-        // parallelo allungano i tempi e danno al timer la finestra per scattare. L'elenco qui
-        // sotto e' tutto quello che l'app chiama su fxbtCloud (cercato nel file): se un domani
-        // ne nasce uno nuovo, va aggiunto qui.
-        // ATTENZIONE: `ready` e' una PROMESSA, non una funzione. L'app fa
-        // `fxbtCloud.ready.then(...)` (app.html righe 6975 e 6979): messa come funzione,
-        // `.then` sarebbe di nuovo undefined e l'errore resterebbe identico.
-        ready: Promise.resolve(true),
-        call: async () => null,
-        graficoSalva: async () => true,
-        serverDatiLeggi: async () => null,
-        serverDatiScrivi: async () => true,
-        serverTradesLeggi: async () => [],
-        serverTradesAggiungi: async () => true,
       });
       try {
         await syncFullStatusToFirebase('test', true);
@@ -120,15 +137,16 @@ test('il salvataggio cloud non manda piu\' lo storico operazioni: manda solo le 
 test('PROVA DI CONTROLLO: se non cambia niente, non si scrive niente', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
+    await pagina.evaluate(MONTA_FINTO_CLOUD);
     const r = await pagina.evaluate(async () => {
       trades = [{id: 'x1', side: 'BUY', asset: 'XAUUSD', entry: 4000, exit: 4005, lots: 0.1,
                  pl: 5, openTime: 1700000000000, closeTime: 1700003600000}];
       let chiamate = 0, aggiunte = 0;
       // Nel banco il modulo Firebase non carica (nessuna rete): fxbtCloud non esiste,
       // quindi si mette su misura — è l'oggetto che syncFullStatusToFirebase() chiama.
-      const cloudVero = window.fxbtCloud;
-      window.fxbtCloud = Object.assign({}, cloudVero, {
-        uid: 'UTENTE-DI-PROVA',
+      // Le SPIE di questo test, e basta: tutto il resto del finto cloud lo mette
+      // __montaFintoCloud (vedi in cima al file).
+      const cloudVero = window.__montaFintoCloud({
         save: async () => { chiamate++; return true; },
         tradesAggiungi: async () => { aggiunte++; return true; },
         tradesConteggio: async () => 1,   // gia' tutte su cloud: nulla di nuovo
