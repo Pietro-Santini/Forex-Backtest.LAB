@@ -62,6 +62,28 @@ test('il salvataggio cloud non manda piu\' lo storico operazioni: manda solo le 
                                  byte: JSON.stringify(stato).length};
           return true;
         },
+        // GLI ALTRI METODI, che questo test non spia ma l'app usa lo stesso.
+        //
+        // Senza di loro il finto cloud ne era SPROVVISTO: `cloudVero` qui sopra e' undefined
+        // (nel banco Firebase non carica), quindi Object.assign copiava solo quelli scritti a
+        // mano. Bastava che un timer dell'app ne chiamasse uno mentre il finto era montato per
+        // ottenere «Cannot read properties of undefined (reading 'then')», che finisce in
+        // `errori` e fa cadere l'ultima asserzione.
+        //
+        // Da solo il test passava SEMPRE; falliva solo nel collaudo completo, dove i processi in
+        // parallelo allungano i tempi e danno al timer la finestra per scattare. L'elenco qui
+        // sotto e' tutto quello che l'app chiama su fxbtCloud (cercato nel file): se un domani
+        // ne nasce uno nuovo, va aggiunto qui.
+        // ATTENZIONE: `ready` e' una PROMESSA, non una funzione. L'app fa
+        // `fxbtCloud.ready.then(...)` (app.html righe 6975 e 6979): messa come funzione,
+        // `.then` sarebbe di nuovo undefined e l'errore resterebbe identico.
+        ready: Promise.resolve(true),
+        call: async () => null,
+        graficoSalva: async () => true,
+        serverDatiLeggi: async () => null,
+        serverDatiScrivi: async () => true,
+        serverTradesLeggi: async () => [],
+        serverTradesAggiungi: async () => true,
       });
       try {
         await syncFullStatusToFirebase('test', true);

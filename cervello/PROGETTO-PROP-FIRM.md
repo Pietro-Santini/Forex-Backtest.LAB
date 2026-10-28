@@ -167,6 +167,61 @@ rischiare meno.
 
 ---
 
+## 5-ter. PASSO 2: LE REGOLE IN UN POSTO SOLO — come è disegnato
+
+Oggi i numeri `5`, `10` e `10` sono **scritti dentro le formule**, in tre funzioni diverse. Finché
+restano lì, «one step o two step?» non è una scelta: è una riscrittura.
+
+### La forma
+
+```js
+const FBL_PROP_REGOLE = {
+  'ftmo-1step': {
+    nome:'FTMO one step',
+    fasi:[ {nome:'Unica', obiettivo:10} ],
+    perditaGiorno:3, perditaTotale:10, totaleInsegue:true,
+    giorniMinimi:0, costanzaMaxGiorno:50, quotaTrader:90
+  },
+  'ftmo-2step': {
+    nome:'FTMO two step',
+    fasi:[ {nome:'Sfida 1', obiettivo:10}, {nome:'Sfida 2', obiettivo:5} ],
+    perditaGiorno:5, perditaTotale:10, totaleInsegue:false,
+    giorniMinimi:4, costanzaMaxGiorno:0, quotaTrader:80
+  }
+};
+```
+
+### Le quattro scelte, e il perché di ognuna
+
+**1. Tutte le percentuali sono del CAPITALE INIZIALE, e lo si dice una volta sola.**
+È l'errore appena corretto: lasciare che ogni formula decida da sola la base è il modo in cui è
+nato. Qui la base è una proprietà del posto, non di chi legge.
+
+**2. `fasi` è un ELENCO, e qui sta tutto il guadagno.**
+Il one step è un elenco da uno, il two step da due. Così **non esiste nessun `if(oneStep)`**: lo
+stesso codice percorre l'elenco e si ferma quando le fasi finiscono. Senza questo, ogni regola
+andrebbe scritta due volte — e due copie divergono sempre, prima o poi.
+
+**3. `totaleInsegue` è un interruttore, ma non basta.**
+Il trailing del one step **insegue il saldo di FINE GIORNATA**, non il minimo toccato durante il
+giorno. È una formula diversa, non un parametro diverso: serve una funzione sua, che l'interruttore
+sceglie. Scriverlo come se fosse solo un flag sarebbe il terzo errore della stessa famiglia dei
+due appena corretti.
+
+**4. Il preset predefinito è `ftmo-2step`, fase 1.**
+È esattamente quello che l'app fa oggi (5% / 10% statico / obiettivo 10%). Chi non tocca niente
+non deve accorgersi di nulla: il passo 2 **non cambia nessun comportamento**, sposta solo dove
+stanno i numeri. Ed è anche il modo di provarlo — a parità di impostazioni, gli stessi 19 test di
+adesso devono restare verdi senza toccarne uno.
+
+### Cosa NON entra nel passo 2
+
+Giorni minimi, regola di costanza, trailing, seconda fase e commissioni **esistono come dato** ma
+nessuno li legge ancora: arrivano al passo 3. Mescolarli qui vorrebbe dire non poter più dire
+«non è cambiato niente», che è l'unica garanzia che rende sicuro questo passaggio.
+
+---
+
 ## 6. COME LO FAREI, IN ORDINE
 
 1. **Le due correzioni del capitolo 2** (base del limite giornaliero, drawdown statico), con i
