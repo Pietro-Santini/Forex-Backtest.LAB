@@ -49939,13 +49939,82 @@ function rendDisegnaGrafico(punti,iMirino){
 
 // ---------- la strategia da provare su questa sala
 const LS_STRAT='fbl_crono_strategia';
-function stratLeggi(sala){
- let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
- return d[sala]||null;
+// QUATTRO STRATEGIE PER SALA, non una sola (28 ottobre 2026).
+//
+// RICHIESTO dal proprietario: «nella configurazione delle strategie inserisci che quella
+// configurazione vale per un conto demo o per un conto in gestione tramite prop firm di FTMO. E
+// ovviamente sara' diverso per one step e two step».
+//
+// Non e' pignoleria: su un one step si rischia il 3% al giorno e su un two step il 5%, e la
+// sfida 2 chiede solo il 5% di obiettivo invece del 10%. Sono tre situazioni in cui un trader
+// prudente NON userebbe la stessa dimensione di posizione.
+const FBL_STRAT_SLOT = ['normale','prop1','prop2a','prop2b'];
+const FBL_STRAT_SLOT_NOMI = {
+ normale:'Conto normale', prop1:'Prop one step',
+ prop2a:'Prop two step - sfida 1', prop2b:'Prop two step - sfida 2'
+};
+function fblStratSlotValido(t){ return FBL_STRAT_SLOT.indexOf(t)>=0 ? t : 'normale'; }
+// Com'e' fatta la voce di una sala: gia' a slot, o ancora alla vecchia maniera?
+// Si riconosce dal CONTENUTO e non da una bandierina: una configurazione ha `modo` o `quote`,
+// una voce a slot ha i nomi degli slot. Affidarsi a una bandierina vorrebbe dire che una voce
+// scritta da una versione che non la metteva verrebbe letta male per sempre.
+function fblStratEVecchia(v){
+ if(!v||typeof v!=='object')return false;
+ if(FBL_STRAT_SLOT.some(k=>Object.prototype.hasOwnProperty.call(v,k)))return false;
+ return Object.prototype.hasOwnProperty.call(v,'modo')||Object.prototype.hasOwnProperty.call(v,'quote');
 }
-function stratSalva(sala,cfg){
+// IL PASSAGGIO DAL VECCHIO FORMATO, ed e' il pezzo che conta davvero.
+//
+// Chi ha gia' configurato le sue sale non deve ritrovarsele vuote - e nemmeno doverle riscrivere
+// quattro volte. Quindi: la configurazione che c'era diventa quella del CONTO NORMALE (dov'e'
+// naturale cercarla), e le altre tre nascono da una sua COPIA.
+//
+// Copia, non legame: si fa con JSON.parse(JSON.stringify(...)) apposta. Se restassero agganciate,
+// modificare il one step cambierebbe anche il conto normale - il peggiore dei difetti, perche'
+// silenzioso e su soldi veri.
+//
+// E partire VUOTE sarebbe altrettanto sbagliato in un altro modo: accendendo la prop firm la sala
+// smetterebbe di operare, e sembrerebbe un guasto.
+function fblStratConverti(v){
+ const copia=()=>{ try{ return JSON.parse(JSON.stringify(v)); }catch(e){ return null; } };
+ const fuori={};
+ FBL_STRAT_SLOT.forEach(k=>{ fuori[k]=copia(); });
+ return fuori;
+}
+function stratLeggi(sala,tipo){
  let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
- d[sala]=cfg; try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
+ const v=d[sala];
+ if(!v)return null;
+ const slot=fblStratSlotValido(tipo);
+ if(fblStratEVecchia(v)){
+  // Si converte e si SALVA, cosi' la conversione avviene una volta sola e non a ogni lettura.
+  const nuovo=fblStratConverti(v);
+  d[sala]=nuovo;
+  try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
+  return nuovo[slot]||null;
+ }
+ return v[slot]||null;
+}
+function stratSalva(sala,cfg,tipo){
+ let d={}; try{ d=JSON.parse(localStorage.getItem(LS_STRAT)||'{}')||{}; }catch(e){}
+ const slot=fblStratSlotValido(tipo);
+ let v=d[sala];
+ if(fblStratEVecchia(v))v=fblStratConverti(v);
+ if(!v||typeof v!=='object')v={};
+ v[slot]=cfg;
+ d[sala]=v;
+ try{ localStorage.setItem(LS_STRAT,JSON.stringify(d)); }catch(e){}
+}
+// QUALE SLOT VALE ADESSO, in base a come e' messa la prop firm. Senza questa, i quattro slot
+// resterebbero quattro caselle da riempire che non decidono niente.
+function fblStratSlotCorrente(){
+ try{
+  if(typeof isPropFirmMode!=='undefined'&&!isPropFirmMode)return 'normale';
+  if(typeof fblPropRegoleAttive!=='function')return 'normale';
+  const r=fblPropRegoleAttive();
+  if(r.chiave==='ftmo-1step')return 'prop1';
+  return r.fase>=1 ? 'prop2b' : 'prop2a';
+ }catch(e){ return 'normale'; }
 }
 // ESPOSTE SU window APPOSTA. Tutto questo blocco gira dentro una funzione chiusa, quindi i suoi
 // nomi NON sono globali: dall'altro script (quello grosso) `stratLeggi` risulta "non definita" e
@@ -49953,7 +50022,11 @@ function stratSalva(sala,cfg){
 // nell'app vale `undefined`. E' lo stesso inciampo gia' pagato con pubblicaPreferenze, ed e' lo
 // stesso rimedio. Serve a fblChiusuraPreCfg(), che deve sapere se una SALA ha scelto per conto
 // suo di chiudere prima della chiusura del mercato.
-try{ window.stratLeggi=stratLeggi; window.stratSalva=stratSalva; }catch(e){}
+try{
+  window.stratLeggi=stratLeggi; window.stratSalva=stratSalva;
+  window.fblStratSlotCorrente=fblStratSlotCorrente;
+  window.FBL_STRAT_SLOT=FBL_STRAT_SLOT; window.FBL_STRAT_SLOT_NOMI=FBL_STRAT_SLOT_NOMI;
+}catch(e){}
 // Quanti TP ha davvero questa sala: non si mostrano cinque righe se i segnali ne hanno due.
 // QUANTI TARGET HA DAVVERO QUESTA SALA.
 // RICHIESTO: il numero di target da configurare dev'essere quello massimo che la sala ha usato
@@ -49994,8 +50067,12 @@ function stratDallaUi(n){
 function stratDisegna(sala,ris){
  const box=$('fblStrategiaUi'); if(!box)return;
  const n=stratQuantiTp(ris,sala);
- const cfg=fblStrategiaNormalizza(stratLeggi(sala)||{},n);
- const salvata=stratLeggi(sala);
+ // LO SLOT CHE VALE ADESSO (28 ottobre 2026). Con la prop firm spenta e' il conto normale; con
+ // la prop accesa e' quello del preset e della fase in corso. Senza questa riga i quattro slot
+ // sarebbero quattro caselle da riempire che non decidono niente.
+ const slot=(typeof fblStratSlotCorrente==='function')?fblStratSlotCorrente():'normale';
+ const cfg=fblStrategiaNormalizza(stratLeggi(sala,slot)||{},n);
+ const salvata=stratLeggi(sala,slot);
  // Le quote si mostrano in percentuale leggibile: normalizzate sono 0,333 e nessuno le scrive cosi'.
  const quotePct=(salvata&&Array.isArray(salvata.quote)&&salvata.quote.length>=n)
    ? salvata.quote.slice(0,n) : cfg.quote.map(v=>Math.round(v*1000)/10);
@@ -50007,7 +50084,17 @@ function stratDisegna(sala,ris){
  const parziali=cfg.modo==='parziali';
  const equa=!!cfg.equa;
  const quotaUguale=Math.round(10000/n)/100;
- let h='<div class="fblStrat"><div class="modo">'
+ // SI DICE QUALE DELLE QUATTRO SI STA MODIFICANDO.
+ //
+ // Quattro configurazioni che si somigliano, nello stesso identico pannello, sono il modo piu'
+ // sicuro di cambiare quella sbagliata e non accorgersene. L'etichetta cambia da sola quando si
+ // accende la prop firm o si passa alla sfida 2: non c'e' niente da selezionare, e non si puo'
+ // sbagliare bersaglio.
+ const nomeSlot=(typeof FBL_STRAT_SLOT_NOMI!=='undefined'&&FBL_STRAT_SLOT_NOMI[slot])||'Conto normale';
+ let h='<div class="fblStrat"><div class="eti" style="flex:1 1 100%;margin:0 0 6px;opacity:.85">'
+  +'Stai configurando: <b>'+nomeSlot+'</b>'
+  +(slot==='normale'?' — accendendo la prop firm si passa da sola alla configurazione giusta.':'')
+  +'</div><div class="modo">'
   +'<label class="eti" style="display:flex;flex-direction:column;gap:3px">COME SI ESEGUE'
   +'<select id="fblStratModo">'
   +'<option value="posizioni"'+(cfg.modo==='posizioni'?' selected':'')+'>una posizione per ogni TP</option>'
@@ -50410,7 +50497,9 @@ function rendCalcola(){
  if(!$('fblStratModo'))stratDisegna(sala,ris);
  const nTp=stratQuantiTp(ris,sala);
  const strategia=$('fblStratModo')?stratDallaUi(nTp):null;
- if(strategia)stratSalva(sala,strategia);
+ // Si scrive NELLO STESSO slot da cui si e' letto: se no si configurerebbe una cosa e se ne
+ // cambierebbe un'altra, che e' il modo piu' rapido di non fidarsi piu' di niente.
+ if(strategia)stratSalva(sala,strategia,(typeof fblStratSlotCorrente==='function')?fblStratSlotCorrente():'normale');
  const serie=C.serie[sala+'|'+sym]||null;
  const c=rendCurva(ris,capitale,rischio,serie,strategia);
  // RICHIESTO: scorrendo il grafico i numeri qui sopra si aggiornano a quel punto nel tempo,
