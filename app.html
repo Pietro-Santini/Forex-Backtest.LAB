@@ -51504,17 +51504,52 @@ async function fblPianoAggiornamento(){
     piano={serve:false,motivo:'qui l\'app si aggiorna da sola: il pacchetto del computer non serve a nulla'};
   }else{
     piano={serve:true,motivo:'non si e\' potuto sapere se il programma installato si aggiorna da solo: per sicurezza si scarica il pacchetto'};
-    const app=await fblPonteCheCopiaServe();
-    if(app&&app.versione){
-      appPonte=app;
-      piano=(app.da==='copia aggiornata')
-        ? {serve:false,motivo:'il programma installato aggiorna l\'app da solo: il pacchetto non serve'}
-        : {serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+    // LA DOMANDA GIUSTA E' QUANTO E' VECCHIO L'ESEGUIBILE, non quale pagina sta servendo.
+    //
+    // SEGNALATO dal proprietario: «quando premiamo aggiorna l'app carica la nuova impaginazione
+    // ma non scarica ForexBacktestLAB.exe, e ogni volta devo spegnere il terminale MT5 e
+    // mettermi a scaricare i pacchetti a mano».
+    //
+    // LA CAUSA stava proprio qui: si chiedeva al ponte QUALE COPIA dell'app stesse servendo, e
+    // se serviva quella aggiornata si concludeva «il pacchetto non serve». Ma il ponte puo'
+    // servire benissimo la pagina nuova restando lui stesso un eseguibile vecchio - ed e'
+    // esattamente la situazione che rompe il collegamento con MT5, perche' li' il codice vecchio
+    // c'e' davvero. Le due cose non sono la stessa, e trattarle come tali faceva rispondere
+    // «tutto a posto» proprio nel caso che non lo era.
+    //
+    // Ora si chiede la versione dell'ESEGUIBILE (il ponte la legge dal registro, dove l'ha
+    // scritta l'installer) e la si confronta con quella della pagina.
+    const prog=await fblPonteVersioneProgramma();
+    if(prog&&prog.da_aggiornare===true){
+      piano={serve:true,automatico:true,
+             motivo:'il programma installato e\' la '+prog.programma+' mentre la pagina e\' la '+prog.pagina+': va reinstallato'};
+    }else if(prog&&prog.da_aggiornare===false){
+      piano={serve:false,motivo:'il programma installato e\' gia\' la '+prog.programma+': basta ricaricare la pagina'};
+    }else{
+      // `da_aggiornare` a null vuol dire «non lo so» (registro illeggibile, o ponte vecchio che
+      // non conosce questa rotta): si ricade sulla domanda di prima, che e' meno precisa ma non
+      // peggiora niente rispetto a ieri.
+      const app=await fblPonteCheCopiaServe();
+      if(app&&app.versione){
+        appPonte=app;
+        piano=(app.da==='copia aggiornata')
+          ? {serve:false,motivo:'il programma installato aggiorna l\'app da solo: il pacchetto non serve'}
+          : {serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+      }
     }
   }
   piano.app=appPonte;
   fblPianoAggiornamentoCache={quando:ora,piano};
   return piano;
+}
+// QUANTO E' VECCHIO L'ESEGUIBILE DEL PONTE.
+// Torna {programma, pagina, da_aggiornare} oppure null se il ponte non risponde o non conosce
+// questa rotta (un ponte vecchio da' 404: e' il caso in cui si ricade sul vecchio ragionamento).
+async function fblPonteVersioneProgramma(){
+  try{
+    const r=await fetchMt5WithTimeout('/versione-programma',{},4000);
+    return (r&&r.ok&&r.data&&typeof r.data==='object')?r.data:null;
+  }catch(e){ return null; }
 }
 // UNA domanda sola al ponte locale: quale copia dell'app sta servendo adesso?
 // Si passa dalla stessa porta di sempre (fetchMt5WithTimeout), cosi' c'e' un solo modo di
@@ -51575,6 +51610,38 @@ async function fblApplicaAggiornamento(release, tagRemoto, btn){
   // Vedi il gestore del messaggio 'versione-nuova'.
   try{ localStorage.setItem('fbl_aggiornamento_atteso',String(Date.now())); }catch(e){}
   btn.disabled=true; btn.textContent='Aggiornamento in corso...';
+
+  // SE IL PROGRAMMA PUO' INSTALLARSI DA SOLO, LO FA.
+  //
+  // RICHIESTO dal proprietario: «deve essere un sistema di aggiornamento come in qualsiasi altra
+  // app del mondo: l'utente preme aggiorna e tutto il resto continua a funzionare. Non puo'
+  // mettersi a scaricare e avviare lui le cose».
+  //
+  // E' vero che un SITO non puo' avviare un programma - lo vieta il browser, per sicurezza. Ma
+  // il ponte gira gia' sul computer con i permessi dell'utente: scaricare e lanciare l'installer
+  // e' esattamente il genere di cosa che puo' fare, ed e' come si aggiornano tutti i programmi.
+  // La richiesta si puo' fare solo dal computer (il ponte rifiuta quelle remote): da lontano non
+  // si reinstalla l'applicazione di qualcun altro mentre la sta usando.
+  if(piano.automatico){
+    try{ btn.textContent='Scarico e installo il programma\u2026'; }catch(e){}
+    try{ $('status').textContent='\u2699\uFE0F Scarico il programma e lo installo: non chiudere nulla, l\'app si riavvia da sola.'; }catch(e){}
+    let esito=null;
+    try{
+      const r=await fetchMt5WithTimeout('/aggiorna-programma',{method:'POST'},300000);
+      esito=(r&&r.ok&&r.data)?r.data:null;
+    }catch(e){}
+    if(esito&&esito.ok){
+      try{ localStorage.setItem('fbl_rel_vista',tagRemoto); }catch(e){}
+      try{ btn.style.display='none'; }catch(e){}
+      try{ $('status').textContent='\u2705 Programma in installazione: l\'app si chiude e si riapre da sola fra pochi secondi.'; }catch(e){}
+      return;
+    }
+    // NON RIUSCITO: non si resta appesi. Si torna alla strada di sempre (pacchetto in Download,
+    // installazione a mano), dicendo che si e' provato - meglio un passaggio in piu' che un
+    // pulsante che non fa niente e non spiega perche'.
+    try{ $('status').textContent='Non sono riuscito a installarlo da solo'+((esito&&esito.messaggio)?(' ('+esito.messaggio+')'):'')+': scarico il pacchetto, poi aprilo tu.'; }catch(e){}
+  }
+
   const p=await fblScaricaEAggiorna(release);
   if(p.ok){
     // Aperto nel browser di sistema: l'utente deve ancora scaricare e installare il

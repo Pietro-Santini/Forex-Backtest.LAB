@@ -137,7 +137,20 @@ Name: "{group}\Disinstalla {#MyAppName}"; Filename: "{uninstallexe}"
 ; (il servizio non sarebbe ancora partito). Da qui in poi le due cose insieme (questa riga per la
 ; primissima volta, la chiave di registro per ogni accesso successivo) garantiscono che il
 ; servizio sia SEMPRE attivo, senza eccezioni e senza che l'utente debba mai saperlo o farlo lui.
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait skipifsilent
+; SENZA "skipifsilent", DI PROPOSITO (28 ottobre 2026).
+;
+; "skipifsilent" significa: non avviare il programma quando l'installazione e' silenziosa. Era
+; giusto finche' l'unico modo di installare in silenzio era una distribuzione aziendale, dove
+; nessuno vuole vedersi partire un programma addosso.
+;
+; Da oggi il programma si AGGIORNA DA SOLO: il ponte scarica questo stesso pacchetto e lo avvia
+; con /VERYSILENT (vedi aggiorna_programma in build/bridge.py). Con "skipifsilent" l'aggiornamento
+; avrebbe funzionato benissimo e avrebbe lasciato l'utente con l'app SPENTA - cioe' peggio di
+; prima, perche' prima almeno sapeva di doverla riavviare.
+;
+; La chiave di avvio automatico non basta: quella parte al prossimo accesso a Windows, non
+; adesso. Serve questa riga, e deve valere in tutti e due i casi.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait
 
 [Messages]
 ; Promemoria onesto mostrato prima dell'installazione: MetaTrader 5 non Ã¨

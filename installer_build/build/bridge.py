@@ -33,6 +33,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -865,6 +866,147 @@ def aggiorna_app(request: Request):
         raise HTTPException(status_code=403, detail="L'aggiornamento dell'app si chiede dal computer.")
     ok, msg = scarica_app_aggiornata()
     return {"ok": ok, "messaggio": msg, "app": versione_servita()}
+
+
+# ===================== AGGIORNARE IL PROGRAMMA, NON SOLO LA PAGINA =====================
+#
+# SEGNALATO dal proprietario: «quando premiamo aggiorna l'app, carica la nuova impaginazione ma
+# non scarica ForexBacktestLAB.exe. Ogni volta devo andare su collegamento, spegnere il terminale
+# MT5, premere connetti e mettermi a scaricare i pacchetti a mano. Deve essere un sistema di
+# aggiornamento come in qualsiasi altra app del mondo: l'utente preme aggiorna e basta».
+#
+# Ha ragione anche sulla parte tecnica: un SITO non puo' avviare un programma - lo vieta la
+# sicurezza del browser, e per fortuna. Ma QUESTO processo gira gia' sul computer dell'utente,
+# con i suoi permessi: avviare un installer e' esattamente il genere di cosa che puo' fare, ed e'
+# come si aggiornano tutti i programmi del mondo.
+#
+# DUE REGALI INASPETTATI, misurati il 28 ottobre 2026 invece di darli per scontati:
+#  1. L'installer scrive gia' la versione e la cartella nel registro di Windows
+#     (DisplayVersion e InstallLocation sotto la chiave di disinstallazione): il ponte sa quanto
+#     e' vecchio senza che si debba inventare un numero di versione da iniettare in compilazione.
+#  2. `PrivilegesRequired=lowest` in installer.iss: l'installazione non chiede l'autorizzazione
+#     di Windows. Senza quello, un aggiornamento silenzioso sarebbe impossibile - comparirebbe
+#     un avviso da confermare, e saremmo punto e a capo.
+#
+# E UN EFFETTO COLLATERALE CHE VALE DA SOLO: un file scaricato dal BROWSER si porta dietro il
+# marchio «arrivato da internet», ed e' quello a far comparire «mantieni il file» e «Windows ha
+# protetto il PC». Un file scaricato da qui non ce l'ha. Quindi questo aggiornamento, oltre a
+# risparmiare la fatica, fa sparire anche quegli avvisi per chi l'app ce l'ha gia' installata.
+_CHIAVE_DISINSTALLAZIONE = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{8F1C6E1A-7B2D-4E3F-9C41-FBLAB00000001}_is1"
+URL_PACCHETTO = "https://github.com/pietro-santini/Forex-Backtest.LAB/releases/latest/download/ForexBacktestLAB_Setup.exe"
+# Il pacchetto vero pesa quasi 100 MB: sotto i 20 non e' lui, e' una pagina di errore travestita
+# o uno scaricamento interrotto. Meglio accorgersene qui che lanciarlo e rompere l'installazione.
+_PACCHETTO_MINIMO_BYTE = 20 * 1024 * 1024
+
+
+def versione_programma_installata():
+    """La versione dell'ESEGUIBILE (non della pagina), letta dal registro dove l'ha scritta
+    l'installer. None se non si riesce a leggerla: non si inventa un numero, perche' su un
+    numero inventato si prenderebbero decisioni vere."""
+    try:
+        import winreg
+        for radice in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(radice, _CHIAVE_DISINSTALLAZIONE) as k:
+                    return winreg.QueryValueEx(k, "DisplayVersion")[0]
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def _tupla(v):
+    try:
+        return tuple(int(x) for x in str(v).strip().split("."))
+    except Exception:
+        return None
+
+
+def aggiorna_programma(timeout=300):
+    """Scarica il pacchetto di installazione e lo avvia in silenzio. Restituisce (esito, messaggio).
+
+    NON esce da solo: ci pensa l'installer, che usa il Gestore riavvii di Windows per chiudere
+    questo processo e sostituire l'eseguibile. Uscire noi per primi lascerebbe l'utente senza
+    ponte per tutto il tempo dell'installazione, e senza niente a cui tornare se fallisce."""
+    if os.name != "nt":
+        return False, "l'aggiornamento del programma vale solo su Windows"
+    installata = versione_programma_installata()
+    pubblicata = None
+    try:
+        v = _versione_di(_CARTELLA_APP) or _versione_di(_BASE_DIR)
+        pubblicata = ".".join(map(str, v)) if v else None
+    except Exception:
+        pass
+    # MAI INDIETRO, stessa regola che vale gia' per la pagina: se il pacchetto che andremmo a
+    # installare non e' piu' nuovo di quello che c'e', non si tocca niente.
+    ti, tp = _tupla(installata), _tupla(pubblicata)
+    if ti and tp and ti >= tp:
+        return True, "il programma e' gia' alla %s: non c'e' niente da installare" % installata
+
+    tmp = os.path.join(tempfile.gettempdir(), "ForexBacktestLAB_Setup_nuovo.exe")
+    try:
+        req = urllib.request.Request(URL_PACCHETTO, headers={"User-Agent": "ForexBacktestLAB"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            dati = r.read()
+    except Exception as e:
+        return False, "scaricamento non riuscito: %s" % e
+
+    # SI CONTROLLA PRIMA DI LANCIARE. Un file troncato o una pagina di errore salvata col nome
+    # giusto, avviata come installer, lascerebbe l'installazione a meta': rotta e senza ritorno.
+    if len(dati) < _PACCHETTO_MINIMO_BYTE:
+        return False, "il file scaricato pesa %.1f MB: non e' il pacchetto" % (len(dati) / 1048576.0)
+    if dati[:2] != b"MZ":
+        return False, "il file scaricato non e' un programma di Windows"
+
+    try:
+        with open(tmp, "wb") as f:
+            f.write(dati)
+    except Exception as e:
+        return False, "non riesco a salvare il pacchetto: %s" % e
+
+    # /VERYSILENT        nessuna finestra, nessun passaggio da confermare
+    # /SUPPRESSMSGBOXES  nessun avviso che resterebbe li' ad aspettare un clic che non arriva
+    # /NORESTART         non riavvia il computer per nessun motivo
+    # /RESTARTAPPLICATIONS  fa richiudere e riaprire a Windows i programmi che tengono i file
+    comando = [tmp, "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/RESTARTAPPLICATIONS"]
+    try:
+        # Staccato da questo processo: deve sopravvivere a noi, visto che il suo primo compito
+        # e' proprio chiuderci per poter sostituire l'eseguibile.
+        bandiere = 0
+        if hasattr(subprocess, "DETACHED_PROCESS"):
+            bandiere = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(comando, close_fds=True, creationflags=bandiere)
+    except Exception as e:
+        return False, "non riesco ad avviare il pacchetto: %s" % e
+    return True, "pacchetto scaricato (%.0f MB) e installazione avviata in silenzio" % (len(dati) / 1048576.0)
+
+
+@app.get("/versione-programma")
+def versione_programma():
+    """Quanto e' vecchio l'ESEGUIBILE rispetto alla pagina. Serve all'app per sapere se il
+    pulsante «Aggiorna» deve limitarsi a ricaricare o deve anche reinstallare il programma."""
+    installata = versione_programma_installata()
+    v = _versione_di(_CARTELLA_APP) or _versione_di(_BASE_DIR)
+    pubblicata = ".".join(map(str, v)) if v else None
+    ti, tp = _tupla(installata), _tupla(pubblicata)
+    return {
+        "programma": installata,
+        "pagina": pubblicata,
+        # None quando non si riesce a leggere una delle due: l'app deve poter distinguere
+        # «sono allineati» da «non lo so», invece di ricevere un falso rassicurante.
+        "da_aggiornare": (None if not (ti and tp) else bool(ti < tp)),
+    }
+
+
+@app.post("/aggiorna-programma")
+def aggiorna_programma_rotta(request: Request):
+    """Scarica e installa il programma. Solo dal computer: da remoto non si reinstalla
+    l'applicazione di qualcun altro mentre la sta usando."""
+    if not _accesso.richiesta_locale(request):
+        raise HTTPException(status_code=403, detail="L'aggiornamento del programma si chiede dal computer.")
+    ok, msg = aggiorna_programma()
+    return {"ok": ok, "messaggio": msg, "programma": versione_programma_installata()}
 
 
 # ===================== NEWS — Calendario economico Forex Factory ========================
