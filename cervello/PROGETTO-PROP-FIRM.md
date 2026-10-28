@@ -43,7 +43,20 @@ dall'architettura, e lì non c'è da inventare niente.
 > tutte e due le formule, ed e' esattamente per questo che l'errore era sopravvissuto. I casi
 > nuovi sono costruiti apposta perche' le due regole diano verdetti OPPOSTI.
 >
-> **Prossimo:** passo 2, le regole in un oggetto solo con i tre preset.
+> ## ✅ PASSO 2 FATTO — 28 ottobre 2026
+>
+> Le regole stanno in **`FBL_PROP_REGOLE`**, un posto solo, coi preset `ftmo-1step` e
+> `ftmo-2step`. Il motore li **legge**: `checkPropFirmRules()` non ha più nessun 5, 10 o 10
+> scritto dentro.
+>
+> **4 test nuovi**, e i due che contano davvero cambiano il preset e guardano se il verdetto
+> cambia. **Controprova eseguita:** rimettendo i numeri fissi vanno rossi esattamente quei due,
+> e restano verdi i due che controllano solo il catalogo.
+>
+> **I 19 test di prima passano senza toccarne uno**, che era la garanzia richiesta: a parita' di
+> impostazioni l'app fa esattamente quello che faceva.
+>
+> **Prossimo:** passo 3 — seconda sfida, giorni minimi, costanza, trailing.
 
 ## 2. DUE ERRORI VERI, TROVATI CONFRONTANDO COL SITO FTMO
 

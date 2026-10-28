@@ -5831,6 +5831,91 @@ function ensurePropFirmDailyBaseline(){
 // storico che sessione live) e ad ogni apertura/chiusura di un trade — per semplicità ed
 // affidabilità è agganciato dentro update() (vedi più sotto), che viene già chiamata da tutti
 // questi punti nell\'app, invece di sparpagliare la chiamata manualmente in ogni funzione.
+// ===================== LE REGOLE DELLA PROP FIRM, IN UN POSTO SOLO =====================
+//
+// Fino al 28 ottobre 2026 i numeri 5, 10 e 10 erano scritti DENTRO le formule, in tre funzioni
+// diverse. Finche' restano li', «one step o two step?» non e' una scelta: e' una riscrittura. Ed
+// e' cosi' che era nato l'errore corretto stamattina - una regola copiata in tre posti diverge, e
+// undici test non se ne erano accorti (vedi cervello/LEZIONI.md, lezione 17).
+//
+// LETTE DAL SITO il 27 ottobre 2026 (ftmo.com/en/trading-objectives).
+//
+// QUATTRO SCELTE, e il perche' di ognuna:
+//
+// 1. TUTTE LE PERCENTUALI SONO DEL CAPITALE INIZIALE, e lo si dice una volta sola. Lasciare che
+//    ogni formula decidesse da se' la base e' esattamente il modo in cui e' nato l'errore.
+//
+// 2. `fasi` E' UN ELENCO, e qui sta tutto il guadagno. Il one step e' un elenco da uno, il two
+//    step da due. Cosi' NON ESISTE NESSUN `if(oneStep)`: lo stesso codice percorre l'elenco e si
+//    ferma quando le fasi finiscono. Senza, ogni regola andrebbe scritta due volte - e due copie
+//    divergono sempre, prima o poi.
+//
+// 3. `totaleInsegue` E' UN INTERRUTTORE, MA NON BASTA. Il trailing del one step insegue il saldo
+//    di FINE GIORNATA, non il minimo toccato durante il giorno: e' una formula diversa, non un
+//    parametro diverso. Qui il dato c'e'; chi lo legge arriva al passo 3. Trattarlo come se
+//    bastasse il flag sarebbe il terzo errore della stessa famiglia dei due appena corretti.
+//
+// 4. IL PREDEFINITO E' `ftmo-2step`, FASE 0. E' esattamente quello che l'app fa oggi (5% al
+//    giorno, 10% statico, obiettivo 10%): chi non tocca niente non deve accorgersi di nulla. Ed
+//    e' anche il modo di provarlo - a parita' di impostazioni, i 19 test di adesso devono restare
+//    verdi senza toccarne uno.
+const FBL_PROP_REGOLE = {
+ 'ftmo-1step': {
+   nome:'FTMO one step',
+   fasi:[ {nome:'Unica', obiettivo:10} ],
+   perditaGiorno:3, perditaTotale:10, totaleInsegue:true,
+   giorniMinimi:0, costanzaMaxGiorno:50, quotaTrader:90
+ },
+ 'ftmo-2step': {
+   nome:'FTMO two step',
+   fasi:[ {nome:'Sfida 1', obiettivo:10}, {nome:'Sfida 2', obiettivo:5} ],
+   perditaGiorno:5, perditaTotale:10, totaleInsegue:false,
+   giorniMinimi:4, costanzaMaxGiorno:0, quotaTrader:80
+ }
+};
+const FBL_PROP_PRESET_KEY='fbl_prop_preset';
+const FBL_PROP_FASE_KEY='fbl_prop_fase';
+function fblPropPresetAttivo(){
+ try{ const k=localStorage.getItem(FBL_PROP_PRESET_KEY); if(k&&FBL_PROP_REGOLE[k])return k; }catch(e){}
+ return 'ftmo-2step';
+}
+function fblPropPresetImposta(k){
+ if(!FBL_PROP_REGOLE[k])return false;
+ try{ localStorage.setItem(FBL_PROP_PRESET_KEY,k); }catch(e){}
+ // Cambiando preset si riparte dalla prima fase: restare sulla «sfida 2» passando a un one step,
+ // che di fasi ne ha una sola, vorrebbe dire puntare a una fase che non esiste.
+ fblPropFaseImposta(0);
+ return true;
+}
+function fblPropFaseAttiva(){
+ const r=FBL_PROP_REGOLE[fblPropPresetAttivo()];
+ let n=0; try{ n=parseInt(localStorage.getItem(FBL_PROP_FASE_KEY)||'0',10)||0; }catch(e){}
+ // Mai fuori dall'elenco: una fase che non esiste darebbe `undefined.obiettivo` al primo tick.
+ return Math.max(0, Math.min(n, r.fasi.length-1));
+}
+function fblPropFaseImposta(n){
+ try{ localStorage.setItem(FBL_PROP_FASE_KEY,String(Math.max(0,parseInt(n,10)||0))); }catch(e){}
+}
+// LE REGOLE DI ADESSO, gia' risolte: preset piu' fase, in un oggetto solo da leggere.
+function fblPropRegoleAttive(){
+ const r=FBL_PROP_REGOLE[fblPropPresetAttivo()];
+ const i=fblPropFaseAttiva();
+ return {
+   chiave:fblPropPresetAttivo(), nome:r.nome,
+   fasi:r.fasi, fase:i, faseNome:r.fasi[i].nome, obiettivo:r.fasi[i].obiettivo,
+   ultimaFase:(i>=r.fasi.length-1),
+   perditaGiorno:r.perditaGiorno, perditaTotale:r.perditaTotale,
+   totaleInsegue:r.totaleInsegue, giorniMinimi:r.giorniMinimi,
+   costanzaMaxGiorno:r.costanzaMaxGiorno, quotaTrader:r.quotaTrader
+ };
+}
+try{
+  window.FBL_PROP_REGOLE=FBL_PROP_REGOLE;
+  window.fblPropRegoleAttive=fblPropRegoleAttive;
+  window.fblPropPresetImposta=fblPropPresetImposta;
+  window.fblPropFaseImposta=fblPropFaseImposta;
+}catch(e){}
+
 function checkPropFirmRules(){
   if(!isPropFirmMode || propFirmViolation) return; // già chiusa per violazione: non ricontrolliamo più
   // Conto MT5 non idoneo in attesa di una scelta (vedi maybeEvaluatePfMt5Account): regole sospese.
@@ -5877,11 +5962,13 @@ function checkPropFirmRules(){
   // (lasciava passare giornate che FTMO boccia), e su uno sceso a 9.500 ne concedeva 475
   // (bocciava giornate che FTMO accetta). La percentuale mostrata nel pannellino ha la stessa
   // base, se no il «x% / 5%» accanto al pulsante direbbe una cosa e il blocco ne farebbe un'altra.
-  const dailyLossLimit=propFirmChallengeInitialCapital*0.05;
+  // I NUMERI ARRIVANO DAL PRESET, non sono piu' scritti qui (vedi FBL_PROP_REGOLE sopra).
+  const _reg=fblPropRegoleAttive();
+  const dailyLossLimit=propFirmChallengeInitialCapital*(_reg.perditaGiorno/100);
   const dailyLoss=propFirmDailyStartBalance-equityNow; // positivo = in perdita rispetto a stamattina
   const dailyLossPct=dailyLoss/propFirmChallengeInitialCapital*100;
   // --- Maximum Drawdown 10%: equity totale vs capitale iniziale della Challenge ---
-  const maxDrawdownLimit=propFirmChallengeInitialCapital*0.10;
+  const maxDrawdownLimit=propFirmChallengeInitialCapital*(_reg.perditaTotale/100);
   const totalLoss=propFirmChallengeInitialCapital-equityNow;
   const totalLossPct=totalLoss/propFirmChallengeInitialCapital*100;
   // STEP 4, punto 4: aggiorna SEMPRE il pannellino drawdown (anche quando non si sta violando
@@ -5897,7 +5984,9 @@ function checkPropFirmRules(){
     return;
   }
   // PUNTO 7: obiettivo profitto raggiunto → pop-up "Prop firm sbloccata" (una sola volta per Challenge).
-  const propTargetPct = 10; // obiettivo: 10% di profitto sul capitale iniziale della Challenge
+  // L'obiettivo e' quello della FASE in corso: 10% nella sfida 1 del two step, 5% nella sfida 2,
+  // 10% nell'unica fase del one step. E' l'elenco `fasi` a dirlo, senza nessun `if`.
+  const propTargetPct = _reg.obiettivo;
   const profitPct = (equityNow - propFirmChallengeInitialCapital) / propFirmChallengeInitialCapital * 100;
   if(profitPct >= propTargetPct){
     $('status').textContent = '🎯 Obiettivo Prop Firm raggiunto! Il conto è sbloccato per il finanziamento.';
