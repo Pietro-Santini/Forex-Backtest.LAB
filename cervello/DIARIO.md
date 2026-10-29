@@ -3586,4 +3586,22 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
 
 ## 29 ottobre 2026 — Punto 5 completo
 - TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
-- Prestazioni: cache, percentuale onesta.
+- Prestazioni: cache, percentuale onesta.
+
+### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
+
+Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
+che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
+scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
+
+La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
+deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
+alterato il conto che gia' funzionava.
+
+Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
+seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
+essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
+il two step ne ha **due** e l'80%.
+
+Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
+approssimazione nell'interfaccia, fuso di Roma, percentuale col denominatore contato prima.
