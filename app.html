@@ -50662,7 +50662,7 @@ function fblPropDedicataPopola(){
 // l'apertura; altrimenti base, numGiorni, maxDDGiorno (col suo giorno), maxDDTot, esito, esitoData,
 // profFinale. `esito`: 'sbloccata' (obiettivo +10% raggiunto prima di violare), 'finita' (un giorno
 // oltre il 5%, o il totale oltre il 10%), altrimenti 'ok'.
-function fblPropDedicataConta(punti,capitale,apertoMs){
+function fblPropDedicataConta(punti,capitale,apertoMs,preset){
  const P=((punti||[]).filter(p=>p&&isFinite(p.t)&&isFinite(p.cap)));
  const idx=P.findIndex(p=>p.t>=apertoMs);
  if(idx<0)return {vuoto:true};
@@ -50718,8 +50718,10 @@ function fblPropDedicataConta(punti,capitale,apertoMs){
  // LA SFIDA 2 RIPARTE DAL CAPITALE INIZIALE, non da dove e' arrivata la prima. E' cosi' che fa
  // FTMO: la verifica non eredita il profitto, ricomincia da capo con un obiettivo piu' basso.
  // Farla continuare dal conto cresciuto le chiederebbe molto di piu' del 5% vero.
- const _reg=(typeof FBL_PROP_REGOLE!=='undefined'&&typeof fblPropPresetAttivo==='function')
-   ? FBL_PROP_REGOLE[fblPropPresetAttivo()] : null;
+ const _presetRichiesto = (preset && (typeof FBL_PROP_REGOLE!=='undefined') && FBL_PROP_REGOLE[preset]) ? preset
+   : ((typeof fblPropPresetAttivo==='function') ? fblPropPresetAttivo() : 'ftmo-2step');
+ const _reg=(typeof FBL_PROP_REGOLE!=='undefined')
+   ? FBL_PROP_REGOLE[_presetRichiesto] : null;
  const regole=_reg||{fasi:[{nome:'Unica',obiettivo:10}],perditaGiorno:5,perditaTotale:10,
                      totaleInsegue:false,giorniMinimi:0,costanzaMaxGiorno:0,quotaTrader:80};
 
@@ -51133,59 +51135,213 @@ function fblResaTotaleSaleApri(){
   const btn=document.getElementById('fblResaTotaleSaleCalcolaBtn');
   if(btn) btn.onclick=()=>{ fblResaTotaleSaleCalcola(); };
 }
-async function fblResaTotaleSaleCalcola(){
-  const ov=document.getElementById('fblResaTotaleSaleOverlay');
-  const capitale=Math.max(1, Number(document.getElementById('fblResaTotaleSaleCapitale')?.value)||10000);
-  const rischio=Math.max(0.01, Number(document.getElementById('fblResaTotaleSaleRischio')?.value)||1);
-  const progressEl=document.getElementById('fblResaTotaleSaleProgress');
-  const statsEl=document.getElementById('fblResaTotaleSaleStats');
-  const resaProgressSet=(t)=>{ resaTotaleSaleOverlays().forEach(ov=>{ const e=ov.querySelector('#fblResaTotaleSaleProgress'); if(e) e.textContent=t; }); };
-  const resaStatsSet=(h)=>{ resaTotaleSaleOverlays().forEach(ov=>{ const e=ov.querySelector('#fblResaTotaleSaleStats'); if(e) e.innerHTML=h; }); };
-  const saleSel = resaTotaleSaleScelte.size ? [...resaTotaleSaleScelte] : resaTotaleSaleLista();
-  // Conta le coppie sala x asset (denominatore) PRIMA di cominciare.
-  const pairs=[];
-  saleSel.forEach(sala=>{
+// ---------- helper RESA TOTALE DI PIU' SALE: statistiche mancanti ----------
+function resaTotaleSaleRighe(saleSel){
+  const righe=[];
+  (saleSel||[]).forEach(sala=>{
     const assetList=(typeof tgAssetPerSala==='function')?tgAssetPerSala(sala):[];
     const assets=assetList&&assetList.length?assetList:[(typeof currentAssetKey!=='undefined'?currentAssetKey:null)||'EURUSD'];
-    assets.forEach(asset=>pairs.push({sala,asset}));
+    assets.forEach(asset=>{
+      const ris=(typeof risultatiDi==='function')?risultatiDi(sala,asset):null;
+      if(!ris) return;
+      (ris||[]).forEach(x=>{ if(x&&x.valutato) righe.push(Object.assign({},x,{sala,asset})); });
+    });
   });
-  const tot=pairs.length||1;
-  resaProgressSet('0/'+tot+' (0%)');
-  // Lavoro spezzato: si avanza coppia per coppia, aggiornando la percentuale sempre.
-  for(let i=0;i<pairs.length;i++){
-    const {sala,asset}=pairs[i];
-    try{ if(typeof risultatiDi==='function') risultatiDi(sala,asset); }catch(e){}
-    const p=Math.round((i+1)/tot*100);
-    resaProgressSet((i+1)+'/'+tot+' ('+p+'%)');
-    // cede il controllo per ridisegnare la pagina (percentuale onesta, non ferma)
-    await new Promise(resolve=>setTimeout(resolve,0));
+  return righe;
+}
+function resaTotaleSaleTP(righe){
+  const v=(righe||[]).filter(x=>x&&x.valutato);
+  const maxTp=Math.max(0,...v.map(x=>((x.tps||[]).length)));
+  const out=[];
+  for(let j=1;j<=maxTp;j++){
+    const con=v.filter(x=>(x.tps||[]).length>=j);
+    const hit=con.filter(x=>(Number(x.raggiunti)||0)>=j).length;
+    out.push({liv:j,tot:con.length,hit,pct:con.length?hit/con.length*100:0});
   }
-  // Calcolo aggregato.
-  let c=null;
-  try{ c=rendCurvaMultiSale(saleSel, capitale, rischio, {}); }catch(e){ c=null; }
-  // Disegno.
-  try{ if(c&&c.punti) rendDisegnaGrafico(c.punti); }catch(e){}
-  // Statistiche base.
-  if(statsEl){
+  if(!out.length) out.push({liv:1,tot:0,hit:0,pct:0});
+  return out;
+}
+function resaTotaleSaleRomaMinuti(ms){
+  try{
+    const parts=new Intl.DateTimeFormat('it-IT',{timeZone:'Europe/Rome',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date(ms));
+    const h=Number((parts.find(p=>p.type==='hour')||{}).value);
+    const m=Number((parts.find(p=>p.type==='minute')||{}).value);
+    if(isFinite(h)&&isFinite(m)) return h*60+m;
+  }catch(e){}
+  const d=new Date(ms); return d.getUTCHours()*60+d.getUTCMinutes();
+}
+function resaTotaleSaleGiorni(punti){
+  const groups=new Map();
+  (punti||[]).forEach(p=>{
+    let k=null; try{ k=cetDateKey(p.t); }catch(e){ k=null; }
+    if(k==null) return;
+    if(!groups.has(k)) groups.set(k,{giorno:k,primo:p.cap,ultimo:p.cap,min:p.cap,max:p.cap,n:1});
+    else { const g=groups.get(k); g.ultimo=p.cap; if(p.cap<g.min)g.min=p.cap; if(p.cap>g.max)g.max=p.cap; g.n++; }
+  });
+  return [...groups.values()].map(g=>({giorno:g.giorno,profitto:g.ultimo-g.primo,primo:g.primo,ultimo:g.ultimo,min:g.min,max:g.max,n:g.n}));
+}
+function resaTotaleSalePerSala(saleSel,capitale,rischio){
+  return (saleSel||[]).map(sala=>{
+    let c=null;
+    try{ c=rendCurvaMultiSale([sala],capitale,rischio,{}); }catch(e){ c=null; }
     const usate=c? (c.usate||0):0;
     const vinte=c? (c.vinte||0):0;
-    const perse=c? (c.perse||0):0;
-    const wr=usate? (vinte/usate*100):0;
-    const rr=usate? ((c.sommaR||0)/usate):0;
     const finale=c? (c.finale||capitale):capitale;
+    const resa=capitale>0?(finale-capitale)/capitale*100:0;
+    const wr=usate?vinte/usate*100:0;
     const dd=c? (c.ddMax||0):0;
-    resaStatsSet(
-      '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px">'
-      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Win rate</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+wr.toFixed(1)+'%</div></div>'
-      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">R:R medio</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+rr.toFixed(2)+'R</div></div>'
-      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Finale</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">€'+Math.round(finale).toLocaleString('it-IT')+'</div></div>'
-      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Drawdown max</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+dd.toFixed(1)+'%</div></div>'
-      +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Operazioni</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+usate+' ('+vinte+'/'+perse+')</div></div>'
-      +'</div>');
-  }
-  resaProgressSet(tot+'/'+tot+' (100%)');
-  return c;
+    const rr=usate?((c.sommaR||0)/usate):0;
+    return {sala,usate,vinte,finale,resa,wr,dd,rr};
+  }).sort((a,b)=>b.resa-a.resa);
 }
+function resaTotaleSaleFasceOrarie(righe){
+  const bands=[];
+  for(let h=0;h<24;h++) bands.push({fascia:String(h).padStart(2,'0')+':00',h,count:0,vinti:0,valutati:0});
+  (righe||[]).forEach(x=>{
+    let mins=0; try{ mins=resaTotaleSaleRomaMinuti(x.tFill||x.ts||Date.now()); }catch(e){}
+    const hb=Math.floor(mins/60);
+    const b=bands[hb]; if(!b) return;
+    b.count++;
+    if(x.valutato){ b.valutati++; if((Number(x.raggiunti)||0)>0) b.vinti++; }
+  });
+  return bands.filter(b=>b.count>0).map(b=>({...b,wr:b.valutati?b.vinti/b.valutati*100:0}));
+}
+function resaTotaleSaleNotizie(righe){
+  const fixed=[{nome:'08:30',mins:8*60+30},{nome:'10:00',mins:10*60},{nome:'14:30',mins:14*60+30},{nome:'16:00',mins:16*60}];
+  const WINDOW=30;
+  const buckets=fixed.map(f=>({fascia:f.nome,mins:f.mins,count:0,valutati:0,vinti:0,righe:[]}));
+  const lontano={fascia:'lontano dalle notizie',count:0,valutati:0,vinti:0};
+  (righe||[]).forEach(x=>{
+    const m=resaTotaleSaleRomaMinuti(x.tFill||x.ts||Date.now());
+    let nearest=null, best=Infinity;
+    fixed.forEach((f,i)=>{ const d=Math.abs(m-f.mins); if(d<best){best=d;nearest=i;} });
+    if(nearest!==null && best<=WINDOW){
+      const b=buckets[nearest]; b.count++; b.righe.push(x);
+      if(x.valutato){ b.valutati++; if((Number(x.raggiunti)||0)>0) b.vinti++; }
+    } else {
+      lontano.count++;
+      if(x.valutato){ lontano.valutati++; if((Number(x.raggiunti)||0)>0) lontano.vinti++; }
+    }
+  });
+  const out=buckets.map(b=>({fascia:b.fascia,count:b.count,valutati:b.valutati,vinti:b.vinti,wr:b.valutati?b.vinti/b.valutati*100:0}));
+  out.push({...lontano,wr:lontano.valutati?lontano.vinti/lontano.valutati*100:0});
+  return out;
+}
+const resaTotaleSaleCache=new Map();
+function resaTotaleSaleCacheKey(saleSel,capitale,rischio){
+  let strat='';
+  try{ (saleSel||[]).forEach(s=>{ try{ if(typeof stratLeggi==='function') strat+=JSON.stringify(stratLeggi(s, (typeof fblStratSlotCorrente==='function'?fblStratSlotCorrente():0))); }catch(e){} }); }catch(e){}
+  return JSON.stringify({s:(saleSel||[]).slice().sort(),c:capitale,r:rischio,strat});
+}
+async function fblResaTotaleSaleCalcola(){
+   const ov=document.getElementById('fblResaTotaleSaleOverlay');
+   const capitale=Math.max(1, Number(document.getElementById('fblResaTotaleSaleCapitale')?.value)||10000);
+   const rischio=Math.max(0.01, Number(document.getElementById('fblResaTotaleSaleRischio')?.value)||1);
+   const progressEl=document.getElementById('fblResaTotaleSaleProgress');
+   const statsEl=document.getElementById('fblResaTotaleSaleStats');
+   const resaProgressSet=(t)=>{ resaTotaleSaleOverlays().forEach(ov=>{ const e=ov.querySelector('#fblResaTotaleSaleProgress'); if(e) e.textContent=t; }); };
+   const resaStatsSet=(h)=>{ resaTotaleSaleOverlays().forEach(ov=>{ const e=ov.querySelector('#fblResaTotaleSaleStats'); if(e) e.innerHTML=h; }); };
+   const saleSel = resaTotaleSaleScelte.size ? [...resaTotaleSaleScelte] : resaTotaleSaleLista();
+   // Cache: se gia' calcolato con la stessa chiave, non si rifa'.
+   const cacheKey=resaTotaleSaleCacheKey(saleSel,capitale,rischio);
+   if(resaTotaleSaleCache.has(cacheKey)){
+     const cached=resaTotaleSaleCache.get(cacheKey);
+     try{ if(cached.curva&&cached.curva.punti) rendDisegnaGrafico(cached.curva.punti); }catch(e){}
+     if(statsEl) resaStatsSet(cached.html||'');
+     resaProgressSet((cached.pairs||saleSel.length)+'/'+(cached.pairs||saleSel.length)+' (100%)');
+     window.fblResaTotaleSaleUltimo=cached;
+     return cached.curva;
+   }
+   // Conta le coppie sala x asset (denominatore) PRIMA di cominciare.
+   const pairs=[];
+   saleSel.forEach(sala=>{
+     const assetList=(typeof tgAssetPerSala==='function')?tgAssetPerSala(sala):[];
+     const assets=assetList&&assetList.length?assetList:[(typeof currentAssetKey!=='undefined'?currentAssetKey:null)||'EURUSD'];
+     assets.forEach(asset=>pairs.push({sala,asset}));
+   });
+   const tot=pairs.length||1;
+   resaProgressSet('0/'+tot+' (0%)');
+   // Lavoro spezzato: si avanza coppia per coppia, aggiornando la percentuale sempre.
+   for(let i=0;i<pairs.length;i++){
+     const {sala,asset}=pairs[i];
+     try{ if(typeof risultatiDi==='function') risultatiDi(sala,asset); }catch(e){}
+     const p=Math.round((i+1)/tot*100);
+     resaProgressSet((i+1)+'/'+tot+' ('+p+'%)');
+     // cede il controllo per ridisegnare la pagina (percentuale onesta, non ferma)
+     await new Promise(resolve=>setTimeout(resolve,0));
+   }
+   // Calcolo aggregato.
+   let c=null;
+   try{ c=rendCurvaMultiSale(saleSel, capitale, rischio, {}); }catch(e){ c=null; }
+   // Disegno.
+   try{ if(c&&c.punti) rendDisegnaGrafico(c.punti); }catch(e){}
+   // Statistiche.
+   const righe=resaTotaleSaleRighe(saleSel);
+   const tp=resaTotaleSaleTP(righe);
+   const giorni=resaTotaleSaleGiorni(c?c.punti:[]);
+   const perSala=resaTotaleSalePerSala(saleSel,capitale,rischio);
+   const fasce=resaTotaleSaleFasceOrarie(righe);
+   const notizie=resaTotaleSaleNotizie(righe);
+   // Prop firm su curva aggregata: entrambi i preset.
+   const prop={};
+   try{ prop['ftmo-1step']=window.fblPropDedicataConta((c&&c.punti)||[],capitale,(c&&c.punti&&c.punti.length)?c.punti[0].t:Date.now(),'ftmo-1step'); }catch(e){ prop['ftmo-1step']=null; }
+   try{ prop['ftmo-2step']=window.fblPropDedicataConta((c&&c.punti)||[],capitale,(c&&c.punti&&c.punti.length)?c.punti[0].t:Date.now(),'ftmo-2step'); }catch(e){ prop['ftmo-2step']=null; }
+   const usate=c? (c.usate||0):0;
+   const vinte=c? (c.vinte||0):0;
+   const perse=c? (c.perse||0):0;
+   const wr=usate? (vinte/usate*100):0;
+   const rr=usate? ((c.sommaR||0)/usate):0;
+   const finale=c? (c.finale||capitale):capitale;
+   const dd=c? (c.ddMax||0):0;
+   let html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:8px">'
+     +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Win rate</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+wr.toFixed(1)+'%</div></div>'
+     +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">R:R medio</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+rr.toFixed(2)+'R</div></div>'
+     +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Finale</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+'€'+Math.round(finale).toLocaleString('it-IT')+'</div></div>'
+     +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Drawdown max</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+dd.toFixed(1)+'%</div></div>'
+     +'<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:8px 10px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700;text-transform:uppercase">Operazioni</div><div style="font-family:monospace;font-size:19px;font-weight:700;margin-top:3px">'+usate+' ('+vinte+'/'+perse+')</div></div>'
+     +'</div>';
+   // TP per TP
+   html+='<div style="margin-top:12px;font-weight:700;font-size:12px;color:#cdd6e0">PERCENTUALE DI TP PRESI, TP PER TP</div>';
+   html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:6px;margin-top:6px">';
+   tp.forEach(t=>{ html+='<div style="background:#0b1117;border:1px solid #202832;border-radius:9px;padding:6px 8px"><div style="font-size:10.5px;color:#8b96a5;font-weight:700">TP'+t.liv+'</div><div style="font-family:monospace;font-size:17px;font-weight:700;margin-top:2px">'+t.pct.toFixed(1)+'%</div><div style="font-size:10px;color:#6b7280">'+t.hit+'/'+t.tot+'</div></div>'; });
+   html+='</div>';
+   // Profitto giorno per giorno
+   html+='<div style="margin-top:12px;font-weight:700;font-size:12px;color:#cdd6e0">PROFITTO GIORNO PER GIORNO</div>';
+   html+='<div style="max-height:160px;overflow:auto;margin-top:6px;font-size:11.5px">';
+   giorni.forEach(g=>{ const su=g.profitto>=0; html+='<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a2230"><span>'+g.giorno+'</span><span style="font-family:monospace;color:'+(su?'#4ecb83':'#ff7b78')+'">'+(su?'+':'')+Math.round(g.profitto).toLocaleString('it-IT')+' € ('+g.n+')</span></div>'; });
+   html+='</div>';
+   // Chi ha reso di piu', sala per sala
+   html+='<div style="margin-top:12px;font-weight:700;font-size:12px;color:#cdd6e0">CHI HA RESO DI PIU\', SALA PER SALA</div>';
+   html+='<div style="margin-top:6px;font-size:11.5px">';
+   perSala.forEach((s,i)=>{ html+='<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a2230"><span>'+(i+1)+'. '+s.sala+'</span><span style="font-family:monospace;color:'+(s.resa>=0?'#4ecb83':'#ff7b78')+'">'+(s.resa>=0?'+':'')+s.resa.toFixed(1)+'% ('+s.usate+')</span></div>'; });
+   html+='</div>';
+   // Fasce orarie
+   html+='<div style="margin-top:12px;font-weight:700;font-size:12px;color:#cdd6e0">FASCE ORARIE (ora segnale, fuso Roma)</div>';
+   html+='<div style="max-height:160px;overflow:auto;margin-top:6px;font-size:11.5px">';
+   fasce.forEach(f=>{ html+='<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a2230"><span>'+f.fascia+'</span><span style="font-family:monospace">'+f.count+' segnali, win '+f.wr.toFixed(1)+'%</span></div>'; });
+   html+='</div>';
+   // Rendimento vicino alle notizie (approssimazione)
+   html+='<div style="margin-top:12px;font-weight:700;font-size:12px;color:#cdd6e0">RENDIMENTO VICINO ALLE NOTIZIE (approssimazione)</div>';
+   html+='<div style="font-size:10.5px;color:#8b96a5;margin:2px 0 6px">Fasce fisse 08:30, 10:00, 14:30, 16:00 CET: approssimazione, non il calendario vero.</div>';
+   html+='<div style="margin-top:6px;font-size:11.5px">';
+   notizie.forEach(n=>{ html+='<div style="display:flex;justify-content:space-between;padding:2px 0;border-bottom:1px solid #1a2230"><span>'+n.fascia+'</span><span style="font-family:monospace">'+n.count+' segnali, win '+n.wr.toFixed(1)+'%</span></div>'; });
+   html+='</div>';
+   // Prop firm
+   html+='<div style="margin-top:12px;font-weight:700;font-size:12px;color:#cdd6e0">PROP FIRM SULL\'AGGREGATO</div>';
+   ['ftmo-2step','ftmo-1step'].forEach(preset=>{
+     const r=prop[preset]; if(!r) return;
+     html+='<div style="margin-top:6px;font-size:11.5px"><b>'+preset+'</b>: esito '+r.esito+(r.esitoData?' ('+r.esitoData+')':'')+', fasi='+(Array.isArray(r.fasi)?r.fasi.map(f=>f.nome+':'+f.esito).join(', '):'')+'</div>';
+     if(Array.isArray(r.fasi)){
+       html+='<div style="font-size:10.5px;color:#8b96a5;margin-left:8px">fasi: '+r.fasi.length+' (elenco, no if oneStep)</div>';
+     }
+   });
+   if(statsEl) resaStatsSet(html);
+   const cachedObj={curva:c,html,pairs:pairs.length,saleSel,capitale,rischio,righe,tp,giorni,perSala,fasce,notizie,prop,usate,vinte,perse,wr,rr,finale,dd};
+   window.fblResaTotaleSaleUltimo=cachedObj;
+   resaTotaleSaleCache.set(cacheKey,cachedObj);
+   resaProgressSet(tot+'/'+tot+' (100%)');
+   return c;
+ }
 // Alias globali per i test (come fblRendCalcola)
 window.fblResaTotaleSaleApri=fblResaTotaleSaleApri;
 window.fblResaTotaleSaleCalcola=fblResaTotaleSaleCalcola;
@@ -51201,6 +51357,54 @@ window.fblResaTotalePiuSaleApri=fblResaTotaleSaleApri;
 window.fblResaTotalePiuSaleCalcola=fblResaTotaleSaleCalcola;
 // Esponi anche la lista sale per i test
 window.fblResaTotaleSaleLista=resaTotaleSaleLista;
+// Esponi le nuove statistiche per i test
+window.resaTotaleSaleRighe=resaTotaleSaleRighe;
+window.fblResaTotaleSaleRighe=resaTotaleSaleRighe;
+window.resaTotaleSaleTP=resaTotaleSaleTP;
+window.fblResaTotaleSaleTP=resaTotaleSaleTP;
+window.resaTotaleSaleTpPerTp=resaTotaleSaleTP;
+window.fblResaTotaleSaleTpPerTp=resaTotaleSaleTP;
+window.resaTotaleSaleGiorni=resaTotaleSaleGiorni;
+window.fblResaTotaleSaleGiorni=resaTotaleSaleGiorni;
+window.resaTotaleSaleGiornoPerGiorno=resaTotaleSaleGiorni;
+window.fblResaTotaleSaleGiornoPerGiorno=resaTotaleSaleGiorni;
+window.resaTotaleSalePerSala=resaTotaleSalePerSala;
+window.fblResaTotaleSalePerSala=resaTotaleSalePerSala;
+window.resaTotaleSaleSalaPerSala=resaTotaleSalePerSala;
+window.fblResaTotaleSaleSalaPerSala=resaTotaleSalePerSala;
+window.resaTotaleSaleFasceOrarie=resaTotaleSaleFasceOrarie;
+window.fblResaTotaleSaleFasceOrarie=resaTotaleSaleFasceOrarie;
+window.resaTotaleSaleFasce=resaTotaleSaleFasceOrarie;
+window.fblResaTotaleSaleFasce=resaTotaleSaleFasceOrarie;
+window.resaTotaleSaleNotizie=resaTotaleSaleNotizie;
+window.fblResaTotaleSaleNotizie=resaTotaleSaleNotizie;
+window.resaTotaleSaleRomaMinuti=resaTotaleSaleRomaMinuti;
+window.fblResaTotaleSaleRomaMinuti=resaTotaleSaleRomaMinuti;
+window.resaTotaleSaleFascia=resaTotaleSaleRomaMinuti;
+// Esponi le nuove statistiche per i test
+window.resaTotaleSaleRighe=resaTotaleSaleRighe;
+window.fblResaTotaleSaleRighe=resaTotaleSaleRighe;
+window.resaTotaleSaleTP=resaTotaleSaleTP;
+window.fblResaTotaleSaleTP=resaTotaleSaleTP;
+window.resaTotaleSaleTpPerTp=resaTotaleSaleTP;
+window.fblResaTotaleSaleTpPerTp=resaTotaleSaleTP;
+window.resaTotaleSaleGiorni=resaTotaleSaleGiorni;
+window.fblResaTotaleSaleGiorni=resaTotaleSaleGiorni;
+window.resaTotaleSaleGiornoPerGiorno=resaTotaleSaleGiorni;
+window.fblResaTotaleSaleGiornoPerGiorno=resaTotaleSaleGiorni;
+window.resaTotaleSalePerSala=resaTotaleSalePerSala;
+window.fblResaTotaleSalePerSala=resaTotaleSalePerSala;
+window.resaTotaleSaleSalaPerSala=resaTotaleSalePerSala;
+window.fblResaTotaleSaleSalaPerSala=resaTotaleSalePerSala;
+window.resaTotaleSaleFasceOrarie=resaTotaleSaleFasceOrarie;
+window.fblResaTotaleSaleFasceOrarie=resaTotaleSaleFasceOrarie;
+window.resaTotaleSaleFasce=resaTotaleSaleFasceOrarie;
+window.fblResaTotaleSaleFasce=resaTotaleSaleFasceOrarie;
+window.resaTotaleSaleNotizie=resaTotaleSaleNotizie;
+window.fblResaTotaleSaleNotizie=resaTotaleSaleNotizie;
+window.resaTotaleSaleRomaMinuti=resaTotaleSaleRomaMinuti;
+window.fblResaTotaleSaleRomaMinuti=resaTotaleSaleRomaMinuti;
+window.resaTotaleSaleFascia=resaTotaleSaleRomaMinuti;
 // Quanti target ha la sala: decide quante righe ha la strategia, quindi quanto rende la
 // simulazione. Sbagliarlo in meno taglia i target in fondo senza dirlo.
 window.stratQuantiTp=stratQuantiTp;
