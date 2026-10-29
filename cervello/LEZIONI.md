@@ -1043,4 +1043,16 @@
   una risposta, e soprattutto la prossima funzione che qualcuno aggiunge nasce scoperta.
   Spostato il controllo in `fetchMt5WithTimeout`, da cui passano TUTTE le chiamate al ponte:
   una riga, e copre anche quello che non e' stato ancora scritto. Con la prova di controllo che
-  le LETTURE devono continuare a passare, se no si spegne il grafico per difendere gli ordini.
+  le LETTURE devono continuare a passare, se no si spegne il grafico per difendere gli ordini.
+
+- **«Non pubblicare» non e' un'istruzione che si puo' dare: il rilascio parte da solo.**
+  (29 ottobre 2026, la 2.0.40 pubblicata due volte - il giorno dopo la 2.0.39 pubblicata due
+  volte.) Avevo scritto nel prompt per OpenCode «NON alzare CACHE_NAME e NON pubblicare
+  release». Sbagliato: il flusso «Installer Windows» ha un trigger su `app.html`, quindi
+  pubblica comunque. Quell'istruzione non ha evitato la release - ha solo garantito che uscisse
+  col numero DUPLICATO, cioe' esattamente l'inciampo che avevo appena finito di documentare.
+  LA REGOLA GIUSTA E' L'OPPOSTA: **chi tocca `app.html` alza `CACHE_NAME`**, perche' il
+  rilascio avviene che lo si voglia o no. L'unico modo di non pubblicare e' non spingere su
+  `main`.
+  E la lezione dentro la lezione: prima di vietare un comportamento, guardare se dipende da chi
+  lo esegue. Qui non dipendeva.
