@@ -17901,9 +17901,9 @@ function draw(){
        // loro, perché sono livelli indipendenti — due posizioni possono condividere il target e
        // avere stop diversi, o viceversa. I numeri (quante etichette sulla riga e il totale di
        // quella riga) usano lo stesso metro del gruppo della casella identica.
-       infogruppoTp:rigaTp?fblDatiGruppoCaselle(rigaTp.membri,rigaTp.livello,rigaTp.livello):null,
+       infogruppoTp:(rigaTp&&!expandedTpSlGroups.has(chiaveRigaTp))?fblDatiGruppoCaselle(rigaTp.membri,rigaTp.livello,rigaTp.livello):null,
        gruppoChiaveTp:rigaTp?chiaveRigaTp:null,
-       infogruppoSl:rigaSl?fblDatiGruppoCaselle(rigaSl.membri,rigaSl.livello,rigaSl.livello):null,
+       infogruppoSl:(rigaSl&&!expandedTpSlGroups.has(chiaveRigaSl))?fblDatiGruppoCaselle(rigaSl.membri,rigaSl.livello,rigaSl.livello):null,
        gruppoChiaveSl:rigaSl?chiaveRigaSl:null,
        // Non è il capo fila della riga: la sua etichetta non si disegna. La LINEA del livello
        // resta, quindi quel prezzo continua a vedersi e a essere cliccabile dalla linea stessa.
@@ -20495,7 +20495,7 @@ function drawTpSlZoneBox(ctx,opts){
      const tpEuroTxt=grpTp?` • +${euro(grpTp.tpTot)}`:soldiLivello(tp,'+');
      // Spostata FUORI dalla casella (a destra del bordo xRight, non più sovrapposta alle
      // candele al suo interno) — richiesto esplicitamente.
-     const pillRectTp=drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grpTp?` · ×${grpTp.num}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
+     const pillRectTp=drawZonePill(ctx,xRight+4,yTp,`${opts.tpEtichetta||'TP1'}: ${fmtPrice(tp)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${tpEuroTxt}${grpTp?'':(opts.origine?` · ${opts.origine}`:'')}${grpTp?` · ×${grpTp.num}`:''}`,zoneColors.tp,contrastTextColor(zoneColors.tp),undefined,w-pad.r);
      if(pillRectTp)tpSlPillHitRects.push(Object.assign({ownerKey},pillRectTp));
      // Hit rect per l'etichetta del gruppo (×N): cliccandola il gruppo si espande/contrae.
      // Riga di prezzo condivisa: la chiave è quella della RIGA del Target, non della casella.
@@ -20536,7 +20536,7 @@ function drawTpSlZoneBox(ctx,opts){
      const pipsVal=(sl-entry)/pipSizeForAsset(assetKey);
      // Anteprima perdita in € se lo Stop viene raggiunto (guadagno, se è uno Stop Profit).
      const slEuroTxt=grpSl?` • ${stopProfit?'+':'-'}${euro(grpSl.slTot)}`:soldiLivello(sl,stopProfit?'+':'-');
-     const pillRectSl=drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${opts.origine?` · ${opts.origine}`:''}${grpSl?` · ×${grpSl.num}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
+     const pillRectSl=drawZonePill(ctx,xRight+4,ySl,`${spLabel}: ${fmtPrice(sl)} (${fmtPctSigned(pct)})${usdMonete?'':' '+fmtPipsVal(pipsVal)}${slEuroTxt}${grpSl?'':(opts.origine?` · ${opts.origine}`:'')}${grpSl?` · ×${grpSl.num}`:''}`,spColor,contrastTextColor(spColor),undefined,w-pad.r);
      if(pillRectSl)tpSlPillHitRects.push(Object.assign({ownerKey},pillRectSl));
      // Riga di prezzo condivisa, lato Stop: anche questa etichetta si espande/contrae al click.
      if(grpSl&&chiaveGrpSl)tpSlPillHitRects.push({ownerKey:'gruppo:'+chiaveGrpSl,x:pillRectSl.x,y:pillRectSl.y,w:pillRectSl.w,h:pillRectSl.h});
@@ -42170,6 +42170,16 @@ function fblAggiornaIndirizzi(){
 try{ fblScegliStradaGrafico(); }catch(e){}
 // E anche quella degli ordini: senza, MT5 restava appeso all'indirizzo indovinato all'avvio.
 try{ fblScegliStradaOrdini(); }catch(e){}
+// Anche a pannello chiuso, se il ponte locale smette di rispondere si riseleziona la strada degli
+// ordini: il pannello dei servizi si ferma a schermata chiusa, ma MT5 non deve restare appeso a
+// una strada morta. Il ponte resta acceso (non si interrompe nulla).
+let fblStradaOrdiniTimer = setInterval(async () => {
+  try {
+    fblPonteLocaleAt = 0;
+    const vivo = await fblControllaPonteLocale();
+    if (!vivo) await fblScegliStradaOrdini();
+  } catch(e) {}
+}, 30000);
 // symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
 // (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
 // dati irraggiungibile (va MAI messo in cache in modo permanente, si ritenta al giro successivo).
@@ -47841,6 +47851,11 @@ async function fblAppQuiGiaAggiornata(){
 // somigliano (il servizio non risponde) ma la cosa da fare e' opposta: installare, oppure solo
 // aspettare. Dirle con le stesse parole manda a reinstallare chi ha solo acceso il PC.
 async function mt5Passo1Parole(giaInstallato){
+ // Se il servizio risponde, i pacchetti ci sono gia': lo segno prima di mostrare il passo.
+ try{
+   const _r = await fetchMt5WithTimeout('/health',{method:'GET'},3000);
+   if(_r && _r.ok){ segnaPonteVisto(); giaInstallato = true; }
+ }catch(e){}
  const titolo=$('mt5BridgeStepTitle'), testo=$('mt5BridgeStepTesto');
  const scarica=$('mt5DownloadDesktopAppBtn'), avanti=$('mt5BridgeContinueBtn');
  // RICHIESTO: su telefono e tablet i pacchetti non si installano e non servono - il servizio vive
