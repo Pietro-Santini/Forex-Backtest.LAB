@@ -345,6 +345,7 @@ body.prop-firm-active.pf-blood-effect #chartMainArea::after{bottom:6px;right:6px
 body.pf-blood-effect .pf-danger-blink{animation:pfDangerBlink 1s step-start infinite}
 @keyframes pfDangerBlink{0%,100%{color:#ff4040;opacity:1}50%{color:#7a1212;opacity:.55}}
 #pfDailyDDPanel .value,#pfMaxDDPanel .value{color:#c98a8a}
+#pfGainPanel .value,#pfEffectiveGainPanel .value,#pfNetProfitPanel .value,#pfProfittoEffettivoPanel .value,#pfGuadagnoEffettivoPanel .value{color:#7fe0a6}
 /* STEP 3 — schermata di violazione Prop Firm ("Conto Chiuso"): z-index sopra qualunque modale
    esistente (9999, come richiesto), design volutamente drammatico. */
 .pfViolationRow{display:flex;justify-content:space-between;gap:12px}
@@ -3572,6 +3573,11 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
       updatePropFirmDrawdownDisplay() più sotto, che ora mostra/nasconde ENTRAMBI i pannelli. -->
  <div class="panel" id="pfDailyDDPanel" style="display:none"><div class="label">Daily Drawdown</div><div id="pfDailyDD" class="value">0.00% / 5%</div></div>
  <div class="panel" id="pfMaxDDPanel" style="display:none"><div class="label">Max Drawdown</div><div id="pfMaxDD" class="value">0.00% / 10%</div></div>
+  <div class="panel" id="pfGainPanel" style="display:none" title=""><div class="label">Guadagno effettivo</div><div id="pfGain" class="value">0.00</div></div>
+  <div class="panel" id="pfEffectiveGainPanel" style="display:none" title=""><div class="label">Guadagno effettivo</div><div id="pfEffectiveGain" class="value">0.00</div></div>
+  <div class="panel" id="pfNetProfitPanel" style="display:none" title=""><div class="label">Guadagno effettivo</div><div id="pfNetProfit" class="value">0.00</div></div>
+  <div class="panel" id="pfProfittoEffettivoPanel" style="display:none" title=""><div class="label">Guadagno effettivo</div><div id="pfProfittoEffettivo" class="value">0.00</div></div>
+  <div class="panel" id="pfGuadagnoEffettivoPanel" style="display:none" title=""><div class="label">Guadagno effettivo</div><div id="pfGuadagnoEffettivo" class="value">0.00</div></div>
 </div>
 
 <!-- IL PANNELLO DEGLI ORDINI E' NASCOSTO, NON CANCELLATO (richiesto dal proprietario: "visto che
@@ -5919,12 +5925,48 @@ function fblPropContoId(){
 function _fblPropConti(){
  try{ return JSON.parse(localStorage.getItem(FBL_PROP_CONTI_KEY)||'{}')||{}; }catch(e){ return {}; }
 }
+function _fblPropMigraVecchiValoriGlobali(){
+ try{
+  if(window.__fblPropMigrazioneInCorso) return;
+  window.__fblPropMigrazioneInCorso=true;
+  const id=fblPropContoId();
+  const d=_fblPropConti();
+  const v=d[id]||{};
+  const s=Object.assign({}, (v&&v.stato)?v:{stato:'in_corso'});
+  let changed=false;
+  if(s.preset===undefined){
+   try{ const k=localStorage.getItem('fbl_prop_preset'); if(k&&FBL_PROP_REGOLE[k]){ s.preset=k; changed=true; } }catch(e){}
+  }
+  if(s.fase===undefined){
+   try{ const f=localStorage.getItem('fbl_prop_fase'); if(f!==null){ s.fase=parseInt(f,10)||0; changed=true; } }catch(e){}
+  }
+  if(s.tipoConto===undefined){
+   try{ const t=localStorage.getItem('fbl_prop_tipo_conto'); if(t&&FBL_PROP_TIPI_CONTO[t]){ s.tipoConto=t; changed=true; } }catch(e){}
+  }
+  if(changed){ fblPropContoStatoSalva(id,s); }
+  try{ localStorage.removeItem('fbl_prop_preset'); }catch(e){}
+  try{ localStorage.removeItem('fbl_prop_fase'); }catch(e){}
+  try{ localStorage.removeItem('fbl_prop_tipo_conto'); }catch(e){}
+ }catch(e){}
+ finally{ try{ window.__fblPropMigrazioneInCorso=false; }catch(e){} }
+}
 function fblPropContoStato(id){
+ const effId=id||fblPropContoId();
+ if(effId===fblPropContoId()){ try{ _fblPropMigraVecchiValoriGlobali(); }catch(e){} }
  const d=_fblPropConti();
- const v=d[id||fblPropContoId()];
- // Un conto mai visto NON eredita niente: nasce in corso. E' il punto che il proprietario ha
- // chiesto esplicitamente - un conto nuovo non deve nascere gia' bocciato.
- return (v&&v.stato)?v:{stato:'in_corso'};
+ const v=d[effId];
+ const base=(v&&v.stato)?v:{stato:'in_corso'};
+ const out=Object.assign({},base);
+ if(out.preset===undefined) out.preset='ftmo-2step';
+ if(out.fase===undefined) out.fase=0;
+ if(out.tipoConto===undefined) out.tipoConto='standard';
+ if(!FBL_PROP_REGOLE[out.preset]) out.preset='ftmo-2step';
+ if(!FBL_PROP_TIPI_CONTO[out.tipoConto]) out.tipoConto='standard';
+ const r=FBL_PROP_REGOLE[out.preset];
+ out.fase=Math.max(0, Math.min(parseInt(out.fase,10)||0, r.fasi.length-1));
+ if(out.faseSuperata===undefined) out.faseSuperata=null;
+ if(out.propChiesto===undefined) out.propChiesto=false;
+ return out;
 }
 function fblPropContoStatoSalva(id,stato){
  const d=_fblPropConti();
@@ -5962,6 +6004,23 @@ function fblPropContoDaChiedere(id){
  // gia' scelto e' un modo di non ascoltare.
  return st.stato==='chiuso' && !st.scelta;
 }
+// ATTIVAZIONE PROP FIRM ALLA CONNESSIONE MT5: una sola volta per conto.
+function fblPropAttivazioneDaChiedere(id){
+ try{
+  const st=fblPropContoStato(id);
+  return !st.propChiesto;
+ }catch(e){ return false; }
+}
+function fblPropContoDaChiedereAttivazione(id){ return fblPropAttivazioneDaChiedere(id); }
+function fblPropContoDaChiederePropFirm(id){ return fblPropAttivazioneDaChiedere(id); }
+function fblPropDomandaAttivazioneDaChiedere(id){ return fblPropAttivazioneDaChiedere(id); }
+try{
+  window.fblPropAttivazioneDaChiedere=fblPropAttivazioneDaChiedere;
+  window.fblPropContoDaChiedereAttivazione=fblPropContoDaChiedereAttivazione;
+  window.fblPropContoDaChiederePropFirm=fblPropContoDaChiederePropFirm;
+  window.fblPropDomandaAttivazioneDaChiedere=fblPropDomandaAttivazioneDaChiedere;
+}catch(e){}
+
 // 'pratica' -> il conto resta usabile per esercitarsi, la prop firm NON ricomincia a calcolare.
 //              La sfida e' persa: fingere il contrario sarebbe peggio che dirlo.
 // 'elimina' -> si ARCHIVIA. Non sparisce: resta nella dashboard col suo storico, e la
@@ -6109,12 +6168,16 @@ const FBL_PROP_TIPI_CONTO = {
 };
 const FBL_PROP_TIPO_KEY='fbl_prop_tipo_conto';
 function fblPropTipoConto(){
- try{ const t=localStorage.getItem(FBL_PROP_TIPO_KEY); if(FBL_PROP_TIPI_CONTO[t])return t; }catch(e){}
+ try{ _fblPropMigraVecchiValoriGlobali(); }catch(e){}
+ const st=fblPropContoStato();
+ const t=st.tipoConto;
+ if(FBL_PROP_TIPI_CONTO[t]) return t;
  return 'standard';
 }
 function fblPropTipoContoImposta(t){
  if(!FBL_PROP_TIPI_CONTO[t])return false;
- try{ localStorage.setItem(FBL_PROP_TIPO_KEY,t); }catch(e){}
+ const st=fblPropContoStato();
+ fblPropContoStatoSalva(null,Object.assign({},st,{tipoConto:t}));
  return true;
 }
 // GLI AVVISI, scritti per essere LETTI.
@@ -6150,28 +6213,37 @@ try{
   window.fblPropTipoContoImposta=fblPropTipoContoImposta;
   window.fblPropAvvisi=fblPropAvvisi;
 }catch(e){}
+try{
+  window.fblPropPresetAttivo=fblPropPresetAttivo;
+  window.fblPropFaseAttiva=fblPropFaseAttiva;
+}catch(e){}
 const FBL_PROP_PRESET_KEY='fbl_prop_preset';
 const FBL_PROP_FASE_KEY='fbl_prop_fase';
 function fblPropPresetAttivo(){
- try{ const k=localStorage.getItem(FBL_PROP_PRESET_KEY); if(k&&FBL_PROP_REGOLE[k])return k; }catch(e){}
+ try{ _fblPropMigraVecchiValoriGlobali(); }catch(e){}
+ const st=fblPropContoStato();
+ const k=st.preset;
+ if(k&&FBL_PROP_REGOLE[k]) return k;
  return 'ftmo-2step';
 }
 function fblPropPresetImposta(k){
  if(!FBL_PROP_REGOLE[k])return false;
- try{ localStorage.setItem(FBL_PROP_PRESET_KEY,k); }catch(e){}
- // Cambiando preset si riparte dalla prima fase: restare sulla «sfida 2» passando a un one step,
- // che di fasi ne ha una sola, vorrebbe dire puntare a una fase che non esiste.
- fblPropFaseImposta(0);
+ const st=fblPropContoStato();
+ const s=Object.assign({},st,{preset:k,fase:0});
+ fblPropContoStatoSalva(null,s);
  return true;
 }
 function fblPropFaseAttiva(){
  const r=FBL_PROP_REGOLE[fblPropPresetAttivo()];
- let n=0; try{ n=parseInt(localStorage.getItem(FBL_PROP_FASE_KEY)||'0',10)||0; }catch(e){}
- // Mai fuori dall'elenco: una fase che non esiste darebbe `undefined.obiettivo` al primo tick.
+ const st=fblPropContoStato();
+ let n=st.fase;
+ n=parseInt(n,10)||0;
  return Math.max(0, Math.min(n, r.fasi.length-1));
 }
 function fblPropFaseImposta(n){
- try{ localStorage.setItem(FBL_PROP_FASE_KEY,String(Math.max(0,parseInt(n,10)||0))); }catch(e){}
+ const st=fblPropContoStato();
+ const s=Object.assign({},st,{fase:Math.max(0,parseInt(n,10)||0)});
+ fblPropContoStatoSalva(null,s);
 }
 // LE REGOLE DI ADESSO, gia' risolte: preset piu' fase, in un oggetto solo da leggere.
 function fblPropRegoleAttive(){
@@ -6193,7 +6265,9 @@ function fblPropRegoleAttive(){
 try{
   window.FBL_PROP_REGOLE=FBL_PROP_REGOLE;
   window.fblPropRegoleAttive=fblPropRegoleAttive;
+  window.fblPropPresetAttivo=fblPropPresetAttivo;
   window.fblPropPresetImposta=fblPropPresetImposta;
+  window.fblPropFaseAttiva=fblPropFaseAttiva;
   window.fblPropFaseImposta=fblPropFaseImposta;
 }catch(e){}
 
@@ -6209,7 +6283,7 @@ function checkPropFirmRules(){
     if(!pfRealMt5DataReady()) return; // MT5 scollegato o dati non ancora arrivati: mai giudicare su dati mancanti
     const m=pfMt5Metrics();
     propFirmChallengeInitialCapital=m.initial;
-    updatePropFirmDrawdownDisplay(m.dailyLossPct,m.totalLossPct);
+    updatePropFirmDrawdownDisplay(m.dailyLossPct,m.totalLossPct, m.eq-m.initial, 'MT5: profit+swap+commissione (netto vero)', m.currency||'EUR');
     if(m.dailyLoss>m.dailyLossLimit){
       triggerPropFirmViolation('daily',{ dailyStartBalance:m.dailyStart, equityNow:m.eq, dailyLoss:m.dailyLoss, dailyLossLimit:m.dailyLossLimit, dailyLossPct:m.dailyLossPct, realMt5Login:m.login, currency:m.currency });
       return;
@@ -6219,13 +6293,28 @@ function checkPropFirmRules(){
       return;
     }
     // PUNTO 7: obiettivo raggiunto anche sul conto MT5 REALE → stesso pop-up.
+    const _regMt5=fblPropRegoleAttive();
     const profitPct=(m.eq-m.initial)/m.initial*100;
-    if(profitPct>=10 && !propFirmSbloccataShown){
+    const _obMt5=_regMt5.obiettivo;
+    if(profitPct>=_obMt5 && !propFirmSbloccataShown){
       propFirmSbloccataShown=true;
-      showPropFirmSbloccata('Obiettivo della Prop Firm raggiunto sul conto MT5 reale '+m.login+': da adesso il limite del drawdown giornaliero del 5% non vale più.',[
+      const _quandoMt5=new Date().toLocaleString('it-IT');
+      try{
+       const _fi=fblPropFaseAttiva();
+       const _st=fblPropContoStato();
+       if(_st.faseSuperata!==_fi){
+        const _s=Object.assign({},_st,{faseSuperata:_fi,faseSuperataQuando:Date.now(),faseSuperataNumeri:{capitaleIniziale:m.initial,equity:m.eq,profittoPct:profitPct,obiettivo:_obMt5}});
+        if(!_regMt5.ultimaFase){ _s.fase=_fi+1; }
+        else { _s.stato='finanziato'; }
+        fblPropContoStatoSalva(null,_s);
+       }
+      }catch(e){}
+      showPropFirmSbloccata('Fase "'+_regMt5.faseNome+'" superata il '+_quandoMt5+' sul conto MT5 reale '+m.login+'.',[
+        ['Fase', _regMt5.faseNome],
+        ['Quando', _quandoMt5],
         ['Capitale iniziale', m.initial.toLocaleString('it-IT',{style:'currency',currency:m.currency||'EUR'})],
         ['Equity attuale', m.eq.toLocaleString('it-IT',{style:'currency',currency:m.currency||'EUR'})],
-        ['Profitto', profitPct.toFixed(2)+'% / obiettivo 10%']
+        ['Profitto', profitPct.toFixed(2)+'% / obiettivo '+_obMt5+'%']
       ]);
     }
     return;
@@ -6258,7 +6347,7 @@ function checkPropFirmRules(){
   // STEP 4, punto 4: aggiorna SEMPRE il pannellino drawdown (anche quando non si sta violando
   // nulla), prima di eventualmente bloccare tutto qui sotto — è quello che lampeggia in rosso
   // avvicinandosi ai limiti.
-  updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct);
+  updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct, equityNow-propFirmChallengeInitialCapital, 'Stima: commissioni tramite fblCommissionePct', 'EUR');
   if(dailyLoss>dailyLossLimit){
     triggerPropFirmViolation('daily',{ dailyStartBalance:propFirmDailyStartBalance, equityNow, dailyLoss, dailyLossLimit, dailyLossPct });
     return;
@@ -6276,7 +6365,20 @@ function checkPropFirmRules(){
     $('status').textContent = '🎯 Obiettivo Prop Firm raggiunto! Il conto è sbloccato per il finanziamento.';
     if(!propFirmSbloccataShown){
       propFirmSbloccataShown = true;
-      showPropFirmSbloccata('Obiettivo della Prop Firm raggiunto: da adesso il limite del drawdown giornaliero del 5% non vale più per questa Challenge.',[
+      const _quandoSim=new Date().toLocaleString('it-IT');
+      try{
+       const _fi=fblPropFaseAttiva();
+       const _st=fblPropContoStato();
+       if(_st.faseSuperata!==_fi){
+        const _s=Object.assign({},_st,{faseSuperata:_fi,faseSuperataQuando:Date.now(),faseSuperataNumeri:{capitaleIniziale:propFirmChallengeInitialCapital,equity:equityNow,profittoPct:profitPct,obiettivo:propTargetPct}});
+        if(!_reg.ultimaFase){ _s.fase=_fi+1; }
+        else { _s.stato='finanziato'; }
+        fblPropContoStatoSalva(null,_s);
+       }
+      }catch(e){}
+      showPropFirmSbloccata('Fase "'+_reg.faseNome+'" superata il '+_quandoSim+': da adesso il limite del drawdown giornaliero non vale piu per questa Challenge.',[
+        ['Fase', _reg.faseNome],
+        ['Quando', _quandoSim],
         ['Capitale iniziale', propFirmChallengeInitialCapital.toLocaleString('it-IT',{style:'currency',currency:'EUR'})],
         ['Equity attuale', equityNow.toLocaleString('it-IT',{style:'currency',currency:'EUR'})],
         ['Profitto', profitPct.toFixed(2)+'% / obiettivo '+propTargetPct+'%']
@@ -6287,18 +6389,28 @@ function checkPropFirmRules(){
 // STEP 4, punto 4: mostra Daily Drawdown / Max Drawdown correnti (in % del rispettivo limite,
 // 5% e 10%) accanto al pulsante Prop Firm, e li fa lampeggiare debolmente in rosso quando ci
 // si avvicina al limite (4% giornaliero, 9% totale) — PRIMA che scatti davvero la violazione.
-function updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct){
-  // 21/9: i due pannelli sono ora due ".panel" separati nella sezione statistiche (accanto a
-  // Trade/Pip totali) invece di un unico contenitore — vanno quindi mostrati/nascosti entrambi.
+function updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct,gainValue,gainSource,gainCurrency){
   const dPanel=$('pfDailyDDPanel'), mPanel=$('pfMaxDDPanel');
   if(!dPanel||!mPanel)return;
   dPanel.style.display=isPropFirmMode?'':'none';
   mPanel.style.display=isPropFirmMode?'':'none';
+  const gainPanelIds=['pfGainPanel','pfEffectiveGainPanel','pfNetProfitPanel','pfProfittoEffettivoPanel','pfGuadagnoEffettivoPanel'];
+  gainPanelIds.forEach(id=>{ const p=$(id); if(p) p.style.display=isPropFirmMode?'':'none'; });
   if(!isPropFirmMode)return;
   const dEl=$('pfDailyDD'), mEl=$('pfMaxDD');
   const dPct=Math.max(0,dailyLossPct), mPct=Math.max(0,totalLossPct);
   if(dEl){ dEl.textContent=dPct.toFixed(2)+'% / 5%'; dEl.classList.toggle('pf-danger-blink',dPct>=4); }
   if(mEl){ mEl.textContent=mPct.toFixed(2)+'% / 10%'; mEl.classList.toggle('pf-danger-blink',mPct>=9); }
+  const cur=gainCurrency||'EUR';
+  let gText='-';
+  try{ if(Number.isFinite(gainValue)) gText=Number(gainValue).toLocaleString('it-IT',{style:'currency',currency:cur}); }catch(e){}
+  gainPanelIds.forEach(id=>{
+    const valId=id.replace('Panel','');
+    const el=$(valId);
+    if(el) el.textContent=gText;
+    const p=$(id);
+    if(p && gainSource) p.title=String(gainSource);
+  });
 }
 // Blocca IMMEDIATAMENTE il simulatore (pausa il replay storico, disconnette lo stream Live) e
 // registra la violazione con i valori numerici al millisecondo, come richiesto. La schermata
@@ -47877,6 +47989,26 @@ function updateMt5ModeUI(){
    // chiedere ad ogni collegamento. Ritardata, per non accavallarsi agli altri avvisi che
    // scattano proprio mentre il conto si collega.
    try{ setTimeout(()=>{ try{ tgProponiDopoMt5(); }catch(e){} },1500); }catch(e){}
+   // Pop-up prop firm alla connessione: UN SOLO PUNTO.
+   try{ setTimeout(async ()=>{
+     try{
+      if(typeof fblPropAttivazioneDaChiedere!=='function') return;
+      const id=fblPropContoId();
+      if(!fblPropAttivazioneDaChiedere(id)) return;
+      // segna come chiesto (una sola volta)
+      try{ const st=fblPropContoStato(id); fblPropContoStatoSalva(id,Object.assign({},st,{propChiesto:true})); }catch(e){}
+      const ok=await appConfirm('Vuoi attivare la modalità Prop Firm su questo conto?');
+      if(!ok) return;
+      const oneStep=await appConfirm('One step? (Annulla = Two step)');
+      const preset=oneStep?'ftmo-1step':'ftmo-2step';
+      try{ fblPropPresetImposta(preset); }catch(e){}
+      // tipo conto
+      try{
+       const swing=await appConfirm('Tipo conto Swing? (Annulla = Standard)');
+       fblPropTipoContoImposta(swing?'swing':'standard');
+      }catch(e){}
+     }catch(e){}
+   },1600); }catch(e){}
  }
  const _switchingToLive=_justConnected&&!liveModeActive;
  if(_switchingToLive){
