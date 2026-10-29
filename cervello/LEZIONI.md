@@ -1026,3 +1026,21 @@
 - **Il keepalive della chiusura pagina fa UNA sola richiesta.** Non si puo' farci passare anche le operazioni nuove: vanno mandate dal sync normale, che gira anche subito prima (sullo stesso pagehide, force=true). (27 ottobre 2026.)
 
 - **Una funzione che accetta sia un valore sia una funzione e' piu' robusta di due firme separate.** (28 ottobre 2026, rendCurva multi-sala.) rendCurva oggi riceve una serie e una strategia applicate a tutti i segnali; per l'aggregazione servono una serie e una strategia per segnale. Invece di cambiare la firma e rompere tutte le chiamate esistenti, la stessa funzione accetta o un valore (costante, come prima) o una funzione (che riceve il segnale). Con valori costanti il comportamento e' identico a prima: e' anche il modo di provare che non si e' rotto niente.
+
+- **Due release con lo stesso numero non arrivano a nessuno.** (29 ottobre 2026, la 2.0.39
+  pubblicata due volte.) Io avevo pubblicato `v2.0.39`; poche ore dopo il lavoro di OpenCode e'
+  uscito come `v2.0.39-210`, perche' `CACHE_NAME` era rimasto fermo. Risultato: il service
+  worker non invalidava niente (la pagina non si rinfrescava) e l'aggiornatore del programma
+  rispondeva «il programma e' gia' alla 2.0.39: non c'e' niente da installare». Un rilascio
+  intero, verde su GitHub, **irraggiungibile per chi lo deve usare**.
+  LA REGOLA: il numero di versione non e' un'etichetta, e' la CHIAVE con cui l'app decide se
+  aggiornarsi. Chiunque rilasci alza `CACHE_NAME` - e se due sessioni diverse lavorano sullo
+  stesso giorno, la seconda controlla cosa ha gia' pubblicato la prima prima di spingere.
+
+- **Dieci guardie sparse valgono meno di una alla porta.** (29 ottobre 2026, replay e ordini
+  MT5.) Il divieto di inviare ordini veri in replay era stato messo in sette funzioni su dieci.
+  Le tre scoperte erano probabilmente irraggiungibili - ma «probabilmente» su soldi veri non e'
+  una risposta, e soprattutto la prossima funzione che qualcuno aggiunge nasce scoperta.
+  Spostato il controllo in `fetchMt5WithTimeout`, da cui passano TUTTE le chiamate al ponte:
+  una riga, e copre anche quello che non e' stato ancora scritto. Con la prova di controllo che
+  le LETTURE devono continuare a passare, se no si spegne il grafico per difendere gli ordini.

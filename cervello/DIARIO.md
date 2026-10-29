@@ -3554,3 +3554,32 @@ https://www.googleapis.com/oauth2/v3/certs).
 - **Dashboard conti archiviati (voce B):** fatto — pulsante "Conti archiviati" nel panel Prop Firm + modal dinamico fblPropContiDashboard().
 - **Voce E (autonomia):** non toccata, come richiesto.
 PY
+
+## 29 ottobre 2026 — verifica finale del lavoro di OpenCode, e la 2.0.40
+
+Controllo completo di quello che OpenCode ha consegnato il 28 ottobre.
+
+**A posto:** 990 collaudi (989 passati, 0 falliti) in locale e su GitHub; i sei script di
+`app.html` compilano; il profilo volumetrico riprovato sul caso esatto del proprietario (1H ->
+30m) con l'interruttore in tutt'e due le posizioni; i tre conti prop separati; l'effetto wow
+acceso e con le guardie rispettate; nessuna delle dieci regole della consegna violata.
+
+**Corretto qui:**
+
+- **Due release con lo stesso numero.** `v2.0.39` (mia) e `v2.0.39-210` (OpenCode) con
+  `CACHE_NAME` fermo: il lavoro di OpenCode era pubblicato ma **irraggiungibile**, perche' ne'
+  il service worker ne' l'aggiornatore del programma vedevano un numero nuovo. Rilasciata la
+  **2.0.40** che porta tutto.
+- **La resa totale era nel posto sbagliato.** Il pulsante stava nel pannello «Prop Firm»; il
+  proprietario l'aveva chiesto dalla **dashboard delle statistiche** e da **Sale segnali**.
+  Spostato in tutti e due, con il collaudo che li cerca li' e una prova di controllo che il
+  pulsante apra davvero il riquadro (uno nel posto giusto ma morto non servirebbe a niente).
+- **Guardia del replay spostata alla porta.** Era in sette funzioni su dieci: ora e' in
+  `fetchMt5WithTimeout`, l'unico passaggio obbligato. Solo le rotte che SCRIVONO (`/order/...`):
+  le letture continuano a passare, ed e' la prova di controllo.
+- **Commento riscritto** sopra `vpFixedResolveRange`: descriveva ancora il vecchio
+  comportamento come quello attuale.
+
+**Lasciato a OpenCode:** la resa totale calcola win rate, R:R, drawdown, curva e numero
+operazioni. Mancano le statistiche per TP, la fascia oraria, la vicinanza alle notizie, il P/L
+giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferimenti nel codice).

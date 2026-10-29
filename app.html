@@ -1926,7 +1926,6 @@ function pubblicaPreferenze(){
         <div style="display:flex;flex-direction:column;align-items:flex-start;gap:8px">
           <button id="propFirmToggleBtn" class="pfToggleBtn" title="Attiva/disattiva la Modalità Prop Firm: capitale, posizioni e P/L di una Challenge stile FTMO, completamente isolati dal conto Standard">🛡️ MODALITÀ PROP FIRM</button>
     <button id="propContiArchiviatiBtn" class="miniBtn" style="margin-top:8px" onclick="fblPropContiDashboard()">📋 Conti archiviati</button>
-    <button id="fblResaTotaleSaleBtn" class="miniBtn" style="margin-top:8px" onclick="fblResaTotaleSaleApri()">📊 Resa totale di più sale</button>
           <label style="display:flex;align-items:center;gap:4px;font-size:9.5px;color:#8a7070;cursor:pointer;user-select:none" title="Se attivo, in Modalità Prop Firm si vedono tutti gli effetti scenici 'Danger & Blood Zone': sfondo con bagliore rosso pulsante, testi del conto in rosso, bordo/teschi sul grafico, lampeggio dei drawdown vicino al limite. Se disattivo (default) resta tutto leggibile e normale: la Modalità Prop Firm funziona lo stesso, cambia solo l'aspetto.">
             <input type="checkbox" id="pfBloodEffectToggle" style="width:12px;height:12px;accent-color:#f23645"> Effetti "Danger &amp; Blood Zone"
           </label>
@@ -2017,6 +2016,12 @@ function pubblicaPreferenze(){
         <div class="fbOptRow" style="margin-bottom:10px;gap:8px">
           <button type="button" id="tgOpenPanelBtn" class="toolBtn" style="flex:1;min-width:150px">📡 Apri il pannello dei segnali</button>
           <button type="button" id="tgAutoBtn" class="toolBtn" style="flex:1;min-width:200px">⚡ Configura apertura automatica</button>
+        </div>
+        <!-- CHIESTO dal proprietario: la resa totale si raggiunge da QUI e dalla dashboard delle
+             statistiche. Era finita nel pannello «Prop Firm», che non e' nessuno dei due: una
+             funzione che non si trova dove la si cerca, per chi la usa non esiste. -->
+        <div class="fbOptRow" style="margin-bottom:10px">
+          <button type="button" id="fblResaTotaleSaleBtn" class="toolBtn" style="flex:1;min-width:200px" onclick="fblResaTotaleSaleApri()">📊 Resa totale di più sale</button>
         </div>
         <div class="fbOptRow" style="margin-bottom:10px;gap:8px">
           <button type="button" class="toolBtn fblCronoBtn" style="flex:1;min-width:200px" title="Tutti i segnali della sala (Telegram) o dell'utente (Syntra), a grafico, con il win rate totale e per livello di TP">📜 Cronologia delle sale: segnali a grafico e win rate per TP</button>
@@ -11032,16 +11037,29 @@ function rowIndexNearTime(t){
 // dentro l'istogramma non deve cambiare"): un profilo vpfixed nasce ancorato per TEMPO
 // (p1.time/p2.time) — cambiando TF lo stesso intervallo di tempo contiene automaticamente un
 // numero diverso di candele (aritmetica: M15 ne ha 1/15 di quelle di M1 sullo stesso periodo),
-// esattamente come un Fixed Range Volume Profile "normale" (TradingView compreso). Qui invece,
-// solo per 'vpfixed', il NUMERO di candele (d.candleCount) viene fissato la prima volta che il
-// profilo viene calcolato/disegnato e poi mantenuto costante ad ogni cambio TF successivo: bIdx si
-// riallinea per contenerne sempre lo stesso numero a partire da aIdx (p1 resta il punto fisso),
-// aggiornando anche d.p2.time così la coerenza resta anche dopo un salvataggio/ricaricamento
-// sessione. ATTENZIONE (onestà sul comportamento, non solo sul codice): questo significa che
-// l'intervallo di TEMPO coperto dall'istogramma CAMBIA da solo quando cambi TF (più corto su TF
-// più alti, più lungo su TF più bassi) — è l'esatto opposto della modalità precedente (tempo
-// fisso, candele variabili). 'vpanchor' NON è toccato: cresce apposta fino alla candela attuale,
-// comportamento voluto e non oggetto di questa richiesta.
+// esattamente come un Fixed Range Volume Profile "normale" (TradingView compreso).
+//
+// DUE RICHIESTE OPPOSTE DELLO STESSO PROPRIETARIO, e adesso sceglie lui. Prima aveva chiesto
+// «cambiando timeframe il numero di candele dentro l'istogramma non deve cambiare»; il 28
+// ottobre 2026 ha segnalato come difetto la conseguenza diretta di quella richiesta: profilo
+// messo su 1H dal 22 ott 01:00 al 23 ott 17:00, passando a 30m diventava 22 ott 20:00 -> 23
+// ott 17:00. Stesse candele, venti ore in meno.
+//
+// NON POSSONO VALERE INSIEME: a tempo fisso cambia il numero di candele, a candele fisse
+// cambia il tempo. E' aritmetica, non codice. Quindi c'e' un interruttore nelle impostazioni
+// del profilo («al cambio di time frame tieni fermo: il tempo / il numero di candele»), e il
+// PREDEFINITO e' IL TEMPO - vedi _vpTfKeepTime() qui sotto.
+//
+//  - tieni fermo IL TEMPO (predefinito): i due estremi restano sulle loro ore reali e il
+//    numero di candele dentro l'istogramma cambia da solo. d.p2.time NON viene toccato.
+//  - tieni fermo IL NUMERO DI CANDELE: d.candleCount viene fissato al primo calcolo e
+//    mantenuto; bIdx si riallinea a partire da aIdx (p1 resta il punto fisso) e d.p2.time
+//    viene riscritto. Si muove l'estremo che NON e' l'ancora: se p1 e' il punto a destra,
+//    si muove l'inizio. E il prezzo segue, perche' l'altezza del profilo viene dalle candele
+//    dentro la finestra: finestra piu' corta = massimo diverso. Non e' un secondo difetto.
+//
+// 'vpanchor' NON e' toccato da niente di tutto questo: cresce apposta fino alla candela
+// attuale, comportamento voluto.
 function _vpTfKeepTime(d){
  if(!d)return true;
  for(const k of ['tfAnchor','vpTfAnchor','vpAnchorMode','anchorMode','tfMode','vpTfMode']){
@@ -35454,6 +35472,25 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
  // su localhost una porta chiusa rifiuta la connessione all'istante (fetch fallisce da sola,
  // senza aspettare nessun timeout) — quello è l'unico caso di errore "vero" e resta immediato.
  const p=String(path||'');
+ // IN REPLAY NON ESCE NESSUN ORDINE VERO, E LA GUARDIA STA QUI: ALLA PORTA.
+ //
+ // RICHIESTO dal proprietario: «le operazioni aperte in modalita' replay non inficiano su
+ // quelle del conto MT5 ma solo su quelle del conto storico».
+ //
+ // PERCHE' QUI e non nelle singole funzioni: la guardia era stata messa in sette funzioni su
+ // dieci. Le tre rimaste agivano solo su elementi con un ticket MT5 - in replay la lista e'
+ // gia' filtrata, quindi erano PROBABILMENTE irraggiungibili. Su soldi veri «probabilmente»
+ // non basta, e dieci guardie da tenere allineate a mano sono dieci occasioni di
+ // dimenticarne una: la prossima funzione che qualcuno aggiunge nascerebbe scoperta.
+ //
+ // SOLO LE ROTTE CHE SCRIVONO. Le letture (/positions, /account, /history_deals) devono
+ // continuare a funzionare anche in replay: senza, il saldo e l'elenco posizioni
+ // smetterebbero di aggiornarsi, che e' molto peggio del difetto che si sta chiudendo.
+ try{
+  if(typeof liveReplayActive!=='undefined' && liveReplayActive && p.startsWith('/order')){
+   return {ok:false, message:'In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'};
+  }
+ }catch(e){}
  const floorMs=p.startsWith('/health')||p.startsWith('/mt5-terminal-status')?10000
    :(p.startsWith('/history_deals')||p.startsWith('/account_history'))?120000
    :(p.startsWith('/order')||p.startsWith('/connect')||p.startsWith('/mt5-launch'))?60000
@@ -51526,7 +51563,10 @@ fblDelega('change',ev=>{
     <div class="fsTitle">📊 Statistiche <span>·</span> dashboard</div>
     <div class="fsSub" id="fsSub">Tutti i trade del Trade Journal, filtrabili. Si aggiorna da sola quando chiudi un trade.</div>
    </div>
-   <button type="button" class="fsClose" id="fsCloseBtn">✕ Chiudi</button>
+   <div style="display:flex;gap:8px;align-items:center">
+    <button type="button" class="fsClose" id="fblResaTotaleSaleBtnStat" onclick="fblResaTotaleSaleApri()" style="border-color:#2dd4bf;color:#5eead4">📊 Resa totale di più sale</button>
+    <button type="button" class="fsClose" id="fsCloseBtn">✕ Chiudi</button>
+   </div>
   </div>
   <div class="fsFilters" id="fsFilters">
    <div class="fsPresets" id="fsPresets">
