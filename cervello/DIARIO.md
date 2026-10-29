@@ -3583,3 +3583,7 @@ acceso e con le guardie rispettate; nessuna delle dieci regole della consegna vi
 **Lasciato a OpenCode:** la resa totale calcola win rate, R:R, drawdown, curva e numero
 operazioni. Mancano le statistiche per TP, la fascia oraria, la vicinanza alle notizie, il P/L
 giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferimenti nel codice).
+
+## 29 ottobre 2026 — Punto 5 completo
+- TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
+- Prestazioni: cache, percentuale onesta.
