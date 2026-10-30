@@ -3833,3 +3833,12 @@ cosi' il confronto era sempre falso. Risultato: per un giro ho inseguito un dife
 esisteva. In backtest l'ordine scattava gia' benissimo. La regola pratica: quando una prova dice
 "non fa niente", la prima cosa da verificare e' che la prova misuri davvero qualcosa - col
 caso piu' semplice possibile, in una modalita' dove so che funziona.
+## 30 ottobre 2026 (notte) — Indicatori e linee al secondo, non al tick della candela
+
+**Segnalato dal proprietario:** "qualunque disegno, qualunque linea viene generata deve essere aggiornata al secondo e non può essere aggiornata a secondo del time frame scelto. Nel senso, a secondo del time frame, per esempio un minuto, gli indicatori e le linee delle entrate dei prezzi delle posizioni quello che unisce la freccia di apertura con la freccia di chiusura in tempo reale si aggiorna ogni minuto, e se passiamo al time frame da 5 minuti si aggiornano ogni 5 minuti, time frame da 15 minuti si aggiornano ogni 15 minuti, e invece non va bene. Si devono aggiornare, si deve aggiornare tutto quanto, ogni singola cosa al tempo di un secondo."
+
+**Misurato.** `currentPrice()` restituiva `rows[idx]?.close`: la chiusura dell'ultima candela. Con un timeframe da 5 minuti quella si muove solo quando la candela chiude - e i disegni che si appoggiano a questo valore (la linea dalla freccia di apertura a quella di uscita di una posizione aperta, gli indicatori calcolati sul prezzo corrente, le caselle TP/SL) si muovevano a scatti della candela. La causa non era che non si disegnava: `draw()` girava ogni secondo (il timer a 1000 ms lo chiama), ma leggeva un prezzo vecchio.
+
+**La cura.** `currentPrice()` ora prende il tick live quando c'e' (MT5 o Capital.com), ripiegando sulla chiusura dell'ultima candela solo quando non si ha niente di piu' recente. Tre prove: senza tick live si ripiega sulla candela; col tick live vince anche se la candela e' piu' su; fuori dal Live si usa la candela (non si inventa un prezzo che non c'e'); un tick non finito o a zero non sovrascrive mai la candela.
+
+**Cosa NON ho misurato, e va detto:** il disegno a occhio. Non ho guardato il grafico in esecuzione: la prova misura il prezzo che il disegno usa, non il disegno. Se un indicatore continuasse a muoversi a scatti di candela, la prossima misura e' su quel disegno specifico - il prezzo ora e' quello giusto, e se l'indicatore non si muove e' perche' si ricalcola su `rows`, che si aggiorna ad ogni tick tramite `applyLivePriceToChart`.
