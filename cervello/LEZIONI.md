@@ -1123,3 +1123,27 @@
   oggetto VUOTO `{}` (quindi coi valori predefiniti) e cadeva con quello pieno. Una cura che
   funziona coi predefiniti e non coi dati veri quasi sempre è una prova costruita male, non un
   programma rotto.
+
+**Il caso piu' semplice possibile, prima del caso reale.**
+
+  (30 ottobre 2026, la quinta volta.) Ho scritto una prova per la cura ai pacchetti che si
+  accumulano, e l'ho pubblicata SENZA eseguirla da sola - perche' "tanto il collaudo completo
+  lo copre". Il collaudo completo l'ha eseguita, ed e' caduta con "fblAppQuiGiaAggionata is
+  not defined".
+
+  La funzione vera si chiama fblAppQuiGiaAggiornata - A-g-g-i-o-r-n-a-t-a. Io avevo scritto
+  "Aggionata", senza la "r" di "Aggiornata". Una lettera. E il messaggio d'errore me l'aveva
+  scritta in faccia, nome per nome.
+
+  LE DUE REGOLE, entrambe pagate:
+  1. Un test nuovo si esegue da solo PRIMA di infilarlo in un collaudo completo. Il collaudo
+     completo e' la verifica finale, non il primo tentativo: costa 13 minuti e butta il giro
+     per un errore che in 5 secondi si vedeva. Provare il singolo file, poi l'insieme.
+  2. I nomi si copiano dal sorgente, non si riscrivono a memoria. Ora li estraggo con una
+     regex dal file, come /async function (fblApp\w*Aggiornat\w*)\s*\(/. Dettarli vuol dire
+     sbagliarli, e la statistica dice che la cosa piu' probabile e' proprio sbagliarli.
+
+  E il particolare che avrebbe dovuto farmi insospettire subito: la prova passava con un oggetto
+  VUOTO {} (quindi coi valori predefiniti) e cadeva con quello pieno. Una cura che funziona
+  coi predefiniti e non coi dati veri quasi sempre e' una prova costruita male, non un
+  programma rotto.

@@ -911,9 +911,6 @@ def _ferma_custode_mt5_feed():
     spegnimento) cosi' il servizio dati spento di proposito non viene riacceso il giro dopo."""
     _custode_stop.set()
 
-
-
-
 # BUG RISOLTO ("premo F5 e torna il vecchio problema già corretto, ma con CTRL+SHIFT+R va tutto
 # bene"): FileResponse/StaticFiles di default NON mandano alcun header Cache-Control, quindi il
 # browser applica il SUO caching euristico sulla risposta di "/" (app.html) e di "sw.js" — su un
