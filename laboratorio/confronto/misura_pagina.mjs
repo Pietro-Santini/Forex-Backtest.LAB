@@ -90,12 +90,53 @@ for (const caso of casi.casi) {
 
 await browser.close();
 
+// ---- FASE 2: la matematica del prezzo. Gli stessi simboli e le stesse combinazioni che
+// ponte_matematica.py calcola da solo: il confronto deve dare lo stesso numero.
+const MAT_SIMBOLI = ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'XAGUSD', 'NZDCAD', 'AUDUSD', 'EURCHF', 'BINANCE:BTCUSDT'];
+const MAT_COMBINAZIONI = [
+    {side: 'BUY', entry: 1.09850, exit: 1.10500, lots: 0.10},
+    {side: 'SELL', entry: 1.09850, exit: 1.09200, lots: 0.50},
+    {side: 'BUY', entry: 4020.00, exit: 4060.00, lots: 0.02},
+    {side: 'SELL', entry: 4020.00, exit: 4000.00, lots: 0.01},
+];
+const matematica = await (async () => {
+    const b = await chromium.launch();
+    const pg = await b.newPage({viewport: {width: 1400, height: 900}});
+    await pg.goto(URL_APP, {waitUntil: 'domcontentloaded'});
+    const out = await pg.evaluate(({simboli, combinazioni}) => {
+        return simboli.map(sym => ({
+            sym,
+            pipDigit: (() => {
+                const i = currentInstrument(sym);
+                return (i && i.pipDigit != null) ? i.pipDigit : null;
+            })(),
+            pipSize: pipSizeForAsset(sym),
+            contractSize: contractSize(sym),
+            plMode: currentInstrument(sym).plMode,
+            casi: combinazioni.map(c => ({
+                ingresso: c,
+                pl: calculateForexPL(c.side, c.entry, c.exit, c.lots, sym),
+                euroAtLevel: euroAtLevel(c.entry, c.exit, c.lots, sym),
+                margin: marginForLots(c.lots, c.entry, sym),
+            })),
+        }));
+    }, {simboli: MAT_SIMBOLI, combinazioni: MAT_COMBINAZIONI});
+    await b.close();
+    return out;
+})();
+
 const uscita = {
     generato: new Date().toISOString(),
     sorgente: 'app.html tgPiano()',
     config: casi.config,
     campi: CAMPI,
-    casi: righe
+    casi: righe,
+    matematica: {
+        sorgente: 'app.html pipSizeForAsset/calculateForexPL/marginForLots',
+        simboli: MAT_SIMBOLI,
+        combinazioni: MAT_COMBINAZIONI,
+        righe: matematica,
+    }
 };
 fs.writeFileSync(path.join(QUI, 'piani_pagina.json'), JSON.stringify(uscita, null, 1), 'utf8');
 console.log('\nscritto piani_pagina.json (' + righe.length + ' casi)');
