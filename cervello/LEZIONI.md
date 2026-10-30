@@ -1147,3 +1147,19 @@
   VUOTO {} (quindi coi valori predefiniti) e cadeva con quello pieno. Una cura che funziona
   coi predefiniti e non coi dati veri quasi sempre e' una prova costruita male, non un
   programma rotto.
+**Un modulo va ricaricato, non preso per fidato: la cache di Python mente.**
+
+  (30 ottobre 2026, ponte.) Ho scritto tre test per bridge.py che passavano da soli e cadevano
+  nel ponte completo. Il motivo: il mio "import bridge" restituiva il modulo GIA' importato da un
+  altro file di prova - creato col MT5 finto di quel file, che non aveva order_send. La mia
+  monkeypatch.setattr(bridge.mt5, ...) andava in errore su un oggetto che non era il mio.
+
+  LA REGOLA: in una fixture che importa un modulo con delle dipendenze finte, il modulo va
+  RICARICATO (importlib.reload), non solo importato. Senza reload il modulo in cache arriva da
+  un altro file, con le sue patch, e dir(modulo) vede roba che il sorgente non contiene - e le
+  asserzioni misurano lo stato di un altro test invece di quello che dicono.
+
+  E il sintomo che avrebbe dovuto farmi insospettare subito: la prova passava da sola e cadeva
+  nell'insieme, con un errore su un attributo che il MIO finto aveva di sicuro. Quando una prova
+  si comporta in modo diverso da sola e in compagnia, il problema è quasi sempre lo stato
+  condiviso, non la logica.

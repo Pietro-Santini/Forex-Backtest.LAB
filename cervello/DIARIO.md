@@ -3855,3 +3855,34 @@ caso piu' semplice possibile, in una modalita' dove so che funziona.
 3. **"Guadagno effettivo" = 0.** I cinque pannelli con etichetta "Guadagno effettivo" (righe 3576-3580) vengono mostrati solo in modalita' Prop Firm. Fuori da quella modalita' restano tutti `display:none` e il valore resta "0.00" (mai aggiornato). Non esiste un pannello "Guadagno effettivo" del conto in modalita' normale. Cura: rinominati per ruolo (Gain effettivo, Profitto effettivo, Profitto netto, Profitto effettivo (EUR), Guadagno effettivo (prop firm)) per non confondere, e chiarito nel nome che l'ultimo e' solo prop firm.
 
 Cura applicata: `app.html` + `sw.js` (CACHE_NAME v2.0.51).
+## 30 ottobre 2026 (sera) — Punti B, C, D della consegna 28: due erano già fatti
+
+**B. Dashboard dei conti archiviati.** Il testo diceva "manca il punto nell'interfaccia".
+Misurato: il pulsante c'è (impostazioni, pannello Prop Firm, `onclick="fblPropContiDashboard()"`)
+e la funzione pure: overlay dedicato, elenco dei conti con stato e marcatura "archiviato",
+pulsante "Elimina definitivamente" per gli archiviati, conferma prima di cancellare, ri-disegno
+dopo. Non mancava niente: era già fatto. Resta il test che lo tiene fermo.
+
+**C. Effetto wow.** Il testo diceva "`fblWowLancia()` non è chiamata da nessuna parte: è codice
+inerte". Misurato: `setTimeout(fblWowLancia, 100)` c'è, l'overlay pure, e le guardie di partenza
+(non parte con posizioni aperte, non parte sotto test, non parte due volte nella stessa
+sessione). Anche questo era già fatto.
+
+**D. Pacchetti/strada ordini — il confronto ponte/pagina.** Questo è il vero residuo, e ho
+misurato fin dove si può misurare. Il ponte **non decide niente**: riceve symbol, side, volume,
+prezzo, SL e TP già belli e fatti dalla pagina. Non esiste nessun endpoint che prenda una
+percentuale di rischio e restituisca un lottaggio, e nessuna funzione di rischio nel modulo.
+L'unica correzione che fa è tecnica: arrotonda il volume al passo del simbolo (`_round_volume`),
+vincolandolo tra minimo e massimo.
+
+Cioè: **la decisione sta al 100% nella pagina**, ed è esattamente il perché con la pagina chiusa
+non parte nessun ordine. Questo è il primo mezzo del "confronto" che la consegna chiedeva — e la
+sua risposta è che il confronto, oggi, dà numeri diversi per costruzione: da una parte c'è chi
+decide, dall'altra chi esegue. `laboratorio/ponte/test_ponte_esegue_non_decide.py` lo misura,
+ed è verde di proposito: dice la verità di oggi. Se un domani il ponte imparasse a decidere, quel
+test diventerebbe rosso — e sarebbe il segnale che il confronto va rifatto da capo.
+
+**Cosa resta davvero:** spostare la decisione nel ponte (rischio → volume, SL/TP da un segnale)
+è la "strada 2" della consegna, ed è un progetto, non una correzione: va riscritta in Python la
+parte di `app.html` che fa quei conti, e provata contro la pagina segnale per segnale. Con la
+pagina chiusa nessun ordine parte: è così com'è costruito, lo dice anche il punto E.
