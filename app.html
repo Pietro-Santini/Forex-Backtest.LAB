@@ -5152,6 +5152,22 @@ function fblPrezzoRipiegoChiusura(pos,motivo){
  const e=Number(pos.entry);
  return (Number.isFinite(e)&&e>0)?e:null;
 }
+// NATO IN REPLAY? L'ordine (o la posizione) lo porta con se': createPendingOrder lo segna con
+// historical quando liveReplayActive, perche' quel globale dopo un minuto e' gia' cambiato e il
+// marchio deve viaggiare con l'ordine, non con lo stato del momento in cui si guarda.
+function fblNatoInReplay(item){ return !!(item&&item.historical); }
+// COM'E' FATTA LA CELLA DELLA MODALITA' per chi e' nato in replay: non "Live" - quello e' il
+// modo in cui si stava guardando - ma STORICO, col simbolino del replay a fianco.
+// RICHIESTO dal proprietario (30 ottobre 2026): "non deve essere sessione live, ma deve
+// risultare quella che e' sessione storico. E ci mettiamo anche a fianco quello che e' replay. Ci
+// indica praticamente un simboletto che sara' una nuova sessione."
+function fblReplayBadge(item){
+  if(!fblNatoInReplay(item))return '';
+  return ' <span title="Aperta in modalita Storico col REPLAY: operazione simulata, non un ordine vero sul conto MT5" style="white-space:nowrap">REPLAY</span>';
+}
+// La sessione da MOSTRARE in tabella per chi e' nato in replay: Storico (Live sta a dire "col
+// conto vero", e qui il conto vero non c'entra).
+function fblSessioneMostrata(item,sessionKey){ return fblNatoInReplay(item)?'backtest':sessionKey; }
 function fblPrezzoChiusura(p){
  try{
   if(p&&p.asset&&p.asset===currentAssetKey){ const c=currentPrice(); if(Number.isFinite(c))return c; }
@@ -12159,7 +12175,7 @@ function update(){
      // Colonna "Prezzo corrente": per le sessioni Storico non attive mostriamo il prezzo di
      // apertura come riferimento (nessun dato "live" disponibile per loro in questo momento).
      const curPriceCell=`<td>${posPrice!=null?fmtPriceA(posPrice,posAsset):(isLiveSession?'—':fmtPriceA(p.entry,posAsset))}</td>`;
-     const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?(isRefOnly
+     const modeTag=(SESSION_LABELS_SHORT[fblSessioneMostrata(p,sessionKey)]||sessionKey)+fblReplayBadge(p)+(p.mt5Ticket!=null?(isRefOnly
        ?' <span title="Posizione reale MT5 (ticket '+p.mt5Ticket+') mostrata solo come RIFERIMENTO: terminale MT5 non collegato, andamento seguito coi prezzi Capital.com. Non conta in P/L, statistiche o totale del conto.">🖥️◻</span>'
        :' <span title="Posizione REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>'):'');
      // Versione SOLO TESTO di modeTag (senza il tag <span> annidato), da usare quando serve
@@ -12167,7 +12183,7 @@ function update(){
      // secondo title="..." con le sue virgolette) dentro un title="..." più esterno chiudeva
      // quest'ultimo in anticipo alla prima virgoletta incontrata, lasciando il resto del testo
      // (e un "> di troppo) riversato come testo visibile nel bottone invece che nel tooltip.
-     const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?(isRefOnly?' (posizione MT5, solo riferimento)':' (posizione reale MT5)'):'');
+     const modeTagPlain=(SESSION_LABELS_SHORT[fblSessioneMostrata(p,sessionKey)]||sessionKey)+(fblNatoInReplay(p)?' (replay)':'')+(p.mt5Ticket!=null?(isRefOnly?' (posizione MT5, solo riferimento)':' (posizione reale MT5)'):'');
      // Il testo del bottone riflette lo stato di selezione (modalità toggle: ripremendolo si
      // deseleziona), così è chiaro a colpo d'occhio invece di restare sempre "Seleziona".
      const isSelected=isCurrentRow&&p===active;
@@ -12274,10 +12290,10 @@ function update(){
      const isCurrentAssetOnScreen=isCurrentRow&&(!currentAssetKey||ordAsset===currentAssetKey);
      const curPrice=isCurrentAssetOnScreen?price:(isLiveSession?livePriceByAsset[ordAsset]:null);
      const curPriceCell=`<td>${curPrice!=null?fmtPriceA(curPrice,ordAsset):'—'}</td>`;
-     const modeTag=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' <span title="Ordine pendente REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
+     const modeTag=(SESSION_LABELS_SHORT[fblSessioneMostrata(p,sessionKey)]||sessionKey)+fblReplayBadge(p)+(p.mt5Ticket!=null?' <span title="Ordine pendente REALE sul conto MT5 collegato (ticket '+p.mt5Ticket+')">🖥️</span>':'');
      // Stessa correzione della tabella "Posizioni aperte" qui sopra: versione solo testo di
      // modeTag da usare dentro un title="..." esterno, per non annidare virgolette/tag.
-     const modeTagPlain=(SESSION_LABELS_SHORT[sessionKey]||sessionKey)+(p.mt5Ticket!=null?' (ordine reale MT5)':'');
+     const modeTagPlain=(SESSION_LABELS_SHORT[fblSessioneMostrata(p,sessionKey)]||sessionKey)+(fblNatoInReplay(p)?' (replay)':'')+(p.mt5Ticket!=null?' (ordine reale MT5)':'');
      const actionsCell=isCurrentRow?`<button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button>`:'';
      // ORIGINE (richiesto): da quale sala arriva l'ordine, e che strumento e'. Stessa identica
      // funzione del Trade Journal, cosi' la stessa operazione si legge uguale nelle due tabelle.
@@ -18035,6 +18051,11 @@ function draw(){
    // replay (non si può dimostrare che sia "già accaduta"), così "le cose fatte in tempo reale"
    // non filtrano nel passato. Fuori dal replay vale sempre (true).
    if(!liveReplayActive)return true;
+   // NATO DURANTE QUESTO REPLAY: si vede sempre. Chi guarda l'ha creato adesso, e
+   // chiederne l'entrata, lo stop e il target e' la richiesta esplicita. createdAt e'
+   // Date.now(), cioe' DOPO il punto di replay: senza questo ramo il filtro qua sotto
+   // lo nascondeva e l'ordine restava invisibile a grafico pur essendo in elenco.
+   if(fblNatoInReplay(p))return true;
    const ct=Number(p.createdAt??p.mt5AddedAt);
    return Number.isFinite(ct)&&ct<=masterTime+((currentTF||1)*60000);
  }).forEach(p=>{

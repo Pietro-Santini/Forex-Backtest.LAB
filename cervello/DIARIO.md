@@ -3764,3 +3764,33 @@ indietro e' la curva del saldo dei giri in cui il dato era falso.
 
 Test: `laboratorio/app/prezzo_del_proprio_asset.test.mjs`, con la controprova che fissa il numero
 dello screenshot (col prezzo del grafico i pip sono 40.043.640; coi livelli della posizione, 42,6).
+## 30 ottobre 2026 (tarda notte) — Ordini pendenti in REPLAY: sessione, simbolo, e a grafico
+
+RICHIESTO dal proprietario: in replay, collegati a MT5, l'ordine pendente creato "non deve essere
+sessione live, ma deve risultare quella che e' sessione storico", col "simboletto" del replay a
+fianco; la stessa indicazione nel Trade Journal; e "dobbiamo visualizzare l'entry, il TP e lo stop
+loss degli ordini pendenti che creiamo in modalita' replay".
+
+**Misurato prima di toccare.** Con `liveReplayActive=true` e MT5 collegato:
+- `currentMode()` vale **'live'** - e la riga usciva etichettata "Live";
+- l'ordine creato portava gia' `historical:true` (lo segna `createPendingOrder`: "questo viene dal
+  replay"), ma **nessuno lo leggeva** ne' per la sessione ne' per il disegno;
+- `createPendingOrder` riempie `createdAt` con `Date.now()`.
+
+**Il difetto che non si vedeva.** Il filtro del disegno confrontava `createdAt` con `masterTime`:
+in replay `masterTime` e' il punto del replay (nel PASSATO) e `createdAt` e' `Date.now()` (ADESSI).
+L'ordine appena creato risultava "nel futuro" e veniva **nascosto a grafico** - pur essendo in
+elenco, con entrata, stop e target. La regola e' giusta per gli ordini venuti da fuori ("le cose
+fatte in tempo reale non devono filtrare nel passato"), sbagliata per quelli nati DURANTE il
+replay: chi guarda li ha appena fatti.
+
+**La cura, in quattro punti e una funzione sola.**
+- `fblNatoInReplay(item)` / `fblReplayBadge(item)` / `fblSessioneMostrata(item,sessionKey)`: il
+  marchio scritto **una volta**, usato dalle tre tabelle (posizioni, ordini pendenti, journal).
+  Chi nasce in replay si mostra come **Storico** e non Live, col simbolino REPLAY a fianco.
+- Il disegno: chi e' nato durante il replay passa il filtro sempre. Il suo `createdAt` resta
+  com'era (serve al resto), non si tocca il dato per correggere un filtro.
+
+**Cosa NON ho misurato, e va detto:** le TRE PROVE sono sul comportamento (sessione mostrata,
+marchio, e il filtro che prima nascondeva). Non ho guardato con gli occhi il grafico in replay:
+quello lo fai tu, e se l'ordine ancora non si disegna la prossima misura e' sul posto.
