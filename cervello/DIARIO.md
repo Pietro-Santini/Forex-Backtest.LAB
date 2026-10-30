@@ -3886,3 +3886,34 @@ test diventerebbe rosso — e sarebbe il segnale che il confronto va rifatto da 
 è la "strada 2" della consegna, ed è un progetto, non una correzione: va riscritta in Python la
 parte di `app.html` che fa quei conti, e provata contro la pagina segnale per segnale. Con la
 pagina chiusa nessun ordine parte: è così com'è costruito, lo dice anche il punto E.
+## 31 ottobre 2026 — Progetto "decisione nel ponte": Fasi 1, 2, 3 finite
+
+**Fase 1 — lo strumento di confronto.** `laboratorio/confronto/`: 12 casi reali, la pagina li
+risolve (`tgPiano`) e il risultato diventa il terreno di verità. Primo giro: 0 su 12 identici —
+la fotografia di partenza, cioè la prova con numeri che la decisione sta tutta nella pagina.
+
+**Fase 2 — la matematica del prezzo.** 144 numeri (9 simboli × 4 combinazioni) da far tornare
+uguali. Primo giro: 54 diversi. Due cause vere: la leva (la pagina la legge dal menu ed è 100,
+io avevo messo 30 — tutti i margini 3,33 volte troppo alti) e il `plMode` fuori tabella
+(`currentInstrument` ricade su EUR/USD in silenzio, quindi una cripta senza metadati ha un
+contratto 100.000 volte troppo grande). Alla fine: 144 su 144.
+
+**Fase 3 — la decisione.** 12 casi. Alla fine: 12 su 12, motivi di rifiuto parola per parola.
+
+**Le tre cose che questo progetto ha insegnato, e che valgono per tutti gli altri:**
+
+1. **La configurazione non si duplica, si esporta.** La prima versione del confronto usava una
+   config scritta a mano in `casi.json` — che la pagina non legge — e segnalava tre casi
+   "diversi" che erano difetti del caso, non del ponte. Da adesso è la pagina a dire con quale
+   config decide (`configEffettiva`).
+2. **Il confronto becca i difetti del confronto.** Tre dei cinque giri rossi non erano difetti
+   del port ma della misura: la pagina che si ricaricava da sola (un caso risultava "rifiutato"
+   per un incidente di misura), un numero formattato male, una config inventata. Uno strumento
+   che non misura se stesso fa lavorare per niente.
+3. **Si copia, non si reinterpreta.** Ogni differenza trovata era una regola che avevo
+   "semplificato" invece di copiare: due percentuali al posto di una, il formato dei prezzi, la
+   leva. Ladecisione non si riscrive a intuito: si porta.
+
+**Cosa resta:** Fase 4 (il ponte legge i segnali), Fase 5 (gestione dal vivo su tick MT5 —
+pareggio, break-even, sposta stop), Fase 6 (il commutatore). Sono la parte pericolosa; ognuna
+va provata contro la pagina prima di accenderla.
