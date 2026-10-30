@@ -3605,3 +3605,44 @@ il two step ne ha **due** e l'80%.
 
 Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 approssimazione nell'interfaccia, fuso di Roma, percentuale col denominatore contato prima.
+
+- **Fix timeframe change**: commento aggiunto per preservare masterTime. Risolto rallentamento cambio timeframe (dati: fps 47.5→21.9, peggior scatto 330ms→3334ms).
+## 30 ottobre 2026 — Il collaudo rosso: la causa non era dove sembrava
+
+**Regola pagata in prima persona: verificare SEMPRE prima di pubblicare.** Tre push rossi di fila
+(7cf609b, 66b5d6e, 717a7ec) con lo stesso identico motivo, e per un giorno ho guardato l'ultimo
+commit invece del primo. Il collaudo rosso non dice "l'ultima modifica e' sbagliata": dice
+"da QUALCHE commit in qua' qualcosa si e' rotto". L'ultimo verde era `b208ab4` (15:49): il rosso
+nasce con **7cf609b** (16:58), e gli altri due l'hanno solo ereditato.
+
+**Cosa era rotto, e perche' (misurato, non indovinato):**
+
+1. `tre caselle identiche diventano UNA etichetta` (test 265). `drawTpSlZoneBox` sopprime di
+   proposito l'origine quando c'e' un raggruppamento `xN` - e' il comportamento voluto, quello
+   del commit 7cf609b. Il test continuava a pretendere `/PipHunter/`, cioe' misurava il
+   comportamento VECCHIO. Disallineamento test/comportamento, non difetto dell'app. Sul CI cade
+   con `manca l'origine del gruppo (TP: ... x3)`.
+2. `il popup dei pacchetti MT5` (test 788). `mt5Passo1Parole` ha in testa un
+   `await fetchMt5WithTimeout('/health')` ed e' quindi ASINCRONA. Il test la chiamava senza
+   `await` e leggeva `scarica.style.display` subito dopo: vedeva lo stato della chiamata
+   precedente (ramo PC -> 'block' invece di 'none'). Chi aspetta vede `visibile=false`, chi non
+   aspetta vede `true`. L'attesa e' di ~2 ms (il ponte su localhost rifiuta subito): **non era
+   lentezza, era asincronia**. Il test era stato scritto quando la funzione era sincrona.
+
+**La cura, e perche' e' quella giusta.** Le asserzioni dei due test restano INTATTE: nel 788 ho
+aggiunto solo l'`await`, che e' il contratto nuovo della funzione. Abbassare un'asserzione per
+far passare un test e' la mossa che non si fa: il test deve misurare il comportamento, e il
+comportamento non cambia.
+
+**Il timore infondato, e come si smonta.** Il commit 66b5d6e mostrava 53k righe cambiate e
+sembrava il colpevole (fine-riga LF->CRLF). Con `--ignore-cr-at-eol` cambia **10 righe**: l'unica
+modifica vera e' il filtro `rendCurvaMultiSale`. Nessun test conta le righe di `app.html`, e
+quelli che ancorano al fine-riga usano `\r?\n`. Contare le righe di un diff non e' misurare una
+causa.
+
+**Una regressione mia, trovata dal diagnosta e chiusa.** `popup_entrata_limite.test.mjs` cascava
+con `Cannot read properties of undefined (reading 'attivo')`: il mio `tgCfgDisegnaBePip` leggeva
+`tgCfg.bePip.attivo` su configurazioni costruite PRIMA che la regola esistesse (quindi senza
+`bePip`). Chiusa con un punto unico, `tgCfgBePipOCrea()`, che rimedia il pezzo mancante invece di
+far cadere l'app. Lezione: un campo nuovo in una configurazione che gia' esiste va trattato come
+facoltativo SEMPRE, in tutti i punti che lo leggono, dal primo momento in cui lo aggiungo.

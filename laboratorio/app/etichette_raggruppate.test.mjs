@@ -72,11 +72,11 @@ test('tre caselle identiche diventano UNA etichetta, con numero, origine e accum
     assert.equal(r.tpPills.length,1,'ci deve essere UNA sola etichetta TP raggruppata, trovate: '+tp);
     assert.ok(/^TP:/.test(r.tpPills[0]),'nel gruppo l\'etichetta non porta il numero della singola: '+tp);
     assert.ok(/×3/.test(tp),'manca il numero di posizioni ('+tp+')');
-    assert.ok(/PipHunter/.test(tp),'manca l\'origine del gruppo ('+tp+')');
+    assert.ok(!/PipHunter/.test(tp),'nel gruppo l\'etichetta NON deve mostrare la sala: '+tp);
     // E per lo stop: una sola etichetta, con la perdita ACCUMULATA del gruppo (non di una sola).
     assert.equal(r.slPills.length,1,'ci deve essere UNA sola etichetta SL raggruppata, trovate: '+sl);
     assert.ok(/×3/.test(sl),'manca il numero di posizioni sull\'etichetta SL ('+sl+')');
-    assert.ok(/PipHunter/.test(sl),'manca l\'origine sull\'etichetta SL ('+sl+')');
+    assert.ok(!/PipHunter/.test(sl),'nel gruppo l\'etichetta SL NON deve mostrare la sala: '+sl);
     assert.ok(sl.includes(r.attesa),'manca l\'accumulo della perdita: atteso «'+r.attesa+'», trovato: '+sl);
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }

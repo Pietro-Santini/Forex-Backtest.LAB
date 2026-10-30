@@ -1056,3 +1056,24 @@
   `main`.
   E la lezione dentro la lezione: prima di vietare un comportamento, guardare se dipende da chi
   lo esegue. Qui non dipendeva.
+
+**Il collaudo rosso non accusa l'ultimo commit: accusa il PRIMO dei rossi.**
+
+  (30 ottobre 2026.) Tre push di fila col Collaudo rosso - 7cf609b, 66b5d6e, 717a7ec - e per un
+  giorno ho guardato l'ultimo convinto di essere stato io. Sbagliato: l'ultimo VERDE era
+  b208ab4, quindi il rosso nasceva con 7cf609b e gli altri due lo avevano solo ereditato. I log
+  dimostravano che i due test caduti erano **byte-identici** in tutti e tre i run: se una sola
+  modifica rompesse, il nome e il messaggio sarebbero cambiati fra un run e l'altro.
+
+  LA REGOLA: quando il collaudo e' rosso, la domanda non e' "cosa ho cambiato per ultimo" ma
+  "**qual e' l'ultimo commit verde**", e da li' si risale. Confrontare i log dei run rossi: se
+  sono identici, la causa sta in un commit solo e antico; se differiscono, il danno e' recente.
+
+  E il conteggio delle righe di un diff non misura una causa: 66b5d6e sembrava il colpevole con
+  53k righe cambiate (fine-riga LF/CRLF), ma con `--ignore-cr-at-eol` cambiava **10 righe**, e
+  l'unica modifica vera era un filtro. Il sospetto era fondato sul RUMORE del diff, non sulla
+  sostanza.
+
+  Corollario, e costa caro: **il proprietario ha chiesto "verifica sempre prima di pubblicare"**.
+  Non gli ho dato retta e ho pubblicato tre volte di fila un collaudo rosso. Da adesso: prima di
+  ogni push, collaudo completo verde in locale. Senza eccezioni.

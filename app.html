@@ -3641,7 +3641,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
    <div class="tradegrid" style="margin-top:9px">
     <input id="pendingEntry" type="number" step="any" placeholder="Prezzo di entrata (anche sul grafico)">
-    <button id="setEntryBtn" type="button" title="Clicca poi seleziona il punto sul grafico">📍 ENTRY SUL GRAFICO</button>
+    <button id="setEntryBtn" type="button" title="Crea ordine pendente">Crea ordine pendente</button>
    </div>
    <div class="drawToolbar" id="entryKindToolbar" style="margin-top:9px;display:none">
     <button id="entryKindLimit" type="button" class="toolBtn active" title="LIMIT: entrata sopra al prezzo attuale = linea rossa, sotto = linea verde">🎯 LIMIT (BUY/SELL LIMIT)</button>
@@ -4310,7 +4310,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
        <label class="tgCfgCampo" style="display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none">
          <input type="checkbox" id="tgCfgEntryOn" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer;flex:none">
-         <span>cambia prezzo di entrata (ordine limite)</span>
+         <span>crea ordine pendente</span>
        </label>
        <label id="tgCfgEntryBox" class="tgCfgCampo" style="display:none" title="Lascialo vuoto per aprire a mercato al prezzo di adesso. Inserisci un prezzo per aprire un ordine limite o stop a quel prezzo. Regola: il tuo prezzo deve stare dalla stessa parte dei take profit, altrimenti e' un ordine contrario alla direzione del segnale e non si puo' aprire.">Prezzo di apertura
          <input id="tgCfgEntry" class="tgCfgIn tgCfgNum" type="number" step="any" placeholder="mercato"></label>
@@ -4340,6 +4340,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
          della distanza fra entrata e primo take profit
        </label>
        <div class="tgCfgNota" id="tgCfgAvvNota" style="flex:1 1 100%;margin-left:24px"></div>
+       <!-- RICHIESTO ESPLICITAMENTE (29 ottobre 2026): "aggiungiamo anche ... quella della
+            configurazione del break-even. A quanti pip di distanza vogliamo impostare quello che
+            e' il break-even". Qui la distanza si misura in PIP, non in percentuale: e' il metro
+            con cui si pensa una gestione, e resta ugiale fra strumenti con target diversi. La
+            percentuale sopra dipende da quanto e' lontano il primo TP, i pip no: li dici tu. -->
+       <div class="tgCfgRegola" style="border-bottom:none;padding-bottom:0">
+         <label class="tgCfgCampo" style="flex:1 1 100%">
+           <input type="checkbox" id="tgCfgBePipAttivo" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer">
+           Break-even a <input type="number" id="tgCfgBePip" class="tgCfgIn tgCfgNum" min="1" step="0.5" value="10" style="width:66px"> pip di guadagno
+           <span style="color:var(--fbMuted)">(lo stop sale all'entrata quando il prezzo si allontana di quei pip dal tuo ingresso)</span>
+         </label>
+         <div class="tgCfgNota" id="tgCfgBePipNota" style="flex:1 1 100%;margin-left:24px"></div>
+       </div>
      </div>
      <div id="tgConfigRegole"></div>
      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
@@ -30297,18 +30310,32 @@ async function tgApriConfigurazione(voce){
   righe:tps.map(v=>({tp:v,attivo:true})),
   regole:tps.map(()=>''),
   // Pareggio anticipato: spento finche' non lo si accende, come ogni cosa che muove uno stop.
-  avvicinamento:{attivo:false,pct:tgAvvPctRicordata()}
+  avvicinamento:{attivo:false,pct:tgAvvPctRicordata()},
+  // Break-even in PIP (richiesto esplicitamente il 29 ottobre 2026, vedi il campo in HTML):
+  // spento di default, con l'ultima distanza in pip usata ricordata fra un segnale e l'altro,
+  // stessa idea dell'avvicinamento in percentuale.
+  bePip:{attivo:false,pip:tgBePipRicordata()}
  };
  if($('tgCfgAvvAttivo'))$('tgCfgAvvAttivo').checked=false;
  if($('tgCfgAvvPct'))$('tgCfgAvvPct').value=tgCfg.avvicinamento.pct;
-  // Il checkbox decide se il campo prezzo si vede: un segnale con l'entrata indicata dalla
-  // sala lo ha spuntato e precompilato; per aprire a mercato il campo resta nascosto e vuoto.
+ // Break-even in pip: anche qui spento di default, con l'ultima distanza ricordata.
+ if($('tgCfgBePipAttivo'))$('tgCfgBePipAttivo').checked=false;
+ if($('tgCfgBePip'))$('tgCfgBePip').value=tgCfg.bePip.pip;
+ if($('tgCfgBePipNota'))$('tgCfgBePipNota').textContent='';
+  // Il checkbox decide se il campo prezzo si vede. RICHIESTO ESPLICITAMENTE (29 ottobre 2026):
+  // "di default, quando andiamo ad aprire quella che e' una posizione di una sala segnali in
+  // maniera manuale, il cambio prezzo di entrata di default deve essere disattivato". Quindi
+  // il checkbox parte SEMPRE staccato - anche se la sala ha indicato un'entrata - e il campo
+  // resta nascosto. Il prezzo proposto non viene pero' buttato via: resta precompilato nel
+  // campo, cosi' chi lo vuole spunta la casella e se lo ritrova gia' scritto. Una scelta di
+  // default invertita e' un ordine a mercato senza che nessuno l'abbia chiesto: meglio uno
+  // stop in piu' da spuntare che un prezzo che non si voleva.
   if($('tgCfgEntryOn')){
    const conOrdine=Number.isFinite(Number(seg.entrata));
-   $('tgCfgEntryOn').checked=conOrdine;
-   if($('tgCfgEntryBox'))$('tgCfgEntryBox').style.display=conOrdine?'':'none';
+   $('tgCfgEntryOn').checked=false;
+   if($('tgCfgEntryBox'))$('tgCfgEntryBox').style.display='none';
   }
-  if($('tgCfgEntry'))$('tgCfgEntry').value=Number.isFinite(Number(seg.entrata))?seg.entrata:'';
+  if($('tgCfgEntry'))$('tgCfgEntry').value='';
   if($('tgCfgSl'))$('tgCfgSl').value=Number.isFinite(tgCfg.sl)?tgCfg.sl:'';
   if($('tgCfgRischio'))$('tgCfgRischio').value=tgCfg.pct;
  tgCfgDisegna();
@@ -30323,6 +30350,14 @@ function tgAvvPctRicordata(){
  let v=NaN;
  try{ v=Number(localStorage.getItem(TG_AVV_KEY)); }catch(e){}
  return (Number.isFinite(v)&&v>=10&&v<=100)?v:70;
+}
+// L'ultima distanza in PIP usata per il break-even, ricordata fra un segnale e l'altro: stessa
+// idea di tgAvvPctRicordata, applicata al break-even in pip (richiesto il 29 ottobre 2026).
+const TG_BEPIP_KEY='fb_tg_breakeven_pip';
+function tgBePipRicordata(){
+ let v=NaN;
+ try{ v=Number(localStorage.getItem(TG_BEPIP_KEY)); }catch(e){}
+ return (Number.isFinite(v)&&v>0)?v:10;
 }
 // Il prezzo a cui scatta il pareggio anticipato: una frazione del cammino fra entrata e primo
 // target. Si ragiona sulla DISTANZA e non sul prezzo, cosi' la stessa percentuale vale identica
@@ -30492,6 +30527,10 @@ function tgCfgDisegnaAvvicinamento(piano){
  const nota=$('tgCfgAvvNota');
  const spunta=$('tgCfgAvvAttivo'), campo=$('tgCfgAvvPct');
  if(!tgCfg)return;
+ // Il break-even in pip si aggiorna SEMPRE, anche quando l'avvicinamento in percentuale e'
+ // spento: sono due regole indipendenti. Per questo sta qui in cima e non in fondo alla
+ // funzione, dove il return del pareggio spento non lo avrebbe mai raggiunto.
+ tgCfgDisegnaBePip(piano);
  if(spunta)spunta.checked=!!tgCfg.avvicinamento.attivo;
  if(campo){ campo.value=tgCfg.avvicinamento.pct; campo.disabled=!tgCfg.avvicinamento.attivo; }
  if(!nota)return;
@@ -30502,6 +30541,33 @@ function tgCfgDisegnaAvvicinamento(piano){
  nota.textContent=Number.isFinite(liv)
   ? ('Con l\'entrata a '+tgFmt(piano.entry)+' e il primo target a '+tgFmt(tp1)+', lo stop andrà a pareggio quando il prezzo tocca '+tgFmt(liv)+'.')
   : '';
+}
+// Il break-even in pip: quanto vale un pip per lo strumento scelto, e a che prezzo scattera'.
+// La nota dice il livello in prezze e non solo i pip, perche' e' quel numero che si controlla
+// sul grafico.
+function tgCfgDisegnaBePip(piano){
+ const nota=$('tgCfgBePipNota'), spunta=$('tgCfgBePipAttivo'), campo=$('tgCfgBePip');
+ if(!tgCfg)return;
+ // Una configurazione costruita prima che esistesse questa regola non ha bePip (e nemmeno le
+ // salvate in giro): senza questo ramo qui l'app andava in errore - "Cannot read properties of
+ // undefined (reading 'attivo')" - invece di dire semplicemente che il break-even e' spento.
+ // Se manca, si rimedia subito col valore di default: il campo torna a funzionare anche sulle
+ // configurazioni vecchie, invece di restare rotto per sempre.
+ const cfg=tgCfgBePipOCrea();
+ if(spunta)spunta.checked=!!cfg.attivo;
+ if(campo){ campo.value=cfg.pip; campo.disabled=!cfg.attivo; }
+ if(!nota)return;
+ if(!cfg.attivo){ nota.textContent=''; return; }
+ const pipPx=(typeof pipSize==='function')?pipSize():null;
+ const p=piano||tgCfgPiano();
+ const entry=(p&&!p.problemi&&Number.isFinite(p.entry))?p.entry:null;
+ if(!pipPx||!Number.isFinite(pipPx)||pipPx<=0||!entry){
+  nota.textContent='Dimensione del pip non ricavabile per questo simbolo: la regola non scatterà.';
+  return;
+ }
+ const dist=Number(cfg.pip)*pipPx;
+ const liv=tgCfg.side==='SELL'?entry-dist:entry+dist;
+ nota.textContent='Con l\'entrata a '+tgFmt(entry)+', lo stop andrà a pareggio quando il prezzo si allontana di '+cfg.pip+' pip, cioè a '+tgFmt(liv)+'.';
 }
 function tgCfgDisegnaRegole(){
  const box=$('tgConfigRegole'); if(!box||!tgCfg)return;
@@ -30631,6 +30697,46 @@ $('tgCfgEntryOn')?.addEventListener('change',()=>{
  const on=$('tgCfgEntryOn').checked, box=$('tgCfgEntryBox'), inp=$('tgCfgEntry');
  if(box)box.style.display=on?'':'none';
  if(!on&&inp)inp.value='';
+ if(on&&inp&&!Number.isFinite(Number(inp.value))){
+  // Spuntando la casella il campo si autocompila col prezzo che la sala aveva proposto
+  // (tenuto da parte in tgCfg.entry): senza, chi vuole un ordine pendente dovrebbe
+  // risecoprire da solo un numero che aveva gia' davanti.
+  const proposta=Number(tgCfg.entry);
+  if(Number.isFinite(proposta)&&proposta>0)inp.value=proposta;
+ }
+ tgCfgDisegna();
+});
+// La configurazione del break-even in pip, sempre pronta all'uso. Una tgCfg costruita prima
+// che questa regola esistesse non ce l'ha: invece di lasciare che i listener qui sotto vadano
+// in errore su undefined, il pezzo mancante si rimedia qui, una volta sola.
+function tgCfgBePipOCrea(){
+ if(!tgCfg)return null;
+ if(!tgCfg.bePip)tgCfg.bePip={attivo:false,pip:tgBePipRicordata()};
+ return tgCfg.bePip;
+}
+$('tgCfgBePipAttivo')?.addEventListener('change',()=>{
+ if(!tgCfg)return;
+ const be=tgCfgBePipOCrea();
+ const on=$('tgCfgBePipAttivo').checked;
+ be.attivo=!!on;
+ if(on){
+  // Ricordata fra un segnale e l'altro: chi lavora a 10 pip ci lavora quasi sempre.
+  const v=Number($('tgCfgBePip').value);
+  if(Number.isFinite(v)&&v>0){
+   be.pip=v;
+   try{ localStorage.setItem(TG_BEPIP_KEY,String(v)); }catch(e){}
+  }
+ }
+ tgCfgDisegna();
+});
+$('tgCfgBePip')?.addEventListener('change',()=>{
+ if(!tgCfg)return;
+ const be=tgCfgBePipOCrea();
+ const v=Number($('tgCfgBePip').value);
+ if(Number.isFinite(v)&&v>0){
+  be.pip=v;
+  try{ localStorage.setItem(TG_BEPIP_KEY,String(v)); }catch(e){}
+ }
  tgCfgDisegna();
 });
 $('tgCfgSl')?.addEventListener('change',()=>{ if(!tgCfg)return; const v=Number($('tgCfgSl').value); if(Number.isFinite(v)&&v>0)tgCfg.sl=v; tgCfgDisegna(); });
@@ -30661,6 +30767,7 @@ $('tgCfgStratNiente')?.addEventListener('click',()=>{
  if(!tgCfg)return;
  tgCfg.regole=tgCfg.righe.map(()=>'');
  tgCfg.avvicinamento.attivo=false;   // "nessuno spostamento" vuol dire NESSUNO
+ tgCfgBePipOCrea().attivo=false;     // ...e il break-even in pip e' uno spostamento anche lui
  tgCfgDisegna();
 });
 $('tgCfgAvvAttivo')?.addEventListener('change',()=>{
@@ -30690,10 +30797,13 @@ $('tgConfigApri')?.addEventListener('click',async ()=>{
  const regole=tgCfgRegoleEffettive();
  const avvicinamento=(tgCfg.avvicinamento&&tgCfg.avvicinamento.attivo)
    ? {pct:Number(tgCfg.avvicinamento.pct)} : null;
+ // Break-even in pip: stesso trattamento - o c'e' con la sua distanza, o non c'e'.
+ const bePip=(tgCfg.bePip&&tgCfg.bePip.attivo&&Number(tgCfg.bePip.pip)>0)
+   ? {pip:Number(tgCfg.bePip.pip)} : null;
  const piano=tgCfgPiano();
  tgChiudiConfigurazione();      // il popup si chiude: da qui in poi comanda la conferma
  if(!(await consensoRischi('esecuzione'))){ $('status').textContent='Posizione non aperta: serve il consenso ai rischi dell\'apertura dai segnali.'; return; }
- await tgEseguiSegnale(dati.voce,{sym:dati.sym,piano,regole,avvicinamento});
+ await tgEseguiSegnale(dati.voce,{sym:dati.sym,piano,regole,avvicinamento,bePip});
 });
 
 // ===================== STRATEGIA: SPOSTAMENTO AUTOMATICO DELLO STOP =====================
@@ -30994,6 +31104,42 @@ function tgStrategiaValuta(){
        +(mosse===1?' posizione':' posizioni')+'.';
       try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
       draw(); update();
+     }
+    }
+   }
+   // BREAK-EVEN IN PIP: la distanza dall'ingresso la conti in pip, non in percentuale verso un
+   // target. Scatta quindi anche senza take profit: conta solo che il prezzo si sia allontanato
+   // abbastanza a favore. Il pareggio e' quello di OGNI posizione (prezzo di esecuzione vero piu'
+   // i costi), sempre con tgStopMigliore a fare da filtro: uno stop gia' piu' avanti non torna
+   // indietro, e uno stop "troppo vicino" al prezzo non si mette.
+   if(st.bePip&&!st.bePip.fatto&&st.entry){
+    const pipPx=st.sym===currentAssetKey?pipSize():pipSizeForAsset(st.sym);
+    if(Number.isFinite(pipPx)&&pipPx>0){
+     const dist=Number(st.bePip.pip)*pipPx;
+     const liv=st.side==='BUY'?st.entry+dist:st.entry-dist;
+     const arrivato=st.side==='BUY'?(r.high>=liv):(r.low<=liv);
+     if(arrivato){
+      let mosse=0;
+      aperte.forEach(pos=>{
+       const be=mt5PrezzoPareggio(pos);
+       if(!tgStopMigliore(pos.side,pos.sl,be))return;
+       if(fblPareggioTroppoVicino(pos,be).vicino)return;
+       const c=Number(r.close);
+       if(Number.isFinite(c)&&(pos.side==='BUY'?be>=c:be<=c))return;
+       pos.sl=be; pos.slAt=Date.now();   // pareggio dalla strategia della sala
+       pos.beMarkerSl=be;
+       if(pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
+       mosse++;
+      });
+      st.bePip.fatto=true;
+      cambiato=true;
+      if(mosse){
+       $('status').textContent='🛡️ Segnale di '+String(st.sala||'')+': raggiunti '+st.bePip.pip
+        +' pip di guadagno, stop portato a pareggio (profitto netto 0,00) su '+mosse
+        +(mosse===1?' posizione':' posizioni')+'.';
+       try{ if(active&&aperte.indexOf(active)>=0){ syncTradeLevels(); refreshTradeLevelUI(); } }catch(e){}
+       draw(); update();
+      }
      }
     }
    }
@@ -34124,6 +34270,11 @@ async function tgEseguiSegnale(voce,opzioni){
  // Senza stop e senza target: target al 50% dello stop e basta, nessun pareggio anticipato.
  const avvicinamento=p.senzaLivelli?null:p.tpCalcolato?{pct:tgAvvicinamentoSenzaTp(A)}
    :((opzioni&&opzioni.avvicinamento)?opzioni.avvicinamento:null);
+ // Break-even a una distanza in PIP dall'ingresso (richiesto il 29 ottobre 2026). A differenza
+ // dell'avvicinamento non guarda ai take profit: conta solo quanto si e' allontanati, quindi
+ // scatta anche su segnali senza target o con il primo target lontanissimo.
+ const bePip=(opzioni&&opzioni.bePip&&Number(opzioni.bePip.pip)>0)
+   ? {pip:Number(opzioni.bePip.pip)} : null;
  // IN REPLAY (e in Storico/backtest) le posizioni dei segnali vanno sul conto SIMULATO,
  // mai sul conto MT5 reale. SEGNALATO dal proprietario (26 ottobre 2026):
  // «in modalità replay le posizioni non vengono aperte nell'account storico, ma vengono
@@ -34245,6 +34396,22 @@ async function tgEseguiSegnale(voce,opzioni){
    }
    const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
    if(p.pendente){
+    // SEGNALATO (29 ottobre 2026): "quando andiamo a premere apri le posizioni, le mette
+    // soltanto sull'applicazione ma non le carica sul terminale MT5". La causa e' qui. Questo
+    // e' il ramo con il grafico sotto (senzaGrafico non preso), e gli ordini a MERCATO da
+    // sempre arrivano a MT5 perche' passano da openMarketTrade, che ci pensa da solo. Gli
+    // ordini PENDENTI invece finivano dritti in pendingOrders: la casella "Ordini pendenti"
+    // si riempiva, il terminale non vedeva niente, e sul grafico non si disegnava niente di
+    // vero. Con conto reale (reale) la strada e' la stessa del ramo senza grafico:
+    // placeRealMt5PendingOrder.
+    if(reale){
+     const t=await placeRealMt5PendingOrder(p.side,p.kind,p.entry,p.sl,tp,p.lotti,sym,
+       {senzaConferma:true,meta}).catch(e=>{ console.log('[Segnali] ordine pendente fallito:',e); return null; });
+     if(!t){ console.log('[Segnali] ordine pendente rifiutato, mi fermo'); break; }
+     if(t!==true)ticketPendenti.push(String(t));
+     aperte++;
+     continue;
+    }
     pendingOrders.push({id:Date.now()+Math.random(),createdAt:Date.now(),asset:sym,side:p.side,kind:p.kind,entry:p.entry,
      sl:p.sl,tp:Number.isFinite(tp)?tp:null,lots:p.lotti,...meta});
     try{ if(liveModeActive)refreshLiveStreamSubscriptions(); }catch(e){}
@@ -34271,7 +34438,9 @@ async function tgEseguiSegnale(voce,opzioni){
     ids:mie.map(x=>x.id).filter(v=>v!=null),
     // Pareggio anticipato: "fatto" resta false finche' non scatta, e una volta scattato non si
     // ripete (lo stop non deve tornare indietro a ogni candela).
-    avvicinamento:avvicinamento?{pct:Number(avvicinamento.pct),fatto:false}:null};
+    avvicinamento:avvicinamento?{pct:Number(avvicinamento.pct),fatto:false}:null,
+    // Break-even in pip: stesso "fatto" stampino, distanza contata in pip dall'ingresso.
+    bePip:bePip?{pip:Number(bePip.pip),fatto:false}:null};
   tgSalvaStrategie();
  }
  voce.stato=aperte?'eseguito':'nuovo';

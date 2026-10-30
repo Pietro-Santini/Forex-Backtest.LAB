@@ -156,17 +156,29 @@ test('PROVA DI CONTROLLO: se non cambia niente, non si scrive niente', async () 
         const dopoPrima = {chiamate, aggiunte};
         await syncFullStatusToFirebase('seconda', true);  // stessa fotografia, niente di nuovo
         const dopoSeconda = {chiamate, aggiunte};
-        return {dopaPrima: dopoPrima, dopoSeconda, scritture: chiamate, aggiunte};
+        // QUANTE SCRITTURE HA CAUSATO LA SECONDA CHIAMATA, e quante ne ha causate la prima.
+        // Una sola idea, due contatori: quante scritture ha causato OGNI chiamata.
+        return {scritture: chiamate, aggiunte,
+                quanteDaZero: dopoPrima.chiamate,
+                quanteInPiu: dopoSeconda.chiamate - dopoPrima.chiamate,
+                rimandateDaZero: dopoPrima.aggiunte,
+                rimandateInPiu: dopoSeconda.aggiunte - dopoPrima.aggiunte};
       } finally {
         window.fxbtCloud = cloudVero;
       }
     });
     // La firma anti-doppioni resta: alla seconda chiamata identica non si riscrive.
-    assert.equal(r.dopaPrima.chiamate, 1, 'la prima scrittura parte');
-    assert.equal(r.dopaPrima.aggiunte, 0, 'con le operazioni gia\' tutte sul cloud non si rimandano');
-    assert.equal(r.dopoSeconda.chiamate, 1,
+    assert.equal(r.quanteDaZero, 1, 'la prima scrittura parte');
+    assert.equal(r.rimandateDaZero, 0, 'con le operazioni gia\' tutte sul cloud non si rimandano');
+    // LA DIFFERENZA, NON IL TOTALE. L'app ha anche un salvataggio periodico (la "rete di
+    // sicurezza" da 4 secondi, vedi FIREBASE_MIN_SYNC_INTERVAL_MS) che puo' scattare proprio
+    // nel mezzo della misura: quella scrittura non centra con la prova, e contarla faceva
+    // cadere il test per una ragione diversa da quella che misura. Cio' che si prova resta
+    // identico, anzi piu' preciso: la seconda chiamata, a fotografia identica, non deve
+    // causare NESSUNA scrittura in piu'.
+    assert.equal(r.quanteInPiu, 0,
       'la seconda volta, con la fotografia identica, NON si riscrive (regola della firma)');
-    assert.equal(r.dopoSeconda.aggiunte, 0, 'e non si rimandano operazioni');
+    assert.equal(r.rimandateInPiu, 0, 'e non si rimandano operazioni');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

@@ -1332,8 +1332,36 @@ def _trova_python() -> Optional[str]:
     pythonw.exe per primo: non apre nessuna finestra di console.
     """
     import shutil
+    # Preferisci sys.executable quando e' un interprete Python reale e utilizzabile.
+    eseguibile = getattr(sys, "executable", None)
+    if eseguibile:
+        try:
+            if subprocess.run([eseguibile, "-c", "import sys"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=10).returncode == 0:
+                if not getattr(sys, "frozen", False):
+                    return eseguibile
+        except Exception:
+            pass
     if not getattr(sys, "frozen", False):
-        return sys.executable
+        return eseguibile
+    # Congelato: cerca nel PATH un interprete che abbia i moduli necessari, invece di prendere
+    # il primo che capita (che puo' essere lo stub del Microsoft Store o un Python senza librerie).
+    moduli = "import telethon, fastapi, uvicorn, websockets"
+    scelti = []
+    for nome in ("pythonw.exe", "python.exe", "python3", "python"):
+        trovato = shutil.which(nome)
+        if trovato and trovato not in scelti:
+            scelti.append(trovato)
+    for candidato in scelti:
+        try:
+            if subprocess.run([candidato, "-c", moduli],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=60).returncode == 0:
+                return candidato
+        except Exception:
+            continue
+    # Nessuno ha gia' i moduli: ripiego sul primo interprete disponibile, che pip potra' popolare.
     for nome in ("pythonw.exe", "python.exe", "python3", "python"):
         trovato = shutil.which(nome)
         if trovato:

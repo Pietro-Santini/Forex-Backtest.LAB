@@ -110,15 +110,17 @@ test('le linee delle posizioni si spengono senza portarsi via le caselle e le et
 test('il popup dei pacchetti MT5 non propone niente da installare su telefono e tablet', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
-    const r = await pagina.evaluate(() => {
+    const r = await pagina.evaluate(async () => {
       const scarica = document.getElementById('mt5DownloadDesktopAppBtn');
-      // Da computer: il download e' la cosa da fare, e si vede.
-      mt5Passo1Parole(false);
+      // mt5Passo1Parole() e' ASINCRONA (in testa fa un health-check sul ponte, con await):
+      // chi chiamasse senza await leggerebbe il DOM di prima, e il test non misurerebbe niente.
+      // Da qui in avanti la si aspetta sempre, prima di guardare lo stile del pulsante.
+      await mt5Passo1Parole(false);
       const pc = {visibile: scarica.style.display!=='none', titolo: document.getElementById('mt5BridgeStepTitle').textContent};
       // Da telefono: niente da installare, e si dice dove guardare davvero.
       const vero = fblEMobile;
       window.fblEMobile = () => true; fblEMobile = window.fblEMobile;
-      mt5Passo1Parole(false);
+      await mt5Passo1Parole(false);
       const mob = {visibile: scarica.style.display!=='none',
                    titolo: document.getElementById('mt5BridgeStepTitle').textContent,
                    testo: document.getElementById('mt5BridgeStepTesto').textContent};
