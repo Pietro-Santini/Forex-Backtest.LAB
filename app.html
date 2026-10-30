@@ -42353,6 +42353,34 @@ let fblStradaOrdiniTimer = setInterval(async () => {
     if (!vivo) await fblScegliStradaOrdini();
   } catch(e) {}
 }, 30000);
+// E STESSA COSA PER IL GRAFICO (porta 8001, il servizio dati), che prima non c'era: la sua strada
+// si sceglieva una volta all'avvio e, se non rispondeva, si ritentava SOLO aprendo il pannello
+// dei servizi. Sintomo visto dal proprietario: "il grafico resta su Capital.com finche' non
+// riparte" - e ripartiva, ma il grafico restava su Capital.com fino alla ricarica della pagina.
+// Il servizio dati parte da solo col ponte, e su un computer appena acceso ci mette qualche
+// secondo: aspettare che l'utente ricarichi a mano non e' una cura.
+// Quando la strada torna a rispondere, se il grafico era CADUTO su Capital.com si ricarica da
+// MT5: l'indirizzo giusto da solo non basta, le candele resterebbero quelle vecchie.
+// FUORI dal timer, per poterla provare: il timer la chiama e basta.
+async function fblGraficoRitentaSeRipreso(){
+  try {
+    if(fblStradaInCorso)return;              // un giro solo alla volta
+    const viaPrima=fblGraficoVia;
+    await fblScegliStradaGrafico();
+    const caduto=Number(mt5FeedCadutoSuCapitalAt)||0;
+    const recente=caduto>0&&Date.now()-caduto<10*60000;
+    if(fblGraficoVia&&viaPrima!==fblGraficoVia&&recente
+       &&mt5ActiveSymbol==null&&mt5Connected&&liveModeActive&&currentAssetKey){
+      console.log('[MT5Feed] il servizio dati ha ricominciato a rispondere: ricarico il grafico da MT5.');
+      loadLiveHistoryFromMt5(currentAssetKey);
+    }
+  }catch(e){}
+}
+let fblStradaGraficoTimer = setInterval(fblGraficoRitentaSeRipreso, 30000);
+// Quando il grafico cade su Capital.com perche' il servizio dati non risponde. Vale 0 (mai) se non
+// c'e' stata una caduta: senza questo stampino il timer qui sopra non potrebbe distinguere "sto
+// ricaricando dopo un guasto" da "primo caricamento della pagina".
+let mt5FeedCadutoSuCapitalAt=0;
 // symbol MT5 risolto per asset: string=risolto, null=verificato e NON trovato su questo broker
 // (l'utente ha già visto/risposto al popup), undefined/assente=non ancora verificato o servizio
 // dati irraggiungibile (va MAI messo in cache in modo permanente, si ritenta al giro successivo).
@@ -42710,6 +42738,7 @@ async function resolveMt5SymbolForAsset(asset){
    }
    if(body&&body.found){
      mt5FeedSymbolForAsset[asset]=body.resolved_symbol; // risultato DEFINITIVO: in cache
+  mt5FeedCadutoSuCapitalAt=0; // il servizio risponde: non c'e' piu' nessuna caduta da curare
      return body.resolved_symbol;
    }
  }
@@ -42746,8 +42775,23 @@ async function loadLiveHistoryFromMt5(asset,opts){
 async function __loadLiveHistoryFromMt5Body(asset,opts){
  const resolved=await resolveMt5SymbolForAsset(asset);
  if(resolved===undefined){
-   $('status').textContent=`⚠️ Servizio dati MT5 (mt5_feed_server.py, porta 8001) non raggiungibile: il grafico resta su Capital.com finché non riparte (avvia "uvicorn mt5_feed_server:app --port 8001" sul tuo PC).`;
+   // Il messaggio dipende da CHI sta guardando. Sbagliarlo manda a cercare la soluzione dove non
+   // e': dal telefono o dal tablet "avvia uvicorn sul tuo PC" è un ordine che non si puo' eseguire,
+   // e chi legge crede di aver sbagliato qualcosa. Li' l'unica cosa vera e' che il SERVIZIO DATI del
+   // computer non risponde - non il collegamento ai conti, che sta su un'altra porta. Sul computer
+   // invece il comando e' quello giusto, perche' e' li' che si avvia.
+   // In entrambi i casi si dice la cosa che conta davvero: ordini e posizioni NON sono toccati da
+   // questa caduta, cambia solo la sorgente del grafico.
+   if(fblEMobile()||fblRemoto()||!fblQuiSiInstallaIlServizio()){
+    $('status').textContent=`⚠️ Il servizio dati del computer (porta 8001) non risponde: il grafico resta su Capital.com. Ordini e posizioni su MT5 non sono toccati: stanno su un altro servizio, che continua a funzionare. Per il grafico da MT5, avvia l'app Forex Backtest LAB sul computer: parte da sola con il terminale.`;
+   }else{
+    $('status').textContent=`⚠️ Servizio dati MT5 (mt5_feed_server.py, porta 8001) non raggiungibile: il grafico resta su Capital.com finché non riparte (avvia "uvicorn mt5_feed_server:app --port 8001" sul tuo PC). Ordini e posizioni su MT5 non sono toccati: stanno su un altro servizio, che continua a funzionare.`;
+   }
    stopMt5RefreshTimer();disconnectMt5Stream();disconnectMt5OrderBook();mt5ActiveSymbol=null;
+   // Resta scritto CHE il grafico e' caduto su Capital.com per un guasto del servizio dati: lo
+   // legge il timer della strada, che solo cosi' puo' distinguere "sto ricaricando dopo un
+   // guasto" da "primo caricamento della pagina". Si azzera quando il servizio torna a rispondere.
+   mt5FeedCadutoSuCapitalAt=Date.now();
    return __loadLiveHistoryFromCapitalImpl(asset,opts);
  }
  if(resolved===null){

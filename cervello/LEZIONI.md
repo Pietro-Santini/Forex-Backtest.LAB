@@ -1077,3 +1077,49 @@
   Corollario, e costa caro: **il proprietario ha chiesto "verifica sempre prima di pubblicare"**.
   Non gli ho dato retta e ho pubblicato tre volte di fila un collaudo rosso. Da adesso: prima di
   ogni push, collaudo completo verde in locale. Senza eccezioni.
+
+**Il nome di una funzione si copia, non si detta.**
+
+  (30 ottobre 2026, e l'ho pagata con un collaudo completo rosso a 13 minuti dalla fine.) Ho
+  scritto un test nuovo per la cura dei pacchetti che si accumulano e l'ho pubblicato SENZA
+  eseguirlo da solo, perche' "tanto il collaudo completo lo copre". Il collaudo completo l'ha
+  eseguito, ed e' caduto con `fblAppQuiGiaAggionata is not defined`.
+
+  La funzione vera si chiama `fblAppQuiGiaAggiornata` - **A-g-g-i-o-r-n-a-t-a**. Io avevo scritto
+  "Aggionata", senza la "r" di "Aggiornata". Una lettera. E il messaggio d'errore me l'aveva
+  scritta in faccia, nome per nome.
+
+  LE DUE REGOLE, entrambe pagate:
+
+  1. **Un test nuovo si esegue da solo PRIMA di infilarlo in un collaudo completo.** Il collaudo
+     completo e' la verifica finale, non il primo tentativo: costa 13 minuti e butta via il giro
+     intero per un errore che in 5 secondi si vedeva. Provare il singolo file, poi l'insieme.
+  2. **I nomi si copiano dal sorgente, non si riscrivono a memoria.** Quando serve il nome esatto
+     di una funzione lo cerco nel file e lo incollo - o estraggo con una regex, come
+     `/async function (fblApp\w*Aggiornat\w*)\s*\(`/. Dettarlo vuol dire sbagliarlo, e la
+     statistica dice che la cosa piu' probabile e' proprio sbagliarlo.
+
+**Le chiavi di un oggetto si copiano come i nomi delle funzioni - e "sembra giusto" non e' una prova.**
+
+  (30 ottobre 2026, stessa sessione, errore dello stesso tipo del precedente a poche ore di
+  distanza: questo e' il segnale che non ho imparato la lezione, l'ho solo letta.) Il test della
+  cura ai pacchetti era rosso con "la versione installata e' piu' vecchia di quella remota /
+  true !== false", cioe' l'app risultava AGGIORNATA anche con la 2.0.40 contro la 2.0.45.
+
+  La tentazione era dire "il confronto versione e' rotto". Invece i pezzi, misurati uno per uno
+  con una prova buttata via dopo, funzionavano tutti: `fblConfrontaVersioni('2.0.45','2.0.40')`
+  tornava 1, esatto. Il guasto era nella MIA prova: passavo `{instalata: "2.0.40"}` mentre
+  l'oggetto si aspetta `installata` - **"installata" ha due L, io ne avevo scritte una**. Con
+  `...setup` la mia chiave diventava un campo di troppo e `installata` restava '2.0.45': il
+  test misurava la versione di prima, non quella che credevo di avere messo.
+
+  LA REGOLA, che e' la stessa di prima detta al contrario: **quando una prova fallisce, la prima
+  cosa da misurare e' la PROVA, non il codice.** Un test che cade per un suo errore interno
+  assomiglia in tutto a un test che cade per un difetto vero - stesso colore, stesso messaggio -
+  e la differenza si vede solo misurando i pezzi uno per uno. Se il difetto fosse stato vero, quei
+  pezzi avrebbero detto un altro numero.
+
+  E il particolare che avrebbe dovuto farmi insospettire subito: la prova passava con un
+  oggetto VUOTO `{}` (quindi coi valori predefiniti) e cadeva con quello pieno. Una cura che
+  funziona coi predefiniti e non coi dati veri quasi sempre è una prova costruita male, non un
+  programma rotto.

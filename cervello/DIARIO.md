@@ -3646,3 +3646,51 @@ con `Cannot read properties of undefined (reading 'attivo')`: il mio `tgCfgDiseg
 `bePip`). Chiusa con un punto unico, `tgCfgBePipOCrea()`, che rimedia il pezzo mancante invece di
 far cadere l'app. Lezione: un campo nuovo in una configurazione che gia' esiste va trattato come
 facoltativo SEMPRE, in tutti i punti che lo leggono, dal primo momento in cui lo aggiungo.
+## 30 ottobre 2026 (più tardi) — Dal cellulare il grafico resta su Capital.com
+
+**Segnalato:** "Servizio dati MT5 (porta 8001) non raggiungibile: il grafico resta su Capital.com
+(avvia uvicorn... sul tuo PC). Ora i dispositivi mobili mi dicono così dopo gli ultimi aggiornamenti."
+
+**Cosa ho misurato, in ordine, e cosa ho escluso:**
+
+1. **L'eseguibile c'è.** Dal log del flusso "Installer Windows": passo 3b costruito
+   ("Copying bootloader EXE a ...\dist\Mt5FeedServer.exe") e il file finisce dentro
+   `installer_build.zip` ("Compressing: ...\dist\Mt5FeedServer.exe"). La release ha
+   `ForexBacktestLAB_Setup.exe`, `installer_build.zip`, `forexbacktestlab.apk`. Quindi il
+   servizio dati non manca per un installer rotto.
+2. **La logica degli indirizzi non è stata toccata di recente.** `git log -S` su
+   `fblPonteLocaleVivo===false` dice ultima modifica `22a2327` (App v105): "il grafico dal
+   telefono sceglie la strada che risponde". Nessuno degli ultimi quattro commit la tocca.
+3. **Il messaggio dà un ordine impossibile a chi non può eseguirlo.** Misurato: nel punto che
+   produce il messaggio non compare mai `fblEMobile`/`fblRemoto`, quindi dal telefono si legge
+   "avvia uvicorn mt5_feed_server:app --port 8001 sul tuo PC" - e chi legge dal telefono crede
+   di aver sbagliato qualcosa, mentre il vero problema (il servizio dati DEL COMPUTER non
+   risponde) non lo dice nessuno.
+
+**Il difetto vero, e spiega il sintomo.** La strada degli ORDINI ha un timer che la riseglie
+ogni 30 secondi (`fblStradaOrdiniTimer`), quella del GRAFICO no: si sceglieva una volta
+all'avvio e si ritentava solo aprendo il pannello dei servizi. Se il servizio dati non era
+ancora partito (computer appena acceso), il grafico cadeva su Capital.com e **ci restava fino
+alla ricarica della pagina**: "resta su Capital.com finché non riparte" - ripartiva, ma il
+grafico non se ne accorgeva.
+
+**La cura, in due pezzi, misurati da `laboratorio/app/servizio_dati_messaggio.test.mjs`:**
+
+- **Messaggio che dipende da chi guarda.** Dal computer resta il comando giusto (lì si avvia).
+  Da telefono/tablet il comando impossibile noncompare più, e si dice la cosa vera: il servizio
+  dati del computer non risponde, e l'app si avvia sul computer. In tutti e due i casi si
+  aggiunge la riga che conta: **ordini e posizioni non sono toccati**, stanno su un altro
+  servizio. Prova di controllo: la caduta su Capital.com resta identica nei due casi - se il
+  test avesse fatto passare anche quella, non starebbe misurando il messaggio.
+- **Ritenta da solo.** `fblGraficoRitentaSeRipreso()`, chiamata da un timer ogni 30 secondi,
+  stessa cadenza e stesso spirito di quello degli ordini. Quando la strada torna a rispondere e
+  il grafico era caduto, si ricarica da MT5: l'indirizzo giusto da solo non basta, le candele
+  resterebbero quelle vecchie. La caduta resta segnata (`mt5FeedCadutoSuCapitalAt`), così il
+  timer distingue "sto ricaricando dopo un guasto" da "primo caricamento della pagina"; il
+  segno si azzera quando il servizio torna a rispondere.
+
+**Cosa NON ho potuto misurare, e va detto:** non ho un cellulare qui, quindi non ho riprodotto
+la caduta dal telefonino. Ho misurato il messaggio e la guarigione forzando `fblEMobile`/
+`fblRemoto`/`fblQuiSiInstallaIlServizio`. Se il guasto dal cellulare resta, la prossima misura
+da fare è **sul dispositivo**: con il pannello Collegamento aperto si vede quale strada sceglie
+(voce "grafico" e cosa risponde), e quella è la risposta che chiude la diagnosi.
