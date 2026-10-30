@@ -3794,3 +3794,42 @@ replay: chi guarda li ha appena fatti.
 **Cosa NON ho misurato, e va detto:** le TRE PROVE sono sul comportamento (sessione mostrata,
 marchio, e il filtro che prima nascondeva). Non ho guardato con gli occhi il grafico in replay:
 quello lo fai tu, e se l'ordine ancora non si disegna la prossima misura e' sul posto.
+## 30 ottobre 2026 (notte fonda) — In replay gli ordini pendenti non scattavano
+
+**Segnalato dal proprietario:** "gli ordini pendenti creati all'interno della modalita' replay,
+tutto questo ovviamente quando attiva la modalita' backtest, gli ordini pendenti non vengono
+eseguiti, cioe' vengono segnati ma non vengono aperti quando il prezzo passa sulla linea
+dell'entry."
+
+**Misurato, con una sonda buttata via dopo.** Ordine BUY a 1.0005 creato col replay in live,
+replay avanzato fino a 1.0009:
+
+| | prima della cura | dopo |
+|---|---|---|
+| ordini ancora in elenco | 1 | **0** |
+| posizioni aperte | 0 | **1** |
+
+**La causa, ed e' una regola che esisteva gia' ma per meta'.** `checkPendingOrders()` guardava
+sempre `rows[rows.length-1]` - l'ultima candela VERA. In replay quella e' il prezzo di oggi:
+1.0009. L'entrata 1.0005 stava nel range della barra di mezzo (quella passata dal replay), ma
+l'ultima barra era ormai a 1.0009 e il suo range non la conteneva piu'. Risultato: l'ordine
+restava in elenco per sempre, "segnato ma non aperto".
+
+**E `evaluate()` - le posizioni - aveva gia' questa eccezione dal 26 ottobre** (revisore): *"una
+posizione nata durante il replay (`historical`) non puo' essere gestita dal prezzo di oggi...
+per quelle posizioni la candela e' quella DEL REPLAY (rows[idx])"*. Era fatta per le posizioni,
+non per gli ordini pendenti. Ora c'è anche li, con la stessa regola e la stessa forma:
+`candelaDi(o)` sceglie la candela del replay se l'ordine e' nato durante il replay, l'ultima vera
+altrimenti.
+
+**Le due prove, e la seconda e' quella che evita l'errore opposto.** Un ordine nato in replay
+scatta quando il replay passa sulla sua entrata; uno NON nato in replay continua a essere
+giudicato dal prezzo vero di oggi. Se la regola valesse per tutti, "le cose fatte in tempo reale"
+inizierebbero a filtrare nel passato - che e' l'errore opposto, e costoso esattamente quanto.
+
+**Una lezione mia, l'ennesima della serie.** La prima sonda mi diceva "non funziona" e invece era
+la sonda ad essere sbagliata: avevo scritto le candele coi campi `h`/`l` invece di `high`/`low`,
+cosi' il confronto era sempre falso. Risultato: per un giro ho inseguito un difetto che non
+esisteva. In backtest l'ordine scattava gia' benissimo. La regola pratica: quando una prova dice
+"non fa niente", la prima cosa da verificare e' che la prova misuri davvero qualcosa - col
+caso piu' semplice possibile, in una modalita' dove so che funziona.
