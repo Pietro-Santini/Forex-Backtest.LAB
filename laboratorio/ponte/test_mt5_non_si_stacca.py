@@ -98,6 +98,7 @@ def test_PROVA_DI_CONTROLLO_il_pulsante_esci_spegne_anche_con_mt5_collegato(monk
         esito = bridge.disconnect(_finta_richiesta(grazia=False))
         assert esito.get("status") == "disconnected"
         assert bridge.mt5_connected is False, "chi lo dice esplicitamente lo spegne davvero"
-        assert "terminale" in spenti and "processo" in spenti,             "e si spegne tutto: terminale, dati e processo"
+        assert "terminale" in spenti, "si chiude il terminale MT5"
+        assert "processo" not in spenti, "ma il processo bridge RESTA VIVO (riconnessione possibile)"
     finally:
         bridge._annulla_spegnimento()

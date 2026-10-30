@@ -73,6 +73,58 @@ if getattr(sys, "frozen", False) and sys.stdout is None:
         sys.stderr = io.StringIO()
         _LOG_FILE_PATH = None
 
+# ===================== LOG PERSISTENTE SU DISCO (bridge.log) =====================
+_BRIDGE_LOG_PATH = os.path.join(
+    os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+    else os.path.dirname(os.path.abspath(__file__)),
+    "bridge.log",
+)
+
+
+def _log_bridge(msg):
+    """Scrive su bridge.log (best-effort) E fa il print. Mai sollevare."""
+    try:
+        with open(_BRIDGE_LOG_PATH, "a", encoding="utf-8", errors="replace") as _f:
+            _f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+            _f.flush()
+    except Exception:
+        pass
+    try:
+        print(msg)
+    except Exception:
+        pass
+
+
+def _installa_excepthook_bridge():
+    try:
+        import traceback as _tb
+
+        def _hook(exc_type, exc_value, exc_tb):
+            try:
+                _log_bridge("ECCEZIONE NON GESTITA: " + "".join(_tb.format_exception(exc_type, exc_value, exc_tb)))
+            except Exception:
+                pass
+            try:
+                sys.__excepthook__(exc_type, exc_value, exc_tb)
+            except Exception:
+                pass
+
+        sys.excepthook = _hook
+
+        def _thread_hook(args):
+            try:
+                _log_bridge("ECCEZIONE IN THREAD %s: %s" % (getattr(args, "thread", "?"), getattr(args, "exc_value", "?")))
+                _log_bridge("".join(_tb.format_exception(args.exc_type, args.exc_value, args.exc_traceback)))
+            except Exception:
+                pass
+
+        threading.excepthook = _thread_hook
+    except Exception:
+        pass
+
+
+_installta = _installa_excepthook_bridge()
+
 # ===================== AUTOTRADING DISATTIVATO AL CAMBIO CONTO =====================
 # Comportamento del TERMINALE MT5 stesso (non un bug nostro, non c'è modo di disattivarlo via
 # API): ogni volta che mt5.login() cambia l'account attivo su un terminale già avviato, MT5
@@ -1975,6 +2027,19 @@ def connect(body: ConnectRequest):
                 mt5_terminal_exe_path = candidate
                 break
 
+    # Dopo un connect riuscito con MT5 collegato, riavvia il feed server (servizio dati MT5,
+    # porta 8001) se non e' gia' vivo: best-effort, mai bloccare l'ordine. Vale anche dopo una
+    # disconnessione manuale, che ha fermato il custode e il feed server ma ha lasciato il bridge vivo.
+    if mt5_connected:
+        try:
+            _start_mt5_feed_server()
+        except Exception as _e:
+            _log_bridge("[Connect] riavvio feed server fallito (non bloccante): %s" % _e)
+        try:
+            _avvia_custode_mt5_feed()
+        except Exception as _e:
+            _log_bridge("[Connect] riavvio custode fallito (non bloccante): %s" % _e)
+
     return {
         "status": "connected",
         "login": body.login,
@@ -2033,19 +2098,28 @@ def disconnect(request: Request):
             return {"status": "resta_acceso", "perche": "mt5_collegato"}
         _programma_spegnimento()
         return {"status": "spegnimento_programmato", "secondi": SECONDI_DI_GRAZIA}
-    mt5.shutdown()
+    # MANUALE (pulsante "Disconnetti"): si disconnette MT5 e si fermano il custode e il feed
+    # server, ma il PROCESSO BRIDGE RESTA VIVO - cosi' la riconnessione funziona senza dover
+    # riavviare l'applicazione (difetto segnalato: "mi dice sempre di riscaricare i pacchetti").
+    # Il grace timer (pagehide, ?grazia=1) resta invariato: vedi sopra.
+    try:
+        mt5.shutdown()
+    except Exception:
+        pass
     mt5_connected = False
-    _try_close_mt5_terminal()
-    _ferma_custode_mt5_feed()  # PRIMA di spegnere il servizio, o il custode lo riaccende
-    _stop_mt5_feed_server()  # niente processo dati MT5 orfano dopo che questo bridge è sparito
-    # Chiude anche QUESTO processo bridge, un attimo dopo aver risposto — coerente col fatto che
-    # non è più "un'app che l'utente apre e chiude da solo", ma un servizio legato 1:1 alla sessione
-    # dell'app web: niente processo invisibile che resta acceso in background dopo che l'utente ha
-    # disconnesso o chiuso la pagina. Il ritardo di 1s serve solo a lasciare al server il tempo di
-    # inviare davvero questa risposta HTTP prima di terminare (os._exit salta ogni cleanup normale
-    # apposta: è il modo più affidabile per un processo "congelato" da PyInstaller di uscire subito,
-    # senza restare bloccato ad aspettare thread/connessioni ancora aperte).
-    threading.Timer(1.0, lambda: os._exit(0)).start()
+    try:
+        _try_close_mt5_terminal()
+    except Exception:
+        pass
+    try:
+        _ferma_custode_mt5_feed()  # PRIMA di spegnere il servizio, o il custode lo riaccende
+    except Exception:
+        pass
+    try:
+        _stop_mt5_feed_server()  # niente processo dati MT5 orfano dopo la disconnessione
+    except Exception:
+        pass
+    _log_bridge("[Disconnect] manuale: MT5 disconnesso, custode e feed server fermati, bridge vivo.")
     return {"status": "disconnected"}
 
 
@@ -3217,4 +3291,12 @@ if __name__ == "__main__":
     _host = _accesso.host_di_ascolto()
     if ACCESSO_REMOTO.get("rete"):
         print("  Accesso da altri dispositivi ACCESO (via Tailscale): serve la chiave.")
-    uvicorn.run(app, host=_host, port=PORT)
+    while True:
+        try:
+            uvicorn.run(app, host=_host, port=PORT)
+            break  # uscita normale (es. segnale di stop): non si riavvia
+        except Exception as _e:
+            import traceback as _tb
+            _log_bridge("uvicorn terminato con errore, riavvio tra 2s: %s" % _e)
+            _log_bridge("".join(_tb.format_exception(type(_e), _e, _e.__traceback__)))
+            time.sleep(2)
