@@ -3694,3 +3694,73 @@ la caduta dal telefonino. Ho misurato il messaggio e la guarigione forzando `fbl
 `fblRemoto`/`fblQuiSiInstallaIlServizio`. Se il guasto dal cellulare resta, la prossima misura
 da fare è **sul dispositivo**: con il pannello Collegamento aperto si vede quale strada sceglie
 (voce "grafico" e cosa risponde), e quella è la risposta che chiude la diagnosi.
+## 30 ottobre 2026 (sera) — "Non chiude le posizioni in guadagno": la causa stava nel grafico
+
+**Segnalato dal proprietario**, di nuovo, dopo i tick del rollover: l'app non chiude da sola le
+posizioni in profitto prima della chiusura del mercato. La funzione e i suoi 12 test esistevano
+gia' (dal 21 ottobre), quindi la tentazione era dire "funziona". Invece no, e la differenza stava
+in una strada che nessun test prendeva.
+
+**La misura, fatta con una sonda buttata via dopo.** Gli orari veri dello strumento (orariAsset)
+arrivano da CAPITAL.COM: chi lavora solo con MT5 non ce li ha, e l'app ripiega sul calendario con
+cui segue MT5 (lun-ven fino alle 22). Quel ripiego passava da liveScheduleAppliesNow(), che
+guarda **currentAssetKey - l'asset che c'e' a grafico** - e non l'asset della posizione da
+chiudere. Risultato, misurato su quattro casi:
+
+| situazione | quanto mancava alla chiusura | chiudeva? |
+|---|---|---|
+| grafico sullo stesso asset | 1 minuto | si |
+| grafico su un altro asset | 1 minuto | si |
+| grafico su nessun asset | **niente** | **no** |
+| grafico su una cripto | **niente** | **no** |
+
+Cioe': posizione in guadagno su EURCHF, grafico su una cripta o su niente, e oltre le 22 nessuno
+la chiudeva - con lo spread che si apre di decine di pip (50 su EURCHF, misurati dal proprietario).
+I 12 test vecchi non se ne accorgevano perche' passavano tutti da orariAsset, la strada buona.
+
+**La cura, in una riga e mezza.** liveScheduleAppliesNow(asset) accetta l'asset di chi chiede;
+se non glielo dici, resta quello a grafico come prima. Chi ce l'ha - la prossima chiusura di una
+posizione, lo stato del mercato di un simbolo - lo passa. Rimisurato: manca vale 60000 in tutti
+e quattro i casi, e le due prove di controllo restano al loro posto (la cripto non chiude perche'
+non chiude mai, e tre minuti prima con finestra a un minuto non si chiude).
+
+laboratorio/app/chiusura_senza_orari_broker.test.mjs, 3 prove, tutte su quella strada.
+
+**Nel frattempo, dal dispositivo del proprietario, la misura che ha chiuso l'altro guasto:**
+"servizio Ordini (computer, tramite il server): risponde" / "servizio Grafico: il computer non
+risponde" / "servizio Segnali (server): risponde". Il server inoltra bene, la porta 8000 parla, la
+8001 no. Causa: nel ponte _start_mt5_feed_server() gira **una volta sola** all'avvio e nessuno lo
+ricontrolla: se Mt5FeedServer.exe muore, la porta resta morta fino al riavvio dell'app. Al
+custode ci pensa lo specialista del ponte.
+## 30 ottobre 2026 (notte) — NZDCAD: pip e profitto calcolati sul prezzo di un ALTRO asset
+
+**Segnalato dal proprietario con lo screenshot del Trade Journal:** due posizioni NZDCAD in
+guadagno risultavano `+40.043.640 pip`, `+120.139.920,00 €`, `+99,99%`, mentre le posizioni XAUUSD
+sopra e sotto erano giuste.
+
+**Riprodotto al numero INVENTATO.** Con il grafico sull'oro a 4005.15 e la posizione NZDCAD entrata
+a 0.78600, `pipsFromPrice('BUY', 0.78600, 4005.15, 'NZDCAD')` fa **esattamente 40.043.640** -
+(4005.15 - 0.786) / 0.0001. I pip veri, chiusura al TP 0.79026, sono **42,6** e il profitto circa
+**162 €**. La firma del difetto era un numero, non un'impressione.
+
+**La causa, in due punti.** Quando non si conosceva il prezzo vero della chiusura, l'app ripiegava
+su `currentPrice()` - il prezzo **del grafico**:
+- `closeMt5PositionReal()` (il ponte non restituisce il prezzo);
+- il giro di `fetchMt5Positions` che giornalizza una posizione MT5 sparita dal conto.
+
+Con una posizione su un altro asset quello e' il prezzo di un ALTRO strumento, e il trade veniva
+scritto a un prezzo che non e' il suo: pip, profitto, percentuale e curva del saldo tutti falsati,
+per sempre. `pipsFromPrice()` e `calculateForexPL()` erano gia' corretti (usavano l'asset della
+posizione): sbagliava il PREZZO che gli arrivava.
+
+**La cura.** `fblPrezzoRipiegoChiusura(pos, motivo)`: quando il prezzo vero non si conosce, si
+ripiega sui **livelli della posizione** - il suo SL se chiusa per lo stop, il suo TP se per il
+target, l'entrata a motivo ignoto. Mai il prezzo del grafico: non e' un dato di quella posizione.
+
+**Una buona notizia, misurata:** i trade già scritti col prezzo sbagliato **si correggono da soli**.
+`mt5RiallineaTradeNoti()` riscrive entry, exit e profitto netto dallo storico vero del broker e
+ricalcola i pip da quelli. Quindi allacciando MT5 lo sbaglio sparisce dal Journal; quel che resta
+indietro e' la curva del saldo dei giri in cui il dato era falso.
+
+Test: `laboratorio/app/prezzo_del_proprio_asset.test.mjs`, con la controprova che fissa il numero
+dello screenshot (col prezzo del grafico i pip sono 40.043.640; coi livelli della posizione, 42,6).

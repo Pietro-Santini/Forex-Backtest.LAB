@@ -5135,6 +5135,23 @@ function fblDedupMotivo(voce){
 // Il prezzo di chiusura: per una posizione REALE lo decide il broker (si chiude a mercato), per
 // una simulata serve il prezzo di quell'asset. Se non lo si ha, quella posizione NON si chiude e
 // lo si dice: chiuderla a un prezzo inventato sarebbe peggio che non chiuderla.
+// PREZZO DA USARE QUANDO NON SI CONOSCE QUELLO VERO DELLA CHIUSURA.
+// MAI quello del grafico: se la posizione e' di un altro asset, currentPrice() e' il prezzo di
+// UN ALTRO STRUMENTO. Misurato sul conto del proprietario (30 ottobre 2026): una posizione
+// NZDCAD chiusa mentre a grafico c'era l'oro e' finita registrata al prezzo dell'oro - 4005.15
+// contro 0.79026 - con i pip a +40.043.640 e il profitto a +120.139.920,00 € invece dei 42,6 pip
+// e dei ~162 € veri. Da li' in poi la curva del saldo e tutte le percentuali erano falsate.
+// Conosci davvero: i LIVELLI della posizione (il suo SL, il suo TP) e la sua entrata. Quelli
+// sono l'unica cosa onesta da tirare in ballo, e in rapporto al motivo della chiusura si sa
+// quale dei due e' quello giusto.
+function fblPrezzoRipiegoChiusura(pos,motivo){
+ if(!pos)return null;
+ const liv=(motivo==='SL')?pos.sl:((motivo==='TP')?pos.tp:null);
+ const n=Number(liv);
+ if(Number.isFinite(n)&&n>0)return n;
+ const e=Number(pos.entry);
+ return (Number.isFinite(e)&&e>0)?e:null;
+}
 function fblPrezzoChiusura(p){
  try{
   if(p&&p.asset&&p.asset===currentAssetKey){ const c=currentPrice(); if(Number.isFinite(c))return c; }
@@ -23421,7 +23438,7 @@ if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo
    fetchMt5Positions();
    return false;
  }
- const price=Number.isFinite(Number(result.data.price))?Number(result.data.price):(currentPrice()??pos.entry);
+ const price=Number.isFinite(Number(result.data.price))?Number(result.data.price):fblPrezzoRipiegoChiusura(pos,reason);
  closeTrade(reason,price,pos,resolveMt5FinalLevels(pos,mt5RealPositions.find(rp=>String(rp.ticket)===String(pos.mt5Ticket))));
  $('status').textContent=`🔌 Posizione ${pos.asset||''} (ticket ${pos.mt5Ticket}) chiusa DAVVERO su MT5 al prezzo ${fmtPrice(price)}.`;
  fetchMt5Positions();
@@ -37568,7 +37585,7 @@ async function fetchMt5Positions(){
      for(const p of justConfirmedClosed){
        const lastKnown=mt5RealPositions.find(rp=>String(rp.ticket)===String(p.mt5Ticket));
        let veri=null;
-       let price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(currentPrice()??p.entry);
+       let price=(lastKnown&&Number.isFinite(Number(lastKnown.price_current)))?Number(lastKnown.price_current):(fblPrezzoRipiegoChiusura(p,'MT5')??p.entry);
        let reason='MT5'; // ripiego se /deal_reason non risponde o non trova nulla
        const dr=await fetchMt5WithTimeout('/deal_reason?ticket='+p.mt5Ticket,{method:'GET'},8000);
        if(dr.ok && dr.data){
@@ -46206,8 +46223,16 @@ function fblSorgenteLivePerCambioTf(fileId, fase, mt5Connesso){
   return mt5Connesso?'mt5':'capital';
 }
 // FBL:TESTA-SORGENTE-LIVE:FINE
-function liveScheduleAppliesNow(){
-  try{ return !!(liveModeActive&&mt5Connected&&currentAssetKey&&!binanceSymbolForAsset(currentAssetKey)); }catch(e){ return false; }
+function liveScheduleAppliesNow(asset){
+  try{
+   // DI CHI E' L'ORARIO. Se non lo si dice, e' quello dell'asset a grafico, come sempre. Chi ha
+   // in mano un asset SPECIFICO - la prossima chiusura di una POSIZIONE, lo stato del mercato di
+   // un simbolo - lo passa: misurato, senza questo il calendario tornava muto quando il grafico
+   // era su un'altra aula o su una cripta, e una posizione in guadagno su EURCHF restava aperta
+   // oltre la chiusura del mercato perche' nessuno la chiudeva.
+   const a=(asset!=null&&asset!=='')?asset:currentAssetKey;
+   return !!(liveModeActive&&mt5Connected&&a&&!binanceSymbolForAsset(a));
+  }catch(e){ return false; }
 }
 // RICHIESTO: la fascia 22-23 con Capital.com si accende e si spegne (Impostazioni grafico → Style,
 // e accanto al menu MT5 in Collegamento/Modalita'). Spenta: dalle 22 il grafico resta fermo fino
@@ -46343,7 +46368,7 @@ function statoMercato(asset,t){
    }
  }
  // Orario con cui l\'app segue MT5 (anche se lo strumento sul broker e' aperto, il grafico e' fermo).
- if(liveScheduleAppliesNow()&&liveSessionPhaseAt(t)==='closed'){
+ if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'){
    let apreAt=null;
    for(let k=1;k<=4*24*60;k++){ const tt=Math.floor(t/60000)*60000+k*60000; if(liveSessionPhaseAt(tt)!=='closed'){ apreAt=tt; break; } }
    return {chiuso:true,apreAt,fonte:'mt5'};
@@ -46387,7 +46412,7 @@ function fblProssimaChiusura(asset,t){
  // Ripiego: il calendario con cui l'app segue MT5. Si cerca il primo minuto "chiuso" entro un
  // giorno: oltre non serve, e un ciclo lungo qui gira a ogni secondo.
  try{
-  if(liveScheduleAppliesNow()&&liveSessionPhaseAt(quando)!=='closed'){
+  if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(quando)!=='closed'){
    for(let k=1;k<=24*60;k++){
     const tt=Math.floor(quando/60000)*60000+k*60000;
     if(liveSessionPhaseAt(tt)==='closed')return tt;

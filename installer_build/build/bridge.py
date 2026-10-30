@@ -351,6 +351,10 @@ def _spegni_tutto_adesso():
     except Exception:
         pass
     try:
+        _ferma_custode_mt5_feed()  # PRIMA di spegnere il servizio, o il custode lo riaccende
+    except Exception:
+        pass
+    try:
         _stop_mt5_feed_server()
     except Exception:
         pass
@@ -752,6 +756,162 @@ def _stop_mt5_feed_server():
     except Exception:
         pass
     _mt5_feed_proc = None
+
+
+# ===================== CUSTODE DEL SERVIZIO DATI MT5 (mt5_feed_server.py, porta 8001) =====
+# SEGNALATO dal proprietario il 30 ottobre 2026, con i numeri alla mano (ore 09:17, sul suo PC):
+#   servizio Ordini (computer, tramite il server): risponde in 319 ms
+#   servizio Grafico (computer): il computer non risponde in 355 ms
+#   servizio Segnali (server): risponde in 434 ms
+# Cioe' il ponte degli ordini era vivo e inoltrava benissimo, mentre la porta 8001 - il servizio
+# dati del grafico - era morta. Il server (Tailscale) non c'entrava niente: senza la 8001 l'app
+# resta su Capital.com per il grafico, e ci resterebbe per sempre.
+#
+# LA CAUSA NON ERA L'AVVIO: `_start_mt5_feed_server()` qui sopra funziona, ma viene chiamata UNA
+# VOLTA SOLA, nel blocco `if __name__ == "__main__"` in fondo a questo file. Se
+# `Mt5FeedServer.exe` muore DOPO - un crash, la memoria, Windows che chiude il processo, un
+# `_kill_stale_instances()` partito da un'altra istanza del ponte - nessuno se ne accorge e la
+# porta resta muta finche' l'utente non riavvia tutta l'app a mano. Non mancava una cura
+# all'avvio: mancava qualcuno che controllasse se il servizio ERA ANCORA vivo. Questo e' quel
+# qualcuno.
+#
+# COSI' FUNZIONA: un thread daemon, ogni `_SECONDI_CUSTODE_MT5_FEED` secondi (15, meno dei 30 con
+# cui app.html ritenta da solo la strada: se la porta torna a rispondere l'app se ne accorge e
+# ricarica il grafico - le due metà' combaciano). Se la porta non risponde, si richiama
+# `_start_mt5_feed_server()`, che e' GIA' la difesa giusta: controlla lei se la porta e' viva
+# (non si avvia un secondo servizio), ritorna subito se il processo di questa istanza e' ancora in
+# vita, e stampa e basta se il file non c'e'.
+#
+# CHI HA DIRITTO AL RIAVVIO, E CHI NO: il custode non e' un rianimatore universale. Se il servizio
+# dati l'ha avviato QUESTA istanza (`_mt5_feed_proc` valorizzato: l'ha partito lei, o almeno ci ha
+# provato) lo tiene in vita. Altrimenti lo riavvia solo se MT5 e' collegato, perche' e' l'unico
+# caso in cui il grafico serve davvero. In tutti gli altri casi - servizio spento di proposito da
+# `_stop_mt5_feed_server()` alla disconnessione, o avanzato da un altro ponte - NON tocca niente:
+# il resto del programma deve poter spegnere i processi senza che un thread in sottofondo li
+# riaccenda, e "come fanno a esserci tre processi dell'applicazione accesi?" e' gia' stato un
+# dubbio del proprietario.
+#
+# E SI SPEGNE COL PONTE, in due modi: il thread e' daemon, e `_ferma_custode_mt5_feed()` viene
+# chiamata nei punti di uscita (`_spegni_tutto_adesso` e /disconnect) - cosi' la chiusura e'
+# dichiarata invece che affidata alla sola morte del processo, e soprattutto viene PRIMA di
+# `_stop_mt5_feed_server()`, altrimenti il custode riaccenderebbe il giro dopo quello che la
+# disconnessione ha appena spento.
+_SECONDI_CUSTODE_MT5_FEED = 15     # tra un controllo e l'altro: sotto i 30 s con cui ritenta l'app
+_TENTATIVI_CUSTODE_MT5_FEED = 8    # limite ai tentativi: meglio otto provi chiari che un martello
+_custode_stop = threading.Event()
+_custode_thr = None
+_custode_tentativi = 0
+_custode_avvisato = False
+_custode_lock = threading.Lock()
+
+
+def _stampa_custode(testo):
+    """Un print che non puo' far cadere niente. Il custode gira in sottofondo per tutta la vita del
+    ponte: se `print` solleva (stdout chiuso, disco pieno sul file di log) l'esecuzione ordini NON
+    deve saperlo. Si dice al giro dopo, o non si dice: mai per questo il thread muore."""
+    try:
+        print(testo)
+    except Exception:
+        pass
+
+
+def _custode_un_giro():
+    """UN controllo della porta 8001. Ritorna una parola che dice com'e' andata, invece di
+    obbligare chi prova a leggere il testo stampato (o, peggio, il codice). Valori:
+      "vivo":       la porta risponde, niente da fare (e il contatore si azzera);
+      "spento":     la porta e' muta ma non e' roba di questa istanza: non si tocca niente;
+      "senza_file": bisognerebbe riavviare, ma il file del servizio non esiste: ditto una volta sola;
+      "riavviato":  la porta era muta e si e' chiamato `_start_mt5_feed_server()`;
+      "arinreso":   limite di tentativi raggiunto: ditto una volta sola, e non si chiama piu';
+      "errore":     qualcosa ha sollevato: stampato, e il custode resta vivo per il giro dopo."""
+    global _custode_tentativi, _custode_avvisato
+    try:
+        if _servizio_gia_vivo(8001):
+            with _custode_lock:
+                era_muta = _custode_tentativi > 0 or _custode_avvisato
+                _custode_tentativi = 0
+                _custode_avvisato = False
+            if era_muta:
+                _stampa_custode("[Mt5Feed] custode: la porta 8001 risponde di nuovo, "
+                                "il grafico torna ai dati di MT5.")
+            return "vivo"
+        if _mt5_feed_proc is None and not mt5_connected:
+            return "spento"  # non l'ha avviato questa istanza e MT5 non e' collegato: non tocca a noi
+        if _mt5_feed_server_exe_path() is None:
+            # Il file non c'e', quindi non c'e' NIENTE da tentare: ogni tentativo in piu'
+            # stamparebbe la stessa riga per sempre. Una volta, e poi silenzio: l'app continua su
+            # Capital.com per il grafico, come gia' fa da sola.
+            with _custode_lock:
+                prima_volta = not _custode_avvisato
+                _custode_avvisato = True
+            if prima_volta:
+                _stampa_custode("[Mt5Feed] custode: servizio dati MT5 non trovato accanto al ponte "
+                                "(installer da rigenerare, o sviluppo senza mt5_feed_server.py): "
+                                "non insisto, l'app usera' Capital.com per il grafico.")
+            return "senza_file"
+        # Arrivati al tetto NON si chiama piu' l'avvio: il contatore resta dov'e' e il giro
+        # seguente esce subito, senza toccare niente. Intanto il ciclo continua a guardare la
+        # porta: se un giorno torna a rispondere, tutto si azzera e il custode riprende a vivere.
+        with _custode_lock:
+            if _custode_tentativi >= _TENTATIVI_CUSTODE_MT5_FEED:
+                return "arinreso"
+        _start_mt5_feed_server()
+        with _custode_lock:
+            _custode_tentativi += 1
+            fatti = _custode_tentativi
+            arreso = fatti >= _TENTATIVI_CUSTODE_MT5_FEED
+            da_dire = None
+            if arreso and not _custode_avvisato:
+                _custode_avvisato = True
+                da_dire = ("[Mt5Feed] custode: %d tentativi e la porta 8001 non risponde ancora. "
+                           "Non insisto oltre: continuo a controllare la porta, ma non riprovo ad "
+                           "avviare il servizio - l'app usera' Capital.com finche' il ponte non "
+                           "viene riavviato." % fatti)
+        if da_dire:
+            _stampa_custode(da_dire)
+        return "arinreso" if arreso else "riavviato"
+    except Exception as e:
+        _stampa_custode("[Mt5Feed] custode: controllo del servizio dati fallito (non bloccante): %s" % e)
+        return "errore"
+
+
+def _custode_mt5_feed_server(intervallo=_SECONDI_CUSTODE_MT5_FEED):
+    """Il thread vero e proprio: un giro, un'attesa, un altro giro, per tutta la vita del ponte.
+    L'attesa e' fatta su un Event e non con time.sleep, cosi' `_ferma_custode_mt5_feed()` lo
+    sveglia subito invece di lasciarlo dormire fino alla scadenza."""
+    while not _custode_stop.is_set():
+        try:
+            _custode_un_giro()
+        except Exception as e:
+            # Difesa doppia, di proposito: `_custode_un_giro()` chiude gia' il suo corpo in
+            # try/except, ma SE una volta dovesse scappare qualcosa il thread non deve morire - un
+            # custode morto e' peggio di nessun custode, perche' sembra che tutto funzioni.
+            _stampa_custode("[Mt5Feed] custode: giro interrotto (non bloccante): %s" % e)
+        _custode_stop.wait(intervallo)
+
+
+def _avvia_custode_mt5_feed():
+    """Un thread solo, e solo se non ce n'e' gia' uno vivo: viene chiamata una volta nel blocco
+    principale, subito dopo `_start_mt5_feed_server()`."""
+    global _custode_thr
+    with _custode_lock:
+        if _custode_thr is not None and _custode_thr.is_alive():
+            return False
+        _custode_stop.clear()
+        _custode_thr = threading.Thread(target=_custode_mt5_feed_server, daemon=True)
+        _custode_thr.start()
+    _stampa_custode("[Mt5Feed] custode avviato: controllo della porta 8001 ogni %d s."
+                    % _SECONDI_CUSTODE_MT5_FEED)
+    return True
+
+
+def _ferma_custode_mt5_feed():
+    """Chiede al custode di smettere. Da solo il thread e' daemon e morirebbe col processo, ma la
+    chiusura va DETTA: viene chiamata prima di `_stop_mt5_feed_server()` (disconnessione,
+    spegnimento) cosi' il servizio dati spento di proposito non viene riacceso il giro dopo."""
+    _custode_stop.set()
+
+
 
 
 # BUG RISOLTO ("premo F5 e torna il vecchio problema già corretto, ma con CTRL+SHIFT+R va tutto
@@ -1879,6 +2039,7 @@ def disconnect(request: Request):
     mt5.shutdown()
     mt5_connected = False
     _try_close_mt5_terminal()
+    _ferma_custode_mt5_feed()  # PRIMA di spegnere il servizio, o il custode lo riaccende
     _stop_mt5_feed_server()  # niente processo dati MT5 orfano dopo che questo bridge è sparito
     # Chiude anche QUESTO processo bridge, un attimo dopo aver risposto — coerente col fatto che
     # non è più "un'app che l'utente apre e chiude da solo", ma un servizio legato 1:1 alla sessione
@@ -3053,6 +3214,7 @@ if __name__ == "__main__":
     print(f"Forex Backtest LAB — servizio bridge avviato su http://127.0.0.1:{PORT}/ "
           f"(nessuna finestra: log su {_LOG_FILE_PATH or '(nessun file di log disponibile)'})")
     _start_mt5_feed_server()  # vedi commento sulla funzione: best-effort, non blocca questo avvio
+    _avvia_custode_mt5_feed()  # e adesso qualcuno controlla che la porta 8001 risponda ancora
     # SOLO 127.0.0.1, sempre: dagli altri dispositivi si arriva con Tailscale Serve (vedi
     # accesso_condiviso.py), che parla con questo servizio in locale.
     _host = _accesso.host_di_ascolto()
