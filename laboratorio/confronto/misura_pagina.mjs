@@ -49,13 +49,14 @@ const errori = [];
 const browser = await chromium.launch();
 
 for (const caso of casi.casi) {
-    const pagina = await browser.newPage({viewport: {width: 1400, height: 900}});
+    let pagina = await browser.newPage({viewport: {width: 1400, height: 900}});
     pagina.on('pageerror', e => errori.push(caso.nome + ': ' + String(e)));
     await pagina.goto(URL_APP, {waitUntil: 'domcontentloaded'});
 
     let piano = null;
-    try {
-        piano = await pagina.evaluate((c) => {
+    for (let tentativo = 1; tentativo <= 3 && piano == null; tentativo++) {
+        try {
+            piano = await pagina.evaluate((c) => {
             // Il prezzo lo do ALLA CANDELA: currentPrice() restituisce rows[idx].close fuori
             // dal Live, quindi non serve toccare funzioni dell'app - si mette il dato dove
             // l'app lo legge, e la misura resta onesta.
@@ -71,7 +72,16 @@ for (const caso of casi.casi) {
             return tgPiano(c.seg, c.sym, c.pctForzata, opz);
         }, caso);
     } catch (e) {
-        piano = {problemi: ['misura non riuscita: ' + String(e).slice(0, 140)]};
+        // La pagina a volte si ricarica da sola durante il primo caso: non e' un rifiuto del
+        // segnale, e segnarlo come tale vorrebbe dire un confronto rosso per un incidente di
+        // misura. Si riprova con una pagina fresca; solo se riprova e ricasca si arrende.
+        piano = null;
+        await pagina.close();
+        pagina = await browser.newPage({viewport: {width: 1400, height: 900}});
+        pagina.on('pageerror', e2 => errori.push(caso.nome + ': ' + String(e2)));
+        await pagina.goto(URL_APP, {waitUntil: 'domcontentloaded'});
+        if (tentativo === 3) piano = {problemi: ['misura non riuscita dopo 3 tentativi: ' + String(e).slice(0, 140)]};
+    }
     }
     await pagina.close();
 
@@ -125,10 +135,46 @@ const matematica = await (async () => {
     return out;
 })();
 
+// La configurazione EFFETTIVA della pagina, per famiglia di strumento: una sola sorgente di
+// verita'. Senza questa, il confronto misurava la config scritta a mano in casi.json - che la
+// pagina non legge - e segnalava differenze che erano difetti del caso, non del ponte.
+const configEffettiva = await (async () => {
+    const b = await chromium.launch();
+    const pg = await b.newPage({viewport: {width: 1400, height: 900}});
+    await pg.goto(URL_APP, {waitUntil: 'domcontentloaded'});
+    const out = await pg.evaluate((simboli) => {
+        // Per SIMBOLO, non per famiglia: il caso deve prendere la config che la pagina
+        // userebbe per quel simbolo (tgAutoPerSimbolo fa esattamente questa strada).
+        return simboli.map(sym => {
+            let A = null;
+            try { A = tgAutoPerSimbolo(sym); } catch (e) { A = null; }
+            if (A && A.sale) { /* lascia stare: qui conta il universale della famiglia */ }
+            return {
+                sym,
+                rischioTotale: tgRischioTotale(),
+                rischioSenzaSl: tgRischioSenzaSlDi(A, null),
+                tpSenzaTpPct: tgTpSenzaTpPctDi(A, null, false),
+                tpSenzaNullaPct: (function () { try { return tgTpSenzaNullaPct(A); } catch (e) { return 50; } })(),
+                apriSenzaSl: tgApreSenzaSl(A),
+                apriSenzaTp: tgApreSenzaTp(A),
+                parti: 1,
+                saldo: realizedBalanceNow(),
+                passoLotto: 0.01,
+                minimoLotto: 0.01,
+                maxN: null,
+                famiglia: (function () { try { return tgFamDaSimbolo(sym); } catch (e) { return null; } })(),
+            };
+        });
+    }, MAT_SIMBOLI);
+    await b.close();
+    return out;
+})();
+
 const uscita = {
     generato: new Date().toISOString(),
     sorgente: 'app.html tgPiano()',
     config: casi.config,
+    configEffettiva,
     campi: CAMPI,
     casi: righe,
     matematica: {

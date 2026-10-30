@@ -50,7 +50,18 @@ def main() -> int:
         print("manca piani_pagina.json: lancia prima  node laboratorio/confronto/misura_pagina.mjs")
         return 2
     rif = json.loads(RIF.read_text(encoding="utf-8"))
-    cfg = rif.get("config", {})
+
+    # UNA SOLA configurazione, e viene dalla pagina. Quella scritta in casi.json e' un promemoria
+    # per l'uomo: se il confronto la usasse, misurerebbe la config di chi ha scritto il file
+    # invece di quella con cui l'app decide davvero - ed e' esattamente il difetto che ha fatto
+    # segnalare 3 casi "diversi" per una config che la pagina non legge nemmeno.
+    per_simbolo = {}
+    for c in rif.get("configEffettiva", []):
+        per_simbolo[c["sym"]] = c
+    cfg_predefinito = rif.get("configEffettiva", [{}])[0] if rif.get("configEffettiva") else {}
+
+    def cfg_di(ing):
+        return per_simbolo.get(ing["sym"], cfg_predefinito)
 
     differenze = 0
     totale = 0
@@ -62,7 +73,7 @@ def main() -> int:
         p_pagina = caso["pagina"]
 
         p_ponte = campi_confronto(decida(
-            ing["seg"], ing["sym"], ing["prezzo"], cfg,
+            ing["seg"], ing["sym"], ing["prezzo"], cfg_di(ing),
             pct_forzata=ing.get("pctForzata"), prezzo_scelto=ing.get("prezzoScelto"),
         ))
 

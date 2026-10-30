@@ -25,13 +25,26 @@ from typing import Dict, List, Optional
 # ---- la tabella, COPIATA da app.html (riga 19526). Una sola sorgente di verita' in due linguaggi:
 # ---- se una delle due cambia, il confronto deve diventare rosso e.dirvi quale delle due ha ragione.
 INSTRUMENTS: Dict[str, dict] = {
-    "EURUSD": {"label": "EUR/USD", "decimals": 5, "pipDigit": 4, "contractSize": 100000, "plMode": "baseEqualsAccount"},
-    "GBPUSD": {"label": "GBP/USD", "decimals": 5, "pipDigit": 4, "contractSize": 100000, "plMode": "approx"},
-    "USDJPY": {"label": "USD/JPY", "decimals": 3, "pipDigit": 2, "contractSize": 100000, "plMode": "approx"},
-    "XAUUSD": {"label": "XAU/USD (Oro)", "decimals": 2, "pipDigit": 1, "contractSize": 100, "plMode": "approx"},
-    "XAGUSD": {"label": "XAG/USD (Argento)", "decimals": 3, "pipDigit": 2, "contractSize": 5000, "plMode": "approx"},
-    "custom": {"label": "Personalizzato", "decimals": None, "pipDigit": None, "contractSize": 100000, "plMode": "approx"},
+    "EURUSD": {"label": "EUR/USD", "decimals": 5, "pipDigit": 4, "contractSize": 100000, "plMode": "baseEqualsAccount", "typicalSpreadPips": 0.6},
+    "GBPUSD": {"label": "GBP/USD", "decimals": 5, "pipDigit": 4, "contractSize": 100000, "plMode": "approx", "typicalSpreadPips": 1.1},
+    "USDJPY": {"label": "USD/JPY", "decimals": 3, "pipDigit": 2, "contractSize": 100000, "plMode": "approx", "typicalSpreadPips": 0.9},
+    "XAUUSD": {"label": "XAU/USD (Oro)", "decimals": 2, "pipDigit": 1, "contractSize": 100, "plMode": "approx", "typicalSpreadPips": 2.2},
+    "XAGUSD": {"label": "XAG/USD (Argento)", "decimals": 3, "pipDigit": 2, "contractSize": 5000, "plMode": "approx", "typicalSpreadPips": 3.0},
+    "custom": {"label": "Personalizzato", "decimals": None, "pipDigit": None, "contractSize": 100000, "plMode": "approx", "typicalSpreadPips": 1.0},
 }
+
+
+def typical_spread_pips(asset_key: str, meta_auto: Optional[dict] = None) -> float:
+    """typicalSpreadPipsForAsset (riga 19925), con lo stesso ricaduta su INSTRUMENTS.EURUSD."""
+    if asset_key in INSTRUMENTS:
+        i = INSTRUMENTS[asset_key]
+        return float(i.get("typicalSpreadPips", 1.0))
+    auto = dict(META_AUTO.get(asset_key, {}))
+    if meta_auto:
+        auto.update({k: v for k, v in meta_auto.items() if v is not None})
+    if auto.get("typicalSpreadPips") is not None:
+        return float(auto["typicalSpreadPips"])
+    return float(INSTRUMENTS["EURUSD"].get("typicalSpreadPips", 1.0))
 
 # I simboli fuori tabella, coi metadati ricavati dal broker (assetAutoMeta lato pagina). Qui la
 # stessa informazione, nella forma che il ponte ha dentro: symbol_info di MT5.
@@ -52,6 +65,7 @@ class Strumento:
     plMode: str
     leverage: float
     fonte: str  # da dove viene: 'tabella', 'broker', 'ricaduta'
+    spread_pips: float = 1.0
 
     @property
     def base_equals_account(self) -> bool:
@@ -93,7 +107,8 @@ def strumento(asset_key: str, meta_auto: Optional[dict] = None,
         i = INSTRUMENTS[k]
         return Strumento(i.get("decimals"), i.get("pipDigit"),
                          float(i.get("contractSize") or 100000),
-                         str(i.get("plMode") or "approx"), float(leva), "tabella")
+                         str(i.get("plMode") or "approx"), float(leva), "tabella",
+                         float(i.get("typicalSpreadPips", 1.0)))
 
     auto = dict(META_AUTO.get(k, {}))
     if meta_auto:
@@ -104,12 +119,14 @@ def strumento(asset_key: str, meta_auto: Optional[dict] = None,
         if not (isinstance(cs, (int, float)) and cs > 0):
             cs = 1 if _cripto(k) else 100000
         return Strumento(auto.get("decimals"), auto.get("pipDigit"), float(cs), "approx",
-                         float(auto.get("leverage") or leva), "broker")
+                         float(auto.get("leverage") or leva), "broker",
+                         float(auto.get("typicalSpreadPips") or typical_spread_pips(k, None)))
 
     i = INSTRUMENTS["EURUSD"]
     return Strumento(i.get("decimals"), i.get("pipDigit"),
                      float(i.get("contractSize") or 100000),
-                     str(i.get("plMode") or "approx"), float(leva), "ricaduta")
+                     str(i.get("plMode") or "approx"), float(leva), "ricaduta",
+                     float(i.get("typicalSpreadPips", 1.0)))
 
 
 
