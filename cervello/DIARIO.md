@@ -3842,3 +3842,16 @@ caso piu' semplice possibile, in una modalita' dove so che funziona.
 **La cura.** `currentPrice()` ora prende il tick live quando c'e' (MT5 o Capital.com), ripiegando sulla chiusura dell'ultima candela solo quando non si ha niente di piu' recente. Tre prove: senza tick live si ripiega sulla candela; col tick live vince anche se la candela e' piu' su; fuori dal Live si usa la candela (non si inventa un prezzo che non c'e'); un tick non finito o a zero non sovrascrive mai la candela.
 
 **Cosa NON ho misurato, e va detto:** il disegno a occhio. Non ho guardato il grafico in esecuzione: la prova misura il prezzo che il disegno usa, non il disegno. Se un indicatore continuasse a muoversi a scatti di candela, la prossima misura e' su quel disegno specifico - il prezzo ora e' quello giusto, e se l'indicatore non si muove e' perche' si ricalcola su `rows`, che si aggiorna ad ogni tick tramite `applyLivePriceToChart`.
+## 30 ottobre 2026 (mattina) — UI: resa totale invisibile, selezione non persistente, guadagno effettivo
+
+**Segnalato dal proprietario** (primo punto della lista "Vai in ordine"): "resa totale visibilita', selezione sale, guadagno effettivo".
+
+**Misurato con un banco Playwright** (rimosso dopo l'uso), tre difetti distinti:
+
+1. **Il riquadro coperto.** `#fblResaTotaleSaleOverlay` ha z-index 80, la dashboard delle statistiche 9000. Aprendolo dal pulsante della dashboard, `elementFromPoint` restituisce la dashboard: il riquadro si apre (`display:flex`) ma resta **coperto**. Il collaudo non lo vedeva perche' cliccava il pulsante del pannello Sale, mai quello della dashboard. Cura: `#fblResaTotaleSaleOverlay{z-index:9001}`.
+
+2. **Selezione delle sale non persistente.** `resaTotaleSaleScelte` e' un `Set` in memoria, mai salvato. Persiste solo finche' la pagina e' aperta, si perde al ricaricamento. Cura: salvataggio in `localStorage` (chiave `fblResaTotaleSaleScelte`) ad ogni toggle e ripristino in `fblResaTotaleSaleApri`; esposto su `window` per la testabilita'.
+
+3. **"Guadagno effettivo" = 0.** I cinque pannelli con etichetta "Guadagno effettivo" (righe 3576-3580) vengono mostrati solo in modalita' Prop Firm. Fuori da quella modalita' restano tutti `display:none` e il valore resta "0.00" (mai aggiornato). Non esiste un pannello "Guadagno effettivo" del conto in modalita' normale. Cura: rinominati per ruolo (Gain effettivo, Profitto effettivo, Profitto netto, Profitto effettivo (EUR), Guadagno effettivo (prop firm)) per non confondere, e chiarito nel nome che l'ultimo e' solo prop firm.
+
+Cura applicata: `app.html` + `sw.js` (CACHE_NAME v2.0.51).
