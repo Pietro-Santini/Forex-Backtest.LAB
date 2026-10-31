@@ -1186,6 +1186,16 @@ window.fblAvviaSoloBacktest=function(){
     }catch(e){ console.warn('Salvataggio keepalive su Firestore non riuscito:', e); return false; }
   }
   let resolveCloudReady;
+  // Firma semplice sul testo: distingue due fotografie, non resiste a un attacco. Stessa scelta
+  // gia' fatta in syncFullStatusToFirebase() ─── qui deve dire "questo footprint e' gia' su
+  // Firestore?", e una somma rotolante sui caratteri costa un passaggio invece di un calcolo
+  // crittografico.
+  function firmaSemplice(t){
+    if(!t) return null;
+    let h = 5381;
+    for(let i=0; i<t.length; i++) h = ((h * 33) ^ t.charCodeAt(i)) >>> 0;
+    return t.length + ':' + h;
+  }
   window.fxbtCloud = {
     uid: null,
     // Si risolve (una sola volta, con l'uid o null) al primo controllo di login: lo script
@@ -1234,6 +1244,44 @@ window.fblAvviaSoloBacktest=function(){
         cb(snap.exists() ? (snap.data().state ?? null) : null);
       }, e=>console.warn("Ascolto sessione Firestore interrotto:", e));
     },
+    // ===== FOOTPRINT NEL DOCUMENTO SUO ─── cura bolletta Firebase, 31 ottobre 2026 =====
+    //
+    // MISURATO: footprintCollectCloudAggregate() arriva fino a FOOTPRINT_CLOUD_MAX_BYTES
+    // (400 KB) e finiva DENTRO il documento session, quindi veniva rimandato per intero ad
+    // ogni salvataggio ─── pagehide, logout, operazione chiusa. Con laconsole che segnava
+    // "larghezza di banda oltre 10 GB" in 30 giorni, erano le scritture piu' pesanti che
+    // restavano dopo la cura incrementale delle operazioni.
+    //
+    // ORA: sta in users/{uid}/data/footprint, documento a parte, e si scrive SOLO quando
+    // cambia davvero (stessa regola "identico = non si scrive" gia' usata per il session).
+    // RETROCOMPATIBILITA': chi ha ancora il campo dentro session continua a leggerlo da li'
+    // (vedi initSession), quindi il passaggio non perde niente.
+    async footprintSalva(celle){
+      if(!this.uid) return false;
+      try{
+        const testo = JSON.stringify(celle || {});
+        if(!testo || testo === '{}') return false;
+        const firma = firmaSemplice(testo);
+        if(firma === this._footprintFirma) return false;   // identico: non si paga due volte
+        await setDoc(doc(db,"users",this.uid,"data","footprint"),
+          { celle, bytes: testo.length, updatedAt: serverTimestamp() });
+        this._footprintFirma = firma;
+        return true;
+      }catch(e){ console.warn("Salvataggio footprint su Firestore fallito:", e); return false; }
+    },
+    async footprintLeggi(){
+      if(!this.uid) return null;
+      try{
+        const snap = await getDoc(doc(db,"users",this.uid,"data","footprint"));
+        if(!snap.exists()) return null;
+        const celle = (snap.data() && snap.data().celle) || null;
+        // Firma ricalcolata subito: cosi' un salvataggio subito dopo la lettura non riscrive
+        // l'identico (la firma e' confrontata con quella dell'ultima scrittura riuscita).
+        if(celle){ try{ this._footprintFirma = firmaSemplice(JSON.stringify(celle)); }catch(e){} }
+        return celle;
+      }catch(e){ console.warn("Lettura footprint da Firestore fallita:", e); return null; }
+    },
+    _footprintFirma: null,
     // DISEGNI/INDICATORI CONDIVISI FRA DISPOSITIVI (vedi graficoCloudAvvia nello script principale):
     // documento a parte, users/{uid}/data/grafico, una voce per sessione+asset. Scrittura "merge":
     // si mandano solo le voci cambiate, le altre restano come sono.
@@ -8260,6 +8308,13 @@ const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più event
 // misura delle prestazioni, cosi' il consumo si guarda invece di immaginarlo.
 let fblCloudUltimaFirma=null, fblCloudUltimoPeso=0, fblCloudScritture=0, fblCloudSaltate=0;
 let fblCloudTradesInviati=0; // quante operazioni sono state mandate col salvataggio incrementale
+// FOOTPRINT NEL DOCUMENTO SUO (cura bolletta, 31 ottobre 2026): il footprint esce dal salvataggio
+// del session e sta in users/{uid}/data/footprint. Queste tre variabili sono il suo freno: si
+// scrive solo se cambiato E non piu' di una volta ogni FOOTPRINT_CLOUD_SYNC_MS. Un minuto perche'
+// il footprint e' una rete di sicurezza per gli asset senza log tick locale, non un dato che
+// cambia ad ogni tick: un minuto di ritardo non si vede, 400 KB ad ogni salvataggio si pagano.
+let fblFootprintUltimoInvio=0, fblFootprintUltimoInvioServer=0, fblFootprintInviati=0;
+const FOOTPRINT_CLOUD_SYNC_MS=60*1000;
 // CORREZIONE ESPLICITA DELL'UTENTE ("problemi di caricamento delle vecchie posizioni nel trade
 // journal"): il bundle mandato a Firestore includeva SEMPRE l'intero array `trades` per intero
 // (mai tagliato: in locale "resta lo storico completo di sempre", giustamente) dentro un
@@ -8367,6 +8422,12 @@ async function syncFullStatusToFirebase(reason,force){
    }
    const bundleSenzaTrades = {...bundle};
    delete bundleSenzaTrades.trades;
+    // CURA BOLLETTA (31 ottobre 2026): il footprint esce dal documento session. Fino a 400 KB
+   // (FOOTPRINT_CLOUD_MAX_BYTES) rimandati ad ogni salvataggio per un dato che cambia piano:
+   // ora sta in users/{uid}/data/footprint e si scrive solo se cambiato, piu' sotto. Resta nel
+   // percorso di FALLBACK (fotografia intera, quando il documento separato delle operazioni non
+   // si sa leggere): li' va tenuto tutto, per non perdere niente.
+   delete bundleSenzaTrades.footprintCells;
    const trimmedBundle = trimTradesForCloudBudget(bundleSenzaTrades, FIRESTORE_DOC_MAX_BYTES);
    // NON SI RISCRIVE QUELLO CHE NON E' CAMBIATO.
    //
@@ -8430,6 +8491,24 @@ async function syncFullStatusToFirebase(reason,force){
     console.log('[Cloud] ' + tradesNuovi.length + ' operazioni nuove, '
       + Math.round(JSON.stringify(tradesNuovi).length / 1024) + ' KB invece della fotografia intera');
    }
+   // FOOTPRINT NEL DOCUMENTO SUO (cura bolletta): fuori dal session, scritto solo se cambiato e
+   // non piu' di una volta al minuto. Se il salvataggio diretto non riesce non e' un guasto:
+   // il footprint resta com'era sul cloud e la copia locale continua a essere la fonte verita'.
+   try{
+    const celleFootprint = bundle.footprintCells;
+    const adesso = Date.now();
+    const haCelle = !!(celleFootprint && Object.keys(celleFootprint).length);
+    if(haCelle && adesso - fblFootprintUltimoInvio > FOOTPRINT_CLOUD_SYNC_MS){
+     const okF = await window.fxbtCloud.footprintSalva(celleFootprint);
+     if(okF){ fblFootprintUltimoInvio = adesso; fblFootprintInviati = (fblFootprintInviati||0)+1; }
+    }
+    // Stessa strada degli altri documenti: doppio scritto sul server Oracle, se configurato.
+    if(haCelle && typeof fblServer==='function' && fblServer()
+       && window.fxbtCloud && window.fxbtCloud.uid
+       && adesso - fblFootprintUltimoInvioServer > FOOTPRINT_CLOUD_SYNC_MS){
+     try{ await window.fxbtCloud.serverDatiScrivi('footprint', celleFootprint); fblFootprintUltimoInvioServer = adesso; }catch(e){}
+    }
+   }catch(e){ console.warn('[Cloud] footprint nel documento suo non salvato:', e); }
    fblCloudScritture++;
  }
  catch(e){ console.warn('Sincronizzazione finale su Firebase non riuscita ('+reason+'):', e); }
@@ -47683,6 +47762,10 @@ function fblMisuraPrestazioni(secondi){
     cloudScritture:(typeof fblCloudScritture!=='undefined')?fblCloudScritture:null,
     cloudSaltate:(typeof fblCloudSaltate!=='undefined')?fblCloudSaltate:null,
     cloudTradesInviati:(typeof fblCloudTradesInviati!=='undefined')?fblCloudTradesInviati:null,
+     // Quante volte il footprint e' stato scritto nel documento SUO (cura bolletta del 31
+     // ottobre 2026). Se questo numero resta fermo mentre cloudScritture cresce, il risparmio
+     // sta funzionando: fino a 400 KB che non passano piu' da ogni salvataggio.
+     footprintInviati:(typeof fblFootprintInviati!=='undefined')?fblFootprintInviati:null,
     cloudUltimoPeso_KB:(typeof fblCloudUltimoPeso!=='undefined'&&fblCloudUltimoPeso)?Math.round(fblCloudUltimoPeso/1024):null
    };
    // I pezzi del disegno, dal piu' caro al meno caro e solo quelli che sono costati qualcosa:
@@ -49535,7 +49618,28 @@ var __initLocalStateSnapshot=null;
            if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
              footprintCloudCellsByAsset[assetKey]=cloudState.footprintCells[assetKey];
          }
-       }
+}
+
+      // CURA BOLLETTA (31 ottobre 2026): il footprint non sta piu' dentro il session, sta nel
+      // documento suo. Se il session non lo porta si legge da la' - e se non c'e' nemmeno li'
+      // non e' un guasto: vuol dire che questo account non ha footprint da ripristinare.
+      // RETROCOMPATIBILITA': gli account che ce l'hanno ancora dentro session lo prendono da
+      // sopra, da questo blocco, e non arrivano nemmeno qui.
+      if(!(cloudState && cloudState.footprintCells)){
+       try{
+        let celleSep=null;
+        const suServer = (typeof fblServer==='function' && fblServer()
+                          && window.fxbtCloud && window.fxbtCloud.uid);
+        if(suServer){ celleSep = await window.fxbtCloud.serverDatiLeggi('footprint'); }
+        else if(cloud && typeof cloud.footprintLeggi==='function'){ celleSep = await cloud.footprintLeggi(); }
+        if(celleSep && typeof celleSep==='object'){
+         for(const assetKey in celleSep){
+          if(!footprintTickLogByAsset[assetKey]||!footprintTickLogByAsset[assetKey].length)
+           footprintCloudCellsByAsset[assetKey]=celleSep[assetKey];
+         }
+        }
+       }catch(e){ console.warn('Lettura footprint dal documento separato fallita:', e); }
+      }
      }
    }catch(e){
      _comeRipristinato='lettura dal cloud fallita: '+(e&&e.message||e);

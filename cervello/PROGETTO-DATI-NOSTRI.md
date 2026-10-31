@@ -296,3 +296,59 @@ serverTradesAggiungi, serverTradesLeggi, serverDatiAscolta (WebSocket). Il caric
 Il syncFullStatusToFirebase fa il doppio scritto dopo il save su Firebase. Collaudo locale: 895 test,
 0 fallimenti. Il server Oracle (rotte /dati, SQLite, verifica token Firebase) era gia' pronto dal
 passo 2.
+
+## Stato passo 4, prima cura: il footprint nel documento suo — FATTO il 31 ottobre 2026 (2.0.56)
+
+DOMANDA DEL PROPRIETARIO: «non possiamo risparmiare questi dati? far sì che non incrementi e che
+non sovrascriva sempre la copia esistente e quindi risparmiare tempo, dati e soldi.»
+
+RISPOSTA MISURATA. La bolletta di ottobre era **8,49 €** (Firestore 6,80 + Cloud Functions 1,40 +
+altro 0,29), col grafico in impennata dal 20 ottobre. Due cause distinte, e una già curata:
+
+1. **Il session rimandava tutto (CURATA il 26-27 ottobre, attiva sul PC solo dal 30 con la 2.0.53).**
+   Il modello di Firestore è «un documento, tutto o niente»: per salvare un'operazione chiusa si
+   riscriveva l'intero storico — 305 KB, di cui 194 KB di operazioni. La cura (salvataggio
+   incrementale, `arrayUnion` su `users/{uid}/data/trades`) era nel repo ma **non nella build
+   installata**: `installer_build/build/app.html` era fermo al 26 ottobre, senza `arrayUnion` né
+   `trades/aggiungi`. Verificato sul PC: dalla 2.0.53 le cure ci sono.
+   **Lezione, ed è costata un mese di bolletta: la cura nel repo non cura niente, cura ciò che sta
+   nella versione installata.** `build_exe.bat` copia `app.html` dalla root alla build, quindi la
+   build si rigenera da sé — ma ciò che girava sul PC era la vecchia.
+
+2. **Il footprint rimaneva dentro ogni salvataggio (CURATA oggi).**
+   `footprintCollectCloudAggregate()` arriva fino a `FOOTPRINT_CLOUD_MAX_BYTES` (400 KB) ed era
+   aggiunto a `bundle.footprintCells`, quindi finiva **dentro** il documento session: fino a 400 KB
+   rimandati a ogni salvataggio (pagehide, logout, operazione chiusa). È il secondo pezzo grosso
+   dopo lo storico, e coi numeri della console («larghezza di banda oltre 10 GB» in 30 giorni) è
+   la voce che resta.
+
+**Cosa fa la cura.** Il footprint esce dal documento session e sta in
+`users/{uid}/data/footprint`, scritto:
+- solo se **cambiato** (firma sul testo, stesso meccanismo «identico = non si scrive» del session);
+- al massimo **una volta al minuto** (`FOOTPRINT_CLOUD_SYNC_MS`): è una rete di sicurezza per gli
+  asset senza log tick locale, non un dato che cambia a ogni tick — un minuto di ritardo non si
+  vede, 400 KB a salvataggio si pagano;
+- anche sul server Oracle (doppio scritto, `serverDatiScrivi('footprint', …)`).
+
+Retrocompatibilità: gli account che hanno ancora `footprintCells` dentro il session lo leggono da
+lì (initSession); se nel session non c'è, si legge il documento separato. Nessuna perdita nel
+passaggio. Resta nel percorso di **fallback completo** (fotografia intera quando il documento delle
+operazioni non si sa leggere): lì va tenuto tutto.
+
+Misura nuova in «Misura le prestazioni»: `footprintInviati` — quante volte il footprint è stato
+scritto nel documento suo. Se resta fermo mentre `cloudScritture` cresce, il risparmio funziona.
+
+Test: `laboratorio/app/footprint_documento_suo.test.mjs` (3 prove, sui byte che partono davvero:
+il session non porta più il footprint, il footprint parte da solo nel documento suo, tre
+salvataggi ravvicinati lo scrivono una volta sola, senza celle non si chiama niente).
+
+**Restano aperte, in ordine di costo:**
+- i **4 ascolti in tempo reale** (`onSnapshot` su session/grafico/collegamento/preferenze): ogni
+  modifica è una lettura per ogni dispositivo in ascolto. Il sostituto è già scritto
+  (`serverDatiAscolta`, riga ~1379) e **non viene mai chiamato**: è la prossima cura.
+- le **Cloud Functions 1,40 €**: non sono solo Stripe. Ci sono anche le funzioni Notion
+  (`notionSyncTrades`, `notionStatus`, `notionReleaseMt5Account`, `createNotionCheckout`,
+  `notionAuthUrl`, `notionDisconnect`), e `notionSyncTick` gira su **timer ogni 15 secondi**
+  (riga ~28364). Con un utente solo non tornano: da misurare quante invocazioni fa davvero.
+- **1 GB archiviati** sulla console con un utente solo non tornano (4 documenti per utente ≈ 1 MB):
+  numero da chiedere al proprietario (Utilizzo → Firestore → Spazio di archiviazione).
