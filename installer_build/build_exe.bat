@@ -218,9 +218,9 @@ if errorlevel 1 (
   echo.
   echo ERRORE durante la creazione di ForexBacktestLABDesktop.exe: guarda il messaggio sopra.
   echo Questo e' l'eseguibile dell'applicazione con la finestra: SENZA, chi installa non ha
-  echo nulla da aprire (il pacchetto conterrebbe solo i servizi invisibili). Non proseguo.
-  echo Se l'errore parla di "webview", installalo: pip install pywebview ^(e' anche nel
-  echo file build\requirements.txt^).
+  echo nulla da aprire, il pacchetto conterrebbe solo i servizi invisibili. Non proseguo.
+  echo Se l'errore parla di "webview", installalo: pip install pywebview, e' anche nel
+  echo file build\requirements.txt.
   pause
   exit /b 1
 )

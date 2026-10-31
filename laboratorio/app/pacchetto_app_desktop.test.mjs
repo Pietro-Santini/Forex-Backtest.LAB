@@ -152,7 +152,7 @@ const PROVA = [
   'print(json.dumps(fatti))',
 ].join('\n');
 
-test('la finestra dell\'applicazione si comporte da applicazione (eseguita davvero)', () => {
+test('la finestra dell\'applicazione si comporta da applicazione (eseguita davvero)', () => {
   const dove = path.join(os.tmpdir(), 'fbl-desktop-prova-' + process.pid + '.py');
   fs.writeFileSync(dove, PROVA, 'utf8');
   let json = '';
@@ -296,3 +296,76 @@ test('la finestra e\' codice Python valido', () => {
   }
   assert.equal(esito, 0, 'desktop_shell.py non e\' Python valido: l\'applicazione non partirebbe');
 });
+
+// I BLOCCHI "if errorlevel 1" DEL .bat DEVONO ESSERE PARSING VALIDO PER cmd.exe.
+//
+// Difetto costato un flusso rosso (31 ottobre 2026): dentro un blocco if (...) avevo scritto
+// "echo nulla da aprire (il pacchetto ...)". In cmd, una ) non escapata DENTRO un blocco if
+// lo chiude prima della fine: ". was unexpected at this time.", processo morto con 255 - e il
+// flusso moriva DOPO aver costruito ForexBacktestLABDesktop.exe benissimo, proprio per colpa
+// del messaggio d'errore del blocco. Nota: il parsing avviene comunque, anche quando la
+// condizione e' falsa (errorlevel 0): e' per questo che il flusso cadeva anche se PyInstaller
+// era andato bene.
+//
+// QUESTO TEST NON CERCA UNA STRINGA: prende ogni blocco if (...) vero di build_exe.bat, lo mette
+// in un .bat di prova e lo fa ESEGUIRE da cmd.exe. Se una parentesi chiude il blocco prima,
+// cmd esce con un codice diverso da 0 e il test lo dice (gira solo su Windows: su Linux cmd.exe
+// non esiste, come build_exe_copia.test.mjs).
+const WINDOWS = process.platform === 'win32';
+const SALTO = 'cmd.exe non esiste su ' + process.platform +
+  ': il parsing del .bat si prova sul Windows del collaudo locale e sul runner di GitHub';
+
+function blocchiIf(testo) {
+  const fuori = [];
+  let dentro = false;
+  let corrente = [];
+  for (const riga of righeDi(testo)) {
+    if (!dentro && /^\s*if errorlevel 1 \(/.test(riga)) {
+      dentro = true;
+      corrente = [riga];
+      continue;
+    }
+    if (dentro) {
+      corrente.push(riga);
+      if (/^\)\s*$/.test(riga)) {
+        fuori.push(corrente.join('\r\n') + '\r\n');
+        dentro = false;
+        corrente = [];
+      }
+    }
+  }
+  return fuori;
+}
+
+test('i blocchi if di build_exe.bat cmd.exe li legge senza rompersi (eseguito davvero)',
+  {skip: WINDOWS ? false : SALTO}, () => {
+    const blocchi = blocchiIf(bat);
+    assert.ok(blocchi.length >= 3,
+      'build_exe.bat dovrebbe avere almeno tre blocchi "if errorlevel 1" (uno per exe). ' +
+      'Trovati: ' + blocchi.length);
+    const dove = path.join(os.tmpdir(), 'fbl-bat-prova-' + process.pid + '.bat');
+    try {
+      blocchi.forEach((blocco, n) => {
+        // Il blocco gira da solo: errorlevel e' 0, quindi il corpo NON si esegue (niente pause,
+        // niente exit) - viene pero' LETTO, ed e' li' che una parentesi di troppo rompe cmd.
+        fs.writeFileSync(dove, '@echo off\r\n' + blocco + 'echo FINE_OK\r\n', 'latin1');
+        let uscita = '';
+        try {
+          uscita = execFileSync('cmd.exe', ['/c', dove], {
+            stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000, encoding: 'latin1'
+          });
+        } catch (errore) {
+          throw new Error(
+            'il blocco if numero ' + (n + 1) + ' di build_exe.bat cmd.exe non lo legge: ' +
+            'una parentesi non escapata chiude il blocco prima della fine (il .bat morirebbe con ' +
+            '"X was unexpected at this time", come il flusso del 31 ottobre 2026). ' +
+            'Blocco:\n' + blocco);
+        }
+        if (!/FINE_OK/.test(String(uscita))) {
+          throw new Error('il blocco if numero ' + (n + 1) + ' non e\' arrivato in fondo');
+        }
+      });
+    } finally {
+      fs.rmSync(dove, {force: true});
+    }
+  });
