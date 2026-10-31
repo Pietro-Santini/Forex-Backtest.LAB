@@ -3949,3 +3949,40 @@ la decisione si sposta davvero.
 **Lezione che si aggiunge alle altre:** lo strumento di confronto é servito anche a dire di NO.
 Costruito per ottenere il permesso di spostare la decisione, ha finito per documentare che quel
 posto va bene dove sta. Misurare non significa sempre cambiare: a volte significa confermare.
+## 31 ottobre 2026 — La bolletta Firebase: misurata, capita, prima cura pubblicata
+
+**Il sintomo.** Progetto Firebase in Blaze: **8,49 €** a ottobre (Firestore 6,80, Cloud Functions
+1,40, altro 0,29), col grafico piatto fino al 17, salto, poi rampa ripida 20-26 → picco il 29. Un
+solo utente: lui.
+
+**La domanda del proprietario:** «non possiamo risparmiare questi dati? far sì che non incrementi e
+che non sovrascriva sempre la copia esistente e quindi risparmiare tempo, dati e soldi.»
+
+**I numeri veri, già scritti nel codice dalla sessione del 26 ottobre** (console, 30 giorni):
+letture 293K, scritture 107K, banda oltre 10 GB, byte archiviati oltre 1 GB.
+
+**Causa 1 — il modello di Firestore è «tutto o niente» (curata il 26-27, attiva solo dal 30).**
+Per salvare un'operazione chiusa si riscriveva l'intero documento session: 305 KB, di cui 194 KB di
+storico. La cura è il salvataggio incrementale (documento a parte, `arrayUnion`, 259 byte per
+operazione nuova). **Ma non girava sul PC:** `installer_build/build/app.html` era fermo al 26
+ottobre, senza `arrayUnion` né `trades/aggiungi`, mentre la root ce l'aveva. Verificato sul file
+installato: dalla 2.0.53 (30 ottobre) le cure ci sono.
+
+> **LA LEZIONE, ED È COSTATA UN MESE DI BOLLETTA: la cura nel repo non cura niente. Cura ciò che
+> sta nella versione installata.** `build_exe.bat` copia `app.html` dalla root alla build, quindi
+> la build si rigenera da sé: ma ciò che girava era la build precedente, e la rampa della bolletta
+> del 20-26 ottobre è esattamente il periodo senza cure.
+
+**Causa 2 — il footprint (curata oggi, v2.0.56).** `footprintCollectCloudAggregate()` arriva fino a
+400 KB e finiva dentro `bundle.footprintCells`, quindi **dentro il documento session**: fino a 400
+KB rimandati a ogni salvataggio (pagehide, logout, operazione chiusa). Ora sta in
+`users/{uid}/data/footprint`, scritto solo se cambiato e al massimo una volta al minuto. Misurato
+coi test: tre salvataggi ravvicinati → una sola scrittura del footprint; senza celle → zero
+scritture. Nuova misura `footprintInviati` in «Misura le prestazioni».
+
+**Cosa resta, in ordine di costo:**
+1. i 4 ascolti `onSnapshot` (ogni modifica = una lettura per ogni dispositivo in ascolto). Il
+   sostituto esiste già (`serverDatiAscolta`) e **non viene mai chiamato**;
+2. le Cloud Functions: non sono solo Stripe. Ci sono le funzioni Notion
+   (`notionSyncTrades` e compagnia) e `notionSyncTick` gira su **timer ogni 15 secondi**;
+3. il mistero dei **1 GB archiviati**: con un utente solo non tornano (4 documenti ≈ 1 MB).
