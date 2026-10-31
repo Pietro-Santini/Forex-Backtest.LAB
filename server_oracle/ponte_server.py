@@ -389,9 +389,20 @@ def _avvisa(uid, nome, versione):
         pass
 
 
+# I documenti che il server tiene per ogni utente. Una lista SOLA, invece dello stesso elenco
+# ripetuto in tre rotte: due elenchi che un giorno divergono sono due comportamenti diversi, e
+# qui vuol dire un documento che si scrive da una parte e non si legge dall'altra.
+#
+# "footprint" aggiunto il 31 ottobre 2026. Sta in users/{uid}/data/footprint da quando è uscito
+# dal documento session (cura bolletta Firebase), e senza averlo in questo elenco il server lo
+# RIFUTAVA con 400: la scrittura finiva nel catch del client, in silenzio, e il risparmio restava
+# a metà — la met che si paga.
+NOMI_DOCUMENTI = ("session", "grafico", "collegamento", "preferenze", "footprint")
+
+
 @app.get("/dati/{nome}")
 def dati_leggi(nome: str, uid: str = Depends(_uid_dep)):
-    if nome not in ("session", "grafico", "collegamento", "preferenze"):
+    if nome not in NOMI_DOCUMENTI:
         raise HTTPException(status_code=400, detail="Nome documento non previsto.")
     conn = _db_conn()
     try:
@@ -408,7 +419,7 @@ def dati_leggi(nome: str, uid: str = Depends(_uid_dep)):
 
 @app.put("/dati/{nome}")
 def dati_scrivi(nome: str, corpo: dict, uid: str = Depends(_uid_dep)):
-    if nome not in ("session", "grafico", "collegamento", "preferenze"):
+    if nome not in NOMI_DOCUMENTI:
         raise HTTPException(status_code=400, detail="Nome documento non previsto.")
     import json as _j
     import time as _t
@@ -433,7 +444,7 @@ def dati_scrivi(nome: str, corpo: dict, uid: str = Depends(_uid_dep)):
 @app.patch("/dati/{nome}")
 def dati_fondi(nome: str, corpo: dict, uid: str = Depends(_uid_dep)):
     # Fusione: i campi mandati sovrascrivono, gli altri restano. Equivale a setDoc(...,{merge:true}).
-    if nome not in ("session", "grafico", "collegamento", "preferenze"):
+    if nome not in NOMI_DOCUMENTI:
         raise HTTPException(status_code=400, detail="Nome documento non previsto.")
     import json as _j
     import time as _t

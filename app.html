@@ -1289,6 +1289,12 @@ window.fblAvviaSoloBacktest=function(){
       if(!this.uid) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","grafico"), { v:1, voci, at: serverTimestamp() }, { merge:true });
+        // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026): stessa ragione degli altri due
+        // documenti - il server Oracle deve avere il disegno, perche' e' da li' che gli altri
+        // dispositivi lo leggeranno.
+        if(this._serverConfigurato()){
+          try{ await this.serverDatiFondi('grafico', { v:1, voci, at: Date.now() }); }catch(e){}
+        }
         return true;
       }catch(e){ console.warn("Salvataggio disegni condivisi fallito:", e); return false; }
     },
@@ -1299,9 +1305,15 @@ window.fblAvviaSoloBacktest=function(){
     },
     graficoAscolta(cb, errCb){
       if(!this.uid) return ()=>{};
-      return onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
-        cb(snap.exists() ? (snap.data().voci || {}) : {}, !!(snap.metadata && snap.metadata.hasPendingWrites));
-      }, e=>{ console.warn("Ascolto disegni condivisi interrotto:", e); if(errCb) errCb(e); });
+      // CURA BOLLETTA (31 ottobre 2026): col server configurato l'ascolto passa dal WebSocket,
+      // che manda solo l'avviso di versione; il documento si legge solo se la versione cambia.
+      // Senza server si resta su Firestore, come prima.
+      return this._ascoltaDoc('grafico',
+        (doc)=>{ cb(((doc && doc.voci) || {}), false); },
+        null,
+        ()=> onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
+              cb(snap.exists() ? (snap.data().voci || {}) : {}, !!(snap.metadata && snap.metadata.hasPendingWrites));
+            }, e=>{ console.warn("Ascolto disegni condivisi interrotto:", e); if(errCb) errCb(e); }));
     },
     // COLLEGAMENTO DEL SERVER TRA DISPOSITIVI STESSO ACCOUNT (18/10/2026): users/{uid}/data/
     // collegamento. Il PC ci scrive host e chiave quando salva il server (fblCollegamentoPubblica,
@@ -1312,14 +1324,24 @@ window.fblAvviaSoloBacktest=function(){
       if(!this.uid) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","collegamento"), payload, {merge:true});
+        // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026). Senza questo, commutare la LETTURA al
+        // server Oracle vorrebbe dire leggere un posto dove nessuno scrive: gli altri dispositivi
+        // non vedrebbero piu' il collegamento. Se il server non risponde non e' un fallimento -
+        // Firebase ha gia' salvato, che resta la rete di sicurezza.
+        if(this._serverConfigurato()){
+          try{ await this.serverDatiFondi('collegamento', payload); }catch(e){}
+        }
         return true;
       }catch(e){ console.warn("Pubblicazione del collegamento server fallita:", e); return false; }
     },
     collegamentoAscolta(cb){
       if(!this.uid) return ()=>{};
-      return onSnapshot(doc(db,"users",this.uid,"data","collegamento"), snap=>{
-        cb(snap.exists() ? snap.data() : null);
-      }, e=>console.warn("Ascolto del collegamento server interrotto:", e));
+      // CURA BOLLETTA (31 ottobre 2026): col server configurato l'ascolto passa dal WebSocket,
+      // che manda solo l'avviso di versione. Senza server si resta su Firestore, come prima.
+      return this._ascoltaDoc('collegamento', cb, null,
+        ()=> onSnapshot(doc(db,"users",this.uid,"data","collegamento"), snap=>{
+              cb(snap.exists() ? snap.data() : null);
+            }, e=>console.warn("Ascolto del collegamento server interrotto:", e)));
     },
     // PREFERENZE TRA DISPOSITIVI STESSO ACCOUNT (sync cloud): users/{uid}/data/preferenze.
     // Le preferenze scelte su un dispositivo (watchlist, ricerche salvate, scala UI) vanno
@@ -1329,14 +1351,22 @@ window.fblAvviaSoloBacktest=function(){
       if(!this.uid) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","preferenze"), payload, {merge:true});
+        // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026): stessa ragione del collegamento -
+        // il documento va anche sul server, dove la lettura commutata lo va a prendere.
+        if(this._serverConfigurato()){
+          try{ await this.serverDatiFondi('preferenze', payload); }catch(e){}
+        }
         return true;
       }catch(e){ console.warn("Pubblicazione delle preferenze fallita:", e); return false; }
     },
     preferenzeAscolta(cb){
       if(!this.uid) return ()=>{};
-      return onSnapshot(doc(db,"users",this.uid,"data","preferenze"), snap=>{
-        cb(snap.exists() ? snap.data() : null);
-      }, e=>console.warn("Ascolto delle preferenze interrotto:", e));
+      // CURA BOLLETTA (31 ottobre 2026): col server configurato l'ascolto passa dal WebSocket,
+      // che manda solo l'avviso di versione. Senza server si resta su Firestore, come prima.
+      return this._ascoltaDoc('preferenze', cb, null,
+        ()=> onSnapshot(doc(db,"users",this.uid,"data","preferenze"), snap=>{
+              cb(snap.exists() ? snap.data() : null);
+            }, e=>console.warn("Ascolto delle preferenze interrotto:", e)));
     },
     // === SALVATAGGIO INCREMENTALE DELLE OPERAZIONI (26 ottobre 2026) ===
     // Il documento `session` non porta piu' l'intero storico: le operazioni
@@ -1377,6 +1407,40 @@ window.fblAvviaSoloBacktest=function(){
     // finche' non e' sicura, poi spegnera' Firestore. La funzione fblServerUrl() costruisce
     // l'URL del server (https://nome.ts.net:8000); cachedIdToken e' il token Firebase tenuto
     // sempre pronto in memoria.
+        // ===== ASCOLTO UNICO: server Oracle se configurato, Firestore altrimenti =====
+    // CURA BOLLETTA del 31 ottobre 2026: gli ascolti Firestore (onSnapshot) sono la voce piu'
+    // cara delle LETTURE - ogni modifica di un documento e' una lettura PER OGNI dispositivo in
+    // ascolto, e i numeri della console (293K letture in 30 giorni) vengono anche da qui.
+    //
+    // PERCHE' NON SPEGNERLI E BASTA: sincronizzano davvero qualcosa (collegamento del server fra
+    // dispositivi, preferenze, disegni condivisi). Spegnerli senza sostituto vorrebbe dire
+    // perdere la sincronizzazione - un peggioramento che nessuno ha chiesto.
+    //
+    // PERCHE' IL WEBSOCKET DEL SERVER: manda solo {nome, versione}, mai il contenuto. Chi ha
+    // gia' quella versione non scarica niente: e' lo stesso servizio, senza pagare il documento.
+    //
+    // PERCHE' UN COMMUTATORE e non una sostituzione secca: se il server non e' configurato si
+    // resta su Firestore, esattamente come prima. La sincronizzazione fra dispositivi non deve
+    // MAI dipendere da una configurazione che non c'e'. E se il canale server non si apre, si
+    // ricade su Firestore: meglio una lettura in piu' che un dispositivo muto.
+    _serverConfigurato(){
+      try{ return (typeof fblServer==='function' && !!fblServer()); }catch(e){ return false; }
+    },
+    _ascoltaDoc(nome, cb, trasforma, ricadutaFirestore){
+      if(!this.uid) return ()=>{};
+      if(!this._serverConfigurato()) return ricadutaFirestore();
+      // La logica dell'ascolto sta in fblAscoltoDocumento, UNA funzione sola nello script
+      // principale, provata da sola da laboratorio/app/ascolto_documento_server.test.mjs.
+      // Perche' fuori di qui: dentro il modulo Firebase non si puo' provare (nel banco il modulo
+      // non carica), e tre copie della stessa logica in tre metodi divergono sempre - la lezione
+      // del 28 ottobre, pagata due volte in un giorno.
+      if(typeof fblAscoltaDocumento!=='function') return ricadutaFirestore();
+      return fblAscoltaDocumento({
+        nome, cb, trasforma,
+        ascoltaServer: (m)=>this.serverDatiAscolta(m),
+        leggiServer: (n)=>this.serverDatiLeggi(n),
+      });
+    },
     async serverDatiLeggi(nome){
       if(!this.uid) return null;
       try{
@@ -1427,13 +1491,29 @@ window.fblAvviaSoloBacktest=function(){
     serverDatiAscolta(cb){
       if(!this.uid) return ()=>{};
       let ws=null, chiuso=false;
-      try{
-        const url='wss://'+fblServer()+':8000/dati/ascolta?token='+encodeURIComponent(cachedIdToken||'');
-        ws=new WebSocket(url);
-        ws.onmessage=(ev)=>{ if(chiuso) return; try{ const d=JSON.parse(ev.data); if(d&&d.nome&&typeof cb==='function') cb(d); }catch(e){} };
-        ws.onclose=()=>{ chiuso=true; };
-        ws.onerror=()=>{ chiuso=true; };
-      }catch(e){ console.warn('Ascolto WebSocket server Oracle fallito:',e); }
+      // RICONNESSIONE (cura del 31 ottobre 2026). Prima, alla chiusura del canale si metteva
+      // chiuso=true e NON si riapriva piu' niente: un solo problema di rete - server che si
+      // riavvia, wireless che cambia, PC che dorme - e questo dispositivo smetteva di ricevere
+      // gli aggiornamenti dagli altri, in silenzio e per sempre. E' lo stesso difetto della
+      // "porta muta" del servizio dati, in un'altra stanza. Ora si riapre da solo con attesa
+      // crescente (5 s, 10 s, 20 s, 30 s al massimo): mentre il server e' giu' non lo si batte,
+      // e quando torna ci si riaggancia senza che nessuno faccia nulla.
+      let tentativo=0;
+      const apri=()=>{
+        if(chiuso) return;
+        try{
+          const url='wss://'+fblServer()+':8000/dati/ascolta?token='+encodeURIComponent(cachedIdToken||'');
+          const w=new WebSocket(url);
+          ws=w;
+          w.onopen=()=>{ tentativo=0; };
+          w.onmessage=(ev)=>{ if(chiuso) return; try{ const d=JSON.parse(ev.data); if(d&&d.nome&&typeof cb==='function') cb(d); }catch(e){} };
+          w.onclose=()=>{ if(chiuso) return; tentativo++; setTimeout(apri, Math.min(30000, 5000*tentativo)); };
+          w.onerror=()=>{ try{ w.close(); }catch(e){} };
+        }catch(e){
+          if(!chiuso){ tentativo++; setTimeout(apri, Math.min(30000, 5000*tentativo)); }
+        }
+      };
+      apri();
       return ()=>{ chiuso=true; try{ if(ws) ws.close(); }catch(e){} };
     }
   };
@@ -28141,6 +28221,12 @@ $$('#generalSettingsModalOverlay [data-gensettings-tab]').forEach(tabBtn=>{
 // strategia modificata...) viene reinviato, se sparisce dal Journal viene archiviato su Notion.
 // Nessun duplicato possibile: il server ricorda quale pagina Notion corrisponde a ogni trade.
 let notionState=null, notionSyncBusy=false, notionLastSyncInfo='';
+// MISURA (cura bolletta, 31 ottobre 2026): quante chiamate alle Cloud Functions fa
+// davvero la sincronizzazione Notion, e quanti giri del timer non trovano niente da fare.
+// Servono per rispondere a una domanda con un numero invece che con un sospetto:
+// le Cloud Functions costavano 1,40 EUR al mese con un utente solo, e non si capiva
+// quale funzione li producesse. Senza questo contatore si taglia alla cieca.
+let notionChiamate=0, notionGiri=0;
 // Cancellazioni CHIESTE dall'utente (oggi: eliminando un conto MT5). Restano da parte finche' il
 // giro di sincronizzazione non le porta a termine, anche se nel frattempo la pagina viene chiusa:
 // per questo stanno in localStorage e non solo in memoria.
@@ -28204,6 +28290,7 @@ function notionLoadHashes(){ try{ const k=notionSyncStoreKey(); return k?(JSON.p
 function notionSaveHashes(h){ try{ const k=notionSyncStoreKey(); if(k)localStorage.setItem(k,JSON.stringify({hashes:h,at:Date.now()})); }catch(e){} }
 function notionReturnUrl(){ const u=new URL(location.href); u.hash=''; ['notion','notion_msg'].forEach(k=>u.searchParams.delete(k)); return u.toString(); }
 async function notionCall(name,data){
+  notionChiamate++;  // misura: quante invocazioni si fanno davvero
  if(!window.fxbtCloud||!window.fxbtCloud.uid||typeof window.fxbtCloud.call!=='function')throw new Error('Devi essere collegato al tuo account per usare il Template Notion.');
  return window.fxbtCloud.call(name,data);
 }
@@ -28242,6 +28329,7 @@ function notionPendingCounts(){
 }
 async function notionSyncTick(force){
  if(notionSyncBusy||!notionReady())return;
+  notionGiri++;
  if(typeof __sessionRestoreDone!=='undefined'&&!__sessionRestoreDone)return;
  if(typeof PIP_SLOT!=='undefined'&&PIP_SLOT>0)return;
  notionSyncBusy=true;
@@ -28440,7 +28528,9 @@ $('notionDisconnectBtn')?.addEventListener('click',async()=>{
    const st0=await refreshNotionStatus();
    if(st0&&st0.connected&&st0.preparing)notionWaitPrepared(false); // pagina ricaricata durante la preparazione
  }
- setInterval(()=>notionSyncTick(false),15000);
+ // 30 s, non 15 (cura bolletta, 31 ottobre 2026): meta' del lavoro per una
+  // sincronizzazione che e' un backup verso Notion, non un dato in tempo reale.
+  setInterval(()=>notionSyncTick(false),30000);
  setTimeout(()=>notionSyncTick(false),5000);
 })();
 // ===================== MODALE "LIVELLI" (RICHIESTO ESPLICITAMENTE: non più una riga per TIPO,
@@ -35458,6 +35548,68 @@ async function fblRegistraSulServer(utente){
  }catch(e){}
  return '';
 }
+// ASCOLTO DI UN DOCUMENTO: server Oracle (WebSocket) se configurato, Firestore altrimenti.
+// CURA BOLLETTA del 31 ottobre 2026.
+//
+// PERCHE' COMMUTARE INVECE DI SPEGNERE. Gli ascolti Firestore (onSnapshot) sono la voce piu'
+// cara delle LETTURE: ogni modifica di un documento e' una lettura PER OGNI dispositivo in
+// ascolto, e i numeri della console del proprietario (293K letture, 10 GB di banda in 30 giorni)
+// vengono anche da qui. Ma questi ascolti sincronizzano davvero qualcosa - collegamento del
+// server fra dispositivi, preferenze, disegni condivisi - quindi spegnerli senza sostituto
+// vorrebbe dire PERDERE la sincronizzazione: un peggioramento che nessuno ha chiesto.
+//
+// PERCHE' IL WEBSOCKET DEL SERVER: manda solo {nome, versione}, mai il contenuto. Chi ha gia'
+// quella versione non scarica niente. Stesso servizio, senza pagare il documento.
+//
+// PERCHE' UNA FUNZIONE SOLA, fuori dal modulo Firebase: nel banco di prova il modulo Firebase
+// non carica (nessuna rete), quindi questa logica non sarebbe raggiungibile da nessun test.
+// Qui invece e' una funzione pura, e il test la prova con una nuvola finta: e' l'unico modo di
+// misurare il comportamento invece di contare le stringhe nel sorgente.
+//
+// OPZIONI:
+//   nome           il documento (collegamento | preferenze | grafico)
+//   cb             chi avvisare col contenuto letto
+//   trasforma      opzionale: dal documento al contenuto che serve a cb
+//   ascoltaServer  apre il canale e chiama cb2 al messaggio {nome, versione}
+//   leggiServer    legge il documento per nome
+// RESTITUISCE la funzione per chiudere l'ascolto.
+function fblAscoltaDocumento(o){
+  o = o || {};
+  const cb = o.cb, trasforma = o.trasforma;
+  if(typeof cb !== 'function') return function(){};
+  let ultimaVersione = null, inLettura = false, daRileggere = false, fermato = false;
+  // La lettura e' UNA per volta: due avvisi ravvicinati non accavallano due fetch, si segna che
+  // ce n'e' un altro da fare e si recupera subito dopo. Senza, due risposte in ordine sparso
+  // possono applicare il documento VECCHIO per ultimo - un aggiornamento perso.
+  const applica = (doc) => { try{ cb(trasforma ? trasforma(doc) : doc); }catch(e){} };
+  const leggiEAvvisa = async () => {
+    try{
+      const d = await o.leggiServer(o.nome);
+      applica(d);
+      while(daRileggere){
+        daRileggere = false;
+        const d2 = await o.leggiServer(o.nome);
+        applica(d2);
+      }
+    }catch(e){ /* un avviso non leggibile non deve buttare giu' l'ascolto */ }
+    finally{ inLettura = false; }
+  };
+  const stop = o.ascoltaServer((msg) => {
+    try{
+      if(fermato || !msg || msg.nome !== o.nome) return;
+      if(ultimaVersione !== null && msg.versione === ultimaVersione) return; // gia' vista
+      ultimaVersione = msg.versione;
+      if(inLettura){ daRileggere = true; return; }
+      inLettura = true;
+      leggiEAvvisa();
+    }catch(e){}
+  });
+  return function(){
+    fermato = true;
+    try{ if(typeof stop === 'function') stop(); }catch(e){}
+  };
+}
+
 /* COLLEGAMENTO CLOUD: INIZIO — host e chiave del server girano DENTRO l'account Google
    (users/{uid}/data/collegamento): chi salva il server sul PC li pubblica, gli altri
    dispositivi dello stesso account li ricevono da soli. Richiesto dal proprietario il
@@ -47766,6 +47918,8 @@ function fblMisuraPrestazioni(secondi){
      // ottobre 2026). Se questo numero resta fermo mentre cloudScritture cresce, il risparmio
      // sta funzionando: fino a 400 KB che non passano piu' da ogni salvataggio.
      footprintInviati:(typeof fblFootprintInviati!=='undefined')?fblFootprintInviati:null,
+     notionChiamateServer:(typeof notionChiamate!=='undefined')?notionChiamate:null,
+     notionGiriTimer:(typeof notionGiri!=='undefined')?notionGiri:null,
     cloudUltimoPeso_KB:(typeof fblCloudUltimoPeso!=='undefined'&&fblCloudUltimoPeso)?Math.round(fblCloudUltimoPeso/1024):null
    };
    // I pezzi del disegno, dal piu' caro al meno caro e solo quelli che sono costati qualcosa:

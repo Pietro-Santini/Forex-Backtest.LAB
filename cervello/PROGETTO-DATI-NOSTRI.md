@@ -343,12 +343,73 @@ il session non porta più il footprint, il footprint parte da solo nel documento
 salvataggi ravvicinati lo scrivono una volta sola, senza celle non si chiama niente).
 
 **Restano aperte, in ordine di costo:**
-- i **4 ascolti in tempo reale** (`onSnapshot` su session/grafico/collegamento/preferenze): ogni
-  modifica è una lettura per ogni dispositivo in ascolto. Il sostituto è già scritto
-  (`serverDatiAscolta`, riga ~1379) e **non viene mai chiamato**: è la prossima cura.
-- le **Cloud Functions 1,40 €**: non sono solo Stripe. Ci sono anche le funzioni Notion
-  (`notionSyncTrades`, `notionStatus`, `notionReleaseMt5Account`, `createNotionCheckout`,
-  `notionAuthUrl`, `notionDisconnect`), e `notionSyncTick` gira su **timer ogni 15 secondi**
-  (riga ~28364). Con un utente solo non tornano: da misurare quante invocazioni fa davvero.
 - **1 GB archiviati** sulla console con un utente solo non tornano (4 documenti per utente ≈ 1 MB):
   numero da chiedere al proprietario (Utilizzo → Firestore → Spazio di archiviazione).
+
+## Terza cura: footprint sul server, e Notion misurato — 31 ottobre 2026 (2.0.58)
+
+**Difetto trovato leggendo il server mentre si pubblicava la cura del footprint:** il server
+Oracle accettava solo `session`, `grafico`, `collegamento`, `preferenze`. Il documento `footprint`
+nuovo veniva perciò **rifiutato con 400**, e la scrittura finiva nel `catch` del client: in
+silenzio. Il risparmio restava a metà — la parte che si paga no (la rete di sicurezza Firebase
+era rimasta), ma il doppio scritto sul server non arrivava da nessuna parte. Ora `footprint` è
+nell'elenco, e l'elenco è **uno solo** (`NOMI_DOCUMENTI`) invece di tre copie nelle tre rotte: due
+elenchi che divergono sono un documento che si scrive da una parte e non si legge dall'altra.
+Test: `laboratorio/ponte/test_nomi_documenti_server.py` (4 prove: footprint accolto su GET/PUT/
+PATCH, un nome non previsto rifiutato con 400, l'elenco è uno solo, session resta il primo).
+
+**Cloud Functions (1,40 €): strumentate, non tagliate alla cieca.** Le funzioni non sono solo
+Stripe: ci sono anche quelle Notion (`notionSyncTrades`, `notionStatus`, `notionReleaseMt5Account`,
+`createNotionCheckout`, `notionAuthUrl`, `notionDisconnect`). Non si può sapere quale produca i
+1,40 € senza contarle, quindi ora si contano: `notionChiamateServer` (quante invocazioni vere) e
+`notionGiriTimer` (quanti giri trovino davvero qualcosa da fare), entrambi in «Misura le
+prestazioni». Il timer è passato da **15 s a 30 s**: metà del lavoro per una sincronizzazione che è
+un backup verso Notion, non un dato in tempo reale.
+
+**Perché non c'è un test comportamentale su Notion:** `notionSyncTick` esce subito se Notion non è
+collegato, quindi in banco non ci sono giri da misurare — un test che contasse le stringhe nel
+sorgente dimostrerebbe che il codice è stato scritto, non che funziona. Quando il proprietario
+avrà letto i due numeri dalla console, si decide con quelli: tenere, rallentare ancora, o spegnere.
+
+## Stato passo 4, seconda cura: gli ascolti commutati sul server — FATTO il 31 ottobre 2026 (2.0.57)
+
+**Cosa facevano.** `onSnapshot` su tre documenti: `collegamento` (host e chiave del server, perché
+gli altri dispositivi li trovino da soli), `preferenze` (watchlist, ricerche, scala UI) e
+`grafico` (disegni e indicatori condivisi). Il quarto, `session`, era spento: `onChange` non
+viene chiamato da nessuna parte. **Costo:** ogni modifica di un documento è una lettura per ogni
+dispositivo in ascolto — ed è la voce che, coi numeri della console (293K letture, 10 GB di banda
+in 30 giorni), pesa di più dopo le scritture.
+
+**Perché non si potevano spegnere e basta.** Sincronizzano davvero qualcosa: spegnerli senza
+sostituto vorrebbe dire perdere la sincronizzazione fra dispositivi. Un peggioramento, non una cura.
+
+**La cura.** Commutazione, non sostituzione secca: una funzione sola `fblAscoltaDocumento` che
+- se il server Oracle è configurato, ascolta il **WebSocket** `/dati/ascolta` (manda solo
+  `{nome, versione}`) e legge il documento **solo quando la versione cambia** — chi ha già quella
+  versione non scarica niente;
+- se il server non è configurato, resta `onSnapshot`, esattamente come prima: la sincronizzazione
+  fra dispositivi non deve MAI dipendere da una configurazione che non c'è.
+
+**Il pezzo che rendeva la commutazione sicura: il doppio scritto.** `collegamentoSalva`,
+`preferenzeSalva` e `graficoSalva` scrivevano **solo** su Firestore. Commutare la lettura al
+server senza questo avrebbe voluto dire leggere un posto dove nessuno scrive: gli altri
+dispositivi non avrebbero più visto né il collegamento, né le preferenze, né i disegni. Ora,
+quando il server c'è, scrivono su tutti e due; se il server non risponde non è un fallimento —
+Firebase ha già salvato e resta la rete di sicurezza.
+
+**Difetto trovato e curato per strada: il canale server non rinasceva.** `serverDatiAscolta`
+chiudeva con `chiuso=true` e non riapriva più niente: un solo problema di rete — server che si
+riavvia, wireless che cambia, PC che dorme — e quel dispositivo smetteva di ricevere gli
+aggiornamenti dagli altri, in silenzio e per sempre. È lo stesso difetto della "porta muta" del
+servizio dati, in un'altra stanza. Ora si riapre da solo con attesa crescente (5 s → 30 s).
+
+**Perché la logica è una funzione sola nello script principale e non dentro il modulo Firebase:**
+nel banco di prova il modulo Firebase non carica (nessuna rete), quindi dentro il modulo non sarebbe
+raggiungibile da nessun test — e tre copie della stessa logica in tre metodi divergono sempre (la
+lezione del 28 ottobre, pagata due volte in un giorno).
+
+Test: `laboratorio/app/ascolto_documento_server.test.mjs` (6 prove, con nuvola finta):
+l'avviso fa leggere il documento e passa il contenuto; la stessa versione non si rilegge (il
+risparmio); due avvisi ravvicinati non si accavallano e l'ultimo applicato è il più recente; gli
+avvisi degli altri documenti non disturbano; chiuso l'ascolto non arriva più niente; senza chi
+ascolta non si rompe niente.

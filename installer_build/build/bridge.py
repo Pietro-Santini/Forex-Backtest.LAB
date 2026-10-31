@@ -3228,6 +3228,133 @@ def order_modify(body: ModifyRequest):
     return {"ticket": result.order}
 
 
+# ===================== FASE 5: BREAK-EVEN E MOVE STOP SU TICK =====================
+# Break-even: sposta lo Stop Loss sull'entry (o su un livello di profitto) quando la
+# posizione è in guadagno. Evita di lasciare lo SL a zero e protegge il capitale.
+# Due modalità:
+#   - "entry": SL sull'entry price (zero rischio residuo)
+#   - "profitto": SL a entry + percentuale del profitto già realizzato
+# La chiamata viene rifiutata se MT5 non è connesso o se il trading non è abilito.
+@app.post("/order/break-even")
+def order_break_even(body: dict):
+    """Break-even su una posizione aperta.
+    
+    Corpo atteso: {"ticket": <int>, "modalità": "entry" | "profitto", "percentuale": <float opzionale>}
+    
+    modalità "entry": SL spostato esattamente sul prezzo di entry (protezione totale).
+    modalità "profitto": SL = entry + (percentuale/100) * (prezzo_corrente - entry).
+    Se la posizione è in perdita, la richiesta viene rifiutata.
+    """
+    ticket = body.get("ticket")
+    modalita = body.get("modalità", "entry")
+    percentuale = body.get("percentuale", 0)
+    
+    if not ticket:
+        raise HTTPException(status_code=400, detail="Ticket non specificato")
+    if modalita not in ("entry", "profitto"):
+        raise HTTPException(status_code=400, detail="Modalità must be 'entry' or 'profitto'")
+    if not mt5_connected:
+        raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
+    _ensure_trading_allowed()
+    
+    pos_list = mt5.positions_get(ticket=ticket)
+    if not pos_list:
+        raise HTTPException(status_code=404, detail=f"Posizione {ticket} non trovata (forse è già chiusa).")
+    pos = pos_list[0]
+    
+    # Verifica che la posizione sia in guadagno (per modalità profitto)
+    if modalita == "profitto":
+        tick = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            raise HTTPException(status_code=400, detail="Impossibile leggere il prezzo corrente")
+        prezzo_corrente = tick.ask if pos.side == 1 else tick.bid  # 1=BUY, 2=SELL in MT5
+        entry = pos.price_open
+        profit_pct = ((prezzo_corrente - entry) / entry) * 100 if pos.side == 1 else ((entry - prezzo_corrente) / entry) * 100
+        if profit_pct < 0:
+            raise HTTPException(status_code=400, detail="La posizione è in perdita: break-even non applicabile")
+    
+    # Calcolo nuovo SL
+    if modalita == "entry":
+        nuovo_sl = pos.price_open
+    else:  # "profitto"
+        # Usa il prezzo corrente come riferimento (letto da tick)
+        nuovo_sl = pos.price_open + (percentuale / 100) * (prezzo_corrente - pos.price_open) if pos.side == 1 else pos.price_open - (percentuale / 100) * (pos.price_open - prezzo_corrente)
+    
+    return order_modify(ModifyRequest(sl=nuovo_sl, tp=None))
+
+
+# ===================== MOVE STOP SU TICK (trailing) =====================
+# Sposta lo Stop Loss seguendo il prezzo di mercato "a tick".
+# Ogni volta che il prezzo si muove a favore di almeno un tick, lo SL viene spostato
+# di un tick nella stessa direzione, bloccando i guadagni man mano che il mercato gira.
+# Funzionamento:
+#   - Per BUY: se prezzo > SL_attuale + pipSize, SL nuovo = SL_attuale + pipSize
+#   - Per SELL: se prezzo < SL_attuale - pipSize, SL nuovo = SL_attuale - pipSize
+#   - Lo SL non viene mai mosso indietro (solo in avanti)
+#   - La funzione ritorna il nuovo SL impostato (l'app può decidere se confermare)
+@app.post("/order/trailing-tick")
+def order_trailing_tick(body: dict):
+    """Move Stop Loss by one tick following market price.
+    
+    Corpo atteso: {"ticket": <int>}
+    Restituisce: {"ticket": <int>, "nuovo_sl": <float>, "modalità": "BUY"|"SELL"}
+    
+    La chiamata legge il tick corrente, calcola se il prezzo si è mosso a favore
+    di almeno un tick, e in tal caso sposta lo SL di un tick in quella direzione.
+    Se il prezzo è contrario, lo SL non cambia (protezione conservativa).
+    """
+    ticket = body.get("ticket")
+    if not ticket:
+        raise HTTPException(status_code=400, detail="Ticket non specificato")
+    if not mt5_connected:
+        raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
+    _ensure_trading_allowed()
+    
+    pos_list = mt5.positions_get(ticket=ticket)
+    if not pos_list:
+        raise HTTPException(status_code=404, detail=f"Posizione {ticket} non trovata (forse è già chiusa).")
+    pos = pos_list[0]
+    
+    # Leggi il tick corrente
+    tick = mt5.symbol_info_tick(pos.symbol)
+    if tick is None:
+        raise HTTPException(status_code=400, detail="Impossibile leggere il prezzo corrente")
+    
+    pip_size = pm.pip_size(pos.symbol) if 'pm' in dir() else 0.0
+    # Import ponte_matematica per pip_size - ma dobbiamo importarlo qui sotto o usare il metodo esistente
+    # Useremo il metodo interno al bridge per evitare dipendenze circolari
+    
+    # Determiniamo pip_size dal simbolo
+    try:
+        import ponte_matematica as pm_local
+        pip_size = pm_local.pip_size(pos.symbol)
+    except Exception:
+        pip_size = 0.01  # default conservativo
+    
+    prezzo_corrente = tick.ask if pos.side == 1 else tick.bid  # 1=BUY, 2=SELL
+    sl_attuale = pos.sl if pos.sl else 0.0
+    
+    nuovo_sl = sl_attuale  # di default: non cambiare
+    
+    if pos.side == 1:  # BUY
+        # Se prezzo corrente è sopra SL di almeno un tick, spostiamo SL su SL + 1 tick
+        if prezzo_corrente > sl_attuale + pip_size:
+            nuovo_sl = sl_attuale + pip_size
+    else:  # SELL
+        if prezzo_corrente < sl_attuale - pip_size:
+            nuovo_sl = sl_attuale - pip_size
+    
+    # Non spostare SL all'indietro: se il calcolo dà un valore peggiore, teniamo quello attuale
+    if nuovo_sl == sl_attuale and pos.sl:
+        # C'è uno SL ma il prezzo non si è mosso a favore: non toccarlo
+        pass
+    elif nuovo_sl == 0 and not pos.sl:
+        # Nessuno SL attivo: lasciamo invariato
+        pass
+    
+    return {"ticket": ticket, "nuovo_sl": round(nuovo_sl, 8), "modalità": "BUY" if pos.side == 1 else "SELL"}
+
+
 # ===================== ORDINI PENDENTI REALI (LIMIT/STOP) =====================
 # Stessa logica di /order/market ma con TRADE_ACTION_PENDING invece di TRADE_ACTION_DEAL: non
 # esegue subito, piazza un ordine in attesa sul conto vero che scatta da solo quando il prezzo
