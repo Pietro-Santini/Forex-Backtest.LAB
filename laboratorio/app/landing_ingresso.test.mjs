@@ -43,15 +43,28 @@ test("il pulsante della prova gratuita passa dalla porta e offre l'installazione
   try {
     assert.equal(await pagina.locator(RIQUADRO).count(), 0, 'riquadro presente prima di premere');
     await pagina.getByRole('button', {name: /Avvia Prova Gratuita di 7 Giorni/}).first().click();
-    // Il pulsante apre ora un modale di scelta piattaforma: si sceglie PC (Windows)
+    // Dopo il pulsante compare la modale di scelta piattaforma: i vari sistemi
+    // operativi PIU' il pulsante separato "Prosegui sul web".
+    await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
+    const scelte = (await pagina.locator('#fblInstallBox button').allTextContents()).join(' | ');
+    assert.ok(/Android/.test(scelte), 'manca la scelta Android: ' + scelte);
+    assert.ok(/Windows/.test(scelte), 'manca la scelta Windows: ' + scelte);
+    // Chi non installa non resta bloccato: "Prosegui sul web" lo porta dove voleva.
+    const prosegui = await pagina.getByRole('link', {name: 'Prosegui sul web'}).getAttribute('href');
+    assert.equal(prosegui, 'login.html', 'chi non installa non arriva dove voleva (login.html)');
+    // Ora si sceglie PC (Windows)
     await pagina.getByRole('button', {name: 'PC (Windows)'}).first().click();
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
     // Il pulsante NON deve piu' portare via dalla landing verso login.html.
     assert.ok(pagina.url().includes('index.html'), 'la pagina se n\'e\' andata: ' + pagina.url());
     const pulsanti = await pagina.locator('#fblInstallBox a').allTextContents();
     assert.ok(pulsanti.some(t => /installer/i.test(t)), 'manca il download dell\'installer');
-    const continua = await pagina.locator('#fblInstallBox a', {hasText:'Continua col sito web'}).getAttribute('href');
-    assert.equal(continua, 'login.html', 'chi non installa non arriva dove voleva (login.html)');
+    // Nessun tentativo di scheme: era quello che mostrava l'errore Microsoft Store.
+    const hrefs = await pagina.locator('#fblInstallBox a').evaluateAll(as => as.map(a => a.getAttribute('href')));
+    assert.ok(!hrefs.some(h => h && /forexbacktestlab:/i.test(h)),
+      'c\'e\' ancora il tentativo di scheme (errore Microsoft Store): ' + hrefs.join(' | '));
+    // Solo l'installer: il riquadro di Windows non offre altro.
+    assert.equal(pulsanti.length, 1, 'il riquadro di Windows deve offrire solo l\'installer: ' + pulsanti.join(' | '));
   } finally { await browser.close(); }
 });
 
@@ -61,7 +74,7 @@ test('il pulsante "Apri Simulatore" porta all\'installazione e, se non si instal
     await pagina.getByRole('button', {name: /Apri Simulatore/}).first().click();
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
     assert.ok(pagina.url().includes('index.html'));
-    const continua = await pagina.locator('#fblInstallBox a', {hasText:'Continua col sito web'}).getAttribute('href');
+    const continua = await pagina.getByRole('link', {name: 'Prosegui sul web'}).getAttribute('href');
     assert.equal(continua, 'app.html');
   } finally { await browser.close(); }
 });
@@ -73,7 +86,7 @@ test("il pulsante dell'abbonamento conserva l'intenzione d'acquisto e la porta a
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
     const intenzione = await pagina.evaluate(() => localStorage.getItem('fxbt_buy_license_intent'));
     assert.ok(intenzione, 'l\'intenzione d\'acquisto non e\' stata registrata');
-    const continua = await pagina.locator('#fblInstallBox a', {hasText:'Continua col sito web'}).getAttribute('href');
+    const continua = await pagina.getByRole('link', {name: 'Prosegui sul web'}).getAttribute('href');
     assert.equal(continua, 'app.html?buy=license');
   } finally { await browser.close(); }
 });

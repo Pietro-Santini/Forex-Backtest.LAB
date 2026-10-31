@@ -1,21 +1,50 @@
+"""FINESTRA DELL'APPLICAZIONE Forex Backtest LAB (Windows).
+
+E' l'eseguibile che l'utente VEDE e apre dall'icona sul Desktop o del menu Start
+(viene compilato in ForexBacktestLABDesktop.exe, vedi build_exe.bat passo 3d e
+installer_build/installer.iss). Gli altri eseguibili del pacchetto
+(ForexBacktestLAB.exe, Mt5FeedServer.exe, SegnaliBridge.exe) sono servizi che
+girano senza finestra: questa finestra li trova gia' in funzione e, se per
+qualche motivo non lo fossero, fa partire il ponte da sola.
+
+Cosa garantisce, perche' l'utente non deve avere problemi:
+  1. il logo di Forex Backtest LAB compare in alto a sinistra (favicon), anche se
+     la pagina caricata fosse servita da un altro indirizzo e senza suo logo;
+  2. il titolo della finestra e il nome dell'applicazione sono quelli veri;
+  3. se il servizio non parte, appare una pagina chiara con "che cosa fare" e un
+     pulsante Riprova, invece di una finestra vuota che sembra rotta;
+  4. funziona sul PC di chiunque: di default parla col ponte locale
+     (http://127.0.0.1:8000), non con il server di un altro utente.
+"""
+import base64
+import json
 import os
-import sys
 import socket
 import subprocess
+import sys
 import time
+
 import webview
 
 webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = False
 webview.settings["REMOTE_DEBUGGING_PORT"] = 9222
 
-DEFAULT_BACKEND = os.environ.get("BACKEND_URL", "http://pietro.tail83d918.ts.net:8002/")
-DEFAULT_APP_URL = DEFAULT_BACKEND.rstrip("/") + "/app.html"
+# IL PONTE LOCALE E' LA REGOLA. Prima qui si partiva dall'indirizzo di un server
+# remoto (Tailscale Oracle): andava bene su quel PC specifico, invece per tutti
+# gli altri l'avvio si trascinava tre secondi di attesa e poi tentava comunque
+# l'indirizzo lontano. Ora: prima il ponte installato con il pacchetto (sempre
+# presente, su ogni PC), e SOLO se l'ambiente lo chiede esplicitamente si esce
+# da questa macchina (variabile BACKEND_URL, per chi sviluppa o ha un Oracle).
+PORTA_LOCALE = 8000
+INDIRIZZO_LOCALE = "http://127.0.0.1:%d/app.html" % PORTA_LOCALE
 
 STORAGE_PATH = os.path.join(os.path.expanduser("~"), ".forexbacktestlab", "webview_profile")
 os.makedirs(STORAGE_PATH, exist_ok=True)
 
 INSTALLED_APP = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Programs", "Forex Backtest LAB")
 BRIDGE_EXE = os.path.join(INSTALLED_APP, "ForexBacktestLAB.exe")
+
+NOME_APP = "Forex Backtest LAB"
 
 
 def _is_port_open(port, host="127.0.0.1", timeout=1.0):
@@ -27,8 +56,17 @@ def _is_port_open(port, host="127.0.0.1", timeout=1.0):
 
 
 def _ensure_backend():
-    if _is_port_open(8000):
-        return "http://127.0.0.1:8000/app.html"
+    """Rende disponibile il ponte (il servizio dell'applicazione) e il suo indirizzo.
+
+    Se la porta locale risponde, il servizio c'e' gia': non si tocca niente.
+    Se non risponde e ForexBacktestLAB.exe c'e' installato, si avvia da solo e si
+    aspetta che risponda. Come ultima carta si prova l'indirizzo scritto nella
+    variabile d'ambiente BACKEND_URL (chi sviluppa, o chi ha un suo server).
+    Ritorna l'indirizzo dell'app; se nessuna delle prove funziona ritorna None, e
+    allora la finestra mostra la pagina di spiegazione (non resta bianca).
+    """
+    if _is_port_open(PORTA_LOCALE):
+        return INDIRIZZO_LOCALE
     if os.path.isfile(BRIDGE_EXE):
         subprocess.Popen(
             [BRIDGE_EXE],
@@ -37,11 +75,111 @@ def _ensure_backend():
         )
         for _ in range(30):
             time.sleep(1)
-            if _is_port_open(8000):
-                return "http://127.0.0.1:8000/app.html"
+            if _is_port_open(PORTA_LOCALE):
+                return INDIRIZZO_LOCALE
+    remoto = (os.environ.get("BACKEND_URL") or "").rstrip("/")
+    if remoto:
+        url = remoto + "/app.html"
+        if _ponte_qui(url):
+            return url
     return None
 
 
+def _ponte_qui(url):
+    """Dice se l'indirizzo risponde davvero: evita finestre vuote su un URL morto."""
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(url.split("?")[0], timeout=4) as r:
+            return 200 <= getattr(r, "status", 200) < 300
+    except Exception:
+        return False
+
+
+# --- IL LOGO IN ALTO A SINISTRA ---------------------------------------------
+def _logo_data_url():
+    """Il logo dell'app come indirizzo incorporato, per metterlo nel tab della finestra.
+
+    Parte dall'icona vera del programma (icon-512.png), quella usata anche
+    dall'icona sul Desktop. Se il file non si trova (esecuzione dai sorgenti,
+    pacchetto diverso) ritorna None e la pagina tiene il favicon che ha gia'.
+    """
+    dove_cercare = []
+    # PyInstaller onefile: i file aggiunti con --add-data finiscono in _MEIPASS.
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        dove_cercare.append(os.path.join(mei, "icon-512.png"))
+    qui = os.path.dirname(os.path.abspath(__file__))
+    dove_cercare.append(os.path.join(qui, "icon-512.png"))
+    dove_cercare.append(os.path.join(os.path.dirname(qui), "icon-512.png"))
+    dove_cercare.append(os.path.join(qui, "..", "installer_build", "build", "icon-512.png"))
+    for percorso in dove_cercare:
+        try:
+            with open(percorso, "rb") as f:
+                return "data:image/png;base64," + base64.b64encode(f.read()).decode("ascii")
+        except OSError:
+            continue
+    return None
+
+
+def _metti_il_logo(finestra):
+    """Mette il logo nel tab della finestra (in alto a sinistra), senza toccare la pagina."""
+    logo = _logo_data_url()
+    if not logo:
+        return
+    js = (
+        "(function(){try{"
+        "var l=document.querySelector('link[rel~=\"icon\"]')||document.querySelector('link[rel=\"shortcut icon\"]');"
+        "if(!l){l=document.createElement('link');l.rel='icon';document.head.appendChild(l);}"
+        "l.type='image/png';l.href=" + json.dumps(logo) + ";"
+        "}catch(e){}})();"
+    )
+    # Il logo si mette quando la pagina e' pronta, non prima.
+    try:
+        finestra.events.loaded += lambda: _inietta(finestra, js)
+    except Exception:
+        try:
+            finestra.events.shown += lambda: _inietta(finestra, js)
+        except Exception:
+            pass
+
+
+def _inietta(finestra, js):
+    try:
+        finestra.evaluate_js(js)
+    except Exception:
+        pass
+
+
+# --- LA PAGINA DI SPIEGAZIONE, SE IL SERVIZIO NON PARTE ---------------------
+def _pagina_spiegazione(motivo):
+    """Pagina mostrata quando il ponte non risponde: chiara, con il pulsante Riprova."""
+    return (
+        "<!doctype html><html lang='it'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>" + NOME_APP + "</title><style>"
+        "body{margin:0;font-family:system-ui,Segoe UI,sans-serif;background:#0b0f14;color:#e8edf3;}"
+        ".box{max-width:520px;margin:12vh auto;padding:28px;border:1px solid #202832;"
+        "border-radius:14px;background:#111720;text-align:center}"
+        "h1{font-size:20px;margin:0 0 12px}"
+        "p{font-size:14px;line-height:1.6;color:#9aa7b8;margin:0 0 10px}"
+        "code{background:#0b1117;border:1px solid #263241;border-radius:6px;padding:2px 6px}"
+        "button{margin-top:12px;background:#2dd4bf;color:#05201c;border:0;border-radius:9px;"
+        "font-weight:700;font-size:14px;padding:11px 22px;cursor:pointer}"
+        ".motivo{font-size:12px;color:#6b7785;margin-top:14px}"
+        "</style></head><body><div class='box'>"
+        "<h1>" + NOME_APP + " non si e' ancora aperto</h1>"
+        "<p>Il servizio dell'applicazione (il ponte) non risponde: senza di lui non ci sono\n"
+        " il grafico ne' gli ordini.</p>"
+        "<p>Premi <b>Riprova</b>: se non basta, riavvia il PC oppure reinstalla il\n"
+        " pacchetto <code>ForexBacktestLAB_Setup.exe</code> dal sito.</p>"
+        "<button onclick=\"try{window.pywebview.api.riprova()}catch(e){" + "location.reload()}\">Riprova</button>"
+        "<div class='motivo'>Dettaglio: " + str(motivo) + "</div>"
+        "</div></body></html>"
+    )
+
+
+# --- ADATTAMENTI DELLA WEBVIEW (zoom e finestre nuove) -----------------------
 def _patch_zoom_and_popups():
     try:
         import webview.platforms.edgechromium as ec
@@ -57,7 +195,7 @@ def _patch_zoom_and_popups():
             except Exception:
                 pass
 
-        ec.EdgeChrome.on_webview_ready = _patched
+        ec.EdgeChrome.on_web_view_ready = _patched
 
         def _allow_native_popup(self, sender, args):
             args.set_Handled(False)
@@ -67,26 +205,55 @@ def _patch_zoom_and_popups():
         print("patch fallita:", exc)
 
 
-def main():
-    app_url = DEFAULT_APP_URL
-    # Se il server Oracle non è raggiungibile, prova il bridge locale
-    try:
-        import urllib.request
-        urllib.request.urlopen("http://pietro.tail83d918.ts.net:8002/health", timeout=3)
-    except Exception:
-        url = _ensure_backend()
-        if url:
-            app_url = url
+class _Api(object):
+    """Cio' che la pagina di spiegazione puo' chiamare per riprovare l'apertura."""
 
+    def __init__(self):
+        self.finestra = None
+
+    def riprova(self):
+        url = _ensure_backend()
+        if url and self.finestra is not None:
+            try:
+                self.finestra.load_url(url)
+            except Exception:
+                return False
+            return True
+        return False
+
+
+def main():
+    api = _Api()
     _patch_zoom_and_popups()
     debug = os.environ.get("DESKTOP_SHELL_DEBUG") == "1"
-    window = webview.create_window(
-        "Forex Backtest LAB",
-        url=app_url,
-        width=1280,
-        height=820,
-        min_size=(960, 580),
-    )
+
+    url = _ensure_backend()
+    if url:
+        finestra = webview.create_window(
+            NOME_APP,
+            url,
+            width=1280,
+            height=820,
+            min_size=(960, 580),
+            js_api=api,
+        )
+    else:
+        # ATTENZIONE: la spiegazione e' HTML, VA PASSATA con "html=", non come secondo
+        # argomento. Il secondo argomento di create_window e' l'INDIRIZZO (url): passandogli
+        # l'HTML, pywebview proverebbe a caricarlo come un indirizzo inesistente e la
+        # finestra resterebbe vuota - cioe' il difetto che questo ramo deve evitare.
+        # Misurato dal test laboratorio/app/pacchetto_app_desktop.test.mjs.
+        finestra = webview.create_window(
+            NOME_APP,
+            html=_pagina_spiegazione("il ponte non risponde sulla porta %d" % PORTA_LOCALE),
+            width=1280,
+            height=820,
+            min_size=(960, 580),
+            js_api=api,
+        )
+    api.finestra = finestra
+    _metti_il_logo(finestra)
+
     try:
         webview.start(
             debug=debug,

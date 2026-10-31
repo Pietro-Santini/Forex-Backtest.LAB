@@ -110,12 +110,12 @@ test("Android senza app: dopo l'attesa arriva il riquadro, e l'uscita porta al s
     "chi rifiuta l'installazione dopo il login deve finire nel simulatore web, non alla home");
 });
 
-test("Windows: dopo il login si prova il collegamento diretto, poi l'installer", () => {
+test("Windows: dopo il login arriva l'installer, senza scheme non registrato", () => {
   const a = ambiente({userAgent: WINDOWS, search: '?dopo=login'});
   a.scatta();
   assert.ok(a.box.azioni.some(x => /installer/i.test(x.testo)), "manca il download dell'installer");
-  assert.ok(a.box.azioni.some(x => x.href === 'forexbacktestlab://avvia'),
-    "manca il collegamento diretto per chi ha gia' l'app desktop");
+  assert.ok(!a.box.azioni.some(x => x.href === 'forexbacktestlab://avvia'),
+    "lo scheme forexbacktestlab:// non e' registrato su Windows: proposto dal sito mostra l'errore Microsoft Store");
 });
 
 test("iPhone: dopo il login si spiega, senza download inventati", () => {

@@ -17,15 +17,24 @@ import subprocess
 import tempfile
 import pathlib
 
+import _percorsi  # noqa: F401  (mette i moduli del ponte nel percorso e prepara env_pulito)
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 def _esegui(script):
     """Un processo a parte, perché il modulo ponte_server resta in cache fra i file di test:
     se un test precedente lo ha importato con un codice più vecchio, qui vedremmo quello. Un
-    processo fresco parte sempre dal file corrente."""
+    processo fresco parte sempre dal file corrente.
+
+    L'ambiente è quello di _percorsi.env_pulito(): quando gira TUTTA la cartella, i test
+    precedenti hanno già sostituito APPDATA con una cartella temporanea (i test non devono
+    toccare i dati veri dell'utente) e un processo Python nuovo non troverebbe più le
+    librerie installate per l'utente. Con l'APPDATA vero il processo parte e il test
+    misura quello che deve misurare."""
     proc = subprocess.run([sys.executable, '-c', script, str(ROOT)],
-                          capture_output=True, text=True, timeout=120)
+                          capture_output=True, text=True, timeout=120,
+                          env=_percorsi.env_pulito())
     assert proc.returncode == 0, ('il test comportamentale non è passato:\n' + proc.stderr
                                  + (('\nstdout: ' + proc.stdout) if proc.stdout else ''))
     return proc.stdout

@@ -51,8 +51,8 @@ function ambiente({userAgent, fuoco=false}){
     location: {href: ''},
   };
   const nodo = (sel) => sel.endsWith('-t')
-    ? {set textContent(v){ box.testo = v; }, get textContent(){ return box.testo; }}
-    : {appendChild: (a) => box.azioni.push({testo: a.textContent, href: a.href})};
+    ? {style: {}, set textContent(v){ box.testo = v; }, get textContent(){ return box.testo; }}
+    : {style: {}, appendChild: (a) => box.azioni.push({testo: a.textContent, href: a.href})};
   const documento = {
     body: {appendChild(){}},
     createElement: () => ({
@@ -100,14 +100,14 @@ test('Android con app aperta: il riquadro non copre la finestra', () => {
   assert.deepEqual(a.box.azioni, [], 'l\'app si era aperta e il riquadro l\'ha coperta');
 });
 
-test("Windows senza app: dopo l'attesa offre l'installer E il collegamento diretto", () => {
+test("Windows senza app: dopo l'attesa offre solo l'installer", () => {
   const a = ambiente({userAgent: WINDOWS});
   const r = a.FBL.apriApp('avvia', 'login.html');
   assert.equal(r.scelta, 'schema-desktop');
   a.scatta();
   assert.ok(a.box.azioni.some(x => /installer/i.test(x.testo)), 'manca il download dell\'installer');
-  assert.ok(a.box.azioni.some(x => x.href === 'forexbacktestlab://avvia'),
-    'manca il collegamento diretto: chi ha gia\' l\'app deve poterci entrare con un tocco');
+  assert.ok(!a.box.azioni.some(x => x.href === 'forexbacktestlab://avvia'),
+    'lo scheme forexbacktestlab:// non e\' registrato su Windows: proposto dal sito mostra l\'errore Microsoft Store');
 });
 
 test('Windows con app aperta: nessun riquadro', () => {
@@ -128,9 +128,8 @@ test("iPhone: nessun download inventato, si spiega che si usa dal browser", () =
 
 test("chi non installa arriva dove voleva andare (non alla home)", () => {
   const a = ambiente({userAgent: WINDOWS});
-  a.FBL.apriApp('avvia', 'login.html');
-  a.scatta();
-  const continua = a.box.azioni.find(x => x.testo === 'Continua col sito web');
-  assert.ok(continua, 'manca il modo di proseguire senza installare');
-  assert.equal(continua.href, 'login.html', 'il proseguimento porta altrove');
+  a.FBL.mostraSceltaPiattaforma('avvia', 'login.html');
+  const prosegui = a.box.azioni.find(x => x.testo === 'Prosegui sul web');
+  assert.ok(prosegui, 'manca il modo di proseguire senza installare');
+  assert.equal(prosegui.href, 'login.html', 'il proseguimento porta altrove');
 });

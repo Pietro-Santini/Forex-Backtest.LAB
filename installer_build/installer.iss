@@ -22,6 +22,14 @@
 #define MyAppVersion "2.0.41"
 #define MyAppPublisher "Pietro Santini"
 #define MyAppExeName "ForexBacktestLAB.exe"
+; LA FINESTRA DELL'APPLICAZIONE: l'unico eseguibile che l'utente VEDE e apre. Gli altri
+; tre (ForexBacktestLAB.exe, Mt5FeedServer.exe, SegnaliBridge.exe) sono servizi senza
+; finestra che girano da soli. Prima questo pacchetto non la conteneva affatto (era
+; costruita solo da desktop\BUILD_EXE_DESKTOP.bat, che il flusso di GitHub non chiama):
+; chi installava trovava i servizi in esecuzione e nessuna applicazione da aprire, ed era
+; costretto a cercarsi i percorsi a mano. Ora la costruisce build_exe.bat (passo 3d) e la
+; installa questo script, con la sua icona sul Desktop e nel menu Start.
+#define MyAppDesktopExeName "ForexBacktestLABDesktop.exe"
 
 [Setup]
 AppId={{8F1C6E1A-7B2D-4E3F-9C41-FBLAB00000001}
@@ -99,6 +107,14 @@ Source: "dist\Mt5FeedServer.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; creava lo stesso e il programma ripiegava sui sorgenti .py, che senza Python e librerie
 ; (pip install) non partono. Se manca, la compilazione si ferma: rifai build_exe.bat.
 Source: "dist\SegnaliBridge.exe"; DestDir: "{app}"; Flags: ignoreversion
+; LA FINESTRA DELL'APPLICAZIONE (desktop_shell.py compilato, passo 3d di build_exe.bat):
+; e' l'eseguibile che l'utente apre dal Desktop o dal menu Start, ed e' anche cio' che apre
+; il collegamento forexbacktestlab:// del sito. OBBLIGATORIO (RICHIESTO dal proprietario,
+; 31 ottobre 2026: "l'utente non deve andare a cercare questi percorsi"): senza questo file
+; il pacchetto installerebbe solo i servizi invisibili, senza alcuna applicazione da aprire.
+; Non ha skipifsourcedoesntexist di proposito: se manca, la compilazione si FERMA invece di
+; consegnare un Setup che lascia l'utente con tre servizi e nessuna finestra.
+Source: "dist\{#MyAppDesktopExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "build\segnali_telegram\configurazione.esempio.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Registry]
@@ -113,8 +129,12 @@ Source: "build\segnali_telegram\configurazione.esempio.json"; DestDir: "{app}"; 
 ; sistema): non servono permessi da amministratore per registrarlo.
 Root: HKCU; Subkey: "Software\Classes\forexbacktestlab"; ValueType: string; ValueName: ""; ValueData: "URL:Forex Backtest Lab"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\forexbacktestlab"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
-Root: HKCU; Subkey: "Software\Classes\forexbacktestlab\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"""
-Root: HKCU; Subkey: "Software\Classes\forexbacktestlab\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\forexbacktestlab\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppDesktopExeName}"""
+; Il comando apre la FINESTRA DELL'APPLICAZIONE ({#MyAppDesktopExeName}), non il servizio
+; ({#MyAppExeName}): prima il "collegamento diretto" del sito avviava il servizio, che gira
+; senza finestra, quindi sembrava che non succedesse niente. Il collegamento dal sito deve
+; comportarsi come il doppio clic sull'icona.
+Root: HKCU; Subkey: "Software\Classes\forexbacktestlab\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppDesktopExeName}"" ""%1"""
 
 ; Avvio automatico ad ogni accesso a Windows, SEMPRE (non piÃ¹ legato a un Task facoltativo: vedi
 ; il commento sopra [Files] sul perchÃ©) - stessa chiave di registro usata da moltissimi programmi
@@ -123,10 +143,27 @@ Root: HKCU; Subkey: "Software\Classes\forexbacktestlab\shell\open\command"; Valu
 ; disinstallazione, non resta comunque nulla "orfano" nel Registro dopo un eventuale addio.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
 
+[Tasks]
+; La scorciatoia sul Desktop si sceglie (o non si sceglie) durante l'installazione, come
+; in qualunque altro programma. Quella nel menu Start si crea sempre: senza, su un desktop
+; senza icone l'utente non avrebbe modo di aprire l'applicazione.
+Name: "desktopicon"; Description: "Crea un'icona sul Desktop"; GroupDescription: "Icone aggiuntive:"
+
 [Icons]
-; Solo la voce nel menu Start per DISINSTALLARE resta â€” niente scorciatoia per AVVIARE il
+; ATTENZIONE, PROPRIETARIO (31 ottobre 2026): qui c'era scritto "nessuna scorciatoia per
+; avviare, l'utente non deve mai vederne un'icona", perche' si pensava a un pacchetto di
+; soli servizi invisibili. Risultato misurato: chi installava non aveva NESSUNA
+; applicazione da aprire e doveva cercarsi i percorsi a mano (e avviando
+; ForexBacktestLAB.exe partivano solo i servizi). Ora l'applicazione si apre dal Desktop o
+; dal menu Start, come qualunque altro programma installato.
+; IconFilename usa l'icona incorporata nell'eseguibile (PyInstaller --icon), la stessa del
+; Setup: un'icona sola per tutto, coerente con l'applicazione. â€” niente scorciatoia per AVVIARE il
 ; programma (nÃ© qui nÃ© sul Desktop, vedi sopra): non Ã¨ un'app che si apre a mano, l'utente non
 ; deve mai vederne un'icona su cui poter cliccare.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"; Tasks: desktopicon
+; La voce per disinstallare resta: un programma installato deve poter essere rimosso dal
+; solito posto, senza andare a caccia del disinstallatore.
 Name: "{group}\Disinstalla {#MyAppName}"; Filename: "{uninstallexe}"
 
 [Run]
@@ -151,6 +188,17 @@ Name: "{group}\Disinstalla {#MyAppName}"; Filename: "{uninstallexe}"
 ; La chiave di avvio automatico non basta: quella parte al prossimo accesso a Windows, non
 ; adesso. Serve questa riga, e deve valere in tutti e due i casi.
 Filename: "{app}\{#MyAppExeName}"; Flags: nowait
+
+; L'APPLICAZIONE VERA, CON LA SUA FINESTRA. Nella pagina finale dell'installazione compare
+; una casella SELEZIONABILE "Avvia Forex Backtest LAB" (e' il flag "postinstall"), come in
+; qualunque altro programma: chi la vuole la lascia, chi non la vuole la leva. Il comportamento
+; e' quello delle icone qui sopra: il doppio clic sull'icona apre questa stessa finestra.
+;
+; "skipifsilent" c'e' DI PROPOSITO, ed e' l'opposto del servizio qui sopra. L'aggiornamento
+; automatico installa con /VERYSILENT (vedi aggiorna_programma in build\bridge.py): li' non
+; deve aprirsi nessuna finestra addosso all'utente, deve solo ripartire il servizio. La
+; finestra la riapre l'utente quando vuole, dall'icona.
+Filename: "{app}\{#MyAppDesktopExeName}"; Description: "Avvia {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Messages]
 ; Promemoria onesto mostrato prima dell'installazione: MetaTrader 5 non Ã¨

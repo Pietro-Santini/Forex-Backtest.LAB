@@ -185,8 +185,48 @@ if errorlevel 1 (
 )
 echo   SegnaliBridge.exe: tutte le librerie presenti.
 
+echo === 3d) Creo ForexBacktestLABDesktop.exe (la FINESTRA dell'applicazione, quella con l'icona sul desktop)...
+REM RICHIESTO dal proprietario: "l'utente non deve andare a cercare percorsi". Questo e' l'unico
+REM eseguibile che si VEDE: e' la finestra vera (desktop_shell.py, dentro ..\desktop), con l'icona
+REM e il titolo di Forex Backtest LAB. Gli altri tre sono servizi senza finestra che questa
+REM finestra trova gia' in funzione (se il ponte non c'e' lo avvia lei, vedi _ensure_backend).
+REM
+REM DEVE stare qui, nello stesso script degli altri: prima era prodotto solo da
+REM ..\desktop\BUILD_EXE_DESKTOP.bat, che il flusso di GitHub NON chiama — risultato, il Setup
+REM uscito dal flusso non conteneva la finestra (chi installava trovava solo i servizi in
+REM esecuzione e nessuna applicazione da aprire). Compilandolo qui, installer.iss lo inserisce
+REM nello stesso pacchetto degli altri tre.
+REM
+REM pywebview e' in build\requirements.txt: senza, "import webview" in desktop_shell.py muore
+REM al primo avvio dell'exe.
+pyinstaller ^
+  --noconfirm ^
+  --onefile ^
+  --windowed ^
+  --name ForexBacktestLABDesktop ^
+  --icon build\icon.ico ^
+  --hidden-import webview.platforms.edgechromium ^
+  --add-data "build\app.html;." ^
+  --add-data "build\sw.js;." ^
+  --add-data "build\manifest.json;." ^
+  --add-data "build\icon-192.png;." ^
+  --add-data "build\icon-512.png;." ^
+  --add-data "build\apple-touch-icon.png;." ^
+  "%~dp0..\desktop\desktop_shell.py"
+
+if errorlevel 1 (
+  echo.
+  echo ERRORE durante la creazione di ForexBacktestLABDesktop.exe: guarda il messaggio sopra.
+  echo Questo e' l'eseguibile dell'applicazione con la finestra: SENZA, chi installa non ha
+  echo nulla da aprire (il pacchetto conterrebbe solo i servizi invisibili). Non proseguo.
+  echo Se l'errore parla di "webview", installalo: pip install pywebview ^(e' anche nel
+  echo file build\requirements.txt^).
+  pause
+  exit /b 1
+)
+
 echo === FATTO ===
-echo Trovi ForexBacktestLAB.exe, Mt5FeedServer.exe E SegnaliBridge.exe in "dist"
+echo Trovi ForexBacktestLAB.exe, Mt5FeedServer.exe, SegnaliBridge.exe E ForexBacktestLABDesktop.exe in "dist"
 echo ^(DEVONO stare insieme nella stessa cartella quando li distribuisci - vedi
 echo installer.iss, che li installa gia' entrambi nello stesso posto^).
 echo PROVALI SUBITO: doppio click su ForexBacktestLAB.exe - NON deve aprirsi
