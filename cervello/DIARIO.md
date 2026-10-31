@@ -3917,3 +3917,35 @@ contratto 100.000 volte troppo grande). Alla fine: 144 su 144.
 **Cosa resta:** Fase 4 (il ponte legge i segnali), Fase 5 (gestione dal vivo su tick MT5 —
 pareggio, break-even, sposta stop), Fase 6 (il commutatore). Sono la parte pericolosa; ognuna
 va provata contro la pagina prima di accenderla.
+## 31 ottobre 2026 — Fase 4, e la decisione del proprietario che cambia il progetto
+
+**Fase 4 fatta e in CI** (194 prove verdi sul ponte): il ponte ordini legge i segnali dal WebSocket
+`/ws/segnali` del ponte segnali (porta 8769) — lo stesso canale della pagina, non uno apposta — e
+tiene l'ultimo arrivato. Canale muto → attesa di 5 s e riprova: il ponte non cade, e continua a
+eseguire gli ordini che la pagina manda.
+
+**Due difetti veri trovati dal test, non da me:**
+
+1. `_segnala_segnale` accoglieva qualunque dict, ack compreso. Il filtro ora sta nel punto unico
+   di ingresso: se stesse solo nel ciclo, la prossima cosa che chiama la funzione passerebbe un
+   messaggio di servizio e lo farebbe diventare un ordine.
+2. L'avvio usava `asyncio.ensure_future` dal blocco principale, che è **sincrono**: senza event
+   loop attivo solleva "no running event loop". Cioè l'ascolto non sarebbe partito **mai**, e
+   l'errore sarebbe finito nel log senza che nessuno lo vedesse. Ora gira in un thread daemon con
+   il suo loop.
+
+**La decisione del proprietario, che ribalta il progetto:** «per quanto riguarda gli ordini il
+server deve solo inoltrare, non deve prendere le decisioni lui, il sistema rimane lo stesso di
+oggi, ma solo per gli ordini. Tutto il resto va cambiato e aggiornato e deve funzionare in
+maniera maniacale.»
+
+Quindi: **gli ordini non si spostano.** La decisione resta nella pagina (`tgPiano`); ponte e
+server inoltrano ed eseguono. Le fasi 5 (gestione dal viva autonoma) e 6 (commutatore) sono
+**fermate**: niente ordini mandi dal ponte senza che la pagina lo chieda. La Fase 4 resta per
+quello che è — il ponte *vede* i segnali. Le fasi 1-3 restano in CI: misurano che il Python del
+laboratorio e la pagina fanno gli stessi numeri, e sono il permesso già conquistato se un domani
+la decisione si sposta davvero.
+
+**Lezione che si aggiunge alle altre:** lo strumento di confronto é servito anche a dire di NO.
+Costruito per ottenere il permesso di spostare la decisione, ha finito per documentare che quel
+posto va bene dove sta. Misurare non significa sempre cambiare: a volte significa confermare.

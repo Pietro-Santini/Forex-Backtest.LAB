@@ -38,6 +38,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import asyncio  # Fase 4: il ciclo di lettura dei segnali gira su un event loop suo, in un thread
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -122,6 +123,118 @@ def _installa_excepthook_bridge():
     except Exception:
         pass
 
+
+# ===================== FASE 4: LETTURA DEI SEGNALI (dal ponte segnali, porta 8769) ==========
+# Il ponte ordini non decide ancora da solo, ma da oggi PUO' vedere i segnali: si collega al
+# WebSocket del ponte segnali (che e' suo figlio, lo ha avviato lui) come fa la pagina, e ne
+# tiene l'ultimo arrivato. Senza questo, la "decisione nel ponte" non avrebbe niente da decidere.
+#
+# Scelte, e perche':
+#   - canale UNICO: /ws/segnali, lo stesso della pagina. Un canale apposta per il ponte sarebbe
+#     un secondo posto dove i segnali si possono guastare da soli;
+#   - la riconnessione ci pensa un sonno di 5 secondi: se il ponte segnali non e' ancora su
+#     (parte dopo), si riprova invece di morire;
+#   - MAI bloccare l'ordine: se il canale segnali non c'e', il ponte continua a eseguire gli
+#     ordini che la pagina manda. I segnali in piu' non sono un permesso di smettere di lavorare.
+_PORTA_SEGNALI_LETTA = 8769
+_ultimo_segnale_ricevuto: Optional[dict] = None
+_ws_segnali_task = None
+
+
+def _ultimo_segnale() -> Optional[dict]:
+    """L'ultimo segnale arrivato dal ponte segnali, o None se non ne e' arrivato nessuno."""
+    return _ultimo_segnale_ricevuto
+
+
+def _segnala_segnale(seg: dict) -> None:
+    """Punto unico dove un segnale entra nel ponte ordini. Oggi lo mette da parte e basta;
+    quando entrera' la decisione, sara' qui che decidera' cosa farne.
+
+    Il filtro "e' davvero un segnale?" sta QUI e non nel ciclo, per una ragione secca: questo e'
+    l'unica porta da cui i segnali entrano. Se il controllo stesse solo nel ciclo, la prossima
+    cosa che chiama `_segnala_segnale` - un endpoint, la Fase 5, un ritardo - potrebbe passare un
+    messaggio di servizio (un ack, un "ultimo_id") e farlo diventare un ordine. Trovato dal test
+    il 31 ottobre 2026: `_segnala_segnale({"azione": "ultimo_id"})` veniva accolto come segnale.
+    """
+    global _ultimo_segnale_ricevuto
+    if not isinstance(seg, dict):
+        return
+    if not (seg.get("strumento") or seg.get("direzione")):
+        return
+    _ultimo_segnale_ricevuto = seg
+    try:
+        _log_bridge("[Segnali] arrivato: " + str(seg.get("strumento")) + " " + str(seg.get("direzione")))
+    except Exception:
+        pass
+
+
+async def _ascolta_segnali_loop() -> None:
+    """Si collega al WebSocket dei segnali e rilegge l'ultimo id dopo ogni messaggio, come fa
+    la pagina: senza, un ricollegamento perderebbe gli ultimi segnali gia' valutati."""
+    import json as _json
+    import websockets
+
+    while True:
+        try:
+            uri = "ws://127.0.0.1:%d/ws/segnali" % _PORTA_SEGNALI_LETTA
+            async with websockets.connect(uri, open_timeout=3) as ws:
+                try:
+                    _log_bridge("[Segnali] canale collegato sulla porta %d" % _PORTA_SEGNALI_LETTA)
+                except Exception:
+                    pass
+                while True:
+                    grezzo = await ws.recv()
+                    try:
+                        m = _json.loads(grezzo)
+                    except Exception:
+                        continue
+                    if not isinstance(m, dict):
+                        continue
+                    seg = m.get("segnale") or m.get("signal") or m
+                    if isinstance(seg, dict) and (seg.get("strumento") or seg.get("direzione")):
+                        _segnala_segnale(seg)
+                    try:
+                        if m.get("id") is not None:
+                            await ws.send(_json.dumps({"ultimo_id": m.get("id")}))
+                    except Exception:
+                        pass
+        except Exception:
+            # Canale non ancora su, o caduto: si riprova. Non e' un errore da gridare, il ponte
+            # segnali parte DOPO questo processo.
+            await asyncio.sleep(5)
+
+
+def _avvia_ascolto_segnali() -> None:
+    """Best-effort: se il canale non si apre, il ponte lavora lo stesso.
+
+    Perche' un THREAD e non `asyncio.ensure_future`: questa funzione viene chiamata dal blocco
+    principale, che e' sincrono - non c'e' nessun event loop in giro - e `ensure_future` senza
+    loop attivo solleva "no running event loop". Cioe' l'ascolto non sarebbe partito MAI, e
+    l'errore sarebbe finito nel log senza che nessuno lo vedesse. Un thread con il suo loop
+    funziona da qualunque punto chiami, sincrono o asincrono che sia.
+    """
+    global _ws_segnali_task
+    if _ws_segnali_task is not None:
+        return
+    try:
+        _ws_segnali_task = threading.Thread(
+            target=lambda: asyncio.run(_ascolta_segnali_loop()),
+            name="fbl-lettura-segnali", daemon=True)
+        _ws_segnali_task.start()
+    except Exception as e:
+        _ws_segnali_task = None
+        try:
+            _log_bridge("[Segnali] ascolto non avviato (non bloccante): %s" % e)
+        except Exception:
+            pass
+
+
+def _ferma_ascolto_segnali() -> None:
+    """Il thread e' daemon e il loop gira per sempre: "fermarlo" significa togliere il riferimento
+    e lasciare che il processo esca. Non si tocca l'event loop da qui - chiamare cancel() su un
+    task che gira su un altro loop e' il modo piu' rapido per far cadere il ponte."""
+    global _ws_segnali_task
+    _ws_segnali_task = None
 
 _installta = _installa_excepthook_bridge()
 
@@ -3285,6 +3398,14 @@ if __name__ == "__main__":
     print(f"Forex Backtest LAB — servizio bridge avviato su http://127.0.0.1:{PORT}/ "
           f"(nessuna finestra: log su {_LOG_FILE_PATH or '(nessun file di log disponibile)'})")
     _start_mt5_feed_server()  # vedi commento sulla funzione: best-effort, non blocca questo avvio
+    try:
+        _avvia_ascolto_segnali()
+    except Exception as _e:
+        try:
+            _log_bridge('[Segnali] avvio ascolto non riuscito (non bloccante): %s' % _e)
+        except Exception:
+            pass
+
     _avvia_custode_mt5_feed()  # e adesso qualcuno controlla che la porta 8001 risponda ancora
     # SOLO 127.0.0.1, sempre: dagli altri dispositivi si arriva con Tailscale Serve (vedi
     # accesso_condiviso.py), che parla con questo servizio in locale.

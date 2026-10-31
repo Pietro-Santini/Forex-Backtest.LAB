@@ -1,17 +1,17 @@
-// Service worker minimale: mette in cache i file dell'app così può
+﻿// Service worker minimale: mette in cache i file dell'app cosÃ¬ puÃ²
 // funzionare offline e i browser la considerano "installabile".
 //
-// STRATEGIA CAMBIATA (era cache-first, ora è network-first) — causa di un bug reale appena
+// STRATEGIA CAMBIATA (era cache-first, ora Ã¨ network-first) â€” causa di un bug reale appena
 // scoperto: con cache-first, ogni volta che pubblichi un app.html aggiornato (anche solo per
-// correggere un bug come quello MT5), chi ha già aperto l'app UNA VOLTA continua a vedere la
-// versione VECCHIA anche dopo aver ricaricato la pagina — il service worker rispondeva sempre con
+// correggere un bug come quello MT5), chi ha giÃ  aperto l'app UNA VOLTA continua a vedere la
+// versione VECCHIA anche dopo aver ricaricato la pagina â€” il service worker rispondeva sempre con
 // la copia in cache PRIMA di controllare la rete, aggiornando la cache solo per il giro
-// SUCCESSIVO. Risultato concreto: un fix pubblicato sembra "non funzionare" quando in realtà non
-// è mai arrivato al browser, e non c'è alcun errore visibile che lo segnali — è emerso proprio
-// così durante un test manuale. Con la rete disponibile (il caso normale) ora si prova SEMPRE la
+// SUCCESSIVO. Risultato concreto: un fix pubblicato sembra "non funzionare" quando in realtÃ  non
+// Ã¨ mai arrivato al browser, e non c'Ã¨ alcun errore visibile che lo segnali â€” Ã¨ emerso proprio
+// cosÃ¬ durante un test manuale. Con la rete disponibile (il caso normale) ora si prova SEMPRE la
 // rete per prima; la cache resta come rete di sicurezza SOLO per l'uso offline vero (o se la rete
-// è momentaneamente irraggiungibile). CACHE_NAME cambiato apposta (v2 -> v3) per invalidare una
-// volta per tutte le cache vecchie di chi ha già usato l'app prima di questo fix.
+// Ã¨ momentaneamente irraggiungibile). CACHE_NAME cambiato apposta (v2 -> v3) per invalidare una
+// volta per tutte le cache vecchie di chi ha giÃ  usato l'app prima di questo fix.
 // ---------------------------------------------------------------------------
 // REGOLA: ALZA DI UNO QUESTO NUMERO A OGNI RILASCIO CHE L'UTENTE DEVE RICEVERE.
 //
@@ -29,7 +29,7 @@
 //   applicazione/sw.js             -> quella che va sul repo del sito
 //   installer_build/sw.js
 //   installer_build/build/sw.js    -> quella impacchettata nell'exe
-// Storico: v4 = pubblicato sul repo fino al 26-09-2026 · v5 = mai pubblicato
+// Storico: v4 = pubblicato sul repo fino al 26-09-2026 Â· v5 = mai pubblicato
 //          v6 = rilascio con installer desktop, Mt5FeedServer e protocollo
 //               forexbacktestlab://
 //          v7 = usata dalle copie in installer_build (il repo era rimasto a v6)
@@ -41,10 +41,10 @@
 //               Windows italiano, messaggio del tablet che non accusa piu' il PC
 //          v10 = accesso da altri dispositivi SOLO via Tailscale (https sul nome
 //               .ts.net): niente Wi-Fi, niente firewall, stesso sito sul tablet
-//          v11 = la prova del collegamento riconosce il permesso «rete locale» del
-//               browser e offre il test diretto, invece di dire «computer non trovato»
+//          v11 = la prova del collegamento riconosce il permesso Â«rete localeÂ» del
+//               browser e offre il test diretto, invece di dire Â«computer non trovatoÂ»
 //          v12 = login al conto MT5 dal tablet (mancava la chiave); dal tablet
-//               «Disconnetti» e la chiusura della pagina non spengono piu' il PC
+//               Â«DisconnettiÂ» e la chiusura della pagina non spengono piu' il PC
 //          v13 = cambio conto MT5: le posizioni dell'altro conto non si chiudono piu'
 //               a prezzo 0 nel Trade Journal, si mettono da parte e tornano
 //          v14 = con piu' conti MT5 si sceglie su quale entrare (niente riconnessione
@@ -132,7 +132,7 @@
 //               Cronologia delle sale: la prop firm dedicata si misura SEMPRE sul conto
 //               iniziale scelto (non sul capitale a cui la sala era arrivata), la data di
 //               apertura torna vuota ogni volta che si accende l'interruttore e quando si
-//               conferma il pop-up «Prop firm sbloccata».
+//               conferma il pop-up Â«Prop firm sbloccataÂ».
 //               Apertura automatica: si scelgono i CONTI MT5 su cui le sale possono aprire da
 //               sole, con tre interruttori - passa da sola al conto scelto, apri su tutti i
 //               conti scelti, torna al conto che stavi guardando.
@@ -158,7 +158,7 @@
 //               alla volta insieme alla candela.
 //               Cronologia delle sale: quello che si porta a grafico resta su QUESTO
 //               dispositivo (dal PC non compare su tablet e telefono, e viceversa), si toglie
-//               col pulsante «Togli dal grafico» e sparisce da solo cambiando sala. In piu' un
+//               col pulsante Â«Togli dal graficoÂ» e sparisce da solo cambiando sala. In piu' un
 //               pulsante porta il setup provato sulla resa (rischio, metodologia, percentuali,
 //               spostamenti dello stop) dentro la strategia dell'apertura automatica di quella
 //               sala, invece di doverla ricopiare a mano.
@@ -222,7 +222,7 @@
 //               Posizione selezionata: delle ALTRE restano le linee di stop e target con le loro
 //               etichette, in grigio - prima sparivano del tutto - mentre il riempimento colorato
 //               resta solo a quella scelta. Cliccando sul vuoto torna tutto.
-//               Cronologia delle sale: accanto al pulsante «Analizza e mostra a grafico», mentre
+//               Cronologia delle sale: accanto al pulsante Â«Analizza e mostra a graficoÂ», mentre
 //               scarica, un cerchietto che si riempie con la percentuale e dice cosa sta
 //               scaricando.
 //               PONTE (serve il reinstaller): la storia di un utente Syntra si prende dalla
@@ -304,7 +304,7 @@
 //               E la riga di Journal di una chiusura Kraken ha numeri veri: i pip erano scritti
 //               ZERO fissi (nel Journal si leggeva "+0.0" per qualunque operazione cripto) e la
 //               colonna Conto conteneva la stringa 'kraken', che passata a euro() diventava
-//               "NaN €". Ora i pip si calcolano come per ogni altra operazione e il conto e' il
+//               "NaN â‚¬". Ora i pip si calcolano come per ogni altra operazione e il conto e' il
 //               saldo vero, convertito in euro come il P/L della stessa riga.
 //          v150 = SYNTRA, LA STORIA DI UN UTENTE (serve il reinstaller: gira nel ponte). Il robot
 //               arrivava sul profilo giusto e poi non faceva piu' niente: "0 operazioni lette".
@@ -626,12 +626,12 @@
 // v2.0.13 -  CAPITOLO 2 (soldi e operazioni) e i lavori della notte. Il collaudo non tocca piu'
 //            il ponte MT5 del proprietario (apriva WebSocket veri verso le sue porte 8001/8769,
 //            centinaia di volte per giro, interrompendogli il collegamento mentre operava); il
-//            pulsante «Aggiorna» si spegne da solo dopo l'aggiornamento; UNA conferma sola per
+//            pulsante Â«AggiornaÂ» si spegne da solo dopo l'aggiornamento; UNA conferma sola per
 //            le chiusure multiple (prima ogni posizione REALE apriva il suo popup); operazioni a
-//            blocco anche su Kraken; via «Operazione» dal riquadro a schermo intero; le
+//            blocco anche su Kraken; via Â«OperazioneÂ» dal riquadro a schermo intero; le
 //            impostazioni (footprint, indicatori, decimali, strategie sale) seguono l'account,
 //            i segreti no; e il conto segue l'asset: cripto -> Kraken, forex/indici/azioni -> MT5.
-const CACHE_NAME = "forex-backtest-lab-v2.0.54";
+const CACHE_NAME = "forex-backtest-lab-v2.0.55";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
@@ -654,12 +654,12 @@ const ASSETS = [
   "./icon-512.png"
 ];
 
-/* AGGIORNAMENTO SW: INIZIO — install e activate provati per intero da
+/* AGGIORNAMENTO SW: INIZIO â€” install e activate provati per intero da
    laboratorio/app/aggiornamento.test.mjs, con caches e clients finti. */
-// ESISTE GIÀ UNA VERSIONE SUL DISPOSITIVO? In una primissima installazione
-// self.registration.active è null; in un AGGIORNAMENTO punta al worker vecchio. È l'unico
-// segnale affidabile per annunciare «versione-nuova» alle pagine aperte SOLO quando è vero:
-// alla prima apertura non c'è nulla di nuovo da dire.
+// ESISTE GIÃ€ UNA VERSIONE SUL DISPOSITIVO? In una primissima installazione
+// self.registration.active Ã¨ null; in un AGGIORNAMENTO punta al worker vecchio. Ãˆ l'unico
+// segnale affidabile per annunciare Â«versione-nuovaÂ» alle pagine aperte SOLO quando Ã¨ vero:
+// alla prima apertura non c'Ã¨ nulla di nuovo da dire.
 let aggiornamentoDiVersione = false;
 
 self.addEventListener("install", (event) => {
@@ -677,12 +677,12 @@ self.addEventListener("activate", (event) => {
         keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))
       )
     )
-      // L'AVVISO ARRIVA DOPO LA PULIZIA, non prima: quando l'utente preme «Aggiorna» la
-      // pagina si ricarica e caches.match cerca in TUTTE le cache — se le vecchie fossero
-      // ancora lì, la ricarica servirebbe di nuovo il file vecchio. E con includeUncontrolled
-      // l'elenco è completo anche prima del claim: subito dopo l'attivazione le pagine sono
+      // L'AVVISO ARRIVA DOPO LA PULIZIA, non prima: quando l'utente preme Â«AggiornaÂ» la
+      // pagina si ricarica e caches.match cerca in TUTTE le cache â€” se le vecchie fossero
+      // ancora lÃ¬, la ricarica servirebbe di nuovo il file vecchio. E con includeUncontrolled
+      // l'elenco Ã¨ completo anche prima del claim: subito dopo l'attivazione le pagine sono
       // ancora controllate dal worker VECCHIO, e senza questa opzione l'elenco del nuovo
-      // worker sarebbe vuoto — l'avviso non arriverebbe mai a nessuno.
+      // worker sarebbe vuoto â€” l'avviso non arriverebbe mai a nessuno.
       .then(() => self.clients.matchAll({includeUncontrolled: true}))
       .then((clienti) => {
         if (!aggiornamentoDiVersione) return;   // prima installazione: niente da annunciare

@@ -75,3 +75,26 @@ dimostra niente. Quindi:
 Non è una serata: è la riscrittura in Python della parte che calcola rischio, volume, stop e
 target, più la gestione dal vivo. La parte **misurabile** (fasi 1-3) è ciò che dà il permesso di
 fare la 4-6: finché il confronto non è verde, spostare la decisione sarebbe spostare un difetto.
+
+## 7. DECISIONE DEL PROPRIETARIO (31 ottobre 2026): gli ordini restano della pagina
+
+> «per quanto riguarda gli ordini in realtà il server deve solo inoltrare, non deve prendere le
+> decisioni lui, il sistema rimane lo stesso di oggi, ma solo per gli ordini. tutto il resto va
+> cambiato e aggiornato e deve funzionare in maniera maniacale.»
+
+Cosa dice, tradotto in lavoro:
+
+- **Gli ordini non si spostano.** La decisione resta in `app.html` (`tgPiano`); il ponte ordini e
+  il server Oracle **inoltrano ed eseguono**, come oggi. Coerente con la misura fatta in apertura:
+  `server_oracle/ponte_server.py` ha 8 endpoint, tutti di inoltro, e zero riferimenti a
+  rischio/lotto/stop/target — è la strada, non il conducente.
+- **Le fasi 5 e 6 sono FERMATE.** Niente gestione dal vivo autonoma nel ponte, niente commutatore
+  che spenga l'automatico della pagina. La Fase 4 resta, ma **per quello che è**: lettura dei
+  segnali e messa da parte dell'ultimo — il ponte sa quali segnali sono arrivati, e non esegue
+  niente da sé. Nessuna autonomia, quindi nessun ordine mandato senza che la pagina lo chieda.
+- **Le fasi 1-3 restano valide e restano in CI.** Misurano che il Python del laboratorio e la
+  pagina fanno gli stessi numeri: sono uno strumento, non un trampolino per accendere l'automatico.
+  Se un domani la decisione si sposta davvero, quello è il permesso già conquistato.
+- **Il lavoro vero ora è «tutto il resto»**: servizi, servizio dati, segnali, prestazioni, replica,
+  interfaccia. Quello va curato uno per uno, con la solita regola: si misura, si cura, il test
+  misura il comportamento, non la presenza di una stringa nel sorgente.
