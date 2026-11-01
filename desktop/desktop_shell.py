@@ -17,6 +17,7 @@ Cosa garantisce, perche' l'utente non deve avere problemi:
      (http://127.0.0.1:8000), non con il server di un altro utente.
 """
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -55,6 +56,38 @@ def _is_port_open(port, host="127.0.0.1", timeout=1.0):
         return False
 
 
+def _hash_app_html():
+    """Hash corto del file app.html servito dal ponte, per il cache-bust dell'URL.
+
+    Ogni volta che l'app viene aggiornata, app.html cambia e l'hash cambia: il
+    desktop carica un URL diverso, quindi la WebView2 (e il service worker) non
+    possono servire la copia vecchia dalla cache. Senza questo, il riavvio
+    dell'applicazione continuava a mostrare la versione precedente (segnalato
+    dal proprietario: "non si aggiorna neanche chiudendo").
+    """
+    dove = []
+    mei = getattr(sys, "_MEIPASS", None)
+    if mei:
+        dove.append(os.path.join(mei, "app.html"))
+    qui = os.path.dirname(os.path.abspath(__file__))
+    dove.append(os.path.join(qui, "app.html"))
+    dove.append(os.path.join(os.path.dirname(qui), "app.html"))
+    dove.append(os.path.join(INSTALLED_APP, "app.html"))
+    for percorso in dove:
+        try:
+            with open(percorso, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()[:12]
+        except OSError:
+            continue
+    return str(int(time.time()))
+
+
+def _url_app():
+    """Indirizzo dell'app con cache-bust, in modo che ogni versione sia un URL nuovo."""
+    base = "http://127.0.0.1:%d/app.html" % PORTA_LOCALE
+    return base + "?v=" + _hash_app_html()
+
+
 def _ensure_backend():
     """Rende disponibile il ponte (il servizio dell'applicazione) e il suo indirizzo.
 
@@ -66,7 +99,7 @@ def _ensure_backend():
     allora la finestra mostra la pagina di spiegazione (non resta bianca).
     """
     if _is_port_open(PORTA_LOCALE):
-        return INDIRIZZO_LOCALE
+        return _url_app()
     if os.path.isfile(BRIDGE_EXE):
         subprocess.Popen(
             [BRIDGE_EXE],
@@ -76,7 +109,7 @@ def _ensure_backend():
         for _ in range(30):
             time.sleep(1)
             if _is_port_open(PORTA_LOCALE):
-                return INDIRIZZO_LOCALE
+                return _url_app()
     remoto = (os.environ.get("BACKEND_URL") or "").rstrip("/")
     if remoto:
         url = remoto + "/app.html"
@@ -212,6 +245,7 @@ class _Api(object):
         self.finestra = None
 
     def riprova(self):
+        _pulisci_cache_webview()
         url = _ensure_backend()
         if url and self.finestra is not None:
             try:
@@ -222,11 +256,32 @@ class _Api(object):
         return False
 
 
+def _pulisci_cache_webview():
+    """Cancella la cache HTTP/WebView2 ad ogni avvio, per non servire mai una copia vecchia
+    di app.html/sw.js dopo un aggiornamento. I dati dell'utente (localStorage, cookie) restano
+    intatti: si tocca solo la cartella Cache. Segnalato dal proprietario: "l'installer
+    all'aggiornamento carica la vecchia app.html".
+    """
+    try:
+        cache_dir = os.path.join(STORAGE_PATH, "EBWebView", "Default", "Cache")
+        if os.path.isdir(cache_dir):
+            import shutil
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        # Anche la cache del service worker (CacheStorage)
+        cs = os.path.join(STORAGE_PATH, "EBWebView", "Default", "Service Worker", "CacheStorage")
+        if os.path.isdir(cs):
+            import shutil
+            shutil.rmtree(cs, ignore_errors=True)
+    except Exception:
+        pass
+
+
 def main():
     api = _Api()
     _patch_zoom_and_popups()
     debug = os.environ.get("DESKTOP_SHELL_DEBUG") == "1"
 
+    _pulisci_cache_webview()
     url = _ensure_backend()
     if url:
         finestra = webview.create_window(

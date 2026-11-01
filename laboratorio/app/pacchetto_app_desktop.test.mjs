@@ -185,7 +185,7 @@ test('la finestra dell\'applicazione si comporta da applicazione (eseguita davve
     'senza js_api il pulsante Riprova della spiegazione non puo\' fare niente');
 
   // L'INDIRIZZO DEL PONTE: prima la macchina locale (funziona per tutti), poi il server altrui.
-  assert.equal(fatti.ponte_su, 'http://127.0.0.1:8000/app.html', 'col ponte locale non si apre l\'applicazione');
+  assert.ok(String(fatti.ponte_su).startsWith('http://127.0.0.1:8000/app.html'), 'col ponte locale non si apre l\'applicazione');
   assert.equal(fatti.ponte_assente, null, 'senza ponte e senza alternativa deve dirlo, non inventare un indirizzo');
   assert.equal(fatti.ponte_remoto, 'http://prova.example:9010/app.html', 'BACKEND_URL non viene usato quando c\'e\'');
 
