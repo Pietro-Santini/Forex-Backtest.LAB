@@ -100,21 +100,25 @@ test('Android con app aperta: il riquadro non copre la finestra', () => {
   assert.deepEqual(a.box.azioni, [], 'l\'app si era aperta e il riquadro l\'ha coperta');
 });
 
-test("Windows senza app: dopo l'attesa offre solo l'installer", () => {
+test("Windows senza app: niente scheme, si va diretti all'installer", () => {
   const a = ambiente({userAgent: WINDOWS});
   const r = a.FBL.apriApp('avvia', 'login.html');
-  assert.equal(r.scelta, 'schema-desktop');
+  assert.equal(r.scelta, 'installazione');
   a.scatta();
   assert.ok(a.box.azioni.some(x => /installer/i.test(x.testo)), 'manca il download dell\'installer');
   assert.ok(!a.box.azioni.some(x => x.href === 'forexbacktestlab://avvia'),
     'lo scheme forexbacktestlab:// non e\' registrato su Windows: proposto dal sito mostra l\'errore Microsoft Store');
 });
 
-test('Windows con app aperta: nessun riquadro', () => {
+test('Windows: il riquadro con l\'installer compare, app aperta o no', () => {
+  // Non si apre piu\' niente da qui (niente scheme, niente iframe), quindi non esiste
+  // nemmeno il caso "il riquadro copre l\'app che si era aperta": la proposta di
+  // installazione si vede sempre, perche\' il pulsante Windows punta all\'installer.
   const a = ambiente({userAgent: WINDOWS, fuoco: true});
   a.FBL.apriApp('avvia');
   a.scatta();
-  assert.deepEqual(a.box.azioni, []);
+  assert.ok(a.box.azioni.some(x => /installer/i.test(x.testo)),
+    'manca il download dell\'installer: il riquadro deve comparire sempre');
 });
 
 test("iPhone: nessun download inventato, si spiega che si usa dal browser", () => {

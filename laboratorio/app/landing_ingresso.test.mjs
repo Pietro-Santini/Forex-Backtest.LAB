@@ -38,33 +38,43 @@ async function apriLanding(userAgent){
 // Il riquadro compare dopo un'attesa voluta (la porta aspetta per vedere se l'app risponde).
 const RIQUADRO = '#fblInstallBox';
 
-test("il pulsante della prova gratuita passa dalla porta e offre l'installazione", async () => {
+test("il pulsante della prova gratuita offre l'installazione: Windows punta diretto all'exe", async () => {
   const {browser, pagina} = await apriLanding(UA_WINDOWS);
+  // Si misurano le richieste della pagina e i frame aperti: NESSUNA deve parlare di
+  // forexbacktestlab:// (era l'iframe nascosto che faceva comparire il messaggio di
+  // Windows "avra' bisogno di una nuova app per aprire questo collegamento").
+  const scheme = [];
+  pagina.on('request', r => { if (/^forexbacktestlab:/i.test(r.url())) scheme.push(r.url()); });
+  pagina.on('framenavigated', f => { if (/^forexbacktestlab:/i.test(f.url())) scheme.push(f.url()); });
   try {
     assert.equal(await pagina.locator(RIQUADRO).count(), 0, 'riquadro presente prima di premere');
     await pagina.getByRole('button', {name: /Avvia Prova Gratuita di 7 Giorni/}).first().click();
     // Dopo il pulsante compare la modale di scelta piattaforma: i vari sistemi
     // operativi PIU' il pulsante separato "Prosegui sul web".
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
-    const scelte = (await pagina.locator('#fblInstallBox button').allTextContents()).join(' | ');
-    assert.ok(/Android/.test(scelte), 'manca la scelta Android: ' + scelte);
-    assert.ok(/Windows/.test(scelte), 'manca la scelta Windows: ' + scelte);
+    const bottoni = (await pagina.locator('#fblInstallBox button').allTextContents()).join(' | ');
+    assert.ok(/Android/.test(bottoni), 'manca la scelta Android: ' + bottoni);
+    assert.ok(/iPhone/.test(bottoni), 'manca la scelta iPhone/iPad/Mac: ' + bottoni);
     // Chi non installa non resta bloccato: "Prosegui sul web" lo porta dove voleva.
     const prosegui = await pagina.getByRole('link', {name: 'Prosegui sul web'}).getAttribute('href');
     assert.equal(prosegui, 'login.html', 'chi non installa non arriva dove voleva (login.html)');
-    // Ora si sceglie PC (Windows)
-    await pagina.getByRole('button', {name: 'PC (Windows)'}).first().click();
+    // RICHIESTO DAL PROPRIETARIO (1° novembre 2026): "PC (Windows)" e' UN LINK DIRETTO
+    // all'installer dell'ultima release di GitHub, non un girointerno che tenta lo scheme.
+    const pc = await pagina.getByRole('link', {name: /PC \(Windows\)/}).getAttribute('href');
+    assert.equal(pc,
+      'https://github.com/pietro-santini/Forex-Backtest.LAB/releases/latest/download/ForexBacktestLAB_Setup.exe',
+      'il pulsante Windows non punta all\'installer dell\'ultima release: ' + pc);
+    // Il giro interno (apriApp, quello che usa anche il login): deve offrire SOLO
+    // l'installer, senza nessun tentativo di scheme.
+    await pagina.evaluate(() => window.FBL.apriApp('avvia', 'login.html'));
     await pagina.waitForSelector(RIQUADRO, {timeout: 5000});
-    // Il pulsante NON deve piu' portare via dalla landing verso login.html.
     assert.ok(pagina.url().includes('index.html'), 'la pagina se n\'e\' andata: ' + pagina.url());
     const pulsanti = await pagina.locator('#fblInstallBox a').allTextContents();
     assert.ok(pulsanti.some(t => /installer/i.test(t)), 'manca il download dell\'installer');
-    // Nessun tentativo di scheme: era quello che mostrava l'errore Microsoft Store.
-    const hrefs = await pagina.locator('#fblInstallBox a').evaluateAll(as => as.map(a => a.getAttribute('href')));
-    assert.ok(!hrefs.some(h => h && /forexbacktestlab:/i.test(h)),
-      'c\'e\' ancora il tentativo di scheme (errore Microsoft Store): ' + hrefs.join(' | '));
-    // Solo l'installer: il riquadro di Windows non offre altro.
     assert.equal(pulsanti.length, 1, 'il riquadro di Windows deve offrire solo l\'installer: ' + pulsanti.join(' | '));
+    const iframeScheme = await pagina.locator('iframe[src^="forexbacktestlab"]').count();
+    assert.equal(iframeScheme, 0, 'il sito tenta ANCORA di aprire lo scheme forexbacktestlab://');
+    assert.deepEqual(scheme, [], 'partite richieste verso lo scheme: ' + scheme.join(' | '));
   } finally { await browser.close(); }
 });
 
