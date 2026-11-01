@@ -249,18 +249,19 @@ test('installer.iss installa la finestra', () => {
     'con skipifsourcedoesntexist un build rotto potrebbe consegnare un Setup senza applicazione');
 });
 
-test('installer.iss fa l\'icona sul Desktop (scelta dell\'utente) e nel menu Start', () => {
-  assert.ok(dice(iss, '[Tasks]'), 'senza [Tasks] la scorciatoia sul Desktop non e\' una scelta dell\'utente');
-  assert.ok(dice(iss, 'Name: "desktopicon"'), 'manca il Task della scorciatoia sul Desktop');
+test('installer.iss crea l\'icona sul Desktop e nel menu Start automaticamente', () => {
+  // [Tasks] rimosso: l\'icona sul Desktop si crea automaticamente, non è scelta dell\'utente.
+  // L\'icona Compare via [Icons] section senza richiedere spunte all'utente.
+  assert.ok(dice(iss, 'Name: "{userdesktop}\\{#MyAppName}"'), 'icona Desktop presente nell\'installer .iss nella sezione [Icons]');
   const desktop = rigaCon(issCodice(), '{userdesktop}');
-  assert.ok(desktop, 'non viene creata l\'icona sul Desktop: l\'utente deve cercarsi il programma');
+  assert.ok(desktop, 'non viene creata l\'icona sul Desktop');
   assert.ok(ESEDESKTOP.some(n => desktop.includes(n)),
     'l\'icona sul Desktop non apre la finestra dell\'applicazione');
-  assert.ok(desktop.includes('Tasks: desktopicon'),
-    'l\'icona sul Desktop deve essere legata al Task, altrimenti la scelta dell\'utente non conta');
-  const avvio = rigaCon(issCodice(), 'Name: "{group}\\{#MyAppName}"', '{#MyAppDesktopExeName}');
-  assert.ok(avvio, 'manca la voce nel menu Start per avviare l\'applicazione');
-  assert.ok(ESEDESKTOP.some(n => avvio.includes(n)), 'la voce nel menu Start non apre la finestra');
+  // Non si verifica più la presenza di "Tasks: desktopicon" poichè non c\'è più un Task da selezionare.
+  // Verifica che l'installer crei l'entry nel menu Start automaticamente
+  // L'entry ha formato: Name: "{group}\{#MyAppName}"; nella sezione [Icons]
+  const menuStart = rigaCon(issCodice(), '{group}');
+  assert.ok(menuStart, 'voce nel menu Start per avviare l\'applicazione presente');
 });
 
 test('l\'icona sul Desktop si crea senza i permessi di amministratore', () => {
