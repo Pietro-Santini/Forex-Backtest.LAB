@@ -143,12 +143,6 @@ Root: HKCU; Subkey: "Software\Classes\forexbacktestlab\shell\open\command"; Valu
 ; disinstallazione, non resta comunque nulla "orfano" nel Registro dopo un eventuale addio.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#MyAppName}"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue
 
-[Tasks]
-; La scorciatoia sul Desktop si sceglie (o non si sceglie) durante l'installazione, come
-; in qualunque altro programma. Quella nel menu Start si crea sempre: senza, su un desktop
-; senza icone l'utente non avrebbe modo di aprire l'applicazione.
-Name: "desktopicon"; Description: "Crea un'icona sul Desktop"; GroupDescription: "Icone aggiuntive:"
-
 [Icons]
 ; ATTENZIONE, PROPRIETARIO (31 ottobre 2026): qui c'era scritto "nessuna scorciatoia per
 ; avviare, l'utente non deve mai vederne un'icona", perche' si pensava a un pacchetto di
@@ -170,7 +164,7 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFile
 ; andava a buon fine, bloccando l'utente a meta'. {userdesktop} e' il Desktop dell'utente
 ; che installa: lo scrive senza chiedere niente a nessuno. Provato dal test
 ; pacchetto_app_desktop.test.mjs.
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"; Tasks: desktopicon
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"
 ; La voce per disinstallare resta: un programma installato deve poter essere rimosso dal
 ; solito posto, senza andare a caccia del disinstallatore.
 Name: "{group}\Disinstalla {#MyAppName}"; Filename: "{uninstallexe}"
@@ -235,6 +229,7 @@ var
 begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM SegnaliBridge.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Mt5FeedServer.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ForexBacktestLABDesktop.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ForexBacktestLAB.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
   Sleep(1500);
 end;
