@@ -219,6 +219,11 @@ function dice(testo, pezzo) { return testo.includes(pezzo); }
 function rigaCon(testo, pezzo, altro) {
   return righeDi(testo).find(r => r.includes(pezzo) && (!altro || r.includes(altro)));
 }
+// Il codice del .iss, senza le righe di commento (in un .iss il commento inizia con ';').
+// Serve perche' i commenti qui sopra spiegano PERCHE' una scelta e' stata fatta e nominano
+// anche quella sbagliata: senza toglierli, un test che cerca "{commondesktop}" troverebbe
+// la parola dentro la spiegazione e griderebbe al difetto gia' corretto.
+function issCodice() { return righeDi(iss).filter(r => !/^\s*;/.test(r)).join('\n'); }
 
 test('build_exe.bat costruisce anche la finestra, con la sua libreria', () => {
   assert.ok(/\-\-name\s+ForexBacktestLABDesktop/.test(bat),
@@ -247,15 +252,31 @@ test('installer.iss installa la finestra', () => {
 test('installer.iss fa l\'icona sul Desktop (scelta dell\'utente) e nel menu Start', () => {
   assert.ok(dice(iss, '[Tasks]'), 'senza [Tasks] la scorciatoia sul Desktop non e\' una scelta dell\'utente');
   assert.ok(dice(iss, 'Name: "desktopicon"'), 'manca il Task della scorciatoia sul Desktop');
-  const desktop = rigaCon(iss, '{commondesktop}');
+  const desktop = rigaCon(issCodice(), '{userdesktop}');
   assert.ok(desktop, 'non viene creata l\'icona sul Desktop: l\'utente deve cercarsi il programma');
   assert.ok(ESEDESKTOP.some(n => desktop.includes(n)),
     'l\'icona sul Desktop non apre la finestra dell\'applicazione');
   assert.ok(desktop.includes('Tasks: desktopicon'),
     'l\'icona sul Desktop deve essere legata al Task, altrimenti la scelta dell\'utente non conta');
-  const avvio = rigaCon(iss, 'Name: "{group}\\{#MyAppName}"', '{#MyAppDesktopExeName}');
+  const avvio = rigaCon(issCodice(), 'Name: "{group}\\{#MyAppName}"', '{#MyAppDesktopExeName}');
   assert.ok(avvio, 'manca la voce nel menu Start per avviare l\'applicazione');
   assert.ok(ESEDESKTOP.some(n => avvio.includes(n)), 'la voce nel menu Start non apre la finestra');
+});
+
+test('l\'icona sul Desktop si crea senza i permessi di amministratore', () => {
+  // Misurato sul PC del proprietario (1° novembre 2026): l'installazione si FERMAVA con
+  // "IPersistFile::Save fallito; codice 0x80070005. Accesso negato." mentre creava
+  // C:\Users\Public\Desktop\Forex Backtest LAB.lnk. {commondesktop} e' una cartella di
+  // sistema: senza amministratore non si scrive, e questo pacchetto e' pensato per
+  // girare SENZA amministratore (PrivilegesRequired=lowest), quindi deve restare cosi'.
+  // L'icona va in {userdesktop}: il Desktop di chi installa, che si scrive da solo.
+  assert.ok(!/\{commondesktop\}/.test(issCodice()),
+    'l\'icona sta in {commondesktop} (C:\\Users\\Public\\Desktop): con PrivilegesRequired=lowest ' +
+    'l\'installazione muore con "Accesso negato" - l\'utente resta bloccato a meta\'');
+  assert.ok(/\{userdesktop\}/.test(issCodice()),
+    'l\'icona sul Desktop deve stare in {userdesktop}, scrivibile senza amministratore');
+  assert.ok(/PrivilegesRequired\s*=\s*lowest/.test(issCodice()),
+    'l\'installazione deve restare per-utente: nessuna richesta di amministratore all\'utente');
 });
 
 test('dopo l\'installazione compare il pulsante selezionabile "Avvia Forex Backtest LAB"', () => {

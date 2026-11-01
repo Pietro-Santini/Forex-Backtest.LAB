@@ -161,7 +161,16 @@ Name: "desktopicon"; Description: "Crea un'icona sul Desktop"; GroupDescription:
 ; programma (nÃ© qui nÃ© sul Desktop, vedi sopra): non Ã¨ un'app che si apre a mano, l'utente non
 ; deve mai vederne un'icona su cui poter cliccare.
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"; Tasks: desktopicon
+; ATTENZIONE (1° novembre 2026): {userdesktop}, NON {commondesktop}. {commondesktop} e'
+; C:\Users\Public\Desktop, una cartella di SISTEMA che si scrive solo con i permessi da
+; amministratore. Questo pacchetto gira con PrivilegesRequired=lowest - nessun
+; amministratore richiesto, e deve restare cosi' (l'utente non deve vedere la richesta di
+; permessi) - quindi scrivere la' era impossibile: Inno Setup si FERMAVAcon
+; "IPersistFile::Save fallito; codice 0x80070005. Accesso negato." e l'installazione non
+; andava a buon fine, bloccando l'utente a meta'. {userdesktop} e' il Desktop dell'utente
+; che installa: lo scrive senza chiedere niente a nessuno. Provato dal test
+; pacchetto_app_desktop.test.mjs.
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppDesktopExeName}"; IconFilename: "{app}\{#MyAppDesktopExeName}"; Comment: "Apri Forex Backtest LAB"; Tasks: desktopicon
 ; La voce per disinstallare resta: un programma installato deve poter essere rimosso dal
 ; solito posto, senza andare a caccia del disinstallatore.
 Name: "{group}\Disinstalla {#MyAppName}"; Filename: "{uninstallexe}"
