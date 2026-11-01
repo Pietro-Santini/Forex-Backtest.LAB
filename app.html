@@ -12087,8 +12087,31 @@ function positionBelongsToCurrentView(pos){
    if(fblBacktestModeInUso()){
      if(fblNasceNelBacktest(pos))return true;
      if(!fblBacktestMostraMt5())return false;
+     // L'interruttore "mostra MT5" rimette lo STORICO (le operazioni chiuse, che governa
+     // tradeBelongsToCurrentView), NON le posizioni aperte di oggi: in modalita' backtest
+     // rivivi un momento passato, e una posizione aperta oggi comparirebbe a un prezzo che
+     // allora non esisteva (richiesta del 27 ottobre, test backtest_nasconde_storico).
+     // Il replay live NORMALE - backtest spento, piu' sotto - invece le mostra (richiesta
+     // del 1 novembre, test replay_posizioni_mt5_reali).
+     if(pos.mt5Ticket!=null)return false;
    }
-   return !!pos.historical;  // replay: SOLO le posizioni nate nel replay
+    if(pos.historical)return true;   // nate nel replay: sempre, come prima
+    // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): in replay con MT5 collegato le posizioni
+    // REALI del conto devono vedersi - linea d'entrata, TP, SL, frecce, etichetta col lato, i
+    // lotti e il P/L che segue il moltiplicatore - e comparire nella tabella "Posizioni aperte".
+    // Non e' un ritorno alla regola del 26 ottobre (commit e63c9c8): la' MT5 non era collegato
+    // durante il replay, quindi la posizione reale aveva i prezzi di ADESSO su un grafico di
+    // ALLORA e disegnarla non aveva senso. Con MT5 collegato il replay live gira sui prezzi di
+    // oggi: la posizione vera sta al suo posto.
+    // QUESTO MOSTRA SOLTANTO: gli ordini veri in replay restano vietati da fetchMt5WithTimeout
+    // (test replay_mai_ordini_veri), che qui non viene toccato.
+    try{
+      if(mt5Connected){
+        const login=currentMt5AccountTag().mt5Login;
+        return pos.mt5Ticket!=null&&(!login||String(pos.mt5Login||'')===login);
+      }
+    }catch(e){}
+    return false;   // senza MT5 collegato: solo cio' che e' nato nel replay, come prima
  }
  let conn=false; try{ conn=!!mt5Connected; }catch(e){}
  if(conn){
@@ -15808,8 +15831,17 @@ function openReferenceTimeForPos(pos){
 // REPLAY IN LIVE (richiesto esplicitamente): una posizione REALE va mostrata a grafico SOLO
 // quando il punto di replay ha già raggiunto la sua candela di apertura (openIdx<=idx); prima
 // di quel momento è "nel futuro" e non deve comparire. Fuori dal replay vale sempre (true).
+// REPLAY IN LIVE (richiesto esplicitamente): una posizione REALE va mostrata a grafico SOLO
+// quando il punto di replay ha raggiunto la sua candela di apertura (openIdx<=idx); prima
+// di quel momento e' "nel futuro" e non deve comparire. Fuori dal replay vale sempre (true).
+// ATTENZIONE (1 novembre 2026): con MT5 COLLEGATO questa regola vale solo per i trade nati
+// nel replay. La posizione VERA del conto (mt5Ticket) si vede sempre: il proprietario ha
+// chiesto entry, TP, SL, frecce, etichetta e P/L dal vivo durante il replay, e con MT5
+// collegato il replay gira sui prezzi di oggi, quindi la posizione reale sta al suo posto.
+// Mostrarla non apre ordini: quelli in replay restano vietati (fetchMt5WithTimeout).
 function posRevealedInReplay(pos){
  if(!liveReplayActive)return true;
+ try{ if(pos&&pos.mt5Ticket!=null&&mt5Connected)return true; }catch(e){}
  const openIdx=rowIndexContainingTime(openReferenceTimeForPos(pos));
  return openIdx!=null&&openIdx<=idx;
 }
@@ -17954,6 +17986,12 @@ function draw(){
    const livStorici=posLivelliAlTempo(pos,momentoMostrato);
    const slStorico=livStorici.sl, tpStorico=livStorici.tp;
    const sideColor=pos.side==='BUY'?'#2fbf71':'#e05252';
+   // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): la posizione REALE del conto MT5 si
+   // deve distinguere a colpo d'occhio da quelle nate nel replay o lette da un file CSV.
+   // Linea ambra, trattino piu' spesso e tesserino "MT5" sull'etichetta: la tabella ha
+   // gia' il suo badge. Misurato dal test replay_posizioni_mt5_reali.test.mjs.
+   const daMt5Reale=pos.mt5Ticket!=null;
+   const coloreMt5='#f0b429';   // ambra: non e' ne' il verde del BUY ne' il rosso del SELL
    // Calcolato una volta sola per candela di apertura, usato sia dalla freccia sia dalla
    // casella Target/Stop qui sotto (che deve restare disponibile anche quando l'entrata è
    // momentaneamente fuori dal range di prezzo visibile, quindi fuori dal blocco if seguente).
@@ -17964,8 +18002,8 @@ function draw(){
    if(pos.entry!=null && pos.entry>=lo && pos.entry<=hi && fblLineePosVisibili()){
      ctx.save();
      ctx.setLineDash([10,6]);
-     ctx.strokeStyle=dimmed?TRADE_DIM_GREY:sideColor;
-     ctx.lineWidth=isFocused?2.4:1.4;
+     ctx.strokeStyle=dimmed?TRADE_DIM_GREY:(daMt5Reale?coloreMt5:sideColor);
+     ctx.lineWidth=isFocused?2.4:(daMt5Reale?2.0:1.4);
      ctx.globalAlpha=dimmed?0.45:(isFocused?1:0.75);
      if(fblLineePrezzoVisibili()){ ctx.beginPath();ctx.moveTo(pad.l,y(pos.entry));ctx.lineTo(w-pad.r,y(pos.entry));ctx.stroke(); }
      ctx.setLineDash([]);
@@ -17980,7 +18018,7 @@ function draw(){
        // da solo), e accanto — sempre sulla stessa riga — il profitto live di QUESTA posizione,
        // aggiornato ad ogni frame come su MT5: blu se in guadagno (esattamente come l'Equity a
        // profitto su MT5, non verde), rosso se in perdita.
-       const lotsTxt=pos.side+(pos.lots!=null?' '+pos.lots.toFixed(2):'');
+       const lotsTxt=(daMt5Reale?'MT5 ':'')+pos.side+(pos.lots!=null?' '+pos.lots.toFixed(2):'');
        // P/L mostrato accanto alla freccia: per una posizione REALE è QUELLO DEL TERMINALE
        // (posLivePL -> mt5RealNet = profit+swap+commission della fotografia del bridge), MAI
        // ricalcolato col prezzo di un'altra fonte (feed Capital.com o rows dello Storico): è
@@ -17990,7 +18028,7 @@ function draw(){
        const plTxt=livePL!=null?('  '+(livePL>=0?'+':'')+euro(livePL)):'';
        const fullTxt=lotsTxt+plTxt, tw=ctx.measureText(fullTxt).width, boxH=13;
        const adjY=placeLabelY(pad.l+4,tw+8,y(pos.entry)-6-11,boxH,pad.t,h-pad.b);
-       ctx.fillStyle=dimmed?TRADE_DIM_GREY:sideColor;
+       ctx.fillStyle=dimmed?TRADE_DIM_GREY:(daMt5Reale?coloreMt5:sideColor);
        ctx.fillText(lotsTxt,pad.l+6,adjY+11);
        if(plTxt){
          ctx.fillStyle=dimmed?TRADE_DIM_GREY:(livePL>=0?TRADE_ARROW_BLUE:TRADE_ARROW_RED);
@@ -18006,7 +18044,7 @@ function draw(){
        const xOpen=pad.l+(openIdx-start+.5)*cw/n;
        if(xOpen>=pad.l-1&&xOpen<=w-pad.r+1){
          const isSell=pos.side==='SELL';
-         drawTradeArrow(ctx,xOpen,y(pos.entry),isSell?'down':'up',dimmed?TRADE_DIM_GREY:(isSell?TRADE_ARROW_RED:TRADE_ARROW_BLUE));
+         drawTradeArrow(ctx,xOpen,y(pos.entry),isSell?'down':'up',dimmed?TRADE_DIM_GREY:(daMt5Reale?coloreMt5:(isSell?TRADE_ARROW_RED:TRADE_ARROW_BLUE)));
           openPosHitRects.push({x1:xOpen-9,x2:xOpen+9,y1:y(pos.entry)-12,y2:y(pos.entry)+12,pos});
           if(fblLineePrezzoVisibili())openPosHitRects.push({x1:pad.l,x2:w-pad.r,y1:y(pos.entry)-4,y2:y(pos.entry)+4,pos});
        }
@@ -22168,13 +22206,13 @@ async function jumpToTradeOnChart(tradeIndex){
  await fblVaiAlContoDi(t);
  const tradeWasLive=(t.mode==='live'||t.mode==='live_propfirm');
  const currentAsset=$('market')?.value||'';
- if(t.asset && currentAsset!==t.asset){
-   applyAssetSelection(t.asset);
-   applyInstrument();
+ const daMt5=(t.mt5Ticket!=null||t.mode==='live'||t.mode==='live_propfirm');
+ if(t.asset && (currentAsset!==t.asset||(daMt5&&mt5Connected))){
+   if(currentAsset!==t.asset){ applyAssetSelection(t.asset); applyInstrument(); }
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   const esito=await caricaStoricoPerSaltoAGrafico(t.asset);
+   const esito=await caricaStoricoPerSaltoAGrafico(t.asset,{mt5:daMt5});
    if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
  if(!rows.length){$('status').textContent=`Nessuno storico per ${t.asset||'questo asset'}: non posso mostrare l'operazione a grafico.`;return;}
@@ -22236,13 +22274,17 @@ async function jumpToTradeOnChart(tradeIndex){
 // ripiego sulla libreria storica quando la fonte Live non ha potuto lavorare - meglio candele ferme
 // che nessuna candela - e il risultato si CONTROLLA: `rowsAssetKey` dice a quale asset
 // appartengono davvero le candele a schermo, ed e' scritto solo da chi le ha caricate per davvero.
-async function caricaStoricoPerSaltoAGrafico(asset){
+async function caricaStoricoPerSaltoAGrafico(asset,opts){
  if(!asset)return {ok:false,motivo:'nessun asset'};
+ opts=opts||{};
  suspendChartFeed('vai a grafico -> '+asset);
  try{
   if(liveModeActive){
    let sorgente='capital';
    try{ sorgente=fblSorgenteLivePerCambioTf(csvLibrary[0]&&csvLibrary[0].id,liveSessionPhaseNow(),mt5Connected); }catch(e){}
+   // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): saltando su una posizione o un ordine
+   // del conto MT5 la sorgente deve essere lo storico MT5, non il CSV della libreria.
+   if(opts.mt5&&mt5Connected)sorgente='mt5';
    try{
     if(sorgente==='mt5')await loadLiveHistoryFromMt5(asset);
     else await loadLiveHistoryFromCapital(asset);
@@ -22328,9 +22370,9 @@ async function jumpToPositionOnChart(posId){
  // della posizione sopra le candele della fonte sbagliata.
  await fblVaiAlContoDi(pos);
  const currentAsset=$('market')?.value||'';
- if(pos.asset && currentAsset!==pos.asset){
-   applyAssetSelection(pos.asset);
-   applyInstrument();
+ const daMt5=pos.mt5Ticket!=null;
+ if(pos.asset && (currentAsset!==pos.asset||(daMt5&&mt5Connected))){
+   if(currentAsset!==pos.asset){ applyAssetSelection(pos.asset); applyInstrument(); }
    // BUG RISOLTO: qui si caricava SEMPRE la libreria CSV di Storico (autoLoadAssetLibrary),
    // anche in modalità Live — per questo "Vai a grafico" su una posizione live riportava alla
    // sessione Storico invece di restare sulla candela Live in diretta di quell'asset. In Live
@@ -22339,7 +22381,7 @@ async function jumpToPositionOnChart(posId){
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   const esito=await caricaStoricoPerSaltoAGrafico(pos.asset);
+   const esito=await caricaStoricoPerSaltoAGrafico(pos.asset,{mt5:daMt5});
    if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
  if(!rows.length){$('status').textContent=`Nessuno storico per ${pos.asset||'questo asset'}: non posso mostrare la posizione a grafico.`;return;}
@@ -22361,15 +22403,15 @@ async function jumpToPendingOnChart(orderId){
  if(!p)return;
  clearClosedTradeHighlight();
  const currentAsset=$('market')?.value||'';
- if(p.asset && currentAsset!==p.asset){
-   applyAssetSelection(p.asset);
-   applyInstrument();
+ const daMt5=p.mt5Ticket!=null;
+ if(p.asset && (currentAsset!==p.asset||(daMt5&&mt5Connected))){
+   if(currentAsset!==p.asset){ applyAssetSelection(p.asset); applyInstrument(); }
    // Stessa correzione di jumpToPositionOnChart: in Live va ricaricato lo storico Live, non
    // quello di Storico.
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   const esito=await caricaStoricoPerSaltoAGrafico(p.asset);
+   const esito=await caricaStoricoPerSaltoAGrafico(p.asset,{mt5:daMt5});
    if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${p.asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}
@@ -22398,13 +22440,12 @@ async function jumpToMt5PendingOnChart(ticket){
  clearClosedTradeHighlight();
  const asset=o.symbol;
  const currentAsset=$('market')?.value||'';
- if(asset && currentAsset!==asset){
-   applyAssetSelection(asset);
-   applyInstrument();
+ if(asset && (currentAsset!==asset||mt5Connected)){
+   if(currentAsset!==asset){ applyAssetSelection(asset); applyInstrument(); }
    // Stesso stop/riavvio del cambio asset manuale: senza, fra il cambio di csvLibrary[0]
    // e l'arrivo del nuovo storico il timer da 1s applicherebbe al nuovo asset il prezzo
    // del vecchio (vedi chartFeedSuspended).
-   const esito=await caricaStoricoPerSaltoAGrafico(asset);
+   const esito=await caricaStoricoPerSaltoAGrafico(asset,{mt5:true});
    if(!esito.ok){ $('status').textContent=esito.motivo; return; }
  }
  if(!rows.length){$('status').textContent=`Nessun CSV in libreria per ${asset||'questo asset'}: aggiungine da "📚 Libreria storici CSV per asset" per poter vedere l'ordine a grafico.`;return;}

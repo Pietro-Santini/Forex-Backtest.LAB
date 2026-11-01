@@ -308,7 +308,12 @@ test('la vista Live normale resta com\'era: dentro solo le posizioni del conto r
       const live = {reale: positionBelongsToCurrentView(reale), simulata: positionBelongsToCurrentView(simulata),
         capital: positionBelongsToCurrentView(capital)};
 
-      // In replay: solo quella nata nel replay.
+      // In replay con MT5 collegato: la posizione REALE del conto si vede (richiesta del
+      // proprietario, 1° novembre 2026: "in modalita' replay con l'account MT5 collegato non mi
+      // mostra a grafico la posizione entry/TP/SL... deve esserci tutto"). Questa riga fissava
+      // il contrario - la regola del 26 ottobre - perche' allora MT5 non era collegato durante
+      // il replay e la posizione vera aveva i prezzi di ADESSO su un grafico di ALLORA.
+      // Test che misura il comportamento: replay_posizioni_mt5_reali.test.mjs.
       liveReplayActive = true;
       const inReplay = {reale: positionBelongsToCurrentView(reale), simulata: positionBelongsToCurrentView(simulata),
         capital: positionBelongsToCurrentView(capital)};
@@ -323,7 +328,7 @@ test('la vista Live normale resta com\'era: dentro solo le posizioni del conto r
     assert.equal(r.live.reale, true, 'in Live con MT5 collegato la posizione del conto reale si vede');
     assert.equal(r.live.simulata, false, 'in Live con MT5 collegato una posizione senza ticket non deve entrare (era così prima)');
     assert.equal(r.live.capital, false, 'in Live con MT5 collegato una posizione Capital.com non deve entrare (era così prima)');
-    assert.equal(r.inReplay.reale, false, 'in replay una posizione reale MT5 non deve comparire sul grafico del passato');
+    assert.equal(r.inReplay.reale, true, 'in replay con MT5 collegato la posizione reale del conto si vede (richiesta del 1 novembre 2026)');
     assert.equal(r.inReplay.capital, false, 'in replay una posizione reale Capital.com non deve comparire sul grafico del passato');
     assert.equal(r.inReplay.simulata, false, 'in replay solo le posizioni nate nel replay (historical)');
     assert.equal(r.dopoStop, false, 'dopo lo STOP una posizione simulata non deve entrare nel conto reale MT5');
