@@ -209,6 +209,14 @@ Filename: "{app}\{#MyAppExeName}"; Flags: nowait
 ; finestra la riapre l'utente quando vuole, dall'icona.
 Filename: "{app}\{#MyAppDesktopExeName}"; Description: "Avvia {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
+; AGGIORNAMENTO AUTOMATICO: quando il ponte lancia il pacchetto con /VERYSILENT, il Setup
+; chiude l'applicazione (ChiudiProgrammi), installa e poi riapre da solo la FINESTRA
+; dell'applicazione (Check silenziosa). E' la stessa cosa che fa OpenCode in alto a
+; destra: installa, chiude, riapre - cosi' i nuovi pacchetti si caricano con un refresh.
+; Senza questa riga l'aggiornamento chiudeva l'app e basta, e l'utente doveva riaprirla
+; a mano (segnalato dal proprietario il 1° novembre 2026).
+Filename: "{app}\{#MyAppDesktopExeName}"; Flags: nowait; Check: InstallazioneSilenziosa
+
 [Messages]
 ; Promemoria onesto mostrato prima dell'installazione: MetaTrader 5 non Ã¨
 ; incluso in questo pacchetto (va installato a parte dal broker dell'utente)
@@ -241,4 +249,15 @@ procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
     ChiudiProgrammi();
+end;
+
+// RICHIESTO (1° novembre 2026): l'aggiornamento automatico avvia il pacchetto con
+// /VERYSILENT (vedi aggiorna_programma in build/bridge.py). In quel caso il Setup
+// chiude il ponte (ChiudiProgrammi qui sopra), installa e poi deve riaprire la
+// FINESTRA dell'applicazione da solo: il ponte non puo' farlo, e' stato spento prima
+// di poterlo riaprire. WizardSilent() e' vero solo in quel caso; nell'installazione
+// normale la finestra si apre dalla casella "Avvia Forex Backtest LAB" piu' sotto.
+function InstallazioneSilenziosa(): Boolean;
+begin
+  Result := WizardSilent();
 end;

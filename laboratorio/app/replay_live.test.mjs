@@ -190,7 +190,7 @@ test('5) guardie anti-reset del replay presenti nei 5 punti critici', () => {
             'applyLivePriceToChart non deve riportare al presente durante il replay');
   assert.ok(APP.includes('if(!liveReplayActive)masterTime=closeTimeOf(baseRows[baseRows.length-1]); // in Live sempre'),
             'il tick-guardiano non deve riportare al presente durante il replay');
-  assert.ok(APP.includes('const liveMargin=(liveModeActive&&!liveReplayActive)?n*LIVE_FUTURE_MARGIN_FRACTION:0;'),
+  assert.ok(APP.includes('const liveMargin=(liveModeActive&&!liveReplayActive&&!fblMercatoFermoOra(currentAssetKey,Date.now()))?n*LIVE_FUTURE_MARGIN_FRACTION:0;'),
             'niente spazio futuro a destra durante il replay');
   assert.ok(conta('liveModeActive?rows[rows.length-1]:rows[idx]')===3,
             'evaluate, checkPendingOrders e checkAlarmLines usano l\'ultima candela vera in Live');

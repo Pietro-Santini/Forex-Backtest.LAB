@@ -12836,7 +12836,11 @@ function maxViewEnd(){
 const LIVE_FUTURE_MARGIN_FRACTION=0.12;
 function getViewWindow(){
  const n=getVisibleCount();
- const liveMargin=(liveModeActive&&!liveReplayActive)?n*LIVE_FUTURE_MARGIN_FRACTION:0;
+ // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): a mercato chiuso il margine futuro
+  // (0.12*n) NON si applica, altrimenti l'asse si estende oltre l'ultima candela e il
+  // grafico sembra "andare avanti" fino alla mezzanotte. Il margine serve solo quando il
+  // mercato e' aperto (spazio per gli orari futuri e i pallini delle notizie).
+  const liveMargin=(liveModeActive&&!liveReplayActive&&!fblMercatoFermoOra(currentAssetKey,Date.now()))?n*LIVE_FUTURE_MARGIN_FRACTION:0;
  // REPLAY FLUIDO (richiesto): mentre play e in corso si riserva una colonna vuota extra a
  // destra dell'ultima candela per la formazione "come dal vivo" (replayDisegnaFormazione).
  // dataEnd resta = idx (vedi sotto), quindi nessuna candela vera in piu: solo spazio dove
@@ -12858,7 +12862,23 @@ function getViewWindow(){
 function getVisibleData(){
  if(!rows.length)return [];
  const {dataStart,dataEnd}=getViewWindow();
- return rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
+ let result=rows.slice(dataStart,Math.min(rows.length,dataEnd+1));
+ // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): a mercato chiuso le candele successive
+ // alla chiusura (es. 22:00-00:00 per XAUUSD) non devono comparire: l'ultima candela a
+ // schermo deve essere quella dell'ultima fascia aperta. Alcuni feed (Capital.com)
+ // restituiscono comunque candele past-close: qui si filtrano, cosi' il grafico resta
+ // fermo all'ultima candela del mercato aperto fino alla riapertura.
+ if(liveModeActive && !liveReplayActive){
+   const out=[];
+   for(const r of result){
+     const t=parseDateTime(r.date);
+     if(!Number.isFinite(t)){ out.push(r); continue; }
+     if(fblMercatoFermoOra(currentAssetKey,t)){ break; }  // stop at market close
+     out.push(r);
+   }
+   result=out;
+ }
+ return result;
 }
 function freezeViewIfNeeded(){
  // Chiamata prima di ogni pan manuale: congela la scala verticale attuale
@@ -46562,7 +46582,12 @@ function liveScheduleAppliesNow(asset){
    // era su un'altra aula o su una cripta, e una posizione in guadagno su EURCHF restava aperta
    // oltre la chiusura del mercato perche' nessuno la chiudeva.
    const a=(asset!=null&&asset!=='')?asset:currentAssetKey;
-   return !!(liveModeActive&&mt5Connected&&a&&!binanceSymbolForAsset(a));
+   // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): la schedule di default MT5 (chiusura 22:00)
+   // vale SEMPRE per gli asset non-crypto, anche senza MT5 collegato. Prima si applicava solo
+   // con MT5 collegato: senza (telefono/tablet/remoto) il mercato non chiudeva mai a 22:00 e
+   // si ripiegava sugli orari di Capital.com, che arrivano alle 00:00 - il grafico andava
+   // avanti fino alla mezzanotte invece di fermarsi all'ultima candela.
+   return !!(liveModeActive&&a&&!binanceSymbolForAsset(a));
   }catch(e){ return false; }
 }
 // RICHIESTO: la fascia 22-23 con Capital.com si accende e si spegne (Impostazioni grafico → Style,
@@ -46696,6 +46721,16 @@ function statoMercato(asset,t){
    if(!dentro){
      const pross=iv.find(x=>x[0]>t);
      return {chiuso:true,apreAt:pross?pross[0]:null,fonte:'orari'};
+   }
+   // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): anche se il calendario dice "aperto",
+   // la schedule MT5 (chiusura 22:00) e' piu' restrittiva per gli asset non-crypto. Il
+   // calendario di Capital.com puo' dire "aperto fino alle 00:00" mentre il mercato vero
+   // (MT5) chiude alle 22:00: in quel caso si applica la chiusura a 22:00, cosi' l'ultima
+   // candela segna 22:00 e non 00:00.
+   if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'){
+     let apreAt=null;
+     for(let k=1;k<=4*24*60;k++){ const tt=Math.floor(t/60000)*60000+k*60000; if(liveSessionPhaseAt(tt)!=='closed'){ apreAt=tt; break; } }
+     return {chiuso:true,apreAt,fonte:'mt5'};
    }
  }
  // Orario con cui l\'app segue MT5 (anche se lo strumento sul broker e' aperto, il grafico e' fermo).

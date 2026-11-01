@@ -294,6 +294,25 @@ test('dopo l\'installazione compare il pulsante selezionabile "Avvia Forex Backt
   assert.ok(servizio, 'il servizio deve continuare ad avviarsi in silenzio dopo l\'installazione');
 });
 
+test('l\'aggiornamento silenzioso riapre la finestra dell\'applicazione', () => {
+  // Misurato dal proprietario (1° novembre 2026): l'aggiornamento chiudeva l'app e basta,
+  // poi l'utente doveva riaprirla a mano. Il Setup deve riaprirla SOLO quando gira in
+  // silenzio (Check: InstallazioneSilenziosa) - cosi' nell'installazione normale resta
+  // la casella "Avvia" a governare, e nell'aggiornamento automatico la finestra torna
+  // da sola, con un refresh, come fa OpenCode in alto a destra.
+  const riga = righeDi(iss).find(r => r.trim().startsWith('Filename: "{app}') &&
+    (r.includes('{#MyAppDesktopExeName}') || r.includes(NOMEDESKTOP)) &&
+    /Check:\s*InstallazioneSilenziosa/.test(r));
+  assert.ok(riga, 'in [Run] manca la voce che riapre la finestra nell\'aggiornamento silenzioso');
+  assert.match(iss, /function\s+InstallazioneSilenziosa\s*\(\)\s*:\s*Boolean;/,
+    'manca la funzione InstallazioneSilenziosa in [Code]');
+  assert.match(iss, /WizardSilent\(\)/,
+    'la funzione silenziosa deve basarsi su WizardSilent()');
+  // Il servizio continua a partire anche nell'aggiornamento silenzioso.
+  assert.match(iss, /Filename:\s*"\{app\}\\(\{#MyAppExeName\}|ForexBacktestLAB\.exe)"/,
+    'il servizio deve continuare ad avviarsi dopo l\'aggiornamento');
+});
+
 test('il collegamento del sito apre la finestra, non il servizio invisibile', () => {
   // Nel comando dello schema deve comparire la finestra, e NON il servizio senza finestra.
   const comando = iss.split('forexbacktestlab\\shell\\open\\command')[1] || '';

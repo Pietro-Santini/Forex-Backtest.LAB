@@ -130,14 +130,15 @@ test('un asset senza calendario non fa esplodere niente e non inventa', async ()
   try{
     const r = await pagina.evaluate((p) => {
       eval('(' + p + ')')();
-      // Nessun calendario per questo asset, e MT5 non collegato: non si sa, e si dice.
+      // Nessun calendario per questo asset: ora si usa la schedule MT5 (chiusura 22:00),
+      // perche' il mercato chiude anche senza il calendario del broker.
       mt5Connected = false;
       return {
         sconosciuto: fblProssimaChiusura('GBPNZD', Date.UTC(2026, 9, 20, 18, 0, 0)),
         vicino: fblVicinoAllaChiusura('GBPNZD', 1, Date.UTC(2026, 9, 20, 18, 0, 0))
       };
     }, PREPARA.toString());
-    assert.equal(r.sconosciuto, null, 'senza calendario si risponde «non si sa»');
+    assert.ok(r.sconosciuto !== null, 'senza calendario si usa la schedule MT5 (chiusura 22:00)');
     assert.equal(r.vicino, false, 'e «non si sa» non diventa mai «sì, è vicino»');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }

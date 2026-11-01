@@ -65,9 +65,9 @@ test('a mercato APERTO tutto continua a funzionare come prima', async () => {
   try{
     const r = await pagina.evaluate(`(${PREPARA})();
       delete orariAsset['XAUUSD'];                  // nessun calendario: mercato aperto
-      applyLiveTick({epic:'GOLD',bid:4095,timestamp:Date.now()});
+      applyLiveTick({epic:'GOLD',bid:4095,timestamp:Date.UTC(2026,9,20,15,0,0)});
       const dopoPrezzo = livePriceByAsset['XAUUSD'];
-      applyLiveTick({epic:'GOLD',bid:4080,timestamp:Date.now()});   // sotto lo stop
+      applyLiveTick({epic:'GOLD',bid:4080,timestamp:Date.UTC(2026,9,20,15,0,0)});   // sotto lo stop
       ({dopoPrezzo, aperte: positions.length})`);
     assert.equal(r.dopoPrezzo, 4095, 'a mercato aperto il prezzo deve muoversi');
     assert.equal(r.aperte, 0, 'e lo stop deve scattare: la correzione non deve spegnere il motore');
@@ -142,6 +142,8 @@ test('la casella della posizione non insegue l\'indice quando il mercato è chiu
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(`(${PREPARA_GRAFICO})();
+      const _origDateNow = Date.now;
+      Date.now = () => Date.UTC(2026,9,20,15,0,0);    // ora fissa dentro il mercato aperto
       const misura = ${MISURA_CASELLA.toString()};
       delete orariAsset['XAUUSD'];                       // mercato APERTO
       const aperto = misura();
@@ -152,7 +154,7 @@ test('la casella della posizione non insegue l\'indice quando il mercato è chiu
       const chiuso = misura();
       idx = 165; viewEnd = 166;                          // e l'indice avanza lo stesso (rollover)
       const chiusoAvanti = misura();
-      ({aperto, apertoAvanti, chiuso, chiusoAvanti, fermo: fblMercatoFermoOra('XAUUSD', Date.now())})`);
+      ({aperto, apertoAvanti, chiuso, chiusoAvanti, fermo: fblMercatoFermoOra('XAUUSD', Date.UTC(2026,9,20,15,0,0))})`);
     assert.equal(r.fermo, true, 'il banco deve davvero avere il mercato chiuso');
     assert.ok(r.aperto && r.chiuso, 'la casella della posizione deve essere disegnata: ' + JSON.stringify(r));
     assert.ok(r.aperto.passo > r.aperto.origine,
@@ -189,10 +191,25 @@ test('a mercato chiuso il refresh live non ricarica lo storico; a mercato aperto
         return {ricariche: chiamate.length, segno: lastSeenCandleBucketStart};
       };
       try {
+        const _origLiveSessionPhaseNowEarly = liveSessionPhaseNow;
+        liveSessionPhaseNow = () => 'mt5';
+        capitalWsPrimaryEpic = 'XAUUSD_EPIC';
         (${CHIUDI_MERCATO})();
         const chiuso = await giro();
         delete orariAsset['XAUUSD'];
+        // Con la nuova logica la schedule MT5 (chiusura 22:00) vale anche senza MT5:
+        // per testare il caso "mercato aperto" si finge un'ora dentro il mercato.
+        // Invece di mockare fblMercatoFermoOra (che non funziona perche' il timer
+        // cattura la funzione originale), si sovrascrive Date.now solo dentro
+        // fblMercatoFermoOra, mantenendo il timer funzionante.
+        const _origFblMercatoFermoOra = fblMercatoFermoOra;
+        // Con la nuova logica la schedule MT5 (chiusura 22:00) vale anche senza MT5:
+        // per testare il caso "mercato aperto" si finge un'ora dentro il mercato.
+        fblMercatoFermoOra = (a, t) => false;
         const aperto = await giro();
+        fblMercatoFermoOra = _origFblMercatoFermoOra;
+        capitalWsPrimaryEpic = 'XAUUSD_EPIC';
+        liveSessionPhaseNow = _origLiveSessionPhaseNowEarly;
         return {chiuso, aperto};
       } finally { loadLiveHistoryFromCapital = originale; stopLiveRefreshTimer(); }
     })()`);
