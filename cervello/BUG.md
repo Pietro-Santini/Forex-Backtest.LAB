@@ -2,6 +2,38 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+- **RISOLTO 2 novembre 2026 — "l'app non risponde / crasha alla riapertura", soprattutto a
+  mercato chiuso** - `app.html`, `getVisibleData()` (riga ~12874). Il filtro che toglie le
+  candele dopo la chiusura chiedeva al calendario dello strumento **per ogni candela
+  visibile**: ogni domanda costruisce `orariIntervalli()` (dieci giorni, dieci
+  `Intl.DateTimeFormat` per fuso - e `orariScartoZona()` ne creava uno nuovo a ogni chiamata) e
+  cerca la riapertura su `4*24*60` minuti. Con una fascia di candele che sta PRIMA della
+  chiusura il ciclo non si interrompeva mai: tanti calendari quante candele, nello stesso giro
+  di disegno. Misurato con `chiusura_mercato_prestazioni.test.mjs`: **23 calendari per 80
+  candele visibili**, e il numero cresceva con le candele.
+
+  **Perche' il commit 09b6b0a non lo aveva risolto.** Aveva reso condizionale solo il filtro,
+  non il costo: a mercato chiuso la condizione e' vera, quindi il ciclo per candela girava
+  comunque - anzi, e' proprio a mercato chiuso che serve.
+
+  **Cura.** (a) `orariScartoZona()`: il formattatore si tiene in cache per fuso; (b)
+  `getVisibleData()`: la fascia visibile e' ordinata per tempo e, da quando il mercato chiude,
+  resta chiuso fino in fondo, quindi **il punto di taglio si cerca su meta' fascia** - `log2`
+  delle candele invece delle candele - col predicato invariato `fblMercatoFermoOra`, cioe' le
+  stesse candele di prima. Resta lo scorrimento linea per linea solo nel caso rarissimo di
+  candele senza data. Dopo la cura la stessa misura da' **8 calendari** e non cresce piu' con
+  le candele.
+
+  **Strada sbagliata, da non riprovare:** prendere la chiusura dal calendario Capital.com
+  (`iv[i][1] <= adesso`) e poi confrontare i timestamp. È rosso perche' quel calendario e' in
+  UTC mentre la schedule MT5 e' sulle 22 di Roma: taglia all'ora sbagliata (80 candele invece
+  di 20). Cercando su meta' fascia si usa lo STESSO predicato di prima, quindi il punto di
+  taglio non puo' cambiare.
+
+  **Test che lo controlla:** `laboratorio/app/chiusura_mercato_prestazioni.test.mjs` (rosso
+  senza la cura, verde con; e non puo' passare "a vuoto" perche' pretende che il filtro tagli
+  davvero).
+
 ## Aperti / limiti noti
 - **RISOLTO 28 ottobre 2026 — Ogni release senza APK rompeva il collegamento per Android** - 28 ottobre
   2026, trovato pubblicando la 2.0.37. `index.html` riga 3528 punta a
