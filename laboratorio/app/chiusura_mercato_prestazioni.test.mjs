@@ -9,8 +9,11 @@
 // calendari quante candele, nello stesso giro di disegno -> thread principale bloccato,
 // "Non risponde".
 //
-// Dopo la cura: il calendario si costruisce UNA volta, si prende l'ultima chiusura passata e il
-// confronto fra candele è un semplice `>=` fra timestamp. Stesso risultato, un calendario solo.
+// Dopo la cura: la fascia visibile è ordinata per tempo e, da quando il mercato chiude, resta
+// chiuso fino in fondo; quindi il punto di taglio si cerca SU METÀ FASCIA (log2 delle candele,
+// non le candele), col predicato invariato fblMercatoFermoOra. Le candele mostrate sono
+// ESATTAMENTE le stesse di prima: lo stesso punto di taglio, trovato in molto meno tempo.
+// Resta lo scorrimento linea per linea solo nel caso rarissimo di candele senza data.
 //
 // Il test misura il COMPORTAMENTO, non il testo del sorgente: conta quante volte il calendario
 // viene costruito durante una singola getVisibleData(), e controlla che le candele mostrate
@@ -27,7 +30,6 @@ const ADESSO = Date.UTC(2026, 10, 3, 23, 0, 0);
 // Le candele finiscono ALL'ORA DI CHIUSURA: tutta la fascia visibile sta prima della chiusura,
 // che è il caso peggiore (quello che bloccava la pagina).
 const N_CANDELE = 30 * 60;
-const ORE = 16;
 
 const PREPARA = (function(){
   return `(function(){
@@ -52,7 +54,7 @@ const PREPARA = (function(){
   })()`;
 })();
 
-test('a mercato chiuso il calendario si costruisce UNA volta, non una per candela', async () => {
+test('a mercato chiuso il punto di taglio si cerca su meta\' fascia, non candela per candela', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const prep = await pagina.evaluate(PREPARA);
@@ -91,7 +93,7 @@ test('a mercato chiuso il calendario si costruisce UNA volta, non una per candel
     assert.equal(esito.visti, esito.attesi,
       'il grafico deve mostrare le stesse candele di prima (' + esito.attesi + ' su ' + esito.presenti + ')');
     // Il limite cresce col logaritmo delle candele (ricerca a metà), NON con le candele.
-    // Col metodo di prima il numero era uguale alle candele visibili (24 su 24) e cresceva con esse.
+    // Col metodo di prima il numero cresceva con le candele (23 calendari per 80 candele).
     const limite = 4 + Math.ceil(Math.log2(esito.presenti + 1));
     assert.ok(esito.calendari <= limite,
       'il calendario si deve cercare su metà fascia, non candela per candela: ' + esito.calendari +
