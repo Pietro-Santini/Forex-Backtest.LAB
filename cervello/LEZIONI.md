@@ -1,5 +1,20 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+23. **Le release le costruisce e pubblica il flusso GitHub: non si creano a mano, e mai vuote.**
+    Creato a mano un tag e una release `v2.0.66` **senza un solo allegato** (nessun Setup, nessun
+    APK), mentre `sw.js` dichiarava ancora `2.0.65`. Dal proprietario: sul tablet *"aggiornamento
+    non riuscito, nessun pacchetto disponibile per questa piattaforma"*, sul PC il pulsante
+    Aggiorna che non conclude mai, perche' l'app legge `releases/latest` e scarica da
+    `releases/latest/download/...`: senza file allegati non trova niente. La cura è lasciare che
+    sia il flusso "Installer Windows", a ogni push su `main`, a compilare il Setup e a pubblicare
+    la release con Setup + zip + **APK** (vedi `cervello/PUBBLICARE.md`), e a verificare sempre
+    gli asset con `gh release view <tag> --json assets`.
+
+24. **`git push origin --tags` non spinge "solo i miei tag": spinge TUTTI, anche i vecchi.** Ci
+    avevo messo dentro il vecchio tag locale `salvataggio-v104`, che e' ripartito un intero
+    flusso su un commit di settimane prima ("App v104..."), rosso sul Collaudo e incomprensibile
+    al proprietario. Il push va seguito dal tag che si sta pubblicando, mai da `--tags`.
+
 1. **Prima la prova, poi l'ipotesi.** Sul 403 del WebSocket si sono persi giri su librerie e
    permessi del browser; la causa era un decoratore spostato. Riprodurre e leggere il codice che
    risponde, prima di teorizzare.

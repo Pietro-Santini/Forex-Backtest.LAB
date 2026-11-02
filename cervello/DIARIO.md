@@ -2,6 +2,48 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-02 — OpenCode — **v2.0.67 PUBBLICATA: il filtro "mercato chiuso" non cerca piu' su
+  ogni candela** (causa del "non risponde / crasha alla riapertura").
+  1. **CAUSA MISURATA, non supposta.** A mercato chiuso `getVisibleData()` chiamava
+     `fblMercatoFermoOra(currentAssetKey,t)` per OGNI candela visibile. Ogni chiamata costruisce
+     il calendario dello strumento (`orariIntervalli`: dieci giorni, dieci
+     `Intl.DateTimeFormat` per fuso) e cerca la riapertura su `4*24*60` minuti. Con una fascia di
+     candele che sta PRIMA della chiusura — il caso vero, mercato chiuso alle 22 e candele fino
+     alle 22 — il ciclo non si interrompeva mai: **tanti calendari quante candele**, nello stesso
+     giro di disegno, e il thread principale si bloccava.
+  2. **Un secondo costo, sullo stesso percorso:** `orariScartoZona()` creava un
+     `Intl.DateTimeFormat` nuovo a ogni chiamata — centinaia di formattatori per frame.
+  3. **CURA.** `orariScartoZona`: il formattatore si tiene in cache per fuso. `getVisibleData`:
+     la fascia visibile e' ordinata per tempo e, da quando il mercato chiude, resta chiuso fino in
+     fondo, quindi **il punto di taglio si cerca su meta' fascia** (`log2` delle candele, non le
+     candele) col predicato invariato `fblMercatoFermoOra`. Resta lo scorrimento linea per linea
+     solo nel caso rarissimo di candele senza data.
+  4. **PRIMA STENTA SBAGLIATA, da non ripetere:** avevo aperto la cura prendendo la chiusura dal
+     calendario Capital.com (`iv[i][1]<=adesso`) e poi confrontando i timestamp. È rosso: quel
+     calendario è in UTC, mentre la schedule MT5 e' sulle 22 di Roma, quindi tagliava all'ora
+     sbagliata (80 candele invece di 20). La ricerca su metà fascia usa lo STESSO predicato di
+     prima, quindi il punto di taglio non puo' cambiare.
+  5. **TEST NUOVO,** `laboratorio/app/chiusura_mercato_prestazioni.test.mjs`: conta quanti
+     calendari si costruiscono durante UNA singola `getVisibleData()` e controlla che il filtro
+     tagli ESATTAMENTE dove tagliava prima. Provato nei due sensi, come richiede il metodo: col
+     metodo di prima è **rosso** (23 calendari per 80 candele, limite 11), con la cura è **verde**
+     (8). Senza la prova di controllo (`visti < presenti`) il test sarebbe passato anche senza
+     filtrare niente — misurava il vuoto.
+
+  **ERRORE MIO, DA NON RIPETERE MAI (costa due giri):** avevo creato a mano il tag e la release
+  `v2.0.66` **senza allegati** (nessun Setup, nessun APK) mentre `sw.js` dichiarava ancora
+  `2.0.65`. Conseguenze viste dal proprietario: sul tablet *"aggiornamento non riuscito, nessun
+  pacchetto disponibile per questa piattaforma"*, sul PC il pulsante Aggiorna che non conclude
+  mai. Avevo anche pushato di colpo TUTTI i tag (`git push origin --tags`), compreso un vecchio
+  `salvataggio-v104`, facendo partire flussi su un commit vecchissimo. **Le release le costruisce
+  e pubblica il flusso GitHub a ogni push su `main`**: non si creano a mano, e mai vuote.
+
+  **Collaudo:** locale `Falliti: 0` (mercato_chiuso + chiusura_mercato + replay_live +
+  frecce_replay_navigate + il nuovo test); su GitHub **verde**; sito pubblicato; release v2.0.67
+  con Setup + installer_build.zip + **APK** (verificato: `releases/latest/download/...`
+  risponde **200 OK**).
+  **Commit:** `66f01a6` (cura + test + versione 2.0.67), `d85092d` (commento del test allineato).
+
 - 2026-10-28 — Claude — **v2.0.37 PUBBLICATA: la prop firm misura i limiti come FTMO**.
   1. **Il limite giornaliero era sulla base sbagliata**, in TRE funzioni (`checkPropFirmRules`,
      `pfMt5Metrics`, `fblPropDedicataConta`). FTMO: 5% del CAPITALE INIZIALE, limite fisso in
