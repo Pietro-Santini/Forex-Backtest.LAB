@@ -12872,14 +12872,35 @@ function getVisibleData(){
  // restituiscono comunque candele past-close: qui si filtrano, cosi' il grafico resta
  // fermo all'ultima candela del mercato aperto fino alla riapertura.
  if(liveModeActive && !liveReplayActive && fblMercatoFermoOra(currentAssetKey,Date.now())){
-   const out=[];
-   for(const r of result){
-     const t=parseDateTime(r.date);
-     if(!Number.isFinite(t)){ out.push(r); continue; }
-     if(fblMercatoFermoOra(currentAssetKey,t)){ break; }  // stop at market close
-     out.push(r);
+   // IL PUNTO DI TAGLIO SI CERCA SU METÀ FASCIA, NON CANDELA PER CANDELA.
+   // PRIMA si chiamava fblMercatoFermoOra(currentAssetKey,t) per ogni candela visibile: ogni
+   // chiamata costruisce il calendario dello strumento (orariIntervalli: dieci giorni, dieci
+   // Intl per fuso) e cerca la riapertura su 4*24*60 minuti. A mercato chiuso, su una fascia di
+   // candele che sta PRIMA della chiusura, il ciclo non si interrompeva mai: tanti calendari
+   // quante candele, nello stesso giro di disegno -> "Non risponde".
+   // La fascia visibile è ordinata per tempo e, da quando il mercato chiude, resta chiuso fino
+   // in fondo: si cerca il PRIMO istante chiuso per metà (log2 delle candele, non le candele).
+   // Il predicato resta fblMercatoFermoOra, quindi il punto di taglio è lo stesso di prima.
+   const tutteConData=result.every(function(r){ return Number.isFinite(parseDateTime(r.date)); });
+   if(tutteConData){
+     let lo=0, hi=result.length;
+     while(lo<hi){
+       const mid=(lo+hi)>>1;
+       const tm=parseDateTime(result[mid].date);
+       if(fblMercatoFermoOra(currentAssetKey,tm)) hi=mid; else lo=mid+1;
+     }
+     result=result.slice(0,lo);
+   }else{
+     // Candele senza data (rarissime): di dette non si può cercare su metà, si scorre come prima.
+     const out=[];
+     for(const r of result){
+       const t=parseDateTime(r.date);
+       if(!Number.isFinite(t)){ out.push(r); continue; }
+       if(fblMercatoFermoOra(currentAssetKey,t)){ break; }  // stop at market close
+       out.push(r);
+     }
+     result=out;
    }
-   result=out;
  }
  return result;
 }
@@ -46682,10 +46703,15 @@ async function orariAggiorna(asset){
  }catch(e){}
 }
 // Scarto in minuti di un fuso rispetto a UTC in un certo istante (per zone diverse da UTC).
+// Il formattatore si tiene in cache per fuso: crearne uno nuovo a ogni chiamata costa centinaia
+// di microsecondi, e questa funzione gira per OGNI giorno del calendario (orariIntervalli), quindi
+// dentro OGNI statoMercato: a mercato chiuso, chiamata per ogni candela visibile, costruiva
+// centinaia di formattatori per frame e la pagina restava su "Non risponde".
+const _orariScartoFmt={};
 function orariScartoZona(zona,t){
  if(!zona||/^utc$/i.test(zona)||/^gmt$/i.test(zona))return 0;
  try{
-   const f=new Intl.DateTimeFormat('en-US',{timeZone:zona,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+   const f=_orariScartoFmt[zona]||(_orariScartoFmt[zona]=new Intl.DateTimeFormat('en-US',{timeZone:zona,hour12:false,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}));
    const p={}; f.formatToParts(new Date(t)).forEach(x=>{ p[x.type]=x.value; });
    const comeUtc=Date.UTC(+p.year,+p.month-1,+p.day,(+p.hour)%24,+p.minute);
    return Math.round((comeUtc-t)/60000);
