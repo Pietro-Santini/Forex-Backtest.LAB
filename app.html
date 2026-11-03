@@ -4502,6 +4502,19 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      </div>
      <div class="tgCfgNota" style="margin-top:7px">Il tetto complessivo vince sempre su quelli delle singole sale. Quando un limite è raggiunto il segnale <b>non viene buttato</b>: finisce nel pannello, da valutare a mano.</div>
 
+     <!-- BREAK-EVEN GENERALE, su TUTTE le posizioni (richiesta del proprietario, 3 novembre 2026):
+          «deve esserci dentro la sezione freni l'impostazione generale di tutte quelle che sono le
+          posizioni automatiche tramite sala segnali E le operazioni manuali». Quello che esisteva
+          prima era solo dentro la configurazione di OGNI SALA, quindi non toccava mai le posizioni
+          aperte a mano. -->
+     <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-top:10px">
+       <label class="tgCfgCampo" title="Spuntato: su OGNI posizione aperta — a mano o da una sala segnali — quando il prezzo si è allontanato dall'ingresso dei pip indicati, lo stop va al punto di pareggio (profitto netto 0,00, costi compresi). Succede una volta sola per posizione, e uno stop già più avanti non torna mai indietro.">
+         <input type="checkbox" id="tgBePipTutteAttivo" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer">
+         Su <b>tutte</b> le posizioni, break-even a
+         <input id="tgBePipTutte" class="tgCfgIn tgCfgNum" type="number" min="0" step="0.5" value="0" style="width:70px"> pip di guadagno</label>
+     </div>
+     <div class="tgCfgNota" id="tgBePipTutteNota" style="margin-top:6px"></div>
+
            <div class="tgCfgSez">🗞️ Freno notizie Forex Factory</div>
       <div class="tgCfgNota" style="margin-bottom:7px">Filtro notizie Forex Factory: scegli <b>quali gravità</b> (alta/media/bassa) e <b>quali paesi/valute</b> devono sospendere l'apertura automatica. Quando una notizia scelta è vicina, l'apertura automatica di <b>tutte</b> le sale segnali — Telegram e utenti Syntra — si ferma per la fascia di minuti indicata e riprende da sola a notizia passata. Il segnale non si butta: arriva comunque nel pannello, con scritto <b>«sospesa dal freno notizie»</b>.</div>
       <label class="tgCfgCampo">
@@ -32360,16 +32373,88 @@ function tgAutoVuoto(){
  // apriSenzaSl / apriSenzaTp: se la sala NON da' lo stop (o il target), si apre lo stesso
  // calcolandolo, oppure no? Predefiniti TRUE perche' e' quello che l\'app ha sempre fatto:
  // spegnerli di nascosto vorrebbe dire smettere di aprire segnali che prima si aprivano.
+ // bePipTutte: il break-even generale, su OGNI posizione (a mano o da sala). Nasce SPENTO: e'
+ // una regola che sposta stop su denaro vero, e non si accende di nascosto a nessuno. Il valore
+ // in pip resta quello scelto finche' non lo si cambia; 0 vuol dire "al punto di partenza",
+ // cioe' pareggio con guadagno zero (richiesta del proprietario, 3 novembre 2026).
  return {attivo:false,maxGlobali:40,perditaMaxGiorno:10,perditaAttiva:true,etaMaxS:60,rischioSenzaSl:1,
-   apriSenzaSl:true,apriSenzaTp:true,
+   apriSenzaSl:true,apriSenzaTp:true,bePipTutte:{attivo:false,pip:0},
    newsAttiva:false,newsMinPre:15,newsMinPost:15,newsSeverita:{High:true,Medium:false},newsPaesi:null,sale:{},spentoIl:null,predefinitiV:2,universale:null};
 }
 // Configurazioni salvate coi predefiniti di prima (6 posizioni in tutto, 3% di perdita, 4 posizioni
 // per sala): passano ai nuovi (40, 10%, 6 - una per ogni TP). Un valore scelto a mano, diverso dal
 // vecchio predefinito, resta com'e'. Usata anche per la configurazione che arriva da un altro
 // dispositivo (vedi GRAFICO_LS), che puo' essere ancora quella vecchia.
+// ============ BREAK-EVEN GENERALE: VALE ANCHE PER LE POSIZIONI APERTE A MANO ============
+//
+// RICHIESTA DEL PROPRIETARIO (3 novembre 2026): «nelle impostazioni delle aperture automatiche,
+// dentro la sezione freni, l'impostazione generale di tutte quelle che sono le posizioni
+// automatiche tramite sala segnali E le operazioni manuali. Lo spostamento del break even e'
+// espresso in pip sullo specifico asset e rimane uguale fino a quando l'utente non lo accende,
+// lo spegne oppure lo modifica... 0 sarebbe il punto di partenza, quindi guadagno 0.»
+//
+// COM'ERA: il break-even in pip esisteva solo DENTRO la configurazione di ogni sala
+// (tgCfg.bePip), e il suo controllo girava dentro la strategia del segnale — quindi non toccava
+// mai una posizione aperta a mano. Questo qui invece passa su TUTTE le posizioni aperte.
+//
+// LE PROTEZIONI SONO LE STESSE della regola delle sale, e non sono un dettaglio: si tratta di
+// spostare stop su denaro vero.
+//   - una volta sola per posizione (pos.beGenFatto), se no ad ogni giro si riproverebbe;
+//   - mai all'indietro: tgStopMigliore rifiuta uno stop peggiore di quello che c'e' gia';
+//   - mai troppo vicino al prezzo (fblPareggioTroppoVicino), che il broker rifiuterebbe;
+//   - mai dalla parte sbagliata del prezzo attuale: uno stop oltre il prezzo e' una chiusura
+//     immediata travestita da protezione.
+// Il pareggio e' quello VERO della posizione (mt5PrezzoPareggio: prezzo di esecuzione piu' i
+// costi), non il prezzo di ingresso: a pareggio si esce con profitto netto 0,00, non con -5 € di
+// commissioni.
+function fblBePipTutteCfg(){
+ try{
+  const c=tgAuto&&tgAuto.bePipTutte;
+  if(!c||!c.attivo)return null;
+  const pip=Number(c.pip);
+  return Number.isFinite(pip)&&pip>=0?{pip}:null;
+ }catch(e){ return null; }
+}
+function fblBePipTutteGiro(){
+ const cfg=fblBePipTutteCfg();
+ if(!cfg)return 0;
+ let mosse=0;
+ try{
+  (positions||[]).forEach(pos=>{
+   if(!pos||pos.beGenFatto||pos.entry==null)return;
+   const sym=pos.asset||currentAssetKey;
+   const prezzo=(sym===currentAssetKey)?currentPrice():livePriceByAsset[sym];
+   if(!Number.isFinite(prezzo))return;
+   const pipPx=(sym===currentAssetKey)?pipSize():pipSizeForAsset(sym);
+   if(!(Number.isFinite(pipPx)&&pipPx>0))return;
+   // Quanto si e' allontanato il prezzo A FAVORE, in pip.
+   const guadagnoPip=(pos.side==='BUY'?(prezzo-pos.entry):(pos.entry-prezzo))/pipPx;
+   if(!(guadagnoPip>=cfg.pip))return;
+   const be=mt5PrezzoPareggio(pos);
+   if(!Number.isFinite(be))return;
+   if(!tgStopMigliore(pos.side,pos.sl,be))return;              // mai all'indietro
+   if(fblPareggioTroppoVicino(pos,be).vicino)return;           // il broker lo rifiuterebbe
+   if(pos.side==='BUY'?(be>=prezzo):(be<=prezzo))return;       // mai oltre il prezzo attuale
+   pos.sl=be; pos.slAt=Date.now(); pos.beMarkerSl=be; pos.beGenFatto=true;
+   if(pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
+   mosse++;
+  });
+ }catch(e){}
+ if(mosse){
+  try{
+   $('status').textContent='🛡️ Break-even generale: raggiunti '+cfg.pip
+    +' pip di guadagno, stop portato a pareggio su '+mosse+(mosse===1?' posizione.':' posizioni.');
+  }catch(e){}
+  try{ if(active)syncTradeLevels(),refreshTradeLevelUI(); }catch(e){}
+  try{ draw(); update(); scheduleSave(); }catch(e){}
+ }
+ return mosse;
+}
 function tgAutoDaSalvato(v){
  const a=Object.assign(tgAutoVuoto(),v||{});
+ // Una configurazione salvata prima che questa regola esistesse non ha bePipTutte: le si da' il
+ // predefinito SPENTO, invece di lasciare un buco che farebbe fallire ogni lettura.
+ if(!a.bePipTutte||typeof a.bePipTutte!=='object')a.bePipTutte={attivo:false,pip:0};
  // Migrazione freno notizie: prima esisteva UN solo campo "minuti prima e dopo". Chi lo aveva
  // impostato se lo ritrova sia prima sia dopo, cosi' non perde la scelta fatta.
  if(v&&v.newsMinPre==null&&v.newsMinPost==null&&v.newsMin!=null){ a.newsMinPre=Number(v.newsMin)||0; a.newsMinPost=Number(v.newsMin)||0; }
@@ -33433,6 +33518,20 @@ function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  try{ tgAutoContiDisegna(); tgAutoContiAggiornaNota(); }catch(e){}
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
+ // Break-even generale (vedi fblBePipTutteGiro): spunta, valore in pip e la nota che spiega
+ // in parole cosa succedera', perche' questa regola sposta stop su denaro vero.
+ {
+  const _be=(tgAuto&&tgAuto.bePipTutte)||{attivo:false,pip:0};
+  if($('tgBePipTutteAttivo'))$('tgBePipTutteAttivo').checked=!!_be.attivo;
+  if($('tgBePipTutte'))$('tgBePipTutte').value=Number(_be.pip)||0;
+  const _n=$('tgBePipTutteNota');
+  if(_n)_n.innerHTML=!_be.attivo
+   ? 'Spento: nessuno stop viene spostato da questa regola.'
+   : (Number(_be.pip)>0
+      ? ('Acceso: su <b>ogni</b> posizione — a mano o da una sala — quando il prezzo si allontana di <b>'
+         +(Number(_be.pip))+' pip</b> a favore, lo stop va al punto di pareggio (profitto netto 0,00, costi compresi). Una volta sola per posizione; uno stop già più avanti non torna indietro.')
+      : 'Acceso con <b>0 pip</b>: il punto di partenza, cioè pareggio a guadagno zero. Lo stop va al pareggio appena il prezzo lo consente (mai oltre il prezzo attuale, mai troppo vicino).');
+ }
  if($('tgAutoRischioSenzaSl'))$('tgAutoRischioSenzaSl').value=tgRischioSenzaSl();
  if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
  if($('tgAutoTpExtra'))$('tgAutoTpExtra').value=tgTpExtraPct();
@@ -33668,6 +33767,22 @@ $('tgAutoTpExtra')?.addEventListener('change',()=>{
 $('tgAutoRischioSenzaSl')?.addEventListener('change',()=>{
  const v=Math.round(Number($('tgAutoRischioSenzaSl').value)*10)/10;
  if(v>0)tgAuto.rischioSenzaSl=Math.min(100,v);
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgBePipTutteAttivo')?.addEventListener('change',()=>{
+ if(!tgAuto.bePipTutte)tgAuto.bePipTutte={attivo:false,pip:0};
+ tgAuto.bePipTutte.attivo=!!$('tgBePipTutteAttivo').checked;
+ tgAutoSalva(); tgAutoDisegna();
+});
+$('tgBePipTutte')?.addEventListener('change',()=>{
+ if(!tgAuto.bePipTutte)tgAuto.bePipTutte={attivo:false,pip:0};
+ const v=Number($('tgBePipTutte').value);
+ // Zero e' un valore LEGITTIMO, non un campo vuoto: e' "il punto di partenza, guadagno 0".
+ tgAuto.bePipTutte.pip=Number.isFinite(v)&&v>=0?v:0;
+ // CAMBIANDO IL VALORE SI RIPARTE: le posizioni gia' portate a pareggio da questa regola tornano
+ // candidabili, se no alzare il numero non avrebbe alcun effetto su quelle gia' aperte - ed e'
+ // proprio quello che il proprietario ha chiesto («lo modifica con un valore piu' alto»).
+ try{ (positions||[]).forEach(p=>{ if(p)p.beGenFatto=false; }); }catch(e){}
  tgAutoSalva(); tgAutoDisegna();
 });
 $('tgAutoMaxGlob')?.addEventListener('change',()=>{
@@ -43134,6 +43249,9 @@ function startLiveRefreshTimer(){
    // valutazione di stop e target, ordini pendenti, salvataggio — verrebbe saltata proprio
    // quando il prezzo si e' mosso. La cadenza di quei tre controlli resta quella di prima.
    if(touched||__pitturaApplicata){evaluate();checkPendingOrders();scheduleSave();__pitturaApplicata=false;}
+   // Break-even generale su TUTTE le posizioni (vedi fblBePipTutteGiro): gira qui, dove il
+   // prezzo e' appena stato aggiornato, insieme alla valutazione di stop e target.
+   try{ fblBePipTutteGiro(); }catch(e){}
    // REPLAY IN LIVE (richiesto esplicitamente): durante il replay NON si ridisegna/aggiorna da qui.
    // Il prezzo live continua ad essere applicato ai dati in background (nessun buco quando si esce
    // dal replay, vedi applyLivePriceToChart), ma update()/draw() sono sospesi: erano loro a far
@@ -44597,6 +44715,9 @@ function startMt5RefreshTimer(){
    // valutazione di stop e target, ordini pendenti, salvataggio — verrebbe saltata proprio
    // quando il prezzo si e' mosso. La cadenza di quei tre controlli resta quella di prima.
    if(touched||__pitturaApplicata){evaluate();checkPendingOrders();scheduleSave();__pitturaApplicata=false;}
+   // Break-even generale su TUTTE le posizioni (vedi fblBePipTutteGiro): gira qui, dove il
+   // prezzo e' appena stato aggiornato, insieme alla valutazione di stop e target.
+   try{ fblBePipTutteGiro(); }catch(e){}
    // REPLAY IN LIVE: come nel timer Capital.com, durante il replay non si ridisegna da qui (il
    // prezzo resta applicato in background, il disegno lo fa il loop del replay).
    // Le graffe servono: senza, draw() girava comunque a ogni secondo anche in replay (era fuori
