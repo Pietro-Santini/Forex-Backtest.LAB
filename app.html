@@ -10233,6 +10233,49 @@ function appConfirm(message,opts={}){
    requestAnimationFrame(()=>overlay.querySelector('[data-role="ok"]')?.focus());
  });
 }
+// ============ UNA SCELTA FRA DUE, CON I NOMI SCRITTI SUI PULSANTI ============
+//
+// SEGNALATO DAL PROPRIETARIO (3 novembre 2026): «mi chiede se impostare la prop firm one step o
+// two step, e i pulsanti sono CONTINUA e INDIETRO. Continua e' attribuito a one step, indietro a
+// two step. Invece no, deve essere una scelta, deve esserci scritto one step o two step. E poi
+// il pop-up del tipo di conto, swing oppure standard: anche li' avanti e indietro.»
+//
+// Aveva ragione due volte. La prima: "Indietro" vuol dire TORNARE, non "scegli la seconda". La
+// seconda, piu' seria: con appConfirm il tasto Esc e il clic fuori dal riquadro valgono ANNULLA,
+// che li' significava «two step» e «standard» — cioe' chiudere la finestra sceglieva al posto
+// tuo una configurazione di RISCHIO, in silenzio (su un one step si rischia il 3% al giorno, su
+// un two step il 5%: non e' un dettaglio estetico).
+//
+// Qui i due pulsanti portano i NOMI delle due strade, e chiudere senza scegliere restituisce
+// null: chi chiama si ferma, non tira a indovinare.
+function appScelta(message,opts={}){
+ return new Promise(resolve=>{
+   const title=opts.title||'Scegli';
+   const a=opts.aLabel||'A', b=opts.bLabel||'B';
+   const overlay=document.createElement('div');
+   overlay.className='fbModalOverlay appConfirmOverlay';
+   overlay.innerHTML=`
+     <div class="fbModalBox appConfirmBox" style="max-width:460px">
+       <div class="fbModalHeader"><h3>${escapeHtmlLite(title)}</h3></div>
+       <div class="appConfirmBody">${opts.html?message:escapeHtmlLite(message)}</div>
+       <div class="liveLoginFooter" style="gap:8px">
+         <button type="button" class="toolBtn" data-role="chiudi" title="Chiudi senza scegliere: non viene impostato niente">Annulla</button>
+         <button type="button" class="toolBtn appConfirmBtn safe" data-role="a">${escapeHtmlLite(a)}</button>
+         <button type="button" class="toolBtn appConfirmBtn safe" data-role="b">${escapeHtmlLite(b)}</button>
+       </div>
+     </div>`;
+   const targetDoc=popupTargetDoc();
+   popupContenitore(targetDoc).appendChild(overlay);
+   function cleanup(r){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(r); }
+   function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); cleanup(null); } }
+   targetDoc.addEventListener('keydown',onKey);
+   overlay.addEventListener('mousedown',e=>{ if(e.target===overlay)cleanup(null); });
+   overlay.querySelector('[data-role="chiudi"]').addEventListener('click',()=>cleanup(null));
+   overlay.querySelector('[data-role="a"]').addEventListener('click',()=>cleanup('a'));
+   overlay.querySelector('[data-role="b"]').addEventListener('click',()=>cleanup('b'));
+   requestAnimationFrame(()=>overlay.querySelector('[data-role="a"]')?.focus());
+ });
+}
 // RICHIESTO ESPLICITAMENTE ("tutti i popup uguali, anche quelli futuri"): le finestre native del
 // browser (prompt/alert), grigie e diverse per ogni browser, sono sostituite da queste due, con lo
 // stesso identico aspetto di appConfirm/delle altre finestre dell\'app (Indietro rosso, Ok verde).
@@ -18153,6 +18196,16 @@ function draw(){
            const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
            const barH=Math.max(1,yBot-yTop);
            const total=profile.upVol[b]+profile.downVol[b];
+           // NOTA (3 novembre 2026): qui ho provato a disegnare anche le fasce VUOTE, come si fa
+           // nella colonna SVP, per dare all'istogramma una griglia di righe sempre uguale. L'ho
+           // TOLTO: la misura non regge la premessa. Con lo stesso storico e 300 fasce,
+           // computeVolumeProfile ne restituisce 300 a 1, 5 e 15 minuti; e in un banco costruito
+           // apposta per lasciare righe vuote, a 15 minuti risultavano piene TUTTE E 120 — perche'
+           // le candele aggregate sono piu' alte e coprono PIU' fasce, non meno. Il dimezzamento
+           // segnalato non nasce quindi da qui, e riempire la zona a basso volume di barrette
+           // grigie avrebbe sporcato proprio la lettura che serve all'utente.
+           // Chi riprende: serve il caso vero (quale profilo, e se cambiando timeframe
+           // l'istogramma copre ancora la stessa fascia di prezzo) prima di toccare questo ciclo.
            if(total<=0)continue;
            const totalPx=Math.max(1,total/profile.maxTotal*maxBarPx);
            const upPx=totalPx*(profile.upVol[b]/total), downPx=totalPx-upPx;
@@ -49674,16 +49727,37 @@ function updateMt5ModeUI(){
       if(!fblPropAttivazioneDaChiedere(id)) return;
       // segna come chiesto (una sola volta)
       try{ const st=fblPropContoStato(id); fblPropContoStatoSalva(id,Object.assign({},st,{propChiesto:true})); }catch(e){}
-      const ok=await appConfirm('Vuoi attivare la modalità Prop Firm su questo conto?');
-      if(!ok) return;
-      const oneStep=await appConfirm('One step? (Annulla = Two step)');
-      const preset=oneStep?'ftmo-1step':'ftmo-2step';
-      try{ fblPropPresetImposta(preset); }catch(e){}
-      // tipo conto
-      try{
-       const swing=await appConfirm('Tipo conto Swing? (Annulla = Standard)');
-       fblPropTipoContoImposta(swing?'swing':'standard');
-      }catch(e){}
+      // PRIMA DOMANDA: che conto e' questo. Richiesta del proprietario (3 novembre 2026):
+      // «all'aggiunta del nuovo conto venisse definito se era un conto per esercitazione senza
+      // prop firm o in modalita' prop firm». Due strade con un nome, non un si'/no.
+      const tipo=await appScelta(
+        'Questo conto MT5 come lo usi?',
+        {title:'🛡️ Nuovo conto', aLabel:'Esercitazione (senza prop firm)', bLabel:'Modalità Prop Firm'});
+      if(tipo!=='b') return;   // null (chiuso) o esercitazione: non si tocca niente
+
+      // SECONDA: one step o two step. I pulsanti lo DICONO.
+      const passi=await appScelta(
+        'Quante fasi ha la sfida di questa prop firm? Su un one step si rischia tipicamente il 3% al giorno, su un two step il 5%.',
+        {title:'🛡️ Tipo di sfida', aLabel:'One step', bLabel:'Two step'});
+      if(passi===null) return;   // chiuso senza scegliere: non si configura a caso
+      try{ fblPropPresetImposta(passi==='a'?'ftmo-1step':'ftmo-2step'); }catch(e){}
+
+      // TERZA: tipo di conto.
+      const conto=await appScelta(
+        'Che tipo di conto è? Lo Swing tiene le posizioni nel fine settimana e durante le notizie; lo Standard no.',
+        {title:'🛡️ Tipo di conto', aLabel:'Standard', bLabel:'Swing'});
+      if(conto===null) return;
+      try{ fblPropTipoContoImposta(conto==='b'?'swing':'standard'); }catch(e){}
+
+      // E ADESSO SI ACCENDE DAVVERO. Segnalato dal proprietario: «non viene attivata quella che
+      // e' la modalita' prop firm: c'e' tutta la configurazione, i passaggi eccetera, ma quando
+      // andiamo a completare non ci attiva la vera e propria modalita'». Era esatto: qui si
+      // impostavano preset e tipo di conto e il giro finiva li'. Senza questa chiamata la
+      // Challenge non parte e non compaiono il max drawdown giornaliero e quello totale, che
+      // sono poi il motivo per cui si attiva la modalita'.
+      // Il conto MT5 e' appena stato collegato, quindi la base e' Live: proceedEnablePropFirm(true)
+      // e' lo stesso identico percorso del pulsante «🛡️ MODALITÀ PROP FIRM», non una scorciatoia.
+      try{ await proceedEnablePropFirm(true); }catch(e){ console.warn('Attivazione prop firm non riuscita:',e); }
      }catch(e){}
    },1600); }catch(e){}
  }
