@@ -2,8 +2,8 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
-- 2026-11-03 — Claude — **v2.0.74: ordini pendenti in tre tabelle, e il conto MT5 che si muove
-  mentre backtesti non lo fa più in silenzio**.
+- 2026-11-03 — Claude — **v2.0.74: ordini pendenti in tre tabelle, il conto MT5 che si muove
+  mentre backtesti non lo fa più in silenzio, e la riga del prezzo che non va più a gradini**.
   1. **PRIMA RICHIESTA, parole del proprietario:** «in modalità replay, facciamo in modo di creare
      due tabelle distinte per gli ordini pendenti. Ordini pendenti MT5 e ordini pendenti storico.
      La tabella ordini pendenti storico deve essere visualizzata soltanto quando siamo in modalità
@@ -64,7 +64,45 @@ Formato: data — chi — cosa — esito collaudo — commit.
   9. **Regressione:** ordini_pendenti_in_replay + pendenti_scattano_in_replay +
      replay_posizioni_mt5_reali + replay_mai_ordini_veri + famiglia_asset + gruppi_be_chiudi +
      gruppi_striscia + kraken_posizioni + orario_esecuzione + replay_conto_storico = **45 verdi**.
-  10. **DA DECIDERE AL MOMENTO DELL'UNIONE:** questo giro è stato fatto su un ramo a parte mentre
+  10. **TERZA RICHIESTA, nella stessa seduta:** «la riga tratteggiata del prezzo reale con la
+      relativa etichetta sull'asse dei prezzi arriva in ritardo, l'aggiornamento va a scatti, non
+      è uguale a quello delle candele»; poi, chiarendo: «è un ritardo di aggiornamento, la segue
+      bene, è solo che la velocità di aggiornamento della candela è più veloce della velocità di
+      aggiornamento della riga del prezzo».
+      **MISURATO PRIMA DI TOCCARE** (app vera, canvas agganciato, cinque prezzi su un 5 minuti):
+      riga e candela erano **già incollate** — Y della riga 552,4 contro corpo che finisce a
+      552,4; 396,6 e 396,6; 595 e 595. Quindi NON era uno sfasamento di posizione: il problema
+      era la **cadenza**, come poi ha confermato il proprietario.
+      **CAUSA.** I tick arrivano più volte al secondo ma l'app li MEMORIZZA soltanto
+      (`lastMt5TickPrice` / `lastPrimaryEpicPrice`): l'unico punto che li scriveva nella candela e
+      ridisegnava erano i due timer da UN SECONDO. Un secondo si vede a occhio.
+      **CURA, con la cadenza scelta dal proprietario fra quattro strade: 250 ms.** Un timer
+      LEGGERO a parte (`fblPitturaPrezzoFine`) che fa solo due cose — applica l'ultimo tick alla
+      candela in corso e ridisegna. **Non** si è abbassato il timer esistente: dentro quello ci
+      sono anche le chiamate REST di ripiego, i cani da guardia, la valutazione di stop e target,
+      il salvataggio e `update()` (~21 ms misurati sulla macchina del proprietario). Portare
+      TUTTO a 250 ms è la strada che in passato ha prodotto i «Non risponde».
+      Tre guardie che contano: `allowNew:false` (una candela nuova la apre solo il timer del
+      secondo, l'unico che sa distinguere un tick vero da un prezzo ripetuto), niente lavoro a
+      prezzo fermo, e niente del tutto in replay e a scheda nascosta.
+      **UN EFFETTO COLLATERALE DA NON PERDERE:** con il pennello che scrive per primo,
+      `applyLivePriceToChart` nel timer del secondo può restituire `false`, e la rete di sicurezza
+      (`if(touched)` -> evaluate + checkPendingOrders + scheduleSave) sarebbe stata **saltata
+      proprio quando il prezzo si è mosso**. Da qui `touched||__pitturaApplicata` nei due timer.
+  11. **E la riga si ancora alla candela DISEGNATA**, non più a `rows[idx].close` scelto per
+      indice (`__chiusuraDisegnata`, segnata dentro il ciclo delle candele). Non cambia la
+      cadenza — serve a rendere impossibile per costruzione che si scollino. Il caso dove
+      divergevano davvero, misurato: a mercato chiuso riga a 105,9 contro ultima candela a 105,4.
+  12. **COSTO MISURATO** (600 candele, 80 a vista, 8 posizioni, senza footprint né indicatori):
+      un giro di pennello **0,46 ms**, un giro del secondo con `update()` 1,45 ms. Tre giri in
+      più al secondo = circa **+1,4 ms al secondo**. Con footprint e indicatori accesi costerà di
+      più: il numero sopra è un pavimento, non un tetto.
+  13. **TEST NUOVO:** `prezzo_pennello_fine.test.mjs`, 4 prove (3 di controllo: non apre candele
+      nuove, in replay non tocca niente, a prezzo fermo non ridisegna). Provato nei due sensi:
+      spegnendo il pennello la prova della cadenza diventa **rossa** (un solo cambio al secondo),
+      con il pennello è verde (almeno 3). Regressione prezzo/candele: replay_live + replay_fluido
+      + mercato_chiuso + chiusura_mercato + chiusura_mercato_prestazioni = **26 verdi**.
+  14. **DA DECIDERE AL MOMENTO DELL'UNIONE:** questo giro è stato fatto su un ramo a parte mentre
       OpenCode lavorava su `main`. Se nel frattempo è uscita un'altra 2.0.74, il numero va
       riallineato in `sw.js` **e** in `installer.iss` prima di pubblicare — se `sw.js` non sale,
       telefono e tablet non ricevono mai la modifica (lezione già pagata con la v2.0.66).

@@ -16780,6 +16780,10 @@ function fblSezFine(nome,t0){
  fblSezioniDraw[nome]=(fblSezioniDraw[nome]||0)+(ora-t0);
  return ora;
 }
+// La chiusura della candela piu' a destra DISEGNATA nell'ultimo giro: la riga tratteggiata del
+// prezzo e la sua etichetta si ancorano a questa, non a rows[idx].close scelto per indice.
+// Riempita dal ciclo delle candele dentro draw(), letta poco piu' sotto nello stesso giro.
+let __chiusuraDisegnata=null;
 function draw(){
  fblScadeDecimali();
  let _tSez=performance.now();   // vedi fblSezFine
@@ -17365,8 +17369,20 @@ function draw(){
  // La linea VPOC della finestra visibile, prima delle candele cosi' non le attraversa sopra.
  try{ drawFootprintVpocLine(ctx,w,h,pad,data,y,lo,hi); }catch(e){ console.warn('VPOC',e); }
  _tSez=fblSezFine('lineaVPOC',_tSez);
+ // LA RIGA DEL PREZZO SI ANCORA ALLA CANDELA APPENA DISEGNATA (richiesta del proprietario,
+ // 3 novembre 2026: «facciamo in modo che mentre si aggiorna la candela, la linea non perde
+ // riferimento la posizione della candela»). Prima la riga tratteggiata e la sua etichetta
+ // leggevano rows[idx].close, scelto PER INDICE: un numero che di solito coincide con la candela
+ // piu' a destra, ma non per costruzione. A mercato chiuso, per esempio, misurato: riga a 105,9
+ // mentre l'ultima candela disegnata chiudeva a 105,4. Qui si prende la chiusura della candela
+ // che il disegno sta davvero mettendo a schermo, in QUESTO giro: qualunque strada abbia
+ // aggiornato le candele, la riga legge lo stesso identico numero, nello stesso fotogramma.
+ __chiusuraDisegnata=null;
  data.forEach((r,i)=>{
    let xx=x(i), up=r.close>=r.open;
+   // Registrata PRIMA di qualunque uscita anticipata (il ramo footprint piu' sotto fa `return`):
+   // l'ultima a vincere e' la candela piu' a destra, che e' quella a cui la riga si aggancia.
+   if(Number.isFinite(Number(r.close)))__chiusuraDisegnata=Number(r.close);
    const fp=_footprintEntries?_footprintEntries[i].fp:null;
    // AREA CLICCABILE PER IL CAMBIO STILE - vedi FOOTPRINT: TOCCO/CLIC SU UNA CANDELA (fpTocco).
    // Registrata per OGNI candela finche' il footprint e' attivo, anche senza tick registrati:
@@ -18813,13 +18829,18 @@ function draw(){
      if(pos.entry!=null && pos.entry>=lo && pos.entry<=hi)drawPriceAxisTag(ctx,y,pos.entry,fmtPrice(pos.entry),entryColor,entryFg,pad,w,h);
    });
  }
- // Current market price: close of the latest available candle in the selected timeframe.
- if(rows.length && rows[idx] && Number.isFinite(Number(rows[idx].close))){
+ // Prezzo di adesso: la chiusura della candela PIU' A DESTRA FRA QUELLE APPENA DISEGNATE
+ // (__chiusuraDisegnata, segnata nel ciclo delle candele qui sopra), non piu' rows[idx].close
+ // scelto per indice. Vedi il commento lungo su __chiusuraDisegnata: e' quello che tiene la riga
+ // incollata alla candela invece di farle seguire un numero suo.
+ const _chiusuraOra=Number.isFinite(__chiusuraDisegnata)?__chiusuraDisegnata
+   :((rows.length&&rows[idx]&&Number.isFinite(Number(rows[idx].close)))?Number(rows[idx].close):null);
+ if(Number.isFinite(_chiusuraOra)){
    // In REPLAY, mentre la candela successiva si forma, il prezzo di adesso e' quello della
    // formazione: linea ed etichetta si muovono con lei, come dal vivo (vedi
    // replayPrezzoFormazione). Fuori dal replay resta la chiusura dell'ultima candela, come prima.
    const _formaOra=replayPrezzoFormazione();
-   const currentClose=Number.isFinite(_formaOra)?_formaOra:Number(rows[idx].close);
+   const currentClose=Number.isFinite(_formaOra)?_formaOra:_chiusuraOra;
    if(currentClose>=lo && currentClose<=hi){
      ctx.save();
      ctx.setLineDash([8,6]);
@@ -42853,7 +42874,12 @@ function startLiveRefreshTimer(){
    // (tick "vivo" o fallback REST), va anche rivalutato se SL/TP dell'asset a grafico sono
    // stati raggiunti e se un ordine pendente va attivato — altrimenti restano ignorati finché
    // non si passa allo Storico e si avanza manualmente.
-   if(touched){evaluate();checkPendingOrders();scheduleSave();}
+   // `||__pitturaApplicata`: il pennello fine (250 ms, vedi fblPitturaPrezzoFine piu' sotto) puo'
+   // aver gia' scritto QUESTO stesso prezzo nella candela, e allora applyLivePriceToChart qui
+   // sopra non segna piu' niente. Senza questa aggiunta la rete di sicurezza del secondo —
+   // valutazione di stop e target, ordini pendenti, salvataggio — verrebbe saltata proprio
+   // quando il prezzo si e' mosso. La cadenza di quei tre controlli resta quella di prima.
+   if(touched||__pitturaApplicata){evaluate();checkPendingOrders();scheduleSave();__pitturaApplicata=false;}
    // REPLAY IN LIVE (richiesto esplicitamente): durante il replay NON si ridisegna/aggiorna da qui.
    // Il prezzo live continua ad essere applicato ai dati in background (nessun buco quando si esce
    // dal replay, vedi applyLivePriceToChart), ma update()/draw() sono sospesi: erano loro a far
@@ -44311,7 +44337,12 @@ function startMt5RefreshTimer(){
    }else if(!lastMt5ChartUpdateAt){
      lastMt5ChartUpdateAt=Date.now();
    }
-   if(touched){evaluate();checkPendingOrders();scheduleSave();}
+   // `||__pitturaApplicata`: il pennello fine (250 ms, vedi fblPitturaPrezzoFine piu' sotto) puo'
+   // aver gia' scritto QUESTO stesso prezzo nella candela, e allora applyLivePriceToChart qui
+   // sopra non segna piu' niente. Senza questa aggiunta la rete di sicurezza del secondo —
+   // valutazione di stop e target, ordini pendenti, salvataggio — verrebbe saltata proprio
+   // quando il prezzo si e' mosso. La cadenza di quei tre controlli resta quella di prima.
+   if(touched||__pitturaApplicata){evaluate();checkPendingOrders();scheduleSave();__pitturaApplicata=false;}
    // REPLAY IN LIVE: come nel timer Capital.com, durante il replay non si ridisegna da qui (il
    // prezzo resta applicato in background, il disegno lo fa il loop del replay).
    // Le graffe servono: senza, draw() girava comunque a ogni secondo anche in replay (era fuori
@@ -47046,6 +47077,62 @@ async function guardianoCandeleMt5(){
 }
 setInterval(()=>{ guardianoCandeleMt5().catch(()=>{ gcRichiestaInCorso=false; }); },1000);
 document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'){ gcCambioAt=0; gcRestAt=0; guardianoCandeleMt5().catch(()=>{}); } });
+
+// ============ IL PENNELLO FINE DEL PREZZO: QUATTRO VOLTE AL SECONDO ============
+//
+// RICHIESTA DEL PROPRIETARIO (3 novembre 2026): «la riga tratteggiata del prezzo reale con la
+// relativa etichetta sull'asse dei prezzi arriva in ritardo, l'aggiornamento va a scatti, non e'
+// uguale a quello delle candele. La velocita' di aggiornamento della candela e' piu' veloce
+// della velocita' di aggiornamento della riga del prezzo.»
+//
+// COM'ERA. I tick dal broker arrivano piu' volte al secondo, ma l'app li MEMORIZZA soltanto
+// (lastMt5TickPrice / lastPrimaryEpicPrice): l'unico punto che li scriveva davvero nella candela
+// e ridisegnava erano i due timer da UN SECONDO (startMt5RefreshTimer / startLiveRefreshTimer).
+// Un secondo e' una cadenza che si vede: il prezzo si muove a gradini.
+//
+// PERCHE' UN TIMER A PARTE invece di abbassare quelli che ci sono gia'. Dentro quei due timer non
+// c'e' solo il disegno: ci sono le chiamate REST di ripiego, i cani da guardia dello streaming, la
+// valutazione di stop e target, il salvataggio e update() (che rifa' tutte le tabelle HTML, ~21 ms
+// misurati sulla macchina del proprietario). Portarli a 250 ms avrebbe moltiplicato per quattro
+// ANCHE quello: e' esattamente la strada che in passato ha prodotto i "Non risponde". Qui si
+// moltiplica per quattro SOLO il disegno, che e' l'unica cosa che l'occhio vede.
+//
+// Il battito di fondo (__bgHeartbeatWorker) batte una volta al secondo: non puo' servire per i
+// 250 ms, quindi questo e' un setInterval normale del thread principale. Va benissimo: a scheda
+// nascosta il browser lo rallenta, ed e' giusto — li' non c'e' nessuno che guarda, e il lavoro
+// vero continua a girare sul battito da un secondo come prima.
+const FBL_PITTURA_MS=250;
+let __pitturaUltimoPrezzo=null;
+// Vero quando il pennello ha gia' scritto il prezzo nella candela: i due timer del secondo lo
+// leggono per non saltare la loro rete di sicurezza (vedi `touched||__pitturaApplicata`).
+let __pitturaApplicata=false;
+function fblPitturaPrezzoFine(){
+ // Niente in Storico e niente in replay: li' il tempo lo comanda il Play, non l'orologio.
+ if(!liveModeActive||liveReplayActive)return;
+ if(chartFeedSuspended)return;
+ // Le due pause di un secondo a cavallo del cambio candela: finche' durano, nessun prezzo tocca
+ // la candela (vedi mt5CandleFrozen / liveCandleFrozen). Qui si rispettano come fa il timer vero.
+ try{ if(mt5CandleFrozen||liveCandleFrozen)return; }catch(e){}
+ // A scheda nascosta non si disegna: sarebbe lavoro buttato.
+ try{ if(document.visibilityState!=='visible')return; }catch(e){}
+ // L'ultimo tick MEMORIZZATO dalla fonte che sta alimentando il grafico adesso.
+ let p=null, daAsset=null;
+ if(mt5ActiveSymbol&&Number.isFinite(lastMt5TickPrice)&&lastMt5TickPrice>0){ p=lastMt5TickPrice; daAsset=currentAssetKey||null; }
+ else if(Number.isFinite(lastPrimaryEpicPrice)&&lastPrimaryEpicPrice>0){ p=lastPrimaryEpicPrice; daAsset=lastPrimaryEpicPriceAsset||null; }
+ if(!Number.isFinite(p))return;
+ if(p===__pitturaUltimoPrezzo)return;   // prezzo fermo: nessun ridisegno, nessun lavoro sprecato
+ __pitturaUltimoPrezzo=p;
+ const ora=(mt5ActiveSymbol&&typeof mt5Adesso==='function')?mt5Adesso():Date.now();
+ // allowNew:false, e non e' un dettaglio: una candela NUOVA la apre SOLO il timer del secondo,
+ // che sa distinguere un tick vero da un prezzo ripetuto (lastMt5RealTickAt). Il pennello
+ // aggiorna la candela in corso e basta - non puo' inventare barre.
+ if(applyLivePriceToChart(p,ora,{allowNew:false,fromAsset:daAsset})){
+  __pitturaApplicata=true;
+  draw();   // solo il disegno: update(), evaluate() e il salvataggio restano al timer del secondo
+ }
+}
+setInterval(()=>{ try{ fblPitturaPrezzoFine(); }catch(e){} },FBL_PITTURA_MS);
+
 function stopMt5RefreshTimer(){
  if(mt5RefreshTimer){clearHeartbeatInterval(mt5RefreshTimer);mt5RefreshTimer=null;}
 }
