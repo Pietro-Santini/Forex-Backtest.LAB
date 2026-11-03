@@ -813,6 +813,15 @@ select.tgCfgIn{cursor:pointer;padding-right:4px}
    condizione spesso non si vede proprio. Questi cartellini sì. Stanno in basso a destra, sopra
    il grafico ma sotto i popup dell'app (z-index 9996 contro i 9997+ del banner e delle modali),
    e spariscono da soli. */
+/* Testo che si vede solo su schermi larghi: sul telefono resta la sola icona del pulsante, e la
+   riga sopra il grafico non sfonda (vedi #nuovaFinestraBtn e grafico_pulsanti_telefono.test.mjs). */
+/* SUL TELEFONO IL PULSANTE NON C'E' PROPRIO. La riga dei comandi sopra il grafico e' gia' al
+   limite a 375 px (sei comandi in 293 px disponibili, vedi grafico_pulsanti_telefono): un
+   settimo la sfonda anche ridotto alla sola icona - misurato, 191 px fuori. E "duplica
+   finestra" e' una funzione da PIU' MONITOR: su un telefono non vuol dire niente.
+   !important perche' updateFloatCornerButtons() scrive display inline, e l'inline vince. */
+@media (max-width:900px){ #nuovaFinestraBtn{display:none !important} }
+@media (max-width:1180px){ .fblSoloLargo{display:none} }
 /* ==== AGGIORNAMENTO IN CORSO (03/11/2026): mentre si aggiorna, l'app non si usa ====
    RICHIESTO DAL PROPRIETARIO: «quando l'utente preme il pulsante aggiorna deve uscire il pop-up
    dello scaricamento della nuova release, e non far continuare l'utilizzo dell'applicazione,
@@ -4162,16 +4171,28 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      Ogni clic crea una nuova finestra completa e indipendente (asset, timeframe, indicatori
      propri), che si può staccare e spostare su un altro schermo. Non è più Picture-in-Picture:
      è una seconda schermata, duplicata. La X di ogni finestra chiude solo quella finestra.
-     NB: questo commento finiva con `*/` invece di `-->`. In HTML `*/` non chiude niente: il
-     commento restava APERTO e si mangiava il pulsante qui sotto insieme a un pezzo di quello
-     dopo. Misurato il 3 novembre 2026 aprendo l'app: document.getElementById('nuovaFinestraBtn')
-     restituiva null — il pulsante non e' MAI esistito nel DOM, quindi la funzione «Nuova
-     finestra» pubblicata nelle v2.0.75/76/78 non aveva alcun modo di essere aperta. -->
+     NB: questo commento finiva con la chiusura dei commenti del linguaggio C invece di quella
+     dell'HTML. In HTML quella non chiude niente: il commento restava APERTO e si mangiava il
+     pulsante qui sotto insieme a un pezzo di quello dopo. Misurato il 3 novembre 2026 aprendo
+     l'app: document.getElementById('nuovaFinestraBtn') restituiva null, il pulsante non e' MAI
+     esistito nel DOM, e la funzione «Nuova finestra» pubblicata nelle v2.0.75/76/78 non aveva
+     alcun modo di essere aperta.
+     E ATTENZIONE A COME SI SCRIVE QUESTA SPIEGAZIONE: scrivere per esteso la sequenza che
+     chiude un commento HTML lo chiude per davvero, anche in mezzo a una frase. Ci sono cascato
+     riscrivendo proprio questo commento, e il testo rimasto fuori diventava un nodo di testo
+     NUDO dentro una riga flex: 247 px occupati da una frase invisibile, che spingevano tre
+     pulsanti fuori dallo schermo del telefono. -->
 <button type="button" id="nuovaFinestraBtn" class="chartCornerBtn"
-        title="Apri una nuova finestra con il solo grafico: asset, timeframe e indicatori
-        indipendenti, staccabile e ingrandibile a tutto schermo. Ogni clic ne crea una nuova."
-        style="width:auto;padding:0 8px;font-size:12px;font-weight:700">
-  Nuova finestra
+        title="Duplica la finestra: apre una pagina indipendente con il solo grafico (asset, timeframe e indicatori suoi), da spostare su un altro schermo. Ogni clic ne apre una nuova; si chiude con la X della finestra."
+        style="width:auto;padding:0 8px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px">
+  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
+  <!-- LA SCRITTA SPARISCE SUL TELEFONO, l'icona no. Il proprietario ha chiesto che ci sia
+       scritto "duplica finestra" (3 novembre 2026), ma a 375 px di larghezza quel testo sfonda
+       la riga dei pulsanti sopra il grafico: misurato, 258 px fuori, e un test del progetto
+       (grafico_pulsanti_telefono) lo vieta da tempo. Sul computer - dove si usano piu' schermi,
+       che e' il senso di questa funzione - la scritta c'e'; sul telefono resta l'icona, con lo
+       stesso title a spiegarla. -->
+  <span class="fblSoloLargo">Duplica finestra</span>
 </button>
      <!-- RICHIESTO ESPLICITAMENTE: "questo pulsante che verra' mostrato soltanto quando viene
           rilevata una nuova posizione e tramite un punto esclamativo bel evidente sotto forma di
@@ -7643,9 +7664,38 @@ function graficoApplica(k,valore){
  try{ persistDrawingsBackupNow(); }catch(e){}
  return true;
 }
+// ============ LE SCRITTURE SU FIRESTORE SI RAGGRUPPANO, NON PARTONO A RAFFICA ============
+//
+// SEGNALATO DAL PROPRIETARIO (3 novembre 2026, con la schermata della console Firebase):
+// «stiamo sovraccaricando Firestore, dobbiamo assolutamente limitarlo». Numeri suoi:
+// SCRITTURE al 97,7% della quota giornaliera gratuita (20.000/giorno), LETTURE all'80,8%
+// (50.000/giorno). Oltre quella soglia si comincia a pagare.
+//
+// DOV'E' IL RUBINETTO. graficoControllaModifiche() gira ogni 1,5 secondi e, appena vede un
+// valore cambiato, chiama graficoProgrammaInvio(): 1,5 secondi dopo parte una setDoc sul
+// documento dei disegni condivisi. Finche' qualcosa continua a cambiare — e in Live cambia
+// spesso: anagrafica delle posizioni, mappa ticket->sala, livelli Kraken — si puo' arrivare a
+// una scrittura ogni 3 secondi, cioe' circa 28.000 al giorno da sole. Combacia con il 97,7%.
+//
+// LA CURA: il rilevamento resta veloce (e' locale e non costa niente), ma l'INVIO ha una
+// distanza minima. Le modifiche che arrivano nel frattempo non si perdono: si accumulano in
+// graficoDaInviare e partono tutte insieme alla prima finestra utile — una scrittura invece di
+// venti. Tetto teorico: 3 scritture al minuto su questo documento, cioe' ~4.300 al giorno nel
+// caso pessimo in cui qualcosa cambi di continuo, contro le ~28.000 di prima.
+//
+// PERCHE' 20 SECONDI e non di piu': questo documento porta i disegni condivisi fra PC, telefono
+// e tablet. Venti secondi di ritardo su un disegno spostato non si notano; un minuto si'.
+const GRAFICO_INVIO_MIN_MS=20000;   // distanza minima fra due scritture del documento disegni
+const GRAFICO_INVIO_DEBOUNCE_MS=1500; // attesa dopo l'ultima modifica, come prima
+let graficoUltimoInvioAt=0;
+// Quante volte ogni chiave ha fatto partire una scrittura: serve a vedere CHI consuma la quota
+// invece di indovinarlo. Si legge nel pannello "Disegni condivisi" delle impostazioni.
+const graficoContaPerChiave={};
 function graficoProgrammaInvio(){
  if(graficoTimerInvio)return;
- graficoTimerInvio=setTimeout(graficoInviaOra,1500);
+ const daUltimo=Date.now()-graficoUltimoInvioAt;
+ const attesa=Math.max(GRAFICO_INVIO_DEBOUNCE_MS,GRAFICO_INVIO_MIN_MS-daUltimo);
+ graficoTimerInvio=setTimeout(graficoInviaOra,attesa);
 }
 let graficoAvvisoPieno=false;
 const graficoStat={inviatoAt:0,inviate:0,ricevutoAt:0,ricevute:0,errore:'',ascolto:false};
@@ -7654,9 +7704,21 @@ function graficoAggiornaStato(){
  const el=document.getElementById('graficoSyncStato')||(typeof floatingDoc!=='undefined'&&floatingDoc&&floatingDoc.getElementById('graficoSyncStato'));
  if(!el)return;
  if(!graficoAttivo){ el.textContent=(PIP_SLOT>0)?'Finestra PIP: la condivisione la fa la finestra principale.':'Non attiva (serve essere collegati al proprio account).'; return; }
+ // CHI CONSUMA LA QUOTA, in chiaro. Le tre chiavi che hanno fatto partire piu' scritture da
+ // quando l'app e' aperta: senza questo, per capire perche' Firestore si riempie bisognava
+ // leggere il codice e indovinare (vedi GRAFICO_INVIO_MIN_MS).
+ let classifica='';
+ try{
+  const righe=Object.keys(graficoContaPerChiave)
+    .map(k=>[k,graficoContaPerChiave[k]])
+    .sort((a,b)=>b[1]-a[1]).slice(0,3);
+  const totale=righe.reduce((s,r)=>s+r[1],0);
+  if(totale)classifica=' · scritture da quando è aperta: '+righe.map(r=>r[0]+' ×'+r[1]).join(', ');
+ }catch(e){}
  el.textContent=(graficoStat.ascolto?'🟢 In ascolto':'🟠 Ascolto in ripresa')
   +' · ultimo invio '+graficoOra(graficoStat.inviatoAt)+' ('+graficoStat.inviate+' voci)'
   +' · ultima ricezione '+graficoOra(graficoStat.ricevutoAt)+' ('+graficoStat.ricevute+' voci applicate)'
+  +classifica
   +(graficoStat.errore?(' · ⚠️ '+graficoStat.errore):'');
 }
 async function graficoInviaOra(){
@@ -7677,6 +7739,10 @@ async function graficoInviaOra(){
    if(!graficoAvvisoPieno){ graficoAvvisoPieno=true; try{ $('status').textContent='⚠️ Disegni troppo pesanti per la condivisione fra dispositivi (oltre 900 KB): restano salvati su questo dispositivo.'; }catch(e){} }
    return;
  }
+ // Chi ha fatto partire questa scrittura: contato per chiave, cosi' nel pannello si vede quale
+ // dato consuma la quota invece di doverlo dedurre (vedi GRAFICO_INVIO_MIN_MS).
+ try{ Object.keys(voci).forEach(ek=>{ const k=graficoDecodifica(ek)||ek; graficoContaPerChiave[k]=(graficoContaPerChiave[k]||0)+1; }); }catch(e){}
+ graficoUltimoInvioAt=Date.now();
  const ok=await window.fxbtCloud.graficoSalva(voci);
  if(ok){ graficoStat.inviatoAt=Date.now(); graficoStat.inviate=Object.keys(voci).length; graficoStat.errore=''; }
  else graficoStat.errore='invio non riuscito, ritento fra 15 s';

@@ -89,3 +89,34 @@ test('ogni clic apre la finestra successiva, non sempre la stessa', async () => 
       'cinque clic devono aprire cinque finestre diverse, invece ha chiesto: ' + JSON.stringify(slot));
   } finally { await browser.close(); }
 });
+
+// GUARDIA CONTRO UNA CLASSE DI DIFETTO CHE HA COLPITO DUE VOLTE IN UN GIORNO.
+//
+// 1. OpenCode chiuse un commento HTML con la chiusura dei commenti del C: il commento resto'
+//    aperto e si MANGIO' il pulsante «Nuova finestra», che non e' mai esistito nel DOM.
+// 2. Riscrivendo la spiegazione di quel difetto, ci sono cascato io: avevo scritto per esteso
+//    la sequenza che chiude un commento HTML, dentro il commento. Si e' chiuso li', e la frase
+//    rimasta fuori e' diventata un nodo di TESTO NUDO dentro una riga flex — 247 px occupati da
+//    una frase invisibile, che spingevano tre pulsanti fuori dallo schermo del telefono.
+//
+// Le due facce dello stesso errore: un commento che finisce dove non doveva. Un nodo di testo
+// nudo in quelle righe non ha MAI una ragione legittima, quindi si vieta e basta: e' il
+// rilevatore piu' semplice che li becca tutti e due.
+test('nelle righe dei pulsanti del grafico non ci sono testi nudi (commenti HTML rotti)', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const nudi = await pagina.evaluate(`(function(){
+      const fuori=[];
+      ['chartFloatControls','chartFloatControlsExtra','quickTradeCluster'].forEach(id=>{
+        const r=document.getElementById(id); if(!r)return;
+        r.childNodes.forEach(n=>{
+          if(n.nodeType===3){ const t=n.textContent.trim(); if(t) fuori.push(id+': '+t.slice(0,70)); }
+        });
+      });
+      return fuori;
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.deepEqual(nudi, [],
+      'testo fuori da ogni elemento dentro una riga di pulsanti: quasi sempre un commento HTML chiuso male');
+  } finally { await browser.close(); }
+});
