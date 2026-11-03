@@ -1,10 +1,17 @@
-// SYNC CLOUD DELLE PREFERENZE: watchlist, ricerche e scala UI girano DENTRO l'account Google
+// SYNC CLOUD DELLE PREFERENZE: watchlist e ricerche salvate girano DENTRO l'account Google
 // (users/{uid}/data/preferenze): le preferenze scelte su un dispositivo arrivano da sole
 // agli altri dello stesso account, come il collegamento del server.
 //
+// LA SCALA UI NON VIAGGIA PIU' (richiesta del proprietario, 3 novembre 2026): «se vado a
+// modificare la scala sul telefono o sul tablet me la va a modificare anche sul PC.
+// Assolutamente no, non deve funzionare in questo modo. Rimane indipendente rispetto agli
+// altri dispositivi.» La scala dipende dallo schermo del dispositivo, non dall'account:
+// sta scritta solo nel magazzino locale e non entra ne' esce dal canale del cloud. Le
+// prove qui sotto coprono proprio questo: la watchlist viaggia, la scala no.
+//
 // Perche' serve un documento a parte: il bundle di sessione (che contiene tutto) viene
 // ritagliato per dimensione e parte solo all'uscita dall'app; le preferenze sono piccole
-// e cambiano spesso (stellina, ricerca salvata, scala), quindi le segue un documento loro
+// e cambiano spesso (stellina, ricerca salvata), quindi le segue un documento loro
 // dedicato, sempre aggiornato.
 //
 // Questo test NON cerca una stringa nel sorgente: estrae il blocco marcato dentro app.html
@@ -100,12 +107,12 @@ test("il blocco delle preferenze e' JavaScript valido", () => {
   assert.doesNotThrow(() => funzioni(), "il blocco estratto da app.html non si puo' nemmeno istanziare");
 });
 
-test("pubblica watchlist, ricerche e scala quando ce n'e' qualcosa", () => {
+test("pubblica watchlist e ricerche, ma la SCALA non sale sulla nuvola", () => {
   const f = funzioni();
   const store = memoria();
   store.setItem(K_WL, JSON.stringify(['EUR/USD', 'BINANCE:BTCUSDT']));
   store.setItem(K_RC, JSON.stringify([{symbol: 'AAPL.US', name: 'Apple', type: 'stock'}]));
-  store.setItem(K_SCALA, '120');
+  store.setItem(K_SCALA, '120');   // la scala di QUESTO dispositivo
   const nv = nuvola();
   assert.equal(f.fblSyncPubblica(nv.cloud('uid-uno'), store), true,
     "il dispositivo ha preferenze ma non pubblica niente: gli altri restano con le loro");
@@ -113,9 +120,27 @@ test("pubblica watchlist, ricerche e scala quando ce n'e' qualcosa", () => {
   assert.ok(doc, "il documento delle preferenze non e' arrivato sulla nuvola");
   assert.deepEqual(doc.watchlist, ['EUR/USD', 'BINANCE:BTCUSDT']);
   assert.deepEqual(doc.ricerche, [{symbol: 'AAPL.US', name: 'Apple', type: 'stock'}]);
-  assert.equal(doc.scala, 120);
+  // RICHIESTO DAL PROPRIETARIO (3 novembre 2026): la scala dell'interfaccia è una cosa DI QUESTO
+  // schermo, non dell'account. Se salisse sulla nuvola, cambiarla sul telefono la cambierebbe
+  // anche sul PC e sul tablet. Quindi nel documento NON deve esserci.
+  assert.equal(doc.scala, undefined,
+    "la scala non deve salire sulla nuvola: cambiandola su un dispositivo cambierebbe su tutti");
+  assert.equal('scala' in doc, false, "il documento non deve portare proprio il campo scala");
   assert.equal(typeof doc.aggiornato, 'number',
     "senza data non si distingue un documento nuovo da uno rimasto indietro");
+});
+
+test("la sola scala non basta a pubblicare: senza watchlist e ricerche non c'e' niente da dire", () => {
+  // Prova di controllo della cura: se la scala non viaggia piu', un dispositivo che ha cambiato
+  // SOLO la scala non ha niente da pubblicare. Senza questa prova si potrebbe "sistemare" il
+  // difetto pubblicando un documento vuoto, che direbbe agli altri dispositivi di cancellare tutto.
+  const f = funzioni();
+  const store = memoria();
+  store.setItem(K_SCALA, '85');
+  const nv = nuvola();
+  assert.equal(f.fblSyncPubblica(nv.cloud('uid-uno'), store), false,
+    "con la sola scala non si pubblica niente: la scala è di questo schermo, non degli altri");
+  assert.equal(nv.documenti.size, 0, "e niente deve arrivare sulla nuvola");
 });
 
 test("senza preferenze non pubblica niente: un documento vuoto ingannerebbe gli altri", () => {
@@ -144,9 +169,29 @@ test("il telefono riceve da solo le preferenze: stesso account, nessuna digitazi
     "la watchlist non e' arrivata: il telefono resterebbe con quella vuota");
   assert.equal(telefono.getItem(K_RC), JSON.stringify([{symbol: 'TSLA.US', name: 'Tesla', type: 'stock'}]),
     "le ricerche non sono arrivate: ogni ricerca andrebbe rifatta a ogni riapertura");
-  assert.equal(telefono.getItem(K_SCALA), '85',
-    "la scala non e' arrivata: il telefono resterebbe con il carattere del computer");
+  // RICHIESTO DAL PROPRIETARIO: la scala NON arriva. Il telefono tiene la sua, il PC la sua.
+  assert.equal(telefono.getItem(K_SCALA), null,
+    "la scala non deve arrivare dal cloud: il telefono deve tenere quella del suo schermo");
   assert.equal(arrivato, 1, "il segnale delle preferenze non e' partito: l'applicazione non riparte");
+});
+
+test("cambiare la scala sul telefono NON la cambia sul PC (il caso del proprietario)", async () => {
+  const f = funzioni();
+  const nv = nuvola();
+  // Il telefono sceglie la sua scala e pubblica le preferenze (come fa fblScalaUiSalva).
+  const telefono = memoria();
+  telefono.setItem(K_WL, JSON.stringify(['XAU/USD']));
+  telefono.setItem(K_SCALA, '60');          // carattere piccolo, sul telefono
+  f.fblSyncPubblica(nv.cloud('uid-uno'), telefono);
+  // Il PC ha la sua scala, già scelta per il suo schermo.
+  const pc = memoria();
+  pc.setItem(K_SCALA, '120');
+  f.fblSyncAvvia(nv.cloud('uid-uno'), pc, () => {});
+  assert.equal(pc.getItem(K_SCALA), '120',
+    "la scala del PC deve restare la sua: quella del telefono non deve viaggiare");
+  // E la watchlist invece viaggia, come sempre: la cura toglie SOLO la scala.
+  assert.equal(pc.getItem(K_WL), JSON.stringify(['XAU/USD']),
+    "la watchlist deve continuare a viaggiare: la cura non deve spegnere tutto il canale");
 });
 
 test("due dispositivi dello stesso account finiscono con le stesse preferenze", () => {
@@ -161,8 +206,12 @@ test("due dispositivi dello stesso account finiscono con le stesse preferenze", 
   f.fblSyncAvvia(nv.cloud('uid-uno'), tablet, () => {});
   f.fblSyncAvvia(nv.cloud('uid-uno'), telefono, () => {});
   assert.equal(tablet.getItem(K_WL), telefono.getItem(K_WL), "i due dispositivi vedono watchlist diverse");
-  assert.equal(tablet.getItem(K_SCALA), telefono.getItem(K_SCALA), "i due dispositivi vedono scale diverse");
   assert.equal(telefono.getItem(K_WL), JSON.stringify(['GBP/USD']));
+  // RICHIESTO DAL PROPRIETARIO: la scala NON deve finire uguale su tutti i dispositivi. Ognuno
+  // tiene la propria, scelta per il proprio schermo. Se il cloud la imponesse uguale per tutti,
+  // un telefono con schermo piccolo erediterebbe la scala del PC (o il viceversa).
+  assert.equal(tablet.getItem(K_SCALA), null);
+  assert.equal(telefono.getItem(K_SCALA), null);
 });
 
 test("il PC cambia una preferenza: gli altri dispositivi la seguono senza scrivere niente", () => {

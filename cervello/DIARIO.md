@@ -2,6 +2,39 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-03 — OpenCode — **v2.0.70 PUBBLICATA: la scala dell'interfaccia non viaggia piu' tra i
+  dispositivi** (ognuno tiene la sua).
+  1. **SINTOMO, parole del proprietario:** "è rimasto ancora il problema che se sono su un
+     dispositivo mobile ed eseguo quello che è lo zoom dell'intera impaginazione, quindi della
+     scala, me la va a modificare anche su tutti gli altri dispositivi collegati. Invece no, deve
+     essere una cosa indipendente tra dispositivo e dispositivo... se lo imposto sul tablet, la
+     scala rimane soltanto per il tablet. Se lo imposto per il PC, rimane soltanto per il PC.
+     Assolutamente no, non deve funzionare in questo modo."
+  2. **CAUSA MISURATA.** La scala UI (`fbl_ui_scala_pct`) era dentro il canale delle PREFERENZE
+     sul cloud, in quattro punti:
+     (a) `fblScalaUiSalva()` salvava in locale e poi chiamava `pubblicaPreferenze()`, quindi la
+         scala saliva sull'account a ogni cambio;
+     (b) `fblSyncPrepara()` la metteva nel documento (`scala`) da pubblicare;
+     (c) `fblSyncRicevi()` la riscriveva nel magazzino del dispositivo che la riceveva;
+     (d) `applicaPreferenzeDalCloud()` la applicava alla pagina appena arrivata.
+     Risultato: cambiarla sul telefono la cambiava dappertutto.
+  3. **CURA.** La scala esce dal canale cloud in tutti e quattro i punti: si salva solo nel
+     magazzino del dispositivo, non si pubblica, non si accetta, non si applica dal cloud.
+     Watchlist e ricerche salvate continuano a viaggiare come sempre (sono scelte dell'account,
+     non dello schermo) — il canale non è stato spento, svuotato della sola scala.
+  4. **TEST.** `laboratorio/app/sync_preferenze.test.mjs` riscritto nel senso nuovo (12 prove,
+     compresa "cambiare la scala sul telefono NON la cambia sul PC") e
+     `laboratorio/app/sync_impostazioni.test.mjs` con la prova invertita. Provato nei due sensi:
+     senza la cura i test esistenti erano ROSSI sulle asserzioni che esigevano il viaggio della
+     scala (`doc.scala` e `getItem(FBL_UI_SCALA_KEY)`), con la cura sono verdi.
+  5. **Regressione:** `scala_ui.test.mjs` (la scala dell'interfaccia continua a funzionare in
+     locale: salvataggio, limiti 10-150%, gesti, grafico che si riadatta) verde, e
+     `zoom_dispositivo.test.mjs` (lo zoom dell'asse prezzi, gia' per dispositivo da prima) verde.
+
+  **Collaudo:** locale `Falliti: 0` sui file toccati; su GitHub **verde**; release v2.0.70
+  **con Setup + installer_build.zip + APK**.
+  **Commit:** la cura e i test, poi la versione 2.0.70.
+
 - 2026-11-03 — OpenCode — **v2.0.69 PUBBLICATA: nel replay un order block si mitiga SOLO quando
   il mercato ci torna davvero** (basta look-ahead sugli indicatori).
   1. **SINTOMO, parole del proprietario:** "in modalita' replay, l'indicatore order blocks,

@@ -1,5 +1,21 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+31. **Prima di sincronizzare una preferenza sull'account, chiedersi se è una scelta dell'UTENTE
+    o una scelta dello SCHERMO.** La scala dell'interfaccia viaggiava con le preferenze perche'
+    "tanto è una preferenza": ma dipende da quanto è grande il display e da come lo tieni tu,
+    quindi metterla in comune significa imporre a un telefono la scala scelta per un monitor.
+    Nel dubbio: quello che dipende dal dispositivo (scala, zoom) resta LOCALE; quello che è una
+    scelta tua (watchlist, ricerche, strategie) viaggia con l'account. Valutare preferenza per
+    preferenza, non "tutto insieme".
+
+32. **Togliere un campo da un canale condiviso vuol dire toglierlo in TUTTI i punti del canale.**
+    La scala passava da quattro funzioni (salva locale, prepara il documento, ricevi, applica):
+    togliendola da tre su quattro sarebbe sembrato funzionare — il sintomo scompare — e poi
+    sarebbe tornato al primo riavvio o al primo dispositivo riagganciato. Quando si restringe un
+    canale, elencare tutti i suoi punti (come qui: 4) e chiuderli insieme, coperti da un test per
+    ciascuno lato (non pubblica, non riceve, non applica).
+
+
 29. **Un calcolo "incrementale" che non sa tornare indietro mente nel replay.** Il modello
     `for(i=builtTo+1; i<=upToIdx; i++)` con reset solo su "cambia l'array o i parametri" funziona
     in diretta, dove `upToIdx` fa sempre un passo avanti. Nel replay si va anche INDIETRO, e li'

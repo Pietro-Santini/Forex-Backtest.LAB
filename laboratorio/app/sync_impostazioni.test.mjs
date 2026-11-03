@@ -62,11 +62,14 @@ test('NESSUN segreto nella sincronizzazione: credenziali, chiavi, numeri, server
   } finally { await browser.close(); }
 });
 
-test('la scala al 30% si pubblica e si accetta: il minimo e\' 10, non 70', async () => {
-  // Il tetto minimo e' sceso al 10% nella v2.0.10 («sul telefono il 70% e' troppo»), ma questi due
-  // controlli erano rimasti al vecchio minimo: una scala al 30% scelta sul telefono non veniva mai
-  // pubblicata, e se arrivava da un altro dispositivo veniva rifiutata. Non si vedeva nessun
-  // errore: semplicemente la scala non seguiva l'account.
+test('la scala NON viaggia piu\': non si pubblica e non si accetta (3 novembre 2026)', async () => {
+  // RICHIESTO DAL PROPRIETARIO: «se vado a modificare la scala sul telefono o sul tablet me la va
+  // a modificare anche sul PC. Assolutamente no, non deve funzionare in questo modo. Rimane
+  // indipendente rispetto agli altri dispositivi.»
+  // Questo test era rosso prima della cura: pubblicava la scala e la accettava dal cloud (era
+  // nato per provare che una scala al 30% passasse, quando la regola era l'opposto). Ora prova
+  // il contrario: la scala resta di questo schermo. Cambiare il verso di un test esistente e'
+  // la prova che la cura ha cambiato il comportamento, non solo il codice.
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(() => {
@@ -76,26 +79,32 @@ test('la scala al 30% si pubblica e si accetta: il minimo e\' 10, non 70', async
         setItem(k, v){ this.dati[k] = String(v); },
         removeItem(k){ delete this.dati[k]; }
       });
-      const store = finto({[FBL_UI_SCALA_KEY]: '30'});
+      // Questo dispositivo ha una preferenza VERA (la watchlist) e anche la scala al 30%.
+      const store = finto({
+        [FBL_SYNC_WATCHLIST_KEY]: JSON.stringify(['XAU/USD']),
+        [FBL_UI_SCALA_KEY]: '30'
+      });
       const pubblicato = fblSyncPrepara(store);
+      // Un documento dal cloud che PORTA la scala non deve sovrascrivere quella locale.
       const dest = finto({});
+      dest.setItem(FBL_UI_SCALA_KEY, '120');       // la scala di QUESTO schermo
       const accettato = fblSyncRicevi({watchlist: [], ricerche: [], scala: 30}, dest);
-      // Il 2% non e' una scala utilizzabile (sotto il tetto non si vede piu' niente): il
-      // documento resta valido — watchlist e ricerche lo sono — ma la scala NON si scrive.
-      // La garanzia che conta e' questa, non il valore restituito.
-      const piccolo = finto({});
-      const troppoPiccolaAccettato = fblSyncRicevi({watchlist: [], ricerche: [], scala: 2}, piccolo);
       return {
-        pubblicata: pubblicato ? pubblicato.scala : null,
-        accettato, scalaRicevuta: dest.getItem(FBL_UI_SCALA_KEY),
-        troppoPiccolaAccettato, scalaPiccola: piccolo.getItem(FBL_UI_SCALA_KEY)
+        pubblicatoQualcosa: !!pubblicato,
+        watchlistPubblicata: pubblicato ? pubblicato.watchlist : null,
+        haCampoScala: pubblicato ? ('scala' in pubblicato) : null,
+        accettato,
+        scalaDopo: dest.getItem(FBL_UI_SCALA_KEY)
       };
     });
-    assert.equal(r.pubblicata, 30, 'una scala al 30% deve essere pubblicata: ' + r.pubblicata);
-    assert.equal(r.accettato, true, 'e una scala al 30% che arriva va accettata');
-    assert.equal(r.scalaRicevuta, '30', 'e scritta nel magazzino: ' + r.scalaRicevuta);
-    assert.equal(r.scalaPiccola, null,
-      'una scala del 2% non va scritta: sotto il tetto non si vedrebbe piu\' niente (trovato: ' + r.scalaPiccola + ')');
+    assert.equal(r.pubblicatoQualcosa, true,
+      'il dispositivo ha una preferenza vera: deve pubblicare qualcosa');
+    assert.deepEqual(r.watchlistPubblicata, ['XAU/USD'],
+      'la watchlist deve continuare a viaggiare');
+    assert.equal(r.haCampoScala, false,
+      'il documento non deve portare proprio il campo scala: ' + r.haCampoScala);
+    assert.equal(r.scalaDopo, '120',
+      'la scala di questo schermo deve restare la sua anche se dal cloud ne arriva un\'altra');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

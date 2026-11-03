@@ -2,6 +2,16 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+- **RISOLTO 3 novembre 2026 — La scala dell'interfaccia viaggiava tra i dispositivi** - `app.html`, canale preferenze del cloud.
+
+  Chiesto dal proprietario (3 novembre 2026): "se sono su un dispositivo mobile ed eseguo lo zoom dell'intera impaginazione, della scala, me la va a modificare anche su tutti gli altri dispositivi collegati. Invece no, deve essere una cosa indipendente tra dispositivo e dispositivo... se lo imposto sul tablet, la scala rimane soltanto per il tablet. Assolutamente no."
+
+  **Causa vera, misurata.** La scala UI (`fbl_ui_scala_pct`) stava nel canale delle preferenze sincronizzate sull'account, in quattro punti: `fblScalaUiSalva()` (salvava in locale e poi pubblicava le preferenze), `fblSyncPrepara()` (metteva `scala` nel documento da pubblicare), `fblSyncRicevi()` (riscriveva `FBL_UI_SCALA_KEY` nel magazzino di chi riceveva) e `applicaPreferenzeDalCloud()` (applicava alla pagina il valore arrivato).
+
+  **Cura.** La scala esce dal canale in tutti e quattro i punti: si salva solo nel magazzino del dispositivo, non si pubblica, non si accetta, non si applica dal cloud. Watchlist e ricerche salvate continuano a viaggiare come sempre: sono scelte dell'account, non dello schermo.
+
+  **Test:** `laboratorio/app/sync_preferenze.test.mjs` (12 prove, compresa "cambiare la scala sul telefono NON la cambia sul PC" e la prova di controllo che la sola scala non pubblica niente) e `laboratorio/app/sync_impostazioni.test.mjs`. Provato nei due sensi: senza la cura i test esistenti erano rossi sulle asserzioni che esigevano il viaggio, con la cura verdi.
+
 - **RISOLTO 3 novembre 2026 — Nel replay gli order block risultavano già mitigati (look-ahead)** - `app.html`, `compute()` di tutti gli indicatori incrementali (`INDICATOR_DEFS`).
 
   Chiesto dal proprietario (3 novembre 2026): "in modalita' replay, l'indicatore order blocks, quando avanziamo, ci fa vedere che l'order block e' gia' stato mitigato, invece no, deve risultare mitigato soltanto quando il mercato ci torna in quella zona... Non puo' essere mitigato appena si forma. Deve seguire la stessa logica identica della modalita' reale. Importantissimo per il backtest."
