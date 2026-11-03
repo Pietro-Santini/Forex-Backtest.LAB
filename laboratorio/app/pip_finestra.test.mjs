@@ -24,7 +24,11 @@ test('la finestra separata si apre come finestra NATIVA dell\'app, col logo dent
     await pagina.evaluate(PREPARA_BTC);
     await pagina.waitForTimeout(200);
 
-    await pagina.click('#floatChartBtn');
+    // IL PULSANTE DEL VECCHIO PIP E' NASCOSTO dal 3 novembre 2026 (richiesta del proprietario:
+    // «togliamo la barra con il pulsante X... ci sganciamo da quel sistema»), quindi non si puo'
+    // piu' cliccare. Il CODICE pero' resta, perche' serve allo schermo intero: si apre chiamando
+    // direttamente la funzione, cosi' resta sorvegliato anche senza la sua porta d'ingresso.
+    await pagina.evaluate(`(function(){ toggleFloatingChart(); return true; })()`);
     await pagina.waitForTimeout(900);
 
     const stato = await pagina.evaluate(() => ({
@@ -64,7 +68,11 @@ test('senza la Picture-in-Picture nativa la finestra di riserva mostra lo stesso
     });
     await pagina.waitForTimeout(200);
 
-    await pagina.click('#floatChartBtn');
+    // IL PULSANTE DEL VECCHIO PIP E' NASCOSTO dal 3 novembre 2026 (richiesta del proprietario:
+    // «togliamo la barra con il pulsante X... ci sganciamo da quel sistema»), quindi non si puo'
+    // piu' cliccare. Il CODICE pero' resta, perche' serve allo schermo intero: si apre chiamando
+    // direttamente la funzione, cosi' resta sorvegliato anche senza la sua porta d'ingresso.
+    await pagina.evaluate(`(function(){ toggleFloatingChart(); return true; })()`);
     await pagina.waitForTimeout(900);
 
     const stato = await pagina.evaluate(() => ({

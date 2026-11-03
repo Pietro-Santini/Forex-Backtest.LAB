@@ -9851,6 +9851,35 @@ function placeLabelY(x,w,desiredY,h,minY,maxY){
  labelPlacements.push({x,y,w,h});
  return y;
 }
+// UNA RIGA ORIZZONTALE CHE SALTA LE ETICHETTE GIA' DISEGNATE, invece di passarci sopra.
+//
+// SERVE A TENERE INSIEME DUE RICHIESTE CHE SEMBRAVANO IN CONFLITTO (3 novembre 2026):
+//  - «l'etichetta deve essere sempre in primo piano e la linea in secondo» (la mattina);
+//  - «non si vede piu' la linea tratteggiata di entrata: c'e' la freccia e c'e' la maniglia a
+//    destra, ma non c'e' la linea che le collega» (la sera).
+// La prima era stata risolta TOGLIENDO la linea dalla casella TP/SL: cosi' pero' spariva anche
+// il collegamento fra la freccia di apertura e la maniglia, che e' il riferimento visivo della
+// posizione. Qui non si sceglie fra le due: la linea si disegna, ma dove incontra un'etichetta
+// si interrompe e riprende dopo. Il registro delle etichette (labelPlacements) e' lo stesso che
+// placeLabelY riempie mano a mano, quindi vale anche per le etichette di ALTRE posizioni gia'
+// disegnate — che era il caso che aveva spinto a togliere la linea del tutto.
+function fblLineaSaltaEtichette(ctx,x1,x2,yy){
+ if(!(x2>x1))return;
+ const margine=2;   // un filo d'aria ai lati della scritta, se no la linea la tocca
+ const buchi=[];
+ for(const b of labelPlacements){
+  if(yy<b.y-margine||yy>b.y+b.h+margine)continue;        // l'etichetta non e' a questa altezza
+  const a=Math.max(x1,b.x-margine), z=Math.min(x2,b.x+b.w+margine);
+  if(z>a)buchi.push([a,z]);
+ }
+ buchi.sort((p,q)=>p[0]-q[0]);
+ let cursore=x1;
+ for(const [a,z] of buchi){
+  if(a>cursore){ ctx.beginPath(); ctx.moveTo(cursore,yy); ctx.lineTo(a,yy); ctx.stroke(); }
+  cursore=Math.max(cursore,z);
+ }
+ if(cursore<x2){ ctx.beginPath(); ctx.moveTo(cursore,yy); ctx.lineTo(x2,yy); ctx.stroke(); }
+}
 // RICHIESTO ESPLICITAMENTE: i pallini Absorption/Rejection del footprint non devono sovrapporsi
 // a testi/icone già disegnati da un indicatore attivo sopra o sotto le candele (es. le
 // etichette "B"/"Wick" di Support & Resistance with Breaks, "BSL"/"SSL", le label BOS/CHoCH e i
@@ -21210,14 +21239,33 @@ function drawTpSlZoneBox(ctx,opts){
  const zoneOpacity=currentZoneOpacity();
  ctx.save();
  let yTp=null,ySl=null;
- // NOTA: il "separatore tratteggiato bianco all'entrata" (la riga da xOrigin a xRight
- // all'altezza dell'entrata, dentro la casella TP/SL) e' stato RIMOSSO da qui perche' veniva
- // disegnato PER POSIZIONE nel secondo passo, DOPO le etichette delle posizioni precedenti:
- // la sua linea passava quindi SOPRA l'etichetta di un'altra posizione vicina e copriva la
- // scritta. Il prezzo dell'entrata resta comunque visibile grazie alla linea a tutta larghezza
- // disegnata nel primo passo (prima di qualsiasi etichetta), che e' l'unico riferimento
- // necessario. RICHIESTO DAL PROPRIETARIO (3 novembre 2026): «devi far si' che la linea non
- // passa sopra l'etichetta».
+ // IL TRATTEGGIO DELL'ENTRATA: RIMESSO, MA CHE SALTA LE ETICHETTE.
+ //
+ // SEGNALATO DAL PROPRIETARIO (3 novembre 2026, sera): «non si vede piu' la linea tratteggiata
+ // di entrata delle posizioni: c'e' la maniglia a destra e la freccia della posizione, ma non
+ // c'e' la linea che collega la freccia con la maniglia».
+ //
+ // COS'ERA SUCCESSO. La mattina aveva chiesto che la linea non passasse SOPRA le etichette. La
+ // cura era stata togliere questa riga del tutto, contando sulla linea a tutta larghezza
+ // disegnata nella prima passata. Ma quella e' un'ALTRA cosa: dipende dall'interruttore «linea
+ // del prezzo di entrata» (fblLineePrezzoVisibili) e, con quell'interruttore spento, non
+ // restava NIENTE a unire la freccia di apertura alla maniglia della casella.
+ //
+ // Qui non si sceglie fra le due richieste: la linea c'e', ma dove incontra un'etichetta si
+ // interrompe e riprende dopo (fblLineaSaltaEtichette). Il registro delle etichette e' quello
+ // globale di placeLabelY, quindi vale anche per le etichette di ALTRE posizioni gia' disegnate
+ // — che era esattamente il caso che aveva spinto a togliere la linea.
+ // Segue l'interruttore delle linee della casella (hideLinee), non quello della linea di prezzo
+ // a tutta larghezza: e' un pezzo della casella, come le righe di Target e Stop.
+ if(!hideLinee){
+   ctx.save();
+   ctx.setLineDash([1,3]);
+   ctx.strokeStyle=dimmed?'rgba(139,150,165,0.7)':'rgba(255,255,255,0.9)';
+   ctx.lineWidth=1; ctx.globalAlpha=dimmed?0.5:0.9;
+   fblLineaSaltaEtichette(ctx,xOrigin,xRight,yEntry);
+   ctx.setLineDash([]); ctx.globalAlpha=1;
+   ctx.restore();
+ }
  if(hasTp){
    yTp=y(tp);
    // tpSlZoneFillVisible (richiesto esplicitamente, toggle dalle celle SL/TP della tabella

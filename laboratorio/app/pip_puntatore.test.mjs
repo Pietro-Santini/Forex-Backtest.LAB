@@ -33,7 +33,11 @@ test('nella finestra separata il mirino cade sotto il mouse (X e Y)', async () =
     await pagina.evaluate((s) => { fblScalaUiApplica(document, s); }, SCALA);
     await pagina.waitForTimeout(300);
 
-    await pagina.click('#floatChartBtn');
+    // IL PULSANTE DEL VECCHIO PIP E' NASCOSTO dal 3 novembre 2026 (richiesta del proprietario:
+    // «togliamo la barra con il pulsante X... ci sganciamo da quel sistema»), quindi non si puo'
+    // piu' cliccare. Il CODICE pero' resta, perche' serve allo schermo intero: si apre chiamando
+    // direttamente la funzione, cosi' resta sorvegliato anche senza la sua porta d'ingresso.
+    await pagina.evaluate(`(function(){ toggleFloatingChart(); return true; })()`);
     await pagina.waitForTimeout(1200);
     const finestra = finestraNuova(pagina);
     await finestra.waitForTimeout(600);
@@ -113,7 +117,11 @@ test('al rientro il grafico torna nella pagina con la sua scala (il contro-zoom 
 
     const prima = await pagina.evaluate(() => getComputedStyle(document.getElementById('chartWrap')).zoom);
 
-    await pagina.click('#floatChartBtn');
+    // IL PULSANTE DEL VECCHIO PIP E' NASCOSTO dal 3 novembre 2026 (richiesta del proprietario:
+    // «togliamo la barra con il pulsante X... ci sganciamo da quel sistema»), quindi non si puo'
+    // piu' cliccare. Il CODICE pero' resta, perche' serve allo schermo intero: si apre chiamando
+    // direttamente la funzione, cosi' resta sorvegliato anche senza la sua porta d'ingresso.
+    await pagina.evaluate(`(function(){ toggleFloatingChart(); return true; })()`);
     await pagina.waitForTimeout(1200);
     const finestra = finestraNuova(pagina);
     await finestra.waitForTimeout(400);
