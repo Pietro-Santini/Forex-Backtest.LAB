@@ -14060,7 +14060,13 @@ const INDICATOR_DEFS={
    compute(rows, upToIdx, ind){
      const p=ind.params;
      const st=ind.calc;
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+     // STESSA CURA dell'order blocks e dell'FVG: in replay, tornando INDIETRO, `upToIdx`
+     // diventa piu' piccolo di `st.builtTo` e il ciclo incrementale non gira affatto - lo
+     // stato resterebbe quello calcolato con candele che nel replay non sono ancora arrivate.
+     // Con `rows` sempre uguale (lo storico) `builtTo` non si azzerava da solo.
+     // Quindi: indietro => si rifa' da zero. Provato da
+     // laboratorio/app/ob_replay_mitigazione.test.mjs.
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
        st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.rawHigh=[]; st.rawLow=[]; st.res=[]; st.sup=[]; st.osc=[];
        st.lastRes=NaN; st.lastSup=NaN; st.shortE=null; st.longE=null; st.breaks=[];
@@ -14173,7 +14179,13 @@ const INDICATOR_DEFS={
    // Bollinger e riempimento quando è selezionato "SMA + Bollinger Bands".
    compute(rows, upToIdx, ind){
      const p=ind.params, st=ind.calc;
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+     // STESSA CURA dell'order blocks e dell'FVG: in replay, tornando INDIETRO, `upToIdx`
+     // diventa piu' piccolo di `st.builtTo` e il ciclo incrementale non gira affatto - lo
+     // stato resterebbe quello calcolato con candele che nel replay non sono ancora arrivate.
+     // Con `rows` sempre uguale (lo storico) `builtTo` non si azzerava da solo.
+     // Quindi: indietro => si rifa' da zero. Provato da
+     // laboratorio/app/ob_replay_mitigazione.test.mjs.
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
        st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.out=[]; st.smoothing=[]; st.bbUp=[]; st.bbLo=[];
        st.emaPrev=null; st.smEmaPrev=null; st.smRmaPrev=null;
@@ -14257,7 +14269,14 @@ const INDICATOR_DEFS={
    // disattivate di default nello script).
    compute(rows, upToIdx, ind){
      const p=ind.params, st=ind.calc;
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+     // STESSA CURA dell'order blocks (riga ~14748): in replay, se si torna INDIETRO,
+     // `upToIdx` diventa piu' piccolo di `st.builtTo` e il ciclo incrementale non gira
+     // affatto: le zone FVG resterebbero mitigate (o attive) per colpa di candele che nel
+     // replay non sono ancora arrivate. Con `rows` sempre uguale (lo storico) `builtTo` non
+     // si azzerava da solo. Quindi: indietro => si rifa' da zero. Provato da
+     // laboratorio/app/ob_replay_mitigazione.test.mjs per gli OB; l'FVG ha la stessa
+     // logica di mitigazione, quindi la stessa cura.
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
        st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        const maxSize=50;
        st.zz=Array.from({length:maxSize},()=>({d:0,x:0,y:NaN}));
@@ -14518,7 +14537,13 @@ const INDICATOR_DEFS={
    }),
    compute(rows, upToIdx, ind){
      const p=ind.params, st=ind.calc;
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+     // STESSA CURA dell'order blocks e dell'FVG: in replay, tornando INDIETRO, `upToIdx`
+     // diventa piu' piccolo di `st.builtTo` e il ciclo incrementale non gira affatto - lo
+     // stato resterebbe quello calcolato con candele che nel replay non sono ancora arrivate.
+     // Con `rows` sempre uguale (lo storico) `builtTo` non si azzerava da solo.
+     // Quindi: indietro => si rifa' da zero. Provato da
+     // laboratorio/app/ob_replay_mitigazione.test.mjs.
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
        st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.labels=[]; st.mssLines=[]; st.breakerBoxes=[]; st.fvgBoxes=[];
        st.lastPH=NaN; st.prevPH=NaN; st.lastPHBar=null;
@@ -14728,7 +14753,24 @@ const INDICATOR_DEFS={
    }),
    compute(rows, upToIdx, ind){
      const p=ind.params, st=ind.calc;
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p)){
+     // IN REPLAY SI TORNA INDIETRO: ALLORA SI RIFÀ DA CAPO.
+     // SEGNALATO dal proprietario (3 novembre 2026): in modalita' replay l'order block
+     // risultava gia' mitigato appena formato, invece deve mitigarsi soltanto quando il
+     // mercato CI TORNA nella zona, come in modalita' reale. "Non puo' essere mitigato
+     // appena si forma. Importantissimo per il backtest."
+     //
+     // CAUSA: il calcolo e' incrementale e `st.builtTo` veniva azzerato solo se cambiava
+     // l'array `rows` o i parametri - nel replay `rows` e' sempre lo STESSO storico. Andando
+     // avanti la zona si segnava mitigata; tornando INDIETRO `upToIdx` diventava piu' piccolo
+     // di `builtTo`, il ciclo non girava affatto e la zona RESTAVA mitigata, con l'indice del
+     // tocco futuro: nel replay si vedeva una mitigazione che deve ancora avvenire - guardare
+     // nel futuro, il difetto peggiore per un backtest.
+     //
+     // CURA: se l'indice richiesto e' PRIMA di quello gia' calcolato, si butta tutto e si
+     // rifa' da zero fino a `upToIdx`. La zona ridiventa VIVA finche' il mercato non ci torna
+     // davvero; riavanzando, la mitigazione ricompare da sé. Provato da
+     // laboratorio/app/ob_replay_mitigazione.test.mjs (rosso prima, verde dopo).
+     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
        st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.zones=[]; st.lastPH=NaN; st.lastPHBar=null; st.lastPL=NaN; st.lastPLBar=null;
        st.bRun=0; st.sRun=0; st.bOpp=null; st.sOpp=null;

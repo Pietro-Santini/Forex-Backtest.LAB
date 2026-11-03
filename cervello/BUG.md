@@ -2,6 +2,21 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+- **RISOLTO 3 novembre 2026 — Nel replay gli order block risultavano già mitigati (look-ahead)** - `app.html`, `compute()` di tutti gli indicatori incrementali (`INDICATOR_DEFS`).
+
+  Chiesto dal proprietario (3 novembre 2026): "in modalita' replay, l'indicatore order blocks, quando avanziamo, ci fa vedere che l'order block e' gia' stato mitigato, invece no, deve risultare mitigato soltanto quando il mercato ci torna in quella zona... Non puo' essere mitigato appena si forma. Deve seguire la stessa logica identica della modalita' reale. Importantissimo per il backtest."
+
+  **Causa vera, misurata.** Il calcolo degli indicatori e' incrementale: `compute(rows, upToIdx, ind)` riparte da `st.builtTo+1` e arriva a `upToIdx`. `st.builtTo` veniva azzerato solo se cambiava l'array `rows` o i parametri - e nel replay l'array `rows` è sempre lo STESSO storico CSV. Quindi:
+  - avanzando fino alla candela in cui il prezzo torna nella zona, la zona viene segnata `mitigated=true` con `mitIdx` = quella candela;
+  - tornando INDIETRO col replay, `upToIdx` diventa piu' piccolo di `builtTo`, il ciclo non gira affatto e la zona RESTA mitigata con l'indice del tocco futuro.
+  Risultato: nel replay si vede una mitigazione che deve ancora avvenire - guardare nel futuro, il difetto peggiore per un backtest.
+
+  **Cura.** Aggiunta alla condizione di reset la terza possibilita' `|| upToIdx<st.builtTo`: se il replay chiede una candela precedente a quella gia' calcolata, si butta tutto e si rifa' da zero fino a `upToIdx`. La zona ridiventa VIVA finche' il mercato non ci torna davvero; riavanzando, la mitigazione ricompare da sé. Applicata a TUTTI gli indicatori con lo stesso schema incrementale (OB, FVG buyside/sellside, Support & Resistance with Breaks, ICT Reversal Setup, EMA), perche' il difetto era della classe, non di uno solo.
+
+  **Strada NON presa, e perche':** invertire il calcolo (togliere la mitigazione quando si torna indietro) sarebbe parso piu' efficiente, ma la mitigazione di una zona dipende da decine di candele, dal run dell'impulso e dallo stato dei pivot: smontarla e' molto piu' fragile che rifare.
+
+  **Test:** `laboratorio/app/ob_replay_mitigazione.test.mjs` (2 prove, compresa la prova di controllo che la mitigazione non sia stata semplicemente spenta). Provato nei due sensi: senza la cura è ROSSO, con la cura è VERDE.
+
 - **RISOLTO 2 novembre 2026 — In replay i segnali non eseguivano ordini reali, e l'apertura si fermava a metà se il grafico era su un altro asset** — `app.html`, `tgEseguiSegnale` (~34613) e la guardia alla porta di `fetchMt5WithTimeout` (~36152).
 
   Chiesto dal proprietario (2 novembre 2026): in replay i segnali che arrivano devono eseguire in background **sul conto MT5 reale**, e con più conti selezionati deve aprire le posizioni sugli altri conti e poi tornare al conto/alla candela del backtest.

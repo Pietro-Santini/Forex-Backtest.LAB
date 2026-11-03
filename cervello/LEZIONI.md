@@ -1,5 +1,22 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+29. **Un calcolo "incrementale" che non sa tornare indietro mente nel replay.** Il modello
+    `for(i=builtTo+1; i<=upToIdx; i++)` con reset solo su "cambia l'array o i parametri" funziona
+    in diretta, dove `upToIdx` fa sempre un passo avanti. Nel replay si va anche INDIETRO, e li'
+    il ciclo non gira: lo stato resta quello calcolato con candele che il replay non ha ancora
+    raggiunto. Per un order block significava vederlo "gia' mitigato" prima che il prezzo ci
+    tornasse - guardare nel futuro, che in un backtest e' il difetto peggiore. La regola: un
+    calcolo incrementale DEVE gestire `upToIdx < builtTo` (nel caso degli indicatori: buttare e
+    rifare da zero, che su poche candele costa niente e non puo' sbagliare).
+
+30. **Quando un difetto e' di una CLASSE, curarlo in uno solo e' una mezza cura che sembra
+    intera.** Il look-ahead stava in sette indicatori con lo stesso schema; curando solo
+    l'order block (quello nominato dal proprietario) il giorno dopo sarebbe arrivata la stessa
+    identica segnalazione per l'FVG o l'ICT Reversal. Prima di dire "sistemato", elencare tutti
+    i punti con lo stesso schema - come ho fatto con un controllo sulle sette funzioni
+    `compute()` di `INDICATOR_DEFS`, e curarli tutti insieme.
+
+
 23. **Le release le costruisce e pubblica il flusso GitHub: non si creano a mano, e mai vuote.**
     Creato a mano un tag e una release `v2.0.66` **senza un solo allegato** (nessun Setup, nessun
     APK), mentre `sw.js` dichiarava ancora `2.0.65`. Dal proprietario: sul tablet *"aggiornamento

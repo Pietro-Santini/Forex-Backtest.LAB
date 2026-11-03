@@ -2,6 +2,47 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-03 — OpenCode — **v2.0.69 PUBBLICATA: nel replay un order block si mitiga SOLO quando
+  il mercato ci torna davvero** (basta look-ahead sugli indicatori).
+  1. **SINTOMO, parole del proprietario:** "in modalita' replay, l'indicatore order blocks,
+     quando avanziamo, ci fa vedere che l'order block e' gia' stato mitigato, invece no, deve
+     risultare mitigato soltanto quando il mercato ci torna in quella zona, come se fosse un
+     order block che si genera in tempo reale e poi il mercato, quando ci torna su quell'order
+     block, allora viene mitigato. Non puo' essere mitigato appena si forma. Deve seguire la
+     stessa logica identica della modalita' reale. Importantissimo. Questo per fare backtest e'
+     super super importante."
+  2. **CAUSA MISURATA.** Il calcolo degli indicatori e' INCREMENTALE: `compute()` riparte da
+     `st.builtTo+1` e arriva a `upToIdx`, e `st.builtTo` veniva azzerato solo se cambiava
+     l'array `rows` o i parametri. Nel replay l'array `rows` e' sempre lo STESSO storico, quindi:
+     avanzando fino alla candela della mitigazione la zona si segnava mitigata; tornando
+     INDIETRO, `upToIdx` diventava piu' piccolo di `builtTo`, il ciclo `for(i=builtTo+1;
+     i<=upToIdx; ...)` NON girava affatto e la zona RESTAVA mitigata, con l'indice del tocco
+     futuro. Cioe': nel replay si vedeva una mitigazione che deve ancora avvenire. Per un
+     backtest e' guardare nel futuro - il difetto peggiore possibile.
+  3. **CURA.** Nella condizione di reset dell'incrementale, aggiunta la terza possibilita':
+     `|| upToIdx<st.builtTo`. Se il replay chiede una candela PRECEDENTE a quella gia' calcolata,
+     si butta tutto e si rifa' da zero fino a `upToIdx`. La zona ridiventa VIVA finche' il
+     mercato non ci torna davvero; riavanzando, la mitigazione ricompare da sé (non e' stata
+     "spenta", e' rimessa al posto giusto).
+  4. **CURA APPLICATA A TUTTA LA CLASSE DI DIFETTO**, non solo all'OB, perche' avevano
+     esattamente lo stesso schema: Order Blocks, FVG (Buyside/Sellside Liquidity + Aligned
+     FVGs), Support & Resistance with Breaks, ICT Reversal Setup, EMA. Tutti gli indicatori
+     incrementali, quindi, non mentono piu' nel replay.
+  5. **TEST NUOVO:** `laboratorio/app/ob_replay_mitigazione.test.mjs`, 2 prove - il difetto
+     (tornando indietro la zona ridiventa viva) e la PROVA DI CONTROLLO (riavanzando si
+     rimitiga da sola, quindi non si e' semplicemente spenta la mitigazione).
+     Provato nei due sensi: senza la cura ROSSO (`true !== false`: la zona restava mitigata),
+     con la cura VERDE.
+  6. **Nota su una strada che NON ho preso:** invertire il calcolo (togliere una mitigazione
+     quando si torna indietro) sarebbe stato piu' "efficiente" ma molto piu' fragile: la
+     mitigation di una zona puo' dipendere da decine di candele, dal run dell'impulso, dallo
+     stato dei pivot. Rifare da zero e' un giro su poche candele e non puo' sbagliare.
+
+  **Collaudo:** locale `Falliti: 0` sui file toccati; regressione indicatori 13/13 verde
+  (order_blocks, ob_sparisce, ob_sync, indicatori_nascosti, ob_replay_mitigazione);
+  su GitHub **verde**; release v2.0.69 **con Setup + installer_build.zip + APK**.
+  **Commit:** la cura e il test (un commit), poi la versione 2.0.69.
+
 - 2026-11-02 — OpenCode — **v2.0.68 PUBBLICATA: in replay i segnali eseguono ordini REALI sul
   conto MT5, in background** (decisione del proprietario, che ribalta quella del 26 ottobre).
   1. **Cosa cambia.** In `tgEseguiSegnale` (`app.html` ~34613) `reale` era
