@@ -255,6 +255,39 @@ class _Api(object):
             return True
         return False
 
+    def nuova_finestra(self, slot):
+        # Apre una finestra NATIVA senza barra degli indirizzi: e' il meccanismo che
+        # sul sito (browser) non si puo' ottenere con window.open (i browser lo vietano
+        // per sicurezza). Qui, nella finestra dell'applicazione, la finestra nuova è
+        // una vera finestra pywebview, con il titolo "Forex Backtest Lab" e nessuna
+        // barra degli indirizzi — esattamente come richiesto. Il contenuto e' la stessa
+        // pagina app.html con pipSlot=N, quindi l'istanza completa e indipendente.
+        try:
+            slot = int(slot)
+        except (ValueError, TypeError):
+            slot = 2
+        if slot < 2:
+            slot = 2
+        if not _is_port_open(PORTA_LOCALE):
+            url_b = _ensure_backend()
+            if not url_b:
+                return False
+        url = "http://127.0.0.1:%d/app.html?pipSlot=%d" % (PORTA_LOCALE, slot)
+        try:
+            w = webview.create_window(
+                NOME_APP,
+                url,
+                width=1280,
+                height=820,
+                min_size=(960, 580),
+                frameless=False,
+                easy_drag=False,
+            )
+            return True
+        except Exception as exc:
+            print("nuova_finestra fallita:", exc)
+            return False
+
 
 def _pulisci_cache_webview():
     """Cancella la cache HTTP/WebView2 ad ogni avvio, per non servire mai una copia vecchia
