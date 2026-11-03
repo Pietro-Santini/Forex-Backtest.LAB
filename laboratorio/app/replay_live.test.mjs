@@ -105,7 +105,15 @@ test('2) avviaReplayLive congela il punto; STOP (esciReplayLive) torna in dirett
         followLatest : followLatest,
         stop : vedi('liveReplayStopBtn'),
         frecce : vedi('pipHistBackBtn') && getComputedStyle(document.getElementById('pipHistBackBtn').parentElement).display==='flex',
-        rigaAvanti : getComputedStyle(document.getElementById('replayControlsRow')).display==='grid',
+        // LA RIGA DOPPIONE (#replayControlsRow) DEVE RESTARE NASCOSTA, anche dentro al replay.
+        // Qui si misurava che fosse 'grid', cioe' VISIBILE: era la vecchia aspettativa, ed e'
+        // esattamente il difetto che il proprietario ha segnalato due volte (1 e 3 novembre
+        // 2026, la seconda con la foto) — sotto al grafico comparivano DUE coppie di frecce per
+        // lo stesso identico comando. Le frecce che contano sono quelle accanto al PLAY, misurate
+        // qui sopra da `frecce`: quelle devono esserci, e il test continua a pretenderle.
+        // I pulsanti #back/#next restano nel DOM perche' sono i VERI comandi a cui delegano sia
+        // le freccette del PLAY sia i tasti della tastiera — vedi fblDoppioneFrecceVia().
+        rigaDoppioneNascosta : getComputedStyle(document.getElementById('replayControlsRow')).display==='none',
       };
       esciReplayLive();
       const dopo = {
@@ -118,8 +126,8 @@ test('2) avviaReplayLive congela il punto; STOP (esciReplayLive) torna in dirett
     }, TRE_CANDELE_JS);
     assert.deepEqual(r.durante, {
       active:true, idx:0, masterTime:Date.parse(TRE_CANDELE[0].date), viewEnd:0,
-      followLatest:true, stop:true, frecce:true, rigaAvanti:true
-    }, 'il replay si ancora al punto scelto e mostra i comandi');
+      followLatest:true, stop:true, frecce:true, rigaDoppioneNascosta:true
+    }, 'il replay si ancora al punto scelto e mostra i comandi (una coppia di frecce, non due)');
     assert.deepEqual(r.dopo, {active:false, idx:2, allUltima:true, idxUltima:true},
                      'STOP riporta all\'ultima candela vera');
     assert.deepEqual(errori, []);
