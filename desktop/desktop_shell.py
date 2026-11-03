@@ -258,10 +258,10 @@ class _Api(object):
     def nuova_finestra(self, slot):
         # Apre una finestra NATIVA senza barra degli indirizzi: e' il meccanismo che
         # sul sito (browser) non si puo' ottenere con window.open (i browser lo vietano
-        // per sicurezza). Qui, nella finestra dell'applicazione, la finestra nuova è
-        // una vera finestra pywebview, con il titolo "Forex Backtest Lab" e nessuna
-        // barra degli indirizzi — esattamente come richiesto. Il contenuto e' la stessa
-        // pagina app.html con pipSlot=N, quindi l'istanza completa e indipendente.
+        # per sicurezza). Qui, nella finestra dell'applicazione, la finestra nuova è
+        # una vera finestra pywebview, con il titolo "Forex Backtest Lab" e nessuna
+        # barra degli indirizzi — esattamente come richiesto. Il contenuto e' la stessa
+        # pagina app.html con pipSlot=N, quindi l'istanza completa e indipendente.
         try:
             slot = int(slot)
         except (ValueError, TypeError):
