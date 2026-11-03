@@ -11625,24 +11625,71 @@ function lvnTouchIndex(fromIdx,lo,hi){
  }
  return -1;
 }
-function computeLowVolumeZone(profile,thresholdPct,edgePct){
+// La zona a basso volume NON deve nascere dalle candele di riapertura.
+// RICHIESTO DAL PROPRIETARIO (3 novembre 2026): «all'aventura c'è il cosiddetto swap di apertura
+// del mercato quindi viene disegnata una candela molto lunga con una spike ed è giusta, però
+// inizia a disegnare il rettangolo verde del not volume e dopo rimane per tutto il giorno
+// perché il mercato non ci torna. Vorrei evitare che mi mostrasse quella zona di inefficienza
+// all'inizio dell'apertura ma me la mostrasse più tardi, quando il mercato inizia a scambiare
+// davvero.»
+//
+// CAUSA MISURATA: la candela di riapertura ha un range enorme (il salto dello swap) e copre da
+// sola decine di fasce dell'istogramma. Il suo volume si sparge su tutte quelle fasce, quindi
+// ognuna risulta poca roba rispetto alla fascia ristretta in cui poi il mercato scambia
+// davvero: la zona a basso volume casca sempre li', appiccicata all'apertura, e il rettangolo
+// verde resta appeso per tutto il giorno.
+//
+// CURA: le fasce coperte da una candela anomala (range molto piu' grande della norma, cioe'
+// proprio la candela di riapertura/swap) NON entrano nella ricerca della zona: non si puo'
+// nascere la' dove il prezzo non si e' davvero fermato. La zona nasce quindi solo nelle fasce
+// dove il mercato ha accumulato contratti, e compare piu' tardi, come chiesto.
+// rows/startIdx/endIdx sono nuovi e facoltativi: chi non li passa (altri chiamanti) si comporta
+// esattamente come prima.
+function computeLowVolumeZone(profile,thresholdPct,edgePct,rows,startIdx,endIdx){
  if(!profile||!profile.buckets||profile.maxTotal<=0)return null;
  const nb=profile.buckets;
  const totals=new Array(nb);
  for(let b=0;b<nb;b++)totals[b]=profile.upVol[b]+profile.downVol[b];
+ // Fasce da escludere: quelle in cui il prezzo e' passato SOLO col salto.
+ // REGOLA: una fascia e' vietata se NESSUNA candela "normale" (cioè non una candela
+ // col salto/swap di riapertura, riconosciuta perche' il suo range e' molto piu' grande della
+ // norma) l'ha attraversata. Sono esattamente le fasce in cui il mercato non si e' davvero
+ // fermato: li' il volume si e' solo sparso per la candela lunga e la zona a basso volume cascava
+ // sempre li', appiccicata all'apertura del mercato, e restava appesa per tutto il giorno.
+ const vietate=new Array(nb).fill(false);
+ if(Array.isArray(rows)&&rows.length){
+  const da=Math.max(0,startIdx|0), a=Math.min(rows.length-1,(endIdx!=null?endIdx:rows.length-1)|0);
+  const ranges=[];
+  for(let i=da;i<=a;i++){ const r=rows[i]; if(r&&Number.isFinite(r.high)&&Number.isFinite(r.low))ranges.push(r.high-r.low); }
+  if(ranges.length>=4){
+   ranges.sort(function(x,y){return x-y;});
+   const mediana=ranges[Math.floor(ranges.length/2)];
+   const soglia=Math.max(mediana*4,profile.bucketSize*3);
+   const toccata=new Array(nb).fill(false);
+   for(let i=da;i<=a;i++){
+     const r=rows[i]; if(!r||!Number.isFinite(r.high)||!Number.isFinite(r.low))continue;
+     if((r.high-r.low)>soglia)continue;                        // candela di riapertura: non tocca
+     const b0=Math.max(0,Math.floor((r.low-profile.priceLo)/profile.bucketSize));
+     const b1=Math.min(nb-1,Math.floor((r.high-profile.priceLo)/profile.bucketSize));
+     for(let b=b0;b<=b1;b++)toccata[b]=true;
+   }
+   for(let b=0;b<nb;b++)vietate[b]=!toccata[b];                 // mai toccata da una candela vera
+  }
+ }
  const thr=profile.maxTotal*Math.max(1,Math.min(100,thresholdPct!=null?thresholdPct:15))/100;
  const edgeFrac=Math.max(0,Math.min(30,edgePct!=null?edgePct:8))/100;
  const edgeExclude=Math.min(Math.floor((nb-1)/2),Math.round(nb*edgeFrac));
- const searchLo=edgeExclude, searchHi=nb-1-edgeExclude;
- let minIdx=searchLo,minVal=Infinity;
- for(let b=searchLo;b<=searchHi;b++){ if(totals[b]<minVal){minVal=totals[b];minIdx=b;} }
+ const searchLo=edgeExclude,searchHi=nb-1-edgeExclude;
+ let minIdx=-1,minVal=Infinity;
+ for(let b=searchLo;b<=searchHi;b++){ if(vietate[b])continue; if(totals[b]<minVal){minVal=totals[b];minIdx=b;} }
+ if(minIdx<0)return null;                                    // tutte le fasce erano di riapertura
  let lo=minIdx,hi=minIdx;
- while(lo>0&&totals[lo-1]<=thr)lo--;
- while(hi<nb-1&&totals[hi+1]<=thr)hi++;
+ while(lo>0&&!vietate[lo-1]&&totals[lo-1]<=thr)lo--;
+ while(hi<nb-1&&!vietate[hi+1]&&totals[hi+1]<=thr)hi++;
  return{
-   loPrice:profile.priceLo+lo*profile.bucketSize,
-   hiPrice:profile.priceLo+(hi+1)*profile.bucketSize,
-   loIdx:lo,hiIdx:hi,minVol:minVal
+  loPrice:profile.priceLo+lo*profile.bucketSize,
+  hiPrice:profile.priceLo+(hi+1)*profile.bucketSize,
+  loIdx:lo,hiIdx:hi,minVol:minVal
  };
 }
 // "Sviluppo" (POC/VA in sviluppo, come su TradingView): NON estende più la riga piatta oltre il
@@ -17729,7 +17776,9 @@ function draw(){
        // stesso bordo destro usato dall'istogramma/dalle righe POC-VAH-VAL (ultima candela, o
        // bordo del grafico se "estendi a destra"/ancorato) — vedi computeLowVolumeZone() sopra.
        if(d.lvnEnabled&&profile&&profile.maxTotal>0){
-         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15,d.lvnEdgePct);
+         // rows/l'indice di partita servono alla cura del 3 novembre 2026: le fasce coperte
+         // dalla candela di riapertura (swap/spike) non devono poter generare la zona.
+         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15,d.lvnEdgePct,rows,0,lastIdx);
          if(lvz){
            const lvTopY=shapesGeo.y(lvz.hiPrice), lvBotY=shapesGeo.y(lvz.loPrice);
            // Fine della zona: la candela che la tocca per prima dopo l'istogramma, altrimenti
