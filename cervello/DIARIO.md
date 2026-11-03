@@ -151,10 +151,58 @@ Formato: data — chi — cosa — esito collaudo — commit.
       Controllo rapido prima di consegnare: `git diff --stat main..HEAD` deve dire numeri
       piccoli. Se dice migliaia di righe su file che hai appena sfiorato, e' questo.
 
-  **Collaudo:** sintassi `app.html` pulita; i due test nuovi provati nei due sensi; regressione
-  45/45 verde.
-  **Solo `app.html`** fra i file che contano per l'utente: basta il push, nessun Setup nuovo
-  (tabella di `cervello/PUBBLICARE.md`).
+  18. **LE FRECCE DOPPIE E I TASTI DELLA TASTIERA, segnalati DUE volte (1 e 3 novembre) e
+      ancora rotti sulla v2.0.79.** Il 1° novembre la riga doppione era stata messa a
+      `display:none` NELL'HTML e il test lo confermava... guardando la pagina APPENA APERTA. Ma
+      TRE punti del codice la rimettevano a `grid` appena l'interfaccia si aggiornava (uscita
+      dalla finestra separata, `updateLiveReplayUI`, `updateLiveModeUI`). Misurato riaprendo
+      l'app: doppione VISIBILE sia in Storico sia in Live col replay. Ora i tre punti chiamano
+      `fblDoppioneFrecceVia()`, che nasconde e basta.
+      I tasti: `handleChartArrowNav` partiva con `if(liveModeActive)return;`, quindi in Live col
+      replay ACCESO non muovevano niente mentre i pulsanti a schermo sì (misurato: Storico
+      50->51, Live+replay 50->50). Ora la guardia è `liveModeActive && !liveReplayActive`, e i
+      tasti **delegano a #next/#back** invece di rifare la logica: prima ne esisteva una seconda
+      versione, simile ma non uguale, a cui mancava `broadcastChartTimeSync()` — muovendosi da
+      tastiera le ALTRE finestre non seguivano.
+  19. **LA LEZIONE, ed è la più importante di questo giro.** Un test che guarda solo la pagina
+      APPENA APERTA non sorveglia niente: `frecce_replay_navigate` era verde mentre il
+      proprietario il doppione lo vedeva, foto alla mano. Ora lo stato si misura DOPO aver fatto
+      girare `updateLiveModeUI()`/`updateLiveReplayUI()`. E `replay_live.test.mjs` **pretendeva**
+      la riga doppione visibile (`rigaAvanti:true`): codificava come giusto proprio il difetto.
+      Rinominato in `rigaDoppioneNascosta` e invertito, tenendo l'asserzione sulle frecce vere
+      (`frecce:true`) così la modifica non può diventare il permesso di farle sparire tutte.
+  20. **L'AGGIORNAMENTO CHE FA CRASHARE L'APP.** Parole del proprietario: «quando aggiorno,
+      l'applicazione mi dà NON RISPONDE e crasha: chiude, installa, riapre, e c'è qualche
+      servizio che rimane ancora attivo dall'istanza precedente».
+      **CAUSA, e non è una supposizione: è scritta in `bridge.py` (~riga 519) da chi ha
+      costruito il custode** — «`_ferma_custode_mt5_feed()` PRIMA di spegnere il servizio, O IL
+      CUSTODE LO RIACCENDE». Il custode è il thread che fa rinascere `Mt5FeedServer.exe` appena
+      la porta 8001 tace. `ChiudiProgrammi` in `installer.iss` uccideva nell'ordine SBAGLIATO:
+      prima SegnaliBridge, poi Mt5FeedServer, e **solo alla fine il ponte**. In quella finestra
+      il custode era vivo e faceva RINASCERE il servizio dati, che sopravviveva al padre e
+      restava orfano con la porta 8001 in mano. Dopo l'installazione il servizio NUOVO non
+      riusciva più ad aprirla: l'app partiva e non trovava i dati.
+      **CURA da tutte e due le parti:** `aggiorna_programma()` spegne custode, servizio dati e
+      ponte dei segnali PRIMA di lanciare l'installer (best-effort: se fallisce, l'installer
+      parte comunque — è una prova di controllo); `installer.iss` chiude il PADRE per primo e
+      sostituisce lo `Sleep(1500)` alla cieca con `ProcessoVivo()` + fino a 10 giri di verifica,
+      perché taskkill torna appena ha CHIESTO la chiusura, non quando è avvenuta.
+  21. **IL PANNELLO «AGGIORNAMENTO IN CORSO»**, chiesto nella stessa segnalazione: «non far
+      continuare l'utilizzo dell'applicazione, perché se no l'utente fa una cosa e intanto parte
+      l'installazione». Un velo a tutto schermo che si alza al PRIMO istante — prima di
+      qualunque attesa di rete, perché il momento pericoloso comincia col clic — si mangia i
+      clic e non si chiude con Esc. **Non resta appeso per sempre:** sulla strada dove l'app
+      sopravvive (pacchetto da installare a mano) compare il motivo e un pulsante per tornare a
+      lavorare, più una rete di sicurezza a cinque minuti.
+
+  **Collaudo:** collaudo completo del browser **1095 prove, 0 rosse**; collaudo python **201
+  verdi**. Sette prove nuove, tutte provate nei due sensi (il difetto rimesso le fa diventare
+  rosse): `pendenti_tre_tabelle`, `avvisi_mt5_replay`, `prezzo_pennello_fine`,
+  `conti_reset_parametri`, `aggiornamento_pannello`, più tre in `frecce_replay_navigate` e tre
+  in `test_aggiorna_programma.py`.
+  **ATTENZIONE ALLA PUBBLICAZIONE:** `installer_build/build/bridge.py` è cambiato, quindi
+  **serve un Setup nuovo** — il push da solo non basta (tabella di `cervello/PUBBLICARE.md`).
+  Finché l'utente non installa il Setup nuovo, l'aggiornamento si comporta come prima.
 
 - 2026-11-03 — OpenCode — **v2.0.72 PUBBLICATA: colori della posizione MT5, e ordine etichette/linee**.
   1. **SINTOMO.** «Sulle posizioni col conto MT5 attivo viene aggiunto il testo MT5 accanto al
