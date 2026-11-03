@@ -1,5 +1,21 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+33. **Un orario "ragionevole" che vale per tutti gli strumenti è un orario sbagliato per ciascuno.
+    ** La schedule "chiudo alle 22 di Roma" era stata scritta per mettere d'accordo MT5 e
+    Capital.com, ed e' diventata la verita' su ogni asset: uno che chiude alle 23 risultava
+    chiuso alle 22, uno che chiude alle 21 aperto fino alle 22. Quando il dato VERO esiste già
+    da qualche parte (qui: `symbol_info.trade_allowed` di MT5, per simbolo), va CHIESTO, non
+    ricostruito con una regola. E la regola resta solo come ripiego quando il dato vero non
+    arriva — non al posto suo.
+
+34. **Quando la cura sta a cavallo di due pezzi (app + ponte), dire "sistemato" senza il
+    pacchetto nuovo è dire una mezza verita'.** Qui `/symbol-check` risponde col campo nuovo
+    solo dopo il Setup nuovo: finche' l'utente non installa, l'app si comporta come prima. Il
+    commit, il diario e la risposta all'utente devono dirlo esplicitamente ("serve il Setup
+    nuovo perche' la cura arrivi fino in fondo"), altrimenti sembra che la cura non abbia
+    funzionato.
+
+
 31. **Prima di sincronizzare una preferenza sull'account, chiedersi se è una scelta dell'UTENTE
     o una scelta dello SCHERMO.** La scala dell'interfaccia viaggiava con le preferenze perche'
     "tanto è una preferenza": ma dipende da quanto è grande il display e da come lo tieni tu,

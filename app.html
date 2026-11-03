@@ -46787,7 +46787,59 @@ function orariIntervalli(o,t){
  return uniti;
 }
 // Stato del mercato per l'asset a grafico: {chiuso, apreAt, fonte} oppure null (niente da dire).
+// STATO DEL MERCATO DETTO DA MT5, PER OGNI STRUMENTO.
+// SEGNALATO DAL PROPRIETARIO (3 novembre 2026): "ogni asset apre e chiude in fasce orarie
+// diverse. NZD/CAD in questo momento il mercato e' aperto. E in realta' mi dice che il mercato
+// e' chiuso e che apre tra 17 minuti a mezzanotte. Ed e' impossibile perche' sul terminale MT5,
+// ma si vede anche dall'aggiornamento delle tabelle delle posizioni aperte, che il mercato e'
+// aperto. Perche' il PL live si aggiorna di quell'asset."
+//
+// CAUSA: l'applicazione decideva l'apertura con UN ORARIO FISSO valido per tutti (chiusura alle
+// 22 di Roma). Cosi' uno strumento che chiude alle 23 risultava chiuso alle 22, e uno che chiude
+// alle 21 risultava aperto fino alle 22. MT5 invece lo sa, strumento per strumento:
+// /symbol-check risponde con trade_allowed, che e' vero solo quando il mercato di quel simbolo
+// e' davvero aperto.
+//
+// Questa cache tiene la risposta di MT5 per asset. Si riempie da fblMercatoMt5Domanda(), che
+// parte da sola (timer) quando MT5 e' collegato, e viene letta OVUNQUE si decida se il mercato
+// e' aperto o chiuso. Se MT5 dice APERTO, l'app dice aperto: l'orario fisso non la sovrascrive piu'.
+const fblMercatoMt5Cache={};   // asset -> {aperto:boolean, letto:ms}
+function fblMercatoMt5Noto(asset){
+ if(!asset)return null;
+ const c=fblMercatoMt5Cache[asset];
+ if(!c)return null;
+ // Una risposta piu' vecchia di 10 minuti non conta piu' niente: il mercato puo' essere cambiato.
+ if(Date.now()-(c.letto||0)>10*60000)return null;
+ return !!c.aperto;
+}
+async function fblMercatoMt5Domanda(asset){
+ if(!asset||!mt5Connected)return null;
+ // Le cripto non chiudono mai: non serve chiedere.
+ try{ if(binanceSymbolForAsset(asset))return null; }catch(e){}
+ const adesso=Date.now();
+ const c=fblMercatoMt5Cache[asset];
+ if(c&&adesso-(c.letto||0)<20000)return c.aperto;   // non piu' di una ogni 20 secondi per asset
+ try{
+  const risolto=await resolveMt5SymbolForAsset(asset);
+  if(!risolto)return null;
+  const r=await fetch(fblConChiave(MT5_FEED_URL+'/symbol-check?symbol='+encodeURIComponent(risolto)),{cache:'no-store'});
+  if(!r.ok)return null;
+  const d=await r.json();
+  if(!d||!d.found)return null;
+  const aperto=!!d.trade_allowed;
+  fblMercatoMt5Cache[asset]={aperto:aperto,letto:Date.now()};
+  return aperto;
+ }catch(e){ return null; }
+}
+// Chiede a MT5 lo stato dell'asset a grafico (e lo tiene fresco col timer piu' sotto).
+function fblMercatoMt5AggiornaCorrente(){
+ if(!mt5Connected||!liveModeActive||!currentAssetKey)return;
+ fblMercatoMt5Domanda(currentAssetKey);
+}
 function statoMercato(asset,t){
+ // MT5 e' l'autorita' sullo stato del mercato: se dice APERTO, e' aperto, qualsiasi cosa
+ // dica l'orario fisso (segnalazione del 3 novembre 2026).
+ { const m=fblMercatoMt5Noto(asset); if(m===true)return null; }
  if(!liveModeActive||!asset)return null;
  try{ if(binanceSymbolForAsset(asset))return null; }catch(e){}
  const o=orariAsset[asset];
@@ -47122,6 +47174,8 @@ function fblSpreadUscita(pos){
 // Le cripto non chiudono mai, e in Storico/replay non si blocca niente (statoMercato() torna null
 // se non siamo in Live: li' il tempo lo decide il replay, non l'orologio).
 function fblMercatoFermoOra(asset,t){
+ // MT5 e' l'autorita': se dice che il mercato e' aperto, non e' fermo (3 novembre 2026).
+ { const m=fblMercatoMt5Noto(asset); if(m===true)return false; }
  if(!asset)return false;
  try{ if(binanceSymbolForAsset(asset))return false; }catch(e){}
  if(!liveModeActive)return false;
@@ -47396,6 +47450,11 @@ async function liveSessionTick(){
  finally{ liveSessionBusy=false; }
 }
 setInterval(()=>{ liveSessionTick(); },1000);
+// Lo stato del mercato detto da MT5 (3 novembre 2026): si tiene fresco da solo, una volta ogni
+// 30 secondi, mentre si e' in Live con MT5 collegato. Se MT5 non risponde non succede niente:
+// resta in uso l'orario fisso di prima, quindi al peggio si comporta come adesso.
+setInterval(()=>{ try{ fblMercatoMt5AggiornaCorrente(); }catch(e){} },30000);
+try{ fblMercatoMt5AggiornaCorrente(); }catch(e){}   // la prima domanda parte subito, non dopo 30s
 
 // ===================== MOTORE LIVE IN BACKGROUND (multi-sessione) =====================
 // RICHIESTO: le posizioni/ordini pendenti aperti in Live (sia il conto Live "semplice" sia la

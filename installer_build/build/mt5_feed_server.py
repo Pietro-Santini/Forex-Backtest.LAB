@@ -329,6 +329,17 @@ def symbol_check(symbol: str):
             "contract_size": getattr(info, "trade_contract_size", None),
             "volume_min": getattr(info, "volume_min", None),
             "volume_step": getattr(info, "volume_step", None),
+            # STATO DEL MERCATO DI QUESTO STRUMENTO, letto da MT5.
+            # SEGNALATO DAL PROPRIETARIO (3 novembre 2026): "ogni asset apre e chiude in fasce
+            # orarie diverse. NZD/CAD adesso il mercato e' aperto e invece l'app dice che e'
+            # chiuso e apre tra 17 minuti a mezzanotte. Ed e' impossibile perche' sul terminale
+            # MT5 il mercato e' aperto e il P/L live si aggiorna."
+            # L'app decideva l'apertura con un orario fisso (chiusura alle 22 di Roma per tutti):
+            # cosi' un asset che chiude alle 23 risultava chiuso alle 22, e uno che chiude alle
+            # 21 risultava aperto fino alle 22. MT5 lo SA, per ogni simbolo: trade_allowed e'
+            # vero solo quando il mercato di quel simbolo e' davvero aperto.
+            "trade_allowed": bool(getattr(info, "trade_allowed", False)),
+            "trade_mode": getattr(info, "trade_mode", None),
             "candidates": [],
         }
     all_symbols = _mt5_call(mt5.symbols_get) or []

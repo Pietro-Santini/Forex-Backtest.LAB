@@ -2,6 +2,41 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-03 — OpenCode — **v2.0.71 PUBBLICATA: lo stato del mercato lo dice MT5, per ogni
+  strumento** (basta orario fisso).
+  1. **SINTOMO, parole del proprietario:** "ogni asset apre e chiude in fasce orarie diverse.
+     NZD/CAD in questo momento il mercato e' aperto. E in realta' mi dice che il mercato e'
+     chiuso e che apre tra 17 minuti a mezzanotte. Ed e' impossibile perche' sul terminale MT5,
+     ma si vede anche dall'aggiornamento delle tabelle delle posizioni aperte, che il mercato e'
+     aperto. Perche' il PL live si aggiorna di quell'asset. Quindi questa cosa va corretta."
+  2. **CAUSA MISURATA.** `statoMercato()` e `fblMercatoFermoOra()` decidevano l'apertura con una
+     schedule FISSA (chiusura alle 22 di Roma, uguale per tutti). Cosi' uno strumento che chiude
+     alle 23 risultava chiuso alle 22, e uno che chiude alle 21 risultava aperto fino alle 22.
+     MT5 invece lo sa, simbolo per simbolo.
+  3. **CURA.** Il ponte (`mt5_feed_server.py`, rotta `/symbol-check`) ora restituisce anche
+     `trade_allowed` e `trade_mode`, letti da `mt5.symbol_info`: `trade_allowed` e' vero solo
+     quando il mercato di quel simbolo e' davvero aperto. L'app ha una cache per asset
+     (`fblMercatoMt5Cache`), riempita da `fblMercatoMt5Domanda()` che gira da sola ogni 30
+     secondi in Live con MT5 collegato; `statoMercato()` e `fblMercatoFermoOra()` la leggono
+     PER PRIME: se MT5 dice APERTO, l'app non dice chiuso, qualunque cosa dica l'orario fisso.
+  4. **DA CHIARIRE IL PERIMETRO.** Senza risposta di MT5 (primo avvio, ponte che non risponde,
+     cache piu' vecchia di 10 minuti) resta ESATTAMENTE l'orario fisso di prima: al peggio
+     l'app si comporta come adesso. La cura non cambia niente finche' MT5 non ha parlato.
+  5. **TEST NUOVO:** `laboratorio/app/mercato_stato_mt5.test.mjs`, 3 prove — il difetto (MT5
+     dice aperto e l'app deve smettere di dire chiuso) piu' DUE prove di controllo (MT5 dice
+     chiuso -> resta chiuso; nessuna risposta -> resta l'orario fisso). Provato nei due sensi:
+     senza la cura ROSSO (`true !== false`: il grafico restava fermo), con la cura VERDE.
+  6. **Nota sul pacchetto.** Il ponte e' cambiato: serve il Setup nuovo (tabella di
+     `cervello/PUBBLICARE.md`: `installer_build/build/mt5_feed_server.py` -> Serve un Setup
+     nuovo, NON il server). Finche' l'utente non installa il Setup nuovo, `/symbol-check`
+     risponde senza `trade_allowed` e l'app continua con l'orario fisso — non si rompe nulla.
+  7. **Regressione:** mercato_chiuso + chiusura_mercato + chiusura_mercato_prestazioni +
+     sorgente_live = 14/14 verdi.
+
+  **Collaudo:** locale `Falliti: 0` sui file toccati; su GitHub **verde**; release v2.0.71
+  **con Setup + installer_build.zip + APK**.
+  **Commit:** la cura e il test, poi la versione 2.0.71.
+
 - 2026-11-03 — OpenCode — **v2.0.70 PUBBLICATA: la scala dell'interfaccia non viaggia piu' tra i
   dispositivi** (ognuno tiene la sua).
   1. **SINTOMO, parole del proprietario:** "è rimasto ancora il problema che se sono su un

@@ -2,6 +2,18 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+- **RISOLTO 3 novembre 2026 — Il mercato risultava chiuso su strumenti che invece erano aperti** - `app.html` + `installer_build/build/mt5_feed_server.py`.
+
+  Chiesto dal proprietario (3 novembre 2026): "ogni asset apre e chiude in fasce orarie diverse. NZD/CAD in questo momento il mercato e' aperto. E in realta' mi dice che il mercato e' chiuso e che apre tra 17 minuti a mezzanotte. Ed e' impossibile perche' sul terminale MT5 il mercato e' aperto e il PL live si aggiorna di quell'asset."
+
+  **Causa vera, misurata.** Lo stato del mercato era deciso da una schedule fissa valida per tutti (chiusura alle 22 di Roma). Uno strumento che chiude alle 23 risultava chiuso alle 22, e uno che chiude alle 21 risultava aperto fino alle 22. MT5 lo sa simbolo per simbolo, ma l'app non glielo chiedeva.
+
+  **Cura.** `/symbol-check` sul ponte ora restituisce `trade_allowed` e `trade_mode` (da `mt5.symbol_info`): `trade_allowed` e' vero solo quando il mercato di quel simbolo e' davvero aperto. L'app lo chiede per l'asset a grafico ogni 30 secondi (cache per asset, `fblMercatoMt5Cache`), e `statoMercato()`/`fblMercatoFermoOra()` lo leggono per primi: se MT5 dice aperto, non si dice chiuso. Senza risposta di MT5 resta l'orario fisso di prima, invariato.
+
+  **Attenzione al pacchetto:** il ponte e' cambiato, quindi serve il **Setup nuovo** perche' la cura arrivi fino in fondo. Senza, `/symbol-check` risponde senza `trade_allowed` e l'app si comporta esattamente come adesso (nessuna rottura).
+
+  **Test:** `laboratorio/app/mercato_stato_mt5.test.mjs` (3 prove, comprese due prove di controllo: MT5 dice chiuso -> resta chiuso; senza risposta -> resta l'orario fisso). Provato nei due sensi: senza la cura rosso, con la cura verde.
+
 - **RISOLTO 3 novembre 2026 — La scala dell'interfaccia viaggiava tra i dispositivi** - `app.html`, canale preferenze del cloud.
 
   Chiesto dal proprietario (3 novembre 2026): "se sono su un dispositivo mobile ed eseguo lo zoom dell'intera impaginazione, della scala, me la va a modificare anche su tutti gli altri dispositivi collegati. Invece no, deve essere una cosa indipendente tra dispositivo e dispositivo... se lo imposto sul tablet, la scala rimane soltanto per il tablet. Assolutamente no."
