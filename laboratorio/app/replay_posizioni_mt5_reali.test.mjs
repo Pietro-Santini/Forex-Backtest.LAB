@@ -141,11 +141,13 @@ test("la posizione reale di un ALTRO account non si mescola al conto collegato",
   } finally { await browser.close(); }
 });
 
-test('la posizione reale MT5 si distingue a grafico da quelle del replay o del CSV', async () => {
-  // RICHIESTO DAL PROPRIETARIO (1° novembre 2026): «le posizioni aperte in questa modalita'
-  // devono essere sottolineate in un altro modo rispetto alle posizioni aperte su un file csv».
-  // Misurato: colore della linea orizzontale della posizione reale (ambra #f0b429, che non e'
-  // ne' il verde del BUY ne' il rosso del SELL) e tesserino "MT5 " davanti all'etichetta.
+test('la posizione reale MT5 si disegna ESATTAMENTE come le altre (scelta A, 3 novembre 2026)', async () => {
+  // DECISIONE ROVESCIATA. Dal 1° novembre la posizione reale aveva linea, etichetta e freccia
+  // AMBRATE piu' il tesserino "MT5 " per distinguerla a colpo d'occhio. Il proprietario ha
+  // chiesto di togliere tutto: «deve essere di colore blu come era in precedenza e il testo MT5
+  // non deve essere presente», e ha scelto la scelta A — linea ed etichetta verdi/rosse lato per
+  // lato, freccia blu (BUY) / rossa (SELL). Questo test era rosso prima della cura perche'
+  // esigeva l'ambra e il tesserino; ora misura il contrario.
   const {browser, pagina, errori} = await apriApp();
   try {
     await pagina.evaluate(scenario(true, '12345678', '12345678'));
@@ -166,11 +168,15 @@ test('la posizione reale MT5 si distingue a grafico da quelle del replay o del C
     })()`);
     assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
     const ambra = /f0b429|240,\s*180,\s*41/i;
-    assert.ok(segni.colori.some(c => ambra.test(c)),
-      'nessuna linea disegnata nel colore della posizione MT5: ' + segni.colori.join(' | '));
-    assert.ok(segni.testi.some(t => /^MT5 /.test(t)),
-      'manca il tesserino "MT5" sull\'etichetta della posizione reale: ' + segni.testi.join(' | '));
+    assert.ok(!segni.colori.some(c => ambra.test(c)),
+      'l\'ambra non deve piu\' esserci: la posizione reale si colora come tutte le altre');
+    assert.ok(segni.colori.some(c => /#2fbf71|47,\s*191,\s*113/i.test(c)),
+      'la linea della posizione BUY deve essere verde, come per tutte le altre: ' + segni.colori.join(' | '));
+    assert.ok(!segni.testi.some(t => /^MT5 /.test(t)),
+      'il tesserino "MT5" non deve comparire sull\'etichetta: ' + segni.testi.join(' | '));
+    assert.ok(segni.testi.some(t => /^BUY\b/.test(t)),
+      'l\'etichetta della posizione reale deve dire solo BUY e i lotti: ' + segni.testi.join(' | '));
     assert.ok(segni.testi.some(t => /^SELL\b/.test(t)),
-      'la posizione nata nel replay deve restare senza tesserino: ' + segni.testi.join(' | '));
+      'la posizione nata nel replay deve continuare a dirsi SELL: ' + segni.testi.join(' | '));
   } finally { await browser.close(); }
 });

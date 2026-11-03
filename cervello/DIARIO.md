@@ -2,6 +2,34 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-03 — OpenCode — **v2.0.72 PUBBLICATA: colori della posizione MT5, e ordine etichette/linee**.
+  1. **SINTOMO.** «Sulle posizioni col conto MT5 attivo viene aggiunto il testo MT5 accanto al
+     buy/sell dentro al grafico e sono tutti di colore giallo, invece deve essere di colore blu
+     come era in precedenza e il testo MT5 non deve essere presente. Le frecce di apertura, se
+     in buy verde e se in sell rossa.» E: «la linea evidenziata passa sopra all'etichetta e
+     invece deve passargli sotto, l'etichetta in primo piano e la linea in secondo.»
+  2. **COLORI: DECISIONE ROVESCIATA** (era il contrario dal 1° novembre, quando fu chiesto che
+     la posizione reale si distinguesse). Domanda posta al proprietario con due strade, risposta
+     A - "esatto come prima": ambra via, tesserino "MT5 " via, linea ed etichetta tornano a
+     `sideColor` (verde BUY / rosso SELL), freccia blu (BUY) / rossa (SELL). Nessuna regola
+     speciale per la posizione reale: si disegna come tutte le altre.
+  3. **ORDINE DI DISEGNO.** Il separatore tratteggiato dell'entrata stava DOPO le etichette
+     Target/Stop dentro `drawTpSlZoneBox`: con la posizione selezionata passava sopra la scritta.
+     Spostato in testa alla funzione. Misurato sull'ordine reale del disegno: prima etichetta TP,
+     etichetta SL, linea entrata - dopo: linea entrata, etichetta TP, etichetta SL.
+  4. **RESTO APERTO, e non va perso:** la cura 3 chiude il caso "linea sopra l'etichetta della
+     STESSA posizione". Il proprietario ha confermato che il caso suo e' quello. Resta il caso
+     FRA posizioni DIVERSE (linea della selezionata sopra l'etichetta di un'altra): richiede una
+     seconda passata nel ciclo delle posizioni - tutte le linee prima, poi tutte le etichette -
+     ed è un lavoro a sé.
+  5. **TEST:** `replay_posizioni_mt5_reali.test.mjs` riscritto nel senso nuovo, provato nei due
+     sensi (rosso senza la cura, verde con). Regressione `etichette_tp_sl` +
+     `etichette_raggruppate` + `clic_sul_grafico` = 14/14 verdi.
+
+  **Collaudo:** locale `Falliti: 0` sui file toccati; su GitHub **verde**; release v2.0.72
+  **con Setup + installer_build.zip + APK**.
+  **Commit:** le due cure e il test, poi la versione 2.0.72.
+
 - 2026-11-03 — OpenCode — **v2.0.71 PUBBLICATA: lo stato del mercato lo dice MT5, per ogni
   strumento** (basta orario fisso).
   1. **SINTOMO, parole del proprietario:** "ogni asset apre e chiude in fasce orarie diverse.
