@@ -5639,6 +5639,15 @@ function mt5AttivaConto(login,server){
   else{ snap.positions=pos; snap.pendingOrders=pend; }
  });
  if(nonRipresi.length)mt5Parcheggio[ora]=nonRipresi; else delete mt5Parcheggio[ora];
+ // IL CONTO E' CAMBIATO DAVVERO: i parametri in composizione non lo seguono (3 novembre 2026).
+ // Qui passano TUTTE le strade che cambiano conto — la tendina, il login a mano, la
+ // riconnessione automatica e il giro automatico sui piu' conti dei segnali — perche'
+ // mt5AttivaConto() e' chiamata da connectToMt5Bridge(), che e' l'unica porta del /connect.
+ // La condizione e' "cambiato", non "collegato": al PRIMO collegamento non si butta via la bozza
+ // che l'utente stava scrivendo, che non viene da nessun altro conto.
+ if(precedente&&precedente!==ora){
+  try{ fblResetParametriOrdine('cambio conto MT5 '+precedente+' -> '+ora); }catch(e){}
+ }
  // Nessun sospetto ereditato dal conto di prima: si riparte da una fotografia vera di questo.
  positions.forEach(p=>{ if(p)p.mt5MissingSince=null; });
  mt5SalvaParcheggio();
@@ -7064,6 +7073,45 @@ function clearDraftTradeLevelFields(){
  if($('pendingEntry'))$('pendingEntry').value='';
  if($('slPending'))$('slPending').value='';
  if($('tpPending'))$('tpPending').value='';
+}
+
+// ============ I PARAMETRI IN COMPOSIZIONE NON PASSANO DA UN CONTO A UN ALTRO ============
+//
+// SEGNALATO DAL PROPRIETARIO (3 novembre 2026): «quando sono collegato a un conto e apro una
+// posizione, ordine a mercato o pendente, e poi faccio lo switch di un altro account MT5,
+// l'ultima posizione che ho aperto nel conto precedente mi riporta i parametri sul nuovo account
+// del TP e del SL. Questo non deve avvenire: quando cambio account deve fare un refresh. Anche
+// quando si eseguono posizioni automatiche su piu' conti rimane in memoria l'ultima posizione a
+// grafico, e cio' non deve succedere: una volta che finisce di aprire, i parametri di TP/SL si
+// resettano.»
+//
+// CAUSA MISURATA. Le caselle SL/TP del trade a mercato vengono riempite da refreshTradeLevelUI()
+// quando c'e' una posizione selezionata (`active`), ma quella funzione NON le svuota mai quando
+// `active` sparisce - c'e' scritto apposta, perche' di solito contengono la bozza del prossimo
+// ordine. Al cambio conto mt5AttivaConto() mette da parte le posizioni dell'altro conto e azzera
+// `active`, ma le CASELLE restano com'erano: sul conto nuovo si ritrovano lo stop e il target
+// dell'ultima posizione del conto vecchio, pronti a essere usati per un ordine vero.
+// Lo stesso vale per le linee trascinabili sul grafico (tradeSLLine/tradeTPLine) e per
+// l'anteprima (previewTradeLevel): restano disegnate con i numeri del conto lasciato.
+//
+// Qui si azzera tutto cio' che e' "in composizione". Non si tocca nulla di cio' che e' GIA'
+// APERTO: le posizioni e gli ordini veri restano dove sono (al cambio conto li gestisce il
+// parcheggio di mt5AttivaConto), e una posizione simulata ancora selezionata si rimette le sue
+// caselle da sola al primo refresh - sono le SUE, non quelle di un altro conto.
+function fblResetParametriOrdine(motivo){
+ try{ clearDraftTradeLevelFields(); }catch(e){}
+ try{ tradeSLLine=null; tradeTPLine=null; }catch(e){}
+ try{ placingTradeLevel=null; previewTradeLevel=null; placingTradeLevelDrag=null; tradeLevelDrag=null; }catch(e){}
+ // Le due anteprime automatiche SL/TP: senza azzerarle, il prossimo ordine sul conto nuovo
+ // nascerebbe con le linee "da confermare" ereditate dal conto di prima.
+ try{ pendingSlAuto=false; pendingTpAuto=false; }catch(e){}
+ try{ highlightedPendingOrderId=null; }catch(e){}
+ try{ updateTradeLevelArmUI(); }catch(e){}
+ try{ refreshSlTpEuroPreview(); }catch(e){}
+ try{ refreshSlTpEuroPreviewPending(); }catch(e){}
+ try{ refreshRiskSuggestion(); }catch(e){}
+ try{ draw(); update(); }catch(e){}
+ if(motivo){ try{ console.log('[Conti] parametri SL/TP in composizione azzerati: '+motivo); }catch(e){} }
 }
 // ===================== MEMORIA DI NAVIGAZIONE PER ASSET E PER SESSIONE (solo vista grafico) =====================
 // La POSIZIONE nel tempo a cui si sta guardando il grafico (candela corrente, timeframe,
@@ -33898,7 +33946,14 @@ async function tgAutoApriQui(voce,d,seg,conto,spazio){
  const eseguitoPrima=voce.eseguito||null;
  voce.autoMotivo=null;
  await tgEseguiSegnale(voce,{sym,piano,regole,avvicinamento,automatico:true,senzaGrafico});
- return !!(voce.eseguito&&voce.eseguito!==eseguitoPrima);
+ const haAperto=!!(voce.eseguito&&voce.eseguito!==eseguitoPrima);
+ // FINITO DI APRIRE, I PARAMETRI SI AZZERANO (richiesta del proprietario, 3 novembre 2026:
+ // «una volta che finisce di aprire, i parametri di TP/SL si resettano, si refreshano»).
+ // Il reset del cambio conto non basta a coprire questo caso: un'apertura automatica sul conto
+ // GIA' collegato non cambia conto, quindi li' non scatterebbe niente e lo stop e il target di
+ // quel segnale resterebbero nelle caselle, pronti per l'ordine successivo fatto a mano.
+ if(haAperto){ try{ fblResetParametriOrdine('apertura automatica conclusa su '+sym); }catch(e){} }
+ return haAperto;
 }
 // RICHIESTO ESPLICITAMENTE: apre il segnale sui conti MT5 scelti nella configurazione, facendo da
 // sola il cambio di conto. Ordine: prima il conto collegato (se e' fra quelli scelti, cosi' il caso

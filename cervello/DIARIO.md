@@ -2,7 +2,7 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
-- 2026-11-03 — Claude — **v2.0.74: ordini pendenti in tre tabelle, il conto MT5 che si muove
+- 2026-11-03 — Claude — **v2.0.80: ordini pendenti in tre tabelle, il conto MT5 che si muove
   mentre backtesti non lo fa più in silenzio, e la riga del prezzo che non va più a gradini**.
   1. **PRIMA RICHIESTA, parole del proprietario:** «in modalità replay, facciamo in modo di creare
      due tabelle distinte per gli ordini pendenti. Ordini pendenti MT5 e ordini pendenti storico.
@@ -102,10 +102,54 @@ Formato: data — chi — cosa — esito collaudo — commit.
       spegnendo il pennello la prova della cadenza diventa **rossa** (un solo cambio al secondo),
       con il pennello è verde (almeno 3). Regressione prezzo/candele: replay_live + replay_fluido
       + mercato_chiuso + chiusura_mercato + chiusura_mercato_prestazioni = **26 verdi**.
-  14. **DA DECIDERE AL MOMENTO DELL'UNIONE:** questo giro è stato fatto su un ramo a parte mentre
-      OpenCode lavorava su `main`. Se nel frattempo è uscita un'altra 2.0.74, il numero va
-      riallineato in `sw.js` **e** in `installer.iss` prima di pubblicare — se `sw.js` non sale,
-      telefono e tablet non ricevono mai la modifica (lezione già pagata con la v2.0.66).
+  14. **QUARTA RICHIESTA, e il proprietario l'ha marcata «molto importante»:** «quando sono
+      collegato a un conto e apro una posizione, a mercato o pendente, e poi faccio lo switch di
+      un altro account MT5, l'ultima posizione aperta nel conto precedente mi riporta i parametri
+      del TP e del SL sul nuovo account. Quando cambio account deve fare un refresh. Anche quando
+      si aprono posizioni automatiche su più conti rimane in memoria l'ultima posizione a
+      grafico: una volta che finisce di aprire, i parametri si resettano.»
+      **CAUSA MISURATA.** `refreshTradeLevelUI()` riempie le caselle SL/TP quando c'è una
+      posizione selezionata, ma **non le svuota mai** quando quella sparisce — c'è scritto
+      apposta, perché di solito contengono la bozza del prossimo ordine. Al cambio conto
+      `mt5AttivaConto()` mette da parte le posizioni dell'altro conto e azzera `active`, ma le
+      caselle, le linee trascinabili (`tradeSLLine`/`tradeTPLine`) e l'anteprima
+      (`previewTradeLevel`) restano con i numeri del conto lasciato: sul conto nuovo erano lì,
+      pronti a diventare un ordine vero.
+      **CURA.** `fblResetParametriOrdine()` azzera tutto ciò che è *in composizione* — le cinque
+      caselle, le due linee trascinabili, l'anteprima, le due bandierine SL/TP automatiche e
+      l'ordine pendente evidenziato — e **non tocca nulla di ciò che è già aperto**.
+      Agganciata in `mt5AttivaConto()`, che è il punto dove passano TUTTE le strade che cambiano
+      conto (tendina, login a mano, riconnessione, giro automatico sui più conti dei segnali),
+      perché è chiamata da `connectToMt5Bridge()`, l'unica porta del `/connect`.
+      **La condizione è «cambiato», non «collegato»** (`precedente&&precedente!==ora`): al primo
+      collegamento non si butta via la bozza che l'utente sta scrivendo, che non viene da nessun
+      altro conto. È la prova di controllo numero 1.
+      **E anche a fine apertura automatica**, in `tgAutoApriQui()`: un'apertura automatica sul
+      conto GIÀ collegato non cambia conto, quindi il reset del cambio conto non scatterebbe e
+      stop e target di quel segnale resterebbero nelle caselle.
+  15. **TEST NUOVO:** `conti_reset_parametri.test.mjs`, 4 prove di cui **3 di controllo** (stesso
+      conto = la bozza resta; la posizione vera non viene cancellata e torna ricollegando il suo
+      conto; sparisce anche l'anteprima disegnata). Provato nei due sensi: senza la cura **2
+      rosse su 4**, con la cura 4 verdi. La prima prova controlla anche il BANCO (le caselle
+      devono partire piene), altrimenti misurerebbe il vuoto.
+      Regressione: conti_automatici + dashboard_conti + conti_chiusi +
+      ordini_pendenti_in_replay + pendenti_tre_tabelle = **26 verdi**.
+  16. **IL NUMERO DI VERSIONE E' CAMBIATO STRADA FACENDO, ed e' andata come temuto.** Questo
+      giro e' stato scritto su un ramo a parte mentre OpenCode lavorava su `main`, e nel
+      frattempo lui ha pubblicato dalla **2.0.74 alla 2.0.79**: la 2.0.74 l'ha presa lui. Questo
+      lavoro e' quindi la **2.0.80**, riportato sul nuovo `main` con un rebase. `app.html` si e'
+      fuso da solo senza un conflitto: gli unici due conflitti erano i numeri di versione in
+      `sw.js` e in `installer.iss`, risolti alzandoli a 2.0.80.
+  17. **DUE TRAPPOLE SUI BYTE, pagate due volte in questo stesso giro.** Su questa macchina
+      `core.autocrlf` e' **true**: un `git add` normale toglie il ritorno a capo Windows da ogni
+      riga di `sw.js` (che nel repo e' tutto CRLF), e produce un diff di **805 righe** per una
+      parola cambiata. `cervello/DIARIO.md` invece ha a capo **misti** (3635 righe CRLF su 4266)
+      e git lo lascia stare, ma un giro di riscrittura con python lo appiattisce tutto a LF:
+      diff di **7376 righe** per una voce aggiunta. Tutti e due vanno ricostruiti dai byte di
+      `main` e aggiunti con `git -c core.autocrlf=false add`. Successo anche DOPO il rebase, che
+      ha rigiocato il commit originale: va ricontrollato ogni volta, non una volta sola.
+      Controllo rapido prima di consegnare: `git diff --stat main..HEAD` deve dire numeri
+      piccoli. Se dice migliaia di righe su file che hai appena sfiorato, e' questo.
 
   **Collaudo:** sintassi `app.html` pulita; i due test nuovi provati nei due sensi; regressione
   45/45 verde.
@@ -3937,7 +3981,7 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
 
 ## 29 ottobre 2026 — Punto 5 completo
 - TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
-- Prestazioni: cache, percentuale onesta.
+- Prestazioni: cache, percentuale onesta.
 - Prestazioni: cache, percentuale onesta.
 
 
@@ -3974,23 +4018,23 @@ il two step ne ha **due** e l'80%.
 
 Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 
-
-### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
-
-Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
-che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
-scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
-
-La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
-deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
-alterato il conto che gia' funzionava.
-
-Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
-seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
-essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
-il two step ne ha **due** e l'80%.
-
-Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
+
+### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
+
+Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
+che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
+scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
+
+La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
+deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
+alterato il conto che gia' funzionava.
+
+Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
+seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
+essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
+il two step ne ha **due** e l'80%.
+
+Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 approssimazione nell'interfaccia, fuso di Roma, percentuale col denominatore contato prima.
 
 - **Fix timeframe change**: commento aggiunto per preservare masterTime. Risolto rallentamento cambio timeframe (dati: fps 47.5→21.9, peggior scatto 330ms→3334ms).
