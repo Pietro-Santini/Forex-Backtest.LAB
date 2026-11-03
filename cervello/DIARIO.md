@@ -2,6 +2,78 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-03 — Claude — **v2.0.74: ordini pendenti in tre tabelle, e il conto MT5 che si muove
+  mentre backtesti non lo fa più in silenzio**.
+  1. **PRIMA RICHIESTA, parole del proprietario:** «in modalità replay, facciamo in modo di creare
+     due tabelle distinte per gli ordini pendenti. Ordini pendenti MT5 e ordini pendenti storico.
+     La tabella ordini pendenti storico deve essere visualizzata soltanto quando siamo in modalità
+     replay e modalità backtest attiva.»
+     **COM'ERA:** una tabella sola (`#pendingOrdersTbl`) con dentro tutto — gli ordini simulati di
+     tutte e 4 le sessioni e quelli reali del conto MT5 — distinti solo da un'icona 🖥️. Le
+     POSIZIONI erano già divise in due riquadri da tempo: gli ordini pendenti no.
+     **ORA** sono tre, con le STESSE colonne (così la riga si legge uguale ovunque e il generatore
+     è uno solo): `#pendingOrdersTbl` i simulati normali, `#mt5PendingTbl` tutto ciò che vive sul
+     conto reale (tracciato in app o piazzato a mano nel terminale), `#replayPendingTbl` quelli
+     nati dentro al replay.
+  2. **DOMANDA POSTA, risposta fissata:** fuori dal replay gli ordini nati nel replay **non si
+     vedono da nessuna parte** (scelta esplicita: si rivedono rientrando). Dentro al replay con la
+     modalità backtest SPENTA restano però nella tabella normale, altrimenti diventerebbero
+     invisibili proprio mentre li stai usando — è la prova di controllo del test.
+  3. **UN DETTAGLIO TROVATO STRADA FACENDO:** il CSS delle cifre a larghezza fissa puntava a
+     `#pendingOrdersBody`, un id **che non è mai esistito** (il tbody si chiama
+     `#pendingOrdersTbl`). La tabella degli ordini pendenti è rimasta senza le cifre monospazio
+     da sempre. Corretto, e ora vale per tutte e tre.
+  4. **SECONDA RICHIESTA:** «se sono in modalità storico, replay, della sezione MT5, se mi si
+     chiudono delle posizioni sotto, in background, o mi si aprono, il suono dell'ordine eseguito
+     me lo deve fare comunque. E mi mostra una notifica soltanto quando sono in modalità replay
+     che la posizione X si è chiusa, dove specifica se è manuale o di una specifica sala, il
+     profitto in euro e in percentuale, il prezzo raggiunto e il numero del TP.»
+  5. **CAUSA MISURATA, non supposta.** Il suono viveva ATTACCATO all'adozione: `playOrderSound()`
+     sta dentro il ciclo che aggiunge la posizione reale a `positions[]`, e la chiusura suona
+     dentro la riconciliazione, che gira solo su `positions` della sessione A SCHERMO. Quindi:
+     (a) in **modalità backtest** le posizioni MT5 non vengono adottate affatto (scelta del 27
+     ottobre, «devono sparire dal grafico») → niente adozione, niente suono; (b) in sessione
+     **Storico** le posizioni reali vengono dirottate nella sessione Live gemella e quel ramo non
+     ha mai suonato, e una loro chiusura non viene nemmeno notata finché resti in Storico.
+  6. **CURA.** Gli avvisi non dipendono più dall'adozione: `fblAvvisiMt5Giro()` guarda la
+     **fotografia grezza** di `/positions`, giro per giro. Prima fotografia = base silenziosa
+     (altrimenti all'avvio suonerebbe una volta per ogni posizione già aperta); ticket nuovo =
+     apertura; ticket sparito **due giri di fila** = chiusura, e solo dopo che `/deal_reason`
+     conferma un deal vero (stessa prudenza della riconciliazione: un giro di polling sfortunato
+     non deve annunciare una chiusura che non c'è stata). Quello di cui si è già occupata la
+     strada ordinaria lo **dichiara lei** (`fblMt5Annunciato`), così non si suona due volte.
+     **La modalità backtest resta pulita come richiesto il 27 ottobre: qui non si adotta e non si
+     disegna niente — solo suono e avviso.**
+  7. **L'AVVISO.** Un cartellino in basso a destra (`#fblAvvisiReplay`) più la notifica di sistema
+     della via unica (`fblNotificaMostra`). Il cartellino serve: mentre backtesti la finestra è in
+     primo piano, e in quella condizione il sistema operativo spesso ingoia la notifica. Dice
+     sala-o-manuale, lato, asset, lotti, euro, **percentuale del saldo** (scelta del proprietario:
+     è la stessa del Trade Journal, quindi i due numeri coincidono sempre), prezzo di uscita e
+     numero del TP. Il numero del TP si scrive **solo** se è davvero un target ad aver chiuso:
+     metterlo su uno stop loss direbbe una cosa falsa.
+     Il testo è costruito da una funzione sola (`fblAvvisoChiusuraMt5Mostra`) usata dalle due
+     strade: anche nel replay con la modalità backtest SPENTA — dove la posizione è adottata e
+     passa dalla riconciliazione — il cartellino compare, altrimenti nel caso più comune non si
+     sarebbe mai visto.
+  8. **TEST NUOVI, provati nei due sensi.** `pendenti_tre_tabelle.test.mjs` (3 prove, compresa la
+     prova di controllo «con la modalità backtest spenta non diventano invisibili»): senza la cura
+     **3 rossi**, con la cura 3 verdi. `avvisi_mt5_replay.test.mjs` (4 prove, due di controllo —
+     fuori dal replay suona ma non mostra niente; un ticket già annunciato non suona due volte):
+     senza la cura **3 rossi su 4** (il quarto è un controllo che passa anche nel vuoto, ed è
+     giusto così).
+  9. **Regressione:** ordini_pendenti_in_replay + pendenti_scattano_in_replay +
+     replay_posizioni_mt5_reali + replay_mai_ordini_veri + famiglia_asset + gruppi_be_chiudi +
+     gruppi_striscia + kraken_posizioni + orario_esecuzione + replay_conto_storico = **45 verdi**.
+  10. **DA DECIDERE AL MOMENTO DELL'UNIONE:** questo giro è stato fatto su un ramo a parte mentre
+      OpenCode lavorava su `main`. Se nel frattempo è uscita un'altra 2.0.74, il numero va
+      riallineato in `sw.js` **e** in `installer.iss` prima di pubblicare — se `sw.js` non sale,
+      telefono e tablet non ricevono mai la modifica (lezione già pagata con la v2.0.66).
+
+  **Collaudo:** sintassi `app.html` pulita; i due test nuovi provati nei due sensi; regressione
+  45/45 verde.
+  **Solo `app.html`** fra i file che contano per l'utente: basta il push, nessun Setup nuovo
+  (tabella di `cervello/PUBBLICARE.md`).
+
 - 2026-11-03 — OpenCode — **v2.0.72 PUBBLICATA: colori della posizione MT5, e ordine etichette/linee**.
   1. **SINTOMO.** «Sulle posizioni col conto MT5 attivo viene aggiunto il testo MT5 accanto al
      buy/sell dentro al grafico e sono tutti di colore giallo, invece deve essere di colore blu
@@ -3827,7 +3899,7 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
 
 ## 29 ottobre 2026 — Punto 5 completo
 - TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
-- Prestazioni: cache, percentuale onesta.
+- Prestazioni: cache, percentuale onesta.
 - Prestazioni: cache, percentuale onesta.
 
 
@@ -3864,23 +3936,23 @@ il two step ne ha **due** e l'80%.
 
 Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 
-
-### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
-
-Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
-che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
-scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
-
-La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
-deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
-alterato il conto che gia' funzionava.
-
-Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
-seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
-essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
-il two step ne ha **due** e l'80%.
-
-Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
+
+### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
+
+Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
+che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
+scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
+
+La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
+deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
+alterato il conto che gia' funzionava.
+
+Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
+seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
+essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
+il two step ne ha **due** e l'80%.
+
+Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 approssimazione nell'interfaccia, fuso di Roma, percentuale col denominatore contato prima.
 
 - **Fix timeframe change**: commento aggiunto per preservare masterTime. Risolto rallentamento cambio timeframe (dati: fps 47.5→21.9, peggior scatto 330ms→3334ms).
