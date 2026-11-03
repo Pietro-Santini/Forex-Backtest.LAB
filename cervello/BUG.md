@@ -2,6 +2,24 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+- **RISOLTO 2 novembre 2026 — In replay i segnali non eseguivano ordini reali, e l'apertura si fermava a metà se il grafico era su un altro asset** — `app.html`, `tgEseguiSegnale` (~34613) e la guardia alla porta di `fetchMt5WithTimeout` (~36152).
+
+  Chiesto dal proprietario (2 novembre 2026): in replay i segnali che arrivano devono eseguire in background **sul conto MT5 reale**, e con più conti selezionati deve aprire le posizioni sugli altri conti e poi tornare al conto/alla candela del backtest.
+
+  **Causa vera, misurata:** tre guardie indipendenti, una per sintomo.
+  (a) `reale` era `!!mt5Connected&&sessioneLive&&!liveReplayActive` → in replay valeva falso e i segnali diventavano posizioni finte;
+  (b) un blocco unico **alla porta** in `fetchMt5WithTimeout` scartava *tutte* le rotte `/order` con il replay attivo;
+  (c) nel ramo senza conto reale `if(currentAssetKey!==sym){...break;}` interrompeva l'apertura a metà se il grafico guardava un altro asset → alcune posizioni aperte e altre no.
+
+  **Cura:** `reale` senza piu' `!liveReplayActive`; tolto il blocco alla porta; tolta la riga che interrompeva l'apertura.
+
+  **Sulla scelta:** rovescia quella del 26 ottobre (richiesta esplicita del proprietario: «in replay le posizioni non vengono aperte sull'account MT5»), confermata il 2 novembre con cognizione di causa sul rischio di ordini reali in background.
+
+  **Prova del rosso:** rimessa la guardia alla porta → 3 rossi, e le 3 prove di controllo (letture, fuori-replay, rotte che non scrivono) rimaste verdi.
+
+  **Test:** `laboratorio/app/replay_mai_ordini_veri.test.mjs`, 6 prove.
+
+  **Nota importante:** il «torna al conto di prima e si ricorda della posizione» **già funzionava**. Il percorso a conto reale passa da `senzaGrafico`, che lancia gli ordini in batch con il simbolo esplicito e **non tocca** `currentAssetKey`: l'apertura in background lascia il grafico e la candela del replay dove sono. Era la guardia (c) a fermare l'apertura prima.
 - **RISOLTO 2 novembre 2026 — "l'app non risponde / crasha alla riapertura", soprattutto a
   mercato chiuso** - `app.html`, `getVisibleData()` (riga ~12874). Il filtro che toglie le
   candele dopo la chiusura chiedeva al calendario dello strumento **per ogni candela
@@ -853,3 +871,4 @@ chiave di firma pronta costruisce l'APK a ogni release pubblicata,
 
 - **La firma anti-doppioni non aveva mai funzionato** - risolto 2.0.32 - 27 ottobre 2026, trovato durante il passo 1 del progetto dati nostri. Causa misurata: lo stato salvato porta savedAt:Date.now(), che cambia a OGNI raccoglimento. La firma si calcolava su tutto il testo, quindi due fotografie identiche avevano firme diverse e si riscrivevano sempre — il proprietario aveva chiesto "identico = non si scrive" (CONSEGNA-OPENCODE-22-OTTOBRE, §1.3) e la console Firebase conta lo spreco (107K scritture in 30 giorni). Cura: la firma si calcola sul contenuto stabile (savedAt normalizzato a 0), il peso continua a essere quello reale. La regola della consegna resta intatta: la firma si aggiorna solo DOPO una scrittura riuscita, e se le operazioni nuove non si salvano la firma non si aggiorna — al giro dopo si riprovano da sole.
 - **Il salvataggio cloud mandava 305 KB a ogni scrittura, di cui 194 KB di storico operazioni** - risolto 2.0.32 - 27 ottobre 2026, passo 1 del progetto dati nostri (PROGETTO-DATI-NOSTRI.md §1, §6). Misurato sulla console Firebase (30 giorni): letture 293K, scritture 107K, "larghezza di banda oltre 10 GB" e "byte archiviati oltre 1 GB" — il costo Firestore e' 3,54 € su 4,82 € totali. Cura: le operazioni chiuse stanno in un documento a parte (users/{uid}/data/trades) e si aggiungono con arrayUnion: una operazione nuova sono ~259 byte invece della fotografia intera (750 volte meno). Il documento session non porta piu' lo storico. Il keepalive della chiusura pagina manda il documento senza operazioni. La lettura unisce i due documenti e resta retrocompatibile. Test: laboratorio/app/cloud_incrementale.test.mjs (3 prove, col comportamento misurato in byte; prova di controllo fatta: rimesso il file vecchio, il test diventa rosso).
+

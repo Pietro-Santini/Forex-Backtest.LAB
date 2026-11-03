@@ -1155,6 +1155,25 @@
      completo e' la verifica finale, non il primo tentativo: costa 13 minuti e butta il giro
      per un errore che in 5 secondi si vedeva. Provare il singolo file, poi l'insieme.
   2. I nomi si copiano dal sorgente, non si riscrivono a memoria. Ora li estraggo con una
+25. **Quando il proprietario ribalta una sua decisione, il testo vecchio nel codice non deve
+    restare li' a contraddire quello nuovo.** Il 26 ottobre chiese «in replay le posizioni non
+    vengono aperte sull'account MT5, non può essere»; il 2 novembre chiese l'opposto, e il
+    commento del 26 ottobre era ancora li', riga per riga, a dire il contrario — sembrava un
+    difetto nuovo quando era una scelta veclia rovesciata. Ho lasciato il commento originale
+    sopra a quello nuovo, pero' con la data e la parola ROVESCIATA: chi legge capisce la storia
+    invece di "sistemare" la cura tornando indietro.
+
+26. **Un guardia "alla porta" (punto unico di passaggio) si toglie alla porta.** In
+    `fetchMt5WithTimeout` passano TUTTE le rotte verso il ponte, comprese quelle che scrivono:
+    per riaprire il trading dal replay e' stata UNA riga, non sette funzioni su dieci da
+    allineare a mano — che era esattamente il motivo per cui la guardia era stata messa la'.
+    Da tenere a mente al contrario: se una regola vale per tutto, il modo giusto di applicarla
+    e' il punto unico, non dieci copie.
+
+27. **Un test che non diventa ROSSO senza la cura non prova niente, e va cancellato, non pubblicato verde.** Volendo coprire la cura alle barre dell'istogramma SVP ho scritto due prove (misura dei pixel sul canvas, misura dei rettangoli lasciati dal disegno): passavano sia con la cura sia rimettendo il difetto, perche' la colonna di pixel che trovavo era il bordo del grafico o il crosshair, non l'istogramma. Le ho tenute per tre giri convinto di aver misurato qualcosa. La regola del progetto (rosso prima, verde dopo) esiste proprio per questo: se la prova del rosso non si riesce a fare, la cura è nell'app ma la sua prova MANCA - e va detto, non taciuto con un verde che non significa niente.
+
+28. **I disegni dell'app lasciano le loro tracce in posti diversi, e sbagliare posto significa misurare il vuoto.** I profili volumetrici degli INDICATORI registrano le barre vere in `vpIndBarRects` (chiave `vpind_<id>_<chiave>`); i disegni MANUALI dello stesso tipo non passano di la'. Misurando i disegni manuali su quel registro si trova sempre zero - e zero sembra "nessun buco", cioè esattamente il risultato che si spera. Prima di misurare un disegno, verificare dove quel disegno lascia i suoi numeri.
+
      regex dal file, come /async function (fblApp\w*Aggiornat\w*)\s*\(/. Dettarli vuol dire
      sbagliarli, e la statistica dice che la cosa piu' probabile e' proprio sbagliarli.
 
@@ -1178,3 +1197,4 @@
   nell'insieme, con un errore su un attributo che il MIO finto aveva di sicuro. Quando una prova
   si comporta in modo diverso da sola e in compagnia, il problema è quasi sempre lo stato
   condiviso, non la logica.
+

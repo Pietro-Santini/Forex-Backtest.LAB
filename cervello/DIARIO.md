@@ -2,6 +2,68 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-02 — OpenCode — **v2.0.68 PUBBLICATA: in replay i segnali eseguono ordini REALI sul
+  conto MT5, in background** (decisione del proprietario, che ribalta quella del 26 ottobre).
+  1. **Cosa cambia.** In `tgEseguiSegnale` (`app.html` ~34613) `reale` era
+     `!!mt5Connected&&sessioneLive&&!liveReplayActive`: in replay valeva falso, quindi ogni
+     segnale diventava una posizione finta. Ora `reale` non guarda piu' il replay.
+  2. **La guardia stava alla porta, ed è stata tolta di la'.** In `fetchMt5WithTimeout`
+     (~36152) c'era un blocco unico su TUTTE le rotte che scrivono (`p.startsWith('/order')`).
+     Toglierla riapre il trading dal replay con UNA modifica invece di sette funzioni su dieci
+     da allineare a mano. Le letture non sono mai state toccate.
+  3. **E l'apertura non si interrompe piu' a meta'.** Nel ramo simulato c'era
+     `if(currentAssetKey!==sym){...break;}`: se il grafico guardava un altro asset il ciclo si
+     fermava a meta' — esattamente il "apre alcune posizioni e non le altre" segnalato. Ora
+     prosegue: l'ordine porta con sé il SUO simbolo. Verificato che il percorso con conto reale
+     (`senzaGrafico=true`) non tocca `currentAssetKey`: l'apertura in background lascia il
+     grafico dov'è, quindi il replay resta punto e il conto non si sposta.
+  4. **PERCHE' SI PUO' FARE:** il percorso a conto reale passa da `senzaGrafico`, che lancia
+     gli ordini in batch con `sym` esplicito e non ha bisogno del grafico. Il ramo simulato
+     (senza MT5) resta com'era.
+  5. **TEST:** `laboratorio/app/replay_mai_ordini_veri.test.mjs` riscritto nel senso nuovo —
+     6 prove, di cui 3 prove di controllo (letture, fuori-replay, rotte non-scriventi).
+     Provato nei due sensi col metodo del progetto: rimessa la guardia diventa ROSSO
+     (3 rossi), tolta diventa VERDE (6 verdi).
+
+  **DECISIONE ROVESCIATA, DA NON PERDERE.** Il 26 ottobre 2026 il proprietario aveva richiesto
+  il contrario, espresso allo stesso modo: «in modalità replay le posizioni non vengono aperte
+  nell'account storico, ma vengono aperte sull'account MT5. Non può essere» — e la guardia alla
+  porta nasce da li'. Il 2 novembre ha rovesciato: **i segnali che arrivano durante il backtest
+  devono ESEGUIRE SUL CONTO REALE**. Conferma esplicita ottenuta sul rischio di ordini reali in
+  background. Se un domani qualcuno "sistema" la cosa al contrario, questo è il motivo per cui
+  non deve farlo.
+
+  **Collaudo:** locale `Falliti: 0` sui file toccati; su GitHub **verde**; release v2.0.68
+  **con Setup + installer_build.zip + APK** (i flussi ci pensano da soli, come da regola).
+  **Commit:** la cura e il test, poi la versione 2.0.68 (quattro commit, ognuno con il suo
+perche'). Le modifiche a `app.html` **e** `sw.js` sono in coppia con `installer.iss`:
+se `sw.js` non saliva di numero, telefono e tablet non avrebbero mai ricevuto la cura.
+
+- 2026-11-03 — OpenCode — **Le barre dell'istogramma SVP/COB si toccano, non sono piu' a
+  strisce** (stessa seduta della v2.0.68, curata prima di pubblicare).
+  1. **SINTOMO, con le foto del proprietario:** "zoomata, zoom out, la colonna SVP le candele
+     vengono disegnate bene, mentre invece se le ALLARGHIAMO... sono piu' distanti le candele
+     una tra l'altra, non ci sono candele che riempiono lo spazio, sono spazi vuoti...
+     devono comunque esserci delle candele una attaccata all'altra, non possono essere separate."
+  2. **CAUSA MISURATA:** `barH` era `Math.max(1,yBot-yTop-1)` e il disegno partiva da
+     `yTop+0.5`: **un pixel e mezzo di stacco per barra**, uno tolto dall'altezza e mezzo
+     aggiunto dallo scostamento. Su un istogramma stretto quei 1,5 px non si notano; con le
+     barre ALLARGATE (`barSizePct` alto, il caso delle foto) ogni fascia mostrava un solco
+     chiaro e l'istogramma sembrava a strisce invece che continuo.
+  3. **CURA:** `barH` torna a essere `yBot-yTop` (tutta la fascia) e il disegno parte da
+     `yTop`, non da `yTop+0.5`. Stessa cura sull'Order Book Profile, che disegna sulla
+     stessa griglia di prezzo (righe 17800-17801).
+  4. **ONESTA' SULLA PROVA:** ho provato a scrivere un test misurando il canvas e i
+     rettangoli che il disegno lascia, e **non sono riuscito a farlo diventare rosso senza
+     la cura**: misurava il vuoto (la colonna che trovavo era il bordo del grafico o il
+     crosshair, non l'istogramma). Un test che non distingue cura da difetto non prova
+     niente, quindi l'ho **cancellato** invece di pubblicarlo verde. La cura e' nell'app, ma
+     la sua prova automatica **manca**: chi riprende il lavoro la deve costruire partendo dai
+     rettangoli veri che l'app lascia in `vpIndBarRects` per i profili degli INDICATORI
+     (`vpind_<id>_<chiave>`), non per i disegni manuali.
+  5. **Regressione controllata:** `cob_svp_scala` + `asse_prezzi_zoom` + `memorie_disegno`
+     = **10/10 verdi**, compreso "le righe sono attaccate: niente pixel di stacco".
+
 - 2026-11-02 — OpenCode — **v2.0.67 PUBBLICATA: il filtro "mercato chiuso" non cerca piu' su
   ogni candela** (causa del "non risponde / crasha alla riapertura").
   1. **CAUSA MISURATA, non supposta.** A mercato chiuso `getVisibleData()` chiamava
@@ -3629,6 +3691,42 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
 ## 29 ottobre 2026 — Punto 5 completo
 - TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
 - Prestazioni: cache, percentuale onesta.
+- Prestazioni: cache, percentuale onesta.
+
+
+
+### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
+
+
+
+Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
+
+che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
+
+scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
+
+
+
+La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
+
+deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
+
+alterato il conto che gia' funzionava.
+
+
+
+Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
+
+seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
+
+essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
+
+il two step ne ha **due** e l'80%.
+
+
+
+Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
+
 
 ### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
 
@@ -4028,3 +4126,4 @@ scritture. Nuova misura `footprintInviati` in «Misura le prestazioni».
 2. le Cloud Functions: non sono solo Stripe. Ci sono le funzioni Notion
    (`notionSyncTrades` e compagnia) e `notionSyncTick` gira su **timer ogni 15 secondi**;
 3. il mistero dei **1 GB archiviati**: con un utente solo non tornano (4 documenti ≈ 1 MB).
+

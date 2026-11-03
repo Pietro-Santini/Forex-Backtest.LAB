@@ -17720,7 +17720,7 @@ function draw(){
          for(let b=0;b<profile.buckets;b++){
            const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
            const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
-           const barH=Math.max(1,yBot-yTop-1);
+           const barH=Math.max(1,yBot-yTop);
            const total=profile.upVol[b]+profile.downVol[b];
            if(total<=0)continue;
            const totalPx=Math.max(1,total/profile.maxTotal*maxBarPx);
@@ -17732,9 +17732,9 @@ function draw(){
            const _baseBarA=Number.isFinite(Number(d.barOpacity))?Math.max(0,Math.min(100,Number(d.barOpacity)))/100:0.55;
            const barAlpha=insideVA?_baseBarA:_baseBarA*OUTSIDE_VA_DIM_FACTOR;
            ctx.fillStyle=hexToRgba(upCol,barAlpha);
-           ctx.fillRect(leftX,yTop+0.5,upPx,barH);
+           ctx.fillRect(leftX,yTop,upPx,barH);
            ctx.fillStyle=hexToRgba(downCol,barAlpha);
-           ctx.fillRect(leftX+upPx,yTop+0.5,downPx,barH);
+           ctx.fillRect(leftX+upPx,yTop,downPx,barH);
          }
          ctx.restore();
        }
@@ -17787,7 +17787,7 @@ function draw(){
              if(total<=0)continue;
              const bucketLoPrice=profile.priceLo+b*profile.bucketSize, bucketHiPrice=bucketLoPrice+profile.bucketSize;
              const yTop=shapesGeo.y(bucketHiPrice), yBot=shapesGeo.y(bucketLoPrice);
-             const barH=Math.max(1,yBot-yTop-1);
+             const barH=Math.max(1,yBot-yTop);
              const px=Math.max(1,total/obDom.maxTotal*maxBarPx);
              // Il pezzo di ogni lato, in proporzione. Un lato presente ma piccolissimo si vede
              // comunque (almeno un pixel): "c'e' poco" e "non c'e'" sono due cose diverse, ed e'
@@ -17797,8 +17797,8 @@ function draw(){
              if(vb>0&&va>0&&pxBid+pxAsk>px)pxBid=Math.max(1,px-pxAsk);
              // Bid attaccato all'asse, ask oltre: l'ordine e' sempre lo stesso in ogni fascia,
              // altrimenti il confronto fra una fascia e l'altra non si puo' fare a occhio.
-             if(pxBid>0){ ctx.fillStyle=hexToRgba(obBidCol,obAlpha); ctx.fillRect(leftX-pxBid,yTop+0.5,pxBid,barH); }
-             if(pxAsk>0){ ctx.fillStyle=hexToRgba(obAskCol,obAlpha); ctx.fillRect(leftX-pxBid-pxAsk,yTop+0.5,pxAsk,barH); }
+             if(pxBid>0){ ctx.fillStyle=hexToRgba(obBidCol,obAlpha); ctx.fillRect(leftX-pxBid,yTop,pxBid,barH); }
+             if(pxAsk>0){ ctx.fillStyle=hexToRgba(obAskCol,obAlpha); ctx.fillRect(leftX-pxBid-pxAsk,yTop,pxAsk,barH); }
            }
            ctx.restore();
          }
@@ -34610,7 +34610,12 @@ async function tgEseguiSegnale(voce,opzioni){
  // «in modalità replay le posizioni non vengono aperte nell'account storico, ma vengono
  // aperte sull'account MT5. Non può essere».
  const sessioneLive=(currentMode()==='live'||currentMode()==='live_propfirm');
- const reale=!!mt5Connected&&sessioneLive&&!liveReplayActive;
+ // DECISIONE ROVESCIATA dal proprietario il 2 novembre 2026: prima qui c'era scritto
+ // !!mt5Connected&&sessioneLive&&!liveReplayActive, che in replay rendeva `reale` falso e
+ // trasformava ogni segnale in una posizione finta. Ora i segnali che arrivano durante il
+ // backtest devono eseguire SUL CONTO MT5 REALE, in background (conferma esplicita del
+ // proprietario sul rischio; la decisione precedente, del 26 ottobre, era l'opposto).
+ const reale=!!mt5Connected&&sessioneLive;
  if(!reale&&p.margine>freeMargin()+1e-9){
   await appAlert('Margine non sufficiente per '+p.n+' posizioni da '+p.lotti.toFixed(2)+' lot: servono '+euro(p.margine)+', liberi ce ne sono '+euro(freeMargin())+'.');
   return;
@@ -34719,11 +34724,11 @@ async function tgEseguiSegnale(voce,opzioni){
   // Simulato (senza rete): loop sequenziale, veloce come prima.
   for(let i=0;i<p.n;i++){
    const tp=(i<p.tp.length)?p.tp[i]:null;
-   if(currentAssetKey!==sym){
-    console.log('[Segnali] asset cambiato durante l\'apertura ('+currentAssetKey+' invece di '+sym+'): mi fermo');
-    voce.autoMotivo='l\'asset a grafico è cambiato durante l\'apertura: aperte '+aperte+' su '+p.n;
-    break;
-   }
+   // NON SI FERMA PIU': DECISIONE ROVESCIATA dal proprietario il 2 novembre 2026.
+   // Prima, se l'asset a grafico cambiava durante l'apertura, il ciclo si interrompeva a
+   // meta'. Ora l'apertura dei segnali prosegue in BACKGROUND anche mentre si guarda un
+   // altro asset (il replay): l'ordine porta con se' il suo simbolo e non ha bisogno del
+   // grafico. Resta l'avviso in console, ma non ferma piu' niente.
    const meta={tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
    if(p.pendente){
     // SEGNALATO (29 ottobre 2026): "quando andiamo a premere apri le posizioni, le mette
@@ -36149,7 +36154,11 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
  // su localhost una porta chiusa rifiuta la connessione all'istante (fetch fallisce da sola,
  // senza aspettare nessun timeout) — quello è l'unico caso di errore "vero" e resta immediato.
  const p=String(path||'');
- // IN REPLAY NON ESCE NESSUN ORDINE VERO, E LA GUARDIA STA QUI: ALLA PORTA.
+ // ATTENZIONE: DECISIONE ROVESCIATA dal proprietario il 2 novembre 2026. Fino al 26 ottobre
+ // 2026 in replay le rotte che scrivono (/order/...) NON partivano, perche' era stato richiesto
+ // che le operazioni aperte in replay non inficino su quelle del conto MT5. Ora gli ordini
+ // veri DAL REPLAY PASSANO, conferma esplicita del proprietario sul rischio: i segnali che
+ // arrivano durante il backtest devono eseguire sul conto MT5 reale in background.
  //
  // RICHIESTO dal proprietario: «le operazioni aperte in modalita' replay non inficiano su
  // quelle del conto MT5 ma solo su quelle del conto storico».
@@ -36163,11 +36172,13 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
  // SOLO LE ROTTE CHE SCRIVONO. Le letture (/positions, /account, /history_deals) devono
  // continuare a funzionare anche in replay: senza, il saldo e l'elenco posizioni
  // smetterebbero di aggiornarsi, che e' molto peggio del difetto che si sta chiudendo.
- try{
-  if(typeof liveReplayActive!=='undefined' && liveReplayActive && p.startsWith('/order')){
-   return {ok:false, message:'In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'};
-  }
- }catch(e){}
+ // IN REPLAY GLI ORDINI VERI PASSANO: DECISIONE ROVESCIATA DAL PROPRIETARIO (2 novembre 2026).
+ // Fino al 26 ottobre 2026 qui c'era il contrario - «le operazioni aperte in modalita' replay
+ // non inficiano su quelle del conto MT5 ma solo su quelle del conto storico» - e le rotte che
+ // scrivono (/order/...) non partivano proprio. Il proprietario ha poi ribaltato la scelta, con
+ // cognizione di causa (confermato esplicitamente sul rischio di ordini reali in background): i
+ // segnali che arrivano mentre si fa backtest devono ESEGUIRE SUL CONTO MT5 REALE, non su
+ // posizioni finte. Le letture non sono mai state toccate da questa guardia.
  const floorMs=p.startsWith('/health')||p.startsWith('/mt5-terminal-status')?10000
    :(p.startsWith('/history_deals')||p.startsWith('/account_history'))?120000
    :(p.startsWith('/order')||p.startsWith('/connect')||p.startsWith('/mt5-launch'))?60000
