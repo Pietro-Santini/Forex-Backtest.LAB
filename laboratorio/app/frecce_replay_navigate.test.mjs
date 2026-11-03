@@ -63,6 +63,66 @@ test('in Live le frecce non spostano il grafico (lo storico è il presente)', as
   } finally { await browser.close(); }
 });
 
+// IL TEST QUI SOTTO PASSAVA MENTRE IL DIFETTO C'ERA, ED E' LA LEZIONE DEL 3 NOVEMBRE 2026.
+// Guarda la pagina APPENA APERTA, dove la riga doppione e' nascosta dall'HTML. Ma TRE punti del
+// codice la rimettevano a 'grid' appena l'interfaccia si aggiornava, e il proprietario il
+// doppione continuava a vederlo, foto alla mano. Qui sotto lo stato si misura DOPO aver fatto
+// girare updateLiveModeUI()/updateLiveReplayUI(): com'e' la pagina mentre la si usa davvero.
+const STATO_FRECCE = `(function(){
+  const visibile = (el) => {
+    if(!el) return false;
+    const s = getComputedStyle(el);
+    if(s.display==='none'||s.visibility==='hidden') return false;
+    const r = el.getBoundingClientRect();
+    return r.width>0 && r.height>0;
+  };
+  const riga=document.getElementById('replayControlsRow');
+  const back=document.getElementById('pipHistBackBtn');
+  const next=document.getElementById('pipHistNextBtn');
+  return {doppione:visibile(riga), stile:riga?getComputedStyle(riga).display:'ASSENTE',
+          ufficiali:visibile(back)&&visibile(next)};
+})()`;
+
+test('in Storico, DOPO l\'aggiornamento dell\'interfaccia, il doppione resta nascosto', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(SCENARIO);
+    await pagina.evaluate(`(function(){ liveModeActive=false; liveReplayActive=false; updateLiveModeUI(); return true; })()`);
+    const v = await pagina.evaluate(STATO_FRECCE);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(v.doppione, false, 'la seconda coppia di frecce deve restare nascosta (stile: '+v.stile+')');
+    assert.equal(v.ufficiali, true, 'le frecce accanto al PLAY devono restare visibili');
+  } finally { await browser.close(); }
+});
+
+test('in Live col replay acceso — il caso della foto — il doppione resta nascosto', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(SCENARIO);
+    await pagina.evaluate(`(function(){ liveModeActive=true; liveReplayActive=true;
+      updateLiveModeUI(); updateLiveReplayUI(); return true; })()`);
+    const v = await pagina.evaluate(STATO_FRECCE);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(v.doppione, false, 'era QUESTO lo stato in cui si vedevano due coppie (stile: '+v.stile+')');
+    assert.equal(v.ufficiali, true, 'e le frecce accanto al PLAY ci devono essere, altrimenti non si naviga piu\'');
+  } finally { await browser.close(); }
+});
+
+test('in Live col replay acceso le frecce della tastiera muovono le candele', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(SCENARIO);
+    await pagina.evaluate(`(function(){ liveModeActive=true; liveReplayActive=true; return true; })()`);
+    const prima = await pagina.evaluate(LEGGI_IDX);
+    await pagina.keyboard.press('ArrowRight');
+    await pagina.waitForTimeout(150);
+    const dopo = await pagina.evaluate(LEGGI_IDX);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(dopo, prima + 1,
+      'dentro al replay la freccia DESTRA deve avanzare di una candela (' + prima + ' -> ' + dopo + ')');
+  } finally { await browser.close(); }
+});
+
 test('su una pagina principale c\'è UNA sola coppia di frecce: quella accanto al play', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {

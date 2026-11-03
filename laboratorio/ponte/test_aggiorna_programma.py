@@ -190,3 +190,98 @@ def test_la_versione_del_programma_si_legge_dal_registro_non_si_inventa(monkeypa
     assert v is None or isinstance(v, str)
     if v is not None:
         assert bridge._tupla(v) is not None, "se una versione c'e', dev'essere leggibile come numeri"
+
+
+# ===================== IL CUSTODE SI SPEGNE PRIMA, O FA RINASCERE I SERVIZI =====================
+#
+# SEGNALATO DAL PROPRIETARIO (3 novembre 2026): «quando aggiorno, l'applicazione mi da' NON
+# RISPONDE e crasha. Quando chiude l'applicazione, esegue l'aggiornamento, poi riapre, e c'e'
+# qualche servizio che rimane ancora attivo dall'istanza precedente».
+#
+# CAUSA, scritta nero su bianco in bridge.py (~riga 519): «_ferma_custode_mt5_feed() PRIMA di
+# spegnere il servizio, O IL CUSTODE LO RIACCENDE». Il custode e' il thread che fa rinascere
+# Mt5FeedServer.exe appena la porta 8001 tace. L'installer uccideva prima i figli e solo ALLA
+# FINE il ponte: in quella finestra il custode era ancora vivo e faceva rinascere il servizio
+# dati, che sopravviveva al padre e restava orfano con la porta 8001 in mano. Dopo
+# l'installazione il servizio NUOVO non riusciva piu' ad aprirla.
+#
+# Qui si prova la meta' che vive nel ponte: prima di lanciare l'installer, il custode e' gia'
+# spento e i servizi sono gia' fermi. L'altra meta' (l'ordine dei taskkill) vive in
+# installer.iss ed e' provata da test_ordine_chiusura_installer qui sotto.
+
+
+def test_il_custode_si_spegne_prima_di_lanciare_l_installer(monkeypatch):
+    """L'ORDINE E' LA CURA. Se l'installer parte col custode ancora vivo, il servizio dati puo'
+    rinascere mentre si sta installando e restare orfano sulla porta 8001."""
+    bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
+    monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.1")
+    monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 99))
+    monkeypatch.setattr(bridge.urllib.request, "urlopen",
+                        _finta_risposta(b"MZ" + b"\0" * (bridge._PACCHETTO_MINIMO_BYTE + 10)))
+
+    ordine = []
+    monkeypatch.setattr(bridge, "_ferma_custode_mt5_feed", lambda: ordine.append("custode"))
+    monkeypatch.setattr(bridge, "_stop_mt5_feed_server", lambda: ordine.append("feed"))
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+
+    def _finto_popen(comando, **k):
+        ordine.append("installer")
+        return types.SimpleNamespace(pid=1234)
+    monkeypatch.setattr(bridge.subprocess, "Popen", _finto_popen)
+
+    ok, msg = bridge.aggiorna_programma()
+    assert ok is True, msg
+    assert "custode" in ordine, "il custode deve essere spento dall'aggiornamento, non lasciato vivo"
+    assert "installer" in ordine, "l'installer deve comunque partire"
+    assert ordine.index("custode") < ordine.index("installer"), \
+        "il custode va spento PRIMA dell'installer: dopo, puo' gia' aver fatto rinascere il servizio"
+    assert ordine.index("custode") < ordine.index("feed"), \
+        "e PRIMA del servizio dati, altrimenti lo riaccende subito (vedi bridge.py riga ~519)"
+
+
+def test_se_spegnere_i_servizi_fallisce_l_aggiornamento_va_avanti_lo_stesso(monkeypatch):
+    """PROVA DI CONTROLLO. La chiusura ordinata e' un miglioramento, non una nuova condizione per
+    aggiornare: se una di quelle funzioni solleva, l'installer deve partire comunque — altrimenti
+    avremmo scambiato un difetto raro con l'impossibilita' di aggiornare."""
+    bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
+    monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.1")
+    monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 99))
+    monkeypatch.setattr(bridge.urllib.request, "urlopen",
+                        _finta_risposta(b"MZ" + b"\0" * (bridge._PACCHETTO_MINIMO_BYTE + 10)))
+
+    def _esplode():
+        raise RuntimeError("il custode non si spegne")
+    monkeypatch.setattr(bridge, "_ferma_custode_mt5_feed", _esplode)
+    monkeypatch.setattr(bridge, "_stop_mt5_feed_server", _esplode)
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+
+    lanciato = {}
+    monkeypatch.setattr(bridge.subprocess, "Popen",
+                        lambda comando, **k: lanciato.setdefault("si", True) or types.SimpleNamespace(pid=1))
+
+    ok, msg = bridge.aggiorna_programma()
+    assert ok is True, msg
+    assert lanciato.get("si"), "l'installer deve partire anche se la chiusura ordinata non riesce"
+
+
+def test_ordine_chiusura_installer():
+    """L'ALTRA META' DELLA CURA, quella che vive in installer.iss: il PADRE si chiude per primo.
+
+    Non si puo' lanciare un vero Setup dentro un collaudo, quindi qui si legge il copione: si
+    controlla che il taskkill di ForexBacktestLAB.exe (che porta con se' il custode) venga PRIMA
+    di quello di Mt5FeedServer.exe, e che l'attesa non sia piu' uno Sleep alla cieca ma un
+    controllo vero che i processi siano andati."""
+    percorso = os.path.join(RADICE, "installer_build", "installer.iss")
+    with open(percorso, "r", encoding="utf-8", errors="replace") as f:
+        testo = f.read()
+    corpo = testo[testo.index("procedure UccidiTutti"):]
+    i_padre = corpo.index("ForexBacktestLAB.exe")
+    i_feed = corpo.index("Mt5FeedServer.exe")
+    assert i_padre < i_feed, (
+        "il ponte (che contiene il custode) va chiuso PRIMA del servizio dati: chiudendolo dopo, "
+        "il custode fa in tempo a far rinascere Mt5FeedServer.exe e resta un orfano sulla 8001")
+    assert "ProcessoVivo" in testo, (
+        "serve un controllo vero che i processi siano andati: taskkill torna appena ha CHIESTO "
+        "la chiusura, non quando e' avvenuta")

@@ -1287,6 +1287,59 @@ def aggiorna_programma(timeout=300):
     except Exception as e:
         return False, "non riesco a salvare il pacchetto: %s" % e
 
+    # PRIMA DI LANCIARE L'INSTALLER, SI SPEGNE IL CUSTODE E SI FERMANO I SERVIZI NOI.
+    #
+    # SEGNALATO DAL PROPRIETARIO (3 novembre 2026): «quando aggiorno, l'applicazione mi da' NON
+    # RISPONDE e crasha. Evidentemente quando chiude l'applicazione, fa l'installazione e poi
+    # riapre, c'e' qualche servizio che rimane ancora attivo dall'istanza precedente.»
+    #
+    # CAUSA MISURATA, ed e' scritta nero su bianco in questo stesso file a riga ~519:
+    # «_ferma_custode_mt5_feed()  # PRIMA di spegnere il servizio, o il custode lo riaccende».
+    # Il custode e' il thread che RIACCENDE Mt5FeedServer.exe appena la porta 8001 smette di
+    # rispondere. L'installer (vedi ChiudiProgrammi in installer.iss) uccideva nell'ordine
+    # sbagliato: prima SegnaliBridge, poi Mt5FeedServer, e SOLO ALLA FINE questo ponte. Nella
+    # finestra fra il secondo e il quarto taskkill il custode e' ancora vivo, si accorge che la
+    # 8001 e' muta e **fa rinascere Mt5FeedServer.exe**. Quel figlio sopravvive alla morte del
+    # padre, resta orfano con la porta 8001 in mano, e dopo l'installazione il servizio NUOVO non
+    # riesce piu' ad aprirla: l'app parte e non trova i dati. Ecco il "non risponde".
+    #
+    # Qui la corsa si chiude alla radice: il custode muore PRIMA, poi si fermano i servizi con le
+    # funzioni ordinate che esistono gia'. Quando l'installer arrivera' coi suoi taskkill non
+    # trovera' piu' nessuno da uccidere, e soprattutto nessuno che possa rinascere.
+    # Tutto best-effort: se una di queste fallisce, l'installer fa comunque il suo lavoro come
+    # prima — non si torna indietro rispetto a oggi, si toglie solo la corsa.
+    try:
+        _ferma_custode_mt5_feed()
+    except Exception:
+        pass
+    try:
+        _stop_mt5_feed_server()
+    except Exception:
+        pass
+    # Il ponte dei segnali si ferma a mano, non con segnali_stop(): quella e' una ROTTA HTTP e
+    # solleva HTTPException quando qualcosa non va: qui farebbe fallire l'aggiornamento per un
+    # dettaglio che non lo riguarda. Qui conta solo che il processo non resti in piedi.
+    try:
+        global _processo_segnali
+        if _processo_segnali is not None and _processo_segnali.poll() is None:
+            try:
+                _processo_segnali.terminate()
+                _processo_segnali.wait(timeout=5)
+            except Exception:
+                try:
+                    _processo_segnali.kill()
+                except Exception:
+                    pass
+            _processo_segnali = None
+    except Exception:
+        pass
+    # Un attimo perche' Windows rilasci davvero le porte 8001/8769: un socket appena chiuso resta
+    # un istante non riassegnabile, ed e' esattamente l'istante in cui l'installer riavvia tutto.
+    try:
+        time.sleep(1.0)
+    except Exception:
+        pass
+
     # /VERYSILENT        nessuna finestra, nessun passaggio da confermare
     # /SUPPRESSMSGBOXES  nessun avviso che resterebbe li' ad aspettare un clic che non arriva
     # /NORESTART         non riavvia il computer per nessun motivo

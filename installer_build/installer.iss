@@ -223,15 +223,66 @@ WelcomeLabel2=Questo installa {#MyAppName} sul tuo PC.%n%nATTENZIONE: serve un t
 // Setup chiedeva "riprova/ignora" e, ignorando, restava la versione VECCHIA (per esempio il ponte dei
 // segnali con il canale rotto). Qui si chiudono prima di installare e prima di disinstallare;
 // [Run] riavvia ForexBacktestLAB.exe a fine installazione, e lui riavvia gli altri due.
-procedure ChiudiProgrammi();
+// L'ORDINE CONTA, E PRIMA ERA SBAGLIATO.
+//
+// SEGNALATO DAL PROPRIETARIO (3 novembre 2026): "quando aggiorno, l'applicazione mi da' NON
+// RISPONDE e crasha: quando chiude, fa l'installazione e poi riapre, c'e' qualche servizio che
+// rimane ancora attivo dall'istanza precedente".
+//
+// CAUSA, documentata dal progetto stesso in build/bridge.py (~riga 519): "_ferma_custode_mt5_feed()
+// PRIMA di spegnere il servizio, O IL CUSTODE LO RIACCENDE". Il custode e' il thread dentro
+// ForexBacktestLAB.exe che fa rinascere Mt5FeedServer.exe appena la porta 8001 smette di
+// rispondere. Qui si uccideva prima SegnaliBridge, poi Mt5FeedServer, e SOLO ALLA FINE il ponte:
+// nella finestra fra il secondo e il quarto taskkill il custode era ancora vivo e faceva
+// RINASCERE Mt5FeedServer.exe. Quel figlio sopravviveva al padre, restava orfano con la porta
+// 8001 occupata, e dopo l'installazione il servizio nuovo non riusciva piu' ad aprirla: l'app
+// partiva e non trovava i dati. Ecco il "non risponde".
+//
+// ADESSO: prima il PADRE (l'unico che puo' far rinascere qualcuno), poi i figli. E al posto di
+// uno Sleep alla cieca si CONTROLLA davvero che non resti nessuno: taskkill torna appena ha
+// CHIESTO la chiusura, non quando e' avvenuta.
+function ProcessoVivo(const Nome: String): Boolean;
 var
   Esito: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM SegnaliBridge.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Mt5FeedServer.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ForexBacktestLABDesktop.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
+  // tasklist filtrato per nome; find esce 1 quando non trova nulla, 0 quando il processo c'e'.
+  Result := Exec(ExpandConstant('{cmd}'),
+    '/C tasklist /FI "IMAGENAME eq ' + Nome + '" /NH | find /I "' + Nome + '" >nul',
+    '', SW_HIDE, ewWaitUntilTerminated, Esito) and (Esito = 0);
+end;
+
+procedure UccidiTutti();
+var
+  Esito: Integer;
+begin
+  // Il PADRE per primo: con lui muore il custode, e da qui nessuno puo' piu' rinascere.
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ForexBacktestLAB.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
-  Sleep(1500);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ForexBacktestLABDesktop.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
+  // Poi i figli, compresi eventuali orfani lasciati da un aggiornamento precedente andato storto.
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Mt5FeedServer.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM SegnaliBridge.exe', '', SW_HIDE, ewWaitUntilTerminated, Esito);
+end;
+
+procedure ChiudiProgrammi();
+var
+  Giro: Integer;
+  Restano: Boolean;
+begin
+  UccidiTutti();
+  // Fino a 10 giri da mezzo secondo: se qualcuno resta in piedi, si riprova invece di tirare
+  // dritto e lasciare che l'installazione fallisca a meta' o che un orfano tenga la porta.
+  for Giro := 1 to 10 do
+  begin
+    Restano := ProcessoVivo('ForexBacktestLAB.exe') or ProcessoVivo('Mt5FeedServer.exe')
+            or ProcessoVivo('SegnaliBridge.exe') or ProcessoVivo('ForexBacktestLABDesktop.exe');
+    if not Restano then
+      Break;
+    UccidiTutti();
+    Sleep(500);
+  end;
+  // Attesa finale: il processo e' morto, ma Windows rilascia la porta che teneva aperta un
+  // attimo dopo — ed e' proprio l'attimo in cui [Run] riavvia tutto.
+  Sleep(800);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
