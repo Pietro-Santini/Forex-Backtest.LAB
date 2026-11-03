@@ -47451,15 +47451,34 @@ async function fblMercatoMt5Domanda(asset){
   if(!r.ok)return null;
   const d=await r.json();
   if(!d||!d.found)return null;
+  // «NON LO SO» NON E' «CHIUSO». Il ponte adesso risponde `null` quando non ha una prova (nessun
+  // tick disponibile per quel simbolo): prima qui si faceva `!!d.trade_allowed`, che trasforma
+  // un null in `false` e lo mette in cache come se fosse una risposta. Non cambiava il
+  // comportamento — l'app agisce solo sul `true` — ma riempiva la memoria di finte certezze, e
+  // sarebbe diventato un difetto vero il giorno in cui qualcuno avesse dato retta anche al falso.
+  if(d.trade_allowed===null||d.trade_allowed===undefined)return null;
   const aperto=!!d.trade_allowed;
   fblMercatoMt5Cache[asset]={aperto:aperto,letto:Date.now()};
   return aperto;
  }catch(e){ return null; }
 }
-// Chiede a MT5 lo stato dell'asset a grafico (e lo tiene fresco col timer piu' sotto).
+// Chiede a MT5 lo stato dell'asset a grafico E DI QUELLI SU CUI HAI POSIZIONI APERTE.
+//
+// RICHIESTA DEL PROPRIETARIO (3 novembre 2026): «fa in modo che OGNI ASSET sia effettivamente
+// veritiero con l'apertura e la chiusura del mercato». Prima si chiedeva solo per l'asset a
+// grafico, quindi le righe delle altre posizioni restavano sull'orario fisso — e il proprietario
+// l'aveva notato proprio guardando le tabelle: «si vede anche sull'aggiornamento delle tabelle
+// delle posizioni aperte che il mercato e' aperto, perche' il P/L live si aggiorna».
+// Tetto di 12 simboli per giro: ogni domanda e' una chiamata al ponte, e la cache dura 20
+// secondi (vedi fblMercatoMt5Domanda), quindi il costo resta trascurabile anche con molte
+// posizioni aperte.
 function fblMercatoMt5AggiornaCorrente(){
- if(!mt5Connected||!liveModeActive||!currentAssetKey)return;
- fblMercatoMt5Domanda(currentAssetKey);
+ if(!mt5Connected||!liveModeActive)return;
+ const visti=new Set();
+ const chiedi=(a)=>{ if(!a||visti.has(a)||visti.size>=12)return; visti.add(a); fblMercatoMt5Domanda(a); };
+ chiedi(currentAssetKey);
+ try{ (positions||[]).forEach(p=>{ if(p)chiedi(p.asset); }); }catch(e){}
+ try{ (pendingOrders||[]).forEach(p=>{ if(p)chiedi(p.asset); }); }catch(e){}
 }
 function statoMercato(asset,t){
  // MT5 e' l'autorita' sullo stato del mercato: se dice APERTO, e' aperto, qualsiasi cosa

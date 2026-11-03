@@ -307,6 +307,95 @@ def health():
     }
 
 
+# ===================== IL MERCATO DI QUESTO STRUMENTO E' APERTO ADESSO? =====================
+#
+# SEGNALATO DAL PROPRIETARIO (3 novembre 2026): «ogni asset apre e chiude in fasce orarie
+# diverse. NZD/CAD adesso il mercato e' aperto e invece l'app dice che e' chiuso e apre tra 17
+# minuti a mezzanotte. Ed e' impossibile, perche' sul terminale MT5 il mercato e' aperto e il P/L
+# live si aggiorna.»
+#
+# IL PRIMO TENTATIVO (v2.0.71) ERA INERTE, e va detto perche' non si ripeta: leggeva
+# `getattr(info, "trade_allowed", False)`. Quel campo su `mt5.symbol_info()` NON ESISTE — sta su
+# `terminal_info()` e `account_info()`, che parlano del TERMINALE e del CONTO, non del simbolo.
+# Il getattr restituiva quindi SEMPRE il valore di ripiego, cioe' falso, per ogni strumento e a
+# qualunque ora. MISURATO con la libreria vera (MetaTrader5 5.0.6231):
+#     'trade_allowed' in mt5.symbol_info('EURUSD')._asdict()  ->  False
+# e il ponte rispondeva "trade_allowed": false su EURUSD di martedi' a mezzogiorno.
+#
+# E LE SESSIONI NON CI SONO. La strada pulita sarebbe `symbol_info_session_quote()`, ma in questa
+# build della libreria non esiste proprio: `[f for f in dir(mt5) if "session" in f]` e' VUOTO, e
+# `sessions_quotes` dentro symbol_info vale None. Misurato, non supposto.
+#
+# QUELLO CHE MT5 CI DA' DAVVERO e' il TICK: `symbol_info_tick()` ha l'orario dell'ultimo prezzo.
+# Se e' di adesso, il mercato di quel simbolo sta quotando — non c'e' prova migliore. Misurato su
+# EURUSD: tick delle 19:03:16 del server contro le 17:03:17 UTC, cioe' esattamente lo scarto di
+# due ore del broker, che questo file sa gia' calcolare (_server_time_offset_seconds).
+#
+# LA REGOLA, ed e' deliberatamente asimmetrica perche' sbagliare nei due versi non costa uguale:
+#   - APERTO (certo)   : il tick e' piu' giovane di SOGLIA_TICK_FRESCO. Qui si risponde true, e
+#                        l'app smette di dire "chiuso" qualunque cosa dica l'orario fisso.
+#   - CHIUSO (certo)   : SOLO se il broker dichiara il simbolo non negoziabile
+#                        (trade_mode == SYMBOL_TRADE_MODE_DISABLED). Un silenzio di tick NON e'
+#                        una prova di chiusura: uno strumento poco liquido puo' tacere per minuti
+#                        a mercato apertissimo, e far congelare il grafico per quello sarebbe un
+#                        danno peggiore del difetto che stiamo curando.
+#   - NON SO (None)    : tutto il resto. L'app resta sull'orario fisso di prima, cioe' al peggio
+#                        si comporta come oggi. Non si inventa niente.
+SOGLIA_TICK_FRESCO = 180.0   # 3 minuti: una coppia aperta non tace cosi' a lungo
+
+
+def _mercato_aperto_adesso(symbol: str, info) -> dict:
+    """Risponde con i campi di stato del mercato per questo simbolo. Non solleva mai."""
+    fuori = {"trade_allowed": None, "mercato_aperto": None, "tick_eta_s": None,
+             "trade_mode": getattr(info, "trade_mode", None), "stato_fonte": "non lo so"}
+    try:
+        disabilitato = getattr(mt5, "SYMBOL_TRADE_MODE_DISABLED", 0)
+        if fuori["trade_mode"] is not None and fuori["trade_mode"] == disabilitato:
+            fuori.update({"trade_allowed": False, "mercato_aperto": False,
+                          "stato_fonte": "il broker dichiara il simbolo non negoziabile"})
+            return fuori
+        tick = _mt5_call(mt5.symbol_info_tick, symbol)
+        epoch = getattr(tick, "time", None) if tick is not None else None
+        if not epoch and not getattr(info, "select", False):
+            # SENZA SELEZIONE NON C'E' TICK, ed e' proprio il caso del proprietario.
+            # MISURATO: NZD/CAD rispondeva `visible: False, select: False, tick: None,
+            # last_error (-4, 'Terminal: Not found')` — MT5 non quota un simbolo che non e' nel
+            # Market Watch, quindi non si poteva sapere niente proprio dello strumento della
+            # segnalazione. Selezionarlo NON e' un'invadenza nuova: questo stesso file lo fa gia'
+            # in SEI punti (storico, tick, streaming, book...) ogni volta che serve un dato vero.
+            # Era `/symbol-check` l'unica rotta a non farlo, e per questo la sua risposta sullo
+            # stato del mercato era inutilizzabile per qualunque simbolo non gia' a grafico.
+            _mt5_call(mt5.symbol_select, symbol, True)
+            time.sleep(0.25)   # al terminale serve un istante per cominciare a quotarlo
+            tick = _mt5_call(mt5.symbol_info_tick, symbol)
+            epoch = getattr(tick, "time", None) if tick is not None else None
+        if not epoch:
+            # Appena selezionato e ancora muto: non si inventa niente. Fra 30 secondi l'app
+            # richiede, e a quel punto il terminale lo sta quotando.
+            fuori["stato_fonte"] = "nessun tick disponibile per questo simbolo"
+            return fuori
+        now = time.time()
+        # Lo scarto dell'orologio del broker: dal tick stesso se e' fresco, altrimenti da un
+        # qualunque altro simbolo che stia quotando adesso (vedi _server_time_offset_seconds).
+        scarto = _server_time_offset_seconds(tick)
+        if scarto is None:
+            return fuori
+        eta = (now + scarto) - float(epoch)
+        fuori["tick_eta_s"] = round(eta, 1)
+        if eta < 0:
+            eta = 0.0    # tick "nel futuro" di qualche secondo: jitter, non un errore
+        if eta <= SOGLIA_TICK_FRESCO:
+            fuori.update({"trade_allowed": True, "mercato_aperto": True,
+                          "stato_fonte": "tick fresco (%.0fs)" % eta})
+        else:
+            # Silenzio lungo: SOSPETTO di mercato chiuso, non prova. Si lascia decidere
+            # all'orario fisso dell'app, che per questi casi c'e' gia'.
+            fuori["stato_fonte"] = "nessun tick da %.0fs: non basta per dire chiuso" % eta
+    except Exception:
+        pass
+    return fuori
+
+
 @app.get("/symbol-check")
 def symbol_check(symbol: str):
     """Sola lettura: esiste questo simbolo su questo broker? Se no, propone candidati per nome
@@ -329,17 +418,8 @@ def symbol_check(symbol: str):
             "contract_size": getattr(info, "trade_contract_size", None),
             "volume_min": getattr(info, "volume_min", None),
             "volume_step": getattr(info, "volume_step", None),
-            # STATO DEL MERCATO DI QUESTO STRUMENTO, letto da MT5.
-            # SEGNALATO DAL PROPRIETARIO (3 novembre 2026): "ogni asset apre e chiude in fasce
-            # orarie diverse. NZD/CAD adesso il mercato e' aperto e invece l'app dice che e'
-            # chiuso e apre tra 17 minuti a mezzanotte. Ed e' impossibile perche' sul terminale
-            # MT5 il mercato e' aperto e il P/L live si aggiorna."
-            # L'app decideva l'apertura con un orario fisso (chiusura alle 22 di Roma per tutti):
-            # cosi' un asset che chiude alle 23 risultava chiuso alle 22, e uno che chiude alle
-            # 21 risultava aperto fino alle 22. MT5 lo SA, per ogni simbolo: trade_allowed e'
-            # vero solo quando il mercato di quel simbolo e' davvero aperto.
-            "trade_allowed": bool(getattr(info, "trade_allowed", False)),
-            "trade_mode": getattr(info, "trade_mode", None),
+            # STATO DEL MERCATO DI QUESTO STRUMENTO: vedi _mercato_aperto_adesso() qui sopra.
+            **_mercato_aperto_adesso(symbol, info),
             "candidates": [],
         }
     all_symbols = _mt5_call(mt5.symbols_get) or []
