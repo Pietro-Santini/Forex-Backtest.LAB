@@ -99,6 +99,18 @@ const PREPARA_ORO = (quante) => {
   rows = R; baseRows = R; idx = R.length - 1; viewEnd = R.length - 1;
   currentAssetKey = 'XAUUSD'; if (typeof rowsAssetKey !== 'undefined') rowsAssetKey = 'XAUUSD';
   liveModeActive = true; mt5Connected = false; positions = []; trades = []; active = null;
+  // IL MERCATO SI DICHIARA APERTO, altrimenti questo test dipende dall'ORA IN CUI LO LANCI.
+  //
+  // Trovato il 3 novembre 2026: queste prove erano rosse sia sul ramo sia su main, e il
+  // proprietario ha giustamente obiettato che il footprint funziona benissimo. Aveva ragione.
+  // Le candele qui sopra arrivano fino ad ADESSO e liveModeActive è acceso: getVisibleData()
+  // applica allora il filtro "mercato chiuso" (fblMercatoFermoOra) e taglia la coda. Misurato
+  // di sera: 71 candele disegnate su 140, quindi la gran parte dei clic cadeva nel vuoto e il
+  // test accusava il footprint di un difetto che non ha. Di giorno passava.
+  // Qui si misura il BERSAGLIO DEL CLIC, non gli orari di borsa: il mercato si dichiara aperto
+  // e la prova vale alla stessa maniera a qualunque ora, di sabato compreso.
+  try { fblMercatoFermoOra = function () { return false; }; } catch (e) {}
+  try { statoMercato = function () { return null; }; } catch (e) {}
   const cb = document.getElementById('footprintEnabled'); cb.checked = true; footprintEnabled = true;
   document.getElementById('footprintStyle').value = 'bidask';
   draw();
