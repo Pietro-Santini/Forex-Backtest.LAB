@@ -1245,14 +1245,24 @@ def _tupla(v):
         return None
 
 
-def aggiorna_programma(timeout=300):
+def aggiorna_programma_dettaglio(timeout=300):
+    """Scarica il pacchetto e lo avvia. Torna {ok, messaggio, avviato}.
+    
+    PERCHE' ESISTE "avviato", OLTRE A "ok" (4 novembre 2026). SEGNALATO dal proprietario:
+    "ho premuto il tasto aggiorna e non mi ha chiuso l'applicazione, non mi ha fatto nulla,
+    cioe' e' stato molto istantaneo". CAUSA: questa funzione rispondeva ok=True in DUE casi
+    diversi - "installazione avviata" e "non c'e' niente da installare" - e l'app guardava solo
+    ok. Nel secondo caso mostrava "installazione in corso, l'app si riavvia da sola" e lasciava
+    il velo sullo schermo mentre non era partito niente. Un esito vero detto in modo ambiguo e'
+    peggio di un errore: l'errore almeno si vede.
+    """
     """Scarica il pacchetto di installazione e lo avvia in silenzio. Restituisce (esito, messaggio).
 
     NON esce da solo: ci pensa l'installer, che usa il Gestore riavvii di Windows per chiudere
     questo processo e sostituire l'eseguibile. Uscire noi per primi lascerebbe l'utente senza
     ponte per tutto il tempo dell'installazione, e senza niente a cui tornare se fallisce."""
     if os.name != "nt":
-        return False, "l'aggiornamento del programma vale solo su Windows"
+        return {"ok": False, "avviato": False, "messaggio": "l'aggiornamento del programma vale solo su Windows"}
     installata = versione_programma_installata()
     pubblicata = None
     try:
@@ -1264,7 +1274,9 @@ def aggiorna_programma(timeout=300):
     # installare non e' piu' nuovo di quello che c'e', non si tocca niente.
     ti, tp = _tupla(installata), _tupla(pubblicata)
     if ti and tp and ti >= tp:
-        return True, "il programma e' gia' alla %s: non c'e' niente da installare" % installata
+        # OK ma NON avviato: non c'era niente da fare, e dirlo e' il punto di tutta questa cura.
+        return {"ok": True, "avviato": False,
+                "messaggio": "il programma e' gia' alla %s: non c'e' niente da installare" % installata}
 
     tmp = os.path.join(tempfile.gettempdir(), "ForexBacktestLAB_Setup_nuovo.exe")
     try:
@@ -1272,20 +1284,21 @@ def aggiorna_programma(timeout=300):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             dati = r.read()
     except Exception as e:
-        return False, "scaricamento non riuscito: %s" % e
+        return {"ok": False, "avviato": False, "messaggio": "scaricamento non riuscito: %s" % e}
 
     # SI CONTROLLA PRIMA DI LANCIARE. Un file troncato o una pagina di errore salvata col nome
     # giusto, avviata come installer, lascerebbe l'installazione a meta': rotta e senza ritorno.
     if len(dati) < _PACCHETTO_MINIMO_BYTE:
-        return False, "il file scaricato pesa %.1f MB: non e' il pacchetto" % (len(dati) / 1048576.0)
+        return {"ok": False, "avviato": False,
+                "messaggio": "il file scaricato pesa %.1f MB: non e' il pacchetto" % (len(dati) / 1048576.0)}
     if dati[:2] != b"MZ":
-        return False, "il file scaricato non e' un programma di Windows"
+        return {"ok": False, "avviato": False, "messaggio": "il file scaricato non e' un programma di Windows"}
 
     try:
         with open(tmp, "wb") as f:
             f.write(dati)
     except Exception as e:
-        return False, "non riesco a salvare il pacchetto: %s" % e
+        return {"ok": False, "avviato": False, "messaggio": "non riesco a salvare il pacchetto: %s" % e}
 
     # PRIMA DI LANCIARE L'INSTALLER, SI SPEGNE IL CUSTODE E SI FERMANO I SERVIZI NOI.
     #
@@ -1353,8 +1366,16 @@ def aggiorna_programma(timeout=300):
             bandiere = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         subprocess.Popen(comando, close_fds=True, creationflags=bandiere)
     except Exception as e:
-        return False, "non riesco ad avviare il pacchetto: %s" % e
-    return True, "pacchetto scaricato (%.0f MB) e installazione avviata in silenzio" % (len(dati) / 1048576.0)
+        return {"ok": False, "avviato": False, "messaggio": "non riesco ad avviare il pacchetto: %s" % e}
+    return {"ok": True, "avviato": True,
+            "messaggio": "pacchetto scaricato (%.0f MB) e installazione avviata in silenzio" % (len(dati) / 1048576.0)}
+
+
+def aggiorna_programma(timeout=300):
+    """La forma di prima, (esito, messaggio): la usano i test e chi non ha bisogno di sapere
+    se l'installazione e' partita davvero. Una riga sola, cosi' la logica resta in un posto."""
+    d = aggiorna_programma_dettaglio(timeout)
+    return d["ok"], d["messaggio"]
 
 
 @app.get("/versione-programma")
@@ -1380,8 +1401,11 @@ def aggiorna_programma_rotta(request: Request):
     l'applicazione di qualcun altro mentre la sta usando."""
     if not _accesso.richiesta_locale(request):
         raise HTTPException(status_code=403, detail="L'aggiornamento del programma si chiede dal computer.")
-    ok, msg = aggiorna_programma()
-    return {"ok": ok, "messaggio": msg, "programma": versione_programma_installata()}
+    d = aggiorna_programma_dettaglio()
+    # "avviato" e' la risposta alla domanda che l'app deve farsi prima di dire "installazione
+    # in corso": e' PARTITO qualcosa? Vedi la nota su aggiorna_programma_dettaglio.
+    return {"ok": d["ok"], "avviato": d["avviato"], "messaggio": d["messaggio"],
+            "programma": versione_programma_installata()}
 
 
 # ===================== NEWS — Calendario economico Forex Factory ========================

@@ -285,3 +285,62 @@ def test_ordine_chiusura_installer():
     assert "ProcessoVivo" in testo, (
         "serve un controllo vero che i processi siano andati: taskkill torna appena ha CHIESTO "
         "la chiusura, non quando e' avvenuta")
+
+
+def test_niente_da_installare_non_e_una_installazione_avviata(monkeypatch):
+    """«OK» NON VUOL DIRE «PARTITO».
+
+    SEGNALATO dal proprietario (4 novembre 2026): «ho premuto il tasto aggiorna e non mi ha
+    chiuso l'applicazione, non mi ha fatto nulla, cioe' e' stato molto istantaneo».
+
+    CAUSA: `aggiorna_programma` rispondeva True in DUE casi diversi — «installazione avviata» e
+    «non c'e' niente da installare» — e l'app guardava solo quel True. Nel secondo caso mostrava
+    «installazione in corso, l'app si riavvia da sola» e lasciava il velo sullo schermo mentre non
+    era partito nulla. Un esito vero detto in modo ambiguo e' peggio di un errore: l'errore si
+    vede. Qui si misura che i due casi ora si distinguono.
+    """
+    bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
+    monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.37")
+    monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
+
+    def _mai(*a, **k):
+        raise AssertionError("non deve scaricare niente: il programma e' gia' aggiornato")
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", _mai)
+
+    d = bridge.aggiorna_programma_dettaglio()
+    assert d["ok"] is True, "non e' un errore: non c'era davvero niente da fare"
+    assert d["avviato"] is False, "ma nessuna installazione e' partita, e l'app deve saperlo"
+    assert "niente da installare" in d["messaggio"]
+
+
+def test_quando_parte_davvero_lo_dice(monkeypatch):
+    """PROVA DI CONTROLLO. Senza questa, bastava rispondere `avviato: False` sempre per far
+    passare il test qui sopra — e l'app non direbbe mai piu' «installazione in corso» nemmeno
+    quando l'installazione parte per davvero."""
+    bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
+    monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.37")
+    monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 81))
+    pacchetto = b"MZ" + b"\x00" * (bridge._PACCHETTO_MINIMO_BYTE + 10)
+    # _finta_risposta restituisce GIA' la funzione da mettere al posto di urlopen.
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", _finta_risposta(pacchetto))
+    avviati = []
+    monkeypatch.setattr(bridge.subprocess, "Popen",
+                        lambda comando, **k: avviati.append(comando) or object())
+
+    d = bridge.aggiorna_programma_dettaglio()
+    assert d["ok"] is True
+    assert d["avviato"] is True, "il pacchetto e' stato avviato: va detto"
+    assert len(avviati) == 1, "l'installer deve essere stato lanciato una volta"
+
+
+def test_la_vecchia_forma_a_due_valori_continua_a_funzionare(monkeypatch):
+    """PROVA DI CONTROLLO: otto punti del progetto chiamano ancora `aggiorna_programma()` nella
+    forma (esito, messaggio). Cambiare quella firma li romperebbe tutti in silenzio."""
+    bridge = _bridge()
+    _finge_windows(monkeypatch, bridge)
+    monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.0.37")
+    monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
+    ok, msg = bridge.aggiorna_programma()
+    assert ok is True and isinstance(msg, str) and "niente da installare" in msg

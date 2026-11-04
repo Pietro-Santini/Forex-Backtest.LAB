@@ -813,6 +813,28 @@ select.tgCfgIn{cursor:pointer;padding-right:4px}
    condizione spesso non si vede proprio. Questi cartellini sì. Stanno in basso a destra, sopra
    il grafico ma sotto i popup dell'app (z-index 9996 contro i 9997+ del banner e delle modali),
    e spariscono da soli. */
+/* ==== FINESTRA DUPLICATA: SOLO IL GRAFICO (04/11/2026) ====
+   RICHIESTO: «deve aprirsi a tutto schermo soltanto il grafico. Stop. La pagina madre e' quella
+   che ha tutto il resto». La classe la mette lo script quando la finestra e' una duplicata
+   (PIP_SLOT>0). I pannelli NON si tolgono dal documento, si nascondono: il motore dell'app
+   continua a leggerli e scriverli, ed e' cosi' che una posizione aperta qui arriva lo stesso
+   alla pagina madre e a tutte le altre finestre. */
+/* PERCHE' `!important`, e non e' pigrizia: initExtraPipWindow() nasconde i pannelli con uno
+   stile INLINE, e un `elemento.style.display='block'` scritto piu' tardi da qualunque parte
+   dell'app CANCELLA quella dichiarazione inline. MISURATO: in una finestra duplicata basta che
+   il codice riaccenda un pannello (succede quando arrivano le posizioni dalla pagina madre, o
+   un ordine pendente) e la tabella ricompare a schermo - e' esattamente quello che vedeva il
+   proprietario. Una regola di foglio di stile con !important invece batte lo stile inline senza
+   !important: da qui i pannelli non tornano piu'. */
+body.fblSoloGrafico > header{display:none!important}
+body.fblSoloGrafico > main > *{display:none!important}
+body.fblSoloGrafico > main{padding:0;margin:0;max-width:none;display:block!important;height:100vh}
+body.fblSoloGrafico > main > .fblPannelloGrafico{
+  display:block!important;margin:0;border:0;border-radius:0;height:100vh;box-sizing:border-box}
+body.fblSoloGrafico > main > .fblPannelloGrafico .chartWrap{height:100vh}
+/* Le finestre modali restano usabili: vivono fuori da <main>, quindi la regola qui sopra non le
+   tocca — si aprono sopra il grafico come nella pagina madre. */
+
 /* Testo che si vede solo su schermi larghi: sul telefono resta la sola icona del pulsante, e la
    riga sopra il grafico non sfonda (vedi #nuovaFinestraBtn e grafico_pulsanti_telefono.test.mjs). */
 /* SUL TELEFONO IL PULSANTE NON C'E' PROPRIO. La riga dei comandi sopra il grafico e' gia' al
@@ -1256,8 +1278,57 @@ window.fblAvviaSoloBacktest=function(){
     // classico più sotto lo usa per sapere quando è sicuro leggere fxbtCloud.uid all'avvio,
     // dato che il login è asincrono e il resto della pagina parte comunque subito.
     ready: new Promise(res=>{ resolveCloudReady=res; }),
+
+    // ============ IL TETTO GIORNALIERO: LA BOLLETTA NON PUO' PIU' SCAPPARE ============
+    //
+    // SEGNALATO DAL PROPRIETARIO (4 novembre 2026): «ieri su Firestore siamo arrivati a 250.000
+    // letture e 122.000 scritture. Io qui inizio a pagare veramente tanto. O sistemiamo qualcosa
+    // che non mi faccia pagare, o cambiamo sistema.»
+    //
+    // DA DOVE VENGONO QUEI NUMERI, fatto il conto: il giro dei disegni condivisi scriveva fino a
+    // una volta ogni 3 secondi (28.000 al giorno per dispositivo), e ogni scrittura fa scattare
+    // un ascolto su OGNI altro dispositivo, cioe' una lettura a testa. Con PC, tablet e telefono
+    // accesi: ~85.000 scritture e ~250.000 letture. Combacia.
+    //
+    // La cura del rubinetto (le scritture si raggruppano) e' nella v2.0.80 e da sola porta quel
+    // giro da ~28.000 a ~4.300 al giorno. Ma una cura che dipende dal fatto che non ci siano
+    // ALTRI rubinetti non e' una garanzia: qui c'e' il tetto, che vale comunque.
+    //
+    // COME FUNZIONA: si contano le scritture del giorno (per documento, cosi' si vede anche CHI
+    // consuma) e oltre il tetto non si scrive piu' sul cloud. Non si perde niente: i dati
+    // restano salvati in locale come sempre, e il giorno dopo il conto riparte. Meglio una
+    // sincronizzazione che si ferma di una bolletta che non si ferma.
+    _budget:{ giorno:null, conta:{}, totale:0, avvisato:false },
+    _budgetTetto(){
+      try{ const v=Number(localStorage.getItem('fbl_cloud_tetto_giorno')); if(Number.isFinite(v)&&v>0)return v; }catch(e){}
+      return 3000;   // ben sotto le 20.000 gratuite, anche con tre dispositivi accesi
+    },
+    _budgetOggi(){
+      const g=new Date().toISOString().slice(0,10);
+      if(this._budget.giorno!==g){ this._budget={giorno:g,conta:{},totale:0,avvisato:false}; }
+      return this._budget;
+    },
+    // Vero se si puo' scrivere. Da chiamare in cima a OGNI metodo che scrive sul cloud.
+    _puoScrivere(nome){
+      const b=this._budgetOggi();
+      if(b.totale>=this._budgetTetto()){
+        if(!b.avvisato){
+          b.avvisato=true;
+          try{ console.warn('[Cloud] tetto giornaliero raggiunto ('+b.totale+'): da qui in poi si salva solo in locale. Dettaglio:',b.conta); }catch(e){}
+          try{ const s=document.getElementById('status'); if(s)s.textContent='☁️ Tetto giornaliero del cloud raggiunto: da qui si salva solo su questo dispositivo. Domani riparte da solo.'; }catch(e){}
+        }
+        return false;
+      }
+      b.totale++; b.conta[nome]=(b.conta[nome]||0)+1;
+      return true;
+    },
+    // Quanto si e' consumato oggi, per documento: serve a trovare il prossimo rubinetto senza
+    // doverlo dedurre dal codice.
+    budgetStato(){ const b=this._budgetOggi(); return {totale:b.totale,tetto:this._budgetTetto(),dettaglio:Object.assign({},b.conta)}; },
+
     async save(state){
       if(!this.uid) return false;
+      if(!this._puoScrivere('session')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","session"), { state, updatedAt: serverTimestamp() });
         return true;
@@ -1312,6 +1383,7 @@ window.fblAvviaSoloBacktest=function(){
     // (vedi initSession), quindi il passaggio non perde niente.
     async footprintSalva(celle){
       if(!this.uid) return false;
+      if(!this._puoScrivere('footprint')) return false;
       try{
         const testo = JSON.stringify(celle || {});
         if(!testo || testo === '{}') return false;
@@ -1341,6 +1413,7 @@ window.fblAvviaSoloBacktest=function(){
     // si mandano solo le voci cambiate, le altre restano come sono.
     async graficoSalva(voci){
       if(!this.uid) return false;
+      if(!this._puoScrivere('grafico')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","grafico"), { v:1, voci, at: serverTimestamp() }, { merge:true });
         // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026): stessa ragione degli altri due
@@ -1376,6 +1449,7 @@ window.fblAvviaSoloBacktest=function(){
     // da digitare a mano, e soprattutto niente più valori da visualizzare in giro.
     async collegamentoSalva(payload){
       if(!this.uid) return false;
+      if(!this._puoScrivere('collegamento')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","collegamento"), payload, {merge:true});
         // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026). Senza questo, commutare la LETTURA al
@@ -1403,6 +1477,7 @@ window.fblAvviaSoloBacktest=function(){
     // collegamento del server, un documento a parte cosi' il bundle di sessione resta pulito.
     async preferenzeSalva(payload){
       if(!this.uid) return false;
+      if(!this._puoScrivere('preferenze')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","preferenze"), payload, {merge:true});
         // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026): stessa ragione del collegamento -
@@ -1430,6 +1505,7 @@ window.fblAvviaSoloBacktest=function(){
     // scrittura riuscita (lo fa il chiamante, qui si risponde vero/falso).
     async tradesAggiungi(nuove){
       if(!this.uid) return false;
+      if(!this._puoScrivere('trades')) return false;
       if(!Array.isArray(nuove)||!nuove.length) return true; // niente di nuovo: non e' un fallimento
       try{
         // Il documento trades: lista = tutte le operazioni. arrayUnion aggiunge
@@ -4183,7 +4259,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      NUDO dentro una riga flex: 247 px occupati da una frase invisibile, che spingevano tre
      pulsanti fuori dallo schermo del telefono. -->
 <button type="button" id="nuovaFinestraBtn" class="chartCornerBtn"
-        title="Duplica la finestra: apre una pagina indipendente con il solo grafico (asset, timeframe e indicatori suoi), da spostare su un altro schermo. Ogni clic ne apre una nuova; si chiude con la X della finestra."
+        title="Duplica la finestra: apre a tutto schermo SOLO il grafico, da spostare su un altro monitor. Le posizioni e gli ordini sono in comune con la pagina principale: quello che apri qui finisce li'. Disegni e indicatori invece restano di questa finestra e non passano alle altre. Ogni clic ne apre una nuova; si chiude con la X della finestra."
         style="width:auto;padding:0 8px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px">
   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
   <!-- LA SCRITTA SPARISCE SUL TELEFONO, l'icona no. Il proprietario ha chiesto che ci sia
@@ -4510,7 +4586,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-top:10px">
        <label class="tgCfgCampo" title="Spuntato: su OGNI posizione aperta — a mano o da una sala segnali — quando il prezzo si è allontanato dall'ingresso dei pip indicati, lo stop va al punto di pareggio (profitto netto 0,00, costi compresi). Succede una volta sola per posizione, e uno stop già più avanti non torna mai indietro.">
          <input type="checkbox" id="tgBePipTutteAttivo" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer">
-         Su <b>tutte</b> le posizioni, break-even a
+         Quando si va a break-even, porta lo stop a
          <input id="tgBePipTutte" class="tgCfgIn tgCfgNum" type="number" min="0" step="0.5" value="0" style="width:70px"> pip di guadagno</label>
      </div>
      <div class="tgCfgNota" id="tgBePipTutteNota" style="margin-top:6px"></div>
@@ -7698,7 +7774,13 @@ function graficoApplica(k,valore){
 //
 // PERCHE' 20 SECONDI e non di piu': questo documento porta i disegni condivisi fra PC, telefono
 // e tablet. Venti secondi di ritardo su un disegno spostato non si notano; un minuto si'.
-const GRAFICO_INVIO_MIN_MS=20000;   // distanza minima fra due scritture del documento disegni
+// 60 SECONDI, non 20 (rialzato il 4 novembre 2026). Con venti secondi il tetto teorico era di
+// 3 scritture al minuto PER DISPOSITIVO: con PC, tablet e telefono accesi fanno 9 al minuto, e
+// ognuna fa scattare un ascolto sugli altri due, cioe' 18 letture. Il proprietario e' arrivato
+// a 250.000 letture in un giorno. A sessanta secondi restano ~1.400 scritture al giorno per
+// dispositivo nel caso pessimo, e un disegno spostato arriva sugli altri schermi entro un
+// minuto - che per un disegno e' nulla.
+const GRAFICO_INVIO_MIN_MS=60000;   // distanza minima fra due scritture del documento disegni
 const GRAFICO_INVIO_DEBOUNCE_MS=1500; // attesa dopo l'ultima modifica, come prima
 let graficoUltimoInvioAt=0;
 // Quante volte ogni chiave ha fatto partire una scrittura: serve a vedere CHI consuma la quota
@@ -8463,7 +8545,22 @@ function anotherWindowOwnsAssetEvaluation(asset){
  }
  return false;
 }
-// SINCRONIZZAZIONE DISEGNI TRA FINESTRE (RICHIESTO ESPLICITAMENTE): quando lo STESSO asset (e la
+// DISEGNI: OGNI FINESTRA I SUOI. SPENTA LA SINCRONIZZAZIONE TRA FINESTRE (4 novembre 2026).
+//
+// Il proprietario ha cambiato idea, e la parola nuova vince su quella vecchia: «in modalita'
+// duplica schermo... le operazioni che apro sulle pagine duplicate andranno a finire nella
+// pagina madre. Per quanto riguarda i disegni, invece no: quello rimane indipendente tra pagina
+// e pagina, e ovviamente va scritto come informativo. E anche per esempio gli indicatori: se
+// inserisco due indicatori sulla pagina duplicata non devono andare a finire su tutte le altre
+// pagine.» Cosa passa e cosa no e' scritto nel title del pulsante «Duplica finestra».
+//
+// Restano in comune SOLO le posizioni, gli ordini pendenti e il conto (trading_sync): e' quello
+// che il proprietario ha chiesto di tenere condiviso. I disegni, da qui, non viaggiano piu'.
+// Il messaggio 'drawings_sync' non viene piu' ne' mandato ne' applicato; le due funzioni sotto
+// restano come porta chiusa, cosi' i punti che le chiamano (il giro da 1500ms e il cambio
+// asset) non vanno toccati e non c'e' modo di riaccendere la cosa per sbaglio.
+//
+// COM'ERA, e perche' c'era: quando lo STESSO asset (e la
 // STESSA modalità Storico/Live/Prop Firm — i disegni sono salvati per asset+modalità, vedi
 // assetDrawings più sopra nel file) è mostrato in due o più finestre insieme, tutto ciò che vive
 // nell'array `drawings` — trendline, linee estese, rettangoli, Fibonacci, VWAP, Profilo
@@ -8480,12 +8577,10 @@ function broadcastDrawingsStateNow(){
  // trasmettere in quell'istante taggherebbe i disegni del vecchio asset con l'ID del nuovo anche
  // verso le ALTRE finestre aperte (che li accetterebbero come buoni, vedi msg.asset===currentAssetKey
  // nel gestore drawings_sync), propagando la stessa corruzione oltre questa finestra.
- if(!tradingChannel||applyingRemoteDrawingsSync||!currentAssetKey||assetSwitchInProgress)return;
- try{ tradingChannel.postMessage({type:'drawings_sync',slot:PIP_SLOT,asset:currentAssetKey,mode:currentMode(),drawings}); }catch(e){}
+ return; // disegni indipendenti per finestra: vedi la nota qui sopra (4 novembre 2026)
 }
 function requestDrawingsSyncNow(){
- if(!tradingChannel||!currentAssetKey)return;
- try{ tradingChannel.postMessage({type:'drawings_sync_request',slot:PIP_SLOT,asset:currentAssetKey,mode:currentMode()}); }catch(e){}
+ return; // non si chiedono piu' i disegni alle altre finestre: ognuna ha i suoi
 }
 if(tradingChannel){
  tradingChannel.onmessage=(ev)=>{
@@ -8520,24 +8615,11 @@ if(tradingChannel){
      if(msg.storico && !liveModeActive && msg.asset){
        applyRemoteAssetSwitch(msg.asset,msg.masterTime);
      }
-   }else if(msg.type==='drawings_sync'){
-     // Applicato SOLO se questa finestra sta mostrando ORA lo stesso identico asset+modalità del
-     // mittente — vedi il commento completo su SINCRONIZZAZIONE DISEGNI più sopra.
-     if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey&&msg.mode===currentMode()&&Array.isArray(msg.drawings)){
-       applyingRemoteDrawingsSync=true;
-       try{
-         drawings=msg.drawings;
-         selectedDrawing=null; // un riferimento selezionato potrebbe puntare a un oggetto ormai sostituito dalla sincronizzazione
-         mirrorCurrentDrawingsIntoAssetDrawings();
-         // Aggiorna subito la "firma" che armDrawingsPersistence() confronta ogni 1500ms: senza
-         // questo, al giro successivo vedrebbe i disegni appena ricevuti come "cambiati" (diversi
-         // dall'ultima firma nota) e li ritrasmetterebbe subito indietro inutilmente.
-         drawingsBackupSig=currentMode()+'|'+(currentAssetKey||'')+'|'+JSON.stringify(drawings);
-         draw();
-       }finally{ applyingRemoteDrawingsSync=false; }
-     }
-   }else if(msg.type==='drawings_sync_request'){
-     if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey&&msg.mode===currentMode())broadcastDrawingsStateNow();
+   }else if(msg.type==='drawings_sync'||msg.type==='drawings_sync_request'){
+     // Ignorati per scelta: i disegni restano di ogni singola finestra (vedi la nota DISEGNI:
+     // OGNI FINESTRA I SUOI piu' sopra). Il ramo c'e' comunque, perche' una finestra rimasta
+     // aperta da prima dell'aggiornamento potrebbe ancora mandarli: arrivano e non fanno nulla.
+     return;
    }else if(msg.type==='random_jump_sync'){
      // Vedi il commento completo su broadcastRandomJumpSync()/applyRemoteRandomJump() più sopra
      // nel file: solo in Storico da entrambe le parti, qualunque sia la finestra mittente.
@@ -18127,13 +18209,41 @@ function draw(){
        // periodo, come il "Width 70%" di default del Volume Profile di TradingView; 100% = 14%, ecc.
        // TETTI: zoom in -> la barra cresce fino a VP_MAX_BAR_PX e poi resta ferma; zoom out -> si
        // accorcia fino a VP_MIN_BAR_PX e poi resta ferma (lunghezze in pixel, indipendenti dallo zoom).
-       const periodRightX=shapesGeo.xFromTime(fullTs[lastIdx]);
-       const periodPx=Math.max(0,periodRightX-leftX);
-       const VP_WIDTH_FRACTION_PER_PCT=0.14/100; // 500% -> 0.70 della larghezza del periodo
+       // ====== L'ISTOGRAMMA NON SI ACCORCIA PIU' AL CAMBIO DI TIMEFRAME ======
+       //
+       // SEGNALATO DAL PROPRIETARIO (3-4 novembre 2026): «se stabilisco 300 barre con un time
+       // frame a un minuto, passando a 5 minuti non possono dimezzare, e a 15 minuti dimezzarsi
+       // ancora di piu'. Devono rimanere sempre uguali... E' come funziona su TradingView: se
+       // cambi il time frame, il numero delle barre sull'istogramma non cambia.» E poi, alla
+       // domanda su cosa cambiasse: «la fascia di prezzo rimane corretta, e lo fanno TUTTI i
+       // profili: disegno a mano, giornaliero e per sessione».
+       //
+       // CAUSA MISURATA, e non e' il numero delle fasce. Le fasce CHIESTE non sono mai dipese dal
+       // timeframe: con lo stesso storico e 300 fasce, computeVolumeProfile ne restituisce 300 a
+       // 1, 5 e 15 minuti. A cambiare era la SCALA ORIZZONTALE. La lunghezza massima della barra
+       // era una frazione della larghezza IN PIXEL del periodo coperto dal profilo, e un periodo
+       // fisso nel TEMPO occupa molti meno pixel quando ogni candela vale 15 minuti invece di 1.
+       // Misurato su 300 minuti di mercato, a parita' di candele a vista:
+       //     1 minuto  -> barra massima 684 px
+       //     5 minuti  -> 599 px
+       //    15 minuti  -> 200 px
+       // Tutte le barre si accorciano dello stesso fattore (3,4x da 1m a 15m): quelle piccole
+       // scendono sotto il pixel e spariscono, e l'istogramma SEMBRA dimezzato. Spiega anche
+       // perche' la fascia di prezzo restava corretta (l'effetto e' orizzontale) e perche'
+       // capitava su tutti e tre i profili: il disegnatore e' questo, uno solo.
+       //
+       // DECISIONE ROVESCIATA, e va detto. Il commento qui sopra diceva «RICHIESTO
+       // ESPLICITAMENTE (stile TradingView): la lunghezza e' AGGANCIATA ALL'ASSE DEL TEMPO».
+       // L'intenzione era giusta — somigliare a TradingView — ma l'aggancio era sbagliato:
+       // TradingView misura la larghezza del profilo sul RIQUADRO, non sul periodo. Da li' il
+       // «Width 70%» che resta identico a ogni timeframe e a ogni zoom. Qui si fa lo stesso, e
+       // il 500% continua a voler dire 70% (ora del riquadro invece che del periodo), quindi chi
+       // non tocca niente ritrova una larghezza simile a quella che aveva.
+       const VP_WIDTH_FRACTION_PER_PCT=0.14/100; // 500% -> 0.70 della larghezza del riquadro
        const VP_MAX_BAR_PX=cw*0.6;
        const VP_MIN_BAR_PX=Math.min(VP_MAX_BAR_PX,40);
-       const timeAnchoredPx=periodPx*(d.barSizePct||500)*VP_WIDTH_FRACTION_PER_PCT;
-       const maxBarPx=Math.max(VP_MIN_BAR_PX,Math.min(VP_MAX_BAR_PX,timeAnchoredPx));
+       const larghezzaRiquadroPx=cw*(d.barSizePct||500)*VP_WIDTH_FRACTION_PER_PCT;
+       const maxBarPx=Math.max(VP_MIN_BAR_PX,Math.min(VP_MAX_BAR_PX,larghezzaRiquadroPx));
        const upCol=d.upColor||_cc.up, downCol=d.downColor||_cc.down;
        // Value Area calcolata QUI, PRIMA delle barre (non solo quando le righe POC/VAH/VAL sono
        // abilitate): serve anche per attenuare le barre fuori dalla Value Area qualche riga sotto,
@@ -24314,6 +24424,25 @@ function applyBreakevenToPosition(pos,t){
  // mercato: e' successo il 20 ottobre a due SELL EURCHF con lo stop a un decimo di pip
  // dall'entrata, portate li' proprio dal pareggio. Non si sposta e si dice perche': cosi' lo stop
  // di prima - che e' piu' lontano - resta a fare il suo lavoro.
+ // UNO STOP OLTRE IL PREZZO DI ADESSO NON SI PIAZZA MAI, e da quando il pareggio puo' essere
+ // SPOSTATO in guadagno (vedi fblPareggioSpostato) questa non e' piu' un'ipotesi di scuola: con
+ // 10 pip impostati e il prezzo avanti di 3, il pareggio spostato cade oltre il prezzo - e uno
+ // stop oltre il prezzo e' una chiusura immediata a mercato travestita da protezione. La
+ // guardia sotto (fblStopTroppoVicino) la prenderebbe solo quando lo spread normale dell'asset
+ // e' noto; qui si dice no sempre, e si spiega che si riprovera' da soli.
+ const _oraVero=fblPrezzoVeroPosizione(pos);
+ if(Number.isFinite(_oraVero)&&(pos.side==='BUY'?(stopSl>=_oraVero):(stopSl<=_oraVero))){
+  const _pipOff=fblBeOffsetPip();
+  pos.bePareggioRifiutatoIl=Date.now();
+  const _dove=fmtPrice(stopSl), _ora2=fmtPrice(_oraVero);
+  $('status').textContent=(_pipOff>0)
+   ? ("⚖️ Break-even NON spostato: lo stop andrebbe a "+_dove+", cioe "+_pipOff
+      +" pip di guadagno come impostato, ma il prezzo ("+_ora2+") non ci e ancora arrivato: uno stop"
+      +" oltre il prezzo chiuderebbe subito la posizione. Riprova quando il prezzo ha superato quel livello.")
+   : ("⚖️ Break-even NON spostato: il pareggio ("+_dove+") e oltre il prezzo di adesso ("
+      +_ora2+"): uno stop li chiuderebbe subito la posizione.");
+  return false;
+ }
  const spazio=fblStopTroppoVicino(pos,stopSl,fblPrezzoVeroPosizione(pos),scelta.margine>0?'normale':'forbice');
  if(spazio.vicino){
   const pip=(()=>{ try{ return pipSizeForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ return 0; } })();
@@ -26600,6 +26729,28 @@ if(PIP_SLOT>0){
 if($('nuovaFinestraBtn'))$('nuovaFinestraBtn').style.display='none';
  if($('floatChartBtn'))$('floatChartBtn').style.display='none';
  if($('floatReturnBtn'))$('floatReturnBtn').style.display='none';
+ // ====== UNA FINESTRA DUPLICATA MOSTRA SOLO IL GRAFICO ======
+ //
+ // RICHIESTA DEL PROPRIETARIO (4 novembre 2026): «in modalita' duplica schermo passi anche le
+ // tabelle delle posizioni, gli ordini pendenti eccetera. Invece deve aprirsi a tutto schermo
+ // soltanto il grafico. Stop. La pagina madre e' quella che ha tutto il resto: configurazioni,
+ // tabelle, trade journal. Le altre pagine duplicano soltanto il grafico.»
+ //
+ // Fin qui la finestra caricava l'app INTERA (e' una istanza completa, con motore suo): comoda
+ // da costruire, ma a schermo ci finiva tutto. Qui si marca il pannello che contiene il grafico
+ // e si lascia a vista solo quello: il resto del <main> e l'intestazione spariscono via CSS
+ // (vedi body.fblSoloGrafico nel foglio di stile). Niente viene RIMOSSO dal documento: i
+ // pannelli restano nel DOM, perche' il motore dell'app continua a leggerli e scriverli — e'
+ // cosi' che le posizioni aperte da qui arrivano lo stesso alla pagina madre.
+ try{
+   const _cw=document.querySelector('.chartWrap');
+   const _pan=_cw&&_cw.closest('.panel');
+   if(_pan)_pan.classList.add('fblPannelloGrafico');
+   document.body.classList.add('fblSoloGrafico');
+   // Il grafico si ridisegna sulla misura nuova: senza, resta della dimensione che aveva
+   // quando la pagina era ancora intera.
+   setTimeout(()=>{ try{ window.dispatchEvent(new Event('resize')); draw(); }catch(e){} },60);
+ }catch(e){}
 }
 else{
 // Pulsante unico "Nuova finestra": ogni clic apre la prossima finestra libera fra 2,3,4.
@@ -26867,7 +27018,9 @@ if(timeAxisZoneEl){
  }
  timeAxisZoneEl.addEventListener('pointerup',e=>{
   const t=newsZonaTocco; newsZonaTocco=null;
-  if(t&&t.id===e.pointerId&&Math.hypot(e.clientX-t.x,e.clientY-t.y)<=10&&performance.now()-t.t<=700){
+  // Stessa tolleranza larga del pallino sul grafico (vedi newsTocco): il dito sbanda e prende
+  // la mira con calma.
+  if(t&&t.id===e.pointerId&&Math.hypot(e.clientX-t.x,e.clientY-t.y)<=20&&performance.now()-t.t<=1500){
    newsPopupApertoAt=Date.now();
    if(t.eventi.length===1)openNewsEventModal(t.eventi[0]); else openNewsClusterModal(t.eventi);
   }
@@ -26982,8 +27135,8 @@ chartEl.addEventListener('dragstart',e=>e.preventDefault());
 // si prendeva il gesto: restava solo lo spostamento orizzontale. La penna si avvicina allo schermo
 // PRIMA di toccarlo (passa sopra senza toccare): in quel momento il grafico smette di cedere lo
 // scorrimento; appena la penna se ne va torna come prima per il dito.
-chartEl.addEventListener('pointerover',e=>{ if(e.pointerType==='pen')chartEl.style.touchAction='none'; });
-chartEl.addEventListener('pointerleave',e=>{ if(e.pointerType==='pen'&&!ditaSulGrafico.size)chartEl.style.touchAction='pan-y'; });
+chartEl.addEventListener('pointerover',e=>{ if(e.pointerType==='pen'){ fblPennaSopra=true; chartEl.style.touchAction='none'; } });
+chartEl.addEventListener('pointerleave',e=>{ if(e.pointerType==='pen'){ fblPennaSopra=false; if(!ditaSulGrafico.size)chartEl.style.touchAction='pan-y'; } });
 chartEl.addEventListener('pointerdown',e=>{ if(e.pointerType==='pen')chartEl.style.touchAction='none'; },true);
 // PAGINA NORMALE = né schermo intero né finestra staccata/PIP. Lì la regola del proprietario
 // (27 ottobre 2026) è secca: «con un dito scorriamo la pagina, con due dita scorriamo il
@@ -26996,13 +27149,22 @@ chartEl.addEventListener('touchstart',e=>{
  if(!t)return;
  // Penna (su Android arriva anche come tocco "stylus"): mai scorrimento della pagina.
  if(t.touchType==='stylus'){ e.preventDefault(); return; }
- if(tradeLevelHit(t.clientX,t.clientY)){ if(!_paginaNormaleGrafico()){e.preventDefault();return;} }
+ // UN DITO SOPRA UNA LINEA TP/SL SE LA PRENDE, ANCHE SULLA PAGINA NORMALE (4 novembre 2026).
+ // SEGNALATO: «non funziona nemmeno selezionare una linea TP/SL e poi trascinarla: al momento
+ // che comincio a trascinarla si blocca». MISURATO: qui, sulla pagina normale, il tocco NON
+ // veniva bloccato, quindi il browser si prendeva il gesto per scorrere la pagina e il
+ // trascinamento moriva sul nascere (in schermo intero funzionava, perche' li' il ramo
+ // bloccava). La regola «un dito scorre la pagina» vale sul grafico VUOTO: una linea e' un
+ // bersaglio preciso, e chi ce la mette sopra vuole spostare quella.
+ if(tradeLevelHit(t.clientX,t.clientY)){ e.preventDefault(); return; }
  if(drawTool==='cursor'){
    // Stiamo per trascinare l'estremità (o il corpo) di un disegno esistente: blocchiamo lo
    // scroll della pagina FIN DA SUBITO, allo stesso modo di come già avviene per SL/TP/ENTRY
    // sopra — altrimenti col dito si rischia di far scorrere la pagina invece di spostare il
    // disegno (il pointerdown/preventDefault più sotto a volte arriva troppo tardi).
-   if(hitTestDrawings(t.clientX,t.clientY)&&!_paginaNormaleGrafico())e.preventDefault();
+   // Stesso discorso della linea TP/SL qui sopra: un disegno e' un bersaglio preciso, e il dito
+   // che ci finisce sopra vuole spostare quello, non scorrere la pagina.
+   if(hitTestDrawings(t.clientX,t.clientY))e.preventDefault();
  }else{
    // Uno strumento di disegno è attivo: il primo tocco sta per fissare il primo punto e
    // avviare subito il trascinamento del secondo (tocca-trascina-rilascia): blocchiamo lo
@@ -27010,6 +27172,63 @@ chartEl.addEventListener('touchstart',e=>{
    e.preventDefault();
  }
 },{passive:false});
+// ====== RETE DI SICUREZZA: IL DITO DEVE SEMPRE POTER SCORRERE LA PAGINA ======
+//
+// SEGNALATO (4 novembre 2026): «a volte avviene un bug che sui dispositivi mobili, con il dito,
+// quando voglio trascinare la pagina e sono sopra il grafico, non me lo fa trascinare». Il «a
+// volte» e' la chiave: non e' una regola sbagliata, e' uno stato che resta appeso.
+//
+// CAUSA MISURATA. Il grafico blocca lo scorrimento della pagina (touch-action:none) per la
+// durata di un gesto suo - trascinare la scala prezzi, una linea, un disegno, il mirino della
+// pressione lunga, il gesto a due dita - e lo sblocca nel ramo del rilascio corrispondente. Ci
+// sono oltre venti punti che bloccano, ognuno col suo sblocco. Se UN SOLO rilascio si perde (e
+// sul telefono si perde: il dito esce dall'elemento, il browser annulla il puntatore, arriva un
+// pointercancel con un altro id) il blocco resta per sempre. Misurato in banco: dopo un mirino
+// da pressione lunga con il rilascio perso, touch-action restava 'none' anche al tocco NUOVO -
+// e da quel momento la pagina non si scorreva piu' sopra il grafico, fino al ricaricamento.
+//
+// LA RETE. Invece di aggiungere un ventunesimo sblocco, qui si guarda il fatto vero: quando
+// NESSUN dito e' piu' appoggiato e NESSUN gesto del grafico e' in corso, lo scorrimento deve
+// tornare libero. L'ascolto e' su document, non su chartEl, proprio perche' il caso che rompe
+// tutto e' il dito che si alza FUORI dal grafico.
+let fblPennaSopra=false;
+function fblGestoGraficoInCorso(){
+ try{
+  return !!(placingTradeLevel||placingTradeLevelDrag||tradeLevelDrag||zoneWidthDrag||shapeDrag
+   ||touchDrawDrag||panDrag||priceAxisDrag||twoFingerPan||fblMirinoTocco
+   ||(typeof timeAxisZoneDrag!=='undefined'&&timeAxisZoneDrag)
+   ||(typeof krakenLivelloDrag!=='undefined'&&krakenLivelloDrag));
+ }catch(e){ return false; }
+}
+function fblSbloccaScorrimentoSeLibero(){
+ if(fblPennaSopra)return;            // la penna vuole il grafico: vedi pointerover piu' sopra
+ if(fblGestoGraficoInCorso())return; // un gesto vero e' in corso: il blocco serve ancora
+ try{ if(typeof touchPoints!=='undefined'&&touchPoints.size)touchPoints.clear(); }catch(e){}
+ try{ if(typeof ditaSulGrafico!=='undefined'&&ditaSulGrafico.size)ditaSulGrafico.clear(); }catch(e){}
+ try{ if(typeof fotoPrimoDito!=='undefined')fotoPrimoDito=null; }catch(e){}
+ if(chartEl.style.touchAction==='none'){ try{ setChartTouchAction(false); }catch(e){} }
+}
+// SENZA DITA SULLO SCHERMO, UNO STATO CHE VIVE SOLO PER UN DITO NON PUO' ESSERE VIVO.
+// Il mirino della pressione lunga e il gesto a due dita esistono solo mentre un dito e' giu'
+// e - diversamente dai trascinamenti, che usano setPointerCapture e quindi il rilascio lo
+// ricevono sempre - non catturano il puntatore: sono proprio loro i due stati che restano
+// appesi quando il rilascio si perde. Qui, a schermo libero, si smontano prima di decidere se
+// sbloccare lo scorrimento. I trascinamenti non si toccano: quelli possono essere del mouse.
+function fblSmontaStatiDaDito(){
+ try{ if(fblMirinoTocco){ fblMirinoTocco=null; crosshair=null; try{ draw(); }catch(e){} } }catch(e){}
+ try{ if(fblTocco&&fblTocco.timer)clearTimeout(fblTocco.timer); fblTocco=null; }catch(e){}
+ try{ if(twoFingerPan)twoFingerPan=false; }catch(e){}
+}
+['touchend','touchcancel'].forEach(tipo=>document.addEventListener(tipo,e=>{
+ if(e.touches&&e.touches.length)return;   // ci sono ancora dita sullo schermo
+ fblSmontaStatiDaDito();
+ fblSbloccaScorrimentoSeLibero();
+},{passive:true,capture:true}));
+// E anche all'inizio di un tocco nuovo con un dito solo: se qualcosa era rimasto appeso dal
+// gesto precedente, si rimedia subito invece di portarselo dietro per tutta la sessione.
+chartEl.addEventListener('touchstart',e=>{
+ if(e.touches&&e.touches.length===1)fblSbloccaScorrimentoSeLibero();
+},{passive:true,capture:true});
 chartEl.addEventListener('touchmove',e=>{
  // panDrag è acceso solo in schermo intero/finestra staccata (lì un dito sposta il grafico):
  // anche il touchmove va bloccato, altrimenti il browser potrebbe far scorrere la pagina
@@ -27783,7 +28002,29 @@ chartEl.addEventListener('pointerdown',e=>{
  if(e.pointerType!=='touch')return;
  if(fblTocco&&fblTocco.timer)clearTimeout(fblTocco.timer);
  const tocco={id:e.pointerId,x:e.clientX,y:e.clientY,t:Date.now(),mosso:false};
- tocco.timer=setTimeout(()=>{
+ // IL DITO SU UN PALLINO-NOTIZIA NON FA PARTIRE IL MIRINO (4 novembre 2026).
+ //
+ // SEGNALATO: «sui dispositivi mobili non mi fa premere quelle che sono le notizie sotto al
+ // grafico, sulla barra del tempo. Vado la' col dito e non mi fa premere la notizia ed
+ // espanderla, mentre invece sul tablet con la penna si'.»
+ //
+ // CAUSA MISURATA, ed e' uno scontro fra due funzioni, non un bersaglio troppo piccolo (il
+ // pallino ha raggio 13 px, largo abbastanza). Il pallino si apre al rilascio solo se il dito
+ // e' stato fermo e giu' per poco; il mirino della pressione lunga scatta a 450 ms. Un dito
+ // che prende la mira su un bersaglio piccolo sta giu' piu' di mezzo secondo: scattava il
+ // mirino, il rilascio veniva consumato da quello, e la notizia non si apriva mai. La penna
+ // invece tocca e stacca in un lampo - da qui la differenza fra tablet e telefono.
+ //
+ // Qui il mirino si fa da parte quando sotto c'e' una notizia: quello e' un bersaglio, non
+ // grafico vuoto. Il mirino resta identico in tutto il resto del grafico.
+ tocco.notizia=(function(){
+  try{
+   const r=chartEl.getBoundingClientRect();
+   const x=e.clientX-r.left, y=e.clientY-r.top;
+   return !!newsDotHitRects.find(d=>Math.hypot(x-d.x,y-d.y)<=Math.max(d.r,14));
+  }catch(err){ return false; }
+ })();
+ tocco.timer=tocco.notizia?null:setTimeout(()=>{
   if(fblTocco!==tocco||tocco.mosso)return;
   if(typeof touchPoints!=='undefined'&&touchPoints.size>1)return;      // due dita: e' pan/zoom
   fblMirinoTocco={id:tocco.id};
@@ -32180,7 +32421,7 @@ function tgStrategiaValuta(){
       // Il pareggio e' quello di OGNI posizione (il suo prezzo di esecuzione vero, piu' i costi),
       // non il prezzo a grafico di quando il segnale e' stato preparato: con quello lo stop finiva
       // SOTTO l'entrata reale (segnalato: entrate 4172.72/4172.60, stop a 4172.23).
-      const be=mt5PrezzoPareggio(pos);
+      const be=fblPareggioSpostato(pos);   // pareggio + i pip scelti (vedi fblBeOffsetPip)
       if(!tgStopMigliore(pos.side,pos.sl,be))return;
       // Dentro la forbice non si mette: qui nessuno sta guardando, e al prossimo giro si
       // riprova da solo quando il prezzo si e' allontanato.
@@ -32217,7 +32458,7 @@ function tgStrategiaValuta(){
      if(arrivato){
       let mosse=0;
       aperte.forEach(pos=>{
-       const be=mt5PrezzoPareggio(pos);
+       const be=fblPareggioSpostato(pos);  // pareggio + i pip scelti (vedi fblBeOffsetPip)
        if(!tgStopMigliore(pos.side,pos.sl,be))return;
        if(fblPareggioTroppoVicino(pos,be).vicino)return;
        const c=Number(r.close);
@@ -32252,7 +32493,7 @@ function tgStrategiaValuta(){
    let spostate=0;
    aperte.forEach(pos=>{
     // "A pareggio" vuol dire il pareggio di QUESTA posizione (vedi mt5PrezzoPareggio).
-    const nuovo=reg.dove==='entrata'?mt5PrezzoPareggio(pos):nuovoRegola;
+    const nuovo=reg.dove==='entrata'?fblPareggioSpostato(pos):nuovoRegola;
     if(!Number.isFinite(nuovo))return;
     // La posizione che ha QUESTO stesso target sta chiudendo proprio ora: toccarle lo stop
     // significherebbe farla risultare chiusa a un livello piu' basso del target che ha raggiunto.
@@ -32460,48 +32701,71 @@ function tgAutoVuoto(){
 // Il pareggio e' quello VERO della posizione (mt5PrezzoPareggio: prezzo di esecuzione piu' i
 // costi), non il prezzo di ingresso: a pareggio si esce con profitto netto 0,00, non con -5 € di
 // commissioni.
-function fblBePipTutteCfg(){
+// ============ BREAK-EVEN GENERALE: DOVE VA LO STOP, NON QUANDO ============
+//
+// CORREZIONE DEL PROPRIETARIO (4 novembre 2026), dopo una prima versione sbagliata: «ci siamo
+// fraintesi. Quando noi pigiamo il pulsante break-even, le posizioni dovranno spostarsi a 0 pip
+// di guadagno, quindi al punto di entrata; ma se l'utente scrive 10 pip, il break-even si sposta
+// a 10 pip. E funziona anche per le sale segnali: quando raggiunge un livello di TP e su quel TP
+// e' stato assegnato che sposta a break-even, segue la stessa regola - non va a 0 pip, va a 10
+// pip come l'utente ha stabilito, quindi sara' sempre in guadagno. E uguale dentro la
+// configurazione della strategia: il pareggio anticipato all'85% verso il primo target sposta le
+// posizioni non a livello 0 ma a 10 pip di guadagno. Perche' oggi funziona che quando arriva a 10
+// pip di guadagno sposta le posizioni a 0, punto d'inizio.»
+//
+// COM'ERA (la versione sbagliata, del 3 novembre): i pip erano la SOGLIA. Un giro periodico
+// guardava tutte le posizioni e, appena una aveva 10 pip di guadagno, le portava lo stop al
+// pareggio esatto - guadagno zero. Esattamente il contrario di quello che serve: quel giro
+// periodico qui non esiste piu'.
+//
+// COM'E' ADESSO: il numero in pip e' la DESTINAZIONE. Nessun grilletto nuovo - i grilletti
+// restano i tre che ci sono sempre stati, e tutti e tre passano da fblPareggioSpostato():
+//   1. il pulsante di pareggio premuto dall'utente (applyBreakevenToPosition e il pulsante BE
+//      della tabella MT5, entrambi via fblPareggioPerStop);
+//   2. una regola di sala che al tocco di un TP porta lo stop «all'entrata»;
+//   3. il pareggio anticipato della strategia (a meta' strada verso il primo target) e il
+//      break-even in pip della sala.
+//
+// LE PROTEZIONI DI SEMPRE RESTANO, e non sono un dettaglio: si tratta di stop su denaro vero.
+//   - mai all'indietro: tgStopMigliore rifiuta uno stop peggiore di quello che c'e' gia';
+//   - mai troppo vicino al prezzo (fblPareggioTroppoVicino/fblStopTroppoVicino), che il broker
+//     rifiuterebbe o che la forbice si prenderebbe al primo allargamento;
+//   - mai oltre il prezzo di adesso: uno stop oltre il prezzo e' una chiusura immediata
+//     travestita da protezione. CONSEGUENZA DA SAPERE: con 10 pip impostati, se il prezzo e'
+//     avanti solo di 3 pip lo spostamento viene rifiutato e si riprova - lo stop finisce a +10
+//     pip quando il prezzo e' andato oltre, non prima.
+function fblBeOffsetPip(){
+ // Quanti pip DI GUADAGNO deve avere lo stop quando si va a pareggio. 0 (o regola spenta) vuol
+ // dire il pareggio vero e proprio: guadagno zero, il punto di partenza.
  try{
   const c=tgAuto&&tgAuto.bePipTutte;
-  if(!c||!c.attivo)return null;
+  if(!c||!c.attivo)return 0;
   const pip=Number(c.pip);
-  return Number.isFinite(pip)&&pip>=0?{pip}:null;
- }catch(e){ return null; }
+  return Number.isFinite(pip)&&pip>0?pip:0;
+ }catch(e){ return 0; }
 }
-function fblBePipTutteGiro(){
- const cfg=fblBePipTutteCfg();
- if(!cfg)return 0;
- let mosse=0;
+// IL PREZZO DOVE VA LO STOP QUANDO SI VA A PAREGGIO, per QUESTA posizione: il pareggio vero
+// (prezzo di esecuzione piu' i costi, vedi mt5PrezzoPareggio) spostato in avanti dei pip
+// scelti. Lo chiamano tutti i punti che spostano a pareggio, ed e' per questo che la scelta
+// dell'utente vale allo stesso modo da qualunque parte arrivi l'ordine di andare a pareggio.
+function fblPareggioSpostato(pos){
+ const base=mt5PrezzoPareggio(pos);
+ if(!Number.isFinite(base))return base;
+ const pip=fblBeOffsetPip();
+ if(!(pip>0))return base;
+ const asset=(pos&&pos.asset)||currentAssetKey;
+ let pipPx=0; try{ pipPx=(asset===currentAssetKey)?pipSize():pipSizeForAsset(asset); }catch(e){ pipPx=0; }
+ if(!(Number.isFinite(pipPx)&&pipPx>0))return base;
+ const spostato=(pos&&pos.side==='SELL')?(base-pip*pipPx):(base+pip*pipPx);
+ // Alla griglia del prezzo: 1,08500+0,00100 fa 1,0860000000000001, e un prezzo cosi' il broker
+ // non lo accetta (stessa cura gia' applicata in fblPareggioPerStop).
+ let cifre=5;
  try{
-  (positions||[]).forEach(pos=>{
-   if(!pos||pos.beGenFatto||pos.entry==null)return;
-   const sym=pos.asset||currentAssetKey;
-   const prezzo=(sym===currentAssetKey)?currentPrice():livePriceByAsset[sym];
-   if(!Number.isFinite(prezzo))return;
-   const pipPx=(sym===currentAssetKey)?pipSize():pipSizeForAsset(sym);
-   if(!(Number.isFinite(pipPx)&&pipPx>0))return;
-   // Quanto si e' allontanato il prezzo A FAVORE, in pip.
-   const guadagnoPip=(pos.side==='BUY'?(prezzo-pos.entry):(pos.entry-prezzo))/pipPx;
-   if(!(guadagnoPip>=cfg.pip))return;
-   const be=mt5PrezzoPareggio(pos);
-   if(!Number.isFinite(be))return;
-   if(!tgStopMigliore(pos.side,pos.sl,be))return;              // mai all'indietro
-   if(fblPareggioTroppoVicino(pos,be).vicino)return;           // il broker lo rifiuterebbe
-   if(pos.side==='BUY'?(be>=prezzo):(be<=prezzo))return;       // mai oltre il prezzo attuale
-   pos.sl=be; pos.slAt=Date.now(); pos.beMarkerSl=be; pos.beGenFatto=true;
-   if(pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
-   mosse++;
-  });
+  const rp=(mt5RealPositions||[]).find(x=>pos&&String(x.ticket)===String(pos.mt5Ticket));
+  if(rp&&Number.isFinite(Number(rp.digits)))cifre=Number(rp.digits);
+  else { const i=currentInstrument(asset); if(Number.isFinite(i.decimals))cifre=i.decimals; }
  }catch(e){}
- if(mosse){
-  try{
-   $('status').textContent='🛡️ Break-even generale: raggiunti '+cfg.pip
-    +' pip di guadagno, stop portato a pareggio su '+mosse+(mosse===1?' posizione.':' posizioni.');
-  }catch(e){}
-  try{ if(active)syncTradeLevels(),refreshTradeLevelUI(); }catch(e){}
-  try{ draw(); update(); scheduleSave(); }catch(e){}
- }
- return mosse;
+ return Number(spostato.toFixed(cifre));
 }
 function tgAutoDaSalvato(v){
  const a=Object.assign(tgAutoVuoto(),v||{});
@@ -33571,19 +33835,21 @@ function tgAutoDisegna(){
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  try{ tgAutoContiDisegna(); tgAutoContiAggiornaNota(); }catch(e){}
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
- // Break-even generale (vedi fblBePipTutteGiro): spunta, valore in pip e la nota che spiega
- // in parole cosa succedera', perche' questa regola sposta stop su denaro vero.
+ // Break-even generale (vedi fblPareggioSpostato): spunta, valore in pip e la nota che spiega
+ // in parole cosa succedera', perche' questa regola sposta stop su denaro vero. Il numero e'
+ // DOVE finisce lo stop, non quando parte: i grilletti restano quelli di sempre.
  {
   const _be=(tgAuto&&tgAuto.bePipTutte)||{attivo:false,pip:0};
   if($('tgBePipTutteAttivo'))$('tgBePipTutteAttivo').checked=!!_be.attivo;
   if($('tgBePipTutte'))$('tgBePipTutte').value=Number(_be.pip)||0;
   const _n=$('tgBePipTutteNota');
   if(_n)_n.innerHTML=!_be.attivo
-   ? 'Spento: nessuno stop viene spostato da questa regola.'
+   ? 'Spento: quando si va a break-even lo stop va al pareggio esatto, cioè guadagno zero.'
    : (Number(_be.pip)>0
-      ? ('Acceso: su <b>ogni</b> posizione — a mano o da una sala — quando il prezzo si allontana di <b>'
-         +(Number(_be.pip))+' pip</b> a favore, lo stop va al punto di pareggio (profitto netto 0,00, costi compresi). Una volta sola per posizione; uno stop già più avanti non torna indietro.')
-      : 'Acceso con <b>0 pip</b>: il punto di partenza, cioè pareggio a guadagno zero. Lo stop va al pareggio appena il prezzo lo consente (mai oltre il prezzo attuale, mai troppo vicino).');
+      ? ('Acceso: ogni volta che si va a break-even — col pulsante, o perché una sala lo fa al tocco di un TP, o per il pareggio anticipato della strategia — lo stop non va a guadagno zero ma a <b>'
+         +(Number(_be.pip))+' pip di guadagno</b>, su <b>ogni</b> posizione: a mano o da una sala. I pip sono quelli dello specifico asset. Se il prezzo non è ancora oltre i '
+         +(Number(_be.pip))+' pip lo spostamento viene rifiutato (uno stop oltre il prezzo chiuderebbe subito) e si riprova da solo appena il prezzo ci arriva.')
+      : 'Acceso con <b>0 pip</b>: il punto di partenza, cioè pareggio a guadagno zero — come se fosse spento. Metti un numero più alto per far finire lo stop già in guadagno.');
  }
  if($('tgAutoRischioSenzaSl'))$('tgAutoRischioSenzaSl').value=tgRischioSenzaSl();
  if($('tgAutoBeSenzaTp'))$('tgAutoBeSenzaTp').value=tgBeSenzaTpPct();
@@ -35894,7 +36160,12 @@ chartEl.addEventListener('pointerdown',e=>{
 chartEl.addEventListener('pointerup',e=>{
  const t=newsTocco; newsTocco=null;
  if(!t||t.id!==e.pointerId)return;
- if(Math.hypot(e.clientX-t.x,e.clientY-t.y)>10||performance.now()-t.t>700)return;
+ // UN DITO NON E' UNA PENNA: piu' sbandamento e piu' tempo. Misurato in banco a 375 px: un
+ // tocco di 900 ms con 12 px di scarto - cioe' un tocco normale, preso di mira - veniva
+ // buttato via da queste due soglie, mentre un tocco istantaneo e fermo (la penna) passava.
+ // Il mirino della pressione lunga qui non da' piu' fastidio: sopra un pallino non parte
+ // (vedi tocco.notizia piu' sopra), quindi questa finestra si puo' allargare senza scontri.
+ if(Math.hypot(e.clientX-t.x,e.clientY-t.y)>20||performance.now()-t.t>1500)return;
  if(twoFingerPan||shapeDrag||tradeLevelDrag)return;
  newsPopupApertoAt=Date.now();
  if(t.eventi.length===1)openNewsEventModal(t.eventi[0]); else openNewsClusterModal(t.eventi);
@@ -38450,7 +38721,8 @@ function fblPrezzoVeroPosizione(pos){
 // allontanato di uno spread se il mercato sta chiudendo o riaprendo (e l'interruttore e'
 // acceso).
 function fblPareggioPerStop(pos,t){
- const esatto=mt5PrezzoPareggio(pos);
+ // Non il pareggio nudo: il pareggio dove l'utente ha deciso che vada (fblPareggioSpostato).
+ const esatto=fblPareggioSpostato(pos);
  const fuori={prezzo:esatto,esatto:esatto,margine:0,fase:null,motivo:''};
  if(!Number.isFinite(esatto))return fuori;
  if(!pos||pos.mt5Ticket==null)return fuori;      // simulata: lo spread e' gia' dentro l'entrata
@@ -38488,7 +38760,9 @@ function fblPareggioChiusuraDecide(pos,t){
  const fuori={azione:'nessuna',prezzo:null,esatto:null,margine:0,fase:null,motivo:''};
  if(!pos||pos.mt5Ticket==null)return fuori;
  const asset=pos.asset||currentAssetKey;
- const esatto=mt5PrezzoPareggio(pos);
+ // Stessa base di fblPareggioPerStop qui sopra, o il confronto "lo stop e' a pareggio?" piu'
+ // sotto non tornerebbe mai quando i pip scelti sono maggiori di zero.
+ const esatto=fblPareggioSpostato(pos);
  if(!Number.isFinite(esatto))return fuori;
  const adesso=Number.isFinite(t)?t:Date.now();
  const scelta=fblPareggioPerStop(pos,adesso);
@@ -43302,9 +43576,6 @@ function startLiveRefreshTimer(){
    // valutazione di stop e target, ordini pendenti, salvataggio — verrebbe saltata proprio
    // quando il prezzo si e' mosso. La cadenza di quei tre controlli resta quella di prima.
    if(touched||__pitturaApplicata){evaluate();checkPendingOrders();scheduleSave();__pitturaApplicata=false;}
-   // Break-even generale su TUTTE le posizioni (vedi fblBePipTutteGiro): gira qui, dove il
-   // prezzo e' appena stato aggiornato, insieme alla valutazione di stop e target.
-   try{ fblBePipTutteGiro(); }catch(e){}
    // REPLAY IN LIVE (richiesto esplicitamente): durante il replay NON si ridisegna/aggiorna da qui.
    // Il prezzo live continua ad essere applicato ai dati in background (nessun buco quando si esce
    // dal replay, vedi applyLivePriceToChart), ma update()/draw() sono sospesi: erano loro a far
@@ -44768,9 +45039,6 @@ function startMt5RefreshTimer(){
    // valutazione di stop e target, ordini pendenti, salvataggio — verrebbe saltata proprio
    // quando il prezzo si e' mosso. La cadenza di quei tre controlli resta quella di prima.
    if(touched||__pitturaApplicata){evaluate();checkPendingOrders();scheduleSave();__pitturaApplicata=false;}
-   // Break-even generale su TUTTE le posizioni (vedi fblBePipTutteGiro): gira qui, dove il
-   // prezzo e' appena stato aggiornato, insieme alla valutazione di stop e target.
-   try{ fblBePipTutteGiro(); }catch(e){}
    // REPLAY IN LIVE: come nel timer Capital.com, durante il replay non si ridisegna da qui (il
    // prezzo resta applicato in background, il disegno lo fa il loop del replay).
    // Le graffe servono: senza, draw() girava comunque a ogni secondo anche in replay (era fuori
@@ -54665,9 +54933,30 @@ async function fblPianoAggiornamento(){
       const app=await fblPonteCheCopiaServe();
       if(app&&app.versione){
         appPonte=app;
+        // IL RIPIEGO PUO' SOLO CONFERMARE CHE IL PACCHETTO SERVE, MAI ESCLUDERLO.
+        //
+        // SEGNALATO DAL PROPRIETARIO (4 novembre 2026): «ho premuto il tasto aggiorna e non mi ha
+        // chiuso l'applicazione, non mi ha fatto nulla, e' stato molto istantaneo». MISURATO sul
+        // suo PC subito dopo: il ponte rispondeva {programma 2.0.79, pagina 2.0.80,
+        // da_aggiornare:true} e gli eseguibili erano ancora quelli del giorno prima — il Setup
+        // non era mai partito.
+        //
+        // COME CI SI ARRIVA: se la domanda precisa (che versione e' l'ESEGUIBILE) non risponde
+        // per un istante — ponte occupato, rete lenta — si cade in questo ripiego, che pero'
+        // chiede un'ALTRA cosa: «quale PAGINA stai servendo» - e servire la pagina nuova non
+        // vuol dire ESSERE aggiornati.
+        //
+        // IL 4 NOVEMBRE 2026 HO CAMBIATO QUESTO RIPIEGO, E ERA SBAGLIATO: lo avevo accusato di
+        // aver fatto fallire l'arrivo della v2.0.80 sul computer del proprietario, ma la misura
+        // diceva un'altra cosa - il suo ponte rispondeva {programma 2.0.79, pagina 2.0.80,
+        // da_aggiornare:true}, cioe' il ramo PRECISO qui sopra, che il pacchetto lo chiede gia'.
+        // Il ripiego non c'entrava niente, e cambiarlo rompeva due regole giuste (un ponte
+        // vecchio deve comportarsi come ieri, e un programma che si aggiorna da solo non deve
+        // scaricare pacchetti). Rimesso com'era: la causa vera sta in cosa fa il PULSANTE
+        // quando il piano dice automatico:true, non in come il piano si decide.
         piano=(app.da==='copia aggiornata')
-          ? {serve:false,motivo:'il programma installato aggiorna l\'app da solo: il pacchetto non serve'}
-          : {serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+          ?{serve:false,motivo:"il programma installato serve gia la copia aggiornata: basta ricaricare la pagina"}
+          :{serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
       }
     }
   }
@@ -54828,6 +55117,26 @@ async function fblApplicaAggiornamento(release, tagRemoto, btn){
       const r=await fetchMt5WithTimeout('/aggiorna-programma',{method:'POST'},300000);
       esito=(r&&r.ok&&r.data)?r.data:null;
     }catch(e){}
+    // "OK" NON VUOL DIRE "PARTITO" (4 novembre 2026).
+    //
+    // SEGNALATO: «ho premuto il tasto aggiorna e non mi ha chiuso l'applicazione, non mi ha
+    // fatto nulla, cioe' e' stato molto istantaneo». CAUSA MISURATA nel ponte: la rotta
+    // /aggiorna-programma rispondeva ok:true in DUE casi diversi — installazione avviata, e
+    // «il programma e' gia' alla tal versione: non c'e' niente da installare». Qui si guardava
+    // solo ok, quindi nel secondo caso si diceva «installazione in corso, l'app si riavvia da
+    // sola» e il velo restava sullo schermo mentre non era partito nulla.
+    //
+    // Adesso il ponte manda anche `avviato`. Un ponte VECCHIO non lo manda: in quel caso
+    // `avviato` e' undefined e vale la regola di prima (ok = partito), altrimenti un
+    // aggiornamento che era partito davvero finirebbe per scaricare anche il pacchetto a mano.
+    // Solo un `avviato:false` esplicito vuol dire «non e' partito niente».
+    if(esito&&esito.ok&&esito.avviato===false){
+      fblAggPannelloVia();
+      try{ btn.disabled=false; btn.textContent='⬇️ Aggiorna ora'; }catch(e){}
+      try{ localStorage.removeItem('fbl_aggiornamento_atteso'); }catch(e){}
+      try{ $('status').textContent='ℹ️ '+(esito.messaggio||'non c’era niente da installare')+'. Non ho toccato nulla.'; }catch(e){}
+      return;
+    }
     if(esito&&esito.ok){
       try{ localStorage.setItem('fbl_rel_vista',tagRemoto); }catch(e){}
       try{ btn.style.display='none'; }catch(e){}

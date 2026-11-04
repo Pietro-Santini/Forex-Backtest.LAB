@@ -2,6 +2,156 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-04 — Claude — **v2.0.81: il profilo non si accorcia più al cambio di timeframe, la
+  finestra duplicata mostra solo il grafico, il break-even va DOVE vuoi tu, e quattro cose che il
+  dito non riusciva a fare**.
+  1. **SINTOMO, parole del proprietario:** «se stabilisco 300 barre con un time frame a un
+     minuto, passando a 5 minuti non possono dimezzare, e a 15 minuti dimezzarsi ancora di più.
+     Devono rimanere sempre uguali… È come funziona su TradingView.» Alla domanda su cosa
+     cambiasse: «la fascia di prezzo rimane corretta, e lo fanno TUTTI i profili: disegno a
+     mano, giornaliero e per sessione.»
+  2. **PRIMA HO CERCATO NEL POSTO SBAGLIATO, e va scritto.** Avevo supposto che il disegno
+     saltasse le fasce VUOTE e avevo già scritto la cura. Il controllo del banco l'ha fermata:
+     a 15 minuti risultavano piene TUTTE E 120 le fasce, perché le candele aggregate sono più
+     ALTE e il loro volume si spalma su PIÙ fasce, non su meno. Ho tolto la cura invece di
+     pubblicarla: le fasce chieste non sono mai dipese dal timeframe (300 a 1, 5 e 15 minuti,
+     misurato).
+  3. **CAUSA VERA: la SCALA ORIZZONTALE.** La lunghezza massima della barra era una frazione
+     della larghezza IN PIXEL del periodo coperto dal profilo, e un periodo fisso nel TEMPO
+     occupa molti meno pixel quando ogni candela vale 15 minuti invece di 1. Misurato su 300
+     minuti di mercato, a parità di candele a vista: **684 px a 1 minuto, 599 a 5 minuti, 200 a
+     15 minuti**. Tutte le barre si accorciano di 3,4 volte: le piccole scendono sotto il pixel
+     e spariscono, e l'istogramma SEMBRA dimezzato. Spiega anche perché la fascia di prezzo
+     restava corretta (l'effetto è orizzontale) e perché capitava su tutti e tre i profili: il
+     disegnatore è uno solo.
+  4. **DECISIONE ROVESCIATA.** Il commento diceva «RICHIESTO ESPLICITAMENTE (stile TradingView):
+     la lunghezza è AGGANCIATA ALL'ASSE DEL TEMPO». L'intenzione era giusta, l'aggancio no:
+     TradingView misura la larghezza del profilo sul RIQUADRO, non sul periodo — da lì il suo
+     «Width 70%» identico a ogni timeframe e a ogni zoom. Ora fa lo stesso, e il 500% continua a
+     voler dire 70% (del riquadro invece che del periodo).
+  5. **TEST NUOVO:** `profilo_barre_timeframe.test.mjs`, 2 prove, di cui una di controllo (la
+     manopola «Dimensione istogramma» deve continuare a funzionare, se no la cura avrebbe
+     bloccato la larghezza su un numero fisso). Provato nei due sensi sul codice PUBBLICATO:
+     rosso sulla v2.0.80, verde qui.
+  6. **DUE MISURE SBAGLIATE PRIMA DI QUELLA BUONA, annotate perché non si ripetano.** La barra
+     del POC è disegnata in DUE rettangoli affiancati (comprato e venduto): misurare il più
+     largo dei due dà un numero che dipende da come si dividono. E leggere i rettangoli del
+     canvas prende dentro candele, sfondi e zona a basso volume: uscivano barre più larghe del
+     grafico stesso. La misura buona legge `vpIndBarRects`, dove il disegnatore registra la
+     geometria esatta di ogni barra.
+
+  7. **LA FINESTRA DUPLICATA MOSTRA SOLO IL GRAFICO.** Parole sue: «in modalità duplica schermo
+     ho visto che passi anche quelle che sono le tabelle delle posizioni, gli ordini pendenti,
+     eccetera. Invece no: deve aprirsi a tutto schermo quello che è soltanto il grafico. Stop.»
+     **E QUI HO TROVATO UNA COSA CHE NON MI ASPETTAVO:** il nascondimento c'era già da tempo
+     (`initExtraPipWindow`), e in banco funzionava perfettamente — la prima versione del test
+     passava anche sul codice pubblicato. La causa vera è che quel nascondimento usa uno stile
+     **inline**, e un `elemento.style.display='block'` scritto più tardi da qualunque parte
+     dell'app lo **cancella**: basta che arrivi una posizione dalla pagina madre o un ordine
+     pendente e il pannello ricompare sopra il grafico. Misurato: pannelli visibili 1 → 2. La cura
+     è una regola di foglio di stile con `!important`, che lo stile inline non batte. Un
+     `!important` **inline** la batterebbe, ma l'app non lo usa: chiederlo al test avrebbe voluto
+     dire pretendere dal CSS una cosa che il CSS non può fare.
+  8. **COSA PASSA TRA LE FINESTRE E COSA NO, e una sua decisione rovesciata.** «Le operazioni che
+     apro sulle pagine duplicate andranno a finire nella pagina madre. Per quanto riguarda i
+     disegni invece no: quello rimane indipendente tra pagina e pagina, e ovviamente va scritto
+     come informativo. E anche per esempio gli indicatori.»
+     **Posizioni e ordini:** già in comune, e il messaggio del conto non ha mai portato disegni né
+     indicatori. **Disegni:** invece viaggiavano, con un messaggio `drawings_sync` **chiesto
+     esplicitamente dal proprietario stesso** in passato. La parola nuova vince su quella vecchia:
+     spento. **Indicatori:** non hanno mai viaggiato. L'informativa chiesta sta nel `title` del
+     pulsante «Duplica finestra», che adesso dice tutte e tre le cose.
+     I pannelli si NASCONDONO, non si rimuovono: è così che una posizione aperta nella finestra
+     duplicata arriva comunque alla pagina madre — e il test lo misura, non lo presume.
+     **TEST:** `finestra_solo_grafico.test.mjs`, 6 prove di cui 3 di controllo (la pagina
+     principale continua a mostrare tutto; le posizioni di un'altra finestra entrano eccome; il
+     documento resta intero). Sul pubblicato: 3 rosse, i controlli verdi da entrambe le parti.
+  9. **BREAK-EVEN: HO CAPITO AL ROVESCIO, e me l'ha corretto.** Il 3 novembre avevo costruito la
+     regola come SOGLIA: un giro periodico portava lo stop al pareggio esatto appena il guadagno
+     raggiungeva i pip impostati. Parole sue del 4: «ci siamo fraintesi… quando noi pigiamo il
+     pulsante break-even, le posizioni dovranno spostarsi a 0 pip di guadagno, quindi al punto di
+     entrata; ma se l'utente scrive 10 pip, il break-even si sposta a 10 pip… perché oggi funziona
+     che quando arriva a 10 pip di guadagno sposta le posizioni a 0, punto d'inizio.»
+     **ORA il numero è la DESTINAZIONE, non il grilletto.** Nessun grilletto nuovo: quel giro
+     periodico è stato tolto, e i tre grilletti di sempre passano tutti da `fblPareggioSpostato()`
+     — il pulsante premuto dall'utente, la regola di sala che al tocco di un TP porta lo stop
+     «all'entrata», e il pareggio anticipato della strategia (l'85% verso il primo target).
+     **UN RISCHIO NUOVO, visto e chiuso:** con 10 pip impostati e il prezzo avanti solo di 3, lo
+     stop spostato cade OLTRE il prezzo — cioè una chiusura immediata a mercato travestita da
+     protezione. La guardia esistente lo prendeva solo quando lo spread normale dell'asset è noto:
+     adesso c'è un rifiuto esplicito che dice anche perché, e si riprova da solo quando il prezzo
+     ha superato il livello.
+     **TEST:** `break_even_generale.test.mjs` **riscritto** — il vecchio pretendeva il
+     comportamento sbagliato, che è il modo peggiore in cui un test può passare. 8 prove, di cui 4
+     di controllo a regola spenta (lo stop deve tornare al pareggio esatto). Sul pubblicato: 4
+     rosse, i 4 controlli verdi da entrambe le parti.
+  10. **QUATTRO COSE CHE IL DITO NON RIUSCIVA A FARE, con tre cause diverse.**
+     (a) «a volte, con il dito, quando voglio trascinare la pagina e sono sopra il grafico, non me
+     lo fa trascinare». Il «a volte» era la chiave: non una regola sbagliata, uno **stato che
+     resta appeso**. Il grafico blocca lo scorrimento per la durata di un gesto suo e lo sblocca
+     nel ramo del rilascio — oltre venti punti bloccano, ognuno col suo sblocco. Se UN rilascio si
+     perde (sul telefono si perde) il blocco resta per sempre: misurato, dopo un mirino da
+     pressione lunga col rilascio perso `touch-action` restava `none` anche al tocco NUOVO. Invece
+     di un ventunesimo sblocco c'è una **rete**: a schermo libero da dita, gli stati che vivono
+     solo per un dito (mirino e gesto a due dita — gli unici due che non catturano il puntatore, e
+     per questo gli unici che perdono il rilascio) si smontano, e lo scorrimento torna libero.
+     (b) «non funziona nemmeno selezionare una linea TP/SL e poi trascinarla: al momento che
+     comincio a trascinarla si blocca… se sono con un dito, in modalità pagina principale».
+     Sulla pagina normale il tocco sulla linea non veniva bloccato, quindi il browser si prendeva
+     il gesto e il trascinamento moriva. In schermo intero funzionava: è esattamente la differenza
+     che descriveva lui. Ora una linea (e un disegno) si prende il gesto in qualunque modalità,
+     mentre il grafico VUOTO continua a scorrere la pagina — ed è la prima prova di controllo.
+     (c) «non mi fa premere le notizie sotto al grafico… mentre sul tablet con la penna sì».
+     **Non era un bersaglio troppo piccolo** (il pallino ha raggio 13 px): era uno scontro fra due
+     funzioni. Il mirino della pressione lunga scatta a 450 ms e si mangiava il rilascio, mentre la
+     notizia si apriva solo sotto i 700 ms e 10 px. Un dito che prende la mira sta giù di più; la
+     penna tocca e stacca in un lampo — da qui la differenza fra tablet e telefono. Misurato: un
+     tocco di 900 ms con 12 px di scarto non apriva niente, uno istantaneo sì. Ora sopra un
+     pallino il mirino si fa da parte, e la finestra del tocco è da dito (20 px, 1500 ms).
+     (d) il mirino a pressione lunga: **in banco funzionava già**, anche con 6 px di sbandamento.
+     Non ho trovato un difetto suo e non ne ho inventato uno: il «non funziona bene» si spiega con
+     (a), perché è proprio il mirino lo stato che restava appeso. Resta una prova di controllo che
+     lo guarda.
+     **TEST:** `telefono_tocco_grafico.test.mjs`, 5 prove a 375 px con lo userAgent di un telefono,
+     di cui 2 di controllo. Sul pubblicato: 3 rosse, i 2 controlli verdi da entrambe le parti.
+  11. **Una cosa in piu' in questo giro:** il tetto giornaliero alle scritture cloud e la finestra
+     del grafico allargata a 60 s (la bolletta Firestore — 250.000 letture e 122.000 scritture in
+     un giorno, segnalate dal proprietario).
+  12. **PERCHÉ LA v2.0.80 NON È MAI ARRIVATA — e perché la prima diagnosi era mia e sbagliata.**
+     Parole sue: «ho premuto il tasto aggiorna e non mi ha chiuso l'applicazione, non mi ha fatto
+     nulla, cioè è stato molto istantaneo».
+     **PRIMA HO ACCUSATO IL POSTO SBAGLIATO, e il collaudo me l'ha detto.** Avevo cambiato il
+     ripiego di `fblPianoAggiornamento` dandogli la colpa. Due test giusti sono andati rossi — un
+     ponte vecchio deve comportarsi come ieri, e un programma che si aggiorna da solo non deve
+     scaricare pacchetti — e avevano ragione loro: la misura sul suo computer diceva
+     `{programma 2.0.79, pagina 2.0.80, da_aggiornare:true}`, cioè il ramo **preciso**, che il
+     pacchetto lo chiede già. Il ripiego non c'entrava niente. Rimesso com'era, con scritto
+     perché.
+     **CAUSA VERA, più avanti nella catena:** la rotta `/aggiorna-programma` del ponte rispondeva
+     `ok:true` in **due casi diversi** — «installazione avviata» e «il programma è già alla tal
+     versione: non c'è niente da installare» — e l'app guardava solo `ok`. Nel secondo caso
+     mostrava «installazione in corso, l'app si riavvia da sola», lasciava il velo bloccante sullo
+     schermo e non succedeva niente. Istantaneo, e senza fare nulla. Un esito vero detto in modo
+     ambiguo è peggio di un errore: l'errore almeno si vede.
+     **CURA:** il ponte ora risponde anche `avviato`, e la logica sta in una funzione sola
+     (`aggiorna_programma_dettaglio`) con la vecchia forma `(esito, messaggio)` come guscio di una
+     riga — otto punti del progetto la chiamano ancora così. L'app dice «installazione in corso»
+     solo se qualcosa è partito; con un `avviato:false` togli il velo, riaccende il pulsante e
+     riporta il motivo detto dal ponte. Un ponte **vecchio** non manda `avviato`: lì vale la
+     regola di prima, o un aggiornamento partito davvero finirebbe a scaricare anche il pacchetto
+     a mano.
+     **TEST:** `aggiorna_niente_da_fare.test.mjs` (3 prove, 2 di controllo: quando parte davvero
+     il velo resta; col ponte vecchio vale la regola di ieri) e 3 prove nuove in
+     `test_aggiorna_programma.py` (di cui una di controllo sulla vecchia firma a due valori).
+     Provati nei due sensi sul pubblicato: 1 rossa su 3 nel browser, 2 su 3 in python, i controlli
+     verdi da entrambe le parti.
+  **Collaudo:** browser 1132 prove, 1131 verdi, 0 rosse (1 saltata); python 212 verdi. Due rosse del primo giro erano
+  mie (vedi il punto 12) e sono state curate alla radice, non silenziate.
+  **NON solo `app.html`:** cambia anche `installer_build/build/bridge.py` (la rotta
+  `/aggiorna-programma` ora dice se l'installazione e' partita). Serve il pacchetto nuovo
+  installato una volta a mano: il ponte della v2.0.79 non manda `avviato`, e fino a quel
+  momento vale la regola di compatibilita'.
+
 - 2026-11-03 — Claude — **v2.0.80: ordini pendenti in tre tabelle, il conto MT5 che si muove
   mentre backtesti non lo fa più in silenzio, e la riga del prezzo che non va più a gradini**.
   1. **PRIMA RICHIESTA, parole del proprietario:** «in modalità replay, facciamo in modo di creare

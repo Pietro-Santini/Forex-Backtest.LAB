@@ -43,7 +43,7 @@ export function lanciaChromium(){
 // dice esplicitamente - vedi pacchetti_non_windows.test.mjs, che apre la pagina con la sua
 // piattaforma. Cosi' il risultato e' lo stesso ovunque giri.
 const UA_WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
-export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows', userAgent=UA_WINDOWS}={}){
+export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows', userAgent=UA_WINDOWS, query=''}={}){
   const opz = {};
   // Nel contenitore cloud Chromium e' gia' installato qui; su GitHub lo installa il flusso.
   for(const p of ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome']) if(fs.existsSync(p)) opz.executablePath = p;
@@ -82,7 +82,9 @@ export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows
   const errori = [];
   pagina.on('pageerror', e => errori.push(String(e).slice(0,300)));
   await pagina.route('**', r => r.request().url().startsWith('file://') ? r.continue() : r.abort());
-  await pagina.goto('file://' + path.join(RADICE, 'app.html'), {waitUntil:'domcontentloaded'});
+  // `query` serve ai test delle FINESTRE DUPLICATE: l'app capisce di essere una copia dalla
+  // querystring (?pipSlot=N), esattamente come quando la apre il pulsante «Duplica finestra».
+  await pagina.goto('file://' + path.join(RADICE, 'app.html') + (query||''), {waitUntil:'domcontentloaded'});
   await pagina.waitForTimeout(2500);
   await pagina.evaluate(() => document.querySelectorAll('#auth-check-overlay,.fbModalOverlay').forEach(el => el.style.display='none'));
   return {browser, pagina, errori};
