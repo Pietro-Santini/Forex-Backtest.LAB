@@ -1396,9 +1396,23 @@ window.fblAvviaSoloBacktest=function(){
     // Ritorna una funzione da chiamare per interrompere l'ascolto.
     onChange(cb){
       if(!this.uid) return ()=>{};
-      return onSnapshot(doc(db,"users",this.uid,"data","session"), snap=>{
-        cb(snap.exists() ? (snap.data().state ?? null) : null);
-      }, e=>console.warn("Ascolto sessione Firestore interrotto:", e));
+      // ANCHE LA SESSIONE PASSA DALL'ASCOLTO NOSTRO, quando c'e' (4 novembre 2026).
+      //
+      // Era l'ultimo documento rimasto su onSnapshot - ed e' il PIU' GROSSO: 48 KB misurati.
+      // Con Firestore ogni modifica lo fa riscaricare INTERO a ogni dispositivo in ascolto,
+      // anche a quello che l'ha appena scritto: e' da li' che vengono le letture che si pagano.
+      // Gli altri tre documenti (grafico, collegamento, preferenze) erano gia' passati
+      // all'ascolto nostro il 31 ottobre; questo no, e cosi' la cura restava a meta' - la meta'
+      // che si paga. Senza server si resta su Firestore, identico a prima.
+      //
+      // La forma del dato e' diversa fra i due posti e va tradotta: su Firestore il documento e'
+      // {state:...}, sul nostro il contenuto E' lo stato (vedi serverDatiScrivi('session', ...)).
+      return this._ascoltaDoc('session',
+        (contenuto)=>{ cb(fblSessioneDaDocumento(contenuto)); },
+        null,
+        ()=> onSnapshot(doc(db,"users",this.uid,"data","session"), snap=>{
+              cb(snap.exists() ? (snap.data().state ?? null) : null);
+            }, e=>console.warn("Ascolto sessione Firestore interrotto:", e)));
     },
     // ===== FOOTPRINT NEL DOCUMENTO SUO ─── cura bolletta Firebase, 31 ottobre 2026 =====
     //
@@ -9000,7 +9014,7 @@ async function syncFullStatusToFirebase(reason,force){
    // e' configurato, si scrive anche li', per poter spegnere Firestore progressivamente.
    // Firebase resta la rete di sicurezza: se il server fallisce, la scrittura su Firebase
    // e' gia' riuscita e non si perde niente.
-   if(typeof fblServer==='function' && fblServer() && window.fxbtCloud && window.fxbtCloud.uid){
+   if(fblCloudNostroDisponibile() && window.fxbtCloud && window.fxbtCloud.uid){
     try{ await window.fxbtCloud.serverDatiScrivi('session', trimmedBundle); }catch(e){ console.warn('Scrittura session su server Oracle fallita:', e); }
     if(tradesNuovi.length){
      try{ await window.fxbtCloud.serverTradesAggiungi(tradesNuovi); }catch(e){ console.warn('Aggiunta operazioni su server Oracle fallita:', e); }
@@ -9126,7 +9140,7 @@ async function syncFullStatusToFirebase(reason,force){
      if(okF){ fblFootprintUltimoInvio = adesso; fblFootprintInviati = (fblFootprintInviati||0)+1; }
     }
     // Stessa strada degli altri documenti: doppio scritto sul server Oracle, se configurato.
-    if(haCelle && typeof fblServer==='function' && fblServer()
+    if(haCelle && fblCloudNostroDisponibile()
        && window.fxbtCloud && window.fxbtCloud.uid
        && adesso - fblFootprintUltimoInvioServer > FOOTPRINT_CLOUD_SYNC_MS){
      try{ await window.fxbtCloud.serverDatiScrivi('footprint', celleFootprint); fblFootprintUltimoInvioServer = adesso; }catch(e){}
@@ -35284,8 +35298,33 @@ function fblCloudNostroDisegna(){
     + " in un file sul tuo disco — meno letture e meno scritture da pagare, perché agli altri"
     + " dispositivi arriva un avviso di venti byte invece del documento intero.";
 }
-$('fblCloudNostroSw')?.addEventListener('change',()=>{
+// C'E' DAVVERO, DALL'ALTRA PARTE? Il ponte che l'utente ha installato puo' essere piu' vecchio
+// delle rotte /dati (sono arrivate con la v2.0.82). Accendere l'interruttore contro un ponte
+// vecchio vorrebbe dire mandare le scritture in un posto che risponde 404 - e anche se Firebase
+// resta la rete di sicurezza e nessun dato si perde, l'utente crederebbe di aver spostato i
+// suoi dati senza averlo fatto. Si chiede, invece di sperare.
+//
+// LA DOMANDA NON PORTA IL TOKEN, di proposito: senza token una rotta che ESISTE risponde 401 e
+// una che non esiste risponde 404. Bastano quei due numeri per saperlo, senza tirare in mezzo
+// l'identita' dell'utente.
+async function fblCloudNostroRotteCiSono(){
+ try{
+  const base=(typeof MT5_BRIDGE_URL==='string'&&MT5_BRIDGE_URL)?MT5_BRIDGE_URL.replace(/\/+$/,''):'http://127.0.0.1:8000';
+  const r=await fetch(base+'/dati/session',{method:'GET'});
+  return r.status===401||r.status===200;
+ }catch(e){ return false; }
+}
+$('fblCloudNostroSw')?.addEventListener('change',async ()=>{
  const acceso=!!$('fblCloudNostroSw').checked;
+ if(acceso && !(await fblCloudNostroRotteCiSono())){
+  try{ $('fblCloudNostroSw').checked=false; }catch(e){}
+  try{ fblCloudNostroImposta(false); }catch(e){}
+  fblCloudNostroDisegna();
+  try{ $('status').textContent='☁️ Il ponte di questo computer non ha ancora il cloud nostro: '
+   +'installa il pacchetto nuovo (dalla v2.0.82 in avanti) e riprova. Per ora i dati restano su Firebase.'; }catch(e){}
+  try{ const n=$('fblCloudNostroNota'); if(n)n.innerHTML='<b>Non si può accendere adesso:</b> il ponte installato su questo computer non conosce ancora le rotte dei documenti. Arrivano con il pacchetto della v2.0.82: installalo una volta e questo interruttore funziona.'; }catch(e){}
+  return;
+ }
  try{ fblCloudNostroImposta(acceso); }catch(e){}
  fblCloudNostroDisegna();
  try{ $('status').textContent=acceso
@@ -37051,6 +37090,22 @@ function fblUrlDati(){
 // Linux) o 'firebase'. Sta QUI e non dentro il modulo Firebase per una ragione pratica: nel
 // banco di prova quel modulo non carica, quindi una regola scritta la' dentro non si potrebbe
 // misurare - e' la stessa ragione per cui l'ascolto dei documenti vive in fblAscoltaDocumento.
+// "C'e' un posto NOSTRO dove scrivere?" - una domanda sola, invece di `fblServer()` sparso in
+// quattro punti: col cloud sul computer `fblServer()` puo' essere vuoto, e quei quattro punti
+// avrebbero smesso di fare la doppia scrittura - lasciando il nostro server senza la sessione e
+// senza il footprint, cioe' i due documenti piu' grossi, proprio quando lo si accende.
+function fblCloudNostroDisponibile(){ return fblCloudDoveScrivere()!=='firebase'; }
+// LA SESSIONE ARRIVA IN DUE FORME, e tradurla male non da' un errore: da' uno stato VUOTO, che
+// e' il modo piu' silenzioso di cancellare il lavoro di qualcuno.
+//   - da Firestore il documento e' {state: ...}
+//   - dal nostro server il contenuto E' lo stato (vedi serverDatiScrivi('session', pacchetto))
+// Si guarda se c'e' la busta `state`: se c'e' si apre, se no il contenuto e' gia' lo stato. E
+// `null` resta `null` - vuol dire "non c'e' ancora niente", che e' diverso da "c'e' il vuoto".
+function fblSessioneDaDocumento(contenuto){
+ if(contenuto==null)return null;
+ if(typeof contenuto==='object' && 'state' in contenuto)return contenuto.state??null;
+ return contenuto;
+}
 function fblCloudDoveScrivere(){
  try{ if(typeof fblCloudNostro==='function' && fblCloudNostro())return 'nostro'; }catch(e){}
  try{ if(typeof fblServer==='function' && fblServer())return 'server'; }catch(e){}
@@ -51498,7 +51553,7 @@ var __initLocalStateSnapshot=null;
    try{
      let cloudState=null;
      // Prova il server Oracle (se configurato): e' il nuovo archivio.
-     if(typeof fblServer==='function' && fblServer() && window.fxbtCloud && window.fxbtCloud.uid){
+     if(fblCloudNostroDisponibile() && window.fxbtCloud && window.fxbtCloud.uid){
        try{
          const serverState=await window.fxbtCloud.serverDatiLeggi('session');
          if(serverState && serverState.version===SESSION_VERSION){
@@ -51552,7 +51607,7 @@ var __initLocalStateSnapshot=null;
       if(!(cloudState && cloudState.footprintCells)){
        try{
         let celleSep=null;
-        const suServer = (typeof fblServer==='function' && fblServer()
+        const suServer = (fblCloudNostroDisponibile()
                           && window.fxbtCloud && window.fxbtCloud.uid);
         if(suServer){ celleSep = await window.fxbtCloud.serverDatiLeggi('footprint'); }
         else if(cloud && typeof cloud.footprintLeggi==='function'){ celleSep = await cloud.footprintLeggi(); }

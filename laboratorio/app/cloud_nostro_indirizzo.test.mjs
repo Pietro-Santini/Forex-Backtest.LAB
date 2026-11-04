@@ -116,3 +116,89 @@ test('PROVA DI CONTROLLO: un nome secco resta https con la porta', async () => {
     assert.equal(r.mille, 'https://pietro.tail83d918.ts.net:8001');
   } finally { await browser.close(); }
 });
+
+// ====== L'INTERRUTTORE NON SI ACCENDE CONTRO UN PONTE VECCHIO ======
+//
+// Le rotte /dati arrivano col pacchetto della v2.0.82. Un ponte precedente risponde 404: acceso
+// contro quello, l'utente crederebbe di aver spostato i suoi dati senza averlo fatto (Firebase
+// resta la rete di sicurezza, quindi non si perde niente — ma la convinzione sbagliata resta).
+// La domanda non porta il token di proposito: senza token una rotta che ESISTE risponde 401 e una
+// che non esiste risponde 404. Bastano quei due numeri.
+const PREMI_INTERRUTTORE = `(async function(){
+  fblCloudNostroImposta(false);
+  MT5_BRIDGE_URL='http://127.0.0.1:8000';
+  const sw=document.getElementById('fblCloudNostroSw');
+  if(!sw) return {errore:'manca l interruttore nel pannello'};
+  sw.checked=true;
+  sw.dispatchEvent(new Event('change'));
+  for(let i=0;i<40;i++){ await new Promise(r=>setTimeout(r,50)); if(!sw.checked||fblCloudNostro())break; }
+  return {spuntato:sw.checked, acceso:fblCloudNostro(), dove:fblCloudDoveScrivere(),
+          nota:(document.getElementById('fblCloudNostroNota')||{}).textContent||''};
+})()`;
+
+test('col ponte vecchio (404) l\'interruttore si rifiuta di accendersi e spiega perché', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.route(u => u.pathname.endsWith('/dati/session'),
+      r => r.fulfill({status: 404, contentType: 'application/json', body: '{"detail":"Not Found"}'}));
+    const r = await pagina.evaluate(PREMI_INTERRUTTORE);
+    assert.ok(!r.errore, r.errore || '');
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.acceso, false, 'non si deve accendere contro un ponte che non ha le rotte');
+    assert.equal(r.spuntato, false, 'e la spunta deve tornare indietro, non restare accesa a vuoto');
+    assert.equal(r.dove, 'firebase', 'i dati devono restare su Firebase');
+    assert.ok(/pacchetto|v2\.0\.82/i.test(r.nota),
+      'la nota deve dire cosa fare (installare il pacchetto nuovo): "' + r.nota + '"');
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO: col ponte che LE HA (risponde 401, cioè «ci sono, e chiedo chi sei»)
+// l'interruttore si accende. Senza questa, un controllo rotto che rifiuta sempre passerebbe la
+// prova qui sopra e la funzione non si potrebbe mai accendere.
+test('PROVA DI CONTROLLO: col ponte nuovo (401) l\'interruttore si accende', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.route(u => u.pathname.endsWith('/dati/session'),
+      r => r.fulfill({status: 401, contentType: 'application/json',
+                      body: '{"detail":"Token Firebase mancante."}'}));
+    const r = await pagina.evaluate(PREMI_INTERRUTTORE);
+    assert.ok(!r.errore, r.errore || '');
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.acceso, true, '401 vuol dire che la rotta c\'è: si deve poter accendere');
+    assert.equal(r.dove, 'nostro');
+  } finally { await browser.close(); }
+});
+
+// ====== LA SESSIONE ARRIVA IN DUE FORME ======
+//
+// L'ascolto della sessione era l'ULTIMO documento rimasto su onSnapshot — ed è il più grosso: 48
+// KB misurati. Con Firestore ogni modifica lo fa riscaricare intero a ogni dispositivo in
+// ascolto, anche a quello che l'ha appena scritto: è da lì che vengono le letture che si pagano.
+// Gli altri tre documenti erano già passati all'ascolto nostro il 31 ottobre; questo no, e così
+// la cura restava a metà — la metà che si paga.
+//
+// La forma del dato è diversa fra i due posti: su Firestore il documento è `{state: ...}`, sul
+// nostro il contenuto È lo stato. Tradurla male non dà un errore: dà uno stato VUOTO, che è il
+// modo più silenzioso di cancellare il lavoro di qualcuno. Per questo la traduzione è una
+// funzione sola, e si misura qui.
+test('la sessione si legge giusta da entrambe le forme', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      const dentro={positions:[{id:'p1'}],version:9};
+      return {
+        daFirestore: fblSessioneDaDocumento({state:dentro}),
+        dalNostro: fblSessioneDaDocumento(dentro),
+        vuoto: fblSessioneDaDocumento(null),
+        bustaVuota: fblSessioneDaDocumento({state:null})
+      };
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.deepEqual(r.daFirestore, {positions:[{id:'p1'}], version:9},
+      'da Firestore si apre la busta `state`');
+    assert.deepEqual(r.dalNostro, {positions:[{id:'p1'}], version:9},
+      'dal nostro server il contenuto è già lo stato: non va cercata una busta che non c\'è');
+    assert.equal(r.vuoto, null, '«non c\'è niente» deve restare null');
+    assert.equal(r.bustaVuota, null, 'una busta vuota è «non c\'è niente», non uno stato vuoto');
+  } finally { await browser.close(); }
+});

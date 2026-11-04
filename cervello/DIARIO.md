@@ -2,6 +2,52 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-04 — Claude — **v2.0.83: la cura della bolletta era rimasta a metà — e la metà che
+  mancava era quella che si paga**.
+  1. **COSA HO TROVATO SUBITO DOPO AVER PUBBLICATO LA v2.0.82.** Guardando il ponte vivo del
+     proprietario per dirgli cosa installare, è venuta fuori una cosa che la v2.0.82 non copriva:
+     l'ascolto del documento **session** era rimasto su `onSnapshot`, cioè su Firestore, mentre gli
+     altri tre (grafico, collegamento, preferenze) erano passati all'ascolto nostro il 31 ottobre.
+     E `session` è il **più grosso**: 48 KB misurati. Con Firestore ogni modifica lo fa riscaricare
+     INTERO a ogni dispositivo in ascolto, **anche a quello che l'ha appena scritto** — ed è da lì
+     che vengono le 250.000 letture che il proprietario paga. La cura della bolletta copriva tre
+     documenti su quattro, e il quarto era quello che pesa.
+  2. **ORA PASSA DALL'ASCOLTO NOSTRO ANCHE LUI**, cioè da `{nome, versione}` — venti byte — con il
+     documento riletto solo se la versione è cambiata. Senza server si resta su Firestore,
+     identico a prima.
+     **UNA TRAPPOLA, chiusa con una funzione sola e il suo test:** la forma del dato è diversa fra
+     i due posti (su Firestore il documento è `{state: …}`, sul nostro il contenuto **è** lo
+     stato). Tradurla male non dà un errore: dà uno **stato vuoto**, che è il modo più silenzioso
+     di cancellare il lavoro di qualcuno. `fblSessioneDaDocumento()` fa solo quello, e distingue
+     «non c'è ancora niente» (`null`, che resta `null`) da «c'è il vuoto».
+  3. **QUATTRO PUNTI CHIEDEVANO ANCORA LA DOMANDA VECCHIA.** La doppia scrittura di session e
+     footprint guardava `fblServer()`, cioè «c'è il server Linux?», invece di «c'è un posto nostro
+     dove scrivere?». Col cloud sul computer `fblServer()` può essere vuoto: quei quattro punti
+     avrebbero smesso di scrivere sul nostro server proprio i **due documenti più grossi**, nel
+     momento in cui lo si accende. Ora la domanda è una sola (`fblCloudNostroDisponibile()`).
+  4. **L'INTERRUTTORE NON SI ACCENDE CONTRO UN PONTE VECCHIO.** Le rotte `/dati` arrivano col
+     pacchetto della v2.0.82: un ponte precedente risponde 404. Acceso contro quello, l'utente
+     crederebbe di aver spostato i suoi dati senza averlo fatto — Firebase resta la rete di
+     sicurezza e nessun dato si perde, ma la convinzione sbagliata resta, ed è il genere di cosa
+     che si scopre tardi. Adesso si chiede, invece di sperare: **la domanda non porta il token, di
+     proposito** — senza token una rotta che esiste risponde 401 e una che non esiste risponde
+     404, e bastano quei due numeri senza tirare in mezzo l'identità dell'utente. Se non ci sono,
+     la spunta torna indietro e la nota dice cosa fare.
+  **TEST:** 3 prove nuove in `cloud_nostro_indirizzo.test.mjs` (una delle quali è la prova di
+  controllo che conta: col ponte **nuovo** (401) l'interruttore si accende — senza quella, un
+  controllo rotto che rifiuta sempre avrebbe passato la prova del 404 e la funzione non si sarebbe
+  mai potuta accendere), più la prova sulle due forme della sessione.
+  **Collaudo:** browser 1148 prove, 1147 verdi, 0 rosse (1 saltata); python 221 verdi.
+  **Solo app.html** fra i file che contano per l'utente: basta il push. Il pacchetto della
+  v2.0.82 resta quello che serve installare, perche' porta le rotte /dati nel ponte.
+
+  **UNA COSA MIA, da non ripetere (4 novembre 2026).** Un collaudo lanciato nello STESSO comando
+  di una modifica ad app.html e' rimasto appeso quattro ore e mezza: la modifica aveva lasciato
+  un errore di sintassi (un apostrofo mangiato dalla shell), i test sono partiti su quel file e
+  il banco aspettava una pagina che non si sarebbe caricata mai. Il proprietario l'ha visto dal
+  Gestione attivita' e ha chiesto cos'era. Regola: modifica, POI controllo di sintassi, POI i
+  test - mai concatenati in un comando solo.
+
 - 2026-11-04 — Claude — **v2.0.82: la bolletta. Si manda solo quello che cambia, e il cloud può
   stare sul computer del proprietario**.
   1. **LA RICHIESTA, parole sue:** «quello che è stato scritto rimane archiviato nel dispositivo.
