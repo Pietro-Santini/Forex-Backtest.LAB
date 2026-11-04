@@ -202,3 +202,97 @@ test('la sessione si legge giusta da entrambe le forme', async () => {
     assert.equal(r.bustaVuota, null, 'una busta vuota è «non c\'è niente», non uno stato vuoto');
   } finally { await browser.close(); }
 });
+
+// ====== ACCESO DI DEFAULT, MA SOLO DOVE RISPONDE ======
+//
+// CHIESTO dal proprietario (4 novembre 2026): «di default poi il mio PC terrà i dati degli utenti
+// e miei sul mio PC, sul disco E».
+//
+// PERCHÉ IL DEFAULT NON PUÒ ESSERE «ACCESO E BASTA»: su un telefono non c'è nessun ponte, quindi
+// un default acceso alla cieca farebbe sbattere OGNI salvataggio contro una porta chiusa prima di
+// ricadere su Firebase — lento e inutile. Quindi all'avvio si chiede una volta se le rotte ci
+// sono, e la risposta si ricorda sul dispositivo.
+//
+// E SONO TRE STATI, non due: una scelta esplicita dell'utente non si scavalca al prossimo avvio.
+// Senza lo '0', chi spegne l'interruttore lo ritroverebbe acceso la volta dopo.
+const STATO = (preparazione) => `(function(){
+  try{ localStorage.removeItem('fbl_cloud_nostro'); }catch(e){}
+  try{ localStorage.removeItem('fbl_cloud_nostro_visto'); }catch(e){}
+  ${preparazione}
+  return {acceso: fblCloudNostro(), scelta: fblCloudNostroScelta(), visto: fblCloudNostroVisto()};
+})()`;
+
+test('senza scelta dell\'utente, acceso se le rotte hanno risposto su questo dispositivo', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const risponde = await pagina.evaluate(STATO(`fblCloudNostroVistoImposta(true);`));
+    const nonRisponde = await pagina.evaluate(STATO(`fblCloudNostroVistoImposta(false);`));
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(risponde.acceso, true,
+      'dove il cloud nostro risponde, di default i dati stanno sul computer');
+    assert.equal(nonRisponde.acceso, false,
+      'dove non risponde (un telefono senza ponte) non si accende: si resta su Firebase');
+  } finally { await browser.close(); }
+});
+
+// LA PROVA CHE CONTA PER CHI USA L'APP: una scelta esplicita non viene scavalcata dal default.
+test('se l\'utente lo spegne, resta spento anche se le rotte rispondono', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(STATO(`
+      fblCloudNostroVistoImposta(true);
+      fblCloudNostroImposta(false);`));
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.scelta, '0', 'lo spegnimento si scrive, non si cancella e basta');
+    assert.equal(r.acceso, false,
+      'senza lo «0» il default lo riaccenderebbe al prossimo avvio, e l\'utente ritroverebbe acceso quello che aveva spento');
+  } finally { await browser.close(); }
+});
+
+test('se l\'utente lo accende, resta acceso anche se la verifica non ha ancora risposto', async () => {
+  const {browser, pagina} = await apriApp();
+  try {
+    const r = await pagina.evaluate(STATO(`
+      fblCloudNostroVistoImposta(false);
+      fblCloudNostroImposta(true);`));
+    assert.equal(r.acceso, true, 'la scelta dell\'utente vince sulla verifica');
+  } finally { await browser.close(); }
+});
+
+// La verifica all'avvio ricorda la risposta: è lei che decide il default.
+test('la verifica all\'avvio ricorda se le rotte ci sono', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.route(u => u.pathname.endsWith('/dati/session'),
+      r => r.fulfill({status: 401, contentType: 'application/json', body: '{}'}));
+    const r = await pagina.evaluate(`(async function(){
+      try{ localStorage.removeItem('fbl_cloud_nostro'); }catch(e){}
+      fblCloudNostroVistoImposta(false);
+      MT5_BRIDGE_URL='http://127.0.0.1:8000';
+      await fblCloudNostroGuarda();
+      return {visto: fblCloudNostroVisto(), acceso: fblCloudNostro()};
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.visto, true, '401 vuol dire che la rotta c\'è: va ricordato');
+    assert.equal(r.acceso, true, 'e da lì il default è acceso');
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO: col 404 la verifica deve ricordare che NON ci sono. Senza questa, una
+// verifica rotta che risponde sempre «sì» accenderebbe il default anche su un telefono.
+test('PROVA DI CONTROLLO: col 404 la verifica ricorda che le rotte non ci sono', async () => {
+  const {browser, pagina} = await apriApp();
+  try {
+    await pagina.route(u => u.pathname.endsWith('/dati/session'),
+      r => r.fulfill({status: 404, contentType: 'application/json', body: '{}'}));
+    const r = await pagina.evaluate(`(async function(){
+      try{ localStorage.removeItem('fbl_cloud_nostro'); }catch(e){}
+      fblCloudNostroVistoImposta(true);
+      MT5_BRIDGE_URL='http://127.0.0.1:8000';
+      await fblCloudNostroGuarda();
+      return {visto: fblCloudNostroVisto(), acceso: fblCloudNostro()};
+    })()`);
+    assert.equal(r.visto, false, 'il 404 va ricordato come «non ci sono»');
+    assert.equal(r.acceso, false, 'e il default resta spento: si usa Firebase');
+  } finally { await browser.close(); }
+});

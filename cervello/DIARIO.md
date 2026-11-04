@@ -2,6 +2,93 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-04 — Claude — **v2.0.86: una finestra appena aperta cancellava le posizioni delle altre
+  (una causa, quattro sintomi), il cloud nostro acceso di default, e una guardia contro i nomi
+  doppi — nata da un mio errore**.
+  1. **IL DIFETTO GROSSO, parole del proprietario:** «quando clicchiamo il pulsante duplica
+     finestra, i parametri di prezzo attuale, P/L live… non ci visualizza più le posizioni a
+     grafico… sulla seconda finestra, se abbiamo delle posizioni aperte, in realtà non ci fa
+     vedere più proprio nulla, non ci aggiorna nulla… è come se cercasse di caricare le posizioni
+     esistenti sulla pagina madre e caricarle sulla seconda finestra, e va in conflitto: appare
+     poi scompare, appare scompare di continuo».
+  2. **CAUSA MISURATA, e una sola per quattro sintomi.** Una finestra duplicata nasce VUOTA per
+     scelta esplicita (non ripristina da disco). Ma `scheduleSave()` annuncia lo stato del conto
+     alle altre finestre a OGNI singola azione, e durante l'avvio di azioni ce ne sono molte —
+     tutte PRIMA che arrivi la risposta alla richiesta dello stato. Quindi la finestra nuova
+     annunciava `positions: []`, e il gestore all'altro capo fa `positions = msg.positions`: **la
+     madre cancellava le sue posizioni**. Poi la madre le riannunciava, la nuova le riceveva, e
+     intanto ne annunciava altre vuote — l'apparire e scomparire che lui descrive.
+     **E SPIEGA IL RESTO:** P/L live, prezzo attuale e margine libero si calcolano DALLE
+     posizioni. Non erano rotti loro, non c'erano le posizioni. La mini dashboard sotto «Torna
+     all'ultima candela» (operazione, P/L, capitale, win/loss, margine libero) esisteva già e
+     funziona: non mostrava niente perché non c'era niente da mostrare.
+  3. **LA REGOLA: si parla solo se si ha qualcosa da dire.** Curata dai DUE lati, e il secondo
+     serve: chi trasmette tace se non ha mai ricevuto niente e non ha niente di suo; chi riceve
+     rifiuta una lista vuota da una finestra che non ha MAI annunciato nulla. Senza il secondo
+     lato, durante il passaggio di versione una finestra vecchia resta aperta e continua a mandare
+     la sua lista vuota. «Ho chiuso l'ultima posizione» passa (quella finestra aveva già parlato
+     con dei dati dentro); «sono appena nata e non so niente» no.
+  4. **LA TARGHETTA «PIP 2» È VIA.** «Quello togliamolo, non serve assolutamente niente… non
+     devono chiamarsi PIP2, PIP3, PIP4.» E con lei i 24 px che il foglio di stile le riservava in
+     cima: senza la banderuola erano una striscia vuota rubata al grafico.
+  5. **I TP/SL CHE SI RICARICAVANO AL CAMBIO ASSET.** «Prova a ricaricare sempre l'ultima
+     posizione aperta, quella dei dati di take profit e stop loss… cosa che invece assolutamente
+     non deve fare.» Era scritto in **quattro punti identici**: `active = l'ULTIMA posizione di
+     questo asset`, e poi le caselle Stop Loss e Take Profit riempite coi SUOI valori. Scegliere
+     per l'utente quale posizione sta modificando — e metterne i livelli nelle caselle da cui
+     parte il prossimo ordine — è una decisione che non spetta al programma: su un conto vero quei
+     numeri diventano un ordine. Ora la regola sta in una funzione sola
+     (`fblAssetCambiatoAzzeraSelezione`) e non seleziona niente. **Le posizioni non si toccano:**
+     restano tutte aperte e tutte disegnate, è la selezione che scompare. Con la prova di
+     controllo che conta: se l'asset NON è cambiato non si tocca niente, perché da quella strada
+     passa anche il refresh del Live ogni secondo e svuotare le caselle cancellerebbe una bozza di
+     ordine in composizione.
+  6. **IL CLOUD NOSTRO È ACCESO DI DEFAULT.** «Di default poi il mio PC terrà i dati degli utenti
+     e miei sul mio PC, sul disco E.» Ma il default vale solo **dove le rotte rispondono davvero**:
+     su un telefono non c'è nessun ponte, e un default acceso alla cieca farebbe sbattere ogni
+     salvataggio contro una porta chiusa prima di ricadere su Firebase. All'avvio si chiede una
+     volta (401 = c'è, 404 = non c'è) e la risposta si ricorda. **Tre stati, non due:** acceso
+     dall'utente, SPENTO dall'utente, o non scelto — perché senza lo «spento» esplicito il default
+     riaccenderebbe al prossimo avvio quello che l'utente aveva spento.
+  7. **UN MIO ERRORE, e la guardia che ne è nata.** Avevo chiamato una funzione del cronometro
+     `fblCronoDisegna`: quel nome **esisteva già** — è il disegnatore della cronologia delle sale
+     Telegram, assegnato a `window` più in basso e chiamato dal `draw()` con nove argomenti. La mia
+     dichiarazione veniva soppiantata dalla sua, quindi il cronometro era **codice morto**, e me ne
+     sono accorto solo perché un test leggeva un riquadro rimasto vuoto. **A ordine invertito avrei
+     rotto un grafico che funziona**, e nessun test lo avrebbe detto: `draw()` chiama quel nome
+     dentro un `try/catch`, quindi quel grafico sarebbe semplicemente scomparso.
+     Da qui `nomi_unici.test.mjs`. Scrivendolo ho imparato due distinzioni senza cui era rosso su
+     un codice sano (`window.nome = nome` è un'esposizione voluta, non una ridefinizione; nella
+     guida agli indicatori ci sono esempi scritti a mano che sembrano funzioni) e **una terza cosa
+     che conta di più**: la prima versione della guardia era **muta**. Il regex finiva con l'ancora
+     di fine riga, e `app.html` ha fine-riga Windows — quella riga non veniva mai esaminata.
+     Scoperto solo provandola nei due sensi: rimettendo il nome sbagliato restava verde. Senza
+     quella prova avrei aggiunto una protezione che non protegge, e l'avrei creduta tale.
+  8. **LA VELOCITÀ: misurata, e non è nell'app.** Alla domanda su dove la sentisse lenta il
+     proprietario ha risposto: «quando scorro il grafico, cambio time frame, inserisco disegni».
+     Misurato con una sessione che ha davvero i suoi disegni dentro (98 KB di pacchetto, 5000
+     candele): `draw()` **1,56 ms**, un passo di scorrimento 1,34 ms, `rebuildRows()` 0 ms, il
+     raccoglimento della sessione 0,04 ms, le firme per campo 0,54 ms, la scrittura sincrona di
+     149 KB su localStorage 0,19 ms, le tre chiamate al ponte 2-3 ms l'una. **Niente di lento, da
+     nessuna parte.** Anche il sospetto che avevo su me stesso — le firme per campo aggiunte dal
+     delta — era infondato.
+     Quindi nessuna cura a naso: entra il **cronometro**, che misura nella sessione VERA e registra
+     solo sopra i 16 ms (un fotogramma), così non diventa lui il rallentamento. L'unica cosa
+     davvero stretta misurata sul computer del proprietario è la **memoria: 2,5 GB liberi su 16**.
+  9. **IL CONTO DEL TRAFFICO** (dalla v2.0.85) ora si vede nel pannello accanto al cronometro:
+     documento per documento, scritture, letture e **KB**, ordinato per banda.
+  10. **AGGIORNAMENTO: CHIUSO, confermato dal proprietario.** «Ora il programma si chiude
+     correttamente alla installazione dell'aggiornamento.» Coincide con le misure: eseguibili
+     sostituiti alle 19:28, canale dei segnali riagganciato alle 19:27 e 19:30, ponte che dichiara
+     la versione nuova. Resta aperto solo il crash occasionale in installazione, se si ripresenta.
+  11. **DA VERIFICARE, e serve una prova del proprietario:** il tasto schermo intero che dopo
+     «duplica finestra» non si seleziona più. Nel ramo desktop `openExtraPipWindow` chiama
+     pywebview e ritorna SUBITO: non tocca nessuno stato della pagina madre, quindi non è l'app a
+     disabilitarlo. La prova che distingue: farlo **dal sito nel browser**, dove la finestra si
+     apre con `window.open` invece che con pywebview.
+  **Collaudo:** browser 1178 prove, 1177 verdi, 0 rosse (1 saltata); python 222 verdi.
+  **Solo `app.html`** fra i file che contano per l'utente: basta il push.
+
 - 2026-11-04 — Claude — **v2.0.85: se cade il PC continua Firebase, una fotografia al giorno, e
   un contatore per sapere DA DOVE viene la bolletta**.
   1. **LA DIVISIONE DEI COMPITI, parole del proprietario:** «la fonte primaria è il nostro PC…

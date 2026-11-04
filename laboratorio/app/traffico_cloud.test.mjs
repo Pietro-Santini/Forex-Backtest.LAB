@@ -180,3 +180,93 @@ test('PROVA DI CONTROLLO: senza traffico il riquadro lo spiega', async () => {
     assert.ok(/Ancora niente/.test(r), 'deve dire che non c\'è ancora niente: "' + r.slice(0, 80) + '"');
   } finally { await browser.close(); }
 });
+
+// ====== IL CRONOMETRO ======
+//
+// CHIESTO dal proprietario: «rendere l'applicazione il più veloce possibile», e alla domanda su
+// DOVE la sente lenta: «quando scorro il grafico, cambio time frame, inserisco disegni».
+//
+// MISURATO IN BANCO, con una sessione che ha davvero i disegni dentro (12 asset, 2 sessioni, 10
+// disegni ciascuno — 98 KB di pacchetto): draw() 1,56 ms, un passo di scorrimento 1,34 ms,
+// rebuildRows() 0 ms, il raccoglimento della sessione 0,04 ms, le firme per campo 0,54 ms, la
+// scrittura sincrona di 149 KB su localStorage 0,19 ms. **Nessuna lentezza, da nessuna parte.**
+// Quindi il collo di bottiglia non è nella logica dell'app come la esercita un banco pulito: vive
+// sul computer vero, con MT5 aperto e la memoria quasi piena (2,5 GB liberi su 16, misurati).
+//
+// Per questo il cronometro sta DENTRO l'app: è l'unico strumento che misura dove serve. E
+// registra solo sopra i 16 ms (un fotogramma), perché un cronometro che scrive tutto diventa lui
+// il rallentamento — il modo più stupido di fallire.
+test('il cronometro registra solo quello che supera la soglia', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      fblLentoAzzera();
+      fblLentoSegna('veloce', 2);
+      fblLentoSegna('veloce', 5);
+      fblLentoSegna('lenta', 40);
+      fblLentoSegna('lenta', 80);
+      fblLentoSegna('lenta', 3);
+      const righe = fblLentoRiassunto();
+      const v = righe.find(x=>x.cosa==='veloce'), l = righe.find(x=>x.cosa==='lenta');
+      return {ordine: righe.map(x=>x.cosa), veloce: v, lenta: l};
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.veloce.giri, 2, 'i giri si contano sempre');
+    assert.equal(r.veloce.lenti, 0, 'ma sotto la soglia non si tiene niente');
+    assert.equal(r.veloce.peggio, 0);
+    assert.equal(r.lenta.giri, 3);
+    assert.equal(r.lenta.lenti, 2, 'il giro da 3 ms non conta come lento');
+    assert.equal(r.lenta.peggio, 80);
+    assert.equal(r.lenta.mediaLenti, 60, 'la media è solo sui lenti: (40+80)/2');
+    assert.equal(r.ordine[0], 'lenta',
+      'si ordina per tempo perso in tutto: cento giri da 40 ms pesano più di un picco da 300');
+  } finally { await browser.close(); }
+});
+
+// Avvolgere una funzione non deve cambiarne il comportamento: né il valore che torna, né gli
+// argomenti, né gli errori. Un cronometro che rompe quello che misura è peggio di nessun
+// cronometro.
+test('avvolgere una funzione non ne cambia il comportamento', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      fblLentoAzzera();
+      window.__somma = function(a,b){ return a+b; };
+      const avvolta = fblLentoAvvolgi('__somma');
+      const dueVolte = fblLentoAvvolgi('__somma');   // non si avvolge due volte
+      const risultato = window.__somma(2,3);
+      window.__esplode = function(){ throw new Error('bum'); };
+      fblLentoAvvolgi('__esplode');
+      let errore = null;
+      try{ window.__esplode(); }catch(e){ errore = e.message; }
+      const r2 = fblLentoRiassunto();
+      return {avvolta, dueVolte, risultato, errore,
+              misurata: !!r2.find(x=>x.cosa==='__somma'),
+              misurataAnchePerdendo: !!r2.find(x=>x.cosa==='__esplode')};
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.avvolta, true);
+    assert.equal(r.dueVolte, false, 'avvolgere due volte raddoppierebbe la misura');
+    assert.equal(r.risultato, 5, 'il valore di ritorno deve passare intatto');
+    assert.equal(r.errore, 'bum', 'l\'errore deve arrivare a chi chiama, non essere inghiottito');
+    assert.equal(r.misurata, true);
+    assert.equal(r.misurataAnchePerdendo, true,
+      'anche una chiamata che fallisce va misurata: spesso è proprio quella lenta');
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO: se niente ha superato la soglia il riquadro lo DICE, invece di mostrare una
+// tabella muta che sembra un difetto. Ed è l'informazione più utile: «da qui dentro non è lenta».
+test('PROVA DI CONTROLLO: senza niente di lento il riquadro lo dice chiaro', async () => {
+  const {browser, pagina} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      fblLentoAzzera();
+      fblLentoSegna('draw', 2);
+      fblLentoDisegna();
+      return (document.getElementById('fblLentoTabella')||{}).textContent||'';
+    })()`);
+    assert.ok(/non è lenta|Nessuna operazione/.test(r),
+      'deve dire che niente ha superato la soglia: "' + r.slice(0, 100) + '"');
+  } finally { await browser.close(); }
+});

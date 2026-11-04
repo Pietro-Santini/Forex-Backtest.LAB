@@ -4594,6 +4594,11 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
            costa due volte. Si riempie da solo mentre si usa l'app. -->
       <div class="tgCfgSez">📊 Traffico cloud di oggi</div>
       <div id="fblTrafficoTabella" class="tgCfgNota" style="margin-bottom:12px"></div>
+      <!-- IL CRONOMETRO. Nel banco di prova tutto risulta veloce (draw 1-2 ms, cambio
+           timeframe 0 ms, salvataggio 0,2 ms): la lentezza, se c'e', vive sul computer vero,
+           con MT5 aperto e la memoria quasi piena. Si misura solo li'. -->
+      <div class="tgCfgSez">⏱️ Cosa è lento, qui e adesso</div>
+      <div id="fblLentoTabella" class="tgCfgNota" style="margin-bottom:12px"></div>
 
       <div class="tgCfgSez">Cosa risponde adesso</div>
       <div id="fblServizi" class="fblServizi"></div>
@@ -7375,6 +7380,34 @@ function clearDraftTradeLevelFields(){
 // APERTO: le posizioni e gli ordini veri restano dove sono (al cambio conto li gestisce il
 // parcheggio di mt5AttivaConto), e una posizione simulata ancora selezionata si rimette le sue
 // caselle da sola al primo refresh - sono le SUE, non quelle di un altro conto.
+// AL CAMBIO ASSET NON SI PRESELEZIONA NESSUNA POSIZIONE.
+//
+// SEGNALATO dal proprietario (4 novembre 2026): «quando selezioniamo l'asset dove ci sono
+// aperte le posizioni, prova a ricaricare sempre l'ultima posizione aperta, quella dei dati di
+// take profit e stop loss dell'ultima posizione aperta, cosa che invece assolutamente non deve
+// fare». Ed e' la stessa famiglia della segnalazione del 3 novembre sul cambio di conto MT5:
+// parametri di una posizione che si ripresentano addosso a un'altra (vedi
+// fblResetParametriOrdine qui sotto).
+//
+// COM'ERA: quattro punti del file facevano, identici, `active = l'ULTIMA posizione di questo
+// asset` e poi refreshTradeLevelUI(), che riempie le caselle Stop Loss e Take Profit con i SUOI
+// valori. Scegliere per l'utente quale posizione sta modificando - e metterne i livelli nelle
+// caselle da cui parte il prossimo ordine - e' una decisione che non spetta al programma: su un
+// conto vero quei numeri diventano un ordine.
+//
+// COM'E' ADESSO: cambiando asset per davvero non si seleziona niente e le caselle si svuotano.
+// Le posizioni NON si toccano: restano tutte aperte e tutte disegnate, di qualunque asset. Chi
+// vuole modificarne una la tocca, come ha sempre fatto.
+//
+// SE L'ASSET NON E' CAMBIATO non si tocca niente, e non e' un dettaglio: questa strada viene
+// percorsa anche dal refresh del grafico Live (ogni secondo circa) e svuotare le caselle a ogni
+// giro cancellerebbe una bozza di ordine che l'utente sta ancora componendo.
+function fblAssetCambiatoAzzeraSelezione(cambiatoDavvero){
+ if(!cambiatoDavvero)return active;
+ active=null;
+ try{ clearDraftTradeLevelFields(); }catch(e){}
+ return null;
+}
 function fblResetParametriOrdine(motivo){
  try{ clearDraftTradeLevelFields(); }catch(e){}
  try{ tradeSLLine=null; tradeTPLine=null; }catch(e){}
@@ -8476,9 +8509,45 @@ function collectTradingSyncPayload(){
    trades, equity, sessionByMode, statsBaselineByMode, isPropFirmMode, tradeStrategies
  };
 }
+// UNA FINESTRA NON ANNUNCIA MAI UNO STATO VUOTO SE NON NE HA MAI RICEVUTO UNO.
+//
+// IL DIFETTO (segnalato dal proprietario il 4 novembre 2026, e spiegava quattro cose insieme):
+// «quando duplichiamo la finestra... non ci fa vedere piu' nulla, non ci aggiorna nulla... e'
+// come se cercasse di caricare le posizioni esistenti sulla pagina madre e caricarle sulla
+// seconda finestra, e va in conflitto: appare poi scompare, appare scompare di continuo».
+//
+// CAUSA. Una finestra duplicata nasce VUOTA per scelta esplicita (non ripristina da disco: vedi
+// initSession). Ma scheduleSave() trasmette lo stato del conto a OGNI singola azione, e durante
+// l'avvio di azioni ce ne sono molte - tutte PRIMA che arrivi la risposta alla richiesta dello
+// stato. Quindi la finestra nuova annunciava `positions: []`, e il gestore all'altro capo fa
+// `positions = msg.positions`: la madre cancellava le sue posizioni. Poi la madre riannunciava
+// le sue, la nuova le riceveva, e intanto ne annunciava altre vuote - da qui l'apparire e
+// scomparire continuo.
+//
+// LA REGOLA: si parla solo se si ha qualcosa da dire. La madre (slot 0) nasce con lo stato vero
+// e puo' sempre parlare. Una finestra duplicata parla quando ha RICEVUTO lo stato almeno una
+// volta, oppure quando ha qualcosa di suo da annunciare (una posizione aperta da lei). Uno
+// stato vuoto da chi non ha mai saputo niente non e' un'informazione: e' una cancellazione.
+let tradingSyncRicevuto=(PIP_SLOT===0);
+// Quali finestre hanno annunciato almeno una volta qualcosa di concreto: serve a chi RICEVE
+// (vedi il gestore trading_sync) per distinguere "ho chiuso l'ultima posizione" da "sono
+// appena nata e non so niente".
+const sorgentiConDati=new Set();
+function fblStatoDaAnnunciare(p){
+ try{
+  return !!(p && ((p.positions&&p.positions.length) || (p.pendingOrders&&p.pendingOrders.length)
+    || (p.trades&&p.trades.length)));
+ }catch(e){ return false; }
+}
 function broadcastTradingStateNow(){
  if(!tradingChannel||applyingRemoteTradingSync)return;
- try{ tradingChannel.postMessage(collectTradingSyncPayload()); }catch(e){ console.warn('Broadcast stato conto (PIP) non riuscito:',e); }
+ let p=null;
+ try{ p=collectTradingSyncPayload(); }catch(e){ return; }
+ if(!tradingSyncRicevuto && !fblStatoDaAnnunciare(p)){
+  // Niente ricevuto e niente di proprio: tacere e' l'unica cosa giusta.
+  return;
+ }
+ try{ tradingChannel.postMessage(p); }catch(e){ console.warn('Broadcast stato conto (PIP) non riuscito:',e); }
 }
 // Guardia duplicato-asset (evita di valutare due volte lo stesso Stop Loss/Take Profit se lo
 // STESSO asset è mostrato in due finestre insieme, es. stesso simbolo a due timeframe diversi su
@@ -8689,6 +8758,28 @@ if(tradingChannel){
    const msg=ev&&ev.data;
    if(!msg||typeof msg!=='object'||msg.slot===PIP_SLOT)return;
    if(msg.type==='trading_sync'){
+     // L'ALTRA META' DELLA STESSA CURA, dal lato di chi RICEVE.
+     //
+     // Il mittente ormai tace quando non ha niente da dire (vedi broadcastTradingStateNow), ma
+     // non basta: durante il passaggio di versione una finestra VECCHIA resta aperta e continua
+     // ad annunciare la sua lista vuota. Chi riceve deve saper riconoscere quel messaggio per
+     // quello che e': non un'informazione, una cancellazione.
+     //
+     // LA REGOLA: una lista vuota si accetta solo da una finestra che almeno una volta ha
+     // annunciato qualcosa. Cosi' "ho chiuso l'ultima posizione" passa (quella finestra aveva
+     // gia' parlato con dei dati dentro), mentre "sono appena nata e non ho niente" no.
+     {
+      const _haDati=fblStatoDaAnnunciare(msg);
+      if(_haDati){ sorgentiConDati.add(msg.slot); }
+      else if(!sorgentiConDati.has(msg.slot)){
+       console.log('[Finestre] ignorato lo stato VUOTO della finestra '+msg.slot
+         +": non ha mai annunciato niente, quindi non puo cancellare quello che abbiamo");
+       return;
+      }
+     }
+     // Da qui in poi questa finestra SA, quindi puo' parlare anche per dire "niente" (una
+     // posizione chiusa qui deve poter svuotare la lista anche sulle altre).
+     tradingSyncRicevuto=true;
      applyingRemoteTradingSync=true;
      try{
        positions=Array.isArray(msg.positions)?msg.positions:positions;
@@ -11926,19 +12017,9 @@ async function autoLoadAssetLibrary(asset){
    // appartenere all'asset appena selezionato: se quella precedente era di un altro asset,
    // la sostituiamo con l'ultima posizione aperta su QUESTO asset (se esiste), altrimenti null.
    // Le posizioni stesse NON vengono toccate: restano tutte aperte, di qualunque asset.
-   const ownNow=positions.filter(p=>(p.asset||asset)===asset);
-   active=ownNow.length?ownNow[ownNow.length-1]:null;
-   if(active){
-     // C'è una posizione già aperta su questo asset: ripopola le caselle SL/TP giuste (a
-     // mercato o pendenti dedicate) con i SUOI valori reali.
-     refreshTradeLevelUI();
-   }else{
-     // Nessuna posizione su questo asset: le caselle SL/TP/ENTRY potrebbero contenere ancora
-     // valori residui dell'asset lasciato (es. un TP di XAU/USD a 2054.20). Vanno svuotate,
-     // altrimenti quei numeri "sporcherebbero" sia lo zoom verticale del nuovo grafico
-     // (collectTradeLevelPrices li includerebbe per errore) sia un eventuale nuovo ordine.
-     clearDraftTradeLevelFields();
-   }
+   // Vedi fblAssetCambiatoAzzeraSelezione: cambiando asset non si preseleziona niente e le
+   // caselle si svuotano. Qui l'asset e' cambiato per davvero (siamo nel ramo del cambio).
+   fblAssetCambiatoAzzeraSelezione(true);
    // Caricamento progressivo (vedi CARICAMENTO CSV PROGRESSIVO): prima una piccola finestra
    // attorno al punto da mostrare, il resto in background dopo che il grafico è già visibile.
    const myGen=++csvProgressiveGen;
@@ -35139,6 +35220,7 @@ async function fblRemotoApri(){
  // viene raggiunto il ponte adesso, e quello cambia da una volta all'altra.
  try{ fblCloudNostroDisegna(); }catch(e){ console.log('[Accesso remoto] interruttore cloud:',e); }
  try{ fblTrafficoDisegna(); }catch(e){ console.log('[Accesso remoto] traffico:',e); }
+ try{ fblLentoDisegna(); }catch(e){ console.log('[Accesso remoto] cronometro:',e); }
  // Sul computer: se il server è già impostato ma questo PC non si è mai presentato, lo fa ora.
  // È quello che toglie di mezzo il "nome del computer" da scrivere a mano sul telefono.
  if(!fblRemoto()&&fblServer()&&fblServerChiave()){
@@ -35518,6 +35600,126 @@ function fblServiziFerma(){ if(fblServiziTimer){ clearInterval(fblServiziTimer);
 // invece di farlo scoprire da un documento che sembra sparito.
 // Il conto del traffico, in tabella. Si guarda per decidere cosa tagliare, quindi e' ordinata
 // per BANDA e non per numero di operazioni: su Firebase si paga la banda.
+// ATTENZIONE AL NOME, e non e' pedanteria: la prima versione di questo blocco si chiamava
+// fblCrono*, e `fblCronoDisegna` ESISTE GIA' in questo file - e' il disegnatore della cronologia
+// delle sale Telegram, assegnato a window piu' in basso e chiamato dal draw() con nove
+// argomenti. La mia dichiarazione veniva soppiantata da quella (quindi il mio cronometro era
+// codice morto, e il test l'ha preso), ma a ordine invertito avrei ROTTO un grafico che
+// funziona. In un file da 55.000 righe un nome nuovo si controlla PRIMA di scriverlo.
+// ====== IL CRONOMETRO: COSA E' LENTO, QUI E ADESSO ======
+//
+// CHIESTO dal proprietario (4 novembre 2026): «rendere l'applicazione il piu' veloce possibile».
+//
+// PERCHE' UN CRONOMETRO DENTRO L'APP, invece di ottimizzare a naso. Nel banco di prova ho
+// misurato tutto quello che si poteva misurare, su 5000 candele: draw() 1-2 ms, update() 0,9 ms,
+// il raccoglimento della sessione 0,03 ms, le tre chiamate al ponte 2-3 ms l'una. Nessuna
+// lentezza, da nessuna parte. Ma il banco NON e' il computer del proprietario: li' girano MT5, il
+// terminale, il browser con le sue schede, e la memoria libera misurata era 2,5 GB su 16. La
+// lentezza, se c'e', vive in quell'ambiente - e si misura solo li'.
+//
+// SI REGISTRA SOLO QUELLO CHE SUPERA UNA SOGLIA (16 ms, cioe' un fotogramma a 60 al secondo):
+// un cronometro che scrive tutto diventa lui il rallentamento, ed e' il modo piu' stupido di
+// fallire. Sotto la soglia si contano solo i giri, senza tenere niente.
+//
+// NON TOCCA NIENTE DEL COMPORTAMENTO: avvolge, misura, e lascia passare il valore di ritorno.
+// Se qualcosa va storto nel cronometro, la funzione avvolta deve funzionare comunque - per questo
+// la chiamata vera sta fuori dal try del cronometro.
+const FBL_LENTO_SOGLIA_MS = 16;
+const fblLento = {};          // nome -> {giri, lenti, peggio, sommaLenti}
+
+function fblLentoSegna(nome, ms){
+  try{
+    let v = fblLento[nome];
+    if(!v){ v = fblLento[nome] = {giri:0, lenti:0, peggio:0, sommaLenti:0}; }
+    v.giri++;
+    if(ms >= FBL_LENTO_SOGLIA_MS){
+      v.lenti++;
+      v.sommaLenti += ms;
+      if(ms > v.peggio) v.peggio = Math.round(ms);
+    }
+  }catch(e){}
+}
+
+// Avvolge una funzione globale col cronometro. Torna true se l'ha avvolta.
+// Si avvolge per NOME e una volta sola: avvolgere due volte raddoppierebbe la misura.
+const fblLentoAvvolte = {};
+function fblLentoAvvolgi(nome){
+  try{
+    if(fblLentoAvvolte[nome]) return false;
+    const vera = window[nome];
+    if(typeof vera !== 'function') return false;
+    fblLentoAvvolte[nome] = vera;
+    window[nome] = function(){
+      const a = performance.now();
+      // La chiamata vera FUORI dal try del cronometro: un errore nel cronometro non deve
+      // diventare un errore dell'app.
+      let esito;
+      try{ esito = vera.apply(this, arguments); }
+      finally{ try{ fblLentoSegna(nome, performance.now() - a); }catch(e){} }
+      return esito;
+    };
+    return true;
+  }catch(e){ return false; }
+}
+
+// Il riassunto, ordinato per TEMPO PERSO (quanti giri lenti per quanto sono durati): e' quello
+// che si guarda per decidere dove intervenire, non il peggiore assoluto - un singolo picco da
+// 300 ms conta meno di cento giri da 40.
+function fblLentoRiassunto(){
+  const righe = Object.keys(fblLento).map(nome=>{
+    const v = fblLento[nome];
+    return {
+      cosa: nome,
+      giri: v.giri,
+      lenti: v.lenti,
+      peggio: v.peggio,
+      mediaLenti: v.lenti ? Math.round(v.sommaLenti / v.lenti) : 0,
+      persiMs: Math.round(v.sommaLenti),
+    };
+  });
+  righe.sort((a,b)=> b.persiMs - a.persiMs);
+  return righe;
+}
+
+function fblLentoAzzera(){ Object.keys(fblLento).forEach(k=>{ delete fblLento[k]; }); }
+
+// Le funzioni che vale la pena guardare: quelle che girano in continuazione. Si avvolgono tardi
+// (dopo l'avvio) perche' prima non esistono ancora tutte.
+function fblLentoAvvia(){
+  ['draw','update','rebuildRows','collectLightSessionState','evaluate',
+   'fetchMt5Positions','fetchMt5Orders','fetchMt5AccountInfo',
+   'tgStrategiaValuta','footprintDisegna','syncFullStatusToFirebase'].forEach(fblLentoAvvolgi);
+}
+
+function fblLentoDisegna(){
+  const dove = $('fblLentoTabella');
+  if(!dove) return;
+  const righe = fblLentoRiassunto().filter(r=>r.giri>0);
+  if(!righe.length){
+    dove.innerHTML = 'Il cronometro non ha ancora dati. Usa l’app normalmente per qualche minuto '
+      + 'e torna qui: registra solo le operazioni che superano <b>' + FBL_LENTO_SOGLIA_MS
+      + ' ms</b> (un fotogramma), così non diventa lui il rallentamento.';
+    return;
+  }
+  const lente = righe.filter(r=>r.lenti>0);
+  const riga = (r)=>'<tr><td style="padding:2px 8px 2px 0">'+r.cosa
+    +'</td><td style="padding:2px 8px;text-align:right;font-variant-numeric:tabular-nums">'+r.giri
+    +'</td><td style="padding:2px 8px;text-align:right;font-variant-numeric:tabular-nums">'+r.lenti
+    +'</td><td style="padding:2px 8px;text-align:right;font-variant-numeric:tabular-nums">'+r.mediaLenti+' ms'
+    +'</td><td style="padding:2px 0 2px 8px;text-align:right;font-variant-numeric:tabular-nums">'+r.peggio+' ms</td></tr>';
+  dove.innerHTML = (lente.length
+      ? ('<div style="margin-bottom:6px"><b>'+lente.length+'</b> operazioni hanno superato almeno una volta i '
+         + FBL_LENTO_SOGLIA_MS + ' ms. Ordinate per <b>tempo perso in tutto</b>, non per il picco: '
+         + 'cento giri da 40 ms pesano più di un picco da 300.</div>')
+      : ('<div style="margin-bottom:6px">Nessuna operazione ha superato i ' + FBL_LENTO_SOGLIA_MS
+         + ' ms: da qui dentro l’app non è lenta. Se la senti lenta, il collo di bottiglia è fuori '
+         + 'da queste funzioni (rete, memoria, altri programmi).</div>'))
+    + '<table style="border-collapse:collapse;font-size:12px">'
+    + '<tr style="opacity:.7"><th style="text-align:left;padding-right:8px">operazione</th>'
+    + '<th style="padding:0 8px">giri</th><th style="padding:0 8px">lenti</th>'
+    + '<th style="padding:0 8px">media dei lenti</th><th style="padding-left:8px">peggio</th></tr>'
+    + righe.map(riga).join('') + '</table>';
+}
 function fblTrafficoDisegna(){
   const dove = $('fblTrafficoTabella');
   if(!dove) return;
@@ -35567,6 +35769,24 @@ function fblCloudNostroDisegna(){
 // LA DOMANDA NON PORTA IL TOKEN, di proposito: senza token una rotta che ESISTE risponde 401 e
 // una che non esiste risponde 404. Bastano quei due numeri per saperlo, senza tirare in mezzo
 // l'identita' dell'utente.
+// ALL'AVVIO SI CHIEDE UNA VOLTA, e la risposta decide il default (vedi fblCloudNostro).
+// Non blocca niente: parte per conto suo e aggiorna il ricordo quando sa. Finche' non sa, vale
+// quello che sapeva l'ultima volta - e al primissimo avvio vale Firebase, che e' il
+// comportamento di sempre.
+async function fblCloudNostroGuarda(){
+ try{
+  const ok=await fblCloudNostroRotteCiSono();
+  fblCloudNostroVistoImposta(ok);
+  if(ok)console.log('[Cloud] il cloud nostro risponde su questo computer: i dati stanno qui');
+  try{ fblCloudNostroDisegna(); }catch(e){}
+ }catch(e){}
+}
+// Non all'istante: all'avvio il ponte puo' non essere ancora in piedi, e una domanda fatta un
+// secondo troppo presto si ricorderebbe come "non c'e'" per tutta la sessione.
+setTimeout(()=>{ try{ fblCloudNostroGuarda(); }catch(e){} }, 4000);
+// Il cronometro si attacca alle funzioni DOPO l'avvio: prima non esistono ancora tutte, e
+// avvolgere una funzione che non c'e' ancora vorrebbe dire non misurarla mai.
+setTimeout(()=>{ try{ fblLentoAvvia(); }catch(e){} }, 5000);
 async function fblCloudNostroRotteCiSono(){
  try{
   const base=(typeof MT5_BRIDGE_URL==='string'&&MT5_BRIDGE_URL)?MT5_BRIDGE_URL.replace(/\/+$/,''):'http://127.0.0.1:8000';
@@ -37331,10 +37551,38 @@ function fblServerUrl(porta){
 // Acceso o spento, lo decide l'utente: spostare dove vivono i dati non e' una cosa da fare di
 // nascosto a nessuno. Spento, tutto resta come prima (server Oracle se impostato, se no
 // Firestore).
+// ACCESO DI DEFAULT, dal 4 novembre 2026. Parole del proprietario: «di default poi il mio PC
+// terra' i dati degli utenti e miei sul mio PC, sul disco E».
+//
+// MA IL DEFAULT VALE SOLO DOVE LE ROTTE RISPONDONO DAVVERO, e non e' prudenza eccessiva: su un
+// telefono non c'e' nessun ponte, quindi un default acceso alla cieca farebbe sbattere OGNI
+// salvataggio contro una porta chiusa prima di ricadere su Firebase - lento e inutile. Percio'
+// all'avvio si chiede una volta se le rotte ci sono (fblCloudNostroRotteCiSono: una richiesta
+// senza token, dove 401 vuol dire "c'e'" e 404 "non c'e'") e la risposta si ricorda sul
+// dispositivo.
+//
+// TRE STATI, non due, e servono tutti e tre:
+//   '1' = acceso dall'utente        -> acceso, sempre
+//   '0' = SPENTO dall'utente        -> spento, e il default non lo riaccende: una scelta
+//                                      esplicita non si scavalca al prossimo avvio
+//   assente = non ha scelto         -> acceso se le rotte hanno risposto su questo dispositivo
 const FBL_CLOUD_NOSTRO_KEY='fbl_cloud_nostro';
-function fblCloudNostro(){ try{ return localStorage.getItem(FBL_CLOUD_NOSTRO_KEY)==='1'; }catch(e){ return false; } }
+const FBL_CLOUD_NOSTRO_VISTO_KEY='fbl_cloud_nostro_visto';
+function fblCloudNostroScelta(){ try{ return localStorage.getItem(FBL_CLOUD_NOSTRO_KEY); }catch(e){ return null; } }
+function fblCloudNostroVisto(){ try{ return localStorage.getItem(FBL_CLOUD_NOSTRO_VISTO_KEY)==='1'; }catch(e){ return false; } }
+function fblCloudNostroVistoImposta(ok){
+ try{ if(ok)localStorage.setItem(FBL_CLOUD_NOSTRO_VISTO_KEY,'1'); else localStorage.removeItem(FBL_CLOUD_NOSTRO_VISTO_KEY); }catch(e){}
+}
+function fblCloudNostro(){
+ const scelta=fblCloudNostroScelta();
+ if(scelta==='1')return true;
+ if(scelta==='0')return false;
+ return fblCloudNostroVisto();
+}
 function fblCloudNostroImposta(acceso){
- try{ if(acceso)localStorage.setItem(FBL_CLOUD_NOSTRO_KEY,'1'); else localStorage.removeItem(FBL_CLOUD_NOSTRO_KEY); }catch(e){}
+ // Si scrive SEMPRE la scelta, anche quando e' "spento": senza lo '0' il default lo
+ // riaccenderebbe al prossimo avvio, e l'utente ritroverebbe acceso quello che aveva spento.
+ try{ localStorage.setItem(FBL_CLOUD_NOSTRO_KEY, acceso?'1':'0'); }catch(e){}
 }
 function fblUrlDati(){
  if(fblCloudNostro()){
@@ -40902,22 +41150,11 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // un footprintByBucket vuoto, la candela in formazione resta candlestick normale finché non
  // arrivano i primi tick di questo asset).
  if(__footprintAssetChanged)footprintRebuildBucketsForCurrentAsset();
- const ownNow=positions.filter(p=>(p.asset||asset)===asset);
- active=ownNow.length?ownNow[ownNow.length-1]:null;
- if(active){
-   refreshTradeLevelUI();
- }else if(wasOnDifferentAsset){
-   // FIX bug "le caselle SL/TP/Entry spariscono durante un refresh forzato del grafico Live":
-   // questa funzione viene richiamata ANCHE quando l'asset è rimasto lo stesso (timer di
-   // refresh ogni ~1s, resync dopo chiusura candela, riconnessione WebSocket — vedi
-   // startLiveRefreshTimer), non solo quando l'utente cambia davvero asset dal menu. Prima
-   // svuotava le caselle ad ogni chiamata se non c'era una posizione già aperta, cancellando
-   // per errore anche una bozza di ordine (SL/TP/Entry) che l'utente stava ancora componendo
-   // PRIMA di eseguirlo. Ora si svuota SOLO quando l'asset è VERAMENTE cambiato (wasOnDifferentAsset),
-   // esattamente come già fa il cambio asset manuale in Storico più sopra — un refresh dello
-   // stesso asset non tocca più le caselle.
-   clearDraftTradeLevelFields();
- }
+ // Vedi fblAssetCambiatoAzzeraSelezione: niente preselezione al cambio asset.
+ fblAssetCambiatoAzzeraSelezione(wasOnDifferentAsset);
+ // La nota che stava qui - "il refresh del grafico Live passa da questa strada ogni secondo,
+ // quindi svuotare le caselle a ogni giro cancellerebbe una bozza di ordine in composizione" -
+ // vive ora dentro fblAssetCambiatoAzzeraSelezione, che e' l'unico posto che decide.
  $('status').textContent=`Ricerca strumento Capital.com per ${asset}…`;
  const epic=await resolveCapitalEpic(asset);
  console.log(`[LoadHistory] epic risolto in ${(performance.now()-__t0).toFixed(0)}ms (da cache se già visto prima)`);
@@ -45104,10 +45341,8 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  const __footprintAssetChanged=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso motivo
  currentAssetKey=asset;
  if(__footprintAssetChanged)footprintRebuildBucketsForCurrentAsset();
- const ownNow=positions.filter(p=>(p.asset||asset)===asset);
- active=ownNow.length?ownNow[ownNow.length-1]:null;
- if(active){ refreshTradeLevelUI(); }
- else if(wasOnDifferentAsset){ clearDraftTradeLevelFields(); }
+ // Vedi fblAssetCambiatoAzzeraSelezione: niente preselezione al cambio asset.
+ fblAssetCambiatoAzzeraSelezione(wasOnDifferentAsset);
 
  $('status').textContent=`Scaricamento storico MT5 (${resolved})…`;
  let body;
@@ -46526,9 +46761,8 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
  currentAssetKey=asset;
  binanceAssetAttivo=asset;
  if(assetCambiato)footprintRebuildBucketsForCurrentAsset();
- const ownNow=positions.filter(p=>(p.asset||asset)===asset);
- active=ownNow.length?ownNow[ownNow.length-1]:null;
- if(active)refreshTradeLevelUI(); else if(wasOnDifferentAsset)clearDraftTradeLevelFields();
+ // Vedi fblAssetCambiatoAzzeraSelezione: niente preselezione al cambio asset.
+ fblAssetCambiatoAzzeraSelezione(wasOnDifferentAsset);
  try{ const m=await binanceCaricaSimboli(); if(m)binanceRegistraMeta(asset,m.get(simbolo)); }catch(e){}
  const tf=currentTF||1;
  const intervallo=BINANCE_INTERVALLI[tf]||'1m';
@@ -51708,9 +51942,11 @@ document.title='Forex Backtest Lab';
   }
  }
  const kioskStyle=document.createElement('style');
+ // I 24 px in cima erano lo spazio della banderuola "PIP 2", che il proprietario ha fatto
+ // togliere: senza di lei quello spazio era una striscia vuota rubata al grafico.
  kioskStyle.textContent=`
    body.fbPipChartOnly{padding:0!important;margin:0!important;overflow:hidden}
-   body.fbPipChartOnly .chartWrap{height:calc(100vh - 24px)!important;margin-top:24px}
+   body.fbPipChartOnly .chartWrap{height:100vh!important;margin-top:0}
  `;
  document.head.appendChild(kioskStyle);
  // ORDINE IMPORTANTE (bug collegato, trovato mentre si aggiungeva movePipHistNavIntoSidebar qui
@@ -51733,15 +51969,12 @@ document.title='Forex Backtest Lab';
  // anche in questa modalità PIP (solo grafico): non va spostato nella sidebar.
  fbPipHideEverythingExceptChartWrap();
  document.body.classList.add('fbPipChartOnly');
- // Banderuola fissa in alto, sottile: questa finestra non salva nulla della propria
- // configurazione (asset/timeframe/indicatori/disegni) — chiuderla la azzera, per scelta
- // esplicita discussa con l'utente prima di costruire questa funzionalità. Esclusa dalla regola
- // "nascondi tutto tranne .chartWrap" qui sopra tramite il suo id.
- const badge=document.createElement('div');
- badge.id='fbPipChartOnlyBadge';
- badge.textContent='🪟 PIP '+PIP_SLOT+' — solo grafico, non salva la propria configurazione. Il conto è condiviso con le altre finestre.';
- badge.style.cssText='position:fixed;top:0;left:0;right:0;z-index:999999;background:#1a2b3d;color:#8fd3ff;font-size:11px;padding:3px 12px;text-align:center;border-bottom:1px solid #2b3541;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
- document.body.prepend(badge);
+ // NIENTE BANDERUOLA. C'era una striscia in alto che diceva "PIP 2 - solo grafico, non salva
+ // la propria configurazione, il conto e' condiviso con le altre finestre". Il proprietario l'ha
+ // fatta togliere (4 novembre 2026): «quello togliamolo, non serve assolutamente niente... non
+ // devono chiamarsi PIP2, PIP3, PIP4, cioe' quello togliamolo, e' testo che non serve». Aveva
+ // ragione: occupava una riga di grafico per ripetere una cosa che l'informativa del pulsante
+ // «Duplica finestra» dice gia', a chi la vuole leggere, prima di aprirla.
  positions=[]; pendingOrders=[]; trades=[]; equity=[num($('capital').value)||10000]; active=null;
  armDrawingsPersistence(); // sicuro anche qui: ogni scrittura su disco è già bloccata da PIP_SLOT dentro persistDrawingsBackupNow()/scheduleSave()
  $('status').textContent='Finestra PIP '+PIP_SLOT+': scegli un asset per iniziare. Il conto si sincronizza da solo appena arriva dalla finestra principale.';
