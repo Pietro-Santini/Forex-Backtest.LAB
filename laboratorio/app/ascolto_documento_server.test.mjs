@@ -232,3 +232,158 @@ test('PROVA DI CONTROLLO: senza chi ascolta non si rompe niente', async () => {
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+// ====== SE CADE IL PC, CONTINUA FIREBASE ======
+//
+// CHIESTO dal proprietario (4 novembre 2026): «la fonte primaria è il nostro PC... però facciamo
+// in modo che Firebase è la nostra spalla: se cade il PC, continua Firebase».
+//
+// IL BUCO, trovato leggendo il codice: si scegliva UNA strada all'avvio e non si tornava mai
+// indietro. Col PC spento il WebSocket riprovava in silenzio ogni 5-30 secondi, qui non arrivava
+// niente, e l'ascolto Firebase NON VENIVA MAI AVVIATO. Quel dispositivo restava zitto: nessun
+// aggiornamento dagli altri, e nessun modo di accorgersene.
+test('se il nostro server tace, si accende anche l\'ascolto Firebase', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(MONTA);
+    const r = await pagina.evaluate(async () => {
+      const arrivati = [];
+      let ricadutaAvviata = 0;
+      const n = window.__montaNuvola({documenti: {preferenze: {a: 1}}});
+      const ferma = window.fblAscoltaDocumento({
+        nome: 'preferenze',
+        cb: (doc) => arrivati.push(doc),
+        ascoltaServer: n.ascoltaServer,
+        leggiServer: n.leggiServer,
+        // Il nostro server non avvisa mai: è il PC spento.
+        ricaduta: (consenti) => { ricadutaAvviata++; return function(){}; },
+        attesaMs: 50,
+      });
+      await new Promise(res => setTimeout(res, 200));
+      ferma();
+      return {ricadutaAvviata, arrivati};
+    });
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.ricadutaAvviata, 1,
+      'col nostro server muto la ricaduta Firebase deve partire, una volta sola');
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO: se il nostro server risponde, la ricaduta NON si accende. Senza questa,
+// bastava accendere sempre Firebase per far passare la prova qui sopra — e si pagherebbero le
+// letture che tutto questo lavoro serve a togliere.
+test('PROVA DI CONTROLLO: se il nostro server risponde, Firebase resta spento', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(MONTA);
+    const r = await pagina.evaluate(async () => {
+      const arrivati = [];
+      let ricadutaAvviata = 0;
+      const n = window.__montaNuvola({documenti: {preferenze: {a: 1, at: 1000}}});
+      const ferma = window.fblAscoltaDocumento({
+        nome: 'preferenze',
+        cb: (doc) => arrivati.push(doc),
+        ascoltaServer: n.ascoltaServer,
+        leggiServer: n.leggiServer,
+        ricaduta: (consenti) => { ricadutaAvviata++; return function(){}; },
+        attesaMs: 120,
+      });
+      n.avvisa({nome: 'preferenze', versione: 1});     // il server si fa sentire subito
+      await new Promise(res => setTimeout(res, 300));
+      ferma();
+      return {ricadutaAvviata, arrivati};
+    });
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(r.ricadutaAvviata, 0,
+      'col nostro server che risponde, accendere anche Firebase vorrebbe dire pagare due volte');
+    assert.equal(r.arrivati.length, 1, 'e il documento deve essere arrivato dal nostro server');
+  } finally { await browser.close(); }
+});
+
+// ====== LA REGOLA DEL PIÙ FRESCO ======
+//
+// È quella che rende SICURA la ricaduta, e senza di lei la ricaduta peggiorerebbe il problema
+// invece di risolverlo. Scenario vero: il PC resta spento un giorno, in quel giorno si lavora dal
+// telefono e Firebase si aggiorna, poi il PC si riaccende e la sua copia — vecchia di un giorno —
+// arriva per ultima. Senza regola, il lavoro di oggi verrebbe sostituito da quello di ieri.
+test('un documento più vecchio di quello già applicato non si applica', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(MONTA);
+    const r = await pagina.evaluate(async () => {
+      const arrivati = [];
+      // Prima lettura: documento di OGGI. Seconda: la copia vecchia che torna dal PC riacceso.
+      let giro = 0;
+      const n = window.__montaNuvola({documenti: {
+        session: () => { giro++; return giro === 1 ? {savedAt: 2000, chi: 'oggi'} : {savedAt: 1000, chi: 'ieri'}; }
+      }});
+      const ferma = window.fblAscoltaDocumento({
+        nome: 'session',
+        cb: (doc) => arrivati.push(doc && doc.chi),
+        ascoltaServer: n.ascoltaServer,
+        leggiServer: n.leggiServer,
+      });
+      n.avvisa({nome: 'session', versione: 1});
+      await new Promise(res => setTimeout(res, 80));
+      n.avvisa({nome: 'session', versione: 2});
+      await new Promise(res => setTimeout(res, 80));
+      ferma();
+      return {arrivati};
+    });
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.deepEqual(r.arrivati, ['oggi'],
+      'la copia di ieri non deve arrivare a cb: invece è arrivato ' + JSON.stringify(r.arrivati));
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO: un documento PIÙ FRESCO deve passare. Senza questa, una regola rotta che
+// scarta tutto passerebbe la prova qui sopra e l'app non riceverebbe più niente.
+test('PROVA DI CONTROLLO: un documento più fresco si applica', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(MONTA);
+    const r = await pagina.evaluate(async () => {
+      const arrivati = [];
+      let giro = 0;
+      const n = window.__montaNuvola({documenti: {
+        session: () => { giro++; return giro === 1 ? {savedAt: 1000, chi: 'prima'} : {savedAt: 5000, chi: 'dopo'}; }
+      }});
+      const ferma = window.fblAscoltaDocumento({
+        nome: 'session',
+        cb: (doc) => arrivati.push(doc && doc.chi),
+        ascoltaServer: n.ascoltaServer,
+        leggiServer: n.leggiServer,
+      });
+      n.avvisa({nome: 'session', versione: 1});
+      await new Promise(res => setTimeout(res, 80));
+      n.avvisa({nome: 'session', versione: 2});
+      await new Promise(res => setTimeout(res, 80));
+      ferma();
+      return {arrivati};
+    });
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.deepEqual(r.arrivati, ['prima', 'dopo'], 'il più fresco deve arrivare');
+  } finally { await browser.close(); }
+});
+
+// Un documento SENZA data non si rifiuta: scartarlo sarebbe peggio del male che cura (l'utente
+// non vedrebbe niente e non capirebbe perché). Si applica, ma non sposta il riferimento.
+test('un documento senza data si applica, e non sposta il riferimento', async () => {
+  const {browser, pagina} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      return {
+        senzaData: fblDataDocumento({a:1}),
+        conSavedAt: fblDataDocumento({savedAt:1234}),
+        dentroLaBusta: fblDataDocumento({state:{savedAt:99}}),
+        conAt: fblDataDocumento({at:777}),
+        nulla: fblDataDocumento(null)
+      };
+    })()`);
+    assert.equal(r.senzaData, null, 'senza data si risponde «non lo so», non zero');
+    assert.equal(r.conSavedAt, 1234);
+    assert.equal(r.dentroLaBusta, 99, 'su Firestore la data sta dentro la busta `state`');
+    assert.equal(r.conAt, 777, 'i documenti piccoli usano `at` invece di `savedAt`');
+    assert.equal(r.nulla, null);
+  } finally { await browser.close(); }
+});

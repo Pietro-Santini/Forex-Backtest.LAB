@@ -2,6 +2,70 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-04 — Claude — **v2.0.85: se cade il PC continua Firebase, una fotografia al giorno, e
+  un contatore per sapere DA DOVE viene la bolletta**.
+  1. **LA DIVISIONE DEI COMPITI, parole del proprietario:** «la fonte primaria è il nostro PC…
+     però facciamo in modo che Firebase è la nostra spalla: se cade il PC, continua Firebase». E:
+     «quelle cose che pesano parecchio, dove Firebase andrebbe a fatturare, togliamolo e
+     mettiamolo sul PC… Firebase e Firestore continueranno quella che è la logica di
+     autenticazione, le cose dove richiede una vera e propria sicurezza solida».
+  2. **PRIMA UN CONTATORE, POI LE CURE — e la ragione è un mio errore dello stesso giorno.** Nella
+     v2.0.83 ho presentato l'ascolto della sessione come «la metà che si paga»: poi ho scoperto
+     che quell'ascolto **non viene mai avviato** (`fxbtCloud.onChange` non è chiamata da nessuna
+     parte; gli ascolti vivi sono grafico, collegamento e preferenze). La modifica era corretta in
+     sé e innocua, ma **non ha risparmiato un byte**, e io l'avevo raccontata come un risparmio.
+     I totali della console Firebase dicono QUANTO, non DA DOVE, e il «da dove» a intuito l'ho
+     già sbagliato due volte oggi (qui e sul profilo volumetrico).
+     **ORA SI MISURA:** una tabella nel pannello «Accesso da altri dispositivi», documento per
+     documento, scritture / letture / **KB**, ordinata per **banda** e non per numero di
+     operazioni (su Firebase si paga la banda, è annotato in cervello). Totale giornaliero, come
+     la console, così i due numeri si confrontano. Si contano anche le consegne di `onSnapshot`
+     che tornano al dispositivo che ha appena scritto: è lo spreco meno visibile di tutti.
+  3. **SE CADE IL PC, CONTINUA FIREBASE — il buco e la cura.** `_ascoltaDoc` scegliva UNA strada
+     all'avvio e non tornava mai indietro: col PC spento il WebSocket riprovava in silenzio ogni
+     5-30 secondi, `fblAscoltaDocumento` non riceveva niente, e l'ascolto Firebase **non veniva
+     mai avviato**. Quel dispositivo restava zitto, senza aggiornamenti dagli altri e **senza modo
+     di accorgersene**. Ora: se il nostro server non si fa sentire entro 8 secondi si accende
+     ANCHE Firebase, senza spegnere il nostro — così quando il PC torna si riaggancia da solo.
+  4. **LA REGOLA DEL PIÙ FRESCO, che è quella che rende SICURA la ricaduta.** Con due sorgenti
+     accese una può avere la copia vecchia. Scenario vero: il PC resta spento un giorno, in quel
+     giorno si lavora dal telefono e Firebase si aggiorna, poi il PC si riaccende e la sua copia —
+     vecchia di un giorno — arriva per ultima. Senza regola, **il lavoro di oggi verrebbe
+     sostituito da quello di ieri**: la ricaduta del punto 3, da sola, avrebbe reso il problema
+     più probabile invece di risolverlo. Si applica solo un documento più fresco; uno senza data
+     si applica comunque (scartarlo sarebbe peggio) ma non sposta il riferimento.
+  5. **UN DETTAGLIO CHE HA FATTO RIFARE IL DISEGNO, e vale la pena scriverlo.** La prima versione
+     passava alla ricaduta un `applica(valore)` da chiamare al posto di `cb`. Sbagliato: i
+     callback non hanno tutti la stessa forma — quello dei disegni prende DUE argomenti
+     `(voci, locale)`, e `locale` distingue l'**eco della propria scrittura** da una modifica di
+     un altro dispositivo. Passandone uno solo, l'eco sarebbe stata trattata come remota e
+     riapplicata addosso: un giro che non finisce. Controllo invertito: la ricaduta **chiede il
+     permesso** (`consenti(data)`) e chiama il SUO callback con i SUOI argomenti.
+  6. **UNA FOTOGRAFIA INTERA AL GIORNO SU FIREBASE.** Chiesta: «una scrittura almeno di backup al
+     giorno su Firebase, per non perdere tutti i dati di tutti gli utenti». E ha una ragione
+     tecnica che va oltre il backup: da quando si manda solo il delta, la copia su Firebase è il
+     risultato di **tante fusioni parziali** — se una non è arrivata (buco di rete, telefono che
+     perde campo a metà), quella copia resta sottilmente sbagliata e **nessuno lo sa**. La
+     fotografia intera riallinea e rimette una base di cui si conosce il contenuto.
+     **Giorno LOCALE, non UTC:** con l'UTC, in Italia scatterebbe all'una o alle due di notte
+     invece che al primo utilizzo della giornata. **Con la memoria negata** (finestra privata) non
+     si fa: senza poter ricordare che è già stata fatta partirebbe a OGNI salvataggio — 48 KB per
+     modifica, l'opposto del risparmio. **Il giorno si segna solo dopo una scrittura riuscita**:
+     un tentativo fallito va rifatto, non dimenticato per ventiquattro ore.
+  7. **UNA CORREZIONE SU QUELLO CHE AVEVO DETTO DEL SERVER ORACLE.** Durante la giornata ho
+     ripetuto più volte che «non ha un posto dove girare»: vale per la **migrazione ad ARM**, non
+     per il server esistente. Verificato: `https://pietro.tail83d918.ts.net:8000/health` risponde
+     `403 — Chiave d'accesso mancante o errata`, cioè il servizio **è vivo** e il controllo chiave
+     funziona. Conseguenza pratica da ricordare: dalla v2.0.82 `server_oracle/ponte_server.py` è
+     cambiato (usa il modulo condiviso), quindi **il server sta girando col codice vecchio** e non
+     ha la cura del registro degli ascoltatori. Va aggiornato quando si ha accesso.
+  **Collaudo:** browser 1161 prove, 1160 verdi, 0 rosse (1 saltata); python 222 verdi.
+  **Test nuovi, provati nel loro pezzo, ognuno con le sue prove di controllo:** 5 prove in
+  `ascolto_documento_server.test.mjs` (fra cui «se il nostro server risponde, Firebase resta
+  spento» — senza quella, accendere sempre Firebase avrebbe fatto passare tutto e pagare due
+  volte) e `traffico_cloud.test.mjs`, 7 prove.
+  **Solo `app.html`** fra i file che contano per l'utente: basta il push.
+
 - 2026-11-04 — Claude — **v2.0.84: torno indietro sugli istogrammi. Avevo confuso due richieste
   diverse** — e i dati dell'utente vanno sul disco E.
   1. **IL PROPRIETARIO MI HA FERMATO, e aveva ragione.** Parole sue, appena pubblicata la

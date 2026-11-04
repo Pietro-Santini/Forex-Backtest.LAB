@@ -1325,12 +1325,24 @@ window.fblAvviaSoloBacktest=function(){
     // Quanto si e' consumato oggi, per documento: serve a trovare il prossimo rubinetto senza
     // doverlo dedurre dal codice.
     budgetStato(){ const b=this._budgetOggi(); return {totale:b.totale,tetto:this._budgetTetto(),dettaglio:Object.assign({},b.conta)}; },
+    // IL CONTO DEL TRAFFICO: scritture, letture e BYTE, documento per documento. La logica sta
+    // nello script principale (fblTrafficoSegna), qui si chiama e basta - e non si lascia mai
+    // cadere un'eccezione addosso a un salvataggio per colpa di un contatore.
+    _conta(tipo,documento,dato){
+      try{
+        if(typeof fblTrafficoSegna!=='function')return;
+        let byte=0;
+        try{ byte=(typeof dato==='string')?dato.length:JSON.stringify(dato||{}).length; }catch(e){ byte=0; }
+        fblTrafficoSegna(tipo,documento,byte);
+      }catch(e){}
+    },
 
     async save(state){
       if(!this.uid) return false;
       if(!this._puoScrivere('session')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","session"), { state, updatedAt: serverTimestamp() });
+        this._conta('scrittura','session',state);
         return true;
       }catch(e){ console.warn("Salvataggio sessione su Firestore fallito:", e); return false; }
     },
@@ -1362,6 +1374,7 @@ window.fblAvviaSoloBacktest=function(){
       try{
         await setDoc(doc(db,"users",this.uid,"data","session"),
           { state: parti, updatedAt: serverTimestamp() }, { merge:true });
+        this._conta('scrittura','session (delta)',parti);
         return true;
       }catch(e){ console.warn("Salvataggio a campi su Firestore fallito:", e); return false; }
     },
@@ -1379,6 +1392,7 @@ window.fblAvviaSoloBacktest=function(){
       if(!this.uid) return null;
       try{
         const snap = await getDoc(doc(db,"users",this.uid,"data","session"));
+        this._conta('lettura','session (avvio)',snap.exists()?snap.data():null);
         if(!snap.exists()) return null;
         const state = (snap.data().state ?? null);
         // SALVATAGGIO INCREMENTALE: se il documento session NON porta piu' le
@@ -1410,7 +1424,10 @@ window.fblAvviaSoloBacktest=function(){
       return this._ascoltaDoc('session',
         (contenuto)=>{ cb(fblSessioneDaDocumento(contenuto)); },
         null,
-        ()=> onSnapshot(doc(db,"users",this.uid,"data","session"), snap=>{
+        (consenti)=> onSnapshot(doc(db,"users",this.uid,"data","session"), snap=>{
+              const _d=snap.exists()?snap.data():null;
+              this._conta('lettura','session',_d);
+              if(consenti && !consenti(fblDataDocumento(_d))) return;
               cb(snap.exists() ? (snap.data().state ?? null) : null);
             }, e=>console.warn("Ascolto sessione Firestore interrotto:", e)));
     },
@@ -1436,6 +1453,7 @@ window.fblAvviaSoloBacktest=function(){
         if(firma === this._footprintFirma) return false;   // identico: non si paga due volte
         await setDoc(doc(db,"users",this.uid,"data","footprint"),
           { celle, bytes: testo.length, updatedAt: serverTimestamp() });
+        this._conta('scrittura','footprint',testo);
         this._footprintFirma = firma;
         return true;
       }catch(e){ console.warn("Salvataggio footprint su Firestore fallito:", e); return false; }
@@ -1461,6 +1479,7 @@ window.fblAvviaSoloBacktest=function(){
       if(!this._puoScrivere('grafico')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","grafico"), { v:1, voci, at: serverTimestamp() }, { merge:true });
+        this._conta('scrittura','grafico',voci);
         // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026): stessa ragione degli altri due
         // documenti - il server Oracle deve avere il disegno, perche' e' da li' che gli altri
         // dispositivi lo leggeranno.
@@ -1483,7 +1502,10 @@ window.fblAvviaSoloBacktest=function(){
       return this._ascoltaDoc('grafico',
         (doc)=>{ cb(((doc && doc.voci) || {}), false); },
         null,
-        ()=> onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
+        (consenti)=> onSnapshot(doc(db,"users",this.uid,"data","grafico"), snap=>{
+              const _d=snap.exists()?snap.data():null;
+              this._conta('lettura','grafico',_d);
+              if(consenti && !consenti(fblDataDocumento(_d))) return;
               cb(snap.exists() ? (snap.data().voci || {}) : {}, !!(snap.metadata && snap.metadata.hasPendingWrites));
             }, e=>{ console.warn("Ascolto disegni condivisi interrotto:", e); if(errCb) errCb(e); }));
     },
@@ -1497,6 +1519,7 @@ window.fblAvviaSoloBacktest=function(){
       if(!this._puoScrivere('collegamento')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","collegamento"), payload, {merge:true});
+        this._conta('scrittura','collegamento',payload);
         // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026). Senza questo, commutare la LETTURA al
         // server Oracle vorrebbe dire leggere un posto dove nessuno scrive: gli altri dispositivi
         // non vedrebbero piu' il collegamento. Se il server non risponde non e' un fallimento -
@@ -1512,7 +1535,10 @@ window.fblAvviaSoloBacktest=function(){
       // CURA BOLLETTA (31 ottobre 2026): col server configurato l'ascolto passa dal WebSocket,
       // che manda solo l'avviso di versione. Senza server si resta su Firestore, come prima.
       return this._ascoltaDoc('collegamento', cb, null,
-        ()=> onSnapshot(doc(db,"users",this.uid,"data","collegamento"), snap=>{
+        (consenti)=> onSnapshot(doc(db,"users",this.uid,"data","collegamento"), snap=>{
+              const _d=snap.exists()?snap.data():null;
+              this._conta('lettura','collegamento',_d);
+              if(consenti && !consenti(fblDataDocumento(_d))) return;
               cb(snap.exists() ? snap.data() : null);
             }, e=>console.warn("Ascolto del collegamento server interrotto:", e)));
     },
@@ -1525,6 +1551,7 @@ window.fblAvviaSoloBacktest=function(){
       if(!this._puoScrivere('preferenze')) return false;
       try{
         await setDoc(doc(db,"users",this.uid,"data","preferenze"), payload, {merge:true});
+        this._conta('scrittura','preferenze',payload);
         // DOPPIO SCRITTO (cura ascolti, 31 ottobre 2026): stessa ragione del collegamento -
         // il documento va anche sul server, dove la lettura commutata lo va a prendere.
         if(this._serverConfigurato()){
@@ -1538,7 +1565,10 @@ window.fblAvviaSoloBacktest=function(){
       // CURA BOLLETTA (31 ottobre 2026): col server configurato l'ascolto passa dal WebSocket,
       // che manda solo l'avviso di versione. Senza server si resta su Firestore, come prima.
       return this._ascoltaDoc('preferenze', cb, null,
-        ()=> onSnapshot(doc(db,"users",this.uid,"data","preferenze"), snap=>{
+        (consenti)=> onSnapshot(doc(db,"users",this.uid,"data","preferenze"), snap=>{
+              const _d=snap.exists()?snap.data():null;
+              this._conta('lettura','preferenze',_d);
+              if(consenti && !consenti(fblDataDocumento(_d))) return;
               cb(snap.exists() ? snap.data() : null);
             }, e=>console.warn("Ascolto delle preferenze interrotto:", e)));
     },
@@ -1558,6 +1588,7 @@ window.fblAvviaSoloBacktest=function(){
         // ritentativo non duplica niente.
         await setDoc(doc(db,"users",this.uid,"data","trades"),
           { v:1, lista: arrayUnion(...nuove), at: serverTimestamp() });
+        this._conta('scrittura','trades (aggiunta)',nuove);
         return true;
       }catch(e){ console.warn("Salvataggio incrementale delle operazioni fallito:", e); return false; }
     },
@@ -1617,6 +1648,11 @@ window.fblAvviaSoloBacktest=function(){
         nome, cb, trasforma,
         ascoltaServer: (m)=>this.serverDatiAscolta(m),
         leggiServer: (n)=>this.serverDatiLeggi(n),
+        // LA RICADUTA (4 novembre 2026): la stessa funzione di prima, che adesso riceve un
+        // `consenti(data)` da chiamare PRIMA di applicare - cosi' anche i documenti che
+        // arrivano da Firebase passano dalla regola del piu' fresco, mantenendo pero' la
+        // forma del proprio callback. Chi non lo usa continua a funzionare come prima.
+        ricaduta: (consenti)=>ricadutaFirestore(consenti),
       });
     },
     async serverDatiLeggi(nome){
@@ -4552,6 +4588,12 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         <span>Tieni i dati sul <b>mio computer</b> invece che su Firebase</span>
       </label>
       <div class="tgCfgNota" id="fblCloudNostroNota" style="margin-bottom:12px"></div>
+      <!-- IL CONTO DEL TRAFFICO DI OGGI. Serve a sapere DA DOVE viene la bolletta invece di
+           dedurlo: il proprietario ha i totali dalla console Firebase (250.000 letture,
+           122.000 scritture), ma quelli dicono quanto e non da dove - e il "da dove" sbagliato
+           costa due volte. Si riempie da solo mentre si usa l'app. -->
+      <div class="tgCfgSez">📊 Traffico cloud di oggi</div>
+      <div id="fblTrafficoTabella" class="tgCfgNota" style="margin-bottom:12px"></div>
 
       <div class="tgCfgSez">Cosa risponde adesso</div>
       <div id="fblServizi" class="fblServizi"></div>
@@ -8782,6 +8824,197 @@ const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più event
 // misura delle prestazioni, cosi' il consumo si guarda invece di immaginarlo.
 let fblCloudUltimaFirma=null, fblCloudUltimoPeso=0, fblCloudScritture=0, fblCloudSaltate=0;
 let fblCloudFirmeCampi=null;   // firme per campo dell'ultima scrittura riuscita (vedi sotto)
+// ====== UNA FOTOGRAFIA INTERA AL GIORNO, SU FIREBASE ======
+//
+// CHIESTO dal proprietario (4 novembre 2026): «Firebase sta li' da riserva per tutto il resto,
+// quindi anche il magazzinamento. Ma comunque la fonte primaria e' il nostro PC... se cade il PC,
+// continua Firebase.» E subito dopo: «una scrittura almeno di backup al giorno su Firebase, per
+// non perdere tutti i dati di tutti gli utenti.»
+//
+// PERCHE' NON BASTA LA SCRITTURA A DELTA, ed e' una ragione tecnica, non prudenza. Da quando si
+// manda solo quello che cambia (vedi fblCloudCampiCambiati), la copia su Firebase e' il risultato
+// di TANTE FUSIONI PARZIALI. Se una sola non e' arrivata - un buco di rete, il telefono che perde
+// campo a metà scrittura - quella copia resta sottilmente sbagliata e NESSUNO LO SA: le firme per
+// campo dicono «mandato», il server ha un'altra cosa, e la differenza non si vede fino al giorno
+// in cui serve. Una fotografia INTERA, periodica, ripara esattamente questo: riallinea tutto e
+// rimette una base di cui si conosce il contenuto.
+//
+// QUANDO SCATTA: alla prima scrittura di un giorno nuovo (ora locale), e la volta successiva solo
+// il giorno dopo. Non c'e' un timer: un timer in una pagina che si apre e si chiude non si puo'
+// garantire, e qui il momento buono c'e' gia' - il salvataggio che sta per partire comunque.
+//
+// COSA COSTA: una scrittura intera al giorno (48 KB misurati) invece di cento al giorno. Il resto
+// del tempo restano i delta da 0,1-5 KB.
+const FBL_FOTO_GIORNO_KEY='fbl_cloud_foto_giorno';
+
+function fblGiornoDiOggi(quando){
+  const d=(quando instanceof Date)?quando:new Date(Number.isFinite(quando)?quando:Date.now());
+  // Giorno LOCALE, non UTC: «una volta al giorno» per l'utente vuol dire il suo giorno, e con
+  // l'UTC in Italia la fotografia scatterebbe all'una o alle due di notte invece che al primo
+  // utilizzo della giornata.
+  const m=String(d.getMonth()+1).padStart(2,'0'), g=String(d.getDate()).padStart(2,'0');
+  return d.getFullYear()+'-'+m+'-'+g;
+}
+
+// Serve la fotografia intera adesso? Legge e scrive il giorno dell'ultima su questo dispositivo.
+// `magazzino` arriva dall'esterno per poterlo provare senza toccare il localStorage vero.
+function fblFotoGiornalieraServe(magazzino, quando){
+  const oggi=fblGiornoDiOggi(quando);
+  let ultimo=null;
+  try{ ultimo=(magazzino||localStorage).getItem(FBL_FOTO_GIORNO_KEY); }catch(e){ ultimo=null; }
+  // Memoria negata (finestra privata): si risponde NO. Scattare a ogni salvataggio sarebbe
+  // peggio del male che cura - una fotografia intera per ogni modifica.
+  if(ultimo===null && !fblMemoriaDisponibile(magazzino)) return false;
+  return ultimo!==oggi;
+}
+
+function fblMemoriaDisponibile(magazzino){
+  try{
+    const m=magazzino||localStorage;
+    m.setItem('fbl_prova_memoria','1');
+    m.removeItem('fbl_prova_memoria');
+    return true;
+  }catch(e){ return false; }
+}
+
+// Si segna SOLO dopo una scrittura riuscita: un tentativo fallito deve essere rifatto, non
+// dimenticato per ventiquattro ore.
+function fblFotoGiornalieraFatta(magazzino, quando){
+  try{ (magazzino||localStorage).setItem(FBL_FOTO_GIORNO_KEY, fblGiornoDiOggi(quando)); }catch(e){}
+}
+
+// ====== QUANTO TRAFFICO FACCIAMO DAVVERO, DOCUMENTO PER DOCUMENTO ======
+//
+// PERCHE' UN CONTATORE PRIMA DI UNA CURA. Il proprietario ha un numero vero dalla console
+// Firebase: «ieri siamo arrivati a 250.000 letture e 122.000 di scritture». Quel numero dice
+// QUANTO, non DA DOVE. E io il «da dove» l'ho sbagliato una volta: ho presentato l'ascolto della
+// sessione come «la meta' che si paga», poi ho scoperto che quell'ascolto NON VIENE MAI AVVIATO
+// (fxbtCloud.onChange non e' chiamata da nessuna parte: gli ascolti vivi sono grafico,
+// collegamento e preferenze). Una cura su una causa supposta e' il modo di perdere tempo due
+// volte - e sul profilo volumetrico e' gia' successo.
+//
+// COSA CONTA, e in che unita' il conto di Firebase ragiona:
+//   - una SCRITTURA = una setDoc/updateDoc riuscita;
+//   - una LETTURA = un documento CONSEGNATO: il getDoc all'avvio, e ogni giro di onSnapshot -
+//     compreso quello che torna indietro al dispositivo che ha appena scritto, che e' lo spreco
+//     meno visibile di tutti.
+// Si contano anche i BYTE, perche' su Firebase si paga la banda e non le operazioni (vedi la nota
+// in cervello): mille letture da 200 byte e mille da 50 KB sono due bollette diverse.
+//
+// DOVE FINISCONO: in memoria per la sessione corrente, e il totale del GIORNO in localStorage,
+// cosi' si puo' confrontare col numero della console Firebase - che e' giornaliero. Si azzera da
+// se' al cambio di giorno.
+const FBL_TRAFFICO_KEY = 'fbl_cloud_traffico';
+
+function fblTrafficoVuoto(giorno){
+  return {giorno: giorno, letture: {}, scritture: {}, byteLetti: {}, byteScritti: {}};
+}
+
+function fblTrafficoOggi(magazzino, quando){
+  const oggi = fblGiornoDiOggi(quando);
+  let t = null;
+  try{
+    const grezzo = (magazzino || localStorage).getItem(FBL_TRAFFICO_KEY);
+    if(grezzo) t = JSON.parse(grezzo);
+  }catch(e){ t = null; }
+  // Giorno diverso (o niente): si riparte da zero. Il confronto con la console Firebase ha senso
+  // solo a giornate intere.
+  if(!t || typeof t !== 'object' || t.giorno !== oggi) t = fblTrafficoVuoto(oggi);
+  return t;
+}
+
+function fblTrafficoSegna(tipo, documento, byte, magazzino, quando){
+  try{
+    const t = fblTrafficoOggi(magazzino, quando);
+    const dove = (tipo === 'lettura') ? 'letture' : 'scritture';
+    const doveByte = (tipo === 'lettura') ? 'byteLetti' : 'byteScritti';
+    const nome = String(documento || '?');
+    t[dove][nome] = (t[dove][nome] || 0) + 1;
+    t[doveByte][nome] = (t[doveByte][nome] || 0) + (Number.isFinite(byte) ? byte : 0);
+    try{ (magazzino || localStorage).setItem(FBL_TRAFFICO_KEY, JSON.stringify(t)); }catch(e){}
+    return t;
+  }catch(e){ return null; }
+}
+
+// Il riassunto in parole, ordinato dal piu' pesante: e' quello che si guarda per decidere cosa
+// tagliare. Torna anche i totali, per confrontarli con la console.
+function fblTrafficoRiassunto(magazzino, quando){
+  const t = fblTrafficoOggi(magazzino, quando);
+  const nomi = {};
+  Object.keys(t.letture).forEach(n => { nomi[n] = true; });
+  Object.keys(t.scritture).forEach(n => { nomi[n] = true; });
+  const righe = Object.keys(nomi).map(n => ({
+    documento: n,
+    letture: t.letture[n] || 0,
+    scritture: t.scritture[n] || 0,
+    kbLetti: Math.round((t.byteLetti[n] || 0) / 1024 * 10) / 10,
+    kbScritti: Math.round((t.byteScritti[n] || 0) / 1024 * 10) / 10,
+  }));
+  // Si ordina per BANDA, non per numero di operazioni: e' la banda che si paga.
+  righe.sort((a, b) => (b.kbLetti + b.kbScritti) - (a.kbLetti + a.kbScritti));
+  const somma = (o) => Object.keys(o).reduce((s, k) => s + o[k], 0);
+  return {
+    giorno: t.giorno,
+    righe: righe,
+    totaleLetture: somma(t.letture),
+    totaleScritture: somma(t.scritture),
+    kbTotali: Math.round((somma(t.byteLetti) + somma(t.byteScritti)) / 1024 * 10) / 10,
+  };
+}
+
+// ====== SE CADE IL PC, CONTINUA FIREBASE ======
+//
+// CHIESTO dal proprietario (4 novembre 2026): «la fonte primaria e' il nostro PC... pero'
+// facciamo in modo che Firebase e' la nostra spalla: se cade il PC, continua Firebase».
+//
+// COM'ERA, e il buco e' stato misurato leggendo il codice: _ascoltaDoc scegliva UNA strada
+// all'avvio - il nostro server se configurato, Firestore altrimenti - e non tornava mai indietro.
+// Col PC spento il WebSocket riprovava in silenzio ogni 5-30 secondi, fblAscoltaDocumento non
+// riceveva niente, e la ricaduta su Firestore NON VENIVA MAI AVVIATA. Quel dispositivo restava
+// zitto: nessun aggiornamento dagli altri, e nessun modo di accorgersene. Esattamente il
+// contrario di «se cade il PC, continua Firebase».
+//
+// COM'E' ADESSO: si parte dal nostro server. Se non si fa sentire entro un'attesa breve, si
+// ACCENDE ANCHE l'ascolto Firebase, senza spegnere il nostro - cosi' quando il PC torna si
+// riaggancia da solo, senza che nessuno faccia niente.
+//
+// E LA REGOLA CHE RENDE SICURA LA RICADUTA: con due sorgenti accese, una delle due puo' avere una
+// copia VECCHIA. Scenario vero, non di scuola: il PC resta spento un giorno, in quel giorno si
+// lavora dal telefono e Firebase si aggiorna, poi il PC si riaccende e la sua copia - vecchia di
+// un giorno - arriva per ultima. Senza regola, il lavoro di oggi verrebbe sostituito da quello di
+// ieri. Quindi: si applica solo un documento PIU' FRESCO di quello che si ha, e `savedAt` e' il
+// metro. Un documento senza `savedAt` non si rifiuta (sarebbe peggio: lo scartammo e l'utente
+// non vedrebbe niente), ma non sposta il riferimento.
+const FBL_RICADUTA_ATTESA_MS = 8000;
+
+// La data di salvataggio di un documento, qualunque forma abbia: su Firestore la busta e'
+// {state:...}, dal nostro server il contenuto E' lo stato, e i documenti piccoli (grafico,
+// preferenze) hanno `at` invece di `savedAt`. null = non si sa.
+function fblDataDocumento(doc){
+  try{
+    if(!doc || typeof doc !== 'object') return null;
+    const dentro = ('state' in doc && doc.state && typeof doc.state === 'object') ? doc.state : doc;
+    for(const campo of ['savedAt', 'at', 'aggiornato', 'updatedAt']){
+      const v = dentro[campo];
+      if(Number.isFinite(v)) return v;
+      if(v && typeof v.toMillis === 'function'){ try{ return v.toMillis(); }catch(e){} }
+      if(typeof v === 'string'){ const t = Date.parse(v); if(Number.isFinite(t)) return t; }
+    }
+    return null;
+  }catch(e){ return null; }
+}
+
+// Un documento appena arrivato si applica? {applica, motivo} — si risponde sempre col perche',
+// perche' un aggiornamento scartato in silenzio sembra un aggiornamento perso.
+function fblDocumentoPiuFresco(arrivato, dataCorrente){
+  const at = fblDataDocumento(arrivato);
+  if(at === null) return {applica: true, data: null, motivo: 'senza data: si applica, ma non sposta il riferimento'};
+  if(!Number.isFinite(dataCorrente)) return {applica: true, data: at, motivo: 'primo documento'};
+  if(at < dataCorrente) return {applica: false, data: dataCorrente,
+    motivo: 'piu vecchio di quello che abbiamo (' + at + ' contro ' + dataCorrente + '): non si applica'};
+  return {applica: true, data: at, motivo: 'piu fresco'};
+}
+
 // ============ SI MANDA SOLO QUELLO CHE E' CAMBIATO ============
 //
 // CHIESTO dal proprietario (4 novembre 2026): «quello che e' stato scritto rimane archiviato nel
@@ -9085,8 +9318,14 @@ async function syncFullStatusToFirebase(reason,force){
     // (la fusione non cancella). Se salvaCampi non c'e' — modulo cloud piu' vecchio — si torna
     // alla fotografia intera invece di non scrivere: un risparmio che perde un dato non e' un
     // risparmio.
+    // UNA VOLTA AL GIORNO SI MANDA TUTTO, non il delta: e' il backup chiesto dal
+    // proprietario («una scrittura almeno di backup al giorno su Firebase, per non perdere
+    // tutti i dati di tutti gli utenti») ed e' anche quello che RIPARA la catena dei delta.
+    // Vedi la nota su fblFotoGiornalieraServe: se una fusione non e' arrivata, la copia su
+    // Firebase resta sottilmente sbagliata e nessuno lo sa. La fotografia intera riallinea.
+    const _fotoOggi = (typeof fblFotoGiornalieraServe === 'function') && fblFotoGiornalieraServe();
     const scelta = (typeof fblCloudCampiCambiati === 'function')
-      ? fblCloudCampiCambiati(trimmedBundle, fblCloudFirmeCampi) : null;
+      ? fblCloudCampiCambiati(trimmedBundle, _fotoOggi ? null : fblCloudFirmeCampi) : null;
     const puoACampi = !!(scelta && !scelta.intero && typeof window.fxbtCloud.salvaCampi === 'function');
     let okScritto = false;
     if (puoACampi) {
@@ -9111,6 +9350,13 @@ async function syncFullStatusToFirebase(reason,force){
     if (!okScritto) {
      const ok = await window.fxbtCloud.save(trimmedBundle);
      if (ok !== false) {
+      // Il giorno si segna SOLO dopo una scrittura intera riuscita: un tentativo fallito va
+      // rifatto, non dimenticato per ventiquattro ore.
+      if (_fotoOggi && typeof fblFotoGiornalieraFatta === 'function') {
+       fblFotoGiornalieraFatta();
+       console.log('[Cloud] fotografia intera del giorno mandata su Firebase ('
+         + Math.round((testo?testo.length:0)/1024) + ' KB): ripara la catena dei delta');
+      }
       fblCloudUltimaFirma = firma;
       fblCloudUltimoPeso = testo ? testo.length : 0;
       // Da qui in poi c'e' una base da cui fare il delta: la fotografia sul server e' questa.
@@ -34892,6 +35138,7 @@ async function fblRemotoApri(){
  // L'interruttore del cloud nostro si ridisegna all'apertura: la sua nota dice anche DOVE
  // viene raggiunto il ponte adesso, e quello cambia da una volta all'altra.
  try{ fblCloudNostroDisegna(); }catch(e){ console.log('[Accesso remoto] interruttore cloud:',e); }
+ try{ fblTrafficoDisegna(); }catch(e){ console.log('[Accesso remoto] traffico:',e); }
  // Sul computer: se il server è già impostato ma questo PC non si è mai presentato, lo fa ora.
  // È quello che toglie di mezzo il "nome del computer" da scrivere a mano sul telefono.
  if(!fblRemoto()&&fblServer()&&fblServerChiave()){
@@ -35269,6 +35516,32 @@ function fblServiziFerma(){ if(fblServiziTimer){ clearInterval(fblServiziTimer);
 // La nota dice in parole cosa cambia, perche' questo interruttore sposta DOVE vivono i dati.
 // Un cambio non porta con se' i dati gia' scritti: quelli restano dove sono, e questo va detto
 // invece di farlo scoprire da un documento che sembra sparito.
+// Il conto del traffico, in tabella. Si guarda per decidere cosa tagliare, quindi e' ordinata
+// per BANDA e non per numero di operazioni: su Firebase si paga la banda.
+function fblTrafficoDisegna(){
+  const dove = $('fblTrafficoTabella');
+  if(!dove) return;
+  let r = null;
+  try{ r = (typeof fblTrafficoRiassunto === 'function') ? fblTrafficoRiassunto() : null; }catch(e){ r = null; }
+  if(!r || !r.righe.length){
+    dove.innerHTML = 'Ancora niente da mostrare per oggi. Si riempie da sé mentre usi l’app: '
+      + 'serve a sapere <b>da dove</b> viene la bolletta, invece di dedurlo.';
+    return;
+  }
+  const riga = (x) => '<tr><td style="padding:2px 8px 2px 0">' + x.documento
+    + '</td><td style="padding:2px 8px;text-align:right;font-variant-numeric:tabular-nums">' + x.scritture
+    + '</td><td style="padding:2px 8px;text-align:right;font-variant-numeric:tabular-nums">' + x.letture
+    + '</td><td style="padding:2px 0 2px 8px;text-align:right;font-variant-numeric:tabular-nums">'
+    + (Math.round((x.kbScritti + x.kbLetti) * 10) / 10) + ' KB</td></tr>';
+  dove.innerHTML = '<div style="margin-bottom:6px">Giorno <b>' + r.giorno + '</b> — '
+    + r.totaleScritture + ' scritture, ' + r.totaleLetture + ' letture, <b>' + r.kbTotali + ' KB</b> '
+    + 'in tutto. Confrontalo col totale della console Firebase, che è giornaliero come questo.</div>'
+    + '<table style="border-collapse:collapse;font-size:12px">'
+    + '<tr style="opacity:.7"><th style="text-align:left;padding-right:8px">documento</th>'
+    + '<th style="padding:0 8px">scritt.</th><th style="padding:0 8px">lett.</th>'
+    + '<th style="padding-left:8px">banda</th></tr>'
+    + r.righe.map(riga).join('') + '</table>';
+}
 function fblCloudNostroDisegna(){
  const sw=$('fblCloudNostroSw'), nota=$('fblCloudNostroNota');
  if(sw)sw.checked=(typeof fblCloudNostro==='function')?fblCloudNostro():false;
@@ -37161,7 +37434,42 @@ function fblAscoltaDocumento(o){
   // La lettura e' UNA per volta: due avvisi ravvicinati non accavallano due fetch, si segna che
   // ce n'e' un altro da fare e si recupera subito dopo. Senza, due risposte in ordine sparso
   // possono applicare il documento VECCHIO per ultimo - un aggiornamento perso.
-  const applica = (doc) => { try{ cb(trasforma ? trasforma(doc) : doc); }catch(e){} };
+  // LA REGOLA DEL PIU' FRESCO, e non e' un abbellimento: da quando ci sono DUE sorgenti accese
+  // (il nostro server e la ricaduta Firebase, vedi sotto) una delle due puo' avere la copia
+  // vecchia. Scenario vero: il PC resta spento un giorno, in quel giorno si lavora dal telefono
+  // e Firebase si aggiorna, poi il PC si riaccende e la sua copia di ieri arriva per ultima.
+  // Senza questa regola il lavoro di oggi verrebbe sostituito da quello di ieri.
+  let dataApplicata = null;
+  const applicaPronto = (valore, dataDocumento) => {
+    if(fermato) return;
+    if(Number.isFinite(dataDocumento) && Number.isFinite(dataApplicata) && dataDocumento < dataApplicata){
+      console.log('[Cloud] '+o.nome+': scartato un documento piu vecchio di quello che abbiamo ('
+        + dataDocumento + ' contro ' + dataApplicata + ')');
+      return;
+    }
+    if(Number.isFinite(dataDocumento)) dataApplicata = dataDocumento;
+    try{ cb(valore); }catch(e){}
+  };
+  const applica = (doc) => {
+    const quando = (typeof fblDataDocumento === 'function') ? fblDataDocumento(doc) : null;
+    applicaPronto(trasforma ? trasforma(doc) : doc, quando);
+  };
+  // IL PERMESSO PER LA RICADUTA, e perche' non le si passa un `applica` che chiama cb al posto
+  // suo: i callback non hanno tutti la stessa forma - quello dei disegni prende DUE argomenti
+  // (voci, locale), e `locale` distingue l'eco della propria scrittura da una modifica di un
+  // altro dispositivo. Passandone uno solo, l'eco verrebbe trattata come remota e si
+  // riapplicherebbe addosso - un giro che non finisce. Cosi' invece la ricaduta chiede «posso?»,
+  // riceve si/no dalla regola del piu' fresco, e chiama il SUO cb con i SUOI argomenti.
+  const consentiRicaduta = (dataDocumento) => {
+    if(fermato) return false;
+    if(Number.isFinite(dataDocumento) && Number.isFinite(dataApplicata) && dataDocumento < dataApplicata){
+      console.log('[Cloud] '+o.nome+': ricaduta, scartato un documento piu vecchio ('
+        + dataDocumento + ' contro ' + dataApplicata + ')');
+      return false;
+    }
+    if(Number.isFinite(dataDocumento)) dataApplicata = dataDocumento;
+    return true;
+  };
   const leggiEAvvisa = async () => {
     try{
       const d = await o.leggiServer(o.nome);
@@ -37174,9 +37482,30 @@ function fblAscoltaDocumento(o){
     }catch(e){ /* un avviso non leggibile non deve buttare giu' l'ascolto */ }
     finally{ inLettura = false; }
   };
+  // SE CADE IL PC, CONTINUA FIREBASE (richiesta del proprietario, 4 novembre 2026).
+  //
+  // COM'ERA: si scegliva UNA strada all'avvio e non si tornava mai indietro. Col PC spento il
+  // WebSocket riprovava in silenzio ogni 5-30 secondi, qui non arrivava niente, e l'ascolto
+  // Firebase NON VENIVA MAI AVVIATO: quel dispositivo restava zitto, senza aggiornamenti dagli
+  // altri e senza modo di accorgersene.
+  //
+  // ORA: se il nostro server non si fa sentire entro un'attesa breve si accende ANCHE Firebase,
+  // senza spegnere il nostro - cosi' quando il PC torna si riaggancia da solo. Le due sorgenti
+  // passano entrambe da applicaPronto, quindi la regola del piu' fresco vale per tutte e due.
+  let fermaRicaduta = null, vistoDalServer = false;
+  const avviaRicaduta = () => {
+    if(fermaRicaduta || fermato || typeof o.ricaduta !== 'function') return;
+    try{
+      fermaRicaduta = o.ricaduta(consentiRicaduta);
+      console.log('[Cloud] '+o.nome+": il nostro server non risponde, acceso anche l'ascolto Firebase");
+    }catch(e){}
+  };
+  const timerRicaduta = setTimeout(()=>{ if(!vistoDalServer) avviaRicaduta(); },
+    Number.isFinite(o.attesaMs) ? o.attesaMs : FBL_RICADUTA_ATTESA_MS);
   const stop = o.ascoltaServer((msg) => {
     try{
       if(fermato || !msg || msg.nome !== o.nome) return;
+      vistoDalServer = true;
       if(ultimaVersione !== null && msg.versione === ultimaVersione) return; // gia' vista
       ultimaVersione = msg.versione;
       if(inLettura){ daRileggere = true; return; }
@@ -37186,7 +37515,9 @@ function fblAscoltaDocumento(o){
   });
   return function(){
     fermato = true;
+    try{ clearTimeout(timerRicaduta); }catch(e){}
     try{ if(typeof stop === 'function') stop(); }catch(e){}
+    try{ if(typeof fermaRicaduta === 'function') fermaRicaduta(); }catch(e){}
   };
 }
 
