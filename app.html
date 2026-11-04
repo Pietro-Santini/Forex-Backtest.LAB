@@ -1334,6 +1334,37 @@ window.fblAvviaSoloBacktest=function(){
         return true;
       }catch(e){ console.warn("Salvataggio sessione su Firestore fallito:", e); return false; }
     },
+    // SI MANDA SOLO QUELLO CHE E' CAMBIATO.
+    //
+    // CHIESTO dal proprietario (4 novembre 2026): «quello che deve scrivere e' soltanto
+    // l'ultimo aggiornamento e non deve sovrascrivere, altrimenti e' normale che scrive una
+    // marea di dati. Prende riferimento soltanto l'ultima scrittura, che e' di qualche byte,
+    // non puo' essere kilobyte o addirittura megabyte».
+    //
+    // MISURATO su una sessione realistica (8 posizioni, 4 ordini pendenti, disegni su 12 asset
+    // in 2 sessioni, ultima candela vista per asset): la fotografia intera pesa 52,4 KB, e
+    // `save` qui sopra la rimanda TUTTA anche quando cambia una cosa sola. Chiudendo una
+    // posizione il delta e' 1,1 KB: quarantotto volte meno.
+    //
+    // COME: `merge:true` fonde le mappe annidate, quindi mandare {state:{positions:[...]}}
+    // aggiorna SOLO state.positions e lascia il resto dov'e', sul server. Chi decide quali
+    // campi mandare e' fblCloudCampiCambiati() nello script principale, che tiene una firma
+    // per campo - qui si scrive e basta, cosi' la regola sta in un posto solo e si puo' provare
+    // da sola.
+    //
+    // CHE COSA *NON* CURA, e va detto: le LETTURE. Quando un documento cambia, Firestore manda
+    // agli altri dispositivi il documento INTERO, non il delta: quelle le taglia solo il server
+    // nostro, che manda {nome, versione} e lascia decidere al dispositivo se rileggere.
+    async salvaCampi(parti){
+      if(!this.uid) return false;
+      if(!parti || typeof parti!=='object' || !Object.keys(parti).length) return false;
+      if(!this._puoScrivere('session')) return false;
+      try{
+        await setDoc(doc(db,"users",this.uid,"data","session"),
+          { state: parti, updatedAt: serverTimestamp() }, { merge:true });
+        return true;
+      }catch(e){ console.warn("Salvataggio a campi su Firestore fallito:", e); return false; }
+    },
     // Versione "fire-and-forget" pensata SOLO per pagehide (vedi commento sopra): non va mai
     // aspettata con await, va solo chiamata perché la richiesta parta subito.
     saveKeepalive: saveSessionKeepalive,
@@ -1554,7 +1585,10 @@ window.fblAvviaSoloBacktest=function(){
     // MAI dipendere da una configurazione che non c'e'. E se il canale server non si apre, si
     // ricade su Firestore: meglio una lettura in piu' che un dispositivo muto.
     _serverConfigurato(){
-      try{ return (typeof fblServer==='function' && !!fblServer()); }catch(e){ return false; }
+      // La regola sta in fblCloudDoveScrivere(), nello script principale, dove si puo' provare
+      // da sola: qui dentro il banco non carica il modulo Firebase. 'firebase' vuol dire che non
+      // c'e' niente di nostro da usare.
+      try{ return fblCloudDoveScrivere()!=='firebase'; }catch(e){ return false; }
     },
     _ascoltaDoc(nome, cb, trasforma, ricadutaFirestore){
       if(!this.uid) return ()=>{};
@@ -1574,7 +1608,7 @@ window.fblAvviaSoloBacktest=function(){
     async serverDatiLeggi(nome){
       if(!this.uid) return null;
       try{
-        const url=fblServerUrl(8000)+'/dati/'+encodeURIComponent(nome);
+        const url=fblUrlDati()+'/dati/'+encodeURIComponent(nome);
         const r=await fetch(url,{headers:{'Authorization':'Bearer '+(cachedIdToken||'')}});
         if(!r.ok) return null;
         const d=await r.json();
@@ -1584,7 +1618,7 @@ window.fblAvviaSoloBacktest=function(){
     async serverDatiScrivi(nome,contenuto){
       if(!this.uid) return false;
       try{
-        const url=fblServerUrl(8000)+'/dati/'+encodeURIComponent(nome);
+        const url=fblUrlDati()+'/dati/'+encodeURIComponent(nome);
         const r=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(cachedIdToken||'')},body:JSON.stringify({contenuto})});
         return r.ok;
       }catch(e){ console.warn('Scrittura sul server Oracle fallita:',e); return false; }
@@ -1592,7 +1626,7 @@ window.fblAvviaSoloBacktest=function(){
     async serverDatiFondi(nome,campi){
       if(!this.uid) return false;
       try{
-        const url=fblServerUrl(8000)+'/dati/'+encodeURIComponent(nome);
+        const url=fblUrlDati()+'/dati/'+encodeURIComponent(nome);
         const r=await fetch(url,{method:'PATCH',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(cachedIdToken||'')},body:JSON.stringify({contenuto:campi})});
         return r.ok;
       }catch(e){ console.warn('Fusione sul server Oracle fallita:',e); return false; }
@@ -1601,7 +1635,7 @@ window.fblAvviaSoloBacktest=function(){
       if(!this.uid) return false;
       if(!Array.isArray(nuove)||!nuove.length) return true;
       try{
-        const url=fblServerUrl(8000)+'/dati/trades/aggiungi';
+        const url=fblUrlDati()+'/dati/trades/aggiungi';
         const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(cachedIdToken||'')},body:JSON.stringify({operazioni:nuove})});
         return r.ok;
       }catch(e){ console.warn('Aggiunta operazioni sul server Oracle fallita:',e); return false; }
@@ -1609,7 +1643,7 @@ window.fblAvviaSoloBacktest=function(){
     async serverTradesLeggi(){
       if(!this.uid) return null;
       try{
-        const url=fblServerUrl(8000)+'/dati/trades';
+        const url=fblUrlDati()+'/dati/trades';
         const r=await fetch(url,{headers:{'Authorization':'Bearer '+(cachedIdToken||'')}});
         if(!r.ok) return null;
         const d=await r.json();
@@ -1632,7 +1666,7 @@ window.fblAvviaSoloBacktest=function(){
       const apri=()=>{
         if(chiuso) return;
         try{
-          const url='wss://'+fblServer()+':8000/dati/ascolta?token='+encodeURIComponent(cachedIdToken||'');
+          const url=fblUrlDatiAscolto(cachedIdToken);
           const w=new WebSocket(url);
           ws=w;
           w.onopen=()=>{ tentativo=0; };
@@ -4492,6 +4526,18 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
         e il server sa dove trovarlo. Gli altri dispositivi dello stesso account Google lo
         ricevono in automatico: niente nome e chiave da scrivere.
       </div>
+
+      <!-- IL CLOUD NOSTRO, SUL COMPUTER (4 novembre 2026).
+           CHIESTO: «per quanto riguarda il server, accendiamolo e lo mettiamo all'interno del
+           nostro disco e sul PC», e «il nostro PC sara' di collegamento anche agli altri utenti
+           per il discorso cloud». Nasce SPENTO e si accende da qui: spostare dove vivono i dati
+           non e' una cosa da fare di nascosto a nessuno. -->
+      <div class="tgCfgSez">☁️ Dove vivono i tuoi dati</div>
+      <label class="tgCfgCampo" style="align-items:flex-start">
+        <input type="checkbox" id="fblCloudNostroSw" style="width:16px;height:16px;accent-color:var(--fbAccent2);cursor:pointer;margin-top:2px">
+        <span>Tieni i dati sul <b>mio computer</b> invece che su Firebase</span>
+      </label>
+      <div class="tgCfgNota" id="fblCloudNostroNota" style="margin-bottom:12px"></div>
 
       <div class="tgCfgSez">Cosa risponde adesso</div>
       <div id="fblServizi" class="fblServizi"></div>
@@ -8721,6 +8767,134 @@ const FIREBASE_MIN_SYNC_INTERVAL_MS=4000; // evita un doppio invio se più event
 // fotografia identica (vedi la nota lunga in syncFullStatusToFirebase) e poterlo DIRE nella
 // misura delle prestazioni, cosi' il consumo si guarda invece di immaginarlo.
 let fblCloudUltimaFirma=null, fblCloudUltimoPeso=0, fblCloudScritture=0, fblCloudSaltate=0;
+let fblCloudFirmeCampi=null;   // firme per campo dell'ultima scrittura riuscita (vedi sotto)
+// ============ SI MANDA SOLO QUELLO CHE E' CAMBIATO ============
+//
+// CHIESTO dal proprietario (4 novembre 2026): «quello che e' stato scritto rimane archiviato nel
+// dispositivo. Quello che deve scrivere e' soltanto l'ultimo aggiornamento e non deve
+// sovrascrivere, altrimenti e' normale che scrive una marea di dati. Prende riferimento soltanto
+// l'ultima scrittura, che e' di qualche byte, non puo' essere kilobyte o addirittura megabyte.»
+//
+// COM'ERA: una firma dell'INTERO pacchetto. Identico = non si scrive (quello funzionava gia'), ma
+// se cambiava UNA cosa si rimandava TUTTO.
+//
+// MISURATO su una sessione realistica (8 posizioni, 4 ordini pendenti, disegni su 12 asset in 2
+// sessioni, ultima candela vista per asset e sessione):
+//   fotografia intera ............................. 52,4 KB
+//   chiudo una posizione, delta per campo .......... 1,1 KB   (48 volte meno)
+//   sposto un disegno, delta per campo ............ 42,9 KB   (quasi niente di risparmiato)
+//
+// PERCHE' I DISEGNI NON BASTAVA IL CAMPO: `assetDrawings` e' UN campo solo che contiene i disegni
+// di tutti gli asset di tutte le sessioni — 42 KB dei 52. Per quello (e per `assetChartViews`,
+// fatto allo stesso modo) la firma scende di un livello: modalita' e asset. Si manda solo l'asset
+// toccato, e `merge:true` fonde le mappe annidate lasciando gli altri asset dove sono.
+//
+// L'UNICO CASO IN CUI SI RISCRIVE TUTTO, e non e' una pigrizia: quando una CHIAVE SPARISCE. La
+// fusione non cancella: se l'utente cancella i disegni di un asset, o un asset esce dalla lista,
+// mandare solo i campi rimasti lascerebbe la vecchia chiave viva sul server, e al prossimo
+// ripristino i disegni cancellati TORNEREBBERO. Un risparmio che ti fa ricomparire un disegno
+// cancellato non e' un risparmio: in quel caso si fa una scrittura intera (senza fusione), che
+// cancella davvero.
+//
+// `savedAt` non conta come modifica: cambia a ogni raccolta, e se contasse si riscriverebbe sempre.
+const FBL_CAMPI_PROFONDI = ['assetDrawings', 'assetChartViews'];
+
+function fblFirmaValore(v){
+  let t;
+  try{ t = JSON.stringify(v); }catch(e){ t = null; }
+  if(t === undefined || t === null) t = String(v);
+  let h = 5381;
+  for(let i=0;i<t.length;i++) h = ((h*33) ^ t.charCodeAt(i)) >>> 0;
+  return t.length + ':' + h;
+}
+
+// Le firme di un pacchetto: una per campo, e per i due campi profondi una per modalita'/asset.
+function fblCloudFirmeDi(pacchetto){
+  const f = {};
+  Object.keys(pacchetto||{}).forEach(k=>{
+    if(k === 'savedAt') return;
+    const v = pacchetto[k];
+    if(FBL_CAMPI_PROFONDI.indexOf(k) >= 0 && v && typeof v === 'object' && !Array.isArray(v)){
+      const dentro = {};
+      Object.keys(v).forEach(modo=>{
+        const liv = v[modo];
+        if(liv && typeof liv === 'object' && !Array.isArray(liv)){
+          const per = {};
+          Object.keys(liv).forEach(asset=>{ per[asset] = fblFirmaValore(liv[asset]); });
+          dentro[modo] = per;
+        }else{
+          dentro[modo] = fblFirmaValore(liv);
+        }
+      });
+      f[k] = {profondo:true, dentro};
+    }else{
+      f[k] = fblFirmaValore(v);
+    }
+  });
+  return f;
+}
+
+// Qualche chiave e' sparita fra due giri di firme? (a qualunque livello dei campi profondi)
+function fblCloudChiaveSparita(prima, dopo){
+  const vecchie = Object.keys(prima||{}), nuove = Object.keys(dopo||{});
+  if(vecchie.some(k=> nuove.indexOf(k) < 0)) return true;
+  return vecchie.some(k=>{
+    const a = prima[k], b = dopo[k];
+    if(!a || !a.profondo) return false;
+    if(!b || !b.profondo) return false;
+    const mv = Object.keys(a.dentro||{}), mn = Object.keys(b.dentro||{});
+    if(mv.some(m=> mn.indexOf(m) < 0)) return true;
+    return mv.some(m=>{
+      const am = a.dentro[m], bm = b.dentro[m];
+      if(!am || typeof am !== 'object') return false;
+      if(!bm || typeof bm !== 'object') return true;   // era una mappa, ora non lo e' piu'
+      return Object.keys(am).some(x=> !(x in bm));
+    });
+  });
+}
+
+// Che cosa mandare: {parti, firme, intero, motivo}.
+//   intero:true  -> scrittura intera, senza fusione (prima volta, o una chiave e' sparita)
+//   parti        -> solo i campi cambiati, da mandare con merge:true
+function fblCloudCampiCambiati(pacchetto, firmePrec){
+  const firme = fblCloudFirmeDi(pacchetto);
+  if(!firmePrec) return {parti:pacchetto, firme, intero:true,
+    motivo:'prima scrittura: non c’è una base da cui calcolare il delta'};
+  if(fblCloudChiaveSparita(firmePrec, firme)) return {parti:pacchetto, firme, intero:true,
+    motivo:'una chiave è sparita: la fusione non cancella, serve una scrittura intera'};
+  const parti = {};
+  Object.keys(firme).forEach(k=>{
+    const a = firmePrec[k], b = firme[k];
+    if(b && b.profondo){
+      if(!a || !a.profondo){ parti[k] = pacchetto[k]; return; }
+      const dentroCambiato = {};
+      Object.keys(b.dentro).forEach(modo=>{
+        const am = a.dentro[modo], bm = b.dentro[modo];
+        if(bm && typeof bm === 'object' && am && typeof am === 'object'){
+          const per = {};
+          Object.keys(bm).forEach(asset=>{
+            if(am[asset] !== bm[asset]) per[asset] = pacchetto[k][modo][asset];
+          });
+          if(Object.keys(per).length) dentroCambiato[modo] = per;
+        }else if(am !== bm){
+          dentroCambiato[modo] = pacchetto[k][modo];
+        }
+      });
+      if(Object.keys(dentroCambiato).length) parti[k] = dentroCambiato;
+      return;
+    }
+    if(a !== b) parti[k] = pacchetto[k];
+  });
+  // `version` e `savedAt` viaggiano con ogni delta: pesano niente e dicono quando e con che
+  // formato e' stato scritto. Senza savedAt un documento aggiornato a pezzi sembrerebbe vecchio.
+  if(Object.keys(parti).length){
+    if(pacchetto && pacchetto.version !== undefined) parti.version = pacchetto.version;
+    if(pacchetto && pacchetto.savedAt !== undefined) parti.savedAt = pacchetto.savedAt;
+  }
+  return {parti, firme, intero:false,
+    motivo:Object.keys(parti).length ? ('cambiati: ' + Object.keys(parti).join(', ')) : 'niente di cambiato'};
+}
+
 let fblCloudTradesInviati=0; // quante operazioni sono state mandate col salvataggio incrementale
 // FOOTPRINT NEL DOCUMENTO SUO (cura bolletta, 31 ottobre 2026): il footprint esce dal salvataggio
 // del session e sta in users/{uid}/data/footprint. Queste tre variabili sono il suo freno: si
@@ -8892,9 +9066,44 @@ async function syncFullStatusToFirebase(reason,force){
    // Il documento session si scrive solo se e' cambiato. La regola della firma RESTA: si
    // aggiorna solo DOPO una scrittura riuscita, quindi un tentativo fallito viene rifatto.
    if (!sessionIdentica) {
-    await window.fxbtCloud.save(trimmedBundle);
-    fblCloudUltimaFirma = firma;
-    fblCloudUltimoPeso = testo ? testo.length : 0;
+    // SI MANDA SOLO IL DELTA (vedi fblCloudCampiCambiati piu' sopra, con la misura in byte).
+    // La scrittura intera resta per due casi: la prima volta, e quando una chiave e' sparita
+    // (la fusione non cancella). Se salvaCampi non c'e' — modulo cloud piu' vecchio — si torna
+    // alla fotografia intera invece di non scrivere: un risparmio che perde un dato non e' un
+    // risparmio.
+    const scelta = (typeof fblCloudCampiCambiati === 'function')
+      ? fblCloudCampiCambiati(trimmedBundle, fblCloudFirmeCampi) : null;
+    const puoACampi = !!(scelta && !scelta.intero && typeof window.fxbtCloud.salvaCampi === 'function');
+    let okScritto = false;
+    if (puoACampi) {
+     if (!Object.keys(scelta.parti).length) {
+      // Le firme per campo dicono "niente di cambiato" dove la firma intera diceva il
+      // contrario: succede per il solo savedAt, che non e' una modifica. Non si scrive.
+      fblCloudSaltate++;
+      fblCloudUltimaFirma = firma;
+      okScritto = true;
+     } else {
+      let peso = 0; try { peso = JSON.stringify(scelta.parti).length; } catch (e) { peso = 0; }
+      okScritto = await window.fxbtCloud.salvaCampi(scelta.parti);
+      if (okScritto) {
+       fblCloudUltimaFirma = firma;
+       fblCloudFirmeCampi = scelta.firme;
+       fblCloudUltimoPeso = peso;
+       console.log('[Cloud] delta ' + Math.round(peso/1024*10)/10 + ' KB invece di '
+         + Math.round((testo?testo.length:0)/1024*10)/10 + ' KB (' + scelta.motivo + ')');
+      }
+     }
+    }
+    if (!okScritto) {
+     const ok = await window.fxbtCloud.save(trimmedBundle);
+     if (ok !== false) {
+      fblCloudUltimaFirma = firma;
+      fblCloudUltimoPeso = testo ? testo.length : 0;
+      // Da qui in poi c'e' una base da cui fare il delta: la fotografia sul server e' questa.
+      fblCloudFirmeCampi = (scelta && scelta.firme) ? scelta.firme
+        : ((typeof fblCloudFirmeDi === 'function') ? fblCloudFirmeDi(trimmedBundle) : null);
+     }
+    }
    }
    // Le operazioni nuove: se la scrittura fallisce, la firma NON si aggiorna e il conteggio
    // sul cloud resta vecchio - al giro dopo si riprovano da sole.
@@ -34679,6 +34888,9 @@ async function fblRemotoApri(){
  // Si vede subito com'è messa la situazione, senza premere niente, e si continua ad aggiornare
  // finché la schermata resta aperta (scelta del proprietario).
  try{ fblServiziAvvia(); }catch(e){ console.log('[Accesso remoto] stato dei servizi:',e); }
+ // L'interruttore del cloud nostro si ridisegna all'apertura: la sua nota dice anche DOVE
+ // viene raggiunto il ponte adesso, e quello cambia da una volta all'altra.
+ try{ fblCloudNostroDisegna(); }catch(e){ console.log('[Accesso remoto] interruttore cloud:',e); }
  // Sul computer: se il server è già impostato ma questo PC non si è mai presentato, lo fa ora.
  // È quello che toglie di mezzo il "nome del computer" da scrivere a mano sul telefono.
  if(!fblRemoto()&&fblServer()&&fblServerChiave()){
@@ -35051,6 +35263,35 @@ function fblServiziAvvia(){
  },6000);
 }
 function fblServiziFerma(){ if(fblServiziTimer){ clearInterval(fblServiziTimer); fblServiziTimer=null; } }
+
+// ====== L'INTERRUTTORE DEL CLOUD NOSTRO ======
+// La nota dice in parole cosa cambia, perche' questo interruttore sposta DOVE vivono i dati.
+// Un cambio non porta con se' i dati gia' scritti: quelli restano dove sono, e questo va detto
+// invece di farlo scoprire da un documento che sembra sparito.
+function fblCloudNostroDisegna(){
+ const sw=$('fblCloudNostroSw'), nota=$('fblCloudNostroNota');
+ if(sw)sw.checked=(typeof fblCloudNostro==='function')?fblCloudNostro():false;
+ if(!nota)return;
+ const dove=(typeof fblUrlDati==='function')?fblUrlDati():'';
+ nota.innerHTML=(sw&&sw.checked)
+  ? ("Acceso: sessione, disegni, preferenze e footprint stanno in un file sul <b>tuo disco</b> "
+     +"(<code>%APPDATA%\\ForexBacktestLAB\\dati</code>), serviti dal ponte di questo computer"
+     +(dove?(" — adesso raggiunto su <code>"+dove+"</code>"):"")+". Gli altri tuoi dispositivi "
+     +"passano dalla stessa strada degli ordini, quindi funzionano anche da fuori casa. "
+     +"<b>Firebase resta la rete di sicurezza</b>: se il computer non risponde, si torna lì. "
+     +"Quello che era già scritto su Firebase <b>resta su Firebase</b>: non viene spostato.")
+  : "Spento: i dati stanno su Firebase, come sempre. Acceso, li tiene il ponte di questo computer"
+    + " in un file sul tuo disco — meno letture e meno scritture da pagare, perché agli altri"
+    + " dispositivi arriva un avviso di venti byte invece del documento intero.";
+}
+$('fblCloudNostroSw')?.addEventListener('change',()=>{
+ const acceso=!!$('fblCloudNostroSw').checked;
+ try{ fblCloudNostroImposta(acceso); }catch(e){}
+ fblCloudNostroDisegna();
+ try{ $('status').textContent=acceso
+  ? '☁️ I dati ora stanno sul tuo computer. Firebase resta la rete di sicurezza.'
+  : '☁️ I dati tornano su Firebase.'; }catch(e){}
+});
 
 // --- Registro della prova ---------------------------------------------------------------------
 // Tutto quello che succede finisce in console con il prefisso [FBL], e in un registro in memoria
@@ -36767,7 +37008,59 @@ const FBL_SYNC_WATCHLIST_KEY='fbl_sync_watchlist';
 const FBL_SYNC_RICERCHE_KEY='fbl_sync_ricerche';
 function fblServer(){ try{ return (localStorage.getItem(FBL_SERVER_KEY)||'').trim(); }catch(e){ return ''; } }
 function fblServerChiave(){ try{ return (localStorage.getItem(FBL_SERVER_CHIAVE_KEY)||'').trim(); }catch(e){ return ''; } }
-function fblServerUrl(porta){ return 'https://'+fblServer()+':'+porta; }
+function fblServerUrl(porta){
+ // Un indirizzo GIA' COMPLETO (con http:// o https://) si usa com'e'. Serve da quando il cloud
+ // nostro puo' stare sul computer stesso: li' si parla in chiaro con 127.0.0.1, e forzare
+ // https su un indirizzo locale non porta a niente. Un NOME secco resta trattato come prima:
+ // https e la porta chiesta, che e' come si arriva al server da fuori.
+ const dove=fblServer();
+ if(/^https?:\/\//i.test(dove))return dove.replace(/\/+$/,'');
+ return 'https://'+dove+':'+porta;
+}
+// ====== DOVE STANNO I DOCUMENTI DELL'UTENTE (sessione, disegni, preferenze, footprint) ======
+//
+// CHIESTO dal proprietario (4 novembre 2026): «accendiamolo e lo mettiamo all'interno del
+// nostro disco e sul PC», e «il nostro PC sara' di collegamento anche agli altri utenti per il
+// discorso cloud».
+//
+// Le rotte /dati vivono ORA dentro il ponte del computer (porta 8000, vedi documenti_utente.py
+// montato da bridge.py), la stessa porta degli ordini. Quindi l'indirizzo dei documenti e'
+// quello del ponte, qualunque strada l'app abbia scelto per raggiungerlo: in locale
+// (127.0.0.1), diretta sulla rete privata, o inoltrata dal server (/pc/8000) - ed e'
+// quest'ultima la strada con cui ci arriva chi non e' in casa.
+//
+// Acceso o spento, lo decide l'utente: spostare dove vivono i dati non e' una cosa da fare di
+// nascosto a nessuno. Spento, tutto resta come prima (server Oracle se impostato, se no
+// Firestore).
+const FBL_CLOUD_NOSTRO_KEY='fbl_cloud_nostro';
+function fblCloudNostro(){ try{ return localStorage.getItem(FBL_CLOUD_NOSTRO_KEY)==='1'; }catch(e){ return false; } }
+function fblCloudNostroImposta(acceso){
+ try{ if(acceso)localStorage.setItem(FBL_CLOUD_NOSTRO_KEY,'1'); else localStorage.removeItem(FBL_CLOUD_NOSTRO_KEY); }catch(e){}
+}
+function fblUrlDati(){
+ if(fblCloudNostro()){
+  try{ if(typeof MT5_BRIDGE_URL==='string'&&MT5_BRIDGE_URL)return MT5_BRIDGE_URL.replace(/\/+$/,''); }catch(e){}
+  return 'http://127.0.0.1:8000';
+ }
+ try{ return fblServer()?fblServerUrl(8000):''; }catch(e){ return ''; }
+}
+// L'indirizzo dell'ascolto in tempo reale, ricavato da quello dei documenti: http -> ws,
+// https -> wss. Scriverlo a mano come 'wss://'+nome era giusto finche' il server era uno solo e
+// sempre in https; col ponte in locale sarebbe un indirizzo che non esiste.
+// DOVE SI SCRIVE, in una parola: 'nostro' (il ponte di questo computer), 'server' (il server
+// Linux) o 'firebase'. Sta QUI e non dentro il modulo Firebase per una ragione pratica: nel
+// banco di prova quel modulo non carica, quindi una regola scritta la' dentro non si potrebbe
+// misurare - e' la stessa ragione per cui l'ascolto dei documenti vive in fblAscoltaDocumento.
+function fblCloudDoveScrivere(){
+ try{ if(typeof fblCloudNostro==='function' && fblCloudNostro())return 'nostro'; }catch(e){}
+ try{ if(typeof fblServer==='function' && fblServer())return 'server'; }catch(e){}
+ return 'firebase';
+}
+function fblUrlDatiAscolto(token){
+ const base=fblUrlDati();
+ if(!base)return '';
+ return base.replace(/^http/i,'ws')+'/dati/ascolta?token='+encodeURIComponent(token||'');
+}
 // L'indirizzo della REGISTRAZIONE. Deve portare la porta del ponte (8000): senza porta si finisce
 // sulla 443, che Tailscale Serve non apre, e la chiamata non arriva nemmeno al server (verificato:
 // https://nome.ts.net/health non risponde, https://nome.ts.net:8000/health si'). Era un guasto

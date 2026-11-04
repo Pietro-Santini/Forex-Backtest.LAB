@@ -89,12 +89,22 @@ print("OK")
 
 
 def test_lelenco_dei_nomi_e_uno_solo():
-    sorg = (ROOT / 'server_oracle' / 'ponte_server.py').read_text(encoding='utf-8')
+    """Dal 4 novembre 2026 le rotte /dati vivono in installer_build/build/documenti_utente.py:
+    le monta sia il server Linux sia il ponte del computer, perche' il proprietario ha chiesto di
+    accendere il cloud nostro anche sul suo PC. Qui si guarda la casa nuova."""
+    sorg = (ROOT / 'installer_build' / 'build' / 'documenti_utente.py').read_text(encoding='utf-8')
     assert 'NOMI_DOCUMENTI = (' in sorg, 'deve esistere UNA lista dei nomi ammessi'
     assert sorg.count('if nome not in NOMI_DOCUMENTI:') >= 3, \
         'le tre rotte /dati devono tutte controllare la stessa lista'
     assert 'if nome not in (' not in sorg, \
         'il controllo del nome deve usare NOMI_DOCUMENTI, non un elenco scritto nelle rotte'
+
+    # E una copia sola: il server non deve tenersi un suo elenco, o un giorno divergono e un
+    # documento si scrive da una parte e non si legge dall'altra (e' quello che e' successo col
+    # footprint, rifiutato con 400 in silenzio).
+    srv = (ROOT / 'server_oracle' / 'ponte_server.py').read_text(encoding='utf-8')
+    assert 'NOMI_DOCUMENTI = (' not in srv, \
+        'il server non deve avere un suo elenco dei nomi: usa quello di documenti_utente'
 
 
 def test_il_primo_nome_resta_session():

@@ -2010,6 +2010,37 @@ ACCESSO_REMOTO = _carica_accesso()
 # Chi non e' il PC deve presentare la chiave: stesso controllo, stesso file, degli altri due servizi.
 _accesso.installa_controllo_chiave(app)
 
+# ===================== IL CLOUD NOSTRO, SU QUESTO COMPUTER =====================
+#
+# CHIESTO dal proprietario (4 novembre 2026): "per quanto riguarda il server, accendiamolo e lo
+# mettiamo all'interno del nostro disco e sul PC". E il motivo, con i suoi numeri: "ieri su
+# Firestore siamo arrivati a 250.000 letture e 122.000 di scritture. O sistemiamo qualcosa
+# all'interno che non mi faccia pagare, o se no cambiamo sistema".
+#
+# COSA AGGIUNGE DAVVERO, oltre a non pagare: quando un documento cambia, Firestore manda agli
+# altri dispositivi il documento INTERO (305 KB misurati, 48 KB dopo le cure di questi giorni),
+# anche a quello che l'ha appena scritto - sono le letture che si pagano. Qui invece parte
+# {nome, versione}: venti byte, e il dispositivo decide se rileggere.
+#
+# LE ROTTE SONO LE STESSE del server Linux, e il modulo e' lo stesso file: due copie della stessa
+# logica divergono sempre.
+#
+# ATTENZIONE, E VA DETTO (il proprietario ha avvisato che questo computer servira' anche altri
+# utenti): l'autenticazione di queste rotte NON e' la chiave condivisa di questo ponte - e' il
+# token Firebase personale di ogni utente, verificato contro le chiavi pubbliche di Google, e
+# ogni riga del database e' legata all'uid che ne esce. Un uid mandato dal client non si accetta
+# da nessuna parte. Per questo /dati scavalca il controllo chiave (vedi accesso_condiviso.py, il
+# ramo `request.url.path.startswith("/dati/")`): uno scavalco STRETTO a quel solo prefisso,
+# perche' tutto il resto di questo ponte - comprese le rotte che mandano ordini veri su MT5 -
+# deve restare dietro la chiave anche quando la porta e' raggiungibile da fuori.
+try:
+    import documenti_utente as _documenti
+    _documenti.registra_router(app)
+    print("[Bridge] cloud nostro attivo: i documenti stanno in", _documenti.percorso_db())
+except Exception as _e_documenti:  # pragma: no cover
+    print("[Bridge] cloud nostro non disponibile:", _e_documenti)
+
+
 # ORDINI CRIPTO SU KRAKEN FUTURES: sotto /kraken, stessa porta e stessa chiave degli ordini MT5.
 # (Binance Futures non e' disponibile ai residenti in Italia: gli ordini cripto passano da Kraken.)
 # Le chiavi API restano in kraken_ordini.py (file della cartella dati, cifrato con DPAPI): l'app

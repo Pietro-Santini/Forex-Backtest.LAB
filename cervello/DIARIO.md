@@ -2,6 +2,93 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-04 — Claude — **v2.0.82: la bolletta. Si manda solo quello che cambia, e il cloud può
+  stare sul computer del proprietario**.
+  1. **LA RICHIESTA, parole sue:** «quello che è stato scritto rimane archiviato nel dispositivo.
+     Quello che deve scrivere è soltanto l'ultimo aggiornamento e non deve sovrascrivere,
+     altrimenti è normale che scrive una marea di dati. Prende riferimento soltanto l'ultima
+     scrittura, che è di qualche byte, non può essere kilobyte o addirittura megabyte.» E il conto
+     che la motiva: «ieri su Firestore siamo arrivati a 250.000 letture e 122.000 di scritture. O
+     sistemiamo qualcosa all'interno che non mi faccia pagare, o se no cambiamo sistema.»
+  2. **PRIMA LA MISURA, perché senza non si sa dove tagliare.** Su una sessione realistica (8
+     posizioni, 4 ordini pendenti, disegni su 12 asset in 2 sessioni, ultima candela vista per
+     asset e per sessione) la fotografia intera pesa **52,4 KB**, di cui **42 KB di soli
+     `assetDrawings`**. Le operazioni chiuse erano già uscite dal pacchetto il 26 ottobre, il
+     footprint il 31: quello che restava si rimandava TUTTO ogni volta che cambiava una cosa sola.
+  3. **DUE LIVELLI DI DELTA, e il secondo serve.** Una firma per CAMPO basta per le posizioni, ma
+     non per i disegni: `assetDrawings` è un campo solo con dentro tutti gli asset di tutte le
+     sessioni, quindi il delta per campo avrebbe mandato ancora 42,9 KB — quasi niente di
+     risparmiato. Per quello (e per `assetChartViews`) la firma scende di un livello:
+     modalità e asset.
+
+     | modifica | prima | dopo | |
+     |---|---|---|---|
+     | scorro il grafico | 48,7 KB | **0,1 KB** | 357× meno |
+     | chiudo una posizione | 48,6 KB | **1,1 KB** | 44× meno |
+     | sposto uno stop | 48,7 KB | **1,2 KB** | 39× meno |
+     | sposto un disegno | 48,7 KB | **5,1 KB** | 10× meno |
+
+     Scorrere il grafico è la cosa che si salva più spesso: lì si passa da 48 KB a cento byte.
+  4. **L'UNICO CASO IN CUI SI RISCRIVE TUTTO, e non è pigrizia: quando una CHIAVE SPARISCE.** La
+     fusione non cancella. Se l'utente cancella i disegni di un asset, mandare solo i campi
+     rimasti lascerebbe la vecchia chiave viva sul server, e al prossimo ripristino i disegni
+     cancellati **tornerebbero**. Un risparmio che ti fa ricomparire un disegno cancellato non è
+     un risparmio: in quel caso si fa una scrittura intera, che cancella davvero. È la prova che
+     conta più del risparmio, ed è nel test.
+  5. **CHE COSA IL DELTA *NON* CURA, e va detto chiaro: le LETTURE.** Quando un documento cambia,
+     Firestore manda agli altri dispositivi il documento **intero**, non il delta — anche a quello
+     che l'ha appena scritto. Le 250.000 letture vengono da lì, e nessuna cura lato scrittura le
+     tocca.
+  6. **PER QUELLO IL CLOUD NOSTRO, e il proprietario l'ha chiesto esplicitamente:** «accendiamolo
+     e lo mettiamo all'interno del nostro disco e sul PC». **Sorpresa, in positivo: era già
+     costruito.** Le rotte `/dati` esistevano da fine ottobre — leggi, scrivi, **fondi** (cioè la
+     scrittura a delta), operazioni append-only, ascolto in tempo reale — ma solo in
+     `server_oracle/ponte_server.py`, cioè solo sul server Linux, che oggi **non ha un posto dove
+     girare** (Oracle non ha capacità a nessuna taglia). Mancava un posto, non il codice.
+  7. **DOVE GIRANO ADESSO: dentro il ponte che il proprietario accende ogni giorno.** Le rotte
+     sono state spostate in `installer_build/build/documenti_utente.py`, montato sia da
+     `bridge.py` (il computer, porta 8000 — la stessa degli ordini) sia da `ponte_server.py`: una
+     copia sola della logica, perché due copie divergono sempre. I dati stanno in un file SQLite
+     in `%APPDATA%\ForexBacktestLAB\dati`, cioè fuori dalla cartella del programma: sopravvive
+     agli aggiornamenti.
+     L'app ci arriva con la **stessa strada degli ordini** — locale, diretta sulla rete privata, o
+     inoltrata dal server su `/pc/8000`: è quest'ultima che serve quando non si è in casa, e
+     risponde anche al suo avviso successivo («il nostro PC sarà di collegamento anche agli altri
+     utenti»). L'interruttore è nel pannello «Accesso da altri dispositivi» e **nasce spento**:
+     spostare dove vivono i dati non è una cosa da fare di nascosto a nessuno.
+  8. **UN DIFETTO VERO TROVATO MENTRE SI SPOSTAVA, e proprio nella parte che serve di più:** il
+     registro degli ascoltatori (`_ascoltatori`) **non veniva mai riempito**. Il WebSocket
+     accettava la connessione, mandava l'elenco iniziale e poi taceva; `avvisa()` trovava sempre
+     un insieme vuoto. Il risparmio che il commento dichiarava — venti byte invece del documento
+     intero — **non è quindi mai entrato in funzione**: scrivendo dal computer, il telefono non lo
+     sapeva. Non era un ascolto, era una sincronizzazione sola andata. Misurato sul codice
+     pubblicato: un ascoltatore collegato risulta **0**; qui risulta 1. In più la **fusione** ora
+     avvisa come la scrittura intera: prima no, e da quando il delta è la strada normale sarebbe
+     stato il caso più comune a non svegliare nessuno.
+  9. **LA PROVA DI SICUREZZA, perché il computer servirà anche altri utenti.** Le rotte `/dati`
+     scavalcano il controllo chiave del ponte — hanno un'autenticazione loro, il token Firebase
+     personale di ogni utente, verificato contro le chiavi pubbliche di Google, e ogni riga del
+     database è legata all'uid che ne esce (un uid mandato dal client non si accetta mai). Quello
+     scavalco deve essere **stretto a quel prefisso**: un test misura che `/order/market` e
+     `/positions` restino dietro la chiave anche da fuori, perché aprire questa porta agli altri
+     utenti non deve voler dire aprire le rotte che mandano ordini veri.
+  10. **UN ERRORE MIO, annotato perché non si ripeta.** Il mio primo test sostituiva
+     `motivo_rifiuto` in un modulo CONDIVISO senza ripristinarlo: undici test rossi altrove, tutti
+     causati da quella riga. Rifatto con `monkeypatch`, e la suite python gira verde anche in
+     ordine inverso.
+  **TEST NUOVI, provati nei due sensi, ognuno con le sue prove di controllo:**
+  `cloud_scrittura_delta.test.mjs` (7 prove, 2 di controllo: niente cambiato = niente mandato; il
+  solo orario di salvataggio non fa scrivere), `cloud_nostro_indirizzo.test.mjs` (6 prove, 3 di
+  controllo: spento non cambia niente, e un nome secco resta https con la porta),
+  `test_cloud_nostro_sul_pc.py` (9 prove, 3 di controllo).
+  **Collaudo:** browser 1145 prove, 1144 verdi, 0 rosse (1 saltata); python 221 verdi, anche
+  in ordine inverso.
+  **NON solo app.html:** cambiano installer_build/build/bridge.py e il modulo nuovo
+  installer_build/build/documenti_utente.py. Serve il pacchetto nuovo, o le rotte /dati sul
+  computer non esistono e l'interruttore del cloud nostro non ha dove scrivere.
+  **Server Oracle:** server_oracle/ponte_server.py e' cambiato (usa il modulo condiviso), quindi
+  quando il server tornera' ad avere un posto dove girare va riportato anche la'.
+
 - 2026-11-04 — Claude — **v2.0.81: il profilo non si accorcia più al cambio di timeframe, la
   finestra duplicata mostra solo il grafico, il break-even va DOVE vuoi tu, e quattro cose che il
   dito non riusciva a fare**.
