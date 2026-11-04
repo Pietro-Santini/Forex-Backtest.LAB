@@ -17,13 +17,8 @@ UNA SOLA COPIA DELLA LOGICA. Il ponte del computer (bridge.py, porta 8000) e il 
 (ponte_server.py) montano lo STESSO router: due copie della stessa logica divergono sempre, ed e'
 la lezione pagata due volte il 28 ottobre.
 
-DOVE STANNO I DATI: in un file SQLite, sul disco.
-  - Windows: %APPDATA%\\ForexBacktestLAB\\dati\\dati_utenti.db (la stessa convenzione delle chiavi
-    Kraken e dei dati dei segnali: sopravvive agli aggiornamenti, perche' non sta nella cartella
-    del programma).
-  - Linux (il server): /dati/dati_utenti.db, come prima.
-  - FBL_DATI nell'ambiente vince su tutto: e' cosi' che i test lo mandano in una cartella usa e
-    getta.
+DOVE STANNO I DATI: in un file SQLite sul disco E, scelto dal proprietario - vedi
+cartella_dati() piu' sotto, che spiega l'ordine delle scelte e perche' E e non C.
 
 CHI SEI LO DICE FIREBASE, NON IL CLIENT. Ogni rotta vuole un token Firebase valido
 ("Authorization: Bearer <id token>") e ne ricava l'uid verificando la firma contro le chiavi
@@ -49,6 +44,49 @@ router = APIRouter()
 FIREBASE_PROJECT_ID = os.environ.get("FBL_FIREBASE_PROJECT_ID", "forex-backtest-lab")
 
 
+# DOVE STANNO I DATI, e perche' proprio li'.
+#
+# SCELTO DAL PROPRIETARIO (4 novembre 2026): "sul disco E, ricordatelo, dove creeremo una
+# cartella apposita chiamata Forex Backtest Lab".
+#
+# E NON E' UN CAPRICCIO, i numeri del suo computer lo dicono: su C restano 29 GB liberi su 465,
+# su E 182 su 220. Questo database cresce con i dati di tutti gli utenti che passano da qui -
+# "poi per i nostri primi 5-10 utenti" - e metterlo sul disco di sistema vuol dire riempire il
+# disco di sistema.
+#
+# L'ORDINE DELLE SCELTE, e ognuna ha un motivo:
+#   1. FBL_DATI nell'ambiente: vince su tutto. E' cosi' che i test scrivono in una cartella usa
+#      e getta invece che nei dati veri, e che un domani si sposta tutto su un mini PC o su un
+#      server senza toccare il codice.
+#   2. E:\Forex Backtest Lab\dati, se il disco E c'e' ED E' SCRIVIBILE. Si prova a scriverci
+#      davvero, non si guarda solo se la lettera esiste: una lettera puo' essere un disco
+#      staccato, un lettore vuoto o una chiavetta estratta, e un database che non si apre e'
+#      peggio di un database nel posto sbagliato.
+#   3. %APPDATA%\ForexBacktestLAB\dati: il ripiego di sempre, per i computer che non hanno un
+#      disco E (gli altri utenti non fanno girare questo servizio, ma il ripiego costa due righe
+#      e togliere un modo di fallire ne vale sempre la pena).
+#   4. /dati su Linux, come prima, per il server.
+CARTELLA_SU_E = os.path.join("E:\\", "Forex Backtest Lab", "dati")
+
+
+def _si_puo_scrivere(cartella: str) -> bool:
+    """Si prova a creare la cartella e a scriverci un file, poi si cancella. Chiedere al disco e'
+    l'unico modo di sapere se risponde: os.path.exists su una lettera di un disco staccato puo'
+    dire di tutto."""
+    try:
+        os.makedirs(cartella, exist_ok=True)
+        prova = os.path.join(cartella, ".prova_scrittura")
+        with open(prova, "w", encoding="utf-8") as f:
+            f.write("ok")
+        try:
+            os.remove(prova)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 def cartella_dati() -> str:
     """La cartella del file SQLite. Si legge a ogni chiamata, non una volta all'import: i test
     cambiano FBL_DATI dopo aver importato il modulo, e un valore congelato all'import li
@@ -57,6 +95,8 @@ def cartella_dati() -> str:
     if scelta:
         return scelta
     if os.name == "nt":
+        if _si_puo_scrivere(CARTELLA_SU_E):
+            return CARTELLA_SU_E
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
         return os.path.join(base, "ForexBacktestLAB", "dati")
     return "/dati"

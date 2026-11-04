@@ -2,6 +2,51 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-04 — Claude — **v2.0.84: torno indietro sugli istogrammi. Avevo confuso due richieste
+  diverse** — e i dati dell'utente vanno sul disco E.
+  1. **IL PROPRIETARIO MI HA FERMATO, e aveva ragione.** Parole sue, appena pubblicata la
+     v2.0.81: «attenzione, abbiamo un problema gravissimo per quanto riguarda gli istogrammi dei
+     profili volumetrici… siamo ritornati al vecchissimo problema che avevamo una volta: quando
+     effettuavamo lo zoom, le dimensioni dell'istogramma rimangono uguali. No, no, no, devi
+     ritornare alla versione precedente. Io ti avevo detto soltanto di modificare quello che era
+     il numero delle barre, ma non il fatto della dimensione, farlo rimanere uguale cambiando il
+     time frame. Sono due cose diverse.»
+  2. **LE DUE COSE, e perché le ho confuse.** Lui aveva chiesto che il **NUMERO** delle fasce non
+     cambiasse col timeframe, «sennò si sposterebbe quello che è il not volume». Io ho agganciato
+     la **LUNGHEZZA** delle barre al riquadro del grafico invece che al periodo coperto dal
+     profilo. Sono richieste diverse e ho curato quella che nessuno aveva fatto.
+  3. **QUANTO ERA GRAVE, misurato.** Col valore predefinito (500%) la formula ancorata al riquadro
+     dava `cw × 0.7`, oltre il tetto massimo `cw × 0.6`: la lunghezza finiva **sempre** contro il
+     tetto. **684 px a qualunque zoom e a qualunque timeframe** — completamente immobile, non
+     «meno reattiva». Un difetto già corretto una volta in passato, fatto tornare da me.
+  4. **CURA: tornato esattamente all'aggancio al periodo**, con scritto accanto perché e con le
+     parole del proprietario, così non si rifà.
+  5. **IL TEST PRETENDEVA IL COMPORTAMENTO SBAGLIATO**, che è il modo peggiore in cui un test
+     possa passare: `profilo_barre_timeframe.test.mjs` misurava «la barra più lunga è la stessa a
+     1, 5 e 15 minuti». Riscritto, e ora misura le due cose **separate**: (a) il numero delle
+     fasce non cambia col timeframe — la richiesta vera; (b) la lunghezza **cambia** con lo zoom —
+     il difetto da non far tornare mai più. Più la prova di controllo sulla manopola «Dimensione
+     istogramma».
+  6. **UNA MISURA SBAGLIATA ANCHE NEL TEST NUOVO, annotata perché è la stessa trappola.** La
+     prima versione della prova sullo zoom confrontava 684 px con 684 px e concludeva «immobile»:
+     stava misurando il **soffitto** (VP_MAX_BAR_PX), non il comportamento. Con un profilo di 30
+     minuti si resta sotto il tetto e si vede la cosa vera.
+  7. **DUE ERRORI DI FILA SULLO STESSO INDICATORE, e vanno scritti insieme.** Il primo: una cura
+     basata su una premessa falsa (le fasce che si dimezzavano), tolta da me quando il controllo
+     del banco l'ha smentita — le fasce non sono mai dipese dal timeframe, 300 a 1, 5 e 15
+     minuti, misurato. Il secondo: questo. **La lezione è la stessa: la cosa chiesta era già a
+     posto, e avrei dovuto fermarmi a dirlo invece di cercare un problema.**
+  8. **I DATI DELL'UTENTE VANNO SUL DISCO E.** Scelto dal proprietario: «sul disco E,
+     ricordatelo, dove creeremo una cartella apposita chiamata Forex Backtest Lab». E non è un
+     capriccio: su C restano **29 GB liberi su 465**, su E **182 su 220**, e questo database
+     cresce con i dati di tutti gli utenti che passano da qui. L'ordine delle scelte è
+     `FBL_DATI` → `E:\Forex Backtest Lab\dati` se il disco **risponde a una prova di scrittura
+     vera** → `%APPDATA%` come ripiego: una lettera di disco può essere una chiavetta staccata, e
+     un database che non si apre è peggio di un database nel posto di riserva.
+  **Collaudo:** browser 1149 prove, 1148 verdi, 0 rosse (1 saltata); python 222 verdi.
+  **NON solo app.html:** cambia `installer_build/build/documenti_utente.py` (la cartella su E).
+  Serve il pacchetto nuovo perché i dati finiscano davvero su E.
+
 - 2026-11-04 — Claude — **v2.0.83: la cura della bolletta era rimasta a metà — e la metà che
   mancava era quella che si paga**.
   1. **COSA HO TROVATO SUBITO DOPO AVER PUBBLICATO LA v2.0.82.** Guardando il ponte vivo del
@@ -157,7 +202,8 @@ Formato: data — chi — cosa — esito collaudo — commit.
      e spariscono, e l'istogramma SEMBRA dimezzato. Spiega anche perché la fascia di prezzo
      restava corretta (l'effetto è orizzontale) e perché capitava su tutti e tre i profili: il
      disegnatore è uno solo.
-  4. **DECISIONE ROVESCIATA.** Il commento diceva «RICHIESTO ESPLICITAMENTE (stile TradingView):
+  4. **DECISIONE ROVESCIATA — E POI ANNULLATA IL GIORNO STESSO: vedi la v2.0.84, il
+     proprietario l'ha fermata perche' rendeva l'istogramma immobile allo zoom.**
      la lunghezza è AGGANCIATA ALL'ASSE DEL TEMPO». L'intenzione era giusta, l'aggancio no:
      TradingView misura la larghezza del profilo sul RIQUADRO, non sul periodo — da lì il suo
      «Width 70%» identico a ogni timeframe e a ogni zoom. Ora fa lo stesso, e il 500% continua a

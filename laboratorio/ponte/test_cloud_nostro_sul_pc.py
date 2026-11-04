@@ -262,3 +262,42 @@ def test_un_socket_morto_non_blocca_gli_avvisi_futuri():
 
     rimasti = asyncio.run(_giro())
     assert rimasti == 0, "il socket morto deve essersi tolto dal registro, ne restano %d" % rimasti
+
+
+def test_i_dati_vanno_sul_disco_e(monkeypatch, tmp_path):
+    """DOVE STANNO I DATI, scelto dal proprietario (4 novembre 2026): «sul disco E, ricordatelo,
+    dove creeremo una cartella apposita chiamata Forex Backtest Lab».
+
+    E NON E' UN CAPRICCIO, i numeri del suo computer lo dicono: su C restano 29 GB liberi su 465,
+    su E 182 su 220. Questo database cresce con i dati di tutti gli utenti che passano da qui, e
+    metterlo sul disco di sistema vuol dire riempire il disco di sistema.
+
+    Si misura l'ORDINE DELLE SCELTE, non la stringa: con FBL_DATI vince l'ambiente (e' cosi' che
+    i test non toccano i dati veri); senza, il disco E se risponde; se il disco E non risponde,
+    il ripiego su APPDATA invece di un errore.
+    """
+    import documenti_utente as du
+
+    # 1. l'ambiente vince su tutto
+    monkeypatch.setenv("FBL_DATI", str(tmp_path))
+    assert du.cartella_dati() == str(tmp_path)
+    assert du.percorso_db() == os.path.join(str(tmp_path), "dati_utenti.db")
+
+    # 2. senza FBL_DATI, il disco E - se ci si puo' scrivere
+    monkeypatch.delenv("FBL_DATI", raising=False)
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(du, "_si_puo_scrivere", lambda cartella: cartella == du.CARTELLA_SU_E)
+    scelta = du.cartella_dati()
+    assert scelta == du.CARTELLA_SU_E, "senza FBL_DATI i dati vanno sul disco E, invece: %r" % scelta
+    assert scelta.upper().startswith("E:"), "deve stare sul disco E: %r" % scelta
+    assert "Forex Backtest Lab" in scelta, \
+        "la cartella si chiama 'Forex Backtest Lab', come ha chiesto il proprietario: %r" % scelta
+
+    # 3. PROVA DI CONTROLLO: se il disco E non risponde non si deve fallire, si ripiega.
+    # Una lettera di disco puo' essere un disco staccato o una chiavetta estratta: un database che
+    # non si apre e' peggio di un database nel posto ripiegato.
+    monkeypatch.setattr(du, "_si_puo_scrivere", lambda cartella: False)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    ripiego = du.cartella_dati()
+    assert ripiego != du.CARTELLA_SU_E, "col disco E muto non si deve insistere su E"
+    assert "ForexBacktestLAB" in ripiego, "il ripiego e' la cartella di sempre: %r" % ripiego
