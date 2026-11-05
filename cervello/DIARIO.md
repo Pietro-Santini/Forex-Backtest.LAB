@@ -2,6 +2,14 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-05 — OpenCode — **v2.0.90: rilascio A — sicurezza sui conti reali**. Il conto collegato
+  REALE, prop (in_corso/finanziato) o «non lo so» (reale === null) non apre più da solo se non è
+  spuntato nella configurazione delle aperture automatiche: il segnale resta nel pannello col motivo
+  in italiano. Sui conti demo tutto come prima. Badge «REALE» in rosso nella tabella conti, conferma
+  esplicita allo spuntare, targhetta «apertura automatica: SPENTA su questo conto» nel pannello
+  segnali. Ponte: /account e /connect restituiscono trade_mode e reale. Collaudo: 5 passi, 0 falliti
+  (sintassi 0s, versione 0s, ponte 84s, segnali 2s, browser 866s). Commit: eeab69a + 31f76fe.
+
 - 2026-11-05 — Claude — **v2.0.88: l'etichetta torna leggibile, le due dita rimesse a posto (era una
   mia regressione), l'origine delle sale viaggia anche sul telefono; e la strada per togliere
   Tailscale, con la scoperta che il disco del server va al rovescio di come sembrava**.
