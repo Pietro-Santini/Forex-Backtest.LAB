@@ -2,6 +2,17 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-05 — OpenCode — **v2.0.91: rilascio B — configurazione per conto**. tgAutoPerConto + chiave
+  fb_tg_auto_per_conto + migrazione (chiave assente ⇒ {} ⇒ tutto come oggi). Tendina «Impostazioni per
+  il conto» in cima al pannello ⚡ con «Tutti i conti (base)» e un elemento per ogni conto salvato
+  (REALE/demo accanto), scritta grande del conto che si sta modificando. tgAuto punta al blocco del
+  conto scelto; tgAutoDisegna() ridisegna. Copia della base alla prima configurazione, nessuna
+  propagazione dopo; sale si sostituisce in blocco. tgAutoDecidi(voce, contoKey) e
+  tgAutoPerSimbodoEConto(strumento, contoKey). tgAutoApriSuiConti ridecide per ogni conto bersaglio.
+  Sincronizzazione fra dispositivi per fb_tg_auto_per_conto (ridisegna il pannello). Freni per conto:
+  spentoIl nel blocco per-conto. Collaudo: 5 passi, 0 falliti. Commit: a2a89df + 4b69037 + 1dc9da1
+  + d17c92c + e92cc4a.
+
 - 2026-11-05 — OpenCode — **v2.0.90: rilascio A — sicurezza sui conti reali**. Il conto collegato
   REALE, prop (in_corso/finanziato) o «non lo so» (reale === null) non apre più da solo se non è
   spuntato nella configurazione delle aperture automatiche: il segnale resta nel pannello col motivo
