@@ -4642,7 +4642,14 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <button type="button" class="fbModalTab active" data-tgautofam="fx">💱 Forex · indici · azioni</button>
        <button type="button" class="fbModalTab" data-tgautofam="cr">🪙 Cripto</button>
      </div>
-     <div class="tgCfgNota" id="tgAutoFamNota" style="margin-bottom:4px"></div>
+      <div class="tgCfgSez">Impostazioni per il conto</div>
+      <div class="tgCfgNota" style="margin-bottom:7px">Scegli per quale conto stai modificando le impostazioni (sale, numeri, strategie, freni). <b>Tutti i conti (base)</b> vale per i conti senza una configurazione propria. Le modifiche non si spalmano sugli altri conti.</div>
+      <label class="tgCfgCampo" style="gap:6px;margin-bottom:8px">
+        <span style="font-weight:700">Impostazioni per il conto:</span>
+        <select id="tgAutoContoSelettore" style="flex:1;min-width:180px;padding:4px 6px;border-radius:6px;border:1px solid var(--fbBorder);background:var(--fbBg);color:var(--fbText)"></select>
+      </label>
+      <div class="tgCfgNota" id="tgAutoContoNota" style="margin-bottom:8px;font-weight:700"></div>
+      <div class="tgCfgNota" id="tgAutoFamNota" style="margin-bottom:4px"></div>
      <div class="tgCfgSez">Interruttore generale</div>
      <label class="tgCfgCampo">
        <input type="checkbox" id="tgAutoAttivo" style="width:17px;height:17px;accent-color:var(--fbAccent2);cursor:pointer">
@@ -7750,6 +7757,7 @@ const GRAFICO_LS={
  // RICHIESTO: la scelta dei conti MT5 per le aperture automatiche si condivide come il resto
  // della configurazione (il PC con MT5 vince su telefono/tablet, vedi graficoSeme).
  fb_tg_auto_conti:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoConti=tgAutoContiDaSalvato(o); }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
+ fb_tg_auto_per_conto:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoPerConto=o; }catch(e){} try{ tgAutoPerContoSalva(); tgAutoDisegna(); }catch(e){} },
  // ===== LE IMPOSTAZIONI SEGUONO L'ACCOUNT, NON IL DISPOSITIVO =====
  // RICHIESTO dal proprietario: «con i dispositivi mobili devono essere ricordate tutte le
  // configurazioni di style, impostazioni footprint heatmap eccetera: devono prendere queste
@@ -33481,7 +33489,41 @@ try{
 const tgAutoCrNuova=!tgAutoCr;
 if(!tgAutoCr)tgAutoCr=tgAutoDaSalvato(JSON.parse(JSON.stringify(tgAutoFx)));
 let tgAuto=tgAutoFx;
-function tgAutoDi(fam){ return fam==='cr'?tgAutoCr:tgAutoFx; }
+// RILASCIO B (configurazione per conto): una copia intera della configurazione per conto.
+// tgAutoFx/tgAutoCr restano la configurazione di «Tutti i conti (base)», usata quando un conto
+// non ha un blocco suo. Un conto REALE nasce con attivo:false (la sicurezza sta dentro la copia).
+const TG_AUTO_PER_CONTO_KEY='fb_tg_auto_per_conto';
+let tgAutoPerConto={};
+try{ const v=JSON.parse(localStorage.getItem(TG_AUTO_PER_CONTO_KEY)||'null'); if(v&&typeof v==='object')tgAutoPerConto=v; }catch(e){ tgAutoPerConto={}; }
+function tgAutoPerContoSalva(){ try{ localStorage.setItem(TG_AUTO_PER_CONTO_KEY,JSON.stringify(tgAutoPerConto)); }catch(e){} }
+// Quale conto si sta modificando nell'interfaccia (null = base «Tutti i conti»).
+let tgAutoContoSelezionato=null;
+function tgAutoContoChiaveCorrente(){ try{ if(mt5ContoAttivo&&mt5ContoAttivo.login!=null)return mt5AccountKey(mt5ContoAttivo); }catch(e){} return null; }
+function tgAutoRisolvi(fam, contoKey){
+  const key = (contoKey===undefined) ? tgAutoContoSelezionato : contoKey;
+  if(key){ const b=tgAutoPerConto[key]; if(b && b[fam]) return b[fam]; }
+  return fam==='cr' ? tgAutoCr : tgAutoFx;
+}
+// Crea (se manca) il blocco di un conto come copia della base, e lo restituisce.
+function tgAutoBloccoConto(contoKey, fam){
+  if(!contoKey) return fam==='cr'?tgAutoCr:tgAutoFx;
+  if(!tgAutoPerConto[contoKey]) tgAutoPerConto[contoKey]={};
+  if(!tgAutoPerConto[contoKey][fam]){
+    tgAutoPerConto[contoKey][fam]=JSON.parse(JSON.stringify(fam==='cr'?tgAutoCr:tgAutoFx));
+    try{
+      const parts=String(contoKey).split('@');
+      const acc=parts[0];
+      const srv=parts.slice(1).join('@');
+      if(tgAutoContoDaTrattareComeReale(acc,srv)){ tgAutoPerConto[contoKey][fam].attivo=false; }
+    }catch(e){}
+    tgAutoPerContoSalva();
+  }
+  return tgAutoPerConto[contoKey][fam];
+}
+function tgAutoPerSimbodoEConto(strumento, contoKey){
+  return tgAutoRisolvi(tgFamDaSimbolo(strumento), contoKey);
+}
+function tgAutoDi(fam){ return tgAutoRisolvi(fam); }
 function tgFamDaSimbolo(x){ let c=false; try{ c=!!binanceSymbolForAsset(x); }catch(e){} return c?'cr':'fx'; }
 function tgAutoPerSimbolo(x){ return tgAutoDi(tgFamDaSimbolo(x)); }
 // DUE MODI DI INTENDERE LA PERCENTUALE, e vanno tenuti distinti perche' danno numeri diversi.
@@ -33956,7 +33998,7 @@ function tgDirezioneScritta(seg){
  if(seg&&typeof seg.direzione_esplicita==='boolean')return seg.direzione_esplicita;
  return /(^|[^A-Z])(BUY|SELL|LONG|SHORT|COMPRA|ACQUISTA|ACQUISTO|VENDI|VENDITA)([^A-Z]|$)/i.test(String((seg&&seg.testo)||''));
 }
-function tgAutoDecidi(voce){
+function tgAutoDecidi(voce, contoKey){
  const seg=voce&&voce.segnale;
  const no=(motivo)=>({apri:false,motivo});
  const A=tgAutoPerSimbolo(seg&&seg.strumento);   // Forex/indici/azioni oppure Cripto
@@ -34546,7 +34588,35 @@ function tgAutoContiAggiornaNota(){
   t+='<br><b style="color:#ffcf7b">Adesso sei sul conto '+ora+'</b>, che non è fra quelli scelti: così non si aprirà niente da solo.';
  el.innerHTML=t;
 }
+function tgAutoContoSelettorePopola(){
+  const sel=$('tgAutoContoSelettore'); if(!sel)return;
+  const prev=tgAutoContoSelezionato;
+  sel.innerHTML='';
+  const base=document.createElement('option');
+  base.value=''; base.textContent='Tutti i conti (base)';
+  sel.appendChild(base);
+  (Array.isArray(mt5SavedAccounts)?mt5SavedAccounts:[]).forEach(acc=>{
+    const opt=document.createElement('option');
+    const k=mt5AccountKey(acc);
+    opt.value=k;
+    const reale=tgAutoContoDaTrattareComeReale(acc.login,acc.server);
+    opt.textContent=String(acc.login)+' @ '+String(acc.server||'')+'  '+(reale?'REALE':'demo');
+    sel.appendChild(opt);
+  });
+  sel.value = (tgAutoContoSelezionato==null?'':tgAutoContoSelezionato);
+  // nota grande di quale conto si sta modificando
+  const nota=$('tgAutoContoNota');
+  if(nota){
+    if(tgAutoContoSelezionato==null) nota.textContent='Stai modificando: Tutti i conti (base).';
+    else nota.textContent='Stai modificando il conto '+tgAutoContoSelezionato+'.';
+    nota.style.color=tgAutoContoSelezionato&&tgAutoContoDaTrattareComeReale(tgAutoContoSelezionato.split('@')[0],tgAutoContoSelezionato.split('@').slice(1).join('@'))?'#ff6b6b':'#cdd6e0';
+  }
+}
+// wiring del selettore
+try{ document.addEventListener('change', (e)=>{ if(e.target&&e.target.id==='tgAutoContoSelettore'){ tgAutoContoSelezionato = e.target.value||null; if(e.target.value){ tgAutoBloccoConto(e.target.value, tgAutoFamUi||'fx'); } tgAuto=tgAutoDi(tgAutoFamUi||'fx'); try{ tgAutoDisegna(); }catch(err){} } }); }catch(e){}
+
 function tgAutoDisegna(){
+ try{ tgAutoContoSelettorePopola(); }catch(e){}
  if($('tgAutoAttivo'))$('tgAutoAttivo').checked=!!tgAuto.attivo;
  try{ tgAutoContiDisegna(); tgAutoContiAggiornaNota(); }catch(e){}
  if($('tgAutoMaxGlob'))$('tgAutoMaxGlob').value=tgAuto.maxGlobali;
@@ -35050,7 +35120,7 @@ async function tgAutoValuta(voce,conto){
   return;
  }
  let d;
- try{ d=tgAutoDecidi(voce); }catch(e){ return; }
+  try{ d=tgAutoDecidi(voce, tgAutoContoCollegatoKey()); }catch(e){ return; }
  if(d.spegni){ tgAutoSpegniPerOggi(d.motivo,A); }
  if(!d.apri){
   // Eliminato: il segnale (senza stop e senza target) non ha nulla da fare ne' in automatico
