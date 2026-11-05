@@ -8501,11 +8501,29 @@ try{ tradingChannel=(EXTRA_PIP_WINDOWS_ENABLED&&('BroadcastChannel' in window))?
 // sopra) guarda questo flag per non ri-trasmettere all'infinito lo stesso aggiornamento appena
 // ricevuto (ogni finestra lo riapplicherebbe, ritrasmetterebbe, e così via).
 let applyingRemoteTradingSync=false;
+// FRA FINESTRE VIAGGIA TUTTO, COMPRESO IL CONTO REALE (5 novembre 2026).
+//
+// SEGNALATO dal proprietario: «nella finestra duplicata non ci fa vedere piu' nulla, non ci
+// aggiorna nulla» - e dopo la cura della cancellazione: «presenta ancora gli stessi sintomi di
+// prima, non e' cambiato nulla». Alla domanda se gli ordini pendenti fossero simulati o reali:
+// «sono ordini reali». Quella risposta ha chiuso il cerchio.
+//
+// CAUSA. Questo messaggio usava stripMt5TrackedForSave(), che TOGLIE tutto quello che ha un
+// mt5Ticket - cioe' ogni posizione e ogni ordine VERO del conto. Alla finestra duplicata non
+// arrivava quindi mai niente di reale: restava vuota per costruzione. La cancellazione che ho
+// curato prima era un difetto in piu', non questo.
+//
+// PERCHE' QUELLA FUNZIONE ESISTE, e perche' qui non va usata: il suo nome lo dice - "ForSave".
+// Serve a non SALVARE su disco e in cloud le posizioni reali, che appartengono al broker e si
+// rileggono da MT5: una copia vecchia salvata ieri sarebbe una bugia. Ma fra due finestre della
+// STESSA macchina, sullo STESSO conto, nello stesso momento, non c'e' niente da proteggere: la
+// finestra duplicata deve vedere quello che vede la madre. Il filtro resta dov'e' utile (il
+// salvataggio) e sparisce da dove faceva danno (questo messaggio).
 function collectTradingSyncPayload(){
  return {
    type:'trading_sync', slot:PIP_SLOT, at:Date.now(),
-   positions:stripMt5TrackedForSave(positions),
-   pendingOrders:stripMt5TrackedForSave(pendingOrders),
+   positions:Array.isArray(positions)?positions.slice():positions,
+   pendingOrders:Array.isArray(pendingOrders)?pendingOrders.slice():pendingOrders,
    trades, equity, sessionByMode, statsBaselineByMode, isPropFirmMode, tradeStrategies
  };
 }
@@ -44842,13 +44860,40 @@ try{ fblScegliStradaOrdini(); }catch(e){}
 // Anche a pannello chiuso, se il ponte locale smette di rispondere si riseleziona la strada degli
 // ordini: il pannello dei servizi si ferma a schermata chiusa, ma MT5 non deve restare appeso a
 // una strada morta. Il ponte resta acceso (non si interrompe nulla).
-let fblStradaOrdiniTimer = setInterval(async () => {
+// E SI TORNA IN LOCALE QUANDO IL PONTE RINASCE, non solo quando muore (5 novembre 2026).
+//
+// MISURATO sul computer del proprietario, dal suo pannello di diagnosi: lettura conto 1552
+// volte, media 261 ms, peggiore 19.094 ms, 4 non riuscite; lettura posizioni media 243 ms. In
+// locale le stesse rotte rispondono in 2-3 ms. La differenza e' tutta nel giro: l'app stava
+// passando dal server (fblOrdiniVia='server', cioe' /pc/8000) invece che da 127.0.0.1.
+//
+// CAUSA. Questo controllo riselezionava la strada SOLO se il ponte locale era morto
+// (`if(!vivo)`). All'avvio, se il ponte non e' ancora in piedi - e su un computer appena
+// accesso ci mette qualche secondo - si sceglie 'server'; da quel momento il ponte torna vivo,
+// la condizione e' falsa, e non si riseleziona MAI. Restava appeso al giro lungo fino alla
+// ricarica della pagina. Con tre chiamate al secondo a 261 ms l'una, sono quasi otto decimi di
+// secondo di rete per ogni secondo di orologio - ed e' la lentezza che il proprietario sentiva.
+//
+// Ora si guarda la cosa giusta: se il ponte locale risponde e NON stiamo gia' andando in
+// locale, si torna in locale. La strada corta e' sempre preferibile, e qui si sente.
+// FUORI DAL TIMER, per poterla provare: il timer la chiama e basta. Un test che ricopiasse
+// questo corpo non protegge niente - cambi il timer e il test resta verde.
+async function fblStradaOrdiniRicontrolla(){
   try {
     fblPonteLocaleAt = 0;
     const vivo = await fblControllaPonteLocale();
-    if (!vivo) await fblScegliStradaOrdini();
-  } catch(e) {}
-}, 30000);
+    if (!vivo) { await fblScegliStradaOrdini(); return 'riselezionata'; }
+    if (fblOrdiniVia !== 'locale') {
+      fblOrdiniVia = 'locale';
+      MT5_BRIDGE_URL = fblUrlOrdini();
+      console.log('[Ponte] il ponte locale risponde: ordini riportati su 127.0.0.1 (prima: giro lungo)');
+      try { fblAggiornaIndirizzi(); } catch(e) {}
+      return 'tornata in locale';
+    }
+    return 'era gia in locale';
+  } catch(e) { return 'errore'; }
+}
+let fblStradaOrdiniTimer = setInterval(fblStradaOrdiniRicontrolla, 30000);
 // E STESSA COSA PER IL GRAFICO (porta 8001, il servizio dati), che prima non c'era: la sua strada
 // si sceglieva una volta all'avvio e, se non rispondeva, si ritentava SOLO aprendo il pannello
 // dei servizi. Sintomo visto dal proprietario: "il grafico resta su Capital.com finche' non
@@ -55793,7 +55838,25 @@ function fblEAppCapacitor(){
 // ricarica la pagina (chiedendo prima al ponte di riscaricare l'app, se c'e') invece di
 // scaricare un Setup che non cambia niente.
 let fblPianoAggiornamentoCache=null;
-async function fblPianoAggiornamento(){
+// IL METRO GIUSTO E' LA VERSIONE PUBBLICATA, NON LA PAGINA SU DISCO (5 novembre 2026).
+//
+// SEGNALATO dal proprietario: «con gli ultimi due aggiornamenti ho dovuto installare
+// manualmente il setup.exe dalla release di GitHub, non ha funzionato con il tasto aggiorna».
+//
+// CAUSA, ed e' strutturale. Sia /versione-programma sia la rotta che installa confrontano il
+// programma installato con la versione della PAGINA scaricata sul disco (_CARTELLA_APP). Ma
+// quella pagina la scarica il ponte quando gli va: se nel momento in cui si preme Aggiorna la
+// copia su disco e' ancora quella vecchia, il confronto dice "pari" e si conclude "basta
+// ricaricare la pagina" - ricarica, e il pacchetto non si installa mai. E' esattamente il
+// "ha fatto solo il refresh" che il proprietario descrive, e spiega perche' capitava proprio
+// negli aggiornamenti ravvicinati.
+//
+// LA DOMANDA GIUSTA e' un'altra: il programma installato e' piu' vecchio del PACCHETTO
+// PUBBLICATO? Quella versione l'app la conosce gia' - e' il tag della release che ha appena
+// letto da GitHub - e non dipende da cosa c'e' su disco. `versionePubblicata` arriva da li'.
+// Se manca (chiamata vecchia, nessuna release letta) si ricade sul ragionamento di prima, che e'
+// meno preciso ma non peggiora niente.
+async function fblPianoAggiornamento(versionePubblicata){
   const ora=Date.now();
   if(fblPianoAggiornamentoCache&&(ora-fblPianoAggiornamentoCache.quando)<60000)return fblPianoAggiornamentoCache.piano;
   const pf=fblPiattaforma();
@@ -55820,7 +55883,14 @@ async function fblPianoAggiornamento(){
     // Ora si chiede la versione dell'ESEGUIBILE (il ponte la legge dal registro, dove l'ha
     // scritta l'installer) e la si confronta con quella della pagina.
     const prog=await fblPonteVersioneProgramma();
-    if(prog&&prog.da_aggiornare===true){
+    // PRIMA DI TUTTO: il programma installato e' indietro rispetto al pacchetto PUBBLICATO?
+    // Questo confronto non passa dal disco, quindi non si fa ingannare da una copia della
+    // pagina ancora vecchia o gia' nuova.
+    if(prog&&prog.programma&&versionePubblicata&&fblVersioneIndietro(prog.programma,versionePubblicata)){
+      piano={serve:true,automatico:true,versione:fblVersionePulita(versionePubblicata),
+             motivo:"il programma installato e la "+prog.programma+" e il pacchetto pubblicato e la "
+               +fblVersionePulita(versionePubblicata)+': va reinstallato'};
+    }else if(prog&&prog.da_aggiornare===true){
       piano={serve:true,automatico:true,
              motivo:'il programma installato e\' la '+prog.programma+' mentre la pagina e\' la '+prog.pagina+': va reinstallato'};
     }else if(prog&&prog.da_aggiornare===false){

@@ -2,6 +2,76 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-05 — Claude — **v2.0.87: fra le finestre non viaggiava il conto REALE (ecco perché «non è
+  cambiato nulla»), gli ordini passavano dal giro lungo a 261 ms, e il tasto Aggiorna guardava il
+  metro sbagliato**.
+  1. **«NON È CAMBIATO NULLA», e aveva ragione.** Dopo la cura della v2.0.86 il proprietario ha
+     riprovato: «la pagina duplicata presenta ancora gli stessi sintomi di prima, non è cambiato
+     nulla». Alla domanda se gli ordini pendenti fossero simulati o reali: **«sono ordini reali»**.
+     Quella risposta ha chiuso il cerchio in un secondo.
+     **CAUSA:** il messaggio fra finestre usava `stripMt5TrackedForSave()`, che TOGLIE tutto quello
+     che ha un `mt5Ticket` — cioè **ogni posizione e ogni ordine vero del conto**. Alla finestra
+     duplicata non arrivava mai niente di reale: restava vuota **per costruzione**. La
+     cancellazione curata nella v2.0.86 era un difetto in più, non questo — ed è esattamente
+     perché per lui non era cambiato nulla.
+     **PERCHÉ QUELLA FUNZIONE ESISTE, e perché lì non andava usata:** il nome lo dice, «ForSave».
+     Serve a non SALVARE su disco e in cloud le posizioni reali, che appartengono al broker e si
+     rileggono da MT5 — una copia vecchia salvata ieri sarebbe una bugia. Ma fra due finestre
+     della STESSA macchina, sullo STESSO conto, nello stesso istante, non c'è niente da
+     proteggere. Il filtro resta dov'è utile e sparisce da dove faceva danno, con la prova di
+     controllo che misura entrambe le metà.
+  2. **GLI ORDINI PASSAVANO DAL GIRO LUNGO, e il numero viene dal suo computer.** Dal pannello di
+     diagnosi che mi ha incollato: `lettura conto 1552 volte, media 261 ms, peggiore 19.094 ms, 4
+     non riuscite`; `lettura posizioni media 243 ms`. Le stesse rotte in locale rispondono in
+     **2-3 ms** (misurato con curl su 127.0.0.1:8000). L'app stava passando **dal server**
+     (`/pc/8000`) invece che da 127.0.0.1: con tre chiamate al secondo a 261 ms sono quasi **otto
+     decimi di secondo di rete per ogni secondo di orologio**.
+     **CAUSA:** il controllo periodico riselezionava la strada **solo se il ponte locale era
+     morto** (`if(!vivo)`). All'avvio, se il ponte non è ancora in piedi — e su un computer appena
+     accesso ci mette qualche secondo — si sceglie il giro lungo; poi il ponte torna vivo, quella
+     condizione è falsa, e non si riseleziona **mai**. Spiega anche perché a lui «ricaricare il
+     grafico» sembrava sistemare le cose. È la stessa famiglia della ricaduta dell'ascolto curata
+     nella v2.0.85: **una decisione presa una volta all'avvio e mai riconsiderata.**
+     Il corpo del timer è stato estratto in `fblStradaOrdiniRicontrolla()` perché il test chiami la
+     funzione VERA: la prima versione della prova ricopiava il corpo del timer, e un test che
+     duplica il codice non protegge niente.
+  3. **IL TASTO AGGIORNA GUARDAVA IL METRO SBAGLIATO.** «Con gli ultimi due aggiornamenti ho
+     dovuto installare manualmente il setup.exe dalla release di GitHub, non ha funzionato con il
+     tasto aggiorna.» Sia `/versione-programma` sia la rotta che installa confrontano il programma
+     installato con la versione della **pagina scaricata sul disco**. Ma quella pagina la scarica
+     il ponte quando gli va: se nel momento del clic la copia su disco è ancora la vecchia, il
+     confronto dice «pari» e si conclude «basta ricaricare» — ricarica, e il pacchetto non si
+     installa mai. È il «ha fatto solo il refresh», e spiega perché capitava negli aggiornamenti
+     ravvicinati. Ora il metro è il **tag della release**, che l'app conosce già e che non dipende
+     da cosa c'è su disco.
+  4. **LA VELOCITÀ, misurata sul suo computer e non ancora curata.** Alla domanda su dove la
+     sentisse lenta: «quando scorro il grafico, cambio time frame, inserisco disegni». Il suo
+     pannello dà la risposta: `disegnoMedio_ms 54.57`, `fotogrammiAlSecondo 14`, e dentro il
+     disegno **`disegniUtente 27,1` + `indicatori 23,74` = 50,8 dei 54,55 ms**. Il contesto spiega
+     perché il mio banco non lo vedeva: lui ha **51.172 candele** (io 5.000), 1,2 milioni di tick
+     di footprint, 2.356 operazioni. Con 17 disegni al secondo sono ~900 ms di lavoro per ogni
+     secondo: il motore è saturo.
+     **Non ho toccato niente**, e il motivo è la lezione del giorno prima: prima di ottimizzare
+     serve sapere QUALE disegno e QUALE indicatore costa. Il prossimo passo è spezzare quei due
+     numeri per singolo disegno e singolo indicatore, come è stato fatto per il traffico cloud.
+  5. **UN ROSSO SENZA SPIEGAZIONE, scritto qui perché non vada perduto.** Nel primo giro intero,
+     `cloud_incrementale` → «PROVA DI CONTROLLO: se non cambia niente, non si scrive niente» è
+     andata rossa **una volta**. Verde da sola, verde in tre giri insieme agli altri test del
+     cloud, verde nel secondo giro intero. Ipotesi escluse, una per una: non ha attese a tempo; il
+     finto cloud **non** fornisce `salvaCampi` (quindi la scrittura passa comunque da `save` e il
+     contatore del test è giusto); e due fotografie consecutive della sessione differiscono solo
+     per `savedAt`, che la firma **normalizza** — quindi nessuna scrittura di troppo. Resta
+     inspiegata. Se ricapita, si parte da qui.
+  6. **UNA MIA ABITUDINE SBAGLIATA, tolta.** Il proprietario ha visto nel Gestione attività
+     un'attività mia da **4 ore e 44 minuti**: era un «attendente» che aspettava la riga finale di
+     un collaudo che io stesso avevo poi fermato, quindi aspettava una riga che non sarebbe mai
+     arrivata. È la seconda volta in due giorni (la prima erano 4 ore e mezza, da un collaudo
+     lanciato nello stesso comando di una modifica che aveva rotto la sintassi). Quegli attendenti
+     **non servono**: il sistema avvisa già da sé quando un comando in background finisce. Non si
+     armano più.
+  **Collaudo:** browser 1183 prove, 1182 verdi, 0 rosse (1 saltata); python 222 verdi.
+  **Solo `app.html`** fra i file che contano per l'utente: basta il push.
+
 - 2026-11-04 — Claude — **v2.0.86: una finestra appena aperta cancellava le posizioni delle altre
   (una causa, quattro sintomi), il cloud nostro acceso di default, e una guardia contro i nomi
   doppi — nata da un mio errore**.

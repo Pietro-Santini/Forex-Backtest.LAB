@@ -217,3 +217,61 @@ test('PROVA DI CONTROLLO: se l\'asset non è cambiato non si tocca niente', asyn
       'e le caselle non si svuotano: ci potrebbe essere una bozza di ordine in composizione');
   } finally { await browser.close(); }
 });
+
+// ====== FRA FINESTRE VIAGGIA ANCHE IL CONTO REALE ======
+//
+// SEGNALATO dal proprietario (5 novembre 2026), dopo la cura della cancellazione: «la pagina
+// duplicata presenta ancora gli stessi sintomi di prima, non è cambiato nulla». E alla domanda se
+// gli ordini pendenti fossero simulati o reali: «sono ordini reali». Quella risposta ha chiuso il
+// cerchio.
+//
+// CAUSA. Il messaggio fra finestre usava `stripMt5TrackedForSave()`, che TOGLIE tutto quello che
+// ha un `mt5Ticket` — cioè ogni posizione e ogni ordine VERO del conto. Alla finestra duplicata
+// non arrivava mai niente di reale: restava vuota **per costruzione**. La cancellazione curata
+// prima era un difetto in più, non questo — ed è per questo che per lui «non è cambiato nulla».
+//
+// PERCHÉ QUELLA FUNZIONE ESISTE, e perché lì non andava usata: il nome lo dice, «ForSave». Serve a
+// non SALVARE su disco e in cloud le posizioni reali, che appartengono al broker e si rileggono da
+// MT5 — una copia vecchia salvata ieri sarebbe una bugia. Ma fra due finestre della STESSA
+// macchina, sullo STESSO conto, nello stesso momento, non c'è niente da proteggere.
+test('il messaggio fra finestre porta anche le posizioni e gli ordini REALI', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      positions.length=0; pendingOrders.length=0;
+      positions.push({id:'sim',asset:'EURUSD',side:'BUY',entry:1.1,sl:1.09,tp:1.11,lots:0.1});
+      positions.push({id:'reale',asset:'EURUSD',side:'SELL',entry:1.1,sl:1.11,tp:1.09,lots:0.2,mt5Ticket:111});
+      pendingOrders.push({id:'pendSim',asset:'EURUSD',side:'BUY',entry:1.098,lots:0.1});
+      pendingOrders.push({id:'pendReale',asset:'EURUSD',side:'BUY',entry:1.097,lots:0.1,mt5Ticket:222});
+      const p=collectTradingSyncPayload();
+      return {posizioni:p.positions.map(x=>x.id), pendenti:p.pendingOrders.map(x=>x.id)};
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.deepEqual(r.posizioni, ['sim', 'reale'],
+      'anche la posizione reale deve viaggiare: invece ' + JSON.stringify(r.posizioni));
+    assert.deepEqual(r.pendenti, ['pendSim', 'pendReale'],
+      'anche l\'ordine pendente reale deve viaggiare: invece ' + JSON.stringify(r.pendenti));
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO, e non è un dettaglio: il filtro deve RESTARE dove serve. Le posizioni reali
+// appartengono al broker e si rileggono da MT5: salvarne una copia su disco o in cloud vorrebbe
+// dire ritrovarsi domani una posizione che non esiste più, con i prezzi di ieri.
+test('PROVA DI CONTROLLO: nel pacchetto che si SALVA le posizioni reali restano fuori', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      positions.length=0; pendingOrders.length=0;
+      positions.push({id:'sim',asset:'EURUSD',side:'BUY',entry:1.1,sl:1.09,tp:1.11,lots:0.1});
+      positions.push({id:'reale',asset:'EURUSD',side:'SELL',entry:1.1,sl:1.11,tp:1.09,lots:0.2,mt5Ticket:111});
+      pendingOrders.push({id:'pendReale',asset:'EURUSD',side:'BUY',entry:1.097,lots:0.1,mt5Ticket:222});
+      const b=collectLightSessionState();
+      return {posizioni:(b.positions||[]).map(x=>x.id), pendenti:(b.pendingOrders||[]).map(x=>x.id)};
+    })()`);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.deepEqual(r.posizioni, ['sim'],
+      'nel salvataggio la posizione reale NON deve entrare: ' + JSON.stringify(r.posizioni));
+    assert.deepEqual(r.pendenti, [],
+      'e nemmeno l\'ordine pendente reale: ' + JSON.stringify(r.pendenti));
+  } finally { await browser.close(); }
+});
