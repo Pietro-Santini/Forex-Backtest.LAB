@@ -41540,8 +41540,6 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // già mostrata viene MAI rimossa solo perché questa particolare risposta non la contiene più.
  // Così l'ultima candela "vecchia" resta sempre attaccata all'apertura di quella nuova, senza
  // mai un buco o un reset visivo — anche se una singola risincronizzazione arriva incompleta.
-  // Lavoro 2: salva il magazzino locale (non a ogni tick: qui, al caricamento dell'asset).
-  try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimals!=='undefined'?decimals:null)); }catch(e){}
   const prevLiveFile=csvLibrary[0];
  const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='capital_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
  let mergedLiveRows=liveRows;
@@ -45722,7 +45720,8 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
   finishAssetSwitchDrawings(asset); // comunque si libera il blocco del cambio asset
   return;
  }
- const mt5Rows=(body.candles||[]).map(c=>({
+ let mt5Rows=(body.candles||[]).map(c=>({
+   time:c.time,
    date:new Date(c.time*1000).toISOString(),
    open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
  })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
@@ -45755,9 +45754,20 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
         mt5Rows.length=0;
         merged.forEach(r=>mt5Rows.push(r));
       } else {
-        // buco o OHLC diverso: scarico intero
-        // (si lascia mt5Rows cosi' com'e', che e' la risposta parziale; si potrebbe rifare il fetch
-        //  con count=200000, ma per semplicita' si accetta la risposta attuale)
+        // buco o OHLC diverso: lo storico locale non torna con quello del broker. Mai mostrare una
+        // coda corta come se fosse tutto lo storico: si rifa' lo scarico INTERO e si sostituisce.
+        try{
+          const res2=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=200000'));
+          const body2=await res2.json();
+          if(res2.ok && Array.isArray(body2.candles)){
+            const pieno=body2.candles.map(c=>({
+              time:c.time,
+              date:new Date(c.time*1000).toISOString(),
+              open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
+            })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
+            if(pieno.length){ mt5Rows=pieno; }
+          }
+        }catch(e2){}
       }
     }catch(e){}
   }
@@ -45785,6 +45795,8 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // Stessa fusione "mai sparire una candela già mostrata" già usata per Capital.com (vedi
  // commento completo in __loadLiveHistoryFromCapitalImpl): una risincronizzazione periodica con
  // una risposta più corta del solito non deve mai far sparire lo storico per un istante.
+ // Lavoro 2: salva il magazzino locale (non a ogni tick: qui, al caricamento dell'asset).
+ try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimalsOfNumber==='function'?decimalsOfNumber(mt5Rows[mt5Rows.length-1].close):null)); }catch(e){}
  const prevLiveFile=csvLibrary[0];
  const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='mt5_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
  let mergedRows=mt5Rows;
