@@ -214,3 +214,72 @@ test('la pressione lunga sul grafico mostra ancora il mirino', async () => {
     assert.equal(r.dopoAlzato, false, 'alzando il dito il mirino deve sparire');
   } finally { await browser.close(); }
 });
+
+// ====== DUE DITA SPOSTANO IL GRAFICO SULLA PAGINA NORMALE ======
+//
+// REGRESSIONE MIA, segnalata dal proprietario (5 novembre 2026): «in modalità pagina principale
+// non si sposta il grafico con due dita, dobbiamo tornare come era prima: con due dita in
+// modalità normale devo poter spostare il grafico, mentre se sono a schermo intero lo sposto con
+// un dito». L'avevo introdotta io con la rete di sicurezza dello scorrimento.
+//
+// CAUSA MISURATA, e sta nell'ORDINE degli eventi del browser: per un tocco arriva prima
+// `pointerdown` — che registra il dito in `touchPoints` — e DOPO `touchstart`. La mia rete girava
+// anche su touchstart e svuotava quel registro: misurato **1 dito dopo il pointerdown, 0 dopo la
+// rete**. Il secondo dito non trovava più il primo, la coppia non si formava, e
+// `iniziaGestoDueDita()` non partiva mai.
+//
+// Ora il registro si pulisce solo quando non c'è più nessun dito sullo schermo, dove è sicuro per
+// definizione. All'inizio di un tocco si rimette solo lo scorrimento, che era il punto della cura.
+test('sulla pagina normale due dita formano la coppia e avviano il gesto', async () => {
+  const {browser, pagina, errori} = await telefono();
+  try {
+    const r = await pagina.evaluate(`(function(){
+      ${PREPARA}
+      liveModeActive=false; positions.length=0; active=null; draw();
+      const X=rc.left+rc.width*0.4, Y=rc.top+rc.height*0.4;
+      const Tdue=(tipo,punti)=>{ const ts=punti.map(p=>new Touch({identifier:p[2],target:chartEl,clientX:p[0],clientY:p[1]}));
+        return new TouchEvent(tipo,{bubbles:true,cancelable:true,touches:ts,targetTouches:ts,changedTouches:[ts[ts.length-1]]}); };
+      // L'ordine VERO del browser: pointerdown, poi touchstart. Se si invertisse, questa prova
+      // non misurerebbe il difetto che c'era.
+      chartEl.dispatchEvent(new PointerEvent('pointerdown',P(X,Y,1)));
+      const dopoPointerdown=touchPoints.size;
+      chartEl.dispatchEvent(Tdue('touchstart',[[X,Y,1]]));
+      const dopoTouchstart=touchPoints.size;
+      chartEl.dispatchEvent(new PointerEvent('pointerdown',P(X+120,Y+40,2)));
+      chartEl.dispatchEvent(Tdue('touchstart',[[X,Y,1],[X+120,Y+40,2]]));
+      return {dopoPointerdown, dopoTouchstart, dita:touchPoints.size, gesto:!!twoFingerPan};
+    })()`);
+    assert.deepEqual(erroriVeri(errori), [], 'la pagina non deve avere errori JS');
+    assert.equal(r.dopoPointerdown, 1, 'il pointerdown registra il primo dito');
+    assert.equal(r.dopoTouchstart, 1,
+      'e il touchstart NON deve cancellarlo: era la regressione (misurato 0 prima della cura)');
+    assert.equal(r.dita, 2, 'due dita appoggiate devono risultare due');
+    assert.equal(r.gesto, true,
+      'con due dita sulla pagina normale il gesto di spostamento del grafico deve partire');
+  } finally { await browser.close(); }
+});
+
+// PROVA DI CONTROLLO: la rete di sicurezza deve continuare a fare il suo lavoro — a schermo
+// libero da dita il registro si pulisce e lo scorrimento torna. Senza questa, la cura qui sopra
+// potrebbe aver semplicemente spento la rete, e tornerebbe il difetto del 4 novembre (la pagina
+// che non si scorre più sopra il grafico).
+test('PROVA DI CONTROLLO: alzate le dita, il registro si pulisce e lo scorrimento torna', async () => {
+  const {browser, pagina, errori} = await telefono();
+  try {
+    const r = await pagina.evaluate(`(async function(){
+      ${PREPARA}
+      liveModeActive=false; positions.length=0; active=null; draw();
+      const X=rc.left+rc.width*0.4, Y=rc.top+rc.height*0.4;
+      chartEl.dispatchEvent(T('touchstart',X,Y,51,true));
+      chartEl.dispatchEvent(new PointerEvent('pointerdown',P(X,Y,51)));
+      await new Promise(r=>setTimeout(r,600));     // parte il mirino: blocca lo scorrimento
+      const durante=chartEl.style.touchAction, ditaDurante=touchPoints.size;
+      chartEl.dispatchEvent(T('touchend',X,Y,51,false));   // nessun dito resta
+      return {durante, ditaDurante, dopo:chartEl.style.touchAction, ditaDopo:touchPoints.size};
+    })()`);
+    assert.deepEqual(erroriVeri(errori), [], 'la pagina non deve avere errori JS');
+    assert.equal(r.durante, 'none', 'col mirino attivo lo scorrimento resta bloccato');
+    assert.equal(r.dopo, 'pan-y', 'alzato il dito lo scorrimento deve tornare libero');
+    assert.equal(r.ditaDopo, 0, 'e il registro delle dita si svuota: li\u00ec pulire \u00e8 sicuro');
+  } finally { await browser.close(); }
+});

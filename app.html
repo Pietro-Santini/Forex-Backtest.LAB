@@ -8373,7 +8373,24 @@ function collectLightSessionState(){
    // di "salvare in questa lista tutte le ricerche che facciamo tramite Capital.com").
    customAssets,
    assetAutoMeta,
-   pfRealMt5Login:pfRealMt5Login!=null?String(pfRealMt5Login):null
+   pfRealMt5Login:pfRealMt5Login!=null?String(pfRealMt5Login):null,
+   // CHI HA APERTO L'OPERAZIONE DEVE SAPERLO ANCHE IL TELEFONO (5 novembre 2026).
+   //
+   // SEGNALATO: «sui dispositivi mobili le operazioni aperte dalle sale segnali mi dice che
+   // l'origine l'ho aperta sempre io, su tutte le sale. Invece deve attribuire il vero nome
+   // della sala e distinguere quelle che invece le ho aperte io».
+   //
+   // CAUSA: l'attribuzione ticket -> sala vive in mt5TgMeta, che sta nel localStorage del
+   // SINGOLO dispositivo. La scrive la macchina che esegue il segnale (il computer, dove gira il
+   // lettore delle sale); il telefono ha la mappa vuota, legge una posizione reale senza sala e
+   // mostra "Manuale" - che e' il ripiego giusto quando non si sa, ma qui era una bugia.
+   //
+   // PERCHE' SOLO LE PIU' RECENTI: la mappa arriva a 2000 ticket, e mandarla intera vorrebbe
+   // dire oltre cento kilobyte addosso al pacchetto - il contrario di quello che si e' appena
+   // fatto per la bolletta. Le operazioni CHIUSE portano la sala dentro di se' (resta nel
+   // Journal), quindi questa mappa serve per le posizioni ancora APERTE e per quelle di poco
+   // prima: le ultime 500 coprono quel caso con abbondanza.
+   mt5TgMeta:fblMt5TgMetaRecenti(500)
  };
 }
 let saveTimer=null;
@@ -9687,6 +9704,13 @@ function applyLightSessionState(state){
    positions.forEach(p=>{ if(!p.asset)p.asset=legacyAsset; });
    pendingOrders.forEach(p=>{ if(!p.asset)p.asset=legacyAsset; });
    trades.forEach(t=>{ if(!t.asset)t.asset=legacyAsset; });
+ }
+ // CHI HA APERTO L'OPERAZIONE, arrivato da un altro dispositivo: riempie i buchi della mappa
+ // locale senza sovrascrivere (vedi fblMt5TgMetaUnisci). E' quello che permette al telefono di
+ // dire il nome della sala invece di "Manuale" per un ordine eseguito dal computer.
+ if(state.mt5TgMeta && typeof fblMt5TgMetaUnisci==='function'){
+  const nuove=fblMt5TgMetaUnisci(state.mt5TgMeta);
+  if(nuove)console.log('[Segnali] '+nuove+' attribuzioni sala arrivate da un altro dispositivo');
  }
  // Trade salvati prima dell'introduzione della modalità Live: erano tutti backtest.
  trades.forEach(t=>{ if(!t.mode)t.mode='backtest'; });
@@ -20245,14 +20269,32 @@ function coloreLineaTrade(tipo,prezzo){
  return '#3ea6ff';
 }
 // La resa "selezionata": linea continua, piu' spessa, con un alone leggero sotto.
+// L'ETICHETTA STA SEMPRE DAVANTI, LA LINEA DIETRO (5 novembre 2026).
+//
+// SEGNALATO dal proprietario: «quando selezioniamo una linea delle etichette, la linea che viene
+// evidenziata passa sopra all'etichetta e invece non deve passargli sopra, ma sotto, perche'
+// altrimenti si vedrebbe questa linea che va sopra l'etichetta e non si leggerebbe il
+// contenuto. Facciamo in modo che l'etichetta viene messa sempre in primo piano e poi la linea
+// in secondo piano.»
+//
+// MISURATO, perche' l'ordine del disegno sembrava dire il contrario: nel momento in cui questa
+// funzione gira risultano gia' registrate 5 etichette, e DUE stanno esattamente all'altezza
+// della linea. Quindi la linea ci passa sopra per davvero - erano state disegnate in un giro
+// precedente.
+//
+// La linea normale questo problema non lo ha: gia' si interrompe e riprende dopo le scritte
+// (fblLineaSaltaEtichette, registro condiviso labelPlacements). Questa, che e' la LINEA
+// EVIDENZIATA - un alone spesso e semitrasparente piu' una riga piena - tirava due tratti
+// dritti da un bordo all'altro. Ora usa lo stesso meccanismo: l'etichetta resta leggibile e la
+// selezione si vede comunque, perche' la linea riprende subito dopo la scritta.
 function disegnaLineaTradeEvidenziata(ctx,colore,yy,xDa,xA){
  ctx.save();
  ctx.setLineDash([]);
  ctx.strokeStyle=colore;
  ctx.globalAlpha=0.22; ctx.lineWidth=7;
- ctx.beginPath();ctx.moveTo(xDa,yy);ctx.lineTo(xA,yy);ctx.stroke();
+ fblLineaSaltaEtichette(ctx,xDa,xA,yy);
  ctx.globalAlpha=1; ctx.lineWidth=2.5;
- ctx.beginPath();ctx.moveTo(xDa,yy);ctx.lineTo(xA,yy);ctx.stroke();
+ fblLineaSaltaEtichette(ctx,xDa,xA,yy);
  ctx.restore();
 }
 // RICHIESTO ESPLICITAMENTE ("come su MetaTrader 5"): la selezione resta finche' non si tocca un
@@ -27755,12 +27797,30 @@ function fblGestoGraficoInCorso(){
    ||(typeof krakenLivelloDrag!=='undefined'&&krakenLivelloDrag));
  }catch(e){ return false; }
 }
-function fblSbloccaScorrimentoSeLibero(){
+// IL REGISTRO DELLE DITA SI PULISCE SOLO A SCHERMO LIBERO (cura del 5 novembre 2026).
+//
+// REGRESSIONE MIA, segnalata dal proprietario: «in modalita' pagina principale non si sposta
+// il grafico con due dita, dobbiamo tornare come era prima». L'avevo introdotta io con questa
+// stessa rete di sicurezza.
+//
+// CAUSA MISURATA in banco, e sta nell'ORDINE degli eventi del browser: per un tocco arriva
+// prima `pointerdown` (che registra il dito in touchPoints) e DOPO `touchstart`. La rete girava
+// anche su touchstart e svuotava il registro: misurato 1 dito dopo il pointerdown, **0 dopo la
+// rete**. Il secondo dito non trovava piu' il primo, la coppia non si formava, e
+// iniziaGestoDueDita() non partiva mai.
+//
+// Ora il registro si pulisce SOLO quando non c'e' piu' nessun dito sullo schermo (dal ramo
+// touchend/touchcancel, che passa `pulisciRegistro`): la' e' sicuro per definizione, perche'
+// senza dita appoggiate quel registro non puo' contenere niente di valido. All'inizio di un
+// tocco si rimette solo lo scorrimento, che era il punto della cura.
+function fblSbloccaScorrimentoSeLibero(pulisciRegistro){
  if(fblPennaSopra)return;            // la penna vuole il grafico: vedi pointerover piu' sopra
  if(fblGestoGraficoInCorso())return; // un gesto vero e' in corso: il blocco serve ancora
- try{ if(typeof touchPoints!=='undefined'&&touchPoints.size)touchPoints.clear(); }catch(e){}
- try{ if(typeof ditaSulGrafico!=='undefined'&&ditaSulGrafico.size)ditaSulGrafico.clear(); }catch(e){}
- try{ if(typeof fotoPrimoDito!=='undefined')fotoPrimoDito=null; }catch(e){}
+ if(pulisciRegistro){
+  try{ if(typeof touchPoints!=='undefined'&&touchPoints.size)touchPoints.clear(); }catch(e){}
+  try{ if(typeof ditaSulGrafico!=='undefined'&&ditaSulGrafico.size)ditaSulGrafico.clear(); }catch(e){}
+  try{ if(typeof fotoPrimoDito!=='undefined')fotoPrimoDito=null; }catch(e){}
+ }
  if(chartEl.style.touchAction==='none'){ try{ setChartTouchAction(false); }catch(e){} }
 }
 // SENZA DITA SULLO SCHERMO, UNO STATO CHE VIVE SOLO PER UN DITO NON PUO' ESSERE VIVO.
@@ -27777,12 +27837,14 @@ function fblSmontaStatiDaDito(){
 ['touchend','touchcancel'].forEach(tipo=>document.addEventListener(tipo,e=>{
  if(e.touches&&e.touches.length)return;   // ci sono ancora dita sullo schermo
  fblSmontaStatiDaDito();
- fblSbloccaScorrimentoSeLibero();
+ fblSbloccaScorrimentoSeLibero(true);   // schermo libero: qui pulire e' sicuro
 },{passive:true,capture:true}));
 // E anche all'inizio di un tocco nuovo con un dito solo: se qualcosa era rimasto appeso dal
 // gesto precedente, si rimedia subito invece di portarselo dietro per tutta la sessione.
 chartEl.addEventListener('touchstart',e=>{
- if(e.touches&&e.touches.length===1)fblSbloccaScorrimentoSeLibero();
+ // NIENTE pulizia qui: il pointerdown ha gia' registrato questo dito, e cancellarlo
+ // impedirebbe al secondo di formare la coppia (vedi la nota sopra).
+ if(e.touches&&e.touches.length===1)fblSbloccaScorrimentoSeLibero(false);
 },{passive:true,capture:true});
 chartEl.addEventListener('touchmove',e=>{
  // panDrag è acceso solo in schermo intero/finestra staccata (lì un dito sposta il grafico):
@@ -39379,6 +39441,33 @@ function loadPersistedMt5OpenAnchors(){
 const MT5_TG_META_KEY='fb_mt5_ticket_segnale';
 let mt5TgMeta={};
 try{ mt5TgMeta=JSON.parse(localStorage.getItem(MT5_TG_META_KEY)||'{}')||{}; }catch(e){ mt5TgMeta={}; }
+// Le ultime N attribuzioni, le piu' recenti: vedi la nota nel pacchetto di sessione.
+function fblMt5TgMetaRecenti(quante){
+ try{
+  const k=Object.keys(mt5TgMeta);
+  if(k.length<=quante){ return Object.assign({},mt5TgMeta); }
+  k.sort((a,b)=>(mt5TgMeta[b].il||0)-(mt5TgMeta[a].il||0));
+  const out={};
+  k.slice(0,quante).forEach(x=>{ out[x]=mt5TgMeta[x]; });
+  return out;
+ }catch(e){ return {}; }
+}
+// Quello che arriva da un altro dispositivo RIEMPIE I BUCHI, non sovrascrive: chi ha eseguito
+// l'ordine sa meglio di chiunque altro da quale sala venisse, e la sua voce non si tocca.
+function fblMt5TgMetaUnisci(arrivata){
+ try{
+  if(!arrivata||typeof arrivata!=='object')return 0;
+  let nuove=0;
+  Object.keys(arrivata).forEach(t=>{
+   const v=arrivata[t];
+   if(!v||!v.tgSala)return;
+   if(mt5TgMeta[t])return;          // la voce locale vince
+   mt5TgMeta[t]=v; nuove++;
+  });
+  if(nuove){ try{ localStorage.setItem(MT5_TG_META_KEY,JSON.stringify(mt5TgMeta)); }catch(e){} }
+  return nuove;
+ }catch(e){ return 0; }
+}
 function mt5RicordaSegnale(ticket,meta){
  if(ticket==null||!meta||!meta.tgSala)return;
  mt5TgMeta[String(ticket)]={tgSala:meta.tgSala,tgGruppo:meta.tgGruppo||null,tgTpIndice:meta.tgTpIndice||null,tgSegnaleId:meta.tgSegnaleId||null,il:Date.now()};

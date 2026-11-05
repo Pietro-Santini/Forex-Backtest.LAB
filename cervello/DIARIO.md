@@ -2,6 +2,79 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-05 — Claude — **v2.0.88: l'etichetta torna leggibile, le due dita rimesse a posto (era una
+  mia regressione), l'origine delle sale viaggia anche sul telefono; e la strada per togliere
+  Tailscale, con la scoperta che il disco del server va al rovescio di come sembrava**.
+  1. **LA LINEA SELEZIONATA PASSAVA SOPRA L'ETICHETTA.** «Quando selezioniamo una linea delle
+     etichette, la linea che viene evidenziata passa sopra all'etichetta e invece deve passargli
+     sotto… l'etichetta va sempre in primo piano.»
+     **MISURATO PRIMA DI CURARE**, perché l'ordine del disegno diceva il contrario: la linea
+     evidenziata si disegna a metà di `draw()`, le pillole TP/SL molto più avanti, quindi "a logica"
+     la scritta copriva la linea. Invece al momento in cui `disegnaLineaTradeEvidenziata` gira ci
+     sono già **5 etichette registrate, due esattamente all'altezza della linea**: disegnate nel
+     giro precedente. Ci passava sopra per davvero.
+     **LA CURA riusa un meccanismo che esisteva già:** `fblLineaSaltaEtichette`, quello della linea
+     normale, interrompe il tratto prima di ogni scritta e lo riprende dopo leggendo
+     `labelPlacements`. La selezione si vede comunque, riprende subito dopo la parola. Provata
+     **rossa sulla main pubblicata e verde sul ramo**, con la prova di controllo verde in entrambe.
+     **LA MIA PRIMA PROVA CHIEDEVA LA COSA SBAGLIATA:** contava i tratti e pretendeva fossero più di
+     due. Ma se l'unica etichetta attraversata sta in FONDO alla linea il tratto giusto è **uno** per
+     passata (si ferma prima della scritta e non c'è più niente dopo) — e il test bocciava una cura
+     che funzionava. Riscritta per misurare la domanda vera: «qualche tratto disegnato copre il
+     rettangolo di un'etichetta?». Misurare la cosa giusta vale più che misurare tanto.
+  2. **LE DUE DITA ERANO UNA MIA REGRESSIONE, e l'ha trovata lui.** «In modalità pagina principale,
+     con due dita devo poter spostare il grafico; a schermo intero lo sposto con un dito. Dobbiamo
+     tornare come era prima.»
+     **CAUSA, mia, della v2.0.81:** la rete che sbloccava lo scorrimento della pagina puliva i
+     registri delle dita (`touchPoints`, `ditaSulGrafico`, `fotoPrimoDito`) **anche su
+     `touchstart`**, cioè con un dito ancora appoggiato. Misurato: `touchPoints` = 1 dopo il
+     pointerdown, **0** subito dopo il mio touchstart, `gestoDueDita:false`. Il secondo dito
+     arrivava e il grafico non sapeva più del primo.
+     **LA CURA:** il parametro `pulisciRegistro`. Si pulisce solo quando lo schermo è **libero**
+     (`touchend/touchcancel` con zero dita), dove pulire è sicuro; su `touchstart` si sblocca lo
+     scorrimento senza toccare i registri. Dopo: `{dopoPointerdown:1, dopoTouchstart:1,
+     ditaAllaFine:2, gestoDueDita:true}`. Due prove nuove in `telefono_tocco_grafico` → 7 verdi.
+  3. **SUL TELEFONO TUTTE LE OPERAZIONI SEMBRAVANO APERTE DA LUI.** «Le operazioni aperte dalle sale
+     segnali mi dice che l'origine l'ho aperta sempre io: deve attribuire il vero nome della sala e
+     distinguere quelle che ho aperto io.»
+     **CAUSA:** il nome della sala non sta nell'operazione, sta nella mappa `mt5TgMeta`, che vive
+     solo nella memoria della finestra che ha ricevuto il segnale. Il telefono riceve la sessione
+     dal cloud, dove quella mappa **non c'era**: senza origine, l'app ricade su «manuale», cioè su
+     di lui.
+     **LA CURA:** `mt5TgMeta: fblMt5TgMetaRecenti(500)` nel pacchetto di sessione, e
+     `fblMt5TgMetaUnisci()` al ripristino — **la copia remota riempie i buchi, quella locale vince**,
+     perché chi ha ricevuto il segnale dal vivo ne sa più di una copia. Unita prima del giro che
+     assegna i `mode`, altrimenti arriverebbe dopo chi la legge.
+  4. **TOGLIERE TAILSCALE: la strada, e perché non si poteva togliere e basta.** «Togli tutto quello
+     che riguarda Tailscale… l'avevo messo solo per una sicurezza in più quando non avevamo il
+     server.» Ma oggi Tailscale non è uno strato in più: è **il trasporto e il certificato**.
+     `tailscale serve --https` è ciò che dà HTTPS a server e PC, e serve per una ragione
+     insuperabile — l'app è servita in HTTPS e **un browser rifiuta le chiamate in http:// da una
+     pagina https://**. Toglierlo senza sostituto = telefono senza accesso.
+     Il sostituto è scritto e pronto: `server_oracle/prepara_dominio.sh` (dominio + Let's Encrypt che
+     si rinnova da sé + Caddy che espone **solo** `/dati`, tutto il resto 404 per chi arriva da
+     internet) e la guida `cervello/GUIDA-DOMINIO-SENZA-TAILSCALE.md`, passi 1-14, nello stile delle
+     istruzioni per neofiti. **L'ordine non è negoziabile:** prima il dominio funziona e il telefono
+     lo vede dai dati mobili, **poi** si toglie Tailscale dall'app, dal ponte, dal server e dalla
+     guida interna. Il passo 14 è il mio, e aspetta solo il nome che sceglie lui.
+  5. **IL DISCO DEL SERVER: la richiesta andava letta al rovescio.** «Possiamo modificare
+     tranquillamente la capienza all'interno del server Oracle passando a 200 GB.» Prima di scrivere
+     i passi sono entrato a guardare: `/dev/sda1 242G, 8.9G usati, 4%`, `sda 250G`. Il disco **non
+     è da ingrandire: è già da 250 GB**, oltre i 200 GB che Always Free regala — e i dati veri di
+     tutta l'infrastruttura sono **7 MB** (2,9 di dati del ponte, 3,8 di backup).
+     Quindi bisogna **scendere**, e qui c'è il vincolo che decide tutto: **Oracle sa ingrandire un
+     boot volume, non sa rimpicciolirlo**, e nemmeno il backup aiuta (si ripristina solo su un disco
+     grande almeno quanto l'originale). Si sostituisce la macchina: Always Free ne dà **due**, quindi
+     la nuova nasce con 50 GB mentre la vecchia lavora ancora, si traslocano 7 MB, si sposta il nome,
+     e **solo alla fine** si termina la vecchia **spuntando «Permanently delete the attached boot
+     volume»** — senza quella casella il disco da 250 GB resta e si finisce a 300. Passi 15-24 nella
+     stessa guida. Non l'ho eseguito: tocca bottoni sul suo account, e la scelta fra questa strada e
+     il Pay As You Go (i 50 GB in eccesso, nell'ordine dell'euro e mezzo al mese) è sua.
+  6. **Collaudo:** giro intero 1187 prove, **1186 verdi, 0 rosse**, 1 saltata; ponte **222 verdi**.
+     Le prove nuove: `linea_selezionata_sotto_etichette` (2, con la prova di controllo), due in
+     `telefono_tocco_grafico` (7 in tutto). `node --check` su tutti e 5 gli script di `app.html`.
+  **Commit:** uno solo — le tre cure con le loro prove, lo script del dominio e la guida — e la versione 2.0.88.
+
 - 2026-11-05 — Claude — **v2.0.87: fra le finestre non viaggiava il conto REALE (ecco perché «non è
   cambiato nulla»), gli ordini passavano dal giro lungo a 261 ms, e il tasto Aggiorna guardava il
   metro sbagliato**.
@@ -4579,7 +4652,7 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
 
 ## 29 ottobre 2026 — Punto 5 completo
 - TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
-- Prestazioni: cache, percentuale onesta.
+- Prestazioni: cache, percentuale onesta.
 - Prestazioni: cache, percentuale onesta.
 
 
@@ -4616,23 +4689,23 @@ il two step ne ha **due** e l'80%.
 
 Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 
-
-### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
-
-Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
-che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
-scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
-
-La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
-deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
-alterato il conto che gia' funzionava.
-
-Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
-seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
-essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
-il two step ne ha **due** e l'80%.
-
-Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
+
+### Verifica delle statistiche aggregate (29 ottobre 2026, Claude)
+
+Le sei statistiche sono arrivate **senza un solo collaudo**: il file che c'era provava soltanto
+che il riquadro «non esplodesse», e un riquadro che si apre non dice niente su cosa c'e'
+scritto dentro. Aggiunto `laboratorio/app/resa_totale_numeri.test.mjs`, che misura i numeri.
+
+La prova piu' importante e' la prima, ed era quella chiesta: **con UNA sola sala l'aggregato
+deve dare numeri identici al calcolo di sempre**. Passa — quindi sommare piu' sale non ha
+alterato il conto che gia' funzionava.
+
+Le altre quattro: TP per TP livello per livello; il fuso di **Roma** d'inverno e d'estate (la
+seconda e' la prova di controllo: un codice che sommasse sempre +60 passerebbe la prima pur
+essendo sbagliato per meta' anno); e la prop firm, dove il one step ha **una** fase e il 90% e
+il two step ne ha **due** e l'80%.
+
+Applicate correttamente anche le tre decisioni del proprietario: notizie dichiarate come
 approssimazione nell'interfaccia, fuso di Roma, percentuale col denominatore contato prima.
 
 - **Fix timeframe change**: commento aggiunto per preservare masterTime. Risolto rallentamento cambio timeframe (dati: fps 47.5→21.9, peggior scatto 330ms→3334ms).
