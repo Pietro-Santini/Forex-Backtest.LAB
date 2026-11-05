@@ -67,6 +67,35 @@ libreria di MetaTrader 5 esiste solo per Windows.
 
 ---
 
+## 2.1 Riallineare lo specchio sul Desktop (a ogni rilascio)
+
+La cartella `C:\Users\pietro\Desktop\trading\backtest app\applicazione` è **solo uno
+specchio di `app.html`** (e del resto del sito): non ci si lavora, e il codice vivo è
+nel repository. Dopo ogni rilascio va riallineata, altrimenti resta indietro di
+versioni e induce in errore chi la apre.
+
+**Prima di copiare, guardare cosa c'è già dentro**: ci sono chiavi API in chiaro
+(`API KEY ANTHROPIC.txt`, `API_KEY_ORACLE.txt`, …) e cartelle che non appartengono
+al repository. Vanno **preservate**, non sovrascritte.
+
+Procedura:
+
+1. Copiare dal repository allo specchio solo i file del sito che sono cambiati
+   (`app.html`, `sw.js`, `index.html`, `login.html`, `asset-library.html`,
+   `manifest.json`, pagine legali, immagini, `CLAUDE.md`, `README.md`, `.gitignore`).
+   Mai copiare cartelle intere e mai toccare i file dei segreti.
+2. Nel repository dello specchio si aggiunge **solo per nome** il file che lo
+   specchio tiene tracciato (`app.html`); mai `git add -A`, perché raccoglierebbe
+   anche le chiavi.
+3. Committare con un messaggio in italiano che dice la versione a cui si è
+   riallineato. **Non pushare**: lo specchio ha lo stesso `origin` del repository
+   vero e un push sovrascriverebbe `main`.
+
+Regola d'oro: il repository vero è l'unica fonte di verità; lo specchio è una
+copia di consultazione.
+
+---
+
 ## 3. Perché sul telefono non arriva l'aggiornamento
 
 L'app è una **PWA**: il telefono si tiene una copia della pagina in memoria (la fa il file
