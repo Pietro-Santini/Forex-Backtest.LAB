@@ -2,6 +2,14 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-05 — OpenCode — **v2.0.92: Lavoro 2 — candele in locale**. Magazzino IndexedDB per
+  asset+timeframe (array tipizzati, tetto 12 voci LRU): a ogni cambio asset/timeframe si chiede solo
+  la coda (count piccolo, ~49 KB) invece di riscaricare 5 MB. Controllo di sovrapposizione: se
+  l'ultima candela salvata torna con OHLC coerente si aggiungono solo le più nuove; altrimenti
+  (buco o broker che ha riscritto lo storico) si rifà lo scarico intero — mai uno storico troncato.
+  Provato nei due versi: laboratorio/app/candele_in_locale.test.mjs (3 prove). Collaudo: 5 passi,
+  0 falliti. Commit: 37a3c33 + 64c1567 + 5704b4b + 7b03968.
+
 - 2026-11-05 — OpenCode — **v2.0.91: rilascio B — configurazione per conto**. tgAutoPerConto + chiave
   fb_tg_auto_per_conto + migrazione (chiave assente ⇒ {} ⇒ tutto come oggi). Tendina «Impostazioni per
   il conto» in cima al pannello ⚡ con «Tutti i conti (base)» e un elemento per ogni conto salvato
