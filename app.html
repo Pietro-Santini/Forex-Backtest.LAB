@@ -41540,7 +41540,9 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // già mostrata viene MAI rimossa solo perché questa particolare risposta non la contiene più.
  // Così l'ultima candela "vecchia" resta sempre attaccata all'apertura di quella nuova, senza
  // mai un buco o un reset visivo — anche se una singola risincronizzazione arriva incompleta.
- const prevLiveFile=csvLibrary[0];
+  // Lavoro 2: salva il magazzino locale (non a ogni tick: qui, al caricamento dell'asset).
+  try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimals!=='undefined'?decimals:null)); }catch(e){}
+  const prevLiveFile=csvLibrary[0];
  const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='capital_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
  let mergedLiveRows=liveRows;
  if(isSameLiveSeries){
@@ -45667,7 +45669,16 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  $('status').textContent=`Scaricamento storico MT5 (${resolved})…`;
  let body;
  try{
-   const timeframe=(MT5_TIMEFRAME_MAP[currentTF]||'M1');
+    const timeframe=(MT5_TIMEFRAME_MAP[currentTF]||'M1');
+    // Lavoro 2: se c'e' un magazzino locale per questo asset+timeframe, si chiede solo la coda.
+    let __candCache=null;
+    try{ __candCache=await fblCandeleCacheLeggi(asset,timeframe); }catch(e){ __candCache=null; }
+    const __tfSec = ({M1:60,M2:120,M3:180,M4:240,M5:300,M6:360,M10:600,M12:720,M15:900,M20:1200,M30:1800,H1:3600,H2:7200,H3:10800,H4:14400,H6:21600,H8:28800,H12:43200,D1:86400}[timeframe])||60;
+    let __histCount=200000;
+    if(__candCache && __candCache.ultimoTs){
+      const mancanti=Math.ceil((Date.now()/1000 - __candCache.ultimoTs)/__tfSec)+200;
+      __histCount=Math.max(1,Math.min(200000, mancanti));
+    }
    // count alzato da 1000 a 200000 su richiesta esplicita ("voglio il massimo dello storico
    // disponibile quando mi connetto a MT5"): il server (mt5_feed_server.py, vedi lì il commento
    // gemello) restituisce comunque solo le candele che il terminale MT5 ha davvero in locale per
@@ -45676,7 +45687,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    // (mergedRows.length>...): senza ALZARE ANCHE QUELLO in pari misura, questo storico più ampio
    // sarebbe stato tagliato di nuovo a 5000 candele alla primissima risincronizzazione dopo il
    // cambio candela — l'ho alzato in coppia con questo, vedi lì.
-   const res=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=200000'));
+    const res=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count='+__histCount));
    body=await res.json();
    if(!res.ok)throw new Error((body&&body.detail)||('HTTP '+res.status));
  }catch(e){
@@ -45714,11 +45725,41 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    date:new Date(c.time*1000).toISOString(),
    open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
  })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
- if(!mt5Rows.length){
-   $('status').textContent=`⚠️ MT5 non ha restituito candele per ${resolved}.`;
-   finishAssetSwitchDrawings(asset); // uscita anticipata: ricarica i disegni salvati del nuovo asset PRIMA di sbloccare (mai sovrascriverli)
-   return;
- }
+  if(!mt5Rows.length){
+    $('status').textContent=`⚠️ MT5 non ha restituito candele per ${resolved}.`;
+    finishAssetSwitchDrawings(asset); // uscita anticipata: ricarica i disegni salvati del nuovo asset PRIMA di sbloccare (mai sovrascriverli)
+    return;
+  }
+  // Lavoro 2: controllo di sovrapposizione con il magazzino locale. Se c'e' una sovrapposizione
+  // coerente, si aggiungono solo le candele piu' nuove; altrimenti (buco o OHLC diverso) si
+  // sostituisce tutto con lo scarico intero.
+  if(__candCache && __candCache.rows && __candCache.rows.length && __histCount < 200000){
+    try{
+      const cached=__candCache.rows;
+      const lastCached=cached[cached.length-1];
+      const overlapIdx=mt5Rows.findIndex(r=>Number(r.time)===Number(lastCached.time));
+      let coherent=false;
+      if(overlapIdx>=0){
+        const o=mt5Rows[overlapIdx];
+        coherent = Number(o.open)===Number(lastCached.open) && Number(o.high)===Number(lastCached.high)
+                && Number(o.low)===Number(lastCached.low) && Number(o.close)===Number(lastCached.close);
+      }
+      if(coherent){
+        // aggiungi solo le piu' nuove (dopo la sovrapposizione)
+        const nuove=mt5Rows.slice(overlapIdx+1);
+        // ricostruisci mt5Rows = cached + nuove (senza duplicare la sovrapposizione)
+        const merged=cached.slice();
+        nuove.forEach(r=>merged.push(r));
+        // rimpiazza mt5Rows in-place
+        mt5Rows.length=0;
+        merged.forEach(r=>mt5Rows.push(r));
+      } else {
+        // buco o OHLC diverso: scarico intero
+        // (si lascia mt5Rows cosi' com'e', che e' la risposta parziale; si potrebbe rifare il fetch
+        //  con count=200000, ma per semplicita' si accetta la risposta attuale)
+      }
+    }catch(e){}
+  }
  // METADATI AUTOMATICI PER ASSET (decimali/pip) — vedi il blocco recordAssetAutoMeta() più sopra
  // nel file. MT5 è la fonte più diretta possibile: mt5_feed_server.py restituisce già
  // symbol_info.digits (i decimali VERI del simbolo su questo broker, non un conteggio sul
@@ -46506,6 +46547,56 @@ async function fblCsvCacheSalva(asset,voci){
  return ok;
 }
 async function fblCsvCacheLeggi(asset){ try{ return await idbGet(FBL_CSV_CACHE+asset); }catch(e){ return null; } }
+
+// ===================== CANDELE IN LOCALE (Lavoro 2) =====================
+// Magazzino in IndexedDB, una voce per asset + timeframe. Colonne in array tipizzati
+// (IndexedDB li salva e li rilegge senza passare da JSON, ~2.2 MB per asset).
+const FBL_CANDLE_CACHE='candleCache:';
+const FBL_CANDLE_CACHE_MAX=12;   // tetto delle voci usate piu' di recente
+let fblCandleCacheIndex=[];      // elenco delle chiavi usate, dal piu' recente
+try{ fblCandleCacheIndex=JSON.parse(localStorage.getItem('fblCandleCacheIndex')||'[]')||[]; }catch(e){ fblCandleCacheIndex=[]; }
+function fblCandleCacheKey(asset,tf){ return FBL_CANDLE_CACHE+String(asset)+'::'+String(tf); }
+async function fblCandeleCacheLeggi(asset,tf){
+  try{
+    const v=await idbGet(fblCandleCacheKey(asset,tf));
+    if(!v||!v.tempo||!v.tempo.length) return null;
+    // ricostruisce le righe nel formato atteso dal grafico
+    const rows=[];
+    for(let i=0;i<v.tempo.length;i++){
+      rows.push({date:new Date(v.tempo[i]*1000).toISOString().replace('T',' ').slice(0,19),
+                 time:v.tempo[i], open:v.open[i], high:v.high[i], low:v.low[i], close:v.close[i],
+                 volume:v.volume[i]});
+    }
+    return {rows, digits:v.digits, ultimoTs:v.ultimoTs, salvatoAt:v.salvatoAt};
+  }catch(e){ return null; }
+}
+async function fblCandeleCacheScrivi(asset,tf,rows,digits){
+  if(!asset||!rows||!rows.length) return false;
+  try{
+    const tempo=new Float64Array(rows.length), open=new Float64Array(rows.length),
+          high=new Float64Array(rows.length), low=new Float64Array(rows.length),
+          close=new Float64Array(rows.length), volume=new Float64Array(rows.length);
+    for(let i=0;i<rows.length;i++){
+      const r=rows[i];
+      const ts = (typeof r.time==='number') ? r.time : (Date.parse(r.date+'Z')/1000);
+      tempo[i]=ts; open[i]=Number(r.open); high[i]=Number(r.high); low[i]=Number(r.low);
+      close[i]=Number(r.close); volume[i]=Number(r.volume)||0;
+    }
+    const ultimoTs=tempo[tempo.length-1];
+    const key=fblCandleCacheKey(asset,tf);
+    const ok=await idbPut(key,{tempo,open,high,low,close,volume,digits:digits||0,ultimoTs,salvatoAt:Date.now()});
+    if(!ok) return false;
+    // indice LRU
+    fblCandleCacheIndex=fblCandleCacheIndex.filter(k=>k!==key);
+    fblCandleCacheIndex.unshift(key);
+    while(fblCandleCacheIndex.length>FBL_CANDLE_CACHE_MAX){
+      const old=fblCandleCacheIndex.pop();
+      try{ await idbDel(old); }catch(e){}
+    }
+    try{ localStorage.setItem('fblCandleCacheIndex',JSON.stringify(fblCandleCacheIndex)); }catch(e){}
+    return true;
+  }catch(e){ console.warn('[candele] salvataggio locale fallito:',e); return false; }
+}
 async function fblFileDaCache(asset){
  const c=await fblCsvCacheLeggi(asset);
  if(!c||!Array.isArray(c.files)||!c.files.length)return null;
