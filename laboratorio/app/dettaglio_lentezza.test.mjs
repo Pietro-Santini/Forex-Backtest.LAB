@@ -89,10 +89,25 @@ test('il dettaglio dice quale disegno e quale indicatore costa', async () => {
     assert.ok(nomi.includes('ind:volume_default:disegno'),
       'manca il disegno dell\'indicatore: ' + nomi.join(', '));
 
-    // I numeri devono essere numeri, non zeri: un contatore a zero direbbe «qui non c'è
-    // problema» proprio dove il problema vive.
-    assert.ok(somma(r.dettaglio, 'disegno:') > 0, 'i disegni sommano zero millisecondi');
-    assert.ok(somma(r.dettaglio, 'ind:') > 0, 'l\'indicatore somma zero millisecondi');
+    // LO STRUMENTO HA MISURATO DAVVERO, e la prova di questo sono le VOCI CREATE, non il loro
+    // valore.
+    //
+    // LA PRIMA VERSIONE DI QUESTA PROVA PRETENDEVA `somma('ind:') > 0`, ed era sbagliata: è
+    // andata verde da sola e ROSSA nel giro intero, perché `volume_default` costa così poco che
+    // sulla macchina carica il suo tempo arrotonda a 0,00 ms. Un'asserzione su un TEMPO dipende
+    // dalla macchina e dalla granularità dell'orologio: è la lezione n. 9 del progetto, e l'ho
+    // ripagata io. Zero millisecondi per un indicatore leggero è una misura GIUSTA, non un
+    // guasto — e serve a sapere che lì non c'è niente da ottimizzare.
+    //
+    // Quello che va garantito è che il cronometro sia passato da ogni punto: se `fblDettaglioFine`
+    // non venisse chiamato, la chiave non esisterebbe affatto (vedi le asserzioni qui sopra), e
+    // qui sotto si controlla che il quadro complessivo non sia vuoto — i disegni, al contrario di
+    // un indicatore leggero, fanno lavoro misurabile perché fra loro c'è un profilo volumetrico.
+    assert.ok(nomi.length >= 6,
+      'lo strumento ha creato solo ' + nomi.length + ' voci: troppo poche per aver misurato tutto');
+    assert.ok(somma(r.dettaglio, 'disegno:') > 0,
+      'i disegni sommano zero millisecondi: col profilo volumetrico nel banco è impossibile, '
+      + 'il cronometro non sta misurando');
 
     // IL PEZZO ANNIDATO: il calcolo del profilo sta DENTRO il suo disegno, e deve esserci —
     // e' la domanda che viene subito dopo («costa il conto o costa disegnarlo?»), e la risposta

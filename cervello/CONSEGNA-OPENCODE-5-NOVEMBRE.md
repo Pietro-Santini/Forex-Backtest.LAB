@@ -34,10 +34,21 @@ su MT5.
 | cosa | percorso |
 |---|---|
 | **Repo vero** (quello che si pubblica) | `C:\Users\pietro\Documents\GitHub\Forex-Backtest.LAB` |
-| Specchio sul Desktop (solo `app.html`) | `C:\Users\pietro\Desktop\trading\backtest app\applicazione` |
+| ~~Specchio sul Desktop~~ **NON USARLO** | `C:\Users\pietro\Desktop\trading\backtest app\applicazione` |
 | Remoto | `https://github.com/Pietro-Santini/Forex-Backtest.LAB`, ramo **`main`** |
 | Chiave SSH del server Oracle | `C:\Users\pietro\Desktop\trading\backtest app\applicazione\oracle\ssh-key-2026-10-06.key` |
 | Server Oracle | `ubuntu@100.100.244.65`, progetto in `/srv/fbl/progetto` |
+
+> **ATTENZIONE sulla cartella del Desktop.** Le vecchie consegne dicono di ricopiarci
+> `app.html` dopo ogni pubblicazione. **Non si fa piu' da un pezzo, e non serve.** Misurato il
+> 5 novembre 2026: quella cartella e' ferma alla **v2.0.56** e il suo `sw.js` dice **v2.0.33**,
+> mentre il repo e' alla 2.0.89 - trenta versioni, e nessuno se n'e' accorto, il che dimostra
+> che **niente dipende da lei**: l'app installata nasce dal Setup che il workflow costruisce dal
+> repo, e la versione web da GitHub Pages, cioe' sempre dal repo.
+>
+> Quindi **non leggere codice da li'** (crederesti di guardare il codice vivo e guarderesti
+> quello di settimane fa) e **non lavorarci**. Se il proprietario vuole si riallinea una volta
+> sola, o si cancella: e' una sua decisione, non una tua iniziativa.
 
 File che contano:
 
@@ -631,7 +642,9 @@ volevo?». Se no, non è finito.
 | | |
 |---|---|
 | **stato** | codice scritto, prove nuove verdi, `sw.js` e `installer.iss` già a 2.0.89, voce del diario già scritta |
-| **cosa manca** | il giro intero del browser (≈1 ora) e sostituire `__COLLAUDO__` nel diario con l'esito |
+| **cosa manca** | il giro intero del browser (circa un'ora) e sostituire `__COLLAUDO__` nel diario con l'esito |
+| **una rossa trovata e curata** | la mia prova `dettaglio_lentezza` pretendeva `somma('ind:') > 0`: verde da sola, **rossa nel giro intero**, perche' `volume_default` costa cosi' poco che su macchina carica arrotonda a 0,00 ms. Un'asserzione su un TEMPO dipende dalla macchina: lezione n. 9. Curata misurando le **voci create** invece del loro valore. **Zero millisecondi per un indicatore leggero e' una misura giusta, non un guasto.** |
+| **da confermare** | nel giro in cui e' uscita quella rossa, l'output era tagliato e **non si vedevano i totali**: serve un giro intero pulito per sapere che non ci fosse altro rosso. E' il primo punto del PASSO 0. |
 
 1. `node laboratorio/strumenti/sintassi_app.mjs` → deve dire `5 script, 0 errori`.
 2. `cd laboratorio && npm run test:app` → leggi `pass` e `fail` alla fine.
