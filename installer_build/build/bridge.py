@@ -2261,10 +2261,26 @@ def connect(body: ConnectRequest):
         except Exception as _e:
             _log_bridge("[Connect] riavvio custode fallito (non bloccante): %s" % _e)
 
+    # DEMO O SOLDI VERI, detto GIA' QUI e non solo da /account (vedi il commento lungo in /account).
+    # Serve qui perche' l'app considera la risposta di /connect l'unica fonte sicura del conto
+    # collegato (mt5ContoAttivo: /account arriva dal polling e per qualche secondo descrive ancora
+    # il conto di prima). Un segnale che arriva nei primi secondi dopo il cambio di conto deve
+    # poter sapere SUBITO se quello che ha davanti e' un conto reale. Se la lettura non riesce
+    # resta None, e "non lo so" vale come "non abilitare niente da sola".
+    _tm = None
+    try:
+        _ai = mt5.account_info()
+        if _ai is not None:
+            _tm = getattr(_ai, "trade_mode", None)
+    except Exception:
+        _tm = None
+
     return {
         "status": "connected",
         "login": body.login,
         "server": body.server,
+        "trade_mode": _tm,
+        "reale": (None if _tm is None else bool(_tm == 2)),
         "algo_trading": algo_trading,
         # Mostrato dall'app SOLO se algo_trading è ancora False: se è tornato già acceso da solo
         # (o il tentativo non era nemmeno necessario), il dettaglio non serve.
@@ -2368,6 +2384,25 @@ def account():
         "margin_level": getattr(info, "margin_level", None),
         "profit": getattr(info, "profit", None),
         "credit": getattr(info, "credit", None),
+        # DEMO O SOLDI VERI, e detto da MT5 invece che indovinato.
+        #
+        # RICHIESTO dal proprietario (5 novembre 2026): le aperture automatiche delle sale segnali
+        # non devono partire da sole su un conto REALE o prop se non e' lui a spuntarlo. Ma per
+        # applicare quella regola l'app deve SAPERE se il conto e' reale, e fino a oggi non lo
+        # sapeva: qui tornavano login, server, saldo e margini, mai il tipo di conto. L'unico
+        # indizio era il nome del server ("...-Demo"), che e' una CONVENZIONE del broker e non un
+        # dato: esistono server reali senza "Live" nel nome e demo senza "Demo". Indovinare il tipo
+        # di conto quando la conseguenza e' aprire posizioni con denaro vero non e' accettabile.
+        #
+        # account_info().trade_mode e' il campo ufficiale di MetaTrader5:
+        #   0 = ACCOUNT_TRADE_MODE_DEMO, 1 = ACCOUNT_TRADE_MODE_CONTEST, 2 = ACCOUNT_TRADE_MODE_REAL
+        # Si manda il numero grezzo COME LO DA' MT5 e, a fianco, la risposta alla domanda vera.
+        # `reale` resta None quando il campo manca (pacchetto MetaTrader5 piu' vecchio): l'app
+        # tratta il "non lo so" come "non abilitare niente da sola" - il dubbio deve far scegliere
+        # l'utente, non il programma.
+        "trade_mode": getattr(info, "trade_mode", None),
+        "reale": (None if getattr(info, "trade_mode", None) is None
+                  else bool(getattr(info, "trade_mode") == 2)),
     }
 
 

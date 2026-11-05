@@ -4653,6 +4653,68 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
 ## 29 ottobre 2026 — Punto 5 completo
 - TP per TP, giorno per giorno, sala per sala, fasce orarie, notizie (approssimazione), prop firm one/two step.
 - Prestazioni: cache, percentuale onesta.
+- 2026-11-05 — Claude — **v2.0.89: il pannello ora dice QUALE disegno e QUALE indicatore costa, e
+  il primo banco punta tutto su un solo tipo di disegno**.
+  1. **PERCHÉ, e perché prima non bastava.** Dal pannello che mi ha incollato: `disegnoMedio_ms
+     54.57`, `fotogrammiAlSecondo 14`, `candele 51172`, e dentro il disegno `disegniUtente 27.1` +
+     `indicatori 23.74` = **50,8 ms su 54,55, il 93%**. Lì la misura si fermava. Due numeri grossi
+     non dicono su cosa mettere le mani: dentro `disegniUtente` ci sono disegni di tipi diversi,
+     dentro `indicatori` ce ne sono N, e ognuno ha il suo costo.
+     **Lo strumento, non la cura:** `fblSezioniDettaglio` + `fblDettaglioFine()`, sullo stesso
+     interruttore delle sezioni (`fblCronoSezioni`), quindi fuori dalla misura non si paga niente.
+     Nomi: `disegno:<tipo>` per ogni disegno, `ind:<chiave>:calcolo` e `ind:<chiave>:disegno` per
+     ogni indicatore, `profiliVP:costruzione` per i profili giornalieri — che non sono disegni
+     dell'utente ma vivono nella sua stessa sezione, e senza separarli il loro costo finirebbe
+     addosso ai disegni veri. Nel pannello: `dentroLeSezioni_ms`, ordinato dal più caro.
+     **Calcolo e disegno separati per una ragione precisa:** sono due cure diverse. Se costa
+     `compute` si mette in cache (il calcolo è già incrementale, `ind.calc.builtTo`); se costa
+     `render` si disegna meno roba. Un numero solo non direbbe quale strada prendere.
+  2. **IL PRIMO BANCO DICE UNA COSA SOLA, E FORTE.** 51.000 candele, 6 linee + 6 rettangoli + 1
+     profilo volumetrico, 2 indicatori accesi: `disegniUtente 4,36 ms`, e dentro di esso
+     **`disegno:vpfixed 4,27` — il 98%**. Linee e rettangoli: **0,02 ms a testa**. Gli indicatori
+     messi insieme: 0,1 ms, e il loro `calcolo` è a zero (l'incrementale funziona, il costo è nel
+     `render`).
+     Non è la prova che sul SUO computer sia lo stesso — lui ha 1,2 milioni di tick di footprint e
+     i profili leggono proprio quello — ma è la prima ipotesi da verificare, e ora si verifica
+     premendo un tasto invece di indovinando.
+     **Il mio banco fa 4,5-5 ms di disegno medio contro i suoi 54,57**: dieci volte meno. Le
+     51.000 candele da sole quindi NON spiegano la sua lentezza — la spiega la sua
+     configurazione. Un motivo in più per non ottimizzare sul mio banco.
+  3. **NON HO CURATO NIENTE, ed è deliberato.** Su quell'indicatore ho già sbagliato due volte in
+     due giorni (una cura su una premessa falsa, e la lunghezza delle barre agganciata al riquadro
+     invece che al periodo: «sono due cose diverse»). L'ordine resta: lo strumento esce, lui preme
+     il tasto, incolla il pannello, e la cura si fa sul numero suo.
+  4. **LA QUADRATURA È DENTRO LE PROVE, perché un conto gonfiato manda a curare la cosa
+     sbagliata.** Il dettaglio è una SCOMPOSIZIONE: la somma dei pezzi non può superare il pezzo
+     intero. La seconda prova lo misura, e c'è anche il controllo che misura il contrario (col
+     cronometro spento il dettaglio deve restare **vuoto**: uno strumento che resta attaccato
+     diventa la causa del rallentamento successivo, già visto in questo progetto).
+     **UNA LETTURA NON SPIEGATA, scritta qui per non perderla:** al primo giro di banco il
+     dettaglio di `vpfixed` risultava 4,4 contro una sezione di 3,88 — cioè il pezzo più grande
+     dell'intero. Misurato subito dopo giro per giro, dieci giri di fila: **sballo 0,00** (e zero
+     rientri di `draw()` dentro se stessa, controllati); e in un giro intero successivo 4,32 di
+     pezzi contro 4,36 di sezione. Undici osservazioni su dodici quadrano esatte. Resta la prima,
+     e la tolleranza di 1 ms nella prova la coprirebbe.
+  5. **LA PROVA VALE IN ENTRAMBI I VERSI.** Rimesso il nome unico al posto del dettaglio per tipo
+     (cioè lo stato di prima), la prova è andata **rossa** dicendo esattamente cosa mancava:
+     «manca il dettaglio «disegno:trendline»: trovati ind:volume_default:calcolo,
+     ind:volume_default:disegno, profiliVP:costruzione, disegniUtente». Rimesso a posto: verde.
+     È il controllo che il 4 novembre mi aveva smascherato una prova muta.
+  6. **E LA DOMANDA DOPO HA GIA' LA SUA CASELLA.** Se il profilo costa, costa il CONTO o costa
+     DISEGNARLO? Sono due cure diverse, quindi il conto si misura a parte:
+     `disegno:vpfixed>calcolo`. E il banco risponde già: `computeVolumeProfile` **è già in cache**
+     (chiave sull'ultima candela, quindi in Live rifà il conto a ogni tick e fuori dal Live mai),
+     il conto è a zero, e i 4,27 ms sono l'**istogramma** — 150 fasce, più sfondo, POC, VAH, VAL.
+     Se sul suo computer il numero del calcolo è alto invece che a zero, vuol dire che è in Live e
+     la cache non lo copre: cura diversa, e lo si saprà dal numero e non da un'ipotesi.
+  7. **UN DIFETTO NEL MIO STESSO STRUMENTO, trovato prima di pubblicarlo.** Il calcolo del profilo
+     sta DENTRO il disegno del profilo: sommarli nel totale avrebbe dato un totale più grande del
+     disegno intero, cioè esattamente il genere di numero gonfiato che manda a cercare il problema
+     dove non è. Da qui la convenzione del **`>`** nel nome (`disegno:vpfixed>calcolo` = «sta
+     dentro»), e il totale del rapporto salta i nomi annidati. La somma nelle prove fa lo stesso,
+     altrimenti la prova della quadratura si sarebbe rotta per colpa della mia stessa aggiunta.
+  **Collaudo:** __COLLAUDO__. **Commit:** uno, strumento + prove, versione 2.0.89.
+
 - Prestazioni: cache, percentuale onesta.
 
 

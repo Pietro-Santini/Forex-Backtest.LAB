@@ -17718,6 +17718,28 @@ function fblSezFine(nome,t0){
  fblSezioniDraw[nome]=(fblSezioniDraw[nome]||0)+(ora-t0);
  return ora;
 }
+// IL DETTAGLIO DENTRO UNA SEZIONE: quale disegno, quale indicatore.
+//
+// MISURATO sul computer del proprietario (5 novembre 2026, dal pannello di diagnosi che mi ha
+// incollato): disegno medio 54,55 ms, 14 fotogrammi al secondo, 51.172 candele — e dentro quel
+// disegno `disegniUtente 27,1` + `indicatori 23,74` = 50,8 ms, cioe' il 93% del totale. Sapere
+// QUALE sezione costa non basta piu': dentro quelle due ci sono disegni di tipi diversi e piu'
+// indicatori, ognuno col suo costo, e mettersi a ottimizzare senza sapere quale pesa e'
+// esattamente l'errore che questo pannello esiste per evitare.
+//
+// Per gli indicatori il calcolo e il disegno si misurano SEPARATI, perche' sono due cure diverse:
+// se costa `compute` si mette in cache il risultato (il calcolo e' incrementale, vedi
+// ind.calc.builtTo); se costa `render` si disegna meno roba. Un numero solo non direbbe quale
+// delle due strade prendere.
+//
+// Stesso interruttore delle sezioni (fblCronoSezioni): fuori dalla misura non si paga niente.
+let fblSezioniDettaglio={};
+function fblDettaglioFine(nome,t0){
+ const ora=performance.now();
+ if(!fblCronoSezioni)return ora;
+ fblSezioniDettaglio[nome]=(fblSezioniDettaglio[nome]||0)+(ora-t0);
+ return ora;
+}
 // La chiusura della candela piu' a destra DISEGNATA nell'ultimo giro: la riga tratteggiata del
 // prezzo e la sua etichetta si ancorano a questa, non a rows[idx].close scelto per indice.
 // Riempita dal ciclo delle candele dentro draw(), letta poco piu' sotto nello stesso giro.
@@ -18429,11 +18451,15 @@ function draw(){
      // ind.calc.builtTo, quindi al primo ridisegno recupera da solo le candele saltate.
      if(ind.hidden)return;
      try{
+       // Il costo di QUESTO indicatore, calcolo e disegno separati: vedi fblDettaglioFine.
+       let _tInd=performance.now();
        def.compute(rows,idx,ind);
+       _tInd=fblDettaglioFine('ind:'+ind.key+':calcolo',_tInd);
        // pad/h in coda (RICHIESTO per l'indicatore Volume, vedi volume_default più sopra nel
        // file): tutti gli altri indicatori li ignorano semplicemente, nessuna modifica alla loro
        // firma esistente.
        def.render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h);
+       fblDettaglioFine('ind:'+ind.key+':disegno',_tInd);
      }catch(err){ /* un indicatore mal configurato non deve rompere il resto del grafico */ }
    });
  }
@@ -18504,9 +18530,19 @@ function draw(){
  const shapesGeo=chartGeometry();
  if(shapesGeo){
    lockButtonRects=[];
+   // Questi due non sono disegni dell'utente ma vivono nella sua stessa sezione, e costruire i
+   // profili giornalieri/di sessione legge il footprint: misurati a parte, o il loro costo
+   // finirebbe addosso ai disegni veri.
+   let _tVp=performance.now();
    const _vpIndVirtual=buildVpIndicatorVirtualDrawings(shapesGeo); // profili giornalieri/sessioni (sotto ai disegni dell'utente)
    drawVpIndicatorHiddenOutlines(ctx);
+   fblDettaglioFine('profiliVP:costruzione',_tVp);
    _vpIndVirtual.concat(pendingDrawing?drawings.concat([pendingDrawing]):drawings).forEach(d=>{
+     // Il costo di QUESTO disegno, sommato per tipo: vedi fblDettaglioFine. I disegni che
+     // escono dalle uscite anticipate qui sotto (livello nascosto, replay, coordinate non
+     // finite) non si contano: costano un confronto, e contarli direbbe che un tipo "costa"
+     // quando invece non e' stato disegnato.
+     const _tDis=performance.now();
      // Pannello "Livelli" (vedi drawingLayerVisible/isDrawingLayerVisible più sopra): un disegno
      // del tipo nascosto non va disegnato — il pendingDrawing (disegno ancora in composizione, non
      // salvato) resta sempre visibile qualunque sia lo stato del livello, altrimenti sparirebbe
@@ -18791,7 +18827,17 @@ function draw(){
        // comunque legato all'intervallo scelto [p1,p2], invariato.
        const rightBoundX=d.type==='vpfixed'?(d.extendRight?(w-pad.r):shapesGeo.xFromTime(fullTs[lastIdx])):(w-pad.r);
        const nb=d.buckets?Math.max(6,Math.min(500,Math.round(d.buckets))):Math.max(8,Math.min(60,Math.round(ch/7)));
+       // Il CALCOLO del profilo a parte dal suo DISEGNO, per la stessa ragione degli indicatori:
+       // sono due cure diverse. computeVolumeProfile e' gia' in cache (chiave sull'ultima
+       // candela, quindi in Live rifa' il conto a ogni tick e fuori dal Live mai): se il numero
+       // qui resta basso mentre `disegno:vpfixed` e' alto, la cache funziona e il costo e'
+       // nell'istogramma - 150 fasce per barra, sfondo, POC/VAH/VAL. Misurato sul banco con
+       // 51.000 candele: `disegno:vpfixed` 4,27 ms su 4,36 di tutta la sezione.
+       let _tProf=performance.now();
        const profile=computeVolumeProfile(startIdx,lastIdx,nb);
+       // Il '>' nel nome dice che questo numero sta DENTRO un altro (disegno:vpfixed) e non va
+       // sommato con lui: vedi il totale nel rapporto, che salta i nomi annidati.
+       fblDettaglioFine('disegno:vpfixed>calcolo',_tProf);
        // RICHIESTO ESPLICITAMENTE (stile TradingView): la lunghezza delle barre è AGGANCIATA ALL'ASSE DEL
        // TEMPO. La barra più lunga (POC) occupa una percentuale FISSA della larghezza del periodo coperto
        // dal profilo (leftX -> ultima candela del profilo), quindi zoommando dentro/fuori le barre si
@@ -19093,6 +19139,7 @@ function draw(){
        }
      }
      ctx.restore();
+     fblDettaglioFine('disegno:'+(d&&d.type||'?'),_tDis);
    });
  }
  }catch(err){ console.error('Errore rendering disegni:',err); }
@@ -50297,6 +50344,7 @@ function fblMisuraPrestazioni(secondi){
  // Fuori da qui il disegno non paga niente.
  fblCronoSezioni=true;
  fblSezioniDraw={};
+ fblSezioniDettaglio={};
  const out=$('fblPrestOut'), btn=$('fblMisuraPrestBtn');
  if(out){ out.style.display='block'; out.textContent='Misuro per '+(durata/1000)+' secondi… lascia l\'app come la usi di solito.'; }
  if(btn)btn.disabled=true;
@@ -50431,6 +50479,23 @@ function fblMisuraPrestazioni(secondi){
    if(sezioni.length){
     r.sezioniDelDisegno_ms=sezioni.map(x=>x[0]+'='+x[1]).join('  ');
     r.sezioniTotale_ms=Math.round(sezioni.reduce((s2,x)=>s2+x[1],0)*100)/100;
+   }
+   // DENTRO LE DUE SEZIONI CARE: quale disegno e quale indicatore, uno per uno.
+   // La misura del 5 novembre sul suo computer ha detto che `disegniUtente` + `indicatori` sono
+   // il 93% del disegno, e lì si è fermata: due numeri grossi non dicono su cosa mettere le mani.
+   // Qui i nomi sono `disegno:<tipo>`, `ind:<chiave>:calcolo`, `ind:<chiave>:disegno` e
+   // `profiliVP:costruzione`. Il numero è il costo MEDIO per disegno, come sopra.
+   const dett=Object.keys(fblSezioniDettaglio||{})
+     .map(nome=>[nome,Math.round((fblSezioniDettaglio[nome]/(nD||1))*100)/100])
+     .filter(x=>x[1]>=0.02)
+     .sort((a,b)=>b[1]-a[1]);
+   if(dett.length){
+    r.dentroLeSezioni_ms=dett.map(x=>x[0]+'='+x[1]).join('  ');
+    // IL TOTALE SALTA I NOMI ANNIDATI (quelli con '>'): un numero che sta DENTRO un altro,
+    // sommato con lui, farebbe un totale piu' grande del disegno intero — e un totale gonfiato
+    // manda a cercare il problema dove non e'.
+    r.dentroSezioniTotale_ms=Math.round(dett.filter(x=>x[0].indexOf('>')<0)
+      .reduce((s2,x)=>s2+x[1],0)*100)/100;
    }
    // SE LA MISURA NON VALE, LO DEVE DIRE LEI.
    // Successo davvero il 22 ottobre: una misura presa con il grafico VUOTO ha dato 88 fotogrammi
