@@ -4713,7 +4713,7 @@ giornaliero e **tutta la sovrapposizione prop firm one/two step** (zero riferime
      dove non è. Da qui la convenzione del **`>`** nel nome (`disegno:vpfixed>calcolo` = «sta
      dentro»), e il totale del rapporto salta i nomi annidati. La somma nelle prove fa lo stesso,
      altrimenti la prova della quadratura si sarebbe rotta per colpa della mia stessa aggiunta.
-  **Collaudo:** __COLLAUDO__. **Commit:** uno, strumento + prove, versione 2.0.89.
+  **Collaudo:** giro intero 5 passi, 0 falliti (sintassi_app 0s, versione_sw 0s, ponte_python 87s, interprete_segnali 2s, app_browser 875s), commit b14b0a3. **Commit:** uno, strumento + prove, versione 2.0.89.
 
 - Prestazioni: cache, percentuale onesta.
 
