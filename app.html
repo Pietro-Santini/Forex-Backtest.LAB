@@ -5864,9 +5864,14 @@ const MT5_PARCHEGGIO_KEY='fb_mt5_parcheggio';
 let mt5Parcheggio={};               // login -> [{modo, tipo:'pos'|'pend', p}]
 try{ mt5Parcheggio=JSON.parse(localStorage.getItem(MT5_PARCHEGGIO_KEY)||'{}')||{}; }catch(e){ mt5Parcheggio={}; }
 function mt5SalvaParcheggio(){ try{ localStorage.setItem(MT5_PARCHEGGIO_KEY,JSON.stringify(mt5Parcheggio)); }catch(e){} }
-function mt5AttivaConto(login,server){
+function mt5AttivaConto(login,server,reale,tradeMode){
  const precedente=mt5ContoAttivo?mt5ContoAttivo.login:null;
- mt5ContoAttivo={login:String(login),server:server?String(server):''};
+ mt5ContoAttivo={login:String(login),server:server?String(server):'',reale:(reale===undefined?null:reale),tradeMode:(tradeMode===undefined?null:tradeMode)};
+ // Ricorda per login@server se il conto e' reale. Solo se il ponte lo ha detto davvero.
+ try{
+   const k=mt5AccountKey(mt5ContoAttivo);
+   if(reale===true||reale===false){ mt5ContoRealePerChiave[k]=reale; mt5ContoRealeSalva(); }
+ }catch(e){}
  const ora=mt5ContoAttivo.login;
  // I dati del conto (saldo, margine...) del conto di prima non valgono per questo.
  try{ if(mt5AccountInfo&&mt5AccountInfo.login!=null&&String(mt5AccountInfo.login)!==ora)mt5AccountInfo=null; }catch(e){}
@@ -33526,6 +33531,31 @@ try{
  if(v&&typeof v==='object')tgAutoConti=tgAutoContiDaSalvato(v);
 }catch(e){}
 function tgAutoContiSalva(){ try{ localStorage.setItem(TG_AUTO_CONTI_KEY,JSON.stringify(tgAutoConti)); }catch(e){} }
+// RILASCIO A (soldi veri): per ogni conto MT5 (login@server) ricordiamo se e' REALE, DEMO o
+// «non lo so». La chiave e' login@server perche' lo stesso numero puo' esistere su due server.
+// `reale` vale true (reale), false (demo) o null (sconosciuto -> trattato come reale, per sicurezza).
+const FBL_MT5_REALE_KEY='fb_mt5_reale';
+let mt5ContoRealePerChiave={};
+try{ const v=JSON.parse(localStorage.getItem(FBL_MT5_REALE_KEY)||'null'); if(v&&typeof v==='object')mt5ContoRealePerChiave=v; }catch(e){ mt5ContoRealePerChiave={}; }
+function mt5ContoRealeSalva(){ try{ localStorage.setItem(FBL_MT5_REALE_KEY,JSON.stringify(mt5ContoRealePerChiave)); }catch(e){} }
+// Il conto collegato ADESSO e' reale/prop/o sconosciuto? Mai trattare null come false.
+function tgAutoContoCollegatoKey(){ try{ if(mt5ContoAttivo&&mt5ContoAttivo.login!=null)return mt5AccountKey(mt5ContoAttivo); }catch(e){} return null; }
+function tgAutoContoRealeDi(login,server){ const k=(login!=null&&server!=null)?(String(login)+'@'+String(server)):null; if(!k)return null; return Object.prototype.hasOwnProperty.call(mt5ContoRealePerChiave,k)?mt5ContoRealePerChiave[k]:null; }
+function tgAutoContoDaTrattareComeReale(login,server){
+ // true = conto REALE o prop o «non lo so» (mai abilitare da sola). false = demo sicuro.
+ let reale=tgAutoContoRealeDi(login,server);
+ if(reale===true) return true;
+ if(reale===false) return false;
+ // prop firm in corso/finanziato (solo se esiste davvero una configurazione prop per questo conto) => soldi veri
+ try{
+   const id='mt5:'+String(login)+'@'+String(server);
+   const d=_fblPropConti();
+   const v=d[id];
+   if(v&&(v.stato==='in_corso'||v.stato==='finanziato')) return true;
+ }catch(e){}
+ // sconosciuto => per sicurezza reale
+ return true;
+}
 // I conti MT5 salvati, come li conosce la tendina dei conti nel menu MT5. Qui non si chiede nessun
 // permesso: se la cartella delle credenziali non e' ancora stata concessa l'elenco resta vuoto, e
 // vale il comportamento di sempre.
@@ -35196,6 +35226,18 @@ async function tgAutoValuta(voce,conto){
  // va solo su quelli, cambiando conto da sola se serve. Senza nessuna scelta si apre dove si e'
  // collegati, esattamente come prima.
  if(conto==='mt5'&&tgAutoContiRegolaAttiva())return await tgAutoApriSuiConti(voce,d,seg,conto);
+ // RILASCIO A (soldi veri): nessun conto scelto. Se il conto collegato e' REALE, prop o
+ // «non lo so», non si apre da sola: il segnale resta nel pannello col motivo.
+ if(conto==='mt5'&&!tgAutoContiRegolaAttiva()){
+  const _login=tgAutoContoCollegatoLogin();
+  const _server=mt5ContoAttivo?mt5ContoAttivo.server:'';
+  if(tgAutoContoDaTrattareComeReale(_login,_server)){
+   const _et='conto '+(_login||'?')+(_server?(' ('+_server+')'):'');
+   voce.autoMotivo=_et+': le aperture automatiche non sono attive su questo conto — aprilo a mano dal pannello segnali, oppure spuntalo nella configurazione';
+   try{ tgRenderPannello(); }catch(e){}
+   return;
+  }
+ }
  await tgAutoApriQui(voce,d,seg,conto,d.spazio);
 }
 // L'APERTURA VERA E PROPRIA sul conto collegato ADESSO (MT5, oppure simulato). Estratta da
@@ -35274,6 +35316,8 @@ async function tgAutoApriSuiConti(voce,d,seg,conto){
  const lista=tgAutoConti.tuttiIConti?bersagli:bersagli.slice(0,1);
  const fatti=[]; const problemi=[];
  for(const acc of lista){
+  const _chiaveAcc=String(acc.login)+'@'+String(acc.server||'');
+  if(tgAutoContoDaTrattareComeReale(acc.login,acc.server) && !tgAutoConti.conti[_chiaveAcc]){ problemi.push('conto '+acc.login+': conto reale/prop, aperture automatiche non attive'); continue; }
   if(String(acc.login)!==String(tgAutoContoCollegatoLogin()||'')){
    try{ $('status').textContent='⚡ Segnale di '+String(voce.chat||'')+': passo al conto MT5 '+acc.login+' per aprirlo…'; }catch(e){}
    const sw=await tgAutoVaiAlConto(acc);
@@ -40626,7 +40670,7 @@ async function fetchMt5AccountInfo(){
  _mt5AccountInfoInFlight=true;
  try{
    const r=await fetchMt5WithTimeout('/account',{method:'GET'},8000);
-   if(r.ok&&r.data&&Number.isFinite(Number(r.data.equity))){ mt5AccountInfo=r.data; mt5AccountInfoErrore=null; }
+   if(r.ok&&r.data&&Number.isFinite(Number(r.data.equity))){ mt5AccountInfo=r.data; mt5AccountInfoErrore=null; try{ if(mt5ContoAttivo&&mt5ContoAttivo.login!=null && (r.data.reale===true||r.data.reale===false)){ const k=mt5AccountKey(mt5ContoAttivo); mt5ContoRealePerChiave[k]=r.data.reale; mt5ContoRealeSalva(); mt5ContoAttivo.reale=r.data.reale; mt5ContoAttivo.tradeMode=r.data.trade_mode; } }catch(e){} }
    else mt5AccountInfoErrore=(r&&r.message)||'risposta non valida';
  }finally{ _mt5AccountInfoInFlight=false; }
 }
@@ -50608,7 +50652,7 @@ async function mt5RiagganciaSilenzioso(){
  const acc=await fetchMt5WithTimeout('/account',{method:'GET'},8000);
  if(!(acc&&acc.ok&&acc.data&&acc.data.login!=null))return false;
  const login=String(acc.data.login), server=String(acc.data.server||'');
- try{ mt5AttivaConto(login,server); }catch(e){}
+ try{ mt5AttivaConto(login,server,acc.data.reale,acc.data.trade_mode); }catch(e){}
  if(!mt5CredsDraft||String(mt5CredsDraft.login)!==login){
   const salvato=(Array.isArray(mt5SavedAccounts)?mt5SavedAccounts:[]).find(a=>String(a.login)===login);
   mt5CredsDraft=salvato||{login,server};
@@ -50721,7 +50765,7 @@ async function connectToMt5Bridge(creds){
  try{
   const esito=await connectToMt5BridgeCorpo(creds);
   if(esito&&esito.ok&&esito.data&&esito.data.login!=null){
-   const r=mt5AttivaConto(esito.data.login,esito.data.server);
+   const r=mt5AttivaConto(esito.data.login,esito.data.server,esito.data.reale,esito.data.trade_mode);
    if(r&&r.parcheggiate)esito.notaConti=' '+r.parcheggiate+' posizione/i o ordine/i di altri conti messi da parte: tornano quando ricolleghi quel conto.';
   }
   return esito;
