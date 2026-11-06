@@ -2,6 +2,8 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — OpenCode — **v2.0.96: il ri-login torna dentro l'app**. Difetto misurato: dopo il logout `location.replace('login.html')` portava a una pagina 404 perché il ponte serviva solo `/` e `/sw.js`. Cura v2.0.95 ha aggiunto la rotta `/login.html` (FileResponse) e percorsi_liberi. Ma `login.html` calcolava `isCapacitor` solo sul Capacitor: nell'app desktop (`window.pywebview`) era false, quindi dopo il login andava a `index.html?dopo=login` invece che a `app.html`. Cura: `isCapacitor` ora include anche `!!window.pywebview` e il marcatore `?from=app` nel redirect dell'app, così DESTINATION='app.html'. In più, `login.html` aggiunto a `_FILE_AGGIORNABILI` (bridge.py) così il ponte lo scarica/aggiorna da solo insieme ad app.html e sw.js. Collaudo: verde.
+
 - 2026-11-06 — OpenCode — **v2.0.96: login.html riconosce l'app desktop (pywebview)**. Difetto
   misurato: dopo il logout `window.location.replace('login.html')` portava a una pagina 404 perché il
   ponte serviva solo `/` e `/sw.js`. Cura v2.0.95 ha aggiunto la rotta `/login.html` (FileResponse)
