@@ -114,7 +114,38 @@
   // Firebase va in errore 400 - misurato il 20 ottobre 2026). Si usa perciò il flusso di
   // reindirizzamento (pagina intera), che invece è una normale navigazione e torna
   // nell'app. Vedi la nota lunga sul pulsante Google, più in basso.
-  const isCapacitor = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()) || !!window.pywebview || (new URLSearchParams(location.search).get('from') === 'app');
+  // DUE DOMANDE DIVERSE, DUE VARIABILI DIVERSE. Confonderle ha reso l'app inutilizzabile.
+  //
+  // SEGNALATO dal proprietario (6 novembre 2026): «mi sono sloggato dall'account e poi è nato
+  // tutto il problema… quando vado a fare l'accesso mi crasha, oppure non mi esegue bene il
+  // login… mi dice Accesso non riuscito con Google, premi rieffettua il login per riprovare, ma
+  // mi dà sempre lo stesso errore».
+  //
+  // LA CAUSA, misurata nel suo log e nella storia di git. Fino alla v2.0.95 questa riga era SOLO
+  // il controllo di Capacitor, e una sola variabile rispondeva a DUE domande:
+  //   1. DOVE si va dopo il login riuscito (dentro l'app -> app.html; sul sito -> index.html);
+  //   2. QUALE flusso di Google si usa (reindirizzamento oppure popup).
+  // La v2.0.96 l'ha allargata a window.pywebview e ?from=app per sistemare la (1) - giusto - e ha
+  // cambiato di nascosto anche la (2): nell'app desktop ha iniziato a partire signInWithRedirect.
+  // Nel suo log si vede tutta la catena:
+  //     GET /login.html?from=app 200
+  //     [Ponte] La pagina e' andata via: spengo fra 90 secondi
+  //     POST /disconnect?grazia=1 200
+  // cioe' il reindirizzamento porta la finestra FUORI dall'app (su accounts.google.com) e il
+  // ponte, vedendo la pagina andarsene, comincia a spegnersi e stacca MT5: e' il "crash".
+  // E non puo' nemmeno riuscire, perche' Google RIFIUTA l'OAuth dentro una webview incorporata
+  // (disallowed_useragent): al ritorno getRedirectResult() e' vuoto e, con lo stato del giro
+  // salvato, esce esattamente il messaggio che lui legge.
+  //
+  // Nell'app desktop il popup invece FUNZIONA, e di proposito: desktop_shell.py installa
+  // on_new_window_request -> set_Handled(False) (verificato il 6 novembre: quell'attributo esiste
+  // davvero), quindi WebView2 apre il popup di Google come finestra vera, FUORI dalla webview.
+  //
+  // Percio' da qui in avanti:
+  //   eApk       -> solo l'APK Capacitor. Decide il FLUSSO di Google (li' il popup non esiste).
+  //   dentroLApp -> APK oppure app desktop. Decide SOLO dove si va dopo il login.
+  const eApk = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+  const dentroLApp = eApk || !!window.pywebview || (new URLSearchParams(location.search).get('from') === 'app');
 
   /* STATO LOGIN GOOGLE: INIZIO
    ---------------------------------------------------------------------------
@@ -208,7 +239,8 @@
   // simulatore nel browser aperto e basta: si torna alla porta d'ingresso della landing
   // (index.html?dopo=login), che prova subito a passare dentro l'app e, se non c'e',
   // offre l'installazione — con sempre l'uscita "Continua col sito web" verso app.html.
-  const DESTINATION = destinazioneLogin(isCapacitor);
+  // Qui serve «sono dentro l'app?», non «che flusso di Google uso?»: vedi le due variabili sopra.
+  const DESTINATION = destinazioneLogin(dentroLApp);
 
   // Non passiamo più nessun actionCodeSettings a sendEmailVerification():
   // così Firebase invia l'email di conferma con il suo link standard, che
@@ -512,7 +544,8 @@
     // NELL'APP INSTALLATA: accesso nativo, e NESSUN ripiego sulla pagina. Ripiegare sul popup
     // o sul reindirizzamento dentro la WebView vorrebbe dire tornare esattamente nell'errore
     // 400: se il nativo non riesce si dice perche', e si resta qui.
-    const nativo = isCapacitor ? pluginAccessoNativo() : null;
+    // Il plugin nativo esiste SOLO nell'APK: sull'app desktop non c'e' niente da chiamare.
+    const nativo = eApk ? pluginAccessoNativo() : null;
     if (nativo) {
       try {
         const cred = await accessoGoogleNativo(nativo);
@@ -547,7 +580,14 @@
     // reindirizzamento è il ripiego se il browser lo blocca. Sul telefono nel browser
     // (non nell'app) il reindirizzamento è il primo tentativo: il popup sui browser
     // mobili è inaffidabile (e fa perdere a Firebase lo stato del giro).
-    const usaRedirect = isCapacitor || tocchiGrossi();
+    // IL REINDIRIZZAMENTO SOLO DOVE PUO' FUNZIONARE.
+    //   - APK: li' il popup non esiste (nessuna finestra nuova) e il redirect resta dentro l'app,
+    //     perche' accounts.google.com e *.firebaseapp.com sono fra gli host ammessi.
+    //   - telefono/tablet nel BROWSER: il popup sui browser mobili e' inaffidabile.
+    //   - APP DESKTOP: MAI. Un redirect qui porta la finestra fuori dall'app, fa partire lo
+    //     spegnimento del ponte (stacca MT5) e Google lo rifiuta comunque perche' siamo in una
+    //     webview incorporata. E' il difetto del 6 novembre 2026: vedi il commento in cima.
+    const usaRedirect = eApk || (tocchiGrossi() && !dentroLApp);
     if (usaRedirect) {
       salvaStatoAuth();   // lo stato del giro va salvato PRIMA di partire (vedi la nota sopra)
       try {
@@ -564,7 +604,16 @@
       const cred = await signInWithPopup(auth, new GoogleAuthProvider());
       await entraNellApp(cred);
     }catch(e){
-      // Se il popup è bloccato dal browser, ripiego sul reindirizzamento.
+      // Se il popup è bloccato dal browser, ripiego sul reindirizzamento — MA NON DENTRO L'APP
+      // DESKTOP, dove il reindirizzamento e' peggio del problema: porta la finestra fuori
+      // dall'app, fa partire lo spegnimento del ponte e Google lo rifiuta comunque (webview
+      // incorporata). Li' si dice all'utente cosa fare, invece di rompere l'app in silenzio.
+      if (e && e.code === "auth/popup-blocked" && dentroLApp && !eApk) {
+        skipAutoRedirect = false;
+        showError("La finestra di Google non si è aperta. Chiudi e riapri il programma e riprova: "
+          + "se ricapita, accedi dal sito nel browser e poi riapri il programma, che ti trova già dentro.");
+        return;
+      }
       if (e && e.code === "auth/popup-blocked") {
         salvaStatoAuth();
         try {

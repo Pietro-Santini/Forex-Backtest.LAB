@@ -39,6 +39,13 @@ REM cartella pulita e si ferma subito. Lo copre laboratorio/app/build_exe_copia.
 if exist "%~dp0..\app.html" copy /y "%~dp0..\app.html" "%~dp0build\app.html" >nul
 if exist "%~dp0..\login.html" copy /y "%~dp0..\login.html" "%~dp0build\login.html" >nul
 if exist "%~dp0..\sw.js" copy /y "%~dp0..\sw.js" "%~dp0build\sw.js" >nul
+rem Le pagine che app.html e login.html LINKANO: senza queste, dentro il programma
+rem rispondono 404 ("detail not found") e i link sono morti. Misurato il 6 novembre 2026.
+if exist "%~dp0..\index.html" copy /y "%~dp0..\index.html" "%~dp0build\index.html" >nul
+if exist "%~dp0..\privacy.html" copy /y "%~dp0..\privacy.html" "%~dp0build\privacy.html" >nul
+if exist "%~dp0..\termini.html" copy /y "%~dp0..\termini.html" "%~dp0build\termini.html" >nul
+if exist "%~dp0..\rischi-finanziari.html" copy /y "%~dp0..\rischi-finanziari.html" "%~dp0build\rischi-finanziari.html" >nul
+if exist "%~dp0..\informativa-bot.html" copy /y "%~dp0..\informativa-bot.html" "%~dp0build\informativa-bot.html" >nul
 if not exist "%~dp0build\app.html" (
   echo ERRORE: manca build\app.html. Scarica tutto il progetto ^(non solo installer_build^).
   pause
@@ -116,6 +123,11 @@ pyinstaller ^
   --add-data "build\sw.js;." ^
   --add-data "build\asset-library.html;." ^
   --add-data "build\login.html;." ^
+  --add-data "build\index.html;." ^
+  --add-data "build\privacy.html;." ^
+  --add-data "build\termini.html;." ^
+  --add-data "build\rischi-finanziari.html;." ^
+  --add-data "build\informativa-bot.html;." ^
   build\bridge.py
 
 if errorlevel 1 (

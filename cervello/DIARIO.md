@@ -2,6 +2,90 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — Claude — **v2.0.97: l'app era inutilizzabile perché UNA variabile rispondeva a DUE
+  domande. Il login Google nell'app desktop torna sul popup, e il ponte smette di spegnersi da
+  solo**.
+  1. **IL SINTOMO, con le sue parole.** «Mi sono sloggato dall'account e poi è nato tutto quanto il
+     problema. Inizialmente dava detail not found… adesso ci siamo piantati e non mi funziona più
+     bene l'applicazione ed è inutilizzabile.» E poi il dettaglio che ha chiuso il caso: «la pagina
+     pop-up tramite web view non è supportata, va in conflitto, quindi dopo succede il crash… mi
+     dice accesso non riuscito con Google, premi rieffettua il login per riprovare, ma mi dà sempre
+     lo stesso errore».
+  2. **LA CAUSA, misurata nel SUO log e nella storia di git, non supposta.** In `login.html` una
+     sola variabile (`isCapacitor`) decideva due cose diverse:
+     **(1)** dove si va dopo il login riuscito; **(2)** quale flusso di Google si usa.
+     Fino alla v2.0.95 era solo il controllo di Capacitor, quindi nell'app desktop era `false` e si
+     usava il **popup**. La v2.0.96 l'ha allargata a `window.pywebview` e `?from=app` per sistemare
+     la (1) — giusto — e ha cambiato **di nascosto** anche la (2): nell'app desktop ha iniziato a
+     partire `signInWithRedirect`.
+     Nel suo `ForexBacktestLAB.log` c'è tutta la catena, in tre righe consecutive:
+     ```
+     GET /login.html?from=app 200
+     [Ponte] La pagina e' andata via: spengo fra 90 secondi, a meno che non torni qualcuno.
+     POST /disconnect?grazia=1 200
+     ```
+     cioè: il reindirizzamento porta la finestra **fuori** dall'app (su `accounts.google.com`), il
+     ponte vede la pagina andarsene, **comincia a spegnersi e stacca MT5**. Quello è il «crash»:
+     non un errore di Python — i `ConnectionResetError` nel log sono rumore di asyncio di quando la
+     finestra se ne va a metà richiesta, cioè un **sintomo** del redirect, non la causa.
+     E non poteva nemmeno riuscire: **Google rifiuta l'OAuth dentro una webview incorporata**
+     (`disallowed_useragent`). Al ritorno `getRedirectResult()` è vuoto e, con lo stato del giro
+     salvato (`loginGoogleInCorso`), si finisce esattamente alla riga 309 di `login.html`, quella
+     che stampa il messaggio che lui legge. Ripremi e rifà lo stesso giro: per sempre.
+  3. **PERCHÉ IL POPUP È LA STRADA GIUSTA NELL'APP DESKTOP, e l'ho verificato invece di crederci.**
+     `desktop/desktop_shell.py` installa `on_new_window_request -> set_Handled(False)`: WebView2
+     apre il popup di Google come finestra **vera**, fuori dalla webview. Misurato sulla pywebview
+     installata: `on_new_window_request` **esiste** (quindi quel patch va a posto davvero).
+  4. **LA CURA: due domande, due variabili.**
+     `eApk` = solo l'APK Capacitor → decide il **flusso** (lì il popup non esiste).
+     `dentroLApp` = APK **oppure** app desktop → decide **solo** la destinazione (resta la cura
+     buona della v2.0.96, che il ri-login torni in `app.html`).
+     E `usaRedirect = eApk || (tocchiGrossi() && !dentroLApp)`: il tocco decide solo nel
+     **browser**, perché il problema del reindirizzamento non è il dito, è la webview. Inoltre,
+     nell'app desktop il ripiego del popup bloccato **non** è più il reindirizzamento (romperebbe
+     l'app): si dice all'utente cosa fare.
+  5. **PERCHÉ TUTTE LE PROVE DICEVANO «VERDE», ed è la lezione da tenere.** I banchi
+     (`login_google_flusso`, `login_google_nativo`) **iniettano `isCapacitor` come parametro**:
+     eseguono il blocco vero del pulsante Google, ma **non** la riga che lo calcola. La riga
+     cambiata era proprio quella, quindi era invisibile a ogni prova. E al banco mancava del tutto
+     la dimensione «**app desktop**»: fingeva solo APK e browser.
+     Aggiunte 4 prove in `login_google_flusso.test.mjs`: nell'app desktop si usa il popup; con lo
+     schermo a tocco **comunque** il popup (la trappola fine: `tocchiGrossi()` da solo manderebbe
+     al redirect anche dentro l'app); col popup bloccato **non** si ripiega sul redirect e non si
+     lascia appeso lo stato del giro; e la **prova di controllo** che nell'APK il reindirizzamento
+     resta — senza di lei, una cura che spegne il redirect *ovunque* passerebbe e romperebbe il
+     telefono. Provate rosse con il comportamento della v2.0.96 e verdi con la cura.
+  6. **DUE DIFETTI MINORI TROVATI PER STRADA, curati nella stessa uscita.**
+     a. **Le pagine linkate non erano nel pacchetto.** `app.html` linka `termini.html` e
+        `rischi-finanziari.html`, `login.html` linka `index.html`: dentro il programma rispondevano
+        **404**, e nel suo log si vede `GET /privacy.html 404`. Il ponte ha una StaticFiles
+        generica su `_BASE_DIR`, quindi il 404 non era una rotta mancante: **i file non c'erano**,
+        perché `build_exe.bat` ne copiava e impacchettava solo una manciata scelta a mano.
+        Aggiunte al pacchetto (copia + `--add-data`): `index.html`, `privacy.html`, `termini.html`,
+        `rischi-finanziari.html`, `informativa-bot.html`. Nota: `index.html` mancante **è** il
+        «detail not found» da cui tutta questa storia è partita.
+     b. **La rotta `/login.html` era dichiarata due volte**, identica parola per parola (la stessa
+        toppa applicata due volte fra la v2.0.95 e la v2.0.96). FastAPI usa la prima, quindi la
+        seconda era codice morto: rimossa.
+  7. **UN DIFETTO TROVATO E NON CURATO, di proposito.** In `desktop_shell.py`:
+     ```python
+     _orig = ec.EdgeChrome.on_webview_ready      # legge  on_webview_ready
+     ec.EdgeChrome.on_web_view_ready = _patched  # scrive on_web_view_ready
+     ```
+     legge un nome e ne scrive un altro. Misurato: `on_webview_ready` esiste, `on_web_view_ready`
+     no — quindi quel patch (tasti acceleratori e zoom da tastiera) è **codice morto da sempre**.
+     Non l'ho sistemato qui: ripararlo **accenderebbe** un comportamento che è stato assente per
+     settimane (F12, Ctrl+R dentro l'app), e non è quello che è stato chiesto. Va fatto da sé,
+     quando lo si vuole davvero.
+  8. **Da dire al proprietario:** `installer_build/build/bridge.py` è cambiato, quindi **serve
+     reinstallare il Setup**: il tasto «Aggiorna» aggiorna solo le pagine. In più il suo
+     `ForexBacktestLAB.log` è arrivato a **91 MB** e cresce senza limite (10.954 righe sono una
+     sola cosa che bussa su `/v1/models` e non è nostra): va messo un tetto, in un'uscita a sé.
+  **Collaudo:** login **55 prove su 55 verdi** (sei file), ponte **230 verdi**, `node --check` su
+  tutti e 5 gli script di `app.html`. Il giro intero del browser era in corso al momento del push:
+  la cura è stata pubblicata subito perché l'app era inutilizzabile, e la parte toccata è coperta
+  dalle 55 prove qui sopra. **Commit:** uno, versione 2.0.97.
+
 - 2026-11-06 — OpenCode — **v2.0.96: il ri-login torna dentro l'app**. Difetto misurato: dopo il logout `location.replace('login.html')` portava a una pagina 404 perché il ponte serviva solo `/` e `/sw.js`. Cura v2.0.95 ha aggiunto la rotta `/login.html` (FileResponse) e percorsi_liberi. Ma `login.html` calcolava `isCapacitor` solo sul Capacitor: nell'app desktop (`window.pywebview`) era false, quindi dopo il login andava a `index.html?dopo=login` invece che a `app.html`. Cura: `isCapacitor` ora include anche `!!window.pywebview` e il marcatore `?from=app` nel redirect dell'app, così DESTINATION='app.html'. In più, `login.html` aggiunto a `_FILE_AGGIORNABILI` (bridge.py) così il ponte lo scarica/aggiorna da solo insieme ad app.html e sw.js. Collaudo: verde.
 
 - 2026-11-06 — OpenCode — **v2.0.96: login.html riconosce l'app desktop (pywebview)**. Difetto

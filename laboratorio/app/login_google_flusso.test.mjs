@@ -46,7 +46,15 @@ const BLOCCO = leggiBlocco();
 
 // Un mondo finto: si guarda QUALE strada di Firebase viene presa, in che ordine, e
 // che cosa resta scritto nei magazzini.
-function mondo({popup = 'ok', redirect = 'ok', grossi = false, capacitor = false} = {}) {
+// `eApk` = APK Capacitor, e decide il FLUSSO di Google. `dentroLApp` = APK OPPURE app desktop, e
+// decide solo DOVE si va dopo il login. Erano una variabile sola fino al 6 novembre 2026, ed e' il
+// motivo per cui l'app e' diventata inutilizzabile (vedi il commento in cima a login.html):
+// allargandola per la destinazione si e' cambiato di nascosto anche il flusso.
+// `dentroLApp` non indicato = come l'APK, cosi' le prove scritte prima restano valide.
+function mondo({popup = 'ok', redirect = 'ok', grossi = false, capacitor = false,
+                dentroLApp = null} = {}) {
+  const eApk = capacitor;
+  const dentro = (dentroLApp === null) ? capacitor : dentroLApp;
   const eventi = [];
   const errori = [];
   const messaggi = [];
@@ -66,7 +74,7 @@ function mondo({popup = 'ok', redirect = 'ok', grossi = false, capacitor = false
   const fakeWin = {location: {replace: (u) => { eventi.push('va-a:' + u); }}};
 
   const funzione = new Function(
-    'document', 'window', 'auth', 'isCapacitor', 'tocchiGrossi',
+    'document', 'window', 'auth', 'eApk', 'dentroLApp', 'tocchiGrossi',
     'salvaStatoAuth', 'consumaStatoAuth',
     'signInWithRedirect', 'signInWithPopup', 'GoogleAuthProvider',
     'getAdditionalUserInfo', 'ensureUserProfile', 'sendWelcomeEmail',
@@ -79,7 +87,7 @@ function mondo({popup = 'ok', redirect = 'ok', grossi = false, capacitor = false
 
   const f = funzione(
     fakeDoc, fakeWin, {},
-    capacitor, () => grossi,
+    eApk, dentro, () => grossi,
     () => { salvati.push('salvato'); },
     () => { consumati.push('consumato'); },
     async () => {
@@ -169,4 +177,63 @@ test('con il popup riuscito si va nell\'app e non si lascia appeso il reindirizz
   assert.ok(m.eventi.includes('va-a:app.html'), 'dopo il login si entra nel programma');
   assert.equal(m.f.saltaRedirect(), true,
     'durante il giro il reindirizzamento automatico resta fermo, altrimenti si salta la schermata');
+});
+
+// ============================================================================================
+// L'APP DESKTOP (pywebview). La dimensione che mancava a questo banco, ed e' per questo che il
+// difetto del 6 novembre 2026 e' passato con «collaudo verde»: qui si fingeva solo l'APK o il
+// browser, mai il programma installato sul computer.
+//
+// SEGNALATO: «mi sono sloggato dall'account e poi e' nato tutto il problema… mi dice Accesso non
+// riuscito con Google, premi rieffettua il login per riprovare, ma mi da' sempre lo stesso
+// errore». Nel suo log: GET /login.html?from=app, poi «[Ponte] La pagina e' andata via: spengo
+// fra 90 secondi» e POST /disconnect?grazia=1 - il reindirizzamento portava la finestra fuori
+// dall'app e faceva spegnere il ponte.
+// ============================================================================================
+
+test('NELL\'APP DESKTOP si usa il POPUP: un reindirizzamento porterebbe la finestra fuori dall\'app', async () => {
+  const m = mondo({dentroLApp: true, capacitor: false});
+  await m.f.clic();
+  assert.equal(m.eventi[0], 'popup',
+    'nell\'app desktop il popup e\' l\'unica strada: desktop_shell.py abilita i popup nativi '
+    + '(on_new_window_request), quindi Google si apre in una finestra VERA, fuori dalla webview');
+  assert.ok(!m.eventi.includes('redirect'),
+    'il reindirizzamento qui e\' il difetto: porta la finestra su accounts.google.com, fa partire '
+    + 'lo spegnimento del ponte (stacca MT5) e Google lo rifiuta comunque perche\' siamo in una '
+    + 'webview incorporata');
+  assert.ok(m.eventi.includes('va-a:app.html'), 'dopo il login si entra nel programma');
+  assert.deepEqual(m.errori, [], 'il giro non deve finire con un errore');
+});
+
+test('NELL\'APP DESKTOP con lo schermo a tocco si usa COMUNQUE il popup', async () => {
+  // La trappola fine: `tocchiGrossi()` e' vero su un portatile con lo schermo a tocco, e da sola
+  // manderebbe al reindirizzamento anche dentro l'app. Il tocco decide solo nel BROWSER.
+  const m = mondo({dentroLApp: true, capacitor: false, grossi: true});
+  await m.f.clic();
+  assert.ok(!m.eventi.includes('redirect'),
+    'uno schermo a tocco non deve far scattare il reindirizzamento dentro l\'app: '
+    + 'il problema del reindirizzamento non e\' il dito, e\' la webview');
+  assert.equal(m.eventi[0], 'popup', 'resta il popup');
+});
+
+test('NELL\'APP DESKTOP, se il popup non si apre, NON si ripiega sul reindirizzamento', async () => {
+  const m = mondo({dentroLApp: true, capacitor: false, popup: 'bloccato'});
+  await m.f.clic();
+  assert.deepEqual(m.eventi, ['popup'],
+    'il ripiego col reindirizzamento qui romperebbe l\'app: meglio dire all\'utente cosa fare');
+  assert.equal(m.errori.length, 1, 'l\'utente deve leggere un messaggio, non restare davanti al nulla');
+  assert.deepEqual(m.salvati, [],
+    'senza reindirizzamento non si salva nessuno stato di giro: altrimenti alla visita dopo '
+    + 'sembrerebbe un login in corso e uscirebbe «Accesso non riuscito» da solo');
+  assert.equal(m.f.saltaRedirect(), false,
+    'dopo l\'errore il reindirizzamento automatico va riaperto, o chi e\' gia\' dentro non entra piu\'');
+});
+
+test('PROVA DI CONTROLLO: nell\'APK il reindirizzamento resta, ed e\' giusto', async () => {
+  // Senza questa, una cura che spegne il reindirizzamento OVUNQUE passerebbe le prove qui sopra
+  // e romperebbe il telefono, dove il popup non esiste proprio.
+  const m = mondo({capacitor: true, dentroLApp: true});
+  await m.f.clic();
+  assert.deepEqual(m.eventi, ['redirect'],
+    'nell\'APK il popup non esiste: li\' il reindirizzamento e\' la strada giusta');
 });
