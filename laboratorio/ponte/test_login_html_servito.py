@@ -40,6 +40,11 @@ os.environ["FBL_FIREBASE_PROJECT_ID"] = "forex-backtest-lab"
 ROOT = sys.argv[1]
 sys.path.insert(0, ROOT + "/server_oracle")
 sys.path.insert(0, ROOT + "/installer_build/build")
+# MetaTrader5 e' solo per Windows e non c'e' su GitHub (Ubuntu). Il ponte lo importa a
+# livello di modulo: si sostituisce con un modulo vuoto, come fanno i test di comportamento
+# del ponte in ambiente senza terminale. La rotta /login.html non usa MetaTrader5.
+import types
+sys.modules['MetaTrader5'] = types.ModuleType('MetaTrader5')
 import bridge as b
 from fastapi.testclient import TestClient
 client = TestClient(b.app)
