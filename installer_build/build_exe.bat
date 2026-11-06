@@ -107,6 +107,7 @@ pyinstaller ^
   --collect-all uvicorn ^
   --hidden-import accesso_condiviso ^
   --collect-all pywinauto ^
+  --collect-all google-auth ^
   --add-data "build\app.html;." ^
   --add-data "build\manifest.json;." ^
   --add-data "build\icon-192.png;." ^

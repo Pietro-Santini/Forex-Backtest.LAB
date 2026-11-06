@@ -2,6 +2,17 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — OpenCode — **v2.0.94: /dati sul PC tornava 401 sempre → dati su E: mai scritti**.
+  Difetto misurato: `documenti_utente.py` verifica il token Firebase con `google.oauth2.id_token`
+  e, se l'import manca, `_FB_AUTH_OK=False` e risponde 401 a QUALUNQUE login. `google-auth`
+  era nel Dockerfile del **server** ma NON nel `requirements.txt` del **ponte locale** (PC) né
+  congelata nell'exe (build_exe.bat). Quindi il ponte installato rifiutava ogni token, `/dati`
+  non scriveva mai e `E:\Forex Backtest Lab\dati` (cartella sì, DB no) restava vuota, con i dati
+  che andavano solo su Firestore. Cura: `google-auth` nel requirements del ponte +
+  `--collect-all google-auth` in build_exe.bat. Prove: rosso/verde
+  `test_dipendenza_google_auth.py`; ponte 229 verde. **Richiede REINSTALLARE il Setup** (l'exe
+  cambia): poi, con login, i /dati vengono accettati e i documenti finiscono su E:.
+
 - 2026-11-06 — OpenCode — **annullata una cura sbagliata a `fblUrlDati`**. Avevo creduto che con
   «tieni i dati sul mio computer» acceso i documenti andassero forzati al ponte locale; il test
   `cloud_nostro_indirizzo` l'ha beccata (rosso): da fuori casa i documenti DEVONO passare
