@@ -634,7 +634,7 @@ _APP_HTML_PATH = os.path.join(_BASE_DIR, "app.html")
 #  3. SI CONTROLLA CHE SIA UN'APP. Un file da 200 byte che dice "404" ha HTTP 200 su certi
 #     hosting: si accetta solo un app.html grande e chiuso da </html>, e un sw.js con CACHE_NAME.
 SITO_APP = "https://pietro-santini.github.io/Forex-Backtest.LAB/"
-_FILE_AGGIORNABILI = ("app.html", "sw.js")
+_FILE_AGGIORNABILI = ("app.html", "sw.js", "login.html")
 
 
 def _cartella_app_aggiornata():

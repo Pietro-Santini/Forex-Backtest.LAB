@@ -2,6 +2,16 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — OpenCode — **v2.0.96: login.html riconosce l'app desktop (pywebview)**. Difetto
+  misurato: dopo il logout `window.location.replace('login.html')` portava a una pagina 404 perché il
+  ponte serviva solo `/` e `/sw.js`. Cura v2.0.95 ha aggiunto la rotta `/login.html` (FileResponse)
+  e `percorsi_liberi` in accesso_condiviso. Ma login.html, all'avvio, calcolava `isCapacitor` solo
+  sul Capacitor: nell'app desktop (`window.pywebview`) era `false` e dopo il login andava a
+  `index.html?dopo=login` invece che a `app.html`. Cura: `isCapacitor` ora include anche
+  `!!window.pywebview`, così DESTINATION='app.html' e il login torna dentro l'app. In più,
+  `login.html` aggiunto a `_FILE_AGGIORNABILI` (bridge.py) così il ponte lo scarica/aggiorna da
+  solo insieme ad app.html e sw.js. Collaudo: verde.
+
 - 2026-11-06 — OpenCode — **v2.0.95: il ponte serve anche login.html**. Difetto misurato: app.html fa `location.replace('login.html')` quando l'utente non e' autenticato o esce, ma il ponte serviva SOLO '/' (app.html) e '/sw.js': `/login.html` rispondeva 404 ('detail not found') e l'utente restava chiuso fuori. Cura: rotta `@app.get("/login.html")` in bridge.py (FileResponse da _BASE_DIR, no-cache) + `percorsi_liberi=("/login.html",)` in installa_controllo_chiave (pagina pubblica, senza chiave) + `--add-data "build\login.html;."` in build_exe.bat. Prova rosso/verde: `test_login_html_servito.py`. Richiede il Setup nuovo (bridge.py fuori app.html). Collaudo: verde.
 
 - 2026-11-06 — OpenCode — **v2.0.94: /dati sul PC tornava 401 sempre → dati su E: mai scritti**.
