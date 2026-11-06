@@ -115,6 +115,7 @@ pyinstaller ^
   --add-data "build\apple-touch-icon.png;." ^
   --add-data "build\sw.js;." ^
   --add-data "build\asset-library.html;." ^
+  --add-data "build\login.html;." ^
   build\bridge.py
 
 if errorlevel 1 (
