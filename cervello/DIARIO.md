@@ -2,6 +2,14 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — OpenCode — **v2.0.93: i dati cloud tornano sul PC (E:\)**. Difetto misurato:
+  con «tieni i dati sul mio computer» acceso, `fblUrlDati()` seguiva `MT5_BRIDGE_URL`
+  (= `fblUrlOrdini()`, che «via server» è il dominio), quindi i documenti finivano sul server e
+  `E:\Forex Backtest Lab\dati` restava vuota. Cura: con l'interruttore acceso i dati puntano
+  **sempre al ponte locale** `127.0.0.1:8000` (il PC è la fonte primaria). Prova rosso/verde in
+  `laboratorio/app/dati_sul_pc.test.mjs`. Nota: col PC spento i dati dal telefono non vanno su E:
+  (resta la rete Firebase); ripiego sul server da valutare. Commit: 11e57a9.
+
 - 2026-11-05 — OpenCode — **v2.0.92: Lavoro 2 — candele in locale**. Magazzino IndexedDB per
   asset+timeframe (array tipizzati, tetto 12 voci LRU): a ogni cambio asset/timeframe si chiede solo
   la coda (count piccolo, ~49 KB) invece di riscaricare 5 MB. Controllo di sovrapposizione: se
