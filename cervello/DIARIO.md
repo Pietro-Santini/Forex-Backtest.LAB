@@ -2,6 +2,8 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — OpenCode — **v2.0.95: il ponte serve anche login.html**. Difetto misurato: app.html fa `location.replace('login.html')` quando l'utente non e' autenticato o esce, ma il ponte serviva SOLO '/' (app.html) e '/sw.js': `/login.html` rispondeva 404 ('detail not found') e l'utente restava chiuso fuori. Cura: rotta `@app.get("/login.html")` in bridge.py (FileResponse da _BASE_DIR, no-cache) + `percorsi_liberi=("/login.html",)` in installa_controllo_chiave (pagina pubblica, senza chiave) + `--add-data "build\login.html;."` in build_exe.bat. Prova rosso/verde: `test_login_html_servito.py`. Richiede il Setup nuovo (bridge.py fuori app.html). Collaudo: verde.
+
 - 2026-11-06 — OpenCode — **v2.0.94: /dati sul PC tornava 401 sempre → dati su E: mai scritti**.
   Difetto misurato: `documenti_utente.py` verifica il token Firebase con `google.oauth2.id_token`
   e, se l'import manca, `_FB_AUTH_OK=False` e risponde 401 a QUALUNQUE login. `google-auth`

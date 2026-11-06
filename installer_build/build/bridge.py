@@ -1124,6 +1124,28 @@ def serve_service_worker():
         raise HTTPException(status_code=404, detail="sw.js non trovato")
     return FileResponse(sw_path, media_type="application/javascript", headers=_NO_CACHE_HEADERS)
 
+@app.get("/login.html")
+def serve_login_page():
+    """La pagina di accesso: il logout la richiede (location.replace('login.html')) e, dopo un
+    logout, l'app deve poterci tornare. Senza questa rotta il ponte rispondeva 404 e l'utente
+    restava chiuso fuori. Si serve dalla cartella del pacchetto (sempre presente), con gli
+    stessi header no-cache di app.html. Cura del 6 novembre 2026 (login bloccato dopo logout)."""
+    path = os.path.join(_BASE_DIR, "login.html")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="login.html non trovato")
+    return FileResponse(path, media_type="text/html", headers=_NO_CACHE_HEADERS)
+
+@app.get("/login.html")
+def serve_login_page():
+    """La pagina di accesso: il logout la richiede (location.replace('login.html')) e, dopo un
+    logout, l'app deve poterci tornare. Senza questa rotta il ponte rispondeva 404 e l'utente
+    restava chiuso fuori. Si serve dalla cartella del pacchetto (sempre presente), con gli
+    stessi header no-cache di app.html. Cura del 6 novembre 2026 (login bloccato dopo logout)."""
+    path = os.path.join(_BASE_DIR, "login.html")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="login.html non trovato")
+    return FileResponse(path, media_type="text/html", headers=_NO_CACHE_HEADERS)
+
 
 class ConnectRequest(BaseModel):
     login: int
@@ -2008,7 +2030,7 @@ def _carica_accesso() -> dict:
 ACCESSO_REMOTO = _carica_accesso()
 
 # Chi non e' il PC deve presentare la chiave: stesso controllo, stesso file, degli altri due servizi.
-_accesso.installa_controllo_chiave(app)
+_accesso.installa_controllo_chiave(app, percorsi_liberi=("/login.html",))
 
 # ===================== IL CLOUD NOSTRO, SU QUESTO COMPUTER =====================
 #
