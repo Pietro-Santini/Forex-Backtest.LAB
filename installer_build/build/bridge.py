@@ -31,6 +31,7 @@ Test rapido:
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -59,11 +60,129 @@ import accesso_condiviso as _accesso
 # di log accanto all'eseguibile: resta uno strumento di diagnostica anche senza finestra
 # visibile, coerente col comportamento richiesto (servizio invisibile in background, mai
 # una finestra che l'utente possa vedere o dover gestire).
+# UN TETTO AL LOG, E LA CHIAVE FUORI DAL DISCO.
+#
+# MISURATO sul computer del proprietario (6 novembre 2026): ForexBacktestLAB.log era arrivato a
+# 91 MB e 1.023.510 righe. Il file si apriva in append e non veniva MAI ruotato, quindi cresceva
+# per sempre: su un disco con poco spazio libero e' una cosa che prima o poi ferma l'applicazione,
+# e per diagnosticare un difetto un file da 91 MB e' inutilizzabile.
+#
+# CHE COSA C'ERA DENTRO, contato invece che immaginato:
+#     /positions        ~295.000 righe
+#     /orders           ~286.000
+#     /account          ~279.000
+#     /health            ~29.000
+#     /account_history   ~17.000
+# cioe' l'88% del file era il NOSTRO polling RIUSCITO: l'app interroga MT5 tre volte al secondo e
+# uvicorn scrive una riga per ogni chiamata. Il disturbo esterno che bussava su /v1/models era
+# l'1%: zittire quello non avrebbe risolto niente. (L'avevo dato per colpevole a occhio, e la
+# misura mi ha smentito: e' il motivo per cui in questo progetto si conta prima di curare.)
+#
+# E UNA COSA PIU' SERIA: in circa 250.000 di quelle righe compariva "?chiave=..." in chiaro, cioe'
+# la chiave condivisa del ponte scritta su disco. Un log non e' il posto di una chiave.
+#
+# LA CURA STA ALL'ULTIMO CANCELLO - la scrittura del file - e non nei logger di uvicorn: uvicorn
+# riconfigura il logging da se' quando parte (dictConfig), e un filtro messo sui suoi logger
+# potrebbe venire spazzato via senza che nessuno se ne accorga. Qui invece passa TUTTO quello che
+# finisce nel file, da qualunque libreria, e non c'e' modo di rompere uvicorn.
+# Tre regole, in ordine:
+#   1. la chiave diventa "chiave=***" SEMPRE, anche sulle righe che si tengono;
+#   2. le righe del polling RIUSCITO (2xx/304 su quelle rotte) non si scrivono. Gli errori SI':
+#      4xx e 5xx sono esattamente cio' che si va a cercare quando qualcosa si rompe;
+#   3. oltre il tetto il file si ruota tenendo UNA copia precedente (.1): c'e' sempre un pezzo di
+#      storia, ma lo spazio occupato ha un massimo.
+_LOG_MAX_BYTE = 5 * 1024 * 1024          # 5 MB, piu' la copia .1: al massimo ~10 MB in tutto
+_LOG_RE_CHIAVE = re.compile(r"([?&]chiave=)[^&\s\"]+")
+# Riga di accesso di uvicorn: '... "GET /positions HTTP/1.1" 200 OK'. Si scarta SOLO se la rotta e'
+# una di quelle ad alta frequenza E l'esito e' buono.
+_LOG_RE_RUMORE = re.compile(
+    r"\"(?:GET|POST|HEAD) /(?:positions|orders|account|account_history|health|news|v1/models)\b[^\"]*\""
+    r"\s+(?:2\d\d|304)\b"
+)
+
+
+class _LogConTetto(object):
+    """Il file di log con la chiave mascherata, il polling riuscito tolto e un tetto di spazio.
+
+    Finisce in sys.stdout e sys.stderr, quindi deve comportarsi come il file che sostituisce:
+    tutto cio' che non e' ridefinito qui viene delegato al file vero (encoding, isatty, fileno...).
+    Non solleva MAI: un log che fa crashare il servizio e' peggio di nessun log."""
+
+    def __init__(self, percorso):
+        self._percorso = percorso
+        self._resto = ""
+        self._fh = open(percorso, "a", buffering=1, encoding="utf-8", errors="replace")
+        try:
+            self._scritti = os.path.getsize(percorso)
+        except Exception:
+            self._scritti = 0
+
+    def __getattr__(self, nome):
+        # Attenzione: __getattr__ viene chiamato solo per cio' che non esiste sull'oggetto, quindi
+        # self._fh (impostato in __init__) non ci passa e non si crea una ricorsione.
+        return getattr(self._fh, nome)
+
+    def _ruota(self):
+        """Chiude, sposta su .1 (sovrascrivendo la .1 precedente) e riapre vuoto. Su Windows un
+        file aperto non si puo' rinominare: per questo si chiude prima."""
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+        try:
+            vecchio = self._percorso + ".1"
+            if os.path.exists(vecchio):
+                os.remove(vecchio)
+            os.replace(self._percorso, vecchio)
+        except Exception:
+            pass
+        try:
+            self._fh = open(self._percorso, "a", buffering=1, encoding="utf-8", errors="replace")
+            self._scritti = 0
+            self._fh.write("--- log ruotato: la parte precedente sta in ForexBacktestLAB.log.1 ---\n")
+        except Exception:
+            pass
+
+    def write(self, testo):
+        try:
+            if not testo:
+                return 0
+            # Le righe arrivano anche a pezzi (prima il messaggio, poi il terminatore): si decide
+            # per RIGA INTERA, altrimenti si scarterebbe mezzo messaggio e il file diventerebbe
+            # illeggibile proprio quando serve.
+            self._resto += testo
+            if "\n" not in self._resto:
+                return len(testo)
+            pezzi = self._resto.split("\n")
+            self._resto = pezzi.pop()
+            tenute = []
+            for riga in pezzi:
+                riga = _LOG_RE_CHIAVE.sub(r"\1***", riga)
+                if _LOG_RE_RUMORE.search(riga):
+                    continue
+                tenute.append(riga)
+            if tenute:
+                blocco = "\n".join(tenute) + "\n"
+                self._fh.write(blocco)
+                self._scritti += len(blocco)
+                if self._scritti >= _LOG_MAX_BYTE:
+                    self._ruota()
+            return len(testo)
+        except Exception:
+            return len(testo or "")
+
+    def flush(self):
+        try:
+            self._fh.flush()
+        except Exception:
+            pass
+
+
 _LOG_FILE_PATH = None
 if getattr(sys, "frozen", False) and sys.stdout is None:
     try:
         _LOG_FILE_PATH = os.path.join(os.path.dirname(sys.executable), "ForexBacktestLAB.log")
-        _log_fh = open(_LOG_FILE_PATH, "a", buffering=1, encoding="utf-8")
+        _log_fh = _LogConTetto(_LOG_FILE_PATH)
         sys.stdout = _log_fh
         sys.stderr = _log_fh
     except Exception:

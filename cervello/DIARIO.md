@@ -2,6 +2,46 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-06 — Claude — **v2.0.98: il log aveva 91 MB, l'88% era il nostro polling, e dentro
+  c'era la chiave in chiaro 250.000 volte**.
+  1. **MISURATO, e la misura mi ha smentito.** Avevo detto al proprietario che il log era gonfiato
+     da «una cosa che bussa su /v1/models e non e' nostra». Contate le righe:
+     `/positions` ~295.000, `/orders` ~286.000, `/account` ~279.000, `/health` ~29.000,
+     `/account_history` ~17.000 — l'**88%** di 1.023.510 righe era il **nostro** polling riuscito
+     (l'app interroga MT5 tre volte al secondo, e uvicorn scrive una riga per chiamata).
+     `/v1/models` era l'**1%**. Zittire il disturbo esterno non avrebbe risolto niente: e' il
+     motivo per cui qui si conta prima di curare, e stavolta l'ho pagato io.
+  2. **LA COSA PIU' SERIA NON ERA LO SPAZIO.** In circa **250.000** righe compariva
+     `?chiave=...` in chiaro: la chiave condivisa del ponte, scritta su disco centinaia di
+     migliaia di volte. Un log non e' il posto di una chiave.
+  3. **LA CURA STA ALL'ULTIMO CANCELLO**, la scrittura del file (`_LogConTetto`), e non nei logger
+     di uvicorn: uvicorn riconfigura il logging da se' quando parte, e un filtro messo sui suoi
+     logger potrebbe venire spazzato via senza che nessuno se ne accorga. Tre regole: la chiave
+     diventa `chiave=***` sempre; il polling **riuscito** (2xx/304 su quelle rotte) non si scrive,
+     ma **gli errori si'** — 4xx e 5xx sono esattamente cio' che si cerca quando qualcosa si
+     rompe; oltre 5 MB il file ruota tenendo una copia `.1`, quindi al massimo ~10 MB in tutto.
+     Le righe si decidono **intere**: uvicorn scrive il messaggio e il terminatore in due volte, e
+     decidere su un pezzo vorrebbe dire scartare mezza riga.
+  4. **DUE ERRORI MIEI NEL CONTROLLO, scritti qui perche' sono istruttivi.** Per provare la cura
+     nel verso opposto ho spento le regole, e la prima volta ho manomesso il file con una
+     sostituzione che ha preso piu' del previsto: una prova che doveva restare verde e' diventata
+     rossa e una che doveva diventare rossa e' rimasta verde. **Un esito cosi' non dimostra
+     niente**, e l'ho rifatto. Al secondo giro ho spento la regola della chiave con
+     un'espressione **senza gruppo di cattura**: `sub(r"***", ...)` con un gruppo che non
+     esiste solleva, l'eccezione e' finita nel `try/except` che protegge il servizio, e il file
+     risultava vuoto — sembrava un difetto della cura, era il banco. Rifatto con
+     `(?!x)(x)`: spenta la regola la chiave finisce nel file, accesa no. Idem per il rumore.
+     Il `try/except` largo resta giusto (un log non deve mai far cadere il servizio) ma nasconde
+     gli errori di programmazione: le prove sono l'unica rete, ed e' per questo che
+     `test_la_chiave_non_finisce_nel_file` controlla anche che ci sia `chiave=***` e non solo che
+     il segreto manchi.
+  5. **Una curiosita' utile:** quelle 11.008 chiamate a `/v1/models` sono qualcosa sul computer
+     del proprietario che cerca un'API in stile OpenAI sulla porta 8000. Rispondiamo 404 e non
+     cambia niente, ma da ora non riempie piu' il log.
+  **Collaudo:** ponte **237 verdi** (230 + 7 nuove in `test_log_con_tetto.py`), provate nei due
+  versi una regola per volta. **Serve reinstallare il Setup**: e' cambiato `bridge.py`.
+  **Commit:** uno, versione 2.0.98.
+
 - 2026-11-06 — Claude — **v2.0.97: l'app era inutilizzabile perché UNA variabile rispondeva a DUE
   domande. Il login Google nell'app desktop torna sul popup, e il ponte smette di spegnersi da
   solo**.
