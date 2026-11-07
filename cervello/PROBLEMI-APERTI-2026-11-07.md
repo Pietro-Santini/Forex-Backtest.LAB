@@ -35,7 +35,7 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
 - Nota: e' un problema GIA' successo e poi risolto (v2.0.99 tolse «il tempo e'
   infinito»). Con la pagina v2.1.1 servita sopra un ponte vecchio il sintomo e'
   tornato: la cura va rifatta e resa stabile.
-- Stato: DA FARE (cura pronta: congelamento SOLO in auto-segui).
+- Stato: FATTO in v2.1.2 (congelamento solo in auto-segui). Da ricontrollare sul PC.
 
 ## P1 — REGRESSIONE MIA (v2.1.0): bloccavo lo spostamento orizzontale
 - Sintomo: «il grafico mi si sposta solo in verticale ma non in orizzontale».
@@ -44,7 +44,10 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
 - CURA: congelamento solo se `followLatest` (auto-segui): ciucci si sposta il
   grafico followLatest diventa false e il congelamento sparisce.
   Test obbligatori: pan libero a mercato chiuso + auto-segui che non avanza.
-- Stato: FATTO, DA VERIFICARE.
+- Stato: FATTO e pubblicato in v2.1.2. Congelamento solo se followLatest: appena si sposta
+  il grafico followLatest diventa false e il congelamento non c'e' piu'. Provato nei due versi
+  (congelamento spento del tutto -> 2 prove rosse; cura v2.1.0 rimessa -> la prova del pan in
+  avanti resta rossa).
 
 ## P2 — FIREBASE: continua a leggere e scrivere a mercato chiuso
 - Sintomo (segnalato dal proprietario): «nonostante tutto i mercati sono chiusi, su Firebase
