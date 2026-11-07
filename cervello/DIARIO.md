@@ -1,3 +1,16 @@
+- 2026-11-07 - OpenCode - **v2.1.6: la riga degli orologi ora si legge.**
+  SEGNALATO dal proprietario: «orologio non c'e'». Il campo C'ERA (l'avevo aggiunto per sapere
+  quale orologio decide la chiusura del mercato), ma il rendering lo stampava come
+  "orologio: [object Object]" - una riga che non si legge e non si copia, cioe' inutile.
+  Senza quei numeri non si puo' curare la chiusura decisa sull'orologio sbagliato (MT5 va
+  avanti anche di un'ora rispetto al dispositivo, come e' gia' scritto nel cervello del
+  progetto).
+  CURA: il valore si rende leggibile - ogni oggetto si apre in coppie chiave=valore. La riga
+  esce come:
+    orologio             : {dispositivo=..., mt5=..., scartoMinuti=0, fase=closed, fermo=true, ultimaCandela=...}
+  Test: misura_orologio_leggibile.test.mjs (rosso-senza/verde-con provati).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-07 - OpenCode - **v2.1.5: a mercato chiuso l'asse si ferma, e questa e' un'applicazione.**
   **1) L'ASSE SI ALLUNGAVA OLTRE LA CHIUSURA.** Dallo screenshot del proprietario: XAU/USD 1m con
   l'asse da "nov 22:29" a "07 nov '26 23:59" - di SABATO, mercato chiuso dal venerdi' sera.
