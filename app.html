@@ -8095,6 +8095,15 @@ function graficoControllaModifiche(){
  if(graficoVisto[ki]==null)graficoVisto[ki]=ji;
  else if(ji!==graficoVisto[ki]){ graficoVisto[ki]=ji; segna(ki); }
 }
+let __graficoUltimaRilettura=0;
+function fblGraficoRiletturaConsentita(forza){
+  if(forza){ __graficoUltimaRilettura=Date.now(); return true; }
+  let chiuso=false;
+  try{ chiuso = liveModeActive && fblMercatoFermoOra(currentAssetKey, Date.now()); }catch(e){}
+  if(chiuso && Date.now()-__graficoUltimaRilettura<30*60000)return false;   // al massimo ogni mezz'ora
+  __graficoUltimaRilettura=Date.now();
+  return true;
+}
 async function graficoCloudAvvia(){
  if(PIP_SLOT>0||graficoAttivo)return;
  const cloud=await waitForFxbtCloud();
@@ -8117,10 +8126,33 @@ async function graficoCloudAvvia(){
  // Rete di sicurezza: ogni 60 s (e al ritorno sull\'app) si rilegge il documento intero. Un
  // aggiornamento in tempo reale perso (rete del telefono che cambia, app in background) non
  // lascia mai i disegni indietro per piu' di un minuto.
- const rileggi=async()=>{ try{ const v=await cloud.graficoLeggi(); if(v)graficoRicevi(v); }catch(e){ graficoStat.errore='rilettura non riuscita'; graficoAggiornaStato(); } };
+ // A MERCATO CHIUSO NON SI CHIEDE NIENTE AL CLOUD.
+ //
+ // MISURATO dal proprietario (7 novembre 2026): a mercato chiuso il progetto continua a
+ // leggere e scrivere - letture 6,4K al giorno, scritture 3,1K - e «in realta' non dovrebbe
+ // ne' leggere ne' scrivere nulla a mercati chiusi».
+ //
+ // Questa e' la RETE DI SICUREZZA (ogni 60 s rilegge il documento intero, per non lasciare i
+ // disegni indietro se un aggiornamento in tempo reale va perduto). A mercato chiuso gli
+ // altri dispositivi non stanno lavorando sul grafico: e' una lettura al minuto per scoprire
+ // niente. Se qualcosa cambia davvero - l'utente torna sull'app, la riapre, o tocca un
+ // disegno - la rilettura parte lo stesso (visibilitychange passa forza=true).
+ // LA DECISIONE STA QUI, FUORI DAL GUSCIO: e' l'unico modo di provarla.
+ // MISURATO dal proprietario (7 novembre 2026): a mercato chiuso il progetto continua a leggere
+ // e scrivere - letture 6,4K al giorno, scritture 3,1K - e «in realta' non dovrebbe ne' leggere
+ // ne' scrivere nulla a mercati chiusi». La rete di sicurezza rilegge l'intero documento dal
+ // cloud ogni 60 s: a mercato chiuso gli altri dispositivi non stanno lavorando sul grafico,
+ // quindi e' una lettura al minuto per scoprire niente. Qui, chiuso, si allenta a mezz'ora; e
+ // se qualcosa cambia davvero (si torna sull'app, la si riapre, si tocca un disegno) la
+ // rilettura parte lo stesso, perche' quei casi passano forza=true.
+
+ const rileggi=async(forza)=>{
+   if(!fblGraficoRiletturaConsentita(forza))return;
+   try{ const v=await cloud.graficoLeggi(); if(v)graficoRicevi(v); }catch(e){ graficoStat.errore='rilettura non riuscita'; graficoAggiornaStato(); }
+ };
  setInterval(rileggi,60000);
  setInterval(graficoAggiornaStato,5000);
- document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')rileggi(); });
+ document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible')rileggi(true); });
  graficoAggiornaStato();
  window.addEventListener('pagehide',()=>{ if(graficoDaInviare.size)graficoInviaOra(); });
 }

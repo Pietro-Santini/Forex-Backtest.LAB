@@ -1,3 +1,18 @@
+- 2026-11-07 - OpenCode - **v2.1.7: a mercato chiuso Firebase non viene interpellato.**
+  MISURATO dal proprietario (quota Firebase, 7 novembre 2026): letture 6,4K/giorno, scritture
+  «in realta' non dovrebbe ne' leggere ne' scrivere nulla a mercati chiusi».
+  CAUSA: la rete di sicurezza rilegge l'intero documento dal cloud OGNI 60 SECONDI
+  (setInterval(rileggi,60000)). A mercato chiuso gli altri dispositivi non stanno lavorando
+  sul grafico: e' una lettura al minuto per scoprire niente.
+  CURA: a mercato chiuso la rilettura si allenta a una ogni mezz'ora; se qualcosa cambia
+  davvero (si torna sull'app, la si riapre, si tocca un disegno) parte lo stesso, perche'
+  quei casi passano forza=true. A mercato aperto tutto come prima.
+  La decisione sta in una funzione sua (fblGraficoRiletturaConsentita) fuori dal guscio: e'
+  l'unico modo di provarla (la prima stesa era dentro una closure, irraggiungibile dai test -
+  e una cura non misurabile e' una cura a meta').
+  Test: cloud_zitto_a_mercato_chiuso.test.mjs (3 prove, rosso-senza/verde-con).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-07 - OpenCode - **v2.1.6: la riga degli orologi ora si legge.**
   SEGNALATO dal proprietario: «orologio non c'e'». Il campo C'ERA (l'avevo aggiunto per sapere
   quale orologio decide la chiusura del mercato), ma il rendering lo stampava come

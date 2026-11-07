@@ -103,7 +103,9 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
   controllo aggiornamenti / polling MT5 continuano a scrivere anche quando il mercato è
   chiuso e non cambia niente.
 - Da fare: misurare quali scritture/letture partono a mercato chiuso, poi zittirle.
-- Stato: DA FARE (dopo P0/P1).
+- Stato: PRIMA CURA in v2.1.7 (la rilettura di sicurezza, che era una al minuto). RESTA da
+  misurare chi altro scrive/legge a mercato chiuso: la quota diceva 3,1K scritture giorno, e
+  quelle non vengono da una rilettura.
 
 ## Dopo — finestre duplicate (cervello/RICHIESTE-DUPLICA-FINESTRA.md)
 - 9 voci, lavoro a se. Non si tocca finche' P0/P1 non sono chiusi e pubblicati.
