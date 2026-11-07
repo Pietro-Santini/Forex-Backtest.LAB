@@ -13971,7 +13971,19 @@ function getViewWindow(){
   // (0.12*n) NON si applica, altrimenti l'asse si estende oltre l'ultima candela e il
   // grafico sembra "andare avanti" fino alla mezzanotte. Il margine serve solo quando il
   // mercato e' aperto (spazio per gli orari futuri e i pallini delle notizie).
-  const liveMargin=(liveModeActive&&!liveReplayActive&&!fblMercatoFermoOra(currentAssetKey,Date.now()))?n*LIVE_FUTURE_MARGIN_FRACTION:0;
+  // IL MARGINE FUTURO (lo spazio vuoto dopo l'ultima candela, che allunga l'asse) esiste
+  // SOLO a mercato APERTO. A mercato chiuso non deve esserci: e' quello che fa arrivare
+  // l'asse a "07 nov 23:59" di sabato, col mercato chiuso dal venerdi' alle 22.
+  //
+  // PERCHE' DUE CONTROLLI E NON UNO. Prima qui c'era solo fblMercatoFermoOra(), che pero'
+  // risponde "non fermo" quando MT5 dice che il mercato e' APERTO - e la sua risposta puo'
+  // essere vecchia di dieci minuti (la cache di fblMercatoMt5Noto). Basta quel minuto per
+  // far ripartire l'asse. La fase della sessione (liveSessionPhaseNow) e' indipendente da
+  // quella cache: se dice chiuso, il margine non si mette, e basta.
+  const _apertoOra = liveModeActive && !liveReplayActive
+    && !fblMercatoFermoOra(currentAssetKey, Date.now())
+    && liveSessionPhaseNow() !== 'closed';
+  const liveMargin = _apertoOra ? n*LIVE_FUTURE_MARGIN_FRACTION : 0;
  // REPLAY FLUIDO (richiesto): mentre play e in corso si riserva una colonna vuota extra a
  // destra dell'ultima candela per la formazione "come dal vivo" (replayDisegnaFormazione).
  // dataEnd resta = idx (vedi sotto), quindi nessuna candela vera in piu: solo spazio dove
@@ -17989,7 +18001,15 @@ function draw(){
  const _footprintEntries=_footprintOn?data.map((r,i)=>{
    const xx=x(i);
    const real=footprintByBucket[footprintBucketStart(parseDateTime(r.date))];
-   const hasReal=!!(real&&Object.keys(real.rows).length);
+   // "Questo bucket ha dati" senza costruire l'elenco delle chiavi: Object.keys() alloca un
+   // array con TUTTI i livelli di prezzo della candela (50-100 elementi), e questo giro
+   // scandisce fino a 2000 candele a fotogramma: 200.000 array buttati via per sapere soltanto
+   // se il primo esiste. MISURATO dal proprietario (7 novembre 2026): la sezione zoneZeroPrint
+   // costava 183 ms sui 238 di disegno, con 50000 candele a grafico. Un giro che si ferma al
+   // primo risultato costa uno, non cento.
+   let _haRighe=false;
+   if(real&&real.rows){ for(const _pk in real.rows){ _haRighe=true; break; } }
+   const hasReal=!!(real&&_haRighe);
    const fp=(bw>=_FOOTPRINT_MIN_BW&&hasReal)?real:null;
    // CORREZIONE ESPLICITA DELL'UTENTE: i pallini Absorption/Rejection NON seguono lo stesso
    // taglio del footprint normale (fp, sopra — sotto _FOOTPRINT_MIN_BW torna alla candela
@@ -27317,6 +27337,43 @@ function toggleMainChartFullscreen(){
    fblEntraSchermoInteroCss();
  }
 }
+// ===================== QUESTA E' UN'APPLICAZIONE, NON UN SITO WEB =====================
+//
+// RICHIESTO ESPLICITAMENTE dal proprietario (7 novembre 2026): «questa e' un'applicazione e
+// deve essere del tutto sganciata da un sito web o da Chrome o da qualsiasi altro motore di
+// ricerca... questi pulsanti non devono esserci e non devono fare nulla, nessuna
+// applicazione fa una cosa del genere».
+//
+// Ha ragione, e non e' una questione di gusto: premere F5 o Ctrl+R mentre si guarda una
+// posizione aperta ricarica la pagina, butta lo stato in memoria e fa ricominciare tutto da
+// capo - mentre l'app ha un suo modo di aggiornarsi (il pulsante «Aggiorna», che installa
+// davvero). Qui quei tasti non fanno niente: l'aggiornamento si chiede al programma, non al
+// motore di rendering che per caso la ospita.
+//
+// Si permette solo dove si SCRIVE: in una casella di testo F5/Ctrl+R non sarebbero comunque
+// scorciatoie, e cancellarle sarebbe un difetto in piu'.
+(function fblVietaRicaricaDaBrowser(){
+  const vietati=[
+    {key:'F5'},                                   // ricarica
+    {key:'r',ctrl:true},                          // Ctrl+R
+    {key:'R',ctrl:true,shift:true},               // Ctrl+Shift+R (ricarica ignorando la cache)
+    {key:'r',ctrl:true,shift:true},
+    {key:'F5',ctrl:true},                         // qualche browser la usa per la ricarica forzata
+  ];
+  document.addEventListener('keydown',(e)=>{
+    const t=e.target;
+    if(t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable))return;
+    for(const v of vietati){
+      if(e.key!==v.key)continue;
+      if(v.ctrl&&!e.ctrlKey)continue;
+      if(!v.ctrl&&e.ctrlKey)continue;
+      if(v.shift&&!e.shiftKey)continue;
+      e.preventDefault();
+      try{ $('status').textContent=' questa e un\'applicazione: si aggiorna dal pulsante Aggiorna, non da F5.'; }catch(err){}
+      return;
+    }
+  },true);
+})();
 // Esc esce dallo schermo intero anche nella variante CSS (il browser gestisce da sé solo
 // quello nativo).
 document.addEventListener('keydown',(e)=>{ if(e.key==='Escape'&&fblSchermoInteroCssAttivo())fblEsciSchermoInteroCss(); });

@@ -1,3 +1,25 @@
+- 2026-11-07 - OpenCode - **v2.1.5: a mercato chiuso l'asse si ferma, e questa e' un'applicazione.**
+  **1) L'ASSE SI ALLUNGAVA OLTRE LA CHIUSURA.** Dallo screenshot del proprietario: XAU/USD 1m con
+  l'asse da "nov 22:29" a "07 nov '26 23:59" - di SABATO, mercato chiuso dal venerdi' sera.
+  CAUSA MISURATA: lo spazio vuoto dopo l'ultima candela (liveMargin) si metteva guardando UNA
+  sola autorita', fblMercatoFermoOra(), che risponde "non fermo" quando MT5 dice che il mercato
+  e' aperto - e la sua risposta puo' essere vecchia di dieci minuti. Basta quel minuto per far
+  ripartire l'asse. CURA: il margine esiste solo a mercato aperto, e la chiusura si decide su DUE
+  autorita' (calendario dello strumento E fase della sessione, che non dipende da quella cache).
+  Test: asse_si_ferma_alla_chiusura.test.mjs (2 prove, rosso-senza/verde-con).
+  **2) F5, CTRL+R E CTRL+SHIFT+R NON FANNO PIU' NIENTE.** RICHIESTO: «questa e' un'applicazione
+  e deve essere del tutto sganciata da un sito web o da Chrome... questi pulsanti non devono
+  esserci e non devono fare nulla». Ricaricare mentre si guarda una posizione aperta butta lo
+  stato in memoria, mentre l'app ha gia' il SUO modo di aggiornarsi: il pulsante Aggiorna.
+  Dove si scrive (caselle di testo) i tasti restano liberi. Test: applicazione_non_sito.test.mjs
+  (3 prove con la TASTIERA VERA: il primo tentativo con eventi sintetici non misurava niente,
+  provato - restava verde nei due versi).
+  **3) IL DISEGNO DELLE ZONE ZERO-PRINT.** Object.keys() sulle righe di footprint alloca un array
+  con tutti i livelli di prezzo della candela, 2000 candele a fotogramma: 200.000 array buttati
+  via per sapere se il primo esiste. Ora un giro che si ferma al primo risultato. (Misurato dal
+  proprietario: 183 ms sui 238 di disegno con 50000 candele.)
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-07 - OpenCode - **v2.1.4: due cure, una trovata dal proprietario guardando la duplicata.**
   **VERIFICATA LA CURA DEI CRASH.** Lo stesso pannello del proprietario, con MT5 collegato:
   `lettura posizioni: 318 volte, media 24 ms, peggiore 354 ms` - ZERO non riuscite (prima 1132
