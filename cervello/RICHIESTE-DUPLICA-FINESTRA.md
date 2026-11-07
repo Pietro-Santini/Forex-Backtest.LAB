@@ -23,12 +23,16 @@ Ogni voce va riprodotta e misurata prima di curare (regola: si misura prima di c
    mostra pochi asset, perde le watchlist, in alcuni casi si apre in modalità storico CSV
    invece di seguire il conto della madre. Asset e watchlist devono essere identici,
    e il conto (MT5 / CSV / Kraken) lo stesso.
-   - Stato: DA FARE.
+   - Stato: FATTO IN PARTE (v2.1.1): la duplicata ora entra in Live se la madre e' in Live
+   (vedi pip_conto_madre.test.mjs). RESTA: elenco asset identico alla madre e watchlist
+   (oggi l'elenco arriva solo da MT5/Capital di questa finestra).
 
 5. **Collegamento tra le sessioni**: le duplicate sono sessioni diverse ma devono
    condividere il conto selezionato. Se la madre passa da MT5 a CSV, le duplicate
    si adattano automaticamente.
-   - Stato: DA FARE.
+   - Stato: PARZIALE (v2.1.1): all'apertura la duplicata prende la modalita' della madre.
+   RESTA: propagare il CAMBIO di modalita' dopo l'apertura (madre che passa Live->Storico
+   o cambia conto con duplicate gia' aperte).
 
 6. **Replay sincronizzato**: premendo Replay con duplicate aperte, il programma chiede
    se applicare il replay anche alle altre duplicate. Se confermato, le duplicate
