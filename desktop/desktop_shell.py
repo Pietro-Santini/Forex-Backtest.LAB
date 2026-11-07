@@ -231,7 +231,7 @@ def _patch_zoom_and_popups():
         # ATTENZIONE AL NOME: prima qui si scriveva `on_web_view_ready` (con un underscore in
         # piu'), mentre l'originale era stato letto da `on_webview_ready`. Due attributi
         # DIVERSI: il patch non agganciava niente e questa funzione era codice morto dal
-        // primo giorno. MISURATO confrontando i due nomi attributo per attributo.
+        # primo giorno. MISURATO confrontando i due nomi attributo per attributo.
         ec.EdgeChrome.on_webview_ready = _patched
 
         def _allow_native_popup(self, sender, args):
