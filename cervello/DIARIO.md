@@ -1,3 +1,5 @@
+- 2026-11-07 - OpenCode - **v2.1.0: disegni e indicatori si fermano a mercato chiuso.** Dopo v2.0.99 le candele si fermavano ma la finestra temporale (start/dataStart) avanzava ancora con viewEnd, quindi i disegni e gli indicatori scivolavano. CURA: in getViewWindow() il congelamento (end = min(end, ultima candela aperta)) viene applicato PRIMA di calcolare start/dataStart/dataEnd, cosi la vista orizzontale resta ferma. Congelamento solo a mercato chiuso, solo in Live (non replay), mai per le crypto. Usa solo liveSessionPhaseAt per non costruire il calendario dello strumento a ogni passo. Collaudo: verde.
+
 # Diario dei giri di agenti
 
 Formato: data — chi — cosa — esito collaudo — commit.

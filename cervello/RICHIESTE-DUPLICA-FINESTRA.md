@@ -1,0 +1,70 @@
+# Richieste aperte — finestra duplicata («Duplica finestra»)
+
+Lista creata il 7 novembre 2026. Lavoro separato dal rilascio mercato-chiuso.
+Ogni voce va riprodotta e misurata prima di curare (regola: si misura prima di correggere).
+
+## Difetti segnalati
+
+1. **Sfarfallio delle posizioni aperte** nella duplicata: TP, SL, punti di entrata,
+   P/L live, prezzo attuale non coincidono con la madre e lampeggiano. Causa da misurare:
+   due loop che si pestano o stato condiviso non sincronizzato.
+   - Stato: DA FARE.
+
+2. **Schermo intero bloccato sulla pagina madre** dopo aver duplicato una finestra.
+   La madre deve poter andare a schermo intero anche con duplicate aperte.
+   - Stato: DA FARE.
+
+3. **Scroll indesiderato** nella duplicata: rodellina/dito fanno scorrere la pagina,
+   ma deve esserci solo il grafico. La barra laterale degli strumenti e del replay
+   deve restare ancorata a sinistra.
+   - Stato: DA FARE.
+
+4. **Elenco asset limitato / modalità CSV** su una seconda duplicata: la duplicata
+   mostra pochi asset, perde le watchlist, in alcuni casi si apre in modalità storico CSV
+   invece di seguire il conto della madre. Asset e watchlist devono essere identici,
+   e il conto (MT5 / CSV / Kraken) lo stesso.
+   - Stato: DA FARE.
+
+5. **Collegamento tra le sessioni**: le duplicate sono sessioni diverse ma devono
+   condividere il conto selezionato. Se la madre passa da MT5 a CSV, le duplicate
+   si adattano automaticamente.
+   - Stato: DA FARE.
+
+6. **Replay sincronizzato**: premendo Replay con duplicate aperte, il programma chiede
+   se applicare il replay anche alle altre duplicate. Se confermato, le duplicate
+   entrano in replay e le posizioni replay si trasportano sulle altre.
+   - Stato: DA FARE.
+
+7. **Disegni sincronizzati**: un disegno manuale aggiunto su una pagina deve
+   comparire anche sulle altre duplicate, indipendentemente da quale è la madre.
+   - Stato: DA FARE.
+
+8. **Modello sulla barra strumenti**: selezionando un disegno salvato come modello e
+   poi cliccando sul grafico, il disegno viene tracciato subito con le priorità salvate;
+   al trascinamento/applicazione si applicano tutte le priorità salvate.
+   (Verificare: potrebbe già funzionare.)
+   - Stato: DA VERIFICARE.
+
+9. **Chiusura lenta delle operazioni** (TP che scatta, chiusura a mercato): già lenta
+   di suo, e con duplicate aperte rallenta ancora di più. Le chiusure devono essere
+   istantanee. Le duplicate non devono rallentare il sistema.
+   - Stato: DA FARE.
+
+## Note per chi cura
+- Misurare prima: riprodurre il flickering con le DevTools (Performance) e contare
+  quanti aggiornamenti al secondo arrivano alla duplicata.
+- Il guardiano `currentAssetKey` («Mai far comparire due grafici») va rispettato
+  anche sulla strada nuova.
+- Non mescolare queste modifiche con il rilascio mercato-chiuso: lavoro a sé.
+
+## Ordine proposto
+Iniziare dalle più concrete e misurabili:
+  - 3 (scroll/overflow) — CSS, verificabile in 1 minuto.
+  - 4 (asset list / conto) — confronto asset disponibili tra madre e duplicata.
+  - 1 (flickering) — richiede misura degli aggiornamenti.
+  - 7 (disegni) — estendere il canale BroadcastChannel esistente.
+  - 6 (replay) — aggiungere richiesta di conferma + sync.
+  - 5 (collegamento conto) — propagazione del conto selezionato.
+  - 2 (schermo intero) — likely facile, da verificare.
+  - 8 (modello) — verifica comportamento attuale.
+  - 9 (prestazioni) — profiling, da fare per ultimo.
