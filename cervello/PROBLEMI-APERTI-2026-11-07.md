@@ -6,10 +6,21 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
 ## P0 — CRASH: il programma crasha da solo, anche restando dentro
 - Sintomo: «continua a crashare anche quando sono dentro da un momento all'altro,
   piu' andiamo avanti e piu' crasha».
-- Fatto: bridge.log sano; Mt5FeedServer.log 25 MB (log che cresce);
-  ForexBacktestLAB.log 2,4 MB con solo OSError WinError 64 su accept (benigno).
-- Da misurare: cosa fa crashatre la finestra pywebview (ForexBacktestLABDesktop.exe).
-  Cercare dump/eventi su Windows, poi riprodurre.
+- **CAUSA TROVATA CON LA MISURA** (pannello prestazioni del proprietario, 7 novembre 2026):
+  la pagina era servita dal ponte di QUESTO computer («da questa pagina:
+  http://127.0.0.1:8000»), ma la strada degli ordini era 'server' (/pc/8000). Risultato:
+  lettura posizioni 1135 volte di cui **1132 non riuscite**, ordini 1131 su 1135, lettura
+  conto 50 su 53; tempi fino a 30-40 s a Richiesta persa. La pagina passava il suo tempo
+  ad aspettare risposte che non arrivavano.
+- CURA (v2.1.3): se l'indirizzo della pagina e' il computer stesso, gli ordini stanno in
+  locale, scelto senza indagini; e dopo tre letture fallite il polling si allenta.
+- Stato: CURATO in v2.1.3, DA VERIFICARE sul PC (rileggere il pannello prestazioni:
+  `lettura posizioni ... 0 non riuscite`).
+
+## P0 — DISEGNO LENTO: UN SOLO PROFILO VOLUMETRICO COSTA 86 ms A FOTOGRAMMA
+- Dalla stessa misura: `disegni 9`, `disegnoMedio_ms 113`, di cui `disegniUtente 86` e
+  `disegno:vpfixed 86`. Con 95347 candele e 271199 tick il profilo volumetrico si rifa
+  troppo spesso: e' quello che fa "scattare" il grafico (`scatti 9`, `scattoPeggiore 141 ms`).
 - Stato: DA FARE.
 
 ## P0 — AGGIORNAMENTO: il pulsante non compare e la versione si aggiorna da sola

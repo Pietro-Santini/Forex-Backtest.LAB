@@ -38378,16 +38378,56 @@ async function fblRisponde(url,ms){
 // il sintomo che non tornava, cioe' grafico e segnali che funzionavano e la sola sezione MT5
 // morta, con il pannello dei servizi tutto verde perche' il server lo provava per conto suo.
 let fblOrdiniVia=null, fblOrdiniInCorso=null;
+// LA PAGINA LA SERVE IL PONTE DI QUESTO COMPUTER? Allora gli ordini stanno QUI, e basta.
+//
+// MISURATO dal pannello di diagnosi del proprietario (7 novembre 2026):
+//   lettura posizioni: 1135 volte, media 609 ms, peggiore 30000 ms, 1132 NON RIUSCITE
+//   ordine (altro):    1135 volte, media 609 ms, peggiore 40877 ms, 1131 non riuscite
+//   lettura conto:       53 volte, peggiore 13892 ms, 50 non riuscite
+// Cioe' 227 richieste al secondo, quasi tutte perse, ognuna con la sua attesa fino a 30-40
+// secondi: la pagina passava il suo tempo ad aspettare risposte che non arrivavano, ed e'
+// ESATTAMENTE il «da un momento all'altro crasha, e piu' andiamo avanti e piu' crasha».
+//
+// LA CAUSA: la pagina arriva da http://127.0.0.1:8000 (il ponte di QUESTO computer, scritto
+// nero su bianco nella stessa diagnosi: «da questa pagina: http://127.0.0.1:8000»), eppure
+// fblOrdiniVia era 'server', cioe' /pc/8000: gli ordini facevano il giro lungo attraverso il
+// server Oracle. La strada corta si sceglie con una prova (fblScegliStradaOrdini) che puo'
+// fallire - il ponte e' occupato, la prova scade a 2,5 s - e poi si ricontrolla solo ogni 30
+// secondi: per tutti quelli in mezzo si resta appesi al giro lungo.
+//
+// PERCHE' LA PROVA E' IL PROBLEMA: per questa domanda la risposta non si scopre, si SA. Se
+// l'indirizzo della pagina e' il computer stesso, il ponte che la serve e' quello che ha le
+// rotte degli ordini: non c'e' niente da chiedere a nessuno, e niente che possa cambiare
+// idea. Un'indagine in piu' e' un modo in piu' di sbagliare.
+// L'indirizzo si puo' passare (lo fa il banco di prova, per misurare ogni caso senza dipendere
+// da dove gira); lasciato vuoto si legge quello vero della pagina.
+function fblPaginaDalPonteLocale(indirizzo){
+  try{
+    const o=String(indirizzo||location.origin||'');
+    if(!/^https?:\/\//i.test(o))return false;   // file:// o altro: non si sa niente
+    const u=new URL(o);
+    if(u.hostname!=='127.0.0.1'&&u.hostname!=='localhost'&&u.hostname!=='[::1]')return false;
+    return true;
+  }catch(e){ return false; }
+}
 function fblUrlOrdini(){
+  // Dal ponte locale: l'indirizzo della pagina E' l'indirizzo degli ordini. Strada piu' corta
+  // impossibile, e scelta senza chiedere niente a nessuno.
+  if(fblPaginaDalPonteLocale())return String(location.origin).replace(/\/+$/,'');
  if(fblOrdiniVia==='locale')return 'http://127.0.0.1:8000';
  if(fblOrdiniVia==='diretto')return 'https://'+fblHost()+':8000';
  if(fblOrdiniVia==='server')return fblServerUrl(8000)+'/pc/8000';
  return fblBaseUrl(8000);   // strada non ancora scelta: quella di prima
 }
-async function fblScegliStradaOrdini(){
+// L'indirizzo della pagina si puo' passare (lo fa il banco di prova, per misurare il caso
+// "la pagina la serve il ponte" senza dipendere da dove gira il collaudo).
+async function fblScegliStradaOrdini(indirizzoPagina){
  if(fblOrdiniInCorso)return fblOrdiniInCorso;
  fblOrdiniInCorso=(async()=>{
   try{
+   // PRIMA di qualunque prova: se la pagina la serve il ponte di questo computer, la strada
+   // e' locale e non si discute (vedi fblPaginaDalPonteLocale).
+   if(fblPaginaDalPonteLocale(indirizzoPagina)){ fblOrdiniVia='locale'; return 'locale'; }
    await fblControllaPonteLocale();
    if(fblPonteLocaleVivo===true){ fblOrdiniVia='locale'; return 'locale'; }
    fblOrdiniVia=null;
@@ -38529,6 +38569,10 @@ function fblSegnaTempoPonte(path,ms,ok){
   if(ms>t.peggio)t.peggio=Math.round(ms);
   if(!ok)t.falliti++;
  }catch(e){}
+ // IL FRENO DEL POLLING (vedi mt5PollSegnaEsito piu' sotto): una lettura riuscita lo rimette
+ // a un giro al secondo, una fallita lo allenta. Si aggiorna QUI, all'unico punto da cui
+ // passano tutte le chiamate al ponte: non c'e' bisogno di toccare ogni singola funzione.
+ try{ if(typeof mt5PollSegnaEsito==='function')mt5PollSegnaEsito(!!ok); }catch(e){}
 }
 // Il riassunto leggibile, per la misura delle prestazioni e per chi lo vuole guardare dal vivo.
 function fblTempiPonteTesto(){
@@ -41129,8 +41173,38 @@ function startMt5PositionsPolling(){
  fetchMt5Orders();
  fetchMt5AccountInfo();
  fetchMt5AccountHistory();
- mt5PositionsPollTimer=setInterval(()=>{ fetchMt5Positions(); fetchMt5Orders(); if(!mt5PositionsFetchInFlight&&!mt5OrdersFetchInFlight) fetchMt5AccountInfo(); },1000);
+ mt5PositionsPollTimer=setInterval(mt5PositionsGiro,1000);
  mt5AccountHistoryTimer=setInterval(fetchMt5AccountHistory,30000);
+}
+// UN GIRO DI POLLING, CON FRENO.
+//
+// MISURATO dal pannello di diagnosi del proprietario (7 novembre 2026): quando la strada degli
+// ordini non risponde il polling NON si ferma - continua a chiedere, una volta al secondo, e
+// ogni richiesta resta appesa fino a 30 s prima di arrendersi. Risultato: 1135 letture
+// posizioni, 1132 non riuscite, e la pagina che passava il suo tempo ad aspettare.
+//
+// Dopo tre giri andati male di fila si allenta (1s -> 2s -> 4s, fino a un massimo di 10s): la
+// strada morta non si martella e la pagina respira. Al primo giro riuscito si torna a 1s,
+// perche' sui soldi veri l'aggiornamento deve essere pronto.
+let mt5PollFalliti=0;
+let mt5PollPassoMs=1000;
+function mt5PositionsGiro(){
+ fetchMt5Positions();
+ fetchMt5Orders();
+ if(!mt5PositionsFetchInFlight&&!mt5OrdersFetchInFlight)fetchMt5AccountInfo();
+}
+// Chiamata dalle letture, cosi' il freno segue la realta' e non un'ipotesi.
+// esito=true quando la fotografia e' arrivata davvero.
+function mt5PollSegnaEsito(ok){
+ if(ok){ mt5PollFalliti=0; }
+ else{ mt5PollFalliti++; }
+ const prima=mt5PollPassoMs;
+ mt5PollPassoMs = mt5PollFalliti>=3 ? Math.min(10000, 1000*Math.pow(2,Math.min(4,mt5PollFalliti-2))) : 1000;
+ if(mt5PollPassoMs!==prima && mt5PositionsPollTimer){
+   clearInterval(mt5PositionsPollTimer);
+   mt5PositionsPollTimer=setInterval(mt5PositionsGiro,mt5PollPassoMs);
+   console.log('[Ponte] letture MT5 in difficolta: allento a '+mt5PollPassoMs+' ms');
+ }
 }
 function stopMt5PositionsPolling(keepSnapshot){
  if(mt5PositionsPollTimer){ clearInterval(mt5PositionsPollTimer); mt5PositionsPollTimer=null; }
@@ -45233,6 +45307,14 @@ try{ fblScegliStradaOrdini(); }catch(e){}
 // questo corpo non protegge niente - cambi il timer e il test resta verde.
 async function fblStradaOrdiniRicontrolla(){
   try {
+    // Dal ponte locale non c'e' niente da risegliere: e' sempre la strada corta.
+    if(fblPaginaDalPonteLocale()){
+      if(fblOrdiniVia!=='locale'){
+        fblOrdiniVia='locale'; MT5_BRIDGE_URL=fblUrlOrdini();
+        try{ fblAggiornaIndirizzi(); }catch(e){}
+      }
+      return 'locale per costruzione';
+    }
     fblPonteLocaleAt = 0;
     const vivo = await fblControllaPonteLocale();
     if (!vivo) { await fblScegliStradaOrdini(); return 'riselezionata'; }

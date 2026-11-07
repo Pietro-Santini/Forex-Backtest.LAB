@@ -1,3 +1,21 @@
+- 2026-11-07 - OpenCode - **v2.1.3: trovata con la MISURA la causa dei «crasha da un momento
+  all'altro».** Dal pannello prestazioni del proprietario, nero su bianco:
+    lettura posizioni: 1135 volte, media 609 ms, peggiore 30000 ms, 1132 NON RIUSCITE
+    ordine (altro):    1135 volte, media 609 ms, peggiore 40877 ms, 1131 non riuscite
+    lettura conto:       53 volte, peggiore 13892 ms, 50 non riuscite
+  e sulla stessa pagina: «da questa pagina: http://127.0.0.1:8000».
+  Gli ordini giravano dal SERVER (/pc/8000) mentre la pagina la serviva il ponte DI QUESTO
+  computer: 99,7% delle letture perse, ognuna con la sua attesa fino a 30 s, e la pagina che
+  passava il suo tempo ad aspettare risposte che non arrivavano.
+  CURA 1: se l'indirizzo della pagina e' il computer stesso, la strada degli ordini e' LOCALE,
+  scelta senza chiedere niente a nessuno (fblPaginaDalPonteLocale). Non e' un'ipotesi: chi
+  serve la pagina ha anche le rotte degli ordini. Prima si sceglieva con una prova che puo'
+  fallire (ponte occupato, scadenza a 2,5 s) e si ricontrollava solo ogni 30 s.
+  CURA 2: dopo tre letture fallite di fila il polling si allenta (1s -> 2s -> 4s, max 10s) e al
+  primo successo torna a 1s. Una strada morta non si martella.
+  Test: laboratorio/app/strada_ordini_locale.test.mjs (3 prove, rosso-senza/verde-con).
+  Collaudo: 302 prove del ponte verdi (erano 237), app browser verde.
+
 - 2026-11-07 - OpenCode - **v2.1.2: tre cure, tutte misurate, ai problemi che facevano crashare l'app.**
   **1) REGRESSIONE MIA RITIRATA (v2.1.0).** Congelavo `end` in getViewWindow() SEMPRE a mercato
   chiuso: di sabato il grafico non si spostava piu' in orizzontale (segnalato: «mi si sposta solo
