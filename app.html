@@ -50854,12 +50854,20 @@ function fblMisuraPrestazioni(secondi){
   try{ window.draw=function(){ const a=performance.now(); try{ return veriDraw.apply(this,arguments); } finally { msD+=performance.now()-a; nD++; } }; }catch(e){}
   try{ window.update=function(){ const a=performance.now(); try{ return veriUpdate.apply(this,arguments); } finally { msU+=performance.now()-a; nU++; } }; }catch(e){}
   // --- i fotogrammi saltati: e' quello che si VEDE come scatto.
-  let frame=0, salti=0, peggiore=0, ultimo=performance.now();
+  // E DELLO SCATTO PEGGIORE SI TIENE ANCHE LA COLPA, non solo la durata: senza, la misura
+  // dice "2402 ms" e non dice DOVE sono andati, e per curarli bisogna indovinare.
+  let frame=0, salti=0, peggiore=0, peggioreSezioni=null, ultimo=performance.now();
   let vivo=true;
   const giro=()=>{
    if(!vivo)return;
    const ora=performance.now(), d=ora-ultimo; ultimo=ora; frame++;
-   if(d>50){ salti++; if(d>peggiore)peggiore=Math.round(d); }
+   if(d>50){
+    salti++;
+    if(d>peggiore){
+     peggiore=Math.round(d);
+     try{ peggioreSezioni=Object.assign({},fblSezioniDraw||{}); }catch(e){ peggioreSezioni=null; }
+    }
+   }
    requestAnimationFrame(giro);
   };
   requestAnimationFrame(giro);
@@ -50883,6 +50891,24 @@ function fblMisuraPrestazioni(secondi){
     fotogrammiAlSecondo:Math.round(frame/sec*10)/10,
     scatti:salti,
     scattoPeggiore_ms:peggiore,
+    // GLI OROLOGI E LA CHIUSURA, detti chiaramente.
+    // SEGNALATO dal proprietario (7 novembre 2026): "il grafico continua ad avanzare dopo la
+    // chiusura e l'ultima candela segna orari impossibili - 21:59, poi 22:59, mentre sono le
+    // 17" - con la nota, gia' scritta nel cervello del progetto, che "MT5 va un'ora piu'
+    // avanti". Senza sapere QUALE orologio usa la decisione, qualunque cura e' un tiro a
+    // indovinare: qui si dicono tutti e due, e con essi la fase calcolata.
+    orologio:(function(){
+      let mt5=null;
+      try{ if(typeof mt5Adesso==='function')mt5=new Date(mt5Adesso()).toISOString(); }catch(e){}
+      let scarto=null;
+      try{ if(typeof mt5ScartoOrologioMs!=='undefined')scarto=Math.round(mt5ScartoOrologioMs/60000); }catch(e){}
+      let fase='?';
+      try{ fase=String(liveSessionPhaseNow()); }catch(e){}
+      let ultima=null;
+      try{ if(rows&&rows.length)ultima=rows[rows.length-1].date; }catch(e){}
+      return {dispositivo:new Date().toISOString(), mt5:mt5, scartoMinuti:scarto, fase:fase,
+              fermo:fblMercatoFermoOra(currentAssetKey,Date.now()), ultimaCandela:ultima};
+    })(),
     disegni:nD, disegnoMedio_ms:nD?Math.round(msD/nD*100)/100:0,
     aggiornamenti:nU, aggiornamentoMedio_ms:nU?Math.round(msU/nU*100)/100:0,
     memoria_MB:(performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576):null),
@@ -56497,7 +56523,7 @@ async function fblPianoAggiornamento(versionePubblicata){
     // PRIMA DI TUTTO: il programma installato e' indietro rispetto al pacchetto PUBBLICATO?
     // Questo confronto non passa dal disco, quindi non si fa ingannare da una copia della
     // pagina ancora vecchia o gia' nuova.
-    if(prog&&prog.programma&&versionePubblicata&&fblVersioneIndietro(prog.programma,versionePubblicata)){
+    if(prog&&prog.programma&&versionePubblicata&&fblConfrontaVersioni(prog.programma,versionePubblicata)<0){
       piano={serve:true,automatico:true,versione:fblVersionePulita(versionePubblicata),
              motivo:"il programma installato e la "+prog.programma+" e il pacchetto pubblicato e la "
                +fblVersionePulita(versionePubblicata)+': va reinstallato'};
@@ -56534,9 +56560,10 @@ async function fblPianoAggiornamento(versionePubblicata){
         // vecchio deve comportarsi come ieri, e un programma che si aggiorna da solo non deve
         // scaricare pacchetti). Rimesso com'era: la causa vera sta in cosa fa il PULSANTE
         // quando il piano dice automatico:true, non in come il piano si decide.
-        piano=(app.da==='copia aggiornata')
-          ?{serve:false,motivo:"il programma installato serve gia la copia aggiornata: basta ricaricare la pagina"}
-          :{serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+               piano=(app.da==='copia aggiornata')
+         ?{serve:false,motivo:"il programma installato serve gia la copia aggiornata: basta ricaricare la pagina"}
+         :{serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+
       }
     }
   }
