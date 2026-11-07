@@ -3,6 +3,40 @@
 Lista fatta col proprietario. Si fa **una cosa per volta**, con misura e test,
 e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano.
 
+## P0 — MERCATO CHIUSO: QUALE OROLOGIO DECIDE LA CHIUSURA
+- Sintomo: «il grafico continua ad avanzare dopo la chiusura; l'ultima candela segna orari
+  impossibili — 21:59, poi 22:59, mentre sono le 17» e il badge «Mercato chiuso» non compare.
+  Nella finestra duplicata invece ultima candela e badge sono GIUSTI: due pagine, due
+  risultati — una gira il codice nuovo, una quello rimasto nella cache.
+- Nota del proprietario, già scritta nel cervello del progetto: «MT5 effettivamente va un'ora
+  più avanti... mi segna che sono le 17, l'ultima candela su MT5, ma in realtà ora italiana
+  sono le 16».
+- Ipotesi da verificare (NON ancora curata): `liveSessionPhaseNow()` e `fblMercatoFermoOra()`
+  giudicano sull'orologio del DISPOSITIVO (`Date.now()`), mentre MT5 gira sull'orologio del
+  servizio, che l'app misura già e tiene in `mt5ScartoOrologioMs` (`mt5Adesso()`). Se i due
+  non combaciano, la chiusura viene decisa un'ora fuori.
+- FATto: il pannello prestazioni ora riporta il campo `orologio`
+  `{dispositivo, mt5, scartoMinuti, fase, fermo, ultimaCandela}`.
+- Stato: IN ATTESA DELLA MISURA del proprietario con MT5 collegato.
+
+## P1 — DISEGNO LENTO CON TANTE CANDELE
+- Dalla misura: `disegnoMedio_ms 238`, di cui `zoneZeroPrint 183`; `scattoPeggiore 1789 ms`;
+  con 50000 candele un profilo volumetrico (`vpfixed`) arriva a 14 ms a fotogramma.
+- Stato: DA FARE.
+
+## P1 — AGGIORNAMENTO IN UN CLICK SOLO
+- Sintomo: «col primo click ha scaricato app.html, col secondo click ha lanciato il setup.
+  Deve fare tutto insieme in un unico click».
+- Causa probabile (misurata nel codice, cura NON ancora applicata perche' richiede una
+  modifica al piano aggiornamento che và provata con calma): il ripiego conclude «basta
+  ricaricare la pagina» quando non riesce a leggere la versione del programma.
+- Stato: DA FARE.
+
+## P1 — FINESTRE DUPLICATE: DATI CHE SPARISCONO AL CLIC
+- «Clicco sul grafico e mi spariscono candele e indicatori; devo premere torna all'ultima
+  candela». CURATO in v2.1.4 (il taglio mercato-chiuso non svuota più il grafico), da
+  verificare sul PC.
+
 ## P0 — CRASH: il programma crasha da solo, anche restando dentro
 - Sintomo: «continua a crashare anche quando sono dentro da un momento all'altro,
   piu' andiamo avanti e piu' crasha».
