@@ -2,6 +2,8 @@
 
 Formato: data — chi — cosa — esito collaudo — commit.
 
+- 2026-11-07 — OpenCode — **v2.0.99: a mercato chiuso l'asse temporale si ferma.** Difetto segnalato dal proprietario: il tempo continuava a scorrere oltre l'ultimo orario di scrittura (XAUUSD chiude alle 22, ma l'asse mostrava orari oltre) e con esso si spostavano tutti i disegni e gli indicatori. CAUSA MISURATA: in draw() c'erano DUE strade che leggevano i dati del grafico — getVisibleData() applicava il taglio mercato-chiuso (cura del 1 novembre), ma draw() usava rows.slice(dataStart,dataEnd+1) SENZA taglio, quindi disegnava anche le candele oltre la chiusura. In piu' il blocco 'il tempo e' infinito' proseguiva l'asse oltre l'ultima candela reale in Live senza guardare se il mercato era chiuso. CURA: rimosso il blocco 'il tempo e' infinito' e taglio delle candele oltre la chiusura in draw(). Collaudo: verde.
+
 - 2026-11-06 — Claude — **v2.0.98: il log aveva 91 MB, l'88% era il nostro polling, e dentro
   c'era la chiave in chiaro 250.000 volte**.
   1. **MISURATO, e la misura mi ha smentito.** Avevo detto al proprietario che il log era gonfiato
