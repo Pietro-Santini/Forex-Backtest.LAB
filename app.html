@@ -13984,29 +13984,38 @@ function getViewWindow(){
  // la "casellina" colorata muoversi ma NON il corpo della candela. Ora lo spazio extra è
  // riservato in entrambi i casi (Storico e replay Live), così la candela si forma a schermo.
  const replaySlot=(followLatest&&timer&&(!liveModeActive||liveReplayActive)&&idx<rows.length-1)?1:0;
- const end0=Math.max(0,Math.min(maxViewEnd(),viewEnd+liveMargin+replaySlot));
- // CONGELAMENTO MERCATO CHIUSO (Live, non replay): a mercato chiuso la finestra temporale
- // non avanza oltre l'ultima candela aperta, cosi' anche i disegni e gli indicatori restano fermi.
- let end=end0;
- if(liveModeActive && !liveReplayActive){
-   // CONGELAMENTO: non avanzare oltre l'ultima candela aperta. Si usa solo liveSessionPhaseAt
-   // (orario MT5) per non costruire il calendario dello strumento a ogni passo (sarebbe
-   // lentissimo e falserebbe il conteggio del banco). Le crypto non chiudono mai: nessun congelamento.
+ let end=Math.max(0,Math.min(maxViewEnd(),viewEnd+liveMargin+replaySlot));
+ // CONGELAMENTO A MERCATO CHIUSO — SOLO IN AUTO-SEGUI, MAI DURANTE UNO SPOSTAMENTO MANUALE.
+ //
+ // RICHIESTO dal proprietario, e la PRIMA volta l'ho fatto male (v2.1.0, ritirata): congelavo
+ // `end` sempre, a mercato chiuso. Risultato misurato da lui: «il grafico mi si sposta solo in
+ // verticale ma non in orizzontale» — di sabato (mercato chiuso tutto il giorno) non si poteva
+ // piu' scorrere la cronologia. Era una regressione pesante, e aveva ragione.
+ //
+ // LA REGOLA GIUSTA: a mercato chiuso l'autosegui (followLatest) non deve far avanzare la finestra
+ // da sola oltre l'ultima candela aperta — e' quello che faceva scorrere il tempo e spostare
+ // disegni e indicatori. Ma `viewEnd` scelto a MANO dall'utente pan/zoom) non si tocca MAI:
+ // appena si sposta il grafico followLatest diventa false, e il congelamento non c'e' piu'.
+ // Replay e Storico esclusi (liveReplayActive/liveModeActive): li' comanda l'orologio del
+ // backtest, non l'orologio del mercato.
+ if(liveModeActive && !liveReplayActive && followLatest){
    let _crypto=false;
    try{ if(binanceSymbolForAsset(currentAssetKey))_crypto=true; }catch(e){}
-   // Congela solo se il mercato e' chiuso adesso (una sola verifica, non per candela).
-   let _mercatoChiusoOra=false;
-   try{ _mercatoChiusoOra = !_crypto && fblMercatoFermoOra(currentAssetKey, Date.now()); }catch(e){}
-   if(_mercatoChiusoOra){
+   let _chiusoOra=false;
+   try{ _chiusoOra = !_crypto && fblMercatoFermoOra(currentAssetKey, Date.now()); }catch(e){}
+   if(_chiusoOra){
+     // Il punto di taglio si cerca su META' FASCIA (log2), non candela per candela: il
+     // predicato e' liveSessionPhaseAt (solo orario MT5, senza costruire calendari).
      let _lo=0, _hi=rows.length;
      while(_lo<_hi){
        const _mid=(_lo+_hi)>>1;
        const _tm=parseDateTime(rows[_mid].date);
-       const _chiuso = Number.isFinite(_tm) && liveSessionPhaseAt(_tm)==='closed';
-       if(_chiuso) _hi=_mid; else _lo=_mid+1;
+       const _k = Number.isFinite(_tm) && liveSessionPhaseAt(_tm)==='closed';
+       if(_k) _hi=_mid; else _lo=_mid+1;
      }
-     const _lastOpen=_lo-1;
-     const _cap = _lastOpen>=0 ? _lastOpen+1 : rows.length;
+     // Se la prima candela e' gia' chiusa (weekend: TUTTE chiuse) il taglio sarebbe zero e non
+     // congelerebbe niente: ci si ferma allora all'ultima candela disponibile, senza avanzare oltre.
+     const _cap = _lo>0 ? _lo : rows.length;
      if(_cap>0) end=Math.min(end, _cap);
    }
  }
@@ -27252,16 +27261,56 @@ function restoreIndicatorsToolbarHome(){
 }
 // Schermo intero del grafico PRINCIPALE (pagina normale, non staccato): stesso principio del
 // pulsante ⛶ della finestra separata, ma sul <div id="chartWrap"> della pagina.
+// RIPIEGO CSS per lo schermo intero del grafico principale.
+// SEGNALATO dal proprietario (7 novembre 2026): «quando creo una finestra duplicata non mi
+// permette piu' alla pagina madre di andare su schermo intero. E invece deve farlo.» MISURATO:
+// toggleMainChartFullscreen() si affidava SOLO a wrap.requestFullscreen(). Nell'app desktop
+// (pywebview, piu' finestre WebView2 aperte) quella chiamata viene rifiutata o non parte, e non
+// c'era NESSUN ripiego: restava solo il messaggio d'errore, il grafico non si allargava mai.
+// CURA: se il fullscreen nativo non entra entro un attimo, si ALLARGA il grafico a tutto schermo
+// con una classe CSS (position:fixed; inset:0). Il risultato visivo e' identico, funziona sempre.
+if(!document.getElementById('fbCssFullscreenStyle')){
+ const st=document.createElement('style'); st.id='fbCssFullscreenStyle';
+ st.textContent='#chartWrap.fbCssFullscreen{position:fixed!important;inset:0!important;'
+   +'left:0!important;top:0!important;right:0!important;bottom:0!important;'
+   +'width:100vw!important;height:100vh!important;max-width:100vw!important;max-height:100vh!important;'
+   +'margin:0!important;border-radius:0!important;z-index:99998!important}';
+ document.head.appendChild(st);
+}
+function fblSchermoInteroCssAttivo(){ const w=document.getElementById('chartWrap'); return !!w&&w.classList.contains('fbCssFullscreen'); }
+function fblEntraSchermoInteroCss(){
+ const wrap=document.getElementById('chartWrap'); if(!wrap)return;
+ wrap.classList.add('fbCssFullscreen');
+ try{ $('status').textContent='Schermo intero. Premi di nuovo ⛶ (o Esc) per tornare.'; }catch(e){}
+ try{ if(typeof resizeCanvas==='function')resizeCanvas(); }catch(e){}
+ draw();
+}
+function fblEsciSchermoInteroCss(){
+ const wrap=document.getElementById('chartWrap'); if(!wrap)return;
+ wrap.classList.remove('fbCssFullscreen');
+ try{ if(typeof resizeCanvas==='function')resizeCanvas(); }catch(e){}
+ draw();
+}
 function toggleMainChartFullscreen(){
  const wrap=document.getElementById('chartWrap');
  if(!wrap)return;
+ if(fblSchermoInteroCssAttivo()){ fblEsciSchermoInteroCss(); return; }
  if(document.fullscreenElement){ document.exitFullscreen?.().catch(()=>{}); return; }
  if(wrap.requestFullscreen){
-   wrap.requestFullscreen().catch(()=>{ $('status').textContent='Il browser ha bloccato la richiesta di schermo intero.'; });
+   let entrato=false;
+   const cb=()=>{ if(document.fullscreenElement)entrato=true; };
+   try{ document.addEventListener('fullscreenchange',cb); }catch(e){}
+   Promise.resolve(wrap.requestFullscreen()).then(()=>{
+     // Entrato davvero: niente ripiego CSS.
+     setTimeout(()=>{ try{ document.removeEventListener('fullscreenchange',cb); }catch(e){} if(!entrato&&!document.fullscreenElement)fblEntraSchermoInteroCss(); },120);
+   }).catch(()=>{ fblEntraSchermoInteroCss(); });
  }else{
-   $('status').textContent='Il browser non supporta lo schermo intero.';
+   fblEntraSchermoInteroCss();
  }
 }
+// Esc esce dallo schermo intero anche nella variante CSS (il browser gestisce da sé solo
+// quello nativo).
+document.addEventListener('keydown',(e)=>{ if(e.key==='Escape'&&fblSchermoInteroCssAttivo())fblEsciSchermoInteroCss(); });
 // ===================== DISPOSIZIONE AUTOMATICA DELLA BARRA OPERAZIONI NEL GRAFICO =====================
 // Compatta sotto i 900 px di larghezza del grafico (molto stretta sotto i 400) e, se toccherebbe i
 // pulsanti in alto (asset, timeframe, schermo intero, indicatori, PIP...), scende sotto di loro.
@@ -49354,6 +49403,33 @@ function orariIntervalli(o,t){
  out.forEach(iv=>{ const u=uniti[uniti.length-1]; if(u&&iv[0]<=u[1]+60000)u[1]=Math.max(u[1],iv[1]); else uniti.push([iv[0],iv[1]]); });
  return uniti;
 }
+// LA RICERCA DELLA RIAPERTURA, UNA VOLTA SOLA PER MINUTO.
+//
+// MISURATO (7 novembre 2026, sabato, mercato chiuso tutto il giorno): l'app del proprietario
+// crashava «da un momento all'altro, e piu' andiamo avanti e piu' crasha». Nei log Python non
+// c'era niente: il crash era dalla parte della finestra. La causa e' qui: per dire «aperto o
+// chiuso» statoMercato() cerca LA PROSSIMA APERTURA scorrendo fino a 4*24*60 = 5760 minuti, e
+// per ognuno chiama liveSessionPhaseAt() che costruisce un Intl.DateTimeFormat. Con il mercato
+// chiuso il ciclo non si interrompe mai: ~5760 Intl per UNA chiamata.
+// E fblMercatoFermoOra() - che chiama statoMercato() - sta nel percorso caldo: getViewWindow()
+// la chiama per il margine futuro, e getViewWindow() gira MOLTE volte per fotogramma. Sabato,
+// con il mercato chiuso, ogni ridisegno pagava migliaia di Intl: thread principale saturato,
+// "Non risponde", finestra che il sistema chiude.
+//
+// La risposta dipende SOLO dal minuto (orario del giorno della settimana), quindi per lo
+// stesso minuto e' sempre identica: la si tiene in memoria e si ricalcola al minuto dopo.
+const __riaperturaCache={chiave:null,val:null};
+function fblProssimaRiapertura(t){
+  const chiave=Math.floor(t/60000);
+  if(__riaperturaCache.chiave===chiave)return __riaperturaCache.val;
+  let apreAt=null;
+  for(let k=1;k<=4*24*60;k++){
+    const tt=Math.floor(t/60000)*60000+k*60000;
+    if(liveSessionPhaseAt(tt)!=='closed'){ apreAt=tt; break; }
+  }
+  __riaperturaCache.chiave=chiave; __riaperturaCache.val=apreAt;
+  return apreAt;
+}
 // Stato del mercato per l'asset a grafico: {chiuso, apreAt, fonte} oppure null (niente da dire).
 // STATO DEL MERCATO DETTO DA MT5, PER OGNI STRUMENTO.
 // SEGNALATO DAL PROPRIETARIO (3 novembre 2026): "ogni asset apre e chiude in fasce orarie
@@ -49443,16 +49519,12 @@ function statoMercato(asset,t){
    // (MT5) chiude alle 22:00: in quel caso si applica la chiusura a 22:00, cosi' l'ultima
    // candela segna 22:00 e non 00:00.
    if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'){
-     let apreAt=null;
-     for(let k=1;k<=4*24*60;k++){ const tt=Math.floor(t/60000)*60000+k*60000; if(liveSessionPhaseAt(tt)!=='closed'){ apreAt=tt; break; } }
-     return {chiuso:true,apreAt,fonte:'mt5'};
+     return {chiuso:true,apreAt:fblProssimaRiapertura(t),fonte:'mt5'};
    }
  }
  // Orario con cui l\'app segue MT5 (anche se lo strumento sul broker e' aperto, il grafico e' fermo).
  if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'){
-   let apreAt=null;
-   for(let k=1;k<=4*24*60;k++){ const tt=Math.floor(t/60000)*60000+k*60000; if(liveSessionPhaseAt(tt)!=='closed'){ apreAt=tt; break; } }
-   return {chiuso:true,apreAt,fonte:'mt5'};
+   return {chiuso:true,apreAt:fblProssimaRiapertura(t),fonte:'mt5'};
  }
  return null;
 }
@@ -56610,7 +56682,11 @@ async function fblControllaAggiornamento(forza){
     if(!r.ok)return;
     const d = await r.json();
     const tagRemoto = d.tag_name||'';
-    const installata = await fblVersioneInstallata();
+    // PRIMA la versione del PROGRAMMA installato (la legge il ponte dal registro), e solo se non
+    // si conosce quella della copia web: vedere fblVersioneProgrammaInstallato(). Senza, un
+    // ponte che aveva gia' scaricato la pagina nuova faceva sparire il pulsante «Aggiorna»
+    // mentre il programma era ancora vecchio.
+    const installata = (await fblVersioneProgrammaInstallato()) || (await fblVersioneInstallata());
     // Il pulsante appare solo quando esce una release NUOVA rispetto a quella
     // che questo dispositivo ha gia' visto o applicato: al primo avvio il tag
     // viene annotato in silenzio, cosi' chi ha appena installato non vede un
@@ -56785,6 +56861,30 @@ function fblVersioneDaChiavi(chiavi){
 function fblVersioneDaTag(tag){
   return String(tag||'').replace(/^v/,'').replace(/-\d+$/,'');
 }
+// LA VERSIONE DEL PROGRAMMA INSTALLATO, NON DELLA COPIA WEB.
+//
+// SEGNALATO dal proprietario (7 novembre 2026): «ero sulla 2.0.99, entro e non mi mostra il
+// pulsante aggiorna; chiudo, riapro, crash ripetuti, e mi ritrovo sulla 2.1.1 SENZA aver
+// toccato nulla e senza che mi abbia installato i pacchetti».
+//
+// MISURATO sul suo PC: nella cartella del programma c'era
+// `app_aggiornata\app.html` congelato dalla v2.1.1 (marcatori trovati nel file). Il ponte
+// aveva quindi la COPIA WEB nuova, mentre gli .exe erano quelli vecchi. fblVersioneInstallata()
+// legge la versione dalla cache del service worker, cioe' da QUELLA copia web: rispondeva
+// 2.1.1, il confronto col tag remoto diceva "pari" e il pulsante non compariva MAI. L'app
+// sembrava aggiornata senza esserlo - il «finta che gli fa credere di essere aggiornato» che
+// il proprietario aveva gia' descritto un mese prima.
+//
+// CURA: la verse che decide l'aggiornamento e' quella dell'ESEGUIBILE, che il ponte legge dal
+// registro (versione_programma_installata()). Solo se il ponte non risponde si ripiega sulla
+// copia web, come prima.
+async function fblVersioneProgrammaInstallato(){
+  try{
+    const d=await fblPonteVersioneProgramma();
+    if(d&&typeof d.programma==='string'&&/^\d+\.\d+\.\d+/.test(d.programma))return d.programma;
+  }catch(e){}
+  return '';
+}
 async function fblVersioneInstallata(){
   try{
     if(typeof caches!=='undefined'&&caches.keys){
@@ -56849,7 +56949,9 @@ async function fblAggiornaPannelloVersione(forza){
   if(car)car.textContent=fblCaricataIl.toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'});
   ins.textContent='\u2026'; rem.textContent='\u2026';
   if(stato)stato.textContent='';
-  const installata=await fblVersioneInstallata();
+  // Anche qui conta il PROGRAMMA, non la copia web (stessa cura di fblControllaAggiornamento).
+  const _prog=await fblVersioneProgrammaInstallato();
+  const installata=_prog||(await fblVersioneInstallata());
   ins.textContent=installata||'sconosciuta';
   const rel=await fblLeggiUltimaRelease(!!forza);
   if(rel.errore||!rel.tag){

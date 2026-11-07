@@ -1,3 +1,22 @@
+- 2026-11-07 - OpenCode - **v2.1.2: tre cure, tutte misurate, ai problemi che facevano crashare l'app.**
+  **1) REGRESSIONE MIA RITIRATA (v2.1.0).** Congelavo `end` in getViewWindow() SEMPRE a mercato
+  chiuso: di sabato il grafico non si spostava piu' in orizzontale (segnalato: «mi si sposta solo
+  in verticale»). Riportato indietro e rifatto bene: il congelamento vale SOLO in auto-segui
+  (`followLatest`), mai durante pan/zoom. Test: laboratorio/app/congelamento_solo_autosegui.test.mjs
+  (5 prove, provate nei due versi: con la cura rotta una sola resta verde, spenta del tutto due).
+  **2) IL PULSANTE AGGIORNA NON COMPARIVA.** MISURATO sul PC: il ponte serviva
+  `app_aggiornata\app.html` della v2.1.1 mentre gli .exe erano vecchi, e fblVersioneInstallata()
+  legge la versione dalla CACHE DEL SERVICE WORKER, cioe' da quella copia web: rispondeva 2.1.1,
+  il confronto col tag diceva «pari», pulsante spento. L'app sembrava aggiornata senza esserlo.
+  CURA: a decidere e' la versione dell'ESEGUIBILE (fblVersioneProgrammaInstallato, la legge il
+  ponte dal registro); la copia web resta il ripiego. Test: versione_programma_non_web.test.mjs
+  (3 prove, rosso-senza/verde-con).
+  **3) desktop_shell.py: il patch dello zoom era codice morto.** Leggeva `on_webview_ready` e
+  scriveva `on_web_view_ready` (due attributi diversi): non agganciava niente. Corretto.
+  In piu' la ricerca della riapertura di mercato si tiene in memoria per minuto (era fino a
+  5760 giri con Intl per chiamata, nel percorso caldo). Test: chiusura_mercato_costo.test.mjs.
+  Collaudo: verde.
+
 - 2026-11-07 - OpenCode - **v2.1.1: la finestra duplicata apre col conto della madre, non con lo Storico CSV.** Voce 4/5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md. CAUSA MISURATA: initExtraPipWindow() parte sempre in Storico (liveModeActive=false, csvLibrary vuoto) e il gestore di pip_clone_snapshot applicava solo stili/asset/warm-start MT5 senza mai passare in Live. Con la madre in Live MT5 la duplicata restava in Storico con elenco asset vuoto. CURA: nel gestore, se la madre e in Live (storico:false) e la finestra PIP no, switchAccountMode(true) prima del resto. Test: laboratorio/app/pip_conto_madre.test.mjs (rosso senza, verde con). Collaudo da verificare.
 
 - 2026-11-07 - OpenCode - **v2.1.0: disegni e indicatori si fermano a mercato chiuso.** Dopo v2.0.99 le candele si fermavano ma la finestra temporale (start/dataStart) avanzava ancora con viewEnd, quindi i disegni e gli indicatori scivolavano. CURA: in getViewWindow() il congelamento (end = min(end, ultima candela aperta)) viene applicato PRIMA di calcolare start/dataStart/dataEnd, cosi la vista orizzontale resta ferma. Congelamento solo a mercato chiuso, solo in Live (non replay), mai per le crypto. Usa solo liveSessionPhaseAt per non costruire il calendario dello strumento a ogni passo. Collaudo: verde.
