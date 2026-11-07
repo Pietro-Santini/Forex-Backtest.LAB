@@ -1,3 +1,21 @@
+- 2026-11-07 - OpenCode - **v2.1.4: due cure, una trovata dal proprietario guardando la duplicata.**
+  **VERIFICATA LA CURA DEI CRASH.** Lo stesso pannello del proprietario, con MT5 collegato:
+  `lettura posizioni: 318 volte, media 24 ms, peggiore 354 ms` - ZERO non riuscite (prima 1132
+  su 1135, media 609 ms, picco 30 s). E il pannello servizi dice «Ordini (questo computer)
+  risponde in 13 ms». La strada locale senza indagini tiene.
+  **1) IL GRAFICO NON SI SVUOTA PIU' SCORRENDO NEL WEEKEND.** SEGNALATO dal proprietario nella
+  finestra duplicata: «clicco sul grafico e mi spariscono candele e indicatori; devo premere
+  torna all'ultima candela». CAUSA MISURATA: a mercato chiuso getVisibleData() taglia le
+  candele dopo la chiusura; con la vista TUTTA dopo la chiusura il punto di taglio e' ZERO e
+  `slice(0,0)` e' un array vuoto - grafico bianco. CURA: se il taglio non lascia niente non si
+  taglia. Chi guarda il passato guarda il passato; le candele FABBRICATE dopo la chiusura
+  continuano a non vedersi (provato). Test: grafico_mai_vuoto.test.mjs (2 prove).
+  **2) STESSA CURA PER LA STRADA DEL GRAFICO.** Dal pannello: «Ordini (questo computer) 13 ms»
+  ma «Grafico (computer, in diretta) 157 ms» - stessa pagina, stessa macchina, due strade. Le
+  candele uscivano su Tailscale per tornare a casa. Ora dal ponte locale anche il servizio dati
+  (porta 8001) sta in locale, scelto senza indagini.
+  Collaudo: 36 prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-07 - OpenCode - **v2.1.3: trovata con la MISURA la causa dei «crasha da un momento
   all'altro».** Dal pannello prestazioni del proprietario, nero su bianco:
     lettura posizioni: 1135 volte, media 609 ms, peggiore 30000 ms, 1132 NON RIUSCITE
