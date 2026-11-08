@@ -1,3 +1,5 @@
+- 2026-11-08 - OpenCode - **FIREBASE: LE SCRITTURE E LE LETTURE SONO SCESE, misurato dal proprietario.** Dalla console di Firebase (novembre 2026): scritture 5 su 20K/giorno (era 3,1K), letture 35 su 50K/giorno (era 6,4K), eliminazioni 0. Il costo resta 5,72 EUR, ma quello e' il costo base del progetto (archivio e banda), non lo sforo. La cura che ha portato il risultato: la rete di sicurezza rileggeva l'intero documento dal cloud OGNI 60 SECONDI (v2.1.7 la allenta a mezz'ora a mercato chiuso), piu' il conteggio del traffico gia' presente. Da tenere sotto controllo: se le letture tornano a salire, il primo posto da guardare e' la rete di sicurezza e la sincronizzazione delle preferenze.
+
 - 2026-11-08 - OpenCode - **v2.2.2: la finestra duplicata sta sullo STESSO CONTO della madre.**
   Voce 5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md.
   SEGNALATO: «se ho duplicato la finestra e sono col conto collegato a MT5, non mi puo' aprire
