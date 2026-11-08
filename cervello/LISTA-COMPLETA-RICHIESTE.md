@@ -90,7 +90,38 @@ Numeri: oggi 3,1K scritture e 6,4K letture (15% e 13% della quota gratuita); pri
 e 114K letture — cioè 18 e 2,3 volte oltre il limite. Resta da misurare CHI scrive (3,1K
 scritture al giorno non vengono da una rilettura).
 
-## F. Regole che valgono per tutto
+## F. Dalla consegna di Claude del 5 novembre (CONSEGNA-OPENCODE-5-NOVEMBRE.md)
+
+Nessuna voce della consegna va perduta. Stato di ciascuna:
+
+| voce | stato |
+|---|---|
+| **LAVORO 1 / rilascio A** — sicurezza conti reali (un conto reale non spuntato non apre da solo; `reale === null` si tratta come reale; targhetta REALE, conferma esplicita) | FATTO — v2.0.90, verde |
+| **LAVORO 1 / rilascio B** — configurazione **per conto** (`tgAutoPerConto`, base «Tutti i conti», nessuna propagazione, `sale` sostituita in blocco, `tgAutoApriSuiConti` che ridecide per ogni conto, freni per conto) | FATTO — v2.0.91, verde |
+| **LAVORO 2** — candele in locale (IndexedDB per asset+timeframe, colonne Float64Array, tetto voci recenti, `count` piccolo calcolato dall'ultima candela, **controllo di sovrapposizione obbligatorio** prima di aggiungere, storico risultante identico a quello intero) | FATTO — v2.0.92, verde |
+| **LAVORO 3 / R1-R2-R3** — dominio senza Tailscale (passi 1-13 dal proprietario; solo dopo, passo 14: si toglie `tailscale`/`ts.net`/`Funnel`/`MagicDNS` da tutto) | DA FARE — sezione D |
+| **LAVORO 4** — disco del server: era **già** 250 GB (sopra i 200 gratuiti), va **sostituita** la macchina, non ingrandita. Passi 15-24, **li esegue il proprietario**; il mio lavoro è verificare dopo ogni blocco (backup `Available`, macchina nuova 50 GB Always Free, due contenitori `Up`, 7 MB arrivati, telefono vede 401 col lucchetto, Terminate **con la spunta** «Permanently delete the attached boot volume»). L'unico errore lì che non dà messaggi | DA FARE (dopo D) |
+| **PASSO 6** — velocità del disegno, **solo dopo il suo numero**: `dentroLeSezioni_ms` dice quale disegno e quale indicatore costa, e per il profilo volumetrico separa calcolo da disegno. Niente ottimizzazioni a occhio (su quello si è sbagliato due volte) | APERTO — parte del lavoro sulle prestazioni, voce C9 |
+| **PASSO 7.1** — linee entry/TP/SL ordini pendenti | voce B2 |
+| **PASSO 7.2** — `E:\...\dati` vuoto | voce E1 |
+| **PASSO 7.3** — tasto schermo intero dopo la duplicazione | voce C2 |
+| **PASSO 7.4** — limite di richieste per indirizzo in Caddy: rimandato **di proposito** (modulo compilato nel binario), protezione attuale = un solo percorso esposto | RIMANDATO, non dimenticato |
+| **§10.3.1** — Firestore si tocca una volta al giorno; ogni ascolto `onSnapshot` consegna il documento **intero** ed è così che si arriva a 250.000 letture | voce E2 |
+| **§10.3.2** — su Firebase si paga la **banda**, il report per SKU va guardato **per primo** | voce E2 |
+
+**Trappole già pagate, da non ripagare** (dal paragrafo 7 della consegna):
+1. `node --test laboratorio/app/` non lancia niente: si usa `cd laboratorio && npm run test:app`.
+2. **Mai** unire nello stesso comando la modifica di un file e il lancio dei test (ci sono rimaste appese due attività, 4h30 e 4h44).
+3. Gli heredoc di bash mangiano apostrofi e backtick: usare gli strumenti di scrittura file, o python.
+4. `app.html` ha righe **CRLF**: una regex con `$` senza `m` non trova niente — così una prova è rimasta muta.
+5. Controllare i nomi doppi: una funzione nuova omonima sostituisce in silenzio (`laboratorio/app/nomi_unici.test.mjs`).
+6. Non ottimizzare il profilo volumetrico «a occhio»: numero delle fasce e lunghezza delle barre **sono due cose diverse**.
+7. Un test che modifica stato condiviso deve usare `monkeypatch` (pytest).
+8. FastAPI qui non mostra le rotte dei router in `app.routes`: provare il montaggio col **comportamento** (401 contro 404).
+9. L'aggiornamento del server è `cd /srv/fbl/progetto/server_oracle && bash prepara_server.sh`.
+10. Una misura presa a vuoto non dice «va tutto bene», dice che non c'era niente da misurare.
+
+## G. Regole che valgono per tutto
 - Si misura prima di correggere: ogni cura ha un test che misura il **comportamento**, non il
   testo del sorgente, e va provato nei due versi (rosso senza / verde con).
 - Italiano ovunque (codice, commenti, commit).
