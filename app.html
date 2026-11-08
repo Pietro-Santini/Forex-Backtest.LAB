@@ -8635,6 +8635,10 @@ function broadcastTradingStateNow(){
  if(!tradingChannel||applyingRemoteTradingSync)return;
  let p=null;
  try{ p=collectTradingSyncPayload(); }catch(e){ return; }
+ // IL CONTO SCELTO viaggia con lo stato (voce 5, 8 novembre 2026): una finestra duplicata
+ // nasce in Storico e non ha modo di sapere su che conto sta lavorando la madre. Da qui in
+ // poi lo sa, perche' glielo dice lo stesso messaggio che porta posizioni e ordini.
+ try{ p.conto = {vivo: liveModeActive, vista: fblContoEffettivo()}; }catch(e){}
  if(!tradingSyncRicevuto && !fblStatoDaAnnunciare(p)){
   // Niente ricevuto e niente di proprio: tacere e' l'unica cosa giusta.
   return;
@@ -8881,6 +8885,24 @@ if(tradingChannel){
  tradingChannel.onmessage=(ev)=>{
    const msg=ev&&ev.data;
    if(!msg||typeof msg!=='object'||msg.slot===PIP_SLOT)return;
+  // IL CONTO DELLA MADRE (voce 5). PRIMA del resto: cambiare conto ricostruisce la sessione,
+  // quindi applicare prima le posizioni e poi cambiare conto le butterebbe via.
+  if(PIP_SLOT>0 && msg.conto){
+    try{
+      const dec = fblApplicaContoMadre(msg.conto);
+      if(dec.cambiato){
+        if(dec.promessa==='live'){
+          Promise.resolve(switchAccountMode(true)).then(function(){
+            try{ if(dec.vista && dec.vista!=='storico') fblContoScegli(dec.vista); }catch(e){}
+          }).catch(function(){});
+        }else if(dec.promessa==='storico'){
+          try{ if(liveModeActive) switchAccountMode(false); }catch(e){}
+        }else if(dec.promessa==='conto' && dec.vista){
+          try{ fblContoScegli(dec.vista); }catch(e){}
+        }
+      }
+    }catch(e){}
+  }
    if(msg.type==='trading_sync'){
      // L'ALTRA META' DELLA STESSA CURA, dal lato di chi RICEVE.
      //
@@ -11884,7 +11906,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.1';
+const FBL_VERSIONE='2.2.2';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -47931,6 +47953,34 @@ function fblContoDisegna(){
  else if(eff==='capital')t='💹 Capital.com: BUY/SELL aprono posizioni SIMULATE su questo conto (azioni, indici).';
  else t=(()=>{ try{ return mt5Connected?'MT5: BUY/SELL vanno sul conto MT5.':'MT5 non collegato: ordini simulati finché non lo colleghi.'; }catch(e){ return ''; } })();
  n.textContent=t;
+}
+// Applica il conto scelto dalla madre (voce 5). Risponde {cambiato, motivo, promessa, vista}.
+// Non tocca NIENTE da solo: dice solo cosa andrebbe fatto, cosi' la prova la misura e il
+// gestore del messaggio esegue. Un messaggio senza il campo conto (una finestra rimasta aperta
+// da prima) non cambia niente, come prima.
+function fblApplicaContoMadre(conto){
+  try{
+    if(!conto || typeof conto!=='object') return {cambiato:false, motivo:'messaggio senza conto'};
+    const madreViva = !!conto.vivo;
+    const madreVista = conto.vista;
+    if(liveModeActive===madreViva && fblContoEffettivo()===madreVista){
+      return {cambiato:false, motivo:'gia allineato'};
+    }
+    if(madreViva && !liveModeActive){
+      return {cambiato:true, motivo:'la madre e in Live, qui si e in Storico',
+              promessa:'live', vista:madreVista};
+    }
+    if(!madreViva && liveModeActive){
+      return {cambiato:true, motivo:'la madre e passata allo Storico',
+              promessa:'storico', vista:'storico'};
+    }
+    // Stessa modalita (Live), conto diverso (p. es. madre su Kraken, qui su MT5).
+    if(madreVista && madreVista!=='storico' && madreVista!==fblContoVista){
+      return {cambiato:true, motivo:'stessa modalita, conto diverso da quello della madre',
+              promessa:'conto', vista:madreVista};
+    }
+    return {cambiato:false, motivo:'niente da cambiare'};
+  }catch(e){ return {cambiato:false, motivo:'errore'}; }
 }
 async function fblContoScegli(c){
  if(c==='storico'){

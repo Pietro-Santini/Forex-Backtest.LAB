@@ -1,3 +1,27 @@
+- 2026-11-08 - OpenCode - **v2.2.2: la finestra duplicata sta sullo STESSO CONTO della madre.**
+  Voce 5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md.
+  SEGNALATO: «se ho duplicato la finestra e sono col conto collegato a MT5, non mi puo' aprire
+  una finestra collegata con il conto CSV. Assolutamente no. Deve essere sempre uguale al
+  conto selezionato. Se invece nella pagina madre cambio e passo a un conto storico, allora le
+  pagine duplicate si adatteranno al conto storico in maniera automatica, quindi deve esserci
+  questo collegamento tra di loro.»
+  CAUSA MISURATA: il conto e' una scelta della madre (liveModeActive + fblContoVista). Una
+  finestra PIP appena nata nasce in Storico e non ha modo di sapere su che conto sta
+  lavorando la madre, perche' quel dato non viaggiava da nessuna parte.
+  CURA: il conto scelto viaggia sullo STESSO messaggio che gia' porta posizioni e ordini
+  (campo conto in broadcastTradingStateNow). La duplicata, all'arrivo, lo applica PRIMA del
+  resto dello stato, perche' cambiare conto ricostruisce la sessione e applicare prima le
+  posizioni le butterebbe via. Tre i casi coperti: madre in Live e duplicata in Storico; madre
+  passata allo Storico; stessa modalita ma conto diverso (p. es. Kraken invece di MT5).
+  La decisione sta in una funzione sua (fblApplicaContoMadre) che NON tocca niente da solo:
+  dice solo cosa andrebbe fatto. Cosi' la prova la misura direttamente e il gestore esegue.
+  NOTA SUL MODO DI LAVORARE, perche' e' costata due giri: dichiarare una funzione dentro il
+  blocco if(tradingChannel){...} la rende locale e irraggiungibile dall'esterno (Provato: la
+  prova dava 'is not defined' e la cura sembrava rotta). La regola e' semplice: le funzioni
+  che le prove devono chiamare stanno a livello di pagina, mai dentro un altro blocco.
+  Test: laboratorio/app/conto_madre_duplicata.test.mjs (6 prove, provate anche al contrario).
+  Collaudo: 24 prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-08 - OpenCode - **v2.2.1: nella duplicata niente scorrimento, e la madre torna a tutto
   schermo.** Voci 2 e 3 di cervello/RICHIESTE-DUPLICA-FINESTRA.md.
   **3) SCORRIMENTO.** SEGNALATO: «mi fa scorrere la pagina come se sotto ci fosse qualcosa, ma
