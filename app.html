@@ -11814,6 +11814,19 @@ const supportsFS=!!window.showDirectoryPicker;
 // file://, nessun service worker) e' l'unica fonte affidabile, altrimenti fblVersioneInstallata()
 // restituisce '' e il pulsante «Aggiorna» resta acceso per sempre.
 const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
+// LA VERSIONE DI QUESTA PAGINA, DETTA DA LEI STESSA.
+//
+// PERCHE' ESISTE. MISURATO sul computer del proprietario (7 novembre 2026): una cura
+// pubblicata non si vedeva, e per un pomeriggio intero si e' inseguito un sintomo che era
+// già curato. La pagina diceva una versione, il ponte ne serviva un'altra (la copia che si
+// scarica da se', app_aggiornata/app.html), e il pannello Versione leggeva la versione dalla
+/// CACHE DEL SERVICE WORKER: rispondeva l'ultima, anche quando il codice che girava era
+/// vecchio. Risultato: l'app sembrava aggiornata senza esserlo.
+//
+// DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
+// a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
+// che in realta' non sta girando.
+const FBL_VERSIONE='2.1.7';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -15439,8 +15452,16 @@ const INDICATOR_DEFS={
      const drawLine=(arr,color,width)=>{
        ctx.save();ctx.strokeStyle=color;ctx.lineWidth=width||1.6;ctx.beginPath();
        let started=false;
-       const from=Math.max(0,dataStart-off-2), to=Math.min(st.builtTo,dataEnd-off+2);
-       for(let i=from;i<=to;i++){
+              // L'OFFSET SPOSTA IL DISEGNO A DESTRA, non il valore (come nello script Pine).
+       // A mercato chiuso quello spostamento portava la linea NELLO SPAZIO VUOTO dopo
+       // l'ultima candela: SEGNALATO dal proprietario (8 novembre 2026) - «gli indicatori
+       // continuano a scorrere il tempo e non si fermano al momento dell'ultima candela
+       // registrata prima della chiusura». Una curva che si allunga nel futuro mentre il
+       // mercato e' chiuso non e' un'informazione: e' un disegno che mente.
+       // Quindi il punto finale non supera mai l'ultima candela vera (idx).
+       const _limite=Number.isFinite(idx)?(idx-off):(dataEnd-off+2);
+       const from=Math.max(0,dataStart-off-2), to=Math.min(st.builtTo,dataEnd-off+2,_limite);
+for(let i=from;i<=to;i++){
          const v=arr[i]; if(!Number.isFinite(v)){started=false;continue;}
          const xx=xAbs(i+off), yy=y(v);
          if(!started){ctx.moveTo(xx,yy);started=true;} else ctx.lineTo(xx,yy);
@@ -45431,6 +45452,7 @@ async function fblStradaOrdiniRicontrolla(){
     if(fblPaginaDalPonteLocale()){
       if(fblOrdiniVia!=='locale'){
         fblOrdiniVia='locale'; MT5_BRIDGE_URL=fblUrlOrdini();
+        try{ fblPianoAggiornamentoDimentica(); }catch(e){}   // la risposta e' arrivata: si rilegge
         try{ fblAggiornaIndirizzi(); }catch(e){}
       }
       return 'locale per costruzione';
@@ -56576,6 +56598,12 @@ function fblEAppCapacitor(){
 // ricarica la pagina (chiedendo prima al ponte di riscaricare l'app, se c'e') invece di
 // scaricare un Setup che non cambia niente.
 let fblPianoAggiornamentoCache=null;
+// Il piano si puo' ricalcolare a mano: la memoria ha una scadenza (60 s), ma una risposta
+// APPENA ARRIVATA - il ponte che si e' acceso, l'indirizzo che ha ricominciato a rispondere -
+// merita di essere riletta subito, non tra un minuto. MISURATO (8 novembre 2026): senza, il
+// pulsante «Aggiorna» poteva restare sulla decisionepresa quand'era muto - ed e' cosi' che
+// succedeva il «primo click non installa, il secondo si'».
+function fblPianoAggiornamentoDimentica(){ fblPianoAggiornamentoCache=null; }
 // IL METRO GIUSTO E' LA VERSIONE PUBBLICATA, NON LA PAGINA SU DISCO (5 novembre 2026).
 //
 // SEGNALATO dal proprietario: «con gli ultimi due aggiornamenti ho dovuto installare
@@ -56661,9 +56689,27 @@ async function fblPianoAggiornamento(versionePubblicata){
         // vecchio deve comportarsi come ieri, e un programma che si aggiorna da solo non deve
         // scaricare pacchetti). Rimesso com'era: la causa vera sta in cosa fa il PULSANTE
         // quando il piano dice automatico:true, non in come il piano si decide.
-               piano=(app.da==='copia aggiornata')
-         ?{serve:false,motivo:"il programma installato serve gia la copia aggiornata: basta ricaricare la pagina"}
-         :{serve:true,motivo:'il programma installato sta servendo la copia congelata: per aggiornarlo serve il pacchetto'};
+                      // IL RIPIEGO NON PUO' MAI ESCLUDERE IL PACCHETTO. Solamente confermare che serve.
+       //
+       // SEGNALATO dal proprietario (8 novembre 2026, e per la seconda volta): «premo il
+       // pulsante aggiorna, non mi esegue l'aggiornamento dell'applicazione con
+       // l'installazione dei pacchetti: aggiorna alla prima volta solo app.html, poi al
+       // SECONDO click mi installa i pacchetti e riavvia».
+       //
+       // CAUSA MISURATA, ed e' scritta in questo stesso file: qui si chiedeva "quale PAGINA
+       // sta servendo il ponte". Rispondere 'copia aggiornata' - che da quando il ponte si
+       // aggiorna da se' la pagina e' il caso NORMALE - faceva concludere serve:false, cioe'
+       // "basta ricaricare". Al primo click quindi non partiva niente di quello che serve (il
+       // programma restava vecchio) e il pulsante rimaneva acceso: serviva il secondo click.
+       //
+       // Servire la pagina nuova non vuol dire ESSERE aggiornati: il ponte puo' servire
+       // benissimo l'ultima app.html restando lui stesso un eseguibile vecchio - ed e'
+       // esattamente la situazione che rompe il collegamento con MT5, perche' li' il codice
+       // vecchio c'e' davvero. Le due cose non sono la stessa cosa.
+       piano={serve:true,
+              motivo:(app&&app.da==='copia aggiornata')
+                ?'non ho potuto leggere la versione del programma installato, ma sta servendo la copia aggiornata della pagina: per sicurezza si installa il pacchetto'
+                :'non ho potuto leggere la versione del programma installato: per sicurezza si installa il pacchetto'};
 
       }
     }
@@ -57187,6 +57233,15 @@ async function fblAggiornaPannelloVersione(forza){
   const ins=$('fblVerInstallata'), car=$('fblVerCaricata'), rem=$('fblVerRemota');
   const stato=$('fblVerStato'), note=$('fblVerNote'), btn=$('fblVerAggiornaBtn');
   if(!ins||!rem)return null;
+  // LA VERSIONE CHE GIRA DAVVERO, detta dalla pagina stessa (FBL_VERSIONE).
+  //
+  // MISURATO (7 novembre 2026): una cura pubblicata non si vedeva perche' la pagina che
+  // girava era una copia vecchia servita dal ponte, ma il pannello leggeva la versione dalla
+  // CACHE DEL SERVICE WORKER e rispondeva l'ultima. Due verita' diverse, e l'utente non aveva
+  // modo di sapere quale delle due stava usando: ed e' cosi' che si insegue per un pomeriggio
+  // intero un sintomo che era gia' curato.
+  const _esec=document.getElementById('fblVerEsecuzione');
+  if(_esec)_esec.textContent=(typeof FBL_VERSIONE!=='undefined'&&FBL_VERSIONE)?FBL_VERSIONE:'sconosciuta';
   if(car)car.textContent=fblCaricataIl.toLocaleString('it-IT',{dateStyle:'short',timeStyle:'short'});
   ins.textContent='\u2026'; rem.textContent='\u2026';
   if(stato)stato.textContent='';

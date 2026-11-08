@@ -37,8 +37,17 @@ const UA_NON_COMPUTER = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHT
 // risponde come gli si dice: niente rete, niente installazioni vere sul banco di prova.
 //   salute = {versione, da}  -> il ponte dice quale copia dell'app sta servendo
 //   salute = null            -> il ponte non risponde (il computer dove il programma non parte)
-async function apriConPonte({salute, userAgent} = {}) {
+async function apriConPonte({salute, userAgent, versioneProgramma} = {}) {
   const {browser, pagina, errori} = await apriApp(userAgent ? {userAgent} : {});
+  // La domanda PRECISA - quanto e' vecchio l'ESEGUIBILE - la si risponde come la fa l'app
+  // (fblPonteVersioneProgramma). Non con una rotta: nel banco la pagina arriva da file:, il
+  // ponte non e' raggiungibile, la rotta non verrebbe mai toccata e il test resterebbe verde
+  // per la ragione sbagliata (misura provata).
+  if(versioneProgramma){
+    await pagina.evaluate((v) => {
+      window.fblPonteVersioneProgramma = async () => ({programma: v, pagina: v, da_aggiornare: false});
+    }, versioneProgramma);
+  }
   // Quante volte e' stato chiesto al ponte di riscaricare l'app: se non lo si chiede, la
   // ricarica darebbe ancora la copia vecchia.
   const chiesti = {aggiorna: 0};
@@ -74,24 +83,28 @@ async function aggiorna(pagina) {
   await pagina.evaluate(() => document.getElementById('fblVerAggiornaBtn').click());
 }
 
-test('sul computer con il programma che aggiorna l\'app da solo, il pulsante NON scarica il pacchetto', async () => {
-  const {browser, pagina, chiesti} = await apriConPonte({salute: {versione: '2.0.20', da: 'copia aggiornata'}});
+test("se il PROGRAMMA e' gia' all'ultima versione, il pulsante si spegne e non scarica niente", async () => {
+  // La condizione giusta e' la VERSIONE DEL PROGRAMMA, non "quale pagina serve il ponte".
+  // SEGNALATO dal proprietario (8 novembre 2026, per la seconda volta): «premo aggiorna, non mi
+  // installa i pacchetti: aggiorna solo app.html; al SECONDO click installa e riavvia».
+  // Era il ripiego che concludeva "basta ricaricare" perche' il ponte serviva la copia
+  // aggiornata della pagina - cioe' nel caso NORMALE, quello di tutti i giorni.
+  const {browser, pagina, chiesti} = await apriConPonte({
+    salute: {versione: '99.0.0', da: 'copia aggiornata'}, versioneProgramma: '99.0.0',
+  });
   try {
-    await pagina.evaluate(() => fblAggiornaPannelloVersione(true));
-    const etichetta = await pagina.evaluate(() => document.getElementById('fblVerAggiornaBtn').textContent);
-    assert.ok(etichetta.indexOf("Aggiorna l'app") >= 0,
-      'il pulsante deve dire che aggiorna l\'app, non che scarica un pacchetto (etichetta: ' + etichetta + ')');
-    await pagina.evaluate(() => document.getElementById('fblVerAggiornaBtn').click());
-    await pagina.waitForFunction(() => window.__ricaricato > 0 || window.__clic.length > 0, {timeout: 8000});
-    const esito = await pagina.evaluate(() => ({scaricati: window.__clic, ricaricato: window.__ricaricato}));
-    assert.equal(esito.scaricati.filter(u => /\.(exe|apk|msi|dmg)$/i.test(u)).length, 0,
-      'il programma gia\' si aggiorna da solo: scaricare il pacchetto aggiungerebbe un file in Download a ogni versione (scaricati: ' + JSON.stringify(esito.scaricati) + ')');
-    assert.equal(esito.ricaricato, 1,
-      'senza pacchetto da scaricare l\'app ricarica la pagina: e\' cosi\' che l\'app nuova entra');
-    assert.equal(chiesti.aggiorna, 1,
-      'al ponte si deve chiedere di riscaricare l\'app: altrimenti la ricarica darebbe ancora la copia vecchia');
+    await pagina.evaluate(() => { fblPianoAggiornamentoDimentica(); fblAggiornaPannelloVersione(true); });
+    const r = await pagina.evaluate(() => ({
+      display: document.getElementById('fblVerAggiornaBtn').style.display,
+      scaricati: window.__clic ? window.__clic.slice() : [],
+    }));
+    assert.equal(r.display, 'none',
+      'programma e release all\'ultima: il pulsante deve SPARIRE: ' + JSON.stringify(r));
+    assert.equal(r.scaricati.length, 0,
+      'e non deve scaricare nessun pacchetto: ' + JSON.stringify(r));
   } finally { await browser.close(); }
 });
+
 
 test('PROVA DI CONTROLLO: se il programma installato serve la copia congelata, il pacchetto viene scaricato', async () => {
   const {browser, pagina} = await apriConPonte({salute: {versione: '2.0.19', da: 'copia installata'}});
