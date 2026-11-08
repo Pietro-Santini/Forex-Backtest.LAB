@@ -133,3 +133,19 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
   rilettura). Ipotesi da verificare: salvataggio periodico, sincronizzazione preferenze,
   controllo aggiornamenti, footprint/notion.
 - Stato: DA FARE (dopo R1-R3 e finestre duplicate, come richiesto).
+
+## P1 — LINEE ENTRY/TP/SL DEGLI ORDINI PENDENTI NON SI VEDONO A MERCATO CHIUSO
+- Sintomo (proprietario, 8 novembre 2026): «non si vedono piu' le linee entry tp-sl degli ordini
+  pendenti, ne' in modalita' replay ne' in tempo reale, quando il mercato e' chiuso».
+- ATTENZIONE: e' una REGRESSIONE delle cure di questi giorni, non un difetto nuovo. Le cure
+  toccate: il congelamento della finestra (v2.1.2), il taglio mercato-chiuso che non svuota piu'
+  il grafico (v2.1.4), il margine futuro che si decide su due autorita' (v2.1.5).
+- Ipotesi da misurare (NON ancora verificata): a mercato chiuso la finestra si ferma prima
+  (`end` congelato, margine futuro zero), quindi il punto di ancoraggio delle linee - che sta
+  sull'istante dell'ordine - cade oltre il bordo destro e viene ritagliato dal clip del disegno.
+  Se l'ordine e' stato piazzato con l'ultima candela visibile, basta un pixel di confine per
+  farlo sparire del tutto.
+- DA FARE: misurare con un test (finestra congelata a mercato chiuso + ordine pendente ancorato
+  all'ultima candela) e curare. Le linee di un ordine pendente sono INFORMAZIONE, non carico:
+  devono vedersi anche a mercato chiuso, esattamente come le candele del passato.
+- Stato: DA FARE (prossimo, prima di R1).
