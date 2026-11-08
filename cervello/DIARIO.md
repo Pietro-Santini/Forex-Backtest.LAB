@@ -1,3 +1,25 @@
+- 2026-11-08 - OpenCode - **v2.2.0: la finestra duplicata mostra gli stessi asset della madre.**
+  Voce 4/5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md, misurata dal proprietario con due
+  screenshot del dialogo «Ricerca simbolo»: madre «ASSET DISPONIBILI (35)» con le stelline
+  piene, duplicata «ASSET DISPONIBILI (5)» con le stelline vuote.
+  CAUSA MISURATA nel codice: availableAssets() costruisce l'elenco dalle voci di #market piu'
+  customAssets. Una finestra PIP aggiuntiva nasce VUOTA per scelta esplicita
+  (initExtraPipWindow), quindi parte con i cinque simboli di default e customAssets vuoto:
+  anche se la madre ne ha trentacinque, la duplicata non puo' mostrarne piu' di cinque. La
+  watchlist sta in localStorage, che una finestra appena nata non ha ancora letto.
+  CURA: la madre passa il proprio elenco (availableAssets + customAssets) e la propria
+  watchlist sullo STESSO messaggio che gia' usa per il clone (pip_clone_snapshot), e la
+  duplicata lo applica all'apertura, nello stesso ordine e con gli stessi nomi.
+  ERRORE MIO durante la cura, e vale la pena di dirlo: avevo dichiarato la funzione dentro il
+  blocco if(tradingChannel){...}, quindi locale e irraggiungibile - il primo giro di prova era
+  rosso con "fblApplicaElencoAssetMadre is not defined" e per poco non l'ho raccontato come un
+  difetto dell'app invece che come il mio. Spostata a livello di pagina.
+  Secondo errore, nella prova: costruivo davvero gli asset della madre sulla finestra del
+  test, cosi' la duplicata ce li aveva gia' e la prova passava a vuoto (verde nei due versi).
+  Rifatta con l'elenco della madre come DATO.
+  Test: laboratorio/app/elenco_asset_duplicata.test.mjs (2 prove, provate anche al contrario).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-08 - OpenCode - **v2.1.9: il click sul grafico non porta piu' nella zona morta.**
   SEGNALATO dal proprietario: «se clicco sul grafico all'apertura mi porta tutto avanti in una
   zona morta non esistente dove non c'e' nessun dato; anche quando clicco torna all'ultima

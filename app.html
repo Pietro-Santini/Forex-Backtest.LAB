@@ -8845,6 +8845,38 @@ function broadcastDrawingsStateNow(){
 function requestDrawingsSyncNow(){
  return; // non si chiedono piu' i disegni alle altre finestre: ognuna ha i suoi
 }
+// Applica l'elenco degli asset e la watchlist arrivati dalla madre (voce 4/5).
+// Restituisce quanti nomi ha dovuto aggiungere: è il numero che il test misura, perché
+// "5 contro 35" non si vede da qui.
+function fblApplicaElencoAssetMadre(assets, custom, watchlist){
+  let aggiunti = 0;
+  try{
+    if(Array.isArray(custom) && custom.length){
+      custom.forEach(function(a){ if(a&&a.symbol&&!customAssets.some(x=>x&&x.symbol===a.symbol))customAssets.push(a); });
+    }
+    if(Array.isArray(assets) && assets.length){
+      const sel=$('market');
+      const noti=new Set([...(sel?[...sel.options]:[])].map(function(o){ return o.value; }));
+      assets.forEach(function(sym){
+        if(!sym||noti.has(sym))return;
+        const propria=customAssets.find(function(a){ return a&&a.symbol===sym; });
+        const nome=propria&&propria.name?propria.name:sym;
+        if(sel){
+          const opt=document.createElement('option');
+          opt.value=sym;
+          opt.textContent=(nome&&nome!==sym)?(nome+' ('+sym+')'):sym;
+          sel.insertBefore(opt, sel.querySelector('option[value="capital_search"]')||null);
+        }
+        noti.add(sym); aggiunti++;
+      });
+    }
+    if(Array.isArray(watchlist))favoriteAssets=watchlist.filter(function(a){ return typeof a==='string'&&a; }).slice(0,10);
+    try{ syncMarketChartSelect(); }catch(e){}
+    try{ if(typeof renderAssetPicker==='function' && $('assetPickerOverlay') && $('assetPickerOverlay').style.display==='flex') renderAssetPicker(); }catch(e){}
+  }catch(e){}
+  return aggiunti;
+}
+// ===================================================================
 if(tradingChannel){
  tradingChannel.onmessage=(ev)=>{
    const msg=ev&&ev.data;
@@ -8930,6 +8962,15 @@ if(tradingChannel){
            type:'pip_clone_snapshot', slot:0, storico:!liveModeActive,
            asset:currentAssetKey||null, mode, chartView,
            styleFields:collectStyleCloneFields(),
+           // ELENCO ASSET E WATCHLIST (voce 4/5, misurata 8 novembre 2026).
+           // Dal dialogo «Ricerca simbolo» delle due finestre: madre 35 asset con le stelline
+           // piene, duplicata 5 asset e stelline vuote. CAUSA: availableAssets() costruisce
+           // l'elenco dalle voci di #market piu' customAssets, e una finestra PIP nasce con i
+           // cinque di default e customAssets vuoto (nasce vuota per scelta esplicita).
+           // CURA: la madre passa quello che ha lei, una volta, e la duplicata lo applica.
+           assets:availableAssets(),
+           customAssets:(Array.isArray(customAssets)?customAssets.slice():[]),
+           watchlist:(Array.isArray(favoriteAssets)?favoriteAssets.slice():[]),
            // WARM-START (RICHIESTO ESPLICITAMENTE: "sono veramente troppo lente... a meno che
            // non ci inventiamo un qualcosa che sia molto più rapido"): niente riscrittura del
            // motore di rendering (draw()/chartGeometry() sono legati a un canvas solo, troppo
@@ -8949,6 +8990,12 @@ if(tradingChannel){
      // per asset_announce/applyRemoteAssetSwitch più sopra nel file.
      if(PIP_SLOT>0 && msg.slot===0){
        applyStyleCloneFields(msg.styleFields);
+       // L'ELENCO DEGLI ASSET E LA WATCHLIST: quelli della madre, non i cinque di default.
+       // SEGNALATO dallo screenshot del proprietario (8 novembre 2026): «gli asset disponibili
+       // e la watchlist devono essere identici a quelli della pagina madre, elencati allo
+       // stesso modo. Non sono due elenchi da tenere allineati a mano». Prima del resto, perche'
+       // l'asset che la madre ha a grafico potrebbe non essere ancora qui.
+       try{ fblApplicaElencoAssetMadre(msg.assets, msg.customAssets, msg.watchlist); }catch(e){}
        // RICHIESTO ESPLICITAMENTE (voce 4/5): 'se ho duplicato la finestra e sono col conto
        // collegato a MT5, non mi puo' aprire una finestra collegata con il conto CSV.
        // Assolutamente no. Deve essere sempre uguale al conto selezionato'. CAUSA: una
@@ -11837,7 +11884,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.1.9';
+const FBL_VERSIONE='2.2.0';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
