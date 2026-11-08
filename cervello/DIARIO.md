@@ -1,3 +1,25 @@
+- 2026-11-08 - OpenCode - **v2.2.1: nella duplicata niente scorrimento, e la madre torna a tutto
+  schermo.** Voci 2 e 3 di cervello/RICHIESTE-DUPLICA-FINESTRA.md.
+  **3) SCORRIMENTO.** SEGNALATO: «mi fa scorrere la pagina come se sotto ci fosse qualcosa, ma
+  ci deve essere soltanto il grafico e non mi deve scorrere nulla con la rotellina del mouse
+  oppure con il dito». MISURATO: `overflow:hidden` da solo non bastava. Aggiunto
+  `overscroll-behavior:none` (toglie il rimbalzo elastico, che su Chrome e Safari fa scorrere
+  anche quando overflow dice di no), `height:100%` su html (senza, l'altezza resta auto e la
+  pagina cresce oltre la finestra, con una barra di scorrimento vera) e `touch-action:none` sul
+  body, lasciando al canvas i gesti che gli servono. La barra laterale NON e' stata toccata:
+  scorre da sola se gli strumenti non ci stanno, e resta ancorata a sinistra del grafico.
+  **2) SCHERMO INTERO.** SEGNALATO: «quando creo una finestra duplicata non mi permette piu'
+  alla pagina madre di andare a schermo intero. E invece deve farlo.» MISURATO sul codice: il
+  controllo del ripiego stava DENTRO il .then() della richiesta - se la richiesta non risolve
+  (ed e' esattamento il caso con piu' finestre aperte, dove il browser la ignora e non risolve
+  ne' rifiuta niente) quel controllo non veniva raggiunto MAI: nessun ripiego, grafico che non
+  si allarga, pulsante che sembra morto. Ora il timer si arma subito, a prescindere.
+  NOTA: la cura anti-scroll esisteva gia' ma era andata PERSA durante le molte operazioni git
+  di questi giorni (stash, checkout). Ritrovata e rimessa, con la prova a guardia - è un
+  promemoria che una cura senza prova sparisce e nessuno se ne accorge.
+  Test: duplicata_solo_grafico.test.mjs (2) e schermo_intero_madre.test.mjs (3), tutti provati
+  anche al contrario. Collaudo: 18 prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-08 - OpenCode - **v2.2.0: la finestra duplicata mostra gli stessi asset della madre.**
   Voce 4/5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md, misurata dal proprietario con due
   screenshot del dialogo «Ricerca simbolo»: madre «ASSET DISPONIBILI (35)» con le stelline

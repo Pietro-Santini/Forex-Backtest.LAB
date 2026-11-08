@@ -54,7 +54,38 @@ test('se il fullscreen nativo non entra, il grafico si allarga lo stesso a tutto
   } finally { await browser.close(); }
 });
 
-test('col fullscreen nativo che funziona NON scatta il ripiego CSS', async () => {
+test('PROVA DEL DIFETTO CON LE FINESTRE DUPLICATE: la richiesta che NON risolve', async () => {
+  // Il caso segnalato: con una finestra duplicata aperta il browser (e il WebView2 dell'app
+  // desktop) ignora la richiesta di schermo intero e non risolve ne' rifiuta niente. Il ripiego
+  // stava dentro il .then(): non veniva raggiunto mai. Qui si misura proprio quello.
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(async () => {
+      const wrap = document.getElementById('chartWrap');
+      // Una richiesta che non risolve mai: ne' allora, ne' rifiutata.
+      wrap.requestFullscreen = () => new Promise(() => {});
+      document.fullscreenElement = null;
+      toggleMainChartFullscreen();
+      await new Promise(res => setTimeout(res, 1500));
+      return {
+        classe: wrap.className,
+        attivo: fblSchermoInteroCssAttivo(),
+        posizione: getComputedStyle(wrap).position,
+        larghezza: Math.round(wrap.getBoundingClientRect().width),
+        vw: window.innerWidth
+      };
+    });
+    assert.equal(r.attivo, true,
+      'la richiesta che non risolve deve comunque far comparire il ripiego: ' + JSON.stringify(r));
+    assert.equal(r.posizione, 'fixed',
+      'e il grafico si deve allargare a tutto schermo: ' + JSON.stringify(r));
+    assert.ok(r.larghezza >= r.vw - 2,
+      'larghezza a tutto schermo: ' + JSON.stringify(r));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('PROVA DI CONTROLLO: col fullscreen nativo che funziona NON scatta il ripiego CSS', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(async () => {

@@ -11884,7 +11884,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.0';
+const FBL_VERSIONE='2.2.1';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -27493,13 +27493,28 @@ function toggleMainChartFullscreen(){
  if(fblSchermoInteroCssAttivo()){ fblEsciSchermoInteroCss(); return; }
  if(document.fullscreenElement){ document.exitFullscreen?.().catch(()=>{}); return; }
  if(wrap.requestFullscreen){
-   let entrato=false;
+   let entrato=false, ripiegato=false;
    const cb=()=>{ if(document.fullscreenElement)entrato=true; };
    try{ document.addEventListener('fullscreenchange',cb); }catch(e){}
-   Promise.resolve(wrap.requestFullscreen()).then(()=>{
-     // Entrato davvero: niente ripiego CSS.
-     setTimeout(()=>{ try{ document.removeEventListener('fullscreenchange',cb); }catch(e){} if(!entrato&&!document.fullscreenElement)fblEntraSchermoInteroCss(); },120);
-   }).catch(()=>{ fblEntraSchermoInteroCss(); });
+   // IL CONTROLLO DEL RIPIEGO SI ARMA SEMPRE, non solo quando la promessa risolve.
+   //
+   // SEGNALATO dal proprietario (8 novembre 2026): «quando creo una finestra duplicata non mi
+   // permette piu' alla pagina madre di andare a schermo intero. E invece deve farlo.»
+   //
+   // MISURATO sul codice: il controllo stava DENTRO il .then() della richiesta. Se la richiesta
+   // non risolve - ed e' esattamento il caso con piu' finestre aperte, dove il browser (o il
+   // WebView2 dell'app) la ignora e non risolve ne' rifiuta niente - quel controllo non veniva
+   // raggiunto MAI: nessun ripiego, grafico che non si allarga, pulsante che sembra morto.
+   // Ora il timer parte subito, qualunque cosa faccia la promessa.
+   try{ window.setTimeout(function(){
+     try{ document.removeEventListener('fullscreenchange',cb); }catch(e){}
+     if(!entrato && !document.fullscreenElement && !ripiegato){ ripiegato=true; fblEntraSchermoInteroCss(); }
+   },200); }catch(e){}
+   Promise.resolve(wrap.requestFullscreen()).then(function(){
+     // Entrato davvero: niente ripiego CSS. Il timer se ne accorge da solo.
+   }).catch(function(){
+     if(!entrato && !document.fullscreenElement && !ripiegato){ ripiegato=true; fblEntraSchermoInteroCss(); }
+   });
  }else{
    fblEntraSchermoInteroCss();
  }
@@ -52863,10 +52878,29 @@ document.title='Forex Backtest Lab';
  const kioskStyle=document.createElement('style');
  // I 24 px in cima erano lo spazio della banderuola "PIP 2", che il proprietario ha fatto
  // togliere: senza di lei quello spazio era una striscia vuota rubata al grafico.
- kioskStyle.textContent=`
-   html.fbPipChartOnly,body.fbPipChartOnly{padding:0!important;margin:0!important;overflow:hidden!important}
-   body.fbPipChartOnly .chartWrap{height:100vh!important;margin-top:0}
- `;
+  // NIENTE SCORRIMENTO, IN NESSUN MODO (voce 3, misurata 8 novembre 2026).
+  //
+  // SEGNALATO dal proprietario: «quando ho una finestra duplicata mi fa scorrere la pagina come
+  // se sotto ci fosse qualcosa, ma invece no: ci deve essere soltanto il grafico e non mi deve
+  // scorrere nulla con la rotellina del mouse oppure con il dito che scorre sulla pagina. E la
+  // barra laterale degli strumenti e del replay deve restare ancorata li' a sinistra».
+  //
+  // overflow:hidden da solo NON bastava, e misura e' la ragione delle righe aggiunte:
+  //   - overscroll-behavior:none toglie il rimbalzo elastico del dito, che su Chrome e Safari
+  //     fa scorrere la pagina anche quando overflow dice di no;
+  //   - height:100% su html chiude l'ultima strada: senza, l'altezza resta "auto" e la pagina
+  //     puo' crescere oltre la finestra, producendo una barra di scorrimento vera;
+  //   - touch-action:none sul body impedisce al dito di far scorrere il documento, lasciando al
+  //     canvas i gesti che gli servono (pan, zoom, mirino, gia' gestiti).
+  // La barra laterale NON si tocca: rimane ancorata per conto suo (chartFsSidebar ha il suo
+  // overflow-y e si apre/chiude col pulsantino) - toglierglielo renderebbe illeggibili elenchi
+  // piu' lunghi dello schermo.
+  kioskStyle.textContent=`
+    html.fbPipChartOnly,body.fbPipChartOnly{padding:0!important;margin:0!important;overflow:hidden!important;overscroll-behavior:none!important;height:100%!important}
+    html.fbPipChartOnly{height:100%!important}
+    body.fbPipChartOnly{touch-action:none}
+    body.fbPipChartOnly .chartWrap{height:100vh!important;margin-top:0}
+  `;
  document.head.appendChild(kioskStyle);
  // ORDINE IMPORTANTE (bug collegato, trovato mentre si aggiungeva movePipHistNavIntoSidebar qui
  // sotto): fbPipHideEverythingExceptChartWrap() nasconde con uno stile INLINE (display:none
