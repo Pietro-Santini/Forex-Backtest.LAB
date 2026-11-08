@@ -1,3 +1,44 @@
+- 2026-11-08 - OpenCode - **v2.2.3: il grafico non perde piu' le candele in mezzo allo storico.
+  Tre difetti segnalati, UNA sola causa misurata.**
+  SEGNALATO dal proprietario (8 novembre, con tre foto in tre punti diversi dello storico):
+  «quando sto scorrendo il grafico a mercato chiuso il grafico si rompe in delle zone specifiche,
+  smette di far visualizzare le candele lungo il grafico in parte; se ci spostiamo un altro po'
+  ritorna a funzionare». Nella stessa giornata altri due sintomi: «il grafico non mi permette di
+  andare oltre l'ultima candela spostandomi» e «se scorro indietro nel tempo l'etichetta del
+  prezzo corrente prende di riferimento l'ultima candela visualizzabile, invece deve rimanere
+  sempre sull'ultima candela creata, non si puo' spostare l'etichetta con la linea».
+  CAUSA MISURATA, una sola per tutti e tre: il confine della chiusura di mercato si cercava con
+  una RICERCA BINARIA che da' per certo che il predicato sia ordinato (prima tutte le candele
+  aperte, poi tutte chiuse). Il mercato non e' ordinato cosi': ogni notte chiude 22:00-00:00 e
+  riapre, e il weekend chiude da venerdi' sera. Misurato su 3000 candele da un minuto:
+  - la finestra che attraversa la pausa notturna (righe 1200-1499) teneva 60 candele su 300:
+    240 candele sparite, ed e' il buco delle foto;
+  - 269 finestre su 3000 con buchi, da pochi minuti a quasi tutta la finestra; spostandosi il
+    confine si sposta, e in alcuni tratti tornano (da cui «ritorna a funzionare»);
+  - lo stesso confine a caso era il tetto di maxViewEnd() (lo spostamento a mano si fermava
+    prima dell'ultima candela aperta) e il congelamento dell'autosegui;
+  - la riga del prezzo leggeva la chiusura della candela piu' a destra FRA QUELLE VISIBILI,
+    quindi scorrendo indietro l'etichetta cambiava numero a ogni spostamento.
+  CURA: il confine si prende dall'ULTIMA CANDELA DEI DATI, non dall'orologio, e si taglia SOLO
+  LA CODA di candele chiuse. Due confini, uno per mestiere (lezione imparata dal collaudo
+  completo, che ha trovato una prova rossa e l'ha fatta sistemare bene invece di aggirarla):
+  fblConfineChiusura() guarda il CALENDARIO e comanda il taglio delle candele oltre la chiusura
+  e il tetto dello spostamento a mano (che quando non trova niente lascia arrivare fino
+  all'ultima candela vera, come prima); fblConfineAutosegui() guarda l'ORARIO DELLA SESSIONE
+  piu' l'istante di chiusura e comanda il congelamento dell'autosegui, che non deve mai scappare
+  avanti da solo. La riga del prezzo si aggancia all'ultima candela creata prima della chiusura
+  (fblPrezzoRigaCorrente), non all'ultima visibile. La richiesta del 1 novembre resta valida:
+  le candele OLTRE la chiusura non si mostrano, e una fetta finita tutta dentro il weekend non
+  lascia mai il grafico vuoto.
+  NOTA DI METODO: le attese delle prove si calcolano col predicato che l'app usava PRIMA della
+  cura (fblMercatoFermoOra, candela per candela), cosi' il rosso-senza misura il difetto vero e
+  non l'assenza di una funzione nuova. Rosso-senza misurato: 60 candele su 300 e 269 finestre
+  con buchi.
+  Test: laboratorio/app/buco_grafico_chiuso.test.mjs (6 prove, compresa la spazzata su TUTTE le
+  finestre dello storico e la prova di controllo a mercato aperto).
+  Collaudo: 53 prove verdi sui file toccati (mercato chiuso, zona morta, congelamento,
+  prestazioni, duplicate, conto madre, linee pendenti).
+
 - 2026-11-08 - OpenCode - **FIREBASE: LE SCRITTURE E LE LETTURE SONO SCESE, misurato dal proprietario.** Dalla console di Firebase (novembre 2026): scritture 5 su 20K/giorno (era 3,1K), letture 35 su 50K/giorno (era 6,4K), eliminazioni 0. Il costo resta 5,72 EUR, ma quello e' il costo base del progetto (archivio e banda), non lo sforo. La cura che ha portato il risultato: la rete di sicurezza rileggeva l'intero documento dal cloud OGNI 60 SECONDI (v2.1.7 la allenta a mezz'ora a mercato chiuso), piu' il conteggio del traffico gia' presente. Da tenere sotto controllo: se le letture tornano a salire, il primo posto da guardare e' la rete di sicurezza e la sincronizzazione delle preferenze.
 
 - 2026-11-08 - OpenCode - **v2.2.2: la finestra duplicata sta sullo STESSO CONTO della madre.**

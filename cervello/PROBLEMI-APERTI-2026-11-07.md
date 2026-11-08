@@ -134,6 +134,28 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
   controllo aggiornamenti, footprint/notion.
 - Stato: DA FARE (dopo R1-R3 e finestre duplicate, come richiesto).
 
+## P0 — IL GRAFICO PERDE LE CANDELE IN MEZZO ALLO STORICO (e non si sposta oltre l'ultima)
+- Stato: CURATO in v2.2.3.
+  SEGNALATO (8 novembre 2026, tre foto in tre punti diversi): «quando sto scorrendo il grafico
+  a mercato chiuso il grafico si rompe in delle zone specifiche, smette di far visualizzare le
+  candele lungo il grafico in parte; se ci spostiamo un altro po' ritorna a funzionare». Nella
+  stessa giornata: «ile grafico non mi permette di andare oltre l'ultima candela spostandomi»
+  e l'etichetta del prezzo che segue l'ultima candela visibile invece dell'ultima creata.
+  CAUSA MISURATA, una sola per i tre sintomi: il confine della chiusura si cercava con una
+  ricerca binaria che dà per certo che il predicato sia ordinato (prima tutte aperte, poi tutte
+  chiuse). Il mercato non è ordinato così: pausa notturna 22:00-00:00, riapertura, weekend.
+  Misurato su 3000 candele da un minuto: la finestra che attraversa la pausa notturna teneva 60
+  candele su 300 (240 sparite), 269 finestre su 3000 con buchi, e spostandosi i buchi si
+  spostano. Stessa ricerca sbagliata era il tetto di maxViewEnd() e il congelamento
+  dell'autosegui, e la riga del prezzo leggeva l'ultima candela visibile.
+  CURA: il confine si prende dall'ultima candela dei dati e si taglia SOLO LA CODA chiusa. Due
+  confini separati (lezione del collaudo completo, che ha trovato una prova rossa invece di
+  lasciar passare la cura): fblConfineChiusura() col calendario comanda il taglio e il tetto
+  dello spostamento a mano; fblConfineAutosegui() con l'orario della sessione più l'istante di
+  chiusura comanda il congelamento dell'autosegui. Resta valida la richiesta del 1 novembre: le
+  candele oltre la chiusura non si mostrano, e il grafico non si svuota mai.
+- Test: laboratorio/app/buco_grafico_chiuso.test.mjs
+
 ## P1 — LINEE ENTRY/TP/SL DEGLI ORDINI PENDENTI NON SI VEDONO A MERCATO CHIUSO
 - Sintomo (proprietario, 8 novembre 2026): «non si vedono piu' le linee entry tp-sl degli ordini
   pendenti, ne' in modalita' replay ne' in tempo reale, quando il mercato e' chiuso».
