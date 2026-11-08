@@ -148,4 +148,4 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
 - DA FARE: misurare con un test (finestra congelata a mercato chiuso + ordine pendente ancorato
   all'ultima candela) e curare. Le linee di un ordine pendente sono INFORMAZIONE, non carico:
   devono vedersi anche a mercato chiuso, esattamente come le candele del passato.
-- Stato: DA FARE (prossimo, prima di R1).
+- Stato: CURATO in v2.1.9 (il tetto di viewEnd a mercato chiuso e' l'ultima candela aperta).

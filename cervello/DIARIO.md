@@ -1,3 +1,25 @@
+- 2026-11-08 - OpenCode - **v2.1.9: il click sul grafico non porta piu' nella zona morta.**
+  SEGNALATO dal proprietario: «se clicco sul grafico all'apertura mi porta tutto avanti in una
+  zona morta non esistente dove non c'e' nessun dato; anche quando clicco torna all'ultima
+  candela e poi clicco dentro al grafico, lui si sposta automaticamente piu' avanti nella zona
+  morta, in modo del tutto casuale».
+  CAUSA MISURATA, ed e' una conseguenza delle cure di questi giorni: maxViewEnd() lasciava
+  arrivare viewEnd fino a idx + 0,85*n, cioe' OLTRE l'ultima candela. In Live quel margine
+  serve (orari futuri, pallini delle notizie); a mercato chiuso non serve piu' niente, ed e'
+  spazio vuoto preso a pieno diritto. Il click spegne l'auto-segui, e con l'auto-segui spento il
+  congelamento non aveva piu' niente da trattenere: la finestra restava nella zona morta. Da qui
+  il «del tutto casuale» - dipende da quante candele oltre la chiusura aveva lasciato il feed.
+  CURA: a mercato chiuso il tetto e' L'ULTIMA CANDELA APERTA, non oltre. Ci si puo' ancora
+  spostare avanti e indietro DENTRO le candele vere (provato), e a mercato aperto il margine
+  futuro resta com'era (prova di controllo).
+  DIFETTO TROVATO DAL TEST DELLE PRESTAZIONI, e vale la pena di dirlo: la prima versione della
+  cura faceva la ricerca del confine a OGNI fotogramma, costruendo il calendario dello
+  strumento ogni volta - 20 calendari per 80 candele, quando il limite e 11. Era esattamente il
+  carcame che aveva lasciato l'app su «Non risponde». Ora il confine si cerca una volta per
+  minuto (chiave asset + minuto).
+  Test: laboratorio/app/zona_morta.test.mjs (3 prove, provate anche al contrario).
+  Collaudo: 28 prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-08 - OpenCode - **v2.1.8: l'aggiornamento torna in UN CLICK SOLO, e gli indicatori
   non si allungano piu' nel futuro.**
   **1) DUE CLICK PER AGGIORNARE (seconda segnalazione del proprietario, 8 novembre).** MISURATO:

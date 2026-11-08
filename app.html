@@ -11837,7 +11837,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.1.8';
+const FBL_VERSIONE='2.1.9';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -13996,13 +13996,69 @@ function maxNoOverlapVisibleCount(){
 function maxManualZoomOutVisibleCount(){
  return Math.max(20000,rows.length||0);
 }
+// Memoria del confine «ultima candela aperta» (vedi maxViewEnd): una ricerca per minuto,
+// non una per fotogramma. Le righe possono cambiare (nuove candele) senza che il confine si
+// sposti davvero: la chiave tiene anche il numero di righe, così una ricerca fatta su un
+// numero diverso di candele non viene riusata per sbaglio.
+let __fblConfineCache={chiave:null,confine:0,righe:-1};
 // Massimo valore di viewEnd: permette di scorrere il grafico oltre l'ultima candela
 // disponibile (come richiesto), lasciando spazio vuoto a destra, senza però poter
 // scorrere all'infinito.
 function maxViewEnd(){
- if(!rows.length)return 0;
- const n=getVisibleCount();
- return idx+Math.max(1,Math.floor(n*0.85));
+  if(!rows.length)return 0;
+  const n=getVisibleCount();
+  // IL TETTO, E LA ZONA MORTA OLTRE L'ULTIMA CANDELA APERTA.
+  //
+  // SEGNALATO dal proprietario (8 novembre 2026): «se clicco sul grafico all'apertura mi porta
+  // tutto avanti in una zona morta non esistente dove non c'e' nessun dato; anche quando clicco
+  // torna all'ultima candela e poi clicco dentro al grafico, lui si sposta automaticamente piu'
+  // avanti nella zona morta, in modo del tutto casuale».
+  //
+  // CAUSA MISURATA, ed e' una conseguenza delle cure di questi giorni. maxViewEnd() lasciava
+  // arrivare viewEnd fino a idx + 0,85*n, cioe' OLTRE l'ultima candela. In Live quel margine
+  // serve (spazio per gli orari futuri e i pallini delle notizie), MA a mercato chiuso non
+  // serve piu' niente: e' spazio vuoto che si prende a pieno diritto. Il click sul grafico
+  // spegne l'auto-segui (freezeViewIfNeeded), e con l'auto-segli spento il congelamento non
+  // aveva piu' niente da trattenere: la finestra restava oltre l'ultima candela, nella zona
+  // morta. Da qui il «mi porta tutto avanti» e il «del tutto casuale» (dipende da quanti
+  // candele aveva lasciato il feed).
+  //
+  // CURA: a mercato chiuso il tetto e' L'ULTIMA CANDELA APERTA, non oltre. Il resto del
+  // grafico (spostarsi indietro, zoomare, il taglio delle candele fabbricate) non cambia: si
+  // toglie solo la possibilita' di finire in un posto dove non c'e' niente da guardare.
+  const base=idx+Math.max(1,Math.floor(n*0.85));
+  let chiuso=false;
+  try{ chiuso = liveModeActive && !liveReplayActive && fblMercatoFermoOra(currentAssetKey, Date.now()); }catch(e){}
+  if(chiuso){
+    // Il confine si cerca UNA VOLTA SOLA PER MINUTO, non a ogni fotogramma.
+    // getViewWindow() - che chiama questa funzione - gira molte volte per frame, e una ricerca
+    // che costruisce il calendario dello strumento a ogni giro è esattamente il carcame che
+    // aveva lasciato l'app su «Non risponde». MISURATO dal test delle prestazioni con la ricerca
+    // senza memoria: 20 calendari per 80 candele, quando il limite è 11. La risposta cambia al
+    // cambio di minuto (l'istante in cui il mercato chiude), non prima: la memoria ha come
+    // chiave asset + minuto.
+    const _chiave=currentAssetKey+'|'+Math.floor(Date.now()/60000);
+    let _lo;
+    if(__fblConfineCache.chiave===_chiave && __fblConfineCache.righe===rows.length){
+      _lo=__fblConfineCache.confine;
+    }else{
+      _lo=0;
+      let _hi=rows.length;
+      while(_lo<_hi){
+        const _mid=(_lo+_hi)>>1;
+        const _tm=parseDateTime(rows[_mid].date);
+        const _k = Number.isFinite(_tm) && fblMercatoFermoOra(currentAssetKey,_tm);
+        if(_k) _hi=_mid; else _lo=_mid+1;
+      }
+      __fblConfineCache={chiave:_chiave,confine:_lo,righe:rows.length};
+    }
+    // Se la prima candela e' gia' chiusa (weekend: TUTTE chiuse) il tetto e' L'ULTIMA CANDELA
+    // DISPONIBILE, non lo spazio futuro: meglio l'ultimo dato vero di uno spazio vuoto.
+    // MISURATO dal test: con `Math.max(base, rows.length)` il tetto tornava oltre l'ultima
+    // candela - cioe' nella stessa zona morta che la cura deve togliere.
+    return _lo>0 ? _lo : Math.max(0, rows.length-1);
+  }
+  return base;
 }
 // Finestra di visualizzazione corrente: `start`/`end` sono le posizioni (in indice di
 // candela, anche frazionarie) del bordo sinistro/destro della vista e possono andare

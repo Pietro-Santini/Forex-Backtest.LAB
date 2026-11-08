@@ -88,7 +88,10 @@ test('a mercato chiuso con candele oltre la chiusura, andare AVANTI a mano resta
       return {totale,aEnd:a.end,bEnd:b.end};
     })()`);
     assert.ok(r.totale>=130, 'la prova deve avere candele oltre la chiusura: '+JSON.stringify(r));
-    assert.equal(r.aEnd, r.totale, 'si deve poter arrivare fino all\'ultima candela: '+JSON.stringify(r));
+    // L'ultima candela VERA, non una posizione in piu': dalla cura della zona morta (8 novembre
+    // 2026) arrivare a rows.length significava finire nello spazio vuoto dopo l'ultima candela.
+    assert.equal(r.aEnd, r.totale-1,
+      'si deve poter arrivare fino all\'ultima candela vera: '+JSON.stringify(r));
     assert.ok(r.bEnd < r.aEnd, 'e tornare indietro: '+JSON.stringify(r));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
