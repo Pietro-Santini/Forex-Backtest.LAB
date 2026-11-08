@@ -1,3 +1,25 @@
+- 2026-11-08 - OpenCode - **v2.1.8: l'aggiornamento torna in UN CLICK SOLO, e gli indicatori
+  non si allungano piu' nel futuro.**
+  **1) DUE CLICK PER AGGIORNARE (seconda segnalazione del proprietario, 8 novembre).** MISURATO:
+  il ripiego del piano aggiornamento chiedeva "quale PAGINA sta servendo il ponte"; rispondere
+  'copia aggiornata' - che da quando il ponte si aggiorna da se' la pagina e' il caso NORMALE -
+  faceva concludere serve:false, cioe' "basta ricaricare". Al primo click non partiva quindi
+  l'installazione dei pacchetti, il pulsante restava acceso, e serviva il secondo click.
+  Servire la pagina nuova non vuol dire ESSERE aggiornati: il ponte puo' servire l'ultima
+  app.html restando lui stesso un eseguibile vecchio - ed e' esattamente il caso che rompe il
+  collegamento con MT5. CURA: il ripiego non puo' mai escludere il pacchetto.
+  Aggiunto: il piano si ricalcola appena il ponte ricomincia a rispondere, invece di restare
+  sulla decisione presa quand'era muto (la memoria era di 60 s).
+  Test: setup_non_necessario.test.mjs (6 prove; il primo riscritto perche' misurava la regola
+  sbagliata - e un test che misura la regola sbagliata tiene in vita il difetto).
+  **2) GLI INDICATORI NON SI ALLUNGANO OLTRE L'ULTIMA CANDELA.** SEGNALATO: «gli indicatori
+  continuano a scorrere il tempo e non si fermano al momento dell'ultima candela registrata
+  prima della chiusura del mercato». CAUSA MISURATA nell'EMA: l'offset di disegno (quello dello
+  script Pine, che sposta il DISEGNO a destra) spingeva il punto finale della linea oltre
+  l'ultima candela vera - e a mercato chiuso quello spazio e' vuoto. Ora il punto finale non
+  supera mai idx. Test: indicatore_non_sfonda.test.mjs (2 prove).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
 - 2026-11-07 - OpenCode - **v2.1.7: a mercato chiuso Firebase non viene interpellato.**
   MISURATO dal proprietario (quota Firebase, 7 novembre 2026): letture 6,4K/giorno, scritture
   «in realta' non dovrebbe ne' leggere ne' scrivere nulla a mercati chiusi».
