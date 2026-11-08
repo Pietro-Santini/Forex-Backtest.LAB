@@ -1,3 +1,10 @@
+## Notizie sul grafico: archivio locale + account, e pallini anche in replay
+- Stato: FATTO in v2.2.4 (8 novembre 2026, richiesto dal proprietario nello stesso messaggio).
+  Le notizie che arrivano dal feed si conservano in locale E sull'account (documento
+  users/{uid}/data/notizie), l'archivio alimenta i pallini del grafico, quindi i pallini si
+  vedono anche in Storico/replay e non dipendono piu' dalla rete. Importanti un anno, tutto
+  per due settimane. Test: laboratorio/app/notizie_archivio.test.mjs
+
 # Lista completa delle richieste del proprietario (aggiornata l'8 novembre 2026)
 
 Ordine di lavoro dall'alto verso il basso. Ogni voce: **misurare → curare → test → pubblicare**.

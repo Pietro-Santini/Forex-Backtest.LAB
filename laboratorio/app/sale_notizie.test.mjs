@@ -60,11 +60,16 @@ test('l archivio conserva solo le notizie che contano, e non duplica', async () 
               // sopravvive al ricaricamento: è su localStorage
               salvate: JSON.parse(localStorage.getItem(NOTIZIE_ARCHIVIO_KEY) || '[]').length};
     });
-    assert.equal(r.primi, 2, 'si tengono solo rosse e arancioni: le Low sono rumore');
+    assert.equal(r.primi, 3, 'in archivio entrano tutte e tre: la Low entra per il replay');
     assert.equal(r.ancora, 0, 'le stesse notizie non si riscrivono');
-    assert.equal(r.quante, 2);
-    assert.deepEqual(r.gravita, ['High', 'Medium']);
-    assert.equal(r.salvate, 2, 'l archivio deve sopravvivere al ricaricamento della pagina');
+    assert.equal(r.quante, 3);
+    // REGOLA CAMBIATA (8 novembre 2026, richiesto: le notizie devono funzionare anche in
+    // replay): prima qui si tenevano solo le importanti e la prova lo difendeva
+    // ["si tengono solo rosse e arancioni: le Low sono rumore"]. Adesso le Low si tengono
+    // DUE SETTIMANE (notizie_archivio.test.mjs lo misura per intero), perche' in replay devono
+    // comparire anche quelle; le importanti restano un anno per la statistica.
+    assert.deepEqual(r.gravita, ['High', 'Low', 'Medium']);
+    assert.equal(r.salvate, 3, 'l archivio deve sopravvivere al ricaricamento della pagina');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

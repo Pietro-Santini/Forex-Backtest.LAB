@@ -1,3 +1,40 @@
+- 2026-11-08 - OpenCode - **v2.2.4: le notizie sul grafico restano, in locale e sull'account.**
+  RICHIESTO dal proprietario: «tutte le notizie che vengono aggiunte sul grafico salvale in
+  locale e sull'account scelto al login, cosi' non le richiede a Forex Factory di continuo ogni
+  volta che entriamo nel grafico, e abbiamo anche uno storico personale delle notizie sul
+  grafico che rimangono e che funziona anche in modalita replay. Dal momento del primo login
+  in assoluto lui inizia a registrare tutte le notizie».
+  CAUSA MISURATA: i pallini si disegnavano solo da `newsEvents`, l'ultima copia del feed, e il
+  feed arriva SOLO in Live (il polling e' agganciato allo stato Live). In Storico/replay
+  `newsEvents` e' vuoto, quindi nessun pallino, e non c'era modo di rivedere le notizie di
+  ieri. L'archivio locale esisteva gia' (fbl_notizie_archivio, lo usava solo la statistica del
+  freno notizie) ma non alimentava il grafico.
+  CURA, in quattro pezzi:
+  1) la lista che il grafico disegna e' l'ARCHIVIO (locale + account) piu' l'ultima copia del
+     feed (newsGrafico, notizieGraficoAggiorna): i pallini restano anche in Storico/replay e
+     compaiono subito all'apertura, senza aspettare la rete;
+  2) l'archivio accetta le notizie in DUE forme, quella del feed (date/country/impact/title) e
+     quella dell'account (t/cur/imp/tit) - notizieVoce(), una sola strada, cosi' locale e cloud
+     restano allineati (misurato: prima le seconde venivano scartate in silenzio);
+  3) le notizie nuove partono per l'account: documento a parte users/{uid}/data/notizie, scritto
+     solo quando la lista e' diversa dall'ultima (regola «identico = non si scrive»), letto
+     all'avvio dentro initSession - server proprio se configurato, Firebase come rete di
+     sicurezza, come gli altri documenti;
+  4) in archivio le importanti restano un anno (la statistica guarda indietro) e TUTTO per due
+     settimane (la fascia che si replayza davvero).
+  NOTA SULLA FRAGILITA' TROVATA STRADA FACENDO: chi assegna newsEvents senza passare dal
+  polling lasciava la lista da disegnare vuota e i pallini sparivano - misurato su tre prove
+  esistenti (telefono_tocco_grafico, notizie_altri_dispositivi) e su una che difendeva la regola
+  vecchia. Ora notizieGraficoSincrona() controlla a fotogramma un NUMERO (quanti eventi aveva
+  il feed l'ultima volta) e ricostruisce solo se e' cambiato: un confronto, non un giro.
+  REGOLE CAMBIATE DI CONSEGUENZA, con le prove aggiornate e il motivo scritto dentro:
+  - in Storico/replay i pallini RESTANO (notizie_altri_dispositivi misurava zero);
+  - in archivio le Low entrano per due settimane (sale_notizie misurava «le Low sono rumore»).
+  Test: laboratorio/app/notizie_archivio.test.mjs (5 prove, compresa la spazzata sui pallini
+  DAVVERO disegnati - newsDotHitRects dopo draw() - e la prova di controllo a grafico vuoto).
+  Rosso-senza misurato: 3 notizie su 4 in archivio e ZERO pallini in replay.
+  Collaudo: 54 prove verdi fra notizie e grafico, 48 sul mercato chiuso e le duplicate.
+
 - 2026-11-08 - OpenCode - **v2.2.3: il grafico non perde piu' le candele in mezzo allo storico.
   Tre difetti segnalati, UNA sola causa misurata.**
   SEGNALATO dal proprietario (8 novembre, con tre foto in tre punti diversi dello storico):

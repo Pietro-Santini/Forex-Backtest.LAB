@@ -1471,6 +1471,44 @@ window.fblAvviaSoloBacktest=function(){
       }catch(e){ console.warn("Lettura footprint da Firestore fallita:", e); return null; }
     },
     _footprintFirma: null,
+    // NOTIZIE SUL GRAFICO: L'ARCHIVIO PERSONALE. RICHIESTO dal proprietario (8 novembre 2026):
+    // "tutte le notizie che vengono aggiunte sul grafico salvale in locale e sull'account scelto
+    // al login, cosi' non le richiede a Forex Factory di continuo ogni volta che entriamo nel
+    // grafico, e abbiamo anche uno storico personale delle notizie che rimane e che funziona
+    // anche in replay".
+    // Documento a parte (users/{uid}/data/notizie), lista di eventi {t,cur,imp,tit} - la stessa
+    // forma dell'archivio locale. Scrive SOLO notizieSalva, e solo quando la lista e' diversa
+    // dall'ultima scritta (stessa regola "identico = non si scrive" degli altri documenti):
+    // le notizie nuove sono poche al giorno, quindi qui non c'e' nessun rischio di raffica.
+    async notizieSalva(eventi){
+      if(!this.uid) return false;
+      if(!this._puoScrivere('notizie')) return false;
+      try{
+        if(!Array.isArray(eventi)||!eventi.length) return false;
+        const testo=JSON.stringify(eventi);
+        const firma=firmaSemplice(testo);
+        if(firma===this._notizieFirma) return false;   // identico: non si paga due volte
+        await setDoc(doc(db,"users",this.uid,"data","notizie"),
+          { v:1, eventi: eventi, bytes: testo.length, updatedAt: serverTimestamp() });
+        this._conta('scrittura','notizie',testo);
+        this._notizieFirma = firma;
+        return true;
+      }catch(e){ console.warn("Salvataggio notizie su Firestore fallito:", e); return false; }
+    },
+    async notizieLeggi(){
+      if(!this.uid) return null;
+      try{
+        const snap=await getDoc(doc(db,"users",this.uid,"data","notizie"));
+        if(!snap.exists())return null;
+        const eventi=(snap.data()&&snap.data().eventi)||null;
+        // Firma ricalcolata subito: un salvataggio subito dopo la lettura non riscrive l'identico.
+        if(Array.isArray(eventi)&&eventi.length){
+          try{ this._notizieFirma=firmaSemplice(JSON.stringify(eventi)); }catch(e){}
+        }
+        return Array.isArray(eventi)?eventi:null;
+      }catch(e){ console.warn("Lettura notizie da Firestore fallita:", e); return null; }
+    },
+    _notizieFirma: null,
     // DISEGNI/INDICATORI CONDIVISI FRA DISPOSITIVI (vedi graficoCloudAvvia nello script principale):
     // documento a parte, users/{uid}/data/grafico, una voce per sessione+asset. Scrittura "merge":
     // si mandano solo le voci cambiate, le altre restano come sono.
@@ -11906,7 +11944,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.3';
+const FBL_VERSIONE='2.2.4';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -20393,12 +20431,16 @@ function draw(){
  // newsDotHitRects rappresenta quindi ora un CLUSTER (`events`: array, MAI vuoto, un solo
  // elemento per un evento isolato) invece di un singolo evento — vedi clusterNewsForDisplay().
  newsDotHitRects=[];
- if(liveModeActive && newsEnabled && newsEvents.length){
+ notizieGraficoSincrona();   // la lista da disegnare non resti mai indietro
+ // NOTIZIE IN REPLAY (richiesto l'8 novembre 2026): i pallini si disegnano dall'archivio
+ // personale (feed + locale + account), non dall'ultima copia del feed dal vivo - cosi'
+ // restano anche in Storico/replay, dove la rete non arriva.
+ if(newsEnabled && newsGrafico.length){
    const axisY=pad.t+ch;
    const g=chartGeometry();
    if(g){
      ctx.save();
-     const filtered=newsEvents.filter(ev=>ev&&newsSeverityFilter[ev.impact]&&newsCountryEnabled(ev.country));
+     const filtered=newsGrafico.filter(ev=>ev&&newsSeverityFilter[ev.impact]&&newsCountryEnabled(ev.country));
      const clusters=clusterNewsForDisplay(filtered);
      clusters.forEach(cluster=>{
        const t=Date.parse(cluster.events[0].date);
@@ -39332,9 +39374,10 @@ async function refreshNewsFeed(){
      if(res.ok&&res.data&&Array.isArray(res.data.events)){
        newsEvents=res.data.events;
        newsFetchedAt=Date.now();
+       notizieGraficoAggiorna();   // la lista da disegnare si rifà subito, feed nuovo
        // Ogni calendario che passa di qui lascia qualcosa nell'archivio: e' l'unico momento in cui
        // le notizie esistono, e domani questa stessa lista sara' gia' stata sostituita.
-       try{ notizieArchivioAggiungi(newsEvents); }catch(e){}
+       try{ if(notizieArchivioAggiungi(newsEvents))notizieCloudPubblica(); }catch(e){}
      }
      // Se il bridge non risponde o dà errore: NON tocchiamo newsEvents (si tiene l'ultima
      // copia buona, o resta vuota se non ne abbiamo mai avuta una) — mai un errore visibile
@@ -39397,6 +39440,7 @@ function newsPollingSincronizza(){
 const NOTIZIE_ARCHIVIO_KEY='fbl_notizie_archivio';
 const NOTIZIE_ARCHIVIO_MAX=3000;        // ~ un anno di eventi importanti, poche centinaia di KB
 const NOTIZIE_ARCHIVIO_GIORNI=400;
+const NOTIZIE_ARCHIVIO_BREVE_GIORNI=14;   // quante settimane si tengono ANCHE le Low, per il replay
 let notizieArchivio=null;               // {chiave -> {t,cur,imp,tit}}, caricato alla prima richiesta
 function notizieArchivioCarica(){
  if(notizieArchivio)return notizieArchivio;
@@ -39414,8 +39458,21 @@ function notizieChiave(e){
 }
 function notizieArchivioSalva(){
  try{
-  const ora=Date.now(), limite=ora-NOTIZIE_ARCHIVIO_GIORNI*86400000;
-  let v=Object.values(notizieArchivioCarica()).filter(e=>Number(e.t)>=limite);
+  const ora=Date.now();
+  const limite=ora-NOTIZIE_ARCHIVIO_GIORNI*86400000;
+  // DUE FINESTRE, per un motivo solo: in replay devono comparire TUTTE le notizie che dal vivo
+  // si vedono sul grafico (il filtro le mostra tutte di base), mentre la statistica del "freno
+  // notizie" ha senso solo sulle importanti. Le "Low" sono tante (~centinaia al mese): tenerle
+  // un anno riempirebbe l'archivio di rumore. Quindi: le importanti per un anno, tutto per due
+  // settimane - che e' la fascia che si replayza davvero.
+  const limiteBreve=ora-NOTIZIE_ARCHIVIO_BREVE_GIORNI*86400000;
+  let v=Object.values(notizieArchivioCarica()).filter(e=>{
+   const t=Number(e.t);
+   // Importante: resta un anno (la statistica del "freno notizie" guarda indietro).
+   if(e.imp==='High'||e.imp==='Medium')return t>=limite;
+   // Tutto il resto: due settimane, che e' la fascia che si replayza davvero.
+   return t>=limiteBreve;
+  });
   // Se si sfora il tetto si buttano le piu' VECCHIE: la statistica guarda sempre il periodo
   // scelto nei filtri, che parte da adesso e va indietro.
   if(v.length>NOTIZIE_ARCHIVIO_MAX)v=v.sort((a,b)=>a.t-b.t).slice(v.length-NOTIZIE_ARCHIVIO_MAX);
@@ -39425,23 +39482,119 @@ function notizieArchivioSalva(){
 }
 // Mette da parte gli eventi appena arrivati dal calendario. Si conservano SOLO quelli importanti
 // (rossi e arancioni): i "Low" sono rumore e riempirebbero l'archivio per niente.
+// Una notizia in qualunque delle DUE forme in cui gira: quella del feed (date/country/impact/
+// title, con i dettagli) e quella dell'archivio o del cloud (t/cur/imp/tit). Stesso dato, due
+// buste: con una sola funzione che le capisce entrambe, locale e account restano allineati.
+function notizieVoce(ev){
+ if(!ev||typeof ev!=='object')return null;
+ let t=NaN, cur='', imp='', tit='';
+ if(ev.imp!=null||ev.cur!=null){
+  t=Number(ev.t);
+  cur=String(ev.cur||'');
+  imp=String(ev.imp||'');
+  tit=String(ev.tit||'');
+ }else{
+  try{ t=Date.parse(ev.date||ev.time||''); }catch(e){}
+  cur=String(ev.country||'');
+  imp=String(ev.impact||'');
+  tit=String(ev.title||'');
+ }
+ if(!Number.isFinite(t)||!imp||!tit)return null;
+ return {t,cur:cur.toUpperCase(),imp,tit:tit.slice(0,80)};
+}
 function notizieArchivioAggiungi(eventi){
  if(!Array.isArray(eventi)||!eventi.length)return 0;
  const A=notizieArchivioCarica();
  let nuovi=0;
  for(const ev of eventi){
-  if(!ev)continue;
-  const imp=String(ev.impact||'');
-  if(imp!=='High'&&imp!=='Medium')continue;
-  let t=NaN;
-  try{ t=Date.parse(ev.date||ev.time||''); }catch(e){}
-  if(!Number.isFinite(t))continue;
-  const e={t,cur:String(ev.country||'').toUpperCase(),imp,tit:String(ev.title||'').slice(0,80)};
+  const e=notizieVoce(ev);
+  if(!e)continue;
   const k=notizieChiave(e);
   if(k&&!A[k]){ A[k]=e; nuovi++; }
  }
- if(nuovi)notizieArchivioSalva();
+ if(nuovi){ notizieArchivioSalva(); notizieGraficoAggiorna(); }
  return nuovi;
+}
+// LA LISTA CHE IL GRAFICO DISEGNA: l'archivio personale (locale + account) PIU' l'ultima copia
+// del feed dal vivo. L'archivio da solo basta: e' cosi' che i pallini compaiono anche in
+// Storico/replay, dove il feed non arriva, e compaiono SUBITO all'apertura senza aspettare la
+// rete. Ricostruita solo quando qualcosa cambia (il feed nuovo, o l'archivio), mai a ogni
+// ridisegno: il grafico ridisegna ogni secondo e qui possono essere tremila eventi.
+let newsGrafico=[];
+let newsGraficoFirma='';
+function notizieGraficoAggiorna(){
+ const A=notizieArchivioCarica();
+ const uniti=[];
+ const visti={};
+ (newsEvents||[]).forEach(ev=>{
+  const e=notizieVoce(ev);
+  if(!e)return;
+  const k=notizieChiave(e);
+  if(k&&!visti[k]){ visti[k]=1; uniti.push(ev); }        // il feed ha i dettagli in piu'
+ });
+ Object.keys(A).forEach(k=>{
+  if(visti[k])return;
+  const e=A[k];
+  visti[k]=1;
+  uniti.push({date:new Date(e.t).toISOString(),country:e.cur,impact:e.imp,title:e.tit});
+ });
+ uniti.sort((a,b)=>{
+  const x=Date.parse(a.date), y=Date.parse(b.date);
+  const nx=Number.isFinite(x)?x:Number(a.t), ny=Number.isFinite(y)?y:Number(b.t);
+  return nx-ny;
+ });
+ // Firma: quanti eventi e qual e' l'ultimo. Se non cambia, la lista resta la stessa di prima.
+ const firma=uniti.length+'|'+(uniti.length?String(Number(uniti[uniti.length-1].t||Date.parse(uniti[uniti.length-1].date)||0)):'');
+ if(firma!==newsGraficoFirma){ newsGraficoFirma=firma; newsGrafico=uniti; }
+}
+// LA LISTA NON DEVE MAI RESTARE INDIETRO. La rifà notizieGraficoAggiorna(), ma solo quando
+// qualcuno glielo dice (il feed nuovo, l'archivio che cresce). Se una strada qualsiasi assegna
+// newsEvents per conto suo, la lista resterebbe vuota e i pallini sparirebbero - misurato su
+// tre prove esistenti (telefono_tocco_grafico, notizie_altri_dispositivi) che assegnano
+// newsEvents e chiamano draw() direttamente. Qui il controllo e' UN CONFRONTO DI NUMERI
+// (quanti eventi aveva il feed l'ultima volta), non una ricostruzione: a fotogramma non costa
+// niente, e la ricostruzione parte solo se il numero è cambiato davvero.
+let __newsGraficoViste=-1;
+function notizieGraficoSincrona(){
+ const n=(newsEvents||[]).length;
+ if(n!==__newsGraficoViste){ __newsGraficoViste=n; notizieGraficoAggiorna(); }
+}
+// Archivio <-> account. La lettura prova prima il server nostro (quello configurato), poi Firebase
+// (la rete di sicurezza): stessa scelta degli altri documenti.
+async function notizieCloudLeggi(){
+ try{
+  const cloud=await waitForFxbtCloud();
+  if(!cloud||!cloud.uid)return null;
+  let lista=null;
+  if(fblCloudNostroDisponibile()&&typeof cloud.serverDatiLeggi==='function')lista=await cloud.serverDatiLeggi('notizie');
+  else if(typeof cloud.notizieLeggi==='function')lista=await cloud.notizieLeggi();
+  return (Array.isArray(lista)&&lista.length)?lista:null;
+ }catch(e){ return null; }
+}
+async function notizieCloudScrivi(lista){
+ try{
+  if(!Array.isArray(lista)||!lista.length)return false;
+  const cloud=await waitForFxbtCloud();
+  if(!cloud||!cloud.uid)return false;
+  if(fblCloudNostroDisponibile()&&typeof cloud.serverDatiScrivi==='function')
+   return await cloud.serverDatiScrivi('notizie',lista);
+  if(typeof cloud.notizieSalva==='function')return await cloud.notizieSalva(lista);
+  return false;
+ }catch(e){ return false; }
+}
+// Le notizie nuove partono per l'account. Non subito: si aspetta un po', perche' le notizie
+// arrivano a gruppi e una lista che cresce di continuo non deve scrivere di continuo.
+let notizieCloudTimer=null;
+function notizieCloudPubblica(){
+ if(notizieCloudTimer)return;
+ notizieCloudTimer=setTimeout(async()=>{
+  notizieCloudTimer=null;
+  try{
+   const A=notizieArchivioCarica();
+   const lista=Object.values(A);
+   if(lista.length)await notizieCloudScrivi(lista);
+  }catch(e){}
+ },5*60000);
 }
 // Le valute toccate da un asset. Il calendario parla per VALUTA (USD, EUR, GBP...), gli asset si
 // chiamano EURUSD, XAUUSD, BTCUSDT: per sapere se una notizia riguarda un trade bisogna tradurre.
@@ -53331,6 +53484,13 @@ var __initLocalStateSnapshot=null;
          }
         }
        }catch(e){ console.warn('Lettura footprint dal documento separato fallita:', e); }
+       // LE NOTIZIE SUL GRAFICO: l'archivio dell'account si unisce a quello locale (richiesto
+       // l'8 novembre 2026). Da qui in poi i pallini delle notizie stanno anche in Storico/replay,
+       // e non dipendono piu' dalla rete: quello che l'account ha gia' visto una volta resta suo.
+       try{
+        const daCloud=await notizieCloudLeggi();
+        if(daCloud&&notizieArchivioAggiungi(daCloud))notizieGraficoAggiorna();
+       }catch(e){}
       }
      }
    }catch(e){
