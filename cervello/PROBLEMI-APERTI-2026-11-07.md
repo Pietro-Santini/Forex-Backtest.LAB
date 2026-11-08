@@ -109,3 +109,27 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
 
 ## Dopo — finestre duplicate (cervello/RICHIESTE-DUPLICA-FINESTRA.md)
 - 9 voci, lavoro a se. Non si tocca finche' P0/P1 non sono chiusi e pubblicati.
+
+## P0 — DISCO E: LA CARTELLA DATI RESTA VUOTA
+- Sintomo: `E:\Forex Backtest Lab\dati` esiste ma non contiene niente. Il ponte è configurato
+  per scriverci, e `bridge.log` non mostra nessuna richiesta `/dati`.
+- Misurato finora: il ponte risponde 401 senza token (le rotte ci sono); la pagina è servita da
+  `http://127.0.0.1:8000`.
+- DA VERIFICARE sul PC: (a) lo stato del toggle «tieni i dati sul mio computer» — se è spento i
+  documenti vanno su Firebase invece che sul disco, ed è il comportamento atteso, non un guasto;
+  (b) `bridge.log` per le chiamate `/dati` con token; (c) che la cartella sia scrivibile.
+- Stato: DA FARE (dopo R1-R3 e finestre duplicate, come richiesto).
+
+## P0 — FIREBASE: TROPPE SCRITTURE E LETTURE, E FATTURA TROPPO
+- Sintomo (proprietario, 8 novembre 2026): «firebase calcola troppe scritture e letture andando a
+  fatturare troppo, non deve sforare e c'è qualcosa che gli fa calcolare dai in continuo senza
+  volerlo».
+- Numeri misurati: 7 novembre scritture 3,1K/giorno su 20K, letture 6,4K/giorno su 50K (15,3% e
+  12,8% della quota gratuita). Prima erano 57K scritture e 114K letture — cioè 18 e 2,3 volte
+  oltre il limite. La crescita è il problema, non il livello di oggi.
+- PRIMA CURA fatta (v2.1.7): la rete di sicurezza rileggeva l'intero documento dal cloud ogni 60
+  secondi; a mercato chiuso ora si allenta a mezz'ora.
+- DA FARE: misurare CHI scrive e chi legge ancora (le scritture 3,1K/giorno non vengono da una
+  rilettura). Ipotesi da verificare: salvataggio periodico, sincronizzazione preferenze,
+  controllo aggiornamenti, footprint/notion.
+- Stato: DA FARE (dopo R1-R3 e finestre duplicate, come richiesto).
