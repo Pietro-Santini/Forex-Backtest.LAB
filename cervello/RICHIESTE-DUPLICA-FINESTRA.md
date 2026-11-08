@@ -72,3 +72,28 @@ Iniziare dalle più concrete e misurabili:
   - 2 (schermo intero) — likely facile, da verificare.
   - 8 (modello) — verifica comportamento attuale.
   - 9 (prestazioni) — profiling, da fare per ultimo.
+
+## Voce 4/5 — ELENCO ASSET DELLA DUPLICATA (misurato 8 novembre 2026)
+
+Dagli screenshot del proprietario, dialogo «Ricerca simbolo» aperto nelle due finestre:
+- pagina madre: ASSET DISPONIBILI (35), con la stellina della watchlist piena su XAUUSD;
+- pagina duplicata: ASSET DISPONIBILI (5) — solo EURUSD, GBPUSD, USDJPY, XAUUSD, XAGUSD, e le
+  stelline della watchlist tutte vuote.
+
+CAUSA MISURATA nel codice: una finestra PIP aggiuntiva nasce VUOTA per scelta esplicita (non
+ripristina da storage, vedi initExtraPipWindow). L'elenco degli asset si costruisce da quello
+che la finestra ha caricato o ricevuto lei: senza l'eredita' dalla madre restano solo i cinque
+di base. La watchlist sta in localStorage, che una finestra appena nata non ha ancora letto.
+
+RICHIESTO: gli asset disponibili e la watchlist devono essere identici a quelli della pagina
+madre, elencati allo stesso modo. Non sono due elenchi da tenere allineati a mano: la duplicata
+deve EREDITARE quello della madre, una volta, all'apertura.
+
+STRADA (da misurare prima di curare): il messaggio pip_clone_snapshot porta gia' stili, asset
+corrente e credenziali MT5 (vedi il gestore). Gli stessi campi che costruiscono l'elenco — il
+risultato della ricerca Capital.com e la watchlist — viaggiano la' dentro, e la duplicata li
+applica prima di mostrare il dialogo. Misura: contare le voci del dialogo nelle due finestre
+dopo l'apertura (oggi 35 contro 5).
+
+- Stato: DA FARE (dopo la regressione delle linee entry/tp/sl: tocca lo stesso canale di
+  comunicazione tra finestre, meglio non aprirne due fronti insieme).
