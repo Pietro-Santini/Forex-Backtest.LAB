@@ -40,10 +40,6 @@ const PREPARA = (modo) => `(function(){
   return notizieArchivioAggiungi(newsEvents);
 })()`;
 
-// Il filtto ESATTO che apply dal disegno dei pallini: se questo trova le notizie, i pallini
-// si disegnano. Non è una stringa cercata nel sorgente: è il percorso che il grafico percorre.
-const CHE_VEDE_IL_GRAFICO = `newsGrafico.filter(ev=>ev&&newsSeverityFilter[ev.impact]&&newsCountryEnabled(ev.country))`;
-
 test("in Storico/replay i pallini restano, anche senza rete", async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
@@ -174,8 +170,8 @@ test('PROVA DI CONTROLLO: senza archivio e senza feed, nessun pallino (niente di
       newsEvents=[]; newsGrafico=[]; newsGraficoFirma='';
       notizieArchivio=null; try{ localStorage.removeItem('fbl_notizie_archivio'); }catch(e){}
       newsEnabled=true;
-      notizieGraficoAggiorna();
-      return {viste:${CHE_VEDE_IL_GRAFICO}.length};
+      draw();                                   // niente notizie: niente pallini
+      return {viste: newsDotHitRects.length};
     })()`);
     assert.equal(r.viste, 0, 'senza notizie non si disegna niente: ' + JSON.stringify(r));
     assert.deepEqual(errori, []);
