@@ -683,6 +683,26 @@ def _versione_di(cartella):
         return None
 
 
+def _versione_da_app_html(testo):
+    """Estrae FBL_VERSIONE da app.html: const FBL_VERSIONE='2.2.12';"""
+    import re
+    m = re.search(r"const FBL_VERSIONE='([0-9][0-9.]*)", testo or "")
+    if not m:
+        return None
+    try:
+        return tuple(int(x) for x in m.group(1).split("."))
+    except Exception:
+        return None
+
+
+def _versione_da_app_html_file(percorso_file):
+    try:
+        with open(percorso_file, encoding="utf-8") as f:
+            return _versione_da_app_html(f.read())
+    except Exception:
+        return None
+
+
 def _coppia_valida(cartella):
     """La cartella contiene un'app servibile? (regola 3, piu' la coppia completa)"""
     try:
@@ -710,7 +730,14 @@ def percorso_app(nome):
     base = os.path.join(_BASE_DIR, nome)
     if not _CARTELLA_APP or not _coppia_valida(_CARTELLA_APP):
         return base
-    nuova, vecchia = _versione_di(_CARTELLA_APP), _versione_di(_BASE_DIR)
+    # NUOVA REGOLA: app.html e sw.js nella cartella aggiornata devono avere la STESSA
+    # versione, altrimenti si serve dal congelato per evitare mismatch come
+    # app.html v2.2.2 con sw.js v2.2.3 (misurato il 9 novembre 2026).
+    v_app = _versione_da_app_html_file(os.path.join(_CARTELLA_APP, "app.html"))
+    v_sw = _versione_di(_CARTELLA_APP)
+    if v_app is not None and v_sw is not None and v_app != v_sw:
+        return base  # coppia divisa: serve dal congelato
+    nuova, vecchia = v_sw, _versione_di(_BASE_DIR)
     if nuova and vecchia and nuova < vecchia:
         return base                      # regola 2: mai indietro
     agg = os.path.join(_CARTELLA_APP, nome)
