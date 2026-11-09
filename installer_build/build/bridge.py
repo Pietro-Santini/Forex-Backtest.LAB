@@ -31,6 +31,7 @@ Test rapido:
 import datetime
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -59,11 +60,129 @@ import accesso_condiviso as _accesso
 # di log accanto all'eseguibile: resta uno strumento di diagnostica anche senza finestra
 # visibile, coerente col comportamento richiesto (servizio invisibile in background, mai
 # una finestra che l'utente possa vedere o dover gestire).
+# UN TETTO AL LOG, E LA CHIAVE FUORI DAL DISCO.
+#
+# MISURATO sul computer del proprietario (6 novembre 2026): ForexBacktestLAB.log era arrivato a
+# 91 MB e 1.023.510 righe. Il file si apriva in append e non veniva MAI ruotato, quindi cresceva
+# per sempre: su un disco con poco spazio libero e' una cosa che prima o poi ferma l'applicazione,
+# e per diagnosticare un difetto un file da 91 MB e' inutilizzabile.
+#
+# CHE COSA C'ERA DENTRO, contato invece che immaginato:
+#     /positions        ~295.000 righe
+#     /orders           ~286.000
+#     /account          ~279.000
+#     /health            ~29.000
+#     /account_history   ~17.000
+# cioe' l'88% del file era il NOSTRO polling RIUSCITO: l'app interroga MT5 tre volte al secondo e
+# uvicorn scrive una riga per ogni chiamata. Il disturbo esterno che bussava su /v1/models era
+# l'1%: zittire quello non avrebbe risolto niente. (L'avevo dato per colpevole a occhio, e la
+# misura mi ha smentito: e' il motivo per cui in questo progetto si conta prima di curare.)
+#
+# E UNA COSA PIU' SERIA: in circa 250.000 di quelle righe compariva "?chiave=..." in chiaro, cioe'
+# la chiave condivisa del ponte scritta su disco. Un log non e' il posto di una chiave.
+#
+# LA CURA STA ALL'ULTIMO CANCELLO - la scrittura del file - e non nei logger di uvicorn: uvicorn
+# riconfigura il logging da se' quando parte (dictConfig), e un filtro messo sui suoi logger
+# potrebbe venire spazzato via senza che nessuno se ne accorga. Qui invece passa TUTTO quello che
+# finisce nel file, da qualunque libreria, e non c'e' modo di rompere uvicorn.
+# Tre regole, in ordine:
+#   1. la chiave diventa "chiave=***" SEMPRE, anche sulle righe che si tengono;
+#   2. le righe del polling RIUSCITO (2xx/304 su quelle rotte) non si scrivono. Gli errori SI':
+#      4xx e 5xx sono esattamente cio' che si va a cercare quando qualcosa si rompe;
+#   3. oltre il tetto il file si ruota tenendo UNA copia precedente (.1): c'e' sempre un pezzo di
+#      storia, ma lo spazio occupato ha un massimo.
+_LOG_MAX_BYTE = 5 * 1024 * 1024          # 5 MB, piu' la copia .1: al massimo ~10 MB in tutto
+_LOG_RE_CHIAVE = re.compile(r"([?&]chiave=)[^&\s\"]+")
+# Riga di accesso di uvicorn: '... "GET /positions HTTP/1.1" 200 OK'. Si scarta SOLO se la rotta e'
+# una di quelle ad alta frequenza E l'esito e' buono.
+_LOG_RE_RUMORE = re.compile(
+    r"\"(?:GET|POST|HEAD) /(?:positions|orders|account|account_history|health|news|v1/models)\b[^\"]*\""
+    r"\s+(?:2\d\d|304)\b"
+)
+
+
+class _LogConTetto(object):
+    """Il file di log con la chiave mascherata, il polling riuscito tolto e un tetto di spazio.
+
+    Finisce in sys.stdout e sys.stderr, quindi deve comportarsi come il file che sostituisce:
+    tutto cio' che non e' ridefinito qui viene delegato al file vero (encoding, isatty, fileno...).
+    Non solleva MAI: un log che fa crashare il servizio e' peggio di nessun log."""
+
+    def __init__(self, percorso):
+        self._percorso = percorso
+        self._resto = ""
+        self._fh = open(percorso, "a", buffering=1, encoding="utf-8", errors="replace")
+        try:
+            self._scritti = os.path.getsize(percorso)
+        except Exception:
+            self._scritti = 0
+
+    def __getattr__(self, nome):
+        # Attenzione: __getattr__ viene chiamato solo per cio' che non esiste sull'oggetto, quindi
+        # self._fh (impostato in __init__) non ci passa e non si crea una ricorsione.
+        return getattr(self._fh, nome)
+
+    def _ruota(self):
+        """Chiude, sposta su .1 (sovrascrivendo la .1 precedente) e riapre vuoto. Su Windows un
+        file aperto non si puo' rinominare: per questo si chiude prima."""
+        try:
+            self._fh.close()
+        except Exception:
+            pass
+        try:
+            vecchio = self._percorso + ".1"
+            if os.path.exists(vecchio):
+                os.remove(vecchio)
+            os.replace(self._percorso, vecchio)
+        except Exception:
+            pass
+        try:
+            self._fh = open(self._percorso, "a", buffering=1, encoding="utf-8", errors="replace")
+            self._scritti = 0
+            self._fh.write("--- log ruotato: la parte precedente sta in ForexBacktestLAB.log.1 ---\n")
+        except Exception:
+            pass
+
+    def write(self, testo):
+        try:
+            if not testo:
+                return 0
+            # Le righe arrivano anche a pezzi (prima il messaggio, poi il terminatore): si decide
+            # per RIGA INTERA, altrimenti si scarterebbe mezzo messaggio e il file diventerebbe
+            # illeggibile proprio quando serve.
+            self._resto += testo
+            if "\n" not in self._resto:
+                return len(testo)
+            pezzi = self._resto.split("\n")
+            self._resto = pezzi.pop()
+            tenute = []
+            for riga in pezzi:
+                riga = _LOG_RE_CHIAVE.sub(r"\1***", riga)
+                if _LOG_RE_RUMORE.search(riga):
+                    continue
+                tenute.append(riga)
+            if tenute:
+                blocco = "\n".join(tenute) + "\n"
+                self._fh.write(blocco)
+                self._scritti += len(blocco)
+                if self._scritti >= _LOG_MAX_BYTE:
+                    self._ruota()
+            return len(testo)
+        except Exception:
+            return len(testo or "")
+
+    def flush(self):
+        try:
+            self._fh.flush()
+        except Exception:
+            pass
+
+
 _LOG_FILE_PATH = None
 if getattr(sys, "frozen", False) and sys.stdout is None:
     try:
         _LOG_FILE_PATH = os.path.join(os.path.dirname(sys.executable), "ForexBacktestLAB.log")
-        _log_fh = open(_LOG_FILE_PATH, "a", buffering=1, encoding="utf-8")
+        _log_fh = _LogConTetto(_LOG_FILE_PATH)
         sys.stdout = _log_fh
         sys.stderr = _log_fh
     except Exception:
@@ -634,7 +753,7 @@ _APP_HTML_PATH = os.path.join(_BASE_DIR, "app.html")
 #  3. SI CONTROLLA CHE SIA UN'APP. Un file da 200 byte che dice "404" ha HTTP 200 su certi
 #     hosting: si accetta solo un app.html grande e chiuso da </html>, e un sw.js con CACHE_NAME.
 SITO_APP = "https://pietro-santini.github.io/Forex-Backtest.LAB/"
-_FILE_AGGIORNABILI = ("app.html", "sw.js")
+_FILE_AGGIORNABILI = ("app.html", "sw.js", "login.html")
 
 
 def _cartella_app_aggiornata():
@@ -865,7 +984,12 @@ def _kill_stale_instances():
     if not getattr(sys, "frozen", False) or os.name != "nt":
         return
     own_pid = os.getpid()
-    for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe"):
+    # TUTTI I SERVIZI, non solo due. MISURATO sul PC del proprietatore (9 novembre 2026):
+    # chiudendo e riaprendo l'app restavano in piedi DUE Mt5FeedServer e DUE SegnaliBridge —
+    # segno che questa pulizia ne chiudeva uno e lasciava l'altro. L'elenco e' lo STESSO
+    # dell'installer (installer.iss, procedura UccidiTutti): se le due strade uccidono due
+    # elenchi diversi, prima o poi una lascia un orfano di troppo.
+    for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe", "SegnaliBridge.exe"):
         try:
             subprocess.run(
                 ["taskkill", "/F", "/IM", exe_name, "/FI", f"PID ne {own_pid}"],
@@ -874,6 +998,91 @@ def _kill_stale_instances():
             )
         except Exception:
             pass  # taskkill assente, nessun processo con quel nome, o altro: mai bloccare l'avvio per questo
+    # E SI ASPETTA CHE LE PORTE SI LIBERINO DAVVERO. taskkill torna appena ha CHIESTO la
+    # chiusura, non quando e' avvenuta: MISURATO dallo stesso pomeriggio, l'istanza nuova
+    # trovava la porta 8000 ancora in mano a quella vecchia, il bind falliva e si riprovava
+    # ogni 2 secondi - la finestra dava "non risponde" per una decina di secondi, e il
+    # proprietatore lo vedeva come un crash. L'attesa vera costa qualche decimo di secondo
+    # all'avvio e toglie di mezzo quel "mi crasha quando chiudo e riapro".
+    for _porta in (8000, 8001):   # 8000 = il ponte, 8001 = il servizio dati (vedi __main__)
+        _aspetta_porta_libera(_porta)
+
+
+def _aspetta_porta_libera(porta, secondi=10):
+    """Aspetta CHE DAVVERO: torna True se la porta smette di rispondere, False se resta
+    occupata dopo l'attesa. Non solleva mai - l'avvio non si blocca per questo."""
+    try:
+        import time as _time
+        for _ in range(secondi * 5):
+            if not _servizio_gia_vivo(porta):
+                return True
+            _time.sleep(0.2)
+        return False
+    except Exception:
+        return False
+
+
+def _chi_tiene_la_porta(porta):
+    """Chi e' il processo che tiene questa porta, in chiaro ("PID 9916 - nomeprocesso").
+
+    SERVE A DIRE UNA COSA UTILE INVECE DI "NON RISPONDE". Misurato sul PC del proprietatore
+    (8-9 novembre 2026): le porte 8000, 8001 e 8769 erano in mano a un processo che NON era
+    uno dei nostri (PID 9916, legato all'IP di Tailscale), mentre il servizio vero girava su
+    127.0.0.1. Due cose diverse che a schermo sembrano uguali: una si cura chiudendo un
+    programma estraneo, l'altra riavviando il nostro. Senza il nome del colpevole si indovina.
+    Windows-only: netstat e taskkill non esistono altrove, e li' non serve nulla."""
+    if os.name != "nt":
+        return ""
+    try:
+        import subprocess as _sp
+        import re as _re
+        cerca = f":{int(porta)} "
+        r = _sp.run(["netstat", "-ano"], capture_output=True, text=True, timeout=8)
+        pid = ""
+        for riga in (r.stdout or "").splitlines():
+            if cerca in riga and "LISTENING" in riga.upper():
+                m = _re.search(r"(\d+)\s*$", riga.strip())
+                if m:
+                    pid = m.group(1)
+                    break
+        if not pid:
+            return ""
+        t = _sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                    capture_output=True, text=True, timeout=8)
+        nome = ""
+        for riga in (t.stdout or "").splitlines():
+            if riga.strip() and "," in riga:
+                nome = riga.split(",")[0].strip().strip('"')
+                break
+        return f"PID {pid}" + (f" - {nome}" if nome else "")
+    except Exception:
+        return ""
+
+
+def _dici_porta_occupata(porta):
+    """Dice UNA VOLTA CHI tiene la porta, e poi tace.
+
+    Misurato sul PC del proprietatore (9 novembre 2026): chiudendo e riaprendo l'app, il bind
+    sulla porta 8000 falliva e si riprovava ogni 2 secondi. Il log si riempiva dello stesso
+    errore, e la cosa utile - che la porta era in mano a un processo che NON era uno dei nostri
+    (PID 9916, Tailscale) - non si leggeva. La notizia si dice una volta: dopo, cento righe
+    identiche non aggiungono niente al log e tolgono spazio a tutto il resto."""
+    global _porta_occupata_detta
+    if _porta_occupata_detta:
+        return
+    _porta_occupata_detta = True
+    colpevole = ""
+    try:
+        colpevole = _chi_tiene_la_porta(porta)
+    except Exception:
+        colpevole = ""
+    _log_bridge(
+        "la porta %d e' occupata%s. L'app ripeta' fra 2 secondi: se non si libera, chiudi quel "
+        "processo e riapri l'applicazione."
+        % (porta, (" da " + colpevole) if colpevole else ""))
+
+
+_porta_occupata_detta = False   # per non ripetere a ogni giro la stessa notizia
 
 
 def _servizio_gia_vivo(porta, timeout=0.4):
@@ -1139,6 +1348,27 @@ def serve_app():
     return FileResponse(percorso_app("app.html"), headers=_NO_CACHE_HEADERS)
 
 
+@app.get("/app.html")
+def serve_app_html():
+    """La pagina si apre anche DIRETTAMENTE, non solo dalla radice: il guscio pywebview la chiede
+    con http://127.0.0.1:8000/app.html, e cosi' la aprono PowerShell, i preferiti, chi prova a
+    mano. SENZA QUESTA ROTTA la richiesta finiva nel mount StaticFiles piu' sotto, che serve dalla
+    cartella del PACCHETTO - per un .exe, la copia congelata DENTRO l'eseguibile, vecchia di
+    mesi - e non dalla copia aggiornata che percorso_app() sceglierebbe.
+
+    MISURATO sul PC del proprietario (9 novembre 2026): /app.html rispondeva v2.2.2 mentre
+    /sw.js - rotta dedicata, quindi aggiornata - rispondeva v2.2.3. Due file dello STESSO
+    programma da due posti diversi: la pagina girava vecchia e il service worker nuovo, e il
+    pannello versione (che legge sw.js) diceva una cosa mentre il codice che girava era un
+    altro. Da qui il "sembrava risolto e invece no": le cure pubblicate non giravano affatto.
+
+    Ora /app.html e / escono dallo stesso posto: la coppia non puo' piu' dividersi."""
+    p = percorso_app("app.html")
+    if not os.path.exists(p):
+        raise HTTPException(status_code=500, detail="app.html non trovato")
+    return FileResponse(p, headers=_NO_CACHE_HEADERS)
+
+
 @app.get("/sw.js")
 def serve_service_worker():
     """Rotta dedicata (invece di lasciarlo alla StaticFiles generica più sotto) SOLO per poter
@@ -1150,6 +1380,17 @@ def serve_service_worker():
     if not os.path.exists(sw_path):
         raise HTTPException(status_code=404, detail="sw.js non trovato")
     return FileResponse(sw_path, media_type="application/javascript", headers=_NO_CACHE_HEADERS)
+
+@app.get("/login.html")
+def serve_login_page():
+    """La pagina di accesso: il logout la richiede (location.replace('login.html')) e, dopo un
+    logout, l'app deve poterci tornare. Senza questa rotta il ponte rispondeva 404 e l'utente
+    restava chiuso fuori. Si serve dalla cartella del pacchetto (sempre presente), con gli
+    stessi header no-cache di app.html. Cura del 6 novembre 2026 (login bloccato dopo logout)."""
+    path = os.path.join(_BASE_DIR, "login.html")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="login.html non trovato")
+    return FileResponse(path, media_type="text/html", headers=_NO_CACHE_HEADERS)
 
 
 class ConnectRequest(BaseModel):
@@ -2035,7 +2276,7 @@ def _carica_accesso() -> dict:
 ACCESSO_REMOTO = _carica_accesso()
 
 # Chi non e' il PC deve presentare la chiave: stesso controllo, stesso file, degli altri due servizi.
-_accesso.installa_controllo_chiave(app)
+_accesso.installa_controllo_chiave(app, percorsi_liberi=("/login.html",))
 
 # ===================== IL CLOUD NOSTRO, SU QUESTO COMPUTER =====================
 #
@@ -3709,12 +3950,23 @@ if __name__ == "__main__":
     _host = _accesso.host_di_ascolto()
     if ACCESSO_REMOTO.get("rete"):
         print("  Accesso da altri dispositivi ACCESO (via Tailscale): serve la chiave.")
+    # L'ANTI-ORFANO SI RIPETE ANCHE DOPO L'AVVIO DEI SERVIZI: un servizio figlio puo' essere
+    # arrivato in ritardo (istanza precedente che stava morendo) e trovarsi la porta occupata
+    # da chi abbiamo appena chiuso. Misurato: senza il secondo giro restava il doppione.
+    _kill_stale_instances()
     while True:
         try:
             uvicorn.run(app, host=_host, port=PORT)
             break  # uscita normale (es. segnale di stop): non si riavvia
         except Exception as _e:
             import traceback as _tb
+            # CHI TIENE LA PORTA, detto una volta sola: misurato, riprovando ogni 2 secondi in
+            # silenzio il log si riempiva dello stesso errore e la cosa utile non si vedeva.
+            _testo_errore = str(_e)
+            if "10048" in _testo_errore or "address already in use" in _testo_errore.lower():
+                _dici_porta_occupata(PORT)
+            else:
+                _porta_occupata_detta = False
             _log_bridge("uvicorn terminato con errore, riavvio tra 2s: %s" % _e)
             _log_bridge("".join(_tb.format_exception(type(_e), _e, _e.__traceback__)))
             time.sleep(2)

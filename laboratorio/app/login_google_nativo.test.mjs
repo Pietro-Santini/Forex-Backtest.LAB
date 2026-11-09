@@ -82,7 +82,7 @@ function mondo({nativo = 'ok', capacitor = true, nuovoUtente = false} = {}) {
   };
 
   const funzione = new Function(
-    'document', 'window', 'auth', 'isCapacitor', 'tocchiGrossi',
+    'document', 'window', 'auth', 'eApk', 'dentroLApp', 'tocchiGrossi',
     'salvaStatoAuth', 'consumaStatoAuth',
     'signInWithRedirect', 'signInWithPopup', 'signInWithCredential', 'GoogleAuthProvider',
     'getAdditionalUserInfo', 'ensureUserProfile', 'sendWelcomeEmail',
@@ -99,7 +99,7 @@ function mondo({nativo = 'ok', capacitor = true, nuovoUtente = false} = {}) {
 
   const f = funzione(
     fakeDoc, fakeWin, {utente: 'finto'},
-    capacitor, () => false,
+    capacitor, capacitor, () => false,
     () => { eventi.push('salva-stato'); },
     () => { eventi.push('consuma-stato'); },
     async () => { eventi.push('redirect'); return {user: {uid: 'u1'}}; },

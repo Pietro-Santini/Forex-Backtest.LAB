@@ -1,6 +1,736 @@
+- 2026-11-09 - OpenCode - **v2.2.12: il prezzo dell'altro broker non entra piu' nella candela.
+  Terza strada della stessa famiglia (due livelli di prezzo nelle stesse candele).**
+  SEGNALATO (9 novembre, con una foto): «al caricamento dello stesso asset si rompe e diventa
+  così... ci sono problemi multipli». Nella foto: candele da 5m con ampiezze di 20-30 punti
+  (quando sono di 2-3) e code lunghissime.
+  INVESTIGATO MISURANDO (due banchi). CAUSA: il pennello da 250 ms sceglie il prezzo con
+  Â«chi ha preso il graficoÂ» (mt5ActiveSymbol) e Â«quale prezzo c'Ã¨Â», MAI con Â«di quale
+  broker Ã¨ il file che sta disegnando il graficoÂ». Riselezionando lo STESSO asset con il
+  grafico caduto su Capital.com, il caricatore MT5 sostituisce la libreria con i suoi dati ma
+  NON azzera nÃ© capitalWsPrimaryEpic nÃ© lastPrimaryEpicPrice: il pennello applica alla candela
+  MT5 il prezzo di Capital.com.
+  MISURATO PRIMA DELLA CURA: ampiezza dell'ultima candela **0,40 -> 64,92** (apertura e massimo
+  restano al livello MT5, minimo e chiusura prendono il livello Capital.com), fascia visibile
+  8,10 -> 71,13. E la candela rotta non torna piÃù indietro perchÃ© high/low non si restringono
+  mai. Il difetto opposto (prezzo MT5 su grafico Capital.com) misura uguale.
+  PERCHE' fromAsset NON BASTAVA: MT5 e Capital.com quotano lo stesso oro con lo STESSO nome
+  asset ("XAUUSD") a circa 66 punti di distanza - numero misurato dal proprietatore il 15
+  ottobre 2026. Il confronto per nome non distingue niente; quello per id di file sÃ¬.
+  CURA, in tre pezzi: fblSorgenteGrafico() dice di chi Ã¨ il file a grafico (stessa regola che
+  già usa il cambio di timeframe); il pennello scarta il prezzo che viene dall'altro broker; il
+  caricatore MT5, quando mette i suoi dati, azzera anche il prezzo dell'altro broker.
+  Test: laboratorio/app/prezzo_dell_altro_broker.test.mjs (4 prove, coi due versi e due
+  controlli). Rosso-senza misurato: ampiezza 0,40 -> 64,92.
+  Collaudo: 41 prove verdi sui file toccati.
+
+- 2026-11-09 - OpenCode - **v2.2.11: la pagina aperta dall'icona esce dalla copia AGGIORNATA,
+  non da quella congelata nell'eseguibile.** E' il conflitto fra file che il proprietatore aveva
+  intuito, misurato e curato.
+  SEGNALATO (9 novembre): «è ritornato questo problema passato che sembrava risolto e invece
+  no, secondo me fa conflitto dei file collegamenti nel nostro pc, altrimenti non si spiega».
+  Aveva ragione, e la misura l'ha detto: http://127.0.0.1:8000/app.html rispondeva **v2.2.2**
+  mentre http://127.0.0.1:8000/sw.js rispondeva **v2.2.3**. Due file dello STESSO programma da
+  due posti diversi.
+  CAUSA MISURATA: il guscio pywebview apre l'app su /app.html, non sulla radice. Quel percorso
+  non aveva una rotta sua e finiva nel mount StaticFiles messo in fondo al file, che serve dalla
+  cartella del PACCHETTO — per un .exe, la copia congelata DENTRO l'eseguibile al momento della
+  compilazione, che nessun aggiornamento puo' toccare. La radice «/» e sw.js invece hanno rotte
+  dedicate che passano da percorso_app(), cioe' dalla copia aggiornata. Risultato: la pagina
+  girava VECCHIA e il service worker NUOVO. Il pannello versione legge sw.js, quindi diceva
+  l'ultima mentre il codice che girava era un altro — ed è cosi' che si insegue per un
+  pomeriggio un difetto «già curato» che in realtà non stava girando affatto. Le cure degli ultimi
+  giorni (v2.2.3 -> v2.2.10) non erano in esecuzione sul PC del proprietatore.
+  CURA: una rotta dedicata per /app.html, identica a quella della radice: stesso file, stessi
+  header no-cache, stessa scelta da percorso_app(). Ora i due indirizzi non possono piu' dividersi.
+  NOTA SUL MODO DI LAVORARE: la prova l'ha scritta il comportamento (due indirizzi, la stessa
+  pagina, la copia aggiornata che vince sulla congelata) e ha anche costretto a scoprire la
+  regola 3 del ponte — una copia sotto i 500 KB o senza </html> in fondo viene rifiutata, ed
+  è quello che teneva la prima stesura della prova rossa.
+  Test: laboratorio/ponte/test_rotta_app_html.py (2 prove). Rosso-senza misurato: /app.html
+  rispondeva 404 (il mount StaticFiles non trova il file nella cartella del pacchetto) o la
+  copia congelata. Collaudo ponte: 317 verdi.
+
+- 2026-11-09 - OpenCode - **v2.2.10: un cambio di sorgente non mescola piu' due livelli di
+  prezzo nelle stesse candele.** Difetto ricorrente, segnalato di nuovo con due foto.
+  SEGNALATO (9 novembre): «Ã¨ ritornato questo problema delle candele che vengono disegnate
+  cosÃ¬, il problema arriva da un momento all'altro tenendo l'app ferma e il footprint diventa
+  cosÃ¬ come nella seconda fotoÂ». Nelle foto: candele altissime con code lunghissime e le
+  caselline numerate del footprint SPARPAGLIATE su tutta l'area del grafico, invece di stare
+  impilate dentro la loro candela.
+  INVESTIGATO MISURANDO (agente investigatore, senza correggere niente), e la causa Ã¨ una
+  sola: il marcatore «Ã¨ cambiata solo la codaÂ» - quello che serve a non rifare tutto lo storico
+  per un tick - guardava solo quante candele ci sono e la data dell'ultima. Cambiando
+  sorgente (MT5 -> Capital.com e ritorno, che succede da solo) lunghezza e data RESTANO, il
+  livello di prezzo NO: su XAUUSD i due broker quotano lo stesso oro a circa 66 punti di
+  distanza (il numero misurato dal proprietatore il 15 ottobre 2025). Il marcatore scattava,
+  l'aggregazione teneva in vita le candele della serie VECCHIA e rifaceva solo la coda con
+  quelle NUOVE: due livelli dentro le stesse candele.
+  MISURATO prima della cura: su 21 candele da 15 minuti la fascia di prezzo visibile diventava
+  88,6 punti invece di 23 (la prova di controllo con la serie riaggregata per intero dÃ** 23).
+  Una candela che assorbe i due livelli diventa 4,3 volte piÃù alta e le sue caselline si
+  spargono su tutta l'area: sono tutte e due le foto. E il «poi torna a visualizzarsi
+  correttamenteÂ» Ã¨ spiegato: una ricostruzione completa (quando la lunghezza cambia) rimette
+  la serie a un livello solo.
+  NON E' UN DIFETTO NUOVO: Ã¨ la stessa strada della v155 (il footprint «a stratiÂ» del 15
+  ottobre). Le difese di allora reggono ancora, e l'indagine lo ha misurato: il passo delle
+  righe del footprint resta UNO SOLO (_footprintStepGlobale) e le righe restano dentro la
+  candela (footprintDentroLaCandela), con righe messe a 160 punti di distanza: 0 caselline
+  fuori su 16 candele. Quello che mancava era la SERIE.
+  CURA: il marcatore adesso controlla anche che la serie sia la STESSA - non solo della stessa
+  lunghezza. Il confronto Ã¨ su tre punti fissi della serie (prima candela, candela di mezzo,
+  ultima) con uno scarto tollerato dello 0,5%: in norma lo storico non si riscrive, cambia
+  solo la coda. Se il livello non torna, non si segnala niente e la cache butta tutto e
+  rifÃ** l'aggregazione da capo: la strada lenta ma corretta. Se i prezzi non si possono
+  leggere, non si segnala: meglio un giro in piÃù che un dato misto a schermo.
+  TROVATO PER STRADA, e annotato perche' va ripreso: il riallineamento serale Capital.com
+  (fblCapitalSeraAllinea, la cura della v155) Ã¨ codice morto - la fase 'capital' non esiste
+  piÃù in liveSessionPhaseAt, misurato 0 riallineamenti su 10.080 minuti - e
+  liveOffSessionSaveRows salva candele che nessuno rilegge. Non Ã¨ la causa di questo giro
+  (la Serie con due livelli lo Ã¨), ma Ã¨ debito da chiudere.
+  Test: laboratorio/app/serie_un_solo_livello.test.mjs (3 prove: il cambio di sorgente non
+  deve far scattare il marcatore e la fascia deve restare di un livello; controllo che un tick
+  sull'ultima candela lo faccia ancora scattare, o ogni tick rifarebbe tutto lo storico;
+  controllo che il footprint tenga un passo solo). Rosso-senza misurato: il marcatore
+  scattava sul cambio di sorgente.
+  Collaudo: 37 prove verdi fra serie, footprint (scala unica, globale, sera, archivio, tocco,
+  larghezza, imbalance) e cronometri.
+
+- 2026-11-09 - OpenCode - **v2.2.9: cambiando time frame, il numero di candele dentro
+  l'istogramma del profilo non cambia piu'.** Voce del 28 ottobre, risegnalata il 9 novembre
+  con Â«mi raccomando Ã¨ importanteÂ».
+  PAROLE DEL PROPRIETARIO (9 novembre): «Ã¨ rimasto il problema del numero delle barre che
+  diminuiscono al cambio di time frame, devono rimanere le stesse del time frame da 1m, quindi
+  se sono a un time frame da 15m non possono diminuire le barre dell'istogramma ma devono
+  rimanere le stesse del timeframe da 1 minuto, come funziona su tradingviewÂ».
+  DA CHE PARTE SI GUARDA, misurato prima di curare: l'istogramma del profilo ha TRE numeri
+  diversi e due erano gia' a posto. Le FASCE (le righe orizzontali) sono fisse per costruzione:
+  misurate 300 a 1, 5 e 15 minuti, prima e dopo. La LUNGHEZZA delle barre segue lo zoom, come
+  richiesto il 4 novembre. Quello che crollava era il NUMERO DI CANDELE dentro il profilo:
+  300 a 1 minuto -> 60 a 5 -> 20 a 15.
+  CAUSA MISURATA: "tieni fermo il numero di candele" spostava sempre l'estremo DESTRO del
+  profilo. Ma chi disegna un profilo lo disegna fino all'ULTIMA candela: l'estremo destro era
+  gia' in fondo ai dati, non poteva allungarsi, e il conto veniva tagliato a quello che
+  restava. Il codice diceva di muovere "l'estremo che non e' l'ancora", ma con l'ancora a
+  SINISTRA quello da muovere era sempre il destro.
+  CURA: se a destra non c'e' posto, si sposta l'INIZIO INDIETRO e il conto resta. Misurato
+  dopo: 300 candele a 1, a 5 e a 15 minuti. Il profilo copre piu' tempo (300 candele a 15
+  minuti sono 75 ore, non 5): e' aritmetica, non un difetto, ed e' esattamente il senso di
+  "tieni fermo il numero di candele".
+  PREDEFINITO CAMBIATO: le impostazioni del profilo si aprono adesso su "Il numero di
+  candele" (la richiesta e' stata fatta due volte), e il codice che crea un profilo nuovo
+  prende quella. L'INTERRUTTORE RESTA, e i profili gia' disegnati conservano la loro scelta
+  perche' il valore viaggia col disegno: misurato da una prova, chi aveva scelto "il tempo"
+  ce l'ha ancora, e anche un disegno fatto prima dell'interruttore non cambia comportamento.
+  Test: laboratorio/app/profilo_numero_candele.test.mjs (4 prove: il numero resta 300 a 5 e 15
+  minuti e il tempo coperto cresce; controllo su "il tempo"; controllo che le fasce restino
+  fisse; controllo che la scelta di chi c'era non venga rubata). Rosso-senza misurato: 60 e 20
+  candele al posto di 300.
+  Collaudo: 31 prove verdi fra profili, colonne COB/SVP, disegni e cronometri.
+
+- 2026-11-09 - OpenCode - **v2.2.8: chiudendo e riaprendo l'app non restano piu' processi in
+  piu', e se la porta e' occupata il ponte dice CHI la tiene.**
+  SEGNALATO dal proprietatore (9 novembre): «ho cliccato aggiorna e mi ha crashato
+  l'applicazione, poi l'ho chiusa e riaperta e mi crashava di continuo per una decina di
+  secondi... ci sono processi che gli danno fastidio a quanto pare e non capisco».
+  CAUSA MISURATA, in due tempi.
+  PRIMO (i processi in piu'): con tasklist sul suo PC risultavano DUE Mt5FeedServer e DUE
+  SegnaliBridge. La pulizia anti-orphano del ponte chiudeva solo due nomi
+  (ForexBacktestLAB.exe e Mt5FeedServer.exe): SegnaliBridge.exe restava in piedi, e il suo
+  servizio segnali (porta 8769) pure. L'installer invece chiudeva i quattro nomi giusti - due
+  strade con due elenchi diversi, quindi un orfano di troppo garantito.
+  SECONDO (il «mi crasha per una decina di secondi»): taskkill torna appena ha CHIESTO la
+  chiusura, non quando e' avvenuta. Il ponte nuovo trovava la porta 8000 ancora in mano a
+  quello vecchio, il bind falliva ([Errno 10048]) e si riprovava ogni 2 secondi in silenzio: la
+  finestra dava «il ponte non risponde» esattamente per quei dieci secondi.
+  CURA, in tre pezzi:
+  1) l'elenco dei nomi della pulizia e' quello dell'installer (ForexBacktestLAB.exe,
+     Mt5FeedServer.exe, SegnaliBridge.exe), e il filtro «PID ne il mio» resta;
+  2) dopo la pulizia si ASPETTA che le porte 8000 e 8001 siano davvero libere
+     (_aspetta_porta_libera: 10 secondi al massimo, non blocca mai l'avvio);
+  3) quando il bind fallisce si dice CHI tiene la porta (_chi_tiene_la_porta: PID e nome da
+     netstat/tasklist) e la notizia si dice UNA VOLTA (_dici_porta_occupata), non a ogni giro
+     di due secondi. Misurato sul suo PC: le porte erano in mano a PID 9916 - un processo che
+     NON era uno dei nostri (Tailscale) - e a schermo sembrava la stessa cosa di «il ponte non
+     risponde»: due difetti diversi, uno si cura chiudendo quel programma.
+  In piu' la pulizia si ripete DOPO l'avvio dei servizi (un figlio arrivato in ritardo poteva
+  trovare la porta occupata).
+  Test: laboratorio/ponte/test_processi_orfani_avvio.py (11 prove: elenco dei nomi, filtro del
+  proprio PID, attesa della porta viva/morta, diagnosta del colpevole, notizia detta una volta
+  sola e di nuovo se si libera). Rosso-senza misurato: 2 prove rosse.
+  Collaudo ponte: 314 verdi.
+
+- 2026-11-09 - OpenCode - **v2.2.7: il riallineamento della vista al primo tocco vale solo
+  quando l'autosegui stava DAVVERO trattenendo.** Correzione di una regressione che il
+  collaudo di GitHub ha trovato e quello locale no.
+  LA REGRESSIONE: la cura del clic (v2.2.5, "prima di spegnere l'autosegui viewEnd si
+  riallinea a dove si vedeva") era fatta SEMPRE. MISURATO con la prova footprint_tocco_stile
+  (5 verde prima della cura, 4 rossa dopo): a mercato APERTO il bordo visibile e' viewEnd PIU'
+  lo spazio futuro, quindi "riallineare" spostava il grafico in avanti al primo tocco - su
+  BTC, 26 candele su 150. Le fasce toccabili del footprint calcolate prima del tocco non
+  corrispondevano piu', e lo stile non cambiava.
+  LA CURA: il riallineamento parte solo se il confine dell'autosegui esiste
+  (fblConfineAutosegui()>0), cioe' solo quando l'autosegui aveva qualcosa da trattenere: a
+  mercato chiuso, coi dati che sforano la chiusura. Negli altri casi non si tocca viewEnd, e
+  il grafico resta dov'e'.
+  NOTA SUL MODO DI LAVORARE, che e' la lezione vera: il mio giro di regressione locale non
+  includeva i file del footprint (footprint_tocco_stile e i suoi fratelli), e la regressione
+  passava. L'ha pescata il collaudo di GitHub, che gira TUTTO - ed e' esattamente il motivo
+  per cui il proprietario dice "conta quello di GitHub". Da oggi il giro locale include
+  almeno: zona_morta, buco_grafico_chiuso, footprint_tocco_stile, disegni_*, notizie_*,
+  mercato_chiuso, congelamento, prestazioni, zoom, telefono_tocco_grafico, duplicate.
+  Collaudo: 121 prove verdi su quei file (footprint compreso).
+
+- 2026-11-09 - OpenCode - **LEZIONE DI METODO, pagata due volte nello stesso pomeriggio: la
+  prova di una cura non si committa PRIMA della cura.**
+  Misurato: commettendo `laboratorio/app/notizie_archivio.test.mjs` insieme alla v2.2.3 e
+  `laboratorio/app/disegni_non_riscritti.test.mjs` insieme alla v2.2.5, entrambi i collaudi di
+  GitHub su quelle versioni sono finiti rossi - non per difetti del programma, ma perche' la
+  prova chiamava funzioni che in quel commit non esistevano ancora. Il rimedio e' sempre stato
+  lo stesso (applicare la cura subito dopo e ripubblicare), ma la regola vale la pena di essere
+  scritta perche' e' la stessa che dice il proprietario: si pubblica a collaudo verde, e una
+  prova che misura una cura deve arrivare COL codice che la fa passare.
+  Come ci si accorge subito: `git status` prima di `git add -A` e leggere i file NON tracciati
+  che finiscono nel commit - entrambe le volte erano li', in vista.
+
+- 2026-11-09 - OpenCode - **v2.2.6: il documento dei disegni condivisi non si riscrive quando
+  non e' cambiato, e si vede finalmente QUANTO PESA.**
+  MISURATO dal proprietatore (tabella Traffico dell'app, 9 novembre):
+     documento grafico — 0 scritture, 6 letture, 4889,5 KB  (circa 815 KB a lettura)
+     collegamento     — 10 scritture, 13 letture, 2,5 KB
+     preferenze       — 0 scritture, 10 letture, 0,6 KB
+     TOTALE           — 10 scritture, 29 letture, 4892 KB
+  LA PRIMA IPOTESI E' MORTA con questa misura: "una scrittura al minuto" era sbagliata, le
+  scritture sono 10. I numeri della console (321 scritture, 694 letture) non sono di oggi su
+  quel computer: 694 diviso 8 giorni fa 87 al giorno, e quel dispositivo da solo ne fa 29 -
+  quindi il numero della console e' del MESE intero e del PROGETTO intero (chiunque apra il
+  sito conta, non solo quel PC). Detto chiaro: non e' vero che "ad app chiusa e' salito".
+  IL CONTO VERO E' LA BANDA: 4890 KB su 4892, il 99,9% da un documento solo. E quel documento
+  e' a 815 KB con un tetto di 900 KB oltre il quale l'app smette di condividere i disegni:
+  perche' e' scritto con {merge:true}, cioe' ogni scrittura AGGIUNGE le sue chiavi e nessuna
+  viene mai tolita - accumula asset e sessioni da settimane.
+  CURA, in due pezzi:
+  1) "identico = non si scrive": il payload viene confrontato con l'ultimo inviato e, se e'
+     uguale, non si scrive (e non si conta). Prima rimandava lo stesso elenco ogni volta che
+     qualcosa veniva marcato, e ogni scrittura fa scattare una lettura su ogni altro
+     dispositivo - l'eco che non si vede. Se l'invio fallisce la firma si butta, cosi' al
+     tentativo dopo riparte comunque.
+  2) il PESO PER CHIAVE, misurato a ogni lettura e mostrato nella riga di stato dei disegni
+     condivisi: senza sapere quale chiave occupa quei byte, la cura successiva (spezzare il
+     documento o tagliare le chiavi morte) sarebbe un tentativo.
+  NOTA SULLA MISURA, che ho sbagliato e mi e' costata un giro: firmaSemplice() sta DENTRO il
+  modulo del cloud e dallo script principale NON si raggiunge (misurato: ReferenceError finito
+  in un catch silenzioso, e il confronto non scattava mai). Ora la firma la fa una funzione
+  locale, graficoFirma(), stessa scelta e stessa spiegazione accanto.
+  Test: laboratorio/app/disegni_non_riscritti.test.mjs (2 prove: stesso contenuto = una sola
+  scrittura, contenuto cambiato = si riscrive; e il peso per chiave del documento letto).
+  Collaudo: 43 prove verdi fra disegni condivisi, disegni per asset/timeframe, duplicate e
+  zona morta.
+
+- 2026-11-09 - OpenCode - **v2.2.5: spostandosi a mano si arriva fino all'ultima candela vera,
+  e il clic non fa piu' saltare la vista.**
+  RICHIESTO dal proprietatore (9 novembre): «ile grafico non mi permette di andare oltre
+  l'ultima candela spostandomi» - il fix di v2.1.9 era rimasto a metà.
+  CAUSA MISURATA, con la prova dentro il banco: il tetto a mercato chiuso (maxViewEnd) era il
+  confine dell'ultima candela APERTA, e valeva SEMPRE, autosegui acceso o no. Misurato su 180
+  righe con 60 candele aperte: la vista si fermava alla riga 60 e non si arrivava NEMANCO
+  all'ultima candela vera.
+  E la prova ha beccato anche il difetto originale dell'8 novembre, che era rimasto in piedi:
+  con l'autosegui acceso la finestra stava sull'ultima candela aperta (riga 60) mentre viewEnd
+  era rimasto sull'ultima candela VERA (riga 179); al primo clic l'autosegui si spegne e la
+  finestra schizzava da 60 a 179 - «si sposta automaticamente piu' avanti, in modo del tutto
+  casuale».
+  CURA, in due righe che tengono in piedi TUTTE le richieste:
+  1) il tetto a mercato chiuso vale SOLO con l'autosegui acceso (followLatest): cosi' la
+     finestra non scappa da sola nella zona morta (richiesta dell'8 novembre) MA spostandosi a
+     mano si arriva fino in fondo ai dati e anche nello spazio vuoto dopo l'ultima candela,
+     col margine di sempre (richiesta del 9 novembre);
+  2) prima di spegnere l'autosegui, freezeViewIfNeeded() riallinea viewEnd a DOVE SI VEDEVA (il
+     bordo destro della finestra di adesso): il clic non sposta piu' niente, e dieci clic in
+     fila nemmeno.
+  REGRESSIONE MIA TROVATA DAL COLLAUDO e curata: il calendario dello strumento si costruiva con
+  NOVE giorni di troppo, cosi' la copertura finiva al giorno PRIMA dell'ultima candela e
+  l'intera ultima giornata di dati risultava chiusa. Otto giorni: copre il giro all'indietro e
+  l'ultima candela (prova chiusura_mercato_prestazioni, che ora misura il taglio giusto).
+  PROVE RESE INDIPENDENTI DAL GIORNO E DALL'ORARIO (misurato: due prove dipendevano dal
+  calendario e sono diventate rosse da sole quando è arrivato lunedi'): asse_si_ferma_alla_
+  chiusura ora blocca l'orologio su un sabato; buco_grafico_chiuso usa date fisse (venerdi' e
+  lunedi', aperti per costruzione) e blocca l'orologio sul lunedi' dopo la chiusura.
+  Test: zona_morta.test.mjs (4 prove, compresa «cliccare non fa saltare la vista» col
+  puntatore sintetico) e buco_grafico_chiuso.test.mjs (6, compresa la spazzata su tutte le
+  finestre). Rosso-senza misurato: tetto 60 su 180 righe, e la spazzata con buchi.
+  Collaudo: 92 prove verdi su zona morta, buchi, congelamento, mercato chiuso, prestazioni,
+  zoom, notizie e duplicate.
+
+- 2026-11-08 - OpenCode - **v2.2.4: le notizie sul grafico restano, in locale e sull'account.**
+  RICHIESTO dal proprietario: «tutte le notizie che vengono aggiunte sul grafico salvale in
+  locale e sull'account scelto al login, cosi' non le richiede a Forex Factory di continuo ogni
+  volta che entriamo nel grafico, e abbiamo anche uno storico personale delle notizie sul
+  grafico che rimangono e che funziona anche in modalita replay. Dal momento del primo login
+  in assoluto lui inizia a registrare tutte le notizie».
+  CAUSA MISURATA: i pallini si disegnavano solo da `newsEvents`, l'ultima copia del feed, e il
+  feed arriva SOLO in Live (il polling e' agganciato allo stato Live). In Storico/replay
+  `newsEvents` e' vuoto, quindi nessun pallino, e non c'era modo di rivedere le notizie di
+  ieri. L'archivio locale esisteva gia' (fbl_notizie_archivio, lo usava solo la statistica del
+  freno notizie) ma non alimentava il grafico.
+  CURA, in quattro pezzi:
+  1) la lista che il grafico disegna e' l'ARCHIVIO (locale + account) piu' l'ultima copia del
+     feed (newsGrafico, notizieGraficoAggiorna): i pallini restano anche in Storico/replay e
+     compaiono subito all'apertura, senza aspettare la rete;
+  2) l'archivio accetta le notizie in DUE forme, quella del feed (date/country/impact/title) e
+     quella dell'account (t/cur/imp/tit) - notizieVoce(), una sola strada, cosi' locale e cloud
+     restano allineati (misurato: prima le seconde venivano scartate in silenzio);
+  3) le notizie nuove partono per l'account: documento a parte users/{uid}/data/notizie, scritto
+     solo quando la lista e' diversa dall'ultima (regola «identico = non si scrive»), letto
+     all'avvio dentro initSession - server proprio se configurato, Firebase come rete di
+     sicurezza, come gli altri documenti;
+  4) in archivio le importanti restano un anno (la statistica guarda indietro) e TUTTO per due
+     settimane (la fascia che si replayza davvero).
+  NOTA SULLA FRAGILITA' TROVATA STRADA FACENDO: chi assegna newsEvents senza passare dal
+  polling lasciava la lista da disegnare vuota e i pallini sparivano - misurato su tre prove
+  esistenti (telefono_tocco_grafico, notizie_altri_dispositivi) e su una che difendeva la regola
+  vecchia. Ora notizieGraficoSincrona() controlla a fotogramma un NUMERO (quanti eventi aveva
+  il feed l'ultima volta) e ricostruisce solo se e' cambiato: un confronto, non un giro.
+  REGOLE CAMBIATE DI CONSEGUENZA, con le prove aggiornate e il motivo scritto dentro:
+  - in Storico/replay i pallini RESTANO (notizie_altri_dispositivi misurava zero);
+  - in archivio le Low entrano per due settimane (sale_notizie misurava «le Low sono rumore»).
+  Test: laboratorio/app/notizie_archivio.test.mjs (5 prove, compresa la spazzata sui pallini
+  DAVVERO disegnati - newsDotHitRects dopo draw() - e la prova di controllo a grafico vuoto).
+  Rosso-senza misurato: 3 notizie su 4 in archivio e ZERO pallini in replay.
+  Collaudo: 54 prove verdi fra notizie e grafico, 48 sul mercato chiuso e le duplicate.
+
+- 2026-11-08 - OpenCode - **v2.2.3: il grafico non perde piu' le candele in mezzo allo storico.
+  Tre difetti segnalati, UNA sola causa misurata.**
+  SEGNALATO dal proprietario (8 novembre, con tre foto in tre punti diversi dello storico):
+  «quando sto scorrendo il grafico a mercato chiuso il grafico si rompe in delle zone specifiche,
+  smette di far visualizzare le candele lungo il grafico in parte; se ci spostiamo un altro po'
+  ritorna a funzionare». Nella stessa giornata altri due sintomi: «il grafico non mi permette di
+  andare oltre l'ultima candela spostandomi» e «se scorro indietro nel tempo l'etichetta del
+  prezzo corrente prende di riferimento l'ultima candela visualizzabile, invece deve rimanere
+  sempre sull'ultima candela creata, non si puo' spostare l'etichetta con la linea».
+  CAUSA MISURATA, una sola per tutti e tre: il confine della chiusura di mercato si cercava con
+  una RICERCA BINARIA che da' per certo che il predicato sia ordinato (prima tutte le candele
+  aperte, poi tutte chiuse). Il mercato non e' ordinato cosi': ogni notte chiude 22:00-00:00 e
+  riapre, e il weekend chiude da venerdi' sera. Misurato su 3000 candele da un minuto:
+  - la finestra che attraversa la pausa notturna (righe 1200-1499) teneva 60 candele su 300:
+    240 candele sparite, ed e' il buco delle foto;
+  - 269 finestre su 3000 con buchi, da pochi minuti a quasi tutta la finestra; spostandosi il
+    confine si sposta, e in alcuni tratti tornano (da cui «ritorna a funzionare»);
+  - lo stesso confine a caso era il tetto di maxViewEnd() (lo spostamento a mano si fermava
+    prima dell'ultima candela aperta) e il congelamento dell'autosegui;
+  - la riga del prezzo leggeva la chiusura della candela piu' a destra FRA QUELLE VISIBILI,
+    quindi scorrendo indietro l'etichetta cambiava numero a ogni spostamento.
+  CURA: il confine si prende dall'ULTIMA CANDELA DEI DATI, non dall'orologio, e si taglia SOLO
+  LA CODA di candele chiuse. Due confini, uno per mestiere (lezione imparata dal collaudo
+  completo, che ha trovato una prova rossa e l'ha fatta sistemare bene invece di aggirarla):
+  fblConfineChiusura() guarda il CALENDARIO e comanda il taglio delle candele oltre la chiusura
+  e il tetto dello spostamento a mano (che quando non trova niente lascia arrivare fino
+  all'ultima candela vera, come prima); fblConfineAutosegui() guarda l'ORARIO DELLA SESSIONE
+  piu' l'istante di chiusura e comanda il congelamento dell'autosegui, che non deve mai scappare
+  avanti da solo. La riga del prezzo si aggancia all'ultima candela creata prima della chiusura
+  (fblPrezzoRigaCorrente), non all'ultima visibile. La richiesta del 1 novembre resta valida:
+  le candele OLTRE la chiusura non si mostrano, e una fetta finita tutta dentro il weekend non
+  lascia mai il grafico vuoto.
+  NOTA DI METODO: le attese delle prove si calcolano col predicato che l'app usava PRIMA della
+  cura (fblMercatoFermoOra, candela per candela), cosi' il rosso-senza misura il difetto vero e
+  non l'assenza di una funzione nuova. Rosso-senza misurato: 60 candele su 300 e 269 finestre
+  con buchi.
+  Test: laboratorio/app/buco_grafico_chiuso.test.mjs (6 prove, compresa la spazzata su TUTTE le
+  finestre dello storico e la prova di controllo a mercato aperto).
+  Collaudo: 53 prove verdi sui file toccati (mercato chiuso, zona morta, congelamento,
+  prestazioni, duplicate, conto madre, linee pendenti).
+
+- 2026-11-08 - OpenCode - **FIREBASE: LE SCRITTURE E LE LETTURE SONO SCESE, misurato dal proprietario.** Dalla console di Firebase (novembre 2026): scritture 5 su 20K/giorno (era 3,1K), letture 35 su 50K/giorno (era 6,4K), eliminazioni 0. Il costo resta 5,72 EUR, ma quello e' il costo base del progetto (archivio e banda), non lo sforo. La cura che ha portato il risultato: la rete di sicurezza rileggeva l'intero documento dal cloud OGNI 60 SECONDI (v2.1.7 la allenta a mezz'ora a mercato chiuso), piu' il conteggio del traffico gia' presente. Da tenere sotto controllo: se le letture tornano a salire, il primo posto da guardare e' la rete di sicurezza e la sincronizzazione delle preferenze.
+
+- 2026-11-08 - OpenCode - **v2.2.2: la finestra duplicata sta sullo STESSO CONTO della madre.**
+  Voce 5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md.
+  SEGNALATO: «se ho duplicato la finestra e sono col conto collegato a MT5, non mi puo' aprire
+  una finestra collegata con il conto CSV. Assolutamente no. Deve essere sempre uguale al
+  conto selezionato. Se invece nella pagina madre cambio e passo a un conto storico, allora le
+  pagine duplicate si adatteranno al conto storico in maniera automatica, quindi deve esserci
+  questo collegamento tra di loro.»
+  CAUSA MISURATA: il conto e' una scelta della madre (liveModeActive + fblContoVista). Una
+  finestra PIP appena nata nasce in Storico e non ha modo di sapere su che conto sta
+  lavorando la madre, perche' quel dato non viaggiava da nessuna parte.
+  CURA: il conto scelto viaggia sullo STESSO messaggio che gia' porta posizioni e ordini
+  (campo conto in broadcastTradingStateNow). La duplicata, all'arrivo, lo applica PRIMA del
+  resto dello stato, perche' cambiare conto ricostruisce la sessione e applicare prima le
+  posizioni le butterebbe via. Tre i casi coperti: madre in Live e duplicata in Storico; madre
+  passata allo Storico; stessa modalita ma conto diverso (p. es. Kraken invece di MT5).
+  La decisione sta in una funzione sua (fblApplicaContoMadre) che NON tocca niente da solo:
+  dice solo cosa andrebbe fatto. Cosi' la prova la misura direttamente e il gestore esegue.
+  NOTA SUL MODO DI LAVORARE, perche' e' costata due giri: dichiarare una funzione dentro il
+  blocco if(tradingChannel){...} la rende locale e irraggiungibile dall'esterno (Provato: la
+  prova dava 'is not defined' e la cura sembrava rotta). La regola e' semplice: le funzioni
+  che le prove devono chiamare stanno a livello di pagina, mai dentro un altro blocco.
+  Test: laboratorio/app/conto_madre_duplicata.test.mjs (6 prove, provate anche al contrario).
+  Collaudo: 24 prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-08 - OpenCode - **v2.2.1: nella duplicata niente scorrimento, e la madre torna a tutto
+  schermo.** Voci 2 e 3 di cervello/RICHIESTE-DUPLICA-FINESTRA.md.
+  **3) SCORRIMENTO.** SEGNALATO: «mi fa scorrere la pagina come se sotto ci fosse qualcosa, ma
+  ci deve essere soltanto il grafico e non mi deve scorrere nulla con la rotellina del mouse
+  oppure con il dito». MISURATO: `overflow:hidden` da solo non bastava. Aggiunto
+  `overscroll-behavior:none` (toglie il rimbalzo elastico, che su Chrome e Safari fa scorrere
+  anche quando overflow dice di no), `height:100%` su html (senza, l'altezza resta auto e la
+  pagina cresce oltre la finestra, con una barra di scorrimento vera) e `touch-action:none` sul
+  body, lasciando al canvas i gesti che gli servono. La barra laterale NON e' stata toccata:
+  scorre da sola se gli strumenti non ci stanno, e resta ancorata a sinistra del grafico.
+  **2) SCHERMO INTERO.** SEGNALATO: «quando creo una finestra duplicata non mi permette piu'
+  alla pagina madre di andare a schermo intero. E invece deve farlo.» MISURATO sul codice: il
+  controllo del ripiego stava DENTRO il .then() della richiesta - se la richiesta non risolve
+  (ed e' esattamento il caso con piu' finestre aperte, dove il browser la ignora e non risolve
+  ne' rifiuta niente) quel controllo non veniva raggiunto MAI: nessun ripiego, grafico che non
+  si allarga, pulsante che sembra morto. Ora il timer si arma subito, a prescindere.
+  NOTA: la cura anti-scroll esisteva gia' ma era andata PERSA durante le molte operazioni git
+  di questi giorni (stash, checkout). Ritrovata e rimessa, con la prova a guardia - è un
+  promemoria che una cura senza prova sparisce e nessuno se ne accorge.
+  Test: duplicata_solo_grafico.test.mjs (2) e schermo_intero_madre.test.mjs (3), tutti provati
+  anche al contrario. Collaudo: 18 prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-08 - OpenCode - **v2.2.0: la finestra duplicata mostra gli stessi asset della madre.**
+  Voce 4/5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md, misurata dal proprietario con due
+  screenshot del dialogo «Ricerca simbolo»: madre «ASSET DISPONIBILI (35)» con le stelline
+  piene, duplicata «ASSET DISPONIBILI (5)» con le stelline vuote.
+  CAUSA MISURATA nel codice: availableAssets() costruisce l'elenco dalle voci di #market piu'
+  customAssets. Una finestra PIP aggiuntiva nasce VUOTA per scelta esplicita
+  (initExtraPipWindow), quindi parte con i cinque simboli di default e customAssets vuoto:
+  anche se la madre ne ha trentacinque, la duplicata non puo' mostrarne piu' di cinque. La
+  watchlist sta in localStorage, che una finestra appena nata non ha ancora letto.
+  CURA: la madre passa il proprio elenco (availableAssets + customAssets) e la propria
+  watchlist sullo STESSO messaggio che gia' usa per il clone (pip_clone_snapshot), e la
+  duplicata lo applica all'apertura, nello stesso ordine e con gli stessi nomi.
+  ERRORE MIO durante la cura, e vale la pena di dirlo: avevo dichiarato la funzione dentro il
+  blocco if(tradingChannel){...}, quindi locale e irraggiungibile - il primo giro di prova era
+  rosso con "fblApplicaElencoAssetMadre is not defined" e per poco non l'ho raccontato come un
+  difetto dell'app invece che come il mio. Spostata a livello di pagina.
+  Secondo errore, nella prova: costruivo davvero gli asset della madre sulla finestra del
+  test, cosi' la duplicata ce li aveva gia' e la prova passava a vuoto (verde nei due versi).
+  Rifatta con l'elenco della madre come DATO.
+  Test: laboratorio/app/elenco_asset_duplicata.test.mjs (2 prove, provate anche al contrario).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-08 - OpenCode - **v2.1.9: il click sul grafico non porta piu' nella zona morta.**
+  SEGNALATO dal proprietario: «se clicco sul grafico all'apertura mi porta tutto avanti in una
+  zona morta non esistente dove non c'e' nessun dato; anche quando clicco torna all'ultima
+  candela e poi clicco dentro al grafico, lui si sposta automaticamente piu' avanti nella zona
+  morta, in modo del tutto casuale».
+  CAUSA MISURATA, ed e' una conseguenza delle cure di questi giorni: maxViewEnd() lasciava
+  arrivare viewEnd fino a idx + 0,85*n, cioe' OLTRE l'ultima candela. In Live quel margine
+  serve (orari futuri, pallini delle notizie); a mercato chiuso non serve piu' niente, ed e'
+  spazio vuoto preso a pieno diritto. Il click spegne l'auto-segui, e con l'auto-segui spento il
+  congelamento non aveva piu' niente da trattenere: la finestra restava nella zona morta. Da qui
+  il «del tutto casuale» - dipende da quante candele oltre la chiusura aveva lasciato il feed.
+  CURA: a mercato chiuso il tetto e' L'ULTIMA CANDELA APERTA, non oltre. Ci si puo' ancora
+  spostare avanti e indietro DENTRO le candele vere (provato), e a mercato aperto il margine
+  futuro resta com'era (prova di controllo).
+  DIFETTO TROVATO DAL TEST DELLE PRESTAZIONI, e vale la pena di dirlo: la prima versione della
+  cura faceva la ricerca del confine a OGNI fotogramma, costruendo il calendario dello
+  strumento ogni volta - 20 calendari per 80 candele, quando il limite e 11. Era esattamente il
+  carcame che aveva lasciato l'app su «Non risponde». Ora il confine si cerca una volta per
+  minuto (chiave asset + minuto).
+  Test: laboratorio/app/zona_morta.test.mjs (3 prove, provate anche al contrario).
+  Collaudo: 28 prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-08 - OpenCode - **v2.1.8: l'aggiornamento torna in UN CLICK SOLO, e gli indicatori
+  non si allungano piu' nel futuro.**
+  **1) DUE CLICK PER AGGIORNARE (seconda segnalazione del proprietario, 8 novembre).** MISURATO:
+  il ripiego del piano aggiornamento chiedeva "quale PAGINA sta servendo il ponte"; rispondere
+  'copia aggiornata' - che da quando il ponte si aggiorna da se' la pagina e' il caso NORMALE -
+  faceva concludere serve:false, cioe' "basta ricaricare". Al primo click non partiva quindi
+  l'installazione dei pacchetti, il pulsante restava acceso, e serviva il secondo click.
+  Servire la pagina nuova non vuol dire ESSERE aggiornati: il ponte puo' servire l'ultima
+  app.html restando lui stesso un eseguibile vecchio - ed e' esattamente il caso che rompe il
+  collegamento con MT5. CURA: il ripiego non puo' mai escludere il pacchetto.
+  Aggiunto: il piano si ricalcola appena il ponte ricomincia a rispondere, invece di restare
+  sulla decisione presa quand'era muto (la memoria era di 60 s).
+  Test: setup_non_necessario.test.mjs (6 prove; il primo riscritto perche' misurava la regola
+  sbagliata - e un test che misura la regola sbagliata tiene in vita il difetto).
+  **2) GLI INDICATORI NON SI ALLUNGANO OLTRE L'ULTIMA CANDELA.** SEGNALATO: «gli indicatori
+  continuano a scorrere il tempo e non si fermano al momento dell'ultima candela registrata
+  prima della chiusura del mercato». CAUSA MISURATA nell'EMA: l'offset di disegno (quello dello
+  script Pine, che sposta il DISEGNO a destra) spingeva il punto finale della linea oltre
+  l'ultima candela vera - e a mercato chiuso quello spazio e' vuoto. Ora il punto finale non
+  supera mai idx. Test: indicatore_non_sfonda.test.mjs (2 prove).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-07 - OpenCode - **v2.1.7: a mercato chiuso Firebase non viene interpellato.**
+  MISURATO dal proprietario (quota Firebase, 7 novembre 2026): letture 6,4K/giorno, scritture
+  «in realta' non dovrebbe ne' leggere ne' scrivere nulla a mercati chiusi».
+  CAUSA: la rete di sicurezza rilegge l'intero documento dal cloud OGNI 60 SECONDI
+  (setInterval(rileggi,60000)). A mercato chiuso gli altri dispositivi non stanno lavorando
+  sul grafico: e' una lettura al minuto per scoprire niente.
+  CURA: a mercato chiuso la rilettura si allenta a una ogni mezz'ora; se qualcosa cambia
+  davvero (si torna sull'app, la si riapre, si tocca un disegno) parte lo stesso, perche'
+  quei casi passano forza=true. A mercato aperto tutto come prima.
+  La decisione sta in una funzione sua (fblGraficoRiletturaConsentita) fuori dal guscio: e'
+  l'unico modo di provarla (la prima stesa era dentro una closure, irraggiungibile dai test -
+  e una cura non misurabile e' una cura a meta').
+  Test: cloud_zitto_a_mercato_chiuso.test.mjs (3 prove, rosso-senza/verde-con).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-07 - OpenCode - **v2.1.6: la riga degli orologi ora si legge.**
+  SEGNALATO dal proprietario: «orologio non c'e'». Il campo C'ERA (l'avevo aggiunto per sapere
+  quale orologio decide la chiusura del mercato), ma il rendering lo stampava come
+  "orologio: [object Object]" - una riga che non si legge e non si copia, cioe' inutile.
+  Senza quei numeri non si puo' curare la chiusura decisa sull'orologio sbagliato (MT5 va
+  avanti anche di un'ora rispetto al dispositivo, come e' gia' scritto nel cervello del
+  progetto).
+  CURA: il valore si rende leggibile - ogni oggetto si apre in coppie chiave=valore. La riga
+  esce come:
+    orologio             : {dispositivo=..., mt5=..., scartoMinuti=0, fase=closed, fermo=true, ultimaCandela=...}
+  Test: misura_orologio_leggibile.test.mjs (rosso-senza/verde-con provati).
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-07 - OpenCode - **v2.1.5: a mercato chiuso l'asse si ferma, e questa e' un'applicazione.**
+  **1) L'ASSE SI ALLUNGAVA OLTRE LA CHIUSURA.** Dallo screenshot del proprietario: XAU/USD 1m con
+  l'asse da "nov 22:29" a "07 nov '26 23:59" - di SABATO, mercato chiuso dal venerdi' sera.
+  CAUSA MISURATA: lo spazio vuoto dopo l'ultima candela (liveMargin) si metteva guardando UNA
+  sola autorita', fblMercatoFermoOra(), che risponde "non fermo" quando MT5 dice che il mercato
+  e' aperto - e la sua risposta puo' essere vecchia di dieci minuti. Basta quel minuto per far
+  ripartire l'asse. CURA: il margine esiste solo a mercato aperto, e la chiusura si decide su DUE
+  autorita' (calendario dello strumento E fase della sessione, che non dipende da quella cache).
+  Test: asse_si_ferma_alla_chiusura.test.mjs (2 prove, rosso-senza/verde-con).
+  **2) F5, CTRL+R E CTRL+SHIFT+R NON FANNO PIU' NIENTE.** RICHIESTO: «questa e' un'applicazione
+  e deve essere del tutto sganciata da un sito web o da Chrome... questi pulsanti non devono
+  esserci e non devono fare nulla». Ricaricare mentre si guarda una posizione aperta butta lo
+  stato in memoria, mentre l'app ha gia' il SUO modo di aggiornarsi: il pulsante Aggiorna.
+  Dove si scrive (caselle di testo) i tasti restano liberi. Test: applicazione_non_sito.test.mjs
+  (3 prove con la TASTIERA VERA: il primo tentativo con eventi sintetici non misurava niente,
+  provato - restava verde nei due versi).
+  **3) IL DISEGNO DELLE ZONE ZERO-PRINT.** Object.keys() sulle righe di footprint alloca un array
+  con tutti i livelli di prezzo della candela, 2000 candele a fotogramma: 200.000 array buttati
+  via per sapere se il primo esiste. Ora un giro che si ferma al primo risultato. (Misurato dal
+  proprietario: 183 ms sui 238 di disegno con 50000 candele.)
+  Collaudo: prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-07 - OpenCode - **v2.1.4: due cure, una trovata dal proprietario guardando la duplicata.**
+  **VERIFICATA LA CURA DEI CRASH.** Lo stesso pannello del proprietario, con MT5 collegato:
+  `lettura posizioni: 318 volte, media 24 ms, peggiore 354 ms` - ZERO non riuscite (prima 1132
+  su 1135, media 609 ms, picco 30 s). E il pannello servizi dice «Ordini (questo computer)
+  risponde in 13 ms». La strada locale senza indagini tiene.
+  **1) IL GRAFICO NON SI SVUOTA PIU' SCORRENDO NEL WEEKEND.** SEGNALATO dal proprietario nella
+  finestra duplicata: «clicco sul grafico e mi spariscono candele e indicatori; devo premere
+  torna all'ultima candela». CAUSA MISURATA: a mercato chiuso getVisibleData() taglia le
+  candele dopo la chiusura; con la vista TUTTA dopo la chiusura il punto di taglio e' ZERO e
+  `slice(0,0)` e' un array vuoto - grafico bianco. CURA: se il taglio non lascia niente non si
+  taglia. Chi guarda il passato guarda il passato; le candele FABBRICATE dopo la chiusura
+  continuano a non vedersi (provato). Test: grafico_mai_vuoto.test.mjs (2 prove).
+  **2) STESSA CURA PER LA STRADA DEL GRAFICO.** Dal pannello: «Ordini (questo computer) 13 ms»
+  ma «Grafico (computer, in diretta) 157 ms» - stessa pagina, stessa macchina, due strade. Le
+  candele uscivano su Tailscale per tornare a casa. Ora dal ponte locale anche il servizio dati
+  (porta 8001) sta in locale, scelto senza indagini.
+  Collaudo: 36 prove verdi sui file toccati, ponte 302 verdi.
+
+- 2026-11-07 - OpenCode - **v2.1.3: trovata con la MISURA la causa dei «crasha da un momento
+  all'altro».** Dal pannello prestazioni del proprietario, nero su bianco:
+    lettura posizioni: 1135 volte, media 609 ms, peggiore 30000 ms, 1132 NON RIUSCITE
+    ordine (altro):    1135 volte, media 609 ms, peggiore 40877 ms, 1131 non riuscite
+    lettura conto:       53 volte, peggiore 13892 ms, 50 non riuscite
+  e sulla stessa pagina: «da questa pagina: http://127.0.0.1:8000».
+  Gli ordini giravano dal SERVER (/pc/8000) mentre la pagina la serviva il ponte DI QUESTO
+  computer: 99,7% delle letture perse, ognuna con la sua attesa fino a 30 s, e la pagina che
+  passava il suo tempo ad aspettare risposte che non arrivavano.
+  CURA 1: se l'indirizzo della pagina e' il computer stesso, la strada degli ordini e' LOCALE,
+  scelta senza chiedere niente a nessuno (fblPaginaDalPonteLocale). Non e' un'ipotesi: chi
+  serve la pagina ha anche le rotte degli ordini. Prima si sceglieva con una prova che puo'
+  fallire (ponte occupato, scadenza a 2,5 s) e si ricontrollava solo ogni 30 s.
+  CURA 2: dopo tre letture fallite di fila il polling si allenta (1s -> 2s -> 4s, max 10s) e al
+  primo successo torna a 1s. Una strada morta non si martella.
+  Test: laboratorio/app/strada_ordini_locale.test.mjs (3 prove, rosso-senza/verde-con).
+  Collaudo: 302 prove del ponte verdi (erano 237), app browser verde.
+
+- 2026-11-07 - OpenCode - **v2.1.2: tre cure, tutte misurate, ai problemi che facevano crashare l'app.**
+  **1) REGRESSIONE MIA RITIRATA (v2.1.0).** Congelavo `end` in getViewWindow() SEMPRE a mercato
+  chiuso: di sabato il grafico non si spostava piu' in orizzontale (segnalato: «mi si sposta solo
+  in verticale»). Riportato indietro e rifatto bene: il congelamento vale SOLO in auto-segui
+  (`followLatest`), mai durante pan/zoom. Test: laboratorio/app/congelamento_solo_autosegui.test.mjs
+  (5 prove, provate nei due versi: con la cura rotta una sola resta verde, spenta del tutto due).
+  **2) IL PULSANTE AGGIORNA NON COMPARIVA.** MISURATO sul PC: il ponte serviva
+  `app_aggiornata\app.html` della v2.1.1 mentre gli .exe erano vecchi, e fblVersioneInstallata()
+  legge la versione dalla CACHE DEL SERVICE WORKER, cioe' da quella copia web: rispondeva 2.1.1,
+  il confronto col tag diceva «pari», pulsante spento. L'app sembrava aggiornata senza esserlo.
+  CURA: a decidere e' la versione dell'ESEGUIBILE (fblVersioneProgrammaInstallato, la legge il
+  ponte dal registro); la copia web resta il ripiego. Test: versione_programma_non_web.test.mjs
+  (3 prove, rosso-senza/verde-con).
+  **3) desktop_shell.py: il patch dello zoom era codice morto.** Leggeva `on_webview_ready` e
+  scriveva `on_web_view_ready` (due attributi diversi): non agganciava niente. Corretto.
+  In piu' la ricerca della riapertura di mercato si tiene in memoria per minuto (era fino a
+  5760 giri con Intl per chiamata, nel percorso caldo). Test: chiusura_mercato_costo.test.mjs.
+  Collaudo: verde.
+
+- 2026-11-07 - OpenCode - **v2.1.1: la finestra duplicata apre col conto della madre, non con lo Storico CSV.** Voce 4/5 di cervello/RICHIESTE-DUPLICA-FINESTRA.md. CAUSA MISURATA: initExtraPipWindow() parte sempre in Storico (liveModeActive=false, csvLibrary vuoto) e il gestore di pip_clone_snapshot applicava solo stili/asset/warm-start MT5 senza mai passare in Live. Con la madre in Live MT5 la duplicata restava in Storico con elenco asset vuoto. CURA: nel gestore, se la madre e in Live (storico:false) e la finestra PIP no, switchAccountMode(true) prima del resto. Test: laboratorio/app/pip_conto_madre.test.mjs (rosso senza, verde con). Collaudo da verificare.
+
+- 2026-11-07 - OpenCode - **v2.1.0: disegni e indicatori si fermano a mercato chiuso.** Dopo v2.0.99 le candele si fermavano ma la finestra temporale (start/dataStart) avanzava ancora con viewEnd, quindi i disegni e gli indicatori scivolavano. CURA: in getViewWindow() il congelamento (end = min(end, ultima candela aperta)) viene applicato PRIMA di calcolare start/dataStart/dataEnd, cosi la vista orizzontale resta ferma. Congelamento solo a mercato chiuso, solo in Live (non replay), mai per le crypto. Usa solo liveSessionPhaseAt per non costruire il calendario dello strumento a ogni passo. Collaudo: verde.
+
 # Diario dei giri di agenti
 
 Formato: data — chi — cosa — esito collaudo — commit.
+
+- 2026-11-07 — OpenCode — **v2.0.99: a mercato chiuso l'asse temporale si ferma.** Difetto segnalato dal proprietario: il tempo continuava a scorrere oltre l'ultimo orario di scrittura (XAUUSD chiude alle 22, ma l'asse mostrava orari oltre) e con esso si spostavano tutti i disegni e gli indicatori. CAUSA MISURATA: in draw() c'erano DUE strade che leggevano i dati del grafico — getVisibleData() applicava il taglio mercato-chiuso (cura del 1 novembre), ma draw() usava rows.slice(dataStart,dataEnd+1) SENZA taglio, quindi disegnava anche le candele oltre la chiusura. In piu' il blocco 'il tempo e' infinito' proseguiva l'asse oltre l'ultima candela reale in Live senza guardare se il mercato era chiuso. CURA: rimosso il blocco 'il tempo e' infinito' e taglio delle candele oltre la chiusura in draw(). Collaudo: verde.
+
+- 2026-11-06 — Claude — **v2.0.98: il log aveva 91 MB, l'88% era il nostro polling, e dentro
+  c'era la chiave in chiaro 250.000 volte**.
+  1. **MISURATO, e la misura mi ha smentito.** Avevo detto al proprietario che il log era gonfiato
+     da «una cosa che bussa su /v1/models e non e' nostra». Contate le righe:
+     `/positions` ~295.000, `/orders` ~286.000, `/account` ~279.000, `/health` ~29.000,
+     `/account_history` ~17.000 — l'**88%** di 1.023.510 righe era il **nostro** polling riuscito
+     (l'app interroga MT5 tre volte al secondo, e uvicorn scrive una riga per chiamata).
+     `/v1/models` era l'**1%**. Zittire il disturbo esterno non avrebbe risolto niente: e' il
+     motivo per cui qui si conta prima di curare, e stavolta l'ho pagato io.
+  2. **LA COSA PIU' SERIA NON ERA LO SPAZIO.** In circa **250.000** righe compariva
+     `?chiave=...` in chiaro: la chiave condivisa del ponte, scritta su disco centinaia di
+     migliaia di volte. Un log non e' il posto di una chiave.
+  3. **LA CURA STA ALL'ULTIMO CANCELLO**, la scrittura del file (`_LogConTetto`), e non nei logger
+     di uvicorn: uvicorn riconfigura il logging da se' quando parte, e un filtro messo sui suoi
+     logger potrebbe venire spazzato via senza che nessuno se ne accorga. Tre regole: la chiave
+     diventa `chiave=***` sempre; il polling **riuscito** (2xx/304 su quelle rotte) non si scrive,
+     ma **gli errori si'** — 4xx e 5xx sono esattamente cio' che si cerca quando qualcosa si
+     rompe; oltre 5 MB il file ruota tenendo una copia `.1`, quindi al massimo ~10 MB in tutto.
+     Le righe si decidono **intere**: uvicorn scrive il messaggio e il terminatore in due volte, e
+     decidere su un pezzo vorrebbe dire scartare mezza riga.
+  4. **DUE ERRORI MIEI NEL CONTROLLO, scritti qui perche' sono istruttivi.** Per provare la cura
+     nel verso opposto ho spento le regole, e la prima volta ho manomesso il file con una
+     sostituzione che ha preso piu' del previsto: una prova che doveva restare verde e' diventata
+     rossa e una che doveva diventare rossa e' rimasta verde. **Un esito cosi' non dimostra
+     niente**, e l'ho rifatto. Al secondo giro ho spento la regola della chiave con
+     un'espressione **senza gruppo di cattura**: `sub(r"***", ...)` con un gruppo che non
+     esiste solleva, l'eccezione e' finita nel `try/except` che protegge il servizio, e il file
+     risultava vuoto — sembrava un difetto della cura, era il banco. Rifatto con
+     `(?!x)(x)`: spenta la regola la chiave finisce nel file, accesa no. Idem per il rumore.
+     Il `try/except` largo resta giusto (un log non deve mai far cadere il servizio) ma nasconde
+     gli errori di programmazione: le prove sono l'unica rete, ed e' per questo che
+     `test_la_chiave_non_finisce_nel_file` controlla anche che ci sia `chiave=***` e non solo che
+     il segreto manchi.
+  5. **Una curiosita' utile:** quelle 11.008 chiamate a `/v1/models` sono qualcosa sul computer
+     del proprietario che cerca un'API in stile OpenAI sulla porta 8000. Rispondiamo 404 e non
+     cambia niente, ma da ora non riempie piu' il log.
+  **Collaudo:** ponte **237 verdi** (230 + 7 nuove in `test_log_con_tetto.py`), provate nei due
+  versi una regola per volta. **Serve reinstallare il Setup**: e' cambiato `bridge.py`.
+  **Commit:** uno, versione 2.0.98.
+
+- 2026-11-06 — Claude — **v2.0.97: l'app era inutilizzabile perché UNA variabile rispondeva a DUE
+  domande. Il login Google nell'app desktop torna sul popup, e il ponte smette di spegnersi da
+  solo**.
+  1. **IL SINTOMO, con le sue parole.** «Mi sono sloggato dall'account e poi è nato tutto quanto il
+     problema. Inizialmente dava detail not found… adesso ci siamo piantati e non mi funziona più
+     bene l'applicazione ed è inutilizzabile.» E poi il dettaglio che ha chiuso il caso: «la pagina
+     pop-up tramite web view non è supportata, va in conflitto, quindi dopo succede il crash… mi
+     dice accesso non riuscito con Google, premi rieffettua il login per riprovare, ma mi dà sempre
+     lo stesso errore».
+  2. **LA CAUSA, misurata nel SUO log e nella storia di git, non supposta.** In `login.html` una
+     sola variabile (`isCapacitor`) decideva due cose diverse:
+     **(1)** dove si va dopo il login riuscito; **(2)** quale flusso di Google si usa.
+     Fino alla v2.0.95 era solo il controllo di Capacitor, quindi nell'app desktop era `false` e si
+     usava il **popup**. La v2.0.96 l'ha allargata a `window.pywebview` e `?from=app` per sistemare
+     la (1) — giusto — e ha cambiato **di nascosto** anche la (2): nell'app desktop ha iniziato a
+     partire `signInWithRedirect`.
+     Nel suo `ForexBacktestLAB.log` c'è tutta la catena, in tre righe consecutive:
+     ```
+     GET /login.html?from=app 200
+     [Ponte] La pagina e' andata via: spengo fra 90 secondi, a meno che non torni qualcuno.
+     POST /disconnect?grazia=1 200
+     ```
+     cioè: il reindirizzamento porta la finestra **fuori** dall'app (su `accounts.google.com`), il
+     ponte vede la pagina andarsene, **comincia a spegnersi e stacca MT5**. Quello è il «crash»:
+     non un errore di Python — i `ConnectionResetError` nel log sono rumore di asyncio di quando la
+     finestra se ne va a metà richiesta, cioè un **sintomo** del redirect, non la causa.
+     E non poteva nemmeno riuscire: **Google rifiuta l'OAuth dentro una webview incorporata**
+     (`disallowed_useragent`). Al ritorno `getRedirectResult()` è vuoto e, con lo stato del giro
+     salvato (`loginGoogleInCorso`), si finisce esattamente alla riga 309 di `login.html`, quella
+     che stampa il messaggio che lui legge. Ripremi e rifà lo stesso giro: per sempre.
+  3. **PERCHÉ IL POPUP È LA STRADA GIUSTA NELL'APP DESKTOP, e l'ho verificato invece di crederci.**
+     `desktop/desktop_shell.py` installa `on_new_window_request -> set_Handled(False)`: WebView2
+     apre il popup di Google come finestra **vera**, fuori dalla webview. Misurato sulla pywebview
+     installata: `on_new_window_request` **esiste** (quindi quel patch va a posto davvero).
+  4. **LA CURA: due domande, due variabili.**
+     `eApk` = solo l'APK Capacitor → decide il **flusso** (lì il popup non esiste).
+     `dentroLApp` = APK **oppure** app desktop → decide **solo** la destinazione (resta la cura
+     buona della v2.0.96, che il ri-login torni in `app.html`).
+     E `usaRedirect = eApk || (tocchiGrossi() && !dentroLApp)`: il tocco decide solo nel
+     **browser**, perché il problema del reindirizzamento non è il dito, è la webview. Inoltre,
+     nell'app desktop il ripiego del popup bloccato **non** è più il reindirizzamento (romperebbe
+     l'app): si dice all'utente cosa fare.
+  5. **PERCHÉ TUTTE LE PROVE DICEVANO «VERDE», ed è la lezione da tenere.** I banchi
+     (`login_google_flusso`, `login_google_nativo`) **iniettano `isCapacitor` come parametro**:
+     eseguono il blocco vero del pulsante Google, ma **non** la riga che lo calcola. La riga
+     cambiata era proprio quella, quindi era invisibile a ogni prova. E al banco mancava del tutto
+     la dimensione «**app desktop**»: fingeva solo APK e browser.
+     Aggiunte 4 prove in `login_google_flusso.test.mjs`: nell'app desktop si usa il popup; con lo
+     schermo a tocco **comunque** il popup (la trappola fine: `tocchiGrossi()` da solo manderebbe
+     al redirect anche dentro l'app); col popup bloccato **non** si ripiega sul redirect e non si
+     lascia appeso lo stato del giro; e la **prova di controllo** che nell'APK il reindirizzamento
+     resta — senza di lei, una cura che spegne il redirect *ovunque* passerebbe e romperebbe il
+     telefono. Provate rosse con il comportamento della v2.0.96 e verdi con la cura.
+  6. **DUE DIFETTI MINORI TROVATI PER STRADA, curati nella stessa uscita.**
+     a. **Le pagine linkate non erano nel pacchetto.** `app.html` linka `termini.html` e
+        `rischi-finanziari.html`, `login.html` linka `index.html`: dentro il programma rispondevano
+        **404**, e nel suo log si vede `GET /privacy.html 404`. Il ponte ha una StaticFiles
+        generica su `_BASE_DIR`, quindi il 404 non era una rotta mancante: **i file non c'erano**,
+        perché `build_exe.bat` ne copiava e impacchettava solo una manciata scelta a mano.
+        Aggiunte al pacchetto (copia + `--add-data`): `index.html`, `privacy.html`, `termini.html`,
+        `rischi-finanziari.html`, `informativa-bot.html`. Nota: `index.html` mancante **è** il
+        «detail not found» da cui tutta questa storia è partita.
+     b. **La rotta `/login.html` era dichiarata due volte**, identica parola per parola (la stessa
+        toppa applicata due volte fra la v2.0.95 e la v2.0.96). FastAPI usa la prima, quindi la
+        seconda era codice morto: rimossa.
+  7. **UN DIFETTO TROVATO E NON CURATO, di proposito.** In `desktop_shell.py`:
+     ```python
+     _orig = ec.EdgeChrome.on_webview_ready      # legge  on_webview_ready
+     ec.EdgeChrome.on_web_view_ready = _patched  # scrive on_web_view_ready
+     ```
+     legge un nome e ne scrive un altro. Misurato: `on_webview_ready` esiste, `on_web_view_ready`
+     no — quindi quel patch (tasti acceleratori e zoom da tastiera) è **codice morto da sempre**.
+     Non l'ho sistemato qui: ripararlo **accenderebbe** un comportamento che è stato assente per
+     settimane (F12, Ctrl+R dentro l'app), e non è quello che è stato chiesto. Va fatto da sé,
+     quando lo si vuole davvero.
+  8. **Da dire al proprietario:** `installer_build/build/bridge.py` è cambiato, quindi **serve
+     reinstallare il Setup**: il tasto «Aggiorna» aggiorna solo le pagine. In più il suo
+     `ForexBacktestLAB.log` è arrivato a **91 MB** e cresce senza limite (10.954 righe sono una
+     sola cosa che bussa su `/v1/models` e non è nostra): va messo un tetto, in un'uscita a sé.
+  **Collaudo:** login **55 prove su 55 verdi** (sei file), ponte **230 verdi**, `node --check` su
+  tutti e 5 gli script di `app.html`. Il giro intero del browser era in corso al momento del push:
+  la cura è stata pubblicata subito perché l'app era inutilizzabile, e la parte toccata è coperta
+  dalle 55 prove qui sopra. **Commit:** uno, versione 2.0.97.
+
+- 2026-11-06 — OpenCode — **v2.0.96: il ri-login torna dentro l'app**. Difetto misurato: dopo il logout `location.replace('login.html')` portava a una pagina 404 perché il ponte serviva solo `/` e `/sw.js`. Cura v2.0.95 ha aggiunto la rotta `/login.html` (FileResponse) e percorsi_liberi. Ma `login.html` calcolava `isCapacitor` solo sul Capacitor: nell'app desktop (`window.pywebview`) era false, quindi dopo il login andava a `index.html?dopo=login` invece che a `app.html`. Cura: `isCapacitor` ora include anche `!!window.pywebview` e il marcatore `?from=app` nel redirect dell'app, così DESTINATION='app.html'. In più, `login.html` aggiunto a `_FILE_AGGIORNABILI` (bridge.py) così il ponte lo scarica/aggiorna da solo insieme ad app.html e sw.js. Collaudo: verde.
+
+- 2026-11-06 — OpenCode — **v2.0.96: login.html riconosce l'app desktop (pywebview)**. Difetto
+  misurato: dopo il logout `window.location.replace('login.html')` portava a una pagina 404 perché il
+  ponte serviva solo `/` e `/sw.js`. Cura v2.0.95 ha aggiunto la rotta `/login.html` (FileResponse)
+  e `percorsi_liberi` in accesso_condiviso. Ma login.html, all'avvio, calcolava `isCapacitor` solo
+  sul Capacitor: nell'app desktop (`window.pywebview`) era `false` e dopo il login andava a
+  `index.html?dopo=login` invece che a `app.html`. Cura: `isCapacitor` ora include anche
+  `!!window.pywebview`, così DESTINATION='app.html' e il login torna dentro l'app. In più,
+  `login.html` aggiunto a `_FILE_AGGIORNABILI` (bridge.py) così il ponte lo scarica/aggiorna da
+  solo insieme ad app.html e sw.js. Collaudo: verde.
+
+- 2026-11-06 — OpenCode — **v2.0.95: il ponte serve anche login.html**. Difetto misurato: app.html fa `location.replace('login.html')` quando l'utente non e' autenticato o esce, ma il ponte serviva SOLO '/' (app.html) e '/sw.js': `/login.html` rispondeva 404 ('detail not found') e l'utente restava chiuso fuori. Cura: rotta `@app.get("/login.html")` in bridge.py (FileResponse da _BASE_DIR, no-cache) + `percorsi_liberi=("/login.html",)` in installa_controllo_chiave (pagina pubblica, senza chiave) + `--add-data "build\login.html;."` in build_exe.bat. Prova rosso/verde: `test_login_html_servito.py`. Richiede il Setup nuovo (bridge.py fuori app.html). Collaudo: verde.
+
+- 2026-11-06 — OpenCode — **v2.0.94: /dati sul PC tornava 401 sempre → dati su E: mai scritti**.
+  Difetto misurato: `documenti_utente.py` verifica il token Firebase con `google.oauth2.id_token`
+  e, se l'import manca, `_FB_AUTH_OK=False` e risponde 401 a QUALUNQUE login. `google-auth`
+  era nel Dockerfile del **server** ma NON nel `requirements.txt` del **ponte locale** (PC) né
+  congelata nell'exe (build_exe.bat). Quindi il ponte installato rifiutava ogni token, `/dati`
+  non scriveva mai e `E:\Forex Backtest Lab\dati` (cartella sì, DB no) restava vuota, con i dati
+  che andavano solo su Firestore. Cura: `google-auth` nel requirements del ponte +
+  `--collect-all google-auth` in build_exe.bat. Prove: rosso/verde
+  `test_dipendenza_google_auth.py`; ponte 229 verde. **Richiede REINSTALLARE il Setup** (l'exe
+  cambia): poi, con login, i /dati vengono accettati e i documenti finiscono su E:.
+
+- 2026-11-06 — OpenCode — **annullata una cura sbagliata a `fblUrlDati`**. Avevo creduto che con
+  «tieni i dati sul mio computer» acceso i documenti andassero forzati al ponte locale; il test
+  `cloud_nostro_indirizzo` l'ha beccata (rosso): da fuori casa i documenti DEVONO passare
+  dall'inoltro del server `/pc/8000`, che li gira al PC. `fblUrlDati` correto = segue il ponte
+  (locale o /pc/8000), invariato. Il difetto «E: vuoto» NON era qui: resta da misurare (richiesta
+  /dati autenticata che non popola la cartella). Lezione: il test del progetto è la verità.
+
+- 2026-11-05 — OpenCode — **v2.0.92: Lavoro 2 — candele in locale**. Magazzino IndexedDB per
+  asset+timeframe (array tipizzati, tetto 12 voci LRU): a ogni cambio asset/timeframe si chiede solo
+  la coda (count piccolo, ~49 KB) invece di riscaricare 5 MB. Controllo di sovrapposizione: se
+  l'ultima candela salvata torna con OHLC coerente si aggiungono solo le più nuove; altrimenti
+  (buco o broker che ha riscritto lo storico) si rifà lo scarico intero — mai uno storico troncato.
+  Provato nei due versi: laboratorio/app/candele_in_locale.test.mjs (3 prove). Collaudo: 5 passi,
+  0 falliti. Commit: 37a3c33 + 64c1567 + 5704b4b + 7b03968.
 
 - 2026-11-05 — OpenCode — **v2.0.91: rilascio B — configurazione per conto**. tgAutoPerConto + chiave
   fb_tg_auto_per_conto + migrazione (chiave assente ⇒ {} ⇒ tutto come oggi). Tendina «Impostazioni per

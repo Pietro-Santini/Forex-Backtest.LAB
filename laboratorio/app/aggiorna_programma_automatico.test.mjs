@@ -75,18 +75,40 @@ test('programma gia\' aggiornato: si ricarica la pagina e basta, niente pacchett
   } finally { await browser.close(); }
 });
 
-test('ponte vecchio che non conosce la rotta: si ricade sul ragionamento di prima, senza rompersi', async () => {
+test('ponte vecchio che non conosce la rotta: il ripiego non ESCLUDE mai il pacchetto', async () => {
   // Compatibilita' all'indietro: un'app nuova con un ponte vecchio deve comportarsi come ieri,
   // non peggio. La rotta risponde 404 (ok:false) e si torna a guardare quale copia serve.
+  //
+  // ATTENZIONE, che qui e' stato corretto un test che misurava la regola sbagliata (8 novembre
+  // 2026). Prima asseriva `serve === false` quando /health diceva 'copia aggiornata' - cioe'
+  // riproduceva ESATTAMENTE il difetto del proprietario («al primo click aggiorna solo app.html,
+  // al secondo installa»). Il ripiego deve poter soltanto CONFERMARE che il pacchetto serve,
+  // mai escluderlo: chi non sa che versione ha l'eseguibile non puo' dire che va tutto bene.
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(PIANO(
       {ok:false},
       {ok:true, data:{app:{versione:'2.0.37', da:'copia aggiornata'}}}
     ));
-    assert.equal(r.piano.serve, false, 'col ponte vecchio vale la vecchia regola');
+    assert.equal(r.piano.serve, true,
+      'col ponte vecchio e la pagina nuova il pacchetto SERVE: escluderlo era il difetto');
     assert.ok(r.chiamate.some(c=>c.indexOf('/health')===0),
       'deve aver chiesto /health come ripiego');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('PROVA DI CONTROLLO: col ponte vecchio e la copia CONGELATA il pacchetto serve (come ieri)', async () => {
+  // L'altra faccia della stessa risposta, che il test corretto qui sopra copriva per sbaglio:
+  // 'copia installata' e' il caso in cui il ripiego diceva serve:true, e deve continuare a dirlo.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(PIANO(
+      {ok:false},
+      {ok:true, data:{app:{versione:'2.0.37', da:'copia installata'}}}
+    ));
+    assert.equal(r.piano.serve, true,
+      'il programma troppo vecchio per aggiornarsi da solo ha bisogno del pacchetto');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

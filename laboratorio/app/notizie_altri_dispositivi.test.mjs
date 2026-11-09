@@ -18,6 +18,13 @@
 //
 // Come si prova che il test serve: togliendo la chiamata a newsPollingSincronizza() da
 // updateLiveModeUI(), il primo test va rosso.
+//
+// REGOLA CAMBIATA (8 novembre 2026, su richiesta del proprietario): «le notizie... devono
+// funzionare anche in modalità replay». Prima i pallini si disegnavano solo in Live (il feed
+// non arriva fuori dal Live); adesso si disegnano dall'ARCHIVIO personale (feed + locale +
+// account), quindi restano anche in Storico/replay. La prova qui sotto lo misura: in Live
+// le bandiere ci siano (il difetto del telefono, che resta il vero scopo del test) e in
+// Storico non spariscano più.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
@@ -96,7 +103,11 @@ test('con le notizie in memoria le bandiere si disegnano davvero', async () => {
       return {inLive, inStorico};
     }, PREPARA.toString());
     assert.equal(r.inLive, 2, 'tutte e due le notizie devono finire sull asse del tempo');
-    assert.equal(r.inStorico, 0, 'in Storico restano fuori, come prima');
+    // ATTTENZIONE, regola cambiata l'8 novembre 2026 (richiesto: i pallini devono funzionare
+    // anche in replay): in Storico le notizie RESTANO, prese dall'archivio personale. Prima
+    // qui si misurava zero, ed era il difetto che il proprietario ha chiuso di togliere.
+    assert.equal(r.inStorico, 2,
+      'in Storico/replay le bandiere devono restare (vengono dall\'archivio, non dal feed): ' + JSON.stringify(r));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
