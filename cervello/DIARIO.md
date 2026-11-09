@@ -1,3 +1,15 @@
+- 2026-11-09 - OpenCode - **LEZIONE DI METODO, pagata due volte nello stesso pomeriggio: la
+  prova di una cura non si committa PRIMA della cura.**
+  Misurato: commettendo `laboratorio/app/notizie_archivio.test.mjs` insieme alla v2.2.3 e
+  `laboratorio/app/disegni_non_riscritti.test.mjs` insieme alla v2.2.5, entrambi i collaudi di
+  GitHub su quelle versioni sono finiti rossi - non per difetti del programma, ma perche' la
+  prova chiamava funzioni che in quel commit non esistevano ancora. Il rimedio e' sempre stato
+  lo stesso (applicare la cura subito dopo e ripubblicare), ma la regola vale la pena di essere
+  scritta perche' e' la stessa che dice il proprietario: si pubblica a collaudo verde, e una
+  prova che misura una cura deve arrivare COL codice che la fa passare.
+  Come ci si accorge subito: `git status` prima di `git add -A` e leggere i file NON tracciati
+  che finiscono nel commit - entrambe le volte erano li', in vista.
+
 - 2026-11-09 - OpenCode - **v2.2.6: il documento dei disegni condivisi non si riscrive quando
   non e' cambiato, e si vede finalmente QUANTO PESA.**
   MISURATO dal proprietatore (tabella Traffico dell'app, 9 novembre):
