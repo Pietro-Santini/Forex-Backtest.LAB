@@ -7981,6 +7981,17 @@ function graficoApplica(k,valore){
 const GRAFICO_INVIO_MIN_MS=60000;   // distanza minima fra due scritture del documento disegni
 const GRAFICO_INVIO_DEBOUNCE_MS=1500; // attesa dopo l'ultima modifica, come prima
 let graficoUltimoInvioAt=0;
+let __graficoUltimaFirma=null;   // identico = non si scrive (v. graficoInviaOra)
+// Firma rotolante sul testo, stessa scelta di firmaSemplice() dentro il modulo del cloud - che
+// pero' sta DENTRO quel modulo e qui non si raggiunge (misurato: ReferenceError finito in un
+// catch silenzioso, e il confronto non scattava mai). Serve a dire una cosa sola: "questo
+// documento e' gia' stato mandato tale e quale?". Non resiste a un attacco, e non deve.
+function graficoFirma(testo){
+ if(!testo)return null;
+ let h=5381;
+ for(let i=0;i<testo.length;i++)h=((h*33)^testo.charCodeAt(i))>>>0;
+ return testo.length+':'+h;
+}
 // Quante volte ogni chiave ha fatto partire una scrittura: serve a vedere CHI consuma la quota
 // invece di indovinarlo. Si legge nel pannello "Disegni condivisi" delle impostazioni.
 const graficoContaPerChiave={};
@@ -8006,6 +8017,16 @@ function graficoAggiornaStato(){
     .map(k=>[k,graficoContaPerChiave[k]])
     .sort((a,b)=>b[1]-a[1]).slice(0,3);
   const totale=righe.reduce((s,r)=>s+r[1],0);
+  // E IL PESO, che e' il conto vero: misurato dall'utente il 9 novembre, il documento dei
+  // disegni condivisi arriva a 815 KB e viene letto sei volte in un giorno (4,9 MB). Senza
+  // sapere QUALE chiave occupa quei byte, la cura successiva sarebbe un tentativo.
+  try{
+   const pesate=Object.keys(graficoPesoPerChiave).map(k=>[k,graficoPesoPerChiave[k]])
+    .sort((a,b)=>b[1]-a[1]).slice(0,3);
+   const kb=pesate.reduce((s,r)=>s+r[1],0);
+   if(kb>0)classifica+=' · peso: '+pesate.map(r=>r[0]+' '+Math.round(r[1]/1024)+' KB').join(', ')
+    +' ('+Math.round(kb/1024)+' KB in tutto)';
+  }catch(e){}
   if(totale)classifica=' · scritture da quando è aperta: '+righe.map(r=>r[0]+' ×'+r[1]).join(', ');
  }catch(e){}
  el.textContent=(graficoStat.ascolto?'🟢 In ascolto':'🟠 Ascolto in ripresa')
@@ -8027,6 +8048,16 @@ async function graficoInviaOra(){
  });
  graficoDaInviare.clear();
  if(!Object.keys(voci).length)return;
+ // IDENTICO = NON SI SCRIVE. Misurato dal proprietore (9 novembre 2026, tabella Traffico
+ // dell'app): il documento dei disegni condivisi veniva riscritto anche quando il contenuto
+ // era quello di prima, perche' basta che QUALCOSA venga marcato per far partire l'invio - e
+ // ogni scrittura fa scattare una lettura su ogni altro dispositivo (l'eco che non si vede).
+ // Qui si confronta il contenuto con l'ultimo inviato: se e' uguale non si scrive e non si conta.
+ try{
+  const firmaOra=graficoFirma(JSON.stringify(voci));
+  if(firmaOra===__graficoUltimaFirma){ graficoDaInviare.clear(); return; }
+  __graficoUltimaFirma=firmaOra;
+ }catch(e){}
  // Tetto di Firestore: 1 MB per documento. Oltre, la scrittura fallirebbe comunque: lo si dice.
  if(byte>900*1024){
    if(!graficoAvvisoPieno){ graficoAvvisoPieno=true; try{ $('status').textContent='⚠️ Disegni troppo pesanti per la condivisione fra dispositivi (oltre 900 KB): restano salvati su questo dispositivo.'; }catch(e){} }
@@ -8037,14 +8068,23 @@ async function graficoInviaOra(){
  try{ Object.keys(voci).forEach(ek=>{ const k=graficoDecodifica(ek)||ek; graficoContaPerChiave[k]=(graficoContaPerChiave[k]||0)+1; }); }catch(e){}
  graficoUltimoInvioAt=Date.now();
  const ok=await window.fxbtCloud.graficoSalva(voci);
+ if(!ok)__graficoUltimaFirma=null;   // non scritto: al tentativo dopo si riprova
  if(ok){ graficoStat.inviatoAt=Date.now(); graficoStat.inviate=Object.keys(voci).length; graficoStat.errore=''; }
  else graficoStat.errore='invio non riuscito, ritento fra 15 s';
  graficoAggiornaStato();
  if(!ok){ Object.keys(voci).forEach(ek=>{ const k=graficoDecodifica(ek); if(k)graficoDaInviare.add(k); }); setTimeout(graficoProgrammaInvio,15000); }
 }
 // Voci arrivate dal cloud (all'avvio e a ogni modifica fatta da un altro dispositivo).
+let graficoPesoPerChiave={};   // quanto pesa ogni chiave nell'ULTIMA lettura (byte)
 function graficoRicevi(vociRemote){
  const remote={};
+ try{
+  graficoPesoPerChiave={};
+  Object.keys(vociRemote||{}).forEach(ek=>{
+   const e=vociRemote[ek];
+   if(e&&typeof e.d==='string'){ const k=graficoDecodifica(ek)||ek; graficoPesoPerChiave[k]=(graficoPesoPerChiave[k]||0)+e.d.length; }
+  });
+ }catch(e){}
  Object.keys(vociRemote||{}).forEach(ek=>{
    const k=graficoDecodifica(ek); const e=vociRemote[ek];
    if(k&&e&&typeof e.d==='string')remote[k]={t:Number(e.t)||0,d:e.d};
@@ -11944,7 +11984,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.5';
+const FBL_VERSIONE='2.2.6';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha

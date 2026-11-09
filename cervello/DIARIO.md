@@ -1,3 +1,37 @@
+- 2026-11-09 - OpenCode - **v2.2.6: il documento dei disegni condivisi non si riscrive quando
+  non e' cambiato, e si vede finalmente QUANTO PESA.**
+  MISURATO dal proprietatore (tabella Traffico dell'app, 9 novembre):
+     documento grafico — 0 scritture, 6 letture, 4889,5 KB  (circa 815 KB a lettura)
+     collegamento     — 10 scritture, 13 letture, 2,5 KB
+     preferenze       — 0 scritture, 10 letture, 0,6 KB
+     TOTALE           — 10 scritture, 29 letture, 4892 KB
+  LA PRIMA IPOTESI E' MORTA con questa misura: "una scrittura al minuto" era sbagliata, le
+  scritture sono 10. I numeri della console (321 scritture, 694 letture) non sono di oggi su
+  quel computer: 694 diviso 8 giorni fa 87 al giorno, e quel dispositivo da solo ne fa 29 -
+  quindi il numero della console e' del MESE intero e del PROGETTO intero (chiunque apra il
+  sito conta, non solo quel PC). Detto chiaro: non e' vero che "ad app chiusa e' salito".
+  IL CONTO VERO E' LA BANDA: 4890 KB su 4892, il 99,9% da un documento solo. E quel documento
+  e' a 815 KB con un tetto di 900 KB oltre il quale l'app smette di condividere i disegni:
+  perche' e' scritto con {merge:true}, cioe' ogni scrittura AGGIUNGE le sue chiavi e nessuna
+  viene mai tolita - accumula asset e sessioni da settimane.
+  CURA, in due pezzi:
+  1) "identico = non si scrive": il payload viene confrontato con l'ultimo inviato e, se e'
+     uguale, non si scrive (e non si conta). Prima rimandava lo stesso elenco ogni volta che
+     qualcosa veniva marcato, e ogni scrittura fa scattare una lettura su ogni altro
+     dispositivo - l'eco che non si vede. Se l'invio fallisce la firma si butta, cosi' al
+     tentativo dopo riparte comunque.
+  2) il PESO PER CHIAVE, misurato a ogni lettura e mostrato nella riga di stato dei disegni
+     condivisi: senza sapere quale chiave occupa quei byte, la cura successiva (spezzare il
+     documento o tagliare le chiavi morte) sarebbe un tentativo.
+  NOTA SULLA MISURA, che ho sbagliato e mi e' costata un giro: firmaSemplice() sta DENTRO il
+  modulo del cloud e dallo script principale NON si raggiunge (misurato: ReferenceError finito
+  in un catch silenzioso, e il confronto non scattava mai). Ora la firma la fa una funzione
+  locale, graficoFirma(), stessa scelta e stessa spiegazione accanto.
+  Test: laboratorio/app/disegni_non_riscritti.test.mjs (2 prove: stesso contenuto = una sola
+  scrittura, contenuto cambiato = si riscrive; e il peso per chiave del documento letto).
+  Collaudo: 43 prove verdi fra disegni condivisi, disegni per asset/timeframe, duplicate e
+  zona morta.
+
 - 2026-11-09 - OpenCode - **v2.2.5: spostandosi a mano si arriva fino all'ultima candela vera,
   e il clic non fa piu' saltare la vista.**
   RICHIESTO dal proprietatore (9 novembre): «ile grafico non mi permette di andare oltre

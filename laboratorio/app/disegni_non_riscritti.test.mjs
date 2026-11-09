@@ -40,8 +40,9 @@ test('stesso contenuto: non si riscrive (e non fa scattare letture sugli altri)'
       graficoDaInviare.add('live|XAUUSD');           // marcato di nuovo, contenuto IDENTICO
       await graficoInviaOra();
       const dopoSeconda = window.__mandate.length;
-      // Qualcosa cambia DAVVERO: ora si riscrive.
-      assetDrawings.live.XAUUSD.push({type: 'line', p1: {x: 5, y: 6}, p2: {x: 7, y: 8}});
+      // Qualcosa cambia DAVVERO: ora si riscrive. Si cambia l'array drawings, che e' quello
+      // che graficoValoreLocale() restituisce per la chiave dell'asset a grafico.
+      drawings.push({type: 'line', p1: {x: 5, y: 6}, p2: {x: 7, y: 8}});
       graficoDaInviare.add('live|XAUUSD');
       await graficoInviaOra();
       const dopoTerza = window.__mandate.length;
