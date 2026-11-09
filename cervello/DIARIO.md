@@ -1,3 +1,48 @@
+- 2026-11-09 - OpenCode - **v2.2.10: un cambio di sorgente non mescola piu' due livelli di
+  prezzo nelle stesse candele.** Difetto ricorrente, segnalato di nuovo con due foto.
+  SEGNALATO (9 novembre): «Ã¨ ritornato questo problema delle candele che vengono disegnate
+  cosÃ¬, il problema arriva da un momento all'altro tenendo l'app ferma e il footprint diventa
+  cosÃ¬ come nella seconda fotoÂ». Nelle foto: candele altissime con code lunghissime e le
+  caselline numerate del footprint SPARPAGLIATE su tutta l'area del grafico, invece di stare
+  impilate dentro la loro candela.
+  INVESTIGATO MISURANDO (agente investigatore, senza correggere niente), e la causa Ã¨ una
+  sola: il marcatore «Ã¨ cambiata solo la codaÂ» - quello che serve a non rifare tutto lo storico
+  per un tick - guardava solo quante candele ci sono e la data dell'ultima. Cambiando
+  sorgente (MT5 -> Capital.com e ritorno, che succede da solo) lunghezza e data RESTANO, il
+  livello di prezzo NO: su XAUUSD i due broker quotano lo stesso oro a circa 66 punti di
+  distanza (il numero misurato dal proprietatore il 15 ottobre 2025). Il marcatore scattava,
+  l'aggregazione teneva in vita le candele della serie VECCHIA e rifaceva solo la coda con
+  quelle NUOVE: due livelli dentro le stesse candele.
+  MISURATO prima della cura: su 21 candele da 15 minuti la fascia di prezzo visibile diventava
+  88,6 punti invece di 23 (la prova di controllo con la serie riaggregata per intero dÃ** 23).
+  Una candela che assorbe i due livelli diventa 4,3 volte piÃù alta e le sue caselline si
+  spargono su tutta l'area: sono tutte e due le foto. E il «poi torna a visualizzarsi
+  correttamenteÂ» Ã¨ spiegato: una ricostruzione completa (quando la lunghezza cambia) rimette
+  la serie a un livello solo.
+  NON E' UN DIFETTO NUOVO: Ã¨ la stessa strada della v155 (il footprint «a stratiÂ» del 15
+  ottobre). Le difese di allora reggono ancora, e l'indagine lo ha misurato: il passo delle
+  righe del footprint resta UNO SOLO (_footprintStepGlobale) e le righe restano dentro la
+  candela (footprintDentroLaCandela), con righe messe a 160 punti di distanza: 0 caselline
+  fuori su 16 candele. Quello che mancava era la SERIE.
+  CURA: il marcatore adesso controlla anche che la serie sia la STESSA - non solo della stessa
+  lunghezza. Il confronto Ã¨ su tre punti fissi della serie (prima candela, candela di mezzo,
+  ultima) con uno scarto tollerato dello 0,5%: in norma lo storico non si riscrive, cambia
+  solo la coda. Se il livello non torna, non si segnala niente e la cache butta tutto e
+  rifÃ** l'aggregazione da capo: la strada lenta ma corretta. Se i prezzi non si possono
+  leggere, non si segnala: meglio un giro in piÃù che un dato misto a schermo.
+  TROVATO PER STRADA, e annotato perche' va ripreso: il riallineamento serale Capital.com
+  (fblCapitalSeraAllinea, la cura della v155) Ã¨ codice morto - la fase 'capital' non esiste
+  piÃù in liveSessionPhaseAt, misurato 0 riallineamenti su 10.080 minuti - e
+  liveOffSessionSaveRows salva candele che nessuno rilegge. Non Ã¨ la causa di questo giro
+  (la Serie con due livelli lo Ã¨), ma Ã¨ debito da chiudere.
+  Test: laboratorio/app/serie_un_solo_livello.test.mjs (3 prove: il cambio di sorgente non
+  deve far scattare il marcatore e la fascia deve restare di un livello; controllo che un tick
+  sull'ultima candela lo faccia ancora scattare, o ogni tick rifarebbe tutto lo storico;
+  controllo che il footprint tenga un passo solo). Rosso-senza misurato: il marcatore
+  scattava sul cambio di sorgente.
+  Collaudo: 37 prove verdi fra serie, footprint (scala unica, globale, sera, archivio, tocco,
+  larghezza, imbalance) e cronometri.
+
 - 2026-11-09 - OpenCode - **v2.2.9: cambiando time frame, il numero di candele dentro
   l'istogramma del profilo non cambia piu'.** Voce del 28 ottobre, risegnalata il 9 novembre
   con Â«mi raccomando Ã¨ importanteÂ».

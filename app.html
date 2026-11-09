@@ -11594,6 +11594,39 @@ function aggregateRows(data, minutes){
 // vale per UNA sola lettura: chi lo usa lo consuma. Cosi' una cache che non viene letta non
 // resta mai indietro per sbaglio.
 let baseRowsCoda=null;   // {prima: array precedente, daIdx: primo indice toccato}
+// LA STESSA SERIE, NON SOLO DELLA STESSA LUNGHEZZA. Il marcatore "è cambiata solo la coda"
+// nasce per una cosa precisa: un prezzo nuovo sull'ultima candela, o una candela nuova in
+// fondo. Se la SERIE è un'altra - stessa lunghezza, stesse date, ma un altro livello di
+// prezzo - tenere in vita la testa dell'aggregazione vuota dire Mescolare due prezzi dentro
+// le stesse candele. Su XAUUSD i due broker quotano lo stesso oro a ~66 punti di distanza
+// (misurato dal proprietatore il 15 ottobre 2025, e ritrovato il 9 novembre 2026 con
+// l'indagine sul footprint "sparpagliato": candele 4,3 volte piu' alte, caselline sparse).
+// Il confronto è su punti FISSI della serie (la prima e la candela di mezzo): in norma sono
+// scolpiti, perche' lo storico non si riscrive - cambia solo la coda. Se uno dei due non
+// torna entro uno scarto piccolo (0,5%), la serie è un'altra e non si segnala niente: la
+// cache butta tutto e rifà l'aggregazione da capo, che è la strada lenta ma corretta.
+// Se i prezzi non si possono leggere, non si segnala: meglio un giro in piu' che un dato
+// misto a schermo.
+function fblStessoLivello(a,b){
+  try{
+    const campiona=(arr)=>{
+      const n=arr&&arr.length||0;
+      if(!n)return null;
+      const punti=[arr[0],arr[n>>1],arr[n-1]];
+      const fuori=[];
+      punti.forEach(r=>{ const c=Number(r&&r.close); if(Number.isFinite(c)&&c>0)fuori.push(c); });
+      return fuori.length?fuori:null;
+    };
+    const pa=campiona(a), pb=campiona(b);
+    if(!pa||!pb||pa.length!==pb.length)return false;
+    for(let i=0;i<pa.length;i++){
+      const scarto=Math.abs(pa[i]-pb[i]);
+      const toll=Math.max(pa[i],pb[i])*0.005;
+      if(scarto>toll)return false;
+    }
+    return true;
+  }catch(e){ return false; }
+}
 function segnalaCodaCambiata(prima,daIdx){ baseRowsCoda={prima,daIdx}; }
 function codaValidaPer(cacheRef){
   return !!(baseRowsCoda && cacheRef && baseRowsCoda.prima===cacheRef);
@@ -11855,7 +11888,8 @@ function rebuildBaseRowsFromLibrary(){
    // E' SOLO LA CODA? Lo si dice alle cache (vedi baseRowsCoda piu' sopra), cosi' non buttano
    // via tutto lo storico per una candela. Si e' prudenti: basta che la lunghezza sia cresciuta
    // di poco (o sia uguale) e che l'ultima candela comune sia rimasta la stessa.
-   if(prima&&prima.length&&baseRows.length>=prima.length&&baseRows.length-prima.length<=2){
+   if(prima&&prima.length&&baseRows.length>=prima.length&&baseRows.length-prima.length<=2
+      && fblStessoLivello(prima,baseRows)){
      const i=prima.length-1;
      if(prima[i]&&baseRows[i]&&prima[i].date===baseRows[i].date)segnalaCodaCambiata(prima,i);
      else baseRowsCoda=null;
@@ -11990,7 +12024,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.9';
+const FBL_VERSIONE='2.2.10';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
