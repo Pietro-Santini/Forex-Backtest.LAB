@@ -41,14 +41,21 @@ test('a mercato chiuso l\'asse non si allunga, anche se MT5 nella cache dice ape
   try {
     const r = await pagina.evaluate(`(() => {
       (${PREPARA})();
+      // La prova DEVE girare in un sabato: "di sabato la sessione e' chiusa" e' la sua tesi, e
+      // farla girare nel giorno in cui capita renderebbe la prova un'opinione (misurato: lunedi'
+      // notte la sessione e' 'mt5' e la prova diventava rossa senza che il codice fosse cambiato).
+      const _D = Date.now;
+      const SAB = Date.UTC(2026,10,7,22,30,0);               // sabato 23:30 di Roma: chiuso
+      Date.now = () => SAB;
       // La cache di MT5 dice "aperto" (ed e' il caso che faceva ripartire l'asse).
-      fblMercatoMt5Cache['XAUUSD'] = {aperto: true, letto: Date.now()};
+      fblMercatoMt5Cache['XAUUSD'] = {aperto: true, letto: SAB};
       followLatest = true;
       viewEnd = rows.length;
       const w = getViewWindow();
-      return {end: w.end, n: w.n, candele: rows.length,
-              fase: liveSessionPhaseNow(),
-              fermo: fblMercatoFermoOra('XAUUSD', Date.now())};
+      const fase = liveSessionPhaseNow();
+      const fermo = fblMercatoFermoOra('XAUUSD', SAB);
+      Date.now = _D;
+      return {end: w.end, n: w.n, candele: rows.length, fase: fase, fermo: fermo};
     })()`);
     assert.equal(r.fase, 'closed', 'di sabato la sessione e\' chiusa: ' + JSON.stringify(r));
     assert.equal(r.end, r.candele,

@@ -11944,7 +11944,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.4';
+const FBL_VERSIONE='2.2.5';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -14161,11 +14161,16 @@ function _fblConfineChiusuraCalcola(a,N){
   if(!Number.isFinite(tUltima))return 0;
   // Il calendario dello strumento, costruito UNA volta e colto largo abbastanza da coprire
   // anche il tratto che si scorre all'indietro (orariIntervalli parte da "ieri" rispetto
-  // all'istante che gli si da': gliene si da' uno di 9 giorni prima).
+  // all'istante che gli si da' e arriva fino a otto giorni DOPO).
+  // ATTENZIONE AL NUMERO, che e' una regressoine misurata dal collaudo (la prova
+  // chiusura_mercato_prestazioni): con NOVE giorni di troppo la copertura finiva al giorno
+  // PRIMA dell'ultima candela, quindi l'ultima giornata di dati risultava tutta chiusa e il
+  // taglio la buttava via. Con otto la copertura va da nove giorni prima a otto giorni dopo
+  // l'ultima candela: il giro all'indietro (otto giorni) e' coperto, e l'ultima candela pure.
   let iv=[];
   try{
     const o=orariAsset[a];
-    if(o&&o.giorni&&Object.keys(o.giorni).length)iv=orariIntervalli(o,tUltima-9*86400000);
+    if(o&&o.giorni&&Object.keys(o.giorni).length)iv=orariIntervalli(o,tUltima-8*86400000);
   }catch(e){}
   const dentro=tt=>{ for(let i=0;i<iv.length;i++){ const x=iv[i]; if(tt>=x[0]&&tt<x[1])return true; } return false; };
   // LA STESSA REGOLA di statoMercato(): dentro il calendario comanda l'orario con cui l'app
@@ -14333,10 +14338,23 @@ function maxViewEnd(){
   // CURA: a mercato chiuso il tetto e' L'ULTIMA CANDELA APERTA, non oltre. Il resto del
   // grafico (spostarsi indietro, zoomare, il taglio delle candele fabbricate) non cambia: si
   // toglie solo la possibilita' di finire in un posto dove non c'e' niente da guardare.
+  // IL TETTO A MERCATO CHIUSO VALE SOLO CON L'AUTOSEGUI ACCESO.
+  //
+  // Perche' l'auto-segui sì e lo spostamento a mano no. Le due richieste del proprietario
+  // sembrano opposte e non lo sono: l'8 novembre (v2.1.9) il difetto era il grafico che
+  // SALTAVA da solo nella zona morta quando si cliccava - e aveveva ragione; il 9 novembre ha
+  // rimisurato il contrario con la cura in piedi: «il grafico non mi permette di andare oltre
+  // l'ultima candela spostandomi», misurato alla candela 60 su 180 righe, cioe' non si arriva
+  // NEMANCO all'ultima candela vera, con o senza auto-segui.
+  // La regola che tiene in piedi tutte e due: se l'autosegui è acceso, la finestra non deve
+  // avanzare da sola oltre l'ultima candela aperta (nessun salto nella zona morta); se l'utente
+  // sposta il grafico con le sue mani, può andare oltre, fino in fondo ai dati e anche nello
+  // spazio vuoto dopo - e tornare indietro quando vuole. Cliccare non sposta niente: toglie
+  // solo l'auto-segui, quindi non c'è nessun salto da evitare.
   const base=idx+Math.max(1,Math.floor(n*0.85));
   let chiuso=false;
   try{ chiuso = liveModeActive && !liveReplayActive && fblMercatoFermoOra(currentAssetKey, Date.now()); }catch(e){}
-  if(chiuso){
+  if(chiuso && followLatest){
     // IL CONFINE VERO: quante candele tenere. Vedi il commento lungo su
     // fblConfineChiusura(): la ricerca binaria di prima dava per certo un ordine che il
     // mercato non ha (pausa notturna, weekend in mezzo allo storico) e restituiva un confine
@@ -14463,6 +14481,17 @@ function freezeViewIfNeeded(){
  if(followLatest){
    const data=getVisibleData();
    if(data.length){const base=autoFitBaseRange(data);viewPriceLo=base.lo;viewPriceHi=base.hi;}
+   // E LA VISTA ORIZZONTALE NON DEVE SALTARE. Questo e' il difetto dell'8 novembre, beccato
+   // per intero dalla prova "cliccare sul grafico NON fa saltare la vista nella zona morta":
+   // MISURATO con l'autosegui acceso la finestra stava sull'ultima candela aperta (riga 60),
+   // ma `viewEnd` intanto era rimasto sull'ULTIMA CANDELA VERA (riga 179): al primo clic
+   // l'autosegui si spegne e la finestra schizzava da 60 a 179 — «si sposta automaticamente
+   // piu' avanti, in modo del tutto casuale».
+   // La cura e' una riga: prima di spegnere l'autosegui si riallinea viewEnd a DOVE SI VEDEVA
+   // (il bordo destro della finestra di adesso), cosi' il grafico non si muove di un pixel.
+   // Lo spostamento a mano resta libero: da qui in poi il tetto e' quello di sempre e si puo'
+   // andare fino in fondo ai dati e oltre, ma CI SI ARRIVA SPOSTANDO, non al primo tocco.
+   try{ viewEnd=getViewWindow().end; }catch(e){}
    followLatest=false;
  }
 }

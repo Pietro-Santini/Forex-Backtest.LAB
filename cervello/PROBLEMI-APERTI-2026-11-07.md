@@ -156,6 +156,17 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
   candele oltre la chiusura non si mostrano, e il grafico non si svuota mai.
 - Test: laboratorio/app/buco_grafico_chiuso.test.mjs
 
+## P0 - LO SPOSTAMENTO A MANO NON ARRIVAVA FINO ALL'ULTIMA CANDELA
+- Stato: CURATO in v2.2.5 (9 novembre 2026).
+  SEGNALATO: «ile grafico non mi permette di andare oltre l'ultima candela spostandomi».
+  CAUSA MISURATA: il tetto a mercato chiuso valeva sempre, anche con l'autosegui spento, ed
+  era l'ultima candela APERTA: su 180 righe con 60 aperte la vista si fermava alla riga 60.
+  CURA: il tetto vale solo con l'autosegui acceso; a mano si arriva fino all'ultima candela
+  vera e oltre (col margine di sempre). E perCHE' il clic non faccia saltare la vista
+  (difetto dell'8 novembre, misurato ancora in piedi), prima di spegnere l'autosegui viewEnd si
+  riallinea a dove si vedeva.
+- Test: laboratorio/app/zona_morta.test.mjs
+
 ## P1 — LINEE ENTRY/TP/SL DEGLI ORDINI PENDENTI NON SI VEDONO A MERCATO CHIUSO
 - Sintomo (proprietario, 8 novembre 2026): «non si vedono piu' le linee entry tp-sl degli ordini
   pendenti, ne' in modalita' replay ne' in tempo reale, quando il mercato e' chiuso».

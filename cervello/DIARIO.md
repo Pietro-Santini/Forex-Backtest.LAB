@@ -1,3 +1,38 @@
+- 2026-11-09 - OpenCode - **v2.2.5: spostandosi a mano si arriva fino all'ultima candela vera,
+  e il clic non fa piu' saltare la vista.**
+  RICHIESTO dal proprietatore (9 novembre): «ile grafico non mi permette di andare oltre
+  l'ultima candela spostandomi» - il fix di v2.1.9 era rimasto a metà.
+  CAUSA MISURATA, con la prova dentro il banco: il tetto a mercato chiuso (maxViewEnd) era il
+  confine dell'ultima candela APERTA, e valeva SEMPRE, autosegui acceso o no. Misurato su 180
+  righe con 60 candele aperte: la vista si fermava alla riga 60 e non si arrivava NEMANCO
+  all'ultima candela vera.
+  E la prova ha beccato anche il difetto originale dell'8 novembre, che era rimasto in piedi:
+  con l'autosegui acceso la finestra stava sull'ultima candela aperta (riga 60) mentre viewEnd
+  era rimasto sull'ultima candela VERA (riga 179); al primo clic l'autosegui si spegne e la
+  finestra schizzava da 60 a 179 - «si sposta automaticamente piu' avanti, in modo del tutto
+  casuale».
+  CURA, in due righe che tengono in piedi TUTTE le richieste:
+  1) il tetto a mercato chiuso vale SOLO con l'autosegui acceso (followLatest): cosi' la
+     finestra non scappa da sola nella zona morta (richiesta dell'8 novembre) MA spostandosi a
+     mano si arriva fino in fondo ai dati e anche nello spazio vuoto dopo l'ultima candela,
+     col margine di sempre (richiesta del 9 novembre);
+  2) prima di spegnere l'autosegui, freezeViewIfNeeded() riallinea viewEnd a DOVE SI VEDEVA (il
+     bordo destro della finestra di adesso): il clic non sposta piu' niente, e dieci clic in
+     fila nemmeno.
+  REGRESSIONE MIA TROVATA DAL COLLAUDO e curata: il calendario dello strumento si costruiva con
+  NOVE giorni di troppo, cosi' la copertura finiva al giorno PRIMA dell'ultima candela e
+  l'intera ultima giornata di dati risultava chiusa. Otto giorni: copre il giro all'indietro e
+  l'ultima candela (prova chiusura_mercato_prestazioni, che ora misura il taglio giusto).
+  PROVE RESE INDIPENDENTI DAL GIORNO E DALL'ORARIO (misurato: due prove dipendevano dal
+  calendario e sono diventate rosse da sole quando è arrivato lunedi'): asse_si_ferma_alla_
+  chiusura ora blocca l'orologio su un sabato; buco_grafico_chiuso usa date fisse (venerdi' e
+  lunedi', aperti per costruzione) e blocca l'orologio sul lunedi' dopo la chiusura.
+  Test: zona_morta.test.mjs (4 prove, compresa «cliccare non fa saltare la vista» col
+  puntatore sintetico) e buco_grafico_chiuso.test.mjs (6, compresa la spazzata su tutte le
+  finestre). Rosso-senza misurato: tetto 60 su 180 righe, e la spazzata con buchi.
+  Collaudo: 92 prove verdi su zona morta, buchi, congelamento, mercato chiuso, prestazioni,
+  zoom, notizie e duplicate.
+
 - 2026-11-08 - OpenCode - **v2.2.4: le notizie sul grafico restano, in locale e sull'account.**
   RICHIESTO dal proprietario: «tutte le notizie che vengono aggiunte sul grafico salvale in
   locale e sull'account scelto al login, cosi' non le richiede a Forex Factory di continuo ogni

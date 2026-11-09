@@ -81,7 +81,7 @@ test('a mercato chiuso con candele oltre la chiusura, andare AVANTI a mano resta
       baseRows=rows.slice(); idx=rows.length-1; viewEnd=rows.length;
       const totale=rows.length;
       followLatest=false;
-      viewEnd=totale;                            // voglio vedere l'ULTIMA candela
+      viewEnd=totale-1;                          // voglio vedere l'ULTIMA candela
       const a=getViewWindow();
       viewEnd=totale-5;                          // e anche 5 prima
       const b=getViewWindow();

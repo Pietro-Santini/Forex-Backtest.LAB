@@ -36,13 +36,11 @@ import {apriApp} from './aiuti.mjs';
 //   giorno D+1    00:00-20:59 UTC  aperto
 //   giorno D+1    21:00-...        chiuso   (la coda: il weekend)
 const PREPARA = (candeleViste) => `(function(){
-  const NOMI=['sun','mon','tue','wed','thu','fri','sat'];
-  const D0=Date.now()-3*86400000;
-  const D=Date.UTC(new Date(D0).getUTCFullYear(),new Date(D0).getUTCMonth(),new Date(D0).getUTCDate());
+  const VENERDI=Date.UTC(2026,10,6,0,0,0);            // venerdi' 6 novembre, mezzanotte UTC
+  const LUNEDI=Date.UTC(2026,10,9,0,0,0);             // lunedi' 9 novembre
   const giorni={sun:[],mon:[],tue:[],wed:[],thu:[],fri:[],sat:[]};
-  const wd=new Date(D).getUTCDay();
-  giorni[NOMI[wd]]=['00:00 - 22:00'];
-  giorni[NOMI[(wd+1)%7]]=['00:00 - 22:00'];
+  giorni.fri=['00:00 - 22:00'];
+  giorni.mon=['00:00 - 22:00'];
   orariAsset['XAUUSD']={zona:'UTC',giorni:giorni,stato:'CLOSED',letto:Date.now()};
   rows=[]; baseRows=[]; let p=4100;
   const metti=t=>{
@@ -50,20 +48,22 @@ const PREPARA = (candeleViste) => `(function(){
     rows.push({date:new Date(t).toISOString(),open:o,high:Math.max(o,c)+1,low:Math.min(o,c)-1,close:c,volume:10});
     p=c;
   };
-  for(let i=0;i<1260;i++)metti(D+i*60000);                    // giorno D aperto
-  for(let i=0;i<120;i++)metti(D+1260*60000+i*60000);          // pausa notturna (chiusa)
-  for(let i=0;i<1260;i++)metti(D+86400000+i*60000);           // giorno D+1 aperto
-  for(let i=0;i<360;i++)metti(D+86400000+1260*60000+i*60000); // coda chiusa
+  for(let i=0;i<1260;i++)metti(VENERDI+i*60000);           // venerdi' aperto
+  for(let i=0;i<120;i++)metti(VENERDI+1260*60000+i*60000); // pausa notturna (chiusa)
+  for(let i=0;i<1260;i++)metti(LUNEDI+i*60000);            // lunedi' aperto
+  for(let i=0;i<360;i++)metti(LUNEDI+1260*60000+i*60000);  // coda chiusa
   baseRows=rows.slice(); idx=rows.length-1; viewEnd=idx;
   currentAssetKey='XAUUSD'; csvLibrary=[{id:'mt5_live_xau',rows:rows}];
   liveModeActive=true; liveReplayActive=false; mt5Connected=false;
+  // L'OROLOGIO SI BLOCCA SU UN SABATO: senza, la prova dipende da quando gira - e
+  // MISURATO il 9 novembre (lunedi' prestto) il mercato era APERTO, l'app aggiungeva lo
+  // spazio futuro (36 candele su 300) e la spazzata diventava rossa senza che il codice
+  // fosse cambiato.
+  const _D=Date.now; Date.now=function(){ return Date.UTC(2026,10,9,21,40,0); };
+  window.__orologioVero=_D;
   followLatest=false; autoFitWidth=false; visibleCount=${candeleViste};
-  return {totale:rows.length, D:D, chiusura:D+86400000+1260*60000};
+  return {totale:rows.length, chiusura:LUNEDI+1260*60000, adesso:Date.now()};
 })()`;
-
-// IL CONFINE VERO, calcolato col predicato candela per candela (quello di prima): l'ultima
-// candela APERTA e' l'ultima che il grafico deve poter mostrare. Se questa cura e' spenta,
-// questo numero resta giusto e le prove restano rosse: misura il comportamento, non il testo.
 const CONFINE = `(function(){
   for(let i=rows.length-1;i>=0;i--){
     if(!fblMercatoFermoOra('XAUUSD',Date.parse(rows[i].date)))return i+1;
@@ -92,26 +92,35 @@ test('la finestra che attraversa la pausa notturna tiene TUTTE le candele', asyn
   } finally { await browser.close(); }
 });
 
-test('la coda dopo la chiusura non si mostra, ma lo storico resta tutto', async () => {
+test("la coda dopo la chiusura: con l'autosegui non si mostra, a mano il grafico non si svuota", async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
-    // LA RICHIESTA DEL 1 NOVEMBRE, CHE RESTA: a mercato chiuso le candele successive alla
-    // chiusura non devono comparire. La cura toglie i buchi, non questa regola.
+    // LE TRE REGOLE CHE DEVONO STARE IN PIEDI INSIEME (richieste del proprietatore in giorni
+    // diversi, e la cura deve tenere tutte e tre):
+    //   1 novembre: a mercato chiuso le candele successive alla chiusura non si mostrano;
+    //   7 novembre: ...ma scorrendo nel weekend il grafico non deve restare bianco;
+    //   9 novembre: ...e spostandomi a mano devo poterne uscire, non restare bloccato.
     const r = await pagina.evaluate(`(() => {
       const B=${PREPARA(300)};
       const confine=${CONFINE};
-      viewEnd = 2999;                        // prova a sfondare nell'ultima candela
-      const v = getVisibleData();
-      return {chiusura: B.chiusura, confine: confine, viste: v.length, attese: Math.min(300, confine) - 1,
-              ultima: v.length?v[v.length-1].date:null, attesaUltima: rows[confine-1].date};
+      // (a) AUTOSEGUI ACCESO, cioe' la vista di tutti i giorni a mercato chiuso.
+      followLatest = true;
+      viewEnd = 2999;                     // oltre la fine: l'autosegui non ci va da solo
+      const auto = getVisibleData();
+      // (b) SPOSTAMENTO A MANO fin dentro il weekend.
+      followLatest = false;
+      const mano = getVisibleData();
+      return {confine: confine,
+              autoN: auto.length, autoUltima: auto.length?auto[auto.length-1].date:null,
+              manoN: mano.length, attesaUltima: rows[confine-1].date};
     })()`);
-    assert.equal(r.viste, r.attese,
-      'la finestra resta piena, meno la candela oltre la chiusura: ' + JSON.stringify(r));
-    assert.equal(r.ultima, r.attesaUltima,
-      "l'ultima candela mostrata deve essere l'ultima APERTA, non una oltre la chiusura: "
+    assert.equal(r.autoN, 299,
+      'con l\'autosegui la finestra e\' piena meno la candela oltre la chiusura: ' + JSON.stringify(r));
+    assert.equal(r.autoUltima, r.attesaUltima,
+      "e l'ultima candela mostrata e' l'ultima APERTA, non una oltre la chiusura: " + JSON.stringify(r));
+    assert.equal(r.manoN, 300,
+      'spostandosi a mano dentro il weekend il grafico NON si svuota (regola del 7 novembre): '
       + JSON.stringify(r));
-    assert.ok(Date.parse(r.ultima) < r.chiusura,
-      "e deve stare prima dell'istante di chiusura: " + JSON.stringify(r));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -122,25 +131,30 @@ test('TUTTE le finestre dello storico tengono le loro candele (la spazzata)', as
     const r = await pagina.evaluate(`(() => {
       const B=${PREPARA(300)};
       const N = rows.length, confine = ${CONFINE};
+      // Il tetto a mano (l'autosegui e' spento qui): e' il margine di sempre, non il confine.
+      const tetto = maxViewEnd();
       let buchi = 0, primoBuco = -1, esempio = null;
       // QUANTE CANDELE DEVONO ESSERCI. La finestra e' [end-299, end] con end limitata dal
-      // tetto, e le candele da confine in poi non si mostrano: quindi l'ultima visibile e'
-      // confine-1 anche quando end arriva a confine. La spazzata gira su TUTTE le finestre
+      // tetto; da confine in poi le candele non si mostrano, quindi l'ultima visibile e'
+      // confine-1; MA se la finestra cade TUTTA dopo il confine il grafico non si svuota e
+      // mostra le sue candele (regola del 7 novembre). La spazzata gira su TUTTE le finestre
       // dello storico: e' la misura di "in tutte le zone", non di un punto solo.
       const n = 300;
       for (let v = 0; v < N; v++) {
         viewEnd = v;
-        const end = Math.min(v, Math.min(v, confine), confine);
-        const hi = Math.min(Math.min(v, confine), confine - 1);
-        const lo = Math.max(0, Math.min(v, confine) - n + 1);
-        const attese = Math.max(0, hi - lo + 1);
+        const end = Math.min(tetto, v);
+        const hi = Math.min(end, confine - 1);
+        const lo = Math.max(0, end - n + 1);
+        const attese = (lo >= confine) ? n : Math.max(0, hi - lo + 1);
         const viste = getVisibleData().length;
         if (viste !== attese) {
           buchi++;
           if (primoBuco < 0) { primoBuco = v; esempio = {viewEnd: v, viste: viste, attese: attese}; }
         }
       }
-      return {N: N, confine: confine, buchi: buchi, primoBuco: primoBuco, esempio: esempio};
+      const esito={N: N, confine: confine, buchi: buchi, primoBuco: primoBuco, esempio: esempio};
+      if(window.__orologioVero)Date.now=window.__orologioVero;
+      return esito;
     })()`);
     assert.equal(r.buchi, 0,
       'nessuna finestra deve perdere candele (misurato: 629 finestre con buchi prima della cura): '
@@ -178,13 +192,23 @@ test('PROVA DI CONTROLLO: a mercato aperto non si taglia niente', async () => {
     const r = await pagina.evaluate(`(() => {
       const B=${PREPARA(300)};
       fblMercatoMt5Cache['XAUUSD'] = {aperto: true, letto: Date.now()};   // MT5 dice: aperto
+      const confine = fblConfineChiusura();
       const fetta = fblTagliaDopoChiusura(rows.slice(1200, 1500), 1200);
       viewEnd = 2999;
-      const viste = getVisibleData().length;
-      return {totale: rows.length, fetta: fetta.length, viste: viste};
+      const v = getVisibleData();
+      // La larghezza della finestra non si misura qui: dipende dallo spazio futuro che l'app
+      // riserva a mercato APERTO (misurato: di sabato sera 300 candele, di lunedi' mattina 264),
+      // e quella e' un'altra prova. Qui si misura il TAGLIO: quante candele restano e quale
+      // e' l'ultima.
+      return {totale: rows.length, confine: confine, fetta: fetta.length, viste: v.length,
+              ultima: v.length ? v[v.length-1].date : null,
+              attesaUltima: rows[rows.length-1].date};
     })()`);
-    assert.equal(r.fetta, 300, 'col mercato aperto la fetta resta intatta: ' + JSON.stringify(r));
-    assert.ok(r.viste >= 299, 'e la finestra tiene tutte le sue candele: ' + JSON.stringify(r));
+    assert.equal(r.confine, r.totale, 'col mercato aperto non c\'e\' confine: ' + JSON.stringify(r));
+    assert.equal(r.fetta, 300, 'la fetta resta intatta: ' + JSON.stringify(r));
+    assert.ok(r.viste > 200, 'e la finestra tiene le sue candele: ' + JSON.stringify(r));
+    assert.equal(r.ultima, r.attesaUltima,
+      'e l\'ultima candela mostrata e\' l\'ultima dei dati: niente viene tagliato: ' + JSON.stringify(r));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

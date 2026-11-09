@@ -29,8 +29,13 @@ const PREPARA = () => {
                low: Math.min(o, c) - 1, close: c, volume: 10});
     p = c;
   }
+  // 60 candele CHIUSE. ATTENZIONE AI DATI, che e' la lezione: devono stare DENTRO la chiusura
+  // (sabato e domenica), non sforare su lunedi' mattina. Con l'ultima candela su una fascia
+  // APERTA la coda chiusa non parte e l'autosegui non ha niente da trattenere - e la prova
+  // diventava dipendente dal giorno in cui gira.
   for (let i = 0; i < 60; i++) {                        // 60 candele CHIUSE (sabato/domenica)
     const t = VEN + 120 * 60000 + (i + 1) * 3600000;
+    if (t > Date.UTC(2026,10,8,22,0,0)) break;          // fino a domenica sera, non oltre
     rows.push({date: new Date(t).toISOString(), open: 4100, high: 4101, low: 4099,
                close: 4100, volume: 0});
   }
@@ -62,7 +67,7 @@ test('scorrendo nel weekend il grafico NON si svuota (il difetto della duplicata
       const aCavallo = getVisibleData().length;
       return {prima, inFondo, primaDellaFine, aCavallo};
     })()`);
-    assert.ok(r.prima >= 180, 'la prova deve avere candele oltre la chiusura: ' + JSON.stringify(r));
+    assert.ok(r.prima > 120, 'la prova deve avere candele oltre la chiusura: ' + JSON.stringify(r));
     assert.ok(r.inFondo > 0,
       'in fondo al weekend il grafico deve mostrare qualcosa, non restare bianco: ' + JSON.stringify(r));
     assert.ok(r.primaDellaFine > 0, 'e nemmeno 30 candele prima della fine: ' + JSON.stringify(r));
