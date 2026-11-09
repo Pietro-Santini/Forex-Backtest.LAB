@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="it">
 <head>
 <meta charset="UTF-8">
@@ -5912,6 +5912,40 @@ function mt5AttivaConto(login,server,reale,tradeMode){
   if(corrente){ positions=pos; pendingOrders=pend; }
   else{ snap.positions=pos; snap.pendingOrders=pend; }
  });
+  // DISEGNI per conto MT5 (voce 7): i disegni del conto di prima non devono restare
+  // visibili sul conto nuovo. Stessa logica di posizioni/ordini: i disegni senza
+  // account ereditano quello su cui erano vivi (precedente); i disegni di un altro
+  // conto si parcheggiano in mt5Parcheggio[login] e si ripristinano quando si torna
+  // a quel conto.
+  const tieniDisegno=(d)=>{
+    if(!d)return true;
+    if(!d.mt5Login&&precedente&&precedente!==ora)d.mt5Login=precedente;
+    return !d.mt5Login||String(d.mt5Login)===ora;
+  };
+  const parcheggiaDisegni=(lista)=>{
+    const tenuti=[];
+    (lista||[]).forEach(d=>{
+      if(tieniDisegno(d))tenuti.push(d);
+      else{(mt5Parcheggio[d.mt5Login]=mt5Parcheggio[d.mt5Login]||[]).push({modo:currentMode(),tipo:'disegno',p:d});parcheggiate++;}
+    });
+    return tenuti;
+  };
+  drawings=parcheggiaDisegni(drawings);
+  if(currentAssetKey&&assetDrawings[currentMode()])assetDrawings[currentMode()][currentAssetKey]=drawings;
+  modi.forEach(modo=>{
+    if(modo===currentMode())return; // modo corrente già filtrato sopra tramite `drawings`
+    const key=currentAssetKey;
+    if(key&&assetDrawings[modo]&&Array.isArray(assetDrawings[modo][key])){
+      assetDrawings[modo][key]=parcheggiaDisegni(assetDrawings[modo][key]);
+    }
+  });
+  daRiprendere.filter(x=>x.tipo==='disegno').forEach(x=>{
+    const destinazione=(x.modo===currentMode()?drawings:((assetDrawings[x.modo]||{})[currentAssetKey]||null));
+    if(destinazione&&!destinazione.some(q=>q===x.p))destinazione.push(x.p);
+  });
+  if(currentAssetKey&&assetDrawings[currentMode()]&&Array.isArray(assetDrawings[currentMode()][currentAssetKey])){
+    drawings=migrateDrawingLayerVisibilityToHidden(assetDrawings[currentMode()][currentAssetKey].slice());
+  }
  if(nonRipresi.length)mt5Parcheggio[ora]=nonRipresi; else delete mt5Parcheggio[ora];
  // IL CONTO E' CAMBIATO DAVVERO: i parametri in composizione non lo seguono (3 novembre 2026).
  // Qui passano TUTTE le strade che cambiano conto â€” la tendina, il login a mano, la
@@ -8572,7 +8606,12 @@ function collectTradingSyncPayload(){
    type:'trading_sync', slot:PIP_SLOT, at:Date.now(),
    positions:Array.isArray(positions)?positions.slice():positions,
    pendingOrders:Array.isArray(pendingOrders)?pendingOrders.slice():pendingOrders,
-   trades, equity, sessionByMode, statsBaselineByMode, isPropFirmMode, tradeStrategies
+   trades, equity, sessionByMode, statsBaselineByMode, isPropFirmMode, tradeStrategies,
+   conto: {
+     vivo: liveModeActive,
+     vista: fblContoEffettivo(),
+     mt5: mt5ContoAttivo ? {login: mt5ContoAttivo.login, server: mt5ContoAttivo.server} : null
+   }
  };
 }
 // UNA FINESTRA NON ANNUNCIA MAI UNO STATO VUOTO SE NON NE HA MAI RICEVUTO UNO.
@@ -8785,7 +8824,7 @@ function applyRemoteChartTimeSync(masterTimeVal){
 function enqueueRemoteSyncConfirm(type, masterTimeVal){
   pendingRemoteSyncConfirm = { type: type, masterTimeVal: masterTimeVal, at: Date.now() };
   showRemoteSyncConfirmUI(true);
-  try{ $('status').textContent='Sincronizzazione replay da un'altra finestra in attesa di conferma (applica o ignora).'; }catch(e){}
+  try{ $('status').textContent='Sincronizzazione replay da un\'altra finestra in attesa di conferma (applica o ignora).'; }catch(e){}
 }
 
 function applyPendingRemoteSyncConfirm(){
@@ -8810,7 +8849,7 @@ function showRemoteSyncConfirmUI(show){
     el = document.createElement('div');
     el.id = 'fblRemoteSyncConfirm';
     el.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);z-index:9999;background:#ff9800;color:#fff;padding:8px 16px;border-radius:4px;font-size:13px;box-shadow:0 2px 8px rgba(0,0,0,.3);display:none;';
-    el.innerHTML = 'Replay sincronizzato da un'altra finestra: <button onclick="applyPendingRemoteSyncConfirm()" style="margin-left:8px;background:#4caf50;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer">Applica</button> <button onclick="dismissPendingRemoteSyncConfirm()" style="margin-left:8px;background:#f44336;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer">Ignora</button> <label style="margin-left:12px;font-size:11px;opacity:.9"><input type="checkbox" id="fblRemoteSyncNoAsk" style="margin-right:4px">Non chiedere più</label>';
+    el.innerHTML = 'Replay sincronizzato da un\'altra finestra: <button onclick="applyPendingRemoteSyncConfirm()" style="margin-left:8px;background:#4caf50;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer">Applica</button> <button onclick="dismissPendingRemoteSyncConfirm()" style="margin-left:8px;background:#f44336;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer">Ignora</button> <label style="margin-left:12px;font-size:11px;opacity:.9"><input type="checkbox" id="fblRemoteSyncNoAsk" style="margin-right:4px">Non chiedere più</label>';
     document.body.appendChild(el);
     // collega checkbox "Non chiedere più"
     try{
@@ -8899,8 +8938,21 @@ if(tradingChannel){
      tradingSyncRicevuto=true;
      applyingRemoteTradingSync=true;
      try{
-       positions=Array.isArray(msg.positions)?msg.positions:positions;
-       pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
+       // VOCE 7: isolamento per conto MT5. Le posizioni e gli ordini pendenti arrivano
+       // solo dal conto MT5 a cui questa finestra e collegata. Un msg.conto.mt5
+       // diverso dal conto locale (o un mittente MT5 quando noi non siamo collegati
+       // a MT5) non sovrascrive le nostre posizioni, perche apparirebbero sul conto
+       // sbagliato.
+       const _mt5Locale=currentMt5AccountTag();
+       const _mt5Remoto=msg.conto&&msg.conto.mt5?{login:String(msg.conto.mt5.login||''),server:String(msg.conto.mt5.server||'')}:null;
+       const _stessoContoMt5=(!_mt5Locale.mt5Login&&!_mt5Remoto.login)
+         ||(_mt5Locale.mt5Login&&_mt5Remoto.login&&_mt5Locale.mt5Login===_mt5Remoto.login&&(_mt5Locale.mt5Server||'')===(_mt5Remoto.server||''));
+       if(!_stessoContoMt5){
+         console.log("[trading_sync] posizioni/ordini del conto MT5 remoto ignorati (diverso dal locale)");
+       }else{
+         positions=Array.isArray(msg.positions)?msg.positions:positions;
+         pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
+       }
        trades=Array.isArray(msg.trades)?msg.trades:trades;
        equity=Array.isArray(msg.equity)?msg.equity:equity;
        if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
@@ -18631,6 +18683,13 @@ function draw(){
      // salvato) resta sempre visibile qualunque sia lo stato del livello, altrimenti sparirebbe
      // mentre lo si sta ancora tracciando.
      if(d!==pendingDrawing && !isDrawingLayerVisible(d))return;
+     // VOCE 7: isolamento per conto MT5. In Live con MT5 collegato si vedono solo i disegni
+     // del conto corrente (e quelli senza account, disegnati fuori da qualsiasi MT5);
+     // i disegni di un altro conto restano nascosti. Fuori dal Live/MT5 si vedono tutti.
+     if(d!==pendingDrawing){
+       const mt5Tag=currentMt5AccountTag().mt5Login;
+       if(mt5Tag&&d.mt5Login!=null&&String(d.mt5Login)!==mt5Tag)return;
+     }
      // REPLAY IN LIVE (richiesto esplicitamente): un disegno salvato non deve comparire PRIMA
      // che il punto di replay abbia raggiunto il suo istante di inizio (p1.time). Vale solo per i
      // disegni giÃ  fissati (non per il pendingDrawing in composizione, che deve restare visibile

@@ -9,14 +9,14 @@ I servizi sono tre e girano separati:
 SOLO TAILSCALE
 ==============
 I tre servizi ascoltano SOLO su 127.0.0.1, sempre. Dagli altri dispositivi ci si arriva con
-Tailscale Serve, che risponde in HTTPS sul nome del PC (nome-pc.xxxx.ts.net) e gira le richieste
+Tailscale Serve, che risponde in HTTPS sul dominio del server e gira le richieste
 ai servizi qui, in locale. Niente porte aperte sulla Wi-Fi, niente regole del firewall, e sul
 tablet si usa il sito normale: https verso https, lo stesso login.
 
 La conseguenza che conta: "arriva da 127.0.0.1" NON vuol piu' dire "e' il PC". Ci arriva anche
 Tailscale Serve, per conto del tablet. Lo si riconosce da due cose che Tailscale Serve fa SEMPRE
 (verificato sul suo sorgente, ipn/ipnlocal/serve.go): imposta X-Forwarded-For con l'indirizzo vero
-di chi chiede, e lascia l'Host originale (il nome .ts.net). Una richiesta e' del PC solo se non ha
+di chi chiede, e lascia l'Host originale (il nome di dominio). Una richiesta e' del PC solo se non ha
 nessuna delle due - vedi richiesta_locale(). Tutti e tre i servizi usano quella funzione e nessun
 altro controllo: tre copie divergono, e una divergenza qui e' una porta aperta senza chiave.
 """
@@ -146,7 +146,7 @@ def richiesta_locale(conn) -> bool:
       - arriva da un indirizzo di loopback;
       - NON porta X-Forwarded-For (ne' Forwarded / X-Forwarded-Host): Tailscale Serve lo mette
         sempre, e lo SOVRASCRIVE, quindi il tablet non puo' toglierlo;
-      - l'Host e' 127.0.0.1 / localhost: Tailscale Serve lascia il nome .ts.net. Protegge anche
+      - l'Host e' 127.0.0.1 / localhost: Tailscale Serve lascia il nome di dominio. Protegge anche
         dal "DNS rebinding" (un sito che si fa risolvere su 127.0.0.1).
     Una pagina sul PC che aggiungesse X-Forwarded-For da se' verrebbe trattata come remota: il
     senso dell'errore e' quello giusto, al massimo le serve la chiave.
@@ -293,8 +293,8 @@ def websocket_autorizzato(websocket, dati: Optional[dict] = None) -> bool:
 
 # ----------------------------------------------------------------------------- Tailscale
 # Il PC si presenta agli altri dispositivi con Tailscale Serve: una regola per ciascuna delle tre
-# porte, https://nome-pc.xxxx.ts.net:PORTA -> http://127.0.0.1:PORTA. Stessi numeri di porta da una
-# parte e dall'altra: l'app cambia solo "http://127.0.0.1" in "https://nome-pc.xxxx.ts.net".
+# porte, https://dominio-server:PORTA -> http://127.0.0.1:PORTA. Stessi numeri di porta da una
+# parte e dall'altra: l'app cambia solo "http://127.0.0.1" in "https://dominio-server".
 _RE_LINK = re.compile(r"https://login\.tailscale\.com/\S+")
 
 

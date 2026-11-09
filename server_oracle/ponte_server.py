@@ -115,9 +115,9 @@ def pc_registra(corpo: dict):
     """
     host = str((corpo or {}).get("host") or "").strip().lower()
     chiave = str((corpo or {}).get("chiave") or "").strip()
-    if not host.endswith(".ts.net"):
+    if not host.endswith(".ts.net") and not host.endswith("github.io"):
         raise HTTPException(status_code=400,
-                            detail="Serve il nome Tailscale del PC (finisce con .ts.net): e' quello per cui vale il certificato.")
+                            detail="Serve il nome del server (finisce con .ts.net o github.io): quello per cui vale il certificato.")
     if not chiave:
         raise HTTPException(status_code=400, detail="Senza la chiave del PC il server non potrebbe parlargli.")
     _scrivi_pc({"host": host, "chiave": chiave, "visto": _time.time()})

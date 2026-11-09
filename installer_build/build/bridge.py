@@ -2222,7 +2222,7 @@ def segnali_stop():
 # ACCESSO DA ALTRI DISPOSITIVI (telefono, tablet) - SOLO TAILSCALE
 # =====================================================================================
 # Il servizio ascolta SOLO su 127.0.0.1. Dal telefono ci si arriva con Tailscale Serve, che
-# risponde in HTTPS sul nome del PC (nome-pc.xxxx.ts.net) e gira le richieste qui. Niente porte
+# risponde in HTTPS sul dominio del server e gira le richieste qui. Niente porte
 # aperte sulla Wi-Fi, niente firewall, e sul tablet si usa il sito normale con lo stesso login.
 # Chi e' "il PC" e chi no lo decide accesso_condiviso.richiesta_locale(), la stessa funzione per
 # tutti e tre i servizi: con Tailscale Serve anche il tablet arriva da 127.0.0.1, e guardare solo
@@ -2358,16 +2358,16 @@ def registra_al_server(body: dict, request: Request):
     _solo_dal_pc(request, "La registrazione al server si fa")
     server = str((body or {}).get("server") or "").strip().lower().rstrip("/")
     chiave_server = str((body or {}).get("chiave_server") or "").strip()
-    if not server.endswith(".ts.net"):
-        raise HTTPException(status_code=400, detail="Serve il nome del server (finisce con .ts.net).")
+    if not server.endswith(".ts.net") and not server.endswith("github.io"):
+        raise HTTPException(status_code=400, detail="Serve il nome del server (finisce con .ts.net o github.io).")
     if not chiave_server:
         raise HTTPException(status_code=400, detail="Serve la chiave del server.")
 
     ts = _accesso.stato_tailscale()
     mio_nome = str(ts.get("nome") or "").strip().lower()
-    if not mio_nome.endswith(".ts.net"):
+    if not mio_nome.endswith(".ts.net") and not mio_nome.endswith("github.io"):
         raise HTTPException(status_code=400, detail=(
-            "Questo computer non ha ancora un nome Tailscale: accendi Tailscale qui, poi riprova "
+            "Questo computer non ha ancora un nome di dominio: accendi Tailscale qui, poi riprova "
             "(stato: %s)." % ("non installato" if not ts.get("installato")
                               else ("spento" if not ts.get("attivo") else "senza nome"))))
     if not ACCESSO_REMOTO.get("rete"):
