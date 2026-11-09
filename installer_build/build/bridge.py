@@ -1321,6 +1321,27 @@ def serve_app():
     return FileResponse(percorso_app("app.html"), headers=_NO_CACHE_HEADERS)
 
 
+@app.get("/app.html")
+def serve_app_html():
+    """La pagina si apre anche DIRETTAMENTE, non solo dalla radice: il guscio pywebview la chiede
+    con http://127.0.0.1:8000/app.html, e cosi' la aprono PowerShell, i preferiti, chi prova a
+    mano. SENZA QUESTA ROTTA la richiesta finiva nel mount StaticFiles piu' sotto, che serve dalla
+    cartella del PACCHETTO - per un .exe, la copia congelata DENTRO l'eseguibile, vecchia di
+    mesi - e non dalla copia aggiornata che percorso_app() sceglierebbe.
+
+    MISURATO sul PC del proprietario (9 novembre 2026): /app.html rispondeva v2.2.2 mentre
+    /sw.js - rotta dedicata, quindi aggiornata - rispondeva v2.2.3. Due file dello STESSO
+    programma da due posti diversi: la pagina girava vecchia e il service worker nuovo, e il
+    pannello versione (che legge sw.js) diceva una cosa mentre il codice che girava era un
+    altro. Da qui il "sembrava risolto e invece no": le cure pubblicate non giravano affatto.
+
+    Ora /app.html e / escono dallo stesso posto: la coppia non puo' piu' dividersi."""
+    p = percorso_app("app.html")
+    if not os.path.exists(p):
+        raise HTTPException(status_code=500, detail="app.html non trovato")
+    return FileResponse(p, headers=_NO_CACHE_HEADERS)
+
+
 @app.get("/sw.js")
 def serve_service_worker():
     """Rotta dedicata (invece di lasciarlo alla StaticFiles generica più sotto) SOLO per poter

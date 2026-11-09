@@ -1,3 +1,30 @@
+- 2026-11-09 - OpenCode - **v2.2.11: la pagina aperta dall'icona esce dalla copia AGGIORNATA,
+  non da quella congelata nell'eseguibile.** E' il conflitto fra file che il proprietatore aveva
+  intuito, misurato e curato.
+  SEGNALATO (9 novembre): «è ritornato questo problema passato che sembrava risolto e invece
+  no, secondo me fa conflitto dei file collegamenti nel nostro pc, altrimenti non si spiega».
+  Aveva ragione, e la misura l'ha detto: http://127.0.0.1:8000/app.html rispondeva **v2.2.2**
+  mentre http://127.0.0.1:8000/sw.js rispondeva **v2.2.3**. Due file dello STESSO programma da
+  due posti diversi.
+  CAUSA MISURATA: il guscio pywebview apre l'app su /app.html, non sulla radice. Quel percorso
+  non aveva una rotta sua e finiva nel mount StaticFiles messo in fondo al file, che serve dalla
+  cartella del PACCHETTO — per un .exe, la copia congelata DENTRO l'eseguibile al momento della
+  compilazione, che nessun aggiornamento puo' toccare. La radice «/» e sw.js invece hanno rotte
+  dedicate che passano da percorso_app(), cioe' dalla copia aggiornata. Risultato: la pagina
+  girava VECCHIA e il service worker NUOVO. Il pannello versione legge sw.js, quindi diceva
+  l'ultima mentre il codice che girava era un altro — ed è cosi' che si insegue per un
+  pomeriggio un difetto «già curato» che in realtà non stava girando affatto. Le cure degli ultimi
+  giorni (v2.2.3 -> v2.2.10) non erano in esecuzione sul PC del proprietatore.
+  CURA: una rotta dedicata per /app.html, identica a quella della radice: stesso file, stessi
+  header no-cache, stessa scelta da percorso_app(). Ora i due indirizzi non possono piu' dividersi.
+  NOTA SUL MODO DI LAVORARE: la prova l'ha scritta il comportamento (due indirizzi, la stessa
+  pagina, la copia aggiornata che vince sulla congelata) e ha anche costretto a scoprire la
+  regola 3 del ponte — una copia sotto i 500 KB o senza </html> in fondo viene rifiutata, ed
+  è quello che teneva la prima stesura della prova rossa.
+  Test: laboratorio/ponte/test_rotta_app_html.py (2 prove). Rosso-senza misurato: /app.html
+  rispondeva 404 (il mount StaticFiles non trova il file nella cartella del pacchetto) o la
+  copia congelata. Collaudo ponte: 317 verdi.
+
 - 2026-11-09 - OpenCode - **v2.2.10: un cambio di sorgente non mescola piu' due livelli di
   prezzo nelle stesse candele.** Difetto ricorrente, segnalato di nuovo con due foto.
   SEGNALATO (9 novembre): «Ã¨ ritornato questo problema delle candele che vengono disegnate
