@@ -1,3 +1,24 @@
+- 2026-11-09 - OpenCode - **v2.2.7: il riallineamento della vista al primo tocco vale solo
+  quando l'autosegui stava DAVVERO trattenendo.** Correzione di una regressione che il
+  collaudo di GitHub ha trovato e quello locale no.
+  LA REGRESSIONE: la cura del clic (v2.2.5, "prima di spegnere l'autosegui viewEnd si
+  riallinea a dove si vedeva") era fatta SEMPRE. MISURATO con la prova footprint_tocco_stile
+  (5 verde prima della cura, 4 rossa dopo): a mercato APERTO il bordo visibile e' viewEnd PIU'
+  lo spazio futuro, quindi "riallineare" spostava il grafico in avanti al primo tocco - su
+  BTC, 26 candele su 150. Le fasce toccabili del footprint calcolate prima del tocco non
+  corrispondevano piu', e lo stile non cambiava.
+  LA CURA: il riallineamento parte solo se il confine dell'autosegui esiste
+  (fblConfineAutosegui()>0), cioe' solo quando l'autosegui aveva qualcosa da trattenere: a
+  mercato chiuso, coi dati che sforano la chiusura. Negli altri casi non si tocca viewEnd, e
+  il grafico resta dov'e'.
+  NOTA SUL MODO DI LAVORARE, che e' la lezione vera: il mio giro di regressione locale non
+  includeva i file del footprint (footprint_tocco_stile e i suoi fratelli), e la regressione
+  passava. L'ha pescata il collaudo di GitHub, che gira TUTTO - ed e' esattamente il motivo
+  per cui il proprietario dice "conta quello di GitHub". Da oggi il giro locale include
+  almeno: zona_morta, buco_grafico_chiuso, footprint_tocco_stile, disegni_*, notizie_*,
+  mercato_chiuso, congelamento, prestazioni, zoom, telefono_tocco_grafico, duplicate.
+  Collaudo: 121 prove verdi su quei file (footprint compreso).
+
 - 2026-11-09 - OpenCode - **LEZIONE DI METODO, pagata due volte nello stesso pomeriggio: la
   prova di una cura non si committa PRIMA della cura.**
   Misurato: commettendo `laboratorio/app/notizie_archivio.test.mjs` insieme alla v2.2.3 e

@@ -31,6 +31,10 @@ const PREPARA = () => {
   }
   for (let i = 0; i < 60; i++) {                        // 60 candele CHIUSE (sabato/domenica)
     const t = VEN + 120 * 60000 + (i + 1) * 3600000;
+    // ATTENZIONE AI DATI: devono stare DENTRO la chiusura, non sforare su lunedi' mattina
+    // (che e' una fascia APERTA). Con l'ultima candela su una fascia aperta la coda chiusa non
+    // parte e l'autosegui non ha niente da trattenere: misurato, la vista schizzava avanti.
+    if (t > Date.UTC(2026,10,8,22,0,0)) break;          // fino a domenica sera, non oltre
     rows.push({date: new Date(t).toISOString(), open: 4100, high: 4101, low: 4099, close: 4100, volume: 0});
   }
   baseRows = rows.slice(); idx = rows.length - 1; viewEnd = rows.length;
