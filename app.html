@@ -12024,7 +12024,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.11';
+const FBL_VERSIONE='2.2.12';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -46768,6 +46768,12 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // applicato alla candela del nuovo asset sia SEMPRE un tick vero del nuovo simbolo (la vecchia
  // connessione WS viene comunque chiusa poco più sotto da connectMt5Stream()→disconnectMt5Stream()).
  lastMt5TickPrice=null;
+ // E VIA ANCHE IL PREZZO DELL'ALTRO BROKER: misurato (9 novembre), riselezionando lo stesso
+ // asset dopo una caduta su Capital.com, questo prezzo restava in memoria (e con lui
+ // capitalWsPrimaryEpic) e il pennello da 250 ms applicava alla candela MT5 il prezzo di
+ // Capital.com - 66 punti piu' in basso, un buco di 22 volte l'ampiezza della candela.
+ try{ lastPrimaryEpicPrice=null; }catch(e){}
+ try{ lastPrimaryEpicPriceAsset=null; }catch(e){}
  rebuildBaseRowsFromLibrary();
  renderCsvLibraryList();
  updateFileBtnLabel();
@@ -50085,10 +50091,24 @@ function fblPitturaPrezzoFine(){
  // A scheda nascosta non si disegna: sarebbe lavoro buttato.
  try{ if(document.visibilityState!=='visible')return; }catch(e){}
  // L'ultimo tick MEMORIZZATO dalla fonte che sta alimentando il grafico adesso.
- let p=null, daAsset=null;
- if(mt5ActiveSymbol&&Number.isFinite(lastMt5TickPrice)&&lastMt5TickPrice>0){ p=lastMt5TickPrice; daAsset=currentAssetKey||null; }
- else if(Number.isFinite(lastPrimaryEpicPrice)&&lastPrimaryEpicPrice>0){ p=lastPrimaryEpicPrice; daAsset=lastPrimaryEpicPriceAsset||null; }
+ let p=null, daAsset=null, daSorgente=null;
+ if(mt5ActiveSymbol&&Number.isFinite(lastMt5TickPrice)&&lastMt5TickPrice>0){ p=lastMt5TickPrice; daAsset=currentAssetKey||null; daSorgente='mt5'; }
+ else if(Number.isFinite(lastPrimaryEpicPrice)&&lastPrimaryEpicPrice>0){ p=lastPrimaryEpicPrice; daAsset=lastPrimaryEpicPriceAsset||null; daSorgente='capital'; }
  if(!Number.isFinite(p))return;
+ // IL PREZZO DEVE VENIRE DAL BROKER DEL FILE A GRAFICO. Misurato (indagine del 9 novembre,
+ // due banchi): "ricaduta" = grafico su Capital.com, si riseleziona lo STESSO asset, il
+ // caricatore MT5 mette i suoi dati ma non azzera il prezzo di Capital.com -> il pennello lo
+ // applica alla candela MT5. Ampiezza 2,86 -> 67,2, fascia 20,81 -> 82,19, e la candela rotta
+ // non torna piu' indietro perche' high/low non si restringono mai. Il difetto opposto (prezzo
+ // MT5 su grafico Capital.com) misura uguale: 67,75 in 2,2 secondi. fromAsset non distingue
+ // niente qui: i due broker usano lo STESSO nome asset.
+ try{
+  const sorgGrafico=fblSorgenteGrafico();
+  if(sorgGrafico&&daSorgente&&sorgGrafico!==daSorgente){
+   console.log('[ChartFeed] scartato prezzo ' + p + ' dal broker ' + daSorgente + ': a grafico c' + String.fromCharCode(39) + 'e un file dell' + String.fromCharCode(39) + 'altro broker (' + sorgGrafico + '). Stesso nome asset, due livelli di prezzo diversi (misurato: 66 punti su XAUUSD).');
+   return;
+  }
+ }catch(e){}
  if(p===__pitturaUltimoPrezzo)return;   // prezzo fermo: nessun ridisegno, nessun lavoro sprecato
  __pitturaUltimoPrezzo=p;
  const ora=(mt5ActiveSymbol&&typeof mt5Adesso==='function')?mt5Adesso():Date.now();
@@ -50117,6 +50137,20 @@ function stopMt5RefreshTimer(){
 // Le crypto (24/7) sono escluse, così come la modalità senza MT5 (solo Capital.com).
 const LIVE_MT5_CLOSE_MIN=22*60, LIVE_CAPITAL_UNTIL_MIN=23*60;
 const OFFSESSION_ROWS_KEY='fxbt_offsession_rows_v1';
+// DI CHI E' IL FILE CHE STA DISEGNANDO IL GRAFICO, ADESSO.
+// Il nome asset non distingue niente: MT5 e Capital.com quotano lo stesso oro con lo stesso
+// nome ("XAUUSD") a circa 66 punti di distanza - misurato dal proprietatore il 15 ottobre 2026
+// e ritrovato l'8 e il 9 novembre su tre strade diverse (cambio di sorgente, riselezione dello
+// stesso asset, merge dei due caricatori). L'id del file invece lo dice, ed e' la stessa regola
+// che usa fblSorgenteLivePerCambioTf() al cambio di timeframe.
+function fblSorgenteGrafico(){
+  try{
+    const id=String((csvLibrary[0]&&csvLibrary[0].id)||'');
+    if(/^mt5_live_/.test(id))return 'mt5';
+    if(/^capital_live_/.test(id))return 'capital';
+  }catch(e){}
+  return null;
+}
 // FBL:TESTA-SORGENTE-LIVE:INIZIO
 function fblSorgenteLivePerCambioTf(fileId, fase, mt5Connesso){
   // Al cambio timeframe in Live non si deve MAI cambiare fonte di nascosto: si ricarica lo storico

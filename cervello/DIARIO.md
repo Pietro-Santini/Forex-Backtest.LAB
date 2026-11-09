@@ -1,3 +1,28 @@
+- 2026-11-09 - OpenCode - **v2.2.12: il prezzo dell'altro broker non entra piu' nella candela.
+  Terza strada della stessa famiglia (due livelli di prezzo nelle stesse candele).**
+  SEGNALATO (9 novembre, con una foto): «al caricamento dello stesso asset si rompe e diventa
+  così... ci sono problemi multipli». Nella foto: candele da 5m con ampiezze di 20-30 punti
+  (quando sono di 2-3) e code lunghissime.
+  INVESTIGATO MISURANDO (due banchi). CAUSA: il pennello da 250 ms sceglie il prezzo con
+  Â«chi ha preso il graficoÂ» (mt5ActiveSymbol) e Â«quale prezzo c'Ã¨Â», MAI con Â«di quale
+  broker Ã¨ il file che sta disegnando il graficoÂ». Riselezionando lo STESSO asset con il
+  grafico caduto su Capital.com, il caricatore MT5 sostituisce la libreria con i suoi dati ma
+  NON azzera nÃ© capitalWsPrimaryEpic nÃ© lastPrimaryEpicPrice: il pennello applica alla candela
+  MT5 il prezzo di Capital.com.
+  MISURATO PRIMA DELLA CURA: ampiezza dell'ultima candela **0,40 -> 64,92** (apertura e massimo
+  restano al livello MT5, minimo e chiusura prendono il livello Capital.com), fascia visibile
+  8,10 -> 71,13. E la candela rotta non torna piÃù indietro perchÃ© high/low non si restringono
+  mai. Il difetto opposto (prezzo MT5 su grafico Capital.com) misura uguale.
+  PERCHE' fromAsset NON BASTAVA: MT5 e Capital.com quotano lo stesso oro con lo STESSO nome
+  asset ("XAUUSD") a circa 66 punti di distanza - numero misurato dal proprietatore il 15
+  ottobre 2026. Il confronto per nome non distingue niente; quello per id di file sÃ¬.
+  CURA, in tre pezzi: fblSorgenteGrafico() dice di chi Ã¨ il file a grafico (stessa regola che
+  già usa il cambio di timeframe); il pennello scarta il prezzo che viene dall'altro broker; il
+  caricatore MT5, quando mette i suoi dati, azzera anche il prezzo dell'altro broker.
+  Test: laboratorio/app/prezzo_dell_altro_broker.test.mjs (4 prove, coi due versi e due
+  controlli). Rosso-senza misurato: ampiezza 0,40 -> 64,92.
+  Collaudo: 41 prove verdi sui file toccati.
+
 - 2026-11-09 - OpenCode - **v2.2.11: la pagina aperta dall'icona esce dalla copia AGGIORNATA,
   non da quella congelata nell'eseguibile.** E' il conflitto fra file che il proprietatore aveva
   intuito, misurato e curato.
