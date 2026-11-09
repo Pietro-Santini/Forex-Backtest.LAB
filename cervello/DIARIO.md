@@ -1,3 +1,35 @@
+- 2026-11-09 - OpenCode - **v2.2.8: chiudendo e riaprendo l'app non restano piu' processi in
+  piu', e se la porta e' occupata il ponte dice CHI la tiene.**
+  SEGNALATO dal proprietatore (9 novembre): «ho cliccato aggiorna e mi ha crashato
+  l'applicazione, poi l'ho chiusa e riaperta e mi crashava di continuo per una decina di
+  secondi... ci sono processi che gli danno fastidio a quanto pare e non capisco».
+  CAUSA MISURATA, in due tempi.
+  PRIMO (i processi in piu'): con tasklist sul suo PC risultavano DUE Mt5FeedServer e DUE
+  SegnaliBridge. La pulizia anti-orphano del ponte chiudeva solo due nomi
+  (ForexBacktestLAB.exe e Mt5FeedServer.exe): SegnaliBridge.exe restava in piedi, e il suo
+  servizio segnali (porta 8769) pure. L'installer invece chiudeva i quattro nomi giusti - due
+  strade con due elenchi diversi, quindi un orfano di troppo garantito.
+  SECONDO (il «mi crasha per una decina di secondi»): taskkill torna appena ha CHIESTO la
+  chiusura, non quando e' avvenuta. Il ponte nuovo trovava la porta 8000 ancora in mano a
+  quello vecchio, il bind falliva ([Errno 10048]) e si riprovava ogni 2 secondi in silenzio: la
+  finestra dava «il ponte non risponde» esattamente per quei dieci secondi.
+  CURA, in tre pezzi:
+  1) l'elenco dei nomi della pulizia e' quello dell'installer (ForexBacktestLAB.exe,
+     Mt5FeedServer.exe, SegnaliBridge.exe), e il filtro «PID ne il mio» resta;
+  2) dopo la pulizia si ASPETTA che le porte 8000 e 8001 siano davvero libere
+     (_aspetta_porta_libera: 10 secondi al massimo, non blocca mai l'avvio);
+  3) quando il bind fallisce si dice CHI tiene la porta (_chi_tiene_la_porta: PID e nome da
+     netstat/tasklist) e la notizia si dice UNA VOLTA (_dici_porta_occupata), non a ogni giro
+     di due secondi. Misurato sul suo PC: le porte erano in mano a PID 9916 - un processo che
+     NON era uno dei nostri (Tailscale) - e a schermo sembrava la stessa cosa di «il ponte non
+     risponde»: due difetti diversi, uno si cura chiudendo quel programma.
+  In piu' la pulizia si ripete DOPO l'avvio dei servizi (un figlio arrivato in ritardo poteva
+  trovare la porta occupata).
+  Test: laboratorio/ponte/test_processi_orfani_avvio.py (11 prove: elenco dei nomi, filtro del
+  proprio PID, attesa della porta viva/morta, diagnosta del colpevole, notizia detta una volta
+  sola e di nuovo se si libera). Rosso-senza misurato: 2 prove rosse.
+  Collaudo ponte: 314 verdi.
+
 - 2026-11-09 - OpenCode - **v2.2.7: il riallineamento della vista al primo tocco vale solo
   quando l'autosegui stava DAVVERO trattenendo.** Correzione di una regressione che il
   collaudo di GitHub ha trovato e quello locale no.

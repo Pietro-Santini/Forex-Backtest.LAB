@@ -134,6 +134,19 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
   controllo aggiornamenti, footprint/notion.
 - Stato: DA FARE (dopo R1-R3 e finestre duplicate, come richiesto).
 
+## P0 - CHIUDENDO E RIAPRENDO L'APP CRASHA PER UNA DECINA DI SECONDI (processi in piu')
+- Stato: CURATO in v2.2.8.
+  SEGNALATO (9 novembre): «mi crashava di continuo per una decina di secondi, ci sono processi
+  che gli danno fastidio».
+  CAUSA MISURATA: la pulizia anti-orphano chiudeva due nomi su tre (mancava SegnaliBridge.exe),
+  e non aspettava che le porte si liberassero davvero - taskkill torna quando ha CHIESTO, non
+  quando e' avvenuto. Il ponte nuovo trovava la 8000 occupata, bind fallito, riprova ogni 2
+  secondi: la finestra dava «non risponde» per quel tempo.
+  CURA: elenco dei nomi come l'installer, attesa vera delle porte 8000/8001, e quando il bind
+  fallisce si dice CHI tiene la porta (PID e nome) - misurato sul PC: PID 9916, Tailscale, non
+  uno dei nostri.
+- Test: laboratorio/ponte/test_processi_orfani_avvio.py
+
 ## P0 — IL GRAFICO PERDE LE CANDELE IN MEZZO ALLO STORICO (e non si sposta oltre l'ultima)
 - Stato: CURATO in v2.2.3.
   SEGNALATO (8 novembre 2026, tre foto in tre punti diversi): «quando sto scorrendo il grafico

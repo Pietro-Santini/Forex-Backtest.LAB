@@ -957,7 +957,12 @@ def _kill_stale_instances():
     if not getattr(sys, "frozen", False) or os.name != "nt":
         return
     own_pid = os.getpid()
-    for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe"):
+    # TUTTI I SERVIZI, non solo due. MISURATO sul PC del proprietatore (9 novembre 2026):
+    # chiudendo e riaprendo l'app restavano in piedi DUE Mt5FeedServer e DUE SegnaliBridge —
+    # segno che questa pulizia ne chiudeva uno e lasciava l'altro. L'elenco e' lo STESSO
+    # dell'installer (installer.iss, procedura UccidiTutti): se le due strade uccidono due
+    # elenchi diversi, prima o poi una lascia un orfano di troppo.
+    for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe", "SegnaliBridge.exe"):
         try:
             subprocess.run(
                 ["taskkill", "/F", "/IM", exe_name, "/FI", f"PID ne {own_pid}"],
@@ -966,6 +971,91 @@ def _kill_stale_instances():
             )
         except Exception:
             pass  # taskkill assente, nessun processo con quel nome, o altro: mai bloccare l'avvio per questo
+    # E SI ASPETTA CHE LE PORTE SI LIBERINO DAVVERO. taskkill torna appena ha CHIESTO la
+    # chiusura, non quando e' avvenuta: MISURATO dallo stesso pomeriggio, l'istanza nuova
+    # trovava la porta 8000 ancora in mano a quella vecchia, il bind falliva e si riprovava
+    # ogni 2 secondi - la finestra dava "non risponde" per una decina di secondi, e il
+    # proprietatore lo vedeva come un crash. L'attesa vera costa qualche decimo di secondo
+    # all'avvio e toglie di mezzo quel "mi crasha quando chiudo e riapro".
+    for _porta in (8000, 8001):   # 8000 = il ponte, 8001 = il servizio dati (vedi __main__)
+        _aspetta_porta_libera(_porta)
+
+
+def _aspetta_porta_libera(porta, secondi=10):
+    """Aspetta CHE DAVVERO: torna True se la porta smette di rispondere, False se resta
+    occupata dopo l'attesa. Non solleva mai - l'avvio non si blocca per questo."""
+    try:
+        import time as _time
+        for _ in range(secondi * 5):
+            if not _servizio_gia_vivo(porta):
+                return True
+            _time.sleep(0.2)
+        return False
+    except Exception:
+        return False
+
+
+def _chi_tiene_la_porta(porta):
+    """Chi e' il processo che tiene questa porta, in chiaro ("PID 9916 - nomeprocesso").
+
+    SERVE A DIRE UNA COSA UTILE INVECE DI "NON RISPONDE". Misurato sul PC del proprietatore
+    (8-9 novembre 2026): le porte 8000, 8001 e 8769 erano in mano a un processo che NON era
+    uno dei nostri (PID 9916, legato all'IP di Tailscale), mentre il servizio vero girava su
+    127.0.0.1. Due cose diverse che a schermo sembrano uguali: una si cura chiudendo un
+    programma estraneo, l'altra riavviando il nostro. Senza il nome del colpevole si indovina.
+    Windows-only: netstat e taskkill non esistono altrove, e li' non serve nulla."""
+    if os.name != "nt":
+        return ""
+    try:
+        import subprocess as _sp
+        import re as _re
+        cerca = f":{int(porta)} "
+        r = _sp.run(["netstat", "-ano"], capture_output=True, text=True, timeout=8)
+        pid = ""
+        for riga in (r.stdout or "").splitlines():
+            if cerca in riga and "LISTENING" in riga.upper():
+                m = _re.search(r"(\d+)\s*$", riga.strip())
+                if m:
+                    pid = m.group(1)
+                    break
+        if not pid:
+            return ""
+        t = _sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
+                    capture_output=True, text=True, timeout=8)
+        nome = ""
+        for riga in (t.stdout or "").splitlines():
+            if riga.strip() and "," in riga:
+                nome = riga.split(",")[0].strip().strip('"')
+                break
+        return f"PID {pid}" + (f" - {nome}" if nome else "")
+    except Exception:
+        return ""
+
+
+def _dici_porta_occupata(porta):
+    """Dice UNA VOLTA CHI tiene la porta, e poi tace.
+
+    Misurato sul PC del proprietatore (9 novembre 2026): chiudendo e riaprendo l'app, il bind
+    sulla porta 8000 falliva e si riprovava ogni 2 secondi. Il log si riempiva dello stesso
+    errore, e la cosa utile - che la porta era in mano a un processo che NON era uno dei nostri
+    (PID 9916, Tailscale) - non si leggeva. La notizia si dice una volta: dopo, cento righe
+    identiche non aggiungono niente al log e tolgono spazio a tutto il resto."""
+    global _porta_occupata_detta
+    if _porta_occupata_detta:
+        return
+    _porta_occupata_detta = True
+    colpevole = ""
+    try:
+        colpevole = _chi_tiene_la_porta(porta)
+    except Exception:
+        colpevole = ""
+    _log_bridge(
+        "la porta %d e' occupata%s. L'app ripeta' fra 2 secondi: se non si libera, chiudi quel "
+        "processo e riapri l'applicazione."
+        % (porta, (" da " + colpevole) if colpevole else ""))
+
+
+_porta_occupata_detta = False   # per non ripetere a ogni giro la stessa notizia
 
 
 def _servizio_gia_vivo(porta, timeout=0.4):
@@ -3812,12 +3902,23 @@ if __name__ == "__main__":
     _host = _accesso.host_di_ascolto()
     if ACCESSO_REMOTO.get("rete"):
         print("  Accesso da altri dispositivi ACCESO (via Tailscale): serve la chiave.")
+    # L'ANTI-ORFANO SI RIPETE ANCHE DOPO L'AVVIO DEI SERVIZI: un servizio figlio puo' essere
+    # arrivato in ritardo (istanza precedente che stava morendo) e trovarsi la porta occupata
+    # da chi abbiamo appena chiuso. Misurato: senza il secondo giro restava il doppione.
+    _kill_stale_instances()
     while True:
         try:
             uvicorn.run(app, host=_host, port=PORT)
             break  # uscita normale (es. segnale di stop): non si riavvia
         except Exception as _e:
             import traceback as _tb
+            # CHI TIENE LA PORTA, detto una volta sola: misurato, riprovando ogni 2 secondi in
+            # silenzio il log si riempiva dello stesso errore e la cosa utile non si vedeva.
+            _testo_errore = str(_e)
+            if "10048" in _testo_errore or "address already in use" in _testo_errore.lower():
+                _dici_porta_occupata(PORT)
+            else:
+                _porta_occupata_detta = False
             _log_bridge("uvicorn terminato con errore, riavvio tra 2s: %s" % _e)
             _log_bridge("".join(_tb.format_exception(type(_e), _e, _e.__traceback__)))
             time.sleep(2)
