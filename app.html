@@ -2938,7 +2938,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
           <label style="flex:none;min-width:150px">Al cambio di time frame tieni fermo</label>
           <select id="vpTfAnchor" style="width:140px">
             <option value="time">Il tempo</option>
-            <option value="candles">Il numero di candele</option>
+            <option value="candles" selected>Il numero di candele</option>
           </select>
         </div>
        <div class="fbOptRow" style="flex-wrap:wrap;row-gap:6px">
@@ -10604,7 +10604,10 @@ function openVpSettingsModal(target){
    if($('vpBuckets'))$('vpBuckets').value=target.buckets||200;
    if($('vpBarSizePct'))$('vpBarSizePct').value=target.barSizePct||500;
    if($('vpExtendRight'))$('vpExtendRight').checked=!!target.extendRight;
-    if($('vpTfAnchor'))$('vpTfAnchor').value=(target.tfAnchor||target.vpTfAnchor||'time');
+    // Predefinito: IL NUMERO DI CANDELE (richiesto dal proprietatore il 28 ottobre e
+    // risegnalato il 9 novembre con "mi raccomando e' importante"). L'interruttore resta:
+    // chi ha scelto "il tempo" lo tiene, perche' questa scelta viaggia col disegno.
+    if($('vpTfAnchor'))$('vpTfAnchor').value=(target.tfAnchor||target.vpTfAnchor||'candles');
    if($('vpBgEnabled'))$('vpBgEnabled').checked=!!target.bgEnabled;
    if($('vpBgColor'))$('vpBgColor').value=target.bgColor||'#ffffff';
    if($('vpBgOpacity'))$('vpBgOpacity').value=target.bgOpacity!=null?target.bgOpacity:5;
@@ -10684,7 +10687,10 @@ function applyVpSettingsFromModal(){
    const sizeVal=Number($('vpBarSizePct')?.value);
    d.barSizePct=Number.isFinite(sizeVal)?Math.max(20,sizeVal):d.barSizePct;
    if(d.type==='vpfixed')d.extendRight=!!$('vpExtendRight')?.checked;
-    d.tfAnchor=$('vpTfAnchor')?.value||'time'; d.vpTfAnchor=d.tfAnchor;
+    // Predefinito: IL NUMERO DI CANDELE (richiesto dal proprietatore il 28 ottobre e
+    // risegnalato il 9 novembre con "mi raccomando e' importante"). L'interruttore
+    // resta: chi ha scelto "il tempo" lo tiene, perche' d.tfAnchor viaggia col disegno.
+    d.tfAnchor=$('vpTfAnchor')?.value||'candles'; d.vpTfAnchor=d.tfAnchor;
    d.bgEnabled=!!$('vpBgEnabled')?.checked;
    d.bgColor=$('vpBgColor')?.value||d.bgColor;
    const bgOpVal=Math.round(Number($('vpBgOpacity')?.value));
@@ -11984,7 +11990,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.8';
+const FBL_VERSIONE='2.2.9';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -12646,7 +12652,8 @@ function _vpTfKeepTime(d){
  return true;
 }
 function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
- const aIdx=rowIndexNearTime(d.p1.time);
+ let aIdx=rowIndexNearTime(d.p1.time);   // let, non const: con "tieni fermo il numero di
+ // candele" l'inizio puo' doversi spostare indietro (vedi sotto).
  if(d.type!=='vpfixed')return{aIdx,bIdx:Math.min(idxLive,rowsLen-1)};
  const keepTime=_vpTfKeepTime(d);
  if(keepTime){
@@ -12657,10 +12664,49 @@ function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
  const rawBIdx=rowIndexNearTime(d.p2.time);
  if(!Number.isFinite(d.candleCount)||d.candleCount<1)d.candleCount=Math.abs(rawBIdx-aIdx)+1;
  const dir=rawBIdx>=aIdx?1:-1;
+ // PRIMA: si spostava sempre l'estremo DESTRO e poi si tagliava ai dati disponibili.
+ // MISURATO (9 novembre 2026): un profilo disegnato sulle ultime 300 candele a 1 minuto,
+ // passando a 15 minuti, crollava a 20 candele - perche' l'estremo destro era GIA' sull'ultima
+ // candela e non poteva allungarsi. Il conto scendeva, ed e' esattamente quello che il
+ // proprietatore ha chiesto di non far succedere ("il numero delle barre deve rimanere quello
+ // del time frame da 1 minuto", richiesto gia' il 28 ottobre e risegnalato il 9 novembre con
+ // "mi raccomando e' importante").
+ // ORA: se a destra non c'e' posto si sposta l'INIZIO INDIETRO, e il conto resta. Il profilo
+ // copre allora un arco di tempo piu' lungo (300 candele a 15 minuti sono 75 ore, non 5): e'
+ // aritmetica, non un difetto, ed e' esattamente il significato di "tieni fermo il numero di
+ // candele".
  let bIdx=aIdx+dir*(d.candleCount-1);
+ if(dir>0&&bIdx>rowsLen-1){
+  const manca=bIdx-(rowsLen-1);
+  const nuovoA=Math.max(0,aIdx-manca);
+  if(nuovoA!==aIdx){
+   aIdx=nuovoA;
+   bIdx=aIdx+dir*(d.candleCount-1);
+   // E l'inizio si sposta CON l'ancora, o al giro dopo tornerebbe dov'era. E' l'unico posto in
+   // cui p1.time viene riscritto, e va detto per intero: qui "tieni fermo il numero di candele"
+   // lo esige, mentre la regola "nessuno riscrive p1.time" protegge l'ancora nell'altra
+   // modalita' (tieni fermo il tempo), dove infatti non si tocca.
+   const tA=fullTs[aIdx];
+   if(Number.isFinite(tA)&&tA!==d.p1.time)d.p1.time=tA;
+  }
+ }
+ if(dir<0&&bIdx<0){
+  const manca=-bIdx;
+  const nuovoA=Math.min(rowsLen-1,aIdx+manca);
+  if(nuovoA!==aIdx){
+   aIdx=nuovoA;
+   bIdx=aIdx+dir*(d.candleCount-1);
+   const tA=fullTs[aIdx];
+   if(Number.isFinite(tA)&&tA!==d.p1.time)d.p1.time=tA;
+  }
+ }
  bIdx=Math.max(0,Math.min(rowsLen-1,bIdx));
  const newTime=fullTs[bIdx];
  if(Number.isFinite(newTime)&&newTime!==d.p2.time)d.p2.time=newTime;
+ // Il conto alla fine e' quello che resta davvero, non quello che si sperava: lo si scrive, cosi'
+ // un profilo creato pochi minuti fa (dati fermi) non somiglia uno creato con dati completi.
+ const rimasto=Math.abs(bIdx-aIdx)+1;
+ if(rimasto>0&&rimasto!==d.candleCount)d.candleCount=rimasto;
  return{aIdx,bIdx};
 }
 // VWAP ancorato: media del prezzo tipico (H+L+C)/3 pesata sul volume reale di ogni candela,

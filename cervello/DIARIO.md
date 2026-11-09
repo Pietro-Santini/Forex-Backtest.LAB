@@ -1,3 +1,35 @@
+- 2026-11-09 - OpenCode - **v2.2.9: cambiando time frame, il numero di candele dentro
+  l'istogramma del profilo non cambia piu'.** Voce del 28 ottobre, risegnalata il 9 novembre
+  con Â«mi raccomando Ã¨ importanteÂ».
+  PAROLE DEL PROPRIETARIO (9 novembre): «Ã¨ rimasto il problema del numero delle barre che
+  diminuiscono al cambio di time frame, devono rimanere le stesse del time frame da 1m, quindi
+  se sono a un time frame da 15m non possono diminuire le barre dell'istogramma ma devono
+  rimanere le stesse del timeframe da 1 minuto, come funziona su tradingviewÂ».
+  DA CHE PARTE SI GUARDA, misurato prima di curare: l'istogramma del profilo ha TRE numeri
+  diversi e due erano gia' a posto. Le FASCE (le righe orizzontali) sono fisse per costruzione:
+  misurate 300 a 1, 5 e 15 minuti, prima e dopo. La LUNGHEZZA delle barre segue lo zoom, come
+  richiesto il 4 novembre. Quello che crollava era il NUMERO DI CANDELE dentro il profilo:
+  300 a 1 minuto -> 60 a 5 -> 20 a 15.
+  CAUSA MISURATA: "tieni fermo il numero di candele" spostava sempre l'estremo DESTRO del
+  profilo. Ma chi disegna un profilo lo disegna fino all'ULTIMA candela: l'estremo destro era
+  gia' in fondo ai dati, non poteva allungarsi, e il conto veniva tagliato a quello che
+  restava. Il codice diceva di muovere "l'estremo che non e' l'ancora", ma con l'ancora a
+  SINISTRA quello da muovere era sempre il destro.
+  CURA: se a destra non c'e' posto, si sposta l'INIZIO INDIETRO e il conto resta. Misurato
+  dopo: 300 candele a 1, a 5 e a 15 minuti. Il profilo copre piu' tempo (300 candele a 15
+  minuti sono 75 ore, non 5): e' aritmetica, non un difetto, ed e' esattamente il senso di
+  "tieni fermo il numero di candele".
+  PREDEFINITO CAMBIATO: le impostazioni del profilo si aprono adesso su "Il numero di
+  candele" (la richiesta e' stata fatta due volte), e il codice che crea un profilo nuovo
+  prende quella. L'INTERRUTTORE RESTA, e i profili gia' disegnati conservano la loro scelta
+  perche' il valore viaggia col disegno: misurato da una prova, chi aveva scelto "il tempo"
+  ce l'ha ancora, e anche un disegno fatto prima dell'interruttore non cambia comportamento.
+  Test: laboratorio/app/profilo_numero_candele.test.mjs (4 prove: il numero resta 300 a 5 e 15
+  minuti e il tempo coperto cresce; controllo su "il tempo"; controllo che le fasce restino
+  fisse; controllo che la scelta di chi c'era non venga rubata). Rosso-senza misurato: 60 e 20
+  candele al posto di 300.
+  Collaudo: 31 prove verdi fra profili, colonne COB/SVP, disegni e cronometri.
+
 - 2026-11-09 - OpenCode - **v2.2.8: chiudendo e riaprendo l'app non restano piu' processi in
   piu', e se la porta e' occupata il ponte dice CHI la tiene.**
   SEGNALATO dal proprietatore (9 novembre): «ho cliccato aggiorna e mi ha crashato
