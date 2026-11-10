@@ -11096,6 +11096,53 @@ function fblSegmentoNelRiquadro(x1,y1,x2,y2,rx1,ry1,rx2,ry2){
 // usata per ENTRY/TP/SL delle posizioni aperte. `y` è la funzione prezzo->pixel di draw()
 // (non l'etichetta stessa). Riusa lo stesso sistema anti-sovrapposizione delle altre caselle
 // (placeLabelY), così due livelli molto vicini in prezzo non si sovrappongono sulla scala.
+// ===================== CARTELLINI DEI DISEGNI SULLA SCALA DEL PREZZO =====================
+// RICHIESTO DAL PROPRIETARIO (10 novembre 2026): «quando seleziono un disegno, fammi vedere il
+// suo prezzo sull'asse dei prezzi, nel punto A e (se il disegno ha due punti) anche nel punto B,
+// e i cartellini devono seguire il disegno».
+//
+// I cartellini seguono il disegno DA SOLI: le ancore dei disegni sono sempre in ms+prezzo (mai in
+// pixel) e la y si ricalcola a ogni draw(), quindi drag, zoom, pan e cambio timeframe li spostano
+// senza che niente debba essere collegato (misurato: 40 px di drag = 40 px di y, prezzo
+// aggiornato di conseguenza).
+//
+// Disegnata DOPO drawAxisGuard e fuori dal clip di plot: la striscia dell'asse viene ridipinta col
+// fondo, e un cartellino disegnato prima sarebbe cancellato (misurato dipingendo un pixel sulla
+// striscia: dopo un solo draw() era sostituito dallo sfondo).
+// Riuse drawPriceAxisTag, la stessa casella dell'entrata delle posizioni, così i numeri si
+// allineano di riga e lo stesso registro anti-sovrapposizione evita che due cartellini vicini in
+// prezzo si coprano.
+// Tipi a UN punto solo: horizontal, horizontalray, vertical, crossline, alarmline - per questi
+// p2 esiste ma è un clone di p1 (misurato p1.price === p2.price). Per il Fibonacci valgono i due
+// estremi: livello 0 = p2, livello 1 = p1 (misurato), e le fasce intermedie restano DENTRO il
+// grafico con le loro etichette, come richiesto.
+const FBL_DISEGNI_UN_PUNTO=['horizontal','horizontalray','vertical','crossline','alarmline'];
+function disegnaCartelliniAssePerDisegno(ctx,geo){
+  try{
+    const y=geo&&geo.y, pad=geo&&geo.pad, w=geo&&geo.w, h=geo&&geo.h, lo=geo&&geo.lo, hi=geo&&geo.hi;
+    // Il colore di sfondo del grafico NON e' una variabile globale: lo passa draw(), dove si
+    // chiama. Misurato: senza, qui si sollevava ReferenceError e il catch silenzioso la
+    // ingoiava - il cartellino non compariva e non si vedeva nessun errore.
+    const sfondoGrafico=(geo&&geo.bg!=null)?geo.bg:'#0b1220';
+    if(typeof y!=='function'||!Number.isFinite(lo)||!Number.isFinite(hi))return;
+    const d=(typeof selectedDrawing!=='undefined')?selectedDrawing:null;
+    if(!d||d.hidden)return;
+    const punti=[d.p1];
+    if(FBL_DISEGNI_UN_PUNTO.indexOf(String(d.type))<0&&d.p2)punti.push(d.p2);
+    let colore=(d&&d.color)?d.color:'#3ea6ff';
+    if(!d.color&&typeof defaultColorFor==='function'){
+      try{ const c=defaultColorFor(d.type); if(c)colore=c; }catch(e){}
+    }
+    punti.forEach(p=>{
+      if(!p||!Number.isFinite(p.price))return;
+      // GATEWAY OBBLIGATORIO: senza, un disegno col prezzo fuori dalla scala visibile verrebbe
+      // schiacciato sul bordo mostrando un prezzo che in realta' non si vede (misurato: y=979,77
+      // col limite h-pad.b=676).
+      if(p.price<lo||p.price>hi)return;
+      drawPriceAxisTag(ctx,y,p.price,fmtPrice(p.price),colore,sfondoGrafico,pad,w,h);
+    });
+  }catch(e){}
+}
 function drawPriceAxisTag(ctx,y,priceVal,text,bg,fg,pad,w,h){
  if(!Number.isFinite(priceVal))return;
  const labelX=priceAxisX(w)+3, labelW=62, labelH=16;
@@ -20729,6 +20776,10 @@ function draw(){
    }
  }
  _tSez=fblSezFine('prezzoCorrente',_tSez);
+ // CARTELLINI DEI DISEGNI SULLA SCALA DEL PREZZO (richiesta del 10 novembre 2026). Qui e non
+ // nel ciclo dei disegni: la striscia dell'asse e' stata appena ridipunta col fondo, quindi
+ // un cartellino disegnato prima verrebbe cancellato (misurato).
+ try{ disegnaCartelliniAssePerDisegno(ctx,{y,pad,w,h,lo,hi,bg:chartBg}); }catch(e){}
  // Anteprima SL/TP mentre si sta posizionando la linea cliccando sul grafico
  // Sopra le candele e i disegni, sotto al mirino: e' un aiuto, non deve coprire il grafico.
  try{ disegnaAnteprimaAggancio(ctx); }catch(e){}
