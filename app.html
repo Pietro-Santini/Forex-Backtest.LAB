@@ -46536,6 +46536,17 @@ function heatmapCellsForAssetNow(assetKey){
 let mt5ActiveSymbol=null;
 let mt5UltimoRestSenzaTickAt=0;
 let lastMt5TickAt=0, mt5StreamReconnectAttemptAt=0, lastMt5TickPrice=null, lastMt5RealTickAt=0;
+// MERCATO APERTO/CHIUSO DAL PASSAGGIO DATI (richiesta del proprietario, 10 novembre 2026):
+// l'ultimo tick VERO ricevuto per ogni asset. Se il feed di un asset continua a mandare dati il
+// mercato e' aperto; se tace da troppo tempo e' chiuso. Le variabili qui sopra sono globali di un
+// solo simbolo (quello a grafico): questa mappa copre TUTTI gli asset, cosi' si puo' rispondere
+// anche per uno in watchlist o per quello di una posizione.
+let mt5UltimoTickPerAsset={};
+// Quanto silenzio prima di dire "chiuso". Deve restare MAGGIORE della soglia del ponte
+// (mt5_feed_server.py, SOGLIA_TICK_FRESCO = 180 s), altrimenti nello stesso minuto il ponte
+// direbbe "aperto" e l'app "chiuso". 5 minuti: uno strumento poco liquido a mercato aperto
+// puo' tacere qualche minuto senza che il mercato sia chiuso.
+const FBL_MT5_SILENZIO_CHIUSO_MS=5*60000;
 // ===================== OROLOGIO DEL SERVIZIO MT5 (tablet/telefono) =====================
 // SEGNALATO: "dal tablet/telefono via Tailscale il grafico si aggiorna nei primi istanti, poi la
 // candela si muove solo a ogni chiusura; il COB invece segue il prezzo". mt5_feed_server.py etichetta
@@ -47171,7 +47182,12 @@ function connectMt5Stream(symbol){
    if(symbol!==mt5ActiveSymbol)return;
    mt5RegistraOrarioTick(Number(msg.time_ms));
    lastMt5TickPrice=msg.bid; // bid, stessa convenzione già usata per Capital.com
-   lastMt5RealTickAt=mt5Adesso(); // tick VERO (non heartbeat): solo lui può aprire una candela nuova. Ora del servizio MT5 (vedi mt5Adesso)
+   lastMt5RealTickAt=mt5Adesso();
+   // MERCATO DAL PASSAGGIO DATI: l'ultimo tick vero per asset, per tutti e due i nomi con cui
+   // l'asset e' conosciuto (quello dell'app e quello risolto su MT5).
+   try{ if(currentAssetKey) mt5UltimoTickPerAsset[currentAssetKey]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
+   try{ if(symbol && symbol!==currentAssetKey) mt5UltimoTickPerAsset[symbol]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
+ // tick VERO (non heartbeat): solo lui può aprire una candela nuova. Ora del servizio MT5 (vedi mt5Adesso)
    // METADATI AUTOMATICI: spread REALE, ogni tick ha già bid E ask insieme (a differenza di
    // Capital.com, mai da sperare che ci sia) — throttled a 1 volta ogni 5s per asset, vedi
    // commento gemello in applyLiveTick().
@@ -47247,6 +47263,11 @@ function connectMt5BackgroundStream(asset,symbol){
    let msg; try{msg=JSON.parse(ev.data);}catch(e){return;}
    if(!msg || msg.error || msg.heartbeat)return;
    if(!Number.isFinite(msg.bid))return;
+   // MERCATO DAL PASSAGGIO DATI: stesso principio del canale principale. Il battito (heartbeat)
+   // NON conta: il ponte lo manda ogni 2 secondi anche a mercato chiuso, quindi non e' prova che
+   // il mercato sia aperto. Conta solo il tick vero, cioe' il prezzo che si muove.
+   try{ if(asset) mt5UltimoTickPerAsset[asset]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
+   try{ if(symbol && symbol!==asset) mt5UltimoTickPerAsset[symbol]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
    if(Number.isFinite(msg.ask)&&(Date.now()-(__assetSpreadLastCapturedAt[symbol]||0)>5000)){
      __assetSpreadLastCapturedAt[symbol]=Date.now();
      const __meta=metaFromBidAsk(msg.bid,msg.ask,symbol);
@@ -50960,6 +50981,20 @@ function fblMercatoFermoOra(asset,t){
  try{ if(binanceSymbolForAsset(asset))return false; }catch(e){}
  if(!liveModeActive)return false;
  const quando=Number.isFinite(t)?t:Date.now();
+ // =================== L'AUTORITA' VERA: IL PASSAGGIO DATI ===================
+ // RICHIESTA DEL PROPRIETARIO (10 novembre 2026): se MT5 continua a mandare dati per
+ // l'aggiornamento del grafico il mercato e' aperto; dal momento che si interrompe e non arriva
+ // piu' nessun dato sulle candele, il mercato e' chiuso. Ora e' cosi': si guarda l'ultimo tick
+ // VERO ricevuto per QUESTO asset.
+ // Vale solo per l'adesso: per un istante passato non sappiamo se il feed taceva in quel momento,
+ // e la risposta giusta resta quella di prima (orario/calendario), su cui contano il confine
+ // dell'autosegui e il taglio della coda chiusa.
+ if(mt5Connected){
+   const u=mt5UltimoTickPerAsset[asset];
+   if(u&&Number.isFinite(u.at)&&u.at>0&&quando>=Date.now()-120000){
+     return (Date.now()-u.at)>FBL_MT5_SILENZIO_CHIUSO_MS;
+   }
+ }
  // Con MT5 collegato comanda l'orario con cui l\'app lo segue (fino alle 22, poi fermo).
  if(mt5Connected){ try{ if(liveSessionPhaseAt(quando)==='closed')return true; }catch(e){} }
  // Sempre, MT5 o no: il calendario vero dello strumento, quando Capital.com ce l'ha dato.

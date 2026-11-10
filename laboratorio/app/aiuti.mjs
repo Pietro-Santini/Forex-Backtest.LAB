@@ -70,10 +70,14 @@ export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows
   await contesto.addInitScript(() => {
     class WebSocketFinto {
       constructor(url){ this.url=String(url||''); this.readyState=0; this.bufferedAmount=0;
-        this.onopen=null; this.onmessage=null; this.onerror=null; this.onclose=null; }
+        this.onopen=null; this.onmessage=null; this.onerror=null; this.onclose=null;
+        try{ (window.__wsFinti=window.__wsFinti||[]).push(this); }catch(e){} }
       send(){}
       close(){ this.readyState=3; try{ this.onclose&&this.onclose({code:1000,reason:'banco di prova'}); }catch(e){} }
       addEventListener(){} removeEventListener(){} dispatchEvent(){ return false; }
+      // Aiuto per i test: consegna un messaggio al gestore, come farebbe il ponte.
+      __consegna(dati){ try{ this.onmessage&&this.onmessage({data:typeof dati==='string'?dati:JSON.stringify(dati)}); }catch(e){} }
+      __apri(){ this.readyState=1; try{ this.onopen&&this.onopen({}); }catch(e){} }
     }
     WebSocketFinto.CONNECTING=0; WebSocketFinto.OPEN=1; WebSocketFinto.CLOSING=2; WebSocketFinto.CLOSED=3;
     try{ Object.defineProperty(window,'WebSocket',{configurable:true,writable:true,value:WebSocketFinto}); }catch(e){}
