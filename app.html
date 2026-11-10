@@ -6078,7 +6078,12 @@ function tradeBelongsToCurrentView(t){
    let conn=false; try{ conn=!!mt5Connected; }catch(e){}
    if(conn){
      const login=currentMt5AccountTag().mt5Login;
-     return t.mt5Ticket!=null&&(!login||String(t.mt5Login||'')===login);
+     // CORRETTO (10 novembre 2026): un'operazione reale SENZA mt5Login appartiene al conto
+     // collegato, perche' il ponte interroga un conto solo ed e' da li' che arriva. Prima
+     // bastava un login noto per farla sparire (misurato: senzaLogin=false) - ed era il
+     // «sul conto giusto non vedo le operazioni». Resta esclusa invece quella di un ALTRO
+     // conto, che il login ce l'ha e non combacia.
+     return t.mt5Ticket!=null&&(!login||t.mt5Login==null||String(t.mt5Login)===login);
    }
    return t.mt5Ticket==null;
  }
@@ -6249,6 +6254,16 @@ let isPropFirmMode = false;
 // una Challenge salvata: serve al modulo del capitale per sapere sotto quale chiave di
 // sessionByMode salvare la nuova Challenge una volta confermato l'importo.
 let pendingPropFirmKey = null;
+// PROP FIRM SESSIONE UNICA (richiesta del proprietario, 10 novembre 2026): la fotografia dei
+// disegni e della vista del grafico della sessione di origine, scattata PRIMA di passare in
+// Prop Firm. Prima non erano dichiarate da nessuna parte: attivando la Prop Firm il codice
+// che doveva ripristinarle sollevava "pfSourceDrawings is not defined" e il ripristino non
+// avveniva mai (misurato: disegni della base arrivati 0 su 3).
+let pfSourceDrawings=null, pfSourceAsset=null, pfSourceMode=null;
+// La vista del grafico della sessione di origine (timeframe e candele visibili): senza questa
+// fotografia, attivando la Prop Firm il grafico ripartiva da timeframe 1m con lo zoom di
+// default invece di restare dov'era (misurato: currentTF 5 -> 1).
+let pfSourceView=null;
 // true SOLO quando il modulo capitale si apre per la PRIMISSIMA attivazione di questa
 // combinazione (subito dopo aver scelto Storico/Live in onPropFirmToggleClick): in quel caso
 // annullare il modulo deve riportare isPropFirmMode a false (si stava ancora "entrando").
@@ -6286,6 +6301,16 @@ function closePropFirmModeChoiceModal(){
 /* ---- STEP C: scelta fatta -> passa (se serve) su Storico/Live, poi entra in Prop Firm ---- */
 async function proceedEnablePropFirm(targetIsLive){
   closePropFirmModeChoiceModal();
+  // PROP FIRM SESSIONE UNICA: fotografa ORA disegni e vista, prima che la creazione della
+  // Challenge azzeri tutto. Crea la Prop Firm sulla STESSA sessione dell'utente, non su una
+  // copia vuota: cambia solo la modalita' di rischio.
+  try{
+    pfSourceDrawings = Array.isArray(drawings)?drawings.slice():null;
+    pfSourceAsset = currentAssetKey||null;
+    pfSourceMode = currentMode();
+    pfSourceView = {tf:(typeof currentTF==='number'?currentTF:null),
+                    visibili:(typeof visibleCount==='number'?visibleCount:null)};
+  }catch(e){ pfSourceDrawings=null; pfSourceAsset=null; pfSourceMode=null; }
   // La Prop Firm su LIVE richiede una sessione Capital.com valida, esattamente come il normale
   // passaggio a Live dal pulsante 📼/🔴 in alto: prima si tenta con le credenziali salvate in
   // automatico (silenzioso, nessun popup); solo se non bastano si apre il login — in modo
@@ -6346,20 +6371,7 @@ async function proceedEnablePropFirm(targetIsLive){
     }
   });
   if(startWithRealMt5Capital!=null) await startNewPropFirmChallenge(startWithRealMt5Capital);
-    // --- Prop Firm sessione unica: ripristina disegni e vista grafico dalla sessione live di origine ---
-    if(pfSourceDrawings && pfSourceDrawings.length){
-      drawings = pfSourceDrawings.slice();
-      if(sessionByMode[key]) sessionByMode[key].drawings = pfSourceDrawings.slice();
-      if(pfSourceAsset){
-        if(!assetDrawings[key]) assetDrawings[key] = {};
-        assetDrawings[key][pfSourceAsset] = pfSourceDrawings.slice();
       }
-    }
-    if(pfSourceAsset && assetChartViews['live'] && assetChartViews['live'][pfSourceAsset]){
-      if(!assetChartViews[key]) assetChartViews[key] = {};
-      assetChartViews[key][pfSourceAsset] = { ...assetChartViews['live'][pfSourceAsset] };
-    }
-  }
 
 /* ---- STEP D: conferma capitale -> crea la Challenge da zero per la chiave in sospeso ---- */
 async function startNewPropFirmChallenge(initialCapital){
@@ -6368,6 +6380,33 @@ async function startNewPropFirmChallenge(initialCapital){
   await withLoadingOverlay('Creazione Challenge Prop Firm…', async()=>{
     positions=[]; active=null; pendingOrders=[]; drawings=[];
     equity=[initialCapital];
+    // PROP FIRM SESSIONE UNICA: rimetti i disegni della sessione di origine. La Challenge
+    // parte pulita (sopra) e poi si recupera cio' che l'utente aveva disegnato: stessa
+    // sessione, non una copia vuota.
+    try{
+      if(pfSourceDrawings && pfSourceDrawings.length){
+        drawings = pfSourceDrawings.slice();
+        if(sessionByMode[key] && typeof sessionByMode[key]==='object') sessionByMode[key].drawings = pfSourceDrawings.slice();
+        if(pfSourceAsset){
+          if(!assetDrawings[key] || typeof assetDrawings[key] !== 'object') assetDrawings[key] = {};
+          assetDrawings[key][pfSourceAsset] = pfSourceDrawings.slice();
+        }
+      }
+      // Anche timeframe e zoom: prima ripartivano da 1m con la vista di default.
+      try{
+        if(pfSourceView){
+          if(Number.isFinite(pfSourceView.tf)&&pfSourceView.tf>0&&currentTF!==pfSourceView.tf){ currentTF=pfSourceView.tf; }
+          if(Number.isFinite(pfSourceView.visibili)&&pfSourceView.visibili>0&&visibleCount!==pfSourceView.visibili){ visibleCount=pfSourceView.visibili; }
+          const _sl=$('tf'); if(_sl&&Number.isFinite(pfSourceView.tf)) _sl.value=String(pfSourceView.tf);
+        }
+      }catch(e){}
+      const _srcMode = pfSourceMode || 'live';
+      if(pfSourceAsset && assetChartViews && assetChartViews[_srcMode] && assetChartViews[_srcMode][pfSourceAsset]){
+        if(!assetChartViews[key] || typeof assetChartViews[key] !== 'object') assetChartViews[key] = {};
+        assetChartViews[key][pfSourceAsset] = { ...assetChartViews[_srcMode][pfSourceAsset] };
+      }
+    }catch(e){}
+    pfSourceDrawings=null; pfSourceAsset=null; pfSourceMode=null; pfSourceView=null;
     if($('capital')) $('capital').value=String(initialCapital);
     // STEP 2: capitale iniziale fisso della Challenge (usato dal motore di rischio per il Max
     // Drawdown) e azzeramento del motore di rischio (nuova Challenge = nuova giornata/nessuna
@@ -6415,9 +6454,13 @@ function finalizePropFirmModeChange(){
   // chiuso finché non si preme "Ricomincia da capo", non basta cambiare sessione e tornare.
   if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
   else hidePropFirmViolationOverlay();
-  // Il pannellino drawdown si nasconde subito uscendo dalla Prop Firm (checkPropFirmRules, che
-  // lo aggiorna, non gira più finché isPropFirmMode è false).
-  if(!isPropFirmMode){ const dp=$('pfDailyDDPanel'), mp=$('pfMaxDDPanel'); if(dp)dp.style.display='none'; if(mp)mp.style.display='none'; hidePfMt5IneligibleModal(); pfPendingDecisionLogin=null; }
+  // Il pannellino drawdown e le caselle dei guadagni si nascondono subito uscendo dalla Prop Firm
+  // (checkPropFirmRules, che li aggiorna, non gira più finché isPropFirmMode è false).
+  // CORRETTO (10 novembre 2026): qui si nascondevano SOLO le due caselle del drawdown, mentre le
+  // cinque del guadagno (gain effettivo, profitto effettivo, profitto netto, profitto effettivo
+  // euro, guadagno effettivo prop firm) restavano a schermo da SPENTE — misurato 5 su 7. La
+  // funzione sotto, con isPropFirmMode false, le nasconde tutte e sette.
+  if(!isPropFirmMode){ updatePropFirmDrawdownDisplay(0,0,0,'','EUR'); hidePfMt5IneligibleModal(); pfPendingDecisionLogin=null; }
   else maybeEvaluatePfMt5Account(); // entrando in Prop Firm Live con MT5 già collegato: controllo subito il conto
   update(); draw();
   scheduleSave();
@@ -8775,7 +8818,12 @@ function broadcastTradingStateNow(){
  // IL CONTO SCELTO viaggia con lo stato (voce 5, 8 novembre 2026): una finestra duplicata
  // nasce in Storico e non ha modo di sapere su che conto sta lavorando la madre. Da qui in
  // poi lo sa, perche' glielo dice lo stesso messaggio che porta posizioni e ordini.
- try{ p.conto = {vivo: liveModeActive, vista: fblContoEffettivo()}; }catch(e){}
+ // CORRETTO (10 novembre 2026): qui si SOSTITUIVA p.conto con {vivo,vista}, e il campo mt5
+ // (login+server) che collectTradingSyncPayload() aveva messo andava perduto. Misurato: con
+ // MT5 collegato, fra due finestre non passava piu' nessun aggiornamento di posizioni o
+ // ordini, nemmeno quelle del proprio conto (il filtro del ricevente non trovava il conto).
+ // Ora si UNISCE: vivo/vista restano quelli di qui, il resto (mt5) resta quello costruito.
+ try{ p.conto = {vivo: liveModeActive, vista: fblContoEffettivo(), ...(p.conto||{})}; }catch(e){}
  if(!tradingSyncRicevuto && !fblStatoDaAnnunciare(p)){
   // Niente ricevuto e niente di proprio: tacere e' l'unica cosa giusta.
   return;
@@ -9131,7 +9179,12 @@ if(tradingChannel){
          positions=Array.isArray(msg.positions)?msg.positions:positions;
          pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
        }
-       trades=Array.isArray(msg.trades)?msg.trades:trades;
+       // Anche i TRADE CHIUSI passano per lo stesso filtro. Misurato (10 novembre 2026): questa
+       // riga stava FUORI dal filtro qui sopra, cosi' un trade di un altro conto MT5 entrava in
+       // `trades` senza che nessuno lo controllasse - ed e' lo "spam tra account" che il
+       // proprietario teme. Il Trade Journal resta globale per scelta, ma non si riempie delle
+       // operazioni di un conto che non e' il suo.
+       if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades:trades;
        equity=Array.isArray(msg.equity)?msg.equity:equity;
        if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
        if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
@@ -9261,6 +9314,13 @@ if(tradingChannel){
 // chiamata di accesso, nessun suono, nessun secondo collegamento.
 if(msg.mt5Connected && !mt5Connected){
           mt5Connected=true;
+          // CORRETTO (10 novembre 2026): la duplicata ereditava SOLO il flag e restava senza sapere
+          // su CHE conto si e'. Misurato: cosi' currentMt5AccountTag() risponde {} e il filtro delle
+          // posizioni (positionBelongsToCurrentView) lascia passare TUTTE le operazioni con ticket,
+          // comprese quelle di un altro conto. La madre invia gia' mt5CredsDraft nello stesso
+          // messaggio: ereditarlo non e' un secondo collegamento (nessuna chiamata, nessun suono),
+          // e' sapere su che conto si sta guardando — come tutte le altre finestre.
+          try{ if(msg.mt5CredsDraft && !mt5CredsDraft){ mt5CredsDraft=msg.mt5CredsDraft; } }catch(e){}
           try{ updateMt5ModeUI(); }catch(e){}
           try{ tradingChannel&&tradingChannel.postMessage({type:'trading_sync_request',slot:PIP_SLOT}); }catch(e){}
           console.log('[Finestra] MT5 risulta collegato dalla finestra principale: ereditato lo stato, nessun secondo accesso');
@@ -13608,7 +13668,10 @@ function positionBelongsToCurrentView(pos){
  let conn=false; try{ conn=!!mt5Connected; }catch(e){}
  if(conn){
     const login=currentMt5AccountTag().mt5Login;
-    return pos.mt5Ticket!=null&&(!login||String(pos.mt5Login||'')===login);
+    // CORRETTO (10 novembre 2026), la stessa cura di tradeBelongsToCurrentView: una posizione
+    // reale senza mt5Login e' del conto collegato (il ponte ne interroga uno solo), quindi non
+    // va nascosta. Quella di un altro conto ha il login e non combacia: resta fuori.
+    return pos.mt5Ticket!=null&&(!login||pos.mt5Login==null||String(pos.mt5Login)===login);
   }
   return true;
 }
@@ -18651,7 +18714,12 @@ function draw(){
  const _footprintImbColor=footprintImbalanceColorNow();
  const _footprintImbAlpha=footprintImbalanceOpacityNow();
  const _FOOTPRINT_MIN_BW=footprintMinBwNow();
- const bw=Math.max(2,Math.min(_footprintOn?90:12,cw/n*.62));
+  // CORRETTO (10 novembre 2026): il corpo aveva un PAVIMENTO di 2 px mentre la colonna disponibile
+ // (cw/n) puo' scendere molto piu' in basso. Misurato: con 864 candele (3 giorni a 5m) la colonna
+ // era 1,32 px e il corpo 2 px, cioe' ogni candela sconfina nella vicina e il grafico diventa un
+ // unico blocco bianco/blu — il difetto del proprietario. Ora il corpo non supera mai la colonna
+ // e scende a 1 px soltanto quando la colonna e' davvero stretta.
+ const bw=Math.max(1,Math.min(_footprintOn?90:12,cw/n*.62,cw/n));
  // Il passo UNICO di tutte le righe del footprint in questo giro di disegno (scala uniforme):
  // calcolato una volta per tutte le candele, non bucket per bucket.
  const _footprintStepGlobale=(()=>{ try{ return footprintStepForAsset(currentAssetKey)||0; }catch(e){ return 0; } })();
@@ -47639,10 +47707,18 @@ async function fblCandeleCacheLeggi(asset,tf){
   try{
     const v=await idbGet(fblCandleCacheKey(asset,tf));
     if(!v||!v.tempo||!v.tempo.length) return null;
-    // ricostruisce le righe nel formato atteso dal grafico
+    // ricostruisce le righe nel formato atteso dal grafico.
+    // CORRETTO (10 novembre 2026): la data era scritta SENZA fuso ("2026-11-09 21:49:00") e
+    // parseDateTime la rileggeva col fuso dei CSV (America/New_York, apposta per i file
+    // importati): ogni candela del magazzino finiva spostata di 5 ore (4 d'estate). Misurato:
+    // l'asse del grafico arrivava a "10 nov 03:49" invece di fermarsi alle 22:49, le caselle
+    // delle posizioni scivolavano via di centinaia di pixel, e il confine della chiusura non
+    // trovava piu' la coda chiusa perche' guardava l'orario dei dati. Le candele che manda il
+    // ponte hanno gia' la forma ISO con la Z (toISOString): da qui in poi anche il magazzino.
     const rows=[];
     for(let i=0;i<v.tempo.length;i++){
-      rows.push({date:new Date(v.tempo[i]*1000).toISOString().replace('T',' ').slice(0,19),
+      const _ms=(typeof v.tempo[i]==='number')?v.tempo[i]*1000:NaN;
+      rows.push({date:new Date(_ms).toISOString(),
                  time:v.tempo[i], open:v.open[i], high:v.high[i], low:v.low[i], close:v.close[i],
                  volume:v.volume[i]});
     }
