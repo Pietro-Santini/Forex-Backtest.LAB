@@ -26,6 +26,13 @@ const SENZA_ORARIO = () => {
     {simbolo: 'PF_ETHUSD', lato: 'SELL', quantita: 3, entrata: 2500, mark: 2560, sl: 2520, tp: [], pnl: 0}
   ]};
   krakenPendenti = [];
+  // Immunizzazione MISURATA (10 novembre 2026): il poll dell'app ogni 3,5 s chiama
+  // krakenAggiornaConto(), che col ponte spento SOSTITUISCE krakenConto con un oggetto
+  // d'errore; krakenPosPannello() lo vede «non collegato» e svuota il pannello. Misurato:
+  // la tabella sparisce 400 ms dopo essere comparsa, e sotto parallelizzazione il test
+  // trovava il pannello gia' vuoto (TypeError). Da solo passava perche' il tempo giocava a
+  // favore. Ora il poll non tocca piu' lo stato preparato dal banco.
+  krakenAggiornaConto = () => {};
   krakenPosPannello();
 };
 
@@ -96,6 +103,8 @@ test('con l\'orario vero dell\'exchange la cella non si corregge', async () => {
         {simbolo: 'PF_ETHUSD', lato:'SELL', quantita:3, entrata:2500, mark:2560, sl:2520, tp:[], pnl:0, aperta_ms: d.getTime()}
       ]};
       krakenPendenti = [];
+      // Stessa immunizzazione di SENZA_ORARIO: il poll non deve svuotare il pannello.
+      krakenAggiornaConto = () => {};
       krakenPosPannello();
     }`.replace(/simbolo/g,'simbolo'));
     assert.match(r.testo, /\d{2}:\d{2}/, 'c\'è l\'orario vero: si mostra quello');
