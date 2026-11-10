@@ -31,7 +31,16 @@ const APP_ATTUALE = fs.readFileSync(path.join(RADICE, 'app.html'));
 // ATTENZIONE: era 'HEAD:app.html', e finche' la cura non era pubblicata HEAD conteneva
 // davvero la versione rotta. Pubblicata la cura, HEAD la contiene anche lui, e il confronto
 // "prima/dopo" non misurava piu' niente (misurato: i due file erano identici).
-const APP_VECCHIA = execFileSync('git', ['show', '7dcf55f:app.html'], {cwd: RADICE, maxBuffer: 64 * 1024 * 1024});
+// GitHub fa il checkout con profondita' 1: la storia non c'e' e `git show <commit>` FALLISCE.
+// Misurato: su GitHub questo file cadeva intero (exitCode 1) per colpa di quella riga,
+// mentre in locale passava - il solito collaudo che dipende da dove gira. Ora la versione
+// "prima" e' un dato che PUO' mancare, e il primo test lo dice invece di rompersi.
+let APP_VECCHIA = null;
+try {
+  APP_VECCHIA = execFileSync('git', ['show', '7dcf55f:app.html'], {cwd: RADICE, maxBuffer: 64 * 1024 * 1024});
+} catch (e) {
+  console.log('STORIA GIT ASSENTE (clone superficiale): il confronto prima/dopo si salta');
+}
 // La porta NON e' la 8000 ne' la 8001: su questo computer girano il ponte e il servizio dati
 // VERI del proprietore, e un banco di prova non li tocca. Non cambia niente della misura:
 // l'app guarda il nome dell'host (localhost), non la porta.
@@ -117,6 +126,7 @@ async function misura(APP) {
 }
 
 test('MISURA con la app.html DI OGGI SU GITHUB PAGES (HEAD): riproduce il log del telefono', async () => {
+  if(!APP_VECCHIA){ console.log('salta: senza storia git non cè la versione di prima da misurare'); return; }
   const r = await misura(APP_VECCHIA);
   console.log('APP_VECCHIA:', JSON.stringify(r, null, 1));
   // L'origine dell'APK viene presa per "qui gira il ponte del computer".

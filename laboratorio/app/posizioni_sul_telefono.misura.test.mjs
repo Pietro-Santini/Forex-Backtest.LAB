@@ -299,6 +299,15 @@ test('MISURA: senza BroadcastChannel il canale fra finestre si spegne senza romp
 // =====================================================================
 test('MISURA: la copia che gira sul telefono è vecchia di quanto?', async () => {
   const leggi=(f)=>{ try{ return fs.readFileSync(f,'utf8'); }catch(e){ return ''; } };
+  // Le copie mobile NON stanno in git: mobile/.gitignore esclude www/ e la cartella dei file
+  // dentro l'APK. Su GitHub il clone non ce l'ha e questa misura non direbbe niente - misurava
+  // l'ambiente, non l'app (la trappola che questo progetto ha gia' pagato). Saltata con un
+  // messaggio, invece di essere rossa per colpa di un clone diverso da quello del proprietario.
+  if(!fs.existsSync(path.join(RADICE,'mobile','www','app.html'))
+     && !fs.existsSync(path.join(RADICE,'mobile','android','app','src','main','assets','public','app.html'))){
+    console.log('COPIE MOBILI: assenti in questo clone (sono fuori da git): misura saltata');
+    return;
+  }
   const radice=leggi(path.join(RADICE,'app.html'));
   const www=leggi(path.join(RADICE,'mobile','www','app.html'));
   const apk=leggi(path.join(RADICE,'mobile','android','app','src','main','assets','public','app.html'));
