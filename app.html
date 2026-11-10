@@ -36693,9 +36693,12 @@ function fblServiziElenco(){
    // Quello che c'e' scritto e' la strada che si sta USANDO davvero, non quella che si suppone.
    dove: fblGraficoVia==='server'?'computer, tramite il server'
         :fblGraficoVia==='diretto'?'computer, in diretta'
+        :fblGraficoVia==='locale'?'questo computer'
         :'computer',
-   url: fblGraficoVia==='server'?fblServerConChiave(fblServerUrl(8000)+'/pc/8001/health')
-                                :fblConChiave(fblBaseUrl(8001)+'/health')},
+   // CORRETTO (10 novembre 2026): provava fblBaseUrl(8001), un indirizzo che il feed NON usa
+   // (quello vero e' fblUrlGrafico()). Misurato: il pallino confermava una strada diversa da
+   // quella che gira - ed e' il difetto che questo progetto ha gia' pagato.
+   url: fblConChiave(fblUrlGrafico()+'/health')},
   {chiave:'segnali', nome:'Segnali', dove: srv?'server':'computer',
    url: srv?perServer(8769,'/health'):fblConChiave(fblBaseUrl(8769)+'/health')}
  ];
@@ -38950,9 +38953,12 @@ function fblAscoltaDocumento(o){
    laboratorio/app/collegamento_cloud.test.mjs, con magazzini e «nuvola» finti: le due
    chiavi arrivano dal test come parametri. */
 function fblCollegamentoHostValido(host){
- // Solo nome tailscale, entro la lunghezza di un nome DNS: il documento arriva da un altro
- // dispositivo, e fidarsi senza controllare e' peggio che non riceverlo affatto.
- return typeof host==='string'&&host.length>0&&host.length<=255&&/^[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net$/.test(host);
+ // Il nome del computer via Tailscale (.ts.net) O il dominio proprio/github.io (R3, 9 novembre
+ // 2026). Misurato: prima accettava SOLO .ts.net, quindi il documento del collegamento arrivato
+ // da un altro dispositivo RIFIUTAVA l'host nuovo e il telefono restava su quello vecchio in
+ // memoria - ed e' cosi' che "ts.net" continuava a comparire anche dopo la cura R3.
+ return typeof host==='string'&&host.length>0&&host.length<=255
+   &&(/^[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net$/.test(host)||/^[A-Za-z0-9][A-Za-z0-9.-]*\.github\.io$/.test(host));
 }
 function fblCollegamentoPrepara(store){
  // Cosa QUESTO dispositivo puo' pubblicare: solo un collegamento COMPLETO (host E chiave),
@@ -39196,7 +39202,17 @@ let fblGraficoVia=null;
 function fblGraficoUrlLocale(){
   try{
     const u=new URL(location.origin);
-    if(u.hostname==='127.0.0.1'||u.hostname==='localhost'||u.hostname==='[::1]')return 'http://'+u.hostname+':8001';
+    const locale=(u.hostname==='127.0.0.1'||u.hostname==='localhost'||u.hostname==='[::1]');
+    if(!locale)return null;
+    // CORRETTO (10 novembre 2026): qui bastava l'hostname locale, cosi' dentro l'APK (origine
+    // https://localhost, porta qualunque) il grafico puntava a http://localhost:8001, cioe' al
+    // telefono STESSO, che non ha nessun servizio dati: da qui il «servizio Grafico non
+    // raggiungibile» del pannello e la caduta del grafico su Capital.com. Ora l'indirizzo locale
+    // del feed si usa solo se la pagina viene davvero dal ponte di QUESTO computer (stessa regola
+    // di fblPaginaDalPonteLocale) oppure se e' un file aperto direttamente: allora il computer e'
+    // questo e il feed gli sta accanto.
+    if(location.protocol==='file:')return 'http://'+u.hostname+':8001';
+    return fblPaginaDalPonteLocale()?('http://'+u.hostname+':8001'):null;
   }catch(e){}
   return null;
 }
@@ -39253,7 +39269,13 @@ function fblPaginaDalPonteLocale(indirizzo){
     if(!/^https?:\/\//i.test(o))return false;   // file:// o altro: non si sa niente
     const u=new URL(o);
     if(u.hostname!=='127.0.0.1'&&u.hostname!=='localhost'&&u.hostname!=='[::1]')return false;
-    return true;
+    // CORRETTO (10 novembre 2026): qui si guardava SOLO l'hostname, non la porta. Misurato sul
+    // telefono: l'APK Capacitor carica i file dal server locale del WebView, la cui origine è
+    // http://localhost (porta qualunque), quindi questa funzione rispondeva «sì, la pagina la
+    // serve il ponte» anche sul telefono - e le posizioni venivchieste al telefono stesso, che
+    // non ha nessun ponte. Il ponte sta sulla 8000 e nient'altro: se la porta non è quella, non
+    // è il ponte. Sul PC nulla cambia (la pagina è servita da http://127.0.0.1:8000).
+    return u.port==='8000';
   }catch(e){ return false; }
 }
 function fblUrlOrdini(){

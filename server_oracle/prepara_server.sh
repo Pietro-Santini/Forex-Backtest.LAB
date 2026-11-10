@@ -48,6 +48,11 @@ sudo docker compose -f "$DIR/server_oracle/docker-compose.yml" up -d --build
 echo "== 6) Pubblicazione su Tailscale (HTTPS, solo per i tuoi dispositivi)"
 sudo tailscale serve --bg --https=8000 http://127.0.0.1:8000
 sudo tailscale serve --bg --https=8769 http://127.0.0.1:8769
+# Il servizio DATI del grafico (Mt5FeedServer) sta sulla 8001 e ascolta solo su 127.0.0.1
+# (mt5_feed_server.py). Misurato (10 novembre 2026): senza questa riga, dal telefono "Ordini"
+# e "Segnali" rispondono e il "Grafico" no - perche' la 8001 non era pubblicata, e il grafico
+# cadeva su Capital.com. Pubblicata anche lei, le tre strade funzionano insieme.
+sudo tailscale serve --bg --https=8001 http://127.0.0.1:8001
 sleep 3
 curl -fsS http://127.0.0.1:8000/health && echo
 NOME=$(tailscale status --json | python3 -c "import sys,json;print(json.load(sys.stdin)['Self']['DNSName'].rstrip('.'))")
