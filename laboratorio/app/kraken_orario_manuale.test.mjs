@@ -34,6 +34,13 @@ test('la cella «Eseguita» si clicca e la posizione si data a mano', async () =
   try{
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
+      // Il pannello Kraken si ridisegna da un timer: con il collaudo che gira quattro file in
+      // parallelo il primo giro poteva non essere ancora passato e "#krakenPosPanel table"
+      // era assente -> TypeError (misurato: rosso in collaudo, verde da solo). Ora si aspetta
+      // che la tabella CI SIA, invece di dormire un tempo fisso.
+      for(let attesa=0; attesa<60 && !document.querySelector('#krakenPosPanel table'); attesa++){
+        await new Promise(r2 => setTimeout(r2, 50));
+      }
       const iEse = [...document.querySelectorAll('#krakenPosPanel th')]
         .map(t => t.textContent.trim()).indexOf('Eseguita');
       const cella = () => document.querySelector('#krakenPosPanel table')

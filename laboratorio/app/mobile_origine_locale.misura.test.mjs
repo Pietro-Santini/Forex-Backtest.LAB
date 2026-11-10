@@ -10,7 +10,7 @@
 //   "Simulato: i dati del conto MT5 non arrivano (risposta non valida)"
 //
 // Qui si misura la STESSA app.html in due versioni:
-//   - VECCHIA  = `git show HEAD:app.html`, quella che sta su GitHub Pages e dentro l'APK;
+//   - VECCHIA  = `git show 7dcf55f:app.html`, la versione pubblicata prima della cura;
 //   - ATTUALE  = il file di lavoro (con la cura del 10 novembre 2026 su fblPaginaDalPonteLocale).
 // La pagina viene servita da http://localhost:PORTA (hostname Â«localhostÂ», come
 // https://localhost dentro la WebView di Capacitor). Il server locale risponde 200 a
@@ -27,7 +27,11 @@ import {chromium} from './aiuti.mjs';
 
 const RADICE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const APP_ATTUALE = fs.readFileSync(path.join(RADICE, 'app.html'));
-const APP_VECCHIA = execFileSync('git', ['show', 'HEAD:app.html'], {cwd: RADICE, maxBuffer: 64 * 1024 * 1024});
+// La versione PRIMA della cura mobile del 10 novembre 2026 (v2.2.18, commit 7dcf55f).
+// ATTENZIONE: era 'HEAD:app.html', e finche' la cura non era pubblicata HEAD conteneva
+// davvero la versione rotta. Pubblicata la cura, HEAD la contiene anche lui, e il confronto
+// "prima/dopo" non misurava piu' niente (misurato: i due file erano identici).
+const APP_VECCHIA = execFileSync('git', ['show', '7dcf55f:app.html'], {cwd: RADICE, maxBuffer: 64 * 1024 * 1024});
 // La porta NON e' la 8000 ne' la 8001: su questo computer girano il ponte e il servizio dati
 // VERI del proprietore, e un banco di prova non li tocca. Non cambia niente della misura:
 // l'app guarda il nome dell'host (localhost), non la porta.
@@ -142,7 +146,7 @@ test('MISURA con la app.html DI OGGI SU GITHUB PAGES (HEAD): riproduce il log de
   assert.equal(r.feedUrl, 'http://localhost:8001');
 });
 
-test('MISURA con la cura del 10 novembre: ordini a posto, grafico ancora no', async () => {
+test('MISURA con la cura del 10 novembre: ordini E grafico a posto', async () => {
   const r = await misura(APP_ATTUALE);
   console.log('APP_ATTUALE:', JSON.stringify(r, null, 1));
   // CURATO: l'origine dell'APK non e' piu' scambiata per il ponte.
@@ -150,9 +154,10 @@ test('MISURA con la cura del 10 novembre: ordini a posto, grafico ancora no', as
   assert.equal(r.localePc, true, 'sul PC la pagina e\' servita dal ponte sulla 8000');
   assert.notEqual(r.sceltaOrdini, 'locale');
   assert.ok(String(r.urlOrdini).indexOf('pietro.tail83d918.ts.net:8000/pc/8000') >= 0, r.urlOrdini);
-  // MA il grafico no: fblGraficoUrlLocale guarda ancora solo l'hostname.
-  assert.equal(r.graficoUrlLocale, 'http://localhost:8001',
-               'fblGraficoUrlLocale non e\' stata curata: accetta qualsiasi origine localhost');
-  assert.equal(r.urlGrafico, 'http://localhost:8001');
-  assert.equal(r.feedUrl, 'http://localhost:8001');
+  // E il grafico: fblGraficoUrlLocale guarda la STESSA regola (porta 8000), quindi non
+  // restituisce piu' http://localhost:8001 - che dentro l'APK e' il telefono stesso.
+  assert.equal(r.graficoUrlLocale, null,
+               'fblGraficoUrlLocale non deve piu accettare qualsiasi origine localhost');
+  assert.ok(String(r.urlGrafico).indexOf('pietro.tail83d918.ts.net') >= 0, r.urlGrafico);
+  assert.ok(String(r.feedUrl).indexOf('pietro.tail83d918.ts.net') >= 0, r.feedUrl);
 });
