@@ -43,7 +43,7 @@ export function lanciaChromium(){
 // dice esplicitamente - vedi pacchetti_non_windows.test.mjs, che apre la pagina con la sua
 // piattaforma. Cosi' il risultato e' lo stesso ovunque giri.
 const UA_WINDOWS = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36';
-export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows', userAgent=UA_WINDOWS, query=''}={}){
+export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows', userAgent=UA_WINDOWS, query='', primaDiNavigare=null}={}){
   const opz = {};
   // Nel contenitore cloud Chromium e' gia' installato qui; su GitHub lo installa il flusso.
   for(const p of ['/opt/pw-browsers/chromium-1194/chrome-linux/chrome']) if(fs.existsSync(p)) opz.executablePath = p;
@@ -86,6 +86,12 @@ export async function apriApp({larghezza=1300, altezza=850, piattaforma='Windows
   const errori = [];
   pagina.on('pageerror', e => errori.push(String(e).slice(0,300)));
   await pagina.route('**', r => r.request().url().startsWith('file://') ? r.continue() : r.abort());
+  // GANCIO PER I BANCHI CHE DEVONO SOSTITUIRE UNA RISORSA ESTERNA (10-11 novembre 2026).
+  // Serve al modulo cloud: Firebase arriva da un CDN e il banco blocca la rete, quindi il
+  // modulo non partiva mai e `window.fxbtCloud` non esisteva. Chi ha bisogno di una risorsa
+  // finta la registra QUI, prima della navigazione (le rotte registrate dopo hanno la
+  // precedenza su quella larga qui sopra).
+  if(primaDiNavigare) await primaDiNavigare(pagina);
   // `query` serve ai test delle FINESTRE DUPLICATE: l'app capisce di essere una copia dalla
   // querystring (?pipSlot=N), esattamente come quando la apre il pulsante «Duplica finestra».
   await pagina.goto('file://' + path.join(RADICE, 'app.html') + (query||''), {waitUntil:'domcontentloaded'});
