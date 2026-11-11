@@ -13,6 +13,18 @@ if not exist "%JAVA_HOME%\bin\java.exe" (
   echo Installa una JDK 21 oppure correggi JAVA_HOME qui sopra.
   exit /b 1
 )
+rem I DUE INCIAMPI CHE GRADLE SPIEGA MALE (misurati il 10 novembre 2026, compilando la 2.2.24):
+rem  - "SDK location not found": qui non c'e' local.properties (giusto: il percorso dell'SDK cambia
+rem    da computer a computer) e nessuno dichiarava ANDROID_HOME;
+rem  - "No matching variant of project :capacitor-android ... No variants exist": mancavano le
+rem    librerie Capacitor in mobile\node_modules (serviva "npm ci").
+rem prepara_apk.mjs li risolve prima di Gradle, e se non puo' li spiega in italiano.
+node "%~dp0..\strumenti\prepara_apk.mjs" --radice "%~dp0.."
+if errorlevel 1 (
+  echo.
+  echo COMPILAZIONE NON AVVIATA: manca qualcosa per Gradle ^(vedi sopra^).
+  exit /b 1
+)
 set "APKSIGNER=C:\Users\pietro\AppData\Local\Android\Sdk\build-tools\35.0.0\apksigner.bat"
 set "KEYSTORE=C:\Users\pietro\.android\debug.keystore"
 set "APKDIR=%~dp0android\app\build\outputs\apk\debug"

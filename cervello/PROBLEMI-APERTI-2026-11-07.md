@@ -195,3 +195,39 @@ e si pubblica solo a collaudo verde. Le migliorie (finestre duplicate) aspettano
   all'ultima candela) e curare. Le linee di un ordine pendente sono INFORMAZIONE, non carico:
   devono vedersi anche a mercato chiuso, esattamente come le candele del passato.
 - Stato: CURATO in v2.1.9 (il tetto di viewEnd a mercato chiuso e' l'ultima candela aperta).
+
+## NUOVO PROGETTO — REPLAY SINCRONIZZATO SU TUTTE LE FINESTRE (10 novembre 2026)
+
+Richiesta del proprietario, testuale: «per quanto riguarda la modalita' replay, vorrei che se
+abbiamo delle pagine duplicate e scegliamo di entrare in modalita' replay su una delle pagine,
+prima di tutto tutte le altre pagine mi vanno in modalita' replay con il conto associato in
+storico. E quando clicco il pulsante play, deve funzionare per tutte le pagine, sia la pagina
+madre che le pagine duplicate. Quindi, se pigio per esempio il tasto play sulla pagina madre,
+avanzano allo stesso momento, in maniera sincronizzata, allo stesso tempo, quindi anche il
+moltiplicatore di velocita' sara' lo stesso spalmato sulle finestre, e andra' avanti allo stesso
+momento per tutte le finestre duplicate. Uguale anche se lo avvio per esempio su una pagina
+duplicata, me lo trasporta sulla pagina principale e sulle altre pagine duplicate che sono state
+create. Questo per poter permettere di vedere magari piu' time frame diversi su finestre diverse
+e anche gli indicatori come si comportano in maniera diversa su piu' schermi, su piu' finestre.»
+
+### Cosa deve fare, in concreto
+1. Entrare in replay su UNA finestra → TUTTE le finestre (madre + duplicate) entrano in replay,
+   con il conto associato in Storico.
+2. Il play/pausa vale per tutte: premuto sulla madre avanzano tutte, premuto su una duplicata
+   avanzano tutte (madre compresa).
+3. Stesso punto del tempo, stesso moltiplicatore di velocita', stesso momento su tutte.
+4. Time frame diversi su finestre diverse devono restare possibili: la sincronizzazione e' sul
+   TEMPO, non sul time frame ne' sugli indicatori (quelli restano di ogni finestra, come oggi).
+
+### Registro dei compiti (sub-agent, misurati e collaudati)
+- [ ] A. Canale: estendere il BroadcastChannel 'trading_sync_v1' (o riusare il ramo esistente)
+      con un messaggio 'replay_sync' che porta {inReplay, asset, masterTime, velocita', inPausa}.
+- [ ] B. Ingresso in replay: `switchAccountMode(false)` / il pulsante replay su una finestra
+      devono annunciare, e le altre applicare.
+- [ ] C. Play/pausa/velocita': un solo orologio maestro (la finestra che ha premuto play),
+      le altre seguono senza rimandare indietro (niente ciclo). Misura: due finestre, play su
+      una, l'altra deve avere lo stesso masterTime entro un giro.
+- [ ] D. Banchi rossi-verdi in laboratorio/app/*.test.mjs (madre + duplicata ?pipSlot=2).
+- [ ] E. Collaudo completo + pubblicazione.
+
+Stato: DA FARE (dopo il commit in corso).

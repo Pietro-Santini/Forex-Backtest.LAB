@@ -16,6 +16,15 @@
 //
 // Ora il ponte manda anche `avviato` (vedi aggiorna_programma_dettaglio in bridge.py, con i suoi
 // test in laboratorio/ponte/test_aggiorna_programma.py) e qui si guarda quello.
+//
+// RIMISURATO il 10 novembre 2026, pero': quella cura lasciava il difetto per l'altra meta'.
+// SEGNALATO: «premo aggiorna, mi esce il popup, si chiude dopo 2 secondi e non fa
+// letteralmente nulla nemmeno il refresh». CAUSA MISURATA nei log del ponte dello stesso
+// giorno: /aggiorna-programma rispondeva ok:true avviato:false («il programma e' gia' alla
+// 2.2.24: non c'e' niente da installare») - il ramo giusto - e il velo spariva lasciando
+// una riga di stato che non si legge. Il primo clic aveva installato DAVVERO (sei POST
+// /aggiorna-programma nei log, installer chiuso e riaperto), il secondo cadeva qui. Adesso
+// l'esito resta visibile e la pagina si ricarica.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
@@ -64,8 +73,13 @@ const PREMI_E_GUARDA = `(async function(){
   for(let i=0;i<60;i++){
     await new Promise(r=>setTimeout(r,100));
     const b=document.getElementById('fblVerAggiornaBtn');
-    if(b && b.textContent.indexOf('in corso')<0 && !b.disabled) break;
-    if(document.getElementById('fblAggOverlay') && i>25) break;
+    // Se il pannello e' su, NON si esce al primo pulsante tornato premibile: da quando il
+    // ramo «niente da installare» ricarica la pagina dopo 2,5 s (misurato il 10 novembre
+    // 2026), uscire prima significava misurare lo stato di mezzo e non l'esito. Si aspetta
+    // il pannello fino a 2,6 s, cioe' oltre la sua scadenza.
+    const veloSu=!!document.getElementById('fblAggOverlay');
+    if(b && b.textContent.indexOf('in corso')<0 && !b.disabled && !veloSu) break;
+    if(veloSu && i>25) break;
   }
   const b=document.getElementById('fblVerAggiornaBtn');
   const velo=document.getElementById('fblAggOverlay');
@@ -74,28 +88,53 @@ const PREMI_E_GUARDA = `(async function(){
     pulsanteSpento:b?!!b.disabled:null,
     pulsanteVisibile:b?getComputedStyle(b).display!=='none':null,
     veloInPiedi:!!(velo&&getComputedStyle(velo).display!=='none'),
+    veloTesto:(document.getElementById('fblAggFase')||{}).textContent||'',
     stato:(document.getElementById('status')||{}).textContent||'',
+    ricariche:window.__ricaricato||0,
     scaricati:(window.__clic||[]).filter(u=>/\\.(exe|apk|msi|dmg)$/i.test(u)),
     attesa:(function(){ try{ return localStorage.getItem('fbl_aggiornamento_atteso'); }catch(e){ return 'errore'; } })()
   };
 })()`;
 
-test('se il ponte dice «niente da installare», l\'app lo dice e non resta bloccata', async () => {
+test('se il ponte dice «niente da installare», l\'app lo dice SENZA SPARIRE e ricarica', async () => {
   const {browser, pagina, errori} = await apriConPonte(
-    {ok: true, avviato: false, messaggio: "il programma e' gia' alla 2.0.81: non c'e' niente da installare"});
+    {ok: true, avviato: false, programma: '2.2.24',
+     messaggio: "il programma e' gia' alla 2.2.24: non c'e' niente da installare"});
   try {
     const r = await pagina.evaluate(PREMI_E_GUARDA);
     assert.ok(!r.errore, r.errore || '');
     assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
-    assert.equal(r.veloInPiedi, false,
-      'il velo bloccante non deve restare su: non c\'è nessuna installazione in corso');
+    // IL VELO DEVE RESTARE CON L'ESITO, non chiudersi in silenzio.
+    //
+    // SEGNALATO dal proprietario (10 novembre 2026): «premo il pulsante aggiorna, mi fa vedere
+    // soltanto questo popup, si chiude subito dopo 2 secondi e non fa letteralmente nulla
+    // nemmeno il refresh». MISURATO nei log del ponte: /aggiorna-programma rispondeva
+    // ok:true avviato:false («il programma e' gia' alla 2.2.24: non c'e' niente da installare»)
+    // e il velo spariva, lasciando come unica traccia una riga di stato lunga tre parole.
+    // Prima del 4 novembre questo ramo diceva «installazione in corso» a vuoto; la cura di
+    // allora fece sparire il velo, e cosi' l'esito vero divento' invisibile. Adesso resta:
+    // il pannello non blocca per sempre (c'e' il pulsante «Torna all'app»), ma non tace.
+    assert.equal(r.veloInPiedi, true,
+      'il pannello con l\'esito deve restare visibile: «premo aggiorna, mi fa vedere ' +
+      'soltanto questo popup» e poi non si deve capire che fine ha fatto');
+    assert.ok(r.veloTesto.indexOf('ultima versione pubblicata') >= 0,
+      'il pannello deve dire la versione e che non c\'era niente da installare, invece dice: "' +
+      r.veloTesto + '"');
+    assert.ok(r.veloTesto.indexOf('installazione in corso') < 0,
+      'non deve dire che si sta installando qualcosa: "' + r.veloTesto + '"');
     assert.equal(r.pulsanteSpento, false, 'il pulsante deve tornare premibile');
     assert.ok(r.stato.indexOf('niente da installare') >= 0,
       'lo stato deve riportare il motivo detto dal ponte, invece dice: "' + r.stato + '"');
-    assert.ok(r.stato.indexOf('installazione in corso') < 0 && r.stato.indexOf('si riapre da sola') < 0,
-      'non deve dire che si sta installando qualcosa: "' + r.stato + '"');
     assert.equal(r.attesa, null,
       'non si deve restare in attesa di una versione nuova che non sta arrivando');
+    assert.equal(r.scaricati.length, 0,
+      'non c\'e\' niente da installare: scaricare un pacchetto sarebbe un doppione');
+    // E LA PAGINA SI RICARICA: e' il «nemmeno il refresh» della segnalazione. La versione
+    // nuova e' installata; chi ha ancora davanti la copia vecchia nella cache del browser
+    // deve vederla comparire da sola.
+    assert.ok(r.ricariche >= 1,
+      'dopo aver detto «niente da installare» la pagina si deve ricaricare: la versione ' +
+      'nuova e\' sul disco e va messa davanti agli occhi. Ricariche viste: ' + r.ricariche);
   } finally { await browser.close(); }
 });
 

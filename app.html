@@ -4393,7 +4393,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      NUDO dentro una riga flex: 247 px occupati da una frase invisibile, che spingevano tre
      pulsanti fuori dallo schermo del telefono. -->
 <button type="button" id="nuovaFinestraBtn" class="chartCornerBtn"
-        title="Duplica la finestra: apre a tutto schermo SOLO il grafico, da spostare su un altro monitor. Le posizioni e gli ordini sono in comune con la pagina principale: quello che apri qui finisce li'. Disegni e indicatori invece restano di questa finestra e non passano alle altre. Ogni clic ne apre una nuova; si chiude con la X della finestra."
+        title="Duplica la finestra: apre a tutto schermo SOLO il grafico, da spostare su un altro monitor. Le posizioni e gli ordini sono in comune con la pagina principale: quello che apri qui finisce li'. Rettangoli, linee e Fibonacci invece passano a tutte le finestre aperte; profilo volumetrico, VWAP, linee Allarme e indicatori restano di questa finestra. Ogni clic ne apre una nuova; si chiude con la X della finestra."
         style="width:auto;padding:0 8px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px">
   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
   <!-- LA SCRITTA SPARISCE SUL TELEFONO, l'icona no. Il proprietario ha chiesto che ci sia
@@ -5956,39 +5956,40 @@ function mt5AttivaConto(login,server,reale,tradeMode){
   const pos=resta(corrente?positions:snap.positions,'pos');
   const pend=resta(corrente?pendingOrders:snap.pendingOrders,'pend');
   daRiprendere.filter(x=>x.modo===modo).forEach(x=>{
+   // UNA VOCE 'disegno' NON E' UN ORDINE PENDENTE (10 novembre 2026). Misurato: il parcheggio
+   // del cambio conto mandava le voci tipo:'disegno' dentro `pendingOrders`, perche' qui tutto
+   // cio' che non era 'pos' diventava un ordine. Poi `rigaPendenteTracciato` moriva su
+   // `p.lots` (un disegno i lotti non li ha) e il Trade Journal non si disegnava piu'.
+   // Ora le voci 'disegno' tornano fra i disegni, nella sessione a cui appartenevano.
+   if(x.tipo==='disegno'){
+     try{
+       const destD=(x.modo===currentMode()?drawings:((assetDrawings[x.modo]||{})[currentAssetKey]||null));
+       if(destD&&!destD.some(q=>q===x.p)){ destD.push(x.p); riprese++; }
+     }catch(eD){}
+     return;
+   }
    const gia=(x.tipo==='pos'?pos:pend).some(q=>q.mt5Ticket!=null&&String(q.mt5Ticket)===String(x.p.mt5Ticket));
    if(!gia){ x.p.mt5MissingSince=null; (x.tipo==='pos'?pos:pend).push(x.p); riprese++; }
   });
   if(corrente){ positions=pos; pendingOrders=pend; }
   else{ snap.positions=pos; snap.pendingOrders=pend; }
  });
-  // DISEGNI per conto MT5 (voce 7): i disegni del conto di prima non devono restare
-  // visibili sul conto nuovo. Stessa logica di posizioni/ordini: i disegni senza
-  // account ereditano quello su cui erano vivi (precedente); i disegni di un altro
-  // conto si parcheggiano in mt5Parcheggio[login] e si ripristinano quando si torna
-  // a quel conto.
-  const tieniDisegno=(d)=>{
-    if(!d)return true;
-    if(!d.mt5Login&&precedente&&precedente!==ora)d.mt5Login=precedente;
-    return !d.mt5Login||String(d.mt5Login)===ora;
-  };
-  const parcheggiaDisegni=(lista)=>{
-    const tenuti=[];
-    (lista||[]).forEach(d=>{
-      if(tieniDisegno(d))tenuti.push(d);
-      else{(mt5Parcheggio[d.mt5Login]=mt5Parcheggio[d.mt5Login]||[]).push({modo:currentMode(),tipo:'disegno',p:d});parcheggiate++;}
-    });
-    return tenuti;
-  };
-  drawings=parcheggiaDisegni(drawings);
-  if(currentAssetKey&&assetDrawings[currentMode()])assetDrawings[currentMode()][currentAssetKey]=drawings;
-  modi.forEach(modo=>{
-    if(modo===currentMode())return; // modo corrente già filtrato sopra tramite `drawings`
-    const key=currentAssetKey;
-    if(key&&assetDrawings[modo]&&Array.isArray(assetDrawings[modo][key])){
-      assetDrawings[modo][key]=parcheggiaDisegni(assetDrawings[modo][key]);
-    }
-  });
+  // DISEGNI: RIMANGONO PER ASSET, NON PER CONTO MT5 (10 novembre 2026, ROVESCIATA la scelta
+  // precedente - LEZIONI.md n. 25). Qui sotto i disegni venivano filtrati via quando il conto
+  // cambiava: finivano in un parcheggio SENZA l'asset, tornavano sull'asset a grafico in quel
+  // momento (spesso un altro) e il parcheggio veniva poi cancellato. Misurato col banco
+  // disegni_sopravvivono_conto.test.mjs: passando dal conto A al conto B, 2 disegni su 2
+  // Sparivano da TUTTI gli asset, e su un altro asset comparivano 2 disegni estranei.
+  // Richiesto dal proprietario: «quando cambio account MT5 non mi deve togliere i disegni che ho
+  // fatto su un account, quelli comunque restano, devono rimanere tra un account e l'altro, e
+  // restare in lista per ogni asset».
+  //
+  // Posizioni e ordini invece CONTINUANO a essere del conto: quelli si, perche' un ordine su un
+  // conto non esiste sull'altro. Un disegno e' un segno sul grafico, non un ordine: resta dov'e',
+  // per ogni asset, per sempre.
+  if(currentAssetKey&&assetDrawings[currentMode()]&&Array.isArray(assetDrawings[currentMode()][currentAssetKey])){
+    drawings=migrateDrawingLayerVisibilityToHidden(assetDrawings[currentMode()][currentAssetKey].slice());
+  }
   daRiprendere.filter(x=>x.tipo==='disegno').forEach(x=>{
     const destinazione=(x.modo===currentMode()?drawings:((assetDrawings[x.modo]||{})[currentAssetKey]||null));
     if(destinazione&&!destinazione.some(q=>q===x.p))destinazione.push(x.p);
@@ -6323,7 +6324,17 @@ async function proceedEnablePropFirm(targetIsLive){
   // esplicito e con un messaggio chiaro, invece di un popup "a sorpresa" più avanti nel flusso
   // (es. mentre si sta per caricare un asset). Se il login non va a buon fine o viene annullato,
   // NON si attiva nulla: si resta esattamente nella sessione in cui ci si trovava.
-  if(targetIsLive){
+  // CON MT5 COLLEGATO IL LOGIN A CAPITAL.COM NON SERVE (10 novembre 2026). Richiesto dal
+  // proprietatore: «non bisogna per forza essere loggati con capital.com, quindi quando
+  // scegliamo se attivarla sul conto storico o conto live, se scegliamo il live non per
+  // forza bisogna eseguire il login col capital.com, perché se siamo collegati con MT5
+  // direttamente lui si collega con MT5». E' già la regola della fonte Live per il cambio
+  // di time frame (fblSorgenteLivePerCambioTf: «nessun file → mt5 se mt5Connected»): la
+  // sessione Live pesca i dati dal ponte MT5. Il login resta per chi usa Capital.com come
+  // fonte Live. Misurato col banco prop_live_senza_capital.test.mjs: prima il login si
+  // apriva SEMPRE (1 apertura, Prop Firm non accesa), ora 0 aperture con MT5 collegato e
+  // la Prop Firm parte col capitale del conto MT5 vero.
+  if(targetIsLive && !mt5Connected){
     const connected=await ensureCapitalConnected('Accedi a Capital.com per attivare la Modalità Prop Firm su Live, poi ripremi "🛡️ MODALITÀ PROP FIRM".');
     if(!connected) return;
   }
@@ -9061,7 +9072,18 @@ function anotherWindowOwnsAssetEvaluation(asset){
  }
  return false;
 }
-// DISEGNI: OGNI FINESTRA I SUOI. SPENTA LA SINCRONIZZAZIONE TRA FINESTRE (4 novembre 2026).
+// DISEGNI: ALCUNI PASSANO, ALCUNI NO (10 novembre 2026). ROVESCIATA la scelta del 4 novembre.
+//
+// ROVESCIATA (LEZIONI.md n. 25): il 4 novembre il proprietario aveva chiesto l'opposto —
+// «per quanto riguarda i disegni, invece no: quello rimane indipendente tra pagina e
+// pagina» — e il canale qui sotto fu spento di proposito. Il 10 novembre ha chiesto che i
+// disegni fatti su una finestra comparissero anche sulle altre, confermando pero' che non
+// devono essere TUTTI (risposta alla domanda di conferma: "solo alcuni tipi di disegno").
+// Quali: DISEGNI_CONDIVISI piu' sotto (rettangolo, linee, Fibonacci). Gli altri — profilo
+// volumetrico, VWAP, linee Allarme — restano di ogni finestra, come il 4 novembre.
+//
+// COM'ERA IL 4 NOVEMBRE, e perche' fu spento (la storia resta, perche' la regola del
+// progetto e' che una decisione ribaltata si legge, non si cancella):
 //
 // Il proprietario ha cambiato idea, e la parola nuova vince su quella vecchia: «in modalita'
 // duplica schermo... le operazioni che apro sulle pagine duplicate andranno a finire nella
@@ -9093,10 +9115,22 @@ function broadcastDrawingsStateNow(){
  // trasmettere in quell'istante taggherebbe i disegni del vecchio asset con l'ID del nuovo anche
  // verso le ALTRE finestre aperte (che li accetterebbero come buoni, vedi msg.asset===currentAssetKey
  // nel gestore drawings_sync), propagando la stessa corruzione oltre questa finestra.
- return; // disegni indipendenti per finestra: vedi la nota qui sopra (4 novembre 2026)
+ if(!tradingChannel||applyingRemoteDrawingsSync||!currentAssetKey||assetSwitchInProgress)return;
+ // SOLO i disegni che viaggiano (DISEGNI_CONDIVISI): VWAP, profilo volumetrico e linee Allarme
+ // restano di questa finestra, quindi non si annunciano nemmeno.
+ const daMandare=drawings.filter(fblDisegnoCondiviso);
+ try{
+  tradingChannel.postMessage({type:'drawings_sync',slot:PIP_SLOT,asset:currentAssetKey,
+    mode:currentMode(),drawings:daMandare});
+ }catch(e){}
 }
 function requestDrawingsSyncNow(){
- return; // non si chiedono piu' i disegni alle altre finestre: ognuna ha i suoi
+ // Finestra appena aperta (o asset appena cambiato): senza questa domanda resterebbe coi suoi
+ // disegni vuoti mentre le altre ne hanno già. La risposta la manda broadcastDrawingsStateNow()
+ // delle altre finestre, che ricevono la richiesta e rimandano il loro elenco.
+ if(!tradingChannel||applyingRemoteDrawingsSync||!currentAssetKey||assetSwitchInProgress)return;
+ try{ tradingChannel.postMessage({type:'drawings_sync_request',slot:PIP_SLOT,
+   asset:currentAssetKey,mode:currentMode()}); }catch(e){}
 }
 // Applica l'elenco degli asset e la watchlist arrivati dalla madre (voce 4/5).
 // Restituisce quanti nomi ha dovuto aggiungere: è il numero che il test misura, perché
@@ -9136,18 +9170,48 @@ if(tradingChannel){
    if(!msg||typeof msg!=='object'||msg.slot===PIP_SLOT)return;
   // IL CONTO DELLA MADRE (voce 5). PRIMA del resto: cambiare conto ricostruisce la sessione,
   // quindi applicare prima le posizioni e poi cambiare conto le butterebbe via.
-  if(PIP_SLOT>0 && msg.conto){
+  // LA BARRIERA PIP_SLOT>0 E' VIA (10 novembre 2026). Prima solo le finestre duplicate
+  // applicavano il conto della madre, quindi un cambio fatto sul tablet non tornava al PC.
+  // Richiesto dal proprietario: «se sul tablet passo dal conto 1 al conto 2, sul PC deve fare la
+  // stessa identica cosa». Il pericolo del ciclo non esiste: chi applica non e' il mittente (il
+  // messaggio non torna indietro a chi l'ha mandato, vedi msg.slot===PIP_SLOT sopra).
+  if(msg.conto){
     try{
       const dec = fblApplicaContoMadre(msg.conto);
       if(dec.cambiato){
         if(dec.promessa==='live'){
+          // LE POSIZIONI DI QUESTO MESSAGGIO ASPETTANO IL CAMBIO CONTO (10 novembre 2026).
+          // Misurato: il cambio conto e' asincrono, e il ramo trading_sync qui sotto assegnava
+          // subito `positions=msg.positions` - quindi le posizioni della madre venivano scritte
+          // nella sessione che si stava LASCIANDO (Storico), che poi switchAccountMode() congela
+          // in sessionByMode.backtest. Risultato misurato sulla pagina duplicata: 7 righe in
+          // tabella invece di 2, con le stesse posizioni contate due volte e le chiuse da tempo
+          // (TP raggiunto) che non sparivano piu', perche' nessun messaggio successivo toccava
+          // quella sessione. Segnalato dal proprietario: «stanno avanzando sul tablet posizioni
+          // che sono gia' state chiuse, che hanno raggiunto gia' il TP». La bandierina dice al
+          // ramo di sotto di rimandare l'applicazione a qui, a cambio concluso.
+          posizioniInAttesaDelConto=true;
           Promise.resolve(switchAccountMode(true)).then(function(){
             try{ if(dec.vista && dec.vista!=='storico') fblContoScegli(dec.vista); }catch(e){}
-          }).catch(function(){});
+            try{ if(posizioniInAttesaDelConto)fblApplicaStatoTrading(msg); }catch(e){}
+            posizioniInAttesaDelConto=false;
+          }).catch(function(){ posizioniInAttesaDelConto=false; });
         }else if(dec.promessa==='storico'){
           try{ if(liveModeActive) switchAccountMode(false); }catch(e){}
         }else if(dec.promessa==='conto' && dec.vista){
           try{ fblContoScegli(dec.vista); }catch(e){}
+        }else if(dec.promessa==='conto_mt5' && dec.login){
+          // IL CONTO MT5 SCELTO DA UN'ALTRA FINESTRA/DISPOSITIVO (10 novembre 2026).
+          // Si attiva quel login senza rifare /connect: il ponte è già su quel conto, e
+          // rifare la connessione qui significherebbe staccare e riattaccare MT5 per un
+          // allineamento che è già fatto. Richiesto dal proprietario: «se passo da conto
+          // 1 a conto 2 sul PC, anche sul tablet deve passare, e viceversa».
+          try{
+            if(typeof mt5AttivaConto==='function')mt5AttivaConto(dec.login,dec.server);
+            try{ if(typeof updateMt5ModeUI==='function')updateMt5ModeUI(); }catch(e2){}
+            try{ scheduleSave(); }catch(e3){}
+            try{ update(); draw(); }catch(e4){}
+          }catch(e5){}
         }
       }
     }catch(e){}
@@ -9176,39 +9240,21 @@ if(tradingChannel){
      // posizione chiusa qui deve poter svuotare la lista anche sulle altre).
      tradingSyncRicevuto=true;
      applyingRemoteTradingSync=true;
-     try{
-       // VOCE 7: isolamento per conto MT5. Le posizioni e gli ordini pendenti arrivano
-       // solo dal conto MT5 a cui questa finestra e collegata. Un msg.conto.mt5
-       // diverso dal conto locale (o un mittente MT5 quando noi non siamo collegati
-       // a MT5) non sovrascrive le nostre posizioni, perche apparirebbero sul conto
-       // sbagliato.
-       const _mt5Locale=currentMt5AccountTag();
-       const _mt5Remoto=msg.conto&&msg.conto.mt5?{login:String(msg.conto.mt5.login||''),server:String(msg.conto.mt5.server||'')}:{login:'',server:''};
-       const _stessoContoMt5=(!_mt5Locale.mt5Login&&!_mt5Remoto.login)
-         ||(_mt5Locale.mt5Login&&_mt5Remoto.login&&_mt5Locale.mt5Login===_mt5Remoto.login&&(_mt5Locale.mt5Server||'')===(_mt5Remoto.server||''));
-       if(!_stessoContoMt5){
-         console.log("[trading_sync] posizioni/ordini del conto MT5 remoto ignorati (diverso dal locale)");
-       }else{
-         positions=Array.isArray(msg.positions)?msg.positions:positions;
-         pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
-       }
-       // Anche i TRADE CHIUSI passano per lo stesso filtro. Misurato (10 novembre 2026): questa
-       // riga stava FUORI dal filtro qui sopra, cosi' un trade di un altro conto MT5 entrava in
-       // `trades` senza che nessuno lo controllasse - ed e' lo "spam tra account" che il
-       // proprietario teme. Il Trade Journal resta globale per scelta, ma non si riempie delle
-       // operazioni di un conto che non e' il suo.
-       if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades:trades;
-       equity=Array.isArray(msg.equity)?msg.equity:equity;
-       if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
-       if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
-       if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
-       if(msg.tradeStrategies)tradeStrategies=msg.tradeStrategies;
-       // "active" (la posizione selezionata nelle caselle SL/TP) resta SEMPRE locale a questa
-       // finestra — ma se puntava a una posizione che nel frattempo è stata chiusa altrove, va
-       // sganciata per non lasciare un riferimento orfano.
-       if(active&&!positions.includes(active))active=null;
-       if(PIP_SLOT===0)scheduleSave(); // la finestra principale persiste comunque il trade arrivato da un'altra finestra
-     }finally{ applyingRemoteTradingSync=false; }
+     // Se sta girando un cambio conto innescato da QUESTO messaggio, non si scrive niente
+     // adesso: lo fara' il .then() del cambio (vedi la bandierina sopra). Scrivere ora
+     // metterebbe le posizioni nella sessione che si sta lasciando - misurato il 10 novembre
+     // 2026: 7 righe fantasma invece di 2 sulla pagina duplicata.
+     if(posizioniInAttesaDelConto)return;
+      try{
+        // L'applicazione vera sta in fblApplicaStatoTrading(): un posto solo, richiamabile sia
+        // subito sia DOPO un cambio conto asincrono (la bandierina posizioniInAttesaDelConto).
+        fblApplicaStatoTrading(msg);
+        // "active" (la posizione selezionata nelle caselle SL/TP) resta SEMPRE locale a questa
+        // finestra — ma se puntava a una posizione che nel frattempo è stata chiusa altrove, va
+        // sganciata per non lasciare un riferimento orfano.
+        if(active&&!positions.includes(active))active=null;
+        if(PIP_SLOT===0)scheduleSave(); // la finestra principale persiste comunque il trade arrivato da un'altra finestra
+      }finally{ applyingRemoteTradingSync=false; }
      try{ draw(); update(); }catch(e){}
    }else if(msg.type==='trading_sync_request'){
      broadcastTradingStateNow();
@@ -9222,10 +9268,44 @@ if(tradingChannel){
        applyRemoteAssetSwitch(msg.asset,msg.masterTime);
      }
    }else if(msg.type==='drawings_sync'||msg.type==='drawings_sync_request'){
-     // Ignorati per scelta: i disegni restano di ogni singola finestra (vedi la nota DISEGNI:
-     // OGNI FINESTRA I SUOI piu' sopra). Il ramo c'e' comunque, perche' una finestra rimasta
-     // aperta da prima dell'aggiornamento potrebbe ancora mandarli: arrivano e non fanno nulla.
-     return;
+     // DISEGNI CHE PASSANO FRA FINESTRE (10 novembre 2026, rovesciata la scelta del 4 novembre,
+     // vedi DISEGNI: ALCUNI PASSANO, ALCUNI NO piu' sopra). Si applicano SOLO se il messaggio
+     // parla dello STESSO asset e della STESSA modalita': i disegni sono salvati per
+     // asset+modalita', e incollarne di un altro asset sarebbe il difetto peggiore di tutti.
+     if(msg.asset!==currentAssetKey||msg.mode!==currentMode())return;
+     // Una richiesta non modifica niente: si risponde rimandando il proprio elenco, cosi' la
+     // finestra appena aperta si allinea SUBITO invece di aspettare il prossimo cambiamento.
+     if(msg.type==='drawings_sync_request'){ broadcastDrawingsStateNow(); return; }
+     applyingRemoteDrawingsSync=true;
+     try{
+       // LA REGOLA E' UN MERCO, NON UNA SOSTITUZIONE (10 novembre 2026, misurato).
+       // La prima stesura SOSTITUIVA l'elenco dei disegni condivisi con quello arrivato, e
+       // succedeva un disastro misurabile: una finestra appena aperta (o che ha appena
+       // cambiato asset) risponde alla richiesta con il suo elenco - VUOTO - e quella
+       // risposta CANCELLAVA i disegni dell'altra finestra. Provato: disegnato un
+       // rettangolo sulla madre, la duplicata restava a zero e la madre perdeva il suo.
+       // Adesso: si AGGIUNGONO (o si aggiornano per id) quelli che arrivano, e si TOGLIE
+       // SOLO quelli che questa finestra aveva adottato da un'altra e che ora non arrivano
+       // piu' - cioe' una cancellazione vera. Un disegno fatto qui, che non e' mai arrivato
+       // da nessuno, non si perde mai.
+       const adottati=window.__fblDisegniRemotiAdottati||(window.__fblDisegniRemotiAdottati=new Set());
+       const mieiLocali=drawings.filter(d=>!fblDisegnoCondiviso(d));
+       const arrivati=(msg.drawings||[]).filter(fblDisegnoCondiviso);
+       const perId=new Map(arrivati.map(d=>[String(d.id),d]));
+       const nuovi=mieiLocali.slice();
+       for(const d of drawings){ if(!fblDisegnoCondiviso(d))continue;
+         if(perId.has(String(d.id))){ nuovi.push(perId.get(String(d.id))); continue; }
+         // Non arriva piu': si toglie solo se prima era arrivato da un'altra finestra.
+         if(adottati.has(String(d.id)))continue;
+         nuovi.push(d); }
+       for(const [id,d] of perId){ if(!nuovi.some(x=>String(x.id)===id))nuovi.push(d); }
+       adottati.clear(); for(const d of perId.keys())adottati.add(d);
+       drawings.length=0; for(const d of nuovi)drawings.push(d);
+       selectedDrawing=null;
+       mirrorCurrentDrawingsIntoAssetDrawings();
+       draw();
+     }catch(e){ console.warn('drawings_sync non applicato:',e); }
+     finally{ applyingRemoteDrawingsSync=false; }
    }else if(msg.type==='random_jump_sync'){
      // Vedi il commento completo su broadcastRandomJumpSync()/applyRemoteRandomJump() più sopra
      // nel file: solo in Storico da entrambe le parti, qualunque sia la finestra mittente.
@@ -10116,7 +10196,14 @@ function applyLightSessionState(state){
  // così anche un vecchio salvataggio "avvelenato" non li rimette a grafico prima di un nuovo
  // login MT5 riuscito.
  positions=stripMt5TrackedForSave(state.positions||[]); active=(state.active&&state.active.mt5Ticket==null)?state.active:null;
- pendingOrders=stripMt5TrackedForSave(state.pendingOrders||[]); trades=state.trades||[];
+ // IN ENTRATA SI TENGONO SOLI I VERI ORDINI (10 novembre 2026). Misurato sul PC del
+ // proprietario: nello stato salvato c'erano 69 DISEGNI dentro `pendingOrders` (trendline,
+ // fib, rectangle, alarmline...) finiti la' per una cura dei giorni prima. Risultato: la
+ // riga della tabella moriva su `p.lots` e il Trade Journal non si disegnava piu'. Un ordine
+ // pendente ha un prezzo di entrata e ha i lotti (o un biglietto MT5): quello che non ha
+ // nessuna delle due cose non e' un ordine, e uno stato gia' inquinato si ripulisce da solo
+ // al primo avvio.
+ pendingOrders=stripMt5TrackedForSave((state.pendingOrders||[]).filter(p=>p&&(p.mt5Ticket!=null||p.entry!=null||p.lots!=null))); trades=state.trades||[];
  tradeStrategies=Array.isArray(state.tradeStrategies)?state.tradeStrategies:[];
  journalStrategyOptionsDirty=true;
  // MIGRAZIONE una tantum: sessioni salvate da versioni precedenti a questa (prima che ogni
@@ -10252,7 +10339,15 @@ let linesMode='trendline';
 // sempre azzerato ad ogni nuova modifica "fresca" (comportamento standard undo/redo).
 let historyUndo=[], historyRedo=[], historyGestureActive=false;
 function snapshotDrawings(){ return JSON.parse(JSON.stringify(drawings)); }
-function pushHistory(){ historyUndo.push(snapshotDrawings()); historyRedo=[]; }
+function pushHistory(){ historyUndo.push(snapshotDrawings()); historyRedo=[];
+ // L'ANNUNCIO ALLE ALTRE FINESTRE, SUBITO (10 novembre 2026). L'annuncio normale parte dal
+ // giro da 1500 ms di armDrawingsPersistence(), ma quel giro non e' armato finche' il
+ // ripristino della sessione non e' concluso, e pushHistory() e' l'imbuto per cui passano
+ // TUTTE le modifiche ai disegni (creazione, spostamento, cancellazione, copia, undo).
+ // Il timeout zero serve perche' questa funzione gira PRIMA della modifica: fra un attimo
+ // lo stato e' quello nuovo e le altre finestre lo vedono mentre lo si sta facendo.
+ setTimeout(()=>{ try{ broadcastDrawingsStateNow(); }catch(e){} },0);
+}
 // Per i controlli "continui" (slider di trasparenza, campo numero spessore, color picker, che
 // generano molti eventi 'input' durante un solo trascinamento/interazione): registriamo un SOLO
 // stato nella cronologia all'inizio dell'interazione (beginHistoryGesture, sul pointerdown/mousedown
@@ -11127,8 +11222,18 @@ function disegnaCartelliniAssePerDisegno(ctx,geo){
     if(typeof y!=='function'||!Number.isFinite(lo)||!Number.isFinite(hi))return;
     const d=(typeof selectedDrawing!=='undefined')?selectedDrawing:null;
     if(!d||d.hidden)return;
+    // UN CARTELLINO PER PREZZO DISTINTO (10 novembre 2026). Richiesto dal proprietario:
+    // «se mettiamo una linea dritta, dovrà farci vedere sull'asse del prezzo soltanto un
+    // cartellino, perché il punto A con il punto B stanno sullo stesso prezzo. Mentre
+    // invece se è obliqua ci disegnerà due etichette diverse.» Misurato: la trendline
+    // disegnata orizzontale passava due punti con lo STESSO prezzo, e ne uscivano due
+    // cartellini uno sopra l'altro (il secondo veniva anche spostato di 16 px
+    // dall'anti-sovrapposizione). Se i due prezzi sono uguali, il secondo punto non
+    // aggiunge niente: si butta.
+    const stessoPrezzo=(a,b)=>{ if(!a||!b)return false; const pa=Number(a.price), pb=Number(b.price);
+      return Number.isFinite(pa)&&Number.isFinite(pb)&&Math.abs(pa-pb)<1e-9; };
     const punti=[d.p1];
-    if(FBL_DISEGNI_UN_PUNTO.indexOf(String(d.type))<0&&d.p2)punti.push(d.p2);
+    if(FBL_DISEGNI_UN_PUNTO.indexOf(String(d.type))<0&&d.p2&&!stessoPrezzo(d.p1,d.p2))punti.push(d.p2);
     let colore=(d&&d.color)?d.color:'#3ea6ff';
     if(!d.color&&typeof defaultColorFor==='function'){
       try{ const c=defaultColorFor(d.type); if(c)colore=c; }catch(e){}
@@ -13313,6 +13418,30 @@ const LINE_TYPES=['trendline','ray','infoline','extendedline','trendangle','hori
 // secondo punto in orizzontale o verticale rispetto al primo), esattamente come già succedeva
 // solo per trendline/extendedline prima di questa modifica.
 const TWO_CLICK_LINE_TYPES=['trendline','ray','infoline','extendedline','trendangle'];
+
+// DISEGNI CHE PASSANO DA UNA FINESTRA A TUTTE LE ALTRE (10 novembre 2026).
+//
+// ROVESCIATA la decisione del 4 novembre 2026 (LEZIONI.md n. 25): quel giorno il proprietario
+// aveva chiesto «i disegni restano indipendenti tra pagina e pagina»; il 10 novembre ha chiesto
+// l'opposto — «se metto un rettangolo o una linea o un ritracciamento Fibonacci su una finestra,
+// mi si deve spalmare anche nelle altre finestre» — confermando pero' che NON TUTTI i disegni
+// devono viaggiare (la risposta alla domanda di conferma e' stata: "solo alcuni tipi").
+//
+// Quindi passano solo quelli che il proprietario ha nominato: RETTANGOLO, LINEE (tutte le
+// tipologia della barra: trendline, ray, infoline, extendedline, trendangle, horizontal,
+// horizontalray, vertical, crossline) e FIBONACCI. Restano locali a ogni finestra, come il
+// 4 novembre, il profilo volumetrico (vpfixed/vpanchor), la VWAP e le linee Allarme: sono
+// strumenti legati all'analisi di quella singola finestra, non segni che si mettono sul grafico.
+const DISEGNI_CONDIVISI=['rectangle'].concat(LINE_TYPES).concat(['fib']);
+function fblDisegnoCondiviso(d){ return !!d && DISEGNI_CONDIVISI.indexOf(String(d.type))>=0; }
+
+// UN PREZZO O C'E' O NON C'E'. `Number(undefined)` fa 0, e 0 non e' null: un trade o una posizione
+// con il prezzo mancante passava i filtri che guardavano solo `==null` e veniva disegnato al
+// prezzo zero, con un profitto assurdo (XAUUSD, contractSize 100: un prezzo a 0 e l'altro a 4075
+// fanno +24.452,88 euro su 0,06 lotti - il numero esatto che il proprietario ha fotografato il
+// 10 novembre 2026). Da qui in avanti un prezzo mancante resta NULL, e i filtri null gia' esistenti
+// lo scartano da soli.
+function fblPrezzoValido(x){ const n=Number(x); return (Number.isFinite(n)&&n>0)?n:null; }
 const LINE_ICON_SVG={
  trendline:'<circle cx="5" cy="19" r="1.7"/><circle cx="17" cy="7" r="1.7"/><path d="M6.4 17.6 L15.6 8.4"/>',
  ray:'<circle cx="5" cy="19" r="1.3"/><circle cx="13" cy="11" r="1.7"/><path d="M6.1 17.9 L11.9 12.1"/><path d="M14.2 9.8 L18 6"/>',
@@ -13733,6 +13862,17 @@ function positionBelongsToCurrentView(pos){
     // va nascosta. Quella di un altro conto ha il login e non combacia: resta fuori.
     return pos.mt5Ticket!=null&&(!login||pos.mt5Login==null||String(pos.mt5Login)===login);
   }
+  // SENZA MT5 COLLEGATO IL FILTRO PER CONTO VALE LO STESSO (10 novembre 2026).
+  // Segnalato dal proprietario: «ho aperto due posizioni, una per ogni account, in due account
+  // diversi... sul tablet mi ha scritto sia la posizione dell'account 1 che la posizione
+  // dell'account 2, nello stesso grafico. E questo non deve assolutamente succedere». Misurato
+  // col banco posizioni_un_solo_conto.test.mjs: col ponte condiviso ma MT5 staccato (la
+  // "Disconnetti" del tablet, che continua a sincronizzare) `return true` lasciava passare
+  // qualunque posizione di qualunque conto - due conti mescolati sullo stesso grafico.
+  // «Grafico scollegato» non vuol dire «conti mischiati»: se il conto attivo e' noto, una
+  // posizione col login di un altro conto resta fuori, in qualunque stato della connessione.
+  const loginNoto=currentMt5AccountTag().mt5Login;
+  if(loginNoto)return pos.mt5Ticket!=null&&(pos.mt5Login==null||String(pos.mt5Login)===loginNoto);
   return true;
 }
 // Comodo: entrambe le condizioni insieme, usato da tutto il disegno del grafico.
@@ -14100,7 +14240,7 @@ function update(){
    const actionsCell=isCurrentRow?`<button class="miniBtn danger" data-cancelpending="${p.id}">Cancella</button>`:'';
    // ORIGINE (richiesto): da quale sala arriva l'ordine, e che strumento e'. Stessa identica
    // funzione del Trade Journal, cosi' la stessa operazione si legge uguale nelle due tabelle.
-   return `<tr><td>${n}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${journalOrigineHtml(p)}${fblTipoBadgeHtml(ordAsset)}</td><td title="${escapeHtmlLite(fblOrarioEsecuzioneTitolo(p.createdAt??p.mt5AddedAt))}">${escapeHtmlLite(fblOrarioEsecuzione(p.createdAt??p.mt5AddedAt))}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPriceA(p.entry,ordAsset)}</td>`+curPriceCell+`<td>${fmtPriceA(p.sl,ordAsset)}</td><td>${fmtPriceA(p.tp,ordAsset)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${p.lots.toFixed(2)}</td>`+
+   return `<tr><td>${n}</td><td>${modeTag}</td><td>${ordAsset}</td><td>${journalOrigineHtml(p)}${fblTipoBadgeHtml(ordAsset)}</td><td title="${escapeHtmlLite(fblOrarioEsecuzioneTitolo(p.createdAt??p.mt5AddedAt))}">${escapeHtmlLite(fblOrarioEsecuzione(p.createdAt??p.mt5AddedAt))}</td><td>${p.side} ${p.kind||'LIMIT'}</td><td>${fmtPriceA(p.entry,ordAsset)}</td>`+curPriceCell+`<td>${fmtPriceA(p.sl,ordAsset)}</td><td>${fmtPriceA(p.tp,ordAsset)}</td><td>${riskRewardLabel(p.entry,p.sl,p.tp)}</td><td>${(Number(p.lots)||0).toFixed(2)}</td>`+
    `<td><button class="miniBtn" data-gotoasset-pending-session="${sessionKey}" data-gotoasset-pending="${p.id}" title="Passa a ${modeTagPlain} / ${ordAsset} e mostra questo ordine a grafico">📍 Vai a grafico</button>${actionsCell}</td></tr>`;
  };
  // Riga di un ordine pendente piazzato A MANO nel terminale MT5 (mai tracciato in app).
@@ -15157,7 +15297,16 @@ function vpIndIstanzeCalcola(ind){
  const endI=Math.min(idx,rows.length-1);
  const days=Math.max(1,Math.min(90,Math.round(Number(ind.params.days)||5)));
  const curDay=romeDayAndMinute(ts[endI]).day;
- const firstDay=curDay-days+1;
+ // "N istogrammi" sono N giorni in cui i DATI esistono, non N giorni di calendario
+ // (10 novembre 2026). Misurato: contando il calendario, sabato e domenica occupavano il
+ // budget e con 5 chiesti uscivano 3 istogrammi (martedì, lunedì, venerdì) invece di 5
+ // (martedì, lunedì, venerdì, giovedì, mercoledì). Si risale finché non si sono visti
+ // `days` giorni distinti, e il più vecchio diventa il confine. Costo identico: il ciclo si
+ // ferma dopo `days` giorni.
+ const giorniVisti=new Set();
+ for(let i=endI;i>=0;i--){ const tt=ts[i]; if(!Number.isFinite(tt))continue;
+  giorniVisti.add(romeDayAndMinute(tt).day); if(giorniVisti.size>=days)break; }
+ const firstDay=giorniVisti.size?Math.min(...giorniVisti):curDay-days+1;
  const map=new Map();
  // RICHIESTO ESPLICITAMENTE: "giorni per istogramma" (solo profili giornalieri). Con N>1 ogni
  // istogramma accumula N giorni di candele e `days` diventa il NUMERO di istogrammi mostrati
@@ -15249,7 +15398,11 @@ function buildVpIndicatorVirtualDrawings(geo){
      const d=Object.assign({},style,{
        type:'vpfixed',_virtual:true,_vpIndBars:true,id:'vpind_'+ind.id+'_'+fullKey,
        p1:{time:ts[inst.a],price:rows[inst.a].close},p2:{time:ts[inst.b],price:rows[inst.b].close},
-       candleCount:inst.b-inst.a+1,extendRight:false,locked:true,hidden:false
+       candleCount:inst.b-inst.a+1,extendRight:false,locked:true,hidden:false,
+     // 10 NOVEMBRE 2026: anche qui la scelta «tieni fermo il NUMERO di barre» va scritta
+     // nel disegno, altrimenti al cambio di time frame l'istogramma cambia numero di
+     // barre (misurato: il giorno intero passava da 1440 a 288 a 96 barre).
+     tfAnchor:'candles',vpTfAnchor:'candles'
      });
      // CORREZIONE ESPLICITA DELL'UTENTE: il colore della sessione tinge SOLO la parte interna
      // dell'istogramma (buyers, volume rialzista); la parte esterna (sellers) resta col colore di
@@ -17956,7 +18109,9 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
  // qui la stessa formula ma con l'indice assoluto (ri-start anziché dataStart+i-start).
  const xForIndex=ri=>pad.l+(ri-start+.5)*cw/n;
  assetTrades.forEach(t=>{
-   if(t.entry==null||t.exit==null)return;
+   // Un prezzo a 0 non esiste (10 novembre 2026): controllare solo `null` lasciava passare
+   // il trade fantasma, `y(0)` in fondo al grafico e un P&L calcolato sul nulla.
+   if(!(fblPrezzoValido(t.entry)&&fblPrezzoValido(t.exit)))return;
    const openTime=openReferenceTimeForPos(t), closeTime=closeReferenceTimeForTrade(t);
    const openIdx=rowIndexContainingTime(openTime), closeIdx=rowIndexContainingTime(closeTime);
    if(openIdx==null||closeIdx==null)return;
@@ -20918,7 +21073,17 @@ function draw(){
  _tSez=fblSezFine('notizie',_tSez);
  // Mirino (crosshair): linea continua bianca sul prezzo puntato dal cursore/penna,
  // più il prezzo esatto nella casella sulla scala verticale, come richiesto.
- if(crosshair && !priceAxisDrag && !panDrag && !shapeDrag && !tradeLevelDrag && !zoneWidthDrag && !placingTradeLevel && drawTool==='cursor'){
+ // IL MIRINO CON I DUE ASSI SEMPRE, ANCHE MENTRE SI DISEGNA (10 novembre 2026).
+ // Richiesto dal proprietario: «quando andiamo a selezionare una trend line ci deve far vedere il
+ // puntatore, sia l'asse del tempo che l'asse del prezzo, con i rispettivi cartellini... e deve
+ // valere sia per la posizione del punto A che del punto B.» La condizione di prima pretendeva il
+ // cursore libero, quindi la croce NON compariva nelle tre fasi del disegno (strumento scelto,
+ // primo punto messo, secondo punto in corso): `crosshair` viene aggiornato a ogni pointermove
+ // senza guardare lo strumento, quindi i numeri ci sono - non li disegnava nessuno. Ora il mirino
+ // compare ogni volta che il puntatore si muove e non si sta trascinando nient'altro (pan, linea
+ // SL/TP, maniglie, forma), come su MT5.
+ const mirinoAttivo=(x)=>!priceAxisDrag && !panDrag && !shapeDrag && !tradeLevelDrag && !zoneWidthDrag && !placingTradeLevel && x;
+ if(crosshair && mirinoAttivo(true)){
    const rect=c.getBoundingClientRect();
    const relX=crosshair.x-rect.left, relY=crosshair.y-rect.top;
    if(relX>=pad.l && relX<=w-pad.r && relY>=pad.t && relY<=h-pad.b){
@@ -21237,8 +21402,16 @@ function disegnaLineaTradeEvidenziata(ctx,colore,yy,xDa,xA){
 // RICHIESTO ESPLICITAMENTE ("come su MetaTrader 5"): la selezione resta finche' non si tocca un
 // punto vuoto del grafico (o si preme Esc), e la linea selezionata resta evidenziata. Prima scadeva
 // da sola dopo 8 secondi e toccare altrove non la toglieva.
+// ROVESCIATA (10 novembre 2026, LEZIONI.md n. 25): il proprietario ha segnalato «seleziono la
+// linea ma mi rimane selezionata per sempre... e non mi permette di spostarla». La costante
+// TRADE_LEVEL_ARMO_MS (8 secondi, definita due righe sopra) era scritta e NON LETTA DA NESSUNO:
+// una linea armata restava pronta per tutta la sessione. Adesso la prontezza scade davvero: 8
+// secondi sono piu' che sufficienti per il secondo clic (quello che sposta), e passati quelli la
+// linea si riseleziona al tocco successivo, come ha sempre fatto MT5.
 function tradeLevelPronta(tipo){
- return tradeLevelArmata===tipo;
+ if(tradeLevelArmata!==tipo)return false;
+ if(!tradeLevelArmataMs||Date.now()-tradeLevelArmataMs>TRADE_LEVEL_ARMO_MS)return false;
+ return true;
 }
 function tradeLevelArma(tipo){
  tradeLevelArmata=tipo; tradeLevelArmataMs=Date.now();
@@ -21299,7 +21472,15 @@ function tradeLevelHit(clientX,clientY,activate){
    // semplice passaggio del mouse/dito usato altrove solo per decidere l'icona del cursore o
    // se bloccare lo scroll — altrimenti la sola posizione del mouse selezionerebbe/cambierebbe
    // "active" in continuazione, senza alcun click.
-   if(activate && active!==posHit.pos){ active=posHit.pos; posSelezionata=posHit.pos; syncTradeLevels(); refreshTradeLevelUI(); update(); }
+   // IL PRIMO CLIC SULLA LINEA LA SOLO MARCA, NON SELEZIONA LA POSIZIONE (10 novembre 2026).
+   // Segnalato dal proprietario: «se vado a selezionare una linea SL o TP, la prima volta è
+   // come se mi selezionasse la posizione e non mi seleziona quella che è la linea». La riga qui
+   // sotto assegnava active/posSelezionata a ogni pointerdown con activate=true, e activate=true
+   // arriva anche dal PRIMO clic - quello che deve solo armare la linea. Ora la posizione si
+   // seleziona da sola solo al SECONDO clic, quando la linea è già armata e il trascinamento sta
+   // davvero per partire (misurato: banco A di sl_tp_selezione_trascinamento.test.mjs rosso
+   // senza questa guardia).
+   if(activate && tradeLevelArmata===posHit.type && active!==posHit.pos){ active=posHit.pos; posSelezionata=posHit.pos; syncTradeLevels(); refreshTradeLevelUI(); update(); }
    return posHit.type;
  }
  if(!active && insideZoneBox(idx,'draft:market')){
@@ -24042,6 +24223,18 @@ function fblClickSuVuoto(e){
    // coinciderebbe e mangerebbe il click — prima cliccando la freccia non si selezionava mai
    // (la casella della posizione copriva anche lì). La casella resta cliccabile altrove
    // (apre le statistiche) e il click sul vuoto continua a deselezionare tutto.
+   // LA LINEA SL/TP VINCE SUL RETTANGOLO DELLA POSIZIONE (10 novembre 2026).
+   // Segnalato dal proprietatore: «se vado a selezionare una linea SL o TP, la prima volta
+   // e' come se mi selezionasse la posizione e non mi seleziona quella che e' la linea».
+   // CAUSA MISURATA (banco A di sl_tp_selezione_trascinamento.test.mjs, con una trappola
+   // su `active`): al pointerdown la posizione NON si selezionava piu' - la cura di ieri
+   // aveva chiuso quella strada -, ma al pointerup il rettangolo della posizione
+   // (openPosHitRects) arrivava fino alla linea dello stop e rubava il clic: `active`
+   // diventava la posizione e le caselle SL/TP si riempivano dei suoi valori.
+   // Misurato: dopoDown active=false, dopoUp active=true - il colpevole era QUI.
+   // La priorita' «la freccia vince sulla casella», chiesta il 23 ottobre, resta per la
+   // freccia: qui si esclude solo il caso in cui il clic sia su una RIGA DI LIVELLO
+   // (SL, TP, entrata, stop profit), che e' esattamente quello che l'utente vuole toccare.
    const posHitR=openPosHitRects.find(r=>relX0>=r.x1&&relX0<=r.x2&&relY0>=r.y1&&relY0<=r.y2);
    if(posHitR){
     if(active!==posHitR.pos)focusPosition(posHitR.pos);
@@ -25945,8 +26138,48 @@ function computeBreakevenSl(entry,side,spread){
 // stesso identico meccanismo già usato per un trascinamento manuale della linea SL.
 // Restituisce true se lo stop e' stato spostato, false se no: fblGruppoPareggio conta su
 // questo per dire quante ne ha spostate DAVVERO.
+// IL PONTE DICE DA SOLO SE IL CONTO E' STACCATO (10 novembre 2026).
+// Il bridge risponde 400 con «Non connesso: chiama prima /connect» quando MT5 non e' agganciato
+// (misurato: 226 letture di /orders e 219 di /positions finite cosi', tutte in una sessione).
+// Tenere questa risposta in memoria serve a due cose: dire la verita' nella barra di stato
+// (invece di dare la colpa alla forbice del mercato) e non decidere niente su una fotografia
+// che non e' arrivata. La memoria si cancella alla prima risposta buona.
+// Gli ordini che l'ULTIMA fotografia riuscita del ponte ha visto davvero. Dichiarata con `let`
+// (non come proprieta' di window): in modalita' strict, leggere un nome mai dichiarato genera
+// un'eccezione - misurato il 10 novembre 2026, ed e' il motivo per cui la cura al fantasma non
+// partiva: l'errore finiva nel catch silenzioso e l'ordine restava in tabella.
+let __mt5OrdiniVistiOk=new Set();
+let __mt5UltimaRispostaNonConnesso=0;
+function mt5PonteDiceNonConnesso(){
+  return Date.now()-__mt5UltimaRispostaNonConnesso<15000;
+}
+function mt5SegnaRispostaPonte(percorso,messaggio){
+  const m=String(messaggio||'');
+  if(/non connesso/i.test(m)){ __mt5UltimaRispostaNonConnesso=Date.now(); return true; }
+  // Il ricordo si cancella solo con una risposta BUONA di una rotta che parla del conto
+  // MT5. Misurato (10 novembre 2026): /health e /account rispondevano 200 e cancellavano il
+  // «Non connesso» arrivato un attimo prima da /positions - e il BE tornava a dare la colpa
+  // alla forbice del mercato invece di dire la verita'. Le rotte che non c'entrano col conto
+  // (health, news, dati...) non hanno voce in capitolo.
+  const p=String(percorso||'');
+  const parlaDelConto=/^\/(positions|orders|account|order|connect|mt5-|history_deals|account_history)/.test(p);
+  if(parlaDelConto)__mt5UltimaRispostaNonConnesso=0;
+  return false;
+}
 function applyBreakevenToPosition(pos,t){
  if(!pos)return false;
+ // SE IL PONTE E' STACCATO, IL BE NON DEVE DARE LA COLPA ALLA FORBICE (10 novembre 2026).
+ // Segnalato dal proprietatore: «ora non funziona piu' nemmeno il tasto BE delle singole
+ // operazioni o a gruppi di posizioni». CAUSA MISURATA: la lista delle posizioni era vuota
+ // (il ponte rispondeva 400 «Non connesso» a /positions), il pareggio si calcolava col
+ // prezzo sbagliato e la guardia della forbice lo rifiutava - la barra di stato dava la
+ // colpa alla forbice del mercato invece che al ponte staccato. Ora lo si dice, e si prova
+ // a rimettere su il collegamento: senza, il tasto non fa niente e non spiega perche'.
+ if(pos.mt5Ticket!=null && mt5RealPositions.length===0 && typeof mt5PonteDiceNonConnesso==='function' && mt5PonteDiceNonConnesso()){
+  try{ $('status').textContent='🖥️ MT5 non e\' collegato: il break-even non puo\' arrivare al conto. Ricollego MT5…'; }catch(eS){}
+  try{ if(typeof maybeOfferMt5AutoReconnect==='function')maybeOfferMt5AutoReconnect('il break even'); }catch(eR){}
+  return false;
+ }
  // IL PAREGGIO E' ZERO (vedi la nota lunga su mt5PrezzoPareggio): profitto netto 0,00, commissioni
  // e swap compresi. Se viene colpito, il risultato e' zero - non "quasi".
  const scelta=fblPareggioPerStop(pos,t);
@@ -26013,8 +26246,24 @@ function applyBreakevenToPosition(pos,t){
 // bridge invece di passare da un oggetto locale.
 async function applyBreakevenToMt5TicketDirect(ticket,t){
 if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo simulate: nessun ordine reale viene inviato a MT5.'; return false; }
+ // COL PONTE CHE DICE «NON CONNESSO» IL BE NON DEVE TACERE (10 novembre 2026).
+ // Segnalato dal proprietatore: «ora non funziona piu' nemmeno il tasto BE delle singole
+ // operazioni o a gruppi di posizioni». Misurato: la fotografia delle posizioni era vuota
+ // (/positions rispondeva 400 «Non connesso»), `mt5RealPositions.find` non trovava niente e
+ // la funzione usciva in silenzio - il pulsante sembrava morto. Adesso lo si dice, e si
+ // prova il riaggancio silenzioso (quello che riprende il conto senza chiedere niente).
+ if(typeof mt5PonteDiceNonConnesso==='function' && mt5PonteDiceNonConnesso()){
+  try{ $('status').textContent='🖥️ MT5 non e\' collegato: il break-even non può arrivare al conto. Riprovo a collegarlo…'; }catch(eS){}
+  try{ if(typeof mt5RiagganciaSilenzioso==='function')mt5RiagganciaSilenzioso(); }catch(eR){}
+  return false;
+ }
  const live=mt5RealPositions.find(p=>String(p.ticket)===String(ticket));
- if(!live)return;
+ if(!live){
+  // Senza la fotografia non si calcola nessun pareggio: uno stop spostato cosi' sarebbe
+  // inventato. Lo si dice, invece di non fare niente.
+  try{ $('status').textContent='🖥️ Non vedo le posizioni sul conto MT5 (il ponte non risponde): collega MT5 e riprova.'; }catch(eS2){}
+  return false;
+ }
  const finta={asset:live.symbol,entry:Number(live.price_open),side:live.side,mt5Ticket:live.ticket};
  const scelta=fblPareggioPerStop(finta,t);
   const beSl=scelta.esatto;
@@ -29019,7 +29268,16 @@ chartEl.addEventListener('pointerdown',e=>{
      // esplicito qui, altrimenti un click con lo strumento Linea Alarm attivo creerebbe per
      // sbaglio un RETTANGOLO (il fallback finale qui sotto) invece di una linea Alarm.
      const type=(LINE_TYPES.includes(drawTool)||drawTool==='alarmline')?drawTool:drawTool==='fib'?'fib':drawTool==='vwap'?'vwap':drawTool==='vpfixed'?'vpfixed':drawTool==='vpanchor'?'vpanchor':'rectangle';
-     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,lvnEdgePct:8,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null,triggerMode:alarmSelectedTriggerMode,afterAction:alarmSelectedAfterAction,triggered:false,lastSide:null}:{})};
+     pendingDrawing={type,p1:{time:point.time,price:point.price},p2:{time:point.time,price:point.price},locked:false,hidden:false,...styleFromUI(type),...(type==='fib'?{levels:newFibLevels(),opts:newFibOpts()}:{}),...((type==='vpfixed'||type==='vpanchor')?{upColor:currentCandleColors().up,downColor:currentCandleColors().down,buckets:200,barSizePct:500,extendRight:false,bgEnabled:true,bgColor:'#ffffff',bgOpacity:5,lvnEnabled:true,lvnColor:'#00e676',lvnOpacity:25,lvnThresholdPct:15,lvnEdgePct:8,pocEnabled:true,pocColor:'#ff9800',pocWidth:1,pocExtend:false,vahEnabled:true,vahColor:'#3ea6ff',vahWidth:1,valEnabled:true,valColor:'#3ea6ff',valWidth:1,vaExtend:false,
+ // 10 NOVEMBRE 2026: la scelta della tendina «al cambio di time frame tieni fermo» DEVE
+ // finire dentro il disegno appena nato. Senza, _vpTfKeepTime() ricade sul predefinito
+ // «il tempo» (riga ~12979) e le 300 barre da un minuto diventano 60 a 5m, 20 a 15m, 5 a
+ // 1h - misurato col banco vp_barre_timeframe.test.mjs. Il numero di barre resta quello
+ // scelto a ogni time frame. Solo per vpfixed: vpanchor cresce fino alla candela attuale
+ // per costruzione, per lui la scelta non significherebbe niente.
+ ...(type==='vpfixed'?{tfAnchor:($('vpTfAnchor')?.value==='time')?'time':'candles',
+                       vpTfAnchor:($('vpTfAnchor')?.value==='time')?'time':'candles'}:{}),
+}:{}),...(type==='vwap'?{band1Enabled:true,band1Mult:1,band1Color:'#3ea6ff',band1Width:1,band2Enabled:false,band2Mult:2,band2Color:'#f0a020',band2Width:1,band3Enabled:false,band3Mult:3,band3Color:'#c77dff',band3Width:1}:{}),...(type==='alarmline'?{enabled:true,armed:true,soundId:null,triggerMode:alarmSelectedTriggerMode,afterAction:alarmSelectedAfterAction,triggered:false,lastSide:null}:{})};
      // Linee Alarm nascoste dall'interruttore in Impostazioni → Alarm: se se ne disegna una nuova,
      // si rimostrano (altrimenti sparirebbe appena creata, sembrando un errore).
      if(type==='alarmline'&&!alarmLinesVisiblePref()){ try{ localStorage.setItem(ALARM_LINES_VISIBLE_KEY,'1'); }catch(e){} if($('alarmLinesVisibleToggle'))$('alarmLinesVisibleToggle').checked=true; }
@@ -29055,6 +29313,17 @@ chartEl.addEventListener('pointerdown',e=>{
      let p2={time:point.time,price:point.price};
      if(TWO_CLICK_LINE_TYPES.includes(pendingDrawing.type))p2=applyStraightLock(pendingDrawing.p1,p2);
      pendingDrawing.p2=p2;
+     // 10 NOVEMBRE 2026: il numero di barre dell'istogramma e' lo spazio fra i DUE punti
+     // appena messi, e va scritto ORA. Durante l'anteprima (dopo il primo clic) i due
+     // punti coincidono, e `vpFixedResolveRange` con "tieni fermo il numero di candele"
+     // congelava 1 barra - misurato col banco vp_barre_timeframe.test.mjs: l'istogramma
+     // restringeva a UNA candela invece delle 300 scelte. Scrivendolo qui, il numero
+     // scelto dall'utente resta quello a ogni time frame.
+     if(pendingDrawing.type==='vpfixed'&&Number.isFinite(pendingDrawing.p1.time)&&Number.isFinite(p2.time)){
+       const ia=rowIndexNearTime(pendingDrawing.p1.time), ib=rowIndexNearTime(p2.time);
+       if(Number.isFinite(ia)&&Number.isFinite(ib)&&Math.abs(ib-ia)+1>1)
+         pendingDrawing.candleCount=Math.abs(ib-ia)+1;
+     }
      pendingDrawing.id=Date.now()+Math.random();
      if(pendingDrawingTemplateText!=null){ pendingDrawing.text=pendingDrawingTemplateText; pendingDrawingTemplateText=null; }
      pushHistory();
@@ -29241,6 +29510,13 @@ chartEl.addEventListener('pointerdown',e=>{
   const hitPill=hitGruppo||tpSlPillHitRects.find(r=>relXc>=r.x-4&&relXc<=r.x+r.w+4&&relYc>=r.y-4&&relYc<=r.y+r.h+4);
   tpSlEtichettaCandidateKey=hitPill?hitPill.ownerKey:null;
  }
+ // IL PRIMO CLIC SULLA LINEA LA SOLO MARCA, NON SELEZIONA LA POSIZIONE (10 novembre 2026).
+ // Segnalato dal proprietario: «se vado a selezionare una linea SL o TP, la prima volta è
+ // come se mi selezionasse la posizione e non mi seleziona quella che è la linea». Il terzo
+ // argomento di tradeLevelHit (`activate`) serve a selezionare la posizione, e va passato
+ // SOLO quando il trascinamento parte davvero - cioè dal SECONDO clic, quando la linea è
+ // già pronta. Misurato col banco sl_tp_selezione_trascinamento.test.mjs: al primo clic
+ // `active` cambiava lo stesso, perche' la selezione avviene dentro tradeLevelHit.
  const tradeHit=tradeLevelHit(e.clientX,e.clientY,true);
  if(tradeHit){
    e.preventDefault();
@@ -29539,6 +29815,20 @@ chartEl.addEventListener('pointermove',e=>{
    return;
  }
  if(tradeLevelDrag){
+   // IL BOTTONE DEVE ESSERE DAVVERO PREMUTO (10 novembre 2026). Misurato: in tutto
+   // app.html la parola `buttons` non compariva mai, quindi una linea SL/TP agganciata
+   // si muoveva da sola al solo passaggio del mouse - il proprietario l'ha visto come
+   // «la trascino e mi si trascina anche se non premo nulla». Se il puntatore si muove
+   // senza bottone il trascinamento e' morto (il pointerup e' stato perso, tipicamente
+   // rilasciando fuori dalla finestra): si chiude lo stato invece di continuare a
+   // inseguire un fantasma.
+   // Muoversi senza bottone non e' un trascinamento: la linea resta dov'e' (l'anteprima non
+   // si tocca, cosi' chi guarda vede lo stesso prezzo di prima) ma il trascinamento finisce
+   // qui - non deve continuare a seguire il puntatore da solo.
+   if(!e.buttons){
+     tradeLevelDrag=null; try{ draw(); }catch(e2){}
+     return;
+   }
    // Anche qui: durante il trascinamento aggiorniamo solo l'anteprima tratteggiata; il
    // valore vero resta quello precedente finché non si rilascia (pointerup), esattamente
    // come per il posizionamento di una linea nuova.
@@ -29791,7 +30081,12 @@ chartEl.addEventListener('pointerup',e=>{
    if(finalPrice!=null)setTradeLevel(tradeLevelDrag,finalPrice,'drag');
    previewTradeLevel=null;
    tradeLevelDrag=null;
-   if(e.pointerType==='touch'){chartEl.releasePointerCapture?.(e.pointerId);setChartTouchAction(false);}
+   // La cattura si libera SEMPRE, non solo col dito (10 novembre 2026). Tenerla con il
+   // mouse faceva restare il grafico padrone del puntatore anche dopo il rilascio, e i
+   // clic sui pulsanti della tabella - il BE (break even) per primo - venivano
+   // consegnati al canvas e non partivano piu'.
+   try{ chartEl.releasePointerCapture?.(e.pointerId); }catch(eLib){}
+   if(e.pointerType==='touch')setChartTouchAction(false);
    draw();
  }
  // Il cambio stile footprint va deciso PRIMA di questa uscita anticipata: su schermo touch il
@@ -29828,7 +30123,21 @@ chartEl.addEventListener('pointerup',e=>{
             else expandedTpSlGroups.add(chiave);
          } else if(kEt.indexOf('pos:')===0){
             const pa=positions.find(p=>'pos:'+p.id===kEt);
-            if(pa&&posSelezionata!==pa)focusPosition(pa); // selezione vera: è un gesto dell'utente
+   // LA RIGA DI LIVELLO VINCE SULLA PILLOLA (10 novembre 2026). La pillola sta sulla
+   // stessa altezza della linea SL/TP, quindi il clic sulla linea finiva qui e
+   // selezionava la POSIZIONE: «la prima volta è come se mi selezionasse la
+   // posizione e non mi seleziona quella che è la linea». Misurato con una
+   // trappola su focusPosition: a chiamarlo era questo ramo, al pointerup.
+   // Se il clic è su una riga di livello (SL, TP, entrata, stop profit) la linea
+   // resta padrona del clic: si arma e si sposta, come chiesto.
+   // LA RIGA DI LIVELLO VINCE SULLA PILLOLA (10 novembre 2026). La pillola sta sulla
+   // stessa altezza della linea SL/TP, quindi il clic sulla linea finiva qui e
+   // selezionava la POSIZIONE: «la prima volta è come se mi selezionasse la
+   // posizione e non mi seleziona quella che è la linea». Misurato con una
+   // trappola su focusPosition: a chiamarlo era proprio questo ramo, al pointerup.
+   // Se il clic è su una riga di livello (SL, TP, entrata, stop profit) la linea
+   // resta padrona del clic: si arma e si sposta, come chiesto.
+   if(pa&&posSelezionata!==pa&&tradeLevelHit(e.clientX,e.clientY,false)===null)focusPosition(pa); // selezione vera: è un gesto dell'utente
          }
        draw();
      }
@@ -29854,7 +30163,21 @@ chartEl.addEventListener('pointerup',e=>{
     if(expandedTpSlGroups.has(chiave))expandedTpSlGroups.delete(chiave); else expandedTpSlGroups.add(chiave);
    } else if(kEt.indexOf('pos:')===0){
     const pa=positions.find(p=>'pos:'+p.id===kEt);
-    if(pa&&posSelezionata!==pa)focusPosition(pa); // selezione vera: è un gesto dell'utente
+   // LA RIGA DI LIVELLO VINCE SULLA PILLOLA (10 novembre 2026). La pillola sta sulla
+   // stessa altezza della linea SL/TP, quindi il clic sulla linea finiva qui e
+   // selezionava la POSIZIONE: «la prima volta è come se mi selezionasse la
+   // posizione e non mi seleziona quella che è la linea». Misurato con una
+   // trappola su focusPosition: a chiamarlo era questo ramo, al pointerup.
+   // Se il clic è su una riga di livello (SL, TP, entrata, stop profit) la linea
+   // resta padrona del clic: si arma e si sposta, come chiesto.
+   // LA RIGA DI LIVELLO VINCE SULLA PILLOLA (10 novembre 2026). La pillola sta sulla
+   // stessa altezza della linea SL/TP, quindi il clic sulla linea finiva qui e
+   // selezionava la POSIZIONE: «la prima volta è come se mi selezionasse la
+   // posizione e non mi seleziona quella che è la linea». Misurato con una
+   // trappola su focusPosition: a chiamarlo era proprio questo ramo, al pointerup.
+   // Se il clic è su una riga di livello (SL, TP, entrata, stop profit) la linea
+   // resta padrona del clic: si arma e si sposta, come chiesto.
+   if(pa&&posSelezionata!==pa&&tradeLevelHit(e.clientX,e.clientY,false)===null)focusPosition(pa); // selezione vera: è un gesto dell'utente
    }
    draw();
   }
@@ -29933,7 +30256,53 @@ chartEl.addEventListener('pointerup',e=>{
 ['pointerup','pointercancel'].forEach(tipo=>window.addEventListener(tipo,()=>{
  if(lineaTradePremuta){ lineaTradePremuta=null; try{ draw(); }catch(e){} }
 }));
+// CHIUSURA DI SICUREZZA DI OGNI TRASCINAMENTO (10 novembre 2026).
+//
+// MISURATO dal proprietario: «seleziono la linea ma mi rimane selezionata per sempre; quando
+// la vado a trascinare mi si trascina anche se non premo nulla; e poi non mi permette di
+// spostarla in una posizione nuova». E ancora: «il tasto BE delle singole operazioni o a
+// gruppi di posizioni non funziona piu'». UNA sola causa, misurata leggendo il codice:
+// il grafico si prende il puntatore (setPointerCapture, riga ~29252) e lo liberava SOLO col
+// dito; se il pointerup non arrivava (rilascio fuori dalla finestra, gesto interrotto,
+// finestra che perde il fuoco) il canvas restava padrone del puntatore - e i clic sui
+// pulsanti della tabella posizioni, BE compreso, venivano consegnati a lui invece che al
+// pulsante. In piu' `tradeLevelArmata` non si azzerava e la linea restava "pronta".
+//
+// Qui si chiude TUTTO, per qualunque puntatore, in un punto solo:
+//   - `lostpointercapture`: il sistema ha tolto la cattura da solo (e' il segnale che il
+//     grafico ha smesso di essere il padrone del puntatore);
+//   - `blur`: la finestra ha perso il fuoco, quindi nessun pointerup arrivera' piu';
+//   - `pointercancel` anche fuori dal grafico.
+// Non tocca la SELEZIONE della linea (tradeLevelArmata): quella, per richiesta esplicita
+// del proprietario, resta finche' non si tocca un punto vuoto del grafico o si preme Esc.
+function fblChiudiTrascinamentiTrade(motivo){
+  let qualcosa=false;
+  const chiudi=(v)=>{ if(v)qualcosa=true; return null; };
+  if(tradeLevelDrag)tradeLevelArmata=null;   // gesto interrotto: la linea non resta "pronta"
+  chiudi(tradeLevelDrag);       tradeLevelDrag=null;
+  chiudi(placingTradeLevelDrag); placingTradeLevelDrag=null;
+  chiudi(priceAxisDrag);        priceAxisDrag=null;
+  chiudi(zoneWidthDrag);        zoneWidthDrag=null;
+  chiudi(shapeDrag);            shapeDrag=null;
+  if(previewTradeLevel){ qualcosa=true; previewTradeLevel=null; }
+  if(lineaTradePremuta){ qualcosa=true; lineaTradePremuta=null; }
+  try{ chartEl.releasePointerCapture?.(-1); }catch(e1){}
+  for(const id of Array.from(touchPoints?touchPoints.keys():[])){
+    try{ chartEl.releasePointerCapture?.(id); }catch(e2){}
+  }
+  if(qualcosa){ try{ draw(); }catch(e3){} }
+  return qualcosa;
+}
+window.addEventListener('lostpointercapture',()=>{ fblChiudiTrascinamentiTrade('cattura persa'); },true);
+window.addEventListener('blur',()=>{ fblChiudiTrascinamentiTrade('finestra senza fuoco'); });
+window.addEventListener('pointercancel',()=>{ fblChiudiTrascinamentiTrade('gesto annullato'); },true);
 chartEl.addEventListener('pointercancel',e=>{
+ // Oltre ad azzerare i flag, si LIBERA la cattura: senza, il grafico restava padrone
+ // del puntatore e i clic sui pulsanti (BE) non gli arrivavano piu' (10 novembre 2026).
+ try{ chartEl.releasePointerCapture?.(e.pointerId); }catch(eLib){}
+ // Se il gesto si interrompe MENTRE si stava spostando, anche la linea perde la selezione:
+ // lasciarla armata voleva dire «pronta da mezz'ora», che e' il sintomo segnalato.
+ if(tradeLevelDrag)tradeLevelArmata=null;
  priceAxisDrag=null;
  tradeLevelDrag=null;
  zoneWidthDrag=null;
@@ -30246,7 +30615,24 @@ const fblClicOrdinePendente=async e=>{
        $('status').textContent=`🔌 Ordine pendente (ticket ${p.mt5Ticket}) cancellato su MT5.`;
        draw();update();
      }else{
-       $('status').textContent='⚠️ Cancellazione reale non riuscita: '+result.message;
+       // QUANDO IL BROKER DICE CHE L'ORDINE NON C'E' PIU', IN APP NON DEVE RESTARE
+       // (10 novembre 2026). Segnalato dal proprietatore, con la prova nel journal del
+       // terminale: «failed cancel order #581084659 ... [Invalid request]» - l'ordine era
+       // gia' stato cancellato (o era scattato) direttamente su MT5, e la riga restava
+       // nella tabella dei pendenti per sempre. Il broker ha risposto: quella strada
+       // «annullare» non esiste piu', quindi la copia locale non corrisponde a niente.
+       // La regola «mai togliere in locale se la cancellazione non e' andata a buon fine»
+       // resta per gli errori VERI (connessione, timeout, rifiuto permercato chiuso): qui
+       // il rifiuto dice l'opposto, cioe' che l'ordine non c'e' piu'.
+       const __m=String((result&&result.message)||'');
+       if(/invalid request|non esiste|not found|sconosciuto|does not exist|no orders/i.test(__m)){
+         pendingOrders=pendingOrders.filter(x=>x!==p);
+         resetPendingComposeFields();
+         $('status').textContent=`ℹ️ Ordine pendente (ticket ${p.mt5Ticket}) gia' cancellato sul conto MT5: l'ho tolto dalla lista.`;
+         draw();update();
+       }else{
+         $('status').textContent='⚠️ Cancellazione reale non riuscita: '+result.message;
+       }
      }
      fetchMt5Orders();
      return;
@@ -37898,7 +38284,17 @@ async function tgEseguiSegnale(voce,opzioni){
     esito=await openMarketTrade(p.side,{lots:p.lotti,sl:p.sl,tp:tp,senzaConferma:true,meta});
    }catch(e){ console.log('[Segnali] apertura fallita:',e); break; }
    if(esito===false)break;
-   if(positions.length>prima)aperte++; else break;
+   // SI CONTA DA CIO' CHE HA DAVVERO DETTO IL PONTE, NON DA `positions` (10 novembre 2026).
+   // Segnalato dal proprietario: «di segnali con 5 take profit me ne apre soltanto uno, oggi
+   // mi apre soltanto una posizione invece di aprirmi tutte quante le posizioni».
+   // CAUSA MISURATA: il ciclo nasce per le posizioni simulate, che finiscono subito in `positions[]`;
+   // col conto MT5 reale aperto dall'interfaccia l'ordine parte davvero (openMarketTrade ->
+   // placeRealMt5Order) e restituisce un TICKET, ma in `positions[]` non finisce niente - la posizione
+   // arriva dopo, dal polling del conto. Alla seconda iterazione `positions.length>prima` era falso,
+   // il ciclo faceva break e restava UNA sola posizione aperta. Ora si conta l'esito: ticket
+   // (o true) = aperta; falso = aperta fallita, e li' il break ha senso.
+   if(reale){ aperte+=(esito?1:0); if(!esito)break; }
+   else if(positions.length>prima)aperte++; else break;
   }
  }if(aperte&&(regole.length||avvicinamento)){
   // La strategia sopravvive alla chiusura della pagina (sta in localStorage) e deve poter
@@ -39211,7 +39607,10 @@ async function fetchServerWithTimeout(path,options,timeoutMs){
       try{ await fblRegistraSulServer(); }catch(e){}
     }
   }
-  if(!res.ok)return {ok:false,message:(data&&data.detail)?data.detail:('Errore HTTP '+res.status)};
+  if(!res.ok){ const __dm=(data&&data.detail)?data.detail:('Errore HTTP '+res.status);
+    try{ if(typeof mt5SegnaRispostaPonte==='function')mt5SegnaRispostaPonte(p,__dm); }catch(eSn){}
+    return {ok:false,message:__dm}; }
+  __ok=true; try{ if(typeof mt5SegnaRispostaPonte==='function')mt5SegnaRispostaPonte(p,''); }catch(eSn){}
   return {ok:true,data};
  }catch(e){
   return {ok:false,message:e.name==='AbortError'?'Il server non ha risposto in tempo.'
@@ -39568,8 +39967,11 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
    const res=await fetch(fblConChiave(base+path),{...(options||{}),signal:controller.signal});
    let data=null;
    try{ data=await res.json(); }catch(e){ /* risposta senza corpo JSON valido */ }
-   if(!res.ok)return {ok:false,message:(data&&data.detail)?data.detail:('Errore HTTP '+res.status)};
-   __ok=true;
+   if(!res.ok){ const __dm=(data&&data.detail)?data.detail:('Errore HTTP '+res.status);
+     try{ if(typeof mt5SegnaRispostaPonte==='function')mt5SegnaRispostaPonte(p,__dm); }catch(eSn){}
+     return {ok:false,message:__dm}; }
+   __ok=true; try{ if(typeof mt5SegnaRispostaPonte==='function')mt5SegnaRispostaPonte(p,''); }catch(eSn){}
+   return {ok:true,data};
    return {ok:true,data};
  }catch(e){
    if(e.name==='AbortError'){
@@ -40703,7 +41105,7 @@ function addBackfilledMt5Trade(d){
  const result=closeResultLabel(d.reason,{sl,entry:Number(d.priceOpen),side:d.side});
  trades.push({
    id:Date.now()+Math.random(),
-   asset:d.symbol,side:d.side,entry:Number(d.priceOpen),
+   asset:d.symbol,side:d.side,entry:fblPrezzoValido(d.priceOpen),
    // RICHIESTO ESPLICITAMENTE: le caselle TP/SL si disegnano SOLO se erano davvero stati
    // impostati (il bridge li restituisce null quando non li trova nello storico ordini, mai
    // stimati/indovinati) — qui si limita a passarli così com'è, mai a inventarli.
@@ -40711,7 +41113,7 @@ function addBackfilledMt5Trade(d){
    origin:'MARKET',lots,risk:0,dist:0,hasRiskModel:false,
    startTime:d.timeOpen*1000,openTF:1,   // orario esatto dal broker: nessuno spostamento sulla candela
    marginUsed:0,mt5Ticket:d.positionId,mt5AddedAt:Date.now(),
-   exit:Number(d.priceClose),result,pl,pct,pips,account,
+   exit:fblPrezzoValido(d.priceClose),result,pl,pct,pips,account,
    // Stesso fix di closeTrade() (bug #7): un trade recuperato da /history_deals è SEMPRE un
    // trade REALE sul conto MT5 collegato, non può mai finire marcato come Storico/backtest solo
    // perché l'utente in quel momento ha la sessione backtest a schermo (currentMode() leggerebbe
@@ -41642,7 +42044,7 @@ async function fetchMt5Positions(){
            const {realOpenMs,realOpenIdx}=resolveMt5OpenAnchor(rp);
            const pos={
              id:Date.now()+Math.random(),
-             asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
+             asset:rp.symbol,side:rp.side,entry:fblPrezzoValido(rp.price_open),
              sl:rp.sl!=null?Number(rp.sl):null,tp:rp.tp!=null?Number(rp.tp):null,
              origin:'MARKET',
              lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
@@ -41673,7 +42075,7 @@ async function fetchMt5Positions(){
        const {realOpenMs,realOpenIdx}=resolveMt5OpenAnchor(rp);
        const pos={
          id:Date.now()+Math.random(),
-         asset:rp.symbol,side:rp.side,entry:Number(rp.price_open),
+         asset:rp.symbol,side:rp.side,entry:fblPrezzoValido(rp.price_open),
          sl:rp.sl!=null?Number(rp.sl):null,tp:rp.tp!=null?Number(rp.tp):null,
          origin:'MARKET',
          lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
@@ -41732,7 +42134,36 @@ async function fetchMt5Orders(){
  try{
    const result=await fetchMt5WithTimeout('/orders',{method:'GET'},8000);
    if(generazione!==mt5GenerazioneConto)return;   // fotografia di un altro conto
+   // IL PONTE CHE DICE «NON CONNESSO» E' UNA RISPOSTA, NON UN SILENZIO (10 novembre 2026).
+   // Segnalato dal proprietatore: «questo ordine pendente era stato aggiunto, ma dopo e'
+   // stato eliminato direttamente dal terminale MT5. E' rimasto in memoria
+   // sull'applicazione... e non viene nemmeno preso in considerazione dentro al grafico».
+   // CAUSA MISURATA: `vanished` (il controllo «e' sparito?») gira SOLO quando la lettura
+   // riesce; il ponte rispondeva 400 «Non connesso» (226 letture di /orders oggi, zero
+   // riuscite) quindi il controllo non partiva mai e l'ordine fantasma restava per sempre.
+   // Quando il ponte dichiara il conto staccato, un ordine tracciato che nessuna fotografia
+   // BUONA ha mai visto e che esiste da prima del guasto non e' piu' affidabile: si toglie,
+   // e lo si dice. (Un ordine appena messo non si tocca: quello lo difende `mt5AddedAt`.)
+   if(!result.ok){
+     try{
+       const msg=String((result&&result.message)||'');
+       if(/non connesso/i.test(msg)){
+         const primaDiAdesso=pendingOrders.filter(p=>p&&p.mt5Ticket!=null&&!(p.mt5AddedAt!=null&&p.mt5AddedAt>=fetchStartedAt));
+         for(const p of primaDiAdesso){
+           if(!__mt5OrdiniVistiOk.has(String(p.mt5Ticket))){
+             pendingOrders=pendingOrders.filter(x=>x!==p);
+             try{ $('status').textContent='Ordine pendente (ticket '+p.mt5Ticket+') tolto dalla lista: il conto non e\' piu\' collegato e il terminale non lo vede.'; }catch(eSt){}
+           }
+         }
+         if(primaDiAdesso.length&&typeof update==='function')update();
+       }
+     }catch(eGhost){}
+     return;
+   }
    if(result.ok && Array.isArray(result.data)){
+     // SI RICORDA quali ordini il ponte ha VISTO DAVVERO: serve a non buttare un ordine
+     // solo perche' una lettura e' fallita (misurato: e' cosi' che nascevano i fantasmi).
+     try{ __mt5OrdiniVistiOk=new Set(result.data.map(o=>String(o.ticket))); }catch(eSet){}
      // Ordini pendenti REALI tracciati in app (pendingOrders[].mt5Ticket) spariti dal conto
      // vero: o sono SCATTATI (diventano una posizione — in MT5 la posizione risultante eredita
      // lo STESSO numero di ticket dell'ordine che l'ha generata, quindi la cerchiamo tra le
@@ -41757,7 +42188,7 @@ async function fetchMt5Orders(){
          // tabella "Operazioni aperte" invece che solo in quella dedicata MT5.
          const pos={
            id:Date.now()+Math.random(),
-           asset:p.asset,side:triggered.side,entry:Number(triggered.price_open),
+           asset:p.asset,side:triggered.side,entry:fblPrezzoValido(triggered.price_open),
            sl:triggered.sl!=null?Number(triggered.sl):null,
            tp:triggered.tp!=null?Number(triggered.tp):null,
            origin:'PENDING',kind:p.kind||'LIMIT',
@@ -41938,6 +42369,25 @@ async function fetchMt5AccountInfo(){
  _mt5AccountInfoInFlight=true;
  try{
    const r=await fetchMt5WithTimeout('/account',{method:'GET'},8000);
+   // IL CONTO DEL PONTE E' QUELLO CHE CONTA, ANCHE FRA DISPOSITIVI (10 novembre 2026).
+   // Misurato: il login che torna da /account non veniva MAI confrontato con quello locale,
+   // quindi se qualcuno cambiava conto (dal PC, dal tablet, da un'altra finestra) gli altri
+   // dispositivi restavano su quello di prima. Il polling di questa funzione gira gia' una
+   // volta al secondo: e' il canale piu' naturale che ci sia, non serve inventarne un altro.
+   // Richiesto dal proprietario: «se passo da conto 1 a conto 2 sul PC, anche sul tablet deve
+   // passare, e viceversa».
+   if(r.data && r.data.login!=null){
+     const loginPonte=String(r.data.login);
+     const loginQui=(mt5ContoAttivo&&mt5ContoAttivo.login!=null)?String(mt5ContoAttivo.login):'';
+     if(loginPonte && loginQui && loginPonte!==loginQui && typeof mt5AttivaConto==='function'){
+       try{
+         mt5AttivaConto(loginPonte, r.data.server||'');
+         try{ if(typeof updateMt5ModeUI==='function')updateMt5ModeUI(); }catch(eUi){}
+         try{ scheduleSave(); }catch(eSv){}
+         try{ update(); draw(); }catch(eDr){}
+       }catch(eAtt){}
+     }
+   }
    if(r.ok&&r.data&&Number.isFinite(Number(r.data.equity))){ mt5AccountInfo=r.data; mt5AccountInfoErrore=null; try{ if(mt5ContoAttivo&&mt5ContoAttivo.login!=null && (r.data.reale===true||r.data.reale===false)){ const k=mt5AccountKey(mt5ContoAttivo); mt5ContoRealePerChiave[k]=r.data.reale; mt5ContoRealeSalva(); mt5ContoAttivo.reale=r.data.reale; mt5ContoAttivo.tradeMode=r.data.trade_mode; } }catch(e){} }
    else mt5AccountInfoErrore=(r&&r.message)||'risposta non valida';
     // P3: appena arrivano i dati del conto, valuta se e' reale per la Prop Firm
@@ -48754,13 +49204,59 @@ function fblContoDisegna(){
 // Non tocca NIENTE da solo: dice solo cosa andrebbe fatto, cosi' la prova la misura e il
 // gestore del messaggio esegue. Un messaggio senza il campo conto (una finestra rimasta aperta
 // da prima) non cambia niente, come prima.
+// Applica lo STATO (posizioni, ordini, trade, equity...) di un messaggio trading_sync. E' un
+// pezzo del gestore del messaggio, messo qui per poterlo chiamare anche DOPO un cambio conto
+// asincrono: scriverlo prima del cambio significa scrivere nella sessione sbagliata (misurato
+// il 10 novembre 2026: posizioni chiuse da tempo che restavano nella tabella del tablet).
+// Bandierina: c'e' un cambio conto asincrono in corso e le posizioni di quel messaggio
+// aspettano di essere applicate (10 novembre 2026). Vedi il ramo trading_sync.
+let posizioniInAttesaDelConto=false;
+
+
+function fblApplicaStatoTrading(msg){
+  try{
+    const _mt5Locale=currentMt5AccountTag();
+    const _mt5Remoto=msg.conto&&msg.conto.mt5?{login:String(msg.conto.mt5.login||''),server:String(msg.conto.mt5.server||'')}:{login:'',server:''};
+    const _stessoContoMt5=(!_mt5Locale.mt5Login&&!_mt5Remoto.login)
+      ||(_mt5Locale.mt5Login&&_mt5Remoto.login&&_mt5Locale.mt5Login===_mt5Remoto.login&&(_mt5Locale.mt5Server||'')===(_mt5Remoto.server||''));
+    if(!_stessoContoMt5){
+      console.log('[trading_sync] posizioni/ordini del conto MT5 remoto ignorati (diverso dal locale)');
+    }else{
+      positions=Array.isArray(msg.positions)?msg.positions:positions;
+      pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
+    }
+    if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades:trades;
+    equity=Array.isArray(msg.equity)?msg.equity:equity;
+    if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
+    if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
+    if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
+    if(msg.tradeStrategies)tradeStrategies=msg.tradeStrategies;
+  }catch(e){ console.warn('trading_sync non applicato:',e); }
+}
 function fblApplicaContoMadre(conto){
   try{
     if(!conto || typeof conto!=='object') return {cambiato:false, motivo:'messaggio senza conto'};
     const madreViva = !!conto.vivo;
     const madreVista = conto.vista;
-    if(liveModeActive===madreViva && fblContoEffettivo()===madreVista){
+    // IL CONTO MT5 SI DISTINGUE DAL LOGIN, NON DALLA "VISTA" (10 novembre 2026).
+    // Misurato col banco conto_sincrono.test.mjs: due conti MT5 diversi hanno la stessa
+    // vista ('mt5') e la stessa modalita' (Live), quindi il confronto qui sotto diceva
+    // «gia' allineato» e il cambio di conto non passava da una finestra all'altra - ne' nel
+    // verso madre->duplicata, ne' in quello duplicata->madre. Richiesto dal proprietario:
+    // «se passo da conto 1 a conto 2 sul PC, anche sul tablet deve passare, e viceversa».
+    const loginMadre=conto.mt5&&conto.mt5.login?String(conto.mt5.login):'';
+    const loginQui=(typeof mt5ContoAttivo!=='undefined'&&mt5ContoAttivo&&mt5ContoAttivo.login)?String(mt5ContoAttivo.login):'';
+    const contoMt5Diverso=loginMadre&&loginQui&&loginMadre!==loginQui;
+    if(liveModeActive===madreViva && fblContoEffettivo()===madreVista && !contoMt5Diverso){
       return {cambiato:false, motivo:'gia allineato'};
+    }
+    // STESSO TIPO DI CONTO (MT5) MA LOGIN DIVERSO: il conto e' cambiato davvero e va
+    // detto, altrimenti «due conti MT5 diversi hanno la stessa vista» faceva rispondere
+    // «niente da cambiare». Misurato col banco conto_sincrono.test.mjs.
+    if(contoMt5Diverso){
+      return {cambiato:true, motivo:'conto MT5 diverso: login '+loginMadre+' invece di '+loginQui,
+              promessa:'conto_mt5', login:loginMadre,
+              server:(conto.mt5&&conto.mt5.server)?String(conto.mt5.server):''};
     }
     if(madreViva && !liveModeActive){
       return {cambiato:true, motivo:'la madre e in Live, qui si e in Storico',
@@ -57949,10 +58445,40 @@ async function fblApplicaAggiornamento(release, tagRemoto, btn){
     // aggiornamento che era partito davvero finirebbe per scaricare anche il pacchetto a mano.
     // Solo un `avviato:false` esplicito vuol dire «non e' partito niente».
     if(esito&&esito.ok&&esito.avviato===false){
-      fblAggPannelloVia();
+      // NON C'E' NIENTE DA INSTALLARE: L'APP DEVE DITELO, E SI DEVE VEDERE.
+      //
+      // SEGNALATO dal proprietario (10 novembre 2026): «premo il pulsante aggiorna, mi fa
+      // vedere soltanto questo popup, si chiude subito dopo 2 secondi e non fa letteralmente
+      // nulla nemmeno il refresh». CAUSA MISURATA nei log del ponte dello stesso giorno: la
+      // rotta /aggiorna-programma rispondeva ok:true avviato:false, cioe' «il programma e' gia'
+      // alla 2.2.24: non c'e' niente da installare» - e qui il velo spariva lasciando come unica
+      // traccia una riga di stato lunga tre parole, che non si legge. Misurato anche perche'
+      // capita PROPRIO dopo un aggiornamento riuscito: negli stessi log ci sono sei POST
+      // /aggiorna-programma, tutti 200, e l'installer ha chiuso e riaperto l'applicazione; il
+      // clic dopo cade in questo ramo, perche' di niente da installare non c'e' piu' niente.
+      //
+      // La cura non rimette il velo bloccante in silenzio (quella regola del 4 novembre era
+      // giusta): l'esito si vede, e l'uscita esiste - il pulsante sul pannello. In piu' la
+      // pagina si RICARICA, che e' la cosa che il proprietario aveva notato mancare: la
+      // versione nuova e' installata, e chi ha ancora davanti la copia vecchia nella cache del
+      // browser deve vederla comparire.
       try{ btn.disabled=false; btn.textContent='⬇️ Aggiorna ora'; }catch(e){}
       try{ localStorage.removeItem('fbl_aggiornamento_atteso'); }catch(e){}
-      try{ $('status').textContent='ℹ️ '+(esito.messaggio||'non c’era niente da installare')+'. Non ho toccato nulla.'; }catch(e){}
+      const __gia=(esito.programma||'').trim();
+      const __dice=__gia
+        ?('Sei gia\' alla '+__gia+': e\' l\'ultima versione pubblicata, non c\'era niente da installare.')
+        :('Non c\'era niente da installare: il programma e\' gia\' aggiornato.');
+      try{ $('status').textContent='ℹ️ '+((esito.messaggio||__dice)+' Ricarico la pagina con la versione nuova.'); }catch(e){}
+      fblAggPannello(__dice+' Ricarico la pagina…',{fermo:true});
+      // Il pulsante dell'aggiornamento si spegne: non c'e' piu' niente da aggiornare.
+      try{ btn.style.display='none'; }catch(e){}
+      // La copia locale del piano poteva dire "installa" quando invece non serve piu': si
+      // butta, cosi' la prossima decisione si riprende i dati veri (misurato il 10 novembre
+      // 2026: senza, il secondo clic ripeteva la stessa risposta per altri 60 secondi).
+      setTimeout(()=>{
+        try{ if(window.fblPianoAggiornamentoDimentica)fblPianoAggiornamentoDimentica(); }catch(e){}
+        fblRicaricaPagina();
+      },2500);
       return;
     }
     if(esito&&esito.ok){
