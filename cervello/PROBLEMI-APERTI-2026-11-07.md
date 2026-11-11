@@ -231,3 +231,23 @@ e anche gli indicatori come si comportano in maniera diversa su piu' schermi, su
 - [ ] E. Collaudo completo + pubblicazione.
 
 Stato: DA FARE (dopo il commit in corso).
+
+## P0 — POSIZIONI DI UN ALTRO CONTO: DUE CASI ANCORA APERTI (11 novembre 2026)
+Due banchi misurano difetti veri e restano ROSSI. NON sono stati committati (un banco rosso
+committato rende rosso il collaudo di GitHub: lezione 31). Vivono in
+`C:\Users\pietro\AppData\Local\Temp\opencode\banchi_aperti\`:
+- `posizioni_un_solo_conto.test.mjs` — (a) la finestra duplicata che non ha ancora fatto
+  `/connect` (conto non noto) mostra 2 righe invece di 1: entra anche la posizione di un altro
+  conto; (b) una fotografia del ponte di un ALTRO conto entra in `positions[]` (misurato:
+  ticket 999 altrui dentro l'elenco). Serve sapere DI CHE CONTO e' la fotografia del ponte:
+  `/positions` non lo dichiara.
+- `posizioni_chiuse_tablet.test.mjs` — le posizioni chiuse da tempo restano nella tabella del
+  tablet dopo un cambio conto (il cambio asincrono e' curato per il caso Live, non per tutti).
+- Stato: DA CURARE, con la misura gia' scritta. La cura tocca il ponte (`/positions` deve dire
+  il login) e il ricevente.
+
+## P1 — TRAFFICO CLOUD: CURE APPLICATE, DA MISURARE SUL CAMPO (11 novembre 2026)
+Applicate in `app.html`: tetto giornaliero persistito su localStorage, rilettura del grafico
+allentata a 5 minuti fuori dal Live, letture contate anche nei quattro percorsi che il pannello
+non vedeva, keepalive sotto il tetto. Banco: `laboratorio/app/cloud_bolletta.test.mjs`.
+Da fare: guardare la console Firebase dopo 24 ore e confrontare con il pannello dell'app.

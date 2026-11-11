@@ -96,7 +96,11 @@ test('la casella Target/Stop e gli indicatori non trattengono piu\' la selezione
   const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
   const i = src.indexOf('function fblClickSuVuoto');
   assert.ok(i > 0, 'la funzione della deselezione deve esistere');
-  const f = src.slice(i, i + 3000);
+  // Le finestre sono 6000 caratteri, non 3000/3500: misurato il 10-11 novembre 2026, il
+  // commento sulla riga di livello che vince sulla pillola ha allungato il blocco e `hitFp`
+  // e' uscito dal taglio - il banco diventava rosso perche' guardava nel posto sbagliato,
+  // non perche' il comportamento fosse cambiato.
+  const f = src.slice(i, i + 6000);
   assert.ok(!/if\(!hitDraw&&!hitZone&&!hitFp\)/.test(f),
     'la casella Target/Stop non deve piu\' bloccare la deselezione');
   assert.ok(!/&&!hitVp&&/.test(f),
@@ -114,7 +118,7 @@ test('il cambio stile del footprint non muore piu\' dentro la casella Target/Sto
   // misurerebbe un'altra cosa.
   const i = src.indexOf('let fpTocco=null;');
   assert.ok(i > 0, 'il gestore del tocco sulle candele deve esistere');
-  const f = src.slice(i, i + 3500);
+  const f = src.slice(i, i + 6000);
   assert.match(f, /const _suCandela=footprintCellHitRects\.some/,
     'si deve sapere se il tocco e\' sul corpo della candela');
   assert.match(f, /if\(!_suCandela&&zoneBoxHitRects\.some/,

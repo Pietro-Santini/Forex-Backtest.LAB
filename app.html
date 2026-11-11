@@ -4393,7 +4393,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      NUDO dentro una riga flex: 247 px occupati da una frase invisibile, che spingevano tre
      pulsanti fuori dallo schermo del telefono. -->
 <button type="button" id="nuovaFinestraBtn" class="chartCornerBtn"
-        title="Duplica la finestra: apre a tutto schermo SOLO il grafico, da spostare su un altro monitor. Le posizioni e gli ordini sono in comune con la pagina principale: quello che apri qui finisce li'. Rettangoli, linee e Fibonacci invece passano a tutte le finestre aperte; profilo volumetrico, VWAP, linee Allarme e indicatori restano di questa finestra. Ogni clic ne apre una nuova; si chiude con la X della finestra."
+        title="Duplica la finestra: apre a tutto schermo SOLO il grafico, da spostare su un altro monitor. Le posizioni e gli ordini sono in comune con la pagina principale: quello che apri qui finisce li'. Dei disegni, rettangoli, linee e Fibonacci passano a tutte le finestre aperte; profilo volumetrico, VWAP, linee Allarme e indicatori restano di questa finestra. Ogni clic ne apre una nuova; si chiude con la X della finestra."
         style="width:auto;padding:0 8px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:6px">
   <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.98h18v14.03z"/></svg>
   <!-- LA SCRITTA SPARISCE SUL TELEFONO, l'icona no. Il proprietario ha chiesto che ci sia
@@ -6010,7 +6010,17 @@ function mt5AttivaConto(login,server,reale,tradeMode){
  // Nessun sospetto ereditato dal conto di prima: si riparte da una fotografia vera di questo.
  positions.forEach(p=>{ if(p)p.mt5MissingSince=null; });
  mt5SalvaParcheggio();
- if(parcheggiate||riprese){
+ // IL CAMBIO CONTO SI ANNUNCIA SEMPRE (10-11 novembre 2026). Misurato col banco
+ // conto_sincrono.test.mjs: cambiando conto sulla duplicata la finestra principale non
+ // riceveva NESSUN messaggio («Messaggi ricevuti dal canale: []»). La causa: qui si
+ // annunciava solo se qualcosa era stato parcheggiato o ripreso, e con zero posizioni
+ // aperte non succedeva - quindi il conto non passava fra le finestre proprio nel caso
+ // piu' comune. La sincronizzazione del conto e' richiesta dal proprietario («se passo
+ // dal conto 1 al conto 2 sul PC, anche sul tablet deve passare, e viceversa»).
+ if(parcheggiate||riprese||(precedente&&precedente!==ora)){
+  // Il cambio conto si annuncia FORZANDO (vedi broadcastTradingStateNow): senza posizioni
+  // aperte lo stato sembra vuoto e il messaggio non partirebbe.
+  if(precedente&&precedente!==ora){ try{ broadcastTradingStateNow(true); }catch(e){} }
   try{ scheduleSave(); }catch(e){}
   try{ update(); }catch(e){}
  }
@@ -8835,7 +8845,12 @@ function fblStatoDaAnnunciare(p){
     || (p.trades&&p.trades.length)));
  }catch(e){ return false; }
 }
-function broadcastTradingStateNow(){
+// `forza` = annuncia anche uno stato "vuoto" (nessuna posizione, nessun ordine, nessun trade).
+// Serve al CAMBIO CONTO (10-11 novembre 2026): misurato col banco conto_sincrono.test.mjs, la
+// duplicata che passava al conto 2 non mandava NIENTE («Messaggi ricevuti dal canale: []»),
+// perche' senza posizioni aperte lo stato sembrava vuoto e la finestra taceva - proprio nel
+// caso piu' comune. Il conto e' un'informazione, non un dettaglio delle posizioni.
+function broadcastTradingStateNow(forza){
  if(!tradingChannel||applyingRemoteTradingSync)return;
  let p=null;
  try{ p=collectTradingSyncPayload(); }catch(e){ return; }
@@ -8848,7 +8863,7 @@ function broadcastTradingStateNow(){
  // ordini, nemmeno quelle del proprio conto (il filtro del ricevente non trovava il conto).
  // Ora si UNISCE: vivo/vista restano quelli di qui, il resto (mt5) resta quello costruito.
  try{ p.conto = {vivo: liveModeActive, vista: fblContoEffettivo(), ...(p.conto||{})}; }catch(e){}
- if(!tradingSyncRicevuto && !fblStatoDaAnnunciare(p)){
+ if(!forza && !tradingSyncRicevuto && !fblStatoDaAnnunciare(p)){
   // Niente ricevuto e niente di proprio: tacere e' l'unica cosa giusta.
   return;
  }

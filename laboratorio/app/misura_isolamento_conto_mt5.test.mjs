@@ -42,7 +42,7 @@ test('MISURA 1 — collectTradingSyncPayload contra il messaggio che parte davve
 });
 
 // ===== 2. Dall'altro capo: quali posizioni vengono davvero applicate? =====
-test('MISURA 2 — chi riceve: cosa entra e cosa no', async () => {
+test('MISURA 2 — chi riceve: il conto segue, le posizioni non si mescolano', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(`(function(){
@@ -71,40 +71,62 @@ test('MISURA 2 — chi riceve: cosa entra e cosa no', async () => {
       tradingChannel.postMessage=function(p){ spedito=p; };
       try{ broadcastTradingStateNow(); }finally{ tradingChannel.postMessage=vera; }
       mt5ContoAttivo=contoMio;
-      // (d) Il messaggio dello STESSO conto, come parte davvero (conto perso per strada).
-      // La posizione e' del conto locale (68794) ma il conto NON e' scritto nel messaggio.
+      // (d) Il messaggio dello STESSO conto, come parte davvero.
       const stessaDelMioConto={id:'stessa',asset:'EURUSD',side:'BUY',entry:1.1,lots:0.1,mt5Ticket:555,mt5Login:'68794',mt5Server:'Broker-Demo'};
       positions.length=0; positions.push(stessaDelMioConto);
       let stessoSpedito=null; const vera2=tradingChannel.postMessage.bind(tradingChannel);
       tradingChannel.postMessage=function(p){ stessoSpedito=p; };
       try{ broadcastTradingStateNow(); }finally{ tradingChannel.postMessage=vera2; }
       stessoSpedito.slot=6;
+      const a_esito=ricevi(daAltro);
+      const a_contoDopo=mt5ContoAttivo?String(mt5ContoAttivo.login):null;
+      const b_esito=ricevi(daStesso);
+      // (e) IL PUNTO DI APPLICAZIONE, SENZA IL CAMBIO CONTO: e' qui che deve reggere
+      // l'isolamento. Si chiama fblApplicaStatoTrading direttamente, come farebbe una
+      // finestra che non puo' seguire il conto (versione vecchia, o cambio in corso).
+      mt5ContoAttivo={login:'68794',server:'Broker-Demo'};
+      positions.length=0; positions.push(mia);
+      const daAltroCopia=JSON.parse(JSON.stringify(daAltro));
+      fblApplicaStatoTrading(daAltroCopia);
+      const e_esito=positions.map(x=>x.id);
       return {
         contoCheArrivaDavvero: spedito.conto,
         contoCheArrivaDavveroStesso: stessoSpedito.conto,
         contoDichiaratoDaAltro: daAltro.conto,
-        a_altroContoDichiarato: ricevi(daAltro),
-        b_stessoContoDichiarato: ricevi(daStesso),
+        a_altroContoDichiarato: a_esito, a_contoDopo,
+        b_stessoContoDichiarato: b_esito,
         c_altroContoComeParte: ricevi(spedito),
-        d_stessoContoComeParte: ricevi(stessoSpedito)
+        d_stessoContoComeParte: ricevi(stessoSpedito),
+        e_puntoDiApplicazione: e_esito
       };
     })()`);
-    console.log('AVVISO conto che arriva davvero =', JSON.stringify(r.contoCheArrivaDavvero));
-    console.log('AVVISO (d) conto che arriva davvero, stesso conto =', JSON.stringify(r.contoCheArrivaDavveroStesso));
-    console.log('AVVISO conto dichiarato (altro) =', JSON.stringify(r.contoDichiaratoDaAltro));
-    console.log('AVVISO (a) altro conto, conto dichiarato =', JSON.stringify(r.a_altroContoDichiarato));
-    console.log('AVVISO (b) stesso conto, conto dichiarato =', JSON.stringify(r.b_stessoContoDichiarato));
-    console.log('AVVISO (c) altro conto, come parte davvero =', JSON.stringify(r.c_altroContoComeParte));
-    console.log('AVVISO (d) stesso conto, come parte davvero =', JSON.stringify(r.d_stessoContoComeParte));
+    console.log('AVVISO (a) altro conto, conto dichiarato =', JSON.stringify(r.a_altroContoDichiarato),
+                '| conto locale dopo =', JSON.stringify(r.a_contoDopo));
+    console.log('AVVISO (b) stesso conto =', JSON.stringify(r.b_stessoContoDichiarato));
+    console.log('AVVISO (c) altro conto come parte davvero =', JSON.stringify(r.c_altroContoComeParte));
+    console.log('AVVISO (d) stesso conto come parte davvero =', JSON.stringify(r.d_stessoContoComeParte));
+    console.log('AVVISO (e) punto di applicazione, senza cambio conto =', JSON.stringify(r.e_puntoDiApplicazione));
     assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
-    assert.deepEqual(r.a_altroContoDichiarato, ['mia'],
-      'le posizioni di un conto MT5 diverso non devono sostituire le nostre');
+    // (a) IL CONTO SEGUE (richiesto dal proprietario: il conto e' sincronizzato fra PC,
+    // tablet, telefono e finestre duplicate), quindi dopo il messaggio si e' su 12345 e le
+    // posizioni mostrate sono le sue: non e' mescolanza, e' lo stesso conto.
+    assert.deepEqual(r.a_altroContoDichiarato, ['altrui'],
+      'seguendo il conto annunciato, le posizioni devono essere quelle di quel conto');
+    assert.equal(r.a_contoDopo, '12345',
+      'il conto annunciato da un\'altra finestra deve diventare il conto locale');
     assert.deepEqual(r.b_stessoContoDichiarato, ['sua'],
       'le posizioni dello STESSO conto devono poter arrivare');
     assert.deepEqual(r.d_stessoContoComeParte, ['stessa'],
       'le posizioni dello STESSO conto devono passare anche nel messaggio che parte davvero');
+    // (e) LA GARANZIA CHE RESTA: nel punto di applicazione, un messaggio di un ALTRO conto
+    // non tocca le posizioni. Prima del 10 novembre 2026 questo era l'unico filtro e non
+    // c'era; ora c'e' ed e' quello che impedisce la mescolanza quando il cambio conto non
+    // e' ancora avvenuto (cambio asincrono, finestra di versione vecchia).
+    assert.deepEqual(r.e_puntoDiApplicazione, ['mia'],
+      'le posizioni di un conto MT5 diverso non devono sostituire le nostre nel punto di applicazione');
   } finally { await browser.close(); }
 });
+
 
 // ===== 3. Il caso del proprietario: una posizione reale SENZA mt5Login si vede? =====
 test('MISURA 3 — posizione reale senza mt5Login, col conto collegato', async () => {
@@ -202,45 +224,51 @@ test('MISURA 6 — cio che si salva non contiene posizioni reali', async () => {
 });
 
 // ===== 7. I TRADE fra finestre: passano senza alcun controllo di conto? =====
-test('MISURA 7 — i trade chiusi che arrivano dall altra finestra non hanno filtro di conto', async () => {
+test('MISURA 7 — i trade chiusi di un altro conto non entrano nel mio giornale', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(`(function(){
       ${IMPOSTA_CONTO('68794','Broker-Demo')}
       const mioTrade={id:'mio',mode:'live',asset:'EURUSD',side:'BUY',entry:1.1,exit:1.11,lots:0.1,mt5Ticket:111,mt5Login:'68794',mt5Server:'Broker-Demo'};
+      const suoTrade={id:'suo',mode:'live',asset:'EURUSD',side:'SELL',entry:1.1,exit:1.09,lots:0.2,mt5Ticket:999,mt5Login:'12345',mt5Server:'Altro-Server'};
       trades.length=0; equity.length=0; trades.push(mioTrade); equity.push(10000);
       // L'ALTRA FINESTRA E' SU UN ALTRO CONTO: costruisce il suo messaggio di la'.
       const contoMio=mt5ContoAttivo;
       mt5ContoAttivo={login:'12345',server:'Altro-Server'};
-      trades.push({id:'suo',mode:'live',asset:'EURUSD',side:'SELL',entry:1.1,exit:1.09,lots:0.2,mt5Ticket:999,mt5Login:'12345',mt5Server:'Altro-Server'});
+      trades.push(suoTrade);
       equity.push(20000);
       const msg=collectTradingSyncPayload(); msg.slot=3;
-      // COPIA PROFONDA: collectTradingSyncPayload passa trades/equity PER RIFERIMENT (non .slice()),
-      // quindi senza copia il messaggio e l'array locale sono lo stesso oggetto.
       const msgCopia=JSON.parse(JSON.stringify(msg));
-      const contoRemoto=msgCopia.conto;
-      const suoiTrade=msgCopia.trades.map(x=>x.id);
-      // Torno alle mie e applico il messaggio arrivato dall'altra finestra.
+      // (a) IL PUNTO DI APPLICAZIONE, SENZA CAMBIO CONTO: i miei trade restano i miei.
       trades.length=0; trades.push(mioTrade); equity.length=0; equity.push(10000);
-      // CORRETTO (10 novembre 2026): questo banco spostava mt5ContoAttivo sull'altro conto
-      // per costruire il messaggio e non lo ritirava indietro, cosi' il ricevente era gia'
-      // sull'altro conto e il filtro (giustamente) lasciava passare tutto: misurava il
-      // banco, non l'app.
-      mt5ContoAttivo=contoMio;
-      const primaTrades=trades.map(x=>x.id), primaEquity=equity.slice();
+      mt5ContoAttivo={login:'68794',server:'Broker-Demo'};
+      fblApplicaStatoTrading(msgCopia);
+      const a_trades=trades.map(x=>x.id);
+      const a_giornale=trades.filter(t=>tradeBelongsToCurrentView(t)).map(x=>x.id);
+      // (b) IL MESSAGGIO VERO (onmessage): il conto segue, e il giornale mostra SOLO i trade
+      // del conto su cui si e' ora. E' la regola del proprietario: le operazioni di un conto
+      // non si spargono negli altri.
+      trades.length=0; trades.push(mioTrade); equity.length=0; equity.push(10000);
+      mt5ContoAttivo={login:'68794',server:'Broker-Demo'};
       tradingChannel.onmessage({data:msgCopia});
-      return {contoRemoto, suoiTrade, primaTrades, dopoTrades:trades.map(x=>x.id),
-              primaEquity, dopoEquity:equity.slice(),
-              tradesPerRiferimento: collectTradingSyncPayload().trades===trades};
+      const b_conto=mt5ContoAttivo?String(mt5ContoAttivo.login):null;
+      const b_giornale=trades.filter(t=>tradeBelongsToCurrentView(t)).map(x=>x.id);
+      return {a_trades, a_giornale, b_conto, b_giornale,
+              contoRemoto: msgCopia.conto};
     })()`);
-    console.log('AVVISO conto remoto =', JSON.stringify(r.contoRemoto));
-    console.log('AVVISO trade suoi =', JSON.stringify(r.suoiTrade), ' miei prima =', JSON.stringify(r.primaTrades));
-    console.log('AVVISO trade dopo =', JSON.stringify(r.dopoTrades));
-    console.log('AVVISO equity prima =', JSON.stringify(r.primaEquity), ' dopo =', JSON.stringify(r.dopoEquity));
-    console.log('AVVISO trades passato per riferimento (stesso oggetto) =', r.tradesPerRiferimento);
+    console.log('AVVISO (a) trades nel punto di applicazione =', JSON.stringify(r.a_trades),
+                '| giornale =', JSON.stringify(r.a_giornale));
+    console.log('AVVISO (b) conto dopo il messaggio =', JSON.stringify(r.b_conto),
+                '| giornale =', JSON.stringify(r.b_giornale));
     assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
-    assert.deepEqual(r.dopoTrades, ['mio'],
-      'i trade di un altro conto non devono sostituire i miei nel Trade Journal');
+    assert.deepEqual(r.a_trades, ['mio'],
+      'i trade di un altro conto non devono sostituire i miei nel punto di applicazione');
+    assert.deepEqual(r.a_giornale, ['mio'],
+      'il giornale, sul mio conto, mostra solo i miei trade');
+    assert.equal(r.b_conto, '12345',
+      'il conto annunciato deve diventare il conto locale');
+    assert.deepEqual(r.b_giornale, ['suo'],
+      'seguendo il conto annunciato, il giornale mostra solo i trade di QUEL conto');
   } finally { await browser.close(); }
 });
 
