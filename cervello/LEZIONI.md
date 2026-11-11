@@ -1,5 +1,32 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+38. **Un `taskkill /IM` per NOME uccide anche il proprio avviatore, e `/FI "PID ne <mio>"` non
+    protegge niente.** In modalita' onefile il padre che scompatta i file si chiama ESATTAMENTE
+    come il figlio e ha un PID diverso: il filtro «tutti tranne me» esclude solo il figlio.
+    Misurato l'11 novembre 2026: di tutti i nostri eseguibili, l'unico senza avviatore vivo era
+    il ponte — l'unico che chiude il proprio nome. E il danno non era nei processi ma sul disco:
+    l'avviatore e' quello che cancella `%TEMP%\_MEI*` quando il figlio finisce, quindi
+    **359 cartelle rimaste per 17,4 GB**, 20-40 nuove al giorno. Regola: chiudere per nome solo
+    processi di cui si conosce il PID del padre, o escludere anche il proprio albero.
+
+39. **Se la funzione che DICE chi tiene la porta non guarda dove guarda quella che DECIDE, il
+    nome del colpevole e' un'ipotesi travestita da misura.** `_servizio_gia_vivo` decide con una
+    TCP su 127.0.0.1; `_chi_tiene_la_porta` racconta leggendo `netstat -ano` e prendendo la
+    PRIMA riga `LISTENING`, qualunque indirizzo sia. Su un PC con Tailscale Serve la prima riga
+    e' sempre quella di Tailscale: percio' il 9 novembre «PID 9916, Tailscale» e' finito nel
+    diario come causa, e due versioni hanno cercato dalla parte sbagliata. Misurato l'11
+    novembre con un socket vero sulla LAN: con 127.0.0.1 LIBERA il ponte accusa comunque chi
+    ascolta altrove. Quando si scrive un messaggio diagnostico, va provato che dica la stessa
+    cosa che la decisione ha visto — altrimenti e' il messaggio a guidare le indagini.
+
+40. **Una pulizia anti-orfano rifatta DOPO aver avviato i figli, chiude i figli.** Il secondo
+    giro di `_kill_stale_instances()` esisteva per il caso «un servizio figlio puo' essere
+    arrivato in ritardo»: il figlio in ritardo era il proprio, avviato diciotto righe sopra.
+    Misurato nel log vero: due `servizio dati MT5 avviato` con due PID diversi per una sola
+    accensione. E ogni attesa di porta di quella pulizia costa fino a 10 s, misurati 20,1 s per
+    chiamata: tutto prima che la porta 8000 cominci a rispondere. Una difesa che gira due volte
+    va scritta in modo da sapere chi ha avviato lei — oppure non va rifatta.
+
 33. **Un orario "ragionevole" che vale per tutti gli strumenti è un orario sbagliato per ciascuno.
     ** La schedule "chiudo alle 22 di Roma" era stata scritta per mettere d'accordo MT5 e
     Capital.com, ed e' diventata la verita' su ogni asset: uno che chiude alle 23 risultava
@@ -1107,18 +1134,30 @@
   una risposta, e soprattutto la prossima funzione che qualcuno aggiunge nasce scoperta.
   Spostato il controllo in `fetchMt5WithTimeout`, da cui passano TUTTE le chiamate al ponte:
   una riga, e copre anche quello che non e' stato ancora scritto. Con la prova di controllo che
-  le LETTURE devono continuare a passare, se no si spegne il grafico per difendere gli ordini.
-
-- **«Non pubblicare» non e' un'istruzione che si puo' dare: il rilascio parte da solo.**
-  (29 ottobre 2026, la 2.0.40 pubblicata due volte - il giorno dopo la 2.0.39 pubblicata due
-  volte.) Avevo scritto nel prompt per OpenCode «NON alzare CACHE_NAME e NON pubblicare
-  release». Sbagliato: il flusso «Installer Windows» ha un trigger su `app.html`, quindi
-  pubblica comunque. Quell'istruzione non ha evitato la release - ha solo garantito che uscisse
-  col numero DUPLICATO, cioe' esattamente l'inciampo che avevo appena finito di documentare.
-  LA REGOLA GIUSTA E' L'OPPOSTA: **chi tocca `app.html` alza `CACHE_NAME`**, perche' il
-  rilascio avviene che lo si voglia o no. L'unico modo di non pubblicare e' non spingere su
-  `main`.
-  E la lezione dentro la lezione: prima di vietare un comportamento, guardare se dipende da chi
+  le LETTURE devono continuare a passare, se no si spegne il grafico per difendere gli ordini.
+
+
+
+- **«Non pubblicare» non e' un'istruzione che si puo' dare: il rilascio parte da solo.**
+
+  (29 ottobre 2026, la 2.0.40 pubblicata due volte - il giorno dopo la 2.0.39 pubblicata due
+
+  volte.) Avevo scritto nel prompt per OpenCode «NON alzare CACHE_NAME e NON pubblicare
+
+  release». Sbagliato: il flusso «Installer Windows» ha un trigger su `app.html`, quindi
+
+  pubblica comunque. Quell'istruzione non ha evitato la release - ha solo garantito che uscisse
+
+  col numero DUPLICATO, cioe' esattamente l'inciampo che avevo appena finito di documentare.
+
+  LA REGOLA GIUSTA E' L'OPPOSTA: **chi tocca `app.html` alza `CACHE_NAME`**, perche' il
+
+  rilascio avviene che lo si voglia o no. L'unico modo di non pubblicare e' non spingere su
+
+  `main`.
+
+  E la lezione dentro la lezione: prima di vietare un comportamento, guardare se dipende da chi
+
   lo esegue. Qui non dipendeva.
 
 **Il collaudo rosso non accusa l'ultimo commit: accusa il PRIMO dei rossi.**
@@ -1264,3 +1303,7 @@
 35. **Stringere un filtro: si scarta chi dichiara un ALTRO conto, non chi non e' di MT5.** (11 novembre 2026.) Per non far passare le posizioni di un conto che non si conosce ho scritto `return pos.mt5Ticket!=null&&pos.mt5Login==null;`. Sembrava la stessa cosa e invece nascondeva anche le posizioni SIMULATE (`mt5Ticket:null`): sei banchi sono diventati rossi in un colpo (`mercato_chiuso`, `mt5_evidenzia_posizione`, `v138`, `tosto_be_posizioni`, `replay_live`). La domanda giusta non e' «questa posizione e' di MT5?» ma «questa posizione dichiara un conto DIVERSO dal mio?»: solo quella va scartata. LEZIONE: quando si stringe una condizione, scrivere a fianco il caso che deve continuare a passare, e farlo misurare.
 
 36. **Imparare un conto non e' collegarsi: la UI non deve raccontarlo.** (11 novembre 2026.) Una finestra duplicata nasce «collegata» ma senza numero di conto, e lo impara dal ponte. Quel passaggio finiva in `updateMt5ModeUI()`, che vedeva la transizione scollegato->collegato e faceva partire suono di benvenuto e domanda sulle sale Telegram - che sovrascriveva la barra di stato. Misurato dal banco `tosto_be_posizioni`: dopo il clic su BE si leggeva il messaggio delle sale invece di «pareggio». La cura e' un parametro `silenzioso`: la UI si aggiorna, la transizione non si racconta. LEZIONE: quando una funzione ha effetti collaterali «da prima volta», chi la chiama per un allineamento silenzioso deve poterlo dire.
+
+37. **Un nome di variabile sbagliato e' invisibile all'occhio e al controllo di sintassi; la prova isolata e' l'unico indizio che smaschera l'ambiente sbagliato.** (11 novembre 2026.) Nel banco del replay sincronizzato avevo dichiarato il parametro `contexto` (con la X, come la parola italiana) e nel corpo scritto `contesto` (senza X): `ReferenceError: contesto is not defined`. Ho riletto quel file decine di volte vedendo sempre la stessa parola in tutte e due le righe, perche' l'occhio normalizza cio' che si aspetta di leggere. Ho perso due ore a sospettare Playwright, la cache di Node, i punti di giunzione, il runner dei test - e intanto la PROVA ISOLATA (le stesse due funzioni in un file a parte, con un ponte finto) girava perfettamente: era l'indizio buono, diceva che la differenza stava nel FILE e non nell'ambiente. A smascherarla e' stato `String.prototype.replace`: dopo aver rinominato `contesto`->`cont`, il corpo cambiava e la firma no, e li si vedeva la X. LA REGOLA: quando un identificativo «non e' definito», stampare `Function.prototype.toString()` della funzione e confrontare firma e corpo CARATTERE PER CARATTERE (`[hex(ord(c)) for c in riga]`), invece di rileggere. E quando una prova isolata funziona e la stessa riga nel file vero no, il colpevole e' il file.
+
+38. **«Il disegno va sul cloud subito» era una supposizione: sono 60 secondi.** (11 novembre 2026.) Nel banco sui disegni che spariscono ho scritto l'attesa che mi sembrava generosa (4,5 secondi) e ho dato per scontato che il documento condiviso fosse già scritto; il banco è diventato rosso e stavo per chiamarlo difetto. La diagnosi (`banchi_aperti_forex/diag_invio_grafico.mjs`, una fotografia di `graficoAttivo`/`graficoDaInviare`/`graficoTimerInvio` ogni 1,7 s) ha mostrato che era tutto regolare: `GRAFICO_INVIO_MIN_MS` è 60.000 ms, e il disegno aspettava in coda col timer armato. LEZIONE: prima di chiamare difetto un banco rosso che riguarda il tempo, stampare le costanti del tempo di quel giro - e tenere la misura come fatto (chi disegna e chiude entro un minuto NON manda il disegno al cloud), non come errore del banco.

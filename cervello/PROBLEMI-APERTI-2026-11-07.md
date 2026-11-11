@@ -266,3 +266,483 @@ Applicate in `app.html`: tetto giornaliero persistito su localStorage, rilettura
 allentata a 5 minuti fuori dal Live, letture contate anche nei quattro percorsi che il pannello
 non vedeva, keepalive sotto il tetto. Banco: `laboratorio/app/cloud_bolletta.test.mjs`.
 Da fare: guardare la console Firebase dopo 24 ore e confrontare con il pannello dell'app.
+
+## P0 — L'AGGIORNAMENTO NON ARRIVA SUI DISPOSITIVI MOBILI (e non si vede sul PC) — 11 nov sera
+Segnalato dal proprietario: «quando aggiorno il software sul PC, l'aggiornamento di gira anche sui
+dispositivi mobili — che in realtà non è così. Il pulsante Aggiorna non viene mostrato, quindi sui
+dispositivi mobili l'applicazione non si aggiorna. È come se ai dispositivi mobili arrivasse scritto
+che l'aggiornamento è stato fatto, mentre invece non è stato fatto.»
+Non misurato. Da misurare: quale versione l'app CREDE di avere su telefono (APK) e su PC (ponte che
+serve una copia congelata), e da quale strada la legge (`fblVersioneProgrammaInstallato()` →
+`/versione-programma` del ponte, `fblVersioneInstallata()` → cache del service worker / `sw.js` /
+`FBL_VERSIONE_BUNDLE`). Se una di queste strade risponde una versione piu' nuova di quella che gira,
+il confronto dice «sei all'ultima» e il pulsante non compare mai.
+Riferimenti: `cervello/GUIDA-APK-AUTOMATICO.md`, `cervello/BUG.md` § «il pulsante non compare» e §
+«ogni release senza APK», banco `laboratorio/app/aggiornamento_apk.test.mjs`.
+Stato: DA MISURARE (banco nuovo: la versione creduta e quella pubblicata nei tre stati — PC con
+copia congelata, telefono/APK col bundle vecchio, pagina da GitHub Pages).
+
+## P1 — LA DASHBOARD NON SI AGGIORNA IN TEMPO REALE — 11 nov sera
+Segnalato dal proprietario: «abbiamo ancora problemi per quanto riguarda l'aggiornamento in tempo
+reale dei dati della dashboard.»
+Manca l'indicazione del RIQUADRO e della situazione (PC o telefono, MT5 collegato o no, una finestra
+o piu'): chiedere uno screenshot col riquadro fermo e l'ora. Strade candidate da misurare una per
+una: (a) riquadri del conto MT5 — `fetchMt5AccountInfo()` / `fetchMt5AccountHistory()` e
+`mt5StatsActive()`; (b) riquadri dal cloud — gli ascolti `onSnapshot`, con il sostituto
+`serverDatiAscolta` che esiste e non viene mai chiamato (vedi DIARIO).
+Stato: DA MISURARE.
+
+## P0 — POSIZIONI E PROFITTI CHE SI SOMMANO FRA DUE ACCOUNT — 11 nov sera
+Segnalato dal proprietario: «se apro una posizione su un account e poi la apro su un altro account,
+mi si sommano le posizioni e i guadagni/profitti, quindi è tutto squilibrato sotto questo punto di
+vista e va risolto.»
+È lo stesso principio della voce «POSIZIONI DI UN ALTRO CONTO» (curata in v2.2.28 per il grafico), ma
+qui la somma compare da un'altra parte. Da misurare: aprire una posizione sul conto A, passare al
+conto B, aprirne una anche li', e contare UNO PER UNO posizioni a grafico, righe in tabella,
+operazioni nel journal, P/L totale, equity. Il risultato giusto è: sul conto B solo il lavoro del
+conto B, l'altro parcheggiato e di ritorno quando si torna su A.
+Ipotesi da verificare (non cause accertate): il parcheggio/ripresa di `mt5AttivaConto()`,
+`fblContoEffettivo()`, il «conto per asset», e `closeTrade()` che scrive nei globali della sessione
+corrente (stesso punto della voce sulla riconciliazione cross-sessione).
+Stato: DA MISURARE (banco nuovo).
+
+
+## P0 — CALO DRASTICO DELLE PRESTAZIONI — 11 nov sera
+Segnalato dal proprietario: «l'applicazione in se' per se' ha fatto un calo drastico delle
+prestazioni».
+Non misurato, e la parola che conta e' **drastico**: va confrontato con un numero di PRIMA, non
+giudicato a occhio. Il pannello prestazioni dell'app misura gia' per voce (il 5 novembre dava
+`disegniUtente 27,1 ms` + `indicatori 23,74 ms` su 54,55 ms totali: due voci su tre del budget di
+un fotogramma). Da misurare: il tempo per fotogramma oggi, nelle stesse condizioni, e quale voce
+e' cresciuta. Serve sapere anche SE il calo e' arrivato con una versione precisa: fra il 9 e l'11
+novembre sono uscite dodici versioni, e il confronto fra due di esse isola la causa.
+Candidati da guardare con la misura in mano, non prima: le finestre duplicate aperte (la voce 9 di
+`RICHIESTE-DUPLICA-FINESTRA.md` dice che rallentano il sistema), gli ascolti del cloud, il polling
+del conto MT5, il footprint e il profilo volumetrico (un solo profilo costava 86 ms).
+Stato: DA MISURARE (banco nuovo: tempo per fotogramma per voce, due versioni a confronto).
+
+## P1 — SUL TELEFONO LE CANDELE NON SONO DISEGNATE COME SUL PC — 11 nov sera
+Segnalato dal proprietario: «sui dispositivi mobili le candele non vengono disegnate esattamente
+come sono disegnate sul PC».
+Non misurato, e manca il DETTAGLIO di cosa cambia: larghezza, spaziatura, code, colore, numero di
+candele a schermo, o la soglia del «grafico a blocchi» curata in v2.2.17. Da chiedere: una foto
+dello stesso asset e timeframe sui due dispositivi, alla stessa ora.
+Da guardare: la v2.2.17 ha toccato proprio la larghezza delle candele e il disegno a blocchi
+(banchi `candele_blocco_5m.misura`, `candele_footprint_larghezza.misura`,
+`candele_soglia_blocco.misura`), e la v2.2.19 ha cambiato come il mobile riconosce il ponte. Il
+sospetto da verificare e' il rapporto di pixel dello schermo (`devicePixelRatio`) o una soglia
+tarata sulla larghezza in pixel, che su un telefono cade dall'altra parte.
+Stato: DA MISURARE (serve la foto dei due schermi).
+
+
+## P0 — IL PC SI INCHIODA, E ALLA RIAPERTURA L'APP «NON RISPONDE» — 11 nov sera
+Segnalato dal proprietario: «quando chiudo l'applicazione poi la vado a riaprire subito dopo, la
+pagina mi da' sempre forex backtest lab non risponde, e si inchioda» e «fa bloccare tutto il PC,
+non funziona piu' niente. Nessun tasto, nessuna applicazione».
+
+MISURATO sul suo PC l'11 novembre alle 15:21 (sola lettura: netstat, tasklist, Get-Process).
+
+1. DUE ETA' DIVERSE FRA PONTE E GUSCIO. `ForexBacktestLAB.exe` (il ponte, PID 19964) era partito
+   alle 14:22:51, cioe' 23 secondi dopo `explorer.exe`: parte AL LOGIN di Windows, da chiave di
+   registro (e' scritto nel commento di `bridge.py` ~riga 967). `ForexBacktestLABDesktop.exe` (il
+   guscio della finestra) era invece delle 15:20:33, un minuto prima della misura. Quindi alla
+   riapertura il guscio NUOVO si attacca a un ponte VECCHIO di un'ora, con dentro il codice di
+   quando e' partito.
+2. LA PULIZIA NON CONOSCE IL GUSCIO. L'elenco dei nomi che il ponte chiude all'avvio
+   (`bridge.py` ~riga 992) e' `ForexBacktestLAB.exe`, `Mt5FeedServer.exe`, `SegnaliBridge.exe`.
+   **`ForexBacktestLABDesktop.exe` non compare in NESSUN sorgente di `installer_build/`**
+   (verificato con grep ricorsivo): la pulizia non puo' chiuderlo, e due gusci possono convivere.
+   Alla misura ce n'erano infatti due (PID 10284 e 21464).
+3. TAILSCALE TIENE LE NOSTRE TRE PORTE. `tailscaled.exe` (PID 8352) era in ascolto su
+   100.120.227.56 porte **8000, 8001 e 8769** — tutte e tre le nostre. Il ponte sta su
+   127.0.0.1:8000. E' lo stesso fenomeno gia' misurato per la v2.2.8 (allora PID 9916).
+4. IPOTESI SMENTITA DALLA MISURA, e va scritto per non ripeterla: sospettavo processi `WebView`
+   orfani di sessioni vecchie dell'app. **Falso.** Dei 19 `msedgewebview2` vivi, risalendo la
+   catena dei padri solo 7 erano nostri (figli di `ForexBacktestLABDesktop`): gli altri erano di
+   `WhatsApp.Root.exe` e di `SearchApp.exe` (la ricerca di Windows).
+
+PERCHE' SI INCHIODA TUTTO IL PC (e non solo l'app): misurata la memoria, 15,9 GB totali con 4,6
+liberi (71% occupata) e la **Compressione memoria di Windows gia' attiva a 801 MB**, che e' il
+segno che il sistema sta comprimendo per non finire. In quella condizione basta aprire qualche
+finestra duplicata (ogni finestra e' un WebView da 100-250 MB) per arrivare a zero: Windows
+inizia a scaricare su disco e TUTTO si ferma, non solo il programma. Non e' un difetto del
+codice dell'app: e' esaurimento di memoria.
+
+Stato: CAUSA PARZIALMENTE MISURATA. Resta da registrare la sequenza chiudi/riapri con i processi
+sotto osservazione (registratore gia' pronto) per vedere CHI sopravvive alla chiusura.
+
+## P0 — IL PC E' LENTO IN GENERALE: CHI MANGIA LA MEMORIA — 11 nov sera
+Segnalato dal proprietario: «da quando abbiamo cominciato a fare questo progetto, il computer a
+livello di prestazioni e' calato drasticamente... certe volte mi arriva la memoria a 95%, quasi al
+100%» e «mi fa comparire non so quante schede di Chrome Atlas Shell.exe... e anche Microsoft Edge
+WebView 2. Me ne apre molte».
+
+MISURATO l'11 novembre alle 15:25: **331 processi vivi**, 15,9 GB di RAM con 4,67 liberi.
+Memoria per famiglia, le prime voci:
+
+    chrome-headless-shell   20 processi   2.392 MB
+    claude                  11 processi   2.348 MB
+    ChatGPT                 13 processi   1.088 MB
+    svchost                 86 processi   1.083 MB
+    msedgewebview2          19 processi   1.028 MB
+    Notion                   7 processi     945 MB
+    node                    10 processi     879 MB
+    Memory Compression       1 processo     801 MB
+    OpenCode                 6 processi     624 MB
+    opencode-cli             1 processo     352 MB
+    BlueStacksServices       4 processi     235 MB
+
+LA RISPOSTA ALLA SUA DOMANDA, con il numero: **i venti `chrome-headless-shell` erano nati tutti
+nello stesso secondo (15:24:51-53), zero minuti di vita: sono i browser invisibili del COLLAUDO
+in corso in quel momento.** Non sono spazzatura rimasta li', ma sono il costo vero di ogni giro
+di collaudo: 2,4 GB. Sommati a Claude (2,3 GB), node (0,9), OpenCode (1,0), gli strumenti con cui
+si SVILUPPA il progetto occupano da soli circa **6,5 GB sui 15,9 disponibili**, cioe' il 40%
+della macchina. Con sopra Chrome/Atlas, ChatGPT, Notion e l'app con le finestre duplicate si
+arriva al 95-100%, ed e' esattamente quello che vede.
+
+ATTENZIONE, da verificare: se un collaudo viene interrotto a meta' (Ctrl+C, crash, finestra
+chiusa), quei venti browser possono restare ORFANI e nessuno li chiude. Da misurare: contarli
+prima e dopo un'interruzione.
+
+Stato: MISURATO. La cura non e' nel codice dell'app: e' nel modo di lavorare (quanti strumenti
+aperti insieme) e, per la parte nostra, nel chiudere i browser del collaudo quando il giro
+finisce o viene interrotto.
+
+
+## AGGIORNAMENTO ALLA VOCE «DASHBOARD IN TEMPO REALE» — 11 nov sera (con foto)
+Il proprietario ha mandato la foto della fascia dei riquadri e ha detto QUALI sono fermi, che era
+il dato mancante per poter lavorare:
+«il riquadro che non mi si aggiorna in tempo reale e' questo qua, e in modalita' pagina intera e'
+quella sulla barra degli strumenti sotto, che c'e' comunque il margine libero, il capitale e tutto
+il resto che non mi si aggiorna in tempo reale. O comunque sia in ritardo... deve essere un
+aggiornamento come si aggiorna il profitto, si aggiorna anche il capitale, il margine libero. E
+tutto il resto. Si deve aggiornare tutto in tempo reale. Non esiste che non si aggiorna. Per
+minuti.»
+
+QUINDI, con precisione:
+- **si aggiorna**: il P/L (e il profitto);
+- **NON si aggiorna, o arriva con minuti di ritardo**: MARGINE LIBERO e CAPITALE, piu' il resto
+  della fascia; e la stessa fascia sulla barra degli strumenti in modalita' pagina intera.
+- Nella foto i due numeri fermi erano identici fra loro (margine libero 11.102,54 e capitale
+  11.102,54), col capitale marcato «Capitale della Challenge Prop Firm (simulato)».
+
+DOVE GUARDARE (da misurare, non da supporre): il P/L vivo si ricalcola a ogni tick dal prezzo,
+mentre capitale e margine libero arrivano da `fetchMt5AccountInfo()` — un polling con un suo
+intervallo. Se quell'intervallo e' lungo (o la risposta e' 400 «Non connesso», o il polling e'
+agganciato a uno stato che in Prop Firm non e' attivo) i due numeri restano fermi mentre il P/L
+continua a muoversi: e' esattamente il sintomo descritto. Da misurare: ogni quanti secondi parte
+la richiesta del conto, ogni quanto risponde, e quanto passa fra due aggiornamenti dei due
+riquadri. Il confronto giusto e' col P/L, che si muove.
+Stato: ORA MISURABILE (prima mancava il riquadro).
+
+
+### PROVA REGISTRATA DAL VIVO DELLA CHIUSURA/RIAPERTURA — 11 novembre, 15:24:37 -> 15:25:10
+Registrati i processi ogni 2 secondi mentre il proprietario chiudeva e riapriva l'app (sola
+lettura). La sequenza, secondo per secondo:
+
+    15:24:37  Ponte x1, Guscio x3, Mt5Feed x1, Segnali x2    app aperta e sana
+    15:24:41  Ponte x1,            Mt5Feed x1, Segnali x2    muoiono i gusci (chiusura)
+    15:24:45  Ponte x1,                        Segnali x2    muore Mt5FeedServer
+    15:24:47                                   Segnali x2    muore anche il Ponte
+    15:24:49  Guscio x1,                       Segnali x2    riapertura: nasce il guscio
+    15:24:52  Ponte x1, Guscio x2,             Segnali x2    nasce il ponte
+    15:24:54  Ponte x2, Guscio x2,             Segnali x2    <-- DUE PONTI INSIEME
+    15:24:56  Ponte x1, Guscio x2                            torna uno
+    15:24:58  Ponte x1, Guscio x2, Mt5Feed x1
+    15:25:00  Ponte x1, Guscio x2, Mt5Feed x2                <-- DUE Mt5FeedServer
+    15:25:10  Ponte x1, Guscio x2, Mt5Feed x2, Segnali x2    stato finale: Mt5Feed DOPPIO
+
+DUE FATTI MISURATI, non supposti:
+1. **Per circa due secondi convivono DUE ponti** (15:24:54). Il nuovo nasce prima che il vecchio
+   sia finito di morire. E' la stessa famiglia del difetto della v2.2.8: `taskkill` torna appena
+   ha CHIESTO la chiusura, non quando e' avvenuta.
+2. **Dalle 15:25:00 restano DUE `Mt5FeedServer` e non tornano piu' uno** (verificato fino alle
+   15:27:18, fine della registrazione). Questo e' l'orfano che resta addosso alla sessione nuova.
+
+PERCHE' NASCE IL SECONDO Mt5FeedServer (ipotesi fortissima, da confermare con una prova): nel
+ponte c'e' un **custode** che riaccende `Mt5FeedServer.exe` appena la porta **8001** smette di
+rispondere (commento in `bridge.py` ~riga 1579-1583, che avvisa anche che «quel figlio sopravvive
+alla morte del padre»). Durante la chiusura la 8001 tace, il custode del ponte che sta morendo lo
+fa rinascere, e intanto il ponte NUOVO ne avvia uno suo: due.
+**E qui si lega la misura di Tailscale**: `tailscaled.exe` e' in ascolto proprio su 8000, 8001 e
+8769. Il giudizio «la 8001 e' muta» puo' essere falsato da chi quella porta la tiene su un altro
+indirizzo. Le due cose vanno misurate insieme, non separate.
+
+CONSEGUENZA PRATICA: due `Mt5FeedServer` vivi significano due client che parlano con lo stesso
+terminale MT5. E' la condizione in cui l'app «non risponde» alla riapertura.
+
+PROSSIMO PASSO (misura, non cura): ripetere chiusura/riapertura con il registratore acceso E con
+Tailscale FERMO, e confrontare le due sequenze. Se con Tailscale fermo il secondo Mt5FeedServer
+non nasce, la causa e' quella e la cura e' nel giudizio sulla porta. Se nasce lo stesso, la causa
+e' solo il custode e si cura spegnendolo prima della chiusura.
+
+
+## P0 — I DISEGNI SUL GRAFICO SPARISCONO DOPO ORE O DOPO UN AGGIORNAMENTO — 11 nov sera
+Segnalato dal proprietario: «disegno qualcosa al grafico, lo lascio andare per ore e ore, poi dopo
+magari quando facciamo qualche aggiornamento, oppure chiudo l'applicazione e poi la vado a
+riaprire, quei disegni non ci sono piu'.»
+Non misurato. Due inneschi dichiarati, e vanno misurati SEPARATAMENTE perche' possono avere cause
+diverse: (a) il tempo che passa, a programma aperto; (b) la chiusura/riapertura o un aggiornamento.
+Da guardare: i disegni stanno per ASSET (decisione del proprietario) e viaggiano anche sul
+documento condiviso del cloud. La v2.2.6 ha introdotto la regola «identico = non si scrive» con una
+firma del contenuto: **se la firma si calcola male, o il documento viene riscritto da una finestra
+con meno disegni, la scrittura buona puo' essere sovrascritta da una vuota**. La v2.2.25 ha toccato
+i disegni fra finestre. Il documento condiviso era inoltre vicino al tetto di 900 KB oltre il quale
+l'app smette di condividere (misurato 815 KB il 9 novembre): da verificare se oggi il tetto viene
+superato, perche' in quel caso le scritture nuove si perdono in silenzio.
+Da misurare: disegnare, contare i disegni in memoria e nel deposito locale e nel documento cloud,
+aspettare, riaprire, ricontare. Il numero che conta e' quante forme ci sono nei tre posti prima e
+dopo.
+Stato: DA MISURARE.
+
+
+## P0 — SELEZIONARE UNA POSIZIONE RICHIEDE PIU' TOCCHI, E SPOSTARE SL/TP E' LENTO — 11 nov sera
+Segnalato dal proprietario: «il selezionamento delle posizioni non me seleziona correttamente. Non
+e' fluida come cosa. Prima di selezionare una posizione ho dovuto toccare 3 volte la linea della
+posizione. Per spostare stop loss e take profit. Quindi rendiamolo molto piu' veloce come cosa,
+anche perche' sono spostamenti magari che una persona dovrebbe fare anche molto velocemente,
+quindi non deve avere ritardi. E quindi ritorniamo come era magari in passato... e funzionava in
+maniera precisa e corretta. Senza bug.»
+
+DUE COSE DIVERSE, da misurare separate:
+(a) **QUANTI TOCCHI SERVONO** per agganciare la linea: tre invece di uno. E' un problema di
+    TOLLERANZA (quanti pixel di distanza dalla linea vengono accettati come «hai toccato la
+    linea»), oppure di ordine di priorita' fra chi raccoglie il tocco (se un altro elemento
+    sopra la linea se lo prende per primo).
+(b) **IL RITARDO** nel trascinamento: una volta agganciata, la linea deve seguire il dito o il
+    mouse senza ritardo percepibile.
+
+E' UNA REGRESSIONE, non un difetto di sempre: il proprietario dice che in passato funzionava. Va
+quindi trovata per CONFRONTO fra versioni, non per lettura del codice di oggi. La v2.2.25
+(11 novembre, 01:39) ha toccato esattamente questa zona: il suo titolo e' «linee SL/TP e
+break-even...» e ha aggiunto il banco `laboratorio/app/sl_tp_selezione_trascinamento.test.mjs`.
+Primo sospetto da verificare: la cura di quel giorno ha stretto la tolleranza o ha aggiunto una
+condizione in piu' prima di agganciare.
+
+DA CHIARIRE CON IL PROPRIETARIO: nel messaggio compare la frase «come anche c'e' la route to
+cloud», che non si capisce (probabile errore di trascrizione vocale). Chiedere cosa intendeva
+prima di tirarne conclusioni.
+
+LA MISURA DA FARE: contare quanti tocchi servono oggi a distanze crescenti dalla linea (0, 2, 4,
+6, 8 pixel) e confrontare lo stesso conto con la versione precedente alla 2.2.25. Il numero che
+conta e' la distanza massima a cui il primo tocco aggancia. Per il ritardo: misurare i
+millisecondi fra il movimento e lo spostamento della linea.
+Stato: DA MISURARE (regressione, confronto fra versioni).
+
+### CAUSA TROVATA NEL CODICE (lettura, 11 nov sera) — due ostacoli che si SOMMANO
+`tradeLevelHit()` sta a `app.html:21513`. La tolleranza verticale e' 14 pixel e va bene. Il
+problema sono due condizioni in piu', messe tutte e due di proposito:
+
+1. **IL TOCCO DEVE CADERE DENTRO LA CASELLA Target/Stop, IN ORIZZONTALE.** Dal commento nel
+   codice: «In ORIZZONTALE il trascinamento parte solo da DENTRO la casella Target/Stop (o dal
+   suo bordo, con un margine di tolleranza): fuori da quell'area, anche se il mouse passa alla
+   stessa altezza (Y) della linea durante un pan del grafico, non deve agganciarla.» Quindi
+   toccare la linea nel punto sbagliato dell'asse orizzontale non fa NIENTE, e a schermo non si
+   distingue da un tocco mancato.
+2. **IL PRIMO CLIC MARCA, NON TRASCINA.** E' il comportamento che la v2.2.25 ha introdotto e
+   difeso con la prova A del banco `sl_tp_selezione_trascinamento.test.mjs`, il cui titolo e'
+   letteralmente «il primo clic sulla linea la MARCA, non deve trascinare la posizione».
+
+I due sommati spiegano i tre tocchi: uno o due vanno persi fuori dalla casella, e quello buono
+marca soltanto. Il trascinamento parte dal tocco dopo.
+
+ATTENZIONE PRIMA DI CURARE: tutte e due le condizioni sono scritte come volute, e una porta la
+nota «richiesto esplicitamente». La prima serve a non agganciare le linee per sbaglio mentre si
+trascina il grafico. Quindi NON si allarga e basta: va chiesto al proprietario quale dei due
+comportamenti vuole cambiare, perche' toglierli entrambi puo' far tornare il difetto opposto
+(linee che si spostano da sole durante un pan).
+Da misurare comunque: la larghezza vera della casella Target/Stop a schermo, perche' se e'
+stretta il bersaglio e' piccolo anche quando si fa tutto giusto.
+
+## P0 — CAPITALE E MARGINE LIBERO NON SI AGGIORNANO (misurato l'11 novembre 2026, cura NON applicata)
+
+Sintomo del proprietario: «il margine libero, il capitale e tutto il resto non mi si aggiorna in
+tempo reale. O comunque sia in ritardo... deve essere un aggiornamento come si aggiorna il
+profitto». Nella foto: margine libero e capitale identici (11.102,54) e sotto il capitale
+«Capitale della Challenge Prop Firm (simulato)».
+
+### MISURATO (banco `C:\Users\pietro\Documents\banchi_aperti_forex\capitale_in_tempo_reale.test.mjs`, 3 prove rosse)
+Ponte MT5 finto che risponde SUBITO con numeri sempre nuovi, polling vero dell'app, finestra di
+8 secondi:
+
+| strada | letture dal ponte | cambi a schermo |
+|---|---|---|
+| P/L live (`/positions` -> `mt5RealPositions` -> `floatingPL`) | **9** | **9** (uno al secondo) |
+| Capitale e Margine libero (`/account` -> `mt5AccountInfo`) | **1** | **1**, poi fermi |
+
+### CAUSA VERA (non ipotesi): il cancello di `mt5PositionsGiro`, `app.html:42822-42826`
+```
+function mt5PositionsGiro(){
+ fetchMt5Positions();
+ fetchMt5Orders();
+ if(!mt5PositionsFetchInFlight&&!mt5OrdersFetchInFlight)fetchMt5AccountInfo();
+}
+```
+Le due chiamate della riga sopra alzano quei due interruttori in modo SINCRONO (prima del loro
+primo `await`): quando si arriva al controllo sono sempre alzati, quindi `/account` **non parte
+mai**. `fetchMt5AccountInfo` ha solo due chiamanti: `app.html:42805`
+(`startMt5PositionsPolling`, cioe' il collegamento) e questa riga 42825, sbarrata. Capitale e
+margine libero reali si leggono **una volta sola, al collegamento**, e poi mai piu' finche'
+qualcuno non riavvia il polling (cambio conto, riconnessione): da qui il «ritardo di minuti».
+
+### SECONDO DIFETTO, nella stessa fascia: l'errore del ponte e' MUTO in Prop Firm
+`mostraFonteCapitale()` (`app.html:42529`) prova i rami in quest'ordine: `mt5StatsActive()` ->
+replay -> **`isPropFirmMode`** -> `!liveModeActive` -> `mt5MonitorOnly` -> `mt5Connected`.
+L'avviso «i dati del conto MT5 non arrivano (…)» sta nell'ultimo ramo, quindi in Modalita' Prop
+Firm non compare MAI: col ponte che risponde 400 «Non connesso» si legge
+«Capitale della Challenge Prop Firm (simulato)» — esattamente la riga della foto — e il numero
+resta fermo senza che nulla lo dica. Riprodotto dalla terza prova del banco.
+
+### ALTRO MISURATO, utile a chi cura
+- La fascia (`mMargin` 14072, `mCapital` 14039, `mPL` 14050, `applyMt5AccountStatsToPanel` 14077)
+  si riscrive SOLO dentro `update()`. Nessun timer la aggiorna per conto suo.
+- L'unica parte della fascia con un timer proprio e' la mini dashboard della barra strumenti in
+  pagina intera: `setInterval(fblMiniDashAggiorna,1000)` (`app.html:28352`). Ma quella ricalcola
+  da sola solo il P/L live (`floatingPL()`); Capitale, Win rate, Loss rate e Margine libero li
+  **copia come testo** da `#mCapital`/`#mMargin` (`app.html:28348`). Quindi non possono essere
+  piu' freschi della fascia: e' il motivo per cui in pagina intera si vede il P/L muoversi e il
+  capitale fermo.
+- Il pennello fine (`fblPitturaPrezzoFine`, 250 ms, `app.html:51087`) chiama solo `draw()`: il
+  grafico e il prezzo restano vivi anche quando `update()` non gira. L'occhio quindi non ha
+  nessun indizio che la fascia sia ferma.
+- In Modalita' Prop Firm `mt5StatsActive()` resta VERO su un conto sconosciuto, perche'
+  `tgAutoContoDaTrattareComeReale` risponde «reale» quando non sa (`app.html:35049`,
+  «sconosciuto => per sicurezza reale»). La strada «Prop Firm simulata» si imbocca quindi solo
+  quando `mt5AccountInfo` manca o non ha equity — ed e' proprio cio' che succede se la PRIMA
+  lettura di `/account` va male, visto che non viene mai ritentata.
+- Ipotesi del DIARIO caduta: `serverDatiAscolta` **viene chiamato** (`app.html:39473`, via
+  `ascoltaServer`) e riguarda i documenti del cloud nostro, non questa fascia.
+
+### CURA PROPOSTA (non applicata, da decidere col proprietario)
+1. Togliere il cancello: in `mt5PositionsGiro` chiamare `fetchMt5AccountInfo()` sempre — ha gia'
+   la sua guardia `_mt5AccountInfoInFlight`, che e' il freno giusto (e lo stesso che usano
+   posizioni e ordini). Il cancello e' un freno messo dove il freno c'era gia' (lezione 34).
+2. Far ridisegnare la fascia quando arriva un conto nuovo: alla fine di `fetchMt5AccountInfo`,
+   se equity/margine sono cambiati, chiamare `applyMt5AccountStatsToPanel()` +
+   `mostraFonteCapitale()` (o `update()`), invece di aspettare il tick del grafico.
+3. Spostare il ramo `isPropFirmMode` di `mostraFonteCapitale()` DOPO il ramo che segnala
+   `mt5AccountInfoErrore`, o unirli: «Challenge Prop Firm (simulato) — i dati del conto MT5 non
+   arrivano (Non connesso)».
+4. Nella mini dashboard, ricalcolare Capitale e Margine libero con `equityNow()`/`freeMargin()`
+   invece di copiare il testo della fascia.
+   **CORREZIONE del 11 novembre sera, verificata con grep:** quella frase e' SBAGLIATA.
+   `ForexBacktestLABDesktop.exe` c'e' in `installer_build/installer.iss` (righe 32, 260 e 277:
+   la procedura `UccidiTutti` lo chiude per secondo). Manca solo nell'elenco di `bridge.py`.
+   Quindi gli elenchi del ponte (3 nomi) e dell'installer (4 nomi) NON sono gli stessi, e il
+   test `test_l_elenco_dei_nomi_e_lo_stesso_dell_installer` non se ne accorge perche' controlla
+   solo i tre nomi che il ponte ha.
+
+
+## MISURA VERA DAL PC DEL PROPRIETARIO — 11 novembre 2026, 15:57:46
+Pannello prestazioni dell'app, mandato dal proprietario. E' la misura che mancava a tre voci
+aperte, e ne CHIUDE una.
+
+### 1. LA PAGINA CHE GIRA E' LA 2.2.12, NON LA 2.2.28 — la voce A e' risolta
+    versione (pannello dell'app in esecuzione): 2.2.12
+    ponte sulla stessa macchina, /versione-programma: {"programma":"2.2.28","pagina":"2.2.28",
+                                                       "da_aggiornare":false}
+    ponte, /sw.js:                                    forex-backtest-lab-v2.2.28
+I FILE sul PC sono aggiornati. E' la FINESTRA APERTA che sta eseguendo codice vecchio di sedici
+versioni (dalla 2.2.13 alla 2.2.28 nessuna cura e' mai entrata in esecuzione su quel computer).
+
+**PERCHE' IL PULSANTE NON COMPARE MAI, con i numeri davanti:** `fblControllaAggiornamento()`
+confronta la versione del PROGRAMMA con quella della PAGINA SERVITA, e sono tutte e due 2.2.28:
+`da_aggiornare:false`, nessun pulsante. Nessuna delle due strade guarda la versione che sta
+DAVVERO girando dentro la finestra. Quindi il confronto e' fra due file sul disco, mentre il
+codice in esecuzione e' una terza cosa che nessuno interroga.
+**LA CURA:** confrontare la versione in esecuzione (la costante dentro la pagina viva) con quella
+pubblicata, e quando sono diverse dirlo e offrire il ricaricamento. E' una riga di confronto in
+piu', ma cambia tutto: oggi un utente puo' restare indietro per settimane senza un avviso.
+**DA DIRE SUBITO AL PROPRIETARIO:** basta ricaricare la pagina per avere le sedici versioni di
+cure. E ATTENZIONE, ne discende una cosa che riguarda TUTTE le altre segnalazioni di stasera:
+sono state fatte su codice 2.2.12, quindi alcune possono essere gia' curate e non in esecuzione.
+Prima di rimisurarle, ricaricare e riprovare.
+
+### 2. IL DISEGNO COSTA 238 ms, E IL 58% E' UN SOLO DISEGNO
+    fotogrammiAlSecondo : 4          (dovrebbero essere decine)
+    disegnoMedio_ms     : 238.34     scattoPeggiore_ms: 735
+    draw: 10.280 giri, 10.160 LENTI, media dei lenti 172 ms
+Dove va il tempo (sezioni del disegno, totale 238,28 ms):
+    disegniUtente = 139.42 ms   (58%)
+    indicatori    =  88.57 ms   (37%)
+    tutto il resto <   3 ms
+E dentro quelle due:
+    disegno:vpfixed             = 139.23 ms   <- UN SOLO profilo volumetrico fisso
+    ind:bsl_ssl_fvg:calcolo     =  49.20 ms
+    ind:order_blocks:calcolo    =  29.86 ms
+    ind:ict_reversal_setup      =   4.25 ms
+    ind:ema_ind                 =   3.28 ms
+**Il «calo drastico delle prestazioni» ha un nome e un numero: un profilo volumetrico fisso che
+da solo mangia piu' della meta' del fotogramma, e due indicatori che insieme ne mangiano 79 ms.**
+I disegni salvati sono 3 e le candele 83.341: il profilo si ricalcola su una finestra enorme.
+Da misurare: perche' vpfixed costa 139 ms a fotogramma invece di essere calcolato una volta e
+riusato (il suo risultato non cambia se non cambiano le candele sotto).
+
+### 3. IL PONTE RISPONDE IN SECONDI, NON IN MILLISECONDI
+    lettura conto     :  67 volte, media 3.832 ms, peggiore 23.262 ms, 1 non riuscita
+    lettura posizioni : 683 volte, media 1.943 ms, peggiore 24.280 ms
+    ordine (altro)    : 689 volte, media 1.919 ms, peggiore 24.290 ms
+    modifica stop/target: 3 volte, media 2.745 ms, peggiore 4.866 ms
+    riquadro "Ordini, questo computer": risponde 5.167 ms
+Due secondi di media e ventiquattro di picco. Questo spiega da solo: la dashboard che sembra
+ferma, lo spostamento di stop e target che «ha ritardi» (2,7 secondi di media per confermare), e
+la sensazione generale di lentezza. **La cura del capitale (v2.2.29) fa partire la richiesta a
+ogni giro, ma se il ponte ci mette 3,8 secondi a rispondere il numero resta comunque indietro:
+il collo di bottiglia e' il ponte, e va misurato a parte.**
+
+### 4. LA BANDA DEL CLOUD: 222 MB IN UN GIORNO PER UN DOCUMENTO SOLO
+    grafico : 68 scritture, 294 letture, 222.406,1 KB
+    TOTALE  : 81 scritture, 322 letture, 224.752,9 KB
+Il documento dei disegni condivisi pesa in media 756 KB a lettura e viene riletto 294 volte in un
+giorno. E' il 99% della banda. Si lega alla voce dei disegni che spariscono: lo stesso documento
+e' vicino al tetto oltre il quale le scritture vengono rifiutate in silenzio.
+
+
+### 5. LA BOLLETTA FIREBASE, dalla console (foto del proprietario, 11 novembre)
+    Costo del progetto      6,31 EUR
+      Cloud Functions       5,21 EUR   <- l'82% della spesa
+      Cloud Firestore       1,05 EUR
+      Non-Firebase Services 0,06 EUR
+    Quote giornaliere gratuite di Firestore:
+      scritture  15K su 20K/giorno  (76,3%)
+      letture    32K su 50K/giorno  (63,5%)
+      eliminazioni 0
+    La curva della spesa sale dal 1 al 9 novembre e **da li' in poi e' piatta**.
+
+TRE COSE DA NOTARE, e una e' una contraddizione da misurare:
+1. **Il grosso NON e' Firestore: sono le Cloud Functions** (5,21 su 6,31). La memoria del progetto
+   diceva «Firebase: si paga la banda», e per Firestore resta vero, ma la voce piu' cara oggi e'
+   un'altra e va guardata per prima. Da capire quali funzioni girano e chi le chiama (il Notion
+   Template Kit ha le sue, e il pannello dell'app segna `notionChiamateServer: 2`,
+   `notionGiriTimer: 66`).
+2. **CONTRADDIZIONE DA MISURARE**: il pannello dell'app conta **81 scritture e 322 letture** nella
+   giornata, la console ne conta **15.000 e 32.000**. Un fattore 185. O ci sono molti dispositivi
+   e sessioni che scrivono, o qualcosa scrive senza passare dal contatore dell'app (le Cloud
+   Functions scrivono anche loro su Firestore, e quelle il contatore dell'app non le vede). Finche'
+   non si sa CHI fa quelle 15.000 scritture, qualunque cura sulla bolletta e' un tentativo.
+3. La curva piatta dal 9 novembre e' una buona notizia ma **non e' merito della cura della v2.2.27**
+   (e' dell'11, e su quel PC non sta nemmeno girando: vedi il punto 1 di questa misura). Da capire
+   cosa e' cambiato il 9.
+
+### 6. DETTAGLIO GOOGLE CLOUD (seconda foto, 11 novembre) — e chi puo' far partire le funzioni
+    01-11 nov 2026 : 2,30 EUR   (-64,94% rispetto al 21-31 ottobre)
+    previsto 01-30 : 2,23 EUR   (-69,86%)
+    voce in salita : Cloud Run Functions 1,25 EUR (+29.486%), progetto forex-backtest-lab,
+                     regione europe-west1
+    picchi nel grafico: 6 novembre (~0,68) e 10 novembre (~0,43), tutti e due di Cloud Run Functions.
+In valore assoluto non e' un'emergenza e la tendenza SCENDE. Il +29.486% e' una percentuale su una
+base quasi zero: prima quelle funzioni non venivano quasi mai chiamate.
+
+VERIFICATO NEL CODICE (per non cercare a caso): le funzioni stanno in due cartelle fuori dal repo,
+`abbonamento_kit/functions-abbonamento` (createSubscriptionCheckout, createBillingPortal,
+abbonamentoWebhook) e `notion_template_kit/functions-notion` (notionSyncTrades, notionStatus,
+notionAuthUrl, notionOAuthCallback, notionDisconnect, notionReleaseMt5Account, createNotionCheckout,
+stripeWebhook).
+**Nessuna ha un trigger su Firestore e nessuna e' programmata a orario** (cercati
+onDocumentWritten/onDocumentCreated/onSchedule: zero). Quindi NON partono da sole a ogni scrittura:
+qualcuno le chiama. I chiamanti possibili sono due: l'app (c'e' un timer che nella misura segnava
+`notionGiriTimer: 66` e `notionChiamateServer: 2`) e i webhook di Stripe/Notion dall'esterno.
+DA MISURARE prima di curare: quante chiamate al minuto fa quel timer quando l'app resta aperta, e
+cosa e' successo il 6 e il 10 novembre. Il divario fra le 81 scritture contate dall'app e le 15.000
+della console resta da spiegare: le funzioni scrivono anche loro, e il contatore dell'app non le
+vede.

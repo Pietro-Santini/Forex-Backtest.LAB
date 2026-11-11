@@ -5900,3 +5900,114 @@ scritture. Nuova misura `footprintInviati` in «Misura le prestazioni».
    (`notionSyncTrades` e compagnia) e `notionSyncTick` gira su **timer ogni 15 secondi**;
 3. il mistero dei **1 GB archiviati**: con un utente solo non tornano (4 documenti ≈ 1 MB).
 
+
+---
+
+## 11 novembre 2026 — v2.2.28: le posizioni di un altro conto non entrano piu' nel grafico
+
+Segnalato dal proprietario: «mi ha scritto sia la posizione dell'account 1 che quella
+dell'account 2, nello stesso grafico».
+
+**CAUSA MISURATA.** Il ponte (`bridge.py`) e' uno solo per computer, e puo' essere finito su un
+ALTRO conto mentre la pagina e' aperta: il tablet, una seconda finestra, o il ponte dei segnali
+lo collegano a un altro account. `GET /positions` rispondeva con la lista nuda, senza dire di che
+conto fosse: l'app la adottava taggandola col PROPRIO numero, e a grafico comparivano due conti.
+In piu' la finestra duplicata nasce «collegata» ma senza numero di conto, e non lo imparava mai.
+
+**CURA (app.html + ponte).**
+- `bridge.py`: `/positions` dichiara il conto negli header `X-MT5-Login` / `X-MT5-Server`, esposti
+  dal CORS (`accesso_condiviso.py`, `expose_headers`): senza, da GitHub Pages il browser li nasconde
+  al JavaScript e la cura non funzionerebbe nel caso vero. Il corpo resta la lista di sempre.
+  Se `account_info()` non risponde gli header non si mettono: l'app ricade nel comportamento di
+  prima invece di ricevere un conto inventato.
+- La fotografia di un conto diverso da quello attivo si SCARTA (ne' adozione ne' chiusure), le
+  posizioni adottate si taggano col conto DICHIARATO, la duplicata impara il conto dal polling di
+  `/account` e dall'annuncio della madre, e ogni posizione che arriva via `trading_sync` porta
+  addosso il conto che l'ha mandata.
+- Il filtro per conto non fa piu' passare tutto quando il conto non si sa. **Scelta dichiarata: con
+  conto ignoto l'app non attribuisce nessuna posizione che abbia un login addosso** (meglio zero per
+  un istante che mostrare quelle di un altro). Prova di controllo nel banco: appena il conto si
+  conosce, la posizione giusta torna.
+
+**DUE TRAPPOLE PAGATE OGGI (lezioni 35 e 36).**
+1. Avevo stretto il filtro con `pos.mt5Ticket!=null`: sei banchi sono diventati rossi in un colpo,
+   perche' quello nascondeva anche le posizioni SIMULATE (il backtest in Live). Il filtro deve
+   scartare chi dichiara un conto diverso, non chi non e' di MT5.
+2. «Imparare il conto» arrivava in `updateMt5ModeUI()`, che leggeva la transizione
+   scollegato->collegato: suono di benvenuto e domanda sulle sale Telegram, che sovrascriveva la
+   barra di stato (dopo il clic su BE si leggeva il messaggio delle sale invece di «pareggio»).
+   Aggiunto il parametro `silenzioso`.
+
+**Resta aperto:** una posizione reale tracciata in una sessione che non e' quella a schermo non viene
+mai riconciliata (se il broker la chiude, resta). Il suo banco vive fuori dal repo
+(`banchi_aperti`): un banco rosso non si committa.
+
+**APK.** La copia dentro `mobile/android/.../assets/public/app.html` era ferma alla 2.2.24. Rifatta
+la strada ufficiale (`mobile\aggiorna_www.bat`: copia dal repo, iniezione da `sw.js`,
+`npx cap sync android`), e ricompilato `build_apk.bat` (BUILD SUCCESSFUL in 1m07s, firmato v2/v3).
+Verificato poi che **l'APK allegato alla release 2.2.28 dal flusso `apk.yml` e' byte-identico** a
+quello sincronizzato: anche i telefoni hanno la 2.2.28. Lezione: prima di compilarlo a mano,
+verificare se il flusso lo ha gia' fatto.
+
+**Verifiche:** collaudo locale 0 falliti (1.382 test browser + ponte + sintassi + versione), collaudo
+GitHub `success` su `8efe94d`, specchio Desktop riallineato.
+
+
+---
+
+## 11 novembre 2026 — v2.2.29: capitale e margine libero si aggiornano come il P/L, e in Prop Firm l'avviso non tace piu'
+
+SEGNALATO dal proprietario (11 novembre, con la foto della fascia dei riquadri): «il riquadro che
+non mi si aggiorna in tempo reale e' questo qua, e in modalita' pagina intera e' quella sulla barra
+degli strumenti sotto, che c'e' comunque il margine libero, il capitale e tutto il resto che non mi
+si aggiorna in tempo reale. O comunque sia in ritardo... deve essere un aggiornamento come si
+aggiorna il profitto, si aggiorna anche il capitale, il margine libero. Non esiste che non si
+aggiorna. Per minuti.»
+Il dato che mancava da giorni era QUALE riquadro: la foto l'ha dato. Il P/L si muove, capitale e
+margine libero no. Il confronto fra i due e' tutta la misura.
+
+**CAUSA MISURATA** (app.html:42822). Il giro che rilegge dal ponte era:
+
+    function mt5PositionsGiro(){
+     fetchMt5Positions();
+     fetchMt5Orders();
+     if(!mt5PositionsFetchInFlight&&!mt5OrdersFetchInFlight)fetchMt5AccountInfo();
+    }
+
+Le due letture sopra alzano il loro interruttore in modo SINCRONO, prima del primo `await`
+(fetchMt5Positions 41870-41874, fetchMt5Orders 42239-42243). Quando si arrivava al controllo erano
+**sempre** alzati: `/account` non partiva MAI. Misurato con ponte finto, finestra di 8 secondi:
+
+    PRIMA:  letture {account: 1, positions: 9, orders: 9}   cambi a schermo {mCapital: 1, mMargin: 1, liveValue: 9}
+    DOPO:   letture {account: 9, positions: 9, orders: 9}   capitale e margine cambiano quanto il P/L
+
+Quindi non era «ogni tanti secondi»: era **una volta sola, al collegamento, e poi mai piu'**. I
+minuti di ritardo erano in realta' un numero fermo fino al prossimo riavvio del polling.
+Il freno contro le richieste accavallate c'era GIA' dentro fetchMt5AccountInfo
+(`_mt5AccountInfoInFlight`, 42486): era un freno messo dove il freno c'era gia' (lezione 34).
+
+**SECONDO DIFETTO, trovato nella stessa fascia e curato insieme** (app.html:42529). In
+`mostraFonteCapitale()` il ramo `isPropFirmMode` veniva PRIMA di quello `mt5Connected`, dove sta
+l'avviso «i dati del conto MT5 non arrivano». In Modalita' Prop Firm quell'avviso non compariva
+MAI: si leggeva la riga rassicurante «Capitale della Challenge Prop Firm (simulato)» mentre il
+numero restava fermo e niente diceva che il ponte non stava rispondendo. Riprodotto con `/account`
+che risponde 400 «Non connesso»: la riga era identica a quella della foto del proprietario.
+I due difetti sono lo stesso difetto: `mt5StatsActive()` cade su «Prop Firm simulata» proprio
+quando `mt5AccountInfo` manca, ed e' quello che succede se la PRIMA lettura va male e nessuno
+ritenta. Ora il messaggio della Prop Firm resta (il capitale li' e' simulato per scelta) ma, se MT5
+e' collegato e il conto non arriva, lo si dice accanto.
+
+**Test**: laboratorio/app/capitale_in_tempo_reale.test.mjs (3 prove: le due strade vanno alla
+stessa velocita'; capitale e margine cambiano quanto il P/L live; in Prop Firm l'avviso compare).
+Ogni prova ha la sua contromisura: se `/positions` non viene letto o il P/L non si muove, il banco
+dichiara la misura non valida invece di passare. Rosso-senza misurato: 3 su 3.
+
+**IPOTESI DEL DIARIO CADUTA, da non ripetere**: era annotato che `serverDatiAscolta` «esiste e non
+viene mai chiamato» e che poteva riguardare questa fascia. Verificato: viene chiamato (39473, via
+`ascoltaServer`) e riguarda i documenti del cloud nostro, non i riquadri del conto.
+
+**RESTA APERTO nella stessa fascia** (annotato, non curato qui): la mini dashboard della modalita'
+pagina intera (`fblMiniDashAggiorna`, 28333) ricalcola da sola solo il P/L e COPIA come testo
+capitale, margine, win rate e loss rate da `#mCapital`/`#mMargin` (28348): non potra' mai essere
+piu' fresca della fascia. Con questa cura la fascia e' fresca, quindi il sintomo sparisce, ma la
+strada resta fragile e andrebbe fatta ricalcolare con `equityNow()`/`freeMargin()`.

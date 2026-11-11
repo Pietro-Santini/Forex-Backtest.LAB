@@ -97,3 +97,47 @@ dopo l'apertura (oggi 35 contro 5).
 
 - Stato: DA FARE (dopo la regressione delle linee entry/tp/sl: tocca lo stesso canale di
   comunicazione tra finestre, meglio non aprirne due fronti insieme).
+
+
+## SEGNALAZIONI DELLA SERA DELL'11 NOVEMBRE 2026 (a voce, dal proprietario)
+
+Arrivate DOPO la v2.2.28. Quasi tutte sono voci GIA' APERTE in questa lista, e una di esse
+(l'elenco asset) era GIA' MISURATA l'8 novembre: sono rimaste indietro mentre si curava altro.
+Nessuna va curata a intuito: per ognuna c'e' scritto se la misura esiste o manca.
+
+**IL PRINCIPIO, parole sue:** «la pagina duplicata quello che deve fare e' semplicemente un copia
+e incolla di quello che c'e' sulla pagina madre, solo con le limitazioni che ho scritto e ho
+definito. Che alcune cose devono essere trasportate, alcune no. Tipo quelle dei disegni, gli
+indicatori, i time frame, eccetera.»
+Quindi il comportamento atteso NON e' «qualche campo viaggia»: e' **copia della madre** piu' una
+lista chiusa di eccezioni. Le eccezioni sono quelle scritte in questo documento e nel DIARIO.
+
+### 10. IL GRAFICO DELLA DUPLICATA RESTA PIANTATO SUL CARICAMENTO  ← P0, NUOVO, da misurare
+Parole sue: «adesso le pagine duplicate, il grafico fa sempre scarico lo storico in corso, carico
+l'asset e rimane sempre li' piantato. Non carica.»
+Non misurato. Da misurare: in quale stato si ferma (il messaggio a schermo e' quello dello
+scaricamento storico), se la richiesta al ponte parte, se torna, e se il disegno riprende. Da
+guardare per prime: l'eredita' del conto all'apertura (se la duplicata non sa quale conto usare,
+puo' restare in attesa di dati che non arrivano) e il guardiano `currentAssetKey`.
+- Stato: DA MISURARE.
+
+### 11. IL CONTO ARRIVA IN RITARDO, E LA TERZA DUPLICATA PRENDE QUELLO VECCHIO  ← P0
+Parole sue: «a un certo punto ci aveva salvato che era collegato con un account, poi dopo un po' di
+tempo si e' collegato effettivamente all'account che e' stato caricato sulla pagina principale» e
+«ho aperto una terza pagina duplicata e ancora mi da' il conto selezionato in precedenza, non
+quello corrente».
+E' la voce 5 di questa lista (propagare il CAMBIO di conto dopo l'apertura), piu' un caso nuovo e
+preciso: **la TERZA finestra**. Le cure di v2.2.26 e v2.2.28 hanno fatto viaggiare il conto, ma
+qui la finestra nuova eredita uno stato VECCHIO, non quello corrente. Da misurare: con tre
+finestre aperte e un cambio di conto sulla madre, quale conto dichiara ognuna delle tre e in che
+ordine temporale (il ritardo e' parte del sintomo, non un dettaglio).
+- Stato: DA MISURARE. Collegata alla voce 5.
+
+### 12. ELENCO ASSET INCOMPLETO SOLO SULLA SECONDA DUPLICATA IN POI  ← P1
+Parole sue: «vado a selezionare gli asset e me ne fa vedere solo alcuni, non mi fa vedere come
+quelli della pagina principale, mentre invece la prima pagina duplicata si'.»
+E' la voce 4, GIA' MISURATA l'8 novembre (madre 35 asset, duplicata 5) e mai curata. La novita'
+utile: la PRIMA duplicata adesso e' a posto, la SECONDA no. Questo restringe la causa:
+l'eredita' funziona per chi nasce dalla madre e non per chi nasce da una duplicata (o per chi
+nasce quando la madre ha gia' una figlia).
+- Stato: DA FARE, misura esistente da ripetere con TRE finestre.
