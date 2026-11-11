@@ -41,7 +41,7 @@ import urllib.error
 import urllib.request
 import asyncio  # Fase 4: il ciclo di lettura dei segnali gira su un event loop suo, in un thread
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -3012,10 +3012,25 @@ def _estimate_server_offset_seconds(preferred_symbols=()):
 
 
 @app.get("/positions")
-def get_positions():
-    """Posizioni REALMENTE aperte ora sul conto collegato (non simulate)."""
+def get_positions(response: Response):
+    """Posizioni REALMENTE aperte ora sul conto collegato (non simulate).
+
+    DICHIARA DI CHE CONTO E' LA FOTOGRAFIA (11 novembre 2026). Il ponte e' uno solo per
+    computer e puo' essere finito su un ALTRO conto mentre l'app (o un'altra pagina) e'
+    aperta: senza questa informazione il ricevente taggava le posizioni col conto che
+    credeva lui, e sul grafico comparivano due conti insieme - segnalato dal proprietario
+    («mi ha scritto sia la posizione dell'account 1 che quella dell'account 2, nello stesso
+    grafico»). Il login viaggia negli header, NON nel corpo: il corpo resta la lista nuda
+    di sempre, quindi chi la legge ({ok,data}, e tutti gli stub dei banchi) non cambia.
+    Se account_info() non risponde, gli header non si mettono: l'app ricade nel
+    comportamento di prima invece di ricevere un conto inventato.
+    """
     if not mt5_connected:
         raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
+    info_conto = mt5.account_info()
+    if info_conto is not None:
+        response.headers["X-MT5-Login"] = str(info_conto.login)
+        response.headers["X-MT5-Server"] = str(getattr(info_conto, "server", "") or "")
     positions = mt5.positions_get()
     if positions is None:
         # positions_get() restituisce None per un errore INTERNO/temporaneo (l'IPC col terminale

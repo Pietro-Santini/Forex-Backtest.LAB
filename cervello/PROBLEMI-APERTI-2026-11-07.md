@@ -232,19 +232,34 @@ e anche gli indicatori come si comportano in maniera diversa su piu' schermi, su
 
 Stato: DA FARE (dopo il commit in corso).
 
-## P0 — POSIZIONI DI UN ALTRO CONTO: DUE CASI ANCORA APERTI (11 novembre 2026)
-Due banchi misurano difetti veri e restano ROSSI. NON sono stati committati (un banco rosso
-committato rende rosso il collaudo di GitHub: lezione 31). Vivono in
-`C:\Users\pietro\AppData\Local\Temp\opencode\banchi_aperti\`:
-- `posizioni_un_solo_conto.test.mjs` — (a) la finestra duplicata che non ha ancora fatto
-  `/connect` (conto non noto) mostra 2 righe invece di 1: entra anche la posizione di un altro
-  conto; (b) una fotografia del ponte di un ALTRO conto entra in `positions[]` (misurato:
-  ticket 999 altrui dentro l'elenco). Serve sapere DI CHE CONTO e' la fotografia del ponte:
-  `/positions` non lo dichiara.
-- `posizioni_chiuse_tablet.test.mjs` — le posizioni chiuse da tempo restano nella tabella del
-  tablet dopo un cambio conto (il cambio asincrono e' curato per il caso Live, non per tutti).
-- Stato: DA CURARE, con la misura gia' scritta. La cura tocca il ponte (`/positions` deve dire
-  il login) e il ricevente.
+## P0 — POSIZIONI DI UN ALTRO CONTO (11 novembre 2026) — CURATO in v2.2.28
+CURATO in v2.2.28, con i banchi DENTRO il repo e verdi:
+- `laboratorio/app/posizioni_un_solo_conto.test.mjs` (6/6) — il ponte dichiara di che conto e'
+  la fotografia (`/positions` risponde con gli header `X-MT5-Login` / `X-MT5-Server`, esposti
+  dal CORS); l'app scarta la fotografia di un altro conto (ne' adozione ne' chiusure), impara
+  il proprio conto dal polling di `/account` e dall'annuncio della madre, timbra le posizioni
+  che arrivano senza conto, e il filtro non fa piu' passare tutto quando il conto non si sa.
+  SCELTA DICHIARATA: conto ignoto ⇒ l'app non attribuisce NESSUNA posizione con un login
+  addosso (meglio zero per un istante che quelle di un altro). Prova di controllo nel banco:
+  appena il conto si conosce, la posizione giusta torna.
+- `laboratorio/app/posizioni_chiuse_tablet.test.mjs` — la parte curata: dopo il cambio conto
+  annunciato la pagina ridipinge SUBITO (misurata a 1536 ms) e il banco aspetta 3000 ms.
+
+RESTA APERTO UN CASO DIVERSO (banco fuori dal repo, in
+`C:\Users\pietro\AppData\Local\Temp\opencode\banchi_aperti\posizioni_chiuse_tablet.test.mjs`):
+una posizione reale tracciata in una sessione che NON e' quella a schermo non viene mai
+riconciliata — se il broker la chiude (TP), resta nella tabella di quella sessione. Curarla
+significa far scambiare i globali (`positions`, `trades`, saldo) al giro di riconciliazione,
+cioe' toccare `closeTrade` (che scrive sempre nella sessione corrente): va progettato, non
+rattoppato. Un banco rosso non si committa (lezione 31).
+
+## P2 — /orders NON DICHIARA DI CHE CONTO E' (11 novembre 2026)
+La cura 2.2.28 fa dichiarare il conto a `/positions` (header `X-MT5-Login`/`X-MT5-Server`) e
+l'app scarta la fotografia di un altro conto. `/orders` invece non lo dichiara ancora: un
+ordine pendente di un ALTRO conto, promosso a posizione quando scatta, viene taggato col conto
+che l'app crede suo (`currentMt5AccountTag()`). Stessa famiglia del difetto P0 curato sopra,
+ma per gli ordini pendenti. Da curare con un banco che misuri la promozione di un ordine
+scattato mentre il ponte e' su un altro conto.
 
 ## P1 — TRAFFICO CLOUD: CURE APPLICATE, DA MISURARE SUL CAMPO (11 novembre 2026)
 Applicate in `app.html`: tetto giornaliero persistito su localStorage, rilettura del grafico

@@ -229,7 +229,12 @@ def opzioni_cors() -> dict:
     "*"). Il permesso per la rete privata lo da' installa_controllo_chiave(), solo al sito
     dell'app (ORIGINI_FIDATE).
     """
-    return {"allow_origins": ["*"], "allow_methods": ["*"], "allow_headers": ["*"]}
+    return {"allow_origins": ["*"], "allow_methods": ["*"], "allow_headers": ["*"],
+            # GLI HEADER CHE L'APP DEVE POTER LEGGERE (11 novembre 2026). /positions dichiara
+            # di che conto e' la fotografia in X-MT5-Login / X-MT5-Server; da un'altra origine
+            # (GitHub Pages, file://) il browser li nasconde al JavaScript se non sono esposti
+            # qui, e la cura contro i conti mescolati non funzionerebbe proprio nel caso vero.
+            "expose_headers": ["X-MT5-Login", "X-MT5-Server"]}
 
 
 def installa_controllo_chiave(app, dati: Optional[dict] = None, percorsi_liberi=()):

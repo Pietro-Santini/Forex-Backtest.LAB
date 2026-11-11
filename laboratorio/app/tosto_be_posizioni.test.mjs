@@ -33,6 +33,13 @@ const PREPARA = (ponteRisponde) => {
   rows = R; baseRows = R; idx = R.length - 1; viewEnd = R.length - 1; visibleCount = R.length;
   currentAssetKey = 'XAUUSD'; positionsVisible = true;
   liveModeActive = true; mt5Connected = true; mt5MonitorOnly = false; liveReplayActive = false;
+  // IL CONTO ATTIVO SI DICHIARA (11 novembre 2026). Una finestra collegata a MT5 conosce SEMPRE
+  // il suo conto (lo scrive connectToMt5Bridge al momento del collegamento). Il banco lo dava
+  // per scontato e non lo impostava: da quando il filtro per conto non fa piu' passare le
+  // posizioni di un conto che non si sa (posizioni_un_solo_conto.test.mjs, stato «conto ignoto»),
+  // una posizione con `mt5Login` scritto addosso restava fuori dalla tabella e il banco misurava
+  // l'assenza del tasto invece del comportamento. Lo stato vero e' questo: conto noto.
+  try { mt5AttivaConto(511468794, 'FTMO-Server', true, 0); } catch (e) { window.__eConto = String(e); }
   // ponteRisponde===false riproduce lo stato misurato: il ponte c'è ma MT5 è staccato (appena
   // riavviato), quindi /positions risponde 400 "Non connesso" e mt5RealPositions resta vuoto.
   mt5RealPositions = ponteRisponde ? [{ticket: 306713136, symbol: 'XAUUSD', side: 'BUY', volume: 0.1,

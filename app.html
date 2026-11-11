@@ -9260,6 +9260,11 @@ if(tradingChannel){
           Promise.resolve(switchAccountMode(true)).then(function(){
             try{ if(dec.vista && dec.vista!=='storico') fblContoScegli(dec.vista); }catch(e){}
             try{ if(posizioniInAttesaDelConto)fblApplicaStatoTrading(msg); }catch(e){}
+            // RIDIPINGERE SUBITO (11 novembre 2026). Misurato dal banco posizioni_chiuse_tablet:
+            // dopo il cambio conto annunciato la tabella veniva ridipinta 1536 ms dopo, e chi
+            // guarda (o chi misura) in quel momento vede ancora le posizioni vecchie. Il cambio
+            // e' asincrono: senza questo, la pagina resta visivamente indietro.
+            try{ draw(); update(); }catch(eR){}
             posizioniInAttesaDelConto=false;
           }).catch(function(){ posizioniInAttesaDelConto=false; });
         }else if(dec.promessa==='storico'){
@@ -13914,8 +13919,13 @@ function positionBelongsToCurrentView(pos){
     // (test replay_mai_ordini_veri), che qui non viene toccato.
     try{
       if(mt5Connected){
+        // CONTRO IGNOTO NON VUOL DIRE «PASSANO TUTTE» (11 novembre 2026): se qui il conto non e'
+        // noto, passano solo le posizioni SENZA conto addosso (quelle che il ponte adotta e che
+        // non sappiamo attribuire). Una posizione con un login esplicito e' di un conto che non
+        // possiamo confrontare col nostro: mostrarla vorrebbe dire mischiare i conti, che e'
+        // esattamente cio' che il proprietario ha vietato.
         const login=currentMt5AccountTag().mt5Login;
-        return pos.mt5Ticket!=null&&(!login||String(pos.mt5Login||'')===login);
+        return pos.mt5Ticket!=null&&String(pos.mt5Login||'')===(login||'');
       }
     }catch(e){}
     return false;   // senza MT5 collegato: solo cio' che e' nato nel replay, come prima
@@ -13926,7 +13936,11 @@ function positionBelongsToCurrentView(pos){
     // CORRETTO (10 novembre 2026), la stessa cura di tradeBelongsToCurrentView: una posizione
     // reale senza mt5Login e' del conto collegato (il ponte ne interroga uno solo), quindi non
     // va nascosta. Quella di un altro conto ha il login e non combacia: resta fuori.
-    return pos.mt5Ticket!=null&&(!login||pos.mt5Login==null||String(pos.mt5Login)===login);
+    // STRETTO L'11 novembre 2026: via il `!login||`. Con il conto NON noto (finestra duplicata
+    // appena nata) quel pezzo lasciava passare qualunque posizione di qualunque conto - misurato
+    // dal banco posizioni_un_solo_conto: 2 righe invece di 1. Ora, se il conto non si sa, passano
+    // solo le posizioni che non dichiarano nessun conto: meglio nessuna che quelle di un altro.
+    return pos.mt5Ticket!=null&&(pos.mt5Login==null||String(pos.mt5Login)===login);
   }
   // SENZA MT5 COLLEGATO IL FILTRO PER CONTO VALE LO STESSO (10 novembre 2026).
   // Segnalato dal proprietario: «ho aperto due posizioni, una per ogni account, in due account
@@ -13939,7 +13953,13 @@ function positionBelongsToCurrentView(pos){
   // posizione col login di un altro conto resta fuori, in qualunque stato della connessione.
   const loginNoto=currentMt5AccountTag().mt5Login;
   if(loginNoto)return pos.mt5Ticket!=null&&(pos.mt5Login==null||String(pos.mt5Login)===loginNoto);
-  return true;
+  // CONTRO IGNOTO: solo le posizioni senza conto addosso (vedi il commento nel ramo collegato).
+  // NIENTE `mt5Ticket!=null` QUI (11 novembre 2026, misurato): aggiungerlo nascondeva anche le
+  // posizioni SIMULATE (mt5Ticket:null) quando MT5 non e' collegato - cioe' il backtest in Live,
+  // che non c'entra nulla coi conti. Segnalato dai banchi mercato_chiuso, mt5_evidenzia_posizione,
+  // v138, tosto_be_posizioni e replay_live, tutti rossi appena messo quel pezzo. Il filtro deve
+  // scartare chi dichiara un ALTRO conto, non chi non e' di MT5.
+  return pos.mt5Login==null;
 }
 // Comodo: entrambe le condizioni insieme, usato da tutto il disegno del grafico.
 function drawableOnCurrentChart(item){
@@ -40037,8 +40057,18 @@ async function fetchMt5WithTimeout(path,options,timeoutMs){
      try{ if(typeof mt5SegnaRispostaPonte==='function')mt5SegnaRispostaPonte(p,__dm); }catch(eSn){}
      return {ok:false,message:__dm}; }
    __ok=true; try{ if(typeof mt5SegnaRispostaPonte==='function')mt5SegnaRispostaPonte(p,''); }catch(eSn){}
-   return {ok:true,data};
-   return {ok:true,data};
+   // DI CHE CONTO E' QUESTA RISPOSTA (11 novembre 2026). Il ponte e' uno solo per computer e
+   // puo' essere finito su un ALTRO conto mentre questa pagina e' aperta: /positions adesso
+   // dichiara il login nei due header qui sotto (bridge.py), e senza leggerli l'app adottava
+   // le posizioni dell'altro conto taggandole col PROPRIO numero - cioe' il difetto segnalato
+   // dal proprietario («mi ha scritto sia la posizione dell'account 1 che quella dell'account 2,
+   // nello stesso grafico»). `conto` e' un campo AGGIUNTO: chi leggeva {ok,data} non cambia.
+   let conto=null;
+   try{
+     const lg=res.headers&&res.headers.get?res.headers.get('X-MT5-Login'):null;
+     if(lg)conto={login:String(lg),server:String((res.headers.get('X-MT5-Server')||''))};
+   }catch(eH){ conto=null; }
+   return {ok:true,data,conto};
  }catch(e){
    if(e.name==='AbortError'){
      return {ok:false,message:`MT5 non ha risposto entro ${(timeoutMs/1000).toFixed(0)}s. Causa più probabile: nel terminale MT5 è aperta una finestra di conferma manuale dell'operazione (Strumenti → Opzioni → scheda Trading → disattiva "Richiedi conferma delle operazioni"/"Confirm requests"), oppure il "Trading algoritmico" non è attivo (pulsante in alto nella barra degli strumenti, deve essere verde).`};
@@ -41859,6 +41889,24 @@ async function fetchMt5Positions(){
    const result=await fetchMt5WithTimeout('/positions',{method:'GET'},8000);
    // Chiesta prima di un cambio conto: descrive un altro conto, non si usa.
    if(generazione!==mt5GenerazioneConto)return;
+   // LA FOTOGRAFIA DI UN ALTRO CONTO NON SI ADOTTA E NON SI RICONCILIA (11 novembre 2026).
+   // Misurato dal banco posizioni_un_solo_conto.test.mjs: il ponte condiviso era passato al
+   // conto 22222, /positions rispondeva con la sua posizione (ticket 999) e l'app la scriveva
+   // in positions[] taggata col PROPRIO conto (11111): a grafico comparivano due conti.
+   // Ora il ponte dichiara il login (header X-MT5-Login) e qui la fotografia di un conto
+   // diverso da quello attivo si butta via: ne' adozione ne' chiusure.
+   const contoFoto=(result.conto&&result.conto.login)?String(result.conto.login):'';
+   const contoQui=(mt5ContoAttivo&&mt5ContoAttivo.login!=null)?String(mt5ContoAttivo.login):'';
+   if(contoFoto && contoQui && contoFoto!==contoQui){
+     console.log('[MT5] fotografia del conto '+contoFoto+' mentre qui si e su '+contoQui
+       +': scartata (ne adozione ne chiusure)');
+     return;
+   }
+   // Il conto da scrivere addosso alle posizioni adottate e' quello DICHIARATO dalla fotografia
+   // (l'unico che sappiamo per certo), non quello che crediamo qui.
+   const tagFoto=(result.conto&&result.conto.login)
+     ?{mt5Login:String(result.conto.login),mt5Server:String(result.conto.server||'')}
+     :currentMt5AccountTag();
    if(result.ok && Array.isArray(result.data)){
      // Contatto riuscito col bridge/terminale in questo preciso istante: vedi il blocco
      // RECUPERO STORICO MT5 più sopra — serve come punto di partenza per /history_deals alla
@@ -41895,7 +41943,7 @@ async function fetchMt5Positions(){
        if(contoOra&&p.mt5Login&&String(p.mt5Login)!==contoOra)continue;
        if(newTickets.has(String(p.mt5Ticket))){
          p.mt5MissingSince=null; // ricomparsa: falso allarme, il sospetto si cancella
-         if(!p.mt5Login)Object.assign(p,currentMt5AccountTag()); // conto su cui vive davvero questa posizione
+         if(!p.mt5Login)Object.assign(p,tagFoto); // conto su cui vive davvero questa posizione (dalla fotografia)
          // BUG RISOLTO ("posizioni aperte con MT5: non riesce a leggere lo Stop Loss e il Take
          // Profit dato da MT5"): SL/TP venivano letti da rp.sl/rp.tp SOLO nel momento
          // dell'adozione (la prima volta che il ticket viene visto, poco più sotto/in
@@ -42115,7 +42163,7 @@ async function fetchMt5Positions(){
              origin:'MARKET',
              lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
              start:realOpenIdx!=null?realOpenIdx:0,startTime:realOpenMs,openTF:currentTF,
-             marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
+             marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...tagFoto
            };
            mt5AllineaApertura(pos,rp);
            applyLocalSlTpDefaultsIfMissing(pos);
@@ -42146,7 +42194,7 @@ async function fetchMt5Positions(){
          origin:'MARKET',
          lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
          start:realOpenIdx!=null?realOpenIdx:(rows[idx]?idx:0),startTime:realOpenMs,openTF:currentTF,
-         marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
+         marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...tagFoto
        };
        mt5AllineaApertura(pos,rp);
        const hadRealSlTp=pos.sl!=null&&pos.tp!=null;
@@ -42260,6 +42308,11 @@ async function fetchMt5Orders(){
            origin:'PENDING',kind:p.kind||'LIMIT',
            lots:Number(triggered.volume)||p.lots,risk:0,dist:0,hasRiskModel:false,
            start:rows[idx]?idx:0,startTime:Date.now(),openTF:currentTF,
+           // QUI SI RESTA AL CONTO CHE CREDIAMO (11 novembre 2026): /orders non dichiara ancora
+           // di che conto e' la fotografia (gli header sono stati messi solo su /positions), e
+           // `tagFoto` vive dentro fetchMt5Positions, non in questa funzione. Scriverlo qui
+           // avrebbe fatto fallire la promozione dell'ordine con un ReferenceError. Resta
+           // annotato in cervello/PROBLEMI-APERTI-2026-11-07.md.
            marginUsed:fblMargineReale(triggered),mt5Ticket:triggered.ticket,mt5AddedAt:Date.now(),...currentMt5AccountTag()
          };
          ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
@@ -42445,10 +42498,19 @@ async function fetchMt5AccountInfo(){
    if(r.data && r.data.login!=null){
      const loginPonte=String(r.data.login);
      const loginQui=(mt5ContoAttivo&&mt5ContoAttivo.login!=null)?String(mt5ContoAttivo.login):'';
-     if(loginPonte && loginQui && loginPonte!==loginQui && typeof mt5AttivaConto==='function'){
+     // ANCHE SE QUI IL CONTO NON E' NOTO (11 novembre 2026): una finestra duplicata nasce
+     // senza conto (eredita solo il flag «MT5 collegato»), e prima questa condizione
+     // (`loginQui` obbligatorio) le impediva di impararlo dal ponte: restava per sempre senza
+     // conto, quindi non applicava NESSUNA posizione e il filtro per conto non sapeva cosa
+     // filtrare. Ora il ponte e' la fonte: se dice un conto diverso da quello noto (o se qui
+     // non se ne conosce nessuno), lo si adotta.
+     if(loginPonte && loginPonte!==loginQui && typeof mt5AttivaConto==='function'){
        try{
          mt5AttivaConto(loginPonte, r.data.server||'');
-         try{ if(typeof updateMt5ModeUI==='function')updateMt5ModeUI(); }catch(eUi){}
+         // Se il conto qui NON era noto (finestra duplicata) lo si sta soltanto imparando: la
+         // UI si aggiorna, ma senza suono e senza la domanda delle sale segnali - non e' una
+         // connessione nuova (vedi il parametro `silenzioso` di updateMt5ModeUI).
+         try{ if(typeof updateMt5ModeUI==='function')updateMt5ModeUI(!loginQui); }catch(eUi){}
          try{ scheduleSave(); }catch(eSv){}
          try{ update(); draw(); }catch(eDr){}
        }catch(eAtt){}
@@ -49281,17 +49343,34 @@ let posizioniInAttesaDelConto=false;
 
 function fblApplicaStatoTrading(msg){
   try{
-    const _mt5Locale=currentMt5AccountTag();
+    let _mt5Locale=currentMt5AccountTag();
     const _mt5Remoto=msg.conto&&msg.conto.mt5?{login:String(msg.conto.mt5.login||''),server:String(msg.conto.mt5.server||'')}:{login:'',server:''};
+    // IL CONTO SI IMPARA DAL MESSAGGIO (11 novembre 2026). Una finestra duplicata nasce senza
+    // conto: prima, con un conto remoto dichiarato e uno locale ignoto, `_stessoContoMt5` era
+    // falso e la duplicata non applicava NIENTE (ne' posizioni ne' operazioni) - e il filtro per
+    // conto, non sapendo il proprio, non poteva escludere quelle di un altro conto. Il conto
+    // della madre e' quello su cui gira il ponte, quindi e' il nostro: si adotta qui, dove il
+    // messaggio lo dichiara, senza rifare /connect.
+    if(!_mt5Locale.mt5Login && _mt5Remoto.login && typeof mt5AttivaConto==='function'){
+      try{ mt5AttivaConto(_mt5Remoto.login,_mt5Remoto.server); _mt5Locale=currentMt5AccountTag(); }catch(eL){}
+    }
     const _stessoContoMt5=(!_mt5Locale.mt5Login&&!_mt5Remoto.login)
       ||(_mt5Locale.mt5Login&&_mt5Remoto.login&&_mt5Locale.mt5Login===_mt5Remoto.login&&(_mt5Locale.mt5Server||'')===(_mt5Remoto.server||''));
+    // OGNI POSIZIONE CHE ARRIVA PORTA IL CONTO CHE L'HA MANDATA (11 novembre 2026). Prima si
+    // copiava `msg.positions` com'e': una posizione arrivata senza login restava senza, e il
+    // filtro la trattava come «mia» anche se veniva da un altro conto. L'informazione c'e' gia'
+    // nel messaggio (msg.conto.mt5): si scrive addosso a chi non ce l'ha. Si tocca SOLO chi ha
+    // un ticket MT5, cosi' le posizioni simulate del replay restano intatte.
+    const _timbra=(x)=>(_mt5Remoto.login && x && x.mt5Ticket!=null && !x.mt5Login)
+      ?{...x, mt5Login:_mt5Remoto.login, mt5Server:_mt5Remoto.server||''}
+      :x;
     if(!_stessoContoMt5){
       console.log('[trading_sync] posizioni/ordini del conto MT5 remoto ignorati (diverso dal locale)');
     }else{
-      positions=Array.isArray(msg.positions)?msg.positions:positions;
-      pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders:pendingOrders;
+      positions=Array.isArray(msg.positions)?msg.positions.map(_timbra):positions;
+      pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders.map(_timbra):pendingOrders;
     }
-    if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades:trades;
+    if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades.map(_timbra):trades;
     equity=Array.isArray(msg.equity)?msg.equity:equity;
     if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
     if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
@@ -53267,12 +53346,20 @@ function playMt5ConnectedChime(force){
  $('mt5ConnectSoundPreviewBtn')?.addEventListener('click',()=>playMt5ConnectedChime(true));
 })();
 var _mt5WasConnectedForModeSwitch;
-function updateMt5ModeUI(){
+function updateMt5ModeUI(silenzioso){
  $('mt5ModeBtn').textContent=(mt5Connected?'🖥️ MT5 (connesso)':'🖥️ MT5 (Live)')+' ⌄';
  // RICHIESTO ESPLICITAMENTE: se ci si collega a MT5 mentre si è in Storico, si passa da soli in
  // Live (un conto reale collegato non ha senso in un replay). Solo sulla TRANSIZIONE
  // scollegato→collegato, così tornare in Storico a mano dopo resta possibile.
- const _justConnected=mt5Connected&&!_mt5WasConnectedForModeSwitch;
+ //
+ // `silenzioso` (11 novembre 2026): IMPARARE IL CONTO NON E' COLLEGARSI. Una finestra duplicata
+ // nasce sapendo di essere collegata ma senza il numero di conto, e lo impara dal ponte (vedi
+ // fetchMt5AccountInfo / fblApplicaStatoTrading). Prima quel passaggio arrivava qui e sembrava
+ // una connessione nuova: suono di benvenuto, domanda sulle sale Telegram e barra di stato
+ // sovrascritta - misurato dal banco tosto_be_posizioni, che dopo aver premuto BE leggeva il
+ // messaggio delle sale invece di «pareggio». Con `silenzioso` la UI si aggiorna lo stesso
+ // (etichetta, riquadri, polling) ma la transizione non viene raccontata.
+ const _justConnected=!silenzioso&&mt5Connected&&!_mt5WasConnectedForModeSwitch;
  _mt5WasConnectedForModeSwitch=!!mt5Connected;
  if(_justConnected){
    playMt5ConnectedChime();

@@ -69,8 +69,15 @@ test('le celle SL e TP non si cliccano, nemmeno sulla posizione selezionata', as
     assert.notEqual(r.tpCursore, 'pointer', 'la cella TP non deve invitare al clic');
     assert.ok(!/underline/.test(r.slSottolineato || ''), 'niente sottolineatura da «cliccami» su SL');
     assert.ok(!/underline/.test(r.tpSottolineato || ''), 'niente sottolineatura da «cliccami» su TP');
-    assert.deepEqual(r.mandato, [],
-      'un clic sulle celle SL/TP non deve mandare NIENTE al ponte: ' + JSON.stringify(r.mandato));
+    // IL GIRO PERIODICO DI /stato NON E' UN CLIC (11 novembre 2026). L'app rilegge lo stato del
+    // conto Kraken a intervalli; se un giro cade dentro i 60 ms della misura, il banco lo
+    // registrava come se il clic avesse mandato qualcosa. Misurato: il collaudo locale e' andato
+    // rosso qui una volta («actual: [{p:'/stato'}]») e il test, rifatto da solo, era verde 6/6.
+    // /stato e' una LETTURA, non un ordine: quello che il banco deve garantire e' che il clic non
+    // mandi nessuna modifica.
+    const ordini = r.mandato.filter(x => x && x.p !== '/stato');
+    assert.deepEqual(ordini, [],
+      'un clic sulle celle SL/TP non deve mandare NIENTE al ponte: ' + JSON.stringify(ordini));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -113,9 +120,11 @@ test('dal grafico lo stop si manda col campo che il ponte si aspetta', async () 
       await krakenLivelloApplica({simbolo: 'PF_XBTUSD', tipo: 'SL', scostamento: 0}, 95);
       return window._mandato;
     }, PREPARA.toString());
-    assert.equal(r.length, 1, 'una sola chiamata al ponte: ' + JSON.stringify(r));
-    assert.equal(r[0].p, '/sl');
-    assert.deepEqual(r[0].corpo, {simbolo: 'PF_XBTUSD', sl: 95});
+    // Stessa precauzione del primo test: il giro periodico di /stato non e' un ordine.
+    const ordini = r.filter(x => x && x.p !== '/stato');
+    assert.equal(ordini.length, 1, 'una sola chiamata al ponte: ' + JSON.stringify(r));
+    assert.equal(ordini[0].p, '/sl');
+    assert.deepEqual(ordini[0].corpo, {simbolo: 'PF_XBTUSD', sl: 95});
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -130,9 +139,10 @@ test('dal grafico i target si mandano TUTTI insieme, non solo quello spostato', 
       await krakenLivelloApplica({simbolo: 'PF_XBTUSD', tipo: 'TP', indice: 1, scostamento: 0}, 140);
       return window._mandato;
     }, PREPARA.toString());
-    assert.equal(r[0].p, '/tp');
-    assert.deepEqual(r[0].corpo, {simbolo: 'PF_XBTUSD', tp: [120, 140]},
-      'il target non trascinato deve essere rimandato com\'era: ' + JSON.stringify(r[0].corpo));
+    const ordini = r.filter(x => x && x.p !== '/stato');
+    assert.equal(ordini[0].p, '/tp');
+    assert.deepEqual(ordini[0].corpo, {simbolo: 'PF_XBTUSD', tp: [120, 140]},
+      'il target non trascinato deve essere rimandato com\'era: ' + JSON.stringify(ordini[0].corpo));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -146,7 +156,8 @@ test('annullando la conferma non si manda niente', async () => {
       await krakenLivelloApplica({simbolo: 'PF_XBTUSD', tipo: 'SL', scostamento: 0}, 95);
       return window._mandato;
     }, PREPARA.toString());
-    assert.deepEqual(r, [], 'chi annulla non sposta niente');
+    const ordini = r.filter(x => x && x.p !== '/stato');
+    assert.deepEqual(ordini, [], 'chi annulla non sposta niente: ' + JSON.stringify(ordini));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
