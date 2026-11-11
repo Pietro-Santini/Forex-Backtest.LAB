@@ -962,7 +962,97 @@ def _mt5_feed_server_exe_path():
     return candidate if os.path.isfile(candidate) else None
 
 
-def _kill_stale_instances():
+def _spazza_cartelle_temporanee(budget_secondi=3.0):
+    r"""Cancella le cartelle %TEMP%\_MEI* rimaste indietro da esecuzioni precedenti.
+
+    PERCHE' ESISTONO. Gli eseguibili onefile scompattano i loro file in una cartella temporanea e
+    la cancellano all'uscita: a farlo e' l'AVVIATORE, il processo padre. Fino al 11 novembre 2026
+    la pulizia anti-orfano uccideva anche il proprio avviatore (taskkill per NOME), e quella
+    cartella restava sul disco per sempre.
+    MISURATE sul PC del proprietatore: 367 cartelle per 17,8 GB, con 20-40 nuove al giorno, su un
+    disco con 39 GB liberi. Fermata la perdita alla radice, restano quelle vecchie: nessuno le
+    cancella, e un disco pieno rallenta tutto il computer.
+
+    PRUDENZA, perche' qui si cancella roba sul disco di qualcun altro:
+      - la cartella di QUESTO processo non si tocca mai (sys._MEIPASS);
+      - si saltano le cartelle toccate da meno di un'ora: potrebbero essere di un programma vivo;
+      - se una cartella e' in uso Windows rifiuta, e noi tiriamo dritto senza lamentarci;
+      - c'e' un budget di tempo: l'avvio non si blocca mai per fare pulizia.
+    Torna (quante, quanti byte) per poterlo scrivere nel log e misurarlo in un banco."""
+    import time as _time
+    quante = 0
+    byte = 0
+    if os.name != "nt":
+        return (0, 0)
+    inizio = _time.monotonic()
+    try:
+        import shutil as _sh
+        import tempfile as _tf
+        base = _tf.gettempdir()
+        mia = getattr(sys, "_MEIPASS", "")
+        mia = os.path.normcase(os.path.abspath(mia)) if mia else ""
+        for nome in os.listdir(base):
+            if _time.monotonic() - inizio > budget_secondi:
+                break
+            if not nome.startswith("_MEI"):
+                continue
+            via = os.path.join(base, nome)
+            if not os.path.isdir(via):
+                continue
+            if mia and os.path.normcase(os.path.abspath(via)) == mia:
+                continue
+            try:
+                if _time.time() - os.path.getmtime(via) < 3600:
+                    continue
+            except OSError:
+                continue
+            peso = 0
+            try:
+                for radice, _dirs, file in os.walk(via):
+                    for f in file:
+                        try:
+                            peso += os.path.getsize(os.path.join(radice, f))
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+            try:
+                _sh.rmtree(via, ignore_errors=False)
+                quante += 1
+                byte += peso
+            except Exception:
+                pass   # in uso, permessi, o sparita mentre guardavamo: non e' un problema nostro
+    except Exception:
+        pass
+    return (quante, byte)
+
+
+def _pid_dei_nostri():
+    """I PID VIVI dei nostri eseguibili, in questo istante.
+    Serve a distinguere un ORFANO della sessione precedente da un figlio che abbiamo appena
+    creato noi: una fotografia presa PRIMA di avviare i servizi contiene solo i primi."""
+    vivi = set()
+    if os.name != "nt":
+        return vivi
+    for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe", "SegnaliBridge.exe"):
+        try:
+            r = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/FO", "CSV", "/NH"],
+                capture_output=True, timeout=5, text=True,
+            )
+            for riga in (r.stdout or "").splitlines():
+                parti = [p.strip().strip('"') for p in riga.split('","')]
+                if len(parti) >= 2 and parti[0].lower().endswith(".exe"):
+                    try:
+                        vivi.add(int(parti[1]))
+                    except ValueError:
+                        pass
+        except Exception:
+            pass   # tasklist assente o altro: meglio una fotografia vuota che un avvio bloccato
+    return vivi
+
+
+def _kill_stale_instances(solo_pid=None, aspetta_porte=True):
     """BUG RISOLTO ("dopo aver aggiornato con l'installer, il freeze delle candele è ricomparso"):
     ForexBacktestLAB.exe si riavvia da solo ad OGNI accesso a Windows (chiave di registro in
     installer.iss) ed è anche lanciato una seconda volta subito dopo l'installazione ([Run] in
@@ -984,28 +1074,57 @@ def _kill_stale_instances():
     if not getattr(sys, "frozen", False) or os.name != "nt":
         return
     own_pid = os.getpid()
+    # IL PROPRIO AVVIATORE NON SI UCCIDE (11 novembre 2026). In modalita' onefile il processo che
+    # scompatta i file in %TEMP%\_MEI* si chiama ESATTAMENTE come questo e ha un PID diverso: il
+    # filtro "PID ne <mio>" non lo protegge, e ucciderlo lascia quella cartella sul disco per
+    # sempre, perche' e' lui che la cancella all'uscita. MISURATE sul PC del proprietatore 359
+    # cartelle per 17,4 GB, 20-40 nuove al giorno.
+    try:
+        ppid = os.getppid()
+    except Exception:
+        ppid = 0
     # TUTTI I SERVIZI, non solo due. MISURATO sul PC del proprietatore (9 novembre 2026):
     # chiudendo e riaprendo l'app restavano in piedi DUE Mt5FeedServer e DUE SegnaliBridge —
     # segno che questa pulizia ne chiudeva uno e lasciava l'altro. L'elenco e' lo STESSO
     # dell'installer (installer.iss, procedura UccidiTutti): se le due strade uccidono due
     # elenchi diversi, prima o poi una lascia un orfano di troppo.
-    for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe", "SegnaliBridge.exe"):
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/IM", exe_name, "/FI", f"PID ne {own_pid}"],
-                capture_output=True,
-                timeout=5,
-            )
-        except Exception:
-            pass  # taskkill assente, nessun processo con quel nome, o altro: mai bloccare l'avvio per questo
+    if solo_pid is not None:
+        # GIRO MIRATO: si chiudono SOLO i processi che erano gia' vivi PRIMA che avviassimo i
+        # nostri. MISURATO (11 novembre 2026): il secondo giro di pulizia, fatto DOPO
+        # _start_mt5_feed_server() e _avvia_ascolto_segnali(), uccideva per nome i servizi che
+        # questa stessa istanza aveva appena creato; poi il custode vedeva la 8001 muta e li
+        # faceva rinascere. Nel log si legge due volte "servizio dati MT5 avviato", con due PID
+        # diversi. Il "figlio arrivato in ritardo" che il secondo giro doveva chiudere era il
+        # nostro.
+        for _pid in solo_pid:
+            if _pid in (own_pid, ppid):
+                continue
+            try:
+                subprocess.run(["taskkill", "/F", "/PID", str(_pid)], capture_output=True, timeout=5)
+            except Exception:
+                pass
+    else:
+        for exe_name in ("ForexBacktestLAB.exe", "Mt5FeedServer.exe", "SegnaliBridge.exe"):
+            _filtri = ["/FI", f"PID ne {own_pid}"]
+            if ppid:
+                _filtri += ["/FI", f"PID ne {ppid}"]
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", exe_name] + _filtri,
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass  # taskkill assente, nessun processo con quel nome, o altro: mai bloccare l'avvio per questo
     # E SI ASPETTA CHE LE PORTE SI LIBERINO DAVVERO. taskkill torna appena ha CHIESTO la
     # chiusura, non quando e' avvenuta: MISURATO dallo stesso pomeriggio, l'istanza nuova
     # trovava la porta 8000 ancora in mano a quella vecchia, il bind falliva e si riprovava
     # ogni 2 secondi - la finestra dava "non risponde" per una decina di secondi, e il
     # proprietatore lo vedeva come un crash. L'attesa vera costa qualche decimo di secondo
     # all'avvio e toglie di mezzo quel "mi crasha quando chiudo e riapro".
-    for _porta in (8000, 8001):   # 8000 = il ponte, 8001 = il servizio dati (vedi __main__)
-        _aspetta_porta_libera(_porta)
+    if aspetta_porte:
+        for _porta in (8000, 8001):   # 8000 = il ponte, 8001 = il servizio dati (vedi __main__)
+            _aspetta_porta_libera(_porta)
 
 
 def _aspetta_porta_libera(porta, secondi=10):
@@ -1039,13 +1158,40 @@ def _chi_tiene_la_porta(porta):
         cerca = f":{int(porta)} "
         r = _sp.run(["netstat", "-ano"], capture_output=True, text=True, timeout=8)
         pid = ""
+        pid_altrove = ""
+        dove_altrove = ""
+        # L'INDIRIZZO CONTA, NON SOLO IL NUMERO DI PORTA (11 novembre 2026).
+        # MISURATO: questa funzione prendeva la PRIMA riga LISTENING che contenesse ":8000 ",
+        # senza guardare SU QUALE INDIRIZZO. Sul PC del proprietatore la prima e' sempre quella di
+        # Tailscale (100.x.y.z), mentre il nostro servizio sta su 127.0.0.1. Cosi' il 9 novembre
+        # il messaggio ha accusato "PID 9916 - Tailscale", quel nome e' finito nel diario come
+        # causa del crash, e ci e' rimasto due giorni senza essere mai stato misurato.
+        # Il nostro servizio ascolta SOLO in locale (accesso_condiviso.host_di_ascolto): chi tiene
+        # la porta su un altro indirizzo non ci da' nessun fastidio e non va accusato.
         for riga in (r.stdout or "").splitlines():
-            if cerca in riga and "LISTENING" in riga.upper():
-                m = _re.search(r"(\d+)\s*$", riga.strip())
-                if m:
-                    pid = m.group(1)
-                    break
+            if cerca not in riga or "LISTENING" not in riga.upper():
+                continue
+            m = _re.search(r"(\d+)\s*$", riga.strip())
+            if not m:
+                continue
+            campi = riga.split()
+            indirizzo = campi[1].rsplit(":", 1)[0] if len(campi) > 1 else ""
+            if indirizzo in ("127.0.0.1", "0.0.0.0", "[::1]", "[::]"):
+                pid = m.group(1)
+                break
+            if not pid_altrove:
+                pid_altrove = m.group(1)
+                dove_altrove = indirizzo
         if not pid:
+            # Nessuno occupa la porta DOVE ci serve. Se qualcuno la tiene altrove lo si scrive nel
+            # log, perche' l'informazione non vada persa, ma NON si restituisce un colpevole: chi
+            # legge il messaggio deve poter credere al nome che ci trova.
+            if pid_altrove:
+                try:
+                    _log_bridge("[Porte] la %s e' libera su 127.0.0.1; c'e' un ascolto su %s "
+                                "(PID %s) che non ci riguarda." % (porta, dove_altrove, pid_altrove))
+                except Exception:
+                    pass
             return ""
         t = _sp.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
                     capture_output=True, text=True, timeout=8)
@@ -3948,8 +4094,21 @@ if __name__ == "__main__":
     _kill_stale_instances()  # PRIMA di tutto: vedi commento sulla funzione — garantisce che questa
                               # istanza (sempre la più recente) sostituisca una eventuale precedente
                               # ancora viva, invece di fallire il bind e lasciarla in esecuzione.
+    # E SI PORTA VIA LA SPAZZATURA DELLE VOLTE PRECEDENTI (vedi _spazza_cartelle_temporanee):
+    # 17,8 GB misurati sul PC del proprietatore. Budget corto: l'avvio non aspetta la pulizia.
+    try:
+        _quante, _byte = _spazza_cartelle_temporanee()
+        if _quante:
+            _log_bridge("[Pulizia] tolte %d cartelle temporanee rimaste indietro (%.1f GB)."
+                        % (_quante, _byte / 1073741824.0))
+    except Exception:
+        pass
     print(f"Forex Backtest LAB — servizio bridge avviato su http://127.0.0.1:{PORT}/ "
           f"(nessuna finestra: log su {_LOG_FILE_PATH or '(nessun file di log disponibile)'})")
+    # FOTOGRAFIA PRIMA DI CREARE I NOSTRI: quello che e' vivo ADESSO e' per forza di qualcun
+    # altro (una sessione precedente). Il secondo giro di pulizia, piu' sotto, chiudera' solo
+    # questi e non i servizi che stiamo per avviare.
+    _pid_prima_dei_nostri = _pid_dei_nostri()
     _start_mt5_feed_server()  # vedi commento sulla funzione: best-effort, non blocca questo avvio
     try:
         _avvia_ascolto_segnali()
@@ -3968,7 +4127,12 @@ if __name__ == "__main__":
     # L'ANTI-ORFANO SI RIPETE ANCHE DOPO L'AVVIO DEI SERVIZI: un servizio figlio puo' essere
     # arrivato in ritardo (istanza precedente che stava morendo) e trovarsi la porta occupata
     # da chi abbiamo appena chiuso. Misurato: senza il secondo giro restava il doppione.
-    _kill_stale_instances()
+    # MA SOLO SUI PID DELLA FOTOGRAFIA, e senza riaspettare le porte (11 novembre 2026): per
+    # nome questo giro uccideva i servizi appena avviati qui sopra, e il custode li faceva
+    # rinascere subito dopo (nel log "servizio dati MT5 avviato" compare due volte, con due PID).
+    # Le attese qui costavano fino a 20 secondi in piu' PRIMA di uvicorn.run, mentre la finestra
+    # del programma si arrende dopo 30: sommate alle prime, era il "non risponde" alla riapertura.
+    _kill_stale_instances(solo_pid=_pid_prima_dei_nostri, aspetta_porte=False)
     while True:
         try:
             uvicorn.run(app, host=_host, port=PORT)

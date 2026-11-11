@@ -78,9 +78,38 @@ import MetaTrader5 as mt5
 # di log accanto all'eseguibile) ma mt5_feed_server.py — file separato, processo separato di
 # proposito, vedi il commento in cima — non l'aveva mai ereditato: qui sotto lo stesso rimedio,
 # con un file di log proprio (Mt5FeedServer.log) così i due processi non condividono nulla.
+# UN TETTO ANCHE A QUESTO LOG (11 novembre 2026).
+# MISURATO sul PC del proprietatore: Mt5FeedServer.log era a 42.199.462 byte (40,2 MB) e cresceva
+# senza limite. Il tetto del 6 novembre era stato dato solo a ForexBacktestLAB.log: questo file,
+# processo separato, non l'aveva mai ereditato - lo stesso scivolone del redirect su file, che pure
+# era gia' stato risolto una volta di la'. Quando una difesa serve a due processi, va data a tutti
+# e due il giorno stesso.
+# Qui basta ruotare all'APERTURA: il file cresce lentamente, e l'app viene riavviata spesso. Si
+# tiene UNA copia precedente (.1), cosi' un pezzo di storia resta sempre leggibile.
+_LOG_FEED_MAX_BYTE = 5 * 1024 * 1024
+
+
+def _ruota_log_se_grosso(percorso):
+    """Se il log ha passato il tetto lo sposta in .1 e riparte da zero. Non solleva mai:
+    un log che impedisce l'avvio del servizio e' peggio di nessun log."""
+    try:
+        if os.path.exists(percorso) and os.path.getsize(percorso) > _LOG_FEED_MAX_BYTE:
+            vecchio = percorso + ".1"
+            try:
+                if os.path.exists(vecchio):
+                    os.remove(vecchio)
+            except OSError:
+                pass
+            os.replace(percorso, vecchio)
+    except Exception:
+        pass
+
+
 if getattr(sys, "frozen", False) and sys.stdout is None:
     try:
-        _log_fh = open(os.path.join(os.path.dirname(sys.executable), "Mt5FeedServer.log"), "a", buffering=1, encoding="utf-8")
+        _via_log = os.path.join(os.path.dirname(sys.executable), "Mt5FeedServer.log")
+        _ruota_log_se_grosso(_via_log)
+        _log_fh = open(_via_log, "a", buffering=1, encoding="utf-8")
         sys.stdout = _log_fh
         sys.stderr = _log_fh
     except Exception:

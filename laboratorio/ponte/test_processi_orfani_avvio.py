@@ -142,13 +142,23 @@ def test_l_attesa_della_porta_torna_false_se_resta_occupata(monkeypatch):
 # IL COLPEVOLE: "la porta è occupata da PID X" invece di "non risponde".
 # ---------------------------------------------------------------------------------------------
 def test_chi_tiene_la_porta_legge_pid_e_nome(monkeypatch):
-    """Misurato sul PC del proprietatore: le porte 8000/8001/8769 erano in mano a un processo
-    che NON era uno dei nostri (PID 9916). Due cose diverse che a schermo sembrano uguali."""
+    """REGOLA CAMBIATA L'11 NOVEMBRE 2026, e il motivo va letto prima di rimetterla com'era.
+
+    Questa prova, scritta il 9 novembre, pretendeva che davanti a un ascolto di Tailscale su
+    100.120.227.56:8000 il ponte dicesse «PID 9916 - Tailscale». Quella diagnosi era SBAGLIATA ed
+    e' stata misurata il giorno dopo: il nostro servizio ascolta SOLO su 127.0.0.1
+    (accesso_condiviso.host_di_ascolto), quindi chi tiene la stessa porta su un altro indirizzo non
+    ci impedisce niente, e _servizio_gia_vivo infatti non si lascia ingannare. Il colpevole lo
+    sceglieva _chi_tiene_la_porta, che prendeva la PRIMA riga LISTENING senza guardare l'indirizzo:
+    cosi' Tailscale e' finito nel diario come causa del crash ed e' rimasto li' due giorni senza
+    che nessuno l'avesse verificato.
+    Adesso: su un indirizzo che non e' il nostro non si accusa nessuno (il fatto va nel log); su
+    127.0.0.1 si dicono PID e nome, che resta il caso per cui la funzione esiste."""
     bridge = _bridge()
     _servizio_compilato(monkeypatch, bridge)
     netstat = ("  TCP  100.120.227.56:8000  0.0.0.0:0  LISTENING  9916\n"
                "  TCP  127.0.0.1:8001        0.0.0.0:0  LISTENING  17712\n")
-    tasklist = '"Tailscale.exe","9916","Console","24","40.000 KB"\r\n'
+    tasklist = '"Mt5FeedServer.exe","17712","Console","24","40.000 KB"\r\n'
 
     class _Finto:
         def __init__(self, out): self.stdout, self.returncode = out, 0
@@ -160,9 +170,16 @@ def test_chi_tiene_la_porta_legge_pid_e_nome(monkeypatch):
         return _Finto(tasklist)
     monkeypatch.setattr(bridge.subprocess, "run", _run)
 
-    detto = bridge._chi_tiene_la_porta(8000)
-    assert "9916" in detto, "il PID di chi tiene la porta deve essere detto: " + detto
-    assert "Tailscale" in detto, "e il suo nome, perche' è quello che l'utente deve chiudere: " + detto
+    # 8000: la tiene Tailscale, ma su un indirizzo che non e' il nostro. Nessuna accusa.
+    detto_8000 = bridge._chi_tiene_la_porta(8000)
+    assert detto_8000 == "", (
+        "sulla 8000 ascolta solo Tailscale su 100.120.227.56: il nostro servizio sta su 127.0.0.1 "
+        "e non e' bloccato da lui, quindi non va accusato. Detto invece: " + repr(detto_8000))
+
+    # 8001: la tiene qualcuno DOVE ci serve. Qui il nome serve davvero.
+    detto_8001 = bridge._chi_tiene_la_porta(8001)
+    assert "17712" in detto_8001, "il PID di chi tiene davvero la porta va detto: " + detto_8001
+    assert "Mt5FeedServer" in detto_8001, "e il suo nome, perche' e' quello da chiudere: " + detto_8001
 
 
 def test_chi_tiene_la_porta_non_dice_nulla_se_la_porta_e_libera(monkeypatch):

@@ -1,5 +1,38 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+42. **Quando una funzione viene sostituita da una piu' severa, i banchi che simulavano la
+    VECCHIA smettono di simulare qualcosa, e passano o cadono per il motivo sbagliato.**
+    (11 novembre 2026, v2.2.30.) Ho sostituito `_is_port_open` con `_ponte_risponde` dentro
+    `_ensure_backend`, perche' una porta aperta non e' un servizio vivo. Il banco
+    `pacchetto_app_desktop` simulava «il ponte non c'e'» mettendo `_is_port_open` a False: da quel
+    momento la finta non toccava piu' niente, la funzione vera e' andata a cercare il ponte VERO
+    in esecuzione su questo PC, e il banco e' diventato rosso dicendo «senza ponte deve dirlo, non
+    inventare un indirizzo» - un messaggio giusto per una situazione che non era quella misurata.
+    Da fuori sembrava una regressione del comportamento; era il banco che non stava piu' simulando.
+    LA REGOLA: quando si cambia il NOME o il livello di una funzione usata da un'altra, si cerca
+    subito chi la sostituisce nei banchi (`grep` del nome dentro `laboratorio/`), prima di far
+    girare il collaudo. E se un banco cade su un'affermazione che NON c'entra con la cura appena
+    fatta, il primo sospetto e' che la sua finta sia scaduta, non che il programma sia rotto.
+    NOTA CHE VALE DOPPIO: il banco e' rimasto onesto proprio perche' misurava il COMPORTAMENTO
+    (l'indirizzo restituito) e non il testo del sorgente: un banco che avesse cercato la stringa
+    "_is_port_open" sarebbe rimasto verde mentendo.
+
+41. **Un collaudo rosso su GitHub non e' sempre colpa del codice: si legge PRIMA quale FASE e'
+    caduta, poi quale prova.** (11 novembre 2026, v2.2.29.) Il collaudo locale era verde (0
+    falliti su 1.382) e quello di GitHub rosso sullo stesso commit. La regola del progetto dice
+    che GitHub e' la verita', quindi il primo pensiero e' stato «ho rotto qualcosa che in locale
+    non si vede». La misura dice altro: la fase caduta era **Librerie**, non i test, con
+    `Temporary failure resolving 'azure.archive.ubuntu.com'` e `Failed to install browsers`. La
+    macchina di GitHub non ha raggiunto il server dei pacchetti Ubuntu, i browser non si sono
+    installati e **nessuna prova e' stata eseguita** (il riassunto finale dice
+    `laboratorio/risultati/ultimo.md: No such file or directory`, cioe' il file non e' mai nato).
+    Rilanciare il flusso e' bastato. LA REGOLA: davanti a un rosso di GitHub, `gh run view <id>
+    --log-failed` e si guarda il NOME DELLA FASE prima del contenuto. Un guasto di rete
+    dell'infrastruttura e una regressione vera si presentano tutti e due come «Collaudo:
+    failure», ma uno si cura con un clic e l'altro con una cura. E attenzione al contrario: «non
+    e' colpa mia» non si dichiara MAI senza aver letto il log, perche' e' anche la scusa piu'
+    comoda per pubblicare una regressione.
+
 38. **Un `taskkill /IM` per NOME uccide anche il proprio avviatore, e `/FI "PID ne <mio>"` non
     protegge niente.** In modalita' onefile il padre che scompatta i file si chiama ESATTAMENTE
     come il figlio e ha un PID diverso: il filtro «tutti tranne me» esclude solo il figlio.

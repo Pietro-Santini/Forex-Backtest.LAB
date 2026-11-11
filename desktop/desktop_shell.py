@@ -56,6 +56,25 @@ def _is_port_open(port, host="127.0.0.1", timeout=1.0):
         return False
 
 
+def _ponte_risponde(timeout=2.0):
+    """Dice se il ponte e' DAVVERO in piedi, non solo se la porta accetta connessioni.
+
+    MISURATO l'11 novembre 2026: alla riapertura il guscio trovava la porta 8000 aperta dal ponte
+    della sessione PRECEDENTE, che stava morendo. _is_port_open rispondeva True, la finestra si
+    attaccava a un servizio che spariva un istante dopo, e nessuno riprovava: la finestra restava
+    li' e Windows la dichiarava "non risponde". Una porta aperta non e' un servizio vivo.
+    """
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "http://127.0.0.1:%d/health" % PORTA_LOCALE, timeout=timeout
+        ) as r:
+            return 200 <= getattr(r, "status", 200) < 300
+    except Exception:
+        return False
+
+
 def _hash_app_html():
     """Hash corto del file app.html servito dal ponte, per il cache-bust dell'URL.
 
@@ -98,7 +117,7 @@ def _ensure_backend():
     Ritorna l'indirizzo dell'app; se nessuna delle prove funziona ritorna None, e
     allora la finestra mostra la pagina di spiegazione (non resta bianca).
     """
-    if _is_port_open(PORTA_LOCALE):
+    if _ponte_risponde():
         return _url_app()
     if os.path.isfile(BRIDGE_EXE):
         subprocess.Popen(
@@ -106,9 +125,16 @@ def _ensure_backend():
             cwd=INSTALLED_APP,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        for _ in range(30):
+        # QUANTO SI ASPETTA, E PERCHE' NON BASTAVANO 30 SECONDI (11 novembre 2026).
+        # All'avvio il ponte fa la pulizia anti-orfano, che aspetta che le porte 8000 e 8001 si
+        # liberino: fino a 10 secondi ciascuna. Finche' quella pulizia veniva fatta DUE volte si
+        # arrivava a 40 secondi, piu' di questi 30, e la finestra si arrendeva proprio mentre il
+        # ponte stava per nascere. Il secondo giro adesso non aspetta piu' (vedi bridge.py), ma il
+        # margine qui resta largo: arrendersi un secondo troppo presto costa un avvio fallito,
+        # aspettare qualche secondo in piu' non costa niente a nessuno.
+        for _ in range(60):
             time.sleep(1)
-            if _is_port_open(PORTA_LOCALE):
+            if _ponte_risponde():
                 return _url_app()
     remoto = (os.environ.get("BACKEND_URL") or "").rstrip("/")
     if remoto:

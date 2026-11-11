@@ -6011,3 +6011,75 @@ pagina intera (`fblMiniDashAggiorna`, 28333) ricalcola da sola solo il P/L e COP
 capitale, margine, win rate e loss rate da `#mCapital`/`#mMargin` (28348): non potra' mai essere
 piu' fresca della fascia. Con questa cura la fascia e' fresca, quindi il sintomo sparisce, ma la
 strada resta fragile e andrebbe fatta ricalcolare con `equityNow()`/`freeMargin()`.
+
+
+---
+
+## 11 novembre 2026 - v2.2.30: chiudere e riaprire l'app non la inchioda piu', e il disco smette di riempirsi
+
+SEGNALATO dal proprietario, ed era la sua prima priorita': «quando chiudo l'applicazione poi la
+vado a riaprire subito dopo, la pagina mi da' sempre forex backtest lab non risponde, e si
+inchioda. Non si riesce a sbloccare» e «fa bloccare tutto il PC, non funziona piu' niente».
+
+**COME E' STATA PRESA LA MISURA.** Un registratore ha fotografato i processi ogni 2 secondi mentre
+il proprietario chiudeva e riapriva davvero l'app, e il log dell'eseguibile installato ha detto il
+resto. Non e' stata formulata nessuna ipotesi prima di avere quei numeri.
+
+**TRE DIFETTI, TUTTI NELLO STESSO PUNTO.**
+1. **La pulizia anti-orfano gira DUE volte e la seconda uccide i figli appena creati.** In
+   `__main__` l'ordine era: `_kill_stale_instances()` -> `_start_mt5_feed_server()` ->
+   `_avvia_ascolto_segnali()` -> `_avvia_custode_mt5_feed()` -> `_kill_stale_instances()`. Il
+   secondo giro chiude per NOME, quindi chiudeva i servizi che questa stessa istanza aveva appena
+   avviato; subito dopo il custode vedeva la porta 8001 muta e li faceva rinascere. Nel log si
+   legge due volte «servizio dati MT5 avviato», con due PID diversi (24280 e 6836). Il «figlio
+   arrivato in ritardo» che quel giro doveva chiudere era il nostro.
+2. **L'avvio restava trattenuto fino a 40 secondi, ma la finestra ne concede 30.** Ogni
+   `_kill_stale_instances` aspetta che 8000 e 8001 si liberino, 10 secondi ciascuna: misurati
+   20.107 ms a giro, per due giri, tutto PRIMA di `uvicorn.run`. Dall'altra parte
+   `desktop_shell._ensure_backend` si arrende dopo 30 secondi. 40 > 30: la finestra non poteva che
+   inchiodarsi. **Questa e' la causa diretta del «non risponde».**
+3. **Il ponte uccideva il proprio avviatore.** In modalita' onefile il processo che scompatta i
+   file si chiama ESATTAMENTE come l'eseguibile e ha un PID diverso: il filtro «PID ne <mio>» non
+   lo proteggeva. E' l'avviatore a cancellare la cartella temporanea all'uscita, quindi quelle
+   cartelle non sparivano piu': **misurate 367 cartelle per 17,8 GB** su un disco con 39 GB liberi,
+   20-40 nuove al giorno.
+
+**LA CURA, in cinque pezzi.**
+- `_kill_stale_instances(solo_pid=None, aspetta_porte=True)`: il giro per nome risparmia anche
+  `os.getppid()`, e il secondo giro riceve la fotografia dei PID vivi PRIMA che nascessero i nostri
+  (`_pid_dei_nostri()`), quindi chiude solo i veri orfani e non aspetta piu' le porte.
+- `_spazza_cartelle_temporanee()`: all'avvio porta via le cartelle rimaste indietro. Non tocca mai
+  quella di questo processo, salta quelle toccate da meno di un'ora (potrebbero essere di un
+  programma vivo) e ha un budget di 3 secondi: l'avvio non si blocca per fare pulizia.
+- `desktop_shell._ponte_risponde()`: la finestra chiede `/health` invece di accontentarsi che la
+  porta sia aperta. Alla riapertura trovava la 8000 aperta dal ponte PRECEDENTE che stava morendo,
+  si attaccava a un servizio che spariva un istante dopo, e nessuno riprovava. Il margine d'attesa
+  passa da 30 a 60 secondi: arrendersi un secondo troppo presto costa un avvio fallito.
+- `mt5_feed_server.py`: un tetto da 5 MB con una copia precedente al suo log, che era arrivato a
+  **40,2 MB**. Il tetto del 6 novembre era stato dato solo al log del ponte: quando una difesa
+  serve a due processi, va data a tutti e due lo stesso giorno.
+
+**IPOTESI SMENTITA DALLA MISURA, e va scritta perche' era nostra.** Il 9 novembre Tailscale era
+stato indicato come causa («le porte erano in mano al PID 9916, non uno dei nostri») e quel nome e'
+rimasto nel diario per due giorni. **E' falso.** `_servizio_gia_vivo` guarda SOLO 127.0.0.1, e il
+nostro servizio ascolta solo li': chi tiene la stessa porta su un altro indirizzo non ci impedisce
+niente. A sbagliare era `_chi_tiene_la_porta`, che prendeva la PRIMA riga LISTENING di netstat
+senza guardare l'indirizzo, e sul PC del proprietario la prima e' sempre quella di Tailscale.
+Adesso quella funzione accetta solo gli indirizzi dove il nostro servizio puo' davvero stare, e se
+trova qualcuno altrove lo scrive nel log senza accusarlo. La prova del 9 novembre difendeva il
+comportamento sbagliato ed e' stata riscritta col motivo dentro.
+
+**ANCHE I «DUE Mt5FeedServer» ERANO UNA LETTURA SBAGLIATA MIA**: sono la normale coppia di un
+eseguibile onefile (avviatore piccolo piu' processo vero, padre e figlio). Il dato anomalo non era
+l'uno-due del servizio dati, ma il ponte rimasto SENZA avviatore. Contare i processi per nome non
+basta: bisogna guardare la parentela e i PID nel log.
+
+**Test**: laboratorio/ponte/test_riapertura_senza_inchiodare.py (5 prove: il giro mirato chiude
+solo la fotografia e mai per nome; la pulizia per nome risparmia se stessa E il proprio avviatore;
+il giro mirato non riaspetta le porte mentre il primo si'; la spazzata toglie le vecchie e
+risparmia la propria e le recenti; la finestra interroga /health e non la sola porta aperta).
+
+**Il blocco di TUTTO il PC resta un'altra cosa**, gia' misurata e annotata: 15,9 GB di memoria con
+4,6 liberi e la Compressione memoria di Windows attiva a 801 MB. In quella condizione basta aprire
+qualche finestra duplicata per finire la memoria. Non e' codice dell'app: e' esaurimento di
+memoria, e i 17,8 GB di temporanei ci entravano come concausa sul file di scambio.
