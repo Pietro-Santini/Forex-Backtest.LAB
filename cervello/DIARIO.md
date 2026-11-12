@@ -6367,3 +6367,48 @@ senza averlo chiamato cosi'. La proposta, in due passi e non una riscrittura:
    e incolla della madre - e per le posizioni reali e' anche l'unico modo corretto, perche' una
    sola finestra deve parlare col ponte. Cancella tutte e cinque le regole ad-hoc. Costo medio.
 Da decidere in quel caso: se chiudendo la madre una figlia va promossa o si resta in sola lettura.
+
+
+---
+
+## 12 novembre 2026 - v2.2.35: undici indicatori nuovi entrano nel grafico
+
+Erano stati portati da altrettanti script **Pine v6** e tenuti da parte: il proprietario aveva
+chiesto di aspettare perche' un'altra sessione stava lavorando sul programma. Finito quel lavoro,
+entrano.
+
+    AMD FVG Trade Setup          19 campi      Liquidity Sweeps & IFVGs     14 campi
+    AMD POC Trade Setup          23            Trendline Liquidity          16
+    Complex H&S                  20            Triangles                    23
+    Gann Method                  20            Valid BOS Pullback           14
+    MSS Sweep Fib Retrace         9            10am Open Key Levels         17
+    No-Wick Retest Levels        18
+
+**COME SONO STATI INTEGRATI, e perche' cosi'.** Il codice (3.640 righe) sta in un blocco suo
+PRIMA di `INDICATOR_DEFS`, e le registrazioni (`INDICATOR_DEFS.chiave=COSTANTE`) subito dopo la
+chiusura della tabella: la tabella storica non si gonfia, e chi legge trova gli indicatori nuovi
+tutti insieme invece che sparsi.
+Per il pannello delle impostazioni **un ramo solo** invece di undici scritti a mano: ogni
+indicatore porta un `buildSettings(ind, paramsRow, {mkNum,mkCheck,mkColor,mkSelect})` che
+dichiara i propri campi, e la catena di `rebuildIndicatorSettingsModal()` lo chiama da sola
+quando nessun ramo scritto a mano ha gia' riempito la riga. Chi aggiungera' il dodicesimo
+indicatore non dovra' toccare quella funzione.
+
+**Test**: laboratorio/app/indicatori_nuovi_undici.test.mjs (4 prove). Misurano il
+COMPORTAMENTO, non la presenza del codice nel sorgente - e la distinzione qui conta davvero,
+perche' `draw()` inghiotte di proposito le eccezioni degli indicatori per non rompere il resto
+del grafico: un indicatore rotto resterebbe rotto in silenzio.
+1. tutti e undici si calcolano su 600 candele vere e si disegnano (il contesto di disegno e' un
+   contatore di tratti, non una tela);
+2. ci sono tutti nel menu, senza doppioni e senza voci che non corrispondono a niente;
+3. i pannelli si riempiono davvero: da 9 a 23 campi per indicatore;
+4. **PROVA DI CONTROLLO, la piu' importante: tornando indietro nel replay il calcolo si rifa'.**
+   E' la trappola che il progetto ha gia' pagato tre volte (order blocks, EMA, FVG allineati): il
+   calcolo e' incrementale, e chi non azzera lo stato quando `upToIdx` torna indietro continua a
+   mostrare quello che ha visto in candele che nel replay non sono ancora arrivate - look-ahead,
+   e un backtest che mente. Misurato: `builtTo` torna a 150 per tutti e undici.
+
+**COSA QUESTO BANCO NON PROVA, e va detto**: che il porting da Pine sia fedele riga per riga.
+Prova che calcolano e disegnano senza rompersi. La fedelta' si vede sul grafico, accanto a
+TradingView: se uno disegna qualcosa di diverso da quello che ci si aspetta, serve uno screenshot
+del proprietario e si corregge quell'indicatore.

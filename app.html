@@ -4253,6 +4253,17 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <option value="tvp3d">Temporal Volume Profile 3D</option>
      <option value="vp_daily">Profili volumetrici giornalieri</option>
      <option value="vp_sessions">Profili volumetrici delle sessioni</option>
+     <option value="amd_fvg_trade">AMD FVG Trade Setup</option>
+     <option value="amd_poc_trade">AMD POC Trade Setup</option>
+     <option value="complex_hs">Complex H&amp;S</option>
+     <option value="gann_method">Gann Method</option>
+     <option value="mss_sweep_fib">MSS Sweep Fib Retrace</option>
+     <option value="no_wick_retest">No-Wick Retest Levels</option>
+     <option value="open10_key_levels">10am Open Key Levels</option>
+     <option value="sweeps_ifvg">Liquidity Sweeps &amp; IFVGs</option>
+     <option value="trendline_liquidity">Trendline Liquidity</option>
+     <option value="triangles">Triangles</option>
+     <option value="valid_bos_pullback">Valid BOS Pullback</option>
    </select></span>
    <button id="openCustomScriptBtn" class="toolBtn" title="Incolla un codice in stile Pine Script (TradingView) e applicalo come indicatore personalizzato">🧩 Codice personalizzato</button>
  </div>
@@ -16229,6 +16240,3599 @@ function tvp3dPointerUp(){
  scheduleSave();
  return true;
 }
+
+// =============================================================================================
+// UNDICI INDICATORI NUOVI (integrati il 12 novembre 2026).
+// Portati da altrettanti script Pine v6. Erano stati scritti e tenuti da parte in attesa che il
+// lavoro sul resto del programma finisse; qui entrano nel grafico.
+// Ognuno segue il formato di INDICATOR_DEFS: label, defaultParams(), compute(), render(), piu'
+// buildSettings() per i campi del pannello - che la catena di rebuildIndicatorSettingsModal()
+// chiama da sola, senza bisogno di un ramo scritto a mano per ciascuno.
+// Le registrazioni in INDICATOR_DEFS e le voci del menu stanno piu' sotto.
+// =============================================================================================
+
+// ============================================================================
+// AMD FVG Trade Setup — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const AMDFVG_TZ = 'America/New_York';
+const AMDFVG_FMT = new Intl.DateTimeFormat('en-US', {timeZone: AMDFVG_TZ, hourCycle: 'h23', hour: '2-digit', minute: '2-digit'});
+
+function amdFvgMins(ms) {
+  const parts = {};
+  AMDFVG_FMT.formatToParts(new Date(ms)).forEach(p => { parts[p.type] = p.value; });
+  return (+parts.hour) % 24 * 60 + (+parts.minute);
+}
+function amdFvgSpec(s) {
+  const m = /^(\d{2})(\d{2})-(\d{2})(\d{2})$/.exec(s);
+  return {start: (+m[1]) * 60 + (+m[2]), end: (+m[3]) * 60 + (+m[4])};
+}
+const AMDFVG_SESS = {
+  sydney: amdFvgSpec('1700-0200'), tokyo: amdFvgSpec('1900-0400'),
+  london: amdFvgSpec('0300-1200'), ny: amdFvgSpec('0800-1700')
+};
+function amdFvgInSpec(mins, s) {
+  return s.end <= s.start ? (mins >= s.start || mins < s.end) : (mins >= s.start && mins < s.end);
+}
+
+const AMD_FVG_TRADE_DEF = {
+  label: 'AMD FVG Trade Setup',
+  buildSettings: (ind, paramsRow, mk) => amdFvgBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    accLen: 30, accWidth: 0.2, manLook: 10, fvgThreshold: 0.1,
+    atrLen: 14, atrMult: 2.0, rrr: 2.0,
+    sydney: false, tokyo: false, london: false, ny: true, showSess: true,
+    accColor: '#808080', manColor: '#f23645', manColorB: '#089981',
+    tpColor: '#089981', slColor: '#f23645', fvgColor: '#ffffff', labelOffset: 1.0
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script.
+  // Nota: come in Pine, l'accumulo si aggiorna anche mentre un trade è aperto.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.tr = []; st.atr = []; st.sessOn = [];
+      st.accHigh = NaN; st.accLow = NaN; st.accStart = NaN; st.accEnd = NaN;
+      st.mH = false; st.mL = false; st.ext = NaN;
+      st.tradeActive = false; st.trade = null;
+      st.zones = []; st.manBoxes = []; st.fvgBoxes = []; st.trades = []; st.labels = [];
+      const diffs = [];
+      for (let k = 1; k < Math.min(rows.length, 300); k++) {
+        const d = new Date(rows[k].date) - new Date(rows[k - 1].date);
+        if (d > 0) diffs.push(d);
+      }
+      diffs.sort((a, b) => a - b);
+    }
+    const accLen = Math.max(5, p.accLen | 0);
+    const manLook = p.manLook | 0;
+    const atrLen = Math.max(1, p.atrLen | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      // ATR (Wilder).
+      const trI = i === 0 ? r.high - r.low
+        : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+      st.tr[i] = trI;
+      if (i < atrLen - 1) st.atr[i] = NaN;
+      else if (i === atrLen - 1) { let s = 0; for (let k = 0; k < atrLen; k++) s += st.tr[k]; st.atr[i] = s / atrLen; }
+      else st.atr[i] = st.atr[i - 1] + (trI - st.atr[i - 1]) / atrLen;
+      const atr = st.atr[i];
+
+      // Sessioni selezionate.
+      const mins = amdFvgMins(new Date(r.date).getTime());
+      const sessOn = (p.sydney && amdFvgInSpec(mins, AMDFVG_SESS.sydney)) ||
+                     (p.tokyo && amdFvgInSpec(mins, AMDFVG_SESS.tokyo)) ||
+                     (p.london && amdFvgInSpec(mins, AMDFVG_SESS.london)) ||
+                     (p.ny && amdFvgInSpec(mins, AMDFVG_SESS.ny));
+      st.sessOn[i] = !!sessOn;
+
+      // Accumulo: ampiezza % dell'ultimo accLen barre (incluso il corrente).
+      let isAcc = false, hh = NaN, ll = NaN;
+      if (i >= accLen - 1) {
+        hh = -Infinity; ll = Infinity;
+        for (let k = i - accLen + 1; k <= i; k++) {
+          if (rows[k].high > hh) hh = rows[k].high;
+          if (rows[k].low < ll) ll = rows[k].low;
+        }
+        isAcc = (hh - ll) / ll * 100 <= p.accWidth && !!sessOn;
+      }
+      if (isAcc) {
+        st.accHigh = hh; st.accLow = ll;
+        st.accStart = i - accLen + 1; st.accEnd = i;
+        st.mH = false; st.mL = false; st.ext = NaN;
+      }
+
+      // Gestione del trade: i box si allungano fino alla chiusura.
+      if (st.tradeActive) {
+        const t = st.trade;
+        t.to = i;
+        const hit = t.bull ? (r.low <= t.sl || r.high >= t.tp) : (r.high >= t.sl || r.low <= t.tp);
+        if (hit) st.tradeActive = false;
+      }
+
+      // Manipolazione e FVG (fuori dall'accumulo, entro la finestra di ricerca).
+      if (!isAcc && !isNaN(st.accHigh) && i <= st.accEnd + manLook && sessOn && i >= 2) {
+        // Ribassista
+        if (!st.mH && !st.mL && r.high > st.accHigh) { st.mH = true; st.ext = r.high; }
+        if (st.mH) {
+          st.ext = Math.max(st.ext, r.high);
+          const gap = rows[i - 2].low - r.high;
+          const bearFVG = gap > atr * p.fvgThreshold && r.close < st.accHigh;
+          if (bearFVG && !st.tradeActive) {
+            st.zones.push({from: st.accStart, to: st.accEnd, hi: st.accHigh, lo: st.accLow});
+            st.manBoxes.push({from: st.accEnd, to: i - 2, top: st.ext, bottom: st.accHigh, bull: false});
+            st.fvgBoxes.push({from: i - 2, to: i, top: rows[i - 2].low, bottom: r.high, bull: false});
+            const slDist = atr * p.atrMult;
+            const sl = r.close + slDist, tp = r.close - slDist * p.rrr;
+            const t = {bull: false, entry: r.close, sl, tp, from: i, to: i};
+            st.trades.push(t); st.trade = t; st.tradeActive = true;
+            st.labels.push({bar: i, text: 'AMD Bearish', price: r.high + atr * p.labelOffset, bull: false});
+            st.accHigh = NaN; st.mH = false;
+          }
+        }
+        // Rialzista (il controllo usa mH già aggiornato sulla stessa barra, come in Pine)
+        if (!st.mL && !st.mH && r.low < st.accLow) { st.mL = true; st.ext = r.low; }
+        if (st.mL) {
+          st.ext = Math.min(st.ext, r.low);
+          const gap = r.low - rows[i - 2].high;
+          const bullFVG = gap > atr * p.fvgThreshold && r.close > st.accLow;
+          if (bullFVG && !st.tradeActive) {
+            st.zones.push({from: st.accStart, to: st.accEnd, hi: st.accHigh, lo: st.accLow});
+            st.manBoxes.push({from: st.accEnd, to: i - 2, top: st.accLow, bottom: st.ext, bull: true});
+            st.fvgBoxes.push({from: i - 2, to: i, top: r.low, bottom: rows[i - 2].high, bull: true});
+            const slDist = atr * p.atrMult;
+            const sl = r.close - slDist, tp = r.close + slDist * p.rrr;
+            const t = {bull: true, entry: r.close, sl, tp, from: i, to: i};
+            st.trades.push(t); st.trade = t; st.tradeActive = true;
+            st.labels.push({bar: i, text: 'AMD Bullish', price: r.low - atr * p.labelOffset, bull: true});
+            st.accHigh = NaN; st.mL = false;
+          }
+        }
+      }
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const barPx = Math.abs(xAbs(dataStart + 1) - xAbs(dataStart)) || 1;
+    const rect = (a, b, top, bottom, color, alpha, dotted) => {
+      const s = Math.max(a, dataStart), e = Math.min(b, dataEnd);
+      if (e < s) return;
+      const x1 = xAbs(s), x2 = Math.max(xAbs(e), x1 + 2);
+      const yt = y(top), yb = y(bottom);
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.min(yt, yb), x2 - x1, Math.abs(yb - yt));
+      if (dotted) {
+        ctx.globalAlpha = 0.8; ctx.strokeStyle = color; ctx.setLineDash([2, 3]);
+        ctx.strokeRect(x1, Math.min(yt, yb), x2 - x1, Math.abs(yb - yt));
+      }
+      ctx.restore();
+    };
+
+    // Sessioni selezionate.
+    if (p.showSess) {
+      ctx.save(); ctx.globalAlpha = 0.04; ctx.fillStyle = '#2962ff';
+      for (let i = Math.max(0, dataStart); i <= Math.min(dataEnd, last); i++) {
+        if (st.sessOn[i]) ctx.fillRect(xAbs(i) - barPx / 2, 0, barPx, ctx.canvas.height || 0);
+      }
+      ctx.restore();
+    }
+
+    for (const z of st.zones) rect(z.from, z.to, z.hi, z.lo, p.accColor, 0.2, false);
+    for (const b of st.manBoxes) rect(b.from, b.to, b.top, b.bottom, b.bull ? p.manColorB : p.manColor, 0.25, false);
+    for (const f of st.fvgBoxes) rect(f.from, f.to, f.top, f.bottom, p.fvgColor, 0.4, true);
+    for (const t of st.trades) {
+      rect(t.from, t.to, Math.max(t.entry, t.tp), Math.min(t.entry, t.tp), p.tpColor, 0.25, false);
+      rect(t.from, t.to, Math.max(t.entry, t.sl), Math.min(t.entry, t.sl), p.slColor, 0.25, false);
+    }
+    ctx.save();
+    ctx.font = scaledFont('bold 10px system-ui'); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const l of st.labels) {
+      if (l.bar < dataStart || l.bar > dataEnd) continue;
+      ctx.fillStyle = l.bull ? '#26a69a' : '#f23645';
+      ctx.fillText(l.text, xAbs(l.bar), y(l.price));
+    }
+    ctx.restore();
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const AMDFVG_SETTINGS = [
+  {type: 'num', key: 'accLen', label: 'Barre accumulo', min: 5, max: 500},
+  {type: 'num', key: 'accWidth', label: 'Range max %', min: 0.1, max: 10, step: 0.1},
+  {type: 'num', key: 'manLook', label: 'Finestra manip.', min: 1, max: 200},
+  {type: 'num', key: 'fvgThreshold', label: 'Gap min. FVG (ATR)', min: 0, max: 10, step: 0.05},
+  {type: 'num', key: 'atrLen', label: 'Lunghezza ATR', min: 1, max: 500},
+  {type: 'num', key: 'atrMult', label: 'Moltiplicatore SL (ATR)', min: 0.1, max: 20, step: 0.1},
+  {type: 'num', key: 'rrr', label: 'Rapporto rischio/rendimento', min: 0.1, max: 20, step: 0.1},
+  {type: 'check', key: 'sydney', label: 'Sydney'},
+  {type: 'check', key: 'tokyo', label: 'Tokyo'},
+  {type: 'check', key: 'london', label: 'Londra'},
+  {type: 'check', key: 'ny', label: 'New York'},
+  {type: 'check', key: 'showSess', label: 'Evidenzia sessioni'},
+  {type: 'color', key: 'accColor', label: 'Accumulo'},
+  {type: 'color', key: 'manColor', label: 'Manip. ribassista'},
+  {type: 'color', key: 'manColorB', label: 'Manip. rialzista'},
+  {type: 'color', key: 'tpColor', label: 'TP'},
+  {type: 'color', key: 'slColor', label: 'SL'},
+  {type: 'color', key: 'fvgColor', label: 'FVG'},
+  {type: 'num', key: 'labelOffset', label: 'Distanza etichetta (ATR)', min: 0, max: 5, step: 0.1}
+];
+function amdFvgBuildSettings(ind, paramsRow, mk) {
+  AMDFVG_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Gli alert dello script non sono generati: l'app non ha un sistema di alert.
+//  - Sfondo sessioni: usa l'altezza del canvas (ctx.canvas.height), da verificare all'integrazione.
+//  - Nello script l'accumulo non è bloccato da un trade aperto: lo stesso qui.
+//  - Il controllo del lato rialzista usa il flag ribassista già aggiornato sulla stessa barra, come in Pine.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// AMD POC Trade Setup — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const AMD_TZ = 'America/New_York';
+const AMD_FMT = new Intl.DateTimeFormat('en-US', {timeZone: AMD_TZ, hourCycle: 'h23', hour: '2-digit', minute: '2-digit'});
+
+// Minuto del giorno ET di un istante (ms epoch).
+function amdEtMins(ms) {
+  const parts = {};
+  AMD_FMT.formatToParts(new Date(ms)).forEach(p => { parts[p.type] = p.value; });
+  return (+parts.hour) % 24 * 60 + (+parts.minute);
+}
+// Sessioni come in Pine: time(tf, "HHMM-HHMM", TIMEZONE) senza giorni = tutti i giorni.
+function amdSpec(s) {
+  const m = /^(\d{2})(\d{2})-(\d{2})(\d{2})$/.exec(s);
+  return {start: (+m[1]) * 60 + (+m[2]), end: (+m[3]) * 60 + (+m[4])};
+}
+const AMD_SESS = {
+  sydney: amdSpec('1700-0200'),
+  tokyo: amdSpec('1900-0400'),
+  london: amdSpec('0300-1200'),
+  ny: amdSpec('0800-1700')
+};
+function amdInSpec(mins, s) {
+  return s.end <= s.start ? (mins >= s.start || mins < s.end) : (mins >= s.start && mins < s.end);
+}
+
+// Costruisce profilo, POC e disegni dell'accumulo al primo sweep (come nello script).
+// Il profilo usa SOLO le barre dell'accumulo (da accStart a accEnd), anche se lo sweep arriva dopo.
+// Correzione rispetto a Pine, che usava le ultime barre prima dello sweep.
+// Se il volume è tutto zero (CSV senza volume), il profilo conta le barre che toccano ogni livello.
+function amdBuildProfile(st, rows, i, p) {
+  const R = Math.max(5, p.profileRows | 0);
+  const step = (st.accHigh - st.accLow) / R;
+  if (!(step > 0)) return;
+
+  let totalVol = 0;
+  for (let k = st.accStart; k <= st.accEnd; k++) totalVol += rows[k].volume || 0;
+  const tpo = totalVol <= 0;
+
+  const vols = [];
+  let maxVol = 0;
+  for (let row = 0; row < R; row++) {
+    const rowLow = st.accLow + step * row, rowHigh = rowLow + step;
+    let rowVol = 0;
+    for (let k = st.accStart; k <= st.accEnd; k++) {
+      const b = rows[k];
+      if (tpo) {
+        if (rowLow <= b.high && rowHigh >= b.low) rowVol += 1;
+      } else {
+        const barRange = b.high - b.low;
+        const overlap = Math.max(0, Math.min(rowHigh, b.high) - Math.max(rowLow, b.low));
+        rowVol += barRange > 0 ? (b.volume || 0) * overlap / barRange : 0;
+      }
+    }
+    vols.push(rowVol);
+    maxVol = Math.max(maxVol, rowVol);
+  }
+
+  let pocRow = 0, pocVol = vols[0];
+  for (let row = 1; row < R; row++) if (vols[row] > pocVol) { pocVol = vols[row]; pocRow = row; }
+  st.poc = st.accLow + step * (pocRow + 0.5);
+  st.profileReady = true;
+
+  st.curPoc = {from: st.accStart, to: i, price: st.poc};
+  st.pocLines.push(st.curPoc);
+  st.zones.push({from: st.accStart, to: st.accEnd, hi: st.accHigh, lo: st.accLow});
+
+  if (p.showProfile && maxVol > 0) {
+    const right = st.accEnd;
+    const pts = [{x: right, y: st.accLow}];
+    for (let row = 0; row < R; row++) {
+      const w = Math.max(1, Math.round(p.profileWidth * vols[row] / maxVol));
+      const left = Math.max(st.accStart, right - w + 1);
+      const bottom = st.accLow + step * row, top = bottom + step;
+      pts.push({x: left, y: bottom}, {x: left, y: top});
+    }
+    pts.push({x: right, y: st.accHigh});
+    st.profiles.push(pts);
+  }
+}
+
+const AMD_POC_TRADE_DEF = {
+  label: 'AMD POC Trade Setup',
+  buildSettings: (ind, paramsRow, mk) => amdBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    accLen: 40, accWidth: 0.1, normalizeAccWidth: true, refTfMinutes: 1,
+    manLook: 20, minPocBreakAtr: 0.15, minBreakBodyAtr: 0.20, breakCloseStrength: 0.65,
+    profileRows: 24, profileWidth: 18, showProfile: true,
+    sydney: false, tokyo: false, london: false, ny: true, showSess: true,
+    accColor: '#808080', manColor: '#f23645', manColorB: '#089981', profileColor: '#5b9cf6',
+    pocColor: '#f23645', tpColor: '#089981', slColor: '#f23645'
+  }),
+
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.tr = []; st.atr = []; st.sessOn = [];
+      st.accHigh = NaN; st.accLow = NaN; st.accStart = NaN; st.accEnd = NaN;
+      st.mH = false; st.mL = false; st.ext = NaN;
+      st.profileReady = false; st.poc = NaN;
+      st.tradeActive = false; st.trade = null; st.curPoc = null;
+      st.zones = []; st.profiles = []; st.pocLines = []; st.manBoxes = []; st.trades = [];
+      // Durata barra del grafico in secondi = mediana delle differenze tra date consecutive.
+      const diffs = [];
+      for (let k = 1; k < Math.min(rows.length, 300); k++) {
+        const d = new Date(rows[k].date) - new Date(rows[k - 1].date);
+        if (d > 0) diffs.push(d / 1000);
+      }
+      diffs.sort((a, b) => a - b);
+      st.barSec = diffs.length ? diffs[diffs.length >> 1] : 60;
+    }
+
+    const accLen = Math.max(5, p.accLen | 0);
+    const refSec = Math.max(1, p.refTfMinutes) * 60;
+    const scale = Math.sqrt(st.barSec / refSec);
+    const effWidth = p.normalizeAccWidth ? p.accWidth * scale : p.accWidth;
+    const manLook = p.manLook | 0;
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+
+      // ATR (Wilder, come ta.atr(14)).
+      const trI = i === 0 ? r.high - r.low
+        : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+      st.tr[i] = trI;
+      if (i < 13) st.atr[i] = NaN;
+      else if (i === 13) { let s = 0; for (let k = 0; k <= 13; k++) s += st.tr[k]; st.atr[i] = s / 14; }
+      else st.atr[i] = st.atr[i - 1] + (trI - st.atr[i - 1]) / 14;
+      const atr = st.atr[i];
+
+      // Sessioni selezionate.
+      const mins = amdEtMins(new Date(r.date).getTime());
+      const sessOn = (p.sydney && amdInSpec(mins, AMD_SESS.sydney)) ||
+                     (p.tokyo && amdInSpec(mins, AMD_SESS.tokyo)) ||
+                     (p.london && amdInSpec(mins, AMD_SESS.london)) ||
+                     (p.ny && amdInSpec(mins, AMD_SESS.ny));
+      st.sessOn[i] = !!sessOn;
+
+      // Accumulo: range degli ultimi accLen barre (incluso il bar corrente).
+      let isAcc = false, hh = NaN, ll = NaN;
+      if (i >= accLen - 1) {
+        hh = -Infinity; ll = Infinity;
+        for (let k = i - accLen + 1; k <= i; k++) {
+          if (rows[k].high > hh) hh = rows[k].high;
+          if (rows[k].low < ll) ll = rows[k].low;
+        }
+        const rangePct = ll !== 0 ? (hh - ll) / ll * 100 : NaN;
+        isAcc = rangePct <= effWidth && !!sessOn;
+      }
+      if (isAcc && !st.tradeActive) {
+        st.accHigh = hh; st.accLow = ll;
+        st.accStart = i - accLen + 1; st.accEnd = i;
+        st.mH = false; st.mL = false; st.ext = NaN;
+        st.profileReady = false; st.poc = NaN;
+      }
+
+      // Ciclo del trade: TP/SL controllati dopo l'apertura; i box si allungano fino alla chiusura.
+      if (st.tradeActive) {
+        const t = st.trade;
+        t.to = i; st.curPoc.to = i;
+        const hit = t.bull ? (r.low <= t.sl || r.high >= t.tp) : (r.high >= t.sl || r.low <= t.tp);
+        if (hit) st.tradeActive = false;
+      }
+
+      // Manipolazione, profilo e rottura del POC (solo fuori dall'accumulo).
+      if (!isAcc && !isNaN(st.accHigh) && !isNaN(st.accLow) && i <= st.accEnd + manLook && sessOn) {
+        const startsBear = !st.mH && !st.mL && r.high > st.accHigh;
+        const startsBull = !st.mH && !st.mL && r.low < st.accLow;
+        if (startsBear) { st.mH = true; st.ext = r.high; }
+        else if (startsBull) { st.mL = true; st.ext = r.low; }
+        if ((startsBear || startsBull) && !st.profileReady) amdBuildProfile(st, rows, i, p);
+
+        if (st.mH) st.ext = Math.max(st.ext, r.high);
+        if (st.mL) st.ext = Math.min(st.ext, r.low);
+
+        const body = Math.abs(r.close - r.open);
+        const range = r.high - r.low;
+        const bearStr = range > 0 ? (r.high - r.close) / range : 0;
+        const bullStr = range > 0 ? (r.close - r.low) / range : 0;
+
+        const bearBreak = st.mH && st.profileReady &&
+          r.close < st.poc - atr * p.minPocBreakAtr &&
+          r.close < r.open &&
+          body >= atr * p.minBreakBodyAtr &&
+          bearStr >= p.breakCloseStrength;
+        if (bearBreak && !st.tradeActive) {
+          st.manBoxes.push({from: st.accEnd, to: i, top: st.ext, bottom: st.accHigh, bull: false});
+          const t = {bull: false, entry: st.poc, sl: st.accHigh, tp: st.accLow, from: i, to: i};
+          st.trades.push(t); st.trade = t; st.tradeActive = true;
+          st.curPoc.to = i;
+          st.accHigh = NaN; st.accLow = NaN; st.profileReady = false; st.mH = false;
+        }
+
+        const bullBreak = st.mL && st.profileReady &&
+          r.close > st.poc + atr * p.minPocBreakAtr &&
+          r.close > r.open &&
+          body >= atr * p.minBreakBodyAtr &&
+          bullStr >= p.breakCloseStrength;
+        if (bullBreak && !st.tradeActive) {
+          st.manBoxes.push({from: st.accEnd, to: i, top: st.ext, bottom: st.accLow, bull: true});
+          const t = {bull: true, entry: st.poc, sl: st.accLow, tp: st.accHigh, from: i, to: i};
+          st.trades.push(t); st.trade = t; st.tradeActive = true;
+          st.curPoc.to = i;
+          st.accHigh = NaN; st.accLow = NaN; st.profileReady = false; st.mL = false;
+        }
+      }
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y, pad, h) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const barPx = Math.abs(xAbs(dataStart + 1) - xAbs(dataStart)) || 1;
+
+    // Rettangolo tra due indici e due prezzi, limitato alla vista.
+    const rect = (a, b, top, bottom, color, alpha) => {
+      const s = Math.max(a, dataStart), e = Math.min(b, dataEnd);
+      if (e < s) return;
+      const x1 = xAbs(s), x2 = Math.max(xAbs(e), x1 + 2);
+      const yt = y(top), yb = y(bottom);
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.min(yt, yb), x2 - x1, Math.abs(yb - yt));
+      ctx.restore();
+    };
+
+    // Sessioni selezionate: sfondo (color.new(blue, 96) = opacità ~4%). Serve il riquadro del grafico.
+    if (p.showSess && pad && h) {
+      ctx.save(); ctx.globalAlpha = 0.04; ctx.fillStyle = '#2962ff';
+      for (let i = Math.max(0, dataStart); i <= Math.min(dataEnd, last); i++) {
+        if (st.sessOn[i]) ctx.fillRect(xAbs(i) - barPx / 2, pad.t, barPx, h);
+      }
+      ctx.restore();
+    }
+
+    // Accumulo
+    for (const z of st.zones) rect(z.from, z.to, z.hi, z.lo, p.accColor, 0.2);
+
+    // Profilo di volume (poligono chiuso)
+    for (const pts of st.profiles) {
+      if (pts[0].x > dataEnd || pts[0].x < dataStart) continue;
+      ctx.save();
+      ctx.globalAlpha = 0.65; ctx.fillStyle = p.profileColor;
+      ctx.beginPath();
+      pts.forEach((pt, k) => {
+        const px = xAbs(Math.max(dataStart, Math.min(dataEnd, pt.x)));
+        const py = y(pt.y);
+        if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      });
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    // POC
+    for (const pl of st.pocLines) {
+      const s = Math.max(pl.from, dataStart), e = Math.min(pl.to, dataEnd);
+      if (e < s) continue;
+      ctx.save();
+      ctx.strokeStyle = p.pocColor; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(xAbs(s), y(pl.price)); ctx.lineTo(xAbs(e), y(pl.price)); ctx.stroke();
+      ctx.restore();
+    }
+
+    // Manipolazione
+    for (const b of st.manBoxes) rect(b.from, b.to, b.top, b.bottom, b.bull ? p.manColorB : p.manColor, 0.25);
+
+    // Trade: box TP (verde) e SL (rosso) dall'entrata fino alla chiusura
+    for (const t of st.trades) {
+      rect(t.from, t.to, Math.max(t.entry, t.tp), Math.min(t.entry, t.tp), p.tpColor, 0.25);
+      rect(t.from, t.to, Math.max(t.entry, t.sl), Math.min(t.entry, t.sl), p.slColor, 0.25);
+    }
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const AMD_SETTINGS = [
+  {type: 'num', key: 'accLen', label: 'Barre accumulo', min: 5, max: 500},
+  {type: 'num', key: 'accWidth', label: 'Range max %', min: 0.1, max: 10, step: 0.1},
+  {type: 'check', key: 'normalizeAccWidth', label: 'Normalizza'},
+  {type: 'num', key: 'refTfMinutes', label: 'TF riferimento (min)', min: 1, max: 60},
+  {type: 'num', key: 'manLook', label: 'Finestra manip.', min: 1, max: 200},
+  {type: 'num', key: 'minPocBreakAtr', label: 'Rottura POC (ATR)', min: 0, max: 5, step: 0.05},
+  {type: 'num', key: 'minBreakBodyAtr', label: 'Corpo min. (ATR)', min: 0, max: 5, step: 0.05},
+  {type: 'num', key: 'breakCloseStrength', label: 'Forza chiusura', min: 0.5, max: 1, step: 0.05},
+  {type: 'num', key: 'profileRows', label: 'Righe profilo', min: 5, max: 50},
+  {type: 'num', key: 'profileWidth', label: 'Larghezza profilo', min: 3, max: 50},
+  {type: 'check', key: 'showProfile', label: 'Profilo'},
+  {type: 'check', key: 'sydney', label: 'Sydney'},
+  {type: 'check', key: 'tokyo', label: 'Tokyo'},
+  {type: 'check', key: 'london', label: 'Londra'},
+  {type: 'check', key: 'ny', label: 'New York'},
+  {type: 'check', key: 'showSess', label: 'Evidenzia sessioni'},
+  {type: 'color', key: 'accColor', label: 'Accumulo'},
+  {type: 'color', key: 'manColor', label: 'Manip. ribassista'},
+  {type: 'color', key: 'manColorB', label: 'Manip. rialzista'},
+  {type: 'color', key: 'profileColor', label: 'Profilo'},
+  {type: 'color', key: 'pocColor', label: 'POC'},
+  {type: 'color', key: 'tpColor', label: 'TP'},
+  {type: 'color', key: 'slColor', label: 'SL'}
+];
+function amdBuildSettings(ind, paramsRow, mk) {
+  AMD_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Lo script Pine non usa `labelOffset` né disegna etichette: il parametro è stato tolto dal pannello.
+//  - Gli `alert()` di Pine non hanno equivalente qui: nessun avviso è generato.
+//  - Profilo: usa solo le barre dell'accumulo. Lo script Pine usava le ultime barre prima dello sweep: correzione voluta.
+//  - Senza volume reale il POC usa il conteggio TPO (barre che toccano ogni livello). Non viene inventato volume.
+//  - Le sessioni usano l'orario di New York, come nello script.
+//  - Il riquadro dello sfondo sessioni usa `pad.t` e `h` del riquadro grafico: verificare all'integrazione.
+//  - Il limite di 500 box/linee di Pine non è replicato.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// Complex H&S — porting COMPLETO dello script Pine v6 (LuxAlgo) per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const CHS_MAX_SWINGS = 60;
+const CHS_MAX_SHOULDERS = 3;
+
+// Sequenza alternata di swing (stessa logica di pushSwing in Pine). Ritorna true se la sequenza cambia.
+function chsPushSwing(st, price, bar, dir) {
+  const n = st.zzP.length;
+  if (n > 0 && st.zzD[n - 1] === dir) {
+    if ((dir === 1 && price >= st.zzP[n - 1]) || (dir === -1 && price <= st.zzP[n - 1])) {
+      st.zzP[n - 1] = price; st.zzB[n - 1] = bar; return true;
+    }
+    return false;
+  }
+  st.zzP.push(price); st.zzB.push(bar); st.zzD.push(dir);
+  if (st.zzP.length > CHS_MAX_SWINGS) { st.zzP.shift(); st.zzB.shift(); st.zzD.shift(); }
+  return true;
+}
+
+// Volume medio della gamba che arriva allo swing k (dallo swing k-1). NaN se non definito.
+function chsLegVolume(st, k) {
+  if (k < 1) return NaN;
+  const fromBar = st.zzB[k - 1], toBar = st.zzB[k];
+  return toBar > fromBar ? (st.cum[toBar] - st.cum[fromBar]) / (toBar - fromBar) : NaN;
+}
+
+// Valida una configurazione: spalle e teste tra gli swing iFirst..iLast.
+// Ritorna {ok, x1, y1, slope, height} con la linea di collo.
+function chsEvaluate(st, p, dir, iFirst, iLast, headIdx, head2Idx, atr, i) {
+  const e = -dir;
+  const P = st.zzP, B = st.zzB, D = st.zzD;
+  const hasH2 = head2Idx !== null;
+  const topIdx = !hasH2 ? headIdx : (e * (P[head2Idx] - P[headIdx]) > 0 ? head2Idx : headIdx);
+  const headP = P[topIdx];
+  const leftEnd = hasH2 ? Math.min(headIdx, head2Idx) : headIdx;
+  const rightStart = hasH2 ? Math.max(headIdx, head2Idx) : headIdx;
+  let leftTrough = null, rightTrough = null;
+  for (let k = iFirst + 1; k <= leftEnd - 1; k += 2) {
+    if (leftTrough === null || e * (P[k] - P[leftTrough]) < 0) leftTrough = k;
+  }
+  for (let k = rightStart + 1; k <= iLast - 1; k += 2) {
+    if (rightTrough === null || e * (P[k] - P[rightTrough]) < 0) rightTrough = k;
+  }
+  if (leftTrough === null || rightTrough === null) return {ok: false};
+  const x1 = B[leftTrough], y1 = P[leftTrough];
+  const slope = (P[rightTrough] - y1) / (B[rightTrough] - x1);
+  const height = e * (headP - (y1 + slope * (B[topIdx] - x1)));
+  let ok = height > 0 && Math.abs(slope * (B[iLast] - B[iFirst])) <= p.tilt / 100 * height;
+  if (ok && hasH2) ok = Math.abs(P[head2Idx] - P[headIdx]) <= p.doubleHead / 100 * height;
+  if (ok) {
+    const tol = 0.25 * atr;
+    const lowerHead = !hasH2 ? headP
+      : (e === 1 ? Math.min(P[headIdx], P[head2Idx]) : Math.max(P[headIdx], P[head2Idx]));
+    for (let k = iFirst; k <= iLast; k++) {
+      const b = B[k], pr = P[k], neck = y1 + slope * (b - x1);
+      if (D[k] === e) {
+        if (k === headIdx || (hasH2 && k === head2Idx)) {
+          if (e * (pr - neck) <= 0) ok = false;
+        } else {
+          const h = e * (pr - neck);
+          if (h < p.minShoulder / 100 * height || e * (lowerHead - pr) < p.headExcess / 100 * height) ok = false;
+        }
+      } else {
+        if (e * (pr - neck) < -tol) ok = false;
+      }
+    }
+  }
+  return {ok, x1, y1, slope, height, topIdx};
+}
+
+// Cerca la figura più grande (più spalle o doppia testa) che termina con l'ultimo swing del tipo giusto.
+function chsTryDetect(st, p, dir, i, atr) {
+  const e = -dir;
+  const n = st.zzP.length;
+  if (!(n >= 7 && st.zzD[n - 1] === e && atr > 0)) return null;
+  const P = st.zzP, B = st.zzB;
+  const iLast = n - 1;
+  let best = null, bestTotal = 0;
+  let laterMax = NaN;
+  for (let h = iLast - 2; h >= 2; h -= 2) {
+    const hp = P[h];
+    if (isNaN(laterMax) || e * (hp - laterMax) > 0) {
+      const rightCount = Math.floor((iLast - h) / 2);
+      if (rightCount <= CHS_MAX_SHOULDERS) {
+        const head2 = (p.doubleHead > 0 && h - 2 >= 0) ? h - 2 : null;
+        const variants = head2 === null ? 0 : 1;
+        for (let variant = 0; variant <= variants; variant++) {
+          const h2 = variant === 1 ? head2 : null;
+          const leftTop = variant === 1 ? head2 : h;
+          for (let leftCount = 1; leftCount <= CHS_MAX_SHOULDERS; leftCount++) {
+            const iFirst = leftTop - 2 * leftCount;
+            if (iFirst < 0 || B[iLast] - B[iFirst] > p.maxSpan) continue;
+            const complexOk = leftCount >= 2 || rightCount >= 2 || h2 !== null;
+            const symOk = !p.symmetry || leftCount === rightCount;
+            const total = leftCount + rightCount + (h2 === null ? 0 : 1);
+            if (!(complexOk && symOk && total > bestTotal)) continue;
+            const ev = chsEvaluate(st, p, dir, iFirst, iLast, h, h2, atr, i);
+            let ok = ev.ok;
+            if (ok && p.trendFilter) {
+              const fb = B[iFirst];
+              let origin = e === 1 ? st.lows[fb] : st.highs[fb];
+              if (fb - p.trendLength >= 0) {
+                for (let b = fb - p.trendLength; b <= fb; b++) {
+                  origin = e === 1 ? Math.min(origin, st.lows[b]) : Math.max(origin, st.highs[b]);
+                }
+                ok = e * ((ev.y1 + ev.slope * (fb - ev.x1)) - origin) >= p.trendSize * atr;
+              } else ok = false;
+            }
+            if (ok) {
+              bestTotal = total;
+              best = {dir, iFirst, iLast, headIdx: h, head2Idx: h2, leftCount, rightCount,
+                      x1: ev.x1, y1: ev.y1, slope: ev.slope, height: ev.height};
+            }
+          }
+        }
+      }
+    }
+    laterMax = isNaN(laterMax) ? hp : (e === 1 ? Math.max(laterMax, hp) : Math.min(laterMax, hp));
+  }
+  if (!best) return null;
+
+  // Stessa figura già in formazione o attiva: nessuna nuova.
+  const headBar = B[best.headIdx];
+  const active = dir === 1 ? st.inverseActive : st.topActive;
+  if (active && active.headBar === headBar) return null;
+
+  // Volume: per gamba, rapporto con le spalle sinistre.
+  const leftTopIdx = best.head2Idx === null ? best.headIdx : best.head2Idx;
+  let vLeft = 0, vRight = 0;
+  for (let k = best.iFirst; k <= leftTopIdx - 2; k += 2) { const v = chsLegVolume(st, k); vLeft += isNaN(v) ? 0 : v; }
+  for (let k = best.headIdx + 2; k <= iLast; k += 2) { const v = chsLegVolume(st, k); vRight += isNaN(v) ? 0 : v; }
+  vLeft /= best.leftCount; vRight /= best.rightCount;
+  const vHead = chsLegVolume(st, leftTopIdx);
+  const vHeadN = isNaN(vHead) ? 0 : vHead;
+  let volText = 'Volume signature: n/a';
+  if (st.volumeSeen && vLeft > 0) {
+    volText = 'Volume into the head ' + (vHeadN / vLeft).toFixed(2) + 'x and into the right shoulders ' +
+      (vRight / vLeft).toFixed(2) + 'x the left shoulders' + (vHeadN < vLeft && vRight < vHeadN ? ' (classical fade)' : '');
+  }
+  const shape = best.leftCount + ' left shoulder' + (best.leftCount > 1 ? 's' : '') + ', ' +
+    (best.head2Idx === null ? 'one head' : 'double head') + ', ' + best.rightCount + ' right shoulder' + (best.rightCount > 1 ? 's' : '');
+  const headPrice = best.head2Idx === null ? P[best.headIdx]
+    : (e === 1 ? Math.max(P[best.headIdx], P[best.head2Idx]) : Math.min(P[best.headIdx], P[best.head2Idx]));
+
+  // Segmenti della figura e marcatori sui picchi.
+  const legs = [];
+  for (let k = best.iFirst; k < iLast; k++) legs.push({x1: B[k], y1: P[k], x2: B[k + 1], y2: P[k + 1]});
+  const marks = [];
+  for (let k = best.iFirst; k <= iLast; k++) {
+    if (st.zzD[k] !== e) continue;
+    const tag = (k === best.headIdx || k === best.head2Idx) ? 'H' : k < best.headIdx ? 'LS' : 'RS';
+    marks.push({bar: B[k], price: P[k], text: tag});
+  }
+  return {
+    dir, state: 0, breakBar: null, target: NaN, stop: NaN, retested: false, reclaims: 0,
+    x1: best.x1, y1: best.y1, slope: best.slope, height: best.height,
+    headBar, headPrice, lastShoulderBar: B[iLast], lastShoulderPrice: P[iLast],
+    infoText: shape + '\n' + volText, legs, marks,
+    neckEnd: i, targetEnd: null, stopEnd: null, targetHidden: false, events: [], erased: false,
+    breakLabel: null, nameLabel: null, shape
+  };
+}
+
+const COMPLEX_HS_DEF = {
+  label: 'Complex H&S',
+  buildSettings: (ind, paramsRow, mk) => chsBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    swingLength: 5, headExcess: 15, minShoulder: 30, doubleHead: 10, tilt: 50, maxSpan: 250,
+    symmetry: false, atrLength: 14, trendFilter: true, trendLength: 60, trendSize: 2.0,
+    breakBuffer: 0.0, window: 80, reclaims: 2, showTarget: true, watch: 80,
+    bullColor: '#089981', bearColor: '#f23645', neutralColor: '#787b86', showEvents: true
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script:
+  // 1) swing e figure nuove  2) monitoraggio delle figure in formazione  3) monitoraggio di quelle completate.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.atr = []; st.tr = []; st.highs = []; st.lows = []; st.cum = [];
+      st.zzP = []; st.zzB = []; st.zzD = [];
+      st.topForming = null; st.inverseForming = null;
+      st.topActive = null; st.inverseActive = null;
+      st.patterns = [];        // tutte le figure disegnate (erased = cancellata)
+      st.volumeSeen = false;
+    }
+    const L = Math.max(2, p.swingLength | 0);
+    const atrLen = Math.max(1, p.atrLength | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      st.highs[i] = r.high; st.lows[i] = r.low;
+      st.cum[i] = (i > 0 ? st.cum[i - 1] : 0) + (r.volume || 0);
+      if ((r.volume || 0) > 0) st.volumeSeen = true;
+      st.tr[i] = i === 0 ? r.high - r.low
+        : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+      if (i < atrLen - 1) st.atr[i] = NaN;
+      else if (i === atrLen - 1) { let s = 0; for (let k = 0; k < atrLen; k++) s += st.tr[k]; st.atr[i] = s / atrLen; }
+      else st.atr[i] = st.atr[i - 1] + (st.tr[i] - st.atr[i - 1]) / atrLen;
+      const atr = st.atr[i];
+      st.evt = {topFormingAlert: false, inverseFormingAlert: false, topBreak: false, inverseBreak: false,
+                topRetest: false, inverseRetest: false, topTarget: false, inverseTarget: false, topFail: false, inverseFail: false};
+
+      // 1) Pivot confermati e nuove figure.
+      const c = i - L;
+      if (c - L >= 0) {
+        const hc = r.high, lc = r.low;
+        // pivot del massimo / minimo alla barra c
+        let isH = true, isL = true;
+        for (let k = c - L; k <= i; k++) {
+          if (k === c) continue;
+          if (k < c) { if (rows[k].high >= rows[c].high) isH = false; if (rows[k].low <= rows[c].low) isL = false; }
+          else { if (rows[k].high > rows[c].high) isH = false; if (rows[k].low < rows[c].low) isL = false; }
+        }
+        if (isH && chsPushSwing(st, rows[c].high, c, 1)) {
+          const cand = chsTryDetect(st, p, -1, i, atr);
+          if (cand) {
+            const F = st.topForming;
+            if (F) { st.evt.topFormingAlert = F.headBar !== cand.headBar; chsErase(F, st); }
+            else st.evt.topFormingAlert = true;
+            st.topForming = cand; st.patterns.push(cand);
+          }
+        }
+        if (isL && chsPushSwing(st, rows[c].low, c, -1)) {
+          const cand = chsTryDetect(st, p, 1, i, atr);
+          if (cand) {
+            const F = st.inverseForming;
+            if (F) { st.evt.inverseFormingAlert = F.headBar !== cand.headBar; chsErase(F, st); }
+            else st.evt.inverseFormingAlert = true;
+            st.inverseForming = cand; st.patterns.push(cand);
+          }
+        }
+      }
+
+      // 2) Figure completate: obiettivo, stop, ritest, fallimento.
+      if (st.topActive) {
+        const e = chsTrackActive(st, p, st.topActive, i, r);
+        st.evt.topTarget = e === 1; st.evt.topFail = e === 2; st.evt.topRetest = e === 3;
+        if (e === 1 || e === 2 || e === 4) st.topActive = null;
+      }
+      if (st.inverseActive) {
+        const e = chsTrackActive(st, p, st.inverseActive, i, r);
+        st.evt.inverseTarget = e === 1; st.evt.inverseFail = e === 2; st.evt.inverseRetest = e === 3;
+        if (e === 1 || e === 2 || e === 4) st.inverseActive = null;
+      }
+
+      // 3) Figure in formazione: rottura della linea di collo, oppure annullamento.
+      if (st.topForming) {
+        const e = chsTrackForming(st, p, st.topForming, i, r, atr);
+        if (e === 1) { st.evt.topBreak = true; st.topActive = st.topForming; st.topForming = null; }
+        else if (e === 2) { chsErase(st.topForming, st); st.topForming = null; }
+      }
+      if (st.inverseForming) {
+        const e = chsTrackForming(st, p, st.inverseForming, i, r, atr);
+        if (e === 1) { st.evt.inverseBreak = true; st.inverseActive = st.inverseForming; st.inverseForming = null; }
+        else if (e === 2) { chsErase(st.inverseForming, st); st.inverseForming = null; }
+      }
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const seg = (x1, y1, x2, y2, color, width, dashed, alpha) => {
+      ctx.save();
+      ctx.globalAlpha = alpha === undefined ? 1 : alpha;
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      if (dashed) ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(xAbs(x1), y(y1)); ctx.lineTo(xAbs(x2), y(y2)); ctx.stroke();
+      ctx.restore();
+    };
+    const txt = (s, xx, yy, color, align, size) => {
+      ctx.save();
+      ctx.fillStyle = color; ctx.font = scaledFont(size || '10px system-ui');
+      ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s, xx, yy); ctx.restore();
+    };
+
+    for (const F of st.patterns) {
+      if (F.erased) continue;
+      const broke = F.state >= 1;
+      const col = broke ? (F.dir === 1 ? p.bullColor : p.bearColor) : p.neutralColor;
+      // gambe della figura
+      for (const l of F.legs) seg(l.x1, l.y1, l.x2, l.y2, col, 2, false, 1);
+      // marcatori
+      for (const m of F.marks) txt(m.text, xAbs(m.bar), y(m.price) + (F.dir === -1 ? -10 : 10), col, 'center', 'bold 9px system-ui');
+      // linea di collo: tratteggiata fino alla rottura, poi piena
+      const neckAt = x => F.y1 + F.slope * (x - F.x1);
+      seg(F.x1, F.y1, F.neckEnd, neckAt(F.neckEnd), col, 2, !broke, 1);
+      // nome della figura sulla testa
+      const nameTxt = F.dir === -1 ? 'Complex H&S' : 'Complex Inverse H&S';
+      txt(nameTxt, xAbs(F.headBar), y(neckAt(F.headBar)) + (F.dir === -1 ? -22 : 22), col, 'center', 'bold 10px system-ui');
+      if (broke) {
+        // obiettivo misurato e stop
+        if (p.showTarget && !F.targetHidden && !isNaN(F.target) && F.targetEnd !== null) {
+          seg(F.breakBar, F.target, F.targetEnd, F.target, col, 1, true, 1);
+          txt('Target ' + F.target.toFixed(5), xAbs(F.breakBar) + 4, y(F.target) - 6, col, 'left', '9px system-ui');
+        }
+        seg(F.breakBar, F.stop, F.stopEnd, F.stop, p.neutralColor, 1, true, 1);
+        txt('Stop ' + F.stop.toFixed(5), xAbs(F.stopEnd), y(F.stop) + 10, p.neutralColor, 'right', '9px system-ui');
+      }
+      if (p.showEvents) {
+        for (const ev of F.events) {
+          if (ev.bar < dataStart || ev.bar > dataEnd) continue;
+          txt(ev.text, xAbs(ev.bar), y(ev.price) + (ev.below ? 10 : -10), ev.color, 'center', 'bold 9px system-ui');
+        }
+      }
+    }
+  }
+};
+
+// Cancella una figura in formazione (non verrà più disegnata).
+function chsErase(F, st) { F.erased = true; }
+
+// Avanza una figura in formazione. 0 = attesa, 1 = rottura del collo, 2 = annullata.
+function chsTrackForming(st, p, F, i, r, atr) {
+  const e = -F.dir;
+  const neck = F.y1 + F.slope * (i - F.x1);
+  F.neckEnd = i;
+  const headTaken = e === 1 ? r.high > F.headPrice : r.low < F.headPrice;
+  const broke = e === 1 ? r.close < neck - p.breakBuffer * atr : r.close > neck + p.breakBuffer * atr;
+  if (headTaken || i - F.lastShoulderBar > p.window) return 2;
+  if (!broke) return 0;
+  F.state = 1;
+  F.breakBar = i;
+  F.target = neck - e * F.height;
+  F.stop = F.lastShoulderPrice;
+  F.targetEnd = i; F.stopEnd = i;
+  const lastBreakIdx = i;
+  F.events.push({bar: i, price: e === 1 ? Math.max(r.high, st.highs[i - 1], st.highs[i - 2]) : Math.min(r.low, st.lows[i - 1], st.lows[i - 2]),
+                 text: 'Break', below: e !== 1, color: e === 1 ? p.bullColor : p.bearColor});
+  return 1;
+}
+
+// Avanza una figura completata. 0 = seguita, 1 = obiettivo, 2 = fallita, 3 = ritest, 4 = finestra chiusa.
+function chsTrackActive(st, p, F, i, r) {
+  const e = -F.dir;
+  const neck = F.y1 + F.slope * (i - F.x1);
+  F.neckEnd = i;
+  F.stopEnd = i;
+  if (!F.targetHidden) F.targetEnd = i;
+  const targetHit = e === 1 ? r.low <= F.target : r.high >= F.target;
+  const stopHit = e === 1 ? r.close > F.stop : r.close < F.stop;
+  F.reclaims = e * (r.close - neck) > 0 ? F.reclaims + 1 : 0;
+  const bullColor = F.dir === 1 ? p.bullColor : p.bearColor;
+  if (p.showTarget && targetHit) {
+    F.events.push({bar: i, price: e === 1 ? r.low : r.high, text: 'Target', below: e === 1, color: bullColor});
+    return 1;
+  }
+  if (stopHit || F.reclaims >= p.reclaims) {
+    if (p.showTarget) F.targetHidden = true;
+    F.events.push({bar: i, price: e === 1 ? r.high : r.low, text: stopHit ? 'Stop' : 'Failed', below: e !== 1, color: p.neutralColor});
+    return 2;
+  }
+  if (!F.retested && i > F.breakBar && (e === 1 ? (r.high >= neck && r.close < neck) : (r.low <= neck && r.close > neck))) {
+    F.retested = true;
+    F.events.push({bar: i, price: e === 1 ? r.high : r.low, text: 'Retest', below: e !== 1, color: bullColor});
+    return 3;
+  }
+  if (i - F.breakBar >= p.watch) return 4;
+  return 0;
+}
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const CHS_SETTINGS = [
+  {type: 'num', key: 'swingLength', label: 'Lunghezza swing', min: 2, max: 50},
+  {type: 'num', key: 'headExcess', label: 'Prominenza testa (%)', min: 1, max: 90, step: 1},
+  {type: 'num', key: 'minShoulder', label: 'Altezza min. spalle (%)', min: 5, max: 95, step: 5},
+  {type: 'num', key: 'doubleHead', label: 'Tolleranza doppia testa (%)', min: 0, max: 50, step: 1},
+  {type: 'num', key: 'tilt', label: 'Limite inclinazione collo (%)', min: 0, max: 200, step: 5},
+  {type: 'num', key: 'maxSpan', label: 'Lunghezza max figura (barre)', min: 20, max: 1000},
+  {type: 'check', key: 'symmetry', label: 'Simmetria spalle'},
+  {type: 'num', key: 'atrLength', label: 'Lunghezza ATR', min: 1, max: 200},
+  {type: 'check', key: 'trendFilter', label: 'Richiedi trend precedente'},
+  {type: 'num', key: 'trendLength', label: 'Finestra trend (barre)', min: 5, max: 500},
+  {type: 'num', key: 'trendSize', label: 'Movimento min. (ATR)', min: 0, max: 50, step: 0.5},
+  {type: 'num', key: 'breakBuffer', label: 'Buffer rottura (ATR)', min: 0, max: 3, step: 0.05},
+  {type: 'num', key: 'window', label: 'Finestra completamento (barre)', min: 5, max: 500},
+  {type: 'num', key: 'reclaims', label: 'Chiusure per fallimento', min: 1, max: 10},
+  {type: 'check', key: 'showTarget', label: 'Obiettivo misurato'},
+  {type: 'num', key: 'watch', label: 'Monitoraggio post-rottura', min: 5, max: 500},
+  {type: 'color', key: 'bullColor', label: 'Inverso (rialzista)'},
+  {type: 'color', key: 'bearColor', label: 'Massimo (ribassista)'},
+  {type: 'color', key: 'neutralColor', label: 'Non confermato'},
+  {type: 'check', key: 'showEvents', label: 'Etichette eventi'}
+];
+function chsBuildSettings(ind, paramsRow, mk) {
+  CHS_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+  });
+}
+
+// NOTE
+//  - Gli alert non sono generati: l'app non ha un sistema di alert.
+//  - Il formato dei pattern segue lo script: le figure in formazione restano visibili finché non si rompono o vengono annullate.
+//  - La regola di parità dei pivot è quella degli altri indicatori (da confrontare con TradingView).
+//  - Il tempo del loop discendente sulle teste è quello dello script: da verificare su un caso noto.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// Gann Method — porting COMPLETO dello script Pine v6 (LuxAlgo) per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const GANN_DAY = 86400000;
+const GANN_MAX_PIVOTS = 60;
+const GANN_SCALE_SWING = 'Anchor Swing (Range / Time)';
+const GANN_SCALE_ATR = 'ATR at Anchor';
+const GANN_SCALE_MANUAL = 'Manual';
+const GANN_DIV_KEY = 'Key (1/4, 1/3, 1/2, 2/3, 3/4)';
+const GANN_DIV_EIGHTHS = 'Eighths';
+const GANN_DIV_BOTH = 'Eighths & Thirds';
+
+// ATR come ta.atr (Wilder), una volta per barra.
+function gannAtr(rows, len) {
+  const tr = [], atr = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    tr[i] = i === 0 ? r.high - r.low
+      : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+    if (i < len - 1) atr[i] = NaN;
+    else if (i === len - 1) { let s = 0; for (let k = 0; k < len; k++) s += tr[k]; atr[i] = s / len; }
+    else atr[i] = atr[i - 1] + (tr[i] - atr[i - 1]) / len;
+  }
+  return atr;
+}
+
+// Frazioni delle divisioni, come buildFractions() in Pine.
+function gannFractions(div) {
+  if (div === GANN_DIV_EIGHTHS) return [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
+  if (div === GANN_DIV_BOTH) return [0.125, 0.25, 1 / 3, 0.375, 0.5, 0.625, 2 / 3, 0.75, 0.875];
+  return [0.25, 1 / 3, 0.5, 2 / 3, 0.75];
+}
+// Nome frazione, come fracName() in Pine.
+function gannFracName(f) {
+  const map = {0.125: '1/8', 0.25: '1/4', 0.375: '3/8', 0.5: '1/2', 0.625: '5/8', 0.75: '3/4', 0.875: '7/8'};
+  if (map[f]) return map[f];
+  if (Math.abs(f - 1 / 3) < 0.001) return '1/3';
+  if (Math.abs(f - 2 / 3) < 0.001) return '2/3';
+  return String(+f.toFixed(3));
+}
+
+// Ultimo pivot confermato di un tipo (1 = massimo, -1 = minimo): {p, b} o NaN.
+function gannLastPivot(st, typ) {
+  for (let k = st.pivType.length - 1; k >= 0; k--) {
+    if (st.pivType[k] === typ) return {p: st.pivPrice[k], b: st.pivBar[k]};
+  }
+  return {p: NaN, b: NaN};
+}
+
+// Registra un pivot confermato e il tratto dal pivot precedente (come addPivot in Pine).
+function gannAddPivot(st, p, b, typ, showSwings) {
+  if (st.pivPrice.length > 0 && showSwings) {
+    const last = st.pivPrice.length - 1;
+    st.swingSegs.push({x1: st.pivBar[last], y1: st.pivPrice[last], x2: b, y2: p});
+    if (st.swingSegs.length > GANN_MAX_PIVOTS) st.swingSegs.shift();
+  }
+  st.pivPrice.push(p); st.pivBar.push(b); st.pivType.push(typ);
+  if (st.pivPrice.length > GANN_MAX_PIVOTS) { st.pivPrice.shift(); st.pivBar.shift(); st.pivType.shift(); }
+}
+
+const GANN_METHOD_DEF = {
+  label: 'Gann Method',
+  buildSettings: (ind, paramsRow, mk) => gannBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    swingBars: 2, showSwings: true, showTrend: true,
+    scale: GANN_SCALE_SWING, atrLen: 14, atrMult: 0.5, manualUnit: 1.0,
+    show21: true, show41: false,
+    divisions: GANN_DIV_KEY, showDiv: true,
+    showSquare: true, counts: '90, 180, 360',
+    showDash: true, dashPos: 'Top Right', dashSize: 'Small',
+    bullColor: '#089981', bearColor: '#f23645', swingColor: '#787b86', midColor: '#ff9800', squareColor: '#ffd700'
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script:
+  // 1) grafico di oscillazione  2) regola di trend e ancore  3) scala 1×1  4) incroci e conteggi.
+  // Il disegno della geometria usa lo stato finale (in Pine avviene solo sull'ultima barra).
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.atr = gannAtr(rows, Math.max(1, p.atrLen | 0));
+      st.ms = [];
+      st.up = 0; st.dn = 0; st.swingDir = 0;
+      st.legHigh = NaN; st.legHighBar = NaN; st.lowAfterHigh = NaN; st.lowAfterHighBar = NaN;
+      st.legLow = NaN; st.legLowBar = NaN; st.highAfterLow = NaN; st.highAfterLowBar = NaN;
+      st.pivPrice = []; st.pivBar = []; st.pivType = [];
+      st.swingSegs = [];
+      st.trend = 0;
+      st.extHigh = NaN; st.extHighBar = NaN; st.extLow = NaN; st.extLowBar = NaN;
+      st.anchorPrice = NaN; st.anchorBar = NaN; st.refPrice = NaN; st.refBar = NaN;
+      st.unit = NaN; st.anchorTime = NaN;
+      st.countDays = String(p.counts).split(',').map(s => parseFloat(s)).filter(d => d > 0).map(d => Math.floor(d));
+      st.countBars = st.countDays.map(() => NaN);
+      st.trendEvents = []; st.flip = []; st.flipDir = [];
+      st.level11Arr = []; st.anchorArr = []; st.closeArr = [];
+      st.ready = false;
+    }
+    const swingBars = Math.max(1, p.swingBars | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      const prev = i > 0 ? rows[i - 1] : null;
+      st.ms[i] = new Date(r.date).getTime();
+      const atrV = st.atr[i];
+
+      // 1) Grafico di oscillazione (barre interne ignorate).
+      const inside = i > 0 && r.high <= prev.high && r.low >= prev.low;
+      if (i > 0 && !inside) {
+        st.up = r.high > prev.high ? st.up + 1 : 0;
+        st.dn = r.low < prev.low ? st.dn + 1 : 0;
+      }
+      if (isNaN(st.legHigh) || r.high > st.legHigh) {
+        st.legHigh = r.high; st.legHighBar = i; st.lowAfterHigh = r.low; st.lowAfterHighBar = i;
+      } else if (r.low < st.lowAfterHigh) { st.lowAfterHigh = r.low; st.lowAfterHighBar = i; }
+      if (isNaN(st.legLow) || r.low < st.legLow) {
+        st.legLow = r.low; st.legLowBar = i; st.highAfterLow = r.high; st.highAfterLowBar = i;
+      } else if (r.high > st.highAfterLow) { st.highAfterLow = r.high; st.highAfterLowBar = i; }
+
+      let swingTop = false, swingBottom = false;
+      if (st.swingDir >= 0 && st.dn >= swingBars && st.legHighBar < i) {
+        if (st.swingDir === 1) { gannAddPivot(st, st.legHigh, st.legHighBar, 1, p.showSwings); swingTop = true; }
+        st.swingDir = -1;
+        st.legLow = st.lowAfterHigh; st.legLowBar = st.lowAfterHighBar;
+        st.highAfterLow = r.high; st.highAfterLowBar = i;
+        st.up = 0;
+      } else if (st.swingDir <= 0 && st.up >= swingBars && st.legLowBar < i) {
+        if (st.swingDir === -1) { gannAddPivot(st, st.legLow, st.legLowBar, -1, p.showSwings); swingBottom = true; }
+        st.swingDir = 1;
+        st.legHigh = st.highAfterLow; st.legHighBar = st.highAfterLowBar;
+        st.lowAfterHigh = r.low; st.lowAfterHighBar = i;
+        st.dn = 0;
+      }
+
+      // 2) Regola di trend: chiusura sopra l'ultimo massimo di oscillazione (rialzo) o sotto l'ultimo minimo (ribasso).
+      const lastTop = gannLastPivot(st, 1), lastBot = gannLastPivot(st, -1);
+      if (isNaN(st.extHigh) || r.high > st.extHigh) { st.extHigh = r.high; st.extHighBar = i; }
+      if (isNaN(st.extLow) || r.low < st.extLow) { st.extLow = r.low; st.extLowBar = i; }
+
+      let trendUp = false, trendDown = false;
+      if (st.trend <= 0 && !isNaN(lastTop.p) && r.close > lastTop.p) trendUp = true;
+      else if (st.trend >= 0 && !isNaN(lastBot.p) && r.close < lastBot.p) trendDown = true;
+
+      if (trendUp || trendDown) {
+        st.refPrice = st.anchorPrice; st.refBar = st.anchorBar;
+        st.anchorPrice = trendUp ? st.extLow : st.extHigh;
+        st.anchorBar = trendUp ? st.extLowBar : st.extHighBar;
+        st.anchorTime = st.ms[st.anchorBar];
+        // Conteggi di calendario ripartono dal nuovo ancoraggio: prima barra che raggiunge ogni data.
+        for (let k = 0; k < st.countDays.length; k++) {
+          st.countBars[k] = NaN;
+          const target = st.anchorTime + st.countDays[k] * GANN_DAY;
+          for (let j = st.anchorBar; j <= i; j++) {
+            if (st.ms[j] >= target) { st.countBars[k] = j; break; }
+          }
+        }
+        st.trend = trendUp ? 1 : -1;
+        // Riparte l'estremo opposto dall'ancoraggio.
+        if (trendUp) {
+          let hh = r.high, hb = i;
+          for (let k = 0; k <= i - st.anchorBar; k++) {
+            const idx = i - k;
+            if (rows[idx].high > hh) { hh = rows[idx].high; hb = idx; }
+          }
+          st.extHigh = hh; st.extHighBar = hb; st.extLow = r.low; st.extLowBar = i;
+        } else {
+          let ll = r.low, lb = i;
+          for (let k = 0; k <= i - st.anchorBar; k++) {
+            const idx = i - k;
+            if (rows[idx].low < ll) { ll = rows[idx].low; lb = idx; }
+          }
+          st.extLow = ll; st.extLowBar = lb; st.extHigh = r.high; st.extHighBar = i;
+        }
+        // Scala 1×1, fissata all'ancoraggio.
+        const rangeSize = isNaN(st.refPrice) ? NaN : Math.abs(st.anchorPrice - st.refPrice);
+        const rangeBars = isNaN(st.refBar) ? NaN : Math.abs(st.anchorBar - st.refBar);
+        const aAtr = st.atr[st.anchorBar] * p.atrMult;
+        if (p.scale === GANN_SCALE_SWING) st.unit = (!isNaN(rangeSize) && rangeBars > 0) ? rangeSize / rangeBars : aAtr;
+        else if (p.scale === GANN_SCALE_ATR) st.unit = aAtr;
+        else st.unit = p.manualUnit;
+      }
+
+      // Stato del trend, scala e linee calcolate su questa barra.
+      const ready = !isNaN(st.anchorPrice) && !isNaN(st.refPrice) && !isNaN(st.unit) && st.unit > 0;
+      st.ready = ready;
+      st.rangeSz = ready ? Math.abs(st.anchorPrice - st.refPrice) : NaN;
+      st.rangeBars = ready ? Math.abs(st.anchorBar - st.refBar) : NaN;
+      st.squareBar = ready ? st.anchorBar + st.rangeBars : NaN;
+      st.mid = ready ? (st.anchorPrice + st.refPrice) / 2 : NaN;
+      st.level11 = ready ? st.anchorPrice + st.trend * st.unit * (i - st.anchorBar) : NaN;
+      st.level11Arr[i] = st.level11; st.anchorArr[i] = st.anchorBar; st.closeArr[i] = r.close;
+
+      // 3) Incroci dell'1×1 e del 50% mentre l'ancoraggio resta lo stesso.
+      const stable = ready && i > 0 && st.anchorArr[i - 1] === st.anchorBar && !isNaN(st.level11Arr[i - 1]);
+      const pc = prev ? prev.close : NaN;
+      st.cross11 = stable && ((r.close > st.level11 && pc <= st.level11Arr[i - 1]) || (r.close < st.level11 && pc >= st.level11Arr[i - 1]));
+      st.crossMid = stable && ((r.close > st.mid && pc <= st.mid) || (r.close < st.mid && pc >= st.mid));
+      st.squareHit = ready && i === st.squareBar;
+
+      // Conteggio di calendario raggiunto su questa barra.
+      st.countHit = false;
+      if (ready) {
+        for (let k = 0; k < st.countDays.length; k++) {
+          if (isNaN(st.countBars[k]) && st.ms[i] >= st.anchorTime + st.countDays[k] * GANN_DAY) {
+            st.countBars[k] = i; st.countHit = true;
+          }
+        }
+      }
+
+      st.trendUp = trendUp; st.trendDown = trendDown;
+      st.swingTop = swingTop; st.swingBottom = swingBottom;
+      if (p.showTrend && (trendUp || trendDown)) {
+        st.trendEvents.push({bar: i, up: trendUp, price: trendUp ? r.low - 0.5 * atrV : r.high + 0.5 * atrV, lastTop: lastTop.p, lastBot: lastBot.p});
+      }
+      // Stop a gradini: ultimo swing sull'altro lato.
+      st.flip[i] = (trendUp || trendDown) ? NaN : st.trend === 1 ? lastBot.p : st.trend === -1 ? lastTop.p : NaN;
+      st.flipDir[i] = st.trend;
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y, pad, h) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const x = i => xAbs(i);
+    const bullC = p.bullColor, bearC = p.bearColor;
+    const segLine = (x1, y1, x2, y2, color, alpha, width, dashed) => {
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width;
+      if (dashed) ctx.setLineDash([6, 4]); else if (dashed === false) ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(x(x1), y(y1)); ctx.lineTo(x(x2), y(y2)); ctx.stroke();
+      ctx.restore();
+    };
+    const txt = (s, xx, yy, color, align, size) => {
+      ctx.save();
+      ctx.fillStyle = color; ctx.font = scaledFont(size || '10px system-ui');
+      ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(s, xx, yy);
+      ctx.restore();
+    };
+
+    // Grafico di oscillazione confermato.
+    if (p.showSwings) {
+      for (const s of st.swingSegs) segLine(s.x1, s.y1, s.x2, s.y2, p.swingColor, 0.85, 1, false);
+      // Tratto ancora in sviluppo, tratteggiato.
+      if (st.pivPrice.length > 0) {
+        const up = st.swingDir === 1;
+        const endBar = up ? st.legHighBar : st.legLowBar, endPrice = up ? st.legHigh : st.legLow;
+        const lb = st.pivBar.length - 1;
+        segLine(st.pivBar[lb], st.pivPrice[lb], endBar, endPrice, p.swingColor, 0.85, 1, true);
+      }
+    }
+
+    // Trend e stop a gradini.
+    if (p.showTrend) {
+      for (let j = 0; j < last; j++) {
+        const a = st.flip[j], b = st.flip[j + 1];
+        if (isNaN(a) || isNaN(b)) continue;
+        const c = st.flipDir[j] === 1 ? bullC : bearC;
+        segLine(j, a, j + 1, a, c, 0.55, 1, false);
+        if (a !== b) segLine(j + 1, a, j + 1, b, c, 0.55, 1, false);
+      }
+      for (const e of st.trendEvents) {
+        if (e.bar < dataStart || e.bar > dataEnd) continue;
+        const c = e.up ? bullC : bearC;
+        txt(e.up ? 'Trend ▲' : 'Trend ▼', x(e.bar), y(e.price), c, 'center', 'bold 10px system-ui');
+      }
+    }
+
+    // Divisioni del range e bordi, fino a 8 barre oltre l'ultima.
+    if (st.ready) {
+      const dirSign = st.trend;
+      const fanC = dirSign === 1 ? bullC : bearC;
+      const xEnd = last + 8;
+      const lo = Math.min(st.anchorPrice, st.refPrice);
+      const rangeSz = st.rangeSz;
+
+      if (p.showDiv) {
+        for (const f of gannFractions(p.divisions)) {
+          const lvl = lo + f * rangeSz;
+          const isMid = f === 0.5;
+          const c = isMid ? p.midColor : p.swingColor;
+          segLine(Math.min(st.anchorBar, st.refBar), lvl, xEnd, lvl, c, isMid ? 0.9 : 0.75, 1, isMid);
+          txt(gannFracName(f) + '  ' + lvl.toFixed(5), x(xEnd) - 4, y(lvl) - 6, c, 'right', '9px system-ui');
+        }
+        segLine(st.refBar, st.refPrice, xEnd, st.refPrice, p.swingColor, 0.6, 1, false);
+      }
+
+      // Angoli dall'ancoraggio.
+      const ratios = [[1, '1×1']];
+      if (p.show21) ratios.push([2, '2×1'], [0.5, '1×2']);
+      if (p.show41) ratios.push([4, '4×1'], [0.25, '1×4']);
+      const edge = dirSign === 1 ? Math.max(st.anchorPrice, st.refPrice) + 0.25 * rangeSz
+        : Math.min(st.anchorPrice, st.refPrice) - 0.25 * rangeSz;
+      for (const [r, name] of ratios) {
+        const main = r === 1;
+        let x2 = xEnd;
+        let y2 = st.anchorPrice + dirSign * st.unit * r * (xEnd - st.anchorBar);
+        if ((dirSign === 1 && y2 > edge) || (dirSign === -1 && y2 < edge)) {
+          x2 = st.anchorBar + Math.round((edge - st.anchorPrice) / (dirSign * st.unit * r));
+          y2 = st.anchorPrice + dirSign * st.unit * r * (x2 - st.anchorBar);
+        }
+        segLine(st.anchorBar, st.anchorPrice, x2, y2, fanC, main ? 1 : 0.65, main ? 2 : 1, !main);
+        txt(name, x(x2) + 4, y(y2), fanC, 'left', '9px system-ui');
+      }
+
+      // Quadrato prezzo-tempo: stessa durata dello swing di ancoraggio.
+      if (p.showSquare && st.squareBar <= last + 20) {
+        const top = Math.max(st.anchorPrice, st.refPrice), bot = Math.min(st.anchorPrice, st.refPrice);
+        segLine(st.squareBar, bot, st.squareBar, top, p.squareColor, 1, 2, true);
+        txt('Time = Range', x(st.squareBar), y(dirSign === 1 ? top : bot) + (dirSign === 1 ? -8 : 8), p.squareColor, 'center', '9px system-ui');
+      }
+
+      // Conteggi di calendario raggiunti.
+      for (let k = 0; k < st.countDays.length; k++) {
+        const cb = st.countBars[k];
+        if (isNaN(cb)) continue;
+        const top = Math.max(st.anchorPrice, st.refPrice), bot = Math.min(st.anchorPrice, st.refPrice);
+        segLine(cb, bot, cb, top, p.squareColor, 0.45, 1, true);
+        txt(st.countDays[k] + 'd', x(cb), y(dirSign === 1 ? bot : top) + (dirSign === 1 ? 8 : -8), p.squareColor, 'center', '9px system-ui');
+      }
+
+      // Ancoraggio.
+      ctx.save();
+      ctx.fillStyle = fanC;
+      ctx.beginPath(); ctx.arc(x(st.anchorBar), y(st.anchorPrice), 3, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    // Dashboard (angolo scelto). Richiede le dimensioni del canvas.
+    if (p.showDash && st.ready) gannDrawDashboard(ctx, st, p, rows, last);
+  }
+};
+
+// Dashboard: stesse 7 righe della tabella Pine.
+function gannDrawDashboard(ctx, st, p, rows, last) {
+  const W = (ctx.canvas.clientWidth || ctx.canvas.width || 600);
+  const H = (ctx.canvas.clientHeight || ctx.canvas.height || 400);
+  const fs = p.dashSize === 'Tiny' ? 9 : p.dashSize === 'Normal' ? 12 : 10;
+  const close = rows[last].close;
+  const time = st.ms[last];
+  const dirSign = st.trend;
+  const level11 = st.level11;
+  const strong = dirSign === 1 ? close >= level11 : close <= level11;
+  const trendText = st.trend === 1 ? 'Up' : st.trend === -1 ? 'Down' : '-';
+  const trendColor = st.trend === 1 ? p.bullColor : st.trend === -1 ? p.bearColor : '#DBDBDB';
+  const unitSrc = p.scale === GANN_SCALE_SWING ? 'swing' : p.scale === GANN_SCALE_ATR ? 'ATR' : 'manual';
+  const vs11 = (close >= level11 ? 'Above 1×1' : 'Below 1×1') + (strong ? ', strong' : ', weak');
+
+  let divText = '-';
+  const frac = (close - Math.min(st.anchorPrice, st.refPrice)) / st.rangeSz;
+  if (frac > 1) divText = 'Above range';
+  else if (frac < 0) divText = 'Below range';
+  else {
+    let below = NaN, above = NaN;
+    for (const f of [0, 1, ...gannFractions(p.divisions)]) {
+      if (f <= frac && (isNaN(below) || f > below)) below = f;
+      if (f >= frac && (isNaN(above) || f < above)) above = f;
+    }
+    const b = below === 0 ? '0' : below === 1 ? '1' : gannFracName(below);
+    const a = above === 1 ? '1' : above === 0 ? '0' : gannFracName(above);
+    divText = b + ' to ' + a;
+  }
+  const sq = st.squareBar > last ? 'In ' + (st.squareBar - last) + ' bars'
+    : st.squareBar === last ? 'This bar' : (last - st.squareBar) + ' bars ago';
+  let nextText = '-';
+  for (let k = 0; k < st.countDays.length; k++) {
+    if (isNaN(st.countBars[k])) {
+      const left = Math.ceil((st.anchorTime + st.countDays[k] * GANN_DAY - time) / GANN_DAY);
+      nextText = st.countDays[k] + 'd in ' + left + ' days';
+      break;
+    }
+  }
+  const rows7 = [
+    ['Swing Trend', trendText, trendColor],
+    ['1×1 per Bar', st.unit.toFixed(5) + ' (' + unitSrc + ')', '#DBDBDB'],
+    ['Price vs 1×1', vs11, strong ? trendColor : p.midColor],
+    ['Division', divText, '#DBDBDB'],
+    ['Time = Range', sq, p.squareColor],
+    ['Next Count', nextText, p.squareColor]
+  ];
+  const pw = 230, rh = fs + 8, ph = rh * (rows7.length + 1) + 8;
+  const left = p.dashPos.indexOf('Left') >= 0;
+  const top = p.dashPos.indexOf('Top') >= 0;
+  const bx = left ? 8 : W - pw - 8, by = top ? 8 : H - ph - 8;
+  ctx.save();
+  ctx.globalAlpha = 0.9; ctx.fillStyle = '#161616'; ctx.fillRect(bx, by, pw, ph);
+  ctx.globalAlpha = 1; ctx.strokeStyle = '#2E2E2E'; ctx.strokeRect(bx, by, pw, ph);
+  ctx.font = fs + 'px system-ui'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#DBDBDB'; ctx.textAlign = 'left';
+  ctx.fillText('Gann Method', bx + 6, by + rh / 2 + 4);
+  ctx.fillStyle = '#808080'; ctx.textAlign = 'right';
+  ctx.fillText(p.swingBars + '-bar swings', bx + pw - 6, by + rh / 2 + 4);
+  rows7.forEach((rw, k) => {
+    const yy = by + rh * (k + 1) + rh / 2 + 4;
+    ctx.fillStyle = '#808080'; ctx.textAlign = 'left'; ctx.fillText(rw[0], bx + 6, yy);
+    ctx.fillStyle = rw[2]; ctx.textAlign = 'right'; ctx.fillText(rw[1], bx + pw - 6, yy);
+  });
+  ctx.restore();
+}
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const GANN_SETTINGS = [
+  {type: 'num', key: 'swingBars', label: 'Barre swing', min: 1, max: 10},
+  {type: 'check', key: 'showSwings', label: 'Linea swing'},
+  {type: 'check', key: 'showTrend', label: 'Cambi di trend'},
+  {type: 'select', key: 'scale', label: 'Scala 1×1', options: [GANN_SCALE_SWING, GANN_SCALE_ATR, GANN_SCALE_MANUAL]},
+  {type: 'num', key: 'atrLen', label: 'ATR lunghezza', min: 1, max: 500},
+  {type: 'num', key: 'atrMult', label: 'ATR moltiplicatore', min: 0.05, max: 20, step: 0.05},
+  {type: 'num', key: 'manualUnit', label: 'Prezzo per barra', min: 0.0000001, max: 1000000, step: 0.0001},
+  {type: 'check', key: 'show21', label: '2×1 e 1×2'},
+  {type: 'check', key: 'show41', label: '4×1 e 1×4'},
+  {type: 'select', key: 'divisions', label: 'Divisioni', options: [GANN_DIV_KEY, GANN_DIV_EIGHTHS, GANN_DIV_BOTH]},
+  {type: 'check', key: 'showDiv', label: 'Mostra divisioni'},
+  {type: 'check', key: 'showSquare', label: 'Quadrato prezzo-tempo'},
+  {type: 'text', key: 'counts', label: 'Conteggi giorni'},
+  {type: 'check', key: 'showDash', label: 'Dashboard'},
+  {type: 'select', key: 'dashPos', label: 'Posizione', options: ['Top Right', 'Top Left', 'Bottom Right', 'Bottom Left']},
+  {type: 'select', key: 'dashSize', label: 'Dimensione', options: ['Tiny', 'Small', 'Normal']},
+  {type: 'color', key: 'bullColor', label: 'Su'},
+  {type: 'color', key: 'bearColor', label: 'Giù'},
+  {type: 'color', key: 'swingColor', label: 'Swing e divisioni'},
+  {type: 'color', key: 'midColor', label: '50%'},
+  {type: 'color', key: 'squareColor', label: 'Quadrato'}
+];
+function gannBuildSettings(ind, paramsRow, mk) {
+  GANN_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+    else if (s.type === 'text' && mk.mkText) paramsRow.appendChild(mk.mkText(s.label, s.key));
+  });
+}
+
+// NOTE
+//  - Gli alert dello script non sono generati (l'app non ha alert). Non sono nel pannello.
+//  - Il campo "Conteggi giorni" è testo libero: serve un helper mkText in app.html; senza, il valore resta quello di default.
+//  - La dashboard è disegnata sul canvas nell'angolo scelto, con le dimensioni del canvas (clientWidth/clientHeight): da verificare all'integrazione.
+//  - Le etichette di Pine sono disegnate come testo; le linee estese oltre l'ultima barra (+8) richiedono che xAbs funzioni fuori dai dati.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// MSS Sweep Fib Retrace — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+// EMA come ta.ema: seme = media semplice delle prime `len` barre.
+function mssEma(values, len) {
+  const out = new Array(values.length).fill(NaN);
+  const a = 2 / (len + 1);
+  let prev = NaN, sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (i < len) {
+      sum += values[i];
+      if (i === len - 1) { prev = sum / len; out[i] = prev; }
+    } else { prev = prev + a * (values[i] - prev); out[i] = prev; }
+  }
+  return out;
+}
+
+// ATR di Wilder.
+function mssAtr(rows, len) {
+  const tr = [], atr = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    tr[i] = i === 0 ? r.high - r.low
+      : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+    if (i < len - 1) atr[i] = NaN;
+    else if (i === len - 1) { let s = 0; for (let k = 0; k < len; k++) s += tr[k]; atr[i] = s / len; }
+    else atr[i] = atr[i - 1] + (tr[i] - atr[i - 1]) / len;
+  }
+  return atr;
+}
+
+const MSS_SWEEP_FIB_DEF = {
+  label: 'MSS Sweep Fib Retrace',
+  buildSettings: (ind, paramsRow, mk) => mssBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    leftBars: 5, rightBars: 5, momentumBars: 3,
+    useMacro: true, emaPeriod: 200,
+    atrPeriod: 14, slMult: 1.5, tpMult: 2.0,
+    showVisuals: true
+  }),
+
+  // Stati: 0 neutro, 1 sweep del massimo (ribassista), 2 sweep del minimo (rialzista),
+  // -1 MSS ribassista in attesa del 50%, -2 MSS rialzista in attesa del 50%.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.ema = mssEma(rows.map(r => r.close), Math.max(1, p.emaPeriod | 0));
+      st.atr = mssAtr(rows, Math.max(1, p.atrPeriod | 0));
+      st.consBull = []; st.consBear = [];
+      st.prevPh = NaN; st.lastPh = NaN; st.lastPhBar = NaN;
+      st.prevPl = NaN; st.lastPl = NaN; st.lastPlBar = NaN;
+      st.state = 0;
+      st.sweepHigh = NaN; st.sweepLow = NaN; st.sweepBar = NaN;
+      st.sweptLevel = NaN; st.sweptBar = NaN;
+      st.mssLevel = NaN; st.mssBar = NaN; st.mssConfirmBar = NaN;
+      st.legHigh = NaN; st.legLow = NaN; st.legEndBar = NaN;
+      st.trade = null; st.trades = [];   // trade: {dir, bar, entry, sl, tp, right, closed}
+      st.draws = [];                     // strutture disegnate al MSS
+      st.entries = [];                   // etichette Short/Long
+    }
+    const L = Math.max(1, p.leftBars | 0), R = Math.max(1, p.rightBars | 0);
+    const mom = Math.max(1, p.momentumBars | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      st.consBull[i] = r.close > r.open ? (i > 0 ? st.consBull[i - 1] : 0) + 1 : 0;
+      st.consBear[i] = r.close < r.open ? (i > 0 ? st.consBear[i - 1] : 0) + 1 : 0;
+      const atr = st.atr[i], ema = st.ema[i];
+
+      // Pivot confermati da R barre a destra e L a sinistra.
+      const c = i - R;
+      if (c - L >= 0) {
+        const hc = rows[c].high, lc = rows[c].low;
+        let isH = true, isL = true;
+        for (let k = c - L; k <= i; k++) {
+          if (k === c) continue;
+          if (k < c) { if (rows[k].high >= hc) isH = false; if (rows[k].low <= lc) isL = false; }
+          else { if (rows[k].high > hc) isH = false; if (rows[k].low < lc) isL = false; }
+        }
+        if (isH) { st.prevPh = st.lastPh; st.lastPh = hc; st.lastPhBar = c; }
+        if (isL) { st.prevPl = st.lastPl; st.lastPl = lc; st.lastPlBar = c; }
+      }
+
+      const localDown = !isNaN(st.prevPh) && !isNaN(st.lastPh) && st.lastPh < st.prevPh;
+      const localUp = !isNaN(st.prevPl) && !isNaN(st.lastPl) && st.lastPl > st.prevPl;
+      const macroDown = r.close < ema, macroUp = r.close > ema;
+      const longTrendOk = p.useMacro ? macroDown : true;
+      const shortTrendOk = p.useMacro ? macroUp : true;
+
+      // 1) Sweep: il prezzo supera un pivot precedente e chiude di nuovo dentro.
+      if (localDown && longTrendOk && !isNaN(st.lastPl) && r.low < st.lastPl && r.close > st.lastPl && st.state === 0) {
+        st.state = 2;
+        st.sweepLow = r.low; st.sweepBar = i;
+        st.sweptLevel = st.lastPl; st.sweptBar = st.lastPlBar;
+        st.mssLevel = st.lastPh; st.mssBar = st.lastPhBar;
+        st.legLow = r.low; st.legHigh = r.high; st.legEndBar = i;
+      }
+      if (localUp && shortTrendOk && !isNaN(st.lastPh) && r.high > st.lastPh && r.close < st.lastPh && st.state === 0) {
+        st.state = 1;
+        st.sweepHigh = r.high; st.sweepBar = i;
+        st.sweptLevel = st.lastPh; st.sweptBar = st.lastPhBar;
+        st.mssLevel = st.lastPl; st.mssBar = st.lastPlBar;
+        st.legHigh = r.high; st.legLow = r.low; st.legEndBar = i;
+      }
+
+      // Estremi della gamba finché si cerca l'MSS.
+      if (st.state === 1) {
+        if (r.low <= st.legLow) { st.legLow = r.low; st.legEndBar = i; }
+        if (r.high > st.sweepHigh) st.state = 0;
+      }
+      if (st.state === 2) {
+        if (r.high >= st.legHigh) { st.legHigh = r.high; st.legEndBar = i; }
+        if (r.low < st.sweepLow) st.state = 0;
+      }
+
+      // 2) MSS: chiusura oltre il livello, con candele di momentum consecutive.
+      if (st.state === 1 && !isNaN(st.mssLevel) && r.close < st.mssLevel) {
+        if (st.consBear[i] >= mom) {
+          st.state = -1; st.mssConfirmBar = i;
+          if (p.showVisuals) st.draws.push(mssSnapshot(st, -1, i));
+        } else st.state = 0;
+      }
+      if (st.state === 2 && !isNaN(st.mssLevel) && r.close > st.mssLevel) {
+        if (st.consBull[i] >= mom) {
+          st.state = -2; st.mssConfirmBar = i;
+          if (p.showVisuals) st.draws.push(mssSnapshot(st, 1, i));
+        } else st.state = 0;
+      }
+
+      // 3) Ingresso al 50% della gamba.
+      if (st.state === -1 && i > st.mssConfirmBar) {
+        const fib = st.sweepHigh - (st.sweepHigh - st.legLow) * 0.5;
+        if (r.high >= fib) {
+          st.state = 0;
+          st.entries.push({bar: i, dir: -1, price: r.high});
+          openTrade(st, -1, i, fib, atr, p);
+        }
+      }
+      if (st.state === -2 && i > st.mssConfirmBar) {
+        const fib = st.sweepLow + (st.legHigh - st.sweepLow) * 0.5;
+        if (r.low <= fib) {
+          st.state = 0;
+          st.entries.push({bar: i, dir: 1, price: r.low});
+          openTrade(st, 1, i, fib, atr, p);
+        }
+      }
+      // Annulla se l'estremo viene superato prima dell'ingresso.
+      if (st.state === -1 && r.high > st.sweepHigh) st.state = 0;
+      if (st.state === -2 && r.low < st.sweepLow) st.state = 0;
+
+      // 4) Gestione del trade: stop e target; i box si allungano di 5 barre finché il trade è aperto.
+      const T = st.trade;
+      if (T && !T.closed) {
+        const hitSl = T.dir === 1 ? r.low <= T.sl : r.high >= T.sl;
+        const hitTp = T.dir === 1 ? r.high >= T.tp : r.low <= T.tp;
+        if (hitSl || hitTp) { T.closed = true; T.right = i; }
+        else T.right = i + 5;
+      }
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const RED = '#f23645', GREEN = '#089981', GREY = '#808080';
+    const seg = (x1, y1, x2, y2, color, alpha, width, dashed) => {
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width;
+      if (dashed === 'dot') ctx.setLineDash([2, 3]); else if (dashed) ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(xAbs(x1), y(y1)); ctx.lineTo(xAbs(x2), y(y2)); ctx.stroke();
+      ctx.restore();
+    };
+    const box = (x1, x2, top, bottom, color, fillAlpha, borderAlpha) => {
+      const a = Math.max(Math.min(x1, x2), dataStart), b = Math.min(Math.max(x1, x2), dataEnd);
+      if (b < a) return;
+      const xa = xAbs(a), xb = Math.max(xAbs(b), xa + 2);
+      const yt = y(top), yb = y(bottom);
+      ctx.save();
+      ctx.globalAlpha = fillAlpha; ctx.fillStyle = color;
+      ctx.fillRect(xa, Math.min(yt, yb), xb - xa, Math.abs(yb - yt));
+      ctx.globalAlpha = borderAlpha; ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.strokeRect(xa, Math.min(yt, yb), xb - xa, Math.abs(yb - yt));
+      ctx.restore();
+    };
+    const txt = (s, xx, yy, color, align, size) => {
+      ctx.save();
+      ctx.fillStyle = color; ctx.font = scaledFont(size || '9px system-ui');
+      ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s, xx, yy); ctx.restore();
+    };
+
+    // EMA macro, colorata per il trend di ogni barra.
+    if (p.useMacro) {
+      for (let j = Math.max(0, dataStart - 1); j < Math.min(last, dataEnd + 1); j++) {
+        const a = st.ema[j], b = st.ema[j + 1];
+        if (isNaN(a) || isNaN(b)) continue;
+        const up = rows[j + 1].close > b;
+        seg(j, a, j + 1, b, up ? GREEN : RED, 0.5, 2, false);
+      }
+    }
+
+    // Disegni dello sweep e dell'MSS.
+    if (p.showVisuals) {
+      for (const d of st.draws) {
+        const c = d.dir === -1 ? RED : GREEN;
+        // linea del livello swept
+        seg(d.sweptBar, d.sweptLevel, d.sweepBar, d.sweptLevel, c, 0.5, 2, 'dot');
+        // box dello sweep
+        box(d.sweepBar - 1, d.sweepBar + 1, d.sweepPrice, d.sweptLevel, c, 0.1, 0.5);
+        // estremo dello sweep proiettato a destra
+        seg(d.sweepBar, d.sweepPrice, d.nowBar, d.sweepPrice, c, 0.7, 1, true);
+        txt('Sweep', xAbs(d.sweepBar), y(d.sweepPrice) + (d.dir === -1 ? -10 : 10), c, 'center', 'bold 9px system-ui');
+        // livello MSS
+        seg(d.mssBar, d.mssLevel, d.nowBar, d.mssLevel, c, 1, 2, false);
+        txt('MSS', xAbs(Math.round((d.mssBar + d.nowBar) / 2)), y(d.mssLevel) + (d.dir === -1 ? -8 : 8), c, 'center', 'bold 9px system-ui');
+        // gamba dello sweep e 50%
+        seg(d.sweepBar, d.sweepPrice, d.legEndBar, d.legOther, GREY, 0.5, 1, false);
+        seg(d.sweepBar, d.fib, d.nowBar + 10, d.fib, GREY, 1, 1, 'dot');
+        txt('50% Retracement', xAbs(d.nowBar + 10) + 4, y(d.fib), GREY, 'left', '9px system-ui');
+      }
+    }
+
+    // Ingressi.
+    for (const e of st.entries) {
+      if (e.bar < dataStart || e.bar > dataEnd) continue;
+      const c = e.dir === -1 ? RED : GREEN;
+      txt(e.dir === -1 ? 'Short' : 'Long', xAbs(e.bar), y(e.price) + (e.dir === -1 ? -10 : 10), c, 'center', 'bold 9px system-ui');
+    }
+
+    // Trade: box di stop (rosso) e target (verde).
+    for (const T of st.trades) {
+      const right = T.closed ? T.right : Math.max(T.right, last);
+      const slTop = Math.max(T.entry, T.sl), slBot = Math.min(T.entry, T.sl);
+      const tpTop = Math.max(T.entry, T.tp), tpBot = Math.min(T.entry, T.tp);
+      box(T.bar, right, slTop, slBot, RED, 0.15, 0.5);
+      box(T.bar, right, tpTop, tpBot, GREEN, 0.15, 0.5);
+    }
+  }
+};
+
+// Apertura trade: stop e target a multipli dell'ATR dal livello di ingresso (50%).
+function openTrade(st, dir, i, fib, atr, p) {
+  const sl = dir === -1 ? fib + atr * p.slMult : fib - atr * p.slMult;
+  const tp = dir === -1 ? fib - atr * p.tpMult : fib + atr * p.tpMult;
+  const t = {dir, bar: i, entry: fib, sl, tp, right: i + 5, closed: false};
+  if (st.trade && !st.trade.closed) st.trade.closed = true;   // il vecchio trade smette di allungarsi
+  st.trade = t; st.trades.push(t);
+}
+
+// Foto dello sweep al momento dell'MSS, come le linee/box/etichette disegnate in Pine.
+function mssSnapshot(st, dir, i) {
+  const short = dir === -1;
+  const sweepPrice = short ? st.sweepHigh : st.sweepLow;
+  const legOther = short ? st.legLow : st.legHigh;
+  const fib = short ? st.sweepHigh - (st.sweepHigh - st.legLow) * 0.5 : st.sweepLow + (st.legHigh - st.sweepLow) * 0.5;
+  return {dir, sweepBar: st.sweepBar, sweepPrice, sweptBar: st.sweptBar, sweptLevel: st.sweptLevel,
+          mssBar: st.mssBar, mssLevel: st.mssLevel, nowBar: i, legEndBar: st.legEndBar, legOther, fib};
+}
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const MSS_SETTINGS = [
+  {type: 'num', key: 'leftBars', label: 'Pivot sinistra', min: 1, max: 50},
+  {type: 'num', key: 'rightBars', label: 'Pivot destra', min: 1, max: 50},
+  {type: 'num', key: 'momentumBars', label: 'Candele momentum per MSS', min: 1, max: 20},
+  {type: 'check', key: 'useMacro', label: 'Filtro macro trend'},
+  {type: 'num', key: 'emaPeriod', label: 'Periodo EMA macro', min: 1, max: 1000},
+  {type: 'num', key: 'atrPeriod', label: 'Periodo ATR', min: 1, max: 500},
+  {type: 'num', key: 'slMult', label: 'Moltiplicatore SL (ATR)', min: 0.1, max: 20, step: 0.1},
+  {type: 'num', key: 'tpMult', label: 'Moltiplicatore TP (ATR)', min: 0.1, max: 20, step: 0.1},
+  {type: 'check', key: 'showVisuals', label: 'Mostra disegni ed etichette'}
+];
+function mssBuildSettings(ind, paramsRow, mk) {
+  MSS_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+  });
+}
+
+// NOTE
+//  - Gli alert non ci sono nello script: nessuno da togliere.
+//  - Lo stato 50%: il segnale viene aperto alla barra che tocca il 50% della gamba, come in Pine.
+//  - Il target e lo stop sono i multipli ATR dello script; i box si fermano alla chiusura del trade.
+//  - Pivot: stessa regola degli altri indicatori (da confrontare con TradingView).
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// No-Wick Retest Levels — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const NOWICK_EMA_SEED_NOTE = 'EMA: seme = media semplice delle prime N barre.';
+
+// EMA come ta.ema: seme = SMA delle prime `len` barre, poi ricorsione con alpha = 2/(len+1).
+function nowickEma(values, len) {
+  const out = new Array(values.length).fill(NaN);
+  const a = 2 / (len + 1);
+  let prev = NaN, sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    if (i < len) {
+      sum += values[i];
+      if (i === len - 1) { prev = sum / len; out[i] = prev; }
+    } else {
+      prev = prev + a * (values[i] - prev);
+      out[i] = prev;
+    }
+  }
+  return out;
+}
+
+const NO_WICK_RETEST_DEF = {
+  label: 'No-Wick Retest Levels',
+  buildSettings: (ind, paramsRow, mk) => noWickBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    wickToleranceTicks: 0, tickSize: 0.00001, maxUntappedLevels: 3,
+    showArrows: true, showSetupMarkers: false,
+    fastEma: 20, slowEma: 50, requirePricePosition: true,
+    atrLength: 14, tpAtr: 2.0, slAtr: 1.0, tradeHistory: 30,
+    longLevelColor: '#089981', shortLevelColor: '#f23645', entryColor: '#f5d547',
+    levelArrowColor: '#f5d547', targetColor: '#089981', stopColor: '#f23645'
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script:
+  // 1) gestione trade attivo  2) scelta del livello  3) consumo dei livelli toccati
+  // 4) apertura trade  5) nuovo livello senza stoppino.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.atr = []; st.tr = [];
+      st.levels = [];          // livelli non ancora toccati: {price, dir, origin}
+      st.entryLines = [];      // livelli toccati che hanno generato un trade: {price, from, to, dir}
+      st.trades = [];          // {dir, entryBar, entry, target, stop, to, closed, exit, exitBar}
+      st.events = [];          // ingressi: {bar, dir}
+      st.markers = [];         // marcatori configurazione: {bar, dir}
+      st.tradeActive = false; st.trade = null;
+      // Trend a 1 minuto: EMA sulle barre a 1 minuto, mappate alle barre del grafico.
+      const m = ind.oneMinRows || rows;
+      st.m = m.map(b => ({t: new Date(b.date).getTime(), c: b.close}));
+      const closes = st.m.map(b => b.c);
+      st.fast = nowickEma(closes, Math.max(1, p.fastEma | 0));
+      st.slow = nowickEma(closes, Math.max(2, p.slowEma | 0));
+      st.ptr = -1;
+    }
+    const atrLen = Math.max(1, p.atrLength | 0);
+    const maxLevels = Math.max(1, p.maxUntappedLevels | 0);
+    const histN = Math.max(1, p.tradeHistory | 0);
+    const tol = p.tickSize * p.wickToleranceTicks;
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+
+      // ATR (Wilder, come ta.atr).
+      const trI = i === 0 ? r.high - r.low
+        : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+      st.tr[i] = trI;
+      if (i < atrLen - 1) st.atr[i] = NaN;
+      else if (i === atrLen - 1) { let s = 0; for (let k = 0; k < atrLen; k++) s += st.tr[k]; st.atr[i] = s / atrLen; }
+      else st.atr[i] = st.atr[i - 1] + (trI - st.atr[i - 1]) / atrLen;
+      const atr = st.atr[i];
+
+      // Trend a 1 minuto (ultima barra a 1 minuto con orario <= apertura della barra del grafico).
+      const tChart = new Date(r.date).getTime();
+      while (st.ptr + 1 < st.m.length && st.m[st.ptr + 1].t <= tChart) st.ptr++;
+      let bull = false, bear = false;
+      if (st.ptr >= 0) {
+        const f = st.fast[st.ptr], s = st.slow[st.ptr], c = st.m[st.ptr].c;
+        if (!isNaN(f) && !isNaN(s)) {
+          bull = f > s && (!p.requirePricePosition || c > f);
+          bear = f < s && (!p.requirePricePosition || c < f);
+        }
+      }
+
+      // 1) Gestione del trade attivo (lo stop ha priorità se entrambi nella stessa barra).
+      const wasActive = st.tradeActive;
+      if (st.tradeActive) {
+        const t = st.trade;
+        t.to = Math.max(i, t.entryBar + 1);
+        if (i > t.entryBar) {
+          const stopHit = t.dir === 1 ? r.low <= t.stop : r.high >= t.stop;
+          const tgtHit = t.dir === 1 ? r.high >= t.target : r.low <= t.target;
+          if (stopHit) { st.tradeActive = false; t.closed = true; t.exit = 'SL'; t.exitBar = i; }
+          else if (tgtHit) { st.tradeActive = false; t.closed = true; t.exit = 'TP'; t.exitBar = i; }
+        }
+      }
+
+      // 2) Miglior livello toccato: il più vicino all'apertura, tra i più recenti in caso di parità.
+      let selIdx = -1, selDist = NaN, selPrice = NaN, selDir = 0;
+      for (let li = st.levels.length - 1; li >= 0; li--) {
+        const L = st.levels[li];
+        const tapped = i > L.origin && r.low <= L.price && r.high >= L.price;
+        const trendOk = L.dir === 1 ? bull : bear;
+        if (tapped && !wasActive && !st.tradeActive && trendOk && !isNaN(atr)) {
+          const d = Math.abs(r.open - L.price);
+          if (isNaN(selDist) || d < selDist) { selIdx = li; selDist = d; selPrice = L.price; selDir = L.dir; }
+        }
+      }
+
+      // 3) Consumo di tutti i livelli toccati; quello scelto diventa la linea di ingresso.
+      let selEntry = null;
+      for (let li = st.levels.length - 1; li >= 0; li--) {
+        const L = st.levels[li];
+        const tapped = i > L.origin && r.low <= L.price && r.high >= L.price;
+        if (tapped) {
+          if (li === selIdx) {
+            selEntry = {price: L.price, from: L.origin, to: i, dir: L.dir};
+            st.entryLines.push(selEntry);
+          }
+          st.levels.splice(li, 1);
+        }
+      }
+
+      // 4) Apertura del trade con target e stop calcolati sull'ATR.
+      if (selEntry && !isNaN(atr)) {
+        const risk = atr * p.slAtr, reward = atr * p.tpAtr;
+        const target = selDir === 1 ? selPrice + reward : selPrice - reward;
+        const stop = selDir === 1 ? selPrice - risk : selPrice + risk;
+        const t = {dir: selDir, entryBar: i, entry: selPrice, target, stop, to: i + 1, closed: false, exit: null, exitBar: null};
+        st.trades.push(t); st.trade = t; st.tradeActive = true;
+        st.events.push({bar: i, dir: selDir});
+        while (st.trades.length > histN) st.trades.shift();
+        while (st.entryLines.length > histN) st.entryLines.shift();
+      }
+
+      // 5) Nuovo livello senza stoppino (candela confermata).
+      const bodyTop = Math.max(r.open, r.close), bodyBottom = Math.min(r.open, r.close);
+      const noUpper = r.close < r.open && r.high - bodyTop <= tol;
+      const noLower = r.close > r.open && bodyBottom - r.low <= tol;
+      if (p.showSetupMarkers && (noUpper || noLower)) st.markers.push({bar: i, dir: noLower ? 1 : -1});
+      if (noUpper || noLower) {
+        const dir = noLower ? 1 : -1;
+        st.levels.push({price: noLower ? r.low : r.high, dir, origin: i});
+        while (st.levels.length > maxLevels) st.levels.shift();
+      }
+
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const barPx = Math.abs(xAbs(dataStart + 1) - xAbs(dataStart)) || 1;
+
+    // Linea orizzontale da un indice a un altro, limitata alla vista.
+    const hline = (from, to, price, color, width, dashed) => {
+      const a = Math.max(from, dataStart), b = Math.min(to, dataEnd);
+      if (b < a) return;
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      if (dashed) ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(xAbs(a), y(price)); ctx.lineTo(xAbs(b), y(price)); ctx.stroke();
+      ctx.restore();
+    };
+    // Rettangolo tra due indici e due prezzi.
+    const rect = (a, b, top, bottom, color, alpha) => {
+      const s = Math.max(a, dataStart), e = Math.min(b, dataEnd);
+      if (e < s) return;
+      const x1 = xAbs(s), x2 = Math.max(xAbs(e), x1 + 2);
+      const yt = y(top), yb = y(bottom);
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.min(yt, yb), x2 - x1, Math.abs(yb - yt));
+      ctx.globalAlpha = 0.8; ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.strokeRect(x1, Math.min(yt, yb), x2 - x1, Math.abs(yb - yt));
+      ctx.restore();
+    };
+    // Triangolo del livello: punta in alto per i long (sopra il prezzo), in basso per gli short.
+    const tri = (x, yy, up, color) => {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      if (up) { ctx.moveTo(x, yy - 8); ctx.lineTo(x - 5, yy); ctx.lineTo(x + 5, yy); }
+      else { ctx.moveTo(x, yy + 8); ctx.lineTo(x - 5, yy); ctx.lineTo(x + 5, yy); }
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    };
+
+    // Livelli non ancora toccati (estesi a destra) con il triangolo all'origine.
+    for (const L of st.levels) {
+      if (L.origin > dataEnd) continue;
+      hline(L.origin, last, L.price, L.dir === 1 ? p.longLevelColor : p.shortLevelColor, 1, false);
+      if (p.showArrows && L.origin >= dataStart && L.origin <= dataEnd) {
+        tri(xAbs(L.origin), y(L.price), L.dir === 1, p.levelArrowColor);
+      }
+    }
+
+    // Livelli toccati che hanno generato un trade: linea di ingresso fino al tocco.
+    for (const e of st.entryLines) hline(e.from, e.to, e.price, p.entryColor, 2, false);
+
+    // Trade: box target e stop dall'ingresso fino alla chiusura (o fino all'ultima barra).
+    for (const t of st.trades) {
+      const to = t.closed ? t.exitBar : (t.to == null ? last : t.to);
+      rect(t.entryBar, to, Math.max(t.entry, t.target), Math.min(t.entry, t.target), p.targetColor, 0.28);
+      rect(t.entryBar, to, Math.max(t.entry, t.stop), Math.min(t.entry, t.stop), p.stopColor, 0.28);
+    }
+
+    // Marcatori di configurazione (solo se attivi nelle impostazioni).
+    if (p.showSetupMarkers) {
+      for (const m of st.markers) {
+        if (m.bar < dataStart || m.bar > dataEnd) continue;
+        const x = xAbs(m.bar), r = rows[m.bar];
+        if (m.dir === 1) tri(x, y(r.low) + 10, false, p.longLevelColor);
+        else tri(x, y(r.high) - 10, true, p.shortLevelColor);
+      }
+    }
+
+    // Ingressi: "L" sotto la candela, "S" sopra.
+    ctx.save();
+    ctx.font = scaledFont('bold 10px system-ui');
+    ctx.textAlign = 'center';
+    for (const e of st.events) {
+      if (e.bar < dataStart || e.bar > dataEnd) continue;
+      const x = xAbs(e.bar), r = rows[e.bar];
+      if (e.dir === 1) { ctx.fillStyle = '#089981'; ctx.textBaseline = 'top'; ctx.fillText('L', x, y(r.low) + 10); }
+      else { ctx.fillStyle = '#f23645'; ctx.textBaseline = 'bottom'; ctx.fillText('S', x, y(r.high) - 10); }
+    }
+    ctx.restore();
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const NO_WICK_SETTINGS = [
+  {type: 'num', key: 'wickToleranceTicks', label: 'Tolleranza stoppino (tick)', min: 0, max: 50},
+  {type: 'num', key: 'tickSize', label: 'Dimensione tick', min: 0.000001, max: 1, step: 0.00001},
+  {type: 'num', key: 'maxUntappedLevels', label: 'Livelli recenti', min: 1, max: 50},
+  {type: 'check', key: 'showArrows', label: 'Triangoli livello'},
+  {type: 'check', key: 'showSetupMarkers', label: 'Marcatori configurazione'},
+  {type: 'num', key: 'fastEma', label: 'EMA veloce (1m)', min: 1, max: 500},
+  {type: 'num', key: 'slowEma', label: 'EMA lenta (1m)', min: 2, max: 500},
+  {type: 'check', key: 'requirePricePosition', label: 'Chiusura lato trend'},
+  {type: 'num', key: 'atrLength', label: 'Lunghezza ATR', min: 1, max: 500},
+  {type: 'num', key: 'tpAtr', label: 'Take profit (ATR)', min: 0.1, max: 20, step: 0.1},
+  {type: 'num', key: 'slAtr', label: 'Stop loss (ATR)', min: 0.1, max: 20, step: 0.1},
+  {type: 'num', key: 'tradeHistory', label: 'Trade conservati', min: 1, max: 100},
+  {type: 'color', key: 'longLevelColor', label: 'Livello long'},
+  {type: 'color', key: 'shortLevelColor', label: 'Livello short'},
+  {type: 'color', key: 'entryColor', label: 'Ingresso'},
+  {type: 'color', key: 'levelArrowColor', label: 'Triangoli'},
+  {type: 'color', key: 'targetColor', label: 'TP'},
+  {type: 'color', key: 'stopColor', label: 'SL'}
+];
+function noWickBuildSettings(ind, paramsRow, mk) {
+  NO_WICK_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Lo script non ha un parametro di tick: `syminfo.mintick` è qui il campo "Dimensione tick" (default 0.00001).
+//  - I segnali di uscita (TP/SL) e gli alert di Pine non sono generati: l'app non ha un sistema di alert.
+//  - Le etichette "L"/"S" sono disegnate come in Pine; i triangoli di configurazione solo con il flag acceso.
+//  - Il trend a 1 minuto richiede le barre a 1 minuto (vedi punto 4 dell'intestazione).
+//  - Limite di 500 oggetti di Pine non replicato.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// 10am Open Key Levels — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
+//
+// Nel formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const OPEN10_TZ = 'America/New_York';
+const OPEN10_FMT = new Intl.DateTimeFormat('en-US', {
+  timeZone: OPEN10_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+});
+const OPEN10_MON_DAY = new Intl.DateTimeFormat('en-US', {timeZone: 'UTC', month: 'short', day: 'numeric'});
+// Tick di sicurezza per il corpo minimo (syminfo.mintick nello script).
+const OPEN10_TICK = 0.00001;
+
+// Specifiche orarie identiche agli input Pine: "HHMM-HHMM:giorni" (1=dom ... 7=sab).
+const OPEN10_SPEC_STRINGS = {
+  open: '1000-1001',
+  trading: '1800-1600:12345',
+  overnight: '1600-0930:12345',
+  cash: '0930-1600:23456'
+};
+function open10ParseSpec(str) {
+  const m = /^(\d{2})(\d{2})-(\d{2})(\d{2})(?::(\d+))?$/.exec(str);
+  return {start: (+m[1]) * 60 + (+m[2]), end: (+m[3]) * 60 + (+m[4]), days: m[5] || '1234567', key: str};
+}
+const OPEN10_SPECS = {
+  open: open10ParseSpec(OPEN10_SPEC_STRINGS.open),
+  trading: open10ParseSpec(OPEN10_SPEC_STRINGS.trading),
+  overnight: open10ParseSpec(OPEN10_SPEC_STRINGS.overnight),
+  cash: open10ParseSpec(OPEN10_SPEC_STRINGS.cash)
+};
+
+// Data e ora ET di un istante (ms epoch).
+function open10Et(ms) {
+  const parts = {};
+  OPEN10_FMT.formatToParts(new Date(ms)).forEach(p => { parts[p.type] = p.value; });
+  return {ymd: parts.year + '-' + parts.month + '-' + parts.day, mins: (+parts.hour) % 24 * 60 + (+parts.minute)};
+}
+function open10AddDays(ymd, n) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+// Giorno della settimana Pine: 1 = domenica ... 7 = sabato.
+function open10Dow(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 1;
+}
+function open10MonDay(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return OPEN10_MON_DAY.format(new Date(Date.UTC(y, m - 1, d, 12)));
+}
+// Finestra di una specifica per una barra: null se fuori, altrimenti giorno di inizio e se è ammesso.
+// Come in Pine, i giorni della specifica riguardano il giorno in cui la finestra inizia.
+function open10Window(et, spec) {
+  const crosses = spec.end <= spec.start;
+  const inWin = crosses ? (et.mins >= spec.start || et.mins < spec.end) : (et.mins >= spec.start && et.mins < spec.end);
+  if (!inWin) return null;
+  const startDay = (crosses && et.mins < spec.end) ? open10AddDays(et.ymd, -1) : et.ymd;
+  return {
+    startDay,
+    startKey: startDay + '@' + spec.start,
+    allowed: spec.days.indexOf(String(open10Dow(startDay))) >= 0
+  };
+}
+
+// Un candidato: candela sorgente (timeframe dei blocchi di rifiuto) costruita dalle barre del grafico.
+function open10Process(st, p, cand, i) {
+  const hist = st.hist;
+  hist.push(cand);
+  const size = hist.length;
+  const s = p.pivotStrength | 0;
+
+  // Swing confermato: la candela `s` barre prima dell'ultima è il massimo/minimo di tutte le s+s vicine.
+  const cIdx = size - 1 - s;
+  if (cIdx >= s) {
+    const cH = hist[cIdx].h, cL = hist[cIdx].l;
+    let isH = true, isL = true;
+    for (let j = cIdx - s; j <= cIdx + s; j++) {
+      if (j === cIdx) continue;
+      if (hist[j].h >= cH) isH = false;
+      if (hist[j].l <= cL) isL = false;
+    }
+    if (isH) st.swH = cH;
+    if (isL) st.swL = cL;
+  }
+
+  // Invalidazione dei blocchi attivi (la chiusura passa il livello di invalidazione).
+  if (st.bullBox && st.bullBox.active && cand.c < st.bullBox.inv) { st.bullBox.to = cand.endIdx; st.bullBox.active = false; }
+  if (st.bearBox && st.bearBox.active && cand.c > st.bearBox.inv) { st.bearBox.to = cand.endIdx; st.bearBox.active = false; }
+
+  // Rifiuto: lo swing viene superato e riconquistato con uno stoppino sufficiente.
+  const prev = size >= 2 ? hist[size - 2] : null;
+  const body = Math.max(Math.abs(cand.c - cand.o), OPEN10_TICK);
+  const upperWick = cand.h - Math.max(cand.o, cand.c);
+  const lowerWick = Math.min(cand.o, cand.c) - cand.l;
+  const ratio = +p.wickRatio;
+  const bearish = st.swH != null && prev && cand.h > st.swH && prev.h <= st.swH && cand.c < st.swH && upperWick >= body * ratio;
+  const bullish = st.swL != null && prev && cand.l < st.swL && prev.l >= st.swL && cand.c > st.swL && lowerWick >= body * ratio;
+
+  if (bullish) {
+    if (st.bullBox) st.boxes = st.boxes.filter(b => b !== st.bullBox);   // box.delete del precedente
+    st.bullBox = {side: 'bull', top: Math.min(cand.o, cand.c), bottom: cand.l, from: cand.startIdx, to: null, inv: cand.l, active: true};
+    st.boxes.push(st.bullBox);
+  }
+  if (bearish) {
+    if (st.bearBox) st.boxes = st.boxes.filter(b => b !== st.bearBox);
+    st.bearBox = {side: 'bear', top: cand.h, bottom: Math.max(cand.o, cand.c), from: cand.startIdx, to: null, inv: cand.h, active: true};
+    st.boxes.push(st.bearBox);
+  }
+}
+
+const OPEN10_KEY_LEVELS_DEF = {
+  label: '10am Open Key Levels',
+  buildSettings: (ind, paramsRow, mk) => open10BuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    showOpen: true, openColor: '#5b9cf6', openWidth: 2,
+    showPrev: true, keepPrev: 20, prevHighColor: '#f23645', prevLowColor: '#089981',
+    showOvernight: true, keepOvernight: 20, onHighColor: '#f59e0b', onLowColor: '#8b5cf6',
+    levelWidth: 1,
+    showRejection: true, rejectionTf: '1', wickRatio: 1.5, pivotStrength: 3, rejColor: '#808080'
+  }),
+
+  // Calcolo incrementale. Con rewind (replay) o parametri cambiati si riparte da zero.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.inTS = []; st.inOpen = [];
+      st.csH = null; st.csL = null;                 // sessione futures corrente
+      st.pairsPrev = [];                             // coppie PSH/PSL: {hi, lo, from, to, date}
+      st.openSegs = [];                              // open delle 10:00: {price, from, to, labelIdx}
+      st.openCur = null;
+      st.ovKey = null; st.ovActive = false; st.ovH = NaN; st.ovL = NaN; st.curOn = null;
+      st.pairsOn = [];                               // coppie ONH/ONL: {hi, lo, from, to, date}
+      st.hist = []; st.bld = null; st.swH = null; st.swL = null;
+      st.boxes = []; st.bullBox = null; st.bearBox = null;
+      // Durata barra del grafico (minuti) = mediana delle differenze tra date consecutive.
+      const diffs = [];
+      for (let k = 1; k < Math.min(rows.length, 300); k++) {
+        const d = new Date(rows[k].date) - new Date(rows[k - 1].date);
+        if (d > 0) diffs.push(d / 60000);
+      }
+      diffs.sort((a, b) => a - b);
+      st.barMin = diffs.length ? diffs[diffs.length >> 1] : 1;
+    }
+
+    const tfMin = +p.rejectionTf || 1;
+    // Come nello script: blocchi solo se il timeframe sorgente è >= a quello del grafico.
+    const srcOK = tfMin >= st.barMin;
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      const ms = new Date(r.date).getTime();
+      const et = open10Et(ms);
+      const prevDate = i > 0 ? open10Et(new Date(rows[i - 1].date).getTime()).ymd : null;
+
+      // --- Sessione futures (inTradingSession, newSession) ---
+      const wT = open10Window(et, OPEN10_SPECS.trading);
+      const inTS = !!(wT && wT.allowed);
+      st.inTS[i] = inTS;
+      const newSession = inTS && !(i > 0 && st.inTS[i - 1]);
+      if (newSession) {
+        const last = st.pairsPrev[st.pairsPrev.length - 1];
+        if (last && last.to == null) last.to = i - 1;
+        if (st.csH != null) {
+          st.pairsPrev.push({hi: st.csH, lo: st.csL, from: i, to: null, date: open10MonDay(prevDate)});
+          while (st.pairsPrev.length > (p.keepPrev | 0)) st.pairsPrev.shift();
+        }
+        st.csH = r.high; st.csL = r.low;
+      } else if (inTS) {
+        st.csH = st.csH == null ? r.high : Math.max(st.csH, r.high);
+        st.csL = st.csL == null ? r.low : Math.min(st.csL, r.low);
+      }
+
+      // --- Open delle 10:00 ET ---
+      const wO = open10Window(et, OPEN10_SPECS.open);
+      const inOpen = !!(wO && wO.allowed);
+      st.inOpen[i] = inOpen;
+      const firstOpen = inOpen && !(i > 0 && st.inOpen[i - 1]);
+      if (newSession && st.openCur) { st.openCur.to = i - 1; st.openCur = null; }   // openLevel := na
+      if (firstOpen) {
+        if (st.openCur) st.openCur.to = i - 1;
+        st.openCur = {price: r.open, from: i, to: null, labelIdx: i};
+        st.openSegs.push(st.openCur);
+      }
+      const wC = open10Window(et, OPEN10_SPECS.cash);
+      if (st.openCur && wC && wC.allowed) st.openCur.labelIdx = i;   // l'etichetta segue le barre di cassa
+
+      // --- Range overnight 16:00-09:30 ---
+      const wN = open10Window(et, OPEN10_SPECS.overnight);
+      const inOv = !!(wN && wN.allowed);
+      const newOv = inOv && st.ovKey !== wN.startKey;
+      const invalidOv = !!wN && et.mins === OPEN10_SPECS.overnight.start && !wN.allowed;
+      if (newOv) {
+        const last = st.pairsOn[st.pairsOn.length - 1];
+        if (last && last.to == null) last.to = i - 1;
+        st.ovKey = wN.startKey;
+        st.ovActive = true;
+        st.ovH = r.high; st.ovL = r.low;
+        st.curOn = {hi: r.high, lo: r.low, from: i, to: null, date: open10MonDay(open10AddDays(wN.startDay, 1))};
+        st.pairsOn.push(st.curOn);
+        while (st.pairsOn.length > (p.keepOvernight | 0)) st.pairsOn.shift();
+      } else if (inOv) {
+        st.ovH = Math.max(st.ovH, r.high);
+        st.ovL = Math.min(st.ovL, r.low);
+      }
+      if (st.ovActive && st.curOn) { st.curOn.hi = st.ovH; st.curOn.lo = st.ovL; }   // linea unica che segue il valore
+      if (invalidOv && !newOv && st.ovActive) {
+        if (st.curOn) st.curOn.to = i;
+        st.ovActive = false;
+      }
+
+      // --- Blocchi di rifiuto: candele sorgente costruite dalle barre del grafico ---
+      if (srcOK) {
+        const key = Math.floor(ms / (tfMin * 60000));
+        if (!st.bld) {
+          st.bld = {key, startIdx: i, endIdx: i, o: r.open, h: r.high, l: r.low, c: r.close};
+        } else if (key !== st.bld.key) {
+          const done = st.bld;
+          open10Process(st, p, done, i);
+          st.bld = {key, startIdx: i, endIdx: i, o: r.open, h: r.high, l: r.low, c: r.close};
+        } else {
+          const b = st.bld;
+          b.h = Math.max(b.h, r.high); b.l = Math.min(b.l, r.low); b.c = r.close; b.endIdx = i;
+        }
+      }
+
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const lw = Math.max(1, p.levelWidth | 0);
+
+    // Segmento orizzontale tra due indici (estremi compresi), limitato alla vista.
+    const hline = (from, to, price, color, width, label, labelRight) => {
+      const a = Math.max(from, dataStart), b = Math.min(to, dataEnd);
+      if (b < a) return;
+      const yy = y(price);
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      ctx.beginPath(); ctx.moveTo(xAbs(a), yy); ctx.lineTo(xAbs(b), yy); ctx.stroke();
+      if (label) {
+        ctx.fillStyle = color; ctx.font = scaledFont('10px system-ui');
+        ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+        ctx.fillText(label, xAbs(Math.min(b, dataEnd)) + 4, yy - 1);
+      }
+      ctx.restore();
+    };
+
+    // 10:00 ET open
+    if (p.showOpen) {
+      for (const o of st.openSegs) {
+        hline(o.from, o.to == null ? last : o.to, o.price, p.openColor, p.openWidth | 0 || 2, null);
+        if (o.labelIdx >= dataStart && o.labelIdx <= dataEnd) {
+          ctx.save();
+          ctx.fillStyle = p.openColor; ctx.font = scaledFont('10px system-ui');
+          ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+          ctx.fillText('10:00 ET Open', xAbs(o.labelIdx) - 4, y(o.price) - 1);
+          ctx.restore();
+        }
+      }
+    }
+
+    // Massimi / minimi della sessione precedente
+    if (p.showPrev) {
+      for (const pr of st.pairsPrev) {
+        const to = pr.to == null ? last : pr.to;
+        hline(pr.from, to, pr.hi, p.prevHighColor, lw, 'PSH ' + pr.date);
+        hline(pr.from, to, pr.lo, p.prevLowColor, lw, 'PSL ' + pr.date);
+      }
+    }
+
+    // Range overnight
+    if (p.showOvernight) {
+      for (const pr of st.pairsOn) {
+        const to = pr.to == null ? last : pr.to;
+        hline(pr.from, to, pr.hi, p.onHighColor, lw, 'ONH ' + pr.date);
+        hline(pr.from, to, pr.lo, p.onLowColor, lw, 'ONL ' + pr.date);
+      }
+    }
+
+    // Blocchi di rifiuto
+    if (p.showRejection) {
+      ctx.save();
+      for (const b of st.boxes) {
+        const a = Math.max(b.from, dataStart), e = Math.min(b.to == null ? last : b.to, dataEnd);
+        if (e < a) continue;
+        const x1 = xAbs(a), x2 = Math.max(xAbs(e), x1 + 2);
+        const yt = y(b.top), yb = y(b.bottom);
+        const top = Math.min(yt, yb), hgt = Math.abs(yb - yt);
+        ctx.globalAlpha = 0.16; ctx.fillStyle = p.rejColor;
+        ctx.fillRect(x1, top, x2 - x1, hgt);
+        ctx.globalAlpha = 0.6; ctx.strokeStyle = p.rejColor; ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.strokeRect(x1, top, x2 - x1, hgt);
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.9; ctx.fillStyle = p.rejColor; ctx.font = scaledFont('9px system-ui');
+        ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+        ctx.fillText('RB - ' + p.rejectionTf + 'M', x2 - 3, top - 1);
+      }
+      ctx.restore();
+    }
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const OPEN10_SETTINGS = [
+  {type: 'check', key: 'showOpen', label: '10:00 open'},
+  {type: 'color', key: 'openColor', label: ''},
+  {type: 'num', key: 'openWidth', label: 'Spessore', min: 1, max: 4},
+  {type: 'check', key: 'showPrev', label: 'Massimi/minimi precedenti'},
+  {type: 'num', key: 'keepPrev', label: 'Mantieni sessioni', min: 1, max: 100},
+  {type: 'color', key: 'prevHighColor', label: 'PSH'},
+  {type: 'color', key: 'prevLowColor', label: 'PSL'},
+  {type: 'check', key: 'showOvernight', label: 'Overnight H/L'},
+  {type: 'num', key: 'keepOvernight', label: 'Mantieni overnight', min: 1, max: 100},
+  {type: 'color', key: 'onHighColor', label: 'ONH'},
+  {type: 'color', key: 'onLowColor', label: 'ONL'},
+  {type: 'num', key: 'levelWidth', label: 'Spessore livelli', min: 1, max: 4},
+  {type: 'check', key: 'showRejection', label: 'Blocchi di rifiuto'},
+  {type: 'select', key: 'rejectionTf', label: 'TF blocco', options: ['1', '5', '15']},
+  {type: 'num', key: 'wickRatio', label: 'Rapporto stoppino/corpo', min: 0.5, max: 10, step: 0.25},
+  {type: 'num', key: 'pivotStrength', label: 'Forza pivot', min: 2, max: 10},
+  {type: 'color', key: 'rejColor', label: 'Blocchi'}
+];
+function open10BuildSettings(ind, paramsRow, mk) {
+  OPEN10_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Orari sessione, giorni e formato stringa: come negli input Pine (OPEN10_SPEC_STRINGS).
+//    Non sono modificabili dal pannello: vanno cambiati nel file se servono.
+//  - Il livello delle 10:00 resta fino al prossimo inizio sessione futures (18:00 ET) o alla prossima 10:00,
+//    come nello script (openLevel viene azzerato a inizio sessione).
+//  - Overnight: la linea è una sola, come in Pine (line.set_y1/y2): mostra il valore finale della finestra.
+//  - Blocchi: la candela sorgente è costruita dalle barre del grafico; il timeframe del blocco deve essere >= a quello del grafico.
+//  - TICK fisso a 0.00001 al posto di syminfo.mintick: regolarlo per XAU o altri strumenti.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// Liquidity Sweeps & Inverse FVGs — porting COMPLETO dello script Pine v6 (LuxAlgo) per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const SWEEP_OPT_WICKS = 'Only Wicks';
+const SWEEP_OPT_OUTBREAK = 'Only Outbreaks & Retest';
+
+// ATR come ta.atr (Wilder), calcolato una volta per barra.
+function sweepsAtr(rows, len) {
+  const tr = [], atr = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    tr[i] = i === 0 ? r.high - r.low
+      : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+    if (i < len - 1) atr[i] = NaN;
+    else if (i === len - 1) { let s = 0; for (let k = 0; k < len; k++) s += tr[k]; atr[i] = s / len; }
+    else atr[i] = atr[i - 1] + (tr[i] - atr[i - 1]) / len;
+  }
+  return atr;
+}
+
+// Linea orizzontale da una barra a un'altra (dotted 'dt' / dashed 'ds'), come get.l() in Pine.
+function sweepsLine(from, to, price, color, alpha, style) {
+  return {from, to, price, color, alpha, style, deleted: false};
+}
+
+// Box dello sweep, come get.br() in Pine. d = 1 ribassista (box sopra il pivot), d = -1 rialzista (sotto).
+function sweepsAddBox(st, d, i, r, prc, area, marker) {
+  const y1 = d === 1 ? r.high : prc;
+  const y2 = d === 1 ? prc : r.low;
+  const b = {
+    left: i - 1, right: i + 1, top: Math.max(y1, y2), bottom: Math.min(y1, y2),
+    dr: d, br: false, area, marker: {x: i, y1, y2, color: marker}
+  };
+  st.boxes.push(b);
+  st.openBoxes.push(b);
+}
+
+// Linea tratteggiata corta di 3 barre dal punto dello sweep (lnDot in Pine).
+function sweepsDot(st, i, price, color) {
+  st.dots.push({from: i, to: i + 3, price, color});
+}
+
+const SWEEPS_IFVG_DEF = {
+  label: 'Liquidity Sweeps & IFVGs',
+  buildSettings: (ind, paramsRow, mk) => sweepsBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    len: 5, sweepMode: SWEEP_OPT_WICKS, extend: true, maxBars: 300,
+    sweepAreaAlpha: 0.25, sweepLineAlpha: 0.5,
+    bullSweep: '#ffeb3b', bearSweep: '#9c27b0',
+    showIfvg: true, volFilter: 0.3, maxIfvgDisplay: 1,
+    ifvgBull: '#089981', ifvgBear: '#f23645', ifvgAlpha: 0.15
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script:
+  // 1) nuovi pivot  2) sweep sui massimi  3) sweep sui minimi  4) estensione box
+  // 5) nuovi FVG  6) FVG -> IFVG  7) aggiornamento e limite IFVG.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.atr = sweepsAtr(rows, 14);
+      st.pivH = [];          // più recente in posizione 0, come unshift in Pine
+      st.pivL = [];
+      st.keepLines = [];     // linee sostituite da una nuova sullo stesso pivot: restano visibili
+      st.boxes = [];         // tutti i box di sweep
+      st.openBoxes = [];     // box ancora da estendere
+      st.dots = [];
+      st.fvgs = [];          // FVG attivi, in fondo il più recente
+      st.ifvgs = [];         // IFVG, più recente in posizione 0
+    }
+    const len = Math.max(1, p.len | 0);
+    const oW = p.sweepMode === SWEEP_OPT_WICKS;
+    const oO = p.sweepMode === SWEEP_OPT_OUTBREAK;
+    const maxB = p.maxBars | 0;
+    const maxIfvg = Math.max(1, p.maxIfvgDisplay | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+
+      // 1) Pivot confermati: il pivot è la barra i - len, confermata da len barre a destra.
+      const c = i - len;
+      if (c - len >= 0) {
+        const hc = rows[c].high, lc = rows[c].low;
+        let isH = true, isL = true;
+        for (let k = c - len; k <= i; k++) {
+          if (k === c) continue;
+          if (k < c) { if (rows[k].high >= hc) isH = false; if (rows[k].low <= lc) isL = false; }
+          else { if (rows[k].high > hc) isH = false; if (rows[k].low < lc) isL = false; }
+        }
+        if (isH) st.pivH.unshift({prc: hc, bix: c, brk: false, mit: false, tak: false, wic: false, lin: null});
+        if (isL) st.pivL.unshift({prc: lc, bix: c, brk: false, mit: false, tak: false, wic: false, lin: null});
+      }
+
+      // Imposta la linea del pivot; la linea precedente resta visibile (come in Pine).
+      const setLin = (g, color, alpha, style) => {
+        if (g.lin) st.keepLines.push(g.lin);
+        g.lin = sweepsLine(g.bix, i, g.prc, color, alpha, style);
+      };
+
+      // 2) Massimi: resistenza / sweep ribassista; poi minimi: supporto / sweep rialzista.
+      for (let k = st.pivH.length - 1; k >= 0; k--) {
+        const g = st.pivH[k];
+        if (!g.mit) {
+          if (!g.brk) {
+            if (r.close > g.prc) { if (!oW) g.brk = true; else g.mit = true; }
+            if (!oO && !g.wic && r.high > g.prc && r.close < g.prc) {
+              sweepsAddBox(st, 1, i, r, g.prc, p.bearSweep, p.bearSweep);
+              setLin(g, p.bearSweep, p.sweepLineAlpha, 'dt');
+              sweepsDot(st, i, r.low, p.bearSweep);
+              g.wic = true;
+            }
+          } else {
+            if (r.close < g.prc) g.mit = true;
+            if (!oW && r.low < g.prc && r.close > g.prc) {
+              sweepsAddBox(st, -1, i, r, g.prc, p.bullSweep, p.bullSweep);
+              setLin(g, p.bullSweep, p.sweepLineAlpha, 'ds');
+              sweepsDot(st, i, r.high, p.bullSweep);
+              g.tak = true;
+            }
+          }
+        }
+        if (i - g.bix > 2000 || g.mit || g.tak) st.pivH.splice(k, 1);
+      }
+
+      for (let k = st.pivL.length - 1; k >= 0; k--) {
+        const g = st.pivL[k];
+        if (!g.mit) {
+          if (!g.brk) {
+            if (r.close < g.prc) { if (!oW) g.brk = true; else g.mit = true; }
+            if (!oO && !g.wic && r.low < g.prc && r.close > g.prc) {
+              sweepsAddBox(st, -1, i, r, g.prc, p.bullSweep, p.bullSweep);
+              setLin(g, p.bullSweep, p.sweepLineAlpha, 'dt');
+              sweepsDot(st, i, r.high, p.bullSweep);
+              g.wic = true;
+            }
+          } else {
+            if (r.close > g.prc) g.mit = true;
+            if (!oW && r.high > g.prc && r.close < g.prc) {
+              sweepsAddBox(st, 1, i, r, g.prc, p.bearSweep, p.bearSweep);
+              setLin(g, p.bearSweep, p.sweepLineAlpha, 'ds');
+              sweepsDot(st, i, r.low, p.bearSweep);
+              g.tak = true;
+            }
+          }
+        }
+        if (i - g.bix > 2000 || g.mit || g.tak) st.pivL.splice(k, 1);
+      }
+
+      // 4) Estensione dei box di sweep finché non vengono mitigati o scadono (maxBars).
+      if (p.extend) {
+        for (let k = st.openBoxes.length - 1; k >= 0; k--) {
+          const b = st.openBoxes[k];
+          if (i - b.left - 1 > maxB) { st.openBoxes.splice(k, 1); continue; }   // scaduto: non si estende più
+          b.right = i;
+          if (b.dr === -1 && r.close < b.bottom) { b.br = true; st.openBoxes.splice(k, 1); }
+          else if (b.dr === 1 && r.close > b.top) { b.br = true; st.openBoxes.splice(k, 1); }
+        }
+      }
+
+      // 5) Nuovi FVG: gap tra la barra i e la barra i-2, solo se più grande del filtro ATR.
+      const threshold = st.atr[i] * p.volFilter;
+      if (i >= 2) {
+        const h2 = rows[i - 2].high, l2 = rows[i - 2].low;
+        if (r.low > h2) {
+          const gap = r.low - h2;
+          if (gap > threshold) st.fvgs.push({top: r.low, bottom: h2, start: i - 2, bull: true});
+        }
+        if (r.high < l2) {
+          const gap = l2 - r.high;
+          if (gap > threshold) st.fvgs.push({top: l2, bottom: r.high, start: i - 2, bull: false});
+        }
+      }
+
+      if (p.showIfvg) {
+        // 6) FVG -> IFVG quando la chiusura lo supera; FVG rimosso se viene riempito senza inversione.
+        for (let k = st.fvgs.length - 1; k >= 0; k--) {
+          const it = st.fvgs[k];
+          let confirmed = false;
+          if (it.bull) {
+            if (r.close < it.bottom) {
+              st.ifvgs.unshift({left: it.start, right: i + 5, top: it.top, bottom: it.bottom, bull: false, mitigated: false, deleted: false});
+              confirmed = true;
+            } else if (r.high < it.bottom) confirmed = true;
+          } else {
+            if (r.close > it.top) {
+              st.ifvgs.unshift({left: it.start, right: i + 5, top: it.top, bottom: it.bottom, bull: true, mitigated: false, deleted: false});
+              confirmed = true;
+            } else if (r.low > it.top) confirmed = true;
+          }
+          if (confirmed || i - it.start > 1000) st.fvgs.splice(k, 1);
+        }
+
+        // 7) Aggiornamento e mitigazione degli IFVG; poi limite FIFO (restano i più recenti).
+        for (const o of st.ifvgs) {
+          if (!o.mitigated) {
+            if (o.bull) { if (r.close < o.bottom) { o.mitigated = true; o.right = i; } }
+            else { if (r.close > o.top) { o.mitigated = true; o.right = i; } }
+          }
+          if (!o.mitigated) o.right = i + 5;
+        }
+        while (st.ifvgs.length > maxIfvg) { const o = st.ifvgs.pop(); o.deleted = true; }
+      }
+
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const barPx = Math.abs(xAbs(dataStart + 1) - xAbs(dataStart)) || 1;
+
+    const rect = (a, b, top, bottom, color, alpha) => {
+      const s = Math.max(a, dataStart), e = Math.min(b, dataEnd);
+      if (e < s) return null;
+      const x1 = xAbs(s), x2 = Math.max(xAbs(e), x1 + 2);
+      const yt = y(top), yb = y(bottom);
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.fillStyle = color;
+      ctx.fillRect(x1, Math.min(yt, yb), x2 - x1, Math.abs(yb - yt));
+      ctx.restore();
+      return {x1, x2, yt: Math.min(yt, yb), h: Math.abs(yb - yt)};
+    };
+    const hline = (from, to, price, color, alpha, style, width) => {
+      const a = Math.max(from, dataStart), b = Math.min(to, dataEnd);
+      if (b < a) return;
+      ctx.save();
+      ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width;
+      if (style === 'dt') ctx.setLineDash([2, 3]);
+      else if (style === 'ds') ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(xAbs(a), y(price)); ctx.lineTo(xAbs(b), y(price)); ctx.stroke();
+      ctx.restore();
+    };
+
+    // Box di sweep (area colorata) e relativo segno verticale.
+    for (const b of st.boxes) {
+      const alpha = p.sweepAreaAlpha;
+      rect(b.left, b.right, b.top, b.bottom, b.area, alpha);
+      if (b.marker.x >= dataStart && b.marker.x <= dataEnd) {
+        ctx.save();
+        ctx.strokeStyle = b.marker.color; ctx.lineWidth = 3;
+        const mx = xAbs(b.marker.x);
+        ctx.beginPath(); ctx.moveTo(mx, y(b.marker.y1)); ctx.lineTo(mx, y(b.marker.y2)); ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Linee tratteggiate di 3 barre dal punto dello sweep.
+    ctx.save(); ctx.setLineDash([2, 3]);
+    for (const d of st.dots) hline(d.from, d.to, d.price, d.color, 1, null, 1);
+    ctx.restore();
+
+    // Linee dei pivot: quelle sostituite restano; quella corrente dei pivot ancora presenti.
+    for (const l of st.keepLines) hline(l.from, l.to, l.price, l.color, l.alpha, l.style, 1);
+    for (const g of st.pivH) if (g.lin) hline(g.lin.from, g.lin.to, g.lin.price, g.lin.color, g.lin.alpha, g.lin.style, 1);
+    for (const g of st.pivL) if (g.lin) hline(g.lin.from, g.lin.to, g.lin.price, g.lin.color, g.lin.alpha, g.lin.style, 1);
+
+    // IFVG: box dal gap di origine fino alla barra attuale (+5 se attivo).
+    if (p.showIfvg) {
+      for (const o of st.ifvgs) {
+        if (o.deleted) continue;
+        const col = o.bull ? p.ifvgBull : p.ifvgBear;
+        const box = rect(o.left, o.right, o.top, o.bottom, col, p.ifvgAlpha);
+        if (box) {
+          ctx.save();
+          ctx.globalAlpha = 0.8; ctx.strokeStyle = col; ctx.lineWidth = 1;
+          ctx.strokeRect(box.x1, box.yt, box.x2 - box.x1, box.h);
+          ctx.globalAlpha = 0.9; ctx.fillStyle = ctx.strokeStyle; ctx.font = scaledFont('8px system-ui');
+          ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+          ctx.fillText('IFVG', box.x1 + 3, box.yt + 2);
+          ctx.restore();
+        }
+      }
+    }
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const SWEEPS_SETTINGS = [
+  {type: 'num', key: 'len', label: 'Oscillazioni', min: 1, max: 50},
+  {type: 'select', key: 'sweepMode', label: 'Opzioni sweep', options: [SWEEP_OPT_WICKS, SWEEP_OPT_OUTBREAK, 'Wicks + Outbreaks & Retest']},
+  {type: 'check', key: 'extend', label: 'Estendi aree'},
+  {type: 'num', key: 'maxBars', label: 'Barre massime', min: 1, max: 5000},
+  {type: 'num', key: 'sweepAreaAlpha', label: 'Opacità area', min: 0, max: 1, step: 0.05},
+  {type: 'num', key: 'sweepLineAlpha', label: 'Opacità linee', min: 0, max: 1, step: 0.05},
+  {type: 'color', key: 'bullSweep', label: 'Sweep rialzista'},
+  {type: 'color', key: 'bearSweep', label: 'Sweep ribassista'},
+  {type: 'check', key: 'showIfvg', label: 'Mostra IFVG'},
+  {type: 'num', key: 'volFilter', label: 'Filtro ATR', min: 0, max: 10, step: 0.1},
+  {type: 'num', key: 'maxIfvgDisplay', label: 'IFVG massimi', min: 1, max: 50},
+  {type: 'color', key: 'ifvgBull', label: 'IFVG rialzista'},
+  {type: 'color', key: 'ifvgBear', label: 'IFVG ribassista'},
+  {type: 'num', key: 'ifvgAlpha', label: 'Opacità IFVG', min: 0, max: 1, step: 0.05}
+];
+function sweepsBuildSettings(ind, paramsRow, mk) {
+  SWEEPS_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Gli alert dello script (sweep e IFVG) non sono generati: l'app non ha un sistema di alert. Per la stessa ragione i relativi input sono stati tolti dal pannello.
+//  - I colori usano valori esatti in hex a 6 cifre più un'opacità separata (le caselle colore dell'app non accettano l'alpha).
+//  - Pivot: `ta.pivothigh/pivotlow` di Pine usa una regola di parità che non è documentata: qui il massimo deve superare a sinistra e non superare a destra. Va verificato su un grafico di confronto.
+//  - Il limite di 500 box/linee di Pine non è replicato. I box di sweep restano tutti in memoria.
+//  - Lo script originale ha un `confirmed := true` duplicato: nessun effetto sul calcolo.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// Trendline Liquidity — porting COMPLETO dello script Pine v6 (LuxAlgo) per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const TL_PIVOT_MEM = 8;
+const TL_MAX_SPAN = 1500;
+const TL_MAX_ACTIVE = 3;
+const TL_CANDIDATE_TTL = 500;
+const TL_ACTIVE = 0, TL_BREACHED = 1, TL_SWEPT = 2, TL_CONFIRMED = 3, TL_BROKEN = 4, TL_EXPIRED = 5;
+
+// Pivot a L barre per lato, confermato alla barra c + L (stessa regola degli altri indicatori).
+function tlPivots(rows, c, L) {
+  let isH = true, isL = true;
+  for (let k = c - L; k <= c + L; k++) {
+    if (k === c) continue;
+    if (rows[k].high >= rows[c].high) isH = false;
+    if (rows[k].low <= rows[c].low) isL = false;
+  }
+  return {isH, isL};
+}
+
+const TRENDLINE_LIQUIDITY_DEF = {
+  label: 'Trendline Liquidity',
+  buildSettings: (ind, paramsRow, mk) => tlBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    swingLength: 10, minTouches: 3, touchTol: 0.25, atrLength: 200,
+    showBand: true, bandWidth: 0.5,
+    reclaimWindow: 8, acceptBars: 3, dispMult: 1.0, shiftWindow: 20,
+    bullColor: '#089981', bearColor: '#f23645', lineStyle: 'Solid',
+    showTag: true, showEvents: true, history: 8
+  }),
+
+  // Calcolo incrementale, stesso ordine dello script:
+  // 1) pivot e linee candidate  2) macchina a stati di ogni linea  3) rimozioni  4) limite della storia.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.tr = []; st.atr = [];
+      st.plBar = []; st.plPrice = []; st.phBar = []; st.phPrice = [];
+      st.lines = [];          // linee candidate e qualificate
+      st.lastPivotHigh = NaN; st.lastPivotLow = NaN;
+    }
+    const L = Math.max(2, p.swingLength | 0);
+    const alen = Math.max(1, p.atrLength | 0);
+    const tolK = p.touchTol;
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      // ATR: RMA(alen) con seme SMA; prima della barra alen-1 vale il true range (nz in Pine).
+      st.tr[i] = i === 0 ? r.high - r.low
+        : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+      if (i < alen - 1) st.atr[i] = st.tr[i];
+      else if (i === alen - 1) { let s = 0; for (let k = 0; k < alen; k++) s += st.tr[k]; st.atr[i] = s / alen; }
+      else st.atr[i] = st.atr[i - 1] + (st.tr[i] - st.atr[i - 1]) / alen;
+      const atr = st.atr[i];
+      const ev = {newPool: false, touch: false, tapSell: false, tapBuy: false, sweepBull: false, sweepBear: false,
+                  shiftBull: false, shiftBear: false, breakDown: false, breakUp: false};
+
+      // 1) Pivot confermati: linee candidate e memoria dei pivot.
+      const c = i - L;
+      if (c - L >= 0) {
+        const pv = tlPivots(rows, c, L);
+        if (pv.isL) {
+          st.lastPivotLow = rows[c].low;
+          if (tlOnPivot(st, rows, p, 1, c, rows[c].low, i, atr)) ev.newPool = true;
+          tlStorePivot(st, 1, c, rows[c].low);
+        }
+        if (pv.isH) {
+          st.lastPivotHigh = rows[c].high;
+          if (tlOnPivot(st, rows, p, -1, c, rows[c].high, i, atr)) ev.newPool = true;
+          tlStorePivot(st, -1, c, rows[c].high);
+        }
+      }
+
+      // 2) Macchina a stati di ogni linea.
+      const removeIdx = [];
+      for (let k = 0; k < st.lines.length; k++) {
+        const tl = st.lines[k];
+        if (i <= tl.createdBar) continue;
+        const dir = tl.dir;
+        const val = tl.y1 + tl.slope * (i - tl.x1);
+        const tolNow = tolK * atr;
+        const col = dir === 1 ? p.bullColor : p.bearColor;
+
+        // La linea si allunga finché il pool è intatto o viene toccato.
+        if (tl.qualified && tl.state <= TL_BREACHED) {
+          tl.endBar = i; tl.bandOff = p.bandWidth * atr;
+        }
+
+        if (tl.state === TL_ACTIVE) {
+          if (!tl.qualified && i - tl.createdBar > TL_CANDIDATE_TTL) {
+            tl.state = TL_EXPIRED; removeIdx.push(k);
+          } else {
+            const edge = dir === 1 ? r.low : r.high;
+            if (dir * (edge - val) < -tolNow) {
+              if (tl.qualified) {
+                tl.state = TL_BREACHED; tl.breachBar = i; tl.extreme = edge;
+                tl.structLevel = dir === 1 ? st.lastPivotHigh : st.lastPivotLow;
+                tl.beyondCount = 0;
+                if (dir === 1) ev.tapSell = true; else ev.tapBuy = true;
+              } else { tl.state = TL_EXPIRED; removeIdx.push(k); }
+            } else {
+              const prevVal = val - tl.slope;
+              const prevEdge = dir === 1 ? rows[i - 1].low : rows[i - 1].high;
+              const inBand = Math.abs(edge - val) <= tolNow;
+              const wasIn = Math.abs(prevEdge - prevVal) <= tolNow;
+              if (inBand && !wasIn) {
+                tl.touches += 1;
+                if (tl.qualified) ev.touch = true;
+                else if (tl.touches >= p.minTouches) { tl.qualified = true; tl.endBar = i; tl.bandOff = p.bandWidth * atr; ev.newPool = true; }
+              }
+            }
+          }
+        }
+
+        if (tl.state === TL_BREACHED) {
+          tl.extreme = dir === 1 ? Math.min(tl.extreme, r.low) : Math.max(tl.extreme, r.high);
+          const beyond = dir * (r.close - val) < 0;
+          const reclaimed = dir * (r.close - val) > 0;
+          tl.beyondCount = beyond ? tl.beyondCount + 1 : 0;
+          const impulsive = reclaimed && dir * (r.close - r.open) > 0 && st.tr[i] >= p.dispMult * atr;
+          const sinceBreach = i - tl.breachBar;
+          if (tl.beyondCount >= p.acceptBars || (sinceBreach >= p.reclaimWindow && !reclaimed)) {
+            // accettazione oltre la linea: rottura vera
+            tl.state = TL_BROKEN; tl.eventBar = i;
+            tl.evt = {bar: i, price: val, text: 'Break', below: dir === 1 ? false : true, color: dir === 1 ? p.bearColor : p.bullColor};
+            if (dir === 1) ev.breakDown = true; else ev.breakUp = true;
+          } else if (impulsive || (sinceBreach >= p.reclaimWindow && reclaimed)) {
+            // lo spike si è fermato e il prezzo ha recuperato la linea: sweep
+            const immediateShift = !isNaN(tl.structLevel) && dir * (r.close - tl.structLevel) > 0;
+            tl.state = immediateShift ? TL_CONFIRMED : TL_SWEPT;
+            tl.eventBar = i;
+            tl.evt = {bar: i, price: tl.extreme, text: immediateShift ? 'Sweep ✓' : 'Sweep', below: dir === -1, color: col};
+            if (dir === 1) { ev.sweepBull = true; if (immediateShift) ev.shiftBull = true; }
+            else { ev.sweepBear = true; if (immediateShift) ev.shiftBear = true; }
+          }
+        } else if (tl.state === TL_SWEPT) {
+          if (!isNaN(tl.structLevel) && dir * (r.close - tl.structLevel) > 0) {
+            tl.state = TL_CONFIRMED;
+            if (tl.evt) tl.evt.text = 'Sweep ✓';
+            if (dir === 1) ev.shiftBull = true; else ev.shiftBear = true;
+          } else if (i - tl.eventBar >= p.shiftWindow) {
+            tl.state = TL_EXPIRED;
+          }
+        }
+      }
+
+      // 3) Rimozione delle linee invalidate o scadute (dalla più recente alla più vecchia).
+      for (let k = removeIdx.length - 1; k >= 0; k--) {
+        const gone = st.lines[removeIdx[k]];
+        gone.removed = true;
+        st.lines.splice(removeIdx[k], 1);
+      }
+
+      // 4) Limite della storia: si tengono le linee risolte più recenti.
+      let resolved = 0;
+      for (const tl of st.lines) if (tl.state >= TL_CONFIRMED) resolved += 1;
+      while (resolved > (p.history | 0)) {
+        const idx = st.lines.findIndex(tl => tl.state >= TL_CONFIRMED);
+        if (idx < 0) break;
+        st.lines[idx].removed = true;
+        st.lines.splice(idx, 1);
+        resolved -= 1;
+      }
+
+      st.ev = ev;
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const lineDash = p.lineStyle === 'Dashed' ? [6, 4] : p.lineStyle === 'Dotted' ? [2, 3] : null;
+    const txt = (s, xx, yy, color, align, size) => {
+      ctx.save();
+      ctx.fillStyle = color; ctx.font = scaledFont(size || '9px system-ui');
+      ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s, xx, yy); ctx.restore();
+    };
+    for (const tl of st.lines) {
+      if (!tl.qualified || tl.removed) continue;
+      const col = tl.dir === 1 ? p.bullColor : p.bearColor;
+      const dotted = tl.state >= TL_SWEPT;          // pool consumato: linea punteggiata
+      const end = tl.endBar;
+      const a = Math.max(tl.x1, dataStart), b = Math.min(end, dataEnd);
+      const val = x => tl.y1 + tl.slope * (x - tl.x1);
+      if (b >= a) {
+        ctx.save();
+        ctx.globalAlpha = tl.state === TL_BROKEN ? 0.6 : 1;
+        ctx.strokeStyle = col; ctx.lineWidth = 1;
+        if (dotted) ctx.setLineDash([2, 3]); else if (lineDash) ctx.setLineDash(lineDash);
+        ctx.beginPath(); ctx.moveTo(xAbs(a), y(val(a))); ctx.lineTo(xAbs(b), y(val(b))); ctx.stroke();
+        ctx.restore();
+
+        if (p.showBand) {
+          const off = tl.bandOff || 0;
+          const edgeA = val(a) - tl.dir * off, edgeB = val(b) - tl.dir * off;
+          // edge tratteggiato, parallelo alla linea a distanza della banda
+          ctx.save();
+          ctx.globalAlpha = tl.state >= TL_SWEPT ? 0.15 : 0.3; ctx.strokeStyle = col; ctx.lineWidth = 1;
+          ctx.setLineDash([2, 3]);
+          ctx.beginPath(); ctx.moveTo(xAbs(a), y(edgeA)); ctx.lineTo(xAbs(b), y(edgeB)); ctx.stroke();
+          ctx.restore();
+          // riempimento tra linea e edge: più tocchi, più profondo
+          const transp = Math.max(60, 92 - tl.touches * 6);
+          ctx.save();
+          ctx.globalAlpha = (100 - transp) / 100 * (tl.state >= TL_SWEPT ? 0.5 : 1);
+          ctx.fillStyle = col;
+          ctx.beginPath();
+          ctx.moveTo(xAbs(a), y(val(a))); ctx.lineTo(xAbs(b), y(val(b)));
+          ctx.lineTo(xAbs(b), y(edgeB)); ctx.lineTo(xAbs(a), y(edgeA));
+          ctx.closePath(); ctx.fill();
+          ctx.restore();
+        }
+
+        if (p.showTag && b >= dataStart) {
+          txt(tl.touches + '×', xAbs(b) + 4, y(val(b)), col, 'left', '9px system-ui');
+        }
+      }
+      if (p.showEvents && tl.evt && tl.evt.bar >= dataStart && tl.evt.bar <= dataEnd) {
+        txt(tl.evt.text, xAbs(tl.evt.bar), y(tl.evt.price) + (tl.evt.below ? 10 : -10), tl.evt.color, 'center', 'bold 9px system-ui');
+      }
+    }
+  }
+};
+
+// Costruisce una linea candidata accoppiando il nuovo pivot con i pivot precedenti.
+// Le linee sono crescenti (supporto) o decrescenti (resistenza), mai orizzontali, e non violate.
+function tlOnPivot(st, rows, p, dir, pivotBar, pivotPrice, i, atr) {
+  const bars = dir === 1 ? st.plBar : st.phBar;
+  const prices = dir === 1 ? st.plPrice : st.phPrice;
+  const minSpan = (p.swingLength | 0) * 2;
+  const tol = p.touchTol;
+  let bestB1 = -1, bestP1 = NaN, bestSlope = NaN, bestTouches = 0;
+  for (let k = 0; k < bars.length; k++) {
+    const b1 = bars[k], p1 = prices[k];
+    const span = pivotBar - b1;
+    if (span >= minSpan && span <= TL_MAX_SPAN && dir * (pivotPrice - p1) > 2 * tol * atr) {
+      const slopeK = (pivotPrice - p1) / span;
+      let validK = true, touchesK = 0, prevIn = false;
+      for (let j = b1; j <= i; j++) {
+        const lineV = p1 + slopeK * (j - b1);
+        const tolJ = tol * st.atr[j];
+        const src = dir === 1 ? rows[j].low : rows[j].high;
+        if (dir * (src - lineV) < -tolJ) { validK = false; break; }
+        const inBand = Math.abs(src - lineV) <= tolJ;
+        if (inBand && !prevIn) touchesK += 1;
+        prevIn = inBand;
+      }
+      if (validK && touchesK > bestTouches) { bestTouches = touchesK; bestB1 = b1; bestP1 = p1; bestSlope = slopeK; }
+    }
+  }
+  if (bestTouches < 2) return false;
+  const valNow = bestP1 + bestSlope * (i - bestB1);
+  for (const other of st.lines) {
+    if (other.dir === dir && other.state <= TL_BREACHED && Math.abs(other.y1 + other.slope * (i - other.x1) - valNow) <= 2 * tol * atr) {
+      return false;   // duplicato
+    }
+  }
+  // enforceCap: al massimo TL_MAX_ACTIVE linee non risolte per direzione; si toglie la più vecchia.
+  const tl = {dir, x1: bestB1, y1: bestP1, slope: bestSlope, touches: bestTouches, createdBar: i,
+              qualified: false, state: TL_ACTIVE, breachBar: 0, eventBar: 0, extreme: NaN, structLevel: NaN,
+              beyondCount: 0, endBar: i, bandOff: 0, evt: null, removed: false};
+  st.lines.push(tl);
+  let unresolved = 0;
+  for (const o of st.lines) if (o.dir === dir && o.state <= TL_BREACHED) unresolved += 1;
+  if (unresolved > TL_MAX_ACTIVE) {
+    const idx = st.lines.findIndex(o => o.dir === dir && o.state <= TL_BREACHED);
+    st.lines[idx].removed = true;
+    st.lines.splice(idx, 1);
+  }
+  // Qualificata subito se ha già il numero minimo di tocchi.
+  if (bestTouches >= p.minTouches) {
+    tl.qualified = true; tl.endBar = i; tl.bandOff = p.bandWidth * atr;
+    return true;
+  }
+  return false;
+}
+
+function tlStorePivot(st, dir, bar, price) {
+  const bars = dir === 1 ? st.plBar : st.phBar;
+  const prices = dir === 1 ? st.plPrice : st.phPrice;
+  bars.push(bar); prices.push(price);
+  if (bars.length > TL_PIVOT_MEM) { bars.shift(); prices.shift(); }
+}
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const TL_SETTINGS = [
+  {type: 'num', key: 'swingLength', label: 'Lunghezza swing', min: 2, max: 100},
+  {type: 'num', key: 'minTouches', label: 'Tocchi minimi', min: 2, max: 20},
+  {type: 'num', key: 'touchTol', label: 'Tolleranza tocco (ATR)', min: 0.01, max: 5, step: 0.05},
+  {type: 'num', key: 'atrLength', label: 'Lunghezza ATR', min: 10, max: 1000},
+  {type: 'check', key: 'showBand', label: 'Mostra banda di liquidità'},
+  {type: 'num', key: 'bandWidth', label: 'Profondità banda (ATR)', min: 0.1, max: 10, step: 0.1},
+  {type: 'num', key: 'reclaimWindow', label: 'Finestra di recupero (barre)', min: 1, max: 200},
+  {type: 'num', key: 'acceptBars', label: 'Chiusure di accettazione', min: 1, max: 50},
+  {type: 'num', key: 'dispMult', label: 'Moltiplicatore spostamento (ATR)', min: 0, max: 10, step: 0.25},
+  {type: 'num', key: 'shiftWindow', label: 'Finestra spostamento (barre)', min: 1, max: 200},
+  {type: 'color', key: 'bullColor', label: 'Supporto rialzista'},
+  {type: 'color', key: 'bearColor', label: 'Resistenza ribassista'},
+  {type: 'select', key: 'lineStyle', label: 'Stile linea', options: ['Solid', 'Dashed', 'Dotted']},
+  {type: 'check', key: 'showTag', label: 'Contatore tocchi'},
+  {type: 'check', key: 'showEvents', label: 'Etichette sweep / rottura'},
+  {type: 'num', key: 'history', label: 'Linee risolte mantenute', min: 0, max: 40}
+];
+function tlBuildSettings(ind, paramsRow, mk) {
+  TL_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Gli alert non sono generati: l'app non ha un sistema di alert.
+//  - Pool: `lastPivot`, pivot in memoria e linee candidate seguono lo script; il confronto con i valori a barre di Pine è da fare su un grafico noto.
+//  - La banda è una stima degli ordini, come nello script: non è un dato di mercato.
+//  - Il disegno dell'edge della banda è approssimato: usa l'ATR del momento in cui la linea è stata aggiornata.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// Ascending / Descending / Symmetrical Triangle — porting COMPLETO dello script Pine v6 (LuxAlgo)
+// per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+const TRI_ASC = 1, TRI_DESC = 2, TRI_SYM = 3;
+const TRI_MAX_SWINGS = 40;
+
+function triKindName(k) {
+  return k === TRI_ASC ? 'Ascending Triangle' : k === TRI_DESC ? 'Descending Triangle' : 'Symmetrical Triangle';
+}
+function triKindLean(k) {
+  return k === TRI_ASC ? 'Classical lean: upside' : k === TRI_DESC ? 'Classical lean: downside' : 'Classical lean: with the prior trend';
+}
+
+// ATR di Wilder per barra.
+function triAtr(rows, len) {
+  const tr = [], atr = [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    tr[i] = i === 0 ? r.high - r.low
+      : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+    if (i < len - 1) atr[i] = NaN;
+    else if (i === len - 1) { let s = 0; for (let k = 0; k < len; k++) s += tr[k]; atr[i] = s / len; }
+    else atr[i] = atr[i - 1] + (tr[i] - atr[i - 1]) / len;
+  }
+  return atr;
+}
+
+// Sequenza alternata di swing: uno stesso lato più estremo sostituisce l'ultimo (come pushSwing in Pine).
+function triPushSwing(st, price, bar, dir) {
+  const n = st.zzP.length;
+  if (n > 0 && st.zzD[n - 1] === dir) {
+    if ((dir === 1 && price >= st.zzP[n - 1]) || (dir === -1 && price <= st.zzP[n - 1])) {
+      st.zzP[n - 1] = price; st.zzB[n - 1] = bar;
+      return true;
+    }
+    return false;
+  }
+  st.zzP.push(price); st.zzB.push(bar); st.zzD.push(dir);
+  if (st.zzP.length > TRI_MAX_SWINGS) { st.zzP.shift(); st.zzB.shift(); st.zzD.shift(); }
+  return true;
+}
+
+// Cerca il triangolo più grande valido tra le ultime finestre di swing (findTriangle in Pine).
+function triFind(st, p, i, atr) {
+  let best = null;
+  const n = st.zzP.length;
+  if (n < 4 || !(atr > 0)) return null;
+  const maxWin = Math.min(n, p.maxSwings | 0);
+  const tol = p.tolerance * atr, buf = p.breakBuffer * atr;
+  for (let w = 4; w <= maxWin; w++) {
+    const base = n - w;
+    let hF = NaN, hFB = NaN, hL = NaN, hLB = NaN, lF = NaN, lFB = NaN, lL = NaN, lLB = NaN;
+    for (let k = base; k < n; k++) {
+      const b = st.zzB[k], pr = st.zzP[k];
+      if (st.zzD[k] === 1) { if (isNaN(hFB)) { hFB = b; hF = pr; } hLB = b; hL = pr; }
+      else { if (isNaN(lFB)) { lFB = b; lF = pr; } lLB = b; lL = pr; }
+    }
+    if (isNaN(hFB) || isNaN(lFB) || !(hLB > hFB) || !(lLB > lFB)) continue;
+
+    const uS = (hL - hF) / (hLB - hFB), lS = (lL - lF) / (lLB - lFB);
+    const x0 = Math.min(hFB, lFB), x1 = st.zzB[n - 1];
+    const u0 = hF + uS * (x0 - hFB), l0 = lF + lS * (x0 - lFB);
+    const height = u0 - l0;
+    const endH = (u0 + uS * (x1 - x0)) - (l0 + lS * (x1 - x0));
+    let ok = x0 >= st.nextStartBar && uS < lS && height >= p.minHeight * atr && x1 - x0 >= p.minBars &&
+             endH > 0 && endH <= (1 - p.minContraction / 100) * height;
+    const apexX = ok ? x0 + height / (lS - uS) : NaN;
+    ok = ok && (i - x0) < p.apexCutoff / 100 * (apexX - x0);
+    if (!ok) continue;
+
+    // Classificazione dalla deriva di ciascun confine.
+    const uD = uS * (x1 - x0), lD = lS * (x1 - x0), flatTol = p.flat / 100 * height;
+    const uFlat = Math.abs(uD) <= flatTol, lFlat = Math.abs(lD) <= flatTol;
+    let kind = 0;
+    if (uFlat && !lFlat && lD > 0) kind = TRI_ASC;
+    else if (lFlat && !uFlat && uD < 0) kind = TRI_DESC;
+    else if (!uFlat && !lFlat && uD < 0 && lD > 0) kind = TRI_SYM;
+    if (!kind) continue;
+
+    // Contenimento: ogni chiusura da x0 fino alla barra precedente resta dentro i confini (con buffer).
+    let contained = true;
+    for (let b = x0; b <= i - 1 && contained; b++) {
+      const c = st.closes[b];
+      const up = u0 + uS * (b - x0), lo = l0 + lS * (b - x0);
+      if (c > up + buf || c < lo - buf) contained = false;
+    }
+
+    // Tocchi sui due confini; nessuno swing deve superare il proprio confine.
+    let tU = 0, tD = 0;
+    if (contained) {
+      for (let k = base; k < n; k++) {
+        const b = st.zzB[k], pr = st.zzP[k];
+        if (st.zzD[k] === 1) {
+          const d = pr - (u0 + uS * (b - x0));
+          if (d > tol) contained = false; else if (d >= -tol) tU++;
+        } else {
+          const d = (l0 + lS * (b - x0)) - pr;
+          if (d > tol) contained = false; else if (d >= -tol) tD++;
+        }
+      }
+    }
+
+    if (contained && tU >= p.minTouches && tD >= p.minTouches && tU + tD >= p.minTotal) {
+      const mid = Math.round((x0 + x1) / 2);
+      const cum = st.cum;
+      const firstAvg = mid > x0 ? (cum[mid] - cum[x0]) / (mid - x0) : NaN;
+      const lastAvg = x1 > mid ? (cum[x1] - cum[mid]) / (x1 - mid) : NaN;
+      const volRatio = (!isNaN(firstAvg) && firstAvg > 0 && !isNaN(lastAvg)) ? lastAvg / firstAvg : NaN;
+      best = {kind, x0, u0, uSlope: uS, l0, lSlope: lS, apexX, height, tU, tD,
+              lastHigh: hL, lastLow: lL, volRatio, atrAt: atr};
+    }
+  }
+  return best;
+}
+
+const TRIANGLES_DEF = {
+  label: 'Triangles',
+  buildSettings: (ind, paramsRow, mk) => triBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    swingLength: 5, maxSwings: 10, minTouches: 2, minTotal: 5, tolerance: 0.3,
+    flat: 15, minHeight: 2, minBars: 15, minContraction: 30, apexCutoff: 85, atrLength: 14,
+    breakBuffer: 0.1, volumeConfirm: false, volumeLength: 20, showTarget: true,
+    failBars: 2, watch: 60,
+    typeColor: '#5b9cf6', bullColor: '#089981', bearColor: '#f23645', neutralColor: '#787b86',
+    showTouches: true, showFill: true
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script:
+  // 1) swing  2) ricerca del triangolo  3) monitoraggio della rottura precedente  4) rottura o dissoluzione del triangolo in formazione.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.atr = triAtr(rows, Math.max(1, p.atrLength | 0));
+      st.closes = []; st.cum = []; st.volSma = [];
+      st.zzP = []; st.zzB = []; st.zzD = [];
+      st.forming = null;        // triangolo in formazione
+      st.resolved = [];         // triangoli risolti: {F, endBar, dir}
+      st.nextStartBar = 0;
+      st.trade = null; st.trades = []; st.tradeActive = false;
+      st.marks = [];            // eventi per le etichette: {bar, price, text, down, color}
+    }
+    const L = Math.max(2, p.swingLength | 0);
+    const volLen = Math.max(1, p.volumeLength | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      st.closes[i] = r.close;
+      st.cum[i] = (i > 0 ? st.cum[i - 1] : 0) + (r.volume || 0);
+      if (i >= volLen - 1) {
+        let s = 0; for (let k = i - volLen + 1; k <= i; k++) s += rows[k].volume || 0;
+        st.volSma[i] = s / volLen;
+      } else st.volSma[i] = NaN;
+      const atr = st.atr[i];
+      st.formedAlert = false; st.upBreakAlert = false; st.downBreakAlert = false;
+      st.targetAlert = false; st.failAlert = false; st.stopAlert = false; st.dissolveAlert = false;
+
+      // 1) Pivot confermati da L barre per lato.
+      let changed = false;
+      const c = i - L;
+      if (c - L >= 0) {
+        const hc = rows[c].high, lc = rows[c].low;
+        let isH = true, isL = true;
+        for (let k = c - L; k <= i; k++) {
+          if (k === c) continue;
+          if (k < c) { if (rows[k].high >= hc) isH = false; if (rows[k].low <= lc) isL = false; }
+          else { if (rows[k].high > hc) isH = false; if (rows[k].low < lc) isL = false; }
+        }
+        if (isH) changed = triPushSwing(st, hc, c, 1) || changed;
+        if (isL) changed = triPushSwing(st, lc, c, -1) || changed;
+      }
+
+      // 2) Nuovo triangolo: sostituisce quello in formazione (come erase + draw in Pine).
+      if (changed) {
+        const found = triFind(st, p, i, atr);
+        if (found) {
+          const F = st.forming;
+          const isNew = !F || F.x0 !== found.x0 || F.kind !== found.kind;
+          found.atrAt = atr;
+          st.forming = found;
+          st.formedAlert = isNew;
+        }
+      }
+
+      // 3) Monitoraggio della rottura in corso: obiettivo, stop, fallimento.
+      const T = st.trade;
+      if (st.tradeActive && T && i > T.bar) {
+        const edge = T.line0 + T.slope * (i - T.x0);
+        T.endBar = i;
+        T.insideCount = (T.dir === 1 ? r.close < edge : r.close > edge) ? T.insideCount + 1 : 0;
+        const targetHit = !isNaN(T.target) && (T.dir === 1 ? r.high >= T.target : r.low <= T.target);
+        const stopHit = T.dir === 1 ? r.close < T.stop : r.close > T.stop;
+        if (targetHit) {
+          st.targetAlert = true; st.tradeActive = false;
+          T.hit = {bar: i, price: T.dir === 1 ? r.high : r.low, text: 'Target', down: T.dir === 1};
+        } else if (stopHit || T.insideCount >= p.failBars) {
+          st.failAlert = T.insideCount >= p.failBars; st.stopAlert = stopHit; st.tradeActive = false;
+          T.targetHidden = true;   // come la linea target cancellata in Pine
+          T.hit = {bar: i, price: T.dir === 1 ? r.low : r.high, text: stopHit ? 'Stop' : 'Failed', down: T.dir !== 1};
+        } else if (i - T.bar >= p.watch) {
+          st.tradeActive = false;
+        }
+      }
+
+      // 4) Rottura del triangolo in formazione, oppure dissoluzione verso l'apice.
+      const F = st.forming;
+      if (F && !st.formedAlert) {
+        const upperNow = F.u0 + F.uSlope * (i - F.x0);
+        const lowerNow = F.l0 + F.lSlope * (i - F.x0);
+        const buffer = p.breakBuffer * atr;
+        const volOk = !p.volumeConfirm || !(st.volSma[i] > 0) || (r.volume || 0) > st.volSma[i];
+        const upBreak = r.close > upperNow + buffer && volOk;
+        const dnBreak = r.close < lowerNow - buffer && volOk;
+        const pastCutoff = (i - F.x0) >= p.apexCutoff / 100 * (F.apexX - F.x0);
+
+        if (upBreak || dnBreak) {
+          const dir = upBreak ? 1 : -1;
+          const level = dir === 1 ? upperNow : lowerNow;
+          st.resolved.push({F, endBar: i, dir});
+          st.upBreakAlert = dir === 1; st.downBreakAlert = dir === -1;
+          st.marks.push({bar: i, price: dir === 1 ? r.low : r.high, text: dir === 1 ? 'Breakout' : 'Breakdown', down: dir !== 1, color: dir === 1 ? p.bullColor : p.bearColor, kind: 'break', F, dir, ratioPct: Math.round(100 * (i - F.x0) / (F.apexX - F.x0))});
+          const trade = {
+            dir, bar: i, x0: F.x0, line0: dir === 1 ? F.u0 : F.l0, slope: dir === 1 ? F.uSlope : F.lSlope,
+            stop: dir === 1 ? F.lastLow : F.lastHigh,
+            target: p.showTarget ? level + dir * F.height : NaN,
+            insideCount: 0, endBar: i, targetHidden: false, hit: null
+          };
+          st.trade = trade; st.trades.push(trade);
+          st.tradeActive = true;
+          st.nextStartBar = i;
+          st.forming = null;
+        } else if (pastCutoff) {
+          st.dissolveAlert = true;
+          st.forming = null;
+        }
+      }
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const line = (x1, y1, x2, y2, color, width, dashed) => {
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = width;
+      if (dashed) ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(xAbs(x1), y(y1)); ctx.lineTo(xAbs(x2), y(y2)); ctx.stroke();
+      ctx.restore();
+    };
+    const txt = (s, xx, yy, color, align, size) => {
+      ctx.save();
+      ctx.fillStyle = color; ctx.font = scaledFont(size || '9px system-ui');
+      ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s, xx, yy); ctx.restore();
+    };
+
+    // Un triangolo: confini, riempimento, nome e tocchi.
+    const drawTri = (F, endBar, color) => {
+      const x = Math.max(F.x0, dataStart - 1), e = Math.min(endBar, dataEnd + 1);
+      if (e < x) return;
+      const uP = b => F.u0 + F.uSlope * (b - F.x0), lP = b => F.l0 + F.lSlope * (b - F.x0);
+      if (p.showFill) {
+        ctx.save(); ctx.globalAlpha = 0.1; ctx.fillStyle = color;
+        ctx.beginPath(); ctx.moveTo(xAbs(F.x0), y(uP(F.x0)));
+        ctx.lineTo(xAbs(e), y(uP(e))); ctx.lineTo(xAbs(e), y(lP(e))); ctx.lineTo(xAbs(F.x0), y(lP(F.x0)));
+        ctx.closePath(); ctx.fill(); ctx.restore();
+      }
+      line(F.x0, uP(F.x0), e, uP(e), color, 2, false);
+      line(F.x0, lP(F.x0), e, lP(e), color, 2, false);
+      txt(triKindName(F.kind), xAbs(F.x0), y(uP(F.x0)) - 8, color, 'left', '9px system-ui');
+      if (p.showTouches) {
+        const tol = p.tolerance * (F.atrAt || 0);
+        for (let k = 0; k < st.zzP.length; k++) {
+          const b = st.zzB[k], pr = st.zzP[k];
+          if (b < F.x0 || b > dataEnd || b < dataStart) continue;
+          const isHigh = st.zzD[k] === 1;
+          const ref = isHigh ? uP(b) : lP(b);
+          if (Math.abs(pr - ref) <= tol) {
+            ctx.save(); ctx.fillStyle = color;
+            ctx.beginPath(); ctx.arc(xAbs(b), y(pr), 3, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+          }
+        }
+      }
+    };
+
+    // Triangoli risolti e quello in formazione.
+    for (const rs of st.resolved) {
+      drawTri(rs.F, rs.endBar, rs.dir === 1 ? p.bullColor : p.bearColor);
+    }
+    if (st.forming) drawTri(st.forming, last, p.typeColor);
+
+    // Rotture, obiettivi e stop.
+    for (const m of st.marks) {
+      if (m.bar < dataStart || m.bar > dataEnd) continue;
+      txt(m.text, xAbs(m.bar), y(m.price) + (m.down ? -10 : 10), m.color, 'center', 'bold 9px system-ui');
+    }
+    for (const T of st.trades) {
+      const c = T.dir === 1 ? p.bullColor : p.bearColor;
+      if (p.showTarget && !T.targetHidden && !isNaN(T.target)) line(T.bar, T.target, T.endBar, T.target, c, 1, true);
+      line(T.bar, T.stop, T.endBar, T.stop, p.neutralColor, 1, true);
+      if (T.hit && T.hit.bar >= dataStart && T.hit.bar <= dataEnd) {
+        txt(T.hit.text, xAbs(T.hit.bar), y(T.hit.price) + (T.hit.down ? -10 : 10), T.hit.text === 'Target' ? c : p.neutralColor, 'center', 'bold 9px system-ui');
+      }
+    }
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const TRI_SETTINGS = [
+  {type: 'num', key: 'swingLength', label: 'Lunghezza swing', min: 2, max: 50},
+  {type: 'num', key: 'maxSwings', label: 'Swing massimi', min: 4, max: 20},
+  {type: 'num', key: 'minTouches', label: 'Tocchi per confine', min: 2, max: 5},
+  {type: 'num', key: 'minTotal', label: 'Tocchi totali minimi', min: 4, max: 12},
+  {type: 'num', key: 'tolerance', label: 'Tolleranza tocco (ATR)', min: 0.05, max: 2, step: 0.05},
+  {type: 'num', key: 'flat', label: 'Tolleranza confine piatto (%)', min: 1, max: 50, step: 1},
+  {type: 'num', key: 'minHeight', label: 'Altezza minima (ATR)', min: 0.5, max: 30, step: 0.5},
+  {type: 'num', key: 'minBars', label: 'Lunghezza minima (barre)', min: 5, max: 500},
+  {type: 'num', key: 'minContraction', label: 'Contrazione minima (%)', min: 5, max: 95, step: 5},
+  {type: 'num', key: 'apexCutoff', label: 'Limite apice (%)', min: 50, max: 100, step: 5},
+  {type: 'num', key: 'atrLength', label: 'Lunghezza ATR', min: 1, max: 200},
+  {type: 'num', key: 'breakBuffer', label: 'Buffer rottura (ATR)', min: 0, max: 3, step: 0.05},
+  {type: 'check', key: 'volumeConfirm', label: 'Richiedi volume'},
+  {type: 'num', key: 'volumeLength', label: 'Media volume', min: 1, max: 200},
+  {type: 'check', key: 'showTarget', label: 'Obiettivo misurato'},
+  {type: 'num', key: 'failBars', label: 'Chiusure per fallimento', min: 1, max: 10},
+  {type: 'num', key: 'watch', label: 'Monitoraggio post-rottura', min: 5, max: 500},
+  {type: 'color', key: 'typeColor', label: 'Triangolo in formazione'},
+  {type: 'color', key: 'bullColor', label: 'Rottura rialzista'},
+  {type: 'color', key: 'bearColor', label: 'Rottura ribassista'},
+  {type: 'color', key: 'neutralColor', label: 'Stop e fallimenti'},
+  {type: 'check', key: 'showTouches', label: 'Mostra tocchi'},
+  {type: 'check', key: 'showFill', label: 'Riempimento'}
+];
+function triBuildSettings(ind, paramsRow, mk) {
+  TRI_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Gli alert (formazione, rotture, obiettivo, fallimento, stop, dissoluzione) non sono generati: l'app non ha alert.
+//  - Pivot: stessa regola degli altri indicatori (massimo strettamente sopra le barre a sinistra, non sotto quelle a destra).
+//  - Le etichette di Pine sono disegnate come testo; i marcatori di tocco come punti.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
+// ============================================================================
+// Valid BOS Pullback — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
+//
+// Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
+//
+
+// Setup: ogni rottura iniziale ha il proprio oggetto, come BosSetup in Pine.
+// Tutti i tempi sono indici di barra (in Pine sono timestamp, ma la corrispondenza è biunivoca).
+function bosNewSetup(dir, i, refBar, ref, target) {
+  return {
+    dir, stage: 1, startBar: i,
+    refBar,            // barra del massimo/minimo strutturale da ritestare
+    ref,               // livello di riferimento
+    target,            // estremo attuale del ramo
+    extTime: i,        // barra dell'estremo attuale
+    extBar: i,         // come extremeBar: barra per la conferma dell'estremo
+    extConfirmed: false,
+    retestBar: NaN,
+    clean: 0,          // barre consecutive senza tocco del livello
+    refX2: i, tgtX2: i,
+    pbLabel: null, touch: null
+  };
+}
+
+const VALID_BOS_PULLBACK_DEF = {
+  label: 'Valid BOS Pullback',
+  buildSettings: (ind, paramsRow, mk) => bosBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    leftBars: 3, rightBars: 3, lookback: 48, touchTicks: 4, minUntouchedBars: 5,
+    minExtensionTicks: 1, maxWait: 120, tickSize: 0.00001,
+    showDeveloping: true, showPullbackText: true, showTouchCircle: true,
+    refColor: '#EAEAEA', bullColor: '#7CFC00', bearColor: '#f23645'
+  }),
+
+  // Calcolo incrementale nello stesso ordine dello script:
+  // 1) nuovi pivot  2) potatura  3) avanzamento dei setup  4) rimozione dei setup con riferimento ritirato
+  // 5) scelta dei massimi/minimi dominanti  6) nuove rotture  7) cancellazione dei setup opposti  8) creazione.
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.highVals = []; st.highBars = [];
+      st.lowVals = []; st.lowBars = [];
+      st.retHighExt = []; st.retHighLev = []; st.retHighDone = [];
+      st.retLowExt = []; st.retLowLev = []; st.retLowDone = [];
+      st.setups = [];      // setup attivi
+      st.snaps = [];       // setup completati: linee, etichette e segni restano visibili
+    }
+    const L = Math.max(1, p.leftBars | 0), R = Math.max(1, p.rightBars | 0);
+    const LB = Math.max(6, p.lookback | 0);
+    const allow = p.touchTicks * p.tickSize;
+    const minExt = p.minExtensionTicks * p.tickSize;
+    const maxWait = Math.max(5, p.maxWait | 0);
+    const minUntouched = Math.max(0, p.minUntouchedBars | 0);
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      const pc = i > 0 ? rows[i - 1].close : NaN;
+
+      // 1) Pivot confermati da R barre a destra, L barre a sinistra (come ta.pivothigh/pivotlow).
+      const c = i - R;
+      if (c - L >= 0) {
+        const hc = rows[c].high, lc = rows[c].low;
+        let isH = true, isL = true;
+        for (let k = c - L; k <= i; k++) {
+          if (k === c) continue;
+          if (k < c) { if (rows[k].high >= hc) isH = false; if (rows[k].low <= lc) isL = false; }
+          else { if (rows[k].high > hc) isH = false; if (rows[k].low < lc) isL = false; }
+        }
+        if (isH) { st.highVals.push(hc); st.highBars.push(c); }
+        if (isL) { st.lowVals.push(lc); st.lowBars.push(c); }
+      }
+
+      // 2) Potatura: pivot più vecchi del lookback, e livelli ritirati più vecchi di lookback + R.
+      while (st.highBars.length > 0 && i - st.highBars[0] > LB) { st.highVals.shift(); st.highBars.shift(); }
+      while (st.lowBars.length > 0 && i - st.lowBars[0] > LB) { st.lowVals.shift(); st.lowBars.shift(); }
+      while (st.retHighDone.length > 0 && i - st.retHighDone[0] > LB + R) { st.retHighExt.shift(); st.retHighLev.shift(); st.retHighDone.shift(); }
+      while (st.retLowDone.length > 0 && i - st.retLowDone[0] > LB + R) { st.retLowExt.shift(); st.retLowLev.shift(); st.retLowDone.shift(); }
+
+      // 3) Avanzamento di ogni setup (dal più recente al più vecchio).
+      let bullBos = false, bearBos = false;
+      for (let k = st.setups.length - 1; k >= 0; k--) {
+        const s = st.setups[k];
+        let invalid = i - s.startBar > maxWait;
+        let completed = false;
+        if (s.dir === 1) {
+          invalid = invalid || r.close < s.ref - allow;
+          if (!invalid) {
+            if (s.stage === 1) {
+              if (r.high > s.target) { s.target = r.high; s.extTime = i; s.extBar = i; s.extConfirmed = false; }
+              if (i - s.extBar >= R) s.extConfirmed = true;
+              const touched = r.low <= s.ref && r.high >= s.ref;
+              if (touched && s.extConfirmed && s.clean >= minUntouched) {
+                s.stage = 2; s.retestBar = i; s.refX2 = i;
+                if (p.showPullbackText) s.pbLabel = {x: s.refBar, price: s.ref, color: p.bullColor};
+                if (p.showTouchCircle) s.touch = {x: i, price: s.ref, color: p.bullColor};
+              }
+              s.clean = touched ? 0 : s.clean + 1;
+            } else if (r.close > s.target) { completed = true; bullBos = true; }
+          }
+        } else {
+          invalid = invalid || r.close > s.ref + allow;
+          if (!invalid) {
+            if (s.stage === 1) {
+              if (r.low < s.target) { s.target = r.low; s.extTime = i; s.extBar = i; s.extConfirmed = false; }
+              if (i - s.extBar >= R) s.extConfirmed = true;
+              const touched = r.high >= s.ref && r.low <= s.ref;
+              if (touched && s.extConfirmed && s.clean >= minUntouched) {
+                s.stage = 2; s.retestBar = i; s.refX2 = i;
+                if (p.showPullbackText) s.pbLabel = {x: s.refBar, price: s.ref, color: p.bearColor};
+                if (p.showTouchCircle) s.touch = {x: i, price: s.ref, color: p.bearColor};
+              }
+              s.clean = touched ? 0 : s.clean + 1;
+            } else if (r.close < s.target) { completed = true; bearBos = true; }
+          }
+        }
+
+        if (invalid) {
+          st.setups.splice(k, 1);
+        } else if (completed) {
+          const sig = s.dir === 1 ? p.bullColor : p.bearColor;
+          if (s.dir === 1) { st.retHighExt.push(s.extTime); st.retHighLev.push(s.target); st.retHighDone.push(i); }
+          else { st.retLowExt.push(s.extTime); st.retLowLev.push(s.target); st.retLowDone.push(i); }
+          // Snapshot del setup completato: resta disegnato.
+          st.snaps.push({
+            dir: s.dir,
+            ref: {from: s.refBar, to: p.showDeveloping ? s.refX2 : s.retestBar, price: s.ref,
+                  color: p.showDeveloping && s.stage === 1 ? p.refColor : sig, dashed: true},
+            tgt: {from: s.extTime, to: i, price: s.target, color: sig},
+            pb: s.pbLabel, touch: s.touch,
+            check: {x: s.extTime, price: s.target, down: s.dir === 1, color: sig}
+          });
+          st.setups.splice(k, 1);
+        } else if (p.showDeveloping) {
+          if (s.stage === 1) s.refX2 = i;
+          s.tgtX2 = i;
+        }
+      }
+
+      // 4) Setup il cui riferimento è stato ritirato da una rottura confermata: rimossi.
+      for (let k = st.setups.length - 1; k >= 0; k--) {
+        const s = st.setups[k];
+        const retired = s.dir === 1 ? st.retHighLev.indexOf(s.ref) >= 0 : st.retLowLev.indexOf(s.ref) >= 0;
+        if (retired) st.setups.splice(k, 1);
+      }
+
+      // 5) Massimo e minimo dominanti tra i pivot non ritirati.
+      let prevHigh = NaN, prevHighBar = NaN, prevLow = NaN, prevLowBar = NaN;
+      for (let k = 0; k < st.highVals.length; k++) {
+        const cand = st.highVals[k], cb = st.highBars[k];
+        if (st.retHighExt.indexOf(cb) < 0 && st.retHighLev.indexOf(cand) < 0 && (isNaN(prevHigh) || cand > prevHigh)) {
+          prevHigh = cand; prevHighBar = cb;
+        }
+      }
+      for (let k = 0; k < st.lowVals.length; k++) {
+        const cand = st.lowVals[k], cb = st.lowBars[k];
+        if (st.retLowExt.indexOf(cb) < 0 && st.retLowLev.indexOf(cand) < 0 && (isNaN(prevLow) || cand < prevLow)) {
+          prevLow = cand; prevLowBar = cb;
+        }
+      }
+
+      // 6) Nuova rottura iniziale: chiusura oltre il massimo/minimo dominante di almeno minExt.
+      let newBull = !bullBos && !isNaN(prevHigh) && i > prevHighBar && r.close > prevHigh + minExt && pc <= prevHigh;
+      let newBear = !bearBos && !isNaN(prevLow) && i > prevLowBar && r.close < prevLow - minExt && pc >= prevLow;
+
+      // Un livello appena diventato BOS non può essere il riferimento bianco di un altro setup.
+      for (const s of st.setups) {
+        if (s.stage === 2 && s.dir === 1 && !isNaN(prevHigh) && Math.abs(prevHigh - s.target) <= p.tickSize) newBull = false;
+        if (s.stage === 2 && s.dir === -1 && !isNaN(prevLow) && Math.abs(prevLow - s.target) <= p.tickSize) newBear = false;
+      }
+
+      // 7) Una rottura nella direzione opposta cancella i setup non finiti della tendenza precedente.
+      if (newBull || newBear) {
+        for (let k = st.setups.length - 1; k >= 0; k--) {
+          const s = st.setups[k];
+          if ((newBull && s.dir === -1) || (newBear && s.dir === 1)) st.setups.splice(k, 1);
+        }
+      }
+
+      // 8) Creazione dei nuovi setup.
+      if (newBull) st.setups.push(bosNewSetup(1, i, prevHighBar, prevHigh, r.high));
+      if (newBear) st.setups.push(bosNewSetup(-1, i, prevLowBar, prevLow, r.low));
+
+      st.bullBos = bullBos; st.bearBos = bearBos;
+      st.builtTo = i;
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const last = st.builtTo;
+    const seg = (x1, x2, price, color, width, dashed) => {
+      const a = Math.max(x1, dataStart - 1), b = Math.min(x2, dataEnd + 1);
+      if (b < a) return;
+      ctx.save();
+      ctx.strokeStyle = color; ctx.lineWidth = width; ctx.globalAlpha = 1;
+      if (dashed) ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(xAbs(a), y(price)); ctx.lineTo(xAbs(b), y(price)); ctx.stroke();
+      ctx.restore();
+    };
+    const txt = (s, xx, yy, color, align, size) => {
+      ctx.save();
+      ctx.fillStyle = color; ctx.font = scaledFont(size || '10px system-ui');
+      ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(s, xx, yy);
+      ctx.restore();
+    };
+    const drawLabels = (pb, touch) => {
+      if (pb) txt('Valid Pullback', xAbs(pb.x) + 4, y(pb.price), pb.color, 'left', 'bold 10px system-ui');
+      if (touch) txt('○', xAbs(touch.x), y(touch.price), touch.color, 'center', '14px system-ui');
+    };
+
+    // Setup completati: linee, segno ✓ e etichette restano.
+    for (const s of st.snaps) {
+      seg(s.ref.from, s.ref.to, s.ref.price, s.ref.color, 2, s.ref.dashed);
+      seg(s.tgt.from, s.tgt.to, s.tgt.price, s.tgt.color, 2, false);
+      txt('✓', xAbs(s.check.x), y(s.check.price) + (s.check.down ? -10 : 10), s.check.color, 'center', 'bold 11px system-ui');
+      drawLabels(s.pb, s.touch);
+    }
+
+    // Setup in corso: livelli di sviluppo (se attivi) ed etichette di ritest.
+    for (const s of st.setups) {
+      if (p.showDeveloping) {
+        const sig = s.dir === 1 ? p.bullColor : p.bearColor;
+        seg(s.refBar, s.refX2, s.ref, s.stage === 2 ? sig : p.refColor, 2, s.stage === 2);
+        seg(s.extTime, s.tgtX2, s.target, sig, 2, false);
+      }
+      drawLabels(s.pbLabel, s.touch);
+    }
+  }
+};
+
+// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
+const BOS_SETTINGS = [
+  {type: 'num', key: 'leftBars', label: 'Barre sinistra', min: 1, max: 50},
+  {type: 'num', key: 'rightBars', label: 'Barre destra', min: 1, max: 50},
+  {type: 'num', key: 'lookback', label: 'Lookback struttura', min: 6, max: 500},
+  {type: 'num', key: 'touchTicks', label: 'Tolleranza invalidazione (tick)', min: 0, max: 1000},
+  {type: 'num', key: 'minUntouchedBars', label: 'Barre minime senza ritest', min: 0, max: 100},
+  {type: 'num', key: 'minExtensionTicks', label: 'Rottura iniziale minima (tick)', min: 1, max: 1000},
+  {type: 'num', key: 'maxWait', label: 'Età massima setup', min: 5, max: 1000},
+  {type: 'num', key: 'tickSize', label: 'Dimensione tick', min: 0.000001, max: 1, step: 0.00001},
+  {type: 'check', key: 'showDeveloping', label: 'Livelli in sviluppo'},
+  {type: 'check', key: 'showPullbackText', label: 'Testo pullback valido'},
+  {type: 'check', key: 'showTouchCircle', label: 'Segna ritest'},
+  {type: 'color', key: 'refColor', label: 'Massimo/minimo precedente'},
+  {type: 'color', key: 'bullColor', label: 'BOS rialzista'},
+  {type: 'color', key: 'bearColor', label: 'BOS ribassista'}
+];
+function bosBuildSettings(ind, paramsRow, mk) {
+  BOS_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
+// NOTE
+//  - Gli alert (rottura BOS confermata, rialzista e ribassista) non sono generati: l'app non ha alert.
+//  - Pivot: stessa regola usata negli altri indicatori (massimo strettamente sopra le barre a sinistra, non sotto quelle a destra). Va verificata con TradingView.
+//  - Tempi memorizzati come indici di barra: la corrispondenza con i timestamp di Pine è biunivoca.
+//  - Non ancora collaudato dentro l'app (bash laboratorio/collauda.sh).
+
 const INDICATOR_DEFS={
  tvp3d:{
    label:'Temporal Volume Profile 3D',
@@ -17207,6 +20811,19 @@ for(let i=from;i<=to;i++){
  }
 
 };
+// GLI UNDICI INDICATORI NUOVI entrano qui, dopo la tabella: cosi' il loro codice resta in un
+// blocco suo e la tabella storica non si gonfia di mille righe.
+INDICATOR_DEFS.amd_fvg_trade=AMD_FVG_TRADE_DEF;
+INDICATOR_DEFS.amd_poc_trade=AMD_POC_TRADE_DEF;
+INDICATOR_DEFS.complex_hs=COMPLEX_HS_DEF;
+INDICATOR_DEFS.gann_method=GANN_METHOD_DEF;
+INDICATOR_DEFS.mss_sweep_fib=MSS_SWEEP_FIB_DEF;
+INDICATOR_DEFS.no_wick_retest=NO_WICK_RETEST_DEF;
+INDICATOR_DEFS.open10_key_levels=OPEN10_KEY_LEVELS_DEF;
+INDICATOR_DEFS.sweeps_ifvg=SWEEPS_IFVG_DEF;
+INDICATOR_DEFS.trendline_liquidity=TRENDLINE_LIQUIDITY_DEF;
+INDICATOR_DEFS.triangles=TRIANGLES_DEF;
+INDICATOR_DEFS.valid_bos_pullback=VALID_BOS_PULLBACK_DEF;
 const aiIndicatorCompileCache=new WeakMap();
 // BUG RISOLTO (segnalato dall'utente: il prompt pronto "sembra" funzionare — l'assistente AI
 // risponde nel formato richiesto (DEFAULT_PARAMS/COMPUTE/RENDER) — ma l\'app "non lo accetta"):
@@ -17940,6 +21557,18 @@ function openIndicatorSettingsModal(ind){
      paramsRow.appendChild(mkColor('OB+','bullColor'));
      paramsRow.appendChild(mkColor('OB-','bearColor'));
      paramsRow.appendChild(mkColor('Mitigata','mitigColor'));
+   }
+   // I CAMPI LI PUO' DICHIARARE L'INDICATORE STESSO (12 novembre 2026).
+   // Gli undici indicatori nuovi portano un buildSettings(ind, paramsRow, {mkNum,mkCheck,
+   // mkColor,mkSelect}) che costruisce i propri campi. Un ramo solo qui invece di undici
+   // scritti a mano: chi aggiunge un indicatore domani non deve toccare questa funzione.
+   // Vale solo per chi NON ha gia' un ramo suo sopra, quindi niente cambia per i vecchi.
+   if(!paramsRow.children.length){
+     const _d=INDICATOR_DEFS[ind.key];
+     if(_d&&typeof _d.buildSettings==='function'){
+       try{ _d.buildSettings(ind,paramsRow,{mkNum,mkCheck,mkColor,mkSelect}); }
+       catch(e){ console.warn('[Indicatori] pannello di '+ind.key+' non costruito:',e); }
+     }
    }
    body.appendChild(paramsRow);
    // --- Setup salvati (preset) per questo tipo di indicatore -------------------------
