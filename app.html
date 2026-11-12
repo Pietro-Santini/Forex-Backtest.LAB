@@ -26466,7 +26466,15 @@ if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo
  $('status').textContent=`Chiusura in corso sul conto MT5 (ticket ${pos.mt5Ticket})…`;
  const result=await fetchMt5WithTimeout('/order/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:pos.mt5Ticket})});
  if(!result.ok){
-   $('status').textContent='⚠️ Chiusura reale non riuscita: '+result.message;
+   // ESITO SCONOSCIUTO E RIFIUTO SONO DUE COSE DIVERSE (12 novembre 2026).
+   // Il ponte risponde 502 quando il terminale non ha risposto all'invio: l'operazione POTREBBE
+   // essere stata eseguita lo stesso. Dire «non riuscita» in quel caso e' una bugia pericolosa,
+   // perche' invita a riprovare - e una chiusura mandata due volte APRE la posizione opposta.
+   const _ignoto=(result.status===502)||/sconosciut/i.test(String(result.message||''));
+   $('status').textContent=_ignoto
+     ? '❓ Chiusura: esito SCONOSCIUTO. Il terminale non ha risposto e l\'operazione potrebbe essere '
+       +'stata eseguita lo stesso. NON riprovare prima di aver controllato le posizioni qui sotto.'
+     : '⚠️ Chiusura reale non riuscita: '+result.message;
    fetchMt5Positions();
    return false;
  }
@@ -26477,6 +26485,21 @@ if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo
  // nell'altra strada di chiusura, dove il commento dice «Number(null) vale 0, che e' finito».
  const _pr=(result.data&&result.data.price!=null)?Number(result.data.price):NaN;
  const price=(Number.isFinite(_pr)&&_pr>0)?_pr:fblPrezzoRipiegoChiusura(pos,reason);
+ // CHIUSA A META' NON E' CHIUSA (12 novembre 2026). Il broker puo' eseguire solo parte del
+ // volume (retcode 10010, esito NORMALE con filling IOC e poca liquidita'): il ponte adesso lo
+ // dichiara. Giornalizzare come chiusura intera una posizione ancora aperta a meta' falserebbe
+ // il conto e lo storico, quindi qui si dice la verita' e si lascia che il giro di lettura
+ // riporti il volume vero.
+ if(result.data&&result.data.parziale){
+   const _ric=Number(result.data.volume_richiesto), _ese=Number(result.data.volume_eseguito);
+   const _resta=(Number.isFinite(_ric)&&Number.isFinite(_ese))?Math.max(0,_ric-_ese):null;
+   $('status').textContent='⚠️ Chiusura ESEGUITA SOLO IN PARTE su MT5 (ticket '+pos.mt5Ticket+'): '
+     +(Number.isFinite(_ese)?('chiusi '+_ese.toFixed(2)+' lot su '+(Number.isFinite(_ric)?_ric.toFixed(2):'?')):'volume parziale')
+     +(_resta!=null?(', restano aperti '+_resta.toFixed(2)+' lot'):'')
+     +'. La posizione e\' ancora aperta per la parte restante.';
+   fetchMt5Positions();
+   return false;
+ }
  closeTrade(reason,price,pos,resolveMt5FinalLevels(pos,mt5RealPositions.find(rp=>String(rp.ticket)===String(pos.mt5Ticket))));
  $('status').textContent=`🔌 Posizione ${pos.asset||''} (ticket ${pos.mt5Ticket}) chiusa DAVVERO su MT5 al prezzo ${fmtPrice(price)}.`;
  fetchMt5Positions();

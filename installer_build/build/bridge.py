@@ -2965,8 +2965,29 @@ def _send_trying_fillings(request: dict):
             last_exc = traceback.format_exc()
             continue
         if result is None:
-            continue
+            # ESITO IGNOTO: NON SI RITENTA MAI (12 novembre 2026).
+            # Prima qui c'era `continue`, cioe' si rimandava lo stesso ordine con un'altra
+            # filling policy. Ma «order_send non ha risposto» NON vuol dire «non e' stato
+            # eseguito»: vuol dire che non lo sappiamo. Rimandare una richiesta di trade dopo
+            # un esito ignoto puo' DUPLICARLA, e su una chiusura significa aprire la posizione
+            # opposta. L'unica risposta onesta e' fermarsi e dirlo: chi chiama deve rileggere
+            # posizioni e deal per sapere cos'e' successo davvero.
+            raise HTTPException(
+                status_code=502,
+                detail=("ESITO SCONOSCIUTO: il terminale non ha risposto all'invio. L'operazione "
+                        "potrebbe essere stata eseguita lo stesso. NON e' stata rimandata, per non "
+                        "rischiare un doppione: controlla le posizioni prima di riprovare. "
+                        f"(MT5: {mt5.last_error()})"),
+            )
         if result.retcode == mt5.TRADE_RETCODE_DONE:
+            return result
+        if result.retcode == 10010:
+            # ESEGUITA SOLO IN PARTE: e' un'ESECUZIONE, non un rifiuto (12 novembre 2026).
+            # Prima finiva in last_result e usciva come «Ordine rifiutato dal broker»: su una
+            # chiusura, meta' posizione era chiusa DAVVERO e chi leggeva credeva di essere
+            # ancora dentro per intero. Con type_filling IOC - la seconda modalita' che questa
+            # funzione prova sempre - l'esecuzione parziale e' l'esito NORMALE quando la
+            # liquidita' non basta: non e' un caso raro. La rotta lo riconosce dal retcode.
             return result
         last_result = result
         if result.retcode != 10030:  # errore diverso da "filling non supportato": non ha senso provare un'altra modalità
@@ -3774,7 +3795,19 @@ def order_close(body: CloseRequest):
         "type_filling": _pick_filling_mode(info),
     }
     result = _send_trying_fillings(request)
-    return {"ticket": result.order, "deal": result.deal, "price": result.price}
+    # IL PARZIALE SI DICHIARA (12 novembre 2026): volume richiesto ed eseguito servono all'app
+    # per dire «chiusa a meta'» invece di «chiusa» o, peggio, «rifiutata».
+    parziale = (result.retcode == 10010)
+    return {
+        "ticket": result.order,
+        "deal": result.deal,
+        "price": result.price,
+        "retcode": result.retcode,
+        "parziale": parziale,
+        "volume_richiesto": pos.volume,
+        "volume_eseguito": getattr(result, "volume", None),
+        "avviso": (RETCODE_MESSAGES.get(10010) if parziale else None),
+    }
 
 
 @app.post("/order/modify")

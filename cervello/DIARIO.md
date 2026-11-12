@@ -6239,3 +6239,53 @@ deve dipendere da una lettura istantanea: va separato, deve pretendere dati comp
 rifiutata qualunque variazione di equity piu' grande del nozionale delle posizioni aperte (nella
 misura di oggi il flottante era ESATTAMENTE il 100% del nozionale: un solo controllo avrebbe
 fermato tutta la catena).
+
+
+---
+
+## 12 novembre 2026 - v2.2.33: una chiusura non si riprova alla cieca, e una meta' non e' un rifiuto
+
+SEGNALATO dalla misura del proprietario (pannello prestazioni, 11 novembre 23:36):
+`chiusura: 8 volte, media 5.043 ms, peggiore 8.306 ms, **8 NON RIUSCITE**`. Otto chiusure su otto
+fallite: non riuscire a uscire da una posizione e' la cosa piu' grave di tutta la lista aperta.
+
+**DUE DIFETTI MISURATI, tutti e due dentro `_send_trying_fillings` (bridge.py).**
+
+1. **L'ESECUZIONE PARZIALE VENIVA RIPORTATA COME RIFIUTO.** Solo `TRADE_RETCODE_DONE` contava come
+   successo: il retcode **10010** («Solo una parte della richiesta e' stata eseguita») finiva fra i
+   rifiuti e usciva come «Ordine rifiutato dal broker». Meta' posizione era chiusa DAVVERO e chi
+   leggeva credeva di essere ancora dentro per intero. E non e' un caso di laboratorio: con
+   `type_filling` IOC - la seconda modalita' che quella funzione prova SEMPRE - l'esecuzione
+   parziale e' l'esito normale quando la liquidita' non basta.
+2. **DOPO UN ESITO IGNOTO SI RIMANDAVA L'ORDINE.** Con `order_send` che torna `None` il codice
+   faceva `continue`, cioe' rimandava la stessa richiesta con un'altra filling policy: fino a TRE
+   invii. Ma «non ha risposto» non vuol dire «non e' stato eseguito». Su soldi veri un secondo
+   invio puo' duplicare la chiusura, e **una chiusura duplicata APRE la posizione opposta**.
+
+**CURA, nel ponte.** Il 10010 torna a chi ha chiesto invece di diventare un errore, e la rotta
+`/order/close` lo dichiara con `parziale`, `volume_richiesto`, `volume_eseguito` e un avviso.
+Davanti a un esito ignoto non si ritenta: si risponde **502** dicendo che l'operazione potrebbe
+essere stata eseguita lo stesso e che va controllata prima di riprovare.
+
+**CURA, nell'app.** `closeMt5PositionReal` distingue adesso tre esiti invece di due:
+- **parziale**: lo dice in chiaro («chiusi 0,05 lot su 0,10, restano aperti 0,05: la posizione e'
+  ancora aperta per la parte restante») e **non giornalizza** l'operazione come chiusura intera,
+  perche' falserebbe conto e storico;
+- **esito sconosciuto** (502): non scrive piu' «non riuscita», che invitava a riprovare, ma
+  «esito SCONOSCIUTO... NON riprovare prima di aver controllato le posizioni»;
+- rifiuto vero: come prima.
+
+**Test**: laboratorio/ponte/test_chiusura_parziale_e_esito_ignoto.py (4 prove, due delle quali di
+controllo: un rifiuto vero resta un rifiuto, e il 10030 fa ancora cambiare filling policy - che e'
+il motivo per cui quella funzione esiste). Collaudo ponte: 327 verdi. Collaudo completo: 0 falliti.
+
+**TRAPPOLA PAGATA PER STRADA**: due errori di sintassi di fila per gli apostrofi italiani dentro
+stringhe JavaScript a virgoletta singola («l'operazione», «e' ancora aperta»). Li ha presi il
+controllo di sintassi prima di qualunque collaudo. Quando si scrive italiano dentro stringhe
+delimitate da apostrofo, l'apostrofo va protetto - o si usa la virgoletta doppia.
+
+**RESTA APERTO su questo fronte**: `/order/close` non prende nessun lock, e il pacchetto
+MetaTrader5 non e' thread-safe (lo dichiara il commento in cima a mt5_feed_server.py, che per
+questo obbliga a passare da `_mt5_call()`). In bridge.py quel lock non esiste: 69 punti chiamano
+`mt5.*` nudo dentro un thread pool da 40. Non spiega i secondi, ma e' il sospetto piu' naturale
+per le letture non riuscite.
