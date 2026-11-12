@@ -64,3 +64,63 @@ sistema che di progettazione.»
 
 Gli agenti del progetto sono in `.claude/agents/`: `regista` (coordina), `collaudatore`,
 `cacciatore-instabilita`, `sentinella-sicurezza`, `guida-neofita`.
+
+
+---
+
+## REGOLA DEL CLOUD — scritta il 12 novembre 2026, dopo la terza bolletta a sorpresa
+
+**IL FATTO CHE L'HA RESA NECESSARIA.** Console Firebase, 12 novembre: **scritture 22.000 su
+20.000 al giorno, quota SUPERATA**, letture 44.000 su 50.000 (l'88%). Il pannello dell'app, nello
+stesso giorno, diceva **81 scritture**. Un rapporto di 270 a 1 fra quello che il programma crede
+di fare e quello che succede davvero. Non e' la prima volta: era gia' successo il 9 novembre
+(14.000 contro 102) e il 31 ottobre. Tre volte lo stesso schema, tre volte scoperto dalla
+bolletta e non da noi.
+
+### LE CINQUE REGOLE
+
+**1. Ogni operazione verso il cloud passa da un tetto, e il tetto sopravvive alla riapertura.**
+Scritture e letture hanno tetti SEPARATI, perche' le quote sono separate: un solo contatore
+farebbe smettere di salvare i dati per colpa delle letture. Oggi: 3.000 scritture e 5.000 letture
+al giorno, contro 20.000 e 50.000 gratuite. Il conto sta in `localStorage`, non in memoria: in una
+WebView le ricariche sono frequenti, e un tetto che riparte da zero a ogni ricarica **non e' un
+tetto, e' un'illusione** (misurato: e' successo per le scritture il 10 novembre e per le letture
+il 12, lo stesso giorno in cui le ho aggiunte - lo ha trovato il banco, non la bolletta).
+
+**2. Non si legge un documento per sapere un numero.** Il conteggio delle operazioni gia' sul
+cloud veniva fatto rileggendo l'INTERO documento a ogni salvataggio. Un numero che si puo'
+ricordare non si rilegge mai: si tiene in memoria e si aggiorna dopo ogni scrittura riuscita, e si
+rilegge solo la prima volta o dopo un errore.
+
+**3. Un ascolto non e' gratis: ogni arrivo e' una lettura.** I quattro ascolti permanenti
+(session, grafico, collegamento, preferenze) producono una lettura a testa OGNI VOLTA che un
+altro dispositivo scrive quel documento. Con tre dispositivi accesi, una scrittura ne genera due,
+per ognuno dei quattro documenti. **E' il moltiplicatore che nessun pannello vedeva**, perche'
+l'app conta le proprie chiamate e non quello che arriva. Prima di aggiungere un ascolto, si
+calcola quante letture produrra' con N dispositivi accesi.
+
+**4. Quando una lettura fallisce, non si riscrive tutto.** Se il conteggio non riesce, il codice
+cadeva nel ramo di ripiego e rimandava la FOTOGRAFIA INTERA. Un ripiego che costa cento volte
+l'operazione normale non e' un ripiego: e' un moltiplicatore che si accende proprio quando le cose
+vanno male. Il pannello del proprietario segnava `cloudTradesInviati: 3469`: non erano operazioni
+nuove, era lo storico rimandato piu' volte.
+
+**5. Il pannello dell'app non e' la verita': la console lo e'.** Il pannello conta le chiamate
+che l'app fa; la console conta le operazioni che Firebase registra - comprese quelle degli
+ascolti, delle Cloud Functions e degli altri dispositivi. **Quando i due numeri divergono di piu'
+di dieci volte, la differenza E' il difetto**, e va cercata prima di toccare qualunque altra cosa.
+
+### COME SI CONTROLLA, in trenta secondi
+Nella console di Firebase, pagina «Uso del prodotto»: scritture e letture del giorno. Nell'app,
+pannello del traffico: `budgetStato()` e `budgetLetture()` danno il conto per documento, cioe'
+**chi** consuma. Se il rapporto fra i due supera dieci, si apre un'indagine.
+
+### COSA NON VA FATTO, e perche'
+- **Alzare il tetto per far sparire l'avviso.** Il tetto non e' il problema, e' il misuratore.
+- **Rendere un banco piu' tollerante perche' cade.** Il 12 novembre il banco
+  `cloud_incrementale` cadeva a intermittenza anche su GitHub: misura la regola «identico = non
+  si scrive», su cui si regge tutta la bolletta. Un banco cosi' si tiene severo finche' non si sa.
+- **Fidarsi di un banco che si salta.** Le prime tre prove del tetto delle letture passavano
+  SENZA MISURARE NIENTE, perche' il modulo del cloud non partiva nel banco e si uscivano con un
+  `return`. Un banco che si salta da' una sicurezza falsa, peggio di uno rosso: se la condizione
+  che serve a misurare non c'e', la prova deve CADERE, non saltare.

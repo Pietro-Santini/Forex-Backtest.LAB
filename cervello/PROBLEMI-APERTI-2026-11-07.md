@@ -773,3 +773,34 @@ proprietario, visto che la console Firebase ne conta 15.000 contro le 81 che l'a
 divario resta non spiegato ed e' annotato piu' sopra.
 Stato: DA MISURARE. Non e' un banco da rendere piu' tollerante: finche' non si sa, va tenuto
 severo, perche' e' l'unico che guarda quella regola.
+
+
+## P0 — I DISEGNI CHE SPARISCONO: due strade curate (v2.2.36), una terza ancora aperta
+CURATE il 12 novembre, su misura dell'indagine dell'11:
+1. **La copia di un account non si sovrascrive piu' da scollegati.** Riaprendo senza account il
+   ripristino scartava la copia firmata con l'uid (il filtro vuole l'uid uguale, e `null` non e'
+   uguale a niente): a schermo zero disegni mentre sul disco ce n'erano due. Fin li' si
+   recuperava; ma il primo disegno nuovo riscriveva la stessa chiave firmata `uid:null` e
+   cancellava i vecchi - da li' la perdita era definitiva. Adesso una sessione senza account
+   scrive in una chiave sua (`..._scollegato`) e non tocca la copia di nessuno.
+2. **Senza account non si resta a mani vuote**: se nessuno e' collegato, il filtro per uid non
+   butta piu' via i disegni di questo dispositivo. Con un account collegato il filtro resta come
+   prima: i disegni di un altro non si mostrano.
+3. **Uno stato vuoto non batte un deposito pieno.** Lo stato di sessione viene riscritto di
+   continuo, quindi e' quasi sempre piu' recente del deposito dei disegni: la data da sola lo
+   faceva vincere anche quando non conteneva NESSUN disegno. Fra «piu' recente ma vuoto» e «piu'
+   vecchio ma pieno», per i disegni vince il pieno.
+
+**RESTA ROSSA la prova DUE** di `banchi_aperti_forex\disegni_chiudi_riapri.test.mjs`, e si sa
+perche': il banco ricarica la pagina e il ripristino passa per un percorso di avvio diverso da
+quello curato (`comeRipristinato: "copia locale (questo dispositivo)"`, cioe' il ramo
+`localMatchesAccount` di initSession, non `restoreDrawingsFromBackupIfNewer`). Da misurare: se in
+quel ramo `assetDrawings` venga sovrascritto DOPO il ripristino, e da chi. Non-regressione
+verificata: 31 prove verdi su tutti i banchi dei disegni.
+
+**RESTANO APERTE le altre due strade misurate l'11 novembre**, non ancora curate:
+- una voce del cloud piu' VECCHIA e piu' povera vince su quella locale piu' ricca (misurato 5
+  disegni -> 1): il confronto usa un «seme» che vale 6 contro millisecondi veri;
+- il tetto di peso e' controllato sul PACCHETTO e non sul DOCUMENTO, quindi si supera il limite
+  del cloud e la scrittura viene rifiutata IN SILENZIO (`graficoAvvisoPieno` resta falso e la
+  barra di stato non dice niente). E' il «spariscono senza dire niente».

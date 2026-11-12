@@ -131,22 +131,61 @@ def _db_conn():
     return conn
 
 
+_ultimo_motivo_rifiuto = {"testo": "", "quando": 0.0, "quanti": 0}
+
+
+def _dillo_una_volta(motivo: str):
+    """Scrive nel log PERCHE' un token e' stato rifiutato, ma una volta ogni 60 secondi.
+
+    MISURATO il 12 novembre 2026 sul PC del proprietario: 3.468 righe «connection rejected (403
+    Forbidden)» nello stesso log, 353 nelle ultime 2.000 righe, e NESSUNA che dicesse il motivo -
+    perche' il rifiuto passava da un `except Exception: return None`. Un rifiuto che si ripete
+    migliaia di volte senza spiegarsi non e' diagnosticabile: non si distingue un token scaduto da
+    una rete che non risponde o da un orologio sfasato, e sono tre cure diverse.
+    Il freno di 60 secondi serve a non riempire il log, che e' proprio il difetto da cui veniamo."""
+    import time as _t
+    ora = _t.time()
+    if motivo == _ultimo_motivo_rifiuto["testo"] and (ora - _ultimo_motivo_rifiuto["quando"]) < 60:
+        _ultimo_motivo_rifiuto["quanti"] += 1
+        return
+    extra = ""
+    if _ultimo_motivo_rifiuto["quanti"]:
+        extra = " (e altri %d rifiuti uguali nel frattempo)" % _ultimo_motivo_rifiuto["quanti"]
+    _ultimo_motivo_rifiuto.update({"testo": motivo, "quando": ora, "quanti": 0})
+    try:
+        print("[Dati] token rifiutato: %s%s" % (motivo, extra), flush=True)
+    except Exception:
+        pass
+
+
 def verifica_token_firebase(token: str):
     """L'uid se il token e' valido, altrimenti None. Mai fidarsi di un uid mandato dal client."""
-    if not token or not _FB_AUTH_OK:
+    if not token:
+        _dillo_una_volta("nessun token nella richiesta")
+        return None
+    if not _FB_AUTH_OK:
+        _dillo_una_volta("le librerie google-auth non sono disponibili in questo eseguibile: "
+                         "nessun token potra' mai essere accettato")
         return None
     try:
         info = _fb_id_token.verify_firebase_token(
             token, _fb_requests.Request(), audience=FIREBASE_PROJECT_ID)
         if not info:
+            _dillo_una_volta("la verifica non ha restituito nessuna informazione")
             return None
         uid = info.get("sub") or info.get("user_id")
         if not str(info.get("iss", "")).startswith("https://securetoken.google.com/"):
+            _dillo_una_volta("il token non viene da Firebase (iss=%r)" % info.get("iss"))
             return None
         if info.get("aud") != FIREBASE_PROJECT_ID:
+            _dillo_una_volta("il token e' di un altro progetto (aud=%r, atteso %r)"
+                             % (info.get("aud"), FIREBASE_PROJECT_ID))
             return None
         return uid
-    except Exception:
+    except Exception as e:
+        # Il tipo dell'errore distingue le tre cause vere: token scaduto, rete che non risponde
+        # (la verifica scarica le chiavi pubbliche di Google), orologio del computer sfasato.
+        _dillo_una_volta("%s: %s" % (type(e).__name__, str(e)[:180]))
         return None
 
 

@@ -1302,7 +1302,7 @@ window.fblAvviaSoloBacktest=function(){
     // consuma) e oltre il tetto non si scrive piu' sul cloud. Non si perde niente: i dati
     // restano salvati in locale come sempre, e il giorno dopo il conto riparte. Meglio una
     // sincronizzazione che si ferma di una bolletta che non si ferma.
-    _budget:{ giorno:null, conta:{}, totale:0, avvisato:false },
+    _budget:{ giorno:null, conta:{}, totale:0, avvisato:false, letture:0, contaLetture:{}, avvisatoLetture:false },
     // IL TETTO NON DEVE AZZERARSI A OGNI APERTURA (10-11 novembre 2026).
     //
     // MISURATO: la console Firebase segnava 14.000 scritture e 28.000 letture in 24 ore,
@@ -1327,14 +1327,62 @@ window.fblAvviaSoloBacktest=function(){
         // Si riprende SOLO il conto di OGGI: un salvataggio di ieri non deve pesare sul
         // tetto di oggi (il giorno dopo il conto riparte da solo, come promesso).
         if(salvato && salvato.giorno===g && Number.isFinite(Number(salvato.totale))){
+          // SI RIPRENDE ANCHE IL CONTO DELLE LETTURE (12 novembre 2026).
+          // Trovato dal banco appena scritto: ripristinando solo le scritture, il tetto delle
+          // letture ripartiva da zero a ogni riapertura - cioe' era finto, esattamente come lo
+          // era quello delle scritture prima della cura del 10 novembre. In una WebView le
+          // ricariche sono frequenti: un tetto che non sopravvive protegge una finestra, non
+          // il progetto.
           this._budget={giorno:g, conta:(salvato.conta||{}), totale:Number(salvato.totale)||0,
-                        avvisato:!!salvato.avvisato};
+                        avvisato:!!salvato.avvisato,
+                        letture:Number(salvato.letture)||0,
+                        contaLetture:(salvato.contaLetture||{}),
+                        avvisatoLetture:!!salvato.avvisatoLetture};
         }else{
-          this._budget={giorno:g,conta:{},totale:0,avvisato:false};
+          this._budget={giorno:g,conta:{},totale:0,avvisato:false,
+                        letture:0,contaLetture:{},avvisatoLetture:false};
         }
       }
       return this._budget;
     },
+    // IL TETTO VALE ANCHE PER LE LETTURE (12 novembre 2026).
+    //
+    // MISURATO sulla console Firebase: scritture 22.000 su 20.000 al giorno - **quota superata**
+    // - e letture 44.000 su 50.000 (l'88%). Il tetto esisteva da giorni, ma contava SOLO le
+    // scritture: le letture non passavano da nessun controllo, e sono quelle che stavano per
+    // sfondare per seconde.
+    // E le letture non si fanno solo chiedendo: i QUATTRO ascolti permanenti (session, grafico,
+    // collegamento, preferenze) ne generano una a testa OGNI VOLTA che un altro dispositivo
+    // scrive quel documento. Con tre dispositivi accesi, una scrittura ne produce due - per
+    // ognuno dei quattro documenti. E' questo il moltiplicatore che il pannello dell'app non
+    // vedeva, perche' lui conta le proprie chiamate, non gli arrivi.
+    // Oltre il tetto si continua a lavorare: i dati restano in locale, come per le scritture.
+    _puoLeggere(nome){
+      const b=this._budgetOggi();
+      const tetto=this._budgetTettoLetture();
+      if((b.letture||0)>=tetto){
+        if(!b.avvisatoLetture){
+          b.avvisatoLetture=true;
+          try{ console.warn('[Cloud] tetto giornaliero delle LETTURE raggiunto ('+(b.letture||0)
+            +'): da qui in poi si legge solo da questo dispositivo. Dettaglio:',b.contaLetture); }catch(e){}
+          try{ const s=document.getElementById('status'); if(s)s.textContent='☁️ Tetto giornaliero delle letture dal cloud raggiunto: da qui si usa la copia di questo dispositivo. Domani riparte da solo.'; }catch(e){}
+        }
+        return false;
+      }
+      b.letture=(b.letture||0)+1;
+      b.contaLetture=b.contaLetture||{};
+      b.contaLetture[nome]=(b.contaLetture[nome]||0)+1;
+      this._budgetSalva();
+      return true;
+    },
+    _budgetTettoLetture(){
+      try{ const v=Number(localStorage.getItem('fbl_cloud_tetto_letture')); if(Number.isFinite(v)&&v>0)return v; }catch(e){}
+      return 5000;   // ben sotto le 50.000 gratuite, anche con tre dispositivi accesi
+    },
+    // Quanto si e' letto oggi, documento per documento: serve a trovare il prossimo rubinetto
+    // senza doverlo dedurre dal codice, esattamente come per le scritture.
+    budgetLetture(){ const b=this._budgetOggi();
+      return {letture:(b.letture||0),tetto:this._budgetTettoLetture(),dettaglio:Object.assign({},b.contaLetture||{})}; },
     // Vero se si puo' scrivere. Da chiamare in cima a OGNI metodo che scrive sul cloud.
     _puoScrivere(nome){
       const b=this._budgetOggi();
@@ -1358,6 +1406,12 @@ window.fblAvviaSoloBacktest=function(){
     // cadere un'eccezione addosso a un salvataggio per colpa di un contatore.
     _conta(tipo,documento,dato){
       try{
+        // IL CONTEGGIO E' ANCHE IL POSTO DOVE SI VEDE IL TETTO DELLE LETTURE (12 nov 2026):
+        // ogni lettura passa di qui, comprese quelle che ARRIVANO dagli ascolti e che nessuno
+        // aveva mai contate contro un limite. Non si ferma la lettura gia' avvenuta - sarebbe
+        // tardi - ma si tiene il conto e si avvisa, ed e' quello che mancava per accorgersene
+        // prima della bolletta.
+        if(tipo==='lettura'){ try{ this._puoLeggere(documento); }catch(e){} }
         if(typeof fblTrafficoSegna!=='function')return;
         let byte=0;
         try{ byte=(typeof dato==='string')?dato.length:JSON.stringify(dato||{}).length; }catch(e){ byte=0; }
@@ -7817,9 +7871,25 @@ function persistDrawingsBackupNow(){
    // dopo che questa stessa pagina li aveva visti): in quel caso è una cancellazione voluta.
    if(total===0 && drawingsBackupLastTotal===0)return;
    drawingsBackupLastTotal=total;
-   const payload={v:1,savedAt:Date.now(),uid:(window.fxbtCloud&&window.fxbtCloud.uid)||null,assetDrawings};
-   try{ localStorage.setItem(DRAWINGS_BACKUP_KEY,JSON.stringify(payload)); }catch(e){ console.warn('Copia dedicata disegni su localStorage non riuscita:',e); }
-   idbPut('drawingsBackup',payload); // asincrona, non serve attenderla
+   const _uidOra=(window.fxbtCloud&&window.fxbtCloud.uid)||null;
+   const payload={v:1,savedAt:Date.now(),uid:_uidOra,assetDrawings};
+   // LA COPIA DI UN ACCOUNT NON SI SOVRASCRIVE DA SCOLLEGATI (12 novembre 2026).
+   // SEGNALATO: «disegno qualcosa, lo lascio per ore, poi chiudo e riapro e quei disegni non ci
+   // sono piu'». MISURATO: riaprendo SENZA account collegato il ripristino scartava la copia
+   // firmata con l'uid (il filtro vuole l'uid uguale, e null non e' uguale a niente): a schermo
+   // zero disegni mentre sul disco ce n'erano due. Fin qui si recuperava. Ma il primo disegno
+   // nuovo arrivava QUI e riscriveva la stessa chiave firmata `uid:null`, cancellando i due
+   // vecchi: da li' in poi la perdita era definitiva.
+   // Adesso una sessione senza account scrive in un posto suo e non tocca la copia di nessuno.
+   let _chiave=DRAWINGS_BACKUP_KEY;
+   if(!_uidOra){
+     try{
+       const _vecchio=JSON.parse(localStorage.getItem(DRAWINGS_BACKUP_KEY)||'null');
+       if(_vecchio&&_vecchio.uid)_chiave=DRAWINGS_BACKUP_KEY+'_scollegato';
+     }catch(e){}
+   }
+   try{ localStorage.setItem(_chiave,JSON.stringify(payload)); }catch(e){ console.warn('Copia dedicata disegni su localStorage non riuscita:',e); }
+   idbPut(_chiave===DRAWINGS_BACKUP_KEY?'drawingsBackup':'drawingsBackupScollegato',payload); // asincrona, non serve attenderla
  }catch(e){ console.warn('Salvataggio dedicato dei disegni non riuscito:',e); }
 }
 function armDrawingsPersistence(){
@@ -7878,12 +7948,36 @@ async function restoreDrawingsFromBackupIfNewer(savedState,uid){
    const candidates=[];
    try{ const raw=localStorage.getItem(DRAWINGS_BACKUP_KEY); if(raw)candidates.push(JSON.parse(raw)); }catch(e){}
    try{ const b=await idbGet('drawingsBackup'); if(b)candidates.push(b); }catch(e){}
-   const valid=candidates.filter(b=>b&&b.v===1&&b.assetDrawings&&typeof b.assetDrawings==='object'&&((b.uid||null)===(uid||null)));
+   try{ const raw=localStorage.getItem(DRAWINGS_BACKUP_KEY+'_scollegato'); if(raw)candidates.push(JSON.parse(raw)); }catch(e){}
+   try{ const b=await idbGet('drawingsBackupScollegato'); if(b)candidates.push(b); }catch(e){}
+   const buone=candidates.filter(b=>b&&b.v===1&&b.assetDrawings&&typeof b.assetDrawings==='object');
+   let valid=buone.filter(b=>(b.uid||null)===(uid||null));
+   // SENZA ACCOUNT NON SI RESTA A MANI VUOTE (12 novembre 2026).
+   // Il filtro per uid e' giusto quando un account C'E': i disegni di un altro non si mostrano.
+   // Ma se nessuno e' collegato, pretendere `uid === null` buttava via proprio i disegni di
+   // questo dispositivo, che sono comunque di chi lo sta usando. Misurato: 2 disegni sul disco,
+   // 0 a schermo. Meglio mostrarli: chi e' davanti al computer li ha fatti lui.
+   if(!valid.length&&!uid)valid=buone;
    if(!valid.length)return false;
    valid.sort((a,b)=>(b.savedAt||0)-(a.savedAt||0));
    const best=valid[0];
    const stateAt=(savedState&&Number.isFinite(savedState.savedAt))?savedState.savedAt:0;
-   if((best.savedAt||0)<=stateAt)return false;
+   // UNO STATO VUOTO NON BATTE UN DEPOSITO PIENO (12 novembre 2026).
+   // La data da sola non basta a decidere chi ha ragione: lo stato di sessione viene riscritto
+   // di continuo, quindi e' quasi sempre piu' recente del deposito dei disegni. Se quello stato
+   // non contiene NESSUN disegno e il deposito ne ha, la data lo farebbe vincere e i disegni
+   // resterebbero sul disco senza mai tornare a schermo - misurato: 2 sul disco, 0 a grafico.
+   // Fra «piu' recente ma vuoto» e «piu' vecchio ma pieno», per i disegni vince il pieno: un
+   // disegno in piu' si cancella in un secondo, uno perso non torna.
+   const _quantiNelDeposito=(()=>{ let n=0; try{ Object.values(best.assetDrawings||{}).forEach(m=>
+     Object.values(m||{}).forEach(l=>{ if(Array.isArray(l))n+=l.length; })); }catch(e){} return n; })();
+   const _quantiNelloStato=(()=>{ let n=0; try{
+     const a=(savedState&&(savedState.assetDrawings||savedState.state&&savedState.state.assetDrawings))||{};
+     Object.values(a).forEach(m=>Object.values(m||{}).forEach(l=>{ if(Array.isArray(l))n+=l.length; }));
+     if(!n&&savedState&&Array.isArray(savedState.drawings))n=savedState.drawings.length;
+   }catch(e){} return n; })();
+   const _depositoPienoStatoVuoto=(_quantiNelDeposito>0&&_quantiNelloStato===0);
+   if((best.savedAt||0)<=stateAt&&!_depositoPienoStatoVuoto)return false;
    assetDrawings=normalizeAssetDrawings(best.assetDrawings);
    if(liveModeActive&&currentAssetKey){
      drawings=migrateDrawingLayerVisibilityToHidden(((assetDrawings[currentMode()]||{})[currentAssetKey])||[]);
@@ -9920,6 +10014,10 @@ function fblCloudCampiCambiati(pacchetto, firmePrec){
     motivo:Object.keys(parti).length ? ('cambiati: ' + Object.keys(parti).join(', ')) : 'niente di cambiato'};
 }
 
+// Quante operazioni risultano gia' sul cloud: si RICORDA fra un salvataggio e l'altro, per
+// non rileggere il documento solo per contarle (vedi la cura del 12 novembre 2026).
+// -1 = non lo sappiamo ancora, e allora si legge.
+let fblCloudTradesSulCloud=-1;
 let fblCloudTradesInviati=0; // quante operazioni sono state mandate col salvataggio incrementale
 // FOOTPRINT NEL DOCUMENTO SUO (cura bolletta, 31 ottobre 2026): il footprint esce dal salvataggio
 // del session e sta in users/{uid}/data/footprint. Queste tre variabili sono il suo freno: si
@@ -10004,9 +10102,29 @@ async function syncFullStatusToFirebase(reason,force){
    // MAI UN CAMBIO SECCO: se il documento separato non si sa leggere (modulo piu' vecchio,
    // rete assente, lettura fallita) si torna al salvataggio COMPLETO, operazioni comprese.
    // Un risparmio che perde un'operazione chiusa non e' un risparmio.
+   // QUANTE OPERAZIONI CI SONO GIA' SUL CLOUD: SI RICORDA, NON SI RILEGGE (12 novembre 2026).
+   // MISURATO sulla console Firebase: scritture 22.000 su una quota di 20.000 al giorno (limite
+   // SUPERATO), letture 44.000 su 50.000. Il pannello dell'app contava 81 scritture.
+   // CAUSA: `tradesConteggio()` chiama `tradesLeggi()`, che fa un getDoc dell'INTERO documento
+   // delle operazioni. Veniva chiamato a OGNI salvataggio, solo per sapere un numero - e i
+   // salvataggi forzati (ogni trade chiuso) saltano pure il freno dei 4 secondi. Ogni conteggio
+   // e' una lettura del documento piu' grosso che abbiamo.
+   // E c'e' il seguito peggiore: se quella lettura fallisce (rete, token scaduto, documento
+   // grande) `gia` torna -1, si cade nel ramo di ripiego e si riscrive la FOTOGRAFIA INTERA;
+   // e se torna 0 per sbaglio si rimandano TUTTE le operazioni invece delle nuove. Il pannello
+   // del proprietario segnava `cloudTradesInviati: 3469`: non sono operazioni nuove, e' lo
+   // storico rimandato piu' volte.
+   // Adesso il numero si tiene in memoria e si aggiorna dopo ogni invio riuscito: si rilegge
+   // solo la prima volta della sessione, o dopo un fallimento, che e' esattamente quando serve.
    let gia = tradesCompleti.length === 0 ? 0 : -1;
+   if (gia < 0 && Number.isFinite(fblCloudTradesSulCloud) && fblCloudTradesSulCloud >= 0) {
+    gia = fblCloudTradesSulCloud;
+   }
    if (gia < 0 && typeof window.fxbtCloud.tradesConteggio === 'function') {
-    try { gia = await window.fxbtCloud.tradesConteggio(); } catch (e) { gia = -1; }
+    try {
+     gia = await window.fxbtCloud.tradesConteggio();
+     if (gia >= 0) fblCloudTradesSulCloud = gia;
+    } catch (e) { gia = -1; }
    }
    if (!(gia >= 0)) {
     // FALLBACK: fotografia intera, come prima della cura.
@@ -10149,6 +10267,11 @@ async function syncFullStatusToFirebase(reason,force){
     const okT = await window.fxbtCloud.tradesAggiungi(tradesNuovi);
     if (!okT) { console.warn('[Cloud] operazioni nuove non salvate: si riprovano al giro dopo'); return; }
     fblCloudTradesInviati = (fblCloudTradesInviati || 0) + tradesNuovi.length;
+    // Il ricordo si aggiorna QUI, dopo una scrittura riuscita: al giro dopo non serve rileggere
+    // il documento per sapere quante ce ne sono. Se la scrittura fallisce si esce prima (sopra),
+    // il ricordo resta quello vecchio e al tentativo successivo si riprova con le stesse.
+    fblCloudTradesSulCloud = (Number.isFinite(fblCloudTradesSulCloud) && fblCloudTradesSulCloud >= 0)
+      ? fblCloudTradesSulCloud + tradesNuovi.length : tradesCompleti.length;
     console.log('[Cloud] ' + tradesNuovi.length + ' operazioni nuove, '
       + Math.round(JSON.stringify(tradesNuovi).length / 1024) + ' KB invece della fotografia intera');
    }

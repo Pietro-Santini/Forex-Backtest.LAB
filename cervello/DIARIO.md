@@ -6412,3 +6412,86 @@ del grafico: un indicatore rotto resterebbe rotto in silenzio.
 Prova che calcolano e disegnano senza rompersi. La fedelta' si vede sul grafico, accanto a
 TradingView: se uno disegna qualcosa di diverso da quello che ci si aspetta, serve uno screenshot
 del proprietario e si corregge quell'indicatore.
+
+
+---
+
+## 12 novembre 2026 - v2.2.36: la bolletta del cloud si ferma alla radice, e i disegni non si perdono piu'
+
+### A) IL CLOUD: tre difetti, e una REGOLA perche' non ricapiti
+
+SEGNALATO dal proprietario con la foto della console Firebase: «non ne posso piu' di vedere quei
+valori giganteschi». I numeri del 12 novembre:
+
+    scritture  22.000 su 20.000 al giorno   -> QUOTA SUPERATA, si paga
+    letture    44.000 su 50.000 al giorno   -> 88%, la prossima a sfondare
+    pannello dell'app, stesso giorno: 81 scritture
+
+**Un rapporto di 270 a 1** fra quello che il programma crede di fare e quello che succede davvero.
+Ed era la terza volta: 9 novembre (14.000 contro 102), 31 ottobre. Tre volte lo stesso schema,
+tre volte scoperto dalla bolletta e non da noi.
+
+**1. Si rileggeva un documento intero per sapere un numero.** `tradesConteggio()` fa un `getDoc`
+di TUTTO il documento delle operazioni, e veniva chiamato a OGNI salvataggio solo per sapere
+quante ce ne fossero gia'. I salvataggi forzati (ogni operazione chiusa) saltano pure il freno dei
+4 secondi. Adesso il numero si ricorda in `fblCloudTradesSulCloud` e si aggiorna dopo ogni
+scrittura riuscita: si rilegge solo la prima volta della sessione o dopo un errore.
+
+**2. Quando quella lettura falliva, si riscriveva TUTTO.** Con `gia = -1` si cadeva nel ramo di
+ripiego e si mandava la fotografia intera. Il pannello del proprietario segnava
+`cloudTradesInviati: 3469`: non erano operazioni nuove, era lo storico rimandato piu' volte. Un
+ripiego che costa cento volte l'operazione normale non e' un ripiego: e' un moltiplicatore che si
+accende proprio quando le cose vanno male.
+
+**3. LE LETTURE NON AVEVANO NESSUN TETTO.** Quello delle scritture esisteva dal 10 novembre; le
+letture non passavano da nessun controllo. E non si fanno solo chiedendo: i QUATTRO ascolti
+permanenti (session, grafico, collegamento, preferenze) generano una lettura a testa OGNI VOLTA
+che un altro dispositivo scrive quel documento. Con tre dispositivi accesi una scrittura ne
+produce due, per ognuno dei quattro documenti. **E' il moltiplicatore che nessun pannello vedeva**,
+perche' l'app conta le proprie chiamate e non gli arrivi.
+Adesso c'e' `_puoLeggere()` con tetto a 5.000 al giorno (contro 50.000 gratuite), SEPARATO da
+quello delle scritture perche' le quote sono separate: un solo contatore farebbe smettere di
+salvare i dati per colpa delle letture.
+
+**IL BANCO CHE NON MISURAVA, e la regressione che ha trovato appena ha cominciato.** Le prime tre
+prove del tetto delle letture **passavano senza misurare niente**: il modulo del cloud non parte
+in un banco (nessuna rete), `window.fxbtCloud` non esisteva, e le prove uscivano con un `return`
+silenzioso. Corrette perche' CADANO invece di saltare - e servendo un Firebase finto, cosi' il
+modulo vero parte davvero. Appena hanno iniziato a misurare hanno trovato un difetto MIO: il conto
+delle letture **non sopravviveva alla riapertura**, cioe' era finto esattamente come quello delle
+scritture prima della cura del 10 novembre. `_budgetOggi()` ripristinava solo `conta`, `totale` e
+`avvisato`. Trovato dal banco, non dalla bolletta: e' la differenza che si voleva.
+
+**Test**: laboratorio/app/cloud_tetto_letture.test.mjs (3 prove: il conto sale e il tetto ferma;
+sopravvive alla riapertura; i due tetti non si rubano la quota a vicenda).
+
+**LA REGOLA** sta in `cervello/REGOLE.md`, cinque punti, con il fatto che l'ha resa necessaria e
+cosa NON va fatto. I due che contano di piu': **un ascolto non e' gratis, ogni arrivo e' una
+lettura**; e **il pannello dell'app non e' la verita', la console lo e'** - quando i due numeri
+divergono di piu' di dieci volte, la differenza E' il difetto.
+
+### B) I DISEGNI CHE SPARISCONO: tre strade curate
+
+Su misura dell'indagine dell'11 novembre.
+1. **La copia di un account non si sovrascrive piu' da scollegati.** Riaprendo senza account il
+   ripristino scartava la copia firmata con l'uid (`null` non e' uguale a niente): zero disegni a
+   schermo mentre sul disco ce n'erano due. Fin li' si recuperava; ma il primo disegno nuovo
+   riscriveva la stessa chiave firmata `uid:null` e cancellava i vecchi. Adesso una sessione senza
+   account scrive in una chiave sua e non tocca la copia di nessuno.
+2. **Senza account non si resta a mani vuote**: il filtro per uid non butta piu' via i disegni di
+   questo dispositivo. Con un account collegato resta come prima.
+3. **Uno stato vuoto non batte un deposito pieno.** Lo stato di sessione viene riscritto di
+   continuo, quindi e' quasi sempre piu' recente del deposito: la data lo faceva vincere anche
+   quando non conteneva NESSUN disegno. Un disegno in piu' si cancella in un secondo, uno perso
+   non torna.
+Non-regressione: 31 prove verdi sui banchi dei disegni.
+
+### C) IL PONTE DICE PERCHE' RIFIUTA UN TOKEN
+
+MISURATO nel log del PC del proprietario: **3.468 righe «connection rejected (403 Forbidden)»**,
+353 nelle ultime 2.000, e NESSUNA che dicesse il motivo - il rifiuto passava da un
+`except Exception: return None`. Non si distingue un token scaduto da una rete che non risponde o
+da un orologio sfasato, e sono tre cure diverse. Adesso il motivo si scrive nel log, **una volta
+al minuto** per non riempirlo (che e' il difetto da cui veniamo).
+
+Collaudo completo: 0 falliti.
