@@ -1658,27 +1658,57 @@ window.fblAvviaSoloBacktest=function(){
         // Il documento trades: lista = tutte le operazioni. arrayUnion aggiunge
         // solo quelle che non ci sono gia' (confronto per valore), quindi un
         // ritentativo non duplica niente.
+        //
+        // `{merge:true}` NON E' UN DETTAGLIO: e' la riga che faceva pagare tre volte ogni
+        // operazione (misurato l'11-12 novembre 2026 dal pannello del proprietario:
+        // 3469 invii per 1138 operazioni in sei sincronizzazioni, e dal banco
+        // laboratorio/app/cloud_trades_una_volta.test.mjs: 104 invii per 32 operazioni).
+        // Una `setDoc` SENZA merge SOSTITUISCE il documento, e le sentinelle come arrayUnion
+        // si applicano DOPO la sostituzione: il campo `lista` in quel momento non esiste piu',
+        // quindi arrayUnion ripartiva dall'array VUOTO e il documento restava con le sole
+        // operazioni appena mandate. Da li' due danni, non uno:
+        //   - `tradesConteggio()` rileggeva un numero piccolo, quindi al salvataggio dopo
+        //     mezzo storico tornava a sembrare "nuovo" e ripartiva (banda, che si paga);
+        //   - sul cloud restavano solo le ultime operazioni: un ripristino da un altro
+        //     dispositivo trovava un Trade Journal mutilato (nel banco: 26 su 32).
+        // Con `merge:true` arrayUnion vede la lista che c'e' e aggiunge in coda, che e'
+        // esattamente quello che il commento qui sopra ha sempre promesso.
         await setDoc(doc(db,"users",this.uid,"data","trades"),
-          { v:1, lista: arrayUnion(...nuove), at: serverTimestamp() });
+          { v:1, lista: arrayUnion(...nuove), at: serverTimestamp() }, {merge:true});
         this._conta('scrittura','trades (aggiunta)',nuove);
         return true;
       }catch(e){ console.warn("Salvataggio incrementale delle operazioni fallito:", e); return false; }
     },
     // Lettura delle sole operazioni dal documento a parte.
     async tradesLeggi(){
-      if(!this.uid) return null;
+      const r = await this._tradesEsito();
+      return r.ok ? r.lista : null;
+    },
+    // LA LETTURA CHE DICE ANCHE SE E' RIUSCITA (12 novembre 2026).
+    //
+    // `tradesLeggi()` risponde `null` in due casi diversissimi: "il documento non c'e'
+    // ancora" e "non ho potuto leggerlo". Chi contava le operazioni li trattava uguale e
+    // leggeva zero, cioe' "sul cloud non c'e' niente": alla prima lettura fallita l'app
+    // rimandava TUTTO lo storico. Misurato dal banco: 30 operazioni diventate 61 invii
+    // appena la lettura non risponde. Qui l'esito viaggia accanto al dato, e chi conta puo'
+    // dire "non lo so" (-1) invece di dire "zero".
+    async _tradesEsito(){
+      if(!this.uid) return {ok:false, lista:null};
       try{
         const s = await getDoc(doc(db,"users",this.uid,"data","trades"));
         this._conta('lettura','trades',s.exists()?s.data():null);   // contata (10-11 novembre 2026)
-        if(!s.exists()) return null;
-        return Array.isArray(s.data().lista) ? s.data().lista : null;
-      }catch(e){ console.warn("Lettura delle operazioni dal cloud fallita:", e); return null; }
+        if(!s.exists()) return {ok:true, lista:[]};   // mai scritto: zero operazioni, e si sa
+        const l = s.data().lista;
+        return {ok:true, lista: Array.isArray(l) ? l : []};
+      }catch(e){ console.warn("Lettura delle operazioni dal cloud fallita:", e); return {ok:false, lista:null}; }
     },
     // Quante operazioni ci sono gia' nel documento separato: serve a capire
     // quali sono le NUOVE da mandare, senza rimandare lo storico.
+    // -1 vuol dire "non lo so": chi chiama torna alla fotografia intera (che porta le
+    // operazioni dentro di se'), invece di rimandare lo storico al documento separato.
     async tradesConteggio(){
-      const l = await this.tradesLeggi();
-      return Array.isArray(l) ? l.length : 0;
+      const r = await this._tradesEsito();
+      return r.ok ? r.lista.length : -1;
     },
     // === SERVER ORACLE (passo 3 del progetto dati nostri) ===
     // Il server Oracle e' il nuovo archivio: le rotte /dati sono protette dal token
@@ -9846,6 +9876,32 @@ function fblCloudCampiCambiati(pacchetto, firmePrec){
 }
 
 let fblCloudTradesInviati=0; // quante operazioni sono state mandate col salvataggio incrementale
+// QUANTE OPERAZIONI HA GIA' IL CLOUD, ricordato invece di richiesto (12 novembre 2026).
+//
+// MISURATO dal banco (laboratorio/app/cloud_trades_una_volta.test.mjs): per sapere QUANTE
+// operazioni ci sono sul cloud, `tradesConteggio()` rilegge il documento INTERO delle
+// operazioni, e lo fa a OGNI salvataggio. Nel banco: 7 letture, 27,5 KB, per un numero.
+// Sul computer del proprietario le operazioni sono 1138, cioe' ~295 KB a lettura: con i suoi
+// sei salvataggi sono 1,8 MB di banda in uscita per sei numeri. E la banda e' l'UNICA cosa
+// che Firestore fa pagare (bolletta di ottobre: 43,86 GiB in uscita).
+// Qui il numero si ricorda: una lettura per pagina aperta invece di una per salvataggio.
+// -1 vuol dire "non lo so" e fa partire la lettura vera. Si aggiorna solo DOPO una scrittura
+// riuscita, e si tiene insieme all'utente: un altro account nella stessa pagina non eredita
+// il conto di chi c'era prima.
+// PERCHE' E' SICURO SBAGLIARE PER DIFETTO: se il numero ricordato e' piu' BASSO del vero (un
+// altro dispositivo ha aggiunto qualcosa nel frattempo), si rimandano operazioni che il cloud
+// ha gia' - e arrayUnion con `merge:true` le riconosce e non le duplica: si spreca un po' di
+// banda, non si perde niente. Il verso pericoloso e' l'opposto (numero piu' alto del vero =
+// operazioni mai spedite), e questo meccanismo non lo puo' produrre: il numero cresce solo di
+// quante operazioni sono state scritte davvero.
+let fblCloudTradesGiaSuCloud={uid:null, n:-1};
+function fblCloudTradesGiaNoto(uid){
+  return (uid && fblCloudTradesGiaSuCloud.uid===uid && fblCloudTradesGiaSuCloud.n>=0)
+    ? fblCloudTradesGiaSuCloud.n : -1;
+}
+function fblCloudTradesGiaSegna(uid, n){
+  if(uid && n>=0) fblCloudTradesGiaSuCloud={uid:uid, n:n};
+}
 // FOOTPRINT NEL DOCUMENTO SUO (cura bolletta, 31 ottobre 2026): il footprint esce dal salvataggio
 // del session e sta in users/{uid}/data/footprint. Queste tre variabili sono il suo freno: si
 // scrive solo se cambiato E non piu' di una volta ogni FOOTPRINT_CLOUD_SYNC_MS. Un minuto perche'
@@ -9930,8 +9986,13 @@ async function syncFullStatusToFirebase(reason,force){
    // rete assente, lettura fallita) si torna al salvataggio COMPLETO, operazioni comprese.
    // Un risparmio che perde un'operazione chiusa non e' un risparmio.
    let gia = tradesCompleti.length === 0 ? 0 : -1;
+   // Prima si guarda se lo si sa gia' (vedi fblCloudTradesGiaSuCloud): rileggere il documento
+   // intero per contare costa ~295 KB di banda a salvataggio, e la banda e' l'unica cosa che
+   // si paga. La lettura vera resta per la prima volta della pagina e per quando non si sa.
+   if (gia < 0) gia = fblCloudTradesGiaNoto(window.fxbtCloud.uid);
    if (gia < 0 && typeof window.fxbtCloud.tradesConteggio === 'function') {
     try { gia = await window.fxbtCloud.tradesConteggio(); } catch (e) { gia = -1; }
+    if (gia >= 0) fblCloudTradesGiaSegna(window.fxbtCloud.uid, gia);
    }
    if (!(gia >= 0)) {
     // FALLBACK: fotografia intera, come prima della cura.
@@ -9946,16 +10007,23 @@ async function syncFullStatusToFirebase(reason,force){
     fblCloudUltimaFirma = firmaC;
     fblCloudUltimoPeso = testoC ? testoC.length : 0;
     fblCloudScritture++;
-   // DOPPIO SCRITTO sul server Oracle (passo 3 del progetto dati nostri): se il server
-   // e' configurato, si scrive anche li', per poter spegnere Firestore progressivamente.
-   // Firebase resta la rete di sicurezza: se il server fallisce, la scrittura su Firebase
-   // e' gia' riuscita e non si perde niente.
-   if(fblCloudNostroDisponibile() && window.fxbtCloud && window.fxbtCloud.uid){
-    try{ await window.fxbtCloud.serverDatiScrivi('session', trimmedBundle); }catch(e){ console.warn('Scrittura session su server Oracle fallita:', e); }
-    if(tradesNuovi.length){
-     try{ await window.fxbtCloud.serverTradesAggiungi(tradesNuovi); }catch(e){ console.warn('Aggiunta operazioni su server Oracle fallita:', e); }
+    // DOPPIO SCRITTO sul server Oracle (passo 3 del progetto dati nostri): se il server
+    // e' configurato, si scrive anche li', per poter spegnere Firestore progressivamente.
+    // Firebase resta la rete di sicurezza: se il server fallisce, la scrittura su Firebase
+    // e' gia' riuscita e non si perde niente.
+    //
+    // SI MANDA `completo`, NON `trimmedBundle` (corretto il 12 novembre 2026). Qui dentro
+    // `trimmedBundle` e `tradesNuovi` sono dichiarati con `const` piu' SOTTO, nella stessa
+    // funzione: leggerli qui non da' `undefined`, lancia un ReferenceError. Il primo finiva
+    // nel try (quindi la copia della sessione sul server non partiva MAI in questa strada, e
+    // il registro dava la colpa al server), il secondo era fuori dal try e faceva abortire
+    // tutto il salvataggio - footprint compreso - con un avviso che parlava d'altro. Si vedeva
+    // solo con il cloud nostro acceso, cioe' proprio sul computer del proprietario, e solo in
+    // questa ricaduta, che prima era quasi irraggiungibile. Nella ricaduta le operazioni
+    // viaggiano DENTRO la fotografia, quindi non c'e' niente da aggiungere a parte.
+    if(fblCloudNostroDisponibile() && window.fxbtCloud && window.fxbtCloud.uid){
+     try{ await window.fxbtCloud.serverDatiScrivi('session', completo); }catch(e){ console.warn('Scrittura session su server Oracle fallita:', e); }
     }
-   }
     return;
    }
    const bundleSenzaTrades = {...bundle};
@@ -9989,13 +10057,24 @@ async function syncFullStatusToFirebase(reason,force){
    // cambia ad OGNI raccoglimento, quindi due fotografie identiche avrebbero firme diverse e si
    // riscriverebbe sempre - il proprietario aveva chiesto "identico = non si scrive" e la console
    // conta lo spreco. Si normalizza savedAt (e solo quello: il resto deve contare).
-   const firmaDi = (t) => {
+   // UNA `function`, NON un `const` (corretto il 12 novembre 2026). La ricaduta qui sopra -
+   // la rete di sicurezza di tutto il salvataggio incrementale, quella che manda la fotografia
+   // intera quando il conteggio delle operazioni non si sa leggere - chiamava `firmaDi` DA
+   // SOPRA la sua dichiarazione: con `const` non e' `undefined`, e' un ReferenceError
+   // ("Cannot access 'firmaDi' before initialization"), che il try/catch della funzione
+   // trasformava in un avviso in console e in NESSUNA scrittura sul cloud. Quindi dal 26
+   // ottobre 2026 la rete di sicurezza non c'era: ogni volta che la lettura del conteggio non
+   // riusciva, il salvataggio cloud non scriveva niente - ne' sessione, ne' operazioni, ne'
+   // footprint - e lo diceva solo a una console che nessuno guarda. Una `function` si sposta
+   // in cima alla funzione da sola (hoisting), quindi vale per entrambe le strade.
+   // Provato al rosso dal banco: laboratorio/app/cloud_trades_una_volta.test.mjs.
+   function firmaDi(t){
     const s = (t || '').replace(/"savedAt":\d+/g, '"savedAt":0');
     if (!s) return null;
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
     return s.length + ':' + h;
-   };
+   }
    let testo = '';
    try { testo = JSON.stringify(trimmedBundle); } catch (e) { testo = ''; }
    const firma = firmaDi(testo);
@@ -10073,6 +10152,10 @@ async function syncFullStatusToFirebase(reason,force){
    if (tradesNuovi.length) {
     const okT = await window.fxbtCloud.tradesAggiungi(tradesNuovi);
     if (!okT) { console.warn('[Cloud] operazioni nuove non salvate: si riprovano al giro dopo'); return; }
+    // Adesso il cloud ne ha `gia + tradesNuovi.length`: lo si ricorda, cosi' il salvataggio
+    // dopo non deve rileggere tutto il documento per contarle. Solo DOPO una scrittura
+    // riuscita: un tentativo fallito non deve far credere che siano arrivate.
+    fblCloudTradesGiaSegna(window.fxbtCloud.uid, gia + tradesNuovi.length);
     fblCloudTradesInviati = (fblCloudTradesInviati || 0) + tradesNuovi.length;
     console.log('[Cloud] ' + tradesNuovi.length + ' operazioni nuove, '
       + Math.round(JSON.stringify(tradesNuovi).length / 1024) + ' KB invece della fotografia intera');

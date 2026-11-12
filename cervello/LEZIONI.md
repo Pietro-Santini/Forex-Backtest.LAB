@@ -1,5 +1,38 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+45. **Prima di dire «risparmia», contare i byte di TUTTE E DUE le direzioni.** (12 novembre
+    2026.) Corretto il difetto che rimandava tre volte ogni operazione (`setDoc` senza `merge`
+    che rifaceva il documento), il banco ha misurato il conto completo e il segno cambiava: con
+    il documento che adesso cresce davvero, `tradesConteggio()` ne rileggeva l'INTERO contenuto a
+    ogni salvataggio solo per sapere un numero - ~295 KB per volta con le 1138 operazioni del
+    proprietario, cioe' 1,8 MB per sei numeri. Prima della cura quella lettura era piccola
+    (il documento veniva svuotato ogni volta) e la spesa stava nella scrittura; dopo si sarebbe
+    spostata tutta sulla lettura, e la "cura" avrebbe fatto PEGGIO della malattia.
+    LA REGOLA: su Firestore si paga la banda in uscita, e le letture sono banda in uscita quanto
+    le scritture. Un banco che misura solo quello che si scrive misura meta' della bolletta: il
+    contatore va messo su entrambe, nello stesso test, e confrontato col peso del dato.
+
+44. **Una ricaduta che nessuno ha mai percorso non e' una ricaduta: e' un commento.** (12
+    novembre 2026.) Il salvataggio incrementale delle operazioni aveva la sua rete di sicurezza
+    scritta e spiegata - «se il conteggio non si sa leggere si manda la fotografia intera,
+    operazioni comprese. Un risparmio che perde un'operazione chiusa non e' un risparmio» - e
+    dentro quel blocco si leggevano TRE variabili dichiarate con `const` piu' SOTTO, nella stessa
+    funzione. Un `const` letto da sopra la sua dichiarazione non vale `undefined`: lancia un
+    ReferenceError. Quel ReferenceError finiva nel `try/catch` della funzione, che lo trasformava
+    in un avviso in console e in NESSUNA scrittura sul cloud - ne' sessione, ne' operazioni, ne'
+    footprint. Per sette versioni la rete di sicurezza non c'era, e l'unico segno era una riga in
+    una console che nessuno guarda.
+    LA REGOLA, due parti. (1) Nel linguaggio: dentro una funzione lunga, quello che serve a piu'
+    strade va dichiarato come `function` (che si sposta in cima da sola) o messo prima di tutte -
+    `const` e `let` non perdonano l'ordine, e in una funzione da duecento righe l'ordine non si
+    vede. (2) Nel metodo: una ricaduta si prova percorrendola. Il banco deve rompere la cosa che
+    la fa scattare (qui: la lettura che non risponde) e pretendere che il salvataggio sia
+    AVVENUTO - non basta controllare che non sia partito troppo. «Non ha rimandato lo storico» e
+    «non ha salvato niente» passano la stessa asserzione, e la prima volta sono passati davvero:
+    la prova di controllo che chiede «la fotografia intera e' partita, con tutte le operazioni
+    dentro?» e' quella che ha scoperto il difetto. Una guardia non provata al rosso e' una falsa
+    sicurezza; qui lo era anche una provata al rosso *per la ragione sbagliata*.
+
 43. **Una media con un picco dentro non e' una misura: e' una media.** (12 novembre 2026.)
     Il pannello prestazioni diceva «lettura conto: 239 volte, media 106.755 ms». Centosei secondi
     per parlare con un servizio sulla STESSA macchina: sembrava la prova di un ponte in ginocchio,

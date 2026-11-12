@@ -6289,3 +6289,64 @@ MetaTrader5 non e' thread-safe (lo dichiara il commento in cima a mt5_feed_serve
 questo obbliga a passare da `_mt5_call()`). In bridge.py quel lock non esiste: 69 punti chiamano
 `mt5.*` nudo dentro un thread pool da 40. Non spiega i secondi, ma e' il sospetto piu' naturale
 per le letture non riuscite.
+
+## 12 novembre 2026 - v2.2.34: ogni operazione chiusa si paga UNA volta, e la rete di sicurezza del cloud esiste davvero
+
+**DA DOVE SI PARTE**: il pannello prestazioni del proprietario, 11 novembre.
+`cloudTradesInviati: 3469 | cloudScritture: 6 | operazioni: 1138`. Il contatore si alza solo dopo
+una scrittura riuscita e vive in memoria: tre invii per ogni operazione nella stessa pagina
+aperta, su un servizio che fa pagare la banda.
+
+**MISURATO PRIMA DI CURARE** (regola del progetto). Banco nuovo:
+`laboratorio/app/cloud_trades_una_volta.test.mjs`. Invece delle solite spie - che sostituiscono
+`tradesConteggio` con un numero FISSO e quindi non provano mai il giro scrivi/rileggi/conta, che
+e' esattamente dove stava il difetto - il banco sostituisce il modulo Firebase del CDN con un
+**simulatore che rispetta le regole documentate di Firestore** e fa girare il codice vero. Con 32
+operazioni e sette salvataggi: **104 invii**, 19.110 byte, 7 scritture su 7 senza merge, e **26
+operazioni su 32 rimaste sul cloud**.
+
+**TRE DIFETTI, tutti nella stessa strada.**
+1. `tradesAggiungi` scriveva senza `{merge:true}`: una `setDoc` senza merge SOSTITUISCE il
+   documento e `arrayUnion` si applica dopo, quindi ripartiva dall'array vuoto. Il documento
+   restava con le sole operazioni appena mandate, il conteggio riletto tornava indietro e mezzo
+   storico ridiventava "nuovo". Non era solo banda: era il Trade Journal mutilato su ogni
+   ripristino da un altro dispositivo.
+2. La **ricaduta non ha mai funzionato**: leggeva `firmaDi`, `trimmedBundle` e `tradesNuovi` da
+   sopra la loro dichiarazione `const`. ReferenceError, raccolto dal `try/catch` della funzione:
+   da sette versioni, quando la lettura del conteggio non riusciva, il salvataggio cloud non
+   scriveva NIENTE - ne' sessione, ne' operazioni, ne' footprint - e lo diceva a una console che
+   nessuno guarda.
+3. `tradesConteggio()` traduceva «non ho potuto leggere» in **0**, cioe' «sul cloud non c'e'
+   niente»: 30 operazioni diventavano 61 invii appena la lettura non risponde. Ora risponde -1,
+   «non lo so», e si passa dalla ricaduta.
+
+**UNA MISURA CHE HA CAMBIATO IL SEGNO DELLA CURA**: col documento che adesso cresce, rileggerlo
+per contare costa ~295 KB a salvataggio (1,8 MB per i sei del proprietario). Senza questo pezzo la
+correzione avrebbe RADDOPPIATO la banda. Il conto si ricorda in memoria, legato all'utente, e si
+aggiorna solo dopo una scrittura riuscita: una lettura per pagina aperta invece di una per
+salvataggio. Sbagliare per difetto e' sicuro (arrayUnion con merge non duplica); il verso
+pericoloso questo meccanismo non lo puo' produrre.
+
+**PROVE AL ROSSO, una per correzione** (una guardia non provata al rosso e' una falsa sicurezza):
+rimesso il `merge` -> cade «una volta sola» (104 invii); rimesso il `const firmaDi` -> cadono la
+ricaduta e la prova di controllo; rimesso il conteggio a 0 -> cade «la lettura guasta». Il banco e'
+verde solo con tutte e tre.
+
+**COLLAUDO**: `cloud_trades_una_volta` 4/4 verdi, piu' `cloud_incrementale`,
+`cloud_niente_doppioni`, `cloud_bolletta`, `nomi_unici`, `attesa_nuvola`, `cloud_nostro_indirizzo`
+(24 verdi). **Il collaudo completo NON e' stato lanciato**: il proprietario lavora sulla stessa
+macchina con MT5 collegato e posizioni reali, e `collauda.sh` apre venti browser. Quindi questa
+versione **resta sul ramo e non e' pubblicata**: va messa su `main` solo dopo un
+`bash laboratorio/collauda.sh` verde.
+
+**RESTA APERTO**: il documento `trades` ora cresce e il tetto duro di Firestore (1 MiB) arriva
+verso le 3.800 operazioni - oltre, la scrittura fallisce e lo dice solo la console (lo storico
+resta integro in locale). Proposta: spezzarlo in documenti da 500. E la lettura per pagina e'
+ancora ~295 KB: proposta, un documento minuscolo col solo numero, scritto subito DOPO l'aggiunta.
+
+**TROVATO PER STRADA, registrato in BUG.md e NON curato**: il blocco «doppio scritto sul server
+nostro» e' nato (v2.0.35) dentro il ramo della ricaduta, ma usa le variabili del percorso
+normale. Risultato: dal salvataggio normale la sessione e le operazioni **non sono mai arrivate
+al server del proprietario** - al server vanno solo footprint, collegamento e preferenze. La cura
+e' una riga ed e' scritta in BUG.md, ma aggiunge una scrittura verso il suo computer a ogni
+salvataggio: lo decide lui.
