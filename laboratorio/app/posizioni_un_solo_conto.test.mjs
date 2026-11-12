@@ -55,7 +55,18 @@ const IN_PAGINA = `(function(stato){
   currentAssetKey='EURUSD'; liveModeActive=true; liveReplayActive=false; fblContoVista='mt5';
   const due=${JSON.stringify(DUE_POSIZIONI())};
   positions.length=0; pendingOrders.length=0; trades.length=0;
-  due.forEach(p=>positions.push(p));
+  // LE DUE POSIZIONI DEVONO STARE DENTRO LA FINESTRA CHE L'APP DISEGNA DAVVERO (12 novembre 2026).
+  // Prima avevano l'ora di apertura «cinque minuti fa», cioe' la candela 295 di 300. Ma la
+  // finestra in vista non arriva fino in fondo: getViewWindow() lascia dello spazio vuoto a
+  // destra (misurato qui: n=80, start=170, end=249), quindi la candela 295 e' FUORI, la freccia
+  // cadeva a x=1806 su una tela larga 1234 e draw() giustamente non la dipingeva. Il banco
+  // pretendeva 2 frecce e ne contava 0: sembrava un difetto dell'app, era il banco che metteva
+  // la posizione dove il grafico non guarda. Adesso l'ora di apertura e il prezzo si prendono da
+  // una candela IN MEZZO alla finestra vera, qualunque finestra l'app scelga.
+  const _v=getViewWindow();
+  const _m=Math.max(0,Math.min(C.length-1,Math.floor((_v.start+_v.end)/2)));
+  const _tm=new Date(C[_m].date).getTime(), _pm=C[_m].close;
+  due.forEach(p=>{ p.startTime=_tm; p.entry=(p.id==='mia')?_pm:_pm+0.0002; positions.push(p); });
   mt5Connected=!!stato.collegato; mt5MonitorOnly=!!stato.monitor;
   mt5ContoAttivo = stato.conto ? {login: stato.conto, server: 'Broker'} : null;
   if(stato.conto===null){ mt5AccountInfo=null; mt5CredsDraft=null; }
@@ -100,9 +111,14 @@ test('due posizioni di due conti: a grafico compare SOLO quella del conto attivo
         ' a grafico, ' + r.frecceDisegnate + ' frecce disegnate da draw())');
       assert.deepEqual(r.sulGrafico, r.attese ? ['mia'] : [],
         r.stato + ': a grafico devono essere SOLO le posizioni del conto attivo');
-      // Ogni posizione disegnata costa DUE chiamate a drawTradeArrow (misurato: 1 posizione
-      // = 2 frecce, 2 posizioni = 4). Se il numero non torna, draw() ha dipinto due conti.
-      assert.equal(r.frecceDisegnate, r.quanteSulGrafico * 2,
+      // UNA freccia per posizione disegnata: quella dell'entrata (app.html, dentro il ciclo
+      // delle posizioni a grafico). Il banco pretendeva DUE frecce per posizione, e quella
+      // premessa era sbagliata: la seconda freccia che era stata contata e' quella
+      // dell'operazione ATTIVA del backtest (il collegamento entrata-prezzo di adesso), che non
+      // si disegna per ogni posizione MT5. Misurato il 12 novembre: 1 posizione a grafico = 1
+      // freccia. Il controllo resta utile com'era: se draw() dipingesse i due conti, le frecce
+      // diventerebbero 2 con una sola posizione attesa, e questa riga lo direbbe.
+      assert.equal(r.frecceDisegnate, r.quanteSulGrafico,
         r.stato + ': draw() ha disegnato ' + r.frecceDisegnate + ' frecce per ' +
         r.quanteSulGrafico + ' posizioni: le frecce devono essere una posizione sola');
     }

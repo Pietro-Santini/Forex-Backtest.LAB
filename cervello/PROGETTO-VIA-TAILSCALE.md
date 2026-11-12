@@ -135,6 +135,46 @@ deve rompersi nel passaggio.
   ferma alla 2.2.19 mentre la radice era alla 2.2.24).
 - **MAI una chiave nel repository**: la chiave di accesso sta nei file fuori dal repo.
 
+## 7-bis. LA CONSEGUENZA DI SICUREZZA, e va trattata come la parte principale del lavoro
+
+Richiamata dal proprietario il 12 novembre 2026: «far viaggiare tutto su una connessione pubblica
+ovviamente criptata ecc, per evitare fishing e hack esterni».
+
+**Il fatto da cui partire, scomodo e vero: oggi le difese sono DUE, dopo questo lavoro ne resta
+UNA.** Oggi una richiesta che non arriva da 127.0.0.1 deve (1) venire da dentro la rete privata
+Tailscale e (2) portare la chiave personale (`accesso_condiviso.richiesta_locale()`). Togliendo
+Tailscale cade la prima, e la chiave diventa l'unica cosa fra Internet e un ponte che **esegue
+ordini veri su MT5**. Chi trova il dominio e la chiave apre e chiude posizioni sui suoi conti.
+Quindi il lavoro non è «togliere Tailscale e mettere il certificato»: è **sostituire la difesa che
+si toglie**, e questa parte va fatta per prima, non per ultima.
+
+Cosa deve esserci, in ordine di importanza:
+
+1. **Nessuna porta aperta sul PC di casa.** Il PC non si fa trovare: è il ponte che apre lui la
+   connessione verso il server (uscente), e il server gli gira le richieste su quella. Così il
+   router di casa non ha niente da inoltrare e non c'è una superficie da attaccare a casa. È
+   anche l'unico modo che non dipende dal suo operatore o da un IP che cambia.
+2. **Un segreto per dispositivo, con scadenza e revocabile.** Non una chiave sola uguale per
+   tutti: telefono e tablet hanno la loro, si vedono in elenco, si revocano una per una. Una
+   chiave unica persa costringe a cambiarla su tutti gli apparecchi, e finché non lo fai sei
+   aperto. Nessun segreto dentro l'app pubblicata: l'app pubblicata la può scaricare chiunque.
+3. **Le rotte che toccano i soldi non bastano col segreto.** `/pc/8000/*` apre e chiude posizioni.
+   Lì serve un limite di frequenza, un registro di chi ha chiesto cosa e quando (che oggi non
+   c'è), e il rifiuto di qualunque richiesta che non arrivi dall'origine dell'app. Un registro
+   serve anche dopo: senza, un accesso non autorizzato non si scopre mai.
+4. **Il phishing non si ferma sul server, si ferma sul nome.** Il rischio vero per lui non è che
+   qualcuno bucchi Caddy: è una pagina che somiglia alla sua e gli chiede la chiave. Difese:
+   un dominio solo, scritto nelle guide e nel pannello, e il ponte che rifiuta richieste con
+   un'origine diversa dalla sua — così una copia della pagina su un altro indirizzo non funziona
+   nemmeno se la chiave gliela dai.
+5. **Il certificato non è la sicurezza, è il minimo.** HTTPS impedisce che qualcuno legga per
+   strada. Non impedisce a nessuno di chiedere. Le quattro cose sopra servono tutte comunque.
+
+**Accettazione, da aggiungere a quella della sezione 6:** con il dominio pubblico attivo, una
+richiesta agli ordini **senza** segreto deve essere rifiutata; una **con un segreto revocato**
+deve essere rifiutata; una con origine diversa da quella dell'app deve essere rifiutata; e ognuno
+dei tre rifiuti deve comparire nel registro. Tre banchi, rossi prima.
+
 ## 8. Inventario esatto di dove sta scritto Tailscale (31 file, 220 righe, misurato oggi)
 
 Codice che deve cambiare:

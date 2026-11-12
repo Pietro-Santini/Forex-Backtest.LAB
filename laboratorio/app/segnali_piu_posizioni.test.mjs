@@ -101,7 +101,7 @@ async function MISURA_AUTO(){
   // accesa, rischio 1%, e una sala spuntata come nel pannello del proprietario.
   tgAutoFx = tgAutoDaSalvato({attivo:true, rischio:1, maxGlobali:40, perditaAttiva:false,
     sale:{'Sala A':{attivo:true, rischio:1, maxPosizioni:6, quote:[], regole:[], avvicinamento:0}}});
-  const deciso = tgAutoDecidi(voce);
+  const deciso = tgAutoDecidi(voce, tgAutoChiaveDestinazione(voce));
   const spazio = deciso && deciso.spazio;
   const piano = tgPiano(window.__segnale.SEGNALE, 'XAUUSD', deciso ? deciso.rischio : 1,
     {maxN: spazio, entroRischio: true, prezzo: 4090});

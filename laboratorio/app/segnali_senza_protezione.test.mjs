@@ -29,7 +29,9 @@ async function decidi(pagina, seg) {
   }, {prep: PREPARA.toString(), seg});
   return pagina.evaluate(() => {
     const voce = {id: 1, chat: 'Sala A', sala: '@a', stato: 'nuovo', ricevuto_ms: Date.now(), segnale: window.__seg};
-    return tgAutoDecidi(voce);
+    // La destinazione si chiede alla stessa funzione che usa l'app (tgAutoChiaveDestinazione):
+    // senza conto in mano la decisione si ferma, ed e' giusto che si fermi (12 novembre 2026).
+    return tgAutoDecidi(voce, tgAutoChiaveDestinazione(voce));
   });
 }
 

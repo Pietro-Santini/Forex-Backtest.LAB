@@ -804,3 +804,42 @@ verificata: 31 prove verdi su tutti i banchi dei disegni.
 - il tetto di peso e' controllato sul PACCHETTO e non sul DOCUMENTO, quindi si supera il limite
   del cloud e la scrittura viene rifiutata IN SILENZIO (`graficoAvvisoPieno` resta falso e la
   barra di stato non dice niente). E' il «spariscono senza dire niente».
+
+
+## P1 — SPOSTARE LA LINEA DI ENTRATA DI UN ORDINE LIMITE — 12 nov, CAUSA TROVATA
+Richiesto dal proprietario: «quando c'e' un ordine limite devo avere la possibilita' di spostarlo,
+anche se l'ordine pendente viene creato da una sala segnali: posso spostare la linea di entrata
+del buy limit e del sell limit».
+CAUSA TROVATA a lettura (app.html, dentro `tradeLevelHit`):
+
+    if(px<=g.pad.l+160 && Math.abs(py-g.y(p.entry))<=tolerance) return `pending:${p.id}:entry`;
+    const rightZoneX=(g.rect.width-g.pad.r)-140;
+    if(Number.isFinite(p.sl) && px>=rightZoneX ...) return `pending:${p.id}:sl`;
+
+La linea di ENTRATA si aggancia **solo nei primi 160 pixel** dopo il margine sinistro; stop e
+target solo negli ultimi 140 a destra. Su un grafico da 1.300 px restano **oltre 900 px in mezzo
+in cui nessuna delle tre linee risponde**, pur essendo disegnate per tutta la larghezza. La
+tolleranza verticale e' 14 px, quindi il bersaglio dell'entrata e' una striscia di 160x28.
+La divisione sinistra/destra esiste per un motivo (tre linee alla stessa altezza vanno distinte),
+ma la fascia e' troppo stretta ed e' invisibile: non c'e' niente a schermo che dica «qui si
+aggancia, qui no».
+NON E' SPECIFICO DEI SEGNALI: il filtro e' `pendingOrders.filter(drawableOnCurrentChart)`, quindi
+vale per qualunque ordine pendente dell'asset a grafico, da segnale o fatto a mano. Da misurare
+pero' il caso del proprietario: un ordine nato da un segnale su un asset di un ALTRO conto
+potrebbe non passare `drawableOnCurrentChart`, e allora non sarebbe disegnato ne' agganciabile -
+e' una seconda strada, da verificare col banco.
+Stato: DA CURARE (allargare la fascia utile, e renderla visibile).
+
+## P1 — COPIARE LE IMPOSTAZIONI DA UN ALTRO CONTO — 12 nov, richiesta nuova
+Parole del proprietario: «per le impostazioni del conto, su apertura automatica delle posizioni,
+quando si seleziona il conto si puo' avere la possibilita' di copiare le impostazioni di un altro
+conto. Quando si aggiunge un conto nuovo viene tutto formattato in maniera standard: noi possiamo
+avere la possibilita' di selezionare "copia impostazioni dal conto X", cosi' ci copia tutte le
+impostazioni di quel conto che abbiamo gia' aggiunto in precedenza».
+Da fare: nel pannello del conto, accanto alla scelta del conto, un menu «copia le impostazioni
+da…» con l'elenco degli altri conti salvati. Da stabilire PRIMA di scrivere il codice: QUALI
+impostazioni si copiano (apertura automatica, rischio, lottaggio, regole Prop Firm, sale seguite,
+strategia) e quali NON si devono copiare mai (il login, il server, la chiave, lo storico delle
+operazioni e il capitale, che sono del conto e non delle preferenze). Copiare qualcosa che
+identifica il conto sarebbe peggio che non avere la funzione.
+Stato: DA FARE (serve prima l'elenco di cosa si copia).

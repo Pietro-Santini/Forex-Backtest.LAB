@@ -1693,26 +1693,52 @@ def aggiorna_programma_dettaglio(timeout=300):
                 "messaggio": "il programma e' gia' alla %s: non c'e' niente da installare" % installata}
 
     tmp = os.path.join(tempfile.gettempdir(), "ForexBacktestLAB_Setup_nuovo.exe")
+    # IL PACCHETTO SI SCARICA A PEZZI, SU FILE, NON TUTTO IN MEMORIA (12 novembre 2026).
+    #
+    # SEGNALATO dal proprietario: «ho pigiato il tasto aggiorna e l'app mi e' crashata». E non
+    # era la prima volta: lo stesso identico sintomo e' nel commento qui sotto, 3 novembre.
+    # MISURATO: il Setup pesa 123 MB. `r.read()` li prendeva TUTTI in memoria in un colpo, e
+    # il processo del ponte (97 MB di normale) si gonfiava oltre i 220 - su un computer gia'
+    # al 70-85% di memoria occupata. In piu' questa rotta e' sincrona: la pagina resta appesa
+    # per tutto il tempo dello scaricamento, uno o due minuti, e Windows la dichiara «non
+    # risponde». Il «crash» che si vede e' esattamente questo.
+    # Adesso si scrive direttamente su file a blocchi da 1 MB: la memoria usata resta quella di
+    # un blocco, qualunque sia la dimensione del pacchetto.
+    scaricati = 0
+    primi_due = b""
     try:
         req = urllib.request.Request(URL_PACCHETTO, headers={"User-Agent": "ForexBacktestLAB"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            dati = r.read()
+        with urllib.request.urlopen(req, timeout=timeout) as r, open(tmp, "wb") as f:
+            while True:
+                pezzo = r.read(1048576)
+                if not pezzo:
+                    break
+                if not primi_due:
+                    primi_due = pezzo[:2]
+                f.write(pezzo)
+                scaricati += len(pezzo)
     except Exception as e:
+        try:
+            os.remove(tmp)      # un pacchetto a meta' non va lasciato sul disco: lo si rilancerebbe
+        except Exception:
+            pass
         return {"ok": False, "avviato": False, "messaggio": "scaricamento non riuscito: %s" % e}
 
     # SI CONTROLLA PRIMA DI LANCIARE. Un file troncato o una pagina di errore salvata col nome
     # giusto, avviata come installer, lascerebbe l'installazione a meta': rotta e senza ritorno.
-    if len(dati) < _PACCHETTO_MINIMO_BYTE:
+    if scaricati < _PACCHETTO_MINIMO_BYTE:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
         return {"ok": False, "avviato": False,
-                "messaggio": "il file scaricato pesa %.1f MB: non e' il pacchetto" % (len(dati) / 1048576.0)}
-    if dati[:2] != b"MZ":
+                "messaggio": "il file scaricato pesa %.1f MB: non e' il pacchetto" % (scaricati / 1048576.0)}
+    if primi_due != b"MZ":
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
         return {"ok": False, "avviato": False, "messaggio": "il file scaricato non e' un programma di Windows"}
-
-    try:
-        with open(tmp, "wb") as f:
-            f.write(dati)
-    except Exception as e:
-        return {"ok": False, "avviato": False, "messaggio": "non riesco a salvare il pacchetto: %s" % e}
 
     # PRIMA DI LANCIARE L'INSTALLER, SI SPEGNE IL CUSTODE E SI FERMANO I SERVIZI NOI.
     #
@@ -1782,7 +1808,7 @@ def aggiorna_programma_dettaglio(timeout=300):
     except Exception as e:
         return {"ok": False, "avviato": False, "messaggio": "non riesco ad avviare il pacchetto: %s" % e}
     return {"ok": True, "avviato": True,
-            "messaggio": "pacchetto scaricato (%.0f MB) e installazione avviata in silenzio" % (len(dati) / 1048576.0)}
+            "messaggio": "pacchetto scaricato (%.0f MB) e installazione avviata in silenzio" % (scaricati / 1048576.0)}
 
 
 def aggiorna_programma(timeout=300):

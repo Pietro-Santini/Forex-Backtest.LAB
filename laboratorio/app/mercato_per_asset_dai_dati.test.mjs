@@ -268,12 +268,22 @@ test('GUARDIA — una cripto non si congela nemmeno con mezz\'ora di silenzio', 
 test('GUARDIA — sabato, canale vivo e nessun tick: il mercato e\' chiuso davvero', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
-    const scena = await pagina.evaluate(SCENA, {
-      t: T_SABATO, asset: 'XAUUSD', tickDaMs: 10 * 60000, cripto: false,
-      calendario: null, rispostaMt5: null, apriCanale: true
-    });
+    // SCENA E VERDETTO IN UNA SOLA CHIAMATA (12 novembre 2026). Erano due, e fra le due l'app
+    // continuava a vivere: timer, risposte del canale, ripristino della sessione. Nel collaudo
+    // intero - con venti browser insieme - quel buco si allarga, l'app cambia stato in mezzo, e
+    // la prova cadeva accusando il codice invece dell'intervallo. Misurando le due cose nello
+    // stesso istante le verifiche restano IDENTICHE e non c'e' piu' niente che possa entrare in
+    // mezzo. La prima lettura resta: serve a dire se la scena e' partita giusta.
+    const tutto = await pagina.evaluate(([datiScena, scenaFn, verdettoFn]) => {
+      const scena = eval('(' + scenaFn + ')')(datiScena);
+      const verdetto = eval('(' + verdettoFn + ')')();
+      return {scena, verdetto};
+    }, [{t: T_SABATO, asset: 'XAUUSD', tickDaMs: 10 * 60000, cripto: false,
+         calendario: null, rispostaMt5: null, apriCanale: true},
+        SCENA.toString(), VERDETTO.toString()]);
+    const scena = tutto.scena;
     assert.equal(scena.fase, 'closed', 'sabato la fase deve essere closed: ' + JSON.stringify(scena));
-    const v = await pagina.evaluate(VERDETTO);
+    const v = tutto.verdetto;
     assert.equal(v.fermo, true,
       'canale vivo e dieci minuti senza un tick di sabato: il mercato e\' chiuso: ' + JSON.stringify(v));
     assert.equal(v.chiusoSecondoStato, true,
@@ -281,3 +291,43 @@ test('GUARDIA — sabato, canale vivo e nessun tick: il mercato e\' chiuso davve
     assert.deepEqual(errori, [], 'nessun errore di pagina');
   } finally { await browser.close(); }
 });
+
+test("GUARDIA — con l'asset ANCORA IGNOTO il mercato non diventa aperto di sabato", async () => {
+  // SCOPERTO PER CASO il 12 novembre, da questa stessa prova che cadeva solo nel collaudo
+  // INTERO e non da sola: `liveSessionPhaseNow()` rispondeva 'closed' alla prima lettura e
+  // 'free' a tutte quelle dopo. La causa non era il carico: era `currentAssetKey` che si
+  // svuota (succede nei primi istanti, prima che la sessione sia ripristinata, e ogni volta
+  // che la libreria resta senza file), e con l'asset vuoto DUE funzioni gemelle rispondevano
+  // «mercato aperto»: `liveScheduleAppliesNow` (che aveva `a &&`) e `fblMercatoFermoOra` (che
+  // aveva `if(!asset)return false`). Cioe' proprio nella finestra in cui si apre l'app il
+  // calendario del mercato era spento.
+  //
+  // La regola e' quella scelta altre due volte lo stesso giorno, e per lo stesso motivo:
+  // «non lo so» non puo' valere «fai pure». Un asset ignoto non e' una cripto.
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(SCENA, {
+      t: T_SABATO, asset: 'XAUUSD', tickDaMs: 10 * 60000, cripto: false,
+      calendario: null, rispostaMt5: null, apriCanale: true
+    });
+    // Adesso l'asset si perde, come fa l'app da sola.
+    const v = await pagina.evaluate(() => {
+      currentAssetKey = '';
+      return {
+        fase: liveSessionPhaseNow(),
+        fermo: (function () { try { return fblMercatoFermoOra(currentAssetKey, Date.now()); }
+                              catch (e) { return String(e); } })(),
+        // e anche chiamata con l'asset della posizione, che e' la forma usata a grafico
+        fermoConAsset: (function () { try { return fblMercatoFermoOra('XAUUSD', Date.now()); }
+                                      catch (e) { return String(e); } })()
+      };
+    });
+    assert.equal(v.fase, 'closed',
+      "di sabato la fase resta closed anche senza sapere l'asset: " + JSON.stringify(v));
+    assert.equal(v.fermo, true,
+      'un asset ignoto NON deve far risultare il mercato aperto di sabato: ' + JSON.stringify(v));
+    assert.equal(v.fermoConAsset, true, "e con l'asset in mano a maggior ragione");
+    assert.deepEqual(errori, [], 'nessun errore di pagina');
+  } finally { await browser.close(); }
+});
+

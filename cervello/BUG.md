@@ -2,6 +2,159 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+- **CURATO IN PARTE (v2.2.37) 12 novembre 2026 — LA PROP FIRM SI SCORDA CHE LA CHALLENGE E' GIA' STATA AVVIATA: la domanda «questo conto MT5 come lo usi?» riparte su un conto gia' deciso** - `app.html`: `fblPropContoStatoSalva()` riga **6777**, `triggerPropFirmViolation()` riga **7230**, `fblPropAttivazioneDaChiedere()` riga **6815**, `fblPropContoId()` riga **6718**, gestore `pip_clone_snapshot` riga **9663**. Diagnostici: `C:\Users\pietro\Documents\banchi_aperti_forex\diag_prop_memoria.mjs`, `diag_prop_memoria2.mjs`. Banco rosso: `C:\Users\pietro\Documents\banchi_aperti_forex\prop_memoria_conto.misura.test.mjs`.
+
+  **CURATE il 12 novembre (v2.2.37), con banco verde `laboratorio/app/prop_memoria_conto.test.mjs`:**
+  - **causa 1** (la violazione cancellava il record): `fblPropContoStatoSalva()` adesso FONDE
+    (`Object.assign({},d[_k]||{},...)`) invece di sostituire. La fusione sta nella funzione, non
+    nei diciannove chiamanti: il prossimo chiamante nuovo non puo' sbagliare nello stesso modo.
+    Misurato dopo la cura: `propChiesto` resta true, `preset` resta `ftmo-1step`, `tipoConto`
+    resta `swing`, `faseSuperata` resta 1, e il conto si chiude comunque col suo motivo.
+  - **causa 3** (la duplicata eseguiva il rito del collegamento): `updateMt5ModeUI(true)` nel
+    gestore `pip_clone_snapshot`. Misurato prima e dopo sulla strada vera, aprendo la pagina come
+    finestra duplicata (`?pipSlot=2`) e consegnando lo scatto della madre sul canale: il
+    parametro passava `false`, adesso passa `true`. Cura anche il suono di benvenuto che si
+    sentiva una volta per ogni finestra aperta.
+  **RESTA APERTA la causa 2** (lo stesso conto con due identita' secondo come si e' saputo il nome
+  del server): non e' curata, ed e' l'unica delle tre che richiede di decidere quale delle due
+  stringhe del ponte e' quella buona.
+
+
+  Parole del proprietario (12 novembre 2026): «ogni volta che apro una pagina duplicata, e sono collegato a un conto, mi dice sempre se questo conto e' una prop firm o meno. E anche sulla pagina madre. Certe volte mi dice se voglio avviare su questo conto la challenge della prop firm, ma in realta' e' gia' stata avviata. Deve rimanere in memoria fisso che quel conto e' stato ormai utilizzato come prop firm ed e' stata attivata, e se lo deve ricordare. Non se lo puo' scordare.»
+
+  **IL PRIMO SOSPETTO E' INNOCENTE, ed e' misurato.** Non e' vero che «la duplicata non puo' ricordare perche' non scrive su disco». `fblPropContoStatoSalva()` scrive **direttamente** in `localStorage` (riga 6780), senza nessuna guardia `PIP_SLOT>0`, e `localStorage` e' condiviso fra tutte le finestre della stessa origine. Misurato (`diag_prop_memoria.mjs`, misura B): la madre scrive `{"mt5:5057460278@FTMO-Demo":{...propChiesto:true...}}`, la duplicata con `PIP_SLOT=2` rilegge **lo stesso contenuto byte per byte** e risponde `fblPropAttivazioneDaChiedere=false`. La memoria arriva. Il problema e' **chi la cancella** e **con che nome la cerca**.
+
+  **CAUSA 1 (deterministica, la piu' grave): una violazione CANCELLA la memoria del conto.** `triggerPropFirmViolation()` riga 7230 fa
+
+      try{ fblPropContoStatoSalva(null,{stato:'chiuso',motivo:rule}); }catch(e){}
+
+  e `fblPropContoStatoSalva()` riga 6779 fa `d[id]=Object.assign({quando:Date.now()},stato||{})`: **sostituisce l'intero record**, non lo aggiorna. Tutti gli altri diciotto punti che salvano passano `Object.assign({},st,{...})` e conservano quello che c'era; questo e' l'unico che passa un oggetto nudo. Misurato (`diag_prop_memoria.mjs`, misura E) su un conto con challenge avviata, preset **one step**, conto **swing**:
+
+  | campo | prima della violazione | dopo |
+  |---|---|---|
+  | `propChiesto` | `true` | **`false`** |
+  | `preset` | `ftmo-1step` | **`ftmo-2step`** |
+  | `tipoConto` | `swing` | **`standard`** |
+  | `fblPropAttivazioneDaChiedere` | `false` | **`true`** |
+
+  Due danni, non uno. Il primo e' la domanda che riparte: e' esattamente il «ma in realta' e' gia' stata avviata» del proprietario. Il secondo costa soldi ed e' **silenzioso**: perdendo `preset` e `tipoConto` il conto torna da solo a **FTMO two step / Standard**, cioe' il limite giornaliero mostrato passa da **3%** a **5%** e ricompaiono le restrizioni overnight/notizie di uno Standard su un conto che era Swing. Nessun avviso. Spariscono allo stesso modo `faseSuperata`, `faseSuperataQuando` e `faseSuperataNumeri`: una fase superata e pagata non e' piu' scritta da nessuna parte.
+
+  **CAUSA 2 (riproducibile): lo stesso conto MT5 ha DUE identita' diverse secondo come si e' saputo il server.** `fblPropContoId()` costruisce la chiave come `'mt5:'+login+'@'+(server||'')`. Misurato (`diag_prop_memoria2.mjs`, caso 3): conto `5057460278` con la memoria scritta sotto `mt5:5057460278@FTMO-Demo`, ma attivato con il server vuoto -> chiave `mt5:5057460278@` -> `fblPropAttivazioneDaChiedere=true` -> **la domanda «🛡️ Nuovo conto / Questo conto MT5 come lo usi?» compare davvero** (contata nel banco, non dedotta). E le due sorgenti del server **non sono la stessa**: il ponte restituisce `body.server`, cioe' quello che l'utente ha **digitato**, nella risposta di `/connect` (`installer_build/build/bridge.py` riga **2721**), e `info.server`, cioe' quello che **dichiara MT5**, in `/account` (riga **2817**). La madre impara il conto dalla prima (`connectToMt5Bridge` -> `mt5AttivaConto(esito.data.login, esito.data.server)`), una finestra duplicata o un altro dispositivo lo imparano dalla seconda (`fetchMt5AccountInfo` riga **46540**: `mt5AttivaConto(loginPonte, r.data.server||'')`). Basta che le due stringhe differiscano di una maiuscola, di uno spazio o di un suffisso perche' lo stesso conto diventi due conti per la prop firm. **Che sulla macchina del proprietario le due stringhe differiscano NON e' misurato** (serve il suo ponte vivo): quello che e' misurato e' che se differiscono la domanda riparte, e che niente nel codice le normalizza. `fetchMt5AccountInfo` confronta **solo il login** (`loginPonte!==loginQui`), mai il server: quindi il disallineamento non viene nemmeno notato.
+
+  **CAUSA 3 (strutturale): una finestra duplicata esegue il rito del «mi sono appena collegato», e non dovrebbe.** Il gestore `pip_clone_snapshot` (riga 9663), quando eredita dalla madre il fatto di essere collegata, chiama `updateMt5ModeUI()` **senza** il parametro `silenzioso`. Dentro `updateMt5ModeUI()` (riga 57552) `_justConnected` diventa vero, e da li' partono tutti e tre: suono di benvenuto, domanda sulle sale Telegram e **la domanda della prop firm**. Misurato (`diag_prop_memoria.mjs`, misura D): consegnando alla duplicata lo scatto vero della madre, `campanelle=1` — **il suono di collegamento suona ancora nella duplicata**, che e' il difetto dell'8 novembre dato per chiuso («sento il suono che riproduce quando mi collego»): la cura di allora ha coperto la strada `fetchMt5AccountInfo` (riga 46553, che passa `!loginQui`) e ha lasciato aperta questa. In quella misura la domanda non e' comparsa solo perche' la chiave combaciava; con la chiave sbagliata della causa 2 compare. Il principio e' gia' scritto nel file, alla riga 57545: «IMPARARE IL CONTO NON E' COLLEGARSI». Una duplicata non si collega mai: eredita.
+
+  **COSA NON E' LA CAUSA, misurato.** (a) La duplicata nasce in Storico, e in Storico `fblPropContoId()` risponde `'storico'` invece del conto MT5 (misurato, `diag_prop_memoria2.mjs` caso 1: `idPrima='storico'`, `chiedePrima=true`): sembrava una trappola, ma la domanda e' ritardata di 1.500 ms e in quell'intervallo la finestra passa in Live, quindi al momento della domanda l'id e' gia' `mt5:5057460278@FTMO-Demo` e la domanda **non** parte. Non va curato. (b) `localStorage` non letto dalla duplicata: falso, vedi sopra.
+
+  **PROVA DI CONTROLLO, che vale quanto le altre:** su un conto **mai visto** (`mt5:99999999@Altro-Demo`) la domanda **deve** comparire, e compare (misurato, caso 4). Una cura che smette di chiedere sarebbe peggio del difetto: all'aggiunta di un conto nuovo quella domanda e' l'unico momento in cui si dichiara se quel conto e' una prop firm.
+
+  **DUBBIO APERTO, separato, da decidere col proprietario:** `startNewPropFirmChallenge()` non scrive niente in `fbl_prop_conti`. Quindi dopo «Ricomincia da capo» la sessione riparte ma il record del conto resta `stato:'chiuso'`, e `fblPropContoCalcola()` continua a rispondere `false`: la prop firm non ricomincia a calcolare su un conto che l'utente crede riaperto. Non e' lo stesso difetto e non l'ho toccato.
+
+- **APERTO (misurato) 12 novembre 2026 — GLI INDICATORI RIFANNO IL CALCOLO DA ZERO A OGNI TICK: `rows` cambia IDENTITA' a ogni prezzo che arriva, e la guardia della cache confronta per riferimento** - `app.html`: `rebuildBaseRowsFromLibrary()` riga **12581** (`baseRows=src.slice()`), `rebuildRows()` riga **12458** (`const disp=fullAgg.slice()`), e la guardia ripetuta **17 volte** (16 indicatori integrati + lo script personale) (`st.ref!==rows`, righe 16472, 16760, 17168, 17475, 17887, 18172, 18530, 18814, 19106, 19529, 19787, 20133, 20252, 20351, 20618, 20845 ...). Diagnostici: `C:\Users\pietro\Documents\banchi_aperti_forex\diag_indicatori_cache.mjs` e `diag_altre_cache_rows.mjs`. Banco rosso: `C:\Users\pietro\Documents\banchi_aperti_forex\indicatori_cache_incrementale.misura.test.mjs`.
+
+  **LA MISURA DEL PROPRIETARIO** (pannello prestazioni, 12 novembre 17:30, v2.2.12, 50.029 candele, quattro indicatori accesi): `fotogrammiAlSecondo` **4,7** • `disegnoMedio_ms` **64,44** • `sezioniDelDisegno: indicatori=58,11` (tutto il resto insieme ~6 ms) • dentro: `ind:bsl_ssl_fvg:calcolo`=**23,15**, `ind:amd_poc_trade:calcolo`=**20,83**, `ind:order_blocks:calcolo`=**12,34**, `ind:ema_ind:calcolo`=1,42 — mentre i rispettivi `:disegno` costano 0,04-0,16 ms. **Non e' il disegno, e' il calcolo.**
+
+  **LA CAUSA, misurata e non supposta.** I 17 calcoli con cache (16 indicatori integrati + lo script personale, su 20 indicatori nel menu) sono scritti per essere incrementali: ognuno tiene `st.builtTo` e il ciclo e' `for(let i=st.builtTo+1;i<=upToIdx;i++)`. Ma la guardia che decide se tenere la cache e'
+
+      if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){ st.builtTo=-1; ...azzera tutto... }
+
+  e `st.ref!==rows` e' un confronto **per riferimento**. In Live, a OGNI prezzo che arriva, la catena `applyLivePriceToChart()` (riga 50831) fa `rebuildBaseRowsFromLibrary()` + `rebuildRows()`, e **tutte e due consegnano un array nuovo di zecca**:
+  - riga 12568: `baseRows = tutteBuone ? src.slice() : src.filter(...)` — la `.slice()` e' **voluta**, e il commento accanto lo dice: «necessaria per invalidare correttamente le cache di getBaseTimes()/getFullAgg(), basate sul confronto per riferimento». Serviva a quelle due cache; nessuno ha visto che la stessa riga azzera anche le 17 cache degli indicatori.
+  - riga 12458: `const disp=fullAgg.slice(); disp[bIdx]=partial; rows=disp` — quando l'ultima candela e' in formazione (cioe' **sempre**, in diretta, su qualunque timeframe diverso da m1).
+
+  Quindi `rows` ha una faccia nuova a ogni tick, `st.ref!==rows` e' sempre vero, e ogni indicatore ributta via tutto e ricalcola **50.029 candele da capo** per guadagnare una candela.
+
+  **I NUMERI** (`diag_indicatori_cache.mjs`, 50.029 candele m1 finte dentro la sessione di New York, 30 tick veri simulati con la stessa coda di `applyLivePriceToChart`; memoria della pagina 73 MB):
+
+  | | a m1 (50.029 candele) | a m5 (10.006 candele) |
+  |---|---|---|
+  | `rows` cambia identita' | **30 tick su 30** | **30 su 30** |
+  | azzeramenti `builtTo=-1`, per indicatore | **30 su 30** (tutti e quattro) | **30 su 30** |
+  | costo per tick, oggi | **241,53 ms** | **43,64 ms** |
+  | costo per tick, con l'identita' stabile | **0,75 ms** | **0,11 ms** |
+  | **rapporto** | **338x** | **397x** |
+
+  Dettaglio per indicatore, costo per tick **oggi** contro **identita' stabile** (m5): `bsl_ssl_fvg` 15,10 -> **0,00**; `amd_poc_trade` 25,95 -> **0,00**; `order_blocks` 2,08 -> **0,00**; `ema_ind` 0,33 -> 0,00. A m1: 92,73 -> 0,00; 137,27 -> 0,00; 7,46 -> 0,00; 3,32 -> 0,00. Un giro **fermo** (stesso `rows`, niente di nuovo) costa **0,000-0,005 ms**: la macchina incrementale funziona perfettamente, non viene mai lasciata lavorare. Il costo di un giro **da zero** e': `bsl_ssl_fvg` 293,3 ms, `amd_poc_trade` 161,8 ms, `order_blocks` 18,1 ms, `ema_ind` 2,8 ms su 50.029 candele.
+
+  **IL BANCO ROSSO, e il rapporto che misura** (`indicatori_cache_incrementale.misura.test.mjs`, 20 tick, rosso in **14 secondi**: nessun `test.skip`). Tre prove: (1) `rows` cambia identita' **20 su 20** tick, atteso 0; (2) ogni indicatore butta la cache **20 su 20**, atteso 0; (3) **la quota di un ricalcolo**: un tick costa **0,503** di un ricalcolo da zero a m5 (49,9 ms contro 99,3) e **0,591** a m1 (250,25 ms contro 423,3), contro un tetto dello 0,05. Non e' 1,0 tondo per un motivo onesto e non per un risparmio: il primo giro paga anche la compilazione a caldo del browser, i giri dopo no — il lavoro svolto e' lo stesso, tutte le candele da capo. La prova 3 e' un **rapporto fra due misure dello stesso giro**, non un tempo secco: la macchina carica sposta entrambi i numeri, il rapporto resta.
+
+  I numeri del banco sono piu' alti di quelli del pannello (43,64 contro 58,11 a parita' di scala e' lo stesso ordine; 241 ms a m1 e' il caso peggiore senza aggregazione) perche' il banco non ha il limite di tempo del fotogramma: la forma del difetto e' identica, il rapporto e' la misura che conta.
+
+  **IL SECONDO SOSPETTO E' INNOCENTE, e si misura:** `JSON.stringify(p)` dei parametri, eseguito a ogni fotogramma per ogni indicatore, costa **0,2-0,8 microsecondi** (mille giri cronometrati). Su quattro indicatori sono **0,002 ms** per fotogramma: tre ordini di grandezza sotto il difetto. Non va toccato.
+
+  **PRECEDENTE GIA' IN CASA, ed e' la strada della cura.** Il 9 novembre lo stesso problema era stato risolto **solo per `getFullAgg()`**: `fblStessoLivello()` (riga 12304) riconosce «sono le stesse candele» campionando **tre punti fissi** (prima, mezzo, ultima) con uno scarto del **0,5%**, e `segnalaCodaCambiata()` dice alle cache «e' cambiata solo la coda, da questo indice». Oggi quel segnale **lo legge solo `getFullAgg`** (`codaValidaPer`). Gli indicatori non lo vedono nemmeno. La cura e' estendere lo stesso meccanismo alla guardia degli indicatori: una **targa della serie** (`rowsSerieId`) che cambia solo quando le candele sono davvero un'altra serie (asset, timeframe, storico ricaricato, salto nel replay) e **non** quando e' cambiata solo la coda; la guardia confronta la targa invece del riferimento, e quando la coda e' cambiata riporta `builtTo` all'indice dell'ultima candela non toccata invece di azzerarlo.
+
+  **IL BUCO DELLA TARGA DA SOLA, e va chiuso nello stesso lavoro (annotato il 12 novembre, non misurato).**
+  La targa ferma il ricalcolo, ma da sola lascia l'indicatore **fermo a una candela incompleta**, che
+  e' peggio che lento. Oggi l'ultima candela in vista e' quella in formazione (`disp[bIdx]=partial`),
+  e il ciclo incrementale la assorbe: `st.builtTo` arriva a comprenderla. Con il riferimento che
+  cambia a ogni tick l'indicatore ributtava tutto e la ricalcolava col prezzo nuovo — lento ma
+  aggiornato. Con la targa stabile `upToIdx` non cresce piu', il ciclo non gira, e quell'indicatore
+  resta con dentro la candela **come era al primo tick della barra**: un order block o un FVG
+  calcolati su una candela che aveva un secondo di dati, e che non si correggono piu'. Non e'
+  «confermato a chiusura barra»: e' «congelato all'apertura della barra», ed e' silenzioso.
+  La cura quindi e' doppia, e le due parti vanno insieme: (1) la targa della serie; (2) il limite
+  del ciclo portato all'ultima candela **chiusa** (`upToIdx` meno uno quando l'ultima e'
+  `partial`), cosi' la candela entra nell'indicatore quando chiude davvero — che e' il
+  comportamento di TradingView, e va scritto a schermo perche' non si scopra da soli.
+  Senza il punto (2), il banco va scritto in modo che se ne accorga: confrontare il valore
+  dell'indicatore dopo dieci tick sulla stessa barra con quello di un ricalcolo da zero sulle
+  stesse candele. Oggi coincidono per forza bruta; con la targa da sola **divergono**.
+
+
+  **E LA CANDELA IN FORMAZIONE? MISURATO: COSTA 0,046 ms.** La cura dell'identita' stabile fa costare zero i tick, ma ha un prezzo dichiarato: la candela ancora aperta non entra nell'indicatore finche' non chiude (l'indicatore si aggiorna «quando nasce una candela nuova»). Si e' misurato quanto costerebbe invece rimacinare **solo l'ultima candela** a ogni tick — una candela su 50.029: `bsl_ssl_fvg` **0,013 ms**, `amd_poc_trade` **0,020 ms**, `order_blocks` **0,010 ms**, `ema_ind` **0,003 ms**, in tutto **0,046 ms per tick** contro i **202,82 ms** di oggi (a m5: 0,010 ms contro 35,63). **Tenere viva la candela in formazione non costa praticamente niente in macchina**: cio' che costa e' il lavoro di scrittura, perche' serve una fotografia dello stato interno da ripristinare prima di riassorbire quella candela, e va fatta indicatore per indicatore (17). La spesa e' di sviluppo e di rischio, non di processore — e questo cambia quale strada conviene.
+
+  **GLI INDICATORI NON SONO I SOLI, e qui si spiegano anche i «~6 ms di tutto il resto» del pannello.** A confrontare `rows`/`baseRows` **per riferimento** sono in **sei** posti, oltre alle 17 guardie degli indicatori: `getRowsTimestamps()` riga **12198**, `getFullAgg()` riga 12331, `getBaseTimes()` riga 12362, `computeVolumeProfile()` riga **13479**, `_lvnTouchCache` riga **13623**, `vpIndBuildInstances()` riga **15649**. Di questi **solo due** hanno la cura della coda del 9 novembre (`getFullAgg` e `getBaseTimes`, via `codaValidaPer`); gli altri quattro si svuotano interi a ogni tick. Misurato (`diag_altre_cache_rows.mjs`, 50.029 candele, 20 tick): `getRowsTimestamps()` si **riempie da zero 20 volte su 20** e costa **7,17 ms per tick** (riconverte 50.029 date per una candela che si e' mossa) — che e' **esattamente l'ordine dei «~6 ms» che il pannello del proprietario attribuiva a tutto il resto del disegno**; la mappa di `computeVolumeProfile()` si **svuota 20 su 20** e costa 0,83 ms per tick su cinque profili. Nessuno di questi quattro e' stato scritto male: tutti e quattro sono vittime della stessa riga. **Quindi la targa della serie serve a sei lettori, non solo agli indicatori**, e va messa accanto a `rows` dove il dato nasce — non dentro una funzione sola, che e' l'errore del 9 novembre.
+
+  **NON E' un difetto del porting dei undici indicatori nuovi (v2.2.35).** Misurato: `amd_poc_trade` e' incrementale per costruzione come gli altri (ciclo `for(let i=st.builtTo+1...)`, stato in `st`, nessuna rilettura dello storico) e **a identita' stabile costa 0,00 ms per tick**. Ha pero' due spese sue che pesano **solo** sul giro da zero, e che vale la pena togliere comunque: (a) la finestra di accumulo e' un ciclo interno di `accLen`=40 candele per ogni candela — 2 milioni di confronti su 50.029 candele, dove un massimo/minimo scorrevole costerebbe O(1); (b) `new Date(r.date).getTime()` per ogni candela, 50.029 parse di stringa, mentre `parseDateTime` e' gia' in cache altrove. Con questi due, un giro da zero scenderebbe sotto i 161,8 ms misurati. Ma e' il contorno: la causa del 4,7 fps e' l'azzeramento, non l'algoritmo.
+
+- **APERTO (misurato) 12 novembre 2026 — A MERCATO CHIUSO LE CANDELE «SI TRASFORMANO»: il corpo vale 1 px e viene spalmato su DUE colonne di pixel** - `app.html`, `draw()` riga **22862** (`bw`) e `getViewWindow()` riga **15204**. Banchi di misura: `C:\Users\pietro\Documents\banchi_aperti_forex\diag_candele_chiuso.mjs`, `diag_candele_soglia.mjs`, banco rosso `candele_leggibili_chiuso.misura.test.mjs`.
+
+  Parole del proprietario (foto XAUUSD 5m, mercato chiuso): «quando il mercato chiude e andiamo indietro nello storico, oppure carichiamo un asset diverso o lo ricarichiamo, tutte le candele si trasformano. E' come se perdessero la proprieta' e si rompe il disegno delle candele. Il disegno di default non e' cosi'.»
+
+  **PRIMA MISURA, e smonta la pista piu' forte: LA CHIUSURA DEL MERCATO NON TOCCA NE' IL COLORE NE' LA LARGHEZZA.** Stesso scenario (XAUUSD 5m, 2.017 candele, grafico 1.300 px -> `cw` = **1.140 px**), misurato due volte con lo stesso banco: una con l'orologio su venerdi' 5 novembre 12:00 UTC (mercato APERTO) e una su sabato 7 novembre 12:00 UTC (mercato CHIUSO, verificato: `fblMercatoFermoOra`=true, `liveSessionPhaseNow`=closed, `statoMercato`=chiuso/fonte orari, `fblConfineChiusura`=804).
+
+  | candele in vista `n` | passo px | corpo px | corpi impastati (stessa colonna del vicino) |
+  |---|---|---|---|
+  | 127 (il valore «ideale») | 8,98 | **5,57** | 0 |
+  | 200 | 5,70 | 3,53 | 0 |
+  | 300 | 3,80 | 2,36 | 0 |
+  | 400 | 2,85 | 1,77 | 0 |
+  | 500 | 2,28 | 1,41 | 61 su 379 |
+  | 600 | 1,90 | 1,18 | 141 su 467 |
+  | 864 (3 giorni a 5m) | 1,32 | **1,00** | **476 su 700** |
+  | 1.234 (il tetto `fblTettoCandele`) | 0,92 | **1,00** | **1.024 su 1.025** |
+  | 2.000 | 0,57 | 1,00 | 1.698 su 1.699 |
+
+  **I numeri sono IDENTICI a mercato aperto e a mercato chiuso**, riga per riga. Non c'e' nessuna soglia che la chiusura fa cadere dall'altra parte: il colore resta quello del tema scelto (`blue_white`: su `#ffffff`, giu' `#2f9bff` — il bianco/blu della foto e' il suo tema, non un ripiego) e la larghezza dipende **solo** da quante candele stanno nella finestra e da quanto e' larga la finestra.
+
+  **COSA CAMBIA DAVVERO ALLA CHIUSURA, misurato: il MARGINE FUTURO sparisce e nella stessa larghezza entrano piu' candele.** `getViewWindow()` riga 15204: `liveMargin = _apertoOra ? n*LIVE_FUTURE_MARGIN_FRACTION : 0` (la frazione e' 0,12). A mercato aperto il 12% destro della finestra e' vuoto; a mercato chiuso si riempie di candele. Misurato a parita' di `n`: **n=127 -> 52 corpi aperto, 67 chiuso**; **n=864 -> 701 corpi aperto, 804 chiuso**, con i corpi impastati che passano da **476 a 546**. La larghezza del singolo corpo non cambia di un pixel: cambia la QUANTITA' di stecchini a schermo, il 14% in piu' di roba nello stesso spazio. E' un peggioramento vero e spiega il «succede al momento della chiusura», ma e' un contorno, non la causa.
+
+  **LA CAUSA DELL'ASPETTO «ROTTO», e si misura in pixel.** Il corpo e' `bw=Math.max(1,Math.min(_footprintOn?90:12,cw/n*.62,cw/n))` (riga **22862**; il pavimento e' stato abbassato da 2 a 1 px il 10 novembre 2026 per togliere il «grafico a blocchi»). Da `n`>=864 il corpo vale **esattamente 1,00 px** e viene disegnato con `fillRect` a una **x frazionaria**: a 1 px su x frazionaria il browser lo spalma su DUE colonne di pixel, a meta' opacita' ciascuna. Misurato: a n=864 **tutti** i 700 corpi coprono 2 colonne di pixel, nessuno ne copre una sola. Da qui esattamente l'aspetto segnalato: il bianco diventa grigio, il blu diventa blu slavato, e la nitidezza cambia da candela a candela secondo la frazione di pixel su cui cade — cioe' «corpi sottili e irregolari» disegnati «con un'altra regola di colore e un'altra larghezza». La regola e' la stessa di sempre: e' il pixel che non c'e'. **E il perche' sono IRREGOLARI si misura allo stesso modo**: nella fascia di mezzo le candele non sono tutte uguali. A n=500 (corpo 1,41 px) **212 corpi coprono 2 colonne di pixel e 167 ne coprono 3**; a n=400 (corpo 1,77 px) sono 59 contro 232; a n=300 (corpo 2,36 px) 122 contro 81. Larghezze diverse per candele identiche, deciso dalla frazione di pixel su cui ognuna cade: e' esattamente «corpi sottili e irregolari».
+
+  **DOVE STA LA SOGLIA, in numeri utilizzabili (grafico 1.300 px, `cw`=1.140):** fino a **n<=300** (passo 3,80 px, corpo 2,36 px) nessun corpo tocca il vicino; da **n=500** comincia l'impasto; da **n=864** il corpo e' al pavimento di 1 px e il 68% dei corpi condivide la colonna del vicino; da **n=1.200** la condivisione e' totale. La soglia **non e' dichiarata da nessuna parte e non coincide con nessuno dei tre tetti esistenti**: `maxNoOverlapVisibleCount()` vale **380** (cw/3) ma non e' piu' il tetto dello zoom del tempo (richiesta esplicita del proprietario: lo zoom del periodo deve essere illimitato), il tetto dello zoom manuale `maxManualZoomOutVisibleCount()` vale **20.000**, e il tetto del cambio timeframe `fblTettoCandele()` vale **1.234** (la larghezza in pixel del grafico). Due dei tre tetti stanno molto oltre il punto in cui il disegno smette di essere leggibile.
+
+  **IL «GRAFICO A BLOCCHI» DELLA v2.2.17 NON E' SPARITO: E' STATO SPOSTATO PIU' IN LA'.** La cura del 10 novembre (pavimento del corpo da 2 px a 1 px) fa sì che il corpo non superi mai la colonna **finche' la colonna e' larga almeno 1 px**. Sopra `n`=1.234 la colonna scende sotto il pixel (passo 0,92 px a n=1.234, 0,57 px a n=2.000) mentre il corpo resta inchiodato a 1 px: il corpo torna a essere **piu' largo del suo posto** e il grafico ridiventa un masso pieno (misurato: 1.024 corpi impastati su 1.025 a n=1.234, 1.698 su 1.699 a n=2.000). La soglia del blocco e' passata da circa 400 candele a circa 1.230, non e' stata tolta — e lo zoom manuale arriva a 20.000.
+
+  **CHI CI PORTA, misurato con la rotellina vera (CTRL + rotellina sul canvas, gestore vero, grafico 1.234 px):** partenza n=127 (corpo 5,57 px, zero impasti) -> **5 tacche** n=205, corpo 3,45 px -> **10 tacche** n=331, corpo **2,14 px** (sotto la soglia) -> **15 tacche** n=532, corpo 1,33 px, **153 corpi impastati** -> **20 tacche** n=857, corpo **1,00 px**, **574 impastati** -> **25 tacche** n=1.381, passo 0,83 px. Sono tre o quattro colpi di rotellina. Nessun tetto interviene: lo zoom del tempo e' limitato da `maxManualZoomOutVisibleCount()` = **20.000** (per richiesta esplicita del proprietario lo zoom del periodo e' «illimitato»), mentre il tetto che saprebbe la risposta giusta, `maxNoOverlapVisibleCount()` = **380**, non viene piu' usato per il tempo. **Nessun avviso, nessuna scritta: il grafico cambia aspetto e non lo dice.**
+
+  **PERCHE' RESTA DOPO «UN ALTRO ASSET O LO RICARICHIAMO» — la vista rotta si ricorda.** Misurato (`diag_candele_memoria_vista.mjs`, e la terza prova del banco rosso): vista allargata a mano a n=900 (corpo 1,00 px, **840 corpi su 901 spalmati su due colonne**, 660 impastati) -> `applyChartViewForAsset('XAUUSD')`, cioe' la strada di ogni ritorno su quell'asset e di ogni ricaricamento del suo storico, rimette **n=900, autoFitWidth=false, corpo 1,00 px**. La larghezza sta in due memorie: `assetChartViews[modo][asset].visibleCount` (riga **12938**) e il file per dispositivo `fbl_zoom_dispositivo` scritto da `fblZoomDispositivoSalva()` (riga **8691**), che su disco contiene `{"visibleCount":900,"autoFitWidth":false}`. **E niente la riporta a posto**, perche' `autoFitWidth` resta spento: `idealVisibleCount()` (che darebbe 127) viene richiamato solo da `forward()`, `back()`, `window.onresize` e dal pulsante «torna all'ultima candela». Un asset mai visto riparte invece pulito (misurato: n=127): per questo il difetto sembra capriccioso.
+
+  **E LA MEMORIA VA SU DISCO, quindi non basta riaprire l'app.** `visibleCount` non sta nel pacchetto di sessione leggero (`collectLightSessionState()` non lo contiene, misurato), ma sta dentro `assetChartViews`, che `saveAssetChartViews()` (riga **7768**) scrive in **IndexedDB** a OGNI caricamento di asset (`idbPut('assetChartViews', ...)`, chiamata alle righe **13036** e **13058**) e che `initSession` rilegge all'avvio (riga **58544**, applicata alla riga **58754**). Misurato con `laboratorio/app/diag_candele_memoria.mjs`: dopo uno zoom-out a `visibleCount`=3000 su disco finisce `{"XAUUSD":{...,"autoFitWidth":false,"visibleCount":3000}}`. **Il ramo di rilettura all'avvio non e' stato eseguito nel banco** (dopo il `reload` la mappa torna vuota e n=127, perche' `initSession` non parte: il banco salta il velo di accesso e non ha una libreria di asset su IndexedDB) — quindi la scrittura su disco e' misurata, la rinascita all'avvio e' letta nel codice e **resta da misurare**. E il **cambio timeframe non c'entra piu'**: 1H -> 1m col gestore vero della select lascia `visibleCount` a 127 (era la cura della v2.2.17, tiene).
+
+  **Banco rosso (3 prove su 3 rosse, 11,3 s in tutto):** `C:\Users\pietro\Documents\banchi_aperti_forex\candele_leggibili_chiuso.misura.test.mjs`
+  1. «CTRL+rotellina indietro: il corpo non deve mai scendere sotto 3 px» -> rosso a 10, 15, 20, 25 tacche;
+  2. «a mercato chiuso lo stesso zoom non deve impastare piu' candele» -> rosso, da **476 a 587** corpi impastati a n=864;
+  3. «tornando su un asset la larghezza deve essere di nuovo leggibile» -> rosso, torna a 1,00 px con `autoFitWidth=false`.
+
+  **COSA NON E' STATO MISURATO (resta ipotesi).** Il percorso Live di cambio/ricarica asset (`loadLiveHistoryFromMt5`) non e' stato eseguito nel banco perche' chiede la rete: nel codice, quando `shouldResetView` e' vero (riga **47303**) si rimettono `viewEnd`, `followLatest`, `autoFitWidth`, `priceZoomFactor`, **ma non `visibleCount`** (riga **47388**), quindi in Live anche un cambio asset dovrebbe conservare la vista rotta. Letto, non eseguito.
+
+  **IL PARERE (chiesto dal proprietario).** La soglia che cambia l'aspetto del grafico non e' una buona idea cosi' com'e', ma non perche' esista: perche' e' **implicita, invisibile e senza fondo**. Tre proposte, in ordine di valore:
+  (1) **un pavimento onesto allo zoom del tempo**: `visibleCount` non oltre `cw/3` (oggi 380 su un grafico da 1.300 px) — lo zoom resta «illimitato» nel senso che conta (si puo' sempre stringere), ma non oltre il punto in cui una candela non e' piu' disegnabile; se si vuole vedere piu' tempo si cambia timeframe, che e' lo strumento giusto per quello;
+  (2) **se si vuole mostrare comunque mesi di storia, si cambia DISEGNO e lo si dice**: sotto i 3 px per colonna si passa a una riga sottile continua (tipo «linea di chiusura» o barre OHLC da 1 px disegnate su x INTERA, non frazionaria, cosi' restano nitide) con una scritta piccola «vista compressa: 1.381 candele» e un tocco per tornare alle candele. Un aspetto diverso va annunciato, non subito;
+  (3) **in ogni caso, x intera**: arrotondare `xx` e `bw` al pixel quando `bw<=2` toglie da solo lo spalmamento su due colonne — e' la meta' del difetto visivo, e si corregge in una riga senza toccare nessuna soglia.
+  E una cosa che non dipende dalle soglie: **la vista non deve restare rotta**. Una larghezza illeggibile non va memorizzata; o si memorizza la finestra di TEMPO e si ricalcola la larghezza su quella, o al ricaricamento di un asset si rimette `autoFitWidth` a vero come si rimettono gia' `followLatest` e `priceZoomFactor`.
+
+
 - **APERTO (misurato, non curato) 12 novembre 2026 — In SELL lampeggia un profitto che e' il PREZZO D'ENTRATA, e la Prop Firm dichiara la sfida superata (e lo SALVA)** - `app.html`. Banco: `C:\Users\pietro\Documents\banchi_aperti_forex\sell_profitto_falso_prop_firm.test.mjs` (8 prove, tutte rosse) + misure `diag_sell_profitto_falso.mjs`, `diag_sell_falso_cloud.mjs`.
 
   Parole del proprietario (11 novembre 2026): «quando vado ad aprire una posizione, al momento che la apro e imposto i livelli TP e stop loss, in SELL la maggior parte delle volte, succede che mi segnala per un attimo come se avessi un profitto che ovviamente non e' assolutamente vero. E questo comporta anche che in quel frangente l'applicazione mi dice che ho sbloccato la Prop Firm. Un bug del genere non e' accettabile.»
@@ -1177,3 +1330,269 @@ ESITI: A, B, C da ROSSI a VERDI. Non-regressione provata, un banco per volta:
   riproduce sul banco: prima e seconda duplicata hanno lo stesso elenco e la stessa watchlist.
   Da riprovare col ponte vero: probabile che dipenda da QUANDO nasce la finestra (madre non ancora
   pronta) piu' che da quante ce ne sono.
+
+---
+
+## 12 novembre 2026 — STORICO E JOURNAL DI ALTRI CONTI (voce 2 di RICHIESTE-12-NOVEMBRE-SERA)
+
+Parole del proprietario: «mi rimangono tutte le posizioni, lo storico nel grafico di tutti quanti
+gli account... Quello che mi deve far vedere e' la cronostoria soltanto di quello specifico account
+a cui sono collegato. Stop.»
+
+La v2.2.28 ha curato le POSIZIONI APERTE (`positionBelongsToCurrentView`). Questa voce riguarda
+**journal, storico, P/L ed equity**, che passano da altre tre strade.
+
+
+BANCO: `storico_un_solo_conto.misura.test.mjs` (fuori dal repo, in `Documenti\banchi_aperti_forex`,
+perche' rosso). Due conti MT5 (A=11111 con 2 operazioni chiuse, B=22222 con 3) piu' DUE operazioni
+SIMULATE senza conto addosso, come controllo.
+
+### LE MISURE (12 novembre 2026)
+
+| scenario | righe Journal | di A | di B | storico a grafico | statistiche | P/L totale |
+|---|---|---|---|---|---|---|
+| collegato ad A (11111)  | 7 | 2 | **3** | 2 (giusto) | 2 (giusto) | 30 (giusto) |
+| collegato a B (22222)   | 7 | **2** | 3 | 3 (giusto) | 3 (giusto) | 1200 (giusto) |
+| collegato, conto ignoto | 7 | **2** | **3** | **5 (i due conti)** | **5** | **1230 = A+B** |
+
+Le due operazioni simulate restano visibili in tutti e tre gli scenari (controllo VERDE: nessun
+filtro le sta cancellando — e' la trappola del 10 novembre, sei banchi rossi in un colpo).
+
+### I QUATTRO PUNTI, con i numeri di riga
+
+**A. IL TRADE JOURNAL NON FILTRA PER CONTO. MAI.** (riga 14694)
+`trades.map(...).filter(({t})=>journalTradeMatchesFilter(t,journalModeFilter)&&...)`, dove
+`journalModeFilter` e' il valore della tendina `#journalModeFilterSelect` (riga 14681) e **parte su
+`all`**; `journalTradeMatchesFilter` (riga 5191) comincia con `if(!f||f==='all')return true`.
+Il Journal non sa nemmeno che esiste un conto collegato: `tradeBelongsToCurrentView` non entra qui.
+Misurato: collegato ad A si leggono **3 righe del conto B**, col loro badge «MT5 …2222» e il loro
+profitto. E' letteralmente «la cronostoria di tutti quanti gli account». La tendina esiste e
+funziona: e' il VALORE DI PARTENZA che e' sbagliato — deve essere il conto collegato, non «Tutte».
+
+**B. STORICO A GRAFICO E STATISTICHE: il ripiego `!login||`** (righe 6202 e 6228)
+- `tradeBelongsToCurrentView`: `return t.mt5Ticket!=null&&(!login||t.mt5Login==null||String(t.mt5Login)===login);`
+- `statsTrades`: `return list.filter(t=>t.mt5Ticket!=null&&(!login||String(t.mt5Login||'')===login));`
+
+Quel `!login||` vuol dire: **se non so quale conto e' collegato, passano tutte**. E' lo stesso pezzo
+che l'11 novembre e' stato tolto da `positionBelongsToCurrentView` (riga 14212) con la motivazione
+«meglio nessuna che quelle di un altro» — nelle due funzioni gemelle e' rimasto.
+Misurato nello scenario «conto ignoto»: 5 operazioni di due conti a grafico, e **P/L totale 1230,
+cioe' la somma dei due conti** (30 di A + 1200 di B). Lo stesso ripiego sporca `closedPL()`
+(riga 27353), e da li' il capitale mostrato.
+Lo stato «collegato + conto ignoto» non e' teorico: e' la finestra duplicata appena nata, gia'
+misurata in `posizioni_un_solo_conto`.
+
+**C. IL RIALLINEAMENTO DELLO STORICO RISCRIVE IL JOURNAL DI UN ALTRO CONTO** (riga 45195,
+`mt5RiallineaTradeNoti`) — il piu' grave: non e' una vista sporca, **modifica i dati salvati**.
+`const perTicket=new Map((deals||[]).map(d=>[String(d.positionId),d]));` poi
+`trades.forEach(t=>{ if(!t||t.mt5Ticket==null)return; const d=perTicket.get(String(t.mt5Ticket)); if(!d)return; ... })`
+L'abbinamento e' **solo per numero di ticket**, senza guardare `t.mt5Login`. Due broker hanno
+numerazioni indipendenti: il ticket 101 esiste su MetaQuotes e su FTMO. Collegandosi a B, lo storico
+di B riscrive l'operazione di A con lo stesso numero, e `scheduleSave()` la persiste.
+Misurato, con UNA sola riga di storico del conto 22222: operazione del conto 11111 riscritta
+`entry 1.1 -> 1.5`, `exit 1.102 -> 1.4`, `pl 10 -> -9999`. Un profitto di 10 del conto A diventa
+una perdita di 9.999 del conto B, nel Journal, per sempre.
+Stesso difetto nella deduplica di `runMt5HistoryCatchUp` (riga 45168):
+`const alreadyKnown=new Set(trades.filter(t=>t.mt5Ticket!=null).map(t=>String(t.mt5Ticket)));` —
+senza il conto, un'operazione VERA del conto B viene scartata come «gia' nota» perche' A ha quel
+numero: quella non la si vede proprio sul conto giusto.
+
+**D. L'EQUITY NON HA UN CONTO.** (`equity.push`: righe 28635, 45265, 56224)
+Le sessioni separate sono quattro (`statsBaselineByMode`, riga 5998: backtest / live /
+backtest_propfirm / live_propfirm) e **nessuna delle quattro distingue il conto MT5**. Misurato:
+`equity.length` resta 7 passando da A a B, cioe' la curva contiene le operazioni di tutti e due.
+Le posizioni aperte hanno il loro parcheggio per conto (`mt5Parcheggio`); la curva di equity, la
+linea di partenza delle statistiche e il capitale no.
+
+STATO: MISURATO, banco rosso, NON curato (altro agente lavora su indicatori e Prop Firm; questa
+voce tocca journal/storico/posizioni e va curata con il banco qui sopra come arbitro).
+Da NON riaprire: nascondere i trade senza `mt5Login` — farebbe sparire voci storiche legittime e le
+operazioni simulate del backtest in Live. Il filtro deve scartare **chi dichiara un conto diverso**,
+non chi non dichiara niente.
+
+---
+
+## 12 novembre 2026 — LE LINEE DI ENTRATA / STOP / TARGET SI PRENDONO SOLO AI BORDI
+
+Richiesta del proprietario, voce «ordine limite»: «quando c'e' un ordine limite devo avere la
+possibilita' di spostarlo, anche se l'ordine pendente viene creato da una sala segnali: posso
+spostare la linea di entrata del buy limit e del sell limit». Seconda voce: «quando apro una
+posizione e poi vado a toccare lo stop loss o il take profit, e vado a spostare le linee, o le
+seleziono, mi deve uscire l'etichetta del rapporto rischio-rendimento».
+
+### MISURA 1 — la fascia utile vera, in pixel (banco `diag_fascia_linee.mjs`)
+
+Finestra 1300x850, tela del grafico **1234 px**, `pad.l=18`, `pad.r=76` → area di plot
+**1140 px** (x da 18 a 1158). Un ordine pendente `LIMIT` dell'asset a grafico, una posizione
+aperta con stop e target. Si spazza l'asse X alla quota Y di ogni linea e si chiede a
+`tradeLevelHit()` se risponde:
+
+| linea | x che rispondono | px utili | % dell'area di plot |
+|---|---|---|---|
+| pendente — ENTRATA | 0–178 | **141** | 12,4% |
+| pendente — STOP | 1018–1158 | **141** | 12,4% |
+| pendente — TARGET | 1018–1158 | **141** | 12,4% |
+| posizione aperta — STOP | 431–1013 | **583** | 51% |
+| posizione aperta — TARGET | 431–1013 | **583** | 51% |
+
+**La fascia morta dell'ordine pendente e' x 159–1017, cioe' 859 px: il 75% del grafico.** Le tre
+linee del pendente sono disegnate da `pad.l` a `w-pad.r` (tutta la larghezza, riga ~24623 e
+~24653) ma rispondono solo nei primi 160 px a sinistra (entrata) e negli ultimi 140 a destra
+(stop e target), righe 25519–25523. Tolleranza verticale 14 px. La posizione aperta non ha questo
+problema perche' la sua fascia e' la **casella Target/Stop**, che si vede (`zoneBoxXRange`:
+xOrigin 444, xRight 1000) e si allunga da sola fino all'ultima candela.
+
+CAUSA VERA: la fascia dell'ordine pendente e' scritta a numero fisso (160 / 140 px dai bordi) e
+non e' legata a niente di visibile. Chi guarda vede una linea tratteggiata lunga 1140 px e non ha
+modo di sapere che ne risponde un ottavo.
+
+**E. LA GUARDIA SUL CONTO FRA FINESTRE E' INCOMPLETA** (`fblApplicaStatoTrading`, righe 53486-53512)
+`_stessoContoMt5` protegge `positions`, `pendingOrders` e `trades`. Ma le tre righe subito dopo
+stanno **fuori** da quella guardia:
+- riga 53490 `equity=Array.isArray(msg.equity)?msg.equity:equity;`
+- riga 53500-53511 il blocco `if(msg.sessionByMode){...} sessionByMode=_nuove;`
+- riga 53512 `if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;`
+
+Misurato: una finestra sul conto B (22222) manda il suo stato a una finestra sul conto A (11111).
+Posizioni e operazioni vengono respinte giustamente, ma passano **tre strade**:
+`equity [10000,10010] -> [50000,40000,30000]`, `sessione Live parcheggiata [] -> [{suaB}]`,
+`linea di partenza delle statistiche 0 -> 7`.
+La terza e' la piu' insidiosa: `statsBaselineByMode.live` e' l'indice da cui si contano capitale,
+P/L e win rate. Portato a 7 dal conto dell'altra finestra, **le prime 7 operazioni del conto A
+scompaiono dalle statistiche** senza che niente lo dica, e con loro il capitale.
+Banco: terzo controllo di `storico_un_solo_conto.misura.test.mjs`
+(«una finestra su un altro conto non deve sovrascrivere equity e sessioni»).
+
+### LE CURE PROPOSTE, minime, nell'ordine in cui conviene farle
+
+1. **C** (`mt5RiallineaTradeNoti`, riga 45195): confrontare anche il conto —
+   `if(t.mt5Login && String(t.mt5Login)!==String(loginAttuale)) return;` prima di cercare il
+   ticket, e la chiave della deduplica di `runMt5HistoryCatchUp` da `ticket` a `login+'#'+ticket`.
+   E' quella che riscrive dati salvati: va prima di tutte.
+2. **E**: spostare le tre righe dentro `if(_stessoContoMt5){...}`.
+3. **B**: togliere `!login||` da `tradeBelongsToCurrentView` e da `statsTrades`, esattamente come
+   l'11 novembre in `positionBelongsToCurrentView`. Il controllo sulle operazioni simulate del
+   banco e' li' proprio per questo: `t.mt5Login==null` deve continuare a passare.
+4. **A — NON SI FA PIU'.** Il proprietario ha precisato il 12 novembre, rispondendo a una mia
+   domanda: «la cronostoria intendo **sul grafico e non sul journal**, sono due cose diverse. Se
+   sono collegato con l'account 1 non posso vedere le posizioni chiuse dell'account 2 **a
+   grafico**, ed e' come funziona su qualsiasi piattaforma di trading». Il Journal resta lo
+   storico completo con la sua tendina: cambiare il valore di partenza non e' richiesto, e
+   sarebbe anche la strada con la trappola misurata qui sotto (un filtro per conto cancella le
+   operazioni simulate). Restano da fare C, E e B - e di B conta soprattutto la faccia che
+   decide cosa si DISEGNA (`tradeBelongsToCurrentView`), che e' esattamente la richiesta.
+
+### LA TRAPPOLA DELLA CURA DI «A», misurata e messa nel banco
+La cura ingenua — mettere la tendina su `mt5:<login>` — **cancellerebbe le operazioni simulate**:
+`journalTradeMatchesFilter` con un filtro `mt5:...` comincia con `if(t.mt5Ticket==null)return false`
+(riga 5193). E' la trappola del 10 novembre in un'altra forma. Serve quindi un valore di partenza
+NUOVO («il conto collegato») che significhi «questo conto **piu'** quello che non dichiara nessun
+conto», non il filtro per conto che c'e' gia'.
+Il banco e' scritto perche' lo faccia notare da solo: NON forza il valore della tendina, legge
+quello che l'app mette, e pretende insieme «zero righe di altri conti» **e** «2 operazioni
+simulate visibili». Misurato oggi: `filtroDiPartenza=all` in tutti e tre gli scenari, e la tendina
+non viene salvata da nessuna parte (nessun `localStorage`, nessun ripristino di sessione: un solo
+`addEventListener` alla riga 58404) — quindi a ogni riapertura si torna a vedere tutti i conti.
+
+### NON CURATO IN QUESTA SESSIONE, e perche'
+`tradeBelongsToCurrentView` e `statsTrades` sono lette da decine di banchi, e il 10 novembre un
+filtro piu' severo su quelle strade ne ha fatti cadere sei in un colpo. Una modifica li' va
+verificata con il collaudo INTERO, che in questa sessione non si poteva lanciare (il proprietario
+lavorava sulla stessa macchina) e con altri agenti dentro lo stesso `app.html`. Il banco rosso e le
+quattro cure sono pronti; chi le applica deve avere `collauda.sh` verde davanti.
+
+---
+
+## FASCIA DEI RIQUADRI IN SCHERMO INTERO (`#fblMiniDash`) — 12 novembre 2026
+
+### MISURA DI PARTENZA (fatta prima di toccare qualunque cosa)
+Banco di misura: `laboratorio/app/diag_minidash.mjs` e `diag_minidash2.mjs` (fuori dal repo: sono
+misure, non banchi).
+
+Quello che c'era nella fascia, in quest'ordine: **P/L live, Capitale, Win rate, Loss rate,
+Margine libero**. Da dove vengono:
+- `P/L live` e' l'unico RICALCOLATO dalla fascia (`floatingPL()`, o `krakenConto.pnl_aperto` sul
+  conto Kraken): e' la SOMMA di tutte le posizioni aperte.
+- `Capitale`, `Win rate`, `Loss rate`, `Margine libero` sono **testo copiato** da `#mCapital`,
+  `#mWR`, `#mLR`, `#mMargin` della dashboard principale. La fascia non li calcola.
+- Si riaggiorna da sola ogni **1 secondo** (`setInterval` accanto a `fblMiniDashAggiorna`), piu'
+  una volta a ogni `fblMiniDashMostra()`.
+Misurato: `{"voci":["P/L live","—","Capitale","€10.000","Win rate","—","Loss rate","—",
+"Margine libero","—"]}`. Togliere Win rate e Loss rate non rompe la copiatura degli altri due:
+ogni voce e' una coppia indipendente nella griglia, `testo(id)` ritorna `—` per gli id assenti.
+
+### `active` E `posSelezionata`: SONO DUE COSE DIVERSE, misurato
+- clic sulla **freccetta** della posizione o sul suo corpo -> `focusPosition()` -> mette **tutte
+  e due** (`{active:"P1", sel:"P1"}`).
+- clic sulla **linea di stop o di target**: solo al SECONDO clic (quando la linea e' gia' armata)
+  -> mette tutte e due (riga 25487).
+- **apertura** di una posizione (a mercato, o pendente che scatta) -> mette **solo `active`**
+  (`{active:"P1", sel:null}`). Lo stesso vale al ripristino di sessione e alla chiusura di
+  un'altra posizione, dove `active` viene riassegnata dall'app da sola.
+Il proprietario ha chiesto la fascia in TUTTI E DUE i casi («quando apriamo una posizione **o** la
+selezioniamo»), quindi la posizione da mostrare e' `posSelezionata || active`, **riagganciata**
+con `fblRiagganciaPosizione()` e scartata se non e' piu' in `positions` (una posizione chiusa non
+deve restare nel pannello coi pulsanti vivi).
+
+### DIFETTO A, GIA' PRESENTE E NON SEGNALATO: in schermo intero di RIPIEGO la fascia non c'e'
+`toggleMainChartFullscreen()` ha due strade: quella nativa (`requestFullscreen`) e il **ripiego
+CSS** (`fblEntraSchermoInteroCss`, classe `fbCssFullscreen`) che si accende quando il fullscreen
+nativo rifiuta o non risponde — cioe' **l'app desktop con piu' finestre aperte**, il caso per cui
+il ripiego e' stato scritto (vedi `schermo_intero_madre.test.mjs`).
+La strada nativa passa dal gestore `fullscreenchange`, che chiama i sei `move*IntoSidebar()`.
+Il ripiego CSS **non ne chiama nessuno**: misurato su pagina pulita
+`{"cssAttivo":true,"miniDash":false,"sidebarAttiva":false,"resetViewDentro":false}`.
+Quindi in quel caso non ci sono ne' la fascia, ne' la barra degli strumenti di disegno, ne'
+«Torna all'ultima candela» dentro la barra laterale. **Non curato in questa sessione**: i sei
+spostamenti sono territorio di altri agenti (indicatori, barra replay) e una cura va fatta in un
+punto solo, con il collaudo intero davanti.
+
+### DIFETTO B, misurato: il «Chiudi» della tabella NON chiede conferma su conto simulato
+Gestore di `#openPositions`, ramo `closeId`: per una posizione con `mt5Ticket` la conferma
+arriva da dentro `closeMt5PositionReal` (ed e' una conferma vera, col ticket e i lotti); per una
+posizione **simulata** si va diretti in `closeTrade('MANUAL',...)`, **senza nessuna domanda**.
+In tabella e' tollerabile (il pulsante sta in fondo a una riga lunga); nella fascia a schermo
+intero no: il pulsante e' grande, sta sotto il dito e il grafico e' a tutto schermo. Nella fascia
+la conferma si chiede **sempre**, prima di qualunque cosa, e nomina la posizione.
+
+### MISURA 2 — l'ordine nato da un segnale: non e' quella la seconda strada (banco `diag_pendente_segnale.mjs`)
+
+Si temeva che un pendente nato da una sala non passasse `drawableOnCurrentChart` e non fosse ne'
+disegnato ne' agganciabile. Misurato, stato per stato (ordine LIMIT sull'asset a grafico, con
+`tgSala`/`tgGruppo`/`tgSegnaleId` addosso):
+
+| stato | disegnabile | px agganciabili sull'entrata |
+|---|---|---|
+| segnale SIMULATO, MT5 staccato | si | 179 |
+| segnale REALE su MT5 (ha ticket), MT5 collegato | si | 179 |
+| segnale SIMULATO, conto Storico | si | 179 |
+| **segnale SIMULATO, MT5 COLLEGATO** | **no** | **0** |
+| segnale REALE di un ALTRO conto, MT5 collegato | no (giusto) | 0 |
+| a mano, SIMULATO, MT5 collegato | no | 0 |
+
+CONCLUSIONE: **la sala segnali non c'entra**. Nella configurazione vera del proprietario (MT5
+collegato, sessione Live) `reale=!!mt5Connected&&sessioneLive` e' vero, quindi il segnale passa da
+`placeRealMt5PendingOrder`, l'ordine ha un `mt5Ticket` e si disegna e si aggancia come gli altri:
+**179 px, gli stessi di un ordine fatto a mano** — cioe' il difetto e' UNO SOLO, la fascia stretta.
+
+RESTA UN DUBBIO, misurato ma NON curato qui (e' il territorio dell'isolamento per conto, v2.2.28):
+un pendente SIMULATO con MT5 collegato sparisce del tutto dal grafico, perche'
+`positionBelongsToCurrentView` pretende `mt5Ticket!=null`. Succede a chi crea il pendente con MT5
+staccato e poi si collega. Un ordine pendente simulato non e' «di un altro conto»: la regola
+dell'isolamento gli si applica per inerzia. Da decidere con chi tiene quella funzione.
+
+### MISURA 3 — l'etichetta del rapporto rischio/rendimento non esiste a grafico
+
+`computeRRRatio()` (riga ~27820) esiste e alimenta il riquadro «R/R», ma usa `active.sl`/`active.tp`,
+che durante il trascinamento **non cambiano**: il valore vero si scrive solo al rilascio
+(`setTradeLevel`). Il cartellino dell'anteprima (riga ~24957) scrive solo
+`previewLabel+'? '+fmtPrice(prezzo)`. Misurato col banco: toccando lo stop non compare nessuna
+scritta col rapporto, e durante il trascinamento a 79800 la tela riceve `"SL? 79800.00000"` —
+prezzo si', rapporto no.
+
+### BANCO (rosso prima della cura)
+
+`C:\Users\pietro\Documents\banchi_aperti_forex\linee_trade_fascia_e_rr.test.mjs`
+4 prove: A (le tre linee rispondono al 10/25/50/75/90% della larghezza), A2 (a meta' grafico il
+primo tocco arma l'entrata), B (toccando lo stop compare «1:2»), B2 (trascinandolo a 79800 il
+cartellino dice «1:4»). Prima della cura: 4 rosse su 4.

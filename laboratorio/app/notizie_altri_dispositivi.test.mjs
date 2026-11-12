@@ -36,6 +36,17 @@ const PREPARA = (inLive) => {
   for (let i = 0; i < 100; i++) R.push({date: new Date(t0 + i * 60000).toISOString(),
     open: 100, high: 100.5, low: 99.5, close: 100.2, volume: 5});
   rows = R; baseRows = R; idx = R.length - 1; viewEnd = R.length - 1;
+  // LA FINESTRA DEVE ESSERE QUELLA CHE IL BANCO DICHIARA, NON QUELLA CHE DECIDE L'OROLOGIO
+  // (12 novembre 2026). Con l'autosegui acceso e il mercato CHIUSO, getViewWindow() congela
+  // `end` all'ultima candela aperta (fblConfineAutosegui): misurato alle 23 di Roma, con queste
+  // candele la finestra diventava start=-56 end=23, e le due notizie - che stanno alle candele
+  // 40 e 70 - cadevano fuori dall'asse. Zero bandiere, e il banco accusava il disegno delle
+  // notizie. Non era il disegno: era l'ORA in cui si lanciava il collaudo. Lo stesso banco
+  // passava di giorno e cadeva dopo le 22.
+  // `followLatest=false` dice «questa finestra l'ha scelta l'utente a mano», e in quel caso
+  // l'app non congela niente - e' scritto dentro getViewWindow stessa. Cosi' la misura delle
+  // bandiere non dipende piu' dal giorno della settimana.
+  followLatest = false;
   currentAssetKey = 'EURUSD'; if (typeof rowsAssetKey !== 'undefined') rowsAssetKey = 'EURUSD';
   liveModeActive = !!inLive; mt5Connected = false; positions = []; trades = []; drawings = [];
   newsEnabled = true;

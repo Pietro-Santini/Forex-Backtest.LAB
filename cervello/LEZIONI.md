@@ -1,5 +1,82 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+45. **Una cura data a UN SOLO lettore della cache lascia il difetto agli altri diciassette — e la
+    riga che invalida una cache ne azzera altre che non sapeva di avere.**
+    (12 novembre 2026.) Il proprietario ha misurato 4,7 fotogrammi al secondo con quattro
+    indicatori accesi, e il pannello diceva dove: `indicatori=58,11 ms` su 64,44 di disegno, tutto
+    nel **calcolo** (`ind:bsl_ssl_fvg:calcolo` 23,15 • `ind:amd_poc_trade:calcolo` 20,83 •
+    `ind:order_blocks:calcolo` 12,34) e nulla nel disegno (0,04-0,16 ms a testa). Ma quei calcoli
+    **sono incrementali per costruzione**: ognuno tiene `st.builtTo` e macina solo le candele
+    nuove. Venti millisecondi a fotogramma vogliono dire una cosa sola: **non macinano le candele
+    nuove, le rimacinano tutte**. Misurato: a ogni tick `rows` cambia identita' (**30 volte su
+    30**), la guardia `st.ref!==rows` e' quindi sempre vera e **tutti e quattro** gli indicatori
+    azzerano `builtTo` (**30 su 30**) e rifanno 50.029 candele per guadagnarne una. Costo: **202,82
+    ms per tick** invece di **0,73**. Un fattore **278**.
+
+    **LA TRAPPOLA VERA, e vale per qualunque cache di questo progetto.** La riga che crea l'array
+    nuovo — `baseRows = src.slice()` in `rebuildBaseRowsFromLibrary()` — non e' una distrazione: e'
+    **voluta**, e il commento accanto spiega perche', «necessaria per invalidare correttamente le
+    cache di `getBaseTimes()`/`getFullAgg()`, basate sul confronto per riferimento». Era vero quando
+    e' stata scritta. Poi sono arrivati diciassette calcoli di indicatore che usano **la stessa
+    tecnica di invalidazione** — confronto per riferimento — e quella riga ha cominciato a
+    invalidare anche loro, senza che nessuno la toccasse e senza che niente lo dicesse.
+    **Invalidare per riferimento e' una scorciatoia che si paga quando i lettori diventano tanti**:
+    chi crea l'array non sa chi lo sta guardando, e l'unico modo di saperlo e' cercarlo a mano.
+
+    **E LA SECONDA TRAPPOLA: la cura era gia' in casa, ma montata su un pezzo solo.** Il **9
+    novembre** questo identico problema era stato riconosciuto e curato — ma solo per
+    `getFullAgg()`: `fblStessoLivello()` riconosce «sono le stesse candele» con tre punti fissi
+    (prima, mezzo, ultima) e uno scarto dello 0,5%, e `segnalaCodaCambiata()` dice alle cache «e'
+    cambiata solo la coda, da questo indice». Funziona, ed e' il modo giusto. Ma quel segnale lo
+    legge **un solo consumatore** (`codaValidaPer`), mentre a confrontare per riferimento erano in
+    diciotto. Tre giorni dopo il difetto e' tornato dalla porta accanto, con lo stesso meccanismo,
+    e si e' ripresentato al proprietario come un numero di fotogrammi.
+    **La regola che ne esce: quando si cura un'invalidazione, si contano prima tutti quelli che la
+    usano** (`grep` della guardia, non memoria), **e la cura si mette dove si crea il dato, non
+    dove lo si legge.** Una targa della serie messa accanto a `rows` la vedono tutti; un
+    `fblStessoLivello` chiamato dentro una funzione sola lo vede solo quella.
+
+    **E IL TERZO INSEGNAMENTO: il sospetto piu' ovvio era innocente, e si e' chiuso in trenta
+    secondi con un numero.** `JSON.stringify(p)` dei parametri, nella stessa guardia, eseguito a
+    ogni fotogramma per ogni indicatore, sembra lo sprecone perfetto. Misurato con mille giri
+    cronometrati: **0,2-0,8 microsecondi**. Su quattro indicatori sono 0,002 ms per fotogramma,
+    tre ordini di grandezza sotto il difetto. Se non si misurava, si ottimizzava quello — e il
+    grafico restava a 4,7 fotogrammi al secondo con una modifica in piu' da mantenere.
+
+    **COME SI MISURA UNA COSA COSI' SENZA FARSI INGANNARE DAL CARICO.** Un tempo in millisecondi
+    preso su una macchina dove il proprietario sta lavorando e' un'opinione. Il banco misura
+    invece un **rapporto fra due misure dello stesso giro**: quanto costa un tick, e quanto costa
+    un ricalcolo da zero. Un tick guadagna una candela su decine di migliaia, quindi deve costare
+    una frazione del ricalcolo intero; oggi ne costa **0,50-0,59**. La macchina carica sposta
+    entrambi i numeri, il rapporto resta — e la soglia (un ventesimo) e' venti volte larga
+    rispetto al regime misurato (un millesimo), cosi' il banco non cade per il vento.
+    Banco: `C:\Users\pietro\Documents\banchi_aperti_forex\indicatori_cache_incrementale.misura.test.mjs`
+    (rosso in 14 secondi), diagnostico `diag_indicatori_cache.mjs`.
+
+44. **Nessun banco guardava se il grafico SI VEDE: un difetto d'aspetto puo' campare settimane.**
+    (12 novembre 2026.) Il proprietario ha segnalato con una foto che «a mercato chiuso le candele
+    si trasformano». Il repository aveva **pagine di prove sul grafico** - buchi a mercato chiuso,
+    asse che si ferma alla chiusura, disegni che non slittano al cambio timeframe, il costo in ms
+    del disegno - e **non una sola prova sull'ASPETTO**: quanto e' larga una candela, se tocca la
+    vicina, se il colore che esce e' quello del tema. Misurato: dai 300 candele a schermo in su il
+    corpo scende sotto i 3 px, e da 864 vale esattamente 1 px e viene spalmato su DUE colonne di
+    pixel a meta' opacita' - il bianco diventa grigio, il blu slavato, e la nitidezza cambia da
+    candela a candela. Tutto questo passava verde, perche' nessuno chiedeva.
+    **COME SI MISURA L'ASPETTO, e costa poco.** Non serve confrontare immagini (fragile, cambia
+    con il carattere e col sistema). Si intercettano le primitive del canvas durante `draw()`
+    (`fillRect`, `moveTo`/`lineTo`/`stroke`) e si verificano **invarianti numeriche**:
+    (a) il corpo di una candela non scende sotto 3 px; (b) due corpi non condividono la stessa
+    colonna di pixel interi; (c) un corpo da 1 px non copre due colonne (cioe' la x e' intera, non
+    frazionaria); (d) il colore che esce e' ESATTAMENTE `currentCandleColors()`; (e) il numero di
+    corpi disegnati e' uguale al numero di candele in vista; (f) niente viene disegnato fuori
+    dall'area di plot. Sono sei righe di assert che girano in tre secondi e beccano una classe
+    intera di difetti che oggi si scopre solo con una fotografia del proprietario.
+    **LA TRAPPOLA DENTRO LA TRAPPOLA**: la cura del 10 novembre 2026 abbasso' il pavimento del
+    corpo da 2 px a 1 px per togliere il «grafico a blocchi». Ha funzionato - i blocchi sono
+    spariti - e ha prodotto il difetto di oggi, perche' un corpo da 1 px su x frazionaria non e'
+    una candela sottile: e' una macchia su due colonne. **Spostare un pavimento senza una prova
+    sull'aspetto significa scambiare un difetto visivo con un altro, senza accorgersene.**
+
 43. **Una media con un picco dentro non e' una misura: e' una media.** (12 novembre 2026.)
     Il pannello prestazioni diceva «lettura conto: 239 volte, media 106.755 ms». Centosei secondi
     per parlare con un servizio sulla STESSA macchina: sembrava la prova di un ponte in ginocchio,
@@ -1404,3 +1481,84 @@
   Il canale consegna una copia strutturata: `positions` viene sostituito con oggetti NUOVI, quindi
   `positions.includes(active)` non puo' riuscire e ogni controllo «e' ancora nell'elenco?» scritto
   per riferimento diventa «buttala via». Fra finestre si confronta per `id`, mai per riferimento.
+- 12 novembre 2026 — **una regola curata in una funzione va cercata nelle sue gemelle, lo stesso
+  giorno.** L'11 novembre il ripiego `!login||` («conto ignoto: passano tutte») e' stato togliato
+  da `positionBelongsToCurrentView` con la motivazione giusta, ed e' rimasto identico nelle due
+  funzioni che fanno la stessa domanda su altri oggetti: `tradeBelongsToCurrentView` (storico a
+  grafico) e `statsTrades` (P/L e capitale). Misurato il giorno dopo: con il conto ignoto il P/L
+  totale era 1230, cioe' la somma esatta di due conti diversi. Mentre si cura un filtro,
+  `grep` del pezzo che si sta togliendo: se compare altrove, quello e' lo stesso difetto, non un
+  difetto nuovo da scoprire la settimana dopo.
+- 12 novembre 2026 — **un abbinamento per ticket non e' un abbinamento per operazione.** I numeri
+  di posizione MT5 sono unici DENTRO un broker, non fra broker: il ticket 101 esiste su MetaQuotes
+  e su FTMO. `mt5RiallineaTradeNoti` abbinava solo per ticket, e lo storico di un conto riscriveva
+  nel Journal l'operazione omonima di un altro (misurato: `pl 10 -> -9999`). La chiave di
+  un'operazione reale e' sempre `login + ticket`, mai il ticket da solo.
+- 12 novembre 2026 — **una guardia di sicurezza messa in cima rifiuta anche quello che doveva
+  buttare.** Per impedire che l'apertura automatica aprisse sul conto sbagliato (il difetto che e'
+  costato una prop firm) ho messo in testa a `tgAutoDecidi` un «se non so il conto, non apro».
+  Due danni, nessuno dei due visto da me: (1) la chiave del conto veniva da
+  `tgAutoContoCollegatoKey()`, che torna null ogni volta che MT5 non e' collegato — cioe' SEMPRE
+  sul conto simulato e SEMPRE su Kraken: l'apertura automatica era morta in due terzi dei casi;
+  (2) un segnale senza stop e senza target non arrivava piu' al controllo che lo ELIMINA, quindi
+  restava nel pannello per sempre. Dentro una funzione che decide, i controlli vanno nell'ordine
+  di cosa dipende da cosa: prima quelli che non dipendono dal conto (il messaggio e' leggibile? ha
+  una protezione?), poi quelli che dipendono dal conto. Una guardia «non so, quindi fermo» e'
+  giusta solo nel punto in cui si sta davvero per toccare i soldi.
+- 12 novembre 2026 — **un banco che passa perche' si ferma prima non sta misurando.** Il banco
+  `auto_apertura_per_conto` nasceva con i campi `sl`/`tp`, mentre l'app legge `stop_loss`/
+  `take_profit`: quei segnali erano senza protezione, e il banco credeva di misurare
+  l'interruttore per conto su segnali che non ci arrivavano nemmeno. Era verde perche' il
+  controllo del conto stava in cima e rispondeva per primo. Si e' scoperto solo riordinando i
+  controlli. Quando un banco nuovo diventa verde al primo colpo, va fatto fallire di proposito una
+  volta (cambiando il valore atteso): se resta verde, non sta guardando quello che dice.
+- 12 novembre 2026 — **un banco rosso non prova che l'app sia rotta: prima si guarda se il banco
+  guarda nel posto giusto.** `posizioni_un_solo_conto` pretendeva due frecce per posizione e ne
+  contava zero, e il sospetto naturale era il disegno delle posizioni. Misurato: `draw()` chiedeva
+  l'indice della candela di apertura e otteneva 295, l'etichetta «BUY 0.10» veniva dipinta, ma la
+  finestra che l'app disegna davvero (`getViewWindow()`) era 170-249 — l'app lascia dello spazio
+  vuoto a destra. La freccia cadeva a x=1806 su una tela larga 1234, e non dipingerla era giusto.
+  Il banco metteva la posizione dove il grafico non guarda. Ed era rosso anche a v2.2.28: una
+  seconda prova che non era una regressione nuova. Quando un banco accusa l'app, la prima misura
+  e' «il banco sta guardando dove guarda l'app?», e la si fa confrontando con una versione
+  precedente prima di aprire il codice dell'app.
+- 12 novembre 2026 — **la premessa di un banco scade come il codice.** Lo stesso banco diceva, in
+  un commento, «misurato: 1 posizione = 2 frecce». Oggi e' 1: la seconda era la freccia
+  dell'operazione ATTIVA del backtest, che non si disegna per ogni posizione MT5. Il numero era
+  vero quando e' stato scritto e non lo e' piu'. Un banco che fissa un numero deve dire da dove
+  viene quel numero, cosi' che chi lo trova rosso possa rimisurarlo invece di dedurlo.
+- 12 novembre 2026 — **un banco che costruisce candele «fino a adesso» eredita l'ora in cui lo
+  lanci, e quindi non misura sempre la stessa cosa.** Due banchi di fila hanno accusato il
+  disegno (le frecce delle posizioni, le bandiere delle notizie) mentre la causa era la stessa:
+  la finestra che il grafico disegna davvero non e' quella che il banco crede. `getViewWindow()`
+  non usa `viewEnd` cosi' com'e': a mercato APERTO aggiunge il margine futuro, e a mercato CHIUSO
+  con l'autosegui acceso CONGELA il bordo destro all'ultima candela aperta
+  (`fblConfineAutosegui`). Misurato alle 23 di Roma, con cento candele che finivano «adesso»:
+  finestra `start=-56 end=23`, e gli oggetti messi dal banco alle candele 40 e 70 cadevano fuori
+  dall'asse. Lo stesso banco passava di giorno. Due regole, da applicare ai banchi nuovi:
+  **(1)** chi misura qualcosa che si disegna dichiara la finestra, e il modo piu' pulito e'
+  `followLatest=false` («questa finestra l'ha scelta l'utente»), perche' allora l'app non
+  congela e non allunga niente; **(2)** chi deve mettere un oggetto dentro la vista non scelga
+  l'indice a mano: legga `getViewWindow()` e prenda una candela in mezzo, cosi' la misura regge
+  qualunque finestra l'app scelga. Senza questo un collaudo e' verde o rosso secondo l'ora, e si
+  finisce a cercare regressioni che non ci sono.
+- 12 novembre 2026 — **«asset ignoto» non puo' valere «mercato aperto», ed e' la terza volta nello
+  stesso giorno che lo stesso errore costa una misura.** Trovato per caso: la prova «sabato, canale
+  vivo e nessun tick» cadeva SOLO nel collaudo intero e passava da sola. Non era il carico. La
+  causa misurata, con l'orologio fissato al sabato e dieci letture di fila: la prima dice
+  `closed/fermo:true`, tutte le altre `free/fermo:false`, perche' in mezzo **`currentAssetKey` si
+  svuota** (succede nei primi istanti, prima che la sessione sia ripristinata, e ogni volta che la
+  libreria resta senza file). E con l'asset vuoto DUE funzioni gemelle rispondevano «mercato
+  aperto»: `liveScheduleAppliesNow` (aveva `a &&` nella condizione) e `fblMercatoFermoOra` (aveva
+  `if(!asset)return false`). Cioe' **il calendario del mercato era spento proprio nella finestra in
+  cui si apre l'app**. Le due cure sono andate insieme, come dice la regola delle gemelle: un asset
+  ignoto non e' una cripto, quindi vale l'orario predefinito, e al massimo il grafico resta fermo
+  un istante di troppo. Il valore di questa lezione non e' il difetto: e' che **un banco che cade
+  solo nel collaudo intero non e' un banco instabile da rilassare** - va misurato, perche' il
+  collaudo intero e' l'unico posto dove due letture distanti scoprono uno stato che cambia.
+- 12 novembre 2026 — **due misure in due chiamate separate alla pagina non misurano lo stesso
+  istante.** Fra la prima e la seconda l'app continua a vivere: timer, risposte del canale,
+  ripristino della sessione. Con venti browser insieme quell'intervallo si allarga, e una prova
+  che confronta «com'era» e «com'e'» accusa il codice invece dell'intervallo. Quando due letture
+  devono descrivere lo STESSO stato, si fanno in una sola chiamata - le verifiche restano
+  identiche e non c'e' piu' niente che possa entrare in mezzo.

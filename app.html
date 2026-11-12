@@ -6776,7 +6776,26 @@ function fblPropContoStato(id){
 }
 function fblPropContoStatoSalva(id,stato){
  const d=_fblPropConti();
- d[id||fblPropContoId()]=Object.assign({quando:Date.now()},stato||{});
+ const _k=id||fblPropContoId();
+ // SI AGGIUNGE A QUELLO CHE C'ERA, non lo si sostituisce (12 novembre 2026).
+ //
+ // SEGNALATO dal proprietario: «certe volte mi dice se voglio avviare su questo conto la
+ // challenge della prop firm, ma in realta' e' gia' stata avviata. Deve rimanere in memoria
+ // fisso, non se lo puo' scordare».
+ //
+ // CAUSA MISURATA: diciotto chiamate su diciannove passano qui un oggetto GIA' fuso
+ // (`Object.assign({},st,{...})`) e conservano quello che c'era. Una no:
+ // `triggerPropFirmViolation()` passa `{stato:'chiuso',motivo:rule}` nudo, e questa riga
+ // sostituiva l'intero record. Misurato su un conto con la challenge avviata:
+ // `propChiesto` true->false (la domanda riparte), e - peggio, perche' e' silenzioso -
+ // `preset` ftmo-1step->ftmo-2step e `tipoConto` swing->standard, cioe' il limite giornaliero
+ // mostrato passa dal 3% al 5% e tornano le restrizioni notte/notizie su un conto che era
+ // Swing. Spariscono allo stesso modo `faseSuperata` e i suoi numeri: una fase superata e
+ // pagata non era piu' scritta da nessuna parte.
+ //
+ // La fusione si fa QUI, una volta, invece di chiedere a diciannove chiamanti di ricordarsene:
+ // il prossimo chiamante nuovo non puo' sbagliare nello stesso modo.
+ d[_k]=Object.assign({},d[_k]||{},{quando:Date.now()},stato||{});
  try{ localStorage.setItem(FBL_PROP_CONTI_KEY,JSON.stringify(d)); }catch(e){}
 }
 function fblPropContoAzzera(){ try{ localStorage.removeItem(FBL_PROP_CONTI_KEY); }catch(e){} }
@@ -7917,6 +7936,12 @@ function armDrawingsPersistence(){
      persistDrawingsBackupNow();
      scheduleSave();
      broadcastDrawingsStateNow(); // vedi SINCRONIZZAZIONE DISEGNI TRA FINESTRE più sopra nel file
+     // RETE DI SICUREZZA PER L'ANNUNCIO RIMANDATO (12 novembre 2026). Dalla cura di oggi
+     // pushHistory() non annuncia mentre si trascina: aspetta il rilascio. Ma un disegno puo'
+     // nascere SENZA un rilascio - incollato, importato, creato da codice, o con un gesto
+     // interrotto a meta' - e in quel caso l'annuncio resterebbe appeso per sempre. Qui, dove
+     // si e' gia' sicuri che nessun gesto e' in corso (la guardia sopra), lo si libera.
+     try{ fblDisegniDaAnnunciare=false; }catch(e){}
    }catch(e){}
  },1500);
 }
@@ -9654,7 +9679,16 @@ if(msg.mt5Connected && !mt5Connected){
           // messaggio: ereditarlo non e' un secondo collegamento (nessuna chiamata, nessun suono),
           // e' sapere su che conto si sta guardando — come tutte le altre finestre.
           try{ if(msg.mt5CredsDraft && !mt5CredsDraft){ mt5CredsDraft=msg.mt5CredsDraft; } }catch(e){}
-          try{ updateMt5ModeUI(); }catch(e){}
+          // SILENZIOSO: UNA DUPLICATA NON SI COLLEGA, EREDITA (12 novembre 2026).
+          // Senza il parametro, dentro updateMt5ModeUI `_justConnected` diventa vero e da li'
+          // partono i tre riti del collegamento: il suono di benvenuto, la domanda sulle sale
+          // Telegram e la domanda della prop firm - in OGNI finestra duplicata che si apre.
+          // E' il «mi dice sempre se questo conto e' una prop firm o meno» segnalato dal
+          // proprietario, ed e' anche il suono che si sentiva una volta per finestra aperta.
+          // Il principio e' scritto dentro updateMt5ModeUI stessa: imparare il conto non e'
+          // collegarsi. La cura dell'11 novembre aveva coperto la strada di fetchMt5AccountInfo
+          // e lasciato aperta questa.
+          try{ updateMt5ModeUI(true); }catch(e){}
           try{ tradingChannel&&tradingChannel.postMessage({type:'trading_sync_request',slot:PIP_SLOT}); }catch(e){}
           console.log('[Finestra] MT5 risulta collegato dalla finestra principale: ereditato lo stato, nessun secondo accesso');
         }
@@ -10613,9 +10647,53 @@ function pushHistory(){ historyUndo.push(snapshotDrawings()); historyRedo=[];
  // giro da 1500 ms di armDrawingsPersistence(), ma quel giro non e' armato finche' il
  // ripristino della sessione non e' concluso, e pushHistory() e' l'imbuto per cui passano
  // TUTTE le modifiche ai disegni (creazione, spostamento, cancellazione, copia, undo).
- // Il timeout zero serve perche' questa funzione gira PRIMA della modifica: fra un attimo
- // lo stato e' quello nuovo e le altre finestre lo vedono mentre lo si sta facendo.
+ // MENTRE SI TRASCINA NON SI ANNUNCIA NIENTE: SI ASPETTA IL RILASCIO (12 novembre 2026).
+ //
+ // SEGNALATO dal proprietario: «se inserisco una linea e prendo uno dei due capi e la vado a
+ // spostare, mi si DESELEZIONA, e in piu' mi va ad aggiornare anche nelle altre pagine. Invece
+ // mi deve dare il tempo di trascinare, spostare e modificare il disegno finche' non lo
+ // rilascio. Quando lo rilascio, allora apporta le modifiche anche alle altre pagine.»
+ // Aveva anche indicato da solo il legame con la bolletta, ed e' esatto: MISURATO lo stesso
+ // giorno, il documento dei disegni faceva 703 MB di banda su 720 totali (il 97,7%) con 1.092
+ // letture su 1.185. Ogni annuncio fa ridisegnare le altre finestre e rimbalza sul cloud.
+ //
+ // La riga di prima diceva, nel suo stesso commento, «le altre finestre lo vedono mentre lo si
+ // sta facendo»: era voluto, ma e' proprio il comportamento da togliere. Chi riceve l'annuncio
+ // rimpiazza l'elenco dei disegni, e il disegno che hai in mano non e' piu' lo stesso oggetto:
+ // da li' la deselezione a meta' trascinamento.
+ if(typeof graficoOccupato==='function' && graficoOccupato()){
+   fblDisegniDaAnnunciare=true;
+   fblAnnuncioDisegniRiprova();   // riprova da sola appena il gesto finisce
+   return;
+ }
  setTimeout(()=>{ try{ broadcastDrawingsStateNow(); }catch(e){} },0);
+}
+// L'annuncio rimandato, da chiamare quando il gesto e' finito.
+let fblDisegniDaAnnunciare=false, fblAnnuncioDisegniT=null;
+// CHI LO RIPRENDE, SE NESSUNO LO RIPRENDE. Un gesto puo' finire in molti modi diversi - rilascio
+// del mouse, secondo tocco che chiude un rettangolo, dito alzato, tasto Esc, finestra che perde il
+// fuoco - e attaccarsi a uno solo di quelli vorrebbe dire perdere l'annuncio in tutti gli altri
+// casi (misurato: il banco del rettangolo fra finestre e' diventato rosso proprio cosi').
+// Quindi non ci si attacca a nessuno: si guarda ogni 200 ms se il gesto e' finito, e allora si
+// annuncia. Il controllo si spegne da solo appena ha fatto il suo lavoro.
+function fblAnnuncioDisegniRiprova(){
+ if(fblAnnuncioDisegniT)return;
+ fblAnnuncioDisegniT=setInterval(()=>{
+   try{
+     if(!fblDisegniDaAnnunciare){ clearInterval(fblAnnuncioDisegniT); fblAnnuncioDisegniT=null; return; }
+     if(typeof graficoOccupato==='function' && graficoOccupato())return;   // ancora in mano
+     fblDisegniDaAnnunciare=false;
+     clearInterval(fblAnnuncioDisegniT); fblAnnuncioDisegniT=null;
+     broadcastDrawingsStateNow();
+   }catch(e){ try{ clearInterval(fblAnnuncioDisegniT); }catch(_e){} fblAnnuncioDisegniT=null; }
+ },200);
+}
+function fblAnnunciaDisegniSeInSospeso(){
+ if(!fblDisegniDaAnnunciare)return false;
+ if(typeof graficoOccupato==='function' && graficoOccupato())return false;   // non ancora
+ fblDisegniDaAnnunciare=false;
+ try{ broadcastDrawingsStateNow(); }catch(e){}
+ return true;
 }
 // Per i controlli "continui" (slider di trasparenza, campo numero spessore, color picker, che
 // generano molti eventi 'input' durante un solo trascinamento/interazione): registriamo un SOLO
@@ -10623,7 +10701,11 @@ function pushHistory(){ historyUndo.push(snapshotDrawings()); historyRedo=[];
 // del controllo) e richiudiamo la "gesture" al termine (endHistoryGesture, sull'evento 'change'),
 // così Ctrl+Z annulla l'intera interazione in un colpo solo invece di richiedere decine di Ctrl+Z.
 function beginHistoryGesture(){ if(!historyGestureActive && selectedDrawing){ pushHistory(); historyGestureActive=true; } }
-function endHistoryGesture(){ historyGestureActive=false; }
+function endHistoryGesture(){ historyGestureActive=false;
+ // Fine del gesto continuo (trasparenza, spessore, colore): se c'e' un annuncio rimandato
+ // adesso e' il momento, non prima.
+ try{ fblAnnunciaDisegniSeInSospeso(); }catch(e){}
+}
 function undoDrawing(){
  if(!historyUndo.length){ $('status').textContent='Nessuna modifica da annullare.'; return; }
  historyRedo.push(snapshotDrawings());
@@ -23379,7 +23461,22 @@ function draw(){
    }
    ctx.strokeStyle=up?_cc.up:_cc.down;ctx.fillStyle=ctx.strokeStyle;
    ctx.beginPath();ctx.moveTo(xx,y(r.high));ctx.lineTo(xx,y(r.low));ctx.stroke();
-   let top=y(Math.max(r.open,r.close)), bot=y(Math.min(r.open,r.close));ctx.fillRect(xx-bw/2,top,bw,Math.max(1,bot-top));
+   let top=y(Math.max(r.open,r.close)), bot=y(Math.min(r.open,r.close));
+   // QUANDO IL CORPO E' SOTTILE, SI DISEGNA SU UNA COLONNA DI PIXEL INTERA (12 novembre 2026).
+   // SEGNALATO con foto: «tutte le candele si trasformano, e' come se perdessero la proprieta'».
+   // MISURATO, e la causa non era la chiusura del mercato (pista smontata: larghezza e colore
+   // sono identici a mercato aperto e chiuso). E' il NUMERO di candele in vista: da circa 864
+   // il corpo vale esattamente 1,00 px, e `fillRect` a una x frazionaria lo spalma su DUE
+   // colonne a META' OPACITA'. Il bianco diventa grigio, il blu slavato, e candele identiche
+   // risultano larghe in modo diverso (misurato a 500 candele: 212 corpi su 2 colonne e 167 su
+   // 3). Non e' un colore sbagliato: e' lo stesso colore, dipinto su mezzo pixel.
+   // Arrotondando al pixel quando il corpo e' sottile, una candela copre una colonna e basta.
+   if(bw<=2){
+     const _x=Math.round(xx-bw/2), _t=Math.round(top), _b=Math.round(bot);
+     ctx.fillRect(_x,_t,1,Math.max(1,_b-_t));
+   }else{
+     ctx.fillRect(xx-bw/2,top,bw,Math.max(1,bot-top));
+   }
  });
  _tSez=fblSezFine('candele',_tSez);
  // Indicatori attivi (es. Support & Resistance with Breaks): calcolati in modo incrementale
@@ -28888,14 +28985,52 @@ function fblContoDiAsset(asset){
  return null;
 }
 // Cambia conto in base all'asset, se serve. Restituisce true se il conto e' stato cambiato.
+// Conti su cui il collegamento ha gia' fallito: non ci si riprova a ogni segnale.
+// Si svuota quando l'utente sceglie un conto a mano (e' lui a dire «riprova»).
+const fblContiCheNonRispondono = new Set();
 async function fblContoPerAsset(asset){
  // In Storico non c'e' nessun conto da seguire: i conti sono una cosa del Live.
  try{ if(!liveModeActive)return false; }catch(e){ return false; }
  const c=fblContoDiAsset(asset);
  if(!c)return false;
  try{ if(fblContoVista===c)return false; }catch(e){}
+ // SE IL CONTO NON SI PUO' PIU' APRIRE, SI TORNA A QUELLO DI PRIMA (12 novembre 2026).
+ //
+ // SEGNALATO dal proprietario: «appena arrivato un nuovo segnale, bam, ha interrotto il
+ // collegamento con MT5», e poi la spiegazione che chiude il caso: «avevo selezionato un altro
+ // conto, ma non e' piu' accessibile, e' stato bannato, e' stato chiuso. Era un conto prop firm.
+ // Da' autorizzazione non concessa, quindi si pianta. E non ritorna piu' all'account precedente».
+ //
+ // LA CATENA, misurata: arriva un segnale -> l'app porta quell'asset a grafico
+ // (tgPortaAGrafico) -> il conto SEGUE l'asset (questa funzione) -> il collegamento al conto
+ // chiuso fallisce -> e nessuno tornava indietro. Da li' il ponte e il terminale restavano su
+ // due conti diversi, le richieste rispondevano «non connesso», e l'unico rimedio era spegnere
+ // MT5 e ricollegarsi a mano. La candela gigante e' la stessa cosa vista dal grafico: per un
+ // istante arrivano i prezzi di un conto sulle candele dell'altro.
+ //
+ // Adesso: si ricorda dov'eravamo, e se il conto nuovo non risponde si torna indietro e lo si
+ // DICE. Un conto che non si apre viene ricordato, cosi' il segnale dopo non ci riprova: era
+ // quello a far ripartire il giro ogni volta.
+ if(fblContiCheNonRispondono.has(c)){
+   try{ $('status').textContent='⚠️ Il conto «'+c+'» non risponde (ultimo tentativo fallito): resto su «'
+     +fblContoVista+'». Per riprovare, scegli quel conto a mano dalla barra dei conti.'; }catch(e){}
+   return false;
+ }
+ const _prima=fblContoVista;
  try{ await fblContoScegli(c); }catch(e){}
- try{ return fblContoVista===c; }catch(e){ return false; }
+ let _riuscito=false;
+ try{ _riuscito=(fblContoVista===c); }catch(e){}
+ if(!_riuscito){
+   fblContiCheNonRispondono.add(c);
+   // SI TORNA DOV'ERAVAMO. Restare a meta' strada e' la cosa peggiore: il ponte resta agganciato
+   // a un conto e il grafico a un altro.
+   try{ if(_prima && fblContoVista!==_prima) await fblContoScegli(_prima); }catch(e){}
+   try{ $('status').textContent='⚠️ Non sono riuscito a passare al conto «'+c+'» (chiuso, scaduto o '
+     +"non autorizzato): sono tornato su «"+fblContoVista+"». Il segnale non e' stato eseguito su "
+     +'quel conto.'; }catch(e){}
+   return false;
+ }
+ return true;
 }
 // Porta l\'app sul conto di quell'operazione, se serve. Non blocca il salto a grafico se il conto
 // non si riesce a cambiare (es. Kraken non collegato): fblContoScegli lo dice gia' da solo nella
@@ -34020,7 +34155,8 @@ chartEl.addEventListener('pointerup',e=>{
    draw();
    return;
  }
- if(shapeDrag){shapeDrag=null;chartEl.releasePointerCapture?.(e.pointerId);if(e.pointerType==='touch')setChartTouchAction(false);scheduleSave();return;}
+ if(shapeDrag){shapeDrag=null;chartEl.releasePointerCapture?.(e.pointerId);if(e.pointerType==='touch')setChartTouchAction(false);scheduleSave();try{ fblAnnunciaDisegniSeInSospeso(); }catch(_e){}   // RILASCIATO: adesso lo vedono le altre
+   return;}
  if(zoneWidthDrag){
    zoneWidthDrag=null;
    chartEl.releasePointerCapture?.(e.pointerId);
@@ -34436,6 +34572,19 @@ $('setTPBtn').addEventListener('click',()=>armTradeLevel('TP'));
 $('setSLBtnPending')?.addEventListener('click',()=>armTradeLevel('SL_PENDING'));
 $('setTPBtnPending')?.addEventListener('click',()=>armTradeLevel('TP_PENDING'));
 $('entryKindLimit')?.addEventListener('click',()=>{
+ // PREMUTO DI NUOVO = ANNULLA, COME SU MT5 (12 novembre 2026).
+ // Richiesto dal proprietario: «se lo premo una volta mi si attiva la linea per posizionare
+ // l'ordine pendente, ma se ripigio lo stesso pulsante mi si deve disattivare, perche' non
+ // voglio piu' metterlo: e' come se lo andassi ad annullare, ed e' la stessa cosa che fa MT5».
+ // Prima l'unica via d'uscita era il tasto Esc, che su un tablet non c'e' nemmeno.
+ // Si annulla solo se e' armato QUESTO tipo di ordine: premendo STOP mentre si stava
+ // posizionando un LIMIT si cambia tipo, non si annulla - e' un'altra intenzione.
+ if(placingTradeLevel==='ENTRY' && typeof pendingOrderKind!=='undefined' && pendingOrderKind==='LIMIT'){
+   placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
+   try{ draw(); }catch(e){}
+   $('status').textContent='Posizionamento annullato.';
+   return;
+ }
  setPendingOrderKind('LIMIT');
  // Cliccare LIMIT o STOP è ciò che arma davvero il posizionamento sul grafico (l'ENTRY da
  // solo aveva solo espanso questi due tasti) e ci proietta subito sopra al grafico.
@@ -34446,6 +34595,13 @@ $('entryKindLimit')?.addEventListener('click',()=>{
  scrollToChart();
 });
 $('entryKindStop')?.addEventListener('click',()=>{
+ // Premuto di nuovo = annulla: vedi la nota sul tasto LIMIT qui sopra.
+ if(placingTradeLevel==='ENTRY' && typeof pendingOrderKind!=='undefined' && pendingOrderKind==='STOP'){
+   placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
+   try{ draw(); }catch(e){}
+   $('status').textContent='Posizionamento annullato.';
+   return;
+ }
  setPendingOrderKind('STOP');
  placingTradeLevel='ENTRY';
  previewTradeLevel=null;
@@ -36816,7 +36972,7 @@ function tgPopolaSuoni(){
 function tgSuonaSegnale(){
  if(!tgSuonoAttivo())return;
  // Nessun suono scelto qui: si usa quello delle linee Alarm, che l'utente ha gia' scelto una volta.
- try{ playAlarmSound(tgSuonoId()||alarmSelectedSoundId); }catch(e){}
+ try{ fblSuonaAvvenimento(tgSuonoId()||alarmSelectedSoundId); }catch(e){}   // una volta sola: vedi fblSuonaAvvenimento
 }
 function tgInvia(oggetto){
  try{ if(tgWs&&tgWs.readyState===1){ tgWs.send(JSON.stringify(oggetto)); return true; } }catch(e){}
@@ -38857,6 +39013,41 @@ function tgAutoPerSimbodoEConto(strumento, contoKey){
 function tgAutoDi(fam){ return tgAutoRisolvi(fam); }
 function tgFamDaSimbolo(x){ let c=false; try{ c=!!binanceSymbolForAsset(x); }catch(e){} return c?'cr':'fx'; }
 function tgAutoPerSimbolo(x){ return tgAutoDi(tgFamDaSimbolo(x)); }
+// DOVE FINIREBBE QUESTO SEGNALE, e con quale configurazione (12 novembre 2026).
+//
+// Nato da una regressione mia, trovata dal banco e non da me: avevo messo in cima a
+// `tgAutoDecidi` un rifiuto «non so su quale conto aprirei» che leggeva
+// `tgAutoContoCollegatoKey()`, la quale torna null ogni volta che MT5 non e' collegato - cioe'
+// SEMPRE sul conto simulato e SEMPRE su Kraken. L'apertura automatica era morta in due terzi dei
+// casi, e un segnale da buttare non veniva piu' nemmeno buttato.
+//
+// La destinazione di un segnale e' una di tre cose, e solo una delle tre e' ambigua:
+//   'sim'               il conto simulato: identita' certa, nessuna configurazione per conto
+//   'kraken'            il conto Kraken:   identita' certa, nessuna configurazione per conto
+//   '<login>@<server>'  un conto MT5:      qui c'e' l'interruttore per conto, e qui ci sono i soldi
+// null = MT5 collegato ma non so a quale conto: e' l'UNICO caso in cui non si apre.
+function tgAutoChiaveDestinazione(voce){
+  const seg=voce&&voce.segnale;
+  let conto='sim';
+  try{ conto=tgContoPerSegnale(seg); }catch(e){ conto='sim'; }
+  if(conto!=='mt5') return conto;
+  return tgAutoContoCollegatoKey();
+}
+// Un conto MT5 si riconosce dalla chiave: login@server. 'sim' e 'kraken' non ce l'hanno.
+function tgAutoDestinazioneEMt5(contoKey){ return !!contoKey && String(contoKey).indexOf('@')>=0; }
+// La configurazione che DECIDE per quella destinazione.
+// Per un conto MT5 si passa da `tgAutoBloccoConto`, non da `tgAutoRisolvi`: la differenza e' che
+// il primo CREA il blocco se manca, e un conto reale (o che non si sa) nasce con attivo:false.
+// Con `tgAutoRisolvi` un conto reale mai aperto nel pannello ricadrebbe sulla configurazione base,
+// e la base accesa addosso a un conto reale e' esattamente il guaio che e' costato una prop firm.
+// Per 'sim' e 'kraken' vale la base, e si passa null ESPLICITO: con `undefined` tgAutoRisolvi
+// ripiegherebbe su `tgAutoContoSelezionato`, cioe' sul conto aperto nel pannello delle
+// impostazioni - un'altra strada da cui l'interruttore di un conto decide per un altro.
+function tgAutoConfigPerDestinazione(strumento, contoKey){
+  const fam=tgFamDaSimbolo(strumento);
+  if(tgAutoDestinazioneEMt5(contoKey)) return tgAutoBloccoConto(contoKey, fam);
+  return tgAutoRisolvi(fam, null);
+}
 // DUE MODI DI INTENDERE LA PERCENTUALE, e vanno tenuti distinti perche' danno numeri diversi.
 //
 // CHIESTO dal proprietario, con un esempio preciso: "SOL a 120, stop a 93, conto da 10.000 euro,
@@ -39332,9 +39523,50 @@ function tgDirezioneScritta(seg){
 function tgAutoDecidi(voce, contoKey){
  const seg=voce&&voce.segnale;
  const no=(motivo)=>({apri:false,motivo});
- const A=tgAutoPerSimbolo(seg&&seg.strumento);   // Forex/indici/azioni oppure Cripto
+ // L'INTERRUTTORE E' DI QUESTO CONTO, NON DI QUELLO CHE SI STA GUARDANDO (12 novembre 2026).
+ //
+ // SEGNALATO dal proprietario, ed e' costato un conto vero: «per colpa di questa cosa questa
+ // notte ci ho chiuso un conto, ci ho chiuso una prop firm. Mi ha aperto delle posizioni dove io
+ // gli avevo detto di non aprire le posizioni in automatico: invece ha preso l'impostazione
+ // dell'altro conto e l'ha applicata».
+ //
+ // CAUSA: questa funzione RICEVEVA `contoKey` - il conto su cui si sta per aprire - e non lo
+ // usava. `tgAutoPerSimbolo()` passa da `tgAutoDi()` -> `tgAutoRisolvi(fam)` senza conto, e
+ // quello ripiega su `tgAutoContoSelezionato`, cioe' **il conto aperto nel pannello delle
+ // impostazioni**, oppure sulla configurazione base. Cosi' l'interruttore di un conto decideva
+ // per un altro. La funzione giusta esisteva gia' accanto, inutilizzata:
+ // `tgAutoPerSimbodoEConto(strumento, contoKey)`.
+ //
+ // E SE IL CONTO NON SI SA, NON SI APRE. Su soldi veri «non lo so» non puo' valere «fai pure»:
+ // e' la stessa regola gia' scelta per le posizioni di un altro conto a grafico (v2.2.28),
+ // meglio non aprire per un istante che aprire sul conto sbagliato per sempre.
+ //
+ // PRIMA L'IGIENE DEL SEGNALE, POI IL CONTO. I controlli qui sotto non dipendono da dove si
+ // aprirebbe: un messaggio senza strumento e' illeggibile su qualunque conto, e un segnale senza
+ // stop e senza target va buttato comunque. Tenendo il controllo del conto in cima, un segnale da
+ // buttare NON portava piu' il marcatore `elimina` e restava nel pannello per sempre: l'ha visto
+ // il banco `segnali_senza_protezione`, non io.
  if(!seg||!seg.strumento||!seg.direzione)return no('il messaggio non dice strumento o direzione');
- if(!A.attivo)return no('apertura automatica spenta');
+ // Senza stop e senza target il segnale non ha NE' protezione NE' obiettivo: non e' un ordine da
+ // aprire da solo, e si elimina (non resta nemmeno nel pannello, perche' non c'e' nulla da fare a
+ // mano). Si elimina anche se contiene BUY/SELL scritto: senza livelli non c'e' un piano.
+ if(!tgC(seg.stop_loss)&&!(seg.take_profit||[]).length)
+   return {apri:false,motivo:'segnale senza stop loss e senza take profit: eliminato',elimina:true};
+ // RICHIESTO: un segnale con il target ma SENZA stop loss non si apre in automatico. Lo stop non
+ // va inventato dal rischio in automatico (tgStopCalcolato resta per l'apertura a MANO): la sala
+ // deve dare una protezione esplicita, altrimenti il segnale resta nel pannello e si apre a mano.
+ if(!tgC(seg.stop_loss))
+   return no('senza stop loss la sala non dà una protezione esplicita: non lo apro da solo, resta qui per l\'apertura manuale');
+ // tgC e non Number.isFinite: Number(null) vale 0, che e' finito - un segnale SENZA stop loss
+ // sarebbe passato per buono e aperto in automatico senza protezione. E' la stessa trappola
+ // gia' presa sull'entrata a fascia, e qui costerebbe molto di piu'.
+ // ADESSO IL CONTO: qui si apre davvero, quindi si deve sapere su chi.
+ if(!contoKey){
+   return no("non so su quale conto aprirei: l'apertura automatica resta ferma "
+     + "finche' il conto non e' noto (l'interruttore e' per conto, non generale)");
+ }
+ const A=tgAutoConfigPerDestinazione(seg.strumento, contoKey);   // Forex/indici/azioni o Cripto
+ if(!A.attivo)return no('apertura automatica spenta per il conto '+contoKey);
  // In Storico il grafico mostra il passato: un segnale di adesso aperto li' finirebbe a un prezzo
  // di mesi fa, nel backtest.
  if(!liveModeActive&&!mt5Connected)return no('sei in modalità Storico: i segnali dal vivo si aprono solo in Live o su MT5');
@@ -39371,19 +39603,6 @@ function tgAutoDecidi(voce, contoKey){
  // Un raddoppio dedotto non si apre mai da solo: e' gia' un'interpretazione, e sommarla a
  // un'apertura senza controllo sarebbe due incertezze una sopra l'altra.
  if(voce.sottotipo==='aggiunta')return no('è un raddoppio dedotto: va confermato a mano');
- // Senza stop e senza target il segnale non ha NE' protezione NE' obiettivo: non e' un ordine da
- // aprire da solo, e si elimina (non resta nemmeno nel pannello, perche' non c'e' nulla da fare a
- // mano). Si elimina anche se contiene BUY/SELL scritto: senza livelli non c'e' un piano.
- if(!tgC(seg.stop_loss)&&!(seg.take_profit||[]).length)
-   return {apri:false,motivo:'segnale senza stop loss e senza take profit: eliminato',elimina:true};
- // RICHIESTO: un segnale con il target ma SENZA stop loss non si apre in automatico. Lo stop non
- // va inventato dal rischio in automatico (tgStopCalcolato resta per l'apertura a MANO): la sala
- // deve dare una protezione esplicita, altrimenti il segnale resta nel pannello e si apre a mano.
- if(!tgC(seg.stop_loss))
-   return no('senza stop loss la sala non dà una protezione esplicita: non lo apro da solo, resta qui per l\'apertura manuale');
- // tgC e non Number.isFinite: Number(null) vale 0, che e' finito - un segnale SENZA stop loss
- // sarebbe passato per buono e aperto in automatico senza protezione. E' la stessa trappola
- // gia' presa sull'entrata a fascia, e qui costerebbe molto di piu'.
  // I tetti: prima quello della sala, poi quello complessivo, che vince sempre.
  const conto=tgContoPerSegnale(seg);
  const apertePerSala=tgAutoAperte(sala,conto), aperteTotali=tgAutoAperte(null,conto);
@@ -40439,7 +40658,11 @@ async function tgImparaMetaDalPonte(sym){
  }catch(e){ return false; }
 }
 async function tgAutoValuta(voce,conto){
- const A=tgAutoPerSimbolo(voce&&voce.segnale&&voce.segnale.strumento);
+ // La configurazione che vale qui e' quella del conto DOVE SI APRIREBBE, non quella del conto
+ // aperto nel pannello delle impostazioni (che e' cio' che faceva `tgAutoPerSimbolo`). Da quella
+ // confusione e' passato l'interruttore di un conto applicato a un altro: 12 novembre 2026.
+ const _dest=tgAutoChiaveDestinazione(voce);
+ const A=tgAutoConfigPerDestinazione(voce&&voce.segnale&&voce.segnale.strumento,_dest);
  // Il simbolo del grafico del segnale. Dichiarato qui perche' lo usano SIA il ramo Capital.com (che
  // viene prima nella lettura) SIA il ramo MT5: dichiararlo piu' sotto faceva assegnare il ramo
  // Capital.com a una variabile non ancora inizializzata, e l'apertura automatica andava in errore.
@@ -40452,13 +40675,15 @@ async function tgAutoValuta(voce,conto){
   return;
  }
  let d;
-  try{ d=tgAutoDecidi(voce, tgAutoContoCollegatoKey()); }catch(e){ return; }
+  try{ d=tgAutoDecidi(voce, _dest); }catch(e){ return; }
  if(d.spegni){ tgAutoSpegniPerOggi(d.motivo,A); }
  if(!d.apri){
   // Eliminato: il segnale (senza stop e senza target) non ha nulla da fare ne' in automatico
   // ne' a mano: si toglie dal pannello. Non si passa da autoMotivo: la scheda non c'e' piu'.
   if(d.elimina){ try{ tgEliminaSegnale(voce); }catch(e){} return; }
-  if(A.attivo&&d.motivo&&d.motivo!=='apertura automatica spenta'){
+  // Il motivo ora dice anche QUALE conto ('apertura automatica spenta per il conto X'): il
+  // confronto per uguaglianza non lo riconosceva piu' e lo scriveva nella scheda del segnale.
+  if(A.attivo&&d.motivo&&String(d.motivo).indexOf('apertura automatica spenta')!==0){
    voce.autoMotivo=d.motivo;   // finisce nella scheda del pannello
    try{ tgRenderPannello(); }catch(e){}
   }
@@ -40501,7 +40726,23 @@ async function tgAutoValuta(voce,conto){
   if(primo){
    try{ $('status').textContent='⚡ Segnale di '+String(voce.chat||'')+': mi collego al conto MT5 '+primo.login+' per aprirlo…'; }catch(e){}
    const sw=await tgAutoVaiAlConto(primo);
-   if(sw.ok)conto='mt5';
+   if(sw.ok){
+    conto='mt5';
+    // L'INTERRUTTORE DEL CONTO DI ARRIVO VINCE (12 novembre 2026). La decisione era stata presa
+    // sul conto simulato; adesso si aprirebbe su un conto MT5 vero, che e' un'altra destinazione.
+    // Se su QUEL conto l'apertura automatica e' stata spenta a mano, non si apre: e' la regola
+    // che e' costata una prop firm, e vale anche quando il conto e' fra quelli scelti.
+    // Si guarda SOLO un blocco che esiste e dice no (tgAutoRisolvi, che non crea niente): aver
+    // scelto il conto nell'elenco dell'automatico e' un si' esplicito, e non va disfatto da un
+    // blocco nuovo creato adesso con il predefinito prudente.
+    const _kArr=tgAutoContoCollegatoKey();
+    const _bArr=_kArr?tgAutoRisolvi(tgFamDaSimbolo(seg&&seg.strumento),_kArr):null;
+    if(_bArr&&_bArr.attivo===false){
+     voce.autoMotivo="sul conto MT5 "+_kArr+" l'apertura automatica è spenta: il segnale resta qui, da aprire a mano";
+     try{ tgRenderPannello(); }catch(e){}
+     return;
+    }
+   }
    else{
     voce.autoMotivo='non sono riuscito a collegarmi al conto MT5 scelto ('+primo.login+'): '+sw.message;
     try{ tgRenderPannello(); }catch(e){}
@@ -44099,6 +44340,27 @@ function playAlarmSound(soundId){
    if(dataUrl){ const a=new Audio(dataUrl); a.play().catch(()=>{}); }
  }catch(e){}
 }
+// UN AVVENIMENTO, UN SUONO SOLO (12 novembre 2026).
+//
+// SEGNALATO dal proprietario: «quando apro una posizione, o con l'apertura automatica delle sale
+// segnali, sento il suono una volta per ogni finestra aperta: sulla madre, e se ho due pagine
+// duplicate lo sento tre volte. Sia all'apertura che alla chiusura. Invece deve avvenire soltanto
+// una volta: e' una posizione, basta che apro, non puo' riprodurre tre, quattro, cinque volte lo
+// stesso suono. E vale anche per le linee dell'allarme.»
+//
+// CAUSA: ogni finestra duplicata e' una sessione intera e valuta gli stessi avvenimenti, quindi
+// suona anche lei. Il suono non e' una cosa della finestra: e' una cosa del COMPUTER, e va fatto
+// da una sola. Si sceglie la madre perche' e' gia' l'unica che scrive su disco e che parla col
+// ponte (vedi PIP_SLOT): la stessa regola che il proprietario ha chiesto per il resto - «le
+// pagine duplicate fanno da input alla madre, la madre da' l'output».
+//
+// I PULSANTI «PROVA» NON PASSANO DI QUI: chi preme Prova in una finestra duplicata deve sentire
+// il suono in quella finestra, altrimenti non puo' sceglierlo.
+function fblSuonaAvvenimento(soundId){
+ try{ if(typeof PIP_SLOT!=='undefined' && PIP_SLOT>0)return false; }catch(e){}
+ playAlarmSound(soundId);
+ return true;
+}
 // Ogni disegno di tipo 'alarmline' è una "sentinella" di prezzo: quando la candela ATTUALE lo
 // attraversa (r.low<=price<=r.high — stessa logica già usata per SL/TP in evaluate(), che
 // cattura il tocco anche dentro il range della candela, non solo in chiusura) e l'allarme non è
@@ -44148,7 +44410,7 @@ function checkAlarmLines(){
  });
 }
 function triggerAlarmLine(d,price){
- playAlarmSound(d.soundId||alarmSelectedSoundId);
+ fblSuonaAvvenimento(d.soundId||alarmSelectedSoundId);   // una volta sola: vedi fblSuonaAvvenimento
  // Notifica del browser: scelta della singola linea (finestra Opzioni allarme) se c'e', altrimenti
  // quella generale di Impostazioni → Alarm.
  const notificaQui=(d.notificaPropria===true||d.notificaPropria===false)?d.notificaPropria:alarmWebNotifEnabled;
@@ -53415,7 +53677,13 @@ async function fblContoScegli(c){
  fblContoDisegna();
  try{ update(); draw(); }catch(e){}
 }
-fblDelega('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('.fblContoBtn'); if(b)fblContoScegli(b.dataset.conto); });
+fblDelega('click',ev=>{ const b=ev.target&&ev.target.closest&&ev.target.closest('.fblContoBtn');
+  if(b){
+    // Sceglierlo A MANO vuol dire «riprova»: si dimentica il fallimento precedente, altrimenti
+    // un conto tornato buono resterebbe inutilizzabile fino alla riapertura dell'app.
+    try{ fblContiCheNonRispondono.delete(b.dataset.conto); }catch(e){}
+    fblContoScegli(b.dataset.conto);
+  } });
 // Collegamento/Modalita' -> Kraken -> "Apri conto Kraken": chiude il popup e porta la dashboard su Kraken.
 fblDelega('click',async ev=>{
  if(!(ev.target&&ev.target.closest&&ev.target.closest('#krakenApriContoBtn')))return;
@@ -55110,7 +55378,20 @@ function liveScheduleAppliesNow(asset){
    // con MT5 collegato: senza (telefono/tablet/remoto) il mercato non chiudeva mai a 22:00 e
    // si ripiegava sugli orari di Capital.com, che arrivano alle 00:00 - il grafico andava
    // avanti fino alla mezzanotte invece di fermarsi all'ultima candela.
-   return !!(liveModeActive&&a&&!binanceSymbolForAsset(a));
+   // UN ASSET CHE NON SI SA NON E' UNA CRIPTO, E NON PUO' SPEGNERE IL CALENDARIO (12 nov 2026).
+   //
+   // Qui c'era `a &&`: con `currentAssetKey` vuoto la funzione rispondeva «nessun orario», e
+   // `liveSessionPhaseNow()` tornava 'free' - cioe' il mercato NON risultava chiuso. Misurato di
+   // sabato, con l'orologio fissato: prima lettura 'closed', e appena l'asset si svuota 'free'
+   // per sempre, con `fblMercatoFermoOra` che passa da true a false. L'asset si svuota da solo
+   // nei primi istanti (prima che la sessione sia ripristinata) e ogni volta che la libreria
+   // resta senza file: e' proprio la finestra in cui si apre l'app.
+   //
+   // E' la stessa regola scelta stasera altre due volte, e per la stessa ragione: «non lo so»
+   // non puo' valere «fai pure». Un asset ignoto non e' una cripto, quindi l'orario predefinito
+   // (chiusura alle 22, weekend chiuso) si applica - che e' il caso prudente: al massimo il
+   // grafico resta fermo un istante di troppo, invece di dire che il mercato e' aperto di sabato.
+   return !!(liveModeActive&&!binanceSymbolForAsset(a));
   }catch(e){ return false; }
 }
 // RICHIESTO: la fascia 22-23 con Capital.com si accende e si spegne (Impostazioni grafico → Style,
@@ -55713,8 +55994,16 @@ function fblAssetRiceveDatiOra(asset){
 }
 function fblMercatoFermoOra(asset,t){
  // MT5 e' l'autorita': se dice che il mercato e' aperto, non e' fermo (3 novembre 2026).
+ // LA GEMELLA DI liveScheduleAppliesNow, E AVEVA LO STESSO BUCO (12 novembre 2026).
+ // Qui c'era `if(!asset)return false;`, cioe' «asset ignoto = mercato NON fermo» = aperto.
+ // Misurato di sabato con l'orologio fissato: appena `currentAssetKey` si svuota (succede nei
+ // primi istanti, prima che la sessione sia ripristinata, e ogni volta che la libreria resta
+ // senza file) la risposta passava da true a false, e il mercato risultava aperto di sabato.
+ // Adesso: se l'asset non arriva si usa quello del grafico, e se non c'e' nemmeno quello si
+ // scende alle strade di sotto (calendario e orario) invece di dichiarare il mercato aperto.
+ // Il percorso caldo non paga niente: due letture di variabile, nessuna chiamata in piu'.
+ if(!asset){ try{ asset=currentAssetKey; }catch(e){} }
  { const m=fblMercatoMt5Noto(asset); if(m===true)return false; }
- if(!asset)return false;
  try{ if(binanceSymbolForAsset(asset))return false; }catch(e){}
  if(!liveModeActive)return false;
  const quando=Number.isFinite(t)?t:Date.now();

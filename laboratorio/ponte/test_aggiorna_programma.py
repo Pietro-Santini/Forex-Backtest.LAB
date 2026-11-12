@@ -103,11 +103,29 @@ def test_non_si_torna_a_una_versione_piu_vecchia(monkeypatch):
 
 
 def _finta_risposta(contenuto):
+    """La risposta finta legge A BLOCCHI, come fa il ponte dal 12 novembre 2026.
+
+    Prima tornava tutto il contenuto a ogni `read()` senza argomenti. Il ponte adesso scarica
+    con `read(1048576)` e scrive direttamente su file: il pacchetto pesa 123 MB e tenerlo tutto
+    in memoria gonfiava il processo e bloccava la pagina per minuti - il proprietario lo vedeva
+    come un crash premendo «Aggiorna». Se questa finta non legge a blocchi, le prove cadono su
+    un errore di firma e non misurano piu' niente di quello che dicono di misurare.
+    """
     class _R:
-        def read(self_inner):
-            return contenuto
+        def __init__(self_inner):
+            self_inner._resto = contenuto
+
+        def read(self_inner, quanti=None):
+            if quanti is None:
+                dato, self_inner._resto = self_inner._resto, b""
+                return dato
+            dato = self_inner._resto[:quanti]
+            self_inner._resto = self_inner._resto[quanti:]
+            return dato
+
         def __enter__(self_inner):
             return self_inner
+
         def __exit__(self_inner, *a):
             return False
     return lambda *a, **k: _R()
