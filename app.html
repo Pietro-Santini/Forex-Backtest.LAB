@@ -8885,6 +8885,11 @@ function collectTradingSyncPayload(){
 // e puo' sempre parlare. Una finestra duplicata parla quando ha RICEVUTO lo stato almeno una
 // volta, oppure quando ha qualcosa di suo da annunciare (una posizione aperta da lei). Uno
 // stato vuoto da chi non ha mai saputo niente non e' un'informazione: e' una cancellazione.
+// L'istante dello stato di trading piu' recente che questa finestra ha applicato: serve a
+// non tornare indietro nel tempo quando piu' finestre rispondono insieme (12 novembre 2026).
+let fblStatoTradingApplicatoAt=NaN;
+// Stessa cosa per il conto, che viaggia in un blocco a parte prima del tipo.
+let fblContoApplicatoAt=NaN;
 let tradingSyncRicevuto=(PIP_SLOT===0);
 // Quali finestre hanno annunciato almeno una volta qualcosa di concreto: serve a chi RICEVE
 // (vedi il gestore trading_sync) per distinguere "ho chiuso l'ultima posizione" da "sono
@@ -9242,6 +9247,20 @@ if(tradingChannel){
   // stessa identica cosa». Il pericolo del ciclo non esiste: chi applica non e' il mittente (il
   // messaggio non torna indietro a chi l'ha mandato, vedi msg.slot===PIP_SLOT sopra).
   if(msg.conto){
+    // NEMMENO IL CONTO TORNA INDIETRO NEL TEMPO (12 novembre 2026).
+    // Questo blocco gira PRIMA del ramo per tipo e fuori dalla barriera anti-rimbalzo, quindi
+    // la regola «non si applica uno stato piu' vecchio» non lo copriva. MISURATO con tre
+    // finestre: alla nascita della terza rispondono tutte, decine di messaggi in 23 ms, e il
+    // conto che restava era quello di chi aveva parlato per ultimo - cioe' il vecchio.
+    {
+      const _quandoC=Number(msg&&msg.at);
+      if(Number.isFinite(_quandoC)&&Number.isFinite(fblContoApplicatoAt)&&_quandoC<fblContoApplicatoAt){
+        console.log('[Finestre] scartato un conto piu vecchio di quello gia applicato ('
+          +(fblContoApplicatoAt-_quandoC)+' ms indietro, dalla finestra '+msg.slot+')');
+        return;
+      }
+      if(Number.isFinite(_quandoC))fblContoApplicatoAt=_quandoC;
+    }
     try{
       const dec = fblApplicaContoMadre(msg.conto);
       if(dec.cambiato){
@@ -9307,6 +9326,27 @@ if(tradingChannel){
        return;
       }
      }
+     // NON SI TORNA INDIETRO NEL TEMPO (12 novembre 2026).
+     // MISURATO con tre finestre: alla richiesta di stato di una finestra NUOVA rispondono
+     // TUTTE le altre, non solo la madre, e decine di risposte arrivano nei primi 23
+     // millisecondi. Vinceva l'ULTIMA arrivata, che non e' la piu' recente: la terza finestra
+     // restava sul conto vecchio (misurato: 50100111 invece del conto corrente).
+     // Il messaggio porta gia' l'istante in cui e' stato formato (`at`, riga 8858) e NESSUNO
+     // lo leggeva. Adesso uno stato piu' VECCHIO di quello gia' applicato si scarta: e' la
+     // regola minima che toglie «vince chi parla per ultimo», senza cambiare il protocollo.
+     // Si guarda solo l'ordine nel tempo: due messaggi con lo stesso istante restano
+     // accettati entrambi, perche' scartarli potrebbe perdere un aggiornamento vero.
+     {
+      const _quando=Number(msg&&msg.at);
+      if(Number.isFinite(_quando)){
+        if(Number.isFinite(fblStatoTradingApplicatoAt)&&_quando<fblStatoTradingApplicatoAt){
+          console.log('[Finestre] scartato uno stato piu vecchio di quello gia applicato ('
+            +(fblStatoTradingApplicatoAt-_quando)+' ms indietro, dalla finestra '+msg.slot+')');
+          return;
+        }
+        fblStatoTradingApplicatoAt=_quando;
+      }
+     }
      // Da qui in poi questa finestra SA, quindi puo' parlare anche per dire "niente" (una
      // posizione chiusa qui deve poter svuotare la lista anche sulle altre).
      tradingSyncRicevuto=true;
@@ -9323,10 +9363,34 @@ if(tradingChannel){
         // "active" (la posizione selezionata nelle caselle SL/TP) resta SEMPRE locale a questa
         // finestra — ma se puntava a una posizione che nel frattempo è stata chiusa altrove, va
         // sganciata per non lasciare un riferimento orfano.
-        if(active&&!positions.includes(active))active=null;
+        // LA SELEZIONE NON SI BUTTA: SI RI-AGGANCIA (12 novembre 2026, MISURATO).
+        // positions e' appena stato SOSTITUITO con la copia arrivata dal canale: BroadcastChannel
+        // consegna una copia strutturata, quindi NESSUN oggetto e' piu' lo stesso oggetto e
+        // includes() e' sempre falso. Il risultato misurato (banco A) e' che `active` veniva
+        // azzerato a OGNI messaggio, e con `active` nullo setTradeLevel() scrive nella bozza
+        // #sl/#tp invece che sulla posizione (banco B): «non me le fa spostare».
+        active=fblRiagganciaPosizione(active);
         if(PIP_SLOT===0)scheduleSave(); // la finestra principale persiste comunque il trade arrivato da un'altra finestra
+        // IL CAPPIO DI MESSAGGI FRA FINESTRE (12 novembre 2026, MISURATO).
+        //
+        // SEGNALATO dal proprietario l'11 novembre: «se sono con la pagina duplicata e vado a
+        // spostare delle posizioni, non me le fa spostare, anzi mi si comincia a comportare in
+        // maniera strana il grafico, e anche sulla pagina madre».
+        //
+        // MISURA (diag_tempesta_messaggi.mjs): UN SOLO annuncio dalla madre produceva 11.508
+        // chiamate a broadcastTradingStateNow() e ~5.750 messaggi spediti PER FINESTRA in 4
+        // secondi - circa 1.400 messaggi al secondo, per sempre, fra due finestre ferme.
+        //
+        // CAUSA: queste due righe stavano FUORI dal finally, cioe' giravano con la barriera
+        // applyingRemoteTradingSync GIA' ABBASSATA. update() finisce con scheduleSave() (vedi
+        // la fine di update()), e scheduleSave() chiama broadcastTradingStateNow(): ogni
+        // messaggio RICEVUTO ne generava uno NUOVO. La barriera c'era ed era giusta (vedi il
+        // commento in scheduleSave), ma una riga fuori posto la scavalcava.
+        //
+        // Qui dentro, invece, la barriera e' ancora alzata: si ridisegna e si aggiorna, e
+        // nessun messaggio riparte.
+        try{ draw(); update(); }catch(e){}
       }finally{ applyingRemoteTradingSync=false; }
-     try{ draw(); update(); }catch(e){}
    }else if(msg.type==='trading_sync_request'){
      broadcastTradingStateNow();
    }else if(msg.type==='asset_announce'){
@@ -11462,8 +11526,31 @@ function showLoadingOverlay(text){
  }
  el.querySelector('.loadingText').textContent=text||'Caricamento in corso…';
  el.style.display='flex';
+ // UN'ATTESA NON PUO' DURARE PER SEMPRE (12 novembre 2026).
+ // SEGNALATO dal proprietario: «il grafico fa sempre "scarico lo storico in corso, carico
+ // l'asset" e rimane sempre li' piantato. Non carica». MISURATO: questo velo non aveva nessun
+ // tetto, quindi se il passo che lo ha acceso non finiva mai (una risposta che non arriva, un
+ // errore inghiottito da un catch) restava a schermo e la pagina sembrava morta.
+ // Dopo il tetto il velo si toglie da solo e lo DICE: meglio un'app che ammette di non essere
+ // riuscita, che una che sembra bloccata senza spiegazioni.
+ try{ clearTimeout(fblVeloTetto); }catch(e){}
+ fblVeloTetto=setTimeout(()=>{
+   try{
+     const v=document.getElementById('globalLoadingOverlay');
+     if(v&&v.style.display!=='none'){
+       v.style.display='none';
+       const s=document.getElementById('status');
+       if(s)s.textContent="⚠️ Il caricamento non si e' concluso entro 30 secondi: l'attesa e' stata tolta per non lasciare la pagina bloccata. Riprova, oppure cambia asset e torna indietro.";
+     }
+   }catch(e){}
+ }, FBL_VELO_TETTO_MS);
 }
+let FBL_VELO_TETTO_MS=30000;   // modificabile apposta: un banco lo abbassa per misurare il
+                                // comportamento senza aspettare mezzo minuto   // 30 secondi: piu' del caricamento piu' lento misurato, molto
+                                  // meno di «per sempre»
+let fblVeloTetto=null;
 function hideLoadingOverlay(){
+ try{ clearTimeout(fblVeloTetto); fblVeloTetto=null; }catch(e){}
  const el=document.getElementById('globalLoadingOverlay');
  if(el)el.style.display='none';
 }
@@ -20291,7 +20378,10 @@ function draw(){
  // DALL'UTENTE (posSelezionata), non quando `active` e' cambiata da sola: vedi il commento lungo
  // sopra posSelezionata. Una posizione scelta e poi chiusa (o di un altro asset) non deve
  // continuare a nascondere le altre: si dimentica da sola qui.
- if(posSelezionata&&!positions.includes(posSelezionata))posSelezionata=null;
+ // Si ri-aggancia per id invece di essere buttata: vedi fblRiagganciaPosizione(). Una
+ // posizione DAVVERO chiusa non c'e' piu' nell'elenco e la selezione cade come prima; una
+ // posizione che e' solo arrivata di nuovo da un'altra finestra resta selezionata.
+ posSelezionata=fblRiagganciaPosizione(posSelezionata);
  // Un solo calcolo per giro di disegno, condiviso da tutte le posizioni: l'istante che il grafico
  // sta mostrando (null fuori dal replay, vedi replayMomentoMostrato).
  const momentoMostrato=replayMomentoMostrato();
@@ -46248,6 +46338,9 @@ let chartFeedSuspended=false, chartFeedSuspendReason='';
    la percentuale si pianta li' - ed e' un'informazione, non un difetto. */
 const FBL_CARICAMENTO_PASSI=['Scarico lo storico','Ricostruisco le candele','Aggancio il prezzo dal vivo'];
 let fblCaricamentoAsset=null, fblCaricamentoPasso=0;
+// Il tetto del riquadro di caricamento. Modificabile apposta: un banco lo abbassa per
+// misurare il comportamento senza aspettare mezzo minuto.
+let FBL_CARICAMENTO_TETTO_MS=30000, fblCaricamentoTetto=null;
 // Il documento in cui vive il grafico ADESSO: in modalita' PIP e' la finestra separata. Si guarda
 // dove sta #chartWrap, non si indovina.
 function fblCaricamentoDoc(){
@@ -46344,6 +46437,26 @@ function fblCaricamentoMostra(asset,passo){
   fblCaricamentoFraz=fblCaricamentoFraz+(1-fblCaricamentoFraz)*0.08;
   fblCaricamentoDipingi();
  },250);
+ // UN CARICAMENTO NON PUO' RESTARE APPESO PER SEMPRE (12 novembre 2026).
+ // SEGNALATO dal proprietario: «il grafico fa sempre scarico lo storico in corso, carico
+ // l'asset, e rimane sempre li' piantato. Non carica». MISURATO: questo riquadro si toglie solo
+ // con fblCaricamentoFine(), cioe' SOLO se il caricamento arriva in fondo. Se un passo non
+ // finisce mai - una risposta che non torna, un errore inghiottito da un catch - resta a
+ // schermo sopra il grafico e la pagina sembra morta, con la barra che si avvicina al passo
+ // successivo senza raggiungerlo mai.
+ // Dopo il tetto si toglie da solo e lo DICE: meglio ammettere di non essere riusciti che
+ // lasciare una finestra bloccata senza spiegazioni.
+ try{ clearTimeout(fblCaricamentoTetto); }catch(e){}
+ fblCaricamentoTetto=setTimeout(()=>{
+  try{
+   if(fblCaricamentoAsset==null)return;
+   const nome=fblCaricamentoAsset;
+   fblCaricamentoFine();
+   const s=document.getElementById('status');
+   if(s)s.textContent="⚠️ Il caricamento di "+nome+" non si e' concluso: l'attesa e' stata tolta "
+     +"per non lasciare il grafico coperto. Riprova, oppure cambia asset e torna indietro.";
+  }catch(e){}
+ }, FBL_CARICAMENTO_TETTO_MS);
  const pct=fblCaricamentoPct();
  const t=doc.getElementById('fblCaricamentoTitolo');
  const p=doc.getElementById('fblCaricamentoPasso');
@@ -46359,6 +46472,7 @@ function fblCaricamentoAvanza(){
  fblCaricamentoMostra(fblCaricamentoAsset,fblCaricamentoPasso+1);
 }
 function fblCaricamentoFine(){
+ try{ clearTimeout(fblCaricamentoTetto); fblCaricamentoTetto=null; }catch(e){}
  // Il 100% lo scrive solo chi ha finito davvero: si dipinge un istante prima di togliere il
  // riquadro, cosi' la barra non sparisce a meta' strada.
  try{
@@ -49407,6 +49521,20 @@ function fblContoDisegna(){
 let posizioniInAttesaDelConto=false;
 
 
+// RI-AGGANCIA UNA POSIZIONE SELEZIONATA all'oggetto che la rappresenta ADESSO nell'elenco.
+// Serve perche' `positions` viene sostituito di sana pianta ogni volta che arriva un messaggio
+// da un'altra finestra (copia strutturata del BroadcastChannel: oggetti nuovi, stesso
+// contenuto). Confronto per `id`, e per `mt5Ticket` per le posizioni reali che arrivano dal
+// ponte. Se la posizione non c'e' piu' davvero (chiusa altrove) torna null, come prima.
+function fblRiagganciaPosizione(p){
+  try{
+    if(!p)return null;
+    if(positions.includes(p))return p;
+    if(p.id!=null){ const q=positions.find(x=>x&&x.id===p.id); if(q)return q; }
+    if(p.mt5Ticket!=null){ const q=positions.find(x=>x&&x.mt5Ticket!=null&&String(x.mt5Ticket)===String(p.mt5Ticket)); if(q)return q; }
+  }catch(e){}
+  return null;
+}
 function fblApplicaStatoTrading(msg){
   try{
     let _mt5Locale=currentMt5AccountTag();
@@ -49438,7 +49566,27 @@ function fblApplicaStatoTrading(msg){
     }
     if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades.map(_timbra):trades;
     equity=Array.isArray(msg.equity)?msg.equity:equity;
-    if(msg.sessionByMode)sessionByMode=msg.sessionByMode;
+    // I DISEGNI NON VIAGGIANO DENTRO LE SESSIONI (12 novembre 2026).
+    // MISURATO: questa riga sostituiva in blocco le quattro sessioni, e dentro ogni sessione ci
+    // sono anche `drawings` e `capital`. Una finestra duplicata appena nata, che di disegni non
+    // ne ha ancora, azzerava quelli salvati della MADRE - e la madre e' l'unica che persiste su
+    // disco, quindi la perdita diventava definitiva. Nel banco: da 3 disegni a 0.
+    // E' anche una violazione laterale della regola «i disegni restano liberi per finestra»:
+    // viaggiavano lo stesso, nascosti dentro un altro campo.
+    // Si prende tutto il resto della sessione e si tengono i PROPRI disegni e il PROPRIO
+    // capitale, che non devono dipendere da chi ha parlato per ultimo.
+    if(msg.sessionByMode){
+      const _mie=sessionByMode||{};
+      const _nuove={};
+      Object.keys(msg.sessionByMode).forEach(k=>{
+        const _in=msg.sessionByMode[k]||{}, _mia=_mie[k]||{};
+        const _fusa=Object.assign({}, _in);
+        if('drawings' in _mia)_fusa.drawings=_mia.drawings; else delete _fusa.drawings;
+        if('capital' in _mia)_fusa.capital=_mia.capital;
+        _nuove[k]=_fusa;
+      });
+      sessionByMode=_nuove;
+    }
     if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
     if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
     if(msg.tradeStrategies)tradeStrategies=msg.tradeStrategies;

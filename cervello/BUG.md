@@ -1017,3 +1017,163 @@ chiave di firma pronta costruisce l'APK a ogni release pubblicata,
 - **La firma anti-doppioni non aveva mai funzionato** - risolto 2.0.32 - 27 ottobre 2026, trovato durante il passo 1 del progetto dati nostri. Causa misurata: lo stato salvato porta savedAt:Date.now(), che cambia a OGNI raccoglimento. La firma si calcolava su tutto il testo, quindi due fotografie identiche avevano firme diverse e si riscrivevano sempre — il proprietario aveva chiesto "identico = non si scrive" (CONSEGNA-OPENCODE-22-OTTOBRE, §1.3) e la console Firebase conta lo spreco (107K scritture in 30 giorni). Cura: la firma si calcola sul contenuto stabile (savedAt normalizzato a 0), il peso continua a essere quello reale. La regola della consegna resta intatta: la firma si aggiorna solo DOPO una scrittura riuscita, e se le operazioni nuove non si salvano la firma non si aggiorna — al giro dopo si riprovano da sole.
 - **Il salvataggio cloud mandava 305 KB a ogni scrittura, di cui 194 KB di storico operazioni** - risolto 2.0.32 - 27 ottobre 2026, passo 1 del progetto dati nostri (PROGETTO-DATI-NOSTRI.md §1, §6). Misurato sulla console Firebase (30 giorni): letture 293K, scritture 107K, "larghezza di banda oltre 10 GB" e "byte archiviati oltre 1 GB" — il costo Firestore e' 3,54 € su 4,82 € totali. Cura: le operazioni chiuse stanno in un documento a parte (users/{uid}/data/trades) e si aggiungono con arrayUnion: una operazione nuova sono ~259 byte invece della fotografia intera (750 volte meno). Il documento session non porta piu' lo storico. Il keepalive della chiusura pagina manda il documento senza operazioni. La lettura unisce i due documenti e resta retrocompatibile. Test: laboratorio/app/cloud_incrementale.test.mjs (3 prove, col comportamento misurato in byte; prova di controllo fatta: rimesso il file vecchio, il test diventa rosso).
 
+
+---
+
+## FINESTRE DUPLICATE — CAUSE LETTE NEL SORGENTE (12 novembre 2026, in corso)
+
+Scritto PRIMA dei banchi, di proposito: la sessione precedente su questo fronte si e' interrotta
+dopo aver scritto «causa trovata, ora i banchi» e non e' rimasto niente su disco. Qui sotto c'e'
+quello che e' stato letto e verificato nel sorgente di `app.html` (riga per riga), separato da
+quello che il banco ha poi misurato davvero.
+
+### A. PUNTO 1 — «dalla duplicata non riesco a spostare le posizioni, e si comporta strano anche
+la madre». CAUSA LETTA NEL SORGENTE: `active` viene azzerato da ogni messaggio che arriva.
+
+Tre fatti nel sorgente, in catena:
+
+1. Il trascinamento di SL/TP di una posizione APERTA lavora SOLO su `active` (la posizione
+   selezionata). `setTradeLevel()` (riga 24190) scrive `active.sl` / `active.tp`; se `active` e'
+   nullo entra nel ramo di riga 24254 — `if(!active){...}` — che scrive soltanto nella CASELLA
+   `#sl`/`#tp` come "preimpostato (si applica quando apri la posizione)". Nessun errore, nessun
+   avviso: il gesto sembra funzionare e non sposta niente. E' esattamente «non me le fa spostare».
+2. Il gestore di `trading_sync` (riga 9322) fa `if(active&&!positions.includes(active))active=null;`
+   subito dopo `fblApplicaStatoTrading(msg)`, che a riga 49437 fa
+   `positions=Array.isArray(msg.positions)?msg.positions.map(_timbra):positions`.
+   `msg.positions` arriva da BroadcastChannel, cioe' da una COPIA strutturata: oggetti NUOVI, mai
+   identici per riferimento a quelli locali. Quindi `positions.includes(active)` e' SEMPRE falso
+   dopo un messaggio con posizioni, e `active` viene azzerato OGNI VOLTA. Non e' una sganciatura
+   di un riferimento orfano (l'intenzione del commento): e' una sganciatura sistematica.
+3. `scheduleSave()` (riga 8755) chiama `broadcastTradingStateNow()` a OGNI azione — ogni tick Live,
+   ogni `update()`, ogni tasto. Quindi la madre bombarda la duplicata di `trading_sync`, e la
+   duplicata perde la selezione in continuazione: il trascinamento parte su una posizione e si
+   chiude su `active===null`.
+
+Il DANNO ALLA MADRE ha la stessa radice, al rovescio: non c'e' nessuna barriera `PIP_SLOT` sul ramo
+`trading_sync` (togliere la barriera e' stato voluto il 10 novembre, perche' il tablet deve poter
+cambiare conto). Quindi ogni messaggio della figlia SOSTITUISCE l'array `positions` della madre con
+oggetti nuovi, e azzera anche l'`active` DELLA MADRE: la riga verde in tabella si sgancia, le
+caselle SL/TP si svuotano, le linee trascinabili cambiano stato. Chi guarda la madre vede «comportarsi
+in maniera strana» senza aver toccato niente.
+
+Terzo pezzo, per le posizioni REALI: `syncMt5PositionLevels(active)` (fondo di `setTradeLevel`) e'
+l'unica strada che dice al broker il nuovo stop. Con `active` nullo non viene mai chiamata, quindi
+lo stop non arriva mai a MT5 e il giro di lettura successivo della madre ri-annuncia il valore
+vecchio: la linea torna indietro da sola.
+
+DIFFERENZA UTILE PER RICONOSCERE IL DIFETTO: gli ORDINI PENDENTI si spostano bene, perche' il loro
+ramo cerca per id (`pendingOrders.find(o=>String(o.id)===idStr)`, riga 24198) e non per
+riferimento. Solo le posizioni aperte, che passano da `active`, si rompono.
+
+CURA PROPOSTA (non ancora applicata): `active` non va tenuto per riferimento ma per id —
+ri-agganciarlo dopo ogni applicazione (`active=positions.find(p=>p.id===idAttivo)`), e non azzerarlo
+se l'id esiste ancora. In piu' una barriera «non applico mentre l'utente sta trascinando»:
+`graficoOccupato()` esiste gia' a riga 8051 (`tradeLevelDrag` compreso) e NON e' usata da nessuno
+dei rami di `tradingChannel.onmessage`.
+
+### B. MESSAGGI SENZA BARRIERA (censimento fatto a riga 9233-9520)
+
+| messaggio | barriera anti-rimbalzo | barriera «utente sta lavorando» |
+|---|---|---|
+| `trading_sync` | SI (`applyingRemoteTradingSync`) | **NO** |
+| `drawings_sync` | SI (`applyingRemoteDrawingsSync` + stesso asset/modo + `assetSwitchInProgress`) | parziale |
+| `asset_announce` → `applyRemoteAssetSwitch` | SI (`applyingRemoteAssetSwitch`) | **NO** (nessun `graficoOccupato()`) |
+| `chart_time_sync` | SI (`applyingRemoteChartTimeSync`) | **NO** |
+| `random_jump_sync` | SI (`applyingRemoteRandomJump`) | **NO** |
+| `pip_clone_snapshot` | nessuna (ma e' una volta sola) | **NO** |
+| il blocco `msg.conto` (prima di ogni tipo) | nessuna | **NO** |
+
+Il blocco `if(msg.conto)` a riga 9246 gira PRIMA di sapere di che tipo e' il messaggio e puo'
+innescare `switchAccountMode()` — che ricostruisce la sessione — in qualunque momento, anche a
+metà trascinamento.
+
+### C. PUNTO 4 — la terza finestra prende il conto vecchio. CAUSA LETTA NEL SORGENTE: vince chi
+risponde per ultimo, e una duplicata in ritardo risponde con la stessa autorita' della madre.
+
+Alla nascita una finestra manda due richieste (riga 9505 e 9511): `trading_sync_request` e
+`pip_clone_request`. Alla prima risponde OGNI altra finestra (`broadcastTradingStateNow()`, riga
+9331), non solo la madre. Il ricevente applica `msg.conto` senza confrontare niente: non guarda
+`msg.at` (c'e' nel pacchetto, riga 8858, e non viene mai letto), non guarda `msg.slot`, non ha una
+regola di precedenza. Quindi la terza finestra adotta il conto dell'ULTIMA risposta arrivata — e se
+la duplicata 2 e' ancora sul conto vecchio, il conto vecchio e' quello che vince.
+A `pip_clone_request` risponde solo la madre (`if(PIP_SLOT===0)`), ma manda `mt5CredsDraft`
+(la bozza del modulo di accesso), non `mt5ContoAttivo` (il conto davvero attivo): sono due
+variabili diverse, e `currentMt5AccountTag()` (riga 6074) usa la bozza come terzo ripiego. Una bozza
+rimasta indietro fa dichiarare alla figlia un conto che la madre non usa piu'.
+
+### D. DA MISURARE ANCORA (non letto, non provato)
+- Punto 3 (il grafico resta piantato sul caricamento): non indagato in questa sessione.
+- Punto 5 / voce 12 (elenco asset della SECONDA duplicata): la cura di `fblApplicaElencoAssetMadre`
+  esiste e risponde solo la madre, quindi la seconda duplicata dovrebbe essere servita come la
+  prima — da misurare con tre finestre, perche' il sintomo dice il contrario.
+
+### E. MISURATO DAVVERO, E CORRETTO (12 novembre 2026, `app.html`, non ancora pubblicato)
+
+**IL CAPPIO DI MESSAGGI FRA FINESTRE — la causa prima del punto 1 e, molto probabilmente, anche
+del punto 3 e della voce 9.** Misurato con `banchi_aperti_forex/diag_tempesta_messaggi.mjs`, che
+conta le chiamate e nomina il chiamante:
+
+| | prima | dopo la cura |
+|---|---|---|
+| chiamate a `broadcastTradingStateNow()` sulla madre in 4 s | **11.508** | **20** |
+| messaggi ricevuti dalla madre in 4 s | **5.753** | **9** |
+| messaggi ricevuti dalla figlia in 4 s | **5.759** | ~9 |
+
+Innescate da UN SOLO annuncio. Due finestre ferme, nessuno che tocca niente: ~1.400 messaggi al
+secondo per finestra, per sempre, con `draw()` e `update()` ad ogni messaggio. E' questo che fa
+«comportare in maniera strana il grafico, e anche sulla pagina madre».
+
+CAUSA MISURATA (lo stack la nomina): `tradingChannel.onmessage` → `update()` → `scheduleSave()`
+(riga 8760) → `broadcastTradingStateNow()`. La riga `try{ draw(); update(); }catch(e){}` del ramo
+`trading_sync` stava FUORI dal `finally{ applyingRemoteTradingSync=false; }`, cioe' girava con la
+barriera GIA' ABBASSATA; e `update()` finisce con `scheduleSave()`. La barriera c'era, il commento
+che la spiega c'era: la scavalcava una riga fuori posto di un carattere.
+CURA: quella riga e' entrata dentro il `try`, prima del `finally`.
+
+**LA SELEZIONE AZZERATA A OGNI MESSAGGIO — il «non me le fa spostare».** Misurato dai banchi A, B,
+C di `finestre_duplicate_tre.misura.test.mjs`. Il banco B e' la prova che si vede a occhio:
+trascinando lo SL di una posizione aperta mentre arriva un messaggio, lo stop della posizione
+restava **1,09** (invariato) e il prezzo finiva nella casella bozza: `casellaSl: "1.08500"`, con la
+riga di stato «Stop Loss **preimpostato** a 1.08500 (si applica quando apri la posizione...)».
+Nessun errore, nessun avviso: il gesto sembra riuscito e non ha spostato niente.
+CAUSA MISURATA: `if(active&&!positions.includes(active))active=null;` — `positions` e' appena stato
+sostituito con la copia strutturata arrivata dal canale, quindi `includes()` e' SEMPRE falso e
+`active` cadeva a ogni messaggio. Stessa riga, stesso difetto, anche su `posSelezionata` (nel
+disegno, riga 20294): la selezione dell'utente sul grafico.
+CURA: `fblRiagganciaPosizione()` — si ri-aggancia per `id` (e per `mt5Ticket` per le reali) invece
+di buttare la selezione. Una posizione davvero chiusa non c'e' piu' nell'elenco e la selezione cade
+come prima.
+
+ESITI: A, B, C da ROSSI a VERDI. Non-regressione provata, un banco per volta:
+`conto_sincrono` (5/5), `clic_sul_grafico` (5/5), `pip_conto_madre` (2/2),
+`disegni_fra_finestre` (5/5), `misura_isolamento_conto_mt5` (8/8).
+
+### F. ANCORA ROSSI, MISURATI, NON CURATI (stesso banco)
+
+- **D / D2 — il conto della terza finestra (punto 4).** Misurato: alla nascita di una finestra
+  rispondono TUTTE le altre, non solo la madre, e vince l'ultimo arrivo. Traccia reale della terza
+  finestra: `[{da:0,login:222},{da:2,login:111},{da:2,login:222},{da:0,login:111},...]` — decine di
+  risposte nei primi 23 ms, con il login che oscilla, e **conto finale 50100111: quello VECCHIO**.
+  Il campo `at` viaggia nel messaggio (riga 8858) e non viene letto da nessuno. In piu' resta un
+  SECONDO cappio, non ancora chiuso: il blocco `if(msg.conto)` gira PRIMA del tipo e FUORI da ogni
+  barriera, e il suo ramo `conto_mt5` chiama `mt5AttivaConto()` → `scheduleSave()` → broadcast;
+  due finestre che non sono d'accordo sul conto si ribaltano a vicenda.
+  CURA PROPOSTA: (a) a `trading_sync_request` risponde SOLO la madre (`if(PIP_SLOT===0)`), come
+  gia' si fa per `pip_clone_request`; (b) il conto si applica solo se `msg.at` e' piu' recente
+  dell'ultimo conto applicato; (c) il blocco `msg.conto` dentro la barriera.
+- **G — `sessionByMode` si porta dietro i DISEGNI (difetto nuovo, non segnalato).** Misurato:
+  `if(msg.sessionByMode)sessionByMode=msg.sessionByMode` (riga 49449) sostituisce in blocco le
+  quattro sessioni, e dentro ogni sessione ci sono `drawings` e `capital`. Una duplicata appena
+  nata, che di disegni non ne ha, cancella quelli salvati della madre: nel banco da 3 a 0. E la
+  madre (slot 0) poi li PERSISTE su disco. E' esattamente la regola che si voleva evitare
+  («i disegni restano liberi per finestra»), rotta da una strada laterale.
+- **F — il velo di caricamento non ha nessun tetto (punto 3).** Misurato: con il ponte che
+  risponde «simbolo non trovato» e la conferma mai data, dopo 3 secondi `#fblCaricamentoAsset` e'
+  ancora sopra il grafico e `fblCaricamentoAsset` e' ancora impegnato. Attenzione: nel banco la
+  conferma e' forzata a non rispondere mai, quindi questo dimostra che **non esiste un tetto**,
+  non ancora che sia quella la strada che il proprietario incontra. Il «rimane piantato» va
+  riprodotto con il ponte vero prima di curarlo.
+- **E — elenco asset: VERDE con tre finestre.** La voce 12 («solo la seconda duplicata») NON si
+  riproduce sul banco: prima e seconda duplicata hanno lo stesso elenco e la stessa watchlist.
+  Da riprovare col ponte vero: probabile che dipenda da QUANDO nasce la finestra (madre non ancora
+  pronta) piu' che da quante ce ne sono.

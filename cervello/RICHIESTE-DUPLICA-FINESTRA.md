@@ -131,7 +131,15 @@ preciso: **la TERZA finestra**. Le cure di v2.2.26 e v2.2.28 hanno fatto viaggia
 qui la finestra nuova eredita uno stato VECCHIO, non quello corrente. Da misurare: con tre
 finestre aperte e un cambio di conto sulla madre, quale conto dichiara ognuna delle tre e in che
 ordine temporale (il ritardo e' parte del sintomo, non un dettaglio).
-- Stato: DA MISURARE. Collegata alla voce 5.
+- Stato: **MISURATO il 12 novembre 2026, non curato.** Alla nascita di una finestra rispondono
+  TUTTE le altre (`trading_sync_request` -> `broadcastTradingStateNow()` senza barriera sullo
+  slot), e vince l'ULTIMO arrivo: il campo `at` viaggia nel messaggio e non viene letto da nessuno.
+  Traccia reale della terza finestra: decine di risposte nei primi 23 ms, login che oscilla fra il
+  conto nuovo e quello vecchio, **conto finale quello VECCHIO**. In piu': il blocco `if(msg.conto)`
+  gira fuori da ogni barriera e il suo ramo `conto_mt5` ri-annuncia (`mt5AttivaConto` ->
+  `scheduleSave`), quindi due finestre in disaccordo sul conto si ribaltano a vicenda senza fine.
+  Cura proposta in BUG.md (sezione F): risponde solo la madre, e il conto si applica solo se piu'
+  recente. Banco: `finestre_duplicate_tre.misura.test.mjs`, prove D e D2 (rosse).
 
 ### 12. ELENCO ASSET INCOMPLETO SOLO SULLA SECONDA DUPLICATA IN POI  ← P1
 Parole sue: «vado a selezionare gli asset e me ne fa vedere solo alcuni, non mi fa vedere come
@@ -140,4 +148,8 @@ E' la voce 4, GIA' MISURATA l'8 novembre (madre 35 asset, duplicata 5) e mai cur
 utile: la PRIMA duplicata adesso e' a posto, la SECONDA no. Questo restringe la causa:
 l'eredita' funziona per chi nasce dalla madre e non per chi nasce da una duplicata (o per chi
 nasce quando la madre ha gia' una figlia).
-- Stato: DA FARE, misura esistente da ripetere con TRE finestre.
+- Stato: **MISURATO il 12 novembre 2026: sul banco NON si riproduce.** Con tre finestre, prima e
+  seconda duplicata hanno lo stesso elenco asset e la stessa watchlist della madre (prova E,
+  verde): la cura di `fblApplicaElencoAssetMadre` regge anche per la seconda. Quindi il sintomo
+  dipende da QUANDO nasce la finestra (madre non ancora pronta a rispondere) e non da quante ce ne
+  sono: da riprovare col ponte vero, con la duplicata aperta subito dopo l'avvio.

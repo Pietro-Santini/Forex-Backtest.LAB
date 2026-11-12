@@ -6289,3 +6289,81 @@ MetaTrader5 non e' thread-safe (lo dichiara il commento in cima a mt5_feed_serve
 questo obbliga a passare da `_mt5_call()`). In bridge.py quel lock non esiste: 69 punti chiamano
 `mt5.*` nudo dentro un thread pool da 40. Non spiega i secondi, ma e' il sospetto piu' naturale
 per le letture non riuscite.
+
+
+---
+
+## 12 novembre 2026 - v2.2.34: le finestre duplicate smettono di parlarsi addosso
+
+SEGNALATO dal proprietario (11 novembre), cinque voci sullo stesso fronte. La prima e la piu'
+grave: «se sono con la pagina duplicata e vado a spostare delle posizioni, non me le fa spostare,
+anzi mi si comincia a comportare in maniera strana il grafico, **e anche sulla pagina madre**».
+
+**LA CAUSA PRIMA: UN CAPPIO DI MESSAGGI.** Misurato con due finestre ferme e UN SOLO annuncio
+dalla madre:
+
+    chiamate a broadcastTradingStateNow() in 4 secondi : 11.508  ->  20
+    messaggi ricevuti dalla madre                      :  5.753  ->   9
+
+Circa **1.400 messaggi al secondo per finestra**, per sempre, con `draw()` e `update()` a ogni
+messaggio. La catena: ricevere -> `update()` -> `scheduleSave()` -> annuncio -> ricevere.
+La barriera anti-rimbalzo c'era, col commento che la spiegava. La scavalcava **una riga fuori
+posto di un carattere**: `try{ draw(); update(); }catch(e){}` stava FUORI dal `try`, quindi dopo
+il `finally{ applyingRemoteTradingSync=false; }`, e `update()` finisce con `scheduleSave()`.
+Da sola, questa tempesta bastava a far sembrare piantato qualunque caricamento.
+
+**IL «NON ME LE FA SPOSTARE».** A ogni messaggio ricevuto: `if(active&&!positions.includes(active))
+active=null;`. Ma `positions` era appena stato sostituito con la **copia strutturata** arrivata dal
+canale, quindi `includes()` e' sempre falso e la posizione selezionata veniva buttata. Senza
+`active` non viene mai chiamata `syncMt5PositionLevels()`: il broker non sa niente e al giro dopo
+la linea torna indietro da sola. Misurato: lo stop della posizione resta 1,09 e il prezzo
+trascinato finisce nella casella delle impostazioni («Stop Loss preimpostato a 1,085»). Stessa
+riga, stesso difetto, anche su `posSelezionata`. Gli ordini pendenti invece si spostavano bene,
+perche' cercano per `id` e non per riferimento: e' da li' che e' venuta la cura.
+CURA: `fblRiagganciaPosizione()`, che ri-aggancia per `id` e per `mt5Ticket`. Una posizione
+davvero chiusa non c'e' piu' nell'elenco e la selezione cade come prima.
+
+**DIFETTO NUOVO, MAI SEGNALATO, ED E' PERDITA DI DATI.** `if(msg.sessionByMode)sessionByMode=
+msg.sessionByMode` sostituiva in blocco le quattro sessioni, e **dentro ogni sessione ci sono i
+`drawings`**. Una duplicata appena nata, che di disegni non ne ha, azzerava quelli della MADRE - e
+la madre e' l'unica che persiste su disco, quindi la perdita diventava definitiva. Nel banco: da 3
+disegni a 0, salvati. Era anche una violazione laterale della regola «i disegni restano liberi per
+finestra»: viaggiavano lo stesso, nascosti dentro un altro campo.
+CURA: si prende tutto il resto della sessione e si tengono i PROPRI disegni e il PROPRIO capitale.
+
+**LA TERZA FINESTRA PRENDEVA IL CONTO VECCHIO.** Alla richiesta di stato di una finestra nuova
+rispondono **tutte** le altre, non solo la madre: decine di risposte nei primi 23 ms, e vinceva
+l'ULTIMA arrivata, che non e' la piu' recente (misurato: conto 50100111 invece di quello corrente).
+Il messaggio porta gia' l'istante in cui e' stato formato (`at`) e **nessuno lo leggeva**.
+CURA: uno stato piu' vecchio di quello gia' applicato si scarta. Vale sia per il ramo dello stato
+sia per il blocco del conto, che gira prima e fuori da ogni barriera. Due messaggi con lo stesso
+istante restano accettati entrambi: scartarli potrebbe perdere un aggiornamento vero.
+
+**E UN'ATTESA NON PUO' DURARE PER SEMPRE.** Il riquadro «Carico EURUSD... Scarico lo storico» si
+toglieva SOLO se il caricamento arrivava in fondo: se un passo non finiva mai restava sopra il
+grafico e la pagina sembrava morta. Adesso ha un tetto di 30 secondi, dopo il quale si toglie da
+solo e lo DICE. Stessa difesa per il velo generale. Meglio ammettere di non essere riusciti che
+lasciare una finestra bloccata senza spiegazioni.
+
+**Test**: `banchi_aperti_forexinestre_duplicate_tre.misura.test.mjs` (9 prove, 7 verdi).
+Non-regressione: 25 prove verdi fra `disegni_fra_finestre`, `conto_sincrono`, `clic_sul_grafico`,
+`pip_conto_madre`, `misura_isolamento_conto_mt5`. Collaudo completo: **0 falliti**.
+
+**RESTANO APERTE DUE PROVE, e si sa perche'**:
+- **D2** e' una MISURA, non una cura: documenta che alla richiesta di stato rispondono tutte le
+  finestre invece della sola madre. La regola dell'istante toglie il danno; la tempesta di
+  risposte resta e va curata alla radice (vedi il parere qui sotto).
+- **F** misura il tetto del riquadro di caricamento, ma il banco non riesce a innescare la strada
+  vera: la cura c'e' ed e' verificabile a mano. Va riprovata col ponte vero.
+
+**IL PARERE DELL'AGENTE, da discutere col proprietario.** Oggi ci sono 8 tipi di messaggio, 5
+barriere `applyingRemote*` e **cinque regole ad-hoc** costruite una per volta per rimediare
+all'assenza di un padrone unico. Ognuna e' giusta; insieme sono un sistema distribuito scritto
+senza averlo chiamato cosi'. La proposta, in due passi e non una riscrittura:
+1. un numero di versione crescente nei messaggi: chi riceve applica solo se e' piu' avanti. Uccide
+   «vince l'ultimo arrivato», i cappi residui e le tempeste. Costo basso.
+2. la figlia non annuncia piu' lo stato: manda un'**intenzione** («sposta lo stop di X a Y»), e la
+   madre esegue e annuncia. E' esattamente il principio del proprietario - la duplicata e' un copia
+   e incolla della madre - e per le posizioni reali e' anche l'unico modo corretto, perche' una
+   sola finestra deve parlare col ponte. Cancella tutte e cinque le regole ad-hoc. Costo medio.
+Da decidere in quel caso: se chiudendo la madre una figlia va promossa o si resta in sola lettura.
