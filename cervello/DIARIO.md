@@ -6083,3 +6083,55 @@ risparmia la propria e le recenti; la finestra interroga /health e non la sola p
 4,6 liberi e la Compressione memoria di Windows attiva a 801 MB. In quella condizione basta aprire
 qualche finestra duplicata per finire la memoria. Non e' codice dell'app: e' esaurimento di
 memoria, e i 17,8 GB di temporanei ci entravano come concausa sul file di scambio.
+
+
+---
+
+## 11 novembre 2026 - v2.2.31: il profilo volumetrico non paga piu' tutto lo storico a ogni fotogramma
+
+SEGNALATO dal proprietario: «l'applicazione in se' per se' ha fatto un calo drastico delle
+prestazioni». La parola che contava era "drastico", e la misura l'ha data lui stesso col pannello
+prestazioni (15:57, 83.341 candele, 3 disegni salvati):
+
+    fotogrammiAlSecondo 4     disegnoMedio_ms 238,34     scattoPeggiore_ms 735
+    disegno:vpfixed         = 139,23 ms   (il 58% del fotogramma)
+    disegno:vpfixed>calcolo =   0,08 ms   (il calcolo del profilo e' in cache: non e' lui)
+    ind:bsl_ssl_fvg:calcolo =  49,20 ms
+    ind:order_blocks:calcolo=  29,86 ms
+    tutto il resto del grafico sotto i 3 ms
+
+Il commento nel codice diceva che sul banco con 51.000 candele lo stesso disegno costava 4,27 ms.
+Qualcosa cresceva con lo storico SUO, e non era l'istogramma.
+
+**CAUSA, trovata a lettura e confermata dal banco.** Nel blocco di draw() che disegna vpfixed e
+vpanchor, la zona a basso volume si calcola a OGNI fotogramma con
+`computeLowVolumeZone(profile, ..., rows, 0, lastIdx)`: partenza da **zero**, cioe' dall'inizio
+dello storico, non dall'inizio del profilo. Dentro quella funzione ci sono DUE giri su tutte le
+candele dell'intervallo piu' un ordinamento dei loro range (per la mediana), nessuna cache. Con
+83.341 candele e un profilo di 300, scorreva e ordinava 83.000 valori per disegnare 300 fasce. E
+`lvnEnabled: true` e' il predefinito di ogni profilo nuovo (riga ~29357), quindi tutti i suoi
+profili pagavano. Quello 0 era arrivato con la cura del 3 novembre (le candele di riapertura non
+devono generare la zona), che aveva bisogno delle candele ma ha preso l'intervallo sbagliato.
+
+**MISURATO col banco** (stesso profilo di 300 candele, zona accesa, 8 fotogrammi):
+    storico di  1.000 candele:  1,31 ms a fotogramma
+    storico di 83.000 candele: 28,86 ms a fotogramma    -> 22 volte, profilo identico
+    DOPO LA CURA, 83.000:        0,68 ms                  -> rapporto 0,7
+(sul PC del proprietatore, piu' lento e con tre profili, i 28 ms del banco erano 139.)
+
+**CURA**: un parametro. `startIdx` al posto di `0`. Ed e' anche piu' giusto: una candela fuori dal
+periodo del profilo non ha messo volume in quelle fasce, quindi non puo' decidere quali sono
+"toccate" e quale e' la mediana dei range. Il profilo ancorato (vpanchor) passa dallo stesso
+blocco: curato anche lui.
+
+**Test**: laboratorio/app/profilo_zona_basso_volume_costo.test.mjs (2 prove). La prima misura un
+RAPPORTO (costo con 83.000 diviso costo con 1.000, stesso profilo: deve restare sotto 3) e non un
+tempo secco, perche' un tempo assoluto sotto carico e' instabile - misurato oggi stesso con un
+banco del cloud caduto solo perche' il PC era pieno. La seconda e' la prova di controllo: una
+candela gigante messa FUORI dal periodo del profilo non deve cambiare la zona. Rosso-senza
+misurato: 22 volte. Non-regressione: 18 prove verdi fra profilo_*, vp_* e questa.
+
+**RESTA APERTO nella stessa misura**, e va preso subito dopo: i due indicatori
+(`ind:bsl_ssl_fvg:calcolo` 49 ms e `ind:order_blocks:calcolo` 30 ms a fotogramma). Il loro calcolo
+e' incrementale per costruzione (riparte da `builtTo`), quindi 49 ms a OGNI fotogramma vuol dire
+che qualcosa gli fa buttare la cache ogni volta. Da misurare.
