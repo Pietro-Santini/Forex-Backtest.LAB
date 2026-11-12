@@ -746,3 +746,30 @@ DA MISURARE prima di curare: quante chiamate al minuto fa quel timer quando l'ap
 cosa e' successo il 6 e il 10 novembre. Il divario fra le 81 scritture contate dall'app e le 15.000
 della console resta da spiegare: le funzioni scrivono anche loro, e il contatore dell'app non le
 vede.
+
+
+## P1 — IL BANCO «identico = non si scrive» CADE A INTERMITTENZA, E PUO' ESSERE UN DIFETTO VERO
+Osservato il 12 novembre, tre volte in un giorno: `laboratorio/app/cloud_incrementale.test.mjs`,
+prova «PROVA DI CONTROLLO: se non cambia niente, non si scrive niente», cade con **1 invece di 0**
+scritture. Rigirato DA SOLO passa; cade quando il collaudo e' sotto carico (in locale) e **e'
+caduto anche sul collaudo di GitHub** (commit bce88ca, macchina pulita e scarica).
+
+PERCHE' NON VA LIQUIDATO COME «BANCO INSTABILE»: la prova misura la regola su cui si regge la
+bolletta del cloud («identico = non si scrive», v2.2.6). Se quella regola salta anche solo a
+intermitenza, l'app scrive piu' del dovuto - e la banda e' esattamente la voce che il proprietario
+paga. Il banco porta gia' dentro una difesa contro il disturbo (misura la DIFFERENZA fra due
+chiamate, non il totale), e cade lo stesso.
+
+PRIMO FATTO MISURATO (lettura del codice, 12 novembre): dentro `syncFullStatusToFirebase`
+(app.html:9890) ci sono **DUE** chiamate a `window.fxbtCloud.save()`, a riga **9945** e a riga
+**10054** (la seconda su un pacchetto ridotto, `trimmedBundle`). Quindi una sola chiamata alla
+funzione puo' produrre due scritture. Da misurare: in quale caso si entra nella seconda, e se e'
+quello il «+1» che compare a intermittenza.
+
+DA MISURARE, in ordine: (a) quale delle due righe scrive quando la prova cade; (b) se la firma
+anti-doppioni confronta un payload che contiene qualcosa che cambia da solo (un orario, un
+contatore, l'ordine di una mappa); (c) quante scritture al giorno costa davvero sul conto del
+proprietario, visto che la console Firebase ne conta 15.000 contro le 81 che l'app dichiara - il
+divario resta non spiegato ed e' annotato piu' sopra.
+Stato: DA MISURARE. Non e' un banco da rendere piu' tollerante: finche' non si sa, va tenuto
+severo, perche' e' l'unico che guarda quella regola.

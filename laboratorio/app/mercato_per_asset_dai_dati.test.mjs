@@ -40,10 +40,14 @@
 //     laboratorio/app/asse_si_ferma_alla_chiusura.test.mjs).
 //
 // COME SI LANCIA (dalla cartella `laboratorio` del repo, un banco per volta):
-//   node --test "C:/Users/pietro/Documents/banchi_aperti_forex/mercato_per_asset_dai_dati.test.mjs"
+//   node --test app/mercato_per_asset_dai_dati.test.mjs   (dalla cartella laboratorio)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {apriApp} from 'file:///C:/Users/pietro/Documents/GitHub/Forex-Backtest.LAB/laboratorio/app/aiuti.mjs';
+// Import RELATIVO: questo banco vive in laboratorio/app e li' sta anche aiuti.mjs.
+// MISURATO il 12 novembre: con il percorso assoluto della macchina di chi l'ha scritto,
+// su GitHub il file moriva in 35 ms con exitCode 1 e ZERO prove eseguite - un collaudo
+// rosso che non misurava niente. Un banco non deve sapere dove abita.
+import {apriApp} from './aiuti.mjs';
 
 // 11 novembre 2026 e' un MERCOLEDI'. Roma a novembre e' CET, cioe' UTC+1.
 const T_2202 = Date.UTC(2026, 10, 11, 21, 2, 0);   // 22:02 di Roma — la FACCIA A

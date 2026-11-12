@@ -23,7 +23,11 @@
 // NON TOCCA NESSUN CONTO VERO: pagina locale, rete bloccata, WebSocket finti (vedi aiuti.mjs).
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {apriApp} from 'file:///C:/Users/pietro/Documents/GitHub/Forex-Backtest.LAB/laboratorio/app/aiuti.mjs';
+// Import RELATIVO: questo banco vive in laboratorio/app e li' sta anche aiuti.mjs.
+// MISURATO il 12 novembre: con il percorso assoluto della macchina di chi l'ha scritto,
+// su GitHub il file moriva in 35 ms con exitCode 1 e ZERO prove eseguite - un collaudo
+// rosso che non misurava niente. Un banco non deve sapere dove abita.
+import {apriApp} from './aiuti.mjs';
 
 // I numeri esatti della foto del proprietario.
 const ENTRATA = 4030.38;
