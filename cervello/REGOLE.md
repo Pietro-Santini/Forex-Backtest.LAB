@@ -30,3 +30,37 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
 - Nessun identificativo di modello AI in commit, codice o pagine.
 - Si risponde e si scrive in italiano, in modo che lo capisca anche chi non è sviluppatore.
 - L'email del proprietario non va mai mandata a servizi esterni.
+
+
+---
+
+## REGOLA DEL PROPRIETARIO (11 novembre 2026, sera): SI LAVORA CON I SUBAGENTI
+
+Parole sue: «mi raccomando, per tutte queste cose applica sempre dei subagenti per smistare i
+compiti. D'ora in poi e' una regola. E' una regola da seguire, cosi' almeno abbiamo un piano
+migliore su cui andare a modificare le cose in maniera piu' curata, precisa, tecnica, e per
+scovare meglio quelli che sono errori o perfezionamenti in merito.»
+
+E i subagenti devono anche PENSARE, non solo eseguire: «magari anche di attribuirgli quella che e'
+una sorta di intelligenza, per cercare di capire se possono migliorare il fatto o meno, se quello
+che dico io puo' essere implementato in una maniera migliore. Perche' io sono un essere umano,
+quindi una macchina magari in determinate cose puo' anche pensarla meglio, puo' vedere degli
+aspetti dove un essere umano non ci arriva. Quindi assolutamente, se riesci a indicarmi come
+migliorare delle cose, ben venga, sono molto aperto a dei consigli. Sia visivi che tecnici che di
+sistema che di progettazione.»
+
+**COME SI APPLICA, in pratica:**
+1. Ogni fronte di lavoro (un difetto, una famiglia di difetti, una misura) va dato a un subagente
+   dedicato, col contesto gia' dentro il prompt: dov'e' il repo vero, le regole del progetto, le
+   misure gia' fatte, e il vincolo di NON lanciare `collauda.sh` (apre 20 browser invisibili per
+   2,4 GB, e il proprietario sta lavorando sulla stessa macchina).
+2. Fronti indipendenti in parallelo, mai due agenti sugli stessi file.
+3. Al subagente si chiede di MISURARE prima di curare, e di dichiarare che cosa resta ipotesi.
+4. **Gli si chiede anche un parere**: se la richiesta si puo' realizzare meglio di come e' stata
+   formulata, deve dirlo con la motivazione. Il proprietario vuole quel parere, non l'obbedienza.
+5. Un banco che misura un difetto ancora aperto resta FUORI dal repo (cartella
+   banchi_aperti_forex nei Documenti): un banco rosso non si committa.
+6. Chi coordina non ripete il lavoro degli agenti: raccoglie, verifica, cura, collauda e pubblica.
+
+Gli agenti del progetto sono in `.claude/agents/`: `regista` (coordina), `collaudatore`,
+`cacciatore-instabilita`, `sentinella-sicurezza`, `guida-neofita`.

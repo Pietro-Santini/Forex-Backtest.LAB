@@ -83,7 +83,11 @@ test('un trade chiuso senza prezzo di entrata non deve essere disegnato', async 
     // profitto fantasma (+24.452,88 €). Questo assert è ROSSO finche' non c'è il filtro prezzo<=0.
     assert.equal(r.zero.seg, 0,
       'DIFETTO (10 nov 2026): drawClosedTradeMarkers disegna il trade chiuso anche con entry=0 ' +
-      '(segmenti disegnati: ' + r.zero.seg + ', P&L fantasma ' + r.zero.pl.toFixed(2) + ' €). ' +
+      // DAL 12 NOVEMBRE il P/L di un prezzo mancante e' `null`, non piu' un numero inventato
+      // (calculateForexPL rifiuta i prezzi non validi): il messaggio deve reggere tutti e due i
+      // casi, o il banco cade mentre COSTRUISCE l'errore invece di misurare quello che dice.
+      '(segmenti disegnati: ' + r.zero.seg + ', P&L fantasma ' +
+      (r.zero.pl == null ? 'null (giusto: prezzo mancante)' : Number(r.zero.pl).toFixed(2)) + ' €). ' +
       'Un prezzo mancante travestito da zero non è un prezzo: non deve ne essere disegnato ne tenuto.');
 
     assert.deepEqual(errori, []);

@@ -22573,6 +22573,18 @@ function contractSize(assetKey){
  return instr.contractSize||100000;
 }
 function calculateForexPL(side,entry,exit,lots,assetKey){
+ // UN PREZZO O C'E' O NON C'E' - ANCHE QUI (12 novembre 2026).
+ // SEGNALATO dal proprietario con la foto del journal: due SELL su XAUUSD da 0,10 lotti che
+ // mostravano +40.303,80 EUR e +363%. Quel numero non era un profitto sbagliato: era il PREZZO
+ // D'ENTRATA. 4030,38 x 100 (contratto oro) x 0,10 = 40303,8. La differenza qui sotto veniva
+ // calcolata con l'USCITA A ZERO, cioe' (entrata - 0).
+ // Lo zero arriva dal ponte quando il broker non riporta il prezzo di chiusura, e passava
+ // perche' chi chiamava si difendeva con Number.isFinite(), e Number.isFinite(0) e' VERO.
+ // La convenzione del 10 novembre (fblPrezzoValido: o maggiore di zero, o null) era stata data
+ // ai disegni e ai campi del record, non ai calcoli: qui il presidio mancava, e il numero falso
+ // non restava a schermo - finiva nel journal, faceva scattare il traguardo della Prop Firm e
+ // saliva nel cloud. Il presidio va messo DOVE SI CALCOLA, non nei diciannove chiamanti.
+ if(fblPrezzoValido(entry)===null||fblPrezzoValido(exit)===null)return null;
  const instr=currentInstrument(assetKey);
  const size=contractSize(assetKey);
  // Differenza di prezzo * unità del contratto = risultato nella valuta di quotazione
@@ -26458,7 +26470,13 @@ if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo
    fetchMt5Positions();
    return false;
  }
- const price=Number.isFinite(Number(result.data.price))?Number(result.data.price):fblPrezzoRipiegoChiusura(pos,reason);
+ // ZERO NON E' UN PREZZO (12 novembre 2026). Number.isFinite(0) e' vero, e result.price vale 0
+ // (o null, che Number() porta a 0) quando il server del broker non riporta il prezzo eseguito:
+ // cosi' la posizione veniva giornalizzata con uscita 0 e un profitto pari al prezzo d'entrata.
+ // Il ripiego sicuro esisteva gia' e non veniva mai chiamato. La stessa cura e' gia' scritta
+ // nell'altra strada di chiusura, dove il commento dice «Number(null) vale 0, che e' finito».
+ const _pr=(result.data&&result.data.price!=null)?Number(result.data.price):NaN;
+ const price=(Number.isFinite(_pr)&&_pr>0)?_pr:fblPrezzoRipiegoChiusura(pos,reason);
  closeTrade(reason,price,pos,resolveMt5FinalLevels(pos,mt5RealPositions.find(rp=>String(rp.ticket)===String(pos.mt5Ticket))));
  $('status').textContent=`🔌 Posizione ${pos.asset||''} (ticket ${pos.mt5Ticket}) chiusa DAVVERO su MT5 al prezzo ${fmtPrice(price)}.`;
  fetchMt5Positions();
@@ -51412,12 +51430,24 @@ function statoMercato(asset,t){
    // calendario di Capital.com puo' dire "aperto fino alle 00:00" mentre il mercato vero
    // (MT5) chiude alle 22:00: in quel caso si applica la chiusura a 22:00, cosi' l'ultima
    // candela segna 22:00 e non 00:00.
-   if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'){
+   // L'ORARIO SCRITTO A MANO NON BATTE I DATI VERI (12 novembre 2026).
+   // Questa strada e' quella che scrive l'etichetta rossa all'utente, ed era l'unica delle tre a
+   // non guardare i tick: alle 23:32 diceva «Mercato chiuso, apre tra 00:28» sul Dollar Index
+   // mentre fblMercatoFermoOra, nello stesso istante, lo dava per aperto. Due risposte opposte
+   // alla stessa domanda. Se per quell'asset stanno arrivando tick veri, non e' chiuso.
+   // E SOLO A CANALE VIVO: se il collegamento e' caduto non sappiamo niente del mercato,
+   // e un'etichetta «Mercato chiuso» sarebbe una bugia su un guasto nostro.
+   if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'&&(!mt5Connected||fblCanaleDatiVivo())&&!fblAssetRiceveDatiOra(asset)){
      return {chiuso:true,apreAt:fblProssimaRiapertura(t),fonte:'mt5'};
    }
  }
  // Orario con cui l\'app segue MT5 (anche se lo strumento sul broker e' aperto, il grafico e' fermo).
- if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'){
+ // L'ORARIO SCRITTO A MANO NON BATTE I DATI VERI (12 novembre 2026): e' il ramo che
+ // prende gli asset senza calendario di Capital.com, il Dollar Index fra questi. Alle
+ // 23:32 scriveva «Mercato chiuso, apre tra 00:28» mentre su MT5 lo strumento quotava.
+ // E SOLO A CANALE VIVO: se il collegamento e' caduto non sappiamo niente del mercato,
+ // e un'etichetta «Mercato chiuso» sarebbe una bugia su un guasto nostro.
+ if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'&&(!mt5Connected||fblCanaleDatiVivo())&&!fblAssetRiceveDatiOra(asset)){
    return {chiuso:true,apreAt:fblProssimaRiapertura(t),fonte:'mt5'};
  }
  return null;
@@ -51726,6 +51756,38 @@ function fblSpreadUscita(pos){
 //
 // Le cripto non chiudono mai, e in Storico/replay non si blocca niente (statoMercato() torna null
 // se non siamo in Live: li' il tempo lo decide il replay, non l'orologio).
+// IL CANALE DATI E' VIVO? (12 novembre 2026)
+// Serve a non confondere DUE silenzi che a schermo sembravano uguali: il mercato che tace (e
+// allora e' chiuso) e il collegamento caduto (e allora non lo sappiamo). Dire «Mercato chiuso»
+// quando e' caduta la rete e' una bugia, e l'app la diceva.
+function fblCanaleDatiVivo(){
+ try{
+   if(!mt5Connected)return false;
+   // SI GUARDA IL BATTITO, NON L'OGGETTO DEL CANALE. Il ponte manda un battito ogni 2 secondi
+   // ANCHE QUANDO NON CI SONO SCAMBI (lastMt5TickAt), separato dal tick vero
+   // (lastMt5RealTickAt): e' proprio il dato che distingue «il mercato tace» da «il
+   // collegamento e' caduto», e non dipende da come e' fatto l'oggetto WebSocket.
+   //   battito fresco  -> il canale c'e': un silenzio di prezzi e' del mercato;
+   //   battito vecchio -> non arriva piu' niente da noi: non sappiamo nulla del mercato.
+   // TRE RISPOSTE, NON DUE: se non e' mai arrivato un battito (lastMt5TickAt a zero, per
+   // esempio appena collegati) non possiamo AFFERMARE che il canale sia caduto, e ci si
+   // comporta come prima di questa cura.
+   if(!Number.isFinite(lastMt5TickAt)||lastMt5TickAt<=0)return true;
+   return (Date.now()-lastMt5TickAt)<=30000;
+ }catch(e){ return true; }
+}
+// STA ARRIVANDO DATO VERO PER QUESTO ASSET, ADESSO? (12 novembre 2026)
+// Una sola definizione, usata da tutte le strade che decidono "aperto/chiuso": prima ognuna
+// rispondeva a modo suo e si contraddicevano nello stesso istante (vedi la cura qui sotto).
+// Guarda l'ultimo tick VERO (non il battito del ponte, che arriva anche senza scambi).
+function fblAssetRiceveDatiOra(asset){
+ try{
+   if(!mt5Connected||!asset)return false;
+   const u=mt5UltimoTickPerAsset[asset];
+   if(!u||!Number.isFinite(u.at)||u.at<=0)return false;
+   return (Date.now()-u.at)<=FBL_MT5_SILENZIO_CHIUSO_MS;
+ }catch(e){ return false; }
+}
 function fblMercatoFermoOra(asset,t){
  // MT5 e' l'autorita': se dice che il mercato e' aperto, non e' fermo (3 novembre 2026).
  { const m=fblMercatoMt5Noto(asset); if(m===true)return false; }
@@ -51744,11 +51806,22 @@ function fblMercatoFermoOra(asset,t){
  if(mt5Connected){
    const u=mt5UltimoTickPerAsset[asset];
    if(u&&Number.isFinite(u.at)&&u.at>0&&quando>=Date.now()-120000){
+     // IL SILENZIO CONTA SOLO SE IL CANALE E' VIVO (12 novembre 2026).
+     // MISURATO: alle 22:00 l'app si staccava da sola, e dopo cinque minuti questo stesso
+     // controllo leggeva il proprio silenzio e concludeva «mercato chiuso». Con il canale
+     // morto non sappiamo niente del mercato: si scende alle strade di sotto (calendario,
+     // orario), che almeno non spacciano un guasto nostro per una chiusura.
+     if(!fblCanaleDatiVivo())return false;
      return (Date.now()-u.at)>FBL_MT5_SILENZIO_CHIUSO_MS;
    }
  }
  // Con MT5 collegato comanda l'orario con cui l\'app lo segue (fino alle 22, poi fermo).
- if(mt5Connected){ try{ if(liveSessionPhaseAt(quando)==='closed')return true; }catch(e){} }
+ // SOLO A CANALE VIVO (12 novembre 2026): a canale caduto il silenzio e' colpa nostra, e
+ // quest'orario lo trasformerebbe in «mercato chiuso». Si scende al calendario vero dello
+ // strumento, qui sotto: unica fonte che non dipende da noi. Nessuna chiamata in piu' —
+ // questa funzione sta nel percorso caldo del disegno e un giro extra si paga a ogni
+ // fotogramma (il 7 novembre e' gia' costato un crash).
+ if(mt5Connected&&fblCanaleDatiVivo()){ try{ if(liveSessionPhaseAt(quando)==='closed')return true; }catch(e){} }
  // Sempre, MT5 o no: il calendario vero dello strumento, quando Capital.com ce l'ha dato.
  try{ const st=statoMercato(asset,quando); if(st&&st.chiuso)return true; }catch(e){}
  return false;
@@ -52005,6 +52078,19 @@ async function liveSessionTick(){
  liveSessionBusy=true;
  try{
    if(ph==='capital'||ph==='closed'){
+     // NON CI SI STACCA DA UN ASSET CHE STA ANCORA QUOTANDO (12 novembre 2026).
+     // MISURATO: questo congelamento guardava SOLO l'orologio (22:00 per ogni asset non-cripto).
+     // Alle 22 staccava il canale MT5 anche su strumenti aperti; da li' in poi "non arrivano
+     // dati" diventava vero per colpa nostra, e la regola «se non arrivano dati e' chiuso»
+     // misurava il nostro stesso silenzio. Una profezia che si autoavvera: il proprietario l'ha
+     // vista sul Dollar Index alle 23:32, aperto su MT5 e dato per chiuso dall'app.
+     // Adesso l'orologio puo' solo PROPORRE la chiusura: se per quell'asset i tick veri
+     // continuano ad arrivare, il canale resta vivo e si riprova al giro dopo (ogni secondo).
+     const _assetOra = mt5ActiveSymbol || currentAssetKey;
+     if(mt5Connected && fblAssetRiceveDatiOra(_assetOra)){
+       liveSessionPhase = prev;   // non si e' cambiato stato: si rivaluta al prossimo giro
+       return;
+     }
      if(prev==='capital')liveOffSessionSaveRows();
      await liveSessionFreezeMt5(ph);
    }else if(ph==='mt5'&&(prev==='capital'||prev==='closed')){

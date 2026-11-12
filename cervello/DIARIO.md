@@ -6135,3 +6135,107 @@ misurato: 22 volte. Non-regressione: 18 prove verdi fra profilo_*, vp_* e questa
 (`ind:bsl_ssl_fvg:calcolo` 49 ms e `ind:order_blocks:calcolo` 30 ms a fotogramma). Il loro calcolo
 e' incrementale per costruzione (riparte da `builtTo`), quindi 49 ms a OGNI fotogramma vuol dire
 che qualcosa gli fa buttare la cache ogni volta. Da misurare.
+
+
+---
+
+## 11 novembre 2026 (sera) - REGOLA NUOVA DEL PROPRIETARIO: si lavora con i subagenti
+
+«D'ora in poi e' una regola»: ogni fronte di lavoro va dato a un subagente dedicato, per smistare
+i compiti e indagare meglio. In piu' i subagenti devono dare un PARERE, non solo eseguire: se una
+richiesta si puo' realizzare meglio di come e' stata formulata, devono dirlo. Il proprietario lo
+ha chiesto esplicitamente e ha aggiunto di essere «molto aperto a dei consigli, sia visivi che
+tecnici che di sistema che di progettazione». Vale anche per chi prende in mano il progetto da una
+sessione nuova: il testo completo, col come si applica, sta in `cervello/REGOLE.md`.
+
+
+---
+
+## 12 novembre 2026 - v2.2.32: il mercato lo dicono i dati, e un prezzo che non c'e' non diventa un profitto
+
+Due famiglie di difetti curate insieme, tutte e due segnalate dal proprietario la sera dell'11 e
+tutte e due misurate da un subagente prima di toccare una riga (e' la regola nuova: vedi REGOLE.md).
+
+### A) MERCATO APERTO O CHIUSO: DECIDONO I DATI, PER OGNI ASSET
+
+SEGNALATO con due casi opposti nello stesso giorno. Alle 22: «non arriva piu' nessun dato, e non
+c'e' nessuna etichetta di mercato chiuso, perche' da MT5 il mercato e' ancora aperto». Alle 23:32,
+con foto: sul **Dollar Index** l'app scriveva «Mercato chiuso, apre tra 00:28:16» mentre su MT5
+quotava, e smetteva di aggiornare le candele.
+
+**CAUSA MISURATA: tre strade indipendenti decidevano "aperto/chiuso" e si contraddicevano.**
+1. `fblMercatoFermoOra` guardava i tick (giusto);
+2. `statoMercato` - **quella che scrive l'etichetta all'utente** - non li guardava affatto e
+   ripiegava sull'orario scritto a mano;
+3. `liveSessionTick` guardava SOLO l'orologio (22:00 per ogni asset non-cripto) e **staccava il
+   canale dati**.
+
+La catena del Dollar Index, misurata: alle 22 la (3) **stacca l'app da MT5 da sola**; da li' in poi
+la regola «se non arrivano dati e' chiuso» della (1) misura **il nostro stesso silenzio**; e
+l'etichetta la scrive la (2) col suo orario finto. Una profezia che si autoavvera. Il countdown a
+mezzanotte veniva da `fblProssimaRiapertura`, che per costruzione non puo' rispondere altro: non
+era un orario del Dollar Index, era un numero inventato.
+
+**CURA, in quattro pezzi.** Una sola definizione di «sta arrivando dato per questo asset»
+(`fblAssetRiceveDatiOra`), usata da tutte le strade. L'orologio puo' solo PROPORRE la chiusura: se
+i tick arrivano, il canale resta vivo e non si congela niente. L'etichetta rossa non compare
+quando i dati arrivano. E soprattutto si distingue **«il mercato tace» da «il collegamento e'
+caduto»** (`fblCanaleDatiVivo`): il ponte manda un battito ogni 2 secondi anche senza scambi
+(`lastMt5TickAt`), separato dal tick vero (`lastMt5RealTickAt`). Battito fresco e nessun prezzo =
+silenzio del mercato; battito vecchio = non sappiamo nulla, e dire «Mercato chiuso» sarebbe una
+bugia su un guasto nostro.
+**Tre risposte, non due**: se un battito non e' mai arrivato non si puo' AFFERMARE che il canale
+sia caduto, e ci si comporta come prima della cura. Senza questa terza risposta la cura rompeva
+due banchi del 10 novembre, ed e' stato giusto che li rompesse.
+
+**TRAPPOLA PAGATA PER STRADA, e vale per chiunque tocchi questa zona**: la prima stesura
+aggiungeva una chiamata a `statoMercato()` dentro `fblMercatoFermoOra`. Due banchi di prestazioni
+sono diventati rossi subito: quella funzione sta nel **percorso caldo** del disegno
+(`getViewWindow` la chiama molte volte per fotogramma) e un giro in piu' li' si paga a ogni
+fotogramma - e' gia' costato un crash il 7 novembre. La guardia definitiva legge due variabili e
+non chiama niente.
+
+Test: laboratorio/app/mercato_per_asset_dai_dati.test.mjs (5 prove: le due facce vere, la
+profezia che si autoavvera, e due guardie - le cripto non si congelano mai, e una chiusura VERA a
+canale vivo deve restare chiusa). Rosso-senza misurato: 3 su 5.
+Non-regressione: **67 prove verdi** su tutti i banchi del mercato chiuso, del congelamento, della
+zona morta e dei buchi nel grafico.
+
+### B) UN PREZZO CHE NON C'E' NON DIVENTA UN PROFITTO
+
+SEGNALATO con la foto del journal: due SELL su XAUUSD da 0,10 lotti con **+40.303,80 EUR** e
+**+363%**, e l'app che dichiarava **superata la Challenge Prop Firm**.
+
+**LA PROVA CHE E' UN PREZZO, NON UN PROFITTO**: 4030,38 (prezzo d'entrata) x 100 (contratto oro)
+x 0,10 (lotti) = **40303,8**. Nella seconda riga 4030,48 -> 40304,8. Il calcolo faceva
+`entrata - uscita` **con l'uscita a zero**.
+
+**CAUSA MISURATA.** `calculateForexPL` non controllava i prezzi, e lo zero passava perche' i
+diciannove chiamanti si difendono con `Number.isFinite()`, e **`Number.isFinite(0)` e' vero**.
+Lo zero arriva dalla chiusura reale: il ponte risponde `price: 0` o `null` quando il broker non
+riporta il prezzo eseguito, e `Number.isFinite(Number(null))` e' di nuovo vero, quindi il ripiego
+sicuro - che esisteva gia' - non veniva mai chiamato.
+**L'asimmetria SELL/BUY e' nella formula**: con uscita zero, in SELL esce +40303,8 (un profitto,
+che sblocca la Prop Firm), in BUY esce -40303,8. Per questo si vedeva «la maggior parte delle
+volte in SELL».
+
+**E IL DANNO NON LAMPEGGIAVA, RESTAVA**: la riga falsa entra nel journal, `equity` cresce, la fase
+della Prop Firm viene **scritta in localStorage** (`faseSuperata`) e il journal sale al cloud con
+`force` acceso, quindi torna su ogni dispositivo.
+
+**CURA, in due pezzi.** Il presidio va **dove si calcola**, non nei chiamanti: `calculateForexPL`
+torna `null` se l'entrata o l'uscita non passano `fblPrezzoValido()` (la convenzione del 10
+novembre: o maggiore di zero, o null). E nella chiusura reale lo zero non e' piu' accettato come
+prezzo: si usa il ripiego sicuro.
+
+Test: laboratorio/app/sell_profitto_falso_prop_firm.test.mjs (8 prove: il calcolo, il riquadro
+P/L appena aperta, il traguardo Prop Firm dal flottante e dal saldo chiuso, il journal che sale al
+cloud, la chiusura con `price: 0` e con `price: null`, lo storico recuperato). Rosso-senza
+misurato: **8 su 8**.
+
+**RESTA APERTO, e va preso**: il verdetto della Prop Firm che si MOSTRA e quello che si SCRIVE
+sono la stessa funzione, chiamata a ogni disegno (67 ms misurati). Un traguardo irreversibile non
+deve dipendere da una lettura istantanea: va separato, deve pretendere dati completi, e andrebbe
+rifiutata qualunque variazione di equity piu' grande del nozionale delle posizioni aperte (nella
+misura di oggi il flottante era ESATTAMENTE il 100% del nozionale: un solo controllo avrebbe
+fermato tutta la catena).

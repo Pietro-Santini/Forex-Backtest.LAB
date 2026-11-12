@@ -1,5 +1,49 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+43. **Una media con un picco dentro non e' una misura: e' una media.** (12 novembre 2026.)
+    Il pannello prestazioni diceva «lettura conto: 239 volte, media 106.755 ms». Centosei secondi
+    per parlare con un servizio sulla STESSA macchina: sembrava la prova di un ponte in ginocchio,
+    e ci siamo andati dietro. Misurato il ponte vero in esecuzione: **2,3 ms**. Il picco - una
+    sola lettura da 24,7 milioni di ms, cioe' 6 ore e 51 minuti - **da solo era il 96,9% del tempo
+    totale**, e toglierlo riporta la media a 3,4 secondi. Quel picco non era nemmeno una richiesta
+    appesa: il cronometro usa `performance.now()` e l'`AbortController` scade con un `setTimeout`,
+    e **nessuno dei due scorre quando il PC va in sospensione o la scheda si congela**. Prova
+    indipendente: fra le due misure la pagina aveva fatto una lettura ogni 18,7 secondi con un
+    timer da 1 secondo - per quelle ore non stava girando affatto.
+    E lo stesso errore ha prodotto una seconda falsa certezza: «e' peggiorato di trenta volte in
+    otto ore». Senza il picco il peggioramento e' del 43%.
+    LA REGOLA: davanti a un tempo medio, chiedere SEMPRE anche la mediana e l'istante del
+    peggiore, prima di cercare la causa. Un pannello che tiene numero, totale e peggiore ma non la
+    mediana invita esattamente a questo errore: vanno aggiunti mediana, `Date.now()` accanto a
+    `performance.now()` e `visibilityState`. Cinque numeri che costano nulla e avrebbero chiuso la
+    diagnosi da soli.
+    LA CAUSA VERA dei secondi era un'altra e banale: la STRADA. 127.0.0.1 costa 5,7 ms, il server
+    Oracle 268, e con la rete lenta 2.506 - proprio i «due secondi» del pannello. Aprendo l'app
+    dal sito in https il controllo del ponte locale e' contenuto misto, il browser lo blocca, e
+    l'app passa dal server anche stando davanti al PC. Quel dato - quale strada si sta usando -
+    **non e' in nessun rapporto**, ed e' il motivo per cui la stessa lentezza e' stata cercata
+    invano tre volte in cinque giorni.
+
+43. **Una media con un valore fuori scala non e' una media: e' quel valore. Prima di cercare
+    la causa di un numero, si controlla quanta parte di quel numero viene da UNA sola misura.**
+    (12 novembre 2026.) Il pannello diceva «lettura conto: media 106.755 ms» e la richiesta era
+    di spiegare centosei secondi su 127.0.0.1 e un degrado di trenta volte in otto ore. Bastava
+    una moltiplicazione: 239 x 106.755 = 25.514.445 ms totali, di cui 24.711.871 - il **96,9%** -
+    sono il singolo picco gia' stampato nella riga accanto. Togliendolo la media e' 3.372 ms,
+    cioe' la stessa fascia della misura di otto ore prima (3.832 ms): il degrado non c'era, e il
+    fenomeno da spiegare era UNO (una pausa da sei ore e cinquanta), non due.
+    E lo stesso picco era impossibile per costruzione: `fetchMt5WithTimeout` mette un tetto di 30
+    s alle letture, quindi 24,7 milioni di ms sono 823 volte il tetto - non una lentezza, un
+    cronometro che ha attraversato una sospensione.
+    LA REGOLA, in tre passi, da fare SEMPRE prima di aprire un sorgente: (1) moltiplicare numero
+    x media per avere il totale; (2) sottrarre il peggiore e rifare la media; (3) confrontarla con
+    il TETTO che il codice impone a quella chiamata. Se la media senza il picco e' un'altra cosa,
+    il difetto da cercare e' il picco, e il resto e' rumore. Se il picco supera il tetto, non e'
+    un ritardo: e' lo strumento di misura.
+    NOTA DI METODO: un pannello che tiene n, totale e peggiore ma non la MEDIANA invita a questo
+    errore. Vale aggiungerla - e con lei l'istante e la STRADA usata, che qui mancava ed e'
+    l'unico dato che avrebbe chiuso la diagnosi da sola invece di lasciarla a ipotesi.
+
 42. **Quando una funzione viene sostituita da una piu' severa, i banchi che simulavano la
     VECCHIA smettono di simulare qualcosa, e passano o cadono per il motivo sbagliato.**
     (11 novembre 2026, v2.2.30.) Ho sostituito `_is_port_open` con `_ponte_risponde` dentro
@@ -1340,3 +1384,10 @@
 37. **Un nome di variabile sbagliato e' invisibile all'occhio e al controllo di sintassi; la prova isolata e' l'unico indizio che smaschera l'ambiente sbagliato.** (11 novembre 2026.) Nel banco del replay sincronizzato avevo dichiarato il parametro `contexto` (con la X, come la parola italiana) e nel corpo scritto `contesto` (senza X): `ReferenceError: contesto is not defined`. Ho riletto quel file decine di volte vedendo sempre la stessa parola in tutte e due le righe, perche' l'occhio normalizza cio' che si aspetta di leggere. Ho perso due ore a sospettare Playwright, la cache di Node, i punti di giunzione, il runner dei test - e intanto la PROVA ISOLATA (le stesse due funzioni in un file a parte, con un ponte finto) girava perfettamente: era l'indizio buono, diceva che la differenza stava nel FILE e non nell'ambiente. A smascherarla e' stato `String.prototype.replace`: dopo aver rinominato `contesto`->`cont`, il corpo cambiava e la firma no, e li si vedeva la X. LA REGOLA: quando un identificativo «non e' definito», stampare `Function.prototype.toString()` della funzione e confrontare firma e corpo CARATTERE PER CARATTERE (`[hex(ord(c)) for c in riga]`), invece di rileggere. E quando una prova isolata funziona e la stessa riga nel file vero no, il colpevole e' il file.
 
 38. **«Il disegno va sul cloud subito» era una supposizione: sono 60 secondi.** (11 novembre 2026.) Nel banco sui disegni che spariscono ho scritto l'attesa che mi sembrava generosa (4,5 secondi) e ho dato per scontato che il documento condiviso fosse già scritto; il banco è diventato rosso e stavo per chiamarlo difetto. La diagnosi (`banchi_aperti_forex/diag_invio_grafico.mjs`, una fotografia di `graficoAttivo`/`graficoDaInviare`/`graficoTimerInvio` ogni 1,7 s) ha mostrato che era tutto regolare: `GRAFICO_INVIO_MIN_MS` è 60.000 ms, e il disegno aspettava in coda col timer armato. LEZIONE: prima di chiamare difetto un banco rosso che riguarda il tempo, stampare le costanti del tempo di quel giro - e tenere la misura come fatto (chi disegna e chiude entro un minuto NON manda il disegno al cloud), non come errore del banco.
+
+39. **Una regola che «misura i dati» può finire per misurare la propria disconnessione.** (12 novembre 2026.) Cercavo perché il DXY risultasse chiuso alle 23:32 con MT5 che lo quotava, e la prima strada che ho guardato è stata quella giusta sulla carta — la soglia di silenzio dei tick (`FBL_MT5_SILENZIO_CHIUSO_MS`). Stavo per dire «la soglia è troppo corta». Non era quello: cinque minuti prima `liveSessionTick()`, che decide solo sull'orario scritto a mano delle 22, aveva chiamato `disconnectMt5Stream()`. Il silenzio che la regola stava misurando l'aveva prodotto l'app stessa. LEZIONE: prima di tarare una soglia su un'assenza di dati, cercare CHI può aver spento la fonte — e nel banco distinguere sempre «il canale è vivo e tace» da «il canale non c'è».
+
+
+40. **Avevo dato per scontato che il numero falso ARRIVASSE alla Prop Firm dal flottante: in sessione Live il flottante valeva 0 e la mia prima misura mi ha corretto.** (12 novembre 2026.) Cercavo il profitto fantasma in SELL e avevo scritto il banco dando per certa la catena «prezzo a zero -> flottante gonfio -> Prop Firm sbloccata». La prima esecuzione ha stampato `flottante: 0` e la Challenge comunque superata: in Live `floatingPL()` usa solo `livePriceByAsset[asset]`, che per un asset quotato da MT5 non viene mai scritto, quindi quella posizione veniva saltata — e la sfida risultava superata per un difetto del mio banco (avevo messo un saldo chiuso che era gia' oltre l'obiettivo). Rifacendo la misura con un saldo sotto l'obiettivo e' uscita la catena VERA, che e' peggiore: la chiusura falsa viene SCRITTA nel Journal, `closeTrade` la mette nella curva di `equity`, e da li' `propFirmClosedBalance()` legge un saldo gonfiato. Non serve nessun valore «di mezzo»: il numero falso e' diventato storia del conto. LEZIONE: quando si cerca come un valore sbagliato raggiunge una regola, la strada che «lampeggia» non e' necessariamente quella che decide — e un banco che diventa rosso per il motivo sbagliato e' un banco che mente. Stampare sempre il valore intermedio (`flottante`, `saldoChiuso`, `equityNow`) insieme al verdetto, mai solo il verdetto.
+
+41. **«Il campo manca» e «il campo c'e' e vale zero» sono due casi diversi, e solo il secondo e' pericoloso.** (12 novembre 2026.) La prima versione della misura su `closeMt5PositionReal` passava al ponte finto una risposta `{}`: il banco e' diventato VERDE, perche' `Number(undefined)` fa `NaN` e il ripiego sicuro scattava. Stavo per concludere che quella strada era a posto. Ma il ponte e' scritto in Python e restituisce `{"price": result.price}`: un campo non valorizzato diventa `None` -> `null` in JSON, e `Number(null)` fa **0**, che passa `Number.isFinite`. Cambiata la risposta finta in `price:0` e `price:null`, il banco e' diventato rosso con i numeri esatti della foto del proprietario. LEZIONE: quando si prova un ingresso «mancante», provare tutte e tre le forme che quel dato puo' prendere arrivando dalla rete (chiave assente, `null`, `0`), perche' in JavaScript hanno tre destini diversi — e per i prezzi la forma `null`/`0` e' quella che produce silenziosamente un numero enorme invece di un errore.
