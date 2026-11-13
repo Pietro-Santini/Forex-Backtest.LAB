@@ -9801,6 +9801,19 @@ if(tradingChannel){
          });
        }catch(e){}
      }
+   }else if(msg.type==='setup_indicatore'){
+     // UN SETTAGGIO CAMBIATO IN UN'ALTRA FINESTRA (13 novembre 2026). Il proprietario lo ha
+     // chiesto cosi': «deve essere salvato su tutte le pagine duplicate, cioe' all'interno di
+     // Forex Backtest LAB in generale». localStorage e' gia' condiviso fra le finestre della
+     // stessa origine, ma il PANNELLO di questa finestra resterebbe con i valori di prima:
+     // e' da li' che nasce il «non me lo salva», perche' si guarda la finestra sbagliata.
+     try{
+       if(msg.key && msg.params){
+         localStorage.setItem(ULTIMI_PARAM_PREFIX+msg.key, JSON.stringify(msg.params));
+         // Il pannello aperto si riallinea; se e' chiuso non c'e' niente da fare.
+         try{ if(typeof rebuildIndicatorSettingsModal==='function')rebuildIndicatorSettingsModal(); }catch(e){}
+       }
+     }catch(e){}
    }else if(msg.type==='cloud_doc'){
      // UN DOCUMENTO DEL CLOUD, GIRATO DALLA MADRE (13 novembre 2026).
      // Lo applicano solo le finestre che hanno rinunciato ad ascoltare da sole (le duplicate):
@@ -21666,7 +21679,8 @@ let indicatorsListHidden=true;
 function addIndicator(key){
  const def=INDICATOR_DEFS[key];
  if(!def)return;
- activeIndicators.push({id:Date.now()+Math.random(),key,params:def.defaultParams(),hidden:false,calc:{ref:null,builtTo:-1}});
+ // Nasce con l'ultimo settaggio usato per questo tipo, non con i predefiniti.
+ activeIndicators.push({id:Date.now()+Math.random(),key,params:fblParamIniziali(key,def),hidden:false,calc:{serie:null,builtTo:-1}});
  indicatorsListHidden=false;
  renderActiveIndicatorsUI();
  draw();
@@ -21709,6 +21723,52 @@ function toggleIndicatorHidden(id){
 // localStorage, così restano disponibili anche se l'indicatore viene rimosso dal grafico e
 // poi riaggiunto in seguito (o riaperto il file in un'altra sessione, sullo stesso browser).
 const PRESET_STORAGE_PREFIX='fbtPresets_v1_';
+// L'ULTIMO SETTAGGIO USATO, PER TIPO DI INDICATORE (13 novembre 2026).
+//
+// CHIESTO dal proprietario: «un indicatore aggiunto dopo deve ricordare l'ultimo settaggio
+// usato, non ripartire dal predefinito: si deve ricordare quando l'ho modificato sulle pagine
+// duplicate, cosi' mi trasporta il setup che avevo fatto prima».
+//
+// E' anche la spiegazione piu' probabile del «applico il nome e non me lo salva»: il setup
+// SALVATO funziona (misurato il 13 novembre: si scrive, sopravvive alla riapertura, vale anche
+// in una finestra duplicata), ma togliendo l'indicatore e rimettendolo tornavano i valori
+// predefiniti - e da fuori e' identico a «non ha salvato niente».
+//
+// Si tiene SEPARATO dai setup nominati: quelli sono scelte che l'utente ha battezzato e che non
+// devono cambiare da sole. Questo e' solo «com'era l'ultima volta».
+const ULTIMI_PARAM_PREFIX='fbtUltimiParam_v1_';
+function fblRicordaParamIndicatore(key, params){
+  try{
+    if(!key||!params)return false;
+    localStorage.setItem(ULTIMI_PARAM_PREFIX+key, JSON.stringify(params));
+    // Le altre finestre lo devono sapere subito: il setup e' «di Forex Backtest LAB in
+    // generale», non di questa finestra (parole del proprietario).
+    try{
+      if(typeof tradingChannel!=='undefined' && tradingChannel)
+        tradingChannel.postMessage({type:'setup_indicatore', slot:PIP_SLOT, key, params});
+    }catch(e){}
+    return true;
+  }catch(e){ return false; }
+}
+function fblParamRicordatiIndicatore(key){
+  try{
+    const raw=localStorage.getItem(ULTIMI_PARAM_PREFIX+key);
+    if(!raw)return null;
+    const v=JSON.parse(raw);
+    return (v&&typeof v==='object')?v:null;
+  }catch(e){ return null; }
+}
+// I parametri con cui nasce un indicatore: l'ultimo settaggio usato se c'e', altrimenti i
+// predefiniti. Le chiavi che l'indicatore non conosce piu' (versione cambiata) si buttano, e
+// quelle nuove arrivano dai predefiniti: cosi' un settaggio vecchio non lo rompe.
+function fblParamIniziali(key, def){
+  const base=def.defaultParams();
+  const ricordati=fblParamRicordatiIndicatore(key);
+  if(!ricordati)return base;
+  const fuori={};
+  Object.keys(base).forEach(k=>{ fuori[k]=(k in ricordati)?ricordati[k]:base[k]; });
+  return fuori;
+}
 function loadIndicatorPresets(key){
  try{
    const raw=localStorage.getItem(PRESET_STORAGE_PREFIX+key);
@@ -21734,7 +21794,8 @@ function applyPresetToIndicator(ind,name){
  const presets=loadIndicatorPresets(ind.key);
  if(!presets[name])return;
  ind.params={...def_paramsSafe(ind),...presets[name]};
- ind.calc={ref:null,builtTo:-1};
+ try{ fblRicordaParamIndicatore(ind.key,ind.params); }catch(e){}
+ ind.calc={serie:null,builtTo:-1};
  rebuildIndicatorSettingsModal();
  draw();
  $('status').textContent=`Setup "${name}" caricato.`;
@@ -21871,7 +21932,9 @@ function openIndicatorSettingsModal(ind){
      lbl.innerHTML=`${labelTxt} `;
      const inp=document.createElement('input');
      inp.type='number';inp.min=min;inp.max=max;if(step)inp.step=step;inp.value=ind.params[key];inp.style.width='52px';
-     inp.addEventListener('change',()=>{const v=Number(inp.value);ind.params[key]=Number.isFinite(v)?v:ind.params[key];draw();});
+     inp.addEventListener('change',()=>{const v=Number(inp.value);ind.params[key]=Number.isFinite(v)?v:ind.params[key];
+       try{ fblRicordaParamIndicatore(ind.key,ind.params); }catch(e){}
+       draw();});
      lbl.appendChild(inp);
      return lbl;
    };
