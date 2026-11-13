@@ -1562,3 +1562,23 @@
   che confronta «com'era» e «com'e'» accusa il codice invece dell'intervallo. Quando due letture
   devono descrivere lo STESSO stato, si fanno in una sola chiamata - le verifiche restano
   identiche e non c'e' piu' niente che possa entrare in mezzo.
+- 13 novembre 2026 — **una cura che rende stabile una cache deve dire anche FINO A DOVE si
+  calcola.** Gli indicatori ricalcolavano 50.029 candele a ogni tick perche' la guardia
+  confrontava il riferimento di `rows`, e `rows` cambia faccia a ogni prezzo (una `.slice()`
+  voluta per altre due cache). Misurato dopo la targa della serie: 262 ms -> 0,6 ms per tick,
+  zero azzeramenti su venti. Ma la targa DA SOLA avrebbe lasciato l'ultima candela - quella in
+  formazione - dentro l'indicatore come era al primo tick della barra, e nessuno l'avrebbe piu'
+  corretta: un order block calcolato su una candela con un secondo di dati. Finche' le cache si
+  buttavano a ogni tick quel difetto non poteva esistere, ed e' la trappola delle cure di
+  velocita': **tolgono il lavoro inutile e, insieme, quello che per sbaglio teneva le cose
+  giuste.** Qui si e' chiuso portando il limite del ciclo all'ultima candela CHIUSA (una riga
+  sola, perche' il punto di chiamata e' uno). Prima di rendere stabile una cache, chiedersi
+  sempre: cosa veniva ricalcolato per forza, e adesso non lo sara' piu'?
+- 13 novembre 2026 — **un banco che RICOPIA una regola dell'app si scolla da solo.** Il banco di
+  misura degli indicatori riscriveva la guardia (`ind.calc.ref !== rows`) per contare quante
+  volte la cache veniva buttata: cambiata la guardia nell'app, quella riga ha continuato a dire
+  «buttata» quando non lo era piu', e il banco accusava una cura che funzionava. La copia si
+  accetta solo se la prova che CONTA non dipende da lei - qui il rapporto fra il costo di un
+  tick e quello di un ricalcolo da zero, che cadrebbe comunque, per qualunque motivo la cache
+  venisse buttata. Un banco che misura solo attraverso una copia della logica non misura l'app:
+  misura la copia.

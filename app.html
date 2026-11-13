@@ -12451,6 +12451,53 @@ function fblStessoLivello(a,b){
     return true;
   }catch(e){ return false; }
 }
+// LA TARGA DELLA SERIE DI CANDELE (13 novembre 2026).
+//
+// MISURATO il 12 novembre, con il pannello prestazioni del proprietario: 4,7 fotogrammi al
+// secondo, 64 ms di disegno di cui 58 di CALCOLO degli indicatori. La causa non erano gli
+// indicatori: a ogni prezzo che arriva, `rebuildBaseRowsFromLibrary()` e `rebuildRows()`
+// consegnano un array NUOVO (`src.slice()`, `fullAgg.slice()`), e le 17 cache degli indicatori
+// riconoscono la loro serie confrontando il RIFERIMENTO (`st.ref!==rows`). Faccia nuova, cache
+// buttata: ogni indicatore ricalcolava 50.029 candele da capo per guadagnarne una.
+// Costo per tick misurato: 202,82 ms. A identita' stabile: 0,73 ms. Duecentosettantotto volte.
+//
+// La `.slice()` non e' una distrazione: era VOLUTA, per invalidare le cache di getBaseTimes() e
+// getFullAgg(), anche loro basate sul riferimento. Serviva a due lettori, e nel frattempo ne
+// sono arrivati venti. Per questo la targa sta QUI, accanto al dato, e non dentro una funzione
+// sola: e' l'errore del 9 novembre (la cura della coda montata sul solo getFullAgg) da non
+// ripetere.
+//
+// La targa cambia quando le candele sono DAVVERO un'altra serie: altro asset, altro timeframe,
+// storico ricaricato da un altro punto, libreria svuotata. NON cambia quando e' cresciuta la
+// coda, che e' il caso di ogni tick.
+let rowsSerieGen = 0;
+function fblSerieRowsCambiata(){ rowsSerieGen++; }
+function rowsSerie(){
+  // La data della prima candela entra nella targa: uno storico ricaricato da un punto diverso
+  // e' un'altra serie anche se asset e timeframe non sono cambiati.
+  let prima='';
+  try{ prima=(baseRows&&baseRows.length)?String(baseRows[0].date||''):''; }catch(e){}
+  return rowsSerieGen+'|'+currentAssetKey+'|'+currentTF+'|'+prima;
+}
+// L'INDICE FINO A CUI GLI INDICATORI CALCOLANO, e qui c'e' il buco che la targa da sola
+// lascerebbe aperto - peggiore della lentezza, perche' silenzioso.
+//
+// L'ultima candela in diretta e' IN FORMAZIONE: cambia a ogni prezzo. Finche' le cache si
+// buttavano a ogni tick, veniva ricalcolata ogni volta - lento ma aggiornato. Con la targa
+// stabile il ciclo incrementale non girerebbe piu', e l'indicatore resterebbe con dentro
+// quella candela COME ERA AL PRIMO TICK DELLA BARRA: un order block o un FVG calcolati su una
+// candela che aveva un secondo di dati, e che non si correggono piu'.
+//
+// Quindi in diretta si calcola fino all'ultima candela CHIUSA. La candela entra
+// nell'indicatore quando chiude davvero: e' il comportamento di TradingView (zone e livelli
+// confermati a chiusura barra), ed e' l'unico che non mente. In Storico e nel replay non
+// cambia niente: li' comanda il cursore del backtest.
+function fblIdxPerIndicatori(){
+  try{
+    if(liveModeActive && !liveReplayActive && idx>0 && idx===rows.length-1) return idx-1;
+  }catch(e){}
+  return idx;
+}
 function segnalaCodaCambiata(prima,daIdx){ baseRowsCoda={prima,daIdx}; }
 function codaValidaPer(cacheRef){
   return !!(baseRowsCoda && cacheRef && baseRowsCoda.prima===cacheRef);
@@ -12716,8 +12763,8 @@ function rebuildBaseRowsFromLibrary(){
       && fblStessoLivello(prima,baseRows)){
      const i=prima.length-1;
      if(prima[i]&&baseRows[i]&&prima[i].date===baseRows[i].date)segnalaCodaCambiata(prima,i);
-     else baseRowsCoda=null;
-   }else baseRowsCoda=null;
+     else { baseRowsCoda=null; fblSerieRowsCambiata(); }
+   }else { baseRowsCoda=null; if(prima&&prima.length)fblSerieRowsCambiata(); }
    return;
  }
  const all=[];
@@ -16599,8 +16646,8 @@ const AMD_FVG_TRADE_DEF = {
   // Nota: come in Pine, l'accumulo si aggiorna anche mentre un trade è aperto.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.tr = []; st.atr = []; st.sessOn = [];
       st.accHigh = NaN; st.accLow = NaN; st.accStart = NaN; st.accEnd = NaN;
       st.mH = false; st.mL = false; st.ext = NaN;
@@ -16887,8 +16934,8 @@ const AMD_POC_TRADE_DEF = {
 
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.tr = []; st.atr = []; st.sessOn = [];
       st.accHigh = NaN; st.accLow = NaN; st.accStart = NaN; st.accEnd = NaN;
       st.mH = false; st.mL = false; st.ext = NaN;
@@ -17295,8 +17342,8 @@ const COMPLEX_HS_DEF = {
   // 1) swing e figure nuove  2) monitoraggio delle figure in formazione  3) monitoraggio di quelle completate.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.atr = []; st.tr = []; st.highs = []; st.lows = []; st.cum = [];
       st.zzP = []; st.zzB = []; st.zzD = [];
       st.topForming = null; st.inverseForming = null;
@@ -17602,8 +17649,8 @@ const GANN_METHOD_DEF = {
   // Il disegno della geometria usa lo stato finale (in Pine avviene solo sull'ultima barra).
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.atr = gannAtr(rows, Math.max(1, p.atrLen | 0));
       st.ms = [];
       st.up = 0; st.dn = 0; st.swingDir = 0;
@@ -18014,8 +18061,8 @@ const MSS_SWEEP_FIB_DEF = {
   // -1 MSS ribassista in attesa del 50%, -2 MSS rialzista in attesa del 50%.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.ema = mssEma(rows.map(r => r.close), Math.max(1, p.emaPeriod | 0));
       st.atr = mssAtr(rows, Math.max(1, p.atrPeriod | 0));
       st.consBull = []; st.consBear = [];
@@ -18299,8 +18346,8 @@ const NO_WICK_RETEST_DEF = {
   // 4) apertura trade  5) nuovo livello senza stoppino.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.atr = []; st.tr = [];
       st.levels = [];          // livelli non ancora toccati: {price, dir, origin}
       st.entryLines = [];      // livelli toccati che hanno generato un trade: {price, from, to, dir}
@@ -18657,8 +18704,8 @@ const OPEN10_KEY_LEVELS_DEF = {
   // Calcolo incrementale. Con rewind (replay) o parametri cambiati si riparte da zero.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.inTS = []; st.inOpen = [];
       st.csH = null; st.csL = null;                 // sessione futures corrente
       st.pairsPrev = [];                             // coppie PSH/PSL: {hi, lo, from, to, date}
@@ -18941,8 +18988,8 @@ const SWEEPS_IFVG_DEF = {
   // 5) nuovi FVG  6) FVG -> IFVG  7) aggiornamento e limite IFVG.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.atr = sweepsAtr(rows, 14);
       st.pivH = [];          // più recente in posizione 0, come unshift in Pine
       st.pivL = [];
@@ -19233,8 +19280,8 @@ const TRENDLINE_LIQUIDITY_DEF = {
   // 1) pivot e linee candidate  2) macchina a stati di ogni linea  3) rimozioni  4) limite della storia.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.tr = []; st.atr = [];
       st.plBar = []; st.plPrice = []; st.phBar = []; st.phPrice = [];
       st.lines = [];          // linee candidate e qualificate
@@ -19656,8 +19703,8 @@ const TRIANGLES_DEF = {
   // 1) swing  2) ricerca del triangolo  3) monitoraggio della rottura precedente  4) rottura o dissoluzione del triangolo in formazione.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.atr = triAtr(rows, Math.max(1, p.atrLength | 0));
       st.closes = []; st.cum = []; st.volSma = [];
       st.zzP = []; st.zzB = []; st.zzD = [];
@@ -19914,8 +19961,8 @@ const VALID_BOS_PULLBACK_DEF = {
   // 5) scelta dei massimi/minimi dominanti  6) nuove rotture  7) cancellazione dei setup opposti  8) creazione.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.ref !== rows || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.ref = rows; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.highVals = []; st.highBars = [];
       st.lowVals = []; st.lowBars = [];
       st.retHighExt = []; st.retHighLev = []; st.retHighDone = [];
@@ -20260,8 +20307,8 @@ const INDICATOR_DEFS={
      // Con `rows` sempre uguale (lo storico) `builtTo` non si azzerava da solo.
      // Quindi: indietro => si rifa' da zero. Provato da
      // laboratorio/app/ob_replay_mitigazione.test.mjs.
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
-       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+     if(st.serie!==rowsSerie() || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
+       st.serie=rowsSerie(); st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.rawHigh=[]; st.rawLow=[]; st.res=[]; st.sup=[]; st.osc=[];
        st.lastRes=NaN; st.lastSup=NaN; st.shortE=null; st.longE=null; st.breaks=[];
        // Il filtro volumi si basa sul dataset intero: se non c'è un vero volume nel CSV
@@ -20379,8 +20426,8 @@ const INDICATOR_DEFS={
      // Con `rows` sempre uguale (lo storico) `builtTo` non si azzerava da solo.
      // Quindi: indietro => si rifa' da zero. Provato da
      // laboratorio/app/ob_replay_mitigazione.test.mjs.
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
-       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+     if(st.serie!==rowsSerie() || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
+       st.serie=rowsSerie(); st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.out=[]; st.smoothing=[]; st.bbUp=[]; st.bbLo=[];
        st.emaPrev=null; st.smEmaPrev=null; st.smRmaPrev=null;
      }
@@ -20478,8 +20525,8 @@ for(let i=from;i<=to;i++){
      // si azzerava da solo. Quindi: indietro => si rifa' da zero. Provato da
      // laboratorio/app/ob_replay_mitigazione.test.mjs per gli OB; l'FVG ha la stessa
      // logica di mitigazione, quindi la stessa cura.
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
-       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+     if(st.serie!==rowsSerie() || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
+       st.serie=rowsSerie(); st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        const maxSize=50;
        st.zz=Array.from({length:maxSize},()=>({d:0,x:0,y:NaN}));
        st.liqB=[]; st.liqS=[]; st.fvgCandidates=[]; st.fvgActive=[];
@@ -20694,8 +20741,8 @@ for(let i=from;i<=to;i++){
    // viene rifiutato con un errore chiaro invece di essere eseguito a metà.
    compute(rows, upToIdx, ind){
      const p=ind.params, st=ind.calc;
-     if(st.ref!==rows || st.builtCode!==p.code){
-       st.ref=rows; st.builtCode=p.code; st.builtTo=-1; st.error=null;
+     if(st.serie!==rowsSerie() || st.builtCode!==p.code){
+       st.serie=rowsSerie(); st.builtCode=p.code; st.builtTo=-1; st.error=null;
        st.vars={}; st.callState={};
        try{ st.compiled=compilePineLikeScript(p.code); st.plots=st.compiled.plots.map(pl=>({...pl,values:[]})); }
        catch(e){ st.compiled=null; st.plots=[]; st.error=e.message||String(e); }
@@ -20745,8 +20792,8 @@ for(let i=from;i<=to;i++){
      // Con `rows` sempre uguale (lo storico) `builtTo` non si azzerava da solo.
      // Quindi: indietro => si rifa' da zero. Provato da
      // laboratorio/app/ob_replay_mitigazione.test.mjs.
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
-       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+     if(st.serie!==rowsSerie() || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
+       st.serie=rowsSerie(); st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.labels=[]; st.mssLines=[]; st.breakerBoxes=[]; st.fvgBoxes=[];
        st.lastPH=NaN; st.prevPH=NaN; st.lastPHBar=null;
        st.lastPL=NaN; st.prevPL=NaN; st.lastPLBar=null;
@@ -20972,8 +21019,8 @@ for(let i=from;i<=to;i++){
      // rifa' da zero fino a `upToIdx`. La zona ridiventa VIVA finche' il mercato non ci torna
      // davvero; riavanzando, la mitigazione ricompare da sé. Provato da
      // laboratorio/app/ob_replay_mitigazione.test.mjs (rosso prima, verde dopo).
-     if(st.ref!==rows || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
-       st.ref=rows; st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
+     if(st.serie!==rowsSerie() || st.builtParamsKey!==JSON.stringify(p) || upToIdx<st.builtTo){
+       st.serie=rowsSerie(); st.builtParamsKey=JSON.stringify(p); st.builtTo=-1;
        st.zones=[]; st.lastPH=NaN; st.lastPHBar=null; st.lastPL=NaN; st.lastPLBar=null;
        st.bRun=0; st.sRun=0; st.bOpp=null; st.sOpp=null;
      }
@@ -23671,7 +23718,8 @@ function draw(){
      try{
        // Il costo di QUESTO indicatore, calcolo e disegno separati: vedi fblDettaglioFine.
        let _tInd=performance.now();
-       def.compute(rows,idx,ind);
+       // In diretta si calcola fino all'ultima candela CHIUSA: vedi fblIdxPerIndicatori().
+       def.compute(rows,fblIdxPerIndicatori(),ind);
        _tInd=fblDettaglioFine('ind:'+ind.key+':calcolo',_tInd);
        // pad/h in coda (RICHIESTO per l'indicatore Volume, vedi volume_default più sopra nel
        // file): tutti gli altri indicatori li ignorano semplicemente, nessuna modifica alla loro

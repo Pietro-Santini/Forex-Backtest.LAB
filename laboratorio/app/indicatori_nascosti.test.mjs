@@ -57,7 +57,15 @@ test('un indicatore VISIBILE viene calcolato e disegnato, fino alla candela corr
     }, {prep: PREPARA_BTC.toString(), finto: FINTO.toString()});
     assert.ok(r.conti.compute >= 1, 'visibile: compute() deve girare');
     assert.ok(r.conti.render >= 1, 'visibile: si disegna');
-    assert.equal(r.builtTo, r.idx, 'il calcolo arriva alla candela corrente, non oltre');
+    // IN DIRETTA SI CALCOLA FINO ALL'ULTIMA CANDELA CHIUSA (13 novembre 2026).
+    // Qui si pretendeva builtTo === idx. Da oggi, in Live, l'ultima candela e' quella IN
+    // FORMAZIONE e resta fuori: con le cache finalmente stabili (la targa della serie) un
+    // indicatore la assorbirebbe COME ERA AL PRIMO TICK DELLA BARRA e non la correggerebbe
+    // piu' - un order block calcolato su una candela con un secondo di dati. E' lo stesso
+    // comportamento di TradingView: zone e livelli confermati a chiusura barra.
+    // La parte «non oltre» resta, ed e' anzi piu' stretta di prima.
+    assert.equal(r.builtTo, r.idx - 1,
+      'in diretta il calcolo arriva all ultima candela CHIUSA (idx-1), mai oltre');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -77,7 +85,8 @@ test('riaccendendo l\'occhio il calcolo riparte e recupera fino alla candela cor
     }, {prep: PREPARA_BTC.toString(), finto: FINTO.toString()});
     assert.equal(r.daSpento, 0);
     assert.ok(r.dopo >= 1, 'riacceso: il calcolo riparte da solo al primo ridisegno');
-    assert.equal(r.builtTo, r.idx, 'riacceso deve ritrovarsi al pari, senza buchi');
+    assert.equal(r.builtTo, r.idx - 1,
+      'riacceso deve ritrovarsi al pari con le candele CHIUSE, senza buchi (vedi la prova sopra)');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
