@@ -22204,6 +22204,73 @@ const TRADE_ARROW_BLUE='#3b82f6', TRADE_ARROW_RED='#e0524f';
 // quelle (colorate) della posizione scelta. Usato da draw() (linea/etichetta/freccia), da
 // drawTpSlZoneBox() (caselle Target/Stop) e da drawOpenTradeProgress() (connettore).
 const TRADE_DIM_GREY='#8b96a5';
+// L'ETICHETTA DEL RAPPORTO RISCHIO/RENDIMENTO MENTRE TOCCHI O SPOSTI UNA LINEA (13 nov 2026).
+//
+// CHIESTO dal proprietario: «quando apro una posizione e poi vado a toccare lo stop loss o il
+// take profit, e vado a spostare le linee, o le seleziono, mi deve uscire l'etichetta del
+// rapporto rischio-rendimento». Il numero c'era gia' - nelle tabelle e nel pannello - ma non
+// dove serve davvero: sotto il dito, nel momento in cui stai decidendo dove mettere lo stop.
+//
+// Si mostra in due momenti: quando la linea e' SELEZIONATA (primo tocco) e mentre la si
+// TRASCINA. Durante il trascinamento vale il prezzo dell'anteprima, non quello salvato: deve
+// cambiare col movimento, altrimenti non serve a decidere.
+//
+// Il testo e' quello di sempre (rrRapportoTesto, a gradini di mezzo punto): lo stesso numero
+// che si legge nelle tabelle, per non avere due verita' diverse sullo stesso schermo.
+function fblLivelliPerRapporto(){
+  // Chi e' il soggetto: una posizione aperta oppure un ordine pendente, secondo cosa si sta
+  // toccando. Torna {entry, sl, tp} con dentro gia' l'anteprima del livello in movimento.
+  const tipo=(typeof tradeLevelDrag!=='undefined'&&tradeLevelDrag)
+    ||(typeof tradeLevelArmata!=='undefined'&&tradeLevelArmata)||null;
+  if(!tipo)return null;
+  const prev=(typeof previewTradeLevel!=='undefined')?previewTradeLevel:null;
+  const prezzoDi=(campo,valore)=>{
+    if(prev&&prev.type===tipo&&Number.isFinite(Number(prev.price))&&campo===tipo)return Number(prev.price);
+    return Number(valore);
+  };
+  // Ordine pendente: la chiave e' 'pending:<id>:<campo>'
+  const mPend=/^pending:(.+):(entry|sl|tp)$/.exec(String(tipo));
+  if(mPend){
+    const ord=(pendingOrders||[]).find(o=>String(o.id)===mPend[1]);
+    if(!ord)return null;
+    const val=(campo,v)=>{
+      if(prev&&prev.type===tipo&&Number.isFinite(Number(prev.price))&&campo===mPend[2])return Number(prev.price);
+      return Number(v);
+    };
+    return {entry:val('entry',ord.entry), sl:val('sl',ord.sl), tp:val('tp',ord.tp),
+            livello:val(mPend[2], mPend[2]==='entry'?ord.entry:(mPend[2]==='sl'?ord.sl:ord.tp))};
+  }
+  if(tipo!=='SL'&&tipo!=='TP')return null;
+  const pos=(typeof active!=='undefined')?active:null;
+  if(!pos||!drawableOnCurrentChart(pos))return null;
+  const sl=prezzoDi('SL',pos.sl), tp=prezzoDi('TP',pos.tp);
+  return {entry:Number(pos.entry), sl, tp, livello:(tipo==='SL')?sl:tp};
+}
+function fblDisegnaRapportoRR(ctx,y,pad,w){
+  const L=fblLivelliPerRapporto();
+  if(!L)return;
+  if(![L.entry,L.sl,L.tp,L.livello].every(v=>Number.isFinite(Number(v))))return;
+  const rischio=Math.abs(Number(L.entry)-Number(L.sl));
+  const premio=Math.abs(Number(L.tp)-Number(L.entry));
+  if(!(rischio>0))return;
+  const testo='R/R '+rrRapportoTesto(premio/rischio);
+  const yy=y(Number(L.livello));
+  if(!Number.isFinite(yy))return;
+  ctx.save();
+  ctx.font='bold 11px system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+  ctx.textAlign='left'; ctx.textBaseline='alphabetic'; ctx.globalAlpha=1;
+  const larg=ctx.measureText(testo).width+10;
+  // A destra, appena prima della scala dei prezzi, e spostata in alto di 16 px per non finire
+  // sopra l'etichetta del prezzo che sta sulla linea stessa.
+  const x=Math.max(pad.l+2,(w-pad.r)-larg-6);
+  const yBox=yy-16-6;
+  ctx.fillStyle='rgba(16,20,28,.92)';
+  if(typeof ctx.roundRect==='function'){ ctx.beginPath(); ctx.roundRect(x,yBox,larg,15,4); ctx.fill(); }
+  else ctx.fillRect(x,yBox,larg,15);
+  ctx.fillStyle='#ffd479';
+  ctx.fillText(testo,x+5,yBox+11);
+  ctx.restore();
+}
 function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
  // Solo i trade CHIUSI dell'asset attualmente a grafico: il Trade Journal è condiviso fra
  // tutti gli asset, ma disegnare sul grafico corrente anche i marker di operazioni di un
@@ -24674,6 +24741,9 @@ function draw(){
  // livelli) indipendentemente dall'interruttore "posizioni chiuse": è la ricostruzione del
  // passato richiesta, non un'opzione di visualizzazione — vedi drawClosedTradeMarkers.
  if(positionsVisible&&fblLineePosVisibili()&&(fblPosizioniChiuseVisibili()||liveReplayActive))drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal);
+ // Il rapporto rischio/rendimento della linea che si sta toccando o spostando: si disegna
+ // per ultimo, cosi' sta sopra a tutto e si legge anche sopra una casella.
+ try{ fblDisegnaRapportoRR(ctx,y,pad,w); }catch(e){}
 
  try{ if(typeof fblCronoDisegna==='function')fblCronoDisegna(ctx,y,lo,hi,pad,cw,n,start,w); }catch(e){}
  _tSez=fblSezFine('tradeChiusi',_tSez);
@@ -25558,6 +25628,25 @@ function tradeLevelDeseleziona(){
  return true;
 }
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&tradeLevelArmata&&!tradeLevelDrag)tradeLevelDeseleziona(); });
+// LE LINEE DI UN ORDINE PENDENTE SI PRENDONO DOVE SI VEDONO (13 novembre 2026).
+//
+// CHIESTO dal proprietario, due volte: «quando c'e' un ordine limite devo avere la possibilita'
+// di spostarlo, anche se l'ordine pendente viene creato da una sala segnali: posso spostare la
+// linea di entrata del buy limit e del sell limit».
+//
+// CAUSA MISURATA: l'entrata si agganciava solo con `px<=pad.l+160` - i primi 160 pixel a
+// sinistra - e stop e target solo negli ultimi 140 a destra. Su un grafico da 1.300 px restano
+// oltre 900 px in mezzo in cui la linea e' DISEGNATA per tutta la larghezza e non risponde al
+// mouse. Non e' una linea che non si puo' spostare: e' una linea che si sposta solo se la
+// prendi nel punto giusto, e nessuno puo' indovinarlo.
+//
+// Il motivo per cui la fascia esisteva era buono - non agganciare una linea per sbaglio
+// mentre si trascina il grafico - ma la difesa vera e' un'altra, ed e' gia' qui: la tolleranza
+// VERTICALE di 14 pixel. Per agganciare bisogna premere sulla linea, non vicino. E' come si
+// comporta TradingView, ed e' quello che il proprietario si aspetta.
+function fblDentroAreaGrafico(g,px){
+  try{ return px>=g.pad.l && px<=(g.rect.width-g.pad.r); }catch(e){ return false; }
+}
 function tradeLevelHit(clientX,clientY,activate){
  const g=chartGeometry();if(!g)return null;
  const px=clientX-g.rect.left, py=clientY-g.rect.top,tolerance=14;
@@ -25629,7 +25718,7 @@ function tradeLevelHit(clientX,clientY,activate){
  // con PENDING BUY/SELL): resta visibile e trascinabile dal momento in cui la imposti,
  // ma solo dalla sua etichetta (vicino al bordo sinistro del grafico, dove viene disegnata).
  const draftEntry=num($('pendingEntry')?.value);
- if(Number.isFinite(draftEntry) && px<=g.pad.l+160 && Math.abs(py-g.y(draftEntry))<=tolerance)return 'ENTRY';
+ if(Number.isFinite(draftEntry) && fblDentroAreaGrafico(g,px) && Math.abs(py-g.y(draftEntry))<=tolerance)return 'ENTRY';
  // Bozza SL/TP DEDICATA all'ordine pendente in composizione (caselle separate da quelle
  // del trade a mercato): trascinabile allo stesso modo, solo dentro la sua casella. Sempre
  // attiva indipendentemente da "active": si può comporre un nuovo ordine pendente anche con
@@ -25640,16 +25729,16 @@ function tradeLevelHit(clientX,clientY,activate){
    const draftTpPending=num($('tpPending')?.value);
    if(Number.isFinite(draftTpPending) && Math.abs(py-g.y(draftTpPending))<=tolerance)return 'TP_PENDING';
  }
- // Linee degli ordini pendenti già creati: entrata, SL e TP, trascinabili solo dall'area
- // della loro etichetta (l'entrata a sinistra, SL/TP a destra — stessa posizione in cui
- // vengono disegnate in draw()), non su tutta la larghezza del grafico. Solo quelli
+ // Linee degli ordini pendenti gia' creati: entrata, SL e TP, trascinabili su TUTTA la
+ // larghezza su cui sono disegnate (13 novembre 2026 - prima: l'entrata solo nei primi 160
+ // pixel a sinistra, SL/TP solo negli ultimi 140 a destra, e in mezzo nulla). Solo quelli
  // DELL'ASSET a grafico ora sono disegnati/trascinabili qui (vedi draw()).
  const ownPendingForDrag=pendingOrders.filter(drawableOnCurrentChart);
  for(const p of ownPendingForDrag){
-   if(px<=g.pad.l+160 && Math.abs(py-g.y(p.entry))<=tolerance)return `pending:${p.id}:entry`;
-   const rightZoneX=(g.rect.width-g.pad.r)-140;
-   if(Number.isFinite(p.sl) && px>=rightZoneX && Math.abs(py-g.y(p.sl))<=tolerance)return `pending:${p.id}:sl`;
-   if(Number.isFinite(p.tp) && px>=rightZoneX && Math.abs(py-g.y(p.tp))<=tolerance)return `pending:${p.id}:tp`;
+   if(!fblDentroAreaGrafico(g,px))continue;
+   if(Math.abs(py-g.y(p.entry))<=tolerance)return `pending:${p.id}:entry`;
+   if(Number.isFinite(p.sl) && Math.abs(py-g.y(p.sl))<=tolerance)return `pending:${p.id}:sl`;
+   if(Number.isFinite(p.tp) && Math.abs(py-g.y(p.tp))<=tolerance)return `pending:${p.id}:tp`;
  }
  return null;
 }
@@ -31124,8 +31213,20 @@ $('mt5OpenPositions').addEventListener('click',async e=>{
  if(mt5CloseTicket)return closeMt5TicketFromTable(mt5CloseTicket);
  if(mt5BeTicket)return applyBreakevenToMt5TicketDirect(mt5BeTicket);
 });
-$('openPositions').addEventListener('click',async e=>{
- // RICHIESTO ESPLICITAMENTE: click dentro le celle SL/TP -> mostra/nascondi SOLO il colore di
+// LE AZIONI DI UNA POSIZIONE (BE, Chiudi, Seleziona, Vai a grafico) STANNO IN UNA FUNZIONE SOLA.
+//
+// Erano scritte dentro il gestore dei click della tabella «Posizioni aperte», e quindi
+// funzionavano solo se il pulsante stava DENTRO quella tabella. Il 13 novembre il proprietario
+// ha chiesto gli stessi due pulsanti anche nella fascia a schermo intero: «cosi' non dobbiamo
+// uscire dallo schermo intero e andare sotto alle posizioni aperte per chiuderla».
+//
+// Si poteva copiare il codice dei due pulsanti nella fascia. Non si fa: il «Chiudi» controlla
+// che l'asset a grafico sia quello giusto, passa dal freno notizie della prop firm e distingue
+// una posizione MT5 da una simulata. Una copia nasce identica e diverge al primo ritocco - e la
+// differenza si scoprirebbe chiudendo una posizione vera al prezzo sbagliato.
+// Quindi: una funzione sola, agganciata a tutti e due i posti. Legge `e.target`, per cui non le
+// importa da quale contenitore arrivi il clic.
+async function fblAzioniSuPosizione(e){ // RICHIESTO ESPLICITAMENTE: click dentro le celle SL/TP -> mostra/nascondi SOLO il colore di
  // riempimento delle caselle Target/Stop sul grafico (le linee restano sempre visibili). Va
  // controllato PRIMA di tutto il resto: queste celle non hanno altri attributi data-* e non
  // devono innescare nessun'altra azione della riga.
@@ -31194,7 +31295,8 @@ $('openPositions').addEventListener('click',async e=>{
    if(pos.mt5Ticket!=null){ await closeMt5PositionReal(pos,'MANUAL'); draw();update(); return; }
    const price=currentPrice()??pos.entry;closeTrade('MANUAL',price,pos);draw();update();
  }
-});
+}
+$('openPositions').addEventListener('click',fblAzioniSuPosizione);
 $('journal').addEventListener('change',e=>{
  const cb=e.target.closest?e.target.closest('.journalSelCb'):null; if(!cb)return;
  const id=cb.getAttribute('data-seltrade');
@@ -32472,6 +32574,8 @@ function fblMiniDashMostra(dopo){
  let el=$('fblMiniDash');
  if(!el){
   el=document.createElement('div'); el.id='fblMiniDash';
+  // Gli stessi pulsanti della tabella, quindi lo stesso gestore: vedi fblAzioniSuPosizione.
+  try{ el.addEventListener('click',fblAzioniSuPosizione); }catch(e){}
   el.style.cssText='flex:0 0 100%;width:100%;box-sizing:border-box;min-width:0;margin-top:8px;padding:7px 8px;border:1px solid #2b3541;border-radius:8px;background:#0f1620;font-size:10.5px;line-height:1.35;color:#cdd6e0;display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px';
  }
  if(dopo&&dopo.parentNode)dopo.parentNode.insertBefore(el,dopo.nextSibling);
@@ -32492,9 +32596,44 @@ function fblMiniDashAggiorna(){
  let kr=false; try{ kr=fblContoEffettivo()==='kraken'; }catch(e){}
  if(kr)pl=krakenConto&&Number.isFinite(Number(krakenConto.pnl_aperto))?Number(krakenConto.pnl_aperto):null;
  const colore=Number.isFinite(pl)?(pl>=0?'#7fdc9a':'#ff8a8a'):'#cdd6e0';
+ // VIA WIN RATE E LOSS RATE (13 novembre 2026). Parole del proprietario: «nel pannellino quando
+ // siamo in pagina a tutto schermo, quello che indica P/L live, capitale, win rate, loss rate,
+ // margine libero: prima cosa togliamo win rate e loss rate, non ci servono».
  const righe=[['P/L live','<b style="color:'+colore+'">'+(Number.isFinite(pl)?((pl>=0?'+':'')+(kr?(pl.toFixed(2)+' $'):euro(pl))):'—')+'</b>'],
-  ['Capitale',escapeHtmlText(testo('mCapital'))],['Win rate',escapeHtmlText(testo('mWR'))],['Loss rate',escapeHtmlText(testo('mLR'))],['Margine libero',escapeHtmlText(testo('mMargin'))]];
- const html=righe.map(([k,v])=>'<span style="color:#8b96a5">'+k+'</span><span style="text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+v+'</span>').join('');
+  ['Capitale',escapeHtmlText(testo('mCapital'))],['Margine libero',escapeHtmlText(testo('mMargin'))]];
+ let html=righe.map(([k,v])=>'<span style="color:#8b96a5">'+k+'</span><span style="text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+v+'</span>').join('');
+ // LA POSIZIONE SELEZIONATA, CON BE E CHIUDI (13 novembre 2026).
+ //
+ // Parole del proprietario: «quando apriamo una posizione o la selezioniamo tramite i target,
+ // lo stop loss o la freccetta della posizione, ci deve comparire quella posizione dentro quel
+ // riquadro sotto, cosi' che avremo i pulsanti BE e Chiudi. Cosi' non dobbiamo uscire dallo
+ // schermo intero e andare sotto alle posizioni aperte per chiuderla: ce l'abbiamo li' e la
+ // chiudiamo direttamente».
+ //
+ // I due pulsanti non hanno un gestore nuovo: portano `data-be` e `data-closepos`, gli stessi
+ // attributi dei pulsanti nella tabella delle posizioni. Cosi' fanno ESATTAMENTE quello che
+ // fanno li' - conferme comprese - e non c'e' una seconda strada che un domani si comporta
+ // diversamente dalla prima.
+ try{
+  const sel=(typeof active!=='undefined'&&active&&drawableOnCurrentChart(active))?active:null;
+  if(sel){
+   let plPos=null; try{ plPos=posLivePL(sel); }catch(e){}
+   const colPos=Number.isFinite(plPos)?(plPos>=0?'#7fdc9a':'#ff8a8a'):'#cdd6e0';
+   const lotti=(sel.lots!=null)?(' '+Number(sel.lots).toFixed(2)):'';
+   const nome=escapeHtmlText(String(sel.side||'')+lotti+' '+String(sel.asset||''));
+   const plTxt=Number.isFinite(plPos)?((plPos>=0?'+':'')+euro(plPos)):'—';
+   const bottone='padding:3px 9px;border-radius:5px;border:1px solid #2b3541;background:#16202c;'
+     +'color:#cdd6e0;font-size:10.5px;cursor:pointer';
+   html+='<span style="grid-column:1/-1;height:1px;background:#2b3541;margin:4px 0"></span>'
+     +'<span style="grid-column:1/-1;display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+     +'<b style="color:#cdd6e0">'+nome+'</b>'
+     +'<b style="color:'+colPos+'">'+plTxt+'</b>'
+     +'<span style="flex:1"></span>'
+     +'<button type="button" data-be="'+escapeHtmlText(String(sel.id))+'" style="'+bottone+'">BE</button>'
+     +'<button type="button" data-closepos="'+escapeHtmlText(String(sel.id))+'" style="'+bottone+'">Chiudi</button>'
+     +'</span>';
+  }
+ }catch(e){}
  if(el.innerHTML!==html)el.innerHTML=html;
 }
 setInterval(()=>{ try{ fblMiniDashAggiorna(); }catch(e){} },1000);
@@ -39307,6 +39446,25 @@ function tgAutoContiBersaglio(){
 // «riprova». Stessa forma gia' usata per il cambio conto manuale (fblContiCheNonRispondono),
 // che pero' ha chiavi di un altro tipo ('mt5'/'kraken') e non si poteva riusare com'era.
 const fblContiMt5CheHannoRifiutato = new Map();
+// QUANDO IL COLLEGAMENTO LO FA UN SEGNALE, NON SI FANNO DOMANDE (13 novembre 2026).
+//
+// DECISO dal proprietario: «il suono mi sta bene, ma il fatto che mi chieda se e' una prop firm
+// o meno non me lo deve chiedere ogni volta, solo la prima volta che mi collego a quel conto,
+// fine. E quando arriva un segnale, certo che non deve apparire la domanda, assolutamente».
+//
+// Il cambio conto automatico e' un collegamento VERO, quindi il rito del «mi sono appena
+// collegato» parte giusto - e il suono resta, come ha chiesto lui. Ma le due DOMANDE (che conto
+// e' questo, e vuoi accendere le sale Telegram) no: arrivano mentre un segnale si sta aprendo,
+// cioe' nel momento peggiore, e davanti allo schermo puo' non esserci nessuno.
+//
+// Si usa un ORARIO e non un interruttore perche' le due domande partono con un setTimeout di
+// 1,5 secondi: un interruttore spento subito dopo la connessione non le prenderebbe. La domanda
+// non si perde: `propChiesto` si segna solo quando l'utente risponde davvero, quindi resta in
+// sospeso e ricompare al primo collegamento fatto a mano.
+let fblCollegamentoDaSegnaleAl = 0;
+function fblCollegamentoAppenaFattoDaSegnale(){
+  return (Date.now() - fblCollegamentoDaSegnaleAl) < 8000;
+}
 function fblContoMt5HaRifiutato(acc){
   try{ return fblContiMt5CheHannoRifiutato.get(mt5AccountKey(acc))||null; }catch(e){ return null; }
 }
@@ -39325,6 +39483,8 @@ async function tgAutoVaiAlConto(acc){
  }
  // Dove siamo adesso: se il tentativo fallisce bisogna poterci tornare.
  const _primaCreds=mt5CredsDraft, _primaConnesso=mt5Connected;
+ // Da qui in poi, per qualche secondo, nessuna domanda a schermo: sta arrivando un segnale.
+ fblCollegamentoDaSegnaleAl=Date.now();
  try{
   const res=await connectToMt5Bridge(acc);
   if(!(res&&res.ok)){
@@ -57957,11 +58117,14 @@ function updateMt5ModeUI(silenzioso){
    // Una volta sola nella vita dell'installazione: chi ha gia' risposto non se lo sente piu'
    // chiedere ad ogni collegamento. Ritardata, per non accavallarsi agli altri avvisi che
    // scattano proprio mentre il conto si collega.
-   try{ setTimeout(()=>{ try{ tgProponiDopoMt5(); }catch(e){} },1500); }catch(e){}
+   try{ setTimeout(()=>{ try{ if(!fblCollegamentoAppenaFattoDaSegnale())tgProponiDopoMt5(); }catch(e){} },1500); }catch(e){}
    // Pop-up prop firm alla connessione: UN SOLO PUNTO.
    try{ setTimeout(async ()=>{
      try{
       if(typeof fblPropAttivazioneDaChiedere!=='function') return;
+      // MAI MENTRE ARRIVA UN SEGNALE: la domanda resta in sospeso (propChiesto si segna solo
+      // quando si risponde davvero) e ricompare al primo collegamento fatto a mano.
+      if(fblCollegamentoAppenaFattoDaSegnale()) return;
       const id=fblPropContoId();
       if(!fblPropAttivazioneDaChiedere(id)) return;
       // PRIMA DOMANDA: che conto e' questo. Richiesta del proprietario (3 novembre 2026):

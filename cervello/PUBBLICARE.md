@@ -414,3 +414,25 @@ se non si ricopia il file. Due correzioni recenti da tenere a mente:
   `*.google.com`. Sono quelli che **tengono il giro di accesso dentro l'app**: se un host
   della pagina di accesso non è ammesso, la WebView lo passa al browser di sistema e il
   ritorno all'app non arriva più.
+
+---
+
+## 13 novembre 2026 — NON LANCIARE IL FLUSSO DELL'INSTALLER A MANO DOPO UN PUSH
+
+Il flusso «Installer Windows» pubblica la Release **da solo** a ogni push su `main`:
+
+    release:
+      if: github.ref == 'refs/heads/main' || inputs.pubblica
+
+Lanciare anche `gh workflow run installer.yml -f pubblica=true` fa partire una SECONDA esecuzione
+in parallelo: tutte e due arrivano al passo «Crea la release», una crea il tag e l'altra muore con
+
+    a release with the same tag name already exists: v2.2.39
+
+Il collaudo resta verde e l'app pubblicata e' giusta — ma in Actions compare un rosso che sembra
+un difetto del codice e non lo e', e restano in giro Release doppie. Successo tre volte di fila
+(v2.2.37-336, v2.2.38-337, e il rosso della v2.2.39).
+
+**Regola: dopo `git push origin HEAD:main` non si lancia niente a mano.** Si aspetta, e si
+controlla con `gh release list` che la Release sia uscita con i suoi allegati. Il lancio manuale
+serve SOLO per ripubblicare una versione gia' pushata il cui flusso e' fallito per altro.
