@@ -1385,6 +1385,12 @@ window.fblAvviaSoloBacktest=function(){
       return {letture:(b.letture||0),tetto:this._budgetTettoLetture(),dettaglio:Object.assign({},b.contaLetture||{})}; },
     // Vero se si puo' scrivere. Da chiamare in cima a OGNI metodo che scrive sul cloud.
     _puoScrivere(nome){
+      // E NON SCRIVE NEMMENO (13 novembre 2026). Stesso motivo degli ascolti: quello che la
+      // duplicata vuole salvare lo salva la madre, che e' l'unica a tenere il filo con il
+      // cloud. Due finestre che scrivono lo stesso documento non raddoppiano solo la
+      // bolletta: si sovrascrivono a vicenda, e l'ultima che parla vince senza che nessuno
+      // lo decida.
+      try{ if(typeof PIP_SLOT!=='undefined' && PIP_SLOT>0) return false; }catch(e){}
       const b=this._budgetOggi();
       if(b.totale>=this._budgetTetto()){
         if(!b.avvisato){
@@ -1764,6 +1770,34 @@ window.fblAvviaSoloBacktest=function(){
     },
     _ascoltaDoc(nome, cb, trasforma, ricadutaFirestore){
       if(!this.uid) return ()=>{};
+      // UNA FINESTRA DUPLICATA NON PARLA CON IL CLOUD: ASCOLTA LA MADRE (13 novembre 2026).
+      //
+      // Chiesto dal proprietario come paletto del progetto «duplicate come specchio»: «mi
+      // raccomando attento al peso sul PC e al peso dei dati che girano su Firebase».
+      //
+      // MISURATO oggi, aprendo l'app con un Firebase finto che conta invece di parlare:
+      //   madre      -> 3 ascolti permanenti, 4 letture
+      //   duplicata  -> 2 ascolti permanenti, 3 letture, TUTTI SUOI
+      // E un ascolto non e' gratis: ogni volta che un altro dispositivo scrive quel
+      // documento, ognuno di quegli ascolti produce UNA LETTURA. Con la madre piu' due
+      // duplicate, una modifica fatta dal telefono si moltiplica per tre.
+      //
+      // Da qui in poi le letture non dipendono piu' da quante finestre apri: la madre ascolta
+      // per tutte e gira quello che arriva sul canale fra finestre, che non costa niente.
+      // Questa e' la porta UNICA di tutti e quattro gli ascolti (session, grafico,
+      // collegamento, preferenze): si chiude qui una volta, non in quattro posti.
+      try{
+        if(typeof PIP_SLOT!=='undefined' && PIP_SLOT>0 && typeof fblAscoltaDocDallaMadre==='function'){
+          return fblAscoltaDocDallaMadre(nome, cb);
+        }
+      }catch(e){}
+      // La madre ascolta per tutte: quello che le arriva lo passa anche alle figlie.
+      try{
+        if(typeof fblAnnunciaDocCloud==='function'){
+          const _cbSola=cb;
+          cb=(contenuto)=>{ try{ fblAnnunciaDocCloud(nome,contenuto); }catch(e){} return _cbSola(contenuto); };
+        }
+      }catch(e){}
       if(!this._serverConfigurato()) return ricadutaFirestore();
       // La logica dell'ascolto sta in fblAscoltoDocumento, UNA funzione sola nello script
       // principale, provata da sola da laboratorio/app/ascolto_documento_server.test.mjs.
@@ -9080,6 +9114,54 @@ let applyingRemoteTradingSync=false;
 // STESSA macchina, sullo STESSO conto, nello stesso momento, non c'e' niente da proteggere: la
 // finestra duplicata deve vedere quello che vede la madre. Il filtro resta dov'e' utile (il
 // salvataggio) e sparisce da dove faceva danno (questo messaggio).
+// I DOCUMENTI DEL CLOUD CHE LA MADRE GIRA ALLE FINESTRE DUPLICATE (13 novembre 2026).
+//
+// La madre e' l'unica che ascolta il cloud (vedi _ascoltaDoc). Quando le arriva un documento
+// lo annuncia sul canale; le duplicate, che non ascoltano, lo applicano con la stessa funzione
+// che avrebbero usato se fosse arrivato dal cloud - cosi' non esistono due strade diverse per
+// lo stesso dato, che e' il modo in cui due finestre finiscono per mostrare cose diverse.
+//
+// L'ultimo contenuto di ogni documento si tiene da parte: una duplicata aperta ADESSO non puo'
+// aspettare la prossima modifica per sapere com'e' fatto il mondo. Appena si registra, lo
+// chiede, e la madre risponde con quello che ha gia' in mano - senza nessuna lettura in piu'.
+const fblUltimiDocCloud = new Map();      // nome -> ultimo contenuto visto dalla madre
+const fblAscoltiDocFigli = new Map();     // nome -> [callback] (solo nelle duplicate)
+function fblAnnunciaDocCloud(nome, contenuto){
+  try{ fblUltimiDocCloud.set(nome, contenuto); }catch(e){}
+  try{
+    if(typeof tradingChannel!=='undefined' && tradingChannel)
+      tradingChannel.postMessage({type:'cloud_doc', slot:PIP_SLOT, nome, contenuto});
+  }catch(e){}
+}
+function fblAscoltaDocDallaMadre(nome, cb){
+  let lista=fblAscoltiDocFigli.get(nome);
+  if(!lista){ lista=[]; fblAscoltiDocFigli.set(nome,lista); }
+  lista.push(cb);
+  // Si chiede subito alla madre com'e' fatto adesso: senza, la finestra resterebbe al buio
+  // fino alla prossima modifica fatta da qualcun altro.
+  try{
+    if(typeof tradingChannel!=='undefined' && tradingChannel)
+      tradingChannel.postMessage({type:'cloud_doc_chiedi', slot:PIP_SLOT, nome});
+  }catch(e){}
+  return ()=>{ try{ const i=lista.indexOf(cb); if(i>=0)lista.splice(i,1); }catch(e){} };
+}
+function fblApplicaDocCloudDaMadre(nome, contenuto){
+  const lista=fblAscoltiDocFigli.get(nome);
+  if(!lista||!lista.length)return 0;
+  let fatti=0;
+  lista.slice().forEach(cb=>{ try{ cb(contenuto); fatti++; }catch(e){ console.warn('[specchio] documento '+nome+' non applicato:',e); } });
+  return fatti;
+}
+function fblRispondiDocCloud(nome){
+  // Solo la madre risponde, e solo se quel documento l'ha gia' visto.
+  try{
+    if(PIP_SLOT!==0)return false;
+    if(!fblUltimiDocCloud.has(nome))return false;
+    if(typeof tradingChannel!=='undefined' && tradingChannel)
+      tradingChannel.postMessage({type:'cloud_doc', slot:PIP_SLOT, nome, contenuto:fblUltimiDocCloud.get(nome)});
+    return true;
+  }catch(e){ return false; }
+}
 function collectTradingSyncPayload(){
  return {
    type:'trading_sync', slot:PIP_SLOT, at:Date.now(),
@@ -9719,6 +9801,16 @@ if(tradingChannel){
          });
        }catch(e){}
      }
+   }else if(msg.type==='cloud_doc'){
+     // UN DOCUMENTO DEL CLOUD, GIRATO DALLA MADRE (13 novembre 2026).
+     // Lo applicano solo le finestre che hanno rinunciato ad ascoltare da sole (le duplicate):
+     // nella madre non c'e' nessuna callback registrata, quindi non fa niente - e cosi' il
+     // messaggio che lei stessa ha mandato non le torna addosso.
+     try{ fblApplicaDocCloudDaMadre(msg.nome, msg.contenuto); }catch(e){}
+   }else if(msg.type==='cloud_doc_chiedi'){
+     // Una duplicata appena nata chiede com'e' fatto adesso quel documento: risponde la madre,
+     // con quello che ha gia' in mano. Nessuna lettura in piu' verso il cloud.
+     try{ fblRispondiDocCloud(msg.nome); }catch(e){}
    }else if(msg.type==='pip_clone_snapshot'){
      // Applicato SOLO da una finestra PIP aggiuntiva, e solo dalla risposta della madre (slot 0) —
      // vedi pip_clone_request qui sopra. Gli stili si applicano SEMPRE (utili anche in Live);

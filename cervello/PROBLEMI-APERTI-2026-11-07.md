@@ -882,3 +882,43 @@ cui questi banchi NON vanno rilassati, vanno resi deterministici.
 modifiche alla cieca su banchi che nessuno sta guardando sono piu' rischiose del problema. Si
 curano quando diventano rossi — ma chi li trova rossi deve leggere PRIMA questa voce, perche' la
 prima domanda non e' «cosa ho rotto» ma «che ora era».
+
+---
+
+## 13 novembre 2026 — DUPLICATE COME SPECCHIO: primo passo fatto, e cosa resta
+
+**Fatto (v2.2.42): una finestra duplicata non parla piu' con il cloud.** Misurato con un Firebase
+finto che conta invece di parlare, prima e dopo:
+
+| | madre | duplicata PRIMA | duplicata DOPO |
+|---|---|---|---|
+| ascolti permanenti | 3 | **2** | **0** |
+| scritture | si' | si' | **no** |
+| letture una tantum all'avvio | 4 | 3 | 3 (da chiudere) |
+
+Gli ascolti sono la voce che conta: ognuno produce UNA lettura ogni volta che un qualunque
+dispositivo scrive quel documento. Con la madre piu' due duplicate una modifica dal telefono
+diventava tre letture. Adesso le letture non dipendono piu' dal numero di finestre.
+Banco: `laboratorio/app/duplicata_non_parla_col_cloud.test.mjs` (5 prove).
+
+**RESTA DA FARE, in ordine:**
+1. **Le 3 letture una tantum all'avvio di ogni duplicata**: passano dai percorsi di lettura
+   diretta (`getDoc`), non dagli ascolti. Vanno girate alla madre con lo stesso meccanismo gia'
+   scritto (`cloud_doc_chiedi` / `fblUltimiDocCloud`).
+2. **Le candele**: oggi ogni finestra scarica e tiene il suo storico. E' la voce che pesa sul PC,
+   e va presa dalla madre.
+3. **Il calcolo degli indicatori**: con la v2.2.41 costa 0,6 ms per tick invece di 262, quindi
+   spostarlo sulla madre adesso ha senso (prima avrebbe spostato il lavoro sbagliato).
+4. **Il disegno resta per finestra**: una tela per finestra, non si condivide. E' la parte
+   leggera (0,04-0,16 ms per indicatore).
+
+**NON MISURATO, e va detto:** la memoria. `performance.memory` nel browser di prova resta fermo
+a 25 MB anche con 50.029 candele caricate (valore quantizzato), quindi il peso per finestra NON
+e' stato misurato qui. La cifra che abbiamo e' quella del proprietario, dal suo PC, il 12
+novembre: 34-36 processi del motore grafico, 1,7 GB, memoria di sistema all'85%. La verifica del
+passo 2 dovra' farla lui con il suo pannello, non questo banco.
+
+**PALETTO DA NON PERDERE** (voce 12 delle richieste del 12 novembre sera): lo specchio vale per i
+DATI, non per la MODALITA'. Una figlia in replay deve poter guardare lo storico mentre la madre
+e' in Live. Una «unica fonte di verita'» che impone anche la modalita' romperebbe quella
+richiesta.
