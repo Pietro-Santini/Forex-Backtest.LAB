@@ -2715,10 +2715,36 @@ def connect(body: ConnectRequest):
     except Exception:
         _tm = None
 
+    # IL NOME DEL SERVER COME LO DICHIARA MT5, non come lo ha digitato l'utente (12 nov 2026).
+    #
+    # DECISO dal proprietario: "certo e' come la dichiara MT5, non si possono avere interferenze
+    # sotto questo aspetto".
+    #
+    # PERCHE' SERVE: lo stesso conto prendeva DUE identita' diverse secondo da dove l'app lo
+    # imparava. Qui, su /connect, tornava `body.server` - cioe' la stringa DIGITATA nel modulo di
+    # accesso. Su /account torna `info.server` - quella che dichiara il terminale. La finestra
+    # madre impara dalla prima, una finestra duplicata o un altro dispositivo dalla seconda:
+    # basta una maiuscola, uno spazio o un suffisso di differenza perche' `login@server` diventi
+    # due chiavi, e con due chiavi la prop firm si scorda la challenge, l'interruttore
+    # dell'apertura automatica di quel conto non si applica piu' e la domanda "questo conto come
+    # lo usi?" riparte da zero.
+    #
+    # Il campo `server` NON si cambia (chi legge i vecchi non deve rompersi): si AGGIUNGE
+    # `server_mt5`, e l'app preferisce quello quando c'e'.
+    _server_mt5 = None
+    try:
+        if _ai is not None:
+            _s = getattr(_ai, "server", None)
+            if _s:
+                _server_mt5 = str(_s)
+    except Exception:
+        _server_mt5 = None
+
     return {
         "status": "connected",
         "login": body.login,
         "server": body.server,
+        "server_mt5": _server_mt5,
         "trade_mode": _tm,
         "reale": (None if _tm is None else bool(_tm == 2)),
         "algo_trading": algo_trading,

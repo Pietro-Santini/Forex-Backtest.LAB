@@ -6021,12 +6021,86 @@ const MT5_PARCHEGGIO_KEY='fb_mt5_parcheggio';
 let mt5Parcheggio={};               // login -> [{modo, tipo:'pos'|'pend', p}]
 try{ mt5Parcheggio=JSON.parse(localStorage.getItem(MT5_PARCHEGGIO_KEY)||'{}')||{}; }catch(e){ mt5Parcheggio={}; }
 function mt5SalvaParcheggio(){ try{ localStorage.setItem(MT5_PARCHEGGIO_KEY,JSON.stringify(mt5Parcheggio)); }catch(e){} }
+// IL TRASLOCO DEGLI ARCHIVI QUANDO LA CHIAVE DI UN CONTO CAMBIA (12 novembre 2026).
+//
+// DECISO dal proprietario: l'identita' di un conto e' il server «come la dichiara MT5, non si
+// possono avere interferenze sotto questo aspetto». Giusto - ma l'identita' e' anche la CHIAVE
+// con cui sono archiviate tre cose, e cambiarla senza portarsi dietro quello che c'era sarebbe
+// molto peggio del difetto:
+//   fb_tg_auto_per_conto   l'interruttore «apri le posizioni in automatico», PER CONTO
+//   fbl_prop_conti         challenge, preset, tipo di conto, fasi superate
+//   FBL_MT5_REALE_KEY      se quel conto va trattato come soldi veri
+// Un conto dove l'interruttore e' SPENTO, con la chiave nuova, non troverebbe il suo blocco e
+// ricadrebbe sulla configurazione base: e la base accesa addosso a un conto vero e' esattamente
+// quello che a novembre ha chiuso una prop firm.
+//
+// Regole del trasloco, e la seconda non e' negoziabile:
+//   1. si copia solo se la chiave NUOVA non ha ancora niente (non si sovrascrive mai una
+//      configurazione che l'utente ha fatto sulla chiave nuova);
+//   2. se entrambe esistono e NON sono d'accordo sull'interruttore, vince SPENTO. Sempre.
+//      «Non lo so» e «le due versioni litigano» su soldi veri valgono fermo, non fai pure.
+//   3. la chiave vecchia NON si cancella: il nome del server puo' tornare a oscillare, e una
+//      riga in piu' in localStorage non ha mai fatto male a nessuno.
+function fblMigraChiaviConto(login, chiaveNuova){
+  const L=String(login||''); if(!L||!chiaveNuova) return {fatto:[]};
+  const fatto=[];
+  // --- l'interruttore dell'apertura automatica, il piu' delicato
+  try{
+    const vecchie=Object.keys(tgAutoPerConto||{}).filter(k=>k!==chiaveNuova&&k.indexOf(L+'@')===0);
+    if(vecchie.length){
+      const spento=(b)=>!!(b&&((b.fx&&b.fx.attivo===false)||(b.cr&&b.cr.attivo===false)));
+      if(!tgAutoPerConto[chiaveNuova]){
+        // si prende il blocco piu' PRUDENTE fra quelli vecchi, non il primo che capita
+        const scelta=vecchie.find(k=>spento(tgAutoPerConto[k]))||vecchie[0];
+        tgAutoPerConto[chiaveNuova]=JSON.parse(JSON.stringify(tgAutoPerConto[scelta]));
+        fatto.push('auto:'+scelta+'->'+chiaveNuova);
+      }else{
+        // esistono entrambe: se una delle vecchie e' spenta, spegne anche la nuova
+        const daSpegnere=vecchie.some(k=>spento(tgAutoPerConto[k]));
+        if(daSpegnere){
+          const b=tgAutoPerConto[chiaveNuova];
+          ['fx','cr'].forEach(f=>{ if(b[f])b[f].attivo=false; });
+          fatto.push('auto:spento-vince:'+chiaveNuova);
+        }
+      }
+      try{ tgAutoPerContoSalva(); }catch(e){}
+    }
+  }catch(e){}
+  // --- la prop firm (chiave con il prefisso mt5:)
+  try{
+    const d=_fblPropConti()||{};
+    const nuova='mt5:'+chiaveNuova;
+    const vecchie=Object.keys(d).filter(k=>k!==nuova&&k.indexOf('mt5:'+L+'@')===0);
+    if(vecchie.length&&!d[nuova]){
+      // si preferisce un record che dichiara qualcosa (challenge avviata) a uno vuoto
+      const scelta=vecchie.find(k=>d[k]&&(d[k].propChiesto||d[k].stato))||vecchie[0];
+      d[nuova]=JSON.parse(JSON.stringify(d[scelta]));
+      try{ localStorage.setItem(FBL_PROP_CONTI_KEY,JSON.stringify(d)); }catch(e){}
+      fatto.push('prop:'+scelta+'->'+nuova);
+    }
+  }catch(e){}
+  // --- reale o demo: se una delle vecchie dice REALE, vale reale (prudente)
+  try{
+    const vecchie=Object.keys(mt5ContoRealePerChiave||{}).filter(k=>k!==chiaveNuova&&k.indexOf(L+'@')===0);
+    if(vecchie.length&&!Object.prototype.hasOwnProperty.call(mt5ContoRealePerChiave,chiaveNuova)){
+      mt5ContoRealePerChiave[chiaveNuova]=vecchie.some(k=>mt5ContoRealePerChiave[k]===true)
+        ? true : mt5ContoRealePerChiave[vecchie[0]];
+      try{ mt5ContoRealeSalva(); }catch(e){}
+      fatto.push('reale:'+vecchie[0]+'->'+chiaveNuova);
+    }
+  }catch(e){}
+  if(fatto.length){ try{ console.log('[conto] chiave cambiata, archivi traslocati:',fatto.join(' | ')); }catch(e){} }
+  return {fatto};
+}
 function mt5AttivaConto(login,server,reale,tradeMode){
  const precedente=mt5ContoAttivo?mt5ContoAttivo.login:null;
  mt5ContoAttivo={login:String(login),server:server?String(server):'',reale:(reale===undefined?null:reale),tradeMode:(tradeMode===undefined?null:tradeMode)};
  // Ricorda per login@server se il conto e' reale. Solo se il ponte lo ha detto davvero.
  try{
    const k=mt5AccountKey(mt5ContoAttivo);
+   // Prima di scrivere qualunque cosa sotto la chiave nuova: se lo stesso login era archiviato
+   // sotto un'altra chiave (il nome del server che cambia), si porta dietro quello che c'era.
+   try{ fblMigraChiaviConto(mt5ContoAttivo.login,k); }catch(eM){}
    if(reale===true||reale===false){ mt5ContoRealePerChiave[k]=reale; mt5ContoRealeSalva(); }
  }catch(e){}
  const ora=mt5ContoAttivo.login;
@@ -57309,7 +57383,13 @@ async function connectToMt5Bridge(creds){
  try{
   const esito=await connectToMt5BridgeCorpo(creds);
   if(esito&&esito.ok&&esito.data&&esito.data.login!=null){
-   const r=mt5AttivaConto(esito.data.login,esito.data.server,esito.data.reale,esito.data.trade_mode);
+   // IL SERVER CHE VALE E' QUELLO CHE DICHIARA MT5 (12 novembre 2026, deciso dal proprietario).
+   // `esito.data.server` e' la stringa DIGITATA nel modulo di accesso; `server_mt5` e' quella del
+   // terminale, e la stessa che torna da /account - cioe' quella che imparano le finestre
+   // duplicate e gli altri dispositivi. Prendendo questa, lo stesso conto ha UNA chiave sola.
+   // Il ripiego sulla digitata serve a un ponte vecchio, che `server_mt5` non lo manda.
+   const _srv=(esito.data.server_mt5||esito.data.server);
+   const r=mt5AttivaConto(esito.data.login,_srv,esito.data.reale,esito.data.trade_mode);
    if(r&&r.parcheggiate)esito.notaConti=' '+r.parcheggiate+' posizione/i o ordine/i di altri conti messi da parte: tornano quando ricolleghi quel conto.';
     // Ripristina Prop Firm su conto MT5 gia' configurato (riconnesse conto noto).
     try{
@@ -63027,6 +63107,47 @@ async function fblApplicaAggiornamento(release, tagRemoto, btn){
     fblAggPannelloVia();
   }
 }
+// UNA VERSIONE E' PUBBLICATA SOLO QUANDO LA RELEASE E' FINITA DEL TUTTO (12 novembre 2026).
+//
+// SEGNALATO dal proprietario, con lo schermo davanti: «mi dice che l'ultima versione e' la 36 e
+// non c'e' nulla da aggiornare, mentre invece la nuova versione e' la 37». E la richiesta:
+// «facciamo in modo che il pulsante venga visualizzato solo quando la pubblicazione e' completa
+// del tutto, altrimenti ricorriamo sempre a questo problema».
+//
+// LA FINESTRA IN CUI SI ROMPE: la Release su GitHub non nasce finita. Prima viene creata (tag e
+// note), poi i file ci vengono caricati sopra, uno alla volta e da flussi diversi - l'APK ha il
+// suo. Il pannello controllava `assets.length>0`: bastava l'APK appena caricato per dichiarare
+// «c'e' una versione nuova», mentre il Setup che serve davvero non era ancora li'. Chi premeva
+// Aggiorna in quel minuto si sentiva rispondere «sei gia' all'ultima, non c'era niente da
+// installare», che e' il modo peggiore di sbagliare: sembra che la versione nuova non esista.
+//
+// Si guardano i file PER NOME, non il loro numero. L'APK resta volontariamente fuori dall'elenco:
+// e' costruito da un altro flusso, e se quello fallisse il pulsante non comparirebbe mai sul
+// computer per colpa di un pacchetto che al computer non serve.
+// SI CHIEDE SOLO IL FILE CHE L'AGGIORNAMENTO INSTALLA DAVVERO: il Setup.
+// `installer_build.zip` (il kit dei sorgenti) e l'APK restano fuori di proposito. Erano
+// nell'elenco nella prima stesura, e il collaudo ha fatto bene a bocciarla: una guardia che
+// chiede piu' del necessario non rimanda il pulsante di qualche minuto, rischia di non farlo
+// comparire MAI - e un aggiornamento che non arriva piu' e' molto peggio di uno che arriva
+// presto. Vale la stessa prudenza per ogni campo: si BOCCIA su un dato che dice chiaramente
+// «non pronto», non sulla sua assenza.
+const FBL_ASSET_PUBBLICAZIONE=['ForexBacktestLAB_Setup.exe'];
+function fblReleaseCompleta(d){
+  try{
+    if(!d)return false;
+    if(d.draft===true||d.prerelease===true)return false;
+    const a=Array.isArray(d.assets)?d.assets:[];
+    return FBL_ASSET_PUBBLICAZIONE.every(nome=>a.some(x=>{
+      if(!x||x.name!==nome)return false;
+      // `state` lo manda GitHub: 'uploaded' quando il file c'e' davvero, 'starter' mentre sale.
+      if(x.state!==undefined&&x.state!=='uploaded')return false;
+      // La dimensione si guarda SOLO se c'e': un file dichiarato di zero byte non si installa,
+      // ma una risposta che non dice la dimensione non e' una prova che il file manchi.
+      if(x.size!==undefined&&!(Number(x.size)>0))return false;
+      return true;
+    }));
+  }catch(e){ return false; }
+}
 async function fblControllaAggiornamento(forza){
   try{
     const r = await fetch('https://api.github.com/repos/Pietro-Santini/Forex-Backtest.LAB/releases/latest', {
@@ -63034,6 +63155,10 @@ async function fblControllaAggiornamento(forza){
     });
     if(!r.ok)return;
     const d = await r.json();
+    // Pubblicazione non finita: nessun pulsante, e soprattutto NON si annota il tag come «visto».
+    // Annotandolo, quando la pubblicazione finisce davvero il confronto direbbe «niente di nuovo»
+    // e l'aggiornamento non verrebbe piu' offerto affatto.
+    if(!fblReleaseCompleta(d))return;
     const tagRemoto = d.tag_name||'';
     // PRIMA la versione del PROGRAMMA installato (la legge il ponte dal registro), e solo se non
     // si conosce quella della copia web: vedere fblVersioneProgrammaInstallato(). Senza, un
@@ -63324,9 +63449,17 @@ async function fblAggiornaPannelloVersione(forza){
     return {installata,remota:'',nuova:false,errore:true};
   }
   rem.textContent=rel.tagRaw||rel.tag;
-  const assetCompleti = !!(rel.release && Array.isArray(rel.release.assets) && rel.release.assets.length>0);
+  // Lo stesso criterio del pulsante: i file che servono, per nome (vedi fblReleaseCompleta).
+  // Prima bastava `assets.length>0`, cioe' un allegato qualunque - anche solo l'APK.
+  const assetCompleti = fblReleaseCompleta(rel.release);
   const nuova = assetCompleti && (!installata || fblConfrontaVersioni(fblVersioneDaTag(rel.tag), installata) > 0);
-  if(stato)stato.textContent=nuova?"(c'e' una versione nuova)":"(sei all'ultima versione)";
+  // Se la Release c'e' ma non e' ancora completa lo si DICE, invece di far credere che non ci
+  // sia niente di nuovo: e' lo scarto fra «non c'e' nulla da aggiornare» e «sta arrivando».
+  const _inArrivo = !assetCompleti && !!(installata
+    && fblConfrontaVersioni(fblVersioneDaTag(rel.tag), installata) > 0);
+  if(stato)stato.textContent=_inArrivo
+    ? "(la versione "+fblVersioneDaTag(rel.tag)+" e' in pubblicazione: i file non sono ancora pronti, riprova fra qualche minuto)"
+    : (nuova?"(c'e' una versione nuova)":"(sei all'ultima versione)");
   if(note){
     if(rel.note){note.style.display='';note.textContent='Cosa cambia in questa versione:\n'+rel.note.slice(0,1200);}
     else{note.style.display='none';note.textContent='';}

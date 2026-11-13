@@ -21,6 +21,20 @@ import {apriApp} from './aiuti.mjs';
 const VEN = Date.UTC(2026, 10, 6, 20, 0, 0);
 
 const PREPARA = () => {
+  // L'OROLOGIO SE LO DICHIARA IL BANCO (13 novembre 2026).
+  //
+  // Questa scena racconta un venerdi' sera e il weekend dopo, e dice all'app che per questo
+  // asset il venerdi' e' aperto fino alle 22. Ma «aperto o chiuso ADESSO» l'app lo chiede
+  // all'orologio VERO: lanciando il collaudo di venerdi' mattina il mercato risulta aperto, il
+  // margine futuro torna e maxViewEnd() sale (misurato: tetto 235 invece di 60). Lo stesso
+  // banco passava la sera prima, di giovedi'. Non e' instabilita': e' una scena che non aveva
+  // dichiarato in che momento si svolge.
+  //
+  // Qui «adesso» e' la domenica sera dopo quelle candele: il mercato e' chiuso per la scena
+  // stessa, e il risultato non dipende piu' dal giorno in cui si lancia il collaudo.
+  if (!window.__NOW_VERO) window.__NOW_VERO = Date.now;
+  window.__NOW_OFF = Date.UTC(2026,10,8,23,0,0) - window.__NOW_VERO.call(Date);
+  Date.now = () => window.__NOW_VERO.call(Date) + window.__NOW_OFF;
   const VEN = Date.UTC(2026,10,6,20,0,0);
   rows = []; baseRows = []; let p = 4100;
   for (let i = 0; i < 120; i++) {                       // 120 candele APERTE (venerdi' sera)

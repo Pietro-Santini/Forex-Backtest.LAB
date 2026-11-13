@@ -843,3 +843,42 @@ strategia) e quali NON si devono copiare mai (il login, il server, la chiave, lo
 operazioni e il capitale, che sono del conto e non delle preferenze). Copiare qualcosa che
 identifica il conto sarebbe peggio che non avere la funzione.
 Stato: DA FARE (serve prima l'elenco di cosa si copia).
+
+---
+
+## 13 novembre 2026 — TRENTUNO BANCHI DIPENDONO DALL'ORA IN CUI SI LANCIA IL COLLAUDO
+
+**Misurato**, non supposto: `grep` dei banchi in `laboratorio/app/` che costruiscono candele a
+partire da `Date.now()` **e** toccano il mercato o il disegno (`fblMercatoFermoOra`,
+`liveSessionPhase*`, `maxViewEnd`, `getViewWindow`, `draw()`), **senza** fissare l'orologio:
+**31 file**. Fra questi: `mercato_chiuso`, `congelamento_solo_autosegui`, `replay_fluido`,
+`replay_posizioni`, `pendenti_fantasma`, `telefono_tocco_grafico`, `ordini_pendenti_grafico`.
+
+**Perche' conta, con i fatti del 12-13 novembre.** In una sola nottata sono andati rossi, uno
+alla volta e per questa ragione, quattro banchi diversi:
+- `posizioni_un_solo_conto` — verde sul PC, rosso su GitHub (la' e' notte in UTC);
+- `notizie_altri_dispositivi` — verde di giorno, rosso dopo le 22 di Roma;
+- `mercato_per_asset_dai_dati` — verde da solo, rosso nel collaudo intero (due letture distanti);
+- `zona_morta` — verde il giovedi' sera, rosso **cinquanta minuti dopo**, perche' nel frattempo
+  era passata la mezzanotte ed era diventato venerdi' (la sua scena dichiara «venerdi' aperto»,
+  e l'app chiede «aperto ADESSO?» all'orologio vero: il margine futuro e' tornato e il tetto e'
+  passato da 60 a 235).
+
+Ogni volta il sospetto naturale e' una regressione del codice, e ogni volta sono venti minuti di
+collaudo buttati piu' il tempo dell'indagine. Una volta su quattro **era** un difetto vero
+(il calendario del mercato spento con l'asset ignoto, curato nella 2.2.37): ed e' il motivo per
+cui questi banchi NON vanno rilassati, vanno resi deterministici.
+
+**La ricetta, gia' applicata ai quattro:**
+1. chi misura qualcosa che si DISEGNA dichiara la finestra con `followLatest = false` («questa
+   vista l'ha scelta l'utente»): cosi' l'app non congela e non allunga niente;
+2. chi deve mettere un oggetto dentro la vista non sceglie l'indice a mano: legge
+   `getViewWindow()` e prende una candela in mezzo;
+3. chi misura «aperto o chiuso adesso» fissa l'orologio della pagina (`__NOW_VERO`/`__NOW_OFF`,
+   come in `mercato_per_asset_dai_dati` e ora in `zona_morta`);
+4. due misure che devono descrivere lo STESSO istante si fanno in UNA sola chiamata alla pagina.
+
+**Non sono stati riscritti tutti e 31 in blocco, di proposito:** oggi sono verdi, e trentun
+modifiche alla cieca su banchi che nessuno sta guardando sono piu' rischiose del problema. Si
+curano quando diventano rossi — ma chi li trova rossi deve leggere PRIMA questa voce, perche' la
+prima domanda non e' «cosa ho rotto» ma «che ora era».

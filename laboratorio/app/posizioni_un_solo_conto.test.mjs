@@ -63,6 +63,14 @@ const IN_PAGINA = `(function(stato){
   // pretendeva 2 frecce e ne contava 0: sembrava un difetto dell'app, era il banco che metteva
   // la posizione dove il grafico non guarda. Adesso l'ora di apertura e il prezzo si prendono da
   // una candela IN MEZZO alla finestra vera, qualunque finestra l'app scelga.
+  // LA FINESTRA LA DICHIARA IL BANCO, NON L'OROLOGIO DI CHI LO LANCIA (12 novembre 2026).
+  // Verde sul PC, rosso su GitHub: la' il collaudo gira di notte in UTC, il mercato risulta
+  // chiuso e - con l'autosegui acceso - getViewWindow() congela il bordo destro all'ultima
+  // candela aperta (fblConfineAutosegui). La vista diventa un'altra, la posizione finisce fuori
+  // e nessuna freccia viene dipinta: il banco accusava il disegno, la causa era l'ora.
+  // followLatest=false significa «questa finestra l'ha scelta l'utente a mano», e in quel caso
+  // l'app non congela e non allunga niente - e' scritto dentro getViewWindow stessa.
+  followLatest = false;
   const _v=getViewWindow();
   const _m=Math.max(0,Math.min(C.length-1,Math.floor((_v.start+_v.end)/2)));
   const _tm=new Date(C[_m].date).getTime(), _pm=C[_m].close;
@@ -77,6 +85,18 @@ const IN_PAGINA = `(function(stato){
   const frecce=[]; const veraFreccia=window.drawTradeArrow;
   window.drawTradeArrow=function(ctx,px,py,dir,col){ frecce.push({px:px,py:py,dir:dir}); return veraFreccia.apply(this,arguments); };
   let errore=null; try{ draw(); }catch(e){ errore=String(e); }
+  const frecceConLAltro=frecce.length;
+  // E ADESSO LO STESSO DISEGNO SENZA la posizione dell'altro conto. Se il grafico la stava
+  // dipingendo, qui le frecce calano; se la ignorava davvero, il numero non cambia.
+  // Si confrontano DUE MISURE invece di pretendere un numero fisso: quante frecce costi una
+  // posizione dipende da cosa e' in vista (quella dell'entrata c'e' sempre, quella del prezzo
+  // di adesso solo se il suo punto cade dentro la finestra), e un numero scritto a mano in un
+  // banco scade — e' gia' successo il 12 novembre, con «1 posizione = 2 frecce» diventato falso.
+  frecce.length=0;
+  const soloMie=positions.filter(p=>p.id!=='altrui');
+  positions.length=0; soloMie.forEach(p=>positions.push(p));
+  try{ draw(); }catch(e){}
+  const frecceSenzaLAltro=frecce.length;
   window.drawTradeArrow=veraFreccia;
   // La tabella HTML dopo update().
   let erroreUpdate=null; try{ update(); }catch(e){ erroreUpdate=String(e); }
@@ -85,7 +105,8 @@ const IN_PAGINA = `(function(stato){
   return {stato:stato.nome, tag:currentMt5AccountTag(),
           sulGrafico:sulGrafico, quanteSulGrafico:sulGrafico.length,
           inTabella:inTabella, quanteInTabella:inTabella.length,
-          frecceDisegnate:frecce.length, errore:errore, erroreUpdate:erroreUpdate,
+          frecceDisegnate:frecceConLAltro, frecceSenzaLAltro:frecceSenzaLAltro,
+          errore:errore, erroreUpdate:erroreUpdate,
           righeTabella:righeTabella};
 })`;
 
@@ -111,16 +132,15 @@ test('due posizioni di due conti: a grafico compare SOLO quella del conto attivo
         ' a grafico, ' + r.frecceDisegnate + ' frecce disegnate da draw())');
       assert.deepEqual(r.sulGrafico, r.attese ? ['mia'] : [],
         r.stato + ': a grafico devono essere SOLO le posizioni del conto attivo');
-      // UNA freccia per posizione disegnata: quella dell'entrata (app.html, dentro il ciclo
-      // delle posizioni a grafico). Il banco pretendeva DUE frecce per posizione, e quella
-      // premessa era sbagliata: la seconda freccia che era stata contata e' quella
-      // dell'operazione ATTIVA del backtest (il collegamento entrata-prezzo di adesso), che non
-      // si disegna per ogni posizione MT5. Misurato il 12 novembre: 1 posizione a grafico = 1
-      // freccia. Il controllo resta utile com'era: se draw() dipingesse i due conti, le frecce
-      // diventerebbero 2 con una sola posizione attesa, e questa riga lo direbbe.
-      assert.equal(r.frecceDisegnate, r.quanteSulGrafico,
-        r.stato + ': draw() ha disegnato ' + r.frecceDisegnate + ' frecce per ' +
-        r.quanteSulGrafico + ' posizioni: le frecce devono essere una posizione sola');
+      // NIENTE NUMERI FISSI: si confronta il disegno CON la posizione dell'altro conto e quello
+      // SENZA. Se il grafico la stesse dipingendo, togliendola le frecce calerebbero. Quante
+      // frecce costi una posizione non e' una costante — quella dell'entrata c'e' sempre, quella
+      // del prezzo di adesso solo se cade dentro la finestra — e infatti il numero scritto a
+      // mano in questo banco («1 posizione = 2 frecce») era gia' diventato falso.
+      assert.equal(r.frecceDisegnate, r.frecceSenzaLAltro,
+        r.stato + ': togliendo la posizione dell altro conto le frecce passano da ' +
+        r.frecceDisegnate + ' a ' + r.frecceSenzaLAltro + ': vuol dire che draw() la stava ' +
+        'dipingendo');
     }
   } finally { await browser.close(); }
 });

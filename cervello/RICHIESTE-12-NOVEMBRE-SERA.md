@@ -297,3 +297,32 @@ Resta da MISURARE con il banco a due finestre descritto sopra, prima di toccare 
 funzione è attraversata da ogni sincronizzazione fra finestre, e una guardia in più va provata
 anche nel verso opposto (due finestre nella STESSA modalità e sullo STESSO conto devono continuare
 a sincronizzarsi come prima).
+
+---
+
+## 13. LA DOMANDA DELLA PROP FIRM: UNA VOLTA SOLA PER CONTO, E MAI MENTRE ARRIVA UN SEGNALE
+
+**Deciso dal proprietario il 12 novembre 2026, rispondendo a una mia domanda sul cambio conto
+automatico:** «il suono mi sta bene, ma il fatto che mi chieda se è una prop firm o meno non me lo
+deve chiedere ogni volta, solo la prima volta che mi collego a quel conto, fine. E quando arriva
+un segnale, certo che non deve apparire la domanda, assolutamente.»
+
+Tre regole, e la terza è quella che non c'era:
+
+1. **Il suono del collegamento resta** anche sul cambio conto automatico. Non va silenziato.
+2. **La domanda si fa una volta per conto, per sempre.** È ciò per cui esiste `propChiesto`. Che
+   ricompaia non è un difetto della domanda: è un difetto dell'IDENTITÀ del conto (la causa 2
+   della voce 3 — lo stesso conto con due chiavi diverse secondo come si è saputo il nome del
+   server) e della causa 1, già curata nella 2.2.37 (una violazione cancellava il record). Questa
+   decisione conferma che la cura dell'identità è la cura vera di questo fastidio.
+3. **Mentre arriva un segnale la domanda non compare, nemmeno la prima volta.** Oggi il cambio
+   conto automatico passa da `updateMt5ModeUI()` senza `silenzioso`, quindi fa il rito del «mi
+   sono appena collegato» — e la domanda è uno dei tre riti. È il momento peggiore: non c'è
+   nessuno davanti allo schermo, e il proprietario ha detto più volte che è lì che si fanno
+   scelte sbagliate in fretta.
+
+**ATTENZIONE, la trappola di questa cura:** saltando la domanda NON si deve segnare `propChiesto`.
+Se si segnasse, il conto resterebbe per sempre «già dichiarato» senza che nessuno abbia dichiarato
+niente — e un conto prop firm verrebbe trattato come un conto normale, che è la famiglia di guai
+della voce 1. La domanda va messa IN SOSPESO e fatta al primo momento in cui l'utente c'è davvero
+(la prossima volta che apre il pannello del conto o l'app).
