@@ -107,7 +107,23 @@ def _url_app():
     return base + "?v=" + _hash_app_html()
 
 
-def _ensure_backend():
+# MAI CHIAMARE QUESTA FUNZIONE CON UN'ATTESA LUNGA DAL THREAD DELLA FINESTRA (13 nov 2026).
+#
+# Segnalato dal proprietario: «dopo che finisce l'aggiornamento, quando la va a riaprire non
+# risponde l'applicazione e continua a dare il solito crash di sempre».
+#
+# MISURATO nel registro eventi di Windows, sul suo PC: NON e' un crash, e' un BLOCCO. Quattro
+# eventi AppHangB1 su ForexBacktestLABDesktop.exe in due minuti (13:35:08, 13:36:33, 13:36:49,
+# 13:37:07): «il programma non interagisce piu' con Windows ed e' stato chiuso». Nessuna
+# eccezione, nessuna memoria esaurita.
+#
+# La causa e' il ciclo qui sotto: fino a 60 time.sleep(1) di fila. Windows marca una finestra
+# come «non risponde» dopo pochi secondi che non pompa i messaggi, e all'avvio il ponte puo'
+# metterci venti secondi (la pulizia anti-orfano aspetta che le porte si liberino).
+#
+# Chi chiama dal thread della finestra passa un'attesa CORTA (o zero) e, se il ponte non c'e'
+# ancora, lo aspetta altrove: vedi _attendi_ponte_poi.
+def _ensure_backend(secondi_di_attesa=60):
     """Rende disponibile il ponte (il servizio dell'applicazione) e il suo indirizzo.
 
     Se la porta locale risponde, il servizio c'e' gia': non si tocca niente.
@@ -132,7 +148,7 @@ def _ensure_backend():
         # ponte stava per nascere. Il secondo giro adesso non aspetta piu' (vedi bridge.py), ma il
         # margine qui resta largo: arrendersi un secondo troppo presto costa un avvio fallito,
         # aspettare qualche secondo in piu' non costa niente a nessuno.
-        for _ in range(60):
+        for _ in range(max(0, int(secondi_di_attesa))):
             time.sleep(1)
             if _ponte_risponde():
                 return _url_app()
@@ -142,6 +158,192 @@ def _ensure_backend():
         if _ponte_qui(url):
             return url
     return None
+
+
+# Aspetta il ponte in un THREAD A PARTE e, quando risponde, chiama quando_pronto(url).
+# Serve a non bloccare mai il thread della finestra: la finestra si apre subito e continua a
+# rispondere a Windows mentre il servizio parte. E' la differenza fra «ci mette venti secondi»
+# e «non risponde, vuoi chiuderlo?».
+def _attendi_ponte_poi(quando_pronto, secondi=60):
+    import threading
+
+    def _lavora():
+        try:
+            url = _ensure_backend(secondi)
+        except Exception:
+            url = None
+        try:
+            quando_pronto(url)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_lavora, name="attesa-ponte", daemon=True)
+    t.start()
+    return t
+
+
+# Quello che si vede mentre il servizio parte: una finestra che risponde, non un vuoto.
+def _pagina_attesa():
+    return (
+        "<!doctype html><html lang='it'><head><meta charset='utf-8'>"
+        "<title>" + NOME_APP + "</title><style>"
+        "body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;"
+        "font-family:system-ui,Segoe UI,sans-serif;background:#0b0f14;color:#e8edf3;}"
+        "div{text-align:center;max-width:460px;line-height:1.5}"
+        "b{display:block;font-size:17px;margin-bottom:8px}"
+        "p{color:#93a1b3;font-size:13px;margin:6px 0}"
+        "</style></head><body><div>"
+        "<b>Sto avviando Forex Backtest LAB...</b>"
+        "<p>Il servizio dell'applicazione sta partendo. Puo' metterci una ventina di secondi "
+        "quando si riapre subito dopo un aggiornamento.</p>"
+        "<p>La finestra si apre da sola appena e' pronto.</p>"
+        "</div></body></html>"
+    )
+
+
+# UNA SOLA ISTANZA, E UN OCCHIO SULLA MEMORIA (13 novembre 2026).
+#
+# Misurato sul PC del proprietario, con lui che guardava:
+#   - aprendo l'app una seconda volta partiva un SECONDO programma intero (altra finestra, altro
+#     motore web, altri 7 processi). Nel suo Gestione attivita' si vedevano 34-36 processi e 1,7 GB
+#     per quella che lui credeva una sola applicazione.
+#   - l'istanza che lavorava in diretta cresceva di 90 MB al secondo, con un core al 100%, fino a
+#     15,8 GB: a quel punto restavano 0,6 GB liberi su 16 e si bloccava TUTTO IL COMPUTER, non solo
+#     l'app. Chiudendola la memoria tornava subito a 10,6 GB.
+#   - la crescita continua anche a finestra MINIMIZZATA (+347 MB in 10 s), quindi non e' il disegno
+#     a schermo: e' qualcosa che gira comunque.
+#
+# La causa di quella crescita non e' ancora trovata. Queste due cure non la curano: tolgono di
+# mezzo il modo in cui diventa fatale. Un programma che si apre una volta sola consuma una volta
+# sola; e un programma che si accorge di star mangiando la memoria puo' ricaricarsi da solo
+# invece di portarsi giu' il computer. Va detto, e sta scritto qui: e' un paracadute, non una cura.
+
+
+def _memoria_mia_mb():
+    """Quanta memoria PRIVATA sta usando questo processo. Senza librerie esterne: ctypes."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _PMC(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        pmc = _PMC()
+        pmc.cb = ctypes.sizeof(_PMC)
+        h = ctypes.windll.kernel32.GetCurrentProcess()
+        if not ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
+            return 0
+        return int(pmc.PagefileUsage / (1024 * 1024))
+    except Exception:
+        return 0
+
+
+# Oltre questa soglia la pagina si ricarica da sola. 2.500 MB e' molto piu' di quanto serva a
+# lavorare (misurato: con la sessione carica e tutto acceso, da fermo sta sotto i 200 MB) e molto
+# meno di quanto serva a mettere in ginocchio un computer da 16 GB.
+SOGLIA_RICARICA_MB = 2500
+
+
+def _sorveglia_memoria(finestra, url):
+    """Guarda ogni dieci secondi quanta memoria sta usando la finestra. Se sfonda la soglia,
+    ricarica la pagina: lo stato dell'utente e' salvato e torna da solo, mentre la memoria si
+    libera. Non chiude mai niente da sola - al massimo ricarica, come fa gia' l'aggiornamento."""
+    import threading
+
+    def _guarda():
+        ricaricata_al = 0.0
+        while True:
+            try:
+                time.sleep(10)
+                mb = _memoria_mia_mb()
+                if mb < SOGLIA_RICARICA_MB:
+                    continue
+                # Non si ricarica a raffica: almeno due minuti fra una e l'altra.
+                if (time.time() - ricaricata_al) < 120:
+                    continue
+                ricaricata_al = time.time()
+                print("[memoria] %d MB: oltre la soglia di %d, ricarico la pagina" % (mb, SOGLIA_RICARICA_MB))
+                try:
+                    if url:
+                        finestra.load_url(url)
+                except Exception:
+                    pass
+            except Exception:
+                # Un guardiano non puo' far cadere l'applicazione che sorveglia.
+                try:
+                    time.sleep(10)
+                except Exception:
+                    return
+
+    threading.Thread(target=_guarda, name="sorveglia-memoria", daemon=True).start()
+
+
+# Il nome di sistema resta in mano nostra per tutta la vita del processo (se lo si lascia
+# andare, Windows lo libera e la finestra dopo non vedrebbe piu' niente), e la RISPOSTA si
+# calcola UNA VOLTA SOLA.
+#
+# Il perche' l'ha trovato il banco di prova, non io: chiamando la funzione due volte nello stesso
+# processo, la seconda volta Windows risponde «esiste gia'» - ma quello che esiste e' il nome che
+# abbiamo creato noi un attimo prima. Il programma si sarebbe chiuso credendo di essere il
+# doppione di se stesso.
+_MUTEX_MIO = None
+_GIA_APERTA = None
+
+
+def _gia_in_esecuzione():
+    """Vero se un'altra finestra dell'applicazione e' gia' aperta.
+
+    Si usa un nome di sistema (mutex) invece di cercare i processi: e' l'unico modo che non
+    sbaglia quando l'eseguibile in modalita' onefile compare DUE volte nell'elenco (l'avviatore
+    e il programma vero), cosa che ha gia' tratto in inganno la pulizia anti-orfano del ponte.
+    """
+    global _MUTEX_MIO, _GIA_APERTA
+    if _GIA_APERTA is not None:
+        return _GIA_APERTA
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        # Il nome vive nella sessione dell'utente: due utenti diversi sullo stesso PC restano
+        # indipendenti.
+        h = kernel32.CreateMutexW(None, False, "Local\\ForexBacktestLAB_finestra")
+        if not h:
+            _GIA_APERTA = False
+            return False
+        _MUTEX_MIO = h
+        _GIA_APERTA = kernel32.GetLastError() == 183  # ERROR_ALREADY_EXISTS
+        return _GIA_APERTA
+    except Exception:
+        # Se il controllo non si puo' fare, si apre: meglio una finestra in piu' che nessuna.
+        _GIA_APERTA = False
+        return False
+
+
+def _porta_davanti_quella_aperta():
+    """Porta in primo piano la finestra gia' aperta, invece di aprirne una seconda."""
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        h = user32.FindWindowW(None, NOME_APP)
+        if not h:
+            return False
+        user32.ShowWindow(h, 9)       # SW_RESTORE: se era ridotta a icona torna su
+        user32.SetForegroundWindow(h)
+        return True
+    except Exception:
+        return False
 
 
 def _ponte_qui(url):
@@ -275,8 +477,22 @@ class _Api(object):
         self.finestra = None
 
     def riprova(self):
+        # Chiamata DALLA PAGINA, quindi dal thread della finestra: attesa corta. Se il ponte
+        # non c'e' ancora lo si continua ad aspettare in sottofondo, e la finestra resta viva.
         _pulisci_cache_webview()
-        url = _ensure_backend()
+        url = _ensure_backend(3)
+        if not url and self.finestra is not None:
+            finestra = self.finestra
+
+            def _poi(indirizzo):
+                try:
+                    if indirizzo:
+                        finestra.load_url(indirizzo)
+                except Exception:
+                    pass
+
+            _attendi_ponte_poi(_poi, 60)
+            return False
         if url and self.finestra is not None:
             try:
                 self.finestra.load_url(url)
@@ -299,7 +515,10 @@ class _Api(object):
         if slot < 2:
             slot = 2
         if not _is_port_open(PORTA_LOCALE):
-            url_b = _ensure_backend()
+            # IL PULSANTE «DUPLICA FINESTRA» NON PUO' CONGELARE L'APP (13 novembre 2026): qui si
+            # e' sul thread della finestra, e con l'attesa lunga premere Duplica mentre il ponte
+            # non risponde bloccava TUTTA l'applicazione per un minuto.
+            url_b = _ensure_backend(3)
             if not url_b:
                 return False
         url = "http://127.0.0.1:%d/app.html?pipSlot=%d" % (PORTA_LOCALE, slot)
@@ -340,12 +559,24 @@ def _pulisci_cache_webview():
 
 
 def main():
+    # SE E' GIA' APERTA, SI PORTA DAVANTI QUELLA (13 novembre 2026). Aprire l'app due volte
+    # significa due programmi interi: due finestre, due motori web, quattordici processi. Il
+    # proprietario lo vedeva come «il programma pesa tantissimo», e gli e' successo per sbaglio
+    # anche durante le prove di oggi.
+    if _gia_in_esecuzione():
+        _porta_davanti_quella_aperta()
+        return 0
     api = _Api()
     _patch_zoom_and_popups()
     debug = os.environ.get("DESKTOP_SHELL_DEBUG") == "1"
 
     _pulisci_cache_webview()
-    url = _ensure_backend()
+    # PRIMA LA FINESTRA, POI L'ATTESA (13 novembre 2026). Si prova UNA volta senza aspettare: se
+    # il ponte e' gia' vivo - il caso normale - si apre dritti sull'app, come prima. Se non
+    # risponde, la finestra si apre lo stesso con la pagina di attesa e il servizio viene
+    # aspettato in un thread, cosi' la finestra continua a rispondere a Windows invece di farsi
+    # dichiarare «non risponde» dopo pochi secondi.
+    url = _ensure_backend(0)
     if url:
         finestra = webview.create_window(
             NOME_APP,
@@ -355,6 +586,28 @@ def main():
             min_size=(960, 580),
             js_api=api,
         )
+    elif os.path.isfile(BRIDGE_EXE):
+        # Il ponte c'e' ma non risponde ancora: finestra subito, attesa in sottofondo.
+        finestra = webview.create_window(
+            NOME_APP,
+            html=_pagina_attesa(),
+            width=1280,
+            height=820,
+            min_size=(960, 580),
+            js_api=api,
+        )
+
+        def _quando_pronto(indirizzo, _f=None):
+            try:
+                if indirizzo:
+                    api.finestra.load_url(indirizzo)
+                else:
+                    api.finestra.load_html(_pagina_spiegazione(
+                        "il ponte non ha risposto sulla porta %d entro un minuto" % PORTA_LOCALE))
+            except Exception:
+                pass
+
+        _attendi_ponte_poi(_quando_pronto, 60)
     else:
         # ATTENZIONE: la spiegazione e' HTML, VA PASSATA con "html=", non come secondo
         # argomento. Il secondo argomento di create_window e' l'INDIRIZZO (url): passandogli
@@ -371,6 +624,11 @@ def main():
         )
     api.finestra = finestra
     _metti_il_logo(finestra)
+    # Il guardiano della memoria: vedi _sorveglia_memoria e la misura che l'ha resa necessaria.
+    try:
+        _sorveglia_memoria(finestra, url)
+    except Exception:
+        pass
 
     try:
         webview.start(

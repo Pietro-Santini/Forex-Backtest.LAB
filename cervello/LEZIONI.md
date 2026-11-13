@@ -1582,3 +1582,27 @@
   tick e quello di un ricalcolo da zero, che cadrebbe comunque, per qualunque motivo la cache
   venisse buttata. Un banco che misura solo attraverso una copia della logica non misura l'app:
   misura la copia.
+
+
+## Un numero che non cala e' la prova che il ciclo non si chiude (13 novembre 2026)
+
+Firebase segnava 42.000 scritture al giorno. Il giro di Notion ne mandava **al massimo 40** per
+volta, e 42.000 / 40 fa esattamente 1.050 giri: cioe' *ogni* giro ne mandava quaranta.
+
+Quella divisione e' la diagnosi. Se il lavoro andasse a buon fine, il giro dopo manderebbe zero -
+le impronte sarebbero aggiornate. Un numero che resta **al massimo** giro dopo giro non dice
+«c'e' molto da fare»: dice **che non si chiude mai**, e che si sta pagando lo stesso lavoro a ore.
+
+Vale per qualunque coda a blocchi: prima di guardare *cosa* manda, dividere il totale per la
+dimensione del blocco e chiedersi se quel numero di giri ha senso.
+
+## Una guardia «sono gia' aperto?» non puo' rispondere a se stessa (13 novembre 2026)
+
+La guardia dell'istanza unica creava un nome di sistema e chiedeva a Windows se esisteva gia'.
+Chiamata **due volte nello stesso processo**, la seconda volta trovava il nome creato da se stessa
+un attimo prima e rispondeva «si'»: il programma si chiudeva credendo di essere il doppione di se
+stesso. Nell'app vera `main()` girava una volta, quindi funzionava - e' il banco di prova, che la
+chiama due volte, ad averlo pescato.
+
+Ogni controllo che **lascia una traccia** per rispondere va calcolato una volta sola e messo da
+parte, altrimenti la seconda risposta e' sbagliata per costruzione.

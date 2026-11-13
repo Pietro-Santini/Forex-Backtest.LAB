@@ -13000,7 +13000,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.12';
+const FBL_VERSIONE='2.2.44';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -29028,6 +29028,8 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
    if(vero.entry!=null)vero.pips=pipsFromPrice(pos.side,vero.entry,price,pos.asset||currentAssetKey);
  }
  trades.push({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero});
+ // Notion: si manda SOLO questa, e solo adesso (vedi fblNotionDopoChiusura).
+ try{ fblNotionDopoChiusura(trades[trades.length-1]); }catch(e){}
  if(!silent)playOrderSound();
  if(pos.mt5Ticket!=null)scheduleMt5AccountHistoryRefresh(); // storico reale MT5 cambiato: statistiche del conto da rileggere
  positions=positions.filter(p=>p!==pos);
@@ -29780,7 +29782,7 @@ function activatePendingOrder(p){
  };
  // Pendente nato da un segnale: la posizione eredita sala, gruppo e target (strategia, Journal).
  ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
- positions.push(pos);
+ fblAggiungiPosizione(pos);
  active=pos;
  playOrderSound();
  refreshTradeRiskModel();
@@ -31027,7 +31029,7 @@ async function placeRealMt5Order(side,forz){
    if(forz&&forz.meta){ Object.assign(pos,forz.meta); mt5RicordaSegnale(ticket,forz.meta); }
    else fblAttribuisciSegnale(pos);   // aperta a mano: cerca il segnale a cui appartiene
    pos.rrSl=pos.sl;
-   positions.push(pos);
+   fblAggiungiPosizione(pos);
    // Richiesto esplicitamente: dopo l'apertura la posizione NON resta selezionata — niente
    // "active" che blocchi le caselle SL/TP sui valori appena usati. Restano subito libere e
    // vuote per comporre il PROSSIMO ordine, esattamente come prima di aprire questo. La
@@ -31118,7 +31120,7 @@ function openMarketTrade(side,forz){
  if(forz&&forz.meta)Object.assign(pos,forz.meta); // vedi nota in placeRealMt5Order
  else fblAttribuisciSegnale(pos);   // aperta a mano: cerca il segnale a cui appartiene
  pos.rrSl=pos.sl;
- positions.push(pos);
+ fblAggiungiPosizione(pos);
  // Richiesto esplicitamente (stesso comportamento già applicato alle posizioni reali MT5):
  // dopo l'apertura la posizione NON resta selezionata — niente "active" che blocchi le caselle
  // SL/TP sui valori appena usati, restano subito libere e vuote per il prossimo ordine. Non si
@@ -36050,6 +36052,31 @@ function notionTradePayload(t){
    mt5Login:t.mt5Login!=null?String(t.mt5Login):null, mt5Server:t.mt5Server||''
  };
 }
+// NOTION SI AGGIORNA QUI: quando una posizione si chiude, e solo con quella (13 nov 2026).
+// Si aspetta qualche secondo perche' subito dopo la chiusura l'operazione viene ancora
+// ritoccata (il prezzo vero dal broker, il motivo, la sala del segnale): mandarla prima
+// vorrebbe dire mandarla due volte, e ogni invio costa una lettura e una scrittura.
+// Le chiavi in attesa. Serve un insieme e non una chiave sola perche' il recupero dallo
+// storico (MT5 o Kraken) puo' trovare quattro operazioni chiuse nello stesso giro: con una
+// variabile sola si manderebbe l'ultima e si perderebbero le altre tre. Quattro chiavi, un
+// invio: resta vero che non si ripercorre niente, perche' qui dentro entra SOLO cio' che si
+// e' appena chiuso.
+let fblNotionDaMandare=new Set();
+let fblNotionAttesaChiusura=null;
+function fblNotionDopoChiusura(t){
+  try{
+    if(!t||t.id==null)return;
+    if(typeof PIP_SLOT!=='undefined'&&PIP_SLOT>0)return;   // lo fa la madre, una volta sola
+    fblNotionDaMandare.add(String(t.id));
+    try{ clearTimeout(fblNotionAttesaChiusura); }catch(e){}
+    fblNotionAttesaChiusura=setTimeout(()=>{
+      const chiavi=Array.from(fblNotionDaMandare);
+      fblNotionDaMandare=new Set();
+      if(!chiavi.length)return;
+      try{ notionSyncTick(false,chiavi); }catch(e){}
+    },4000);
+  }catch(e){}
+}
 function notionReady(){ return !!(notionState&&notionState.paid&&notionState.connected&&!notionState.preparing&&notionState.complete!==false); }
 function notionPendingCounts(){
  const h=notionLoadHashes(); let changed=0; const live=new Set();
@@ -36057,7 +36084,11 @@ function notionPendingCounts(){
  const removed=Object.keys(h).filter(k=>!live.has(k)).length;
  return {changed,removed};
 }
-async function notionSyncTick(force){
+// `soloId`: la chiave di UNA operazione. Quando c'e', si guarda solo quella e non si tocca
+// niente altro - niente passata su tutto lo storico, niente cancellazioni. E' la strada
+// normale, quella della chiusura di una posizione. Senza `soloId` si fa la passata
+// completa, che ora parte solo dal pulsante.
+async function notionSyncTick(force,soloId){
  if(notionSyncBusy||!notionReady())return;
   notionGiri++;
  if(typeof __sessionRestoreDone!=='undefined'&&!__sessionRestoreDone)return;
@@ -36068,10 +36099,20 @@ async function notionSyncTick(force){
    let idsFixed=false;
    (trades||[]).forEach(t=>{ if(t&&t.id==null){ t.id=Date.now()+Math.random(); idsFixed=true; } });
    if(idsFixed)scheduleSave();
-   const live=new Map((trades||[]).filter(t=>t&&t.id!=null).map(t=>[String(t.id),t]));
+   let live=new Map((trades||[]).filter(t=>t&&t.id!=null).map(t=>[String(t.id),t]));
+   // Una sola operazione: si restringe qui, PRIMA di qualunque conto, cosi' nessuna delle
+   // righe sotto puo' andare a guardare le altre mille.
+   if(soloId!=null){
+     const chiavi=Array.isArray(soloId)?soloId.map(String):[String(soloId)];
+     const scelte=[];
+     chiavi.forEach(k=>{ const t=live.get(k); if(t)scelte.push([k,t]); });
+     live=new Map(scelte);
+   }
    const upserts=[];
    for(const [k,t] of live){ const pl=notionTradePayload(t); if(hashes[k]!==JSON.stringify(pl))upserts.push(pl); if(upserts.length>=40)break; }
-   let deletes=Object.keys(hashes).filter(k=>!live.has(k));
+   // Con una sola operazione in mano non si cancella NIENTE: tutte le altre risulterebbero
+   // «sparite» solo perche' non le stiamo guardando, e finirebbero archiviate su Notion.
+   let deletes=(soloId!=null)?[]:Object.keys(hashes).filter(k=>!live.has(k));
    // Le cancellazioni CHIESTE dall'utente (eliminazione di un conto MT5) si separano dalle altre:
    // la rete di sicurezza qui sotto serve contro le sparizioni IMPREVISTE, non contro una scelta
    // deliberata - ed e' per questo che prima eliminare un conto non liberava mai lo slot su
@@ -36096,7 +36137,9 @@ async function notionSyncTick(force){
    const f=(res.failed||[]).length;
    notionLastSyncInfo=f?`⚠️ ${f} trade non inviati: ${(res.failed[0]&&res.failed[0].error)||''}`:`✅ Inviati ${(res.ok||[]).length} trade${(res.deleted||[]).length?`, rimossi ${(res.deleted||[]).length}`:''} • ${new Date().toLocaleTimeString('it-IT')}`;
    // Altri da inviare? si continua subito (coda a blocchi da 40).
-   if((res.ok||[]).length&&(upserts.length>=40||deletes.length>=40))setTimeout(()=>notionSyncTick(true),1500);
+   // La coda a blocchi da 40 vale solo per la passata completa: partendo da una chiusura non
+   // si deve mai scivolare in una passata su tutto lo storico - sarebbe la bolletta di nuovo.
+   if(soloId==null&&(res.ok||[]).length&&(upserts.length>=40||deletes.length>=40))setTimeout(()=>notionSyncTick(true),1500);
    else if(notionRilasci().length)setTimeout(()=>notionEseguiRilasci(),50);
  }catch(e){
    notionLastSyncInfo='⚠️ Invio a Notion non riuscito: '+((e&&e.message)||e);
@@ -36258,10 +36301,27 @@ $('notionDisconnectBtn')?.addEventListener('click',async()=>{
    const st0=await refreshNotionStatus();
    if(st0&&st0.connected&&st0.preparing)notionWaitPrepared(false); // pagina ricaricata durante la preparazione
  }
- // 30 s, non 15 (cura bolletta, 31 ottobre 2026): meta' del lavoro per una
-  // sincronizzazione che e' un backup verso Notion, non un dato in tempo reale.
-  setInterval(()=>notionSyncTick(false),30000);
- setTimeout(()=>notionSyncTick(false),5000);
+ // NIENTE PIU' TIMER: NOTION SI AGGIORNA QUANDO SI CHIUDE UNA POSIZIONE (13 novembre 2026).
+ //
+ // DECISO dal proprietario, guardando la bolletta: «Notion non puo' pesare cosi' tanto,
+ // deve aggiornarsi solo quando si chiude una singola posizione, non sempre, altrimenti e'
+ // normale che pesa. E si aggiorna solo con l'ultima, non puo' aggiornarsi di continuo e
+ // ripercorrere tutte le operazioni».
+ //
+ // MISURATO il 13 novembre sulla console Firebase: in un giorno 42.000 scritture (tetto
+ // gratuito 20.000) e 85.000 letture (tetto 50.000), con 7,01 euro di Cloud Functions su
+ // 8,50 di bolletta totale. L'app, per conto suo, aveva scritto 57 volte: tutto il resto
+ // passava di qui.
+ //
+ // PERCHE' COSTAVA TANTO, nei numeri: il giro partiva ogni 30 secondi e mandava fino a 40
+ // operazioni; la funzione sul server fa UNA lettura e UNA scrittura su Firestore per
+ // OGNI operazione (notionTokens/<uid>/synced/<key>). Sono 80 operazioni di database per
+ // giro, 4.800 all'ora. E 42.000 diviso 40 fa 1.050 giri: cioe' QUASI OGNI GIRO ne mandava
+ // 40. Se una sincronizzazione non va a buon fine, le stesse quaranta tornano al giro dopo,
+ // e al dopo ancora, per sempre - un ciclo che non si chiude mai e che si paga a ore.
+ //
+ // Adesso: nessun timer. Si manda SOLO l'operazione appena chiusa (vedi
+ // fblNotionDopoChiusura), e la passata completa resta sul pulsante, quando la chiedi tu.
 })();
 // ===================== MODALE "LIVELLI" (RICHIESTO ESPLICITAMENTE: non più una riga per TIPO,
 // ma una riga per ogni SINGOLO disegno — se ci sono due Fibonacci compaiono due righe distinte,
@@ -39993,7 +40053,7 @@ async function tgCapitalEseguiSegnale(voce,o){
    historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso(),
    tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
   pos.rrSl=pos.sl;
-  positions.push(pos);
+  fblAggiungiPosizione(pos);
   aperte++;
  }
  if(liveModeActive){ try{ refreshLiveStreamSubscriptions(); }catch(e){} }
@@ -46596,6 +46656,46 @@ let mt5OwnMarketOrderInFlight=0;
 // misterioso). Includendo qui anche i ticket ancora in pendingOrders[], fetchMt5Positions()
 // li considera già "tracciati" e lascia che sia SOLO fetchMt5Orders() a promuoverli — mai più
 // i due controlli in corsa fra loro sullo stesso ticket.
+// DUE POSIZIONI CON LO STESSO TICKET NON POSSONO ESISTERE (13 novembre 2026).
+//
+// SEGNALATO dal proprietario, con lo screenshot: «ho aperto solamente una posizione in sell, ma
+// in realta' me ne avrei due. E se vado a vedere sul terminale MT5, in effetti c'e' soltanto una
+// posizione. E' come se prendesse un doppione della stessa posizione, che in realta' non esiste.
+// Succede anche con le posizioni aperte in automatico dalle sale segnali: a volte le raddoppia o
+// le triplica».
+//
+// Un ticket MT5 identifica UNA posizione su quel conto: se ne compaiono due con lo stesso numero,
+// la seconda e' per forza un fantasma. E un fantasma non e' un problema estetico: entra nei conti
+// del margine, nei tetti dell'apertura automatica («quante ne ho gia' aperte»), nel P/L mostrato
+// e nelle statistiche.
+//
+// Le strade che aggiungono una posizione sono NOVE (ordine a mercato, pendente scattato, adozione
+// dal conto MT5, segnali, replay, sessioni in sottofondo...). Invece di cercare quale delle nove
+// si e' inceppata - e di rifarlo alla prossima - la porta diventa una sola, e li' si controlla.
+// Cosi' non si copre solo il difetto visto: si copre anche quello che non abbiamo ancora visto.
+function fblAggiungiPosizione(pos, dove){
+  const lista = Array.isArray(dove) ? dove : positions;
+  if(!pos) return null;
+  try{
+    if(pos.mt5Ticket!=null){
+      const t=String(pos.mt5Ticket);
+      const gia=lista.find(x=>x&&x.mt5Ticket!=null&&String(x.mt5Ticket)===t);
+      if(gia){
+        // Non si butta via quello che di nuovo c'e': la posizione gia' in elenco si AGGIORNA con
+        // i campi che arrivano adesso e che le mancano, perche' la seconda chiamata spesso porta
+        // un dato migliore della prima (l'orario vero del broker, lo stop, la sala del segnale).
+        ['entry','sl','tp','lots','marginUsed','startTime','start','openTF',
+         'tgSala','tgGruppo','tgTpIndice','tgSegnaleId','mt5Login','mt5Server'].forEach(k=>{
+          if(pos[k]!=null && gia[k]==null) gia[k]=pos[k];
+        });
+        try{ console.warn('[posizioni] doppione evitato: il ticket '+t+' era gia in elenco'); }catch(e){}
+        return gia;
+      }
+    }
+  }catch(e){}
+  lista.push(pos);
+  return pos;
+}
 function allTrackedMt5PositionTickets(){
  const set=new Set();
  ['backtest','live','backtest_propfirm','live_propfirm'].forEach(key=>{
@@ -46907,7 +47007,7 @@ async function fetchMt5Positions(){
            };
            mt5AllineaApertura(pos,rp);
            applyLocalSlTpDefaultsIfMissing(pos);
-           pairedSnap.positions.push(pos);
+           fblAggiungiPosizione(pos, pairedSnap.positions);
          });
          scheduleSave();
          $('status').textContent=`🖥️ ${toMove.length} posizione/i reale/i rilevata/e su MT5: aggiunta/e automaticamente sulla sessione Live (senza Prop Firm) — mai in Storico.`;
@@ -46939,7 +47039,7 @@ async function fetchMt5Positions(){
        mt5AllineaApertura(pos,rp);
        const hadRealSlTp=pos.sl!=null&&pos.tp!=null;
        applyLocalSlTpDefaultsIfMissing(pos);
-       positions.push(pos);
+       fblAggiungiPosizione(pos);
        // Suona solo se è DAVVERO nuova rispetto a quando ci siamo collegati: alla prima
        // fotografia (apertura app/ricarica/riconnessione) le posizioni già esistenti si adottano
        // in silenzio (vedi blocco SUONO ORDINI MT5).
@@ -47058,7 +47158,7 @@ async function fetchMt5Orders(){
          ['tgSala','tgGruppo','tgTpIndice','tgSegnaleId','tgProva'].forEach(k=>{ if(p[k]!=null)pos[k]=p[k]; });
          pos.rrSl=pos.sl;
          mt5AllineaApertura(pos,triggered);
-         positions.push(pos);
+         fblAggiungiPosizione(pos);
          // Suona solo se lo avevamo visto ancora in attesa mentre eravamo collegati: uno scatto
          // avvenuto ad app chiusa, ritrovato all'avvio, resta silenzioso.
          if(mt5SoundSeenPendingTickets.has(String(p.mt5Ticket)))playOrderSound();
@@ -51656,7 +51756,7 @@ function evaluateLiveBackgroundAsset(asset,price,prevPrice){
      lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:0,startTime:p.startTime||Date.now(),
      openTF:currentTF,marginUsed:requiredMargin,historical:!!p.historical
    };
-   positions.push(pos);
+   fblAggiungiPosizione(pos);
    playOrderSound();
    $('status').textContent=`Ordine pendente attivato in background: ${p.side} ${asset} a ${fmtPrice(p.entry)}.`;
  });
@@ -54467,7 +54567,7 @@ async function capitalOrdineManuale(side){
  if(pos.tp==null){ pos.tp=defaults.tp; pos.tpAuto=true; }
  fblAttribuisciSegnale(pos);
  pos.rrSl=pos.sl;
- positions.push(pos);
+ fblAggiungiPosizione(pos);
  active=null;
  clearDraftTradeLevelFields();
  if(liveModeActive){ try{ refreshLiveStreamSubscriptions(); }catch(e){} }
@@ -55046,6 +55146,7 @@ async function krakenRegistraChiusura(id,st){
   plUsd:Math.round(plUsd*100)/100,valutaConto:'USD',cambioEurUsd:cambio||null,plStimato:stimato||undefined,
   chiusureParziali:chiusure.length||undefined};
  trades.push(t);
+ try{ fblNotionDopoChiusura(t); }catch(e){}
  try{ journalStrategyOptionsDirty=true; }catch(e){}
  try{ scheduleSave(); }catch(e){}
  try{ update(); draw(); }catch(e){}
@@ -56974,6 +57075,7 @@ function closeTradeInSession(sessionKey,session,reason,price,pos){
  const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
  const account=balanceBefore+pl;
  trades.push({...pos,exit:price,result:reason,pl,pct,pips,account,closedAt:new Date().toISOString(),closeTF:pos.openTF||currentTF,mode:sessionKey});
+ try{ fblNotionDopoChiusura(trades[trades.length-1]); }catch(e){}
  session.positions=(session.positions||[]).filter(p=>p!==pos);
  if(session.active===pos)session.active=null;
  session.equity=session.equity||[];
@@ -57055,7 +57157,7 @@ async function pollBackgroundLiveSession(sessionKey){
        const pos={ id:Date.now()+Math.random(), asset, side:p.side, entry:applySpreadToEntry(p.side,p.entry,asset,sessionKey==='live_propfirm'), sl:p.sl, tp:p.tp,
          origin:'PENDING', kind:p.kind||'LIMIT', lots:p.lots, risk:0, dist:0, hasRiskModel:false,
          start:0, startTime:p.startTime||Date.now(), openTF:currentTF, marginUsed:requiredMargin };
-       session.positions=session.positions||[]; session.positions.push(pos);
+       session.positions=session.positions||[]; fblAggiungiPosizione(pos, session.positions);
      });
      changed=true;
    }

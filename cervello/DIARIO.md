@@ -6495,3 +6495,57 @@ da un orologio sfasato, e sono tre cure diverse. Adesso il motivo si scrive nel 
 al minuto** per non riempirlo (che e' il difetto da cui veniamo).
 
 Collaudo completo: 0 falliti.
+
+
+## 2026-11-13 — Claude — LA BOLLETTA FIREBASE ERA NOTION, E IL CONTO LO DIMOSTRA
+
+Il proprietario, con la bolletta davanti (8,50 euro: **7,01 di Cloud Functions**, 1,41 di
+Firestore) e la console che segnava **42.000 scritture** in un giorno (tetto gratuito 20.000) e
+**85.000 letture** (tetto 50.000): «notion non puo' pesare cosi' tanto, notion deve aggiornarsi
+solo quando si chiude una singola posizione non sempre, altrimenti e' normale che pesa» e «si
+aggiorna solo con l'ultima, non puo' aggiornarsi di continuo e ripercorrere tutte le operazioni».
+
+**L'app, quel giorno, aveva scritto 57 volte** (misurato dal contatore interno). Il resto passava
+tutto dalla sincronizzazione Notion.
+
+### IL CONTO CHE INCHIODA LA CAUSA
+
+- un giro ogni 30 secondi (`setInterval(()=>notionSyncTick(false),30000)`);
+- ogni giro mandava fino a **40** operazioni (`if(upserts.length>=40)break`);
+- la funzione sul server fa **una lettura e una scrittura su Firestore per OGNI operazione**
+  (`notionTokens/<uid>/synced/<key>`): 80 operazioni di database per giro, 4.800 all'ora;
+- **42.000 / 40 = 1.050 giri**: cioe' quasi *ogni* giro ne mandava quaranta.
+
+Quest'ultimo numero e' quello che conta. Se le impronte fossero aggiornate, il giro dopo manderebbe
+zero. Mandavano sempre quaranta perche' quando una sincronizzazione non va a buon fine le stesse
+quaranta tornano al giro dopo, e al dopo ancora: **un ciclo che non si chiude mai e si paga a ore**.
+
+### LA CURA
+
+Niente timer. Si manda **solo l'operazione appena chiusa**, dai tre punti dove una posizione si
+chiude davvero (`closeTrade`, `closeTradeInSession`, chiusura Kraken in diretta), con 4 secondi di
+attesa perche' subito dopo la chiusura l'operazione viene ancora ritoccata (prezzo vero dal broker,
+motivo, sala del segnale) e mandarla prima vorrebbe dire mandarla due volte. Le chiavi si accumulano
+in un insieme: se il recupero dallo storico trova quattro chiusure in un giro, partono tutte e
+quattro **in un solo invio**. La passata completa resta sul pulsante «Invia tutti», quando la chiede
+lui.
+
+**La trappola che la cura poteva creare**, e che e' chiusa da un test: guardando UNA operazione, le
+altre mille risulterebbero «sparite» e Notion le archivierebbe. Con `soloId` non si cancella niente.
+
+Banco: `laboratorio/app/notion_solo_alla_chiusura.test.mjs` (6 prove).
+
+### IL BANCO HA PESCATO UN MIO DIFETTO VERO, NON UN DETTAGLIO
+
+`_gia_in_esecuzione()` (la guardia dell'istanza unica, scritta ieri) chiamata **due volte nello
+stesso processo** vedeva il nome di sistema che avevamo creato noi un attimo prima e rispondeva
+«c'e' gia' un'altra finestra»: il programma si sarebbe chiuso credendo di essere il doppione di se
+stesso. Ora la risposta si calcola una volta sola e il nome resta in mano nostra per tutta la vita
+del processo. Lo ha trovato `pacchetto_app_desktop.test.mjs`, che chiama `main()` due volte.
+
+### RESTA DA FARE SUL SERVER (non in questo repo)
+
+`notion_template_kit/functions-notion/index.js` fa ancora una lettura e una scrittura per ogni
+operazione. Con una sola operazione per volta sono 2 operazioni invece di 80, quindi il problema
+e' risolto dal lato dell'app; ma raggruppare le scritture in un `batch` lo renderebbe definitivo.
+Richiede un rilascio delle Cloud Functions, che fa lui.

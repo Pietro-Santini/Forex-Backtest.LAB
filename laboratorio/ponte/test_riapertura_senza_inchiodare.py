@@ -182,5 +182,171 @@ def test_il_guscio_non_si_accontenta_della_porta_aperta():
         "_ensure_backend deve usare la verifica vera, non _is_port_open")
     assert "_is_port_open(PORTA_LOCALE)" not in dentro, (
         "_ensure_backend non deve piu' accontentarsi della porta aperta")
-    assert "range(60)" in dentro, (
-        "il margine d'attesa deve essere largo: la pulizia del ponte puo' prendersi 20 secondi")
+    assert "secondi_di_attesa=60" in sorgente, (
+        "il margine d'attesa predefinito deve restare largo: la pulizia del ponte puo' "
+        "prendersi 20 secondi. (Dal 13 novembre l'attesa e' un parametro, non piu' un 60 "
+        "scritto dentro il ciclo: chi chiama dal thread della finestra ne passa una corta.)")
+
+
+# ---------------------------------------------------------------------------------------------
+# 6. NESSUNA ATTESA LUNGA SUL THREAD DELLA FINESTRA
+#
+# SEGNALATO dal proprietario (13 novembre 2026): «dopo che finisce l'aggiornamento, quando la va
+# a riaprire non risponde l'applicazione e continua a dare il solito crash di sempre».
+#
+# MISURATO nel registro eventi di Windows, sul suo PC: non e' un crash, e' un BLOCCO. Quattro
+# eventi AppHangB1 su ForexBacktestLABDesktop.exe in due minuti - 13:35:08, 13:36:33, 13:36:49,
+# 13:37:07 - «il programma non interagisce piu' con Windows ed e' stato chiuso». Nessuna
+# eccezione e nessuna memoria esaurita: il thread della finestra smette di pompare i messaggi.
+#
+# La causa: _ensure_backend puo' dormire fino a 60 secondi di fila, e veniva chiamata anche dal
+# pulsante «Duplica finestra» e dal pulsante «Riprova», che girano sul thread della finestra.
+# ---------------------------------------------------------------------------------------------
+def _corpo_di(sorgente, nome):
+    """Il corpo di una funzione, dalla sua riga def fino alla prossima def allo stesso livello."""
+    pezzo = sorgente.split(nome)[1]
+    a_capo = chr(10)
+    for taglio in (a_capo + "    def ", a_capo + "def "):
+        if taglio in pezzo:
+            pezzo = pezzo.split(taglio, 1)[0]
+    return pezzo
+
+
+def test_il_pulsante_duplica_finestra_non_puo_congelare_l_app():
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    corpo = _corpo_di(sorgente, "def nuova_finestra(")
+    assert "_ensure_backend(" in corpo, "deve comunque provare a tirare su il ponte"
+    assert "_ensure_backend()" not in corpo, (
+        "qui si e' sul thread della finestra: con l'attesa predefinita (60 s) premere Duplica "
+        "mentre il ponte non risponde congela TUTTA l'applicazione, e Windows la dichiara "
+        "«non risponde» - e' l'AppHangB1 misurato sul PC del proprietario")
+
+
+def test_il_pulsante_riprova_non_puo_congelare_l_app():
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    corpo = _corpo_di(sorgente, "def riprova(")
+    assert "_ensure_backend()" not in corpo, (
+        "anche Riprova gira sul thread della finestra: attesa corta, e il resto in sottofondo")
+    assert "_attendi_ponte_poi(" in corpo, (
+        "se il ponte non c'e' ancora lo si continua ad aspettare altrove, altrimenti premere "
+        "Riprova una volta sola basterebbe a perdere l'avvio")
+
+
+def test_la_finestra_si_apre_PRIMA_di_aspettare_il_ponte():
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    corpo = _corpo_di(sorgente, "def main(")
+    assert "_ensure_backend(0)" in corpo, (
+        "all'avvio si prova UNA volta senza aspettare: se il ponte e' gia' vivo si apre dritti "
+        "sull'app, come prima")
+    assert "_attendi_ponte_poi(" in corpo, (
+        "e se non risponde la finestra si apre lo stesso, aspettando il servizio in un thread: "
+        "una finestra che risponde e dice «sto avviando» non e' un crash, una che non pompa i "
+        "messaggi per venti secondi lo diventa agli occhi di Windows")
+    assert "_pagina_attesa(" in corpo, "e in quell'attesa si deve vedere qualcosa, non un vuoto"
+
+
+def test_l_attesa_in_sottofondo_non_blocca_chi_la_chiama():
+    """La funzione deve tornare SUBITO: e' tutto il punto. Qui si misura il comportamento, non
+    il sorgente: si chiama con un'attesa finta che dura, e si guarda l'orologio."""
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    spazio = {"time": time, "threading": __import__("threading")}
+    # Si estrae la sola funzione e le si da' un _ensure_backend finto che dorme.
+    pezzo = "def _attendi_ponte_poi(" + sorgente.split("def _attendi_ponte_poi(", 1)[1]
+    pezzo = pezzo.split(chr(10) + "# Quello che si vede", 1)[0]
+    spazio["_ensure_backend"] = lambda secondi=60: (time.sleep(0.6) or "http://finto")
+    exec(pezzo, spazio)
+    risultati = []
+    inizio = time.time()
+    t = spazio["_attendi_ponte_poi"](lambda url: risultati.append(url), 1)
+    subito = time.time() - inizio
+    assert subito < 0.2, (
+        "chi chiama non deve restare fermo ad aspettare: ha aspettato %.2f s" % subito)
+    t.join(timeout=3)
+    assert risultati == ["http://finto"], (
+        "e quando il ponte risponde si deve essere richiamati: %r" % (risultati,))
+
+
+# ---------------------------------------------------------------------------------------------
+# 7. UNA SOLA ISTANZA, E UN OCCHIO SULLA MEMORIA
+#
+# MISURATO sul PC del proprietario il 13 novembre 2026, con lui che guardava:
+#   - l'istanza che lavorava in diretta cresceva di 90 MB al secondo con un core al 100%, fino a
+#     15,8 GB: restavano 0,6 GB liberi su 16 e si bloccava TUTTO IL COMPUTER. Chiudendola la
+#     memoria tornava subito a 10,6 GB.
+#   - la crescita continua anche a finestra MINIMIZZATA (+347 MB in 10 s): non e' il disegno.
+#   - aprendo l'app una seconda volta partiva un SECONDO programma intero (altra finestra, altro
+#     motore web, sette processi in piu').
+#
+# La causa della crescita NON e' ancora trovata. Queste due prove non la misurano: misurano il
+# paracadute, cioe' che il programma si accorga di star mangiando la memoria e che non si possa
+# aprire due volte.
+# ---------------------------------------------------------------------------------------------
+def test_il_guscio_si_apre_una_volta_sola():
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    corpo = _corpo_di(sorgente, "def main(")
+    assert "_gia_in_esecuzione()" in corpo, (
+        "main deve controllare se l'applicazione e' gia' aperta PRIMA di crearne un'altra: due "
+        "istanze sono due programmi interi, e il proprietario lo vedeva come «pesa tantissimo»")
+    assert "_porta_davanti_quella_aperta()" in corpo, (
+        "e invece di non fare niente deve portare davanti la finestra che c'e' gia'")
+    assert "CreateMutexW" in sorgente, (
+        "il controllo va fatto con un nome di sistema, non cercando i processi: in modalita' "
+        "onefile l'eseguibile compare DUE volte nell'elenco, e quell'inganno ha gia' confuso la "
+        "pulizia anti-orfano del ponte")
+
+
+def test_il_guardiano_della_memoria_c_e_e_ricarica_invece_di_chiudere():
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    assert "SOGLIA_RICARICA_MB" in sorgente, "serve una soglia dichiarata, non un numero sparso"
+    # Qui NON si usa _corpo_di: quella si ferma alla prima funzione annidata, e il guardiano
+    # vero (_guarda) e' proprio annidato dentro. Si prende fino alla prossima funzione di primo
+    # livello.
+    pezzo = sorgente.split("def _sorveglia_memoria(")[1]
+    corpo = pezzo.split(chr(10) + "def ", 1)[0]
+    assert "load_url" in corpo, (
+        "oltre la soglia si RICARICA la pagina: lo stato e' salvato e torna da solo")
+    for vietato in ("Stop-Process", "kill(", "os._exit", "sys.exit"):
+        assert vietato not in corpo, (
+            "il guardiano non chiude niente da solo (%s): al massimo ricarica, come fa gia' "
+            "l'aggiornamento" % vietato)
+    assert "daemon=True" in corpo, "e gira in un thread a parte, non sul thread della finestra"
+
+
+def test_la_soglia_e_larga_ma_non_fatale():
+    """La soglia deve stare fra «quanto serve per lavorare» e «quanto serve per uccidere il PC».
+    Misurato: da fermo con la sessione carica sta sotto i 200 MB; a 15.800 MB il computer si
+    blocca. Una soglia troppo bassa ricaricherebbe la pagina mentre si lavora."""
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    import re
+    m = re.search(r"SOGLIA_RICARICA_MB\s*=\s*(\d+)", sorgente)
+    assert m, "la soglia deve essere un numero leggibile"
+    soglia = int(m.group(1))
+    assert 1000 <= soglia <= 4000, (
+        "soglia %d MB: fuori dall'intervallo sensato. Sotto i 1000 si ricaricherebbe mentre si "
+        "lavora, sopra i 4000 si arriva comunque a mettere in ginocchio un PC da 8 GB" % soglia)
+
+
+def test_la_misura_della_memoria_non_dipende_da_librerie_esterne():
+    """Nel pacchetto non c'e' psutil: se il guardiano lo importasse, non partirebbe affatto - e
+    un guardiano che non parte e' peggio di nessun guardiano, perche' si crede di averlo."""
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    corpo = _corpo_di(sorgente, "def _memoria_mia_mb(")
+    assert "psutil" not in corpo, "niente psutil: non e' nel pacchetto"
+    assert "GetProcessMemoryInfo" in corpo, "si chiede a Windows, con ctypes"
+    assert "except Exception" in corpo, "e se non si riesce a misurare si risponde 0, non si cade"

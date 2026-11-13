@@ -41,6 +41,19 @@ riga "# Collaudo $(date -u '+%Y-%m-%d %H:%M') UTC — commit $(git rev-parse --s
 riga ""
 passo sintassi_app node laboratorio/strumenti/sintassi_app.mjs
 passo versione_sw bash -c 'grep -q "forex-backtest-lab-v[0-9][0-9.]*\"" sw.js'
+# LA VERSIONE DENTRO app.html DEVE COMBACIARE CON QUELLA DI sw.js (13 novembre 2026).
+# Per trentuno versioni `const FBL_VERSIONE` e' rimasta a 2.2.12 mentre sw.js saliva: il
+# pannello prestazioni e il pannello «che versione sto usando» - che esiste APPOSTA per
+# capire quale copia gira - stampavano un numero falso. Non ha rotto l'aggiornamento (il
+# ponte legge sw.js), ha rotto la DIAGNOSI: ci sono volute due ore per scoprire che il
+# proprietario era aggiornato e il numero no.
+passo versione_app_html bash -c '
+  SW=$(sed -n "s/.*forex-backtest-lab-v\([0-9.]*\)\".*//p" sw.js | head -1)
+  APP=$(sed -n "s/.*const FBL_VERSIONE=.\([0-9.]*\).;.*//p" app.html | head -1)
+  if [ "$SW" != "$APP" ]; then
+    echo "sw.js dice $SW ma app.html dice $APP: la versione stampata dai pannelli sarebbe falsa"
+    exit 1
+  fi'
 passo ponte_python "$PY" -m pytest -q laboratorio/ponte
 passo interprete_segnali bash -c 'cd installer_build/build/segnali_telegram && "$0" test_parser.py && "$0" test_formati_reali.py && "$0" test_syntra_audcad.py' "$PY"
 # I TEST DEL BROWSER GIRANO IN PARALLELO, quattro file per volta.
