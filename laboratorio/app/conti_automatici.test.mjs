@@ -202,6 +202,6 @@ test('la scelta dei conti si salva, si condivide e ha i suoi comandi a schermo',
   });
   // Il cambio di conto passa dalla stessa strada della tendina dei conti: connectToMt5Bridge e'
   // quello che mette da parte le posizioni degli altri conti (mt5AttivaConto).
-  assert.match(src, /async function tgAutoVaiAlConto\(acc\)\{[\s\S]{0,600}connectToMt5Bridge\(acc\)/,
-    'il passaggio di conto deve usare connectToMt5Bridge, non una scorciatoia');
+  assert.match(src, /async function tgAutoVaiAlConto\(acc\)\{[\s\S]{0,3000}connectToMt5Bridge\(acc\)/,
+    'il passaggio di conto deve usare connectToMt5Bridge, non una scorciatoia. La finestra di caratteri non e la regola: serve solo a non finire nella funzione dopo. Era 600 fino al 13 novembre, quando la funzione e cresciuta (il conto che ha rifiutato si salta, e se il tentativo fallisce si torna indietro) e il controllo e caduto senza che fosse cambiato niente di cio che protegge');
 });

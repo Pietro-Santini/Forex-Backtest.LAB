@@ -212,8 +212,15 @@ test('duplicata col warm-start MT5: login VUOTO, quindi passano tutte (anche sen
     assert.equal(r.dopoWarm.contoAttivo, false, 'ma NON eredita mt5ContoAttivo della madre');
     assert.equal(r.dopoWarm.accountInfo, false, 'ne mt5AccountInfo');
     assert.equal(r.dopoWarm.login, undefined, 'quindi il login attivo e VUOTO: ' + JSON.stringify(r.dopoWarm));
-    assert.equal(r.dopoWarm.passano, 2,
-      'col login vuoto passano TUTTE le operazioni col ticket, anche quella senza login: ' + JSON.stringify(r.dopoWarm));
+    // MISURA AGGIORNATA IL 13 NOVEMBRE: qui c'era 2, cioe la fotografia del difetto —
+    // «col login vuoto passano TUTTE le operazioni col ticket». Il proprietario ha chiesto il
+    // contrario: «se sono collegato con l account 1 non posso vedere le posizioni chiuse dell
+    // account 2 a grafico». Con il conto ignoto adesso non ne passa nessuna: e la stessa regola
+    // gia scelta per le posizioni aperte (v2.2.28) e per l apertura automatica — non lo so non
+    // puo valere fai pure. Il resto di questa misura non cambia: la duplicata eredita il flag
+    // MT5 e NON il conto, ed e proprio quello il motivo per cui il filtro deve chiudersi.
+    assert.equal(r.dopoWarm.passano, 0,
+      'col login vuoto non passa NESSUNA operazione reale: ' + JSON.stringify(r.dopoWarm));
   } finally { await browser.close(); }
 });
 

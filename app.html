@@ -6268,7 +6268,23 @@ function tradeBelongsToCurrentView(t){
      // bastava un login noto per farla sparire (misurato: senzaLogin=false) - ed era il
      // «sul conto giusto non vedo le operazioni». Resta esclusa invece quella di un ALTRO
      // conto, che il login ce l'ha e non combacia.
-     return t.mt5Ticket!=null&&(!login||t.mt5Login==null||String(t.mt5Login)===login);
+     // IL RIPIEGO «SE NON SO IL MIO CONTO, PASSANO TUTTE» NON VALE PIU' (13 novembre 2026).
+     //
+     // CHIESTO dal proprietario: «se sono collegato con l'account 1 non posso vedere le
+     // posizioni chiuse dell'account 2 a grafico, ed e' come funziona su qualsiasi piattaforma
+     // di trading». La v2.2.28 aveva curato solo le posizioni APERTE: i filtri sono due
+     // funzioni diverse, e questa - che decide lo STORICO a grafico - aveva ancora dentro
+     // `!login||`, cioe' «conto mio ignoto: passano tutte». Misurato il 12 novembre: con il
+     // conto ignoto finivano a grafico 5 operazioni di DUE conti e il P/L faceva 1230, cioe'
+     // la somma esatta dei due. E' la stessa regola scelta per le posizioni aperte: se non so
+     // su che conto sono, non disegno niente di reale - meglio un grafico spoglio per un
+     // istante che lo storico di un altro conto addosso al proprio.
+     //
+     // `t.mt5Login==null` RESTA, ed e' voluto: e' la cura del 10 novembre. Il ponte interroga
+     // un conto solo, quindi un'operazione reale senza login e' di quello collegato; toglierla
+     // rifarebbe comparire il «sul conto giusto non vedo le mie operazioni».
+     if(!login)return false;
+     return t.mt5Ticket!=null&&(t.mt5Login==null||String(t.mt5Login)===login);
    }
    return t.mt5Ticket==null;
  }
@@ -6294,7 +6310,14 @@ function statsTrades(){
    let conn=false; try{ conn=!!mt5Connected; }catch(e){}
    if(conn){
      const login=currentMt5AccountTag().mt5Login;
-     return list.filter(t=>t.mt5Ticket!=null&&(!login||String(t.mt5Login||'')===login));
+     // STESSA REGOLA DEL GRAFICO (13 novembre 2026): senza sapere su che conto si e', le
+     // operazioni reali non si sommano. Qui il `!login` non sporcava un disegno: sporcava il
+     // P/L e il CAPITALE. Misurato il 12 novembre con il conto ignoto: P/L totale 1230, cioe'
+     // la somma esatta di due conti diversi, e da li' passano closedPL() e il capitale
+     // mostrato. Un numero sbagliato sul capitale e' peggio di un numero assente, perche'
+     // nessuno lo mette in dubbio.
+     if(!login)return [];
+     return list.filter(t=>t.mt5Ticket!=null&&String(t.mt5Login||'')===login);
    }
    return list.filter(t=>t.mt5Ticket==null);
  }
@@ -9060,6 +9083,11 @@ let applyingRemoteTradingSync=false;
 function collectTradingSyncPayload(){
  return {
    type:'trading_sync', slot:PIP_SLOT, at:Date.now(),
+   // CHI PARLA DICE IN CHE MONDO VIVE (13 novembre 2026). Senza questo campo chi riceve non
+   // puo' sapere se il mittente stava guardando il mercato o lo storico, e una finestra in
+   // replay si prendeva addosso le posizioni di una in Live. `conto.vivo` non basta: dice solo
+   // Live si/no, mentre le modalita' sono quattro (backtest, live, e le due con la prop firm).
+   modo:(function(){ try{ return currentMode(); }catch(e){ return null; } })(),
    positions:Array.isArray(positions)?positions.slice():positions,
    pendingOrders:Array.isArray(pendingOrders)?pendingOrders.slice():pendingOrders,
    trades, equity, sessionByMode, statsBaselineByMode, isPropFirmMode, tradeStrategies,
@@ -30366,16 +30394,34 @@ function applyBreakevenToPosition(pos,t){
       +_ora2+"): uno stop li chiuderebbe subito la posizione.");
   return false;
  }
+ // LA FORBICE AVVISA, NON METTE IL VETO (13 novembre 2026).
+ //
+ // DECISO dal proprietario, guardando la barra di stato dire «Pareggio NON spostato: cadrebbe a
+ // 12.8 pip dal prezzo, dentro la forbice del cambio giornata»: «in realta' lo deve ignorare, e'
+ // un'azione che fa l'utente, quindi l'azione dell'utente e' prioritaria su quello che dice lui.
+ // Il BE non viene inserito SOLO se il prezzo non e' abbastanza lontano da poter impostare il BE
+ // con le rispettive impostazioni del setting sulla distanza in guadagno in pip».
+ //
+ // Resta quindi UN SOLO rifiuto, quello qui sopra: lo stop cadrebbe OLTRE il prezzo di adesso e
+ // chiuderebbe la posizione all'istante - non e' un parere, e' un ordine che si rifiuta da solo,
+ // ed e' esattamente il caso che il proprietario ha lasciato in piedi (il prezzo non ha ancora
+ // raggiunto la distanza in pip impostata). La forbice invece e' una PREVISIONE («li' verrebbe
+ // preso al primo allargamento»), e una previsione non puo' annullare una decisione presa da chi
+ // sta guardando il grafico: si scrive e si procede.
+ //
+ // Il motivo per cui la guardia esisteva (20 ottobre 2026: due SELL EURCHF con lo stop a un
+ // decimo di pip dall'entrata, portate li' dal pareggio) resta valido per le regole
+ // AUTOMATICHE, dove non c'e' nessuno a decidere: li' la guardia non si tocca
+ // (fblPareggioTroppoVicino, dentro le regole delle strategie).
  const spazio=fblStopTroppoVicino(pos,stopSl,fblPrezzoVeroPosizione(pos),scelta.margine>0?'normale':'forbice');
+ let _avvisoForbice='';
  if(spazio.vicino){
   const pip=(()=>{ try{ return pipSizeForAsset((pos&&pos.asset)||currentAssetKey); }catch(e){ return 0; } })();
   const inPip=(n)=>(pip>0?(Math.round(n/pip*10)/10+' pip'):fmtPrice(n));
-  pos.bePareggioRifiutatoIl=Date.now();
-  $('status').textContent='⚖️ Pareggio NON spostato: cadrebbe a '+inPip(spazio.distanza)
-  +' dal prezzo, '+(scelta.margine>0?'dentro lo spread normale':'dentro la forbice del cambio giornata')+' (~'+inPip(spazio.forbice)+'). '
-   +'Uno stop li\' verrebbe preso al primo allargamento anche senza che il mercato si muova: '
-   +'meglio lasciare quello che c\'e\' e riprovare quando il prezzo si e\' allontanato.';
-  return false;
+  _avvisoForbice=" ⚠️ Attenzione: lo stop cade a "+inPip(spazio.distanza)+" dal prezzo, "
+   +(scelta.margine>0?'dentro lo spread normale':'dentro la forbice del cambio giornata')
+   +" (~"+inPip(spazio.forbice)+"): puo' essere preso al primo allargamento anche senza che il "
+   +"mercato si muova. Spostato lo stesso, come hai chiesto.";
  }
  pos.sl=stopSl; pos.slAt=Date.now();   // pareggio: da adesso lo stop e' qui, non da prima
  pos.beMarkerSl=beSl; // ricordato per il Trade Journal: se scatta ancora qui, il risultato è "BE" e non un generico "SL"
@@ -30390,9 +30436,9 @@ function applyBreakevenToPosition(pos,t){
     ?`⚖️ Stop Loss spostato a pareggio + margine di chiusura (${fmtPrice(stopSl)}): il pareggio esatto e ${fmtPrice(beSl)}, ma il mercato sta chiudendo e la forbice del cambio giornata e ~${fblInPip((pos&&pos.asset)||currentAssetKey,scelta.margine)} — lo stop viene tenuto fuori dalla forbice e torna al pareggio esatto quando il mercato si stabilizza — sincronizzo sul conto MT5…`
     :`⚖️ Stop Loss spostato a pareggio + margine di chiusura (${fmtPrice(stopSl)}): il pareggio esatto e ${fmtPrice(beSl)}, il mercato sta chiudendo e la forbice e ~${fblInPip((pos&&pos.asset)||currentAssetKey,scelta.margine)}.`;
   }else{
- $('status').textContent=pos.mt5Ticket!=null
+ $('status').textContent=(pos.mt5Ticket!=null
    ?`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap) — sincronizzo sul conto MT5…`
-   :`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}).`;
+   :`⚖️ Stop Loss spostato a pareggio (${fmtPrice(beSl)}).`)+_avvisoForbice;
   }
  if(pos.mt5Ticket!=null)syncMt5PositionLevels(pos);
  return true;
@@ -30429,10 +30475,13 @@ if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo
  // uno stop regalato. Qui il prezzo di chiusura si legge dal preventivo vero: un acquisto si
  // chiude sul bid, una vendita sull'ask.
  const oraQui=Number(live.side==='BUY'?live.bid:live.ask);
+ // Anche qui la forbice AVVISA e non mette il veto: e' lo stesso pulsante premuto da un'altra
+ // tabella, e la decisione resta dell'utente (13 novembre 2026).
  const spazio=fblStopTroppoVicino(finta,stopSl,oraQui,scelta.margine>0?'normale':'forbice');
- if(spazio.vicino)return $('status').textContent='⚖️ Pareggio NON spostato su '+live.symbol+' (ticket '+live.ticket+'): '
-   +'cadrebbe dentro la forbice fra compra e vendi, e verrebbe preso al primo allargamento. '
-   +"Lo stop attuale resta dove sta: riprova quando il prezzo si è allontanato.";
+ const _avvisoForbice=spazio.vicino
+   ? " ⚠️ Attenzione: lo stop cade dentro la forbice fra compra e vendi e puo' essere preso al "
+     +"primo allargamento. Spostato lo stesso, come hai chiesto."
+   : '';
  if(!await appConfirm(`Spostare DAVVERO lo Stop Loss di ${live.side} ${live.symbol} (ticket ${live.ticket}) a ${scelta.margine>0?`pareggio + margine di chiusura (${fmtPrice(stopSl)}: il pareggio esatto e ${fmtPrice(beSl)}, il mercato sta chiudendo)`:`pareggio (${fmtPrice(beSl)}: profitto netto 0,00 con commissioni e swap)`} sul conto MT5 collegato?`))return;
  $('status').textContent=`Spostamento a pareggio in corso sul conto MT5 (ticket ${live.ticket})…`;
  const result=await fetchMt5WithTimeout('/order/modify',{
@@ -30440,9 +30489,9 @@ if(liveReplayActive){ $('status').textContent='In replay le operazioni sono solo
    body:JSON.stringify({ticket:live.ticket,sl:stopSl,tp:Number.isFinite(Number(live.tp))?Number(live.tp):0})
  });
  if(result.ok){
-   $('status').textContent=scelta.margine>0
+   $('status').textContent=(scelta.margine>0
     ?`✅ Stop Loss di ${live.symbol} (ticket ${live.ticket}) spostato a pareggio + margine di chiusura (${fmtPrice(stopSl)}) su MT5: il pareggio esatto e ${fmtPrice(beSl)}, ma il mercato sta chiudendo e la forbice del cambio giornata e ~${fblInPip(live.symbol,scelta.margine)}.`
-    :`✅ Stop Loss di ${live.symbol} (ticket ${live.ticket}) spostato a pareggio su MT5 (${fmtPrice(beSl)}).`;
+    :`✅ Stop Loss di ${live.symbol} (ticket ${live.ticket}) spostato a pareggio su MT5 (${fmtPrice(beSl)}).`)+_avvisoForbice;
    // BUG RISOLTO: questo pulsante "BE" (tabella dedicata "🖥️ Posizioni MT5", ticket non
    // necessariamente passato da un oggetto pos locale) parlava SOLO col bridge — la stessa
    // posizione, se già adottata anche in positions[] (tabella unificata "Posizioni aperte",
@@ -39240,12 +39289,67 @@ function tgAutoContiBersaglio(){
 // Passa DAVVERO a un altro conto MT5: la stessa strada della tendina dei conti (connectToMt5Bridge
 // registra il conto nuovo, mette da parte le posizioni degli altri e riprende le sue, vedi
 // mt5AttivaConto). Niente domande a schermo: qui non c'e' nessuno a rispondere.
+// I CONTI MT5 CHE HANNO GIA' DETTO DI NO, sulla strada dei segnali (13 novembre 2026).
+//
+// SEGNALATO dal proprietario: «alcune volte salta la connessione con il terminale MT5... appena
+// arrivato un nuovo segnale, bam, ha interrotto il collegamento», e poi la causa, che l'ha
+// trovata lui: «provava a collegarsi a un account che era disabilitato, quindi si piantava sia
+// l'applicazione nostra che il terminale MT5».
+//
+// PERCHE' STACCAVA: per provare un login nuovo il ponte CHIUDE la sessione MT5 che c'era. Se il
+// login viene rifiutato - conto chiuso, scaduto, non autorizzato - la vecchia connessione non
+// c'e' piu' e la nuova non c'e': si resta senza niente, e bisogna spegnere il terminale e
+// ricollegarsi a mano. E siccome nessuno se lo ricordava, il segnale dopo ci riprovava uguale.
+//
+// Tre cose, e nessuna chiede niente all'utente: un conto che ha gia' rifiutato si SALTA; se il
+// tentativo fallisce si TORNA al conto di prima; e il segnale non si butta, resta nel pannello
+// col motivo. L'elenco si svuota quando l'utente sceglie quel conto a mano: e' lui a dire
+// «riprova». Stessa forma gia' usata per il cambio conto manuale (fblContiCheNonRispondono),
+// che pero' ha chiavi di un altro tipo ('mt5'/'kraken') e non si poteva riusare com'era.
+const fblContiMt5CheHannoRifiutato = new Map();
+function fblContoMt5HaRifiutato(acc){
+  try{ return fblContiMt5CheHannoRifiutato.get(mt5AccountKey(acc))||null; }catch(e){ return null; }
+}
+function fblContoMt5Riprova(acc){
+  try{ fblContiMt5CheHannoRifiutato.delete(mt5AccountKey(acc)); }catch(e){}
+}
 async function tgAutoVaiAlConto(acc){
  if(!acc||acc.login==null)return {ok:false,message:'conto non indicato'};
  if(!acc.password)return {ok:false,message:'password non salvata per questo conto'};
+ const _rifiuto=fblContoMt5HaRifiutato(acc);
+ if(_rifiuto){
+  return {ok:false,message:"il conto "+acc.login+" aveva gia' rifiutato il collegamento ("
+    +(_rifiuto.motivo||"motivo non detto")+"): non ci riprovo a ogni segnale, perche' per tentare "
+    +"un accesso nuovo il ponte chiude quello che c'e'. Scegli quel conto a mano dalla barra dei "
+    +"conti per riprovare."};
+ }
+ // Dove siamo adesso: se il tentativo fallisce bisogna poterci tornare.
+ const _primaCreds=mt5CredsDraft, _primaConnesso=mt5Connected;
  try{
   const res=await connectToMt5Bridge(acc);
-  if(!(res&&res.ok))return {ok:false,message:(res&&res.message)||'connessione non riuscita'};
+  if(!(res&&res.ok)){
+   const _motivo=(res&&res.message)||'connessione non riuscita';
+   try{ fblContiMt5CheHannoRifiutato.set(mt5AccountKey(acc),{quando:Date.now(),motivo:_motivo}); }catch(eM){}
+   // SI TORNA DOV'ERAVAMO. Il ponte ha gia' chiuso la sessione di prima per tentare questa:
+   // restare a meta' strada vuol dire lasciare l'utente senza MT5 fino a quando non se ne
+   // accorge da solo - ed e' esattamente quello che gli e' successo.
+   let _tornato=false;
+   if(_primaConnesso&&_primaCreds&&_primaCreds.login!=null&&String(_primaCreds.login)!==String(acc.login)){
+    try{
+     const _back=await connectToMt5Bridge(_primaCreds);
+     if(_back&&_back.ok){
+      _tornato=true; mt5CredsDraft=_primaCreds; mt5Connected=true;
+      try{ mt5SelectedAccountKey=mt5AccountKey(_primaCreds); }catch(eK){}
+      try{ updateMt5ModeUI(true); }catch(eU){}
+      try{ renderMt5AccountSelect(); }catch(eR){}
+     }
+    }catch(eB){}
+   }
+   return {ok:false,message:_motivo+(_tornato
+     ?". Sono tornato sul conto "+_primaCreds.login+", che era collegato prima."
+     :(_primaConnesso?". ATTENZIONE: non sono riuscito a tornare sul conto di prima, MT5 e' da ricollegare.":""))};
+  }
+  try{ fblContoMt5Riprova(acc); }catch(eP){}
   mt5CredsDraft=acc;
   mt5Connected=true;
   mt5SelectedAccountKey=mt5AccountKey(acc);
@@ -45350,7 +45454,11 @@ async function runMt5HistoryCatchUp(){
    // schermo) — mai aggiungere due volte lo stesso ticket/posizione.
    const riallineati=mt5RiallineaTradeNoti(result.data);
    if(riallineati){ __journalLastRenderSig=null; update(); draw(); scheduleSave(); }
-   const alreadyKnown=new Set(trades.filter(t=>t.mt5Ticket!=null).map(t=>String(t.mt5Ticket)));
+   // «Gia' nota» vale solo per le operazioni DI QUESTO conto: con il solo ticket,
+   // un'operazione vera del conto collegato veniva scartata come doppione perche' un ALTRO
+   // conto aveva quel numero - e quella sparisce dallo storico senza che nessuno lo dica.
+   const alreadyKnown=new Set(trades.filter(t=>t.mt5Ticket!=null&&fblTradeDelContoCollegato(t))
+                                     .map(t=>String(t.mt5Ticket)));
    const missing=result.data.filter(d=>!alreadyKnown.has(String(d.positionId)));
    if(!missing.length)return;
    missing.sort((a,b)=>a.timeClose-b.timeClose); // in ordine cronologico, come se li scoprissimo uno alla volta
@@ -45380,13 +45488,56 @@ function mt5NettoDaStorico(d){
 // millisecondo, prezzi di esecuzione e profitto netto. Corregge anche quelli registrati prima di
 // questa versione con gli orari della candela a schermo. Il saldo ("Conto") non si tocca: per il
 // passato l\'app non conosce il saldo del conto in quel momento, e inventarlo sarebbe peggio.
+// UN TICKET NON IDENTIFICA UN'OPERAZIONE: SERVE ANCHE IL CONTO (13 novembre 2026).
+//
+// MISURATO il 12 novembre: i numeri di posizione MT5 sono unici DENTRO un broker, non fra
+// broker. Il ticket 101 esiste su MetaQuotes e su FTMO. Lo storico che arriva dal ponte e' SEMPRE
+// quello del conto collegato ADESSO (il ponte interroga un terminale solo), ma veniva abbinato
+// alle operazioni salvate guardando il solo ticket. Risultato misurato su una riga sola di
+// storico del conto 22222: l'operazione del conto 11111 riscritta - entry 1.1 -> 1.5,
+// exit 1.102 -> 1.4, **pl 10 -> -9999** - e poi salvata. Non e' un difetto di vista: riscrive
+// i dati sul disco, ed e' per questo che e' la prima della lista.
+//
+// La regola, e le tre risposte sono diverse fra loro:
+//   conto collegato ignoto           -> NON si tocca niente (non lo so != fai pure)
+//   operazione con un ALTRO login    -> non e' sua, si lascia stare
+//   operazione SENZA login           -> e' del conto collegato (il ponte ne interroga uno solo:
+//                                       e' la stessa regola gia' scelta il 10 novembre per il
+//                                       filtro del grafico) e le si SCRIVE ADDOSSO il login,
+//                                       cosi' domani non e' piu' ambigua per nessuno.
+function fblTradeDelContoCollegato(t){
+  try{
+    if(!t||t.mt5Ticket==null)return false;
+    const mio=(currentMt5AccountTag()||{}).mt5Login;
+    if(!mio)return false;                      // non so chi sono: non tocco niente
+    if(t.mt5Login==null)return true;           // senza conto: e' del collegato, per forza
+    return String(t.mt5Login)===String(mio);
+  }catch(e){ return false; }
+}
+// Scrive il conto addosso a un'operazione che non ce l'ha: si fa solo dopo aver stabilito che
+// e' del conto collegato, e serve a far sparire gradualmente le operazioni senza conto.
+function fblTimbraContoSuTrade(t){
+  try{
+    const tag=currentMt5AccountTag()||{};
+    if(!tag.mt5Login||!t||t.mt5Ticket==null)return false;
+    if(t.mt5Login!=null)return false;
+    t.mt5Login=String(tag.mt5Login);
+    if(tag.mt5Server!=null)t.mt5Server=String(tag.mt5Server);
+    return true;
+  }catch(e){ return false; }
+}
 function mt5RiallineaTradeNoti(deals){
- let n=0;
+ let n=0, cambiatoConto=false;
  const perTicket=new Map((deals||[]).map(d=>[String(d.positionId),d]));
  trades.forEach(t=>{
   if(!t||t.mt5Ticket==null)return;
+  // IL TICKET DA SOLO NON BASTA: deve essere un'operazione DI QUESTO conto (vedi
+  // fblTradeDelContoCollegato). Senza, lo storico di un conto riscriveva l'operazione
+  // omonima di un altro.
+  if(!fblTradeDelContoCollegato(t))return;
   const d=perTicket.get(String(t.mt5Ticket)); if(!d)return;
-  let cambiato=false;
+  if(fblTimbraContoSuTrade(t))cambiatoConto=true;
+  let cambiato=cambiatoConto; cambiatoConto=false;
   const set=(k,v)=>{ if(v!=null&&t[k]!==v){ t[k]=v; cambiato=true; } };
   const aperto=Number(d.timeOpen)*1000, chiuso=Number(d.timeClose)*1000;
   if(aperto>0){ set('startTime',aperto); set('openTF',1); }
@@ -53633,11 +53784,36 @@ function fblApplicaStatoTrading(msg){
     // conto, non sapendo il proprio, non poteva escludere quelle di un altro conto. Il conto
     // della madre e' quello su cui gira il ponte, quindi e' il nostro: si adotta qui, dove il
     // messaggio lo dichiara, senza rifare /connect.
-    if(!_mt5Locale.mt5Login && _mt5Remoto.login && typeof mt5AttivaConto==='function'){
+    // UNA FINESTRA IN STORICO/REPLAY NON ADOTTA IL CONTO MT5 DI NESSUNO (13 novembre 2026).
+    //
+    // SEGNALATO dal proprietario: «sulle pagine duplicate, se vado ad aprire una posizione in
+    // modalita' replay con backtest attivo non me la fa visualizzare e sparisce... nella pagina
+    // madre e nell'altra duplicata ho il conto MT5 collegato e non lo storico, quindi non so se
+    // va in conflitto per questo». Andava in conflitto esattamente per questo.
+    //
+    // LA CATENA, letta nel codice: la figlia in Storico non ha un conto MT5 - non le serve, sta
+    // guardando lo storico. Arriva il messaggio della madre, che e' in Live su MT5; la riga qui
+    // sotto ADOTTAVA quel conto; adottato il conto `_stessoContoMt5` diventava vero; e allora
+    // `positions`, `pendingOrders` e `trades` venivano sostituiti IN BLOCCO con quelli della
+    // madre. La posizione appena aperta nel backtest non c'era piu'.
+    //
+    // L'adozione resta per le figlie che sono in LIVE come la madre: li' e' giusta, ed e' la
+    // cura dell'11 novembre (una duplicata nasce senza conto e senza quello non filtrava niente).
+    const _ioInStorico=(function(){ try{ return !liveModeActive||!!liveReplayActive; }catch(e){ return false; } })();
+    if(!_ioInStorico && !_mt5Locale.mt5Login && _mt5Remoto.login && typeof mt5AttivaConto==='function'){
       try{ mt5AttivaConto(_mt5Remoto.login,_mt5Remoto.server); _mt5Locale=currentMt5AccountTag(); }catch(eL){}
     }
-    const _stessoContoMt5=(!_mt5Locale.mt5Login&&!_mt5Remoto.login)
-      ||(_mt5Locale.mt5Login&&_mt5Remoto.login&&_mt5Locale.mt5Login===_mt5Remoto.login&&(_mt5Locale.mt5Server||'')===(_mt5Remoto.server||''));
+    // MODALITA' DIVERSA = MONDI DIVERSI, e non si copia niente (13 novembre 2026).
+    // La guardia confrontava solo i CONTI. Ma una finestra in Storico/replay e una in Live non
+    // hanno le stesse posizioni nemmeno quando il conto combacia: una guarda il passato,
+    // l'altra il mercato di adesso. Il proprietario lo ha detto come regola: «la pagina in
+    // replay sara' associata al conto storico, le altre al conto con cui sono collegate, e non
+    // deve esserci contraddizione ne' confusione».
+    const _modoRemoto=(msg&&msg.modo!=null)?String(msg.modo):null;
+    const _modoMio=(function(){ try{ return currentMode(); }catch(e){ return null; } })();
+    const _stessaModalita=(_modoRemoto==null||_modoMio==null)?true:(_modoRemoto===_modoMio);
+    const _stessoContoMt5=_stessaModalita&&((!_mt5Locale.mt5Login&&!_mt5Remoto.login)
+      ||(_mt5Locale.mt5Login&&_mt5Remoto.login&&_mt5Locale.mt5Login===_mt5Remoto.login&&(_mt5Locale.mt5Server||'')===(_mt5Remoto.server||'')));
     // OGNI POSIZIONE CHE ARRIVA PORTA IL CONTO CHE L'HA MANDATA (11 novembre 2026). Prima si
     // copiava `msg.positions` com'e': una posizione arrivata senza login restava senza, e il
     // filtro la trattava come «mia» anche se veniva da un altro conto. L'informazione c'e' gia'
@@ -53653,7 +53829,11 @@ function fblApplicaStatoTrading(msg){
       pendingOrders=Array.isArray(msg.pendingOrders)?msg.pendingOrders.map(_timbra):pendingOrders;
     }
     if(_stessoContoMt5)trades=Array.isArray(msg.trades)?msg.trades.map(_timbra):trades;
-    equity=Array.isArray(msg.equity)?msg.equity:equity;
+    // ANCHE L'EQUITY STA SOTTO LA GUARDIA (13 novembre 2026). Era l'unica riga di stato fuori:
+    // misurato il 12 novembre, passando da una finestra all'altra l'equity veniva sostituita in
+    // blocco ([10000,10010] -> [50000,40000,30000]), cioe' la curva del capitale di un conto
+    // finiva addosso a un altro - e in Storico addosso a un backtest.
+    if(_stessoContoMt5)equity=Array.isArray(msg.equity)?msg.equity:equity;
     // I DISEGNI NON VIAGGIANO DENTRO LE SESSIONI (12 novembre 2026).
     // MISURATO: questa riga sostituiva in blocco le quattro sessioni, e dentro ogni sessione ci
     // sono anche `drawings` e `capital`. Una finestra duplicata appena nata, che di disegni non
@@ -53675,7 +53855,13 @@ function fblApplicaStatoTrading(msg){
       });
       sessionByMode=_nuove;
     }
-    if(msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
+    // LA LINEA DA CUI SI CONTA STA SOTTO LA GUARDIA (13 novembre 2026).
+    // `statsBaselineByMode` dice da quale operazione in poi si contano capitale e statistiche.
+    // Copiandola da una finestra di un altro conto (o di un'altra modalita') si sposta quella
+    // linea: misurato il 12 novembre, `live` passava da 0 a 7 e sette operazioni sparivano
+    // dalle statistiche SENZA che niente lo dicesse. E' il tipo di errore peggiore, perche' i
+    // numeri restano plausibili.
+    if(_stessoContoMt5&&msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
     if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
     if(msg.tradeStrategies)tradeStrategies=msg.tradeStrategies;
   }catch(e){ console.warn('trading_sync non applicato:',e); }

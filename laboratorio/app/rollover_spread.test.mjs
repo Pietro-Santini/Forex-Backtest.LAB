@@ -168,7 +168,7 @@ test('ma non si piazza se cadrebbe dentro la forbice: è il caso EURCHF', async 
   } finally { await browser.close(); }
 });
 
-test('il pulsante vero: sposta quando ci sta, e quando non ci sta NON tocca lo stop', async () => {
+test('il pulsante vero: sposta sempre quando lo chiedi tu, e dentro la forbice lo dice', async () => {
   // LA DIFFERENZA CHE CONTA: una funzione giusta che nessuno chiama non corregge niente. Qui si
   // chiama applyBreakevenToPosition, cioè esattamente ciò che fa il pulsante, e si guarda il
   // campo sl dopo. Il modo in cui questa correzione potrebbe fallire sul serio è proprio questo:
@@ -201,14 +201,28 @@ test('il pulsante vero: sposta quando ci sta, e quando non ci sta NON tocca lo s
         slLontana: lontana.sl, marcataLontana: lontana.beMarkerSl
       };
     }, PREPARA.toString());
-    // Il rifiuto: lo stop resta dov'era (1,10500), più lontano del pareggio.
-    assert.equal(r.slVicina, 1.10500,
-      'rifiutato il pareggio, lo stop di prima non si tocca: trovato ' + r.slVicina);
-    assert.equal(r.marcataVicina, true,
-      'e la posizione non va marcata come «a pareggio»: nel Journal direbbe il falso');
-    assert.match(r.statoVicina, /NON spostato/,
-      'e lo si deve DIRE, altrimenti si crede di essere protetti: ' + r.statoVicina);
-    assert.match(r.statoVicina, /forbice/, 'con il motivo: ' + r.statoVicina);
+    // CAMBIATO IL 13 NOVEMBRE, per decisione del proprietario. Qui si pretendeva che il
+    // pulsante RIFIUTASSE di spostare lo stop dentro la forbice. Lui ha guardato quel messaggio
+    // sullo schermo e ha detto: «in realta lo deve ignorare, e una azione che fa l utente,
+    // quindi l azione dell utente e prioritaria su quello che dice lui. Il BE non viene inserito
+    // solo se il prezzo non e abbastanza lontano da poter impostare il BE con le rispettive
+    // impostazioni del setting sulla distanza in guadagno in pip».
+    //
+    // Quindi il pulsante ADESSO sposta, e scrive l avviso accanto al risultato. Il motivo per
+    // cui la guardia esisteva (20 ottobre, due SELL EURCHF con lo stop a un decimo di pip
+    // dall entrata) resta valido dove nessuno puo decidere: le regole AUTOMATICHE delle
+    // strategie la usano ancora, e la prova qui sopra («ma non si piazza se cadrebbe dentro la
+    // forbice») continua a misurare la guardia in se.
+    assert.equal(r.slVicina, 1.10001,
+      'il pulsante sposta lo stop al pareggio anche dentro la forbice: trovato ' + r.slVicina);
+    assert.equal(r.marcataVicina, false,
+      'e adesso la posizione E marcata come a pareggio, perche a pareggio ci e andata davvero');
+    assert.match(r.statoVicina, /spostato a pareggio/,
+      'la barra di stato dice che e stato spostato: ' + r.statoVicina);
+    assert.match(r.statoVicina, /Attenzione/,
+      'ma l avviso della forbice resta scritto: ' + r.statoVicina);
+    assert.match(r.statoVicina, /come hai chiesto/,
+      'e si dice che si e proceduto su richiesta: ' + r.statoVicina);
     // Il caso normale continua a funzionare: cinquanta pip di spazio, pareggio esatto.
     assert.equal(r.slLontana, 1.10500, "con spazio, lo stop va sul pareggio esatto (l'entrata)");
     assert.equal(r.marcataLontana, 1.10500, 'e il Journal la riconosce come BE');
