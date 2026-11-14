@@ -103,17 +103,6 @@ REM numpy (limite noto di PyInstaller con numpy 2.x, che ha spostato quelle este
 REM numpy._core). Fix: --collect-all numpy esplicito su ENTRAMBI gli exe qui sotto (vedi anche il
 REM commento in build\requirements.txt sul perche' NON e' stato fissato un numpy<2: su Python 3.13
 REM richiederebbe di compilarlo da sorgente, serve un compilatore che qui non c'e').
-echo === 3a) Creo ForexBacktestLAB.exe con PyInstaller (puo' richiedere qualche minuto)... ===
-pyinstaller ^
-  --name ForexBacktestLAB ^
-  --onefile ^
-  --windowed ^
-  --icon build\icon.ico ^
-  --collect-all MetaTrader5 ^
-  --collect-all numpy ^
-  --collect-all uvicorn ^
-  --hidden-import accesso_condiviso ^
-  --collect-all pywinauto ^
 REM --collect-all VUOLE IL NOME DEL MODULO, NON QUELLO DEL PACCHETTO PyPI (14 novembre 2026).
 REM
 REM Qui c'era scritto "--collect-all google-auth". Il pacchetto su PyPI si chiama google-auth,
@@ -133,6 +122,23 @@ REM
 REM google e' un pacchetto "namespace" (non ha __init__.py): va nominato per esteso, e i due
 REM moduli che il ponte importa davvero si dichiarano a mano, perche' un import dentro un try
 REM PyInstaller non lo segue.
+REM ATTENZIONE: QUI SOTTO NON SI POSSONO METTERE RIGHE REM.
+REM Le righe del comando sono unite dal carattere ^ : cmd.exe le legge come UNA riga sola,
+REM quindi un REM in mezzo non e' un commento, diventa un argomento di PyInstaller.
+REM MISURATO il 14 novembre 2026, flusso Installer Windows rosso:
+REM   pyinstaller: error: unrecognized arguments: IL NOME DEL MODULO, NON QUELLO DEL...
+REM I commenti vanno sopra il comando, come questi.
+echo === 3a) Creo ForexBacktestLAB.exe con PyInstaller (puo' richiedere qualche minuto)... ===
+pyinstaller ^
+  --name ForexBacktestLAB ^
+  --onefile ^
+  --windowed ^
+  --icon build\icon.ico ^
+  --collect-all MetaTrader5 ^
+  --collect-all numpy ^
+  --collect-all uvicorn ^
+  --hidden-import accesso_condiviso ^
+  --collect-all pywinauto ^
   --collect-all google.auth ^
   --collect-all google.oauth2 ^
   --hidden-import google.oauth2.id_token ^

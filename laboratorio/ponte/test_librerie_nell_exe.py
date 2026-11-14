@@ -113,3 +113,30 @@ def test_se_PyInstaller_c_e_si_misura_davvero_cosa_raccoglie():
         "collect_all('google-auth') ha raccolto qualcosa: se PyInstaller ha imparato a tradurre "
         "i nomi dei pacchetti PyPI, questa prova va riscritta - ma il nome del modulo resta "
         "quello giusto da usare")
+
+def test_nessun_commento_REM_dentro_un_comando_continuato():
+    """UN REM FRA DUE RIGHE UNITE DA ^ NON E' UN COMMENTO: E' UN ARGOMENTO.
+
+    MISURATO il 14 novembre 2026, flusso Installer Windows rosso. Avevo spiegato la correzione
+    di google.auth con un blocco di commento messo in mezzo alle opzioni di PyInstaller. Ma le
+    righe del comando sono unite dal carattere ^ , e cmd.exe le legge come UNA riga sola: il
+    commento e' finito dentro il comando.
+
+        pyinstaller: error: unrecognized arguments: IL NOME DEL MODULO, NON QUELLO DEL PACCHETTO
+        '--collect-all' is not recognized as an internal or external command
+
+    La compilazione si e' fermata e il pacchetto non e' uscito. Il controllo e' meccanico: si
+    scorre il file e, finche' una riga finisce con ^ , la successiva fa parte dello stesso
+    comando e non puo' cominciare per REM.
+    """
+    righe = COSTRUTTORE.read_text(encoding="utf-8", errors="replace").splitlines()
+    dentro_un_comando = False
+    colpevoli = []
+    for numero, riga in enumerate(righe, 1):
+        if dentro_un_comando and riga.strip().upper().startswith("REM"):
+            colpevoli.append((numero, riga.strip()[:70]))
+        dentro_un_comando = riga.rstrip().endswith("^")
+    assert not colpevoli, (
+        "queste righe REM stanno DENTRO un comando continuato con ^ , quindi cmd.exe le passa "
+        "come argomenti e la compilazione si ferma. I commenti vanno sopra il comando: %s"
+        % colpevoli)
