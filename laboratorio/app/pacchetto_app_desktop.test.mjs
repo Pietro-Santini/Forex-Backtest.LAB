@@ -165,6 +165,24 @@ const PROVA = [
   '    "titolo": ((f2.kw.get("title") if f2 else None) or (f2.args[0] if f2 and f2.args else None)),',
   '}',
   '',
+  '',
+  '# 5) NIENTE CHE TOCCHI LA FINESTRA PUO PARTIRE PRIMA CHE LA FINESTRA ESISTA.',
+  '#    Caso avvio a freddo: il ponte non risponde ancora ma il suo eseguibile c e, quindi',
+  '#    si apre la pagina di attesa e il ponte si aspetta altrove. Si registra l ORDINE.',
+  'create.clear()',
+  'ordine = []',
+  'm._ensure_backend = lambda secondi=60: None',
+  'm.os.path.isfile = lambda p: True',
+  'm._attendi_ponte_poi = lambda quando, secondi=60: ordine.append("attesa-ponte")',
+  'm._sorveglia_memoria = lambda fin, u: ordine.append("guardiano")',
+  'def _start_finto(*a, **k):',
+  '    ordine.append("finestra-pronta")',
+  '    for f in a:',
+  '        if callable(f): f()',
+  'webview.start = _start_finto',
+  'm.main()',
+  'fatti["ordine_avvio"] = ordine',
+  '',
   'print(json.dumps(fatti))',
 ].join('\n');
 
@@ -214,6 +232,33 @@ test('la finestra dell\'applicazione si comporta da applicazione (eseguita davve
   assert.equal(fatti.con_ponte.apre_app, true, 'col ponte attivo la finestra non carica l\'applicazione');
   assert.equal(fatti.con_ponte.titolo, 'Forex Backtest LAB', 'titolo sbagliato nel caso normale');
   assert.equal(fatti.main_uscita, 0, 'main() deve chiudere con 0');
+
+  // NIENTE load_url PRIMA CHE LA FINESTRA ESISTA (14 novembre 2026).
+  //
+  // RIPRODOTTO sul PC del proprietario, a freddo, con un doppio clic vero: la finestra si apre
+  // in 4 secondi e risponde, al decimo smette di rispondere e resta un rettangolo nero per
+  // sempre. MISURATO in quel momento: CPU a ZERO per oltre 70 secondi, memoria ferma a 108 MB,
+  // mentre i processi del motore web erano vivi e attivi. Zero CPU vuol dire che non calcola:
+  // aspetta.
+  //
+  // La causa: il thread che aspetta il ponte, e il guardiano della memoria, partivano PRIMA di
+  // webview.start(). Quando il ponte si alza in fretta - qui in 4 secondi - load_url arriva
+  // mentre la finestra si sta ancora costruendo, e i due si aspettano a vicenda. Piu' il
+  // computer e' veloce, piu' il blocco e' probabile.
+  //
+  // Questa prova guarda l'ORDINE, che e' la cosa che conta: tutto cio' che tocca la finestra
+  // deve venire DOPO che la finestra e' pronta.
+  const ordine = fatti.ordine_avvio || [];
+  console.log('ordine avvio:', JSON.stringify(ordine));
+  assert.ok(ordine.includes('finestra-pronta'),
+    'webview.start non e stato chiamato: la prova non sta misurando niente');
+  assert.ok(ordine.includes('attesa-ponte'),
+    'col ponte non ancora pronto, qualcuno deve pur aspettarlo');
+  assert.ok(ordine.indexOf('finestra-pronta') < ordine.indexOf('attesa-ponte'),
+    'l attesa del ponte (che poi chiama load_url) deve partire DOPO che la finestra e pronta, ' +
+    'altrimenti si incastrano a vicenda e la finestra resta nera: ' + JSON.stringify(ordine));
+  assert.ok(ordine.indexOf('finestra-pronta') < ordine.indexOf('guardiano'),
+    'anche il guardiano della memoria chiama load_url: stessa regola. ' + JSON.stringify(ordine));
 });
 
 // ============================================================================

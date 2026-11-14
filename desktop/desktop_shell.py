@@ -621,6 +621,10 @@ def main():
     # risponde, la finestra si apre lo stesso con la pagina di attesa e il servizio viene
     # aspettato in un thread, cosi' la finestra continua a rispondere a Windows invece di farsi
     # dichiarare «non risponde» dopo pochi secondi.
+    # COSA FARE QUANDO LA FINESTRA SARA' PRONTA (14 novembre 2026). Vedi il blocco lungo piu'
+    # sotto, su webview.start: niente che tocchi la finestra puo' partire prima che pywebview
+    # l'abbia davvero creata.
+    da_fare_quando_pronta = None
     url = _ensure_backend(0)
     if url:
         finestra = webview.create_window(
@@ -652,7 +656,8 @@ def main():
             except Exception:
                 pass
 
-        _attendi_ponte_poi(_quando_pronto, 60)
+        # NON si parte adesso: si segna soltanto. Vedi webview.start, piu' sotto.
+        da_fare_quando_pronta = _quando_pronto
     else:
         # ATTENZIONE: la spiegazione e' HTML, VA PASSATA con "html=", non come secondo
         # argomento. Il secondo argomento di create_window e' l'INDIRIZZO (url): passandogli
@@ -669,14 +674,39 @@ def main():
         )
     api.finestra = finestra
     _metti_il_logo(finestra)
-    # Il guardiano della memoria: vedi _sorveglia_memoria e la misura che l'ha resa necessaria.
-    try:
-        _sorveglia_memoria(finestra, url)
-    except Exception:
-        pass
+
+    # NIENTE load_url PRIMA CHE LA FINESTRA ESISTA DAVVERO (14 novembre 2026).
+    #
+    # RIPRODOTTO sul PC del proprietario, a freddo, con un doppio clic vero: la finestra si apre
+    # in 4 secondi e risponde; al decimo secondo smette di rispondere e resta cosi' per sempre -
+    # un rettangolo nero. MISURATO in quel momento: CPU a ZERO per oltre 70 secondi, memoria
+    # ferma a 108 MB, mentre i processi del motore web sotto erano vivi e attivi (1 GB). Zero CPU
+    # vuol dire che non sta calcolando niente: sta aspettando.
+    #
+    # LA CAUSA. Qui sotto, prima, partivano DUE thread: quello che aspetta il ponte e poi chiama
+    # finestra.load_url(), e il guardiano della memoria, che fa lo stesso sopra una soglia.
+    # Partivano PRIMA di webview.start(), cioe' prima che pywebview avesse creato la finestra
+    # vera. Se il ponte risponde in fretta - ed e' il caso normale, qui si e' alzato in 4 secondi
+    # - load_url arriva MENTRE la finestra si sta costruendo: la chiamata aspetta il thread della
+    # finestra, che a sua volta sta aspettando di finire l'inizializzazione. Si bloccano a
+    # vicenda, con CPU a zero, ed e' esattamente il quadro misurato.
+    #
+    # Piu' il ponte e' veloce, piu' e' probabile il blocco: un difetto che peggiora sui computer
+    # buoni e sparisce quando si fanno le prove a mano, col ponte gia' acceso.
+    #
+    # pywebview una strada giusta ce l'ha, ed e' questa: la funzione passata a webview.start()
+    # viene eseguita DOPO che la finestra e' pronta. Da li' in poi load_url si puo' chiamare.
+    def _quando_la_finestra_e_pronta():
+        if da_fare_quando_pronta is not None:
+            _attendi_ponte_poi(da_fare_quando_pronta, 60)
+        try:
+            _sorveglia_memoria(finestra, url)
+        except Exception:
+            pass
 
     try:
         webview.start(
+            _quando_la_finestra_e_pronta,
             debug=debug,
             private_mode=False,
             storage_path=STORAGE_PATH,

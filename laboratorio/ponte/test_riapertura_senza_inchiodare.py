@@ -244,10 +244,29 @@ def test_la_finestra_si_apre_PRIMA_di_aspettare_il_ponte():
     assert "_ensure_backend(0)" in corpo, (
         "all'avvio si prova UNA volta senza aspettare: se il ponte e' gia' vivo si apre dritti "
         "sull'app, come prima")
-    assert "_attendi_ponte_poi(" in corpo, (
-        "e se non risponde la finestra si apre lo stesso, aspettando il servizio in un thread: "
-        "una finestra che risponde e dice «sto avviando» non e' un crash, una che non pompa i "
-        "messaggi per venti secondi lo diventa agli occhi di Windows")
+    # L'ATTESA DEL PONTE SI E' SPOSTATA, E LA PROVA CON LEI (14 novembre 2026).
+    #
+    # Fino a ieri _attendi_ponte_poi partiva dritto dentro main(), e questa riga lo cercava li'.
+    # Dal 14 novembre parte dalla funzione che pywebview esegue QUANDO LA FINESTRA E' PRONTA,
+    # perche' il thread chiama finestra.load_url() e, se arriva mentre la finestra si sta ancora
+    # costruendo, i due si aspettano a vicenda: misurato sul PC del proprietario, finestra nera
+    # e CPU a zero per oltre 70 secondi (vedi pacchetto_app_desktop.test.mjs, che misura
+    # l'ORDINE invece del testo).
+    #
+    # La cosa da garantire non cambia: la finestra si apre comunque per prima, e il ponte si
+    # aspetta altrove - mai con l'attesa lunga sul thread della finestra, che e' cio' che
+    # Windows scambia per «non risponde».
+    tutto = sorgente
+    assert "_attendi_ponte_poi(" in tutto, (
+        "se il ponte non risponde la finestra si apre lo stesso, aspettando il servizio in un "
+        "thread: una finestra che risponde e dice «sto avviando» non e' un crash, una che non "
+        "pompa i messaggi per venti secondi lo diventa agli occhi di Windows")
+    pronta = _corpo_di(tutto, "def _quando_la_finestra_e_pronta(")
+    assert "_attendi_ponte_poi(" in pronta, (
+        "l'attesa del ponte deve partire da dentro _quando_la_finestra_e_pronta: li' pywebview "
+        "ha gia' creato la finestra, e load_url non si incastra")
+    assert "_sorveglia_memoria(" in pronta, (
+        "anche il guardiano della memoria chiama load_url: stessa regola")
     assert "_pagina_attesa(" in corpo, "e in quell'attesa si deve vedere qualcosa, non un vuoto"
 
 
