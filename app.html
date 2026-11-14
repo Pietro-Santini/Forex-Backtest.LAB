@@ -12582,7 +12582,29 @@ function rowsSerie(){
   // e' un'altra serie anche se asset e timeframe non sono cambiati.
   let prima='';
   try{ prima=(baseRows&&baseRows.length)?String(baseRows[0].date||''):''; }catch(e){}
-  return rowsSerieGen+'|'+currentAssetKey+'|'+currentTF+'|'+prima;
+  // LA TARGA DESCRIVE I DATI, NON LA SCELTA NEL MENU' (14 novembre 2026).
+  //
+  // SEGNALATO dal proprietario con cinque schermate: «cambiando asset gli indicatori rimangono
+  // sull'asset precedente». Nelle sue immagini la tabella ICT diceva «Bearish (1.10)» su un
+  // grafico dell'oro a 3878, e «Bullish (3878.93)» su un grafico di EUR/USD a 1.10 - in tutte e
+  // due le direzioni. In una, la scala verticale andava da -5083 a +8094 per tenere dentro i
+  // disegni dei due strumenti insieme.
+  //
+  // PERCHE' NON SI CORREGGEVA DA SOLA, che e' la parte che conta: qui c'era `currentAssetKey`,
+  // cioe' l'asset SCELTO, che cambia subito mentre le candele arrivano dopo.
+  //   1) si passa all'oro: la targa cambia (asset nuovo) e l'indicatore si ricalcola sulle
+  //      candele di EUR/USD ancora in memoria, salvando lo stato sotto la targa dell'oro;
+  //   2) arrivano le candele dell'oro: asset uguale, timeframe uguale, e la data della prima
+  //      candela pure - due storici da un minuto partono dallo stesso istante - quindi LA TARGA
+  //      NON CAMBIA e l'indicatore non si ricalcola mai piu'.
+  // Da qui il difetto permanente invece che passeggero.
+  //
+  // `rowsAssetKey` dice a quale asset appartengono DAVVERO le candele in memoria. Con quello
+  // nella targa il passo 1 non cambia niente (i dati sono ancora EUR/USD) e il passo 2 si',
+  // che e' esattamente l'ordine giusto. Si ricade su currentAssetKey quando non c'e' - CSV,
+  // backtest - dove le candele non vengono da un caricamento per asset.
+  const diChi=rowsAssetKey||currentAssetKey;
+  return rowsSerieGen+'|'+diChi+'|'+currentTF+'|'+prima;
 }
 // L'INDICE FINO A CUI GLI INDICATORI CALCOLANO, e qui c'e' il buco che la targa da sola
 // lascerebbe aperto - peggiore della lentezza, perche' silenzioso.
@@ -13000,7 +13022,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.49';
+const FBL_VERSIONE='2.2.50';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -23858,7 +23880,24 @@ function draw(){
  // candele registra il proprio rettangolo in labelPlacements subito dopo averlo disegnato (vedi
  // sr_breaks/bsl_ssl_fvg/ict_reversal_setup più sotto), così i pallini, disegnati dopo, possono
  // vederlo e spostarsi di conseguenza (placeArDotCenterY() qui sotto).
- if(activeIndicators.length){
+ // GLI INDICATORI NON SI CALCOLANO SU CANDELE DI UN ALTRO ASSET (14 novembre 2026).
+ //
+ // SEGNALATO dal proprietario, con lo screenshot: «guarda cosa succede quando cambiamo
+ // asset, tra EUR/USD e XAU/USD: gli indicatori rimangono sull'asset precedente e le
+ // candele carica quelle dell'asset selezionato». Nella sua schermata il grafico e' su
+ // XAU/USD (prezzo 3879) ma la tabella ICT dice «Last Breaker Bearish (1.10)»: livelli di
+ // EUR/USD. La scala verticale andava da -1221 a 5328 per tenere dentro tutte e due.
+ //
+ // LA CAUSA, gia' scritta nel codice in due punti senza che nessuno la collegasse agli
+ // indicatori: cambiando asset `currentAssetKey` passa SUBITO al nuovo, mentre le candele
+ // arrivano dopo («currentAssetKey e' gia' il nuovo asset ma drawings e' ancora quello del
+ // vecchio», e lo stesso durante l'attesa della history). In quella finestra un ridisegno
+ // calcola gli indicatori sulle candele VECCHIE, e il risultato resta li' a schermo.
+ //
+ // `rowsAssetKey` dice a quale asset appartengono davvero le candele caricate: finche' non
+ // combacia, non si calcola e non si disegna niente. Meglio un grafico senza indicatori
+ // per un istante che indicatori di un altro strumento - quelli si leggono come veri.
+ if(activeIndicators.length && (!rowsAssetKey || !currentAssetKey || rowsAssetKey===currentAssetKey)){
    const xAbs=j=>pad.l+(j-start+.5)*cw/n;
    activeIndicators.forEach(ind=>{
      const def=INDICATOR_DEFS[ind.key]; if(!def)return;

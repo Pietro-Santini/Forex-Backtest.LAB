@@ -1692,3 +1692,30 @@ niente.
 
 Quando si ha una spiegazione compatibile, la domanda giusta non e' «torna?» ma **«quale fatto, se
 lo osservassi, la escluderebbe?»** - e poi andare a cercarlo.
+
+## Dentro l'oggetto js_api solo metodi (14 novembre 2026)
+
+pywebview cammina dentro l'oggetto che gli si passa come `js_api` per raccogliere le funzioni da
+offrire alla pagina, e scende negli attributi. Metterci dentro un oggetto grosso e pieno di
+riferimenti circolari - la finestra, il motore, una sessione - manda quella visita in ricorsione
+e **blocca la creazione della finestra**, perche' il thread principale la aspetta.
+
+Sintomo: finestra che non risponde, CPU a zero, disco fermo, intermittente, sia all'avvio sia a
+ogni ricarica di pagina. Tutto il resto vive fuori dall'oggetto esposto.
+
+## Quando una causa e' «plausibile» per la terza volta, cambia strumento (14 novembre 2026)
+
+In una sola giornata ho dato per trovata tre volte una causa sbagliata, ognuna compatibile con i
+fatti noti e due delle quali erano perfino difetti veri. Il tempo non l'hanno fatto perdere le
+correzioni - erano tutte giuste - ma il **continuare a cercare la causa leggendo il codice**.
+
+La regola: dopo la seconda ipotesi smentita, non formularne una terza. Prendere lo strumento che
+guarda dentro il processo mentre e' nello stato sbagliato (su Python: `py-spy dump --pid`, che
+non richiede di modificare o riavviare nulla). Dieci minuti contro mezza giornata.
+
+## Una prova che non aspetta abbastanza misura il rumore (14 novembre 2026)
+
+Contare «bloccata» al primo campione in cui una finestra non risponde da' numeri falsi: durante
+il caricamento e' normale che non risponda. Il criterio giusto e' **se si riprende**: campionare
+per un minuto e guardare la fine. Con il criterio frettoloso uscivano 2 blocchi su 6; con quello
+giusto 3 su 5, e il risultato era netto - o sempre viva o sempre bloccata, mai a meta'.

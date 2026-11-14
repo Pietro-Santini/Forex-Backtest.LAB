@@ -6719,3 +6719,73 @@ Due volte su tre ho dato la causa per trovata quando avevo solo una spiegazione 
 passo che ha chiuso la questione non e' stato un ragionamento piu' fine: e' stato un fatto nuovo
 (il blocco su una semplice ricarica) che ha reso impossibili le altre spiegazioni. Quando una
 causa e' «plausibile», serve il fatto che escluda le altre - non un'altra lettura del codice.
+
+## 2026-11-14, pomeriggio — Claude — LA CAUSA VERA DEL BLOCCO, E TRE MIE SBAGLIATE PRIMA
+
+### LA CAUSA
+
+Letta con py-spy sulla pila di chiamate di un processo BLOCCATO sul PC del proprietario. Non
+dedotta, non ipotizzata: letta.
+
+    Thread 25468 (idle): "MainThread"
+        create_window (winforms.py:834)
+        start (__init__.py:303)
+        main (desktop_shell.py:708)
+    Thread 25984 (idle): "Thread-2 (generate_js_object)"
+        inject_pywebview.<locals>.get_functions (util.py:196)
+        get_functions (util.py:206)      <- ricorsione
+        get_functions (util.py:206)
+        get_functions (util.py:206)
+        generate_func (util.py:214)
+        generate_js_object (util.py:231)
+
+Per far chiamare i nostri metodi dalla pagina, pywebview CAMMINA DENTRO l'oggetto js_api e ne
+raccoglie le funzioni, scendendo negli attributi. `api.finestra = finestra` gli metteva dentro la
+finestra stessa: da li' si entra in tutto l'albero di pywebview - la finestra tiene il motore, il
+motore tiene la finestra - e la camminata non finisce. Il thread principale resta fermo in
+`create_window` ad aspettarla.
+
+**La riga incriminata era vecchia e non c'entrava con niente di quello che si stava toccando.**
+
+### PERCHE' COMBACIA CON TUTTO
+
+- succede all'avvio E su una semplice ricarica della pagina: quella camminata si rifa' a OGNI
+  caricamento;
+- e' intermittente (misurato oggi: da 1 su 2 fino a 4 su 4 su avvii a freddo ripetuti) perche'
+  dipende da come va la visita dell'albero;
+- la CPU resta a zero e il disco fermo perche' nessuno dei due thread calcola: si aspettano.
+
+### CURA
+
+La finestra vive in una variabile del modulo (`_FINESTRA`), non dentro js_api. L'oggetto esposto
+alla pagina contiene SOLO metodi. Banco: la regola e' letta sull'albero sintattico - niente
+attributi dentro `_Api`, e nessuno che gliene appenda da fuori.
+
+### IL CONTO ONESTO: TRE CAUSE DATE PER TROVATE, TRE SBAGLIATE
+
+1. **«E' il mio modo di lanciarla»** (installazione silenziosa con l'output catturato). Plausibile:
+   un tubo che nessuno svuota blocca davvero una print. Sbagliata: riaperta con un doppio clic
+   vero si bloccava lo stesso.
+2. **«Sono i thread che partono prima di webview.start»** (roba mia della 2.2.44). Plausibile e
+   perfino vera come difetto. Sbagliata come causa: i numeri la escludevano gia' (il guardiano
+   non poteva essere scattato, 125 MB contro soglia 2.500; l'attesa del ponte non era in uso,
+   porta 8000 gia' aperta) e infatti dopo la correzione il blocco e' rimasto.
+3. **«E' il logo iniettato con evaluate_js»**. Plausibile, nel punto giusto del tempo (il
+   caricamento della pagina), e per di piu' l'iniezione era davvero inutile. Sbagliata: dopo
+   averla tolta, 3 blocchi su 5 avvii.
+
+Tutte e tre le correzioni sono giuste e restano - il contatore della memoria, l'ordine di avvio,
+il logo che non serviva, e il ponte che rifiutava l'installazione - ma nessuna era QUESTO difetto.
+
+### COSA HA CHIUSO LA QUESTIONE
+
+Non ragionare meglio: **smettere di ragionare e andare a leggere dove il processo era fermo**.
+Dieci minuti con py-spy contro mezza giornata di ipotesi compatibili.
+
+### NOTA SULLA MISURA, CHE MI HA QUASI INGANNATO UNA QUARTA VOLTA
+
+Il primo giro di prove contava «bloccata» al primo campione in cui la finestra non rispondeva.
+Ma una finestra che non risponde mentre carica e' normale: il criterio giusto e' **se si
+riprende**. Con il criterio sbagliato uscivano 2 blocchi su 6; con quello giusto (60 secondi di
+campioni, e si guarda la fine) uscivano 3 su 5, e il quadro era molto piu' netto - o tutti `o`
+o tutti `X`, mai una via di mezzo.
