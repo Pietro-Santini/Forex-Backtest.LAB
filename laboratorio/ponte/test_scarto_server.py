@@ -77,6 +77,11 @@ def _carica(nome, monkeypatch, mt5):
     # La memoria vive nel modulo (singleton di processo): resettare ad ogni test.
     monkeypatch.setattr(mod, "_last_good_server_offset", None)
     monkeypatch.setattr(mod, "_ultima_ricerca_scarto", 0.0)
+    # Dal 14 novembre un tick vale solo se e' PIU' NUOVO dell'ultimo visto (a mercato chiuso
+    # l'ultimo tick resta fermo e la sua eta' veniva scambiata per un fuso orario). Anche
+    # questa memoria e' del modulo, quindi va azzerata come le altre: senza, una prova
+    # eredita il tick di quella prima e il suo esito dipende dall'ordine.
+    monkeypatch.setattr(mod, "_epoch_massimo_visto", 0)
     return mod
 
 

@@ -68,6 +68,9 @@ def _pulisci(tmp_path, monkeypatch):
     monkeypatch.setattr(feed, "_FILE_SCARTO", str(tmp_path / "scarto_server.json"))
     monkeypatch.setattr(feed, "_last_good_server_offset", None)
     monkeypatch.setattr(feed, "_ultima_ricerca_scarto", 0.0)
+    # Dal 14 novembre un tick vale solo se e' PIU' NUOVO dell'ultimo visto: senza azzerare
+    # anche questo, l'esito di una prova dipenderebbe da quelle girate prima.
+    monkeypatch.setattr(feed, "_epoch_massimo_visto", 0)
     yield
     feed._last_good_server_offset = None
 
@@ -108,6 +111,9 @@ def test_un_tick_fresco_misura_lo_scarto_vero(monkeypatch):
     """Il caso normale, a mercato aperto: il tick ha l'ora del server e noi siamo adesso."""
     _fingi_server(monkeypatch)
     fresco = ADESSO + SCARTO_VERO        # stesso istante, ma con l'orologio del broker
+    # La prima osservazione SI ACCETTA: con un tick davvero fresco lo scarto deve essere noto
+    # subito, altrimenti alla prima installazione il grafico resta sfasato. (Per un momento
+    # l'avevo resa muta: test_scarto_server.py ha avuto ragione a protestare.)
     assert feed._scarto_fresco_da_epoch(fresco, ADESSO) == SCARTO_VERO
 
 
@@ -163,9 +169,16 @@ def test_un_tick_FRESCO_vince_sul_ricordo(monkeypatch):
     # L'orario deve essere fresco rispetto all'orologio VERO: _server_time_offset_seconds
     # legge time.time(), non un istante finto. (Prima questa prova era rossa per colpa mia:
     # usavo l'istante di quel sabato, che oggi e' vecchio di giorni e viene respinto.)
+    # A mercato APERTO i tick arrivano di continuo: il primo fa da riferimento, dal secondo in
+    # poi si misura. E' la regola del 14 novembre (un tick vale solo se AVANZA), e qui si
+    # riproduce quel flusso invece di una chiamata sola.
+    class TickPrimo:
+        time = time.time() + 10800 - 30
+
     class TickFresco:
         time = time.time() + 10800     # il broker e' passato a UTC+3
 
+    feed._server_time_offset_seconds(TickPrimo())
     assert feed._server_time_offset_seconds(TickFresco()) == 10800
 
 
@@ -188,3 +201,57 @@ def test_non_si_scrive_su_disco_a_ogni_candela(monkeypatch):
     for _ in range(50):
         feed._ricorda_scarto(SCARTO_VERO)
     assert os.path.getmtime(feed._FILE_SCARTO) == quando
+
+def test_un_tick_VECCHIO_DI_ORE_INTERE_non_e_un_fuso_orario(monkeypatch):
+    """IL BUCO DEL 14 NOVEMBRE, con i numeri veri.
+
+    MISURATO sul PC del proprietario, sabato pomeriggio a mercato chiuso: lo scarto era saltato
+    a -57600 (meno sedici ore) e tutte le candele erano tornate sbagliate.
+
+        adesso:            sab 14/11 16:53
+        grezzo:            -53.973 s  (-15,0 ore)   <- e' l'ETA' del tick di venerdi'
+        allineato a 30min: -54.000 s
+        residuo:                27 s                <- si respingeva solo sopra 300
+        eta' oltre 24h?    NO                       <- si respingeva solo sopra 86.400
+
+    Un tick vecchio di un numero INTERO di ore cade sulla griglia della mezz'ora esatta: succede
+    per forza dopo ogni chiusura, una volta all'ora, per le prime ventiquattro.
+    """
+    _fingi_server(monkeypatch)
+    adesso = 1794671580.0                 # sab 14/11 16:53
+    tick_di_venerdi = adesso - 53973      # l'ultimo tick vero prima della chiusura
+    # Respinta dalla guardia delle 14 ore: -15 ore non e' il fuso di nessun broker.
+    assert feed._scarto_fresco_da_epoch(tick_di_venerdi, adesso) is None
+    # E ripetendola - il tick non avanza, il mercato e' chiuso - non si misura comunque niente.
+    ottenuto = feed._scarto_fresco_da_epoch(tick_di_venerdi, adesso + 60)
+    assert ottenuto is None, (
+        "un tick fermo da quindici ore non e' un fuso orario: prima da qui usciva -54000 e le "
+        "candele finivano sedici ore avanti. Ottenuto: %s" % ottenuto)
+
+
+def test_nessun_broker_sta_oltre_le_quattordici_ore(monkeypatch):
+    """Il controllo c'era gia' sul valore RICORDATO ma non su quello MISURATO: l'asimmetria
+    lasciava entrare -15 e -16 ore. Nessun server MT5 sta fuori da UTC-12..+14."""
+    _fingi_server(monkeypatch)
+    adesso = 1794671580.0
+    feed._scarto_fresco_da_epoch(adesso - 100000, adesso)      # prima osservazione, muta
+    assert feed._scarto_fresco_da_epoch(adesso - 15 * 3600, adesso) is None, "15 ore: respinto"
+    assert feed._scarto_fresco_da_epoch(adesso + 20 * 3600, adesso) is None, "20 ore: respinto"
+
+
+def test_a_mercato_CHIUSO_non_si_misura_e_vince_il_ricordo(monkeypatch):
+    """Tutto insieme: il mercato e' fermo, il tick non avanza mai, e la risposta giusta e'
+    l'ultima misura buona salvata su disco - non un numero ricavato da un'eta'."""
+    _fingi_server(monkeypatch)
+    feed._ricorda_scarto(SCARTO_VERO)
+    feed._last_good_server_offset = None
+    adesso = 1794671580.0
+    fermo = adesso - 53973
+
+    class TickFermo:
+        time = fermo
+
+    monkeypatch.setattr(feed, "_scarto_da_un_simbolo_quiunque", lambda now: None)
+    for _ in range(3):                       # il mercato resta chiuso: si richiede piu' volte
+        assert feed._server_time_offset_seconds(TickFermo()) == SCARTO_VERO, (
+            "a mercato chiuso deve valere il 7200 ricordato, mai l'eta' del tick fermo")

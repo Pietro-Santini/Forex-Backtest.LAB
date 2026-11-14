@@ -204,6 +204,40 @@ _last_good_server_offset = None
 _ultima_ricerca_scarto = 0.0
 
 
+
+# UN TICK E' FRESCO SOLO SE AVANZA (14 novembre 2026).
+#
+# MISURATO sul PC del proprietario, di sabato pomeriggio a mercato chiuso: lo scarto e' saltato
+# a -57600 (meno sedici ore) e tutte le candele sono tornate sbagliate. Il conto che lo spiega:
+#
+#     adesso:            sab 14/11 16:53
+#     grezzo:            -53.973 s  (-15,0 ore)   <- e' l'ETA' del tick di venerdi', non un fuso
+#     allineato a 30min: -54.000 s
+#     residuo:                27 s                <- la guardia respingeva solo sopra 300
+#     eta' oltre 24h?    NO                       <- la guardia respingeva solo sopra 86.400
+#
+# IL BUCO: un tick vecchio di un numero INTERO di ore cade sulla griglia della mezz'ora esatta,
+# e la guardia lo scambia per un fuso orario. Succede per forza dopo ogni chiusura, una volta
+# all'ora, per le prime 24. L'eta' non si puo' dedurre dal timestamp: un tick di venerdi' alle
+# 22:54 e un orologio di broker spostato di 15 ore danno lo stesso identico numero.
+#
+# LE DUE CURE, tutte e due necessarie:
+#
+# 1) NESSUN SERVER MT5 STA OLTRE LE 14 ORE da UTC. Il controllo c'era gia' sul valore RICORDATO
+#    (_scarto_ricordato) ma non su quello MISURATO: l'asimmetria lasciava entrare -15 e -16 ore.
+#
+# 2) UN TICK VALE SOLO SE E' PIU' NUOVO DELL'ULTIMO CHE ABBIAMO VISTO. A mercato aperto i tick
+#    avanzano di continuo, quindi si misura come prima; a mercato chiuso l'ultimo tick resta
+#    sempre lo stesso, non avanza mai, e non si misura niente - che e' la risposta giusta.
+#    Alla primissima osservazione non si misura: non c'e' nulla con cui confrontare, e il
+#    valore ricordato su disco copre quel momento.
+#
+# NOTA ONESTA: il buco (1) e (2) e' vecchio, ma la memoria su disco aggiunta il 14 novembre lo
+# ha reso PEGGIORE - prima un valore sbagliato durava fino al riavvio, poi se lo ricordava.
+# Per questo _ricorda_scarto ora scrive solo cio' che ha passato tutte e due le guardie.
+_epoch_massimo_visto = 0
+
+
 def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
     """Lo scarto orario reale (server - UTC), ma SOLO se quell'epoch e' abbastanza fresco da
     poterlo misurare davvero; altrimenti None.
@@ -218,12 +252,31 @@ def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
     fresco il residuo dalla griglia di mezz'ora e' di secondi (jitter di rete/IPC); con un tick
     vecchio l'eta' si somma al residuo e il numero che esce e' un caso quasi sempre a caso — basta
     superare i 5 minuti di eta' per non misurare piu' niente di vero."""
+    global _epoch_massimo_visto
     if not epoch:
         return None
+    # (2) Il tick deve essere PIU' NUOVO dell'ultimo visto: vedi il blocco qui sopra.
     try:
-        grezzo = float(epoch) - now
+        e = float(epoch)
+    except Exception:
+        return None
+    # LA PRIMA OSSERVAZIONE SI ACCETTA. Qui per un momento l'avevo resa muta, e il banco
+    # test_scarto_server.py ha avuto ragione a protestare: con un tick davvero fresco lo scarto
+    # deve essere noto SUBITO, al primo colpo - altrimenti alla prima installazione il grafico
+    # resta sfasato finche' non arriva un secondo tick. A reggere il caso di sabato bastano le
+    # altre due guardie (le 14 ore, e il tick che deve avanzare).
+    avanzato = (_epoch_massimo_visto == 0) or (e > _epoch_massimo_visto)
+    if e > _epoch_massimo_visto:
+        _epoch_massimo_visto = e
+    if not avanzato:
+        return None
+    try:
+        grezzo = e - now
         allineato = round(grezzo / 1800.0) * 1800
     except Exception:
+        return None
+    # (1) Nessun server MT5 sta oltre le 14 ore da UTC.
+    if abs(allineato) > 14 * 3600:
         return None
     # La guardia deve respingere due cose: (1) un tick il cui residuo dalla griglia di mezz'ora
     # e' troppo grande (non e' un orologio di broker), e (2) un tick troppo vecchio (eta' > 24h),

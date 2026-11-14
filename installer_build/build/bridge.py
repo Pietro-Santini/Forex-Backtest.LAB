@@ -3100,6 +3100,15 @@ def _send_and_check(request: dict):
     return result
 
 
+# UN TICK E' FRESCO SOLO SE AVANZA (14 novembre 2026). Stessa cura di mt5_feed_server.py, dove
+# sta il commento lungo con i numeri. In breve: a mercato chiuso l'ultimo tick resta sempre lo
+# stesso, e la sua ETA' - se e' un numero intero di ore - cade sulla griglia della mezz'ora e
+# veniva scambiata per un fuso orario (misurato: -15 ore con 27 secondi di residuo). Due
+# guardie nuove: nessun server MT5 sta oltre 14 ore da UTC, e un tick vale solo se e' piu'
+# nuovo dell'ultimo visto.
+_epoch_massimo_visto = 0
+
+
 def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
     """Lo scarto server/UTC misurato da un epoch di tick SOLO se quell'epoch è davvero fresco,
     altrimenti None.
@@ -3112,11 +3121,25 @@ def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
     rete/IPC), con un epoch vecchio l'età si somma e il residuo diventa quasi sempre un numero
     a caso — basta superare i 5 minuti. Stessa soglia (300 s) di _estimate_server_offset_seconds.
     """
+    global _epoch_massimo_visto
     if not epoch:
         return None
     try:
-        grezzo = float(epoch) - now
+        e = float(epoch)
     except Exception:
+        return None
+    # LA PRIMA OSSERVAZIONE SI ACCETTA. Qui per un momento l'avevo resa muta, e il banco
+    # test_scarto_server.py ha avuto ragione a protestare: con un tick davvero fresco lo scarto
+    # deve essere noto SUBITO, al primo colpo - altrimenti alla prima installazione il grafico
+    # resta sfasato finche' non arriva un secondo tick. A reggere il caso di sabato bastano le
+    # altre due guardie (le 14 ore, e il tick che deve avanzare).
+    avanzato = (_epoch_massimo_visto == 0) or (e > _epoch_massimo_visto)
+    if e > _epoch_massimo_visto:
+        _epoch_massimo_visto = e
+    if not avanzato:
+        return None
+    grezzo = e - now
+    if abs(round(grezzo / 1800.0) * 1800.0) > 14 * 3600:
         return None
     # La guardia deve respingere due cose: (1) un tick il cui residuo dalla griglia di mezz'ora
     # e' troppo grande (non e' un orologio di broker), e (2) un tick troppo vecchio (eta' > 24h),
