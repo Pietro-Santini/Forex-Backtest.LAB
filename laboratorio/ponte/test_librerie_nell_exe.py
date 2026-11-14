@@ -140,3 +140,71 @@ def test_nessun_commento_REM_dentro_un_comando_continuato():
         "queste righe REM stanno DENTRO un comando continuato con ^ , quindi cmd.exe le passa "
         "come argomenti e la compilazione si ferma. I commenti vanno sopra il comando: %s"
         % colpevoli)
+
+# ---------------------------------------------------------------------------------------------
+# DICHIARARE IL MODULO NON BASTA: DEVONO ESSERCI ANCHE LE SUE DIPENDENZE
+# ---------------------------------------------------------------------------------------------
+REQUISITI = Path(RADICE) / "installer_build" / "build" / "requirements.txt"
+
+
+def _pacchetti_richiesti():
+    """I nomi dei pacchetti elencati in requirements.txt, senza commenti ne' versioni."""
+    nomi = set()
+    for riga in REQUISITI.read_text(encoding="utf-8", errors="replace").splitlines():
+        r = riga.strip()
+        if not r or r.startswith("#"):
+            continue
+        nomi.add(re.split(r"[<>=!~\[ ]", r)[0].strip().lower())
+    return nomi
+
+
+def test_requests_e_nei_requisiti():
+    """SECONDA CAUSA DELLO STESSO SINTOMO (14 novembre 2026).
+
+    Corretto il nome del modulo in build_exe.bat (era `--collect-all google-auth` invece di
+    `google.auth`), l'eseguibile della 2.2.51 continuava a dire "le librerie google-auth non
+    sono disponibili". MISURATO nel log di compilazione di GitHub:
+
+        WARNING: Failed to collect submodules for 'google.auth.compute_engine' because
+        importing it raised: ModuleNotFoundError: No module named 'requests'
+
+    documenti_utente.py fa `from google.auth.transport import requests`, e quel modulo e'
+    costruito SOPRA la libreria requests - che non e' mai stata nei requisiti. L'import falliva
+    dentro il try esattamente come prima: stesso sintomo, causa diversa.
+
+    Conseguenza, la stessa di prima: ogni richiesta al canale /dati torna 401 e il salvataggio
+    dei documenti sul disco E non parte.
+    """
+    assert "requests" in _pacchetti_richiesti(), (
+        "google.auth.transport.requests ha bisogno della libreria requests: senza, la verifica "
+        "del token non puo' mai riuscire e il disco E resta vuoto")
+
+
+def test_ogni_modulo_dichiarato_ha_il_suo_pacchetto():
+    """La regola generale: dichiarare un modulo a PyInstaller non lo fa esistere.
+
+    Per ogni `--collect-all`/`--hidden-import` nominato in build_exe.bat, il pacchetto che lo
+    fornisce deve comparire in requirements.txt. Senza, la raccolta fallisce in silenzio (un
+    WARNING nel log di compilazione) e il difetto si scopre mesi dopo, in produzione.
+    """
+    # Da quale pacchetto arriva ogni modulo che dichiariamo. Si tiene a mano perche' e' corto e
+    # perche' va letto: e' la mappa fra "cosa importa il codice" e "cosa si installa".
+    DA_QUALE_PACCHETTO = {
+        "google.auth": "google-auth",
+        "google.oauth2": "google-auth",
+        "google.oauth2.id_token": "google-auth",
+        "google.auth.transport.requests": "requests",   # <- il caso del 14 novembre
+        "MetaTrader5": "metatrader5",
+        "numpy": "numpy",
+        "uvicorn": "uvicorn",
+        "pywinauto": "pywinauto",
+    }
+    presenti = _pacchetti_richiesti()
+    mancanti = []
+    for _opzione, modulo in _nomi_dichiarati():
+        pacchetto = DA_QUALE_PACCHETTO.get(modulo)
+        if pacchetto and pacchetto.lower() not in presenti:
+            mancanti.append((modulo, pacchetto))
+    assert not mancanti, (
+        "questi moduli sono dichiarati a PyInstaller ma il pacchetto che li fornisce non e' nei "
+        "requisiti: la raccolta fallisce in silenzio. %s" % mancanti)
