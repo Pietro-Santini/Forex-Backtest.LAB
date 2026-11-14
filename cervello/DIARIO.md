@@ -6647,3 +6647,75 @@ inganno del punto C: il numero vero e' 1,2 GB.
   chiave»), come da lista.
 - `ForexBacktestLAB.spec` e `Mt5FeedServer.spec` non li usa nessuno (build_exe.bat passa le
   opzioni a mano): due file generati che sembrano la fonte della verita' e non lo sono.
+
+## 2026-11-14 — Claude — IL «SOLITO CRASH DI SEMPRE»: ERA IL LOGO
+
+Il proprietario ha chiesto di fare l'aggiornamento dal PULSANTE dell'applicazione, non
+installando il pacchetto a mano, «almeno testiamo tutto il sistema di aggiornamento con relativi
+inciampi, bug e crash possibili». E' stata la richiesta giusta: senza quel giro il difetto non
+sarebbe uscito.
+
+### COME SI E' ARRIVATI, PASSO PER PASSO (e due conclusioni mie sbagliate per strada)
+
+1. **Prima conclusione sbagliata.** Di notte, dopo un'installazione silenziosa lanciata da me con
+   l'output catturato, la finestra non rispondeva. Ho attribuito il blocco al MIO modo di
+   lanciarla (un tubo che nessuno svuota). Spiegazione plausibile, accettata troppo in fretta.
+
+2. **Riproduzione pulita.** A freddo, con un doppio clic vero: finestra aperta in 4 secondi,
+   risponde; al decimo smette e resta un rettangolo nero. MISURATO: CPU a ZERO per oltre 70
+   secondi, memoria ferma a 108 MB, motore web vivo a 1 GB. Il difetto era reale.
+
+3. **Seconda conclusione sbagliata.** Ho dato la colpa ai due thread che chiamano `load_url`
+   partendo prima di `webview.start()` (roba mia, della 2.2.44). Corretto - ed e' una correzione
+   giusta e da tenere - ma NON era la causa: al tentativo dopo, col ponte gia' acceso, la finestra
+   si e' bloccata lo stesso. Numeri che escludevano i due sospetti: il guardiano della memoria non
+   poteva essere scattato (PagefileUsage 125 MB contro una soglia di 2.500) e l'attesa del ponte
+   non era stata usata (porta 8000 gia' aperta).
+
+4. **Il fatto che ha deciso tutto.** L'aggiornamento col pulsante e' andato BENE (finestra chiusa
+   a 30 s, tornata a 40 s, versione 2.2.46, risponde, e ha continuato a rispondere per 5 minuti).
+   Restava pero' la striscia «disponibile una nuova versione». Premendola, la pagina si ricarica -
+   **e la finestra si e' bloccata**. Una semplice RICARICA, che con l'avvio non c'entra niente.
+   Da li' la causa non poteva piu' essere nell'avvio: doveva stare nel CARICAMENTO DELLA PAGINA.
+
+### LA CAUSA
+
+`_metti_il_logo()` faceva `finestra.events.loaded += lambda: finestra.evaluate_js(...)` per
+scrivere il favicon. La chiamata aspetta il thread della finestra, che in quel momento sta ancora
+completando il caricamento: si aspettano a vicenda. Succede a OGNI caricamento di pagina - avvio,
+ricarica, aggiornamento - ed e' il «solito crash di sempre» di cui il proprietario parlava da
+giorni. Codice vecchio, non introdotto in questi giorni.
+
+Lo stato misurato nel momento del blocco, tutto insieme: CPU a zero per minuti; **0 KB letti e 0
+scritti su disco in 8 secondi**; memoria immobile; **tutti e dieci i thread in attesa**, con
+quello che aveva lavorato (6,84 s di CPU) fermo su `UserRequest`. Il sistema operativo diceva
+esattamente cos'era: un blocco incrociato.
+
+**E NON SERVIVA A NIENTE.** `app.html` dichiara gia' il proprio logo nel suo `<head>` (righe 14-15,
+`icon-512.png` e `icon-192.png`) e il ponte serve quei file (HTTP 200). L'iniezione riscriveva un
+favicon che c'era gia'.
+
+Tolta. Per le nostre due pagine interne (attesa e spiegazione) il logo si scrive nell'HTML.
+
+Frequenza misurata: su due avvii a freddo consecutivi, uno bloccato e uno no.
+
+### COSA HA FUNZIONATO BENE, E VA DETTO
+
+Il sistema di aggiornamento dal pulsante: scaricamento, installazione silenziosa, chiusura,
+riapertura, versione nuova, tutto in 40 secondi e senza intoppi. L'unico difetto di quel giro e'
+la striscia che resta (vedi sotto).
+
+### RESTA APERTO DA QUESTO GIRO
+
+- **La striscia «disponibile una nuova versione» dopo un aggiornamento riuscito.** Il ponte e'
+  allineato (`{"programma":"2.2.46","pagina":"2.2.46","da_aggiornare":false}`), ma la pagina nella
+  finestra e' quella vecchia. Il meccanismo che dovrebbe farla ricaricare da sola
+  (`fbl_aggiornamento_atteso`) non scatta: vive nel browser e non sopravvive al riavvio del
+  programma. Cura proposta: spostare il promemoria nel ponte.
+
+### NOTA DI METODO
+
+Due volte su tre ho dato la causa per trovata quando avevo solo una spiegazione compatibile. Il
+passo che ha chiuso la questione non e' stato un ragionamento piu' fine: e' stato un fatto nuovo
+(il blocco su una semplice ricarica) che ha reso impossibili le altre spiegazioni. Quando una
+causa e' «plausibile», serve il fatto che escluda le altre - non un'altra lettura del codice.

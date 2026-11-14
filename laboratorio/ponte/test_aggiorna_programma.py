@@ -362,3 +362,91 @@ def test_la_vecchia_forma_a_due_valori_continua_a_funzionare(monkeypatch):
     monkeypatch.setattr(bridge, "_versione_di", lambda cartella: (2, 0, 37))
     ok, msg = bridge.aggiorna_programma()
     assert ok is True and isinstance(msg, str) and "niente da installare" in msg
+
+def test_il_ponte_non_confronta_col_proprio_disco(monkeypatch):
+    """IL PONTE NON PUO' DECIDERE DA SOLO CHE NON C'E' NIENTE DA INSTALLARE.
+
+    MISURATO sul PC del proprietario il 14 novembre 2026, premendo il pulsante Aggiorna:
+    programma installato 2.2.46, pacchetto pubblicato su GitHub 2.2.47, e il ponte ha risposto
+    «il programma e' gia' alla 2.2.46: non c'e' niente da installare». Nel log il
+    POST /aggiorna-programma era arrivato, quindi l'app aveva chiesto giusto: rifiutava qui.
+
+    LA CAUSA: `pubblicata` si leggeva dalla COPIA DELLA PAGINA SUL DISCO. Dopo un aggiornamento
+    riuscito quel numero vale sempre quanto il programma installato, quindi il confronto era
+    destinato a rispondere «no» per costruzione: due numeri che si muovono insieme non possono
+    segnalare che e' uscito qualcosa di nuovo.
+
+    Adesso chi chiama dice che versione vuole, e il freno «mai indietro» misura quella.
+    """
+    import bridge
+
+    monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.2.46")
+    # Sul disco c'e' la pagina della stessa versione: e' la situazione normale dopo un
+    # aggiornamento, ed e' proprio quella che prima bloccava tutto.
+    monkeypatch.setattr(bridge, "_versione_di", lambda *a, **k: (2, 2, 46))
+
+    partito = {"quante": 0}
+
+    def _finto_popen(*a, **k):
+        partito["quante"] += 1
+
+        class P:
+            pid = 1234
+        return P()
+
+    monkeypatch.setattr(bridge.subprocess, "Popen", _finto_popen)
+
+    # NESSUNA PROVA SCARICA DA INTERNET. La prima versione di questa prova sostituiva una
+    # funzione che non esiste (`_scarica_pacchetto`): il ponte scarica con urlopen direttamente
+    # qui dentro, quindi il finto non prendeva e il collaudo si tirava giu' 123 MB veri, ogni
+    # volta. Si sostituisce la cosa giusta - urlopen - con un pacchetto finto di due byte.
+    class _RispostaFinta:
+        headers = {"Content-Length": "2"}
+
+        def read(self, *a):
+            if getattr(self, "_dato", False):
+                return b""
+            self._dato = True
+            return b"OK"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda *a, **k: _RispostaFinta())
+
+    # 1) SENZA dire la versione: resta il vecchio comportamento, che sbaglia in difetto.
+    d = bridge.aggiorna_programma_dettaglio()
+    assert d["ok"] is True
+    assert d["avviato"] is False, (
+        "senza sapere che versione si vuole, il ponte non deve inventarsi un aggiornamento")
+
+    # 2) DICENDO che il pacchetto pubblicato e' la 2.2.47: NON si deve piu' rifiutare.
+    d = bridge.aggiorna_programma_dettaglio(versione_voluta="2.2.47")
+    assert not (d["ok"] is True and d["avviato"] is False
+                and "niente da installare" in d["messaggio"]), (
+        "con la 2.2.47 pubblicata e la 2.2.46 installata il ponte NON puo' dire che non c'e' "
+        "niente da fare: e' il difetto del 14 novembre. Risposta: %s" % d)
+
+    # 3) IL FRENO RESTA: non si torna mai indietro.
+    d = bridge.aggiorna_programma_dettaglio(versione_voluta="2.2.40")
+    assert d["avviato"] is False and "niente da installare" in d["messaggio"], (
+        "una versione piu' VECCHIA di quella installata non si installa mai: %s" % d)
+
+    # 4) Un valore senza senso non deve far saltare il freno.
+    d = bridge.aggiorna_programma_dettaglio(versione_voluta="non-un-numero")
+    assert d["avviato"] is False, (
+        "con una versione illeggibile si ricade sul confronto prudente, non si installa a caso")
+
+
+def test_l_app_dice_al_ponte_che_versione_vuole():
+    """L'altra meta' della cura: senza il parametro, la correzione del ponte non serve a nulla."""
+    import os as _os
+    percorso = _os.path.join(RADICE, "app.html")
+    with open(percorso, encoding="utf-8") as f:
+        sorgente = f.read()
+    assert "'/aggiorna-programma'+(_vol?" in sorgente, (
+        "l'app deve passare la versione pubblicata a /aggiorna-programma, altrimenti il ponte "
+        "ricade sul confronto con la copia sul disco e non installa mai")

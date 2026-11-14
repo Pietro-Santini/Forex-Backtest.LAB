@@ -1659,7 +1659,7 @@ def _tupla(v):
         return None
 
 
-def aggiorna_programma_dettaglio(timeout=300):
+def aggiorna_programma_dettaglio(timeout=300, versione_voluta=None):
     """Scarica il pacchetto e lo avvia. Torna {ok, messaggio, avviato}.
     
     PERCHE' ESISTE "avviato", OLTRE A "ok" (4 novembre 2026). SEGNALATO dal proprietario:
@@ -1678,14 +1678,38 @@ def aggiorna_programma_dettaglio(timeout=300):
     if os.name != "nt":
         return {"ok": False, "avviato": False, "messaggio": "l'aggiornamento del programma vale solo su Windows"}
     installata = versione_programma_installata()
+
+    # CONTRO CHE COSA SI CONFRONTA: LA VERSIONE PUBBLICATA, NON LA PAGINA SUL DISCO.
+    #
+    # MISURATO sul PC del proprietario il 14 novembre 2026, premendo il pulsante Aggiorna:
+    # installata 2.2.46, pubblicata su GitHub 2.2.47, e il ponte ha risposto «sei gia' a posto».
+    # Nel log c'e' il POST /aggiorna-programma arrivato, quindi l'app aveva chiesto bene: era
+    # questa funzione a rifiutare.
+    #
+    # LA CAUSA: `pubblicata` veniva letta da `_versione_di(_CARTELLA_APP)`, cioe' dalla COPIA
+    # DELLA PAGINA CHE ABBIAMO SUL DISCO - che dopo un aggiornamento riuscito vale sempre quanto
+    # il programma installato. Due numeri che si muovono insieme non possono mai dire che c'e'
+    # qualcosa di nuovo: il confronto era destinato a rispondere «no» per costruzione.
+    # E' la stessa confusione gia' corretta dal lato dell'app («si chiedeva al ponte QUALE COPIA
+    # stesse servendo»): la cura era stata applicata solo meta'.
+    #
+    # Adesso: chi chiama dice CHE VERSIONE vuole installare (l'app la sa, l'ha letta dalla
+    # release). Il freno «mai indietro» resta, ma misurato sulla cosa giusta. Senza quel dato si
+    # ricade sul vecchio confronto, che e' sbagliato in difetto - non installa quando potrebbe -
+    # e quindi non fa danni: non si inventa un aggiornamento che nessuno ha chiesto.
     pubblicata = None
-    try:
-        v = _versione_di(_CARTELLA_APP) or _versione_di(_BASE_DIR)
-        pubblicata = ".".join(map(str, v)) if v else None
-    except Exception:
-        pass
-    # MAI INDIETRO, stessa regola che vale gia' per la pagina: se il pacchetto che andremmo a
-    # installare non e' piu' nuovo di quello che c'e', non si tocca niente.
+    if versione_voluta:
+        try:
+            if _tupla(str(versione_voluta)):
+                pubblicata = str(versione_voluta)
+        except Exception:
+            pubblicata = None
+    if pubblicata is None:
+        try:
+            v = _versione_di(_CARTELLA_APP) or _versione_di(_BASE_DIR)
+            pubblicata = ".".join(map(str, v)) if v else None
+        except Exception:
+            pass
     ti, tp = _tupla(installata), _tupla(pubblicata)
     if ti and tp and ti >= tp:
         # OK ma NON avviato: non c'era niente da fare, e dirlo e' il punto di tutta questa cura.
@@ -1836,12 +1860,16 @@ def versione_programma():
 
 
 @app.post("/aggiorna-programma")
-def aggiorna_programma_rotta(request: Request):
+def aggiorna_programma_rotta(request: Request, versione: str = None):
     """Scarica e installa il programma. Solo dal computer: da remoto non si reinstalla
-    l'applicazione di qualcun altro mentre la sta usando."""
+    l'applicazione di qualcun altro mentre la sta usando.
+
+    `versione` e' quella del pacchetto PUBBLICATO, che la pagina conosce perche' l'ha appena
+    letta dalla release. Senza, si ricade sul vecchio confronto con la copia sul disco - che
+    sbaglia in difetto (vedi aggiorna_programma_dettaglio)."""
     if not _accesso.richiesta_locale(request):
         raise HTTPException(status_code=403, detail="L'aggiornamento del programma si chiede dal computer.")
-    d = aggiorna_programma_dettaglio()
+    d = aggiorna_programma_dettaglio(versione_voluta=versione)
     # "avviato" e' la risposta alla domanda che l'app deve farsi prima di dire "installazione
     # in corso": e' PARTITO qualcosa? Vedi la nota su aggiorna_programma_dettaglio.
     return {"ok": d["ok"], "avviato": d["avviato"], "messaggio": d["messaggio"],

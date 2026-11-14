@@ -1669,3 +1669,26 @@ Il sondaggio ora spegne la guardia (`m._gia_in_esecuzione = lambda: False`) e il
 della guardia si prova a parte. Regola generale: tutto cio' che una funzione legge DAL SISTEMA
 (nomi globali, porte, processi, orologio) va messo sotto il controllo della prova, altrimenti non
 si sta misurando il programma ma la stanza in cui gira.
+
+## Non toccare la finestra da un gestore di evento della pagina (14 novembre 2026)
+
+`finestra.events.loaded += lambda: finestra.evaluate_js(...)` sembra innocuo e invece e' un blocco
+incrociato: la chiamata aspetta il thread della finestra, che sta ancora completando il
+caricamento. Si manifesta a ogni caricamento di pagina, in modo intermittente (misurato: uno su
+due), e il quadro e' inconfondibile - CPU a zero, nessun I/O, memoria immobile, tutti i thread in
+attesa. **Zero CPU non vuol dire «sta facendo troppo»: vuol dire che sta aspettando.**
+
+Regola: quello che deve stare in una nostra pagina si scrive nel suo HTML; quello che deve partire
+dopo l'apertura si mette nella funzione passata a `webview.start()`.
+
+## Una causa «plausibile» non e' una causa trovata (14 novembre 2026)
+
+Nello stesso giorno ho dato per trovata due volte una causa sbagliata, tutte e due le volte con
+una spiegazione che tornava con i fatti noti: prima il modo in cui lanciavo l'applicazione, poi i
+thread che partivano troppo presto. Quello che ha chiuso la questione non e' stata una lettura
+piu' attenta del codice, ma **un fatto nuovo che rendeva impossibili le altre spiegazioni**: il
+blocco si presentava anche su una semplice ricarica della pagina, che con l'avvio non c'entra
+niente.
+
+Quando si ha una spiegazione compatibile, la domanda giusta non e' «torna?» ma **«quale fatto, se
+lo osservassi, la escluderebbe?»** - e poi andare a cercarlo.
