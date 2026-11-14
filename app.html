@@ -13040,7 +13040,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.52';
+const FBL_VERSIONE='2.2.53';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -60250,7 +60250,9 @@ if ('serviceWorker' in navigator) {
   // arriva SOLO quando sw.js ha già installato la versione nuova e pulito le cache vecchie,
   // quindi premere «Aggiorna» basta: la ricarica trova subito i file nuovi e l\'app riparte
   // aggiornata, da sola e senza barre di progresso inventate.
-  navigator.serviceWorker.addEventListener('message', (ev) => {
+  // async: dentro si chiede al ponte quale versione sta servendo, prima di mostrare qualcosa
+  // (vedi fblSonoGiaAggiornato).
+  navigator.serviceWorker.addEventListener('message', async (ev) => {
     if (!ev.data || ev.data.tipo !== 'versione-nuova') return;
     if (document.getElementById('fblVersioneNuova')) return;   // una volta sola
     // SE L'AGGIORNAMENTO L'HAI CHIESTO TU, NON TI SI CHIEDE UNA SECONDA VOLTA.
@@ -60275,6 +60277,12 @@ if ('serviceWorker' in navigator) {
       setTimeout(() => { try { location.reload(); } catch (e) {} }, 600);
       return;
     }
+    // La striscia nasce da un messaggio del service worker, che e' un evento del suo ciclo di
+    // vita e NON una prova che si sia indietro: se la pagina che gira e' gia' quella servita
+    // dal ponte, non si mostra niente. Vedi fblSonoGiaAggiornato.
+    try {
+      if (await fblSonoGiaAggiornato()) return;
+    } catch (e) {}
     const b = document.createElement('div');
     b.id = 'fblVersioneNuova';
     b.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:14px;z-index:100000;'
@@ -63575,14 +63583,77 @@ function fblRicaricaPagina(){
 function fblEtichettaAggiorna(piano){
   return (piano&&piano.serve)?'\u2b07\ufe0f Aggiorna':'\u{1F504} Aggiorna l\'app';
 }
+// SONO DAVVERO INDIETRO? (14 novembre 2026)
+//
+// SEGNALATO dal proprietario: «se l'installazione e' stata fatta come mai ancora ho il tasto
+// aggiorna attivo sia sotto alla pagina che sopra?».
+//
+// MISURATO sul suo PC, con tutto gia' aggiornato alla 2.2.52:
+//   - il ponte serviva    app.html 2.2.52 e sw.js forex-backtest-lab-v2.2.52
+//   - la copia su disco   2.2.52
+//   - la cache del service worker conteneva FBL_VERSIONE='2.2.52'
+//   - sw.js era identico byte per byte a due richieste di fila
+// Non c'era NIENTE da aggiornare, e il pulsante era acceso lo stesso.
+//
+// LA CAUSA: nessuno dei due avvisi guardava la versione DELLA PAGINA CHE STA GIRANDO. La
+// striscia in basso compare quando il service worker annuncia «versione nuova» - un evento del
+// suo ciclo di vita, non una prova che si sia indietro - e il pulsante in alto si accendeva a
+// prescindere, perche' la sua etichetta descrive il piano ma la sua COMPARSA non era condizionata
+// a niente.
+//
+// Adesso la domanda e' una sola e si risponde con i numeri: la versione che sto eseguendo
+// (FBL_VERSIONE, scritta dentro questa stessa pagina) e' uguale a quella che il ponte serve?
+// Se si', non si e' indietro di niente, e non si mostra nulla. Un avviso che compare quando non
+// serve insegna a ignorarlo, e il giorno che serve davvero non lo guarda piu' nessuno.
+// `pubblicata` e' la versione dell'ULTIMA RELEASE, quando chi chiama la conosce.
+//
+// ATTENZIONE, ed e' un errore che ho gia' fatto: senza quel confronto si guarda solo la copia
+// LOCALE (quella che il ponte ha sul disco), e il ponte non sa niente di GitHub. Se esce una
+// versione nuova e il ponte serve ancora la vecchia, "pagina uguale a quella servita" e' vero
+// e si spegnerebbe l'avviso proprio quando serve. E' la stessa confusione corretta stamattina
+// dentro il ponte ("confrontava con la propria copia sul disco"), e due banchi del laboratorio
+// l'hanno ripresa al volo: aggiornamento_release.test.mjs e versione_programma_non_web.test.mjs.
+//
+// Senza `pubblicata` (la striscia del service worker, che non la conosce) ci si limita al
+// confronto locale: li' la domanda e' solo "il service worker ha una pagina diversa da quella
+// che sto eseguendo?", e per quella il confronto locale basta.
+async function fblSonoGiaAggiornato(pubblicata){
+  try{
+    if(typeof FBL_VERSIONE!=='string'||!FBL_VERSIONE)return false;
+    const prog=await fblPonteVersioneProgramma();
+    if(!prog||!prog.pagina)return false;         // non si sa: meglio mostrare l'avviso
+    if(FBL_VERSIONE!==prog.pagina)return false;
+    if(prog.programma && prog.programma!==prog.pagina)return false;
+    if(pubblicata){
+      try{
+        if(fblConfrontaVersioni(FBL_VERSIONE, pubblicata)<0)return false;   // GitHub e' avanti
+      }catch(e){ return false; }
+    }
+    return true;
+  }catch(e){ return false; }
+}
 async function fblMostraPulsanteAggiorna(release, tagRemoto){
   const btn=document.getElementById('fblAggiornaBtn');
   if(!btn)return null;
+  // L'ORDINE CONTA, E LO HA INSEGNATO IL BANCO (14 novembre 2026).
+  //
+  // Qui avevo messo il controllo PRIMA di mostrare il pulsante. Sembrava piu' pulito, e invece
+  // ha fatto cadere due prove: chi chiama questa funzione NON la aspetta, e `btn.style.display`
+  // era la prima istruzione, SINCRONA. Mettendoci davanti un `await`, il pulsante compariva un
+  // attimo dopo - e chi guardava subito lo trovava ancora nascosto.
+  //
+  // Quindi: si mostra subito come sempre, e semmai si nasconde dopo. Nel caso normale (si e'
+  // indietro davvero) il comportamento resta identico a prima, istruzione per istruzione.
   btn.style.display='';
   const piano=await fblPianoAggiornamento(fblVersioneDaTag(tagRemoto));
   btn.textContent=fblEtichettaAggiorna(piano);
   btn.disabled=false;
   btn.onclick=()=>fblApplicaAggiornamento(release,tagRemoto,btn);
+  // NON SI E' INDIETRO DI NIENTE: si spegne. Vedi fblSonoGiaAggiornato per i numeri misurati.
+  if(await fblSonoGiaAggiornato(fblVersioneDaTag(tagRemoto))){
+    try{ btn.style.display='none'; }catch(e){}
+    return null;
+  }
   return btn;
 }
 // ============ IL PANNELLO "AGGIORNAMENTO IN CORSO" ============
