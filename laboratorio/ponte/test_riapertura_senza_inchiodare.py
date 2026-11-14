@@ -369,3 +369,44 @@ def test_la_misura_della_memoria_non_dipende_da_librerie_esterne():
     assert "psutil" not in corpo, "niente psutil: non e' nel pacchetto"
     assert "GetProcessMemoryInfo" in corpo, "si chiede a Windows, con ctypes"
     assert "except Exception" in corpo, "e se non si riesce a misurare si risponde 0, non si cade"
+
+def test_nessuno_chiama_la_finestra_da_un_gestore_di_evento():
+    """LA FINESTRA NON SI TOCCA DA UN GESTORE DI EVENTO DELLA PAGINA (14 novembre 2026).
+
+    MISURATO sul PC del proprietario: la finestra si bloccava SEMPRE nell'istante in cui la
+    pagina finiva di caricare - all'avvio e anche su una semplice ricarica, che con l'avvio non
+    c'entra nulla. In quel momento: CPU a ZERO per minuti, 0 KB letti e 0 scritti su disco in 8
+    secondi, memoria immobile, e tutti e dieci i thread in attesa, con quello che aveva lavorato
+    fermo su UserRequest. Non e' lentezza, e' un blocco incrociato.
+
+    LA CAUSA: `finestra.events.loaded += lambda: finestra.evaluate_js(...)`, usata per scrivere
+    il logo nella pagina. La chiamata aspetta il thread della finestra, che sta ancora
+    completando il caricamento. E non serviva nemmeno: app.html dichiara gia' il proprio logo.
+
+    La regola e' secca e non ha eccezioni: niente evaluate_js, e nessun gestore sugli eventi
+    della pagina. Quello che deve stare in una NOSTRA pagina si scrive nel suo HTML; quello che
+    deve partire dopo l'apertura si mette nella funzione passata a webview.start().
+    """
+    # Si legge il CODICE, non il testo: i commenti qui sopra e nel sorgente nominano
+    # evaluate_js apposta, per raccontare il difetto, e non devono far scattare la guardia.
+    # Con l'albero sintattico la distinzione e' esatta invece che approssimata.
+    import ast
+
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        albero = ast.parse(f.read())
+    vietati = {"evaluate_js", "loaded", "shown"}
+    colpevoli = []
+    for nodo in ast.walk(albero):
+        if isinstance(nodo, ast.Attribute) and nodo.attr in vietati:
+            # "events.loaded" e "events.shown" contano solo se sono proprio gli eventi
+            # della finestra: un attributo "loaded" qualunque non c'entra.
+            if nodo.attr in ("loaded", "shown"):
+                base = nodo.value
+                if not (isinstance(base, ast.Attribute) and base.attr == "events"):
+                    continue
+            colpevoli.append((nodo.lineno, nodo.attr))
+    assert not colpevoli, (
+        "queste righe chiamano la finestra da un gestore di evento o le iniettano codice: e' il "
+        "blocco del 14 novembre 2026 (finestra nera, CPU a zero, tutti i thread in attesa). %s"
+        % colpevoli)

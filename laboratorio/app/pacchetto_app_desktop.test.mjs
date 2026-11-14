@@ -153,7 +153,9 @@ const PROVA = [
   '    "pagina_propria": not prova_html.startswith("http"),',
   '}',
   'script = " ".join(f.scripts) if f else ""',
-  'fatti["logo_nella_finestra"] = ("data:image/png;base64," in script) and ("link" in script)',
+  '# IL LOGO STA NELL HTML, NON SI INIETTA PIU (14 novembre 2026): vedi la prova sotto.',
+  'fatti["logo_nella_pagina"] = ("data:image/png;base64," in prova_html) and ("rel=" in prova_html)',
+  'fatti["niente_iniezione"] = (script.strip() == "")',
   '',
   '# 4) IL CASO NORMALE: col ponte che risponde la finestra apre l\'applicazione, non la spiegazione',
   'create.clear()',
@@ -208,8 +210,21 @@ test('la finestra dell\'applicazione si comporta da applicazione (eseguita davve
   // "non ha il logo, non ha in alto a sinistra nulla").
   assert.equal(fatti.logo.presente, true, 'il logo non e\' stato trovato: manca icon-512.png nel percorso atteso');
   assert.equal(fatti.logo.png, true, 'il logo non e\' un PNG valido: non comparirebbe in alto a sinistra');
-  assert.equal(fatti.logo_nella_finestra, true,
-    'il logo non viene iniettato nella pagina: in alto a sinistra non comparirebbe nulla');
+  // IL LOGO NELL HTML, MAI INIETTATO DA UN ALTRO THREAD (14 novembre 2026).
+  //
+  // Fino a oggi il logo si scriveva nella pagina con evaluate_js, da un gestore dell evento
+  // "pagina caricata". MISURATO sul PC del proprietario: la finestra si bloccava SEMPRE
+  // nell istante in cui la pagina finiva di caricare - all avvio e anche su una semplice
+  // ricarica. In quel momento CPU a zero per minuti, 0 KB letti e scritti su disco, memoria
+  // immobile, e tutti e dieci i thread in attesa. Un blocco incrociato: evaluate_js aspetta il
+  // thread della finestra, che sta ancora finendo di caricare.
+  //
+  // E non serviva: app.html dichiara gia il proprio logo nel suo head. Resta solo per le NOSTRE
+  // pagine interne, dove si mette nel testo dell HTML e nessun thread e' di mezzo.
+  assert.equal(fatti.logo_nella_pagina, true,
+    'il logo deve stare nell HTML della pagina di spiegazione, non essere iniettato');
+  assert.equal(fatti.niente_iniezione, true,
+    'nessuno script deve essere iniettato nella finestra: e la chiamata che la bloccava');
 
   // IL TITOLO: il nome vero dell'applicazione, come qualunque finestra Windows.
   assert.equal(fatti.finestra.titolo, 'Forex Backtest LAB', 'titolo della finestra sbagliato');

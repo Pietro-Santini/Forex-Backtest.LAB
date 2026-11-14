@@ -186,6 +186,7 @@ def _attendi_ponte_poi(quando_pronto, secondi=60):
 def _pagina_attesa():
     return (
         "<!doctype html><html lang='it'><head><meta charset='utf-8'>"
+        + _riga_del_logo() +
         "<title>" + NOME_APP + "</title><style>"
         "body{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;"
         "font-family:system-ui,Segoe UI,sans-serif;background:#0b0f14;color:#e8edf3;}"
@@ -428,33 +429,32 @@ def _logo_data_url():
     return None
 
 
-def _metti_il_logo(finestra):
-    """Mette il logo nel tab della finestra (in alto a sinistra), senza toccare la pagina."""
+def _riga_del_logo():
+    """Il <link> con il logo, da mettere dentro le NOSTRE pagine (attesa, spiegazione).
+
+    QUI C'ERA L'INIEZIONE, ED ERA LA CAUSA DEL BLOCCO (14 novembre 2026).
+    Prima di oggi questa funzione registrava un gestore sull'evento "pagina caricata" che
+    chiamava finestra.evaluate_js() per scrivere il favicon dentro la pagina.
+
+    MISURATO sul PC del proprietario: la finestra si blocca sempre NELL'ISTANTE IN CUI LA PAGINA
+    FINISCE DI CARICARE - all'avvio e anche su una semplice ricarica, che con l'avvio non c'entra
+    niente. In quel momento: CPU a ZERO per minuti, nessuna lettura ne' scrittura su disco (0 KB
+    in 8 secondi), memoria immobile, e TUTTI i dieci thread in attesa, con quello che aveva
+    lavorato fermo su UserRequest. Non e' lentezza: e' un blocco incrociato. evaluate_js chiamata
+    dal gestore dell'evento aspetta il thread della finestra, che sta ancora completando il
+    caricamento.
+
+    E NON SERVIVA A NIENTE: app.html dichiara gia' il proprio logo nel suo <head>
+    (<link rel="icon" ... href="icon-512.png"> e la versione 192), e il ponte serve quel file.
+    L'iniezione riscriveva un favicon che c'era gia'.
+
+    Resta utile per le nostre pagine interne (attesa e spiegazione), che sono HTML scritto da
+    noi: li' il logo si mette nel testo della pagina, dove non c'e' nessun thread di mezzo.
+    """
     logo = _logo_data_url()
     if not logo:
-        return
-    js = (
-        "(function(){try{"
-        "var l=document.querySelector('link[rel~=\"icon\"]')||document.querySelector('link[rel=\"shortcut icon\"]');"
-        "if(!l){l=document.createElement('link');l.rel='icon';document.head.appendChild(l);}"
-        "l.type='image/png';l.href=" + json.dumps(logo) + ";"
-        "}catch(e){}})();"
-    )
-    # Il logo si mette quando la pagina e' pronta, non prima.
-    try:
-        finestra.events.loaded += lambda: _inietta(finestra, js)
-    except Exception:
-        try:
-            finestra.events.shown += lambda: _inietta(finestra, js)
-        except Exception:
-            pass
-
-
-def _inietta(finestra, js):
-    try:
-        finestra.evaluate_js(js)
-    except Exception:
-        pass
+        return ""
+    return "<link rel='icon' type='image/png' href='" + logo + "'>"
 
 
 # --- LA PAGINA DI SPIEGAZIONE, SE IL SERVIZIO NON PARTE ---------------------
@@ -463,6 +463,7 @@ def _pagina_spiegazione(motivo):
     return (
         "<!doctype html><html lang='it'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        + _riga_del_logo() +
         "<title>" + NOME_APP + "</title><style>"
         "body{margin:0;font-family:system-ui,Segoe UI,sans-serif;background:#0b0f14;color:#e8edf3;}"
         ".box{max-width:520px;margin:12vh auto;padding:28px;border:1px solid #202832;"
@@ -673,7 +674,6 @@ def main():
             js_api=api,
         )
     api.finestra = finestra
-    _metti_il_logo(finestra)
 
     # NIENTE load_url PRIMA CHE LA FINESTRA ESISTA DAVVERO (14 novembre 2026).
     #
