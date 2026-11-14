@@ -516,19 +516,56 @@ def _patch_zoom_and_popups():
         print("patch fallita:", exc)
 
 
+# LA FINESTRA NON SI APPENDE ALL'OGGETTO ESPOSTO ALLA PAGINA (14 novembre 2026).
+#
+# QUESTA E' LA CAUSA DEL BLOCCO, e non e' un'ipotesi: e' la pila di chiamate letta con py-spy
+# su un processo bloccato sul PC del proprietario.
+#
+#     Thread-2 (generate_js_object)
+#         inject_pywebview.<locals>.get_functions (util.py:196)
+#         get_functions (util.py:206)
+#         get_functions (util.py:206)      <- ricorsione
+#         get_functions (util.py:206)
+#         generate_func (util.py:214)
+#         generate_js_object (util.py:231)
+#     MainThread (idle): create_window (winforms.py:834)   <- sta aspettando quel thread
+#
+# COSA SUCCEDE: per far chiamare i nostri metodi dalla pagina, pywebview CAMMINA DENTRO
+# l'oggetto che gli diamo come js_api e ne raccoglie le funzioni, scendendo negli attributi.
+# Noi gli avevamo attaccato `api.finestra = finestra`, cioe' la finestra stessa: da li' si entra
+# in tutto l'albero di pywebview (la finestra tiene il motore, il motore tiene la finestra...) e
+# la camminata non finisce piu'. Il thread principale resta fermo dentro create_window ad
+# aspettarla, e Windows vede una finestra che non risponde.
+#
+# COMBACIA CON TUTTO IL MISURATO: succede sia all'avvio sia a una semplice ricarica (quella
+# camminata rifa' a ogni caricamento di pagina); e' intermittente perche' dipende da come va la
+# visita; e la CPU resta a zero perche' nessuno dei due sta calcolando - si aspettano.
+#
+# LA REGOLA: l'oggetto js_api contiene SOLO i metodi da offrire alla pagina. Tutto il resto -
+# a maggior ragione un oggetto grosso e pieno di riferimenti circolari come la finestra - vive
+# fuori. Qui sta in una variabile del modulo, che pywebview non guarda.
+_FINESTRA = None
+
+
+def _finestra_corrente():
+    return _FINESTRA
+
+
 class _Api(object):
     """Cio' che la pagina di spiegazione puo' chiamare per riprovare l'apertura."""
 
     def __init__(self):
-        self.finestra = None
+        # NIENTE attributi oltre ai metodi: vedi il blocco sopra. In particolare la finestra
+        # non si tiene qui, si chiede a _finestra_corrente().
+        pass
 
     def riprova(self):
         # Chiamata DALLA PAGINA, quindi dal thread della finestra: attesa corta. Se il ponte
         # non c'e' ancora lo si continua ad aspettare in sottofondo, e la finestra resta viva.
         _pulisci_cache_webview()
         url = _ensure_backend(3)
-        if not url and self.finestra is not None:
-            finestra = self.finestra
+        finestra = _finestra_corrente()
+        if not url and finestra is not None:
 
             def _poi(indirizzo):
                 try:
@@ -539,9 +576,9 @@ class _Api(object):
 
             _attendi_ponte_poi(_poi, 60)
             return False
-        if url and self.finestra is not None:
+        if url and finestra is not None:
             try:
-                self.finestra.load_url(url)
+                finestra.load_url(url)
             except Exception:
                 return False
             return True
@@ -650,9 +687,9 @@ def main():
         def _quando_pronto(indirizzo, _f=None):
             try:
                 if indirizzo:
-                    api.finestra.load_url(indirizzo)
+                    _finestra_corrente().load_url(indirizzo)
                 else:
-                    api.finestra.load_html(_pagina_spiegazione(
+                    _finestra_corrente().load_html(_pagina_spiegazione(
                         "il ponte non ha risposto sulla porta %d entro un minuto" % PORTA_LOCALE))
             except Exception:
                 pass
@@ -673,7 +710,9 @@ def main():
             min_size=(960, 580),
             js_api=api,
         )
-    api.finestra = finestra
+    # La finestra si mette nella variabile del modulo, NON dentro api: vedi il blocco su _Api.
+    global _FINESTRA
+    _FINESTRA = finestra
 
     # NIENTE load_url PRIMA CHE LA FINESTRA ESISTA DAVVERO (14 novembre 2026).
     #

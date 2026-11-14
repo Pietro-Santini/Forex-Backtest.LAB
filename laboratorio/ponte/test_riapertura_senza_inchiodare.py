@@ -410,3 +410,64 @@ def test_nessuno_chiama_la_finestra_da_un_gestore_di_evento():
         "queste righe chiamano la finestra da un gestore di evento o le iniettano codice: e' il "
         "blocco del 14 novembre 2026 (finestra nera, CPU a zero, tutti i thread in attesa). %s"
         % colpevoli)
+
+def test_l_oggetto_esposto_alla_pagina_contiene_solo_metodi():
+    """L'OGGETTO js_api NON PUO' TENERE LA FINESTRA (14 novembre 2026).
+
+    QUESTA E' LA CAUSA DEL BLOCCO, letta con py-spy su un processo bloccato, non dedotta:
+
+        Thread-2 (generate_js_object)
+            inject_pywebview.<locals>.get_functions (util.py:196)
+            get_functions (util.py:206)      <- ricorsione
+            get_functions (util.py:206)
+            generate_func (util.py:214)
+            generate_js_object (util.py:231)
+        MainThread (idle): create_window (winforms.py:834)
+
+    Per far chiamare i nostri metodi dalla pagina, pywebview CAMMINA DENTRO l'oggetto js_api
+    scendendo negli attributi. Con `api.finestra = finestra` si entra in tutto l'albero di
+    pywebview (la finestra tiene il motore, il motore tiene la finestra) e la camminata non
+    finisce. Il thread principale resta fermo in create_window ad aspettarla: Windows vede una
+    finestra che non risponde, con la CPU a zero perche' nessuno dei due calcola.
+
+    Combacia con tutto il misurato: succede all'avvio E su una semplice ricarica (quella
+    camminata si rifa' a ogni caricamento di pagina), ed e' intermittente.
+
+    La regola: dentro js_api solo metodi. Tutto il resto vive fuori.
+    """
+    import ast
+
+    percorso = os.path.join(RADICE, "desktop", "desktop_shell.py")
+    with open(percorso, encoding="utf-8") as f:
+        albero = ast.parse(f.read())
+
+    classe = None
+    for nodo in albero.body:
+        if isinstance(nodo, ast.ClassDef) and nodo.name == "_Api":
+            classe = nodo
+    assert classe is not None, "la classe _Api non c'e' piu': aggiornare questa prova"
+
+    # 1) Dentro _Api non si assegna nessun attributo su self.
+    attributi = []
+    for nodo in ast.walk(classe):
+        if isinstance(nodo, (ast.Assign, ast.AnnAssign)):
+            bersagli = nodo.targets if isinstance(nodo, ast.Assign) else [nodo.target]
+            for b in bersagli:
+                if (isinstance(b, ast.Attribute) and isinstance(b.value, ast.Name)
+                        and b.value.id == "self"):
+                    attributi.append((nodo.lineno, b.attr))
+    assert not attributi, (
+        "_Api non puo' tenere attributi: pywebview ci cammina dentro per raccogliere i metodi da "
+        "offrire alla pagina, e su un oggetto grosso non ne esce piu'. Trovati: %s" % attributi)
+
+    # 2) E nessuno glieli attacca da fuori.
+    da_fuori = []
+    for nodo in ast.walk(albero):
+        if isinstance(nodo, ast.Assign):
+            for b in nodo.targets:
+                if (isinstance(b, ast.Attribute) and isinstance(b.value, ast.Name)
+                        and b.value.id == "api"):
+                    da_fuori.append((nodo.lineno, b.attr))
+    assert not da_fuori, (
+        "nessuno puo' appendere attributi all'oggetto esposto alla pagina: e' esattamente il "
+        "difetto del 14 novembre (`api.finestra = finestra`). Trovati: %s" % da_fuori)
