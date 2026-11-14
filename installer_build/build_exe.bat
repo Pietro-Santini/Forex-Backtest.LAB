@@ -114,7 +114,29 @@ pyinstaller ^
   --collect-all uvicorn ^
   --hidden-import accesso_condiviso ^
   --collect-all pywinauto ^
-  --collect-all google-auth ^
+REM --collect-all VUOLE IL NOME DEL MODULO, NON QUELLO DEL PACCHETTO PyPI (14 novembre 2026).
+REM
+REM Qui c'era scritto "--collect-all google-auth". Il pacchetto su PyPI si chiama google-auth,
+REM ma il MODULO da importare e' google.auth: PyInstaller non trovava niente, si limitava a un
+REM avviso ("skipping data collection for module 'google-auth' as it is not a package") e
+REM continuava. Misurato:
+REM     collect_all('google-auth')     -> 0 dati, 0 binari, 0 import nascosti
+REM     collect_all('google.auth')     -> 61 dati, 60 import nascosti
+REM     collect_all('google.oauth2')   -> 19 dati, 18 import nascosti
+REM
+REM COSA COSTAVA, misurato sul PC del proprietario il 14 novembre: nell'eseguibile la verifica
+REM del token non poteva mai riuscire, quindi OGNI richiesta al canale dei dati veniva
+REM rifiutata. 3.468 righe "connection rejected (403 Forbidden)" in un log, 780 in quello dopo,
+REM /dati/session e /dati/collegamento sempre 401 - cioe' il salvataggio dei documenti sul
+REM disco E non ha mai potuto funzionare, pur essendo attivo e configurato.
+REM
+REM google e' un pacchetto "namespace" (non ha __init__.py): va nominato per esteso, e i due
+REM moduli che il ponte importa davvero si dichiarano a mano, perche' un import dentro un try
+REM PyInstaller non lo segue.
+  --collect-all google.auth ^
+  --collect-all google.oauth2 ^
+  --hidden-import google.oauth2.id_token ^
+  --hidden-import google.auth.transport.requests ^
   --add-data "build\app.html;." ^
   --add-data "build\manifest.json;." ^
   --add-data "build\icon-192.png;." ^

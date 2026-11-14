@@ -1606,3 +1606,66 @@ chiama due volte, ad averlo pescato.
 
 Ogni controllo che **lascia una traccia** per rispondere va calcolato una volta sola e messo da
 parte, altrimenti la seconda risposta e' sbagliata per costruzione.
+
+## Una misura fatta con uno strumento che altera il fenomeno non vale (14 novembre 2026)
+
+Ho installato l'app in silenzio da PowerShell catturandone l'output. Il Setup, in modalita'
+silenziosa, lancia la finestra come figlia di chi lo ha avviato: il programma ha ereditato un tubo
+che nessuno svuotava, e si e' bloccato alla prima `print()` che lo ha riempito. CPU a zero,
+`Responding = False` - identico a un difetto dell'app, e stavo per annunciarlo come tale.
+
+Prima di dare la colpa al programma, rifare la prova nel modo in cui lo usa la persona: lanciata
+con un doppio clic vero, rispondeva in 6 secondi.
+
+## PagefileUsage non e' la memoria occupata (14 novembre 2026)
+
+Su un processo con un motore web dentro, misurato:
+
+    PagefileUsage   2.639 MB
+    WorkingSetSize    253 MB
+
+Dieci volte. `PagefileUsage` e' lo spazio di indirizzi che il processo si e' fatto addebitare, e
+per un motore web e' enorme per costruzione. Il numero che risponde alla domanda «quanta memoria
+sta togliendo al computer» e' il **working set**, quello della colonna "Memoria" del Gestione
+attivita'. Con il contatore sbagliato una guardia tarata su 2.500 MB scattava su un'app sana.
+
+## --collect-all vuole il nome del MODULO, non del pacchetto PyPI (14 novembre 2026)
+
+`--collect-all google-auth` raccoglie ZERO: il modulo si chiama `google.auth`. PyInstaller scrive
+un avviso e continua, quindi l'eseguibile esce senza la libreria e il difetto si scopre mesi dopo,
+in produzione, sotto forma di 3.468 token rifiutati.
+
+Regola che non puo' dare falsi allarmi: **un nome di modulo Python non contiene trattini**. Un
+trattino dentro `--collect-all`, `--hidden-import` o `--collect-submodules` e' sbagliato sempre.
+E se l'import sta dentro un `try`, PyInstaller non segue quel ramo: va dichiarato a mano.
+
+## Un istante FISSO contro l'orologio vero e' una prova a tempo (14 novembre 2026)
+
+Scrivendo il banco dello scarto orario ho messo, come "tick vecchio", l'epoch vero dell'ultima
+candela di quel sabato. Ma la funzione sotto prova legge `time.time()`: col passare delle ore la
+distanza fra quell'epoch e "adesso" cambia, e dopo un'ora era finita per caso vicino alla griglia
+della mezz'ora - la guardia l'ha accettata e ne ha ricavato -3600. Risultato: verde da sola,
+rossa nella suite, cioe' dipendente dall'ora in cui la si lanciava.
+
+Quando la funzione legge l'orologio vero, il dato di prova va costruito RISPETTO a quell'orologio
+(`time.time() - 3*86400`), non fissato a un istante. Un numero fisso che oggi sta da una parte
+della soglia, domani sta dall'altra.
+
+## Una prova non deve condividere un file vero con le altre (14 novembre 2026)
+
+Le stesse prove scrivevano nel file dello scarto sotto l'APPDATA del collaudo, e un'altra prova
+della suite - con un MT5 finto che dichiara lo stesso nome di server - ci scriveva dentro a sua
+volta. La cura non e' cancellare piu' forte all'inizio: e' dare a ogni prova il suo file
+(`tmp_path`), cosi' l'ordine non conta piu'.
+
+## Una guardia di "istanza unica" rende il collaudo dipendente dal PC (14 novembre 2026)
+
+Il banco del pacchetto desktop chiama `main()`. Da quando `main()` esce subito se una finestra e'
+gia' aperta - con un nome di sistema valido per tutta la sessione di Windows - il collaudo
+diventava rosso ogni volta che il proprietario aveva l'applicazione aperta: nessuna finestra
+creata, nessun logo iniettato. L'esito dipendeva da cosa girava sul computer.
+
+Il sondaggio ora spegne la guardia (`m._gia_in_esecuzione = lambda: False`) e il comportamento
+della guardia si prova a parte. Regola generale: tutto cio' che una funzione legge DAL SISTEMA
+(nomi globali, porte, processi, orologio) va messo sotto il controllo della prova, altrimenti non
+si sta misurando il programma ma la stanza in cui gira.

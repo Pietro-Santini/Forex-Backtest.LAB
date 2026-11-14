@@ -6549,3 +6549,101 @@ del processo. Lo ha trovato `pacchetto_app_desktop.test.mjs`, che chiama `main()
 operazione. Con una sola operazione per volta sono 2 operazioni invece di 80, quindi il problema
 e' risolto dal lato dell'app; ma raggruppare le scritture in un `batch` lo renderebbe definitivo.
 Richiede un rilascio delle Cloud Functions, che fa lui.
+
+## 2026-11-14 — Claude — TRE DIFETTI TROVATI APRENDO L'APPLICAZIONE SUL SUO PC
+
+Il proprietario ha chiesto di aggiornare l'app e provarla io, sul suo computer. Installata la
+2.2.44, ha scritto «verifica perche' e' crashata di nuovo». Quello che e' venuto fuori e' piu' di
+quanto cercassimo, e uno dei tre difetti e' mio.
+
+### A) IL BLOCCO CHE AVEVO CREATO IO — da non raccontare come un difetto dell'app
+
+Dopo l'installazione silenziosa la finestra non rispondeva. MISURATO: CPU a ZERO per 24 secondi,
+memoria ferma, 10 thread, `Responding = False`. Zero CPU vuol dire che non sta calcolando: sta
+aspettando.
+
+La causa era il mio modo di lanciarla. Il Setup, con `/SILENT`, lancia la finestra come FIGLIA di
+chi lo ha avviato (riga `Check: InstallazioneSilenziosa` in installer.iss), e io lo avevo avviato
+da PowerShell catturandone l'output: il programma eredita un tubo che nessuno svuota, e la prima
+`print()` che lo riempie si blocca per sempre. Riaperta con un doppio clic vero (lanciata da
+`explorer.exe`, senza eredita'): **risponde, pronta in 6 secondi**.
+
+LEZIONE, gia' pagata altre volte in questo progetto: una misura fatta con uno strumento che
+altera il fenomeno non vale. Stavo per annunciargli una ricaduta della 2.2.44 che non esisteva.
+Il percorso dell'aggiornamento automatico NON ha questo problema: lancia il Setup con
+`DETACHED_PROCESS`, quindi non eredita niente.
+
+### B) google-auth NON ERA DENTRO L'ESEGUIBILE — il difetto grosso
+
+Nel log del ponte, grazie al messaggio diagnostico aggiunto il 13 novembre:
+
+    [Dati] token rifiutato: le librerie google-auth non sono disponibili in questo eseguibile:
+    nessun token potra' mai essere accettato (e altri 13 rifiuti uguali nel frattempo)
+
+LA CAUSA, una riga di `build_exe.bat`: `--collect-all google-auth`. Su PyPI il pacchetto si chiama
+google-auth, ma il MODULO e' `google.auth`. PyInstaller non trovava niente, scriveva un avviso
+(«skipping data collection for module 'google-auth' as it is not a package») e **continuava**.
+
+MISURATO con PyInstaller stesso:
+
+    collect_all('google-auth')     ->  0 dati,  0 import nascosti
+    collect_all('google.auth')     -> 61 dati, 60 import nascosti
+    collect_all('google.oauth2')   -> 19 dati, 18 import nascosti
+
+QUANTO COSTAVA, e qui sta la cosa che nessuno aveva collegato: senza quella libreria la verifica
+del token non puo' MAI riuscire, quindi **ogni** richiesta al canale dei dati viene rifiutata.
+3.468 righe «connection rejected (403 Forbidden)» in un log, 780 nel successivo, e
+`/dati/session` e `/dati/collegamento` sempre **401 Unauthorized**.
+
+Cioe': **il salvataggio dei documenti sul disco E non ha mai potuto funzionare**, pur essendo
+acceso e configurato (`[Bridge] cloud nostro attivo: i documenti stanno in E:\Forex Backtest
+Lab\dati\dati_utenti.db`). Era in lista come un lavoro da fare; era questo difetto.
+
+Banco: `laboratorio/ponte/test_librerie_nell_exe.py` (6 prove). La regola che difende copre tutta
+la classe, non solo il caso visto: **un nome di modulo Python non puo' contenere un trattino**,
+quindi un trattino dentro `--collect-all` o `--hidden-import` e' sbagliato per costruzione.
+Verificato che sarebbe stata rossa sulla versione in git (segnalava `google-auth`).
+
+### C) IL MIO GUARDIANO DELLA MEMORIA LEGGEVA IL CONTATORE SBAGLIATO
+
+Scritto il 13 novembre, leggeva `PagefileUsage`. Misurato il 14 sul suo PC, su un'applicazione
+perfettamente sana:
+
+    PagefileUsage   2.639 MB     <- quello che leggevo
+    WorkingSetSize    253 MB     <- la RAM davvero occupata
+
+Dieci volte tanto. Con la soglia a 2.500 MB il guardiano scattava SUBITO e ricaricava la pagina
+ogni due minuti, per sempre. Non e' una supposizione: nel log si vede la ricarica non chiesta da
+nessuno (un `POST /disconnect?grazia=1` seguito da `GET /sw.js`, `/versione-programma`,
+`/segnali-launch`).
+
+E non lasciava traccia: l'eseguibile della finestra e' compilato `--windowed`, quindi il `print`
+del guardiano finiva nel nulla. Il difetto si e' trovato per deduzione dalle richieste al ponte.
+Adesso scrive in `ForexBacktestLABDesktop.log`, accanto agli altri.
+
+Corretto: si legge il working set, e la soglia e' 3.000 MB — dodici volte il normale misurato
+(253 MB) e cinque volte meno del caso che gli bloccava il computer (15,8 GB).
+
+### LA MEMORIA, MISURATA PER DAVVERO: 21 campioni in 7 minuti, PIATTA
+
+    motore web (7 processi)   847 MB
+    finestra                  266 MB
+    ponte                      40 MB
+    dati MT5                   43 MB
+    TOTALE                  1.196 MB   di working set
+
+La perdita fino a 15,8 GB NON si e' ripresentata in questa sessione, quindi non e' risolta: resta
+senza causa. Da notare che il «4,8 GB» che si legge sommando `PrivateMemorySize` e' lo stesso
+inganno del punto C: il numero vero e' 1,2 GB.
+
+### ANCORA DA GUARDARE, visto sul suo PC e non ancora affrontato
+
+- 16 MB di log nella cartella dell'applicazione, che nessuno ruota (uno da 5,2 MB, uno da 7,2).
+- Il profilo del motore web a 591 MB.
+- `[Pulizia] tolte 16 cartelle temporanee rimaste indietro (0.8 GB)` si ripete a ogni avvio, piu'
+  volte al giorno, sempre fra 0,4 e 0,8 GB: qualcosa riavvia gli eseguibili molto piu' di quanto
+  serva, e ogni avvio di un onefile estrae una cartella nuova.
+- Tailscale e' ancora acceso («Accesso da altri dispositivi ACCESO (via Tailscale): serve la
+  chiave»), come da lista.
+- `ForexBacktestLAB.spec` e `Mt5FeedServer.spec` non li usa nessuno (build_exe.bat passa le
+  opzioni a mano): due file generati che sembrano la fonte della verita' e non lo sono.

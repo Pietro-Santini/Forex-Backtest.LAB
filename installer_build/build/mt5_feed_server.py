@@ -262,6 +262,98 @@ def _scarto_da_un_simbolo_quiunque(now) -> Optional[int]:
     return _scarto_fresco_da_epoch(migliore, now)
 
 
+
+def _nome_server_broker():
+    """Il nome del server come lo dichiara MT5 (es. "FTMO-Demo"), stringa vuota se non si sa."""
+    try:
+        info = _mt5_call(mt5.account_info)
+        return str(getattr(info, "server", "") or "")
+    except Exception:
+        return ""
+
+
+# =====================================================================================
+# LO SCARTO ORARIO DEL BROKER SI RICORDA SU DISCO (14 novembre 2026)
+# =====================================================================================
+# SEGNALATO dal proprietario, con lo screenshot del grafico: «abbiamo ancora il problema del
+# tempo che non si ferma alla chiusura dell'asset, mi mostra 00:48 invece l'asset ha chiuso alle
+# 22:00».
+#
+# MISURATO sul suo PC, di sabato a mercato chiuso: le candele di XAU/USD arrivavano fino alle
+# 00:45 locali e NON erano inventate - avevano volume vero (1.056, 626, 739 tick). Erano candele
+# giuste, mostrate due ore avanti. Nei log dello stesso giorno, a mercato aperto:
+#
+#     scarto server/UTC 7200s   12 volte     <- il vero scarto di FTMO (UTC+2, ora solare)
+#     scarto server/UTC    0s    2 volte     <- solo DOPO il riavvio di quella notte
+#
+# LA CAUSA: lo scarto si misura da un tick FRESCO, e a mercato chiuso non c'e' niente di fresco
+# da misurare - giustamente, perche' l'eta' di un tick vecchio verrebbe scambiata per il fuso
+# orario del broker (difetto del 18 ottobre: 8h20 di eta' spostavano ogni candela di 8h20). La
+# riserva c'era gia', ma viveva in una variabile di questo processo: riaprendo l'applicazione nel
+# fine settimana si ripartiva da zero, e "zero" vuol dire mostrare l'orologio del server come se
+# fosse UTC. Due ore di errore, per tutto il tempo che il mercato resta chiuso.
+#
+# Adesso l'ultima misura buona si scrive accanto agli altri dati, sotto il NOME DEL SERVER del
+# broker: due conti su server diversi non si passano un fuso sbagliato, e cambiando broker non ci
+# si porta dietro quello di prima. Il file e' lo stesso per il ponte e per il servizio dati: chi
+# dei due misura per primo lo dice all'altro.
+#
+# ATTENZIONE a non usarlo per aggirare la guardia: un valore ricordato vale SOLO quando non c'e'
+# niente di fresco. Appena arriva un tick vero vince lui - compreso il giorno in cui il broker
+# passa all'ora legale, che e' proprio il caso in cui il ricordo sarebbe vecchio di un'ora.
+_CARTELLA_SCARTO = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"),
+                                "ForexBacktestLAB")
+_FILE_SCARTO = os.path.join(_CARTELLA_SCARTO, "scarto_server.json")
+
+
+def _scarto_ricordato():
+    """L'ultima misura buona per QUESTO server del broker, se c'e'. None quando non si sa di
+    quale server si tratta: un fuso attribuito al broker sbagliato e' peggio di nessun fuso."""
+    try:
+        server = _nome_server_broker()
+        if not server:
+            return None
+        with open(_FILE_SCARTO, encoding="utf-8") as f:
+            dati = json.load(f)
+        voce = (dati or {}).get(server)
+        if not isinstance(voce, dict):
+            return None
+        scarto = int(voce.get("scarto"))
+        # Il fuso di un server sta fra -12 e +14 ore: fuori di li' il file e' rovinato.
+        if abs(scarto) > 14 * 3600:
+            return None
+        return scarto
+    except Exception:
+        return None
+
+
+def _ricorda_scarto(scarto):
+    """Scrive la misura buona, ma solo se e' cambiata o se e' passato un giorno: non deve
+    diventare una scrittura su disco a ogni candela richiesta."""
+    try:
+        server = _nome_server_broker()
+        if not server or scarto is None:
+            return
+        try:
+            with open(_FILE_SCARTO, encoding="utf-8") as f:
+                dati = json.load(f) or {}
+        except Exception:
+            dati = {}
+        if not isinstance(dati, dict):
+            dati = {}
+        voce = dati.get(server) if isinstance(dati.get(server), dict) else {}
+        if voce.get("scarto") == int(scarto) and (time.time() - float(voce.get("quando") or 0)) < 86400:
+            return
+        dati[server] = {"scarto": int(scarto), "quando": time.time()}
+        os.makedirs(_CARTELLA_SCARTO, exist_ok=True)
+        tmp = _FILE_SCARTO + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(dati, f)
+        os.replace(tmp, _FILE_SCARTO)      # mai un file mezzo scritto
+    except Exception:
+        pass
+
+
 def _server_time_offset_seconds(tick) -> int:
     """Stessa identica logica di _server_time_offset_seconds() in bridge.py (vedi lì il commento
     completo): l'orologio del server del broker spesso non è UTC. Calcoliamo lo scarto da un tick
@@ -282,13 +374,22 @@ def _server_time_offset_seconds(tick) -> int:
         _last_good_server_offset = scarto
         return scarto
     if _last_good_server_offset is not None:
+        _ricorda_scarto(_last_good_server_offset)
         return _last_good_server_offset
     if now - _ultima_ricerca_scarto > 60.0:
         _ultima_ricerca_scarto = now
         scarto = _scarto_da_un_simbolo_quiunque(now)
         if scarto is not None:
             _last_good_server_offset = scarto
+            _ricorda_scarto(scarto)
             return scarto
+    # 5) L'ultima misura buona salvata su disco. E' l'unica che sopravvive a un riavvio, ed e'
+    #    esattamente il caso del fine settimana: nessun tick fresco da nessuna parte, per due
+    #    giorni di fila. Senza questo si tornava a 0, cioe' a due ore di errore sul grafico.
+    ricordato = _scarto_ricordato()
+    if ricordato is not None:
+        _last_good_server_offset = ricordato
+        return ricordato
     return 0
 
 

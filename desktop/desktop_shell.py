@@ -219,8 +219,48 @@ def _pagina_attesa():
 # invece di portarsi giu' il computer. Va detto, e sta scritto qui: e' un paracadute, non una cura.
 
 
+# UN PRINT, QUI, NON LO LEGGE NESSUNO (14 novembre 2026).
+#
+# Questo eseguibile e' compilato con --windowed: non ha una console, e tutto quello che scrive su
+# stdout finisce nel nulla. Quando il guardiano della memoria ha cominciato a ricaricare la pagina
+# da solo, nel log non c'era UNA riga che lo dicesse: il difetto si e' trovato per deduzione,
+# guardando le richieste al ponte (un /disconnect seguito da un /sw.js). Una guardia che agisce
+# senza lasciare traccia costa piu' tempo di quanto ne risparmi.
+def _scrivi_nel_diario(riga):
+    """Una riga con l'ora nel diario della finestra, accanto agli altri log dell'applicazione."""
+    try:
+        import datetime
+        quando = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        dove = os.path.join(INSTALLED_APP, "ForexBacktestLABDesktop.log")
+        if not os.path.isdir(INSTALLED_APP):
+            dove = os.path.join(os.path.expanduser("~"), ".forexbacktestlab",
+                                "ForexBacktestLABDesktop.log")
+            os.makedirs(os.path.dirname(dove), exist_ok=True)
+        with open(dove, "a", encoding="utf-8") as f:
+            f.write("%s [finestra] %s\n" % (quando, riga))
+    except Exception:
+        pass
+
+
 def _memoria_mia_mb():
-    """Quanta memoria PRIVATA sta usando questo processo. Senza librerie esterne: ctypes."""
+    """Quanta RAM sta occupando davvero questo processo, in MB.
+
+    IL CONTATORE GIUSTO E' IL WORKING SET, NON IL PAGEFILE (misurato il 14 novembre 2026).
+    La prima versione di questa funzione leggeva PagefileUsage, e il risultato misurato sul PC
+    del proprietario, su un'applicazione perfettamente sana, era:
+
+        PagefileUsage   2.639 MB          <- quello che leggevo
+        WorkingSetSize    253 MB          <- la RAM davvero occupata
+
+    Dieci volte tanto. PagefileUsage e' lo spazio di indirizzi che il processo si e' fatto
+    addebitare, e per un motore web e' enorme per costruzione: non dice niente su quanta memoria
+    sta togliendo al computer. Con la soglia a 2.500 MB il guardiano scattava SUBITO, su un'app
+    sana, e ricaricava la pagina ogni due minuti per sempre - difetto visto dal vivo nel log
+    (POST /disconnect seguito da GET /sw.js, cioe' una ricarica non chiesta da nessuno).
+
+    Il working set e' quello che il Gestione attivita' mostra alla voce "Memoria", ed e' il numero
+    che il proprietario guardava quando ha visto 15,8 GB.
+    """
     try:
         import ctypes
         from ctypes import wintypes
@@ -244,15 +284,19 @@ def _memoria_mia_mb():
         h = ctypes.windll.kernel32.GetCurrentProcess()
         if not ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb):
             return 0
-        return int(pmc.PagefileUsage / (1024 * 1024))
+        return int(pmc.WorkingSetSize / (1024 * 1024))
     except Exception:
         return 0
 
 
-# Oltre questa soglia la pagina si ricarica da sola. 2.500 MB e' molto piu' di quanto serva a
-# lavorare (misurato: con la sessione carica e tutto acceso, da fermo sta sotto i 200 MB) e molto
-# meno di quanto serva a mettere in ginocchio un computer da 16 GB.
-SOGLIA_RICARICA_MB = 2500
+# Oltre questa soglia di WORKING SET la pagina si ricarica da sola.
+#
+# I due numeri fra cui sta, misurati entrambi sul PC del proprietario:
+#   253 MB   working set di un'applicazione sana, con la sessione carica e il conto collegato;
+#   15,8 GB  il caso che gli bloccava tutto il computer (0,6 GB liberi su 16).
+# 3.000 MB e' dodici volte il normale - quindi non puo' scattare per un uso intenso - e cinque
+# volte meno del punto in cui fa danno.
+SOGLIA_RICARICA_MB = 3000
 
 
 def _sorveglia_memoria(finestra, url):
@@ -273,7 +317,8 @@ def _sorveglia_memoria(finestra, url):
                 if (time.time() - ricaricata_al) < 120:
                     continue
                 ricaricata_al = time.time()
-                print("[memoria] %d MB: oltre la soglia di %d, ricarico la pagina" % (mb, SOGLIA_RICARICA_MB))
+                _scrivi_nel_diario(
+                    "memoria a %d MB (soglia %d): ricarico la pagina" % (mb, SOGLIA_RICARICA_MB))
                 try:
                     if url:
                         finestra.load_url(url)
