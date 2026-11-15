@@ -1719,3 +1719,27 @@ Contare «bloccata» al primo campione in cui una finestra non risponde da' nume
 il caricamento e' normale che non risponda. Il criterio giusto e' **se si riprende**: campionare
 per un minuto e guardare la fine. Con il criterio frettoloso uscivano 2 blocchi su 6; con quello
 giusto 3 su 5, e il risultato era netto - o sempre viva o sempre bloccata, mai a meta'.
+
+## Un'avvertenza scritta in un commento non protegge nessuno (15 novembre 2026)
+
+Il 14 novembre ho fatto scattare ordini e stop dentro la candela usando il percorso che il
+replay disegnava da sempre: apertura -> massimo -> minimo -> chiusura, in quest'ordine
+qualunque fosse il verso. Sapevo che era parziale, e l'ho scritto nel codice: «favorisce
+sistematicamente gli ordini sopra il prezzo... renderlo direzionale e' una decisione a parte».
+Poi ho pubblicato.
+
+Il giorno dopo, con una sonda su tutte le 58 aperture possibili dentro una candela (stop 2 pip,
+target 4): **34 stop, 17 target, 7 ancora aperte - identico in una candela che sale e in una che
+scende**. Cioe' 51 posizioni su 58 morivano nella candela in cui nascevano, e l'esito non
+dipendeva dal mercato ma dall'ordine di visita degli estremi. Col verso giusto diventa 11/25/22
+comprando in salita e 40/6/12 comprando in discesa.
+
+Due lezioni, e la seconda e' quella che conta.
+
+1. **Misurare la conseguenza, non descriverla.** Avevo la frase giusta («favorisce
+   sistematicamente») e non il numero. Se avessi contato le 58 aperture il 14, non avrei
+   pubblicato. Scrivere l'avvertenza mi ha dato la sensazione di aver fatto la mia parte.
+2. **Un commento non e' un rinvio valido.** Quando una parzialita' nota cambia i risultati che
+   il proprietario legge, il commento la documenta ma non la contiene: il backtest sbagliato
+   esce comunque dalla porta. O si misura e si vede che e' tollerabile, o si cura prima di
+   pubblicare. Il terzo caso - pubblicare con l'avviso - non esiste.

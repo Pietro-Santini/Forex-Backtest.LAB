@@ -78,7 +78,14 @@ test('in replay, con MT5 collegato, la posizione aperta si disegna e mostra il P
       const riga = [...document.querySelectorAll('#openPositions tr')].find(tr => /BUY/.test(tr.textContent) && tr.textContent.includes('XAUUSD'));
       return {
         entry: pos.entry,
-        prezzoReplay: currentPrice(),
+        // IL PREZZO MOSTRATO, NON currentPrice() (14 novembre 2026). Questa riga diceva
+        // `currentPrice()`, che in replay e' la chiusura dell'ultima candela COMPIUTA -
+        // cioe' l'apertura di quella in formazione. L'asserzione qui sotto dice «al prezzo
+        // della candela mostrata» ed era quindi in contraddizione con se stessa: difendeva
+        // il difetto segnalato dal proprietario («prende come riferimento da dove e'
+        // partita l'ultima candela e non il prezzo corrente»). prezzoMostratoOra() e' il
+        // prezzo che l'utente sta davvero vedendo, formazione compresa.
+        prezzoReplay: prezzoMostratoOra(),
         drawable: drawableOnCurrentChart(pos),
         revealed: posRevealedInReplay(pos),
         testiEuro: window.__testi.filter(t => /€/.test(t)),

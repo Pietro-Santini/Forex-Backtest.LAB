@@ -275,3 +275,35 @@ fib, note) l'ancoraggio è solido e coperto dai test.
    confermato), poi A+B (funzione nuova), poi E (verifica).
 3. Ogni blocco: misura del difetto → causa → correzione → test verde → prova di controllo rossa.
 4. Alla fine: bump `CACHE_NAME`, collaudo, APK, release (procedura di `cervello/PUBBLICARE.md`).
+
+## IL PERCORSO DENTRO LA CANDELA (deciso il 15 novembre 2026)
+
+Dentro una candela i dati contengono quattro numeri: apertura, massimo, minimo, chiusura. **Il
+percorso vero non esiste nei dati** e nessuna regola puo' ricostruirlo. Il replay ne usa percio'
+uno dichiarato, scritto in `replaySintesiPath()`:
+
+    candela RIALZISTA (chiusura >= apertura):  apertura -> minimo -> massimo -> chiusura
+    candela RIBASSISTA:                        apertura -> massimo -> minimo -> chiusura
+    tempi: 30% sulla prima gamba, 45% sulla seconda, 25% sull'ultima
+
+Su quella stessa linea - una sola, non due - si appoggia **tutto**: il disegno della candela in
+formazione, l'accumulo del footprint, il P/L live, lo scatto degli ordini pendenti e lo scatto di
+stop e target. E' questa la garanzia che il simulatore puo' davvero dare: **cio' che vedi e cio'
+che accade sono la stessa cosa**. Non e' il percorso del mercato; e' il percorso dell'app, ed e'
+coerente con se stesso.
+
+**Perche' direzionale.** Fino al 14 novembre l'ordine era sempre massimo-poi-minimo. Misurato su
+tutte le 58 aperture possibili dentro una candela di EUR/USD a un minuto, stop 2 pip e target 4:
+34 stop, 17 target, 7 ancora aperte - **lo stesso risultato in una candela che sale e in una che
+scende**. L'esito lo decideva l'ordine di visita, non il mercato. Col verso giusto: 11/25/22
+comprando in salita, 40/6/12 comprando in discesa.
+
+**Cosa resta approssimato, e va detto al proprietario se lo chiede.** Il momento esatto dentro la
+candela in cui uno stop scatta dipende da questa convenzione. Su time frame alti (un'ora, un
+giorno) la differenza fra il percorso dichiarato e quello vero puo' essere grande: l'esito
+complessivo di una strategia resta indicativo, non una certezza. Per toglierla del tutto
+servirebbero i tick veri, cioe' una fonte dati diversa.
+
+**Non si tocca senza misurare.** Chi cambia questa funzione rifaccia il conto delle 58 aperture:
+il banco `laboratorio/app/replay_scatto_dentro_la_candela.test.mjs` lo fa da solo e si lamenta se
+i due versi danno lo stesso risultato.

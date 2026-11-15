@@ -1,3 +1,16 @@
+- 2026-11-15 — Claude — **v2.2.54: in replay si entra, e si esce, al prezzo del secondo in cui sei.**
+  Il percorso dentro la candela ora segue il verso della candela (rialzista: apertura -> minimo ->
+  massimo -> chiusura; ribassista l'opposto), e SL/TP tornano a valutarsi secondo per secondo come
+  in tempo reale. Prima il percorso visitava sempre il massimo prima del minimo: misurato su tutte
+  le 58 aperture possibili dentro una candela dava 34 stop / 17 target / 7 aperte, lo stesso numero
+  in salita e in discesa - era il percorso a decidere l'esito, non il mercato. Ora 11/25/22 in
+  salita e 40/6/12 in discesa. Deciso dal proprietario: «deve fare esattamente quello che fa oggi a
+  mercato a tempo reale... lo esegue al momento di dove si trova l'evoluzione della candela, al
+  secondo». Insieme: l'ordine pendente scatta appena il prezzo tocca la linea (prima aspettava la
+  chiusura della candela: 48 secondi di ritardo su 60 misurati), la posizione nasce con l'istante
+  della candela in formazione e non di quella chiusa, il prezzo d'ingresso e' quello del momento e
+  non l'apertura della barra, e il cartellino sulla scala mostra il conto alla rovescia. 27 prove
+  nuove nei banchi del replay.
 - 2026-11-09 - OpenCode - **v2.2.12: il prezzo dell'altro broker non entra piu' nella candela.
   Terza strada della stessa famiglia (due livelli di prezzo nelle stesse candele).**
   SEGNALATO (9 novembre, con una foto): «al caricamento dello stesso asset si rompe e diventa

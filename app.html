@@ -13040,7 +13040,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.53';
+const FBL_VERSIONE='2.2.54';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -25196,7 +25196,7 @@ function draw(){
    const draftSlRaw=num($('sl')?.value), draftTpRaw=num($('tp')?.value);
    const draftSl=isDraggingSl && previewTradeLevel.price!=null?previewTradeLevel.price:draftSlRaw;
    const draftTp=isDraggingTp && previewTradeLevel.price!=null?previewTradeLevel.price:draftTpRaw;
-   const draftEntryMkt=currentPrice();
+   const draftEntryMkt=prezzoOraPerOrdine();   // in replay: il prezzo del momento rivisto
    if((Number.isFinite(draftSl)||Number.isFinite(draftTp)) && Number.isFinite(draftEntryMkt)){
      const risk=Math.abs(draftEntryMkt-(Number.isFinite(draftSl)?draftSl:draftEntryMkt));
      const reward=Math.abs((Number.isFinite(draftTp)?draftTp:draftEntryMkt)-draftEntryMkt);
@@ -25252,7 +25252,7 @@ function draw(){
    const draftSlP=isDraggingSlP && previewTradeLevel.price!=null?previewTradeLevel.price:draftSlPRaw;
    const draftTpP=isDraggingTpP && previewTradeLevel.price!=null?previewTradeLevel.price:draftTpPRaw;
    const pe=num($('pendingEntry')?.value);
-   const draftEntryP=isDraggingEntryP && previewTradeLevel.price!=null?previewTradeLevel.price:(Number.isFinite(pe)?pe:currentPrice());
+   const draftEntryP=isDraggingEntryP && previewTradeLevel.price!=null?previewTradeLevel.price:(Number.isFinite(pe)?pe:prezzoOraPerOrdine());
    if((Number.isFinite(draftSlP)||Number.isFinite(draftTpP)) && Number.isFinite(draftEntryP)){
      const risk=Math.abs(draftEntryP-(Number.isFinite(draftSlP)?draftSlP:draftEntryP));
      const reward=Math.abs((Number.isFinite(draftTpP)?draftTpP:draftEntryP)-draftEntryP);
@@ -25364,9 +25364,23 @@ function draw(){
      const labelW=70;
      // In Live aggiungiamo, sotto al prezzo, il conto alla rovescia prima della chiusura
      // della candela in corso (come MT5/TradingView): la casella si allunga di conseguenza.
-     // Ha senso solo in Live perché si basa sull'orologio reale — in Storico/replay la
-     // candela "in corso" avanza col Play, non con il tempo che passa.
-     const showCountdown=liveModeActive&&liveSessionPhaseNow()!=='closed'; // a mercato chiuso il conto alla rovescia si ferma, come su MT5
+     // ANCHE IN REPLAY, QUANDO UNA CANDELA SI STA FORMANDO (14 novembre 2026).
+     //
+     // Qui c'era scritto che il conto alla rovescia «ha senso solo in Live perche' si basa
+     // sull'orologio reale»: era vero quando fu scritto, e non lo e' piu'. fmtCandleCountdown()
+     // ha imparato il replay (ha un ramo che scorre col MOLTIPLICATORE), ma nessuno e' tornato
+     // a riaprire questo cancello: il numero si calcolava e non si disegnava.
+     //
+     // SEGNALATO dal proprietario: «non ci mostra il timer sul cartellino sull'asse del
+     // prezzo». MISURATO con una sonda, replay sul conto Storico con il PLAY premuto:
+     //     liveModeActive ......... false
+     //     showCountdown .......... false   <- il cancello chiudeva comunque
+     //     prezzo sul cartellino .. disegnato
+     //     conto alla rovescia .... NON disegnato
+     // E in replay-Live spariva ogni volta che l'orologio VERO diceva mercato chiuso, anche se
+     // il momento rivisto era un martedi' a meta' sessione.
+     const inFormazione=!!(typeof replayForm!=='undefined'&&replayForm&&replayForm.idx===idx+1);
+     const showCountdown=inFormazione||(liveModeActive&&liveSessionPhaseNow()!=='closed'); // a mercato chiuso il conto alla rovescia si ferma, come su MT5
      const labelH=showCountdown?30:20;
      const labelY=placeLabelY(labelX,labelW,py-labelH/2,labelH,pad.t,h-pad.b);
      // Price marker is part of the right-hand scale. Sfondo casella = colore linea tema,
@@ -27921,6 +27935,48 @@ function mt5RealNet(ticket){
 // caselle facevano un salto secco una volta per candela invece di seguire il moltiplicatore.
 // Il prezzo in formazione, invece, avanza di un passo per ogni secondo di mercato svelato: e'
 // esattamente la "velocita' di aggiornamento selezionata".
+// IL PREZZO "DI ADESSO" QUANDO SI PIAZZA UN ORDINE (14 novembre 2026).
+//
+// SEGNALATO dal proprietario, in replay: «quando piazza il tp e sl non prende in considerazione
+// il momento in cui si trova sul prezzo ma prende come riferimento da dove e' partita l'ultima
+// candela e non il prezzo corrente».
+//
+// MISURATO con una sonda sulla pagina vera, candela in formazione 100,00 / 101,00 / 99,00 /
+// 100,50 fermata a META' barra (sub 30 su 60):
+//     chiusura dell'ultima candela compiuta ....... 100,0000
+//     prezzo corrente VERO del replay ............. 100,1111
+//     entry consegnata all'anteprima .............. 100,0000   <- sbagliato
+//
+// LA CAUSA: si usava currentPrice(), che restituisce rows[idx].close - cioe' la chiusura
+// dell'ultima candela COMPIUTA, che e' esattamente l'apertura di quella in formazione. Sono
+// le parole del proprietario, alla lettera: «da dove e' partita l'ultima candela».
+//
+// E NON ERA SOLO IL DISEGNO: la stessa fonte alimenta openMarketTrade(), quindi in replay la
+// posizione ENTRAVA DAVVERO a quel prezzo. Non un difetto estetico: P/L, Trade Journal,
+// statistiche ed equity del backtest venivano calcolati su un prezzo mai esistito in quel
+// momento.
+//
+// IL SECONDO RAMO, peggiore, misurato: se durante un replay-Live c'e' un tick dal vivo in
+// memoria (lastPrimaryEpicPrice / lastMt5TickPrice, mai azzerati entrando in replay),
+// currentPrice() restituisce IL PREZZO DI ADESSO - misurato 123,456 contro i 100,1111 del
+// momento rivisto. L'ordine si sarebbe ancorato a un prezzo che non c'entra niente con la
+// candela guardata.
+//
+// Per questo non basta chiamare prezzoMostratoOra(): a PLAY in pausa (replayForm nullo) anche
+// lei ripiega su currentPrice(), e il tick del presente rientrerebbe dalla finestra. Qui, in
+// replay, il presente non entra mai: o il prezzo della formazione, o la chiusura della candela
+// che si sta guardando.
+function prezzoOraPerOrdine(){
+  try{
+    if(liveReplayActive||replayForm){
+      const f=replayPrezzoFormazione();
+      if(Number.isFinite(f))return f;
+      const c=rows[idx]&&Number(rows[idx].close);
+      return Number.isFinite(c)?c:null;
+    }
+  }catch(e){}
+  return currentPrice();
+}
 function prezzoMostratoOra(){
  const p=replayPrezzoFormazione();
  return Number.isFinite(p)?p:currentPrice();
@@ -29810,6 +29866,35 @@ function scanHistoricalSlTpTouches(){
    }
  });
 }
+// L'ISTANTE DI NASCITA DI UNA POSIZIONE APERTA IN REPLAY (15 novembre 2026).
+//
+// MISURATO con una sonda sulla pagina vera: una vendita aperta al secondo 30 di una candela e'
+// stata chiusa in stop su un massimo che il prezzo aveva toccato DODICI SECONDI PRIMA che la
+// posizione esistesse.
+//
+// LA CAUSA: si registrava `startTime` dalla candela rows[idx], che e' quella GIA' CHIUSA,
+// mentre la posizione nasce in quella in formazione (replayForm.idx). Il controllo di
+// evaluate() - `if(rowTime<=pos.startTime)return;` - serve proprio a non valutare una
+// posizione contro la propria candela di nascita; con l'istante sbagliato quel controllo non
+// scattava, e la candela di nascita veniva valutata PER INTERO, massimo e minimo compresi,
+// incluso il tratto precedente all'ingresso. Un prezzo accaduto prima non puo' chiudere una
+// posizione: non e' un'approssimazione, e' impossibile.
+//
+// COSA SI PERDE, e va detto: saltando la candela di nascita, uno stop toccato DAVVERO dopo
+// l'ingresso ma dentro quella stessa candela non viene visto, e si valutera' dalla successiva.
+// E' un'approssimazione limitata a una candela e nota, al posto di un errore senza limite.
+// Chiuderla del tutto richiederebbe di valutare SL e TP sul percorso dentro la barra, cioe' di
+// decidere l'esito di un'operazione in base a un ordine di visita che nei dati non c'e' - e su
+// quello il proprietario ha deciso di no (vedi replayValutaFormazione).
+function fblIstanteNascitaReplay(predefinito){
+  try{
+    if(replayForm&&rows[replayForm.idx]){
+      const t=parseDateTime(rows[replayForm.idx].date);
+      if(Number.isFinite(t))return t;
+    }
+  }catch(e){}
+  return predefinito;
+}
 function activatePendingOrder(p){
  const requiredMargin=marginForLots(p.lots,p.entry);
  if(requiredMargin>freeMargin()+1e-9){
@@ -29825,7 +29910,7 @@ function activatePendingOrder(p){
    id:Date.now()+Math.random(),
    asset:posAsset,
    side:p.side,entry:entryWithSpread,sl:p.sl,tp:p.tp,origin:'PENDING',kind:p.kind||'LIMIT',
-   lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(rows[idx].date),
+   lots:p.lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:fblIstanteNascitaReplay(parseDateTime(rows[idx].date)),
    openTF:currentTF, // timeframe attivo al momento dell'apertura: serve per ancorare le frecce
    // sempre all'ultima candela CHIUSA in m1 di quel punto, indipendentemente dal timeframe
    // che si sta guardando dopo (vedi openReferenceTimeForPos()).
@@ -31120,7 +31205,17 @@ function openMarketTrade(side,forz){
  if(blockedByPropFirmNews())return; // STEP 2: conto chiuso per violazione, o notizia macro simulata in corso
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
  const market=rows[idx];
+ // IL PREZZO A CUI SI ENTRA DAVVERO. In diretta e' la chiusura dell'ultima candela, come prima;
+ // in replay e' il prezzo del momento che si sta guardando - altrimenti il backtest registra
+ // un'entrata a un prezzo mai esistito in quell'istante, e con essa P/L, Journal, statistiche
+ // ed equity. Vedi prezzoOraPerOrdine() per i numeri misurati.
  let entry=Number(market.close);
+ try{
+   if(liveReplayActive||replayForm){
+     const _p=prezzoOraPerOrdine();
+     if(Number.isFinite(_p))entry=_p;
+   }
+ }catch(e){}
  if(!Number.isFinite(entry))return $('status').textContent='Prezzo corrente non disponibile.';
  // Spread automatico (solo Modalità Prop Firm): il prezzo di entrata effettivo è già
  // "peggiorato" dello spread, esattamente come un ordine a mercato reale.
@@ -31156,7 +31251,7 @@ function openMarketTrade(side,forz){
    id:Date.now()+Math.random(),
    asset:$('market')?.value||'',
    side,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,origin:'MARKET',
-   lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:parseDateTime(market.date),
+   lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:fblIstanteNascitaReplay(parseDateTime(market.date)),
    openTF:currentTF, // vedi nota in activatePendingOrder()
    marginUsed:requiredMargin,
    historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso()
@@ -31683,6 +31778,104 @@ function startPlayInterval(){
  }
  timer=setInterval(replayAnimTick,REPLAY_FRAME_MS);
 }
+// GLI ORDINI SCATTANO QUANDO IL PREZZO TOCCA IL LIVELLO, NON A CANDELA CHIUSA (14 nov 2026).
+//
+// SEGNALATO dal proprietario: «appena passa sopra il prezzo alla linea di entrata scatta
+// l'apertura e non dopo che finisce la candela e passa alla successiva, deve funzionare come
+// in tempo reale allo stesso modo lo deve simulare alla perfezione».
+//
+// MISURATO con una sonda sulla pagina vera, candela da un minuto, ordine a 1,00150:
+//     passo 11  prezzo 1,00150  pendenti=1 posizioni=0   <- il prezzo E' sull'entrata
+//     passo 17  prezzo 1,00200  pendenti=1 posizioni=0   <- l'ha superata di 5 pip
+//     passo 58  prezzo 1,00050  pendenti=1 posizioni=0   <- tornato sotto, ancora pendente
+//     passo 59  idx avanza      pendenti=0 posizioni=1   <- scatta ORA, a candela chiusa
+// Ritardo misurato: 48 secondi su 60, l'80% della candela. Su un grafico orario, 48 minuti.
+// Lo stesso identico ritardo e' stato misurato per lo scatto di SL e TP.
+//
+// LA CAUSA: checkPendingOrders() ed evaluate() venivano chiamate SOLO da forward(), cioe' solo
+// quando una candela si chiude. Il battito del replay, che avanza di un secondo di mercato per
+// volta, chiamava solo draw(): il prezzo dentro la barra esiste, e' calcolato, e' disegnato e
+// muove persino il P/L - ma nessuno lo confrontava con il livello di ingresso.
+//
+// LA REGOLA DEL PERCORSO, dichiarata e non inventata. Dentro una candela si conoscono solo
+// apertura, massimo, minimo e chiusura: il percorso vero NON ESISTE nei dati, e fingere di
+// saperlo sarebbe peggio del difetto. Il replay ne usa uno solo, gia' scritto in
+// replaySintesiPath(), e dal 15 novembre segue il VERSO della candela:
+//     candela RIALZISTA:  apertura -> minimo (primo 30% del tempo) -> massimo (45%) -> chiusura
+//     candela RIBASSISTA: apertura -> massimo -> minimo -> chiusura
+// E' LO STESSO percorso che il grafico disegna, su cui il footprint accumula e su cui si muove
+// il P/L. Quindi l'ordine scatta quando quella linea - quella che stai guardando - attraversa
+// il suo livello. Non e' il percorso vero del mercato; e' un percorso dichiarato, e garantisce
+// la sola cosa che conti in un simulatore: cio' che vedi e cio' che accade sono la stessa cosa.
+//
+// IL 14 NOVEMBRE QUI C'ERA SCRITTO IL CONTRARIO, e vale la pena ricordarlo. Il percorso andava
+// sempre apertura -> massimo -> minimo -> chiusura, e questo commento avvertiva che "favorisce
+// sistematicamente gli ordini sopra il prezzo" rinviando la cura a un'altra volta. MISURATO il
+// giorno dopo su tutte le 58 aperture possibili dentro una candela (stop 2 pip, target 4): 34
+// stop, 17 target, 7 ancora aperte - IDENTICO in una candela che sale e in una che scende. Non
+// era un'imprecisione da tollerare: era il percorso a decidere l'esito, non il mercato. Col
+// verso giusto diventa 11/25/22 comprando in salita e 40/6/12 comprando in discesa, che e'
+// quello che deve succedere. L'avvertenza scritta in un commento non proteggeva nessuno.
+function replayValutaFormazione(prezzoPrima, prezzoDopo){
+  try{
+    if(!replayForm || replayForm.idx!==idx+1) return;
+    if(!Number.isFinite(prezzoPrima) || !Number.isFinite(prezzoDopo)) return;
+    // L'attraversamento, nella stessa forma usata per i tick veri (vedi evaluateLiveBackground):
+    // non basta "il prezzo e' oltre", serve che l'abbia ATTRAVERSATO in questo secondo.
+    const tocca=(liv)=>{
+      const v=Number(liv);
+      if(!Number.isFinite(v))return false;
+      return (prezzoPrima<=v&&prezzoDopo>=v)||(prezzoPrima>=v&&prezzoDopo<=v);
+    };
+    const mio=(o)=>{
+      if(!o||o.mt5Ticket!=null)return false;        // MAI gli ordini veri del broker
+      if(!o.historical)return false;                // solo quelli nati nel replay
+      try{ if(typeof belongsToCurrentAsset==='function'&&!belongsToCurrentAsset(o))return false; }catch(e){}
+      return true;
+    };
+
+    // 1) ORDINI PENDENTI
+    //
+    // SI TOGLIE DALLA LISTA PRIMA DI ATTIVARLO, come fa checkPendingOrders() alla riga del
+    // `pendingOrders.filter`. Non e' un dettaglio: il percorso dichiarato attraversa lo stesso
+    // livello piu' volte (sale al massimo, scende al minimo, risale alla chiusura), e senza
+    // questa riga lo stesso ordine apre una posizione a OGNI attraversamento. Misurato mentre
+    // scrivevo questa cura: un solo ordine pendente, TRE posizioni aperte a fine candela.
+    const daAttivare=(pendingOrders||[]).filter(o=>mio(o)&&tocca(o.entry));
+    if(daAttivare.length){
+      pendingOrders=pendingOrders.filter(o=>!daAttivare.includes(o));
+      daAttivare.forEach(o=>{ try{ activatePendingOrder(o); }catch(e){} });
+    }
+
+    // 2) STOP LOSS E TAKE PROFIT, secondo per secondo come in tempo reale.
+    //
+    // Questo blocco e' stato tolto per qualche ora il 14 novembre, e per una ragione buona: con
+    // il percorso di allora - sempre apertura -> massimo -> minimo -> chiusura - 51 posizioni
+    // su 58 morivano nella candela in cui nascevano, perche' ogni candela visitava per forza
+    // tutti e due gli estremi. Rimesso il 15 novembre, DOPO aver reso il percorso direzionale
+    // (vedi replaySintesiPath): adesso il verso lo decide la candela, e la distorsione
+    // sistematica non c'e' piu'.
+    //
+    // CHIESTO dal proprietario: «deve fare esattamente quello che fa oggi a mercato a tempo
+    // reale: quando vai ad aprire ed eseguire un ordine, lui lo esegue al momento di dove si
+    // trova l'evoluzione della candela, al secondo». Una posizione aperta a meta' candela va
+    // quindi gestita da li' in avanti, non congelata fino alla chiusura della barra.
+    //
+    // Si valuta SOLO il tratto DOPO l'ingresso, perche' `tocca()` confronta il prezzo di questo
+    // secondo con quello di prima: un livello attraversato prima che la posizione esistesse non
+    // la puo' toccare. E' l'altra meta' della cura di fblIstanteNascitaReplay().
+    (positions||[]).slice().forEach(pos=>{
+      if(!mio(pos))return;
+      const colpoSl=tocca(pos.sl), colpoTp=tocca(pos.tp);
+      if(!colpoSl&&!colpoTp)return;
+      // Toccati tutti e due nello stesso secondo: vince lo STOP. E' la scelta prudente, quella
+      // che non regala al backtest un guadagno che forse non c'e' stato.
+      const prezzo=colpoSl?Number(pos.sl):Number(pos.tp);
+      const motivo=colpoSl?closeResultLabel('SL',pos):'TP';
+      try{ closeTrade(motivo,prezzo,pos); }catch(e){}
+    });
+  }catch(e){}
+}
 function replayAnimTick(){
  if(replayForm&&replayForm.idx!==idx+1)replayForm=null;
  if(idx>=rows.length-1){
@@ -31730,7 +31923,14 @@ function replayAnimTick(){
   }
   step--;
   replaySubAccumulo(replayForm);
+  // IL PREZZO PRIMA E DOPO QUESTO SECONDO. La valutazione va fatta QUI DENTRO, un secondo per
+  // volta: a moltiplicatore alto un giro ne svela anche trenta, e un livello attraversato e
+  // riattraversato nello stesso giro andrebbe perso se si guardasse solo l'inizio e la fine.
+  // E' lo stesso errore che il footprint aveva gia' pagato.
+  const _pPrima=replayPrezzoFormazione();
   replayForm.sub++;
+  const _pDopo=replayPrezzoFormazione();
+  replayValutaFormazione(_pPrima,_pDopo);
  }
  if(replayForm&&replayForm.sub>=perBar){
   // Bordo: step esaurito proprio a soglia — completa comunque la candela e prosegue.
@@ -31774,16 +31974,51 @@ function replayAvviaFormazione(targetIdx){
  return {idx:targetIdx,sub:1,path,fp:{step,rows:{}},vol:Number(r.volume)||0};
 }
 // Percorso sintetico dentro la candela: open → max → min → close (niente candele future).
+// IL PERCORSO SEGUE IL VERSO DELLA CANDELA (15 novembre 2026).
+//
+// Fino a ieri questo percorso andava SEMPRE apertura -> massimo -> minimo -> chiusura,
+// qualunque fosse il verso della candela. Era una scelta comoda e sbagliata, e si e' visto
+// appena si e' provato a usarlo per decidere qualcosa.
+//
+// MISURATO su tutte le 58 aperture possibili dentro una candela normale di EUR/USD a un
+// minuto (stop 2 pip, target 4), valutando SL e TP secondo per secondo:
+//     chiusa in STOP ....... 34
+//     chiusa in TARGET ..... 17
+//     ancora aperta .........  7     <- 51 su 58 morivano nella candela in cui nascevano
+// Chi apriva fra il secondo 17 e il 24 - cioe' chi compra su un impulso - veniva stoppato
+// SEMPRE, dopo cinque secondi esatti, perche' da li' il percorso scendeva in linea retta fino
+// al minimo. Pessimista per gli acquisti, ottimista per le vendite: il peggio di tutti e due,
+// e per di piu' una distorsione sistematica, non un rumore.
+//
+// Adesso il verso lo decide la candela, come si muove il prezzo nella maggior parte dei casi:
+//     candela RIALZISTA (chiusura >= apertura):  apertura -> minimo -> massimo -> chiusura
+//     candela RIBASSISTA:                        apertura -> massimo -> minimo -> chiusura
+//
+// RESTA VERO, e va detto chiaro: dentro una candela si conoscono solo apertura, massimo,
+// minimo e chiusura. Il percorso vero NON ESISTE nei dati e nessuna regola puo' inventarlo.
+// Questa e' una convenzione dichiarata, scelta perche' e' la piu' simile a come il prezzo si
+// muove davvero - e perche' e' la STESSA linea che il grafico disegna, su cui il footprint
+// accumula e su cui si muove il P/L. La garanzia che offre e' quella che conta in un
+// simulatore: cio' che vedi e cio' che accade sono la stessa cosa.
+//
+// DECISO dal proprietario il 15 novembre, sapendo che cambia anche il disegno della candela in
+// formazione: «deve fare esattamente quello che fa oggi a mercato a tempo reale».
+//
+// Le proporzioni di tempo restano quelle di prima (30% / 45% / 25%): cambia l'ordine delle due
+// gambe centrali, non il ritmo.
 function replaySintesiPath(r,N){
  const O=Number(r.open)||0,H=Number(r.high)||0,L=Number(r.low)||0,C=Number(r.close)||0;
  if(!(O>0&&N>1))return null;
+ const rialzista=(C>=O);
+ const primo=rialzista?L:H;          // dove va per primo
+ const secondo=rialzista?H:L;        // e poi dall'altra parte
  const p=[];
  for(let i=0;i<N;i++){
   const f=i/(N-1);
   let pr;
-  if(f<0.30){pr=O+(H-O)*(f/0.30);}
-  else if(f<0.75){pr=H-(H-L)*((f-0.30)/0.45);}
-  else {pr=L+(C-L)*((f-0.75)/0.25);}
+  if(f<0.30){pr=O+(primo-O)*(f/0.30);}
+  else if(f<0.75){pr=primo+(secondo-primo)*((f-0.30)/0.45);}
+  else {pr=secondo+(C-secondo)*((f-0.75)/0.25);}
   p.push(isFinite(pr)?pr:O);
  }
  return p;
@@ -51614,7 +51849,10 @@ function fmtCandleCountdown(){
  // totali): a 10x scende di 10 secondi per ogni secondo reale, esattamente come la candela.
  // Fuori dal replay resta il conto reale (Date.now()), identico a prima.
  let totalSec;
- if(liveReplayActive){
+ // `replayForm||liveReplayActive`: nel replay sul conto STORICO/CSV liveReplayActive e' falso,
+ // e senza questo il numero tornerebbe a essere quello dell'orologio vero invece che quello del
+ // replay (misurato: 0:32 invece di 0:30, e per di piu' variabile a ogni sguardo).
+ if(typeof replayForm!=='undefined'&&replayForm||liveReplayActive){
   const perBar=replaySecondsPerBar();
   totalSec=replayForm?Math.max(0,perBar-replayForm.sub):perBar;
  }else{

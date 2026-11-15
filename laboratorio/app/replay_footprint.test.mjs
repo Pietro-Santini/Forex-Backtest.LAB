@@ -101,17 +101,32 @@ test('si SOMMA ai dati veri, non li sovrascrive', async () => {
       for (let i = 0; i < 20; i++) { replaySubAccumulo(f); f.sub++; }
       // Un dato "vero" gia' presente su quella candela, su un livello che la formazione tocca.
       const bucket = footprintBucketStart(parseDateTime(rows[6].date));
+      // IL LATO VA CHIESTO ALLA FORMAZIONE, NON DECISO QUI. Fino al 15 novembre questo pezzo
+      // seminava il dato vero sempre sul lato ACQUISTO, perche' il percorso dentro la candela
+      // saliva sempre per primo. Ora segue il verso della candela (vedi replaySintesiPath): in
+      // una candela rialzista come questa i primi venti secondi SCENDONO verso il minimo, e su
+      // quei livelli la formazione accumula in VENDITA. Seminando il lato sbagliato il banco
+      // misurava zero contro sette, e si lamentava di una cosa giusta.
       const livello = Object.keys(f.fp.rows)[0];
+      const suo = f.fp.rows[livello];
+      const lato = (suo.buy > 0) ? 'buy' : 'sell';
+      const volume = (lato === 'buy') ? 'askVol' : 'bidVol';
       footprintByBucket[bucket] = {step: f.fp.step, rows: {}};
-      footprintByBucket[bucket].rows[livello] = {buy: 7, sell: 0, askVol: 70, bidVol: 0, trades: 7};
+      const seme = {buy: 0, sell: 0, askVol: 0, bidVol: 0, trades: 7};
+      seme[lato] = 7; seme[volume] = 70;
+      footprintByBucket[bucket].rows[livello] = seme;
       replayFinalizzaFootprint(f);
       const cella = footprintByBucket[bucket].rows[livello];
-      return {buy: cella.buy, askVol: cella.askVol, trades: cella.trades,
-              formazioneBuy: f.fp.rows[livello].buy};
+      return {lato, conteggio: cella[lato], volume: cella[volume], trades: cella.trades,
+              dellaFormazione: suo[lato]};
     }, PREPARA.toString());
-    assert.ok(r.buy > 7, 'il dato vero (7) deve restare e sommarsi: trovato ' + r.buy);
-    assert.ok(r.askVol > 70, 'anche il volume: ' + r.askVol);
-    assert.ok(r.trades > 7, 'e il conteggio dei trade: ' + r.trades);
+    assert.ok(r.dellaFormazione > 0,
+      'la formazione deve avere davvero accumulato su quel lato, altrimenti il banco misurerebbe ' +
+      'zero contro sette ed sarebbe rosso (o verde) per il motivo sbagliato: ' + JSON.stringify(r));
+    assert.ok(r.conteggio > 7,
+      'il dato vero (7) deve restare e sommarsi, lato ' + r.lato + ': ' + JSON.stringify(r));
+    assert.ok(r.volume > 70, 'anche il volume: ' + JSON.stringify(r));
+    assert.ok(r.trades > 7, 'e il conteggio dei trade: ' + JSON.stringify(r));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
