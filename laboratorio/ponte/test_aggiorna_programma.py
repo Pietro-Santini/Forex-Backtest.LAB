@@ -380,6 +380,23 @@ def test_il_ponte_non_confronta_col_proprio_disco(monkeypatch):
     """
     import bridge
 
+    # QUESTA PROVA DEVE GIRARE ANCHE SU LINUX (15 novembre 2026).
+    #
+    # MISURATO: su GitHub (Ubuntu) questa prova era ROSSA mentre in locale su Windows era verde,
+    # e il collaudo di GitHub e' rimasto rosso per due versioni senza che nessuno guardasse.
+    # LA CAUSA: aggiorna_programma_dettaglio() esce subito con
+    #     {"ok": False, "messaggio": "l'aggiornamento del programma vale solo su Windows"}
+    # quando os.name non e' "nt". Il primo assert qui sotto chiede ok is True, e su Linux
+    # trovava False: «assert False is True».
+    #
+    # Si FINGE Windows invece di saltare la prova: la regola che difende - «il ponte non puo'
+    # decidere da solo che non c'e' niente da installare» - non dipende dal sistema operativo, e
+    # saltarla proprio dove gira il collaudo vorrebbe dire non controllarla mai. Con os.name
+    # finto la funzione arriva fino al controllo del pacchetto scaricato e si ferma la', senza
+    # mai lanciare niente (subprocess.DETACHED_PROCESS, che su Linux non esiste, non viene
+    # raggiunto).
+    monkeypatch.setattr(bridge.os, "name", "nt")
+
     monkeypatch.setattr(bridge, "versione_programma_installata", lambda: "2.2.46")
     # Sul disco c'e' la pagina della stessa versione: e' la situazione normale dopo un
     # aggiornamento, ed e' proprio quella che prima bloccava tutto.
@@ -416,6 +433,14 @@ def test_il_ponte_non_confronta_col_proprio_disco(monkeypatch):
             return False
 
     monkeypatch.setattr(bridge.urllib.request, "urlopen", lambda *a, **k: _RispostaFinta())
+
+    # 0) LA PROVA DI CONTROLLO DEL SISTEMA FINTO: se il travestimento non prendesse, tutte le
+    # verifiche qui sotto misurerebbero la via d'uscita «vale solo su Windows» invece della
+    # regola, e questa prova tornerebbe rossa su Linux senza dire perche'.
+    d = bridge.aggiorna_programma_dettaglio(versione_voluta="2.2.47")
+    assert "solo su Windows" not in d["messaggio"], (
+        "il travestimento da Windows non ha preso: questa prova sta misurando la via d'uscita "
+        "per gli altri sistemi, non la regola. Risposta: %s" % d)
 
     # 1) SENZA dire la versione: resta il vecchio comportamento, che sbaglia in difetto.
     d = bridge.aggiorna_programma_dettaglio()

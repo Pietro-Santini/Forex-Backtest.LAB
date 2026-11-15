@@ -1743,3 +1743,24 @@ Due lezioni, e la seconda e' quella che conta.
    il proprietario legge, il commento la documenta ma non la contiene: il backtest sbagliato
    esce comunque dalla porta. O si misura e si vede che e' tollerabile, o si cura prima di
    pubblicare. Il terzo caso - pubblicare con l'avviso - non esiste.
+
+## Il collaudo verde in locale NON dice che GitHub e' verde (15 novembre 2026)
+
+Il collaudo di casa gira su **Windows**, quello di GitHub su **Ubuntu**. Per due versioni di fila
+ho pubblicato con «collaudo verde: 0 falliti» mentre su GitHub il collaudo era ROSSO, e non me ne
+sono accorto perche' non ho guardato.
+
+Il banco rosso era `test_il_ponte_non_confronta_col_proprio_disco`:
+`aggiorna_programma_dettaglio()` esce subito con «vale solo su Windows» quando `os.name != "nt"`,
+quindi su Linux il primo controllo trovava `ok=False` e cadeva. In locale non poteva vedersi.
+
+LE DUE REGOLE:
+
+1. **Dopo ogni pubblicazione, guardare `gh run list`.** Non basta controllare `CACHE_NAME` su
+   `origin/main`: quello dice che il file e' arrivato, non che i controlli passano. Un flusso
+   rosso su main e' il primo segnale che il proprietario vede, e lo vede prima di me.
+2. **Una prova che dipende dal sistema operativo si traveste, non si salta.** La regola che
+   difendeva - «il ponte non puo' decidere da solo che non c'e' niente da installare» - non
+   dipende da Windows: ora il banco finge `os.name = "nt"` e gira su tutti i sistemi, con una
+   prova di controllo che si lamenta se il travestimento non prende. Saltarla con uno `skipif`
+   avrebbe tolto il rosso e anche il controllo, proprio dove il collaudo gira davvero.
