@@ -13,7 +13,7 @@ piu' in basso, sono stati corretti; il testo originale resta perche' spiega i si
 | 3 scorrimento nella duplicata | curata. Misurato: 0 px da scorrere, rotellina inerte. Stesso banco |
 | 4 / 12 elenco asset | curata (`fblApplicaElencoAssetMadre`). Da riprovare col ponte vero |
 | 5 propagazione del conto | curata il 12-13 nov, nei due versi (`conto_sincrono` 5/5) |
-| 6 replay sincronizzato con la domanda | **DA FARE**: e' una funzione nuova, non un difetto |
+| 6 replay sincronizzato con la domanda | **FATTA il 15 nov**: banco replay_su_tutte_le_finestre (7/7) |
 | 7 disegni sincronizzati | curata (`disegni_fra_finestre` 5/5) |
 | 8 modello sulla barra strumenti | **DA VERIFICARE** |
 | 9 chiusure lente | **DA MISURARE** |
@@ -187,3 +187,45 @@ nasce quando la madre ha gia' una figlia).
   verde): la cura di `fblApplicaElencoAssetMadre` regge anche per la seconda. Quindi il sintomo
   dipende da QUANDO nasce la finestra (madre non ancora pronta a rispondere) e non da quante ce ne
   sono: da riprovare col ponte vero, con la duplicata aperta subito dopo l'avvio.
+
+## NUOVE RICHIESTE DEL 15 NOVEMBRE 2026 (sera)
+
+### 13. IL MIRINO SI TRASPORTA FRA LE FINESTRE - FATTA (v2.2.57)
+Parole sue: «se sono su pagine duplicate e su tutte le pagine c'e' lo stesso identico asset, se
+sto con il mirino su una finestra mi si deve trasportare anche sulle altre... sullo stesso punto
+del prezzo, stesso punto dell'orario... e' esattamente come funziona su TradingView». Tre
+condizioni: solo il mouse («vale soltanto per il PC»), solo lo stesso asset, e i time frame
+possono essere diversi.
+CORREZIONE SUA, subito dopo la prima versione: «non si deve posare, ma deve muoversi in tempo
+reale senza fermarsi anche a time frame diversi: deve calcolare lo spostamento che avviene su
+time frame da 1 minuto rapportato ai time frame piu' alti». Fatto: il mirino scorre DENTRO la
+candela, alla frazione giusta, e l'istante spedito e' continuo.
+- Stato: FATTA. Banco `mirino_fra_finestre.test.mjs` (11/11).
+
+### 14. L'ANTEPRIMA DEL TAGLIO DEL REPLAY SU TUTTE LE FINESTRE - FATTA (v2.2.57)
+Parole sue: «in modalita' replay con le pagine duplicate, quando andiamo a selezionare un nuovo
+punto, l'anteprima deve venire anche sulle altre pagine duplicate... l'asse verticale che delimita
+il taglio... anche se hanno un time frame diverso». Viaggia l'orario, come per il mirino.
+Si manda solo se il replay e' condiviso (risposta «su tutte le finestre» alla voce 6): disegnare
+un taglio su finestre che devono restare in diretta sarebbe contraddittorio. CONFERMATO dal
+proprietario.
+- Stato: FATTA, nello stesso banco.
+
+### 15. TIME FRAME NUOVI - DA FARE
+Parole sue: «aggiungiamo piu' time frame: da 3 minuti, 10 minuti, 2h 3h 4h 5h 12h 2g 3g 5g 1w 2w
+1 mese» (4h c'e' gia').
+IL LAVORO VERO NON E' IL MENU, E' L'ANCORAGGIO DELLE CANDELE. I gruppi si contano dall'epoca
+Unix: `bucketKeyOf(t,minuti)=floor(t/(minuti*60000))`. Va bene per 3m, 10m, 2h, 3h, 12h, che
+dividono esattamente la giornata. NON va bene per:
+  - 5h (300 min): 1440/300 = 4,8, quindi le candele slittano di giorno in giorno;
+  - 2g, 3g, 5g, 1w, 2w: l'epoca Unix cade di GIOVEDI', quindi le settimane non partono di lunedi';
+  - 1 mese: 43.200 minuti sono 30 giorni fissi, non il mese del calendario.
+Serve un ancoraggio per time frame (mezzanotte, lunedi', primo del mese), e tocca `bucketKeyOf`,
+`findBucketIndexForTime`, `buildPartialBucket` e i punti che fanno `bucketKeyOf(...)*TF*60000`
+(che presuppone candele tutte uguali, falso per i mesi). Sotto ci stanno footprint, replay e
+indicatori: capitolo a se', con il suo collaudo.
+Da decidere anche la strada dei DATI in Live: `MT5_TIMEFRAME_MAP` copre 1,5,15,30,60,240,1440 e
+per gli altri ripiega su M1 - inutilizzabile per un mese (un mese di M1 sono 43.200 candele). La
+strada giusta e' chiedere il piu' grande time frame MT5 che divide quello voluto (H1 per 5h, D1
+per i giorni, le settimane e il mese) e aggregare da li'.
+- Stato: DA FARE, prossimo capitolo.

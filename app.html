@@ -9743,6 +9743,55 @@ if(tradingChannel){
         // nessun messaggio riparte.
         try{ draw(); update(); }catch(e){}
       }finally{ applyingRemoteTradingSync=false; }
+   }else if(msg.type==='mirino'){
+     // IL MIRINO DI UN'ALTRA FINESTRA. La condizione del proprietario e' una sola e sta qui:
+     // stesso asset, altrimenti non si applica niente. Un prezzo e un orario di XAU/USD su un
+     // grafico di EUR/USD non vogliono dire nulla.
+     if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey){
+       applicandoMirinoRemoto=true;
+       try{
+         fblMirinoRemoto=msg.via?null:{t:msg.t, prezzo:msg.prezzo, asset:msg.asset};
+         // Si ridisegna solo se non c'e' un mirino LOCALE: se l'utente sta muovendo il mouse
+         // qui, il suo mirino comanda e quello di fuori non deve rubargli il posto.
+         if(!crosshair)draw();
+       }finally{ applicandoMirinoRemoto=false; }
+     }
+   }else if(msg.type==='mirino_taglio'){
+     // L'ANTEPRIMA DEL TAGLIO scelta su un'altra finestra. Stessa condizione dell'asset, e non
+     // si tocca niente se qui la scelta del punto e' gia' in corso: in quel caso comanda la mano
+     // di chi sta trascinando QUI.
+     if(msg.asset&&currentAssetKey&&msg.asset===currentAssetKey){
+       applicandoMirinoRemoto=true;
+       try{
+         fblGuidaRemota=msg.via?null:{t:msg.t, asset:msg.asset};
+         if(!liveReplaySelecting)draw();
+       }finally{ applicandoMirinoRemoto=false; }
+     }
+   }else if(msg.type==='presenza_request'){
+     // «Chi c'e'?»: si risponde e basta. Serve a sapere se ci sono altre finestre aperte prima
+     // di chiedere al proprietario se il replay deve partire anche la' (voce 6). Una finestra
+     // chiusa non risponde, ed e' il motivo per cui si chiede invece di tenere un elenco.
+     try{ tradingChannel.postMessage({type:'presenza',slot:PIP_SLOT}); }catch(e){}
+   }else if(msg.type==='presenza'){
+     if(fblPresenzaAttesa){ try{ fblPresenzaAttesa.add(msg.slot); }catch(e){} }
+   }else if(msg.type==='replay_sync'){
+     // UN'ALTRA FINESTRA E' ENTRATA (O USCITA) DAL REPLAY, e il proprietario ha scelto «su tutte».
+     // Si applica dietro la barriera, cosi' non si rimanda in giro quello che si e' appena
+     // ricevuto: e' il cappio misurato il 15 novembre sul percorso del conto.
+     // La scelta si eredita, altrimenti lo STOP di la' non fermerebbe questa.
+     applicandoReplayRemoto=true;
+     try{
+       fblReplayPerTutte=true;
+       if(msg.attivo){
+         if(Number.isFinite(msg.t))avviaReplayLive(msg.t,{propaga:false});
+       }else{
+         esciReplayLive({propaga:false});
+         // Finito il replay condiviso, questa finestra torna «da sola»: la scelta non si
+         // eredita oltre. Senza questa riga restava accesa, e un replay avviato qui per una
+         // strada che non passa dalla domanda sarebbe partito su tutte senza chiedere.
+         fblReplayPerTutte=false;
+       }
+     }finally{ applicandoReplayRemoto=false; }
    }else if(msg.type==='trading_sync_request'){
      broadcastTradingStateNow();
    }else if(msg.type==='asset_announce'){
@@ -10863,6 +10912,220 @@ let followLatest=true, viewPriceLo=null, viewPriceHi=null;
 // enormi). Si disattiva non appena l'utente zooma orizzontalmente a mano (rotellina
 // CTRL, trascinamento sulla scala del tempo, o "Vai a grafico" da un trade).
 let autoFitWidth=true;
+// IL MIRINO SI TRASPORTA SULLE ALTRE FINESTRE DELLO STESSO ASSET (15 novembre 2026).
+//
+// RICHIESTO dal proprietario: «se sono su pagine duplicate e su tutte le pagine c'e' lo stesso
+// identico asset, se sto con il mirino su una finestra mi si deve trasportare anche sulle altre
+// finestre duplicate... sullo stesso punto del prezzo, stesso punto dell'orario... e' esattamente
+// come funziona su TradingView».
+//
+// LE TRE CONDIZIONI, parole sue:
+// 1. SOLO IL MOUSE, non il dito: «questo vale soltanto per il PC».
+// 2. SOLO LO STESSO ASSET: «se sulla finestra 1 siamo su Euro USD, mentre sulla finestra 2 siamo
+//    su XAU/USD, il puntatore andra' soltanto per quelle due finestre... non puo' essere
+//    riportato su un asset diverso, questa e' la condizione».
+// 3. TIME FRAME DIVERSI DEVONO FUNZIONARE: «se sulla finestra 1 siamo a 15 minuti, la finestra 2
+//    a 5 minuti e la pagina madre a 1 minuto, se io mi sposto su quello da 1 minuto, sulle altre
+//    pagine segue l'asse del prezzo e l'asse del tempo».
+//
+// COME: sul canale NON viaggiano i pixel - sarebbero senza senso in una finestra con un altro
+// zoom, un'altra altezza e un altro time frame - ma ORARIO e PREZZO, le due cose che significano
+// lo stesso in tutte le finestre. Chi riceve li riconverte nei propri pixel con la propria
+// geometria, e da li' in poi il mirino lo disegna il codice di sempre: la riga del prezzo, la
+// casella sulla scala e la pillola con data e ora sono quelle, non una copia.
+//
+// LA CANDELA CHE CONTIENE L'ISTANTE: a time frame diversi un minuto preciso cade DENTRO una
+// candela da 15, e il mirino si posa al centro di quella - come TradingView, che appoggia sempre
+// il mirino su una barra. La ricerca e' binaria perche' le candele possono essere decine di
+// migliaia e questa funzione gira a ogni movimento del mouse.
+//
+// IL PREZZO PUO' RESTARE FUORI, e va gestito invece di far sparire tutto: due finestre hanno
+// zoom verticali diversi, quindi un prezzo in cima al grafico da 15 minuti puo' cadere sopra il
+// bordo di quello da 1 minuto. In quel caso si disegna la riga del TEMPO e si tace sul prezzo:
+// e' l'informazione che c'e'. Far scomparire il mirino sembrerebbe un difetto.
+let fblMirinoRemoto=null;        // {t, prezzo, asset} arrivato da un'altra finestra
+let fblGuidaRemota=null;         // {t, asset}: l'anteprima del taglio del replay, da un'altra
+let fblGeoGrafico=null;          // la geometria dell'ultimo disegno: serve a convertire
+let applicandoMirinoRemoto=false;
+let fblMirinoUltimoInvio=0, fblGuidaUltimoInvio=0;
+// 40 ms = 25 movimenti al secondo. Un mouse ne genera molti di piu' (fino a 120 al secondo su
+// uno schermo veloce) e mandarli tutti vorrebbe dire inondare il canale e far ridisegnare le
+// altre finestre a ogni pixel: e' lo stesso errore delle letture moltiplicate al ponte, misurato
+// oggi stesso. A 25 al secondo l'occhio non vede differenza.
+const FBL_MIRINO_OGNI_MS=40;
+
+// IL MIRINO SCORRE DENTRO LA CANDELA, NON SI POSA AL SUO CENTRO (15 novembre 2026, sera).
+//
+// CORREZIONE CHIESTA dal proprietario: «non si deve posare, ma deve muoversi in tempo reale
+// senza fermarsi anche a time frame diversi: deve calcolare lo spostamento che avviene su time
+// frame da 1 minuto rapportato ai time frame piu' alti».
+//
+// Com'era prima: si cercava la candela che contiene l'istante e il mirino si metteva al suo
+// CENTRO. Su un grafico da 15 minuti il mirino saltava di una candela intera ogni volta, cioe'
+// si muoveva a scatti di quindici minuti mentre sull'altra finestra scorreva liscio.
+//
+// IL CONTO GIUSTO. Ogni candela occupa una striscia di larghezza cw/n. Chiamiamo `u` la
+// coordinata continua in cui i numeri interi sono i BORDI SINISTRI delle candele:
+//     u = (x - bordo - pad.l) * n / cw + start
+// L'indice e' la parte intera di u, e la parte decimale dice QUANTO si e' dentro quella candela.
+// Da li' l'istante esatto: inizio della candela + frazione * durata della candela. Al contrario,
+// ricevuto un istante, si trova la candela che lo contiene, si calcola che frazione di quella
+// candela e' passata, e il mirino si mette a quella frazione della sua larghezza.
+// Cosi' un minuto di spostamento su un grafico da 1 minuto diventa un quindicesimo di candela su
+// uno da 15: il movimento e' continuo e in scala, in tutte e due i versi.
+//
+// L'ISTANTE CHE VIAGGIA E' CONTINUO, non arrotondato alla candela: arrotondarlo renderebbe il
+// movimento a scatti sul ricevente anche col conto giusto, perche' gli scatti sarebbero gia'
+// dentro il numero spedito.
+
+// Quanto dura la candela all'indice indicato, in millisecondi. Si misura dalla distanza con la
+// successiva, che e' il dato vero; sull'ultima non c'e' una successiva e si usa il time frame.
+function fblDurataCandela(i){
+  try{
+    const a=parseDateTime(rows[i]&&rows[i].date);
+    const b=parseDateTime(rows[i+1]&&rows[i+1].date);
+    if(Number.isFinite(a)&&Number.isFinite(b)&&b>a)return b-a;
+  }catch(e){}
+  const m=Number(currentTF)||1;
+  return Math.max(1,m*60000);
+}
+
+// Dove sta il grafico ADESSO. Si legge a ogni conversione, non si ricorda: la pagina scorre.
+function fblAngoloGrafico(){
+  const g=fblGeoGrafico; if(!g||!g.tela)return null;
+  try{ const r=g.tela.getBoundingClientRect(); return {left:r.left, top:r.top}; }catch(e){ return null; }
+}
+
+// Da pixel dello schermo a {orario, prezzo}. Null se il punto e' fuori dall'area del grafico.
+function fblMirinoDaSchermo(cx,cy){
+  const g=fblGeoGrafico; if(!g||!rows||!rows.length)return null;
+  if(!(g.range>0&&g.n>0&&g.cw>0&&g.ch>0))return null;
+  const a=fblAngoloGrafico(); if(!a)return null;
+  const relX=cx-a.left, relY=cy-a.top;
+  if(!(relX>=g.pad.l&&relX<=g.pad.l+g.cw&&relY>=g.pad.t&&relY<=g.pad.t+g.ch))return null;
+  const prezzo=g.hi-(relY-g.pad.t)*g.range/g.ch;
+  const t=fblIstanteContinuo(relX,g);
+  if(!Number.isFinite(t)||!Number.isFinite(prezzo))return null;
+  return {t:t, prezzo:prezzo};
+}
+
+// Solo l'orario sotto una certa x: serve all'anteprima del taglio, dove il prezzo non conta.
+function fblIstanteDaSchermoX(cx){
+  const g=fblGeoGrafico; if(!g||!rows||!rows.length)return NaN;
+  if(!(g.n>0&&g.cw>0))return NaN;
+  const a=fblAngoloGrafico(); if(!a)return NaN;
+  return fblIstanteContinuo(cx-a.left,g);
+}
+
+// L'istante esatto sotto una posizione orizzontale: candela + frazione di candela.
+function fblIstanteContinuo(relX,g){
+  if(!rows||!rows.length)return NaN;
+  const u=(relX-g.pad.l)*g.n/g.cw+g.start;
+  let i=Math.floor(u);
+  let frazione=u-i;
+  if(i<0){ i=0; frazione=0; }
+  if(i>rows.length-1){ i=rows.length-1; frazione=1; }
+  const inizio=parseDateTime(rows[i]&&rows[i].date);
+  if(!Number.isFinite(inizio))return NaN;
+  return inizio+Math.max(0,Math.min(1,frazione))*fblDurataCandela(i);
+}
+
+// L'indice della candela che CONTIENE l'istante dato. Ricerca binaria sulle date, che sono in
+// ordine. -1 se l'istante e' prima della prima candela o non c'e' niente in memoria.
+function fblRigaPerIstante(t){
+  if(!rows||!rows.length||!Number.isFinite(t))return -1;
+  const primo=parseDateTime(rows[0].date);
+  if(Number.isFinite(primo)&&t<primo)return -1;
+  let a=0,b=rows.length-1,trovato=-1;
+  while(a<=b){
+    const m=(a+b)>>1;
+    const tm=parseDateTime(rows[m]&&rows[m].date);
+    if(!Number.isFinite(tm)){ a=m+1; continue; }
+    if(tm<=t){ trovato=m; a=m+1; } else b=m-1;
+  }
+  return trovato;
+}
+
+// Da {orario, prezzo} ai pixel di QUESTA finestra. `dentroX`/`dentroY` dicono se cadono nella
+// parte visibile: a zoom diversi il prezzo puo' restare fuori (vedi la nota in testa).
+function fblMirinoSuSchermo(t,prezzo){
+  const g=fblGeoGrafico; if(!g)return null;
+  if(!(g.range>0&&g.n>0&&g.cw>0&&g.ch>0))return null;
+  const i=fblRigaPerIstante(t);
+  if(i<0)return null;
+  const a=fblAngoloGrafico(); if(!a)return null;
+  // QUANTO si e' dentro la candela: e' questo che rende il movimento continuo invece che a
+  // scatti di una candela intera (vedi la nota lunga sopra).
+  const inizio=parseDateTime(rows[i]&&rows[i].date);
+  const durata=fblDurataCandela(i);
+  let frazione=(Number.isFinite(inizio)&&durata>0)?((t-inizio)/durata):0.5;
+  frazione=Math.max(0,Math.min(1,frazione));
+  const relX=g.pad.l+(i-g.start+frazione)*g.cw/g.n;
+  const relY=g.pad.t+(g.hi-prezzo)/g.range*g.ch;
+  return {x:a.left+relX, y:a.top+relY,
+          dentroX:(relX>=g.pad.l&&relX<=g.pad.l+g.cw),
+          dentroY:(relY>=g.pad.t&&relY<=g.pad.t+g.ch)};
+}
+
+// Vale la pena mandare qualcosa? Mai mentre si applica roba altrui (e' la barriera anti-rimbalzo
+// usata in tutto il resto del canale), e mai senza un asset: senza asset non si potrebbe
+// nemmeno verificare la condizione del proprietario.
+function fblMirinoPuoParlare(){
+  return !!(tradingChannel && !applicandoMirinoRemoto && currentAssetKey);
+}
+
+function fblAnnunciaMirino(cx,cy){
+  if(!fblMirinoPuoParlare())return;
+  const ora=Date.now();
+  if(ora-fblMirinoUltimoInvio<FBL_MIRINO_OGNI_MS)return;
+  const q=fblMirinoDaSchermo(cx,cy);
+  if(!q)return;
+  fblMirinoUltimoInvio=ora;
+  try{ tradingChannel.postMessage({type:'mirino',slot:PIP_SLOT,
+    asset:currentAssetKey, t:q.t, prezzo:q.prezzo}); }catch(e){}
+}
+
+// Il mirino sparisce anche sulle altre quando il mouse esce dal grafico: senza questo resterebbe
+// appeso dove si trovava, e sembrerebbe un disegno.
+function fblAnnunciaMirinoVia(){
+  if(!fblMirinoPuoParlare())return;
+  fblMirinoUltimoInvio=0;
+  try{ tradingChannel.postMessage({type:'mirino',slot:PIP_SLOT,
+    asset:currentAssetKey, via:true}); }catch(e){}
+}
+
+// L'ANTEPRIMA DEL TAGLIO DEL REPLAY, sulle altre finestre (richiesta del 15 novembre, sera).
+//
+// RICHIESTO dal proprietario: «in modalita' replay con le pagine duplicate, quando andiamo a
+// selezionare un nuovo punto per spostarci indietro nel tempo o piu' avanti, l'anteprima deve
+// venire anche sulle altre pagine duplicate... l'asse verticale che delimita il taglio, la
+// preview del taglio deve avvenire anche allo stesso momento su tutte le altre finestre, anche
+// se hanno un time frame diverso».
+//
+// Viaggia l'ORARIO, come per il mirino: ogni finestra traccia la propria linea sulla propria
+// candela e sfuma il proprio "futuro" da sola.
+//
+// L'AMBITO E' QUELLO GIA' SCELTO: l'anteprima si manda solo se il replay e' condiviso, cioe' se
+// alla domanda «su tutte le finestre o solo questa?» si e' risposto "su tutte". Mandarla anche
+// dopo aver detto "solo questa" vorrebbe dire disegnare un taglio su finestre che non devono
+// entrare in replay: la risposta del proprietario comanda anche qui.
+function fblAnnunciaGuida(cx){
+  if(!fblMirinoPuoParlare()||!fblReplayPerTutte)return;
+  const ora=Date.now();
+  if(ora-fblGuidaUltimoInvio<FBL_MIRINO_OGNI_MS)return;
+  const t=fblIstanteDaSchermoX(cx);
+  if(!Number.isFinite(t))return;
+  fblGuidaUltimoInvio=ora;
+  try{ tradingChannel.postMessage({type:'mirino_taglio',slot:PIP_SLOT,
+    asset:currentAssetKey, t:t}); }catch(e){}
+}
+
+function fblAnnunciaGuidaVia(){
+  if(!fblMirinoPuoParlare()||!fblReplayPerTutte)return;
+  fblGuidaUltimoInvio=0;
+  try{ tradingChannel.postMessage({type:'mirino_taglio',slot:PIP_SLOT,
+    asset:currentAssetKey, via:true}); }catch(e){}
+}
 // --- Crosshair (mirino) che segue mouse/penna, con prezzo sulla scala a destra ---
 let crosshair=null;
 // Punto (in coordinate pagina, come crosshair) dove il dito sta attualmente toccando il
@@ -13078,7 +13341,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.55';
+const FBL_VERSIONE='2.2.57';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -13316,6 +13579,9 @@ function resetChartViewForAssetSwitch(){
  placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI();
  priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount();
  viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; highlightedPendingOrderId=null; touchHoverPoint=null;
+ // Il mirino e l'anteprima arrivati da fuori valgono per UN asset: cambiando asset vanno
+ // buttati, o resterebbero disegnati su un grafico a cui non appartengono.
+ fblMirinoRemoto=null; fblGuidaRemota=null;
  update(); draw();
 }
 // Ripristina la vista del grafico (candela corrente, timeframe, zoom orizzontale/verticale)
@@ -14236,6 +14502,9 @@ function reset(){
  statsBaselineByMode[currentMode()]=trades.filter(t=>t.mode===currentMode()).length;
  active=null; tradeSLLine=null; tradeTPLine=null;
  equity=[num($('capital').value)||10000]; history=[]; placingTradeLevel=null; previewTradeLevel=null; updateTradeLevelArmUI(); priceZoomFactor=1; followLatest=true; autoFitWidth=true; visibleCount=idealVisibleCount(); viewPriceLo=null; viewPriceHi=null; crosshair=null; highlightedTrade=null; highlightedPendingOrderId=null; touchHoverPoint=null;
+ // Il mirino e l'anteprima arrivati da fuori valgono per UN asset: cambiando asset vanno
+ // buttati, o resterebbero disegnati su un grafico a cui non appartengono.
+ fblMirinoRemoto=null; fblGuidaRemota=null;
  // BUG RISOLTO: RESET SESSIONE azzerava positions/equity in memoria ma non aggiornava la
  // fotografia della sessione corrente in sessionByMode — cambiando sessione e tornando
  // indietro si ritrovavano le vecchie posizioni pre-reset invece di quelle appena azzerate.
@@ -23316,6 +23585,22 @@ function draw(){
  // restano quindi sempre liberi di andare sia oltre sia sotto quell'estensione.
  let {lo,hi,range}=computePriceRange(data);
  const y=v=>pad.t+(hi-v)/range*ch, x=i=>pad.l+(dataStart+i-start+.5)*cw/n;
+ // LA GEOMETRIA DI QUESTO DISEGNO, messa da parte per il mirino fra finestre (15 nov 2026).
+ // Serve a tradurre pixel <-> (orario, prezzo) FUORI da draw(), dove queste variabili non
+ // esistono: il movimento del mouse e i messaggi dalle altre finestre arrivano la'. Si salva
+ // qui, dove i valori sono appena stati calcolati, invece di ricalcolarli altrove: due conti
+ // separati sulla stessa cosa prima o poi divergono.
+ // NON SI SALVANO LE COORDINATE DEL GRAFICO, SI SALVA IL GRAFICO.
+ // MISURATO dal banco: salvando left/top al momento del disegno, bastava uno SCORRIMENTO della
+ // pagina senza un ridisegno e il mirino risultava fuori dall'area - un movimento del mouse non
+ // mandava niente, sessanta ne mandavano venti (i primi si perdevano, poi un ridisegno
+ // aggiornava le coordinate). Sulla pagina madre, che scorre, sarebbe stato un difetto vero.
+ // Il riquadro si legge al momento della conversione; qui si tiene solo cio' che dipende dal
+ // disegno (scala dei prezzi e finestra di candele).
+ try{
+   fblGeoGrafico={tela:c, pad:pad, cw:cw, ch:ch,
+                  hi:hi, range:range, start:start, n:n, dataStart:dataStart};
+ }catch(e){ fblGeoGrafico=null; }
  // --- Zona di protezione: da qui in poi (candele, griglia, indicatori, disegni, posizioni,
  // ordini pendenti e caselle Target/Stop) tutto è "ritagliato" (clip) dentro l'area di plot
  // vera e propria [pad.l..w-pad.r] x [pad.t..h-pad.b]. Così un disegno o una casella con un
@@ -25599,17 +25884,33 @@ function draw(){
  // compare ogni volta che il puntatore si muove e non si sta trascinando nient'altro (pan, linea
  // SL/TP, maniglie, forma), come su MT5.
  const mirinoAttivo=(x)=>!priceAxisDrag && !panDrag && !shapeDrag && !tradeLevelDrag && !zoneWidthDrag && !placingTradeLevel && x;
- if(crosshair && mirinoAttivo(true)){
+ // IL PUNTO DEL MIRINO: quello di QUESTA finestra, oppure quello arrivato da un'altra sullo
+ // stesso asset (15 novembre 2026). Il mirino locale ha sempre la precedenza: se stai muovendo
+ // il mouse qui, il tuo mirino non deve essere spostato da un'altra finestra.
+ let _mirPunto=null, _mirDaFuori=false;
+ if(crosshair){ _mirPunto={x:crosshair.x,y:crosshair.y}; }
+ else if(fblMirinoRemoto && fblMirinoRemoto.asset===currentAssetKey){
+   const _q=fblMirinoSuSchermo(fblMirinoRemoto.t,fblMirinoRemoto.prezzo);
+   if(_q){ _mirPunto={x:_q.x,y:_q.y}; _mirDaFuori=true; }
+ }
+ if(_mirPunto && mirinoAttivo(true)){
    const rect=c.getBoundingClientRect();
-   const relX=crosshair.x-rect.left, relY=crosshair.y-rect.top;
-   if(relX>=pad.l && relX<=w-pad.r && relY>=pad.t && relY<=h-pad.b){
+   const relX=_mirPunto.x-rect.left, relY=_mirPunto.y-rect.top;
+   const _dentroX=(relX>=pad.l && relX<=w-pad.r), _dentroY=(relY>=pad.t && relY<=h-pad.b);
+   // Il mirino locale si disegna come sempre (dentro tutti e due i bordi). Quello che arriva da
+   // un'altra finestra basta che sia dentro in ORIZZONTALE: il prezzo puo' cadere fuori per via
+   // di uno zoom verticale diverso, e in quel caso si disegna la riga del tempo e si tace sul
+   // prezzo invece di far sparire tutto.
+   if(_dentroX && (_dentroY || _mirDaFuori)){
      const crossPrice=hi-(relY-pad.t)*range/ch;
      ctx.save();
      // Linea verticale sottile tratteggiata, per completare la "croce".
      ctx.setLineDash([3,3]);ctx.strokeStyle=lineColorAlpha(0.35);ctx.lineWidth=1;
      ctx.beginPath();ctx.moveTo(relX,pad.t);ctx.lineTo(relX,h-pad.b);ctx.stroke();
      ctx.setLineDash([]);
-     // Linea orizzontale continua sul prezzo puntato.
+     // Linea orizzontale continua sul prezzo puntato - e la casella del prezzo qui sotto - solo
+     // se quel prezzo cade davvero nella fascia visibile di QUESTA finestra.
+     if(_dentroY){
      ctx.strokeStyle=lineColor;ctx.lineWidth=1;
      ctx.beginPath();ctx.moveTo(pad.l,relY);ctx.lineTo(w-pad.r,relY);ctx.stroke();
      // Casella con il prezzo esatto sulla scala verticale. Sfondo = colore linea tema,
@@ -25621,6 +25922,7 @@ function draw(){
      ctx.fillStyle=chartBg;ctx.font=scaledFont('bold 11px Arial');ctx.textAlign='center';ctx.textBaseline='middle';
      ctx.fillText(fmtPrice(crossPrice),labelX+labelW/2,labelY+labelH/2);
      ctx.textBaseline='alphabetic';ctx.textAlign='left';
+     }
      // Etichetta data+ora della candela più vicina, sopra la barra dell'asse temporale:
      // pillola evidenziata (colore linea su sfondo grafico) esattamente come la barra oraria
      // di TradingView, così sostituisce visivamente la tacca "normale" più vicina con quella puntata.
@@ -25649,8 +25951,18 @@ function draw(){
  // RICHIESTO ESPLICITAMENTE (stile TradingView Bar Replay): la parte a DESTRA della guida (il
  // "futuro" che viene tagliato via tornando indietro nel tempo) si scurisce con un gradiente —
  // più scuro subito dopo la linea, che sfuma progressivamente verso il bordo destro del grafico.
- if(liveReplaySelecting){
-   const gx=Number.isFinite(liveReplayGuideClientX)?liveReplayGuideClientX:(crosshair?crosshair.x:NaN);
+ // L'ANTEPRIMA DEL TAGLIO ARRIVA ANCHE DA UN'ALTRA FINESTRA (15 novembre 2026, sera).
+ // Chiesto dal proprietario: scegliendo il punto del replay su una finestra, la linea e la
+ // sfumatura del "futuro tagliato" devono comparire nello stesso istante su tutte le altre,
+ // anche a time frame diverso. Viaggia l'orario; la x qui la calcola ogni finestra per se'.
+ let _gxDaFuori=NaN;
+ if(!liveReplaySelecting && fblGuidaRemota && fblGuidaRemota.asset===currentAssetKey){
+   const _qg=fblMirinoSuSchermo(fblGuidaRemota.t,hi);
+   if(_qg&&_qg.dentroX)_gxDaFuori=_qg.x;
+ }
+ if(liveReplaySelecting || Number.isFinite(_gxDaFuori)){
+   const gx=Number.isFinite(_gxDaFuori)?_gxDaFuori
+     :(Number.isFinite(liveReplayGuideClientX)?liveReplayGuideClientX:(crosshair?crosshair.x:NaN));
    if(Number.isFinite(gx)){
      const rectR=c.getBoundingClientRect();
      const relXR=gx-rectR.left;
@@ -34557,6 +34869,10 @@ chartEl.addEventListener('pointermove',e=>{
  // Mirino (crosshair) per mouse/penna: sempre aggiornato, indipendentemente da altre azioni.
  if(e.pointerType==='mouse'||e.pointerType==='pen'||(fblMirinoTocco&&fblMirinoTocco.id===e.pointerId)){
    crosshair={x:e.clientX,y:e.clientY};
+   // SI TRASPORTA SOLO IL MOUSE (e la penna, che su un PC e' un mouse con la punta): il
+   // proprietario ha escluso il dito - «questo vale soltanto per il PC» - e il ramo del dito
+   // qui sotto esce prima di arrivare a questa riga.
+   if(e.pointerType==='mouse'||e.pointerType==='pen')fblAnnunciaMirino(e.clientX,e.clientY);
    if(fblMirinoTocco&&fblMirinoTocco.id===e.pointerId){ e.preventDefault(); draw(); return; }   // il dito muove solo il mirino
  }else{
    crosshair=null;
@@ -34822,9 +35138,10 @@ chartEl.addEventListener('pointerleave',()=>{
  const avevaAnteprima=!!anteprimaDisegno;
  anteprimaDisegno=null;
  if(crosshair||avevaAnteprima){crosshair=null;draw();}
+ fblAnnunciaMirinoVia();
  setHoverDrawing(null);
 });
-chartEl.addEventListener('pointerout',()=>{ if(crosshair){crosshair=null;draw();} setHoverDrawing(null); });
+chartEl.addEventListener('pointerout',()=>{ if(crosshair){crosshair=null;draw();} fblAnnunciaMirinoVia(); setHoverDrawing(null); });
 // Ascoltatori AGGIUNTIVI (non sostituiscono quelli sopra) dedicati SOLO a rivelare i dati
 // statistici delle caselle TP/SL dei trade chiusi al tocco su tablet: tenendo il dito
 // appoggiato sul grafico si aggiorna touchHoverPoint e si ridisegna, esattamente come fa
@@ -58898,7 +59215,81 @@ function avviaSelezioneReplayLive(){
 }
 // Fa partire DAVVERO il replay da un istante: congela masterTime/idx lì e mostra i comandi di
 // avanzamento (◀ ▶ PLAY). I dati live continuano ad arrivare in background.
-function avviaReplayLive(t){
+// IL REPLAY SU TUTTE LE FINESTRE, O SOLO SU QUESTA (voce 6, 15 novembre 2026).
+//
+// RICHIESTO dal proprietario: «premendo Replay con duplicate aperte, il programma chiede se
+// applicare il replay anche alle altre duplicate. Se confermato, le duplicate entrano in replay
+// e le posizioni replay si trasportano sulle altre.»
+//
+// COSA C'ERA GIA', E PERCHE' NON BASTAVA. Esistevano `remoteSyncConsent` e
+// enqueueRemoteSyncConfirm(), ma chiedono nel verso OPPOSTO: e' la finestra che RICEVE a dire
+// «un'altra finestra ti sta imponendo un replay, applica o ignora». E `remoteSyncConsent` parte
+// da true, quindi non chiedeva comunque niente. MISURATO inoltre che entrare in replay non
+// veniva annunciato per nulla: sul canale esistono chart_time_sync e random_jump_sync (la
+// POSIZIONE nel tempo) e nessun messaggio che dica «sono entrato in replay». Premere Replay su
+// una finestra lasciava le altre in diretta.
+//
+// COME FUNZIONA ADESSO: la domanda si fa UNA VOLTA, nel momento che il proprietario ha
+// descritto - quando si preme "Replay" - e solo se c'e' davvero qualche altra finestra aperta.
+// La risposta vale per tutto quel replay, STOP compreso: se hai scelto "tutte", fermarne una
+// ferma tutte. Altrimenti bisognerebbe fermarle a mano una per una, che e' peggio del problema.
+//
+// COME SI SA SE CI SONO ALTRE FINESTRE: si chiede, e si aspetta un soffio. Non basta guardare
+// `siblingAssetBySlot`, che si riempie solo quando qualcuno annuncia un asset e non si svuota
+// mai: due finestre ferme da un minuto non direbbero niente, e una finestra CHIUSA resterebbe in
+// elenco per sempre. Con la domanda, chi non c'e' piu' semplicemente non risponde.
+//
+// LE POSIZIONI non hanno bisogno di niente di nuovo: quelle del replay sono posizioni simulate e
+// viaggiano gia' nel messaggio trading_sync insieme a ordini e operazioni chiuse.
+let applicandoReplayRemoto=false;      // barriera anti-rimbalzo, come per trading_sync
+let fblReplayPerTutte=false;           // la scelta fatta alla domanda, valida per questo replay
+let fblPresenzaAttesa=null;            // chi si fa sentire mentre contiamo le finestre vive
+
+// Chiede chi c'e' e aspetta 300 ms. Risponde con l'elenco degli altri slot che si sono fatti
+// sentire. 300 ms perche' il canale fra finestre e' locale al browser: nelle misure del 15
+// novembre le risposte alla nascita di una finestra arrivavano tutte entro 23 ms.
+function fblChiediPresenzaFinestre(){
+  return new Promise(risolvi=>{
+    if(!tradingChannel){ risolvi([]); return; }
+    const visti=new Set();
+    fblPresenzaAttesa=visti;
+    try{ tradingChannel.postMessage({type:'presenza_request',slot:PIP_SLOT}); }catch(e){}
+    setTimeout(()=>{ fblPresenzaAttesa=null; risolvi(Array.from(visti)); },300);
+  });
+}
+
+// La domanda. Si fa solo se c'e' qualcun altro, e solo quando NON si e' gia' in replay: dentro un
+// replay il pulsante serve a spostare il punto, e richiedere lo stesso a ogni spostamento sarebbe
+// solo un fastidio.
+async function fblChiediAmbitoReplay(){
+  if(liveReplayActive)return;
+  fblReplayPerTutte=false;
+  let altre=[];
+  try{ altre=await fblChiediPresenzaFinestre(); }catch(e){ altre=[]; }
+  if(!altre.length)return;
+  const quante=altre.length;
+  const testo=(quante===1
+    ? "C'e' un'altra finestra aperta. Vuoi che il replay parta anche la', dallo stesso punto?"
+    : "Ci sono "+quante+" altre finestre aperte. Vuoi che il replay parta anche la', dallo stesso punto?");
+  let si=false;
+  try{
+    si=await appConfirm(testo+" Le posizioni che aprirai nel replay si vedranno su tutte. "
+      +"Scegliendo «Solo questa», le altre restano in diretta.",
+      {title:'Replay su tutte le finestre?', danger:false,
+       okLabel:'Su tutte le finestre', cancelLabel:'Solo questa'});
+  }catch(e){ si=false; }
+  fblReplayPerTutte=!!si;
+}
+
+// L'annuncio alle altre. Non parte mentre stiamo APPLICANDO un annuncio altrui: e' la stessa
+// barriera che evita i cappi di messaggi, curata il 12 e il 15 novembre.
+function fblAnnunciaReplay(attivo,t){
+  if(!tradingChannel||applicandoReplayRemoto)return;
+  if(!fblReplayPerTutte)return;
+  try{ tradingChannel.postMessage({type:'replay_sync',slot:PIP_SLOT,at:Date.now(),
+    attivo:!!attivo, t:Number.isFinite(t)?t:null}); }catch(e){}
+}
+function avviaReplayLive(t,opz){
   if(!liveModeActive||!Number.isFinite(t))return;
   liveReplaySelecting=false; liveReplayGuideClientX=null;
   liveReplayActive=true;
@@ -58911,11 +59302,13 @@ function avviaReplayLive(t){
   updateLiveReplayUI();
   draw();update();
   try{ $('status').textContent=`🔁 Replay dal ${liveReplayStamp(masterTime)} • candela ${idx+1}/${rows.length}. Avanza con ◀ ▶ o PLAY, esci con ⏹ STOP.`; }catch(e){}
+  // Se la scelta e' stata "su tutte le finestre", le altre partono dallo stesso punto.
+  if(!(opz&&opz.propaga===false))fblAnnunciaReplay(true,t);
 }
 // Esce dal replay e torna in diretta (tasto STOP). Le posizioni simulate e gli ordini pendenti
 // sono SEMPRE rimasti agganciati all'ultima candela vera durante il replay (vedi evaluate()), quindi
 // non c'è nulla da "recuperare": basta riportare la vista all'ultima candela.
-function esciReplayLive(){
+function esciReplayLive(opz){
   const era=liveReplayActive;
   liveReplayActive=false; liveReplaySelecting=false; liveReplayGuideClientX=null;
   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
@@ -58925,6 +59318,11 @@ function esciReplayLive(){
   updateLiveReplayUI();
   draw();update();
   if(era)try{ $('status').textContent='⏹ Replay terminato: sei di nuovo in diretta.'; }catch(e){}
+  // Lo STOP segue la stessa scelta dell'avvio: se il replay era su tutte, si fermano tutte.
+  if(!(opz&&opz.propaga===false)){
+    fblAnnunciaReplay(false,null);
+    fblReplayPerTutte=false;          // il prossimo replay rifara' la domanda
+  }
 }
 // Mostra/nascondi la barra Replay e i comandi di avanzamento. La barra è visibile SOLO in Live; il
 // tasto STOP compare solo mentre la scelta del punto o il replay sono attivi; le frecce ◀ ▶ + PLAY
@@ -58948,7 +59346,14 @@ function updateLiveReplayUI(){
   // nel caso piu' comune — Live con il replay acceso, cioe' esattamente la foto del proprietario.
   fblDoppioneFrecceVia();
 }
-$('liveReplayBtn')?.addEventListener('click',()=>{ avviaSelezioneReplayLive(); });
+// LA DOMANDA SI FA QUI, premendo "Replay", come chiesto dal proprietario: «premendo Replay con
+// duplicate aperte, il programma chiede se applicare il replay anche alle altre duplicate».
+// Prima si chiede, poi si sceglie il punto: all'inverso il proprietario vedrebbe la domanda a
+// gesto gia' fatto.
+$('liveReplayBtn')?.addEventListener('click',async ()=>{
+  try{ await fblChiediAmbitoReplay(); }catch(e){}
+  avviaSelezioneReplayLive();
+});
 $('liveReplayStopBtn')?.addEventListener('click',()=>{ esciReplayLive(); });
 // MODALITÀ BACKTEST (27 ottobre 2026): accesa/spenta dalla barra del replay. Attivandola il
 // replay lavora come il conto dello storico — le posizioni dell'account MT5 non vengono più
@@ -59010,19 +59415,28 @@ setTimeout(()=>{ try{ fblBacktestModeUi(); }catch(e){} },500);
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init); else init();
 })();
-$('liveReplayGoBtn')?.addEventListener('click',()=>{
+$('liveReplayGoBtn')?.addEventListener('click',async ()=>{
   const inp=$('liveReplayDateTime');
   const t=inp?new Date(inp.value).getTime():NaN;
-  if(Number.isFinite(t))avviaReplayLive(t);
+  if(!Number.isFinite(t))return;
+  // L'ALTRA PORTA D'INGRESSO. Si puo' entrare in replay anche scrivendo giorno e ora qui, senza
+  // passare dal pulsante "Replay": senza questa riga la domanda non si farebbe e il replay
+  // partirebbe solo su questa finestra, cioe' una cosa diversa a seconda di come sei entrato.
+  try{ await fblChiediAmbitoReplay(); }catch(e){}
+  avviaReplayLive(t);
 });
 // Scelta del punto col trascinamento: la guida segue il dito/mouse, il punto si fissa al rilascio.
 $('chart')?.addEventListener('pointermove',e=>{
   if(!liveReplaySelecting)return;
   liveReplayGuideClientX=e.clientX; draw();
+  if(e.pointerType==='mouse'||e.pointerType==='pen')fblAnnunciaGuida(e.clientX);
 },{passive:true});
 $('chart')?.addEventListener('pointerup',e=>{
   if(!liveReplaySelecting)return;
   const t=liveReplayTimeFromClientX(e.clientX);
+  // Scelto il punto (o annullato), l'anteprima del taglio se ne va anche dalle altre finestre:
+  // lasciarla li' sarebbe una linea ferma su un taglio che non e' piu' in corso.
+  fblAnnunciaGuidaVia();
   if(Number.isFinite(t))avviaReplayLive(t);
   else{ liveReplaySelecting=false; liveReplayGuideClientX=null; updateLiveReplayUI(); draw(); }
 });

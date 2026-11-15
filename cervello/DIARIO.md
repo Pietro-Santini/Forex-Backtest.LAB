@@ -1,3 +1,35 @@
+- 2026-11-15 - Claude - **v2.2.57: il mirino si trasporta fra le finestre, come su TradingView, e
+  il replay si puo' far partire su tutte insieme.** Muovendo il mouse su una finestra, le altre
+  sullo STESSO asset mostrano il mirino allo stesso orario e allo stesso prezzo. Sul canale non
+  viaggiano i pixel - senza senso con un altro zoom o un altro time frame - ma orario e prezzo, e
+  ogni finestra li riconverte nei propri. A time frame diversi il mirino NON si posa al centro
+  della candela: scorre dentro, in proporzione. MISURATO: 6,93 minuti percorsi sulla finestra a 1
+  minuto danno 4,2 px di spostamento su quella a 15, contro 4,2 px attesi (una candela da 15
+  minuti e' larga 9,0 px); cinque posizioni vicine danno cinque posizioni diverse DENTRO la stessa
+  candela. L'istante che viaggia e' continuo, non arrotondato alla candela, altrimenti gli scatti
+  sarebbero gia' dentro il numero spedito. Solo il mouse (e la penna), mai il dito, e mai su un
+  asset diverso. Insieme: l'anteprima del taglio del replay compare nello stesso istante su tutte
+  le finestre quando la scelta e' «su tutte», e il replay stesso (voce 6) ora chiede «su tutte le
+  finestre o solo questa?» alla pressione di Replay. UN DIFETTO MIO TROVATO DAL BANCO: salvavo le
+  coordinate del grafico al momento del disegno, e bastava uno SCORRIMENTO della pagina senza un
+  ridisegno per mandare il mirino fuori area (un movimento non spediva niente, sessanta ne
+  spedivano venti); ora il riquadro si legge al momento della conversione. Banchi: 11 prove per il
+  mirino, 7 per il replay condiviso.
+- 2026-11-15 - Claude - **v2.2.56: il replay si puo' far partire su tutte le finestre insieme
+  (voce 6), e il collaudo di GitHub torna verde.** Premendo "Replay" con altre finestre aperte il
+  programma chiede «su tutte le finestre o solo questa?»: scegliendo "su tutte", le duplicate
+  entrano in replay dallo stesso punto e le posizioni aperte da li' in poi si vedono ovunque (le
+  posizioni simulate viaggiavano gia' nel messaggio trading_sync: provato, non supposto). Prima
+  non esisteva nessun messaggio che dicesse «sono entrato in replay» - viaggiava solo la posizione
+  nel tempo - quindi premere Replay lasciava le altre finestre in diretta. La scelta vale anche
+  per lo STOP, altrimenti andrebbero fermate a mano una per una. Per sapere se ci sono altre
+  finestre si CHIEDE e si aspettano 300 ms, invece di tenere un elenco: una finestra chiusa non
+  risponde, mentre in un elenco resterebbe per sempre. SCOPERTO INOLTRE che il collaudo su GitHub
+  (Ubuntu) era rosso da due versioni mentre in locale (Windows) era verde: una prova del ponte
+  cadeva perche' aggiorna_programma_dettaglio() esce subito con «vale solo su Windows» quando
+  os.name non e' "nt". Ora quella prova si traveste da Windows invece di essere saltata, e la
+  regola che difende viene finalmente controllata dove il collaudo gira davvero. Regola nuova in
+  LEZIONI.md: dopo ogni pubblicazione si guarda `gh run list`, non solo CACHE_NAME.
 - 2026-11-15 - Claude - **v2.2.55: le finestre duplicate non rallentano piu' il ponte, e sei voci
   su dodici erano gia' curate.** Rimisurate una per una contro il codice: sfarfallio, schermo intero
   sulla madre, scorrimento nella duplicata, elenco asset, propagazione del conto e disegni
