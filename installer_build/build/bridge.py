@@ -621,6 +621,64 @@ _grazia_timer = None
 _grazia_lock = threading.Lock()
 _mt5_order_lock = threading.Lock()
 
+# UNA SOLA FOTOGRAFIA PER TUTTE LE FINESTRE APERTE (15 novembre 2026).
+#
+# SEGNALATO dal proprietario (voce 9 delle finestre duplicate): «la chiusura e' gia' lenta di suo,
+# e con duplicate aperte rallenta ancora di piu'. Le chiusure devono essere istantanee. Le
+# duplicate non devono rallentare il sistema.»
+#
+# MISURATO il 15 novembre con tre pagine vere e un ponte finto che conta le richieste: OGNI
+# finestra interroga il ponte per conto suo, una volta al secondo, su tre rotte diverse.
+#     una finestra  ..... ~27 letture in 6 secondi
+#     tre finestre  ..... ~83 letture in 6 secondi   (/positions 7 + /orders 7 + /account 7, a testa)
+# Verso il terminale MT5 queste chiamate sono per natura seriali: una richiesta di chiusura
+# mandata in mezzo a quel flusso si mette in coda dietro le letture delle altre finestre. Non e'
+# la pagina a essere lenta - closeTrade() nella pagina misura 2,5 ms e non peggiora con le
+# duplicate aperte - e' il ponte che sta rispondendo a tre finestre che chiedono la stessa cosa.
+#
+# LA CURA, tutta da questo lato: se piu' finestre chiedono la stessa fotografia nello stesso
+# quarto di secondo, a MT5 si va UNA volta sola e la risposta si serve a tutte. Le finestre
+# chiedono una volta al secondo, quindi un quarto di secondo di eta' non si vede: nessuna
+# finestra riceve un dato piu' vecchio di quanto gia' riceverebbe fra due giri.
+#
+# PERCHE' NON SI E' TOLTA LA LETTURA ALLE DUPLICATE, che sarebbe la cura ovvia: le posizioni
+# REALI del broker (mt5RealPositions, usata in 38 punti dell'app) NON viaggiano sul canale fra
+# finestre, quindi una duplicata ha bisogno davvero della propria lettura. Toglierla vorrebbe
+# dire cambiare il protocollo fra finestre e il percorso dei dati di un conto vero: troppo
+# rischio per il guadagno, e comunque lascerebbe una duplicata cieca se si chiude la madre.
+#
+# SICUREZZA: dopo QUALUNQUE operazione di trading la fotografia si butta subito (vedi il filtro
+# _foto_scade_dopo_le_operazioni). Vale anche quando l'operazione FALLISCE o resta con esito
+# sconosciuto - e' proprio il caso in cui si vuole rileggere dal vivo.
+_FOTO_TTL = 0.25
+_foto_lock = threading.Lock()
+_foto_dati = {}
+_foto_epoca = 0
+
+
+def _foto(nome, produci):
+    """Chiama `produci()` al massimo una volta ogni _FOTO_TTL secondi, per tutti i chiamanti.
+
+    Il lucchetto si tiene anche DURANTE la chiamata a MT5, di proposito: due finestre che
+    arrivano insieme non devono fare due letture: la seconda aspetta la prima e si prende la
+    stessa risposta. Verso MT5 sarebbero comunque state servite una dopo l'altra.
+    """
+    with _foto_lock:
+        v = _foto_dati.get(nome)
+        if v is not None and v[2] == _foto_epoca and (time.monotonic() - v[0]) < _FOTO_TTL:
+            return v[1]
+        valore = produci()
+        _foto_dati[nome] = (time.monotonic(), valore, _foto_epoca)
+        return valore
+
+
+def _foto_scadi():
+    """Butta tutte le fotografie: la prossima lettura torna a MT5 davvero."""
+    global _foto_epoca
+    with _foto_lock:
+        _foto_epoca += 1
+        _foto_dati.clear()
+
 
 def _spegni_tutto_adesso():
     """Quello che /disconnect ha sempre fatto: MT5, terminale, processo dati, e questo processo."""
@@ -682,6 +740,24 @@ app = FastAPI(title="Forex Backtest LAB — Bridge MT5")
 # browser deve poter chiamare questo bridge da lì. In seguito si potrà restringere
 # a solo l'origine reale dell'app, se si vuole irrigidire la sicurezza.
 app.add_middleware(CORSMiddleware, **_accesso.opzioni_cors())   # vedi opzioni_cors(): rete privata
+
+
+@app.middleware("http")
+async def _foto_scade_dopo_le_operazioni(request: Request, call_next):
+    """Dopo qualunque operazione di trading, la fotografia condivisa si butta.
+
+    Sta QUI, in un posto solo, e non dentro le nove rotte che aprono, chiudono, modificano e
+    annullano: una rotta nuova aggiunta domani e' coperta senza doversene ricordare. Si butta
+    anche quando l'operazione e' fallita o e' rimasta con esito sconosciuto, che e' proprio il
+    caso in cui bisogna rileggere dal vivo.
+    """
+    risposta = await call_next(request)
+    try:
+        if request.method != "GET" and request.url.path.startswith(("/order", "/position")):
+            _foto_scadi()
+    except Exception:
+        pass
+    return risposta
 
 
 @app.middleware("http")
@@ -2859,7 +2935,7 @@ def account():
     if not mt5_connected:
         raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
 
-    info = mt5.account_info()
+    info = _foto("account_info", mt5.account_info)
     if info is None:
         raise HTTPException(status_code=500, detail=f"Impossibile leggere il conto: {mt5.last_error()}")
 
@@ -3297,11 +3373,11 @@ def get_positions(response: Response):
     """
     if not mt5_connected:
         raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
-    info_conto = mt5.account_info()
+    info_conto = _foto("account_info", mt5.account_info)
     if info_conto is not None:
         response.headers["X-MT5-Login"] = str(info_conto.login)
         response.headers["X-MT5-Server"] = str(getattr(info_conto, "server", "") or "")
-    positions = mt5.positions_get()
+    positions = _foto("positions", mt5.positions_get)
     if positions is None:
         # positions_get() restituisce None per un errore INTERNO/temporaneo (l'IPC col terminale
         # ha avuto un intoppo, il terminale era momentaneamente occupato...), MAI per "il conto
@@ -4229,7 +4305,7 @@ def get_orders():
     scattati, per questo separati da /positions."""
     if not mt5_connected:
         raise HTTPException(status_code=400, detail="Non connesso: chiama prima /connect")
-    orders = mt5.orders_get()
+    orders = _foto("orders", mt5.orders_get)
     if orders is None:
         return []
     out = []

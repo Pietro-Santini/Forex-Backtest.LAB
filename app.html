@@ -9204,6 +9204,36 @@ function collectTradingSyncPayload(){
 let fblStatoTradingApplicatoAt=NaN;
 // Stessa cosa per il conto, che viaggia in un blocco a parte prima del tipo.
 let fblContoApplicatoAt=NaN;
+// APPLICARE NON E' ANNUNCIARE (15 novembre 2026).
+//
+// MISURATO con tre finestre vere: alla nascita di una finestra, UNA SOLA duplicata manda 12
+// annunci per 2 richieste ricevute. La sonda nomina i chiamanti:
+//     tradingChannel.onmessage ............ 2   <- le risposte giuste alle 2 richieste
+//     scheduleSave <- update .............. 5   |
+//     mt5AttivaConto <- onmessage ......... 1   |  dieci ECHI: questa finestra sta solo
+//     scheduleSave <- mt5AttivaConto ...... 1   |  APPLICANDO un conto arrivato da fuori,
+//     scheduleSave <- onmessage ........... 1   |  e intanto lo ri-annuncia a tutti
+//     altri scheduleSave .................. 2   |
+//
+// LA CAUSA: il blocco `if(msg.conto)` gira PRIMA del ramo per tipo, e la barriera anti-rimbalzo
+// (`applyingRemoteTradingSync`) viene alzata solo dentro il ramo `trading_sync`, piu' sotto.
+// Quindi tutto il percorso che applica il conto - mt5AttivaConto(), scheduleSave(), update() -
+// gira a barriera ABBASSATA, e ogni passo rimanda in giro quello che ha appena ricevuto. Due
+// finestre non d'accordo sul conto si ribaltano a vicenda senza fine.
+//
+// Questo aiuto alza la barriera per il tempo di un'applicazione e la RIMETTE COM'ERA (non a
+// `false`): il blocco del conto puo' trovarsi annidato dentro un'altra applicazione, e forzare
+// `false` all'uscita spalancherebbe la porta a meta' strada.
+//
+// Non ferma il salvataggio su disco: scheduleSave() prima annuncia e poi scrive, e la barriera
+// agisce solo su broadcastTradingStateNow(). La propagazione fra finestre non si perde, perche'
+// chi PROPAGA e' la finestra dove l'utente ha cambiato conto, non chi lo riceve.
+function fblSenzaRiannunciare(fn){
+  const prima=applyingRemoteTradingSync;
+  applyingRemoteTradingSync=true;
+  try{ return fn(); }
+  finally{ applyingRemoteTradingSync=prima; }
+}
 let tradingSyncRicevuto=(PIP_SLOT===0);
 // Quali finestre hanno annunciato almeno una volta qualcosa di concreto: serve a chi RICEVE
 // (vedi il gestore trading_sync) per distinguere "ho chiuso l'ultima posizione" da "sono
@@ -9575,6 +9605,7 @@ if(tradingChannel){
       }
       if(Number.isFinite(_quandoC))fblContoApplicatoAt=_quandoC;
     }
+    fblSenzaRiannunciare(function(){
     try{
       const dec = fblApplicaContoMadre(msg.conto);
       if(dec.cambiato){
@@ -9591,6 +9622,11 @@ if(tradingChannel){
           // ramo di sotto di rimandare l'applicazione a qui, a cambio concluso.
           posizioniInAttesaDelConto=true;
           Promise.resolve(switchAccountMode(true)).then(function(){
+            // ANCHE QUI DENTRO (15 novembre 2026): questa funzione gira DOPO, a cambio conto
+            // concluso, quando la barriera alzata dal giro sincrono e' gia' stata rimessa
+            // com'era. Senza questo, il `draw(); update();` qui sotto era da solo cinque dei
+            // dieci echi misurati (`scheduleSave <- update`).
+            fblSenzaRiannunciare(function(){
             try{ if(dec.vista && dec.vista!=='storico') fblContoScegli(dec.vista); }catch(e){}
             try{ if(posizioniInAttesaDelConto)fblApplicaStatoTrading(msg); }catch(e){}
             // RIDIPINGERE SUBITO (11 novembre 2026). Misurato dal banco posizioni_chiuse_tablet:
@@ -9598,6 +9634,7 @@ if(tradingChannel){
             // guarda (o chi misura) in quel momento vede ancora le posizioni vecchie. Il cambio
             // e' asincrono: senza questo, la pagina resta visivamente indietro.
             try{ draw(); update(); }catch(eR){}
+            });
             posizioniInAttesaDelConto=false;
           }).catch(function(){ posizioniInAttesaDelConto=false; });
         }else if(dec.promessa==='storico'){
@@ -9619,6 +9656,7 @@ if(tradingChannel){
         }
       }
     }catch(e){}
+    });
   }
    if(msg.type==='trading_sync'){
      // L'ALTRA META' DELLA STESSA CURA, dal lato di chi RICEVE.
@@ -13040,7 +13078,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.54';
+const FBL_VERSIONE='2.2.55';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha

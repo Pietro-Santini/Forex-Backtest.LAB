@@ -1301,20 +1301,48 @@ ESITI: A, B, C da ROSSI a VERDI. Non-regressione provata, un banco per volta:
 `conto_sincrono` (5/5), `clic_sul_grafico` (5/5), `pip_conto_madre` (2/2),
 `disegni_fra_finestre` (5/5), `misura_isolamento_conto_mt5` (8/8).
 
-### F. ANCORA ROSSI, MISURATI, NON CURATI (stesso banco)
+### F. RIMISURATO IL 15 NOVEMBRE 2026 — due voci su quattro erano GIA' CURATE
 
-- **D / D2 — il conto della terza finestra (punto 4).** Misurato: alla nascita di una finestra
-  rispondono TUTTE le altre, non solo la madre, e vince l'ultimo arrivo. Traccia reale della terza
-  finestra: `[{da:0,login:222},{da:2,login:111},{da:2,login:222},{da:0,login:111},...]` — decine di
-  risposte nei primi 23 ms, con il login che oscilla, e **conto finale 50100111: quello VECCHIO**.
-  Il campo `at` viaggia nel messaggio (riga 8858) e non viene letto da nessuno. In piu' resta un
-  SECONDO cappio, non ancora chiuso: il blocco `if(msg.conto)` gira PRIMA del tipo e FUORI da ogni
-  barriera, e il suo ramo `conto_mt5` chiama `mt5AttivaConto()` → `scheduleSave()` → broadcast;
-  due finestre che non sono d'accordo sul conto si ribaltano a vicenda.
-  CURA PROPOSTA: (a) a `trading_sync_request` risponde SOLO la madre (`if(PIP_SLOT===0)`), come
-  gia' si fa per `pip_clone_request`; (b) il conto si applica solo se `msg.at` e' piu' recente
-  dell'ultimo conto applicato; (c) il blocco `msg.conto` dentro la barriera.
-- **G — `sessionByMode` si porta dietro i DISEGNI (difetto nuovo, non segnalato).** Misurato:
+ATTENZIONE a chi legge questa sezione: era rimasta indietro. Il banco che cita
+(`finestre_duplicate_tre.misura.test.mjs`) NON ESISTE in nessun ramo del repository: le misure del
+12 novembre vivevano solo come prosa qui dentro. E' la lezione gia' scritta in questo file - una
+voce di diario non e' una prova che una cosa esista, lo e' un test. Il banco rifatto e committato
+e' `laboratorio/app/finestre_tre_il_conto.test.mjs` (5/5).
+
+- **D / D2 — il conto della terza finestra (punto 4). IL SINTOMO NON SI RIPRODUCE PIU'.**
+  Rimisurato con tre pagine vere: la terza finestra prende il conto della madre in 6 giri su 6, e
+  la traccia dice perche' - quando la terza nasce, la duplicata si e' GIA' allineata da sola alla
+  madre, quindi al momento della nascita non c'e' piu' disaccordo. Le cure del 12-13 novembre
+  (propagazione + guardia su `msg.at`) tengono. La prova resta come guardia di non-regressione.
+  DUE CORREZIONI ALLE MISURE SCRITTE QUI SOPRA:
+  (1) il numero «decine di risposte nei primi 23 ms» e' di PRIMA della cura del 12 novembre
+      (sezione E, da 11.508 chiamate a 20): non descrive il codice di oggi;
+  (2) anche la prima misura del 15 novembre era sbagliata, e va detto: contava le CHIAMATE a
+      `broadcastTradingStateNow()`, non i messaggi spediti. Le chiamate sono 12 per 2 richieste,
+      ma le barriere ne fermavano quasi tutte: i messaggi che usciranno davvero erano UNO.
+      Contare le chiamate dava lo stesso numero prima e dopo qualunque cura.
+  RESTAVA PERO' UN DIFETTO VERO, e quell'unico messaggio era lui: **chi applica un conto arrivato
+  da fuori lo ri-annunciava.** Il blocco `if(msg.conto)` gira PRIMA del ramo per tipo, mentre la
+  barriera anti-rimbalzo si alza solo dentro il ramo `trading_sync`: tutto il percorso che applica
+  il conto (`mt5AttivaConto` -> `scheduleSave` -> broadcast, e `update()` nella coda asincrona del
+  cambio conto) girava a barriera abbassata. E' il cappio previsto in questa stessa sezione: non
+  e' infinito solo perche' si ferma quando le finestre vanno d'accordo, ma ogni cambio conto costa
+  un giro di messaggi in piu' e un ridisegno su ogni finestra.
+  **CURATO il 15 novembre** con `fblSenzaRiannunciare()`, che alza la barriera per il tempo
+  dell'applicazione - coda asincrona compresa - e la rimette COM'ERA, non a `false` (il blocco puo'
+  trovarsi annidato dentro un'altra applicazione; forzare `false` spalancherebbe la porta a meta'
+  strada). Messaggi spediti: da 1 a 0. Non-regressione provata: `conto_sincrono` 5/5 nei DUE versi
+  (la propagazione non si perde, perche' chi propaga e' la finestra dove l'utente ha cambiato
+  conto, non chi riceve), `pip_conto_madre` 2/2, `disegni_fra_finestre` 5/5,
+  `misura_isolamento_conto_mt5` 8/8, `posizioni_chiuse_tablet` 2/2.
+- **La parte (a) della cura proposta — «risponde solo la madre» — NON e' stata fatta, di proposito.**
+  Non serve piu' al conto (vedi sopra) e porterebbe un rischio nuovo: chiusa la finestra madre,
+  nessuno risponderebbe piu' alla nascita di una finestra. Se un giorno servisse, va fatta con un
+  ripiego («risponde una duplicata solo se la madre non ha risposto»), non con una barriera secca.
+
+- **G — `sessionByMode` si porta dietro i DISEGNI. GIA' CURATA il 13 novembre 2026** (verificato
+  nel sorgente il 15 novembre: la riga ora fonde e tiene i PROPRI disegni e il PROPRIO capitale,
+  col commento che riporta la misura). Il testo qui sotto resta per la storia. Misurato:
   `if(msg.sessionByMode)sessionByMode=msg.sessionByMode` (riga 49449) sostituisce in blocco le
   quattro sessioni, e dentro ogni sessione ci sono `drawings` e `capital`. Una duplicata appena
   nata, che di disegni non ne ha, cancella quelli salvati della madre: nel banco da 3 a 0. E la

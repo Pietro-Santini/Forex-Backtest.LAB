@@ -1,3 +1,19 @@
+- 2026-11-15 - Claude - **v2.2.55: le finestre duplicate non rallentano piu' il ponte, e sei voci
+  su dodici erano gia' curate.** Rimisurate una per una contro il codice: sfarfallio, schermo intero
+  sulla madre, scorrimento nella duplicata, elenco asset, propagazione del conto e disegni
+  sincronizzati erano gia' a posto e segnati «da fare», perche' le misure del 12 novembre vivevano
+  solo come prosa in BUG.md e il banco che citavano non esisteva in nessun ramo. DUE DIFETTI VERI
+  TROVATI E CURATI: (1) chi riceveva un conto da un'altra finestra lo RI-ANNUNCIAVA, perche' il
+  blocco che applica il conto gira prima che si alzi la barriera anti-rimbalzo - messaggi spediti
+  da 1 a 0, con fblSenzaRiannunciare() che rimette la barriera com'era e non a false; (2) ogni
+  finestra interrogava il ponte per conto suo, una volta al secondo su tre rotte: misurato ~27
+  letture in 6 s con una finestra e ~83 con tre, e verso MT5 quelle chiamate sono seriali, quindi
+  una chiusura si accodava dietro le letture delle altre finestre. Ora il ponte serve UNA sola
+  fotografia a tutte le finestre che chiedono la stessa cosa nello stesso quarto di secondo, e la
+  butta subito dopo qualunque operazione di trading (un filtro in un posto solo, non nove rotte da
+  ricordare). La pagina non era lenta: closeTrade() misura 2,5 ms e non peggiora con le duplicate.
+  Verificate con banco anche le voci 2, 3 e 8 (il modello sulla barra porta tutte e nove le
+  proprieta' salvate). 17 prove nuove; i banchi del ponte restano 371 verdi.
 - 2026-11-15 — Claude — **v2.2.54: in replay si entra, e si esce, al prezzo del secondo in cui sei.**
   Il percorso dentro la candela ora segue il verso della candela (rialzista: apertura -> minimo ->
   massimo -> chiusura; ribassista l'opposto), e SL/TP tornano a valutarsi secondo per secondo come

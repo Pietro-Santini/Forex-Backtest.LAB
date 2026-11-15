@@ -1,23 +1,57 @@
 # Richieste aperte — finestra duplicata («Duplica finestra»)
 
+## VERIFICA DEL 15 NOVEMBRE 2026 — LEGGERE PRIMA DEL RESTO
+
+Rimisurate una per una contro il codice di oggi, invece di fidarsi degli stati scritti qui sotto.
+**Sei voci su dodici erano gia' curate e segnate ancora da fare.** Gli stati delle singole voci,
+piu' in basso, sono stati corretti; il testo originale resta perche' spiega i sintomi.
+
+| voce | stato vero al 15 novembre |
+|---|---|
+| 1 sfarfallio | curata il 12 nov (tempesta di messaggi: da 11.508 chiamate a 20) |
+| 2 schermo intero sulla madre | curata l'8 nov. **Ora con un banco**: `duplicata_schermo_e_scroll` |
+| 3 scorrimento nella duplicata | curata. Misurato: 0 px da scorrere, rotellina inerte. Stesso banco |
+| 4 / 12 elenco asset | curata (`fblApplicaElencoAssetMadre`). Da riprovare col ponte vero |
+| 5 propagazione del conto | curata il 12-13 nov, nei due versi (`conto_sincrono` 5/5) |
+| 6 replay sincronizzato con la domanda | **DA FARE**: e' una funzione nuova, non un difetto |
+| 7 disegni sincronizzati | curata (`disegni_fra_finestre` 5/5) |
+| 8 modello sulla barra strumenti | **DA VERIFICARE** |
+| 9 chiusure lente | **DA MISURARE** |
+| 10 grafico piantato sul caricamento | tetto di 30 s aggiunto il 12 nov. Da riprovare col ponte vero |
+| 11 conto della terza finestra | il sintomo NON si riproduce piu' (6 giri su 6 col conto giusto) |
+| eco del conto (non segnalato) | **CURATO il 15 nov**: chi applica un conto non lo ri-annuncia |
+
+PERCHE' ERANO RIMASTE INDIETRO, e vale per la prossima volta: le misure del 12 novembre erano
+state scritte in `BUG.md` come prosa, e il banco che citavano
+(`finestre_duplicate_tre.misura.test.mjs`) **non esiste in nessun ramo**. Senza un banco
+committato, nessuno sa piu' se una cosa e' curata: va riletto il sorgente da zero. I banchi nuovi
+sono `finestre_tre_il_conto.test.mjs` (5/5) e `duplicata_schermo_e_scroll.test.mjs` (3/3).
+
+RESTA VERO che le voci 10 e 12 vanno riprovate col ponte MT5 vero: sul banco non si riproducono,
+e il proprietario le ha viste con il ponte collegato. Un banco verde non chiude una segnalazione
+vista dal vivo.
+
 Lista creata il 7 novembre 2026. Lavoro separato dal rilascio mercato-chiuso.
 Ogni voce va riprodotta e misurata prima di curare (regola: si misura prima di correggere).
 
 ## Difetti segnalati
 
-1. **Sfarfallio delle posizioni aperte** nella duplicata: TP, SL, punti di entrata,
+1. **Sfarfallio delle posizioni aperte** [CURATA il 12 novembre 2026: la causa era una tempesta
+   di messaggi fra finestre, da 11.508 chiamate in 4 s a 20 - vedi BUG.md sezione E] nella duplicata: TP, SL, punti di entrata,
    P/L live, prezzo attuale non coincidono con la madre e lampeggiano. Causa da misurare:
    due loop che si pestano o stato condiviso non sincronizzato.
-   - Stato: DA FARE.
+   - Stato: CURATA (12 novembre 2026).
 
-2. **Schermo intero bloccato sulla pagina madre** dopo aver duplicato una finestra.
+2. **Schermo intero bloccato sulla pagina madre** [CURATA l'8 novembre, VERIFICATA il 15 con un
+   banco: la madre entra a schermo intero con una duplicata aperta] dopo aver duplicato una finestra.
    La madre deve poter andare a schermo intero anche con duplicate aperte.
-   - Stato: DA FARE.
+   - Stato: CURATA (8 novembre 2026), con banco dal 15 novembre.
 
-3. **Scroll indesiderato** nella duplicata: rodellina/dito fanno scorrere la pagina,
+3. **Scroll indesiderato** nella duplicata [CURATA, VERIFICATA il 15 novembre: nella duplicata
+   non c'e' niente da scorrere e la rotellina la lascia ferma]: rodellina/dito fanno scorrere la pagina,
    ma deve esserci solo il grafico. La barra laterale degli strumenti e del replay
    deve restare ancorata a sinistra.
-   - Stato: DA FARE.
+   - Stato: CURATA, con banco dal 15 novembre.
 
 4. **Elenco asset limitato / modalità CSV** su una seconda duplicata: la duplicata
    mostra pochi asset, perde le watchlist, in alcuni casi si apre in modalità storico CSV
@@ -39,9 +73,9 @@ Ogni voce va riprodotta e misurata prima di curare (regola: si misura prima di c
    entrano in replay e le posizioni replay si trasportano sulle altre.
    - Stato: DA FARE.
 
-7. **Disegni sincronizzati**: un disegno manuale aggiunto su una pagina deve
+7. **Disegni sincronizzati** [CURATA: banco disegni_fra_finestre 5/5]: un disegno manuale aggiunto su una pagina deve
    comparire anche sulle altre duplicate, indipendentemente da quale è la madre.
-   - Stato: DA FARE.
+   - Stato: CURATA (banco disegni_fra_finestre 5/5).
 
 8. **Modello sulla barra strumenti**: selezionando un disegno salvato come modello e
    poi cliccando sul grafico, il disegno viene tracciato subito con le priorità salvate;
