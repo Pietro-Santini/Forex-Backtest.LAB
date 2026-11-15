@@ -4019,7 +4019,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
   <!-- Il Timeframe è già selezionabile direttamente dal grafico (menu #tfChart in alto a destra
        del grafico): questo select è lo stesso controllo "master", tenuto in DOM ma nascosto qui
        in cima alla pagina per non duplicarlo visivamente. -->
-  <div style="display:none"><select id="tf"><option value="1">1m</option><option value="5">5m</option><option value="15">15m</option><option value="30">30m</option><option value="60">1H</option><option value="240">4H</option><option value="1440">1D</option></select></div>
+  <div style="display:none"><select id="tf"><option value="1">1m</option><option value="3">3m</option><option value="5">5m</option><option value="10">10m</option><option value="15">15m</option><option value="30">30m</option><option value="60">1H</option><option value="120">2H</option><option value="180">3H</option><option value="240">4H</option><option value="300">5H</option><option value="720">12H</option><option value="1440">1G</option><option value="2880">2G</option><option value="4320">3G</option><option value="7200">5G</option><option value="10080">1 sett.</option><option value="20160">2 sett.</option><option value="43200">1 mese</option></select></div>
  </div>
  <!-- ===== Import storico automatico da Alpha Vantage (STEP 1) =====
       Scarica candele FX direttamente dall'API gratuita di Alpha Vantage e le aggiunge alla
@@ -4545,12 +4545,24 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <button type="button" id="tgAlertBtn" style="display:none" class="chartCornerBtn" title="Nuovo segnale da una sala Telegram">!<span id="tgAlertBadge"></span></button>
      <select id="tfChart" class="chartCornerBtn" style="width:auto;padding:0 6px;font-size:12px;font-weight:700;cursor:pointer" title="Cambia timeframe direttamente dal grafico">
        <option value="1">1m</option>
+       <option value="3">3m</option>
        <option value="5">5m</option>
+       <option value="10">10m</option>
        <option value="15">15m</option>
        <option value="30">30m</option>
        <option value="60">1H</option>
+       <option value="120">2H</option>
+       <option value="180">3H</option>
        <option value="240">4H</option>
-       <option value="1440">1D</option>
+       <option value="300">5H</option>
+       <option value="720">12H</option>
+       <option value="1440">1G</option>
+       <option value="2880">2G</option>
+       <option value="4320">3G</option>
+       <option value="7200">5G</option>
+       <option value="10080">1 sett.</option>
+       <option value="20160">2 sett.</option>
+       <option value="43200">1 mese</option>
      </select>
      <button id="chartFullscreenBtn" class="chartCornerBtn" title="Schermo intero">⛶</button>
      <button id="randomBtn" class="chartCornerBtn" style="width:auto;padding:0 8px;font-size:12px;font-weight:700" title="Carica un punto casuale nello storico caricato, da cui far partire un nuovo replay">🎲<span class="qtTesto"> DATA RANDOM</span></button>
@@ -12779,7 +12791,7 @@ function aggregateRows(data, minutes){
     const r=data[i];
     const t= usaCache && tempi && Number.isFinite(tempi[i]) ? tempi[i] : parseDateTime(r.date);
     if(!Number.isFinite(t)) continue;
-    const bucket=Math.floor(t/(minutes*60000))*(minutes*60000);
+    const bucket=fblInizioBucket(t,minutes);
     if(!buckets.has(bucket)){
       buckets.set(bucket,{date:r.date,open:r.open,high:r.high,low:r.low,close:r.close,volume:Number.isFinite(r.volume)?r.volume:0,tClose:t});
     }else{
@@ -12959,11 +12971,10 @@ function getFullAgg(minutes){
     // ricalcolato per intero, perche' una candela nuova ne cambia massimo, minimo e volume.
     const tDa=parseDateTime(baseRows[da]&&baseRows[da].date);
     if(Number.isFinite(tDa)){
-      const passo=Math.max(1,Number(minutes)||1)*60000;
-      const bucketDa=Math.floor(tDa/passo)*passo;
+      const bucketDa=fblInizioBucket(tDa,minutes);
       // Dalla cache si tiene tutto cio' che sta PRIMA di quel bucket: non e' stato toccato.
       let taglio=cached.data.length;
-      while(taglio>0 && cached.data[taglio-1] && Math.floor(parseDateTime(cached.data[taglio-1].date)/passo)*passo>=bucketDa)taglio--;
+      while(taglio>0 && cached.data[taglio-1] && fblInizioBucket(parseDateTime(cached.data[taglio-1].date),minutes)>=bucketDa)taglio--;
       // E dalle candele base si riprende dalla prima che cade in quel bucket.
       const tempi=baseTimesCacheRef===cached.ref&&baseTimesCache?baseTimesCache:null;
       let primaBase=da;
@@ -13009,7 +13020,81 @@ function closeTimeOf(row){
   if(!row) return NaN;
   return Number.isFinite(row.tClose)?row.tClose:parseDateTime(row.date);
 }
-function bucketKeyOf(t,minutes){ return Math.floor(t/(minutes*60000)); }
+// I CONFINI DELLE CANDELE: UNA SOLA FONTE DI VERITA' (15 novembre 2026).
+//
+// RICHIESTO dal proprietario: «aggiungiamo piu' time frame: 3 minuti, 10 minuti, 2h 3h 4h 5h 12h
+// 2g 3g 5g 1w 2w 1 mese».
+//
+// IL LAVORO NON ERA IL MENU. Prima i gruppi si contavano cosi':
+//     Math.floor(t/(minuti*60000))
+// cioe' partendo dall'EPOCA UNIX. Va bene per 1, 5, 15, 30, 60, 240 minuti, che dividono
+// esattamente la giornata: i confini cadono su ore vere. Per i time frame nuovi no, e si
+// sarebbero viste candele dai bordi sbagliati senza nessun avviso:
+//   - 5h (300 min): 1440/300 = 4,8, quindi i confini SLITTANO di giorno in giorno;
+//   - 2g, 3g, 5g, 1w, 2w: il 1 gennaio 1970 era un GIOVEDI', quindi le settimane sarebbero
+//     cominciate di giovedi';
+//   - 1 mese: 43.200 minuti sono 30 giorni fissi, non il mese del calendario.
+//
+// LE REGOLE ADESSO, una per famiglia:
+//   - sotto la giornata e divisore di 1440 (1, 3, 5, 10, 15, 30, 60, 120, 180, 240, 720):
+//     identico a prima, dall'epoca. Nessun cambiamento per chi usa i time frame di sempre.
+//   - sotto la giornata e NON divisore (5h): ancorato alla MEZZANOTTE del giorno. L'ultima
+//     candela del giorno e' piu' corta (a 5h: 00, 05, 10, 15, 20 -> quella delle 20 dura 4h).
+//     Meglio di candele che attraversano la mezzanotte spostandosi ogni giorno.
+//   - multipli del giorno (1g, 2g, 3g, 5g) e settimane (1w, 2w): ancorati a un LUNEDI'.
+//   - 1 mese: il mese del CALENDARIO, con la sua lunghezza vera.
+//
+// `bucketKeyOf` restituisce ora l'INIZIO del bucket in millisecondi, non un indice: resta una
+// chiave crescente (serve solo a confrontare e ordinare) e vale anche per i mesi, che hanno
+// lunghezze diverse e quindi non si possono numerare moltiplicando.
+const FBL_GIORNO_MS=86400000;
+// Il primo lunedi' dopo l'epoca: 5 gennaio 1970, 00:00 UTC. L'epoca stessa e' un giovedi'.
+const FBL_ANCORA_LUNEDI=Date.UTC(1970,0,5);
+// Il valore in minuti che significa «un mese di calendario». 43.200 = 30 giorni: nessun altro
+// time frame dell'elenco usa questo numero, quindi fa da segnale senza ambiguita'.
+const FBL_TF_MESE=43200;
+
+function fblInizioBucket(t,minutes){
+  const m=Math.max(1,Number(minutes)||1);
+  if(!Number.isFinite(t))return NaN;
+  if(m>=FBL_TF_MESE){
+    const d=new Date(t);
+    return Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),1);
+  }
+  const passo=m*60000;
+  if(m%1440===0){
+    // Giorni e settimane: contati da un lunedi', cosi' le settimane cominciano di lunedi' e i
+    // multipli di giorno non slittano a seconda di dove cade l'epoca.
+    return FBL_ANCORA_LUNEDI+Math.floor((t-FBL_ANCORA_LUNEDI)/passo)*passo;
+  }
+  if(1440%m===0){
+    // Divisore della giornata: identico al conto di sempre.
+    return Math.floor(t/passo)*passo;
+  }
+  // Sotto la giornata ma non divisore: si riparte da mezzanotte.
+  const mezzanotte=Math.floor(t/FBL_GIORNO_MS)*FBL_GIORNO_MS;
+  return mezzanotte+Math.floor((t-mezzanotte)/passo)*passo;
+}
+
+// La fine del bucket (esclusa). Per i mesi e' il primo del mese dopo; per i time frame che non
+// dividono la giornata non si sfonda la mezzanotte, altrimenti l'ultima candela del giorno
+// mangerebbe l'inizio del giorno dopo.
+function fblFineBucket(inizio,minutes){
+  const m=Math.max(1,Number(minutes)||1);
+  if(!Number.isFinite(inizio))return NaN;
+  if(m>=FBL_TF_MESE){
+    const d=new Date(inizio);
+    return Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1);
+  }
+  const fine=inizio+m*60000;
+  if(m<1440 && 1440%m!==0){
+    const mezzanotteDopo=Math.floor(inizio/FBL_GIORNO_MS)*FBL_GIORNO_MS+FBL_GIORNO_MS;
+    return Math.min(fine,mezzanotteDopo);
+  }
+  return fine;
+}
+
+function bucketKeyOf(t,minutes){ return fblInizioBucket(t,minutes); }
 // Trova, nell'aggregazione COMPLETA `fullAgg` (timeframe `minutes`), l'indice dell'ultima
 // candela il cui bucket è <= quello di `t`: è la candela a cui `t` appartiene (o, in caso di
 // buco nei dati, quella immediatamente precedente).
@@ -13030,7 +13115,7 @@ function findBucketIndexForTime(fullAgg,minutes,t){
 // cambiare timeframe — mai un prezzo "nel futuro" rispetto a quel punto.
 function buildPartialBucket(bucketStartMs,minutes,capTimeMs){
   const times=getBaseTimes();
-  const bucketEndExclusive=bucketStartMs+minutes*60000;
+  const bucketEndExclusive=fblFineBucket(bucketStartMs,minutes);
   let i=lowerBound(times,bucketStartMs);
   let o=null,h=-Infinity,l=Infinity,c=null,vol=0,firstDate=null,lastT=null;
   while(i<baseRows.length && times[i]<bucketEndExclusive && times[i]<=capTimeMs){
@@ -13075,7 +13160,10 @@ function rebuildRows(){
   if(bIdx<0)bIdx=0;
   const bucket=fullAgg[bIdx];
   if(bucket.tClose>masterTime){
-    const bucketStart=bucketKeyOf(bucket.tClose,currentTF)*currentTF*60000;
+    // bucketKeyOf restituisce GIA' l'inizio del bucket in millisecondi: moltiplicare per il
+    // time frame, come si faceva prima, sarebbe sbagliato - e per i mesi non avrebbe senso,
+    // perche' hanno lunghezze diverse.
+    const bucketStart=bucketKeyOf(bucket.tClose,currentTF);
     const partial=buildPartialBucket(bucketStart,currentTF,masterTime);
     if(partial){
       const disp=fullAgg.slice();
@@ -13341,7 +13429,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.57';
+const FBL_VERSIONE='2.2.58';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -53005,7 +53093,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  let __candCache=null;
  let __histCount=200000;
  try{
-    timeframe=(MT5_TIMEFRAME_MAP[currentTF]||'M1');
+    timeframe=fblTfMt5Per(currentTF);
     // Lavoro 2: se c'e' un magazzino locale per questo asset+timeframe, si chiede solo la coda.
     try{ __candCache=await fblCandeleCacheLeggi(asset,timeframe); }catch(e){ __candCache=null; }
     const __tfSec = ({M1:60,M2:120,M3:180,M4:240,M5:300,M6:360,M10:600,M12:720,M15:900,M20:1200,M30:1800,H1:3600,H2:7200,H3:10800,H4:14400,H6:21600,H8:28800,H12:43200,D1:86400}[timeframe])||60;
@@ -53308,6 +53396,31 @@ if(__ph==='capital'||__ph==='closed'){
 }
 
 const MT5_TIMEFRAME_MAP={1:'M1',5:'M5',15:'M15',30:'M30',60:'H1',240:'H4',1440:'D1'};
+// QUALE TIME FRAME CHIEDERE A MT5 PER UNO CHE LUI NON HA (15 novembre 2026).
+//
+// MT5 ha questi: M1 M2 M3 M4 M5 M6 M10 M12 M15 M20 M30 H1 H2 H3 H4 H6 H8 H12 D1. Dei time frame
+// chiesti dal proprietario mancano 5h, 2g, 3g, 5g, 1w, 2w e il mese.
+//
+// PRIMA si ripiegava su M1 per tutto cio' che non era in mappa (`MT5_TIMEFRAME_MAP[tf]||'M1'`),
+// e per i time frame alti e' inutilizzabile: un solo mese di candele da un minuto sono 43.200
+// candele, e per avere uno storico sensato servirebbero centinaia di migliaia.
+//
+// ADESSO si chiede il piu' GRANDE time frame di MT5 che DIVIDE esattamente quello voluto, e si
+// aggrega da quello. Esatto per costruzione, perche' ogni candela scaricata cade dentro un solo
+// gruppo: H1 per le 5 ore (60 divide 300), D1 per giorni, settimane e mese.
+const FBL_TF_MT5_DISPONIBILI=[
+  [1440,'D1'],[720,'H12'],[480,'H8'],[360,'H6'],[240,'H4'],[180,'H3'],[120,'H2'],[60,'H1'],
+  [30,'M30'],[20,'M20'],[15,'M15'],[12,'M12'],[10,'M10'],[6,'M6'],[5,'M5'],[4,'M4'],[3,'M3'],
+  [2,'M2'],[1,'M1']
+];
+function fblTfMt5Per(minuti){
+  const m=Math.max(1,Number(minuti)||1);
+  if(MT5_TIMEFRAME_MAP[m])return MT5_TIMEFRAME_MAP[m];
+  for(const [quanti,nome] of FBL_TF_MT5_DISPONIBILI){
+    if(quanti<=m && m%quanti===0)return nome;
+  }
+  return 'M1';
+}
 
 async function fetchLatestMt5PriceRest(symbol){
  if(!symbol)return null;

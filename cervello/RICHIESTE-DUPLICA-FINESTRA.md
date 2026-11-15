@@ -228,4 +228,7 @@ Da decidere anche la strada dei DATI in Live: `MT5_TIMEFRAME_MAP` copre 1,5,15,3
 per gli altri ripiega su M1 - inutilizzabile per un mese (un mese di M1 sono 43.200 candele). La
 strada giusta e' chiedere il piu' grande time frame MT5 che divide quello voluto (H1 per 5h, D1
 per i giorni, le settimane e il mese) e aggregare da li'.
-- Stato: DA FARE, prossimo capitolo.
+- Stato: **FATTA (v2.2.58).** Ancoraggio in fblInizioBucket/fblFineBucket, una sola fonte di
+  verita'; bucketKeyOf restituisce l'inizio del bucket in ms; fblTfMt5Per() chiede a MT5 il piu'
+  grande time frame che divide quello voluto. Banco `time_frame_nuovi.test.mjs` (8/8), con la
+  non-regressione sui time frame di sempre (zero differenze col conto vecchio).

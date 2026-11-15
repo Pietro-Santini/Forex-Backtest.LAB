@@ -1,3 +1,25 @@
+- 2026-11-15 - Claude - **v2.2.58: diciannove time frame, con i confini delle candele ancorati
+  dove devono stare.** Aggiunti 3m, 10m, 2H, 3H, 5H, 12H, 2G, 3G, 5G, 1 settimana, 2 settimane e
+  1 mese (4H c'era gia'). IL LAVORO NON ERA IL MENU: i gruppi si contavano dall'epoca Unix
+  (`floor(t/(minuti*60000))`), che va bene solo per i time frame che dividono esattamente la
+  giornata. Per i nuovi si sarebbero viste candele dai bordi sbagliati senza nessun avviso - le 5
+  ore slittano di giorno in giorno (1440/300 = 4,8), le settimane sarebbero cominciate di GIOVEDI'
+  perche' il 1 gennaio 1970 era un giovedi', e il mese sarebbe stato di 30 giorni fissi. Ora ogni
+  famiglia ha il suo ancoraggio, in una sola funzione (fblInizioBucket/fblFineBucket): mezzanotte
+  per i time frame sotto la giornata che non la dividono, un LUNEDI' per giorni e settimane, il
+  CALENDARIO per i mesi (febbraio 2026 28 giorni, febbraio 2024 29, gennaio 31, aprile 30).
+  `bucketKeyOf` restituisce l'inizio del bucket in millisecondi invece di un indice, perche' i
+  mesi hanno lunghezze diverse e non si possono numerare moltiplicando. Per i dati in Live si
+  chiede a MT5 il piu' grande time frame che DIVIDE quello voluto - H1 per le 5 ore (MT5 non ha
+  H5), D1 per giorni, settimane e mese - invece di ripiegare su M1, che per un mese sarebbero
+  43.200 candele. LA PROVA CHE CONTA e' la non-regressione: il conto vecchio e' scritto in chiaro
+  nel banco e confrontato con quello nuovo su tutti i time frame che esistevano prima, zero
+  differenze. Un errore mio nel banco, istruttivo: avevo scritto «tre giorni a 2 ore fanno 36
+  candele» e ne trovava 37 - le date scritte come 00:00 diventano 05:00 dentro l'app, quindi i
+  dati non cominciano su un confine e il primo gruppo e' parziale. Riscritta sulle proprieta' che
+  valgono sempre (tante candele quanti i gruppi, nessun volume perso, candele in ordine), che e'
+  piu' forte di qualunque numero fisso. Banco: time_frame_nuovi (8/8); non-regressione su
+  footprint, cambio TF, disegni al cambio TF, conto storico in replay e cache indicatori.
 - 2026-11-15 - Claude - **v2.2.57: il mirino si trasporta fra le finestre, come su TradingView, e
   il replay si puo' far partire su tutte insieme.** Muovendo il mouse su una finestra, le altre
   sullo STESSO asset mostrano il mirino allo stesso orario e allo stesso prezzo. Sul canale non
