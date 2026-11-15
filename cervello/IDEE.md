@@ -104,3 +104,11 @@ il canale dal vivo), il controllo della chiave condiviso fra i tre servizi, e il
 strategia unico (`fblSimulaStrategia`) usato sia per le prove sia per le aperture.
 
 Stato: **idea, non pianificata.** Vedi `cervello/ORACLE.md` per la strada attuale.
+
+- **[B] Tabella delle notizie in tempo reale dentro l'app** — oggi l'app ha un CALENDARIO (eventi
+  programmati), non un flusso: una notizia non in calendario non arriva per definizione. Il
+  proprietario la vuole dentro l'applicazione, spostabile e trasparente, da poter appoggiare sul
+  grafico: «quando arriva una nuova notizia, magari che non è presente sul calendario, esce
+  direttamente sull'applicazione... c'è proprio un progetto dietro da fare». — proprietario
+  (15 novembre 2026) — **progetto a sé, da pianificare**. Dettagli, fonti già verificate dal vivo e
+  decisioni aperte in `cervello/PROGETTO-TABELLA-NOTIZIE.md`. Issue su GitHub aperta.

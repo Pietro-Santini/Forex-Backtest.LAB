@@ -1,3 +1,25 @@
+- 2026-11-15 - Claude - **v2.2.59: in replay le notizie non perdono piu' forecast, previous e
+  actual.** SEGNALATO dal proprietario: «in modalita' replay si perde quelli che sono i testi nel
+  dettaglio della notizia, il forecast e il previous non vengono piu' visualizzati, e' come se
+  vengono cancellati». MISURATO: non venivano cancellati, NON ERANO MAI STATI SALVATI.
+  `notizieVoce()` teneva quattro campi - orario, valuta, gravita', titolo (tagliato a 80
+  caratteri) - e buttava forecast, previous e actual. In Live il popup li prende dal feed e si
+  vedono; in replay e in Storico il feed non arriva, le notizie vengono dall'archivio, e quei campi
+  non c'erano. Il commento nel sorgente lo diceva senza vederne le conseguenze: «il feed ha i
+  dettagli in piu'». UN SECONDO DIFETTO, trovato leggendo: `if(k && !A[k])` aggiungeva solo le
+  notizie NUOVE, quindi una notizia gia' archiviata non veniva mai piu' toccata - e l'ACTUAL esce
+  DOPO l'orario dell'evento, cioe' sempre su una notizia gia' in archivio: veniva scartato per
+  sempre. Senza questa correzione, andare a prendere l'actual dalle fonti ufficiali non sarebbe
+  servito a niente. Ora l'archivio FONDE i campi che mancavano, e un valore che c'e' non viene mai
+  sostituito da uno vuoto. COSTO MISURATO su 3000 notizie: da 213 KB a 333 KB (da 73 a 114 byte
+  per notizia). Il link a Forex Factory NON si salva: costerebbe 179 KB, piu' dei tre valori
+  insieme, ed e' CALCOLATO dalla data - come il glossario e l'«effetto usuale», che quindi in
+  replay c'erano gia'. Il titolo si tiene fino a 120 caratteri e la chiave della notizia non
+  cambia (verificato: altrimenti gli archivi gia' in casa sarebbero diventati irraggiungibili).
+  Banco: notizie_dettagli_archivio (6/6); non-regressione su freno_notizie, notizie_archivio,
+  notizie_altri_dispositivi e sale_notizie. NOTA: le notizie gia' in archivio hanno solo i quattro
+  campi vecchi e si riempiranno quando il feed ripassa su quegli eventi; per quelle piu' vecchie
+  della settimana corrente i dettagli non sono recuperabili, non sono mai stati scritti.
 - 2026-11-15 - Claude - **v2.2.58: diciannove time frame, con i confini delle candele ancorati
   dove devono stare.** Aggiunti 3m, 10m, 2H, 3H, 5H, 12H, 2G, 3G, 5G, 1 settimana, 2 settimane e
   1 mese (4H c'era gia'). IL LAVORO NON ERA IL MENU: i gruppi si contavano dall'epoca Unix

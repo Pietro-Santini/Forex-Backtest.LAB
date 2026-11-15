@@ -13429,7 +13429,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.58';
+const FBL_VERSIONE='2.2.59';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -45928,7 +45928,33 @@ function notizieVoce(ev){
   tit=String(ev.title||'');
  }
  if(!Number.isFinite(t)||!imp||!tit)return null;
- return {t,cur:cur.toUpperCase(),imp,tit:tit.slice(0,80)};
+ // I DETTAGLI RESTANO NELL'ARCHIVIO (15 novembre 2026).
+ //
+ // SEGNALATO dal proprietario: «in modalita' replay, per quanto riguarda le notizie si perde
+ // quelli che sono i testi nel dettaglio della notizia all'interno del popup, il forecast e il
+ // previous non vengono piu' visualizzati, e' come se vengono cancellati».
+ //
+ // CAUSA MISURATA: non venivano cancellati, NON ERANO MAI STATI SALVATI. Questa funzione teneva
+ // quattro campi - orario, valuta, gravita', titolo - e buttava forecast, previous e actual. In
+ // Live il popup li prende dal feed dal vivo e si vedono; in replay e in Storico il feed non
+ // arriva, le notizie vengono dall'archivio, e quei tre campi non c'erano.
+ //
+ // COSA NON SI PERDEVA, e quindi non serve salvare: il link a Forex Factory e' CALCOLATO dalla
+ // data (newsForexFactoryDayUrl), e cosi' il glossario e l'«effetto usuale». Salvarlo per ogni
+ // notizia costerebbe 179 KB su 3000 eventi - piu' dei tre valori insieme - per un dato che si
+ // ricava.
+ //
+ // QUANTO COSTA, misurato su 3000 notizie (il tetto dell'archivio): da 213 KB a 333 KB, cioe'
+ // da 73 a 114 byte per notizia. Dentro il limite di localStorage con larghissimo margine.
+ const corto=(x)=>{ const v2=(x==null?'':String(x)).trim(); return v2?v2.slice(0,24):''; };
+ const e={t,cur:cur.toUpperCase(),imp,tit:tit.slice(0,120)};
+ const fore=corto(ev.fore!=null?ev.fore:ev.forecast);
+ const prev=corto(ev.prev!=null?ev.prev:ev.previous);
+ const act =corto(ev.act !=null?ev.act :ev.actual);
+ if(fore)e.fore=fore;
+ if(prev)e.prev=prev;
+ if(act)e.act=act;
+ return e;
 }
 function notizieArchivioAggiungi(eventi){
  if(!Array.isArray(eventi)||!eventi.length)return 0;
@@ -45938,7 +45964,25 @@ function notizieArchivioAggiungi(eventi){
   const e=notizieVoce(ev);
   if(!e)continue;
   const k=notizieChiave(e);
-  if(k&&!A[k]){ A[k]=e; nuovi++; }
+  if(!k)continue;
+  if(!A[k]){ A[k]=e; nuovi++; continue; }
+  // UNA NOTIZIA GIA' IN ARCHIVIO DEVE POTER IMPARARE QUELLO CHE PRIMA NON SI SAPEVA.
+  //
+  // Prima c'era `if(k&&!A[k])`: una notizia gia' archiviata non veniva piu' toccata. L'ACTUAL
+  // esce DOPO l'orario dell'evento, quindi arrivava sempre su una notizia gia' in archivio e
+  // veniva scartato per sempre. Lo stesso per forecast e previous, che a volte compaiono solo
+  // quando l'evento si avvicina.
+  //
+  // Si RIEMPIE solo cio' che manca: un valore che c'e' non viene mai sostituito da uno vuoto.
+  // Al primo giro dopo l'aggiornamento questo serve anche a far crescere le voci vecchie, che
+  // hanno solo i quattro campi di prima - per gli eventi ancora coperti dal feed.
+  const vecchia=A[k];
+  let cambiata=false;
+  ['fore','prev','act'].forEach(campo=>{
+   if(e[campo]&&e[campo]!==vecchia[campo]){ vecchia[campo]=e[campo]; cambiata=true; }
+  });
+  if(e.tit&&e.tit.length>String(vecchia.tit||'').length){ vecchia.tit=e.tit; cambiata=true; }
+  if(cambiata)nuovi++;
  }
  if(nuovi){ notizieArchivioSalva(); notizieGraficoAggiorna(); }
  return nuovi;
@@ -45964,7 +46008,13 @@ function notizieGraficoAggiorna(){
   if(visti[k])return;
   const e=A[k];
   visti[k]=1;
-  uniti.push({date:new Date(e.t).toISOString(),country:e.cur,impact:e.imp,title:e.tit});
+  // SI RIMONTANO ANCHE I DETTAGLI, non solo i quattro campi: e' questa riga che in replay
+  // consegnava al popup una notizia senza forecast ne' previous (vedi notizieVoce).
+  const rimontata={date:new Date(e.t).toISOString(),country:e.cur,impact:e.imp,title:e.tit};
+  if(e.fore)rimontata.forecast=e.fore;
+  if(e.prev)rimontata.previous=e.prev;
+  if(e.act)rimontata.actual=e.act;
+  uniti.push(rimontata);
  });
  uniti.sort((a,b)=>{
   const x=Date.parse(a.date), y=Date.parse(b.date);
