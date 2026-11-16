@@ -145,6 +145,50 @@ TG_VIVO: Dict[str, object] = {"client": None, "ent": {}}
 STORICO_MAX = 50
 
 
+# L'ULTIMO ID CONSEGNATO, e perche' sta su disco (16 novembre 2026).
+#
+# MISURATO: il commento nel gestore del WebSocket dice «si riparte dall'ultimo segnale gia'
+# visto, non da zero», ma `ultimo` era una variabile LOCALE al collegamento, azzerata a ogni
+# `await websocket.accept()`. Ogni nuovo collegamento — un refresh della pagina, una finestra
+# duplicata, un cellulare in piu' — riceveva quindi TUTTA la bacheca (fino a STORICO_MAX
+# messaggi), e l'app riapplicava il segnale ancora dentro il minuto di validita'. Aprire una
+# duplicata significava una seconda valutazione degli ultimi ordini; con quattro take profit,
+# altre quattro posizioni.
+#
+# Adesso l'ultimo id consegnato e' del ponte, non del collegamento, e sta su disco perche' un
+# riavvio del ponte non deve ricominciare da zero.
+ULTIMO_CONSEGNATO_FILE = os.path.join(CARTELLA_DATI, "ultimo_consegnato.json")
+ULTIMO_CONSEGNATO: Dict[str, int] = {"id": 0}
+
+
+def ultimo_consegnato_leggi() -> int:
+    """L'ultimo id consegnato, letto dal disco. Zero se non c'e' ancora (primo avvio)."""
+    try:
+        with open(ULTIMO_CONSEGNATO_FILE, "r", encoding="utf-8") as f:
+            return max(0, int((json.load(f) or {}).get("ultimo") or 0))
+    except Exception:
+        return 0
+
+
+def ultimo_consegnato_scrivi(valore: int) -> None:
+    """Scrivere sul disco non deve far cadere il ponte: se non si riesce, si tira avanti in memoria."""
+    ULTIMO_CONSEGNATO["id"] = int(valore)
+    try:
+        with open(ULTIMO_CONSEGNATO_FILE, "w", encoding="utf-8") as f:
+            json.dump({"ultimo": int(valore)}, f)
+    except Exception:
+        pass
+
+
+def ultimo_consegnato_ricorda(valore: int) -> None:
+    """Registra l'id consegnato, se e' piu' avanti di quello che si ha gia'."""
+    if int(valore) > ULTIMO_CONSEGNATO["id"]:
+        ultimo_consegnato_scrivi(int(valore))
+
+
+ULTIMO_CONSEGNATO["id"] = ultimo_consegnato_leggi()
+
+
 def _scrivibile(testo: str, codifica: str = "") -> str:
     """Il testo, ridotto a quello che la console di questo computer sa scrivere.
 
@@ -186,7 +230,7 @@ class Bacheca:
         self._scartati: List[dict] = []
         self._ev = asyncio.Event()
         self._lock = asyncio.Lock()
-        self._prossimo_id = 1
+        self._prossimo_id = ultimo_consegnato_leggi() + 1
 
     async def aggiungi(self, voce: dict, riconosciuto: bool) -> dict:
         async with self._lock:
@@ -1496,7 +1540,10 @@ async def ws_segnali(websocket: WebSocket):
 
     # Si riparte dall'ultimo segnale gia' visto, non da zero: cosi' un refresh della pagina non
     # ripropone ordini che avevi gia' valutato.
-    ultimo = {"id": 0}
+        # Si riparte dall'ultimo segnale GIA' CONSEGNATO, non da zero: un collegamento che
+    # nasce adesso non deve rimettersi da capo con ordini che un'altra finestra (o la
+    # stessa, prima di un refresh) ha gia' valutato.
+    ultimo = {"id": ULTIMO_CONSEGNATO["id"]}
     chiuso = asyncio.Event()
 
     async def ascolta_comandi():
@@ -1659,6 +1706,7 @@ async def ws_segnali(websocket: WebSocket):
                                       + time.time() * 1000.0 - float(s.get("servizio_ms") or time.time() * 1000.0))
                     await websocket.send_text(json.dumps(s))
                     ultimo["id"] = s["id"]
+                    ultimo_consegnato_ricorda(s["id"])
             # Lo stato parte APPENA cambia, senza attendere che l'app lo chieda. Prima partiva solo
             # su richiesta: la richiesta del codice di verifica nasce mezzo secondo dopo l'invio del
             # numero, quindi non arrivava mai da sola e restava da premere "Ricontrolla" a mano -

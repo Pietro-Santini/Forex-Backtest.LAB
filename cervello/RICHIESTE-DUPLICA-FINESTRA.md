@@ -232,3 +232,72 @@ per i giorni, le settimane e il mese) e aggregare da li'.
   verita'; bucketKeyOf restituisce l'inizio del bucket in ms; fblTfMt5Per() chiede a MT5 il piu'
   grande time frame che divide quello voluto. Banco `time_frame_nuovi.test.mjs` (8/8), con la
   non-regressione sui time frame di sempre (zero differenze col conto vecchio).
+
+---
+
+## 16 novembre 2026 — il replay fra finestre: decisioni del proprietario
+
+Diagnosi misurata (indagine in sola lettura): lo stato del replay era **per finestra** e l'unico
+canale parlava solo di «entro/esco», mai dell'**istante** né del play. Da lì: scelta non ereditata,
+play/pausa locali, deriva fra finestre, stop che buttava l'istante.
+
+**Cura applicata** (8 prove verdi, più 25 banchi sullo stesso stato rilanciati): un solo orologio.
+L'autorità (slot più basso) avanza e **pubblica l'istante** (`FBL_REPLAY_OGNI_MS`, 30 ms); le altre
+finestre non avanzano mai da sole, applicano l'istante ricevuto con `rebuildRows`, che traduce sul
+proprio time frame. La scelta «su tutte» diventa uno **stato condiviso** portato dallo scatto della
+finestra nuova: una finestra nata **dopo** la scelta la eredita. Il passo a frecce viaggia come
+**istante**: M15 sulla madre = 15 candele su M1, 3 su M5. La riga del prezzo viene dal momento
+rivisto, così riga ed etichetta non si dividono mai, con play e con le frecce.
+
+**DECISIONE del proprietario sul tasto STOP (16 novembre 2026)**: «STOP pausa dove è, PLAY riparte
+dallo stesso secondo». Quindi lo stop **non è un'uscita** quando il replay è condiviso: congela
+sull'istante scelto e il play riprende esattamente da lì. Oggi il comportamento è ancora quello di
+prima quando si è da soli (lo stop torna all'ultima candela vera, come impone il banco `replay_live`
+n. 2): la cura «stop che resta armato» è **in coda**, va fatta quando `app.html` è libero, e cambia
+il senso del tasto — quindi va detta anche al proprietario, non solo al codice.
+
+Ipotesi dichiarate: se la madre si chiude col replay condiviso in corso, le duplicate smettono di
+avanzare (nessuno pubblica più) e non è stata messa una guardia di ripresa di proposito; il ritardo
+misurato fra finestre è **0 s**; se il feed live riprende a spingere, `masterTime` torna al bordo
+vivo finché lo stop armato non è curato.
+
+## 16 novembre 2026, sera — il passo a frecce: RIACCUMULA INVECE DI AVANZARE (difetto trovato)
+
+Ricorretto dal proprietario, che aveva ragione e la cura precedente solo in parte:
+> «se io deve essere sempre ricalcolato a seconda del time frame su cui si va a pigiare […] se pigio la
+> freccettina sulla duplicata M5 e la madre è M1, sulla madre deve avanzare di 5 candele […] se su una
+> finestra c'è un time frame da 15 minuti e sulle altre due da 1 minuto, tutte e due devono andare
+> avanti di 15 candele mentre su quella da 15 minuti una […] se è 30 minuti una finestra, un'altra 10
+> minuti, un'altra 1 minuto, quella da 10 farà 3 salti in avanti, quella da 1 minuto salterà 30 candele
+> […] se invece sono sulla finestra da 1 minuto e le altre due hanno 30 e 15 minuti, avanzeranno
+> soltanto di pochissimo, ma non avanza la candela, avanza soltanto l'evoluzione dell'estensione della
+> candela.»
+
+**MISURATO con un simulatore fedele** (`%TEMP%\opencode\sim_replay\sim.mjs`): **il passo non è la durata
+della candela di chi preme, tranne quando chi preme è esattamente sul confine di una sua candela.** Da
+qualunque altro stato — cioè dallo stato normale dopo il play, o da un istante ricevuto sottominuto —
+**riavvolge**: dup M5 a 08:31 con madre M1 → **−1 minuto** sulla madre (atteso +5); ▶ su M15 da metà
+candela → **−47 s** (atteso +15 min); ◀ da metà candela M5 → −12 min (atteso −5).
+
+La causa è in `forward()` (~30598): deriva il passo da `fullAgg[idx]` / `tClose` invece che da
+`masterTime + durataCandelaDiChiPreme`, e in Live `tClose` è l'apertura della candela (`aggregateRows`
+~12872). Il **trasporto** invece è già corretto (`fblAnnunciaReplay('istante', replayMomentoMostrato())`
+~30659, ramo `replay_sync` ~9789, `fblReplayApplicaIstante` ~59928): nessun numero di candele da
+nessuna parte, non va toccato. Due righe da chiudere con la cura: `fblReplayApplicaIstante` ~59951 fa
+`idx--` senza la guardia `idx>0` (sul primo bucket `idx` diventa **−1**, misurato, e `#back` non
+risponde più) e ~30635 (`if(liveReplayActive && idx>=rows.length-1){ esciReplayLive(); return; }`)
+annuncia `'stop'` a tutte (~60096).
+
+**Sul tetto al salto — deciso dal proprietario (16 novembre 2026)**: «nessun tetto, ma il replay non
+muore». Cioè: un passo resta sempre la durata della candela di chi preme, anche da una finestra
+mensile su una M1. La misura che conta: in Live lo storico si chiede con `max=1000` (~49183), quindi una
+finestra M1 tiene 1.000 minuti; un passo da una finestra D1 (1.440 minuti) la manderebbe oltre i suoi
+dati e **oggi il replay condiviso morirebbe al primo tocco** (uscita + annuncio di stop a tutte). Con la
+cura, quella finestra esce da sé e le altre continuano. In Storico/CSV (fino a 500.000 candele, ~12901)
+non serve niente. Il disegno non è il problema: `findBucketIndexForTime` è una ricerca binaria.
+
+**Ricorretto anche il rapporto precedente**, che era giusto nel numero e sbagliato nel verso: «premo
+sulla dup M5, la madre M1 avanza di un minuto» era in realtà **−1 minuto** (la madre torna indietro),
+misurato dallo stato in formazione. «Premo sulla madre M15, la dup M1 salta 15 candele» era vero solo
+perché la madre era sul confine. Non sono due regole per direzione: è **la stessa espressione applicata
+a due stati diversi**.

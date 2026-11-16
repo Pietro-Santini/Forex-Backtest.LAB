@@ -1,3 +1,31 @@
+- 2026-11-17 - OpenCode - **v2.2.60: il passo a frecce del replay condiviso non si perde piu', e
+  le posizioni sono tante quanti i take profit.** Il difetto che fermava il backtest: in replay
+  condiviso (madre + duplicate) il click sulla freccia non arrivava alle altre finestre, quindi si
+  avanzava solo dove si premeva. MISURATO con una spia nelle due pagine: `fblReplayUltimoInvioMs`
+  era stato scritto 11-15 ms prima del click e `tradingChannel.postMessage` non veniva mai
+  chiamata - il gesto lo scartava il **throttle da 30 ms**, che serve allo scorrimento e non ai
+  gesti. Ora `fblAnnunciaReplay(modo,t,sempre)` strozza solo il battito continuo (`sempre` falso),
+  `fblReplayPasso` annuncia sempre con `!continuo` e `forward(silenzioso)` passa il silenzio: il
+  click viaggia, il battito resta strozzato. Il passo segue il time frame di chi preme (M5 -> 5
+  candele M1, M15 -> 15 su M1 e 1 su M15, M30 con M10 e M1 -> 3 su M10 e 30 su M1) perche' quello
+  che viaggia e' l'**istante in millisecondi**, non un numero di candele; chi riceve mostra
+  esattamente quell'istante, quindi l'invariante `sotto = istante - apertura candela` vale anche
+  nelle duplicate. STOP ferma tutte sullo stesso istante e prezzo; PLAY riparte dallo stesso
+  secondo; il secondo STOP esce dal replay e le porta via tutte; una finestra che ha finito i suoi
+  dati esce **senza annunciare stop** alle altre. L'autorita' e' la madre (o lo slot piu' basso) e
+  avanza una candela alla volta con `evaluate()` + `checkPendingOrders()`, cosi' SL e TP non
+  vengono saltati. Le posizioni: il numero e' quello dei TP, mai di piu'; la madre e' l'autorita',
+  le duplicate ereditano in silenzio, e se si apre meno del dichiarato lo dice forte (scheda,
+  barra di stato, pannello). Il chiarimento del proprietario del 16 novembre e' scritto in
+  `cervello/BUG.md`: la regola del minuto riguarda **solo gli istogrammi dei profili volumetrici**,
+  il footprint non si tocca (la prima indagine lo aveva preso di mira: sbagliata, e la cura non e'
+  fatta). Banchi: `passo_frecce_finestre` (10/10, era 10 rosse su 10), `replay_fra_finestre`,
+  `replay_stop_armato`, `replay_su_tutte_le_finestre` riallineato alla regola pausa/uscita (7/7),
+  `posizioni_per_finestra`, `segnali_meno_posizioni`, `segnali_voce_riduzione`,
+  `candele_timbro_scarto`, `nomi_modelli_disegni` (11/11, portato dentro il repo), ponte
+  `test_news_actual` e `test_bacheca_riconsegna`. Collaudo locale: 1589 verdi su 1590 (l'unica
+  rossa era `tp_in_ordine`, che cercava la riga `const tutti=tgTpInOrdine(...)` sostituita da
+  `tpDichiarati` + filtro: riallineata e 6/6). Ponte: 401 verdi.
 - 2026-11-15 - Claude - **v2.2.59: in replay le notizie non perdono piu' forecast, previous e
   actual.** SEGNALATO dal proprietario: «in modalita' replay si perde quelli che sono i testi nel
   dettaglio della notizia, il forecast e il previous non vengono piu' visualizzati, e' come se

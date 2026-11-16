@@ -9791,19 +9791,67 @@ if(tradingChannel){
      // Si applica dietro la barriera, cosi' non si rimanda in giro quello che si e' appena
      // ricevuto: e' il cappio misurato il 15 novembre sul percorso del conto.
      // La scelta si eredita, altrimenti lo STOP di la' non fermerebbe questa.
+     // Il replay e' una cosa del Live: in Storico non c'e' niente da congelare.
+     if(!liveModeActive)return;
+     // IL FILTRO SULL'ASSET (15 novembre, sera). MISURATO: la finestra su GBP/USD rispondeva a
+     // questo messaggio ed ENTRAVA in replay sull'istante di EUR/USD - il messaggio non portava
+     // l'asset e questo ramo non guardava il suo. Un prezzo e un orario di un altro asset su
+     // questo grafico non vogliono dire niente: stessa condizione gia' imposta per il mirino.
+     if(msg.asset && currentAssetKey && msg.asset!==currentAssetKey)return;
+     const _modo=msg.modo||(msg.attivo?'avvia':'stop');
+     let _riAnnuncia=false;
      applicandoReplayRemoto=true;
      try{
        fblReplayPerTutte=true;
-       if(msg.attivo){
-         if(Number.isFinite(msg.t))avviaReplayLive(msg.t,{propaga:false});
-       }else{
-         esciReplayLive({propaga:false});
+       fblReplayVistoSlot(msg.slot);
+       if(_modo==='stop'){
+         // FERMATO DI LA', ALLO STESSO ISTANTE: non si salta all'ultima candela e non si butta
+         // via la formazione, cosi' un PLAY qui dopo riprende dallo stesso secondo.
+         // `esci:true` e' l'uscita ESPLICITA di un'altra finestra: la pausa armata non deve
+          // rimbalzare sul canale, altrimenti chi riceve uno 'stop' resterebbe in replay
+          // (dallo STOP della pausa viaggia 'pausa', non 'stop').
+          esciReplayLive({propaga:false, istante:msg.t, esci:true});
          // Finito il replay condiviso, questa finestra torna «da sola»: la scelta non si
          // eredita oltre. Senza questa riga restava accesa, e un replay avviato qui per una
          // strada che non passa dalla domanda sarebbe partito su tutte senza chiedere.
          fblReplayPerTutte=false;
+         fblReplaySlotMin=null;
+         try{ update(); }catch(e){}
+       }else{
+         // 'avvia'/'istante'/'play'/'pausa': si applica l'ISTANTE, che questa finestra converte
+         // da se' sul proprio time frame (rebuildRows). Il battito NON parte da qui: avanza
+         // solo l'autorita', tutte le altre applicano quello che lei pubblica.
+         // SENZA il confronto con masterTime: anche se l'istante è quello che già si ha, la
+         // finestra deve ENTRARE in replay (liveReplayActive) - è il caso della duplicata già
+         // posata sullo stesso punto, misurato: con il confronto restava in diretta.
+         if(Number.isFinite(msg.t))fblReplayApplicaIstante(msg.t);
+         if(_modo==='avvia'){
+           fblReplaySlotMin=null;
+           fblReplayVistoSlot(msg.slot);
+           fblReplayPausa=false;      // un replay nuovo non parte in pausa
+           // Se il MIO slot e' piu' basso di quello che ha avviato, comando io (la regola: la
+           // madre, o lo slot piu' basso fra i partecipanti). Lo dico agli altri, cosi' nessuno
+           // tiene un battito proprio per sbaglio e due orologi non si sommano.
+           _riAnnuncia=(PIP_SLOT<Number(msg.slot));
+           try{ update(); }catch(e){}
+         }else if(_modo==='play'){
+           fblReplayInCorso=true;
+           fblReplayPausa=false;
+           const b=$('play'); if(b)b.textContent='⏹ STOP';
+         }else if(_modo==='pausa'){
+           fblReplayInCorso=false;
+           // La PAUSA ARMATA (16 novembre): chi ha premuto STOP potrebbe non essere
+            // l'autorita', quindi il suo orologio locale - se per caso ne teneva uno - va
+            // spento, e lo stato di pausa resta acceso fino al PROSSIMO gesto.
+            if(timer){clearInterval(timer);timer=null;}
+            fblReplayPausa=true;
+            const b=$('play'); if(b)b.textContent='▶ PLAY';
+         }
        }
      }finally{ applicandoReplayRemoto=false; }
+     // Il ri-annuncio sta FUORI dalla barriera di proposito: applicare non e' annunciare, ma
+     // qui non si rimanda indietro quello ricevuto - si dice chi comanda, e basta.
+     if(_riAnnuncia)fblAnnunciaReplay('avvia', replayMomentoMostrato());
    }else if(msg.type==='trading_sync_request'){
      broadcastTradingStateNow();
    }else if(msg.type==='asset_announce'){
@@ -9896,6 +9944,17 @@ if(tradingChannel){
            // principale) ma la madre le passa SUBITO, qui, quello che ha già verificato funzionare
            // (conto MT5 già connesso) invece di lasciarla rifare da zero l'intera trafila di
            // login/conferma che normalmente costa i secondi più lunghi all'apertura.
+           // REPLAY IN LIVE, se e' condiviso (15 novembre, sera): una finestra che nasce DOPO
+           // la scelta deve ereditarne la scelta e il punto nel tempo. Parole del proprietario:
+           // «se dopo aggiungo un'altra finestra duplicata quella riprende la scelta che e' stata
+           // fatta prima... se si vuole modificare si deve uscire dalla modalita' replay e
+           // riselezionare la scelta». L'istante e' quello ESATTO (replayMomentoMostrato), non il
+           // masterTime grezzo: cosi' il secondo di formazione non si perde per strada.
+           replay:(fblReplayPerTutte&&liveReplayActive)?{
+             perTutte:true, attivo:true, inCorso:!!fblReplayInCorso, slot:PIP_SLOT,
+             asset:currentAssetKey||null,
+             t:(Number.isFinite(replayMomentoMostrato())?replayMomentoMostrato():null)
+           }:null,
            mt5Connected:!!mt5Connected, mt5CredsDraft:mt5Connected?mt5CredsDraft:null
          });
        }catch(e){}
@@ -9998,6 +10057,33 @@ if(msg.mt5Connected && !mt5Connected){
           try{ tradingChannel&&tradingChannel.postMessage({type:'trading_sync_request',slot:PIP_SLOT}); }catch(e){}
           console.log('[Finestra] MT5 risulta collegato dalla finestra principale: ereditato lo stato, nessun secondo accesso');
         }
+       // IL REPLAY CONDIVISO SI EREDITA ALLA NASCITA (15 novembre, sera). Misurato: la scelta
+       // («su tutte») e lo stato del replay non viaggiavano nello scatto, quindi una finestra
+       // nata DOPO restava in diretta - e il mirino, la linea del taglio e l'avanzamento non le
+       // arrivavano, proprio il difetto segnalato dal proprietario. Si applica QUI, dopo
+       // l'eventuale passaggio in Live (la riga qui sotto e' asincrona): e' il primo momento in
+       // cui questa finestra puo' tenere uno stato di replay.
+       try{
+         const rp=msg.replay;
+         // Il filtro sull'asset e' quello del replay_sync: se questa finestra sta gia' guardando
+         // un altro asset, il replay della madre non la riguarda.
+         if(rp&&rp.perTutte&&rp.attivo&&liveModeActive
+            && (!currentAssetKey||!rp.asset||currentAssetKey===rp.asset)){
+           fblReplayPerTutte=true;
+           fblReplaySlotMin=null;
+           fblReplayVistoSlot(rp.slot);
+           fblReplayInCorso=!!rp.inCorso;
+           // Leggero di proposito: a quest'ora le candele di questa finestra possono non essere
+           // ancora arrivate (rebuildRows() senza righe non fa niente) e un draw()/update() su
+           // un grafico vuoto non deve poter rompere l'apertura. Il caricamento che arrivera'
+           // chiama rebuildRows() da se', e l'istante e' gia' al posto giusto.
+           liveReplayActive=true; liveReplaySelecting=false;
+           if(Number.isFinite(rp.t)){ masterTime=rp.t; rebuildRows(); }
+           updateLiveReplayUI();
+           const bp=$('play'); if(bp)bp.textContent=fblReplayInCorso?'⏹ STOP':'▶ PLAY';
+           console.log('[Finestra] replay condiviso ereditato dalla finestra principale');
+         }
+       }catch(e){}
        };
        if(!msg.storico && !liveModeActive){
          try{ switchAccountMode(true).then(()=>{ try{_applicaRimanente();}catch(e){} }).catch(()=>{ try{_applicaRimanente();}catch(e){} }); }
@@ -11448,16 +11534,15 @@ function applyTemplateStyleToUI(t){
  drawDashedDefault=!!t.dashed; drawDottedDefault=!!t.dotted;
  updateDrawStyleVisibility();
 }
-async function saveCurrentDrawingAsTemplate(drawingArg){
- closeDrawTemplateMenu();
- const d=(drawingArg&&drawingArg.type)?drawingArg:selectedDrawing;
- if(!d){ $('status').textContent='Seleziona prima un disegno da salvare come modello.'; return false; }
- const name=await appPrompt('Nome per questo modello di disegno:',{title:'💾 Salva modello',placeholder:'Es. "Supporto giornaliero", "Zona domanda"'});
- if(!name||!name.trim())return false;
- const existing=loadDrawingTemplates();
- if(existing[name.trim()]&&!await appConfirm(`Esiste già un modello chiamato "${name.trim()}". Vuoi sostituirlo?`,{title:'💾 Salva modello',okLabel:'Sostituisci',danger:false}))return false;
- const templates=loadDrawingTemplates();
- templates[name.trim()]={
+// Costruisce l'oggetto MODELLO a partire da un disegno, portando TUTTI i campi che servono a
+// ridisegnarlo identico. Il nome resta FUORI dall'oggetto: è la chiave della memoria, non un
+// campo del modello, e per questo non si può cambiare dopo (regola del proprietario, 16 novembre
+// 2026). Perché questa funzione esiste invece di elencare i campi a mano nel salvataggio: prima il
+// Fibonacci salvato dal percorso generico perdeva levels e opts - misurato, il modello c'era in
+// memoria ma era un guscio vuoto, inutilizzabile. Qualunque strumento nuovo con campi propri
+// avrebbe perso i suoi allo stesso modo, quindi l'elenco sta qui, in un posto solo.
+function drawingTemplateFromDrawing(d){
+ const t={
    type:d.type,
    color:d.color||defaultColorFor(d.type),
    lineWidth:d.lineWidth||2,
@@ -11468,8 +11553,101 @@ async function saveCurrentDrawingAsTemplate(drawingArg){
    fillOpacity:d.fillOpacity!=null?d.fillOpacity:.12,
    text:d.text||''
  };
+ // Fibonacci: livelli e opzioni sono TUTTA la configurazione dello strumento. Copia profonda,
+ // perché levels è un array di oggetti: senza, modello e disegno punterrebbero agli stessi oggetti
+ // e modificare l'uno cambierebbe anche l'altro.
+ if(d.type==='fib'){
+   t.levels=JSON.parse(JSON.stringify(d.levels||newFibLevels()));
+   t.opts=Object.assign({},d.opts||newFibOpts());
+ }
+ // Linea Alarm: cosa la fa scattare e cosa succede dopo fanno parte del modello, non sono stile.
+ if(d.type==='alarmline'){
+   t.enabled=!!d.enabled; t.armed=!!d.armed; t.soundId=d.soundId||null;
+   t.triggerMode=d.triggerMode; t.afterAction=d.afterAction;
+ }
+ return t;
+}
+// Il nome di un modello è unico nell'INTERO programma, non solo dentro la sua famiglia. Senza
+// questo controllo si potevano avere due modelli omonimi in due memorie diverse, e ritrovarsi a
+// dire «non me lo salva» solo perché lo si cercava nel menu sbagliato. Ritorna DOVE sta il nome
+// già usato (per dirlo nella domanda di sovrascrittura), oppure null.
+function nomeModelloGiaUsato(nome){
+ if(loadDrawingTemplates()[nome])return {famiglia:'disegni',dove:'menu "Modello ⌄"'};
+ if(loadFibTemplates()[nome])return {famiglia:'fib',dove:'menu "Modello Fib ⌄"'};
+ return null;
+}
+// TUTTI i nomi già usati, di ENTRAMBE le famiglie (disegni generici e modelli Fibonacci), con
+// l'etichetta del menu dove trovarli. È la lista mostrata DENTRO la finestra del nome mentre si
+// scrive: prima i nomi occupati si scoprivano solo DOPO, dal rifiuto - e chi non lo notava restava
+// con un modello che credeva salvato. Ordinati per nome, così la lista è stabile mentre si scrive.
+function nomiModelliGiaUsati(){
+ const voci=[];
+ Object.keys(loadDrawingTemplates()).forEach(n=>voci.push({nome:n,famiglia:'disegni',dove:'menu "Modello ⌄"',etichetta:'Modello ⌄'}));
+ Object.keys(loadFibTemplates()).forEach(n=>{
+   if(voci.some(v=>v.nome===n))return; // un nome occupato due volte deve comparire una sola volta
+   voci.push({nome:n,famiglia:'fib',dove:'menu "Modello Fib ⌄"',etichetta:'Modello Fib ⌄'});
+ });
+ return voci.sort((a,b)=>a.nome.localeCompare(b.nome,'it'));
+}
+// La finestra del nome, col controllo dei nomi già usati. RITORNA:
+//   null                      → annullato (Esc/Indietro): non si salva niente;
+//   {nome, sovrascrivi:false} → nome libero, salvataggio normale;
+//   {nome, sovrascrivi:true}  → nome già usato e l'utente ha risposto SÌ alla domanda.
+// RICHIESTA DEL PROPRIETARIO (16 novembre 2026): «se si scrive lo stesso nome, viene chiesto se
+// sovrascrivere il modello salvato precedentemente con quel nome... e l'utente tra sì e no.
+// Classico.» PERCHÉ la sovrascrittura serve: è l'unico modo per correggere un REFUSO DI
+// CONTENUTO - il nome resta quello e il modello si aggiorna. La regola del proprietario resta
+// intatta: NESSUN percorso rinomina un modello, qui si sostituisce il CONTENUTO di un nome che
+// l'utente ha scelto esplicitamente. Con «no» non si salva niente e il campo resta: la finestra
+// del nome si riapre con quello che era già scritto, così si corregge senza riscriverlo da capo.
+async function chiediNomeModello(messaggio,titolo,placeholder){
+ let nomeDaRiscrivere='';
+ for(;;){
+   const name=await appPrompt(messaggio,{title:titolo,placeholder:placeholder,defaultValue:nomeDaRiscrivere||undefined,suggerimenti:nomiModelliGiaUsati()});
+   if(!name||!name.trim())return null;
+   const nome=name.trim();
+   const esistente=nomeModelloGiaUsato(nome);
+   if(!esistente)return {nome,sovrascrivi:false};
+   const si=await appConfirm(`Attenzione: hai già un modello chiamato "${nome}" (${esistente.dove}).\nVuoi sovrascrivere il modello precedente con quello nuovo? Quello vecchio verrà sostituito.`,{title:'⚠️ Sovrascrivere il modello?',okLabel:'Sì',cancelLabel:'No'});
+   if(si)return {nome,sovrascrivi:true};
+   // «No»: niente viene salvato e il modello vecchio resta com'è. La finestra del nome si riapre
+   // col nome già scritto (il "campo resta" richiesto), in attesa di una correzione.
+   nomeDaRiscrivere=nome;
+   $('status').textContent=`Modello "${nome}" lasciato com'era: non è stato sovrascritto.`;
+ }
+}
+// Toglie IL MODELLO VECCHIO col nome dato da TUTTE E DUE le memorie. Il nome è unico in tutto il
+// programma, quindi la sovrascrittura deve raggiungere il modello vecchio ANCHE se sta nell'altra
+// famiglia (un nome nato in Fibonacci e riscritto dalla strada generica, o viceversa): senza, il
+// nome resterebbe occupato da un modello che l'utente crede sostituito, e il salvataggio successivo
+// ricadrebbe nella domanda di sovrascrittura senza che nulla sia cambiato. NON viene rinominato
+// niente: il nome IDENTICO lo riusa il chiamante per il modello nuovo.
+function eliminaModelloOmonimo(nome){
+ const g=loadDrawingTemplates();
+ if(g[nome]){ delete g[nome]; saveDrawingTemplates(g); }
+ const f=loadFibTemplates();
+ if(f[nome]){ delete f[nome]; saveFibTemplates(f); }
+ renderDrawTemplateMenu(); renderFibTemplateMenu();
+}
+async function saveCurrentDrawingAsTemplate(drawingArg){
+ closeDrawTemplateMenu();
+ const d=(drawingArg&&drawingArg.type)?drawingArg:selectedDrawing;
+ if(!d){ $('status').textContent='Seleziona prima un disegno da salvare come modello.'; return false; }
+ const chiesto=await chiediNomeModello('Nome per questo modello di disegno:','💾 Salva modello','Es. "Supporto giornaliero", "Zona domanda"');
+ if(!chiesto)return false;
+ const nome=chiesto.nome;
+ // Sovrascrittura CHIESTA dall'utente (ha risposto Sì alla domanda): il modello vecchio con questo
+ // nome esce dalle memorie, al suo posto finisce il nuovo. Stesso nome, contenuto nuovo: è così
+ // che si corregge un refuso di contenuto senza cambiare il nome (regola del proprietario).
+ if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome);
+ const templates=loadDrawingTemplates();
+ templates[nome]=drawingTemplateFromDrawing(d);
  saveDrawingTemplates(templates);
- $('status').textContent=`Modello "${name.trim()}" salvato: lo trovi nel menu "Modello ⌄" della toolbar.`;
+ // IL MENU VA RIDISEGNATO SUBITO. Senza questa riga il modello era in memoria ma non si vedeva
+ // fino alla riapertura del menu - ed è esattamente il «me lo fa scrivere ma non me lo salva»
+ // segnalato dal proprietario (misurato: il nome era in localStorage, il menu restava vuoto).
+ renderDrawTemplateMenu();
+ $('status').textContent=`Modello "${nome}" salvato: lo trovi nel menu "Modello ⌄" della toolbar.`;
  return true;
 }
 function applyDrawingTemplate(name){
@@ -11482,11 +11660,23 @@ function applyDrawingTemplate(name){
    d.color=t.color; d.lineWidth=t.lineWidth; d.dashed=t.dashed; d.dotted=!!t.dotted; d.opacity=t.opacity;
    if(d.type==='rectangle'){ d.fillColor=t.fillColor; d.fillOpacity=t.fillOpacity; }
    d.text=t.text||'';
+   // Fibonacci: il modello deve poter ridare ANCHE i livelli e le opzioni, non solo lo stile,
+   // altrimenti applicarlo a un ritracciamento ne azzera la configurazione.
+   if(d.type==='fib'){
+     if(Array.isArray(t.levels))d.levels=JSON.parse(JSON.stringify(t.levels));
+     if(t.opts)d.opts=Object.assign({},t.opts);
+   }
    syncDrawStyleUI(d);
    draw(); scheduleSave();
    $('status').textContent=`Modello "${name}" applicato al disegno selezionato.`;
  }else{
    applyTemplateStyleToUI(t);
+   // Un modello Fibonacci applicato senza disegno selezionato diventa la configurazione dei
+   // PROSSIMI ritracciamenti: è il senso di un modello Fibonacci.
+   if(t.type==='fib'){
+     if(Array.isArray(t.levels))fibDefaultLevels=JSON.parse(JSON.stringify(t.levels));
+     if(t.opts)fibDefaultOpts=Object.assign({},t.opts);
+   }
    pendingDrawingTemplateText=t.text||'';
    $('status').textContent=`Modello "${name}" impostato come predefinito per il prossimo disegno che creerai.`;
  }
@@ -11620,31 +11810,48 @@ function saveFibTemplates(templates){
 function renderFibTemplateMenu(){
  const list=$('fibTemplateList'); if(!list)return;
  const templates=loadFibTemplates();
- const names=Object.keys(templates).sort((a,b)=>a.localeCompare(b,'it'));
+ const generici=loadDrawingTemplates();
+ // DUE FAMIGLIE DI MODELLI, UN SOLO MENU: qui si vedono ANCHE i modelli Fibonacci salvati dal
+ // percorso generico («Modello ⌄» della barra degli strumenti). Senza, un Fibonacci salvato da
+ // quella strada sembrava non salvato: si cercava qui e non si trovava (misurato - era in
+ // memoria, questo menu restava vuoto). Dal 16 novembre 2026 il percorso generico porta anche
+ // levels e opts, quindi questi modelli sono utilizzabili esattamente come gli altri.
+ const voci=[];
+ Object.keys(templates).forEach(n=>{ if(templates[n])voci.push({name:n,t:templates[n],fam:'fib'}); });
+ Object.keys(generici).forEach(n=>{ if(generici[n]&&generici[n].type==='fib')voci.push({name:n,t:generici[n],fam:'disegni'}); });
+ voci.sort((a,b)=>a.name.localeCompare(b.name,'it'));
  list.innerHTML='';
- if(!names.length){
+ if(!voci.length){
    const empty=document.createElement('div');
    empty.className='drawTemplateEmpty';
    empty.textContent='Nessun modello Fibonacci salvato. Configura i livelli e scegli "Salva come...".';
    list.appendChild(empty);
    return;
  }
- names.forEach(name=>{
+ voci.forEach(({name,t,fam})=>{
    const row=document.createElement('div'); row.className='drawTemplateRow';
    const main=document.createElement('div'); main.className='drawTemplateRowMain';
    const nameEl=document.createElement('div'); nameEl.className='drawTemplateRowName';
    nameEl.textContent=name; nameEl.title=name;
    main.appendChild(nameEl);
+   if(fam==='disegni'){
+     const metaEl=document.createElement('div'); metaEl.className='drawTemplateRowMeta';
+     metaEl.textContent='salvato dal menu "Modello ⌄"';
+     metaEl.title='Modello salvato dal menu "Modello ⌄" della barra degli strumenti';
+     main.appendChild(metaEl);
+   }
    const delBtn=document.createElement('button');
    delBtn.className='drawTemplateRowDel'; delBtn.title='Elimina questo modello'; delBtn.textContent='🗑';
    delBtn.addEventListener('click',async ev=>{
      ev.stopPropagation();
      if(!await appConfirm(`Eliminare definitivamente il modello "${name}"?`))return;
-     const t=loadFibTemplates(); delete t[name]; saveFibTemplates(t); renderFibTemplateMenu();
+     if(fam==='fib'){ const t=loadFibTemplates(); delete t[name]; saveFibTemplates(t); renderFibTemplateMenu(); }
+     else{ const t=loadDrawingTemplates(); delete t[name]; saveDrawingTemplates(t); renderDrawTemplateMenu(); renderFibTemplateMenu(); }
    });
    row.appendChild(main); row.appendChild(delBtn);
    row.addEventListener('click',()=>{
-     const t=loadFibTemplates()[name]; if(!t)return;
+     const t=(fam==='fib')?loadFibTemplates()[name]:loadDrawingTemplates()[name];
+     if(!t)return;
      applyFibTemplateToForm(t);
      closeFibTemplateMenu();
      $('status').textContent=`Modello Fibonacci "${name}" caricato nel modulo (premi Ok per applicarlo).`;
@@ -12451,6 +12658,7 @@ function appPrompt(message,opts={}){
        <div class="fbModalHeader"><h3>${escapeHtmlLite(title)}</h3></div>
        <div class="appConfirmBody">${escapeHtmlLite(message)}</div>
        <div style="padding:0 16px 14px"><input type="${opts.type||'text'}" data-role="input" placeholder="${escapeHtmlLite(opts.placeholder||'')}" style="width:100%;padding:10px;border-radius:8px;border:1px solid #2b3541;background:#0b1117;color:#e8edf3;font-size:14px;box-sizing:border-box"></div>
+       <div data-role="suggerimenti" style="display:none;padding:0 16px 12px;max-height:132px;overflow-y:auto"></div>
        <div class="liveLoginFooter">
          <button type="button" class="toolBtn fbBackBtn" data-role="cancel">${escapeHtmlLite(opts.cancelLabel||'Indietro')}</button>
          <button type="button" class="toolBtn appConfirmBtn appConfirmOk safe" data-role="ok">${escapeHtmlLite(opts.okLabel||'Ok')}</button>
@@ -12460,6 +12668,48 @@ function appPrompt(message,opts={}){
    popupContenitore(targetDoc).appendChild(overlay);
    const input=overlay.querySelector('[data-role="input"]');
    input.value=opts.defaultValue!=null?String(opts.defaultValue):'';
+   // --- NOMI GIÀ USATI, VISIBILI MENTRE SI SCRIVE (richiesto dal proprietario, 16 novembre 2026)
+   // «vorrei che mostriamo i nomi già usati mentre si scrive». Chi salva un modello vede subito
+   // quali nomi sono occupati, invece di scoprirlo dopo dal rifiuto. opts.suggerimenti arriva da
+   // nomiModelliGiaUsati(): la lista si restringe mentre si scrive e ogni riga dice da quale MENU
+   // viene il nome, perché il nome è unico in tutto il programma ma le due famiglie (disegni
+   // generici e Fibonacci) stanno in menu separati - cercare nel menu sbagliato era proprio il
+   // modo di perdere di vista un modello già salvato. Cliccando una riga il nome finisce nel
+   // campo, così si corregge (o si sovrascrive, dopo la domanda) senza riscriverlo da capo.
+   const boxSuggerimenti=overlay.querySelector('[data-role="suggerimenti"]');
+   const suggerimenti=(Array.isArray(opts.suggerimenti)?opts.suggerimenti:[]).filter(v=>v&&v.nome);
+   function disegnaSuggerimenti(){
+     const q=input.value.trim().toLowerCase();
+     const visibili=suggerimenti.filter(v=>!q||v.nome.toLowerCase().includes(q));
+     boxSuggerimenti.innerHTML='';
+     if(!suggerimenti.length){ boxSuggerimenti.style.display='none'; return; }
+     const titolo=document.createElement('div');
+     titolo.setAttribute('data-role','suggerimenti-titolo');
+     titolo.style.cssText='font-size:11px;color:#84909f;margin:0 0 4px';
+     titolo.textContent=visibili.length?('Nomi già usati'+(q?' con questa scritta':'')+':'):'Nessun nome già usato con questa scritta.';
+     boxSuggerimenti.appendChild(titolo);
+     visibili.forEach(v=>{
+       const riga=document.createElement('div');
+       riga.setAttribute('data-role','suggerimento');
+       riga.setAttribute('data-nome',v.nome);
+       riga.title='Nome già usato: clicca per metterlo nel campo';
+       riga.style.cssText='display:flex;justify-content:space-between;gap:8px;align-items:baseline;padding:5px 8px;margin-top:4px;border:1px solid #202832;border-radius:6px;background:#0b1117;cursor:pointer;font-size:12.5px';
+       const n=document.createElement('span');
+       n.textContent=v.nome;
+       n.style.cssText='color:#e8edf3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+       const f=document.createElement('span');
+       f.setAttribute('data-role','suggerimento-famiglia');
+       f.textContent=v.etichetta||'';
+       f.style.cssText='color:#8b96a5;font-size:10.5px;flex:none';
+       riga.appendChild(n); riga.appendChild(f);
+       // Il clic non deve portar via il focus dal campo: si scrive con mousedown+preventDefault.
+       riga.addEventListener('mousedown',e=>e.preventDefault());
+       riga.addEventListener('click',()=>{ input.value=v.nome; disegnaSuggerimenti(); input.focus(); });
+       boxSuggerimenti.appendChild(riga);
+     });
+     boxSuggerimenti.style.display='block';
+   }
+   if(suggerimenti.length){ input.addEventListener('input',disegnaSuggerimenti); disegnaSuggerimenti(); }
    function cleanup(result){ targetDoc.removeEventListener('keydown',onKey); overlay.remove(); resolve(result); }
    function onKey(e){
      if(e.key==='Escape'){ e.preventDefault(); cleanup(null); }
@@ -13429,7 +13679,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.59';
+const FBL_VERSIONE='2.2.60';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -15890,6 +16140,19 @@ function fblTagliaDopoChiusura(lista,base){
 function fblPrezzoRigaCorrente(){
   const N=rows.length;
   if(!N)return null;
+  // IN REPLAY la riga del prezzo e' quella del momento che si sta rivedendo, NON la chiusura
+  // dell'ULTIMA candela creata: quella Sta fuori dalla fascia visibile (si e' tornati indietro
+  // nel tempo) e la riga con la sua etichetta SCOMPARIVA. Chiesto dal proprietario: «in modalita'
+  // replay quando clicco le frecce per avanzare di candela in candela sparisce la linea del
+  // prezzo in orizzontale con la sua etichetta, deve sempre rimanere visibili sia con il tasto
+  // play che con le frecce». E' lo stesso valore che usa il cartellino (replayPrezzoFormazione),
+  // quindi riga ed etichetta non possono piu' dividersi.
+  if(liveReplayActive){
+    const f=replayPrezzoFormazione();
+    if(Number.isFinite(f))return f;
+    const c=rows[idx]&&Number(rows[idx].close);
+    if(Number.isFinite(c))return c;
+  }
   const k=fblConfineChiusura();
   const i=(k>0?k:N)-1;
   const r=rows[i]||rows[idx];
@@ -23736,9 +23999,47 @@ function draw(){
      const dayChanged=dayKey!==prevDayKey;
      prevDayKey=dayKey;
      timeTicks.push({x:xx,t,dayChanged,hour:p.hour,minute:p.minute});
-   });
- })();
- timeTicks.forEach(tk=>{
+    });
+    // DOPO L'ULTIMA CANDELA L'ASSE CONTINUA (richiesto dal proprietario, e la frase sua è già
+    // scritta sopra, su LIVE_FUTURE_MARGIN_FRACTION: «dopo l'ultima candela bisogna continuare
+    // a far vedere l'orario... il tempo è infinito»). Lo SPAZIO vuoto oltre l'ultima candela
+    // esiste già — il margine futuro a mercato aperto, oppure il grafico portato a mano nello
+    // spazio dopo l'ultima candela — ma le TACCHE si fermavano all'ultima candela: in quello
+    // spazio non si leggeva nessun orario, quindi non si poteva vedere a che ora sarebbe
+    // caduta una notizia ancora da uscire. È quello che si misura qui.
+    //
+    // L'ANCORAGGIO NON SI INVENTA: si riparte dal bucket dell'ultima candela
+    // (fblInizioBucket/bucketKeyOf, la stessa della v2.2.58) e si avanza di un PASSO DI TIME
+    // FRAME per tacca (M1 = 1 minuto, M5 = 5), così l'orario scritto è quello vero della
+    // prossima candela e non una stima. La x è quella solita della griglia (x(i), uno slot di
+    // candela per tacca): le tacche di prima non si spostano di un pixel.
+    //
+    // E lo spazio VUOTO resta senza tacche quando non c'è spazio (mercato chiuso, ultima
+    // candela incollata al bordo): l'asse si allunga solo dove il grafico si è già allungato.
+    const tfMin=Math.max(1,Math.round(Number(currentTF)||1));
+    const passoMs=tfMin*60000;
+    const ultimoSlot=data.length-1;
+    const slotPx=cw/n;
+    if(Number.isFinite(slotPx)&&slotPx>0&&ultimoSlot>=0){
+     let b=fblInizioBucket(last,tfMin);
+     if(!Number.isFinite(b))b=last;
+     // Quanti passi di time frame stanno nello spazio rimasto oltre l'ultima candela.
+     const quanti=Math.floor(((w-pad.r+2)-x(ultimoSlot))/slotPx);
+     for(let k=1;k<=Math.min(quanti,600);k++){
+      // I mesi non hanno una lunghezza fissa: la loro fine la sa fblFineBucket, non una
+      // moltiplicazione. Per tutti gli altri time frame un passo è esattamente il time frame.
+      b=(tfMin>=FBL_TF_MESE)?fblFineBucket(b,tfMin):b+passoMs;
+      const xx=x(ultimoSlot+k);
+      if(xx>w-pad.r+2)break;
+      const p=tzParts(b); if(!p)break;
+      const dayKey=p.year+'-'+p.month+'-'+p.day;
+      const dayChanged=dayKey!==prevDayKey;
+      prevDayKey=dayKey;
+      timeTicks.push({x:xx,t:b,dayChanged,futuro:true,hour:p.hour,minute:p.minute});
+     }
+    }
+  })();
+  timeTicks.forEach(tk=>{
    ctx.strokeStyle=fblGrigliaVisibile()?(tk.dayChanged?gridColorStrong:gridColor):'rgba(0,0,0,0)';ctx.lineWidth=1;
    ctx.beginPath();ctx.moveTo(tk.x,pad.t);ctx.lineTo(tk.x,pad.t+ch);ctx.stroke();
  });
@@ -30508,6 +30809,12 @@ function createPendingOrder(side){
 }
 function forward(silenzioso){
  if(!rows.length)return;
+ // REPLAY CONDIVISO: IL PASSO A FRECCETTA VALE UNA CANDELLA DI CHI PREME, DA QUALUNQUE STATO
+ // (16 novembre 2026). Vedi fblReplayPasso(): la strada e' una sola, in avanti e all'indietro.
+ // Prima di questa riga il passo era "una candela INTERA sulla griglia", non "una candela a
+ // partire dall'istante mostrato": da meta' candela riavvolgeva (misurato: M5 a 08:31, -1 min
+ // invece di +5 — banco passo_frecce_finestre.test.mjs).
+ if(fblReplayCondiviso()){ fblReplayPasso(1, !!silenzioso); return; }
  // Se l'utente non ha zoomato orizzontalmente a mano, il numero di candele visibili si
  // ricalcola ad ogni passo avanti: così il ridimensionamento automatico prosegue mentre
  // si avanza nel tempo (es. dopo un ridimensionamento della finestra del browser), non
@@ -30543,7 +30850,7 @@ function forward(silenzioso){
  // così può continuare a rivedere la cronologia mentre il replay prosegue sotto.
  if(followLatest)viewEnd=idx;
  // REPLAY IN LIVE: raggiunta l'ultima candela vera il replay è finito, si torna in diretta da soli.
- if(liveReplayActive && idx>=rows.length-1){ esciReplayLive(); return; }
+ if(liveReplayActive && idx>=rows.length-1){ esciReplayLive({esci:true}); return; }
  if(idx>=rows.length-1)$('status').textContent='Fine dello storico.';
  else if(positions.length)$('status').textContent=`Candela ${idx+1}/${rows.length} • ${positions.length} posizion${positions.length>1?'i':'e'} aperta/e.`;
  // `silenzioso`: non ridisegnare e non aggiornare il pannello adesso. Lo usa SOLO il battito del
@@ -30560,7 +30867,15 @@ function forward(silenzioso){
  // SILENZIOSI del replay l'annuncio non parte: lo manda il battito una volta sola, alla fine,
  // altrimenti dieci candele completate in un giro diventerebbero dieci annunci a tutte le
  // finestre affiancate.
- if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump&&!silenzioso)broadcastChartTimeSync(masterTime);
+ // IL PASSO A FRECCIA, IN REPLAY CONDIVISO, VIAGGIA COME ISTANTE (15 novembre, sera): «se salto
+ // una candela da 15 minuti sulle pagine duplicate dovranno essere saltate esattamente 15
+ // candele per le finestre con time frame a 1 minuto, 3 candele per le finestre con il time
+ // frame da 5 minuti». Chi riceve converte l'istante sul proprio time frame da se'
+ // (rebuildRows), quindi non c'e' nessun contaggio di candele da trasportare. chart_time_sync
+ // in Live viene ignorato da chi riceve: senza questo ramo il passo non arriverebbe a nessuna.
+ if(fblReplayCondiviso()){
+  fblAnnunciaReplay('istante', replayMomentoMostrato());
+ }else if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump&&!silenzioso)broadcastChartTimeSync(masterTime);
 }
 // Il CSV storico può essere caricato SOLO dopo aver scelto un ASSET (coppia di valute):
 // blocchiamo l'apertura stessa della finestra di selezione file al click, così l'utente
@@ -31054,7 +31369,7 @@ $('marketChart')?.addEventListener('change',()=>{
 $('market')?.addEventListener('change',async()=>{
  const v=$('market').value;
  // Cambiando asset si esce automaticamente dal replay (e si carica l'ultimo prezzo).
- if(liveReplayActive) esciReplayLive();
+ if(liveReplayActive) esciReplayLive({esci:true});
  syncMarketChartSelect();
  if(v==='capital_search'){ handleCapitalManualAssetSearch(); return; }
  if(v==='__watchlist__'){
@@ -32121,9 +32436,11 @@ $('journal').addEventListener('click',async e=>{
  scrollToChart();
  await jumpToTradeOnChart(Number(jumpIdx));
 });
-$('next').onclick=forward;
+$('next').onclick=()=>forward(false);
 $('back').onclick=()=>{
  if(!rows.length||idx<=0)return;
+ // REPLAY CONDIVISO: stesso passo di forward(), all'indietro — una candela di CHI PREME.
+ if(fblReplayCondiviso()){ fblReplayPasso(-1); return; }
  if(autoFitWidth)visibleCount=idealVisibleCount();
  idx--;
  masterTime=closeTimeOf(rows[idx]);
@@ -32132,7 +32449,11 @@ $('back').onclick=()=>{
  $('status').textContent=`Tornato alla candela ${idx+1}.`;
  // RICHIESTO ESPLICITAMENTE: vedi il commento completo su broadcastChartTimeSync() più sopra nel
  // file, stesso identico discorso di forward() qui sopra ma all'indietro.
- if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump)broadcastChartTimeSync(masterTime);
+ // Stessa regola di forward(), all'indietro: in replay condiviso il passo viaggia come
+ // istante, e ogni finestra lo converte sul proprio time frame.
+ if(fblReplayCondiviso()){
+  fblAnnunciaReplay('istante', replayMomentoMostrato());
+ }else if(!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump)broadcastChartTimeSync(masterTime);
 };
 $('resetView').addEventListener('click',resetToLatestCandle);
 // Frecce storico duplicate nella sezione sotto "🗑 Rimuovi tutti" (vedi #pipHistNavSection nel
@@ -32145,10 +32466,31 @@ $('pipHistNextBtn')?.addEventListener('click',()=>$('next').click());
 $('reset').onclick=reset;
 $('play').addEventListener('click',()=>{
  if(!rows.length)return $('status').textContent='Carica prima un CSV.';
- if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';try{draw();}catch(e){} $('status').textContent='Play in pausa.';return;}
+ // REPLAY CONDIVISO (15 novembre, sera): l'orologio e' UNO SOLO, quello dell'autorita' (la
+ // madre, o lo slot piu' basso fra i partecipanti). Chi non e' l'autorita' non avanza da se':
+ // chiede, e applica l'istante che arriva. Il perche' e' gia' pagato: tre finestre con tre
+ // setInterval avanzano a tre ritmi diversi, perche' i browser rallentano i timer delle schede
+ // in secondo piano (vedi il commento lungo su replayElapsedMs).
+ const condiviso=fblReplayCondiviso();
+ if(timer){
+  clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';try{draw();}catch(e){}
+  if(condiviso){ fblReplayInCorso=false; fblAnnunciaReplay('pausa', replayMomentoMostrato()); }
+  $('status').textContent='Play in pausa.';
+  return;
+ }
+ if(condiviso&&!fblReplaySonoAutorita()){
+  // La richiesta parte: l'autorita' fa partire il SUO battito e pubblica l'istante; questa
+  // finestra lo applica e non tiene nessun timer proprio.
+  fblReplayPausa=false;                // il PLAY annulla la pausa armata dello STOP
+  fblReplayInCorso=true; $('play').textContent='⏹ STOP';
+  fblAnnunciaReplay('play', replayMomentoMostrato());
+  $('status').textContent='Replay automatico attivo (comandato dalla finestra che comanda).';
+  return;
+ }
  if(idx>=rows.length-1)return;
  startPlayInterval();
  $('play').textContent='⏹ STOP';$('status').textContent='Replay automatico attivo.';
+ if(condiviso){ fblReplayPausa=false; fblReplayInCorso=true; fblAnnunciaReplay('play', replayMomentoMostrato()); }
 });
 // ===================== REPLAY FLUIDO "COME DAL VIVO" (RICHIESTO ESPLICITAMENTE) =======
 // RICHIESTO ESPLICITAMENTE (correzione): il replay avanza al SECONDO, non "a candela".
@@ -32385,7 +32727,13 @@ function replayAnimTick(){
  // grafico non viene mai presentato senza di lei, quindi non puo' piu' lampeggiare. Il pannello
  // si aggiorna solo se qualcosa e' davvero cambiato di candela.
  try{ draw(); if(candeleCompletate)update(); }catch(e){}
- if(candeleCompletate&&!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump){
+ // IL TEMPO VIAGGIA COL MESSAGGIO DEL REPLAY, non con chart_time_sync: in Live quello viene
+ // ignorato da chi riceve (applyRemoteChartTimeSync esce subito se liveModeActive), quindi con
+ // tre finestre in replay le altre due restavano ferme. In Storico - replay non condiviso -
+ // non cambia niente.
+ if(fblReplayCondiviso()){
+  fblAnnunciaReplay('istante', replayMomentoMostrato());
+ }else if(candeleCompletate&&!applyingRemoteChartTimeSync&&!applyingRemoteRandomJump){
   try{ broadcastChartTimeSync(masterTime); }catch(e){}
  }
  const s=$('status');
@@ -32395,6 +32743,9 @@ function replayAnimTick(){
 function replayFerma(){
  if(timer){ clearInterval(timer); timer=null; }
  const b=$('play'); if(b)b.textContent='▶ PLAY';
+ // Anche la fine naturale del replay (dati finiti) si annuncia: tutte le finestre si fermano
+ // sullo STESSO istante, invece di una che arriva in fondo e due che restano indietro.
+ if(fblReplayCondiviso()){ fblReplayInCorso=false; fblAnnunciaReplay('pausa', replayMomentoMostrato()); }
  // NON azzerare replayForm: preserva il progresso della candela in formazione
  // così al prossimo PLAY si riprende dal secondo esatto dove si era fermati.
  try{ draw();update(); }catch(e){}
@@ -38893,7 +39244,23 @@ function tgRenderPannello(){
   box.appendChild(tgRiga('Nessun segnale ancora. Quando una sala ne manda uno compare qui, e il pulsante "!" si accende accanto al timeframe.','hint'));
   return;
  }
- // I piu' recenti in cima: un segnale vecchio di ore non e' piu' la cosa da guardare.
+ // LA RIGA IN TESTA AL PANNELLO (richiesto: «Dirlo forte: scheda del segnale, stato e
+  // pannello»). Quando l'ULTIMO segnale arrivato è stato aperto in automatico con MENO
+  // posizioni del previsto, il proprietario non deve andarsi a cercare la scheda: glielo dice
+  // il pannello appena lo apre. Regole ferree, per non trasformarsi in un allarme rotto:
+  //   - vale per l'ULTIMO segnale e basta (uno storico di ieri non urla);
+  //   -vale solo se la posizione è stata APERTA (stato «eseguito» con almeno una posizione):
+  //   un segnale non aperto ha già la sua riga «Non aperto in automatico» nella scheda;
+  //   - sparisce da sola: il prossimo segnale, completo o no che sia, prende il suo posto.
+  // Scritta con createElement/textContent, mai innerHTML: il testo qui sopra viene da fuori.
+  const ultima=tgSegnaliRicevuti[tgSegnaliRicevuti.length-1];
+  if(ultima&&ultima.automatico&&ultima.stato==='eseguito'&&(ultima.aperte||0)>0&&ultima.autoMotivo){
+   const b=document.createElement('div');
+   b.style.cssText='padding:7px 9px;margin-bottom:8px;border-radius:6px;background:rgba(224,160,66,.14);border:1px solid rgba(224,160,66,.4);color:#ffcf8b;font-weight:700;font-size:12px';
+   b.textContent='⚠ Ultimo segnale aperto con meno posizioni del previsto: '+ultima.autoMotivo+'. Dettagli nella scheda qui sotto.';
+   box.appendChild(b);
+  }
+  // I piu' recenti in cima: un segnale vecchio di ore non e' piu' la cosa da guardare.
  tgSegnaliRicevuti.slice().reverse().forEach(voce=>{
   const seg=voce.segnale; if(!seg)return;
   const dir=String(seg.direzione||'').toUpperCase();
@@ -38986,7 +39353,16 @@ function tgRenderPannello(){
   // Perche' l'apertura automatica NON ha aperto questo segnale. Senza, resterebbe un mistero: si
   // vedrebbe solo un segnale fermo nel pannello, senza sapere se e' stato ignorato o rifiutato.
   if(voce.autoMotivo){
-   card.appendChild(tgRiga('⚡ Non aperto in automatico: '+voce.autoMotivo+'. Puoi aprirlo a mano qui sotto.','tgCardAvviso'));
+   // IL PREFISSO DICE QUELLO CHE E' SUCCESSO, non sempre e solo "non aperto".
+    // MISURATO prima di questa cura: con il tetto della sala a 1 su un segnale da 5 take
+    // profit la posizione veniva APERTA, `autoMotivo` raccontava la riduzione, e la scheda la
+    // presentava con «⚡ Non aperto in automatico» - il contrario di quello che era successo.
+    // Il motivo di una posizione aperta con meno posizioni del previsto e' una cosa diversa dal
+    // motivo di una posizione non aperta, e va detto con parole diverse.
+    const aperta=!!(voce.stato==='eseguito'&&(voce.aperte||0)>0);
+    card.appendChild(tgRiga(aperta
+     ?('⚡ Aperta in automatico, ma con meno posizioni del previsto: '+voce.autoMotivo+'.')
+     :('⚡ Non aperto in automatico: '+voce.autoMotivo+'. Puoi aprirlo a mano qui sotto.'),'tgCardAvviso'));
   }
   if(voce.sottotipo==='aggiunta'){
    card.appendChild(tgRiga('⚠ Raddoppio dedotto dal segnale precedente di questa sala: strumento e prezzi non sono stati ripetuti dalla sala, li ho ripresi da quel segnale.','tgCardAvviso'));
@@ -39424,6 +39800,19 @@ function tgCfgDisegnaRiepilogo(piano){
  agg(regoleAttive.length
    ? ('Strategia: '+regoleAttive.length+(regoleAttive.length===1?' spostamento dello stop impostato':' spostamenti dello stop impostati'))
    : 'Strategia: nessuno spostamento automatico dello stop.');
+  // IL MOTIVO UNICO anche qui. Nel popup manuale non passano ne' il tetto della sala ne' il
+  // rischio forzato, ma i take profit fuori scala e quelli già superati dal prezzo capitano
+  // eccome: prima si leggeva solo "il prezzo ha già superato N take profit" (conto dei soli
+  // scartati) e non si capiva QUANTE posizioni si aprivano davvero rispetto a quelle che la
+  // sala aveva scritto. È la stessa frase che esce nella scheda del segnale e nella barra di
+  // stato: una sola, calcolata in tgPiano.
+  if(piano.motivoPosizioni){
+   const d=document.createElement('div');
+   d.className='tgCfgNota';
+   d.style.marginTop='7px';
+   d.textContent=piano.motivoPosizioni+'.';
+   box.appendChild(d);
+  }
  if(piano.alMinimo&&piano.rischioReale>piano.importoTot+0.01){
   const d=document.createElement('div');
   d.className='tgCfgAllarme';
@@ -41927,8 +42316,168 @@ $('tgAutoNewsPaesiTutte')?.addEventListener('click',()=>{
 // UNA FILA PER CONTO (RICHIESTO: segnali cripto e forex che arrivano insieme partono insieme, ognuno
 // sul suo conto). Dentro lo stesso conto si resta in fila, per i motivi scritti sopra: i tetti
 // vanno controllati dopo che il segnale precedente ha aperto.
+// ===================================================================
+// CHI APRE I SEGNALI, FRA LE FINESTRE (regola del proprietario, 16 novembre 2026)
+//
+// SEGNALATO: «avevo 2 finestre duplicate e quindi ha aperto x3 volte». Con tre finestre aperte
+// lo STESSO messaggio del ponte veniva applicato da ognuna per conto suo: 3 aperture x 4 take
+// profit = 12 posizioni invece di 4. Regola scritta in cervello/REGOLE.md («per le posizioni la
+// prioritaria e' la pagina madre»), e vale per tutto cio' che AGISCE sul conto.
+//
+// PERCHE' DUE PEZZI E NON UNO. Il numero di posizioni si decide in un punto solo (tgPiano: uno
+// per take profit) e va tenuto; il difetto e' la RIPETIZIONE dell'applicazione. La ripetizione
+// ha due strade diverse, e chiuderne una sola lascia aperta l'altra:
+//   - finestre duplicate: ognuna ha la SUA copia del messaggio, perche' il ponte riconsegna la
+//     bacheca a ogni collegamento (oggi almeno; lato ponte e' in cura a parte);
+//   - la stessa finestra, dopo una ricarica: `tgSegnaliRicevuti` e il filtro anti-doppioni
+//     stanno in memoria, e il filtro anti-doppioni di contenuto su questa strada non scatta
+//     (le posizioni MT5 "senza grafico" non finiscono in positions[], quindi non ha niente con
+//     cui confrontare: misurato, lo stesso messaggio due volte apriva altri 4 ordini).
+// Chiude il primo l'AUTORITA', chiude il secondo il RICORDO SU DISCO.
+//
+// LA PRESENZA SI MISURA COL BATTITO, non con un elenco che non si svuota mai: `siblingAssetBySlot`
+// (usato da anotherWindowOwnsAssetEvaluation per SL/TP) si riempie quando qualcuno annuncia
+// l'asset e una finestra CHIUSA ci resta per sempre, quindi una madre chiusa terrebbe bloccate
+// tutte le sue duplicate anche quando lei non c'e' piu'. Qui le finestre battono, e chi tace da
+// troppo non conta piu': una duplicata lasciata sola torna autorita' e apre, com'è giusto.
+const TG_PRESENZA_OGNI_MS=2500;        // ogni quanto questa finestra dice "ci sono"
+const TG_PRESENZA_VIVA_MS=9000;        // oltre questo silenzio, per me la finestra non esiste piu'
+const TG_PRESENZA_ATTESA_MS=700;       // quanto si aspetta una risposta prima di decidere
+let tgPresenzaSlot={};                 // slot -> istante dell'ultimo battito visto
+let tgPresenzaTimer=null;
+let tgPresenzaCanaleWs=null;           // creato alla prima occasione, non all'avvio
+// Canale SEPARATO da quello del trading: le posizioni non devono dipendere da un sotto-sistema
+// che sta in mezzo ai segnali, e un messaggio di presenza in piu' sul canale principale sarebbe
+// rumore in una strada gia' molto trafficata.
+function tgCanalePresenza(){
+ if(tgPresenzaCanaleWs!==null)return tgPresenzaCanaleWs;
+ try{ tgPresenzaCanaleWs=('BroadcastChannel' in window)?new BroadcastChannel('fxbt_segnali_presenza_v1'):null; }catch(e){ tgPresenzaCanaleWs=null; }
+ if(tgPresenzaCanaleWs){
+  tgPresenzaCanaleWs.onmessage=(ev)=>{
+   const msg=ev&&ev.data;
+   if(!msg||typeof msg!=='object')return;
+   if(msg.slot===PIP_SLOT)return;
+   if(msg.tipo==='presenza'){ tgPresenzaSlot[msg.slot]=Number(msg.at)||Date.now(); }
+   else if(msg.tipo==='presenza_chiedi'){ tgPresenzaBatti(); }   // chi chiede vuole sapere: rispondo
+  };
+  tgPresenzaBatti();
+  if(!tgPresenzaTimer)tgPresenzaTimer=setInterval(tgPresenzaBatti,TG_PRESENZA_OGNI_MS);
+ }
+ return tgPresenzaCanaleWs;
+}
+function tgPresenzaBatti(){
+ try{ const c=tgCanalePresenza(); if(c)c.postMessage({tipo:'presenza',slot:PIP_SLOT,at:Date.now()}); }catch(e){}
+}
+function tgPresenzaChiedi(){
+ try{ const c=tgCanalePresenza(); if(c)c.postMessage({tipo:'presenza_chiedi',slot:PIP_SLOT}); }catch(e){}
+}
+// Lo slot PIU' BASSO fra le finestre che battono adesso, me compreso.
+function tgPresenzaSlotPiuBasso(){
+ let minimo=PIP_SLOT;
+ const adesso=Date.now();
+ for(const chiave in tgPresenzaSlot){
+  const quando=Number(tgPresenzaSlot[chiave])||0;
+  if(adesso-quando>TG_PRESENZA_VIVA_MS)continue;   // tace da troppo: per me non esiste piu'
+  const slot=Number(chiave);
+  if(Number.isFinite(slot)&&slot<minimo)minimo=slot;
+ }
+ return minimo;
+}
+// Chiede chi c'e' e aspetta un soffio: basta UNA risposta da uno slot piu' basso del mio.
+async function tgAspettaPresenza(){
+ const c=tgCanalePresenza();
+ if(!c)return;                       // senza canale non c'e' modo di sapere: non si aspetta
+ tgPresenzaChiedi();
+ const fine=Date.now()+TG_PRESENZA_ATTESA_MS;
+ while(Date.now()<fine){
+  await new Promise(r=>setTimeout(r,60));
+  if(tgPresenzaSlotPiuBasso()<PIP_SLOT)return;
+ }
+}
+// Vero se QUESTA finestra e' autorizzata ad applicare un segnale. La madre (slot 0) non chiede
+// niente a nessuno: e' sempre lei. Se non c'e' il canale non si puo' sapere, e fra "apro" e
+// "non apro mai niente per un'ipotesi" scelgo il primo, perche' il secondo e' peggio.
+async function tgSonoAutoritaSegnale(){
+ if(PIP_SLOT===0)return true;
+ const c=tgCanalePresenza();
+ if(!c)return true;
+ await tgAspettaPresenza();
+ return tgPresenzaSlotPiuBasso()>=PIP_SLOT;
+}
+// Il battito parte da solo all'avvio, come fa il collegamento ai segnali (tgCollega, ~2500 ms
+// piu' su). Se partisse solo quando serve, la madre — che non deve chiedere niente a nessuno per
+// sapere di essere autorita' — non batterebbe mai, e le duplicate non la sentirebbero.
+setTimeout(()=>{ try{ tgCanalePresenza(); }catch(e){} },1200);
+
+// IL RICORDO SU DISCO: un segnale applicato non si applica due volte, quale che sia la finestra
+// che lo riceve. Chiave per chiave con l'istante: servono nelle ore in cui il ponte riconsegna
+// la bacheca (il minuto di validita' del segnale), non per sempre.
+const TG_APPLICATO_PREFISSO='fb_tg_segnale_applicato_';
+const TG_APPLICATO_VITA_MS=86400000;  // un giorno: un id di bacheca non si riusa mai
+function tgApplicatoChiave(id){ return TG_APPLICATO_PREFISSO+String(id); }
+function tgSegnaleApplicatoRicorda(voce,quante){
+ try{
+  const id=voce&&voce.id;
+  if(id==null||id==='')return;
+  localStorage.setItem(tgApplicatoChiave(id),JSON.stringify({
+   id:String(id),at:Date.now(),sala:String(voce.chat||''),
+   strumento:String((voce.segnale&&voce.segnale.strumento)||''),posizioni:Number(quante)||0}));
+  // La pulizia delle chiavi vecchie la fa una scrittura su cinquanta, non tutte: leggere TUTTE
+  // le chiavi del deposito a ogni segnale sarebbe il modo piu' lento per tenere in ordine un
+  // elenco (regola del cloud n. 2: non si rilegge un intero documento per sapere un numero).
+  if(Math.random()<0.02)tgApplicatoPulisci();
+ }catch(e){}
+}
+function tgApplicatoPulisci(){
+ try{
+  const adesso=Date.now();
+  for(let i=localStorage.length-1;i>=0;i--){
+   const chiave=localStorage.key(i);
+   if(!chiave||chiave.indexOf(TG_APPLICATO_PREFISSO)!==0)continue;
+   let voce=null; try{ voce=JSON.parse(localStorage.getItem(chiave)); }catch(e){}
+   if(!voce||adesso-(Number(voce.at)||0)>TG_APPLICATO_VITA_MS)localStorage.removeItem(chiave);
+  }
+ }catch(e){}
+}
+// Null se il segnale non risulta applicato; altrimenti il ricordo, con la sua data.
+function tgSegnaleGiaApplicato(voce){
+ const id=voce&&voce.id;
+ if(id==null||id==='')return null;
+ try{
+  const grezzo=localStorage.getItem(tgApplicatoChiave(id));
+  if(!grezzo)return null;
+  const voce=JSON.parse(grezzo);
+  if(!voce)return null;
+  if(Date.now()-(Number(voce.at)||0)>TG_APPLICATO_VITA_MS)return null;
+  return voce;
+ }catch(e){ return null; }
+}
+// Il motivo per cui QUESTO segnale non si applica in QUESTA finestra, oppure '' se si applica.
+// Lo si scrive nel pannello: chi guarda la duplicata deve poterlo LEGGERE, non restare con un
+// segnale che non succede niente e nessuna spiegazione (regola: si eredita in silenzio, non si
+// eredita in silenzio E all'oscuro).
+async function tgPercheNonApplicareQui(voce){
+ const gia=tgSegnaleGiaApplicato(voce);
+ if(gia)return 'questo segnale e\' gia\' stato applicato'
+   +(gia.sala?(' dalla sala "'+gia.sala+'"'):'')
+   +(gia.posizioni?((' ('+gia.posizioni+' posizioni)')):'')+': non si apre due volte.';
+ if(!await tgSonoAutoritaSegnale())
+  return 'apre la finestra principale (slot '+tgPresenzaSlotPiuBasso()+'): finestra numero '
+   +PIP_SLOT+', in attesa. Da qui non apro niente: vale per tutte le finestre duplicate.';
+ return '';
+}
 const tgAutoCode={};
-function tgAutoInCoda(voce){
+// LE DUE GUARDIE, prima di qualunque decisione. Un segnale bloccato qui non arriva a
+// tgAutoValuta, quindi non viene contato dai tetti della sala e non apre niente: il motivo
+// resta scritto nel pannello, cosi' si vede perche' una finestra non ha aperto.
+async function tgAutoInCoda(voce){
+ const blocco=await tgPercheNonApplicareQui(voce);
+ if(blocco){
+  try{ voce.autoMotivo=blocco; }catch(e){}
+  try{ tgRenderPannello(); }catch(e){}
+  return;
+ }
+
  let conto='sim';
  try{ conto=tgContoPerSegnale(voce&&voce.segnale); }catch(e){}
  const prima=tgAutoCode[conto]||Promise.resolve();
@@ -43537,7 +44086,12 @@ function tgPiano(seg,sym,pctForzata,opz){
  }
  // In ordine di arrivo (vedi tgTpInOrdine): e' questo che decide quale posizione e' la "n.1" e
  // quindi quando la strategia sposta gli stop delle altre.
- const tutti=tgTpInOrdine(seg.take_profit,side).filter(v=>!lontano(v,20));
+ // `tpDichiarati` e' l'elenco GREZZO della sala, prima di qualunque filtro: conta quanti take
+  // profit la sala ha DICHIARATO, che e' il numero da mettere a confronto con quelli che si
+  // aprono davvero (vedi motivoPosizioni piu' sotto).
+  const tpDichiarati=tgTpInOrdine(seg.take_profit,side);
+  const fuoriScala=tpDichiarati.filter(v=>!!lontano(v,20));
+  const tutti=tpDichiarati.filter(v=>!lontano(v,20));
  // Un take profit che il prezzo ha gia' passato non ha senso come posizione a se': aprirla
  // significherebbe nascere oltre il proprio obiettivo. Si scartano quelli, non tutto il segnale.
  let tp=tutti.filter(v=>!validateTradeLevel(side,entry,NaN,v));
@@ -43561,7 +44115,25 @@ function tgPiano(seg,sym,pctForzata,opz){
   if(!validateTradeLevel(side,entry,NaN,v)&&v!==entry){ tp=[v]; tpCalcolato=true; }
  }
  const scartati=tutti.filter(v=>!!validateTradeLevel(side,entry,NaN,v));
- if(tp.length>maxN)tp=tp.slice(0,maxN);
+ // TUTTI I TAKE PROFIT GIA' SUPERATI DAL PREZZO (caso limite misurato prima di curarlo: un
+  // segnale SELL coi cinque target SOPRA il prezzo). Prima si arrivava a `tp=[]` con
+  // `n=Math.max(1,0)=1`, e si apriva UNA posizione senza nessun target, solo con lo stop:
+  // l'interruttore «non aprire i segnali senza target» non lo impediva perche' guarda
+  // `!tutti.length` (la sala i target li aveva DATI) e non `!tp.length` (quelli validi).
+  //
+  // LA STRADA SCELTA E' QUELLA DEL SEGNALE MORTO, non quella del segnale senza target: la
+  // sala ha descritto cinque obiettivi e il prezzo li ha già passati tutti, quindi non c'e'
+  // piu' niente da eseguire. Aprirne uno inventato — uno stop, senza il target che la sala
+  // aveva in testa — e' un ordine che nessuno ha chiesto, ed e' esattamente il genere di
+  // posizione che domani non si sapeva di avere. Il rifiuto si DICE (finisce in
+  // voce.autoMotivo e nel popup), non si lascia capire da una scheda vuota.
+  if(tutti.length&&!tp.length)
+   return {problemi:['tutti e '+tutti.length+' i take profit della sala sono già stati superati dal prezzo ('
+     +tutti.map(tgFmt).join('  ·  ')+'): il segnale non ha più nessun obiettivo valido, non apro niente']};
+  // Quanti take profit validi restavano PRIMA dei due tagli (tetto e rischio): servono per
+  // dire chi ha tagliato quanto, e sono il termine di confronto del motivo.
+  const tpValidi=tp.length;
+  if(tp.length>maxN)tp=tp.slice(0,maxN);
  let n=Math.max(1,tp.length);
  // Tetto 100% (19 ottobre 2026, era 20%): la percentuale con cui si apre una posizione può valere
  // quanto tutto il capitale, se e' quello che il proprietario ha scritto nella configurazione.
@@ -43589,6 +44161,10 @@ function tgPiano(seg,sym,pctForzata,opz){
  // superare quello chiesto - e allora va detto chiaramente prima di confermare.
  if(!(lotti>=minimoLotto)){ lotti=minimoLotto; alMinimo=true; }
  let notaRidotte=null;
+ // Quante posizioni c'erano PRIMA di questo taglio: senza, il motivo direbbe "il rischio non
+ //  basta" anche quando a tagliare era stato il TETTO - misurato, col tetto a 1 su un segnale
+ //  da 5 take profit uscivano due cause, la seconda delle quali non era mai successa.
+ const nPrimaDelRischio=n;
  // Il confronto va fatto sulla STESSA grandezza del tetto: con base 'capitale' il tetto e' un
  // valore di posizione, non una perdita, e paragonarlo alla perdita direbbe un'altra cosa.
  if(opz.entroRischio&&alMinimo&&lotti*perUnita*n>importoTot+0.01){
@@ -43617,7 +44193,43 @@ function tgPiano(seg,sym,pctForzata,opz){
    if(grezzi.every(v=>v>=minimoLotto-1e-12))lottiTp=grezzi;
   }
  }catch(e){ lottiTp=null; }
- const rischioReale=lottiTp?lottiTp.reduce((a,v)=>a+v*perLotto,0):lotti*perLotto*n;
+ // ============ IL MOTIVO, UNO SOLO, CALCOLATO QUI E NON ALTROVE ============
+  // RICHIESTA DEL PROPRIETARIO (16 novembre 2026): «Dirlo forte: scheda del segnale, stato e
+  // pannello». Il numero di posizioni NON cambia — i tetti, il rischio e i take profit passati
+  // sono scelte giuste e volute — quello che manca è la VOCE.
+  //
+  // MISURATO PRIMA DI QUESTA CURA: le riduzioni erano mute o parlavano da sole in posti
+  // diversi, e nessuno di quei posti era dove il proprietario guarda.
+  //   - il tetto della sala tagliava in silenzio ( tp=tp.slice(0,maxN) );
+  //   - il rischio della sala produceva `notaRidotte`, che nell'apertura AUTOMATICA non usciva
+  //     da nessuna parte (il riepilogo `r` veniva costruito e buttato via);
+  //   - i take profit già superati finishescano in `scartati`, detti solo nel popup manuale.
+  //
+  // Ora il motivo si calcola in QUESTO punto solo, dove le riduzioni avvengono davvero, ed è
+  // un testo unico che dia le tre cose che servono: quanti take profit la sala aveva
+  // DICHIARATO, quante posizioni si aprono, e perche'. Chi apre lo porta fuori — scheda del
+  // segnale, barra di stato, popup manuale: sono tre lettori dello stesso motivo, non tre
+  // motivazioni diverse.
+ let motivoPosizioni=null;
+ if(tpDichiarati.length&&n<tpDichiarati.length){
+  const pezzi=[];
+  // Quante posizioni aveva concesso il TETTO (maxN): se e' meno di quante ne erano valide,
+  // e' lui che ha tagliato.
+  const postiTetto=Math.min(tpValidi,(Number.isFinite(maxN)?maxN:tpValidi));
+  if(tpValidi-postiTetto>0)
+   pezzi.push('tetto delle posizioni pieno: posto per '+postiTetto);
+  // E quante ne ha tolte il RISCHIO (entroRischio): il confronto si fa col numero di prima,
+  // non con quello dichiarato - sennò il tetto e il rischio racconterebbero lo stesso taglio.
+  if(nPrimaDelRischio-n>0)
+   pezzi.push('il rischio scelto non basta per '+nPrimaDelRischio+' lotti minimi');
+  if(scartati.length)
+   pezzi.push(scartati.length+(scartati.length===1?' take profit già superato dal prezzo':' take profit già superati dal prezzo'));
+  if(fuoriScala.length)
+   pezzi.push(fuoriScala.length+(fuoriScala.length===1?' take profit fuori scala (oltre il 20% dal prezzo)':' take profit fuori scala (oltre il 20% dal prezzo)'));
+  if(pezzi.length)
+   motivoPosizioni=(n===1?('aperta 1 posizione'):('aperte '+n+' posizioni'))+' invece di '+tpDichiarati.length+' dichiarate dalla sala: '+pezzi.join('; ');
+ }
+  const rischioReale=lottiTp?lottiTp.reduce((a,v)=>a+v*perLotto,0):lotti*perLotto*n;
  let margine=0;
  try{ margine=lottiTp?lottiTp.reduce((a,v)=>a+marginForLots(v,entry,sym),0):marginForLots(lotti,entry,sym)*n; }catch(e){}
  // `base` esce nel piano perche' chi lo mostra deve poter scrivere "5% del capitale" invece di
@@ -43625,7 +44237,7 @@ function tgPiano(seg,sym,pctForzata,opz){
  // sempre sulla perdita vera, qualunque base sia stata usata per decidere il lottaggio.
  return {side,entry,sl,tp,scartati,n,lotti,lottiTp,pct,importoTot,rischioReale,alMinimo,margine,perLotto,sym,slCalcolato,tpCalcolato,senzaLivelli,
    base:baseCap?'capitale':'rischio',
-   pendente,kind,notaEntrata,notaRidotte,parti,
+   pendente,kind,notaEntrata,notaRidotte,parti,motivoPosizioni,tpDichiarati:tpDichiarati.length,
    rr:(tp.length&&Math.abs(entry-sl)>0)?Math.abs(tp[0]-entry)/Math.abs(entry-sl):null,
    rischioRealePct:(saldo>0?rischioReale/saldo*100:null)};
 }
@@ -43702,7 +44314,10 @@ async function tgEseguiSegnale(voce,opzioni){
  r.push((reale?'ORDINI VERI su MT5':'Posizioni simulate')+': '+p.n+(p.n===1?' posizione ':' posizioni separate ')+p.side+' su '+sym);
  if(p.pendente)r.push('ORDINE '+p.kind+' (pendente) a '+tgFmt(p.entry)+': si apre da solo quando il prezzo ci arriva.');
  else if(p.notaEntrata)r.push('Nota: '+p.notaEntrata+'.');
- if(p.notaRidotte)r.push('Nota: '+p.notaRidotte+'.');
+ // IL MOTIVO UNICO (tgPiano, vedi motivoPosizioni). Prende il posto di `notaRidotte`, che
+  // diceva la stessa cosa in un altro modo: due testi per una riduzione sola prima o poi
+  // dicono due cose diverse.
+  if(p.motivoPosizioni)r.push('Posizioni: '+p.motivoPosizioni+'.');
  if(p.parti>1)r.push('Il messaggio ha '+p.parti+' entrate: questa usa 1/'+p.parti+' del rischio della sala, così tutte insieme restano dentro al rischio scelto.');
  if(!p.pendente)r.push('Entrata: il prezzo di adesso, '+tgFmt(p.entry)
    +(tgC(seg.entrata)?(' — la sala diceva '+tgFmt(seg.entrata)+(tgC(seg.entrata_max)?('–'+tgFmt(seg.entrata_max)):'')):''));
@@ -43849,7 +44464,9 @@ async function tgEseguiSegnale(voce,opzioni){
    if(reale){ aperte+=(esito?1:0); if(!esito)break; }
    else if(positions.length>prima)aperte++; else break;
   }
- }if(aperte&&(regole.length||avvicinamento)){
+ }
+ if(aperte>0)tgSegnaleApplicatoRicorda(voce,aperte);
+ if(aperte&&(regole.length||avvicinamento)){
   // La strategia sopravvive alla chiusura della pagina (sta in localStorage) e deve poter
   // RITROVARE le sue posizioni quando l\'app riapre. Per questo si porta dietro i ticket: le
   // posizioni riadottate dal conto MT5 sono oggetti nuovi, senza l'etichetta del gruppo, e senza
@@ -43883,8 +44500,27 @@ async function tgEseguiSegnale(voce,opzioni){
  $('status').textContent=aperte
   ? ('📡 Segnale di '+String(voce.chat||'')+': '+(p.pendente?('piazzati '+aperte+(aperte===1?' ordine ':' ordini ')+p.kind+' a '+tgFmt(p.entry)+' '):('aperte '+aperte+(aperte===1?' posizione ':' posizioni ')))+p.side+' su '+sym+' — SL '+tgFmt(p.sl)+(p.tp.length?(', TP '+p.tp.slice(0,aperte).map(tgFmt).join(' / ')):''))
   : ('📡 Segnale di '+String(voce.chat||'')+': nessuna posizione aperta.');
+  // IL MOTIVO ESCE DOVE IL PROPRIETARIO GUARDA. In automatico il riepilogo `r` qui sopra non
+  // viene mostrato a nessuno (la conferma si salta), quindi senza queste due righe una
+  // riduzione non lasciava traccia: misurato, con il tetto della sala a 1 su un segnale da
+  // 5 take profit si apriva una posizione e non si leggeva da nessuna parte che ne erano
+  // previste cinque.
+  if(p.motivoPosizioni){
+   // La scheda del segnale nel pannello (voce.autoMotivo), così resta scritto anche dopo.
+   if(opzioni&&opzioni.automatico){
+    try{ voce.autoMotivo=p.motivoPosizioni; }catch(e){}
+   }
+   // La barra di stato, che è quello che si legge nell'istante in cui succede.
+   if(aperte){
+    try{ $('status').textContent+=' — '+p.motivoPosizioni; }catch(e){}
+   }
+  }
  if(aperte&&aperte<p.n){
-  const msg='Attenzione: erano previste '+p.n+' posizioni ma ne sono state aperte '+aperte+'. Mi sono fermato alla prima che non e\' andata a buon fine — controlla il conto prima di riprovare.';
+  // Il motivo del piano (tetto, rischio, target passati) resta DAVANTI a questo: sapere che
+   // il broker ha rifiutato l'ultima posizione non serve a molto se non si sa nemmeno quante
+   // ne erano previste.
+   const msg=(p.motivoPosizioni?(p.motivoPosizioni+'. '):'')
+    +'Attenzione: erano previste '+p.n+' posizioni ma ne sono state aperte '+aperte+'. Mi sono fermato alla prima che non e\' andata a buon fine — controlla il conto prima di riprovare.';
   // In automatico nessun popup: bloccherebbe la fila dei segnali finche' qualcuno non clicca.
   if(opzioni&&opzioni.automatico){ voce.autoMotivo=msg; try{ tgRenderPannello(); }catch(e){} }
   else await appAlert(msg);
@@ -44260,12 +44896,19 @@ $('fibTemplateBtn')?.addEventListener('click',ev=>{
 $('fibTemplateMenu')?.addEventListener('click',ev=>ev.stopPropagation());
 $('fibTemplateSaveAs')?.addEventListener('click',async ev=>{
  ev.stopPropagation(); closeFibTemplateMenu();
- const name=await appPrompt('Nome per questo modello Fibonacci:',{title:'💾 Salva modello Fibonacci'});
- if(!name||!name.trim())return;
+ // STESSA finestra del nome del percorso generico: nomi già usati mentre si scrive e, per un nome
+ // già occupato, la domanda di sovrascrittura (sì/no) invece del rifiuto - vedi chiediNomeModello.
+ const chiesto=await chiediNomeModello('Nome per questo modello Fibonacci:','💾 Salva modello Fibonacci');
+ if(!chiesto)return;
+ const nome=chiesto.nome;
+ // Sovrascrittura chiesta dall'utente: il modello vecchio con questo nome esce dalle memorie.
+ if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome);
  const templates=loadFibTemplates();
- templates[name.trim()]={levels:readFibLevelsFromTable(),opts:readFibOptsFromForm()};
+ templates[nome]={levels:readFibLevelsFromTable(),opts:readFibOptsFromForm()};
  saveFibTemplates(templates);
- $('status').textContent=`Modello Fibonacci "${name.trim()}" salvato.`;
+ // Il menu va ridisegnato subito, come per il percorso generico.
+ renderFibTemplateMenu();
+ $('status').textContent=chiesto.sovrascrivi?`Modello Fibonacci "${nome}" sovrascritto: il modello precedente è stato sostituito da questo.`:`Modello Fibonacci "${nome}" salvato: lo trovi nel menu "Modello Fib ⌄".`;
 });
 $('fibTemplateApplyDefault')?.addEventListener('click',ev=>{
  ev.stopPropagation(); closeFibTemplateMenu();
@@ -44317,7 +44960,9 @@ $('drawTemplateSaveAs')?.addEventListener('click',ev=>{ ev.stopPropagation(); sa
 // RICHIESTO ESPLICITAMENTE: "💾 Salva modello" direttamente dentro le impostazioni del disegno
 // (accanto a Ok): conferma le modifiche come Ok e le salva con un nome nel menu "Modello ⌄".
 $('drawStyleModalSaveTplBtn')?.addEventListener('click',async()=>{
- const d=drawStyleModalTarget; if(!d)return;
+ // Il ritorno precoce MUTO era il difetto opposto: si premeva «Salva modello» e non succedeva
+ // niente, senza una parola. Ora la barra di stato dice il perché.
+ const d=drawStyleModalTarget; if(!d){ $('status').textContent='Apri le impostazioni di un disegno prima di salvarne il modello.'; return; }
  readDrawStyleModalInto(d); draw();
  // Salva SOLO il modello: la finestra resta aperta, poi si decide con Ok/Indietro cosa fare del disegno.
  const saved=await saveCurrentDrawingAsTemplate(d);
@@ -53142,6 +53787,17 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  let timeframe;
  let __candCache=null;
  let __histCount=200000;
+ // TIMBRO DELLO SCARTO ORARIO (15 novembre 2026). `__timbroScarto` = lo scarto con cui sono
+ // calcolati i tempi che finiranno nel magazzino; `__riallineamentoSec` = di quanto e' stata
+ // spostata la serie locale, per DIRLO nella barra di stato (un riallineamento silenzioso e'
+ // indistinguibile da un difetto). Spiegazione completa dove si usano, piu' sotto.
+ let __timbroScarto=null;
+ let __riallineamentoSec=null;
+ // Perche' la serie locale e' stata BUTTATA VIA (e lo storico rifatto da capo): detto nella
+ // barra di stato. Vale il principio di cui sopra - un ripiego silenzioso e' indistinguibile
+ // da un difetto, ed e' esattamente cosi' che e' nata questa cura: nessuno diceva perche'
+ // riscaricava 200000 candele ogni volta.
+ let __ripiegoMotivo=null;
  try{
     timeframe=fblTfMt5Per(currentTF);
     // Lavoro 2: se c'e' un magazzino locale per questo asset+timeframe, si chiede solo la coda.
@@ -53167,6 +53823,10 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
    finishAssetSwitchDrawings(asset); // uscita anticipata: ricarica i disegni salvati del nuovo asset PRIMA di sbloccare (mai sovrascriverli)
    return;
  }
+ // Lo scarto orario che il ponte dichiara di aver applicato AI TEMPI DI QUESTA RISPOSTA.
+ // Campo assente = ponte vecchio: si tiene null, NON 0 (zero e' uno scarto vero: broker in UTC).
+ __timbroScarto=(typeof body.utc_offset_seconds_applied==='number' && Number.isFinite(body.utc_offset_seconds_applied))
+   ? body.utc_offset_seconds_applied : null;
  // SEGNALATO DAL PROPRIETARIO: «cambiando asset restano TUTTI E DUE i grafici [...] vedremo delle
  // candele di un asset e delle candele di un altro. No, dobbiamo fare in modo che quando passa
  // smette di visualizzare l'asset precedente e carica quello che l'utente ha selezionato
@@ -53206,9 +53866,142 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
   // Lavoro 2: controllo di sovrapposizione con il magazzino locale. Se c'e' una sovrapposizione
   // coerente, si aggiungono solo le candele piu' nuove; altrimenti (buco o OHLC diverso) si
   // sostituisce tutto con lo scarico intero.
+  //
+  // ===== TIMBRO DELLO SCARTO ORARIO (15 novembre 2026) =====
+  // IL PROBLEMA, misurato. Il ponte pubblica i tempi GIA' spostati sul fuso (`time = tempo_broker
+  // - scarto`) e dichiara quale scarto ha applicato (utc_offset_seconds_applied). Il magazzino
+  // locale pero' salvava `tempo` senza dire CON CHE SCARTO li aveva calcolati. Le candele
+  // scaricate quando lo scarto era misurato male restano a un altro orologio: la ricerca di un
+  // `time` identico fra magazzino e coda nuova non trova niente, si va nel ramo `else` e si rifa'
+  // lo SCARICO INTERO da 200000 candele. Il proprietario ha chiesto l'opposto: «non voglio che
+  // ricarica ogni volta l'intero storico, soltanto l'ultima parte aggiunta dopo l'ultima
+  // visualizzazione».
+  //
+  // LA CORREZIONE E' UNA SOMMA, perche' il tempo pubblicato e' `tempo_broker - scarto`:
+  //     tempo_giusto = tempo_salvato + scarto_vecchio - scarto_giusto
+  // I due scarti sono entrambi noti: `scarto_vecchio` sta nel record del magazzino (scritto qui
+  // accanto), `scarto_giusto` lo dichiara la risposta appena arrivata. Nessuna richiesta in piu'.
+  //
+  // LE SERIE GIA' IN CASA non hanno il timbro, perche' nessuno lo scriveva. Li' lo scostamento si
+  // MISURA dalla sovrapposizione che c'e' gia': la coda si chiede con 200 candele di margine (vedi
+  // `mancanti` sopra), quindi bastano le candele salvate i cui OHLC combaciano con una appena
+  // scaricata - la differenza fra i due `time` E' lo scostamento. Si confrontano ALMENO TRE punti
+  // diversi: se dicono tutti la stessa cosa si applica; se discordano la serie ha piu' di un
+  // orologio dentro (e' gia' successo, con uno scarto di -57600) e SOLO ALLORA si rifa' lo scarico
+  // intero. Quel ripiego deve restare: mai mostrare una coda corta come se fosse tutto lo storico.
+  function __fblSpostaSerie(serie,secondi){
+    for(let i=0;i<serie.length;i++){
+      const r=serie[i];
+      const t=Number(r.time)+secondi;
+      // Un tempo non finito (o non numero) NON si sposta: `new Date(t*1000).toISOString()`
+      // qui sotto solleverebbe a mezzo ciclo, e una serie spostata a META' non va ne' usata
+      // ne' salvata - la legge di sovrapposizione guarda i prezzi (che restano giusti) e la
+      // darebbe per buona. Si dichiara l'insuccesso e si butta via tutto: chi chiama ripiega
+      // sullo scarico intero (vedi il `catch` che imposta __forzaIntero piu' sotto).
+      if(!Number.isFinite(t)){
+        throw new Error('tempo non valido nella serie salvata (posizione '+i+'): '+secondi+' s non spostabili');
+      }
+      r.time=t;
+      // La data si RIGENERA, e in ISO con la Z: una data senza fuso viene riletta col fuso dei
+      // CSV e sposta ogni candela di 5 ore (cura del 10 novembre, pagata cara - vedi LEZIONI).
+      r.date=new Date(t*1000).toISOString();
+    }
+  }
+  function __fblMisuraScarto(serieNuova,serieSalvata){
+    // chiave OHLC -> tempi nuovi. Se la stessa candela compare con piu' di un tempo e' ambigua:
+    // si scarta, non si tira a indovinare (un indovinello sbagliato sposterebbe tutto lo storico).
+    const perOhlc=new Map();
+    for(let i=0;i<serieNuova.length;i++){
+      const r=serieNuova[i];
+      const k=Number(r.open)+'|'+Number(r.high)+'|'+Number(r.low)+'|'+Number(r.close);
+      const a=perOhlc.get(k);
+      if(a)a.push(Number(r.time)); else perOhlc.set(k,[Number(r.time)]);
+    }
+    const conta=new Map();
+    // La sovrapposizione possibile sta in fondo alla serie salvata: le ultime 400 candele bastano
+    // a trovarci dentro almeno tre punti anche sul timeframe piu' corto.
+    const da=Math.max(0,serieSalvata.length-400);
+    for(let i=da;i<serieSalvata.length;i++){
+      const s=serieSalvata[i];
+      const k=Number(s.open)+'|'+Number(s.high)+'|'+Number(s.low)+'|'+Number(s.close);
+      const tempi=perOhlc.get(k);
+      if(!tempi||tempi.length!==1)continue;
+      const d=tempi[0]-Number(s.time);
+      conta.set(d,(conta.get(d)||0)+1);
+    }
+    let migliore=null,quante=0;
+    conta.forEach((n,d)=>{ if(n>quante){ quante=n; migliore=d; } });
+    let altri=0;
+    conta.forEach((n,d)=>{ if(d!==migliore)altri+=n; });
+    // I punti utili sono TUTTI quelli che hanno combinato: lo scostamento dominante piu' gli
+    // altri. Il giudizio si fa su questo totale, non sui soli punti dominanti.
+    const utili=quante+altri;
+    if(quante<3)return {ok:false,motivo:'punti utili '+quante,punti:quante,altri:altri,utili:utili};
+    // TOLLERANZA SULLO SCOSTAMENTO DOMINANTE (seconda revisione, punto 2). L'IDENTITA' DI UNA
+    // CANDELA sono quattro numeri (open|high|low|close): su uno strumento con pochi decimali
+    // DUE CANDELE DIVERSE possono avere gli stessi quattro valori (barra piatta), quindi una
+    // candela salvata combacia con quella SBAGLIATA e produce un punto con uno scostamento
+    // diverso dagli altri. Finche' UN SOLO punto cosi' buttava via l'intera misura e
+    // costringeva allo scarico intero da 200000 - esattamente il sintomo del proprietario.
+    // Adesso lo scostamento dominante si accetta se copre almeno l'80% dei punti utili (in
+    // numeri interi: quante >= 4*altri) e almeno 3 punti; sotto quella soglia la serie ha
+    // DAVVERO due orologi dentro (e' gia' successo, con uno scarto di -57600) e si butta via.
+    if(quante>=4*altri)return {ok:true,sec:migliore,punti:quante,altri:altri,utili:utili};
+    // Campo ESPLICITO, non il testo del motivo: chi cambia il messaggio non deve poter
+    // spegnere il ripiego senza che niente protesti (era `m.motivo.indexOf('discordanti')`).
+    return {ok:false,motivo:'discordanti ('+quante+' contro '+altri+')',discordanti:true,punti:quante,altri:altri,utili:utili};
+  }
+  // LO SCARICO INTERO da 200000 candele, cioe' il ripiego. Una funzione perche' ci arrivano
+  // TRE strade diverse (sovrapposizione che non torna, piu' di un orologio dentro la serie,
+  // eccezione a meta' ciclo) e perche' una di queste esce da un `catch`: col ripiego scritto
+  // DENTRO il ramo `else` quelle strade non ripiegavano affatto. Se la richiesta non rende
+  // niente (rete caduta) la serie resta quella della coda: non e' la scelta giusta, ma e'
+  // quella di sempre, e cambiarla qui sarebbe una cura dentro una cura.
+  async function __fblStoricoCompleto(){
+    try{
+      const res2=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=200000'));
+      const body2=await res2.json();
+      if(res2.ok && Array.isArray(body2.candles)){
+        const pieno=body2.candles.map(c=>({
+          time:c.time,
+          date:new Date(c.time*1000).toISOString(),
+          open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
+        })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
+        if(pieno.length){ mt5Rows=pieno; return true; }
+      }
+    }catch(e2){}
+    return false;
+  }
   if(__candCache && __candCache.rows && __candCache.rows.length && __histCount < 200000){
+    // La banda: la serie locale va BUTTATA VIA e lo storico rifatto da capo. La decidono tre
+    // strade diverse (sovrapposizione che non torna, piu' di un orologio dentro la serie,
+    // eccezione a meta' ciclo) e la legge UN punto solo, DOPO il try. Finche' il ripiego
+    // stava dentro il ramo `else`, chi usciva da un `catch` non ripiegava: si teneva la coda.
+    let __forzaIntero=false;
     try{
       const cached=__candCache.rows;
+      const __timbroSalvato=(typeof __candCache.scarto==='number' && Number.isFinite(__candCache.scarto))?__candCache.scarto:null;
+      if(__timbroSalvato!==null && __timbroScarto!==null){
+        // (1) il timbro c'e' e si legge: si sposta per somma, senza misurare niente.
+        const sec=__timbroSalvato-__timbroScarto;
+        if(sec!==0){ __fblSpostaSerie(cached,sec); __riallineamentoSec=sec; }
+      }else{
+        // (2) serie senza timbro (tutte quelle gia' in casa): lo scostamento si misura.
+        const m=__fblMisuraScarto(mt5Rows,cached);
+        if(m.ok){
+          if(m.sec!==0){ __fblSpostaSerie(cached,m.sec); __riallineamentoSec=m.sec; }
+          // Da qui la serie e' allineata ai tempi appena scaricati, cioe' allo scarto che il ponte
+          // dichiara ADESSO. Se il ponte non lo dichiara (campo assente) ma il vecchio timbro
+          // c'era, lo scarto giusto si ricava: scarto_nuovo = scarto_vecchio - scostamento.
+          if(__timbroScarto===null && __timbroSalvato!==null)__timbroScarto=__timbroSalvato-m.sec;
+        }else if(m.discordanti){
+          // Piu' orologi dentro la stessa serie: nessuna somma la raddrizza. Scarico intero.
+          // E LO SI DICE, col numero: un ripiego silenzioso e' indistinguibile da un difetto.
+          __forzaIntero=true;
+          __ripiegoMotivo='la serie salvata aveva '+m.altri+' candele su '+m.utili+
+            ' con orari diversi dal broker (piu\' di un orologio nello stesso magazzino).';
+        }
+      }
       const lastCached=cached[cached.length-1];
       const overlapIdx=mt5Rows.findIndex(r=>Number(r.time)===Number(lastCached.time));
       let coherent=false;
@@ -53217,7 +54010,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
         coherent = Number(o.open)===Number(lastCached.open) && Number(o.high)===Number(lastCached.high)
                 && Number(o.low)===Number(lastCached.low) && Number(o.close)===Number(lastCached.close);
       }
-      if(coherent){
+      if(coherent && !__forzaIntero){
         // aggiungi solo le piu' nuove (dopo la sovrapposizione)
         const nuove=mt5Rows.slice(overlapIdx+1);
         // ricostruisci mt5Rows = cached + nuove (senza duplicare la sovrapposizione)
@@ -53229,20 +54022,27 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
       } else {
         // buco o OHLC diverso: lo storico locale non torna con quello del broker. Mai mostrare una
         // coda corta come se fosse tutto lo storico: si rifa' lo scarico INTERO e si sostituisce.
-        try{
-          const res2=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(resolved)+'&timeframe='+timeframe+'&count=200000'));
-          const body2=await res2.json();
-          if(res2.ok && Array.isArray(body2.candles)){
-            const pieno=body2.candles.map(c=>({
-              time:c.time,
-              date:new Date(c.time*1000).toISOString(),
-              open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
-            })).filter(r=>[r.open,r.high,r.low,r.close].every(Number.isFinite) && Number.isFinite(parseDateTime(r.date)));
-            if(pieno.length){ mt5Rows=pieno; }
-          }
-        }catch(e2){}
+        // Se poco sopra la serie era stata riallineata, quel lavoro e' stato buttato via: dirlo
+        // nella barra di stato sarebbe una bugia (la serie a schermo e' tutta nuova).
+        __riallineamentoSec=null;
+        __forzaIntero=true;
+        if(!__ripiegoMotivo)__ripiegoMotivo='la serie salvata non combacia con quella del broker (buco nei tempi o prezzi diversi).';
       }
-    }catch(e){}
+    }catch(e){
+      // UN'ECCEZIONE QUI NON DEVE PIU' CADERE NEL SILENZIO (seconda revisione, punto 4).
+      // L'unico modo per arrivarci oggi e' un tempo non valido nella serie salvata
+      // (`new Date(t*1000).toISOString()` non sa scriverlo - vedi __fblSpostaSerie):
+      // l'eccezione finiva in questo `catch` VUOTO, `mt5Rows` restava la CODA corta appena
+      // scaricata e quella coda sostituiva magazzino e grafico. Una serie illeggibile si
+      // vedeva come una riduzione dello storico: il rovescio esatto di questa cura. Ora si
+      // butta via tutto, si rifa' lo scarico intero e lo si dice.
+      __forzaIntero=true;
+      __riallineamentoSec=null;
+      if(!__ripiegoMotivo)__ripiegoMotivo='la serie salvata non e\' leggibile (un tempo non valido).';
+    }
+    // UN SOLO punto di ripiego, fuori dal try: sovrapposizione che non torna, piu' di un
+    // orologio dentro la serie, eccezione a meta' ciclo. Tutte e tre passano di qui.
+    if(__forzaIntero)await __fblStoricoCompleto();
   }
  // METADATI AUTOMATICI PER ASSET (decimali/pip) — vedi il blocco recordAssetAutoMeta() più sopra
  // nel file. MT5 è la fonte più diretta possibile: mt5_feed_server.py restituisce già
@@ -53269,7 +54069,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // commento completo in __loadLiveHistoryFromCapitalImpl): una risincronizzazione periodica con
  // una risposta più corta del solito non deve mai far sparire lo storico per un istante.
  // Lavoro 2: salva il magazzino locale (non a ogni tick: qui, al caricamento dell'asset).
- try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimalsOfNumber==='function'?decimalsOfNumber(mt5Rows[mt5Rows.length-1].close):null)); }catch(e){}
+ try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimalsOfNumber==='function'?decimalsOfNumber(mt5Rows[mt5Rows.length-1].close):null), __timbroScarto); }catch(e){}
  const prevLiveFile=csvLibrary[0];
  const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='mt5_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
  let mergedRows=mt5Rows;
@@ -53406,7 +54206,14 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  update();draw();
  renderActiveIndicatorsUI();
  saveLightStateNow();
- $('status').textContent=`🟢 Storico Live MT5 caricato: ${baseRows.length.toLocaleString('it-IT')} candele per ${resolved}.`;
+ $('status').textContent=`🟢 Storico Live MT5 caricato: ${baseRows.length.toLocaleString('it-IT')} candele per ${resolved}.`+
+   (__riallineamentoSec!=null
+     ? ` Serie locale riallineata: orari spostati di ${__riallineamentoSec>0?'+':''}${__riallineamentoSec} s (lo scarto orario del broker non e' piu' quello con cui erano state salvate).`
+     : '')+
+    // E se la serie locale e' stata BUTTATA VIA (scostamento troppo frammentato, sovrapposizione
+    // che non torna, serie illeggibile), lo si dice: senza, un nuovo scarico da 200000 candele
+    // non si distingue da un difetto - che e' il motivo per cui questa cura esiste.
+    (__ripiegoMotivo!=null ? ` Serie locale buttata via: ${__ripiegoMotivo}` : '');
  lastMt5ChartUpdateAt=Date.now();
  const rolloverBucketMs=(currentTF||1)*60000;
  mt5LastSeenCandleBucketStart=Math.floor(Date.now()/rolloverBucketMs)*rolloverBucketMs;
@@ -54102,10 +54909,14 @@ async function fblCandeleCacheLeggi(asset,tf){
                  time:v.tempo[i], open:v.open[i], high:v.high[i], low:v.low[i], close:v.close[i],
                  volume:v.volume[i]});
     }
-    return {rows, digits:v.digits, ultimoTs:v.ultimoTs, salvatoAt:v.salvatoAt};
+    // TIMBRO DELLO SCARTO ORARIO (15 novembre 2026): con che scarto erano stati calcolati questi
+    // `tempo`. MANCANTE = null, MAI 0: zero e' uno scarto vero (broker in UTC) e `Number(null)` fa
+    // 0 - un timbro assente travestito da zero farebbe spostare la serie di tutto lo scarto.
+    const scarto=(typeof v.scarto==='number' && Number.isFinite(v.scarto))?v.scarto:null;
+    return {rows, digits:v.digits, ultimoTs:v.ultimoTs, salvatoAt:v.salvatoAt, scarto};
   }catch(e){ return null; }
 }
-async function fblCandeleCacheScrivi(asset,tf,rows,digits){
+async function fblCandeleCacheScrivi(asset,tf,rows,digits,scarto){
   if(!asset||!rows||!rows.length) return false;
   try{
     const tempo=new Float64Array(rows.length), open=new Float64Array(rows.length),
@@ -54119,7 +54930,11 @@ async function fblCandeleCacheScrivi(asset,tf,rows,digits){
     }
     const ultimoTs=tempo[tempo.length-1];
     const key=fblCandleCacheKey(asset,tf);
-    const ok=await idbPut(key,{tempo,open,high,low,close,volume,digits:digits||0,ultimoTs,salvatoAt:Date.now()});
+    // `scarto` = lo scarto orario che il ponte dichiara di aver applicato a questi tempi
+    // (utc_offset_seconds_applied). Senza, una serie vecchia non si puo' riallineare: il campo
+    // mancante resta null, MAI 0 (zero e' uno scarto vero, non un'assenza).
+    const scartoOk=(typeof scarto==='number' && Number.isFinite(scarto))?scarto:null;
+    const ok=await idbPut(key,{tempo,open,high,low,close,volume,digits:digits||0,ultimoTs,salvatoAt:Date.now(),scarto:scartoOk});
     if(!ok) return false;
     // indice LRU
     fblCandleCacheIndex=fblCandleCacheIndex.filter(k=>k!==key);
@@ -56543,6 +57358,12 @@ setInterval(()=>{
 },3000);
 
 async function krakenEseguiSegnale(voce,o){
+ // Stesse guardie dei segnali MT5/simulati: un segnale gia' applicato non si applica due
+ // volte, e non da una finestra che non e' autorizzata ad applicarlo.
+ if(voce&&voce.id!=null&&voce.id!==''){
+  const blocco=await tgPercheNonApplicareQui(voce);
+  if(blocco){ voce.autoMotivo=blocco; try{ tgRenderPannello(); }catch(e){} return false; }
+ }
  const p=o.piano;
  const gruppo='sg'+Date.now().toString(36)+Math.floor(Math.random()*1000).toString(36);
  // Con le quote, ogni target ha la sua quantita': su Kraken diventano gli ordini limite che
@@ -56551,6 +57372,7 @@ async function krakenEseguiSegnale(voce,o){
  const r=await krakenBridge('/segnale',{simbolo:o.simbolo,lato:p.side,quantita_per_tp:p.lotti,
    quantita_tp:Array.isArray(p.lottiTp)?p.lottiTp:[],
    tp:p.tp.slice(0,p.n),sl:p.sl,gruppo});
+ if(r.ok&&voce&&voce.id!=null&&voce.id!=='')tgSegnaleApplicatoRicorda(voce,1);
  if(!r.ok){
   voce.autoMotivo=krakenNome()+' non ha aperto: '+r.message;
   try{ tgRenderPannello(); }catch(e){}
@@ -59407,6 +60229,200 @@ function avviaSelezioneReplayLive(){
 let applicandoReplayRemoto=false;      // barriera anti-rimbalzo, come per trading_sync
 let fblReplayPerTutte=false;           // la scelta fatta alla domanda, valida per questo replay
 let fblPresenzaAttesa=null;            // chi si fa sentire mentre contiamo le finestre vive
+// UN OROLOGIO SOLO per il replay condiviso (15 novembre 2026, sera).
+//
+// RICHIESTO: «quando pigio il pulsante play deve avanzare anche su tutte le pagine duplicate...
+// in modo all'unisono preciso e coordinato». MISURATO il perche' non ci si arriva con un
+// battito per finestra: i browser rallentano i timer delle schede in secondo piano (e' la
+// lezione gia' pagata su replayElapsedMs), quindi tre finestre con tre setInterval avanzano a
+// tre ritmi diversi e nessuna resta allineata alle altre due.
+//
+// L'AUTORITA' e' la madre (slot 0); se non partecipa, lo slot PIU' BASSO fra quelli che stanno
+// rivedendo insieme. Avanza lei e PUBBLICA l'istante; le altre finestre non hanno un battito
+// proprio, applicano l'istante che arriva (rebuildRows fa la conversione sul proprio time
+// frame: una candela da 15 minuti sono 15 minuti su tutte, e su un grafico a un minuto sono
+// 15 candele, su uno a 5 minuti 3).
+let fblReplayInCorso=false;           // il battito dell'autorita' sta girando (PLAY premuto)
+// PAUSA ARMATA DEL REPLAY CONDIVISO (16 novembre 2026). Lo STOP, col replay «su tutte le
+// finestre», non esce piu' dal replay: FERMA l'orologio e lascia il replay ARMATO sull'istante
+// scelto, cosi' il PLAY riparte dallo STESSO secondo (richiesta del proprietario: «STOP pausa
+// dove è, PLAY riparte dallo stesso secondo»). Da soli lo STOP fa quello che ha sempre fatto:
+// torna all'ultima candela vera e in diretta (prova: replay_live.test.mjs n. 2).
+// L'USCITA resta una strada esplicita, e non sparisce con la pausa: STOP ripremuto con tutto
+// gia' fermo (fblReplayPausa acceso) esce dal replay, e con lui escono tutte le finestre.
+// Stessa regola del tasto PLAY: premuto una volta fa una cosa, la seconda fa l'altra.
+let fblReplayPausa=false;
+let fblReplaySlotMin=null;            // lo slot piu' basso fra i partecipanti: chi comanda
+let fblReplayUltimoInvioMs=0;         // throttle dell'annuncio dell'istante
+// TOLLERANZA DI SINCRONISMO: un fotogramma. Mentre scorre, l'istante si annuncia a questo
+// ritmo; i gesti (PLAY/PAUSA/STOP/frecce) portano invece l'istante ESATTO, quindi in quei
+// punti le finestre combaciano al millisecondo e non "a un fotogramma di distanza".
+const FBL_REPLAY_OGNI_MS=30;
+// Tiene traccia dello slot piu' basso visto fra i partecipanti: chi comanda. La madre (slot 0)
+// comanda sempre, se partecipa al replay condiviso.
+function fblReplayVistoSlot(slot){
+  if(Number.isFinite(slot)){
+    fblReplaySlotMin=(fblReplaySlotMin===null||fblReplaySlotMin===undefined)?slot:Math.min(fblReplaySlotMin,slot);
+  }else if(fblReplaySlotMin===null||fblReplaySlotMin===undefined){
+    fblReplaySlotMin=PIP_SLOT;
+  }
+}
+function fblReplaySonoAutorita(){
+  const m=(fblReplaySlotMin===null||fblReplaySlotMin===undefined)?PIP_SLOT:fblReplaySlotMin;
+  return PIP_SLOT<=m;
+}
+// Vero quando il replay è CONDIVISO: la scelta «su tutte» è stata fatta E questa finestra è
+// davvero in replay. In diretta (liveReplayActive spento) non c'e' niente da tenere insieme.
+function fblReplayCondiviso(){ return !!fblReplayPerTutte && !!liveReplayActive; }
+// ============ IL PASSO A FRECCETTA NEL REPLAY CONDIVISO (16 novembre 2026) ===================
+// REGOLA DEL PROPRIETARIO, letterale: «se pigio la freccettina di andare avanti sulla duplicata M5
+// e la madre è M1, sulla madre deve avanzare di 5 candele […] se è 30 minuti una finestra, un'altra
+// è 10 minuti, un'altra è 1 minuto, quella da 10 farà 3 salti in avanti, quella da 1 minuto salterà
+// 30 candele. Se invece sono sulla finestra con time frame da 1 minuto e ci sono le altre due
+// finestre che hanno 30 minuti e l'altra da 15 minuti, avanzeranno soltanto di pochissimo, ma non
+// avanza la candela, avanza soltanto l'evoluzione dell'estensione della candela.»
+//
+// IN UNA RIGA: il passo vale la DURATA DELLA CANDELLA DI CHI PREME, e chi riceve si mette su
+// quell'istante (rebuildRows). Su un time frame più grosso non cambia candela: cambia solo
+// l'evoluzione dentro la candela in formazione. Si usa LA STESSA STRADA DEI RICEVENTI
+// (fblReplayApplicaIstante), quindi per costruzione chi preme e chi riceve finiscono nello STESSO
+// stato: stesso prezzo della riga, stesso cartellino, stesso conteggio alla rovescia.
+//
+// MISURATO PRIMA DELLA CURA (banco passo_frecce_finestre.test.mjs): il passo era la durata giusta
+// solo a candela appena chiusa; da metà candela RIAVVOLGEVA, perché forward() avanzava di una
+// candela INTERA sulla griglia invece di partire dall'istante mostrato (M5 a 08:31: -1 min invece
+// di +5; ◀ dalla stessa posizione: -12 min invece di -5).
+//
+// L'AUTORITÀ AVANZA UNA CANDELLA ALLA VOLTA (non a salti): le posizioni e gli ordini pendenti si
+// valutano su OGNI candela attraversata, come a PLAY. A salti si salterebbe il target o lo stop
+// colpito in mezzo — e su un M1 che riceve un passo da M30 sarebbero 30 candele al buio.
+function fblReplayPasso(segno, continuo){
+ try{
+  const perBar=replaySecondsPerBar()*1000;      // durata di UNA candela di CHI PREME
+  const da=replayMomentoMostrato();
+  if(!Number.isFinite(da)||!Number.isFinite(perBar)||perBar<=0)return;
+  let t=da+((segno<0)?-perBar:perBar);
+  // Non si esce dai PROPRI dati: l'istante si ferma fra la prima e l'ultima candela vera.
+  const primaT=baseRows.length?parseDateTime(baseRows[0]&&baseRows[0].date):null;
+  const ultimaT=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
+  if(Number.isFinite(primaT)&&t<primaT)t=primaT;
+  if(Number.isFinite(ultimaT)&&t>ultimaT)t=ultimaT;
+  // Solo l'autorità consuma le candele (e quindi simula le posizioni): le altre applicano
+  // l'istante che arriva, esattamente come a PLAY.
+  if(fblReplaySonoAutorita()){
+   let giri=0;
+   while(giri++<20000){
+    const ora=replayMomentoMostrato();
+    if(!Number.isFinite(ora))break;
+    if((segno>0)?(ora>=t):(ora<=t))break;
+    if(!fblReplayUnaCandela(segno))break;
+    const dopo=replayMomentoMostrato();
+    // Fine dei PROPRI dati: non si muove più e non si annuncia niente a nessuno (regola del
+    // 16 novembre: una finestra corta non deve fermare il replay di tutte le altre).
+    if(!Number.isFinite(dopo)||dopo===ora)break;
+   }
+  }
+  fblReplayApplicaIstante(t);
+  try{ update(); }catch(e){}
+  // Viaggia l'istante DAVVERO raggiunto (se l'autorità si è fermata prima, lo dicono tutte).
+  // `!continuo`: premuto da un dito e' un GESTO e non si strozza mai (vedi fblAnnunciaReplay);
+  // chiamato dal battito (forward(true)) e' scorrimento e va strozzato come tutti gli altri.
+  fblAnnunciaReplay('istante', replayMomentoMostrato(), !continuo);
+ }catch(e){}
+}
+// UNA candela di questo time frame, dalla posizione in cui si è (formazione compresa), con la
+// valutazione: è la stessa strada dei riceventi, senza annuncio e senza disegno (li fa il passo).
+function fblReplayUnaCandela(segno){
+ const perBar=replaySecondsPerBar()*1000;
+ const da=replayMomentoMostrato();
+ if(!Number.isFinite(da)||!Number.isFinite(perBar)||perBar<=0)return false;
+ fblReplayApplicaIstante(da+((segno<0)?-perBar:perBar), true);
+ try{ evaluate(); }catch(e){}
+ try{ checkPendingOrders(); }catch(e){}
+ return true;
+}
+// APPLICA UN ISTANTE ARRIVATO DA UN'ALTRA FINESTRA. Non avanza niente da se': prende
+// l'istante e lo mette sul proprio time frame, che e' esattamente il lavoro che fa
+// rebuildRows() (su un grafico a 5 minuti la candela mostrata diventa quella che CONTIENE
+// quell'istante, con la sua chiusura parziale).
+// L'istante è ESATTO, fino al secondo di formazione. Su un grafico a un minuto le candele sono
+// intere: per mostrare lo stesso secondo del mittente la candela DOPO quella mostrata si mette
+// "in formazione" coi secondi che mancavano - cosi' prezzo della riga, cartellino e conteggio
+// alla rovescia sono gli stessi su tutte le finestre.
+function fblReplayApplicaIstante(t, silenzioso){
+  if(!Number.isFinite(t))return;
+  // QUESTA FINESTRA NON HA PIU' DATI FINO A QUEL PUNTO: esce dal replay DA SOLA, in silenzio.
+  // Prima annunciava 'stop' a tutte e il replay condiviso moriva al primo tocco (in Live lo
+  // storico si chiede con max=1000 candele, quindi una finestra corta basta). Regola del
+  // proprietario: le finestre con time frame diversi devono poter convivere.
+  if(baseRows.length){
+    const ultima=closeTimeOf(baseRows[baseRows.length-1]);
+    if(Number.isFinite(ultima)&&t>ultima){
+      const era=liveReplayActive;
+      esciReplayLive({esci:true, propaga:false});
+      fblReplayPerTutte=false;
+      fblReplaySlotMin=null;
+      if(era)try{ $('status').textContent='Questa finestra non ha dati fino al punto del replay: resta fuori, le altre continuano.'; }catch(e){}
+      if(!silenzioso)draw();
+      return;
+    }
+  }
+  liveReplayActive=true;
+  liveReplaySelecting=false;
+  replayForm=null;
+  masterTime=t;
+  rebuildRows();
+  // rebuildRows su TF=1 riporta masterTime al secondo intero della candela piu' vicina:
+  // l'istante esatto è quello arrivato, non il suo arrotondamento.
+  masterTime=t;
+  try{
+    // PER OGNI TIME FRAME, non solo quello a un minuto: su un grafico a 5 minuti la candela
+    // mostrata e' il bucket che CONTIENE l'istante (rebuildRows glielo dà parziale), e metterla
+    // "in formazione" con i secondi rimasti è lo stesso identico stato del mittente - così il
+    // prezzo della riga, il cartellino e l'istante leggibile (replayMomentoMostrato) sono gli
+    // stessi su tutte le finestre, anche dopo l'uscita dal replay.
+    {
+      const perBar=replaySecondsPerBar();
+      const st=parseDateTime(rows[idx]&&rows[idx].date);
+      if(Number.isFinite(st)){
+        // Quanti secondi di QUESTA candela sono gia' passati all'istante arrivato. Se e'
+        // negativo, la candela che CONTIENE l'istante e' la precedente (rebuildRows aveva
+        // scelto la piu' vicina al secondo intero).
+        let nel=Math.floor((t-st)/1000);
+        if(nel<0&&idx>0){ idx--; nel=nel+perBar; }
+        if(nel>0&&nel<perBar&&rows[idx+1]&&idx>0){
+          // L'istante cade DENTRO la candela mostrata: si torna sulla candela prima e la si
+          // mette in formazione, ESATTAMENTE come fa il mittente.
+          // `idx>0` NON è una precauzione: senza, sul PRIMO bucket di un time frame grosso
+          // (D1/mensile con poche candele) idx diventava -1 e rows[-1] non esiste — misurato:
+          // «la finestra D1 deve restare su una riga vera: oggi idx=-1».
+          idx--;
+          replayForm=replayAvviaFormazione(idx+1);
+          if(replayForm)replayForm.sub=nel;
+        }else if(nel>=perBar&&rows[idx+1]){
+          replayForm=replayAvviaFormazione(idx+1);
+          if(replayForm)replayForm.sub=perBar;
+        }
+      }
+      // INVARIANTE DI SINCRONISMO: chi riceve mostra ESATTAMENTE l'istante ricevuto. Le euristiche
+      // qui sopra scelgono la candela giusta; il secondo DENTRO di essa si ricava dall'istante, non
+      // si eredita da un conteggio che può sbagliare di una candela (misurato: la duplicata D1
+      // restava a 08:31 mentre la madre era a 08:32 — un minuto di scarto su un passo a freccia).
+      // replayMomentoMostrato() legge formation.date + sub: imponendo sub = istante - apertura,
+      // le due grandezze coincidono per costruzione, su qualunque time frame.
+      if(replayForm){
+        const apertura=parseDateTime(rows[replayForm.idx]&&rows[replayForm.idx].date);
+        if(Number.isFinite(apertura)){
+          replayForm.sub=Math.max(0,Math.round((t-apertura)/1000));
+        }else{
+          replayForm=null;
+        }
+      }
+    }
+  }catch(e){}
+  if(followLatest)viewEnd=idx;
+  if(!silenzioso)draw();
+}
 
 // Chiede chi c'e' e aspetta 300 ms. Risponde con l'elenco degli altri slot che si sono fatti
 // sentire. 300 ms perche' il canale fra finestre e' locale al browser: nelle misure del 15
@@ -59446,16 +60462,53 @@ async function fblChiediAmbitoReplay(){
 
 // L'annuncio alle altre. Non parte mentre stiamo APPLICANDO un annuncio altrui: e' la stessa
 // barriera che evita i cappi di messaggi, curata il 12 e il 15 novembre.
-function fblAnnunciaReplay(attivo,t){
+// L'ANNUNCIO ALLE ALTRE FINESTRE. `modo` dice di che cosa si tratta:
+//   'avvia'   - sono entrato in replay da questo punto
+//   'istante' - sto scorrendo: `t` e' l'istante ESATTO di adesso (replayMomentoMostrato)
+//   'play'    - l'orologio riparte (l'autorita' comincia ad avanzare e a pubblicare)
+//   'pausa'   - l'orologio si ferma, su `t`
+//   'stop'    - fermo tutto qui: `t' e' l'istante esatto, NON la fine dei dati
+// VIAGGIA L'ISTANTE (millisecondi), NON IL NUMERO DI CANDELE: ogni finestra lo converte da sé
+// sul proprio time frame, quindi «una candela da 15 minuti» sono 15 candele su un grafico a un
+// minuto e 3 su uno a 5 minuti, senza che nessuna finestra debba contare le candele altrui.
+// VIAGGIA ANCHE L'ASSET: il tempo di un asset su un grafico di un altro asset non vuole dire
+// niente (misurato il 15 novembre: la finestra GBP/USD entrava nel replay di EUR/USD perche'
+// questo messaggio non portava l'asset e il ramo che lo riceve non guardava il suo).
+//
+// `sempre` DISTINGUE IL GESTO DALLO SCORRIMENTO (16 novembre 2026, misurato).
+// Il throttle qui sotto esiste per un motivo vero: a moltiplicatore alto il battito pubblica piu'
+// volte al secondo e non c'e' ragione di intasare il canale. Ma un GESTO - il passo a freccia, il
+// PLAY, la pausa - porta l'istante ESATTO, e perdere un gesto vuol dire lasciare una finestra
+// indietro di una candela. Non era teoria: premendo ▶ sulla madre subito dopo un annuncio del
+// battito, l'annuncio del gesto cadeva dentro i 30 ms del throttle e non partiva piu'. Misurato nel
+// banco passo_frecce_finestre.test.mjs: madre a 08:32, duplicata D1 ferma a 08:31, con
+// `fblReplayUltimoInvioMs` scritto 11-15 ms prima del click e il ramo 'istante' che usciva.
+// Quindi: chi scorre chiama senza `sempre` (strozzato), chi preme chiama con `sempre` (consegnato).
+function fblAnnunciaReplay(modo,t,sempre){
   if(!tradingChannel||applicandoReplayRemoto)return;
   if(!fblReplayPerTutte)return;
+  const esatto=Number.isFinite(t)?t:null;
+  // Mentre scorre l'annuncio e' throttlato: uno ogni fotogramma (FBL_REPLAY_OGNI_MS), non uno
+  // a ogni fotogramma del battito. I gesti non sono throttlati: quelli portano l'istante esatto.
+  if(modo==='istante'&&!sempre){
+    const ora=Date.now();
+    if(ora-fblReplayUltimoInvioMs<FBL_REPLAY_OGNI_MS)return;
+    fblReplayUltimoInvioMs=ora;
+  }else if(modo==='istante'){
+    // Anche il gesto aggiorna il segnaposto, altrimenti il battito che riparte subito dopo
+    // troverebbe il throttle "libero" e pubblicherebbe due volte di fila.
+    fblReplayUltimoInvioMs=Date.now();
+  }
+  fblReplayVistoSlot(PIP_SLOT);
   try{ tradingChannel.postMessage({type:'replay_sync',slot:PIP_SLOT,at:Date.now(),
-    attivo:!!attivo, t:Number.isFinite(t)?t:null}); }catch(e){}
+    asset:currentAssetKey||null, modo, attivo:modo!=='stop',
+    t:esatto}); }catch(e){}
 }
 function avviaReplayLive(t,opz){
   if(!liveModeActive||!Number.isFinite(t))return;
   liveReplaySelecting=false; liveReplayGuideClientX=null;
   liveReplayActive=true;
+  fblReplayPausa=false;                // un replay nuovo non parte in pausa
   masterTime=t;
   rebuildRows();
   followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
@@ -59466,24 +60519,80 @@ function avviaReplayLive(t,opz){
   draw();update();
   try{ $('status').textContent=`🔁 Replay dal ${liveReplayStamp(masterTime)} • candela ${idx+1}/${rows.length}. Avanza con ◀ ▶ o PLAY, esci con ⏹ STOP.`; }catch(e){}
   // Se la scelta e' stata "su tutte le finestre", le altre partono dallo stesso punto.
-  if(!(opz&&opz.propaga===false))fblAnnunciaReplay(true,t);
+  if(!(opz&&opz.propaga===false)){
+    // La traccia dell'autorita' riparte da capo: quella di prima e' di un replay finito, con
+    // finestre che nel frattempo possono avere chiuso.
+    fblReplaySlotMin=null;
+    fblReplayVistoSlot(PIP_SLOT);
+    fblReplayInCorso=false;
+    fblAnnunciaReplay('avvia',t);
+  }
 }
 // Esce dal replay e torna in diretta (tasto STOP). Le posizioni simulate e gli ordini pendenti
 // sono SEMPRE rimasti agganciati all'ultima candela vera durante il replay (vedi evaluate()), quindi
 // non c'è nulla da "recuperare": basta riportare la vista all'ultima candela.
 function esciReplayLive(opz){
   const era=liveReplayActive;
+  // L'ISTANTE ESATTO A CUI FERMARSI, col secondo di formazione dentro (replayMomentoMostrato).
+  //
+  // RICHIESTO (15 novembre): «il tasto stop ferma su tutte le pagine duplicate allo stesso tempo e
+  // allo stesso prezzo, senza sfalsati, e quando ripremo il tasto play rifà ripartire in maniera
+  // precisa lo scorrimento delle candele». QUI C'ERA IL MOTIVO DELLO SFALSAMENTO: questa funzione
+  // rimetteva masterTime all'ULTIMA CANDELA dei dati (closeTimeOf(baseRows[ultima])) e
+  // rebuildRows() ricostruiva tutta la vista di colpo. La finestra che aveva premuto STOP
+  // schizzava in fondo al possibile, e le altre restavano dove erano - o ricevevano un t nullo
+  // e ci saltavano a loro volta. Misurato: fino a 600 candele e 10 minuti di mercato di scarto.
+  // `opz.istante` arriva dallo STOP di un'altra finestra: è l'istante esatto di chi ha premuto,
+  // e vale più del proprio (che può essere indietro di un fotogramma).
+  const tEsatto=(opz&&Number.isFinite(opz.istante))?opz.istante:replayMomentoMostrato();
+  // LA SCELTA «SU TUTTE» CAMBIA IL SIGNIFICATO DELLO STOP, ed è ragionevole che sia cosi'.
+  // Da soli non c'e' niente da tenere insieme: lo STOP fa quello che ha sempre fatto, riporta
+  // all'ULTIMA CANDELA VERA e in diretta (prova: laboratorio/app/replay_live.test.mjs, n. 2).
+  // Col replay condiviso invece DEVE FERMARE DOV'E' SI E', tutte le finestre sullo stesso
+  // istante e allo stesso prezzo - la richiesta del proprietario del 15 novembre - perche' il
+  // salto all'ultima candela è esattamente lo sfalsamento che qui si sta curando.
+  //
+  // DAL 16 NOVEMBRE LA REGOLA E' GENERALE («STOP = pausa sul punto, PLAY = ripartenza dallo
+  // stesso secondo»), quindi col replay condiviso lo STOP NON esce piu': ARMA il replay e
+  // ripremendolo, a orologio fermo, esce (strada esplicita conservata - cambio asset e fine
+  // dei dati escono comunque, passando {esci:true}).
+  const _condiviso=!!fblReplayPerTutte;
+  const _pausa=_condiviso&&!(opz&&opz.esci)&&!fblReplayPausa;
+  if(_pausa){
+   // PAUSA ARMATA: non si esce dal replay e non si butta via niente. L'orologio si ferma, la
+   // formazione (replayForm) NON si azzera: un PLAY qui dopo riprende dallo STESSO secondo
+   // (startPlayInterval la conserva, prova in replay_stop.test.mjs). Le altre finestre
+   // ricevono l'istante esatto con modo 'pausa', che le lascia in replay dov'erano.
+   liveReplaySelecting=false; liveReplayGuideClientX=null;
+   fblReplayPausa=true;
+   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
+   fblReplayInCorso=false;
+   if(Number.isFinite(tEsatto))masterTime=tEsatto;
+   updateLiveReplayUI();
+   draw();update();
+   if(era)try{ $('status').textContent='⏹ Replay in pausa dal '+liveReplayStamp(tEsatto)+': premi PLAY per riprendere dallo stesso secondo, STOP di nuovo per uscire.'; }catch(e){}
+   if(!(opz&&opz.propaga===false))fblAnnunciaReplay('pausa', tEsatto);
+   return;
+  }
+  fblReplayPausa=false;
   liveReplayActive=false; liveReplaySelecting=false; liveReplayGuideClientX=null;
   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
-  if(baseRows.length)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
-  rebuildRows();
-  followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+  fblReplayInCorso=false;
+  if(_condiviso){
+    // Uscita vera dal replay condiviso: NON si ricostruiscono le righe e NON si tocca la
+    // vista, si RESTA FERMI dove si è. La formazione non si azzera.
+    if(Number.isFinite(tEsatto))masterTime=tEsatto;
+  }else{
+    if(baseRows.length)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+    rebuildRows();
+    followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
+  }
   updateLiveReplayUI();
   draw();update();
-  if(era)try{ $('status').textContent='⏹ Replay terminato: sei di nuovo in diretta.'; }catch(e){}
+  if(era)try{ $('status').textContent='⏹ Replay fermato: premi PLAY per riprendere dallo stesso punto.'; }catch(e){}
   // Lo STOP segue la stessa scelta dell'avvio: se il replay era su tutte, si fermano tutte.
   if(!(opz&&opz.propaga===false)){
-    fblAnnunciaReplay(false,null);
+    fblAnnunciaReplay('stop', tEsatto);
     fblReplayPerTutte=false;          // il prossimo replay rifara' la domanda
   }
 }

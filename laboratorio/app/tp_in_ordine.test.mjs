@@ -85,8 +85,14 @@ test('tutti i punti che leggono i take profit passano dallo stesso ordinamento',
     'il pannello');
   assert.match(src, /const tps=tgTpInOrdine\(seg\.take_profit,seg\.direzione\);\r?\n tgCfg=\{/,
     'la finestra di configurazione');
-  assert.match(src, /const tutti=tgTpInOrdine\(seg\.take_profit,side\)/,
+  // L'apertura vera (v2.2.60) ordina una volta sola e poi FILTRA da quella lista ordinata:
+  // prima era `const tutti=tgTpInOrdine(...)`, ora `tpDichiarati` (l'elenco grezzo ordinato,
+  // che serve a contare i TP dichiarati dalla sala) e `tutti` che ne deriva. Il requisito non
+  // cambia: la lista che si apre deve venire dall'ordinamento, mai dall'ordine di scrittura.
+  assert.match(src, /const tpDichiarati=tgTpInOrdine\(seg\.take_profit,side\);/,
     'l apertura vera delle posizioni');
+  assert.match(src, /const tutti=tpDichiarati\.filter\(/,
+    'la lista aperta deve discendere da quella ordinata');
 });
 
 test('il rifiuto dello stop dice QUALE numero sta guardando', () => {

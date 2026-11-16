@@ -24,6 +24,23 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
 - Prima di dire che una versione è online, controllare `CACHE_NAME` su `origin/main`.
 - Niente `git push --force`, niente riscrittura della storia.
 
+## REGOLA DEL PONTE FRA LE FINESTRE — scritta il 16 novembre 2026, dal proprietario
+
+> «per le posizioni la prioritaria è la pagina madre, per il discorso sale aperture automatiche.»
+
+Tradotta in regola operativa, perché valga per tutti i fronti aperti:
+
+- La **madre** (slot 0; se manca, lo slot più basso fra quelli aperti) è l'**autorità unica** per
+  tutto ciò che **agisce** sul conto: aperture automatiche, segnali delle sale, chiusure, stop,
+  target, suoni di apertura/chiusura, scritture nel Journal.
+- Le finestre duplicate **non rilevano niente per conto proprio** e **non aprono niente**: ereditano
+  lo stato dal canale fra finestre, **in silenzio** (il parametro «silenzioso» che il progetto già
+  usa altrove, riga ~59529: *la UI si aggiorna, la transizione non si racconta*).
+- Conseguenza voluta: con due duplicate aperte lo stesso segnale non parte tre volte (misurato: 3
+  aperture, 3×4 posizioni invece di 4). Sui soldi veri è tre volte il rischio.
+- Vale anche per il **replay**: un solo orologio, la madre avanza e pubblica l'istante.
+- **NON** vale per il mirino, che continua a viaggiare in tutte le direzioni.
+
 ## Qualità
 - Nessuna correzione senza test che la dimostri (`laboratorio/`).
 - `bash laboratorio/collauda.sh` deve essere verde prima di proporre una modifica.

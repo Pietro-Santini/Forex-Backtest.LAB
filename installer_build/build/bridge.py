@@ -2080,13 +2080,26 @@ def _normalize_news_event(item: dict) -> Optional[dict]:
     }
 
 
+_HTTP_UA = {"User-Agent": "Mozilla/5.0 (compatible; ForexBacktestLAB/1.0)"}
+
+
+def _http_get_bytes(url, timeout=10, headers=None):
+    """UNICO punto da cui il ponte fa uscire una richiesta HTTP per le notizie.
+
+    Perche' e' una funzione e non una riga dentro i due posti che la usano: perche' il banco di
+    prova (`laboratorio/ponte/test_news_actual.py`) la sostituisce e NESSUNA prova tocca la rete
+    (il collaudo gira anche su GitHub, dove la rete esterna e' bloccata, e un test che dipende da
+    internet e' rosso la' e verde qui - vedi la lezione del 16 ottobre 2026). Una futura aggiunta
+    che chiamasse `urllib.request.urlopen` per conto suo sfuggirebbe al banco: la prova
+    `test_ogni_richiesta_passa_dal_seam_e_mai_dritta_a_urlopen` esiste esattamente per questo.
+    """
+    richiesta = urllib.request.Request(url, headers=_HTTP_UA if headers is None else headers)
+    with urllib.request.urlopen(richiesta, timeout=timeout) as risposta:
+        return risposta.read()
+
+
 def _fetch_news_from_feed() -> list:
-    req = urllib.request.Request(
-        _NEWS_FEED_URL,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; ForexBacktestLAB/1.0)"},
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        raw = resp.read()
+    raw = _http_get_bytes(_NEWS_FEED_URL, timeout=10)
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
@@ -2138,6 +2151,657 @@ def news():
         _news_cache["last_error"] = None
     _save_news_cache_to_disk(events, now)  # vedi commento sopra _load_news_cache_from_disk
     return {"events": events, "cached": False, "fetched_at": now}
+
+
+# ============ ACTUAL DELLE NOTIZIE — FONTI UFFICIALI (15 NOVEMBRE 2026) ==================
+# Chiesto dal proprietario: «Cerchiamo in qualche modo di prendere in tempo reale l'actual per le
+# notizie appena viene pubblicato, che arrivano per le notizie medio/grave, arancioni/gialle/rosse».
+# Fra quattro strade ha scelto: fonti ufficiali per i dati che contano.
+#
+# PERCHE' NON BASTA IL CALENDARIO. `ff_calendar_thisweek.json` e' un PROGRAMMA settimanale e non
+# riporta mai l'actual (misurato: un FOMC Statement delle 14:00 controllato dopo le 16 aveva
+# ancora `actual: null`). Non e' un problema di frequenza: il ponte scende gia' a 2 minuti di TTL
+# vicino a un evento. Quindi serve un'altra fonte, e dev'essere ufficiale: sono i numeri con cui
+# si muovono i mercati, e un actual sbagliato e' peggio di un actual mancante.
+#
+# COSA HO MISURATO DAVVERO, CON RICHIESTE VERE, IL 15 NOVEMBRE 2026 (status, byte, tempo, valore):
+#   BLS  api.bls.gov/publicAPI/v2/timeseries/data/CUUR0000SA0?startyear=2025&endyear=2026
+#        200, 2145 byte, 0,90 s - punto piu' recente 2026-M10 = 337.511 (ottobre 2026)
+#   BLS  .../CES0000000001  200, 2117 byte - 2026-M10 = 159293 migliaia (Total nonfarm)
+#   BLS  .../CUUR0000SA0L1E 200, 2148 byte - 2026-M10 = 339.921 (CPI senza cibo ed energia)
+#   BLS  .../LNS14000000    200, 2227 byte - 2026-M10 = 4.1 (tasso di disoccupazione)
+#   BLS  .../CES0500000003  200, 2095 byte - 2026-M10 = 38.00 (retribuzione oraria media)
+#   BLS  .../WPSFD4         200, 2562 byte - 2026-M10 = 160.254 (PPI domanda finale, destag.)
+#
+# LA MISURA CHE HA CAMBIATO LA TABELLA (15 novembre 2026, ore 20:21-20:45 UTC, sempre da questo PC,
+# richieste vere con lo stesso indirizzo): il CPI ha DUE serie, e il numero di chi le guarda
+# dipende da quale si sceglie.
+#   BLS  .../CUSR0000SA0   (indice CPI destagionalizzato)  200, 2145 byte
+#        2026-M10 = 337.476, 2026-M09 = 336.298, 2026-M08 = 334.131
+#   BLS  .../CUUR0000SA0   (indice CPI NON destagionalizzato) 200, 2145 byte
+#        2026-M10 = 337.511, 2026-M09 = 336.940, 2026-M08 = 334.980
+#   BLS  .../CUSR0000SA0L1E (Core CPI destagionalizzato) 200, 2148 byte
+#        2026-M10 = 339.900, 2026-M09 = 338.896
+# A parita' di mese la variazione MENSILE e' diversa:
+#        destagionalizzata  337.476 / 336.298 - 1 = +0,350%  -> arrotondato 0,35
+#        non destagionaliz. 337.511 / 336.940 - 1 = +0,169%  -> arrotondato 0,17
+# Il numero che il mercato e il comunicato BLS chiamano «CPI m/m» e' il DESTAGIONALIZZATO
+# (0,35 di ottobre 2026), non 0,17. Per la variazione ANNUA il comunicato usa invece l'indice NON
+# destagionalizzato, quindi lo y/y resta su CUUR. Da qui le DUE serie nella tabella: stessa
+# famiglia, due calcoli, due indirizzi, due interrogazioni.
+# E L'ULTIMA MISURA, FATTA PER SBAGLIO E TENUTA PERCHE' SERVE (15 novembre 2026, dopo le tre
+# richieste qui sopra): la quarta risposta BLS e' stata
+#     HTTP 200, 224 byte, status REQUEST_NOT_PROCESSED, message "the daily threshold for total
+#     number of requests allocated to the user with registration key has been reached"
+# cioe' il tetto giornaliero VERO della fonte, raggiunto e detto dalla fonte stessa. Due cose da
+# questa misura: (1) il tetto di 25 al giorno non e' una leggenda, si esaurisce in quattro
+# richieste se l'indirizzo ne ha gia' fatte altre; (2) e' la forma esatta del rifiuto, e la rotta
+# la tratta giusta - diventa un `motivo`, non un valore inventato (vedi _news_actual_bls_punti).
+# Con questa misura il confronto sulle retribuzioni orarie (CES0500000003 e' destagionalizzata?)
+# resta ipotesi: la quota della giornata era finita. Da rifare, non da indovinare.
+#   Fed  federalreserve.gov/feeds/press_all.xml  200, 14607 byte: fra i 20 item c'e'
+#        «Federal Reserve issues FOMC statement», Wed, 28 Oct 2026 18:00 GMT, link
+#        .../newsevents/pressreleases/monetary20261028a.htm; la pagina (200, 83055 byte) dice
+#        «target range for the federal funds rate at 3-3/4 to 4 percent».
+#   SCARTATE, con il motivo misurato:
+#     - FRED (fred.stlouisfed.org/graph/fredgraph.csv?id=DFF): timeout dopo 15 s da questo PC.
+#     - Eurostat prc_hicp_manr: risponde 200 ma e' FERMO a 2025-12 con "updated":"2026-02-06",
+#       cioe' undici mesi indietro rispetto agli altri dati: un numero cosi' non e' un actual, e
+#       mostrarlo sarebbe peggio di un trattino. Non e' in tabella finche' non si rivede.
+#     - la pagina dei limiti della BLS: 403 Forbidden (non ho potuto rileggerla, i limiti sotto
+#       sono quelli dichiarati dalla loro documentazione, non misurati da me).
+#     - Bank of England / BIS / EIA: gli indirizzi gia' provati erano 404 (vedi
+#       cervello/PROGETTO-TABELLA-NOTIZIE.md). Non sono in tabella.
+#
+# PERCHE' STA NEL PONTE E NON NELL'APP. La cache dev'essere una per computer: piu' finestre
+# aperte non devono moltiplicare le richieste. E' l'errore gia' misurato il 15 novembre sul ponte
+# MT5 (da ~27 letture in 6 secondi con una finestra a ~83 con tre). E qui c'e' anche un tetto
+# giornaliero vero dalla parte della fonte: la BLS, senza chiave, concede 25 interrogazioni al
+# giorno per indirizzo IP e 10 anni di dati per interrogazione (documentazione BLS; non l'ho
+# esaurito di proposito, avrebbe rotto le prove per il resto della giornata).
+#
+# QUANTO COSTA, e perche' le cache hanno DUE velocita'. Si chiede solo per eventi High/Medium e
+# solo entro +-20 minuti dall'orario (_NEWS_FAST_WINDOW_SECONDS, lo stesso del calendario). Prima
+# dell'evento il valore non puo' essere uscito, quindi si guarda poco; appena uscito si guarda
+# spesso (2 minuti) per prenderlo in tempo; trovato il dato del mese atteso, la voce diventa
+# "definitiva" e si tiene 6 ore. Conti fatti: un giorno di Non-Farm (3 serie) ~9 interrogazioni,
+# un giorno di CPI ~6.
+# DA RIFARE DOPO LA DIVISIONE IN DUE SERIE DEL CPI (15 novembre 2026). Prima «CPI m/m» e «CPI y/y»
+# condividevano un'indice e quindi una lettura: ora no (destagionalizzato qui, non là). Nel giorno
+# peggiore - un CPI con m/m E y/y nello stesso minuto, entrambi High, con l'app che bussa per
+# tutti i TTL della finestra - sono 11 letture per serie, cioe' 22 per la famiglia CPI. Aggiungendo
+# il Non-Farm e la disoccupazione dello stesso giorno la somma sfonda le 25 dichiarate dalla BLS.
+# IL TETTO NOSTRO (20) E' LA DIFESA, e ora è piu' utile di prima: chi arriva dopo trova scritto
+# «quota raggiunta», che è una risposta onesta, e mai un 403 della fonte lasciato li' a spiegarsi
+# da solo. Se un giorno diventasse troppo stretto la strada giusta è una richiesta BLS sola per le
+# due serie del CPI (la loro API accetta piu' serie per chiamata), non alzare il tetto.
+#
+# LA TRAPPOLA CHE RENDE ONESTA QUESTA ROTTA: BLS e' un indice, non "il valore uscito". Se si
+# restituisse semplicemente il punto piu' recente, venti minuti PRIMA del CPI si mostrerebbe il
+# dato del mese prima come se fosse quello di oggi - un numero giusto con la data sbagliata, che
+# e' la cosa peggiore che una tabella di notizie possa fare. Percio' si confronta il periodo del
+# dato con il mese ATTESO (il mese precedente l'evento): se non combaciano, `valore` e' None e il
+# `motivo` dice quale dato c'e' davvero nella fonte.
+_NEWS_ACTUAL_WINDOW_SECONDS = _NEWS_FAST_WINDOW_SECONDS
+_NEWS_ACTUAL_BLS_URL = ("https://api.bls.gov/publicAPI/v2/timeseries/data/%s"
+                        "?startyear=%d&endyear=%d")
+_NEWS_ACTUAL_FED_FEED = "https://www.federalreserve.gov/feeds/press_all.xml"
+_NEWS_ACTUAL_TTL_DEFINITIVO = 6 * 60 * 60   # dato del mese atteso gia' trovato: non cambia piu'
+_NEWS_ACTUAL_TTL_ERRORE = 2 * 60            # una fonte che sbaglia non si tempesta di richieste
+_NEWS_ACTUAL_QUOTA_GIORNO = 20              # nostro tetto, sotto le 25/giorno dichiarate dalla BLS
+
+# ANCHE LA FED HA UN TETTO, E NON ERA DETTO DA NESSUNA PARTE (15 novembre 2026).
+# La BLS ha un limite dichiarato e noi ce lo siamo imposto. La Fed non ne dichiara uno, ma la
+# realta' dei numeri e' la stessa se non peggio: una lettura del tasso costa DUE richieste (il feed
+# dei comunicati + la pagina del comunicato). Con i TTL qui sopra, nella finestra di venti minuti
+# intorno a un FOMC sono circa 11 letture, cioe' 22 visite a federalreserve.gov da un solo
+# indirizzo IP - e senza un tetto non si ferma niente, perche' l'unico limite era il TTL. Se quel
+# sito inizia a rispondere 403/429 (ogni giorno capita a qualcuno), il valore diventerebbe
+# irraggiungibile per ore senza che nessuno sappia perche'. Quindi lo stesso contatore della BLS,
+# con un numero piu' largo (la Fed non ha limiti dichiarati, il tetto qui e' nostro) e contato a
+# LETTURA, non a singola visita: la pagina e il feed sono una sola notizia.
+_NEWS_ACTUAL_QUOTA_FED_GIORNO = 40          # letture del comunicato al giorno (~80 visite)
+# L'errore sulla Fed si ricorda PIU' a lungo che sulla BLS: una pagina del comunicato che cambia
+# forma resta cambiata per settimane, e tornare a chiederla ogni 2 minuti per un pomeriggio sono
+# decine di visite inutili verso un sito che non si lamenta: semplicemente chiude.
+_NEWS_ACTUAL_TTL_ERRORE_FED = 10 * 60
+
+# LA TABELLA DI CORRISPONDENZA fra il titolo dell'evento nel calendario e la serie ufficiale.
+# `parole` sono sottostringhe del titolo in minuscolo (spazi gia' normalizzati), `senza` esclude
+# (serve perche' «Core CPI m/m» contiene anche «cpi m/m»), `paese` e' il campo `country` del
+# calendario - INDISPENSABILE: «CPI m/m» esiste anche per EUR e GBP, e senza la valuta si
+# mostrerebbe il CPI americano sotto un evento europeo.
+# `calcolo`: "m/m" e "y/y" = variazione percentuale; "delta" = differenza in migliaia (le serie
+# BLS del lavoro sono gia' in migliaia); "livello" = il valore cosi' com'e'.
+#
+# DUE SERIE PER IL CPI, E NON E' UN DETTAGLIO (misura del 15 novembre 2026 nel commento qui
+# sopra): la variazione MENSILE si calcola sull'indice DESTAGIONALIZZATO (CUSR...) e quella
+# ANNUA sull'indice NON destagionalizzato (CUUR...). Sono due indirizzi BLS diversi e quindi due
+# interrogazioni: «CPI m/m» e «CPI y/y» non condividono piu' la lettura. In compenso il numero
+# mostrato e' quello che il mercato chiama con quel nome (0,35 di ottobre 2026, non 0,17).
+# La stessa coppia vale per il Core CPI: CUUR0000SA0L1E per lo y/y, CUSR0000SA0L1E per l'm/m
+# (misurato: 200, 2148 byte, 2026-M10 = 339.900 su M09 = 338.896).
+_NEWS_ACTUAL_REGOLE = [
+    {"paese": "USD", "parole": ("core cpi", "m/m"), "senza": (),
+     "serie": "CUSR0000SA0L1E", "fonte": "BLS", "calcolo": "m/m", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("core cpi", "y/y"), "senza": (),
+     "serie": "CUUR0000SA0L1E", "fonte": "BLS", "calcolo": "y/y", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("cpi", "m/m"), "senza": ("core",),
+     "serie": "CUSR0000SA0", "fonte": "BLS", "calcolo": "m/m", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("cpi", "y/y"), "senza": ("core",),
+     "serie": "CUUR0000SA0", "fonte": "BLS", "calcolo": "y/y", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("non-farm employment change",), "senza": (),
+     "serie": "CES0000000001", "fonte": "BLS", "calcolo": "delta", "unita": "migliaia",
+     "fresco": True},
+    {"paese": "USD", "parole": ("nonfarm payrolls",), "senza": (),
+     "serie": "CES0000000001", "fonte": "BLS", "calcolo": "delta", "unita": "migliaia",
+     "fresco": True},
+    {"paese": "USD", "parole": ("unemployment rate",), "senza": (),
+     "serie": "LNS14000000", "fonte": "BLS", "calcolo": "livello", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("average hourly earnings", "m/m"), "senza": (),
+     "serie": "CES0500000003", "fonte": "BLS", "calcolo": "m/m", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("ppi", "m/m"), "senza": ("core",),
+     "serie": "WPSFD4", "fonte": "BLS", "calcolo": "m/m", "unita": "%", "fresco": True},
+    {"paese": "USD", "parole": ("federal funds rate",), "senza": (),
+     "serie": "FOMC statement", "fonte": "Fed", "calcolo": "fed", "unita": "%", "fresco": False},
+]
+
+_news_actual_lock = threading.Lock()
+# serie -> {"dato": punti BLS oppure esito Fed, "errore": messaggio o None,
+#           "letto_il": quando, "definitivo": True se il dato del periodo atteso e' gia' arrivato}
+_news_actual_cache = {}
+_news_actual_quota = {"giorno": None, "usate": 0}
+_news_actual_quota_fed = {"giorno": None, "usate": 0}
+
+
+def _news_actual_giorno() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+
+
+def _news_actual_quota_verifica(contatore, tetto, testo_tetto):
+    """Guarda se il tetto del giorno e' esaurito, SENZA consumare niente.
+
+    LA SEPARAZIONE FRA VERIFICA E CONSUMO ESISTE DAL 15 NOVEMBRE 2026, ed e' la cura di un difetto
+    pagato in chiaro: prima un'unica funzione verificava E consumava PRIMA della richiesta. Con una
+    fonte che sbaglia (timeout, 500, rate-limit) e un TTL d'errore di 2 minuti, un pomeriggio di
+    errori azzerava la giornata: venti risposte negative lasciavano la rotta a dire «quota
+    raggiunta» fino a domani, anche se di interrogazioni BUONE ne aveva fatte zero. Un tetto che
+    si consuma senza aver preso niente non e' un tetto: e' un modo per restare al buio.
+    """
+    giorno = _news_actual_giorno()
+    with _news_actual_lock:
+        if contatore["giorno"] != giorno:
+            contatore["giorno"] = giorno
+            contatore["usate"] = 0
+        if contatore["usate"] >= tetto:
+            raise RuntimeError(testo_tetto)
+
+
+def _news_actual_quota_consuma(contatore):
+    """Conta UNA lettura RIUSCITA. Si chiama solo dopo che la fonte ha risposto e la risposta e'
+    stata capita: una richiesta fallita non toglie niente a chi viene dopo."""
+    giorno = _news_actual_giorno()
+    with _news_actual_lock:
+        if contatore["giorno"] != giorno:
+            contatore["giorno"] = giorno
+            contatore["usate"] = 0
+        contatore["usate"] += 1
+
+
+def _news_actual_normalizza(testo) -> str:
+    """Minuscolo, spazi compattati, niente spazi insicuri: « CPI  m/m » e «cpi m/m» sono lo stesso
+    evento. Non si tolgono «m/m» o «y/y»: sono la differenza fra due numeri diversi."""
+    return " ".join(str(testo or "").replace("\u00a0", " ").lower().split())
+
+
+def _news_actual_regola(titolo, valuta):
+    """La riga di tabella che riguarda questo evento, oppure None. L'ordine conta: le regole con
+    «core» vengono prima, e quelle generiche escludono «core» per non prenderselo."""
+    t = _news_actual_normalizza(titolo)
+    v = str(valuta or "").strip().upper()
+    for regola in _NEWS_ACTUAL_REGOLE:
+        if regola["paese"] != v:
+            continue
+        if any(p not in t for p in regola["parole"]):
+            continue
+        if any(p in t for p in regola["senza"]):
+            continue
+        return regola
+    return None
+
+
+def _news_actual_mese(epoch, indietro=1) -> str:
+    """Periodo 'YYYY-MM' di `indietro` mesi prima di epoch: e' il mese che un evento pubblicato
+    oggi dovrebbe riportare (il CPI di novembre riporta ottobre)."""
+    dt = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).replace(
+        day=1, hour=0, minute=0, second=0, microsecond=0)
+    for _ in range(indietro):
+        dt = (dt - datetime.timedelta(days=1)).replace(day=1)
+    return "%04d-%02d" % (dt.year, dt.month)
+
+
+def _news_actual_bls_punti(serie, timeout=10):
+    """Punti (periodo, valore) della serie BLS, dal piu' recente. Solleva con un messaggio leggibile
+    se la fonte risponde male: chi chiama lo trasforma in `motivo`, mai in un errore 500."""
+    url = _news_actual_bls_url(serie)
+    _news_actual_quota_verifica(
+        _news_actual_quota, _NEWS_ACTUAL_QUOTA_GIORNO,
+        "quota giornaliera delle fonti ufficiali raggiunta (%d interrogazioni): il valore "
+        "torna disponibile domani" % _NEWS_ACTUAL_QUOTA_GIORNO)
+    grezzo = _http_get_bytes(url, timeout=timeout)
+    try:
+        dati = json.loads(grezzo.decode("utf-8", "replace"))
+    except ValueError:
+        raise ValueError("la BLS ha risposto con qualcosa che non e' JSON "
+                         "(blocco, pagina HTML o rate-limit)")
+    stato = dati.get("status")
+    if stato != "REQUEST_SUCCEEDED":
+        messaggio = dati.get("message")
+        if isinstance(messaggio, list):
+            messaggio = " ".join(str(m) for m in messaggio)
+        raise ValueError("la BLS ha risposto %s: %s" % (stato, str(messaggio or "")[:200]))
+    try:
+        grezzi = dati["Results"]["series"][0]["data"]
+    except (KeyError, IndexError, TypeError):
+        raise ValueError("la risposta della BLS non ha la forma attesa (Results.series[0].data)")
+    punti = []
+    for voce in grezzi:
+        try:
+            periodo = str(voce.get("period") or "")
+            valore = voce.get("value")
+        except AttributeError:
+            continue
+        # M13 e' la media annuale, non un mese. "-" e' il segnaposto BLS per "dato non disponibile":
+        # e' un valore ASSENTE e non deve diventare zero (la lezione di Number(null) vale anche qui).
+        if not re.fullmatch(r"M(0[1-9]|1[0-2])", periodo):
+            continue
+        if valore in (None, "", "-"):
+            continue
+        try:
+            numero = float(valore)
+        except (TypeError, ValueError):
+            continue
+        punti.append({"periodo": "%s-%s" % (voce.get("year"), periodo[1:]),
+                      "valore": numero})
+    if not punti:
+        raise ValueError("la BLS non ha restituito nessun punto utilizzabile per la serie %s" % serie)
+    # LA QUOTA SI CONSUMA QUI, non prima della richiesta (punto 4 della revisione del
+    # 15 novembre 2026): venti fallimenti di fila non devono chiudere la giornata a chi arriva dopo.
+    _news_actual_quota_consuma(_news_actual_quota)
+    return punti
+
+
+def _news_actual_bls_url(serie) -> str:
+    """L'indirizzo vero della serie.
+
+    TRE ANNI DI STORIA, non due: per una variazione ANNUA di un evento di GENNAIO (il CPI di
+    gennaio riporta dicembre) serve il dato di DUE anni prima - dicembre di anno-2. Con
+    `startyear=anno-1` quel mese non arriva e lo y/y di gennaio era muto («la fonte non ha il dato
+    di ...»). Misurato: la BLS senza chiave dà fino a 10 anni per interrogazione, quindi due anni
+    in piu' non costano nulla (la richiesta resta una sola)."""
+    anno = datetime.datetime.now(datetime.timezone.utc).year
+    return _NEWS_ACTUAL_BLS_URL % (serie, anno - 2, anno)
+
+
+def _news_actual_fed_tasso(timeout=10):
+    """L'intervallo obiettivo del federal funds rate, dall'ULTIMO comunicato FOMC.
+
+    Due richieste: il feed dei comunicati (per trovare l'ultimo «FOMC statement») e la pagina del
+    comunicato (dove il numero e' scritto in prosa: «target range for the federal funds rate at
+    3-3/4 to 4 percent»). Misurato il 15 novembre 2026 sul comunicato del 28 ottobre 2026.
+    Restituisce l'estremo SUPERIORE come `valore` (e' la convenzione del calendario) e l'intervallo
+    per esteso in `intervallo`, cosi' l'app puo' scrivere «3.75-4.00%» invece di un numero solo.
+    Il tetto giornaliero della Fed si guarda PRIMA delle due richieste e si consuma DOPO (punto 4):
+    un feed muto non deve costare la giornata.
+    """
+    import email.utils
+    import xml.etree.ElementTree as ET
+
+    _news_actual_quota_verifica(
+        _news_actual_quota_fed, _NEWS_ACTUAL_QUOTA_FED_GIORNO,
+        "quota giornaliera delle letture della Fed raggiunta (%d letture): il valore torna "
+        "disponibile domani" % _NEWS_ACTUAL_QUOTA_FED_GIORNO)
+    grezzo = _http_get_bytes(_NEWS_ACTUAL_FED_FEED, timeout=timeout)
+    try:
+        radice = ET.fromstring(grezzo)
+    except ET.ParseError:
+        raise ValueError("il feed dei comunicati della Fed non e' XML valido")
+    comunicato = None
+    for item in radice.iter("item"):
+        titolo = (item.findtext("title") or "").strip()
+        if "fomc statement" in titolo.lower():
+            comunicato = {"titolo": titolo,
+                          "link": (item.findtext("link") or "").strip(),
+                          "pub": (item.findtext("pubDate") or "").strip()}
+            break   # il primo e' il piu' recente: il feed e' in ordine di pubblicazione
+    if comunicato is None or not comunicato["link"]:
+        raise ValueError("nessun comunicato FOMC nel feed della Fed")
+
+    pagina = _http_get_bytes(comunicato["link"], timeout=timeout)
+    testo = re.sub(r"<[^>]+>", " ", pagina.decode("utf-8", "replace"))
+    testo = " ".join(testo.split())
+    trovato = _RE_FED_TASSO.search(testo)
+    if trovato is None:
+        raise ValueError("il comunicato FOMC non contiene piu' la frase dell'intervallo obiettivo "
+                         "(la pagina e' cambiata): il valore non si inventa")
+    frase = trovato.group(1)
+    parti = re.split(r"\s+to\s+", frase.strip())
+    try:
+        numeri = [_news_actual_numero_frazione(p) for p in parti]
+    except ValueError:
+        raise ValueError("intervallo FOMC non leggibile: «%s»" % frase[:60])
+    basso, alto = (min(numeri), max(numeri))
+    quando = comunicato["pub"]
+    try:
+        quando = email.utils.parsedate_to_datetime(comunicato["pub"]).isoformat()
+    except (TypeError, ValueError):
+        pass  # data illeggibile: si restituisce la stringa del feed, non il 1970
+    # Lettura riuscita: ora si consuma (e solo ora).
+    _news_actual_quota_consuma(_news_actual_quota_fed)
+    return {"valore": round(alto, 4), "unita": "%", "quando": quando,
+            "intervallo": "%.2f-%.2f" % (basso, alto),
+            "dettaglio": "target range %s percent (%s)" % (frase.strip(), comunicato["titolo"][:80]),
+            "url": comunicato["link"]}
+
+
+# LA REGEX DELL'INTERVALLO, E PERCHE' CAMBIA FORMA (15 novembre 2026).
+# Quella di prima era `([0-9][^.;]{0,60}?)`: vietava il PUNTO dentro l'intervallo. Funzionava con
+# le frazioni («3-3/4 to 4 percent») ma rifiutava in silenzio un intervallo scritto in decimali
+# («3.5 to 3.75 percent»), che e' una forma possibile: il valore spariva e restava solo il motivo
+# generico «il comunicato non contiene piu' la frase», cioe' una bugia - la pagina era cambiata
+# nel modo sbagliato, non sparita. La regex nuova non vieta piu' il punto e ricostruisce
+# l'intervallo da due numeri: frazioni, decimali o interi, «at» o «to».
+# MISURATO su pagine vere (HTTP 200, testo ripulito dai tag): 2011-01-26 «at 0 to 1/4 percent»,
+# 2016-01-27 «at 1/4 to 1/2 percent», 2019-01-30 «at 2-1/4 to 2-1/2 percent», 2026-10-28
+# «at 3-3/4 to 4 percent» (83055 byte): la nuova legge tutte quelle che leggeva la vecchia, e in
+# piu' «3.5 to 3.75 percent» che la vecchia perdeva. La formulazione dei comunicati del 2006
+# («raise its target for the federal funds rate by 25 basis points to 5 percent») non e' letta da
+# NESSUNA delle due: fuori scopo, e' la formulazione dei comunicati di vent'anni fa.
+_FED_NUMERO = r"[0-9]+(?:\.[0-9]+)?(?:\s*-\s*[0-9]+)?(?:\s*/\s*[0-9]+)?"
+_RE_FED_TASSO = re.compile(
+    r"target range for the federal funds rate\s+(?:at|to)?\s+("
+    + _FED_NUMERO + r"\s+to\s+" + _FED_NUMERO + r")\s+percent",
+    re.I)
+
+
+def _news_actual_numero_frazione(testo) -> float:
+    """«3-3/4» -> 3.75, «1/2» -> 0.5, «4» -> 4.0, «3.50» -> 3.5. Le frazioni si usano nei
+    comunicati FOMC e non stanno in nessun campo numerico."""
+    s = " ".join(str(testo).replace("\u2013", "-").replace("\u2014", "-").split())
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*-\s*(\d+)\s*/\s*(\d+)", s)
+    if m:
+        return float(m.group(1)) + float(m.group(2)) / float(m.group(3))
+    m = re.fullmatch(r"(\d+)\s*/\s*(\d+)", s)
+    if m:
+        return float(m.group(1)) / float(m.group(2))
+    return float(s)
+
+
+def _news_actual_dalla_cache(chiave, ttl, ttl_errore):
+    """La voce in cache se e' ancora buona, altrimenti None (va riletta). Solleva se l'ultima
+    lettura era un ERRORE ancora fresco: una fonte che sbaglia non si tempesta di richieste, ma
+    nemmeno si ricorda per sempre - l'errore scade dopo `ttl_errore` (_NEWS_ACTUAL_TTL_ERRORE per
+    la BLS, _NEWS_ACTUAL_TTL_ERRORE_FED per la Fed: una pagina di un comunicato che cambia forma
+    resta cambiata per settimane, e tornare a chiederla ogni due minuti sono decine di visite
+    inutili verso un sito che non si lamenta mai - semplicemente chiude).
+
+    `ttl_errore` è un PARAMETRO e non un valore preso dal modulo: un default sarebbe legato al
+    momento in cui la funzione è definita, e chi prova (o chi cura dopo) potrebbe cambiare la
+    costante e non vedere niente cambiare - la stessa trappola delle variabili globali.
+    Attenzione anche al `min(ttl, ttl_errore)` che c'era qui prima del 15 novembre 2026: con il
+    ttl normale a 2 minuti dentro la finestra, il tetto del min() rendeva il TTL d'errore lungo
+    della Fed identico a quello della BLS, cioè la cura non curava niente. L'errore si ricorda
+    per `ttl_errore` e basta."""
+    adesso = time.time()
+    with _news_actual_lock:
+        voce = _news_actual_cache.get(chiave)
+    if voce is None:
+        return None
+    eta = adesso - voce["letto_il"]
+    if voce["errore"] is None:
+        if eta <= ttl:
+            return voce
+        if voce.get("definitivo") and eta <= _NEWS_ACTUAL_TTL_DEFINITIVO:
+            return voce
+    if voce["errore"] is not None and eta <= ttl_errore:
+        raise ValueError(voce["errore"])
+    return None
+
+
+def _news_actual_in_cache(chiave, dato, errore=None):
+    with _news_actual_lock:
+        _news_actual_cache[chiave] = {"dato": dato, "errore": errore,
+                                      "letto_il": time.time(), "definitivo": False}
+
+
+def _news_actual_leggi_serie(regola, ttl):
+    """(punti, dalla_cache) della serie BLS. La cache e' SEPARATA da quella di /news (che deve
+    restare identica) e si condivide fra tutti gli eventi che usano la STESSA serie. Non e' piu'
+    vero che «CPI m/m» e «CPI y/y» costino una sola interrogazione: dal 15 novembre 2026 usano due
+    serie diverse (destagionalizzata per l'm/m, non destagionalizzata per lo y/y) e quindi due
+    letture. Si tengono i PUNTI, non il risultato: m/m e y/y sono due calcoli diversi."""
+    chiave = regola["serie"]
+    voce = _news_actual_dalla_cache(chiave, ttl, _NEWS_ACTUAL_TTL_ERRORE)
+    if voce is not None:
+        return voce["dato"], True
+    try:
+        punti = _news_actual_bls_punti(chiave)
+    except Exception as errore:
+        _news_actual_in_cache(chiave, None, str(errore))
+        raise
+    _news_actual_in_cache(chiave, punti)
+    return punti, False
+
+
+def _news_actual_leggi_fed(ttl):
+    """(esito, dalla_cache) dell'intervallo FOMC. Due richieste a ogni lettura (feed + comunicato):
+    vale la pena metterle in cache, altrimenti in venti minuti di finestra sono quaranta visite a
+    federalreserve.gov. In piu' c'e' il tetto giornaliero e l'errore lungo, vedi
+    _news_actual_fed_tasso e _news_actual_dalla_cache."""
+    chiave = "FOMC statement"
+    voce = _news_actual_dalla_cache(chiave, ttl, _NEWS_ACTUAL_TTL_ERRORE_FED)
+    if voce is not None:
+        return voce["dato"], True
+    try:
+        esito = _news_actual_fed_tasso()
+    except Exception as errore:
+        _news_actual_in_cache(chiave, None, str(errore))
+        raise
+    _news_actual_in_cache(chiave, esito)
+    return esito, False
+
+
+def _news_actual_segna_definitivo(chiave):
+    """Il dato del periodo atteso e' arrivato: non cambia piu', e per 6 ore non si richiede niente.
+    E' questo che tiene le interrogazioni BLS sotto il tetto nei giorni affollati."""
+    with _news_actual_lock:
+        voce = _news_actual_cache.get(chiave)
+        if voce is not None:
+            voce["definitivo"] = True
+            voce["letto_il"] = time.time()
+
+
+def _news_actual_ttl(secondi_dopo_evento) -> float:
+    """Quanto tenere buona la lettura, in base a quanto siamo vicini all'uscita del dato.
+    Prima dell'evento il valore non puo' essere uscito: si guarda poco. Appena uscito si guarda
+    spesso, perche' e' li' che serve il tempo reale. Poi si rallenta."""
+    if secondi_dopo_evento < 0:
+        return 5 * 60
+    if secondi_dopo_evento <= 10 * 60:
+        return 2 * 60
+    if secondi_dopo_evento <= 20 * 60:
+        return 5 * 60
+    return 10 * 60
+
+
+def _news_actual_periodo_indietro(periodo, mesi) -> str:
+    """«2026-10» meno `mesi` mesi -> «2025-10». Il confronto si fa SUL PERIODO, mai sulla
+    posizione nell'elenco: misurato il 15 novembre 2026, nella serie CPI della BLS **manca
+    2025-10** (il mese del shutdown americano, in cui i prezzi non sono stati raccolti), quindi
+    «il dodicesimo punto all'indietro» e' settembre 2025 e la variazione annua verrebbe calcolata
+    contro il mese sbagliato - un numero sbagliato che sembra buono."""
+    anno, mese = int(periodo[:4]), int(periodo[5:7])
+    totale = anno * 12 + (mese - 1) - int(mesi)
+    return "%04d-%02d" % (totale // 12, totale % 12 + 1)
+
+
+def _news_actual_calcola(punti, regola):
+    """Il numero dell'evento a partire dai punti della serie.
+    Solleva con un messaggio leggibile se i punti non bastano: mai un numero inventato."""
+    calcolo = regola["calcolo"]
+    # IL PUNTO CHE CONTA E' QUELLO DEL PERIODO PIU' RECENTE, NON IL PRIMO DELL'ELENCO.
+    # Correzione del 15 novembre 2026: qui c'era `ultimo = punti[0]`, cioe' «il primo elemento che
+    # la fonte ha messo in risposta», con un commento due righe sopra che prometteva l'opposto.
+    # Funziona finche' la BLS risponde in ordine decrescente (cosa che fa, ma che NESSUNA regola
+    # obbliga a fare): bastava una risposta in ordine crescente perche' il valore piu' VECCHIO
+    # diventasse «il numero di questo evento» - un numero giusto con la data sbagliata, che e' il
+    # difetto peggiore che una tabella di notizie possa avere.
+    # I periodi sono 'YYYY-MM': ordinarli in ordine alfabetico li mette in ordine cronologico, e
+    # l'ultimo e' il massimo SENZA dipendere da come la fonte ha deciso di elencarli.
+    ordinati = sorted(punti, key=lambda p: p["periodo"])
+    ultimo = ordinati[-1]
+    if calcolo == "livello":
+        return {"valore": round(ultimo["valore"], 2), "quando": ultimo["periodo"],
+                "dettaglio": "valore %s nel %s" % (ultimo["valore"], ultimo["periodo"])}
+    if calcolo not in ("delta", "m/m", "y/y"):
+        raise ValueError("calcolo sconosciuto: %s" % calcolo)
+
+    salto = 12 if calcolo == "y/y" else 1
+    periodo_confronto = _news_actual_periodo_indietro(ultimo["periodo"], salto)
+    per_periodo = {p["periodo"]: p["valore"] for p in punti}
+    if periodo_confronto not in per_periodo:
+        raise ValueError(
+            "la fonte non ha il dato di %s (i mesi non sono tutti in fila: e' successo davvero "
+            "con l'arresto del governo americano dell'ottobre 2025): senza quel mese il numero "
+            "non si puo' calcolare" % periodo_confronto)
+    prima_valore = per_periodo[periodo_confronto]
+    if calcolo == "delta":
+        return {"valore": int(round(ultimo["valore"] - prima_valore)),
+                "quando": ultimo["periodo"],
+                "dettaglio": "%s su %s (%s)" % (ultimo["valore"], prima_valore, periodo_confronto)}
+    if prima_valore == 0:
+        raise ValueError("il punto di confronto (%s) e' zero: non si divide" % periodo_confronto)
+    variazione = (ultimo["valore"] / prima_valore - 1.0) * 100.0
+    return {"valore": round(variazione, 2), "quando": ultimo["periodo"],
+            "dettaglio": "indice %s (%s) su %s (%s)"
+                         % (ultimo["valore"], ultimo["periodo"], prima_valore, periodo_confronto)}
+
+
+@app.get("/news/actual")
+def news_actual(titolo: str = "", valuta: str = "", quando: str = "", impatto: str = ""):
+    """Il VALORE USCITO di un evento del calendario, preso dalla fonte ufficiale.
+
+    Parametri (tutti obbligatori tranne `impatto`, e ogni mancanza ha il suo motivo perche'):
+      titolo  - il titolo dell'evento come lo da' il calendario (es. "CPI m/m");
+      valuta  - il campo `country` del calendario ("USD"): senza, "CPI m/m" non si sa di che
+                paese sia e si mostrerebbe il dato americano sotto un evento europeo;
+      quando  - l'orario dell'evento in ISO 8601 con fuso;
+      impatto - "High" o "Medium" (accettati anche "alto"/"medio"): per gli altri non si chiede.
+
+    Risponde SEMPRE 200. `valore: null` non e' un guasto: e' il caso normale fuori dalla finestra,
+    per una serie che non e' in tabella, o quando la fonte e' indietro - e in quel caso `motivo`
+    dice perche', cosi' l'app puo' scrivere «valore uscito non disponibile da questa fonte»
+    invece di un trattino muto.
+
+    SULL'ACCESSO, DETTO CHIARO (15 novembre 2026: qui era scritto il contrario, ed era falso).
+    Questa rotta NON è senza controllo, e non lo è /news: `accesso_condiviso.installa_controllo_
+    chiave` (chiamata una sola volta in fondo a questo file) esenta SOLO /dati/ (che si difende da
+    solo con il token Firebase dentro la rotta), /register e /verifica_chiave (consegnano le chiavi
+    personali) e, qui, /login.html. Tutto il resto — /news compresa — passa da `motivo_rifiuto`,
+    che lascia passare solo chi viene dal PC (richiesta_locale: loopback, senza X-Forwarded-For,
+    con Host locale) o chi presenta la chiave condivisa/personale. Quindi dal PC la chiave non si
+    chiede, e dal tablet sì: com'è giusto, visto che questa rotta esce su Internet verso la BLS e
+    la Fed per conto nostro. Non allarghiamo niente: il commento dice solo la verità.
+    """
+    risposta = {"titolo": titolo, "valuta": str(valuta or "").upper(), "valore": None,
+                "unita": None, "quando": None, "fonte": None, "serie": None, "url": None,
+                "dettaglio": None, "letto_il": None, "cache": False, "motivo": None}
+
+    if not str(titolo or "").strip():
+        risposta["motivo"] = "manca il titolo dell'evento"
+        return risposta
+    if not str(valuta or "").strip():
+        risposta["motivo"] = ("manca la valuta dell'evento: senza, un titolo come «CPI m/m» non "
+                              "si sa di quale paese sia e non si puo' scegliere la fonte")
+        return risposta
+
+    impatto_pulito = _news_actual_normalizza(impatto)
+    if impatto_pulito not in ("high", "medium", "alto", "medio"):
+        risposta["motivo"] = ("la rotta chiede alla fonte solo per gli eventi High e Medium "
+                              "(impatto ricevuto: «%s»)" % impatto)
+        return risposta
+
+    epoch = _news_event_epoch(quando) if str(quando or "").strip() else None
+    if epoch is None:
+        risposta["motivo"] = ("orario dell'evento assente o illeggibile: senza, non si puo' sapere "
+                              "se il valore puo' essere gia' uscito")
+        return risposta
+
+    adesso = time.time()
+    scarto = adesso - epoch
+    if abs(scarto) > _NEWS_ACTUAL_WINDOW_SECONDS:
+        risposta["motivo"] = ("fuori dalla finestra di %d minuti dall'orario dell'evento: non si "
+                              "interroga nessuna fonte"
+                              % (_NEWS_ACTUAL_WINDOW_SECONDS // 60))
+        return risposta
+
+    regola = _news_actual_regola(titolo, valuta)
+    if regola is None:
+        risposta["motivo"] = ("nessuna fonte ufficiale in tabella per questo evento (titolo/valuta): "
+                              "il valore non c'e' e non lo inventiamo")
+        return risposta
+
+    risposta["fonte"] = regola["fonte"]
+    risposta["serie"] = regola["serie"]
+    risposta["unita"] = regola["unita"]
+    risposta["url"] = (None if regola["calcolo"] == "fed"
+                       else _news_actual_bls_url(regola["serie"]))
+    atteso = _news_actual_mese(epoch, 1) if regola.get("fresco") else None
+
+    try:
+        if regola["calcolo"] == "fed":
+            esito, dalla_cache = _news_actual_leggi_fed(_news_actual_ttl(scarto))
+            risposta["cache"] = dalla_cache
+        else:
+            punti, dalla_cache = _news_actual_leggi_serie(regola, _news_actual_ttl(scarto))
+            risposta["cache"] = dalla_cache
+            esito = _news_actual_calcola(punti, regola)
+    except Exception as errore:
+        # Il testo che arriva da fuori non si stampa mai com'e' (console Windows cp1252): qui
+        # finisce solo dentro il JSON, che e' UTF-8, e non viene mai scritto su una console.
+        risposta["motivo"] = "valore non disponibile da questa fonte: %s" % str(errore)[:300]
+        return risposta
+
+    risposta["letto_il"] = adesso
+    risposta["dettaglio"] = esito.get("dettaglio")
+    risposta["url"] = esito.get("url") or risposta["url"]
+    if esito.get("intervallo"):
+        risposta["intervallo"] = esito["intervallo"]
+    risposta["quando"] = esito.get("quando")
+
+    if atteso is not None and esito.get("quando") != atteso:
+        # LA PROVA DI ONESTA': la fonte c'e', risponde, ma il dato che ha dentro e' quello del
+        # mese prima. Restituirlo come «il valore di questo evento» sarebbe un numero giusto con
+        # la data sbagliata (e succede sia PRIMA dell'uscita sia se la fonte e' in ritardo).
+        risposta["motivo"] = ("la fonte ha ancora il dato di %s mentre questo evento riporta %s: "
+                              "il valore non e' ancora pubblicato"
+                              % (esito.get("quando"), atteso))
+        return risposta
+
+    if atteso is not None:
+        _news_actual_segna_definitivo(regola["serie"])
+    elif regola["calcolo"] == "fed":
+        # Il comunicato appena letto e' quello dell'evento (pubblicato dopo l'orario meno 5
+        # minuti)? Allora e' il nuovo tasso: non cambia piu' per settimane.
+        try:
+            pubblicato = datetime.datetime.fromisoformat(str(esito.get("quando") or ""))
+            if pubblicato.timestamp() >= epoch - 300:
+                _news_actual_segna_definitivo(regola["serie"])
+        except (TypeError, ValueError):
+            pass  # data illeggibile: si rileggera' al prossimo giro, senza inventare niente
+    risposta["valore"] = esito["valore"]
+    risposta["unita"] = esito.get("unita") or regola["unita"]
+    return risposta
 
 
 def _find_registered_mt5_terminal() -> bool:

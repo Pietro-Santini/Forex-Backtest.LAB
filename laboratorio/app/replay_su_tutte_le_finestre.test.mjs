@@ -20,6 +20,12 @@
 //   (`siblingAssetBySlot` non si svuota mai);
 // - la scelta vale anche per lo STOP: se hai detto "su tutte", fermarne una ferma tutte.
 //   Altrimenti servirebbe fermarle a mano una per una, che e' peggio del problema di partenza.
+//   DAL 16 NOVEMBRE «fermare» ha un significato nuovo, deciso dal proprietario: «STOP pausa dove
+//   è, PLAY riparte dallo stesso secondo». Col replay condiviso il primo STOP ARMA la pausa su
+//   tutte le finestre allo stesso istante; e' il SECONDO STOP (a orologio fermo) a uscire dal
+//   replay, e a quel punto escono tutte. Quindi la prova qui sotto guarda il primo STOP (pausa
+//   propagata, stesso istante su tutte) e poi il secondo (uscita propagata): e' lo stesso intento
+//   del 15 novembre, con la regola di oggi.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -156,7 +162,7 @@ test('SCEGLIENDO «solo questa», la duplicata resta in diretta', async () => {
   } finally { await browser.close(); }
 });
 
-test('lo STOP segue la stessa scelta: se era su tutte, le ferma tutte', async () => {
+test('lo STOP segue la stessa scelta: se era su tutte, lo ferma su tutte (prima pausa, poi uscita)', async () => {
   const {browser, madre, dup} = await dueFinestreInLive();
   try {
     await madre.evaluate(RISPOSTA(true));
@@ -167,11 +173,23 @@ test('lo STOP segue la stessa scelta: se era su tutte, le ferma tutte', async ()
     await dup.waitForTimeout(1200);
     const primaDup = await dup.evaluate(STATO);
     assert.equal(primaDup.inReplay, true, 'la duplicata deve essere entrata prima dello STOP');
+    // PRIMO STOP = PAUSA ARMATA (regola del 16 novembre), propagata a tutte.
+    await madre.evaluate(`(function(){ esciReplayLive(); })()`);
+    await dup.waitForTimeout(1200);
+    const pausaMadre = await madre.evaluate(STATO);
+    const pausaDup = await dup.evaluate(STATO);
+    console.log('dopo il PRIMO STOP -> madre:', JSON.stringify(pausaMadre), '| duplicata:', JSON.stringify(pausaDup));
+    assert.equal(pausaMadre.inReplay, true, 'il primo STOP mette in pausa, non esce: ' + JSON.stringify(pausaMadre));
+    assert.equal(pausaDup.inReplay, true,
+      'e la duplicata resta in replay anche lei, ferma sullo stesso istante: ' + JSON.stringify(pausaDup));
+    assert.equal(pausaDup.masterTime, pausaMadre.masterTime,
+      'la pausa ferma tutte allo STESSO istante, non a uno ciascuno');
+    // SECONDO STOP, a orologio fermo = USCITA, e con lui escono tutte.
     await madre.evaluate(`(function(){ esciReplayLive(); })()`);
     await dup.waitForTimeout(1200);
     const dopoMadre = await madre.evaluate(STATO);
     const dopoDup = await dup.evaluate(STATO);
-    console.log('dopo lo STOP -> madre:', JSON.stringify(dopoMadre), '| duplicata:', JSON.stringify(dopoDup));
+    console.log('dopo lo STOP due volte -> madre:', JSON.stringify(dopoMadre), '| duplicata:', JSON.stringify(dopoDup));
     assert.equal(dopoMadre.inReplay, false, 'la madre esce dal replay');
     assert.equal(dopoDup.inReplay, false,
       'e la duplicata anche, altrimenti bisognerebbe fermarle a mano una per una: '

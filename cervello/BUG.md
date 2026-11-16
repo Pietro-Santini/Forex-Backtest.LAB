@@ -2,6 +2,258 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+## APERTI — 16 novembre 2026, finestre duplicate (da misurare, non ancora curbati)
+
+Due sintomi, segnalati insieme dal proprietario con le finestre duplicate:
+
+> «e ancora avviene quello che è il doppio/triplo suono dell'esecuzione / chiusura della posizione
+> con le pagine duplicate e quando avviene la chiusura o l'apertura della posizione tra le finestre
+> duplicate avviene uno sfarfallio della chiusura della posizione a grafico con le linee tp-sl-entry
+> che lampeggiano diverse volte prima di andarsene per le posizioni chiuse mentre per le posizioni
+> aperte rimanere fisse e stabili.»
+
+1. **IL SUONO PARTE DUE O TRE VOLTE** all'apertura/chiusura di una posizione quando ci sono finestre
+   duplicate. Ipotesi da misurare: ogni finestra suona per conto suo, oppure il suono è agganciato alla
+   *ricezione* del messaggio `trading_sync` invece che al *cambiamento* della posizione, quindi con
+   tre finestre il messaggio arriva due volte e suona due volte. Le strade candidate: suona solo lo
+   slot più basso (come già fa `anotherWindowOwnsAssetEvaluation`), oppure il suono si aggancia a un
+   dato che cambia **una volta**. (Precedente utile: la cura del 12 novembre v2.2.37 che aveva già
+   dovuto chiudere un «suono di benvenuto che si sentiva una volta per ogni finestra aperta».)
+2. **LE LINEE DELLA POSIZIONE CHIUSA LAMPEGGIANO** (entry, TP, SL) diverse volte prima di sparire,
+   mentre le posizioni aperte restano fisse. Ipotesi da misurare: la posizione chiusa resta in una
+   lista attiva mentre esce da un'altra (o rientra dal messaggio dell'altra finestra), quindi viene
+   ridisegnata per alcuni giri prima di essere tolta. Misurare quanti giri passano in mezzo.
+   Sono due sintomi con una causa sola o due? Da dire esplicitamente.
+
+**Stato:** causa misurata leggendo il sorgente (16 novembre 2026), banco scritto e non eseguito
+(`%TEMP%\opencode\banco_suono_sfarfallio.test.mjs`, 483 righe, prova di controllo e autocontrolli
+anti-banco-muto inclusi). **L'ipotesi «il suono è agganciato alla ricezione di `trading_sync» è
+FALSA**: `fblApplicaStatoTrading()` (riga 55353) non chiama `playOrderSound`. La causa vera è un'altra
+e una sola per i tre sintomi (suono doppio, sfarfallio, riga doppia nel Journal):
+
+**CAUSA: ogni finestra interroga il ponte per conto proprio e giudica la fotografia per conto proprio.**
+`startMt5PositionsPolling()` (riga 48565) con `mt5PositionsPollTimer=setInterval(...,1000)` (48572)
+è una variabile di pagina, quindi **una per finestra**; il detector suona a **47961** (apertura) e a
+**47808-47809 → 29673** (chiusura). Le difese `mt5SoundSeenOpenTickets` (29408) e `fblMt5Annunciati`
+(29448) sono **di pagina**: con due finestre lo stesso ticket viene visto da due detector indipendenti
+→ due suoni, due righe nel Journal. Lo sfarfallio è lo stesso meccanismo con un effetto visivo:
+`fblApplicaStatoTrading()` sostituisce la lista in blocco (**55404**) e ogni messaggio ridisegna
+(**9756**), mentre il guardiano del tempo (**9711**) confronta l'orologio e non il contenuto; la
+posizione chiusa **rientra** perché l'altra finestra la vede ancora (ri-adozione **47931-47957**).
+Il lampo non è un numero fisso: dura quanto il disaccordo, tipicamente **2-4 giri**.
+
+**CURA DECISA dal proprietario (16 novembre 2026)**: la **madre** è l'autorità, le duplicate
+**ereditano** e non rilevano. Concretamente: il detector (apertura/chiusura, suono, Journal) gira
+**solo nella madre**; le duplicate ricevono lo stato dal canale `trading_sync` **in silenzioso** e non
+riaprono niente. Chiude tutti e tre gli effetti con una regola sola. La strada preferita fra quelle
+proposte dall'indagine è la (b) con la variante profonda: `fblMt5Annunciati` deve viaggiare nel
+messaggio invece di essere riscritto nei diciannove chiamanti (stessa reg già applicata il 12 novembre
+a `fblPropContoStatoSalva`). Costa di più — tocca `initExtraPipWindow`, l'idea che le duplicate siano
+copie complete — e va misurata: è esattamente ciò che misura il banco.
+
+3. **GLI ISTOGRAMMI DEL PROFILO VOLUMETRICO SI ADATTANO AL TIME FRAME** invece di restare su base
+   1 minuto.
+   > «gli istogrammi del profilo volumetrico non mantengono il numero e le dimensioni fisse del time
+   > frame a 1 minuto quando cambiamo time frame più alti, se siamo a time frame 5 minuti dobbiamo
+   > sempre vedere l'istogramma generato e in evoluzione del time frame da 1 minuto sempre! non si
+   > deve regolare al cambio time frame ma il numero delle barre rimane sempre lo stesso identico.»
+
+   **CHIARIMENTO DEL PROPRIETARIO (16 novembre 2026), da non sbagliare più:**
+   > «la regola riguarda solo gli istogrammi dei profili volumetrici e non riguarda il footprint, io
+   > non ho mai accennato il footprint, del footprint non va modificato assolutamente nulla»
+
+   Quindi: **il footprint è fuori da questa voce.** `footprintBucketStart`, `_footprintEntries`,
+   `__footprintRebuildBuckets` e tutto il resto del footprint **non si toccano**. La prima indagine
+   aveva preso quella strada (passo `(currentTF||1)*60000`) e misurava la cosa sbagliata: era il
+   footprint, non i profili. Non ripetere quell'errore.
+
+   **MISURATO leggendo il sorgente (16 novembre 2026), sul profilo volumetrico vero.**
+   Il profilo degli indicatori e quello disegnato a mano passano dalla stessa funzione:
+   `computeVolumeProfile(startIdx,endIdx,buckets)` (~14442, con `_computeVolumeProfileUncached` ~14453)
+   distribuisce il volume delle candele `rows[startIdx..endIdx]`. `rows` è l'array del **time frame
+   corrente**: a 5m sono candele da 5 minuti, a 1H da un'ora. Il range lo risolve
+   `vpFixedResolveRange(d,fullTs,idxLive,rowsLen)` (~14346), che lavora anch'esso in indici del TF
+   corrente. Conseguenza: a 5m l'istogramma **non** è quello generato al minuto — si aggiorna ogni 5
+   minuti, non ogni minuto, e la sua forma viene da 5 volte meno candele. È il sintomo descritto
+   («l'istogramma generato e in evoluzione del time frame da 1 minuto sempre»).
+   Le **fasce** di prezzo invece non dipendono dal TF: misurato prima (v2.0.84, banco
+   `profilo_barre_timeframe.test.mjs`), restano 300 a 1, 5 e 15 minuti. Quindi la richiesta nuova è
+   **la sorgente del volume**: M1 sempre, qualunque sia il TF del grafico.
+
+   **Da misurare prima di curare** (non ancora fatto, e non va indovinato):
+   1. se le candele M1 sono già in memoria quando il grafico è a 5m/15m/1H senza dover chiedere al
+      server (`__candCache`, `fblCandeleCacheLeggi`, `assetCandles`), e con quale chiave;
+   2. come si traduce l'intervallo di tempo del profilo in indici M1 (`rowIndexNearTime` lavora sui
+      `rows` correnti: serve la stessa ricerca sull'array M1);
+   3. cosa succede nei due modi di ancoraggio (`tieni fermo il tempo` / `il numero di candele`) e in
+      replay, dove le M1 devono essere allineate all'istante del replay e non a adesso;
+   4. il costo: 1H su 720 minuti = 720 candele M1 contro 12 da 1H (60×). La cache
+      `_vpProfileCache` (~14441) è già per array `rows`, quindi va adattata o il profilo M1 va
+      calcolato una volta per ridisegno.
+
+   Banco da scrivere (dentro il repo, `laboratorio/app/`): misurare su 1m/5m/15m/1H (a) che l'ultima
+   fascia si muova **ogni minuto** anche a 5m e a 1H, (b) che il numero delle fasce resti lo stesso,
+   (c) che a 1m nulla cambi rispetto a oggi, (d) che il footprint resti **identico** (controllo che
+   nessuno lo tocchi).
+
+5. **APRE PIÙ POSIZIONI DI QUANTE IL SEGNALE NE CHIEDA** (soldi veri: priorità massima).
+   > «apre più posizioni del dovuto rispetto a quello che dice il segnale del numero delle posizioni.
+   > Deve aprire lo stesso numero di posizioni per il numero di TP mai di più.»
+
+   **Fatto misurato dalle sue due foto (16 novembre 2026).** Il segnale dichiara 4 TP (Entry
+   3875-3880, SL 3890, TP1 3870, TP2 3865, TP3 3860, TP4 3855) e il pannello del segnale conferma:
+   «4 posizioni da 0.01 lot su MT5». Quindi **una posizione per TP è la regola giusta e va tenuta**:
+   il difetto non è nel conteggio per TP, è **nella ripetizione** (nello stesso momento a grafico
+   risultavano più di 4 SELL da 0.01, e due linee di SL, una «manuale»). Ipotesi da misurare:
+   riprova dopo un ordine non confermato, rivalutazione a ogni tick quando il prezzo entra nella
+   fascia, finestre duplicate che applicano lo stesso segnale per conto, «Rimetti fra i nuvovi»,
+   ripristino dopo ricarica, o lo stesso messaggio arrivato due volte.
+   **Regola del proprietario, da rispettare alla lettera**: numero di posizioni = numero dei TP,
+   **mai di più**.
+
+   **CAUSA CONFERMATA DAL PROPRIETARIO (16 novembre 2026), con numero**: «ahhh ecco perché viene
+   aperto più volte, avevo 2 finestre duplicate e quindi ha aperto x3 volte». Quindi **ogni finestra
+   applica il segnale per conto suo**: madre + 2 duplicate = 3 aperture dello stesso segnale, 3 × 4
+   posizioni = 12 invece di 4.
+   **MISURATO leggendo il sorgente (16 novembre 2026), con le righe.**
+   La catena: messaggio → `tgMessaggioSegnali` (**38501**) → `tgAutoInCoda` (**42061**) →
+   `tgAutoDecidi` (40989) → `tgAutoValuta`/`tgAutoApriQui` (42126/42377) → **`tgEseguiSegnale`
+   (43791)** → ciclo `for(i=0;i<p.n;i++)` (**43908** MT5, **43933** simulato) → `placeRealMt5Order`
+   (31586). Il numero di posizioni si decide in **un punto solo**, `tgPiano` **43695**
+   (`let n=Math.max(1,tp.length)`), con tre sole riduzioni (tetti della sala 43694, lotto minimo che
+   sfora → taglio a k 43730-43733, TP già passati). **Quel numero è giusto e va tenuto.**
+   Il difetto è **quante volte `tgEseguiSegnale` viene chiamato per lo stesso messaggio**:
+   1. **La finestra duplicata applica per conto suo — è la causa del ×3.** In tutto il blocco dei
+      segnali (righe 37700-44100) ci sono **zero occorrenze di `PIP_SLOT`**: la guardia «lo fa la
+      madre» esiste già per il cloud (1393), per Notion (36934, 36960), per il suono (45826) e per i
+      salvataggi su disco — **manca solo qui**. All'avvio ogni finestra fa `tgGiaUsato()` →
+      `tgCollega()` (**38981-38982**, senza guardia), apre il **proprio** WebSocket e riceve **la sua
+      copia** del messaggio → `tgEseguiSegnale`. La guardia `anotherWindowOwnsAssetEvaluation`
+      (**9493**) esiste ma è usata **solo** per la valutazione SL/TP (30238, 30332), mai per le
+      aperture.
+   2. **Il ponte riconsegna tutta la bacheca a ogni collegamento — seconda porta, indipendente dalle
+      duplicate.** `segnali_bridge.py` tiene gli ultimi 50 segnali (`STORICO_MAX`, 145) e a ogni
+      WebSocket nuovo riconsegna tutto: `ultimo = {"id": 0}` (**1499** — il commento sopra dice «si
+      riparte dall'ultimo già visto», il codice parte da zero) e `BACHECA.da(ultimo["id"])` (1650).
+      Dall'app `tgUltimoId` non è persistito (37442) e `tgSegnaliRicevuti` non è salvato (37705).
+      Effetto: **ricaricare la pagina, o aprire una duplicata, entro il minuto di validità del segnale
+      (`TG_SEGNALE_VALIDO_MS`, 38712) riapplica il segnale — la madre stessa, da sola.**
+   3. **Chiave di deduplicazione per segnale: non esiste.** `tgMessaggioSegnali` non controlla `m.id`.
+      Il filtro anti-doppioni di contenuto `fblDedupMotivo` (5762) guarda roba **in memoria di quella
+      finestra**, e sulla strada MT5 senza grafico (`senzaGrafico`) le posizioni non finiscono in
+      `positions[]`: **fra finestre diverse è cieco**.
+   4. **Riprova dopo un ordine non confermato: esclusa** — il ciclo si ferma alla prima bocciatura
+      (`break` a 43917, 43926, 43953, 43969). Bene: è la regola del progetto (esito sconosciuto ≠
+      rifiuto, non si ritenta mai).
+   5. **Rivalutazione a ogni tick: esclusa** — `tgAutoInCoda` ha due soli chiamanti (38580, 38060) e
+      il timer da 5 s (38713-38719) fa solo scadere i segnali vecchi.
+   6. **«Rimetti fra i nuovi»** (39166) rimette `stato='nuovo'` senza riaprire, ma
+      `syntraAggiungiSala` (**38051-38061**) rimette in coda **tutti** i segnali ancora `nuovo` di
+      quell'utente: uno appena rimesso a mano ripartirebbe (percorso stretto, solo Syntra).
+   7. **La seconda SL «manuale»» non è una causa diversa**: con 12 posizioni allo stesso stop 3890 le
+      linee raggruppano per prezzo (fblChiaveCaselleTpSl, 25167-25210). La seconda nasce dalla
+      **linea «bozza» della barra ordini** (`#sl`, 25696, disegnata quando **non** c'è una posizione
+      selezionata — 25689) oppure da una posizione **adottata dal polling che ha perso l'origine**
+      (etichetta «manuale»» a 5621-5631). Chiudendo la moltiplicazione si restringono a una.
+   **CURA misurata**: bastano due cose all'**ingresso** dell'applicazione (il numero si crea in
+   `tgPiano` ed è già giusto): `PIP_SLOT===0` all'entrata di `tgAutoInCoda` (42061) o nei suoi due
+   chiamanti, **più** una chiave persistita per messaggio applicato (id della bacheca + marcatore),
+   perché la riconsegna a ogni collegamento riapre anche sulla madre da sola. Kraken è a parte:
+   `krakenEseguiSegnale` (56845) fa **una** posizione con chiusure parziali, quindi lì la regola
+   «una per TP» non si applica e la moltiplicazione va chiusa lo stesso, per un'altra strada.
+   **Nota di sicurezza, da ripetere al proprietario finché la cura non è pubblicata**: con le
+   duplicate aperte lo stesso segnale parte una volta per finestra (12 posizioni invece di 4). E
+   anche **ricaricare la pagina madre da sola**, entro un minuto dall'uscita del segnale, la riapre.
+   **Banco pronto** in `%TEMP%\opencode\banco_posizioni_eccesso.test.mjs` (8 prove): 4 TP → 4 ordini
+   (controllo), 1 → 1, 3 → 3; ordine rifiutato e ponte muto → nessun ritentativo; due finestre → 8 e
+   tre finestre → 12 (**la riproduzione del difetto**, verde oggi); madre + duplicata → 4 e ricarica →
+   0 ordini nuovi (**la cura**, rossa oggi).
+
+   **CURATO il 16 novembre 2026** (banco `laboratorio/app/posizioni_per_finestra.test.mjs`, 9/9;
+   misura prima della cura: 2 finestre → 8, 3 finestre → 12 ordini per un segnale da 4). Quattro pezzi:
+   1. **autorità**: solo la madre (o lo slot più basso fra le finestre **vive**) applica un segnale. La
+      presenza si misura col **battito** su un canale BroadcastChannel dedicato (2,5 s, finestra di
+      vita 9 s) — non con `siblingAssetBySlot`, che non si svuota mai e terrebbe bloccate per sempre le
+      duplicate di una madre chiusa. Domanda + attesa massima 700 ms; la voce bloccata resta nel
+      pannello **col motivo scritto**.
+   2. **ricordo su disco**: `tgSegnaleApplicatoRicorda` (chiave per id in `localStorage`, vita 1
+      giorno, pulizia pigra) scritto in `tgEseguiSegnale` e letto in `tgAutoInCoda`: chiude la porta 2
+      anche se il ponte riconsegna.
+   3. **ponte**: `segnali_bridge.py` — l'ultimo id **consegnato** è del ponte e sta su disco
+      (`ultimo_consegnato.json`), e `Bacheca._prossimo_id` riparte dall'ultimo consegnato + 1
+      (**senza questo la cura faceva peggio del difetto**: dopo un riavvio il ponte riassegnerebbe id
+      da 1 e un segnale nuovo verrebbe scartato in silenzio). Nuova prova
+      `laboratorio/ponte/test_bacheca_riconsegna.py` (verificata al contrario: senza cura cade).
+   4. **stessa guardia su Kraken** (`krakenEseguiSegnale`, 56845); l'ordine manuale (voce senza id) non
+      si tocca, quello l'ha confermato la persona.
+   `python -m pytest laboratorio/ponte -q` → **401 passed**.
+   **Scoperta dalla misura, da curare (decisione del proprietario del 16 novembre 2026: «in gruppo con
+   ripiego: se qualcuno viene rifiutato, rileggere e basta»)** — gli ordini di un segnale partono **in
+   gruppo** (`Promise.all`), quindi il «mi fermo alla prima bocciatura» avviene **dopo** la partenza:
+   misurato, con un rifiuto del primo gli altri tre erano già inviati (4 invece di 1). Non toccato in
+   questo giro. Da fare: niente ritentativi (mai), solo **rileggere** cosa è rimasto e **dirlo** nel
+   pannello («aperti 3 su 4: uno rifiutato»). È in coda.
+
+   **IL VERSO OPPOSTO, segnalato dal proprietario il 16 novembre 2026**: «a volte apre soltanto una
+   posizione rispetto ai TP del segnale […] è arrivato un segnale da 5 TP e ha aperto soltanto una
+   posizione e ha messo soltanto un TP». **MISURATO**: con un segnale normale di 5 TP ne aprono 5 (il
+   parser ne consegna 5, nessun tetto interno). Ne apre di meno solo per tre riduzioni, **tutte prima
+   di aprire e tutte mute**: (a) il **tetto della sala** che lascia posto per 1 sola posizione
+   (`tgAutoDecidi` ~41075-41082 → `tgPiano` ~43854: `if(tp.length>maxN)tp=tp.slice(0,maxN)`; attenzione
+   a un cfg senza `maxPosizioni` che legge **1**); (b) il **rischio** che non basta per 5 lotti minimi
+   (~43884-43894: `k=floor(importoTot/(0.01*perUnita))`, misurato XAUUSD stop 25 $, rischio 1% su
+   10.000 € → **4** posizioni, rischio 0,3% → **1**); (c) i **take profit già passati** (~43830-43833).
+   Il motivo era scritto (`notaRidotte`, ~43891) ma in automatico **veniva buttato via**: entrava nel
+   riepilogo `r` della conferma e `const ok=automatico?true:await appConfirm(...)` (~44045) lo scartava.
+   In più il prefisso della scheda diceva il falso («⚡ Non aperto in automatico» su una posizione aperta).
+   **CURATO il 16 novembre 2026** (banco `laboratorio/app/segnali_meno_posizioni.test.mjs`, 10/10;
+   prima della cura: 1 verde e **9 rosse**, con `voce.autoMotivo` a `null`): il motivo unico si calcola
+   in `tgPiano` (`motivoPosizioni`, con tre numeri — TP dichiarati, posizioni aperte, motivo esatto) e
+   esce nella **scheda del segnale** (col prefisso corretto, in arancione chiaro), nella **barra di
+   stato** e nel **popup manuale**. Frase tipo: «⚡ Aperta in automatico, ma con meno posizioni del
+   previsto: aperta 1 posizione invece di 5 dichiarate dalla sala: tetto delle posizioni pieno: posto
+   per 1».
+   **Caso limite chiuso**: se il prezzo ha passato **tutti** i take profit, oggi `tp=[]` e
+   `n=Math.max(1,0)=1` apriva **una posizione senza nessun target** e l'interruttore «apri senza
+   target» non lo impediva (43839 controllava `!tutti.length`, non `!tp.length`). Ora **non apre** e lo
+   dice (la sala i target li aveva dati, il prezzo li ha passati tutti: aprire uno stop senza obiettivo
+   è inventare un ordine che nessuno ha chiesto).
+   **Decisione del proprietario**: «Dirlo forte: scheda del segnale, stato e pannello» — il numero di
+   posizioni **non** cambia (tetti, rischio e TP passati sono scelte giuste e volute); e il parere
+   dell'indagine è che forzare sempre 5 posizioni a 0,01 lotti **non** è prudente: con uno stop lontano
+   5 posizioni a lotto minimo possono già superare il rischio scelto (`rischioReale`) e sfondere i tetti
+   della prop firm.
+   **131 prove esistenti rilanciate, tutte verdi.**
+   **Stato:** indagine in corso in sola lettura (16 novembre 2026), banco in preparazione in
+   `%TEMP%\opencode\banco_posizioni_eccesso.test.mjs`, tutto su ponte finto e conto simulato.
+
+4. **IL NOME DEL MODELLO DI DISEGNO «NON SI SALVA»** (linee, rettangoli, ritracciamenti di Fibonacci).
+   > «succede troppe volte che non mi permette di salvare il nome del modello, me lo fa scrivere ma
+   > quando lo vado a salvare non me lo salva […] devono sempre rimanere in memoria e non devono essere
+   > tolti né modificati in futuro da parte dell'utente.»
+
+   **Misurato leggendo il sorgente (16 novembre 2026).** Il campo è l'`<input>` di `appPrompt`
+   (riga 12453) e il nome sta in `saveCurrentDrawingAsTemplate` (riga **11451**): il modello viene
+   scritto in `localStorage['fbtDrawingTemplates_v1']` col **nome come chiave** (11460-11470), e il
+   gemello del Fibonacci a **44261** scrive in `fbtFibTemplates_v1`. **Il nome non sta accanto ai
+   punti del disegno** (`assetDrawings`, riga 7945, che è quella salvata su disco, IndexedDB e cloud):
+   sta in un posto secondario, che è il rischio che la regola vietava.
+   Tre cause distinte, tutte da curare **nella famiglia** (non in uno strumento):
+   - dopo il salvataggio il menu non viene ridisegnato (11471 senza richiamo a
+     `renderDrawTemplateMenu()`): il modello c'è ma non si vede finché non si riapre il menu — è
+     l'ipotesi più probabile per il «non me lo salva»;
+   - **il modello salvato dalla strada generica perde `levels` e `opts`**: per il Fibonacci il
+     nome resta ma il modello è inutilizzabile, quindi «salvato» e «caricato» non coincidono;
+   - due ritorni precoci (11454 senza disegno selezionato, 44320 senza bersaglio) in cui la finestra
+     del nome non si apre affatto.
+   **Deciso dal proprietario (16 novembre 2026)**: nome **immutabile per sempre**, ma il modello si
+   può **cancellare**. Quindi nessuna strada di rinomina (nemmeno per refuso), il cestino resta.
+   Banco pronto in `%TEMP%\opencode\banco_nomi_disegni.test.mjs` (7 prove, sintassi verificata, non
+   eseguito) con la prova di controllo inversa (Esc → in memoria non deve restare niente) e la prova
+   dell'immutabilità (il 🗑 toglie il modello, ma nessun percorso lo rinomina).
+
+---
+
 - **CURATO IN PARTE (v2.2.37) 12 novembre 2026 — LA PROP FIRM SI SCORDA CHE LA CHALLENGE E' GIA' STATA AVVIATA: la domanda «questo conto MT5 come lo usi?» riparte su un conto gia' deciso** - `app.html`: `fblPropContoStatoSalva()` riga **6777**, `triggerPropFirmViolation()` riga **7230**, `fblPropAttivazioneDaChiedere()` riga **6815**, `fblPropContoId()` riga **6718**, gestore `pip_clone_snapshot` riga **9663**. Diagnostici: `C:\Users\pietro\Documents\banchi_aperti_forex\diag_prop_memoria.mjs`, `diag_prop_memoria2.mjs`. Banco rosso: `C:\Users\pietro\Documents\banchi_aperti_forex\prop_memoria_conto.misura.test.mjs`.
 
   **CURATE il 12 novembre (v2.2.37), con banco verde `laboratorio/app/prop_memoria_conto.test.mjs`:**
@@ -1624,3 +1876,34 @@ prezzo si', rapporto no.
 4 prove: A (le tre linee rispondono al 10/25/50/75/90% della larghezza), A2 (a meta' grafico il
 primo tocco arma l'entrata), B (toccando lo stop compare «1:2»), B2 (trascinandolo a 79800 il
 cartellino dice «1:4»). Prima della cura: 4 rosse su 4.
+
+
+### IL PASSO A FRECCIA PERDEVA L'ANNUNCIO: IL THROTTLE SCARTAVA IL GESTO (16 novembre 2026)
+
+MISURATO dal banco `laboratorio/app/passo_frecce_finestre.test.mjs`, prova «IL PRIMO BUCKET»:
+premendo il tasto avanti sulla madre (M1) la madre andava a 08:32 e la duplicata D1 restava a
+08:31. Con una spia dentro le due pagine vere: `fblAnnunciaReplay('istante', 1794317520000, ...)`
+veniva chiamata una volta sola, `fblReplayPerTutte` era true, `tradingChannel` esisteva - e
+`tradingChannel.postMessage` **non veniva mai chiamata**. Il valore `fblReplayUltimoInvioMs` era
+stato scritto 11-15 ms prima del click, e il ramo `modo==='istante'` usciva sul throttle da
+`FBL_REPLAY_OGNI_MS` (30 ms).
+
+LA CAUSA: il throttle esiste per lo SCORRIMENTO (a moltiplicatore alto il battito pubblica piu'
+volte al secondo), ma il passo a freccia passava dallo stesso ramo: un GESTO veniva scartato come
+se fosse un fotogramma. Non era teoria e non era raro: bastava premere avanti entro 30 ms da un
+annuncio del battito, e una finestra restava indietro di una candela.
+
+LA CURA: `fblAnnunciaReplay(modo, t, sempre)` - il throttle vale solo se `sempre` e' falso;
+`fblReplayPasso(segno, continuo)` annuncia con `!continuo`; `forward(silenzioso)` passa
+`!!silenzioso`, quindi il battito (`forward(true)`, righe 32698 e 32721) resta strozzato e i gesti
+no. Il gesto aggiorna comunque il segnaposto, altrimenti il battito che riparte subito dopo
+pubblicherebbe due volte di fila.
+
+MISURA: banco `passo_frecce_finestre.test.mjs` da **10 rosse su 10** a **10 verdi** (0 fallimenti,
+123 s). Banchi replay collegati verdi: `replay_fra_finestre`, `replay_stop_armato`,
+`replay_scatto_dentro_la_candola`, `frecce_replay_navigate`, `replay_footprint`.
+
+NOTA SU UN BANCO VECCHIO: `replay_su_tutte_le_finestre.test.mjs` pretendeva che il PRIMO STOP
+uscisse dal replay. Dal 16 novembre la regola e' «STOP pausa dove si e', PLAY riparte dallo stesso
+secondo»: la prova e' stata riallineata (primo STOP = pausa propagata sullo STESSO istante,
+secondo STOP = uscita propagata a tutte), non cancellata.
