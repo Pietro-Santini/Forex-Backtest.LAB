@@ -43,6 +43,15 @@
   tutte le viste nello stesso punto, e 200000 candele da un minuto sono ~139 giorni - ma **non
   ancora misurata** sul suo grafico. Scritto cosa misurare prima di curare, e perche' non si cura
   alzando il numero a caso.
+  **(3) IL PULSANTE SI CHIAMA ESCI, E LO STOP VIVE SUL PLAY.** Chiarito dal proprietario nello
+  stesso giro: «premiamo il tasto replay, poi esce fuori quello che e' il tasto stop. Invece non
+  deve uscire il tasto stop, ma deve venire fuori quello che e' il tasto esci. Il tasto stop stara'
+  soltanto quando premiamo quello che e' il tasto play e poi dopo si trasforma in tasto stop».
+  Prima quel pulsante chiamava `esciReplayLive()` senza `esci:true`, quindi col replay condiviso
+  armava una PAUSA e bisognava premerlo DUE volte per uscire. Ora fa una cosa sola, quella che dice
+  il suo nome; la pausa ha il suo pulsante (il PLAY, che diventa «⏹ STOP» mentre il replay scorre -
+  gia' cosi' nel codice, con una prova di controllo che lo fissa). Due gesti con due nomi, invece
+  di uno che fa due cose a seconda di come ci sei arrivato.
   Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-17 - Claude - **v2.2.65: finestre duplicate — il doppio suono, gli indicatori che
   sembravano azzerarsi, e il conto nuovo che non arrivava alle altre finestre.** Tre cure, ognuna

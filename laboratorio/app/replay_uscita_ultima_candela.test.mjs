@@ -132,3 +132,45 @@ test('CONTROLLO: l\'ultima candela si raggiunge anche a mercato chiuso', async (
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
+test('il pulsante si chiama ESCI e esce al primo colpo, anche col replay condiviso', async () => {
+  // RICHIESTO il 17 novembre 2026: «premiamo il tasto replay, poi esce fuori quello che e' il
+  // tasto stop. Invece non deve uscire il tasto stop, ma deve venire fuori quello che e' il tasto
+  // esci. Il tasto stop starà soltanto quando premiamo quello che e' il tasto play e poi dopo si
+  // trasforma in tasto stop.»
+  //
+  // Prima il pulsante chiamava `esciReplayLive()` senza `esci:true`: col replay condiviso armava
+  // una PAUSA e bisognava premerlo DUE volte per uscire. La prova misura il primo colpo.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    await pagina.evaluate(PREPARA(true));
+    const r = await pagina.evaluate(`(() => {
+      const b = document.getElementById('liveReplayStopBtn');
+      const nome = b ? (b.textContent||'').trim() : null;
+      b.style.display='inline-block';
+      b.click();
+      return {nome, replay:liveReplayActive, idx, ultima:baseRows.length-1, pausa:fblReplayPausa};
+    })()`);
+    assert.match(r.nome, /ESCI/i, 'il pulsante deve chiamarsi ESCI, non STOP: "' + r.nome + '"');
+    assert.equal(r.pausa, false, 'non deve armare una pausa: deve uscire');
+    assert.equal(r.replay, false, 'al primo colpo deve essere fuori dal replay');
+    assert.equal(r.idx, r.ultima, 'e deve stare sull ultima candela: e a ' + r.idx + ' su ' + r.ultima);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('CONTROLLO: il PLAY resta il pulsante della pausa (diventa STOP mentre scorre)', async () => {
+  // L'altra metà della richiesta: lo STOP esiste ancora, ma vive sul PLAY. Se questa prova
+  // diventa rossa, la pausa è rimasta senza pulsante.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    await pagina.evaluate(PREPARA(true));
+    const r = await pagina.evaluate(`(() => {
+      const p = document.getElementById('play');
+      return {esiste: !!p, nomeAFermo: p ? (p.textContent||'').trim() : null};
+    })()`);
+    assert.equal(r.esiste, true, 'il pulsante PLAY deve esistere');
+    assert.match(r.nomeAFermo, /PLAY/i, 'a replay fermo si chiama PLAY: "' + r.nomeAFermo + '"');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
