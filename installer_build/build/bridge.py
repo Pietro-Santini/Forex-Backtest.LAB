@@ -3737,14 +3737,78 @@ def _ensure_symbol(symbol: str):
     return info
 
 
+def _volume_leggibile(v) -> str:
+    """Un numero come lo scriverebbe una persona: 0.1, non 0.1000000000000000055."""
+    try:
+        return ("%.8f" % float(v)).rstrip("0").rstrip(".") or "0"
+    except Exception:
+        return str(v)
+
+
 def _round_volume(info, volume: float) -> float:
-    """Arrotanda il volume richiesto al passo consentito dal simbolo (volume_step) e lo
-    vincola tra volume_min e volume_max: un volume "storto" (es. 0.07 lot con step 0.01 va
-    bene, ma con step 0.1 no) fa rifiutare l'intero ordine dal broker."""
+    """Porta il volume sul passo del simbolo SENZA MAI FARLO CRESCERE.
+
+    IL VOLUME ESEGUITO E' <= DI QUELLO RICHIESTO. Sempre. Non e' un dettaglio tecnico: e' la
+    regola che tiene il rischio dentro quello che l'utente ha scelto.
+
+    COM'ERA (trovato con un audit il 17 novembre 2026, non da una segnalazione):
+        step = info.volume_step or 0.01
+        vol = round(round(volume / step) * step, 8)      # al piu' VICINO, quindi anche in su
+        vol = max(info.volume_min, min(info.volume_max, vol))   # e poi ALZATO al minimo
+    Su un simbolo con passo o minimo 0,1 - indici e molti CFD cripto - 0,03 lot richiesti
+    diventavano 0,1: il rischio scelto moltiplicato per tre, in silenzio. La pagina calcola
+    sempre col passo 0,01 (`opz.passo` e' valorizzato solo per Kraken) e non confronta il
+    volume tornato con quello chiesto, quindi la differenza non si vedeva da nessuna parte.
+    Il commento di prima parlava di «far rifiutare l'intero ordine dal broker»: era scritto
+    pensando al rifiuto tecnico, non al rischio. Sono due problemi diversi, e qui vince il
+    rischio.
+
+    ORA:
+      - si arrotonda PER DIFETTO al passo;
+      - il tetto volume_max si applica (ridurre e' sempre sicuro);
+      - se quel che resta e' sotto il volume_min del simbolo si RIFIUTA, con un motivo
+        scritto che la pagina mostra nel pannello segnali. Alzare al minimo vorrebbe dire
+        aprire una posizione piu' grande di quella decisa, e quello non e' un ripiego
+        accettabile: meglio un segnale non aperto che una posizione tripla.
+
+    PERCHE' `int(round(q, 9))` E NON UN FLOOR DIRETTO: 0,29 diviso 0,01 in binario fa
+    28,999999999999996, e un floor ingenuo tornerebbe 0,28 - una riduzione silenziosa su un
+    volume che era GIA' giusto. Il round al nono decimale toglie il rumore del binario, e
+    l'int fa il per difetto su un numero pulito.
+    """
     step = info.volume_step or 0.01
-    vol = round(round(volume / step) * step, 8)
-    vol = max(info.volume_min, min(info.volume_max, vol))
-    return round(vol, 2)
+    minimo = getattr(info, "volume_min", 0.0) or 0.0
+    massimo = getattr(info, "volume_max", None)
+
+    volume = float(volume)
+    if volume <= 0:
+        # I chiamanti rifiutano gia' un volume non positivo ("Volume non valido"): qui non si
+        # inventa un minimo, si restituisce zero e la decisione resta loro.
+        return 0.0
+
+    passi = int(round(volume / step, 9))
+    vol = round(passi * step, 8)
+    if massimo:
+        vol = min(vol, float(massimo))
+
+    if vol < minimo - 1e-9:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Volume troppo piccolo per {sym}: richiesti {ric} lot, ma questo simbolo ha "
+                "passo {passo} e minimo {min_}. Arrotondando per difetto resterebbero {vol} lot. "
+                "L'ordine NON viene aperto: portarlo al minimo vorrebbe dire aprire una "
+                "posizione piu' grande di quella decisa, e il rischio scelto non si tocca. "
+                "Alza il rischio della sala, oppure apri a mano la dimensione che vuoi."
+            ).format(
+                sym=getattr(info, "name", None) or "questo simbolo",
+                ric=_volume_leggibile(volume),
+                passo=_volume_leggibile(step),
+                min_=_volume_leggibile(minimo),
+                vol=_volume_leggibile(vol),
+            ),
+        )
+    return vol
 
 
 def _pick_filling_mode(info):

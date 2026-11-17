@@ -70,12 +70,18 @@ def test_passo_grosso_arrotonda_per_difetto_non_al_piu_vicino(bridge):
 
 
 def test_mai_sopra_il_richiesto_su_una_griglia_di_valori(bridge):
-    """La regola generale, provata su molte combinazioni invece che su un caso fortunato."""
+    """La regola generale, provata su molte combinazioni invece che su un caso fortunato.
+
+    L'attesa si ricava dall'ARROTONDAMENTO PER DIFETTO, non dal minimo: con un passo piu'
+    grosso del minimo (passo 0,1 e minimo 0,01, che esiste) 0,01 richiesti scendono a zero e
+    l'ordine va rifiutato, anche se 0,01 era >= del minimo. Dedurre l'attesa dal solo minimo
+    era il difetto della prima stesura di questo banco.
+    """
     for passo, minimo in ((0.01, 0.01), (0.1, 0.1), (0.1, 0.01), (0.5, 0.5), (1.0, 1.0)):
         info = simbolo(passo=passo, minimo=minimo)
-        for richiesto in (0.01, 0.03, 0.07, 0.12, 0.37, 0.99, 1.0, 1.49, 2.5, 7.77):
-            if richiesto < minimo:
-                # sotto il minimo del simbolo si rifiuta: non si gonfia (vedi test dedicato)
+        for richiesto in (0.01, 0.03, 0.07, 0.12, 0.29, 0.37, 0.99, 1.0, 1.49, 2.5, 7.77):
+            atteso = int(round(richiesto / passo, 9)) * passo   # il per difetto, fatto a mano
+            if atteso < minimo - 1e-9:
                 with pytest.raises(HTTPException):
                     bridge._round_volume(info, richiesto)
                 continue
@@ -83,6 +89,21 @@ def test_mai_sopra_il_richiesto_su_una_griglia_di_valori(bridge):
             assert vol <= richiesto + 1e-9, (
                 "passo %s minimo %s: richiesti %s, eseguiti %s - il volume e' CRESCIUTO"
                 % (passo, minimo, richiesto, vol))
+            assert vol == pytest.approx(atteso, abs=1e-9), (
+                "passo %s: richiesti %s, attesi %s per difetto, tornati %s"
+                % (passo, richiesto, atteso, vol))
+
+
+def test_un_multiplo_esatto_non_viene_ridotto_dal_binario(bridge):
+    """0,29 con passo 0,01 e' un multiplo esatto, ma in binario fa 28,999999999999996.
+
+    Un floor ingenuo tornerebbe 0,28: una riduzione silenziosa del rischio su un volume che
+    era GIA' giusto. Meno pericoloso di un aumento, ma e' comunque un numero inventato.
+    """
+    info = simbolo(passo=0.01, minimo=0.01)
+    for v in (0.29, 0.07, 0.58, 1.16, 3.33):
+        assert bridge._round_volume(info, v) == pytest.approx(v, abs=1e-9), (
+            "%s e' un multiplo esatto del passo: non si tocca" % v)
 
 
 def test_sotto_il_minimo_del_simbolo_si_rifiuta_non_si_gonfia(bridge):
