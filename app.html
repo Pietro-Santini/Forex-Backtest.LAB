@@ -13679,7 +13679,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.61';
+const FBL_VERSIONE='2.2.62';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -60424,20 +60424,58 @@ function fblReplayCondiviso(){ return !!fblReplayPerTutte && !!liveReplayActive;
 // candela INTERA sulla griglia invece di partire dall'istante mostrato (M5 a 08:31: -1 min invece
 // di +5; ◀ dalla stessa posizione: -12 min invece di -5).
 //
+// DI QUANTO AVANZA UNA CANDELLA DI QUESTO TIME FRAME, in millisecondi, a partire dall'istante `da`.
+// Per i time frame normali e' la durata fissa (`replaySecondsPerBar`). Per il MENSILE no, e non e'
+// un dettaglio: la candela mensile e' un mese di CALENDARIO (28-31 giorni, vedi fblInizioBucket),
+// mentre `replaySecondsPerBar` dice 43200 minuti = 30 giorni FISSI. MISURATO il 17 novembre 2026
+// partendo dal primo del mese (lo stato vero della candela sul grafico): con 30 giorni fissi i mesi
+// da 31 giorni NON avanzavano (1 gennaio + 30 giorni = 31 gennaio, ancora gennaio) e un passo
+// INDIETRO dal primo del mese finiva perfino nel mese prima di quello giusto (idx 24 -> 23).
+//
+// La regola resta quella del proprietario, «un passo = una candela»: si va al mese dopo (o prima) e
+// ci si mette alla STESSA altezza dentro il mese. Se il giorno non esiste (31 gennaio -> febbraio)
+// ci si ferma dentro il mese, all'ultimo istante utile: la candela avanza di UNO e non ne salta mai
+// due (31 giorni applicati al 31 gennaio porterebbero al 3 marzo, e febbraio non si vedrebbe mai).
+function fblReplayPassoIstante(da,segno){
+ const tf=Math.max(1,Number(currentTF)||1);
+ if(tf<FBL_TF_MESE)return da+((segno<0)?-tf*60000:tf*60000);
+ const inizio=fblInizioBucket(da,tf);
+ if(!Number.isFinite(inizio))return da+((segno<0)?-tf*60000:tf*60000);
+ const sub=Math.max(0,da-inizio);                    // quanto si e' dentro il mese
+ if(segno<0){
+   const finePrima=inizio;
+   const inizioPrima=fblInizioBucket(finePrima-1,tf);
+   const lunghezza=finePrima-inizioPrima;
+   if(!(lunghezza>0))return da-tf*60000;
+   return inizioPrima+Math.min(sub,lunghezza-1000);  // 1 s prima della fine del mese prima
+ }
+ const inizioDopo=fblFineBucket(inizio,tf);
+ const lunghezzaDopo=fblFineBucket(inizioDopo,tf)-inizioDopo;
+ if(!(lunghezzaDopo>0))return da+tf*60000;
+ return inizioDopo+Math.min(sub,lunghezzaDopo-1000);
+}
 // L'AUTORITÀ AVANZA UNA CANDELLA ALLA VOLTA (non a salti): le posizioni e gli ordini pendenti si
 // valutano su OGNI candela attraversata, come a PLAY. A salti si salterebbe il target o lo stop
 // colpito in mezzo — e su un M1 che riceve un passo da M30 sarebbero 30 candele al buio.
 function fblReplayPasso(segno, continuo){
  try{
-  const perBar=replaySecondsPerBar()*1000;      // durata di UNA candela di CHI PREME
   const da=replayMomentoMostrato();
-  if(!Number.isFinite(da)||!Number.isFinite(perBar)||perBar<=0)return;
-  let t=da+((segno<0)?-perBar:perBar);
-  // Non si esce dai PROPRI dati: l'istante si ferma fra la prima e l'ultima candela vera.
+  if(!Number.isFinite(da))return;
+  let t=fblReplayPassoIstante(da,segno);         // UNA candela di CHI PREME, mese compreso
+  if(!Number.isFinite(t))return;
+  // INDIETRO non si esce dai propri dati: l'istante si ferma sulla prima candela vera.
+  // IN AVANTI NON SI FERMA PIU' (17 novembre 2026): il tetto all'ultima candela faceva restare la
+  // finestra immobile sull'ultimo istante e l'annuncio diceva quello, quindi le altre finestre non
+  // si muovevano. Ora l'istante RICHIESTO viaggia lo stesso e la finestra senza piu' dati esce da
+  // sola (ramo apposito di fblReplayApplicaIstante), lasciando avanzare le altre.
   const primaT=baseRows.length?parseDateTime(baseRows[0]&&baseRows[0].date):null;
   const ultimaT=baseRows.length?closeTimeOf(baseRows[baseRows.length-1]):null;
   if(Number.isFinite(primaT)&&t<primaT)t=primaT;
-  if(Number.isFinite(ultimaT)&&t>ultimaT)t=ultimaT;
+  const oltrePropriDati=Number.isFinite(ultimaT)&&t>ultimaT;
+  // Se il passo esce dai PROPRI dati, l'istante RICHIESTO viaggia PRIMA di consumare le candele:
+  // l'uscita (che avviene dentro il ciclo, alla prima candela oltre i dati) spegne
+  // fblReplayPerTutte, e dopo l'annuncio non partirebbe piu' - misurato: la duplicata restava ferma.
+  if(oltrePropriDati&&fblReplaySonoAutorita())fblAnnunciaReplay('istante', t, !continuo);
   // Solo l'autorità consuma le candele (e quindi simula le posizioni): le altre applicano
   // l'istante che arriva, esattamente come a PLAY.
   if(fblReplaySonoAutorita()){
@@ -60453,21 +60491,25 @@ function fblReplayPasso(segno, continuo){
     if(!Number.isFinite(dopo)||dopo===ora)break;
    }
   }
+  // QUESTA FINESTRA NON ARRIVA FIN LI': l'istante RICHIESTO e' gia' partito (vedi sopra).
   fblReplayApplicaIstante(t);
   try{ update(); }catch(e){}
   // Viaggia l'istante DAVVERO raggiunto (se l'autorità si è fermata prima, lo dicono tutte).
   // `!continuo`: premuto da un dito e' un GESTO e non si strozza mai (vedi fblAnnunciaReplay);
   // chiamato dal battito (forward(true)) e' scorrimento e va strozzato come tutti gli altri.
-  fblAnnunciaReplay('istante', replayMomentoMostrato(), !continuo);
+  if(!oltrePropriDati)fblAnnunciaReplay('istante', replayMomentoMostrato(), !continuo);
  }catch(e){}
 }
 // UNA candela di questo time frame, dalla posizione in cui si è (formazione compresa), con la
 // valutazione: è la stessa strada dei riceventi, senza annuncio e senza disegno (li fa il passo).
 function fblReplayUnaCandela(segno){
- const perBar=replaySecondsPerBar()*1000;
  const da=replayMomentoMostrato();
- if(!Number.isFinite(da)||!Number.isFinite(perBar)||perBar<=0)return false;
- fblReplayApplicaIstante(da+((segno<0)?-perBar:perBar), true);
+ if(!Number.isFinite(da))return false;
+ // UNA candela VERA, mese compreso (vedi fblReplayPassoIstante): con la durata fissa un mese da 31
+ // giorni non si completava mai e il ciclo dell'autorita' girava a vuoto.
+ const t=fblReplayPassoIstante(da,segno);
+ if(!Number.isFinite(t)||t===da)return false;
+ fblReplayApplicaIstante(t, true);
  try{ evaluate(); }catch(e){}
  try{ checkPendingOrders(); }catch(e){}
  return true;

@@ -1910,7 +1910,9 @@ stato scritto 11-15 ms prima del click, e il ramo `modo==='istante'` usciva sul 
 LA CAUSA: il throttle esiste per lo SCORRIMENTO (a moltiplicatore alto il battito pubblica piu'
 volte al secondo), ma il passo a freccia passava dallo stesso ramo: un GESTO veniva scartato come
 se fosse un fotogramma. Non era teoria e non era raro: bastava premere avanti entro 30 ms da un
-annuncio del battito, e una finestra restava indietro di una candela.
+annuncio, e una finestra restava indietro di una candela. QUALE annuncio, lo dice la spia: quello
+del **click precedente** (11-15 ms prima), non il battito - il battito gira ogni
+`FBL_REPLAY_OGNI_MS` e non e' lui ad aver scritto il segnaposto in quei millisecondi.
 
 LA CURA: `fblAnnunciaReplay(modo, t, sempre)` - il throttle vale solo se `sempre` e' falso;
 `fblReplayPasso(segno, continuo)` annuncia con `!continuo`; `forward(silenzioso)` passa
@@ -1926,3 +1928,61 @@ NOTA SU UN BANCO VECCHIO: `replay_su_tutte_le_finestre.test.mjs` pretendeva che 
 uscisse dal replay. Dal 16 novembre la regola e' «STOP pausa dove si e', PLAY riparte dallo stesso
 secondo»: la prova e' stata riallineata (primo STOP = pausa propagata sullo STESSO istante,
 secondo STOP = uscita propagata a tutte), non cancellata.
+
+
+### IL PASSO SU UNA CANDELA MENSILE FACEVA 30 GIORNI FISSI, E IL TETTO IN AVANTI FERMAVA TUTTE (17 novembre 2026, v2.2.62)
+
+Due difetti dello stesso pezzo di codice, `fblReplayPasso`, trovati misurando il passo a freccetta
+sui time frame alti e sul bordo dei dati.
+
+**1) IL MESE NON E' 30 GIORNI.** `replaySecondsPerBar()` vale `currentTF*60` secondi, quindi sul
+time frame mensile (43200 minuti) il passo era **30 giorni fissi**. Ma la candela mensile non dura
+30 giorni: `fblInizioBucket` per `minutes>=FBL_TF_MESE` usa i **mesi di calendario** (28-31 giorni).
+MISURATO partendo dal primo del mese, che e' lo stato vero della candela sul grafico: `1 gennaio +
+30 giorni = 31 gennaio`, cioe' **ancora gennaio** - la candela non avanzava in 7 mesi su 12; e
+`1 febbraio + 30 giorni = 3 marzo`, saltando febbraio. Un passo **indietro** dal 1° gennaio finiva
+addirittura a dicembre (idx 24 -> 23) e sulla candela di febbraio usciva un mese intero sbagliato.
+Partendo dal 15 del mese il difetto si nascondeva (15 gennaio + 30 = 14 febbraio, che per caso e'
+il mese giusto): il primo banco che avevo scritto partiva da li' e i numeri dicevano «0 mesi su 12»
+- era il banco a non misurare, non il codice a essere sano.
+
+LA CURA: `fblReplayPassoIstante(da, segno)` - per i time frame normali la durata resta quella
+(`da ± tf*60000`, invariato); per il mensile si va al mese di calendario dopo (o prima) e ci si
+mette alla **stessa altezza dentro il mese**; se il giorno non esiste (31 gennaio -> febbraio) ci si
+ferma dentro il mese, all'ultimo istante utile: la candela avanza di **una** e non ne salta mai due.
+`fblReplayPasso` e `fblReplayUnaCandela` (il ciclo dell'autorita') usano tutti e due la nuova
+funzione, altrimenti il ciclo girava a vuoto sui mesi da 31 giorni.
+
+MISURA: banco nuovo `passo_mensile_replay.test.mjs`, 3 prove - dodici passi in avanti (uno per mese
+del 2026, ognuno deve mostrare il primo del mese dopo), undici indietro, e il caso peggiore 31
+gennaio -> febbraio. **Rosso sul codice vecchio** con gli errori esatti («dal mese 1 un passo deve
+mostrare 2026-02-01, invece mostra 2026-01-01»; «dal mese 3 indietro deve mostrare il mese prima,
+invece mostra 2026-01-01»; «dal 31 gennaio si deve finire a febbraio, non il 2026-03-01»), **verde
+dopo la cura**. Il banco porta una **prova di controllo**: conta quanti mesi sbaglierebbe la formula
+a 30 giorni fissi e pretende che siano almeno 6 su 12 (ne conta 7) - se un giorno tornasse a zero,
+vorrebbe dire che il banco non sta piu' misurando niente.
+
+**2) IL TETTO IN AVANTI FERMAVA TUTTE.** `fblReplayPasso` chiudeva con `if(t>ultimaT)t=ultimaT`.
+Quando la finestra che preme e' gia' sull'ultima sua candela, l'istante veniva riportato indietro
+all'ultima candela: quella finestra **non avanzava e non usciva**, e annunciava quell'istante alle
+altre, che quindi **restavano ferme anche loro**. Il replay condiviso si bloccava in silenzio, che e'
+il «si ferma» del proprietario. La regola del 16 novembre e' l'opposto: chi non ha piu' dati **esce
+da solo, in silenzio**, e le altre continuano; il ramo che fa uscire c'era gia' in
+`fblReplayApplicaIstante`, mancava solo che l'istante richiesto le arrivasse.
+
+LA CURA: via il tetto in avanti (indietro resta il fermo sulla prima candela vera), e l'istante
+**richiesto** viene annunciato **prima** di consumare le candele. L'ordine conta e l'ho sbagliato la
+prima volta: annunciando dopo, l'uscita (che avviene dentro il ciclo) spegne `fblReplayPerTutte` e
+l'annuncio non partiva piu' - misurato: la duplicata restava ferma sull'istante vecchio.
+
+MISURA: banco nuovo `passo_fine_dati.test.mjs` - madre con 30 candele da un minuto, duplicata con
+500, replay condiviso avviato sull'ultima candela della madre, **un** passo: la madre esce
+(`inReplay:false`) e la duplicata mostra l'istante richiesto (+60 s) restando in replay. **Rosso sul
+codice vecchio** («la finestra senza piu' dati deve uscire dal replay, invece resta dentro»),
+**verde dopo**. Trappola gia' pagata, ricaduta qui: l'istante di partenza va calcolato **dentro la
+pagina** (`parseDateTime`), non in UTC fuori - il primo giro cadeva sul minuto sbagliato.
+
+Verificati verdi dopo la cura anche i dieci banchi replay che c'erano: `passo_frecce_finestre`,
+`replay_fra_finestre`, `replay_stop_armato`, `replay_su_tutte_le_finestre`, `replay_live`,
+`frecce_replay_navigate`, `replay_fluido`, `countdown_candela_replay`, `replay_posizioni`,
+`replay_stop`.

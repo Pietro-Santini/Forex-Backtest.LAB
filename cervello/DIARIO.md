@@ -1,3 +1,23 @@
+- 2026-11-17 - OpenCode - **v2.2.62: il passo a freccetta su una candela mensile fa UN mese di
+  calendario, e il tetto in avanti non ferma piu' tutto il replay.** Due difetti dello stesso
+  punto, `fblReplayPasso`. (1) `replaySecondsPerBar()` vale `currentTF*60`, quindi sul mensile
+  (43200 minuti) il passo erano **30 giorni fissi**, mentre la candela mensile e' un mese di
+  calendario (28-31 giorni): partendo dal primo del mese - lo stato vero della candela a grafico -
+  `1 gennaio + 30 giorni = 31 gennaio` e la candela NON avanzava in **7 mesi su 12**;
+  `1 febbraio + 30 = 3 marzo` saltava febbraio; un passo indietro dal 1° gennaio finiva a dicembre
+  (idx 24 -> 23). Il primo banco partiva dal 15 del mese e diceva «0 mesi sbagliati»: il difetto era
+  vero, era il banco a non misurarlo (trappola del giorno, annotata). (2) `if(t>ultimaT)t=ultimaT`
+  riportava indietro l'istante di chi ha finito i dati: quella finestra restava immobile e annunciava
+  il vecchio istante alle altre, che si fermavano tutte - il «si ferma» del proprietario. CURA:
+  `fblReplayPassoIstante(da,segno)` (time frame normali invariati; sul mensile si va al mese dopo o
+  prima alla stessa altezza dentro il mese, e se il giorno non esiste ci si ferma dentro il mese, mai
+  due candele), usata da `fblReplayPasso` e da `fblReplayUnaCandela`; via il tetto in avanti, e
+  l'istante RICHIESTO annunciato **prima** di consumare le candele (annunciato dopo, l'uscita spegne
+  `fblReplayPerTutte` e l'annuncio non parte piu'). Banchi nuovi `passo_mensile_replay` (3 prove +
+  prova di controllo: la formula a 30 giorni deve sbagliare almeno 6 mesi su 12, ne sbaglia 7) e
+  `passo_fine_dati` (madre che finisce i dati esce, duplicata che ne ha di piu' avanza): **entrambi
+  rossi sul codice vecchio** con gli errori attesi, verdi dopo. Dieci banchi replay esistenti verdi.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-17 - OpenCode - **v2.2.61: il profilo volumetrico si calcola sempre al minuto, a
   qualunque time frame.** SEGNALATO dal proprietario il 16: «gli istogrammi del profilo volumetrico
   non mantengono il numero e le dimensioni fisse del time frame a 1 minuto quando cambiamo time
