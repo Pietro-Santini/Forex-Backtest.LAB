@@ -40859,12 +40859,23 @@ function tgAutoContoCollegatoLogin(){
 }
 // L'ordine in cui si apre: PRIMA il conto collegato adesso (se e' fra quelli scelti), cosi' il caso
 // normale non fa nessun cambio di conto; poi gli altri scelti, nell'ordine in cui sono salvati.
+//
+// UN CONTO NON E' UN NUMERO: E' login@server (17 novembre 2026). Qui si confrontava il solo
+// numero, e con lo STESSO numero su due server - 111@Broker-Live collegato, 111@Broker-Demo
+// spuntato - il conto demo finiva "primo" perche' il numero combaciava, e piu' sotto il cambio
+// conto veniva saltato per la stessa ragione: si apriva sul conto REALE con la configurazione
+// accesa del demo. Non e' un caso di scuola: `fblMigraChiaviConto` esiste proprio perche' la
+// stringa del server dello stesso conto oscilla (digitata a mano contro quella che riporta MT5),
+// quindi lo stesso conto fisico puo' stare fra i salvati con due chiavi, una demo e una reale.
+// La chiave si costruisce con `mt5AccountKey`, la stessa con cui sono scritte le spunte in
+// `tgAutoConti.conti`: usarne un'altra forma scollegherebbe in silenzio le spunte dell'utente.
 function tgAutoContiBersaglio(){
  const scelti=tgAutoContiScelti();
  if(!scelti.length)return [];
- const ora=tgAutoContoCollegatoLogin();
- const primo=scelti.filter(a=>ora&&String(a.login)===ora);
- const altri=scelti.filter(a=>!(ora&&String(a.login)===ora));
+ const ora=tgAutoContoCollegatoKey();
+ const chiave=a=>{ try{ return mt5AccountKey(a); }catch(e){ return null; } };
+ const primo=scelti.filter(a=>ora&&chiave(a)===ora);
+ const altri=scelti.filter(a=>!(ora&&chiave(a)===ora));
  return primo.concat(altri);
 }
 // Passa DAVVERO a un altro conto MT5: la stessa strada della tendina dei conti (connectToMt5Bridge
@@ -42905,9 +42916,14 @@ async function tgAutoApriQui(voce,d,seg,conto,spazio){
 async function tgAutoApriSuiConti(voce,d,seg,conto){
  const bersagli=tgAutoContiBersaglio();
  const loginPartenza=tgAutoContoCollegatoLogin();
- const tornaA=(tgAutoConti.tornaIndietro&&loginPartenza)
-   ? tgAutoContiSalvati().find(a=>String(a.login)===loginPartenza) : null;
- const collegatoAbilitato=!!(loginPartenza&&bersagli.some(a=>String(a.login)===loginPartenza));
+ // LA CHIAVE INTERA, non il numero: vedi il commento di tgAutoContiBersaglio. `chiavePartenza`
+ // e' null quando non si sa su quale conto si e' collegati, e in quel caso «il conto collegato
+ // e' fra quelli scelti» non puo' essere vero: il dubbio vale fermo, non fai pure.
+ const chiavePartenza=tgAutoContoCollegatoKey();
+ const _chiave=a=>{ try{ return mt5AccountKey(a); }catch(e){ return null; } };
+ const tornaA=(tgAutoConti.tornaIndietro&&chiavePartenza)
+   ? tgAutoContiSalvati().find(a=>_chiave(a)===chiavePartenza) : null;
+ const collegatoAbilitato=!!(chiavePartenza&&bersagli.some(a=>_chiave(a)===chiavePartenza));
  // Il conto collegato non e' fra quelli scelti e il cambio automatico e' spento: non si apre
  // niente, e lo si dice. E' una scelta esplicita dell'utente, non un guasto.
  if(!collegatoAbilitato&&!tgAutoConti.cambiaConto){
@@ -42920,15 +42936,34 @@ async function tgAutoApriSuiConti(voce,d,seg,conto){
  const lista=tgAutoConti.tuttiIConti?bersagli:bersagli.slice(0,1);
  const fatti=[]; const problemi=[];
  for(const acc of lista){
-  const _chiaveAcc=String(acc.login)+'@'+String(acc.server||'');
+  const _chiaveAcc=_chiave(acc);
+  const _et='conto '+acc.login+(acc.server?(' su '+acc.server):'');
+  if(!_chiaveAcc){ problemi.push(_et+': non riesco a identificarlo (manca il server), non apro'); continue; }
   if(tgAutoContoDaTrattareComeReale(acc.login,acc.server) && !tgAutoConti.conti[_chiaveAcc]){ problemi.push('conto '+acc.login+': conto reale/prop, aperture automatiche non attive'); continue; }
-  if(String(acc.login)!==String(tgAutoContoCollegatoLogin()||'')){
+  // IL CAMBIO CONTO SI DECIDE SULLA CHIAVE INTERA. Col solo numero, 111@Broker-Live e
+  // 111@Broker-Demo sembravano lo stesso conto e il cambio veniva saltato.
+  if(_chiaveAcc!==tgAutoContoCollegatoKey()){
    try{ $('status').textContent='⚡ Segnale di '+String(voce.chat||'')+': passo al conto MT5 '+acc.login+' per aprirlo…'; }catch(e){}
    const sw=await tgAutoVaiAlConto(acc);
    if(!sw.ok){ problemi.push('conto '+acc.login+': '+sw.message); continue; }
   }
+  // LA GUARDIA FINALE, E VALE PER TUTTI I MODI DI SBAGLIARE CONTO.
+  //
+  // Qui si e' a un passo dall'ordine vero. Prima di mandarlo si guarda DOVE SI E' DAVVERO, e
+  // se non e' il conto deciso non si apre. Copre in un punto solo tre strade diverse che
+  // portano allo stesso danno: il numero uguale su due server (curato sopra, questa e' la
+  // rete); un cambio conto che risponde ok ma non e' atterrato dove diceva; e la corsa fra il
+  // cambio conto e una risposta di /account partita prima e arrivata dopo, che riporta l'app
+  // sul conto di prima. Il ponte non puo' difendersi da sola: nella richiesta d'ordine non
+  // esiste nessun campo «conto atteso», esegue su qualunque sessione sia aperta.
+  const _doveSono=tgAutoContoCollegatoKey();
+  if(_doveSono!==_chiaveAcc){
+   problemi.push(_et+': non apro, perché il collegamento è su '+(_doveSono||'un conto che non so dire')
+     +' e non su questo. Riprova, oppure collegati a mano al conto giusto.');
+   continue;
+  }
    const _famConta=tgFamDaSimbolo(seg.strumento);
-   const _cfgConta=tgAutoRisolvi(_famConta, String(acc.login)+'@'+String(acc.server||''));
+   const _cfgConta=tgAutoRisolvi(_famConta, _chiaveAcc);
    const dConta=Object.assign({}, d, {cfg:_cfgConta, A:_cfgConta, base:tgBaseDi(_cfgConta, d.base)});
    const spazio=tgAutoSpazioOra(dConta,conto);
   if(spazio<=0){ problemi.push('conto '+acc.login+': tetti già pieni'); continue; }
@@ -42938,7 +42973,7 @@ async function tgAutoApriSuiConti(voce,d,seg,conto){
  }
  // Si torna al conto che si stava guardando: chi lo ha chiesto non vuole ritrovarsi su un conto
  // diverso da quello che aveva davanti.
- if(tornaA&&String(tornaA.login)!==String(tgAutoContoCollegatoLogin()||'')){
+ if(tornaA&&_chiave(tornaA)!==tgAutoContoCollegatoKey()){
   try{ $('status').textContent='↩️ Torno al conto MT5 '+tornaA.login+' (quello che stavi guardando).'; }catch(e){}
   const back=await tgAutoVaiAlConto(tornaA);
   if(!back.ok)problemi.push('ritorno al conto '+tornaA.login+' non riuscito: '+back.message);
