@@ -92,10 +92,57 @@ una regola che manca.
    Se l'ipotesi regge, i punti 2, 4 e 5 sono **una cura sola invece di tre**. Se non regge, lo si
    scopre prima di aver scritto tre cure sbagliate.
 
+7. **SUL GRAFICO SI VEDONO LE POSIZIONI DI TUTTI I CONTI, non solo di quello selezionato.**
+   Segnalato il 17 novembre:
+
+   > «quando cambio conto ancora visualizzo le posizioni al grafico degli altri conti. Cioè io in
+   > poche parole vedo tutte, non solo di un altro conto, ma di tutti i conti che sono stati
+   > aggiunti. Invece no, io devo vedere soltanto la cronostoria sul grafico delle posizioni
+   > soltanto del conto selezionato al momento […] deve funzionare come su MT5 sul terminale.»
+
+   **CAUSA TROVATA, ed è una riga sola** (`positionBelongsToCurrentView`, `app.html` ~15230):
+   ```js
+   const loginNoto=currentMt5AccountTag().mt5Login;
+   if(loginNoto)return pos.mt5Ticket!=null&&(pos.mt5Login==null||String(pos.mt5Login)===loginNoto);
+   ```
+   Una posizione passa se ha il login del conto attivo **oppure se non ha login affatto**. Quel
+   secondo ramo è il difetto: una posizione **senza targhetta** compare su **ogni** conto.
+   Confermato dal collaudo del 17 novembre, che fra gli avvisi stampa
+   `posizioni viste = {"conLogin":true,"altroLogin":false,"senzaLogin":true,"simulata":false}`:
+   `senzaLogin:true` vuol dire che le posizioni senza conto addosso **si vedono**.
+
+   **PERCHE' QUEL RAMO C'E', e perché non va solo stretto** (altrimenti si rompe quello che
+   proteggeva): il commento sopra quella riga e la consegna del 5 novembre raccontano il problema
+   opposto, già pagato — un ordine reale **senza** `mt5Login` restava **nascosto** quando un login
+   era noto (misurato allora: `senzaLogin:false`), e le linee entrata/TP/SL degli ordini pendenti
+   non si vedevano. Il ramo è stato allargato per quello. Stringerlo e basta riporta indietro quel
+   difetto.
+
+   **LA STRADA GIUSTA, da confermare misurando:** non decidere *in fase di disegno* cosa fare di
+   una posizione senza targhetta, ma **non lasciarla senza targhetta**. Il ponte sa da quale conto
+   arriva una posizione — la espone perfino come intestazione (`X-MT5-Server`,
+   `bridge.py` ~4107) — quindi la targhetta si scrive **quando la posizione si legge**, e il
+   filtro può tornare stretto senza nascondere niente. Da tenere distinti due casi che oggi
+   finiscono nello stesso ramo:
+   - `mt5Ticket == null` → **non è una posizione MT5** (simulata, backtest in Live): non c'entra
+     coi conti e si vede sempre. Una cura dell'11 novembre è già stata annullata per questo: vedi
+     il commento, aggiungere `mt5Ticket!=null` nel ramo «conto ignoto» aveva fatto sparire le
+     posizioni simulate e reso rossi cinque banchi.
+   - `mt5Ticket != null && mt5Login == null` → **è una posizione MT5 che ha perso il conto**:
+     questa va attribuita, non mostrata a tutti.
+
+   **Banchi già esistenti su questa zona**, da rileggere prima di toccare (e da tenere verdi):
+   `posizioni_un_solo_conto`, `conto_non_si_mischia`, `conto_al_salto`, `anagrafica_posizione`,
+   più i cinque citati nel commento (`mercato_chiuso`, `mt5_evidenzia_posizione`, `v138`,
+   `tosto_be_posizioni`, `replay_live`).
+
 **Stato:** niente curato, niente banco. Il punto 1 ha la causa letta nel sorgente (manca il
-guard), i punti 2, 4 e 5 sono sintomi da misurare con l'ipotesi del punto 6, e il 3 è una
-decisione di disegno da prendere col proprietario. **Ordine:** il 3 va prima del 2, perché decide
-cosa deve fare il pulsante; la misura del 6 va prima di 2, 4 e 5, perché potrebbe unificarli.
+guard), i punti 2, 4 e 5 sono sintomi da misurare con l'ipotesi del punto 6, il 3 è una decisione
+di disegno da prendere col proprietario, e il 7 ha la riga esatta ma **non** la cura, perché
+stringere quel ramo senza prima scrivere la targhetta alla fonte riporta indietro un difetto già
+pagato. **Ordine:** il 3 va prima del 2, perché decide cosa deve fare il pulsante; la misura del 6
+va prima di 2, 4 e 5, perché potrebbe unificarli; il 7 è indipendente dagli altri e si può fare
+quando si vuole.
 
 ## APERTI — 16 novembre 2026, finestre duplicate (da misurare, non ancora curbati)
 
