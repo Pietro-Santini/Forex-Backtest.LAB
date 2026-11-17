@@ -9236,6 +9236,35 @@ function fblRispondiDocCloud(nome){
     return true;
   }catch(e){ return false; }
 }
+// UN CONTO AGGIUNTO IN UNA FINESTRA COMPARE ANCHE NELLE ALTRE (richiesto il 17 novembre 2026).
+//
+// Parole del proprietario: «se aggiungo un nuovo conto mi si deve aprire anche sulle altre
+// finestre visibili e non solo su quella dove l'ho aggiunto da impostazioni».
+//
+// CAUSA: `mt5SavedAccounts` e' una CACHE in memoria della cartella delle credenziali. La cartella
+// su disco e' una sola e condivisa, ma ogni finestra tiene la sua copia: chi aggiunge aggiorna la
+// propria e le altre restano indietro finche' non rileggono.
+//
+// COSA VIAGGIA, E COSA NO - LA REGOLA CHE NON SI TOCCA: si manda solo «rileggi», mai l'elenco.
+// Dentro quei record ci sono le CREDENZIALI, e quelle non viaggiano mai, nemmeno fra due finestre
+// della stessa macchina. Chi riceve va a leggere la cartella da se'.
+function fblContiMt5Annuncia(){
+ try{ if(tradingChannel)tradingChannel.postMessage({type:'conti_mt5_cambiati',slot:PIP_SLOT,at:Date.now()}); }
+ catch(e){ console.warn('Annuncio conti MT5 non riuscito:',e); }
+}
+// Rilegge la cartella e ridisegna la tendina. SOLO se e' tornato un elenco: `mt5ContiSenzaChiedere`
+// risponde null quando il permesso sulla cartella non c'e' (succede, ed e' una scelta dichiarata),
+// e assegnare quel null vorrebbe dire CANCELLARE l'elenco dei conti in tutte le altre finestre a
+// ogni annuncio innocuo - molto peggio del difetto che si sta curando. Il banco lo misura.
+async function fblContiMt5Rileggi(){
+ try{
+  const l=await mt5ContiSenzaChiedere();
+  if(!Array.isArray(l))return false;
+  mt5SavedAccounts=l;
+  try{ renderMt5AccountSelect(); }catch(e){}
+  return true;
+ }catch(e){ return false; }
+}
 function collectTradingSyncPayload(){
  return {
    type:'trading_sync', slot:PIP_SLOT, at:Date.now(),
@@ -9817,6 +9846,11 @@ if(tradingChannel){
         // nessun messaggio riparte.
         try{ draw(); update(); }catch(e){}
       }finally{ applyingRemoteTradingSync=false; }
+   }else if(msg.type==='conti_mt5_cambiati'){
+     // Un'altra finestra ha aggiunto o togliato un conto: si rilegge la cartella (una sola fonte
+     // per tutta la macchina) e si ridisegna la tendina. Nessun dato di conto arriva dal
+     // messaggio: le credenziali non viaggiano.
+     fblContiMt5Rileggi();
    }else if(msg.type==='mirino'){
      // IL MIRINO DI UN'ALTRA FINESTRA. La condizione del proprietario e' una sola e sta qui:
      // stesso asset, altrimenti non si applica niente. Un prezzo e un orario di XAU/USD su un
@@ -61443,6 +61477,7 @@ $('mt5DeleteAccountBtn').addEventListener('click',async()=>{
  const handle=await getMt5CredsDirHandle();
  if(!handle)return;
  mt5SavedAccounts=await removeMt5AccountFromHandle(handle,acc);
+ fblContiMt5Annuncia();   // le altre finestre aperte rileggono la cartella e si aggiornano
  // RICHIESTO ESPLICITAMENTE: eliminando un conto MT5 si eliminano dal Trade Journal anche TUTTE le
  // operazioni fatte con quel conto (riconosciute dal numero di conto salvato su ogni operazione).
  const accLogin=String(acc.login);
@@ -61708,6 +61743,7 @@ $('mt5LoginSubmitBtn').addEventListener('click',async()=>{
      if(handle){
        // STEP B: si aggiunge alla lista (o si aggiorna se login+server esistono già).
        mt5SavedAccounts=await upsertMt5AccountInHandle(handle,creds);
+       fblContiMt5Annuncia();   // il conto nuovo compare anche nelle altre finestre aperte
        saved=true;
      }
    }catch(e){ console.warn('Salvataggio conto MT5 su cartella locale non riuscito:',e); }
