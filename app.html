@@ -40886,7 +40886,15 @@ let mt5ContoRealePerChiave={};
 try{ const v=JSON.parse(localStorage.getItem(FBL_MT5_REALE_KEY)||'null'); if(v&&typeof v==='object')mt5ContoRealePerChiave=v; }catch(e){ mt5ContoRealePerChiave={}; }
 function mt5ContoRealeSalva(){ try{ localStorage.setItem(FBL_MT5_REALE_KEY,JSON.stringify(mt5ContoRealePerChiave)); }catch(e){} }
 // Il conto collegato ADESSO e' reale/prop/o sconosciuto? Mai trattare null come false.
-function tgAutoContoCollegatoKey(){ try{ if(mt5ContoAttivo&&mt5ContoAttivo.login!=null)return mt5AccountKey(mt5ContoAttivo); }catch(e){} return null; }
+// MENTRE UN COLLEGAMENTO E' IN CORSO, NON SI SA SU CHE CONTO SI E' (17 novembre 2026).
+// `mt5AttivaConto` viene chiamata DENTRO il try di `connectToMt5Bridge`, quindi per tutta la
+// durata del cambio conto `mt5ContoAttivo` descrive ancora il conto VECCHIO. Rispondere con
+// quello vorrebbe dire far decidere la destinazione di un ordine a un dato che sta per cambiare.
+// Null fa valere la regola che il percorso dei soldi ha gia' in tutti gli altri punti: «non lo
+// so» vale fermo, non fai pure - `tgAutoDecidi` rifiuta, e la guardia finale di
+// `tgAutoApriSuiConti` non apre. Il contatore torna a zero in un `finally`, quindi questo stato
+// dura solo il tempo del collegamento.
+function tgAutoContoCollegatoKey(){ try{ if(mt5ConnessioneInCorso>0)return null; if(mt5ContoAttivo&&mt5ContoAttivo.login!=null)return mt5AccountKey(mt5ContoAttivo); }catch(e){} return null; }
 function tgAutoContoRealeDi(login,server){ const k=(login!=null&&server!=null)?(String(login)+'@'+String(server)):null; if(!k)return null; return Object.prototype.hasOwnProperty.call(mt5ContoRealePerChiave,k)?mt5ContoRealePerChiave[k]:null; }
 function tgAutoContoDaTrattareComeReale(login,server){
  // true = conto REALE o prop o «non lo so» (mai abilitare da sola). false = demo sicuro.
@@ -48954,9 +48962,26 @@ var _mt5AccountInfoInFlight=false;
 var mt5AccountInfoErrore=null;
 async function fetchMt5AccountInfo(){
  if(_mt5AccountInfoInFlight)return; // su un PC lento la risposta può tardare: mai richieste accavallate
+ // LE DUE GUARDIE CHE `fetchMt5Positions` HA DAL PRIMO GIORNO E QUESTA NON AVEVA (17 novembre
+ // 2026, trovato da un audit). Questo polling gira una volta al secondo, quindi una risposta puo'
+ // essere partita col conto A e arrivare quando l'utente e' gia' passato al conto B: quella
+ // risposta dice «sei sul conto A» e l'app ci tornava. Da li' in poi credeva di essere su A
+ // mentre il ponte era su B, e un ordine finiva sul conto sbagliato - reale compreso. Il ponte
+ // non puo' difendersi: nella richiesta d'ordine non esiste nessun campo «conto atteso».
+ //
+ // NON SI PUO' SEMPLICEMENTE ZITTIRLA: questa funzione E' ANCHE il canale che propaga il cambio
+ // conto fra dispositivi («se passo da conto 1 a conto 2 sul PC, anche sul tablet deve passare»,
+ // 10 novembre). Quindi si scartano SOLO le risposte scavalcate da un cambio conto fatto QUI, e
+ // tutto il resto passa come prima. Il banco lo misura in entrambi i versi.
+ if(mt5ConnessioneInCorso>0)return; // cambio conto in corso: nessuna fotografia e' affidabile
+ const _genConto=mt5GenerazioneConto;
  _mt5AccountInfoInFlight=true;
  try{
    const r=await fetchMt5WithTimeout('/account',{method:'GET'},8000);
+   // Scavalcati mentre eravamo in attesa: questa risposta descrive un conto che non e' piu'
+   // quello di adesso. Il `finally` qui sotto rilascia il lucchetto, quindi il polling riprende
+   // al giro dopo (c'e' una prova apposta: senza, un cambio conto lo ucciderebbe per sempre).
+   if(mt5ConnessioneInCorso>0||_genConto!==mt5GenerazioneConto)return;
    // IL CONTO DEL PONTE E' QUELLO CHE CONTA, ANCHE FRA DISPOSITIVI (10 novembre 2026).
    // Misurato: il login che torna da /account non veniva MAI confrontato con quello locale,
    // quindi se qualcuno cambiava conto (dal PC, dal tablet, da un'altra finestra) gli altri
