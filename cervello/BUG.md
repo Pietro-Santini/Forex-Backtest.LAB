@@ -144,6 +144,44 @@ pagato. **Ordine:** il 3 va prima del 2, perché decide cosa deve fare il pulsan
 va prima di 2, 4 e 5, perché potrebbe unificarli; il 7 è indipendente dagli altri e si può fare
 quando si vuole.
 
+## 17 novembre 2026 — SUONO DOPPIO: l'apertura è curata, la chiusura no
+
+Il banco da 483 righe scritto il 16 novembre e mai eseguito è stato **salvato dal `%TEMP%`**
+(ora `laboratorio/app/suono_e_sfarfallio_duplicate.test.mjs`) e **lanciato per la prima volta**.
+
+**Una sua prova di controllo era sbagliata**, ed è il motivo per cui valeva la pena lanciarlo
+invece di fidarsi: adottava **due** posizioni in un colpo solo e poi pretendeva **un** suono.
+Letta di fretta diceva «il suono raddoppia anche con una finestra sola», che avrebbe mandato la
+diagnosi dalla parte opposta a quella giusta. Corretta: una posizione per volta.
+
+**CURATO — l'APERTURA.** Misurato prima: «Madre 1 + duplicata 1 = 2». Ogni finestra suonava per
+conto suo. Due famiglie di suoni, e solo una andava toccata: quelli che la finestra ha **causato**
+(l'ordine che hai eseguito lì) devono suonare sempre; quelli **osservati** da MT5 li vedono tutte
+le finestre. Guardati i tre siti osservati con `fblSuonoDaMt5SpettaAMe()`, che riusa il **battito**
+di presenza — non un elenco di finestre, perché un elenco che non si svuota lascerebbe una madre
+**chiusa** a zittire per sempre le sue duplicate (lezione già scritta a `app.html` ~42517).
+Dopo: madre 1, duplicata 0.
+
+**NON CURATO — la CHIUSURA**, e sono due difetti distinti:
+1. **la duplicata suona ancora una volta** per una chiusura vista su MT5. La strada non è nessuna
+   delle tre guardate (il giro degli avvisi, il giro dei sospetti, l'adozione nelle posizioni):
+   **va trovata misurando**, non per esclusione. Candidato da verificare: `closeTrade()`
+   (`app.html` ~30045, `if(!silent)playOrderSound()`), chiamata da qualche percorso che reagisce
+   alla sparizione del ticket.
+2. **la madre annuncia la stessa chiusura due volte** su sei giri in cui il ticket non c'è più.
+   Per le APERTURE esiste già il coordinamento fra le due strade (`fblMt5Annunciato`); per le
+   chiusure non c'è.
+
+**STATO DEL BANCO: 5 verdi su 5, e dice la verità.** Due prove affermano quello che è curato, due
+sono etichettate **«MISURA, NON ATTESA»** e fissano i numeri di oggi (duplicata 1, chiusure 2):
+se quei numeri cambiano, la causa è cambiata e va rimisurata. Scritte come misure e non come
+attese perché un banco rosso lasciato in piedi blocca il collaudo e quindi ogni pubblicazione,
+mentre un banco cancellato perde la misura. Quando saranno curate, tornano `=== 1` e `=== 0`.
+
+**LO SFARFALLIO NON SI RIPRODUCE.** Le prove sulle linee che lampeggiano — ricomparse dopo la
+sparizione, righe di prezzo ridipinte — sono **verdi**. O è già curato, o sul banco non si vede e
+serve il PC del proprietario.
+
 ## APERTI — 16 novembre 2026, finestre duplicate (da misurare, non ancora curbati)
 
 Due sintomi, segnalati insieme dal proprietario con le finestre duplicate:

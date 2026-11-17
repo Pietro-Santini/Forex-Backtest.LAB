@@ -29843,7 +29843,8 @@ function fblAvvisiMt5Giro(dati){
   fblMt5Sospetti.delete(t);                      // ricomparso: il sospetto di chiusura si cancella
   if(fblMt5SnapPrec.has(t))return;
   if(fblMt5Annunciati.has(t)){ fblMt5Annunciati.delete(t); return; }
-  playOrderSound();
+  // Evento OSSERVATO da MT5: lo vedono tutte le finestre, lo annuncia una sola.
+  if(fblSuonoDaMt5SpettaAMe())playOrderSound();
   try{
    const lotti=Number(rp.volume)||0;
    $('status').textContent=`🖥️ Posizione aperta sul conto MT5 in background: ${rp.side||''} ${rp.symbol||''} ${lotti.toFixed(2)} lot a ${fmtPriceA(rp.price_open,rp.symbol)}.`;
@@ -29920,7 +29921,8 @@ async function fblAvvisoChiusuraMt5(ticket,ultimo){
  }catch(e){ return; }
  if(d.stillOpen)return;                          // su MT5 è ancora aperta: era un falso allarme
  if(d.reason==null&&d.price==null)return;        // questo conto non ha mai visto il ticket
- playOrderSound();
+ // Chiusura OSSERVATA su MT5: la vedono tutte le finestre, la annuncia una sola.
+ if(fblSuonoDaMt5SpettaAMe())playOrderSound();
  // Sala e numero del take profit: vivono nella memoria ticket -> segnale (mt5RicordaSegnale),
  // che è salvata su disco, quindi si leggono anche per una posizione che l'app non ha mai
  // adottato — è esattamente il caso della modalità backtest.
@@ -42576,6 +42578,32 @@ async function tgAspettaPresenza(){
 // Vero se QUESTA finestra e' autorizzata ad applicare un segnale. La madre (slot 0) non chiede
 // niente a nessuno: e' sempre lei. Se non c'e' il canale non si puo' sapere, e fra "apro" e
 // "non apro mai niente per un'ipotesi" scelgo il primo, perche' il secondo e' peggio.
+// UN EVENTO CHE ARRIVA DA MT5 LO ANNUNCIA UNA FINESTRA SOLA (17 novembre 2026).
+//
+// SEGNALATO dal proprietario il 16: «ancora avviene quello che e' il doppio/triplo suono
+// dell'esecuzione / chiusura della posizione con le pagine duplicate». MISURATO dal banco
+// `suono_e_sfarfallio_duplicate` (483 righe scritte il 16 e lanciate per la prima volta oggi):
+// «Madre 1 + duplicata 1 = 2». Con UNA finestra sola il percorso e' corretto - un'apertura un
+// suono, una chiusura un suono - quindi il difetto sta tutto nel coordinamento fra finestre.
+//
+// DUE FAMIGLIE DI SUONI, e solo una va toccata:
+//   - quelli che QUESTA finestra ha causato (l'ordine che hai eseguito qui, il pendente che hai
+//     creato qui): devono suonare qui, sempre, anche con dieci finestre aperte. Non si toccano.
+//   - quelli OSSERVATI da MT5 (una posizione che compare, una che si chiude): li vedono tutte
+//     le finestre perche' tutte leggono lo stesso conto, e sono questi che raddoppiano.
+//
+// Si riusa il BATTITO, non un elenco di finestre: lo dice il commento qui sopra, e la ragione e'
+// gia' pagata - un elenco che non si svuota lascerebbe una madre CHIUSA a zittire per sempre le
+// sue duplicate. Chi tace da troppo non conta piu', quindi una duplicata lasciata sola torna a
+// suonare, com'e' giusto.
+//
+// LIMITE NOTO, e va detto: due finestre con lo STESSO slot (due istanze normali, entrambe con
+// PIP_SLOT 0) non si sentono sul canale, perche' i messaggi del proprio slot si scartano. Per
+// quel caso vale la prenotazione dei segnali, non questa regola. Qui si cura il caso segnalato,
+// cioe' la madre con le sue duplicate.
+function fblSuonoDaMt5SpettaAMe(){
+ try{ return tgPresenzaSlotPiuBasso()>=PIP_SLOT; }catch(e){ return true; }
+}
 async function tgSonoAutoritaSegnale(){
  if(PIP_SLOT===0)return true;
  const c=tgCanalePresenza();
@@ -48789,7 +48817,8 @@ async function fetchMt5Positions(){
        // Suona solo se è DAVVERO nuova rispetto a quando ci siamo collegati: alla prima
        // fotografia (apertura app/ricarica/riconnessione) le posizioni già esistenti si adottano
        // in silenzio (vedi blocco SUONO ORDINI MT5).
-       if(mt5SoundPositionsBaselineDone && !mt5SoundSeenOpenTickets.has(String(rp.ticket)))playOrderSound();
+       // ...e lo annuncia una finestra sola: l'adozione la fa ogni finestra che legge il conto.
+       if(mt5SoundPositionsBaselineDone && !mt5SoundSeenOpenTickets.has(String(rp.ticket)) && fblSuonoDaMt5SpettaAMe())playOrderSound();
        // Di questa apertura ci siamo occupati qui: il giro degli avvisi (fblAvvisiMt5Giro) la
        // salta, altrimenti suonerebbe due volte per lo stesso ticket.
        fblMt5Annunciato(rp.ticket);
