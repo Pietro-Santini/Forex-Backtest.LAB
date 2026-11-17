@@ -11560,6 +11560,42 @@ function closeDrawTextEditor(){
 // riempimento) più l'eventuale TESTO di un disegno, con un nome a scelta. Si applica poi
 // al disegno selezionato, oppure — se nessun disegno è selezionato — diventa lo stile
 // predefinito per il prossimo disegno che verrà creato (testo compreso).
+// UN SALVATAGGIO CHE FALLISCE DEVE DIRLO, E DIRE PERCHE' (17 novembre 2026).
+//
+// SEGNALATO dal proprietario: «sui dispositivi mobili il modello e le impostazioni degli
+// indicatori me li fa salvare ma sul PC no». Il banco `nomi_modelli_disegni` e' verde (11 prove,
+// compresa «sopravvive alla ricarica»), quindi il codice che salva funziona: a non funzionare e'
+// il posto dove scrive, e solo sul PC.
+//
+// MISURATO sul suo PC il 17 novembre: il profilo della finestra pesa 1,4 GB, di cui 854 MB di
+// IndexedDB sotto `http://127.0.0.1:8000` - il magazzino delle candele, lo storico dell'order
+// book e la cache dei CSV, le tre cose che un audit dello stesso giorno aveva gia' trovato
+// SENZA TETTO. La memoria dei modelli (`localStorage`) e' a 2,5 MB su un tetto di 5 MB per
+// indirizzo. Sul telefono niente di tutto questo esiste, ed e' li' che infatti salva.
+//
+// Sospetto forte, NON ancora certezza: la scrittura fallisce per mancanza di spazio. Quindi qui
+// non si cura niente a intuito - si TOGLIE IL SILENZIO, che e' sempre giusto e non costa nulla:
+// un messaggio che dice anche QUANTO e' pieno, cosi' la prossima volta la causa si legge invece
+// di indovinarla. `navigator.storage.estimate()` e' asincrona, quindi il numero arriva un attimo
+// dopo e si aggiunge al messaggio gia' mostrato.
+function fblMemoriaPienaAvvisa(cosa){
+ const base='Impossibile salvare '+cosa+': la memoria del browser non accetta altro.';
+ try{ $('status').textContent=base+' Sto misurando quanto e\' piena…'; }catch(e){}
+ try{
+  if(navigator.storage&&navigator.storage.estimate){
+   navigator.storage.estimate().then(s=>{
+    try{
+     const mb=v=>(Number(v)/1048576);
+     const usato=mb(s&&s.usage), tetto=mb(s&&s.quota);
+     if(!(tetto>0)){ $('status').textContent=base; return; }
+     $('status').textContent=base+' Occupati '+usato.toFixed(0)+' MB su '+tetto.toFixed(0)
+       +' MB ('+Math.round(usato/tetto*100)+'%). Libera spazio dalle impostazioni, oppure dillo a chi segue il programma.';
+    }catch(e2){}
+   }).catch(()=>{});
+  }else{ try{ $('status').textContent=base; }catch(e){} }
+ }catch(e){}
+ try{ console.warn('[memoria] salvataggio fallito:',cosa); }catch(e){}
+}
 const DRAW_TEMPLATE_STORAGE_KEY='fbtDrawingTemplates_v1';
 let pendingDrawingTemplateText=null;
 function loadDrawingTemplates(){
@@ -11567,8 +11603,8 @@ function loadDrawingTemplates(){
  catch(e){ return {}; }
 }
 function saveDrawingTemplates(templates){
- try{ localStorage.setItem(DRAW_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); }
- catch(e){ $('status').textContent='Impossibile salvare il modello: memoria del browser non disponibile.'; }
+ try{ localStorage.setItem(DRAW_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); return true; }
+ catch(e){ fblMemoriaPienaAvvisa('il modello'); return false; }
 }
 function drawingTypeLabel(type){
  if(type==='rectangle')return '▭ Rettangolo';
@@ -11866,8 +11902,8 @@ function loadFibTemplates(){
  catch(e){ return {}; }
 }
 function saveFibTemplates(templates){
- try{ localStorage.setItem(FIB_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); }
- catch(e){ $('status').textContent='Impossibile salvare il modello Fibonacci: memoria del browser non disponibile.'; }
+ try{ localStorage.setItem(FIB_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); return true; }
+ catch(e){ fblMemoriaPienaAvvisa('il modello Fibonacci'); return false; }
 }
 function renderFibTemplateMenu(){
  const list=$('fibTemplateList'); if(!list)return;
@@ -55049,7 +55085,13 @@ function fblProfiloIndCampi(){
 }
 function fblProfiloIndLeggi(){ const o={}; fblProfiloIndCampi().forEach(id=>{ const el=$(id); if(el)o[id]=el.type==='checkbox'?!!el.checked:el.value; }); return o; }
 function fblProfiliIndCarica(){ try{ return JSON.parse(localStorage.getItem(FBL_PROFILI_IND_KEY)||'{}')||{}; }catch(e){ return {}; } }
-function fblProfiliIndSalva(tutti){ try{ localStorage.setItem(FBL_PROFILI_IND_KEY,JSON.stringify(tutti)); }catch(e){} }
+// IL SILENZIO QUI ERA IL PEGGIORE DI TUTTI (17 novembre 2026): `catch(e){}` nudo. I modelli dei
+// disegni un messaggio ce l'avevano, i parametri degli indicatori no - quindi lo stesso guasto
+// si vedeva per meta' e si cercava dalla parte sbagliata. Ora dicono tutti e due la stessa cosa.
+function fblProfiliIndSalva(tutti){
+ try{ localStorage.setItem(FBL_PROFILI_IND_KEY,JSON.stringify(tutti)); return true; }
+ catch(e){ fblMemoriaPienaAvvisa('le impostazioni dell\'indicatore'); return false; }
+}
 function fblProfiloIndApplica(valori){
  fblProfiloIndApplicando=true;
  try{
