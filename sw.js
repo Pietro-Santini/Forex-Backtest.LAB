@@ -644,7 +644,11 @@
 //            una risposta di /account partita prima del cambio conto non riporta piu' sul conto
 //            di prima; due finestre normali non aprono piu' lo stesso segnale due volte. E i tre
 //            salvataggi che fallivano in silenzio adesso lo dicono, col numero dentro.
-const CACHE_NAME = "forex-backtest-lab-v2.2.64";
+// v2.2.65 - FINESTRE DUPLICATE: un evento che arriva da MT5 lo annuncia una finestra sola (il
+//            doppio suono dell'apertura); gli indicatori si portano dietro al cambio di modalita'
+//            (non si «resettano» chiudendo la prop firm: erano nell'altro cassetto); e un conto
+//            aggiunto in una finestra compare anche nelle altre aperte.
+const CACHE_NAME = "forex-backtest-lab-v2.2.65";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

@@ -1,3 +1,57 @@
+- 2026-11-17 - Claude - **v2.2.65: finestre duplicate — il doppio suono, gli indicatori che
+  sembravano azzerarsi, e il conto nuovo che non arrivava alle altre finestre.** Tre cure, ognuna
+  provata nei due versi **togliendo davvero la cura** con `git stash`.
+  **(1) IL DOPPIO SUONO ALL'APERTURA.** Il banco da 483 righe scritto il 16 novembre stava in
+  `%TEMP%` e non era mai stato eseguito: **salvato nel repository e lanciato**. Misurato:
+  «Madre 1 + duplicata 1 = 2». Due famiglie di suoni, e solo una andava toccata — quelli che la
+  finestra ha **causato** (l'ordine eseguito lì) devono suonare sempre; quelli **osservati** da
+  MT5 li vedono tutte le finestre. Guardati i tre siti osservati con `fblSuonoDaMt5SpettaAMe()`,
+  che riusa il **battito** di presenza e non un elenco di finestre: un elenco che non si svuota
+  lascerebbe una madre **chiusa** a zittire per sempre le sue duplicate (lezione già a ~42517).
+  Dopo: madre 1, duplicata 0. **UNA SUA PROVA DI CONTROLLO ERA SBAGLIATA**, ed è il motivo per cui
+  valeva la pena lanciarlo invece di fidarsi: adottava **due** posizioni e pretendeva **un** suono,
+  quindi diceva «raddoppia anche con una finestra sola» — che avrebbe mandato la diagnosi dalla
+  parte opposta. **RESTA APERTA LA CHIUSURA**, due difetti distinti registrati in `BUG.md`: la
+  duplicata suona ancora una volta (da una strada che **non** è nessuna delle tre guardate: va
+  trovata misurando, non per esclusione) e la madre annuncia la stessa chiusura due volte (per le
+  aperture il coordinamento fra le due strade esiste già, `fblMt5Annunciato`; per le chiusure no).
+  Le due prove relative sono etichettate **«MISURA, NON ATTESA»** e fissano i numeri di oggi:
+  scritte così perché un banco rosso blocca il collaudo e quindi ogni pubblicazione, mentre
+  cancellarlo perderebbe la misura. **E lo SFARFALLIO non si riproduce**: le prove sulle linee che
+  lampeggiano sono verdi.
+  **(2) GLI INDICATORI NON SI RESETTANO: ERANO NELL'ALTRO CASSETTO.** SEGNALATO: «quando si chiude
+  quello che è un conto prop firm, le impostazioni delle pagine duplicate si resettano
+  completamente, si resettano anche gli indicatori». CAUSA MISURATA e poi riprodotta sul banco:
+  `currentMode()` vale `base+'_propfirm'` quando la prop firm è accesa, `indicatorsByMode` è
+  archiviato **per modalità**, e il canale fra finestre manda `isPropFirmMode` **senza guardia**
+  (nella stessa funzione `trades` ed `equity` sono protetti da `_stessoContoMt5`). Quindi ogni
+  duplicata passava da `live_propfirm` a `live` e mostrava un cassetto vuoto. È la **stessa forma**
+  del difetto dei modelli dei disegni, trovata lo stesso giorno: non una perdita, una chiave che
+  cambia sotto. SCELTA del proprietario fra tre strade: la **C** — seguono la madre, e gli
+  indicatori si portano dietro. LA REGOLA, e il «se» conta: si portano dietro **solo** se la
+  destinazione non ha indicatori suoi, altrimenti si sovrascriverebbe un lavoro scelto lì (lo
+  stesso difetto al rovescio); e si **copia**, non si condivide il riferimento, altrimenti andare
+  e tornare mescolerebbe due configurazioni. Banco `indicatori_seguono_la_modalita` (4 prove, 3 di
+  controllo).
+  **(3) UN CONTO AGGIUNTO COMPARE IN TUTTE LE FINESTRE.** **QUESTA VOCE L'AVEVO CAPITA AL
+  ROVESCIO** per due commit: «si spalma» letto come una lamentela, mentre il proprietario **vuole**
+  che si spalmi e oggi non lo faceva. Correzione registrata in `BUG.md` insieme alla lezione: una
+  parola come «si spalma» non dice da sola se chi parla la vuole o no — **si chiede**. CAUSA:
+  `mt5SavedAccounts` è una **cache in memoria** della cartella delle credenziali; la cartella è una
+  sola e condivisa, ma ogni finestra tiene la sua copia e restava indietro. CURA: si annuncia sul
+  canale **solo «rileggi»**, mai l'elenco — dentro quei record ci sono le **credenziali**, e quelle
+  non viaggiano mai, nemmeno fra due finestre della stessa macchina. TRAPPOLA con prova dedicata:
+  `mt5ContiSenzaChiedere()` risponde `null` quando il permesso sulla cartella manca, e assegnare
+  quel null avrebbe **cancellato l'elenco dei conti in tutte le altre finestre** a ogni annuncio
+  innocuo.
+  **TRE VOLTE IN UN GIORNO IL BANCO ERA SBAGLIATO E IL CODICE GIUSTO**, e va scritto perché è la
+  lezione più utile della giornata: la corsa fra finestre provata in sequenza invece che insieme;
+  gli indicatori finti col campo `type` mentre `serializeIndicators` richiede `key`; il canale
+  intercettato da `window.tradingChannel`, che è un `let` e non sta su `window`. Ogni volta la
+  prova restava rossa **con la cura corretta**, e ogni volta la tentazione era dare la colpa al
+  codice. Per questo ogni cura è stata riprovata togliendola davvero con `git stash`: è l'unica
+  verifica che distingue una prova che misura da una che si lamenta.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-17 - Claude - **v2.2.64: il resto dei buchi sui soldi veri dell'audit, e tre salvataggi
   che smettono di fallire in silenzio.** Quattro cure, ognuna col suo banco provato nei due versi.
   **(1) IL LOTTO COL PASSO VERO DEL SIMBOLO.** Conseguenza diretta della v2.2.63: da li' il ponte
