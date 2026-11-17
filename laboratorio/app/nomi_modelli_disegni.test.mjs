@@ -59,7 +59,7 @@
 //   - "non risponde mai" si scrive Infinity, non 999.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {apriApp} from 'file:///C:/Users/pietro/Documents/GitHub/Forex-Backtest.LAB/laboratorio/app/aiuti.mjs';
+import {apriApp} from './aiuti.mjs';
 
 // Le due chiavi dove oggi finisce il nome (lette dal sorgente, non inventate).
 const CHIAVE_DISEGNI = 'fbtDrawingTemplates_v1';

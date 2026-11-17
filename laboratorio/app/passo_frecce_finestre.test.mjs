@@ -37,9 +37,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const REPO = 'C:/Users/pietro/Documents/GitHub/Forex-Backtest.LAB';
-const {apriApp} = await import('file:///' + REPO + '/laboratorio/app/aiuti.mjs');
-const PAGINA = 'file://' + REPO + '/app.html';
+// IL PERCORSO DELLA PAGINA SI RICAVA DA DOVE STA QUESTO FILE (17 novembre 2026): era scritto a
+// mano "C:/Users/pietro/..." e sul collaudo di GitHub, che gira su Linux, il banco moriva prima di
+// cominciare (tre banchi rossi su GitHub e verdi sul PC: era solo questo).
+const PAGINA=new URL('../../app.html', import.meta.url).href;
+const {apriApp} = await import(new URL('./aiuti.mjs', import.meta.url).href);
 
 // 10 novembre 2026, 08:00. Le date delle candele finte sono scritte come «2026-11-10 08:00»,
 // cioe' senza fuso: l'app le legge nell'orario del sorgente CSV (America/New_York), quindi TUTTI
@@ -632,6 +634,24 @@ test('LA FINESTRA SENZA PIU DATI esce da sé, senza annunciare stop a tutte le a
   } finally { await c.browser.close(); }
 });
 
+// =====================================================================================
+// MISURA RIPORTATA (prova tolta perche' un banco rosso non resta nel repo) — «NESSUN TETTO».
+// Misurata il 16 novembre con questo stesso banco: madre M1 di 60 candele (in Live max=1000) e una
+// dup D1 di dieci giorni, replay condiviso, madre sull'ultima sua candela (08:59, idx 59/60):
+//   prima : madre idx 59, masterTime 08:59, inReplay true
+//   ▶     : madre idx 59, masterTime 08:59, inReplay TRUE (non esce, non si muove)
+//           dup D1 momento 08:59 -> 08:59 (nessun passo: l'annuncio è l'istante di prima)
+// La cura in working tree AGGANCIA il passo di chi preme alla sua ultima candela (in fblReplayPasso:
+// "se t>ultimaT allora t=ultimaT"), quindi "il replay non muore" è rispettato, ma il "nessun tetto"
+// del proprietario no: chi preme non esce da sé, resta fermo dentro il replay. Non succede quando
+// l'istante ARRIVA da un'altra finestra: lì la finestra esce da sé in silenzio (ramo apposito in
+// fblReplayApplicaIstante, provato dalla prova 9 qui sopra). Quando il varano sarà curato la prova
+// va rimessa così:
+//   const c = await scenaCondivisa([F(1, 60), F(1440, 10)], 59, 0);
+//   await premi(c.madre, 'next', 'madre ▶');  const dopo = await dopoIlPasso(c);
+//   assert.equal(dopo[0].inReplay, false);           // esce da sé, in silenzio
+//   assert.equal(dopo[1].inReplay, true);            // e le altre finestre continuano
+//   assert.equal(dopo[1].momento - prima[1].momento, await passoAtteso(c.madre));
 // =====================================================================================
 // 10. CONTROLLO: IL PLAY continua a seguire la stessa regola — nessun orologio a parte. Il battito
 //     avanza una candela per volta (replaySecondsPerBar è la sua durata) e pubblica l'istante: la

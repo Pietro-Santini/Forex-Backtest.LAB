@@ -96,6 +96,25 @@ copie complete — e va misurata: è esattamente ciò che misura il banco.
    (c) che a 1m nulla cambi rispetto a oggi, (d) che il footprint resti **identico** (controllo che
    nessuno lo tocchi).
 
+   **CURATO il 17 novembre 2026 (v2.2.61).** La strada scelta è la seconda: **il profilo si calcola
+   sempre sulle candele a un minuto**. Misura fatta prima di curare, stessa finestra di 300 minuti e
+   stessi dati, con lo **stesso zoom** (altrimenti si confrontano due cose diverse): le barre a 5
+   minuti differivano da quelle a 1 minuto in media di **20,2 px** (peggiore 64,6), a 15 minuti di
+   **20,8 px** (peggiore 45,6) — e senza equalizzare lo zoom la differenza arrivava a 53 e 222 px.
+   Dopo la cura, sugli stessi numeri: **0,0 px** a 5 e a 15 minuti, fasce sempre 120.
+   Come: `fblSerieM1PerProfilo()` tiene una serie a un minuto per asset (dal magazzino IndexedDB
+   `fblCandeleCacheLeggi(asset,1)`, altrimenti da `/history?timeframe=M1&count=20000`), e
+   `computeVolumeProfile`/`vpFixedResolveRange`/`lvnTouchIndex`/`developingLevels` accettano ora una
+   serie facoltativa (senza, si comportano **esattamente** come prima). Il "numero di candele" resta
+   quello del grafico: N candele del time frame = N×TF candele da un minuto, cioè lo stesso arco di
+   tempo di prima. Se la serie M1 non c'è, o il profilo comincia prima dei dati che ho, si torna al
+   time frame del grafico: mezzo profilo al minuto e mezzo no sarebbe peggio.
+   Il **footprint non è stato toccato**: nessuna sua funzione è cambiata (controllo nel banco:
+   `footprint_scala_unica` e `footprint_blocchi` verdi dopo la cura).
+   Banco: `laboratorio/app/profilo_sempre_minuto.test.mjs` — 2 prove, di cui una **di controllo**
+   che spegne apposta la serie M1 e pretende che le differenze tornino (20,2 px), perché un banco
+   che passa perché non disegna niente sarebbe indistinguibile da uno che passa perché è giusto.
+
 5. **APRE PIÙ POSIZIONI DI QUANTE IL SEGNALE NE CHIEDA** (soldi veri: priorità massima).
    > «apre più posizioni del dovuto rispetto a quello che dice il segnale del numero delle posizioni.
    > Deve aprire lo stesso numero di posizioni per il numero di TP mai di più.»

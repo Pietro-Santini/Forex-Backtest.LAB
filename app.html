@@ -13679,7 +13679,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.60';
+const FBL_VERSIONE='2.2.61';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -14287,8 +14287,32 @@ function styleFromUI(type){
 // Trova l'indice di candela (nell'intero dataset `rows`) più vicino nel tempo a un timestamp:
 // usato per agganciare l'ancora di questi disegni alla candela più vicina al click, così il
 // calcolo riparte sempre da una candela reale invece che da un istante a metà tra due candele.
-function rowIndexNearTime(t){
- const ts=getRowsTimestamps();
+// TIMESTAMP DI UNA SERIE DIVERSA DA `rows` (17 novembre 2026): serve ai profili volumetrici,
+// che d'ora in poi si calcolano sulle candele a UN MINUTO anche quando il grafico e' a 5m/15m/1H
+// (vedi fblSerieM1PerProfilo). Cache per array, cosi' non si rilegge a ogni ridisegno.
+const _fblTsSerieCache=new WeakMap();
+function fblTimestampsSerie(s){
+ if(!s||!s.length)return [];
+ let ts=_fblTsSerieCache.get(s);
+ if(ts)return ts;
+ ts=new Array(s.length);
+ let ultimo=NaN;
+ for(let i=0;i<s.length;i++){
+   const d=s[i]&&s[i].date;
+   const v=d?_parseDateTimeUncached(d):NaN;
+   ts[i]=Number.isFinite(v)?v:ultimo;
+   if(Number.isFinite(ts[i]))ultimo=ts[i];
+ }
+ // Le date che restano non valide (nessun vicino prima) prendono il primo valore buono.
+ let primo=NaN;
+ for(let i=0;i<ts.length;i++){ if(Number.isFinite(ts[i])){primo=ts[i];break;} }
+ if(Number.isFinite(primo))for(let i=0;i<ts.length;i++){ if(!Number.isFinite(ts[i]))ts[i]=primo; }
+ _fblTsSerieCache.set(s,ts);
+ return ts;
+}
+// `serie` e' facoltativa: senza, si comporta esattamente come prima (candele del grafico).
+function rowIndexNearTime(t,serie){
+ const ts=(serie&&serie!==rows)?fblTimestampsSerie(serie):getRowsTimestamps();
  if(!ts.length||!Number.isFinite(t))return 0;
  if(t<=ts[0])return 0;
  const last=ts.length-1;
@@ -14343,18 +14367,25 @@ function _vpTfKeepTime(d){
  if(typeof d.vpKeepCandles!=='undefined')return !d.vpKeepCandles;
  return true;
 }
-function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
- let aIdx=rowIndexNearTime(d.p1.time);   // let, non const: con "tieni fermo il numero di
+function vpFixedResolveRange(d,fullTs,idxLive,rowsLen,serie){
+ const m1=(serie&&serie!==rows);
+ // Con la serie a UN MINUTO il "numero di candele" va letto nella stessa unita' di prima: un
+ // profilo che copriva N candele del grafico copre N*currentTF candele da un minuto - cioe' lo
+ // stesso arco di TEMPO di prima, ma con il volume distribuito minuto per minuto (ed e' la
+ // richiesta del 16 novembre: "l'istogramma generato e in evoluzione del time frame da 1 minuto").
+ const passo=(m1?(currentTF||1):1);
+ let aIdx=rowIndexNearTime(d.p1.time,serie);   // let, non const: con "tieni fermo il numero di
  // candele" l'inizio puo' doversi spostare indietro (vedi sotto).
  if(d.type!=='vpfixed')return{aIdx,bIdx:Math.min(idxLive,rowsLen-1)};
  const keepTime=_vpTfKeepTime(d);
  if(keepTime){
-   const bIdx=rowIndexNearTime(d.p2.time);
+   const bIdx=rowIndexNearTime(d.p2.time,serie);
    const bi=Math.max(0,Math.min(rowsLen-1,Number.isFinite(bIdx)?bIdx:aIdx));
    return{aIdx,bIdx:bi};
  }
- const rawBIdx=rowIndexNearTime(d.p2.time);
- if(!Number.isFinite(d.candleCount)||d.candleCount<1)d.candleCount=Math.abs(rawBIdx-aIdx)+1;
+ const rawBIdx=rowIndexNearTime(d.p2.time,serie);
+ if(!Number.isFinite(d.candleCount)||d.candleCount<1)d.candleCount=Math.max(1,Math.round((Math.abs(rawBIdx-aIdx)+1)/passo));
+ const conta=Math.max(1,Math.round(d.candleCount*passo));
  const dir=rawBIdx>=aIdx?1:-1;
  // PRIMA: si spostava sempre l'estremo DESTRO e poi si tagliava ai dati disponibili.
  // MISURATO (9 novembre 2026): un profilo disegnato sulle ultime 300 candele a 1 minuto,
@@ -14367,13 +14398,13 @@ function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
  // copre allora un arco di tempo piu' lungo (300 candele a 15 minuti sono 75 ore, non 5): e'
  // aritmetica, non un difetto, ed e' esattamente il significato di "tieni fermo il numero di
  // candele".
- let bIdx=aIdx+dir*(d.candleCount-1);
+ let bIdx=aIdx+dir*(conta-1);
  if(dir>0&&bIdx>rowsLen-1){
   const manca=bIdx-(rowsLen-1);
   const nuovoA=Math.max(0,aIdx-manca);
   if(nuovoA!==aIdx){
    aIdx=nuovoA;
-   bIdx=aIdx+dir*(d.candleCount-1);
+   bIdx=aIdx+dir*(conta-1);
    // E l'inizio si sposta CON l'ancora, o al giro dopo tornerebbe dov'era. E' l'unico posto in
    // cui p1.time viene riscritto, e va detto per intero: qui "tieni fermo il numero di candele"
    // lo esige, mentre la regola "nessuno riscrive p1.time" protegge l'ancora nell'altra
@@ -14387,7 +14418,7 @@ function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
   const nuovoA=Math.min(rowsLen-1,aIdx+manca);
   if(nuovoA!==aIdx){
    aIdx=nuovoA;
-   bIdx=aIdx+dir*(d.candleCount-1);
+   bIdx=aIdx+dir*(conta-1);
    const tA=fullTs[aIdx];
    if(Number.isFinite(tA)&&tA!==d.p1.time)d.p1.time=tA;
   }
@@ -14398,7 +14429,8 @@ function vpFixedResolveRange(d,fullTs,idxLive,rowsLen){
  // Il conto alla fine e' quello che resta davvero, non quello che si sperava: lo si scrive, cosi'
  // un profilo creato pochi minuti fa (dati fermi) non somiglia uno creato con dati completi.
  const rimasto=Math.abs(bIdx-aIdx)+1;
- if(rimasto>0&&rimasto!==d.candleCount)d.candleCount=rimasto;
+ const rimastoGrafico=Math.max(1,Math.round(rimasto/passo));   // sempre nel numero di candele del grafico
+ if(rimasto>0&&rimastoGrafico!==d.candleCount)d.candleCount=rimastoGrafico;
  return{aIdx,bIdx};
 }
 // VWAP ancorato: media del prezzo tipico (H+L+C)/3 pesata sul volume reale di ogni candela,
@@ -14439,18 +14471,19 @@ function computeAnchoredVWAP(anchorIdx,endIdx){
 // array `rows` + intervallo + barre). L'ultima candela (in formazione in Live) entra nella chiave
 // con il suo high/low/close/volume, così quel profilo si ricalcola a ogni tick come prima.
 let _vpProfileCache=new Map(), _vpProfileCacheRows=null;
-function computeVolumeProfile(startIdx,endIdx,buckets){
- if(_vpProfileCacheRows!==rows||_vpProfileCache.size>600){ _vpProfileCache=new Map(); _vpProfileCacheRows=rows; }
- const _hiK=Math.min(rows.length-1,Math.max(startIdx,endIdx));
- const _lastR=rows[_hiK];
- const _key=Math.min(startIdx,endIdx)+'|'+_hiK+'|'+buckets+'|'+rows.length+'|'+(_lastR?(_lastR.high+','+_lastR.low+','+_lastR.close+','+_lastR.volume):'')+'|'+((typeof liveModeActive!=='undefined'&&liveModeActive)?1:0);
+function computeVolumeProfile(startIdx,endIdx,buckets,serie){
+ const S=(serie&&serie.length)?serie:rows;
+ if(_vpProfileCacheRows!==S||_vpProfileCache.size>600){ _vpProfileCache=new Map(); _vpProfileCacheRows=S; }
+ const _hiK=Math.min(S.length-1,Math.max(startIdx,endIdx));
+ const _lastR=S[_hiK];
+ const _key=Math.min(startIdx,endIdx)+'|'+_hiK+'|'+buckets+'|'+S.length+'|'+(_lastR?(_lastR.high+','+_lastR.low+','+_lastR.close+','+_lastR.volume):'')+'|'+((typeof liveModeActive!=='undefined'&&liveModeActive)?1:0);
  const _hit=_vpProfileCache.get(_key);
  if(_hit!==undefined)return _hit;
- const _res=_computeVolumeProfileUncached(startIdx,endIdx,buckets);
+ const _res=_computeVolumeProfileUncached(startIdx,endIdx,buckets,S);
  _vpProfileCache.set(_key,_res);
  return _res;
 }
-function _computeVolumeProfileUncached(startIdx,endIdx,buckets){
+function _computeVolumeProfileUncached(startIdx,endIdx,buckets,rows){
  const lo2=Math.max(0,Math.min(startIdx,endIdx)), hi2=Math.min(rows.length-1,Math.max(startIdx,endIdx));
  if(hi2<lo2)return null;
  let priceLo=Infinity,priceHi=-Infinity;
@@ -14583,15 +14616,16 @@ function computeValueArea(profile,vaPct){
 // fascia): lì si ferma. Se non è mai stata toccata continua ad allungarsi fino all'ultima candela,
 // al passo con il mercato. Ricerca incrementale con cache (niente riscansione a ogni ridisegno).
 let _lvnTouchCache=new Map(), _lvnTouchRowsRef=null;
-function lvnTouchIndex(fromIdx,lo,hi){
- if(_lvnTouchRowsRef!==rows){ _lvnTouchCache=new Map(); _lvnTouchRowsRef=rows; }
- const end=Math.min(idx,rows.length-1);
+function lvnTouchIndex(fromIdx,lo,hi,serie){
+ const S=(serie&&serie.length)?serie:rows;
+ if(_lvnTouchRowsRef!==S){ _lvnTouchCache=new Map(); _lvnTouchRowsRef=S; }
+ const end=Math.min((serie&&serie.length)?S.length-1:idx,S.length-1);
  const key=fromIdx+'|'+lo+'|'+hi;
  let c=_lvnTouchCache.get(key);
  if(!c){ if(_lvnTouchCache.size>3000)_lvnTouchCache.clear(); c={touch:-1,scanned:fromIdx}; _lvnTouchCache.set(key,c); }
  if(c.touch>=0) return c.touch<=end?c.touch:-1; // replay tornato indietro prima del tocco: non ancora toccata
  for(let i=Math.max(fromIdx+1,c.scanned+1);i<=end;i++){
-   const r=rows[i]; if(!r)continue;
+   const r=S[i]; if(!r)continue;
    if(r.high>=lo&&r.low<=hi){ c.touch=i; c.scanned=i; return i; }
    c.scanned=i;
  }
@@ -14672,19 +14706,19 @@ function computeLowVolumeZone(profile,thresholdPct,edgePct,rows,startIdx,endIdx)
 // mostra come questi livelli si sono mossi nel tempo — sempre dentro l'intervallo del profilo
 // stesso [startIdx,lastIdx], mai oltre. Campionata a passi (stride) quando l'intervallo è molto
 // lungo, per non ricalcolare centinaia di profili ad ogni frame durante pan/zoom.
-function developingLevels(startIdx,lastIdx,nb,vaPct){
+function developingLevels(startIdx,lastIdx,nb,vaPct,serie){
  const total=lastIdx-startIdx+1;
  if(total<=1)return null;
  const maxSteps=150;
  const stride=Math.max(1,Math.ceil(total/maxSteps));
  const pts=[];
  for(let i=startIdx;i<=lastIdx;i+=stride){
-   const prof=computeVolumeProfile(startIdx,i,nb);
+   const prof=computeVolumeProfile(startIdx,i,nb,serie);
    const va=prof?computeValueArea(prof,vaPct):null;
    if(va)pts.push({i,pocPrice:va.pocPrice,vahPrice:va.vahPrice,valPrice:va.valPrice});
  }
  if(pts.length&&pts[pts.length-1].i!==lastIdx){
-   const prof=computeVolumeProfile(startIdx,lastIdx,nb);
+   const prof=computeVolumeProfile(startIdx,lastIdx,nb,serie);
    const va=prof?computeValueArea(prof,vaPct):null;
    if(va)pts.push({i:lastIdx,pocPrice:va.pocPrice,vahPrice:va.vahPrice,valPrice:va.valPrice});
  }
@@ -23859,6 +23893,12 @@ function draw(){
  // cambiano uno stop o un target attraversano subito dopo averlo cambiato: vedi il commento
  // lungo sopra posStoriaSegna(). Costa un confronto di tre numeri per posizione aperta.
  try{ posStoriaAggiornaTutte(); }catch(e){}
+ // PROFILI VOLUMETRICI AL MINUTO (vedi fblSerieM1PerProfilo): se il grafico non e' a 1 minuto,
+ // si assicura in sottofondo la serie a un minuto dello stesso asset. Non blocca niente: finche'
+ // non c'e', i profili si calcolano come prima; quando arriva, un ridisegno li aggiorna.
+ // Sta DOPO posStoriaAggiornaTutte e non prima: quella riga deve restare in testa a draw(),
+ // e c'e' un banco (replay_posizioni) che lo pretende a meno di 400 caratteri dall'inizio.
+ try{ if((currentTF||1)>1)fblSerieM1Assicura(); }catch(e){}
  if(!liveModeActive){ try{ fblRegStoricoSync(); }catch(e){} }
  // Annuncia l'asset a grafico ORA alle altre finestre PIP (solo se cambiato dall'ultima volta —
  // vedi anotherWindowOwnsAssetEvaluation()/broadcastAssetAnnounce() più sopra nel file): usato
@@ -25015,14 +25055,24 @@ function draw(){
        // confine sono state rimosse su richiesta (restano comunque selezionabili/trascinabili
        // cliccando nell'area dell'istogramma o vicino ai quadratini quando selezionato).
        const fullTs=getRowsTimestamps();
-       const {aIdx,bIdx}=vpFixedResolveRange(d,fullTs,idx,rows.length);
+       // SERIE DEI PROFILI VOLUMETRICI: le candele a UN MINUTO quando ci sono (vedi
+       // fblSerieM1PerProfilo), altrimenti quelle del grafico. E' la richiesta del 16 novembre
+       // («se siamo a time frame 5 minuti dobbiamo sempre vedere l'istogramma generato e in
+       // evoluzione del time frame da 1 minuto»). MISURATO prima della cura, sulla stessa finestra
+       // di 300 minuti e sugli stessi dati: le barre a 5 minuti differivano da quelle a 1 minuto in
+       // media di 53 px (peggiore 130), a 15 minuti di 222 px (peggiore 501).
+       const serieM1=(typeof fblSerieM1PerProfilo==='function')?fblSerieM1PerProfilo(d,fullTs):null;
+       const serieProf=serieM1?serieM1.rows:rows;
+       const tsProf=serieM1?serieM1.ts:fullTs;
+       const idxLiveProf=serieM1?serieM1.idxLive:idx;
+       const {aIdx,bIdx}=vpFixedResolveRange(d,tsProf,idxLiveProf,serieProf.length,serieM1?serieProf:null);
        const startIdx=Math.min(aIdx,bIdx), lastIdx=Math.max(aIdx,bIdx);
-       const leftX=shapesGeo.xFromTime(fullTs[startIdx]);
+       const leftX=shapesGeo.xFromTime(tsProf[startIdx]);
        // "Estendi fino al bordo destro" (impostabile dal doppio click, solo per l'intervallo
        // fisso: l'ancorato arriva già da solo al bordo, si estende sempre fino ad ora): sposta
        // solo il confine VISIVO destro fino al bordo del grafico, il calcolo del volume resta
        // comunque legato all'intervallo scelto [p1,p2], invariato.
-       const rightBoundX=d.type==='vpfixed'?(d.extendRight?(w-pad.r):shapesGeo.xFromTime(fullTs[lastIdx])):(w-pad.r);
+       const rightBoundX=d.type==='vpfixed'?(d.extendRight?(w-pad.r):shapesGeo.xFromTime(tsProf[lastIdx])):(w-pad.r);
        const nb=d.buckets?Math.max(6,Math.min(500,Math.round(d.buckets))):Math.max(8,Math.min(60,Math.round(ch/7)));
        // Il CALCOLO del profilo a parte dal suo DISEGNO, per la stessa ragione degli indicatori:
        // sono due cure diverse. computeVolumeProfile e' gia' in cache (chiave sull'ultima
@@ -25031,7 +25081,7 @@ function draw(){
        // nell'istogramma - 150 fasce per barra, sfondo, POC/VAH/VAL. Misurato sul banco con
        // 51.000 candele: `disegno:vpfixed` 4,27 ms su 4,36 di tutta la sezione.
        let _tProf=performance.now();
-       const profile=computeVolumeProfile(startIdx,lastIdx,nb);
+       const profile=computeVolumeProfile(startIdx,lastIdx,nb,serieProf);
        // Il '>' nel nome dice che questo numero sta DENTRO un altro (disegno:vpfixed) e non va
        // sommato con lui: vedi il totale nel rapporto, che salta i nomi annidati.
        fblDettaglioFine('disegno:vpfixed>calcolo',_tProf);
@@ -25059,7 +25109,7 @@ function draw(){
        //     allo zoom, che e' un difetto gia' corretto una volta in passato.
        // Da qui l'aggancio al periodo resta quello di sempre, e non si tocca piu' senza che il
        // proprietario lo chieda con queste parole.
-       const periodRightX=shapesGeo.xFromTime(fullTs[lastIdx]);
+       const periodRightX=shapesGeo.xFromTime(tsProf[lastIdx]);
        const periodPx=Math.max(0,periodRightX-leftX);
        const VP_WIDTH_FRACTION_PER_PCT=0.14/100; // 500% -> 0.70 della larghezza del periodo
        const VP_MAX_BAR_PX=cw*0.6;
@@ -25101,16 +25151,16 @@ function draw(){
          // per un profilo di 300. Banco: 1,3 ms su 1.000 candele contro 28,9 su 83.000, stesso
          // profilo (22 volte). E' anche piu' giusto: una candela fuori dal periodo non ha messo
          // volume nelle fasce di questo profilo, non puo' decidere quali sono "toccate".
-         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15,d.lvnEdgePct,rows,startIdx,lastIdx);
+         const lvz=computeLowVolumeZone(profile,d.lvnThresholdPct!=null?d.lvnThresholdPct:15,d.lvnEdgePct,serieProf,startIdx,lastIdx);
          if(lvz){
            const lvTopY=shapesGeo.y(lvz.hiPrice), lvBotY=shapesGeo.y(lvz.loPrice);
            // Fine della zona: la candela che la tocca per prima dopo l'istogramma, altrimenti
            // l'ultima candela (o il bordo del grafico per un profilo esteso/ancorato).
-           const _tIdx=lvnTouchIndex(lastIdx,lvz.loPrice,lvz.hiPrice);
-           const _endI=Math.min(idx,rows.length-1);
-           let lvRightX=_tIdx>=0?shapesGeo.xFromTime(fullTs[_tIdx]):((d.type==='vpanchor'||d.extendRight)?rightBoundX:shapesGeo.xFromTime(fullTs[_endI]));
+           const _tIdx=lvnTouchIndex(lastIdx,lvz.loPrice,lvz.hiPrice,serieM1?serieProf:null);
+           const _endI=Math.min(idxLiveProf,serieProf.length-1);
+           let lvRightX=_tIdx>=0?shapesGeo.xFromTime(tsProf[_tIdx]):((d.type==='vpanchor'||d.extendRight)?rightBoundX:shapesGeo.xFromTime(tsProf[_endI]));
            if(!Number.isFinite(lvRightX))lvRightX=rightBoundX;
-           lvRightX=Math.max(lvRightX,Math.min(rightBoundX,shapesGeo.xFromTime(fullTs[lastIdx])||rightBoundX));
+           lvRightX=Math.max(lvRightX,Math.min(rightBoundX,shapesGeo.xFromTime(tsProf[lastIdx])||rightBoundX));
            ctx.save();
            ctx.globalAlpha=Math.min(1,strokeAlpha)*Math.max(0,Math.min(100,d.lvnOpacity!=null?d.lvnOpacity:25))/100;
            ctx.fillStyle=d.lvnColor||'#00e676';
@@ -25233,7 +25283,7 @@ function draw(){
        // da quella che è il POC stesso... lo sviluppo invece deve essere un'altra linea che mostra
        // lo storico") AGGIUNGE una SECONDA linea distinta, più sottile e punteggiata, che traccia
        // come il livello si è mosso nel tempo — non sostituisce più la riga piatta.
-       const developing=(va&&(d.pocExtend||d.vaExtend))?developingLevels(startIdx,lastIdx,nb,0.7):null;
+       const developing=(va&&(d.pocExtend||d.vaExtend))?developingLevels(startIdx,lastIdx,nb,0.7,serieProf):null;
        // Tipo di linea (continua/tratteggiata) per la riga piatta del livello, configurabile per
        // POC/VAH/VAL separatamente (default: POC continuo, VAH/VAL tratteggiati — comportamento
        // di prima, per chi ha già un disegno salvato senza questo campo).
@@ -25252,7 +25302,7 @@ function draw(){
            ctx.setLineDash([2,2]);
            ctx.beginPath();
            developing.forEach((pt,ix)=>{
-             const px=shapesGeo.xFromTime(fullTs[pt.i]), pyDev=shapesGeo.y(pt[priceKey]);
+             const px=shapesGeo.xFromTime(tsProf[pt.i]), pyDev=shapesGeo.y(pt[priceKey]);
              if(ix===0)ctx.moveTo(px,pyDev); else ctx.lineTo(px,pyDev);
            });
            ctx.stroke();
@@ -26929,13 +26979,18 @@ function hitTestDrawings(clientX,clientY,vpBodySelect){
      // cliccabile. Prima della condivisione in una funzione unica i due punti avevano lo stesso
      // calcolo duplicato due volte: bastava toccarne uno solo (come poi successo per il fix del
      // conteggio candele fisso) per farli disallineare di nuovo.
-     const {aIdx,bIdx}=vpFixedResolveRange(d,fullTs,idx,rows.length);
-     const leftX=g.xFromTime(fullTs[Math.min(aIdx,bIdx)]);
-     const rightX=d.type==='vpfixed'?(d.extendRight?(g.rect.width-g.pad.r):g.xFromTime(fullTs[Math.max(aIdx,bIdx)])):(g.rect.width-g.pad.r);
+     // Stessa serie del disegno (vedi fblSerieM1PerProfilo): le maniglie devono cadere sugli
+     // stessi angoli dell'istogramma, altrimenti a 5m si afferrano punti che non esistono.
+     const serieM1H=(typeof fblSerieM1PerProfilo==='function')?fblSerieM1PerProfilo(d,fullTs):null;
+     const profRows=serieM1H?serieM1H.rows:rows;
+     const profTs=serieM1H?serieM1H.ts:fullTs;
+     const {aIdx,bIdx}=vpFixedResolveRange(d,profTs,serieM1H?serieM1H.idxLive:idx,profRows.length,serieM1H?profRows:null);
+     const leftX=g.xFromTime(profTs[Math.min(aIdx,bIdx)]);
+     const rightX=d.type==='vpfixed'?(d.extendRight?(g.rect.width-g.pad.r):g.xFromTime(profTs[Math.max(aIdx,bIdx)])):(g.rect.width-g.pad.r);
      // Stesse maniglie agli angoli VERI dell'istogramma di draw() (vedi lì il commento): il
      // bucket count qui non conta, priceLo/priceHi di computeVolumeProfile dipendono solo
      // dall'intervallo [startIdx,lastIdx], non dal numero di bucket — ne basta uno qualsiasi.
-     const hitProfile=computeVolumeProfile(Math.min(aIdx,bIdx),Math.max(aIdx,bIdx),6);
+     const hitProfile=computeVolumeProfile(Math.min(aIdx,bIdx),Math.max(aIdx,bIdx),6,profRows);
      const handleYBottom=hitProfile?g.y(hitProfile.priceLo):g.pad.t+14;
      const handleYTop=hitProfile?g.y(hitProfile.priceHi):g.pad.t+14;
      // BUG RISOLTO (vedi il commento gemello in draw()): l'hit-test delle maniglie non può più
@@ -54946,6 +55001,82 @@ async function fblCandeleCacheScrivi(asset,tf,rows,digits,scarto){
     try{ localStorage.setItem('fblCandleCacheIndex',JSON.stringify(fblCandleCacheIndex)); }catch(e){}
     return true;
   }catch(e){ console.warn('[candele] salvataggio locale fallito:',e); return false; }
+}
+// ===================== SERIE A UN MINUTO PER I PROFILI VOLUMETRICI =====================
+// RICHIESTA DEL PROPRIETARIO (16 novembre 2026), con il chiarimento che l'ha accompagnata il 17:
+// «la regola riguarda solo gli istogrammi dei profili volumetrici e non riguarda il footprint, io
+// non ho mai accennato il footprint, del footprint non va modificato assolutamente nulla». Quindi
+// il FOOTPRINT non c'entra: qui si parla SOLO dei profili volumetrici (indicatori vp_daily /
+// vp_sessions e profili disegnati a mano), che passano tutti da computeVolumeProfile.
+//
+// PERCHE' SERVE UNA SECONDA SERIE: in Live lo storico arriva GIA' aggregato al time frame del
+// grafico (/history?timeframe=<TF>), quindi a 5 minuti il profilo di un'ora veniva distribuito su
+// 12 candele da 5 minuti invece che su 60 da un minuto: stesso periodo, forma diversa, e aggiornato
+// ogni 5 minuti invece che ogni minuto.
+// MISURATO prima della cura, sulla stessa finestra di 300 minuti e sugli stessi dati: la forma
+// delle barre a 5 minuti differiva da quella a 1 minuto in media di 53 px (peggiore 130), a 15
+// minuti di 222 px (peggiore 501).
+//
+// LA SERIE M1 SI PRENDE DAL MAGAZZINO (IndexedDB, una voce per asset+timeframe) e, se non c'e', dal
+// servizio dati MT5. NON si scrive nel magazzino: ha un tetto di voci e le M1 sono grandi.
+const FBL_M1_PROFILI=20000;   // ~14 giorni di minuti: copre i profili giornalieri e di sessione
+let fblM1Serie={asset:null,rows:null,ts:null};
+let fblM1InCorso=null, fblM1UltimoTentativoAt=0;
+function fblSerieM1PerProfilo(d,fullTs){
+ const s=fblM1Serie;
+ if(!s.rows||!s.rows.length)return null;
+ if(s.asset!==currentAssetKey)return null;
+ if((currentTF||1)===1)return null;                      // il grafico e' gia' al minuto
+ if(!d||(d.type!=='vpfixed'&&d.type!=='vpanchor'))return null;
+ const t1=Number(d.p1&&d.p1.time);
+ if(!Number.isFinite(t1))return null;
+ const t2=Number(d.p2&&d.p2.time);
+ const lo=Math.min(t1,Number.isFinite(t2)?t2:t1), hi=Math.max(t1,Number.isFinite(t2)?t2:t1);
+ // Il profilo deve stare DENTRO i dati che ho: mezzo profilo al minuto e mezzo no sarebbe
+ // peggio di un profilo intero al time frame del grafico.
+ if(lo<s.ts[0])return null;
+ const tUltima=Number.isFinite(masterTime)?masterTime:((fullTs&&fullTs.length)?fullTs[Math.min(idx,fullTs.length-1)]:NaN);
+ let idxLive=s.ts.length-1;
+ if(Number.isFinite(tUltima))idxLive=Math.max(0,Math.min(s.ts.length-1,rowIndexNearTime(tUltima,s.rows)));
+ return {rows:s.rows, ts:s.ts, idxLive};
+}
+function fblSerieM1Dimentica(){ fblM1Serie={asset:null,rows:null,ts:null}; fblM1UltimoTentativoAt=0; }
+async function fblSerieM1Assicura(){
+ if((currentTF||1)<=1)return null;
+ const asset=currentAssetKey;
+ if(!asset)return null;
+ if(fblM1Serie.asset===asset&&fblM1Serie.rows&&fblM1Serie.rows.length)return null;
+ if(fblM1InCorso)return null;
+ if(Date.now()-fblM1UltimoTentativoAt<120000)return null;   // niente martello sul servizio
+ fblM1UltimoTentativoAt=Date.now();
+ fblM1InCorso=(async function(){
+  try{
+   let righe=null;
+   try{
+     const letto=await fblCandeleCacheLeggi(asset,1);
+     if(letto&&letto.rows&&letto.rows.length)righe=letto.rows;
+   }catch(e){ righe=null; }
+   if((!righe||righe.length<200)&&liveModeActive&&mt5ActiveSymbol&&!liveReplayActive){
+     try{
+       const r=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(mt5ActiveSymbol)
+         +'&timeframe=M1&count='+FBL_M1_PROFILI),{cache:'no-store'});
+       const j=await r.json();
+       const arr=(j&&Array.isArray(j.candles))?j.candles.map(c=>({
+         time:c.time, date:new Date(c.time*1000).toISOString(),
+         open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
+       })).filter(x=>[x.open,x.high,x.low,x.close].every(Number.isFinite)):null;
+       if(arr&&arr.length)righe=arr;
+     }catch(e){}
+   }
+   if(!righe||!righe.length)return;
+   if(currentAssetKey!==asset)return;                        // l'utente ha gia' cambiato asset
+   fblM1Serie={asset, rows:righe, ts:null};
+   fblM1Serie.ts=fblTimestampsSerie(righe);
+   try{ draw(); }catch(e){}
+  }catch(e){
+  }finally{ fblM1InCorso=null; }
+ })();
+ return fblM1InCorso;
 }
 async function fblFileDaCache(asset){
  const c=await fblCsvCacheLeggi(asset);

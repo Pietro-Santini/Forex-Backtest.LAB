@@ -1,3 +1,29 @@
+- 2026-11-17 - OpenCode - **v2.2.61: il profilo volumetrico si calcola sempre al minuto, a
+  qualunque time frame.** SEGNALATO dal proprietario il 16: «gli istogrammi del profilo volumetrico
+  non mantengono il numero e le dimensioni fisse del time frame a 1 minuto quando cambiamo time
+  frame piu' alti... non si deve regolare al cambio time frame». E il 17, dopo che avevo guardato
+  dalla parte sbagliata: «la regola riguarda solo gli istogrammi dei profili volumetrici e non
+  riguarda il footprint, del footprint non va modificato assolutamente nulla». Quindi: footprint
+  MAI toccato (nessuna sua funzione e' cambiata, e i suoi due banchi sono verdi).
+  CAUSA MISURATA: in Live lo storico arriva GIA' aggregato al time frame del grafico
+  (`/history?timeframe=<TF>`), quindi a 5 minuti il profilo veniva distribuito su 12 candele da 5
+  minuti invece che su 60 da un minuto; le fasce invece non sono mai dipese dal time frame (misurato
+  prima: 120/300 a 1, 5 e 15). Misura della FORMA, stessa finestra di 300 minuti e stesso zoom:
+  20,2 px di differenza media a 5 minuti (peggiore 64,6) e 20,8 a 15 (peggiore 45,6); senza
+  equalizzare lo zoom, 53 e 222 px - il primo confronto mio era proprio sbagliato per questo.
+  CURA: `fblSerieM1PerProfilo()` tiene una serie a un minuto per asset (magazzino IndexedDB della
+  candela, altrimenti `/history?timeframe=M1&count=20000`), e `computeVolumeProfile`,
+  `vpFixedResolveRange`, `lvnTouchIndex` e `developingLevels` accettano una serie facoltativa: senza,
+  si comportano esattamente come prima. Il numero di candele resta quello del grafico (N candele del
+  time frame = N*TF candele da un minuto: stesso arco di tempo). Se la serie M1 manca, o il profilo
+  comincia prima dei dati disponibili, si torna al time frame del grafico: meglio un profilo intero
+  grosso che mezzo profilo fine. Il vantaggio e' anche che il profilo si muove OGNI MINUTO anche a
+  1H, non ogni ora. Banco nuovo `profilo_sempre_minuto` (2 prove): la prima pretende 0 px di
+  differenza fra 1, 5 e 15 minuti; la seconda e' di CONTROLLO, spegne la serie M1 e pretende che le
+  differenze tornino - senza di lei, un banco che passa perche' non disegna niente sarebbe
+  indistinguibile da uno giusto. Verdi anche `profilo_barre_fisse`, `profilo_barre_timeframe`,
+  `profilo_numero_candele`, `profilo_zona_basso_volume_costo`, `disegni_cambio_tf`,
+  `footprint_scala_unica` e `footprint_blocchi`.
 - 2026-11-17 - OpenCode - **v2.2.60: il passo a frecce del replay condiviso non si perde piu', e
   le posizioni sono tante quanti i take profit.** Il difetto che fermava il backtest: in replay
   condiviso (madre + duplicate) il click sulla freccia non arrivava alle altre finestre, quindi si

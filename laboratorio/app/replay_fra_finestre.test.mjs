@@ -72,9 +72,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const REPO = 'C:/Users/pietro/Documents/GitHub/Forex-Backtest.LAB';
-const {apriApp} = await import('file:///' + REPO + '/laboratorio/app/aiuti.mjs');
-const PAGINA = 'file://' + REPO + '/app.html';
+// IL PERCORSO DELLA PAGINA SI RICAVA DA DOVE STA QUESTO FILE (17 novembre 2026): era scritto a
+// mano "C:/Users/pietro/..." e sul collaudo di GitHub, che gira su Linux, il banco moriva prima di
+// cominciare (tre banchi rossi su GitHub e verdi sul PC: era solo questo).
+const PAGINA=new URL('../../app.html', import.meta.url).href;
+const {apriApp} = await import(new URL('./aiuti.mjs', import.meta.url).href);
 
 // La candela su cui si sceglie il punto del replay: tardi nello storico, cosi' dopo il taglio
 // restano candele a sufficienza perche' la linea e il mirino cadano DENTRO la parte visibile di
