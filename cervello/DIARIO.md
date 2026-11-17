@@ -17,7 +17,9 @@
   prova di controllo: la formula a 30 giorni deve sbagliare almeno 6 mesi su 12, ne sbaglia 7) e
   `passo_fine_dati` (madre che finisce i dati esce, duplicata che ne ha di piu' avanza): **entrambi
   rossi sul codice vecchio** con gli errori attesi, verdi dopo. Dieci banchi replay esistenti verdi.
-  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`. Pubblicata: commit `217acec`,
+  **collaudo GitHub verde** (`Falliti: 0`, 24 m 14 s) e **Installer Windows verde** (6 m 30 s);
+  specchio Desktop riallineato (hash identico al repo).
 - 2026-11-17 - OpenCode - **v2.2.61: il profilo volumetrico si calcola sempre al minuto, a
   qualunque time frame.** SEGNALATO dal proprietario il 16: «gli istogrammi del profilo volumetrico
   non mantengono il numero e le dimensioni fisse del time frame a 1 minuto quando cambiamo time
