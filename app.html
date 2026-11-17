@@ -8173,6 +8173,64 @@ const GRAFICO_CAMPI_LOCALI=new Set(['lastSide','armed']);
 // dello stesso documento, una per impostazione salvata in localStorage. La funzione accanto la
 // riapplica quando arriva da un altro dispositivo. Le strategie delle posizioni aperte
 // (fb_tg_strategie) restano del dispositivo che le ha aperte: sono stato, non configurazione.
+// SUI CONTI REALI IL CLOUD PUO' SPEGNERE, MAI ACCENDERE (17 novembre 2026).
+//
+// TROVATO con un audit, non da una segnalazione. Spuntare a mano un conto reale per le aperture
+// automatiche chiede una conferma apposta, col rollback della spunta se rispondi no: e' LA
+// barriera che protegge i soldi. Ma le due chiavi che tengono quella decisione
+// (`fb_tg_auto_conti` e `fb_tg_auto_per_conto`) arrivano anche dalla sincronizzazione fra
+// dispositivi, e la' venivano sostituite in blocco - nessun filtro, nessuna conferma, nessuna
+// regola «spento vince». Quindi un documento vecchio, o scritto da un altro dispositivo, poteva
+// accendere l'automatico su un conto reale e spuntarlo nell'elenco; e la spunta, da sola, e'
+// l'unica autorizzazione che il percorso di apertura pretende.
+//
+// La regola e' la stessa che `fblMigraChiaviConto` applica gia' quando sposta queste chiavi fra
+// due nomi dello stesso conto, dove il commento dice «non negoziabile»: spento vince, e «non lo
+// so» vale fermo. Qui si applica al verso in cui arriva dal cloud:
+//   - ACCENDERE un conto reale (o che non si sa): no, a meno che non fosse GIA' acceso qui -
+//     cioe' a meno che la conferma non sia gia' stata data su questo dispositivo;
+//   - SPEGNERE: sempre si', in qualunque caso. Spegnere l'automatico dal tablet DEVE arrivare al
+//     PC: e' la direzione in cui si deve poter agire da lontano.
+//
+// CONSEGUENZA VOLUTA: spuntando un conto reale sul tablet, sul PC non si spunta da solo. La
+// conferma va data anche la'. E' il prezzo scelto, ed e' il verso giusto in cui sbagliare.
+function fblChiaveContoDaTrattareComeReale(chiave){
+ try{
+  const s=String(chiave||''); const i=s.indexOf('@');
+  const login=(i<0)?s:s.slice(0,i);
+  const server=(i<0)?'':s.slice(i+1);
+  if(typeof tgAutoContoDaTrattareComeReale==='function')return !!tgAutoContoDaTrattareComeReale(login,server);
+ }catch(e){}
+ return true; // non lo so => reale
+}
+// Le spunte in arrivo: una spunta NUOVA su un conto reale si butta, una che c'era gia' resta.
+function fblContiScelti_dalCloud(o){
+ const prima=((typeof tgAutoConti!=='undefined'&&tgAutoConti&&tgAutoConti.conti)||{});
+ const conti=Object.assign({},(o&&o.conti)||{});
+ Object.keys(conti).forEach(k=>{
+  if(conti[k]&&!prima[k]&&fblChiaveContoDaTrattareComeReale(k))delete conti[k];
+ });
+ return Object.assign({},o,{conti});
+}
+// I blocchi per conto in arrivo: l'interruttore `attivo` di un conto reale non si accende dal
+// cloud. Tutto il RESTO della configurazione arriva normalmente: si spegne un interruttore, non
+// si butta il blocco - altrimenti configurare un conto dal tablet non servirebbe a niente.
+function fblPerConto_dalCloud(o){
+ let out; try{ out=JSON.parse(JSON.stringify(o||{})); }catch(e){ return o; }
+ Object.keys(out||{}).forEach(k=>{
+  if(!fblChiaveContoDaTrattareComeReale(k))return;
+  const locale=((typeof tgAutoPerConto!=='undefined'&&tgAutoPerConto&&tgAutoPerConto[k])||null);
+  ['fx','cr'].forEach(f=>{
+   const b=out[k]&&out[k][f];
+   if(!b||typeof b!=='object')return;
+   if(b.attivo===true){
+    const eraAccesoQui=!!(locale&&locale[f]&&locale[f].attivo===true);
+    if(!eraAccesoQui)b.attivo=false;
+   }
+  });
+ });
+ return out;
+}
 const GRAFICO_LS={
  // Solo da leggere: arriva dal dispositivo che ha aperto le posizioni Kraken e serve a disegnarne
  // stop e target. Non fa partire nessuna strategia qui (vedi krakenLivelliPubblica).
@@ -8245,8 +8303,12 @@ const GRAFICO_LS={
  fb_tg_suono_on:v=>{ try{ const el=$('tgSuonoCheckbox'); if(el)el.checked=(v==='1'); }catch(e){} },
  // RICHIESTO: la scelta dei conti MT5 per le aperture automatiche si condivide come il resto
  // della configurazione (il PC con MT5 vince su telefono/tablet, vedi graficoSeme).
- fb_tg_auto_conti:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoConti=tgAutoContiDaSalvato(o); }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
- fb_tg_auto_per_conto:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoPerConto=o; }catch(e){} try{ tgAutoPerContoSalva(); tgAutoDisegna(); }catch(e){} },
+ // IL RISALVATAGGIO NON E' DI TROPPO: `graficoApplica` scrive in localStorage il valore GREZZO
+ // appena arrivato e poi chiama questa funzione. Ripulire solo la variabile in memoria
+ // lascerebbe su disco il valore non ripulito, e alla ricarica il conto reale tornerebbe
+ // acceso: il banco lo misura (`realeSuDisco`).
+ fb_tg_auto_conti:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object'){ tgAutoConti=tgAutoContiDaSalvato(fblContiScelti_dalCloud(o)); tgAutoContiSalva(); } }catch(e){} try{ tgAutoDisegna(); }catch(e){} },
+ fb_tg_auto_per_conto:v=>{ try{ const o=JSON.parse(v); if(o&&typeof o==='object')tgAutoPerConto=fblPerConto_dalCloud(o); }catch(e){} try{ tgAutoPerContoSalva(); tgAutoDisegna(); }catch(e){} },
  // ===== LE IMPOSTAZIONI SEGUONO L'ACCOUNT, NON IL DISPOSITIVO =====
  // RICHIESTO dal proprietario: «con i dispositivi mobili devono essere ricordate tutte le
  // configurazioni di style, impostazioni footprint heatmap eccetera: devono prendere queste
