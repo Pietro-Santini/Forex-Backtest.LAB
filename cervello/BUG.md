@@ -2,6 +2,68 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+## APERTI — 17 novembre 2026, prop firm chiusa e finestre duplicate
+
+Segnalato dal proprietario. Tre problemi dentro una segnalazione, e il terzo non è un difetto ma
+una regola che manca.
+
+> «Quando sono collegato ho delle finestre duplicate e la prop firm mi si chiude perché non sono
+> riuscito a superarla, mi esce fuori il pop-up su tutte e tre le pagine, mentre invece mi deve
+> uscire soltanto sulla pagina madre se chiudo il conto per aver violato una regola della prop
+> firm. E quando premo il pulsante e ricomincia da capo, succede che sulle pagine duplicate
+> qualche pasticcio. […] se gli dico che continuo a utilizzare questo conto come modalità di
+> esercitazione non me lo fa più utilizzare, perché effettivamente quel conto è chiuso per sempre
+> e ne devo creare per forza un altro. Quindi ci deve essere un sistema che sappia riconoscere
+> qual è effettivamente quello che è un conto vero prop firm e uno finto. Per dirti, se apro un
+> conto demo da MetaQuotes e ci applico sopra quella che è una modalità prop firm, allora lì sì,
+> posso anche continuare a esercitarmi, ma se è un conto invece di una prop firm reale oppure una
+> prop firm trial, non posso continuare perché proprio appunto è bloccato.»
+
+1. **IL POPUP DI VIOLAZIONE ESCE SU TUTTE LE FINESTRE.** Deve uscire **solo sulla pagina madre**.
+   LETTO NEL SORGENTE (17 novembre, da misurare con un banco): `showPropFirmViolationOverlay()`
+   (`app.html` ~riga 7401) **non ha nessun guard `PIP_SLOT`** — nessuna delle due funzioni della
+   catena ce l'ha. E chi la chiama è il controllo dell'equity (`triggerPropFirmViolation`, chiamata
+   da ~7260, ~7264, ~7321, ~7325), che gira in **ogni** finestra che ha i dati del conto: quindi
+   ogni finestra registra la violazione per conto suo e si apre il suo overlay. Nel progetto esiste
+   già il modo giusto di fare questa cosa (`anotherWindowOwnsAssetEvaluation`, e i guard
+   `if(PIP_SLOT>0)return` sulle scritture): la strada è quella, non una nuova.
+2. **IL PULSANTE «RICOMINCIA» FA PASTICCI SULLE DUPLICATE.** Da misurare: cosa succede alle
+   duplicate quando la madre riparte (`restartPropFirmChallenge` ~7459 → `openPropFirmCapitalModal`
+   → `startNewPropFirmChallenge`). Sospetto da verificare, non ancora misurato: le duplicate non
+   sanno che la sfida è ripartita, quindi restano col vecchio capitale iniziale e la vecchia
+   violazione in memoria. Serve un annuncio fra finestre, come già si fa per il conto e per il
+   replay.
+3. **PROP FIRM VERA O ESERCITAZIONE: l'app non lo sa distinguere, e la differenza è sostanziale.**
+   Dopo una violazione l'app offre due strade (`fblPropContoScegli`, ~7993): `'pratica'` (il conto
+   resta usabile per esercitarsi, la prop firm si spegne) e `'elimina'` (si archivia). La strada
+   `'pratica'` **ha senso solo su un conto che il broker lascia vivo**: su una prop firm vera — o
+   su un suo trial — il conto è **chiuso per sempre** e l'utente deve crearne un altro, quindi
+   offrirgli «continua a esercitarti qui» è una strada che non esiste.
+   **PERCHE' LA DISTINZIONE DI OGGI NON BASTA:** esiste già il caso del conto reale
+   (`restartPropFirmChallenge` ~7461: se `propFirmViolation.realMt5Login != null` si mostra
+   `showPfMt5IneligibleModal` invece del capitale da scegliere) — ma **un trial FTMO è
+   tecnicamente un conto DEMO** (`trade_mode` 0), quindi quella strada non scatta e il conto
+   finisce trattato come un demo qualunque. Demo-contro-reale **non** è la domanda giusta: la
+   domanda è **di chi è il conto**.
+   **COSA L'APP SA OGGI, misurato:** il ponte restituisce `server` e `server_mt5` (`bridge.py`
+   ~3514-3515, ~3611) e `trade_mode`/`reale`. **Non restituisce `company`**, cioè il nome del
+   broker che MT5 pubblica in `account_info()`, ed è il dato che distinguerebbe «FTMO S.R.O.» da
+   «MetaQuotes Software Corp.»: `grep -c company app.html` → **0**. Il dato esiste in MT5 e non
+   viene chiesto.
+   **STRADA PROPOSTA (da confermare col proprietario prima di scrivere codice):** non una lista di
+   prop firm incollata nel codice, che invecchia e sbaglia. La domanda «questo conto è una prop
+   firm?» **si fa già una volta per conto** (`fblPropAttivazioneDaChiedere`, `propChiesto`): la si
+   rende a **tre** risposte invece di due — prop firm vera / prop firm di prova (trial) /
+   esercitazione mia su un conto demo — si ricorda per `login@server`, e la strada `'pratica'` si
+   offre **solo** alla terza. In più una rete di sicurezza dal `company`/`server` (da esporre nel
+   ponte): se il broker è riconosciuto come prop firm, «esercitazione» non si può scegliere, e se
+   `trade_mode == 2` il conto è soldi veri comunque. Vale la regola del dubbio già in uso nel
+   progetto: se non si sa, si tratta come vera.
+
+**Stato:** niente curato, niente banco. Il punto 1 ha la causa letta nel sorgente (manca il
+guard), il 2 è un sospetto da misurare, il 3 è una decisione di disegno da prendere col
+proprietario. Il punto 3 va fatto **prima** del 2, perché decide cosa deve fare il pulsante.
+
 ## APERTI — 16 novembre 2026, finestre duplicate (da misurare, non ancora curbati)
 
 Due sintomi, segnalati insieme dal proprietario con le finestre duplicate:
