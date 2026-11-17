@@ -13811,7 +13811,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.65';
+const FBL_VERSIONE='2.2.66';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -30802,7 +30802,31 @@ function scanHistoricalSlTpTouches(){
    }
    const tpDa=Number.isFinite(pos.tpAt)?pos.tpAt:null;
    if(!slOk&&!tpOk)return; // niente da controllare
-   for(let i=0;i<rows.length;i++){
+   // IN REPLAY IL FUTURO NON E' ANCORA ARRIVATO (17 novembre 2026).
+   //
+   // SEGNALATO dal proprietario, con la diagnosi già dentro la segnalazione: «vado ad aprire
+   // un'operazione, appena la apro me la chiude... me la chiude in profitto a più 315 euro e il
+   // 3,15% del conto... non ho messo né uno stop loss, né un take profit... in modalità replay
+   // il prezzo sta a 4.172 e il prezzo al momento sta a 3.850... ho aperto una posizione in sell
+   // e quindi mi si è chiusa in guadagno, e infatti se la vado ad aprire in buy me la chiude in
+   // negativo».
+   //
+   // Questa funzione ricostruisce le chiusure avvenute «mentre l'app non era aperta» e scorreva
+   // TUTTE le candele salvate. In replay `idx` e' CONGELATO sul punto scelto (vedi il commento a
+   // ~5084), quindi le candele da `idx+1` in poi sono il FUTURO dal punto di vista del replay: la
+   // ricostruzione le leggeva come passato già avvenuto e chiudeva la posizione al primo tocco
+   // dello stop o del target - che ci sono anche senza metterli a mano, perché l'app ne mette due
+   // automatici a 1:1 (applyLocalSlTpDefaultsIfMissing). Da qui tutto quello che ha visto lui.
+   //
+   // NON SI SPEGNE LA RICOSTRUZIONE IN REPLAY, e il banco ha una prova apposta: dentro la
+   // finestra del replay - fra l'apertura e il punto dove si e' arrivati - un tocco dello stop e'
+   // un esito di backtest VERO e deve chiudere. Si sposta solo il confine.
+   //
+   // `idx+1` e non `idx`: la candela dove il replay si trova ADESSO vale, quella dopo no. Un
+   // errore di uno qui sarebbe invisibile a occhio e riaprirebbe il difetto al primo passo del
+   // replay; il banco misura il confine su due candele vicine.
+   const _finoA=(liveReplayActive&&Number.isFinite(idx))?Math.max(0,Math.min(rows.length,idx+1)):rows.length;
+   for(let i=0;i<_finoA;i++){
      const r=rows[i];
      const rowTime=parseDateTime(r.date);
      // Stesso identico gate di evaluate(): mai valutare una candela precedente (o uguale)
@@ -61144,15 +61168,30 @@ function esciReplayLive(opz){
   liveReplayActive=false; liveReplaySelecting=false; liveReplayGuideClientX=null;
   if(timer){clearInterval(timer);timer=null;$('play').textContent='▶ PLAY';}
   fblReplayInCorso=false;
-  if(_condiviso){
-    // Uscita vera dal replay condiviso: NON si ricostruiscono le righe e NON si tocca la
-    // vista, si RESTA FERMI dove si è. La formazione non si azzera.
-    if(Number.isFinite(tEsatto))masterTime=tEsatto;
-  }else{
-    if(baseRows.length)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
-    rebuildRows();
-    followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
-  }
+  // USCENDO DAL REPLAY SI TORNA ALL'ULTIMA CANDELA. SEMPRE, E SU TUTTE LE FINESTRE
+  // (richiesto dal proprietario il 17 novembre 2026).
+  //
+  // Sue parole: «quando vado a stoppare, cioè a uscire dalla modalità replay, lui mi deve
+  // ritornare automaticamente all'ultima candela, anche se il mercato è chiuso... E deve
+  // ritornare sia sulla pagina madre che sulle pagine duplicate».
+  //
+  // PRIMA C'ERANO DUE STRADE: da soli si tornava all'ultima candela, col replay condiviso si
+  // restava fermi dove si era. Quel ramo veniva dalla richiesta del 15 novembre («il tasto stop
+  // ferma su tutte le pagine duplicate allo stesso tempo e allo stesso prezzo, senza sfalsati»),
+  // ma quella riguarda lo STOP COME PAUSA - che resta esattamente com'è, qui sopra, e ha una
+  // prova dedicata nel banco. Era finito per sbaglio anche sull'USCITA vera.
+  //
+  // E tornare all'ultima candela AUMENTA l'allineamento che era stato chiesto invece di
+  // ridurlo: l'ultima candela è lo stesso punto per tutte le finestre sullo stesso asset,
+  // mentre «dove si era» dipendeva da quale finestra aveva premuto.
+  //
+  // UNA CURA SOLA VALE PER TUTTE: chi riceve l'annuncio di stop da un'altra finestra chiama
+  // questa stessa funzione (`esciReplayLive({propaga:false, istante:msg.t, esci:true})`), quindi
+  // madre e duplicate passano tutte da qui. `tEsatto` qui non serve più: l'istante di chi ha
+  // premuto conta per la PAUSA, non per l'uscita.
+  if(baseRows.length)masterTime=closeTimeOf(baseRows[baseRows.length-1]);
+  rebuildRows();
+  followLatest=true; viewEnd=idx; autoFitWidth=true; priceZoomFactor=1; viewPriceLo=null; viewPriceHi=null;
   updateLiveReplayUI();
   draw();update();
   if(era)try{ $('status').textContent='⏹ Replay fermato: premi PLAY per riprendere dallo stesso punto.'; }catch(e){}

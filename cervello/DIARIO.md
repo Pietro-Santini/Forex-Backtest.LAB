@@ -1,3 +1,49 @@
+- 2026-11-17 - Claude - **v2.2.66: in replay una posizione non si chiude piu' col futuro, e
+  uscendo dal replay si torna all'ultima candela su tutte le finestre.** Due cure, ognuna col suo
+  banco e con le prove di controllo che proteggono quello che funzionava.
+  **(1) LA POSIZIONE CHE SI CHIUDEVA APPENA APERTA.** SEGNALATO dal proprietario con la diagnosi
+  dentro: «vado ad aprire un'operazione, appena la apro me la chiude... me la chiude in profitto a
+  piu' 315 euro e il 3,15% del conto... i PIP sono 157,6, che e' giusto... non ho messo ne' uno
+  stop loss, ne' un take profit... in modalita' replay il prezzo sta a 4.172 e il prezzo al
+  momento sta a 3.850... ho aperto una posizione in sell e quindi mi si e' chiusa in guadagno, e
+  infatti se la vado ad aprire in buy me la chiude in negativo».
+  CAUSA: `scanHistoricalSlTpTouches()` ricostruisce le chiusure avvenute «mentre l'app non era
+  aperta» e scorreva **tutte** le candele salvate (`for(let i=0;i<rows.length;i++)`). In replay
+  `idx` e' CONGELATO sul punto scelto, quindi le candele successive sono **il futuro**: la
+  ricostruzione le leggeva come passato e chiudeva al primo tocco dello stop o del target, che
+  esistono anche senza metterli a mano perche' l'app ne mette due automatici a 1:1. Da qui tutto
+  quello che aveva visto, segno compreso.
+  CURA: il giro si fermaa `idx+1` quando il replay e' attivo. **Non si spegne la ricostruzione in
+  replay**, e c'e' una prova apposta: fra l'apertura e il punto dove si e' arrivati un tocco dello
+  stop e' un esito di backtest VERO e deve chiudere. `idx+1` e non `idx` perche' la candela dove
+  il replay si trova adesso vale: il banco misura il confine su due candele vicine, perche' un
+  errore di uno sarebbe invisibile e riaprirebbe il difetto al primo passo.
+  Banco `replay_posizione_non_si_chiude_subito` (4 prove, 3 di controllo): rossa prima con
+  «e' stata chiusa dal futuro (chiuse: 1, esito TP)», verde dopo.
+  **(2) USCENDO DAL REPLAY SI TORNA ALL'ULTIMA CANDELA.** SEGNALATO: «quando vado a stoppare, cioe'
+  a uscire dalla modalita' replay, lui mi deve ritornare automaticamente all'ultima candela, anche
+  se il mercato e' chiuso. Cosa che invece oggi non succede... magari c'e' stata qualche modifica
+  all'interno che infatti ho intravisto... E deve ritornare sia sulla pagina madre che sulle
+  pagine duplicate».
+  **AVEVA RAGIONE ANCHE SULLA MODIFICA:** c'era, del 15-16 novembre, ed era una sua richiesta -
+  «il tasto stop ferma su tutte le pagine duplicate allo stesso tempo e allo stesso prezzo, senza
+  sfalsati». Ma quella riguarda lo STOP **come pausa**, e il ramo era finito anche sull'USCITA
+  vera: da soli si tornava all'ultima candela, col replay condiviso si restava fermi. Le due
+  strade diventano una. **La pausa non si tocca** e ha una prova dedicata: se diventasse rossa,
+  la cura avrebbe disfatto una richiesta precedente invece di aggiungerne una nuova. E tornare
+  all'ultima candela **aumenta** l'allineamento chiesto allora invece di ridurlo: l'ultima candela
+  e' lo stesso punto per tutte le finestre sullo stesso asset, mentre «dove si era» dipendeva da
+  chi aveva premuto. Una cura sola vale per tutte le finestre perche' chi riceve l'annuncio di stop
+  chiama la stessa funzione.
+  Banco `replay_uscita_ultima_candela` (4 prove, 3 di controllo, compresa quella a mercato chiuso:
+  il tetto limita quanto si scorre in avanti, non dove si atterra).
+  **REGISTRATA IN BUG.md, da affrontare dopo per sua indicazione:** in Live lo zoom out si ferma
+  sempre allo stesso giorno in TUTTI i time frame. Ipotesi con la verifica di struttura fatta -
+  `getFullAgg` aggrega ogni time frame da `baseRows`, quindi un tetto sulla serie di base ferma
+  tutte le viste nello stesso punto, e 200000 candele da un minuto sono ~139 giorni - ma **non
+  ancora misurata** sul suo grafico. Scritto cosa misurare prima di curare, e perche' non si cura
+  alzando il numero a caso.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-17 - Claude - **v2.2.65: finestre duplicate — il doppio suono, gli indicatori che
   sembravano azzerarsi, e il conto nuovo che non arrivava alle altre finestre.** Tre cure, ognuna
   provata nei due versi **togliendo davvero la cura** con `git stash`.

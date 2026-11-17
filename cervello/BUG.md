@@ -158,6 +158,35 @@ pagato. **Ordine:** il 3 va prima del 2, perché decide cosa deve fare il pulsan
 va prima di 2, 4 e 5, perché potrebbe unificarli; il 7 è indipendente dagli altri e si può fare
 quando si vuole.
 
+## 17 novembre 2026 — ZOOM OUT IN LIVE: il grafico si ferma sempre allo stesso giorno
+
+Segnalato dal proprietario, **da affrontare dopo** (sua indicazione esplicita):
+
+> «se facciamo un zoom out del grafico in modalita live, quindi a mercato aperto, non so come mai
+> mi faccia vedere soltanto quella che e' una sezione e basta del grafico. Si ferma a un
+> determinato giorno che e' verso marzo, i primi di marzo, e non mi fa vedere quello che precede
+> marzo. Quindi e' come se ci fosse una limitazione di caricamento dei dati al grafico. [...] E
+> questo succede con tutti i time frame. Quindi non e' un problema di time frame, ma e' un
+> problema proprio di caricamento di dati. Si ferma sempre allo stesso giorno in tutti i time
+> frame, partendo da un minuto a una settimana.»
+
+**IPOTESI, con la verifica di struttura già fatta (17 novembre) — non ancora misurata sul suo
+grafico.** «Lo stesso giorno in TUTTI i time frame» e' la firma di un limite sulla serie di BASE,
+non sui time frame: `getFullAgg(minutes)` aggrega ogni time frame da `baseRows`
+(`if(cached && cached.ref===baseRows)`), quindi tutte le viste nascono dalla stessa serie e un
+tetto su quella le ferma tutte nello stesso punto. Il candidato e' il `count` dello scarico da
+`/history`, che nel codice compare 19 volte come `200000`: duecentomila candele da un minuto sono
+circa **139 giorni di calendario**, e scontando i fine settimana si va intorno ai **194 giorni**
+— cioe' da meta' novembre si arriva a maggio/marzo, l'ordine di grandezza giusto.
+
+**COSA MISURARE PRIMA DI CURARE, in quest'ordine:** (1) quante candele ha davvero `baseRows` sul
+suo grafico e qual e' la data della prima; (2) se quel numero e' esattamente il tetto o il massimo
+che MT5 restituisce per quel simbolo (sono due cause diverse: una e' nostra, l'altra e' del
+broker); (3) se il magazzino locale delle candele (IndexedDB) tronca a sua volta. **Non si cura
+alzando il numero a caso:** 200000 candele da un minuto sono gia' ~5 MB per asset, e il magazzino
+cresce senza tetto (voce 5.2 della scaletta) — la strada probabile e' chiedere lo storico lontano
+al time frame che serve invece di aggregarlo tutto dal minuto.
+
 ## 17 novembre 2026 — MISURA: perché le duplicate «si resettano». E l'ipotesi che le unificava era METÀ sbagliata
 
 Misurato il canale fra finestre (`collectTradingSyncPayload` / `fblApplicaStatoTrading`) per
