@@ -638,7 +638,13 @@
 //            server si apriva sul conto REALE non spuntato). Piu' una guardia finale a un passo
 //            dall'ordine: si guarda su quale conto si e' davvero, e se non e' quello deciso non si
 //            apre.
-const CACHE_NAME = "forex-backtest-lab-v2.2.63";
+// v2.2.64 - IL RESTO DEI BUCHI SUI SOLDI VERI dell'audit del 17 novembre, piu' una cosa che
+//            serviva a capire: il lotto si calcola col passo VERO del simbolo (e i decimali non
+//            lo fanno piu' crescere); sui conti reali il cloud puo' spegnere ma mai accendere;
+//            una risposta di /account partita prima del cambio conto non riporta piu' sul conto
+//            di prima; due finestre normali non aprono piu' lo stesso segnale due volte. E i tre
+//            salvataggi che fallivano in silenzio adesso lo dicono, col numero dentro.
+const CACHE_NAME = "forex-backtest-lab-v2.2.64";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

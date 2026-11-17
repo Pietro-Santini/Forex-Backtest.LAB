@@ -1,3 +1,87 @@
+- 2026-11-17 - Claude - **v2.2.64: il resto dei buchi sui soldi veri dell'audit, e tre salvataggi
+  che smettono di fallire in silenzio.** Quattro cure, ognuna col suo banco provato nei due versi.
+  **(1) IL LOTTO COL PASSO VERO DEL SIMBOLO.** Conseguenza diretta della v2.2.63: da li' il ponte
+  RIFIUTA un volume sotto il `volume_min` del simbolo invece di gonfiarlo, ma l'app continuava a
+  calcolare sempre col passo 0,01, quindi su un simbolo con passo 0,1 (indici, molti CFD cripto)
+  produceva un numero che il ponte non puo' accettare e il segnale non si apriva affatto. Sicuro
+  e inutile. Il dato c'era e veniva buttato: `/symbol-check` dichiara `volume_step` **e**
+  `volume_min`, l'app leggeva solo il minimo e `tgPiano` non lo guardava mai. DUE CAMPI NUOVI,
+  non il riuso di `minDeal`: quel campo lo scrivono anche Capital.com (`minDealSize`) e Binance
+  (`minQty`) con un significato diverso - minimi di QUANTITA' nelle loro unita', non lotti MT5 -
+  e un lottaggio MT5 deciso dal numero di un altro broker e' un errore sui soldi. Precedenza: il
+  chiamante (Kraken, col passo del contratto) > il simbolo > 0,01 come sempre.
+  **SECONDO DIFETTO, trovato dal banco di questa stessa cura e non cercato:** i decimali del
+  lotto si calcolavano con `Math.round(-Math.log10(passo))`, che col passo 0,5 fa
+  `Math.round(0,301) = 0`, quindi 3,5 lot passavano da `toFixed(0)` e diventavano **4** - un
+  AUMENTO del rischio prodotto dall'arrotondamento dei decimali, subito dopo che il calcolo lo
+  aveva ridotto per difetto. Lo ha scoperto solo perche' nel banco c'era il passo 0,5 fra quelli
+  da provare. Banco `lotto_passo_del_simbolo` (5 prove, 2 di controllo): 3 rosse prima
+  (`actual: 3.77, expected: 3.7`), 5 verdi dopo; 43 banchi del lottaggio verdi.
+  **(2) SUI CONTI REALI IL CLOUD PUO' SPEGNERE, MAI ACCENDERE.** Spuntare a mano un conto reale
+  chiede una conferma apposta col rollback: e' LA barriera che protegge i soldi. Ma
+  `fb_tg_auto_conti` e `fb_tg_auto_per_conto` arrivano anche dalla sincronizzazione e la'
+  venivano sostituite in blocco - nessun filtro, nessuna conferma, nessuna regola «spento vince»
+  (che invece `fblMigraChiaviConto` applica gia' alle stesse chiavi, col commento «non
+  negoziabile»). Un documento vecchio o di un altro dispositivo poteva quindi accendere
+  l'automatico su un conto reale, e la spunta da sola e' l'unica autorizzazione che il percorso
+  di apertura pretende. Ora: accendere un conto reale (o che non si sa) dal cloud NO, a meno che
+  non fosse gia' acceso qui; spegnere SI' sempre, perche' spegnere dal tablet deve arrivare al
+  PC. **Il risalvataggio non e' di troppo:** `graficoApplica` scrive in localStorage il valore
+  GREZZO e poi chiama il gestore, quindi ripulire solo la variabile lasciava su disco il valore
+  non ripulito e alla ricarica il conto tornava acceso - il banco lo misura a parte
+  (`realeSuDisco`). CONSEGUENZA VOLUTA: spuntando un conto reale sul tablet, sul PC non si spunta
+  da solo. Banco `config_dal_cloud_non_accende_reale` (5 prove, 2 di controllo): 3 rosse prima,
+  5 verdi dopo; 48 banchi di sincronizzazione e conti verdi.
+  **(3) LA CORSA AL CAMBIO CONTO, ALLA RADICE.** `fetchMt5Positions` ha due guardie contro
+  questo; `fetchMt5AccountInfo` non ne aveva nessuna, e il suo polling gira ogni secondo: una
+  risposta poteva partire col conto A e arrivare quando si era gia' passati a B, dicendo «sei su
+  A». Non si poteva zittirla, perche' E' ANCHE il canale che propaga il cambio conto fra
+  dispositivi (richiesta del 10 novembre): si scartano solo le risposte scavalcate da un cambio
+  fatto QUI. In piu' `tgAutoContoCollegatoKey()` risponde null mentre un collegamento e' in
+  corso, perche' `mt5AttivaConto` viene chiamata DENTRO il try di `connectToMt5Bridge` e per
+  tutta la durata del cambio `mt5ContoAttivo` descriveva ancora il conto vecchio. Banco
+  `conto_corsa_risposta_vecchia` (5 prove, 2 di controllo, piu' un autocontrollo: uscire presto
+  senza rilasciare `_mt5AccountInfoInFlight` ucciderebbe il polling per sempre).
+  **(4) DUE FINESTRE NORMALI NON APRONO PIU' LO STESSO SEGNALE DUE VOLTE.** La radice e' che
+  tutte le guardie sono costruite su `PIP_SLOT`, che vale 0 per QUALUNQUE pagina senza
+  `?pipSlot=N`: due istanze normali sono entrambe «madre» e non si vedono nemmeno sul canale di
+  presenza (`if(msg.slot===PIP_SLOT)return`). L'unica barriera condivisa si scriveva DOPO gli
+  ordini, che partono in parallelo. Serviva una cosa che non esisteva: `FBL_FINESTRA_ID`, nuovo
+  a ogni caricamento. Cura: una PRENOTAZIONE scritta PRIMA di aprire, terza guardia in
+  `tgAutoInCoda`, che dura due minuti e si lascia se non si e' aperto niente (anche dopo un
+  errore: una prenotazione rimasta addosso a un tentativo fallito terrebbe il segnale chiuso a
+  tutti). **ONESTA' SU QUANTO E' STRETTA, scritta anche nel codice:** `localStorage` non ha una
+  scrittura atomica, si scrive e si RILEGGE, e la corsa passa da «tutta l'esecuzione MT5»
+  (secondi) a «fra una scrittura e la sua rilettura» (millisecondi). Non e' un lucchetto.
+  **IL BANCO ERA SBAGLIATO ALLA PRIMA STESURA:** faceva finire tutto il lavoro della prima
+  finestra PRIMA di far arrivare la seconda, quindi la prenotazione era gia' stata lasciata e la
+  prova restava rossa anche con la cura giusta. La corsa vera e' con le due finestre che lavorano
+  INSIEME. Provato nei due versi togliendo davvero la cura (`git stash`): 5 verdi con, 3 rosse
+  senza; 39 banchi dei segnali e dei doppioni verdi.
+  **(5) IL SILENZIO SUI SALVATAGGI.** SEGNALATO: «sui dispositivi mobili il modello e le
+  impostazioni degli indicatori me li fa salvare ma sul PC no». Il banco
+  `nomi_modelli_disegni` e' verde (11 prove, compresa «sopravvive alla ricarica»), quindi il
+  codice che salva funziona: non funziona il POSTO dove scrive, e solo sul PC. MISURATO sul suo
+  PC: profilo WebView **1,4 GB**, di cui **854 MB** di IndexedDB tutto sotto
+  `http://127.0.0.1:8000` (il magazzino delle candele, lo storico dell'order book e la cache dei
+  CSV - le tre cose che l'audit aveva gia' trovato SENZA TETTO), `Local Storage` a **2,5 MB** su
+  un tetto di 5 MB per indirizzo, disco C al 91%. Sul telefono niente di tutto questo esiste.
+  **Due ipotesi mie scartate misurando, e vanno scritte perche' non si ripaghino:** il secondo
+  cassetto `http_localhost_8000` esiste (4,8 MB) ma e' fermo dal **17 ottobre** mentre quello
+  vivo e' di oggi, quindi e' un residuo; e 46 GB liberi su 466 non bastano a far rifiutare una
+  scrittura. **Nessuna cura**, perche' il sospetto e' forte ma non certo. Si toglie pero' il
+  silenzio: `fblProfiliIndSalva` aveva un `catch(e){}` NUDO mentre i modelli un messaggio ce
+  l'avevano - quindi lo stesso guasto si vedeva per meta' e si cercava dalla parte sbagliata. Ora
+  tutti e tre dicono la stessa cosa e il messaggio porta il numero
+  (`navigator.storage.estimate()`: «Occupati N MB su M MB»). LA MISURA CHE DECIDE la fa il
+  proprietario in dieci secondi: salvare un modello e guardare la riga di stato.
+  **Igiene, nello stesso giro:** il `.gitignore` copre ora le sonde di diagnosi (60 file non
+  tracciati e non ignorati, nessuna con una sola `assert`; scoperti da 60 a 0, banchi tracciati
+  361). Registrate in `BUG.md` cinque segnalazioni nuove del proprietario (popup della prop firm
+  su tutte le finestre, duplicate che si azzerano, conto che si spalma, posizioni di tutti i
+  conti sul grafico - con la riga esatta e il motivo per cui NON va solo stretta - e i template
+  delle finestre, che hanno un progetto loro). Versioni alzate in `sw.js`, `FBL_VERSIONE`,
+  `MyAppVersion`. **In sospeso:** la prova della riga di stato, e i tetti delle voci 5.2 e 5.4.
 - 2026-11-17 - Claude - **v2.2.63: il ponte non puo' piu' far crescere il lotto, e un conto e'
   login@server anche dove si decide DOVE aprire.** Due buchi sui soldi veri, trovati da un AUDIT
   del percorso di apertura automatica e non da una segnalazione: nessuno dei due aveva un banco, e
