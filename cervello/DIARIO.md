@@ -1,3 +1,75 @@
+- 2026-11-17 - Claude - **v2.2.63: il ponte non puo' piu' far crescere il lotto, e un conto e'
+  login@server anche dove si decide DOVE aprire.** Due buchi sui soldi veri, trovati da un AUDIT
+  del percorso di apertura automatica e non da una segnalazione: nessuno dei due aveva un banco, e
+  il secondo l'ho riprodotto sul banco prima di curarlo.
+  **(1) IL LOTTO.** `_round_volume` in `bridge.py` arrotondava al multiplo **piu' vicino** del
+  passo del simbolo e poi **alzava** il risultato a `volume_min`:
+  `vol = round(round(volume/step)*step, 8)` e `vol = max(info.volume_min, min(info.volume_max, vol))`.
+  Su un simbolo con passo o minimo 0,1 - indici e molti CFD cripto - **0,03 lot richiesti
+  diventavano 0,1**, cioe' il rischio scelto moltiplicato per tre, in silenzio: la pagina calcola
+  sempre col passo 0,01 (`opz.passo` e' valorizzato solo per Kraken), non rilegge il `volume_min`
+  che pure si fa dire da `/symbol-check`, e chi manda l'ordine non confronta il volume tornato con
+  quello chiesto. Il commento della funzione parlava di «far rifiutare l'intero ordine dal broker»:
+  era scritta pensando al rifiuto TECNICO, non al rischio - due problemi diversi, e qui vince il
+  rischio. CURA: arrotondamento per difetto, il tetto `volume_max` che riduce (ridurre e' sempre
+  sicuro), e il **RIFIUTO** con un motivo scritto quando quel che resta e' sotto il minimo del
+  simbolo. TRAPPOLA DEL BINARIO, annotata nel banco: il per difetto non si puo' fare con un floor
+  diretto, perche' `0,29/0,01` fa `28,999999999999996` e tornerebbe `0,28` - una riduzione
+  silenziosa su un volume che era GIA' giusto. Si usa `int(round(q,9))`.
+  **(2) LA CHIAVE DEL CONTO.** La protezione sui conti reali e' scritta bene e usa la chiave
+  intera, ma il percorso che decide dove si apre confrontava il **solo numero**, in
+  `tgAutoApriSuiConti` (`collegatoAbilitato` e il salto del cambio conto) e in
+  `tgAutoContiBersaglio`. Con lo STESSO numero su due server - collegati a `111@Broker-Live`
+  (REALE, non spuntato) e `111@Broker-Demo` (demo, spuntato) fra i salvati - l'app concludeva «il
+  conto collegato e' fra quelli scelti» perche' i numeri combaciavano, **saltava il cambio conto**
+  per la stessa ragione, e apriva sulla sessione corrente: sul conto REALE, con la configurazione
+  accesa del demo. La guardia sui conti reali non scattava perche' guarda `acc` (il demo,
+  legittimamente spuntato), non il conto su cui si stava davvero per aprire. NON e' un caso di
+  scuola: `fblMigraChiaviConto` esiste proprio perche' la stringa del server dello stesso conto
+  oscilla (digitata a mano contro quella che riporta MT5). CURA: si confronta `mt5AccountKey(acc)`,
+  la stessa forma con cui sono scritte le spunte (usarne un'altra le avrebbe scollegate in
+  silenzio); chiave non costruibile = non si apre, e lo si dice; e **LA GUARDIA FINALE**, a un
+  passo dall'ordine: si guarda dove si e' DAVVERO e se non e' il conto deciso non si apre. In un
+  punto solo copre tre strade allo stesso danno - il numero uguale su due server, un cambio conto
+  che risponde ok ma atterra altrove, e la corsa fra il cambio conto e una risposta di `/account`
+  partita prima e arrivata dopo. Il ponte non puo' difendersi: nella richiesta d'ordine non esiste
+  nessun campo «conto atteso», esegue su qualunque sessione sia aperta.
+  **PERCHE' NESSUN BANCO LI VEDEVA:** `test_ponte_esegue_non_decide` dice nel commento «arrotonda
+  per difetto» ma prova solo il passo 0,01, dove `0,07` e' gia' un multiplo;
+  `conti_reali_auto.test.mjs` registra le aperture con `String(mt5ContoAttivo.login)`, cioe' misura
+  con la stessa lente che causa il difetto, e i suoi conti hanno sempre numeri diversi (111/222).
+  Banchi nuovi: `laboratorio/ponte/test_lotto_non_cresce.py` (8 prove, di cui 3 di controllo che col
+  passo 0,01 i numeri non cambiano di una virgola) e
+  `laboratorio/app/destinazione_login_e_server.test.mjs` (5 prove, 2 di controllo), che registra la
+  **chiave intera**. **Provati nei due versi:** il primo 4 rosse su 8 senza la cura, 8 verdi con; il
+  secondo 3 rosse su 5 senza, e la prima diceva `Aperture: ["111@Broker-Live"]` - cioe' il conto
+  reale - poi 5 verdi; le prove di controllo verdi in entrambi i casi. Banchi vicini verdi
+  (`conti_reali_auto`, `conti_automatici`, `auto_apertura_per_conto`,
+  `identita_conto_server_mt5`: 23 su 23). Giro intero del ponte **410 verdi**.
+  **IGIENE, nello stesso giro:** c'erano **60 file non tracciati e NON ignorati** (sonde di
+  diagnosi `diag_*`, `misura_*`, `indagine_*`, due `base.log` e un `laboratorio/null` nato da un
+  `> null` al posto di `> /dev/null`): `git check-ignore` usciva 1 su tutti, quindi al primo
+  `git add -A` sarebbero finiti pubblicati, per la quarta volta nella storia di questo repository.
+  Lette a campione, non hanno UNA `assert`: `diag_candele_memoria` usa perfino `test(...)` senza
+  affermare niente, quindi passerebbe anche col difetto dentro. Coperte per nome nel `.gitignore`;
+  verificato dopo: scoperti da 60 a **0** e nessun `*.test.mjs` finito fra gli ignorati (banchi
+  tracciati 361, cioe' i 360 di prima piu' quello di oggi).
+  **COSA CAMBIA PER L'UTENTE, e va detto:** su un simbolo con passo o minimo 0,1 un segnale che
+  prima si apriva adesso **non si apre**, col motivo nel pannello. Prima si apriva a tre volte il
+  rischio scelto, quindi non e' una perdita: e' un gonfiaggio che si e' smesso di fare. IN SOSPESO,
+  ed e' il pezzo che lo rimette a posto davvero: insegnare a `tgPiano` il passo e il minimo VERI del
+  simbolo (`/symbol-check` dichiara gia' `volume_step` e `volume_min`; l'app salva solo `minDeal` e
+  non lo usa per MT5), cosi' calcola subito un lotto valido e si rifiuta solo quando il rischio non
+  ci sta davvero.
+  **ALTRI TRE BUCHI DELLO STESSO AUDIT, ANCORA APERTI:** `fb_tg_auto_per_conto` e
+  `fb_tg_auto_conti` arrivano dalla sincronizzazione e vengono sostituite in blocco, senza la
+  regola «spento vince» e senza la conferma che invece la spunta a mano chiede: un documento cloud
+  puo' accendere l'automatico su un conto reale. Due finestre normali (`PIP_SLOT=0` entrambe:
+  programma installato piu' scheda del browser) sono entrambe «madre» e aprono lo stesso segnale
+  due volte - il ricordo condiviso si scrive DOPO gli ordini, che partono in parallelo. E la corsa
+  al cambio conto alla radice: `mt5ContoAttivo` non si azzera all'inizio di `connectToMt5Bridge`, e
+  `fetchMt5AccountInfo` non ha il controllo di generazione che `fetchMt5Positions` ha.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-17 - OpenCode - **v2.2.62: il passo a freccetta su una candela mensile fa UN mese di
   calendario, e il tetto in avanti non ferma piu' tutto il replay.** Due difetti dello stesso
   punto, `fblReplayPasso`. (1) `replaySecondsPerBar()` vale `currentTF*60`, quindi sul mensile

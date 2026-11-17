@@ -631,7 +631,14 @@
 //            blocco anche su Kraken; via «Operazione» dal riquadro a schermo intero; le
 //            impostazioni (footprint, indicatori, decimali, strategie sale) seguono l'account,
 //            i segreti no; e il conto segue l'asset: cripto -> Kraken, forex/indici/azioni -> MT5.
-const CACHE_NAME = "forex-backtest-lab-v2.2.62";
+// v2.2.63 - SOLDI VERI, due buchi trovati da un audit e non da una segnalazione: il ponte non
+//            puo' piu' far crescere il lotto (arrotondava al multiplo piu' VICINO del passo e poi
+//            alzava al minimo: su un simbolo con passo 0,1 erano 3 volte il rischio scelto), e un
+//            conto e' login@server anche dove si decide DOVE aprire (con lo stesso numero su due
+//            server si apriva sul conto REALE non spuntato). Piu' una guardia finale a un passo
+//            dall'ordine: si guarda su quale conto si e' davvero, e se non e' quello deciso non si
+//            apre.
+const CACHE_NAME = "forex-backtest-lab-v2.2.63";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
