@@ -42591,6 +42591,66 @@ setTimeout(()=>{ try{ tgCanalePresenza(); }catch(e){} },1200);
 // IL RICORDO SU DISCO: un segnale applicato non si applica due volte, quale che sia la finestra
 // che lo riceve. Chiave per chiave con l'istante: servono nelle ore in cui il ponte riconsegna
 // la bacheca (il minuto di validita' del segnale), non per sempre.
+// DUE FINESTRE NORMALI SONO ENTRAMBE «MADRE», E NESSUNA LO SAPEVA (17 novembre 2026).
+//
+// Tutte le guardie contro il doppione sono costruite su `PIP_SLOT`: `tgSonoAutoritaSegnale`
+// risponde subito di si' quando vale 0, e il canale di presenza scarta i messaggi del proprio
+// slot. Ma `PIP_SLOT` vale 0 per QUALUNQUE pagina senza `?pipSlot=N`, quindi due istanze normali
+// - il programma installato piu' una scheda del browser, o due copie aperte a mano - sono
+// entrambe madre, non si vedono nemmeno sul canale, e aprono tutte e due lo stesso segnale.
+// L'unica barriera condivisa era il ricordo su disco, che pero' si scrive DOPO gli ordini: la
+// corsa era larga quanto l'esecuzione su MT5, cioe' secondi.
+//
+// Serviva una cosa che non esisteva: un modo di distinguere due finestre con lo stesso slot.
+// Nuovo a ogni caricamento di pagina, perche' una finestra ricaricata e' un nuovo pretendente.
+let FBL_FINESTRA_ID=(()=>{
+ try{ if(crypto&&crypto.randomUUID)return 'f-'+crypto.randomUUID(); }catch(e){}
+ return 'f-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,10);
+})();
+// LA PRENOTAZIONE: si scrive PRIMA di aprire, non dopo.
+//
+// QUANTO DURA: piu' della piu' lenta esecuzione su MT5, molto meno di un blocco eterno. Se la
+// finestra che prenota muore a meta' strada, dopo due minuti il segnale torna di tutti - un
+// doppione ogni tanto e' un guasto, un segnale che non si apre MAI e' un guasto peggiore.
+const TG_PRENOTA_PREFISSO='fb_tg_segnale_prenotato_';
+const TG_PRENOTA_VITA_MS=120000;
+function tgPrenotaChiave(id){ return TG_PRENOTA_PREFISSO+String(id); }
+// true = il segnale e' mio, posso aprirlo. false = lo sta gia' aprendo un'altra finestra.
+//
+// ONESTA' SU QUANTO E' STRETTA, e va detta qui dove si legge: `localStorage` non ha una
+// scrittura atomica, quindi due finestre che prenotano nello stesso identico istante possono
+// passare entrambe. Si scrive e si RILEGGE: chi non si ritrova nella rilettura ha perso. Questo
+// riduce la corsa da «tutta l'esecuzione MT5» (secondi) a «il tempo fra una scrittura e la sua
+// rilettura» (millisecondi). Non e' un lucchetto e non va raccontato come tale.
+function tgSegnalePrenota(voce){
+ const id=voce&&voce.id;
+ if(id==null||id==='')return true;   // senza id non si prenota niente: come prima
+ const k=tgPrenotaChiave(id);
+ try{
+  const grezzo=localStorage.getItem(k);
+  if(grezzo){
+   const g=JSON.parse(grezzo);
+   const eta=Date.now()-(Number(g&&g.at)||0);
+   // di un'altra finestra e ancora valida: giu' le mani
+   if(g&&g.chi!==FBL_FINESTRA_ID&&eta<TG_PRENOTA_VITA_MS)return false;
+  }
+  localStorage.setItem(k,JSON.stringify({chi:FBL_FINESTRA_ID,at:Date.now()}));
+  const ri=JSON.parse(localStorage.getItem(k)||'null');
+  return !!(ri&&ri.chi===FBL_FINESTRA_ID);
+ }catch(e){ return true; }   // memoria non disponibile: meglio il comportamento di prima
+}
+// Si lascia quando non si e' aperto niente, cosi' il segnale resta disponibile per un altro giro
+// o per un'altra finestra. Se si e' aperto, non si lascia: subentra il ricordo su disco, che dura
+// un giorno.
+function tgSegnalePrenotazioneLascia(voce){
+ const id=voce&&voce.id;
+ if(id==null||id==='')return;
+ try{
+  const g=JSON.parse(localStorage.getItem(tgPrenotaChiave(id))||'null');
+  if(g&&g.chi!==FBL_FINESTRA_ID)return;   // non e' mia: non la tolgo a un altro
+  localStorage.removeItem(tgPrenotaChiave(id));
+ }catch(e){}
+}
 const TG_APPLICATO_PREFISSO='fb_tg_segnale_applicato_';
 const TG_APPLICATO_VITA_MS=86400000;  // un giorno: un id di bacheca non si riusa mai
 function tgApplicatoChiave(id){ return TG_APPLICATO_PREFISSO+String(id); }
@@ -42656,6 +42716,14 @@ async function tgAutoInCoda(voce){
   try{ tgRenderPannello(); }catch(e){}
   return;
  }
+ // LA TERZA GUARDIA, per le due finestre che si credono entrambe madre. Si prenota PRIMA di
+ // mettersi in coda: le due guardie di sopra non possono vedere l'altra finestra, perche'
+ // ragionano su `PIP_SLOT`, che vale 0 per tutte e due.
+ if(!tgSegnalePrenota(voce)){
+  try{ voce.autoMotivo='lo sta gia\' aprendo un\'altra finestra dell\'applicazione: da qui non apro, per non aprirlo due volte.'; }catch(e){}
+  try{ tgRenderPannello(); }catch(e){}
+  return;
+ }
 
  let conto='sim';
  try{ conto=tgContoPerSegnale(voce&&voce.segnale); }catch(e){}
@@ -42663,7 +42731,12 @@ async function tgAutoInCoda(voce){
  const dopo=prima
   .then(()=>tgAutoValuta(voce,conto))
   .catch(e=>{ console.log('[Segnali] valutazione automatica fallita:',e);
-    try{ voce.autoMotivo='errore durante l\'apertura automatica: '+((e&&e.message)||e); tgRenderPannello(); }catch(_){} });
+    try{ voce.autoMotivo='errore durante l\'apertura automatica: '+((e&&e.message)||e); tgRenderPannello(); }catch(_){} })
+  // LA PRENOTAZIONE SI LASCIA SE NON SI E' APERTO NIENTE, sempre, anche dopo un errore: se
+  // restasse addosso a un tentativo fallito, quel segnale non lo aprirebbe piu' nessuno per due
+  // minuti. Se invece si e' aperto, subentra il ricordo su disco e la prenotazione non serve
+  // piu' - ne' va tolta, perche' il ricordo dura un giorno e questa due minuti.
+  .then(()=>{ try{ if(!tgSegnaleGiaApplicato(voce))tgSegnalePrenotazioneLascia(voce); }catch(e){} });
  tgAutoCode[conto]=dopo;
  return dopo;
 }
