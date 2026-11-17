@@ -158,6 +158,56 @@ pagato. **Ordine:** il 3 va prima del 2, perché decide cosa deve fare il pulsan
 va prima di 2, 4 e 5, perché potrebbe unificarli; il 7 è indipendente dagli altri e si può fare
 quando si vuole.
 
+## 17-18 novembre 2026 — quattro segnalazioni nuove (da fare DOPO, indicazione del proprietario)
+
+1. **IL GRAFICO SI PIANTA ALLE 22, MA TUTTO IL RESTO VA.** «quando arrivano le 22, il grafico, per
+   esempio, dell'asset XAUUSD si pianta, mentre invece il terminale MT5 continua ad andare, ad
+   aggiornare le candele... se io vado sulla tabella delle posizioni aperte, lui mi mostra quello
+   che è il P/L live. L'aggiornamento lo vede. Vede anche quello che è il prezzo corrente. Mi
+   calcola tutto, tranne quello che è la scrittura della candela a grafico.» **Vale per tutti gli
+   asset, nessuno escluso.**
+   **La diagnosi è quasi fatta e viene da lui:** se il prezzo corrente arriva e il P/L live si
+   aggiorna, la catena del tick funziona — si ferma solo chi SCRIVE la candela. Da misurare: che
+   cosa, alle 22, smette di far entrare il tick nella candela (il pennello dei 250 ms? un confine
+   di sessione? un tetto del calendario?) mentre `currentPrice()` continua a rispondere. **Non si
+   cura prima di sapere quale dei tre.**
+2. **I MODELLI «SALVA COME» DEVONO ESSERE PER CLASSE.** «se io vado a salvare quello che è il
+   modello Fibonacci, non mi può far vedere quelli che sono i modelli, per esempio, delle linee o
+   dei rettangoli... E deve essere anche distinto con il modello delle impostazioni del profilo del
+   volume, sia a intervallo fisso che profilo volumetrico ancorato, e anche il VWAP. Quindi ognuno
+   ha una sua classe di appartenenza.» Oggi l'elenco dei nomi già usati mescola due famiglie
+   (disegno generico e Fibonacci) **per scelta dichiarata** nel banco `nomi_modelli_disegni`
+   («due famiglie, un nome solo»): va rifatto per classe, e le classi sono almeno cinque — linee e
+   rettangoli, Fibonacci, profilo volumetrico a intervallo fisso, profilo volumetrico ancorato,
+   VWAP.
+   **E ANCORA NON SALVA:** «non riesce a salvarmi quello che è praticamente il modello del
+   Fibonacci o di una linea o del profilo volumetrico, e non mi salva nemmeno le impostazioni degli
+   indicatori». È il problema messo in attesa, di cui la v2.2.65 ha tolto il silenzio: alla prima
+   occasione **serve la riga di stato** dopo un salvataggio fallito, che ora dice quanti MB sono
+   occupati su quanti.
+3. **SU MOBILE «AGGIORNA» DEVE INSTALLARE DA SÉ.** «oggi il PC non è che va a scaricare un nuovo
+   pacchetto di installazione, lo installa già lui da solo automaticamente... Deve fare la stessa
+   identica cosa anche sui dispositivi mobili. Perché oggi quello che fa è che mi scarica il
+   download del pacchetto di installazione APK e poi io manualmente lo devo andare a installare.»
+4. **LA DOMANDA SULLA PROP FIRM RITORNA A OGNI RIAPERTURA.** «succede ogni volta che chiudo
+   l'applicazione e la riapro, mi fa sempre la stessa identica domanda. Deve esserci un qualcosa
+   che salva, gli viene attribuita a quello che è un ID. Almeno lui sa che quel conto è stato
+   attribuito a una scelta e non mi fa più la domanda. A un nuovo conto, ovviamente, quando viene
+   aggiunto non ha l'ID e quindi mi fa la domanda.» Era già la voce A4 della consegna del 15
+   novembre («non riproducibile sul banco»), ma **adesso c'è il disegno**: la risposta si lega a un
+   ID del conto. Il meccanismo esiste già (`propChiesto` per `login@server`): da misurare perché
+   non regge alla riapertura — si salva e non si rilegge, o si rilegge con una chiave diversa?
+
+**NOTA DI METODO, dallo stesso giro:** nel banco `replay_fra_finestre` un difetto stava **nascosto
+dietro un'altra assertion**. La prova si fermava sulla prima (quella superata dalla richiesta nuova)
+e non arrivava mai alla seconda, che misurava una cosa ancora rotta. Capovolgendo la prima è
+comparsa la seconda. **Una prova rossa può nasconderne un'altra**, e il conto delle rosse non è il
+conto dei difetti.
+**DA FARE, piccolo:** un banco per il caso «una finestra che NON partecipa al replay non deve farsi
+spostare il tempo dall'uscita di un replay altrui». La guardia esiste in `esciReplayLive`
+(`if(!era)`), ma nella scena di `replay_fra_finestre` tutte le finestre partecipano, quindi lì non
+si può più misurare.
+
 ## 17 novembre 2026 — ZOOM OUT IN LIVE: il grafico si ferma sempre allo stesso giorno
 
 Segnalato dal proprietario, **da affrontare dopo** (sua indicazione esplicita):

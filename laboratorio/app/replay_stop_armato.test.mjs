@@ -1,3 +1,11 @@
+// AGGIORNATO IL 17-18 NOVEMBRE 2026, su richiesta del proprietario: CAMBIA IL PULSANTE, NON LA
+// REGOLA. La pausa resta quella chiesta il 15-16 novembre - tutte le finestre ferme sullo stesso
+// istante, senza salto all'ultima candela, e il PLAY che riprende dallo stesso secondo - ma ora la
+// fa il pulsante PLAY, che diventa «STOP» mentre il replay scorre. Il pulsante rosso si chiama
+// ESCI e fa una cosa sola: esce, e riporta all'ultima candela vera. Sue parole: «non deve uscire
+// il tasto stop, ma deve venire fuori quello che e' il tasto esci. Il tasto stop stara' soltanto
+// quando premiamo quello che e' il tasto play e poi dopo si trasforma in tasto stop».
+// Quindi qui la pausa si preme con $('play') e l'uscita con $('liveReplayStopBtn'), UNA volta.
 // REPLAY CONDIVISO: LO STOP PAUSA SUL PUNTO, IL PLAY RIPRENDE DALLO STESSO SECONDO.
 //
 // RICHIESTO DAL PROPRIETARIO (16 novembre 2026), per estendere a tutti i casi la regola che il
@@ -99,7 +107,7 @@ test('PROVA DI CONTROLLO: da soli, lo STOP esce dal replay come prima', async ()
   } finally { await browser.close(); }
 });
 
-test('col replay condiviso lo STOP pausa sul punto: tutte le finestre restano in replay, stesso istante', async () => {
+test('col replay condiviso il PLAY mette in pausa sul punto: tutte le finestre restano in replay, stesso istante', async () => {
   const {browser, madre, dup, errori, errori2} = await dueFinestreInLive();
   try {
     await madre.evaluate(RISPOSTA(true));
@@ -115,15 +123,16 @@ test('col replay condiviso lo STOP pausa sul punto: tutte le finestre restano in
     assert.equal(inCorso.timer, true, 'il PLAY deve aver avviato l\'orologio: ' + JSON.stringify(inCorso));
     const istanteStop = inCorso.momento;
 
-    // STOP: premuto col pulsante vero, non chiamando la funzione.
-    await madre.evaluate(() => { if ($('liveReplayStopBtn')) $('liveReplayStopBtn').click(); });
+    // LA PAUSA: si preme il pulsante PLAY, che a orologio in corso mostra «⏹ STOP». Premuto
+    // col pulsante vero, non chiamando la funzione.
+    await madre.evaluate(() => { if ($('play')) $('play').click(); });
     await dup.waitForTimeout(900);
     const dMadre = await madre.evaluate(STATO);
     const dDup = await dup.evaluate(STATO);
     console.log('dopo lo STOP -> madre:', JSON.stringify(dMadre), '| duplicata:', JSON.stringify(dDup));
 
     assert.equal(dMadre.inReplay, true,
-      'col replay condiviso lo STOP NON deve far uscire dal replay: ' + JSON.stringify(dMadre));
+      'la pausa NON deve far uscire dal replay: ' + JSON.stringify(dMadre));
     assert.equal(dDup.inReplay, true,
       'la duplicata deve restare in replay anche lei: ' + JSON.stringify(dDup));
     assert.equal(dMadre.timer, false, 'l\'orologio deve essere fermo: ' + JSON.stringify(dMadre));
@@ -160,17 +169,15 @@ test('col replay condiviso lo STOP pausa sul punto: tutte le finestre restano in
     assert.equal(rMadre.inReplay, true, 'il replay continua: ' + JSON.stringify(rMadre));
     assert.equal(rDup.inReplay, true, 'anche sulla duplicata: ' + JSON.stringify(rDup));
 
-    // La strada esplicita per USCIRE resta: STOP con tutto già fermo esce dal replay.
+    // L'USCITA: UN solo colpo sul pulsante ESCI (prima ne servivano due, perche' il primo
+    // armava la pausa: dal 17 novembre la pausa ha il suo pulsante e questo esce subito).
     await madre.evaluate(() => { if ($('liveReplayStopBtn')) $('liveReplayStopBtn').click(); });
-    await dup.waitForTimeout(700);
-    await madre.evaluate(() => { if ($('liveReplayStopBtn')) $('liveReplayStopBtn').click(); });
-    await dup.waitForTimeout(900);
+    await dup.waitForTimeout(1100);
     const uMadre = await madre.evaluate(STATO);
     const uDup = await dup.evaluate(STATO);
     console.log('doppio STOP -> madre:', JSON.stringify(uMadre), '| duplicata:', JSON.stringify(uDup));
     assert.equal(uMadre.inReplay, false,
-      'riconfermando lo STOP a orologio fermo si esce dal replay (strada esplicita conservata): '
-      + JSON.stringify(uMadre));
+      'il pulsante ESCI esce dal replay al primo colpo: ' + JSON.stringify(uMadre));
     assert.equal(uDup.inReplay, false, 'e la duplicata esce con lei: ' + JSON.stringify(uDup));
     assert.equal(uMadre.perTutte, false,
       'finita la pausa condivisa la scelta non si eredita: ' + JSON.stringify(uMadre));

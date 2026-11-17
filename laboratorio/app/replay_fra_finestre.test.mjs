@@ -659,7 +659,7 @@ test('AVANZAMENTO 1: premendo PLAY sulla madre, la duplicata avanza insieme?', a
 // 7. FATTO NUOVO 2 â€” PAUSA E STOP: chi conserva l'istante, e chi lo porta alle altre.
 //    Sono due cose diverse e oggi il codice le fa al contrario l'una dell'altra.
 // =====================================================================================
-test('AVANZAMENTO 2: la pausa conserva l istante ma non viaggia, lo STOP viaggia ma non lo conserva',
+test('AVANZAMENTO 2: la pausa conserva l istante ma non viaggia, l uscita viaggia e torna all ultima candela',
   async () => {
     const c = await scenaConReplayCondiviso(true);
     try {
@@ -732,20 +732,48 @@ test('AVANZAMENTO 2: la pausa conserva l istante ma non viaggia, lo STOP viaggia
 
       // QUELLO CHE CHIEDE IL PROPRIETARIO: ferme tutte allo stesso istante, e quell'istante e
       // quello del clic, non la fine del dato.
-      assert.ok(persoM !== null && Math.abs(persoM) <= 1000,
-        'LO STOP DEVE FERMARE DOVE SI E, non saltare all ultima candela: dopo il clic la '
-        + 'finestra e a ' + secondi(persoM) + ' s di distanza dall istante che stava mostrando. '
-        + 'esciReplayLive (59478) fa `masterTime=closeTimeOf(baseRows[ultima])`.');
-      assert.ok(dopoStopM.momento !== null && dopoStopD.momento !== null
-        && Math.abs(dopoStopM.momento - dopoStopD.momento) <= 1000,
-        'e le due finestre devono restare sullo stesso istante anche dopo lo STOP: '
-        + JSON.stringify({madre:dopoStopM.momento, duplicata:dopoStopD.momento}));
+      // CAPOVOLTA IL 17-18 NOVEMBRE 2026, su richiesta esplicita del proprietario: «quando vado
+      // a stoppare, cioe a uscire dalla modalita replay, lui mi deve ritornare automaticamente
+      // all ultima candela, anche se il mercato e chiuso... E deve ritornare sia sulla pagina
+      // madre che sulle pagine duplicate». Prima questa riga pretendeva il CONTRARIO - fermarsi
+      // dove si era - e veniva dalla richiesta del 15 novembre, che pero riguardava lo STOP come
+      // PAUSA. Dal 17 novembre la pausa ha il suo pulsante (il PLAY, che diventa STOP) e questo
+      // si chiama ESCI: esce, e torna all ultima candela. La pausa resta misurata nella prima
+      // metà di questa stessa prova, che non e stata toccata.
+      const ultimaVeraM = await c.madre.evaluate(() => (baseRows.length ? closeTimeOf(baseRows[baseRows.length-1]) : null));
+      assert.ok(dopoStopM.masterTime !== null && ultimaVeraM !== null
+        && Math.abs(dopoStopM.masterTime - ultimaVeraM) <= 1000,
+        'USCENDO DAL REPLAY SI DEVE TORNARE ALL ULTIMA CANDELA: masterTime dopo l uscita e '
+        + (dopoStopM.masterTime === null ? 'null' : new Date(dopoStopM.masterTime).toISOString())
+        + ', l ultima candela e ' + (ultimaVeraM === null ? 'null' : new Date(ultimaVeraM).toISOString()));
+      // Restano comunque allineate - e anzi di piu di prima, perche l ultima candela e lo
+      // stesso punto per tutte, mentre «dove si era» dipendeva da chi aveva premuto.
+      // Si confronta `masterTime` e non `momento`: fuori dal replay `momento` e null per
+      // costruzione (replayMomentoMostrato non ha piu niente da mostrare), quindi confrontarlo
+      // misurerebbe il vuoto.
+      assert.ok(dopoStopM.masterTime !== null && dopoStopD.masterTime !== null
+        && Math.abs(dopoStopM.masterTime - dopoStopD.masterTime) <= 1000,
+        'e le due finestre devono finire sullo stesso istante anche dopo l uscita: '
+        + JSON.stringify({madre:dopoStopM.masterTime, duplicata:dopoStopD.masterTime}));
       // LA TERZA FINESTRA, che oggi NON entra in replay con loro (e' il difetto della prova 1).
       // Qui si misura un secondo effetto: lo STOP «su tutte» non deve spostare il tempo di una
       // finestra che non sta rivedendo niente. Oggi `replay_sync` (59478? no: 9789) non filtra e
       // `esciReplayLive` le porta via `masterTime` all'ultima candela (59485).
-      assert.equal(dopoStopD3.masterTime, primaStopD3.masterTime,
-        'LO STOP DI UN REPLAY A CUI QUESTA FINESTRA NON PARTECIPA NON DEVE SPOSTARLE IL TEMPO: '
+      // AGGIORNATA IL 17-18 NOVEMBRE 2026, e la premessa era VECCHIA. Questa riga era scritta
+      // quando la terza finestra NON entrava in replay con le altre («e il difetto della prova
+      // 1»), e pretendeva che l uscita non le spostasse il tempo. Dal 15 novembre (v2.2.57) il
+      // replay parte su TUTTE le finestre, quindi questa partecipa - misurato qui: prima dello
+      // stop il suo orologio era nel passato con gli altri - e uscendo deve tornare all ultima
+      // candela come loro, che e' la richiesta del 17 novembre.
+      //
+      // LA REGOLA PER CHI DAVVERO NON PARTECIPA RESTA, e sta nel codice: `esciReplayLive` esce
+      // subito senza toccare vista ne orologio quando questa finestra non era in replay
+      // (`if(!era)`). Registrato in BUG.md che quel caso merita un banco suo: qui non si puo'
+      // piu' misurare, perche' in questa scena tutte partecipano.
+      const ultimaVeraD3 = await c.d3p.evaluate(() => (baseRows.length ? closeTimeOf(baseRows[baseRows.length-1]) : null));
+      assert.ok(dopoStopD3.masterTime !== null && ultimaVeraD3 !== null
+        && Math.abs(dopoStopD3.masterTime - ultimaVeraD3) <= 1000,
+        'LA TERZA FINESTRA PARTECIPA AL REPLAY, QUINDI USCENDO TORNA ALL ULTIMA CANDELA COME LE ALTRE: '
         + 'prima ' + new Date(primaStopD3.masterTime).toISOString() + ', dopo '
         + (dopoStopD3.masterTime === null ? 'null' : new Date(dopoStopD3.masterTime).toISOString())
         + '. Il ramo replay_sync (9789) non guarda l asset e non guarda chi era in replay.');
@@ -833,8 +861,11 @@ test('AVANZAMENTO 3: dopo la pausa il play riprende dallo stesso secondo, non da
       console.log('DOPO LO STOP, il play fa ripartire?', JSON.stringify({clic:ripreso,
         inReplay:dopoTutto.inReplay, inCorso:dopoTutto.inCorso, momento:dopoTutto.momento,
         idx:dopoTutto.idx, candele:dopoTutto.iMostrata}));
-      assert.ok(dopoTutto.inCorso === true && dopoTutto.momento !== null,
-        'DOPO LO STOP IL PLAY DEVE RIPARTIRE dallo stesso punto: oggi lo STOP esce dal replay e '
+      assert.ok(dopoTutto.inReplay === false,
+        'CAPOVOLTA il 17-18 novembre 2026: dopo l USCITA il replay e finito, e il PLAY non lo '
+        + 'deve resuscitare - per rivedere si ripreme Replay. Prima questa riga pretendeva il '
+        + 'contrario, quando quel pulsante era una pausa. La ripresa dopo la PAUSA resta misurata '
+        + 'sopra, con il pulsante PLAY, e non e stata toccata. Stato dopo l uscita: '
         + 'porta `masterTime` all ultima candela (59478), quindi il tasto PLAY non trova piu '
         + 'niente da riprendere (il guard `if(idx>=rows.length-1)return` a 32149) e non parte: '
         + JSON.stringify({inReplay:dopoTutto.inReplay, inCorso:dopoTutto.inCorso,
