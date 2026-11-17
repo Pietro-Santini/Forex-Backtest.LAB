@@ -144,6 +144,61 @@ pagato. **Ordine:** il 3 va prima del 2, perché decide cosa deve fare il pulsan
 va prima di 2, 4 e 5, perché potrebbe unificarli; il 7 è indipendente dagli altri e si può fare
 quando si vuole.
 
+## 17 novembre 2026 — MISURA: perché le duplicate «si resettano». E l'ipotesi che le unificava era METÀ sbagliata
+
+Misurato il canale fra finestre (`collectTradingSyncPayload` / `fblApplicaStatoTrading`) per
+decidere se i punti 2 (pulsante «ricomincia»), 4 (duplicate che si azzerano) e 5 (conto che si
+spalma) fossero **una cura sola o tre**. Risposta: **due e una, non tre e non una.**
+
+### I punti 2 e 4 sono lo stesso difetto, e la causa è verificata
+
+`collectTradingSyncPayload` manda `isPropFirmMode`, e chi riceve lo applica **senza nessuna
+guardia**:
+
+```js
+if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
+```
+
+Nella stessa funzione `trades` ed `equity` sono protetti da `_stessoContoMt5`; questo no.
+E poi:
+
+```js
+function currentMode(){
+  const base=liveModeActive?'live':'backtest';
+  return isPropFirmMode?(base+'_propfirm'):base;
+}
+let indicatorsByMode={backtest:null,live:null,backtest_propfirm:null,live_propfirm:null};
+```
+
+**Gli indicatori sono archiviati PER MODALITÀ.** Quindi quando la prop firm si chiude o riparte
+sulla madre, l'interruttore si propaga a ogni duplicata, la loro `currentMode()` passa da
+`live_propfirm` a `live`, e loro mostrano gli indicatori **dell'altro cassetto** — vuoto se non
+l'hanno mai configurato.
+
+**Gli indicatori non si resettano: sono nell'altro cassetto.** È la stessa forma del problema dei
+modelli dei disegni (3.2 della scaletta): non una perdita, una chiave che cambia sotto.
+
+**LA CURA È UNA DECISIONE, non un difetto da raddrizzare**, e va chiesta al proprietario:
+- **A** — le duplicate NON seguono la prop firm della madre: ogni finestra tiene la sua modalità.
+  Semplice, ma allora due finestre dello stesso conto possono trovarsi in modalità diverse;
+- **B** — la seguono, ma gli indicatori smettono di essere per modalità (uno solo per asset).
+  Risolve anche il «perdo gli indicatori» in altri casi, e tocca un archivio che esiste da mesi;
+- **C** — la seguono, e al cambio di modalità gli indicatori si portano dietro. Il più gentile,
+  il più lavoro.
+
+### Il punto 5 (il conto che si spalma) è un'altra cosa, e c'è un conflitto da sciogliere
+
+`mt5SavedAccounts` **non viaggia sul canale**: l'elenco si legge da una **cartella di credenziali
+condivisa** (`upsertMt5AccountInHandle`, `removeMt5AccountFromHandle`), cioè **una sola fonte per
+tutta la macchina**. Aggiungere un conto lo fa comparire in tutte le finestre perché le finestre
+leggono la stessa cartella: non è un difetto della sincronizzazione.
+
+Il conto **attivo** invece viaggia (`conto.mt5` nel carico), e quello è stato **chiesto
+esplicitamente** dal proprietario il 10 novembre: «se passo da conto 1 a conto 2 sul PC, anche sul
+tablet deve passare, e viceversa». Quindi qui due sue richieste si contraddicono, e la domanda da
+fargli è precisa: **cosa non deve spalmarsi — l'elenco dei conti, o il conto selezionato?**
+Non si cura prima di saperlo.
+
 ## 17 novembre 2026 — SUONO DOPPIO: l'apertura è curata, la chiusura no
 
 Il banco da 483 righe scritto il 16 novembre e mai eseguito è stato **salvato dal `%TEMP%`**
