@@ -60,9 +60,42 @@ una regola che manca.
    `trade_mode == 2` il conto è soldi veri comunque. Vale la regola del dubbio già in uso nel
    progetto: se non si sa, si tratta come vera.
 
+4. **CHIUDENDO UN CONTO PROP FIRM, LE DUPLICATE SI AZZERANO.** Segnalato lo stesso giorno:
+
+   > «quando si chiude quello che è un conto prop firm, quelle che sono le impostazioni delle
+   > pagine duplicate si resettano completamente, si resettano anche quelli che sono gli
+   > indicatori e questo non va bene, perché non posso stare a ripristinare sempre quelli che
+   > sono gli indicatori alla chiusura di un conto. Quindi quelli rimangono sulle pagine
+   > duplicate.»
+
+   Le impostazioni delle duplicate — **indicatori compresi** — devono restare dove sono. Da
+   misurare: cosa esattamente viene azzerato e da quale strada.
+5. **UN CONTO AGGIUNTO IN UNA FINESTRA SI SPALMA SU TUTTE.** Segnalato come «molto importante»:
+
+   > «se nelle impostazioni della pagina madre, oppure nelle impostazioni delle pagine duplicate,
+   > vado ad aggiungere un nuovo conto, dopo si spalma su tutti quanti le finestre che sono
+   > presenti.»
+
+6. **L'IPOTESI CHE TIENE INSIEME I PUNTI 2, 4 E 5 — da misurare, non da dare per buona.**
+   Tre sintomi **opposti**: una cosa che dovrebbe restare locale si spalma (punto 5), e due che
+   dovrebbero restare si azzerano (punti 4 e 2). Tutti e tre puntano allo stesso meccanismo: il
+   trasporto dello stato fra finestre che **sostituisce in blocco** invece di fondere.
+   È esattamente il punto di una trappola già pagata e documentata in
+   `cervello/PROGETTO-COPIA-IMPOSTAZIONI-CONTI.md`: il **13 novembre 2026** si è misurato che
+   `sessionByMode` non contiene solo impostazioni ma anche i **disegni** e il **capitale**, e che
+   il trasporto fra finestre (`if(msg.sessionByMode)sessionByMode=msg.sessionByMode`) sostituiva
+   in blocco: una duplicata appena nata, che di disegni non ne aveva, **cancellava quelli della
+   madre**, e la madre (slot 0) poi li persisteva su disco. Quella riga ora fonde. Il sospetto è
+   che altri campi facciano ancora il giro vecchio.
+   **LA MISURA, ed è una sola per tutti e tre:** elencare quali campi viaggiano fra finestre e,
+   per ognuno, dire se è un'impostazione di QUELLA finestra, un dato del conto, o roba condivisa.
+   Se l'ipotesi regge, i punti 2, 4 e 5 sono **una cura sola invece di tre**. Se non regge, lo si
+   scopre prima di aver scritto tre cure sbagliate.
+
 **Stato:** niente curato, niente banco. Il punto 1 ha la causa letta nel sorgente (manca il
-guard), il 2 è un sospetto da misurare, il 3 è una decisione di disegno da prendere col
-proprietario. Il punto 3 va fatto **prima** del 2, perché decide cosa deve fare il pulsante.
+guard), i punti 2, 4 e 5 sono sintomi da misurare con l'ipotesi del punto 6, e il 3 è una
+decisione di disegno da prendere col proprietario. **Ordine:** il 3 va prima del 2, perché decide
+cosa deve fare il pulsante; la misura del 6 va prima di 2, 4 e 5, perché potrebbe unificarli.
 
 ## APERTI — 16 novembre 2026, finestre duplicate (da misurare, non ancora curbati)
 
