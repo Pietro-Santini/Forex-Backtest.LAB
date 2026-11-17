@@ -27589,6 +27589,13 @@ function recordAssetAutoMeta(assetKey,partial,source){
    contractSize:Number.isFinite(partial.contractSize)&&partial.contractSize>0?partial.contractSize:prev.contractSize,
    leverage:Number.isFinite(partial.leverage)&&partial.leverage>0?partial.leverage:prev.leverage,
    minDeal:Number.isFinite(partial.minDeal)&&partial.minDeal>0?partial.minDeal:prev.minDeal,
+   // IL PASSO E IL MINIMO DEL LOTTO MT5, campi a parte e scritti SOLO dalla strada MT5
+   // (/symbol-check). Non si riusa `minDeal` qui sopra perche' quello lo scrivono anche
+   // Capital.com (minDealSize) e Binance (minQty) con un significato diverso - minimi di
+   // quantita' nelle loro unita', non lotti - e un lottaggio MT5 deciso dal numero di un altro
+   // broker e' un errore sui soldi. Vedi tgPiano, dove questi due hanno la precedenza su 0,01.
+   lotStep:Number.isFinite(partial.lotStep)&&partial.lotStep>0?partial.lotStep:prev.lotStep,
+   lotMin:Number.isFinite(partial.lotMin)&&partial.lotMin>0?partial.lotMin:prev.lotMin,
    instrType:partial.instrType||prev.instrType,
    locked:!!(partial.locked||prev.locked),
    source:source||prev.source,
@@ -42602,8 +42609,15 @@ async function tgImparaMetaDalPonte(sym){
   // LA COPPIA O NIENTE: i decimali da soli farebbero passare il controllo lasciando la dimensione
   // del contratto sbagliata - cioe' esattamente il danno che il controllo doveva evitare.
   if(!Number.isFinite(dec)||!(cs>0))return false;
+  // IL PASSO E IL MINIMO DEL SIMBOLO SI PRENDONO QUI, dove gia' si parlava col servizio dati.
+  // `/symbol-check` li dichiara entrambi (mt5_feed_server.py: volume_step, volume_min) e prima
+  // del 17 novembre 2026 l'app leggeva solo il minimo, lo salvava come `minDeal` e non lo usava
+  // mai per il lottaggio: il passo veniva buttato del tutto.
+  const _vStep=Number(d.volume_step), _vMin=Number(d.volume_min);
   recordAssetAutoMeta(sym,{decimals:dec,contractSize:cs,
-    minDeal:Number.isFinite(Number(d.volume_min))&&Number(d.volume_min)>0?Number(d.volume_min):undefined,
+    minDeal:Number.isFinite(_vMin)&&_vMin>0?_vMin:undefined,
+    lotStep:Number.isFinite(_vStep)&&_vStep>0?_vStep:undefined,
+    lotMin:Number.isFinite(_vMin)&&_vMin>0?_vMin:undefined,
     locked:true},'mt5/symbol-check');
   return tgMetaNota(sym);
  }catch(e){ return false; }
@@ -44066,9 +44080,42 @@ function tgPiano(seg,sym,pctForzata,opz){
  // monete, col passo e il minimo del contratto. Senza, tutto come prima (conto MT5/simulato, in €).
  const saldoConto=()=>Number.isFinite(opz.saldo)?Number(opz.saldo):realizedBalanceNow();
  const valoreA=(a,b,l)=>(typeof opz.valore==='function')?opz.valore(a,b,l):euroAtLevel(a,b,l,sym);
- const passoLotto=Number(opz.passo)>0?Number(opz.passo):0.01;
- const minimoLotto=Number(opz.minimo)>0?Number(opz.minimo):0.01;
- const decLotto=Math.max(0,Math.round(-Math.log10(passoLotto)));
+ // IL PASSO E IL MINIMO SONO QUELLI DEL SIMBOLO, non sempre 0,01 (17 novembre 2026).
+ //
+ // Conseguenza diretta della v2.2.63, dove il ponte ha smesso di ALZARE un volume sotto il
+ // minimo del simbolo e ha iniziato a rifiutarlo. Quella cura protegge i soldi, ma da sola
+ // lasciava un buco dall'altra parte: l'app calcolava sempre col passo 0,01, quindi su un
+ // simbolo con passo 0,1 (indici, molti CFD cripto) produceva un numero che il ponte non puo'
+ // accettare, e il segnale non si apriva affatto. Sicuro e inutile: meglio aprirlo giusto.
+ //
+ // L'ordine di precedenza, e il primo non si discute:
+ //   1. quello che passa il CHIAMANTE (`opz.passo`/`opz.minimo`): e' Kraken, col passo del
+ //      contratto, che non ha niente a che vedere coi lotti MT5;
+ //   2. quello che il SIMBOLO dichiara (`lotStep`/`lotMin`, da /symbol-check);
+ //   3. 0,01, come e' sempre stato.
+ // Cosi' nessun lottaggio gia' in uso cambia da solo: cambia solo dove il simbolo dice qualcosa.
+ //
+ // PERCHE' NON SI RIUSA `minDeal`: quel campo e' scritto anche da Capital.com (`minDealSize`) e
+ // da Binance (`minQty`), che sono minimi di QUANTITA' nelle loro unita', non lotti MT5. Usarlo
+ // come minimo di lotto vorrebbe dire far decidere il lottaggio MT5 a un numero di un altro
+ // broker. Da qui due campi dichiarati, scritti solo dalla strada MT5.
+ const _metaLotto=(()=>{ try{ return (sym&&assetAutoMeta&&assetAutoMeta[sym])||null; }catch(e){ return null; } })();
+ const _passoSimbolo=Number(_metaLotto&&_metaLotto.lotStep);
+ const _minimoSimbolo=Number(_metaLotto&&_metaLotto.lotMin);
+ const passoLotto=Number(opz.passo)>0?Number(opz.passo):(_passoSimbolo>0?_passoSimbolo:0.01);
+ const minimoLotto=Number(opz.minimo)>0?Number(opz.minimo):(_minimoSimbolo>0?_minimoSimbolo:0.01);
+ // I DECIMALI SI CONTANO SUL PASSO, NON CON UN LOGARITMO (difetto trovato dal banco di questa
+ // stessa cura, non cercato). `Math.round(-Math.log10(0.5))` fa Math.round(0,301) = 0, quindi
+ // con un passo 0,5 un lotto di 3,5 passava da `toFixed(0)` e diventava 4: un AUMENTO del
+ // rischio prodotto dall'arrotondamento dei decimali, dopo che il calcolo lo aveva ridotto per
+ // difetto. Col passo 0,01 i due modi danno lo stesso numero (2), quindi niente cambia dove
+ // non deve.
+ const decLotto=(()=>{
+  const s=String(passoLotto);
+  const i=s.indexOf('.');
+  if(i<0)return 0;
+  return Math.min(8,s.length-i-1);
+ })();
  const maxN=(Number(opz.maxN)>=1)?Math.floor(Number(opz.maxN)):Infinity;
  const parti=(Number(opz.parti)>1)?Math.min(10,Math.floor(Number(opz.parti))):1;
  const side=String(seg.direzione||'').toUpperCase();
