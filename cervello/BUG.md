@@ -70,11 +70,25 @@ una regola che manca.
 
    Le impostazioni delle duplicate — **indicatori compresi** — devono restare dove sono. Da
    misurare: cosa esattamente viene azzerato e da quale strada.
-5. **UN CONTO AGGIUNTO IN UNA FINESTRA SI SPALMA SU TUTTE.** Segnalato come «molto importante»:
+5. **UN CONTO AGGIUNTO IN UNA FINESTRA DEVE COMPARIRE ANCHE NELLE ALTRE.** Segnalato come «molto
+   importante»:
 
    > «se nelle impostazioni della pagina madre, oppure nelle impostazioni delle pagine duplicate,
    > vado ad aggiungere un nuovo conto, dopo si spalma su tutti quanti le finestre che sono
    > presenti.»
+
+   **ATTENZIONE, QUESTA VOCE ERA STATA CAPITA AL ROVESCIO** (corretto il 17 novembre 2026, su
+   chiarimento del proprietario). «Si spalma» era stato letto come una lamentela — «si spalma e
+   non deve» — e per due commit la voce ha detto il contrario di quello che serviva, portandosi
+   dietro anche l'ipotesi del punto 6. Parole sue nel chiarimento:
+
+   > «Semplicemente se aggiungo un nuovo conto mi si deve aprire anche sulle altre finestre
+   > visibili e non solo su quella dove l'ho aggiunto da impostazioni.»
+
+   Quindi **è una richiesta, non un difetto da togliere**: oggi il conto nuovo compare solo nella
+   finestra dove lo aggiungi, e deve comparire in tutte quelle aperte. Lezione di metodo: una
+   parola come «si spalma» non dice da sola se chi parla la vuole o no, e indovinarlo e' costato
+   due commit e un'ipotesi sbagliata. **Si chiede.**
 
 6. **L'IPOTESI CHE TIENE INSIEME I PUNTI 2, 4 E 5 — da misurare, non da dare per buona.**
    Tre sintomi **opposti**: una cosa che dovrebbe restare locale si spalma (punto 5), e due che
@@ -186,18 +200,24 @@ modelli dei disegni (3.2 della scaletta): non una perdita, una chiave che cambia
 - **C** — la seguono, e al cambio di modalità gli indicatori si portano dietro. Il più gentile,
   il più lavoro.
 
-### Il punto 5 (il conto che si spalma) è un'altra cosa, e c'è un conflitto da sciogliere
+### Il punto 5 è un'altra cosa — e la mia lettura era al rovescio
 
-`mt5SavedAccounts` **non viaggia sul canale**: l'elenco si legge da una **cartella di credenziali
-condivisa** (`upsertMt5AccountInHandle`, `removeMt5AccountFromHandle`), cioè **una sola fonte per
-tutta la macchina**. Aggiungere un conto lo fa comparire in tutte le finestre perché le finestre
-leggono la stessa cartella: non è un difetto della sincronizzazione.
+**Scritto prima:** «il conto che si spalma è un'altra cosa, e c'è un conflitto da sciogliere».
+**Sbagliato.** Chiarito dal proprietario: lui **vuole** che si spalmi, e oggi non lo fa. Non c'è
+nessun conflitto con la richiesta del 10 novembre sulla propagazione del conto attivo: sono due
+cose che vanno nella stessa direzione.
 
-Il conto **attivo** invece viaggia (`conto.mt5` nel carico), e quello è stato **chiesto
-esplicitamente** dal proprietario il 10 novembre: «se passo da conto 1 a conto 2 sul PC, anche sul
-tablet deve passare, e viceversa». Quindi qui due sue richieste si contraddicono, e la domanda da
-fargli è precisa: **cosa non deve spalmarsi — l'elenco dei conti, o il conto selezionato?**
-Non si cura prima di saperlo.
+**LA CAUSA, misurata.** `mt5SavedAccounts` è una **cache in memoria** della cartella delle
+credenziali (`let mt5SavedAccounts=[]; // cache della lista di conti letta dalla cartella`).
+Aggiungendo un conto si aggiorna **solo la cache di quella finestra**
+(`mt5SavedAccounts=await upsertMt5AccountInHandle(handle,creds)`): la cartella su disco è una
+sola e condivisa, ma le altre finestre tengono la loro copia vecchia finché non rileggono. Quindi
+il conto nuovo non compare, e l'elenco dei conti non viaggia sul canale fra finestre
+(`collectTradingSyncPayload` non lo manda).
+
+**LA CURA:** annunciare sul canale fra finestre che l'elenco è cambiato, così le altre rileggono
+e ridisegnano. Non si manda l'elenco — dentro ci sono le **credenziali**, e quelle non viaggiano
+mai, nemmeno fra due finestre della stessa macchina: si manda solo «rileggi».
 
 ## 17 novembre 2026 — SUONO DOPPIO: l'apertura è curata, la chiusura no
 

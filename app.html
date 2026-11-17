@@ -16677,6 +16677,39 @@ function normalizeIndicatorsByMode(raw,legacyList){
  Object.keys(base).forEach(k=>{ base[k]=serializeIndicators(legacy); });
  return base;
 }
+// GLI INDICATORI SI PORTANO DIETRO AL CAMBIO DI MODALITA' (scelta del proprietario, 17 novembre
+// 2026, fra tre strade proposte: la «C»).
+//
+// SEGNALATO: «quando si chiude quello che e' un conto prop firm, quelle che sono le impostazioni
+// delle pagine duplicate si resettano completamente, si resettano anche quelli che sono gli
+// indicatori... non posso stare a ripristinare sempre quelli che sono gli indicatori alla
+// chiusura di un conto».
+//
+// CAUSA MISURATA: `currentMode()` vale `base+'_propfirm'` quando la prop firm e' accesa, e
+// `indicatorsByMode` e' archiviato PER MODALITA'. Chiudendo la prop firm sulla madre,
+// l'interruttore si propaga a ogni duplicata (il canale manda `isPropFirmMode` senza guardia),
+// la loro modalita' cambia, e mostrano gli indicatori dell'ALTRO cassetto - vuoto se non l'hanno
+// mai riempito. GLI INDICATORI NON SI RESETTANO: SONO NELL'ALTRO CASSETTO. E' la stessa forma
+// del difetto dei modelli dei disegni: non una perdita, una chiave che cambia sotto.
+//
+// LA REGOLA, e il «se» conta: si portano dietro SOLO se la modalita' di destinazione non ha
+// indicatori suoi. Se ne ha, sono stati scelti deliberatamente la' e non si sovrascrivono -
+// sovrascriverli sarebbe un secondo modo di perdere il proprio lavoro, cioe' lo stesso difetto
+// al rovescio. E si COPIA (serializeIndicators da una lista nuova), non si condivide il
+// riferimento: due modalita' che puntano allo stesso array diventerebbero la stessa cosa, e
+// andare e tornare mescolerebbe due configurazioni.
+function fblIndicatoriSeguonoLaModalita(modoPrima){
+ try{
+  const dopo=currentMode();
+  if(!modoPrima||modoPrima===dopo)return false;
+  if(!indicatorsByMode||!(dopo in indicatorsByMode))return false;
+  const vuoto=a=>!Array.isArray(a)||a.length===0;
+  if(!vuoto(indicatorsByMode[dopo]))return false;        // la destinazione ha i suoi: giu' le mani
+  if(vuoto(indicatorsByMode[modoPrima]))return false;    // niente da portare
+  indicatorsByMode[dopo]=serializeIndicators(indicatorsByMode[modoPrima]);
+  return true;
+ }catch(e){ return false; }
+}
 // Copia dedicata e piccola degli indicatori di tutte le sessioni (come per i disegni): se il
 // salvataggio principale fallisce (es. localStorage pieno) o un refresh (F5 / Ctrl+Shift+R) cade
 // nel mezzo di una scrittura asincrona, all'avvio si usa la copia più recente fra le due.
@@ -30215,10 +30248,15 @@ async function ensureSessionActive(targetSessionKey){
    // esiste di sicuro, visto che le appartiene la posizione/ordine/trade su cui si sta
    // saltando) e senza richiedere capitale iniziale (mai una sessione "nuova" da qui).
    if(isPropFirmMode!==targetIsPropFirm){
+     // Stessa regola del canale fra finestre, qui per il cambio di modalita' fatto in locale:
+     // gli indicatori si portano dietro PRIMA del ripristino, cosi' restoreModeSnapshot trova
+     // la lista gia' al suo posto.
+     const _modoPrima=currentMode();
      captureCurrentModeSnapshot();
      captureCurrentAssetChartView(currentMode());
      captureCurrentAssetDrawings(currentMode());
      isPropFirmMode=targetIsPropFirm;
+     fblIndicatoriSeguonoLaModalita(_modoPrima);
      restoreModeSnapshot(currentMode());
      updatePropFirmBodyClass();
    }
@@ -56397,7 +56435,15 @@ function fblApplicaStatoTrading(msg){
     // dalle statistiche SENZA che niente lo dicesse. E' il tipo di errore peggiore, perche' i
     // numeri restano plausibili.
     if(_stessoContoMt5&&msg.statsBaselineByMode)statsBaselineByMode=msg.statsBaselineByMode;
-    if(msg.isPropFirmMode!=null)isPropFirmMode=!!msg.isPropFirmMode;
+    if(msg.isPropFirmMode!=null){
+      // SEGUIRE LA MADRE SI', PERDERE GLI INDICATORI NO (scelta «C» del proprietario). La
+      // modalita' cambia come prima - il canale manda `isPropFirmMode` e la duplicata lo
+      // applica - ma gli indicatori si portano dietro nella modalita' nuova se quella non ne
+      // ha di suoi. Vedi fblIndicatoriSeguonoLaModalita per la regola e il perche' del «se».
+      const _modoPrima=currentMode();
+      isPropFirmMode=!!msg.isPropFirmMode;
+      fblIndicatoriSeguonoLaModalita(_modoPrima);
+    }
     if(msg.tradeStrategies)tradeStrategies=msg.tradeStrategies;
   }catch(e){ console.warn('trading_sync non applicato:',e); }
 }
