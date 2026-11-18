@@ -8822,6 +8822,20 @@ async function idbDel(key){
   });
  }catch(e){ console.warn('Cancellazione sessione fallita:',e); return false; }
 }
+// TUTTE LE CHIAVI DEL MAGAZZINO: serve alla pulizia dei blocchi orfani (vedi
+// fblTickPulisciOrfani piu' sotto nel file), l'unico posto che ha bisogno di sapere cosa c'e'
+// su disco e non solo cosa l'app sta cercando.
+async function idbChiavi(){
+ try{
+  const db=await openSessionDB();
+  return await new Promise((resolve,reject)=>{
+   const tx=db.transaction(SESSION_STORE,'readonly');
+   const req=tx.objectStore(SESSION_STORE).getAllKeys();
+   req.onsuccess=()=>resolve((req.result||[]).map(String));
+   req.onerror=()=>reject(req.error);
+  });
+ }catch(e){ console.warn('Lettura elenco chiavi fallita:',e); return null; }
+}
 // STEP 0b — attende in modo sicuro che il ponte verso Firestore (window.fxbtCloud, esposto
 // dallo script di login/STEP 0a) sia disponibile E che il primo controllo di login sia
 // concluso: i due script partono in ordine non garantito, quindi non possiamo assumere che
@@ -13834,7 +13848,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.68';
+const FBL_VERSIONE='2.2.69';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -50732,6 +50746,52 @@ async function fblTickCaricaBlocchi(){
  }
  return out;
 }
+// I BLOCCHI CHE NESSUNO LEGGE PIU': LA PULIZIA ALL'AVVIO.
+//
+// MISURATO il 18 novembre 2026 sul PC del proprietario: 799 MB di file blob in 4.779 file, e nel
+// registro solo 339 chiavi, di cui 243 blocchi di tick (`ftick:`). I tetti del footprint (3 giorni
+// e 150.000 tick per asset, decisi dal proprietario il 26 ottobre) ne ammettono 7-8 per asset: su
+// disco ce n'erano trenta volte tanti, e la numerazione di EURUSD aveva passato il migliaio.
+//
+// IL PERCHE', e sta in una riga: `st.daCancellare` vive SOLO in memoria. L'indice che va su disco
+// contiene `base` e `len`, non l'elenco dei blocchi buttati. Quindi un blocco tagliato dal tetto e
+// una chiusura prima del salvataggio successivo lasciano quel blocco su disco PER SEMPRE: fuori
+// dall'indice, mai piu' letto da nessuno, e impossibile da ritrovare dall'app.
+//
+// LA PULIZIA: all'avvio, dopo aver letto l'indice, si cancellano i blocchi che l'indice non nomina.
+// Non e' una scelta fra tenere e perdere: cio' che si cancella non e' raggiungibile nemmeno
+// volendo. Le due guardie che contano:
+//   - SENZA INDICE NON SI CANCELLA NIENTE. Se la lettura dell'indice non riesce, o l'indice non
+//     c'e' (registro vecchio a blob unico, dispositivo nuovo), la funzione esce subito. Altrimenti
+//     una lettura fallita una volta spazzerebbe via tutto il footprint.
+//   - SOLO LA FINESTRA MADRE. Le finestre duplicate (PIP_SLOT>0) non scrivono mai su disco: non
+//     devono nemmeno cancellare.
+async function fblTickPulisciOrfani(){
+ if(typeof PIP_SLOT!=='undefined' && PIP_SLOT>0) return 0;
+ let idx=null;
+ try{ idx=await idbGet(FOOTPRINT_TICK_INDICE); }catch(e){ idx=null; }
+ if(!idx || typeof idx!=='object') return 0;   // senza indice non si cancella NIENTE
+ let chiavi=null;
+ try{ chiavi=await idbChiavi(); }catch(e){ chiavi=null; }
+ if(!Array.isArray(chiavi) || !chiavi.length) return 0;
+ let buttati=0;
+ for(let i=0;i<chiavi.length;i++){
+  const k=String(chiavi[i]);
+  if(k.indexOf(FOOTPRINT_TICK_CHIAVE)!==0) continue;
+  const resto=k.slice(FOOTPRINT_TICK_CHIAVE.length);
+  const taglio=resto.lastIndexOf(':');
+  if(taglio<0) continue;
+  const asset=resto.slice(0,taglio), n=Number(resto.slice(taglio+1));
+  if(!Number.isFinite(n)) continue;
+  const st=idx[asset];
+  const base=(st && Number.isFinite(st.base))?st.base:0;
+  const quanti=(st && st.len && st.len.length)?st.len.length:0;
+  if(st && n>=base && n<base+quanti) continue;  // blocco vivo: l'indice lo nomina
+  try{ if(await idbDel(k)) buttati++; }catch(e){}
+ }
+ if(buttati)console.info('[footprint] blocchi orfani cancellati:',buttati);
+ return buttati;
+}
 let footprintTicksDirty=false;
 // Versione del contenuto del footprint: si alza ad ogni tick nuovo. Serve alla cache delle
 // zone zero-print (sopra) per sapere quando il risultato salvato non è più buono.
@@ -62288,6 +62348,9 @@ var __initLocalStateSnapshot=null;
  // al prossimo salvataggio il registro viene riscritto a blocchi (e il blob vecchio cancellato).
  let blocchiTick=null;
  try{ blocchiTick=await fblTickCaricaBlocchi(); }catch(e){ blocchiTick=null; }
+ // I blocchi che l'indice non nomina piu' non li legge nessuno: si cancellano qui, dopo la
+ // lettura dell'indice e prima di qualunque scrittura nuova. Vedi fblTickPulisciOrfani.
+ try{ await fblTickPulisciOrfani(); }catch(e){}
  if(blocchiTick&&Object.keys(blocchiTick).length){
    footprintTickLogByAsset=blocchiTick;
    footprintTicksDirty=true;   // l'indice dei blocchi va riscritto con la struttura di oggi

@@ -1,3 +1,31 @@
+- 2026-11-18 - Claude - **v2.2.69: i blocchi di tick che nessuno legge piu' si cancellano all'avvio.**
+  Autorizzato dal proprietario dopo la misura («va bene andiamo avanti e procedi»).
+  **LA MISURA, sul suo PC, file letti e non toccati.** Dei 854 MB di IndexedDB sotto
+  `http_127.0.0.1_8000`: **799 MB di file blob in 4.779 file**, mentre nel registro esistono solo
+  **339 chiavi distinte** - di cui **243 blocchi di tick del footprint** (`ftick:`), 15 giorni di
+  archivio footprint, 9 voci del magazzino candele e **zero copie dei CSV** (il mio sospetto
+  principale, sbagliato: va detto).
+  **LA CAUSA, ed e' una riga.** `st.daCancellare` vive SOLO in memoria; l'indice che va su disco
+  contiene `base` e `len`, non l'elenco dei blocchi buttati. Quindi un blocco tagliato dal tetto (3
+  giorni / 150.000 tick per asset, deciso dal proprietario il 26 ottobre) e una chiusura prima del
+  salvataggio successivo lasciano quel blocco su disco **per sempre**: fuori dall'indice, mai piu'
+  letto, e irraggiungibile anche volendo. I tetti ammettono 7-8 blocchi per asset: ce n'erano 243,
+  e la numerazione di EURUSD aveva passato il migliaio.
+  **LA CURA:** `fblTickPulisciOrfani()`, all'avvio, dopo la lettura dell'indice e **prima** di
+  qualunque scrittura nuova: i blocchi che l'indice non nomina si cancellano. Aggiunta `idbChiavi()`
+  (l'elenco di cio' che c'e' davvero su disco, non di cio' che l'app cerca).
+  **LE DUE GUARDIE, che in una funzione che cancella contano piu' della cura:** (1) **senza indice
+  non si cancella niente** - se la lettura non riesce, o l'indice non c'e' (registro vecchio a blob
+  unico, dispositivo nuovo), la funzione esce subito; altrimenti una lettura fallita una volta
+  spazzerebbe via tutto il footprint; (2) **solo la finestra madre** (`PIP_SLOT>0` esce): le
+  duplicate non scrivono su disco e non devono nemmeno cancellare.
+  Banco `blocchi_tick_orfani`, 4 prove: quella della cura, le due di controllo sulle guardie, e una
+  che controlla **nel testo di `app.html`** che la pulizia sia agganciata subito dopo la lettura
+  dell'indice e non altrove. Controverifica con `git stash`: senza la cura tornano tutte rosse
+  (le funzioni non esistono).
+  **QUANTO LIBERA si vedra' al primo avvio dell'app sul suo PC**: la pulizia non e' una stima, e'
+  una cancellazione che si misura guardando la cartella dopo. Da ricontrollare.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-18 - Claude - **v2.2.68: il magazzino delle candele segue la watchlist, e lo storico del
   book si scrive ogni ora.** Due decisioni del proprietario, prese dopo che gli e' stato spiegato
   cosa c'era in casa e chi l'aveva deciso.
