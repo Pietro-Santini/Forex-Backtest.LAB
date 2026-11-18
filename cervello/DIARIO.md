@@ -1,3 +1,39 @@
+- 2026-11-18 - Claude - **v2.2.71: il blu del pareggio si accende a ZERO, non all'entrata.**
+  SEGNALATO dal proprietario: «quando vado a trascinare lo stop loss, lo metto a break even, e
+  sul terminale MT5 risulta che ho perso comunque dei soldi. La striscia mi deve diventare blu
+  quando effettivamente la perdita non e' negativa, ma e' zero. Il profitto e' zero, in poche
+  parole. Questo va a rispettare il risk management con il rapporto rischio-rendimento e le
+  vittorie di win rate e loss rate.»
+  **CAUSA: tre punti decidevano «stop a pareggio o oltre» con la stessa riga ingenua**
+  `pos.side==='BUY' ? sl>=entry : sl<=entry`, cioe' confrontando con il PREZZO DI ENTRATA.
+  Chiudere all'entrata non e' zero: restano la commissione (si paga DUE volte, entrata e uscita)
+  e lo swap. Con lo stop li' il conto MT5 chiude in perdita **e la striscia era gia' blu**:
+  diceva «sei al sicuro» mentre non lo era, e sporcava win rate e rapporto rischio-rendimento.
+  **E il numero giusto l'app lo aveva gia'.** `mt5PrezzoPareggio(pos)` - lo stesso che usa il
+  pulsante BE, che infatti funzionava bene - sposta l'entrata di quanto serve a ripagare
+  commissioni e swap e arrotonda SEMPRE contro di noi. Il colore non lo guardava: trascinando lo
+  stop a mano non si passa dal pulsante.
+  **CURA: una regola sola** (`fblStopAPareggioOOltre`, accanto a `isStopProfitLevel`), usata da
+  tutti i punti che accendono il blu: `isStopProfitLevel` (tabelle, Journal, etichette, livelli),
+  il colore della casella TP/SL **mentre si trascina** (`isStopProfitLive`, ed e' il punto che il
+  proprietario guardava) e la striscia di vicinanza delle righe (`fblStrisciaPosizione`, anche
+  nella riga di gruppo, a cui ora si passa il ticket).
+  **DOVE RESTA L'ENTRATA, e per un motivo:** le due righe di Kraken. Kraken non comunica la
+  commissione per singola posizione (lo dice gia' il messaggio di `krakenConfermaBlocco` sullo
+  stop a pareggio), quindi il pareggio vero non si puo' calcolare e **l'app non inventa numeri**.
+  Stessa ragione per cui le posizioni simulate e i ticket non presenti nella lista MT5 tornano
+  l'entrata: costi non noti = comportamento di prima.
+  Banco `pareggio_blu_solo_a_zero` (6 prove: 2 funzionali BUY/SELL, 2 di GUARDIA sui costi non
+  noti, 1 sul pareggio vero, 1 che conta nel testo di `app.html` i punti rimasti e verifica che
+  siano solo i due di Kraken). Controverifica con `git stash`: senza la cura tornano rosse.
+  Rilanciati a mano, tutti verdi, gli otto banchi del pareggio: `be_decide_utente`,
+  `break_even_generale`, `breakeven_pip`, `oltre_il_pareggio`, `gruppi_be_chiudi`,
+  `margine_chiusura`, `etichette_raggruppate`, `resa_con_stop`.
+  **IL COLLAUDO INTERO NON E' ANCORA PASSATO** su questa versione ne' sulla 2.2.70: il giro
+  lanciato alle 13:18 si e' PIANTATO (registro fermo per undici minuti, tre banchi appesi -
+  `aggiorna_niente_da_fare`, `config_dal_cloud_non_accende_reale`, `traffico_cloud`, tutti e tre
+  banchi che parlano col ponte o col cloud) mentre l'app vera era aperta sul PC e teneva la porta
+  8000. **LEZIONE: il collaudo si lancia col PC libero, app chiusa.** Da rifare.
 - 2026-11-18 - Claude - **v2.2.70: alle 22 la candela non si ferma piu' se MT5 sta ancora
   trasmettendo.** SEGNALATO dal proprietario: «il grafico XAUUSD si blocca alle 22 mentre MT5
   continua a trasmettere; il PL live funziona, solo la candela non si aggiorna» - e vale per

@@ -13848,7 +13848,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.70';
+const FBL_VERSIONE='2.2.71';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -15226,9 +15226,41 @@ function riskRewardLabel(entry,sl,tp){
 // sl>=entry; per un SELL, sl<=entry. Puramente segnaletico (colori/etichette a grafico e in
 // tabella): non cambia in alcun modo la logica di chiusura né il calcolo dell'R/R (che resta
 // sempre ancorato a p.rrSl, lo SL "di apertura").
+// IL PAREGGIO E' ZERO, NON L'ENTRATA (18 novembre 2026).
+// SEGNALATO dal proprietario: «quando trascino lo stop loss e lo metto a break even, sul
+// terminale MT5 risulta che ho perso comunque dei soldi. La striscia mi deve diventare blu
+// quando la perdita non e' negativa, ma e' zero. Questo va a rispettare il risk management con
+// il rapporto rischio-rendimento e il win rate.»
+// Chiudere al prezzo di ENTRATA non vuol dire zero: restano la commissione (si paga due volte,
+// entrata e uscita) e lo swap. Uno stop li' chiude in perdita, e la striscia era gia' blu.
+// Il prezzo giusto l'app lo conosceva gia': `mt5PrezzoPareggio(pos)` - lo stesso che usa il
+// pulsante BE - sposta l'entrata di quanto serve a ripagare commissioni e swap e arrotonda
+// SEMPRE contro di noi. Da qui passano tutti i punti che accendono il blu, cosi' non possono
+// piu' dire due cose diverse.
+// QUANDO I COSTI NON SI SANNO non si inventa niente: `mt5PrezzoPareggio` risponde l'entrata
+// (posizione simulata - lo spread e' gia' dentro l'entrata - oppure ticket non presente nella
+// lista MT5), e il comportamento resta quello di prima.
+function fblPrezzoPareggioPerColore(pos){
+ try{
+   const p=mt5PrezzoPareggio(pos);
+   if(Number.isFinite(p))return p;
+ }catch(e){}
+ return Number(pos&&pos.entry);
+}
+// Lo stop di questa posizione e' a pareggio (zero) o oltre? `sl` si puo' passare per chiedere di
+// uno stop diverso da quello salvato: serve mentre si trascina la linea, che e' il momento in cui
+// il proprietario guarda il colore per decidere.
+function fblStopAPareggioOOltre(pos,sl){
+ if(!pos)return false;
+ const stop=Number.isFinite(sl)?sl:Number(pos.sl);
+ if(!Number.isFinite(stop)||!Number.isFinite(Number(pos.entry)))return false;
+ const rif=fblPrezzoPareggioPerColore(pos);
+ if(!Number.isFinite(rif))return false;
+ return pos.side==='BUY' ? stop>=rif : stop<=rif;
+}
 function isStopProfitLevel(pos){
  if(!pos || !Number.isFinite(pos.sl) || !Number.isFinite(pos.entry))return false;
- return pos.side==='BUY' ? pos.sl>=pos.entry : pos.sl<=pos.entry;
+ return fblStopAPareggioOOltre(pos,pos.sl);
 }
 // Etichetta precisa da mostrare nel Trade Journal quando una posizione si chiude perché il suo
 // Stop Loss è stato colpito (reason 'SL', simulato o reale): se quello Stop era a pareggio o
@@ -25850,7 +25882,9 @@ function draw(){
      const risk=Math.abs(pos.entry-(rrSl!=null?rrSl:pos.entry));
      const reward=Math.abs((liveTp!=null?liveTp:pos.entry)-pos.entry);
      const rr=(rrSl!=null&&liveTp!=null&&risk>0)?(reward/risk):null;
-     const isStopProfitLive=Number.isFinite(liveSl)&&(pos.side==='BUY'?liveSl>=pos.entry:liveSl<=pos.entry);
+     // Il colore della striscia mentre si trascina: stessa regola unica di isStopProfitLevel,
+     // col pareggio VERO (commissioni e swap) - vedi fblStopAPareggioOOltre.
+     const isStopProfitLive=Number.isFinite(liveSl)&&fblStopAPareggioOOltre(pos,liveSl);
       // RICHIESTO ESPLICITAMENTE: quando una posizione di QUESTO grafico è selezionata, si vedono
       // SOLO le sue linee TP/SL con le etichette; le caselle TP/SL delle altre spariscono del
       // tutto (non più solo in grigio spento), per un grafico più ordinato e preciso. dimmed è vero
@@ -29259,7 +29293,10 @@ function fblStrisciaPosizione(p){
  const sl=Number(p.sl), tp=Number(p.tp);
  // Lo STOP A PROFITTO prima di tutto: quando c'e', e' l'informazione piu' urgente - si sta
  // tornando indietro da un guadagno gia' fatto.
- const inProfitto=Number.isFinite(sl)&&(buy?sl>=entry:sl<=entry);
+ // «A PROFITTO» VUOL DIRE ZERO O MEGLIO, non «oltre l'entrata» (18 novembre 2026): con uno stop
+ // all'entrata restano da pagare commissione e swap, e il conto chiude in perdita. Stessa regola
+ // unica del colore della casella a grafico - vedi fblStopAPareggioOOltre.
+ const inProfitto=Number.isFinite(sl)&&fblStopAPareggioOOltre({side:(buy?'BUY':'SELL'),entry:entry,sl:sl,mt5Ticket:(p&&p.mt5Ticket!=null)?p.mt5Ticket:null},sl);
  if(inProfitto){
   const da=Number.isFinite(Number(p.ultimoTp))?Number(p.ultimoTp):null;
   const q=da!=null?vicino(da,sl):vicino(entry,sl);
@@ -29288,7 +29325,9 @@ function fblStrisciaGruppoCellaHtml(dati){
  let best=null;
  (dati||[]).forEach((d,i)=>{
   const p=d&&d.p; if(!p)return;
-  const st=fblStrisciaPosizione({side:p.side,entry:p.entry,sl:p.sl,tp:p.tp,prezzo:d.prezzo,ultimoTp:p.ultimoTpRaggiunto});
+  // mt5Ticket serve al pareggio vero (commissioni e swap): senza, la striscia del gruppo
+  // tornerebbe a dire «a profitto» all'entrata - vedi fblStopAPareggioOOltre.
+  const st=fblStrisciaPosizione({side:p.side,entry:p.entry,sl:p.sl,tp:p.tp,prezzo:d.prezzo,ultimoTp:p.ultimoTpRaggiunto,mt5Ticket:p.mt5Ticket});
   if(!st)return;
   const perc=Number.isFinite(st.perc)?st.perc:0;
   if(!best||perc<best.perc)best={st:st,perc:perc,i:i};
