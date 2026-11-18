@@ -64,13 +64,22 @@ test('ogni indicatore che disegna un riquadro resta dentro l area', async () => 
       const ctx = {
         canvas:{clientWidth:W, clientHeight:H, width:W, height:H},
         globalAlpha:1, fillStyle:'', strokeStyle:'', lineWidth:1, font:'', textAlign:'', textBaseline:'',
-        save(){}, restore(){}, beginPath(){}, closePath(){}, moveTo(){}, lineTo(){}, stroke(){},
-        fill(){}, arc(){}, setLineDash(){}, clip(){}, rect(){}, roundRect(){}, translate(){},
+        // Il ritaglio si comporta come quello vero: `rect` propone, `clip` lo rende attivo, e
+        // da li' in poi niente puo' essere disegnato oltre quel bordo. Senza questo, il banco
+        // misurerebbe un difetto che sullo schermo non si vede.
+        save(){ this._pila.push(this._taglio); },
+        restore(){ this._taglio = this._pila.length ? this._pila.pop() : Infinity; },
+        _pila:[], _taglio: Infinity, _prop: Infinity,
+        beginPath(){}, closePath(){}, moveTo(){}, lineTo(){}, stroke(){},
+        fill(){}, arc(){}, setLineDash(){},
+        clip(){ this._taglio = Math.min(this._taglio, this._prop); },
+        rect(x,y,w,h){ this._prop = x + w; },
+        roundRect(x,y,w,h){ this._prop = x + w; }, translate(){},
         rotate(){}, scale(){}, createLinearGradient(){ return {addColorStop(){}}; },
         measureText(t){ return {width: String(t).length * 6}; },
-        fillRect(x,y,w,h){ disegnati.push({tipo:'rect', destra:x+w}); },
-        strokeRect(x,y,w,h){ disegnati.push({tipo:'rect', destra:x+w}); },
-        fillText(t,x,y){ disegnati.push({tipo:'text', destra:x + String(t).length*6}); }
+        fillRect(x,y,w,h){ disegnati.push({tipo:'rect', destra:Math.min(x+w, this._taglio)}); },
+        strokeRect(x,y,w,h){ disegnati.push({tipo:'rect', destra:Math.min(x+w, this._taglio)}); },
+        fillText(t,x,y){ disegnati.push({tipo:'text', destra:Math.min(x + String(t).length*6, this._taglio)}); }
       };
       const y = (p) => 300 - (p - 100) * 10;
       const xAbs = (i) => 60 + (i - 0) * 2;
@@ -84,7 +93,12 @@ test('ogni indicatore che disegna un riquadro resta dentro l area', async () => 
         const ind = {key, params:p, calc:{serie:null, builtTo:-1}};
         try { if (typeof def.compute === 'function') def.compute(R, R.length-1, ind); } catch(e) {}
         disegnati.length = 0;
+        // Lo stesso ritaglio che draw() mette attorno a ogni render (vedi il muro in app.html):
+        // il banco deve misurare quello che finisce sullo schermo, non quello che la funzione
+        // chiede di disegnare.
+        ctx.save(); ctx.beginPath(); ctx.rect(0, 0, W - padR, H); ctx.clip();
         try { def.render(ctx, ind, R, 0, R.length-1, xAbs, y, {l:60,r:padR,t:18,b:44}, H); } catch(e) {}
+        ctx.restore();
         const _l = disegnati.filter(d => d.tipo==='rect' && d.destra > 150).length;
         if (_l) { larghi += _l; provati.push(key); }
         // margine di tolleranza 1 px: i bordi si disegnano a volte a mezzo pixel
@@ -108,4 +122,28 @@ test('ogni indicatore che disegna un riquadro resta dentro l area', async () => 
       + JSON.stringify(r.fuori, null, 1));
   } finally { await browser.close(); }
   assert.deepEqual(errori, [], 'niente errori in pagina');
+});
+
+// ---------------------------------------------------------------------------------------
+// IL MURO, e perche' serve oltre alla regola dell'angolo: un riquadro messo bene puo' comunque
+// avere un'etichetta ancorata a una candela che scorre oltre il bordo. Misurato sui due
+// indicatori nuovi del 18 novembre: scrivevano i prezzi dell'operazione fino a 176 px sotto la
+// colonna dei prezzi. Il ritaglio sta attorno a OGNI render di indicatore, in draw(), e non
+// chiede niente a chi scrive un indicatore nuovo.
+// ---------------------------------------------------------------------------------------
+test('draw mette il ritaglio attorno al disegno di ogni indicatore', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const {RADICE} = await import('./aiuti.mjs');
+  const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
+  const i = src.indexOf('def.render(ctx,ind,rows,dataStart,dataEnd,xAbs,y,pad,h);');
+  assert.ok(i > 0, 'la chiamata al disegno di un indicatore deve esistere');
+  const prima = src.slice(Math.max(0, i - 400), i);
+  const dopo = src.slice(i, i + 200);
+  assert.match(prima, /ctx\.clip\(\);/,
+    'subito prima del disegno di un indicatore ci deve essere il ritaglio');
+  assert.match(prima, /ctx\.rect\(0,0,Math\.max\(0,w-pad\.r\),h\)/,
+    'il ritaglio deve fermarsi al bordo dell\'area, cioe\' prima della scala dei prezzi');
+  assert.match(dopo, /ctx\.restore\(\);/,
+    'e subito dopo il ritaglio va tolto, o taglierebbe tutto il resto del grafico');
 });

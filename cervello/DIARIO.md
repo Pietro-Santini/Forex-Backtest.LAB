@@ -1,3 +1,30 @@
+- 2026-11-18 - Claude - **v2.2.76: nessun indicatore puo' piu' disegnare sotto la scala dei
+  prezzi. Due difese, non una.**
+  SEGNALATO dal proprietario con foto della scaletta «BOS Pullback» mezzo nascosta dalla colonna
+  dei prezzi: «per tutte le tabelle che ci sono negli indicatori, bisogna fare attenzione che non
+  vada a disegnare la tabella dietro all'asse del prezzo».
+  **IL BANCO HA PRESO IL DIFETTO DA SOLO, ED E' LA PARTE CHE CONTA.** La regola e il suo banco
+  erano stati scritti mentre il pannello della foto non esisteva ancora nel codice pubblicato -
+  lo stava scrivendo un'altra sessione. Unito il suo lavoro (2.2.75), il banco e' diventato rosso
+  **senza che nessuno lo toccasse**, con i numeri: `xau_sweep_v2` e `valid_bos_pullback`
+  disegnavano fino a **x=1100** con l'area che finisce a **924**. Centosettantasei pixel sotto i
+  prezzi, cioe' esattamente la fotografia.
+  **PRIMA DIFESA, l'angolo.** `scalettaDisegna` - la funzione condivisa che l'altra sessione ha
+  scritto bene, una per tutti gli indicatori - metteva l'angolo a `C.width - larghezza`, cioe' al
+  bordo del CANVAS. Ora chiama `fblAngoloRiquadroGrafico`, la stessa regola di Gann e ICT.
+  **SECONDA DIFESA, il muro.** L'angolo giusto non basta: un'etichetta ancorata a una candela che
+  scorre va dove vuole, ed era il resto dei pixel fuori posto (misurato: da 1100 si scendeva a
+  1024, ancora oltre 924). Adesso `draw()` mette un **ritaglio** attorno al disegno di OGNI
+  indicatore, fermo al bordo dell'area: quello che cade sotto la scala prezzi semplicemente non
+  arriva allo schermo. Vale per gli indicatori di domani e non chiede niente a chi li scrive.
+  Taglia **solo a destra**: sopra, sotto e a sinistra niente cambia, perche' la banda del volume e
+  le etichette in basso vivono li' e tagliarle sarebbe un difetto nuovo.
+  **IL BANCO ORA MISURA QUELLO CHE SI VEDE:** il contesto finto rispetta il ritaglio come il
+  canvas vero (`rect` propone, `clip` rende attivo, e da li' in poi niente passa oltre). Terza
+  prova aggiunta: il ritaglio deve stare attorno al render e togliersi subito dopo, altrimenti
+  taglierebbe tutto il resto del grafico. Nove indicatori con riquadro misurati davvero, elencati
+  dal banco stesso.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-18 - Claude - **v2.2.75: gli indicatori raccontano la costruzione del setup, passo
   per passo, con la lista di controllo in un angolo.**
   **CHIESTO DAL PROPRIETARIO:** «non voglio un indicatore che mi disegna il risultato gia' pronto,
