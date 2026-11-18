@@ -1,3 +1,32 @@
+- 2026-11-18 - Claude - **v2.2.75: una regola sola per i riquadri degli indicatori, e vale anche
+  per quelli che devono ancora nascere.**
+  SEGNALATO dal proprietario con foto (pannello «BOS Pullback» mezzo nascosto dalla colonna dei
+  prezzi): «una precisazione per tutte le tabelle che ci sono negli indicatori che li disegna:
+  bisogna fare attenzione che non vada a disegnare la tabella dietro all'asse del prezzo».
+  **MISURATO: la regola c'era gia', ma in UN indicatore solo.** La dashboard ICT calcolava il suo
+  angolo con `chartPadR(W)` e poi riportava il riquadro dentro l'area; quella del Gann si ancorava
+  a `W - larghezza - 8`, cioe' al bordo del CANVAS, che comprende la striscia della scala prezzi:
+  a destra finiva sotto i numeri. Due regole diverse per la stessa cosa, e la seconda sbagliata -
+  il caso da manuale di una regola scritta due volte.
+  **CURA:** `fblAngoloRiquadroGrafico(W,H,larghezza,altezza,dove,margine)`, accanto a
+  `chartPadR`. Tiene conto della scala prezzi a destra, di quella dei tempi in basso e dei margini,
+  accetta sia `top_right` sia `Top Right`, e se il riquadro e' piu' largo dell'area lo lascia
+  attaccato al bordo sinistro: meta' riquadro visibile e' meglio di un riquadro sotto i prezzi.
+  Gann e ICT ora la chiamano tutti e due; chi aggiunge un indicatore domani ha un posto solo da
+  guardare.
+  **IL BANCO (`riquadri_indicatori_dentro`), e il suo autocontrollo.** Prima prova: la regola nei
+  quattro angoli, rossa prima della cura. Seconda prova: passa in rassegna **tutti** gli
+  INDICATOR_DEFS con un contesto finto che registra ogni cosa disegnata, e nessuno deve superare
+  il bordo dell'area. Per non essere un banco muto, fallisce se nessun indicatore ha disegnato
+  niente di largo, e stampa quali ha misurato davvero: `tvp3d, ict_reversal_setup, order_blocks,
+  amd_fvg_trade, amd_poc_trade, open10_key_levels, sweeps_ifvg`. **Il limite e' dichiarato:** gli
+  indicatori che mostrano il pannello solo a stato «pronto» (il Gann) in quel contesto non
+  disegnano, e per loro vale la prima prova - che misura la REGOLA invece del disegno.
+  **PERCHE' QUESTA VERSIONE ESCE SUBITO E DA SOLA:** il pannello della foto non e' nel codice
+  pubblicato (cercate le sue voci una per una: non ci sono) - lo sta scrivendo un'altra sessione.
+  Se la regola arriva su `main` PRIMA, quella sessione la trova gia' pronta quando si riallinea;
+  se arriva dopo, il suo pannello nasce col difetto e va curato due volte.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-18 - Claude - **v2.2.74: tre segnalazioni del proprietario, piu' i modelli per classe.**
   Versione costruita sopra la 2.2.73 della sessione cloud (indicatore sweep XAUUSD): riallineata
   con un merge, nessun conflitto.
