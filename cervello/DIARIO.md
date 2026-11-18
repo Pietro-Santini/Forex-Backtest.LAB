@@ -1,3 +1,20 @@
+- 2026-11-18 - Claude - **MISURATO DOPO: la pulizia dei blocchi orfani ha liberato 691 MB.**
+  Chiude la riga «quanto libera si vedra' al primo avvio» della voce v2.2.69. Numeri presi sulla
+  cartella del profilo prima (12:58) e dopo (13:01) l'avvio con la 2.2.69 installata:
+  file blob di IndexedDB **733 MB in 4.353 file -> 42 MB in 39 file**; IndexedDB in tutto 740 ->
+  **57 MB**; profilo intero dell'app 1,4 GB -> **312 MB**. Il proprietario ha confermato guardando:
+  il footprint dei giorni recenti c'e' ancora tutto.
+  **E IL MIO CONTEGGIO ERA SBAGLIATO PER DIFETTO.** Avevo letto 243 blocchi `ftick:` nel registro:
+  dopo la pulizia nel registro compaiono oltre **tremila** chiavi `ftick:` tolte. Leggendo le
+  stringhe dentro i file `.ldb/.log` si vede cio' che e' sopravvissuto alla compattazione, non
+  tutto cio' che esiste. **La dimensione della cartella era il dato onesto, il conteggio delle
+  chiavi era un'ombra.** Da ricordare la prossima volta che si misura un magazzino: contare i file
+  e i byte, e usare le chiavi solo per capire di CHI sono.
+  **ATTENZIONE a una misura che per poco non e' diventata una bugia:** prima di accorgermi che la
+  2.2.69 non era ancora installata, avevo letto 788 -> 733 MB e stavo per attribuire quei 55 MB
+  alla cura. Erano il normale scorrere dei tick con la versione vecchia. L'ha detto il proprietario,
+  non me ne ero accorto io: **una misura va presa dopo aver verificato che la cura sia davvero in
+  funzione**, non dopo averla pubblicata.
 - 2026-11-18 - Claude - **v2.2.69: i blocchi di tick che nessuno legge piu' si cancellano all'avvio.**
   Autorizzato dal proprietario dopo la misura («va bene andiamo avanti e procedi»).
   **LA MISURA, sul suo PC, file letti e non toccati.** Dei 854 MB di IndexedDB sotto
