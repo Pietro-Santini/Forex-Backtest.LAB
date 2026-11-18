@@ -421,30 +421,22 @@ test('con due finestre la chiusura suona una volta, non lascia righe doppie e no
     const chiusaB = analizza(logB, 'chiusa', baseB.base);
     const suoniChiusura = (a.suoni + b.suoni) - suoniDopoApertura;
 
-    // MISURA, NON ATTESA: sull'APERTURA la duplicata ora tace (curato), sulla CHIUSURA no -
-    // suona ancora una volta, da una strada diversa da quelle guardate il 17 novembre 2026
-    // (non e' il giro degli avvisi ne' quello delle posizioni: va trovata misurando).
-    assert.equal(b.suoni, 1,
-      'MISURA: oggi la duplicata suona ancora una volta per la chiusura. Se cambia, rimisurare: ' + b.suoni);
+    // CAPOVOLTA IL 18 NOVEMBRE 2026, come il suo autore aveva previsto. La strada mancante e'
+    // stata trovata misurando: il giro delle chiusure vere (fblSincronizzaChiusureMt5) decideva
+    // se tacere con `mt5SoundSeenOpenTickets`, che e' un insieme DI PAGINA - entrambe le finestre
+    // avevano visto il ticket aperto, quindi entrambe credevano di dover annunciare. Adesso la
+    // domanda ha due meta': «l'ho visto aprire?» e «tocca a me?» (prenotazione condivisa).
+    assert.equal(b.suoni, 0,
+      'la duplicata non deve suonare per una chiusura che arriva da MT5: ' + b.suoni);
 
-    // ---- MISURA DI UN DIFETTO ANCORA APERTO, non un'affermazione di correttezza ----
-    //
-    // Curato il coordinamento FRA finestre, ne resta uno DENTRO la madre: su sei giri in cui il
-    // ticket non c'e' piu', la madre suona DUE volte per una sola chiusura (misurato il 17
-    // novembre: madre 3, duplicata 1, due dei quali di apertura). E' un difetto diverso da
-    // quello segnalato - non riguarda le duplicate - e ha una causa tutta sua, da misurare:
-    // probabilmente due strade che annunciano la stessa chiusura (il giro dei sospetti che
-    // chiede conferma al ponte, e il giro delle posizioni), senza il coordinamento che per le
-    // APERTURE esiste gia' (`fblMt5Annunciato`).
-    //
-    // Scritto come misura e non come attesa perche' un banco rosso lasciato in piedi blocca il
-    // collaudo e quindi ogni pubblicazione, e un banco cancellato perde la misura. Quando sara'
-    // curato, questa riga torna `=== 1` e il commento va via. Registrato in cervello/BUG.md.
-    assert.equal(suoniChiusura, 2,
-      'MISURA, NON ATTESA: oggi la madre annuncia la stessa chiusura due volte. Se questo numero ' +
-      'cambia, la causa e\' cambiata e va rimisurata. Suoni di chiusura contati: ' + suoniChiusura +
-      ' (madre ' + a.suoni + ', duplicata ' + b.suoni + ', dopo apertura ' +
-      suoniDopoApertura + ').');
+    // CAPOVOLTA IL 18 NOVEMBRE 2026. Restava un doppione DENTRO la madre: due strade annunciavano
+    // la stessa chiusura (il giro dei sospetti che chiede conferma al ponte, e il giro delle
+    // chiusure vere), senza il coordinamento che per le aperture esisteva gia'. La prenotazione
+    // condivisa, essendo per ticket e con scadenza, le mette d'accordo tutte e due: la prima
+    // scrive e annuncia, la seconda legge che c'e' gia' e tace.
+    assert.equal(suoniChiusura, 1,
+      'una chiusura deve produrre UN suono in tutto. Contati: ' + suoniChiusura +
+      ' (madre ' + a.suoni + ', duplicata ' + b.suoni + ', dopo apertura ' + suoniDopoApertura + ').');
     assert.equal(a.trades, 1,
       'la chiusura deve lasciare UNA riga nel Journal. Righe sulla madre: ' + a.trades);
     assert.equal(chiusaA.ricomparse + chiusaB.ricomparse, 0,

@@ -1,3 +1,38 @@
+- 2026-11-18 - Claude - **v2.2.72: un evento di MT5 si annuncia una volta sola, e non dipende piu'
+  da chi sa di chi.** Chiude il doppio suono alla chiusura con le finestre duplicate (aperto dal
+  16 novembre) **e** il rosso del collaudo su GitHub.
+  **IL ROSSO SU GITHUB, ed e' il dato che ha dato la direzione.** Il proprietario ha fatto notare
+  che il collaudo su GitHub era rosso mentre il mio locale era verde. Due prove di
+  `suono_e_sfarfallio_duplicate` (1552 e 1553). E lo stesso commit **e' passato alle 01:41 ed e'
+  caduto alle 12:12**, con in mezzo un commit che tocca solo il diario: non una regressione, una
+  **cura che dipendeva dai tempi**.
+  **CAUSA, in due meta'.** (1) `fblSuonoDaMt5SpettaAMe()` decideva col BATTITO di presenza («ho lo
+  slot piu' basso fra quelli che sento»), e il battito parte 1.200 ms dopo il caricamento: una
+  finestra che non ha ancora sentito nessuno si crede sola e suona. In locale il battito arrivava
+  in tempo, sulla macchina di GitHub no. (2) Alla CHIUSURA non c'era nessun coordinamento: il giro
+  delle chiusure vere decideva se tacere con `mt5SoundSeenOpenTickets`, un insieme **di pagina** -
+  entrambe le finestre avevano visto il ticket aperto, quindi entrambe annunciavano. Due suoni, e
+  due righe nel Journal.
+  **CURA: `fblAnnuncioMt5MiSpetta(chiave)`**, una prenotazione su **localStorage**, che le finestre
+  della stessa origine condividono per costruzione: niente battito, niente elenchi di finestre,
+  niente tempismo. La prima che arriva scrive e annuncia, le altre leggono che c'e' gia' e
+  tacciono. Chiave per ticket e per tipo (`apre:` / `chiude:`), vita 20 secondi: piu' del
+  disallineamento fra due polling indipendenti (uno-due secondi, misurato), molto meno della vita
+  della pagina. Le chiavi scadute si cancellano a ogni passaggio - lo spazio di localStorage e'
+  quello che stamattina impediva di salvare i modelli, e non si riempie di briciole. Stesso
+  meccanismo gia' usato per i segnali (`TG_PRENOTA_PREFISSO`), dove aveva chiuso la stessa corsa.
+  **SENZA MEMORIA SI ANNUNCIA:** se localStorage non risponde la funzione dice si'. Un suono in
+  piu' e' un fastidio; un suono che non parte su una chiusura vera e' un'informazione perduta su
+  soldi veri.
+  **LA CORSA RESIDUA, detta e non nascosta:** localStorage non e' atomico, quindi due finestre che
+  leggono nello stesso millisecondo possono annunciare entrambe. I polling sono a un secondo e
+  sfasati: la collisione passa da secondi a millisecondi. E' una riduzione enorme, non una
+  garanzia, ed e' la stessa scelta gia' fatta per i segnali.
+  **LE DUE MISURE DEL 17 NOVEMBRE SONO STATE CAPOVOLTE IN ATTESE**, come il loro autore aveva
+  previsto: `b.suoni === 0` (la duplicata tace) e `suoniChiusura === 1` (una chiusura, un suono).
+  Banco `suono_e_sfarfallio_duplicate`: **5 prove su 5 verdi**, comprese le due di controllo (la
+  posizione aperta non lampeggia; con una finestra sola apertura e chiusura suonano comunque).
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-18 - Claude - **v2.2.71: il blu del pareggio si accende a ZERO, non all'entrata.**
   SEGNALATO dal proprietario: «quando vado a trascinare lo stop loss, lo metto a break even, e
   sul terminale MT5 risulta che ho perso comunque dei soldi. La striscia mi deve diventare blu

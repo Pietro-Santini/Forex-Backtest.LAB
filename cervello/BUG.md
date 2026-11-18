@@ -298,7 +298,20 @@ il conto nuovo non compare, e l'elenco dei conti non viaggia sul canale fra fine
 e ridisegnano. Non si manda l'elenco — dentro ci sono le **credenziali**, e quelle non viaggiano
 mai, nemmeno fra due finestre della stessa macchina: si manda solo «rileggi».
 
-## 17 novembre 2026 — SUONO DOPPIO: l'apertura è curata, la chiusura no
+## CHIUSO il 18 novembre 2026 (v2.2.72) — SUONO DOPPIO: curate apertura E chiusura
+
+La strada mancante della chiusura e' stata trovata misurando, come la nota qui sotto chiedeva: il
+giro delle chiusure vere () decideva se tacere con
+, che e' un insieme **di pagina**. Con due finestre entrambe avevano visto
+il ticket aperto, quindi entrambe annunciavano. E il doppione DENTRO la madre veniva dalle due
+strade che annunciano la stessa chiusura, senza coordinamento.
+
+Cura: , una prenotazione condivisa su localStorage (per ticket e per
+tipo, vita 20 s) al posto del battito di presenza, che dipendeva dai tempi - ed e' il motivo per
+cui la stessa prova passava in locale e cadeva su GitHub. Le due misure sono state capovolte in
+attese: la duplicata tace, una chiusura fa un suono. Banco verde 5 su 5.
+
+### La nota del 17 novembre, come era (resta per la storia)
 
 Il banco da 483 righe scritto il 16 novembre e mai eseguito è stato **salvato dal `%TEMP%`**
 (ora `laboratorio/app/suono_e_sfarfallio_duplicate.test.mjs`) e **lanciato per la prima volta**.

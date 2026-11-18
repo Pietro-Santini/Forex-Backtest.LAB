@@ -13848,7 +13848,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.71';
+const FBL_VERSIONE='2.2.72';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -29986,8 +29986,9 @@ function fblAvvisiMt5Giro(dati){
   fblMt5Sospetti.delete(t);                      // ricomparso: il sospetto di chiusura si cancella
   if(fblMt5SnapPrec.has(t))return;
   if(fblMt5Annunciati.has(t)){ fblMt5Annunciati.delete(t); return; }
-  // Evento OSSERVATO da MT5: lo vedono tutte le finestre, lo annuncia una sola.
-  if(fblSuonoDaMt5SpettaAMe())playOrderSound();
+  // Evento OSSERVATO da MT5: lo vedono tutte le finestre, lo annuncia una sola - e chi annuncia
+  // si decide con la prenotazione condivisa, non col battito (vedi fblAnnuncioMt5MiSpetta).
+  if(fblAnnuncioMt5MiSpetta('apre:'+t))playOrderSound();
   try{
    const lotti=Number(rp.volume)||0;
    $('status').textContent=`🖥️ Posizione aperta sul conto MT5 in background: ${rp.side||''} ${rp.symbol||''} ${lotti.toFixed(2)} lot a ${fmtPriceA(rp.price_open,rp.symbol)}.`;
@@ -30064,8 +30065,9 @@ async function fblAvvisoChiusuraMt5(ticket,ultimo){
  }catch(e){ return; }
  if(d.stillOpen)return;                          // su MT5 è ancora aperta: era un falso allarme
  if(d.reason==null&&d.price==null)return;        // questo conto non ha mai visto il ticket
- // Chiusura OSSERVATA su MT5: la vedono tutte le finestre, la annuncia una sola.
- if(fblSuonoDaMt5SpettaAMe())playOrderSound();
+ // Chiusura OSSERVATA su MT5: la vedono tutte le finestre, la annuncia una sola (prenotazione
+ // condivisa, vedi fblAnnuncioMt5MiSpetta).
+ if(fblAnnuncioMt5MiSpetta('chiude:'+ticket))playOrderSound();
  // Sala e numero del take profit: vivono nella memoria ticket -> segnale (mt5RicordaSegnale),
  // che è salvata su disco, quindi si leggono anche per una posizione che l'app non ha mai
  // adottato — è esattamente il caso della modalità backtest.
@@ -42773,6 +42775,61 @@ async function tgAspettaPresenza(){
 // PIP_SLOT 0) non si sentono sul canale, perche' i messaggi del proprio slot si scartano. Per
 // quel caso vale la prenotazione dei segnali, non questa regola. Qui si cura il caso segnalato,
 // cioe' la madre con le sue duplicate.
+// UN EVENTO DI MT5 SI ANNUNCIA UNA VOLTA SOLA, E NON DIPENDE DA CHI SA DI CHI (18 novembre 2026).
+//
+// COM'ERA, e perche' non bastava: `fblSuonoDaMt5SpettaAMe()` decideva col BATTITO di presenza
+// («ho lo slot piu' basso fra quelli che sento»). Funziona solo se il battito e' GIA' arrivato:
+// parte 1.200 ms dopo il caricamento, e una finestra che non ha ancora sentito nessuno si crede
+// la sola e suona. Misurato: in locale passava, sul collaudo di GitHub (macchina piu' lenta e
+// condivisa) la stessa prova cadeva - il 18 novembre lo stesso commit e' passato alle 01:41 ed e'
+// caduto alle 12:12. Una cura che dipende dai tempi non e' una cura.
+//
+// E ALLA CHIUSURA non c'era affatto: il giro delle chiusure vere (fblSincronizzaChiusureMt5)
+// decide se tacere con `mt5SoundSeenOpenTickets`, che e' un insieme DI PAGINA. Entrambe le
+// finestre hanno visto il ticket aperto, quindi entrambe credevano di dover annunciare: due
+// suoni e due righe nel Journal.
+//
+// COM'E' ORA: una PRENOTAZIONE su localStorage, che le finestre della stessa origine condividono
+// per costruzione - niente battito, niente elenchi di finestre, niente tempismo. La prima che
+// arriva scrive la chiave e annuncia; le altre leggono che c'e' gia' e tacciono. Stesso
+// meccanismo gia' usato per i segnali (TG_PRENOTA_PREFISSO), dove aveva chiuso lo stesso tipo di
+// corsa.
+//
+// QUANTO DURA: 20 secondi. Piu' del disallineamento fra due polling indipendenti (uno-due
+// secondi, misurato), molto meno della vita della pagina: una chiave dimenticata non deve
+// zittire per sempre un evento futuro sullo stesso ticket.
+//
+// SENZA MEMORIA SI ANNUNCIA: se localStorage non risponde (finestra privata, deposito pieno) la
+// funzione dice si'. Un suono in piu' e' un fastidio, un suono che non parte mai su una chiusura
+// vera e' un'informazione perduta su soldi veri.
+//
+// LA CORSA RESIDUA, detta: localStorage non e' atomico, quindi due finestre che leggono nello
+// stesso millisecondo possono annunciare entrambe. I due polling sono a un secondo l'uno
+// dall'altro e sfasati, quindi la finestra di collisione e' di millisecondi contro secondi; e'
+// la stessa scelta gia' fatta per i segnali, ed e' una riduzione enorme, non una garanzia.
+const FBL_MT5_EVENTO_PREFISSO='fbl_mt5_evento_';
+const FBL_MT5_EVENTO_VITA_MS=20000;
+function fblAnnuncioMt5MiSpetta(chiave){
+ if(!chiave)return true;
+ try{
+  const k=FBL_MT5_EVENTO_PREFISSO+String(chiave);
+  const ora=Date.now();
+  const v=Number(localStorage.getItem(k));
+  if(Number.isFinite(v)&&v>0&&(ora-v)<FBL_MT5_EVENTO_VITA_MS)return false;   // l'ha gia' preso qualcuno
+  localStorage.setItem(k,String(ora));
+  // Le chiavi scadute si portano via subito: lo spazio del deposito e' quello che il 18 novembre
+  // impediva di salvare i modelli dei disegni, e non si riempie di briciole.
+  try{
+   for(let i=localStorage.length-1;i>=0;i--){
+    const ck=localStorage.key(i);
+    if(!ck||ck.indexOf(FBL_MT5_EVENTO_PREFISSO)!==0||ck===k)continue;
+    const cv=Number(localStorage.getItem(ck));
+    if(!Number.isFinite(cv)||(ora-cv)>=FBL_MT5_EVENTO_VITA_MS)localStorage.removeItem(ck);
+   }
+  }catch(e){}
+  return true;
+ }catch(e){ return true; }
+}
 function fblSuonoDaMt5SpettaAMe(){
  try{ return tgPresenzaSlotPiuBasso()>=PIP_SLOT; }catch(e){ return true; }
 }
@@ -48838,7 +48895,12 @@ async function fetchMt5Positions(){
        mt5ApplicaSegnale(p);
        // Silenziosa se il ticket non è mai stato visto aperto da quando siamo collegati: la
        // chiusura è avvenuta mentre l\'app era chiusa/scollegata (vedi blocco SUONO ORDINI MT5).
-       const muta=!mt5SoundSeenOpenTickets.has(String(p.mt5Ticket));
+       //  e' un insieme DI PAGINA: con due finestre entrambe avevano
+       // visto il ticket aperto e credevano di dover annunciare la chiusura - due suoni e due
+       // righe nel Journal. La prenotazione condivisa aggiunge la seconda meta' della domanda:
+       // «e tocca a me?» (vedi fblAnnuncioMt5MiSpetta).
+       const muta=!mt5SoundSeenOpenTickets.has(String(p.mt5Ticket))
+                  || !fblAnnuncioMt5MiSpetta('chiude:'+p.mt5Ticket);
        closeTrade(closeResultLabel(c.reason,{...p,sl:c.finalLevels.sl}),c.price,p,c.finalLevels,muta,c.veri);
        // Di questa chiusura ci siamo occupati qui (suono compreso): il giro degli avvisi la
        // salta. L'AVVISO pero' lo diamo lo stesso, perche' nel replay con la modalita' backtest
