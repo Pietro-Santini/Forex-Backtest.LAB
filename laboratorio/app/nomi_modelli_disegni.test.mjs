@@ -541,6 +541,12 @@ test('un nome GIÀ USATO fa comparire la domanda di sovrascrittura (sì/no), non
 });
 
 // ===================== 8. IL FIBONACCI DALLA STRADA GENERICA =====================
+// RICONCILIATO IL 18 NOVEMBRE 2026. Questa prova affermava che un Fibonacci salvato dalla
+// finestra «Modello» finisse fra i modelli dei DISEGNI. Era vero, ed era il difetto: il
+// proprietario lo cercava nel menu «Modello Fib» e non lo trovava («per il fibonacci e il
+// profilo volumetrico ancora non me li salva i modelli»). Da oggi ogni classe ha il suo
+// cassetto, quindi la prova resta identica in tutto - il modello deve essere utilizzabile,
+// con livelli e opzioni - tranne che lo si cerca dove adesso vive davvero.
 test('il FIBONACCI salvato dalla strada generica porta levels e opts (modello utilizzabile)', async () => {
   const {browser, pagina} = await apriApp();
   try {
@@ -549,8 +555,12 @@ test('il FIBONACCI salvato dalla strada generica porta levels e opts (modello ut
     assert.equal(d.stato.quanti, 1, 'il fibonacci deve esistere prima di salvarne il modello');
     // Stessa finestra "Modello ⌄" usata per linee e rettangoli, non quella del modale Fib.
     const dopo = await salvaModelloDisegno(pagina, 'Fib generico');
-    const t = dopo.disegni || {};
-    assert.ok(t['Fib generico'], 'il nome scritto deve essere la chiave del modello: ' + JSON.stringify(t));
+    const t = dopo.fib || {};
+    assert.ok(t['Fib generico'],
+      'il modello deve stare nel cassetto del Fibonacci, dove il menu «Modello Fib» lo cerca: '
+      + JSON.stringify({fib: dopo.fib, disegni: dopo.disegni}));
+    assert.ok(!(dopo.disegni || {})['Fib generico'],
+      'e NON fra i modelli dei disegni: ' + JSON.stringify(dopo.disegni));
     assert.equal(t['Fib generico'].type, 'fib', 'il modello salvato dal fibonacci è un fibonacci');
     assert.ok(Array.isArray(t['Fib generico'].levels) && t['Fib generico'].levels.length > 0,
       'il modello deve portare i livelli del fibonacci: ' + JSON.stringify(t['Fib generico']));
