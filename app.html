@@ -4341,6 +4341,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <option value="tvp3d">Temporal Volume Profile 3D</option>
      <option value="vp_daily">Profili volumetrici giornalieri</option>
      <option value="vp_sessions">Profili volumetrici delle sessioni</option>
+     <option value="xau_sweep_v2">XAUUSD Liquidity Sweep v2</option>
      <option value="amd_fvg_trade">AMD FVG Trade Setup</option>
      <option value="amd_poc_trade">AMD POC Trade Setup</option>
      <option value="complex_hs">Complex H&amp;S</option>
@@ -22236,8 +22237,363 @@ for(let i=from;i<=to;i++){
  }
 
 };
+// ============================================================================
+// XAUUSD Liquidity Sweep v2 — porting dello script Pine omonimo.
+//
+// Mostra gli sweep di liquidita con rifiuto e, quando il setup e' valido, disegna
+// ENTRY, STOP LOSS e OBIETTIVO come linee che seguono l'operazione: lo stop si
+// sposta da solo al break-even e poi segue il trailing, e i prezzi sono scritti
+// a destra di ogni linea.
+//
+// I valori preimpostati vengono da un backtest su XAUUSD M1 2022-2025 (1.373.103
+// barre): sono quelli che hanno retto anche sull'anno tenuto fuori dalla ricerca.
+// La cartella `ricerca_sweep/` del repository contiene il metodo e i numeri.
+//
+// NOTA SULLA RISOLUZIONE: il programma lavora su candele da un minuto in su, non
+// al secondo. Le linee si aggiornano a ogni ridisegno del grafico, quindi in
+// tempo reale, ma stop e obiettivo vengono verificati sulla candela: dentro il
+// minuto non c'e' un dato piu' fine da leggere.
+// ============================================================================
+
+const XAUSWEEP_DEF = {
+  label: 'XAUUSD Liquidity Sweep v2',
+  buildSettings: (ind, paramsRow, mk) => xauSweepBuildSettings(ind, paramsRow, mk),
+  defaultParams: () => ({
+    pivot: 5, eqTol: 0.15, penMin: 0.05, penMax: 0.60, wickMin: 0.45,
+    rientroMin: 0.05, etaMax: 120,
+    sessOn: true, sessDa: 12, sessA: 24,
+    volMin: 0.75, volMax: 2.50,
+    bias: 'Solo a favore di trend', biasTf: 60, biasEma: 100,
+    attesa: 10,
+    bufferStop: 0.40, stopMinAtr: 0.40, stopMaxAtr: 2.50, stopMinUsd: 1.20,
+    beR: 1.0, beOffset: 0.10, tpFisso: false, tpR: 4.0, trailAtr: 8.0,
+    mostraLivelli: true, mostraSweep: true, mostraLinee: true, mostraPrezzi: true,
+    soloUltima: false,
+    colEntry: '#5b9cf6', colStop: '#f23645', colTp: '#089981'
+  }),
+
+  compute(rows, upToIdx, ind) {
+    const p = ind.params, st = ind.calc;
+    const chiave = JSON.stringify(p);
+    if (st.serie !== rowsSerie() || st.chiave !== chiave || upToIdx < st.builtTo) {
+      st.serie = rowsSerie(); st.chiave = chiave; st.builtTo = -1;
+      st.atr = []; st.atrMedio = []; st.sommaAtr = 0; st.finestra = [];
+      st.livBuy = NaN; st.livSell = NaN; st.barBuy = -1e9; st.barSell = -1e9;
+      st.usataBuy = false; st.usataSell = false;
+      st.precPh = NaN; st.precPl = NaN;
+      st.htfBucket = null; st.htfUltimo = NaN; st.htfEma = NaN; st.htfEmaChiusa = NaN;
+      st.htfMax = NaN; st.htfMin = NaN; st.htfStoria = [];
+      st.operazioni = []; st.sweeps = []; st.livelli = [];
+      st.aperta = null; st.ultimaUscita = -1e9;
+    }
+    const P = Math.max(2, p.pivot | 0);
+    const kEma = 2 / (Math.max(2, p.biasEma | 0) + 1);
+    const msBucket = Math.max(1, p.biasTf | 0) * 60000;
+
+    for (let i = st.builtTo + 1; i <= upToIdx; i++) {
+      const r = rows[i];
+      const prezzoMs = new Date(r.date).getTime();
+
+      // --- ATR di Wilder a 14 e sua media a 100 ---
+      const tr = i === 0 ? r.high - r.low
+        : Math.max(r.high - r.low, Math.abs(r.high - rows[i - 1].close), Math.abs(r.low - rows[i - 1].close));
+      if (i < 13) { st.atr[i] = NaN; st.sommaTr = (st.sommaTr || 0) + tr; }
+      else if (i === 13) { st.sommaTr = (st.sommaTr || 0) + tr; st.atr[i] = st.sommaTr / 14; }
+      else st.atr[i] = st.atr[i - 1] + (tr - st.atr[i - 1]) / 14;
+      const atr = st.atr[i];
+      if (!isNaN(atr)) {
+        st.finestra.push(atr); st.sommaAtr += atr;
+        if (st.finestra.length > 100) st.sommaAtr -= st.finestra.shift();
+      }
+      st.atrMedio[i] = st.finestra.length === 100 ? st.sommaAtr / 100 : NaN;
+
+      // --- bias di timeframe superiore: EMA dell'ultima barra HTF gia' chiusa ---
+      const bucket = Math.floor(prezzoMs / msBucket);
+      if (st.htfBucket === null) st.htfBucket = bucket;
+      else if (bucket !== st.htfBucket) {
+        st.htfEma = isNaN(st.htfEma) ? st.htfUltimo : st.htfEma + kEma * (st.htfUltimo - st.htfEma);
+        st.htfEmaChiusa = st.htfEma;
+        st.htfBucket = bucket;
+      }
+      st.htfUltimo = r.close;
+
+      // --- pivot confermati con ritardo di P barre ---
+      const j = i - P;
+      if (j - P >= 0) {
+        let maxSin = -Infinity, maxDes = -Infinity, minSin = Infinity, minDes = Infinity;
+        for (let k = j - P; k < j; k++) { if (rows[k].high > maxSin) maxSin = rows[k].high; if (rows[k].low < minSin) minSin = rows[k].low; }
+        for (let k = j + 1; k <= i; k++) { if (rows[k].high > maxDes) maxDes = rows[k].high; if (rows[k].low < minDes) minDes = rows[k].low; }
+        if (rows[j].high >= maxSin && rows[j].high > maxDes) {
+          const v = rows[j].high;
+          const uguale = !isNaN(st.precPh) && Math.abs(v - st.precPh) <= atr * p.eqTol;
+          st.livBuy = uguale ? Math.max(v, st.precPh) : v;
+          st.barBuy = j; st.usataBuy = false; st.precPh = v;
+          if (p.mostraLivelli) st.livelli.push({bar: j, prezzo: st.livBuy, sopra: true, fino: j + (p.etaMax | 0)});
+        }
+        if (rows[j].low <= minSin && rows[j].low < minDes) {
+          const v = rows[j].low;
+          const uguale = !isNaN(st.precPl) && Math.abs(v - st.precPl) <= atr * p.eqTol;
+          st.livSell = uguale ? Math.min(v, st.precPl) : v;
+          st.barSell = j; st.usataSell = false; st.precPl = v;
+          if (p.mostraLivelli) st.livelli.push({bar: j, prezzo: st.livSell, sopra: false, fino: j + (p.etaMax | 0)});
+        }
+      }
+
+      // --- gestione dell'operazione aperta ---
+      const op = st.aperta;
+      if (op) {
+        let chiusa = false;
+        if (op.dir === 1) {
+          if (r.low <= op.stop) { op.uscita = op.stop; chiusa = true; }
+          else {
+            if (!op.beFatto && r.high >= op.be) { op.beFatto = true; op.stop = Math.max(op.stop, op.entry + op.rischio * p.beOffset); }
+            if (p.tpFisso && op.beFatto && r.high >= op.tp) { op.uscita = op.tp; chiusa = true; }
+          }
+        } else {
+          if (r.high >= op.stop) { op.uscita = op.stop; chiusa = true; }
+          else {
+            if (!op.beFatto && r.low <= op.be) { op.beFatto = true; op.stop = Math.min(op.stop, op.entry - op.rischio * p.beOffset); }
+            if (p.tpFisso && op.beFatto && r.low <= op.tp) { op.uscita = op.tp; chiusa = true; }
+          }
+        }
+        if (!chiusa && op.beFatto && p.trailAtr > 0 && !isNaN(atr)) {
+          op.stop = op.dir === 1 ? Math.max(op.stop, r.close - atr * p.trailAtr)
+                                 : Math.min(op.stop, r.close + atr * p.trailAtr);
+        }
+        op.a = i;
+        op.scalini.push({bar: i, stop: op.stop});
+        if (chiusa) {
+          op.chiusa = true;
+          op.erre = ((op.uscita - op.entry) * op.dir) / op.rischio;
+          st.aperta = null; st.ultimaUscita = i;
+        }
+      }
+
+      st.builtTo = i;
+      if (st.aperta) continue;
+      if (isNaN(atr) || atr <= 0 || isNaN(st.atrMedio[i]) || st.atrMedio[i] <= 0) continue;
+
+      // --- filtri di contesto ---
+      if (p.sessOn) {
+        const ora = new Date(prezzoMs).getUTCHours() + new Date(prezzoMs).getUTCMinutes() / 60;
+        const da = p.sessDa, a = p.sessA;
+        const dentro = da <= a ? (ora >= da && ora < a) : (ora >= da || ora < a);
+        if (!dentro) continue;
+      }
+      const rapporto = atr / st.atrMedio[i];
+      if (rapporto < p.volMin || rapporto > p.volMax) continue;
+      if (i - st.ultimaUscita < (p.attesa | 0)) continue;
+
+      // --- sweep con rifiuto ---
+      const sellOk = !isNaN(st.livSell) && !st.usataSell && (i - st.barSell) <= (p.etaMax | 0);
+      const buyOk = !isNaN(st.livBuy) && !st.usataBuy && (i - st.barBuy) <= (p.etaMax | 0);
+      const ampiezza = Math.max(r.high - r.low, 1e-9);
+      const ombraGiu = Math.min(r.open, r.close) - r.low;
+      const ombraSu = r.high - Math.max(r.open, r.close);
+      let lungo = sellOk && r.low < st.livSell - atr * p.penMin &&
+        (st.livSell - r.low) <= atr * p.penMax &&
+        r.close > st.livSell + atr * p.rientroMin &&
+        ombraGiu / ampiezza >= p.wickMin && r.close > r.open;
+      let corto = buyOk && r.high > st.livBuy + atr * p.penMin &&
+        (r.high - st.livBuy) <= atr * p.penMax &&
+        r.close < st.livBuy - atr * p.rientroMin &&
+        ombraSu / ampiezza >= p.wickMin && r.close < r.open;
+      if (!lungo && !corto) continue;
+      if (p.mostraSweep) st.sweeps.push({bar: i, su: !!lungo, prezzo: lungo ? r.low : r.high});
+
+      // --- bias ---
+      if (p.bias !== 'Nessuno') {
+        if (isNaN(st.htfEmaChiusa)) continue;
+        if (lungo && !(r.close > st.htfEmaChiusa)) lungo = false;
+        if (corto && !(r.close < st.htfEmaChiusa)) corto = false;
+      }
+      if (!lungo && !corto) continue;
+
+      // --- costruzione del setup ---
+      const dir = lungo ? 1 : -1;
+      const stopGrezzo = dir === 1 ? r.low - atr * p.bufferStop : r.high + atr * p.bufferStop;
+      const rischio = Math.abs(r.close - stopGrezzo);
+      if (dir === 1) st.usataSell = true; else st.usataBuy = true;
+      if (rischio < atr * p.stopMinAtr || rischio > atr * p.stopMaxAtr) continue;
+      if (p.stopMinUsd > 0 && rischio < p.stopMinUsd) continue;
+
+      const nuova = {
+        dir, da: i, a: i, entry: r.close, stop: stopGrezzo, rischio,
+        be: r.close + dir * rischio * p.beR,
+        tp: r.close + dir * rischio * (p.tpFisso ? p.tpR : 4.0),
+        tpStimato: !p.tpFisso, beFatto: false, chiusa: false,
+        uscita: NaN, erre: NaN, scalini: [{bar: i, stop: stopGrezzo}]
+      };
+      st.operazioni.push(nuova);
+      st.aperta = nuova;
+      if (st.operazioni.length > 400) st.operazioni.shift();
+    }
+  },
+
+  render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) {
+    const st = ind.calc, p = ind.params;
+    if (!st || st.builtTo < 0) return;
+    const visibile = (a, b) => !(b < dataStart || a > dataEnd);
+    const linea = (a, b, prezzo, colore, spessore, tratteggio) => {
+      const x1 = xAbs(Math.max(a, dataStart)), x2 = xAbs(Math.min(b, dataEnd));
+      if (x2 < x1) return;
+      ctx.save();
+      ctx.strokeStyle = colore; ctx.lineWidth = spessore;
+      if (tratteggio) ctx.setLineDash(tratteggio);
+      ctx.beginPath(); ctx.moveTo(x1, y(prezzo)); ctx.lineTo(Math.max(x2, x1 + 2), y(prezzo)); ctx.stroke();
+      ctx.restore();
+    };
+    const cartellino = (x, prezzo, testo, colore) => {
+      ctx.save();
+      ctx.font = scaledFont('bold 10px system-ui');
+      const w = ctx.measureText(testo).width + 10, h = 15, yy = y(prezzo);
+      ctx.globalAlpha = 0.92; ctx.fillStyle = colore;
+      ctx.fillRect(x + 3, yy - h / 2, w, h);
+      ctx.globalAlpha = 1; ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(testo, x + 8, yy);
+      ctx.restore();
+    };
+
+    // livelli di liquidita
+    if (p.mostraLivelli) {
+      ctx.save(); ctx.lineWidth = 1; ctx.globalAlpha = 0.5; ctx.setLineDash([4, 4]);
+      for (const L of st.livelli) {
+        const fine = Math.min(L.fino, st.builtTo);
+        if (!visibile(L.bar, fine)) continue;
+        ctx.strokeStyle = L.sopra ? '#f23645' : '#089981';
+        const x1 = xAbs(Math.max(L.bar, dataStart)), x2 = xAbs(Math.min(fine, dataEnd));
+        if (x2 <= x1) continue;
+        ctx.beginPath(); ctx.moveTo(x1, y(L.prezzo)); ctx.lineTo(x2, y(L.prezzo)); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // cartellini "Sweep"
+    if (p.mostraSweep) {
+      ctx.save(); ctx.font = scaledFont('bold 9px system-ui'); ctx.textAlign = 'center';
+      for (const s of st.sweeps) {
+        if (s.bar < dataStart || s.bar > dataEnd) continue;
+        ctx.fillStyle = s.su ? '#089981' : '#f23645';
+        ctx.textBaseline = s.su ? 'top' : 'bottom';
+        ctx.fillText('Sweep', xAbs(s.bar), y(s.prezzo) + (s.su ? 6 : -6));
+      }
+      ctx.restore();
+    }
+
+    if (!p.mostraLinee) return;
+    const elenco = p.soloUltima ? st.operazioni.slice(-1) : st.operazioni;
+    for (const op of elenco) {
+      const fine = op.chiusa ? op.a : dataEnd;
+      if (!visibile(op.da, fine)) continue;
+      const colore = op.dir === 1 ? p.colEntry : p.colEntry;
+
+      // aree fra entry e i due estremi
+      const rettangolo = (prezzo, tinta) => {
+        const x1 = xAbs(Math.max(op.da, dataStart)), x2 = xAbs(Math.min(fine, dataEnd));
+        if (x2 <= x1) return;
+        const yA = y(op.entry), yB = y(prezzo);
+        ctx.save(); ctx.globalAlpha = 0.10; ctx.fillStyle = tinta;
+        ctx.fillRect(x1, Math.min(yA, yB), x2 - x1, Math.abs(yB - yA));
+        ctx.restore();
+      };
+      rettangolo(op.tp, p.colTp);
+      rettangolo(op.scalini.length ? op.scalini[0].stop : op.stop, p.colStop);
+
+      linea(op.da, fine, op.entry, colore, 2, null);
+      linea(op.da, fine, op.tp, p.colTp, 2, op.tpStimato ? [6, 4] : null);
+      linea(op.da, fine, op.be, '#808080', 1, [2, 3]);
+
+      // lo stop e' una scala: cambia quando scattano break-even e trailing
+      ctx.save(); ctx.strokeStyle = p.colStop; ctx.lineWidth = 2; ctx.beginPath();
+      let primo = true;
+      for (let k = 0; k < op.scalini.length; k++) {
+        const s = op.scalini[k];
+        if (s.bar < dataStart - 1 || s.bar > dataEnd + 1) { primo = true; continue; }
+        const x = xAbs(s.bar), yy = y(s.stop);
+        if (primo) { ctx.moveTo(x, yy); primo = false; }
+        else { ctx.lineTo(x, yy); }
+        const succ = op.scalini[k + 1];
+        if (succ && succ.stop !== s.stop) { ctx.lineTo(xAbs(succ.bar), yy); }
+      }
+      if (!op.chiusa && op.scalini.length) {
+        const ultimo = op.scalini[op.scalini.length - 1];
+        if (ultimo.bar <= dataEnd) ctx.lineTo(xAbs(dataEnd), y(ultimo.stop));
+      }
+      ctx.stroke(); ctx.restore();
+
+      // etichetta dell'ingresso
+      if (op.da >= dataStart && op.da <= dataEnd) {
+        ctx.save();
+        ctx.font = scaledFont('bold 10px system-ui');
+        ctx.textAlign = 'center'; ctx.textBaseline = op.dir === 1 ? 'top' : 'bottom';
+        ctx.fillStyle = op.dir === 1 ? '#089981' : '#f23645';
+        const testo = (op.dir === 1 ? 'LONG ' : 'SHORT ') + fmtPrice(op.entry);
+        ctx.fillText(testo, xAbs(op.da), y(op.dir === 1 ? rows[op.da].low : rows[op.da].high) + (op.dir === 1 ? 18 : -18));
+        ctx.restore();
+      }
+
+      // prezzi scritti a destra: solo per l'operazione ancora aperta
+      if (!op.chiusa && p.mostraPrezzi) {
+        const x = xAbs(Math.min(st.builtTo, dataEnd));
+        const stopOra = op.scalini.length ? op.scalini[op.scalini.length - 1].stop : op.stop;
+        const erre = ((rows[Math.min(st.builtTo, rows.length - 1)].close - op.entry) * op.dir) / op.rischio;
+        cartellino(x, op.entry, (op.dir === 1 ? 'LONG ' : 'SHORT ') + fmtPrice(op.entry) +
+          '   ' + (erre >= 0 ? '+' : '') + erre.toFixed(1) + 'R', p.colEntry);
+        cartellino(x, stopOra, 'SL ' + fmtPrice(stopOra) + (op.beFatto ? (p.trailAtr > 0 ? '  trailing' : '  in pari') : ''), p.colStop);
+        cartellino(x, op.tp, (op.tpStimato ? '4R ' : 'TP ') + fmtPrice(op.tp), p.colTp);
+      }
+    }
+  }
+};
+
+const XAUSWEEP_SETTINGS = [
+  {type: 'num', key: 'pivot', label: 'Forza swing (barre)', min: 2, max: 30},
+  {type: 'num', key: 'wickMin', label: 'Rifiuto minimo (ombra/ampiezza)', min: 0, max: 0.9, step: 0.05},
+  {type: 'num', key: 'penMax', label: 'Penetrazione massima (ATR)', min: 0.1, max: 5, step: 0.05},
+  {type: 'num', key: 'penMin', label: 'Penetrazione minima (ATR)', min: 0, max: 1, step: 0.01},
+  {type: 'num', key: 'rientroMin', label: 'Rientro minimo (ATR)', min: 0, max: 1, step: 0.01},
+  {type: 'num', key: 'eqTol', label: 'Tolleranza massimi/minimi uguali (ATR)', min: 0.01, max: 1, step: 0.01},
+  {type: 'num', key: 'etaMax', label: 'Eta massima del livello (barre)', min: 10, max: 1000},
+  {type: 'check', key: 'sessOn', label: 'Filtro sessione'},
+  {type: 'num', key: 'sessDa', label: 'Sessione da (ora UTC)', min: 0, max: 24, step: 0.5},
+  {type: 'num', key: 'sessA', label: 'Sessione a (ora UTC)', min: 0, max: 24, step: 0.5},
+  {type: 'num', key: 'volMin', label: 'ATR / media minimo', min: 0, max: 3, step: 0.05},
+  {type: 'num', key: 'volMax', label: 'ATR / media massimo', min: 0.5, max: 99, step: 0.1},
+  {type: 'select', key: 'bias', label: 'Bias superiore', options: ['Solo a favore di trend', 'Nessuno']},
+  {type: 'num', key: 'biasTf', label: 'Minuti del timeframe di bias', min: 5, max: 1440},
+  {type: 'num', key: 'biasEma', label: 'EMA del bias', min: 5, max: 400},
+  {type: 'num', key: 'attesa', label: 'Attesa dopo un trade (barre)', min: 0, max: 200},
+  {type: 'num', key: 'bufferStop', label: 'Buffer stop oltre il wick (ATR)', min: 0, max: 2, step: 0.05},
+  {type: 'num', key: 'stopMinAtr', label: 'Stop minimo (ATR)', min: 0.1, max: 3, step: 0.05},
+  {type: 'num', key: 'stopMaxAtr', label: 'Stop massimo (ATR)', min: 0.5, max: 10, step: 0.1},
+  {type: 'num', key: 'stopMinUsd', label: 'Stop minimo (dollari)', min: 0, max: 50, step: 0.1},
+  {type: 'num', key: 'beR', label: 'Break-even a (R)', min: 0.2, max: 10, step: 0.1},
+  {type: 'num', key: 'beOffset', label: 'Margine del break-even (R)', min: 0, max: 1, step: 0.05},
+  {type: 'check', key: 'tpFisso', label: 'Usa un target fisso'},
+  {type: 'num', key: 'tpR', label: 'Target fisso (R)', min: 0.5, max: 30, step: 0.1},
+  {type: 'num', key: 'trailAtr', label: 'Trailing dopo il break-even (ATR)', min: 0, max: 20, step: 0.1},
+  {type: 'check', key: 'mostraLivelli', label: 'Mostra i livelli di liquidita'},
+  {type: 'check', key: 'mostraSweep', label: 'Mostra i cartellini Sweep'},
+  {type: 'check', key: 'mostraLinee', label: 'Mostra entry, SL e TP'},
+  {type: 'check', key: 'mostraPrezzi', label: 'Prezzi scritti a destra'},
+  {type: 'check', key: 'soloUltima', label: 'Solo l ultima operazione'},
+  {type: 'color', key: 'colEntry', label: 'Entry'},
+  {type: 'color', key: 'colStop', label: 'Stop loss'},
+  {type: 'color', key: 'colTp', label: 'Obiettivo'}
+];
+function xauSweepBuildSettings(ind, paramsRow, mk) {
+  XAUSWEEP_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  });
+}
+
 // GLI UNDICI INDICATORI NUOVI entrano qui, dopo la tabella: cosi' il loro codice resta in un
 // blocco suo e la tabella storica non si gonfia di mille righe.
+INDICATOR_DEFS.xau_sweep_v2=XAUSWEEP_DEF;
 INDICATOR_DEFS.amd_fvg_trade=AMD_FVG_TRADE_DEF;
 INDICATOR_DEFS.amd_poc_trade=AMD_POC_TRADE_DEF;
 INDICATOR_DEFS.complex_hs=COMPLEX_HS_DEF;
