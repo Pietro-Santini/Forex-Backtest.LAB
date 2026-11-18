@@ -1,3 +1,27 @@
+- 2026-11-18 - Claude - **v2.2.67: «Modello salvato» si dice solo se e' salvato davvero.**
+  SEGNALATO dal proprietario: «quando vado a salvarlo mi dice modello salvato, ma dopo quando vado
+  sulla lista dei modelli non e' presente. Quindi dice che lo salva, ma in realta' non lo salva.»
+  **CAUSA, ed e' una riga che non guardava un risultato.** Dal 17 novembre `saveDrawingTemplates`
+  risponde true/false e, quando la scrittura fallisce, scrive nella barra di stato quanto e' piena
+  la memoria. Ma nessuno guardava quel risultato: il messaggio della memoria veniva scritto e
+  **subito sovrascritto** da «Modello salvato», il menu si ridisegnava (vuoto) e la funzione
+  rispondeva `true` - quindi il pulsante dentro le impostazioni mostrava perfino una spunta verde.
+  Il programma diceva una cosa falsa nel modo piu' convincente che esista. **Ed e' anche il motivo
+  per cui il proprietario non ha mai visto il messaggio introdotto il giorno prima: durava un
+  millisecondo.**
+  Curati i due punti che lo dicevano: i modelli dei disegni e quelli Fibonacci. Se la scrittura non
+  va: non si dice che e' andata, non si ridisegna un menu che non e' cambiato, e non si cancella il
+  motivo dalla barra di stato - che e' l'unica cosa che permette di capire cosa fare.
+  **QUESTO CHIUDE IL CERCHIO SUL PROBLEMA MESSO IN ATTESA IL 17.** Le due prove di controllo del
+  banco nuovo passano: quando la memoria ACCETTA, il modello si salva, si rilegge dalla stessa
+  chiave che la lista guarda, e lo dice. Quindi il salvataggio non e' rotto: **la memoria sta
+  rifiutando per davvero**, come la misura del 17 novembre faceva sospettare (1,4 GB di profilo,
+  854 MB di IndexedDB sotto l'indirizzo dell'app, `Local Storage` a 2,5 MB su un tetto di 5).
+  La cura vera e' il TETTO sul magazzino delle candele e sulla cache dei CSV (voci 5.2 e 5.4 della
+  scaletta): non sono pulizia, sono la causa di un difetto che il proprietario vede ogni giorno.
+  Banco `modello_salvato_non_mente` (3 prove, 2 di controllo); le 11 prove di
+  `nomi_modelli_disegni` restano verdi.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-17 - Claude - **v2.2.66: in replay una posizione non si chiude piu' col futuro, e
   uscendo dal replay si torna all'ultima candela su tutte le finestre.** Due cure, ognuna col suo
   banco e con le prove di controllo che proteggono quello che funzionava.
