@@ -1,3 +1,27 @@
+- 2026-11-18 - Claude - **v2.2.70: alle 22 la candela non si ferma piu' se MT5 sta ancora
+  trasmettendo.** SEGNALATO dal proprietario: «il grafico XAUUSD si blocca alle 22 mentre MT5
+  continua a trasmettere; il PL live funziona, solo la candela non si aggiorna» - e vale per
+  tutti gli asset, e' una legge universale.
+  **LA TERZA STRADA.** Il 12 novembre erano state curate due strade su tre: l'app non si stacca
+  piu' dal canale di un asset che quota (`liveSessionTick`) e l'etichetta rossa non compare per
+  orologio (`statoMercato`/`fblMercatoFermoOra`). Verificato oggi: il banco di quel giorno,
+  `mercato_per_asset_dai_dati`, e' verde su tutte e cinque le prove. **Era rimasta la terza, ed e'
+  la piu' visibile di tutte:** `applyLivePriceToChart()` - la funzione che porta il prezzo sulla
+  candela - cominciava con `if(liveSessionPhaseNow()==='closed')return false;`, e
+  `liveSessionPhaseNow()` guarda SOLO l'orario scritto a mano (`LIVE_MT5_CLOSE_MIN=22*60`). Dalle
+  22 in poi nessun prezzo toccava il grafico, qualunque cosa facesse il broker. Subito sotto, lo
+  stesso sbarramento passando da `statoMercato()`. **Il PL continuava a funzionare perche' viene
+  dal conto, non dalla candela: ecco perche' il sintomo sembrava assurdo ed era invece coerente.**
+  **LA CURA:** l'orologio puo' solo PROPORRE la chiusura. Se per quell'asset i tick veri stanno
+  arrivando (`fblAssetRiceveDatiOra`: canale vivo e ultimo tick entro cinque minuti), il prezzo
+  passa. Quando i tick finiscono davvero, le stesse due righe tornano a fermare tutto - ed e' cio'
+  che continua a impedire le «candele finte» a mercato chiuso.
+  Banco `candela_viva_dopo_le_22` (4 prove: 2 rosse prima della cura, 2 di GUARDIA verdi anche
+  prima - sabato non si inventano candele, e dodici minuti di silenzio dopo le 22 fermano il
+  grafico). Rilanciati a mano, tutti verdi, gli otto banchi confinanti: `asse_si_ferma_alla_chiusura`,
+  `buco_grafico_chiuso`, `mercato_chiuso`, `mercato_dai_dati_mt5`, `mercato_per_asset_dai_dati`,
+  `chiusura_mercato`, `cloud_zitto_a_mercato_chiuso`, `linee_pendenti_chiuso`.
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-18 - Claude - **MISURATO DOPO: la pulizia dei blocchi orfani ha liberato 691 MB.**
   Chiude la riga «quanto libera si vedra' al primo avvio» della voce v2.2.69. Numeri presi sulla
   cartella del profilo prima (12:58) e dopo (13:01) l'avvio con la 2.2.69 installata:
