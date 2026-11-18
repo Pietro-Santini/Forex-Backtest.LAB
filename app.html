@@ -21096,7 +21096,8 @@ const VALID_BOS_PULLBACK_DEF = {
     leftBars: 3, rightBars: 3, lookback: 48, touchTicks: 4, minUntouchedBars: 5,
     minExtensionTicks: 1, maxWait: 120, tickSize: 0.00001,
     showDeveloping: true, showPullbackText: true, showTouchCircle: true,
-    refColor: '#EAEAEA', bullColor: '#7CFC00', bearColor: '#f23645'
+    refColor: '#EAEAEA', bullColor: '#7CFC00', bearColor: '#f23645',
+    rrTarget: 2, mostraScaletta: true, posScaletta: 'Alto a destra'
   }),
 
   // Calcolo incrementale nello stesso ordine dello script:
@@ -21112,6 +21113,10 @@ const VALID_BOS_PULLBACK_DEF = {
       st.retLowExt = []; st.retLowLev = []; st.retLowDone = [];
       st.setups = [];      // setup attivi
       st.snaps = [];       // setup completati: linee, etichette e segni restano visibili
+      // La scaletta: i passi che l'utente vede accendersi uno dopo l'altro.
+      st.scaletta = scalettaNuova(['Riferimento', 'Rottura iniziale', 'Estremo confermato',
+        'Pullback valido', 'Rottura confermata', 'Operazione']);
+      st.op = null; st.opBar = -1; st.opSnap = null;
     }
     const L = Math.max(1, p.leftBars | 0), R = Math.max(1, p.rightBars | 0);
     const LB = Math.max(6, p.lookback | 0);
@@ -21146,6 +21151,7 @@ const VALID_BOS_PULLBACK_DEF = {
 
       // 3) Avanzamento di ogni setup (dal più recente al più vecchio).
       let bullBos = false, bearBos = false;
+      let scartoMotivo = '', fatta = null;   // per la scaletta: perche' un setup e' morto, e quale e' nato
       for (let k = st.setups.length - 1; k >= 0; k--) {
         const s = st.setups[k];
         let invalid = i - s.startBar > maxWait;
@@ -21183,6 +21189,8 @@ const VALID_BOS_PULLBACK_DEF = {
         }
 
         if (invalid) {
+          scartoMotivo = (i - s.startBar > maxWait) ? 'setup scaduto: troppe barre di attesa'
+            : (s.dir === 1 ? 'chiusura sotto il riferimento' : 'chiusura sopra il riferimento');
           st.setups.splice(k, 1);
         } else if (completed) {
           const sig = s.dir === 1 ? p.bullColor : p.bearColor;
@@ -21197,6 +21205,7 @@ const VALID_BOS_PULLBACK_DEF = {
             pb: s.pbLabel, touch: s.touch,
             check: {x: s.extTime, price: s.target, down: s.dir === 1, color: sig}
           });
+          fatta = s;
           st.setups.splice(k, 1);
         } else if (p.showDeveloping) {
           if (s.stage === 1) s.refX2 = i;
@@ -21208,7 +21217,7 @@ const VALID_BOS_PULLBACK_DEF = {
       for (let k = st.setups.length - 1; k >= 0; k--) {
         const s = st.setups[k];
         const retired = s.dir === 1 ? st.retHighLev.indexOf(s.ref) >= 0 : st.retLowLev.indexOf(s.ref) >= 0;
-        if (retired) st.setups.splice(k, 1);
+        if (retired) { scartoMotivo = 'riferimento ritirato da una rottura confermata'; st.setups.splice(k, 1); }
       }
 
       // 5) Massimo e minimo dominanti tra i pivot non ritirati.
@@ -21240,13 +21249,63 @@ const VALID_BOS_PULLBACK_DEF = {
       if (newBull || newBear) {
         for (let k = st.setups.length - 1; k >= 0; k--) {
           const s = st.setups[k];
-          if ((newBull && s.dir === -1) || (newBear && s.dir === 1)) st.setups.splice(k, 1);
+          if ((newBull && s.dir === -1) || (newBear && s.dir === 1)) { scartoMotivo = 'rottura nella direzione opposta'; st.setups.splice(k, 1); }
         }
       }
 
       // 8) Creazione dei nuovi setup.
       if (newBull) st.setups.push(bosNewSetup(1, i, prevHighBar, prevHigh, r.high));
       if (newBear) st.setups.push(bosNewSetup(-1, i, prevLowBar, prevLow, r.low));
+
+      // --- L'OPERAZIONE. Nasce dalla rottura confermata: si entra alla chiusura che rompe
+      // l'estremo, lo stop sta sul livello ritestato (se quello viene perso il setup non esiste
+      // piu'), il target e' a R:R scelto dall'utente. Il lottaggio lo calcola il motore della
+      // scaletta col saldo e la percentuale di rischio del programma.
+      if (fatta) {
+        const dist = Math.abs(r.close - fatta.ref);
+        if (dist > 0) {
+          const rr = Math.max(0.1, +p.rrTarget || 2);
+          st.op = {
+            dir: fatta.dir, entry: r.close, sl: fatta.ref,
+            tp: fatta.dir === 1 ? r.close + dist * rr : r.close - dist * rr,
+            rr, tpStimato: true, lotto: scalettaLotto(r.close, fatta.ref)
+          };
+          st.opBar = i; st.opSnap = fatta;
+        }
+      } else if (st.op && st.opBar !== i && (newBull || newBear || i - st.opBar > maxWait)) {
+        st.op = null; st.opSnap = null;   // la costruzione riparte da capo: l'operazione vecchia non si mostra piu'
+      }
+
+      // --- LA SCALETTA. Racconta un setup alla volta: quello appena completato se c'e'
+      // un'operazione in corso, altrimenti il piu' recente ancora in costruzione.
+      const sc = st.scaletta;
+      if (sc) {
+        const compl = st.op ? st.opSnap : null;
+        const sv = compl || (st.setups.length ? st.setups[st.setups.length - 1] : null);
+        if (sv) scalettaSegna(sc, 0, 'ok', (sv.dir === 1 ? 'massimo ' : 'minimo ') + fmtPrice(sv.ref));
+        else if (!isNaN(prevHigh) || !isNaN(prevLow))
+          scalettaSegna(sc, 0, 'ok', (isNaN(prevHigh) ? '-' : fmtPrice(prevHigh)) + ' / ' + (isNaN(prevLow) ? '-' : fmtPrice(prevLow)));
+        else scalettaSegna(sc, 0, 'attesa', 'struttura non pronta');
+
+        if (!sv) {
+          scalettaAzzera(sc, 1);
+          sc.esito = scartoMotivo || '';
+        } else {
+          scalettaSegna(sc, 1, 'ok', (sv.dir === 1 ? 'rialzista' : 'ribassista') + ', ' + (i - sv.startBar) + ' barre');
+          scalettaSegna(sc, 2, sv.extConfirmed ? 'ok' : 'attesa',
+            fmtPrice(sv.target) + (sv.extConfirmed ? '' : ' da confermare'));
+          scalettaSegna(sc, 3, sv.stage >= 2 ? 'ok' : 'attesa',
+            sv.stage >= 2 ? 'ritest a ' + fmtPrice(sv.ref) : (sv.clean + '/' + minUntouched + ' barre pulite'));
+          scalettaSegna(sc, 4, compl ? 'ok' : 'attesa',
+            compl ? fmtPrice(st.op.entry) : 'oltre ' + fmtPrice(sv.target));
+          sc.esito = compl ? '' : (scartoMotivo || '');
+        }
+
+        if (st.op) {
+          scalettaSegna(sc, 5, 'ok', i === st.opBar ? 'aperta ora' : (i - st.opBar) + ' barre');
+          sc.operazione = st.op;
+        } else { scalettaSegna(sc, 5, 'attesa', ''); sc.operazione = null; }
+      }
 
       st.bullBos = bullBos; st.bearBos = bearBos;
       st.builtTo = i;
@@ -21295,6 +21354,8 @@ const VALID_BOS_PULLBACK_DEF = {
       }
       drawLabels(s.pbLabel, s.touch);
     }
+
+    if (p.mostraScaletta && st.scaletta) scalettaDisegna(ctx, ind, st.scaletta, p.posScaletta, 'BOS Pullback');
   }
 };
 
@@ -21313,14 +21374,19 @@ const BOS_SETTINGS = [
   {type: 'check', key: 'showTouchCircle', label: 'Segna ritest'},
   {type: 'color', key: 'refColor', label: 'Massimo/minimo precedente'},
   {type: 'color', key: 'bullColor', label: 'BOS rialzista'},
-  {type: 'color', key: 'bearColor', label: 'BOS ribassista'}
+  {type: 'color', key: 'bearColor', label: 'BOS ribassista'},
+  {type: 'num', key: 'rrTarget', label: 'Target in R (R:R)', min: 0.5, max: 10, step: 0.1},
+  {type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
+  // options a null: l'elenco delle posizioni si legge quando il pannello si apre, non adesso
+  // (SCALETTA_POSIZIONI e' dichiarata piu' in basso in questo stesso script).
+  {type: 'select', key: 'posScaletta', label: 'Posizione della scaletta', options: null}
 ];
 function bosBuildSettings(ind, paramsRow, mk) {
   BOS_SETTINGS.forEach(s => {
     if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
     else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
     else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
-    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options || SCALETTA_POSIZIONI));
   });
 }
 
@@ -22306,6 +22372,162 @@ for(let i=from;i<=to;i++){
 
 };
 // ============================================================================
+// SCALETTA DEI SETUP — motore condiviso fra gli indicatori.
+//
+// RICHIESTO DAL PROPRIETARIO (18 novembre 2026): «non voglio un indicatore che
+// mi disegna il risultato gia' pronto, voglio vedere l'evoluzione passo passo.
+// Prende un punto di riferimento, poi vede se la struttura e' validata o
+// invalidata. Primo punto confermato, secondo punto confermato, terzo punto
+// confermato e allora si entra. Con una lista di controllo in un angolo».
+//
+// Come si usa da un indicatore:
+//   1. in compute(), creare una volta  st.scaletta = scalettaNuova([...nomi dei passi])
+//      e a ogni barra chiamare scalettaSegna(st.scaletta, indice, stato, nota)
+//      con stato 'attesa' | 'ok' | 'ko';
+//   2. quando nasce un'operazione, riempire st.scaletta.operazione con
+//      {dir, entry, sl, tp} — il motore ci aggiunge da solo R:R, lottaggio e
+//      rischio in valuta, presi dal conto del programma;
+//   3. in render(), chiamare scalettaDisegna(ctx, ind, st.scaletta, posizione).
+//
+// Il lottaggio usa le stesse funzioni del pannello ordini (realizedBalanceNow,
+// contractSize, maxLotsByMargin), quindi il numero consigliato qui e quello
+// consigliato la' coincidono.
+// ============================================================================
+
+const SCALETTA_POSIZIONI = ['Alto a destra', 'Basso a destra', 'Alto a sinistra', 'Basso a sinistra'];
+const SCALETTA_COLORI = {attesa: '#808080', ok: '#089981', ko: '#f23645'};
+const SCALETTA_SEGNI = {attesa: '·', ok: '✓', ko: '✗'};
+
+function scalettaNuova(nomi) {
+  return {
+    passi: (nomi || []).map(n => ({nome: n, stato: 'attesa', nota: ''})),
+    operazione: null, esito: ''
+  };
+}
+
+function scalettaSegna(sc, indice, stato, nota) {
+  if (!sc || !sc.passi[indice]) return;
+  sc.passi[indice].stato = stato;
+  sc.passi[indice].nota = nota == null ? '' : String(nota);
+}
+
+// Riporta in attesa tutti i passi da `da` in poi: serve quando un setup si
+// invalida e la costruzione riparte da capo.
+function scalettaAzzera(sc, da) {
+  if (!sc) return;
+  for (let i = da | 0; i < sc.passi.length; i++) { sc.passi[i].stato = 'attesa'; sc.passi[i].nota = ''; }
+}
+
+// Lottaggio consigliato con la percentuale di rischio e il saldo del programma.
+function scalettaLotto(entry, sl) {
+  try {
+    const riskPct = num(document.getElementById('risk') && document.getElementById('risk').value);
+    if (!Number.isFinite(riskPct) || riskPct <= 0) return null;
+    const dist = Math.abs(entry - sl);
+    if (!(dist > 0)) return null;
+    const saldo = realizedBalanceNow();
+    const rischio = saldo * riskPct / 100;
+    if (!(rischio > 0)) return null;
+    const instr = currentInstrument(), size = contractSize();
+    const perditaPerLotto = instr.plMode === 'baseEqualsAccount' ? (dist * size / entry) : (dist * size);
+    if (!(perditaPerLotto > 0)) return null;
+    let lotti = rischio / perditaPerLotto, ridotto = false;
+    const tetto = maxLotsByMargin(entry);
+    if (Number.isFinite(tetto) && tetto > 0 && lotti > tetto) { lotti = tetto; ridotto = true; }
+    lotti = Math.max(0.01, Math.round(lotti * 100) / 100);
+    return {lotti, rischio, riskPct, ridotto, saldo};
+  } catch (e) { return null; }
+}
+
+// Posizione verticale: piu' indicatori con la scaletta accesa si impilano invece
+// di sovrapporsi.
+function scalettaSlot(ind) {
+  try {
+    const lista = activeIndicators.filter(x => x && !x.hidden && x.calc && x.calc.scaletta);
+    const k = lista.indexOf(ind);
+    return k < 0 ? 0 : k;
+  } catch (e) { return 0; }
+}
+
+function scalettaDisegna(ctx, ind, sc, posizione, titolo) {
+  if (!sc || !sc.passi.length) return;
+  const C = ctx.canvas || {width: 0, height: 0};
+  const righe = sc.passi.length;
+  const op = sc.operazione;
+  const extra = op ? 5 : (sc.esito ? 1 : 0);
+  const hRiga = 14, padding = 8, hTitolo = 16;
+  ctx.save();
+  ctx.font = scaledFont('10px system-ui');
+  let largh = ctx.measureText(titolo || 'Scaletta').width + 24;
+  const misura = t => { const w = ctx.measureText(t).width; if (w + 34 > largh) largh = w + 34; };
+  sc.passi.forEach(p => misura(p.nome + (p.nota ? '  ' + p.nota : '')));
+  if (op) {
+    misura('Entry   ' + fmtPrice(op.entry));
+    misura('Stop   ' + fmtPrice(op.sl));
+    misura('Target   ' + fmtPrice(op.tp));
+    misura('R:R   ' + op.rr.toFixed(2));
+    misura(op.lotto ? ('Lotti   ' + op.lotto.lotti + '   (' + op.lotto.riskPct.toFixed(2) + '% = ' + Math.round(op.lotto.rischio) + ')') : 'Lotti   imposta il rischio %');
+  } else if (sc.esito) misura(sc.esito);
+  largh = Math.min(largh, 260);
+  const alt = hTitolo + righe * hRiga + (extra ? extra * hRiga + 6 : 0) + padding;
+
+  const slot = scalettaSlot(ind) * (alt + 8);
+  const destra = (posizione || '').indexOf('destra') >= 0;
+  const alto = (posizione || '').indexOf('Alto') >= 0;
+  const x = destra ? (C.width - largh - 12) : 12;
+  const yBase = alto ? (12 + slot) : (C.height - alt - 12 - slot);
+
+  ctx.globalAlpha = 0.92; ctx.fillStyle = '#161616';
+  ctx.fillRect(x, yBase, largh, alt);
+  ctx.globalAlpha = 1; ctx.strokeStyle = '#2E2E2E'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, yBase + 0.5, largh - 1, alt - 1);
+
+  ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+  ctx.fillStyle = '#DBDBDB'; ctx.font = scaledFont('bold 10px system-ui');
+  ctx.fillText(titolo || 'Scaletta', x + 8, yBase + hTitolo / 2 + 3);
+
+  let yy = yBase + hTitolo + hRiga / 2 + 2;
+  ctx.font = scaledFont('10px system-ui');
+  sc.passi.forEach((p, k) => {
+    const col = SCALETTA_COLORI[p.stato] || SCALETTA_COLORI.attesa;
+    ctx.fillStyle = col;
+    ctx.fillText(SCALETTA_SEGNI[p.stato] || '·', x + 8, yy);
+    ctx.fillStyle = p.stato === 'attesa' ? '#808080' : '#DBDBDB';
+    ctx.fillText((k + 1) + '. ' + p.nome, x + 20, yy);
+    if (p.nota) {
+      ctx.fillStyle = col; ctx.textAlign = 'right';
+      ctx.fillText(p.nota, x + largh - 8, yy);
+      ctx.textAlign = 'left';
+    }
+    yy += hRiga;
+  });
+
+  if (op) {
+    ctx.strokeStyle = '#2E2E2E'; ctx.beginPath();
+    ctx.moveTo(x + 6, yy - hRiga / 2 + 3); ctx.lineTo(x + largh - 6, yy - hRiga / 2 + 3); ctx.stroke();
+    yy += 4;
+    const voce = (nome, valore, colore) => {
+      ctx.fillStyle = '#808080'; ctx.fillText(nome, x + 20, yy);
+      ctx.fillStyle = colore || '#DBDBDB'; ctx.textAlign = 'right';
+      ctx.fillText(valore, x + largh - 8, yy);
+      ctx.textAlign = 'left'; yy += hRiga;
+    };
+    voce('Entry', fmtPrice(op.entry), op.dir === 1 ? '#089981' : '#f23645');
+    voce('Stop', fmtPrice(op.sl), '#f23645');
+    voce('Target', (op.tpStimato ? '≈ ' : '') + fmtPrice(op.tp), '#089981');
+    voce('R:R', '1 : ' + op.rr.toFixed(2));
+    voce('Lotti', op.lotto
+      ? (fmtLottiQuick ? fmtLottiQuick(op.lotto.lotti) : op.lotto.lotti) +
+        '  (' + op.lotto.riskPct.toFixed(2) + '%)' + (op.lotto.ridotto ? ' ⚠' : '')
+      : 'imposta il rischio %');
+  } else if (sc.esito) {
+    ctx.fillStyle = '#808080';
+    ctx.fillText(sc.esito, x + 20, yy + 4);
+  }
+  ctx.restore();
+}
+
+// ============================================================================
 // XAUUSD Liquidity Sweep v2 — porting dello script Pine omonimo.
 //
 // Mostra gli sweep di liquidita con rifiuto e, quando il setup e' valido, disegna
@@ -22336,7 +22558,8 @@ const XAUSWEEP_DEF = {
     bufferStop: 0.40, stopMinAtr: 0.40, stopMaxAtr: 2.50, stopMinUsd: 1.20,
     beR: 1.0, beOffset: 0.10, tpFisso: false, tpR: 4.0, trailAtr: 8.0,
     mostraLivelli: true, mostraSweep: true, mostraLinee: true, mostraPrezzi: true,
-    soloUltima: false,
+    soloUltima: false, mostraScaletta: true, posScaletta: 'Alto a destra',
+    mostraScarti: true,
     colEntry: '#5b9cf6', colStop: '#f23645', colTp: '#089981'
   }),
 
@@ -22351,8 +22574,10 @@ const XAUSWEEP_DEF = {
       st.precPh = NaN; st.precPl = NaN;
       st.htfBucket = null; st.htfUltimo = NaN; st.htfEma = NaN; st.htfEmaChiusa = NaN;
       st.htfMax = NaN; st.htfMin = NaN; st.htfStoria = [];
-      st.operazioni = []; st.sweeps = []; st.livelli = [];
+      st.operazioni = []; st.sweeps = []; st.livelli = []; st.scarti = [];
       st.aperta = null; st.ultimaUscita = -1e9;
+      st.scaletta = scalettaNuova(['Livello di liquidita', 'Sessione', 'Volatilita',
+        'Bias orario', 'Sweep con rifiuto', 'Rischio sostenibile', 'Operazione']);
     }
     const P = Math.max(2, p.pivot | 0);
     const kEma = 2 / (Math.max(2, p.biasEma | 0) + 1);
@@ -22438,55 +22663,121 @@ const XAUSWEEP_DEF = {
       }
 
       st.builtTo = i;
-      if (st.aperta) continue;
-      if (isNaN(atr) || atr <= 0 || isNaN(st.atrMedio[i]) || st.atrMedio[i] <= 0) continue;
+      const sc = st.scaletta;
 
-      // --- filtri di contesto ---
-      if (p.sessOn) {
-        const ora = new Date(prezzoMs).getUTCHours() + new Date(prezzoMs).getUTCMinutes() / 60;
-        const da = p.sessDa, a = p.sessA;
-        const dentro = da <= a ? (ora >= da && ora < a) : (ora >= da || ora < a);
-        if (!dentro) continue;
+      // --- passo 7: se c'e' un'operazione aperta la scaletta la racconta ---
+      if (st.aperta) {
+        const o = st.aperta;
+        scalettaSegna(sc, 6, 'ok', o.beFatto ? 'stop protetto' : 'in corso');
+        const erre = ((r.close - o.entry) * o.dir) / o.rischio;
+        sc.operazione = {
+          dir: o.dir, entry: o.entry, sl: o.stop, tp: o.tp, tpStimato: o.tpStimato,
+          rr: Math.abs(o.tp - o.entry) / o.rischio, lotto: scalettaLotto(o.entry, o.stopIniziale)
+        };
+        sc.esito = (erre >= 0 ? '+' : '') + erre.toFixed(1) + 'R in corso';
+        continue;
       }
-      const rapporto = atr / st.atrMedio[i];
-      if (rapporto < p.volMin || rapporto > p.volMax) continue;
-      if (i - st.ultimaUscita < (p.attesa | 0)) continue;
+      sc.operazione = null;
+      scalettaSegna(sc, 6, 'attesa', '');
 
-      // --- sweep con rifiuto ---
+      // --- i passi si valutano tutti, senza uscite anticipate: la scaletta deve
+      //     poter dire a che punto e' arrivata la costruzione ---
+      const pronto = !isNaN(atr) && atr > 0 && !isNaN(st.atrMedio[i]) && st.atrMedio[i] > 0;
+
+      // passo 1: esiste un livello di liquidita ancora valido?
       const sellOk = !isNaN(st.livSell) && !st.usataSell && (i - st.barSell) <= (p.etaMax | 0);
       const buyOk = !isNaN(st.livBuy) && !st.usataBuy && (i - st.barBuy) <= (p.etaMax | 0);
+      if (sellOk || buyOk) {
+        const quali = sellOk && buyOk ? (fmtPrice(st.livSell) + ' / ' + fmtPrice(st.livBuy))
+          : fmtPrice(sellOk ? st.livSell : st.livBuy);
+        scalettaSegna(sc, 0, 'ok', quali);
+      } else scalettaSegna(sc, 0, 'attesa', 'nessuno armato');
+
+      // passo 2: sessione
+      let inSessione = true;
+      if (p.sessOn) {
+        const d = new Date(prezzoMs);
+        const ora = d.getUTCHours() + d.getUTCMinutes() / 60;
+        inSessione = p.sessDa <= p.sessA ? (ora >= p.sessDa && ora < p.sessA) : (ora >= p.sessDa || ora < p.sessA);
+        scalettaSegna(sc, 1, inSessione ? 'ok' : 'ko',
+          String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0') + ' UTC');
+      } else scalettaSegna(sc, 1, 'ok', 'filtro spento');
+
+      // passo 3: volatilita
+      let volOk = true, rapporto = NaN;
+      if (pronto) {
+        rapporto = atr / st.atrMedio[i];
+        volOk = rapporto >= p.volMin && rapporto <= p.volMax;
+        scalettaSegna(sc, 2, volOk ? 'ok' : 'ko', rapporto.toFixed(2) + 'x');
+      } else scalettaSegna(sc, 2, 'attesa', 'dati insufficienti');
+
+      // passo 4: bias del timeframe superiore
+      let biasLong = true, biasShort = true;
+      if (p.bias !== 'Nessuno') {
+        if (isNaN(st.htfEmaChiusa)) {
+          biasLong = biasShort = false;
+          scalettaSegna(sc, 3, 'attesa', 'EMA non pronta');
+        } else {
+          biasLong = r.close > st.htfEmaChiusa;
+          biasShort = r.close < st.htfEmaChiusa;
+          scalettaSegna(sc, 3, (biasLong || biasShort) ? 'ok' : 'ko',
+            biasLong ? 'solo long' : biasShort ? 'solo short' : 'fermo');
+        }
+      } else scalettaSegna(sc, 3, 'ok', 'filtro spento');
+
+      const attesaOk = (i - st.ultimaUscita) >= (p.attesa | 0);
+      if (!attesaOk) scalettaSegna(sc, 4, 'attesa', 'pausa dopo l ultimo trade');
+
+      if (!pronto) continue;
+
+      // passo 5: sweep con rifiuto
       const ampiezza = Math.max(r.high - r.low, 1e-9);
       const ombraGiu = Math.min(r.open, r.close) - r.low;
       const ombraSu = r.high - Math.max(r.open, r.close);
-      let lungo = sellOk && r.low < st.livSell - atr * p.penMin &&
+      const lungo = sellOk && r.low < st.livSell - atr * p.penMin &&
         (st.livSell - r.low) <= atr * p.penMax &&
         r.close > st.livSell + atr * p.rientroMin &&
         ombraGiu / ampiezza >= p.wickMin && r.close > r.open;
-      let corto = buyOk && r.high > st.livBuy + atr * p.penMin &&
+      const corto = buyOk && r.high > st.livBuy + atr * p.penMin &&
         (r.high - st.livBuy) <= atr * p.penMax &&
         r.close < st.livBuy - atr * p.rientroMin &&
         ombraSu / ampiezza >= p.wickMin && r.close < r.open;
-      if (!lungo && !corto) continue;
+
+      if (!lungo && !corto) {
+        if (attesaOk) scalettaSegna(sc, 4, 'attesa', 'nessuno');
+        scalettaSegna(sc, 5, 'attesa', '');
+        continue;
+      }
+      scalettaSegna(sc, 4, 'ok', (lungo ? 'rialzista su ' : 'ribassista su ') + fmtPrice(lungo ? st.livSell : st.livBuy));
       if (p.mostraSweep) st.sweeps.push({bar: i, su: !!lungo, prezzo: lungo ? r.low : r.high});
 
-      // --- bias ---
-      if (p.bias !== 'Nessuno') {
-        if (isNaN(st.htfEmaChiusa)) continue;
-        if (lungo && !(r.close > st.htfEmaChiusa)) lungo = false;
-        if (corto && !(r.close < st.htfEmaChiusa)) corto = false;
-      }
-      if (!lungo && !corto) continue;
+      // da qui lo sweep c'e': se qualcosa non va la struttura si invalida, e il
+      // motivo resta scritto sul grafico accanto alla candela.
+      const scarta = (motivo) => {
+        sc.esito = 'sweep scartato: ' + motivo;
+        if (p.mostraScarti) st.scarti.push({bar: i, prezzo: lungo ? r.low : r.high, su: !!lungo, motivo: motivo});
+      };
 
-      // --- costruzione del setup ---
+      if (!inSessione) { scarta('fuori sessione'); continue; }
+      if (!volOk) { scarta('volatilita fuori fascia'); continue; }
+      if (!attesaOk) { scalettaSegna(sc, 4, 'ko', 'pausa dopo l ultimo trade'); scarta('pausa dopo l ultimo trade'); continue; }
+      if ((lungo && !biasLong) || (corto && !biasShort)) {
+        scalettaSegna(sc, 3, 'ko', lungo ? 'sweep long contro trend' : 'sweep short contro trend');
+        scarta('bias orario contrario'); continue;
+      }
+
+      // passo 6: il rischio sta nei limiti?
       const dir = lungo ? 1 : -1;
       const stopGrezzo = dir === 1 ? r.low - atr * p.bufferStop : r.high + atr * p.bufferStop;
       const rischio = Math.abs(r.close - stopGrezzo);
       if (dir === 1) st.usataSell = true; else st.usataBuy = true;
-      if (rischio < atr * p.stopMinAtr || rischio > atr * p.stopMaxAtr) continue;
-      if (p.stopMinUsd > 0 && rischio < p.stopMinUsd) continue;
+      if (rischio < atr * p.stopMinAtr) { scalettaSegna(sc, 5, 'ko', 'stop troppo stretto'); scarta('stop troppo stretto'); continue; }
+      if (rischio > atr * p.stopMaxAtr) { scalettaSegna(sc, 5, 'ko', 'stop troppo largo'); scarta('stop troppo largo'); continue; }
+      if (p.stopMinUsd > 0 && rischio < p.stopMinUsd) { scalettaSegna(sc, 5, 'ko', 'sotto il minimo in valuta'); scarta('stop sotto il minimo in valuta'); continue; }
+      scalettaSegna(sc, 5, 'ok', fmtPrice(rischio) + ' di rischio');
 
       const nuova = {
-        dir, da: i, a: i, entry: r.close, stop: stopGrezzo, rischio,
+        dir: dir, da: i, a: i, entry: r.close, stop: stopGrezzo, stopIniziale: stopGrezzo, rischio: rischio,
         be: r.close + dir * rischio * p.beR,
         tp: r.close + dir * rischio * (p.tpFisso ? p.tpR : 4.0),
         tpStimato: !p.tpFisso, beFatto: false, chiusa: false,
@@ -22494,7 +22785,10 @@ const XAUSWEEP_DEF = {
       };
       st.operazioni.push(nuova);
       st.aperta = nuova;
+      scalettaSegna(sc, 6, 'ok', 'aperta ora');
+      sc.esito = '';
       if (st.operazioni.length > 400) st.operazioni.shift();
+      if (st.scarti.length > 200) st.scarti.shift();
     }
   },
 
@@ -22547,6 +22841,22 @@ const XAUSWEEP_DEF = {
         ctx.fillText('Sweep', xAbs(s.bar), y(s.prezzo) + (s.su ? 6 : -6));
       }
       ctx.restore();
+    }
+
+    // setup scartati: la croce con il motivo, cosi' si vede anche cosa NON si prende
+    if (p.mostraScarti && st.scarti) {
+      ctx.save(); ctx.font = scaledFont('9px system-ui'); ctx.textAlign = 'center';
+      for (const x of st.scarti) {
+        if (x.bar < dataStart || x.bar > dataEnd) continue;
+        ctx.fillStyle = '#808080';
+        ctx.textBaseline = x.su ? 'top' : 'bottom';
+        ctx.fillText('x ' + x.motivo, xAbs(x.bar), y(x.prezzo) + (x.su ? 18 : -18));
+      }
+      ctx.restore();
+    }
+
+    if (p.mostraScaletta && st.scaletta) {
+      scalettaDisegna(ctx, ind, st.scaletta, p.posScaletta, 'Liquidity Sweep');
     }
 
     if (!p.mostraLinee) return;
@@ -22646,6 +22956,9 @@ const XAUSWEEP_SETTINGS = [
   {type: 'check', key: 'mostraLinee', label: 'Mostra entry, SL e TP'},
   {type: 'check', key: 'mostraPrezzi', label: 'Prezzi scritti a destra'},
   {type: 'check', key: 'soloUltima', label: 'Solo l ultima operazione'},
+  {type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
+  {type: 'select', key: 'posScaletta', label: 'Posizione della scaletta', options: SCALETTA_POSIZIONI},
+  {type: 'check', key: 'mostraScarti', label: 'Scrivi perche un setup e stato scartato'},
   {type: 'color', key: 'colEntry', label: 'Entry'},
   {type: 'color', key: 'colStop', label: 'Stop loss'},
   {type: 'color', key: 'colTp', label: 'Obiettivo'}

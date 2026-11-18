@@ -1,5 +1,24 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+46. **Dentro uno stesso `<script>` le funzioni sono issate, le `const` no: un elenco di opzioni
+    letto a tempo di caricamento guarda indietro, non avanti.**
+    (18 novembre 2026.) Collegando la scaletta dei passi al `Valid BOS Pullback` ho scritto
+    l'elenco delle impostazioni dell'indicatore con `options: SCALETTA_POSIZIONI`, copiandolo da
+    come era scritto nell'altro indicatore, dove funziona. Ma l'altro indicatore sta **sotto** il
+    motore della scaletta e il BOS sta **sopra**: `const SCALETTA_POSIZIONI` non e' ancora nata
+    quando quell'array viene costruito, e il file sarebbe morto al caricamento con un errore di
+    zona morta — non in un caso raro, **sempre**, per tutti.
+    **PERCHE' NON SI VEDE:** le altre funzioni della scaletta (`scalettaNuova`, `scalettaSegna`,
+    `scalettaDisegna`) sono dichiarate con `function`, quindi issate, e dal BOS si chiamano senza
+    un lamento. Funziona tutto tranne la riga che legge un valore **mentre il file viene letto**.
+    Il resto del codice dell'indicatore gira quando l'utente accende qualcosa, cioe' molto dopo:
+    la differenza non e' «sopra o sotto», e' **quando**.
+    **LA REGOLA CHE RESTA:** un valore che serve mentre il file viene caricato lo si legge solo se
+    e' dichiarato prima; se non lo e', si rinvia (`options: null`, e la lista si legge quando il
+    pannello si apre). E il controllo non e' il collaudo del browser, che qui avrebbe parlato
+    chiaro: e' **sapere dove sta la dichiarazione**, perche' copiare una riga che funziona da
+    un'altra parte del file non dice niente sull'ordine.
+
 45. **Una cura data a UN SOLO lettore della cache lascia il difetto agli altri diciassette — e la
     riga che invalida una cache ne azzera altre che non sapeva di avere.**
     (12 novembre 2026.) Il proprietario ha misurato 4,7 fotogrammi al secondo con quattro
