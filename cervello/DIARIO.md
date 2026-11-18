@@ -1,3 +1,41 @@
+- 2026-11-18 - Claude - **v2.2.75: gli indicatori raccontano la costruzione del setup, passo
+  per passo, con la lista di controllo in un angolo.**
+  **CHIESTO DAL PROPRIETARIO:** «non voglio un indicatore che mi disegna il risultato gia' pronto,
+  voglio vedere l'evoluzione passo passo. Prende un punto di riferimento, poi vede se la struttura
+  e' validata o invalidata. Primo punto confermato, secondo punto confermato, terzo punto
+  confermato e allora si entra. Con una lista di controllo in un angolo». E l'operazione con
+  entrata, stop, target, rapporto rischio/rendimento e **lottaggio preso dal conto del
+  programma**, non calcolato a mano.
+  **IL MOTORE E' UNO SOLO, CONDIVISO** (`scalettaNuova`, `scalettaSegna`, `scalettaAzzera`,
+  `scalettaLotto`, `scalettaDisegna`): un indicatore dichiara i nomi dei suoi passi e a ogni barra
+  dice per ognuno `attesa` / `ok` / `ko` con una nota. Il riquadro si disegna in uno dei quattro
+  angoli, e piu' indicatori con la scaletta accesa **si impilano invece di sovrapporsi**
+  (`scalettaSlot`).
+  **IL LOTTAGGIO NON E' UN SECONDO CONTO:** `scalettaLotto` usa le stesse funzioni del pannello
+  ordini (`realizedBalanceNow`, `contractSize`, `maxLotsByMargin`) e la stessa percentuale di
+  rischio del programma, quindi il numero consigliato qui e quello consigliato la' **coincidono**.
+  Se il margine non basta il lottaggio viene tagliato e il riquadro lo dice con un ⚠.
+  **DUE INDICATORI COLLEGATI.** Il `Liquidity Sweep` (xau_sweep_v2, arrivato con la v2.2.73) con
+  sette passi: livello di liquidita', sessione, volatilita', bias orario, sweep con rifiuto,
+  rischio sostenibile, operazione. Il **`Valid BOS Pullback`** - quello delle schermate del
+  proprietario - con sei: riferimento, rottura iniziale, estremo confermato, pullback valido,
+  rottura confermata, operazione. L'operazione del BOS entra alla chiusura che rompe l'estremo, ha
+  lo stop sul livello ritestato (se quello cade il setup non esiste piu') e il target a R:R
+  scelto nelle impostazioni (di serie 1:2).
+  **LA TRAPPOLA DELL'ORDINE NEL FILE, pagata e chiusa:** l'indicatore BOS sta **prima** del motore
+  della scaletta dentro lo stesso `<script>`. Le `function` sono issate e vanno benissimo a tempo
+  di esecuzione, ma `const SCALETTA_POSIZIONI` **no**: leggerla nell'elenco delle impostazioni,
+  che si costruisce quando il file viene caricato, darebbe un errore di zona morta. Per questo
+  l'elenco delle posizioni del BOS tiene `options: null` e la lista si legge quando il pannello si
+  apre, non prima.
+  **COSA MISURA IL BANCO NUOVO** (`laboratorio/app/scaletta_setup.test.mjs`, candele scritte a mano
+  una per una, quattro prove verdi): i passi si accendono alle barre previste (4, 5, 7, 8, 9) e
+  **mai un passo acceso col precedente spento**, su nessuna barra; l'operazione ha stop e target
+  dalla parte giusta, il R:R chiesto e un lottaggio che allo stop perde davvero l'1% di 10.000; un
+  setup invalidato **riporta i passi in attesa e scrive il motivo** invece di restare accesa su un
+  setup morto; il riquadro si disegna, nei quattro angoli diversi, e sparisce se spento.
+  **PROVATO ANCHE SU DATI VERI** (XAUUSD 2025 a 5 minuti, 70.822 barre): 77 setup BOS completati,
+  16 operazioni nelle prime 12.000 barre, zero passi fuori ordine.
 - 2026-11-18 - Claude - **v2.2.74: tre segnalazioni del proprietario, piu' i modelli per classe.**
   Versione costruita sopra la 2.2.73 della sessione cloud (indicatore sweep XAUUSD): riallineata
   con un merge, nessun conflitto.
