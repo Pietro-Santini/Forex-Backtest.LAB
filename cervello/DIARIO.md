@@ -1,3 +1,45 @@
+- 2026-11-18 - Claude - **v2.2.74: tre segnalazioni del proprietario, piu' i modelli per classe.**
+  Versione costruita sopra la 2.2.73 della sessione cloud (indicatore sweep XAUUSD): riallineata
+  con un merge, nessun conflitto.
+  **(1) UN INDICATORE TOLTO DAL GRAFICO RIPARTE PULITO.** Parole sue: «modifico un indicatore e
+  non lo salvo, lo elimino dal grafico, lo riaggiungo e mi rimette i valori dell'ultima modifica.
+  Deve rimettere i valori di default. Soprattutto con il nuovo indicatore valid boss pullback.»
+  **QUESTA RICHIESTA NE CONTRADDICEVA UNA SUA DEL 13 NOVEMBRE**, scritta nel codice: «un
+  indicatore aggiunto dopo deve ricordare l'ultimo settaggio usato». Le due si conciliano su un
+  gesto: **l'eliminazione**. Finche' lo strumento resta a grafico l'ultimo settaggio si ricorda e
+  viaggia fra le finestre (13 novembre); quando lo si TOGLIE si butta anche la memoria, perche'
+  togliere e' il modo di dire «non mi serve piu' cosi'» (18 novembre). Se un altro indicatore
+  dello stesso tipo resta a grafico, la memoria non si butta: e' ancora in uso. I setup salvati
+  col nome non si toccano mai. L'annuncio `setup_indicatore_dimentica` porta la dimenticanza
+  anche alle altre finestre, altrimenti il difetto tornava dalla finestra accanto.
+  Banco `indicatore_tolto_riparte_pulito` (3 prove: 1 della cura, 2 di GUARDIA - una per ciascuna
+  delle due richieste che dovevano restare vere).
+  **(2) IL CONTO ALLA ROVESCIA DELLA CANDELA SULLE FINESTRE DUPLICATE.** Parole sue: «sulle pagine
+  duplicate non mi fa vedere l'aggiornamento del timer della chiusura delle candele. A volte su
+  una duplicata funziona e sull'altra no, mentre sul main funziona sempre.» MISURATO: il numero si
+  ricalcola solo dentro `draw()`, e a chiamare `draw()` ogni secondo erano **solo i timer del
+  feed** (`startMt5RefreshTimer` esce subito senza `mt5Connected`/`mt5ActiveSymbol`, idem il
+  gemello di Capital.com). Una duplicata senza collegamento **non si ridisegnava mai**: 0 ridisegni
+  in tre secondi, misurato. «A volte una si' e una no» e' quale finestra ha il feed. Cura: un
+  battito di disegno che non chiede dati a nessuno, sul worker del battito (che il browser non
+  rallenta quando la finestra sta dietro), fermo durante il replay e zitto se qualcun altro ha
+  gia' disegnato da meno di 900 ms. Banco `timer_candela_sempre_vivo` (3 prove, 1 di guardia).
+  **(3) L'ANTEPRIMA D'ORDINE CHE COMPARIVA DOPO OGNI CHIUSURA.** Parole sue: «chiudo la posizione
+  dalla tendina a sinistra, a schermo intero, e mi genera una preview del livello di stop loss e
+  take profit in maniera totalmente inutile». MISURATO, ed e' una riga che non controlla:
+  `refreshTradeLevelUI()` riempiva le caselle SL/TP da `active` **senza verificare che quella
+  posizione fosse ancora aperta**. Dentro `closeTrade` l'ordine e' «svuota le caselle ... poi
+  chiama questa»: se `active` puntava ancora alla posizione appena chiusa, le caselle si
+  riempivano di nuovo; subito dopo il giro di MT5 azzerava la selezione, e il disegno vedeva
+  «nessuna posizione attiva + caselle piene» = anteprima di un ordine che nessuno sta componendo.
+  Ecco perche' si vedeva con le posizioni REALI piu' che con le simulate: li' la selezione si
+  azzera dopo, non prima. Banco `chiusa_niente_anteprima` (4 prove, 1 di guardia: una bozza
+  scritta a mano l'anteprima la deve ancora avere).
+  **(4) MODELLI PER CLASSE** (dal commit precedente sul ramo): il Fibonacci finisce nel cassetto
+  del Fibonacci, i profili e il VWAP hanno il loro con le opzioni vere, e `saveIndicatorPresets`
+  non dice piu' «salvato» quando la memoria rifiuta. Banco `modelli_per_classe` (8 prove).
+  **ANCORA APERTO, segnalato con foto:** la tendina dei setup di un indicatore mostra un nome
+  vecchio ma non i nuovi, e il pulsante «elimina un setup salvato» non fa niente. Da misurare.
 - 2026-11-18 - Claude - **v2.2.72: un evento di MT5 si annuncia una volta sola, e non dipende piu'
   da chi sa di chi.** Chiude il doppio suono alla chiusura con le finestre duplicate (aperto dal
   16 novembre) **e** il rosso del collaudo su GitHub.
