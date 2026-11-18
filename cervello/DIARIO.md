@@ -1,3 +1,38 @@
+- 2026-11-18 - Claude - **v2.2.68: il magazzino delle candele segue la watchlist, e lo storico del
+  book si scrive ogni ora.** Due decisioni del proprietario, prese dopo che gli e' stato spiegato
+  cosa c'era in casa e chi l'aveva deciso.
+  **(1) IL TETTO DELLE CANDELE E' LA WATCHLIST, NON UN NUMERO.** Parole sue: «questo lo voglio
+  implementare solo per gli asset messi nella watchlist e non per 12 asset». Prima
+  `FBL_CANDLE_CACHE_MAX=12` teneva le ultime dodici voci asset+timeframe usate, chiunque fossero:
+  dodici asset di passaggio bastavano a far buttare le candele dei suoi, e gli stessi dodici
+  restavano a occupare spazio. Ora restano le voci degli asset con la stellina (`favoriteAssets`,
+  dieci al massimo) PIU' quelle dell'asset che si sta guardando adesso - senza quest'ultimo,
+  aprire un asset fuori watchlist vorrebbe dire riscaricarne tutto lo storico a ogni sguardo,
+  cioe' l'opposto del motivo per cui il magazzino esiste. Il resto si lascia andare: sono candele,
+  si riscaricano dal ponte. Banco `magazzino_candele_watchlist` (4 prove: 3 rosse prima, 1 di
+  controllo verde anche prima).
+  **(2) LO STORICO DEL BOOK OGNI ORA.** Parole sue: «mettiamo ogni ora». Prima lo storico poco
+  profondo si riscriveva nello stesso giro debounced a 800 ms dello stato leggero - a mercato vivo
+  ogni pochi secondi, riscrivendo OGNI VOLTA tutto il log di tutti gli asset; quello profondo
+  (Binance) una volta al minuto. Ora al massimo una volta all'ora, e **sempre** quando si esce
+  davvero (pagina che si chiude, uscita dalla sessione): senza quel `forza`, la cura si sarebbe
+  mangiata fino a un'ora di storico a ogni chiusura. Se la scrittura fallisce, l'orologio torna
+  dov'era e si riprova al giro dopo invece di aspettare un'altra ora. Banco
+  `book_salvato_ogni_ora` (4 prove; controverifica con `git stash`: senza la cura la prova
+  principale torna rossa).
+  **LA MISURA DI COSA OCCUPA DAVVERO LO SPAZIO** (chiesta dal proprietario, fatta sui file del suo
+  profilo, letti e non toccati): dei 854 MB di IndexedDB sotto `http_127.0.0.1_8000`, **799 MB sono
+  file blob**, 4.779 file, mentre nel registro esistono solo **339 chiavi distinte** - di cui
+  **243 blocchi di tick del footprint** (`ftick:`), 15 giorni di archivio footprint (`fpArc:`), 9
+  voci del magazzino candele, e **zero `csvCache:`**. Quindi la copia dei CSV, che era il mio
+  sospetto principale, non c'entra niente. Il sospetto vero e' un altro: i tetti del footprint (3
+  giorni, 150.000 tick per asset) implicano al massimo 7-8 blocchi per asset, ma su disco ce ne
+  sono 243 e la numerazione di EURUSD ha passato il migliaio. `st.daCancellare` vive **solo in
+  memoria**: l'indice salvato contiene `base` e `len`, non l'elenco dei blocchi buttati - quindi
+  un blocco tagliato e poi una chiusura prima del salvataggio lascia il blocco su disco per
+  sempre, e nessuno lo legge piu'. **Da misurare come prossima cosa** (e da curare con una
+  passata di pulizia all'avvio: i blocchi che l'indice non nomina si cancellano).
+  Versioni alzate in `sw.js`, `FBL_VERSIONE`, `MyAppVersion`.
 - 2026-11-18 - Claude - **v2.2.67: «Modello salvato» si dice solo se e' salvato davvero.**
   SEGNALATO dal proprietario: «quando vado a salvarlo mi dice modello salvato, ma dopo quando vado
   sulla lista dei modelli non e' presente. Quindi dice che lo salva, ma in realta' non lo salva.»

@@ -8109,8 +8109,9 @@ function flushDrawingsOnExit(){
    saveFootprintTicksNow();
    saveFootprintArchivioNow();
    // Stesso identico discorso per il log dello storico order book (heatmap) — vedi
-   // orderBookHistoryDirty/saveOrderBookHistoryNow() più sopra nel file.
-   saveOrderBookHistoryNow();
+   // orderBookHistoryDirty/saveOrderBookHistoryNow() più sopra nel file. Qui si FORZA: la pagina
+   // sta sparendo, e l'ora di attesa non deve mangiarsi lo storico.
+   saveOrderBookHistoryNow(true);
  }catch(e){}
 }
 window.addEventListener('pagehide',flushDrawingsOnExit);
@@ -13833,7 +13834,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.67';
+const FBL_VERSIONE='2.2.68';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -51989,7 +51990,7 @@ function scheduleDepthDraw(){
  if(_depthDrawTimer)return;
  _depthDrawTimer=setTimeout(()=>{ _depthDrawTimer=null; try{ draw(); }catch(e){} },250);
 }
-let orderBookDeepDirty=false, orderBookDeepSavedAt=0;
+var orderBookDeepDirty=false, orderBookDeepSavedAt=0;
 function depthIngest(key,snap,opt){
  opt=opt||{};
  latestOrderBookByAsset[key]=snap; // sempre l'ultimo stato: lo usa il COB
@@ -53854,25 +53855,38 @@ let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha gi�
 // e il caricamento all'avvio (vedi initSession) lo ripristina PRIMA che arrivi il primo snapshot
 // live — da lì in poi connectMt5OrderBook() continua semplicemente ad aggiungere allo stesso log,
 // esattamente come il footprint continua ad aggiungere allo stesso footprintTickLogByAsset.
-let orderBookHistoryDirty=false;
-async function saveOrderBookHistoryNow(){
- // Fonti profonde (Binance, chiavi "bn:"; "ext:" solo in salvataggi vecchi) a parte, al massimo una
- // volta al minuto: sono molto più pesanti del DOM MT5 e riscriverle ogni 800ms bloccherebbe l\'app.
- if(orderBookHistoryDirty){
+var orderBookHistoryDirty=false;
+// OGNI ORA, NON OGNI GIRO (decisione del proprietario, 18 novembre 2026: lo storico del book
+// «mettiamo ogni ora»). Prima lo storico poco profondo si riscriveva nello stesso giro debounced
+// a 800ms dello stato leggero — cioè in pratica ogni pochi secondi a mercato vivo, riscrivendo
+// OGNI VOLTA tutto il log di tutti gli asset; quello profondo (Binance) una volta al minuto. Ora
+// si scrivono al massimo una volta all'ora, e SEMPRE quando si esce davvero (`forza`: pagina che
+// si chiude, uscita dalla sessione), così non si perde un'ora di storico per una chiusura.
+var FBL_BOOK_SALVA_OGNI_MS=3600000;
+var orderBookSalvatoAt=0;
+async function saveOrderBookHistoryNow(forza){
+ const ora=Date.now();
+ const tocca=(ultimo)=>(forza===true || ora-ultimo>=FBL_BOOK_SALVA_OGNI_MS);
+ if(orderBookHistoryDirty && tocca(orderBookSalvatoAt)){
+   const prima=orderBookSalvatoAt;
+   orderBookSalvatoAt=ora;
    orderBookHistoryDirty=false;
    const shallow={};
    for(const k in orderBookHistoryByAsset)if(!isDeepDepthKey(k)&&!/^reg:/.test(k))shallow[k]=orderBookHistoryByAsset[k];   // reg: = dal file unico, gia' sul disco
    const ok=await idbPut('orderBookHistory',shallow);
-   if(!ok)orderBookHistoryDirty=true; // scrittura fallita: riprova al prossimo giro invece di perdere il flag
+   // scrittura fallita: si riprova al prossimo giro (orologio rimesso dov'era), invece di perdere
+   // il flag o di aspettare un'altra ora per riprovare.
+   if(!ok){ orderBookHistoryDirty=true; orderBookSalvatoAt=prima; }
  }
- if((orderBookDeepDirty||providerSvpDirty)&&Date.now()-orderBookDeepSavedAt>60000){
-   orderBookDeepSavedAt=Date.now();
+ if((orderBookDeepDirty||providerSvpDirty) && tocca(orderBookDeepSavedAt)){
+   const prima=orderBookDeepSavedAt;
+   orderBookDeepSavedAt=ora;
    orderBookDeepDirty=false; providerSvpDirty=false;
    const deep={};
    for(const k in orderBookHistoryByAsset)if(isDeepDepthKey(k))deep[k]=orderBookHistoryByAsset[k];
    const ok1=await idbPut('orderBookHistoryDeep',deep);
    const ok2=await idbPut('providerSvp',providerSvpByKey);
-   if(!ok1||!ok2)orderBookDeepDirty=true;
+   if(!ok1||!ok2){ orderBookDeepDirty=true; orderBookDeepSavedAt=prima; }
  }
 }
 // HEATMAP DI LIQUIDITÀ — CACHE A BUCKET PER CANDELA (richiesto esplicitamente: "lasciata come
@@ -55374,7 +55388,30 @@ async function fblCsvCacheLeggi(asset){ try{ return await idbGet(FBL_CSV_CACHE+a
 // Magazzino in IndexedDB, una voce per asset + timeframe. Colonne in array tipizzati
 // (IndexedDB li salva e li rilegge senza passare da JSON, ~2.2 MB per asset).
 const FBL_CANDLE_CACHE='candleCache:';
-const FBL_CANDLE_CACHE_MAX=12;   // tetto delle voci usate piu' di recente
+// IL TETTO E' LA WATCHLIST, NON UN NUMERO (decisione del proprietario, 18 novembre 2026:
+// «questo lo voglio implementare solo per gli asset messi nella watchlist e non per 12 asset»).
+// Prima restavano le ultime 12 voci asset+timeframe usate, chiunque fossero: dodici asset di
+// passaggio bastavano a far buttare le candele dei suoi, e gli stessi dodici restavano a
+// occupare spazio. Ora in magazzino restano le voci degli asset con la stellina (favoriteAssets,
+// al massimo dieci) PIU' quelle dell'asset che si sta guardando adesso - senza quest'ultimo,
+// aprire un asset fuori watchlist vorrebbe dire riscaricarne tutto lo storico a ogni sguardo,
+// cioe' l'opposto del motivo per cui il magazzino esiste. Il resto si lascia andare: sono
+// candele, si riscaricano dal ponte.
+function fblCandleCacheAssetDi(key){
+  const s=String(key||'');
+  if(s.indexOf(FBL_CANDLE_CACHE)!==0) return '';
+  const resto=s.slice(FBL_CANDLE_CACHE.length);
+  const i=resto.lastIndexOf('::');
+  return i<0?resto:resto.slice(0,i);
+}
+// Va tenuta? Solo se l'asset e' in watchlist o e' quello appena caricato (`assetOra`).
+function fblCandleCacheDaTenere(key,assetOra){
+  const a=fblCandleCacheAssetDi(key);
+  if(!a) return false;
+  const pari=(x)=>String(x||'').toUpperCase()===a.toUpperCase();
+  if(assetOra && pari(assetOra)) return true;
+  try{ return Array.isArray(favoriteAssets) && favoriteAssets.some(pari); }catch(e){ return false; }
+}
 let fblCandleCacheIndex=[];      // elenco delle chiavi usate, dal piu' recente
 try{ fblCandleCacheIndex=JSON.parse(localStorage.getItem('fblCandleCacheIndex')||'[]')||[]; }catch(e){ fblCandleCacheIndex=[]; }
 function fblCandleCacheKey(asset,tf){ return FBL_CANDLE_CACHE+String(asset)+'::'+String(tf); }
@@ -55424,13 +55461,15 @@ async function fblCandeleCacheScrivi(asset,tf,rows,digits,scarto){
     const scartoOk=(typeof scarto==='number' && Number.isFinite(scarto))?scarto:null;
     const ok=await idbPut(key,{tempo,open,high,low,close,volume,digits:digits||0,ultimoTs,salvatoAt:Date.now(),scarto:scartoOk});
     if(!ok) return false;
-    // indice LRU
+    // indice, e pulizia di cio' che non e' ne' in watchlist ne' l'asset di adesso
     fblCandleCacheIndex=fblCandleCacheIndex.filter(k=>k!==key);
     fblCandleCacheIndex.unshift(key);
-    while(fblCandleCacheIndex.length>FBL_CANDLE_CACHE_MAX){
-      const old=fblCandleCacheIndex.pop();
-      try{ await idbDel(old); }catch(e){}
+    const resta=[];
+    for(const k of fblCandleCacheIndex){
+      if(k===key || fblCandleCacheDaTenere(k,asset)) resta.push(k);
+      else { try{ await idbDel(k); }catch(e){} }
     }
+    fblCandleCacheIndex=resta;
     try{ localStorage.setItem('fblCandleCacheIndex',JSON.stringify(fblCandleCacheIndex)); }catch(e){}
     return true;
   }catch(e){ console.warn('[candele] salvataggio locale fallito:',e); return false; }
@@ -59136,7 +59175,7 @@ async function liveSessionFreezeMt5(ph){
  try{ saveLightStateNow(); }catch(e){}
  try{ saveFootprintTicksNow(); }catch(e){}
  try{ saveFootprintArchivioNow(); }catch(e){}
- try{ saveOrderBookHistoryNow(); }catch(e){}
+ try{ saveOrderBookHistoryNow(true); }catch(e){}
  liveOffSessionSaveRows();
  // 2) MT5 smette di aggiornare (il collegamento al conto resta: posizioni e ordini non si toccano).
  fblNotteMt5=true;
