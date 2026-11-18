@@ -11714,6 +11714,10 @@ function drawingTemplateFromDrawing(d){
    t.levels=JSON.parse(JSON.stringify(d.levels||newFibLevels()));
    t.opts=Object.assign({},d.opts||newFibOpts());
  }
+ // Profili volumetrici e VWAP: le loro opzioni SONO il modello (vedi VP_CAMPI_MODELLO).
+ if(fblClasseModello(d.type)==='vp'){
+   VP_CAMPI_MODELLO.forEach(c=>{ if(d[c]!==undefined)t[c]=d[c]; });
+ }
  // Linea Alarm: cosa la fa scattare e cosa succede dopo fanno parte del modello, non sono stile.
  if(d.type==='alarmline'){
    t.enabled=!!d.enabled; t.armed=!!d.armed; t.soundId=d.soundId||null;
@@ -11794,7 +11798,12 @@ async function saveCurrentDrawingAsTemplate(drawingArg){
  // nome esce dalle memorie, al suo posto finisce il nuovo. Stesso nome, contenuto nuovo: è così
  // che si corregge un refuso di contenuto senza cambiare il nome (regola del proprietario).
  if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome);
- const templates=loadDrawingTemplates();
+ // OGNI CLASSE NEL SUO CASSETTO (18 novembre 2026). Prima tutto finiva nei modelli dei disegni:
+ // un Fibonacci salvato da qui andava nel menu «Modello» mentre il proprietario lo cercava nel
+ // menu «Modello Fib», e per i profili il modello nasceva vuoto. Misurato e segnalato: «per il
+ // fibonacci e il profilo volumetrico ancora non me li salva i modelli».
+ const classe=fblClasseModello(d.type);
+ const templates=(classe==='fib')?loadFibTemplates():(classe==='vp')?loadVpTemplates():loadDrawingTemplates();
  templates[nome]=drawingTemplateFromDrawing(d);
  // «MODELLO SALVATO» SI DICE SOLO SE E' SALVATO DAVVERO (18 novembre 2026).
  //
@@ -11811,12 +11820,21 @@ async function saveCurrentDrawingAsTemplate(drawingArg){
  // Se non e' andata: non si dice che e' andata, non si ridisegna un menu che non e' cambiato, e
  // NON si cancella dalla barra di stato il motivo - che e' l'unica cosa che permette di capire
  // cosa fare.
- if(!saveDrawingTemplates(templates))return false;
+ const scritto=(classe==='fib')?saveFibTemplates(templates)
+              :(classe==='vp')?saveVpTemplates(templates)
+              :saveDrawingTemplates(templates);
+ if(!scritto)return false;
  // IL MENU VA RIDISEGNATO SUBITO. Senza questa riga il modello era in memoria ma non si vedeva
  // fino alla riapertura del menu - ed è esattamente il «me lo fa scrivere ma non me lo salva»
  // segnalato dal proprietario (misurato: il nome era in localStorage, il menu restava vuoto).
  renderDrawTemplateMenu();
- $('status').textContent=`Modello "${nome}" salvato: lo trovi nel menu "Modello ⌄" della toolbar.`;
+ if(classe==='fib')try{ renderFibTemplateMenu(); }catch(e){}
+ if(classe==='vp')try{ renderVpTemplateMenu(); }catch(e){}
+ $('status').textContent=(classe==='fib')
+   ?`Modello Fibonacci "${nome}" salvato: lo trovi nel menu "Modello Fib ⌄".`
+   :(classe==='vp')
+     ?`Modello "${nome}" salvato: lo trovi nelle impostazioni dello strumento, in "Modelli".`
+     :`Modello "${nome}" salvato: lo trovi nel menu "Modello ⌄" della toolbar.`;
  return true;
 }
 function applyDrawingTemplate(name){
@@ -11967,6 +11985,45 @@ let fibDefaultOpts={...FIB_OPTS_DEFAULT};
 function newFibLevels(){ return JSON.parse(JSON.stringify(fibDefaultLevels)); }
 function newFibOpts(){ return {...fibDefaultOpts}; }
 // --- Modelli Fibonacci salvati (localStorage), come i modelli di disegno ma con la propria chiave ---
+// IL TERZO CASSETTO: I MODELLI DEI PROFILI E DEL VWAP (18 novembre 2026).
+//
+// SEGNALATO: «per il fibonacci e il profilo volumetrico ancora non me li salva i modelli».
+// MISURATO: un profilo a intervallo fisso salvava un modello con SOLO colore, spessore e
+// opacita' - niente passo, niente percentili, niente righe, niente POC/VAH/VAL. Un modello
+// vuoto, perche' `drawingTemplateFromDrawing` conosceva solo stile, Fibonacci e linea Alarm.
+//
+// Tre classi stanno qui dentro (`vpfixed`, `vpanchor`, `vwap`) perche' il modello si applica
+// SOLO a uno strumento della stessa classe (il `type` e' salvato nel modello e si controlla
+// prima di applicarlo): un VWAP non puo' prendere i percentili di un profilo.
+const VP_TEMPLATE_STORAGE_KEY='fbtVpTemplates_v1';
+function loadVpTemplates(){
+ try{ const raw=localStorage.getItem(VP_TEMPLATE_STORAGE_KEY); return raw?JSON.parse(raw):{}; }
+ catch(e){ return {}; }
+}
+function saveVpTemplates(templates){
+ try{ localStorage.setItem(VP_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); return true; }
+ catch(e){ fblMemoriaPienaAvvisa('il modello'); return false; }
+}
+// A quale cassetto appartiene uno strumento. Una funzione sola: prima ogni strada decideva da
+// se', ed e' cosi' che un Fibonacci finiva fra i disegni.
+function fblClasseModello(tipo){
+ if(tipo==='fib')return 'fib';
+ if(tipo==='vpfixed'||tipo==='vpanchor'||tipo==='vwap')return 'vp';
+ return 'disegno';
+}
+// I CAMPI CHE FANNO IL MODELLO di un profilo o di un VWAP: elencati uno per uno, come per il
+// Fibonacci e per la linea Alarm. Elencati e non copiati in blocco perche' un modello non deve
+// portarsi dietro DOVE era quel disegno (x1/y1/x2/y2, ancora, tempi): quello appartiene al
+// disegno, non al modello - altrimenti applicare un modello sposterebbe lo strumento.
+const VP_CAMPI_MODELLO=['upColor','downColor','buckets','barSizePct','extendRight',
+ 'bgEnabled','bgColor','bgOpacity',
+ 'lvnEnabled','lvnColor','lvnOpacity','lvnThresholdPct','lvnEdgePct',
+ 'pocEnabled','pocColor','pocWidth','pocExtend',
+ 'vahEnabled','vahColor','vahWidth','valEnabled','valColor','valWidth','vaExtend',
+ 'tfAnchor','vpTfAnchor','vaPct','rowSize','rowMode',
+ 'band1Enabled','band1Mult','band1Color','band1Width',
+ 'band2Enabled','band2Mult','band2Color','band2Width',
+ 'band3Enabled','band3Mult','band3Color','band3Width'];
 const FIB_TEMPLATE_STORAGE_KEY='fbtFibTemplates_v1';
 function loadFibTemplates(){
  try{ const raw=localStorage.getItem(FIB_TEMPLATE_STORAGE_KEY); return raw?JSON.parse(raw):{}; }
@@ -22741,9 +22798,13 @@ function loadIndicatorPresets(key){
    return raw?JSON.parse(raw):{};
  }catch(e){ return {}; }
 }
+// «SETUP SALVATO» SI DICE SOLO SE E' SALVATO DAVVERO (18 novembre 2026).
+// Stessa cura gia' fatta la mattina per i modelli dei disegni e del Fibonacci: questa strada era
+// rimasta indietro. La funzione non rispondeva niente, quindi chi la chiama diceva «salvato»
+// anche quando la memoria rifiutava - e il messaggio dell'errore veniva subito sovrascritto.
 function saveIndicatorPresets(key,presets){
- try{ localStorage.setItem(PRESET_STORAGE_PREFIX+key,JSON.stringify(presets)); }
- catch(e){ $('status').textContent='Impossibile salvare il setup: memoria del browser non disponibile.'; }
+ try{ localStorage.setItem(PRESET_STORAGE_PREFIX+key,JSON.stringify(presets)); return true; }
+ catch(e){ try{ fblMemoriaPienaAvvisa('il setup'); }catch(e2){ $('status').textContent='Impossibile salvare il setup: memoria del browser piena.'; } return false; }
 }
 async function savePresetForIndicator(ind){
  const def=INDICATOR_DEFS[ind.key]; if(!def)return;
@@ -22751,9 +22812,12 @@ async function savePresetForIndicator(ind){
  if(!name)return;
  const presets=loadIndicatorPresets(ind.key);
  presets[name.trim()]=JSON.parse(JSON.stringify(ind.params));
- saveIndicatorPresets(ind.key,presets);
+ // Se la memoria rifiuta non si dice che e' andata, e NON si cancella dalla barra di stato il
+ // motivo: e' l'unica cosa che permette di capire cosa fare.
+ if(!saveIndicatorPresets(ind.key,presets))return false;
  rebuildIndicatorSettingsModal();
  $('status').textContent=`Setup "${name.trim()}" salvato per ${def.label}.`;
+ return true;
 }
 function applyPresetToIndicator(ind,name){
  if(!name)return;
