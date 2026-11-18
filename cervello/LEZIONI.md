@@ -1783,3 +1783,62 @@ LE DUE REGOLE:
    dipende da Windows: ora il banco finge `os.name = "nt"` e gira su tutti i sistemi, con una
    prova di controllo che si lamenta se il travestimento non prende. Saltarla con uno `skipif`
    avrebbe tolto il rosso e anche il controllo, proprio dove il collaudo gira davvero.
+## Un banco che legge l'orologio del PC non e' un collaudo (18 novembre 2026)
+
+Il collaudo della 2.2.76 e' uscito ROSSO con un solo banco caduto, `tosto_be_posizioni`: il tasto
+BE metteva lo stop a 4046,36 invece del pareggio 4050,76. Lo stesso banco era verde in tutti i
+collaudi precedenti, **con lo stesso codice**. Quello che era cambiato era l'ora: il collaudo e'
+passato per le 21:30-22:00 locali.
+
+MISURATO, non supposto: in quella mezz'ora `fblFinestraChiusura('XAUUSD')` risponde «calda, fase
+chiusura» (il mercato chiude alle 22:00), e allora il pulsante BE fa esattamente il suo mestiere -
+allontana lo stop di uno spread di rollover, 44 pip, cioe' 4,40 su XAUUSD, per non farselo
+prendere al cambio giornata. 4050,76 - 4,40 = 4046,36: il numero del rosso, al centesimo. Lo
+stesso rosso si riproduce a comando fissando l'orologio della pagina (`pagina.clock.setFixedTime`)
+alle 21:40, e sparisce fissandolo alle 15:00.
+
+Quindi **l'app non aveva nessun difetto**. Il difetto era nel banco, che ereditava l'ora invece di
+dichiararla - lo stesso sbaglio del sistema operativo ereditato (vedi la lezione del 15 novembre).
+
+LE DUE REGOLE:
+
+1. **Un banco che tocca un comportamento legato all'orario dichiara l'ora**, come dichiara il
+   sistema operativo. In `tosto_be_posizioni` l'ora e' adesso una scelta esplicita: 'fredda'
+   (15:00, pareggio esatto) o 'calda' (21:40, pareggio meno il margine). Tutti e due i
+   comportamenti sono voluti, e adesso tutti e due hanno il loro test - prima nessuno copriva
+   il caso caldo del pulsante, e cadeva per caso una volta al giorno.
+2. **Prima di toccare l'app, riprodurre il rosso a comando.** Qui bastava fissare l'orologio: se
+   avessi dato per scontato che il BE sbagliasse, avrei «curato» il margine di chiusura, cioe'
+   avrei tolto la protezione proprio nella mezz'ora in cui serve - su soldi veri.
+## Una rete di sicurezza che funziona nasconde il difetto sotto (18 novembre 2026)
+
+Il 18 novembre, alla segnalazione «il grafico si blocca alle 22 mentre MT5 trasmette», era stata
+curata la strada piu' visibile: i tick veri battono l'orologio, quindi la candela prosegue finche'
+i dati arrivano (2.2.70). Giusta, e infatti le candele arrivavano fino alle 22:49.
+
+Ma la domanda vera non era «come faccio a non fermare la candela»: era **a che ora chiude questo
+mercato**. Quella risposta stava in una costante scritta a mano (22:00), giusta solo per un server
+UTC+3. Finche' la rete di sicurezza reggeva, il grafico sembrava a posto e nessuno guardava la
+costante - mentre lo stesso numero sbagliato governava anche la protezione del BE sul cambio
+giornata, dove nessuna rete lo copriva. Il difetto si vedeva solo dove non c'era la toppa.
+
+LA REGOLA: quando una cura fa passare i dati **nonostante** una regola, la regola va misurata, non
+aggirata. E il numero giusto, quasi sempre, qualcuno lo sta gia' dichiarando: qui il servizio dati
+mandava `utc_offset_seconds_applied` in ogni risposta dello storico, e l'app lo buttava via dopo
+averlo usato per i timbri delle candele.
+## Due rossi uguali in due giri diversi non sono rumore (19 novembre 2026)
+
+Un giro di collaudo aveva dato due rossi mentre la macchina era carica, e li avevo messi da parte
+come probabile saturazione - con la riserva, giusta, di riconfermarli a macchina scarica. Il giro
+successivo, pulito, ha dato **gli stessi due**. Non era carico: era un difetto vero, nascosto
+dietro un banco che a quell'ora misurava il vuoto.
+
+LA REGOLA: il carico spiega un rosso che cambia da un giro all'altro. Un rosso che si ripete
+IDENTICO va misurato, non interpretato - e la misura che l'ha chiuso in dieci minuti e' stata
+registrare lo **stack di chi chiamava** la funzione sospetta, invece di ragionare su chi avrebbe
+potuto chiamarla.
+
+E il corollario sui banchi che fissano l'orologio: **fissare l'ora non e' sempre la cura**. Dove la
+prova misura qualcosa che vive nel tempo che passa (un battito, un conto alla rovescia), congelare
+`Date.now()` la fa passare o fallire per il motivo sbagliato. Li' si dichiara lo STATO che conta
+(il mercato aperto o chiuso), non l'ora, e si controlla di esserci davvero prima di misurare.

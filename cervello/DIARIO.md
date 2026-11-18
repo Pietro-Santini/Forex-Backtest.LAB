@@ -7570,3 +7570,80 @@ Ma una finestra che non risponde mentre carica e' normale: il criterio giusto e'
 riprende**. Con il criterio sbagliato uscivano 2 blocchi su 6; con quello giusto (60 secondi di
 campioni, e si guarda la fine) uscivano 3 su 5, e il quadro era molto piu' netto - o tutti `o`
 o tutti `X`, mai una via di mezzo.
+## 18 novembre 2026 (sera) - Il rosso della 2.2.76 non era dell'app: era l'ora
+
+Il collaudo della 2.2.76 (commit `82833f9`) e' finito con `Falliti: 1`. Caduto `app_browser`, un
+solo banco: `tosto_be_posizioni`, il tasto BE delle posizioni MT5. Lo stop finiva a 4046,36 invece
+del pareggio 4050,76.
+
+MISURA (non ipotesi): la differenza, 4,40 esatti, e' il margine di chiusura di XAUUSD (44 pip di
+spread di rollover x 0,1 di pip). Alle 21:30 locali `fblFinestraChiusura('XAUUSD')` e' calda, fase
+«chiusura»: il mercato chiude alle 22:00 e il BE allontana lo stop di uno spread per non farselo
+prendere al cambio giornata. Il collaudo e' passato di li'. Rosso riprodotto a comando fissando
+l'orologio della pagina alle 21:40, verde alle 15:00.
+
+Curato il BANCO, non l'app: l'ora adesso si dichiara ('fredda' o 'calda') e il caso caldo del
+pulsante ha finalmente il suo test - prima non lo copriva nessuno. Banco verde: 3 su 3.
+
+Controllati gli altri banchi che premono il BE (`be_decide_utente`, `break_even_generale`,
+`pannello_schermo_intero`, `rollover_spread`): lavorano su posizioni senza `mt5Ticket`, e
+`fblPareggioPerStop` esce subito per quelle. Nessun altro era esposto.
+## 18 novembre 2026 (notte) - v2.2.77: l'ora di chiusura la dice il broker, non una costante
+
+SEGNALATO dal proprietario, con la foto del grafico XAU/USD: «non mi fa vedere le candele
+successive dopo le 22 perche' in realta' MT5 trasmette le candele fino a una certa ora mentre il
+nostro programma pensa che alle 22 e' chiuso».
+
+MISURA (sui suoi servizi vivi, non su ipotesi):
+- `GET 127.0.0.1:8001/history?symbol=XAUUSD` dichiara `utc_offset_seconds_applied: 7200`. Il
+  server del suo broker (FTMO-Demo) e' **UTC+2**, non UTC+3;
+- l'ultima candela M1 servita era delle **22:49 locali** (21:49 UTC) e alle 23:06 non ne
+  arrivavano piu': il giorno di trading finisce alle 24:00 del server = **23:00 locali**.
+
+`LIVE_MT5_CLOSE_MIN = 22*60` era giusto solo per un server UTC+3 con l'Italia in ora solare: con
+questo broker sbagliava di un'ora tutto l'anno. E non toccava solo il grafico:
+
+1. il grafico dalle 22 proseguiva solo grazie alla cura dei tick della 2.2.70 - una rete di
+   sicurezza che copriva il difetto, non la regola giusta;
+2. l'etichetta rossa «Mercato chiuso» e il conto alla rovescia;
+3. **SOLDI VERI**: la finestra calda del margine di chiusura - il pulsante BE che allontana lo
+   stop di uno spread di rollover, 44 pip su XAUUSD - si accendeva alle 21:30-22:00 e si
+   **spegneva alle 22:30**, cioe' proprio nella mezz'ora vera del cambio giornata, quella da cui
+   deve proteggere.
+
+CURA: la chiusura e' la mezzanotte del server riportata all'ora di Roma. Lo scarto non si
+indovina - lo dichiara il servizio dati in ogni risposta dello storico, e l'app lo ricorda anche
+fra un avvio e l'altro (`fblScartoServerRicorda` / `fblChiusuraMinutiLocali`). Scarto ignoto
+(ponte vecchio): resta il 22:00 di prima, che e' il caso prudente.
+
+Banco: `laboratorio/app/chiusura_ora_del_server.test.mjs`, scritto ROSSO prima della cura, 4 prove
+(UTC+2, prova di controllo UTC+3, scarto ignoto, e la finestra calda del BE). Verde dopo.
+
+TRAPPOLA PAGATA DENTRO LA CURA STESSA: `Number(null)` fa **0**, che e' uno scarto vero (broker su
+Greenwich). Il primo giro della cura trattava «non lo so» come «UTC», e il banco dello scarto
+ignoto e' rimasto rosso finche' il caso non e' stato riconosciuto PRIMA della conversione.
+## 19 novembre 2026 (notte) - v2.2.78: in replay nessuno ridisegna da sotto
+
+Il collaudo della 2.2.77 e' uscito con 2 rossi, tutti e due in `timer_candela_sempre_vivo`. Erano
+gli stessi due di un giro precedente che avevo attribuito alla saturazione: **non era carico**.
+
+MISURA: il collaudo e' girato dopo le 22, e a mercato chiuso il conto alla rovescia della candela
+e' spento di proposito (`showCountdown` guarda `liveSessionPhaseNow()!=='closed'`, «come su MT5»).
+La prova misurava il vuoto: `fmtCandleCountdown` mai chiamata, elenco dei valori `[]`.
+
+Ma la terza prova ha rivelato un difetto VERO. Registrando lo stack di chi chiamava `draw()`:
+a mercato chiuso, **durante un replay**, due giri da un secondo ridisegnavano il grafico -
+4 ridisegni in 3 secondi:
+1. il giro «conto alla rovescia vivo anche a grafico fermo», che non guardava `liveReplayActive`;
+2. `liveSessionFreezeMt5` (chiamata da `liveSessionTick`), che faceva `update(); draw();`.
+
+In replay il disegno lo comanda il replay: un ridisegno di adesso ridipinge lo stato LIVE sopra il
+fotogramma che si sta guardando. E succede **la sera**, cioe' esattamente quando il replay si usa.
+Curati tutti e due; prova di controllo fatta togliendo le guardie (rosso con 4 ridisegni) e
+rimettendole (verde).
+
+BANCO: l'ora non si poteva fissare - congelare l'orologio ferma anche il battito, che chiede «e'
+passato un secondo?», e la prova misurava zero ridisegni per il motivo sbagliato. Quindi qui si
+dichiara il **mercato**, non l'ora: un asset che non chiude mai per il caso aperto, e il
+calendario dello strumento con una fascia che non contiene adesso per il caso chiuso. Ogni prova
+controlla di essere nello stato che dice di misurare prima di misurarlo.

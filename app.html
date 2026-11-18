@@ -13918,7 +13918,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.76';
+const FBL_VERSIONE='2.2.78';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -55371,6 +55371,10 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // Campo assente = ponte vecchio: si tiene null, NON 0 (zero e' uno scarto vero: broker in UTC).
  __timbroScarto=(typeof body.utc_offset_seconds_applied==='number' && Number.isFinite(body.utc_offset_seconds_applied))
    ? body.utc_offset_seconds_applied : null;
+ // Lo stesso numero serve a sapere QUANDO CHIUDE il mercato (vedi fblChiusuraMinutiLocali): la
+ // mezzanotte del server, non un orario scritto a mano. Si ricorda solo quando il ponte lo
+ // dichiara davvero; un ponte vecchio (campo assente) lascia in piedi l'ultimo scarto conosciuto.
+ try{ if(__timbroScarto!==null)fblScartoServerRicorda(__timbroScarto); }catch(e){}
  // SEGNALATO DAL PROPRIETARIO: «cambiando asset restano TUTTI E DUE i grafici [...] vedremo delle
  // candele di un asset e delle candele di un altro. No, dobbiamo fare in modo che quando passa
  // smette di visualizzare l'asset precedente e carica quello che l'utente ha selezionato
@@ -59352,6 +59356,66 @@ function stopMt5RefreshTimer(){
 //  - 00:00 → riapertura automatica con MT5.
 // Le crypto (24/7) sono escluse, così come la modalità senza MT5 (solo Capital.com).
 const LIVE_MT5_CLOSE_MIN=22*60, LIVE_CAPITAL_UNTIL_MIN=23*60;
+// L'ORA DI CHIUSURA LA DICE IL SERVER DEL BROKER, NON UNA COSTANTE (18 novembre 2026).
+//
+// SEGNALATO dal proprietario con la foto del grafico XAU/USD: «non mi fa vedere le candele
+// successive dopo le 22 perche' in realta' MT5 trasmette le candele fino a una certa ora mentre
+// il nostro programma pensa che alle 22 e' chiuso».
+//
+// MISURATO sui suoi servizi vivi, lo stesso giorno:
+//   - GET 127.0.0.1:8001/history?symbol=XAUUSD dichiara "utc_offset_seconds_applied": 7200.
+//     Il server del suo broker (FTMO-Demo) e' UTC+2, non UTC+3;
+//   - l'ultima candela M1 servita era delle 22:49 LOCALI, e alle 23:06 non ne arrivavano piu':
+//     il giorno di trading finisce alle 24:00 del server, cioe' alle 23:00 locali.
+//
+// `LIVE_MT5_CLOSE_MIN = 22*60` era giusto solo per un server UTC+3 con l'Italia in ora solare.
+// Con questo broker sbagliava di un'ora TUTTO L'ANNO, e non toccava solo il grafico: la finestra
+// calda del margine di chiusura (il pulsante BE che allontana lo stop di uno spread di rollover,
+// 44 pip su XAUUSD) si accendeva alle 21:30-22:00 e si SPEGNEVA alle 22:30 - cioe' proprio nella
+// mezz'ora vera del cambio giornata, quella da cui deve proteggere. Soldi veri.
+//
+// La chiusura e' la MEZZANOTTE DEL SERVER riportata all'ora di Roma. Lo scarto non si indovina:
+// lo dichiara il servizio dati in ogni risposta dello storico, e si tiene da parte (anche fra un
+// avvio e l'altro) perche' serve prima che lo storico sia stato riscaricato.
+// Scarto ignoto = nessuna invenzione: resta il 22:00 di prima, che e' il caso prudente (al
+// massimo il grafico resta fermo un'ora di troppo, mai candele finte a mercato chiuso).
+const FBL_SCARTO_SERVER_KEY='fbl_scarto_server_sec';
+let fblScartoServerSec=null;
+try{ const __v=localStorage.getItem(FBL_SCARTO_SERVER_KEY); if(__v!==null&&__v!==''&&Number.isFinite(Number(__v)))fblScartoServerSec=Number(__v); }catch(e){}
+function fblScartoServerRicorda(sec){
+ // ATTENZIONE A `Number(null)`, che fa 0 - cioe' uno scarto VERO (broker in UTC). Il «non lo so»
+ // si riconosce PRIMA di convertire: dimenticare lo scarto non puo' equivalere a dichiarare che
+ // il broker sta su Greenwich.
+ if(sec===null||sec===undefined||sec===''){
+  // Esplicitamente «non lo so»: si dimentica anche quello salvato, altrimenti un ponte vecchio
+  // continuerebbe a lavorare con lo scarto di un collegamento precedente.
+  fblScartoServerSec=null;
+  try{ localStorage.removeItem(FBL_SCARTO_SERVER_KEY); }catch(e){}
+  try{ liveSessionPhase=null; }catch(e){}
+  return;
+ }
+ const n=Number(sec);
+ if(!Number.isFinite(n))return;
+ if(fblScartoServerSec===n)return;
+ fblScartoServerSec=n;
+ try{ localStorage.setItem(FBL_SCARTO_SERVER_KEY,String(n)); }catch(e){}
+ try{ liveSessionPhase=null; }catch(e){}   // la fascia oraria si rivaluta subito, non al prossimo giro
+}
+// I minuti dentro il giorno di Roma in cui finisce il giorno di trading del broker.
+function fblChiusuraMinutiLocali(t){
+ try{
+  if(!Number.isFinite(fblScartoServerSec))return LIVE_MT5_CLOSE_MIN;
+  const quando=Number.isFinite(t)?t:Date.now();
+  const scartoRomaMin=Math.round(romeOffsetMs(quando)/60000);
+  const scartoServerMin=Math.round(fblScartoServerSec/60);
+  // 24:00 del server, visto dall'orologio di Roma.
+  let min=1440-(scartoServerMin-scartoRomaMin);
+  min=((min%1440)+1440)%1440;
+  // Una chiusura a mezzanotte di Roma (server nello stesso fuso) vorrebbe dire «non chiude mai»
+  // dentro il giorno: li' resta la soglia conosciuta, invece di lasciare la candela libera.
+  return (min===0)?LIVE_MT5_CLOSE_MIN:min;
+ }catch(e){ return LIVE_MT5_CLOSE_MIN; }
+}
 const OFFSESSION_ROWS_KEY='fxbt_offsession_rows_v1';
 // DI CHI E' IL FILE CHE STA DISEGNANDO IL GRAFICO, ADESSO.
 // Il nome asset non distingue niente: MT5 e Capital.com quotano lo stesso oro con lo stesso
@@ -59465,7 +59529,7 @@ function liveSessionPhaseAt(t){
  const dm=romeDayAndMinute(t);
  const wd=((dm.day+4)%7+7)%7; // 0=domenica … 6=sabato
  if(wd===6||wd===0)return 'closed';
- if(dm.min<LIVE_MT5_CLOSE_MIN)return 'mt5';
+ if(dm.min<fblChiusuraMinutiLocali(t))return 'mt5';
  if(dm.min<LIVE_CAPITAL_UNTIL_MIN)return 'closed'; // Capital.com NON prosegue piu' il grafico: a mercato chiuso si ferma, riprende alla riapertura
  return 'closed';
 }
@@ -60152,6 +60216,13 @@ function disegnaModalitaBacktest(ctx,w,h,pad){
 setInterval(()=>{
  try{
    if(!liveModeActive||!currentAssetKey)return;
+   // IN REPLAY IL DISEGNO LO COMANDA IL REPLAY (19 novembre 2026).
+   // Misurato con lo stack di chi chiamava draw(): a mercato chiuso questo giro ridisegnava
+   // anche durante un replay - 4 ridisegni in 3 secondi - e un ridisegno fuori dal replay
+   // ridipinge lo stato LIVE sopra il fotogramma che il replay sta mostrando. E' la sera, cioe'
+   // esattamente quando il replay si usa. Il battito del conto alla rovescia (fblAvviaBattito-
+   // Disegno) questa guardia ce l'aveva gia': qui mancava.
+   if(liveReplayActive)return;
    orariAggiorna(currentAssetKey);
    const st=statoMercato(currentAssetKey,Date.now());
    if(st&&st.chiuso)draw();
@@ -60258,7 +60329,11 @@ try{ await refreshLiveStreamSubscriptions(); }catch(e){}
   lastSeenCandleBucketStart=null;
   $('status').textContent='🌙 Mercato chiuso: grafico salvato e fermo. Si ricollega da solo a MT5 alla riapertura (00:00).';
 }
- try{ update(); draw(); }catch(e){}
+ // Stessa regola del giro qui sopra: i pannelli si aggiornano sempre, il GRAFICO no se c'e' un
+ // replay in corso - li' comanda il replay, e un ridisegno di adesso cancellerebbe il fotogramma
+ // che il proprietario sta guardando (misurato: liveSessionFreezeMt5 chiamata da liveSessionTick
+ // disegnava anche in replay).
+ try{ update(); if(!liveReplayActive)draw(); }catch(e){}
 }
 // RIAPERTURA (00:00): conto MT5 ricollegato se nella notte si e' perso, storico ricaricato, timer
 // e canali prezzi/book riaccesi. Prima si ricaricava solo lo storico: timer e canale tick spenti

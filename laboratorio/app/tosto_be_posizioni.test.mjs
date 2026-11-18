@@ -98,9 +98,29 @@ async function ponteFinto(pagina, {ponteRisponde, registro}) {
   });
 }
 
-async function apriECollega({ponteRisponde = true} = {}) {
+// L'ORA DEL BANCO E' DICHIARATA, NON EREDITATA (18 novembre 2026).
+//
+// Questo banco e' stato ROSSO nel collaudo della 2.2.76 con uno stop a 4046,36 invece del
+// pareggio 4050,76 - e verde in tutti i collaudi precedenti, con lo STESSO codice. Misurato
+// (non supposto): alle 21:30 locali `fblFinestraChiusura('XAUUSD')` risponde calda, fase
+// 'chiusura' (il mercato chiude alle 22:00), e allora il pulsante BE fa quello che deve:
+// allontana lo stop di uno spread di rollover - 44 pip, cioe' 4,40 su XAUUSD - per non farselo
+// prendere al cambio giornata. 4050,76 - 4,40 = 4046,36, il numero esatto del rosso. Riprodotto
+// a comando fissando l'orologio della pagina alle 21:40.
+//
+// Quindi non era un difetto dell'app: era il banco che leggeva l'orologio del PC. Un collaudo che
+// dipende da che ora lo lanci non e' un collaudo, e' un'opinione (stessa ragione per cui il
+// sistema operativo si dichiara, vedi aiuti.mjs). Da qui in avanti l'ora si dichiara:
+//   - 'fredda' (15:00): mercato aperto e lontano dalla chiusura -> il BE mette il pareggio esatto;
+//   - 'calda'  (21:40): mezz'ora alla chiusura -> il BE mette il pareggio MENO il margine.
+// Tutti e due i comportamenti sono voluti, e adesso tutti e due hanno il loro test.
+const ORE = {fredda: [15, 0], calda: [21, 40]};
+
+async function apriECollega({ponteRisponde = true, ora = 'fredda'} = {}) {
   const registro = {letture: [], scritture: []};
   const {browser, pagina, errori} = await apriApp({larghezza: 1400, altezza: 1900});
+  const quando = new Date(); quando.setHours(ORE[ora][0], ORE[ora][1], 0, 0);
+  await pagina.clock.setFixedTime(quando);
   await ponteFinto(pagina, {ponteRisponde, registro});
   await pagina.evaluate(([p, ok]) => { eval('(' + p + ')')(ok === 'true'); },
                         [PREPARA.toString(), ponteRisponde ? 'true' : 'false']);
@@ -125,6 +145,31 @@ test('col ponte che risponde, il tasto BE parte e riesce: una chiamata, uno stop
     const chiamate = registro.scritture.filter(x => x.indexOf('/order/modify') >= 0);
     assert.equal(chiamate.length, 1, 'premendo BE deve partire ESATTAMENTE una chiamata a /order/modify: partite ' + chiamate.length);
     assert.deepEqual(dopo.sl, [dopo.pareggio], 'lo stop deve finire sul pareggio della posizione');    assert.match(dopo.stato, /pareggio/i, 'la barra di stato deve dire che ci è arrivata: ' + dopo.stato);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('mezz\'ora alla chiusura, il BE non mette lo stop sul pareggio nudo: lo allontana di uno spread', async () => {
+  // Il caso che ha fatto il rosso della 2.2.76, adesso voluto e misurato. Nella finestra calda
+  // uno stop sul pareggio esatto verrebbe preso dall'allargamento del cambio giornata (il fatto
+  // da cui nasce tutto: due SELL EURCHF prese alle 00:00:42 con lo spread a 50 pip). Lo stop
+  // dev'essere il pareggio MENO la forbice del rollover, e la barra lo deve dire.
+  const {browser, pagina, errori, registro} = await apriECollega({ponteRisponde: true, ora: 'calda'});
+  try {
+    await pagina.waitForTimeout(1200);
+    registro.scritture.length = 0;
+    await pagina.evaluate(() => document.querySelector('#mt5OpenPositions [data-mt5-be]').click());
+    await pagina.waitForTimeout(1200);
+    const dopo = await pagina.evaluate(() => ({stato: document.getElementById('status').textContent,
+                                               sl: positions.map(p => p.sl),
+                                               scelta: fblPareggioPerStop(positions[0], Date.now()),
+                                               pareggio: mt5PrezzoPareggio(positions[0])}));
+    assert.equal(dopo.scelta.fase, 'chiusura', 'con l\'orologio alle 21:40 la finestra deve essere calda');
+    assert.ok(dopo.scelta.margine > 0, 'il margine di chiusura deve esserci: ' + dopo.scelta.margine);
+    assert.deepEqual(dopo.sl, [dopo.scelta.prezzo],
+      'lo stop deve finire sul pareggio MENO il margine (' + dopo.scelta.prezzo + '), non sul pareggio nudo (' + dopo.pareggio + ')');
+    assert.ok(dopo.sl[0] < dopo.pareggio, 'un acquisto: lo stop col margine sta SOTTO il pareggio');
+    assert.match(dopo.stato, /margine di chiusura/i, 'la barra deve dire perche non e il pareggio nudo: ' + dopo.stato);
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
