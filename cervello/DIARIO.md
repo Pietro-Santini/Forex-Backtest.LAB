@@ -7792,3 +7792,35 @@ lascia processi vivi. Adesso il passo dei banchi browser ha un tetto di 45 minut
 (`timeout --kill-after=30`, variabile `TETTO_BROWSER`): se lo supera CADE e si vede nel
 risultato. Il tetto e' il triplo abbondante del giro normale (~11 minuti), quindi non puo'
 scattare per lentezza - solo per un blocco vero. Provato che scatta davvero (uscita 124).
+## 19 novembre 2026 - v2.2.82: il break-even delle sale torna a scattare (tre difetti, tutti sui soldi veri)
+
+SEGNALATO dal proprietario: «dico al secondo take profit mi devi spostare le posizioni a break
+even... non me lo fa piu', non mi sposta piu' le posizioni a break even in maniera automatica».
+
+MISURATO facendo girare la strategia vera su una scena con posizioni REALI MT5 di un simbolo
+diverso da quello a grafico - che e' il suo caso. Tre difetti, non uno:
+
+**1. La strategia era ostaggio dell'asset a grafico.** `tgStrategiaValuta()` veniva chiamata solo
+da dentro `evaluate()`, DOPO due uscite anticipate che coi segnali non c'entrano niente: se
+un'altra finestra duplicata «possiede» l'asset a grafico, e se lo storico dell'asset a grafico
+non e' ancora stato scansionato (normale dopo un cambio asset o una riapertura). Misurato: con la
+scansione non fatta, lo stop non si muoveva e la regola non risultava nemmeno valutata. Ma quelle
+guardie proteggono la chiusura SL/TP delle posizioni SIMULATE dell'asset a grafico, mentre la
+strategia governa posizioni di altri simboli e posizioni reali. Adesso si valuta sempre, in cima,
+come le linee Alarm.
+
+**2. Il break-even in pip stava annidato dentro il pareggio anticipato.** Sotto
+`if(st.avvicinamento && !st.avvicinamento.fatto && st.tps.length)`: chi accendeva solo il
+break-even in pip non lo vedeva scattare mai, e chi li accendeva tutti e due lo perdeva appena il
+primo risultava «fatto». Misurato: `bePip.fatto` restava false e lo stop fermo. Sono due regole
+indipendenti, e adesso stanno una accanto all'altra.
+
+**3. Una regola rifiutata restava «fatta» per sempre.** Il numero del target finiva in `st.fatte`
+anche quando non si era spostata NESSUNA posizione (stop dentro la forbice, prezzo gia' oltre il
+pareggio in quell'istante, fotografia del conto non ancora arrivata). Al giro dopo veniva
+saltata, e quello spostamento non avveniva mai piu'. Adesso un rifiuto e' un rinvio: si riprova.
+
+BANCO: `strategia_sala_be.test.mjs`, 4 prove. La quarta, alla prima scrittura, PASSAVA ANCHE COL
+DIFETTO RIMESSO: la scena non faceva nemmeno toccare il target, e poi il filtro della forbice
+leggeva il prezzo da `livePriceByAsset`, che non avevo aggiornato. Riscritta finche' la prova di
+controllo non ha fatto quello che doveva: rossa col difetto, verde con la cura.

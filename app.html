@@ -14019,7 +14019,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.81';
+const FBL_VERSIONE='2.2.82';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -31875,6 +31875,21 @@ function evaluate(){
  // questa funzione, che sotto esce subito se non c'è nulla da controllare per SL/TP) — vedi
  // checkAlarmLines() più sopra.
  checkAlarmLines();
+ // LA STRATEGIA DELLE SALE SI VALUTA SEMPRE, COME LE LINEE ALARM (19 novembre 2026).
+ //
+ // SEGNALATO dal proprietario: «dico "al secondo take profit mi devi spostare le posizioni a
+ // break even"... non me lo fa piu'». MISURATO: `tgStrategiaValuta()` veniva chiamata solo piu'
+ // in basso, DOPO due uscite anticipate che non hanno niente a che fare con i segnali — se
+ // un'altra finestra duplicata «possiede» l'asset a grafico, e se lo storico dell'asset a
+ // grafico non e' ancora stato scansionato (cosa normale subito dopo un cambio asset o una
+ // riapertura). Nella misura, con la scansione non fatta, lo stop non si muoveva e la regola
+ // non risultava nemmeno valutata.
+ //
+ // Ma quelle due guardie proteggono la chiusura SL/TP delle posizioni SIMULATE dell'asset a
+ // grafico. La strategia di una sala e' un'altra cosa: governa posizioni di ALTRI simboli e
+ // posizioni REALI MT5, che questa funzione non chiude mai. Non ha motivo di dipendere da cosa
+ // sta guardando il grafico in quel momento — esattamente come le linee Alarm qui sopra.
+ try{ tgStrategiaValuta(); }catch(e){}
  // Finestre PIP multiple (vedi PIP_SLOT più sopra nel file): se un'altra finestra con slot PIÙ
  // BASSO sta mostrando ADESSO questo stesso asset, la chiusura automatica SL/TP per quell'asset
  // spetta SOLO a lei (criterio deterministico, evita di chiudere la stessa posizione due volte
@@ -31888,7 +31903,7 @@ function evaluate(){
  // posizione: vale quindi anche per i gruppi fatti solo di posizioni reali MT5, che questa
  // funzione per il resto non tocca (le chiude il broker).
  const ownPositions=positions.filter(belongsToCurrentAsset).filter(p=>p.mt5Ticket==null);
- if(!ownPositions.length){ try{ tgStrategiaValuta(); }catch(e){} return; }
+ if(!ownPositions.length)return;   // la strategia delle sale e' gia' stata valutata in cima
  // REPLAY IN LIVE: in Live la valutazione SL/TP resta di norma agganciata all'ultima candela VERA
  // (il "presente"), non al punto di replay. Così, mentre si rivede il passato, le posizioni
  // simulate e gli ordini pendenti continuano a essere gestiti in tempo reale in background
@@ -41734,11 +41749,19 @@ function tgStrategiaValuta(){
      }
     }
    }
-   // BREAK-EVEN IN PIP: la distanza dall'ingresso la conti in pip, non in percentuale verso un
-   // target. Scatta quindi anche senza take profit: conta solo che il prezzo si sia allontanato
-   // abbastanza a favore. Il pareggio e' quello di OGNI posizione (prezzo di esecuzione vero piu'
-   // i costi), sempre con tgStopMigliore a fare da filtro: uno stop gia' piu' avanti non torna
-   // indietro, e uno stop "troppo vicino" al prezzo non si mette.
+   }
+  // BREAK-EVEN IN PIP: la distanza dall'ingresso la conti in pip, non in percentuale verso un
+  // target. Scatta quindi anche senza take profit: conta solo che il prezzo si sia allontanato
+  // abbastanza a favore. Il pareggio e' quello di OGNI posizione (prezzo di esecuzione vero piu'
+  // i costi), sempre con tgStopMigliore a fare da filtro: uno stop gia' piu' avanti non torna
+  // indietro, e uno stop "troppo vicino" al prezzo non si mette.
+  //
+  // STAVA DENTRO IL BLOCCO DEL PAREGGIO ANTICIPATO (19 novembre 2026), cioe' sotto un
+  // `if(st.avvicinamento && !st.avvicinamento.fatto && st.tps.length)`: chi accendeva SOLO il
+  // break-even in pip non lo vedeva scattare mai, e chi li accendeva tutti e due lo perdeva
+  // appena il primo risultava «fatto». Misurato: `bePip.fatto` restava false e lo stop fermo.
+  // Sono due regole indipendenti, e adesso stanno una accanto all'altra.
+  {
    if(st.bePip&&!st.bePip.fatto&&st.entry){
     const pipPx=st.sym===currentAssetKey?pipSize():pipSizeForAsset(st.sym);
     if(Number.isFinite(pipPx)&&pipPx>0){
@@ -41799,8 +41822,18 @@ function tgStrategiaValuta(){
     if(pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
     spostate++;
    });
-   (st.fatte=st.fatte||[]).push(reg.quando);
-   cambiato=true;
+   // SI SEGNA «FATTA» SOLO SE HA SPOSTATO DAVVERO QUALCOSA (19 novembre 2026).
+   //
+   // Prima il numero del target finiva qui dentro anche quando non si era mossa NESSUNA
+   // posizione - stop dentro la forbice, prezzo gia' oltre il pareggio in quell'istante,
+   // pareggio non calcolabile perche' la fotografia del conto non era ancora arrivata. Al giro
+   // dopo la regola veniva saltata, e quello spostamento non avveniva mai piu': l'utente vedeva
+   // semplicemente che «il break even non parte». Adesso un rifiuto e' solo un rinvio: al giro
+   // successivo, quando le condizioni tornano buone, ci riprova da solo.
+   if(spostate){
+    (st.fatte=st.fatte||[]).push(reg.quando);
+    cambiato=true;
+   }
    if(spostate){
     $('status').textContent='🛡️ Strategia del segnale di '+String(st.sala||'')+': raggiunto il take profit n. '
      +reg.quando+', stop portato a '+(reg.dove==='entrata'?'pareggio (profitto netto 0,00)':tgFmt(nuovo))+' su '+spostate+(spostate===1?' posizione':' posizioni')+'.';
