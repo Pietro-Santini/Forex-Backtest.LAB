@@ -143,9 +143,19 @@ test('una data rotta viene ancora intercettata, anche se si convalida solo la co
   } finally { await browser.close(); }
 });
 
-// LA GUARDIA CONTRO IL RITORNO DEL DIFETTO, scritta in modo che non dipenda dalla macchina: si
-// misura il costo di un prezzo ADESSO e quello del comportamento di PRIMA (riaggregare tutto e
-// rileggere tutte le date) nello stesso giro, e si confronta il rapporto.
+// LA GUARDIA CONTRO IL RITORNO DEL DIFETTO. Prima misurava il TEMPO: il costo di un prezzo adesso
+// contro il costo del comportamento di prima, nello stesso giro. Era una buona idea e non ha
+// retto: il 19 novembre 2026, sullo stesso commit che altrove passava, il runner di GitHub ha
+// misurato 1,83 ms contro 8,47 ms - 4,6 volte, sotto la soglia di 5 - mentre qui il rapporto sta
+// fra 10 e 20. Il tempo su una macchina condivisa e' rumore: quel banco era verde o rosso per
+// fortuna, e un banco che decide per fortuna non protegge niente.
+//
+// ADESSO MISURA IL LAVORO, che e' la cosa che il difetto faceva davvero: a ogni prezzo di coda la
+// pagina rileggeva tutte le date e riaggregava tutto. Si contano le righe che passano di li'
+// (spie messe sopra `aggregateRows` e `parseDateTime` per un solo prezzo): un numero esatto, che
+// non cambia con la macchina. Misurato su 60.000 candele: un prezzo di coda tocca 5 righe e
+// convalida 10 date; quando invece cambia tutto, ne convalida 60.009 - ed e' la prova di
+// controllo: la rete di sicurezza non e' stata spenta per far tornare il conto.
 //
 // PERCHE' NON SI PRETENDE «COSTO COSTANTE»: resta una parte che cresce con lo storico - tre copie
 // di array per prezzo. Si potevano togliere mutando le cache sul posto, ma `rows` PUO' essere lo
@@ -153,7 +163,7 @@ test('una data rotta viene ancora intercettata, anche se si convalida solo la co
 // dati sotto il grafico mentre disegna. Un guadagno di due volte in cambio di un difetto
 // intermittente e invisibile non e' un affare. Copiare un array e' comunque molto piu' economico
 // che rileggere ogni data: e' la differenza fra 2 ms e 58 ms su 200.000 candele.
-test('un prezzo costa molto meno di quanto costava prima', async () => {
+test('un prezzo di coda rilegge solo la coda, non tutte le date', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate((p) => {
@@ -164,28 +174,40 @@ test('un prezzo costa molto meno di quanto costava prima', async () => {
       fullAggCache.clear(); baseTimesCache = null; baseTimesCacheRef = null; baseRowsCoda = null;
       getFullAgg(5); getBaseTimes();          // la prima volta si paga tutto, ed e' giusto
 
-      // ADESSO: venti prezzi come a mercato aperto.
-      const a = performance.now();
-      for (let k = 0; k < 20; k++) {
-        const u = csvLibrary[0].rows[csvLibrary[0].rows.length - 1];
-        u.close = 100 + k / 100;
-        rebuildBaseRowsFromLibrary(); getFullAgg(5); getBaseTimes();
-      }
-      const adesso = (performance.now() - a) / 20;
+      const veroAgg = aggregateRows, veroParse = parseDateTime;
+      let aggChiamate = 0, aggRighe = 0, parseChiamate = 0;
+      const aggSpia = function (rows, tf) { aggChiamate++; aggRighe += rows.length; return veroAgg(rows, tf); };
+      const parseSpia = function (d) { parseChiamate++; return veroParse(d); };
+      try {
+        aggregateRows = aggSpia;
+        parseDateTime = parseSpia;
 
-      // PRIMA: riaggregare tutto e rileggere tutte le date, che e' cio' che succedeva a ogni
-      // prezzo quando le cache si buttavano.
-      const b = performance.now();
-      for (let k = 0; k < 20; k++) {
-        aggregateRows(baseRows, 5);
-        baseRows.map(x => parseDateTime(x.date));
+        // UN PREZZO CHE CAMBIA SOLO L'ULTIMA CANDELA: e' il caso di mercato aperto.
+        const u = csvLibrary[0].rows[csvLibrary[0].rows.length - 1];
+        u.close = 100.5;
+        rebuildBaseRowsFromLibrary(); getFullAgg(5); getBaseTimes();
+        const coda = {aggChiamate, aggRighe, parseChiamate};
+
+        // CONTROLLO: cambia tutto (un array diverso). Qui la convalida DEVE toccare ogni candela,
+        // altrimenti la guardia passerebbe anche con la rete di sicurezza spenta.
+        aggChiamate = 0; aggRighe = 0; parseChiamate = 0;
+        csvLibrary = [{rows: csvLibrary[0].rows.slice()}];
+        rebuildBaseRowsFromLibrary(); getFullAgg(5); getBaseTimes();
+        return {coda, tutto: {aggChiamate, aggRighe, parseChiamate}, candele: baseRows.length};
+      } finally {
+        aggregateRows = veroAgg;
+        parseDateTime = veroParse;
       }
-      const prima = (performance.now() - b) / 20;
-      return {adesso, prima, volte: prima / Math.max(0.01, adesso)};
     }, PREPARA.toString());
-    assert.ok(r.volte >= 5,
-      'un prezzo deve costare almeno cinque volte meno di prima: adesso ' + r.adesso.toFixed(2)
-      + ' ms, prima ' + r.prima.toFixed(2) + ' ms, cioe\' ' + r.volte.toFixed(1) + ' volte');
+
+    assert.ok(r.coda.aggRighe <= 10,
+      'un prezzo di coda deve riaggregare solo la coda: ha aggregato ' + r.coda.aggRighe + ' righe su ' + r.candele);
+    assert.ok(r.coda.parseChiamate <= 20,
+      'un prezzo di coda deve convalidare solo le date nuove: ne ha convalidate ' + r.coda.parseChiamate
+      + ' su ' + r.candele);
+    assert.ok(r.tutto.parseChiamate >= r.candele * 0.9,
+      'quando cambia tutto la convalida deve tornare su ogni candela (prova di controllo): '
+      + r.tutto.parseChiamate + ' su ' + r.candele);
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
