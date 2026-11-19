@@ -1,3 +1,41 @@
+- 2026-11-19 - Claude - **v2.2.88: i modelli hanno una casa sola, e ogni pannello ha il suo
+  «Predefinito».**
+  SEGNALATO dal proprietario, dopo giorni di tentativi: «ancora il salvataggio dei modelli per il
+  ritracciamento fibonacci non funziona, neanche per i profili volumetrici disegnati a mano, come
+  neanche il VWAP». E poi due richieste precise: «per quanto riguarda la lista dei modelli sulla
+  barra laterale mi deve fare vedere solo i modelli delle linee e rettangoli», e «un pulsante dentro
+  ogni modello e setup, un tasto con scritto "predefinito", cioe' un tasto che ci permette di
+  ritornare alle impostazioni di fabbrica dell'indicatore/disegno ecc.».
+  **MISURATO PRIMA DELLA CURA, con numeri.** (1) Salvando un modello dal pannello del profilo DOPO
+  aver cambiato i campi SENZA premere Ok, il modello si portava dietro i valori di PRIMA: barre
+  24 invece di 99, colore vecchio. Si salvava una cosa e se ne applicava un'altra — «non funziona»
+  era una descrizione esatta, non un'impressione. (2) Il menu laterale leggeva TUTTE E TRE le
+  memorie: comparivano Fibonacci e profili in mezzo alle linee. (3) I modelli salvati nei giorni in
+  cui la strada generica scriveva tutto in `fbtDrawingTemplates_v1` restavano invisibili per
+  sempre: un Fibonacci in quel cassetto non comparira' MAI nel menu «Modello Fib», che legge solo
+  la sua memoria.
+  **LA CURA.** La lettura del pannello e' una sola (`readVpSettingsFromModal`), usata sia da Ok sia
+  da «Salva come modello»: due strade, un'unica verita'. `renderDrawTemplateMenu` filtra su
+  `fblClasseModello(type)==='disegno'`. Una riparazione all'avvio (`fblRiparaCassettiModelli` +
+  `fblFamigliaModello`) riporta a casa i modelli vecchi leggendo la famiglia DAL CONTENUTO — `type`,
+  oppure `levels`/`opts` per il Fibonacci, oppure i campi dei profili — e assegna il `type` che
+  mancava, senza il quale il modello non si applica. Il nome di un modello ora e' unico in tutto il
+  programma, profili compresi: controllo, suggerimento, sovrascrittura ed eliminazione
+  (`nomeModelloGiaUsato`, `nomiModelliGiaUsati`, `eliminaModelloOmonimo`).
+  **«PREDEFINITO» DENTRO I PANNELLI**, non solo nei menu: stile del disegno
+  (`#drawStyleModalDefaultBtn`), profilo/VWAP (`#vpTemplateReset` con `vpDefaultOpzioni` /
+  `vpApplicaPredefiniti`), indicatore (`#indPresetDefaultBtn` con `fblPredefinitoIndicatore` che
+  riparte da `defaultParams()` e riscrive anche gli «ultimi usati», altrimenti togliendo e
+  rimettendo l'indicatore tornava il setup sporco). I due menu che gia' c'erano sono stati
+  rinominati «↺ Predefinito», cosi' la parola e' la stessa ovunque.
+  **IL BANCO NUOVO** (`laboratorio/app/modelli_laterale_e_predefinito.test.mjs`, 10 prove) misura
+  il comportamento, non il testo: il menu laterale non contiene i modelli delle altre famiglie, il
+  modello salvato contiene i valori APPENA SCRITTI nei campi, i modelli vecchi tornano nel cassetto
+  giusto col tipo, e ogni «Predefinito» riporta davvero i valori di fabbrica (confrontati con
+  `defaultParams()` / `vpDefaultOpzioni`). `modelli_ovunque.test.mjs` e' stato riscritto alla
+  nuova regola: ogni modello nel menu della propria famiglia. 41/41 verdi sui banchi vicini,
+  collaudo locale completo verde (1764 app + 410 ponte, 0 falliti).
+  Versione alzata nei tre punti (`sw.js`, `FBL_VERSIONE`, `MyAppVersion`).
 - 2026-11-18 - Claude - **v2.2.76: nessun indicatore puo' piu' disegnare sotto la scala dei
   prezzi. Due difese, non una.**
   SEGNALATO dal proprietario con foto della scaletta «BOS Pullback» mezzo nascosta dalla colonna
