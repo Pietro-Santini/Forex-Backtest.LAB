@@ -7858,3 +7858,30 @@ l'aggiornamento automatico avviene SOLO all'avvio del ponte - era vera ma NON er
 me l'ha detto lui («anche se aggiorno la versione non cambia nulla»), e aveva ragione. Il difetto
 vero era quello misurato sopra, che vale su tutti i dispositivi. Resta comunque buono a sapersi:
 **un ponte acceso da ore serve la versione di quando e' partito.**
+## 19 novembre 2026 - v2.2.84: una posizione nasce sull'asset che stai guardando
+
+Indagando il punto 4.5 della scaletta («in replay apro una posizione e sparisce, e non compare nel
+Trade Journal») ho misurato una cosa che non cercavo: `openMarketTrade` prendeva l'asset dalla
+TENDINA dell'interfaccia - `asset: $('market')?.value||''` - e non dall'asset a grafico. Con quella
+tendina vuota la posizione nasceva con `asset: ""`, e da li' spariva da sola: `belongsToCurrentAsset`
+false, quindi SL/TP non piu' valutati, filtro per asset che non la mostra, Journal senza strumento.
+
+Nell'uso normale la tendina viene allineata quando si sceglie l'asset dalla watchlist, quindi il
+piu' delle volte combacia - ma e' un allineamento che si puo' perdere (asset aperto da una finestra
+duplicata, sessione ripristinata, storico da file). Adesso comanda `currentAssetKey`, e la tendina
+vale solo se dice la stessa cosa. Banco `posizione_asset_del_grafico.test.mjs`, 3 prove rosse prima.
+Gli altri banchi che aprono posizioni restano verdi (28 prove).
+
+### COSA NON SONO RIUSCITO A RIPRODURRE, e va detto
+
+Sul blocco 4 (replay nelle finestre duplicate) ho misurato, e nel banco **i sintomi non si
+vedono**:
+- aprendo una posizione in replay - in Storico e in Live, con e senza MT5 collegato, e anche
+  facendola valutare da una finestra che in replay NON e' - la posizione RESTA, non si chiude da
+  sola e non sparisce;
+- su una finestra duplicata (`?pipSlot=2`) frecce, PLAY e moltiplicatore risultano VISIBILI
+  quanto sulla principale.
+
+Quindi il sintomo dipende da uno stato che la scena non riproduce: schermo intero, finestra
+separata vera, o un passaggio preciso che va fatto a mano. Serve il gesto esatto dal proprietario
+prima di toccare il codice - curare a occhi chiusi qui vorrebbe dire rompere quello che funziona.
