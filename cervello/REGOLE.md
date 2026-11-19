@@ -141,3 +141,19 @@ pannello del traffico: `budgetStato()` e `budgetLetture()` danno il conto per do
   SENZA MISURARE NIENTE, perche' il modulo del cloud non partiva nel banco e si uscivano con un
   `return`. Un banco che si salta da' una sicurezza falsa, peggio di uno rosso: se la condizione
   che serve a misurare non c'e', la prova deve CADERE, non saltare.
+## L'ORA SUL GRAFICO E' SEMPRE QUELLA LOCALE (19 novembre 2026)
+
+Deciso dal proprietario, con queste parole: «io devo sempre vedere l'ora locale, non l'ora del
+broker».
+
+Il grafico, l'asse del tempo, i cartellini e il Trade Journal mostrano l'ora del DISPOSITIVO
+(`selectedTimeZone`, rilevato in automatico). L'ora del server del broker si usa solo per i
+conti interni - per esempio per sapere quando chiude il mercato, che e' la mezzanotte del server
+riportata all'ora di Roma (`fblChiusuraMinutiLocali`) - ma non si mostra MAI come orario delle
+candele, e non si propone nemmeno come scelta.
+
+PERCHE' NASCE QUESTA REGOLA: il 19 novembre lui aveva segnalato un'asse «sfasato di un'ora»
+confrontando con un grafico che mostrava l'ora del server (FTMO: UTC+2, cioe' un'ora avanti
+rispetto a Roma d'inverno). Misurata tutta la catena, l'app aveva ragione. La tentazione, a quel
+punto, era aggiungere un interruttore per mostrare l'ora del broker: lui ha detto di no, e la
+risposta vale per sempre - una differenza di un'ora con MT5 e' NORMALE e non va «curata».

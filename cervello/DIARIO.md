@@ -7723,3 +7723,72 @@ Banco: `bos_break_even.test.mjs`, 4 prove scritte rosse prima della cura; `bos_d
 ora anche la prova della nuova costruzione che non deve cancellare niente (scritta rossa, e la
 prima versione delle sue candele non faceva nascere davvero la seconda costruzione: la premessa
 adesso e' stringente e lo dice).
+## 19 novembre 2026 - L'asse sfasato di un'ora: quattro misure, nessun difetto trovato nel codice
+
+Voce 1.1 della scaletta. SEGNALATO dal proprietario confrontando con TradingView: «la candela
+della notizia e' delle 14:30, da noi l'asse la mette alle 15:30».
+
+MISURATO, in quest'ordine:
+1. **I dati che arrivano**: l'ultima candela servita dal servizio MT5 e' sempre quella del minuto
+   in corso (controllato dal vivo: candela delle 02:44, orologio 02:44). Nessuno sfasamento.
+2. **L'asse**: banco nuovo `asse_tempo_ora_giusta.test.mjs`. Costruisce candele con istanti noti e
+   confronta l'ora scritta sull'asse con quella calcolata da `Intl` per lo stesso istante e lo
+   stesso fuso. Verde in Live e in replay, su un giorno d'inverno e uno d'estate, e la stessa
+   candela porta la stessa ora nelle due modalita'.
+3. **Il magazzino**: gia' misurato il 10 novembre (scrivi e rileggi: spostamento 0 ore), e le
+   serie salvate con un altro scarto vengono riallineate col loro timbro.
+4. **I CSV**: il loro fuso (America/New_York) sposta di CINQUE ore, non di una - e per XAUUSD la
+   libreria e' vuota, quindi il suo replay dell'oro non li usa.
+
+Quindi il codice, per quanto si riesce a misurare da qui, scrive l'ora giusta. Resta una
+spiegazione molto concreta da verificare con lui: **MT5 mostra l'ora del SERVER del broker**, che
+per FTMO e' UTC+2, mentre la nostra app mostra l'ora di Roma (UTC+1 d'inverno). Differenza:
+esattamente un'ora. Lo stesso vale per un grafico TradingView impostato su un fuso diverso da
+quello locale.
+
+CHIUSA: il proprietario ha confermato - **era l'ora del broker**. Il grafico di confronto
+mostrava l'ora del server MT5 (UTC+2 per FTMO), la nostra app mostra l'ora di Roma (UTC+1
+d'inverno): un'ora esatta, e nessun difetto. La voce 1.1 della scaletta si chiude cosi'.
+
+RESTA UNA DOMANDA APERTA, da fargli quando serve: se gli fa comodo confrontare con MT5, l'app
+potrebbe mostrare l'ora del BROKER invece di quella locale (o farla scegliere). Oggi
+`selectedTimeZone` e' il fuso del dispositivo, rilevato in automatico, e lo scarto del server e'
+gia' noto (`fblScartoServerSec`): sarebbe un interruttore, non un lavoro grosso. Non si fa finche'
+non lo chiede.
+
+COSA RESTA COMUNQUE GUADAGNATO: il banco `asse_tempo_ora_giusta.test.mjs`. Quella catena -
+istante della candela -> ora scritta sull'asse - prima non la sorvegliava nessuno, e adesso e'
+verde in Live, in replay, d'inverno e d'estate.
+## 19 novembre 2026 - v2.2.81: i modelli del profilo volumetrico si ritrovano, e il collaudo non resta piu' appeso
+
+### 1. I modelli del profilo (voce 2.1)
+
+SEGNALATO: «per il fibonacci e il profilo volumetrico ancora non me li salva i modelli».
+
+MISURATO, prima di toccare niente:
+- **i setup degli indicatori funzionano**: salvataggio, tendina che si aggiorna, cestino che
+  elimina davvero (riprodotto il gesto intero). La sua foto era di prima della cura del 18;
+- **il Fibonacci funziona**: il modello finisce in `fibTemplateList` e si vede;
+- **il profilo volumetrico no**, e il difetto era peggio di un salvataggio che non salva: il
+  modello veniva scritto davvero in `fbtVpTemplates_v1`, la barra di stato diceva «lo trovi
+  nelle impostazioni dello strumento, in Modelli», ma quella lista NON ESISTEVA.
+  `loadVpTemplates()` non era chiamata da nessuna parte se non dal salvataggio stesso, e
+  `renderVpTemplateMenu()` - l'unica riga che l'avrebbe ridisegnata - chiamava una funzione **mai
+  scritta**, dentro un `try{}catch(e){}` che inghiottiva l'errore in silenzio.
+
+Il modello finiva in un cassetto che nessuno apriva mai, e il programma mandava l'utente a
+cercarlo dove non c'era. CURATO: la sezione «Modelli salvati» dentro le impostazioni del profilo,
+un clic applica (solo fra strumenti della stessa famiglia: un VWAP non prende i percentili di un
+profilo), la ✕ elimina con conferma. Banco `modelli_profilo.test.mjs`, 4 prove rosse prima.
+
+### 2. Il collaudo appeso undici ore
+
+Il giro lanciato alle 02:50 si e' fermato dentro `app_browser`: ultimo banco scritto alle 02:57,
+e alle 13:56 i due processi node erano ancora li' con tre secondi di CPU in tutto, piu' tre
+browser orfani. Se n'e' accorto il proprietario: «sono 668 minuti che sta in esecuzione».
+
+Un collaudo che non finisce non e' ne' verde ne' rosso: non dice niente, blocca il lavoro e
+lascia processi vivi. Adesso il passo dei banchi browser ha un tetto di 45 minuti
+(`timeout --kill-after=30`, variabile `TETTO_BROWSER`): se lo supera CADE e si vede nel
+risultato. Il tetto e' il triplo abbondante del giro normale (~11 minuti), quindi non puo'
+scattare per lentezza - solo per un blocco vero. Provato che scatta davvero (uscita 124).

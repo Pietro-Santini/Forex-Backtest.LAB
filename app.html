@@ -3148,6 +3148,11 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        </div>
      </div>
    </div>
+   <div class="fbOptRow" id="vpTemplateRow" style="flex-wrap:wrap;row-gap:6px;border-top:1px solid #2b3541;padding-top:10px;margin-top:6px">
+     <div class="hint" style="flex:1 1 100%;margin:0 0 4px;font-weight:700;letter-spacing:.3px">MODELLI SALVATI</div>
+     <div id="vpTemplateList" style="display:flex;flex-wrap:wrap;gap:6px;flex:1 1 100%"></div>
+     <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Per salvare un modello: seleziona il profilo sul grafico e usa «Modello ⌄ → Salva come…». Qui lo ritrovi, lo applichi con un clic e lo elimini con la ✕.</span>
+   </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="vpModalCancelBtn" class="toolBtn">Annulla</button>
      <button id="vpModalOkBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Ok</button>
@@ -11842,7 +11847,9 @@ async function saveCurrentDrawingAsTemplate(drawingArg){
  // segnalato dal proprietario (misurato: il nome era in localStorage, il menu restava vuoto).
  renderDrawTemplateMenu();
  if(classe==='fib')try{ renderFibTemplateMenu(); }catch(e){}
- if(classe==='vp')try{ renderVpTemplateMenu(); }catch(e){}
+ // Niente piu' `catch` muto qui: se questa chiamata fallisse, il modello resterebbe invisibile
+ // e nessuno lo saprebbe - che e' esattamente com'e' nato questo difetto.
+ if(classe==='vp')try{ renderVpTemplateMenu(); }catch(e){ console.warn('[Modelli profilo] lista non ridisegnata:',e); }
  $('status').textContent=(classe==='fib')
    ?`Modello Fibonacci "${nome}" salvato: lo trovi nel menu "Modello Fib ⌄".`
    :(classe==='vp')
@@ -12016,6 +12023,97 @@ function loadVpTemplates(){
 function saveVpTemplates(templates){
  try{ localStorage.setItem(VP_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); return true; }
  catch(e){ fblMemoriaPienaAvvisa('il modello'); return false; }
+}
+// I MODELLI DEL PROFILO SI DEVONO POTER RITROVARE (19 novembre 2026).
+//
+// SEGNALATO dal proprietario: «per il fibonacci e il profilo volumetrico ancora non me li salva i
+// modelli». Il Fibonacci era stato curato il 18; il profilo no, e la misura ha mostrato una cosa
+// peggiore di un salvataggio che non funziona: il modello veniva scritto DAVVERO in
+// `fbtVpTemplates_v1`, la barra di stato diceva «lo trovi nelle impostazioni dello strumento, in
+// Modelli»... ma quella lista non esisteva, `loadVpTemplates()` non veniva chiamata da nessuna
+// parte se non dal salvataggio stesso, e `renderVpTemplateMenu()` - l'unica riga che avrebbe
+// dovuto ridisegnarla - chiamava una funzione MAI SCRITTA, dentro un `try{}catch(e){}` che
+// inghiottiva l'errore in silenzio.
+// Cioe': il modello finiva in un cassetto che nessuno apriva mai, e il programma mandava l'utente
+// a cercarlo in un posto che non c'era. Dal suo punto di vista «non me lo salva», ed era una
+// descrizione esatta.
+//
+// Da qui in poi: la lista c'e' (dentro le impostazioni dello strumento, dove il messaggio dice),
+// un clic applica il modello, la ✕ lo elimina.
+function renderVpTemplateMenu(){
+ const list=$('vpTemplateList'); if(!list)return;
+ list.innerHTML='';
+ const templates=loadVpTemplates();
+ const nomi=Object.keys(templates);
+ if(!nomi.length){
+   const vuoto=list.ownerDocument.createElement('span');
+   vuoto.className='hint'; vuoto.style.margin='0';
+   vuoto.textContent='Nessun modello salvato per profili e VWAP.';
+   list.appendChild(vuoto);
+   return;
+ }
+ const doc=list.ownerDocument;
+ nomi.forEach(nome=>{
+   const t=templates[nome]||{};
+   const chip=doc.createElement('span');
+   chip.style.cssText='display:inline-flex;align-items:center;gap:6px;background:#0b1117;border:1px solid #2b3541;border-radius:999px;padding:3px 4px 3px 10px;font-size:11.5px;color:#c8d2dd';
+   const etichetta=doc.createElement('span');
+   etichetta.textContent=nome;
+   etichetta.style.cursor='pointer';
+   // Si dice SUBITO a cosa si applica: un modello di VWAP non si puo' mettere su un profilo, e
+   // scoprirlo solo dopo il clic sarebbe una perdita di tempo.
+   etichetta.title='Applica questo modello'+(t.type?(' (salvato da '+(t.type==='vwap'?'un VWAP':'un profilo')+')'):'');
+   etichetta.addEventListener('click',()=>applyVpTemplate(nome));
+   chip.appendChild(etichetta);
+   const x=doc.createElement('button');
+   x.className='toolBtn'; x.textContent='✕';
+   x.style.cssText='padding:0 6px;line-height:18px;min-width:0';
+   x.title='Elimina il modello "'+nome+'"';
+   x.addEventListener('click',ev=>{ ev.stopPropagation(); deleteVpTemplate(nome); });
+   chip.appendChild(x);
+   list.appendChild(chip);
+ });
+}
+// Applica un modello al profilo (o VWAP) di cui sono aperte le impostazioni.
+//
+// SOLO FRA STRUMENTI DELLA STESSA FAMIGLIA: il modello porta con se' il `type` di quando e' stato
+// salvato, e un VWAP non puo' prendere i percentili di un profilo (ne' viceversa). Se non
+// corrispondono non si applica NIENTE e lo si dice - meglio di un'applicazione a meta'.
+function applyVpTemplate(nome){
+ const templates=loadVpTemplates();
+ const t=templates[nome]; if(!t)return false;
+ const d=(typeof vpModalTarget!=='undefined'&&vpModalTarget)?vpModalTarget:selectedDrawing;
+ if(!d){ $('status').textContent='Apri le impostazioni di un profilo prima di applicare un modello.'; return false; }
+ const famiglia=x=>(x==='vwap')?'vwap':'profilo';
+ if(t.type&&famiglia(t.type)!==famiglia(d.type)){
+   $('status').textContent='Il modello "'+nome+'" viene da '+(famiglia(t.type)==='vwap'?'un VWAP':'un profilo')
+     +' e non si puo applicare a questo strumento.';
+   return false;
+ }
+ try{ pushHistory(); }catch(e){}
+ VP_CAMPI_MODELLO.forEach(c=>{ if(t[c]!==undefined)d[c]=t[c]; });
+ // I campi del pannello devono mostrare quello che e' appena stato applicato: altrimenti si
+ // vedrebbero ancora i valori di prima e premendo Ok si riscriverebbero sopra il modello.
+ try{ openVpSettingsModal(d); }catch(e){}
+ try{ draw(); }catch(e){}
+ $('status').textContent='Modello "'+nome+'" applicato. Con Annulla o Ctrl+Z torni com\'era.';
+ return true;
+}
+// Elimina un modello di profilo/VWAP. Si chiede conferma: un modello si perde in un clic e si
+// riscrive in molti.
+async function deleteVpTemplate(nome){
+ if(!nome)return false;
+ const templates=loadVpTemplates();
+ if(!templates[nome])return false;
+ if(typeof appConfirm==='function'){
+   const si=await appConfirm('Eliminare definitivamente il modello "'+nome+'"?',{title:'🗑 Elimina modello'});
+   if(!si)return false;
+ }
+ delete templates[nome];
+ if(!saveVpTemplates(templates))return false;
+ renderVpTemplateMenu();
+ $('status').textContent='Modello "'+nome+'" eliminato.';
+ return true;
 }
 // A quale cassetto appartiene uno strumento. Una funzione sola: prima ogni strada decideva da
 // se', ed e' cosi' che un Fibonacci finiva fra i disegni.
@@ -12257,6 +12355,9 @@ function openVpSettingsModal(target){
    if($('vpBand3Color'))$('vpBand3Color').value=target.band3Color||'#c77dff';
    if($('vpBand3Width'))$('vpBand3Width').value=target.band3Width||1;
  }
+ // La lista dei modelli si riempie ADESSO, non alla prossima apertura: e' il posto in cui il
+ // messaggio del salvataggio dice di cercarli.
+ try{ renderVpTemplateMenu(); }catch(e){ console.warn('[Modelli profilo] lista non costruita:',e); }
  moveModalToFloatingIfActive($('vpModalOverlay'));
  if($('vpModalOverlay'))$('vpModalOverlay').style.display='flex';
  $('status').textContent='Modifica le impostazioni di questo profilo volumetrico.';
@@ -13918,7 +14019,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.80';
+const FBL_VERSIONE='2.2.81';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha

@@ -83,7 +83,20 @@ passo interprete_segnali bash -c 'cd installer_build/build/segnali_telegram && "
 PARALLELI=$(nproc 2>/dev/null || echo 4)
 [ "$PARALLELI" -gt 10 ] && PARALLELI=10
 [ "$PARALLELI" -lt 2 ] && PARALLELI=2
-passo app_browser bash -c "cd laboratorio && node --test --test-concurrency=$PARALLELI app/*.test.mjs"
+# UN COLLAUDO APPESO NON DEVE RESTARE APPESO (19 novembre 2026).
+#
+# MISURATO: il giro lanciato alle 02:50 si e' fermato dentro questo passo e ci e' rimasto
+# UNDICI ORE - l'ultimo banco scritto nel log era delle 02:57, e alle 13:56 i due processi node
+# erano ancora li' con tre secondi di CPU in tutto, piu' tre browser orfani. Il proprietario se
+# n'e' accorto prima di me: «sono 668 minuti che sta in esecuzione».
+#
+# Un collaudo che non finisce non e' ne' verde ne' rosso: non dice niente, e intanto blocca il
+# lavoro e lascia processi vivi che rallentano la macchina. Da qui in poi ha un tetto: se lo
+# supera, il passo CADE (e si vede nel risultato) invece di restare appeso per sempre.
+# 45 minuti sono il triplo abbondante del giro normale, che con i banchi in parallelo sta
+# intorno agli 11 minuti: non puo' scattare per lentezza, solo per un blocco vero.
+TETTO_BROWSER=${TETTO_BROWSER:-2700}
+passo app_browser bash -c "cd laboratorio && timeout --kill-after=30 $TETTO_BROWSER node --test --test-concurrency=$PARALLELI app/*.test.mjs"
 grep -h "AVVISO" "$R"/*.log 2>/dev/null | sort -u | sed 's/^/- ⚠️ /' >> "$OUT"
 riga ""
 riga "Falliti: $FALLITI"
