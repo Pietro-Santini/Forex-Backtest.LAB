@@ -1,5 +1,22 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+47. **Pubblicare non e' aggiornare: il repository e' mio, il programma in uso e' suo.**
+    (19 novembre 2026.) Dopo aver pubblicato la 2.2.88 e verificato il collaudo locale verde, ho
+    chiamato `POST /aggiorna-app` sul ponte del proprietario per «riallineare» la sua
+    installazione. **Non era compito mio e non era stato chiesto**: il proprietario mi ha
+    interrotto con «il mio PC non lo devi toccare per quanto riguarda un aggiornamento, sono io che
+    pigio il pulsante aggiorna».
+    **PERCHE' SEMBRAVA INNOCUO:** il comando non riavvia niente, scarica `app.html` e `sw.js`
+    nella cartella `app_aggiornata`. Ma e' pur sempre una sostituzione di file decisa da me su un
+    programma che in quel momento sta girando, con posizioni e sale automatiche aperte, e nel
+    codice esiste anche un ramo che **avvia l'installer**. La differenza fra «scaricare» e
+    «installare» e' un pulsante, non un confine: chi non deve premere quel pulsante non deve
+    nemmeno avvicinarsi.
+    **LA REGOLA CHE RESTA:** il mio lavoro finisce col `git push`. Dopo, informo (versione su
+    `main`, collaudo GitHub, cosa cambia) e **aspetto**: l'aggiornamento dell'applicazione e' una
+    decisione del proprietario, presa quando non ha operazioni in corso. `/health` si legge, non si
+    scrive. Scritta in `cervello/REGOLE.md` e in `AGENTS.md`.
+
 46. **Dentro uno stesso `<script>` le funzioni sono issate, le `const` no: un elenco di opzioni
     letto a tempo di caricamento guarda indietro, non avanti.**
     (18 novembre 2026.) Collegando la scaletta dei passi al `Valid BOS Pullback` ho scritto

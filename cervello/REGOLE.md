@@ -24,6 +24,26 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
 - Prima di dire che una versione è online, controllare `CACHE_NAME` su `origin/main`.
 - Niente `git push --force`, niente riscrittura della storia.
 
+## MAI AGGIORNARE L'APPLICAZIONE IN USO — scritta il 19 novembre 2026, dal proprietario
+
+> «Il mio PC non lo devi toccare per quanto riguarda un aggiornamento: il programma deve continuare
+> a girare senza essere riavviato. Sono io che pigio il pulsante aggiorna per poterlo aggiornare,
+> non tu. Mai aggiornare l'applicazione in uso.»
+
+- **Nessun agente pubblica, scarica o installa l'applicazione che il proprietario sta usando.**
+  Niente `POST /aggiorna-app`, niente `GET /aggiorna-app`, niente download di `app.html`/`sw.js`
+  nella sua installazione, niente lancio di `ForexBacktestLAB.exe` o dell'installer, niente
+  riavvio del ponte o del programma.
+- **Il push su GitHub e' l'ultimo passo dell'agente.** Da li' in poi il lavoro e' finito: il sito
+  si aggiorna da solo, e **l'applicazione la aggiorna il proprietario quando vuole**, premendo lui
+  il pulsante. Una versione su `main` e verde non e' un invito ad andarla a installare.
+- **Il collaudo si misura sul repository e sui banchi**, non sull'installazione in uso. Per sapere
+  che cosa gira davvero sul PC si legge `/health` **in sola lettura** e lo si riferisce; non si
+  cambia.
+- Il motivo non e' formalita': quell'app tiene aperte posizioni e sale automatiche. Un riavvio o
+  una sostituzione di file decisi da un agente chiudono o interrompono operazioni in corso, e i
+  soldi non si riavviano.
+
 ## REGOLA DEL PONTE FRA LE FINESTRE — scritta il 16 novembre 2026, dal proprietario
 
 > «per le posizioni la prioritaria è la pagina madre, per il discorso sale aperture automatiche.»
