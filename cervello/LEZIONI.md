@@ -1842,3 +1842,19 @@ E il corollario sui banchi che fissano l'orologio: **fissare l'ora non e' sempre
 prova misura qualcosa che vive nel tempo che passa (un battito, un conto alla rovescia), congelare
 `Date.now()` la fa passare o fallire per il motivo sbagliato. Li' si dichiara lo STATO che conta
 (il mercato aperto o chiuso), non l'ora, e si controlla di esserci davvero prima di misurare.
+## Un banco rosso puo' voler dire che la richiesta va capita meglio (19 novembre 2026)
+
+Scrivendo le due entrate del Valid BOS Pullback avevo tradotto «devono convivere» in «alla
+conferma tutte e due devono risultare aperte». Il banco e' rimasto rosso, e aveva ragione lui: il
+target della prima entrata E' la zona che la conferma sta rompendo, quindi in quella barra la
+prima ha gia' incassato. Non era un difetto da aggirare: era la richiesta da capire meglio.
+
+LA REGOLA: quando un banco scritto da me resta rosso su una regola che ho inventato io, la prima
+cosa da mettere in discussione e' la regola, non il codice. E la cura giusta spesso e' piu'
+piccola e piu' vera di quella che stavo per scrivere - qui: far chiudere la prima a target e
+tenerla a vista con il suo esito, invece di forzarla a restare aperta.
+
+E il corollario: **una regola nuova puo' invalidare un banco vecchio che ha ragione**. La scaletta
+pretendeva che nessun passo si accendesse col precedente spento; con l'entrata al pullback quella
+regola si rompeva. Non si tocca l'assert per farlo passare: si riscrivono i passi nell'ordine vero
+dei fatti (sei sono diventati sette), e la regola torna a valere senza eccezioni.

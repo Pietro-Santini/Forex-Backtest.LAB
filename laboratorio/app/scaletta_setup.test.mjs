@@ -77,8 +77,13 @@ const PASSO_PASSO = (spec, parametri) => `(() => {
   return {storia, completati: ind.calc.snaps.length};
 })()`;
 
+// SETTE PASSI DAL 19 NOVEMBRE 2026. Da quando le entrate sono due (vedi bos_due_entrate.test.mjs)
+// l'ordine vero dei fatti e' questo: al pullback si entra SUBITO, e la rottura confermata arriva
+// dopo, con la sua entrata. Con i sei passi di prima il passo «Operazione» si accendeva mentre
+// «Rottura confermata» era ancora spento - cioe' la scaletta raccontava una costruzione avvenuta
+// in un ordine che non era il suo, ed e' proprio la regola che questo banco difende.
 const NOMI = ['Riferimento', 'Rottura iniziale', 'Estremo confermato', 'Pullback valido',
-              'Rottura confermata', 'Operazione'];
+              'Entrata al pullback', 'Rottura confermata', 'Entrata alla conferma'];
 
 test('i passi si accendono uno alla volta, nell\'ordine della costruzione', async () => {
   const {browser, pagina, errori} = await apriApp();
@@ -101,12 +106,13 @@ test('i passi si accendono uno alla volta, nell\'ordine della costruzione', asyn
     assert.equal(acceso(1), 5, 'la rottura iniziale è alla barra 5');
     assert.equal(acceso(2), 7, 'l\'estremo è confermato alla barra 7');
     assert.equal(acceso(3), 8, 'il pullback valido è alla barra 8');
-    assert.equal(acceso(4), 9, 'la rottura confermata è alla barra 9');
-    assert.equal(acceso(5), 9, 'l\'operazione nasce con la rottura confermata');
+    assert.equal(acceso(4), 8, 'l\'entrata al pullback nasce sul ritest, alla barra 8');
+    assert.equal(acceso(5), 9, 'la rottura confermata è alla barra 9');
+    assert.equal(acceso(6), 9, 'e la seconda entrata nasce con la rottura confermata');
 
     // Alla fine la scaletta è tutta accesa e il setup è fra quelli disegnati.
     const fine = r.storia[r.storia.length - 1];
-    assert.deepEqual(fine.stati, ['ok', 'ok', 'ok', 'ok', 'ok', 'ok'],
+    assert.deepEqual(fine.stati, ['ok', 'ok', 'ok', 'ok', 'ok', 'ok', 'ok'],
       'a setup finito tutti i passi devono essere accesi: ' + JSON.stringify(fine.stati));
     assert.equal(r.completati, 1, 'il setup completato deve restare disegnato');
     assert.deepEqual(errori, []);
@@ -158,7 +164,8 @@ test('setup invalidato: i passi tornano in attesa e la scaletta dice perché', a
     const fine = r.storia[r.storia.length - 1];
     assert.equal(fine.stati[1], 'attesa', 'la rottura iniziale doveva tornare in attesa');
     assert.equal(fine.stati[2], 'attesa', 'l\'estremo confermato doveva tornare in attesa');
-    assert.equal(fine.stati[5], 'attesa', 'non c\'è nessuna operazione da mostrare');
+    assert.equal(fine.stati[4], 'attesa', 'nessuna entrata al pullback da mostrare');
+    assert.equal(fine.stati[6], 'attesa', 'e nessuna entrata alla conferma');
     assert.equal(fine.op, null, 'un setup morto non deve lasciare un\'operazione accesa');
     assert.ok(/riferimento/i.test(fine.esito),
       'la scaletta deve scrivere il motivo, invece dice: ' + JSON.stringify(fine.esito));

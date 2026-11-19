@@ -13918,7 +13918,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.78';
+const FBL_VERSIONE='2.2.79';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21073,8 +21073,10 @@ function triBuildSettings(ind, paramsRow, mk) {
 
 // Setup: ogni rottura iniziale ha il proprio oggetto, come BosSetup in Pine.
 // Tutti i tempi sono indici di barra (in Pine sono timestamp, ma la corrispondenza è biunivoca).
+let bosSetupSeq = 0;
 function bosNewSetup(dir, i, refBar, ref, target) {
   return {
+    id: ++bosSetupSeq,          // le operazioni sanno da quale costruzione sono nate
     dir, stage: 1, startBar: i,
     refBar,            // barra del massimo/minimo strutturale da ritestare
     ref,               // livello di riferimento
@@ -21087,6 +21089,65 @@ function bosNewSetup(dir, i, refBar, ref, target) {
     refX2: i, tgtX2: i,
     pbLabel: null, touch: null
   };
+}
+
+// L'ENTRATA AL PULLBACK (19 novembre 2026).
+//
+// Chiesto dal proprietario: si entra dove c'e' il cerchietto - il ritest del livello - senza
+// aspettare la conferma. Tre numeri, e nessuno dei tre e' una proiezione:
+//   - si entra alla chiusura della barra che ha ritestato;
+//   - lo stop sta SOTTO IL MINIMO di quella barra (sopra il massimo, per una vendita), con il
+//     cuscinetto della tolleranza gia' impostata: se quel minimo viene perso, il ritest non ha
+//     tenuto e il setup non esiste piu';
+//   - il target e' LA ZONA DELLA ROTTURA, cioe' l'estremo che il prezzo deve rompere per
+//     confermare. E' li' che questa operazione chiude, ed e' esattamente dove la seconda comincia.
+// Il lottaggio e' suo: lo stop e' piu' stretto di quello della conferma, quindi a parita' di
+// rischio il lotto e' piu' grande. Lo stesso lotto su tutte e due vorrebbe dire due rischi diversi.
+function bosApriPullback(st, p, s, r, i) {
+  try {
+    const cuscinetto = Math.max(0, (+p.touchTicks || 0) * (+p.tickSize || 0));
+    const entry = r.close;
+    const sl = s.dir === 1 ? (r.low - cuscinetto) : (r.high + cuscinetto);
+    const tp = s.target;
+    if (!(Number.isFinite(entry) && Number.isFinite(sl) && Number.isFinite(tp))) return;
+    if (s.dir === 1 ? !(sl < entry && tp > entry) : !(sl > entry && tp < entry)) return;
+    const dist = Math.abs(entry - sl);
+    if (!(dist > 0)) return;
+    st.ops.push({
+      nome: 'pullback', setupId: s.id, barra: i,
+      dir: s.dir, entry, sl, tp,
+      rr: Math.abs(tp - entry) / dist, tpStimato: false,
+      lotto: scalettaLotto(entry, sl)
+    });
+  } catch (e) {}
+}
+
+// Un'operazione vive finche' il prezzo non tocca il suo stop o il suo target. Chi la chiude e' il
+// PREZZO: non l'arrivo della seconda entrata, non il passare delle barre.
+//
+// E QUANDO CHIUDE NON SPARISCE (19 novembre 2026). Il target dell'entrata al pullback E' la zona
+// della rottura, quindi nella barra che conferma il setup quell'operazione ha gia' incassato: e'
+// il suo esito migliore, non un fallimento. Farla sparire in silenzio proprio mentre nasce la
+// seconda entrata darebbe l'impressione di un'operazione mangiata dall'altra. Resta a vista in
+// `st.opsFinite`, con scritto come e' finita.
+function bosChiudiOperazioniToccate(st, r, i) {
+  if (!st.ops.length) return;
+  st.ops = st.ops.filter(o => {
+    if (o.barra === i) return true;          // appena nata: la sua barra non la chiude
+    const toccaSl = o.dir === 1 ? (r.low <= o.sl) : (r.high >= o.sl);
+    const toccaTp = o.dir === 1 ? (r.high >= o.tp) : (r.low <= o.tp);
+    if (toccaSl || toccaTp) {
+      if (st.op === o) { st.op = null; st.opSnap = null; }
+      // Se nella stessa barra tocca tutti e due, vale lo STOP: non si puo' sapere quale e'
+      // arrivato prima, e dare per buono il target sarebbe raccontarsi una vittoria.
+      o.esito = toccaSl ? 'stop' : 'target';
+      o.barraFine = i;
+      st.opsFinite.push(o);
+      if (st.opsFinite.length > 4) st.opsFinite.shift();
+      return false;
+    }
+    return true;
+  });
 }
 
 const VALID_BOS_PULLBACK_DEF = {
@@ -21114,9 +21175,21 @@ const VALID_BOS_PULLBACK_DEF = {
       st.setups = [];      // setup attivi
       st.snaps = [];       // setup completati: linee, etichette e segni restano visibili
       // La scaletta: i passi che l'utente vede accendersi uno dopo l'altro.
+      // SETTE PASSI, NON SEI (19 novembre 2026). Da quando si entra anche al pullback, l'unica
+      // operazione in fondo non basta piu': l'entrata al pullback arriva PRIMA della rottura
+      // confermata, e raccontarla come ultimo passo faceva accendere il sesto col quinto ancora
+      // spento - cioe' la scaletta raccontava una costruzione che non era avvenuta in
+      // quell'ordine. Adesso i passi sono l'ordine vero dei fatti, e la regola «nessun passo
+      // acceso se quello prima e' spento» torna a valere senza eccezioni.
       st.scaletta = scalettaNuova(['Riferimento', 'Rottura iniziale', 'Estremo confermato',
-        'Pullback valido', 'Rottura confermata', 'Operazione']);
+        'Pullback valido', 'Entrata al pullback', 'Rottura confermata', 'Entrata alla conferma']);
       st.op = null; st.opBar = -1; st.opSnap = null;
+      // LE DUE ENTRATE (19 novembre 2026). Chiesto dal proprietario: «le entrate sono due, e
+      // devono convivere». `st.ops` tiene quelle VIVE, ognuna col suo stop, il suo target e il
+      // suo lottaggio. `st.op` resta la seconda (o la prima se la seconda non c'e' ancora):
+      // e' quella che la scaletta mostrava gia' prima, e nessuno deve accorgersi del cambio.
+      st.ops = [];
+      st.opsFinite = [];   // quelle gia' chiuse dal prezzo: restano a vista, con il loro esito
     }
     const L = Math.max(1, p.leftBars | 0), R = Math.max(1, p.rightBars | 0);
     const LB = Math.max(6, p.lookback | 0);
@@ -21167,6 +21240,7 @@ const VALID_BOS_PULLBACK_DEF = {
                 s.stage = 2; s.retestBar = i; s.refX2 = i;
                 if (p.showPullbackText) s.pbLabel = {x: s.refBar, price: s.ref, color: p.bullColor};
                 if (p.showTouchCircle) s.touch = {x: i, price: s.ref, color: p.bullColor};
+                bosApriPullback(st, p, s, r, i);
               }
               s.clean = touched ? 0 : s.clean + 1;
             } else if (r.close > s.target) { completed = true; bullBos = true; }
@@ -21182,6 +21256,7 @@ const VALID_BOS_PULLBACK_DEF = {
                 s.stage = 2; s.retestBar = i; s.refX2 = i;
                 if (p.showPullbackText) s.pbLabel = {x: s.refBar, price: s.ref, color: p.bearColor};
                 if (p.showTouchCircle) s.touch = {x: i, price: s.ref, color: p.bearColor};
+                bosApriPullback(st, p, s, r, i);
               }
               s.clean = touched ? 0 : s.clean + 1;
             } else if (r.close < s.target) { completed = true; bearBos = true; }
@@ -21191,6 +21266,9 @@ const VALID_BOS_PULLBACK_DEF = {
         if (invalid) {
           scartoMotivo = (i - s.startBar > maxWait) ? 'setup scaduto: troppe barre di attesa'
             : (s.dir === 1 ? 'chiusura sotto il riferimento' : 'chiusura sopra il riferimento');
+          // Il setup e' morto: l'entrata al pullback nata da lui non ha piu' ragione di esistere
+          // (il livello che la teneva in piedi e' stato perso).
+          st.ops = st.ops.filter(o => o.setupId !== s.id);
           st.setups.splice(k, 1);
         } else if (completed) {
           const sig = s.dir === 1 ? p.bullColor : p.bearColor;
@@ -21266,15 +21344,26 @@ const VALID_BOS_PULLBACK_DEF = {
         if (dist > 0) {
           const rr = Math.max(0.1, +p.rrTarget || 2);
           st.op = {
+            nome: 'conferma', setupId: fatta.id, barra: i,
             dir: fatta.dir, entry: r.close, sl: fatta.ref,
             tp: fatta.dir === 1 ? r.close + dist * rr : r.close - dist * rr,
             rr, tpStimato: true, lotto: scalettaLotto(r.close, fatta.ref)
           };
           st.opBar = i; st.opSnap = fatta;
+          // LE DUE ENTRATE CONVIVONO: la seconda si aggiunge, non sostituisce la prima. Il
+          // target della prima e' la zona che la seconda sta rompendo, quindi e' normale che si
+          // chiuda qui intorno - ma a chiuderla dev'essere il PREZZO, non l'arrivo della seconda.
+          st.ops.push(st.op);
         }
       } else if (st.op && st.opBar !== i && (newBull || newBear || i - st.opBar > maxWait)) {
         st.op = null; st.opSnap = null;   // la costruzione riparte da capo: l'operazione vecchia non si mostra piu'
+        st.ops = st.ops.filter(o => o.nome !== 'conferma');
       }
+      // Le operazioni vive si chiudono quando il prezzo tocca il loro stop o il loro target.
+      bosChiudiOperazioniToccate(st, r, i);
+      // La prima entrata, se la conferma non arriva mai, non puo' restare accesa per sempre.
+      st.ops = st.ops.filter(o => o.nome !== 'pullback' || (i - o.barra) <= maxWait);
+      if (!st.op && st.ops.length) st.op = st.ops[st.ops.length - 1];
 
       // --- LA SCALETTA. Racconta un setup alla volta: quello appena completato se c'e'
       // un'operazione in corso, altrimenti il piu' recente ancora in costruzione.
@@ -21296,15 +21385,25 @@ const VALID_BOS_PULLBACK_DEF = {
             fmtPrice(sv.target) + (sv.extConfirmed ? '' : ' da confermare'));
           scalettaSegna(sc, 3, sv.stage >= 2 ? 'ok' : 'attesa',
             sv.stage >= 2 ? 'ritest a ' + fmtPrice(sv.ref) : (sv.clean + '/' + minUntouched + ' barre pulite'));
-          scalettaSegna(sc, 4, compl ? 'ok' : 'attesa',
-            compl ? fmtPrice(st.op.entry) : 'oltre ' + fmtPrice(sv.target));
+          // 5. l'entrata al pullback: viva adesso, oppure gia' chiusa in questa costruzione.
+          const tutte = (st.ops || []).concat(st.opsFinite || []);
+          const pb = tutte.filter(o => o.nome === 'pullback' && o.setupId === sv.id).pop();
+          scalettaSegna(sc, 4, pb ? 'ok' : 'attesa',
+            pb ? (fmtPrice(pb.entry) + (pb.esito === 'target' ? ' ✓' : pb.esito === 'stop' ? ' ✗' : ''))
+               : 'al ritest di ' + fmtPrice(sv.ref));
+          // 6. la rottura confermata, e 7. l'entrata che ne nasce.
+          scalettaSegna(sc, 5, compl ? 'ok' : 'attesa',
+            compl ? fmtPrice(st.opSnap.target) : 'oltre ' + fmtPrice(sv.target));
+          const cf = tutte.filter(o => o.nome === 'conferma' && o.setupId === sv.id).pop();
+          scalettaSegna(sc, 6, cf ? 'ok' : 'attesa', cf ? fmtPrice(cf.entry) : '');
           sc.esito = compl ? '' : (scartoMotivo || '');
         }
 
-        if (st.op) {
-          scalettaSegna(sc, 5, 'ok', i === st.opBar ? 'aperta ora' : (i - st.opBar) + ' barre');
-          sc.operazione = st.op;
-        } else { scalettaSegna(sc, 5, 'attesa', ''); sc.operazione = null; }
+        if (st.ops.length) {
+          const ultima = st.ops[st.ops.length - 1];
+          sc.operazione = st.op || ultima;   // come prima: chi legge una sola operazione trova questa
+          sc.operazioni = st.ops;            // e chi le vuole tutte e due, le trova qui
+        } else { sc.operazione = null; sc.operazioni = null; }
       }
 
       st.bullBos = bullBos; st.bearBos = bearBos;
@@ -21353,6 +21452,28 @@ const VALID_BOS_PULLBACK_DEF = {
         seg(s.extTime, s.tgtX2, s.target, sig, 2, false);
       }
       drawLabels(s.pbLabel, s.touch);
+    }
+
+    // LE DUE ENTRATE, DISEGNATE. Chiesto dal proprietario: i livelli si vedono sul grafico, non
+    // solo scritti dentro un riquadro. Per ogni operazione viva tre linee - entrata, stop,
+    // target - dalla barra in cui e' nata fino al bordo destro, con scritto di quale si tratta.
+    for (const o of (st.ops || []).concat(st.opsFinite || [])) {
+      const fin = Number.isFinite(o.barraFine) ? o.barraFine : Math.max(dataEnd, o.barra);
+      const cEntry = o.dir === 1 ? p.bullColor : p.bearColor;
+      const breve = (o.nome === 'pullback' ? 'Pullback' : 'Conferma')
+        + (o.esito === 'target' ? ' ✓ target' : o.esito === 'stop' ? ' ✗ stop' : '');
+      seg(o.barra, fin, o.entry, cEntry, 1, true);
+      seg(o.barra, fin, o.sl, '#f23645', 1, true);
+      seg(o.barra, fin, o.tp, '#089981', 1, true);
+      const xT = xAbs(o.barra) + 4;
+      // Il lottaggio sta sull'etichetta dell'entrata, non solo dentro il riquadro: i due stop
+      // sono a distanze diverse, quindi i due lotti sono diversi, e si devono poter leggere
+      // accanto alla linea a cui appartengono.
+      const lotti = (o.lotto && Number.isFinite(o.lotto.lotti))
+        ? ('  ·  ' + (typeof fmtLottiQuick === 'function' ? fmtLottiQuick(o.lotto.lotti) : o.lotto.lotti) + ' lotti') : '';
+      txt(breve + ' · entrata ' + fmtPrice(o.entry) + lotti, xT, y(o.entry) - 7, cEntry, 'left', 'bold 10px system-ui');
+      txt(breve + ' · stop ' + fmtPrice(o.sl), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
+      txt(breve + ' · target ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
     }
 
     if (p.mostraScaletta && st.scaletta) scalettaDisegna(ctx, ind, st.scaletta, p.posScaletta, 'BOS Pullback');

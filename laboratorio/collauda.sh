@@ -68,7 +68,22 @@ passo interprete_segnali bash -c 'cd installer_build/build/segnali_telegram && "
 # pagina sua (vedi apriApp in app/aiuti.mjs), quindi non condividono ne' stato, ne' memoria del
 # browser, ne' file. Misurato PRIMA di cambiarlo: 370 test, 0 falliti, 5 minuti e 25 invece di 18.
 # node:test parallelizza per FILE (un processo ciascuno); dentro un file i test restano in fila.
-passo app_browser bash -c 'cd laboratorio && node --test --test-concurrency=4 app/*.test.mjs'
+# QUANTI IN PARALLELO LO DICE LA MACCHINA, NON UN NUMERO SCRITTO A MANO (19 novembre 2026).
+#
+# SEGNALATO dal proprietario: «e' diventato un impazzimento, devo aspettare sempre 30 minuti per
+# pubblicare una modifica». MISURATO sul suo PC: 4 in parallelo su una macchina con 14 processori
+# usavano meno di un terzo della macchina, e il blocco durava ~24 minuti; con 10 in parallelo lo
+# stesso blocco ha chiuso in 10 minuti e 27 secondi.
+#
+# Qui il numero si calcola: tanti quanti i processori, con un tetto di 10 (oltre, su questi test
+# che aprono un Chromium ciascuno, si comincia a pagare in memoria invece di guadagnare tempo) e
+# un minimo di 2. Sul runner di GitHub, che di processori ne ha quattro, resta 4 come prima:
+# li' il collaudo non si salva con il parallelismo ma con il tetto di tempo del flusso, che per
+# questo e' stato portato da 30 a 60 minuti (vedi .github/workflows/collaudo.yml).
+PARALLELI=$(nproc 2>/dev/null || echo 4)
+[ "$PARALLELI" -gt 10 ] && PARALLELI=10
+[ "$PARALLELI" -lt 2 ] && PARALLELI=2
+passo app_browser bash -c "cd laboratorio && node --test --test-concurrency=$PARALLELI app/*.test.mjs"
 grep -h "AVVISO" "$R"/*.log 2>/dev/null | sort -u | sed 's/^/- ⚠️ /' >> "$OUT"
 riga ""
 riga "Falliti: $FALLITI"

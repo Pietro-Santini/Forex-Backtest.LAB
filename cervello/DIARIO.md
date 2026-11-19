@@ -7647,3 +7647,34 @@ passato un secondo?», e la prova misurava zero ridisegni per il motivo sbagliat
 dichiara il **mercato**, non l'ora: un asset che non chiude mai per il caso aperto, e il
 calendario dello strumento con una fascia che non contiene adesso per il caso chiuso. Ogni prova
 controlla di essere nello stato che dice di misurare prima di misurarlo.
+## 19 novembre 2026 - v2.2.79: Valid BOS Pullback, le due entrate
+
+CHIESTO dal proprietario: «le entrate sono due, e devono convivere». Fatto, col banco scritto
+rosso prima (`laboratorio/app/bos_due_entrate.test.mjs`, 4 prove).
+
+**Entrata 1, al pullback** (nasce sul ritest, dove c'e' il cerchietto): si entra alla chiusura
+della barra che ha ritestato; lo stop sta SOTTO il minimo di quella barra piu' il cuscinetto della
+tolleranza gia' impostata; il target NON e' una proiezione ma **la zona della rottura**, cioe'
+l'estremo da rompere.
+
+**Entrata 2, alla conferma**: quella di sempre - chiusura che rompe l'estremo, stop sul livello
+ritestato, target proiettato al R:R scelto.
+
+Ognuna col **suo** lottaggio: lo stop del pullback e' piu' stretto (0,11 contro 0,70 nella scena
+del banco), quindi a parita' di rischio il lotto e' piu' grande. Lo stesso lotto su tutte e due
+vorrebbe dire rischiare due cifre diverse - lo stesso difetto del lotto arrotondato male (2.2.63).
+Tutti i livelli sono LINEE sul grafico, con scritto quale operazione e con quanti lotti.
+
+DUE COSE IMPARATE SCRIVENDO LA CURA, tutte e due dal banco che e' diventato rosso:
+
+1. **La prima entrata non «convive» fino in fondo: incassa.** Il suo target e' la zona della
+   rottura, e la rottura confermata e' proprio il prezzo che attraversa quella zona. Quindi nella
+   barra che fa nascere la seconda entrata, la prima ha gia' centrato il target. Pretendere che
+   restasse aperta era sbagliato: adesso chiude con esito `target` e **resta a vista**
+   (`st.opsFinite`) invece di sparire in silenzio proprio mentre nasce l'altra. Se stop e target
+   cadono nella stessa barra vale lo stop: non si puo' sapere quale e' arrivato prima.
+2. **La scaletta e' passata da sei passi a sette.** Il banco `scaletta_setup` pretende - a
+   ragione - che nessun passo si accenda col precedente spento. Con l'entrata al pullback il
+   vecchio passo «Operazione» si accendeva mentre «Rottura confermata» era ancora in attesa. I
+   passi ora sono l'ordine vero dei fatti: Riferimento, Rottura iniziale, Estremo confermato,
+   Pullback valido, **Entrata al pullback**, Rottura confermata, **Entrata alla conferma**.
