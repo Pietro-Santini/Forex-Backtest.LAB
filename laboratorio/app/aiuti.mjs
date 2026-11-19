@@ -110,3 +110,22 @@ export const PREPARA_BTC = () => {
   liveModeActive=true; mt5Connected=false; fblContoVista='kraken';
   window.appConfirm=async()=>true; appConfirm=window.appConfirm;
 };
+
+// L'ORA DI ROMA NON E' L'ORA DELLA MACCHINA (19 novembre 2026).
+//
+// Il collaudo di GitHub gira in UTC, il PC del proprietario in Europe/Rome. I banchi che
+// costruivano gli istanti con `new Date().setHours(22, 30)` chiedevano quindi due cose diverse
+// nei due posti: sul runner «22:30» finiva per essere mezzanotte e mezza di Roma, e tre prove
+// della chiusura del mercato piu' quella del BE in finestra calda sono uscite rosse solo la'.
+// Riprodotto a comando in locale con TZ=UTC: stessi rossi, stesse prove.
+//
+// L'app ragiona SEMPRE sull'ora di Roma (romeOffsetMs), quindi i banchi devono chiedere quella.
+// Restituisce l'istante (in millisecondi) in cui a Roma sono le h:m di oggi.
+export async function oraDiRoma(pagina, h, m = 0) {
+  return await pagina.evaluate(([hh, mm]) => {
+    const adesso = Date.now();
+    const giorno = Math.floor((adesso + romeOffsetMs(adesso)) / 86400000);
+    const grezzo = giorno * 86400000 + (hh * 60 + mm) * 60000;
+    return grezzo - romeOffsetMs(grezzo);
+  }, [h, m]);
+}

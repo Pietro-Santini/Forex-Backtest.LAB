@@ -45,7 +45,7 @@ const PARAMETRI = {leftBars: 2, rightBars: 2, touchTicks: 1, minUntouchedBars: 2
                    minExtensionTicks: 1, tickSize: 0.01, rrTarget: 2};
 
 // Esegue l'indicatore barra per barra e riporta le operazioni vive a ogni barra.
-const PASSO_PASSO = `(() => {
+const PASSO_PASSO_SU = (spec, par) => `(() => {
   // Conto noto, cosi' il lottaggio si puo' controllare col numero in mano: 1% di 10.000 = 100.
   realizedBalanceNow = () => 10000;
   const campo = document.getElementById('risk');
@@ -53,8 +53,8 @@ const PASSO_PASSO = `(() => {
 
   const def = INDICATOR_DEFS['valid_bos_pullback'];
   const ind = hydrateIndicators([{id: 1, key: 'valid_bos_pullback', params: def.defaultParams()}])[0];
-  Object.assign(ind.params, ${JSON.stringify(PARAMETRI)});
-  const R = ${JSON.stringify(BOS_RIALZISTA)}.map((a, i) => ({
+  Object.assign(ind.params, ${JSON.stringify(par || PARAMETRI)});
+  const R = ${JSON.stringify(spec)}.map((a, i) => ({
     date: new Date(Date.UTC(2024, 0, 1, 0, i, 0)).toISOString(),
     open: a[0], high: a[1], low: a[2], close: a[3], volume: 100
   }));
@@ -70,8 +70,12 @@ const PASSO_PASSO = `(() => {
     const finite = (ind.calc.opsFinite || []).map(leggi);
     storia.push({barra: i, ops, finite});
   }
-  return {storia, contratto: contractSize(), modo: currentInstrument().plMode};
+  return {storia, contratto: contractSize(), modo: currentInstrument().plMode,
+          setupInCorso: ind.calc.setups.length, nuoveRotture: ind.calc.snaps.length};
 })()`;
+
+// Le quattro prove di sempre girano sulla costruzione base.
+const PASSO_PASSO = PASSO_PASSO_SU(BOS_RIALZISTA);
 
 const alBarra = (r, n) => r.storia[n].ops;
 const conNome = (ops, nome) => ops.find(o => o.nome === nome) || null;
@@ -134,6 +138,53 @@ test('alla conferma nasce la SECONDA entrata, e la prima incassa il suo target',
       'il target della prima cade dove comincia la seconda: ' + pb.tp + ' contro ' + cf.entry);
     assert.ok(pb.sl !== cf.sl, 'due stop diversi: la prima rischia il minimo del ritest, la seconda il livello');
     assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// La stessa costruzione, piu' le barre che fanno nascere una NUOVA rottura mentre la seconda
+// entrata e' ancora aperta - senza che il prezzo tocchi il suo stop (101,00) ne' il suo target
+// (103,10). E' il caso misurato sul grafico vero del proprietario (XAU/USD, 18 novembre, setup
+// delle 17:15): la seconda entrata nasceva alle 17:20 a 3742,90 con stop 3750,16 e target
+// 3728,38, e poi spariva dal grafico senza aver toccato niente.
+const BOS_POI_ALTRA_COSTRUZIONE = BOS_RIALZISTA.concat([
+  [101.70, 101.95, 101.60, 101.90],  // 10
+  [101.90, 102.00, 101.70, 101.95],  // 11
+  [101.95, 102.00, 101.45, 101.50],  // 12  il minimo 101,45: candidato pivot
+  [101.50, 101.80, 101.55, 101.75],  // 13
+  [101.75, 101.90, 101.60, 101.85],  // 14  due barre a destra: pivot confermato
+  [101.85, 101.90, 101.30, 101.35]   // 15  NUOVA ROTTURA, verso il basso
+]);
+// Con il lookback corto il minimo dominante e' quello appena fatto (101,45) e non i minimi
+// dell'inizio: cosi' la nuova rottura nasce davvero, e nessuna di queste barre tocca lo stop
+// (101,00) o il target (103,10) della seconda entrata, che resta aperta per tutta la scena.
+const PARAMETRI_CORTI = Object.assign({}, PARAMETRI, {lookback: 6});
+
+test('una nuova costruzione non cancella la seconda entrata ancora aperta', async () => {
+  // IL DIFETTO, segnalato dal proprietario con la foto del grafico: «l'entrata della seconda
+  // entry con il suo target non me lo fa vedere». Misurato sulle sue candele vere: l'operazione
+  // nasceva e poi veniva buttata via appena partiva un'altra costruzione - in silenzio, senza
+  // nemmeno finire fra quelle chiuse. A chiudere un'operazione dev'essere il PREZZO (stop o
+  // target), o la sua scadenza: mai il fatto che il mercato abbia ricominciato a costruire
+  // un altro setup.
+  const {browser, pagina} = await apriApp();
+  try {
+    const r = await pagina.evaluate(PASSO_PASSO_SU(BOS_POI_ALTRA_COSTRUZIONE, PARAMETRI_CORTI));
+    const fine = r.storia[r.storia.length - 1];
+    const tutte = fine.ops.concat(fine.finite);
+    const cf = tutte.find(o => o.nome === 'conferma');
+
+    // PREMESSA STRINGENTE: una costruzione NUOVA dev'essere davvero partita dopo la barra 9,
+    // altrimenti questo banco passa senza misurare niente - ed e' esattamente quello che faceva
+    // la prima versione di questa prova, con le candele sbagliate.
+    assert.ok(r.setupInCorso > 0,
+      'premessa non soddisfatta: dopo la conferma non e partita nessuna nuova costruzione '
+      + '(setup in corso alla fine: ' + r.setupInCorso + '). Le candele della scena vanno riviste.');
+
+    assert.ok(cf, 'la seconda entrata non deve sparire: non e fra le vive ne fra le chiuse');
+    if (cf.esito) {
+      assert.fail('la seconda entrata risulta chiusa con esito «' + cf.esito + '», ma il prezzo '
+        + 'non ha mai toccato ne lo stop (101,00) ne il target (' + cf.tp + ')');
+    }
   } finally { await browser.close(); }
 });
 

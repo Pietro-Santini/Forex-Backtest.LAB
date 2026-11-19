@@ -7678,3 +7678,48 @@ DUE COSE IMPARATE SCRIVENDO LA CURA, tutte e due dal banco che e' diventato ross
    vecchio passo «Operazione» si accendeva mentre «Rottura confermata» era ancora in attesa. I
    passi ora sono l'ordine vero dei fatti: Riferimento, Rottura iniziale, Estremo confermato,
    Pullback valido, **Entrata al pullback**, Rottura confermata, **Entrata alla conferma**.
+## 19 novembre 2026 - v2.2.80: la seconda entrata non sparisce piu', e il break-even e' nelle impostazioni
+
+SEGNALATO dal proprietario con due foto: sul grafico vedeva solo l'entrata al pullback («mi fa
+vedere l'entrata 3750.51 ed il target di quello e 3745, ma l'entrata della seconda entry con il
+suo target non me lo fa vedere perche?»), le scritte si leggevano male, e nelle impostazioni non
+c'era il break-even che aveva chiesto.
+
+### 1. La seconda entrata spariva
+
+MISURATO sulle sue candele vere, scaricate dal suo servizio dati (XAU/USD M1, 18 novembre): la
+seconda entrata NASCEVA alle 17:20 - entrata 3742,90, stop 3750,16, target 3728,38 - e poi veniva
+buttata via appena partiva un'altra costruzione, senza aver toccato ne' stop ne' target, e senza
+nemmeno finire fra quelle chiuse.
+
+La riga colpevole era mia, della 2.2.79: insieme a `st.op = null` (che fa passare la SCALETTA al
+setup nuovo, ed e' giusto) cancellava anche l'operazione dalle vive. Adesso a chiudere
+un'operazione e' solo il PREZZO (stop o target) o la sua scadenza, che pero' si DICE: esito
+«scaduta» invece di una sparizione.
+
+Dopo la cura, sulle stesse candele: pullback chiusa a target alle 17:20, conferma nata alle 17:20
+e chiusa a stop alle 18:25. Due operazioni, tutte e due a vista.
+
+### 2. Le scritte a grafico
+
+«Non scrivere su ogni etichetta target altrimenti non si capisce». Aveva ragione: ogni riga
+ripeteva nome ed esito, e la parola «target» compariva tre volte con tre significati diversi
+(il nome dell'operazione chiusa a target, la riga dello stop, la riga del target). Adesso nome,
+lotti ed esito stanno SOLO sulla riga dell'entrata; le altre due dicono `SL ...` e `TP ...`.
+
+### 3. Il break-even nelle impostazioni
+
+Due caselle nuove, con le sue parole: **% verso il target** (a che punto scatta, 0 = spento) e
+**pip oltre l'entrata** (di quanto si sposta lo stop). Il livello a cui scattera' si vede sul
+grafico PRIMA che scatti - linea gialla tratteggiata «BE a ...» - ed e' il motivo per cui l'aveva
+chiesto. Lo stop va all'entrata piu' i pip scelti, mai sull'entrata nuda (stessa ragione di
+`mt5PrezzoPareggio`), e non torna mai indietro.
+
+I pip sono quelli veri dello strumento (`pipSizeForAsset`), non i tick dell'indicatore: lui tiene
+la «dimensione tick» a 1 su XAU/USD, cioe' un dollaro intero, e ragionare in tick avrebbe dato
+numeri che non sono i suoi.
+
+Banco: `bos_break_even.test.mjs`, 4 prove scritte rosse prima della cura; `bos_due_entrate` ha
+ora anche la prova della nuova costruzione che non deve cancellare niente (scritta rossa, e la
+prima versione delle sue candele non faceva nascere davvero la seconda costruzione: la premessa
+adesso e' stringente e lo dice).

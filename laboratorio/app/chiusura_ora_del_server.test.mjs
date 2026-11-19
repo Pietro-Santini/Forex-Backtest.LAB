@@ -27,14 +27,16 @@
 // ogni risposta dello storico. Qui si pretende che lo usi.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {apriApp} from './aiuti.mjs';
+import {apriApp, oraDiRoma} from './aiuti.mjs';
 
 // Lo scarto del server, in secondi, come lo dichiara il servizio dati.
 const UTC2 = 7200;      // il broker del proprietario (FTMO-Demo), ora solare
 const UTC3 = 10800;     // il caso per cui era stato scritto il 22:00
 
-// Un'ora locale di oggi, in millisecondi.
-const oggiAlle = (h, m) => { const d = new Date(); d.setHours(h, m, 0, 0); return d.getTime(); };
+// GLI ORARI SI CHIEDONO A ROMA, NON ALLA MACCHINA (19 novembre 2026).
+// Questo banco e' uscito rosso sul collaudo di GitHub - che gira in UTC - mentre in casa era
+// verde: `new Date().setHours(22, 30)` significa due istanti diversi nei due posti, e l'app
+// ragiona sempre sull'ora di Roma. Riprodotto in locale con TZ=UTC, curato con `oraDiRoma`.
 
 async function preparaApp() {
   const {browser, pagina, errori} = await apriApp();
@@ -48,6 +50,8 @@ async function preparaApp() {
 test('col server a UTC+2 il mercato chiude alle 23:00 locali, non alle 22:00', async () => {
   const {browser, pagina, errori} = await preparaApp();
   try {
+    const [alle2230, alle2310, alle2130] =
+      [await oraDiRoma(pagina, 22, 30), await oraDiRoma(pagina, 23, 10), await oraDiRoma(pagina, 21, 30)];
     const r = await pagina.evaluate(([scarto, alle2230, alle2310, alle2130]) => {
       fblScartoServerRicorda(scarto);
       return {
@@ -56,7 +60,7 @@ test('col server a UTC+2 il mercato chiude alle 23:00 locali, non alle 22:00', a
         alle2310: liveSessionPhaseAt(alle2310),
         alle2130: liveSessionPhaseAt(alle2130)
       };
-    }, [UTC2, oggiAlle(22, 30), oggiAlle(23, 10), oggiAlle(21, 30)]);
+    }, [UTC2, alle2230, alle2310, alle2130]);
 
     assert.equal(r.minutiChiusura, 23 * 60, 'la chiusura deve cadere alle 23:00 locali (24:00 del server UTC+2)');
     assert.notEqual(r.alle2230, 'closed', 'alle 22:30 il mercato e ancora aperto: MT5 stava trasmettendo');
@@ -72,11 +76,16 @@ test('col server a UTC+3 resta il comportamento di prima: chiusura alle 22:00', 
   // davvero alle 22:00 italiane d inverno.
   const {browser, pagina, errori} = await preparaApp();
   try {
+    const alle2230 = await oraDiRoma(pagina, 22, 30);
     const r = await pagina.evaluate(([scarto, alle2230]) => {
       fblScartoServerRicorda(scarto);
-      return {minutiChiusura: fblChiusuraMinutiLocali(alle2230), alle2230: liveSessionPhaseAt(alle2230)};
-    }, [UTC3, oggiAlle(22, 30)]);
-    const atteso = new Date(oggiAlle(22, 30)).getTimezoneOffset() === -60 ? 22 * 60 : 23 * 60;
+      return {minutiChiusura: fblChiusuraMinutiLocali(alle2230),
+              alle2230: liveSessionPhaseAt(alle2230),
+              scartoRomaMin: Math.round(romeOffsetMs(alle2230) / 60000)};
+    }, [UTC3, alle2230]);
+    // D'inverno Roma e' UTC+1 e la mezzanotte di un server UTC+3 cade alle 22:00; d'estate Roma
+    // e' UTC+2 e cade alle 23:00. L'atteso si calcola, invece di darlo per scontato.
+    const atteso = 1440 - (UTC3 / 60 - r.scartoRomaMin);
     assert.equal(r.minutiChiusura, atteso, 'con un server UTC+3 la mezzanotte del server cade un ora prima');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
@@ -88,10 +97,11 @@ test('scarto del server ignoto: non si inventa niente, resta il 22:00 di prima',
   // fermo un ora di troppo, mai candele finte a mercato chiuso).
   const {browser, pagina, errori} = await preparaApp();
   try {
+    const alle2230 = await oraDiRoma(pagina, 22, 30);
     const r = await pagina.evaluate((alle2230) => {
       fblScartoServerRicorda(null);
       return {minutiChiusura: fblChiusuraMinutiLocali(alle2230), alle2230: liveSessionPhaseAt(alle2230)};
-    }, oggiAlle(22, 30));
+    }, alle2230);
     assert.equal(r.minutiChiusura, 22 * 60, 'senza lo scarto del server resta la soglia storica');
     assert.equal(r.alle2230, 'closed', 'e alle 22:30 il mercato risulta chiuso, come prima');
     assert.deepEqual(errori, []);
@@ -105,6 +115,7 @@ test('SOLDI VERI: la finestra calda del margine di chiusura segue la chiusura ve
   // esattamente il momento in cui il cambio giornata allarga la forbice.
   const {browser, pagina, errori} = await preparaApp();
   try {
+    const [alle2230, alle2130] = [await oraDiRoma(pagina, 22, 30), await oraDiRoma(pagina, 21, 30)];
     const r = await pagina.evaluate(([scarto, alle2230, alle2130]) => {
       fblScartoServerRicorda(scarto);
       const pos = {asset: 'XAUUSD', side: 'BUY', entry: 4050.70, mt5Ticket: 306713136};
@@ -116,7 +127,7 @@ test('SOLDI VERI: la finestra calda del margine di chiusura segue la chiusura ve
         stop2230: fblPareggioPerStop(pos, alle2230),
         stop2130: fblPareggioPerStop(pos, alle2130)
       };
-    }, [UTC2, oggiAlle(22, 30), oggiAlle(21, 30)]);
+    }, [UTC2, alle2230, alle2130]);
 
     assert.equal(r.alle2230.calda, true, 'alle 22:30 manca mezz ora alla chiusura vera: finestra calda');
     assert.equal(r.alle2230.fase, 'chiusura', 'e la fase e la chiusura');

@@ -1858,3 +1858,39 @@ E il corollario: **una regola nuova puo' invalidare un banco vecchio che ha ragi
 pretendeva che nessun passo si accendesse col precedente spento; con l'entrata al pullback quella
 regola si rompeva. Non si tocca l'assert per farlo passare: si riscrivono i passi nell'ordine vero
 dei fatti (sei sono diventati sette), e la regola torna a valere senza eccezioni.
+## Le candele vere dell'utente sono a un comando di distanza (19 novembre 2026)
+
+Il proprietario ha segnalato che la seconda entrata non si vedeva. Invece di ragionare sul codice
+ho scaricato le SUE candele dal suo servizio dati (`GET 127.0.0.1:8001/history?symbol=XAUUSD`),
+le ho date in pasto all'indicatore con i parametri della sua foto delle impostazioni, e ho
+stampato le operazioni nate barra per barra. In due minuti: l'operazione nasceva alle 17:20 e
+spariva poco dopo - quindi il difetto non era nella nascita ma nella vita.
+
+LA REGOLA: quando il difetto si vede su un grafico, i dati di quel grafico sono disponibili. Una
+misura sui dati veri vale piu' di dieci ipotesi sul codice, e dice anche QUALE dei due pezzi
+guardare.
+
+E il corollario sulla premessa dei banchi: la mia prima versione del banco che doveva riprodurre
+il difetto passava subito, perche' le candele inventate non facevano nascere davvero la seconda
+costruzione. Un banco che non puo' fallire non difende niente: la premessa («dev'essere partita
+una nuova costruzione») ora e' un assert esplicito che spiega cosa rivedere se non regge.
+## Il fuso del collaudo: GitHub e' in UTC, il PC di casa no (19 novembre 2026)
+
+Tre prove della chiusura del mercato e una del tasto BE sono uscite rosse SOLO sul collaudo di
+GitHub, con lo stesso codice verde in casa. Causa misurata: i banchi costruivano gli istanti con
+`new Date().setHours(22, 30)` - cioe' l'ora della MACCHINA - mentre l'app ragiona sempre sull'ora
+di Roma (`romeOffsetMs`). Sul runner, che gira in UTC, quel «22:30» e' mezzanotte e mezza di Roma:
+un istante diverso da quello che la prova voleva misurare.
+
+Riprodotto a comando in locale con `TZ=UTC node --test ...`: stessi rossi, stesse prove. E' il
+modo piu' veloce per provare un rosso che si vede solo su GitHub, e andrebbe usato PRIMA di
+pubblicare ogni banco che tocca orari.
+
+LA REGOLA: un banco che parla di orari chiede l'ora a ROMA, non alla macchina. In `aiuti.mjs` c'e'
+`oraDiRoma(pagina, h, m)`, che risponde con l'istante in cui a Roma sono quelle ore. Dopo la cura
+i banchi sono verdi con TZ=UTC, con Europe/Rome e con America/New_York.
+
+E' la terza volta che lo stesso sbaglio costa un collaudo: il sistema operativo (15 novembre),
+l'orologio (18 novembre), il fuso (oggi). La forma e' sempre quella - **il banco eredita
+l'ambiente invece di dichiararlo** - e vale la pena cercarla a mano ogni volta che si scrive una
+prova che dipende da dove o quando gira.

@@ -13918,7 +13918,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.79';
+const FBL_VERSIONE='2.2.80';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21117,9 +21117,57 @@ function bosApriPullback(st, p, s, r, i) {
       nome: 'pullback', setupId: s.id, barra: i,
       dir: s.dir, entry, sl, tp,
       rr: Math.abs(tp - entry) / dist, tpStimato: false,
-      lotto: scalettaLotto(entry, sl)
+      lotto: scalettaLotto(entry, sl),
+      beLivello: bosLivelloBreakEven(p, s.dir, entry, tp), beFatto: false, slIniziale: sl
     });
   } catch (e) {}
+}
+
+// QUANTO VALE UN PIP per lo strumento a grafico. Il proprietario ragiona in pip («10, 20, 30»),
+// non nei tick dell'indicatore - che sono una misura sua, impostata a mano nel pannello e che su
+// XAU/USD lui tiene a 1 (un dollaro intero). Si chiede quindi all'app, che lo sa per ogni
+// strumento; se proprio non lo sapesse, si ripiega sul tick dichiarato nell'indicatore.
+function bosPassoBreakEven(p) {
+  try {
+    if (typeof pipSizeForAsset === 'function') {
+      const v = Number(pipSizeForAsset(currentAssetKey));
+      if (Number.isFinite(v) && v > 0) return v;
+    }
+  } catch (e) {}
+  const t = Number(p && p.tickSize);
+  return (Number.isFinite(t) && t > 0) ? t : 0.0001;
+}
+
+// IL LIVELLO A CUI SCATTERA' IL PAREGGIO, calcolato appena l'operazione nasce: e' quello che il
+// proprietario vuole VEDERE prima che succeda («la linea del BE va disegnata, cosi' si vede a che
+// livello scattera'»). Percentuale zero = break-even spento, e non c'e' nessuna linea da fare.
+function bosLivelloBreakEven(p, dir, entry, tp) {
+  const perc = Number(p && p.bePerc);
+  if (!(Number.isFinite(perc) && perc > 0)) return null;
+  if (!(Number.isFinite(entry) && Number.isFinite(tp))) return null;
+  const quota = Math.min(100, perc) / 100;
+  return entry + (tp - entry) * quota;
+}
+
+// IL PAREGGIO SCATTA, E NON TORNA INDIETRO. Lo stop va all'entrata PIU' i pip scelti (meno, per
+// una vendita): mai sull'entrata nuda, che con commissioni e spread e' gia' una perdita - e' la
+// stessa ragione per cui il pulsante BE delle posizioni vere usa mt5PrezzoPareggio e non il
+// prezzo di ingresso.
+function bosApplicaBreakEven(st, p, r) {
+  const passo = bosPassoBreakEven(p);
+  const pips = Math.max(0, Number(p.bePips) || 0);
+  for (const o of (st.ops || [])) {
+    if (o.beFatto || !Number.isFinite(o.beLivello)) continue;
+    const arrivato = o.dir === 1 ? (r.high >= o.beLivello) : (r.low <= o.beLivello);
+    if (!arrivato) continue;
+    const nuovo = o.dir === 1 ? (o.entry + pips * passo) : (o.entry - pips * passo);
+    // Non si peggiora mai uno stop gia' piu' vicino al profitto di cosi'.
+    if (o.dir === 1 ? (nuovo <= o.sl) : (nuovo >= o.sl)) { o.beFatto = true; continue; }
+    o.slIniziale = o.sl;
+    o.sl = Number(nuovo.toFixed(8));
+    o.beFatto = true;
+    o.beBarra = st.builtTo + 1;
+  }
 }
 
 // Un'operazione vive finche' il prezzo non tocca il suo stop o il suo target. Chi la chiude e' il
@@ -21158,7 +21206,12 @@ const VALID_BOS_PULLBACK_DEF = {
     minExtensionTicks: 1, maxWait: 120, tickSize: 0.00001,
     showDeveloping: true, showPullbackText: true, showTouchCircle: true,
     refColor: '#EAEAEA', bullColor: '#7CFC00', bearColor: '#f23645',
-    rrTarget: 2, mostraScaletta: true, posScaletta: 'Alto a destra'
+    rrTarget: 2, mostraScaletta: true, posScaletta: 'Alto a destra',
+    // IL BREAK-EVEN, chiesto dal proprietario: «a che percentuale del target scatta il pareggio,
+    // e di quanti pip spostare lo stop dall'ingresso (10, 20, 30...)». Spento di partenza
+    // (bePerc 0): chi non lo vuole non se lo trova addosso, e le operazioni di chi aggiorna
+    // l'app si comportano esattamente come prima finche' non lo accende lui.
+    bePerc: 0, bePips: 10
   }),
 
   // Calcolo incrementale nello stesso ordine dello script:
@@ -21343,11 +21396,13 @@ const VALID_BOS_PULLBACK_DEF = {
         const dist = Math.abs(r.close - fatta.ref);
         if (dist > 0) {
           const rr = Math.max(0.1, +p.rrTarget || 2);
+          const tpC = fatta.dir === 1 ? r.close + dist * rr : r.close - dist * rr;
           st.op = {
             nome: 'conferma', setupId: fatta.id, barra: i,
-            dir: fatta.dir, entry: r.close, sl: fatta.ref,
-            tp: fatta.dir === 1 ? r.close + dist * rr : r.close - dist * rr,
-            rr, tpStimato: true, lotto: scalettaLotto(r.close, fatta.ref)
+            dir: fatta.dir, entry: r.close, sl: fatta.ref, tp: tpC,
+            rr, tpStimato: true, lotto: scalettaLotto(r.close, fatta.ref),
+            beLivello: bosLivelloBreakEven(p, fatta.dir, r.close, tpC), beFatto: false,
+            slIniziale: fatta.ref
           };
           st.opBar = i; st.opSnap = fatta;
           // LE DUE ENTRATE CONVIVONO: la seconda si aggiunge, non sostituisce la prima. Il
@@ -21356,13 +21411,37 @@ const VALID_BOS_PULLBACK_DEF = {
           st.ops.push(st.op);
         }
       } else if (st.op && st.opBar !== i && (newBull || newBear || i - st.opBar > maxWait)) {
-        st.op = null; st.opSnap = null;   // la costruzione riparte da capo: l'operazione vecchia non si mostra piu'
-        st.ops = st.ops.filter(o => o.nome !== 'conferma');
+        // La SCALETTA passa alla costruzione nuova - racconta un setup alla volta - ma
+        // l'OPERAZIONE no: quella resta aperta finche' il prezzo non la chiude.
+        //
+        // IL DIFETTO CHE QUESTA RIGA AVEVA (19 novembre 2026). SEGNALATO dal proprietario con la
+        // foto del grafico: «l'entrata della seconda entry con il suo target non me lo fa
+        // vedere». MISURATO sulle sue candele vere (XAU/USD, 18 novembre): la seconda entrata
+        // NASCEVA alle 17:20 a 3742,90, stop 3750,16, target 3728,38 - e poi spariva, buttata
+        // via da qui appena partiva un'altra costruzione. Senza aver toccato niente, e senza
+        // nemmeno finire fra quelle chiuse: sul grafico restava solo la prima entrata.
+        // A chiudere un'operazione dev'essere il PREZZO, o la sua scadenza. Mai il fatto che il
+        // mercato abbia ricominciato a costruire da un'altra parte.
+        st.op = null; st.opSnap = null;
       }
+      // IL PAREGGIO PRIMA DELLE CHIUSURE: se in questa stessa barra il prezzo ha raggiunto il
+      // livello del break-even, lo stop si e' gia' spostato, e la chiusura va giudicata sullo
+      // stop NUOVO. Farlo dopo vorrebbe dire chiudere in perdita un'operazione che era gia' al
+      // sicuro.
+      bosApplicaBreakEven(st, p, r);
       // Le operazioni vive si chiudono quando il prezzo tocca il loro stop o il loro target.
       bosChiudiOperazioniToccate(st, r, i);
-      // La prima entrata, se la conferma non arriva mai, non puo' restare accesa per sempre.
-      st.ops = st.ops.filter(o => o.nome !== 'pullback' || (i - o.barra) <= maxWait);
+      // E quando scadono: nessuna resta accesa per sempre, ma lo si DICE (esito «scaduta»)
+      // invece di farla sparire di nascosto.
+      for (let k = st.ops.length - 1; k >= 0; k--) {
+        const o = st.ops[k];
+        if (i - o.barra > maxWait) {
+          o.esito = 'scaduta'; o.barraFine = i;
+          st.opsFinite.push(o); if (st.opsFinite.length > 4) st.opsFinite.shift();
+          if (st.op === o) { st.op = null; st.opSnap = null; }
+          st.ops.splice(k, 1);
+        }
+      }
       if (!st.op && st.ops.length) st.op = st.ops[st.ops.length - 1];
 
       // --- LA SCALETTA. Racconta un setup alla volta: quello appena completato se c'e'
@@ -21460,8 +21539,16 @@ const VALID_BOS_PULLBACK_DEF = {
     for (const o of (st.ops || []).concat(st.opsFinite || [])) {
       const fin = Number.isFinite(o.barraFine) ? o.barraFine : Math.max(dataEnd, o.barra);
       const cEntry = o.dir === 1 ? p.bullColor : p.bearColor;
-      const breve = (o.nome === 'pullback' ? 'Pullback' : 'Conferma')
-        + (o.esito === 'target' ? ' ✓ target' : o.esito === 'stop' ? ' ✗ stop' : '');
+      // LE SCRITTE SI LEGGONO UNA VOLTA SOLA (19 novembre 2026). SEGNALATO dal proprietario:
+      // «migliora le scritte a grafico, cosi' si capiscono poco; non scrivere su ogni etichetta
+      // target altrimenti non si capisce». Prima ogni riga ripeteva nome ed esito - «Pullback ✓
+      // target · stop», «Pullback ✓ target · target» - e la parola target compariva tre volte
+      // con tre significati. Adesso: il nome e l'esito stanno SOLO sulla riga dell'entrata, e le
+      // altre due righe dicono solo cosa sono, con la sigla corta.
+      const esito = o.esito === 'target' ? '  ✓ chiusa a target'
+                  : o.esito === 'stop' ? '  ✗ chiusa a stop'
+                  : o.esito === 'scaduta' ? '  · scaduta' : '';
+      const breve = (o.nome === 'pullback' ? 'Pullback' : 'Conferma');
       seg(o.barra, fin, o.entry, cEntry, 1, true);
       seg(o.barra, fin, o.sl, '#f23645', 1, true);
       seg(o.barra, fin, o.tp, '#089981', 1, true);
@@ -21471,9 +21558,16 @@ const VALID_BOS_PULLBACK_DEF = {
       // accanto alla linea a cui appartengono.
       const lotti = (o.lotto && Number.isFinite(o.lotto.lotti))
         ? ('  ·  ' + (typeof fmtLottiQuick === 'function' ? fmtLottiQuick(o.lotto.lotti) : o.lotto.lotti) + ' lotti') : '';
-      txt(breve + ' · entrata ' + fmtPrice(o.entry) + lotti, xT, y(o.entry) - 7, cEntry, 'left', 'bold 10px system-ui');
-      txt(breve + ' · stop ' + fmtPrice(o.sl), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
-      txt(breve + ' · target ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
+      txt(breve + '  ' + fmtPrice(o.entry) + lotti + esito, xT, y(o.entry) - 7, cEntry, 'left', 'bold 10px system-ui');
+      txt('SL ' + fmtPrice(o.sl) + (o.beFatto ? ' (a pareggio)' : ''), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
+      txt('TP ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
+      // IL LIVELLO DEL BREAK-EVEN SI VEDE PRIMA CHE SCATTI: e' la riga della richiesta. Finche'
+      // non e' scattato si disegna la linea con la sua scritta; dopo non serve piu', perche' il
+      // posto dove e' andato lo stop si legge gia' sulla riga SL.
+      if (!o.beFatto && Number.isFinite(o.beLivello)) {
+        seg(o.barra, fin, o.beLivello, '#DDA94F', 1, true);
+        txt('BE a ' + fmtPrice(o.beLivello), xT, y(o.beLivello) - 7, '#DDA94F', 'left', '10px system-ui');
+      }
     }
 
     if (p.mostraScaletta && st.scaletta) scalettaDisegna(ctx, ind, st.scaletta, p.posScaletta, 'BOS Pullback');
@@ -21497,6 +21591,10 @@ const BOS_SETTINGS = [
   {type: 'color', key: 'bullColor', label: 'BOS rialzista'},
   {type: 'color', key: 'bearColor', label: 'BOS ribassista'},
   {type: 'num', key: 'rrTarget', label: 'Target in R (R:R)', min: 0.5, max: 10, step: 0.1},
+  // IL BREAK-EVEN, con le parole del proprietario: a che percentuale del target scatta, e di
+  // quanti pip si sposta lo stop dall'ingresso. Zero per cento = spento.
+  {type: 'num', key: 'bePerc', label: 'Break-even: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
+  {type: 'num', key: 'bePips', label: 'Break-even: pip oltre l\'entrata', min: 0, max: 1000, step: 1},
   {type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
   // options a null: l'elenco delle posizioni si legge quando il pannello si apre, non adesso
   // (SCALETTA_POSIZIONI e' dichiarata piu' in basso in questo stesso script).

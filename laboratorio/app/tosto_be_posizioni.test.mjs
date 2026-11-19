@@ -19,7 +19,7 @@
 // del mercato — che non c'entra niente. Il primo test è quello rosso.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {apriApp, RADICE} from './aiuti.mjs';
+import {apriApp, RADICE, oraDiRoma} from './aiuti.mjs';
 
 // Una posizione REALE (mt5Ticket) tracciata nell'app, piu' la sua fotografia dal ponte: è il caso
 // del proprietario, la posizione aperta sul conto che compare in tutte e due le tabelle.
@@ -119,8 +119,10 @@ const ORE = {fredda: [15, 0], calda: [21, 40]};
 async function apriECollega({ponteRisponde = true, ora = 'fredda'} = {}) {
   const registro = {letture: [], scritture: []};
   const {browser, pagina, errori} = await apriApp({larghezza: 1400, altezza: 1900});
-  const quando = new Date(); quando.setHours(ORE[ora][0], ORE[ora][1], 0, 0);
-  await pagina.clock.setFixedTime(quando);
+  // L'ora si chiede a ROMA, non alla macchina: il collaudo di GitHub gira in UTC e «21:40»
+  // li' sarebbe un altro istante (vedi oraDiRoma in aiuti.mjs, e il rosso del 19 novembre).
+  const quando = await oraDiRoma(pagina, ORE[ora][0], ORE[ora][1]);
+  await pagina.clock.setFixedTime(new Date(quando));
   await ponteFinto(pagina, {ponteRisponde, registro});
   await pagina.evaluate(([p, ok]) => { eval('(' + p + ')')(ok === 'true'); },
                         [PREPARA.toString(), ponteRisponde ? 'true' : 'false']);
