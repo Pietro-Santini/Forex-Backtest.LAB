@@ -7885,3 +7885,27 @@ vedono**:
 Quindi il sintomo dipende da uno stato che la scena non riproduce: schermo intero, finestra
 separata vera, o un passaggio preciso che va fatto a mano. Serve il gesto esatto dal proprietario
 prima di toccare il codice - curare a occhi chiusi qui vorrebbe dire rompere quello che funziona.
+## 19 novembre 2026 - v2.2.85: in replay i comandi compaiono su TUTTE le finestre
+
+SEGNALATO dal proprietario, e stavolta con i tre dettagli che hanno permesso di riprodurlo in
+dieci minuti: «finestra separata; il replay parte da tutte le finestre, main e duplicate; i
+pulsanti ci sono SOLO nella finestra dove e' stato lanciato e non sono visibili nelle altre».
+
+CAUSA MISURATA: la finestra che RICEVE l'annuncio `replay_sync` entra davvero in replay
+(`fblReplayApplicaIstante` mette `liveReplayActive=true`) e chiama `update()` - ma `update()` non
+tocca la barra del replay. L'unica funzione che mostra ESCI, le frecce ◀ ▶, il PLAY e il
+moltiplicatore e' `updateLiveReplayUI()`, e la chiamava **solo chi il replay lo lanciava**
+(`avviaReplayLive`). Nel banco: ricevuto l'annuncio, `liveReplayActive` true e il pulsante ESCI
+`nascosto`.
+
+Una finestra dentro al replay ma senza i comandi per avanzare sembra rotta. Entrare nel replay e
+mostrare i comandi del replay sono la stessa cosa: adesso stanno insieme.
+
+Banco `replay_comandi_su_tutte.test.mjs`, 2 prove (una rossa prima, l'altra e' la prova di
+controllo: finito il replay i comandi devono sparire, altrimenti la finestra mentirebbe
+nell'altro verso). Banchi vicini del replay verdi: 34 prove.
+
+LEZIONE SUL METODO, da ricordare: il giro precedente non ero riuscito a riprodurre niente e
+l'avevo scritto invece di curare a caso. Sono bastate tre risposte del proprietario - che tipo di
+finestra, da dove parte il replay, se i pulsanti mancano o non rispondono - per trovare la riga
+esatta. Chiedere il gesto costa un messaggio; indovinare costa una versione sbagliata.
