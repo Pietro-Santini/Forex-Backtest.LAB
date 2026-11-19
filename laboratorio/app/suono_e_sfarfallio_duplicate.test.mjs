@@ -346,7 +346,57 @@ test('con due finestre l\'apertura di una posizione suona una volta sola', async
     assert.equal(a.suoni + b.suoni, 1,
       'una sola apertura deve produrre un solo suono, non uno per finestra. ' +
       'Madre ' + a.suoni + ' + duplicata ' + b.suoni + ' = ' + (a.suoni + b.suoni));
-    assert.equal(b.suoni, 0, 'la duplicata non deve suonare per un evento che arriva da MT5: ' + b.suoni);
+    // QUALE delle due finestre suona non e' garantito, ed è una scelta, non una svista (19
+    // novembre 2026). La prenotazione dell'evento e' first-come-first-served: la prima finestra
+    // che PRENOTA annuncia, l'altra tace. Chi arriva prima dipende da quale dei due polling
+    // indipendenti gira per primo - e stabilire una regola fissa («suona sempre la madre») vor
+    // dire chiedere al BATTITO di presenza, che e' esattamente la cura che abbiamo appena
+    // tolto perche' dipendeva dai tempi (verde in locale, rossa sui runner lenti).
+    // Cio' che si garantisce, e che il proprietario ha chiesto, è: UN suono, non due. E una
+    // finestra non puo' aver suonato DUE volte per lo stesso evento, perche' la prenotazione
+    // vale per chiave e resta occupata venti secondi.
+    assert.ok(Math.max(a.suoni, b.suoni) <= 1,
+      'una stessa apertura non deve poter essere annunciata due volte dalla stessa finestra: ' +
+      'madre ' + a.suoni + ', duplicata ' + b.suoni);
+  } finally { await bench.browser.close(); }
+});
+
+// ===========================================================================
+// PROVA 2-bis — LA CONDIZIONE DEL RUNNER LENTO, riprodotta a comando.
+//
+// Il 19 novembre 2026 lo STESSO commit e' passato sul ramo `main` ed e' caduto sul ramo di
+// lavoro: «madre 1, duplicata 1». La causa non era il caso: l'adozione della posizione decideva
+// ancora col BATTITO di presenza (`fblSuonoDaMt5SpettaAMe`), e su una macchina lenta il primo
+// giro arriva prima che il battito dell'altra finestra sia stato sentito: ognuna si crede la
+// sola. Qui il battito viene spento apposta in tutte e due le finestre, che e' esattamente quello
+// stato; se il suono continua a essere uno, la decisione non dipende piu' dai tempi.
+// ===========================================================================
+test('con il battito di presenza NON ancora arrivato la stessa apertura suona lo stesso una volta sola', async () => {
+  const bench = await apriDueFinestre();
+  try {
+    await preparaDue(bench);
+    for (const pagina of [bench.madre, bench.duplicata]) {
+      await pagina.evaluate(() => {
+        try { clearInterval(tgPresenzaTimer); } catch (e) {}
+        tgPresenzaTimer = null;
+        try { for (const k in tgPresenzaSlot) delete tgPresenzaSlot[k]; } catch (e) {}
+        tgPresenzaBatti = function () {};          // nessuno si annuncia piu'
+        window.tgPresenzaBatti = function () {};
+      });
+    }
+    await setFoto(bench.madre, []);
+    await setFoto(bench.duplicata, []);
+    await Promise.all([giro(bench.madre), giro(bench.duplicata)]);
+    await bench.madre.waitForTimeout(800);
+    await setFoto(bench.madre, [CFG.chiusa]);
+    await setFoto(bench.duplicata, [CFG.chiusa]);
+    await Promise.all([giro(bench.madre), giro(bench.duplicata)]);
+    await bench.madre.waitForTimeout(900);
+    const a = await LEGGI(bench.madre);
+    const b = await LEGGI(bench.duplicata);
+    assert.equal(a.suoni + b.suoni, 1,
+      'senza battito la stessa apertura deve suonare una volta sola comunque (madre ' + a.suoni +
+      ', duplicata ' + b.suoni + ')');
   } finally { await bench.browser.close(); }
 });
 
@@ -426,8 +476,12 @@ test('con due finestre la chiusura suona una volta, non lascia righe doppie e no
     // se tacere con `mt5SoundSeenOpenTickets`, che e' un insieme DI PAGINA - entrambe le finestre
     // avevano visto il ticket aperto, quindi entrambe credevano di dover annunciare. Adesso la
     // domanda ha due meta': «l'ho visto aprire?» e «tocca a me?» (prenotazione condivisa).
-    assert.equal(b.suoni, 0,
-      'la duplicata non deve suonare per una chiusura che arriva da MT5: ' + b.suoni);
+    // Come per l'apertura (19 novembre 2026): la prenotazione dell'evento vale uno per tutte,
+    // non uno per la madre. Quindi cio' che si garantisce è un suono in tutto e mai due dalla
+    // stessa finestra; non È quale delle due lo emette.
+    assert.ok(Math.max(a.suoni - suoniDopoApertura, b.suoni - suoniDopoApertura) <= 1,
+      'una stessa chiusura non deve poter essere annunciata due volte dalla stessa finestra: ' +
+      'madre ' + (a.suoni - suoniDopoApertura) + ', duplicata ' + (b.suoni - suoniDopoApertura));
 
     // CAPOVOLTA IL 18 NOVEMBRE 2026. Restava un doppione DENTRO la madre: due strade annunciavano
     // la stessa chiusura (il giro dei sospetti che chiede conferma al ponte, e il giro delle
