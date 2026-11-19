@@ -7909,3 +7909,31 @@ LEZIONE SUL METODO, da ricordare: il giro precedente non ero riuscito a riprodur
 l'avevo scritto invece di curare a caso. Sono bastate tre risposte del proprietario - che tipo di
 finestra, da dove parte il replay, se i pulsanti mancano o non rispondono - per trovare la riga
 esatta. Chiedere il gesto costa un messaggio; indovinare costa una versione sbagliata.
+
+## 19 novembre 2026 - v2.2.86: il mirino viaggia nei due versi, e comanda chi ha mosso il mouse per ultimo
+
+SEGNALATO dal proprietario: il mirino del mouse si vede sulla finestra duplicata ma non torna
+indietro. Non e' un difetto di disegno, e' una regola sbagliata.
+
+MISURA (misura_mirino_sequenza.mjs e misura_mirino_geometria.mjs): nella sequenza madre ->
+duplicata -> madre, la madre teneva il proprio mirino fermo su {x:527,y:353} e IGNORAVA il remoto
+{t:1794317263967.8, prezzo:1.0872} che le era gia' arrivato. La regola scritta prima - "il mirino
+locale comanda sempre" - aveva senso con un mouse e una finestra sola; con due finestre sullo
+stesso mouse e' il difetto stesso: chi riceve il movimento si crede l'unico, e chi ha mosso il
+mouse per ULTIMO perde sempre.
+
+CURA: i messaggi `mirino` (anche quelli inoltrati via `via`) portano `at`, l'orologio di chi ha
+mosso il mouse. Una finestra disegna il locale solo se `at` e' piu' recente del proprio ultimo
+movimento. In uscita dal grafico (pointerleave/pointerout) il locale si azzera, e
+`fblDimenticaMirinoLocale()` su blur e visibilitychange impedisce a una finestra lasciata
+indietro di continuare a credersi "l'ultima". Scadenza di sicurezza
+FBL_MIRINO_LOCALE_SCADUTO_MS=800 per gli annunci vecchi senza `at`.
+
+BANCHI: nuovo `mirino_da_entrambi_i_versi.test.mjs` (rosso prima, verde dopo) e
+`mirino_fra_finestre.test.mjs` riscritto nella prova "comanda chi ha mosso il mouse per ULTIMO",
+con il perche' scritto accanto: la vecchia regola non regge piu'. 13 prove verdi, 15/15 con i
+banchi vicini. Collaudo completo: Falliti 0 (6/6).
+
+LEZIONE: una regola che parla di "locale" e "remoto" ha gia' dentro l'errore quando i due lati
+sono lo stesso utente. Con un mouse solo non esiste il locale: esiste il movimento piu' recente.
+
