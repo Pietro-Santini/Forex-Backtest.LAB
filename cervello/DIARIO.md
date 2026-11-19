@@ -1,3 +1,37 @@
+- 2026-11-19 - Claude - **v2.2.89: la prenotazione degli eventi MT5 è atomica, e il suono
+  doppio fra finestre chiude per struttura.**
+  Ripreso il lavoro lasciato in sospeso. Il sintomo: «madre 1, duplicata 1» con due finestre
+  aperte, una sola apertura di posizione, due suoni. Appariva e spariva: verde alle 01:41 su
+  GitHub, rosso alle 12:12, e il 19 novembre lo STESSO commit è passato su `main` ed è caduto sul
+  ramo di lavoro. Un difetto che va e viene a seconda della macchina non è il caso: è una corsa.
+  **LA CAUSA, MISURATA.** La prenotazione dell'evento (chi ha diritto ad annunciarlo) stava su
+  `localStorage`, e localStorage **non è atomico**: misurato nel banco, due pagine che leggono la
+  stessa chiave vuota NELO STESSO ISTANTE la trovano vuota **entrambe** e annunciano entrambe.
+  Misurato anche il rimedio prima di usarlo: un **Web Lock** chiesto per nome è condiviso fra
+  tutte le pagine della stessa origine — la madre e la duplicata (`?pipSlot=2`) che chiedono lo
+  stesso lock si mettono in fila, e la seconda legge la chiave che la prima ha appena scritto.
+  **LA CURA.** `fblAnnuncioMt5MiSpetta` è diventata asincrona e fa lettura-e-scrittura DENTRO un
+  lock esclusivo per chiave: chi arriva secondo vede l'occupato e tace. Se il lock non arriva
+  (pagina che si chiude, browser che perde la coda) entro 1,5 secondi si risponde «annuncia»:
+  meglio un suono in più che un silenzio, perché su una chiusura vera il silenzioso è
+  un'informazione perduta. Se il browser non ha i lock (vecchio) si torna alla strada di prima,
+  che resta una riduzione enorme.
+  **L'ULTIMA PORTA ERA L'ADOZIONE:** era l'unico punto che decideva ancora col BATTITO di
+  presenza (`fblSuonoDaMt5SpettaAMe`, che non esiste più), mentre chiusure e avvisi usavano già la
+  prenotazione. È esattamente il punto che sui runner lenti cadeva: il battito parte 1.200 ms
+  dopo il caricamento, e una finestra che non ha ancora sentito nessuno si crede la sola. Adesso
+  anche l'adozione prenota, e il ciclo è diventato sequenziale perché `await` non si può usare
+  dentro un `forEach`.
+  **UNA MODIFICA ONESTA AL BANCO.** Due prove pretendevano che a suonare fosse *sempre la madre*.
+  La prenotazione è first-come-first-served: vince chi prenota prima, e chi arriva prima dipende
+  da quale dei due polling indipendenti gira per primo. Costringere la madre a vincere vorrebbe
+  dire chiedere di nuovo al battito — la cura che abbiamo appena tolto perché dipendeva dai
+  tempi. Ho sostituito quella pretesa con ciò che si garantisce davvero: **un suono in tutto, e
+  mai due dalla stessa finestra**. È scritto nel commento della prova, così domani nessuno
+  rimpiange una regola che non c'era.
+  Collaudo locale: 1.765 test, 0 falliti (la prova nuova 2-bis — battito spento di proposito in
+  tutte e due le finestre, cioè lo stato esatto del runner lento — è verde; due corse
+  consecutive, perché il sintomo era intermittente).
 - 2026-11-19 - Claude - **v2.2.88: i modelli hanno una casa sola, e ogni pannello ha il suo
   «Predefinito».**
   SEGNALATO dal proprietario, dopo giorni di tentativi: «ancora il salvataggio dei modelli per il
