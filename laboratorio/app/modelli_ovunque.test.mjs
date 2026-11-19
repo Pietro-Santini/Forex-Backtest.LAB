@@ -152,21 +152,22 @@ for (const tipo of ['vpfixed', 'vpanchor', 'vwap']) {
   });
 }
 
-// QUELLO CHE SALVI DEVE VEDERSI DOVE L'HAI SALVATO (19 novembre 2026).
+// OGNI MODELLO NEL SUO MENU (19 novembre 2026).
 //
-// SEGNALATO: «Fibonacci non funziona manco per sogno... magari lo salvera' pure, ma non me lo fa
-// vedere nella lista, per poterlo richiamare». MISURATO: un Fibonacci salvato dal menu
-// «Modello ⌄» della barra finisce nel cassetto dei modelli Fibonacci e in QUEL menu non compare
-// piu' (si vede solo aprendo il modulo del Fibonacci); un profilo salvato da li' sparisce allo
-// stesso modo. Dal 18 novembre ogni classe ha il suo cassetto - giusto - ma nessuno mostra
-// all'utente dove e' finito.
+// Il proprietario ha poi precisato: «per quanto riguarda la lista dei modelli sulla barra laterale
+// mi deve fare vedere solo i modelli delle linee e rettangoli». Quindi la regola e':
+//  - linee e rettangoli -> menu «Modello ⌄» della barra laterale;
+//  - Fibonacci          -> menu «Modello Fib ⌄» del suo modulo;
+//  - profili e VWAP     -> lista «Modelli salvati» nelle impostazioni dello strumento.
+// Un modello non deve comparire in due posti: chi ne salva uno lo ritrova esattamente dove sta lo
+// strumento, e la barra laterale resta leggibile.
 for (const caso of [
   {tipo: 'fib', nome: 'Fib salvato qui', extra: {levels: [{v: 0}, {v: 0.618}, {v: 1}], opts: {labelsPrice: true}}},
   {tipo: 'vpfixed', nome: 'Profilo salvato qui', extra: {buckets: 24, upColor: '#00ff00', downColor: '#e05b64'}},
   {tipo: 'vwap', nome: 'VWAP salvato qui', extra: {band1Enabled: true, band1Mult: 2}},
   {tipo: 'line', nome: 'Linea salvata qui', extra: {}}
 ]) {
-  test(`un ${caso.tipo} salvato dal menu «Modello» si vede in quel menu`, async () => {
+  test(`un ${caso.tipo} salvato dal menu «Modello» compare nel menu della sua famiglia`, async () => {
     const {browser, pagina, errori} = await apriApp();
     try {
       const r = await pagina.evaluate(`(async () => {
@@ -178,12 +179,23 @@ for (const caso of [
         window.appPrompt = async () => ${JSON.stringify(caso.nome)}; appPrompt = window.appPrompt;
         const ok = await saveCurrentDrawingAsTemplate(d);
         openDrawTemplateMenu();
-        return {ok, voci: ${TESTI}(document.getElementById('drawTemplateList'))};
+        if (typeof renderFibTemplateMenu === 'function') renderFibTemplateMenu();
+        if (typeof renderVpTemplateMenu === 'function') renderVpTemplateMenu();
+        const testo = (id) => { const el = document.getElementById(id); return el ? ${TESTI}(el) : null; };
+        return {ok, laterale: testo('drawTemplateList'), fib: testo('fibTemplateList'), vp: testo('vpTemplateList')};
       })()`);
 
       assert.equal(r.ok, true, 'il modello doveva salvarsi');
-      assert.ok((r.voci || []).some(t => t.indexOf(caso.nome) >= 0),
-        'salvato dal menu «Modello», in quel menu non si vede piu: ' + JSON.stringify(r.voci));
+      if (caso.tipo === 'line') {
+        assert.ok((r.laterale || []).some(t => t.indexOf(caso.nome) >= 0),
+          'una linea salvata dal menu «Modello» deve restare in quel menu: ' + JSON.stringify(r.laterale));
+      } else {
+        assert.ok(!(r.laterale || []).some(t => t.indexOf(caso.nome) >= 0),
+          'questo modello NON deve comparire nel menu laterale delle linee: ' + JSON.stringify(r.laterale));
+        const dove = caso.tipo === 'fib' ? r.fib : r.vp;
+        assert.ok((dove || []).some(t => t.indexOf(caso.nome) >= 0),
+          'e deve comparire nel menu della sua famiglia: ' + JSON.stringify(dove));
+      }
       assert.deepEqual(errori, []);
     } finally { await browser.close(); }
   });

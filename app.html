@@ -2981,6 +2981,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="drawStyleModalBackBtn" class="toolBtn fbBackBtn">Indietro</button>
+    <button id="drawStyleModalDefaultBtn" class="toolBtn" title="Riporta questo disegno allo stile di fabbrica (colore, spessore, tratteggio, opacita, testo)">↺ Predefinito</button>
      <button id="drawStyleModalSaveTplBtn" class="toolBtn" title="Salva queste impostazioni come modello: lo ritrovi nel menu &quot;Modello ⌄&quot; della toolbar">💾 Salva modello</button>
      <button id="drawStyleModalOkBtn" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">Ok</button>
    </div>
@@ -3016,7 +3017,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
        <button id="fibTemplateBtn" class="toolBtn" title="Salva o applica un modello di impostazioni Fibonacci">Modello Fib ⌄</button>
        <div id="fibTemplateMenu" class="drawTemplateMenu" style="display:none;top:auto;bottom:calc(100% + 4px)">
          <button id="fibTemplateSaveAs" class="drawTemplateMenuItem">💾 Salva come...</button>
-         <button id="fibTemplateApplyDefault" class="drawTemplateMenuItem">↺ Applica predefiniti</button>
+         <button id="fibTemplateApplyDefault" class="drawTemplateMenuItem">↺ Predefinito</button>
          <div class="drawTemplateSep"></div>
          <div id="fibTemplateList"></div>
        </div>
@@ -3155,6 +3156,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
           Quindi ci sara' sempre carica il setup, salva e il pulsante per la lista per eliminare».
           Misurato: in questo pannello c'erano solo ✕, Indietro e Ok. -->
      <button type="button" id="vpTemplateSaveAs" class="toolBtn" style="flex:none">💾 Salva come modello…</button>
+     <button type="button" id="vpTemplateReset" class="toolBtn" style="flex:none" title="Riporta questo strumento alle impostazioni di fabbrica">↺ Predefinito</button>
      <div id="vpTemplateList" style="display:flex;flex-wrap:wrap;gap:6px;flex:1 1 100%"></div>
      <span class="hint" style="flex:1 1 100%;margin:2px 0 0">I modelli salvati si applicano con un clic sul nome e si eliminano con la ✕. Valgono fra strumenti della stessa famiglia: un modello di VWAP non si applica a un profilo.</span>
    </div>
@@ -4280,7 +4282,7 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
      <button id="drawTemplateBtn" class="toolBtn" title="Salva lo stile e il testo del disegno selezionato come modello predefinito, o riapplica un modello salvato in precedenza">Modello ⌄</button>
      <div id="drawTemplateMenu" class="drawTemplateMenu" style="display:none">
        <button id="drawTemplateSaveAs" class="drawTemplateMenuItem">💾 Salva come...</button>
-       <button id="drawTemplateApplyDefault" class="drawTemplateMenuItem">↺ Applica predefiniti</button>
+       <button id="drawTemplateApplyDefault" class="drawTemplateMenuItem">↺ Predefinito</button>
        <div class="drawTemplateSep"></div>
        <div id="drawTemplateList"></div>
      </div>
@@ -11793,6 +11795,9 @@ function drawingTemplateFromDrawing(d){
 function nomeModelloGiaUsato(nome){
  if(loadDrawingTemplates()[nome])return {famiglia:'disegni',dove:'menu "Modello ⌄"'};
  if(loadFibTemplates()[nome])return {famiglia:'fib',dove:'menu "Modello Fib ⌄"'};
+ // I modelli dei profili/VWAP stanno nelle impostazioni dello strumento: anche loro occupano il
+ // nome (il nome e' unico in tutto il programma, regola del proprietario).
+ if(loadVpTemplates()[nome])return {famiglia:'vp',dove:'impostazioni dello strumento, sezione "Modelli"'};
  return null;
 }
 // TUTTI i nomi già usati, di ENTRAMBE le famiglie (disegni generici e modelli Fibonacci), con
@@ -11805,6 +11810,10 @@ function nomiModelliGiaUsati(){
  Object.keys(loadFibTemplates()).forEach(n=>{
    if(voci.some(v=>v.nome===n))return; // un nome occupato due volte deve comparire una sola volta
    voci.push({nome:n,famiglia:'fib',dove:'menu "Modello Fib ⌄"',etichetta:'Modello Fib ⌄'});
+ });
+ Object.keys(loadVpTemplates()).forEach(n=>{
+   if(voci.some(v=>v.nome===n))return;
+   voci.push({nome:n,famiglia:'vp',dove:'impostazioni dello strumento, sezione "Modelli"',etichetta:'Modelli profilo'});
  });
  return voci.sort((a,b)=>a.nome.localeCompare(b.nome,'it'));
 }
@@ -11846,7 +11855,11 @@ function eliminaModelloOmonimo(nome){
  if(g[nome]){ delete g[nome]; saveDrawingTemplates(g); }
  const f=loadFibTemplates();
  if(f[nome]){ delete f[nome]; saveFibTemplates(f); }
- renderDrawTemplateMenu(); renderFibTemplateMenu();
+ // Anche il cassetto dei profili: senza, sovrascrivendo un nome nato li' il modello vecchio
+ // restava in memoria e il nome sembrava ancora occupato.
+ const v=loadVpTemplates();
+ if(v[nome]){ delete v[nome]; saveVpTemplates(v); }
+ renderDrawTemplateMenu(); renderFibTemplateMenu(); try{ renderVpTemplateMenu(); }catch(e){}
 }
 async function saveCurrentDrawingAsTemplate(drawingArg){
  closeDrawTemplateMenu();
@@ -11865,7 +11878,12 @@ async function saveCurrentDrawingAsTemplate(drawingArg){
  // fibonacci e il profilo volumetrico ancora non me li salva i modelli».
  const classe=fblClasseModello(d.type);
  const templates=(classe==='fib')?loadFibTemplates():(classe==='vp')?loadVpTemplates():loadDrawingTemplates();
- templates[nome]=drawingTemplateFromDrawing(d);
+ const modello=drawingTemplateFromDrawing(d);
+ // IL TIPO LO PORTA SEMPRE (19 novembre 2026). Il vecchio «Salva come» del Fibonacci scriveva
+ // solo livelli e opzioni: senza «type» il modello non si poteva applicare con sicurezza e non si
+ // capiva di che strumento fosse. Nei cassetti del proprietario ce ne sono diversi cosi'.
+ if(classe==='fib'&&!modello.type)modello.type='fib';
+ templates[nome]=modello;
  // «MODELLO SALVATO» SI DICE SOLO SE E' SALVATO DAVVERO (18 novembre 2026).
  //
  // SEGNALATO: «quando vado a salvarlo mi dice modello salvato, ma dopo quando vado sulla lista
@@ -11957,70 +11975,23 @@ async function deleteDrawingTemplate(name){
 function renderDrawTemplateMenu(){
  const list=$('drawTemplateList'); if(!list)return;
  const templates=loadDrawingTemplates();
- const names=Object.keys(templates).sort((a,b)=>a.localeCompare(b,'it'));
+ // QUI SOLO LINEE E RETTANGOLI (richiesto dal proprietario, 19 novembre 2026).
+ //
+ // Prima questo menu leggeva TUTTE E TRE le memorie e mostrava anche i modelli Fibonacci e quelli
+ // dei profili/VWAP: chi cercava una linea si trovava davanti strumenti che non c'entrano, e i
+ // modelli degli altri cassetti sembravano "salvati due volte". Ogni famiglia ha il suo posto:
+ // Fibonacci nel menu «Modello Fib», profili e VWAP nelle impostazioni dello strumento.
+ const names=Object.keys(templates)
+   .filter(n=>templates[n]&&fblClasseModello(templates[n].type)==='disegno')
+   .sort((a,b)=>a.localeCompare(b,'it'));
  list.innerHTML='';
- let quantiAltri=0;
- try{ quantiAltri=Object.keys(loadFibTemplates()).length+Object.keys(loadVpTemplates()).length; }catch(e){}
- if(!names.length&&!quantiAltri){
+ if(!names.length){
    const empty=document.createElement('div');
    empty.className='drawTemplateEmpty';
-   empty.textContent='Nessun modello salvato. Seleziona un disegno e scegli "Salva come...".';
+   empty.textContent='Nessun modello per linee e rettangoli. Seleziona un disegno e scegli "Salva come...". I modelli Fibonacci e quelli dei profili/VWAP stanno nei loro menu.';
    list.appendChild(empty);
    return;
  }
- // TUTTI I MODELLI SI VEDONO DA QUI (19 novembre 2026).
- //
- // SEGNALATO dal proprietario: «magari lo salvera' pure, ma non me lo fa vedere nella lista, per
- // poterlo richiamare». MISURATO: un Fibonacci salvato da QUESTO menu finisce nel cassetto dei
- // modelli Fibonacci e in questo menu non compariva piu' (si vedeva solo aprendo il modulo del
- // Fibonacci); un profilo salvato da qui spariva allo stesso modo dentro il cassetto dei profili.
- // Dal 18 novembre ogni classe ha il suo cassetto - ed e' giusto, perche' un modello di VWAP non
- // si applica a una linea - ma il posto DA CUI SI SALVA deve mostrare quello che si e' salvato.
- // Qui sotto le tre memorie si leggono insieme; ogni riga dice a che strumento appartiene, e
- // applicandola a uno strumento di un'altra famiglia il programma lo dice invece di fare danni.
- const altri=[];
- try{ Object.keys(loadFibTemplates()).forEach(n=>altri.push({nome:n,classe:'fib',t:loadFibTemplates()[n]})); }catch(e){}
- try{ Object.keys(loadVpTemplates()).forEach(n=>altri.push({nome:n,classe:'vp',t:loadVpTemplates()[n]})); }catch(e){}
- altri.forEach(({nome,classe,t})=>{
-   const row=document.createElement('div');
-   row.className='drawTemplateRow';
-   const main=document.createElement('div');
-   main.className='drawTemplateRowMain';
-   const nameEl=document.createElement('div');
-   nameEl.className='drawTemplateRowName';
-   nameEl.textContent=nome; nameEl.title=nome;
-   const metaEl=document.createElement('div');
-   metaEl.className='drawTemplateRowMeta';
-   const dove=(classe==='fib')?'Fibonacci':(t&&t.type==='vwap')?'VWAP':'Profilo volumetrico';
-   metaEl.textContent=dove+' · si applica a uno strumento dello stesso tipo';
-   metaEl.title=metaEl.textContent;
-   main.appendChild(nameEl); main.appendChild(metaEl);
-   const delBtn=document.createElement('button');
-   delBtn.className='drawTemplateRowDel'; delBtn.title='Elimina questo modello'; delBtn.textContent='🗑';
-   delBtn.addEventListener('click',async ev=>{
-     ev.stopPropagation();
-     if(classe==='fib'){
-       if(!await appConfirm('Eliminare definitivamente il modello "'+nome+'"?'))return;
-       const t2=loadFibTemplates(); delete t2[nome]; saveFibTemplates(t2);
-       try{ renderFibTemplateMenu(); }catch(e){}
-     }else{ await deleteVpTemplate(nome); }
-     renderDrawTemplateMenu();
-   });
-   row.appendChild(main); row.appendChild(delBtn);
-   row.addEventListener('click',()=>{
-     closeDrawTemplateMenu();
-     if(classe==='vp'){ applyVpTemplate(nome); return; }
-     // Fibonacci: si applica al disegno selezionato, se e' un Fibonacci.
-     const d=selectedDrawing;
-     if(!d||d.type!=='fib'){ $('status').textContent='Seleziona un ritracciamento di Fibonacci, poi applica il modello "'+nome+'".'; return; }
-     try{ pushHistory(); }catch(e){}
-     if(t&&t.levels)d.levels=JSON.parse(JSON.stringify(t.levels));
-     if(t&&t.opts)d.opts=Object.assign({},d.opts||{},t.opts);
-     try{ draw(); }catch(e){}
-     $('status').textContent='Modello Fibonacci "'+nome+'" applicato.';
-   });
-   list.appendChild(row);
- });
  names.forEach(name=>{
    const t=templates[name];
    const row=document.createElement('div');
@@ -12213,6 +12184,34 @@ async function deleteVpTemplate(nome){
  $('status').textContent='Modello "'+nome+'" eliminato.';
  return true;
 }
+// LE IMPOSTAZIONI DI FABBRICA DI UN PROFILO E DI UN VWAP (19 novembre 2026).
+//
+// CHIESTO dal proprietario: «un tasto con scritto "predefinito", cioe' un tasto che ci permette di
+// ritornare alle impostazioni di fabbrica dell'indicatore/disegno ecc.». Sono gli stessi valori con
+// cui nasce uno strumento nuovo (vedi la creazione in app.html): se cambiano li', cambiano qui.
+function vpDefaultOpzioni(tipo){
+ if(tipo==='vwap'){
+  return {color:defaultColorFor('vwap'), lineWidth:2,
+   band1Enabled:true, band1Mult:1, band1Color:'#3ea6ff', band1Width:1,
+   band2Enabled:false, band2Mult:2, band2Color:'#f0a020', band2Width:1,
+   band3Enabled:false, band3Mult:3, band3Color:'#c77dff', band3Width:1};
+ }
+ const c=currentCandleColors();
+ return {upColor:c.up, downColor:c.down, buckets:200, barSizePct:500, extendRight:false,
+  bgEnabled:true, bgColor:'#ffffff', bgOpacity:5,
+  lvnEnabled:true, lvnColor:'#00e676', lvnOpacity:25, lvnThresholdPct:15, lvnEdgePct:8,
+  pocEnabled:true, pocColor:'#ff9800', pocWidth:1, pocLineStyle:'solid', pocExtend:false,
+  vahEnabled:true, vahColor:'#3ea6ff', vahWidth:1, vahLineStyle:'dashed',
+  valEnabled:true, valColor:'#3ea6ff', valWidth:1, valLineStyle:'dashed', vaExtend:false,
+  obEnabled:false,
+  ...(tipo==='vpfixed'?{tfAnchor:'candles',vpTfAnchor:'candles'}:{})};
+}
+function vpApplicaPredefiniti(d){
+ if(!d)return false;
+ const base=vpDefaultOpzioni(d.type);
+ Object.keys(base).forEach(k=>{ d[k]=base[k]; });
+ return true;
+}
 // A quale cassetto appartiene uno strumento. Una funzione sola: prima ogni strada decideva da
 // se', ed e' cosi' che un Fibonacci finiva fra i disegni.
 function fblClasseModello(tipo){
@@ -12242,6 +12241,54 @@ function saveFibTemplates(templates){
  try{ localStorage.setItem(FIB_TEMPLATE_STORAGE_KEY,JSON.stringify(templates)); return true; }
  catch(e){ fblMemoriaPienaAvvisa('il modello Fibonacci'); return false; }
 }
+
+// I MODELLI DEI GIORNI PRECEDENTI DEVONO RITROVARSI (19 novembre 2026).
+//
+// SEGNALATO: «sono giorni che ci sto lavorando senza risolvere il problema». Nei giorni in cui il
+// salvataggio metteva ogni modello nel cassetto dei disegni, il proprietario ne ha salvati diversi
+// che oggi sono in memorie sbagliate: un Fibonacci in fbtDrawingTemplates_v1 non comparira' MAI nel
+// menu «Modello Fib», perche' quel menu legge solo la sua memoria. Non basta curare il salvataggio
+// nuovo: i modelli gia' salvati vanno riportati a casa, altrimenti il difetto resta a schermo.
+//
+// La famiglia si legge DAL CONTENUTO, non dal cassetto in cui si trova:
+//  - «type» fib / vpfixed / vpanchor / vwap e' la verita' piu' diretta;
+//  - senza «type», levels/opts sono di un Fibonacci (era la vecchia strada «Salva come»);
+//  - senza «type», i campi dei profili (buckets, upColor, band1Mult...) sono di un profilo o VWAP.
+// Un modello spostato riceve anche il «type» che gli mancava, se no non si applica.
+function fblFamigliaModello(t){
+ if(!t||typeof t!=='object')return null;
+ if(t.type==='fib')return 'fib';
+ if(t.type==='vpfixed'||t.type==='vpanchor'||t.type==='vwap')return 'vp';
+ if(Array.isArray(t.levels)||(t.opts&&typeof t.opts==='object'))return 'fib';
+ if(VP_CAMPI_MODELLO.some(c=>t[c]!==undefined))return 'vp';
+ return 'disegno';
+}
+function fblRiparaCassettiModelli(){
+ const cassetti={disegno:loadDrawingTemplates(),fib:loadFibTemplates(),vp:loadVpTemplates()};
+ let cambiato=false;
+ ['disegno','fib','vp'].forEach(da=>{
+  const voci=cassetti[da];
+  Object.keys(voci).forEach(nome=>{
+   const modello=voci[nome];
+   const giusto=fblFamigliaModello(modello);
+   if(!giusto||giusto===da)return;
+   if(!modello.type){
+    // Il tipo che gli mancava: e' l'informazione senza cui il modello non si applica.
+    if(giusto==='fib')modello.type='fib';
+    else if(giusto==='vp')modello.type='vpfixed'; // il profilo a intervallo fisso era il predefinito
+   }
+   cassetti[giusto][nome]=modello;
+   delete voci[nome];
+   cambiato=true;
+  });
+ });
+ if(!cambiato)return false;
+ saveDrawingTemplates(cassetti.disegno);
+ saveFibTemplates(cassetti.fib);
+ saveVpTemplates(cassetti.vp);
+ return true;
+}
+try{ fblRiparaCassettiModelli(); }catch(e){ console.warn('[Modelli] riordino dei cassetti non riuscito:',e); }
 function renderFibTemplateMenu(){
  const list=$('fibTemplateList'); if(!list)return;
  const templates=loadFibTemplates();
@@ -12479,10 +12526,13 @@ function closeVpSettingsModal(revert){
  vpModalTarget=null;
  vpModalSnapshot=null;
 }
-function applyVpSettingsFromModal(){
- if(!vpModalTarget){ closeVpSettingsModal(); return; }
- pushHistory();
- const d=vpModalTarget;
+function readVpSettingsFromModal(d){
+ // LEGGE IL PANNELLO, NON CHIUDE E NON DISEGNA (19 novembre 2026). Serve a due cose che
+ // devono per forza vedere gli stessi campi: premere Ok e salvare il modello. Prima il
+ // salvataggio leggeva lo STRUMENTO, cioe' i valori di prima, e chi cambiava le bande o le
+ // soglie e poi premeva «Salva come modello» si ritrovava un modello vecchio: da fuori,
+ // «non me lo salva». Una lettura sola, due usi.
+ if(!d)return;
  if(d.type==='vpfixed'||d.type==='vpanchor'){
    d.upColor=$('vpUpColor')?.value||d.upColor;
    d.downColor=$('vpDownColor')?.value||d.downColor;
@@ -12553,6 +12603,12 @@ function applyVpSettingsFromModal(){
    const b3w=Math.round(Number($('vpBand3Width')?.value));
    d.band3Width=Number.isFinite(b3w)?Math.max(1,Math.min(10,b3w)):d.band3Width;
  }
+}
+function applyVpSettingsFromModal(){
+ if(!vpModalTarget){ closeVpSettingsModal(); return; }
+ pushHistory();
+ const d=vpModalTarget;
+ readVpSettingsFromModal(d);
  draw(); scheduleSave();
  $('status').textContent='Impostazioni del profilo volumetrico applicate.';
  closeVpSettingsModal(false);
@@ -14117,7 +14173,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.87';
+const FBL_VERSIONE='2.2.88';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -23928,6 +23984,20 @@ function fblParamIniziali(key, def){
   Object.keys(base).forEach(k=>{ fuori[k]=(k in ricordati)?ricordati[k]:base[k]; });
   return fuori;
 }
+// LE IMPOSTAZIONI DI FABBRICA DI UN INDICATORE (19 novembre 2026). Stessa richiesta fatta per i
+// disegni: un tasto «Predefinito» che riporta i parametri a quelli con cui l'indicatore nasce.
+// Si annotano anche come "ultimi usati", altrimenti togliendolo e rimettendolo tornerebbe il
+// setup sporco che si stava cercando di lasciare.
+function fblPredefinitoIndicatore(ind){
+ const def=INDICATOR_DEFS[ind&&ind.key]; if(!def)return false;
+ ind.params=def.defaultParams();
+ ind.calc={serie:null,builtTo:-1};
+ try{ fblRicordaParamIndicatore(ind.key,ind.params); }catch(e){}
+ rebuildIndicatorSettingsModal();
+ draw();
+ $('status').textContent='Impostazioni di fabbrica ripristinate per '+def.label+'.';
+ return true;
+}
 function loadIndicatorPresets(key){
  try{
    const raw=localStorage.getItem(PRESET_STORAGE_PREFIX+key);
@@ -24300,6 +24370,14 @@ function openIndicatorSettingsModal(ind){
    saveBtn.className='toolBtn'; saveBtn.textContent='💾'; saveBtn.title='Salva i parametri attuali come nuovo setup nominato';
    saveBtn.addEventListener('click',()=>savePresetForIndicator(ind));
    presetRow.appendChild(saveBtn);
+    // «PREDEFINITO» DENTRO IL PANNELLO DELL'INDICATORE (19 novembre 2026).
+    const defBtn=document.createElement('button');
+    defBtn.id='indPresetDefaultBtn';
+    defBtn.className='toolBtn';
+    defBtn.textContent='↺ Predefinito';
+    defBtn.title='Riporta questo indicatore ai parametri di fabbrica';
+    defBtn.addEventListener('click',()=>fblPredefinitoIndicatore(ind));
+    presetRow.appendChild(defBtn);
    if(presetNames.length){
      const delBtn=document.createElement('button');
      delBtn.className='toolBtn'; delBtn.textContent='🗑📂'; delBtn.title='Mostra i setup salvati, per applicarli o eliminarli';
@@ -46774,10 +46852,31 @@ $('vpTemplateSaveAs')?.addEventListener('click',async ev=>{
  // messaggio qui sotto lo dice chiaramente invece di lasciarlo intuire.
  const d=(typeof vpModalTarget!=='undefined'&&vpModalTarget)?vpModalTarget:selectedDrawing;
  if(!d){ $('status').textContent='Nessuno strumento da salvare come modello.'; return; }
+ // QUELLO CHE SI VEDE NEI CAMPI E' QUELLO CHE SI SALVA (19 novembre 2026).
+ // Prima si salvava lo strumento, che porta i valori di prima finche' non si preme Ok: chi
+ // cambiava le bande, le soglie o i colori e premeva subito «Salva come modello» otteneva un
+ // modello vecchio. Il messaggio lo ammetteva («premi Ok e salvalo di nuovo»), ma un pulsante che
+ // chiede di rifare il lavoro non e' un pulsante.
+ try{ readVpSettingsFromModal(d); }catch(e){}
  const fatto=await saveCurrentDrawingAsTemplate(d);
  try{ renderVpTemplateMenu(); }catch(e){}
- if(fatto)$('status').textContent=($('status').textContent||'')
-   +' (il modello riprende le impostazioni gia applicate allo strumento: se hai appena cambiato qualcosa, premi Ok e salvalo di nuovo)';
+ if(fatto)$('status').textContent=$('status').textContent||'Modello salvato.';
+});
+// «PREDEFINITO» DENTRO IL PANNELLO (19 novembre 2026). Riporta lo strumento ai valori di fabbrica,
+// li mostra subito nei campi e sul grafico; resta «Ok» a confermare e «Annulla» (o Ctrl+Z) a
+// tornare com'era.
+$('vpTemplateReset')?.addEventListener('click',ev=>{
+ ev.stopPropagation();
+ const d=(typeof vpModalTarget!=='undefined'&&vpModalTarget)?vpModalTarget:selectedDrawing;
+ if(!d){ $('status').textContent='Apri le impostazioni di un profilo prima di riportarlo ai predefiniti.'; return; }
+ const prima=vpModalSnapshot?Object.assign({},vpModalSnapshot):null;
+ try{ pushHistory(); }catch(e){}
+ vpApplicaPredefiniti(d);
+ openVpSettingsModal(d);
+ // «Annulla» deve riportare a com'era PRIMA del predefinito, non ai predefiniti stessi.
+ if(prima)vpModalSnapshot=prima;
+ try{ draw(); }catch(e){}
+ $('status').textContent='Impostazioni di fabbrica ripristinate. Premi Ok per confermarle, o Annulla per tornare com\'erano.';
 });
 $('vpModalOkBtn')?.addEventListener('click',applyVpSettingsFromModal);
 $('vpModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('vpModalOverlay'))closeVpSettingsModal(); });
@@ -46889,6 +46988,18 @@ $('drawStyleModalSaveTplBtn')?.addEventListener('click',async()=>{
  // Salva SOLO il modello: la finestra resta aperta, poi si decide con Ok/Indietro cosa fare del disegno.
  const saved=await saveCurrentDrawingAsTemplate(d);
  if(saved){ const b=$('drawStyleModalSaveTplBtn'); const old=b.textContent; b.textContent='✅ Modello salvato'; setTimeout(()=>{ b.textContent=old; },1800); }
+});
+// «PREDEFINITO» DENTRO IL PANNELLO DELLO STILE (19 novembre 2026): riporta il disegno allo stile
+// di fabbrica. Non chiude la finestra e non tocca il catastico dell'apertura, quindi «Indietro»
+// continua a riportare a com'era quando si e' aperto il pannello.
+$('drawStyleModalDefaultBtn')?.addEventListener('click',()=>{
+ const d=drawStyleModalTarget; if(!d)return;
+ const col=defaultColorFor(d.type);
+ d.color=col; d.lineWidth=2; d.dashed=false; d.dotted=false; d.opacity=1;
+ d.fillColor=col; d.fillOpacity=.12; d.text='';
+ openDrawStyleModal(d);
+ draw(); scheduleSave();
+ $('status').textContent='Stile di fabbrica ripristinato. Premi Ok per applicarlo a questo disegno.';
 });
 $('drawTemplateApplyDefault')?.addEventListener('click',ev=>{ ev.stopPropagation(); applyDrawingDefaults(); });
 $('drawTemplateMenu')?.addEventListener('click',ev=>ev.stopPropagation());
