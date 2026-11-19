@@ -7824,3 +7824,37 @@ BANCO: `strategia_sala_be.test.mjs`, 4 prove. La quarta, alla prima scrittura, P
 DIFETTO RIMESSO: la scena non faceva nemmeno toccare il target, e poi il filtro della forbice
 leggeva il prezzo da `livePriceByAsset`, che non avevo aggiornato. Riscritta finche' la prova di
 controllo non ha fatto quello che doveva: rossa col difetto, verde con la cura.
+## 19 novembre 2026 - v2.2.83: i modelli si vedono dove li salvi
+
+CHIESTO dal proprietario: «tutti gli indicatori si devono poter salvare e comparire nella lista
+del carica setup; il pulsante della cartella si preme ma non mostra nulla, deve uscire fuori la
+lista dei nomi salvati con il cestino; stessa cosa per VWAP ancorato, profilo a intervallo fisso
+e profilo ancorato, perche' oggi non esiste la possibilita' di salvarli come modello». E poi:
+«Fibonacci non funziona manco per sogno... magari lo salvera' pure, ma non me lo fa vedere nella
+lista, per poterlo richiamare».
+
+LA MISURA CHE HA SPIEGATO TUTTO: un Fibonacci salvato dal menu «Modello ⌄» della barra finisce
+nel cassetto dei modelli Fibonacci e **in quel menu non compare piu'**; un profilo salvato da li'
+sparisce allo stesso modo dentro il cassetto dei profili. Dal 18 novembre ogni classe ha il suo
+cassetto - ed e' giusto, perche' un modello di VWAP non si applica a una linea - ma il posto DA
+CUI SI SALVA non mostrava quello che era appena stato salvato. Dal punto di vista di chi usa
+l'app: «lo salva e sparisce».
+
+CURATO, in tre punti:
+1. il menu «Modello ⌄» legge tutte e tre le memorie: ogni riga dice a che strumento appartiene,
+   e applicandola a uno di un'altra famiglia il programma lo dice invece di fare danni;
+2. negli indicatori il pulsante accanto al salva apre la LISTA dei setup, un nome per riga, con
+   il cestino per ciascuno (prima rispondeva «seleziona prima un setup dal menu» e non mostrava
+   niente: un pulsante che chiede un gesto fatto da un'altra parte e' un indovinello);
+3. nel pannello dei profili e del VWAP c'e' «💾 Salva come modello…»: prima li' dentro c'erano
+   solo ✕, Indietro e Ok.
+
+Banco `modelli_ovunque.test.mjs`, 12 prove (7 erano rosse). Verificati anche gli altri banchi
+degli indicatori e dei modelli: 17 prove verdi.
+
+UNA DEVIAZIONE DA RICORDARE: il proprietario ha detto «sul tablet funziona, sul PC no». La prima
+spiegazione che ho trovato - il ponte serviva la 2.2.80 mentre il sito era alla 2.2.82, perche'
+l'aggiornamento automatico avviene SOLO all'avvio del ponte - era vera ma NON era la sua causa:
+me l'ha detto lui («anche se aggiorno la versione non cambia nulla»), e aveva ragione. Il difetto
+vero era quello misurato sopra, che vale su tutti i dispositivi. Resta comunque buono a sapersi:
+**un ponte acceso da ore serve la versione di quando e' partito.**

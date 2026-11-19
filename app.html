@@ -3150,8 +3150,13 @@ function render(ctx, ind, rows, dataStart, dataEnd, xAbs, y) { ... }" style="wid
    </div>
    <div class="fbOptRow" id="vpTemplateRow" style="flex-wrap:wrap;row-gap:6px;border-top:1px solid #2b3541;padding-top:10px;margin-top:6px">
      <div class="hint" style="flex:1 1 100%;margin:0 0 4px;font-weight:700;letter-spacing:.3px">MODELLI SALVATI</div>
+     <!-- CHIESTO dal proprietario (19 novembre 2026): «si deve far si' che possiamo salvare anche
+          quei disegni, perche' in fondo oggi non esiste la possibilita' di salvarlo come modello.
+          Quindi ci sara' sempre carica il setup, salva e il pulsante per la lista per eliminare».
+          Misurato: in questo pannello c'erano solo ✕, Indietro e Ok. -->
+     <button type="button" id="vpTemplateSaveAs" class="toolBtn" style="flex:none">💾 Salva come modello…</button>
      <div id="vpTemplateList" style="display:flex;flex-wrap:wrap;gap:6px;flex:1 1 100%"></div>
-     <span class="hint" style="flex:1 1 100%;margin:2px 0 0">Per salvare un modello: seleziona il profilo sul grafico e usa «Modello ⌄ → Salva come…». Qui lo ritrovi, lo applichi con un clic e lo elimini con la ✕.</span>
+     <span class="hint" style="flex:1 1 100%;margin:2px 0 0">I modelli salvati si applicano con un clic sul nome e si eliminano con la ✕. Valgono fra strumenti della stessa famiglia: un modello di VWAP non si applica a un profilo.</span>
    </div>
    <div class="fbModalFooter" style="justify-content:flex-end">
      <button id="vpModalCancelBtn" class="toolBtn">Annulla</button>
@@ -11916,13 +11921,68 @@ function renderDrawTemplateMenu(){
  const templates=loadDrawingTemplates();
  const names=Object.keys(templates).sort((a,b)=>a.localeCompare(b,'it'));
  list.innerHTML='';
- if(!names.length){
+ let quantiAltri=0;
+ try{ quantiAltri=Object.keys(loadFibTemplates()).length+Object.keys(loadVpTemplates()).length; }catch(e){}
+ if(!names.length&&!quantiAltri){
    const empty=document.createElement('div');
    empty.className='drawTemplateEmpty';
    empty.textContent='Nessun modello salvato. Seleziona un disegno e scegli "Salva come...".';
    list.appendChild(empty);
    return;
  }
+ // TUTTI I MODELLI SI VEDONO DA QUI (19 novembre 2026).
+ //
+ // SEGNALATO dal proprietario: «magari lo salvera' pure, ma non me lo fa vedere nella lista, per
+ // poterlo richiamare». MISURATO: un Fibonacci salvato da QUESTO menu finisce nel cassetto dei
+ // modelli Fibonacci e in questo menu non compariva piu' (si vedeva solo aprendo il modulo del
+ // Fibonacci); un profilo salvato da qui spariva allo stesso modo dentro il cassetto dei profili.
+ // Dal 18 novembre ogni classe ha il suo cassetto - ed e' giusto, perche' un modello di VWAP non
+ // si applica a una linea - ma il posto DA CUI SI SALVA deve mostrare quello che si e' salvato.
+ // Qui sotto le tre memorie si leggono insieme; ogni riga dice a che strumento appartiene, e
+ // applicandola a uno strumento di un'altra famiglia il programma lo dice invece di fare danni.
+ const altri=[];
+ try{ Object.keys(loadFibTemplates()).forEach(n=>altri.push({nome:n,classe:'fib',t:loadFibTemplates()[n]})); }catch(e){}
+ try{ Object.keys(loadVpTemplates()).forEach(n=>altri.push({nome:n,classe:'vp',t:loadVpTemplates()[n]})); }catch(e){}
+ altri.forEach(({nome,classe,t})=>{
+   const row=document.createElement('div');
+   row.className='drawTemplateRow';
+   const main=document.createElement('div');
+   main.className='drawTemplateRowMain';
+   const nameEl=document.createElement('div');
+   nameEl.className='drawTemplateRowName';
+   nameEl.textContent=nome; nameEl.title=nome;
+   const metaEl=document.createElement('div');
+   metaEl.className='drawTemplateRowMeta';
+   const dove=(classe==='fib')?'Fibonacci':(t&&t.type==='vwap')?'VWAP':'Profilo volumetrico';
+   metaEl.textContent=dove+' · si applica a uno strumento dello stesso tipo';
+   metaEl.title=metaEl.textContent;
+   main.appendChild(nameEl); main.appendChild(metaEl);
+   const delBtn=document.createElement('button');
+   delBtn.className='drawTemplateRowDel'; delBtn.title='Elimina questo modello'; delBtn.textContent='🗑';
+   delBtn.addEventListener('click',async ev=>{
+     ev.stopPropagation();
+     if(classe==='fib'){
+       if(!await appConfirm('Eliminare definitivamente il modello "'+nome+'"?'))return;
+       const t2=loadFibTemplates(); delete t2[nome]; saveFibTemplates(t2);
+       try{ renderFibTemplateMenu(); }catch(e){}
+     }else{ await deleteVpTemplate(nome); }
+     renderDrawTemplateMenu();
+   });
+   row.appendChild(main); row.appendChild(delBtn);
+   row.addEventListener('click',()=>{
+     closeDrawTemplateMenu();
+     if(classe==='vp'){ applyVpTemplate(nome); return; }
+     // Fibonacci: si applica al disegno selezionato, se e' un Fibonacci.
+     const d=selectedDrawing;
+     if(!d||d.type!=='fib'){ $('status').textContent='Seleziona un ritracciamento di Fibonacci, poi applica il modello "'+nome+'".'; return; }
+     try{ pushHistory(); }catch(e){}
+     if(t&&t.levels)d.levels=JSON.parse(JSON.stringify(t.levels));
+     if(t&&t.opts)d.opts=Object.assign({},d.opts||{},t.opts);
+     try{ draw(); }catch(e){}
+     $('status').textContent='Modello Fibonacci "'+nome+'" applicato.';
+   });
+   list.appendChild(row);
+ });
  names.forEach(name=>{
    const t=templates[name];
    const row=document.createElement('div');
@@ -14019,7 +14079,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.82';
+const FBL_VERSIONE='2.2.83';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -23857,6 +23917,42 @@ async function savePresetForIndicator(ind){
  $('status').textContent=`Setup "${name.trim()}" salvato per ${def.label}.`;
  return true;
 }
+// LA LISTA DEI SETUP DI UN INDICATORE: un nome per riga, si applica cliccandolo e si elimina
+// con il cestino. Stessa forma della lista dei modelli dei disegni, perche' e' la stessa cosa
+// vista da un'altra parte del programma.
+function fblListaSetupIndicatore(ind){
+ const doc=document;
+ const box=doc.createElement('div');
+ box.id='indPresetList';
+ box.style.cssText='flex:1 1 100%;display:flex;flex-direction:column;gap:5px;margin-top:6px;padding-top:6px;border-top:1px solid #2b3541';
+ const presets=loadIndicatorPresets(ind.key);
+ const nomi=Object.keys(presets);
+ if(!nomi.length){
+  const vuoto=doc.createElement('span');
+  vuoto.className='hint'; vuoto.style.margin='0';
+  vuoto.textContent='Nessun setup salvato per questo indicatore.';
+  box.appendChild(vuoto);
+  return box;
+ }
+ nomi.forEach(nome=>{
+  const riga=doc.createElement('div');
+  riga.style.cssText='display:flex;align-items:center;gap:8px;justify-content:space-between';
+  const etichetta=doc.createElement('span');
+  etichetta.textContent=nome;
+  etichetta.title='Applica il setup "'+nome+'"';
+  etichetta.style.cssText='cursor:pointer;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+  etichetta.addEventListener('click',()=>applyPresetToIndicator(ind,nome));
+  const x=doc.createElement('button');
+  x.className='toolBtn'; x.textContent='🗑';
+  x.setAttribute('data-elimina',nome);
+  x.title='Elimina il setup "'+nome+'"';
+  x.style.cssText='padding:0 7px;line-height:20px;min-width:0;flex:none';
+  x.addEventListener('click',async ev=>{ ev.stopPropagation(); await deletePresetForIndicator(ind,nome); });
+  riga.appendChild(etichetta); riga.appendChild(x);
+  box.appendChild(riga);
+ });
+ return box;
+}
 function applyPresetToIndicator(ind,name){
  if(!name)return;
  const presets=loadIndicatorPresets(ind.key);
@@ -24168,10 +24264,19 @@ function openIndicatorSettingsModal(ind){
    presetRow.appendChild(saveBtn);
    if(presetNames.length){
      const delBtn=document.createElement('button');
-     delBtn.className='toolBtn'; delBtn.textContent='🗑📂'; delBtn.title='Elimina un setup salvato';
-     delBtn.addEventListener('click',async()=>{
-       if(presetSel.value)await deletePresetForIndicator(ind,presetSel.value);
-       else $('status').textContent='Seleziona prima un setup dal menu da eliminare.';
+     delBtn.className='toolBtn'; delBtn.textContent='🗑📂'; delBtn.title='Mostra i setup salvati, per applicarli o eliminarli';
+     // IL PULSANTE DEVE MOSTRARE LA LISTA (19 novembre 2026).
+     //
+     // CHIESTO dal proprietario: «il pulsante della cartella per eliminare un setup salvato deve
+     // funzionare, perche' oggi si preme ma non mostra nulla: deve uscire fuori la lista dei nomi
+     // salvati, dove possiamo premere il cestino per eliminarlo».
+     // MISURATO: premuto senza prima scegliere dalla tendina rispondeva «Seleziona prima un setup
+     // dal menu da eliminare» e non mostrava niente. Un pulsante che chiede un gesto fatto da
+     // un'altra parte non e' un pulsante: e' un indovinello.
+     delBtn.addEventListener('click',()=>{
+       const aperta=presetRow.querySelector('#indPresetList');
+       if(aperta){ aperta.remove(); return; }   // premuto di nuovo: si richiude
+       presetRow.appendChild(fblListaSetupIndicatore(ind));
      });
      presetRow.appendChild(delBtn);
    }
@@ -46596,6 +46701,19 @@ $('fibModalOkBtn')?.addEventListener('click',applyFibSettingsFromModal);
 $('fibModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('fibModalOverlay'))closeFibSettingsModal(); });
 $('vpModalCloseBtn')?.addEventListener('click',closeVpSettingsModal);
 $('vpModalCancelBtn')?.addEventListener('click',closeVpSettingsModal);
+$('vpTemplateSaveAs')?.addEventListener('click',async ev=>{
+ ev.stopPropagation();
+ // Si salva lo strumento com'e' ADESSO. Le modifiche appena fatte nei campi si confermano con
+ // Ok: `applyVpSettingsFromModal` chiude il pannello, e chiuderlo mentre si salva un modello
+ // sarebbe un dispetto - quindi il modello prende i valori gia' applicati allo strumento, e il
+ // messaggio qui sotto lo dice chiaramente invece di lasciarlo intuire.
+ const d=(typeof vpModalTarget!=='undefined'&&vpModalTarget)?vpModalTarget:selectedDrawing;
+ if(!d){ $('status').textContent='Nessuno strumento da salvare come modello.'; return; }
+ const fatto=await saveCurrentDrawingAsTemplate(d);
+ try{ renderVpTemplateMenu(); }catch(e){}
+ if(fatto)$('status').textContent=($('status').textContent||'')
+   +' (il modello riprende le impostazioni gia applicate allo strumento: se hai appena cambiato qualcosa, premi Ok e salvalo di nuovo)';
+});
 $('vpModalOkBtn')?.addEventListener('click',applyVpSettingsFromModal);
 $('vpModalOverlay')?.addEventListener('click',ev=>{ if(ev.target===$('vpModalOverlay'))closeVpSettingsModal(); });
 // Anteprima dal vivo della zona a basso volume: mentre il modale impostazioni è aperto, cambiare
