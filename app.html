@@ -9894,7 +9894,18 @@ if(tradingChannel){
          fblMirinoRemoto=msg.via?null:{t:msg.t, prezzo:msg.prezzo, asset:msg.asset};
          // Si ridisegna solo se non c'e' un mirino LOCALE: se l'utente sta muovendo il mouse
          // qui, il suo mirino comanda e quello di fuori non deve rubargli il posto.
+         // CHI HA MOSSO IL MOUSE PER ULTIMO COMANDA (19 novembre 2026). Il messaggio porta
+         // `at`, l'istante in cui l'altra finestra ha mosso il mouse (stesso orologio: stesso
+         // computer). Con UN solo mouse il movimento piu' recente dice dov'e' il puntatore:
+         // se e' piu' recente del nostro ultimo movimento, il mirino locale e' rimasto indietro
+         // (il mouse e' passato di la' senza un `pointerout`) e va lasciato il posto a quello
+         // che arriva. E' il difetto misurato il 19 novembre: la madre continuava a disegnare il
+         // proprio mentre quello della duplicata era arrivato e registrato.
+         const _at=Number(msg.at)||0;
          if(!crosshair)draw();
+         else if(_at>fblMirinoLocaleMs||Date.now()-fblMirinoLocaleMs>=FBL_MIRINO_LOCALE_SCADUTO_MS){
+           crosshair=null; fblMirinoLocaleMs=0; draw();
+         }
        }finally{ applicandoMirinoRemoto=false; }
      }
    }else if(msg.type==='mirino_taglio'){
@@ -11205,6 +11216,20 @@ let fblMirinoUltimoInvio=0, fblGuidaUltimoInvio=0;
 // altre finestre a ogni pixel: e' lo stesso errore delle letture moltiplicate al ponte, misurato
 // oggi stesso. A 25 al secondo l'occhio non vede differenza.
 const FBL_MIRINO_OGNI_MS=40;
+// QUANTO PUO' RESTARE "VIVO" IL MIRINO LOCALE SENZA CHE IL MOUSE SI MUOVA (19 novembre 2026).
+//
+// Il mirino locale comanda su quello che arriva da fuori, ed e' giusto: mentre il mouse e' qui,
+// il puntatore e' il tuo. Ma `crosshair` non veniva mai spento quando il mouse se ne andava da una
+// finestra all'altra senza un `pointerout` (cambio scheda, finestra coperta, finestra separata):
+// restava appeso a un punto che non era piu' sotto il puntatore, e da quel momento la finestra
+// IGNORAVA il mirino di tutte le altre. Misurato il 19 novembre: la madre teneva il proprio mirino
+// su {x:527,y:353} mentre quello della duplicata era arrivato e registrato, e il proprietario lo
+// vedeva come «il mirino della madre si vede sulle duplicate, non il contrario».
+// Oltre questo tempo senza un movimento qui, il mirino locale e' considerato vecchio e lascia il
+// posto a quello che arriva: un mouse solo esiste, quindi se un'altra finestra sta parlando, il
+// puntatore non e' qui.
+const FBL_MIRINO_LOCALE_SCADUTO_MS=800;
+let fblMirinoLocaleMs=0;         // quando il mouse ha aggiornato il mirino locale (0 = mai)
 
 // IL MIRINO SCORRE DENTRO LA CANDELA, NON SI POSA AL SUO CENTRO (15 novembre 2026, sera).
 //
@@ -11333,7 +11358,7 @@ function fblAnnunciaMirino(cx,cy){
   const q=fblMirinoDaSchermo(cx,cy);
   if(!q)return;
   fblMirinoUltimoInvio=ora;
-  try{ tradingChannel.postMessage({type:'mirino',slot:PIP_SLOT,
+  try{ tradingChannel.postMessage({type:'mirino',slot:PIP_SLOT,at:ora,
     asset:currentAssetKey, t:q.t, prezzo:q.prezzo}); }catch(e){}
 }
 
@@ -11342,7 +11367,7 @@ function fblAnnunciaMirino(cx,cy){
 function fblAnnunciaMirinoVia(){
   if(!fblMirinoPuoParlare())return;
   fblMirinoUltimoInvio=0;
-  try{ tradingChannel.postMessage({type:'mirino',slot:PIP_SLOT,
+  try{ tradingChannel.postMessage({type:'mirino',slot:PIP_SLOT,at:Date.now(),
     asset:currentAssetKey, via:true}); }catch(e){}
 }
 
@@ -14092,7 +14117,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.85';
+const FBL_VERSIONE='2.2.86';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -36920,6 +36945,7 @@ chartEl.addEventListener('pointermove',e=>{
  // Mirino (crosshair) per mouse/penna: sempre aggiornato, indipendentemente da altre azioni.
  if(e.pointerType==='mouse'||e.pointerType==='pen'||(fblMirinoTocco&&fblMirinoTocco.id===e.pointerId)){
    crosshair={x:e.clientX,y:e.clientY};
+   fblMirinoLocaleMs=Date.now();   // da adesso il mirino locale e' "fresco" (vedi il ricevitore)
    // SI TRASPORTA SOLO IL MOUSE (e la penna, che su un PC e' un mouse con la punta): il
    // proprietario ha escluso il dito - «questo vale soltanto per il PC» - e il ramo del dito
    // qui sotto esce prima di arrivare a questa riga.
@@ -37188,11 +37214,25 @@ chartEl.addEventListener('pointerleave',()=>{
  // non c'e' piu' fa credere che il disegno andra' li'.
  const avevaAnteprima=!!anteprimaDisegno;
  anteprimaDisegno=null;
- if(crosshair||avevaAnteprima){crosshair=null;draw();}
+ if(crosshair||avevaAnteprima){crosshair=null;fblMirinoLocaleMs=0;draw();}
  fblAnnunciaMirinoVia();
  setHoverDrawing(null);
 });
-chartEl.addEventListener('pointerout',()=>{ if(crosshair){crosshair=null;draw();} fblAnnunciaMirinoVia(); setHoverDrawing(null); });
+chartEl.addEventListener('pointerout',()=>{ if(crosshair){crosshair=null;fblMirinoLocaleMs=0;draw();} fblAnnunciaMirinoVia(); setHoverDrawing(null); });
+// IL MIRINO NON RESTA APPESO QUANDO LA FINESTRA PERDE IL FUOCO O VIENE NASCOSTA (19 novembre 2026).
+// Il passaggio del mouse da una finestra all'altra NON sempre produce un `pointerout` (cambio
+// scheda, finestra coperta, finestra separata, schermo intero): senza questa riga il mirino resta
+// disegnato in un punto dove il puntatore non c'e' piu', e questa finestra ignora quello di tutte
+// le altre. E' il difetto misurato il 19 novembre: «il mirino della madre si vede sulle duplicate,
+// non il contrario». Il mirino appartiene alla finestra che ha il puntatore: perso quello, se ne va.
+function fblDimenticaMirinoLocale(){
+ if(!crosshair)return;
+ crosshair=null; fblMirinoLocaleMs=0;
+ try{ draw(); }catch(e){}
+ try{ fblAnnunciaMirinoVia(); }catch(e){}
+}
+window.addEventListener('blur',fblDimenticaMirinoLocale);
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden')fblDimenticaMirinoLocale(); });
 // Ascoltatori AGGIUNTIVI (non sostituiscono quelli sopra) dedicati SOLO a rivelare i dati
 // statistici delle caselle TP/SL dei trade chiusi al tocco su tablet: tenendo il dito
 // appoggiato sul grafico si aggiorna touchHoverPoint e si ridisegna, esattamente come fa

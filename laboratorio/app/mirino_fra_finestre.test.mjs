@@ -307,23 +307,58 @@ test('uscendo dal grafico, il mirino sparisce anche sulle altre', async () => {
   } finally { await browser.close(); }
 });
 
-test('il mirino LOCALE comanda su quello che arriva da fuori', async () => {
+test('il mirino di chi ha mosso il mouse per ULTIMO comanda (regola cambiata il 19 novembre 2026)', async () => {
+  // QUESTA PROVA E' STATA RISCRITTA PERCHE' LA REGOLA E' CAMBIATA, e lo dice la cronologia:
+  // «il mirino LOCALE comanda sempre su quello che arriva da fuori». Era una protezione giusta ma
+  // senza scadenza: il 19 novembre il proprietario ha segnalato «il mirino della madre si vede
+  // sulle duplicate, non il contrario», e la misura ha mostrato che la madre teneva il PROPRIO
+  // mirino (fermo su un punto dove il mouse non era piu') e ignorava quello della duplicata, che
+  // pure arrivava e veniva registrato.
+  // Con UN solo mouse comanda il movimento piu' recente: il messaggio porta `at` (stesso orologio,
+  // stesso computer). Un messaggio partito PRIMA del nostro movimento non conta niente (e' quello
+  // che resta in volo quando il mouse arriva qui); uno partito DOPO dice che il puntatore e'
+  // altrove. Le due prove qui sotto misurano esattamente questo.
   const {browser, A, B} = await dueFinestre('EURUSD', 1, 'EURUSD', 1);
   try {
-    // B ha il suo mirino sotto il mouse, e intanto A manda il proprio.
+    // B ha il suo mirino sotto il mouse.
     const boxB = await riquadro(B);
     await B.mouse.move(boxB.x + boxB.w * 0.3, boxB.y + boxB.h * 0.6);
     await B.waitForTimeout(120);
     const suo = await B.evaluate(() => (crosshair ? {x: crosshair.x, y: crosshair.y} : null));
     assert.ok(suo, 'B deve avere il suo mirino');
-    await muoviIlMouse(A, 0.8, 0.2);
-    const dopo = await B.evaluate(() => ({
+
+    // 1) Messaggio VECCHIO (partito prima del movimento di B): non deve spostare niente.
+    //    Parte da A: il canale non consegna a chi lo manda, e nella realta' il messaggio arriva
+    //    sempre da un'altra finestra.
+    await A.evaluate(() => {
+      tradingChannel.postMessage({type:'mirino', slot:0, at:Date.now()-5000,
+        asset:currentAssetKey, t:parseDateTime(baseRows[10].date), prezzo:1.0001});
+    });
+    await B.waitForTimeout(200);
+    const dopoVecchio = await B.evaluate(() => ({
       suo: crosshair ? {x: crosshair.x, y: crosshair.y} : null,
       remoto: !!fblMirinoRemoto}));
-    console.log('locale contro remoto:', JSON.stringify(dopo));
-    assert.deepEqual(dopo.suo, suo,
-      'il mirino di chi sta muovendo il mouse QUI non deve essere spostato da un altra finestra: '
-      + JSON.stringify(dopo));
+    console.log('messaggio vecchio:', JSON.stringify(dopoVecchio));
+    assert.deepEqual(dopoVecchio.suo, suo,
+      'un messaggio partito prima del nostro movimento non deve spostare il mirino locale: '
+      + JSON.stringify(dopoVecchio));
+
+    // 2) Messaggio PIU' RECENTE del nostro ultimo movimento: il puntatore e' altrove, si lascia
+    //    il posto (e' il verso che il proprietario non vedeva funzionare).
+    await B.waitForTimeout(150);
+    await A.evaluate(() => {
+      tradingChannel.postMessage({type:'mirino', slot:0, at:Date.now(),
+        asset:currentAssetKey, t:parseDateTime(baseRows[10].date), prezzo:1.0002});
+    });
+    await B.waitForTimeout(200);
+    const dopoNuovo = await B.evaluate(() => ({
+      suo: crosshair ? {x: crosshair.x, y: crosshair.y} : null,
+      remoto: fblMirinoRemoto ? {prezzo:fblMirinoRemoto.prezzo} : null}));
+    console.log('messaggio più recente:', JSON.stringify(dopoNuovo));
+    assert.equal(dopoNuovo.suo, null,
+      'un movimento piu\' recente dice che il mouse non e\' piu\' qui: ' + JSON.stringify(dopoNuovo));
+    assert.ok(dopoNuovo.remoto && Math.abs(dopoNuovo.remoto.prezzo - 1.0002) < 1e-9,
+      'e il mirino disegnato deve essere quello arrivato: ' + JSON.stringify(dopoNuovo));
   } finally { await browser.close(); }
 });
 
