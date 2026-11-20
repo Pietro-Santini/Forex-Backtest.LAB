@@ -140,3 +140,64 @@ test('un ticket già annunciato dalla strada ordinaria non suona una seconda vol
     assert.equal(dopo, 0, 'già annunciato altrove: qui non si suona di nuovo');
   } finally { await browser.close(); }
 });
+
+// PROVA DI CONTROLLO 3 (segnalato il 20 novembre 2026: «due riquadri sovrapposti, entrambi EA»).
+// Suono e cartellino prendevano due decisioni separate: chi non vinceva la prenotazione taceva
+// nel suono ma mostrava ugualmente il riquadro. Misurato prima della cura: due cartellini
+// identici e UN solo suono. Ora il cartellino segue la prenotazione.
+test('lo stesso ticket annunciato due volte mostra un cartellino solo', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(BANCO);
+    await pagina.evaluate(`(async function(){
+      document.getElementById('fblAvvisiReplay')?.remove();
+      window.__suoni=0; window.__dealChiamate=0;
+      const pos={ticket:888101,symbol:'XAUUSD',side:'BUY',volume:0.5};
+      await fblAvvisoChiusuraMt5(888101,pos);
+      await fblAvvisoChiusuraMt5(888101,pos);
+      return true; })()`);
+    await pagina.waitForTimeout(500);
+    const fine = await pagina.evaluate(LEGGI);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(fine.cartellini, 1,
+      'un cartellino per chiusura: due riquadri sovrapposti per lo stesso ticket sono il difetto ' +
+      'segnalato (trovati ' + fine.cartellini + ')');
+    assert.equal(fine.suoni, 1, 'e un suono solo, scelto dalla stessa prenotazione');
+  } finally { await browser.close(); }
+});
+
+// REGRESSIONE DEL 19 NOVEMBRE 2026, misurata nel codice e poi nel banco: nel ciclo delle
+// aperture del giro degli avvisi `return` (eredità del vecchio forEach, dove valeva
+// continue) usciva dalla funzione. Con una posizione che RESTA aperta, la chiusura di
+// un'altra non veniva mai annunciata e la fotografia precedente non si aggiornava più. Il
+// ciclo aspetta (deve prenotare l'evento), quindi `forEach` non andava bene: con
+// `for...of` quel `return` è diventato un'uscita dalla funzione - e la chiusura successiva
+// non la vedeva nessuno.
+test('se si chiude una posizione mentre un\'altra resta aperta, la chiusura viene annunciata', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    await pagina.evaluate(BANCO);
+    await pagina.evaluate(`(function(){
+      document.getElementById('fblAvvisiReplay')?.remove();
+      window.__suoni=0; window.__dealChiamate=0;
+      fblMt5SnapBaseline=false; fblMt5SnapPrec=new Map(); fblMt5Sospetti=new Map(); fblMt5Annunciati=new Set();
+      return true; })()`);
+    const A = {ticket: 888101, symbol: 'XAUUSD', side: 'BUY', volume: 0.50, price_open: 1900, price_current: 1910};
+    const B = {ticket: 888102, symbol: 'XAUUSD', side: 'BUY', volume: 0.50, price_open: 1900, price_current: 1910};
+    await pagina.evaluate(giro([A, B]));        // base: entrambe aperte
+    await pagina.evaluate(giro([A, B]));        // niente di nuovo
+    await pagina.evaluate(giro([A]));           // B manca una volta: solo un sospetto
+    const sospetto = await pagina.evaluate(LEGGI);
+    await pagina.evaluate(giro([A]));           // B manca anche la seconda: chiusura vera
+    await pagina.waitForTimeout(500);
+    const fine = await pagina.evaluate(LEGGI);
+    assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
+    assert.equal(sospetto.deal, 0, 'sparita una volta sola: è un sospetto, non si annuncia niente');
+    assert.equal(fine.suoni, 1, 'la chiusura di B deve suonare, anche se A è ancora aperta');
+    assert.equal(fine.cartellini, 1, 'e mostrare il suo cartellino');
+    const snap = await pagina.evaluate('[...fblMt5SnapPrec.keys()]');
+    assert.deepEqual(snap, ['888101'],
+      'la fotografia resta pulita: solo le posizioni ancora aperte (trovato ' +
+      JSON.stringify(snap) + ')');
+  } finally { await browser.close(); }
+});

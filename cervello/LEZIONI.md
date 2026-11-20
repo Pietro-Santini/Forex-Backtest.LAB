@@ -1,5 +1,20 @@
 # Lezioni (errori di ragionamento da non ripetere)
 
+48. **`return` dentro un `forEach` è un `continue`: convertito in `for...of` diventa un'uscita
+     dalla funzione, e la cura peggiora il difetto.**
+     (19 novembre 2026, trovato e misurato il 20.) Rendendo `fblAvvisiMt5Giro` asincrono per
+     poter prenotare un evento dentro un Web Lock ho convertito due `forEach` in `for...of`.
+     In uno dei due il corpo conteneva `if(gia.noto)return;`: nel `forEach` quella riga
+     significava «passa al ticket dopo», nel `for...of` significa «chiudi la funzione e basta».
+     **MISURATO il risultato, non immaginato:** con due posizioni sul conto, la chiusura di una
+     delle due non veniva MAI annunciata (suoni 0, richieste al ponte 0) se l'altra restava
+     aperta, perché il primo ticket già noto usciva dal ciclo lasciando vuoto anche il controllo
+     delle chiusure. Un peggioramento silenzioso: senza un banco che contasse gli annunci non si
+     sarebbe visto.
+     **LA REGOLA CHE RESTA:** convertendo `forEach` in `for...of` si rilegge OGNI `return` del
+     corpo. In un `forEach` è sempre un salto; in un `for...of` è un'uscita. E un ciclo che
+     deve `await` non si scrive con il `forEach`: si scrive con `for...of` (o con un `map` +
+     `Promise.all`), ma il `for...of` richiede questa rilettura.
 47. **Pubblicare non e' aggiornare: il repository e' mio, il programma in uso e' suo.**
     (19 novembre 2026.) Dopo aver pubblicato la 2.2.88 e verificato il collaudo locale verde, ho
     chiamato `POST /aggiorna-app` sul ponte del proprietario per «riallineare» la sua

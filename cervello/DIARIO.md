@@ -1,3 +1,51 @@
+- 2026-11-20 - Claude - **v2.2.90: un ticket MT5 = una riga sola nel Journal, e il cartellino
+  segue la prenotazione.**
+  SEGNALATO dal proprietario, ed è una delle segnalazioni più gravi di sempre: «mi ha contato
+  due posizioni in una, non è la prima volta che succede. mi mostra pure l'EA e a volte me lo
+  mostra pure sul trade journal con tutto 0 sui valori».
+  **MISURATO PRIMA DI CURARE, in tre misure con numero.** (1) `_misura_doppione_journal.mjs`:
+  un ticket chiuso dall'EA produceva UNA riga, poi `runMt5HistoryCatchUp()` la riaggiungeva -
+  2, poi 3, poi 4 righe identiche, tutte col motivo «EA» - a ogni giro di recupero storico. La
+  causa era nel filtro del recupero: passava da `fblTradeDelContoCollegato(t)`, che vale FALSE
+  quando `currentMt5AccountTag()` è vuoto, quindi col conto ignoto NESSUNA riga risultava nota
+  e ogni riconnessione riaggiungeva lo stesso deal. La controprova col conto noto
+  (`_misura_doppione_journal2.mjs`) dava 1 riga sola: il buco era il conto ignoto e, in genere,
+  l'assenza di un invariante per ticket. (2) `_misura_cartellini_avvisi.mjs`: lo stesso ticket
+  annunciato due volte dava DUE cartellini sovrapposti e UN solo suono - il cartellino non era
+  legato alla prenotazione dell'evento. (3) stessa misura: una posizione che RESTA aperta
+  blocca l'annuncio della chiusura di un'altra.
+  **LA CURA, UNA REGOLA SOLA IN UN POSTO SOLO.** «Un ticket MT5 = una riga sola nel Journal»,
+  con l'account come discriminante: ticket uguale + login uguale (o ignoto da una delle due
+  parti, perché il ponte interroga un conto solo) = stessa operazione; login diverso =
+  operazione diversa, perché i numeri di posizione MT5 sono unici DENTRO un broker, non fra
+  broker. La porta unica `fblRegistraTradeMt5()` la usano sia `closeTrade()` (chiusura che sta
+  avvenendo adesso) sia `addBackfilledMt5Trade()` (chiusura recuperata dallo storico) - stessa
+  filosofia di `fblAggiungiPosizione`. Se la riga che c'era ha i valori tutti a 0 e la nuova è
+  reale, si aggiorna QUELLA: è la metà del difetto scritta nella segnalazione. Il punto
+  nell'equity curve si aggiunge solo se l'operazione è finita DAVVERO nel Journal, altrimenti
+  il conto crescerebbe da solo a ogni riconnessione (misurato: 3 punti per una chiusura sola).
+  **E I DOPPIONI GIÀ SALVATI?** Il difetto «non è la prima volta che succede», quindi nelle
+  versioni precedenti sono state scritte più righe per lo stesso ticket: al caricamento
+  `fblRiparaDoppioniJournal()` le toglie, tenendo la riga con i valori veri e riallineando
+  baseline ed equity come per un'eliminazione manuale (`removeTradeRecordAt`), così le
+  statistiche non restano sballate di un trade che non è mai esistito.
+  **IL GIRO DEGLI AVVISI AVEVA UNA REGRESSIONE DEL 19 NOVEMBRE**, letta nel codice e poi
+  misurata: nel ciclo delle aperture `return` (eredità del vecchio `forEach`, dove valeva
+  `continue`) usciva dalla funzione. Con una posizione che resta aperta, la chiusura di
+  un'altra non veniva MAI annunciata e la fotografia precedente non si aggiornava più -
+  misurato `suoni:0, deal:0`. I due `return` sono diventati `continue`, e anche il ciclo delle
+  chiusure aspetta (era un `forEach` che lanciava l'annuncio e scappava via).
+  **I BANCHI NUOVI** misurano il comportamento, non il testo:
+  `laboratorio/app/journal_una_riga_per_ticket.test.mjs` (6 prove) fa il percorso vero - ponte
+  finto, adozione, chiusura dall'EA, TRE recuperi storici - e conta le righe che finiscono
+  DAVVERO nel Journal, più le prove di controllo: col conto noto, due conti con lo stesso
+  numero di ticket (non si mangia un'operazione vera), un ticket nuovo viene aggiunto, la riga
+  a 0 si aggiorna con i valori veri, la riparazione al caricamento. In
+  `avvisi_mt5_replay.test.mjs` due prove nuove: il cartellino doppio e la chiusura bloccata da
+  una posizione aperta. Le tre misure temporanee sono state cancellate.
+  Versione alzata nei tre punti (`sw.js`, `FBL_VERSIONE`, `MyAppVersion`).
+  Collaudo locale: **Falliti: 0**.
+
 - 2026-11-19 - Claude - **v2.2.89: la prenotazione degli eventi MT5 è atomica, e il suono
   doppio fra finestre chiude per struttura.**
   Ripreso il lavoro lasciato in sospeso. Il sintomo: «madre 1, duplicata 1» con due finestre

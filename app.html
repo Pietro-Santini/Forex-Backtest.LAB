@@ -11103,7 +11103,17 @@ function applyLightSessionState(state){
    if(s)sessionByMode[k]={...s,positions:stripMt5TrackedForSave(s.positions),pendingOrders:stripMt5TrackedForSave(s.pendingOrders)};
  });
  liveModeActive=!!state.liveModeActive;
- isPropFirmMode=!!state.isPropFirmMode;
+  isPropFirmMode=!!state.isPropFirmMode;
+  // DOPPIONI NEL TRADE JOURNAL: le versioni precedenti potevano contare due volte lo stesso
+  // ticket MT5 ('mi ha contato due posizioni in una, non e' la prima volta che succede'). Al
+  // caricamento si riparano da soli - invariante: un ticket MT5 = una riga sola, vedi
+  // fblRiparaDoppioniJournal. Adesso currentMode() dice gia' la verita' (liveModeActive e
+  // isPropFirmMode sono appena stati ripristinati), cosi' removeTradeRecordAt riallinea
+  // baseline ed equity della modalita' giusta invece di indovinarla.
+  try{
+    const doppioni=fblRiparaDoppioniJournal();
+    if(doppioni)console.log('[Journal] tolti '+doppioni+' doppioni: stesso ticket MT5 contato due volte');
+  }catch(e){ console.warn('[Journal] riparazione dei doppioni non riuscita:',e); }
  // STEP 2/3: se la sessione ripristinata era una Challenge Prop Firm, il capitale iniziale e
  // l'eventuale violazione già registrata (conto chiuso) vanno ripristinati anche qui — un
  // refresh di pagina non deve MAI "sbloccare" da solo un conto chiuso per violazione.
@@ -14173,7 +14183,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.89';
+const FBL_VERSIONE='2.2.90';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -31329,8 +31339,8 @@ async function fblAvvisiMt5Giro(dati){
  // li' deciderebbe il suono quando le pare, tornando al disordine di prima.
  for(const [t,rp] of ora){
   fblMt5Sospetti.delete(t);                      // ricomparso: il sospetto di chiusura si cancella
-  if(fblMt5SnapPrec.has(t))return;
-  if(fblMt5Annunciati.has(t)){ fblMt5Annunciati.delete(t); return; }
+   if(fblMt5SnapPrec.has(t))continue;
+   if(fblMt5Annunciati.has(t)){ fblMt5Annunciati.delete(t); continue; }
   // Evento OSSERVATO da MT5: lo vedono tutte le finestre, lo annuncia una sola - e chi annuncia
   // si decide con la prenotazione condivisa, non col battito (vedi fblAnnuncioMt5MiSpetta).
   if(await fblAnnuncioMt5MiSpetta('apre:'+t))playOrderSound();
@@ -31345,16 +31355,19 @@ async function fblAvvisiMt5Giro(dati){
  // dopo che il ponte conferma un deal di chiusura vero.
  const spariti=[];
  fblMt5SnapPrec.forEach((rp,t)=>{ if(!ora.has(t))spariti.push([t,rp]); });
- spariti.forEach(([t,rp])=>{
-  if(fblMt5Annunciati.has(t)){ fblMt5Annunciati.delete(t); fblMt5Sospetti.delete(t); return; }
-  if(!fblMt5Sospetti.has(t)){
-    fblMt5Sospetti.set(t,Date.now());
-    ora.set(t,rp);                               // lo teniamo in memoria un giro ancora
-    return;
+  // Anche questo ciclo ASPETTA, per la stessa ragione di quello delle aperture qui sopra:
+  // la prenotazione dell'evento (e la domanda al ponte che la conferma) deve essere decisa
+  // PRIMA che il giro finisca, non quando pare a lei.
+  for(const [t,rp] of spariti){
+   if(fblMt5Annunciati.has(t)){ fblMt5Annunciati.delete(t); fblMt5Sospetti.delete(t); continue; }
+   if(!fblMt5Sospetti.has(t)){
+     fblMt5Sospetti.set(t,Date.now());
+     ora.set(t,rp);                               // lo teniamo in memoria un giro ancora
+     continue;
+   }
+   fblMt5Sospetti.delete(t);
+   try{ await fblAvvisoChiusuraMt5(t,rp); }catch(e){} // asincrona: chiede il deal vero al ponte
   }
-  fblMt5Sospetti.delete(t);
-  fblAvvisoChiusuraMt5(t,rp);                    // asincrona: chiede il deal vero al ponte
- });
  fblMt5SnapPrec=ora;
 }
 
@@ -31412,12 +31425,18 @@ async function fblAvvisoChiusuraMt5(ticket,ultimo){
  if(d.reason==null&&d.price==null)return;        // questo conto non ha mai visto il ticket
  // Chiusura OSSERVATA su MT5: la vedono tutte le finestre, la annuncia una sola (prenotazione
  // condivisa, vedi fblAnnuncioMt5MiSpetta).
- if(await fblAnnuncioMt5MiSpetta('chiude:'+ticket))playOrderSound();
+  // IL CARTELLINO E' LEGATO ALLA PRENOTAZIONE. Suono e cartellino erano due decisioni separate:
+  // chi non vinceva il lock taceva nel suono ma mostrava ugualmente il riquadro. Misurato
+  // (laboratorio/app/_misura_cartellini_avvisi.mjs): DUE cartellini identici sovrapposti e UN
+  // solo suono - due riquadri sovrapposti, entrambi con scritto EA, esattamente il difetto
+  // segnalato. Ora chi non ha vinto la prenotazione non mostra niente.
+  const mio=await fblAnnuncioMt5MiSpetta('chiude:'+ticket);
+  if(mio)playOrderSound();
  // Sala e numero del take profit: vivono nella memoria ticket -> segnale (mt5RicordaSegnale),
  // che è salvata su disco, quindi si leggono anche per una posizione che l'app non ha mai
  // adottato — è esattamente il caso della modalità backtest.
  const meta=mt5ApplicaSegnale({mt5Ticket:ticket});
- fblAvvisoChiusuraMt5Mostra({
+  if(mio)fblAvvisoChiusuraMt5Mostra({
   ticket,
   asset:(ultimo&&ultimo.symbol)||'',
   side:(ultimo&&ultimo.side)||'',
@@ -31483,6 +31502,118 @@ function fblCloudSalvaTradeJournal(){
   },FBL_CLOUD_TRADE_ATTESA_MS);
  }catch(e){}
 }
+// UN TICKET MT5 = UNA RIGA SOLA NEL JOURNAL. Invariante, 20 novembre 2026.
+//
+// SEGNALATO dal proprietario: 'mi ha contato due posizioni in una, non e' la prima volta che
+// succede. mi mostra pure l'EA e a volte me lo mostra pure sul trade journal con tutto 0 sui
+// valori'.
+//
+// MISURATO, non supposto (laboratorio/app/_misura_doppione_journal.mjs): un ticket chiuso
+// dall'EA produceva UNA riga, poi runMt5HistoryCatchUp() la riaggiungeva - 2, poi 3, poi 4
+// righe identiche, tutte col risultato 'EA' - a ogni giro di recupero storico. La causa
+// misurata: la deduplica filtrava con fblTradeDelContoCollegato(t), che vale FALSE quando
+// currentMt5AccountTag() e' vuoto, quindi NESSUNA riga risultava nota e ogni recupero
+// riaggiungeva lo stesso deal. La controprova col conto noto (_misura_doppione_journal2.mjs)
+// dava 1 riga sola: il buco e' il conto ignoto e, in generale, l'assenza di un invariante per
+// ticket.
+//
+// LA REGOLA, in una porta unica usata da chiunque chiuda un'operazione MT5 - closeTrade() per
+// una chiusura che sta avvenendo adesso, addBackfilledMt5Trade() per una recuperata dallo
+// storico:
+//   ticket uguale + conto uguale (o ignoto da una delle due parti) = STESSA OPERAZIONE.
+// Non si aggiunge una seconda riga: si restituisce quella che c'era. Se la riga che c'era ha i
+// valori vuoti (il 'tutto 0 sui valori' della segnalazione) e la nuova e' reale, si aggiorna
+// quella. Un conto DIVERSO con lo stesso numero non si tocca: i numeri di posizione MT5 sono
+// unici dentro un broker, non fra broker.
+function fblTradeMt5Stesso(t,ticket,login){
+  try{
+    if(!t||t.mt5Ticket==null||ticket==null)return false;
+    if(String(t.mt5Ticket)!==String(ticket))return false;
+    const a=t.mt5Login!=null?String(t.mt5Login):'';
+    const b=login!=null?String(login):'';
+    // Un conto ignoto vuol dire 'il ponte ne interroga uno solo': se una delle due parti tace
+    // non si puo' escludere che sia la stessa operazione, e per questo invariante si tiene.
+    return a===''||b===''||a===b;
+  }catch(e){ return false; }
+}
+// La riga 'con tutto 0 sui valori': nessun prezzo d'uscita e nessun profitto.
+function fblRigaMt5Vuota(t){
+  if(!t)return true;
+  const p=Number(t.pl), e=Number(t.exit);
+  const pVuoto=!Number.isFinite(p)||p===0, eVuoto=!Number.isFinite(e)||e<=0;
+  return pVuoto&&eVuoto;
+}
+// Quanti dati veri porta una riga: serve a scegliere quale delle due tenere.
+function fblRigaMt5Piena(t){
+  if(!t)return 0;
+  const e=Number(t.exit), p=Number(t.pl);
+  return ((Number.isFinite(e)&&e>0)?2:0)+((Number.isFinite(p)&&p!==0)?2:0)+(t.closeTF===1?1:0)+(t.startTime?1:0);
+}
+// Due righe parlano della stessa chiusura? Stesso ticket e stessi numeri, o una delle due e'
+// la riga vuota dell'altra.
+function fblStessaChiusuraMt5(a,b){
+  const n=v=>Number.isFinite(Number(v))?Number(v):null;
+  return n(a.exit)===n(b.exit)&&n(a.pl)===n(b.pl);
+}
+// Copia in dest SOLO i campi che dest non ha: la riga che resta e' quella che c'era, ma non
+// deve restare con i buchi.
+function fblUnisciRigaMt5(dest,src){
+  Object.keys(src||{}).forEach(k=>{
+    if(dest[k]==null||dest[k]==='')dest[k]=src[k];
+  });
+}
+// Ritorna {riga,aggiunta}: 'riga' e' quella da usare d'ora in poi (la nuova appena scritta, o
+// la vecchia aggiornata), 'aggiunta' dice se e' finita DAVVERO nel Journal - cosi' chi chiama
+// non conta due volte lo stesso profitto nell'equity curve.
+function fblRegistraTradeMt5(riga){
+  try{
+    if(!riga||riga.mt5Ticket==null){ trades.push(riga); return {riga,aggiunta:true}; }
+    const login=riga.mt5Login!=null?riga.mt5Login:((currentMt5AccountTag()||{}).mt5Login);
+    const gia=trades.find(t=>fblTradeMt5Stesso(t,riga.mt5Ticket,login));
+    if(!gia){ trades.push(riga); return {riga,aggiunta:true}; }
+    // Lo stesso ticket e' gia' nel Journal: NON si aggiunge una seconda riga.
+    if(fblRigaMt5Vuota(gia)&&!fblRigaMt5Vuota(riga)){
+      // Ma se quella che c'era era rimasta con i valori a 0, dentro i dati veri di questa.
+      ['entry','exit','pl','pct','pips','account','closedAt','result','sl','tp','side','asset','lots','startTime'].forEach(k=>{
+        if(riga[k]!=null)gia[k]=riga[k];
+      });
+    }
+    fblUnisciRigaMt5(gia,riga);
+    return {riga:gia,aggiunta:false};
+  }catch(e){ trades.push(riga); return {riga,aggiunta:true}; }
+}
+// LA RIPARAZIONE DEI DOPPIONI GIA' SALVATI. Il difetto non e' la prima volta che succede:
+// nelle versioni precedenti sono state scritte piu' righe per lo stesso ticket. Al caricamento
+// si tolgono, tenendo una riga sola (quella con i valori veri), e si riallinea baseline ed
+// equity esattamente come per un'eliminazione manuale (removeTradeRecordAt), cosi' le
+// statistiche del conto non restino sballate di un trade che non e' mai esistito.
+function fblRiparaDoppioniJournal(){
+  let tolti=0;
+  if(!Array.isArray(trades))return 0;
+  for(let i=trades.length-1;i>=0;i--){
+    const t=trades[i]; if(!t||t.mt5Ticket==null)continue;
+    let j=-1;
+    for(let k=0;k<trades.length;k++){
+      if(k===i)continue;
+      const x=trades[k];
+      if(x&&x.mt5Ticket!=null&&fblTradeMt5Stesso(x,t.mt5Ticket,t.mt5Login)&&fblStessaChiusuraMt5(x,t)){ j=k; break; }
+    }
+    if(j<0)continue;
+    const lo=Math.min(i,j), hi=Math.max(i,j);
+    if(fblRigaMt5Piena(trades[hi])>fblRigaMt5Piena(trades[lo])){
+      // I dati veri stanno nella riga che si toglie: si portano su quella che resta.
+      ['entry','exit','pl','pct','pips','account','closedAt','result','sl','tp','side','asset','lots','startTime'].forEach(k=>{
+        if(trades[hi][k]!=null&&(trades[lo][k]==null||trades[lo][k]===''))trades[lo][k]=trades[hi][k];
+      });
+    }
+    fblUnisciRigaMt5(trades[lo],trades[hi]);
+    removeTradeRecordAt(hi);   // rimuove il doppione e riallinea baseline/equity della modalita'
+    tolti++;
+    if(i<hi)i=lo+1;   // la riga che resta va ricontrollata contro altri eventuali gemelli
+  }
+  return tolti;
+}
+
 function closeTrade(reason,price,pos,realLevels,silent,veri){
  pos=pos||active;
  if(!pos)return;
@@ -31531,9 +31662,13 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
    }
    if(vero.entry!=null)vero.pips=pipsFromPrice(pos.side,vero.entry,price,pos.asset||currentAssetKey);
  }
- trades.push({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero});
+  // PORTA UNICA (invariante: un ticket MT5 = una riga sola nel Journal, vedi
+  // fblRegistraTradeMt5): se quel ticket e' gia' nel Journal - recuperato dallo storico, o
+  // scritto da un'altra strada - NON si aggiunge una seconda riga, si aggiorna quella che
+  // c'era (comprese le righe rimaste con i valori a 0).
+  const _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero});
  // Notion: si manda SOLO questa, e solo adesso (vedi fblNotionDopoChiusura).
- try{ fblNotionDopoChiusura(trades[trades.length-1]); }catch(e){}
+  try{ fblNotionDopoChiusura(_chiusura.riga); }catch(e){}
  if(!silent)playOrderSound();
  if(pos.mt5Ticket!=null)scheduleMt5AccountHistoryRefresh(); // storico reale MT5 cambiato: statistiche del conto da rileggere
  positions=positions.filter(p=>p!==pos);
@@ -49381,9 +49516,15 @@ async function runMt5HistoryCatchUp(){
    // «Gia' nota» vale solo per le operazioni DI QUESTO conto: con il solo ticket,
    // un'operazione vera del conto collegato veniva scartata come doppione perche' un ALTRO
    // conto aveva quel numero - e quella sparisce dallo storico senza che nessuno lo dica.
-   const alreadyKnown=new Set(trades.filter(t=>t.mt5Ticket!=null&&fblTradeDelContoCollegato(t))
-                                     .map(t=>String(t.mt5Ticket)));
-   const missing=result.data.filter(d=>!alreadyKnown.has(String(d.positionId)));
+    // L'INVARIANTE DEL JOURNAL, applicato anche qui: un ticket GIA presente nel Journal e'
+    // "noto" qualunque conto abbia scritto quella riga, anche col conto collegato ignoto.
+    // PRIMA era diverso, ed e' la causa misurata del difetto (laboratorio/app/
+    // _misura_doppione_journal.mjs): il filtro passava da fblTradeDelContoCollegato(t), che
+    // vale FALSE quando currentMt5AccountTag() risulta vuoto - non c'era UNA riga nota, e ogni
+    // recupero storico riaggiungeva lo stesso deal: 2, 3, 4 righe identiche, tutte col motivo
+    // 'EA', tutte sullo stesso ticket (segnalato dal proprietario).
+    const mioLogin=(currentMt5AccountTag()||{}).mt5Login;
+    const missing=result.data.filter(d=>!trades.some(t=>fblTradeMt5Stesso(t,d.positionId,mioLogin)));
    if(!missing.length)return;
    missing.sort((a,b)=>a.timeClose-b.timeClose); // in ordine cronologico, come se li scoprissimo uno alla volta
    missing.forEach(d=>addBackfilledMt5Trade(d));
@@ -49500,7 +49641,10 @@ function addBackfilledMt5Trade(d){
  // distinzione SL/BE/SP resta comunque corretta per "SP" (calcolabile dal solo SL finale),
  // semplicemente non può mai risultare "BE" per un trade recuperato così.
  const result=closeResultLabel(d.reason,{sl,entry:Number(d.priceOpen),side:d.side});
- trades.push({
+  // LA STESSA PORTA UNICA di closeTrade() - invariante: un ticket MT5 = una riga sola nel
+  // Journal (vedi fblRegistraTradeMt5): se quel ticket e' gia' nel Journal non si aggiunge una
+  // seconda riga, si aggiorna quella che c'era (comprese le righe rimaste con i valori a 0).
+  const _recupero=fblRegistraTradeMt5({
    id:Date.now()+Math.random(),
    asset:d.symbol,side:d.side,entry:fblPrezzoValido(d.priceOpen),
    // RICHIESTO ESPLICITAMENTE: le caselle TP/SL si disegnano SOLO se erano davvero stati
@@ -49522,8 +49666,11 @@ function addBackfilledMt5Trade(d){
    backfilled:true,
    ...currentMt5AccountTag()
  });
- mt5ApplicaSegnale(trades[trades.length-1]);
- equity.push(account);
+  mt5ApplicaSegnale(_recupero.riga);
+  // Il punto nell'equity curve si aggiunge SOLO se l'operazione e' finita davvero nel Journal:
+  // se era gia' la' (lo stesso ticket) non si aggiunge una seconda volta, o il conto crescerebbe
+  // da solo a ogni riconnessione.
+  if(_recupero.aggiunta)equity.push(account);
 }
 // ===================== POSIZIONI REALI MT5 (controllo completo) =====================
 // Da qui in poi si parla di denaro VERO: mt5RealPositions è la fotografia (ogni 2s) di ciò
