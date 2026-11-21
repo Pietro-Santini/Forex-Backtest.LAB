@@ -132,3 +132,113 @@ proprietario costa il suo tempo; un banco costa il tuo e resta per sempre.
   `cervello/DIARIO.md` con una voce in testa.
 - **Il PC del proprietario si legge, non si tocca.** Niente riavvii, niente file cancellati, niente
   aggiornamenti decisi da te: il push è l'ultimo passo, poi è lui che preme Aggiorna.
+
+---
+
+# AGGIUNTA — 21 novembre 2026, sera: due punti dal proprietario
+
+## A. L'ora di mercato tagliata: resta una regola fissa delle 22:00 — DA CORREGGERE
+
+**Segnalato:** «l'ultima candela visualizzata al terminale di MT5 è alle 22:58, mentre a me mi
+visualizza alle 21:59, e effettivamente mi taglia quella che è un'ora di mercato. Gli indicatori
+vanno avanti, ma l'ultima candela è un'ora prima.»
+
+**La regola del proprietario, che vale e non si discute:** il mercato è chiuso **solo** quando non
+arrivano più dati da MT5. **Nessuna ora fissa.** Niente «chiude alle 22», niente regole sul
+weekend scritte a mano (ci sono asset che il sabato trasmettono).
+
+### Dov'è il difetto, misurato sul codice (non supposto)
+
+`app.html`, `fblChiusuraMinutiLocali(t)` (intorno a riga **60426**):
+
+```js
+function fblChiusuraMinutiLocali(t){
+ try{
+  if(!Number.isFinite(fblScartoServerSec))return LIVE_MT5_CLOSE_MIN;   // <-- QUI
+  ...
+  return (min===0)?LIVE_MT5_CLOSE_MIN:min;                              // <-- E QUI
+ }catch(e){ return LIVE_MT5_CLOSE_MIN; }                                // <-- E QUI
+}
+```
+
+`LIVE_MT5_CLOSE_MIN = 22*60` (riga **~60304**) **è la regola fissa delle 22:00 che il proprietario
+ha chiesto di togliere**, rimasta come ripiego in tre punti.
+
+**Il conto torna esattamente con quello che vede.** Con lo scarto del server noto e uguale a 7200
+(broker UTC+2) e Roma d'inverno (UTC+1):
+`min = 1440 − (120 − 60) = 1380` = **23:00 di Roma**, e la candela delle 22:58 si vedrebbe.
+Lui vede il taglio alle **22:00**, cioè esattamente `LIVE_MT5_CLOSE_MIN`: vuol dire che
+`fblScartoServerSec` **non è noto** (è `null`) e scatta il ripiego fisso.
+
+`fblScartoServerSec` viene impostato in un punto solo: `fblScartoServerRicorda(__timbroScarto)`,
+`app.html` riga **56386**, dentro il caricamento dello storico **MT5** — quindi resta `null` se il
+grafico non è passato da MT5 in quella sessione (per esempio con la sorgente su Capital.com), e il
+ripiego delle 22:00 taglia un'ora di mercato vero.
+
+### Chi usa quel numero, e quindi che cosa taglia
+
+- `liveSessionPhaseAt(t)` → `if(dm.min < fblChiusuraMinutiLocali(t)) return 'mt5'`
+- `fblConfineChiusura()` / `_fblConfineChiusuraCalcola()` → il confine della coda chiusa
+- `fblTagliaDopoChiusura(lista, base)` → **taglia davvero le candele**, sia in `getVisibleData()`
+  sia in `draw()`
+
+### Che cosa fare
+
+Il confine della chiusura deve venire **dai dati**, non da una costante oraria. Nel file ci sono
+già le funzioni che incarnano la regola giusta e vanno usate come autorità:
+
+- `fblAssetRiceveDatiOra(asset)` — c'è stato un tick vero negli ultimi `FBL_MT5_SILENZIO_CHIUSO_MS`
+  (5 minuti);
+- `fblMercatoMt5Noto(asset)` — MT5 dichiara il mercato aperto;
+- e, per lo storico già scaricato, **l'ultima candela realmente ricevuta**: oltre quella non c'è
+  mercato, prima di quella non si taglia niente.
+
+**Regola da implementare, in una riga:** non si taglia **mai** una candela che MT5 ha davvero
+mandato. Il taglio serve solo contro le candele *inventate* oltre l'ultima reale.
+
+**Se proprio serve un ripiego** quando non si sa nulla (nessun tick, nessuno storico, nessuno
+scarto), **non dev'essere un'ora fissa**: meglio non tagliare niente e mostrare tutto quello che
+c'è. Un'ora di mercato vero nascosta è peggio di qualche candela in più.
+
+### Prove da scrivere (prova del rosso obbligatoria)
+
+1. Con `fblScartoServerSec = null` e una serie che arriva fino alle **22:58** di Roma: l'ultima
+   candela mostrata dev'essere **22:58**, non 21:59. *(Oggi questa prova è ROSSA: è il difetto.)*
+2. Con `fblScartoServerSec = 7200`: stessa risposta, 22:58.
+3. Controprova: candele **oltre** l'ultima reale non si mostrano.
+4. Controprova weekend: un asset che trasmette di sabato non dev'essere tagliato.
+
+Banchi già esistenti da non rompere: `chiusura_ora_del_server.test.mjs`,
+`candela_viva_dopo_le_22.test.mjs`, `mercato_dai_dati_mt5.test.mjs`,
+`mercato_per_asset_dai_dati.test.mjs`, `tick_vecchio_non_e_mercato.test.mjs`,
+`scarto_orologio_solo_tick_nuovi.test.mjs`.
+
+## B. Tutto lo storico a 1 minuto — NON è un difetto dell'app
+
+**Chiesto:** «anche a un minuto vorrei vedere tutto lo storico; adesso a 1m ho solo dal 18 ottobre
+al 21 novembre.»
+
+**Verificato: l'app chiede già il massimo.** `__histCount` parte da **200000** candele e
+`mt5_feed_server.py` accetta fino a 200000, con una sequenza di ripieghi a numeri più bassi se il
+terminale rifiuta. Il limite **non è nell'app**: è `copy_rates_from_pos`, cioè quanto storico M1
+**quel terminale e quel broker tengono**.
+
+Due strade vere, in ordine di efficacia:
+
+1. **MT5 → Strumenti → Opzioni → Grafici → «Max. barre nel grafico»**: il default tipico è 100000,
+   che a 1 minuto fa circa **due mesi e mezzo** — ed è esattamente quello che il proprietario
+   vede (18 ottobre → 21 novembre). Alzandolo (o mettendo «Illimitato») e riaprendo il grafico del
+   simbolo, MT5 scarica più storico dal broker, e da lì lo prende anche l'app.
+2. **Il magazzino locale** (`fblCandeleCacheScrivi` / `fblCandeleCacheLeggi`, per asset **e** per
+   timeframe) accumula nel tempo e **supera** quello che il terminale tiene: la storia cresce da
+   sola restando collegati. Attenzione a non romperlo: oggi la coda si fonde col magazzino solo se
+   la candela di sovrapposizione combacia per OHLC, altrimenti si riscarica tutto.
+
+**Non trasformare questo punto in una caccia dentro `app.html`:** la misura dice che l'app chiede
+già il massimo. Prima di toccare qualunque riga, chiedi al servizio e conta le candele:
+
+```
+curl.exe -s "http://127.0.0.1:8001/history?symbol=XAUUSD&timeframe=M1&count=200000"
+```
+
+Se ne tornano quante ne ha il terminale, il limite è il terminale e il punto si chiude lì.
