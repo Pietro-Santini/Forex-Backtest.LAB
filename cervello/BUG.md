@@ -60,6 +60,11 @@ cambi dell'ora legale, il tick di 4h30, il valore avvelenato sul disco),
 `laboratorio/app/scarto_orologio_solo_tick_nuovi.test.mjs` (2 prove),
 `laboratorio/app/tick_vecchio_non_e_mercato.test.mjs`.
 
+**CONFERMATO SUL CAMPO (21 novembre 2026, dopo la v2.2.93).** Il proprietario ha aggiornato e
+l'ultima candela di XAU/USD e' tornata al 20 novembre: prima diceva 21 nov 03:19. La catena
+misurata (scarto -9000 -> 4h30 di spostamento -> 23:50 del broker mostrato come 03:20) e'
+quindi chiusa dalla misura **e** dalla prova sul suo PC, non solo dai banchi.
+
 **LEZIONE.** Un commento che descrive una cura non e' la cura. Qui la riga diceva 24 ore e il
 commento sopra diceva 5 minuti, per settimane: il collaudo non se ne e' accorto perche' nessuna
 prova misurava un tick di poche ore — c'erano quella di 8h20 e quella del tick assente, e il buco
