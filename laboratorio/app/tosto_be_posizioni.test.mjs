@@ -121,7 +121,12 @@ async function apriECollega({ponteRisponde = true, ora = 'fredda'} = {}) {
   const {browser, pagina, errori} = await apriApp({larghezza: 1400, altezza: 1900});
   // L'ora si chiede a ROMA, non alla macchina: il collaudo di GitHub gira in UTC e «21:40»
   // li' sarebbe un altro istante (vedi oraDiRoma in aiuti.mjs, e il rosso del 19 novembre).
+  // La finestra calda dipende dal calendario vero dello strumento, che nel banco di prova non c'e'
+  // (e cambia con l'ora legale). Per la calda si fissa la finestra come «mezz'ora alla chiusura»:
+  // il test verifica il comportamento del break-even dentro la finestra, non il calendario.
   const quando = await oraDiRoma(pagina, ORE[ora][0], ORE[ora][1]);
+  if (ora === 'calda') await pagina.evaluate(() => { window.fblFinestraChiusura = (asset, t) =>
+    ({calda: true, fase: 'chiusura', chiudeAt: (Number.isFinite(t) ? t : Date.now()) + 30*60000, apreAt: null}); });
   await pagina.clock.setFixedTime(new Date(quando));
   await ponteFinto(pagina, {ponteRisponde, registro});
   await pagina.evaluate(([p, ok]) => { eval('(' + p + ')')(ok === 'true'); },

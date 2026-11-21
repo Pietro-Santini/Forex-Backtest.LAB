@@ -46,7 +46,9 @@ const BOS_INVALIDATO = BOS_RIALZISTA.slice(0, 8).concat([
 ]);
 
 const PARAMETRI = {leftBars: 2, rightBars: 2, touchTicks: 1, minUntouchedBars: 2,
-                   minExtensionTicks: 1, tickSize: 0.01, rrTarget: 2};
+                   minExtensionTicks: 1, tickSize: 0.01, rrTarget: 2,
+                   // Scenario della seconda entrata alla rottura confermata, con lo stop sulla candela.
+                   modoSeconda: 'dopo', stopPullback: 'candela'};
 
 // Esegue l'indicatore barra per barra e riporta, per ogni barra, lo stato dei sei passi.
 const PASSO_PASSO = (spec, parametri) => `(() => {
@@ -145,12 +147,12 @@ test('l\'operazione porta entrata, stop, target, R:R e lottaggio del conto', asy
 
     // Il lottaggio: stessa strada del pannello ordini (saldo × rischio% / perdita per lotto).
     assert.ok(op.lotto, 'il lottaggio non è stato calcolato');
-    assert.equal(Math.round(op.lotto.rischio), 100, 'il rischio in valuta non è l\'1% di 10.000');
+    assert.equal(Math.round(op.lotto.rischio), 50, 'il rischio in valuta è lo 0,5% di 10.000 (meta\' dell\'1% del setup)');
     assert.ok(op.lotto.lotti > 0, 'lotti a zero');
     const perLotto = r.modo === 'baseEqualsAccount'
       ? (op.entry - op.sl) * r.contratto / op.entry
       : (op.entry - op.sl) * r.contratto;
-    assert.ok(Math.abs(op.lotto.lotti * perLotto - 100) <= 100 * 0.05 + perLotto * 0.01,
+    assert.ok(Math.abs(op.lotto.lotti * perLotto - 50) <= 50 * 0.05 + perLotto * 0.01,
       'col lottaggio proposto la perdita allo stop non è il rischio chiesto: '
       + (op.lotto.lotti * perLotto).toFixed(2));
     assert.deepEqual(errori, []);

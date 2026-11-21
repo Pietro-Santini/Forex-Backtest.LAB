@@ -29,6 +29,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp, oraDiRoma} from './aiuti.mjs';
 
+// Il mercato di sabato e domenica e' sempre chiuso: il banco deve cadere su un giorno feriale,
+// altrimenti il risultato dipende da CHE GIORNO E' quando si lancia il collaudo (e il sabato
+// il test dava sempre «chiuso»).
+async function oraFeriale(pagina, h, m) {
+  let t = await oraDiRoma(pagina, h, m);
+  while ([0, 6].includes(new Date(t).getUTCDay())) t += 86400000;
+  return t;
+}
+
 // Lo scarto del server, in secondi, come lo dichiara il servizio dati.
 const UTC2 = 7200;      // il broker del proprietario (FTMO-Demo), ora solare
 const UTC3 = 10800;     // il caso per cui era stato scritto il 22:00
@@ -51,7 +60,7 @@ test('col server a UTC+2 il mercato chiude alle 23:00 locali, non alle 22:00', a
   const {browser, pagina, errori} = await preparaApp();
   try {
     const [alle2230, alle2310, alle2130] =
-      [await oraDiRoma(pagina, 22, 30), await oraDiRoma(pagina, 23, 10), await oraDiRoma(pagina, 21, 30)];
+      [await oraFeriale(pagina, 22, 30), await oraFeriale(pagina, 23, 10), await oraFeriale(pagina, 21, 30)];
     const r = await pagina.evaluate(([scarto, alle2230, alle2310, alle2130]) => {
       fblScartoServerRicorda(scarto);
       return {
@@ -76,7 +85,7 @@ test('col server a UTC+3 resta il comportamento di prima: chiusura alle 22:00', 
   // davvero alle 22:00 italiane d inverno.
   const {browser, pagina, errori} = await preparaApp();
   try {
-    const alle2230 = await oraDiRoma(pagina, 22, 30);
+    const alle2230 = await oraFeriale(pagina, 22, 30);
     const r = await pagina.evaluate(([scarto, alle2230]) => {
       fblScartoServerRicorda(scarto);
       return {minutiChiusura: fblChiusuraMinutiLocali(alle2230),
@@ -97,7 +106,7 @@ test('scarto del server ignoto: non si inventa niente, resta il 22:00 di prima',
   // fermo un ora di troppo, mai candele finte a mercato chiuso).
   const {browser, pagina, errori} = await preparaApp();
   try {
-    const alle2230 = await oraDiRoma(pagina, 22, 30);
+    const alle2230 = await oraFeriale(pagina, 22, 30);
     const r = await pagina.evaluate((alle2230) => {
       fblScartoServerRicorda(null);
       return {minutiChiusura: fblChiusuraMinutiLocali(alle2230), alle2230: liveSessionPhaseAt(alle2230)};
@@ -115,7 +124,7 @@ test('SOLDI VERI: la finestra calda del margine di chiusura segue la chiusura ve
   // esattamente il momento in cui il cambio giornata allarga la forbice.
   const {browser, pagina, errori} = await preparaApp();
   try {
-    const [alle2230, alle2130] = [await oraDiRoma(pagina, 22, 30), await oraDiRoma(pagina, 21, 30)];
+    const [alle2230, alle2130] = [await oraFeriale(pagina, 22, 30), await oraFeriale(pagina, 21, 30)];
     const r = await pagina.evaluate(([scarto, alle2230, alle2130]) => {
       fblScartoServerRicorda(scarto);
       const pos = {asset: 'XAUUSD', side: 'BUY', entry: 4050.70, mt5Ticket: 306713136};

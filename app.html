@@ -14183,7 +14183,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.90';
+const FBL_VERSIONE='2.2.91';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21332,66 +21332,53 @@ function triBuildSettings(ind, paramsRow, mk) {
 
 // ============================================================================
 // Valid BOS Pullback — porting COMPLETO dello script Pine v6 per Forex Backtest LAB
-//
+// ESTESO 21 novembre 2026: DUE posizioni + DOPPIO BREAK-EVEN + STOP SU LIQUIDITÀ
 // Formato di INDICATOR_DEFS (app.html): { label, defaultParams(), compute(), render(), buildSettings() }
-//
 
 // Setup: ogni rottura iniziale ha il proprio oggetto, come BosSetup in Pine.
 // Tutti i tempi sono indici di barra (in Pine sono timestamp, ma la corrispondenza è biunivoca).
 let bosSetupSeq = 0;
 function bosNewSetup(dir, i, refBar, ref, target) {
   return {
-    id: ++bosSetupSeq,          // le operazioni sanno da quale costruzione sono nate
+    id: ++bosSetupSeq,
     dir, stage: 1, startBar: i,
-    refBar,            // barra del massimo/minimo strutturale da ritestare
-    ref,               // livello di riferimento
-    target,            // estremo attuale del ramo
-    extTime: i,        // barra dell'estremo attuale
-    extBar: i,         // come extremeBar: barra per la conferma dell'estremo
-    extConfirmed: false,
-    retestBar: NaN,
-    clean: 0,          // barre consecutive senza tocco del livello
+    refBar, ref, target,
+    extTime: i, extBar: i, extConfirmed: false,
+    retestBar: NaN, clean: 0,
     refX2: i, tgtX2: i,
     pbLabel: null, touch: null
   };
 }
 
-// L'ENTRATA AL PULLBACK (19 novembre 2026).
-//
-// Chiesto dal proprietario: si entra dove c'e' il cerchietto - il ritest del livello - senza
-// aspettare la conferma. Tre numeri, e nessuno dei tre e' una proiezione:
-//   - si entra alla chiusura della barra che ha ritestato;
-//   - lo stop sta SOTTO IL MINIMO di quella barra (sopra il massimo, per una vendita), con il
-//     cuscinetto della tolleranza gia' impostata: se quel minimo viene perso, il ritest non ha
-//     tenuto e il setup non esiste piu';
-//   - il target e' LA ZONA DELLA ROTTURA, cioe' l'estremo che il prezzo deve rompere per
-//     confermare. E' li' che questa operazione chiude, ed e' esattamente dove la seconda comincia.
-// Il lottaggio e' suo: lo stop e' piu' stretto di quello della conferma, quindi a parita' di
-// rischio il lotto e' piu' grande. Lo stesso lotto su tutte e due vorrebbe dire due rischi diversi.
-function bosApriPullback(st, p, s, r, i) {
-  try {
-    const cuscinetto = Math.max(0, (+p.touchTicks || 0) * (+p.tickSize || 0));
-    const entry = r.close;
-    const sl = s.dir === 1 ? (r.low - cuscinetto) : (r.high + cuscinetto);
-    const tp = s.target;
-    if (!(Number.isFinite(entry) && Number.isFinite(sl) && Number.isFinite(tp))) return;
-    if (s.dir === 1 ? !(sl < entry && tp > entry) : !(sl > entry && tp < entry)) return;
-    const dist = Math.abs(entry - sl);
-    if (!(dist > 0)) return;
-    st.ops.push({
-      nome: 'pullback', setupId: s.id, barra: i,
-      dir: s.dir, entry, sl, tp,
-      rr: Math.abs(tp - entry) / dist, tpStimato: false,
-      lotto: scalettaLotto(entry, sl),
-      beLivello: bosLivelloBreakEven(p, s.dir, entry, tp), beFatto: false, slIniziale: sl
-    });
-  } catch (e) {}
+// ===============================================================
+// LIQUIDITÀ PER STOP LOSS (21 novembre 2026)
+// Trova swing high/low nelle ultime N candele + buffer pip
+// ===============================================================
+function bosTrovaLivelloLiquidita(rows, i, dir, p) {
+  const lookback = Math.max(2, Number(p.liqLookback) || 10);
+  const bufferPips = Math.max(0, Number(p.liqBufferPips) || 2);
+  const passo = bosPassoBreakEven({tickSize: p.tickSize});
+  const buffer = bufferPips * passo;
+  let livello = null;
+  if (dir === 1) { // Long: minimo più basso = supporto
+    let minLow = Infinity;
+    for (let k = Math.max(0, i - lookback); k <= i; k++) {
+      if (rows[k].low < minLow) minLow = rows[k].low;
+    }
+    livello = minLow - buffer;
+  } else { // Short: massimo più alto = resistenza
+    let maxHigh = -Infinity;
+    for (let k = Math.max(0, i - lookback); k <= i; k++) {
+      if (rows[k].high > maxHigh) maxHigh = rows[k].high;
+    }
+    livello = maxHigh + buffer;
+  }
+  return livello;
 }
 
-// QUANTO VALE UN PIP per lo strumento a grafico. Il proprietario ragiona in pip («10, 20, 30»),
-// non nei tick dell'indicatore - che sono una misura sua, impostata a mano nel pannello e che su
-// XAU/USD lui tiene a 1 (un dollaro intero). Si chiede quindi all'app, che lo sa per ogni
-// strumento; se proprio non lo sapesse, si ripiega sul tick dichiarato nell'indicatore.
+// ===============================================================
+// QUANTO VALE UN PIP per lo strumento a grafico
+// ===============================================================
 function bosPassoBreakEven(p) {
   try {
     if (typeof pipSizeForAsset === 'function') {
@@ -21403,63 +21390,278 @@ function bosPassoBreakEven(p) {
   return (Number.isFinite(t) && t > 0) ? t : 0.0001;
 }
 
-// IL LIVELLO A CUI SCATTERA' IL PAREGGIO, calcolato appena l'operazione nasce: e' quello che il
-// proprietario vuole VEDERE prima che succeda («la linea del BE va disegnata, cosi' si vede a che
-// livello scattera'»). Percentuale zero = break-even spento, e non c'e' nessuna linea da fare.
-function bosLivelloBreakEven(p, dir, entry, tp) {
-  const perc = Number(p && p.bePerc);
+// Pip step per BE specifico (usa bePips1 o bePips2)
+function bosPipsBreakEven(p, quale) {
+  const pips = Math.max(0, Number(p[quale === 1 ? 'bePips1' : 'bePips2']) || 0);
+  return pips * bosPassoBreakEven(p);
+}
+
+// ===============================================================
+// LIVELLO BREAK-EVEN per posizione (1=pullback, 2=conferma)
+// ===============================================================
+function bosLivelloBreakEven(p, dir, entry, tp, quale) {
+  const perc = Number(p && p[quale === 1 ? 'bePerc1' : 'bePerc2']);
   if (!(Number.isFinite(perc) && perc > 0)) return null;
   if (!(Number.isFinite(entry) && Number.isFinite(tp))) return null;
   const quota = Math.min(100, perc) / 100;
   return entry + (tp - entry) * quota;
 }
 
-// IL PAREGGIO SCATTA, E NON TORNA INDIETRO. Lo stop va all'entrata PIU' i pip scelti (meno, per
-// una vendita): mai sull'entrata nuda, che con commissioni e spread e' gia' una perdita - e' la
-// stessa ragione per cui il pulsante BE delle posizioni vere usa mt5PrezzoPareggio e non il
-// prezzo di ingresso.
+function bosLivelloBreakEvenLegacy(p, dir, entry, tp) {
+  return bosLivelloBreakEven(p, dir, entry, tp, 1);
+}
+
+// ===============================================================
+// APRE DUE POSIZIONI AL PULLBACK VALIDO (21 novembre 2026)
+// 1. PULLBACK: target = zona rottura confermata, stop = liquidità
+// 2. CONFERMA: target = RR alto (es 15), stop = livello ritestato
+// ===============================================================
+// MODO DELLA SECONDA POSIZIONE (impostazione modoSeconda):
+//  'insieme' = entrambe al valid pullback; rischio della seconda: dallo stop precedente all'entrata del pullback.
+//  'dopo'    = la prima al pullback, la seconda alla rottura confermata; rischio: dal suo stop
+//              (livello di riferimento) alla sua entrata (chiusura della rottura).
+function bosModoSeconda(p) {
+  return (p && p.modoSeconda === 'dopo') ? 'dopo' : 'insieme';
+}
+
+function bosApriConfermaDopo(st, p, fatta, r, i) {
+  try {
+    const entry = r.close;
+    const sl = fatta.ref;
+    if (!(Number.isFinite(entry) && Number.isFinite(sl))) return;
+    if (fatta.dir === 1 ? !(sl < entry) : !(sl > entry)) return;
+    const dist = Math.abs(entry - sl);
+    if (!(dist > 0)) return;
+    const rr = Math.max(2, +p.rrTarget2 || 2);
+    const tp = fatta.dir === 1 ? entry + dist * rr : entry - dist * rr;
+    st.ops.push({
+      nome: 'conferma', setupId: fatta.id, barra: i,
+      dir: fatta.dir, entry, sl, tp,
+      rr, tpStimato: true,
+      lotto: scalettaLotto(entry, sl, 0.5),
+      beLivello1: null, be1Fatto: false,
+      beLivello2: bosLivelloBreakEven(p, fatta.dir, entry, tp, 2), be2Fatto: false,
+      slIniziale: sl,
+      livelloRotturaConfermata: fatta.target
+    });
+  } catch (e) {}
+}
+
+// LO STOP DEL PULLBACK, scelto dal parametro stopPullback:
+//  'candela'    = minimo/massimo della candela di ritest + cuscinetto (come prima);
+//  'struttura'  = livello ritestato (il massimo/minimo rotto) + cuscinetto;
+//  'liquidita'  = minimo/massimo delle ultime liqLookback candele + liqBufferPips.
+function bosStopPullback(s, p, r, i, cuscinetto) {
+  const modo = p && p.stopPullback;
+  if (modo === 'struttura' && Number.isFinite(s.ref)) return s.dir === 1 ? (s.ref - cuscinetto) : (s.ref + cuscinetto);
+  if (modo === 'liquidita' && typeof rows !== 'undefined' && rows) {
+    const liq = bosTrovaLivelloLiquidita(rows, i, s.dir, p);
+    if (Number.isFinite(liq)) return liq;
+  }
+  return s.dir === 1 ? (r.low - cuscinetto) : (r.high + cuscinetto);
+}
+
+function bosApriPullback(st, p, s, r, i) {
+  try {
+    const cuscinetto = Math.max(0, (+p.touchTicks || 0) * (+p.tickSize || 0));
+    const entry = r.close;
+
+    // Pullback stop = TIGHT (minimo/massimo candela ritest + cuscinetto) come prima
+    // Se il minimo della candela ritest viene perso, il pullback non ha tenuto
+    const slPullback = bosStopPullback(s, p, r, i, cuscinetto);
+    if (!Number.isFinite(slPullback)) return;
+    const tpPullback = s.target;
+
+    if (!(Number.isFinite(entry) && Number.isFinite(slPullback) && Number.isFinite(tpPullback))) return;
+    if (s.dir === 1 ? !(slPullback < entry && tpPullback > entry) : !(slPullback > entry && tpPullback < entry)) return;
+    const distPullback = Math.abs(entry - slPullback);
+    if (!(distPullback > 0)) return;
+
+    // ----- DUE POSIZIONI, INSIEME, AL VALID PULLBACK -----
+    // Stesso ingresso, stesso stop (sotto il minimo del ritest). Ognuna con mezzo rischio (0,5%):
+    //  - PRIMA: target = rottura confermata (zona dell'estremo da rompere);
+    //  - SECONDA: target a rapporto rrTarget2 (minimo 1:2, il valore si sceglie con i backtest).
+    // Il break-even (BE1 sul pullback, BE2 sulla seconda) li sposta dopo, come gia' previsto.
+    const rrLungo = Math.max(2, +p.rrTarget2 || 2);
+    const tpLungo = s.dir === 1 ? entry + distPullback * rrLungo : entry - distPullback * rrLungo;
+    const beLivello1 = bosLivelloBreakEven(p, s.dir, entry, tpPullback, 1);
+    const beLivello2 = bosLivelloBreakEven(p, s.dir, entry, tpLungo, 2);
+    st.ops.push({
+      nome: 'pullback', setupId: s.id, barra: i,
+      dir: s.dir, entry, sl: slPullback, tp: tpPullback,
+      rr: Math.abs(tpPullback - entry) / distPullback, tpStimato: false,
+      lotto: scalettaLotto(entry, slPullback, 0.5),
+      beLivello1, be1Fatto: false, beLivello2: null, be2Fatto: false,
+      slIniziale: slPullback,
+      livelloRotturaConfermata: s.target
+    });
+    // Modo 'insieme' (default): la seconda nasce qui. Modo 'dopo': nasce alla rottura confermata
+    // (vedi bosApriConfermaDopo), con il rischio calcolato dal suo stop e dalla sua entrata.
+    if (bosModoSeconda(p) === 'insieme') {
+      st.ops.push({
+        nome: 'conferma', setupId: s.id, barra: i,
+        dir: s.dir, entry, sl: slPullback, tp: tpLungo,
+        rr: rrLungo, tpStimato: true,
+        lotto: scalettaLotto(entry, slPullback, 0.5),
+        beLivello1: null, be1Fatto: false, beLivello2, be2Fatto: false,
+        slIniziale: slPullback,
+        livelloRotturaConfermata: s.target
+      });
+    }
+  } catch (e) {}
+}
+
+// ===============================================================
+// DOPPIO BREAK-EVEN (21 novembre 2026)
+// BE1 (pullback): bePerc1/bePips1. Scatta -> sposta ENTRAMBE a entry_pullback + pips1
+// BE2 (conferma): bePerc2/bePips2. SOLO dopo extConfirmed -> sposta SOLO pos2 a livello_rottura + pips2
+// ===============================================================
 function bosApplicaBreakEven(st, p, r) {
   const passo = bosPassoBreakEven(p);
-  const pips = Math.max(0, Number(p.bePips) || 0);
+  const pips1 = Math.max(0, Number(p.bePips1) || 0);
+  const pips2 = Math.max(0, Number(p.bePips2) || 0);
+
   for (const o of (st.ops || [])) {
-    if (o.beFatto || !Number.isFinite(o.beLivello)) continue;
-    const arrivato = o.dir === 1 ? (r.high >= o.beLivello) : (r.low <= o.beLivello);
-    if (!arrivato) continue;
-    const nuovo = o.dir === 1 ? (o.entry + pips * passo) : (o.entry - pips * passo);
-    // Non si peggiora mai uno stop gia' piu' vicino al profitto di cosi'.
-    if (o.dir === 1 ? (nuovo <= o.sl) : (nuovo >= o.sl)) { o.beFatto = true; continue; }
-    o.slIniziale = o.sl;
-    o.sl = Number(nuovo.toFixed(8));
-    o.beFatto = true;
-    o.beBarra = st.builtTo + 1;
+    // ----- BE1: POSIZIONE PULLBACK -----
+    if (o.nome === 'pullback') {
+      if (!o.be1Fatto && Number.isFinite(o.beLivello1)) {
+        const arrivato1 = o.dir === 1 ? (r.high >= o.beLivello1) : (r.low <= o.beLivello1);
+        if (arrivato1) {
+          const nuovoSl1 = o.dir === 1 ? (o.entry + pips1 * passo) : (o.entry - pips1 * passo);
+          if (o.dir === 1 ? (nuovoSl1 > o.sl) : (nuovoSl1 < o.sl)) {
+            o.slIniziale = o.sl; o.sl = Number(nuovoSl1.toFixed(8));
+            o.be1Fatto = true; o.be1Barra = st.builtTo + 1;
+          }
+          // Applica ANCHE a conferma (se non ha già BE1)
+          const op2 = (st.ops || []).find(x => x.nome === 'conferma' && x.setupId === o.setupId);
+          if (op2 && !op2.be1Fatto) {
+            const nuovoSl2 = op2.dir === 1 ? (op2.entry + pips1 * passo) : (op2.entry - pips1 * passo);
+            if (op2.dir === 1 ? (nuovoSl2 > op2.sl) : (nuovoSl2 < op2.sl)) {
+              op2.slIniziale = op2.sl; op2.sl = Number(nuovoSl2.toFixed(8));
+              op2.be1Fatto = true; op2.be1Barra = st.builtTo + 1;
+            }
+          }
+        }
+      }
+    }
+
+    // ----- BE2: POSIZIONE CONFERMA -----
+    if (o.nome === 'conferma') {
+      // BE2 scatta SOLO se la rottura è confermata (extConfirmed del setup)
+      // Controlla sia setups attivi che snaps (completati)
+      const setupAttivo = (st.setups || []).find(s => s.id === o.setupId);
+      const setupCompletato = (st.snaps || []).find(s => s.id === o.setupId);
+      const setupRif = setupAttivo || setupCompletato;
+      const rotturaConfermata = setupRif && setupRif.extConfirmed === true;
+
+      if (!o.be2Fatto && rotturaConfermata && Number.isFinite(o.beLivello2)) {
+        const arrivato2 = o.dir === 1 ? (r.high >= o.beLivello2) : (r.low <= o.beLivello2);
+        if (arrivato2) {
+          const livelloRottura = o.livelloRotturaConfermata;
+          if (Number.isFinite(livelloRottura)) {
+            const nuovoSl = o.dir === 1 ? (livelloRottura + pips2 * passo) : (livelloRottura - pips2 * passo);
+            if (o.dir === 1 ? (nuovoSl > o.sl) : (nuovoSl < o.sl)) {
+              o.slIniziale = o.sl; o.sl = Number(nuovoSl.toFixed(8));
+              o.be2Fatto = true; o.be2Barra = st.builtTo + 1;
+            }
+          }
+        }
+      }
+    }
   }
 }
 
-// Un'operazione vive finche' il prezzo non tocca il suo stop o il suo target. Chi la chiude e' il
-// PREZZO: non l'arrivo della seconda entrata, non il passare delle barre.
-//
-// E QUANDO CHIUDE NON SPARISCE (19 novembre 2026). Il target dell'entrata al pullback E' la zona
-// della rottura, quindi nella barra che conferma il setup quell'operazione ha gia' incassato: e'
-// il suo esito migliore, non un fallimento. Farla sparire in silenzio proprio mentre nasce la
-// seconda entrata darebbe l'impressione di un'operazione mangiata dall'altra. Resta a vista in
-// `st.opsFinite`, con scritto come e' finita.
+// ===============================================================
+// CHIUSURA OPERAZIONI (stop/target/scadenza)
+// ===============================================================
 function bosChiudiOperazioniToccate(st, r, i) {
   if (!st.ops.length) return;
   st.ops = st.ops.filter(o => {
-    if (o.barra === i) return true;          // appena nata: la sua barra non la chiude
+    if (o.barra === i) return true;
     const toccaSl = o.dir === 1 ? (r.low <= o.sl) : (r.high >= o.sl);
     const toccaTp = o.dir === 1 ? (r.high >= o.tp) : (r.low <= o.tp);
     if (toccaSl || toccaTp) {
       if (st.op === o) { st.op = null; st.opSnap = null; }
-      // Se nella stessa barra tocca tutti e due, vale lo STOP: non si puo' sapere quale e'
-      // arrivato prima, e dare per buono il target sarebbe raccontarsi una vittoria.
       o.esito = toccaSl ? 'stop' : 'target';
       o.barraFine = i;
       st.opsFinite.push(o);
       if (st.opsFinite.length > 4) st.opsFinite.shift();
+      // La PRIMA posizione ha incassato la rottura confermata: la SECONDA va a pareggio
+      // sull'entrata del pullback (stesso prezzo di ingresso), cosi' il setup non puo' piu' perdere.
+      if (o.nome === 'pullback' && toccaTp && !toccaSl) {
+        for (const c of st.ops) {
+          if (c.nome === 'conferma' && c.setupId === o.setupId && c.barra !== i && !c.beFatto) {
+            c.slIniziale = c.sl; c.sl = c.entry; c.beFatto = true;
+          }
+        }
+      }
       return false;
     }
     return true;
+  });
+  // Scadenza maxWait
+  for (let k = st.ops.length - 1; k >= 0; k--) {
+    const o = st.ops[k];
+    if (i - o.barra > (st.maxWait || 120)) {
+      o.esito = 'scaduta'; o.barraFine = i;
+      st.opsFinite.push(o);
+      if (st.opsFinite.length > 4) st.opsFinite.shift();
+      if (st.op === o) { st.op = null; st.opSnap = null; }
+      st.ops.splice(k, 1);
+    }
+  }
+  if (!st.op && st.ops.length) st.op = st.ops[st.ops.length - 1];
+}
+
+// ===============================================================
+// DEFINIZIONE INDICATORE
+// ===============================================================
+// CAMPI DEL PANNELLO BOS (ricostruiti: nella versione modificata mancavano).
+const BOS_SETTINGS = [
+  {type: 'num', key: 'leftBars', label: 'Barre sinistra', min: 1, max: 50},
+  {type: 'num', key: 'rightBars', label: 'Barre destra', min: 1, max: 50},
+  {type: 'num', key: 'lookback', label: 'Lookback struttura', min: 6, max: 500},
+  {type: 'num', key: 'touchTicks', label: 'Tolleranza invalidazione (tick)', min: 0, max: 1000},
+  {type: 'num', key: 'minUntouchedBars', label: 'Barre minime senza ritest', min: 0, max: 100},
+  {type: 'num', key: 'minExtensionTicks', label: 'Rottura iniziale minima (tick)', min: 1, max: 1000},
+  {type: 'num', key: 'maxWait', label: 'Età massima setup', min: 5, max: 1000},
+  {type: 'num', key: 'tickSize', label: 'Dimensione tick', min: 0.000001, max: 1, step: 0.00001},
+  {type: 'check', key: 'showDeveloping', label: 'Livelli in sviluppo'},
+  {type: 'check', key: 'showPullbackText', label: 'Testo pullback valido'},
+  {type: 'check', key: 'showTouchCircle', label: 'Segna ritest'},
+  {type: 'color', key: 'refColor', label: 'Massimo/minimo precedente'},
+  {type: 'color', key: 'bullColor', label: 'BOS rialzista'},
+  {type: 'color', key: 'bearColor', label: 'BOS ribassista'},
+  {type: 'num', key: 'rrTarget', label: 'Prima posizione: target in R (rottura confermata)', min: 0.5, max: 10, step: 0.1},
+  {type: 'num', key: 'rrTarget2', label: 'Seconda posizione: target in R (minimo 2)', min: 2, max: 50, step: 0.5},
+  {type: 'select', key: 'modoSeconda', label: 'Seconda posizione', options: ['insieme', 'dopo']},
+  {type: 'select', key: 'stopPullback', label: 'Stop del pullback', options: ['candela', 'struttura', 'liquidita'], nota: 'Confronto su dati MT5 (seconda 1:2, senza costi): su M1, M5 e M15 lo stop su liquidità ha il drawdown più basso in tutti i casi: 2–5% contro 3–15% con le altre due opzioni. Il rendimento è più basso di quello sullo stop alla candela in alcuni casi. Il rapporto rendimento/drawdown è migliore con la liquidità in 4 casi su 6 (M1 insieme e dopo, M5 insieme, M15 dopo). Sul M5 dopo e sull’M15 insieme rende di più la candela. Tengo lo stop su liquidità come default.'},
+  {type: 'num', key: 'bePerc1', label: 'BE1 pullback: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
+  {type: 'num', key: 'bePips1', label: 'BE1 pullback: pip oltre l\'entrata', min: 0, max: 1000, step: 1},
+  {type: 'num', key: 'bePerc2', label: 'BE2 seconda: % verso la rottura confermata (0 = spento)', min: 0, max: 100, step: 1},
+  {type: 'num', key: 'bePips2', label: 'BE2 seconda: pip oltre la rottura confermata', min: 0, max: 1000, step: 1},
+  {type: 'num', key: 'liqLookback', label: 'Stop su liquidità: barre precedenti', min: 2, max: 200, step: 1},
+  {type: 'num', key: 'liqBufferPips', label: 'Stop su liquidità: cuscinetto (pip)', min: 0, max: 1000, step: 1},
+  {type: 'num', key: 'tolleranzaRitest', label: 'Tolleranza del ritest (pip): rifiuto vicino al livello', min: 0, max: 500, step: 1},
+  {type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
+  {type: 'select', key: 'posScaletta', label: 'Posizione della scaletta', options: null}
+];
+function bosBuildSettings(ind, paramsRow, mk) {
+  BOS_SETTINGS.forEach(s => {
+    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') {
+      const el = mk.mkSelect(s.label, s.key, s.options || SCALETTA_POSIZIONI);
+      if (s.nota) {
+        el.title = s.nota;   // comparsa col mouse sopra il campo
+        const p = document.createElement('div');
+        p.style.cssText = 'font-size:11px;color:#8b96a5;max-width:520px;line-height:1.35;margin-top:4px';
+        p.textContent = 'Promemoria: ' + s.nota;   // testo visibile nel pannello
+        el.appendChild(p);
+      }
+      paramsRow.appendChild(el);
+    }
   });
 }
 
@@ -21471,17 +21673,13 @@ const VALID_BOS_PULLBACK_DEF = {
     minExtensionTicks: 1, maxWait: 120, tickSize: 0.00001,
     showDeveloping: true, showPullbackText: true, showTouchCircle: true,
     refColor: '#EAEAEA', bullColor: '#7CFC00', bearColor: '#f23645',
-    rrTarget: 2, mostraScaletta: true, posScaletta: 'Alto a destra',
-    // IL BREAK-EVEN, chiesto dal proprietario: «a che percentuale del target scatta il pareggio,
-    // e di quanti pip spostare lo stop dall'ingresso (10, 20, 30...)». Spento di partenza
-    // (bePerc 0): chi non lo vuole non se lo trova addosso, e le operazioni di chi aggiorna
-    // l'app si comportano esattamente come prima finche' non lo accende lui.
-    bePerc: 0, bePips: 10
+    rrTarget: 2, rrTarget2: 2, modoSeconda: 'insieme', stopPullback: 'liquidita', tolleranzaRitest: 0,
+    mostraScaletta: true, posScaletta: 'Alto a destra',
+    bePerc1: 0, bePips1: 10,
+    bePerc2: 0, bePips2: 10,
+    liqLookback: 10, liqBufferPips: 2
   }),
 
-  // Calcolo incrementale nello stesso ordine dello script:
-  // 1) nuovi pivot  2) potatura  3) avanzamento dei setup  4) rimozione dei setup con riferimento ritirato
-  // 5) scelta dei massimi/minimi dominanti  6) nuove rotture  7) cancellazione dei setup opposti  8) creazione.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
     if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
@@ -21490,37 +21688,31 @@ const VALID_BOS_PULLBACK_DEF = {
       st.lowVals = []; st.lowBars = [];
       st.retHighExt = []; st.retHighLev = []; st.retHighDone = [];
       st.retLowExt = []; st.retLowLev = []; st.retLowDone = [];
-      st.setups = [];      // setup attivi
-      st.snaps = [];       // setup completati: linee, etichette e segni restano visibili
-      // La scaletta: i passi che l'utente vede accendersi uno dopo l'altro.
-      // SETTE PASSI, NON SEI (19 novembre 2026). Da quando si entra anche al pullback, l'unica
-      // operazione in fondo non basta piu': l'entrata al pullback arriva PRIMA della rottura
-      // confermata, e raccontarla come ultimo passo faceva accendere il sesto col quinto ancora
-      // spento - cioe' la scaletta raccontava una costruzione che non era avvenuta in
-      // quell'ordine. Adesso i passi sono l'ordine vero dei fatti, e la regola «nessun passo
-      // acceso se quello prima e' spento» torna a valere senza eccezioni.
+      st.setups = [];
+      st.snaps = [];
       st.scaletta = scalettaNuova(['Riferimento', 'Rottura iniziale', 'Estremo confermato',
         'Pullback valido', 'Entrata al pullback', 'Rottura confermata', 'Entrata alla conferma']);
       st.op = null; st.opBar = -1; st.opSnap = null;
-      // LE DUE ENTRATE (19 novembre 2026). Chiesto dal proprietario: «le entrate sono due, e
-      // devono convivere». `st.ops` tiene quelle VIVE, ognuna col suo stop, il suo target e il
-      // suo lottaggio. `st.op` resta la seconda (o la prima se la seconda non c'e' ancora):
-      // e' quella che la scaletta mostrava gia' prima, e nessuno deve accorgersi del cambio.
       st.ops = [];
-      st.opsFinite = [];   // quelle gia' chiuse dal prezzo: restano a vista, con il loro esito
+      st.opsFinite = [];
+      st.maxWait = Math.max(5, p.maxWait | 0);
     }
     const L = Math.max(1, p.leftBars | 0), R = Math.max(1, p.rightBars | 0);
     const LB = Math.max(6, p.lookback | 0);
     const allow = p.touchTicks * p.tickSize;
+    // TOLLERANZA DEL RITEST (pip): il ritest vale anche se il prezzo non arriva al livello al
+    // millimetro, purche' la candela ci si avvicini entro la tolleranza e RIFIUTI (chiuda dalla
+    // parte giusta). 0 = il vecchio comportamento: serve un attraversamento esatto.
+    const tolRit = Math.max(0, +p.tolleranzaRitest || 0) * bosPassoBreakEven(p);
     const minExt = p.minExtensionTicks * p.tickSize;
-    const maxWait = Math.max(5, p.maxWait | 0);
+    const maxWait = st.maxWait;
     const minUntouched = Math.max(0, p.minUntouchedBars | 0);
 
     for (let i = st.builtTo + 1; i <= upToIdx; i++) {
       const r = rows[i];
       const pc = i > 0 ? rows[i - 1].close : NaN;
 
-      // 1) Pivot confermati da R barre a destra, L barre a sinistra (come ta.pivothigh/pivotlow).
+      // 1) Pivot confermati
       const c = i - R;
       if (c - L >= 0) {
         const hc = rows[c].high, lc = rows[c].low;
@@ -21534,15 +21726,15 @@ const VALID_BOS_PULLBACK_DEF = {
         if (isL) { st.lowVals.push(lc); st.lowBars.push(c); }
       }
 
-      // 2) Potatura: pivot più vecchi del lookback, e livelli ritirati più vecchi di lookback + R.
+      // 2) Potatura
       while (st.highBars.length > 0 && i - st.highBars[0] > LB) { st.highVals.shift(); st.highBars.shift(); }
       while (st.lowBars.length > 0 && i - st.lowBars[0] > LB) { st.lowVals.shift(); st.lowBars.shift(); }
       while (st.retHighDone.length > 0 && i - st.retHighDone[0] > LB + R) { st.retHighExt.shift(); st.retHighLev.shift(); st.retHighDone.shift(); }
       while (st.retLowDone.length > 0 && i - st.retLowDone[0] > LB + R) { st.retLowExt.shift(); st.retLowLev.shift(); st.retLowDone.shift(); }
 
-      // 3) Avanzamento di ogni setup (dal più recente al più vecchio).
+      // 3) Avanzamento setup
       let bullBos = false, bearBos = false;
-      let scartoMotivo = '', fatta = null;   // per la scaletta: perche' un setup e' morto, e quale e' nato
+      let scartoMotivo = '', fatta = null;
       for (let k = st.setups.length - 1; k >= 0; k--) {
         const s = st.setups[k];
         let invalid = i - s.startBar > maxWait;
@@ -21553,7 +21745,7 @@ const VALID_BOS_PULLBACK_DEF = {
             if (s.stage === 1) {
               if (r.high > s.target) { s.target = r.high; s.extTime = i; s.extBar = i; s.extConfirmed = false; }
               if (i - s.extBar >= R) s.extConfirmed = true;
-              const touched = r.low <= s.ref && r.high >= s.ref;
+              const touched = (r.low <= s.ref && r.high >= s.ref) || (r.low <= s.ref + tolRit && r.close > s.ref);
               if (touched && s.extConfirmed && s.clean >= minUntouched) {
                 s.stage = 2; s.retestBar = i; s.refX2 = i;
                 if (p.showPullbackText) s.pbLabel = {x: s.refBar, price: s.ref, color: p.bullColor};
@@ -21569,7 +21761,7 @@ const VALID_BOS_PULLBACK_DEF = {
             if (s.stage === 1) {
               if (r.low < s.target) { s.target = r.low; s.extTime = i; s.extBar = i; s.extConfirmed = false; }
               if (i - s.extBar >= R) s.extConfirmed = true;
-              const touched = r.high >= s.ref && r.low <= s.ref;
+              const touched = (r.high >= s.ref && r.low <= s.ref) || (r.high >= s.ref - tolRit && r.close < s.ref);
               if (touched && s.extConfirmed && s.clean >= minUntouched) {
                 s.stage = 2; s.retestBar = i; s.refX2 = i;
                 if (p.showPullbackText) s.pbLabel = {x: s.refBar, price: s.ref, color: p.bearColor};
@@ -21584,17 +21776,16 @@ const VALID_BOS_PULLBACK_DEF = {
         if (invalid) {
           scartoMotivo = (i - s.startBar > maxWait) ? 'setup scaduto: troppe barre di attesa'
             : (s.dir === 1 ? 'chiusura sotto il riferimento' : 'chiusura sopra il riferimento');
-          // Il setup e' morto: l'entrata al pullback nata da lui non ha piu' ragione di esistere
-          // (il livello che la teneva in piedi e' stato perso).
           st.ops = st.ops.filter(o => o.setupId !== s.id);
           st.setups.splice(k, 1);
         } else if (completed) {
           const sig = s.dir === 1 ? p.bullColor : p.bearColor;
           if (s.dir === 1) { st.retHighExt.push(s.extTime); st.retHighLev.push(s.target); st.retHighDone.push(i); }
           else { st.retLowExt.push(s.extTime); st.retLowLev.push(s.target); st.retLowDone.push(i); }
-          // Snapshot del setup completato: resta disegnato.
           st.snaps.push({
+            id: s.id,
             dir: s.dir,
+            extConfirmed: s.extConfirmed,
             ref: {from: s.refBar, to: p.showDeveloping ? s.refX2 : s.retestBar, price: s.ref,
                   color: p.showDeveloping && s.stage === 1 ? p.refColor : sig, dashed: true},
             tgt: {from: s.extTime, to: i, price: s.target, color: sig},
@@ -21609,14 +21800,14 @@ const VALID_BOS_PULLBACK_DEF = {
         }
       }
 
-      // 4) Setup il cui riferimento è stato ritirato da una rottura confermata: rimossi.
+      // 4) Riferimento ritirato
       for (let k = st.setups.length - 1; k >= 0; k--) {
         const s = st.setups[k];
         const retired = s.dir === 1 ? st.retHighLev.indexOf(s.ref) >= 0 : st.retLowLev.indexOf(s.ref) >= 0;
         if (retired) { scartoMotivo = 'riferimento ritirato da una rottura confermata'; st.setups.splice(k, 1); }
       }
 
-      // 5) Massimo e minimo dominanti tra i pivot non ritirati.
+      // 5) Massimo/minimo dominanti
       let prevHigh = NaN, prevHighBar = NaN, prevLow = NaN, prevLowBar = NaN;
       for (let k = 0; k < st.highVals.length; k++) {
         const cand = st.highVals[k], cb = st.highBars[k];
@@ -21631,17 +21822,16 @@ const VALID_BOS_PULLBACK_DEF = {
         }
       }
 
-      // 6) Nuova rottura iniziale: chiusura oltre il massimo/minimo dominante di almeno minExt.
+      // 6) Nuova rottura iniziale
       let newBull = !bullBos && !isNaN(prevHigh) && i > prevHighBar && r.close > prevHigh + minExt && pc <= prevHigh;
       let newBear = !bearBos && !isNaN(prevLow) && i > prevLowBar && r.close < prevLow - minExt && pc >= prevLow;
 
-      // Un livello appena diventato BOS non può essere il riferimento bianco di un altro setup.
       for (const s of st.setups) {
         if (s.stage === 2 && s.dir === 1 && !isNaN(prevHigh) && Math.abs(prevHigh - s.target) <= p.tickSize) newBull = false;
         if (s.stage === 2 && s.dir === -1 && !isNaN(prevLow) && Math.abs(prevLow - s.target) <= p.tickSize) newBear = false;
       }
 
-      // 7) Una rottura nella direzione opposta cancella i setup non finiti della tendenza precedente.
+      // 7) Rottura opposta cancella setup
       if (newBull || newBear) {
         for (let k = st.setups.length - 1; k >= 0; k--) {
           const s = st.setups[k];
@@ -21649,71 +21839,31 @@ const VALID_BOS_PULLBACK_DEF = {
         }
       }
 
-      // 8) Creazione dei nuovi setup.
+      // 8) Nuovi setup
       if (newBull) st.setups.push(bosNewSetup(1, i, prevHighBar, prevHigh, r.high));
       if (newBear) st.setups.push(bosNewSetup(-1, i, prevLowBar, prevLow, r.low));
 
-      // --- L'OPERAZIONE. Nasce dalla rottura confermata: si entra alla chiusura che rompe
-      // l'estremo, lo stop sta sul livello ritestato (se quello viene perso il setup non esiste
-      // piu'), il target e' a R:R scelto dall'utente. Il lottaggio lo calcola il motore della
-      // scaletta col saldo e la percentuale di rischio del programma.
+      // Operazione da rottura confermata: crea la SECONDA posizione (conferma)
+      // La prima (pullback) è già stata creata da bosApriPullback al ritest
+      // Dalla v2.3: le due posizioni nascono gia' al valid pullback (bosApriPullback), quindi qui
+      // non si apre piu' nulla: la rottura confermata serve solo a sbloccare il BE2.
       if (fatta) {
-        const dist = Math.abs(r.close - fatta.ref);
-        if (dist > 0) {
-          const rr = Math.max(0.1, +p.rrTarget || 2);
-          const tpC = fatta.dir === 1 ? r.close + dist * rr : r.close - dist * rr;
-          st.op = {
-            nome: 'conferma', setupId: fatta.id, barra: i,
-            dir: fatta.dir, entry: r.close, sl: fatta.ref, tp: tpC,
-            rr, tpStimato: true, lotto: scalettaLotto(r.close, fatta.ref),
-            beLivello: bosLivelloBreakEven(p, fatta.dir, r.close, tpC), beFatto: false,
-            slIniziale: fatta.ref
-          };
-          st.opBar = i; st.opSnap = fatta;
-          // LE DUE ENTRATE CONVIVONO: la seconda si aggiunge, non sostituisce la prima. Il
-          // target della prima e' la zona che la seconda sta rompendo, quindi e' normale che si
-          // chiuda qui intorno - ma a chiuderla dev'essere il PREZZO, non l'arrivo della seconda.
-          st.ops.push(st.op);
-        }
+        st.opSnap = fatta;   // per la scaletta: la rottura di questo setup e' confermata
+        st.op = null;
+        if (bosModoSeconda(p) === 'dopo') bosApriConfermaDopo(st, p, fatta, r, i);
       } else if (st.op && st.opBar !== i && (newBull || newBear || i - st.opBar > maxWait)) {
-        // La SCALETTA passa alla costruzione nuova - racconta un setup alla volta - ma
-        // l'OPERAZIONE no: quella resta aperta finche' il prezzo non la chiude.
-        //
-        // IL DIFETTO CHE QUESTA RIGA AVEVA (19 novembre 2026). SEGNALATO dal proprietario con la
-        // foto del grafico: «l'entrata della seconda entry con il suo target non me lo fa
-        // vedere». MISURATO sulle sue candele vere (XAU/USD, 18 novembre): la seconda entrata
-        // NASCEVA alle 17:20 a 3742,90, stop 3750,16, target 3728,38 - e poi spariva, buttata
-        // via da qui appena partiva un'altra costruzione. Senza aver toccato niente, e senza
-        // nemmeno finire fra quelle chiuse: sul grafico restava solo la prima entrata.
-        // A chiudere un'operazione dev'essere il PREZZO, o la sua scadenza. Mai il fatto che il
-        // mercato abbia ricominciato a costruire da un'altra parte.
         st.op = null; st.opSnap = null;
       }
-      // IL PAREGGIO PRIMA DELLE CHIUSURE: se in questa stessa barra il prezzo ha raggiunto il
-      // livello del break-even, lo stop si e' gia' spostato, e la chiusura va giudicata sullo
-      // stop NUOVO. Farlo dopo vorrebbe dire chiudere in perdita un'operazione che era gia' al
-      // sicuro.
-      bosApplicaBreakEven(st, p, r);
-      // Le operazioni vive si chiudono quando il prezzo tocca il loro stop o il loro target.
-      bosChiudiOperazioniToccate(st, r, i);
-      // E quando scadono: nessuna resta accesa per sempre, ma lo si DICE (esito «scaduta»)
-      // invece di farla sparire di nascosto.
-      for (let k = st.ops.length - 1; k >= 0; k--) {
-        const o = st.ops[k];
-        if (i - o.barra > maxWait) {
-          o.esito = 'scaduta'; o.barraFine = i;
-          st.opsFinite.push(o); if (st.opsFinite.length > 4) st.opsFinite.shift();
-          if (st.op === o) { st.op = null; st.opSnap = null; }
-          st.ops.splice(k, 1);
-        }
-      }
-      if (!st.op && st.ops.length) st.op = st.ops[st.ops.length - 1];
 
-      // --- LA SCALETTA. Racconta un setup alla volta: quello appena completato se c'e'
-      // un'operazione in corso, altrimenti il piu' recente ancora in costruzione.
+      // Break-even PRIMA delle chiusure
+      bosApplicaBreakEven(st, p, r);
+      // Chiusure
+      bosChiudiOperazioniToccate(st, r, i);
+
+      // Scaletta
       const sc = st.scaletta;
       if (sc) {
-        const compl = st.op ? st.opSnap : null;
+        const compl = st.opSnap || null;   // il setup la cui rottura e' stata confermata
         const sv = compl || (st.setups.length ? st.setups[st.setups.length - 1] : null);
         if (sv) scalettaSegna(sc, 0, 'ok', (sv.dir === 1 ? 'massimo ' : 'minimo ') + fmtPrice(sv.ref));
         else if (!isNaN(prevHigh) || !isNaN(prevLow))
@@ -21725,28 +21875,20 @@ const VALID_BOS_PULLBACK_DEF = {
           sc.esito = scartoMotivo || '';
         } else {
           scalettaSegna(sc, 1, 'ok', (sv.dir === 1 ? 'rialzista' : 'ribassista') + ', ' + (i - sv.startBar) + ' barre');
-          scalettaSegna(sc, 2, sv.extConfirmed ? 'ok' : 'attesa',
-            fmtPrice(sv.target) + (sv.extConfirmed ? '' : ' da confermare'));
-          scalettaSegna(sc, 3, sv.stage >= 2 ? 'ok' : 'attesa',
-            sv.stage >= 2 ? 'ritest a ' + fmtPrice(sv.ref) : (sv.clean + '/' + minUntouched + ' barre pulite'));
-          // 5. l'entrata al pullback: viva adesso, oppure gia' chiusa in questa costruzione.
+          scalettaSegna(sc, 2, sv.extConfirmed ? 'ok' : 'attesa', fmtPrice(sv.target) + (sv.extConfirmed ? '' : ' da confermare'));
+          scalettaSegna(sc, 3, sv.stage >= 2 ? 'ok' : 'attesa', sv.stage >= 2 ? 'ritest a ' + fmtPrice(sv.ref) : (sv.clean + '/' + minUntouched + ' barre pulite'));
           const tutte = (st.ops || []).concat(st.opsFinite || []);
           const pb = tutte.filter(o => o.nome === 'pullback' && o.setupId === sv.id).pop();
-          scalettaSegna(sc, 4, pb ? 'ok' : 'attesa',
-            pb ? (fmtPrice(pb.entry) + (pb.esito === 'target' ? ' ✓' : pb.esito === 'stop' ? ' ✗' : ''))
-               : 'al ritest di ' + fmtPrice(sv.ref));
-          // 6. la rottura confermata, e 7. l'entrata che ne nasce.
-          scalettaSegna(sc, 5, compl ? 'ok' : 'attesa',
-            compl ? fmtPrice(st.opSnap.target) : 'oltre ' + fmtPrice(sv.target));
+          scalettaSegna(sc, 4, pb ? 'ok' : 'attesa', pb ? (fmtPrice(pb.entry) + (pb.esito === 'target' ? ' ✓' : pb.esito === 'stop' ? ' ✗' : '')) : 'al ritest di ' + fmtPrice(sv.ref));
+          scalettaSegna(sc, 5, compl ? 'ok' : 'attesa', compl ? fmtPrice(st.opSnap.target) : 'oltre ' + fmtPrice(sv.target));
           const cf = tutte.filter(o => o.nome === 'conferma' && o.setupId === sv.id).pop();
           scalettaSegna(sc, 6, cf ? 'ok' : 'attesa', cf ? fmtPrice(cf.entry) : '');
           sc.esito = compl ? '' : (scartoMotivo || '');
         }
-
         if (st.ops.length) {
           const ultima = st.ops[st.ops.length - 1];
-          sc.operazione = st.op || ultima;   // come prima: chi legge una sola operazione trova questa
-          sc.operazioni = st.ops;            // e chi le vuole tutte e due, le trova qui
+          sc.operazione = st.op || ultima;
+          sc.operazioni = st.ops;
         } else { sc.operazione = null; sc.operazioni = null; }
       }
 
@@ -21769,18 +21911,16 @@ const VALID_BOS_PULLBACK_DEF = {
       ctx.restore();
     };
     const txt = (s, xx, yy, color, align, size) => {
-      ctx.save();
-      ctx.fillStyle = color; ctx.font = scaledFont(size || '10px system-ui');
+      ctx.save(); ctx.fillStyle = color; ctx.font = scaledFont(size || '10px system-ui');
       ctx.textAlign = align || 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(s, xx, yy);
-      ctx.restore();
+      ctx.fillText(s, xx, yy); ctx.restore();
     };
     const drawLabels = (pb, touch) => {
       if (pb) txt('Valid Pullback', xAbs(pb.x) + 4, y(pb.price), pb.color, 'left', 'bold 10px system-ui');
       if (touch) txt('○', xAbs(touch.x), y(touch.price), touch.color, 'center', '14px system-ui');
     };
 
-    // Setup completati: linee, segno ✓ e etichette restano.
+    // Setup completati
     for (const s of st.snaps) {
       seg(s.ref.from, s.ref.to, s.ref.price, s.ref.color, 2, s.ref.dashed);
       seg(s.tgt.from, s.tgt.to, s.tgt.price, s.tgt.color, 2, false);
@@ -21788,7 +21928,7 @@ const VALID_BOS_PULLBACK_DEF = {
       drawLabels(s.pb, s.touch);
     }
 
-    // Setup in corso: livelli di sviluppo (se attivi) ed etichette di ritest.
+    // Setup in corso
     for (const s of st.setups) {
       if (p.showDeveloping) {
         const sig = s.dir === 1 ? p.bullColor : p.bearColor;
@@ -21798,83 +21938,38 @@ const VALID_BOS_PULLBACK_DEF = {
       drawLabels(s.pbLabel, s.touch);
     }
 
-    // LE DUE ENTRATE, DISEGNATE. Chiesto dal proprietario: i livelli si vedono sul grafico, non
-    // solo scritti dentro un riquadro. Per ogni operazione viva tre linee - entrata, stop,
-    // target - dalla barra in cui e' nata fino al bordo destro, con scritto di quale si tratta.
+    // LE DUE ENTRATE
     for (const o of (st.ops || []).concat(st.opsFinite || [])) {
       const fin = Number.isFinite(o.barraFine) ? o.barraFine : Math.max(dataEnd, o.barra);
       const cEntry = o.dir === 1 ? p.bullColor : p.bearColor;
-      // LE SCRITTE SI LEGGONO UNA VOLTA SOLA (19 novembre 2026). SEGNALATO dal proprietario:
-      // «migliora le scritte a grafico, cosi' si capiscono poco; non scrivere su ogni etichetta
-      // target altrimenti non si capisce». Prima ogni riga ripeteva nome ed esito - «Pullback ✓
-      // target · stop», «Pullback ✓ target · target» - e la parola target compariva tre volte
-      // con tre significati. Adesso: il nome e l'esito stanno SOLO sulla riga dell'entrata, e le
-      // altre due righe dicono solo cosa sono, con la sigla corta.
       const esito = o.esito === 'target' ? '  ✓ chiusa a target'
-                  : o.esito === 'stop' ? '  ✗ chiusa a stop'
-                  : o.esito === 'scaduta' ? '  · scaduta' : '';
+                    : o.esito === 'stop' ? '  ✗ chiusa a stop'
+                    : o.esito === 'scaduta' ? '  · scaduta' : '';
       const breve = (o.nome === 'pullback' ? 'Pullback' : 'Conferma');
       seg(o.barra, fin, o.entry, cEntry, 1, true);
       seg(o.barra, fin, o.sl, '#f23645', 1, true);
       seg(o.barra, fin, o.tp, '#089981', 1, true);
       const xT = xAbs(o.barra) + 4;
-      // Il lottaggio sta sull'etichetta dell'entrata, non solo dentro il riquadro: i due stop
-      // sono a distanze diverse, quindi i due lotti sono diversi, e si devono poter leggere
-      // accanto alla linea a cui appartengono.
       const lotti = (o.lotto && Number.isFinite(o.lotto.lotti))
         ? ('  ·  ' + (typeof fmtLottiQuick === 'function' ? fmtLottiQuick(o.lotto.lotti) : o.lotto.lotti) + ' lotti') : '';
       txt(breve + '  ' + fmtPrice(o.entry) + lotti + esito, xT, y(o.entry) - 7, cEntry, 'left', 'bold 10px system-ui');
-      txt('SL ' + fmtPrice(o.sl) + (o.beFatto ? ' (a pareggio)' : ''), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
+      txt('SL ' + fmtPrice(o.sl) + (o.be1Fatto || o.be2Fatto ? ' (a pareggio)' : ''), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
       txt('TP ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
-      // IL LIVELLO DEL BREAK-EVEN SI VEDE PRIMA CHE SCATTI: e' la riga della richiesta. Finche'
-      // non e' scattato si disegna la linea con la sua scritta; dopo non serve piu', perche' il
-      // posto dove e' andato lo stop si legge gia' sulla riga SL.
-      if (!o.beFatto && Number.isFinite(o.beLivello)) {
-        seg(o.barra, fin, o.beLivello, '#DDA94F', 1, true);
-        txt('BE a ' + fmtPrice(o.beLivello), xT, y(o.beLivello) - 7, '#DDA94F', 'left', '10px system-ui');
+      // BE1
+      if (!o.be1Fatto && Number.isFinite(o.beLivello1)) {
+        seg(o.barra, fin, o.beLivello1, '#DDA94F', 1, true);
+        txt('BE1 a ' + fmtPrice(o.beLivello1), xT, y(o.beLivello1) - 7, '#DDA94F', 'left', '10px system-ui');
+      }
+      // BE2
+      if (!o.be2Fatto && Number.isFinite(o.beLivello2)) {
+        seg(o.barra, fin, o.beLivello2, '#DDA94F', 1, true);
+        txt('BE2 a ' + fmtPrice(o.beLivello2), xT, y(o.beLivello2) - 7, '#DDA94F', 'left', '10px system-ui');
       }
     }
 
     if (p.mostraScaletta && st.scaletta) scalettaDisegna(ctx, ind, st.scaletta, p.posScaletta, 'BOS Pullback');
   }
-};
-
-// IMPOSTAZIONI — ogni parametro compare qui una sola volta e resta modificabile a mano.
-const BOS_SETTINGS = [
-  {type: 'num', key: 'leftBars', label: 'Barre sinistra', min: 1, max: 50},
-  {type: 'num', key: 'rightBars', label: 'Barre destra', min: 1, max: 50},
-  {type: 'num', key: 'lookback', label: 'Lookback struttura', min: 6, max: 500},
-  {type: 'num', key: 'touchTicks', label: 'Tolleranza invalidazione (tick)', min: 0, max: 1000},
-  {type: 'num', key: 'minUntouchedBars', label: 'Barre minime senza ritest', min: 0, max: 100},
-  {type: 'num', key: 'minExtensionTicks', label: 'Rottura iniziale minima (tick)', min: 1, max: 1000},
-  {type: 'num', key: 'maxWait', label: 'Età massima setup', min: 5, max: 1000},
-  {type: 'num', key: 'tickSize', label: 'Dimensione tick', min: 0.000001, max: 1, step: 0.00001},
-  {type: 'check', key: 'showDeveloping', label: 'Livelli in sviluppo'},
-  {type: 'check', key: 'showPullbackText', label: 'Testo pullback valido'},
-  {type: 'check', key: 'showTouchCircle', label: 'Segna ritest'},
-  {type: 'color', key: 'refColor', label: 'Massimo/minimo precedente'},
-  {type: 'color', key: 'bullColor', label: 'BOS rialzista'},
-  {type: 'color', key: 'bearColor', label: 'BOS ribassista'},
-  {type: 'num', key: 'rrTarget', label: 'Target in R (R:R)', min: 0.5, max: 10, step: 0.1},
-  // IL BREAK-EVEN, con le parole del proprietario: a che percentuale del target scatta, e di
-  // quanti pip si sposta lo stop dall'ingresso. Zero per cento = spento.
-  {type: 'num', key: 'bePerc', label: 'Break-even: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
-  {type: 'num', key: 'bePips', label: 'Break-even: pip oltre l\'entrata', min: 0, max: 1000, step: 1},
-  {type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
-  // options a null: l'elenco delle posizioni si legge quando il pannello si apre, non adesso
-  // (SCALETTA_POSIZIONI e' dichiarata piu' in basso in questo stesso script).
-  {type: 'select', key: 'posScaletta', label: 'Posizione della scaletta', options: null}
-];
-function bosBuildSettings(ind, paramsRow, mk) {
-  BOS_SETTINGS.forEach(s => {
-    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
-    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
-    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
-    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options || SCALETTA_POSIZIONI));
-  });
-}
-
-// NOTE
+};// NOTE
 //  - Gli alert (rottura BOS confermata, rialzista e ribassista) non sono generati: l'app non ha alert.
 //  - Pivot: stessa regola usata negli altri indicatori (massimo strettamente sopra le barre a sinistra, non sotto quelle a destra). Va verificata con TradingView.
 //  - Tempi memorizzati come indici di barra: la corrispondenza con i timestamp di Pine è biunivoca.
@@ -22903,16 +22998,22 @@ function scalettaAzzera(sc, da) {
 }
 
 // Lottaggio consigliato con la percentuale di rischio e il saldo del programma.
-function scalettaLotto(entry, sl) {
+// `quota` = frazione del rischio totale dell'entrata (1 = tutto, 0.5 = meta'): cosi' le due
+// posizioni di un setup insieme rischiano l'1% impostato, non il 2%.
+function scalettaLotto(entry, sl, quota = 1) {
   try {
-    const riskPct = num(document.getElementById('risk') && document.getElementById('risk').value);
+    const riskPct = num(document.getElementById('risk') && document.getElementById('risk').value) * quota;
     if (!Number.isFinite(riskPct) || riskPct <= 0) return null;
     const dist = Math.abs(entry - sl);
     if (!(dist > 0)) return null;
     const saldo = realizedBalanceNow();
     const rischio = saldo * riskPct / 100;
     if (!(rischio > 0)) return null;
-    const instr = currentInstrument(), size = contractSize();
+    // Fallback robusto se instrument non pronto (es. nei test)
+    let instr = currentInstrument();
+    let size = contractSize();
+    if (!instr || !instr.plMode) { instr = {plMode: 'baseEqualsAccount'}; }
+    if (!Number.isFinite(size) || size <= 0) { size = 1; }
     const perditaPerLotto = instr.plMode === 'baseEqualsAccount' ? (dist * size / entry) : (dist * size);
     if (!(perditaPerLotto > 0)) return null;
     let lotti = rischio / perditaPerLotto, ridotto = false;
@@ -48749,8 +48850,8 @@ function notizieArchivioSalva(){
    const t=Number(e.t);
    // Importante: resta un anno (la statistica del "freno notizie" guarda indietro).
    if(e.imp==='High'||e.imp==='Medium')return t>=limite;
-   // Tutto il resto: due settimane, che e' la fascia che si replayza davvero.
-   return t>=limiteBreve;
+   // Anche le Low restano per un anno: il proprietario vuole TUTTE le notizie, nessuna esclusa.
+   return t>=limite;
   });
   // Se si sfora il tetto si buttano le piu' VECCHIE: la statistica guarda sempre il periodo
   // scelto nei filtri, che parte da adesso e va indietro.

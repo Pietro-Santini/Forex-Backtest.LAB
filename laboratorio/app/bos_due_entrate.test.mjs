@@ -41,8 +41,10 @@ const BOS_RIALZISTA = [
   [101.05, 101.80, 101.00, 101.70]   // 9  ROTTURA CONFERMATA -> ENTRATA 2
 ];
 
+// Questi test descrivono la seconda entrata alla rottura confermata ('dopo') e lo stop
+// del pullback sulla candela di ritest: le due scelte di default sono coperte da prove a parte.
 const PARAMETRI = {leftBars: 2, rightBars: 2, touchTicks: 1, minUntouchedBars: 2,
-                   minExtensionTicks: 1, tickSize: 0.01, rrTarget: 2};
+                   minExtensionTicks: 1, tickSize: 0.01, rrTarget: 2, modoSeconda: 'dopo', stopPullback: 'candela'};
 
 // Esegue l'indicatore barra per barra e riporta le operazioni vive a ogni barra.
 const PASSO_PASSO_SU = (spec, par) => `(() => {
@@ -197,8 +199,8 @@ test('ogni entrata porta il SUO lottaggio: stop diversi, lotti diversi, stesso r
 
     assert.ok(pb.lotti > 0 && cf.lotti > 0,
       'tutte e due devono avere un lottaggio: ' + JSON.stringify([pb, cf]));
-    assert.equal(Math.round(pb.rischio), 100, 'il rischio della prima e l\'1% di 10.000');
-    assert.equal(Math.round(cf.rischio), 100, 'e anche quello della seconda');
+    assert.equal(Math.round(pb.rischio), 50, 'il rischio della prima e lo 0,5% di 10.000 (meta\' dell\'1%)');
+    assert.equal(Math.round(cf.rischio), 50, 'e anche quello della seconda: l\'altra meta\'');
 
     // Lo stop della prima e' piu' stretto (0,11) di quello della seconda (0,70): a parita' di
     // rischio il lotto deve essere PIU' GRANDE. Un lotto uguale vorrebbe dire due rischi diversi.
@@ -212,7 +214,7 @@ test('ogni entrata porta il SUO lottaggio: stop diversi, lotti diversi, stesso r
       ? Math.abs(entry - sl) * r.contratto / entry : Math.abs(entry - sl) * r.contratto;
     for (const o of [pb, cf]) {
       const perdita = o.lotti * perLotto(o.entry, o.sl);
-      assert.ok(Math.abs(perdita - 100) <= 100 * 0.05 + perLotto(o.entry, o.sl) * 0.01,
+      assert.ok(Math.abs(perdita - 50) <= 50 * 0.05 + perLotto(o.entry, o.sl) * 0.01,
         'col lotto proposto per «' + o.nome + '» la perdita allo stop non e il rischio chiesto: ' + perdita.toFixed(2));
     }
     assert.deepEqual(errori, []);
