@@ -143,13 +143,14 @@ def test_RIAPERTA_A_MERCATO_CHIUSO_ritrova_le_due_ore(monkeypatch):
 
 
 def test_senza_nessun_ricordo_si_resta_a_zero(monkeypatch):
-    """Non si inventa niente: senza una misura buona alle spalle vale ancora la regola di prima
-    (l'orologio del server com'e', mai un numero dedotto dall'eta' di un tick)."""
+    """Senza una misura viva e senza memoria lo scarto viene dal CALENDARIO dell'ora legale (21
+    novembre 2026): mai zero per default, mai un numero dedotto dall'eta' di un tick."""
     _fingi_server(monkeypatch)
     feed._last_good_server_offset = None
     monkeypatch.setattr(feed, "_scarto_da_un_simbolo_quiunque", lambda now: None)
 
-    assert feed._server_time_offset_seconds(_tick_senza_eta_misurabile()) == 0
+    import time as _t
+    assert feed._server_time_offset_seconds(_tick_senza_eta_misurabile()) == feed._scarto_broker_da_calendario(_t.time())
 
 
 def test_un_ALTRO_broker_non_eredita_il_fuso(monkeypatch):

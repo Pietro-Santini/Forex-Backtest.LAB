@@ -33,6 +33,15 @@ Il file è di testo semplice, con a capo Windows (CRLF).
 
 ## Memoria, collaudo e agenti
 
+- **PRIMA DI TOCCARE TEMPO, ORARI, CANDELE O MERCATO APERTO/CHIUSO**: leggere
+  «REGOLE SUL TEMPO E SUI DATI DEL GRAFICO» in fondo a `cervello/REGOLE.md`. Sono dieci regole
+  non negoziabili, scritte il 21 novembre 2026 dopo una giornata persa sullo scarto `-9000`.
+  In una riga: **si misura la sorgente prima di toccare il grafico**
+  (`curl "http://127.0.0.1:8001/history?symbol=XAUUSD&timeframe=M1&count=5"`, si guarda
+  `utc_offset_seconds_applied`), non si dichiara mai una causa senza averla misurata, e non si
+  mostrano mai candele false — meglio meno candele, e detto nella barra di stato.
+- Dopo **ogni** modifica a `app.html`: `node laboratorio/strumenti/sintassi_app.mjs`. Un solo
+  apostrofo italiano dentro una stringa JavaScript rompe un intero blocco `<script>`.
 - `cervello/` è la memoria del progetto: leggere `cervello/LEGGIMI.md` e `cervello/REGOLE.md`
   prima di lavorare, aggiornarlo alla fine (bug, lezioni, idee, diario).
 - `bash laboratorio/collauda.sh` deve essere verde prima di proporre o pubblicare una modifica.

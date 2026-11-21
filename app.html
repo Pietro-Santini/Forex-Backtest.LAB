@@ -13004,6 +13004,51 @@ function hideLoadingOverlay(){
 function nextPaint(){
  return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
 }
+// IL PASSO VERO DELLA SERIE A GRAFICO, in minuti (21 novembre 2026).
+//
+// SEGNALATO dal proprietario: «il time frame selezionato e' 1m ma mi visualizza le candele da 5m,
+// mentre invece se seleziono 15 minuti me le fa vedere correttamente».
+//
+// QUELL'INDIZIO E' LA DIAGNOSI. E' la stessa serie da 5 minuti in tutti e due i casi: a 15 minuti
+// si aggrega bene (15 e' multiplo di 5) e sembra giusta, a 1 minuto viene mostrata cosi' com'e',
+// cioe' candele da 5m con l'etichetta 1m. Un grafico falso, non un grafico vuoto - il tipo di
+// errore peggiore, perche' non si vede.
+//
+// Si misura la distanza PIU' FREQUENTE fra due candele vicine, non la media: i buchi del feed
+// (su XAU/USD c'e' una pausa vera di 76 minuti al giorno) falserebbero la media.
+function fblPassoSerieMinuti(righe){
+ const R=righe||baseRows;
+ if(!R||R.length<6)return null;
+ const conteggi=new Map();
+ for(let i=Math.max(1,R.length-200);i<R.length;i++){
+   const a=parseDateTime(R[i-1].date), b=parseDateTime(R[i].date);
+   if(!Number.isFinite(a)||!Number.isFinite(b))continue;
+   const m=Math.round((b-a)/60000);
+   if(m>0)conteggi.set(m,(conteggi.get(m)||0)+1);
+ }
+ let passo=null,max=0;
+ for(const [m,n] of conteggi){ if(n>max){ max=n; passo=m; } }
+ return passo;
+}
+
+// DOPO IL CAMBIO TIME FRAME IN LIVE: la serie caricata dev'essere davvero di quella risoluzione.
+// Se la ricarica non riesce (servizio dati che non risponde, rete, simbolo), restano le candele
+// di prima: con un time frame piu' PICCOLO di quelle, il grafico mostrerebbe candele false.
+// Allora si torna al time frame che i dati hanno davvero, e lo si dice - mai candele false.
+function fblControllaPassoDopoCambioTf(vecchioTF){
+ try{
+   const passo=fblPassoSerieMinuti();
+   if(!Number.isFinite(passo)||passo<=currentTF)return;   // la serie e' fine abbastanza: tutto a posto
+   const chiesto=currentTF;
+   const tornaA=(Number(vecchioTF)>=passo)?Number(vecchioTF):passo;
+   currentTF=tornaA;
+   const sel=$('tf'); if(sel)sel.value=String(tornaA);
+   rebuildRows(); draw(); update();
+   $('status').textContent='⚠️ Le candele da '+chiesto+'m non sono arrivate: il grafico resta a '
+     +tornaA+'m. Mostrare candele da '+passo+'m sotto la scritta '+chiesto+'m sarebbe un grafico falso.';
+ }catch(e){}
+}
+
 async function withLoadingOverlay(text,fn){
  showLoadingOverlay(text);
  await nextPaint();
@@ -14183,7 +14228,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.92';
+const FBL_VERSIONE='2.2.93';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -16551,9 +16596,9 @@ function fblConfineChiusura(){
     const a=currentAssetKey;
     if(!a)return rows.length;
     try{ if(binanceSymbolForAsset(a))return rows.length; }catch(e){}
-    try{ if(fblMercatoMt5Noto(a)===true)return rows.length; }catch(e){}
     const N=rows.length;
     if(!N)return rows.length;
+    try{ if(fblMercatoMt5Noto(a)===true)return rows.length; }catch(e){}
     const _chiave=a+'|'+Math.floor(Date.now()/60000);
     if(__fblConfineCacheCh.chiave===_chiave && __fblConfineCacheCh.righe===N)return __fblConfineCacheCh.val;
     const v=_fblConfineChiusuraCalcola(a,N);
@@ -32755,16 +32800,10 @@ function forward(silenzioso){
  let step=1;
  for(let s=0;s<step;s++){
    if(currentTF===1){
-     // A 1 MINUTO IL PASSO E' DI UN MINUTO, NON DI UNA RIGA. Se nel dato manca un minuto (buco del
-     // feed), contare le righe saltava al minuto successivo esistente (25 -> 35 visto dal
-     // proprietario). Ora l'orologio avanza di 60 s e si mostra la candela che contiene quell'istante.
-     const tempiBase=getBaseTimes();
-     const prossimo=(Number.isFinite(masterTime)?masterTime:tempiBase[idx])+60000;
-     const ultimo=tempiBase.length?tempiBase[tempiBase.length-1]:NaN;
-     const j=Math.max(0,lowerBound(tempiBase,prossimo+1)-1);
-     if(idx>=rows.length-1&&prossimo>ultimo)break;   // fine dei dati
-     masterTime=prossimo;
-     idx=Math.max(idx,Math.min(j,rows.length-1));
+     // Passo a candela reale: si va alla successiva candela vera. Nei buchi di dati non si inventa niente.
+     if(idx>=rows.length-1)break;
+     idx++;
+     masterTime=parseDateTime(rows[idx].date);
    }else{
      const fullAgg=getFullAgg(currentTF);
      const bucket=fullAgg[idx];
@@ -35019,7 +35058,10 @@ $('tf').addEventListener('change',()=>{
 // candele finte. Ora si ricarica dalla STESSA fonte del file a grafico.
 const __sorgenteTf=fblSorgenteLivePerCambioTf(csvLibrary[0]&&csvLibrary[0].id, liveSessionPhaseNow(), mt5Connected);
 const __optsTf={tfChangeSpanMinutes:visibleRealMinutes,tfChangeOldTF:oldTF,vistaFoto};
-withLoadingOverlay('Cambio timeframe Live…', ()=>__sorgenteTf==='mt5'?loadLiveHistoryFromMt5(asset,__optsTf):loadLiveHistoryFromCapital(asset,__optsTf));
+withLoadingOverlay('Cambio timeframe Live…', async ()=>{
+  await (__sorgenteTf==='mt5'?loadLiveHistoryFromMt5(asset,__optsTf):loadLiveHistoryFromCapital(asset,__optsTf));
+  fblControllaPassoDopoCambioTf(oldTF);   // mai candele di un'altra risoluzione con l'etichetta nuova
+});
    }
    $('tf').blur();
    return;
@@ -56036,13 +56078,26 @@ function mt5TickAt(timeMs){
  const ageMs=Math.abs(ora-timeMs);
  return ageMs<=FBL_MT5_SILENZIO_CHIUSO_MS ? ora : 0;
 }
+// LO SCARTO DELL'OROLOGIO SI STIMA SOLO DA TICK NUOVI (21 novembre 2026). A mercato chiuso il
+// ponte rimanda gli stessi tick vecchi con lo stesso orario: contarli sporcava lo scarto (e con una
+// finestra vuota lo azzerava), e le candele venivano datate ore avanti o indietro.
+let mt5UltimoOrarioTickNuovo=-Infinity;
 function mt5RegistraOrarioTick(timeMs){
  if(!Number.isFinite(timeMs))return;
+ if(timeMs<=mt5UltimoOrarioTickNuovo)return;   // stesso tick o tick piu' vecchio: non e' un dato nuovo
+ mt5UltimoOrarioTickNuovo=timeMs;
  const ora=Date.now(), d=timeMs-ora;
- if(Math.abs(d)>6*3600000)return; // tick vecchio di ore (mercato chiuso): non dice nulla
+ // L'OROLOGIO DEL SERVIZIO DATI STA SULLO STESSO PC: la differenza vera e' di secondi, mai di ore.
+ // Un numero grande non e' un orologio diverso, e' un tick FERMO (mercato chiuso) la cui eta' veniva
+ // presa per scarto: con 6 ore di tolleranza un tick di 4h30 spostava di 4h30 ogni conto sul tempo.
+ // E' lo stesso difetto misurato sul servizio MT5 (vedi _SCARTO_MINIMO_PLAUSIBILE in
+ // mt5_feed_server.py, i -9000 del 21 novembre 2026). Cinque minuti, come il silenzio che decide
+ // se il mercato sta ancora trasmettendo (FBL_MT5_SILENZIO_CHIUSO_MS).
+ if(Math.abs(d)>FBL_MT5_SILENZIO_CHIUSO_MS)return;
  mt5ScartiOrologio.push({at:ora,d});
  while(mt5ScartiOrologio.length&&ora-mt5ScartiOrologio[0].at>90000)mt5ScartiOrologio.shift();
  if(mt5ScartiOrologio.length>400)mt5ScartiOrologio.splice(0,mt5ScartiOrologio.length-400);
+  if(!mt5ScartiOrologio.length)return;   // finestra vuota: si tiene lo scarto gia' stimato, non si azzera
  const max=Math.max(...mt5ScartiOrologio.map(x=>x.d));
  const prima=mt5ScartoOrologioMs;
  mt5ScartoOrologioMs=Math.abs(max)>2000?Math.round(max):0; // sotto i 2 s: rete e ritardi normali
@@ -63031,6 +63086,20 @@ function fblReplayPasso(segno, continuo){
   const da=replayMomentoMostrato();
   if(!Number.isFinite(da))return;
   let t=fblReplayPassoIstante(da,segno);         // UNA candela di CHI PREME, mese compreso
+  // SOLO CANDELE VERE (21 novembre 2026): avanti si salta al prossimo dato reale (un buco nel dato non
+  // si riempie). Una finestra che finisce i propri dati si ferma da sola: le altre continuano (regola).
+  try{
+    const tempiReplay=getBaseTimes();
+    if(tempiReplay&&tempiReplay.length){
+      if(segno>0){
+        const j=lowerBound(tempiReplay,da+1);
+        if(j<tempiReplay.length)t=Math.max(t,tempiReplay[j]);
+      }else{
+        const j=lowerBound(tempiReplay,da)-1;
+        if(j>=0)t=Math.min(t,tempiReplay[j]);
+      }
+    }
+  }catch(e){}
   if(!Number.isFinite(t))return;
   // INDIETRO non si esce dai propri dati: l'istante si ferma sulla prima candela vera.
   // IN AVANTI NON SI FERMA PIU' (17 novembre 2026): il tetto all'ultima candela faceva restare la

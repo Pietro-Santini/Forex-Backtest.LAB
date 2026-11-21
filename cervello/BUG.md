@@ -2,6 +2,69 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+## RISOLTO — 21 novembre 2026, l'orario sbagliato dell'ultima candela (lo scarto -9000)
+
+> «L'ultima candela del terminale e' alle 23:50 del 20/11/2026, mentre sull'app sono le 03:19.
+> Questo sull'asset XAU/USD.» — e, prima: «il tempo scorre anche a mercato chiuso».
+
+**MISURATO sul PC del proprietario, non dedotto.** `curl http://127.0.0.1:8001/history?symbol=XAUUSD&timeframe=M1&count=5`
+rispondeva `"utc_offset_seconds_applied": -9000`, e il file
+`%APPDATA%\ForexBacktestLAB\scarto_server.json` conteneva
+`{"Upcomers-Server": {"scarto": -9000, "quando": ...}}`. Nessun broker sta a **-2h30**: ogni candela
+usciva spostata di 4 ore e mezza in avanti (lo scarto vero d'inverno e' +7200).
+
+**LA CAUSA VERA.** `_scarto_fresco_da_epoch()` misura `grezzo = epoch_del_tick - adesso`, cioe'
+**scarto meno l'eta' del tick**. Con un tick fresco esce lo scarto; con un tick fermo esce un numero
+piu' piccolo di qualunque fuso reale. Le guardie non lo fermavano:
+
+- la griglia della mezz'ora lo lasciava passare, perche' **-9000 e' un multiplo tondo di 1800**;
+- il tetto di 14 ore non lo toccava;
+- la guardia sull'eta' era `abs(grezzo) > 86400`, cioe' **fino a 24 ore**, mentre il commento
+  sopra la riga diceva gia' «basta superare i 5 minuti di eta' per non misurare piu' niente di
+  vero». Il commento descriveva la cura del 18 ottobre; la riga non la applicava.
+
+Bastava che il servizio misurasse di sabato con il mercato chiuso da 4h30 (7200 - 16200 = -9000)
+perche' il numero passasse, e `_ricorda_scarto()` lo scriveva su disco: da li' in poi restava
+sbagliato anche dopo il riavvio.
+
+**PERCHE' IN REPLAY ERA GIUSTO.** Il replay non usa l'orologio: legge le candele cosi' come stanno.
+Per questo il proprietario vedeva tutte le candele corrette in replay e sbagliate in Live — ed e'
+l'indizio che ha portato allo scarto invece che al grafico.
+
+**LA CURA, e vale per qualunque broker senza indovinare il suo fuso.** `_SCARTO_MINIMO_PLAUSIBILE
+= -3600`: i server MT5 stanno da UTC+0 in su (EET +2/+3 nella quasi totalita'), quindi un valore
+sotto UTC-1 non e' un fuso, e' l'eta' di un tick fermo. Applicata in tre punti e in tutti e due i
+file (`mt5_feed_server.py` e `bridge.py`, che hanno la stessa funzione):
+
+1. la misura dal tick si rifiuta sotto quella soglia (al posto delle 24 ore);
+2. `_scarto_ricordato()` butta un valore sotto la soglia: **i -9000 gia' sul disco non tornano a
+   galla**, non serve cancellare il file a mano;
+3. `_ricorda_scarto()` non lo scrive piu'.
+
+Quando non c'e' nessun tick fresco (sabato e domenica) lo scarto viene da
+`_scarto_broker_da_calendario()`: UTC+2 d'inverno, UTC+3 con l'ora legale europea, dal calendario e
+non da un valore salvato di un'altra stagione.
+
+**LO STESSO DIFETTO ERA ANCHE NELL'APP.** `mt5RegistraOrarioTick()` accettava un tick vecchio fino a
+**6 ore** come differenza di orologio. Il servizio manda i tick gia' in UTC (`"time_ms": ... - offset`),
+quindi li' non si misura il fuso del broker ma l'orologio del servizio rispetto al dispositivo — e il
+servizio gira sullo stesso PC: la differenza vera e' di secondi. Ora il tetto e'
+`FBL_MT5_SILENZIO_CHIUSO_MS` (5 minuti), e un tick conta solo se il suo orario e' **piu' nuovo**
+dell'ultimo visto (il ponte ripete lo stesso tick a mercato chiuso).
+
+**Prova del rosso:** rimessa la vecchia guardia `abs(grezzo) > 86400` →
+`test_tick_vecchio_di_4h30_non_diventa_uno_scarto` rosso; rimessa quella nuova → verde.
+
+**Test:** `laboratorio/ponte/test_scarto_broker_calendario.py` (4 prove: inverno/estate, i due
+cambi dell'ora legale, il tick di 4h30, il valore avvelenato sul disco),
+`laboratorio/app/scarto_orologio_solo_tick_nuovi.test.mjs` (2 prove),
+`laboratorio/app/tick_vecchio_non_e_mercato.test.mjs`.
+
+**LEZIONE.** Un commento che descrive una cura non e' la cura. Qui la riga diceva 24 ore e il
+commento sopra diceva 5 minuti, per settimane: il collaudo non se ne e' accorto perche' nessuna
+prova misurava un tick di poche ore — c'erano quella di 8h20 e quella del tick assente, e il buco
+stava giusto in mezzo.
+
 ## APERTI — 17 novembre 2026, prop firm chiusa e finestre duplicate
 
 Segnalato dal proprietario. Tre problemi dentro una segnalazione, e il terzo non è un difetto ma
