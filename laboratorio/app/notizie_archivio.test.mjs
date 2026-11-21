@@ -22,12 +22,14 @@ import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
 
 // Tre notizie come le manda il feed (forma del ponte /news).
-const FEED = () => [
-  {title:'Non Farm Payrolls', country:'USD', date:'2026-11-06T13:30:00.000Z', impact:'High', forecast:'150K', previous:'120K'},
-  {title:'CPI y/y',          country:'USD', date:'2026-11-06T13:30:00.002Z', impact:'High'},
-  {title:'Retail Sales m/m', country:'GBP', date:'2026-11-06T09:30:00.000Z', impact:'Medium'},
-  {title:'Rumore di fondo',  country:'EUR', date:'2026-11-06T08:00:00.000Z', impact:'Low'},
-];
+// Date RELATIVE a oggi (due giorni fa): con date fisse le Low diventano vecchie e il test non regge piu'.
+const GIORNO_FEED = () => new Date(Date.now() - 2*86400000).toISOString().slice(0,10);
+const FEED = () => { const d = GIORNO_FEED(); return [
+  {title:'Non Farm Payrolls', country:'USD', date:`${d}T13:30:00.000Z`, impact:'High', forecast:'150K', previous:'120K'},
+  {title:'CPI y/y',          country:'USD', date:`${d}T13:30:00.002Z`, impact:'High'},
+  {title:'Retail Sales m/m', country:'GBP', date:`${d}T09:30:00.000Z`, impact:'Medium'},
+  {title:'Rumore di fondo',  country:'EUR', date:`${d}T08:00:00.000Z`, impact:'Low'},
+]; };
 
 const PREPARA = (modo) => `(function(){
   newsEvents=${JSON.stringify(FEED())}; newsFetchedAt=Date.now();
@@ -47,7 +49,7 @@ test("in Storico/replay i pallini restano, anche senza rete", async () => {
     // Misuro newsDotHitRects, cioe' i pallini che il grafico ha DISEGNATO (lo riempie draw()):
     // non una stringa nel sorgente, il risultato che si vede a schermo.
     const r = await pagina.evaluate(`(() => {
-      const VEN=Date.UTC(2026,10,6,7,0,0);
+      const VEN=Date.parse('${GIORNO_FEED()}T07:00:00Z');   // stesso giorno delle notizie di prova
       let p=4100; const R=[];
       for(let i=0;i<500;i++){
         const t=VEN+i*60000, o=p, c=p+Math.sin(i/7)*2;
@@ -135,7 +137,7 @@ test('le notizie nuove partono per l\'account (e solo quelle nuove)', async () =
   } finally { await browser.close(); }
 });
 
-test("l'archivio tiene le importanti un anno e tutto per due settimane", async () => {
+test("l'archivio tiene TUTTE le notizie per un anno, nessuna esclusa", async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(`(() => {
@@ -155,8 +157,8 @@ test("l'archivio tiene le importanti un anno e tutto per due settimane", async (
     })()`);
     assert.ok(r.salvate.includes('Importante di dieci mesi fa'),
       'una notizia importante di dieci mesi fa deve restare (la statistica guarda indietro): ' + JSON.stringify(r));
-    assert.ok(!r.salvate.includes('Rumore di dieci mesi fa'),
-      'il rumore di dieci mesi fa no: ' + JSON.stringify(r));
+    assert.ok(r.salvate.includes('Rumore di dieci mesi fa'),
+      'anche il rumore di dieci mesi fa resta (il proprietario vuole tutte le notizie): ' + JSON.stringify(r));
     assert.ok(r.salvate.includes('Rumore di tre giorni fa'),
       'il rumore recente si tiene (in replay i pallini devono esserci): ' + JSON.stringify(r));
     assert.deepEqual(errori, []);
