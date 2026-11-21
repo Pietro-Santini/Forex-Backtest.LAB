@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(BUILD, "segnali_telegram"))
 # quando girava tutta la cartella, per colpa dell'ordine alfabetico:
 # test_esci_telegram importa questo file prima di lui. Su GitHub le librerie
 # sono di sistema e il difetto non si vedeva (verde la', rosso a casa).
+os.environ.setdefault("FBL_NIENTE_GIRO_PENDENTI", "1")   # nei test niente giro in sottofondo sugli ordini
 os.environ.setdefault("FBL_APPDATA_ORIGINALE", os.environ.get("APPDATA", ""))
 # Mai la cartella dati vera dell'utente: ogni esecuzione ha la sua.
 os.environ["APPDATA"] = tempfile.mkdtemp(prefix="fbl_collaudo_")
