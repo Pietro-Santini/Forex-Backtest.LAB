@@ -917,7 +917,10 @@ def _giro_pendenti() -> None:
         time.sleep(2)
 
 
-threading.Thread(target=_giro_pendenti, name="kraken-pendenti", daemon=True).start()
+# Nei test il giro in sottofondo NON parte: i test chiamano controlla_pendenti() da soli, e il giro
+# li faceva scattare due volte (racconto del collaudo, 21 novembre 2026: ordini doppi, test a intermittenza).
+if os.environ.get("FBL_NIENTE_GIRO_PENDENTI") != "1":
+    threading.Thread(target=_giro_pendenti, name="kraken-pendenti", daemon=True).start()
 
 
 @router.post("/pendente")

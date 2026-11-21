@@ -14183,7 +14183,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.91';
+const FBL_VERSIONE='2.2.92';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -32755,9 +32755,16 @@ function forward(silenzioso){
  let step=1;
  for(let s=0;s<step;s++){
    if(currentTF===1){
-     if(idx>=rows.length-1)break;
-     idx++;
-     masterTime=parseDateTime(rows[idx].date);
+     // A 1 MINUTO IL PASSO E' DI UN MINUTO, NON DI UNA RIGA. Se nel dato manca un minuto (buco del
+     // feed), contare le righe saltava al minuto successivo esistente (25 -> 35 visto dal
+     // proprietario). Ora l'orologio avanza di 60 s e si mostra la candela che contiene quell'istante.
+     const tempiBase=getBaseTimes();
+     const prossimo=(Number.isFinite(masterTime)?masterTime:tempiBase[idx])+60000;
+     const ultimo=tempiBase.length?tempiBase[tempiBase.length-1]:NaN;
+     const j=Math.max(0,lowerBound(tempiBase,prossimo+1)-1);
+     if(idx>=rows.length-1&&prossimo>ultimo)break;   // fine dei dati
+     masterTime=prossimo;
+     idx=Math.max(idx,Math.min(j,rows.length-1));
    }else{
      const fullAgg=getFullAgg(currentTF);
      const bucket=fullAgg[idx];
@@ -56018,6 +56025,17 @@ const FBL_MT5_SILENZIO_CHIUSO_MS=5*60000;
 // tick (il tick piu' fresco degli ultimi 90 s: un tick nuovo arriva pochi ms dopo essere nato) e
 // usa quell'ora per candele, cambio candela e confronti col REST.
 let mt5ScartiOrologio=[], mt5ScartoOrologioMs=0;
+// ULTIMO TICK VERO (sabato, 21 novembre 2026): il mercato e' aperto solo se il TICK e' recente.
+// Prima si segnava l'ora di ARRIVO sul PC: un prezzo fermo che il ponte rimanda con il suo vecchio
+// orario sembrava vivo, e il grafico creava candele finte a mercato chiuso. Ora conta l'orario
+// del tick: se e' vecchio di piu' di cinque minuti (con lo scarto dell'orologio del broker) non
+// e' un tick vivo, e restituisce 0 = nessun tick.
+function mt5TickAt(timeMs){
+ const ora=mt5Adesso();
+ if(!Number.isFinite(timeMs)||timeMs<=0)return ora;   // senza orario del tick: comportamento di prima
+ const ageMs=Math.abs(ora-timeMs);
+ return ageMs<=FBL_MT5_SILENZIO_CHIUSO_MS ? ora : 0;
+}
 function mt5RegistraOrarioTick(timeMs){
  if(!Number.isFinite(timeMs))return;
  const ora=Date.now(), d=timeMs-ora;
@@ -56555,7 +56573,9 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // Lavoro 2: salva il magazzino locale (non a ogni tick: qui, al caricamento dell'asset).
  try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimalsOfNumber==='function'?decimalsOfNumber(mt5Rows[mt5Rows.length-1].close):null), __timbroScarto); }catch(e){}
  const prevLiveFile=csvLibrary[0];
- const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='mt5_live_'+asset && prevLiveFile.rows && prevLiveFile.rows.length>0;
+ // Si fonde con lo storico precedente SOLO se e' dello stesso timeframe: cambiando da 5m a 1m le
+ // candele da 5m non devono restare in mezzo a quelle da 1m (sintomo: 1m mostrato con candele da 5m).
+ const isSameLiveSeries=prevLiveFile && prevLiveFile.id==='mt5_live_'+asset && prevLiveFile.tf===timeframe && prevLiveFile.rows && prevLiveFile.rows.length>0;
  let mergedRows=mt5Rows;
  if(isSameLiveSeries){
    const byTime=new Map();
@@ -56586,7 +56606,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
      mergedRows=[...byT.entries()].sort((a,b)=>a[0]-b[0]).map(e=>e[1]);
    }
  }
- csvLibrary=[{id:'mt5_live_'+asset,name:`MT5 Live (${resolved})`,addedAt:Date.now(),rows:mergedRows}];
+ csvLibrary=[{id:'mt5_live_'+asset,name:`MT5 Live (${resolved})`,addedAt:Date.now(),rows:mergedRows,tf:timeframe}];
  // BUG RISOLTO ("cambiando asset, la candela finale prende un valore enorme senza senso" — segnalato
  // con screenshot, uno spillover di prezzo da un simbolo all'altro): mt5ActiveSymbol viene
  // riassegnato al NUOVO simbolo qui sopra, MOLTO prima di questo punto (prima ancora dell'await
@@ -56835,8 +56855,8 @@ function connectMt5Stream(symbol){
    lastMt5RealTickAt=mt5Adesso();
    // MERCATO DAL PASSAGGIO DATI: l'ultimo tick vero per asset, per tutti e due i nomi con cui
    // l'asset e' conosciuto (quello dell'app e quello risolto su MT5).
-   try{ if(currentAssetKey) mt5UltimoTickPerAsset[currentAssetKey]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
-   try{ if(symbol && symbol!==currentAssetKey) mt5UltimoTickPerAsset[symbol]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
+   try{ if(currentAssetKey) mt5UltimoTickPerAsset[currentAssetKey]={at:mt5TickAt(msg.time_ms),prezzo:msg.bid}; }catch(e){}
+   try{ if(symbol && symbol!==currentAssetKey) mt5UltimoTickPerAsset[symbol]={at:mt5TickAt(msg.time_ms),prezzo:msg.bid}; }catch(e){}
  // tick VERO (non heartbeat): solo lui può aprire una candela nuova. Ora del servizio MT5 (vedi mt5Adesso)
    // METADATI AUTOMATICI: spread REALE, ogni tick ha già bid E ask insieme (a differenza di
    // Capital.com, mai da sperare che ci sia) — throttled a 1 volta ogni 5s per asset, vedi
@@ -56916,8 +56936,8 @@ function connectMt5BackgroundStream(asset,symbol){
    // MERCATO DAL PASSAGGIO DATI: stesso principio del canale principale. Il battito (heartbeat)
    // NON conta: il ponte lo manda ogni 2 secondi anche a mercato chiuso, quindi non e' prova che
    // il mercato sia aperto. Conta solo il tick vero, cioe' il prezzo che si muove.
-   try{ if(asset) mt5UltimoTickPerAsset[asset]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
-   try{ if(symbol && symbol!==asset) mt5UltimoTickPerAsset[symbol]={at:mt5Adesso(),prezzo:msg.bid}; }catch(e){}
+   try{ if(asset) mt5UltimoTickPerAsset[asset]={at:mt5TickAt(msg.time_ms),prezzo:msg.bid}; }catch(e){}
+   try{ if(symbol && symbol!==asset) mt5UltimoTickPerAsset[symbol]={at:mt5TickAt(msg.time_ms),prezzo:msg.bid}; }catch(e){}
    if(Number.isFinite(msg.ask)&&(Date.now()-(__assetSpreadLastCapturedAt[symbol]||0)>5000)){
      __assetSpreadLastCapturedAt[symbol]=Date.now();
      const __meta=metaFromBidAsk(msg.bid,msg.ask,symbol);
@@ -63033,7 +63053,7 @@ function fblReplayPasso(segno, continuo){
     const ora=replayMomentoMostrato();
     if(!Number.isFinite(ora))break;
     if((segno>0)?(ora>=t):(ora<=t))break;
-    if(!fblReplayUnaCandela(segno))break;
+    if(!fblReplayUnaCandela(segno, t))break;   // mai oltre l'istante richiesto da chi preme
     const dopo=replayMomentoMostrato();
     // Fine dei PROPRI dati: non si muove più e non si annuncia niente a nessuno (regola del
     // 16 novembre: una finestra corta non deve fermare il replay di tutte le altre).
@@ -63051,12 +63071,15 @@ function fblReplayPasso(segno, continuo){
 }
 // UNA candela di questo time frame, dalla posizione in cui si è (formazione compresa), con la
 // valutazione: è la stessa strada dei riceventi, senza annuncio e senza disegno (li fa il passo).
-function fblReplayUnaCandela(segno){
+function fblReplayUnaCandela(segno, limite){
  const da=replayMomentoMostrato();
  if(!Number.isFinite(da))return false;
  // UNA candela VERA, mese compreso (vedi fblReplayPassoIstante): con la durata fissa un mese da 31
  // giorni non si completava mai e il ciclo dell'autorita' girava a vuoto.
- const t=fblReplayPassoIstante(da,segno);
+ let t=fblReplayPassoIstante(da,segno);
+ // Se chi preme e' su un timeframe piu' piccolo, la madre non salta la sua candela intera: si
+ // ferma all'istante richiesto (candela in formazione), come dice la regola del proprietario.
+ if(Number.isFinite(limite)&&Number.isFinite(t))t=(segno>0)?Math.min(t,limite):Math.max(t,limite);
  if(!Number.isFinite(t)||t===da)return false;
  fblReplayApplicaIstante(t, true);
  try{ evaluate(); }catch(e){}
