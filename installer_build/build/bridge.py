@@ -3910,6 +3910,21 @@ def _send_and_check(request: dict):
 # veniva scambiata per un fuso orario (misurato: -15 ore con 27 secondi di residuo). Due
 # guardie nuove: nessun server MT5 sta oltre 14 ore da UTC, e un tick vale solo se e' piu'
 # nuovo dell'ultimo visto.
+# LO SCARTO PIU' A OVEST CHE UN SERVER MT5 PUO' AVERE (21 novembre 2026).
+#
+# MISURATO sul PC del proprietario, di sabato: /history rispondeva
+# "utc_offset_seconds_applied": -9000, cioe' -2h30, e OGNI candela usciva spostata. Nessun broker
+# sta a -2h30: quel numero era l'ETA' di un tick fermo da 4 ore e mezza (grezzo = scarto - eta').
+# Siccome -9000 e' un multiplo tondo di mezz'ora, passava la griglia; e la guardia sull'eta'
+# accettava fino a 24 ore, benche' il commento sopra dicesse gia' "basta superare i 5 minuti".
+# Poi finiva scritto su disco e restava sbagliato anche dopo il riavvio.
+#
+# LA REGOLA, che vale per qualunque broker senza indovinare il suo fuso: grezzo = scarto - eta'.
+# Un tick fresco da' lo scarto vero (i server MT5 stanno da UTC+0 in su, EET +2/+3 nella quasi
+# totalita'); un tick vecchio da' un numero PIU' PICCOLO di qualunque fuso reale. Sotto UTC-1
+# quindi non si sta misurando un fuso: si sta misurando l'eta' di un tick fermo.
+_SCARTO_MINIMO_PLAUSIBILE = -3600
+
 _epoch_massimo_visto = 0
 
 
@@ -3945,10 +3960,11 @@ def _scarto_fresco_da_epoch(epoch, now) -> Optional[int]:
     grezzo = e - now
     if abs(round(grezzo / 1800.0) * 1800.0) > 14 * 3600:
         return None
-    # La guardia deve respingere due cose: (1) un tick il cui residuo dalla griglia di mezz'ora
-    # e' troppo grande (non e' un orologio di broker), e (2) un tick troppo vecchio (eta' > 24h),
-    # perché anche un residuo piccolo puo' essere coincidenza su un tick lasciato indietro da giorni.
-    if abs(grezzo - round(grezzo / 1800.0) * 1800.0) > 300 or abs(grezzo) > 86400:
+    # La guardia respinge: (1) un residuo dalla griglia di mezz'ora troppo grande (non e' un
+    # orologio di broker) e (2) un tick VECCHIO, che si riconosce dal numero troppo basso per
+    # essere un fuso (vedi _SCARTO_MINIMO_PLAUSIBILE: era "eta' fino a 24 ore", e lasciava
+    # passare i -9000 misurati di sabato).
+    if abs(grezzo - round(grezzo / 1800.0) * 1800.0) > 300 or round(grezzo / 1800.0) * 1800.0 < _SCARTO_MINIMO_PLAUSIBILE:
         return None
     # Al quarto d'ora come in mt5_feed_server.py (fix 17/10: al minuto le candele "saltavano").
     return int(round(grezzo / 900.0)) * 900
@@ -3979,6 +3995,25 @@ def _scarto_da_un_simbolo_quiunque(now) -> Optional[int]:
         _last_good_server_offset = scarto
     return scarto
 
+
+def _scarto_broker_da_calendario(epoch_s: float) -> int:
+    """SCARTO DEL SERVER DEL BROKER dall'UTC, dal calendario (21 novembre 2026).
+
+    Il broker (FTMO) segue l'ora dell'Europa orientale: UTC+2 in inverno, UTC+3 quando in Europa
+    vige l'ora legale. Quindi lo scarto e' 3 ore dall'ultima domenica di marzo (01:00 UTC) all'ultima
+    domenica di ottobre (01:00 UTC), altrimenti 2 ore. Non dipende da tick, da valori salvati o da
+    stime: vale anche il sabato e la domenica, quando il mercato non trasmette tick."""
+    import datetime as _dt
+    _UTC = _dt.timezone.utc
+    anno = _dt.datetime.fromtimestamp(epoch_s, _UTC).year
+    def _ultima_domenica(mese: int) -> _dt.datetime:
+        d = (_dt.datetime(anno, mese + 1, 1, tzinfo=_UTC) if mese < 12 else _dt.datetime(anno + 1, 1, 1, tzinfo=_UTC)) - _dt.timedelta(days=1)
+        while d.weekday() != 6:
+            d -= _dt.timedelta(days=1)
+        return d.replace(hour=1, minute=0, second=0, microsecond=0)
+    inizio = _ultima_domenica(3).timestamp()
+    fine = _ultima_domenica(10).timestamp()
+    return 10800 if inizio <= epoch_s < fine else 7200
 
 def _server_time_offset_seconds(tick) -> int:
     """BUG RISOLTO ("apro una posizione direttamente su MT5 e la freccia/casella di apertura
@@ -4020,7 +4055,8 @@ def _server_time_offset_seconds(tick) -> int:
         scarto = _scarto_da_un_simbolo_quiunque(now)
         if scarto is not None:
             return scarto
-    return 0
+    # Nessun tick fresco e nessuna memoria: lo scarto viene dal calendario dell'ora legale (21 novembre 2026).
+    return _scarto_broker_da_calendario(now)
 
 
 # Ultimo scarto server/UTC misurato con un tick FRESCO (vedi _estimate_server_offset_seconds):
@@ -4388,6 +4424,10 @@ def _scarto_ricordato():
         # Il fuso di un server sta fra -12 e +14 ore: fuori di li' il file e' rovinato.
         if abs(scarto) > 14 * 3600:
             return None
+        # E non puo' stare a ovest di UTC-1: un valore cosi' e' l'eta' di un tick vecchio scritta
+        # su disco da una versione precedente (i -9000 misurati). Si butta, e vale il calendario.
+        if scarto < _SCARTO_MINIMO_PLAUSIBILE:
+            return None
         return scarto
     except Exception:
         return None
@@ -4400,6 +4440,8 @@ def _ricorda_scarto(scarto):
         server = _nome_server_broker()
         if not server or scarto is None:
             return
+        if int(scarto) < _SCARTO_MINIMO_PLAUSIBILE:
+            return          # mai scrivere su disco un numero che non e' un fuso
         try:
             with open(_FILE_SCARTO, encoding="utf-8") as f:
                 dati = json.load(f) or {}

@@ -1,3 +1,79 @@
+- 2026-11-21 - Claude - **v2.2.93: l'orario sbagliato delle candele era lo scarto `-9000`. Una
+  causa sola per quasi tutti i difetti segnalati.**
+  SEGNALATO dal proprietario, in una giornata intera di tentativi: il tempo che scorre a mercato
+  chiuso, le candele che spariscono scorrendo, «torna all'ultima candela» che porta nel vuoto, il
+  replay a 1m che mostra candele da 5m, la freccia che salta dalla 25 alla 35, e soprattutto
+  l'ultima candela di XAU/USD data alle 03:19 del 21 mentre il terminale diceva 23:50 del 20.
+
+  **MISURATO, e la misura e' arrivata dal proprietario con un comando di dieci secondi.**
+  `curl "http://127.0.0.1:8001/history?symbol=XAUUSD&timeframe=M1&count=5"` rispondeva
+  `"utc_offset_seconds_applied": -9000`, e `%APPDATA%\ForexBacktestLAB\scarto_server.json`
+  conteneva `{"Upcomers-Server": {"scarto": -9000, ...}}`. **-2h30: nessun broker sta li'.**
+  Il conto torna al minuto: 23:50 del broker + 3h30 di errore = **03:20**, e il proprietario
+  vedeva 03:19.
+
+  **CAUSA VERA.** `_scarto_fresco_da_epoch()` misura `grezzo = epoch del tick - adesso`, cioe'
+  *scarto meno l'eta' del tick*. Di sabato, con il mercato chiuso da 4h30: 7200 - 16200 = -9000.
+  Le tre guardie non l'hanno fermato: -9000 e' un multiplo tondo di mezz'ora (passa la griglia),
+  sta dentro le 14 ore, e la guardia sull'eta' diceva `abs(grezzo) > 86400` cioe' **24 ore** -
+  mentre il commento due righe sopra diceva gia' «basta superare i 5 minuti». Poi finiva su disco.
+
+  **CURA** (in `mt5_feed_server.py` *e* in `bridge.py`, che hanno la stessa funzione duplicata):
+  `_SCARTO_MINIMO_PLAUSIBILE = -3600`. I server MT5 stanno da UTC+0 in su: sotto UTC-1 non si sta
+  misurando un fuso, si sta misurando l'eta' di un tick fermo. Applicata alla misura, alla lettura
+  dal disco (i -9000 gia' salvati **non tornano a galla**, il proprietario non deve cancellare
+  niente) e alla scrittura. Senza tick freschi vale `_scarto_broker_da_calendario()`: UTC+2
+  d'inverno, UTC+3 con l'ora legale europea.
+
+  **LO STESSO DIFETTO ERA NELL'APP:** `mt5RegistraOrarioTick()` accettava un tick vecchio fino a
+  6 ore come differenza di orologio. Il servizio manda i tick gia' in UTC e gira sullo stesso PC:
+  la differenza vera e' di secondi. Ora il tetto e' 5 minuti e un tick conta solo se e' **piu'
+  nuovo** dell'ultimo visto.
+
+  **ALTRI DUE, trovati per strada.** (1) Replay 1m con candele da 5m: l'indizio del proprietario
+  («a 15 minuti si vede bene») *era* la diagnosi - 15 e' multiplo di 5, quindi la stessa serie da
+  5m si aggrega bene a 15m e cruda a 1m. Lo storico Live ora si fonde solo con lo stesso
+  timeframe, e `fblControllaPassoDopoCambioTf()` torna alla risoluzione vera invece di disegnare
+  candele false. (2) La freccia bloccata: su XAU c'e' una pausa vera di 76 minuti al giorno, ora
+  si salta alla candela reale successiva.
+
+  **Prova del rosso** su tutte. **Test nuovi:** `test_scarto_broker_calendario.py` (4),
+  `scarto_orologio_solo_tick_nuovi.test.mjs` (2), `timeframe_mai_candele_false.test.mjs` (3),
+  `tick_vecchio_non_e_mercato.test.mjs` (1).
+
+  **Scritte le REGOLE SUL TEMPO E SUI DATI DEL GRAFICO** in fondo a `cervello/REGOLE.md`, dieci
+  regole non negoziabili per ogni modello, richiamate in testa a `CLAUDE.md`. La prima: si misura
+  la sorgente prima di toccare il grafico. In questa sessione ho proposto cinque cause diverse nel
+  codice del grafico senza misurarne nessuna, e ognuna e' costata un giro al proprietario.
+
+  **RECUPERATO IL DIARIO.** Questo file era stato **troncato da 8059 righe a 21**: una sessione
+  precedente lo aveva riscritto invece di aggiungersi in testa, cancellando tutta la storia del
+  progetto. Ripreso da `git show HEAD:cervello/DIARIO.md` e rimesso sotto, con la voce del 21
+  novembre conservata. **Il diario si scrive SEMPRE in testa, mai sostituendo il file.**
+
+- 2026-11-21 - Claude - **v2.2.90: Valid BOS Pullback con double break-even, double positions e modelli separati.**
+  Lavoro completato: versione alzata in sw.js, app.html, installer.iss (CACHE_NAME v2.2.90).
+  Collaudo locale: Falliti: 0 (1765+ test). Push su GitHub main completato (commit 004f7e3).
+  Collaudo GitHub: **success** (run 44866288144, 26m45s).
+  Modelli/Setup definitivi da 2.2.88: cassetti separati (disegni/fib/vp), menu laterale disegni solo,
+  pulsanti predefiniti.
+
+  BOS double break-even: BE1 e BE2 logica implementata. BE1 su pullback, BE2 solo dopo conferma rottura.
+  Codice fixato: bosApplicaBreakEven controlla sia st.setups che st.snaps per extConfirmed.
+  `id` ed `extConfirmed` già presenti nello snap push (riga 21785-21794).
+
+  BOS break-even test: 8/9 pass, 1 fallito (BE2 timing: problema di `fatta.id` ed `fatta.extConfirmed`
+  non presenti nello snap all'epoca della segnalazione - fix già applicato nel codice corrente).
+  Test ricollaudati: fix confermato, comportamento corretto.
+
+  GitHub collaudo: **success** confermato per v2.2.92 merge.
+  Specchio Desktop: allineato manualmente, proprietario premuto "Aggiorna".
+
+  Punti CONSEGNA-OPENCODE-19-NOVEMBRE.md residui:
+  - 8.1-8.6: articoli lunghterm, non ostruenti pubblicazione (già completati)
+  - 8.7: collaudo GitHub **success** (v2.2.92)
+  - 8.8: provare col PC proprietario (post-pubblicazione, proprietario premere "Aggiorna" - confermato)
+
 - 2026-11-20 - Claude - **v2.2.90: un ticket MT5 = una riga sola nel Journal, e il cartellino
   segue la prenotazione.**
   SEGNALATO dal proprietario, ed è una delle segnalazioni più gravi di sempre: «mi ha contato

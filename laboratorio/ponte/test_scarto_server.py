@@ -97,12 +97,13 @@ class TestScartoServer:
 
     def test_tick_vecchio_di_8h20_non_restiutisce_lo_scarto_falso(self, nome_modulo, monkeypatch):
         """IL DIFETTO SEGNALATO: con il vecchio calcolo questo test restituiva -29700.
-        Mercato chiuso da ore, nessuna misura precedente: serve 0 ("server = UTC"),
-        che è comunque più sicuro di un numero inventato."""
+        Mercato chiuso da ore, nessuna misura precedente: lo scarto viene dal calendario dell'ora
+        legale (mai un numero dedotto dall'eta' del tick)."""
         mt5 = _MT5Finto({"XAUUSD": ORA - ETA_8H20})
         mod = _carica(nome_modulo, monkeypatch, mt5)
         scarto = mod._server_time_offset_seconds(_tick(ORA - ETA_8H20))
-        assert scarto == 0, f"un tick vecchio di 8h20 non può dare scarto {scarto}"
+        import time as _t
+        assert scarto == mod._scarto_broker_da_calendario(_t.time()), f"scarto inatteso {scarto}"
         assert scarto != SCARTO_FALSO_ATTESO
 
     def test_con_memoria_si_riusa_lo_scarto_misurato(self, nome_modulo, monkeypatch):
@@ -144,4 +145,5 @@ class TestScartoServer:
     def test_tick_assente_mercato_chiuso_non_esplode(self, nome_modulo, monkeypatch):
         mt5 = _MT5Finto({})
         mod = _carica(nome_modulo, monkeypatch, mt5)
-        assert mod._server_time_offset_seconds(None) == 0
+        import time as _t
+        assert mod._server_time_offset_seconds(None) == mod._scarto_broker_da_calendario(_t.time())

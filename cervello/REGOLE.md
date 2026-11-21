@@ -177,3 +177,124 @@ confrontando con un grafico che mostrava l'ora del server (FTMO: UTC+2, cioe' un
 rispetto a Roma d'inverno). Misurata tutta la catena, l'app aveva ragione. La tentazione, a quel
 punto, era aggiungere un interruttore per mostrare l'ora del broker: lui ha detto di no, e la
 risposta vale per sempre - una differenza di un'ora con MT5 e' NORMALE e non va «curata».
+
+---
+
+# REGOLE SUL TEMPO E SUI DATI DEL GRAFICO — 21 novembre 2026
+
+**Scritte dopo la caccia allo scarto `-9000`**, che ha tenuto fermo il proprietario per un'intera
+giornata. Valgono per **ogni modello di AI, ogni agente, ogni sessione**. Non si saltano, non si
+"adattano al caso", non si rimandano. Chi non può rispettarne una lo dice e si ferma.
+
+## 1. Prima si MISURA LA SORGENTE, poi si tocca il codice
+
+Quando un orario, una data o una candela sono sbagliati, la prima cosa che si fa è **chiedere al
+servizio che quei dati li produce**, non leggere il codice del grafico:
+
+```
+curl.exe -s "http://127.0.0.1:8001/history?symbol=XAUUSD&timeframe=M1&count=5"
+```
+
+Si guarda **`utc_offset_seconds_applied` per primo**. Se non è un fuso plausibile (vedi regola 3),
+la caccia finisce lì: il grafico non c'entra.
+
+> Perché: il 21 novembre questa misura ha chiuso in un colpo un problema su cui erano state
+> proposte, senza prove, almeno cinque cause diverse nel codice del grafico. **Ogni ipotesi non
+> misurata è costata un giro al proprietario.** Un comando di dieci secondi valeva più di tutte.
+
+## 2. Non si dichiara risolto, né "probabilmente è questo", senza una misura
+
+Vietate le frasi «la causa più probabile è…», «dovrebbe essere…», «la correzione è applicata ma va
+provata» presentate come avanzamento. Si dice **una** di queste tre cose:
+
+- «**Misurato**: ecco il numero, ecco il comando che l'ha prodotto, ecco il test che lo blocca.»
+- «**Non riprodotto**: ecco cosa ho escluso, ecco il dato preciso che mi serve.»
+- «**Non lo so ancora.**»
+
+Una causa raccontata bene ma non misurata è **peggio** di un «non lo so»: manda il proprietario a
+provare cose che non cambiano niente.
+
+## 3. Il fuso del broker: nessun numero dedotto da dati fermi
+
+- Lo scarto del server si misura **solo** da un tick **fresco** e **più nuovo dell'ultimo visto**.
+- `grezzo = scarto − età del tick`: con un tick fermo esce un numero **più piccolo di qualunque
+  fuso reale**. Sotto **UTC−1** non è un fuso, è l'età di un tick
+  (`_SCARTO_MINIMO_PLAUSIBILE`, in `mt5_feed_server.py` **e** in `bridge.py`: la funzione è
+  duplicata, si correggono **tutti e due**).
+- Un numero che non ha passato tutte le guardie **non si scrive su disco** e, se già scritto da una
+  versione vecchia, **non si rilegge**.
+- Senza tick freschi (sabato e domenica) lo scarto viene dal **calendario** dell'ora legale
+  europea, non da un valore salvato di un'altra stagione.
+- Un multiplo tondo di mezz'ora **non è una prova** che il numero sia un fuso: `-9000` lo era.
+
+## 4. Il mercato è aperto se MT5 trasmette. Punto.
+
+Parole del proprietario: «semplicemente lo capisci dal trasferimento di dati derivato da MT5».
+**Mai** orari fissi, mai «chiude alle 22», mai regole sul weekend scritte a mano: ci sono asset che
+il fine settimana trasmettono. L'ultima candela che l'app mostra è **l'ultima che MT5 ha dato**.
+
+## 5. Mai dati falsi. Meglio meno, e detto
+
+- Mai candele **inventate** oltre l'ultima candela reale.
+- Mai candele di **un'altra risoluzione** sotto la scritta del time frame scelto
+  (`fblControllaPassoDopoCambioTf`): se la ricarica non riesce si torna alla risoluzione vera e
+  **lo si scrive nella barra di stato**.
+- Nei **buchi** del dato (su XAU/USD c'è una pausa vera di 76 minuti al giorno) si salta alla
+  candela reale successiva: non si riempie il buco e non si lascia l'utente bloccato a premere.
+- Il passo di una serie si misura sulla distanza **più frequente**, mai sulla media: i buchi la
+  falsano.
+
+> Un grafico vuoto si vede. Un grafico **falso** no, e ci si opera sopra con soldi veri.
+
+## 6. Un commento non è una cura
+
+Il difetto `-9000` è vissuto per settimane sotto un commento che descriveva già la cura giusta
+(«basta superare i 5 minuti di età») mentre la riga sotto diceva `> 86400`, cioè 24 ore.
+
+**Quando un commento nomina un numero o una soglia, quel numero deve stare in un test.** Se il
+test non c'è, il commento è una speranza. Chi legge un commento del genere durante un lavoro
+qualunque **verifica la riga**, anche se non è quello che stava facendo.
+
+## 7. Ogni modifica a `app.html` passa dal controllo di sintassi
+
+Un solo apostrofo dentro una stringa (`l'etichetta`) ha rotto **un intero blocco `<script>`**: non
+una funzione, tutte quelle del blocco. L'app sarebbe partita morta.
+
+```
+node laboratorio/strumenti/sintassi_app.mjs
+```
+
+Si lancia **subito dopo l'ultima modifica**, prima di qualunque altra cosa, e comunque sempre prima
+di pubblicare. Attenzione agli accenti e agli apostrofi italiani dentro le stringhe JavaScript.
+
+## 8. Prova del rosso, sempre
+
+Nessuna correzione entra senza aver visto il test **fallire prima**: si rimette la riga vecchia, si
+controlla il rosso, si rimette quella nuova, si controlla il verde. Senza questo passaggio non si
+sa se il test misura la cura o il vuoto.
+
+## 9. Un difetto che torna è un difetto mai chiuso
+
+Se il proprietario dice «questo era già stato risolto», la risposta **non** è ricorrere alla
+memoria: si va a vedere **perché la guardia non ha retto** e si scrive in `cervello/BUG.md` la
+causa vera, la prova del rosso e il test. Un fix senza test non è un fix: è un fix che tornerà.
+
+## 10. Il PC del proprietario si LEGGE, non si tocca
+
+Vale la regola «MAI AGGIORNARE L'APPLICAZIONE IN USO» anche per i file di appoggio del servizio
+(per esempio `%APPDATA%\ForexBacktestLAB\scarto_server.json`): si **leggono** per misurare e lo si
+riferisce. Non si cancellano, non si riscrivono, non si riavvia niente. La cura si scrive nel
+codice, in modo che un valore sbagliato già sul disco venga **rifiutato alla lettura** e il
+proprietario non debba fare nulla a mano.
+
+## 11. La memoria del progetto si AGGIUNGE, non si sostituisce
+
+`cervello/DIARIO.md`, `cervello/BUG.md`, `cervello/LEZIONI.md` si scrivono **in testa**, lasciando
+sotto tutto quello che c'era. Mai riscrivere il file, mai «ripulirlo», mai accorciarlo.
+
+> Il 21 novembre 2026 `DIARIO.md` e' stato trovato **troncato da 8059 righe a 21**: una sessione
+> precedente lo aveva riscritto con la sola voce del giorno, cancellando tutta la storia del
+> progetto. E' stato recuperato da `git show HEAD:cervello/DIARIO.md` prima di pubblicare.
+
+Prima di ogni commit si guarda `git diff --stat` sui file di `cervello/`: se compaiono
+**cancellazioni** dove ci si aspettavano solo aggiunte, ci si ferma e si recupera.
