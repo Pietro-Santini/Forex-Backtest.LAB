@@ -4,6 +4,7 @@
 - 7-bis: hotfix localhost origin, rate limit 600/min, esenzione `/dati/ascolta`; deploy server.
 - Migrazione dominio: app 2.2.100 pubblicata, server/Caddy aggiornati; agente PC avviato via tunnel.
 - Bug: fix leak grafico trade MT5 altri conti in `live_propfirm` (`tradeBelongsToCurrentView`).
+- Prop Firm: guardie anti-falsa-violazione quando dati MT5 reali non pronti; consenti lettura dati su stato chiuso (no riapertura automatica).
 
 - 2026-11-22 - OpenCode - **Fase 1A / 7-bis (in corso, repo, non pubblicato): Caddy fix 8.7.27 + controlli ordini.**
   - **Dominio:** `forexbacktestlab.duckdns.org` (indicato dal proprietario).

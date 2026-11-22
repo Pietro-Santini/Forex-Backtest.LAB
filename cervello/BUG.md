@@ -1,5 +1,10 @@
 # BUG
 
+## 2026-11-22 - Prop Firm: falsa violazione / capitale simulato quando dati MT5 non pronti
+- **Sintomo**: conto MT5 reale mostrava capitale simulato e "dati MT5 non arrivano"; violazione giornaliera/chiusura falsa; popup casuali.
+- **Causa probabile**: con `pfWantsRealMt5` ma dati reali non pronti, il motore valutava sul simulato; stato chiuso bloccava la riattivazione dati reali.
+- **Cura parziale**: guardie in `checkPropFirmRules` (no valutazione simulata se MT5 reale atteso ma dati non pronti) e in `maybeEvaluatePfMt5Account` (consenti lettura dati reali anche se stato chiuso, senza riaprire). Richiede verifica su caso reale.
+
 ## 2026-11-22 - Leak grafico trade MT5 altri conti in live_propfirm
 - **Sintomo**: con conto A attivo, sul grafico comparivano trade chiusi MT5 di conto B (anche altro modo) su app installata.
 - **Causa**: `tradeBelongsToCurrentView` applicava il filtro conto MT5 solo a `m==='live'`, non a `live_propfirm`.
