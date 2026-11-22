@@ -87,6 +87,15 @@ def registra_utente(token_firebase):
     utenti = _carica_utenti()
 
     if uid in utenti:
+        # Se la chiave era stata revocata (7-bis), una nuova registrazione emette una chiave nuova.
+        if utenti[uid].get("revocata"):
+            utenti[uid]["chiave"] = str(uuid.uuid4())
+            utenti[uid]["revocata"] = False
+            utenti[uid].pop("revocata_il", None)
+            utenti[uid]["email"] = email
+            utenti[uid]["ultimo_accesso"] = datetime.now(timezone.utc).isoformat()
+            _salva_utenti(utenti)
+            return utenti[uid]["chiave"]
         utenti[uid]["ultimo_accesso"] = datetime.now(timezone.utc).isoformat()
         _salva_utenti(utenti)
         return utenti[uid]["chiave"]
@@ -107,15 +116,29 @@ def valida_chiave(chiave):
         return None
     utenti = _carica_utenti()
     for uid, info in utenti.items():
+        if info.get("revocata"):
+            continue
         if info.get("chiave") == chiave:
             return uid
     return None
 
 
+def chiave_revocata(chiave):
+    """True se la chiave era valida ma e' stata revocata. Serve per rifiuti 7-bis."""
+    if not chiave:
+        return False
+    utenti = _carica_utenti()
+    for info in utenti.values():
+        if info.get("chiave") == chiave and info.get("revocata"):
+            return True
+    return False
+
+
 def revoca_chiave(uid):
     utenti = _carica_utenti()
     if uid in utenti:
-        del utenti[uid]
+        utenti[uid]["revocata"] = True
+        utenti[uid]["revocata_il"] = datetime.now(timezone.utc).isoformat()
         _salva_utenti(utenti)
         return True
     return False

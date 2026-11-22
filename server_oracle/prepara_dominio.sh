@@ -25,21 +25,22 @@
 #      trappola che fa perdere mezz'ora: il dominio risolve, Caddy parte, e la richiesta non
 #      arriva mai).
 #
-# COSA SI ESPONE, e niente altro: /dati (i documenti) e /dati/ascolta (l'avviso di versione).
-# Tutto il resto del ponte - Kraken, i segnali, l'inoltro al PC - resta raggiungibile SOLO da
-# dentro la macchina. Su internet non si apre un'applicazione: si apre una porta, e si apre il
-# meno possibile.
+# COSA SI ESPONE: /dati (documenti, con token Firebase), /pc/* (ordini/grafico/segnali al PC), /agente (tunnel PC in uscita),
+# dietro chiave + controlli 7-bis sugli ordini) e /segnali/* (ponte segnali). Tutto il resto
+# resta raggiungibile SOLO da dentro la macchina.
 #
 # L'AUTENTICAZIONE non la mette questo script perche' c'e' gia' ed e' per utente: ogni richiesta a
 # /dati porta un token Firebase verificato contro le chiavi pubbliche di Google, e ogni riga del
 # database e' legata all'uid che ne esce (vedi documenti_utente.py e la sua prova
-# test_i_dati_di_due_utenti_non_si_toccano). Caddy aggiunge il canale cifrato e un limite di
-# richieste, non l'identita'.
+# test_i_dati_di_due_utenti_non_si_toccano). Le rotte /pc/* passano dal controllo chiave e, per
+# gli ordini (porta 8000), dai controlli 7-bis (segreto mancante/revocato, origine non ammessa,
+# registro rifiuti). Caddy aggiunge il canale cifrato, non l'identita'.
 # ============================================================================================
 set -euo pipefail
 
 DOMINIO="${FBL_DOMINIO:-}"
 PORTA_DATI="${FBL_PORTA_DATI:-8000}"
+PORTA_SEGNALI="${FBL_PORTA_SEGNALI:-8769}"
 
 if [ -z "$DOMINIO" ]; then
   cat <<'FINE'
@@ -94,25 +95,32 @@ if ! command -v caddy >/dev/null; then
   sudo apt-get update -q && sudo apt-get install -y -q caddy
 fi
 
-echo "== 4) La configurazione: SOLO /dati, con un limite di richieste"
-# Il limite serve per una ragione concreta, non per prudenza generica: questa macchina ha ~951 MB
-# di RAM. Il pericolo non e' il furto dei dati (per quello ci sono i token) - e' che qualcuno la
-# tenga occupata. Venti richieste al secondo per indirizzo bastano a un utente vero e non a un
-# martellamento.
+echo "== 4) La configurazione: /dati, /pc, /agente e /segnali (il resto bloccato)"
+# Si espongono solo le rotte necessarie. /pc/* passa da ponte_server (chiave + 7-bis sugli ordini).
+# /segnali/* va al ponte segnali. Tutto il resto risponde 404.
 sudo tee /etc/caddy/Caddyfile >/dev/null <<FINE
 {
+	# NIENTE redirect dalla 80: su questo server la 80 e' occupata da nginx. Caddy resta SOLO
+	# sulla 443 e prende da solo il certificato Let's Encrypt (via canale TLS-ALPN sulla 443).
+	# (Provato sistemando a mano: `auto_https off` spegneva anche i certificati e dava
+	# ERR_SSL_PROTOCOL_ERROR; `disable_redirects` ottiene il certificato senza toccare la 80.)
+	auto_https disable_redirects
 	# Gli errori del certificato finiscono qui: senza, un rinnovo fallito e' invisibile.
 	log {
 		output file /var/log/caddy/caddy.log
 	}
 }
 
-$DOMINIO {
-	# SOLO i documenti. Qualunque altro percorso non esiste, per chi arriva da internet:
-	# Kraken, i segnali e l'inoltro al PC restano raggiungibili solo da dentro la macchina.
-	@documenti path /dati /dati/*
-	handle @documenti {
+https://$DOMINIO {
+	# Documenti (token Firebase) e inoltro PC (chiave + 7-bis sugli ordini) stanno sul ponte 8000.
+	@ponte path /dati /dati/* /pc /pc/* /agente /agente/*
+	handle @ponte {
 		reverse_proxy 127.0.0.1:$PORTA_DATI
+	}
+	# Ponte segnali Telegram.
+	@segnali path /segnali /segnali/*
+	handle @segnali {
+		reverse_proxy 127.0.0.1:$PORTA_SEGNALI
 	}
 	handle {
 		respond "Non disponibile" 404
@@ -131,15 +139,18 @@ echo "== 5) Prova: il certificato e le rotte"
 sleep 6
 echo -n "   https://$DOMINIO/dati/session  (senza token, atteso 401) -> "
 curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 "https://$DOMINIO/dati/session" || echo "(nessuna risposta)"
+echo -n "   https://$DOMINIO/pc/8000/health (senza segreto, atteso 401/403) -> "
+curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 "https://$DOMINIO/pc/8000/health" || echo "(nessuna risposta)"
 echo -n "   https://$DOMINIO/health        (non esposto, atteso 404) -> "
 curl -s -o /dev/null -w "%{http_code}\n" --max-time 20 "https://$DOMINIO/health" || echo "(nessuna risposta)"
 
 cat <<FINE
 
 == Fatto. Come si legge l'esito:
-   401 su /dati/session  = perfetto: la rotta c'e', il certificato e' valido, e chiede chi sei.
-   404 su /health        = perfetto: tutto il resto del ponte NON e' esposto.
-   nessuna risposta      = la 443 non arriva: controlla la Security List della VCN su Oracle.
+   401 su /dati/session     = perfetto: la rotta c'e', il certificato e' valido, e chiede chi sei.
+   401/403 su /pc/8000/...  = perfetto: rotta ordini esposta ma protetta (7-bis).
+   404 su /health           = perfetto: tutto il resto del ponte NON e' esposto.
+   nessuna risposta         = la 443 non arriva: controlla la Security List della VCN su Oracle.
 
    L'indirizzo da mettere nell'app: https://$DOMINIO
 FINE

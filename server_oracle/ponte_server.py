@@ -7,11 +7,14 @@ Tailscale Serve, con la chiave (accesso_condiviso.py).
 
 Le chiavi Kraken REALI non si mettono qui (cervello/REGOLE.md): il collegamento reale si rifiuta.
 """
+import asyncio
+import base64
 import os
 import sys
 
 QUI = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(os.path.dirname(QUI), "installer_build", "build")
+sys.path.insert(0, QUI)
 sys.path.insert(0, os.environ.get("FBL_BUILD") or BUILD)
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket  # noqa: E402
@@ -37,6 +40,20 @@ import auth_server  # noqa: E402
 auth_server.registra_router(app)
 app.add_middleware(CORSMiddleware, **accesso.opzioni_cors())
 accesso.installa_controllo_chiave(app)
+
+# 7-bis: ordini esposti su internet senza Tailscale. Va prima del controllo chiave
+# condivisa: registra il motivo preciso e rifiuta origine/segreto/revoca.
+import sicurezza_7bis  # noqa: E402
+
+@app.middleware("http")
+async def _controllo_7bis_ordini(request, call_next):
+    motivo = sicurezza_7bis.motivo_rifiuto_7bis(request)
+    if motivo is not None:
+        sicurezza_7bis.registra_rifiuto(motivo, request)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"detail": sicurezza_7bis.messaggio_rifiuto(motivo)},
+                            headers={"Access-Control-Allow-Origin": "*"})
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -157,12 +174,27 @@ async def pc_inoltra(percorso: str, request: Request):
 
 
 async def _inoltra(porta: int, percorso: str, request: Request):
-    """Gira al PC una richiesta arrivata dal telefono, mettendoci la chiave del PC."""
+    """Gira al PC una richiesta: preferisce il tunnel agente (uscita dal PC), poi il vecchio host Tailscale."""
+    from fastapi.responses import Response
+    utente = _utente_da_richiesta(request)
+    agente = multiutente.agente_di(utente) if utente else None
+    if agente is not None:
+        try:
+            risp = await agente.chiedi_http(
+                porta, percorso, request.method, dict(request.query_params),
+                await request.body(), request.headers.get("content-type", "application/json"))
+            corpo = base64.b64decode(risp.get("corpo") or b"")
+            headers = {"Access-Control-Allow-Origin": "*"}
+            ct = str(risp.get("content_type") or (risp.get("headers") or {}).get("content-type") or "application/json")
+            return Response(content=corpo, status_code=int(risp.get("status") or 200),
+                            media_type=ct, headers=headers)
+        except Exception as e:
+            raise HTTPException(status_code=502, detail="Il computer non risponde tramite tunnel: %s" % e)
+
     d = _leggi_pc()
     if not d.get("host"):
         raise HTTPException(status_code=503, detail="Nessun computer registrato su questo server.")
     import httpx
-    from fastapi.responses import Response
     url = "https://%s:%d/%s" % (d["host"], porta, percorso)
     parametri = dict(request.query_params)
     parametri["chiave"] = d.get("chiave", "")
@@ -175,7 +207,6 @@ async def _inoltra(porta: int, percorso: str, request: Request):
                         media_type=r.headers.get("content-type", "application/json"),
                         headers={"Access-Control-Allow-Origin": "*"})
     except httpx.HTTPError as e:
-        # Il PC spento e' la cosa piu' probabile, e va detta cosi': non e' un guasto del server.
         raise HTTPException(status_code=502,
                             detail="Il computer non risponde (acceso? Tailscale attivo?): %s" % e)
 
@@ -195,6 +226,11 @@ async def pc_inoltra_ws(websocket: WebSocket, porta: int, percorso: str):
     """
     if porta not in PORTE_PC:
         await websocket.close(code=4400)
+        return
+    motivo7 = sicurezza_7bis.motivo_rifiuto_7bis(websocket)
+    if motivo7 is not None:
+        sicurezza_7bis.registra_rifiuto(motivo7, websocket)
+        await websocket.close(code=4403)
         return
     if not accesso.websocket_autorizzato(websocket):
         await websocket.close(code=4403)
@@ -239,6 +275,83 @@ async def pc_inoltra_ws(websocket: WebSocket, porta: int, percorso: str):
             pass
 
 
+
+
+# =====================================================================
+# TUNNEL AGENTE: il PC si connette IN USCITA al server (nessuna porta aperta sul PC).
+# Il server gli gira le richieste /pc/* dentro questo canale. Serve per togliere Tailscale.
+# =====================================================================
+import multiutente  # noqa: E402
+
+def _utente_da_richiesta(request) -> str:
+    """Identifica l'utente: chiave personale -> uid, altrimenti singolo agente connesso."""
+    chiave = str(request.headers.get("x-fbl-chiave") or request.query_params.get("chiave") or "")
+    if not chiave:
+        try:
+            st = multiutente.stato()
+            if len(st) == 1:
+                return next(iter(st.keys()))
+        except Exception:
+            pass
+        return ""
+    try:
+        import auth_server
+        uid = auth_server.valida_chiave(chiave)
+        if uid:
+            return uid
+    except Exception:
+        pass
+    try:
+        st = multiutente.stato()
+        if len(st) == 1:
+            return next(iter(st.keys()))
+    except Exception:
+        pass
+    return ""
+
+
+@app.websocket("/agente")
+async def agente_ws(websocket: WebSocket):
+    await websocket.accept()
+    agente = None
+    try:
+        primo = await asyncio.wait_for(websocket.receive_json(), timeout=20)
+        if not isinstance(primo, dict) or primo.get("tipo") != "auth":
+            await websocket.close(code=4400)
+            return
+        utente = str(primo.get("utente") or "").strip()
+        chiave = str(primo.get("chiave") or "").strip()
+        if not utente or not chiave:
+            await websocket.close(code=4403)
+            return
+        try:
+            multiutente.registra_utente(utente, chiave)
+        except PermissionError:
+            if not multiutente.utente_valido(utente, chiave):
+                await websocket.close(code=4403)
+                return
+        except Exception:
+            if not multiutente.utente_valido(utente, chiave):
+                await websocket.close(code=4403)
+                return
+        agente = multiutente.collega(utente, websocket)
+        await websocket.send_json({"ok": True, "utente": utente})
+        while True:
+            msg = await websocket.receive_json()
+            if isinstance(msg, dict):
+                agente.ricevi(msg)
+    except Exception:
+        pass
+    finally:
+        if agente is not None:
+            try:
+                multiutente.scollega(agente.utente, agente)
+            except Exception:
+                pass
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 # =====================================================================
 # I DOCUMENTI DELL'UTENTE: le rotte /dati vivono in un modulo SOLO.

@@ -40,6 +40,7 @@ A = blocca o confonde un neofita; B = migliora molto; C = rifinitura.
   bisogno. — da fare
 
 ## Lavori chiesti dal proprietario (5 ottobre 2026), in ordine di priorità
+- **[A] Valid BOS Pullback: apertura automatica posizioni (soldi veri) — 22 novembre 2026** — Quando un Valid BOS Pullback viene confermato, l'app può aprire automaticamente le posizioni con i parametri scelti nelle impostazioni dell'indicatore. **Attivabile/disattivabile**. Muove soldi veri: nessuna apertura reale senza banco verde e prova di controllo. Deve rispettare: metodologia (2 posizioni insieme o separate), rischio/rendimento, percentuale, lotti, SL/TP, percentuali/logica BE (break-even). Comportamento analogo all'apertura automatica sale segnali, ma sorgente = indicatore (analisi struttura -> conferma -> entry). **Deve funzionare anche in backtest/replay**, attivabile/disattivabile. — proprietario — da progettare/misurare prima di implementare
 - **[A] Segnali Syntra sulla sessione cripto** — devono arrivare chiari e leggibili e aprire le
   posizioni giuste sul conto scelto; la dashboard rispetta i segnali di ogni utente Syntra (sala).
   Primo passo: test con messaggi Syntra registrati (`storico_sale` archivia `sy_*.json`) →

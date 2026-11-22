@@ -2,6 +2,20 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+## IN CORSO — 22 novembre 2026, Fase 1A / 7-bis: ordini esposti via dominio senza Tailscale
+
+**Stato.** In lavorazione sul repo (non pubblicato). Obiettivo: esporre `/pc/8000/*` via Caddy/dominio solo dopo controlli 7-bis.
+
+**Fatto.**
+- `server_oracle/prepara_dominio.sh`: applicato fix 8.7.27 (`auto_https disable_redirects`, `https://$DOMINIO`) e esteso Caddyfile a `/dati`, `/pc/*`, `/segnali/*` con 404 sul resto.
+- `server_oracle/sicurezza_7bis.py`: controlli 7-bis per rotte ordini proxiate (origine ammessa, segreto mancante, segreto revocato, registro `registro_rifiuti.jsonl` in `FBL_DATI`).
+- `server_oracle/ponte_server.py`: middleware HTTP + check WS per 7-bis sulle rotte ordini.
+- `installer_build/build/auth_server.py`: revoca marca `revocata` (non cancella), aggiunto `chiave_revocata`; nuova registrazione su uid revocato emette chiave nuova.
+
+**Test.** `laboratorio/ponte/test_7bis_ordini.py` 4/4 verdi (senza segreto, revocato, origine diversa rifiutati e registrati; valido+origine app passa). `python -m pytest -q laboratorio/ponte` 421/421 verdi.
+
+**Manca per chiudere 7-bis/Fase 1A.** Segreto per dispositivo con scadenza, rate limit, registro esteso/rotazione, tunnel agente `/agente` cablato in ponte_server per PC senza porte in ingresso, verifica Caddy reale su `forexbacktestlab.duckdns.org`, rimozione Tailscale da codice/APK/UI/testi con checklist mobile.
+
 ## RISOLTO — 22 novembre 2026, 8.4.12: posizioni/trade di altri conti visibili sul grafico
 
 > Scaletta 8.4.12: «Sul grafico si vedono le posizioni di tutti i conti... una posizione passa il filtro se ha il login del conto attivo **o se non ha login**».

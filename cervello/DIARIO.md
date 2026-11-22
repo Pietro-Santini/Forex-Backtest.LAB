@@ -1,3 +1,11 @@
+- 2026-11-22 - OpenCode - **Fase 1A / 7-bis (in corso, repo, non pubblicato): Caddy fix 8.7.27 + controlli ordini.**
+  - **Dominio:** `forexbacktestlab.duckdns.org` (indicato dal proprietario).
+  - **8.7.27 / Caddy:** `server_oracle/prepara_dominio.sh` ora genera Caddyfile con `auto_https disable_redirects`, `https://$DOMINIO`, rotte esposte `/dati /dati/*`, `/pc /pc/*`, `/segnali /segnali/*`, resto 404. Test self-check script aggiornato (401 dati, 401/403 pc, 404 health).
+  - **7-bis ordini (accettazione base):** nuovo `server_oracle/sicurezza_7bis.py`; middleware HTTP + check WS in `server_oracle/ponte_server.py`; rifiuti registrati in `FBL_DATI/registro_rifiuti.jsonl` (motivi: `segreto_mancante`, `segreto_revocato`, `origine_non_ammessa`). Si applica a rotte ordini proxiate (X-Forwarded-*), non alle richieste locali.
+  - **auth_server:** `revoca_chiave` marca revocata (rilevabile), `chiave_revocata()` aggiunta, re-register su uid revocato emette chiave nuova.
+  - **Prove rosse->verdi:** `laboratorio/ponte/test_7bis_ordini.py` 4/4. Regressione ponte: `python -m pytest -q laboratorio/ponte` 421/421 pass.
+  - **Aperto:** segreto per dispositivo+scadenza, rate limit, tunnel `/agente` cablato per via-Tailscale senza porte in ingresso, verifica reale su server/dominio, rimozione Tailscale da codice/APK/UI/script/testi e checklist mobile.
+
 - 2026-11-22 - OpenCode - **v2.2.99: batch scaletta 8.4.12/8.4.10/8.4.11/8.4.9 + 8.2.6.**
   - **8.4.12 posizioni/trade altri conti:** con conto noto passano solo record reali con `mt5Login` uguale; conto ignoto conservativo; timbratura login in `fetchMt5Positions`. Banchi: `posizioni_null_login_conto.test.mjs`, aggiornati `misura_isolamento_conto_mt5.test.mjs` e `posizioni_grafico_madre_duplicata.misura.test.mjs`.
   - **8.4.10 popup violazione solo madre:** `fblFinestraMadre()` guard in `showPropFirmViolationOverlay`; no popup ripetuto su restore/finalize se conto chiuso.

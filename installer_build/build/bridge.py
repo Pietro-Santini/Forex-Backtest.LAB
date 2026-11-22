@@ -3347,6 +3347,46 @@ def registra_al_server(body: dict, request: Request):
     return {"ok": True, "host": mio_nome, "server": server, "risposta": esito}
 
 
+@app.post("/agente-pc/avvia")
+def agente_pc_avvia(body: dict, request: Request):
+    """Avvia l'agente PC: connessione in USCITA verso il server (senza porte aperte sul PC)."""
+    _solo_dal_pc(request, "Questa impostazione si cambia")
+    server = str((body or {}).get("server") or "").strip()
+    utente = str((body or {}).get("utente") or "").strip()
+    chiave = str((body or {}).get("chiave") or "").strip()
+    if not server:
+        raise HTTPException(status_code=400, detail="Serve l'indirizzo del server.")
+    if not utente or len(chiave) < 24:
+        raise HTTPException(status_code=400, detail="Servono utente e una chiave lunga (almeno 24 caratteri).")
+    try:
+        import agente_pc
+        st = agente_pc.avvia_agente(server, utente, chiave)
+        return {"ok": True, "agente": st}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/agente-pc/stato")
+def agente_pc_stato(request: Request):
+    _solo_dal_pc(request, "Questa informazione si legge")
+    try:
+        import agente_pc
+        return {"ok": True, "agente": agente_pc.stato()}
+    except Exception as e:
+        return {"ok": False, "errore": str(e)}
+
+
+@app.post("/agente-pc/ferma")
+def agente_pc_ferma(request: Request):
+    _solo_dal_pc(request, "Questa impostazione si cambia")
+    try:
+        import agente_pc
+        agente_pc.ferma_agente()
+        return {"ok": True, "agente": agente_pc.stato()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/accesso-remoto")
 def accesso_remoto_imposta(body: dict, request: Request):
     """Accende o spegne l'accesso: la chiave richiesta E le tre regole di Tailscale Serve insieme.
