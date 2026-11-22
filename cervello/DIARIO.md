@@ -1,3 +1,77 @@
+- 2026-11-22 - OpenCode - **v2.2.96: replay con prop firm sul conto storico, e TP della seconda entrata BOS solo alla conferma.**
+  Due difetti segnalati dal proprietario, misurati prima di toccare il codice.
+
+  **Replay bloccato dalla prop firm.** In replay (Live + MT5 collegato) il motore misurava i
+  limiti sull'equity del conto MT5 vero, non su quella del conto storico: con MT5 a -17,2% e
+  conto storico a -0,6% (9.938,25 € su 10.000) compariva «🛑 Conto Prop Firm chiuso per
+  violazione» e l'ordine non partiva. Causa: `pfUsesRealMt5()` vero anche in replay, e la
+  violazione del conto reale restava in memoria nella stessa sessione `live_propfirm`. Cura:
+  `pfUsesRealMt5()` richiede `!liveReplayActive`; la violazione porta `contoId`; in replay si
+  mette da parte solo la violazione di un altro conto, e torna uscendo dal replay. Prove:
+  `replay_prop_firm_conto_storico.test.mjs` 2/2.
+
+  **Valid BOS Pullback, seconda entrata.** In modo «insieme» nasceva già col TP = rischio × 2 e
+  poteva chiudersi a target prima della conferma. Ora nasce con solo lo stop uguale alla prima;
+  alla conferma il TP è `distanza(entrata pullback, punto di rottura) × rrTarget2` (2 o 3). Non
+  si forza più il break-even della seconda sulla stessa barra della conferma. Prove:
+  `bos_seconda_tp_alla_conferma.test.mjs` 4/4; regressione BOS 13/13 verdi.
+
+  Versione 2.2.96 in `sw.js`, `app.html`, `installer_build/installer.iss`.
+
+- 2026-11-22 - OpenCode - **v2.2.95: i nomi dei modelli tornano a essere tre cassetti separati.**
+  SEGNALATO dal proprietario: salvando un modello Fibonacci con un nome già scelto per un disegno,
+  compariva «Attenzione: hai già un modello chiamato...» e con «Sì» veniva sostituito il modello
+  dell'altra famiglia. «L'id serve proprio a questo, per identificare e metterlo all'interno del
+  contenitore giusto.»
+
+  **MISURATO** nel banco dei nomi, non supposto: la finestra «Salva come...» di un DISEGNO elencava
+  `["Supporto giornaliero","Zona domanda","Fib 61.8 ritracciato"]`, cioè i tre cassetti mescolati.
+
+  **CAUSA.** Le tre funzioni erano già state separate per cassetto, ma la strada del Fibonacci non
+  passava mai la classe: `chiediNomeModello` con due soli argomenti (senza classe si ripiega su
+  «cerca dappertutto») e `eliminaModelloOmonimo(nome, fblClasseModello(d.type))` con un `d` che in
+  quel punto non esiste.
+
+  **CURA.** `app.html`: `'fib'` passato a entrambe. Nessun percorso cancella più un modello fuori dal
+  proprio cassetto; la domanda di omonimia compare solo nello stesso cassetto.
+
+  **PROVE.** 22/22 sui due banchi dei nomi (11 + 11) e 30/30 sui banchi vicini dei modelli. Rossa
+  prima, verde dopo.
+
+- 2026-11-21 (sera) - OpenCode - **v2.2.94: l'ora di mercato non si taglia più. L'ultima candela
+  vera resta l'ultima candela vera.**
+  SEGNALATO dal proprietario: «l'ultima candela visualizzata al terminale di MT5 è alle 22:58,
+  mentre a me mi visualizza alle 21:59, e effettivamente mi taglia quella che è un'ora di mercato».
+
+  **MISURATO in laboratorio, non supposto:** scarto del server ignoto (`null`), serie a 1 minuto
+  fino alle 22:58 di Roma con tick veri fino a lì → il grafico mostrava come ultima candela
+  **21:59**. Numeri: `{"totale":179,"confine":120,"ultima":"2026-11-11T20:59:00.000Z"}`.
+
+  **CAUSA.** Con lo scarto ignoto `fblChiusuraMinutiLocali()` ripiega sulle 22:00 fisse di Roma.
+  Da lì due confini — `_fblConfineChiusuraCalcola()` (il taglio) e `fblConfineAutosegui()` (il
+  congelamento della vista) — buttavano via le candele 22:00-22:58, che MT5 aveva mandato davvero.
+  Nessuno dei due guardava i dati ricevuti: la regola «il mercato è chiuso solo quando non arrivano
+  più dati» era rispettata ovunque tranne che qui.
+
+  **CURA.** Nuova `_fblAllargaAllUltimaReale(cap,a,N)`: il confine si sposta avanti fino all'ultimo
+  tick vero dell'asset, e oltre quella candela si può tagliare. Usata dalle due strade. In più le
+  due funzioni non tagliano/congelano se `fblAssetRiceveDatiOra(asset)` è vero, e la cache del
+  confine include l'ultimo tick (un tick nuovo si vede subito).
+
+  **SECONDO PASSO**, dalla sua osservazione: «non è che non è presente il file, è che non riesce a
+  scrivere a grafico quelle che sono le candele rimanenti fino all'effettiva chiusura del mercato...
+  in modalità replay va a ripescare le candele giuste caricate da MT5 fino all'ultima» (23:50).
+  Il solo tick non bastava: se l'app è appena partita e non è arrivato nessun tick, il taglio
+  restava. Ma se la sorgente è MT5, il file è la sua serie (un file MT5 non contiene candele che
+  MT5 non ha mandato). Ora `_fblAllargaAllUltimaReale` non taglia né congela niente quando
+  `fblSorgenteGrafico()==='mt5'`. Misurato: file fino alle 23:50, nessun tick → 21:59 prima,
+  23:50 dopo.
+
+  **PROVA DEL ROSSO.** `laboratorio/app/chiusura_non_taglia_candele_reali.test.mjs`: senza cura 2
+  rosse; col solo tick la prova «app appena aperta, nessun tick» era rossa (21:59 invece di 23:50);
+  dopo 5 verdi. Verdi anche gli undici banchi vicini (45 prove). Versione 2.2.94 in `sw.js`,
+  `app.html` e `installer.iss`.
+
 - 2026-11-21 - Claude - **v2.2.93: l'orario sbagliato delle candele era lo scarto `-9000`. Una
   causa sola per quasi tutti i difetti segnalati.**
   SEGNALATO dal proprietario, in una giornata intera di tentativi: il tempo che scorre a mercato

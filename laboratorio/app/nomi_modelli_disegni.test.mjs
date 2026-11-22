@@ -282,19 +282,27 @@ test('i nomi GIÀ USATI si vedono dentro la finestra del nome mentre si scrive',
     await pagina.locator('#drawTemplateSaveAs').click();
     const campo = pagina.locator('.appConfirmOverlay [data-role="input"]').last();
     await campo.waitFor({timeout: 5000});
+    // OGNI CASSETTO MOSTRA I SUOI NOMI (21 novembre 2026). Qui si sta salvando un DISEGNO, quindi
+    // si vedono i due nomi dei disegni. Il nome del Fibonacci NON compare più: sta in un altro
+    // contenitore, e farlo comparire qui creava proprio la confusione segnalata dal proprietario
+    // («non mi può venire fuori il messaggio attenzione, hai già un modello chiamato...» quando
+    // salvavo un Fibonacci con un nome usato da un disegno). La famiglia resta dichiarata.
     const suggeriti = await leggiSuggerimenti(pagina);
     const nomiSuggeriti = suggeriti.map(s => s.nome);
     assert.ok(nomiSuggeriti.includes('Supporto giornaliero'),
       'il nome dei disegni generici deve vedersi mentre si scrive: ' + JSON.stringify(nomiSuggeriti));
     assert.ok(nomiSuggeriti.includes('Zona domanda'),
       'anche il secondo modello generico: ' + JSON.stringify(nomiSuggeriti));
-    assert.ok(nomiSuggeriti.includes('Fib 61.8 ritracciato'),
-      'e il modello Fibonacci, che sta nell\'altra famiglia: ' + JSON.stringify(nomiSuggeriti));
-    // La famiglia deve essere dichiarata per ogni nome: cercare nel menu sbagliato era una delle
-    // cause del «non me lo salva».
-    const fib = suggeriti.find(s => s.nome === 'Fib 61.8 ritracciato');
-    assert.ok(fib && /fib/i.test(fib.famiglia),
-      'il modello Fibonacci deve dire di che famiglia è: ' + JSON.stringify(fib));
+    assert.equal(nomiSuggeriti.includes('Fib 61.8 ritracciato'), false,
+      'il modello Fibonacci sta in un altro contenitore: salvando un disegno non deve comparire: '
+      + JSON.stringify(nomiSuggeriti));
+    // La famiglia deve essere dichiarata per ogni nome mostrato: cercare nel menu sbagliato era
+    // una delle cause del «non me lo salva».
+    const disegno = suggeriti.find(s => s.nome === 'Supporto giornaliero');
+    assert.ok(disegno && /disegn|modello/i.test(disegno.famiglia),
+      'il modello di disegno deve dire di che famiglia è: ' + JSON.stringify(disegno));
+    // E lo stesso nome, salvato nel cassetto Fibonacci, deve dire «Fib»: la famiglia la dà il
+    // contenitore, non il nome. Lo si apre dalla strada Fibonacci (modale ⚙️ → Modello Fib ⌄).
     // E scrivendo il nome la lista si restringe: quello che si sta scrivendo si riconosce subito.
     await campo.fill('Supporto');
     await pagina.waitForTimeout(120);
@@ -304,6 +312,27 @@ test('i nomi GIÀ USATI si vedono dentro la finestra del nome mentre si scrive',
     assert.ok(!filtrati.includes('Zona domanda'),
       'quelli che non combaciano devono sparire, sennò la lista non serve a niente: ' + JSON.stringify(filtrati));
     await pagina.keyboard.press('Escape');
+    await pagina.waitForTimeout(120);
+    // L'ALTRO CASSETTO. Lo stesso controllo fatto dal lato Fibonacci: la finestra del suo
+    // «Salva come...» deve mostrare SOLO i nomi del Fibonacci, e nessuno dei disegni.
+    await pagina.evaluate(() => { openFibSettingsModal(selectedDrawing); });
+    await pagina.waitForTimeout(120);
+    await pagina.locator('#fibTemplateBtn').click();
+    await pagina.locator('#fibTemplateSaveAs').click();
+    const campoFib = pagina.locator('.appConfirmOverlay [data-role="input"]').last();
+    await campoFib.waitFor({timeout: 5000});
+    const suggeritiFib = await leggiSuggerimenti(pagina);
+    const nomiFib = suggeritiFib.map(s => s.nome);
+    assert.ok(nomiFib.includes('Fib 61.8 ritracciato'),
+      'nella finestra del nome del Fibonacci deve vedersi il suo modello: ' + JSON.stringify(nomiFib));
+    assert.equal(nomiFib.includes('Supporto giornaliero'), false,
+      'e non quelli dei disegni: sono un altro contenitore: ' + JSON.stringify(nomiFib));
+    const fib = suggeritiFib.find(s => s.nome === 'Fib 61.8 ritracciato');
+    assert.ok(fib && /fib/i.test(fib.famiglia),
+      'il modello Fibonacci deve dire di che famiglia è: ' + JSON.stringify(fib));
+    await pagina.keyboard.press('Escape');
+    await pagina.waitForTimeout(120);
+    await pagina.evaluate(() => { closeFibSettingsModal(); });
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

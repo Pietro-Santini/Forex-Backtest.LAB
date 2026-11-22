@@ -7264,6 +7264,28 @@ try{
 }catch(e){}
 
 function checkPropFirmRules(){
+  // LA VIOLAZIONE È DEL CONTO, NON DELLA FINESTRA (22 novembre 2026).
+  //
+  // Il replay vive dentro la sessione Live (`live_propfirm`): la violazione registrata sul conto
+  // MT5 vero restava quindi in memoria anche in replay e bloccava ogni apertura sul conto
+  // storico — «🛑 Conto Prop Firm chiuso per violazione» su un conto che perdeva lo 0,6%.
+  //
+  // Qui si mette da parte SOLO in replay, e solo per una chiusura che non è di questo conto:
+  //   - porta la marca di un altro conto (`contoId`), oppure
+  //   - è del conto MT5 reale (`realMt5Login`), oppure
+  //   - il conto di adesso non risulta chiuso in memoria (`fbl_prop_conti`): una chiusura vera
+  //     viene SEMPRE scritta lì da triggerPropFirmViolation, quindi se lì non c'è, non è sua.
+  // La chiusura del conto vero non si perde: è scritta sul conto e torna appena si esce dal
+  // replay. Banco: replay_prop_firm_conto_storico.test.mjs (prova di controllo compresa).
+  try{
+    if(liveReplayActive && propFirmViolation){
+      const _stQ=fblPropContoStato();
+      const _altroConto=(propFirmViolation.contoId && propFirmViolation.contoId!==fblPropContoId())
+        || propFirmViolation.realMt5Login!=null
+        || (_stQ && _stQ.stato!=='chiuso');
+      if(_altroConto){ propFirmViolation=null; hidePropFirmViolationOverlay(); }
+    }
+  }catch(e){}
   // IL CICLO E' DEL CONTO. Se questo conto ha gia' perso o e' gia' finanziato, non si calcola
   // piu' niente: la sfida e' finita, in un senso o nell'altro.
   try{ if(typeof fblPropContoCalcola==='function'&&!fblPropContoCalcola())return; }catch(e){}
@@ -7406,7 +7428,11 @@ function updatePropFirmDrawdownDisplay(dailyLossPct,totalLossPct,gainValue,gainS
 // drammatica a tutta pagina che LEGGE questo oggetto arriva con lo Step 3: per ora (Step 2)
 // mostriamo un avviso chiaro nello stato in fondo alla pagina come segnaposto funzionante.
 function triggerPropFirmViolation(rule,details){
-  propFirmViolation={rule,...details,timestamp:Date.now(),timestampIso:new Date().toISOString()};
+  // `contoId`: A QUALE CONTO appartiene la chiusura (22 novembre 2026). Le sessioni sono quattro,
+  // i conti sono di più (MT5 reale, storico, simulato) e una violazione non deve viaggiare: senza
+  // questa marca il blocco del conto MT5 restava in memoria e bloccava anche il replay, che è un
+  // altro conto (fblPropContoId() risponde 'storico').
+  propFirmViolation={rule,...details,contoId:fblPropContoId(),timestamp:Date.now(),timestampIso:new Date().toISOString()};
   // SI SEGNA SUL CONTO, non solo sulla sessione: cosi' resta chiuso anche riaprendo l'app o
   // cambiando modalita', e un altro conto non se lo porta dietro.
   try{ fblPropContoStatoSalva(null,{stato:'chiuso',motivo:rule}); }catch(e){}
@@ -11798,33 +11824,48 @@ function drawingTemplateFromDrawing(d){
  }
  return t;
 }
-// Il nome di un modello è unico nell'INTERO programma, non solo dentro la sua famiglia. Senza
-// questo controllo si potevano avere due modelli omonimi in due memorie diverse, e ritrovarsi a
-// dire «non me lo salva» solo perché lo si cercava nel menu sbagliato. Ritorna DOVE sta il nome
-// già usato (per dirlo nella domanda di sovrascrittura), oppure null.
-function nomeModelloGiaUsato(nome){
+// IL NOME SI CERCA SOLO NEL CASSETTO DOVE SI STA SALVANDO (21 novembre 2026).
+//
+// SEGNALATO dal proprietario: «quando vado a salvare quello che è un modello del ritracciamento
+// Fibonacci e scrivo lo stesso nome che è stato scelto per magari un disegno di linea o di
+// rettangolo o di un profilo volumetrico, se io lo salvo con lo stesso nome non mi può venire
+// fuori il messaggio "attenzione, hai già un modello chiamato...". Questo non deve succedere
+// perché io sto salvando quello che è il nome del modello su un contenitore del ritracciamento di
+// Fibonacci e non lo sto salvando sul contenitore dei modelli del profilo volumetrico. Deve
+// esserci distinzione. L'id serve proprio per questo. Se sto scrivendo lo stesso nome sullo stesso
+// contenitore, ovvio, lì me lo deve dire.»
+//
+// Prima (richiesta del 16 novembre) il nome era unico in tutto il programma e la ricerca guardava
+// tutte e tre le memorie. Adesso ogni cassetto ha i suoi nomi: `classe` e' `'fib'`, `'vp'` oppure
+// `'disegno'` (linee, rettangoli e gli altri disegni della stessa famiglia), cioe' lo stesso
+// `fblClasseModello()` che decide dove il modello finisce.
+function nomeModelloGiaUsato(nome, classe){
+ if(classe==='fib'){
+  if(loadFibTemplates()[nome])return {famiglia:'fib',dove:'menu "Modello Fib ⌄"'};
+  return null;
+ }
+ if(classe==='vp'){
+  if(loadVpTemplates()[nome])return {famiglia:'vp',dove:'impostazioni dello strumento, sezione "Modelli"'};
+  return null;
+ }
  if(loadDrawingTemplates()[nome])return {famiglia:'disegni',dove:'menu "Modello ⌄"'};
- if(loadFibTemplates()[nome])return {famiglia:'fib',dove:'menu "Modello Fib ⌄"'};
- // I modelli dei profili/VWAP stanno nelle impostazioni dello strumento: anche loro occupano il
- // nome (il nome e' unico in tutto il programma, regola del proprietario).
- if(loadVpTemplates()[nome])return {famiglia:'vp',dove:'impostazioni dello strumento, sezione "Modelli"'};
  return null;
 }
-// TUTTI i nomi già usati, di ENTRAMBE le famiglie (disegni generici e modelli Fibonacci), con
-// l'etichetta del menu dove trovarli. È la lista mostrata DENTRO la finestra del nome mentre si
-// scrive: prima i nomi occupati si scoprivano solo DOPO, dal rifiuto - e chi non lo notava restava
-// con un modello che credeva salvato. Ordinati per nome, così la lista è stabile mentre si scrive.
-function nomiModelliGiaUsati(){
+// TUTTI i nomi già usati NEL CASSETTO IN CUI SI STA SALVANDO, con l'etichetta del menu dove
+// trovarli. È la lista mostrata DENTRO la finestra del nome mentre si scrive: prima i nomi
+// occupati si scoprivano solo DOPO, dal rifiuto - e chi non lo notava restava con un modello che
+// credeva salvato. Ordinati per nome, così la lista è stabile mentre si scrive.
+// Dal 21 novembre mostra SOLO il cassetto di destinazione: un nome libero in Fibonacci non deve
+// comparire mentre si salva una linea (v. il commento su nomeModelloGiaUsato).
+function nomiModelliGiaUsati(classe){
  const voci=[];
- Object.keys(loadDrawingTemplates()).forEach(n=>voci.push({nome:n,famiglia:'disegni',dove:'menu "Modello ⌄"',etichetta:'Modello ⌄'}));
- Object.keys(loadFibTemplates()).forEach(n=>{
-   if(voci.some(v=>v.nome===n))return; // un nome occupato due volte deve comparire una sola volta
-   voci.push({nome:n,famiglia:'fib',dove:'menu "Modello Fib ⌄"',etichetta:'Modello Fib ⌄'});
- });
- Object.keys(loadVpTemplates()).forEach(n=>{
-   if(voci.some(v=>v.nome===n))return;
-   voci.push({nome:n,famiglia:'vp',dove:'impostazioni dello strumento, sezione "Modelli"',etichetta:'Modelli profilo'});
- });
+ if(classe==='fib'){
+  Object.keys(loadFibTemplates()).forEach(n=>voci.push({nome:n,famiglia:'fib',dove:'menu "Modello Fib ⌄"',etichetta:'Modello Fib ⌄'}));
+ }else if(classe==='vp'){
+  Object.keys(loadVpTemplates()).forEach(n=>voci.push({nome:n,famiglia:'vp',dove:'impostazioni dello strumento, sezione "Modelli"',etichetta:'Modelli profilo'}));
+ }else{
+  Object.keys(loadDrawingTemplates()).forEach(n=>voci.push({nome:n,famiglia:'disegni',dove:'menu "Modello ⌄"',etichetta:'Modello ⌄'}));
+ }
  return voci.sort((a,b)=>a.nome.localeCompare(b.nome,'it'));
 }
 // La finestra del nome, col controllo dei nomi già usati. RITORNA:
@@ -11838,13 +11879,17 @@ function nomiModelliGiaUsati(){
 // intatta: NESSUN percorso rinomina un modello, qui si sostituisce il CONTENUTO di un nome che
 // l'utente ha scelto esplicitamente. Con «no» non si salva niente e il campo resta: la finestra
 // del nome si riapre con quello che era già scritto, così si corregge senza riscriverlo da capo.
-async function chiediNomeModello(messaggio,titolo,placeholder){
+//
+// DAL 21 NOVEMBRE 2026 la finestra guarda SOLO il `classe` che le viene passato (v. il commento
+// lungo su nomeModelloGiaUsato). Senza classe si comporta come prima e cerca dappertutto: è il
+// ripiego per le chiamate vecchie che non sanno ancora in quale cassetto stanno salvando.
+async function chiediNomeModello(messaggio,titolo,placeholder,classe){
  let nomeDaRiscrivere='';
  for(;;){
-   const name=await appPrompt(messaggio,{title:titolo,placeholder:placeholder,defaultValue:nomeDaRiscrivere||undefined,suggerimenti:nomiModelliGiaUsati()});
+   const name=await appPrompt(messaggio,{title:titolo,placeholder:placeholder,defaultValue:nomeDaRiscrivere||undefined,suggerimenti:nomiModelliGiaUsati(classe)});
    if(!name||!name.trim())return null;
    const nome=name.trim();
-   const esistente=nomeModelloGiaUsato(nome);
+   const esistente=nomeModelloGiaUsato(nome,classe);
    if(!esistente)return {nome,sovrascrivi:false};
    const si=await appConfirm(`Attenzione: hai già un modello chiamato "${nome}" (${esistente.dove}).\nVuoi sovrascrivere il modello precedente con quello nuovo? Quello vecchio verrà sostituito.`,{title:'⚠️ Sovrascrivere il modello?',okLabel:'Sì',cancelLabel:'No'});
    if(si)return {nome,sovrascrivi:true};
@@ -11854,34 +11899,47 @@ async function chiediNomeModello(messaggio,titolo,placeholder){
    $('status').textContent=`Modello "${nome}" lasciato com'era: non è stato sovrascritto.`;
  }
 }
-// Toglie IL MODELLO VECCHIO col nome dato da TUTTE E DUE le memorie. Il nome è unico in tutto il
-// programma, quindi la sovrascrittura deve raggiungere il modello vecchio ANCHE se sta nell'altra
-// famiglia (un nome nato in Fibonacci e riscritto dalla strada generica, o viceversa): senza, il
-// nome resterebbe occupato da un modello che l'utente crede sostituito, e il salvataggio successivo
-// ricadrebbe nella domanda di sovrascrittura senza che nulla sia cambiato. NON viene rinominato
-// niente: il nome IDENTICO lo riusa il chiamante per il modello nuovo.
-function eliminaModelloOmonimo(nome){
+// Toglie IL MODELLO VECCHIO col nome dato DAL CASSETTO IN CUI SI STA SALVANDO (21 novembre 2026).
+//
+// Prima toglieva l'omonimo da TUTTE E TRE le memorie perché il nome era unico in tutto il
+// programma. Adesso non lo è più: ogni cassetto ha i suoi nomi (richiesta del proprietario, v. il
+// commento lungo su nomeModelloGiaUsato). Cercare negli altri cassetti sarebbe un disastro
+// doppio: cancella un modello che l'utente non ha chiesto di toccare (quello col nome uguale
+// nell'altra famiglia) e fa scattare la domanda di sovrascrittura per un nome che in realtà è
+// libero. Senza `classe` si comporta come prima (ripiego per le chiamate vecchie).
+// NON viene rinominato niente: il nome IDENTICO lo riusa il chiamante per il modello nuovo.
+function eliminaModelloOmonimo(nome,classe){
+ if(classe==='fib'){
+  const f=loadFibTemplates();
+  if(f[nome]){ delete f[nome]; saveFibTemplates(f); try{ renderFibTemplateMenu(); }catch(e){} }
+  return;
+ }
+ if(classe==='vp'){
+  const v=loadVpTemplates();
+  if(v[nome]){ delete v[nome]; saveVpTemplates(v); try{ renderVpTemplateMenu(); }catch(e){} }
+  return;
+ }
  const g=loadDrawingTemplates();
- if(g[nome]){ delete g[nome]; saveDrawingTemplates(g); }
- const f=loadFibTemplates();
- if(f[nome]){ delete f[nome]; saveFibTemplates(f); }
- // Anche il cassetto dei profili: senza, sovrascrivendo un nome nato li' il modello vecchio
- // restava in memoria e il nome sembrava ancora occupato.
- const v=loadVpTemplates();
- if(v[nome]){ delete v[nome]; saveVpTemplates(v); }
- renderDrawTemplateMenu(); renderFibTemplateMenu(); try{ renderVpTemplateMenu(); }catch(e){}
+ if(g[nome]){ delete g[nome]; saveDrawingTemplates(g); renderDrawTemplateMenu(); }
+ // Ripiego senza classe: com'era prima del 21 novembre, cerca anche negli altri due cassetti.
+ if(!classe){
+  const f=loadFibTemplates();
+  if(f[nome]){ delete f[nome]; saveFibTemplates(f); try{ renderFibTemplateMenu(); }catch(e){} }
+  const v=loadVpTemplates();
+  if(v[nome]){ delete v[nome]; saveVpTemplates(v); try{ renderVpTemplateMenu(); }catch(e){} }
+ }
 }
 async function saveCurrentDrawingAsTemplate(drawingArg){
  closeDrawTemplateMenu();
  const d=(drawingArg&&drawingArg.type)?drawingArg:selectedDrawing;
  if(!d){ $('status').textContent='Seleziona prima un disegno da salvare come modello.'; return false; }
- const chiesto=await chiediNomeModello('Nome per questo modello di disegno:','💾 Salva modello','Es. "Supporto giornaliero", "Zona domanda"');
+ const chiesto=await chiediNomeModello('Nome per questo modello di disegno:','💾 Salva modello','Es. "Supporto giornaliero", "Zona domanda"',fblClasseModello(d.type));
  if(!chiesto)return false;
  const nome=chiesto.nome;
  // Sovrascrittura CHIESTA dall'utente (ha risposto Sì alla domanda): il modello vecchio con questo
  // nome esce dalle memorie, al suo posto finisce il nuovo. Stesso nome, contenuto nuovo: è così
  // che si corregge un refuso di contenuto senza cambiare il nome (regola del proprietario).
- if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome);
+ if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome,fblClasseModello(d.type));
  // OGNI CLASSE NEL SUO CASSETTO (18 novembre 2026). Prima tutto finiva nei modelli dei disegni:
  // un Fibonacci salvato da qui andava nel menu «Modello» mentre il proprietario lo cercava nel
  // menu «Modello Fib», e per i profili il modello nasceva vuoto. Misurato e segnalato: «per il
@@ -14228,7 +14286,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.93';
+const FBL_VERSIONE='2.2.96';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -16590,6 +16648,45 @@ function maxManualZoomOutVisibleCount(){
 //   rows.length -> niente da tagliare (mercato aperto, o l'ultima candela e' aperta);
 //   0           -> non si e' trovato il confine: non si taglia niente, meglio mostrare.
 let __fblConfineCacheCh={chiave:null,righe:-1,val:0};
+// NON SI TAGLIA, NE' SI CONGELA, UNA CANDELA CHE MT5 HA DAVVERO MANDATO (21 novembre 2026).
+//
+// `cap` e' un confine "quante candele tenere" trovato con l'orario (le 22:00 di Roma, il weekend).
+// L'ultima candela realmente ricevuta e' l'ultimo TICK VERO di questo asset: tutto cio' che sta
+// dentro quel momento e' mercato vero, e nasconderlo e' il difetto che il proprietario vede come
+// «mi taglia un'ora di mercato» (l'ultima candela a 21:59 mentre MT5 e' arrivato alle 22:58).
+// Qui il confine si sposta avanti finche' le candele sono dentro il periodo ricevuto davvero.
+// Se non c'e' nessun tick vero non si sa niente e resta il confine di prima.
+function _fblAllargaAllUltimaReale(cap, a, N){
+  try{
+    if(!(N>0))return cap;
+    // SE IL FILE E' DI MT5, LE SUE CANDELE SONO QUELLE CHE MT5 HA MANDATO (21 novembre 2026).
+    //
+    // Parole del proprietario: «non e' che non e' presente il file, e' che non riesce a scrivere
+    // a grafico quelle che sono le candele rimanenti fino all'effettiva chiusura del mercato...
+    // in modalita' replay va a ripescare le candele giuste caricate da MT5 fino effettivamente
+    // all'ultima». In Live lo stesso file arriva alle 23:50 e il grafico si fermava alle 21:59.
+    //
+    // Qui non c'e' niente da indovinare: se la sorgente che sta disegnando e' MT5, il file e' la
+    // sua serie. Le candele "past-close" le aggiunge Capital.com, non MT5 (v. getVisibleData).
+    // Quindi per un file MT5 non si taglia e non si congela niente: l'ultima candela del file e'
+    // l'ultima candela vera. Vale anche quando in questa sessione non e' arrivato nessun tick
+    // (app aperta dopo, ponte appena agganciato, mercato gia' chiuso).
+    try{ if(fblSorgenteGrafico()==='mt5')return N; }catch(e){}
+    if(!(cap>0))return cap;
+    const u=mt5UltimoTickPerAsset[a];
+    if(!u||!Number.isFinite(u.at)||u.at<=0)return cap;
+    const tReale=u.at;
+    let c=cap;
+    while(c<N){
+      const t=parseDateTime(rows[c].date);
+      if(!Number.isFinite(t))break;   // data che non si legge: ci si ferma (si taglia da li')
+      if(t>tReale)break;              // oltre l'ultima candela reale: si puo' tagliare
+      c++;                            // questa MT5 l'ha mandata davvero: resta
+    }
+    return c;
+  }catch(e){ return cap; }
+}
+
 function fblConfineChiusura(){
   try{
     if(!liveModeActive||liveReplayActive)return rows.length;
@@ -16599,7 +16696,17 @@ function fblConfineChiusura(){
     const N=rows.length;
     if(!N)return rows.length;
     try{ if(fblMercatoMt5Noto(a)===true)return rows.length; }catch(e){}
-    const _chiave=a+'|'+Math.floor(Date.now()/60000);
+    // NON SI TAGLIA UNA CANDELA CHE MT5 STA DAVVERO MANDANDO ADESSO (21 novembre 2026).
+    // Il proprietario: «l'ultima candela visualizzata al terminale di MT5 e' alle 22:58, mentre a
+    // me mi visualizza alle 21:59... mi taglia quella che e' un'ora di mercato». La regola e' la
+    // sua (REGOLE.md 4): il mercato e' chiuso solo quando non arrivano piu' dati. Se per questo
+    // asset c'e' un tick vero entro il silenzio di 5 minuti, non c'e' nessun taglio da fare.
+    try{ if(fblAssetRiceveDatiOra(a))return rows.length; }catch(e){}
+    // L'ultimo tick VERO entra nella chiave della cache: se ne arriva uno il confine si ricalcola
+    // subito, non al minuto dopo (altrimenti una candela vera resterebbe nascosta per un minuto).
+    let _tickReale=0;
+    try{ const u=mt5UltimoTickPerAsset[a]; if(u&&Number.isFinite(u.at)&&u.at>0)_tickReale=u.at; }catch(e){}
+    const _chiave=a+'|'+Math.floor(Date.now()/60000)+'|'+_tickReale;
     if(__fblConfineCacheCh.chiave===_chiave && __fblConfineCacheCh.righe===N)return __fblConfineCacheCh.val;
     const v=_fblConfineChiusuraCalcola(a,N);
     __fblConfineCacheCh={chiave:_chiave,righe:N,val:v};
@@ -16648,13 +16755,21 @@ function _fblConfineChiusuraCalcola(a,N){
   // niente": e' la regola già collaudata del grafico che non si svuota mai, e lascia lo
   // spostamento a mano libero di arrivare fino all'ultima candela vera.
   const tLimite=tUltima-8*86400000;
+  let confine=0;
   for(let i=N-1;i>=0;i--){
     const t=parseDateTime(rows[i].date);
     if(!Number.isFinite(t))continue;      // candela senza data: non dice niente, si va avanti
     if(t<tLimite)break;                   // chiusura piu' vecchia di 8 giorni: non si taglia
-    if(!chiusa(t))return i+1;
+    if(!chiusa(t)){ confine=i+1; break; }
   }
-  return 0;
+  // NON SI TAGLIA UNA CANDELA CHE MT5 HA DAVVERO MANDATO (21 novembre 2026).
+  //
+  // MISURATO: con `fblScartoServerSec` ignoto (null) `fblChiusuraMinutiLocali()` ripiega sulle
+  // 22:00 fisse di Roma, e questo confine buttava via le candele 22:00-22:58 che MT5 aveva
+  // mandato davvero (`rows` arrivava a 22:58, l'ultima visibile era 21:59 - il difetto del
+  // proprietario, riprodotto in laboratorio/app/chiusura_non_taglia_candele_reali.test.mjs).
+  // Il confine si sposta avanti fino all'ultima candela reale (v. _fblAllargaAllUltimaReale).
+  return _fblAllargaAllUltimaReale(confine, a, N);
 }
 // IL CONFINE DELL'AUTOSEGUI: dove deve fermarsi la finestra quando avanza da sola, con il
 // mercato chiuso. Risposta: quante candele tenere (0 = non si congela niente, lo spostamento
@@ -16696,6 +16811,10 @@ function fblConfineAutosegui(){
     const a=currentAssetKey;
     try{ if(a&&binanceSymbolForAsset(a))return 0; }catch(e){}
     try{ if(fblMercatoMt5Noto(a)===true)return 0; }catch(e){}
+    // ...E NEPPURE SE I DATI STANNO ARRIVANDO ADESSO (21 novembre 2026): con lo scarto del server
+    // ignoto `liveSessionPhaseAt` dice «chiuso» dalle 22:00 anche mentre MT5 trasmette, e
+    // l'autosegui si fermava sulla candela delle 21:59. Non c'e' niente da trattenere.
+    try{ if(fblAssetRiceveDatiOra(a))return 0; }catch(e){}
     const N=rows.length;
     const tUltima=parseDateTime(rows[N-1].date);
     if(!Number.isFinite(tUltima))return 0;
@@ -16727,7 +16846,10 @@ function fblConfineAutosegui(){
       }
       cap = cap>0 ? Math.min(cap,lo) : lo;
     }
-    return cap;
+    // IL CONFINE NON PUO' NASCONDERE UNA CANDELA VERA (21 novembre 2026): v. la gemella in
+    // _fblConfineChiusuraCalcola(). Misurato: qui l'autosegui si fermava alle 21:59 mentre la
+    // serie arrivava alle 22:58, che e' esattamente quello che il proprietario vedeva a schermo.
+    return _fblAllargaAllUltimaReale(cap, a, N);
   }catch(e){ return 0; }
 }
 // Applica il confine a una FETTA di rows (quella che il grafico sta guardando). `base` e'
@@ -21459,7 +21581,8 @@ function bosLivelloBreakEvenLegacy(p, dir, entry, tp) {
 // ===============================================================
 // APRE DUE POSIZIONI AL PULLBACK VALIDO (21 novembre 2026)
 // 1. PULLBACK: target = zona rottura confermata, stop = liquidità
-// 2. CONFERMA: target = RR alto (es 15), stop = livello ritestato
+// 2. CONFERMA: al pullback SOLO lo stop (identico); target alla conferma della rottura,
+//    cioè (entrata del pullback -> punto di rottura) × rrTarget2 (22 novembre 2026)
 // ===============================================================
 // MODO DELLA SECONDA POSIZIONE (impostazione modoSeconda):
 //  'insieme' = entrambe al valid pullback; rischio della seconda: dallo stop precedente all'entrata del pullback.
@@ -21489,6 +21612,28 @@ function bosApriConfermaDopo(st, p, fatta, r, i) {
       slIniziale: sl,
       livelloRotturaConfermata: fatta.target
     });
+  } catch (e) {}
+}
+
+// IL TARGET DELLA SECONDA ENTRA' NASCE ALLA CONFERMA (richiesta del proprietario, 22 novembre 2026).
+//
+// La seconda entrata nasce al pullback con il solo stop, identico a quello della prima. Il target
+// si imposta quando una candela CHIUDE oltre il punto di rottura (la «conferma»), ed è la distanza
+// dall'entrata del pullback a quel punto moltiplicata per rrTarget2: 2 = 1:2, 3 = 1:3.
+// Prima si nasceva già col target a rischio × 2, cioè un numero che non c'entrava con la
+// liquidità, e la posizione poteva chiudersi a target PRIMA che la rottura esistesse.
+function bosImpostaTpConferma(st, p, fatta) {
+  try {
+    const rr = Math.max(2, +p.rrTarget2 || 2);
+    for (const o of (st.ops || [])) {
+      if (o.nome !== 'conferma' || o.setupId !== fatta.id || Number.isFinite(o.tp)) continue;
+      const dist = Math.abs(fatta.target - o.entry);
+      if (!(dist > 0)) continue;
+      o.tp = o.dir === 1 ? o.entry + dist * rr : o.entry - dist * rr;
+      o.rr = rr;
+      o.tpStimato = false;
+      o.beLivello2 = bosLivelloBreakEven(p, o.dir, o.entry, o.tp, 2);
+    }
   } catch (e) {}
 }
 
@@ -21525,12 +21670,13 @@ function bosApriPullback(st, p, s, r, i) {
     // ----- DUE POSIZIONI, INSIEME, AL VALID PULLBACK -----
     // Stesso ingresso, stesso stop (sotto il minimo del ritest). Ognuna con mezzo rischio (0,5%):
     //  - PRIMA: target = rottura confermata (zona dell'estremo da rompere);
-    //  - SECONDA: target a rapporto rrTarget2 (minimo 1:2, il valore si sceglie con i backtest).
+    //  - SECONDA: AL PULLBACK HA SOLO LO STOP. Il target nasce alla conferma della rottura
+    //    (vedi bosImpostaTpConferma): distanza dall'entrata del pullback al punto di rottura,
+    //    moltiplicata per rrTarget2 (2 = 1:2, 3 = 1:3, si sceglie nelle impostazioni).
+    //    Richiesta esplicita del proprietario, 22 novembre 2026.
     // Il break-even (BE1 sul pullback, BE2 sulla seconda) li sposta dopo, come gia' previsto.
     const rrLungo = Math.max(2, +p.rrTarget2 || 2);
-    const tpLungo = s.dir === 1 ? entry + distPullback * rrLungo : entry - distPullback * rrLungo;
     const beLivello1 = bosLivelloBreakEven(p, s.dir, entry, tpPullback, 1);
-    const beLivello2 = bosLivelloBreakEven(p, s.dir, entry, tpLungo, 2);
     st.ops.push({
       nome: 'pullback', setupId: s.id, barra: i,
       dir: s.dir, entry, sl: slPullback, tp: tpPullback,
@@ -21545,10 +21691,10 @@ function bosApriPullback(st, p, s, r, i) {
     if (bosModoSeconda(p) === 'insieme') {
       st.ops.push({
         nome: 'conferma', setupId: s.id, barra: i,
-        dir: s.dir, entry, sl: slPullback, tp: tpLungo,
+        dir: s.dir, entry, sl: slPullback, tp: null,
         rr: rrLungo, tpStimato: true,
         lotto: scalettaLotto(entry, slPullback, 0.5),
-        beLivello1: null, be1Fatto: false, beLivello2, be2Fatto: false,
+        beLivello1: null, be1Fatto: false, beLivello2: null, be2Fatto: false,
         slIniziale: slPullback,
         livelloRotturaConfermata: s.target
       });
@@ -21624,19 +21770,25 @@ function bosChiudiOperazioniToccate(st, r, i) {
   st.ops = st.ops.filter(o => {
     if (o.barra === i) return true;
     const toccaSl = o.dir === 1 ? (r.low <= o.sl) : (r.high >= o.sl);
-    const toccaTp = o.dir === 1 ? (r.high >= o.tp) : (r.low <= o.tp);
+    // SENZA TARGET NON SI CHIUDE (22 novembre 2026): `r.high >= null` vale `>= 0`, cioè VERO, e
+    // una seconda entrata ancora senza TP si sarebbe chiusa «a target» alla prima barra.
+    const toccaTp = Number.isFinite(o.tp) && (o.dir === 1 ? (r.high >= o.tp) : (r.low <= o.tp));
     if (toccaSl || toccaTp) {
       if (st.op === o) { st.op = null; st.opSnap = null; }
       o.esito = toccaSl ? 'stop' : 'target';
       o.barraFine = i;
       st.opsFinite.push(o);
       if (st.opsFinite.length > 4) st.opsFinite.shift();
-      // La PRIMA posizione ha incassato la rottura confermata: la SECONDA va a pareggio
-      // sull'entrata del pullback (stesso prezzo di ingresso), cosi' il setup non puo' piu' perdere.
+      // La PRIMA posizione ha incassato la rottura confermata: la SECONDA riceve qui il suo target
+      // (distanza entrata->rottura × R:R, richiesta 22/11/2026) se non ce l'ha ancora. Non la si
+      // forza a pareggio sulla stessa barra: il proprietario vuole che quel target possa lavorare.
       if (o.nome === 'pullback' && toccaTp && !toccaSl) {
         for (const c of st.ops) {
-          if (c.nome === 'conferma' && c.setupId === o.setupId && c.barra !== i && !c.beFatto) {
-            c.slIniziale = c.sl; c.sl = c.entry; c.beFatto = true;
+          if (c.nome !== 'conferma' || c.setupId !== o.setupId || c.barra === i) continue;
+          if (!Number.isFinite(c.tp) && Number.isFinite(c.livelloRotturaConfermata)) {
+            const rr = Math.max(2, +c.rr || 2);
+            const dist = Math.abs(c.livelloRotturaConfermata - c.entry);
+            if (dist > 0) { c.tp = c.dir === 1 ? c.entry + dist * rr : c.entry - dist * rr; c.tpStimato = false; }
           }
         }
       }
@@ -21678,7 +21830,7 @@ const BOS_SETTINGS = [
   {type: 'color', key: 'bullColor', label: 'BOS rialzista'},
   {type: 'color', key: 'bearColor', label: 'BOS ribassista'},
   {type: 'num', key: 'rrTarget', label: 'Prima posizione: target in R (rottura confermata)', min: 0.5, max: 10, step: 0.1},
-  {type: 'num', key: 'rrTarget2', label: 'Seconda posizione: target in R (minimo 2)', min: 2, max: 50, step: 0.5},
+  {type: 'num', key: 'rrTarget2', label: 'Seconda posizione: target in R alla conferma (2 = 1:2, 3 = 1:3)', min: 2, max: 50, step: 0.5},
   {type: 'select', key: 'modoSeconda', label: 'Seconda posizione', options: ['insieme', 'dopo']},
   {type: 'select', key: 'stopPullback', label: 'Stop del pullback', options: ['candela', 'struttura', 'liquidita'], nota: 'Confronto su dati MT5 (seconda 1:2, senza costi): su M1, M5 e M15 lo stop su liquidità ha il drawdown più basso in tutti i casi: 2–5% contro 3–15% con le altre due opzioni. Il rendimento è più basso di quello sullo stop alla candela in alcuni casi. Il rapporto rendimento/drawdown è migliore con la liquidità in 4 casi su 6 (M1 insieme e dopo, M5 insieme, M15 dopo). Sul M5 dopo e sull’M15 insieme rende di più la candela. Tengo lo stop su liquidità come default.'},
   {type: 'num', key: 'bePerc1', label: 'BE1 pullback: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
@@ -21896,6 +22048,7 @@ const VALID_BOS_PULLBACK_DEF = {
         st.opSnap = fatta;   // per la scaletta: la rottura di questo setup e' confermata
         st.op = null;
         if (bosModoSeconda(p) === 'dopo') bosApriConfermaDopo(st, p, fatta, r, i);
+        else bosImpostaTpConferma(st, p, fatta);   // seconda entrata già viva: qui nasce il suo TP
       } else if (st.op && st.opBar !== i && (newBull || newBear || i - st.opBar > maxWait)) {
         st.op = null; st.opSnap = null;
       }
@@ -21993,13 +22146,17 @@ const VALID_BOS_PULLBACK_DEF = {
       const breve = (o.nome === 'pullback' ? 'Pullback' : 'Conferma');
       seg(o.barra, fin, o.entry, cEntry, 1, true);
       seg(o.barra, fin, o.sl, '#f23645', 1, true);
-      seg(o.barra, fin, o.tp, '#089981', 1, true);
+      // Il target della seconda entrata non esiste finché la rottura non è confermata: niente
+      // linea a zero, e si dice a parole perché non c'è (22 novembre 2026).
+      const haTp = Number.isFinite(o.tp);
+      if (haTp) seg(o.barra, fin, o.tp, '#089981', 1, true);
       const xT = xAbs(o.barra) + 4;
       const lotti = (o.lotto && Number.isFinite(o.lotto.lotti))
         ? ('  ·  ' + (typeof fmtLottiQuick === 'function' ? fmtLottiQuick(o.lotto.lotti) : o.lotto.lotti) + ' lotti') : '';
       txt(breve + '  ' + fmtPrice(o.entry) + lotti + esito, xT, y(o.entry) - 7, cEntry, 'left', 'bold 10px system-ui');
       txt('SL ' + fmtPrice(o.sl) + (o.be1Fatto || o.be2Fatto ? ' (a pareggio)' : ''), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
-      txt('TP ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
+      if (haTp) txt('TP ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
+      else txt('TP: alla conferma della rottura', xT, y(o.entry) + 7, '#8b96a5', 'left', '10px system-ui');
       // BE1
       if (!o.be1Fatto && Number.isFinite(o.beLivello1)) {
         seg(o.barra, fin, o.beLivello1, '#DDA94F', 1, true);
@@ -23152,7 +23309,7 @@ function scalettaDisegna(ctx, ind, sc, posizione, titolo) {
     };
     voce('Entry', fmtPrice(op.entry), op.dir === 1 ? '#089981' : '#f23645');
     voce('Stop', fmtPrice(op.sl), '#f23645');
-    voce('Target', (op.tpStimato ? '≈ ' : '') + fmtPrice(op.tp), '#089981');
+    voce('Target', Number.isFinite(op.tp) ? ((op.tpStimato ? '≈ ' : '') + fmtPrice(op.tp)) : 'alla conferma', '#089981');
     voce('R:R', '1 : ' + op.rr.toFixed(2));
     voce('Lotti', op.lotto
       ? (fmtLottiQuick ? fmtLottiQuick(op.lotto.lotti) : op.lotto.lotti) +
@@ -47240,11 +47397,11 @@ $('fibTemplateSaveAs')?.addEventListener('click',async ev=>{
  ev.stopPropagation(); closeFibTemplateMenu();
  // STESSA finestra del nome del percorso generico: nomi già usati mentre si scrive e, per un nome
  // già occupato, la domanda di sovrascrittura (sì/no) invece del rifiuto - vedi chiediNomeModello.
- const chiesto=await chiediNomeModello('Nome per questo modello Fibonacci:','💾 Salva modello Fibonacci');
+ const chiesto=await chiediNomeModello('Nome per questo modello Fibonacci:','💾 Salva modello Fibonacci','Fib 61.8 ritracciato','fib');
  if(!chiesto)return;
  const nome=chiesto.nome;
  // Sovrascrittura chiesta dall'utente: il modello vecchio con questo nome esce dalle memorie.
- if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome);
+ if(chiesto.sovrascrivi)eliminaModelloOmonimo(nome,'fib');
  const templates=loadFibTemplates();
  templates[nome]={levels:readFibLevelsFromTable(),opts:readFibOptsFromForm()};
  // Stessa regola della strada generica (18 novembre 2026): se la memoria rifiuta, non si dice
@@ -51378,7 +51535,17 @@ function setPfMt5Choice(login,val){
  const m=pfMt5Choices(); if(val==null)delete m[login]; else m[login]=val;
  try{ localStorage.setItem(PF_MT5_CHOICE_KEY,JSON.stringify(m)); }catch(e){}
 }
-function pfUsesRealMt5(){ try{ return !!(isPropFirmMode&&liveModeActive&&pfRealMt5Login!=null); }catch(e){ return false; } }
+// IN REPLAY VALE IL CONTO STORICO, MAI IL CONTO MT5 (22 novembre 2026).
+//
+// `fblPropContoId()` lo dice già dal 28 ottobre 2026: «in replay vale SEMPRE lo storico, anche
+// con MT5 collegato». Questo predicato però rispondeva di sì anche dentro il replay (perché il
+// replay vive nella sessione Live), così il motore misurava i limiti sull'equity del conto vero.
+//
+// MISURATO nel banco replay_prop_firm_conto_storico.test.mjs: conto MT5 con 12.000 di capitale
+// iniziale e 9.938,25 di equity (-17,2%) contro il conto storico che perde 61,75 su 10.000
+// (-0,6%). Prima della cura: violazione «max» a carico del conto reale e ogni apertura in replay
+// rifiutata con «🛑 Conto Prop Firm chiuso per violazione», benché il conto storico fosse sano.
+function pfUsesRealMt5(){ try{ return !!(isPropFirmMode&&liveModeActive&&!liveReplayActive&&pfRealMt5Login!=null); }catch(e){ return false; } }
 function pfRealMt5DataReady(){
  try{ return !!(pfUsesRealMt5()&&mt5Connected&&mt5AccountInfo&&String(mt5AccountInfo.login)===String(pfRealMt5Login)&&mt5AccountHistory); }catch(e){ return false; }
 }

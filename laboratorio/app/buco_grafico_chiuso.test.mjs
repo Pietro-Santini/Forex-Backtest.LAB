@@ -53,7 +53,12 @@ const PREPARA = (candeleViste) => `(function(){
   for(let i=0;i<1260;i++)metti(LUNEDI+i*60000);            // lunedi' aperto
   for(let i=0;i<360;i++)metti(LUNEDI+1260*60000+i*60000);  // coda chiusa
   baseRows=rows.slice(); idx=rows.length-1; viewEnd=idx;
-  currentAssetKey='XAUUSD'; csvLibrary=[{id:'mt5_live_xau',rows:rows}];
+  // SORGENTE NON DICHIARATA, E NON MT5 (21 novembre 2026). Qui la coda chiusa e' costruita a mano,
+  // quindi non e' un file di MT5: un file di MT5 e' la serie che MT5 ha mandato, e per quelli la
+  // cura del 21 novembre non taglia piu' niente (_fblAllargaAllUltimaReale). Il taglio che
+  // questo banco misura resta quello delle sorgenti che restituiscono candele past-close
+  // (Capital.com). Con l'id 'mt5_live_*' il banco dichiarava una cosa impossibile.
+  currentAssetKey='XAUUSD'; csvLibrary=[{id:'xau',rows:rows}];
   liveModeActive=true; liveReplayActive=false; mt5Connected=false;
   // L'OROLOGIO SI BLOCCA SU UN SABATO: senza, la prova dipende da quando gira - e
   // MISURATO il 9 novembre (lunedi' prestto) il mercato era APERTO, l'app aggiungeva lo

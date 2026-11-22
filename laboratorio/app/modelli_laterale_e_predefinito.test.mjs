@@ -204,31 +204,68 @@ test('un profilo e un VWAP lasciati nel cassetto dei disegni tornano nel loro', 
 });
 
 // ---------------------------------------------------------------------------
-// 3-bis. UN NOME DI UN MODELLO DI PROFILO OCCUPA IL NOME IN TUTTO IL PROGRAMMA
-//    (la regola del proprietario e' «il nome e' unico»: vale anche per i profili)
+// 3-bis. OGNI CASSETTO HA I SUOI NOMI (21 novembre 2026)
+//    Il proprietario: «se io lo salvo con lo stesso nome non mi può venire fuori il messaggio
+//    attenzione, hai già un modello chiamato... Questo non deve succedere perché io sto salvando
+//    il nome sul contenitore del Fibonacci e non sul contenitore del profilo. Deve esserci
+//    distinzione. Se sto scrivendo lo stesso nome SULLO STESSO contenitore, ovvio, lì me lo deve
+//    dire.» QUINDI: occupato DENTRO il cassetto, libero negli altri.
 // ---------------------------------------------------------------------------
-test('un nome gia usato da un modello di profilo chiede la sovrascrittura e viene sostituito', async () => {
+test('un nome gia usato da un modello di profilo occupa il nome SOLO fra i profili', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(() => {
       for (const k of ['fbtDrawingTemplates_v1', 'fbtFibTemplates_v1', 'fbtVpTemplates_v1']) { try { localStorage.removeItem(k); } catch (e) {} }
       saveVpTemplates({'ZONA MIA': {type: 'vpfixed', buckets: 30}});
-      const dove = nomeModelloGiaUsato('ZONA MIA');
-      const neiSuggerimenti = nomiModelliGiaUsati().some(v => v.nome === 'ZONA MIA');
-      eliminaModelloOmonimo('ZONA MIA');
       return {
-        dove,
-        neiSuggerimenti,
-        dopoDisegni: Object.keys(loadDrawingTemplates()),
-        dopoFib: Object.keys(loadFibTemplates()),
-        dopoVp: Object.keys(loadVpTemplates())
+        // Nel cassetto giusto il nome e' occupato, e si sa anche dove sta.
+        nelCassettoVp: nomeModelloGiaUsato('ZONA MIA', 'vp'),
+        // Negli altri due cassetti lo STESSO nome e' libero: nessun messaggio di omonimia.
+        nelCassettoFib: nomeModelloGiaUsato('ZONA MIA', 'fib'),
+        nelCassettoDisegni: nomeModelloGiaUsato('ZONA MIA', 'disegno'),
+        // La lista mostrata mentre si scrive e' quella del cassetto dove si salva.
+        suggeritiVp: nomiModelliGiaUsati('vp').some(v => v.nome === 'ZONA MIA'),
+        suggeritiFib: nomiModelliGiaUsati('fib').some(v => v.nome === 'ZONA MIA')
       };
     });
-    assert.ok(r.dove, 'il nome di un modello di profilo deve risultare gia usato: ' + JSON.stringify(r.dove));
-    assert.ok(String(r.dove.dove).toLowerCase().includes('modelli'),
-      'e deve dire dove si trova, cosi la domanda di sovrascrittura ha senso: ' + JSON.stringify(r.dove));
-    assert.equal(r.neiSuggerimenti, true, 'il nome deve comparire fra quelli suggeriti mentre si scrive');
-    assert.deepEqual(r.dopoVp, [], 'la sovrascrittura deve togliere il vecchio modello dal cassetto dei profili');
+    assert.ok(r.nelCassettoVp, 'nel cassetto dei profili il nome deve risultare gia usato: ' + JSON.stringify(r.nelCassettoVp));
+    assert.ok(String(r.nelCassettoVp.dove).toLowerCase().includes('modelli'),
+      'e deve dire dove si trova, cosi la domanda di sovrascrittura ha senso: ' + JSON.stringify(r.nelCassettoVp));
+    assert.equal(r.nelCassettoFib, null,
+      'lo stesso nome deve essere LIBERO nel cassetto Fibonacci: non si sovrascrive un profilo per colpa di un fib: '
+      + JSON.stringify(r.nelCassettoFib));
+    assert.equal(r.nelCassettoDisegni, null,
+      'e libero nel cassetto dei disegni: ' + JSON.stringify(r.nelCassettoDisegni));
+    assert.equal(r.suggeritiVp, true, 'mentre si salva un profilo il nome compare fra i suggeriti');
+    assert.equal(r.suggeritiFib, false, 'mentre si salva un Fibonacci NON deve comparire: e\' un altro contenitore');
+  } finally { await browser.close(); }
+  assert.deepEqual(errori, []);
+});
+
+test('sovrascrivere in un cassetto NON cancella l\'omonimo negli altri', async () => {
+  // La sovrascrittura deve raggiungere il modello vecchio SOLO nel suo cassetto. Se cancellasse
+  // anche gli omonimi, salvare «Supporto» come linea dopo aver salvato «Supporto» come Fibonacci
+  // farebbe sparire il modello Fibonacci senza che nessuno l'abbia chiesto.
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(() => {
+      for (const k of ['fbtDrawingTemplates_v1', 'fbtFibTemplates_v1', 'fbtVpTemplates_v1']) { try { localStorage.removeItem(k); } catch (e) {} }
+      saveFibTemplates({'STESSO NOME': {levels: [], opts: {}}});
+      saveVpTemplates({'STESSO NOME': {type: 'vpfixed', buckets: 30}});
+      saveDrawingTemplates({'STESSO NOME': {color: '#fff'}});
+      // Sovrascrittura DAL cassetto dei profili: tocca solo quello.
+      eliminaModelloOmonimo('STESSO NOME', 'vp');
+      return {
+        dopoFib: Object.keys(loadFibTemplates()),
+        dopoVp: Object.keys(loadVpTemplates()),
+        dopoDisegni: Object.keys(loadDrawingTemplates())
+      };
+    });
+    assert.deepEqual(r.dopoVp, [], 'dal cassetto dei profili la sovrascrittura deve togliere il vecchio modello');
+    assert.deepEqual(r.dopoFib, ['STESSO NOME'],
+      'il modello Fibonacci con lo stesso nome deve restare: ' + JSON.stringify(r.dopoFib));
+    assert.deepEqual(r.dopoDisegni, ['STESSO NOME'],
+      'e anche il modello di disegno: ' + JSON.stringify(r.dopoDisegni));
   } finally { await browser.close(); }
   assert.deepEqual(errori, []);
 });
