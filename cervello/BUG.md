@@ -1,3 +1,11 @@
+# BUG
+
+## 2026-11-22 - Leak grafico trade MT5 altri conti in live_propfirm
+- **Sintomo**: con conto A attivo, sul grafico comparivano trade chiusi MT5 di conto B (anche altro modo) su app installata.
+- **Causa**: `tradeBelongsToCurrentView` applicava il filtro conto MT5 solo a `m==='live'`, non a `live_propfirm`.
+- **Cura**: filtro conto applicato a `live` e `live_propfirm`; in live non connesso esclusi trade con `mt5Ticket` o `mt5Login`.
+- **Prova**: `laboratorio/app/conto_non_si_mischia.test.mjs` (caso live_propfirm cross-account).
+
 # Registro dei bug
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.

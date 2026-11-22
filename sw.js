@@ -650,7 +650,8 @@
 //            aggiunto in una finestra compare anche nelle altre aperte.
 // v2.2.100 - Base migrazione dominio: URL server per percorsi Caddy (compatibile con Tailscale),
 //            7-bis ordini/tunnel agente in repo, preparazione pubblicazione.
-const CACHE_NAME = "forex-backtest-lab-v2.2.100";
+// v2.2.101 - Filtro conto grafico: in Live mai mostrare trade MT5 di altri conti/login.
+const CACHE_NAME = "forex-backtest-lab-v2.2.101";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

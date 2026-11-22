@@ -180,3 +180,26 @@ test('PROVA DI CONTROLLO: due finestre nella STESSA modalita e sullo stesso cont
     assert.deepEqual(r.equity, [12000], 'e anche la curva del capitale');
   } finally { await browser.close(); }
 });
+
+test('live prop firm: trade MT5 di altro conto/modo non deve apparire a grafico', async () => {
+  const {browser, pagina} = await apriApp();
+  try {
+    const r = await pagina.evaluate(() => {
+      trades.length = 0;
+      const base = {asset:'XAUUSD', side:'BUY', entry:1.1, exit:1.2, pl:10,
+        closedAt:new Date(Date.now()-3600000).toISOString()};
+      trades.push({...base, id:'mio', mode:'live_propfirm', mt5Ticket:1, mt5Login:'12346925'});
+      trades.push({...base, id:'altro-live', mode:'live', mt5Ticket:2, mt5Login:'1515344853'});
+      trades.push({...base, id:'altro-pf', mode:'live_propfirm', mt5Ticket:3, mt5Login:'1515344853'});
+      trades.push({...base, id:'no-ticket', mode:'live', mt5Ticket:null, mt5Login:'1515344853'});
+      liveModeActive = true; isPropFirmMode = true; mt5Connected = true;
+      mt5AttivaConto('12346925','S');
+      const grafico = trades.filter(tradeBelongsToCurrentView).map(t=>t.id);
+      mt5Connected = false; mt5ContoAttivo = null; mt5AccountInfo=null; mt5CredsDraft=null;
+      const scollegato = trades.filter(tradeBelongsToCurrentView).map(t=>t.id);
+      return {grafico, scollegato};
+    });
+    assert.deepEqual(r.grafico, ['mio'], 'solo il conto attivo: '+JSON.stringify(r));
+    assert.deepEqual(r.scollegato, [], 'scollegato in live: nessun trade MT5 di altri conti: '+JSON.stringify(r));
+  } finally { await browser.close(); }
+});

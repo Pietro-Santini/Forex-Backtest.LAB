@@ -1,3 +1,10 @@
+# DIARIO
+
+## 2026-11-22
+- 7-bis: hotfix localhost origin, rate limit 600/min, esenzione `/dati/ascolta`; deploy server.
+- Migrazione dominio: app 2.2.100 pubblicata, server/Caddy aggiornati; agente PC avviato via tunnel.
+- Bug: fix leak grafico trade MT5 altri conti in `live_propfirm` (`tradeBelongsToCurrentView`).
+
 - 2026-11-22 - OpenCode - **Fase 1A / 7-bis (in corso, repo, non pubblicato): Caddy fix 8.7.27 + controlli ordini.**
   - **Dominio:** `forexbacktestlab.duckdns.org` (indicato dal proprietario).
   - **8.7.27 / Caddy:** `server_oracle/prepara_dominio.sh` ora genera Caddyfile con `auto_https disable_redirects`, `https://$DOMINIO`, rotte esposte `/dati /dati/*`, `/pc /pc/*`, `/segnali /segnali/*`, resto 404. Test self-check script aggiornato (401 dati, 401/403 pc, 404 health).
