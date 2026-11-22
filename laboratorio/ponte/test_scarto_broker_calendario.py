@@ -3,8 +3,43 @@
 Il broker segue l'ora dell'Europa orientale: UTC+2 in inverno, UTC+3 quando vige l'ora legale europea.
 Il servizio non deve mai usare un valore salvato di un'altra stagione."""
 import datetime as dt
+import sys
+import types
 
 import _percorsi  # noqa: F401
+
+# Sul CI (Linux, senza MetaTrader5) mt5_feed_server non si importa: le funzioni sotto prova
+# sono calcoli puri sul calendario, non toccano MT5. Stub minimo ma completo per l'import.
+class _FintoMt5:
+    SYMBOL_TRADE_MODE_DISABLED = 0
+    COPY_TICKS_ALL = 0
+    def symbol_select(self, *a, **k): return True
+    def symbol_info_tick(self, *a, **k): return None
+    def symbol_info(self, *a, **k): return None
+    def symbols_get(self, *a, **k): return ()
+    def initialize(self, *a, **k): return False
+    def shutdown(self, *a, **k): return None
+    def terminal_info(self, *a, **k): return None
+    def account_info(self, *a, **k): return None
+    def last_error(self, *a, **k): return (0, "")
+    def __getattr__(self, nome):
+        if nome.startswith("TIMEFRAME_"): return 1
+        if nome.startswith("COPY_TICKS_"): return 0
+        if nome.isupper(): return 0
+        return lambda *a, **k: None
+
+if "MetaTrader5" not in sys.modules:
+    sys.modules["MetaTrader5"] = _FintoMt5()
+else:
+    _f = sys.modules["MetaTrader5"]
+    for _n, _v in (("SYMBOL_TRADE_MODE_DISABLED",0),("COPY_TICKS_ALL",0)):
+        if not hasattr(_f, _n): setattr(_f, _n, _v)
+    if not hasattr(_f, "TIMEFRAME_M1"):
+        try: setattr(_f, "TIMEFRAME_M1", 1)
+        except Exception: pass
+if "pywinauto" not in sys.modules:
+    sys.modules["pywinauto"] = types.ModuleType("pywinauto")
+
 import mt5_feed_server as m
 
 

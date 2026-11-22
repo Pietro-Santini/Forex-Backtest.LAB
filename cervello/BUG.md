@@ -2,6 +2,73 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+## RISOLTO — 22 novembre 2026, replay: posizioni chiuse restano visibili sul grafico
+
+> «quando chiudo le posizioni in modalità replay le posizioni non rimangono impresse a grafico,
+> quindi non posso rivedere la posizione che ho aperto come in modalità live che rimane sul
+> grafico il tp e sl» — proprietario.
+
+**CAUSA.** In replay `drawClosedTradeMarkers` mostrava le orizzontali Entry/TP/SL solo finché il
+trade era aperto (`!closeReached`), poi le toglieva.
+
+**CURA.** In replay le orizzontali restano visibili anche dopo la chiusura
+(`liveReplayActive && openIdx<=idx`), così la posizione chiusa resta rivedibile sul grafico.
+
+## FATTO — 22 novembre 2026, registro spostamenti SL/TP sulle posizioni chiuse
+
+> «quando selezioniamo una operazione chiusa a grafico deve farci vedere dove erano i tp-sl e se
+> poi lo stop loss è stato spostato prima di chiudere la posizione... un vero e proprio registro
+> che registra mano mano gli spostamenti del tp-sl... solo se selezioniamo la posizione chiusa»
+
+**CURA.** `app.html`: ogni modifica SL/TP sulla posizione attiva registra `slHistory`/`tpHistory`
+(prezzo, tempo, indice candela). Alla chiusura il trade porta lo storico. Selezionando una
+posizione chiusa sul grafico, si disegna il percorso a gradini degli spostamenti SL/TP.
+
+## RISOLTO — 22 novembre 2026, collaudo GitHub v2.2.96 rosso (import MetaTrader5 su CI Linux)
+
+**CAUSA MISURATA.** `laboratorio/ponte/test_scarto_broker_calendario.py` importava
+`mt5_feed_server` senza stub MetaTrader5/pywinauto; su GitHub Actions (Linux) collection falliva
+con `ModuleNotFoundError: No module named 'MetaTrader5'`.
+
+**CURA.** Stub `MetaTrader5`/`pywinauto` in `sys.modules` prima dell’import, come negli altri test
+del ponte (funzioni sotto test sono calcoli puri di calendario).
+
+## RISOLTO — 22 novembre 2026, in replay il capitale del conto storico non si aggiorna alla chiusura
+
+> «in modalità backtest nel replay la apre e la mantiene e calcola perfettamente quello che è il
+> P/L live, il problema è quando la chiude non aggiorna il capitale del conto storico, mentre
+> invece nel trade journal la fa vedere la posizione con il suo profitto/perdita» — proprietario.
+
+**MISURATO.** Banco `laboratorio/app/replay_capitale_dopo_chiusura.test.mjs`: in replay live,
+posizione BUY aperta a 4080, avanzata di una candela (P/L flottante +100), chiusa manualmente.
+Prima della cura: capitale prima 10100, dopo la chiusura 10000 (il guadagno spariva); il trade
+era nel journal con `pl:100` ma con `mode:'backtest'`.
+
+**CAUSA VERA.** `closeTrade` salvava le posizioni replay (`historical`) con
+`closeMode = backtest/backtest_propfirm` invece della modalità corrente, quindi `statsTrades()`
+(che legge la modalità corrente) non le contava. Inoltre `equity.push` e l'aggiustamento in
+`removeTradeRecordAt` erano saltati per `historical`.
+
+**CURA.** `app.html`: per le posizioni historical si usa `currentMode()`; `equity.push` e
+`removeTradeRecordAt` considerano anche i trade historical durante `liveReplayActive`, così
+capitale, curva e rimozione restano coerenti.
+
+**PROVA.** `replay_capitale_dopo_chiusura.test.mjs` 1/1; regressione replay 14/14.
+
+## FATTO — 22 novembre 2026, etichette BOS più leggibili e BE2 calcolato dalla rottura
+
+> «migliorie estetiche alle scritte che appaiono sul grafico dell'indicatore pull back, dobbiamo
+> rendere le scritte più leggibili e non un testo sopra l'altro. inoltre dobbiamo aggiungere pure
+> l'opzione che il be della seconda operazione quando raggiunge la percentuale di arrivo al tp
+> deve partire dalla rottura e non dalla apertura della posizione stessa» — proprietario.
+
+**CURA.** `app.html` (Valid BOS Pullback): etichette delle operazioni raccolte, ordinate per y,
+distanziate (min 13 px) e disegnate con sfondo scuro semitrasparente. Aggiunta opzione
+`bePerc2Da` (`apertura`/`rottura`, default `apertura`): quando è `rottura`, il livello BE2 si
+calcola come `rottura + (TP - rottura) * quota`.
+
+**PROVE.** `bos_be2_da_rottura.test.mjs` 2/2 (da rottura 101.725, da apertura 101.50). Sintassi OK.
+
 ## RISOLTO — 22 novembre 2026, in replay la prop firm non blocca il conto storico per colpa del conto MT5
 
 > «in replay il comando di apertura posizione non prende e mostra il messaggio di blocco

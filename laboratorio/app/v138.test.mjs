@@ -1,7 +1,7 @@
 // v1.0.138 — Test delle nuove richieste:
-//  A) in replay le orizzontali dei livelli (entry/TP/SL) si vedono SOLO finché la posizione è
-//     ANCORA aperta a quel punto del replay; appena il replay supera la candela di chiusura
-//     (closeReached) spariscono tutte (restano solo frecce e linea tratteggiata).
+//  A) in replay le orizzontali dei livelli (entry/TP/SL) restano visibili anche dopo la chiusura,
+//     così la posizione resta "impressa" sul grafico e si può rivedere (aggiornato v2.2.98,
+//     richiesta esplicita del proprietario).
 //  B) P/L live in PIP aggiornato anche in modalità PIP/finestra separata (vedi livePLElement).
 //  C) sicurezza selezione: click su posizione aperta (freccia o riga) la seleziona; click su un
 //     punto vuoto deseleziona TUTTO; senza selezione i tasti SL/TP definiscono i livelli della
@@ -103,7 +103,7 @@ test('A) in replay le orizzontali dei livelli si vedono solo finché la posizion
       idx = 1; viewEnd = 1; masterTime = closeTimeOf(R[1]);
       const ancoraAperta = conta();
 
-      // Replay oltre la candela di chiusura (closeIdx 2 <= idx 2): TUTTE le orizzontali spariscono.
+      // Replay oltre la candela di chiusura (closeIdx 2 <= idx 2): le orizzontali restano visibili.
       idx = 2; viewEnd = 2; masterTime = closeTimeOf(R[2]);
       const chiusa = conta();
 
@@ -118,7 +118,7 @@ test('A) in replay le orizzontali dei livelli si vedono solo finché la posizion
     }, {JS: TRE_CANDELE_JS, SPIA: SPIA_RIGHE});
     assert.equal(r.extraAperta.length, 3, 'a posizione ancora aperta si vedono le 3 orizzontali ricostruite (entry, TP, SL): ' + JSON.stringify(r.extraAperta));
     assert.equal(r.extraAncora.length, 3, 'prima della chiusura restano ancora 3: ' + JSON.stringify(r.extraAncora));
-    assert.equal(r.extraChiusa.length, 0, 'oltre la candela di chiusura le orizzontali spariscono tutte: ' + JSON.stringify(r.extraChiusa));
+    assert.equal(r.extraChiusa.length, 3, 'oltre la candela di chiusura le orizzontali restano visibili: ' + JSON.stringify(r.extraChiusa));
     assert.ok(r.extraAperta.some(k => k.includes('#2fbf71')), 'tra i livelli c\'è il TP verde');
     assert.ok(r.extraAperta.some(k => k.includes('#3b82f6')), 'tra i livelli c\'è l\'entry blu');
     assert.ok(r.extraAperta.some(k => k.includes('#e05252')), 'tra i livelli c\'è lo SL rosso');

@@ -1,3 +1,24 @@
+- 2026-11-22 - OpenCode - **v2.2.98: replay posizioni chiuse visibili, storico spostamenti SL/TP, fix collaudo GitHub ponte.**
+  - **Replay chiuse sul grafico:** in replay le orizzontali Entry/TP/SL/Stop Profit restano anche
+    dopo `closeReached`, così la posizione chiusa resta rivedibile.
+  - **Registro SL/TP:** `slHistory`/`tpHistory` sulla posizione; alla chiusura nel trade; trail a
+    gradini disegnato solo quando la posizione chiusa è selezionata sul grafico.
+  - **CI GitHub rosso v2.2.96:** `test_scarto_broker_calendario.py` stubba MetaTrader5/pywinauto
+    prima dell’import (test di calendario puro).
+  - **Backtest XAUUSD (misura, campione piccolo):** M1 HISTDATA 2024-2025 709.663 candele ha dato
+    2 setup/4 trade; M5/M15/H1 MT5 recenti 3-4 trade. Risultati salvati in temp, non conclusivi.
+
+- 2026-11-22 - OpenCode - **v2.2.97: capitale replay aggiornato alla chiusura; etichette BOS leggibili; BE2 da rottura opzionale.**
+  **Replay capitale.** Chiusura posizione in replay: il trade finiva nel journal ma il capitale
+  tornava alla base perché `closeMode` era forzato a backtest/backtest_propfirm e l'equity non
+  veniva spinta. Misurato con `replay_capitale_dopo_chiusura.test.mjs` (rosso: 10100->10000).
+  Cura: closeMode=currentMode() per historical, equity push/adjust anche in liveReplayActive.
+  Verde 1/1, replay 14/14.
+
+  **BOS grafica/BE2.** Etichette operazioni distanziate con sfondo per evitare sovrapposizioni.
+  Nuova opzione `bePerc2Da` (apertura/rottura, default apertura) per calcolare la % BE2 dalla
+  rottura confermata. `bos_be2_da_rottura.test.mjs` 2/2.
+
 - 2026-11-22 - OpenCode - **v2.2.96: replay con prop firm sul conto storico, e TP della seconda entrata BOS solo alla conferma.**
   Due difetti segnalati dal proprietario, misurati prima di toccare il codice.
 

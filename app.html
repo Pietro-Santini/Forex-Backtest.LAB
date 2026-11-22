@@ -14286,7 +14286,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.96';
+const FBL_VERSIONE='2.2.98';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21566,12 +21566,15 @@ function bosPipsBreakEven(p, quale) {
 // ===============================================================
 // LIVELLO BREAK-EVEN per posizione (1=pullback, 2=conferma)
 // ===============================================================
-function bosLivelloBreakEven(p, dir, entry, tp, quale) {
+function bosLivelloBreakEven(p, dir, entry, tp, quale, livelloRottura) {
   const perc = Number(p && p[quale === 1 ? 'bePerc1' : 'bePerc2']);
   if (!(Number.isFinite(perc) && perc > 0)) return null;
   if (!(Number.isFinite(entry) && Number.isFinite(tp))) return null;
   const quota = Math.min(100, perc) / 100;
-  return entry + (tp - entry) * quota;
+  // BE2: l'utente può scegliere se la % verso il TP parte dall'apertura o dalla rottura confermata.
+  const daRottura = quale === 2 && p && p.bePerc2Da === 'rottura' && Number.isFinite(livelloRottura);
+  const base = daRottura ? livelloRottura : entry;
+  return base + (tp - base) * quota;
 }
 
 function bosLivelloBreakEvenLegacy(p, dir, entry, tp) {
@@ -21608,7 +21611,7 @@ function bosApriConfermaDopo(st, p, fatta, r, i) {
       rr, tpStimato: true,
       lotto: scalettaLotto(entry, sl, 0.5),
       beLivello1: null, be1Fatto: false,
-      beLivello2: bosLivelloBreakEven(p, fatta.dir, entry, tp, 2), be2Fatto: false,
+      beLivello2: bosLivelloBreakEven(p, fatta.dir, entry, tp, 2, fatta.target), be2Fatto: false,
       slIniziale: sl,
       livelloRotturaConfermata: fatta.target
     });
@@ -21632,7 +21635,7 @@ function bosImpostaTpConferma(st, p, fatta) {
       o.tp = o.dir === 1 ? o.entry + dist * rr : o.entry - dist * rr;
       o.rr = rr;
       o.tpStimato = false;
-      o.beLivello2 = bosLivelloBreakEven(p, o.dir, o.entry, o.tp, 2);
+      o.beLivello2 = bosLivelloBreakEven(p, o.dir, o.entry, o.tp, 2, o.livelloRotturaConfermata);
     }
   } catch (e) {}
 }
@@ -21835,7 +21838,8 @@ const BOS_SETTINGS = [
   {type: 'select', key: 'stopPullback', label: 'Stop del pullback', options: ['candela', 'struttura', 'liquidita'], nota: 'Confronto su dati MT5 (seconda 1:2, senza costi): su M1, M5 e M15 lo stop su liquidità ha il drawdown più basso in tutti i casi: 2–5% contro 3–15% con le altre due opzioni. Il rendimento è più basso di quello sullo stop alla candela in alcuni casi. Il rapporto rendimento/drawdown è migliore con la liquidità in 4 casi su 6 (M1 insieme e dopo, M5 insieme, M15 dopo). Sul M5 dopo e sull’M15 insieme rende di più la candela. Tengo lo stop su liquidità come default.'},
   {type: 'num', key: 'bePerc1', label: 'BE1 pullback: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
   {type: 'num', key: 'bePips1', label: 'BE1 pullback: pip oltre l\'entrata', min: 0, max: 1000, step: 1},
-  {type: 'num', key: 'bePerc2', label: 'BE2 seconda: % verso la rottura confermata (0 = spento)', min: 0, max: 100, step: 1},
+  {type: 'num', key: 'bePerc2', label: 'BE2 seconda: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
+  {type: 'select', key: 'bePerc2Da', label: 'BE2 seconda: % calcolata da', options: ['apertura', 'rottura']},
   {type: 'num', key: 'bePips2', label: 'BE2 seconda: pip oltre la rottura confermata', min: 0, max: 1000, step: 1},
   {type: 'num', key: 'liqLookback', label: 'Stop su liquidità: barre precedenti', min: 2, max: 200, step: 1},
   {type: 'num', key: 'liqBufferPips', label: 'Stop su liquidità: cuscinetto (pip)', min: 0, max: 1000, step: 1},
@@ -21873,7 +21877,7 @@ const VALID_BOS_PULLBACK_DEF = {
     rrTarget: 2, rrTarget2: 2, modoSeconda: 'insieme', stopPullback: 'liquidita', tolleranzaRitest: 0,
     mostraScaletta: true, posScaletta: 'Alto a destra',
     bePerc1: 0, bePips1: 10,
-    bePerc2: 0, bePips2: 10,
+    bePerc2: 0, bePerc2Da: 'apertura', bePips2: 10,
     liqLookback: 10, liqBufferPips: 2
   }),
 
@@ -22153,19 +22157,41 @@ const VALID_BOS_PULLBACK_DEF = {
       const xT = xAbs(o.barra) + 4;
       const lotti = (o.lotto && Number.isFinite(o.lotto.lotti))
         ? ('  ·  ' + (typeof fmtLottiQuick === 'function' ? fmtLottiQuick(o.lotto.lotti) : o.lotto.lotti) + ' lotti') : '';
-      txt(breve + '  ' + fmtPrice(o.entry) + lotti + esito, xT, y(o.entry) - 7, cEntry, 'left', 'bold 10px system-ui');
-      txt('SL ' + fmtPrice(o.sl) + (o.be1Fatto || o.be2Fatto ? ' (a pareggio)' : ''), xT, y(o.sl) + 7, '#f23645', 'left', '10px system-ui');
-      if (haTp) txt('TP ' + fmtPrice(o.tp), xT, y(o.tp) - 7, '#089981', 'left', '10px system-ui');
-      else txt('TP: alla conferma della rottura', xT, y(o.entry) + 7, '#8b96a5', 'left', '10px system-ui');
-      // BE1
+      // Etichette leggibili: raccolte, ordinate per y e distanziate perché non si coprano.
+      const etichette = [];
+      etichette.push({y: y(o.entry), testo: breve + '  ' + fmtPrice(o.entry) + lotti + esito, colore: cEntry, bold: true});
+      etichette.push({y: y(o.sl), testo: 'SL ' + fmtPrice(o.sl) + (o.be1Fatto || o.be2Fatto ? ' (a pareggio)' : ''), colore: '#f23645', bold: false});
+      if (haTp) etichette.push({y: y(o.tp), testo: 'TP ' + fmtPrice(o.tp), colore: '#089981', bold: false});
+      else etichette.push({y: y(o.entry) + 14, testo: 'TP: alla conferma della rottura', colore: '#8b96a5', bold: false});
       if (!o.be1Fatto && Number.isFinite(o.beLivello1)) {
         seg(o.barra, fin, o.beLivello1, '#DDA94F', 1, true);
-        txt('BE1 a ' + fmtPrice(o.beLivello1), xT, y(o.beLivello1) - 7, '#DDA94F', 'left', '10px system-ui');
+        etichette.push({y: y(o.beLivello1), testo: 'BE1 a ' + fmtPrice(o.beLivello1), colore: '#DDA94F', bold: false});
       }
-      // BE2
       if (!o.be2Fatto && Number.isFinite(o.beLivello2)) {
         seg(o.barra, fin, o.beLivello2, '#DDA94F', 1, true);
-        txt('BE2 a ' + fmtPrice(o.beLivello2), xT, y(o.beLivello2) - 7, '#DDA94F', 'left', '10px system-ui');
+        etichette.push({y: y(o.beLivello2), testo: 'BE2 a ' + fmtPrice(o.beLivello2), colore: '#DDA94F', bold: false});
+      }
+      etichette.sort((a, b) => a.y - b.y);
+      for (let k = 1; k < etichette.length; k++) {
+        if (etichette[k].y - etichette[k - 1].y < 13) etichette[k].y = etichette[k - 1].y + 13;
+      }
+      for (let k = etichette.length - 2; k >= 0; k--) {
+        if (etichette[k + 1].y - etichette[k].y < 13) etichette[k].y = etichette[k + 1].y - 13;
+      }
+      for (const e of etichette) {
+        const font = scaledFont((e.bold ? 'bold 10px' : '10px') + ' system-ui');
+        ctx.save();
+        ctx.font = font;
+        const w = ctx.measureText(e.testo).width;
+        if (typeof ctx.fill === 'function') {
+          ctx.fillStyle = 'rgba(16,20,28,0.72)';
+          ctx.beginPath(); ctx.rect(xT - 2, e.y - 7, w + 5, 13); ctx.fill();
+        }
+        ctx.fillStyle = e.colore;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(e.testo, xT, e.y);
+        ctx.restore();
       }
     }
 
@@ -25156,13 +25182,10 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
    // trade rivelati SI vedono (a differenza del grafico normale, dove sono state tolte: lì
    // restano solo frecce + linea tratteggiata). Non dipende dall'interruttore "posizioni chiuse":
    // è la ricostruzione richiesta, sempre attiva in replay.
-   // RICHIESTO ESPLICITAMENTE (nuova regola, "è come se fossimo in tempo reale ma nel passato"):
-   // le orizzontali dei livelli (entry, TP, SL, Stop Profit) si vedono SOLO mentre il trade è
-   // ANCORA APERTO a quel punto del replay. Appena il replay supera la candela di chiusura
-   // (closeReached) il trade è concluso e TUTTE le sue orizzontali spariscono: restano solo le
-   // frecce e la linea tratteggiata apertura->chiusura. Prima restavano visibili anche dopo la
-   // chiusura (una lista infinita di righe con lo storico lungo).
-   if(liveReplayActive&&!closeReached){
+   // IN REPLAY le orizzontali dei livelli restano visibili anche dopo la chiusura, così la
+   // posizione resta "impressa" sul grafico e si può rivedere (entry/TP/SL/Stop Profit).
+   // Richiesto dal proprietario (22 novembre 2026): prima sparivano al closeReached.
+   if(liveReplayActive && openIdx<=idx){
      const liv=[];
      if(t.entry!=null)liv.push([t.entry,'Entry',t.side==='BUY'?TRADE_ARROW_BLUE:TRADE_ARROW_RED]);
      if(t.tp!=null&&Number.isFinite(t.tp))liv.push([t.tp,'TP','#2fbf71']);
@@ -25250,6 +25273,36 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
    if(closeOnScreen){
      const priceWentDown=t.exit<t.entry;
      drawTradeArrow(ctx,xClose,yClose,priceWentDown?'up':'down',priceWentDown?TRADE_ARROW_BLUE:TRADE_ARROW_RED);
+   }
+   // Storico spostamenti SL/TP: visibile solo quando la posizione chiusa è selezionata.
+   if(isSelected){
+     const drawTrail = (hist, color, label) => {
+       if(!Array.isArray(hist) || hist.length < 2) return;
+       ctx.save();
+       ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.setLineDash([4,3]); ctx.globalAlpha = 0.9;
+       for(let hi2=0; hi2<hist.length; hi2++){
+         const h = hist[hi2];
+         const hNext = hist[hi2+1];
+         const t1 = (h.idx!=null) ? h.idx : rowIndexContainingTime(h.t);
+         const t2 = hNext ? ((hNext.idx!=null)?hNext.idx:rowIndexContainingTime(hNext.t)) : closeIdx;
+         if(t1==null || t2==null) continue;
+         const x1=xForIndex(Math.max(t1,openIdx)), x2=xForIndex(Math.min(t2,closeIdx));
+         const yy=y(h.p);
+         if(x2>=pad.l && x1<=w-pad.r){
+           ctx.beginPath(); ctx.moveTo(Math.max(x1,pad.l),yy); ctx.lineTo(Math.min(x2,w-pad.r),yy); ctx.stroke();
+           if(hi2>0){ ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(x1,y(hist[hi2-1].p)); ctx.lineTo(x1,yy); ctx.stroke(); ctx.setLineDash([4,3]); }
+         }
+       }
+       const last=hist[hist.length-1];
+       if(last && Number.isFinite(last.p)){
+         const lx=xForIndex(closeIdx)+4, ly=y(last.p);
+         ctx.setLineDash([]); ctx.fillStyle=color; ctx.font=scaledFont('bold 9px Arial'); ctx.textAlign='left'; ctx.textBaseline='middle';
+         ctx.fillText(label+' '+fmtPrice(last.p), lx, ly);
+       }
+       ctx.restore();
+     };
+     drawTrail(t.slHistory, isStopProfitLevel(t)?'#2fbf71':'#e05252', isStopProfitLevel(t)?'Stop Profit':'SL');
+     drawTrail(t.tpHistory, '#2fbf71', 'TP');
    }
    // Dati statistici (Esito + R:R) SOLO al passaggio del mouse sopra la linea/frecce di
    // QUESTO trade — richiesto esplicitamente: non richiede selezione, e sparisce da solo non
@@ -31945,7 +31998,11 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // in fetchMt5Positions() che ormai non le adotta più in Storico), ma qui forziamo comunque il
  // ramo Live corretto come ultima rete di sicurezza, qualunque fosse la sessione a schermo nel
  // momento esatto della chiusura.
- const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):(pos.historical?(isPropFirmMode?'backtest_propfirm':'backtest'):currentMode());
+ // Posizione nata in replay (historical): appartiene alla sessione corrente, non alla modalità
+ // backtest fissa - altrimenti in replay live finisce nel bucket `backtest` e statsTrades(),
+ // che legge la modalità corrente, non la conta: il capitale non si aggiorna (misurato nel banco
+ // replay_capitale_dopo_chiusura.test.mjs).
+ const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):(pos.historical?currentMode():currentMode());
  // RICHIESTO ESPLICITAMENTE: ogni operazione reale MT5 porta con sé il NUMERO DI CONTO su cui è
  // stata eseguita (Journal separato per conto, statistiche mai sommate fra conti MT5 diversi).
  const acctTag=pos.mt5Ticket!=null?(pos.mt5Login?{mt5Login:String(pos.mt5Login),mt5Server:pos.mt5Server||''}:currentMt5AccountTag()):{};
@@ -31998,7 +32055,9 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // l'equity curve è un'unica timeline continua del conto, non una per asset. Con il profitto vero
  // di MT5 la curva segue quello (il saldo del broker va solo nella colonna "Conto" del Journal,
  // la curva resta sul capitale dell\'app per non avere salti).
- if(!pos.historical) equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
+ // Le posizioni del replay (historical) aggiornano l'equity della sessione corrente: la
+ // curva/drawdown devono seguire il conto storico, come già fa closedPL()/statsTrades().
+ if(!pos.historical || liveReplayActive) equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
  // Il Trade Journal e' cambiato: va anche nel cloud, che e' l'unica copia che segue l'account
  // attraverso aggiornamenti, reinstallazioni e cambi di indirizzo d'ingresso.
  fblCloudSalvaTradeJournal();
@@ -32033,8 +32092,9 @@ async function deleteTrade(i){
 function removeTradeRecordAt(i){
  const t=trades[i]; if(!t)return;
  const mode=t.mode||'backtest';
- if(!t.historical){
-   const modeTrades=trades.filter(x=>(x.mode||'backtest')===mode && !x.historical);
+ // Storico in replay: il trade era contato nell'equity della sessione corrente.
+ if(!t.historical || liveReplayActive){
+   const modeTrades=trades.filter(x=>{ const xm=x.mode||'backtest'; return xm===mode && (!x.historical || liveReplayActive); });
    const filteredIdx=modeTrades.indexOf(t);
    const baseline=statsBaselineByMode[mode]||0;
    if(filteredIdx<baseline && filteredIdx>=0){
