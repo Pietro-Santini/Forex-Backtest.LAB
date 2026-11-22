@@ -4080,6 +4080,7 @@ def _scarto_da_un_simbolo_quiunque(now) -> Optional[int]:
     scarto = _scarto_fresco_da_epoch(freshest, now)
     if scarto is not None:
         _last_good_server_offset = scarto
+        _last_good_server_offset_server = _nome_server_broker()
     return scarto
 
 
@@ -4142,14 +4143,20 @@ def _server_time_offset_seconds(tick) -> int:
         scarto = _scarto_da_un_simbolo_quiunque(now)
         if scarto is not None:
             return scarto
-    # Nessun tick fresco e nessuna memoria: lo scarto viene dal calendario dell'ora legale (21 novembre 2026).
-    return _scarto_broker_da_calendario(now)
+    # Nessun tick fresco e nessuna memoria: prova il valore salvato su disco per questo server.
+    ricordato = _scarto_ricordato()
+    if ricordato is not None:
+        _last_good_server_offset = ricordato
+        return ricordato
+    # Nessuna misura disponibile: 0 è più sicuro di un calendario assunto (FTMO/EET non vale per tutti i broker).
+    return 0
 
 
 # Ultimo scarto server/UTC misurato con un tick FRESCO (vedi _estimate_server_offset_seconds):
 # tenuto in memoria per poterlo riusare quando, in quel momento, nessun simbolo sta quotando
 # (mercato chiuso, weekend) e quindi nessun tick è abbastanza recente per rimisurarlo.
 _last_good_server_offset = None
+_last_good_server_offset_server = None
 # Ultimo scan del Market Watch fatto da _server_time_offset_seconds (epoch time): serve a non
 # rifare 60 chiamate IPC a ogni giro di polling (2s) quando il mercato è chiuso.
 _ultima_ricerca_scarto = 0.0
@@ -4170,8 +4177,9 @@ def _estimate_server_offset_seconds(preferred_symbols=()):
     intere) e accettato solo se il tick è davvero fresco (residuo <= 5 min: un tick vecchio ha un
     residuo casuale); altrimenti si riusa l'ultimo scarto buono già misurato in questo processo,
     e solo in mancanza di tutto si ricade sul valore arrotondato "best effort" (mai un'eccezione)."""
-    global _last_good_server_offset
+    global _last_good_server_offset, _last_good_server_offset_server
     now = time.time()
+    server = _nome_server_broker()
     names = []
     for sym in preferred_symbols:
         if sym and sym not in names:
@@ -4197,15 +4205,21 @@ def _estimate_server_offset_seconds(preferred_symbols=()):
         if t and (freshest is None or t > freshest):
             freshest = t
     if freshest is None:
-        return _last_good_server_offset if _last_good_server_offset is not None else 0
+        if _last_good_server_offset is not None and (_last_good_server_offset_server == server or not server):
+            return _last_good_server_offset
+        ricordato = _scarto_ricordato()
+        return ricordato if ricordato is not None else 0
     raw = freshest - now
     rounded = int(round(raw / 1800.0)) * 1800
     if abs(raw - rounded) <= 300:
         _last_good_server_offset = rounded
+        _last_good_server_offset_server = server
+        _ricorda_scarto(rounded)
         return rounded
-    if _last_good_server_offset is not None:
+    if _last_good_server_offset is not None and (_last_good_server_offset_server == server or not server):
         return _last_good_server_offset
-    return rounded
+    ricordato = _scarto_ricordato()
+    return ricordato if ricordato is not None else rounded
 
 
 @app.get("/positions")
@@ -4554,17 +4568,18 @@ def _offset_server_cache(preferred_symbols=()):
     (arrotondata alla mezz'ora, solo da tick freschi), ripetuta al massimo ogni 10 minuti: /positions
     la chiede ogni 2 secondi e rileggere 60 tick a ogni giro sarebbe uno spreco."""
     global _offset_misurato_il
-    if _last_good_server_offset is not None and time.time() - _offset_misurato_il < 600:
+    server = _nome_server_broker()
+    if _last_good_server_offset is not None and (_last_good_server_offset_server == server or not server) and time.time() - _offset_misurato_il < 600:
         return _last_good_server_offset
     valore = _estimate_server_offset_seconds(preferred_symbols)
     _offset_misurato_il = time.time()
-    # Una misura vera si ricorda; se non si e' potuto misurare niente (mercato chiuso, nessun
-    # tick fresco) si rilegge l'ultima buona invece di spacciare 0 per il fuso del broker.
     if valore:
         _ricorda_scarto(valore)
         return valore
     ricordato = _scarto_ricordato()
     if ricordato is not None:
+        _last_good_server_offset = ricordato
+        _last_good_server_offset_server = server
         return ricordato
     return valore
 

@@ -198,6 +198,7 @@ def _ensure_initialized():
 # nessun simbolo sta quotando (chiusura quotidiana, notte, fine settimana) e quindi non c'e'
 # niente di fresco da cui rimisurarlo. Stessa riserva che bridge.py tiene per sé.
 _last_good_server_offset = None
+_last_good_server_offset_server = None
 # Pausa (secondi) fra due scandagliamenti del mercato alla ricerca di un tick fresco: /history,
 # /ticks e il loop del WebSocket chiamano lo scarto spesso, e leggere i tick di 60 simboli via
 # IPC non deve girare a ogni chiamata — con lo scarto già misurato in memoria non serve nemmeno.
@@ -450,25 +451,18 @@ def _scarto_broker_da_calendario(epoch_s: float) -> int:
     return 10800 if inizio <= epoch_s < fine else 7200
 
 def _server_time_offset_seconds(tick) -> int:
-    """Stessa identica logica di _server_time_offset_seconds() in bridge.py (vedi lì il commento
-    completo): l'orologio del server del broker spesso non è UTC. Calcoliamo lo scarto da un tick
-    REALE e lo sottraiamo da ogni timestamp prima di restituirlo (copre quindi anche l'ora
-    legale).
-
-    AGGIORNATO 18/10/2026: il tick viene usato SOLO se fresco (vedi _scarto_fresco_da_epoch) — un
-    tick lasciato indietro da ore non misura niente e non deve mai essere scambiato per lo scarto
-    orario (il difetto misurato: 8h20 di eta' spostavano ogni candela di 8h20). Gerarchia:
-    1) il tick appena letto, se fresco; 2) l'ultima misura di questo processo; 3) un tick fresco
-    di un altro simbolo in quotazione (al piu' una volta al minuto); 4) 0 — cioe' l'orologio del
-    server, esattamente come lo mostra il terminale MT5, e in ogni caso lo STESSO valore per
-    candele e per marker: mai un numero indovinato dall'eta' di un vecchio tick."""
-    global _last_good_server_offset, _ultima_ricerca_scarto
+    """Stessa identica logica di _server_time_offset_seconds() in bridge.py: misura lo scarto server/UTC
+    da un tick fresco; riusa cache in memoria/su disco solo per lo stesso server; mai calendario FTMO hardcoded."""
+    global _last_good_server_offset, _last_good_server_offset_server, _ultima_ricerca_scarto
     now = time.time()
+    server = _nome_server_broker()
     scarto = _scarto_fresco_da_epoch(getattr(tick, "time", None), now)
     if scarto is not None:
         _last_good_server_offset = scarto
+        _last_good_server_offset_server = server
+        _ricorda_scarto(scarto)
         return scarto
-    if _last_good_server_offset is not None:
+    if _last_good_server_offset is not None and (_last_good_server_offset_server == server or not server):
         _ricorda_scarto(_last_good_server_offset)
         return _last_good_server_offset
     if now - _ultima_ricerca_scarto > 60.0:
@@ -476,14 +470,17 @@ def _server_time_offset_seconds(tick) -> int:
         scarto = _scarto_da_un_simbolo_quiunque(now)
         if scarto is not None:
             _last_good_server_offset = scarto
+            _last_good_server_offset_server = server
             _ricorda_scarto(scarto)
             return scarto
-    # 5) L'ultima misura buona salvata su disco. E' l'unica che sopravvive a un riavvio, ed e'
-    #    esattamente il caso del fine settimana: nessun tick fresco da nessuna parte, per due
-    #    giorni di fila. Senza questo si tornava a 0, cioe' a due ore di errore sul grafico.
-    # 5) Nessun tick fresco e nessuna misura viva: lo scarto viene dal calendario dell'ora legale
-    #    (vedi _scarto_broker_da_calendario). Mai piu' un valore salvato di un'altra stagione.
-    return _scarto_broker_da_calendario(now)
+    # 5) Ultima misura buona salvata su disco per QUESTO server (sopravvive al riavvio/fine settimana).
+    ricordato = _scarto_ricordato()
+    if ricordato is not None:
+        _last_good_server_offset = ricordato
+        _last_good_server_offset_server = server
+        return ricordato
+    # 6) Nessuna misura disponibile: 0 e' piu' sicuro di un calendario assunto (FTMO/EET non vale per tutti i broker).
+    return 0
 
 
 def _resolve_symbol(symbol: str) -> Optional[str]:

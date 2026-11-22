@@ -1,5 +1,16 @@
 # BUG
 
+## 2026-11-23 - Offset broker/UTC errato su broker non EET (Upcomers) e Prop Firm esercitazione
+- **Sintomo**: posizioni graficate ~1h sfasate su Upcomers; conti esercitazione/non-prop valutati da Prop Firm; caselle drawdown nascoste in attesa dati MT5.
+- **Causa**: fallback calendario hardcoded EET/FTMO in bridge/mt5_feed_server; cache offset globale non per server; checkPropFirmRules senza gate esercitazione; guardia dati-MT5-non-pronti ritornava senza aggiornare display.
+- **Cura**: offset misurato da tick, cache per server, fallback disco/0 prudente; gate `esercitazione` in checkPropFirmRules; pannelli DD mostrano "in attesa dati MT5 reali".
+- **Prova**: `test_scarto_ricordato.py`, `test_scarto_server.py` aggiornati.
+
+## 2026-11-23 - Valid BOS Pullback: scadenza a tempo dopo valid pullback
+- **Sintomo**: dopo valid pullback, setup/operazioni scadevano a tempo ("target scaduto").
+- **Cura**: nessuna scadenza a tempo dopo valid pullback (stage>=2) e sulle operazioni; `maxWait` resta solo per formazione setup. Aggiunto toggle BE su TP1 (SL seconda a BE entrata, solo favorevole).
+- **Prova**: `sintassi_app.mjs`, `scaletta_setup.test.mjs`.
+
 ## 2026-11-22 - Prop Firm: falsa violazione / capitale simulato quando dati MT5 non pronti
 - **Sintomo**: conto MT5 reale mostrava capitale simulato e "dati MT5 non arrivano"; violazione giornaliera/chiusura falsa; popup casuali.
 - **Causa probabile**: con `pfWantsRealMt5` ma dati reali non pronti, il motore valutava sul simulato; stato chiuso bloccava la riattivazione dati reali.

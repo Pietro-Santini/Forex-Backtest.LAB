@@ -1,5 +1,10 @@
 # DIARIO
 
+## 2026-11-23
+- Fix offset broker/UTC: rimosso fallback EET/FTMO hardcoded in bridge/mt5_feed_server; cache per server; test offset aggiornati.
+- Prop Firm: gate `esercitazione` (niente violazione automatica su conti esercitazione); pannelli drawdown mostrano attesa dati MT5 reali.
+- Valid BOS Pullback: nessuna scadenza a tempo dopo valid pullback; `maxWait` solo formazione; aggiunto toggle BE su TP1 (SL seconda a BE entrata, solo favorevole). Auto-open demo MT5 ancora da fare.
+
 ## 2026-11-22
 - 7-bis: hotfix localhost origin, rate limit 600/min, esenzione `/dati/ascolta`; deploy server.
 - Migrazione dominio: app 2.2.100 pubblicata, server/Caddy aggiornati; agente PC avviato via tunnel.
