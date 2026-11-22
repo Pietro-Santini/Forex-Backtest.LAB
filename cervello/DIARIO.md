@@ -1,3 +1,13 @@
+- 2026-11-22 - OpenCode - **v2.2.99: batch scaletta 8.4.12/8.4.10/8.4.11/8.4.9 + 8.2.6.**
+  - **8.4.12 posizioni/trade altri conti:** con conto noto passano solo record reali con `mt5Login` uguale; conto ignoto conservativo; timbratura login in `fetchMt5Positions`. Banchi: `posizioni_null_login_conto.test.mjs`, aggiornati `misura_isolamento_conto_mt5.test.mjs` e `posizioni_grafico_madre_duplicata.misura.test.mjs`.
+  - **8.4.10 popup violazione solo madre:** `fblFinestraMadre()` guard in `showPropFirmViolationOverlay`; no popup ripetuto su restore/finalize se conto chiuso.
+  - **8.4.11 Ricomincia nelle duplicate:** sync Prop Firm runtime/capitale in `fblApplicaStatoTrading` a parità conto/modalità.
+  - **8.4.9 Vera/Trial:** scelta per conto MT5 (vera/trial, stesse regole, trial simulata), chiave selettiva `mt5:login|server`, nessuna domanda dopo violazione, nessun popup per conti non idonei, stato Attivo/Fallito/Passato in lista conti. Aggiornato `prop_conto_chiuso_scelta.test.mjs`.
+  - **8.2.6 magazzino broker:** cache candele con chiave `asset::tf::broker`, fallback legacy.
+  - **8.2.7:** già corretto in 8a98156c (chiave M1 canonica) — confermato.
+  - **Collaudo locale:** Falliti 0 (dopo 2 rilanci per allineare banchi al comportamento 8.4.9/8.4.12).
+
+
 - 2026-11-22 - OpenCode - **v2.2.98: replay posizioni chiuse visibili, storico spostamenti SL/TP, fix collaudo GitHub ponte.**
   - **Replay chiuse sul grafico:** in replay le orizzontali Entry/TP/SL/Stop Profit restano anche
     dopo `closeReached`, così la posizione chiusa resta rivedibile.

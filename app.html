@@ -2680,19 +2680,18 @@ function pubblicaPreferenze(){
   </div>
 </div>
 
-<!-- RICHIESTO ESPLICITAMENTE: Prop Firm su conto MT5 REALE — se al collegamento il conto ha già
-     superato il drawdown, non si può usare come Challenge reale: si sceglie qui cosa fare. -->
+<!-- 8.4.9: scelta Prop Firm per conto MT5: Vera o Trial. La scelta si ricorda per conto. -->
 <div id="pfMt5IneligibleModalOverlay" class="fbModalOverlay" style="display:none;z-index:10001">
   <div class="fbModalBox" style="max-width:460px">
-    <div class="fbModalHeader"><h3>🛡️ Conto MT5 non idoneo alla Prop Firm</h3></div>
+    <div class="fbModalHeader"><h3>🛡️ Modalità Prop Firm sul conto</h3></div>
     <div class="liveLoginBody">
       <div id="pfMt5IneligibleText" style="font-size:13px;color:#c8d2dd;line-height:1.55"></div>
-      <div style="font-size:12px;color:#8b96a5;line-height:1.5">Scegli come continuare:</div>
+      <div style="font-size:12px;color:#8b96a5;line-height:1.5">Scegli una sola volta per questo conto:</div>
       <div style="display:flex;flex-direction:column;gap:8px">
-        <button id="pfMt5NewAccountBtn" type="button" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">🔁 Collega un altro account MT5</button>
-        <button id="pfMt5UseSimulatedBtn" type="button" class="toolBtn">🧪 Usa il conto Prop Firm simulato (le operazioni restano quelle vere di MT5)</button>
-        <button id="pfMt5ExitPropFirmBtn" type="button" class="toolBtn">↩️ Esci dalla Modalità Prop Firm</button>
+        <button id="pfMt5VeraBtn" type="button" class="toolBtn" style="background:#277d5a;border-color:#3ea6ff">✅ Prop Firm reale (vera)</button>
+        <button id="pfMt5TrialBtn" type="button" class="toolBtn">🧪 Firm demo trial</button>
       </div>
+      <div style="font-size:11px;color:#8b96a5;line-height:1.4">Trial: stesse regole della reale, ma simulata. La scelta viene ricordata per questo conto.</div>
     </div>
   </div>
 </div>
@@ -6346,11 +6345,9 @@ function tradeBelongsToCurrentView(t){
      // su che conto sono, non disegno niente di reale - meglio un grafico spoglio per un
      // istante che lo storico di un altro conto addosso al proprio.
      //
-     // `t.mt5Login==null` RESTA, ed e' voluto: e' la cura del 10 novembre. Il ponte interroga
-     // un conto solo, quindi un'operazione reale senza login e' di quello collegato; toglierla
-     // rifarebbe comparire il «sul conto giusto non vedo le mie operazioni».
+     // CONTO NOTO: solo operazioni del conto attivo. mt5Login==null non passa più (8.4.12).
      if(!login)return false;
-     return t.mt5Ticket!=null&&(t.mt5Login==null||String(t.mt5Login)===login);
+     return t.mt5Ticket!=null && t.mt5Login!=null && String(t.mt5Login)===login;
    }
    return t.mt5Ticket==null;
  }
@@ -6650,7 +6647,7 @@ async function proceedEnablePropFirm(targetIsLive){
       let realCap=null;
       try{
         if(targetIsLive && pfWantsRealMt5() && mt5Connected && mt5AccountInfo && mt5AccountHistory
-           && pfMt5Choices()[String(mt5AccountInfo.login)]!=='simulated'){
+           && pfMt5ChoiceGet(mt5AccountInfo.login, mt5AccountInfo.server)!=='trial'){
           const m=pfMt5Metrics(); if(Number.isFinite(m.initial)&&m.initial>0)realCap=m.initial;
         }
       }catch(e){}
@@ -6749,7 +6746,7 @@ function finalizePropFirmModeChange(){
   // STEP 3: se si sta entrando in una Challenge già chiusa per violazione (restoreModeSnapshot
   // l'ha appena ripristinata), la schermata drammatica ricompare subito — un conto chiuso resta
   // chiuso finché non si preme "Ricomincia da capo", non basta cambiare sessione e tornare.
-  if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
+  if(isPropFirmMode && propFirmViolation && !(function(){try{return fblPropContoStato().stato==='chiuso';}catch(e){return false;}})()) showPropFirmViolationOverlay();
   else hidePropFirmViolationOverlay();
   // Il pannellino drawdown e le caselle dei guadagni si nascondono subito uscendo dalla Prop Firm
   // (checkPropFirmRules, che li aggiorna, non gira più finché isPropFirmMode è false).
@@ -6988,9 +6985,8 @@ function fblPropContoAttivo(id){ return !fblPropContoStato(id).archiviato; }
 // ricominciare. Due strade dichiarate valgono piu' di una schermata rossa.
 function fblPropContoDaChiedere(id){
  const st=fblPropContoStato(id);
- // Si chiede solo a chi ha perso E non ha ancora risposto: ripetere la stessa domanda a chi ha
- // gia' scelto e' un modo di non ascoltare.
- return st.stato==='chiuso' && !st.scelta;
+ // 8.4.9: dopo violazione nessuna domanda/popup; lo stato si vede nella lista conti.
+ return false;
 }
 // ATTIVAZIONE PROP FIRM ALLA CONNESSIONE MT5: una sola volta per conto.
 function fblPropAttivazioneDaChiedere(id){
@@ -7444,7 +7440,9 @@ function triggerPropFirmViolation(rule,details){
 // STEP 3: schermata drammatica a tutta pagina, con i valori esatti al millisecondo registrati
 // da triggerPropFirmViolation(). L'overlay copre l'intera viewport (position:fixed, z-index
 // altissimo), quindi blocca già da solo qualunque interazione col resto della pagina.
+function fblFinestraMadre(){ try{ return typeof PIP_SLOT==='undefined' || PIP_SLOT===0; }catch(e){ return true; } }
 function showPropFirmViolationOverlay(){
+  if(!fblFinestraMadre()) return; // 8.4.10: il popup violazione esce solo sulla madre
   const v=propFirmViolation; if(!v)return;
   try{ fblPropAggiornaSceltaConto(); }catch(e){}
   const ruleLabel=v.rule==='daily'?'Daily Drawdown (5%)':'Maximum Drawdown (10%)';
@@ -14286,7 +14284,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.98';
+const FBL_VERSIONE='2.2.99';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -15834,13 +15832,12 @@ function positionBelongsToCurrentView(pos){
     // (test replay_mai_ordini_veri), che qui non viene toccato.
     try{
       if(mt5Connected){
-        // CONTRO IGNOTO NON VUOL DIRE «PASSANO TUTTE» (11 novembre 2026): se qui il conto non e'
-        // noto, passano solo le posizioni SENZA conto addosso (quelle che il ponte adotta e che
-        // non sappiamo attribuire). Una posizione con un login esplicito e' di un conto che non
-        // possiamo confrontare col nostro: mostrarla vorrebbe dire mischiare i conti, che e'
-        // esattamente cio' che il proprietario ha vietato.
+        // CONTO NOTO: solo posizioni reali del conto attivo. Conto ignoto: solo senza login.
+        // 8.4.12: mt5Login==null non passa più quando il conto è noto (ponte condiviso/multi-conto).
         const login=currentMt5AccountTag().mt5Login;
-        return pos.mt5Ticket!=null&&String(pos.mt5Login||'')===(login||'');
+        if(pos.mt5Ticket==null) return false;
+        if(login) return pos.mt5Login!=null && String(pos.mt5Login)===String(login);
+        return pos.mt5Login==null;
       }
     }catch(e){}
     return false;   // senza MT5 collegato: solo cio' che e' nato nel replay, come prima
@@ -15848,14 +15845,12 @@ function positionBelongsToCurrentView(pos){
  let conn=false; try{ conn=!!mt5Connected; }catch(e){}
  if(conn){
     const login=currentMt5AccountTag().mt5Login;
-    // CORRETTO (10 novembre 2026), la stessa cura di tradeBelongsToCurrentView: una posizione
-    // reale senza mt5Login e' del conto collegato (il ponte ne interroga uno solo), quindi non
-    // va nascosta. Quella di un altro conto ha il login e non combacia: resta fuori.
-    // STRETTO L'11 novembre 2026: via il `!login||`. Con il conto NON noto (finestra duplicata
-    // appena nata) quel pezzo lasciava passare qualunque posizione di qualunque conto - misurato
-    // dal banco posizioni_un_solo_conto: 2 righe invece di 1. Ora, se il conto non si sa, passano
-    // solo le posizioni che non dichiarano nessun conto: meglio nessuna che quelle di un altro.
-    return pos.mt5Ticket!=null&&(pos.mt5Login==null||String(pos.mt5Login)===login);
+    // 8.4.12: con conto noto, SOLO posizioni reali con mt5Login uguale. Prima passava anche
+    // mt5Login==null, ma con ponte condiviso/multi-conto poteva mostrare posizioni di altri conti.
+    // Con conto ignoto: solo posizioni senza login esplicito.
+    if(pos.mt5Ticket==null) return false;
+    if(login) return pos.mt5Login!=null && String(pos.mt5Login)===String(login);
+    return pos.mt5Login==null;
   }
   // SENZA MT5 COLLEGATO IL FILTRO PER CONTO VALE LO STESSO (10 novembre 2026).
   // Segnalato dal proprietario: «ho aperto due posizioni, una per ogni account, in due account
@@ -15867,8 +15862,12 @@ function positionBelongsToCurrentView(pos){
   // «Grafico scollegato» non vuol dire «conti mischiati»: se il conto attivo e' noto, una
   // posizione col login di un altro conto resta fuori, in qualunque stato della connessione.
   const loginNoto=currentMt5AccountTag().mt5Login;
-  if(loginNoto)return pos.mt5Ticket!=null&&(pos.mt5Login==null||String(pos.mt5Login)===loginNoto);
-  // CONTRO IGNOTO: solo le posizioni senza conto addosso (vedi il commento nel ramo collegato).
+  if(loginNoto){
+    // 8.4.12: con conto noto, non passano più posizioni reali senza login.
+    if(pos.mt5Ticket!=null) return pos.mt5Login!=null && String(pos.mt5Login)===String(loginNoto);
+    return pos.mt5Login==null;
+  }
+  // CONTO IGNOTO: solo le posizioni senza conto addosso (vedi il commento nel ramo collegato).
   // NIENTE `mt5Ticket!=null` QUI (11 novembre 2026, misurato): aggiungerlo nascondeva anche le
   // posizioni SIMULATE (mt5Ticket:null) quando MT5 non e' collegato - cioe' il backtest in Live,
   // che non c'entra nulla coi conti. Segnalato dai banchi mercato_chiuso, mt5_evidenzia_posizione,
@@ -15876,6 +15875,7 @@ function positionBelongsToCurrentView(pos){
   // scartare chi dichiara un ALTRO conto, non chi non e' di MT5.
   return pos.mt5Login==null;
 }
+
 // Comodo: entrambe le condizioni insieme, usato da tutto il disegno del grafico.
 function drawableOnCurrentChart(item){
  return belongsToCurrentAsset(item)&&positionBelongsToCurrentView(item);
@@ -50763,6 +50763,15 @@ async function fetchMt5Positions(){
      ?{mt5Login:String(result.conto.login),mt5Server:String(result.conto.server||'')}
      :currentMt5AccountTag();
    if(result.ok && Array.isArray(result.data)){
+     // 8.4.12: targhetta conto sulle posizioni/ordini reali senza login.
+     try{
+       const _loginT=(tagFoto&&tagFoto.mt5Login!=null)?String(tagFoto.mt5Login):null;
+       if(_loginT){
+         positions.forEach(p=>{ if(p&&p.mt5Ticket!=null&&!p.mt5Login) p.mt5Login=_loginT; });
+         pendingOrders.forEach(p=>{ if(p&&p.mt5Ticket!=null&&!p.mt5Login) p.mt5Login=_loginT; });
+         trades.forEach(t=>{ if(t&&t.mt5Ticket!=null&&!t.mt5Login) t.mt5Login=_loginT; });
+       }
+     }catch(e){}
      // Contatto riuscito col bridge/terminale in questo preciso istante: vedi il blocco
      // RECUPERO STORICO MT5 più sopra — serve come punto di partenza per /history_deals alla
      // prossima connessione, quindi va aggiornato ad ogni giro di polling riuscito, non solo
@@ -51589,11 +51598,33 @@ var pfRealMt5Login;             // numero di conto MT5 su cui si sta applicando 
 var pfPendingDecisionLogin;     // conto non idoneo in attesa di una scelta: regole sospese finché non si decide
 const PF_MT5_CHOICE_KEY='forex_lab_pf_mt5_choice_by_login';
 const PF_USE_REAL_MT5_PREF_KEY='forex_lab_pf_use_real_mt5';
+function fblPropMt5Key(login,server){
+  const l=String(login==null?'':login).trim();
+  const s=String(server==null?'':server).trim().toLowerCase();
+  return l ? ('mt5:'+l+'|'+s) : '';
+}
 function pfWantsRealMt5(){ try{ return localStorage.getItem(PF_USE_REAL_MT5_PREF_KEY)!=='0'; }catch(e){ return true; } }
 function pfMt5Choices(){ try{ return JSON.parse(localStorage.getItem(PF_MT5_CHOICE_KEY)||'{}')||{}; }catch(e){ return {}; } }
-function setPfMt5Choice(login,val){
- const m=pfMt5Choices(); if(val==null)delete m[login]; else m[login]=val;
- try{ localStorage.setItem(PF_MT5_CHOICE_KEY,JSON.stringify(m)); }catch(e){}
+function pfMt5ChoiceGet(login,server){
+  const m=pfMt5Choices();
+  const k=fblPropMt5Key(login,server);
+  let v = k && Object.prototype.hasOwnProperty.call(m,k) ? m[k] : undefined;
+  if(v===undefined){
+    // compat vecchia chiave solo-login
+    const lk=String(login==null?'':login).trim();
+    if(lk && Object.prototype.hasOwnProperty.call(m,lk)) v=m[lk];
+  }
+  if(v==='simulated') v='trial';
+  return (v==='vera'||v==='trial') ? v : null;
+}
+function setPfMt5Choice(login,val,server){
+  const m=pfMt5Choices();
+  const k=fblPropMt5Key(login,server);
+  const lk=String(login==null?'':login).trim();
+  const v=(val==='simulated')?'trial':val;
+  if(k){ if(v==null) delete m[k]; else m[k]=v; }
+  if(lk && lk!==k) delete m[lk]; // pulizia vecchia chiave
+  try{ localStorage.setItem(PF_MT5_CHOICE_KEY,JSON.stringify(m)); }catch(e){}
 }
 // IN REPLAY VALE IL CONTO STORICO, MAI IL CONTO MT5 (22 novembre 2026).
 //
@@ -51639,54 +51670,83 @@ function maybeEvaluatePfMt5Account(){
  try{
    if(!(isPropFirmMode&&liveModeActive&&mt5Connected&&mt5AccountInfo&&mt5AccountHistory))return;
    const login=String(mt5AccountInfo.login);
-   const wantsSimulated=!pfWantsRealMt5()||pfMt5Choices()[login]==='simulated';
-   if(wantsSimulated){
+   const server=String(mt5AccountInfo.server||'');
+   const scelta = pfMt5ChoiceGet(login,server);
+   const stConto = (typeof fblPropContoStato==='function') ? fblPropContoStato() : null;
+   // 8.4.9: dopo violazione/fallimento nessuna domanda/popup automatico.
+   if(stConto && stConto.stato==='chiuso'){
      pfPendingDecisionLogin=null;
      if(pfRealMt5Login!=null){ pfRealMt5Login=null; scheduleSave(); }
      return;
    }
-   if(String(pfRealMt5Login)===login)return; // già attiva su questo conto
+
    const m=pfMt5Metrics();
    const maxBreached=m.totalLoss>m.maxDrawdownLimit, dailyBreached=m.dailyLoss>m.dailyLossLimit;
-   if(!maxBreached&&!dailyBreached){
+   const idoneoReale=!maxBreached && !dailyBreached;
+
+   if(scelta==='trial' || !pfWantsRealMt5()){
+     pfPendingDecisionLogin=null;
+     if(pfRealMt5Login!=null){ pfRealMt5Login=null; scheduleSave(); }
+     return;
+   }
+
+   if(scelta==='vera'){
+     if(!idoneoReale){
+       // 8.4.9: conti non idonei alla vera -> nessun popup/messaggio. Non applica vera.
+       pfPendingDecisionLogin=null;
+       if(pfRealMt5Login!=null){ pfRealMt5Login=null; scheduleSave(); }
+       return;
+     }
+     if(String(pfRealMt5Login)===login) return;
      pfRealMt5Login=login; pfPendingDecisionLogin=null;
      propFirmChallengeInitialCapital=m.initial;
      propFirmViolation=null; propFirmSbloccataShown=false; propFirmDailyBaselineDate=null; propFirmDailyStartBalance=null;
      hidePropFirmViolationOverlay(); hidePfMt5IneligibleModal();
-     $('status').textContent=`🛡️ Prop Firm applicata al conto MT5 reale ${login}: capitale iniziale ${mt5Money(m.initial)} — drawdown giornaliero ${Math.max(0,m.dailyLossPct).toFixed(2)}% / 5%, massimo ${Math.max(0,m.totalLossPct).toFixed(2)}% / 10%.`;
+     $('status').textContent=`🛡️ Prop Firm reale (vera) sul conto MT5 ${login}: capitale iniziale ${mt5Money(m.initial)} — drawdown giornaliero ${Math.max(0,m.dailyLossPct).toFixed(2)}% / 5%, massimo ${Math.max(0,m.totalLossPct).toFixed(2)}% / 10%.`;
      scheduleSave(); update(); draw();
      return;
    }
-   if(pfPendingDecisionLogin===login && $('pfMt5IneligibleModalOverlay')?.style.display==='flex')return; // già a schermo
+
+   // Nessuna scelta ancora: chiedi solo se idoneo. Se non idoneo, nessun popup (8.4.9):
+   // lo si considera trial in modo silenzioso (stesse regole, simulato), così non blocca.
+   if(!idoneoReale){
+     setPfMt5Choice(login,'trial',server);
+     pfPendingDecisionLogin=null;
+     if(pfRealMt5Login!=null){ pfRealMt5Login=null; scheduleSave(); }
+     return;
+   }
+   if(pfPendingDecisionLogin===login && $('pfMt5IneligibleModalOverlay')?.style.display==='flex') return;
    pfPendingDecisionLogin=login;
    if(pfRealMt5Login!=null){ pfRealMt5Login=null; scheduleSave(); }
-   const why=maxBreached
-     ?`ha già superato il <b>Max Drawdown del 10%</b>: capitale iniziale ${mt5Money(m.initial)}, equity attuale ${mt5Money(m.eq)} (perdita ${m.totalLossPct.toFixed(2)}%).`
-     :`ha già superato oggi il <b>Daily Drawdown del 5%</b>: saldo di inizio giornata ${mt5Money(m.dailyStart)}, equity attuale ${mt5Money(m.eq)} (perdita ${m.dailyLossPct.toFixed(2)}%).`;
-   showPfMt5IneligibleModal(`Il conto MT5 <b>${login}</b>${mt5AccountInfo.server?(' ('+escapeHtmlLite(String(mt5AccountInfo.server))+')'):''} ${why}<br><br>Su questo account la Modalità Prop Firm reale non si può usare.`);
+   showPfMt5IneligibleModal(`Conto MT5 <b>${escapeHtmlLite(login)}</b>${server?(' ('+escapeHtmlLite(server)+')'):''}.<br><br>Scegli se usare <b>Prop Firm reale (vera)</b> oppure <b>Firm demo trial</b>. Stesse regole, trial simulata. La scelta viene ricordata per questo conto.`);
  }catch(e){ console.warn('Controllo idoneità Prop Firm sul conto MT5 non riuscito:',e); }
 }
-$('pfMt5NewAccountBtn')?.addEventListener('click',()=>{
- hidePfMt5IneligibleModal();
- if(typeof openMt5LoginModal==='function')openMt5LoginModal();
- $('status').textContent='Collega un altro account MT5: la Prop Firm reale verrà controllata sul nuovo conto appena connesso.';
+function fblPfScegliTrial(login,server){
+  if(login) setPfMt5Choice(login,'trial',server);
+  pfPendingDecisionLogin=null; pfRealMt5Login=null;
+  hidePfMt5IneligibleModal();
+  propFirmViolation=null; propFirmSbloccataShown=false;
+  pendingPropFirmKey=currentMode(); pendingPropFirmIsFreshActivation=false;
+  openPropFirmCapitalModal();
+  $('status').textContent='Prop Firm demo trial: scegli il capitale della Challenge. Stesse regole della reale, simulata sul conto MT5 collegato.';
+  scheduleSave(); update();
+}
+function fblPfScegliVera(login,server){
+  if(login) setPfMt5Choice(login,'vera',server);
+  pfPendingDecisionLogin=null;
+  hidePfMt5IneligibleModal();
+  maybeEvaluatePfMt5Account();
+  scheduleSave(); update();
+}
+$('pfMt5VeraBtn')?.addEventListener('click',()=>{
+  const login=pfPendingDecisionLogin||(mt5AccountInfo&&String(mt5AccountInfo.login));
+  const server=mt5AccountInfo&&mt5AccountInfo.server;
+  fblPfScegliVera(login,server);
 });
-$('pfMt5UseSimulatedBtn')?.addEventListener('click',()=>{
- const login=pfPendingDecisionLogin||(mt5AccountInfo&&String(mt5AccountInfo.login));
- if(login)setPfMt5Choice(login,'simulated');
- pfPendingDecisionLogin=null; pfRealMt5Login=null;
- hidePfMt5IneligibleModal();
- // Serve un capitale di Challenge simulato: stesso modulo di "Ricomincia da capo" (annullabile
- // senza uscire dalla Prop Firm). La violazione eventualmente ereditata dal conto reale si toglie.
- propFirmViolation=null; propFirmSbloccataShown=false;
- pendingPropFirmKey=currentMode(); pendingPropFirmIsFreshActivation=false;
- openPropFirmCapitalModal();
- $('status').textContent='Conto Prop Firm simulato: scegli il capitale della Challenge. Le operazioni restano quelle vere del conto MT5 collegato.';
- scheduleSave(); update();
-});
-$('pfMt5ExitPropFirmBtn')?.addEventListener('click',()=>{
- hidePfMt5IneligibleModal(); pfPendingDecisionLogin=null;
- disablePropFirmMode();
+$('pfMt5TrialBtn')?.addEventListener('click',()=>{
+  const login=pfPendingDecisionLogin||(mt5AccountInfo&&String(mt5AccountInfo.login));
+  const server=mt5AccountInfo&&mt5AccountInfo.server;
+  fblPfScegliTrial(login,server);
 });
 (function initPfUseRealMt5Toggle(){
  const cb=$('pfUseRealMt5Toggle'); if(!cb)return;
@@ -56581,7 +56641,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  try{
     timeframe=fblTfMt5Per(currentTF);
     // Lavoro 2: se c'e' un magazzino locale per questo asset+timeframe, si chiede solo la coda.
-    try{ __candCache=await fblCandeleCacheLeggi(asset,timeframe); }catch(e){ __candCache=null; }
+    try{ __candCache=await fblCandeleCacheLeggi(asset,timeframe,(mt5ContoAttivo&&mt5ContoAttivo.server)||''); }catch(e){ __candCache=null; }
     const __tfSec = ({M1:60,M2:120,M3:180,M4:240,M5:300,M6:360,M10:600,M12:720,M15:900,M20:1200,M30:1800,H1:3600,H2:7200,H3:10800,H4:14400,H6:21600,H8:28800,H12:43200,D1:86400}[timeframe])||60;
     if(__candCache && __candCache.ultimoTs){
       const mancanti=Math.ceil((Date.now()/1000 - __candCache.ultimoTs)/__tfSec)+200;
@@ -56853,7 +56913,7 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // commento completo in __loadLiveHistoryFromCapitalImpl): una risincronizzazione periodica con
  // una risposta più corta del solito non deve mai far sparire lo storico per un istante.
  // Lavoro 2: salva il magazzino locale (non a ogni tick: qui, al caricamento dell'asset).
- try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimalsOfNumber==='function'?decimalsOfNumber(mt5Rows[mt5Rows.length-1].close):null), __timbroScarto); }catch(e){}
+ try{ await fblCandeleCacheScrivi(asset, timeframe, mt5Rows, (typeof decimalsOfNumber==='function'?decimalsOfNumber(mt5Rows[mt5Rows.length-1].close):null), __timbroScarto, (mt5ContoAttivo&&mt5ContoAttivo.server)||''); }catch(e){}
  const prevLiveFile=csvLibrary[0];
  // Si fonde con lo storico precedente SOLO se e' dello stesso timeframe: cambiando da 5m a 1m le
  // candele da 5m non devono restare in mezzo a quelle da 1m (sintomo: 1m mostrato con candele da 5m).
@@ -57691,8 +57751,8 @@ function fblCandleCacheAssetDi(key){
   const s=String(key||'');
   if(s.indexOf(FBL_CANDLE_CACHE)!==0) return '';
   const resto=s.slice(FBL_CANDLE_CACHE.length);
-  const i=resto.lastIndexOf('::');
-  return i<0?resto:resto.slice(0,i);
+  const parti=resto.split('::');
+  return parti[0]||resto;
 }
 // Va tenuta? Solo se l'asset e' in watchlist o e' quello appena caricato (`assetOra`).
 function fblCandleCacheDaTenere(key,assetOra){
@@ -57714,10 +57774,21 @@ function fblTfCanonico(tf){
   if(!s) return s;
   return /^[0-9]+$/.test(s) ? ('M'+s) : s;   // 1 -> M1, '15' -> M15, 'M1' resta M1, 'H1' resta H1
 }
-function fblCandleCacheKey(asset,tf){ return FBL_CANDLE_CACHE+String(asset)+'::'+fblTfCanonico(tf); }
-async function fblCandeleCacheLeggi(asset,tf){
+function fblCandleCacheBroker(broker){
+  const b=String(broker==null?'':broker).trim().toLowerCase();
+  if(b) return b;
+  try{ const s=(typeof mt5ContoAttivo!=='undefined'&&mt5ContoAttivo&&mt5ContoAttivo.server)?String(mt5ContoAttivo.server):''; return s.trim().toLowerCase()||'default'; }catch(e){ return 'default'; }
+}
+function fblCandleCacheKey(asset,tf,broker){ return FBL_CANDLE_CACHE+String(asset)+'::'+fblTfCanonico(tf)+'::'+fblCandleCacheBroker(broker); }
+function fblCandleCacheKeyLegacy(asset,tf){ return FBL_CANDLE_CACHE+String(asset)+'::'+fblTfCanonico(tf); }
+async function fblCandeleCacheLeggi(asset,tf,broker){
   try{
-    const v=await idbGet(fblCandleCacheKey(asset,tf));
+    let v=await idbGet(fblCandleCacheKey(asset,tf,broker));
+    if(!v||!v.tempo||!v.tempo.length){
+      // compat: vecchia chiave senza broker (8.2.6)
+      const legacy=await idbGet(fblCandleCacheKeyLegacy(asset,tf));
+      if(legacy&&legacy.tempo&&legacy.tempo.length) v=legacy;
+    }
     if(!v||!v.tempo||!v.tempo.length) return null;
     // ricostruisce le righe nel formato atteso dal grafico.
     // CORRETTO (10 novembre 2026): la data era scritta SENZA fuso ("2026-11-09 21:49:00") e
@@ -57741,7 +57812,7 @@ async function fblCandeleCacheLeggi(asset,tf){
     return {rows, digits:v.digits, ultimoTs:v.ultimoTs, salvatoAt:v.salvatoAt, scarto};
   }catch(e){ return null; }
 }
-async function fblCandeleCacheScrivi(asset,tf,rows,digits,scarto){
+async function fblCandeleCacheScrivi(asset,tf,rows,digits,scarto,broker){
   if(!asset||!rows||!rows.length) return false;
   try{
     const tempo=new Float64Array(rows.length), open=new Float64Array(rows.length),
@@ -57754,7 +57825,7 @@ async function fblCandeleCacheScrivi(asset,tf,rows,digits,scarto){
       close[i]=Number(r.close); volume[i]=Number(r.volume)||0;
     }
     const ultimoTs=tempo[tempo.length-1];
-    const key=fblCandleCacheKey(asset,tf);
+    const key=fblCandleCacheKey(asset,tf,broker);
     // `scarto` = lo scarto orario che il ponte dichiara di aver applicato a questi tempi
     // (utc_offset_seconds_applied). Senza, una serie vecchia non si puo' riallineare: il campo
     // mancante resta null, MAI 0 (zero e' uno scarto vero, non un'assenza).
@@ -57825,7 +57896,7 @@ async function fblSerieM1Assicura(){
   try{
    let righe=null;
    try{
-     const letto=await fblCandeleCacheLeggi(asset,1);
+     const letto=await fblCandeleCacheLeggi(asset,1,(mt5ContoAttivo&&mt5ContoAttivo.server)||'');
      if(letto&&letto.rows&&letto.rows.length)righe=letto.rows;
    }catch(e){ righe=null; }
    if((!righe||righe.length<200)&&liveModeActive&&mt5ActiveSymbol&&!liveReplayActive){
@@ -58835,8 +58906,9 @@ function fblApplicaStatoTrading(msg){
     // disco, quindi la perdita diventava definitiva. Nel banco: da 3 disegni a 0.
     // E' anche una violazione laterale della regola «i disegni restano liberi per finestra»:
     // viaggiavano lo stesso, nascosti dentro un altro campo.
-    // Si prende tutto il resto della sessione e si tengono i PROPRI disegni e il PROPRIO
-    // capitale, che non devono dipendere da chi ha parlato per ultimo.
+    // Si prende tutto il resto della sessione e si tengono i PROPRI disegni. Il capitale
+    // invece segue la sessione quando e' lo stesso conto/modalita' (8.4.11: "Ricomincia" deve
+    // arrivare anche alle duplicate, altrimenti restano col vecchio capitale).
     if(msg.sessionByMode){
       const _mie=sessionByMode||{};
       const _nuove={};
@@ -58844,10 +58916,25 @@ function fblApplicaStatoTrading(msg){
         const _in=msg.sessionByMode[k]||{}, _mia=_mie[k]||{};
         const _fusa=Object.assign({}, _in);
         if('drawings' in _mia)_fusa.drawings=_mia.drawings; else delete _fusa.drawings;
-        if('capital' in _mia)_fusa.capital=_mia.capital;
+        if(!_stessoContoMt5 && ('capital' in _mia)) _fusa.capital=_mia.capital;
         _nuove[k]=_fusa;
       });
       sessionByMode=_nuove;
+      // 8.4.11: allinea runtime Prop Firm della sessione corrente (capitale/violazione/baseline)
+      // quando arriva da stesso conto/modalita'. Senza questo le duplicate tenevano il vecchio stato.
+      try{
+        const _mk=currentMode();
+        const _snap=sessionByMode&&sessionByMode[_mk];
+        if(_stessoContoMt5 && _snap && (_mk==='backtest_propfirm'||_mk==='live_propfirm')){
+          if(Number.isFinite(_snap.initialCapital)) propFirmChallengeInitialCapital=_snap.initialCapital;
+          propFirmViolation=_snap.violation||null;
+          propFirmDailyBaselineDate=_snap.dailyBaselineDate||null;
+          propFirmDailyStartBalance=Number.isFinite(_snap.dailyStartBalance)?_snap.dailyStartBalance:null;
+          propFirmChallengeCreatedAt=Number.isFinite(_snap.createdAt)?_snap.createdAt:propFirmChallengeCreatedAt;
+          if(_snap.capital!=null && $('capital')) $('capital').value=String(_snap.capital);
+          if(propFirmViolation) showPropFirmViolationOverlay(); else hidePropFirmViolationOverlay();
+        }
+      }catch(e){}
     }
     // LA LINEA DA CUI SI CONTA STA SOTTO LA GUARDIA (13 novembre 2026).
     // `statsBaselineByMode` dice da quale operazione in poi si contano capitale e statistiche.
@@ -62099,13 +62186,35 @@ async function refreshMt5AccountsUI(){
  }
  renderMt5AccountSelect();
 }
+function fblPropStatoEtichettaMt5(login,server){
+  try{
+    const id='mt5:'+String(login).trim()+'@'+String(server||'').trim();
+    const st=fblPropContoStato(id);
+    if(!st) return '';
+    if(st.stato==='chiuso') return ' · <span style="color:#ff6b6b">Fallito</span>';
+    if(st.stato==='finanziato') return ' · <span style="color:#4ade80">Passato</span>';
+    if(st.stato==='in_corso' && (st.propChiesto||st.modo||pfMt5ChoiceGet(login,server))) return ' · <span style="color:#93c5fd">Attivo</span>';
+  }catch(e){}
+  return '';
+}
+function fblPropStatoTestoMt5(login,server){
+  try{
+    const id='mt5:'+String(login).trim()+'@'+String(server||'').trim();
+    const st=fblPropContoStato(id);
+    if(!st) return '';
+    if(st.stato==='chiuso') return ' [Fallito]';
+    if(st.stato==='finanziato') return ' [Passato]';
+    if(st.stato==='in_corso' && (st.propChiesto||st.modo||pfMt5ChoiceGet(login,server))) return ' [Attivo]';
+  }catch(e){}
+  return '';
+}
 function renderMt5AccountSelect(){
  const sel=$('mt5AccountSelect');
  sel.innerHTML='';
  mt5SavedAccounts.forEach(acc=>{
    const opt=document.createElement('option');
    opt.value=mt5AccountKey(acc);
-   opt.textContent=`${acc.login} @ ${acc.server}`;
+   opt.textContent=`${acc.login} @ ${acc.server}${fblPropStatoTestoMt5(acc.login,acc.server)}`;
    sel.appendChild(opt);
  });
  const addOpt=document.createElement('option');
@@ -62158,7 +62267,7 @@ function mt5ScegliContoPopup(conti,opts={}){
       <div class="fbModalHeader"><h3>${escapeHtmlLite(opts.title||'🖥️ Su quale conto MT5 vuoi entrare?')}</h3></div>
       <div class="appConfirmBody">${escapeHtmlLite(opts.message||'Hai più conti MT5 salvati: scegli quello su cui collegarti.')}</div>
       <div style="display:flex;flex-direction:column;gap:8px;padding:0 16px 14px">
-        ${conti.map((acc,i)=>`<button type="button" class="toolBtn" data-conto="${i}" style="${stile}">🖥️ Conto <b>${escapeHtmlLite(String(acc.login))}</b> <span style="opacity:.7">· ${escapeHtmlLite(String(acc.server||''))}</span></button>`).join('')}
+        ${conti.map((acc,i)=>`<button type="button" class="toolBtn" data-conto="${i}" style="${stile}">🖥️ Conto <b>${escapeHtmlLite(String(acc.login))}</b> <span style="opacity:.7">· ${escapeHtmlLite(String(acc.server||''))}</span>${fblPropStatoEtichettaMt5(acc.login,acc.server)}</button>`).join('')}
         <button type="button" class="toolBtn" data-nuovo="1" style="${stile}">➕ Accedi a un nuovo conto</button>
       </div>
       <div class="liveLoginFooter">
@@ -65076,10 +65185,10 @@ var __initLocalStateSnapshot=null;
  scheduleSave();
  armDrawingsPersistence(); // da qui in poi ogni modifica ai disegni viene salvata da sola (vedi blocco dedicato)
  graficoCloudAvvia(); // disegni e indicatori condivisi con gli altri dispositivi dell'account
- // STEP 3: se la sessione ripristinata era già una Challenge chiusa per violazione, la
- // schermata drammatica ricompare subito al caricamento della pagina — non basta un refresh
- // per "sbloccarla" di nuovo.
- if(isPropFirmMode && propFirmViolation) showPropFirmViolationOverlay();
+  // 8.4.9: dopo violazione nessun popup ripetuto; lo stato resta visibile nella lista conti.
+  if(isPropFirmMode && propFirmViolation && fblFinestraMadre()){
+    try{ const st=fblPropContoStato(); if(!st||st.stato!=='chiuso') showPropFirmViolationOverlay(); }catch(e){}
+  }
  // Ultimissimo passo, a ripristino ormai completo (posizioni/sessione/grafico già al punto
  // dove ero rimasto): prima prova a far partire da sola l\'app desktop (bridge + MT5) se non è
  // già accesa, poi propone la riconnessione automatica a MT5 se serve — l'ordine conta: così il

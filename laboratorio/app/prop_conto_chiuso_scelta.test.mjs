@@ -1,19 +1,10 @@
-// CONTO PERSO: cosa vuoi farne? La domanda, e le due strade.
+// CONTO PERSO: stato visibile, nessuna domanda ripetuta (8.4.9).
 //
-// RICHIESTO dal proprietario: «per i conti chiusi con la prop firm facciamo in modo che venga
-// fuori un messaggio: vuoi continuare a utilizzare questo conto per fare pratica ma senza la
-// modalita' prop firm? Oppure vuoi eliminare questo conto e crearne uno nuovo? Se sceglie di
-// continuare ad esercitarsi senza la prop firm lo puo' fare tranquillamente. Se dice di
-// eliminarlo, prima elimina l'account lasciandolo comunque nella dashboard, poi l'utente puo'
-// eliminarlo anche dalla dashboard, definitivamente».
+// 8.4.9 (decisione proprietario): dopo la violazione non deve comparire più la domanda/popup
+// "cosa vuoi farne". Lo stato del conto (attivo/fallito/passato) va mostrato nella lista conti.
+// I conti non idonei non devono generare popup; le scelte già prese non si richiedono più.
 //
-// PERCHE' LA DOMANDA SERVE: un conto perso oggi resta li' muto, con la schermata di violazione e
-// nient'altro. L'utente non sa se quel conto e' ancora buono per esercitarsi (lo e'), ne' come
-// ricominciare. Due strade dichiarate valgono piu' di una schermata rossa.
-//
-// E LA CANCELLAZIONE E' IN DUE TEMPI DI PROPOSITO: prima si toglie di mezzo, poi - con calma e
-// con un gesto diverso - si cancella davvero. Un conto che sparisce al primo clic porta con se'
-// lo storico delle operazioni, e quello non si recupera.
+// La cancellazione resta in due tempi (archivio -> eliminazione definitiva) dove usata.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {apriApp} from './aiuti.mjs';
@@ -27,18 +18,18 @@ async function nellApp(codice){
   } finally { await browser.close(); }
 }
 
-test('un conto perso CHIEDE cosa farne, una volta sola', async () => {
+test('8.4.9: un conto perso NON chiede cosa farne (nessun popup ripetuto)', async () => {
   const r = await nellApp(`(function(){
     fblPropContoAzzera();
     fblPropContoStatoSalva('C1', {stato:'chiuso', motivo:'daily'});
     const prima = fblPropContoDaChiedere('C1');
     fblPropContoScegli('C1','pratica');
     const dopo = fblPropContoDaChiedere('C1');
-    return {prima, dopo};
+    return {prima, dopo, stato:fblPropContoStato('C1').stato};
   })()`);
-  assert.equal(r.prima, true, 'appena perso, la domanda si deve fare');
-  assert.equal(r.dopo, false,
-    'ma una volta risposto non si richiede piu\': ripetere la stessa domanda e\' un modo di non ascoltare');
+  assert.equal(r.prima, false, '8.4.9: dopo violazione nessuna domanda');
+  assert.equal(r.dopo, false, '8.4.9: nessuna domanda ripetuta');
+  assert.equal(r.stato, 'chiuso');
 });
 
 test('scelta PRATICA: il conto resta usabile, senza prop firm', async () => {
@@ -99,10 +90,7 @@ test('PROVA DI CONTROLLO: un conto IN CORSO non chiede niente e non si archivia'
   assert.equal(r.archiviato, false);
 });
 
-test('un conto archiviato non si confonde con uno perso e basta', async () => {
-  // Sono due situazioni diverse: «perso, e non ho ancora deciso» e «perso, e ho deciso di
-  // toglierlo». La dashboard le deve poter distinguere, se no mostrerebbe la stessa cosa a chi
-  // deve ancora scegliere e a chi ha gia' scelto.
+test('8.4.9: conto perso/archiviato non genera domanda, ma si distingue per stato/archivio', async () => {
   const r = await nellApp(`(function(){
     fblPropContoAzzera();
     fblPropContoStatoSalva('PERSO', {stato:'chiuso'});
@@ -115,12 +103,10 @@ test('un conto archiviato non si confonde con uno perso e basta', async () => {
       toltoArch:   !!fblPropContoStato('TOLTO').archiviato
     };
   })()`);
-  assert.deepEqual(r, {persoChiede:true, persoArch:false, toltoChiede:false, toltoArch:true});
+  assert.deepEqual(r, {persoChiede:false, persoArch:false, toltoChiede:false, toltoArch:true});
 });
 
-test('i due pulsanti esistono davvero e sono premibili', async () => {
-  // Un pezzo di logica che nessuno puo' premere non serve a niente. Qui si controlla che la
-  // schermata di violazione li mostri, e che premerli registri la scelta sul conto.
+test('8.4.9: dopo violazione la domanda "cosa farne" non compare', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate(`(function(){
@@ -133,13 +119,11 @@ test('i due pulsanti esistono davvero e sono premibili', async () => {
       showPropFirmViolationOverlay();
       const box = document.getElementById('pfSceltaConto');
       const visibile = !!(box && box.style.display !== 'none');
-      document.getElementById('pfSceltaPraticaBtn').click();
-      return {visibile, scelta: fblPropContoStato(id).scelta,
-              richiede: fblPropContoDaChiedere(id)};
+      return {visibile, richiede: fblPropContoDaChiedere(id), stato: fblPropContoStato(id).stato};
     })()`);
-    assert.equal(r.visibile, true, 'la domanda deve comparire nella schermata di violazione');
-    assert.equal(r.scelta, 'pratica', 'e premere il pulsante deve registrare la scelta');
-    assert.equal(r.richiede, false, 'dopo non si richiede piu\'');
+    assert.equal(r.visibile, false, '8.4.9: nessuna domanda nella schermata di violazione');
+    assert.equal(r.richiede, false);
+    assert.equal(r.stato, 'chiuso');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

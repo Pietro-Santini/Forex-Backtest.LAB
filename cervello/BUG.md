@@ -2,6 +2,45 @@
 
 Formato: **titolo** — stato — dove — causa vera — test che lo controlla.
 
+## RISOLTO — 22 novembre 2026, 8.4.12: posizioni/trade di altri conti visibili sul grafico
+
+> Scaletta 8.4.12: «Sul grafico si vedono le posizioni di tutti i conti... una posizione passa il filtro se ha il login del conto attivo **o se non ha login**».
+
+**CAUSA.** `positionBelongsToCurrentView`/`tradeBelongsToCurrentView` accettavano record reali con `mt5Login==null` anche a conto noto; con ponte condiviso/multi-conto questo poteva mostrare posizioni di altri conti.
+
+**CURA.** A conto noto passano solo record reali con `mt5Login` uguale al conto attivo. A conto ignoto resta il comportamento conservativo. In `fetchMt5Positions`, timbratura `mt5Login` su posizioni/ordini/trade reali senza login quando la foto dichiara il conto.
+
+**TEST.** `laboratorio/app/posizioni_null_login_conto.test.mjs`; aggiornati `misura_isolamento_conto_mt5.test.mjs` e `posizioni_grafico_madre_duplicata.misura.test.mjs` al nuovo contratto 8.4.12.
+
+## RISOLTO — 22 novembre 2026, 8.4.10: popup violazione solo sulla madre
+
+**CAUSA.** `showPropFirmViolationOverlay()` mostrava l'overlay in qualunque finestra con violazione (anche duplicate).
+
+**CURA.** Guardia `fblFinestraMadre()` (`PIP_SLOT===0`); l'overlay non si apre sulle duplicate. Su restore/finalize non viene ripetuto se il conto è già chiuso.
+
+**TEST.** `laboratorio/app/scaletta_8410_8411.test.mjs`.
+
+## RISOLTO — 22 novembre 2026, 8.4.11: “Ricomincia” non avvisava le duplicate
+
+**CAUSA.** `fblApplicaStatoTrading` manteneva capitale locale e non riallineava runtime Prop Firm (initialCapital/violazione/baseline/createdAt/campo capitale) al sync.
+
+**CURA.** A parità di conto/modalità, il capitale di sessione segue il sync; per sessione Prop Firm corrente riallineati runtime e UI.
+
+**TEST.** `laboratorio/app/scaletta_8410_8411.test.mjs`.
+
+## FATTO — 22 novembre 2026, 8.4.9: scelta Prop Firm Vera/Trial per conto
+
+**DECISIONE PROPRIETARIO.** Due opzioni: Prop Firm reale (vera) e Firm demo trial. Stesse regole, trial simulata. Scelta ricordata per conto; dopo violazione nessuna domanda/popup; conti non idonei nessun popup; lista conti mostra stato Attivo/Fallito/Passato.
+
+**CURA.** `fblPropMt5Key(login,server)` chiave selettiva; `pfMt5ChoiceGet/setPfMt5Choice` compatibili con vecchia chiave; modal vera/trial; `maybeEvaluatePfMt5Account` aggiornata; `fblPropContoDaChiedere` non richiede dopo violazione; etichette stato in select/popup conti MT5. Aggiornato `prop_conto_chiuso_scelta.test.mjs` alla regola 8.4.9.
+
+## RISOLTO — 22 novembre 2026, 8.2.6: magazzino candele non distingueva il broker
+
+**CAUSA.** Chiave cache `asset::tf` senza broker: due broker con stesso simbolo potevano sovrascriversi.
+
+**CURA.** Chiave `asset::tf::broker` (server MT5 normalizzato), fallback lettura legacy, `fblCandleCacheAssetDi` compatibile con nuovo formato.
+
+
 ## RISOLTO — 22 novembre 2026, replay: posizioni chiuse restano visibili sul grafico
 
 > «quando chiudo le posizioni in modalità replay le posizioni non rimangono impresse a grafico,

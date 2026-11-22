@@ -93,12 +93,10 @@ test('madre in Live con MT5: il Trade Journal mostra le 3, il grafico NON le pas
     assert.equal(r.liveNoMt5, 0,
       'in Live anche SENZA MT5 le operazioni mode=backtest NON passano (filtro modo, riga 6049): ' + JSON.stringify(r));
     assert.equal(r.liveMt5_reale, 1, 'la reale del conto giusto passa: ' + JSON.stringify(r));
-    // CORRETTO (10 novembre 2026): prima ci si aspettava 1 perche' la cura non c'era e la
-    // madre buttava via la reale senza login (era il «sul conto non vedo le operazioni»).
-    // Ora un reale senza mt5Login appartiene al conto collegato (il ponte ne interroga uno
-    // solo): passano 2 su 3, e resta fuori solo quella di un altro conto.
-    assert.equal(r.liveMt5_senzaLogin, 2,
-      'la reale senza login passa: e\' del conto collegato: ' + JSON.stringify(r));
+    // 8.4.12: con conto noto, il reale senza mt5Login NON passa (evita bleed tra conti in ponte condiviso).
+    // La targhetta va scritta quando la posizione arriva dal ponte.
+    assert.equal(r.liveMt5_senzaLogin, 1,
+      '8.4.12: reale senza login non passa con conto noto: ' + JSON.stringify(r));
     assert.equal(r.liveMt5_altroConto, 0, 'quella di un altro conto non passa: ' + JSON.stringify(r));
     assert.deepEqual(errori, [], 'nessun errore di pagina');
   } finally { await browser.close(); }

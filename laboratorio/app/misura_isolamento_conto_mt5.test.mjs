@@ -145,9 +145,10 @@ test('MISURA 3 — posizione reale senza mt5Login, col conto collegato', async (
     assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');
     assert.equal(r.conLogin, true);
     assert.equal(r.altroLogin, false, 'la posizione di un altro conto deve restare nascosta');
-    assert.equal(r.senzaLogin, true,
-      'una posizione reale SENZA conto (adottata quando ancora non si sapeva) deve vedersi, ' +
-      'altrimenti sul conto giusto non compaiono le operazioni');
+    // 8.4.12: con conto noto, una posizione reale senza mt5Login non si attribuisce (ponte condiviso).
+    // La targhetta viene scritta in fetchMt5Positions; qui misuriamo il filtro.
+    assert.equal(r.senzaLogin, false,
+      '8.4.12: con conto noto, una posizione reale senza mt5Login non passa (evita bleed tra conti)');
   } finally { await browser.close(); }
 });
 
@@ -169,8 +170,9 @@ test('MISURA 4 — trade chiuso senza mt5Login, col conto collegato', async () =
     assert.equal(r.conLogin, true);
     assert.equal(r.altro, false, 'il trade di un altro conto deve restare nascosto');
     assert.equal(r.simulato, false, 'collegati a MT5 le simulate Capital.com non si vedono');
-    assert.equal(r.senzaLogin, true,
-      'un trade reale senza conto deve vedersi (era il difetto segnalato sui pendenti)');
+    // 8.4.12: con conto noto, trade reale senza mt5Login non si attribuisce.
+    assert.equal(r.senzaLogin, false,
+      '8.4.12: con conto noto, un trade reale senza mt5Login non passa (evita bleed tra conti)');
   } finally { await browser.close(); }
 });
 
