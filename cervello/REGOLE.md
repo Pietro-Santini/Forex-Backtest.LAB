@@ -23,6 +23,7 @@ Valgono per ogni agente, ogni sessione, ogni automatismo. Le cambia solo il prop
   i due file si pubblicano insieme.
 - Prima di dire che una versione è online, controllare `CACHE_NAME` su `origin/main`.
 - Niente `git push --force`, niente riscrittura della storia.
+- **Ogni rilascio va applicato anche sul server Oracle e su Caddy.** Dopo push verde e release GitHub verde: sul server `cd /srv/fbl/progetto && git pull && docker compose -f server_oracle/docker-compose.yml up -d --build`; se cambiano Caddy o script di dominio rieseguire `FBL_DOMINIO=forexbacktestlab.duckdns.org bash server_oracle/prepara_dominio.sh`. Il PC/app in uso e i dispositivi mobili li aggiorna solo il proprietario; il server va allineato a ogni release.
 
 ## MAI AGGIORNARE L'APPLICAZIONE IN USO — scritta il 19 novembre 2026, dal proprietario
 

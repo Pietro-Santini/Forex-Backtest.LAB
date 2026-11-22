@@ -109,3 +109,21 @@ def test_ordini_con_segreto_valido_e_origine_app_passano(server, monkeypatch):
     # nessun PC registrato -> 503 è la risposta normale del percorso, non 401/403
     r = cli.get("/pc/8000/health", headers={**PUBBLICO, "x-fbl-chiave": chiave})
     assert r.status_code == 503, r.text
+
+
+def test_ordini_origine_localhost_ammessa_in_transizione(server, monkeypatch):
+    _, cli, _ = server
+    chiave = _registra(cli, monkeypatch)
+    h = {"x-forwarded-for": "203.0.113.7", "host": "forexbacktestlab.duckdns.org",
+         "origin": "https://localhost", "x-fbl-chiave": chiave}
+    r = cli.get("/pc/8000/health", headers=h)
+    assert r.status_code == 503, r.text
+
+
+def test_dati_ascolta_non_bloccata_da_7bis(server, monkeypatch):
+    _, cli, _ = server
+    # WS sync dati: non è rotta ordini, non deve prendere 403 segreto_mancante da 7-bis.
+    h = {"x-forwarded-for": "203.0.113.7", "host": "forexbacktestlab.duckdns.org",
+         "origin": "https://localhost"}
+    r = cli.get("/pc/8000/dati/ascolta?token=tok", headers=h)
+    assert r.text != '{"detail":"Segreto mancante o non valido."}', r.text

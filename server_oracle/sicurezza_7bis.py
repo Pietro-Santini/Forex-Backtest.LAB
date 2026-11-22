@@ -14,13 +14,18 @@ from typing import Optional
 
 ORIGINI_APP = {
     "https://pietro-santini.github.io",
+    "https://localhost",
+    "http://localhost",
+    "https://127.0.0.1",
+    "http://127.0.0.1",
 }
 
 PORTE_ORDINI = {8000}
 
 # Rate limit semplice in memoria (per-IP, finestra 60s). Sufficiente come primo argine.
+# 600/min: il polling ordini/grafico/conto dell'app genera molte richieste legittime.
 _RATE_FINESTRA_S = 60
-_RATE_MAX_RICHIESTE = 120
+_RATE_MAX_RICHIESTE = 600
 _RATE_BUCKET = {}  # ip -> [timestamp, ...]
 
 
@@ -87,6 +92,9 @@ def porta_da_path(path: str) -> Optional[int]:
 def e_rotta_ordini(request) -> bool:
     path = str(getattr(getattr(request, "url", None), "path", ""))
     if path == "/pc" or path == "/pc/":
+        return False
+    # Sync dati (Firebase token) non è un'operazione ordini: non va bloccata da 7-bis.
+    if path.endswith("/dati/ascolta"):
         return False
     porta = porta_da_path(path)
     return porta in PORTE_ORDINI
