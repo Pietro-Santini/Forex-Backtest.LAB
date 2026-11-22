@@ -112,14 +112,15 @@ sudo tee /etc/caddy/Caddyfile >/dev/null <<FINE
 }
 
 https://$DOMINIO {
-	# Documenti (token Firebase) e inoltro PC (chiave + 7-bis sugli ordini) stanno sul ponte 8000.
-	@ponte path /dati /dati/* /pc /pc/* /agente /agente/*
+	# Documenti (token Firebase), registrazione chiave, inoltro PC e tunnel agente sul ponte 8000.
+	@ponte path /dati /dati/* /pc /pc/* /agente /agente/* /register
 	handle @ponte {
 		reverse_proxy 127.0.0.1:$PORTA_DATI
 	}
-	# Ponte segnali Telegram.
+	# Ponte segnali Telegram (stesso servizio, path pubblica /segnali/* -> / sul ponte 8769).
 	@segnali path /segnali /segnali/*
 	handle @segnali {
+		uri strip_prefix /segnali
 		reverse_proxy 127.0.0.1:$PORTA_SEGNALI
 	}
 	handle {

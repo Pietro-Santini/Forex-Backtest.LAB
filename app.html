@@ -14284,7 +14284,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.99';
+const FBL_VERSIONE='2.2.100';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -47932,13 +47932,45 @@ const FBL_SYNC_WATCHLIST_KEY='fbl_sync_watchlist';
 const FBL_SYNC_RICERCHE_KEY='fbl_sync_ricerche';
 function fblServer(){ try{ return (localStorage.getItem(FBL_SERVER_KEY)||'').trim(); }catch(e){ return ''; } }
 function fblServerChiave(){ try{ return (localStorage.getItem(FBL_SERVER_CHIAVE_KEY)||'').trim(); }catch(e){ return ''; } }
+function fblServerHost(){
+ const dove=fblServer();
+ if(/^https?:\/\//i.test(dove)){ try{ return new URL(dove).hostname.toLowerCase(); }catch(e){ return dove.toLowerCase(); } }
+ return dove.replace(/:\d+$/,'').toLowerCase();
+}
+function fblServerUsaPercorsi(){
+ // Dominio/Caddy: una sola origine https, servizi distinti per percorso (/dati, /pc/8000, /pc/8001, /segnali).
+ // Nomi .ts.net e github.io restano sulla vecchia forma https://nome:porta (compatibilità transizione).
+ const h=fblServerHost();
+ if(!h) return false;
+ if(h==='127.0.0.1'||h==='localhost'||h==='[::1]') return false;
+ if(h.endsWith('.ts.net')) return false;
+ if(h.endsWith('.github.io')) return false;
+ if(/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return false;
+ return h.indexOf('.')!==-1;
+}
 function fblServerUrl(porta){
  // Un indirizzo GIA' COMPLETO (con http:// o https://) si usa com'e'. Serve da quando il cloud
  // nostro puo' stare sul computer stesso: li' si parla in chiaro con 127.0.0.1, e forzare
  // https su un indirizzo locale non porta a niente. Un NOME secco resta trattato come prima:
  // https e la porta chiesta, che e' come si arriva al server da fuori.
  const dove=fblServer();
- if(/^https?:\/\//i.test(dove))return dove.replace(/\/+$/,'');
+ if(/^https?:\/\//i.test(dove)){
+  const base=dove.replace(/\/+$/,'');
+  if(fblServerUsaPercorsi()){
+   const p=Number(porta);
+   if(p===8769) return base+'/segnali';
+   if(p===8001) return base+'/pc/8001';
+   return base;
+  }
+  return base;
+ }
+ if(fblServerUsaPercorsi()){
+  const base='https://'+dove.replace(/\/+$/,'');
+  const p=Number(porta);
+  if(p===8769) return base+'/segnali';
+  if(p===8001) return base+'/pc/8001';
+  return base;
+ }
  return 'https://'+dove+':'+porta;
 }
 // ====== DOVE STANNO I DOCUMENTI DELL'UTENTE (sessione, disegni, preferenze, footprint) ======
@@ -48184,12 +48216,16 @@ function fblAscoltaDocumento(o){
    laboratorio/app/collegamento_cloud.test.mjs, con magazzini e «nuvola» finti: le due
    chiavi arrivano dal test come parametri. */
 function fblCollegamentoHostValido(host){
- // Il nome del computer via Tailscale (.ts.net) O il dominio proprio/github.io (R3, 9 novembre
- // 2026). Misurato: prima accettava SOLO .ts.net, quindi il documento del collegamento arrivato
- // da un altro dispositivo RIFIUTAVA l'host nuovo e il telefono restava su quello vecchio in
- // memoria - ed e' cosi' che "ts.net" continuava a comparire anche dopo la cura R3.
- return typeof host==='string'&&host.length>0&&host.length<=255
-   &&(/^[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net$/.test(host)||/^[A-Za-z0-9][A-Za-z0-9.-]*\.github\.io$/.test(host));
+ // Nome Tailscale (.ts.net) o dominio proprio (es. duckdns.org/github.io). Transizione: accetta
+ // entrambi, cosi' un vecchio .ts.net salvato non si rompe mentre si passa al dominio.
+ if(typeof host!=='string')return false;
+ host=host.trim();
+ if(!host||host.length>255) return false;
+ if(/^https?:\/\//i.test(host)){
+  try{ host=new URL(host).hostname; }catch(e){ return false; }
+ }
+ return /^[A-Za-z0-9][A-Za-z0-9.-]*\.ts\.net$/.test(host)
+   || /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\.[A-Za-z]{2,}$/.test(host);
 }
 function fblCollegamentoPrepara(store){
  // Cosa QUESTO dispositivo puo' pubblicare: solo un collegamento COMPLETO (host E chiave),

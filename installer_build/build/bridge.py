@@ -3347,6 +3347,43 @@ def registra_al_server(body: dict, request: Request):
     return {"ok": True, "host": mio_nome, "server": server, "risposta": esito}
 
 
+def _agente_pc_config_path() -> str:
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    d = os.path.join(base, "ForexBacktestLAB")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, "agente_pc.json")
+
+
+def _agente_pc_carica_config() -> dict:
+    try:
+        with open(_agente_pc_config_path(), "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _agente_pc_salva_config(d: dict) -> None:
+    p = _agente_pc_config_path()
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+
+
+def _agente_pc_avvio_automatico() -> None:
+    try:
+        cfg = _agente_pc_carica_config()
+        if not cfg.get("attivo"):
+            return
+        server = str(cfg.get("server") or "").strip()
+        utente = str(cfg.get("utente") or "").strip()
+        chiave = str(cfg.get("chiave") or "").strip()
+        if server and utente and len(chiave) >= 24:
+            import agente_pc
+            agente_pc.avvia_agente(server, utente, chiave)
+    except Exception as e:
+        print("[AgentePC] avvio automatico non riuscito: %s" % e)
+
+
 @app.post("/agente-pc/avvia")
 def agente_pc_avvia(body: dict, request: Request):
     """Avvia l'agente PC: connessione in USCITA verso il server (senza porte aperte sul PC)."""
@@ -3361,6 +3398,10 @@ def agente_pc_avvia(body: dict, request: Request):
     try:
         import agente_pc
         st = agente_pc.avvia_agente(server, utente, chiave)
+        try:
+            _agente_pc_salva_config({"attivo": True, "server": server, "utente": utente, "chiave": chiave})
+        except Exception:
+            pass
         return {"ok": True, "agente": st}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -3382,6 +3423,12 @@ def agente_pc_ferma(request: Request):
     try:
         import agente_pc
         agente_pc.ferma_agente()
+        try:
+            cfg = _agente_pc_carica_config()
+            cfg["attivo"] = False
+            _agente_pc_salva_config(cfg)
+        except Exception:
+            pass
         return {"ok": True, "agente": agente_pc.stato()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -5241,6 +5288,13 @@ if __name__ == "__main__":
             pass
 
     _avvia_custode_mt5_feed()  # e adesso qualcuno controlla che la porta 8001 risponda ancora
+    try:
+        _agente_pc_avvio_automatico()
+    except Exception as _e:
+        try:
+            _log_bridge('[AgentePC] avvio automatico non riuscito (non bloccante): %s' % _e)
+        except Exception:
+            pass
     # SOLO 127.0.0.1, sempre: dagli altri dispositivi si arriva con Tailscale Serve (vedi
     # accesso_condiviso.py), che parla con questo servizio in locale.
     _host = _accesso.host_di_ascolto()

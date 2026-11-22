@@ -226,7 +226,7 @@ test("un documento difettoso viene rifiutato e il magazzino resta come prima", (
     {nome: 'oggetto vuoto', d: {}},
     {nome: 'manca la chiave', d: {host: 'casa.ts.net'}},
     {nome: 'manca l host', d: {chiave: 'k'}},
-    {nome: 'host non tailscale', d: {host: 'esempio.com', chiave: 'k'}},
+    {nome: 'host senza punto', d: {host: 'esempio', chiave: 'k'}},
     {nome: 'tipi sbagliati', d: {host: 123, chiave: {}}},
     {nome: 'valori lunghissimi', d: {host: 'a'.repeat(400) + '.ts.net', chiave: 'b'.repeat(400)}},
   ];
@@ -248,7 +248,7 @@ test("i documenti difettosi non accendono il segnale di collegamento", () => {
   const cloud = nv.cloud('uid-uno');   // ascolta PRIMA che la nuvola abbia documenti
   f.fblCollegamentoAvvia(cloud, telefono, () => arrivati++);
   assert.equal(arrivati, 0, "la nuvola era vuota: nessun segnale poteva esserci");
-  cloud.collegamentoSalva({host: 'esempio.com', chiave: 'k'});   // arriva un documento rotto
+  cloud.collegamentoSalva({host: 'esempio', chiave: 'k'});   // arriva un documento rotto
   assert.equal(arrivati, 0, "un documento non valido non deve far credere che il collegamento c'e'");
   assert.equal(telefono.getItem(K_HOST), null);
 });
