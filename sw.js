@@ -659,7 +659,8 @@
 // v2.2.107 - Revert fuso asse/profili MT5: i timestamp sono UTC reali, display in fuso device.
 // v2.2.108 - BOS auto-open replay: sessione storica, campi grafico, no chiusura immediata stessa barra.
 // v2.2.109 - Replay: currentPrice usa prezzo replay, non tick live; BOS auto-open senza guard same-bar aggressivo.
-const CACHE_NAME = "forex-backtest-lab-v2.2.109";
+// v2.2.110 - BOS auto-open replay: consenti forming bar e non chiudere nello stesso sub di nascita.
+const CACHE_NAME = "forex-backtest-lab-v2.2.110";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

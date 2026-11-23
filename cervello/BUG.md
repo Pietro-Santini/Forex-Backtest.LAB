@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - BOS auto-open replay: apre e chiude subito
+- **Sintomo**: in replay, al valid pullback apre e chiude subito; linee TP/SL compaiono ma posizione non resta aperta; Journal registra P/L.
+- **Causa**: guard replay consentiva solo i==idx (bloccava forming bar idx+1); replayValutaFormazione poteva chiudere la posizione nello stesso tick/sub di nascita.
+- **Cura**: consenti i tra idx e replayForm.idx; aggiunto `_replayBornSub` e skip in replayValutaFormazione finch? sub <= bornSub.
+- **Prova**: sintassi, collaudo.
+
 ## 2026-11-23 - Replay: prezzo live mostrato / BOS auto-open bloccato
 - **Sintomo**: in replay/backtest il prezzo mostrato era il tick live reale; BOS auto-open in replay poteva non aprire per guard same-bar troppo aggressivo.
 - **Causa**: `currentPrice()` restituiva tick live anche in replay; guard SL/TP stessa barra in BOS auto-open saltava aperture legittime.
