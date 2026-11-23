@@ -6296,7 +6296,11 @@ function currentMt5AccountTag(){
 function tradeBelongsToCurrentView(t){
  if(!t)return false;
  const m=currentMode();
- if((t.mode||'backtest')!==m)return false;
+ const tm=t.mode||'backtest';
+ if(tm!==m){
+   try{ if(liveReplayActive && t.historical && tm===((m==='live_propfirm'||m==='backtest_propfirm')?'backtest_propfirm':'backtest')) return belongsToCurrentAsset(t) ? true : false; }catch(e){}
+   return false;
+ }
  // MODALITA' BACKTEST: sparisce anche lo STORICO, non solo le posizioni aperte.
  //
  // SEGNALATO dal proprietario (28 ottobre 2026): «quando attiviamo la modalita' backtest non
@@ -6345,14 +6349,16 @@ function statsTrades(){
  const m=currentMode();
  const list=trades.filter(t=>t.mode===m).slice(statsBaselineByMode[m]||0);
  // IN REPLAY IL CONTO E' QUELLO STORICO.
- //
- // SEGNALATO dal proprietario (25-26 ottobre 2026): in replay si deve aggiornare anche il win/loss
- // rate dell'account storico. Misurato dal revisore: con MT5 collegato questo filtro restituiva
- // SOLO le operazioni reali (mt5Ticket!=null), quindi un'operazione vera chiusa a -3.000 portava il
- // capitale "storico" a 7.000, mentre un'operazione simulata del replay chiusa a +1.000 non entrava
- // mai (capitale fermo a 10.000). Due conti mescolati nei due sensi. In replay contano solo le
- // operazioni simulate (senza ticket MT5).
- try{ if(liveReplayActive) return list.filter(t=>t.mt5Ticket==null); }catch(e){}
+ // Le posizioni replay vengono salvate in sessione backtest/backtest_propfirm (separazione Journal),
+ // ma in replay-live devono comunque contare nel conto/curve del replay.
+ try{
+   if(liveReplayActive){
+     const histMode=(m==='live_propfirm'||m==='backtest_propfirm')?'backtest_propfirm':'backtest';
+     const hist=trades.filter(t=>(t.mode||'backtest')===histMode && t.historical && t.mt5Ticket==null).slice(statsBaselineByMode[histMode]||0);
+     const seen=new Set();
+     return list.concat(hist).filter(t=>{ const k=String(t.id||''); if(seen.has(k)) return false; seen.add(k); return t.mt5Ticket==null; });
+   }
+ }catch(e){}
  // RICHIESTO ESPLICITAMENTE: nella sessione Live le statistiche non devono MAI sommare conti
  // diversi. Collegati a un conto MT5 → solo le operazioni di QUEL conto; non collegati (Live con
  // Capital.com) → solo le operazioni simulate Capital.com, senza quelle reali di nessun conto MT5.
@@ -13565,10 +13571,18 @@ function journalClosedAtLabel(closedAt){
 // orologio della macchina di journalClosedAtLabel(). pos.startTime è già in ms (candela in cui
 // la posizione è stata aperta, o l'ancora salvata per le posizioni reali MT5 adottate).
 function journalOpenAtLabel(t){
- const ms=Number(t&&t.startTime);
- if(!Number.isFinite(ms))return 'Apertura: non disponibile';
- const d=new Date(ms);
- return 'Aperta il '+d.toLocaleDateString('it-IT')+' alle '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+ const fmtMs=(ms)=>{
+  if(!Number.isFinite(ms))return null;
+  const d=new Date(ms);
+  return d.toLocaleDateString('it-IT')+' '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',hourCycle:'h23'});
+ };
+ const grafico=fmtMs(Number(t&&t.startTime));
+ const reale=fmtMs(Number(t&&t.realOpenAt));
+ if(t&&t.historical&&(reale||grafico)){
+  return 'Apertura reale: '+(reale||'—')+' | Asse grafico: '+(grafico||'—');
+ }
+ if(grafico) return 'Aperta il '+grafico;
+ return 'Apertura: non disponibile';
 }
 (function initJournalOpenTooltip(){
  const tip=document.createElement('div');
@@ -14285,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.103';
+const FBL_VERSIONE='2.2.104';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -18221,7 +18235,7 @@ const AMD_FVG_TRADE_DEF = {
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
     if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1; st._rebuilding=true;
       st.tr = []; st.atr = []; st.sessOn = [];
       st.accHigh = NaN; st.accLow = NaN; st.accStart = NaN; st.accEnd = NaN;
       st.mH = false; st.mL = false; st.ext = NaN;
@@ -21616,6 +21630,7 @@ function bosApriConfermaDopo(st, p, fatta, r, i) {
       slIniziale: sl,
       livelloRotturaConfermata: fatta.target
     });
+    try{ bosAutoApriOpsSetup(st, p, fatta.id, i); }catch(e){}
   } catch (e) {}
 }
 
@@ -21655,6 +21670,53 @@ function bosStopPullback(s, p, r, i, cuscinetto) {
   return s.dir === 1 ? (r.low - cuscinetto) : (r.high + cuscinetto);
 }
 
+function bosPuoAutoAprireDemo(p){
+  try{
+    if(!p || !p.autoOpenDemo) return false;
+    if(liveReplayActive) return false;
+    if(!liveModeActive) return false;
+    if(!mt5Connected) return false;
+    if(!mt5AccountInfo || mt5AccountInfo.reale !== false) return false;
+    return true;
+  }catch(e){ return false; }
+}
+function bosAutoApriOpsSetup(st, p, setupId, i){
+  try{
+    if(!bosPuoAutoAprireDemo(p)) return;
+    if(st && st._rebuilding) return;
+    if(i < rows.length-1) return; // solo barra live corrente
+    const ops=(st.ops||[]).filter(o=>o && o.setupId===setupId && !o.autoOpenAttempted);
+    for(const op of ops){
+      op.autoOpenAttempted=true;
+      const asset=currentAssetKey||$('market')?.value||'';
+      if(!asset) continue;
+      let entry=Number(op.entry);
+      if(!Number.isFinite(entry)) entry=Number(rows[idx]&&rows[idx].close);
+      const sl=Number(op.sl), tp=Number(op.tp);
+      if(!Number.isFinite(entry)||!Number.isFinite(sl)) continue;
+      const dir=op.dir===1?'BUY':'SELL';
+      if(dir==='BUY' ? !(sl<entry) : !(sl>entry)) continue;
+      if(Number.isFinite(tp)){ if(dir==='BUY' ? !(tp>entry) : !(tp<entry)) continue; }
+      const lots=Math.max(0.01, Number(op.lotto)||0.01);
+      const requiredMargin=typeof marginForLots==='function'?marginForLots(lots,entry):0;
+      if(typeof freeMargin==='function' && requiredMargin>freeMargin()+1e-9) continue;
+      const dup=positions.some(pos=>pos && pos.bosAuto && pos.bosSetupId===op.setupId && pos.bosNome===op.nome && pos.asset===asset);
+      if(dup) continue;
+      const pos={
+        id:Date.now()+Math.random(),
+        asset, side:dir, entry, sl, tp:Number.isFinite(tp)?tp:null, origin:'BOS_AUTO',
+        lots, risk:0, dist:0, hasRiskModel:false, start:idx, startTime:Date.now(), openTF:currentTF,
+        marginUsed:requiredMargin, historical:false, backtest:!!fblBacktestModeInUso(),
+        bosAuto:true, bosSetupId:op.setupId, bosNome:op.nome
+      };
+      fblAggiungiPosizione(pos);
+      active=pos;
+      try{ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }catch(e){}
+      op.autoPosId=pos.id;
+      try{ $('status').textContent='BOS auto (demo): '+dir+' '+asset+' aperta.'; }catch(e){}
+    }
+  }catch(e){}
+}
 function bosApriPullback(st, p, s, r, i) {
   try {
     const cuscinetto = Math.max(0, (+p.touchTicks || 0) * (+p.tickSize || 0));
@@ -21703,6 +21765,7 @@ function bosApriPullback(st, p, s, r, i) {
         livelloRotturaConfermata: s.target
       });
     }
+    try{ bosAutoApriOpsSetup(st, p, s.id, i); }catch(e){}
   } catch (e) {}
 }
 
@@ -21831,6 +21894,7 @@ const BOS_SETTINGS = [
   {type: 'num', key: 'maxWait', label: 'Età massima setup (formazione pullback)', min: 5, max: 1000},
   {type: 'check', key: 'beTp1', label: 'BE su TP1: quando il pullback prende TP, porta SL seconda a BE (entrata)'},
   {type: 'num', key: 'rischioOperazione', label: 'Rischio per operazione (%)', min: 0.01, max: 100, step: 0.01},
+  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni (solo demo/simulato, conto MT5 collegato, niente reale)'},
   {type: 'num', key: 'bePerc2', label: 'BE2 seconda: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
   {type: 'select', key: 'bePerc2Da', label: 'BE2 seconda: % calcolata da', options: ['apertura', 'rottura']},
   {type: 'num', key: 'bePips2', label: 'BE2 seconda: pip oltre la rottura confermata', min: 0, max: 1000, step: 1},
@@ -21873,6 +21937,7 @@ const VALID_BOS_PULLBACK_DEF = {
     bePerc2: 0, bePerc2Da: 'apertura', bePips2: 10,
     beTp1: false,
     rischioOperazione: 0.5,
+    autoOpenDemo: false,
     liqLookback: 10, liqBufferPips: 2
   }),
 
@@ -22375,6 +22440,7 @@ const INDICATOR_DEFS={
          }
        }
      }
+     st._rebuilding=false;
      st.builtTo=upToIdx;
    },
    render(ctx,ind,rows,dataStart,dataEnd,xAbs,y){
@@ -25133,6 +25199,9 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
    // La freccia/linea di chiusura invece compare solo quando si raggiunge anche la
    // candela di chiusura: fino a quel momento si vede solo la freccia di apertura.
    const closeReached=closeIdx<=idx;
+   // REPLAY: un trade chiuso non deve vedersi prima del punto di chiusura (né frecce, né linee,
+   // né sviluppo). Compare solo quando il replay raggiunge la chiusura.
+   if(liveReplayActive && !closeReached) return;
    const xOpen=xForIndex(openIdx), xClose=xForIndex(closeIdx);
    const yOpen=y(t.entry), yClose=y(t.exit);
    const openOnScreen=t.entry>=lo&&t.entry<=hi&&xOpen>=pad.l-1&&xOpen<=w-pad.r+1;
@@ -25172,40 +25241,6 @@ function drawClosedTradeMarkers(ctx,y,lo,hi,pad,cw,n,start,w,hoverLocal){
        fixedSpan:span,
        noHandle:true
      });
-   }
-   // REPLAY IN LIVE (richiesto esplicitamente): ricostruzione del posizionamento del passato —
-   // mano a mano che il replay raggiunge l'apertura di un'operazione (openIdx<=idx), su QUEL
-   // trade si mostrano le linee orizzontali dei suoi livelli (entry, TP, SL — "Stop Profit"
-   // quando lo stop stava a pareggio o oltre l'entrata). In modalità replay le orizzontali dei
-   // trade rivelati SI vedono (a differenza del grafico normale, dove sono state tolte: lì
-   // restano solo frecce + linea tratteggiata). Non dipende dall'interruttore "posizioni chiuse":
-   // è la ricostruzione richiesta, sempre attiva in replay.
-   // IN REPLAY le orizzontali dei livelli restano visibili anche dopo la chiusura, così la
-   // posizione resta "impressa" sul grafico e si può rivedere (entry/TP/SL/Stop Profit).
-   // Richiesto dal proprietario (22 novembre 2026): prima sparivano al closeReached.
-   if(liveReplayActive && openIdx<=idx){
-     const liv=[];
-     if(t.entry!=null)liv.push([t.entry,'Entry',t.side==='BUY'?TRADE_ARROW_BLUE:TRADE_ARROW_RED]);
-     if(t.tp!=null&&Number.isFinite(t.tp))liv.push([t.tp,'TP','#2fbf71']);
-     if(t.sl!=null&&Number.isFinite(t.sl))liv.push([t.sl,isStopProfitLevel(t)?'Stop Profit':'SL',isStopProfitLevel(t)?'#2fbf71':'#e05252']);
-     ctx.save();
-     ctx.setLineDash([4,3]);
-     liv.forEach(([p,label,col])=>{
-       if(p==null||p<lo||p>hi)return;
-       const ly=y(p);
-       ctx.strokeStyle=col;ctx.lineWidth=1;ctx.globalAlpha=0.6;
-       ctx.beginPath();ctx.moveTo(pad.l,ly);ctx.lineTo(w-pad.r,ly);ctx.stroke();
-       ctx.setLineDash([]);
-       ctx.fillStyle=col;ctx.globalAlpha=0.9;ctx.font=scaledFont('bold 9px Arial');
-       ctx.textAlign='left';
-       const txt=label+' '+fmtPrice(p), tw=ctx.measureText(txt).width, boxH=11;
-       const ty=placeLabelY(w-pad.r-tw-6,tw+6,ly-4-9,boxH,pad.t,y(lo));
-       ctx.fillText(txt,w-pad.r-tw-4,ty+9);
-       ctx.setLineDash([4,3]);
-     });
-     ctx.setLineDash([]);
-     ctx.globalAlpha=1;
-     ctx.restore();
    }
    // Linea tratteggiata tra apertura e chiusura: SEMPRE visibile (indipendentemente da hover
    // o selezione) finché la chiusura è già stata raggiunta dal replay (closeReached) e almeno
@@ -29861,8 +29896,8 @@ function currentPrice(){
   if(mt5ActiveSymbol && Number.isFinite(lastMt5TickPrice) && lastMt5TickPrice>0)return lastMt5TickPrice;
   if(Number.isFinite(lastPrimaryEpicPrice) && lastPrimaryEpicPrice>0)return lastPrimaryEpicPrice;
  }
- const p=rows[idx]?.close;
- return Number.isFinite(Number(p))?Number(p):null;
+ const p=Number(rows[idx]?.close);
+ return (Number.isFinite(p) && p>0)?p:null;
 }
 // ===================== ANTEPRIMA AUTOMATICA SL/TP =====================
 // Al click di BUY/SELL (a mercato) o dopo aver piazzato l'ENTRY di un ordine pendente LIMIT/
@@ -31996,11 +32031,10 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // in fetchMt5Positions() che ormai non le adotta più in Storico), ma qui forziamo comunque il
  // ramo Live corretto come ultima rete di sicurezza, qualunque fosse la sessione a schermo nel
  // momento esatto della chiusura.
- // Posizione nata in replay (historical): appartiene alla sessione corrente, non alla modalità
- // backtest fissa - altrimenti in replay live finisce nel bucket `backtest` e statsTrades(),
- // che legge la modalità corrente, non la conta: il capitale non si aggiorna (misurato nel banco
- // replay_capitale_dopo_chiusura.test.mjs).
- const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):(pos.historical?currentMode():currentMode());
+ // Posizione nata in replay (historical): deve restare nel conto/sessione STORICO, mai nel
+ // Journal live Capital.com. In replay-live currentMode() e' live/live_propfirm, ma la posizione
+ // e' simulata nel replay: va in backtest/backtest_propfirm.
+ const closeMode=pos.mt5Ticket!=null?(isPropFirmMode&&liveModeActive?'live_propfirm':'live'):(pos.historical?(isPropFirmMode?'backtest_propfirm':'backtest'):currentMode());
  // RICHIESTO ESPLICITAMENTE: ogni operazione reale MT5 porta con sé il NUMERO DI CONTO su cui è
  // stata eseguita (Journal separato per conto, statistiche mai sommate fra conti MT5 diversi).
  const acctTag=pos.mt5Ticket!=null?(pos.mt5Login?{mt5Login:String(pos.mt5Login),mt5Server:pos.mt5Server||''}:currentMt5AccountTag()):{};
@@ -32053,9 +32087,15 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // l'equity curve è un'unica timeline continua del conto, non una per asset. Con il profitto vero
  // di MT5 la curva segue quello (il saldo del broker va solo nella colonna "Conto" del Journal,
  // la curva resta sul capitale dell\'app per non avere salti).
- // Le posizioni del replay (historical) aggiornano l'equity della sessione corrente: la
- // curva/drawdown devono seguire il conto storico, come già fa closedPL()/statsTrades().
- if(!pos.historical || liveReplayActive) equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
+ // L'equity segue la modalità del trade: le posizioni replay vanno nel conto storico,
+ // quindi in replay-live non contaminano l'equity della sessione live.
+ if(closeMode===currentMode()) equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
+ else {
+   let _eqSnap=sessionByMode[closeMode];
+   if(!_eqSnap || typeof _eqSnap!=='object'){ _eqSnap=sessionByMode[closeMode]={positions:[],pendingOrders:[],active:null,equity:[baseCapital()],drawings:[],capital:String(baseCapital())}; }
+   if(!Array.isArray(_eqSnap.equity)) _eqSnap.equity=[baseCapital()];
+   _eqSnap.equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
+ }
  // Il Trade Journal e' cambiato: va anche nel cloud, che e' l'unica copia che segue l'account
  // attraverso aggiornamenti, reinstallazioni e cambi di indirizzo d'ingresso.
  fblCloudSalvaTradeJournal();
@@ -32090,9 +32130,9 @@ async function deleteTrade(i){
 function removeTradeRecordAt(i){
  const t=trades[i]; if(!t)return;
  const mode=t.mode||'backtest';
- // Storico in replay: il trade era contato nell'equity della sessione corrente.
- if(!t.historical || liveReplayActive){
-   const modeTrades=trades.filter(x=>{ const xm=x.mode||'backtest'; return xm===mode && (!x.historical || liveReplayActive); });
+ // Riallinea equity/baseline della modalità a cui il trade appartiene.
+ {
+   const modeTrades=trades.filter(x=> (x.mode||'backtest')===mode);
    const filteredIdx=modeTrades.indexOf(t);
    const baseline=statsBaselineByMode[mode]||0;
    if(filteredIdx<baseline && filteredIdx>=0){
@@ -32849,6 +32889,7 @@ function activatePendingOrder(p){
    // "Congela" lo SL di apertura per l'R/R (vedi nota identica in openMarketTrade()).
    rrSl:p.sl,
    historical:!!p.historical,
+   realOpenAt:(liveReplayActive&&p.historical)?Date.now():null,
    // Il conto effettivo: in replay la posizione e' simulata sul conto Storico, anche se MT5 e'
    // collegato per il resto (allineato a fblPropContoId, che gia' faceva così).
    account:liveReplayActive?'storico':null
@@ -34074,7 +34115,10 @@ async function placeRealMt5Order(side,forz){
    mt5OwnMarketOrderInFlight--;
  }
  if(result.ok){
-   const filledEntry=Number.isFinite(Number(result.data.price))?Number(result.data.price):entryApprox;
+   const _filledRaw=Number(result.data&&result.data.price);
+   const _approx=Number(entryApprox);
+   const filledEntry=(Number.isFinite(_filledRaw)&&_filledRaw>0)?_filledRaw:((Number.isFinite(_approx)&&_approx>0)?_approx:NaN);
+   if(!(Number.isFinite(filledEntry)&&filledEntry>0)){ $('status').textContent='Ordine MT5 eseguito ma prezzo di entrata non valido: controlla la posizione nel terminale MT5.'; fetchMt5Positions(); return false; }
    const ticket=result.data.ticket;
    if(ticket!=null)mt5SoundSeenOpenTickets.add(String(ticket)); // aperta da noi ora: la sua chiusura suonerà
    fblMt5Annunciato(ticket); // il suono per questa apertura lo facciamo qui sotto: il giro degli avvisi la salta
@@ -34173,10 +34217,11 @@ function openMarketTrade(side,forz){
      if(Number.isFinite(_p))entry=_p;
    }
  }catch(e){}
- if(!Number.isFinite(entry))return $('status').textContent='Prezzo corrente non disponibile.';
+ if(!(Number.isFinite(entry) && entry>0))return $('status').textContent='Prezzo corrente non disponibile.';
  // Spread automatico (solo Modalità Prop Firm): il prezzo di entrata effettivo è già
  // "peggiorato" dello spread, esattamente come un ordine a mercato reale.
  entry=applySpreadToEntry(side,entry,$('market')?.value||'');
+ if(!(Number.isFinite(entry) && entry>0))return $('status').textContent='Prezzo di entrata non valido.';
 
  // BUY/SELL "al prezzo attuale" devono aprire la posizione SEMPRE, anche se nelle caselle
  // SL/TP è rimasto un valore di una bozza precedente incompatibile con il lato scelto (es.
@@ -34221,6 +34266,7 @@ function openMarketTrade(side,forz){
    asset:(currentAssetKey||$('market')?.value||''),
    side,entry,sl:Number.isFinite(sl)?sl:null,tp:Number.isFinite(tp)?tp:null,origin:'MARKET',
    lots,risk:0,dist:0,hasRiskModel:false,start:idx,startTime:fblIstanteNascitaReplay(parseDateTime(market.date)),
+   realOpenAt:liveReplayActive?Date.now():null,
    openTF:currentTF, // vedi nota in activatePendingOrder()
    marginUsed:requiredMargin,
    historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso()
@@ -43446,6 +43492,7 @@ async function tgCapitalEseguiSegnale(voce,o){
    tp:(Number.isFinite(tp)?tp:null),origin:'MARKET',lots:p.lotti,risk:0,dist:0,hasRiskModel:false,
    start:idx,startTime:liveReplayActive?replayMomentoMostrato():Date.now(),openTF:currentTF,marginUsed:Number(p.margine)||0,account:'capital',
    historical:!!liveReplayActive,backtest:!!fblBacktestModeInUso(),
+   realOpenAt:liveReplayActive?Date.now():null,
    tgGruppo:gruppo,tgTpIndice:i+1,tgSala:fblNomeSala(voce),tgSegnaleId:voce.id,tgProva:!!voce.prova};
   pos.rrSl=pos.sl;
   fblAggiungiPosizione(pos);

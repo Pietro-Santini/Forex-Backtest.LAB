@@ -47,6 +47,7 @@ test('in replay, chiudere una posizione aggiorna il capitale storico e il journa
         chiusi: trades.length,
         trade: trades[0] ? {pl: trades[0].pl, mode: trades[0].mode, historical: trades[0].historical} : null,
         aperte: positions.length,
+        sessionBacktestEquity: (sessionByMode.backtest && sessionByMode.backtest.equity) || [],
       };
     }, {prepara: PREPARA.toString()});
 
@@ -54,10 +55,13 @@ test('in replay, chiudere una posizione aggiorna il capitale storico e il journa
     assert.equal(r.chiusi, 1, 'il trade deve essere nel journal');
     assert.ok(r.plFlottante > 0, 'premessa: la posizione era in guadagno');
     assert.equal(r.trade.pl, r.plFlottante, 'il journal deve registrare il P/L');
-    // Prima della chiusura il guadagno era flottante; dopo è realizzato: il capitale deve restare
-    // allo stesso livello (non tornare alla base come faceva il bug).
-    assert.equal(r.capitaleDopo, r.capitalePrima,
-      'il capitale storico deve restare al livello che includeva il P/L: prima ' + r.capitalePrima + ' dopo ' + r.capitaleDopo);
+    // Le posizioni replay devono finire nella sessione STORICO, non live.
+    assert.equal(r.trade.mode, 'backtest');
+    assert.equal(r.trade.historical, true);
+    // Il capitale live non deve essere contaminato dal trade storico; lo storico riceve il P/L.
+    const capStorico = r.sessionBacktestEquity.at(-1);
+    assert.ok(Math.abs(capStorico - (10000 + r.trade.pl)) < 0.01,
+      'equity sessione storico deve includere il P/L: ' + capStorico);
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

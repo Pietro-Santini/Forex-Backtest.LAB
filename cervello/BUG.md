@@ -1,5 +1,16 @@
 # BUG
 
+## 2026-11-23 - Entry 0 in apertura live (P/L non calcolabile)
+- **Sintomo**: apertura posizione in live con entry a 0, P/L/SL-TP non calcolati; segnalato su operazione reale.
+- **Causa**: guardie entry accettavano `0` (`Number.isFinite(0)` true); `currentPrice()` poteva restituire close 0; `placeRealMt5Order` accettava fill price 0.
+- **Cura**: rifiuto `entry<=0` in `openMarketTrade` (prima/dopo spread), `currentPrice()` ritorna null su close `<=0`, `placeRealMt5Order` non crea posizione locale con fill/approx `<=0` e ricarica posizioni MT5.
+- **Prova**: `laboratorio/app/entry_zero_guard.test.mjs`.
+
+## 2026-11-23 - Replay: trade in sessione live, date/linee/sviluppo errati
+- **Sintomo**: posizioni aperte in replay finivano nel Journal live; date storiche ambigue; linee tratteggiate entry/SL/TP in replay; trade chiusi visibili prima della chiusura tornando indietro.
+- **Cura**: trade `historical` chiusi in replay salvati in `backtest/backtest_propfirm`; `realOpenAt` + tooltip "Apertura reale / Asse grafico"; rimosse linee tratteggiate replay; trade chiuso visibile solo a `closeReached`.
+- **Prova**: `laboratorio/app/replay_fix_4_issue.test.mjs`, `replay_capitale_dopo_chiusura.test.mjs`, `replay_live.test.mjs` caso 6, `v138.test.mjs` caso A aggiornati.
+
 ## 2026-11-23 - Offset broker/UTC errato su broker non EET (Upcomers) e Prop Firm esercitazione
 - **Sintomo**: posizioni graficate ~1h sfasate su Upcomers; conti esercitazione/non-prop valutati da Prop Firm; caselle drawdown nascoste in attesa dati MT5.
 - **Causa**: fallback calendario hardcoded EET/FTMO in bridge/mt5_feed_server; cache offset globale non per server; checkPropFirmRules senza gate esercitazione; guardia dati-MT5-non-pronti ritornava senza aggiornare display.

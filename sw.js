@@ -653,7 +653,8 @@
 // v2.2.101 - Filtro conto grafico: in Live mai mostrare trade MT5 di altri conti/login.
 // v2.2.102 - Guardie Prop Firm: no valutazione su simulato quando dati MT5 reali non pronti.
 // v2.2.103 - Offset broker/UTC per server, BOS pullback senza scadenza post-valid, BE TP1, drawdown in attesa.
-const CACHE_NAME = "forex-backtest-lab-v2.2.103";
+// v2.2.104 - Fix replay (storico/live, 2 date, no linee, visibile solo a chiusura), BOS auto demo, guard entry<=0.
+const CACHE_NAME = "forex-backtest-lab-v2.2.104";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

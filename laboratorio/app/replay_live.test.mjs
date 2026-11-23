@@ -217,21 +217,14 @@ test('5) guardie anti-reset del replay presenti nei 5 punti critici', () => {
             'una posizione reale si mostra solo quando il replay ha raggiunto la sua apertura');
 });
 
-test('6) in replay: posizioni reali nascoste, trade rivelati con ricostruzione livelli', async () => {
-  // RICHIESTE ESPLICITE:
-  //  - in modalità replay le posizioni REALI ancora aperte spariscono dal grafico (linee,
-  //    etichette target/stop/stop profit, caselle e P/L) e riappaiono solo tornando in diretta;
-  //  - i trade rivelati dal replay (apertura raggiunta: openIdx<=idx) mostrano la ricostruzione
-  //    del posizionamento: le linee orizzontali dei loro livelli (entry, TP, SL / Stop Profit),
-  //    da bordo a bordo, come chiesto per il "riavvolgimento".
-  //  - le orizzontali dei trade chiusi NON dipendono dall'interruttore "posizioni chiuse" durante
-  //    il replay; in diretta (interruttore spento di default) spariscono e le chiuse non si vedono.
+test('6) in replay: posizioni reali nascoste; trade chiuso compare solo alla chiusura, senza linee tratteggiate', async () => {
+  // Richieste: in replay le posizioni reali aperte restano nascoste; i trade chiusi non mostrano
+  // nulla prima del punto di chiusura (n? frecce, n? linee, n? sviluppo) e non mostrano le linee
+  // tratteggiate entry/SL/TP.
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate((JS) => {
       const R = JSON.parse(JS);
-      // Conteggio delle righe orizzontali che attraversano TUTTO il grafico (bordo sinistro →
-      // bordo destro, a y costante): il metodo usato per le righe di prezzo negli altri test.
       const proto = CanvasRenderingContext2D.prototype;
       const vM = proto.moveTo, vL = proto.lineTo, vS = proto.stroke;
       let ultimo = null, intere = 0, larghezza = 0;
@@ -248,12 +241,13 @@ test('6) in replay: posizioni reali nascoste, trade rivelati con ricostruzione l
         ultimo = null;
         return vS.apply(this, arguments);
       };
-      let righeVuoto = [], righeLivelli = [], righeAperta = [], righeDiretta = [];
+      let righeVuoto = [], righePrimaChiusura = [], righeAllaChiusura = [], righeAperta = [], righeDiretta = [];
       const conta = (tag) => {
         intere = 0; righe.length = 0;
         draw();
         if (tag === 'V') righeVuoto = righe.slice();
-        if (tag === 'L') righeLivelli = righe.slice();
+        if (tag === 'P') righePrimaChiusura = righe.slice();
+        if (tag === 'C') righeAllaChiusura = righe.slice();
         if (tag === 'A') righeAperta = righe.slice();
         if (tag === 'D') righeDiretta = righe.slice();
         return intere;
@@ -266,61 +260,49 @@ test('6) in replay: posizioni reali nascoste, trade rivelati con ricostruzione l
       larghezza = (document.getElementById('chart').clientWidth || 800) - 40;
       positions = []; active = null; trades = [];
 
-      avviaReplayLive(parseDateTime(R[0].date));   // il grafico è sul passato: idx = 0
-      // Scala verticale fissa e nota (97–103): così i 3 livelli scelti del trade rivelato stanno
-      // tutti dentro il range e il test è deterministico (l'auto-fit del replay, altrimenti,
-      // apre una finestra ~±1.1 attorno al prezzo che taglia fuori i livelli più lontani).
+      avviaReplayLive(parseDateTime(R[0].date));
       followLatest = false; viewPriceLo = 97; viewPriceHi = 103; priceZoomFactor = 1;
-      const vuoto = conta('V');
+      conta('V');
 
-      // Trade CHIUSO nel passato (09:00 → 09:02) la cui apertura è già stata raggiunta dal
-      // replay (openIdx 0 <= idx 0): si vedono i 3 livelli ricostruiti (entry, TP, SL).
       const t0 = parseDateTime(R[0].date), t2 = parseDateTime(R[2].date);
       trades = [{id: 'T1', asset: 'TESTX', side: 'BUY', mode: 'live', mt5Ticket: null,
                  entry: 100, exit: 100.2, sl: 99.5, tp: 101.5, rrSl: 99.5, lots: 0.1, result: 'Loss',
                  pips: 10, pl: 10, pct: 0.5, account: 1000, strategy: '',
                  startTime: t0, closedAt: new Date(t2).toISOString()}];
-      const livelli = conta('L');
+      // idx=0, chiusura a idx=2: prima della chiusura non deve vedersi nulla
+      conta('P');
+      idx = 2; viewEnd = 2; conta('C');
 
-      // Posizione APERTA reale (same scala, entry 100.5 dentro la zoom): durante il replay
-      // NON deve comparire, quindi la lista delle righe nuove resta identica a quella dei soli
-      // livelli rivelati. SL/TP messi fuori portata (80/200) così l'eventuale evaluate() di
-      // STOP non la chiude.
+      // Posizione aperta reale durante replay: non deve aggiungere righe.
+      idx = 0; viewEnd = 2;
       positions = [{id: 'P1', asset: 'TESTX', side: 'BUY', entry: 100.5, sl: 80, tp: 200, rrSl: 80,
                     lots: 0.1, start: 1, startTime: t0 + 60000, marginUsed: 10}];
-      const conAperta = conta('A');
+      conta('A');
 
-      esciReplayLive();                    // STOP: si torna in diretta
-      // In diretta ri-fissa la scala (98–103, così l'entry dell'aperta, 100.5, rientra a schermo)
-      // perché esciReplayLive riattiva followLatest e l'auto-fit la rifarebbe da sé.
+      esciReplayLive();
       followLatest = false; viewPriceLo = 98; viewPriceHi = 103; priceZoomFactor = 1;
-      const inDiretta = conta('D');   // l'aperta torna (riga di entrata), le chiuse (interruttore off) no
+      conta('D');
 
       proto.moveTo = vM; proto.lineTo = vL; proto.stroke = vS;
       const kw = (r) => r.y1 + '|' + r.a + '|' + r.c;
       const diff = (A, B) => B.filter(b => !A.some(a => kw(a) === kw(b))).map(kw);
       return {
-        extraL: diff(righeVuoto, righeLivelli),
+        extraPrima: diff(righeVuoto, righePrimaChiusura),
+        extraClose: diff(righeVuoto, righeAllaChiusura),
         extraA: diff(righeVuoto, righeAperta),
         extraD: diff(righeVuoto, righeDiretta),
       };
     }, TRE_CANDELE_JS);
-    // extraL: righe piene NUOVE (y+alpha+colore) rispetto al grafico vuoto. La ricostruzione
-    // disegna le 3 linee dei livelli (entry, TP, SL) con alpha 0.6 e i suoi colori → ognuna è
-    // una riga distinta; la griglia di prezzo ha alpha/colori diversi e non interferisce.
-    assert.equal(r.extraL.length, 3,
-      'il trade rivelato mostra la ricostruzione: entry, TP e SL da bordo a bordo. extraL=' + JSON.stringify(r.extraL));
-    assert.ok(r.extraL.some(k => k.includes('#2fbf71')),
-      'tra i livelli ricostruiti c\'è anche la linea del TP (verde): ' + JSON.stringify(r.extraL));
-    assert.ok(r.extraL.some(k => k.includes('#3b82f6')),
-      'tra i livelli ricostruiti c\'è anche la linea dell\'entry (blu): ' + JSON.stringify(r.extraL));
-    assert.equal(r.extraA.length, r.extraL.length,
-      'durante il replay la posizione REALE aperta non aggiunge nessuna riga (restano solo i livelli rivelati): extraA=' + JSON.stringify(r.extraA));
-    assert.equal(r.extraD.length, 1,
-      'tornati in diretta, della posizione aperta resta la sua riga di entrata (le chiuse, interruttore spento, spariscono del tutto): extraD=' + JSON.stringify(r.extraD));
+    assert.equal(r.extraPrima.length, 0, 'prima della chiusura in replay nessuna linea del trade: ' + JSON.stringify(r.extraPrima));
+    // Nessuna linea tratteggiata orizzontale entry/SL/TP (quelle avevano alpha 0.6)
+    assert.ok(!r.extraClose.some(k => k.startsWith('100|0.6|') || k.startsWith('99.5|0.6|') || k.startsWith('101.5|0.6|')),
+      'alla chiusura niente linee tratteggiate entry/SL/TP: ' + JSON.stringify(r.extraClose));
+    assert.equal(r.extraA.length, r.extraPrima.length, 'posizione reale aperta non aggiunge righe in replay: ' + JSON.stringify(r.extraA));
+    assert.equal(r.extraD.length, 1, 'in diretta resta la riga di entrata della posizione aperta: ' + JSON.stringify(r.extraD));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
+
 test('7) col PLAY in replay-Live: colonna extra per la candela in formazione e countdown col moltiplicatore', async () => {
   // RICHIESTE ESPLICITE, nate da due difetti visti dal proprietario:
   //  - "in REPLAY LIVE il tasto PLAY non aggiorna la candela": lo spazio a destra dove la candela

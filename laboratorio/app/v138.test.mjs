@@ -72,7 +72,7 @@ const SPIA_RIGHE = `
   })();
 `;
 
-test('A) in replay le orizzontali dei livelli si vedono solo finché la posizione è aperta', async () => {
+test('A) in replay: nessuna orizzontale tratteggiata entry/SL/TP; trade chiuso compare solo alla chiusura', async () => {
   const {browser, pagina, errori} = await apriApp();
   try{
     const r = await pagina.evaluate((o) => {
@@ -88,7 +88,7 @@ test('A) in replay le orizzontali dei livelli si vedono solo finché la posizion
       masterTime = closeTimeOf(R[2]); slTpScanDoneForAsset = 'TESTX';
       positions = []; active = null; trades = [];
 
-      avviaReplayLive(parseDateTime(R[0].date));   // idx = 0, in replay
+      avviaReplayLive(parseDateTime(R[0].date));
       followLatest = false; viewPriceLo = 97; viewPriceHi = 103; priceZoomFactor = 1;
       const vuoto = conta();
 
@@ -97,31 +97,21 @@ test('A) in replay le orizzontali dei livelli si vedono solo finché la posizion
                  entry: 100, exit: 100.2, sl: 99.5, tp: 101.5, rrSl: 99.5, lots: 0.1, result: 'Loss',
                  pips: 10, pl: 10, pct: 0.5, account: 1000, strategy: '',
                  startTime: t0, closedAt: new Date(t2).toISOString()}];
-      const aperta = conta();                      // idx=0: apertura 0<=0, chiusura non raggiunta
-
-      // La candela di chiusura NON è ancora raggiunta: le orizzontali restano.
+      const prima = conta(); // prima della chiusura
       idx = 1; viewEnd = 1; masterTime = closeTimeOf(R[1]);
-      const ancoraAperta = conta();
-
-      // Replay oltre la candela di chiusura (closeIdx 2 <= idx 2): le orizzontali restano visibili.
+      const ancora = conta();
       idx = 2; viewEnd = 2; masterTime = closeTimeOf(R[2]);
       const chiusa = conta();
 
       spia.proto.moveTo = spia.vM; spia.proto.lineTo = spia.vL; spia.proto.stroke = spia.vS;
       const kw = (x) => x.y1 + '|' + x.a + '|' + x.c;
       const diff = (A, B) => B.filter(b => !A.some(a => kw(a) === kw(b))).map(kw);
-      return {
-        extraAperta: diff(vuoto, aperta),
-        extraAncora: diff(vuoto, ancoraAperta),
-        extraChiusa: diff(vuoto, chiusa),
-      };
+      return { extraPrima: diff(vuoto, prima), extraAncora: diff(vuoto, ancora), extraChiusa: diff(vuoto, chiusa) };
     }, {JS: TRE_CANDELE_JS, SPIA: SPIA_RIGHE});
-    assert.equal(r.extraAperta.length, 3, 'a posizione ancora aperta si vedono le 3 orizzontali ricostruite (entry, TP, SL): ' + JSON.stringify(r.extraAperta));
-    assert.equal(r.extraAncora.length, 3, 'prima della chiusura restano ancora 3: ' + JSON.stringify(r.extraAncora));
-    assert.equal(r.extraChiusa.length, 3, 'oltre la candela di chiusura le orizzontali restano visibili: ' + JSON.stringify(r.extraChiusa));
-    assert.ok(r.extraAperta.some(k => k.includes('#2fbf71')), 'tra i livelli c\'è il TP verde');
-    assert.ok(r.extraAperta.some(k => k.includes('#3b82f6')), 'tra i livelli c\'è l\'entry blu');
-    assert.ok(r.extraAperta.some(k => k.includes('#e05252')), 'tra i livelli c\'è lo SL rosso');
+    assert.equal(r.extraPrima.length, 0, 'prima della chiusura nessuna orizzontale: ' + JSON.stringify(r.extraPrima));
+    assert.equal(r.extraAncora.length, 0, 'ancora prima della chiusura: ' + JSON.stringify(r.extraAncora));
+    assert.ok(!r.extraChiusa.some(k => k.startsWith('100|0.6|') || k.startsWith('99.5|0.6|') || k.startsWith('101.5|0.6|')),
+      'niente linee tratteggiate entry/SL/TP: ' + JSON.stringify(r.extraChiusa));
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

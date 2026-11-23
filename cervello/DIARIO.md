@@ -3,7 +3,9 @@
 ## 2026-11-23
 - Fix offset broker/UTC: rimosso fallback EET/FTMO hardcoded in bridge/mt5_feed_server; cache per server; test offset aggiornati.
 - Prop Firm: gate `esercitazione` (niente violazione automatica su conti esercitazione); pannelli drawdown mostrano attesa dati MT5 reali.
-- Valid BOS Pullback: nessuna scadenza a tempo dopo valid pullback; `maxWait` solo formazione; aggiunto toggle BE su TP1 (SL seconda a BE entrata, solo favorevole). Auto-open demo MT5 ancora da fare.
+- Valid BOS Pullback: nessuna scadenza a tempo dopo valid pullback; `maxWait` solo formazione; aggiunto toggle BE su TP1 (SL seconda a BE entrata, solo favorevole). Auto-open demo: toggle spento default, solo MT5 demo collegato, no reale/replay/duplicati/rebuild.
+- Replay: trade historical chiusi in replay vanno in sessione storica; Journal mostra apertura reale + asse grafico; rimosse linee tratteggiate entry/SL/TP in replay; trade chiuso visibile solo a chiusura.
+- Guard entry<=0: rifiuto prezzo non valido in apertura live/MT5; no posizioni locali con entry 0.
 
 ## 2026-11-22
 - 7-bis: hotfix localhost origin, rate limit 600/min, esenzione `/dati/ascolta`; deploy server.
