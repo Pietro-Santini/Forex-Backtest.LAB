@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - BOS auto-open replay: lotti 0.01 e chiusura immediata da scan
+- **Sintomo**: BOS auto-open apre sempre 0.01 lotti; posizione replay "sfarfalla" (TP/SL poi sparisce), SL non toccato, trade non visibile nel Journal/capitale della sessione guardata.
+- **Causa**: `op.lotto` ? oggetto `{lotti,...}` ma auto-open faceva `Number(op.lotto)`=>NaN=>0.01; `scanHistoricalSlTpTouches` poteva chiudere la birth bar in replay.
+- **Cura**: usa `op.lotto.lotti`; guard birth bar anche in scan mentre replayForm ? sulla stessa barra; rischioOperazione usato nei lotti pullback/insieme (per operazione).
+- **Prova**: sintassi, collaudo.
+
 ## 2026-11-23 - BOS auto-open replay: chiusura immediata nella stessa barra
 - **Sintomo**: status "aperta" ma chiude subito (XAUUSD M1 replay), Journal vuoto/non visibile nella sessione attesa.
 - **Causa**: replayValutaFormazione chiudeva al tick successivo sulla stessa forming bar; guard solo su sub insufficiente.

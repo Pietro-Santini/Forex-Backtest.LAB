@@ -661,7 +661,8 @@
 // v2.2.109 - Replay: currentPrice usa prezzo replay, non tick live; BOS auto-open senza guard same-bar aggressivo.
 // v2.2.110 - BOS auto-open replay: consenti forming bar e non chiudere nello stesso sub di nascita.
 // v2.2.111 - BOS auto-open replay: non chiudere nella barra di nascita in formazione.
-const CACHE_NAME = "forex-backtest-lab-v2.2.111";
+// v2.2.112 - BOS auto-open: lotti da op.lotto.lotti; scan non chiude birth bar in replay.
+const CACHE_NAME = "forex-backtest-lab-v2.2.112";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il
