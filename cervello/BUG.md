@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - Hotfix 2.2.107: regressione asse tempo/profili (1h indietro)
+- **Sintomo**: asse tempo 1h indietro (es. 03:09 invece di 04:09), profilo volumetrico giornaliero spezzato a 23:00.
+- **Causa**: mia correzione 2.2.105/106 sbagliata: forzava UTC su timestamp MT5 che sono gi? UTC reali (`utc_offset_seconds_applied` ? metadato broker, non shift da togliere in display).
+- **Cura**: ripristinato display in fuso device/selectedTimeZone e `romeDayAndMinute` originale.
+- **Prova**: sintassi, collaudo.
+
 ## 2026-11-23 - Hotfix 2.2.106: 500 /positions dopo 2.2.105
 - **Sintomo**: `/positions` del bridge risponde 500 Internal Server Error; app non riceve posizioni MT5.
 - **Causa**: regressione in 2.2.105: `_offset_server_cache()` assegnava `_last_good_server_offset/_server` senza dichiararli `global`, causando `UnboundLocalError`.

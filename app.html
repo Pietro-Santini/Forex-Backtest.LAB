@@ -13521,36 +13521,24 @@ function detectLocalTimeZone(){
 }
 let selectedTimeZone=detectLocalTimeZone();
 const tzFmtCache={}, tzDayFmtCache={}, tzDateFmtCache={};
-function chartDisplayTimeZone(){
- // I tempi MT5 arrivano già "spostati" dello scarto broker (utc_offset_seconds_applied),
- // quindi mostrarli in UTC equivale a mostrare l'ora del broker. Usare il fuso del device
- // (Rome) li sposta di nuovo: da qui l'asse/istogrammi sbagliati al cambio broker.
- try{
-   if(Number.isFinite(fblScartoServerSec) && mt5Connected && mt5ActiveSymbol && currentAssetKey===mt5ActiveSymbol) return 'UTC';
- }catch(e){}
- return selectedTimeZone;
-}
 function getTzFmt(tz){
  return tzFmtCache[tz]||(tzFmtCache[tz]=new Intl.DateTimeFormat('it-IT',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}));
 }
 function tzParts(t){
  if(!Number.isFinite(t))return null;
- const tz=chartDisplayTimeZone();
- const parts=getTzFmt(tz).formatToParts(new Date(t));
+ const parts=getTzFmt(selectedTimeZone).formatToParts(new Date(t));
  const o={};
  parts.forEach(p=>{ if(p.type!=='literal')o[p.type]=p.value; });
  return {year:Number(o.year),month:Number(o.month),day:Number(o.day),hour:Number(o.hour),minute:Number(o.minute)};
 }
 function tzDayLabel(t){ // es. "05 gen"
  if(!Number.isFinite(t))return '';
- const tz=chartDisplayTimeZone();
- const fmt=tzDayFmtCache[tz]||(tzDayFmtCache[tz]=new Intl.DateTimeFormat('it-IT',{timeZone:tz,day:'2-digit',month:'short'}));
+ const fmt=tzDayFmtCache[selectedTimeZone]||(tzDayFmtCache[selectedTimeZone]=new Intl.DateTimeFormat('it-IT',{timeZone:selectedTimeZone,day:'2-digit',month:'short'}));
  return fmt.format(new Date(t));
 }
 function tzDateLabel(t){ // es. "05/01/2024"
  if(!Number.isFinite(t))return '?';
- const tz=chartDisplayTimeZone();
- const fmt=tzDateFmtCache[tz]||(tzDateFmtCache[tz]=new Intl.DateTimeFormat('it-IT',{timeZone:tz,day:'2-digit',month:'2-digit',year:'numeric'}));
+ const fmt=tzDateFmtCache[selectedTimeZone]||(tzDateFmtCache[selectedTimeZone]=new Intl.DateTimeFormat('it-IT',{timeZone:selectedTimeZone,day:'2-digit',month:'2-digit',year:'numeric'}));
  return fmt.format(new Date(t));
 }
 // RICHIESTO ESPLICITAMENTE ("nel trade journal, a fianco al numero id, la data con ora e minuto
@@ -14311,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.106';
+const FBL_VERSIONE='2.2.107';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -17405,12 +17393,7 @@ function romeOffsetMs(t){
  }
  return off;
 }
-function romeDayAndMinute(t){
-  const tz=(typeof chartDisplayTimeZone==='function')?chartDisplayTimeZone():'Europe/Rome';
-  const loc=(tz==='UTC')?t:(t+romeOffsetMs(t));
-  const day=Math.floor(loc/86400000);
-  return {day,min:Math.floor((loc-day*86400000)/60000)};
-}
+function romeDayAndMinute(t){ const loc=t+romeOffsetMs(t); const day=Math.floor(loc/86400000); return {day,min:Math.floor((loc-day*86400000)/60000)}; }
 function hhmmToMin(str,def){ const m=/^(\d{1,2}):(\d{2})$/.exec(String(str||'').trim()); if(!m)return def; const h=Math.min(23,Number(m[1])), mi=Math.min(59,Number(m[2])); return h*60+mi; }
 function romeDayLabel(day){ const d=new Date(day*86400000); return String(d.getUTCDate()).padStart(2,'0')+'/'+String(d.getUTCMonth()+1).padStart(2,'0'); }
 function darkenHex(hex,f){ const m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m)return hex; const n=parseInt(m[1],16); const c=v=>Math.round(v*(1-f)).toString(16).padStart(2,'0'); return '#'+c((n>>16)&255)+c((n>>8)&255)+c(n&255); }
@@ -21690,8 +21673,7 @@ function bosStopPullback(s, p, r, i, cuscinetto) {
 function bosPuoAutoAprireDemo(p){
   try{
     if(!p || !p.autoOpenDemo) return false;
-    if(liveReplayActive) return false;
-    if(!liveModeActive) return false;
+    if(!liveModeActive && !liveReplayActive) return false;
     if(!mt5Connected) return false;
     if(!mt5AccountInfo || mt5AccountInfo.reale !== false) return false;
     return true;
@@ -21701,7 +21683,8 @@ function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
     if(!bosPuoAutoAprireDemo(p)) return;
     if(st && st._rebuilding) return;
-    if(i < rows.length-1) return; // solo barra live corrente
+    if(liveReplayActive){ if(i!==idx) return; }
+    else if(i < rows.length-1) return; // solo barra live corrente
     const ops=(st.ops||[]).filter(o=>o && o.setupId===setupId && !o.autoOpenAttempted);
     for(const op of ops){
       op.autoOpenAttempted=true;
@@ -21911,7 +21894,7 @@ const BOS_SETTINGS = [
   {type: 'num', key: 'maxWait', label: 'Età massima setup (formazione pullback)', min: 5, max: 1000},
   {type: 'check', key: 'beTp1', label: 'BE su TP1: quando il pullback prende TP, porta SL seconda a BE (entrata)'},
   {type: 'num', key: 'rischioOperazione', label: 'Rischio per operazione (%)', min: 0.01, max: 100, step: 0.01},
-  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni (solo demo/simulato, conto MT5 collegato, niente reale)'},
+  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni (solo demo/simulato, conto MT5 collegato, anche in replay, niente reale)'},
   {type: 'num', key: 'bePerc2', label: 'BE2 seconda: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
   {type: 'select', key: 'bePerc2Da', label: 'BE2 seconda: % calcolata da', options: ['apertura', 'rottura']},
   {type: 'num', key: 'bePips2', label: 'BE2 seconda: pip oltre la rottura confermata', min: 0, max: 1000, step: 1},
