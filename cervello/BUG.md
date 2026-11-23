@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - BOS auto-open replay: chiusura immediata nella stessa barra
+- **Sintomo**: status "aperta" ma chiude subito (XAUUSD M1 replay), Journal vuoto/non visibile nella sessione attesa.
+- **Causa**: replayValutaFormazione chiudeva al tick successivo sulla stessa forming bar; guard solo su sub insufficiente.
+- **Cura**: `_replayBornBarIdx` e skip in replayValutaFormazione per tutta la forming bar di nascita.
+- **Prova**: sintassi, collaudo.
+
 ## 2026-11-23 - BOS auto-open replay: apre e chiude subito
 - **Sintomo**: in replay, al valid pullback apre e chiude subito; linee TP/SL compaiono ma posizione non resta aperta; Journal registra P/L.
 - **Causa**: guard replay consentiva solo i==idx (bloccava forming bar idx+1); replayValutaFormazione poteva chiudere la posizione nello stesso tick/sub di nascita.
