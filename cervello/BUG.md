@@ -1,5 +1,12 @@
 # BUG
 
+## 2026-11-24 - BOS auto-open: TP/BE/chiusura non sincronizzati su posizioni reali; beTp1 non applicato; tocco valid pullback solo a fine candela
+- **Sintomo**: auto-open BOS apre posizione ma TP seconda entrata mancante; prima posizione non chiusa al TP1; BE % non sposta SL; nessuna chiusura a tutti i TP. In replay chiusura non sempre visibile in Journal con ora reale.
+- **Causa**: st.ops aggiornati solo nella simulazione indicatore, utoPosId mai riletto; eTp1 presente in settings ma non implementato; compute BOS avanzava builtTo sulla barra in formazione, rilevando il tocco solo a candela chiusa.
+- **Cura**: helper osPosAuto/bosSyncAutoPos/bosChiudiAutoPos per propagare TP/SL/BE/chiusura; implementato eTp1; BOS rievaluta barra in formazione senza avanzare builtTo e con guardie anti-duplicato; 
+ealCloseAt su trade chiusi e visualizzazione Journal.
+- **Prova**: laboratorio/app/bos_auto_sync_posizioni.test.mjs, test BOS esistenti, sintassi app.
+
 ## 2026-11-23 - Grafico fermo dopo le 22:00 mentre MT5 trasmette (v2.2.113)
 - **Sintomo**: dopo le 22:00 (ora Roma) le candele non venivano piu disegnate sul grafico; capitale/P&L live si aggiornavano. Misurato: liveSessionPhaseNow=closed, chiusuraMin=1320, mt5Connected=true, mt5ActiveSymbol=null, ssetRiceve=false, lastMt5TickAt/Real=0.
 - **Causa**: liveSessionTick congelava il feed chart sulla chiusura da orologio; il guard proteggeva solo con tick recenti (blAssetRiceveDatiOra). Con feed tick WS morto/assente ma broker ancora tradabile (P&L REST vivo), la fase passava a closed e spegneva il grafico.

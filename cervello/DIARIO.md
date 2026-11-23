@@ -1,5 +1,8 @@
 # DIARIO
 
+## 2026-11-24
+- v2.2.114: BOS auto-open sincronizza TP/SL/BE/chiusura da st.ops alle posizioni reali (autoPosId). Implementato beTp1. Tocco valid pullback rilevato intra-bar in replay/live (BOS rievaluta barra in formazione senza avanzare builtTo, guardie anti-duplicato). Trade replay chiusi salvano realCloseAt e Journal lo mostra.
+
 ## 2026-11-23
 - v2.2.113: fix grafico fermo dopo 22:00 con MT5 ancora tradabile. liveSessionTick ora usa autorita MT5 (blMercatoMt5Noto/trade_allowed): no freeze se broker aperto, defer 15s su cache sconosciuta, riapertura se gia closed. Test laboratorio/app/chiusura_mt5_autorita.test.mjs.
 - Fix offset broker/UTC: rimosso fallback EET/FTMO hardcoded in bridge/mt5_feed_server; cache per server; test offset aggiornati.

@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.113';
+const FBL_VERSIONE='2.2.114';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -16386,7 +16386,11 @@ function update(){
    // #journal (vedi listener 'change' più sotto nello script), come già per jumptrade/deltrade.
    const strategyOptionsHtml='<option value="">—</option>'+tradeStrategies.map(s=>`<option value="${escapeHtmlLite(s)}"${t.strategy===s?' selected':''}>${escapeHtmlLite(s)}</option>`).join('');
    const strategyCell=`<td><select class="journalStrategySelect" data-strategy-trade="${i}" title="Strategia usata in questa operazione" style="font-size:11px;background:#131a24;color:#e8edf3;border:1px solid #2b3541;border-radius:5px;padding:2px 3px;max-width:100px">${strategyOptionsHtml}</select></td>`;
-   return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td class="journalClosedCell" data-open-label="${escapeHtmlLite(journalOpenAtLabel(t))}">${journalClosedAtLabel(t.closedAt)}</td><td>${tAsset}</td><td>${modeTag}</td><td>${journalOrigineEFamigliaHtml(t)}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'—'}</td><td>${fmtPriceA(t.entry,t.asset)}</td><td>${journalSlTxt}</td><td>${fmtPriceA(t.tp,t.asset)}</td><td>${rrArrotondatoTesto(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPriceA(t.exit,t.asset)}</td><td>${t.result}</td>`+
+    const _realClose=Number(t&&t.realCloseAt);
+    const _realCloseTxt=Number.isFinite(_realClose)?(new Date(_realClose).toLocaleDateString('it-IT')+' '+new Date(_realClose).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit',hourCycle:'h23'})):'';
+    const _closeTxt=journalClosedAtLabel(t.closedAt)+(_realCloseTxt?`<div style="color:#8b96a5;font-size:10px;line-height:1.2">Reale: ${_realCloseTxt}</div>`:'');
+    const _tip=(journalOpenAtLabel(t)||'')+(_realCloseTxt?` | Chiusura reale: ${_realCloseTxt}`:'');
+    return `<tr${otherAsset?' class="otherAssetRow"':''}><td>${i+1}</td><td class="journalClosedCell" data-open-label="${escapeHtmlLite(_tip)}">${_closeTxt}</td><td>${tAsset}</td><td>${modeTag}</td><td>${journalOrigineEFamigliaHtml(t)}</td><td>${t.side}</td><td>${t.lots!=null?t.lots.toFixed(2):'-'}</td><td>${fmtPriceA(t.entry,t.asset)}</td><td>${journalSlTxt}</td><td>${fmtPriceA(t.tp,t.asset)}</td><td>${rrArrotondatoTesto(t.entry,t.rrSl??t.sl,t.tp)}</td><td>${fmtPriceA(t.exit,t.asset)}</td><td>${t.result}</td>`+
    strategyCell+
    // UN'OPERAZIONE SENZA `pips` NON DEVE ROMPERE TUTTA LA TABELLA (28 ottobre 2026).
    //
@@ -21652,6 +21656,7 @@ function bosImpostaTpConferma(st, p, fatta) {
       o.rr = rr;
       o.tpStimato = false;
       o.beLivello2 = bosLivelloBreakEven(p, o.dir, o.entry, o.tp, 2, o.livelloRotturaConfermata);
+      bosSyncAutoPos(o);
     }
   } catch (e) {}
 }
@@ -21678,6 +21683,30 @@ function bosPuoAutoAprireDemo(p){
     if(!mt5AccountInfo || mt5AccountInfo.reale !== false) return false;
     return true;
   }catch(e){ return false; }
+}
+function bosPosAuto(op){
+  try{
+    if(!op || !op.autoPosId) return null;
+    const pos=positions.find(p=>p && p.id===op.autoPosId);
+    return pos || null;
+  }catch(e){ return null; }
+}
+function bosSyncAutoPos(op){
+  try{
+    const pos=bosPosAuto(op); if(!pos) return;
+    let changed=false;
+    if(Number.isFinite(op.sl) && op.sl!==pos.sl){ pos.sl=op.sl; if(op.be1Fatto||op.be2Fatto) pos.slAt=Date.now(); changed=true; }
+    if(Number.isFinite(op.tp) && op.tp!==pos.tp){ pos.tp=op.tp; changed=true; }
+    if(changed){ try{ syncTradeLevels(); }catch(e){} try{ refreshTradeRiskModel(); }catch(e){} try{ refreshTradeLevelUI(); }catch(e){} try{ update(); }catch(e){} try{ draw(); }catch(e){} }
+  }catch(e){}
+}
+function bosChiudiAutoPos(op, reason, price){
+  try{
+    const pos=bosPosAuto(op); if(!pos) return;
+    const px=Number.isFinite(price)?price:(reason==='SL'?pos.sl:pos.tp);
+    if(!Number.isFinite(px)) return;
+    try{ closeTrade(reason, px, pos); }catch(e){}
+  }catch(e){}
 }
 function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
@@ -21805,6 +21834,7 @@ function bosApplicaBreakEven(st, p, r) {
           if (o.dir === 1 ? (nuovoSl1 > o.sl) : (nuovoSl1 < o.sl)) {
             o.slIniziale = o.sl; o.sl = Number(nuovoSl1.toFixed(8));
             o.be1Fatto = true; o.be1Barra = st.builtTo + 1;
+            bosSyncAutoPos(o);
           }
           // Applica ANCHE a conferma (se non ha già BE1)
           const op2 = (st.ops || []).find(x => x.nome === 'conferma' && x.setupId === o.setupId);
@@ -21813,6 +21843,7 @@ function bosApplicaBreakEven(st, p, r) {
             if (op2.dir === 1 ? (nuovoSl2 > op2.sl) : (nuovoSl2 < op2.sl)) {
               op2.slIniziale = op2.sl; op2.sl = Number(nuovoSl2.toFixed(8));
               op2.be1Fatto = true; op2.be1Barra = st.builtTo + 1;
+              bosSyncAutoPos(op2);
             }
           }
         }
@@ -21837,6 +21868,7 @@ function bosApplicaBreakEven(st, p, r) {
             if (o.dir === 1 ? (nuovoSl > o.sl) : (nuovoSl < o.sl)) {
               o.slIniziale = o.sl; o.sl = Number(nuovoSl.toFixed(8));
               o.be2Fatto = true; o.be2Barra = st.builtTo + 1;
+              bosSyncAutoPos(o);
             }
           }
         }
@@ -21861,18 +21893,20 @@ function bosChiudiOperazioniToccate(st, r, i, p) {
       if (st.op === o) { st.op = null; st.opSnap = null; }
       o.esito = toccaSl ? 'stop' : 'target';
       o.barraFine = i;
+      bosChiudiAutoPos(o, toccaSl ? 'SL' : 'TP', toccaSl ? o.sl : o.tp);
       st.opsFinite.push(o);
       if (st.opsFinite.length > 4) st.opsFinite.shift();
-      // La PRIMA posizione ha incassato la rottura confermata: la SECONDA riceve qui il suo target
-      // (distanza entrata->rottura × R:R, richiesta 22/11/2026) se non ce l'ha ancora. Non la si
-      // forza a pareggio sulla stessa barra: il proprietario vuole che quel target possa lavorare.
       if (o.nome === 'pullback' && toccaTp && !toccaSl) {
         for (const c of st.ops) {
           if (c.nome !== 'conferma' || c.setupId !== o.setupId || c.barra === i) continue;
           if (!Number.isFinite(c.tp) && Number.isFinite(c.livelloRotturaConfermata)) {
             const rr = Math.max(2, +c.rr || 2);
             const dist = Math.abs(c.livelloRotturaConfermata - c.entry);
-            if (dist > 0) { c.tp = c.dir === 1 ? c.entry + dist * rr : c.entry - dist * rr; c.tpStimato = false; }
+            if (dist > 0) { c.tp = c.dir === 1 ? c.entry + dist * rr : c.entry - dist * rr; c.tpStimato = false; bosSyncAutoPos(c); }
+          }
+          if (p && p.beTp1 && Number.isFinite(c.entry) && Number.isFinite(c.sl)) {
+            const be = c.entry;
+            if (c.dir === 1 ? (be > c.sl) : (be < c.sl)) { c.sl = Number(be.toFixed(8)); c.be1Fatto = true; c.be1Barra = i; bosSyncAutoPos(c); }
           }
         }
       }
@@ -21999,8 +22033,8 @@ const VALID_BOS_PULLBACK_DEF = {
           if (k < c) { if (rows[k].high >= hc) isH = false; if (rows[k].low <= lc) isL = false; }
           else { if (rows[k].high > hc) isH = false; if (rows[k].low < lc) isL = false; }
         }
-        if (isH) { st.highVals.push(hc); st.highBars.push(c); }
-        if (isL) { st.lowVals.push(lc); st.lowBars.push(c); }
+        if (isH && st.highBars[st.highBars.length-1]!==c) { st.highVals.push(hc); st.highBars.push(c); }
+        if (isL && st.lowBars[st.lowBars.length-1]!==c) { st.lowVals.push(lc); st.lowBars.push(c); }
       }
 
       // 2) Potatura
@@ -22117,8 +22151,8 @@ const VALID_BOS_PULLBACK_DEF = {
       }
 
       // 8) Nuovi setup
-      if (newBull) st.setups.push(bosNewSetup(1, i, prevHighBar, prevHigh, r.high));
-      if (newBear) st.setups.push(bosNewSetup(-1, i, prevLowBar, prevLow, r.low));
+      if (newBull && !st.setups.some(s=>s.dir===1 && s.startBar===i && s.ref===prevHigh)) st.setups.push(bosNewSetup(1, i, prevHighBar, prevHigh, r.high));
+      if (newBear && !st.setups.some(s=>s.dir===-1 && s.startBar===i && s.ref===prevLow)) st.setups.push(bosNewSetup(-1, i, prevLowBar, prevLow, r.low));
 
       // Operazione da rottura confermata: crea la SECONDA posizione (conferma)
       // La prima (pullback) è già stata creata da bosApriPullback al ritest
@@ -22171,7 +22205,8 @@ const VALID_BOS_PULLBACK_DEF = {
       }
 
       st.bullBos = bullBos; st.bearBos = bearBos;
-      st.builtTo = i;
+      const _formingBar = (liveModeActive && !liveReplayActive) ? (rows.length - 1) : (liveReplayActive && replayForm && Number.isFinite(replayForm.idx) ? replayForm.idx : -1);
+      st.builtTo = (i === _formingBar) ? i - 1 : i;
     }
   },
 
@@ -26660,7 +26695,13 @@ function draw(){
        // Il costo di QUESTO indicatore, calcolo e disegno separati: vedi fblDettaglioFine.
        let _tInd=performance.now();
        // In diretta si calcola fino all'ultima candela CHIUSA: vedi fblIdxPerIndicatori().
-       def.compute(rows,fblIdxPerIndicatori(),ind);
+       // Eccezione BOS: tocco valid pullback deve reagire subito sulla barra in formazione (issue 6).
+       let _upTo=fblIdxPerIndicatori();
+       if(ind && ind.key==='valid_bos_pullback'){
+         const _forming=(liveModeActive && !liveReplayActive)?(rows.length-1):(liveReplayActive && replayForm && Number.isFinite(replayForm.idx)?replayForm.idx:-1);
+         if(_forming>_upTo) _upTo=Math.min(_forming, rows.length-1);
+       }
+       def.compute(rows,_upTo,ind);
        _tInd=fblDettaglioFine('ind:'+ind.key+':calcolo',_tInd);
        // pad/h in coda (RICHIESTO per l'indicatore Volume, vedi volume_default più sopra nel
        // file): tutti gli altri indicatori li ignorano semplicemente, nessuna modifica alla loro
@@ -32089,14 +32130,14 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
   const _dstTrades = (closeMode===currentMode()) ? trades : (sessionByMode[closeMode] && Array.isArray(sessionByMode[closeMode].trades) ? sessionByMode[closeMode].trades : null);
   let _chiusura;
   if(_dstTrades){
-    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero}, _dstTrades);
+    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,realCloseAt:(pos.historical?Date.now():(pos.realCloseAt||null)),...vero}, _dstTrades);
   } else if(closeMode!==currentMode()) {
     let _eqSnap=sessionByMode[closeMode];
     if(!_eqSnap || typeof _eqSnap!=='object'){ _eqSnap=sessionByMode[closeMode]={positions:[],pendingOrders:[],active:null,equity:[baseCapital()],drawings:[],capital:String(baseCapital()),trades:[]}; }
     if(!Array.isArray(_eqSnap.trades)) _eqSnap.trades=[];
-    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero}, _eqSnap.trades);
+    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,realCloseAt:(pos.historical?Date.now():(pos.realCloseAt||null)),...vero}, _eqSnap.trades);
   } else {
-    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero});
+    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,realCloseAt:(pos.historical?Date.now():(pos.realCloseAt||null)),...vero});
   }
  // Notion: si manda SOLO questa, e solo adesso (vedi fblNotionDopoChiusura).
   try{ fblNotionDopoChiusura(_chiusura.riga); }catch(e){}
