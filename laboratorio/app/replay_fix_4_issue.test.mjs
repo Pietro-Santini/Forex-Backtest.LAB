@@ -31,8 +31,9 @@ test('issue1: chiusura posizione replay-live va in sessione storico, non live', 
       const pos = positions[positions.length-1];
       idx=85; viewEnd=85;
       closeTrade('MANUALE', rows[85].close, pos);
-      const t = trades[0];
-      return {mode:t?.mode, historical:t?.historical, liveTrades: trades.filter(x=>x.mode==='live').length, backtestTrades: trades.filter(x=>x.mode==='backtest').length};
+      const bt = (sessionByMode.backtest && sessionByMode.backtest.trades) || [];
+      const t = bt[0] || trades[0];
+      return {mode:t?.mode, historical:t?.historical, liveTrades: trades.filter(x=>x.mode==='live').length, backtestTrades: bt.filter(x=>x.mode==='backtest').length};
     }, {prepara: PREPARA.toString()});
     assert.equal(r.historical, true);
     assert.equal(r.mode, 'backtest');
@@ -53,7 +54,8 @@ test('issue2: trade storico in replay ha data reale apertura e asse grafico', as
       const startTime = pos.startTime;
       idx=85; viewEnd=85;
       closeTrade('MANUALE', rows[85].close, pos);
-      const t = trades[0];
+      const bt = (sessionByMode.backtest && sessionByMode.backtest.trades) || [];
+      const t = bt[0] || trades[0];
       const lbl = journalOpenAtLabel(t);
       return {hasReal:Number.isFinite(realOpenAt), hasChart:Number.isFinite(startTime), realOpenAt, startTime, lbl, hasBoth:/Apertura reale:/.test(lbl) && /Asse grafico:/.test(lbl)};
     }, {prepara: PREPARA.toString()});

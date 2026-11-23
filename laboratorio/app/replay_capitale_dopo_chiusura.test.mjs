@@ -40,12 +40,13 @@ test('in replay, chiudere una posizione aggiorna il capitale storico e il journa
       const plFlottante = posLivePL(pos);
       const prezzoChiusura = rows[81].close;
       closeTrade('MANUALE', prezzoChiusura, pos);
+      const btTrades = (sessionByMode.backtest && sessionByMode.backtest.trades) || [];
       return {
         capitalePrima,
         plFlottante,
         capitaleDopo: equityNow(),
-        chiusi: trades.length,
-        trade: trades[0] ? {pl: trades[0].pl, mode: trades[0].mode, historical: trades[0].historical} : null,
+        chiusi: btTrades.length,
+        trade: btTrades[0] ? {pl: btTrades[0].pl, mode: btTrades[0].mode, historical: btTrades[0].historical} : null,
         aperte: positions.length,
         sessionBacktestEquity: (sessionByMode.backtest && sessionByMode.backtest.equity) || [],
       };

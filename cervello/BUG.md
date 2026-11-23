@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - Chiusura MT5 non riflessa in app / saldo Journal errato / fuso MT5
+- **Sintomo**: posizioni chiuse su terminale non chiuse in app; doppione/Journal incoerente; saldo Journal 10.825 ? vs saldo reale; al cambio account MT5 asse tempo/profili volumetrici giornalieri sfasati.
+- **Causa**: `fetchMt5Positions` azzerava `mt5MissingSince` quando `/deal_reason` dava reason/price nulli o prezzo<=0, impedendo retry; `closeTrade/addBackfilledMt5Trade` scrivevano sempre nei globali correnti; saldo reale deal mancante ricadeva su saldo simulato; asse/profili usavano fuso Rome su timestamp MT5 gi? shiftati da offset broker; `bridge.py` `_offset_server_cache()` poteva restituire `None` causando 500 su `/positions`.
+- **Cura**: retry su deal_reason incompleto/prezzo<=0; routing trade/equity nella sessione corretta (`fblRegistraTradeMt5` accetta array destinazione); fallback `mt5AccountInfo.balance` per trade reali MT5; `chartDisplayTimeZone()`=UTC per asset MT5 attivo e `romeDayAndMinute` broker-aware; `_offset_server_cache()` fallback numerico 0.
+- **Prova**: `sintassi_app.mjs`, test mirati replay/journal/entry, collaudo completo verde.
+
 ## 2026-11-23 - Entry 0 in apertura live (P/L non calcolabile)
 - **Sintomo**: apertura posizione in live con entry a 0, P/L/SL-TP non calcolati; segnalato su operazione reale.
 - **Causa**: guardie entry accettavano `0` (`Number.isFinite(0)` true); `currentPrice()` poteva restituire close 0; `placeRealMt5Order` accettava fill price 0.

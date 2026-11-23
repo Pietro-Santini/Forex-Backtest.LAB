@@ -4573,15 +4573,17 @@ def _offset_server_cache(preferred_symbols=()):
         return _last_good_server_offset
     valore = _estimate_server_offset_seconds(preferred_symbols)
     _offset_misurato_il = time.time()
-    if valore:
-        _ricorda_scarto(valore)
-        return valore
+    if isinstance(valore, (int, float)) and math.isfinite(float(valore)):
+        _ricorda_scarto(int(valore))
+        _last_good_server_offset = int(valore)
+        _last_good_server_offset_server = server
+        return int(valore)
     ricordato = _scarto_ricordato()
     if ricordato is not None:
         _last_good_server_offset = ricordato
         _last_good_server_offset_server = server
         return ricordato
-    return valore
+    return 0
 
 
 @app.get("/history_deals")

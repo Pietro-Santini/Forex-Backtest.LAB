@@ -13521,24 +13521,36 @@ function detectLocalTimeZone(){
 }
 let selectedTimeZone=detectLocalTimeZone();
 const tzFmtCache={}, tzDayFmtCache={}, tzDateFmtCache={};
+function chartDisplayTimeZone(){
+ // I tempi MT5 arrivano già "spostati" dello scarto broker (utc_offset_seconds_applied),
+ // quindi mostrarli in UTC equivale a mostrare l'ora del broker. Usare il fuso del device
+ // (Rome) li sposta di nuovo: da qui l'asse/istogrammi sbagliati al cambio broker.
+ try{
+   if(Number.isFinite(fblScartoServerSec) && mt5Connected && mt5ActiveSymbol && currentAssetKey===mt5ActiveSymbol) return 'UTC';
+ }catch(e){}
+ return selectedTimeZone;
+}
 function getTzFmt(tz){
  return tzFmtCache[tz]||(tzFmtCache[tz]=new Intl.DateTimeFormat('it-IT',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}));
 }
 function tzParts(t){
  if(!Number.isFinite(t))return null;
- const parts=getTzFmt(selectedTimeZone).formatToParts(new Date(t));
+ const tz=chartDisplayTimeZone();
+ const parts=getTzFmt(tz).formatToParts(new Date(t));
  const o={};
  parts.forEach(p=>{ if(p.type!=='literal')o[p.type]=p.value; });
  return {year:Number(o.year),month:Number(o.month),day:Number(o.day),hour:Number(o.hour),minute:Number(o.minute)};
 }
 function tzDayLabel(t){ // es. "05 gen"
  if(!Number.isFinite(t))return '';
- const fmt=tzDayFmtCache[selectedTimeZone]||(tzDayFmtCache[selectedTimeZone]=new Intl.DateTimeFormat('it-IT',{timeZone:selectedTimeZone,day:'2-digit',month:'short'}));
+ const tz=chartDisplayTimeZone();
+ const fmt=tzDayFmtCache[tz]||(tzDayFmtCache[tz]=new Intl.DateTimeFormat('it-IT',{timeZone:tz,day:'2-digit',month:'short'}));
  return fmt.format(new Date(t));
 }
 function tzDateLabel(t){ // es. "05/01/2024"
  if(!Number.isFinite(t))return '?';
- const fmt=tzDateFmtCache[selectedTimeZone]||(tzDateFmtCache[selectedTimeZone]=new Intl.DateTimeFormat('it-IT',{timeZone:selectedTimeZone,day:'2-digit',month:'2-digit',year:'numeric'}));
+ const tz=chartDisplayTimeZone();
+ const fmt=tzDateFmtCache[tz]||(tzDateFmtCache[tz]=new Intl.DateTimeFormat('it-IT',{timeZone:tz,day:'2-digit',month:'2-digit',year:'numeric'}));
  return fmt.format(new Date(t));
 }
 // RICHIESTO ESPLICITAMENTE ("nel trade journal, a fianco al numero id, la data con ora e minuto
@@ -14299,7 +14311,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.104';
+const FBL_VERSIONE='2.2.105';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -17393,7 +17405,12 @@ function romeOffsetMs(t){
  }
  return off;
 }
-function romeDayAndMinute(t){ const loc=t+romeOffsetMs(t); const day=Math.floor(loc/86400000); return {day,min:Math.floor((loc-day*86400000)/60000)}; }
+function romeDayAndMinute(t){
+  const tz=(typeof chartDisplayTimeZone==='function')?chartDisplayTimeZone():'Europe/Rome';
+  const loc=(tz==='UTC')?t:(t+romeOffsetMs(t));
+  const day=Math.floor(loc/86400000);
+  return {day,min:Math.floor((loc-day*86400000)/60000)};
+}
 function hhmmToMin(str,def){ const m=/^(\d{1,2}):(\d{2})$/.exec(String(str||'').trim()); if(!m)return def; const h=Math.min(23,Number(m[1])), mi=Math.min(59,Number(m[2])); return h*60+mi; }
 function romeDayLabel(day){ const d=new Date(day*86400000); return String(d.getUTCDate()).padStart(2,'0')+'/'+String(d.getUTCMonth()+1).padStart(2,'0'); }
 function darkenHex(hex,f){ const m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m)return hex; const n=parseInt(m[1],16); const c=v=>Math.round(v*(1-f)).toString(16).padStart(2,'0'); return '#'+c((n>>16)&255)+c((n>>8)&255)+c(n&255); }
@@ -31954,12 +31971,13 @@ function fblUnisciRigaMt5(dest,src){
 // Ritorna {riga,aggiunta}: 'riga' e' quella da usare d'ora in poi (la nuova appena scritta, o
 // la vecchia aggiornata), 'aggiunta' dice se e' finita DAVVERO nel Journal - cosi' chi chiama
 // non conta due volte lo stesso profitto nell'equity curve.
-function fblRegistraTradeMt5(riga){
+function fblRegistraTradeMt5(riga, arr){
   try{
-    if(!riga||riga.mt5Ticket==null){ trades.push(riga); return {riga,aggiunta:true}; }
+    const dst=Array.isArray(arr)?arr:trades;
+    if(!riga||riga.mt5Ticket==null){ dst.push(riga); return {riga,aggiunta:true}; }
     const login=riga.mt5Login!=null?riga.mt5Login:((currentMt5AccountTag()||{}).mt5Login);
-    const gia=trades.find(t=>fblTradeMt5Stesso(t,riga.mt5Ticket,login));
-    if(!gia){ trades.push(riga); return {riga,aggiunta:true}; }
+    const gia=dst.find(t=>fblTradeMt5Stesso(t,riga.mt5Ticket,login));
+    if(!gia){ dst.push(riga); return {riga,aggiunta:true}; }
     // Lo stesso ticket e' gia' nel Journal: NON si aggiunge una seconda riga.
     if(fblRigaMt5Vuota(gia)&&!fblRigaMt5Vuota(riga)){
       // Ma se quella che c'era era rimasta con i valori a 0, dentro i dati veri di questa.
@@ -31969,7 +31987,7 @@ function fblRegistraTradeMt5(riga){
     }
     fblUnisciRigaMt5(gia,riga);
     return {riga:gia,aggiunta:false};
-  }catch(e){ trades.push(riga); return {riga,aggiunta:true}; }
+  }catch(e){ (Array.isArray(arr)?arr:trades).push(riga); return {riga,aggiunta:true}; }
 }
 // LA RIPARAZIONE DEI DOPPIONI GIA' SALVATI. Il difetto non e' la prima volta che succede:
 // nelle versioni precedenti sono state scritte piu' righe per lo stesso ticket. Al caricamento
@@ -32049,7 +32067,9 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
    if(veri.pl!=null){
      vero.pl=veri.pl;
      const saldoDopo=veri.balanceDopo!=null?veri.balanceDopo:veri.balance;
-     if(saldoDopo!=null){ vero.account=saldoDopo; const prima=saldoDopo-veri.pl; vero.pct=prima!==0?(veri.pl/prima*100):0; }
+     const saldoMt5=Number(mt5AccountInfo&&mt5AccountInfo.balance);
+     const saldoReale=Number.isFinite(saldoDopo)?saldoDopo:(Number.isFinite(saldoMt5)?saldoMt5:null);
+     if(saldoReale!=null){ vero.account=saldoReale; const prima=saldoReale-veri.pl; vero.pct=prima!==0?(veri.pl/prima*100):0; }
      else{ vero.pct=balanceBefore!==0?(veri.pl/balanceBefore*100):0; vero.account=balanceBefore+veri.pl; }
    }
    if(vero.entry!=null)vero.pips=pipsFromPrice(pos.side,vero.entry,price,pos.asset||currentAssetKey);
@@ -32058,7 +32078,18 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
   // fblRegistraTradeMt5): se quel ticket e' gia' nel Journal - recuperato dallo storico, o
   // scritto da un'altra strada - NON si aggiunge una seconda riga, si aggiorna quella che
   // c'era (comprese le righe rimaste con i valori a 0).
-  const _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero});
+  const _dstTrades = (closeMode===currentMode()) ? trades : (sessionByMode[closeMode] && Array.isArray(sessionByMode[closeMode].trades) ? sessionByMode[closeMode].trades : null);
+  let _chiusura;
+  if(_dstTrades){
+    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero}, _dstTrades);
+  } else if(closeMode!==currentMode()) {
+    let _eqSnap=sessionByMode[closeMode];
+    if(!_eqSnap || typeof _eqSnap!=='object'){ _eqSnap=sessionByMode[closeMode]={positions:[],pendingOrders:[],active:null,equity:[baseCapital()],drawings:[],capital:String(baseCapital()),trades:[]}; }
+    if(!Array.isArray(_eqSnap.trades)) _eqSnap.trades=[];
+    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero}, _eqSnap.trades);
+  } else {
+    _chiusura=fblRegistraTradeMt5({...pos,...realLevelFields,...acctTag,exit:price,result:reason,pl,pct,pips,account,closedAt:rows[idx]?.date||'',closeTF:currentTF,mode:closeMode,...vero});
+  }
  // Notion: si manda SOLO questa, e solo adesso (vedi fblNotionDopoChiusura).
   try{ fblNotionDopoChiusura(_chiusura.riga); }catch(e){}
  if(!silent)playOrderSound();
@@ -32086,16 +32117,18 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
  // "account" è il saldo GLOBALE del conto (tutti gli asset) subito dopo questa chiusura:
  // l'equity curve è un'unica timeline continua del conto, non una per asset. Con il profitto vero
  // di MT5 la curva segue quello (il saldo del broker va solo nella colonna "Conto" del Journal,
- // la curva resta sul capitale dell\'app per non avere salti).
+ // la curva resta sul capitale dell'app per non avere salti).
  // L'equity segue la modalità del trade: le posizioni replay vanno nel conto storico,
  // quindi in replay-live non contaminano l'equity della sessione live.
  if(closeMode===currentMode()) equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
  else {
    let _eqSnap=sessionByMode[closeMode];
-   if(!_eqSnap || typeof _eqSnap!=='object'){ _eqSnap=sessionByMode[closeMode]={positions:[],pendingOrders:[],active:null,equity:[baseCapital()],drawings:[],capital:String(baseCapital())}; }
+   if(!_eqSnap || typeof _eqSnap!=='object'){ _eqSnap=sessionByMode[closeMode]={positions:[],pendingOrders:[],active:null,equity:[baseCapital()],drawings:[],capital:String(baseCapital()),trades:[]}; }
    if(!Array.isArray(_eqSnap.equity)) _eqSnap.equity=[baseCapital()];
+   if(!Array.isArray(_eqSnap.trades)) _eqSnap.trades=[];
    _eqSnap.equity.push(vero.pl!=null?balanceBefore+vero.pl:account);
  }
+
  // Il Trade Journal e' cambiato: va anche nel cloud, che e' l'unica copia che segue l'account
  // attraverso aggiornamenti, reinstallazioni e cambi di indirizzo d'ingresso.
  fblCloudSalvaTradeJournal();
@@ -50074,7 +50107,8 @@ function addBackfilledMt5Trade(d){
  const netto=mt5NettoDaStorico(d);
  const pl=netto!=null?netto:calculateForexPL(d.side,d.priceOpen,d.priceClose,lots,d.symbol);
  const pips=pipsFromPrice(d.side,d.priceOpen,d.priceClose,d.symbol);
- const balanceBefore=(num($('capital').value)||10000)+closedPL();
+ const saldoMt5=Number(mt5AccountInfo&&mt5AccountInfo.balance);
+ const balanceBefore=Number.isFinite(saldoMt5)?(saldoMt5-pl):((num($('capital').value)||10000)+closedPL());
  const pct=balanceBefore!==0?(pl/balanceBefore*100):0;
  const account=balanceBefore+pl;
  const closeIso=new Date(d.timeClose*1000).toISOString();
@@ -50092,6 +50126,11 @@ function addBackfilledMt5Trade(d){
   // LA STESSA PORTA UNICA di closeTrade() - invariante: un ticket MT5 = una riga sola nel
   // Journal (vedi fblRegistraTradeMt5): se quel ticket e' gia' nel Journal non si aggiunge una
   // seconda riga, si aggiorna quella che c'era (comprese le righe rimaste con i valori a 0).
+  const _bfMode=(isPropFirmMode&&liveModeActive?'live_propfirm':'live');
+  const _bfSnap=( _bfMode===currentMode() ? null : sessionByMode[_bfMode]);
+  if(_bfSnap && !Array.isArray(_bfSnap.trades)) _bfSnap.trades=[];
+  if(_bfSnap && !Array.isArray(_bfSnap.equity)) _bfSnap.equity=[baseCapital()];
+  const _bfDst=(_bfMode===currentMode()) ? trades : (_bfSnap ? _bfSnap.trades : trades);
   const _recupero=fblRegistraTradeMt5({
    id:Date.now()+Math.random(),
    asset:d.symbol,side:d.side,entry:fblPrezzoValido(d.priceOpen),
@@ -50107,18 +50146,21 @@ function addBackfilledMt5Trade(d){
    // trade REALE sul conto MT5 collegato, non può mai finire marcato come Storico/backtest solo
    // perché l'utente in quel momento ha la sessione backtest a schermo (currentMode() leggerebbe
    // quella, non da dove viene davvero il trade) — mai l'impossibile combo Storico+🖥️.
-   closedAt:closeIso,closeTF:1,mode:(isPropFirmMode&&liveModeActive?'live_propfirm':'live'),
+   closedAt:closeIso,closeTF:1,mode:_bfMode,
    // Marcatore interno (non mostrato in una colonna dedicata del Journal, che non ne ha una):
    // distingue programmaticamente un trade "scoperto" da /history_deals da uno rilevato in
    // tempo reale dal normale polling — utile per debug/dedup, non per la UI.
    backfilled:true,
    ...currentMt5AccountTag()
- });
+ }, _bfDst);
   mt5ApplicaSegnale(_recupero.riga);
   // Il punto nell'equity curve si aggiunge SOLO se l'operazione e' finita davvero nel Journal:
   // se era gia' la' (lo stesso ticket) non si aggiunge una seconda volta, o il conto crescerebbe
   // da solo a ogni riconnessione.
-  if(_recupero.aggiunta)equity.push(account);
+  if(_recupero.aggiunta){
+    if(_bfMode===currentMode()) equity.push(account);
+    else if(_bfSnap) _bfSnap.equity.push(account);
+  }
 }
 // ===================== POSIZIONI REALI MT5 (controllo completo) =====================
 // Da qui in poi si parla di denaro VERO: mt5RealPositions è la fotografia (ogni 2s) di ciò
@@ -50960,8 +51002,8 @@ async function fetchMt5Positions(){
          if(dr.data.stillOpen){ p.mt5MissingSince=null; continue; }
          // Nessun deal: questo conto non ha MAI visto il ticket. Non e' una chiusura - e' una
          // posizione di un altro conto, o uno storico non ancora pronto. Non si giornalizza; si
-         // riguarda piu' tardi. Era esattamente il caso del cambio conto.
-         if(dr.data.reason==null&&dr.data.price==null){ p.mt5MissingSince=null; continue; }
+         // riguarda piu' tardi. Si tiene "mancante" così al prossimo giro si riprova.
+         if(dr.data.reason==null&&dr.data.price==null){ p.mt5MissingSince=p.mt5MissingSince||fetchStartedAt; continue; }
          if(dr.data.reason)reason=dr.data.reason;
          // Number(null) vale 0, che e' "finito": cosi' un prezzo mancante diventava un'uscita a 0.
          const prezzoDeal=dr.data.price!=null?Number(dr.data.price):NaN;
@@ -50978,7 +51020,8 @@ async function fetchMt5Positions(){
          };
        }
        // Un'uscita a 0 (o negativa) non esiste: meglio non scrivere niente che un P/L inventato.
-       if(!(Number(price)>0)){ p.mt5MissingSince=null; continue; }
+       // Si tiene "mancante" per riprovare al prossimo giro (lo storico può arrivare in ritardo).
+       if(!(Number(price)>0)){ p.mt5MissingSince=p.mt5MissingSince||fetchStartedAt; continue; }
        const finalLevels=resolveMt5FinalLevels(p,lastKnown);
        chiusureVere.push({p,reason,price,finalLevels,veri});
      }

@@ -52,7 +52,8 @@ test('operazioni a blocco: una conferma sola per tre posizioni reali', async () 
     const r = await pagina.evaluate(async (p) => {
       eval('(' + p + ')')();
       await fblChiudiBlocco(() => true, 'Tutte le posizioni');
-      return {conferme: window._conferme.length, aperte: positions.length, chiuse: trades.length,
+      const tAll=[].concat(trades||[], ((sessionByMode.live||{}).trades)||[], ((sessionByMode.live_propfirm||{}).trades)||[], ((sessionByMode.backtest||{}).trades)||[]);
+      return {conferme: window._conferme.length, aperte: positions.length, chiuse: tAll.length,
               testo: window._conferme[0] || ''};
     }, PREPARA.toString());
     assert.equal(r.conferme, 1,
@@ -94,7 +95,8 @@ test('chi annulla non chiude niente, in tutte e due le strade', async () => {
       const dopoBlocco = positions.length;
       await document.getElementById('closeAll').onclick();
       await new Promise(res => setTimeout(res, 100));
-      return {dopoBlocco, dopoTutte: positions.length, chiuse: trades.length};
+      const tAll=[].concat(trades||[], ((sessionByMode.live||{}).trades)||[], ((sessionByMode.live_propfirm||{}).trades)||[], ((sessionByMode.backtest||{}).trades)||[]);
+      return {dopoBlocco, dopoTutte: positions.length, chiuse: tAll.length};
     }, PREPARA.toString());
     assert.equal(r.dopoBlocco, 3, 'annullando il blocco non si chiude niente');
     assert.equal(r.dopoTutte, 3, 'annullando CHIUDI TUTTE nemmeno');

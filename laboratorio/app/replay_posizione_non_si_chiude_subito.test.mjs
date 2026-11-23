@@ -66,8 +66,10 @@ const PREPARA = (opz) => `(() => {
 const SCANSIONA = `(() => {
   slTpScanDoneForAsset = null;    // la funzione lo rimette: cosi' non esce prima del tempo
   scanHistoricalSlTpTouches();
-  return {aperte:positions.length, chiuse:trades.length,
-    esito: trades.length ? String(trades[trades.length-1].result||trades[trades.length-1].reason||'') : null};
+  const tAll = [].concat(trades||[], ((sessionByMode.backtest||{}).trades)||[], ((sessionByMode.backtest_propfirm||{}).trades)||[]);
+  const last = tAll[tAll.length-1];
+  return {aperte:positions.length, chiuse:tAll.length,
+    esito: last ? String(last.result||last.reason||'') : null};
 })()`;
 
 test('in replay la posizione NON si chiude col futuro che il replay non ha ancora raggiunto', async () => {

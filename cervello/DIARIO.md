@@ -6,6 +6,7 @@
 - Valid BOS Pullback: nessuna scadenza a tempo dopo valid pullback; `maxWait` solo formazione; aggiunto toggle BE su TP1 (SL seconda a BE entrata, solo favorevole). Auto-open demo: toggle spento default, solo MT5 demo collegato, no reale/replay/duplicati/rebuild.
 - Replay: trade historical chiusi in replay vanno in sessione storica; Journal mostra apertura reale + asse grafico; rimosse linee tratteggiate entry/SL/TP in replay; trade chiuso visibile solo a chiusura.
 - Guard entry<=0: rifiuto prezzo non valido in apertura live/MT5; no posizioni locali con entry 0.
+- v2.2.105: retry chiusura MT5 su deal_reason incompleto; close/backfill scrivono nella sessione corretta; fallback saldo reale `mt5AccountInfo.balance`; asse/profili MT5 in UTC/broker; `_offset_server_cache()` in bridge non ritorna None (fix 500 /positions).
 
 ## 2026-11-22
 - 7-bis: hotfix localhost origin, rate limit 600/min, esenzione `/dati/ascolta`; deploy server.
