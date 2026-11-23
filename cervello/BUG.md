@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - Hotfix 2.2.106: 500 /positions dopo 2.2.105
+- **Sintomo**: `/positions` del bridge risponde 500 Internal Server Error; app non riceve posizioni MT5.
+- **Causa**: regressione in 2.2.105: `_offset_server_cache()` assegnava `_last_good_server_offset/_server` senza dichiararli `global`, causando `UnboundLocalError`.
+- **Cura**: aggiunti i global mancanti in `_offset_server_cache()`.
+- **Prova**: `sintassi_app.mjs`, collaudo.
+
 ## 2026-11-23 - Chiusura MT5 non riflessa in app / saldo Journal errato / fuso MT5
 - **Sintomo**: posizioni chiuse su terminale non chiuse in app; doppione/Journal incoerente; saldo Journal 10.825 ? vs saldo reale; al cambio account MT5 asse tempo/profili volumetrici giornalieri sfasati.
 - **Causa**: `fetchMt5Positions` azzerava `mt5MissingSince` quando `/deal_reason` dava reason/price nulli o prezzo<=0, impedendo retry; `closeTrade/addBackfilledMt5Trade` scrivevano sempre nei globali correnti; saldo reale deal mancante ricadeva su saldo simulato; asse/profili usavano fuso Rome su timestamp MT5 gi? shiftati da offset broker; `bridge.py` `_offset_server_cache()` poteva restituire `None` causando 500 su `/positions`.

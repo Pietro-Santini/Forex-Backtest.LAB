@@ -4567,7 +4567,7 @@ def _offset_server_cache(preferred_symbols=()):
     """Scarto orologio server/UTC con la misura robusta di _estimate_server_offset_seconds
     (arrotondata alla mezz'ora, solo da tick freschi), ripetuta al massimo ogni 10 minuti: /positions
     la chiede ogni 2 secondi e rileggere 60 tick a ogni giro sarebbe uno spreco."""
-    global _offset_misurato_il
+    global _offset_misurato_il, _last_good_server_offset, _last_good_server_offset_server
     server = _nome_server_broker()
     if _last_good_server_offset is not None and (_last_good_server_offset_server == server or not server) and time.time() - _offset_misurato_il < 600:
         return _last_good_server_offset
