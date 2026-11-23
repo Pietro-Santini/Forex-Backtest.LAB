@@ -9,6 +9,7 @@
 - v2.2.105: retry chiusura MT5 su deal_reason incompleto; close/backfill scrivono nella sessione corretta; fallback saldo reale `mt5AccountInfo.balance`; asse/profili MT5 in UTC/broker; `_offset_server_cache()` in bridge non ritorna None (fix 500 /positions).
 - v2.2.106 hotfix: aggiunti global mancanti in `_offset_server_cache()` (regressione 500 /positions).
 - v2.2.107 hotfix: revert display UTC errato su MT5; i timestamp feed sono UTC reali, asse/profili tornano al fuso device. BOS auto-open: permesso anche in replay (solo demo/simulato).
+- v2.2.108: BOS auto-open replay crea posizione storica con campi grafico/replay corretti; guard SL/TP stessa barra solo in replay; trade va in sessione storica.
 
 ## 2026-11-22
 - 7-bis: hotfix localhost origin, rate limit 600/min, esenzione `/dati/ascolta`; deploy server.

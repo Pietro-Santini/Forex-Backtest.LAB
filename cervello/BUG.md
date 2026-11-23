@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - BOS auto-open replay: sessione/P-L/grafico errati
+- **Sintomo**: in replay, auto-open Valid BOS Pullback aggiungeva/subtraeva subito denaro, non mostrava posizione/entry-SL-TP sul grafico, trade nel Journal in sessione Live PF.
+- **Causa**: posizione auto creata senza campi replay/storici (`historical`, `startTime` replay, `realOpenAt`, `openTF`, `rrSl/slIniziale`) e senza guard same-bar SL/TP.
+- **Cura**: in replay posizione `historical:true`+backtest corretto con campi grafico/replay; guard SL/TP stessa barra solo in replay; auto-open permesso in replay demo/simulato.
+- **Prova**: `bos_auto_open_demo.test.mjs`, sintassi, collaudo completo verde.
+
 ## 2026-11-23 - Hotfix 2.2.107: regressione asse tempo/profili (1h indietro)
 - **Sintomo**: asse tempo 1h indietro (es. 03:09 invece di 04:09), profilo volumetrico giornaliero spezzato a 23:00.
 - **Causa**: mia correzione 2.2.105/106 sbagliata: forzava UTC su timestamp MT5 che sono gi? UTC reali (`utc_offset_seconds_applied` ? metadato broker, non shift da togliere in display).

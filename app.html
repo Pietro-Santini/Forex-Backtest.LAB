@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.107';
+const FBL_VERSIONE='2.2.108';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21697,16 +21697,35 @@ function bosAutoApriOpsSetup(st, p, setupId, i){
       const dir=op.dir===1?'BUY':'SELL';
       if(dir==='BUY' ? !(sl<entry) : !(sl>entry)) continue;
       if(Number.isFinite(tp)){ if(dir==='BUY' ? !(tp>entry) : !(tp<entry)) continue; }
+      // In replay evita apertura se lo stesso bar ha gia' toccato SL/TP (chiusura immediata).
+      if(liveReplayActive){
+        const _bar=rows[i]||rows[idx]||{};
+        const _bLo=Number(_bar.low), _bHi=Number(_bar.high);
+        if(Number.isFinite(_bLo)&&Number.isFinite(_bHi)){
+          if(dir==='BUY'){ if(_bLo<=sl || (Number.isFinite(tp)&&_bHi>=tp)) continue; }
+          else { if(_bHi>=sl || (Number.isFinite(tp)&&_bLo<=tp)) continue; }
+        }
+      }
       const lots=Math.max(0.01, Number(op.lotto)||0.01);
       const requiredMargin=typeof marginForLots==='function'?marginForLots(lots,entry):0;
       if(typeof freeMargin==='function' && requiredMargin>freeMargin()+1e-9) continue;
       const dup=positions.some(pos=>pos && pos.bosAuto && pos.bosSetupId===op.setupId && pos.bosNome===op.nome && pos.asset===asset);
       if(dup) continue;
+      const _nowMs = Date.now();
+      const _barTime = parseDateTime((rows[idx]||rows[i]||{}).date);
       const pos={
-        id:Date.now()+Math.random(),
+        id:_nowMs+Math.random(),
         asset, side:dir, entry, sl, tp:Number.isFinite(tp)?tp:null, origin:'BOS_AUTO',
-        lots, risk:0, dist:0, hasRiskModel:false, start:idx, startTime:Date.now(), openTF:currentTF,
-        marginUsed:requiredMargin, historical:false, backtest:!!fblBacktestModeInUso(),
+        lots, risk:0, dist:0, hasRiskModel:false,
+        start:idx,
+        startTime:(typeof fblIstanteNascitaReplay==='function')?fblIstanteNascitaReplay(_barTime):_barTime,
+        realOpenAt:liveReplayActive?_nowMs:null,
+        openTF:currentTF,
+        marginUsed:requiredMargin,
+        historical:!!liveReplayActive,
+        backtest:!!fblBacktestModeInUso(),
+        rrSl:sl,
+        slIniziale:sl,
         bosAuto:true, bosSetupId:op.setupId, bosNome:op.nome
       };
       fblAggiungiPosizione(pos);
