@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.112';
+const FBL_VERSIONE='2.2.113';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -61847,7 +61847,12 @@ setInterval(()=>{
 },5000);
 async function liveSessionTick(){
  if(liveSessionBusy)return;
- const ph=liveSessionPhaseNow();
+ let ph=liveSessionPhaseNow();
+ // MT5 autorita': se l'orologio dice chiuso/capital ma il broker riporta il simbolo ancora
+ // tradabile, non spegnere il grafico. Cosi' si evita la regressione "dopo le 22:00 niente
+ // candele" quando MT5 sta ancora trasmettendo (P&L live continua perche' usa REST).
+ const _assetPh = mt5ActiveSymbol || currentAssetKey;
+ if((ph==='closed' || ph==='capital') && mt5Connected && fblMercatoMt5Noto(_assetPh)===true) ph='mt5';
  if(ph==='capital'&&Date.now()-liveOffSessionSavedAt>10000){ liveOffSessionSavedAt=Date.now(); liveOffSessionSaveRows(); }
  const prev=liveSessionPhase;
  if(ph===prev)return;
@@ -61867,6 +61872,27 @@ async function liveSessionTick(){
      if(mt5Connected && fblAssetRiceveDatiOra(_assetOra)){
        liveSessionPhase = prev;   // non si e' cambiato stato: si rivaluta al prossimo giro
        return;
+     }
+     // MT5 e' l'autorita': se il broker dice che il simbolo e' ancora tradabile, il solo orologio
+     // non basta a spegnere il grafico. Copre il caso in cui il feed WS dei tick si e' spento per
+     // conto suo ma il mercato e' aperto (posizioni/P&L si aggiornano via REST): si tiene vivo il
+     // canale e il watchdog del timer lo riconnette. Se la cache non sa, si chiede a MT5 e si
+     // rimanda di un giro, senza congelare sulla base di un "non so".
+     if(mt5Connected && _assetOra){
+       const _mt5Aperto = fblMercatoMt5Noto(_assetOra);
+       if(_mt5Aperto === true){ liveSessionPhase = prev; try{ fblMercatoMt5Domanda(_assetOra); }catch(e){} return; }
+       if(_mt5Aperto === null){
+         try{ fblMercatoMt5Domanda(_assetOra); }catch(e){}
+         // Cache vuota/vecchia: dai a MT5 una finestra breve per rispondere prima di congelare
+         // sulla base del solo orologio. Se MT5 non risponde, dopo la finestra si applica la
+         // regola oraria di prima (nessun blocco infinito).
+         const _askAt = liveSessionTick._mt5AskAt || 0;
+         if(!_askAt){ liveSessionTick._mt5AskAt = Date.now(); liveSessionPhase = prev; return; }
+         if(Date.now() - _askAt < 15000){ liveSessionPhase = prev; return; }
+         liveSessionTick._mt5AskAt = 0; // finestra scaduta: lascia decidere l'orologio
+       } else {
+         liveSessionTick._mt5AskAt = 0;
+       }
      }
      if(prev==='capital')liveOffSessionSaveRows();
      await liveSessionFreezeMt5(ph);

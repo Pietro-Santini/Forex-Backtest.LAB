@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - Grafico fermo dopo le 22:00 mentre MT5 trasmette (v2.2.113)
+- **Sintomo**: dopo le 22:00 (ora Roma) le candele non venivano piu disegnate sul grafico; capitale/P&L live si aggiornavano. Misurato: liveSessionPhaseNow=closed, chiusuraMin=1320, mt5Connected=true, mt5ActiveSymbol=null, ssetRiceve=false, lastMt5TickAt/Real=0.
+- **Causa**: liveSessionTick congelava il feed chart sulla chiusura da orologio; il guard proteggeva solo con tick recenti (blAssetRiceveDatiOra). Con feed tick WS morto/assente ma broker ancora tradabile (P&L REST vivo), la fase passava a closed e spegneva il grafico.
+- **Cura**: in liveSessionTick autorita MT5: se blMercatoMt5Noto dice 	rade_allowed=true, la fase resta/torna mt5 (no freeze/riapertura); se cache sconosciuta, finestra breve 15s per chiedere a MT5, poi fallback orario.
+- **Prova**: laboratorio/app/chiusura_mt5_autorita.test.mjs (3/3), sintassi app.
+
 ## 2026-11-23 - BOS auto-open replay: lotti 0.01 e chiusura immediata da scan
 - **Sintomo**: BOS auto-open apre sempre 0.01 lotti; posizione replay "sfarfalla" (TP/SL poi sparisce), SL non toccato, trade non visibile nel Journal/capitale della sessione guardata.
 - **Causa**: `op.lotto` ? oggetto `{lotti,...}` ma auto-open faceva `Number(op.lotto)`=>NaN=>0.01; `scanHistoricalSlTpTouches` poteva chiudere la birth bar in replay.

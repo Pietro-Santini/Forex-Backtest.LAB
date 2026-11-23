@@ -1,6 +1,7 @@
 # DIARIO
 
 ## 2026-11-23
+- v2.2.113: fix grafico fermo dopo 22:00 con MT5 ancora tradabile. liveSessionTick ora usa autorita MT5 (blMercatoMt5Noto/trade_allowed): no freeze se broker aperto, defer 15s su cache sconosciuta, riapertura se gia closed. Test laboratorio/app/chiusura_mt5_autorita.test.mjs.
 - Fix offset broker/UTC: rimosso fallback EET/FTMO hardcoded in bridge/mt5_feed_server; cache per server; test offset aggiornati.
 - Prop Firm: gate `esercitazione` (niente violazione automatica su conti esercitazione); pannelli drawdown mostrano attesa dati MT5 reali.
 - Valid BOS Pullback: nessuna scadenza a tempo dopo valid pullback; `maxWait` solo formazione; aggiunto toggle BE su TP1 (SL seconda a BE entrata, solo favorevole). Auto-open demo: toggle spento default, solo MT5 demo collegato, no reale/replay/duplicati/rebuild.
