@@ -1,5 +1,11 @@
 # BUG
 
+## 2026-11-23 - Replay: prezzo live mostrato / BOS auto-open bloccato
+- **Sintomo**: in replay/backtest il prezzo mostrato era il tick live reale; BOS auto-open in replay poteva non aprire per guard same-bar troppo aggressivo.
+- **Causa**: `currentPrice()` restituiva tick live anche in replay; guard SL/TP stessa barra in BOS auto-open saltava aperture legittime.
+- **Cura**: `currentPrice()` in replay usa `replayPrezzoFormazione()`/`rows[idx].close`; rimosso guard same-bar aggressivo (la chiusura SL/TP la gestisce lo scan col confine replay).
+- **Prova**: sintassi, collaudo.
+
 ## 2026-11-23 - BOS auto-open replay: sessione/P-L/grafico errati
 - **Sintomo**: in replay, auto-open Valid BOS Pullback aggiungeva/subtraeva subito denaro, non mostrava posizione/entry-SL-TP sul grafico, trade nel Journal in sessione Live PF.
 - **Causa**: posizione auto creata senza campi replay/storici (`historical`, `startTime` replay, `realOpenAt`, `openTF`, `rrSl/slIniziale`) e senza guard same-bar SL/TP.
