@@ -53,10 +53,16 @@ per lo stato di adesso vale questo file.
 
 ## 3. Lavoro mio, senza bisogno di lui
 
-7. 🤖 **`collauda.sh` deve troncare `laboratorio/risultati/ultimo.md`** invece di accodarci le corse
-   (`tee -a`). Con due corse nel file, il controllo a sottostringa `"Falliti: 0"` di
-   `guardia_git.py` passa **anche se l'ultima corsa è rossa**: è una protezione più debole di
-   quanto sembri. Finora l'ho aggirato ripulendo il file a mano prima di ogni corsa.
+7. ~~**`collauda.sh` deve troncare `ultimo.md`**~~ **PUNTO SBAGLIATO, RITIRATO il 25 novembre.**
+   `collauda.sh` **tronca già** il file (`: > "$OUT"`, riga 39, e c'è da sempre). Avevo visto due
+   corse nello stesso file e dedotto un difetto dello script senza aprirlo. La causa vera:
+   avevo **fermato** un collaudo e lanciato subito il successivo, e `TaskStop` uccide il processo
+   che lo avvolge, non `collauda.sh`, che continuava a girare — il nuovo ha troncato, il vecchio ha
+   scritto dopo.
+   **Quello che resta di vero**, e vale saperlo: il controllo di `guardia_git.py` cerca la
+   **sottostringa** `"Falliti: 0"` in tutto il file, quindi due corse sovrapposte possono farlo
+   passare anche con l'ultima rossa. Non è un difetto dello script, è un motivo per non lanciare
+   due collaudi insieme.
 8. 🤖 **I margini di tempo scritti a mano** negli altri banchi della famiglia permessi
    (`assert.ok(r.ms < 4000)` con un tetto nominale di 1500). Ne ho già corretto uno dopo un rosso
    finto a 4515 ms: il collaudo gira quattro browser in parallelo e i timer slittano. Gli altri
@@ -83,9 +89,13 @@ Stato dichiarato in `MIGRAZIONE.md`: fasi **0-7 complete** (fondamenta, chart co
 cloud/sync, UI/split, updater in-app, adapter notifiche), build Vite OK (`app.html` da 5,3 MB a
 1,41 KB, 37 moduli), **35/35** test JS e **10/10** Python verdi, E2E locale verde.
 
-11. 🤖 **Portare le cure dei permessi nella migrazione.** Verificato con una ricerca: sotto `src/`
-    **non c'è** né `verifyDirPermission` né `queryPermission`, quindi la gestione della cartella
-    delle credenziali non è ancora stata portata. Quando la si porta, **il tetto va portato con
+11. 🤖 **Portare le cure dei permessi nella migrazione.** ATTENZIONE: la prima verifica che avevo
+    scritto qui («sotto `src/` non c'è...») **non provava niente**: in quel progetto **`src/` non
+    esiste**, le cartelle sono `js/`, `css/`, `config/`, `backend/`, `supabase/`, `test/`. Rifatta
+    il 25 novembre dove sta il codice (`js/`, 43 file, più `config/` e `app.html`): **zero**
+    occorrenze di `verifyDirPermission`, `queryPermission`, `showDirectoryPicker`, `mt5CredsDir`.
+    La conclusione regge, ma ora per il motivo giusto: la gestione della cartella delle credenziali
+    non è ancora stata portata. Quando la si porta, **il tetto va portato con
     lei**, altrimenti la nuova app eredita identico un difetto che qui è costato un pomeriggio di
     diagnosi: un `await` su un permesso di file non deve mai essere senza tetto, e la UI non deve
     dipendere da quella risposta per aprirsi. Già annotato in `MIGRAZIONE.md`.
@@ -94,10 +104,18 @@ cloud/sync, UI/split, updater in-app, adapter notifiche), build Vite OK (`app.ht
     prestazioni delle query (RPC anti-N+1, indici, projection) non sono misurate — sono scritte.
 13. ⚖️ **Il backlog §4b**: responsive, trading bot, notifiche background reali, audit dei collaudi,
     test live 8.8 nella nuova app.
-14. ⚖️ **La decisione sull'unione** (contratto §0 di `MIGRAZIONE.md`): API identiche, nomi file del
-    sito, bump di versione solo dopo collaudo verde, export/import dati, 7 passi. Da applicare
-    **solo** su sua decisione esplicita. È la decisione più importante che resta: da lì dipende se
-    il punto 10 si fa qui, là, o una volta sola.
+14. ⚖️ **L'unione** (contratto §0 di `MIGRAZIONE.md`): API identiche, nomi file del sito, bump di
+    versione solo dopo collaudo verde, export/import dati, 7 passi.
+    **CORREZIONE DEL 25 NOVEMBRE:** avevo scritto che era «la decisione più importante che resta».
+    Non lo è, perché **era già presa**: il §0 dice, deciso dal proprietario il 24 novembre, che
+    «tutto il lavoro rimasto si fa qui», nella migrazione. Quindi il punto 10 si fa **là**, non in
+    `app.html`. Quello che resta da decidere non è *se* unire ma **quando**, e soprattutto in quale
+    **ordine** portare il comportamento.
+    **MISURATO il 25 novembre**, perché «fasi 0-7 complete» legge come «quasi finito» e non lo è:
+    la migrazione è **3.480 righe** in `js/` (125 kB) contro le ~**70.000** righe di `app.html`
+    (6,2 MB), cioè circa il **5%**. L'architettura è in piedi e verificata (35/35 JS, 10/10
+    Python, build Vite 307 ms); il comportamento è quasi tutto da portare — `js/indicators` sono
+    342 righe contro footprint, heatmap, Temporal VP 3D e order book dell'app vera.
 
 ## 6. Server e cloud — da confermare con lui
 

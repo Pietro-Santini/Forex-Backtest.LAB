@@ -67,16 +67,22 @@ test('verifyDirPermission si conclude anche se il permesso non risponde mai', as
       const t0 = performance.now();
       const esito = await Promise.race([
         verifyDirPermission(handle, 'readwrite'),
-        new Promise(r => setTimeout(() => r('__APPESO__'), 5000))
+        // SENTINELLA LEGATA ALLA COSTANTE, non un numero a mano: a 5000 ms fissi questa gara
+        // dichiarava «appeso» un caso che a 4515 ms era soltanto lento (il collaudo gira quattro
+        // browser in parallelo). Un numero scritto a mano qui produce un rosso che accusa il
+        // codice di un difetto che non ha.
+        new Promise(r => setTimeout(() => r('__APPESO__'), FBL_PERMESSO_TIMEOUT_MS * 6))
       ]);
-      return {esito, ms: Math.round(performance.now() - t0), chiamate: globalThis.__chiamate};
+      return {esito, ms: Math.round(performance.now() - t0), tetto: FBL_PERMESSO_TIMEOUT_MS,
+              chiamate: globalThis.__chiamate};
     }, PREPARA.toString());
     if (r.salta) return;
     assert.notEqual(r.esito, '__APPESO__',
       'verifyDirPermission non si e\' conclusa entro 5 s: e\' l\'attesa senza fine misurata sul PC');
     assert.equal(r.esito, false,
       'un permesso che non risponde non e\' un permesso concesso: deve valere false');
-    assert.ok(r.ms < 4000, 'e deve concludersi in fretta, non al limite: misurati ' + r.ms + ' ms');
+    assert.ok(r.ms < r.tetto * 4,
+      'e si conclude, non resta appesa: misurati ' + r.ms + ' ms su un tetto di ' + r.tetto + ' ms');
     assert.ok(r.chiamate.query >= 1, 'il permesso va pur chiesto almeno una volta');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
@@ -103,13 +109,14 @@ test('la voce «Account» apre la sua sezione anche se la cartella non risponde'
         await new Promise(r => setTimeout(r, 50));
       }
       return {menuAperto, sezione: $('mt5AccountSection').style.display,
-              ms: Math.round(performance.now() - t0)};
+              ms: Math.round(performance.now() - t0), tetto: FBL_PERMESSO_TIMEOUT_MS};
     }, PREPARA.toString());
     if (r.salta) return;
     assert.equal(r.menuAperto, true, 'il menu MT5 si apre al primo click');
     assert.equal(r.sezione, 'block',
       'la sezione dei conti non si e\' aperta: il pulsante «Account» e\' rimasto muto');
-    assert.ok(r.ms < 4000, 'e deve aprirsi subito, non dopo un\'attesa: misurati ' + r.ms + ' ms');
+    assert.ok(r.ms < r.tetto * 4,
+      'e deve aprirsi senza aspettare la cartella: misurati ' + r.ms + ' ms su un tetto di ' + r.tetto + ' ms');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -173,13 +180,14 @@ test('la lettura silenziosa dei conti risponde «non lo so» invece di restare a
         new Promise(r => setTimeout(() => r('__APPESO__'), 6000))
       ]);
       return {esito: esito === '__APPESO__' ? '__APPESO__' : (esito === null ? 'null' : JSON.stringify(esito)),
-              ms: Math.round(performance.now() - t0)};
+              ms: Math.round(performance.now() - t0), tetto: FBL_PERMESSO_TIMEOUT_MS};
     }, PREPARA.toString());
     if (r.salta) return;
     assert.notEqual(r.esito, '__APPESO__', 'mt5ContiSenzaChiedere non si e\' conclusa');
     assert.equal(r.esito, 'null',
       '«non lo so» e\' null, non un elenco vuoto: un elenco vuoto direbbe «sono sicuro che non ci sono conti» (visto: ' + r.esito + ')');
-    assert.ok(r.ms < 4000, 'e si conclude in fretta: misurati ' + r.ms + ' ms');
+    assert.ok(r.ms < r.tetto * 4,
+      'e si conclude, non resta appesa: misurati ' + r.ms + ' ms su un tetto di ' + r.tetto + ' ms');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
@@ -204,12 +212,13 @@ test('la voce «Connetti» arriva alla finestra di login anche se la cartella no
         await new Promise(r => setTimeout(r, 50));
       }
       return {modal: $('mt5LoginModalOverlay').style.display,
-              ms: Math.round(performance.now() - t0)};
+              ms: Math.round(performance.now() - t0), tetto: FBL_PERMESSO_TIMEOUT_MS};
     }, PREPARA.toString());
     if (r.salta) return;
     assert.notEqual(r.modal, 'none',
       'la finestra di login non si e\' aperta: «Connetti» e\' rimasto muto, come sul PC');
-    assert.ok(r.ms < 4000, 'e deve aprirsi subito: misurati ' + r.ms + ' ms');
+    assert.ok(r.ms < r.tetto * 4,
+      'e deve aprirsi senza aspettare la cartella: misurati ' + r.ms + ' ms su un tetto di ' + r.tetto + ' ms');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
