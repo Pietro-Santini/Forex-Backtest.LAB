@@ -1,5 +1,10 @@
 # Scaletta - cosa manca da fare
 
+> **QUESTO FILE E' FERMO AL 21 OTTOBRE 2026 (v2.0.15).** Per lo stato di adesso e per cosa resta
+> da fare, migrazione compresa, vedi **`cervello/SCALETTA-25-NOVEMBRE.md`**. Quello che segue
+> resta per il metodo — come si legge una scaletta, come si committa, e la verifica su quale
+> versione il proprietario ha davvero in mano — che vale ancora.
+
 Aggiornata il **21 ottobre 2026**, dopo la v2.0.15.
 
 **COME SI LEGGE.** Un punto e' FATTO solo quando esiste un test che prima falliva e ora passa, e

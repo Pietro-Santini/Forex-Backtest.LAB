@@ -3527,3 +3527,40 @@ banchi di questa famiglia, e che avevo lasciato cadere.
 accumula (`tee -a`), e con due corse dentro il controllo a sottostringa di `guardia_git.py` su
 `Falliti: 0` diventa inaffidabile. Ripulendolo prima, la riga che si legge è quella della corsa
 vera.
+
+### 25 novembre 2026 — UN CALENDARIO CHE NON CHIUDE MAI NON È UN CALENDARIO
+
+Chiuso l'ultimo punto aperto della revisione del 24 novembre, e il meccanismo è peggiore di come
+l'avevo riassunto.
+
+`orariIntervalli` **fonde** gli intervalli che si toccano entro 60 secondi, e il salto
+`23:59 → 00:00` è **esattamente** 60.000 ms. Quindi un calendario con tutti e sette i giorni
+`00:00 - 23:59` non è «aperto quasi sempre»: diventa **un solo intervallo continuo**, e
+`fblOrariAssetAperto` risponde «aperto» a qualunque istante gli si chieda, per sempre.
+
+**IL COSTO, che è la parte grave.** La guardia in `liveSessionTick` non avrebbe mai permesso il
+congelamento, e con lui **non sarebbero mai partiti** `saveLightStateNow`,
+`saveFootprintTicksNow`, `saveFootprintArchivioNow`, `saveOrderBookHistoryNow(true)` e
+`liveOffSessionSaveRows`, né si sarebbe impostato `fblNotteMt5` (quindi nemmeno il ricollegamento
+automatico alla riapertura). Un calendario troppo generoso dal broker avrebbe spento il salvataggio
+di fine giornata **in silenzio**: dati persi, non un fastidio. E nessun log l'avrebbe detto.
+
+**LA CURA.** In `fblOrariAssetStato`: se gli intervalli si riducono a **uno solo** che copre almeno
+otto giorni, non c'è nessuna chiusura nella finestra, quindi quel calendario non porta
+informazione e si risponde `null` = «non ho un calendario utilizzabile». Da lì decide l'orologio,
+che è la stessa regola di quando il calendario non c'è affatto. Per un asset non-cripto (le cripto
+escono prima nei chiamanti, via `binanceSymbolForAsset`) «non chiude mai» non può essere vero:
+mancherebbe anche il weekend.
+
+**MISURA:** prova nuova in `mercato_chiuso_orari_veri.test.mjs` — con un calendario `00:00 - 23:59`
+su sette giorni lo stato deve essere `null`, `fblOrariAssetAperto` deve dire `false`, e
+`liveSessionFreezeMt5` deve essere chiamata **una volta** (si conta). **27 test su 27** verdi sui
+banchi del mercato, collaudo completo `Falliti: 0` su **1825** test.
+
+**HO DOVUTO CAMBIARE I MIEI STESSI DATI DI PROVA**, e vale registrarlo: i banchi che avevo scritto
+il 24 novembre usavano proprio `00:00 - 23:59` su sette giorni come «calendario aperto». Era un
+dato di prova che non poteva esistere nella realtà, e che ora l'app giustamente rifiuta: sono
+passati a `00:00 - 23:00`, che copre l'istante della segnalazione e lascia un'ora di chiusura al
+giorno. Era esattamente l'avviso che l'agente in revisione aveva dato — «un calendario di prova
+realistico proverebbe anche la conversione di fuso» — e che avevo lasciato cadere. Un dato di prova
+impossibile fa passare i test per il motivo sbagliato.

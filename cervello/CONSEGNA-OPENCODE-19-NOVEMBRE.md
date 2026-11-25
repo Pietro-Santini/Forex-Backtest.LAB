@@ -655,3 +655,9 @@ accesso. Si assegna **a nome nudo**.
 - `CACHE_NAME` e' ancora `v2.2.114` sia nella copia installata sia su `origin/main`, con `app.html`
   modificata dopo: **resta da bumpare al prossimo rilascio**, ma per la regola del progetto, non
   come cura di questo difetto.
+
+### 25 novembre 2026 - LA SCALETTA DI ADESSO E UN ALTRO FILE
+
+La sezione 5 di questo documento (Da fare da Claude) e ESAURITA: il blocco MT5 che fermava tutto
+e risolto e pubblicato (v2.2.115, .116, .117). Per cosa resta da fare, migrazione compresa, vedi
+cervello/SCALETTA-25-NOVEMBRE.md.
