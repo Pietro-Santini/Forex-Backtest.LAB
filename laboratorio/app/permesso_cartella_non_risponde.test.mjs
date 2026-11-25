@@ -114,6 +114,76 @@ test('la voce «Account» apre la sua sezione anche se la cartella non risponde'
   } finally { await browser.close(); }
 });
 
+test('il riquadro delle credenziali si riempie, e dice «non lo so» invece di restare muto', async () => {
+  // LE DUE STRADE RIMASTE NUDE, trovate dalla revisione e sistemate il 25 novembre 2026.
+  // `fblCredStatoCartella` chiamava `queryPermission` senza tetto: nel WebView muto il riquadro
+  // «Credenziali: collegata / da riconfermare» non si riempiva MAI e il pulsante «Ricollega»
+  // non compariva. Stesso meccanismo dei due pulsanti MT5, in un posto diverso.
+  // Il quarto stato conta: 'daRiconfermare' offrirebbe un pulsante che non puo' riuscire.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async (fonte) => {
+      if (!supportsFS) return {salta: true};
+      eval('(' + fonte + ')()');
+      const t0 = performance.now();
+      const stato = await Promise.race([
+        fblCredStatoCartella('mt5CredsDir'),
+        new Promise(r => setTimeout(() => r('__APPESO__'), 6000))
+      ]);
+      // E il riquadro deve riempirsi davvero, senza offrire il pulsante.
+      await Promise.race([fblCredCartellaAggiorna(), new Promise(r => setTimeout(r, 9000))]);
+      const box = document.getElementById('fblCredCartellaStato');
+      const b = document.getElementById('fblCredRicollega');
+      return {stato, ms: Math.round(performance.now() - t0),
+              // IL MARGINE SI PRENDE DALLA COSTANTE, non si inventa: scritto a mano a 4000 ms
+              // questo test e' diventato rosso a 4515 ms soltanto perche' il collaudo gira
+              // quattro browser in parallelo e i timer slittano. La proprieta' vera e' «si
+              // conclude», non «si conclude in un tempo preciso».
+              tetto: FBL_PERMESSO_TIMEOUT_MS,
+              testo: box ? (box.textContent || '').trim() : 'manca',
+              pulsante: b ? b.style.display : 'manca'};
+    }, PREPARA.toString());
+    if (r.salta) return;
+    assert.notEqual(r.stato, '__APPESO__',
+      'fblCredStatoCartella non si e\' conclusa: e\' la chiamata rimasta senza tetto');
+    assert.equal(r.stato, 'nonSiSa',
+      'con il permesso che non risponde lo stato e\' «non lo so», non «da riconfermare» (visto: ' + r.stato + ')');
+    assert.ok(r.ms < r.tetto * 4,
+      'e si conclude, non resta appesa: misurati ' + r.ms + ' ms su un tetto di ' + r.tetto + ' ms');
+    assert.match(r.testo, /non risponde sul permesso/,
+      'il riquadro deve dire com\'e\' invece di restare vuoto: ' + r.testo);
+    assert.equal(r.pulsante, 'none',
+      'e NON deve offrire «Ricollega la cartella», che in questo browser non puo\' riuscire');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('la lettura silenziosa dei conti risponde «non lo so» invece di restare appesa', async () => {
+  // `mt5ContiSenzaChiedere` ha per contratto tre risposte, e la terza e' null = «non lo so senza
+  // chiedere». Con `queryPermission` nudo non riusciva a darla: restava appesa, e chi la aspettava
+  // non arrivava mai a decidere. I suoi chiamanti sono tre punti diversi dell'app.
+  const {browser, pagina, errori} = await apriApp();
+  try{
+    const r = await pagina.evaluate(async (fonte) => {
+      if (!supportsFS) return {salta: true};
+      eval('(' + fonte + ')()');
+      const t0 = performance.now();
+      const esito = await Promise.race([
+        mt5ContiSenzaChiedere(),
+        new Promise(r => setTimeout(() => r('__APPESO__'), 6000))
+      ]);
+      return {esito: esito === '__APPESO__' ? '__APPESO__' : (esito === null ? 'null' : JSON.stringify(esito)),
+              ms: Math.round(performance.now() - t0)};
+    }, PREPARA.toString());
+    if (r.salta) return;
+    assert.notEqual(r.esito, '__APPESO__', 'mt5ContiSenzaChiedere non si e\' conclusa');
+    assert.equal(r.esito, 'null',
+      '«non lo so» e\' null, non un elenco vuoto: un elenco vuoto direbbe «sono sicuro che non ci sono conti» (visto: ' + r.esito + ')');
+    assert.ok(r.ms < 4000, 'e si conclude in fretta: misurati ' + r.ms + ' ms');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
 test('la voce «Connetti» arriva alla finestra di login anche se la cartella non risponde', async () => {
   // L'altra meta' del sintomo: senza conti leggibili la strada giusta e' chiedere le credenziali,
   // non restare in attesa. Qui NON si chiama il ponte: senza conti salvati non c'e' niente da

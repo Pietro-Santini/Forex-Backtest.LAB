@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.115';
+const FBL_VERSIONE='2.2.116';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -62529,7 +62529,14 @@ async function fblCredStatoCartella(chiave){
   }
   const h=await libDirGet(chiave);
   if(!h)return 'manca';
-  const q=await h.queryPermission({mode:'readwrite'});
+  // COL TETTO, ANCHE QUI (25 novembre 2026). Questa chiamata era rimasta **nuda**: nel WebView
+  // dell'app installata `queryPermission` non si conclude mai, quindi il riquadro
+  // «Credenziali: collegata / da riconfermare» non si riempiva MAI e il pulsante «Ricollega la
+  // cartella» non compariva — un pannello muto, con lo stesso meccanismo dei due pulsanti MT5.
+  // QUARTO STATO, perche' i tre non bastavano: 'daRiconfermare' offrirebbe un pulsante che in
+  // quel WebView non puo' riuscire, e 'ok' sarebbe una bugia. «Non lo so» e' la risposta vera.
+  const q=await fblPermessoConTimeout(h.queryPermission({mode:'readwrite'}));
+  if(q==='timeout')return 'nonSiSa';
   return q==='granted'?'ok':'daRiconfermare';
  }catch(e){ return 'manca'; }
 }
@@ -62547,7 +62554,10 @@ async function fblCredCartellaAggiorna(){
  }
  const stati=[];
  for(const c of FBL_CRED_CARTELLE)stati.push({...c,stato:await fblCredStatoCartella(c.chiave)});
- const parole={ok:'collegata',daRiconfermare:'da riconfermare',manca:'non ancora scelta'};
+ // 'nonSiSa': la cartella e' salvata ma il browser non risponde sulla domanda del permesso (vedi
+ // fblCredStatoCartella). Si dice com'e', senza promettere il pulsante: premerlo non riuscirebbe.
+ const parole={ok:'collegata',daRiconfermare:'da riconfermare',manca:'non ancora scelta',
+               nonSiSa:'collegata, ma questo browser non risponde sul permesso'};
  box.textContent=stati.map(x=>x.nome+': '+(parole[x.stato]||x.stato)).join(' \u00b7 ');
  // Il pulsante serve solo se c'e' qualcosa da riconfermare: offrirlo quando non ci sono cartelle
  // salvate prometterebbe una cosa che non puo' fare.
@@ -62707,7 +62717,12 @@ async function mt5ContiSenzaChiedere(){
   if(!supportsFS)return null;
   const h=await libDirGet('mt5CredsDir');
   if(!h||!h.queryPermission)return null;
-  if((await h.queryPermission({mode:'readwrite'}))!=='granted')return null;
+  // COL TETTO, ANCHE QUI (25 novembre 2026): era l'altra chiamata rimasta nuda, e nel WebView
+  // dell'app installata restava appesa per sempre. Chi aspettava questa risposta non arrivava mai
+  // a decidere — ed e' una funzione che per contratto deve poter dire «non lo so» (null) invece di
+  // restare in attesa. Il tetto le permette di rispettarlo: 'timeout' non e' 'granted', quindi si
+  // esce con null, che e' esattamente «non lo so senza chiedere».
+  if((await fblPermessoConTimeout(h.queryPermission({mode:'readwrite'})))!=='granted')return null;
   mt5CredsDirHandle=h;
   return await readMt5AccountsFromHandle(h);
  }catch(e){ return null; }

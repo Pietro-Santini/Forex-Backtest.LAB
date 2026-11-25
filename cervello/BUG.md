@@ -3491,3 +3491,39 @@ un'altra sessione e per un altro motivo, che si e' acceso rosso appena ho tolto 
 secondo caso in due giorni in cui i test del progetto hanno visto un mio errore prima del
 proprietario — il primo fu la revisione con l'agente. Il collaudo completo prima di pubblicare non
 e' una formalita'.
+
+### 25 novembre 2026 — LE DUE CHIAMATE RIMASTE NUDE, E UN QUARTO STATO
+
+Chiuso il punto 4b della revisione. Due strade chiamavano ancora `queryPermission` **senza tetto**,
+quindi nel WebView dell'app installata restavano appese esattamente come i pulsanti di prima:
+
+1. **`fblCredStatoCartella`** → il riquadro «Credenziali: collegata / da riconfermare» nelle
+   impostazioni **non si riempiva mai**, e il pulsante «Ricollega la cartella» non compariva.
+   Stesso meccanismo dei due pulsanti MT5, in un posto diverso e meno visibile.
+2. **`mt5ContiSenzaChiedere`** → una funzione che per **contratto** deve poter rispondere `null`
+   = «non lo so senza chiedere» (lo dice il suo stesso commento) non riusciva a darla: restava
+   appesa, e i suoi tre chiamanti non arrivavano mai a decidere.
+
+**UN QUARTO STATO, perché i tre non bastavano.** `fblCredStatoCartella` aveva `'ok'`,
+`'daRiconfermare'` e `'manca'`. Con il permesso che non risponde, `'daRiconfermare'` sarebbe
+sbagliato — **offrirebbe un pulsante che in quel WebView non può riuscire** — e `'ok'` sarebbe una
+bugia. Aggiunto `'nonSiSa'`, che il riquadro scrive come «collegata, ma questo browser non risponde
+sul permesso» e che **non** accende il pulsante. Dire «non lo so» è una risposta; restare muti no.
+
+**MISURA:** due prove nuove in `permesso_cartella_non_risponde.test.mjs` — il riquadro si riempie,
+lo stato è `nonSiSa`, il pulsante resta nascosto; e la lettura silenziosa torna `null` (non un
+elenco vuoto, che direbbe «sono sicuro che non ci sono conti»). Verdi insieme ai banchi che già
+coprivano quelle funzioni, `cartella_credenziali` e `conti_nuovi_in_tutte_le_finestre`:
+**20 test su 20**.
+
+**UN MARGINE SCRITTO A MANO MI HA FATTO UN ROSSO FINTO**, e vale registrarlo: avevo messo
+`ms < 4000` con un tetto nominale di 1500, e il test è diventato rosso a **4515 ms** soltanto
+perché il collaudo gira quattro browser in parallelo e i timer slittano. Il margine ora si prende
+**dalla costante** (`FBL_PERMESSO_TIMEOUT_MS * 4`): la proprietà vera è «si conclude», non «si
+conclude in un tempo preciso». Era l'avviso che l'agente in revisione aveva già dato sugli altri
+banchi di questa famiglia, e che avevo lasciato cadere.
+
+**Pulito anche `laboratorio/risultati/ultimo.md`** prima di lanciare il collaudo: quel file si
+accumula (`tee -a`), e con due corse dentro il controllo a sottostringa di `guardia_git.py` su
+`Falliti: 0` diventa inaffidabile. Ripulendolo prima, la riga che si legge è quella della corsa
+vera.
