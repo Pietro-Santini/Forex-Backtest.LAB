@@ -1,5 +1,24 @@
 # BUG
 
+## 2026-11-24 - App non si collega più a MT5 dopo riavvio del ponte
+- **Sintomo**: app desktop non collegata a MT5; pulsante "Connetti" non rispondeva. Feed server (8001) vedeva l'account, ponte (8000) no.
+- **Causa**: ponte riavviato senza `mt5.initialize()` nel suo processo (due processi separati). Non era il browser né le credenziali.
+- **Cura**: `POST /mt5-launch` (endpoint esistente, senza credenziali) → aggancia il terminale già aperto.
+- **Verifica**: `/account` login 12346925 @ Upcomers-Server, equity 9682.38; posizioni vere di nuovo.
+- **Lezione**: se il feed vede MT5 e il ponte no, non chiedere le credenziali — usare `/mt5-launch`.
+
+## 2026-11-24 - Book storico resta in memoria al cambio asset
+- **Sintomo**: cambiando asset, lo storico book 12h dell'asset precedente restava in `orderBookHistoryByAsset`.
+- **Causa**: nessuna pulizia al cambio asset.
+- **Cura**: `fblPulisciBookStoricoAlCambioAsset` chiamata sugli switch asset; mantiene asset corrente e chiavi `reg:`.
+- **Prova**: `laboratorio/app/book_storico_cambio_asset.test.mjs`.
+
+## 2026-11-24 - Replay-live: trade storico chiuso invisibile in Journal/stats
+- **Sintomo**: chiudendo una posizione `historical` in replay-live, il trade non compariva nel Journal/conto replay; passando a Storico restava assente.
+- **Causa**: `closeTrade/addBackfilledMt5Trade` scrivevano in `sessionByMode[closeMode].trades` quando `closeMode!=currentMode()`, ma Journal/stats leggono `trades` globale.
+- **Cura**: mirror dello stesso oggetto trade nel `trades` globale quando la destinazione è un bucket di sessione diversa.
+- **Prova**: `laboratorio/app/replay_journal_visibile.test.mjs` (rossa/verde), regressione `replay_fix_4_issue.test.mjs`, `replay_posizione_non_si_chiude_subito.test.mjs`.
+
 ## 2026-11-24 - BOS auto-open: TP/BE/chiusura non sincronizzati su posizioni reali; beTp1 non applicato; tocco valid pullback solo a fine candela
 - **Sintomo**: auto-open BOS apre posizione ma TP seconda entrata mancante; prima posizione non chiusa al TP1; BE % non sposta SL; nessuna chiusura a tutti i TP. In replay chiusura non sempre visibile in Journal con ora reale.
 - **Causa**: st.ops aggiornati solo nella simulazione indicatore, utoPosId mai riletto; eTp1 presente in settings ma non implementato; compute BOS avanzava builtTo sulla barra in formazione, rilevando il tocco solo a candela chiusa.
@@ -2749,3 +2768,726 @@ Verificati verdi dopo la cura anche i dieci banchi replay che c'erano: `passo_fr
 `replay_fra_finestre`, `replay_stop_armato`, `replay_su_tutte_le_finestre`, `replay_live`,
 `frecce_replay_navigate`, `replay_fluido`, `countdown_candela_replay`, `replay_posizioni`,
 `replay_stop`.
+
+## 24 novembre 2026 — «ACCOUNT E CONNETTI NON RISPONDONO»: ERA UN'ATTESA SENZA FINE
+
+SEGNALATO dal proprietario: «il pulsante account e connetti non rispondono, non mi permettono di
+collegarmi a MT5», «me lo fa solo sul PC, sul tablet funziona tutto correttamente», e alla domanda
+«si apre la finestra di login o non succede nulla?» → **«non succede nulla»**.
+
+**TRE CAUSE SBAGLIATE, SCARTATE UNA A UNA CON LE MISURE** (vale piu' di una causa giusta
+indovinata, perche' sono tre strade che non vanno ripercorse):
+
+1. **Non era la cache del service worker.** `CACHE_NAME` era rimasto a `v2.2.114` dopo la
+   riscrittura di `app.html` delle 21:58, e sembrava la spiegazione ovvia. MISURATO leggendo il
+   `CacheStorage` del WebView vero
+   (`C:\Users\pietro\.forexbacktestlab\webview_profile\EBWebView`): la voce
+   `http://127.0.0.1:8000/app.html` aveva `content-length` **6.144.172** e SHA256
+   `3DD52A0F…8A7481`, **identico** al file su disco. La copia vecchia (6.128.400 byte) non c'era
+   da nessuna parte. **Il bump della cache non c'entrava niente**: resta una cosa da fare per sua
+   conto, non una cura per questo difetto.
+2. **Non era `/mt5-launch` contro `/connect`.** Il ponte rispondeva 400 «Non connesso», il feed
+   8001 diceva `connected_to_broker=true`: sembrava lo stesso disallineamento del 19 novembre.
+   MISURATO: era un **`[Disconnect]` manuale alle 22:08:40** premuto dal proprietario stesso
+   (confermato da lui). Lo stato era coerente, non rotto.
+3. **Non era il click che non arrivava.** Sospetto di un velo invisibile sopra al pulsante.
+   MISURATO sulla pagina viva: `mt5ModeBtn` **113x30 px**, `display:block`, `visibility:visible`,
+   `pointerEvents:auto`, e `document.elementFromPoint` al suo centro restituiva
+   **`BUTTON#mt5ModeBtn`** — il click arrivava a destinazione, e i tre gestori erano attaccati
+   (`click:1` ciascuno).
+
+**LA CAUSA VERA, MISURATA.** Nel WebView dell'app installata
+`handle.queryPermission({mode:'readwrite'})` **non si conclude mai**: non risponde `'granted'`,
+non risponde `'prompt'`, non lancia un errore — la promessa resta **pendente**. Misure prese
+leggendo la pagina viva dalla porta di debug, senza cambiare una riga:
+
+| cosa | esito misurato |
+|---|---|
+| riferimento alla cartella in IndexedDB | **presente**, `name=applicazione`, `kind=directory` |
+| `queryPermission({mode:'readwrite'})` | **non si conclude** (oltre 4 s, pendente) |
+| `queryPermission({mode:'read'})` | **non si conclude** |
+| `refreshMt5AccountsUI()` | **non si conclude** (misurato **6006 ms**, pendente) |
+| banner «Ricollega la cartella» | `display:none` — non si mostrava nemmeno lui |
+
+Il costo: **entrambe le voci del menu MT5 mostrano la loro roba solo DOPO aver letto la cartella.**
+`«Account»` fa `await refreshMt5AccountsUI()` e **poi** `section.style.display='block'`;
+`«Connetti»` fa `await mt5ScegliConto()`, che **comincia** con `await refreshMt5AccountsUI()`. Una
+promessa che non si conclude le lascia entrambe a meta': nessun errore in console, **nessuna riga
+nei log del ponte** (ed e' per questo che dopo le 21:58 non si vedeva nessun `POST /connect`: non
+veniva mai tentato), e da fuori «non succede nulla».
+
+**PERCHE' SOLO SUL PC.** Sul tablet la cartella non si usa affatto — archivio interno
+(`fblMobileCredsHandle`, vedi `getMt5CredsDirHandle`): nessuno chiede quel permesso, quindi niente
+si appende. Il «funziona sul tablet» non era un indizio contro l'ipotesi del permesso: era la sua
+conferma.
+
+**LA CURA.** Una risposta che non arriva vale «non lo so», non «aspetta per sempre».
+`fblPermessoConTimeout` mette un tetto di **`FBL_PERMESSO_TIMEOUT_MS = 1500`** su
+`queryPermission` e `requestPermission`; il ripiego e' la stringa `'timeout'`, che **non e'**
+`'granted'`, quindi non concede niente per sbaglio. In piu' la voce `«Account»` **apre la sezione
+prima** e rilegge la cartella dopo: nel caso peggiore si vede una tendina vuota per un istante,
+invece di un pulsante che non fa niente.
+
+**MISURA:** banco nuovo `laboratorio/app/permesso_cartella_non_risponde.test.mjs`, 3 prove, con una
+cartella finta le cui `queryPermission`/`requestPermission` **non si concludono mai** (`new
+Promise(() => {})`) — la condizione misurata sul PC. **Rossi sul codice vecchio** tutti e tre, con
+gli errori esatti: «verifyDirPermission non si e' conclusa entro 5 s», «la sezione dei conti non si
+e' aperta: il pulsante Account e' rimasto muto», «la finestra di login non si e' aperta: Connetti e'
+rimasto muto, come sul PC». **Verdi dopo la cura.**
+
+**TRAPPOLA PAGATA DENTRO IL BANCO, DA NON RIPETERE.** Al primo giro il terzo test era **verde per
+sbaglio**: preparava la pagina con `globalThis.mt5TerminalConfirmedBefore = true`, ma nell'app quella
+e' una **`let`** di primo livello, e un `let` globale **non diventa una proprieta' di `globalThis`**.
+Si creava una variabile nuova, l'app continuava a leggere la sua (`false`), e il test provava la
+strada del **primo accesso** — che apre il login subito e non passa mai dalla cartella. Le
+assegnazioni del banco vanno fatte **a nome nudo** (`mt5TerminalConfirmedBefore = true`), che trova
+il legame vero nello spazio globale. Un test verde sulla strada sbagliata e' peggio di un test rosso.
+
+**IN SOSPESO su questo difetto:** la cura e' nel repo (`app.html`), **non** nella copia installata
+`app_aggiornata\app.html` del proprietario, che non va toccata senza una sua decisione. Finche' non
+la aggiorna lui, sul suo PC i due pulsanti restano muti e la via per collegare MT5 e' la finestra di
+login aperta a mano. Nota a parte, non legata a questo difetto: il processo WebView gira con
+`--remote-debugging-port=9222` aperta — e' la porta da cui sono venute tutte queste misure, ma
+chiunque sul PC puo' collegarsi e leggere la sessione.
+
+## 24 novembre 2026, sera — RISOLTO (vedi la voce in fondo): «MERCATO CHIUSO» DETTO CON IL MERCATO APERTO
+
+**MISURA (non un sospetto).** Leggendo `#status` sulla pagina viva del WebView, **alle 22:40 circa**
+del 24 novembre, la scritta era:
+
+> 🌙 Mercato chiuso: grafico salvato e fermo. Si ricollega da solo a MT5 alla riapertura (00:00).
+
+**Il mercato NON era chiuso.** Il proprietario: «il mercato non è chiuso, chiude alle 23:00 su
+questo broker». Quindi la scritta era **sbagliata di una ventina di minuti**, e diceva anche una
+riapertura (00:00) che non era quella vera.
+
+**LA REGOLA GIUSTA, DETTA DAL PROPRIETARIO** (e questo difetto «sembrava essere risolto», quindi e'
+una **ricaduta**): il mercato si dichiara chiuso **solo** quando si verificano **insieme**
+
+1. **non arrivano piu' aggiornamenti** dei dati delle candele, **e**
+2. il confronto fra **l'ora di apertura e di chiusura di quel singolo asset su quel broker** e gli
+   orologi del broker torna «chiuso» — e **gli orologi cambiano col tipo di broker**, quindi non si
+   puo' usare l'ora locale del PC ne' una sola tabella per tutti.
+
+**~~L'IPOTESI DA MISURARE~~ IPOTESI POI SMENTITA DALLE MISURE (vedi la correzione in fondo).** Alle **22:08:40** c'e' stato un `[Disconnect]`
+manuale di MT5 (premuto dal proprietario, confermato). Da quel momento le candele **non arrivavano
+piu'**: la condizione 1 era vera. Se l'app ha concluso «mercato chiuso» da **quella sola**
+condizione, allora confonde **«non ricevo dati»** con **«il mercato e' chiuso»** — e qualunque
+disconnessione, calo di rete o ponte fermo si traveste da chiusura di mercato. Va misurato quale
+delle due condizioni viene davvero valutata, e con quale orologio, **prima** di toccare qualcosa.
+
+**ATTENZIONE AL MIO STESSO ERRORE, DA NON RIPETERE.** Io ho **citato quella scritta come un fatto**
+(«il mercato è chiuso, quindi è il momento meno invasivo per lanciare il collaudo»), e il
+proprietario ha dovuto correggermi. La scritta dell'app e' **il sintomo di questo difetto**, non una
+fonte sull'orario dei mercati: va trattata come un dato da verificare, mai come la verita'.
+
+**IN SOSPESO**: difetto **aperto**, nessuna cura tentata, nessun test scritto ancora. Da fare dopo
+(o insieme a) i test live 8.8, con una misura che parta dai due ingredienti della regola sopra.
+
+### CORREZIONE alla voce qui sopra, 15 minuti dopo: LA CAUSA E' MISURATA, E NON E' L'ASSENZA DI DATI
+
+L'ipotesi che avevo scritto sopra — «l'app confonde *non ricevo dati* con *mercato chiuso*, per via
+del `[Disconnect]` delle 22:08» — **e' SBAGLIATA**. L'ho misurata e non regge: la scritta arriva
+dall'**orologio**, non dall'assenza di candele. Lascio l'ipotesi sbagliata scritta, cancellata, per
+non ripercorrerla.
+
+**MISURE sulla pagina viva alle 22:41:54** (sola lettura, porta 9222):
+
+| cosa | valore misurato |
+|---|---|
+| ora del PC | **22:41:54** (1361 minuti) |
+| `fblScartoServerSec` | **3600** → **NOTO**, non `null` |
+| `fblChiusuraMinutiLocali(ora)` | **1320** = **22:00** |
+| `LIVE_MT5_CLOSE_MIN` (ripiego fisso) | **22:00** |
+| `LIVE_CAPITAL_UNTIL_MIN` | **23:00** |
+| `liveSessionPhaseNow()` | **`closed`** |
+| orari veri salvati da Capital.com | **25 asset** (AUDCAD, XAUUSD, EURUSD, GBPCAD, …) |
+| `#status` | «🌙 Mercato chiuso … riapertura (00:00)» |
+
+**QUINDI il ripiego «scarto ignoto» NON c'entra**: lo scarto era noto (3600 s). La strada vera e'
+l'**altro** ripiego, dentro `fblChiusuraMinutiLocali` (app.html ~60944):
+
+```
+let min=1440-(scartoServerMin-scartoRomaMin);   // 1440-(60-60) = 1440
+min=((min%1440)+1440)%1440;                      // -> 0
+return (min===0)?LIVE_MT5_CLOSE_MIN:min;         // -> 22:00
+```
+
+L'orologio del broker e **quello di Roma sono nello stesso fuso** (entrambi +1 h a novembre, scarto
+60 min contro 60 min). La «mezzanotte del server vista da Roma» viene quindi **mezzanotte di Roma**,
+cioe' `min===0`; il codice la considera inutilizzabile («vorrebbe dire non chiude mai dentro il
+giorno») e **ripiega su `LIVE_MT5_CLOSE_MIN` = 22:00**. Il broker chiude alle **23:00**: il ripiego
+sbaglia di **un'ora piena**, ed e' per questo che alle 22:41 l'app diceva «chiuso».
+
+**LE DUE COSE CHE STONANO, DA DECIDERE CON IL PROPRIETARIO** (non le tocco da solo: il numero
+giusto e' una scelta sua, non mia):
+
+1. **Il numero 23:00 e' gia' nel file**, ma in un'altra costante: `LIVE_CAPITAL_UNTIL_MIN=23*60`.
+   Il ripiego usa 22:00. Se la chiusura di questo broker e' 23:00, il ripiego sta guardando la
+   costante sbagliata — ma cambiarla a mano resta un numero fisso, cioe' lo stesso difetto spostato
+   di un'ora.
+2. **Gli orari veri ci sono**: `orariAsset` ne tiene **25**, letti da Capital.com
+   (`instrument.openingHours` + `snapshot.marketStatus`, rinfrescati ogni 6 ore). Li usa
+   l'etichetta sul grafico col conto alla rovescia, **ma non** `liveSessionPhaseAt`, che decide con
+   l'orologio e una soglia unica per tutti. **Sono due fonti di verita' diverse per la stessa
+   domanda**, ed e' la radice vera: la regola chiesta dal proprietario («l'ora di apertura e
+   chiusura di QUELL'asset su QUEL broker, con i suoi orologi») e' implementata **solo** nel ramo
+   dell'etichetta.
+
+**COSA SERVIREBBE** (proposta, non fatta): far decidere `liveSessionPhaseAt` dagli orari
+dell'asset quando ci sono, e tenere la soglia fissa solo come ultimo ripiego dichiarato; piu' un
+banco che misuri il caso «broker nello stesso fuso di Roma», che oggi e' esattamente quello che
+casca sul ripiego. Non l'ho scritto: va deciso prima il numero giusto e la fonte giusta.
+
+**NOTA sul mio metodo, da non ripetere**: la prima ipotesi («assenza di dati») l'ho scritta
+*prima* di misurare lo scarto e la fase. Erano tre letture, trenta secondi. Scrivere l'ipotesi
+costa meno che misurarla, ed e' proprio per questo che va misurata subito.
+
+### VERIFICA DAL VIVO DELLA CURA, sul PC del proprietario (24 novembre 2026, 22:50)
+
+Cura applicata **anche alla copia installata** `app_aggiornata\app.html` su sua decisione esplicita
+(«Sì, applicala»). Copia di sicurezza accanto al file:
+`app.html.prima-del-tetto-permessi-24nov` (6.144.172 byte, SHA256 `3DD52A0F…8A7481`). File corretto:
+6.145.175 byte, SHA256 `1747CF6B…37E94`. Sintassi: **5 script, 0 errori**.
+
+**MISURE A CURA INSTALLATA** (stessa porta 9222, app riaperta dal proprietario alle 22:49:11):
+
+| cosa | prima | dopo |
+|---|---|---|
+| `FBL_PERMESSO_TIMEOUT_MS` nella pagina viva | assente | **1500** (gira il codice nuovo, non la cache) |
+| `verifyDirPermission(handle,'readwrite')` | **non si concludeva** | **`false` in 3002 ms** |
+| voce «Account» → sezione conti | restava `none` (muta) | **`block` in 0 ms** |
+| voce «Connetti» → finestra di login | restava chiusa (muta) | **aperta in 0 ms**, passo «Credenziali» |
+
+I 3002 ms sono i **due** tetti da 1500 in fila (`queryPermission` e poi `requestPermission`, perche'
+col gesto attivo si prova anche a chiedere): il conto torna, e nessuna delle due risposte arriva —
+conferma indipendente che in questo WebView **entrambe** restano pendenti, non solo la prima.
+
+**IL SERVICE WORKER NON HA SERVITO LA COPIA VECCHIA**, pur con `CACHE_NAME` invariato a `v2.2.114`:
+la pagina riaperta esegue il codice nuovo. Conferma la misura di prima (la cache si aggiorna dalla
+rete) e che il bump non era necessario per far arrivare la cura. Il bump resta da fare per la regola
+del progetto, non per questo.
+
+**L'app NON ha sovrascritto il file alla riapertura**: impronta identica prima e dopo
+(`1747CF6B…`). Il timore che l'aggiornatore cancellasse la correzione, nato dal fatto che
+`app.html` era stato riscritto alle 22:20:00 con contenuto identico, **non si e' avverato**. (Quella
+riscrittura era il riavvio dei servizi delle 22:20, non un aggiornamento: ponte 22:19:57, feed
+22:20:01, segnali 22:20:10.)
+
+**DUE COSE DA SISTEMARE, VISTE QUI E NON CERCATE:**
+
+1. **L'etichetta della voce mente.** Con `mt5Connected=false` la voce del menu diceva
+   **«🔌 Disconnetti»**: il gestore ha giustamente preso la strada della *connessione* (e ha aperto
+   il login), ma chi legge vede «Disconnetti» mentre non e' connesso. E' esattamente come il
+   proprietario l'ha descritta: «mt5 live connetti che ora è disconnetti». `updateMt5ModeUI` non
+   aveva ancora corretto l'etichetta. Difetto **aperto**, piccolo ma fuorviante.
+2. **Il banner «Ricollega la cartella» non si vede** quando serve: misurato `display:none` subito
+   dopo l'apertura della sezione. Attenzione: quella lettura e' **troppo presto** (la sezione si apre
+   in 0 ms, il refresh finisce ~3 s dopo), quindi **non e' una prova** che il banner manchi — va
+   rimisurato dopo 4 s. Se davvero non comparisse, l'elenco conti vuoto resterebbe senza
+   spiegazione, cioe' il difetto che `cartella_credenziali.test.mjs` doveva aver chiuso.
+
+**PRECARICATO NELLA FINESTRA DI LOGIN** (letto, niente scritto): conto **vuoto**, server
+**`MetaQuotes-Demo`**, password vuota. **Non** `FTMO-Demo 1515386110` come diceva la consegna
+precedente: quella era la bozza vista nel browser non autenticato dell'altro agente, non lo stato di
+questo PC. Il conto giusto (**12346925 @ Upcomers-Server**) lo scrive il proprietario: nessuna
+credenziale e' stata letta, scritta o trascritta, e `/connect` non e' stato chiamato da me.
+
+**LEZIONE PAGATA, DA NON RIPETERE: non ricaricare la pagina dell'app desktop con
+`location.reload()`.** L'ho fatto per far prendere effetto alla cura e **la finestra dell'app si e'
+chiusa** (porta 9222 muta, processo `ForexBacktestLABDesktop` sparito); ha dovuto riaprirla lui. Il
+ponte, il feed, i segnali e il terminale sono rimasti vivi e nessuna posizione e' stata toccata, ma
+il gesto va chiesto a lui: **la cura si prende da sola alla prossima riapertura**, non serve
+ricaricare.
+
+## 24 novembre 2026 — VIA IL POPUP «SBLOCCA I FILE COLLEGATI»: ARCHIVIO INTERNO, IN AUTOMATICO
+
+RICHIESTO dal proprietario, subito dopo la cura dei pulsanti muti: «eliminiamo il popup che esce
+fuori del sblocca i file collegati eccetera, **non deve visualizzarsi, lo fa in automatico**».
+
+**PERCHE' TOGLIERLO E' GIUSTO, e non e' nascondere il problema sotto il tappeto.** La cura dei
+pulsanti muti ha fatto comparire quel banner: prima non si vedeva perche' il codice restava
+appeso **prima** di arrivare a mostrarlo. Ma MISURATO: in quel WebView non rispondono **ne'**
+`queryPermission` **ne'** `requestPermission` — i 3002 ms di `verifyDirPermission` sono la somma
+dei **due** tetti da 1500. Quindi il banner chiedeva un gesto **che non puo' riuscire**: premere
+«Sblocca» non avrebbe cambiato niente, mai. Un popup che non puo' funzionare non va mostrato.
+
+**LA SCELTA, FATTA DAL PROPRIETARIO fra tre strade** (gliele ho messe davanti con i costi, perche'
+il costo non era mio da decidere):
+
+1. **archivio interno** ← **scelta sua**: quando l'API tace si usa `fblMobileCredsHandle()`, lo
+   stesso archivio interno (IndexedDB) che usa il tablet. Nessun popup, nessun permesso, funziona
+   da subito. **Costo accettato**: i conti che stanno nel file della cartella vanno riscritti
+   **una volta** nell'app, poi restano.
+2. il ponte legge la cartella dal disco con un endpoint nuovo in `bridge.py`: niente da riscrivere,
+   ma modifica al ponte **e riavvio** del ponte, che con posizioni possibilmente aperte non faccio.
+   **Verificato**: `bridge.py` **non ha** oggi alcun endpoint per credenziali o cartelle (solo
+   `/account` e `/account_history`), quindi era davvero da scrivere.
+3. nascondere solo il banner: **sconsigliata e scartata**, riporterebbe il difetto «le credenziali
+   sono sparite» (elenco vuoto senza spiegazione) che `cartella_credenziali.test.mjs` aveva chiuso.
+
+**LA CURA.** `fblSegnaPermessoSenzaRisposta()` prende il verdetto «API muta» e lo **ricorda** in
+`localStorage` (`fbl_permesso_api_muta`), cosi' dal secondo avvio non si riprova nemmeno. Da quel
+momento `getMt5CredsDirHandle` e `getCapitalCredsDirHandle` tornano l'archivio interno, e
+`fblChiediPermessoFile` **esce subito senza mostrare niente**. Il verdetto azzera anche le cartelle
+tenute in cache, e il ripiego e' ricontrollato **dopo** l'attesa, cosi' anche il primo click
+funziona invece di tornare un elenco vuoto.
+
+**SERVONO DUE SILENZI DI FILA, NON UNO.** E' il guardrail che evita di peggiorare le cose: con un
+solo tetto scaduto, una macchina carica che risponde in due secondi farebbe cambiare strada
+all'app e i conti della cartella spariderebbero dalla vista su un browser **sano**. In questo
+WebView tacciono entrambe le chiamate, quindi il verdetto arriva comunque **al primo click**, prima
+che il banner faccia in tempo a comparire.
+
+**MISURA:** banco nuovo `laboratorio/app/permesso_api_muta_archivio_interno.test.mjs`, 3 prove che
+tengono distinti i tre casi:
+
+| caso | atteso | esito |
+|---|---|---|
+| API muta | archivio interno, banner `none`, verdetto preso e ricordato | **verde** |
+| browser che **risponde** `'prompt'` | **banner `flex`**, nessun archivio interno, verdetto NON preso | **verde** |
+| **un solo** silenzio | verdetto NON preso, nessun archivio interno | **verde** |
+
+La seconda prova e' quella che conta per non ingannarsi: **e' la dimostrazione che il banner non e'
+stato spento per tutti**, ma solo dove non puo' servire. Senza di lei questa cura sarebbe
+indistinguibile da «nascondi il popup e ignora il problema». Tutti e 11 i test dei tre banchi del
+permesso passano insieme (`permesso_api_muta_archivio_interno`, `permesso_cartella_non_risponde`,
+`cartella_credenziali`). Sintassi: **5 script, 0 errori**, su repo e copia installata.
+
+**UN TEST ESISTENTE L'HO ROTTO IO, E L'HO SISTEMATO DICENDOLO.** `cartella_credenziali.test.mjs`
+cercava `fblChiediPermessoFile('usare i conti MT5 salvati'` **entro i primi 1400 caratteri** di
+`getMt5CredsDirHandle`; le righe nuove l'hanno spinta oltre e il test e' diventato rosso. Ho
+allargato la finestra a 3000 **spiegando nel test perche'**: il limite di 1400 era incidentale, non
+era la proprieta' sotto esame (che e' «chiede il permesso con un motivo invece di tornare null in
+silenzio», e vale ancora per un browser che risponde). E' il difetto dei test che cercano stringhe
+nel sorgente invece di misurare il comportamento: la stessa proprieta' e' ora misurata **sul
+comportamento** dal banco nuovo.
+
+**IN SOSPESO:** la cura e' sul disco (repo **e** copia installata, `app_aggiornata\app.html`) ma
+**non ancora verificata dal vivo**: serve che il proprietario **chiuda e riapra l'app** —
+`location.reload()` non si usa, l'ha chiusa l'ultima volta. Alla riapertura va controllato che il
+banner non compaia e che i conti si salvino nell'archivio interno. Da ricordare: **il conto va
+riscritto una volta** (`12346925 @ Upcomers-Server`), ed e' il costo che il proprietario ha
+accettato scegliendo questa strada.
+
+### CORREZIONE alla cura del popup, mezz'ora dopo: IL VERDETTO NON DEVE SMETTERE DI PROVARE
+
+**MISURA CHE HA EVITATO UN DANNO** (24 novembre, dopo che il proprietario ha rifatto il login e
+riaperto l'app). Sondate **tutte** le pagine aperte sulla porta 9222 — 3 pagine vere
+(`app.html?v=…` e due `app.html?pipSlot=2`) piu' 4 worker — tutte e tre dicono la stessa cosa:
+
+| cosa | valore |
+|---|---|
+| `mt5Connected` | **true** — **MT5 E' COLLEGATO** |
+| cartella in cache | **`conti trading`** (non `applicazione`) |
+| conti in elenco | **1** → in tendina `12346925 @ Upcomers-Server [Passato]` |
+| banner | **`none`** |
+| prima cura (`FBL_PERMESSO_TIMEOUT_MS`) | **viva** |
+| seconda cura (`fblPermessoApiMuta`) | **NON viva** (pagine caricate prima di applicarla) |
+
+**LA CARTELLA RISPONDE.** Il permesso **fresco**, dato dal proprietario con un gesto suo vero
+durante il login, **funziona**: e' solo **dopo il riavvio** che l'API torna muta. Questo smonta un
+pezzo della mia ipotesi: il WebView non e' incapace di dare quel permesso, e' incapace di
+**rispondere** quando il permesso va riconfermato da solo.
+
+**IL DANNO CHE LA MIA CURA AVREBBE FATTO.** Avevo messo il ripiego all'archivio interno **in cima**
+a `getMt5CredsDirHandle`, prima di provare la cartella: col verdetto ricordato in `localStorage`,
+dal riavvio successivo l'app **non avrebbe piu' letto la cartella MAI**, e il conto
+`12346925 @ Upcomers-Server` dentro `conti trading` **sarebbe sparito dall'elenco**. Cioe' avrei
+ricreato, con la cura, esattamente il «**le credenziali sono sparite**» che questo progetto
+combatte da sempre — e stavolta senza nemmeno un banner a spiegarlo, perche' il banner l'avevo
+appena spento.
+
+**LA CORREZIONE.** Il verdetto «API muta» serve **a non mostrare il banner**, non a smettere di
+provare. Quindi: la cartella si prova **sempre**, e l'archivio interno e' il **ripiego dopo** il
+tentativo fallito, in entrambe le funzioni (`getMt5CredsDirHandle` e `getCapitalCredsDirHandle`).
+Costo: nel caso muto si aspettano i due tetti (circa 3 s) prima di ripiegare — invisibile, perche'
+la sezione «Account» si apre comunque in 0 ms.
+
+**MISURA:** quarta prova nel banco `permesso_api_muta_archivio_interno.test.mjs` — «col verdetto
+già preso, una cartella che RISPONDE vince sull'archivio interno»: verdetto `true` ricordato,
+cartella `conti trading` che risponde `'granted'`, e si pretende che torni **la cartella** e non
+l'archivio. **Rossa prima della correzione** (tornava l'archivio interno), **verde dopo**. Dodici
+test verdi sui tre banchi del permesso. Sintassi: 5 script, 0 errori, su repo e copia installata.
+
+**TRAPPOLA DEL BANCO, da ricordare**: `assert.notMatch` **non esiste** nel Node di questo banco
+(TypeError, non asserzione fallita — quindi un test che lo usa e' rosso per il motivo sbagliato e
+non misura niente). Si scrive `assert.equal(/regola/.test(valore), false, …)`.
+
+**LEZIONE PIU' GENERALE, pagata due volte in questa sessione**: una cura che **ricorda** un verdetto
+va guardata dal lato «e se il mondo cambia dopo?». Il primo verdetto («API muta») era giusto quando
+l'ho misurato e **sbagliato venti minuti dopo**, perche' il proprietario aveva rifatto il login. Un
+verdetto appiccicoso che spegne un tentativo e' peggio del difetto che cura.
+
+**IN SOSPESO:** le tre pagine aperte girano la **prima** cura ma non la seconda; la seconda e' su
+disco (repo e copia installata) e si prendera' alla prossima chiusura e riapertura dell'app. Da
+verificare allora: nessun banner, e il conto **ancora in tendina** (e' la prova che il ripiego non
+ha rubato il posto alla cartella). **Niente da riscrivere a mano**: il conto e' nella cartella e la
+cartella si continua a provare — il costo che il proprietario aveva accettato scegliendo l'archivio
+interno **non si paga piu'**.
+
+### VERIFICA FINALE DAL VIVO, a cura completa installata (24 novembre 2026, dopo la riapertura)
+
+Sondata la pagina principale dell'app riaperta dal proprietario (porta 9222, sola lettura). **Tutto
+quello che serviva sapere e' in questa riga:**
+
+| cosa | valore misurato | significato |
+|---|---|---|
+| `fblPermessoApiMuta` definito | **true** | la seconda cura **gira** (non e' la copia vecchia) |
+| `FBL_PERMESSO_TIMEOUT_MS` | **1500** | la prima cura gira |
+| `verdettoApiMuta` | **true** | l'API e' tornata **muta** dopo il riavvio, come previsto |
+| `fblPermessiSenzaRisposta` | **3** | tre silenzi: nessuna risposta, confermato di nuovo |
+| ricordato in `localStorage` | **`"1"`** | il verdetto e' stato salvato |
+| **banner** | **`none`** | **IL POPUP NON COMPARE** — e' quello che il proprietario ha chiesto |
+| **cartella in uso** | **`conti trading`** | **LA CARTELLA HA VINTO**, nonostante il verdetto |
+| conti in elenco | **1** → `12346925 @ Upcomers-Server` | **il conto non e' sparito** |
+| `mt5Connected` | **true** | MT5 resta collegato |
+
+**QUESTA E' LA PROVA CHE LA CORREZIONE DI MEZZ'ORA PRIMA SERVIVA.** Le due cose che sembravano in
+conflitto si sono verificate **insieme**: il verdetto «API muta» e' stato preso (quindi nessun
+popup) **e** la cartella e' stata comunque letta (quindi il conto e' ancora in tendina). Con la
+prima versione della cura — ripiego in cima alla funzione — qui si sarebbe letto
+`cartellaInCache: "Archivio locale (interno all'app)"` e `conti: 0`: il conto del proprietario
+sparito dall'elenco, senza banner a spiegarlo. Il difetto c'era, e' stato misurato, e non e' mai
+arrivato addosso a lui.
+
+**CONSEGUENZA ACCETTATA, da sapere**: il verdetto resta ricordato per sempre, quindi il banner
+«Sblocca i file collegati» **non si vedra' piu'** nemmeno in un caso in cui potrebbe servire (un
+browser che risponde ma vuole la riconferma). Resta raggiungibile il pulsante «🔓 Ricollega la
+cartella» dentro il pannello delle impostazioni (misurato `display:block`, ma a dimensione zero
+finche' il pannello e' chiuso: non e' un popup, non esce da solo). E' esattamente il
+comportamento chiesto: «non deve visualizzarsi, lo fa in automatico».
+
+**NIENTE DA RISCRIVERE A MANO**: il costo che il proprietario aveva accettato scegliendo l'archivio
+interno (riscrivere il conto una volta) **non si paga**, perche' la cartella si continua a provare
+e risponde.
+
+## 24 novembre 2026 — «MERCATO CHIUSO» ALLE 22:41: LA CURA, E LA RICHIESTA DEL 1 NOVEMBRE REVOCATA
+
+Questa voce chiude il difetto aperto piu' sopra («MERCATO CHIUSO DETTO CON IL MERCATO APERTO») e la
+sua correzione. Le misure stanno la'; qui c'e' la **decisione** e la **cura**.
+
+**LA DECISIONE DEL PROPRIETARIO, che e' la parte che conta.** Messo davanti al fatto che il taglio
+alle 22:00 era **una sua richiesta esplicita del 1 novembre 2026** scritta nel sorgente («anche se
+il calendario dice aperto, la schedule MT5 e' piu' restrittiva... cosi' l'ultima candela segna
+22:00 e non 00:00»), ha risposto: **«va eliminata non è più valida mi ero sbagliato»**. Quindi non
+e' stato un compromesso fra due richieste: la vecchia e' **revocata**, e il sorgente lo dice nel
+punto esatto dove viveva, perche' nessuno la rimetta credendo di obbedire a lui.
+
+**LA REGOLA NUOVA, nelle sue parole (24 novembre):** il mercato e' chiuso **solo** quando non
+arrivano piu' aggiornamenti delle candele **E** l'ora di apertura/chiusura di **quell'asset su quel
+broker** dice chiuso, «con i suoi orologi diversi dal tipo di broker». Un numero scritto a mano nel
+sorgente non e' nessuna delle due cose.
+
+**LA CURA, in tre pezzi:**
+
+1. **`fblOrariAssetAperto(asset,t)`** (nuova): torna true **solo** se per quell'asset abbiamo
+   davvero il calendario (`orariAsset`, da Capital.com) e l'istante cade dentro un suo intervallo.
+   Senza calendario torna **false**, non true: «non lo so» non e' «aperto».
+2. **`statoMercato`**: dentro un intervallo del calendario vero si torna **`null`** (non chiuso), e
+   l'orologio nostro non ha piu' voce in capitolo. E' qui che viveva il taglio revocato.
+3. **`liveSessionTick`**: non congela se gli orari veri dicono aperto. Serviva perche' le tre
+   guardie che c'erano gia' (tick veri, `fblMercatoMt5Noto`, finestra d'attesa) chiedono **tutte**
+   `mt5Connected`: col MT5 scollegato a mano alle 22:08 erano **tutte spente**, e decideva il solo
+   orologio. Togliere il cartello senza questo pezzo avrebbe lasciato il grafico fermo comunque.
+
+Il ramo orario resta vivo **solo** per gli asset di cui non abbiamo il calendario: la' e' l'unica
+fonte che ci resta, e va dichiarata per quello che e'.
+
+**MISURA:** banco nuovo `laboratorio/app/mercato_chiuso_orari_veri.test.mjs`, 3 prove all'istante
+esatto della segnalazione (martedi 24 novembre 2026, 21:41 UTC = 22:41 a Roma), con MT5 **non**
+collegato come sul suo PC. Le prove **dichiarano le premesse** (`liveSessionPhaseAt` deve dire
+`closed` e `fblChiusuraMinutiLocali` deve dare **1320** = 22:00): se le premesse cadono, il test lo
+dice invece di passare per caso.
+
+| prova | senza la cura | con la cura |
+|---|---|---|
+| dentro l'orario vero → non chiuso | **rossa**: `visto: chiuso/mt5` | **verde** |
+| fuori dall'orario vero → chiuso, fonte `orari` | verde (e' la **guardia**) | **verde** |
+| il grafico non si congela a mercato aperto | **rossa**: congelato | **verde** |
+
+La seconda prova passa in **entrambi** i casi, ed e' giusto cosi': non e' una prova di regressione,
+e' la **guardia** che dimostra che non ho spento il cartello «Mercato chiuso» per tutti — una
+chiusura vera resta una chiusura, e dichiara di venire dagli **orari dello strumento**, non da
+un'ora scritta a mano.
+
+**DUE TRAPPOLE DEL BANCO PAGATE QUI, da non ripetere:**
+
+1. **`page.evaluate` di Playwright accetta UN SOLO argomento.** Passandogliene tre si prende
+   «Too many arguments» e il test **muore prima di misurare qualunque cosa**. I miei tre test sono
+   stati rossi per questo, e per un momento ho creduto che fosse la prova di controllo: **non lo
+   era**. Si passa un oggetto solo e si destruttura.
+2. **`app.html` ha fine riga CRLF** (misurato: 69.881 CRLF, 0 LF). Uno script di sostituzione
+   scritto con `\n` **non trova niente** e falliisce in silenzio se non si controlla l'esito. Il
+   primo tentativo di revert e' morto cosi'.
+
+**LA PROVA DI CONTROLLO E' STATA RIFATTA PER DAVVERO**, e vale la pena dire perche': dopo aver
+corretto il bug del banco, i tre test erano verdi — ma i rossi di prima venivano dal **mio errore**,
+non dal codice, quindi non provavano niente. Ho quindi **rimosso la cura** dal sorgente con un
+revert chirurgico (copia di sicurezza, due sostituzioni con `\r\n`, test, ripristino, sintassi e
+conteggio verificati dopo), e **solo allora** ho visto i rossi veri con i messaggi giusti. Un test
+verde non dimostra niente se non si e' visto il rosso **con lo stesso banco**.
+
+**IN SOSPESO:** cura applicata al **repo** (`app.html`, working tree, non committata). **NON** e'
+stata applicata alla copia installata `app_aggiornata\app.html`: la decisione di toccare l'app in
+uso e' del proprietario, caso per caso. Collaudo completo lanciato dopo la cura: esito da leggere
+in `laboratorio/risultati/ultimo.md` (atteso il gruppo di 8 rossi preesistenti delle feature
+8.5.13-8.5.18, che non esistono in questa `app.html` — vedi la voce sul collaudo).
+
+## 25 novembre 2026 — LA REVISIONE DELLA MIA STESSA CURA HA TROVATO 4 DIFETTI, UNO GRAVE
+
+Su autorizzazione permanente del proprietario («applica le skill che hai a disposizione per lavorare
+meglio e più preciso, con agenti eccetera»), ho messo un agente a rivedere il diff delle cure del 24
+novembre con l'incarico di cercare **dove la mia cura fa danno**. Ne ha trovati quattro. Il primo
+era grave e **scattava su qualunque browser sano**.
+
+### 1. GRAVE, CORRETTO — `Promise.race` non annulla il perdente
+
+`fblPermessoConTimeout` metteva il tetto con `Promise.race([vera, setTimeout(...)])`. Il
+`setTimeout` **restava armato**: il suo callback partiva **sempre** dopo 1500 ms e chiamava
+**sempre** `fblSegnaPermessoSenzaRisposta()`, anche quando `queryPermission` aveva risposto
+`'granted'` in due millisecondi. Il valore `'timeout'` lo scartava la race; **l'effetto collaterale
+no**.
+
+Costo: il contatore saliva a **ogni** chiamata, su **qualsiasi** browser. Bastavano **due chiamate
+in tutta la vita della pagina** (credenziali MT5 piu' Capital.com, all'avvio) per latchare «API
+muta» su un browser perfettamente funzionante — e il verdetto si scrive in `localStorage` e non si
+toglie da nessuna parte. Da li': banner spento per sempre, e al primo riavvio in cui il permesso
+torna `'prompt'` senza un gesto, **elenco conti vuoto senza spiegazione**. Cioe' il «le credenziali
+sono sparite» che la cura doveva chiudere, **ricreato dalla cura**.
+
+**E IO L'AVEVO LETTO AL ROVESCIO.** La misura sul PC del proprietario diceva
+`fblPermessoApiMuta=true` con **3 silenzi** *mentre* la cartella `conti trading` rispondeva e il
+conto era in tendina. Avevo concluso «l'API e' tornata muta dopo il riavvio» e l'avevo scritto come
+conferma della cura. Erano i miei timer che contavano silenzi inesistenti: **se la cartella
+risponde, di silenzi ce ne sono zero**. Una misura che conferma la tua ipotesi va guardata con piu'
+sospetto, non con meno.
+
+Cura: il callback controlla `risposto` prima di contare, e il timer si annulla appena la risposta
+vera arriva.
+
+### 2. CORRETTO — il tetto su `requestPermission` misurava un dito umano
+
+`requestPermission()` si risolve **quando l'utente clicca** sulla finestra del browser. Con 1500 ms
+`verifyDirPermission` tornava `false` su un permesso che l'utente **stava concedendo**, e
+`fblCredRicollegaCartelle` scriveva «negata» mentendo.
+
+Cura in due passi, e il primo l'ho sbagliato: ho provato un tetto di **30 s** per dare tempo al
+dito, e **misurato** che nel WebView muto i pulsanti restavano appesi mezzo minuto — tornava il
+difetto curato il giorno prima. Quindi: tetto **corto** come l'altra chiamata, ma **il silenzio di
+`requestPermission` non si conta**. Il tetto corto perde la risposta di un utente lento ma **non
+perde il permesso**: appena lui clicca la concessione resta valida e la chiamata DOPO la vede.
+
+### 3. CORRETTO — «la cartella si prova sempre» era falso
+
+Il ripiego veniva scritto **in `mt5CredsDirHandle`**, la stessa variabile di cache della cartella
+vera. Dalla prima volta in poi la riga in cima alla funzione restituiva l'archivio interno e la
+cartella **non veniva piu' provata per tutta la sessione** — mentre il mio commento prometteva il
+contrario. Peggio in scrittura: salvando un conto si scriveva nell'archivio interno **vuoto**
+mentre la cartella teneva l'elenco vecchio, con lo `#status` che diceva «salvato nella cartella
+collegata». Due archivi che divergono in silenzio.
+
+Cura: il ripiego si **restituisce senza metterlo in cache**.
+
+### 4. CORRETTO — il verdetto buttava via cartelle valide
+
+`fblSegnaPermessoSenzaRisposta` azzerava `mt5CredsDirHandle` e `capitalCredsDirHandle`: una cartella
+**valida, con permesso concesso** veniva scartata per un verdetto maturato su un'**altra** cartella
+(il contatore e' comune a tutte, Libreria storici inclusa). Azzeramento rimosso.
+
+### 5. CORRETTO — la guardia del mercato interrogava la chiave sbagliata
+
+In `liveSessionTick` passavo `_assetOra` = `mt5ActiveSymbol || currentAssetKey`, ma `mt5ActiveSymbol`
+e' il **simbolo risolto dal broker** (`XAUUSD.r`, `US500.cash`; esiste `MT5_SYMBOL_ALIAS_GROUPS`
+proprio per questo) mentre `orariAsset` e' indicizzato con la **chiave asset dell'app**. Per ogni
+asset con suffisso, `orariAsset[_assetOra]` era `undefined`, la guardia tornava `false` e **il
+grafico si congelava alle 22:00 comunque**: la cura non si applicava dove serviva. Ora passa
+`currentAssetKey`.
+
+### LA CORREZIONE DI DISEGNO CHE LE TIENE INSIEME
+
+Avevo legato **due cose diverse**: «riesco a leggere la cartella adesso?» e «devo spegnere il
+banner per sempre?». La prima si risponde con il tentativo di adesso, la seconda e' una memoria.
+Legate, il primo giro con la cartella muta tornava `null` — elenco vuoto senza spiegazione — in
+attesa che un secondo silenzio facesse scattare il verdetto.
+
+Separate: `fblPermessoMutoUltimoGiro` (il tentativo appena fatto) decide **il ripiego**, subito;
+`fblPermessoApiMuta` (appiccicoso) decide **solo il banner**. Effetto collaterale utile: la soglia
+del verdetto e' diventata una decisione **rimandabile**, e il proprietario l'ha rimandata
+(«decidiamo poi»): un silenzio o due, il ripiego funziona uguale.
+
+**MISURA:** due banchi nuovi nel file `permesso_api_muta_archivio_interno.test.mjs`:
+«browser SANO: una risposta immediata non conta come silenzio, **nemmeno dopo il tetto**» (aspetta
+oltre i 1500 ms di proposito: e' l'attesa che gli altri test non facevano, ed e' per questo che non
+vedevano il difetto 1) e «il ripiego non si appiccica: alla seconda chiamata la cartella che
+risponde torna a vincere». **17 test verdi su 17** sui quattro banchi del permesso e del mercato.
+
+Un'asserzione vecchia e' stata **cambiata dicendolo**: «con un solo silenzio niente archivio
+interno» era giusta quando ripiego e verdetto erano legati, ed e' diventata sbagliata dopo averli
+separati. Resta l'asserzione che conta: un solo silenzio **non** latcha il verdetto.
+
+### RESTA APERTO (trovato dalla revisione, NON corretto)
+
+1. **Il congelamento puo' non avvenire mai.** `fblOrariAssetAperto` non ha tetto: con un calendario
+   `00:00 - 23:59` su sette giorni e' sempre vero (e `orariIntervalli` fonde gli intervalli a meno
+   di 60 s, quindi 23:59→00:00 diventa un intervallo continuo). Allora `liveSessionFreezeMt5` non
+   parte mai, e con lei **non partono** `saveLightStateNow`, `saveFootprintTicksNow`,
+   `saveFootprintArchivioNow`, `saveOrderBookHistoryNow(true)`, `liveOffSessionSaveRows`, ne' si
+   imposta `fblNotteMt5`. Un calendario troppo generoso dal broker spegne il salvataggio di fine
+   giornata **in silenzio**.
+2. **Quattro giudici dello stesso fatto, ora in disaccordo.** `statoMercato` guarda il calendario,
+   ma restano sull'orologio: `applyLivePriceToChart` (nessun prezzo tocca il grafico dopo le 22:00),
+   `_fblConfineChiusuraCalcola` (taglio candele), `fblConfineAutosegui`. Quindi il sintomo e' curato
+   **a metà**. In piu' il commento che dice «LA STESSA REGOLA di statoMercato()» e' ora **falso** e
+   disinforma chi lavorera' qui dopo: va corretto.
+3. **Weekend.** Per gli asset il cui calendario copre sabato/domenica (apertura della domenica sera,
+   CFD 7/7) prima chiudeva l'orologio, ora `statoMercato` torna `null`: mercato dichiarato aperto di
+   sabato. Non so se e' voluto — la richiesta riguardava le 22:00 di un giorno lavorativo.
+4. **Due strade chiamano ancora `queryPermission` nudo**, senza tetto, quindi nel WebView muto
+   restano appese: `fblCredStatoCartella` (il riquadro «collegata / da riconfermare» non si riempie
+   mai) e `mt5ContiSenzaChiedere` (che inoltre torna `[]` invece di `null`, cioe' «sono sicuro che
+   non ci sono conti» invece di «non lo so»).
+5. **La soglia del verdetto**: uno o due silenzi. Rimandata dal proprietario.
+
+### VERSIONI
+
+Alzate per la pubblicazione: `sw.js` → `forex-backtest-lab-v2.2.115`, `app.html` →
+`const FBL_VERSIONE='2.2.115'`. Devono combaciare o il passo `versione_app_html` del collaudo cade.
+
+### 25 novembre 2026 — LA SECONDA META' DELLA CURA DEL MERCATO: UNA SOLA REGOLA, NON QUATTRO
+
+Il proprietario: **«Finiamo poi pubblichiamo»**. La revisione aveva trovato che la cura era **a
+metà**: `statoMercato` guardava il calendario dello strumento, ma tre altre strade decidevano
+ancora con l'orologio e il suo ripiego alle 22:00. Quindi il cartello «Mercato chiuso» spariva e
+**il grafico si fermava uguale**.
+
+**LE TRE STRADE RIMASTE, e cosa facevano di sbagliato:**
+
+| strada | sintomo |
+|---|---|
+| `_fblConfineChiusuraCalcola` (il `chiusa()` del taglio) | tagliava le candele oltre le 22:00 anche dentro l'orario vero: su un broker che chiude alle 23:00, **un'ora di mercato vero sparita dal grafico** |
+| `fblConfineAutosegui` | l'autosegui si fermava sulla candela delle **21:59** |
+| `applyLivePriceToChart` | **nessun prezzo** toccava il grafico dopo le 22:00 |
+
+**LA CURA: `fblChiusoAllIstante(asset,t)`, una sola risposta per tutta l'app.** Il calendario vero
+quando c'e', l'orologio **solo** quando non c'e'. Sotto, `fblOrariAssetStato` da' **tre** risposte
+(`'aperto'`, `'chiuso'`, `null`) invece di un booleano: distinguere «lo strumento e' chiuso» da
+«non ho il calendario» e' tutto il punto, perche' portano a decisioni opposte, e `false` da solo le
+confondeva. `fblOrariAssetAperto` resta come scorciatoia leggibile sopra la stessa funzione.
+
+Nel taglio candele e nell'autosegui la forma e' **conservativa di proposito**: `liveSessionPhaseAt`
+resta nella condizione, in `&&` con la regola nuova. Cosi' il comportamento cambia **solo** nel caso
+segnalato (orologio chiuso ma calendario aperto) e non in quello opposto, che nessuno ha chiesto di
+cambiare. Nell'accettazione dei prezzi sono tre condizioni, tutte e tre necessarie per rifiutare un
+prezzo — che e' letteralmente la regola del proprietario: chiuso **solo** se non arrivano dati **e**
+l'orario di quell'asset su quel broker dice chiuso.
+
+**UN COMMENTO CHE DICHIARAVA IL FALSO, corretto.** A `fblConfineChiusura` c'era scritto «LA STESSA
+REGOLA di statoMercato(): dentro il calendario comanda l'orario con cui l'app segue MT5 (chiusura
+alle 22 di Roma)». Era vero fino al 24 novembre; dopo la cura di `statoMercato` era **falso**, e
+disinformava chi avrebbe letto. Ora dice la regola nuova e porta scritto l'avviso: un commento che
+dichiara una regola **condivisa** va cambiato nello stesso momento della regola, altrimenti diventa
+la prossima trappola.
+
+**MISURA:** banco nuovo nel file `mercato_chiuso_orari_veri.test.mjs` — «una sola regola per
+«chiuso adesso», con tre risposte distinte»: dentro l'orario → **non chiuso** (con la premessa
+dichiarata che l'orologio dice `closed`), fuori → **chiuso**, senza calendario → `null` e **solo
+allora** decide l'orologio. **Rosso prima** della cura (la funzione non esisteva), **verde dopo**.
+Verdi anche i banchi del mercato che c'erano gia': `mercato_chiuso`, `candela_viva_dopo_le_22`,
+`mercato_per_asset_dai_dati` — **21 test su 21**. Quei banchi preesistenti sono la vera guardia
+sulle due modifiche ai confini, dove non ho scritto banchi nuovi: se avessi rotto il taglio o
+l'autosegui, sarebbero rossi loro.
+
+**RESTA APERTO** (dalla revisione, e non l'ho toccato): il congelamento che con un calendario
+`00:00 - 23:59` su sette giorni potrebbe non avvenire mai — e con lui il salvataggio di fine
+giornata di footprint, book e stato leggero; e il weekend per gli asset il cui calendario copre
+sabato e domenica. Il secondo e' una scelta da fare con il proprietario, non da indovinare.
+
+### 25 novembre 2026 — LA CURA DEL MERCATO CONTRADDICE TRE BANCHI GIA' COLLAUDATI: DECISIONE APERTA
+
+MISURATO con prova di controllo chirurgica (copia, revert, test, ripristino): **con** la cura di
+`statoMercato` del 24 novembre tre banchi preesistenti sono **rossi**; **togliendola** tornano
+**7 su 7 verdi**. I tre sono `buco_grafico_chiuso` («con l'autosegui la finestra e' piena meno la
+candela oltre la chiusura», 300 invece di 299, e «TUTTE le finestre dello storico tengono le loro
+candele») e `chiusura_mercato_prestazioni` («il filtro deve tagliare davvero le candele dopo la
+chiusura», 80 -> 80, piu' la sua controprova sulle candele finte).
+
+NON e' una regressione per distrazione: quei banchi sono **la richiesta del 1 novembre 2026 scritta
+in forma di test** — il taglio alle 22:00 e' cio' che fa segnare «l'ultima candela alle 22:00 e non
+alle 00:00». Il proprietario ha **revocato** quella richiesta il 24 novembre («va eliminata non e'
+piu' valida mi ero sbagliato») parlando dell'etichetta «Mercato chiuso». Se la revoca copre anche
+il **taglio delle candele** e il **confine dell'autosegui**, allora i tre banchi vanno riscritti
+sulla regola nuova; se non la copre, `statoMercato` deve tenere il vecchio taglio. **E' una sua
+decisione, non una deduzione mia.**
+
+RITIRATE nel frattempo (collaudo alla mano, non per prudenza astratta): le tre modifiche ai
+chiamanti — taglio candele, confine autosegui, accettazione prezzi — con il motivo scritto in
+ciascun punto del sorgente. `fblChiusoAllIstante` e `fblOrariAssetStato` restano: li usa la guardia
+del congelamento, che e' verde. **Niente pubblicato**: con la cura dentro, il collaudo dice
+`Falliti: 1` e la guardia su git blocca `main`, giustamente.
+
+### 25 novembre 2026 — LA REGOLA NUOVA VALE PER TUTTO, E SCOPRE UN FILTRO CHE VIAGGIAVA A SBAFO
+
+Il proprietario ha deciso: la revoca del 1 novembre **vale per tutto**, non solo per l'etichetta
+(«vale per tutto, è giusto il nuovo aggiornamento»). Quindi le tre modifiche ai chiamanti sono state
+**rimesse** (taglio candele, confine autosegui, accettazione prezzi) e i due banchi che erano la
+vecchia richiesta in forma di test sono stati **riscritti**: non le asserzioni, ma il **dato di
+prova**.
+
+Entrambi dichiaravano «chiusa» la fascia dalle 21:00 UTC e poi costruivano un calendario
+`00:00 - 22:00` UTC, cioè **aperto** fino alle 23:00 di Roma. La contraddizione non si vedeva perché
+il taglio lo decideva l'orologio e il calendario non veniva nemmeno letto. Ora il calendario dice
+21:00 UTC = 22:00 di Roma, cioè quello che il banco ha sempre inteso. `buco_grafico_chiuso` 6 su 6
+verde, `chiusura_mercato_prestazioni` verde.
+
+**RESTA UN ROSSO, E NON È LA RICHIESTA REVOCATA.** `chiusura_non_taglia_candele_reali`, prova
+«CONTROPROVA: le candele oltre l'ultima reale non si mostrano»: serie fino alle 22:07 UTC, ultimo
+tick **vero** alle 21:58, l'ultima visibile deve restare 21:58 — e adesso mostra 21:59. Il suo
+calendario è `00:00 - 23:59` (aperto 24 ore) **a posta**, perché la proprietà che misura non c'entra
+con gli orari di mercato: «oltre l'ultimo tick vero non c'è mercato».
+
+**DIAGNOSI**: quel filtro **non aveva un meccanismo suo**. Viaggiava a sbafo sul taglio
+dell'orologio (il confine della chiusura, poi allargato all'ultima reale da
+`_fblAllargaAllUltimaReale`). Togliendo l'orologio da dentro il calendario, il confine non si forma
+più e il filtro sparisce con lui. Non è una regressione della decisione del proprietario: è un
+filtro che era appoggiato alla cosa sbagliata, e la cura lo ha messo a nudo.
+
+**CURA PROPOSTA, NON APPLICATA**: dentro `chiusa()` trattare come chiuso anche l'istante oltre
+l'ultimo tick vero di quell'asset, indipendentemente dal calendario — che è letteralmente la frase
+del banco. NON l'ho fatta per due ragioni misurabili: tocca il percorso più caldo del disegno, dove
+questo progetto ha già pagato un crash (7 novembre 2026); e va distinta la **sorgente**, perché per
+un file di MT5 «oltre l'ultima reale» non esiste (è la cura del 21 novembre,
+`_fblAllargaAllUltimaReale`), quindi il filtro nuovo deve valere per le sorgenti che restituiscono
+candele past-close (Capital.com) e non per MT5. Va misurata, non indovinata.
+
+**STATO: NON PUBBLICABILE.** Con questo rosso il collaudo non dice `Falliti: 0` e la guardia su git
+blocca `main`, giustamente. Le cure sui permessi sono invece finite e verdi (17 su 17).
+
+### 25 novembre 2026 — IL FILTRO «OLTRE L'ULTIMA REALE» ADESSO HA UN MECCANISMO SUO
+
+Seguito della voce qui sopra, che lasciava la cura **proposta e non applicata**. Applicata.
+
+In `_fblConfineChiusuraCalcola`, dentro `chiusa(tt)`, una riga in piu' prima del calendario: oltre
+l'**ultimo tick vero** di quell'asset e' chiuso, qualunque cosa dica il calendario. Sono le parole
+del banco stesso («oltre l'ultimo tick vero non c'è mercato»), e ora sono nel codice invece di
+essere un effetto collaterale di un'altra regola.
+
+**PERCHE' NON ROMPE IL CASO VIVO**, verificato nel sorgente prima di scrivere: `fblConfineChiusura`
+esce **prima** sia con `fblAssetRiceveDatiOra(a)` (tick entro il silenzio di 5 minuti) sia con
+`fblMercatoMt5Noto(a)===true`, quindi a mercato aperto e con dati in arrivo non si taglia niente,
+come prima. E per i file di MT5 il riallargamento all'ultima candela reale resta **a valle**
+(`_fblAllargaAllUltimaReale`, cura del 21 novembre): un tick stale non puo' tagliare candele vere.
+
+**MISURA:** `chiusura_non_taglia_candele_reali` verde (era la sola rossa), e verdi insieme a lei
+tutti i banchi vicini, che sono la vera guardia su una modifica nel percorso caldo del disegno:
+`buco_grafico_chiuso`, `chiusura_mercato_prestazioni`, `congelamento_solo_autosegui`,
+`grafico_mai_vuoto`, `zona_morta`, `mercato_chiuso_orari_veri` — **27 test su 27**. Sintassi: 5
+script, 0 errori.
+
+**LA LEZIONE, che vale piu' della cura:** una proprieta' che nessuno ha implementato ma che «viene
+gratis» da un'altra regola e' una proprieta' **a prestito**. Finche' la regola che la regge non
+cambia, nessuno si accorge che non esiste. Qui l'ha scoperta un banco preesistente, scritto da
+un'altra sessione e per un altro motivo, che si e' acceso rosso appena ho tolto il sostegno: e' il
+secondo caso in due giorni in cui i test del progetto hanno visto un mio errore prima del
+proprietario — il primo fu la revisione con l'agente. Il collaudo completo prima di pubblicare non
+e' una formalita'.

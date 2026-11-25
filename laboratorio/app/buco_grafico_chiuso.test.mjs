@@ -39,8 +39,15 @@ const PREPARA = (candeleViste) => `(function(){
   const VENERDI=Date.UTC(2026,10,6,0,0,0);            // venerdi' 6 novembre, mezzanotte UTC
   const LUNEDI=Date.UTC(2026,10,9,0,0,0);             // lunedi' 9 novembre
   const giorni={sun:[],mon:[],tue:[],wed:[],thu:[],fri:[],sat:[]};
-  giorni.fri=['00:00 - 22:00'];
-  giorni.mon=['00:00 - 22:00'];
+  // IL CALENDARIO DEVE DIRE QUELLO CHE QUESTO BANCO INTENDE PER «CHIUSO» (25 novembre 2026).
+  // Qui c'era '00:00 - 22:00' UTC, cioe' un calendario APERTO fino alle 23:00 di Roma, mentre le
+  // righe qui sopra chiamano «chiusa» la fascia dalle 21:00 UTC. La contraddizione non si vedeva
+  // perche' il taglio lo decideva l'OROLOGIO (ripiego alle 22:00 di Roma) e il calendario non
+  // veniva nemmeno consultato. Dal 25 novembre comanda il calendario dello strumento — decisione
+  // del proprietario, «vale per tutto, e' giusto il nuovo aggiornamento» — quindi il banco deve
+  // dichiarare la chiusura dove la vuole: 21:00 UTC = 22:00 di Roma.
+  giorni.fri=['00:00 - 21:00'];
+  giorni.mon=['00:00 - 21:00'];
   orariAsset['XAUUSD']={zona:'UTC',giorni:giorni,stato:'CLOSED',letto:Date.now()};
   rows=[]; baseRows=[]; let p=4100;
   const metti=t=>{

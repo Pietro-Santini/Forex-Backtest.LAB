@@ -129,7 +129,14 @@ test('anche MT5 spiega perche\' i conti non si vedono, come Capital.com', () => 
   // MT5 tornava null e basta.
   const src = fs.readFileSync(path.join(RADICE, 'app.html'), 'utf8');
   const i = src.indexOf('async function getMt5CredsDirHandle(');
-  const f = src.slice(i, i + 1400);
+  // FINESTRA ALLARGATA da 1400 a 3000 il 24 novembre 2026, e il motivo conta: la funzione e'
+  // cresciuta (ripiego sull'archivio interno quando l'API dei permessi e' muta), e la chiamata
+  // cercata e' finita OLTRE il millequattrocentesimo carattere. Il limite a 1400 era incidentale,
+  // non era la proprieta' sotto esame: quella e' «chiede il permesso con un motivo invece di
+  // tornare null in silenzio», e vale ancora. La stessa proprieta' e' ora misurata anche sul
+  // COMPORTAMENTO (non sul testo del sorgente, che e' una prova debole) dal banco
+  // permesso_api_muta_archivio_interno.test.mjs, prova «browser che RISPONDE: il banner resta».
+  const f = src.slice(i, i + 3000);
   assert.match(f, /fblChiediPermessoFile\('usare i conti MT5 salvati'/,
     'getMt5CredsDirHandle deve chiedere il permesso con un motivo, non tornare null in silenzio');
 });

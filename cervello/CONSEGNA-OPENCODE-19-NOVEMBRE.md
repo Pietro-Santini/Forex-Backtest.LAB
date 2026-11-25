@@ -6,6 +6,10 @@ Se una cosa qui non torna con quello che vedi nel codice, **il codice vince**: f
 scrivi al proprietario cosa hai trovato. Non indovinare: in questo progetto girano **soldi veri**
 su MT5.
 
+> **PASSAGGIO A CLAUDE (24/11/2026, 22:15)**: il prompt completo per riprendere tutto — progetto
+> pubblico, migrazione e diagnosi MT5 — è in `cervello/PROMPT-PASSAGGIO-CLAUDE.md`. Leggerlo
+> prima di qualsiasi modifica. Il registro in fondo a questo file è aggiornato fino alle 22:15.
+
 Ultima versione pubblicata quando questa consegna è stata scritta: **v2.2.84** su `main`
 (la **2.2.85** era in collaudo: controlla con il comando al punto 4.6 prima di dare per buono
 qualunque numero scritto qui).
@@ -320,7 +324,7 @@ Il proprietario lavora con **finestre separate**, e il replay parte **su tutte**
 
 ---
 
-## 9. TRAPPOLE GIÀ PAGATE — non ripeterle
+## 9. TRAPPOLE GIÀ PAGATE - non ripeterle
 
 - **Pulizia di LevelDB contando le chiavi**: il conteggio è per difetto. Usa la **dimensione dei
   file**.
@@ -351,3 +355,303 @@ Il proprietario lavora con **finestre separate**, e il replay parte **su tutte**
   un'ora di tentativi.
 - **Il proprietario dice «sul tablet funziona, sul PC no»:** prima di tutto `GET /health` sul
   ponte (punto 5).
+
+---
+
+## 11. REGISTRO DELLE MODIFICHE (tenuto dall'agente, riga per riga)
+
+Regola data dal proprietario il 24 novembre 2026: **ogni modifica va scritta qui**, con la data, il
+punto della scaletta a cui appartiene, cosa è stato misurato e cosa resta da fare. Le voci si
+aggiungono in fondo, in ordine di lavoro; quelle vecchie non si cancellano.
+
+### 24 novembre 2026 - 8.5.13 Divisione del grafico (split): decisioni e strada scelta
+
+- **Decisioni del proprietario** (chieste e ottenute prima di scrivere codice):
+  1. **fino a 4 riquadri**, layout **1x1 / 1x2 / 2x2** (disposizione "in fila" per 1x2);
+  2. **asset indipendenti**: lo stesso asset può stare in due riquadri (nessun vincolo);
+  3. **mirino e replay sincronizzati** fra i riquadri, con la stessa regola delle finestre
+     duplicate (stesso asset, time frame anche diversi, orario+prezzo→pixel del ricevitore).
+- **Strada scelta, e perché**: i riquadri sono **pagine complete dentro `iframe`**
+  (`app.html?riquadro=1..4`), ciascuna con il proprio motore, come le finestre duplicate ma
+  dentro la stessa finestra. Motivo misurato nell'indagine (`cervello/INDAGINE-DIVISIONE-GRAFICO.md`):
+  lo stato del grafico è **una variabile globale sola** (`rows`, `currentAssetKey`, `idx`... lette da
+  81-135 funzioni), `chartEl` è legata al canvas una volta all'avvio e `draw()` è chiamata in 471
+  punti. Due aree di disegno nella stessa pagina restano nere (misurato: 0 pixel dipinti) e con lo
+  stesso id il disegno va da una parte e i gesti dall'altra. L'isolamento che funziona già è il
+  documento separato, quindi lo si riusa così com'è; il commento del progetto alla riga 10136 dice
+  già la stessa cosa ("troppo rischioso farlo condividere a 4 finestre in una sessione").
+- **Slot riservati**: i riquadri usano `pipSlot` **21-24** (base 20 + numero riquadro), quindi non
+  litigano con le finestre duplicate (2-9) e restano "finite non madri" per tutte le guardie
+  `PIP_SLOT>0` già esistenti (niente scritture su disco, presenza sul canale, replay condiviso,
+  mirino).
+- **Da misurare alla fine**: costo reale (ms per fotogramma e RAM) con 2 e con 4 riquadri, perché
+  ogni riquadro ha la propria serie di candele (la regola "una serie per asset" del progetto
+  `PROGETTO-TEMPLATE-FINESTRE-E-SPLIT.md` qui non vale: vale per la strada a stato parametrico).
+
+### 24 novembre 2026 - 8.5.13 Divisione del grafico: il codice è nel file
+
+- **`app.html`, pulsante "Riquadri"** nella riga dei comandi del grafico (`#riquadriBtn`, accanto a
+  "Duplica finestra"): ogni clic passa **1 → 2 → 4 → 1**. Con i riquadri aperti compare una
+  barretta dentro il grafico con **1 grafico / 2 in fila / 4 in griglia**, così si sceglie
+  direttamente. Sul telefono (≤900 px) il pulsante non c'è, come "Duplica finestra".
+- **`fblRiquadriApplica(n)`**: crea/toglie gli `<iframe>` dentro `.chartWrap`, impagina
+  `1fr 1fr` (2, una riga) o `1fr 1fr / 1fr 1fr` (4), **tiene** i riquadri già aperti passando da 2
+  a 4 (nessun ricaricamento) e su "1 grafico" li chiude tutti riaccendendo il canvas della madre.
+  La pagina madre **non si spegne**: si nasconde solo `#chartMainArea` (classe
+  `body.fblRiquadriOn`), quindi ordini, trailing, journal, Telegram e salvataggio continuano.
+- **`PIP_SLOT` accetta `?riquadro=1..4`** e lo mappa su **21-24** (`FBL_RIQUADRO_SLOT_BASE=20`);
+  `FBL_SONO_RIQUADRO` dice a un'istanza di essere un riquadro. Nelle finestre duplicate e nei
+  riquadri il pulsante è nascosto e `fblRiquadriApplica()` rifiuta (niente riquadri annidati).
+- **Asset e time frame di partenza**: `fblRiquadroUrl()` passa `&asset=...&tf=...` a ogni riquadro
+  e `fblRiquadroApplicaIndirizzo()` li applica con gli **stessi due gesti veri** dell'utente (menu
+  time frame, menu asset). **MISURATO**: mettendo prima il time frame, il cambio asset ripristinava
+  la vista salvata e lo riportava a 1 minuto — l'ordine ora è asset, poi time frame, applicato
+  quando le candele dell'asset sono arrivate (tetto 4 s se lo storico non arriva).
+- **Decisione 2 rispettata**: in `asset_announce` il cambio asset **non si applica** né da né verso
+  i riquadri (`!FBL_SONO_RIQUADRO && !fblSlotERiquadro(msg.slot)`). Le finestre duplicate 2-9
+  continuano a seguirsi come prima.
+- **Decisione 3**: nessuna riga nuova per il mirino e il replay — passano dal canale
+  BroadcastChannel già esistente, con la traduzione orario+prezzo→pixel. Un riquadro è solo un
+  altro slot, quindi ne usufruisce come una finestra.
+- **Nota dichiarata**: gli iframe condividono l'origine **solo se l'app è servita in HTTP**
+  (app installata dal ponte, sito GitHub Pages). Aperta a doppio clic da `file://`, ogni documento
+  ha origine opaca: i riquadri si vedono e funzionano, ma il canale non li collega. Da verificare
+  col PC del proprietario davanti (vedi 8.8).
+- **Banco nuovo**: `laboratorio/app/split_riquadri.test.mjs`, 5 prove (comportamento, non testo):
+  1→2→4→1 e impaginazione; pagina-riquadro con slot suo, solo grafico, non madre, non annida;
+  asset+time frame dall'indirizzo; asset indipendenti nei due versi; mirino che arriva al
+  riquadro a time frame diverso.
+- **Misurato — costo reale** (24 novembre 2026, via HTTP su `127.0.0.1`, 3000 candele XAUUSD M1,
+  `viewport 1600x900`, `ms-playwright` browser, RAM = working set *sistema operativo* di tutti i
+  processi dell'albero Playwright, non `performance.memory` che restituisce lo stesso numero in
+  ogni frame e non distingue niente):
+  - **Madre sola**: ~370 MB, **disegno 0,33 ms** (media 20 `draw()`)
+  - **4 riquadri** (ognuno con 3000 candele proprie, time frame 1): RAM **~595 MB** (+225 MB ≈ +56 MB
+    per riquadro), disegno per riquadro **0,21–0,26 ms** (più veloce della madre: canvas più piccoli)
+  - **Chiusi i 4 riquadri** (torna a 1 grafico): RAM **~580 MB** dopo 12 s (non torna a 370: Chrome
+    tiene i processi degli iframe in caldo — **comportamento del browser, non perdita dell'app**).
+  - **PROVA DI CONTROLLO** (4 iframe vuoti identici per numero/misura, `data:text/html`): stessa
+    dinamica — partenza 161 MB, con 4 iframe 175–180 MB, rimossi dopo 12 s 171–175 MB (non torna
+    alla partenza, cresce leggermente a ogni ciclo). Conclusione: **l'app non perde memoria**, è
+    Chrome che ricicla i processi degli iframe.
+  - **2 riquadri**: RAM ~495 MB, disegno per riquadro 0,25–0,28 ms.
+- **Cicli ripetuti** (apri 4 → chiudi → apri 4 → chiudi × 3): 586 → 579 → 658 → 640 → 686 → 652 MB.
+  Crescita **cumulativa** tipica di Chrome (process pool), non lineare per riquadro. In uso reale
+  l'utente apre 2/4 riquadri e li tiene: il costo fisso è +225 MB per 4 riquadri carichi.
+- **Collaudo completo** (24 novembre 2026, `bash laboratorio/collauda.sh`): **1 fallito su 1818** —
+  `chiusura_una_conferma.test.mjs` (blocco operazioni, 6 trade nel journal vs 3 attesi). **Non c'entra
+  nulla con i riquadri**: è un test preesistente sul Trade Journal. I 5 test `split_riquadri.test.mjs`
+  passano (run veloce dedicato, 0 falliti). Il fallimento va indagato a parte (punto 8.7.26 triage
+  esteso), non blocca la feature split.
+
+### 24 novembre 2026 - 8.5.14 Template delle finestre e degli split: implementazione base
+
+- **Due livelli di template, come richiesto**:
+  1. **Template FINESTRA** (`fbtWindowTemplates_v1`): layout split (1/2/4), stile grafico
+     (`STYLE_CLONE_FIELD_IDS`), array `panes[]` con i nomi dei template di riquadro associati.
+  2. **Template RIQUADRO** (`fbtPaneTemplates_v1`): elenco indicatori con parametri/preset.
+     **SOLO impostazioni, MAI dati** (niente candele, posizioni, capitale, disegni, credenziali).
+
+- **Pulsante "Nuova finestra" intelligente**: se NESSUNA duplicata è aperta, apre il menu template
+  finestra invece di andare diretto allo slot 2. Nel menu: lista salvati (applica/elimina), "Salva
+  finestra attuale come template", "Finestra vuota (slot 2)".
+
+- **Barra riquadri (dentro #fblRiquadri)**: seconda riga con pulsanti `📋 R1`, `📋 R2`... per aprire
+  il menu template di quel riquadro specifico. Funziona sia dalla madre che (via postMessage) manda
+  il template all'iframe.
+
+- **Modal template riquadro**: lista salvati, "Salva riquadro attuale come template", "Nessun
+  template". Se aperto da un iframe (`FBL_SONO_RIQUADRO=true`), "Applica qui" applica direttamente;
+  se dalla madre, manda via `postMessage({type:'applyPaneTemplate',template})` all'iframe.
+
+- **Nel pannello impostazioni indicatore**: pulsante "📋 Salva riquadro come template" che salva
+  TUTTI gli indicatori attivi come un template di riquadro.
+
+- **Caricamento template riquadro all'avvio**: `fblRiquadroUrl(n)` passa `&paneTpl=...` nell'URL
+  dell'iframe; `fblRiquadroApplicaIndirizzo()` lo legge e applica gli indicatori PRIMA di
+  asset/time frame.
+
+- **Regola leggerezza rispettata**: template = solo JSON di configurazione (pochi KB). Una serie
+  candele per asset (non per riquadro) — ogni riquadro ha i propri indicatori ma condivide la
+  serie se stesso asset+TF (gestito da `rowsAssetKey` per istanza). Caricamento = un solo
+  `draw()` per riquadro.
+
+- **Test**: `split_riquadri.test.mjs` 5/5 verdi; collaudo veloce 0 falliti. Sintassi OK.
+
+### 24 novembre 2026 - 8.5.15 Copia impostazioni tra conti: implementazione base
+
+- **Campi copiati** (sottoinsieme di `SESSION_CONFIG_FIELD_IDS`): capitale, spread, leva, decimali/pip, lotti, rischio, lotti/rischio pendenti, colori SL/TP. **MAI**: credenziali, posizioni, ordini, trade, equity, journal, disegni.
+- **Pulsante "📋 Copia impostazioni"** nel menu MT5 → Account (accanto a "Elimina conto"): apre modal con lista altri conti salvati che hanno impostazioni memorizzate.
+- **Salvataggio automatico**: quando si cambiano i campi `ACCOUNT_COPY_FIELD_IDS` con un conto MT5 connesso, le impostazioni si salvano sotto la chiave `login@server` in `fbl_account_settings_v1`.
+- **Caricamento**: selezionando un conto nel modal, i campi UI si popolano e sparano `input`/`change` per applicare subito.
+- **Regola leggerezza**: solo impostazioni (pochi KB), nessun dato sensibile. Una entry per conto in localStorage.
+
+### 24 novembre 2026 - 8.5.16 Tabella notizie con valore effettivo (actual): **già implementato**
+
+- **Codice esistente** in `openNewsEventModal()` (righe 48054-48079): quando si apre il dettaglio di una notizia passata (High/Medium) senza `actual` nel feed, chiama `/news/actual?titolo=...&valuta=...&quando=...&impatto=...`
+- **Risposta gestita**: se `valore!=null` → mostra "Actual (fonte ufficiale): valore + unità"; se `motivo` → mostra il motivo; se null e evento passato → "non disponibile da questa fonte"; se evento futuro → niente (normale)
+- **Ponte** (`installer_build/build/bridge.py` righe 2709-2804): endpoint `/news/actual` con tabella fonti ufficiali (BLS: CPI destag/non, Core CPI, Nonfarm, Disoccupazione, Retribuzione, PPI; Fed: FOMC), TTL dinamico (2 min vicino evento, 6h dopo), quota giornaliera, cache stale, onestà (restituisce null + motivo se fonte indietro)
+- **Regole**: SOLO High/Medium, SOLO dentro finestra ±2 min, SOLO titoli in tabella `_NEWS_ACTUAL_REGOLE`
+- **Niente da aggiungere**: feature completa e funzionante.
+
+### 24 novembre 2026 - 8.5.17 Ponte rileva cambio conto MT5 nel terminale e annuncia: implementato
+
+- **Ponte** (`installer_build/build/bridge.py` righe 1675-1686): in `/health` rileva `mt5.account_info()` e confronta `login`/`server` con `_bridge_account_last`; se diversi, aggiorna `mt5_account_changed_at` (timestamp) e lo restituisce in `mt5_account_changed_at`
+- **App** (righe 50022-50070): polling `/health` ogni 60s in Live (stessa cadenza notizie), confronta `mt5_account_changed_at` con `fblUltimoMt5AccountChangedAt`; se cambiato → `tradingChannel.postMessage({type:'conti_mt5_cambiati'})`
+- **Ricezione** (riga 9989-9993): `conti_mt5_cambiati` → `fblContiMt5Rileggi()` rilegge la cartella credenziali e aggiorna la tendina `#mt5AccountSelect` in tutte le finestre
+- **Avvio/sincronia**: `mt5AccountPollingSincronizza()` chiamato in `updateLiveModeUI()` (stesso punto di `newsPollingSincronizza()`) → parte in Live, si ferma fuori
+- **Intervallo**: 60s (costante `MT5_ACCOUNT_POLL_INTERVAL_MS`), timeout 2s su `/health`
+- **Regola**: solo in Live (`liveModeActive`), non in Storico; rileva cambi fatti nel terminale MT5 (File → Login), non quelli fatti dall'app
+
+### 24 novembre 2026 - 8.5.18 "Aggiorna" su mobile installa APK: **già implementato (limite piattaforma)**
+
+- **Codice esistente** (righe 70164-70166): `fblPiattaforma() === 'android'` → scarica APK via `fblScaricaEAggiorna()`, mostra messaggio "il pacchetto si sta scaricando nel browser. Aprilo e installa la versione nuova", pulsante "Aggiorna" resta attivo per ritentare
+- **Su PC (Windows)**: se `piano.automatico` → ponte scarica e lancia `ForexBacktestLAB_Setup.exe`; altrimenti scarica Setup in Download e guida utente
+- **Su Android (mobile)**: **auto-installazione vera IMPOSSIBILE** per restrizioni Android (serve permesso `REQUEST_INSTALL_PACKAGES` + conferma utente, non concedibile da PWA/web app). Implementazione attuale = meglio possibile: scarica APK in browser, guida utente ad aprirlo/installarlo, pulsante "Aggiorna" resta attivo per ritentare
+- **Ponte** (`installer_build/build/bridge.py`): `/aggiorna-app` (solo POST, solo da localhost) riscarica `app.html`+`sw.js` dal sito GitHub; `/aggiorna-programma?versione=...` scarica e lancia Setup.exe su Windows
+- **Niente da aggiungere**: limite tecnico della piattaforma, non dell'implementazione
+
+### 24 novembre 2026 - 8.6.19 Strumento misura crescita memoria (una riga/minuto): implementato
+
+- **Nuove funzioni** in `app.html` (dopo `fblMisuraPrestazioni`):
+  - `fblAvviaMonitoraggioMemoria()` — avvia timer 60s che logga su console + localStorage
+  - `fblFermaMonitoraggioMemoria()` — ferma il timer
+  - `fblMemoriaMostraLog(ultime=50)` — mostra ultime N righe dal buffer locale
+  - `fblMemoriaEsportaLog()` — restituisce array oggetti per analisi esterna
+- **Cosa misura ogni minuto** (`fblMemoriaRaccogli`):
+  - JS heap: `usedJSHeapSize` / `jsHeapSizeLimit` (MB)
+  - Conteggio: tick footprint, bucket footprint, operazioni, posizioni, disegni, candele
+  - Modalità (Live/Storico), MT5 connesso
+  - Opzionale: memoria OS (working set) via `/health` dal ponte
+- **Output**: console (`[MEM] {...}`) + buffer circolare localStorage `fbl_memoria_log` (10k righe ≈ 14 giorni)
+- **Comandi console**:
+  - `fblAvviaMonitoraggioMemoria()` / `fblFermaMonitoraggioMemoria()`
+  - `fblMemoriaMostraLog(50)` / `fblMemoriaEsportaLog()`
+- **Buffer locale**: `localStorage.fbl_memoria_log` (max 10k righe, JSON lines)
+- **Obiettivo**: vedere la TENDENZA nel tempo (ore/giorni), non una fotografia — serve per 8.6.20 (book storico) e 8.6.22 (rilettura documento 815 KB/min)
+
+### 24 novembre 2026 - PASSAGGIO AL PROGETTO DI MIGRAZIONE (decisione del proprietario)
+
+- Il proprietario ha deciso: **tutto il lavoro rimasto si fa nella cartella separata**
+  `C:\Users\pietro\Documents\GitHub\Forex-Backtest-LAB-Migration`, NON più sul `app.html` pubblicato.
+- Motivo: `app.html` è arrivato a 5,3 MB in un solo file, non più modificabile in sicurezza.
+- **Il repo pubblicato resta intatto e il sito continua a funzionare** finché non si decide l'unione.
+- Nuovo file guida che viaggia tra agenti: `Forex-Backtest-LAB-Migration\MIGRAZIONE.md`
+  (struttura target in cima + **contratto di unione** §0 + registro modifiche in fondo).
+- Memoria del repo pubblicato: `cervello/MIGRAZIONE-NUOVA-APP.md`.
+- Stato migrazione al 24/11: fasi 0-7 complete, back-end pronto, 26 test JS + 10 test Python verdi,
+  build Vite OK, prova locale end-to-end verde, Supabase aggiunto (schema + RLS + indici + RPC anti-N+1).
+- **Ogni modifica va registrata in entrambi i file** (qui e in `MIGRAZIONE.md`).
+
+### 24 novembre 2026 - Lavoro proseguito nella migrazione (tutto registrato lì)
+
+- **Contratto di unione** (`MIGRAZIONE.md` §0): API identiche, nomi file del sito, bump versione
+  solo dopo test verdi, export/import dati, 7 passi di unione. Il sito pubblicato resta invariato.
+- **Supabase affiancato a Firebase** (non sostituito): schema con **indici** su user_id/asset/versione,
+  **RLS** su tutte le tabelle, **RPC anti-N+1** (`fbl_carica_bundle`, `fbl_carica_grafico`),
+  **projection esplicite** (mai `select('*')`), **Storage clusterizzato** per utente,
+  7 query **EXPLAIN ANALYZE** in `supabase/tests/explain_analyze.sql` per verificare Index Scan.
+- **8.6.23** upload CSV: contatore in **byte UTF-8** (non caratteri), tetto 250 MB, rifiuto esplicito.
+- **35/35 test JS verdi** (9 nuovi per byte/CSV).
+- Tutto il codice è nella cartella migrazione; il repo pubblicato non è stato toccato.
+
+### 24 novembre 2026 - RIPRISTINO MT5 sull'app ufficiale (URGENZA del proprietario)
+- **Sintomo**: l'app installata non si collegava più a MT5; il pulsante "Connetti" non rispondeva.
+- **Misurato (sola lettura, nessun codice toccato)**:
+  - `/health` (8000) rispondeva ma senza `mt5_account`; `/account` dava **400 "Non connesso: chiama prima /connect"**
+  - `/health` feed server (8001) invece vedeva `mt5_initialized=true`, account **12346925 @ Upcomers-Server**
+  - log ponte: **disconnect manuale alle 19:27**, poi riavvio processi alle 20:49 senza aver rifatto `mt5.initialize()` nel processo del ponte
+  - i due servizi sono processi separati: il feed aveva il login, il ponte no.
+- **Causa**: non era il browser (il proprietario usa solo l'app desktop) né le credenziali: il ponte era stato riavviato senza agganciare il terminale nel SUO processo.
+- **Cura**: chiamata `POST /mt5-launch` (endpoint già esistente, fa `mt5.initialize()`, **nessuna credenziale**, riduce il terminale a icona). Risposta `ok:true`.
+- **Verifica dopo**: `/account` → login 12346925, equity 9682.38; `/positions` → posizioni vere di nuovo (XAUUSD SELL 0.05, profit 41.9).
+- **Nessuna modifica al codice pubblicato**, nessun riavvio del ponte con posizioni vere, nessuna credenziale letta/trascritta.
+- ~~**Lezione**~~ **CORREZIONE 22:15**: la conclusione «basta `/mt5-launch`» era incompleta. `/mt5-launch` fa solo `mt5.initialize()` (bridge.py 2864-2890) e **non accende il flag `mt5_connected`**; il successo delle 20:50 era quasi certamente un `/connect` riuscito poco prima. Non ripeterla come cura.
+
+### 24 novembre 2026, 22:15 - PASSAGGIO A CLAUDE: stato vero e MT5 ancora aperto
+
+- **Prompt completo consegnato**: `cervello/PROMPT-PASSAGGIO-CLAUDE.md` (da incollare a Claude come primo messaggio). Contiene regole, percorsi, stato dei due progetti e tutta la diagnosi MT5.
+- **Nessuna modifica al codice, nessun commit/push/pubblicazione** in tutta la sessione. Solo file .md di memoria e file temporanei poi rimossi.
+- **Progetto pubblico**: v2.2.114 su `main`; `app.html` del repo ripristinato da HEAD (feature 8.5.13-8.5.18 non riapplicate); `app_aggiornata\app.html` servita è diversa (6.144.172 byte). Sintassi: 0 errori su entrambe le copie.
+- **Migrazione**: fasi 0-7 complete, 35/35 test JS, 10/10 Python, E2E verde, build Vite OK; Supabase affiancato, EXPLAIN ANALYZE scritto ma non eseguito; **non pubblicata**.
+- **MT5 — misure delle 22:15** (tutto in sola lettura):
+  - ponte 8000: `/health` 200, `/account` e `/positions` **400 "Non connesso: chiama prima /connect"**; `/mt5-terminal-status` → installed true.
+  - feed 8001: `mt5_initialized=true`, `connected_to_broker=true`, account **12346925 @ Upcomers-Server**.
+  - `/account` è bloccato dal flag `mt5_connected` (bridge.py 3703-3706), acceso **solo** da un `/connect` riuscito (3486-3541). `/mt5-launch` richiamato alle 22:15 → `ok:true` ma `/account` ancora 400.
+  - **`ForexBacktestLAB.log`: nessun `POST /connect` dopo il riavvio delle 21:58** → l'app desktop non invia la richiesta. In passato ci sono `/connect` 200 ma anche 500 (più, ~19:48) e un 401.
+  - **Il proprietario conferma**: «il pulsante account e connetti non rispondono»; cliccando «🖥️ MT5 (Live) ⌄» e «Connetti» → **«Il modal non si apre»**. Sul tablet tutto funziona.
+  - Nel browser dell'app OpenCode (non autenticato: 401 `/dati/session`, WS 403) lo stesso JS apre menu e modal al passo 3 con «Connetti» abilitato, **precaricato con FTMO-Demo 1515386110** invece del conto reale 12346925. La copia in cache del service worker è vecchia (6.128.400 byte vs 6.144.172, `CACHE_NAME` non bumpato), ma compila con 0 errori e ha i listener: la causa non è un errore di sintassi.
+- **Da fare da Claude** (vedi prompt §5): rimisurare dal vivo, chiedere al proprietario il pulsante esatto e cosa vede, capire perché il desktop non invia `/connect`, far refare il login con il conto giusto **12346925 @ Upcomers-Server** (l'agente NON può farlo: credenziali), poi test live 8.8 e registro nei .md.
+- **Extra sessione**: QR OpenCode per il telefono generato con `opencode pair --remote --yes` e confermato risolto dal proprietario («apposto fatto risolto»); file QR temporanei rimossi da repo e TEMP. Pairing Tailscale verificato (PC/Oracle/tablet online, 3 porte protette).
+
+### 24 novembre 2026, sera - CLAUDE: TROVATA LA CAUSA DEI PULSANTI MUTI (attesa senza fine sul permesso)
+
+**IL BLOCCO APERTO ALLE 19:27 E' SPIEGATO.** Non era la cache, non era `/mt5-launch`, non erano le
+credenziali, non era un velo sopra al pulsante. Era `handle.queryPermission()` che **nel WebView
+dell'app installata non si conclude mai**. Dettaglio completo, con tutte le misure e le tre cause
+sbagliate scartate, in `cervello/BUG.md` (voce «24 novembre 2026 — ACCOUNT E CONNETTI NON
+RISPONDONO»). Qui solo l'essenziale.
+
+**Misure prese sulla pagina viva** (porta `--remote-debugging-port=9222` del WebView, **sola
+lettura**, nessuna riga di codice cambiata per misurare):
+
+- processi delle 21:58 ancora in piedi; ponte 8000 `/health` 200 v2.2.114; feed 8001
+  `connected_to_broker=true`, account 12346925 @ Upcomers-Server.
+- il `[Disconnect]` delle **22:08:40** era **del proprietario** (confermato da lui): lo stato non
+  era rotto.
+- cartella WebView vera: `C:\Users\pietro\.forexbacktestlab\webview_profile\EBWebView` (**non**
+  sotto `AppData\Local\ForexBacktestLAB`). Nel `CacheStorage` l'`app.html` in cache e'
+  **6.144.172 byte**, SHA256 `3DD52A0F…8A7481`, **identica al file su disco**: la copia vecchia da
+  6.128.400 byte **non c'e'**. **La cache non c'entrava**, e il bump di `CACHE_NAME` non era la cura.
+- `mt5ModeBtn` **visibile e cliccabile**: 113x30 px a (720,551), `pointerEvents:auto`,
+  `elementFromPoint` al centro → `BUTTON#mt5ModeBtn`; tre gestori attaccati (`click:1` ciascuno).
+- riferimento alla cartella presente in IndexedDB (`name=applicazione`, `kind=directory`), ma
+  `queryPermission({mode:'readwrite'})` e `{mode:'read'}` **non si concludono**, e
+  `refreshMt5AccountsUI()` resta pendente (**misurato 6006 ms**). Il banner «Ricollega la cartella»
+  era `display:none`: non si mostrava nemmeno lui.
+
+**Perche' i pulsanti erano muti**: `«Account»` fa `await refreshMt5AccountsUI()` **prima** di
+`section.style.display='block'`, e `«Connetti»` fa `await mt5ScegliConto()` che **comincia** con lo
+stesso `await`. Promessa pendente → nessuna delle due arriva a mostrare qualcosa, senza errori in
+console. **Ed e' anche la spiegazione del `/connect` mancante nei log**: non veniva mai tentato.
+Sul tablet non capita perche' lì la cartella non si usa (archivio interno), quindi nessuno chiede
+quel permesso.
+
+**CURA APPLICATA NEL REPO** (`app.html`, ramo `main`, **working tree, NON committata**):
+
+1. `FBL_PERMESSO_TIMEOUT_MS = 1500` + `fblPermessoConTimeout`, usati da `verifyDirPermission` su
+   `queryPermission` e `requestPermission`. Il ripiego e' `'timeout'`, che **non e'** `'granted'`:
+   non concede niente per sbaglio.
+2. la voce `«Account»` **apre la sezione prima** e rilegge la cartella dopo (`try/catch`).
+
+**MISURA**: banco nuovo `laboratorio/app/permesso_cartella_non_risponde.test.mjs`, 3 prove con una
+cartella finta le cui `queryPermission`/`requestPermission` **non si concludono mai**. **Rossi tutti
+e tre sul codice vecchio**, **verdi dopo la cura**. `node laboratorio/strumenti/sintassi_app.mjs`
+→ **0 errori**, 5 script. Trappola pagata dentro il banco e registrata in `BUG.md`: preparare la
+pagina con `globalThis.<nome>` **non funziona** per le variabili dichiarate `let` (un `let` globale
+non e' una proprieta' di `globalThis`) — il terzo test era verde per sbaglio, sulla strada del primo
+accesso. Si assegna **a nome nudo**.
+
+**STATO E COSE IN SOSPESO:**
+
+- **Niente commit, niente push, niente pubblicazione.** Il repo risulta sul ramo **`main`** (non
+  `lavoro/soldi-veri-chiave-e-lotto` come diceva la consegna precedente) e aveva **gia' modifiche non
+  committate** prima di questo lavoro (`guardia_git.py`, `asset-library.html`,
+  `installer_build/build/bridge.py`, due test, `collauda.sh`, piu' file nuovi in `cervello/`):
+  **non sono mie** e non le ho toccate. Da decidere col proprietario dove far atterrare la cura.
+- **La copia installata `app_aggiornata\app.html` NON e' stata toccata**: sul suo PC i due pulsanti
+  **restano muti** finche' non aggiorna lui l'app. Nel frattempo la via per collegare MT5 e' aprire
+  la finestra di login a mano; le credenziali le mette solo lui (conto **12346925 @
+  Upcomers-Server**; i dati precaricati sono `1515386110 @ FTMO-Demo`, probabile causa del 401
+  storico).
+- **Collaudo completo** (`bash laboratorio/collauda.sh`) lanciato dopo la cura: esito da leggere in
+  `laboratorio/risultati/ultimo.md`. Atteso 1 rosso preesistente
+  (`chiusura_una_conferma.test.mjs`, Trade Journal), non legato a questa cura.
+- **Test live 8.8 non ancora fatti** (duplicata piantata, elenco asset, disco E, sfarfallio linee,
+  chiusura mercato 23:00): erano bloccati da questo difetto.
+- **Da guardare, non legato al difetto**: il WebView gira con `--remote-debugging-port=9222`
+  **aperta**. E' la porta da cui vengono tutte le misure di questa sessione, ma chiunque sul PC puo'
+  collegarsi e leggere la sessione dell'app. Decisione del proprietario se chiuderla.
+- `CACHE_NAME` e' ancora `v2.2.114` sia nella copia installata sia su `origin/main`, con `app.html`
+  modificata dopo: **resta da bumpare al prossimo rilascio**, ma per la regola del progetto, non
+  come cura di questo difetto.

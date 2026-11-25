@@ -48,7 +48,12 @@ const PREPARA = (function(){
     liveModeActive=true; liveReplayActive=false; followLatest=false;
     try{ document.getElementById('market').value='XAUUSD'; }catch(e){}
     const giorni={};
-    ['mon','tue','wed','thu','fri','sat','sun'].forEach(function(g){ giorni[g]=['00:00 - 22:00']; });
+    // Come in buco_grafico_chiuso: il calendario deve DICHIARARE la chiusura che il banco vuole
+    // misurare (21:00 UTC = 22:00 di Roma). Con '00:00 - 22:00' il calendario restava aperto e il
+    // taglio arrivava solo dall'orologio; dal 25 novembre comanda il calendario dello strumento
+    // («vale per tutto, e' giusto il nuovo aggiornamento»), quindi un calendario aperto vuol dire
+    // nessun taglio — e la prova di controllo «il filtro deve tagliare davvero» diventava rossa.
+    ['mon','tue','wed','thu','fri','sat','sun'].forEach(function(g){ giorni[g]=['00:00 - 21:00']; });
     orariAsset['XAUUSD']={zona:'UTC',giorni:giorni,stato:null,letto:${ADESSO}};
     return {candele:rows.length, chiusura:${ADESSO}-7200000};
   })()`;

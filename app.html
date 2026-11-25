@@ -14299,24 +14299,140 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.114';
+const FBL_VERSIONE='2.2.115';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
 // bisogno della cartella mostra il banner con il motivo (fblChiediPermessoFile) e riprova dopo.
 function fblHaGesto(){ try{ return navigator.userActivation?!!navigator.userActivation.isActive:true; }catch(e){ return true; } }
+// UNA RISPOSTA CHE NON ARRIVA VALE «NON LO SO», NON «ASPETTA PER SEMPRE».
+//
+// MISURATO sul PC del proprietario (24 novembre 2026), dentro il WebView dell'app installata,
+// leggendo la pagina viva dalla porta di debug: handle.queryPermission({mode:'readwrite'}) NON si
+// conclude mai. Non risponde 'granted', non risponde 'prompt', non lancia un errore: la promessa
+// resta pendente (misurato oltre 4 s in lettura diretta, e refreshMt5AccountsUI ancora pendente a
+// 6006 ms). Nel browser normale la stessa chiamata risponde subito; e' il WebView dell'app
+// installata a non rispondere.
+//
+// IL COSTO: ogni pulsante che aspettava quella risposta diventava MUTO. Le due voci del menu MT5
+// («Account» e «Connetti») mostrano la loro roba solo DOPO aver letto la cartella, quindi non
+// mostravano niente: nessun errore in console, nessuna riga nei log del ponte, e il proprietario
+// vedeva «non succede nulla» — per un pomeriggio si e' cercata la causa nella cache, nei pulsanti
+// e nelle credenziali, mentre il click arrivava a destinazione (misurato: 113x30 px,
+// pointerEvents auto, elementFromPoint al centro restituiva il pulsante stesso).
+//
+// Sul tablet non capitava perche' lì la cartella non si usa affatto (archivio interno): nessuno
+// chiedeva quel permesso, e tutto funzionava. E' per questo che il difetto sembrava «solo sul PC».
+const FBL_PERMESSO_TIMEOUT_MS=1500;
+// UN POPUP CHE NON PUO' FUNZIONARE NON VA MOSTRATO: VA SOSTITUITO.
+//
+// RICHIESTO dal proprietario (24 novembre 2026): «eliminiamo il popup che esce fuori del sblocca i
+// file collegati eccetera, non deve visualizzarsi, lo fa in automatico».
+//
+// MISURATO sul suo PC: in questo WebView NON risponde ne' `queryPermission` ne'
+// `requestPermission` — i 3002 ms di `verifyDirPermission` sono la somma dei DUE tetti da 1500.
+// Quindi il banner «Sblocca i file collegati» chiedeva un gesto che **non puo' riuscire**:
+// premerlo non avrebbe cambiato nulla, e restava li' a ogni avvio.
+//
+// LA STRADA: quando l'API e' muta si passa all'ARCHIVIO INTERNO dell'app
+// (`fblMobileCredsHandle`), lo stesso che usa il tablet — IndexedDB, nessun permesso da chiedere.
+// I dati restano sul dispositivo esattamente come prima: cambia **dove** sono tenuti, non se
+// escono (non escono). Il verdetto si ricorda in localStorage, quindi dal secondo avvio non si
+// riprova nemmeno.
+//
+// SERVONO DUE SILENZI DI FILA, non uno: un browser lento che risponde in due secondi NON deve far
+// cambiare strada all'app. In questo WebView tacciono entrambe le chiamate, quindi il verdetto
+// arriva comunque al primo click, prima che il banner faccia in tempo a comparire.
+const FBL_API_MUTA_KEY='fbl_permesso_api_muta';
+let fblPermessoApiMuta=false;
+try{ fblPermessoApiMuta=localStorage.getItem(FBL_API_MUTA_KEY)==='1'; }catch(e){}
+let fblPermessiSenzaRisposta=0;
+function fblSegnaPermessoSenzaRisposta(){
+ if(++fblPermessiSenzaRisposta<2)return;
+ if(fblPermessoApiMuta)return;
+ fblPermessoApiMuta=true;
+ try{ localStorage.setItem(FBL_API_MUTA_KEY,'1'); }catch(e){}
+ try{ const el=document.getElementById('unlockFilesBanner'); if(el)el.style.display='none'; }catch(e){}
+ // QUI AZZERAVO `mt5CredsDirHandle` e `capitalCredsDirHandle`, ED ERA UN DANNO: una cartella
+ // VALIDA e con permesso concesso veniva buttata via per un verdetto maturato su un'ALTRA
+ // cartella (il contatore e' comune a tutte). Il verdetto non deve toccare le cartelle che
+ // funzionano: serve solo a non mostrare un banner che non puo' riuscire.
+}
+// IL TETTO NON DEVE CONTARE UN SILENZIO CHE NON C'E' STATO.
+//
+// DIFETTO MIO, trovato in revisione il 24 novembre 2026 poche ore dopo averlo introdotto.
+// `Promise.race` **non annulla il perdente**: il `setTimeout` restava armato e il suo callback
+// partiva SEMPRE dopo 1500 ms, chiamando SEMPRE `fblSegnaPermessoSenzaRisposta()` — anche quando
+// `queryPermission` aveva risposto `'granted'` in due millisecondi. Il valore `'timeout'` veniva
+// scartato dalla race, l'EFFETTO COLLATERALE no.
+//
+// Costo: il contatore saliva a OGNI chiamata, su QUALSIASI browser. Bastavano **due chiamate in
+// tutta la vita della pagina** (le credenziali MT5 piu' quelle di Capital.com, all'avvio) per
+// latchare «API muta» su un browser perfettamente sano; e il verdetto si scrive in localStorage e
+// non si toglie da nessuna parte. Da li': banner spento per sempre, e al primo riavvio in cui il
+// permesso torna `'prompt'` senza un gesto, elenco conti VUOTO senza spiegazione — il «le
+// credenziali sono sparite» che questa cura doveva chiudere, causato dalla cura.
+//
+// MISURATO sul PC del proprietario, e io l'avevo letto al rovescio: dopo la riapertura la pagina
+// diceva `fblPermessoApiMuta=true` con **3 silenzi** MENTRE la cartella `conti trading` rispondeva
+// e il conto era in tendina. Avevo concluso «l'API e' tornata muta». Erano i miei timer che
+// contavano silenzi inesistenti: se la cartella risponde, di silenzi ce ne sono ZERO.
+//
+// Da qui: il callback controlla `risposto` prima di contare, e il timer si annulla appena la
+// risposta vera arriva. Inoltre `requestPermission` **non conta come silenzio** e ha un tetto
+// molto piu' alto: quella chiamata si risolve **quando l'utente clicca** sulla finestra del
+// browser, quindi 1500 ms misuravano l'attesa di un essere umano, non il browser. Con il tetto
+// corto «Ricollega la cartella» dichiarava «negata» un permesso che l'utente stava concedendo.
+const FBL_PERMESSO_CHIESTO_TIMEOUT_MS=30000;
+function fblPermessoConTimeout(p,opz){
+ // Il valore di ripiego e' 'timeout': non e' 'granted', quindi non concede niente per sbaglio.
+ const conta=!(opz&&opz.contaSilenzio===false);
+ const tetto=(opz&&Number.isFinite(opz.tettoMs))?opz.tettoMs:FBL_PERMESSO_TIMEOUT_MS;
+ let risposto=false, timer=null;
+ const vera=Promise.resolve(p).then(v=>{ risposto=true; return v; },()=>{ risposto=true; return 'errore'; });
+ const scadenza=new Promise(r=>{ timer=setTimeout(()=>{ if(!risposto&&conta)fblSegnaPermessoSenzaRisposta(); r('timeout'); },tetto); });
+ return Promise.race([vera,scadenza]).then(v=>{
+   if(risposto&&timer!==null){ try{ clearTimeout(timer); }catch(e){} }
+   return v;
+ });
+}
+// DUE COSE DIVERSE, CHE AVEVO LEGATO PER SBAGLIO.
+//
+// `fblPermessoApiMuta` e' il verdetto APPICCICOSO (due silenzi, ricordato in localStorage) e serve
+// a UNA cosa sola: non mostrare un banner che non puo' riuscire.
+// `fblPermessoMutoUltimoGiro` dice invece se il tentativo APPENA FATTO e' andato a vuoto per
+// silenzio. E' lui che deve decidere il ripiego sull'archivio interno, perche' la domanda «riesco
+// a leggere la cartella ADESSO?» si risponde con il tentativo di adesso, non con una memoria.
+//
+// Legandoli, il primo giro con la cartella muta tornava `null`: elenco conti vuoto senza
+// spiegazione, cioe' il difetto che la cura doveva chiudere, in attesa che un secondo silenzio
+// facesse scattare il verdetto. Separati, il ripiego parte subito e il verdetto resta libero di
+// avere la soglia che si decidera'.
+let fblPermessoMutoUltimoGiro=false;
 async function verifyDirPermission(handle,mode){
  if(!handle)return false;
+ fblPermessoMutoUltimoGiro=false;
  try{
    const opts={mode};
-   if((await handle.queryPermission(opts))==='granted')return true;
+   const risQuery=await fblPermessoConTimeout(handle.queryPermission(opts));
+   if(risQuery==='granted')return true;
+   if(risQuery==='timeout')fblPermessoMutoUltimoGiro=true;
    if(!fblHaGesto())return false;
-   if((await handle.requestPermission(opts))==='granted')return true;
+   // NESSUN CONTEGGIO del silenzio, ma TETTO CORTO come l'altra chiamata. Misurato il 24 novembre:
+   // con un tetto di 30 s (per dare tempo al dito umano sulla finestra del browser) in un WebView
+   // muto i pulsanti restavano appesi mezzo minuto, cioe' tornava il difetto che stavamo curando.
+   // Il tetto corto perde la risposta di un utente lento, ma NON perde il permesso: appena lui
+   // clicca, la concessione resta valida e la chiamata DOPO la vede (e' la proprieta' misurata dal
+   // banco «il ripiego non si appiccica»). Meglio una risposta tardiva che un pulsante muto.
+   const risChiesto=await fblPermessoConTimeout(handle.requestPermission(opts),{contaSilenzio:false});
+   if(risChiesto==='granted')return true;
+   if(risChiesto==='timeout')fblPermessoMutoUltimoGiro=true;
  }catch(e){}
  return false;
 }
 var fblPermessoInAttesa=[], fblPermessoRimandati=new Set();
 function fblChiediPermessoFile(motivo,rifai){
+ if(fblPermessoApiMuta)return;                        // chiederebbe un gesto che qui non puo' riuscire
  if(fblPermessoRimandati.has(motivo))return;          // "Non ora" gia' detto per questo uso
  if(!fblPermessoInAttesa.some(x=>x.motivo===motivo))fblPermessoInAttesa.push({motivo,rifai});
  const d=$('unlockFilesDesc');
@@ -16749,10 +16865,15 @@ function _fblConfineChiusuraCalcola(a,N){
     if(o&&o.giorni&&Object.keys(o.giorni).length)iv=orariIntervalli(o,tUltima-8*86400000);
   }catch(e){}
   const dentro=tt=>{ for(let i=0;i<iv.length;i++){ const x=iv[i]; if(tt>=x[0]&&tt<x[1])return true; } return false; };
-  // LA STESSA REGOLA di statoMercato(): dentro il calendario comanda l'orario con cui l'app
-  // segue MT5 (chiusura alle 22 di Roma), fuori dal calendario il mercato e' chiuso — e senza
-  // orari nel calendario e' chiuso per TUTTE le candele (il calendario non dice niente, quindi
-  // non si sa quando riapre).
+  // LA STESSA REGOLA di statoMercato(), e dal 25 novembre 2026 lo e' DAVVERO: dentro il
+  // calendario il mercato NON e' chiuso (prima qui comandava «l'orario con cui l'app segue MT5,
+  // chiusura alle 22 di Roma», ed era la richiesta del 1 novembre che il proprietario ha
+  // revocato); fuori dal calendario il mercato e' chiuso; e senza orari nel calendario e' chiuso
+  // per TUTTE le candele (il calendario non dice niente, quindi non si sa quando riapre).
+  //
+  // ATTENZIONE A QUESTO COMMENTO: fino al 25 novembre diceva «dentro il calendario comanda
+  // l'orario» mentre statoMercato era gia' stato cambiato, quindi DISINFORMAVA chi leggeva. Un
+  // commento che dichiara una regola condivisa va cambiato nello stesso momento della regola.
   //
   // PERCHE' NON SI RIPIEGA SULL'ORARIO DELLA SESSIONE, qui. PROVATO e ritirato (collaudo
   // completo, 8 novembre 2026): con il calendario vuoto facevo rispondere liveSessionPhaseAt al
@@ -16764,9 +16885,37 @@ function _fblConfineChiusuraCalcola(a,N){
   //     il tetto resta l'ultima candela vera: chi scorre a mano arriva sempre in fondo;
   //   - il CONGELAMENTO dell'autosegui ha il confine suo, quello dell'orario della sessione,
   // che non ha bisogno del calendario (fblConfineAutosegui(), vedi sotto).
+  // OLTRE L'ULTIMO TICK VERO NON C'E' MERCATO, e questo filtro ora ha un meccanismo SUO.
+  //
+  // MISURATO il 25 novembre 2026: la prova «CONTROPROVA: le candele oltre l'ultima reale non si
+  // mostrano» (`chiusura_non_taglia_candele_reali`) e' diventata rossa appena il calendario ha
+  // smesso di far decidere l'orologio — e il suo calendario e' `00:00 - 23:59`, aperto 24 ore **a
+  // posta**, perche' quella proprieta' non c'entra con gli orari di mercato. Si scopre cosi' che il
+  // filtro non esisteva: viaggiava a sbafo sul taglio orario (si tagliava per orologio e poi si
+  // riallargava all'ultima reale con `_fblAllargaAllUltimaReale`). Togliendo l'orologio da dentro
+  // il calendario, il confine non si formava e il filtro spariva con lui.
+  //
+  // Qui lo si dice esplicitamente, con le parole del banco: oltre l'ultimo tick VERO di questo
+  // asset e' chiuso, qualunque cosa dica il calendario. Non tocca il caso vivo (sopra si esce
+  // prima con `fblAssetRiceveDatiOra` e con `fblMercatoMt5Noto`), e per i file di MT5 il
+  // riallargamento all'ultima candela reale resta a valle, che e' la cura del 21 novembre.
+  let _ultimoVero=0;
+  try{ const u=mt5UltimoTickPerAsset[a]; if(u&&Number.isFinite(u.at)&&u.at>0)_ultimoVero=u.at; }catch(e){}
   const chiusa=tt=>{
     if(!Number.isFinite(tt))return false;
-    if(iv.length)return dentro(tt)?liveSessionPhaseAt(tt)==='closed':true;
+    if(_ultimoVero>0&&tt>_ultimoVero)return true;
+    // DENTRO IL CALENDARIO NON SI TAGLIA.
+    //
+    // Qui c'era `liveSessionPhaseAt(tt)==='closed'`, cioe' l'orologio col suo ripiego alle 22:00,
+    // che vinceva anche dentro l'orario vero dello strumento: su un broker che chiude alle 23:00
+    // tagliava **un'ora di mercato vero** dal grafico.
+    //
+    // E' la richiesta del 1 novembre 2026, REVOCATA dal proprietario il 24 novembre («va eliminata
+    // non e' piu' valida mi ero sbagliato») e confermata il 25 come valida **per tutto**, non solo
+    // per l'etichetta: «vale per tutto, è giusto il nuovo aggiornamento». Tre banchi
+    // (`buco_grafico_chiuso`, `chiusura_mercato_prestazioni` e la sua controprova) erano quella
+    // richiesta scritta in forma di test e sono stati riscritti sulla regola nuova, non aggirati.
+    if(iv.length)return !dentro(tt);
     return true;
   };
   // LA CODA CHIUSA: dall'ultima candela verso sinistra, finche' resta chiusa. Se non si trova
@@ -16841,13 +16990,17 @@ function fblConfineAutosegui(){
     // PRIMO CONFINE: la coda chiusa dei dati, secondo l'orario della sessione. E' il caso di
     // tutti i giorni: le candele finiscono dentro la chiusura (il feed si ferma), quindi la
     // coda c'e' e l'autosegui si ferma all'ultima candela aperta.
-    if(liveSessionPhaseAt(tUltima)==='closed'){
+    // L'OROLOGIO PROPONE, IL CALENDARIO DELLO STRUMENTO DECIDE (25 novembre 2026, «vale per
+    // tutto»): `&&` con `fblChiusoAllIstante`, che dentro l'orario vero dice «non chiuso» e senza
+    // calendario ripiega sull'orologio di prima. Senza questo l'autosegui si fermava sulla candela
+    // delle 21:59 su un broker che chiude alle 23:00.
+    if(liveSessionPhaseAt(tUltima)==='closed' && fblChiusoAllIstante(a,tUltima)){
       const tLimite=tUltima-8*86400000;
       for(let k=N-1;k>=0;k--){
         const t=parseDateTime(rows[k].date);
         if(!Number.isFinite(t))continue;
         if(t<tLimite)break;
-        if(liveSessionPhaseAt(t)!=='closed'){ cap=k+1; break; }
+        if(!(liveSessionPhaseAt(t)==='closed' && fblChiusoAllIstante(a,t))){ cap=k+1; break; }
       }
     }
     // SECONDO CONFINE: l'orologio. Se il mercato e' chiuso ADESSO, l'autosegui si ferma
@@ -55993,7 +56146,11 @@ function applyLivePriceToChart(price,timestamp,opts){
 // quell'asset i tick veri continuano ad arrivare (fblAssetRiceveDatiOra: canale vivo e ultimo
 // tick entro cinque minuti), il prezzo passa. Quando i tick finiscono davvero, questa stessa
 // riga torna a fermare tutto, ed e' quella che impedisce le «candele finte» a mercato chiuso.
-if(liveSessionPhaseNow()==='closed' && !fblAssetRiceveDatiOra(mt5ActiveSymbol||currentAssetKey))return false;
+// L'OROLOGIO PROPONE, IL CALENDARIO DELLO STRUMENTO DECIDE (25 novembre 2026, «vale per tutto»):
+// tre condizioni, tutte e tre necessarie per rifiutare un prezzo. Prima bastavano le due vecchie, e
+// dentro l'orario vero di un broker che chiude alle 23:00 nessun prezzo toccava il grafico dopo le
+// 22:00 — il cartello «Mercato chiuso» era stato tolto ma il grafico restava fermo uguale.
+if(liveSessionPhaseNow()==='closed' && fblChiusoAllIstante(currentAssetKey,Date.now()) && !fblAssetRiceveDatiOra(mt5ActiveSymbol||currentAssetKey))return false;
 // BUG RISOLTO ("a mercato chiuso il grafico fa comunque candele finte fino alle 02:00"): la riga
 // qui sopra blocca solo quando MT5 e' collegato (la "fase" e' 'closed' soltanto in quel caso). Se
 // il collegamento MT5 cade, la fase diventa 'free' e nessun controllo fermava piu' i prezzi: con
@@ -61210,6 +61367,45 @@ function fblMercatoMt5AggiornaCorrente(){
  try{ (positions||[]).forEach(p=>{ if(p)chiedi(p.asset); }); }catch(e){}
  try{ (pendingOrders||[]).forEach(p=>{ if(p)chiedi(p.asset); }); }catch(e){}
 }
+// GLI ORARI VERI DELLO STRUMENTO DICONO «APERTO ADESSO»? (24 novembre 2026)
+//
+// Torna true SOLO se per quell'asset abbiamo davvero il calendario (quello che Capital.com da'
+// per strumento, tenuto in `orariAsset`) e l'istante cade dentro un suo intervallo. Senza
+// calendario torna **false**, non true: «non lo so» non e' «aperto», e chi chiama decide con le
+// fonti che gli restano. Serve a tenere l'orologio NOSTRO fuori dalle decisioni che il calendario
+// del broker sa prendere da solo.
+function fblOrariAssetAperto(asset,t){
+ return fblOrariAssetStato(asset,t)==='aperto';
+}
+// TRE RISPOSTE, NON DUE: 'aperto', 'chiuso', oppure null = «per questo asset non ho il
+// calendario». Distinguerle e' tutto il punto: `false` da solo confondeva «lo strumento e' chiuso»
+// con «non lo so», e sono due cose che portano a decisioni opposte.
+function fblOrariAssetStato(asset,t){
+ try{
+  if(!asset)return null;
+  const o=orariAsset[asset];
+  if(!o||!o.giorni||!Object.keys(o.giorni).length)return null;
+  const quando=Number.isFinite(t)?t:Date.now();
+  const iv=orariIntervalli(o,quando);
+  if(!iv.length)return null;
+  return iv.some(x=>quando>=x[0]&&quando<x[1])?'aperto':'chiuso';
+ }catch(e){ return null; }
+}
+// «CHIUSO A QUELL'ISTANTE?» — UNA SOLA RISPOSTA PER TUTTA L'APP.
+//
+// RICHIESTO dal proprietario (24-25 novembre 2026): il mercato e' chiuso solo quando non arrivano
+// piu' aggiornamenti delle candele **E** l'ora di apertura/chiusura di QUELL'asset su QUEL broker
+// dice chiuso. Prima della cura quattro strade rispondevano a questa stessa domanda in modi
+// diversi: `statoMercato` (etichetta), il taglio delle candele, il confine dell'autosegui e
+// l'accettazione dei prezzi. Curando solo la prima il sintomo restava a metà — il cartello
+// spariva ma il grafico veniva comunque tagliato alle 22:00. Questa funzione e' la risposta
+// condivisa: il calendario vero quando c'e', l'orologio solo quando non c'e'.
+function fblChiusoAllIstante(asset,t){
+ const s=fblOrariAssetStato(asset,t);
+ if(s==='aperto')return false;
+ if(s==='chiuso')return true;
+ try{ return liveSessionPhaseAt(Number.isFinite(t)?t:Date.now())==='closed'; }catch(e){ return false; }
+}
 function statoMercato(asset,t){
  // MT5 e' l'autorita' sullo stato del mercato: se dice APERTO, e' aperto, qualsiasi cosa
  // dica l'orario fisso (segnalazione del 3 novembre 2026).
@@ -61224,21 +61420,30 @@ function statoMercato(asset,t){
      const pross=iv.find(x=>x[0]>t);
      return {chiuso:true,apreAt:pross?pross[0]:null,fonte:'orari'};
    }
-   // RICHIESTA DEL PROPRIETARIO (1 novembre 2026): anche se il calendario dice "aperto",
-   // la schedule MT5 (chiusura 22:00) e' piu' restrittiva per gli asset non-crypto. Il
-   // calendario di Capital.com puo' dire "aperto fino alle 00:00" mentre il mercato vero
-   // (MT5) chiude alle 22:00: in quel caso si applica la chiusura a 22:00, cosi' l'ultima
-   // candela segna 22:00 e non 00:00.
-   // L'ORARIO SCRITTO A MANO NON BATTE I DATI VERI (12 novembre 2026).
-   // Questa strada e' quella che scrive l'etichetta rossa all'utente, ed era l'unica delle tre a
-   // non guardare i tick: alle 23:32 diceva «Mercato chiuso, apre tra 00:28» sul Dollar Index
-   // mentre fblMercatoFermoOra, nello stesso istante, lo dava per aperto. Due risposte opposte
-   // alla stessa domanda. Se per quell'asset stanno arrivando tick veri, non e' chiuso.
-   // E SOLO A CANALE VIVO: se il collegamento e' caduto non sappiamo niente del mercato,
-   // e un'etichetta «Mercato chiuso» sarebbe una bugia su un guasto nostro.
-   if(liveScheduleAppliesNow(asset)&&liveSessionPhaseAt(t)==='closed'&&(!mt5Connected||fblCanaleDatiVivo())&&!fblAssetRiceveDatiOra(asset)){
-     return {chiuso:true,apreAt:fblProssimaRiapertura(t),fonte:'mt5'};
-   }
+   // DENTRO L'ORARIO VERO DELLO STRUMENTO IL MERCATO NON E' CHIUSO. PUNTO.
+   //
+   // QUI C'ERA LA RICHIESTA DEL PROPRIETARIO DEL 1 NOVEMBRE 2026, **REVOCATA DA LUI STESSO** il
+   // 24 novembre 2026: «va eliminata non è più valida mi ero sbagliato». Diceva che la chiusura
+   // MT5 delle 22:00 era piu' restrittiva del calendario di Capital.com e doveva vincere sempre,
+   // «cosi' l'ultima candela segna 22:00 e non 00:00». Era giusta per il broker di allora.
+   //
+   // PERCHE' ERA SBAGLIATA QUI, MISURATO il 24 novembre alle 22:41 sul suo PC: l'app scriveva
+   // «🌙 Mercato chiuso... riapertura (00:00)» mentre il suo broker (Upcomers-Server) chiude alle
+   // 23:00. La catena: `fblScartoServerSec` era NOTO (3600), ma l'orologio del broker e quello di
+   // Roma sono nello stesso fuso, quindi la «mezzanotte del server vista da Roma» cade su 0,
+   // `fblChiusuraMinutiLocali` la scarta come inutilizzabile e **ripiega su
+   // LIVE_MT5_CLOSE_MIN = 22:00**. Un'ora piena di errore, e un'ora di riapertura inventata.
+   //
+   // LA REGOLA DEL PROPRIETARIO, nelle sue parole: il mercato e' chiuso solo quando non arrivano
+   // piu' aggiornamenti delle candele **E** l'ora di apertura/chiusura di QUELL'asset su QUEL
+   // broker dice chiuso — «con i suoi orologi diversi dal tipo di broker». Un numero scritto a
+   // mano nel sorgente non e' nessuna delle due cose.
+   //
+   // Quindi: se siamo dentro un intervallo del calendario vero dello strumento, si torna «non
+   // chiuso» e l'orologio nostro non ha voce in capitolo. Il ramo orario resta vivo solo per gli
+   // asset di cui NON abbiamo il calendario (sotto): li' e' l'unica fonte che ci resta, e lo si
+   // dichiara invece di spacciarlo per il calendario del broker.
+   return null;
  }
  // Orario con cui l\'app segue MT5 (anche se lo strumento sul broker e' aperto, il grafico e' fermo).
  // L'ORARIO SCRITTO A MANO NON BATTE I DATI VERI (12 novembre 2026): e' il ramo che
@@ -61935,6 +62140,27 @@ async function liveSessionTick(){
          liveSessionTick._mt5AskAt = 0;
        }
      }
+     // GLI ORARI VERI DELLO STRUMENTO BATTONO L'OROLOGIO (24 novembre 2026).
+     // Richiesta del proprietario, che ha REVOCATO quella del 1 novembre: «va eliminata non è
+     // più valida mi ero sbagliato».
+     // MISURATO il 24 novembre alle 22:41 sul suo PC: MT5 era scollegato a mano dalle 22:08,
+     // quindi le tre guardie qui sopra erano TUTTE spente (chiedono `mt5Connected`) e decideva il
+     // solo orologio, col suo ripiego alle 22:00 — su un broker che chiude alle 23:00. Il grafico
+     // si fermava un'ora prima del dovuto e annunciava una riapertura falsa («00:00»).
+     // Dentro l'orario vero dello strumento non si congela: si rivaluta al giro dopo.
+     // LA CHIAVE GIUSTA E' `currentAssetKey`, NON `_assetOra`. Trovato in revisione il 24
+     // novembre 2026: `_assetOra` e' `mt5ActiveSymbol || currentAssetKey`, e `mt5ActiveSymbol` e'
+     // il simbolo RISOLTO DAL BROKER (es. `XAUUSD.r`, `US500.cash` — esiste
+     // MT5_SYMBOL_ALIAS_GROUPS proprio per questo), mentre `orariAsset` e' indicizzato con la
+     // chiave asset dell'app (vedi `orariSalva`). Per ogni asset con suffisso di broker
+     // `orariAsset[_assetOra]` era `undefined`, la guardia tornava false e il grafico si
+     // congelava alle 22:00 comunque: la cura non si applicava proprio dove serviva. Le due
+     // guardie qui sopra possono usare `_assetOra` perche' le loro mappe sono indicizzate su
+     // ENTRAMBE le chiavi a posta; `orariAsset` no.
+     if(fblOrariAssetAperto(currentAssetKey,Date.now())){
+       liveSessionPhase = prev;
+       return;
+     }
      if(prev==='capital')liveOffSessionSaveRows();
      await liveSessionFreezeMt5(ph);
    }else if(ph==='mt5'&&(prev==='capital'||prev==='closed')){
@@ -62119,9 +62345,14 @@ async function getCapitalCredsDirHandle(){
    capitalCredsDirHandle=fblMobileCredsHandle();
    return capitalCredsDirHandle;
  }
+ // Stessa regola del gemello MT5: la cartella si prova SEMPRE, l'archivio interno e' il ripiego.
  const handle=await libDirGet('capitalCredsDir');
  if(!handle)return null;
  if(await verifyDirPermission(handle,'readwrite')){ capitalCredsDirHandle=handle; return handle; }
+ // Anche qui il ripiego NON si mette in cache, per la stessa ragione del gemello MT5.
+ // Il verdetto ricordato, OPPURE il silenzio del tentativo appena fatto: in entrambi i casi la
+ // cartella non si riesce a leggere adesso, e un elenco vuoto senza spiegazione e' il difetto.
+ if(fblPermessoApiMuta||fblPermessoMutoUltimoGiro)return fblMobileCredsHandle();
  fblChiediPermessoFile('usare le credenziali salvate di Capital.com',()=>{ if(liveModeActive&&!capitalSessionTokens)return ensureCapitalConnected(); });
  return null;
 }
@@ -62369,9 +62600,29 @@ async function getMt5CredsDirHandle(){
    mt5CredsDirHandle=fblMobileCredsHandle();
    return mt5CredsDirHandle;
  }
+ // LA CARTELLA SI PROVA SEMPRE, ANCHE COL VERDETTO «API MUTA» GIA' PRESO.
+ //
+ // MISURATO il 24 novembre 2026, e ha salvato questa cura dal fare danno: dopo che il
+ // proprietario ha rifatto il login, la cartella `conti trading` RISPONDE e contiene il suo conto
+ // (`12346925 @ Upcomers-Server`, visto in tendina). Il permesso fresco, dato con un gesto suo
+ // vero, funziona; e' solo dopo il riavvio che l'API torna muta. Se qui si tornasse subito
+ // l'archivio interno per via del verdetto ricordato, quella cartella non verrebbe piu' letta MAI
+ // e il suo conto SPARIREBBE dall'elenco - esattamente il «le credenziali sono sparite» che
+ // questo progetto combatte da sempre. Il verdetto quindi serve a NON mostrare il banner
+ // (fblChiediPermessoFile), non a smettere di provare.
  const handle=await libDirGet('mt5CredsDir');
  if(!handle)return null;
  if(await verifyDirPermission(handle,'readwrite')){ mt5CredsDirHandle=handle; return handle; }
+ // La cartella non risponde: archivio interno, senza banner e senza elenco vuoto senza spiegazione.
+ // IL RIPIEGO NON SI METTE IN CACHE. Scrivendolo in `mt5CredsDirHandle` la riga in cima
+ // (`if(mt5CredsDirHandle)return mt5CredsDirHandle`) lo avrebbe restituito per TUTTA la sessione:
+ // la cartella vera non veniva piu' provata nemmeno una volta, e «si prova sempre» era falso.
+ // Peggio in scrittura: salvando un conto si scriveva nell'archivio interno vuoto mentre la
+ // cartella teneva l'elenco vecchio — due archivi che divergono in silenzio, e uno #status che
+ // diceva «salvato nella cartella collegata» mentendo. Trovato in revisione, 24 novembre 2026.
+ // Il verdetto ricordato, OPPURE il silenzio del tentativo appena fatto: in entrambi i casi la
+ // cartella non si riesce a leggere adesso, e un elenco vuoto senza spiegazione e' il difetto.
+ if(fblPermessoApiMuta||fblPermessoMutoUltimoGiro)return fblMobileCredsHandle();
  // PRIMA QUI SI TORNAVA null IN SILENZIO, e l'elenco dei conti MT5 risultava semplicemente vuoto:
  // nessun errore, nessuna spiegazione, e il proprietario vedeva «le credenziali sono sparite»
  // dopo ogni aggiornamento. Capital.com il banner lo mostrava gia' (vedi
@@ -64205,8 +64456,13 @@ $('mt5MenuAccountBtn').addEventListener('click',async ev=>{
  const section=$('mt5AccountSection'); if(!section)return;
  const opening=section.style.display==='none';
  if(opening){
-   await refreshMt5AccountsUI();
+   // LA SEZIONE SI APRE PRIMA, E SOLO DOPO SI RILEGGE LA CARTELLA (prima era il contrario).
+   // MISURATO il 24 novembre 2026: aspettare la cartella prima di aprire rendeva il pulsante
+   // MUTO ogni volta che il permesso non rispondeva (vedi fblPermessoConTimeout piu' sopra).
+   // Aprire prima costa, nel caso peggiore, una tendina vuota per un istante; aspettare costava
+   // un pulsante che non fa assolutamente niente, senza spiegare perche'.
    section.style.display='block';
+   try{ await refreshMt5AccountsUI(); }catch(e){}
  }else{
    section.style.display='none';
  }
