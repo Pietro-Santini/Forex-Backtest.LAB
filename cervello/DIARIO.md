@@ -8273,3 +8273,27 @@ banchi vicini. Collaudo completo: Falliti 0 (6/6).
 LEZIONE: una regola che parla di "locale" e "remoto" ha gia' dentro l'errore quando i due lati
 sono lo stesso utente. Con un mouse solo non esiste il locale: esiste il movimento piu' recente.
 
+
+## 26 novembre 2026 — v2.2.118: lo Sweep v2 si legge, e il pannello ha quattro sezioni
+
+SEGNALATO: «mi disegna una riga per ogni candela ... 30 impostazioni ... non saprei dove mettere
+le mani».
+
+CAUSA MISURATA: in `XAUSWEEP_DEF.compute` ogni pivot confermato (quasi uno per barra) spingeva un
+livello in `st.livelli`; l'elenco NON aveva tetto e `render` li disegnava tutti, ognuno lungo
+`etaMax` barre (120). In piu' erano accesi per difetto i motivi degli scarti e TUTTE le
+operazioni invece della sola ultima.
+
+CURA: nuovo parametro `livelliMax` (3 per difetto) e il render disegna solo gli ultimi N livelli;
+tetto a 400 livelli e 300 sweep in memoria; `soloUltima` acceso e `mostraScarti` spento per
+difetto. Le 36 impostazioni ora dichiarano il loro gruppo (`XAUSWEEP_GRUPPI`, quattro sezioni con
+titolo) e quelle avanzate compaiono solo con la spunta `mostraAvanzate`: per difetto se ne vedono
+14. Nessuna impostazione e' stata tolta: nessun valore cambia: cambia solo cosa si vede.
+
+BANCO: `laboratorio/app/sweep_v2_grafico_leggibile.test.mjs` (2 prove), con CONTROPROVA che
+alzando `livelliMax` le righe tornano - cosi' il test non passa perche' il disegno e' spento.
+Collaudo completo: Falliti 0.
+
+LEZIONE: un elenco che cresce a ogni barra e un render che lo disegna tutto non e' "troppa
+informazione", e' un difetto di memoria che si vede. Il tetto va messo dove nasce il dato, non
+solo dove si disegna.

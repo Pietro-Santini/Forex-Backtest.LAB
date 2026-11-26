@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.117';
+const FBL_VERSIONE='2.2.118';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -20076,6 +20076,27 @@ function nowickEma(values, len) {
   return out;
 }
 
+// APERTURA AUTOMATICA DEL NO-WICK — usa lo STESSO meccanismo del Valid BOS Pullback.
+// Non c'e' una seconda regola: il permesso lo da' bosPuoAutoAprireDemo() (interruttore
+// autoOpenDemo + diretta/replay + MT5 collegato + conto NON reale) e la posizione la apre
+// bosAutoApriOpsSetup(), la stessa funzione del pullback. Avere due regole per la stessa
+// domanda e' gia' costato due giorni di diagnosi (cervello/BUG.md): qui non si ripete.
+function noWickAutoApri(st, p, t, i) {
+  try {
+    if (!bosPuoAutoAprireDemo(p)) return;
+    const setupId = 'nowick-' + i + '-' + (t.dir === 1 ? 'L' : 'S');
+    if (st._autoFatti && st._autoFatti[setupId]) return;
+    if (!st._autoFatti) st._autoFatti = {};
+    st._autoFatti[setupId] = true;
+    const op = {
+      nome: 'nowick', setupId, dir: t.dir, entry: t.entry, sl: t.stop, tp: t.target,
+      lotto: scalettaLotto(t.entry, t.stop, {assoluto: Math.max(0.01, +p.rischioOperazione || 0.5)})
+    };
+    bosAutoApriOpsSetup({ops: [op]}, p, setupId, i);
+    t._op = op;   // serve al break-even per spostare lo stop anche sulla posizione aperta
+  } catch (e) {}
+}
+
 const NO_WICK_RETEST_DEF = {
   label: 'No-Wick Retest Levels',
   buildSettings: (ind, paramsRow, mk) => noWickBuildSettings(ind, paramsRow, mk),
@@ -20084,6 +20105,23 @@ const NO_WICK_RETEST_DEF = {
     showArrows: true, showSetupMarkers: false,
     fastEma: 20, slowEma: 50, requirePricePosition: true,
     atrLength: 14, tpAtr: 2.0, slAtr: 1.0, tradeHistory: 30,
+    // PER DIFETTO SOLO VISUALIZZAZIONE: nessuna posizione viene aperta da questo indicatore.
+    // Misurato su 1.373.103 barre vere di XAUUSD: con le impostazioni del pannello la strategia
+    // PERDE (profit factor 0,90 fuori campione). La configurazione che regge (15 minuti, 08-16,
+    // TP 1,5 ATR / SL 1,5 ATR, PF 1,27) e' la migliore di 306 prove e lo Sharpe deflazionato la
+    // boccia: non c'e' vantaggio dimostrato. L'interruttore esiste proprio per tenerlo spento.
+    autoOpenDemo: false, rischioOperazione: 0.5,
+    // BREAK-EVEN A SOGLIA PERCENTUALE, stessi nomi del Valid BOS Pullback: bePerc1 = quanta
+    // parte del cammino verso il target basta perche' lo stop vada a pareggio (0 = SPENTO),
+    // bePips1 = di quanti pip oltre l'entrata si mette lo stop a pareggio.
+    // SPENTO PER DIFETTO, e non per prudenza generica: misurate 42 varianti di gestione
+    // dell'uscita su 1.373.103 barre vere di XAUUSD, il break-even e il trailing hanno
+    // PEGGIORATO i risultati in OGNI variante provata (ricerca_sweep/RISULTATI-NOWICK.md,
+    // sezione «Secondo giro»); lo stesso era gia' accaduto sulla liquidity sweep
+    // (ricerca_sweep/RISULTATI.md). C'e' perche' il proprietario lo vuole per parita' col
+    // pullback, non perche' sia un miglioramento: chi lo accende sappia che e' misurato in
+    // perdita rispetto al lasciare correre lo stop iniziale.
+    bePerc1: 0, bePips1: 0,
     longLevelColor: '#089981', shortLevelColor: '#f23645', entryColor: '#f5d547',
     levelArrowColor: '#f5d547', targetColor: '#089981', stopColor: '#f23645'
   }),
@@ -20149,6 +20187,40 @@ const NO_WICK_RETEST_DEF = {
           const tgtHit = t.dir === 1 ? r.high >= t.target : r.low <= t.target;
           if (stopHit) { st.tradeActive = false; t.closed = true; t.exit = 'SL'; t.exitBar = i; }
           else if (tgtHit) { st.tradeActive = false; t.closed = true; t.exit = 'TP'; t.exitBar = i; }
+          // BREAK-EVEN: NIENTE REGOLA NUOVA. Soglia e livello li calcolano le stesse due
+          // funzioni del pullback, bosLivelloBreakEven(..., 1) e bosPassoBreakEven(), sugli
+          // stessi parametri bePerc1 (% del cammino verso il target, 0 = spento) e bePips1
+          // (pip oltre l'entrata). Lo stop si muove SOLO in meglio, mai indietro.
+          //
+          // QUELLO CHE DICONO I NUMERI, scritto qui perche' non vada perso: 42 varianti di
+          // gestione dell'uscita misurate su 1.373.103 barre vere di XAUUSD; il break-even e
+          // il trailing hanno PEGGIORATO i risultati in OGNI variante provata
+          // (ricerca_sweep/RISULTATI-NOWICK.md, «Secondo giro»), come era gia' successo sulla
+          // liquidity sweep (ricerca_sweep/RISULTATI.md). Questo non e' un miglioramento mai
+          // verificato: e' verificato, e in perdita. C'e' per parita' col pullback, spento.
+          //
+          // L'ordine conta: prima si guarda se la barra ha preso stop o target con lo stop
+          // che aveva all'apertura della barra, POI si sposta a pareggio. Spostarlo prima
+          // farebbe chiudere a pareggio operazioni che su quella stessa barra lo stop vero
+          // non aveva ancora toccato.
+          if (st.tradeActive && !t.beFatto) {
+            const beLiv = bosLivelloBreakEven(p, t.dir, t.entry, t.target, 1);
+            if (Number.isFinite(beLiv)) {
+              const arrivato = t.dir === 1 ? (r.high >= beLiv) : (r.low <= beLiv);
+              if (arrivato) {
+                const passo = bosPassoBreakEven(p);
+                const pips = Math.max(0, Number(p.bePips1) || 0);
+                const nuovoSl = t.dir === 1 ? (t.entry + pips * passo) : (t.entry - pips * passo);
+                if (t.dir === 1 ? (nuovoSl > t.stop) : (nuovoSl < t.stop)) {
+                  t.stopIniziale = t.stop;
+                  t.stop = Number(nuovoSl.toFixed(8));
+                  t.beFatto = true; t.beBarra = i;
+                  t.beLivello = beLiv;
+                  if (t._op) { t._op.sl = t.stop; t._op.be1Fatto = true; try { bosSyncAutoPos(t._op); } catch (e) {} }
+                }
+              }
+            }
+          }
         }
       }
 
@@ -20188,6 +20260,7 @@ const NO_WICK_RETEST_DEF = {
         st.events.push({bar: i, dir: selDir});
         while (st.trades.length > histN) st.trades.shift();
         while (st.entryLines.length > histN) st.entryLines.shift();
+        noWickAutoApri(st, p, t, i);
       }
 
       // 5) Nuovo livello senza stoppino (candela confermata).
@@ -20301,7 +20374,13 @@ const NO_WICK_SETTINGS = [
   {type: 'num', key: 'atrLength', label: 'Lunghezza ATR', min: 1, max: 500},
   {type: 'num', key: 'tpAtr', label: 'Take profit (ATR)', min: 0.1, max: 20, step: 0.1},
   {type: 'num', key: 'slAtr', label: 'Stop loss (ATR)', min: 0.1, max: 20, step: 0.1},
+  {type: 'num', key: 'bePerc1', label: 'Break-even: % verso il target (0 = spento)', min: 0, max: 100, step: 1,
+   nota: 'Misurato, non supposto: su 1.373.103 barre vere di XAUUSD sono state provate 42 varianti di gestione dell\u2019uscita e il break-even (come il trailing) ha PEGGIORATO i risultati in tutte. Lasciarlo a 0 significa lasciare lo stop dove e\u2019 nato, che nelle misure rende di piu\u2019.'},
+  {type: 'num', key: 'bePips1', label: 'Break-even: pip oltre l\u2019entrata', min: 0, max: 1000, step: 1},
   {type: 'num', key: 'tradeHistory', label: 'Trade conservati', min: 1, max: 100},
+  {type: 'num', key: 'rischioOperazione', label: 'Rischio per operazione (%)', min: 0.01, max: 100, step: 0.01},
+  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni (solo demo/simulato, conto MT5 collegato, anche in replay, niente reale)',
+   nota: 'ATTENZIONE: questa strategia NON ha ancora un vantaggio dimostrato. Misurata su 1.373.103 barre vere di XAUUSD, con le impostazioni di questo pannello PERDE: profit factor 0,90 fuori campione. L\u2019unica configurazione che regge (15 minuti, ore 08-16, TP 1,5 ATR e SL 1,5 ATR: profit factor 1,27 fuori campione) e\u2019 la migliore di 306 prove e lo Sharpe deflazionato la boccia. Spento = solo visualizzazione dei livelli: nessuna posizione viene aperta.'},
   {type: 'color', key: 'longLevelColor', label: 'Livello long'},
   {type: 'color', key: 'shortLevelColor', label: 'Livello short'},
   {type: 'color', key: 'entryColor', label: 'Ingresso'},
@@ -20311,10 +20390,19 @@ const NO_WICK_SETTINGS = [
 ];
 function noWickBuildSettings(ind, paramsRow, mk) {
   NO_WICK_SETTINGS.forEach(s => {
-    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
-    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
-    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
-    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+    let el = null;
+    if (s.type === 'num') el = paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+    else if (s.type === 'check') el = paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+    else if (s.type === 'color') el = paramsRow.appendChild(mk.mkColor(s.label, s.key));
+    else if (s.type === 'select') el = paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+    // L'AVVISO SI VEDE, non si nasconde: e' il motivo per cui l'interruttore esiste.
+    if (el && s.nota) {
+      el.title = s.nota;
+      const nota = document.createElement('div');
+      nota.style.cssText = 'font-size:11px;color:#f5d547;max-width:520px;line-height:1.35;margin-top:4px';
+      nota.textContent = s.nota;
+      el.appendChild(nota);
+    }
   });
 }
 
@@ -23646,9 +23734,11 @@ const XAUSWEEP_DEF = {
     attesa: 10,
     bufferStop: 0.40, stopMinAtr: 0.40, stopMaxAtr: 2.50, stopMinUsd: 1.20,
     beR: 1.0, beOffset: 0.10, tpFisso: false, tpR: 4.0, trailAtr: 8.0,
-    mostraLivelli: true, mostraSweep: true, mostraLinee: true, mostraPrezzi: true,
-    soloUltima: false, mostraScaletta: true, posScaletta: 'Alto a destra',
-    mostraScarti: true,
+    // Grafico leggibile per difetto: pochi livelli, una sola operazione, niente croci dei
+    // setup scartati. Erano queste tre cose a riempire il grafico di righe, una per candela.
+    mostraLivelli: true, livelliMax: 3, mostraSweep: true, mostraLinee: true, mostraPrezzi: true,
+    soloUltima: true, mostraScaletta: true, posScaletta: 'Alto a destra',
+    mostraScarti: false, mostraAvanzate: false,
     colEntry: '#5b9cf6', colStop: '#f23645', colTp: '#089981'
   }),
 
@@ -23878,6 +23968,10 @@ const XAUSWEEP_DEF = {
       sc.esito = '';
       if (st.operazioni.length > 400) st.operazioni.shift();
       if (st.scarti.length > 200) st.scarti.shift();
+      // livelli e sweep crescevano senza tetto: su mesi di barre erano decine di migliaia di
+      // righe da disegnare, ed e' questo che riempiva il grafico.
+      if (st.livelli.length > 400) st.livelli.splice(0, st.livelli.length - 400);
+      if (st.sweeps.length > 300) st.sweeps.splice(0, st.sweeps.length - 300);
     }
   },
 
@@ -23908,8 +24002,12 @@ const XAUSWEEP_DEF = {
 
     // livelli di liquidita
     if (p.mostraLivelli) {
+      // Un pivot confermato nasce quasi a ogni barra: disegnarli tutti faceva una riga per
+      // candela. Si mostrano solo gli ultimi, quelli su cui l'operazione puo' ancora nascere.
+      const quanti = Math.max(1, p.livelliMax | 0 || 3);
+      const daMostrare = st.livelli.slice(-quanti);
       ctx.save(); ctx.lineWidth = 1; ctx.globalAlpha = 0.5; ctx.setLineDash([4, 4]);
-      for (const L of st.livelli) {
+      for (const L of daMostrare) {
         const fine = Math.min(L.fino, st.builtTo);
         if (!visibile(L.bar, fine)) continue;
         ctx.strokeStyle = L.sopra ? '#f23645' : '#089981';
@@ -24014,50 +24112,81 @@ const XAUSWEEP_DEF = {
   }
 };
 
+// Le impostazioni sono trentasei: tutte in fila una dopo l'altra non si capiva dove mettere le
+// mani. Ora ognuna dichiara il gruppo a cui appartiene e se e' "avanzata": per difetto si vedono
+// solo le dieci che contano, divise in quattro sezioni con un titolo. Le avanzate compaiono con
+// la spunta "Mostra tutte le impostazioni": nessun valore cambia, cambia solo cosa si vede.
+const XAUSWEEP_GRUPPI = [
+  {id: 'grafico', titolo: 'Cosa si vede sul grafico'},
+  {id: 'ingresso', titolo: 'Quando entra (lo sweep)'},
+  {id: 'filtri', titolo: 'Filtri: orario, volatilita, trend'},
+  {id: 'rischio', titolo: 'Stop, break-even e obiettivo'}
+];
 const XAUSWEEP_SETTINGS = [
-  {type: 'num', key: 'pivot', label: 'Forza swing (barre)', min: 2, max: 30},
-  {type: 'num', key: 'wickMin', label: 'Rifiuto minimo (ombra/ampiezza)', min: 0, max: 0.9, step: 0.05},
-  {type: 'num', key: 'penMax', label: 'Penetrazione massima (ATR)', min: 0.1, max: 5, step: 0.05},
-  {type: 'num', key: 'penMin', label: 'Penetrazione minima (ATR)', min: 0, max: 1, step: 0.01},
-  {type: 'num', key: 'rientroMin', label: 'Rientro minimo (ATR)', min: 0, max: 1, step: 0.01},
-  {type: 'num', key: 'eqTol', label: 'Tolleranza massimi/minimi uguali (ATR)', min: 0.01, max: 1, step: 0.01},
-  {type: 'num', key: 'etaMax', label: 'Eta massima del livello (barre)', min: 10, max: 1000},
-  {type: 'check', key: 'sessOn', label: 'Filtro sessione'},
-  {type: 'num', key: 'sessDa', label: 'Sessione da (ora UTC)', min: 0, max: 24, step: 0.5},
-  {type: 'num', key: 'sessA', label: 'Sessione a (ora UTC)', min: 0, max: 24, step: 0.5},
-  {type: 'num', key: 'volMin', label: 'ATR / media minimo', min: 0, max: 3, step: 0.05},
-  {type: 'num', key: 'volMax', label: 'ATR / media massimo', min: 0.5, max: 99, step: 0.1},
-  {type: 'select', key: 'bias', label: 'Bias superiore', options: ['Solo a favore di trend', 'Nessuno']},
-  {type: 'num', key: 'biasTf', label: 'Minuti del timeframe di bias', min: 5, max: 1440},
-  {type: 'num', key: 'biasEma', label: 'EMA del bias', min: 5, max: 400},
-  {type: 'num', key: 'attesa', label: 'Attesa dopo un trade (barre)', min: 0, max: 200},
-  {type: 'num', key: 'bufferStop', label: 'Buffer stop oltre il wick (ATR)', min: 0, max: 2, step: 0.05},
-  {type: 'num', key: 'stopMinAtr', label: 'Stop minimo (ATR)', min: 0.1, max: 3, step: 0.05},
-  {type: 'num', key: 'stopMaxAtr', label: 'Stop massimo (ATR)', min: 0.5, max: 10, step: 0.1},
-  {type: 'num', key: 'stopMinUsd', label: 'Stop minimo (dollari)', min: 0, max: 50, step: 0.1},
-  {type: 'num', key: 'beR', label: 'Break-even a (R)', min: 0.2, max: 10, step: 0.1},
-  {type: 'num', key: 'beOffset', label: 'Margine del break-even (R)', min: 0, max: 1, step: 0.05},
-  {type: 'check', key: 'tpFisso', label: 'Usa un target fisso'},
-  {type: 'num', key: 'tpR', label: 'Target fisso (R)', min: 0.5, max: 30, step: 0.1},
-  {type: 'num', key: 'trailAtr', label: 'Trailing dopo il break-even (ATR)', min: 0, max: 20, step: 0.1},
-  {type: 'check', key: 'mostraLivelli', label: 'Mostra i livelli di liquidita'},
-  {type: 'check', key: 'mostraSweep', label: 'Mostra i cartellini Sweep'},
-  {type: 'check', key: 'mostraLinee', label: 'Mostra entry, SL e TP'},
-  {type: 'check', key: 'mostraPrezzi', label: 'Prezzi scritti a destra'},
-  {type: 'check', key: 'soloUltima', label: 'Solo l ultima operazione'},
-  {type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
-  {type: 'select', key: 'posScaletta', label: 'Posizione della scaletta', options: SCALETTA_POSIZIONI},
-  {type: 'check', key: 'mostraScarti', label: 'Scrivi perche un setup e stato scartato'},
-  {type: 'color', key: 'colEntry', label: 'Entry'},
-  {type: 'color', key: 'colStop', label: 'Stop loss'},
-  {type: 'color', key: 'colTp', label: 'Obiettivo'}
+  // --- grafico ---
+  {g: 'grafico', type: 'check', key: 'mostraLinee', label: 'Mostra entry, SL e TP'},
+  {g: 'grafico', type: 'check', key: 'soloUltima', label: 'Solo l ultima operazione'},
+  {g: 'grafico', type: 'check', key: 'mostraLivelli', label: 'Mostra i livelli di liquidita'},
+  {g: 'grafico', type: 'num', key: 'livelliMax', label: 'Quanti livelli alla volta', min: 1, max: 40},
+  {g: 'grafico', type: 'check', key: 'mostraSweep', label: 'Mostra i cartellini Sweep'},
+  {g: 'grafico', type: 'check', key: 'mostraScaletta', label: 'Mostra la scaletta dei passi'},
+  {g: 'grafico', adv: true, type: 'check', key: 'mostraScarti', label: 'Scrivi perche un setup e stato scartato'},
+  {g: 'grafico', adv: true, type: 'check', key: 'mostraPrezzi', label: 'Prezzi scritti a destra'},
+  {g: 'grafico', adv: true, type: 'select', key: 'posScaletta', label: 'Posizione della scaletta', options: SCALETTA_POSIZIONI},
+  {g: 'grafico', adv: true, type: 'color', key: 'colEntry', label: 'Entry'},
+  {g: 'grafico', adv: true, type: 'color', key: 'colStop', label: 'Stop loss'},
+  {g: 'grafico', adv: true, type: 'color', key: 'colTp', label: 'Obiettivo'},
+  // --- ingresso ---
+  {g: 'ingresso', type: 'num', key: 'pivot', label: 'Forza swing (barre)', min: 2, max: 30},
+  {g: 'ingresso', type: 'num', key: 'wickMin', label: 'Rifiuto minimo (ombra/ampiezza)', min: 0, max: 0.9, step: 0.05},
+  {g: 'ingresso', type: 'num', key: 'penMax', label: 'Penetrazione massima (ATR)', min: 0.1, max: 5, step: 0.05},
+  {g: 'ingresso', adv: true, type: 'num', key: 'penMin', label: 'Penetrazione minima (ATR)', min: 0, max: 1, step: 0.01},
+  {g: 'ingresso', adv: true, type: 'num', key: 'rientroMin', label: 'Rientro minimo (ATR)', min: 0, max: 1, step: 0.01},
+  {g: 'ingresso', adv: true, type: 'num', key: 'eqTol', label: 'Tolleranza massimi/minimi uguali (ATR)', min: 0.01, max: 1, step: 0.01},
+  {g: 'ingresso', adv: true, type: 'num', key: 'etaMax', label: 'Eta massima del livello (barre)', min: 10, max: 1000},
+  // --- filtri ---
+  {g: 'filtri', type: 'check', key: 'sessOn', label: 'Filtro sessione'},
+  {g: 'filtri', type: 'select', key: 'bias', label: 'Bias superiore', options: ['Solo a favore di trend', 'Nessuno']},
+  {g: 'filtri', adv: true, type: 'num', key: 'sessDa', label: 'Sessione da (ora UTC)', min: 0, max: 24, step: 0.5},
+  {g: 'filtri', adv: true, type: 'num', key: 'sessA', label: 'Sessione a (ora UTC)', min: 0, max: 24, step: 0.5},
+  {g: 'filtri', adv: true, type: 'num', key: 'volMin', label: 'ATR / media minimo', min: 0, max: 3, step: 0.05},
+  {g: 'filtri', adv: true, type: 'num', key: 'volMax', label: 'ATR / media massimo', min: 0.5, max: 99, step: 0.1},
+  {g: 'filtri', adv: true, type: 'num', key: 'biasTf', label: 'Minuti del timeframe di bias', min: 5, max: 1440},
+  {g: 'filtri', adv: true, type: 'num', key: 'biasEma', label: 'EMA del bias', min: 5, max: 400},
+  {g: 'filtri', adv: true, type: 'num', key: 'attesa', label: 'Attesa dopo un trade (barre)', min: 0, max: 200},
+  // --- rischio ---
+  {g: 'rischio', type: 'num', key: 'bufferStop', label: 'Buffer stop oltre il wick (ATR)', min: 0, max: 2, step: 0.05},
+  {g: 'rischio', type: 'num', key: 'beR', label: 'Break-even a (R)', min: 0.2, max: 10, step: 0.1},
+  {g: 'rischio', type: 'check', key: 'tpFisso', label: 'Usa un target fisso'},
+  {g: 'rischio', type: 'num', key: 'tpR', label: 'Target fisso (R)', min: 0.5, max: 30, step: 0.1},
+  {g: 'rischio', type: 'num', key: 'trailAtr', label: 'Trailing dopo il break-even (ATR)', min: 0, max: 20, step: 0.1},
+  {g: 'rischio', adv: true, type: 'num', key: 'beOffset', label: 'Margine del break-even (R)', min: 0, max: 1, step: 0.05},
+  {g: 'rischio', adv: true, type: 'num', key: 'stopMinAtr', label: 'Stop minimo (ATR)', min: 0.1, max: 3, step: 0.05},
+  {g: 'rischio', adv: true, type: 'num', key: 'stopMaxAtr', label: 'Stop massimo (ATR)', min: 0.5, max: 10, step: 0.1},
+  {g: 'rischio', adv: true, type: 'num', key: 'stopMinUsd', label: 'Stop minimo (dollari)', min: 0, max: 50, step: 0.1}
 ];
 function xauSweepBuildSettings(ind, paramsRow, mk) {
-  XAUSWEEP_SETTINGS.forEach(s => {
-    if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
-    else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
-    else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
-    else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+  const tutte = !!ind.params.mostraAvanzate;
+  // La spunta sta in cima: e' la chiave per far comparire il resto. Il terzo argomento di
+  // mkCheck ridisegna il pannello, altrimenti le avanzate apparirebbero solo riaprendolo.
+  const cima = document.createElement('div');
+  cima.style.cssText = 'flex:0 0 100%;width:100%';
+  cima.appendChild(mk.mkCheck('Mostra tutte le impostazioni', 'mostraAvanzate', true));
+  paramsRow.appendChild(cima);
+  XAUSWEEP_GRUPPI.forEach(gr => {
+    const voci = XAUSWEEP_SETTINGS.filter(s => s.g === gr.id && (tutte || !s.adv));
+    if (!voci.length) return;
+    const tit = document.createElement('div');
+    tit.textContent = gr.titolo;
+    tit.style.cssText = 'flex:0 0 100%;width:100%;margin:6px 0 0;padding-top:6px;' +
+      'border-top:1px solid #2a3442;color:#cfe0f5;font-weight:600;font-size:11px';
+    paramsRow.appendChild(tit);
+    voci.forEach(s => {
+      if (s.type === 'num') paramsRow.appendChild(mk.mkNum(s.label, s.key, s.min, s.max, s.step));
+      else if (s.type === 'check') paramsRow.appendChild(mk.mkCheck(s.label, s.key));
+      else if (s.type === 'color') paramsRow.appendChild(mk.mkColor(s.label, s.key));
+      else if (s.type === 'select') paramsRow.appendChild(mk.mkSelect(s.label, s.key, s.options));
+    });
   });
 }
 
