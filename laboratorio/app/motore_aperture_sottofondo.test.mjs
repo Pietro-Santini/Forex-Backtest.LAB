@@ -19,7 +19,14 @@ const PREPARA = `
   baseRows = [];
   for (let i = 0; i < 300; i++) { const c = 4000 + Math.sin(i / 9) * 2;
     baseRows.push({date: new Date(t0 + i * 60000).toISOString(), open: c, high: c + 0.6, low: c - 0.6, close: c, volume: 10}); }
-  rows = baseRows; idx = rows.length - 1; viewEnd = idx; currentTF = 1; currentAssetKey = 'XAUUSD';
+  // Il GRAFICO guardato e' a 30 minuti, la regola lavora a 5: misurato sulla sua app il 27 novembre
+  // 2026, la prima stesura del motore prendeva le candele del grafico e lavorava sul timeframe sbagliato.
+  currentTF = 30; rows = aggregateRows(baseRows, 30); idx = rows.length - 1; viewEnd = idx; currentAssetKey = 'XAUUSD';
+  mt5ActiveSymbol = 'XAUUSD'; fblMotoreSerie = {}; fblMotoreUltimaBase = null; fblMotoreInCorso = false;
+  // Le candele del motore arrivano da MT5 (fblMotoreCaricaSerie): qui un finto le costruisce dai
+  // minuti di prova, COMPRESA quella in formazione, come fa il servizio dati vero.
+  window.__richieste = [];
+  fblMotoreCaricaSerie = async (tf, quante) => { __richieste.push(tf); return aggregateRows(baseRows, tf).map(r => ({...r})); };
   liveModeActive = true; liveReplayActive = false; mt5Connected = true;
   mt5AccountInfo = {reale: false, equity: 10000, balance: 10000, margin_free: 10000};
   positions.length = 0; trades.length = 0; equity = [10000]; if ($('capital')) $('capital').value = '10000';
@@ -46,24 +53,25 @@ const PREPARA = `
   window.__barra = chiuse5.length - 1;      // il segnale nasce sull'ultima candela a 5 minuti CHIUSA
 `;
 
-test('spento non apre; acceso apre sul SUO timeframe (5 minuti) mentre il grafico e a 1 minuto', async () => {
+test('spento non apre; acceso apre sul SUO timeframe (5 minuti) mentre il grafico e a 30 minuti', async () => {
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
-      fblMotoreAutoGiro(true);
+      await fblMotoreAutoGiro(true);
       const spento = __ordini.length;
       fblMotoreSalvaConfig({__finto: true});
-      fblMotoreAutoGiro(true);
+      await fblMotoreAutoGiro(true);
       await new Promise(res => setTimeout(res, 0));
       const o = __ordini[0] || null;
-      return {spento, ordini: __ordini.length, graficoTf: currentTF,
+      return {spento, ordini: __ordini.length, graficoTf: currentTF, richieste: [...new Set(__richieste)],
               side: o && o.side, autoTF: o && o.meta.autoTF, origin: o && o.meta.origin,
               rapporto: o ? (o.tp - positions[0].entry) / (positions[0].entry - o.sl) : null};
     })()`);
     assert.equal(r.spento, 0, 'con l interruttore spento non parte niente');
     assert.equal(r.ordini, 1, 'acceso deve aprire: ' + JSON.stringify(r));
-    assert.equal(r.graficoTf, 1, 'il grafico guardato e a 1 minuto');
+    assert.equal(r.graficoTf, 30, 'il grafico guardato e a 30 minuti');
     assert.equal(r.autoTF, 5, 'la regola lavora sui SUOI 5 minuti');
+    assert.deepEqual(r.richieste, [5], 'le candele si chiedono a MT5 al timeframe della regola, non a quello del grafico');
     assert.equal(r.side, 'BUY');
     assert.equal(r.origin, 'MOTORE_AUTO');
     assert.ok(Math.abs(r.rapporto - 3) < 0.2, 'obiettivo a 3 volte il rischio: ' + r.rapporto);
@@ -76,7 +84,7 @@ test('un segnale, un ordine: un nuovo giro senza candela nuova non riapre', asyn
   try {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
       fblMotoreSalvaConfig({__finto: true});
-      fblMotoreAutoGiro(true); fblMotoreAutoGiro(true); fblMotoreAutoGiro(false);
+      await fblMotoreAutoGiro(true); await fblMotoreAutoGiro(true); await fblMotoreAutoGiro(false);
       return {ordini: __ordini.length};
     })()`);
     assert.equal(r.ordini, 1);
@@ -90,7 +98,7 @@ test('un segnale VECCHIO (nato prima dell accensione) non apre', async () => {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
       window.__barra = window.__barra - 4;      // il segnale e di venti minuti fa
       fblMotoreSalvaConfig({__finto: true});
-      fblMotoreAutoGiro(true);
+      await fblMotoreAutoGiro(true);
       return {ordini: __ordini.length};
     })()`);
     assert.equal(r.ordini, 0, 'si apre solo sull ultima candela chiusa');
@@ -103,14 +111,16 @@ test('il break-even arriva a +1,5 R e porta lo stop a +0,5 R anche su MT5', asyn
   try {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
       fblMotoreSalvaConfig({__finto: true});
-      fblMotoreAutoGiro(true);
+      await fblMotoreAutoGiro(true);
       await new Promise(res => setTimeout(res, 0));
       const pos = positions[0]; const R = pos.autoRischio;
       // una candela a 1 minuto chiusa che arriva oltre +1,5 R
-      const t = Date.parse(baseRows[baseRows.length - 1].date) + 60000;
+      // minuti nuovi: il primo arriva oltre +1,5 R; se ne aggiungono abbastanza da CHIUDERE la sua
+      // candela a 5 minuti (il motore guarda le candele chiuse) piu' una in formazione
+      let t = Date.parse(baseRows[baseRows.length - 1].date) + 60000;
       baseRows.push({date: new Date(t).toISOString(), open: pos.entry, high: pos.entry + 1.6 * R, low: pos.entry, close: pos.entry + R, volume: 10});
-      baseRows.push({date: new Date(t + 60000).toISOString(), open: pos.entry + R, high: pos.entry + R, low: pos.entry + R, close: pos.entry + R, volume: 10});
-      fblMotoreAutoGiro(false);
+      for (let j = 1; j <= 10; j++) baseRows.push({date: new Date(t + j * 60000).toISOString(), open: pos.entry + R, high: pos.entry + R, low: pos.entry + R, close: pos.entry + R, volume: 10});
+      await fblMotoreAutoGiro(true);
       return {sl: pos.sl, atteso: pos.entry + 0.5 * R, modifiche: __modifiche.length, fatto: pos.autoBeFatto};
     })()`);
     assert.equal(r.modifiche, 1, 'lo stop spostato deve arrivare a MT5');
@@ -125,13 +135,13 @@ test('conto reale, replay o altro asset: il motore non apre', async () => {
   try {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
       fblMotoreSalvaConfig({__finto: true});
-      const prova = (fn) => { __ordini.length = 0; for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
+      const prova = async (fn) => { __ordini.length = 0; fblMotoreSerie = {}; fblMotoreUltimaBase = null; for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
         fblAutoApertureFatte = null; localStorage.removeItem('fbl_auto_aperture');
-        mt5AccountInfo.reale = false; liveReplayActive = false; currentAssetKey = 'XAUUSD'; fn(); fblMotoreAutoGiro(true); return __ordini.length; };
-      return {reale: prova(() => { mt5AccountInfo.reale = true; }),
-              replay: prova(() => { liveReplayActive = true; }),
-              altro: prova(() => { currentAssetKey = 'EURUSD'; }),
-              normale: prova(() => {})};
+        mt5AccountInfo.reale = false; liveReplayActive = false; currentAssetKey = 'XAUUSD'; fn(); await fblMotoreAutoGiro(true); return __ordini.length; };
+      return {reale: await prova(() => { mt5AccountInfo.reale = true; }),
+              replay: await prova(() => { liveReplayActive = true; }),
+              altro: await prova(() => { currentAssetKey = 'EURUSD'; }),
+              normale: await prova(() => {})};
     })()`);
     assert.equal(r.reale, 0); assert.equal(r.replay, 0); assert.equal(r.altro, 0);
     assert.equal(r.normale, 1, 'CONTROPROVA: nelle stesse condizioni ma in regola, apre');
@@ -174,11 +184,11 @@ test('REALE: senza il suo interruttore non apre (nemmeno se la demo e accesa); c
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
       mt5AccountInfo.reale = true;
       fblMotoreSalvaConfig({__finto: true});                       // solo la demo
-      fblMotoreAutoGiro(true);
+      await fblMotoreAutoGiro(true);
       const senza = __ordini.length;
       for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
       fblMotoreSalvaConfig({'__finto@reale': true, '__finto#rischio': 1, '__finto#rischioReale': 0.25});
-      fblMotoreAutoGiro(true);
+      await fblMotoreAutoGiro(true);
       await new Promise(res => setTimeout(res, 0));
       const o = __ordini[0] || null;
       // il lotto atteso per 0,25% del saldo con quello stop
@@ -198,17 +208,17 @@ test('REALE: conto di tipo sconosciuto, due posizioni gia aperte, tre perdite og
   try {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
       fblMotoreSalvaConfig({'__finto@reale': true});
-      const prova = (fn) => { __ordini.length = 0; positions.length = 0; trades.length = 0;
+      const prova = async (fn) => { __ordini.length = 0; fblMotoreSerie = {}; fblMotoreUltimaBase = null; positions.length = 0; trades.length = 0;
         for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
         fblAutoApertureFatte = null; localStorage.removeItem('fbl_auto_aperture');
-        mt5AccountInfo.reale = true; fn(); fblMotoreAutoGiro(true); return __ordini.length; };
+        mt5AccountInfo.reale = true; fn(); await fblMotoreAutoGiro(true); return __ordini.length; };
       const oggi = new Date().toISOString();
       return {
-        sconosciuto: prova(() => { mt5AccountInfo.reale = null; }),
-        dueAperte: prova(() => { positions.push({autoContoReale: true, mt5Ticket: 1}, {autoContoReale: true, mt5Ticket: 2}); }),
-        trePerdite: prova(() => { for (let i = 0; i < 3; i++) trades.push({autoContoReale: true, pl: -10, closedAt: oggi}); }),
-        perditeIeri: prova(() => { for (let i = 0; i < 3; i++) trades.push({autoContoReale: true, pl: -10, closedAt: new Date(Date.now() - 86400000 * 2).toISOString()}); }),
-        normale: prova(() => {})
+        sconosciuto: await prova(() => { mt5AccountInfo.reale = null; }),
+        dueAperte: await prova(() => { positions.push({autoContoReale: true, mt5Ticket: 1}, {autoContoReale: true, mt5Ticket: 2}); }),
+        trePerdite: await prova(() => { for (let i = 0; i < 3; i++) trades.push({autoContoReale: true, pl: -10, closedAt: oggi}); }),
+        perditeIeri: await prova(() => { for (let i = 0; i < 3; i++) trades.push({autoContoReale: true, pl: -10, closedAt: new Date(Date.now() - 86400000 * 2).toISOString()}); }),
+        normale: await prova(() => {})
       };
     })()`);
     assert.equal(r.sconosciuto, 0, 'se non si sa che conto e, non si apre');

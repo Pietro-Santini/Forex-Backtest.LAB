@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.121';
+const FBL_VERSIONE='2.2.122';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -24477,17 +24477,74 @@ function fblMotoreApri(reg, sig, rowsTf, k){
   const op={nome:reg.id, indicatore:reg.id, setupId:reg.id+'-'+rowsTf[k].date, dir:d, entry, sl:stop, tp};
   const chiave=[asset,'motore',reg.id,rowsTf[k].date,d].join('|');
   const meta={bosAuto:true, bosSetupId:op.setupId, bosNome:reg.id, origin:'MOTORE_AUTO',
-              autoIndicatore:reg.id, autoTF:reg.tf, autoBe:reg.be, autoRischio:rischio, autoBeFatto:false};
+              autoIndicatore:reg.id, autoTF:reg.tf, autoBe:reg.be, autoRischio:rischio, autoBeFatto:false,
+              autoBarra:rowsTf[k].date};
   return fblAutoInviaOrdineDemo({autoOpenDemo:true}, asset, op, {entry, sl:stop, tp, lots:lotti, chiave, meta});
 }
 
+// LE CANDELE DEL MOTORE, CHIESTE A MT5 PER IL TIMEFRAME DI OGNI REGOLA (27 novembre 2026).
+//
+// MISURATO sulla sua app: con il grafico a 5 minuti le regole a 5 minuti avevano calcolato 50.000
+// candele. La prima stesura supponeva che baseRows fossero sempre candele da 1 minuto, ma in
+// diretta lo storico arriva GIA' raggruppato al timeframe del GRAFICO (/history?timeframe=<TF>,
+// vedi i profili volumetrici qui sopra, stesso problema). Con il grafico a 30 minuti le regole a
+// 5 minuti avrebbero lavorato su candele da 30: il contrario della richiesta («indifferentemente
+// dal time frame che si sta guardando»).
+// Ora il motore chiede a MT5 le candele del timeframe della regola, come i profili chiedono le M1.
+// La serie si scarica una volta e poi si ACCODA: il calcolo degli indicatori e' incrementale per
+// posizione (la candela k deve restare la k), e una finestra "ultime N" che scorre li romperebbe.
+const FBL_MOTORE_CANDELE=5000, FBL_MOTORE_CODA=60;
+let fblMotoreSerie={};              // tf -> array di candele CHIUSE (senza quella in formazione)
+async function fblMotoreCaricaSerie(tf, quante){
+  const r=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(mt5ActiveSymbol)
+    +'&timeframe=M'+tf+'&count='+quante),{cache:'no-store'});
+  const j=await r.json();
+  return (j&&Array.isArray(j.candles)) ? j.candles.map(c=>({
+    time:c.time, date:new Date(c.time*1000).toISOString(),
+    open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
+  })).filter(x=>[x.open,x.high,x.low,x.close].every(Number.isFinite)) : null;
+}
+// Aggiorna la serie di un timeframe: tutta la prima volta, poi solo la coda accodata per orario.
+async function fblMotoreAggiornaSerie(tf){
+  const vecchia=fblMotoreSerie[tf];
+  const arrivate=await fblMotoreCaricaSerie(tf, vecchia&&vecchia.length ? FBL_MOTORE_CODA : FBL_MOTORE_CANDELE);
+  if(!arrivate||arrivate.length<2) return vecchia||null;
+  const chiuse=arrivate.slice(0, arrivate.length-1);            // l'ultima e' quella in formazione
+  if(!vecchia||!vecchia.length){ fblMotoreSerie[tf]=chiuse; return chiuse; }
+  const ultimaT=Date.parse(vecchia[vecchia.length-1].date);
+  const nuove=chiuse.filter(c=>Date.parse(c.date)>ultimaT);
+  // Se la coda non si attacca alla serie (app ferma a lungo) si riparte da capo: accodare oltre
+  // un buco darebbe agli indicatori candele finte contigue.
+  const primaDellaCoda=chiuse.length ? Date.parse(chiuse[0].date) : NaN;
+  if(nuove.length && Number.isFinite(primaDellaCoda) && primaDellaCoda>ultimaT){
+    const tutta=await fblMotoreCaricaSerie(tf, FBL_MOTORE_CANDELE);
+    if(tutta&&tutta.length>1){ fblMotoreSerie[tf]=tutta.slice(0, tutta.length-1); return fblMotoreSerie[tf]; }
+  }
+  for(const c of nuove) vecchia.push(c);
+  return vecchia;
+}
+
 // IL BREAK-EVEN delle posizioni aperte dal motore: quando il prezzo arriva alla soglia (in R),
-// lo stop va al nuovo livello, anche su MT5. Si guarda l'ultima candela a 1 minuto chiusa.
+// lo stop va al nuovo livello, anche su MT5. Si guardano l'ultima candela chiusa del timeframe
+// piu' piccolo scaricato e il prezzo di adesso.
 function fblMotoreBreakEven(){
-  const r=baseRows&&baseRows.length>1 ? baseRows[baseRows.length-2] : null;
-  if(!r) return;
+  let ora=NaN; try{ ora=Number(currentPrice()); }catch(e){}
   for(const pos of positions){
     if(!pos||pos.origin!=='MOTORE_AUTO'||!Array.isArray(pos.autoBe)||pos.autoBeFatto) continue;
+    // TUTTE le candele chiuse dopo quella del segnale, non solo l'ultima: se la soglia viene toccata
+    // in una candela e il motore guarda quando ne e' gia' chiusa un'altra, guardando solo l'ultima
+    // la soglia si perderebbe (trovato dal banco il 27 novembre 2026).
+    const serie=fblMotoreSerie[pos.autoTF]||[];
+    const dal=Date.parse(pos.autoBarra||'');
+    let hi=Number.isFinite(ora)?ora:-Infinity, lo=Number.isFinite(ora)?ora:Infinity;
+    for(let j=serie.length-1;j>=0;j--){
+      const c=serie[j]; const tc=Date.parse(c.date);
+      if(Number.isFinite(dal) && tc<=dal) break;
+      if(!Number.isFinite(dal) && j<serie.length-1) break;          // senza orario: solo l'ultima
+      if(c.high>hi) hi=c.high; if(c.low<lo) lo=c.low;
+    }
+    if(!Number.isFinite(hi)||!Number.isFinite(lo)) continue;
+    const r={high:hi, low:lo};
     if(pos.asset!==currentAssetKey) continue;
     const d=pos.side==='BUY'?1:-1, R=Number(pos.autoRischio), e=Number(pos.entry);
     if(!(R>0)||!Number.isFinite(e)) continue;
@@ -24501,8 +24558,11 @@ function fblMotoreBreakEven(){
   }
 }
 
-// Un giro del motore: si chiama quando chiude una candela a 1 minuto. `forza` serve ai test.
-function fblMotoreAutoGiro(forza){
+// Un giro del motore: una volta al minuto. `forza` serve ai test (giro anche nello stesso minuto).
+let fblMotoreInCorso=false;
+async function fblMotoreAutoGiro(forza){
+  if(fblMotoreInCorso) return;
+  fblMotoreInCorso=true;
   try{
     // Demo: l'interruttore demo della regola. Reale: il suo interruttore REALE (vedi
     // fblPuoAprireSulConto). Se il tipo di conto non si sa, non si apre niente.
@@ -24512,19 +24572,23 @@ function fblMotoreAutoGiro(forza){
     if(!accese.length) return;
     if(!liveModeActive || liveReplayActive) return;
     if(currentAssetKey!=='XAUUSD') return;
-    if(!mt5Connected) return;
-    if(!baseRows||baseRows.length<50) return;
-    const ultima=baseRows[baseRows.length-1].date;
-    if(!forza && ultima===fblMotoreUltimaBase) return;
-    fblMotoreUltimaBase=ultima;
+    if(!mt5Connected || !mt5ActiveSymbol) return;
+    const minuto=Math.floor(Date.now()/60000);
+    if(!forza && minuto===fblMotoreUltimaBase) return;
+    fblMotoreUltimaBase=minuto;
+    const serie={};
+    for(const tf of [...new Set(accese.map(reg=>reg.tf))]){
+      try{ serie[tf]=await fblMotoreAggiornaSerie(tf); }catch(e){ serie[tf]=fblMotoreSerie[tf]||null; }
+    }
     try{ fblMotoreBreakEven(); }catch(e){}
-    const cache={};
     for(const reg of accese){
       const def=INDICATOR_DEFS[reg.key]; if(!def) continue;
-      if(!cache[reg.tf]){ const agg=aggregateRows(baseRows, reg.tf); cache[reg.tf]=agg.slice(0, Math.max(0, agg.length-1)); }   // senza la candela in formazione
-      const rowsTf=cache[reg.tf];
+      const rowsTf=serie[reg.tf];
+      if(!rowsTf) continue;
       const K=rowsTf.length-1; if(K<30) continue;
       const s=fblMotoreStato(reg);
+      // Serie nuova (ripartita dopo un buco): lo stato dell'indicatore va ricalcolato da capo.
+      if(s.serie!==rowsTf){ s.serie=rowsTf; s.fatte=-1; }
       const atr=(typeof sweepsAtr==='function') ? sweepsAtr(rowsTf, 14) : [];
       if(s.fatte<0 || s.fatte>K){
         // primo giro (o storico cambiato): si calcola tutto fino alla candela prima, senza aprire
@@ -24543,6 +24607,7 @@ function fblMotoreAutoGiro(forza){
       }
     }
   }catch(e){ try{ console.log('[Motore auto] giro fallito:', e); }catch(_){} }
+  finally{ fblMotoreInCorso=false; }
 }
 setInterval(()=>{ try{ fblMotoreAutoGiro(false); }catch(e){} }, 3000);
 

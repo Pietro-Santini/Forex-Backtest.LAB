@@ -8398,3 +8398,26 @@ fblAutoInviaOrdineDemo: le guardie restano in un posto solo.
 BANCO: motore_aperture_sottofondo.test.mjs, 4 prove nuove sul reale (interruttore proprio, rischio
 del reale, conto sconosciuto, due aperte, tre perdite oggi, pull back sul reale, conferma e rischio
 fuori misura).
+
+## 27 novembre 2026 — v2.2.122: il motore chiede a MT5 le SUE candele, non quelle del grafico
+
+SEGNALATO: «ho qualche difficoltà con le aperture automatiche tramite gli indicatori. Non so se
+effettivamente sia in funzione questa cosa o meno».
+
+MISURATO sulla sua app (DevTools 9222, sola lettura): v2.2.121, diretta, demo, tutte le regole
+accese, il motore girava a ogni candela ma con il grafico a 5 minuti le regole a 5 minuti avevano
+calcolato 50.000 candele, quella a 15 minuti 16.669, quella a 30 minuti 8.336. Il motore supponeva
+che baseRows fossero minuti: in diretta lo storico arriva GIA' raggruppato al timeframe del grafico
+(stesso problema gia' risolto per i profili volumetrici). Con il grafico a 30 minuti le regole a 5
+avrebbero lavorato su candele da 30. Il banco non poteva vederlo: usava una base a 1 minuto.
+
+CURA: fblMotoreCaricaSerie chiede a MT5 (/history?timeframe=M<tf>, stesso simbolo e stessa
+conversione delle M1 dei profili) le candele del timeframe di ogni regola; la serie si scarica una
+volta (5.000 candele) e poi si ACCODA per orario (60 per volta), perche' il calcolo incrementale
+vuole che la candela k resti la k; se la coda non si attacca si riparte da capo. Controllato sul
+servizio vero: l'ultima candela che manda e' quella in formazione, e il motore la scarta.
+Il break-even ora guarda TUTTE le candele chiuse dal segnale, non solo l'ultima (il banco ha
+trovato che la soglia toccata in una candela non piu' ultima si perdeva).
+
+BANCO: motore_aperture_sottofondo.test.mjs ora tiene il GRAFICO a 30 minuti e controlla che le
+candele si chiedano a MT5 al timeframe della regola (5).
