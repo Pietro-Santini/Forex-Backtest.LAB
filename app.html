@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.122';
+const FBL_VERSIONE='2.2.123';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -22047,22 +22047,34 @@ function fblPuoAprireSulConto(p, id){
     return fblRealeConsentitoOra();
   }catch(e){ return false; }
 }
+// Perche' l'ultimo invio NON e' partito (lo legge il registro del motore, v2.2.123).
+let fblAutoUltimoMotivo='';
+function fblMotivoContoNo(id){
+  const tipo=fblTipoConto();
+  if(!tipo) return 'tipo di conto sconosciuto (demo o reale?)';
+  if(tipo==='demo') return 'apertura demo non permessa';
+  if(!liveModeActive||liveReplayActive||!mt5Connected) return 'conto reale: non in diretta o MT5 non collegato';
+  if(!fblRealePermesso(id)) return 'interruttore REALE spento';
+  return 'conto reale: tetto di posizioni aperte o di perdite del giorno raggiunto';
+}
 function fblAutoInviaOrdineDemo(p, asset, op, o){
+  fblAutoUltimoMotivo='';
+  const _no=(m)=>{ fblAutoUltimoMotivo=m; return false; };
   try{
     const dir=op.dir===1?'BUY':'SELL';
     const {entry, sl, tp, chiave}=o;
     let lots=o.lots;
     const id=op.indicatore||'pullback';
-    if(fblAutoApertureCarica().has(chiave)) return false;                 // guardia 4
+    if(fblAutoApertureCarica().has(chiave)) return _no('segnale gia\' aperto');   // guardia 4
     let prezzoOra=NaN; try{ prezzoOra=Number(currentPrice()); }catch(e){}
     if(!Number.isFinite(prezzoOra)||prezzoOra<=0) prezzoOra=entry;
     const distOra=Math.abs(prezzoOra-sl), distPrevista=Math.abs(entry-sl);
     const minimo=fblStopMinimoAuto(asset);
     const latoGiusto = dir==='BUY' ? (sl<prezzoOra && (!Number.isFinite(tp)||tp>prezzoOra))
                                    : (sl>prezzoOra && (!Number.isFinite(tp)||tp<prezzoOra));
-    if(!latoGiusto){ try{ $('status').textContent='Apertura automatica saltata: il prezzo ha gia\' superato lo stop o l\'obiettivo.'; }catch(e){} return false; }   // guardia 2
-    if(distOra<minimo){ try{ $('status').textContent='Apertura automatica saltata: stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+').'; }catch(e){} return false; } // guardia 3
-    if(!fblPuoAprireSulConto(p, id)) return false;                        // guardia 1, all'istante dell'invio
+    if(!latoGiusto){ try{ $('status').textContent='Apertura automatica saltata: il prezzo ha gia\' superato lo stop o l\'obiettivo.'; }catch(e){} return _no('il prezzo ha gia\' superato lo stop o l\'obiettivo'); }   // guardia 2
+    if(distOra<minimo){ try{ $('status').textContent='Apertura automatica saltata: stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+').'; }catch(e){} return _no('stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+')'); } // guardia 3
+    if(!fblPuoAprireSulConto(p, id)) return _no(fblMotivoContoNo(id));    // guardia 1, all'istante dell'invio
     const reale=fblTipoConto()==='reale';
     const meta=Object.assign({}, o.meta||{}, reale?{autoContoReale:true}:{});
     if(reale){
@@ -24482,6 +24494,125 @@ function fblMotoreApri(reg, sig, rowsTf, k){
   return fblAutoInviaOrdineDemo({autoOpenDemo:true}, asset, op, {entry, sl:stop, tp, lots:lotti, chiave, meta});
 }
 
+// =====================================================================================
+// OSSERVAZIONE, REGISTRO E SOSPENSIONE AUTOMATICA PER REGOLA (27 novembre 2026, v2.2.123).
+// Proposto da Claude, approvato dal proprietario («Sì, procedi») dopo la domanda «non so se
+// effettivamente sia in funzione questa cosa o meno».
+//
+// PERCHE': la ricerca ha validato poco (due regole su sette reggono fuori campione, e solo in un
+// periodo). L'unico banco onesto rimasto e' il FUTURO VERO. Quindi:
+//  1. OSSERVAZIONE (accesa di serie per ogni regola): il motore calcola anche le regole che non
+//     aprono, e ogni segnale diventa un'operazione "in ombra" seguita candela per candela con le
+//     stesse regole della ricerca (lo stop vince il pareggio nella stessa candela, break-even dalla
+//     candela DOPO quella che tocca la soglia, costi 0,20 $ andata e ritorno). Nessun ordine.
+//     Ombra anche per le regole che aprono davvero: misura la REGOLA, non l'esecuzione.
+//  2. REGISTRO: ogni segnale con il suo esito (aperto / bloccato: motivo / osservato) e lo stato
+//     dell'ultimo giro del motore (girato o fermo, e perche'), cosi' si vede se lavora.
+//  3. SOSPENSIONE: se le operazioni in ombra di una regola perdono FBL_MOTORE_SOSPENDI_R volte il
+//     rischio dal loro massimo, la regola smette di APRIRE (continua a osservare) finche' il
+//     proprietario non preme «Riprendi». 10 R: con obiettivo 1:3/1:4 e circa un'operazione vinta su
+//     quattro, dieci perdite di fila capitano anche a una regola sana, quindi la soglia non e' piu'
+//     stretta di cosi'.
+// =====================================================================================
+const FBL_MOTORE_SOSPENDI_R=10, FBL_MOTORE_COSTO=0.20;
+const FBL_MOTORE_OMBRA_CHIAVE='fbl_motore_ombra', FBL_MOTORE_REGISTRO_CHIAVE='fbl_motore_registro';
+let fblMotoreUltimoGiro={t:0, testo:'il motore non ha ancora girato'};
+function fblMotoreOsserva(id){ return fblMotoreConfig()[id+'#osserva']!==false; }
+function fblMotoreSospesa(id){ const s=fblMotoreConfig()[id+'#sospesa']; return (s&&typeof s==='object')?s:null; }
+function fblMotoreLeggi(chiave){ try{ const a=JSON.parse(localStorage.getItem(chiave)||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function fblMotoreScrivi(chiave, a, tetto){ try{ localStorage.setItem(chiave, JSON.stringify(a.slice(-tetto))); }catch(e){} }
+function fblMotoreRegistra(voce){
+  const a=fblMotoreLeggi(FBL_MOTORE_REGISTRO_CHIAVE);
+  a.push(Object.assign({t:new Date().toISOString()}, voce));
+  fblMotoreScrivi(FBL_MOTORE_REGISTRO_CHIAVE, a, 500);
+}
+function fblMotoreRegistroDi(id){ return fblMotoreLeggi(FBL_MOTORE_REGISTRO_CHIAVE).filter(v=>v&&v.regola===id); }
+function fblMotoreOmbraDi(id){ return fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE).filter(o=>o&&o.regola===id); }
+// Un segnale sull'ultima candela chiusa: ombra sempre, ordine solo se la regola apre su questo conto.
+function fblMotoreDecidi(reg, sig, rowsTf, k, apre){
+  const entry=Number(rowsTf[k].close), stop=Number(sig.stop), d=sig.dir;
+  const rischio=Math.abs(entry-stop);
+  const base={regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:d, entry, stop};
+  if(!(rischio>0) || (d===1 ? !(stop<entry) : !(stop>entry))){
+    fblMotoreRegistra(Object.assign(base, {esito:'scartato', motivo:'stop dal lato sbagliato o nullo'}));
+    return false;
+  }
+  const tp=entry+d*rischio*reg.obiettivoR;
+  const ombra=fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE);
+  const idOmbra=reg.id+'|'+rowsTf[k].date+'|'+d;
+  if(!ombra.some(o=>o&&o.id===idOmbra)){
+    ombra.push({id:idOmbra, regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:d, entry, stop, stopOra:stop, tp,
+                rischio, obiettivoR:reg.obiettivoR, be:reg.be||null, beFatto:false, stato:'aperta', R:null, chiusa:null});
+    fblMotoreScrivi(FBL_MOTORE_OMBRA_CHIAVE, ombra, 2000);
+  }
+  const sosp=fblMotoreSospesa(reg.id);
+  if(apre && sosp){
+    fblMotoreRegistra(Object.assign(base, {tp, esito:'osservato', motivo:'regola SOSPESA: '+(sosp.motivo||'')}));
+    return false;
+  }
+  if(!apre){
+    fblMotoreRegistra(Object.assign(base, {tp, esito:'osservato', motivo:'solo osservazione (apertura spenta per questo conto)'}));
+    return false;
+  }
+  const ok=fblMotoreApri(reg, sig, rowsTf, k);
+  fblMotoreRegistra(Object.assign(base, {tp, esito:ok?'aperto':'bloccato', motivo:ok?'ordine inviato a MT5':(fblAutoUltimoMotivo||'invio non riuscito')}));
+  return ok;
+}
+// Segue le operazioni in ombra di una regola sulle candele CHIUSE del suo timeframe.
+function fblMotoreOmbraAggiorna(reg, rowsTf){
+  const ombra=fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE);
+  let cambiate=false;
+  for(const o of ombra){
+    if(!o||o.regola!==reg.id||o.stato!=='aperta') continue;
+    const dal=Date.parse(o.barra), d=o.dir;
+    for(const c of rowsTf){
+      const tc=Date.parse(c.date);
+      if(!(tc>dal) || (o.vista && tc<=Date.parse(o.vista))) continue;
+      o.vista=c.date; cambiate=true;
+      const costoR=FBL_MOTORE_COSTO/o.rischio;
+      if(d===1 ? c.low<=o.stopOra : c.high>=o.stopOra){            // lo stop vince il pareggio
+        o.stato='chiusa'; o.R=d*(o.stopOra-o.entry)/o.rischio-costoR; o.chiusa=c.date; o.uscita='stop'; break;
+      }
+      if(d===1 ? c.high>=o.tp : c.low<=o.tp){
+        o.stato='chiusa'; o.R=o.obiettivoR-costoR; o.chiusa=c.date; o.uscita='obiettivo'; break;
+      }
+      if(Array.isArray(o.be)&&!o.beFatto && (d===1 ? c.high>=o.entry+o.be[0]*o.rischio : c.low<=o.entry-o.be[0]*o.rischio)){
+        o.beFatto=true; o.stopOra=o.entry+d*o.be[1]*o.rischio;     // vale dalla candela dopo
+      }
+    }
+  }
+  if(cambiate) fblMotoreScrivi(FBL_MOTORE_OMBRA_CHIAVE, ombra, 2000);
+  fblMotoreControllaSospensione(reg);
+}
+// I numeri di una regola, dalle sue operazioni in ombra chiuse (dopo l'ultima ripresa, se c'e').
+function fblMotoreStatistiche(id){
+  const ripresa=Date.parse(fblMotoreConfig()[id+'#ripresa']||'');
+  const tutte=fblMotoreOmbraDi(id);
+  const chiuse=tutte.filter(o=>o.stato==='chiusa'&&Number.isFinite(o.R)&&(!Number.isFinite(ripresa)||Date.parse(o.chiusa)>ripresa))
+                    .sort((a,b)=>Date.parse(a.chiusa)-Date.parse(b.chiusa));
+  let eq=0, picco=0, calo=0, vinte=0, su=0, giu=0;
+  for(const o of chiuse){
+    eq+=o.R; if(eq>picco) picco=eq; if(picco-eq>calo) calo=picco-eq;
+    if(o.R>0){ vinte++; su+=o.R; } else giu+=-o.R;
+  }
+  return {chiuse:chiuse.length, aperte:tutte.filter(o=>o.stato==='aperta').length, vinte, totaleR:eq,
+          pf:giu>0?su/giu:(su>0?Infinity:null), caloMassimoR:calo, caloOraR:picco-eq};
+}
+function fblMotoreControllaSospensione(reg){
+  if(fblMotoreSospesa(reg.id)) return;
+  const st=fblMotoreStatistiche(reg.id);
+  if(!(st.caloOraR>=FBL_MOTORE_SOSPENDI_R)) return;
+  const c=fblMotoreConfig();
+  const motivo='calo di '+st.caloOraR.toFixed(1)+' R dal massimo nelle operazioni osservate (soglia '+FBL_MOTORE_SOSPENDI_R+' R)';
+  c[reg.id+'#sospesa']={da:new Date().toISOString(), motivo};
+  fblMotoreSalvaConfig(c);
+  fblMotoreRegistra({regola:reg.id, tf:reg.tf, esito:'sospesa', motivo});
+}
+function fblMotoreRiprendi(id){
+  const c=fblMotoreConfig(); delete c[id+'#sospesa']; c[id+'#ripresa']=new Date().toISOString(); fblMotoreSalvaConfig(c);
+  fblMotoreRegistra({regola:id, esito:'ripresa', motivo:'ripresa a mano: il calo si conta da adesso'});
+}
+
 // LE CANDELE DEL MOTORE, CHIESTE A MT5 PER IL TIMEFRAME DI OGNI REGOLA (27 novembre 2026).
 //
 // MISURATO sulla sua app: con il grafico a 5 minuti le regole a 5 minuti avevano calcolato 50.000
@@ -24563,19 +24694,22 @@ let fblMotoreInCorso=false;
 async function fblMotoreAutoGiro(forza){
   if(fblMotoreInCorso) return;
   fblMotoreInCorso=true;
+  const fermo=(testo)=>{ fblMotoreUltimoGiro={t:Date.now(), testo:'fermo: '+testo}; };
   try{
     // Demo: l'interruttore demo della regola. Reale: il suo interruttore REALE (vedi
-    // fblPuoAprireSulConto). Se il tipo di conto non si sa, non si apre niente.
+    // fblPuoAprireSulConto). Se il tipo di conto non si sa, non si apre niente: ma le regole in
+    // OSSERVAZIONE si calcolano lo stesso (v2.2.123), perche' osservare non rischia niente.
     const tipo=fblTipoConto();
-    if(!tipo) return;
-    const accese=FBL_MOTORE_REGOLE.filter(reg=>tipo==='demo' ? fblMotoreAcceso(reg.id) : fblRealePermesso(reg.id));
-    if(!accese.length) return;
-    if(!liveModeActive || liveReplayActive) return;
-    if(currentAssetKey!=='XAUUSD') return;
-    if(!mt5Connected || !mt5ActiveSymbol) return;
+    const apre=(reg)=> tipo==='demo' ? fblMotoreAcceso(reg.id) : (tipo==='reale' ? fblRealePermesso(reg.id) : false);
+    const accese=FBL_MOTORE_REGOLE.filter(reg=>apre(reg) || fblMotoreOsserva(reg.id));
+    if(!accese.length) return fermo('nessuna regola accesa o in osservazione');
+    if(!liveModeActive || liveReplayActive) return fermo(liveReplayActive?'replay in corso':'non sei in diretta');
+    if(currentAssetKey!=='XAUUSD') return fermo('il grafico non e\' su XAUUSD');
+    if(!mt5Connected || !mt5ActiveSymbol) return fermo('MT5 non collegato');
     const minuto=Math.floor(Date.now()/60000);
     if(!forza && minuto===fblMotoreUltimaBase) return;
     fblMotoreUltimaBase=minuto;
+    let nSegnali=0;
     const serie={};
     for(const tf of [...new Set(accese.map(reg=>reg.tf))]){
       try{ serie[tf]=await fblMotoreAggiornaSerie(tf); }catch(e){ serie[tf]=fblMotoreSerie[tf]||null; }
@@ -24589,6 +24723,9 @@ async function fblMotoreAutoGiro(forza){
       const s=fblMotoreStato(reg);
       // Serie nuova (ripartita dopo un buco): lo stato dell'indicatore va ricalcolato da capo.
       if(s.serie!==rowsTf){ s.serie=rowsTf; s.fatte=-1; }
+      // Prima le operazioni in ombra (e quindi l'eventuale sospensione), poi i segnali nuovi: una
+      // regola che ha appena superato la soglia di calo non deve aprire nello stesso giro.
+      try{ fblMotoreOmbraAggiorna(reg, rowsTf); }catch(e){}
       const atr=(typeof sweepsAtr==='function') ? sweepsAtr(rowsTf, 14) : [];
       if(s.fatte<0 || s.fatte>K){
         // primo giro (o storico cambiato): si calcola tutto fino alla candela prima, senza aprire
@@ -24603,10 +24740,12 @@ async function fblMotoreAutoGiro(forza){
         const segnali=fblMotoreSegnale(reg, s, rowsTf, k, atr);
         s.fatte=k;
         if(k!==K) continue;                               // si apre solo sull'ultima candela chiusa
-        for(const sig of segnali){ s.n++; fblMotoreApri(reg, sig, rowsTf, k); }
+        for(const sig of segnali){ s.n++; nSegnali++; fblMotoreDecidi(reg, sig, rowsTf, k, apre(reg)); }
       }
     }
-  }catch(e){ try{ console.log('[Motore auto] giro fallito:', e); }catch(_){} }
+    const nApre=accese.filter(apre).length;
+    fblMotoreUltimoGiro={t:Date.now(), testo:'girato: '+accese.length+' regole calcolate ('+nApre+' possono aprire su questo conto'+(tipo?' '+tipo:', tipo di conto sconosciuto')+'), '+nSegnali+' segnali nuovi'};
+  }catch(e){ fblMotoreUltimoGiro={t:Date.now(), testo:'errore nel giro: '+(e&&e.message||e)}; try{ console.log('[Motore auto] giro fallito:', e); }catch(_){} }
   finally{ fblMotoreInCorso=false; }
 }
 setInterval(()=>{ try{ fblMotoreAutoGiro(false); }catch(e){} }, 3000);
@@ -24678,13 +24817,63 @@ function fblMotoreAutoSezione(ind, body){
     box.appendChild(casella(propri.id+'@reale', propri.nome+' — anche sul conto REALE', true));
     box.appendChild(campoRischio(propri.id, true));
   }
+  if(regole.length){
+    const giro=document.createElement('div');
+    giro.dataset.motoreGiro='1';
+    giro.style.cssText='color:#cfe0f5;font-size:11px';
+    const t=fblMotoreUltimoGiro.t ? new Date(fblMotoreUltimoGiro.t).toLocaleTimeString('it-IT') : '—';
+    giro.textContent='Ultimo giro del motore: '+t+' — '+fblMotoreUltimoGiro.testo;
+    box.appendChild(giro);
+  }
   for(const reg of regole){
     const be=reg.be ? (' · a +'+reg.be[0]+' R lo stop va a +'+reg.be[1]+' R') : ' · senza break-even';
     const testo=reg.nome+' — '+reg.tf+' minuti · obiettivo 1:'+reg.obiettivoR+be+' · verifica: '+reg.verifica;
+    // OSSERVAZIONE (v2.2.123): accesa di serie, registra i segnali e il loro esito senza aprire.
+    const lo=document.createElement('label');
+    lo.style.cssText='display:flex;align-items:center;gap:6px;color:#93a1b3';
+    const io=document.createElement('input'); io.type='checkbox'; io.checked=fblMotoreOsserva(reg.id); io.dataset.motoreOsserva=reg.id;
+    io.addEventListener('change',()=>{ const c=fblMotoreConfig(); c[reg.id+'#osserva']=io.checked; fblMotoreSalvaConfig(c); });
+    lo.appendChild(io); lo.append(' '+reg.nome+' — osserva (segue ogni segnale e il suo esito, senza aprire)');
+    box.appendChild(lo);
+    const st=fblMotoreStatistiche(reg.id);
+    const num=document.createElement('div');
+    num.dataset.motoreNumeri=reg.id;
+    num.style.cssText='color:#93a1b3;font-size:11px;margin-left:22px';
+    num.textContent=st.chiuse||st.aperte
+      ? ('Osservate: '+st.chiuse+' chiuse, '+st.aperte+' in corso · vinte '+st.vinte+' · totale '+(st.totaleR>=0?'+':'')+st.totaleR.toFixed(1)+' R · PF '+(st.pf==null?'—':(st.pf===Infinity?'∞':st.pf.toFixed(2)))+' · calo massimo '+st.caloMassimoR.toFixed(1)+' R')
+      : 'Osservate: nessuna operazione ancora';
+    box.appendChild(num);
+    const sosp=fblMotoreSospesa(reg.id);
+    if(sosp){
+      const riga=document.createElement('div');
+      riga.style.cssText='display:flex;align-items:center;gap:8px;margin-left:22px;color:#ff8a8a;font-size:11px';
+      riga.dataset.motoreSospesa=reg.id;
+      riga.append('SOSPESA dal '+new Date(sosp.da).toLocaleString('it-IT')+': '+sosp.motivo+'. Non apre, continua a osservare.');
+      const b=document.createElement('button'); b.type='button'; b.textContent='Riprendi'; b.dataset.motoreRiprendi=reg.id;
+      b.addEventListener('click',()=>{ fblMotoreRiprendi(reg.id); riga.remove(); });
+      riga.appendChild(b);
+      box.appendChild(riga);
+    }
     box.appendChild(casella(reg.id, testo+' (demo)', false));
     box.appendChild(campoRischio(reg.id, false));
     box.appendChild(casella(reg.id+'@reale', reg.nome+' — anche sul conto REALE', true));
     box.appendChild(campoRischio(reg.id, true));
+    // REGISTRO: le ultime decisioni del motore per questa regola.
+    const bReg=document.createElement('button'); bReg.type='button'; bReg.textContent='Registro decisioni'; bReg.style.marginLeft='22px'; bReg.dataset.motoreRegistro=reg.id;
+    const elenco=document.createElement('div'); elenco.style.cssText='display:none;margin-left:22px;font-size:11px;color:#93a1b3;max-width:560px';
+    bReg.addEventListener('click',()=>{
+      if(elenco.style.display!=='none'){ elenco.style.display='none'; return; }
+      const voci=fblMotoreRegistroDi(reg.id).slice(-30).reverse();
+      elenco.textContent='';
+      if(!voci.length) elenco.textContent='Nessuna decisione registrata finora.';
+      for(const v of voci){
+        const r=document.createElement('div');
+        r.textContent=new Date(v.t).toLocaleString('it-IT')+' · '+v.esito.toUpperCase()+(v.dir?(' · '+(v.dir===1?'long':'short')+' a '+v.entry+' stop '+v.stop):'')+' · '+(v.motivo||'');
+        elenco.appendChild(r);
+      }
+      elenco.style.display='block';
+    });
+    box.appendChild(bReg); box.appendChild(elenco);
   }
   body.appendChild(box);
 }

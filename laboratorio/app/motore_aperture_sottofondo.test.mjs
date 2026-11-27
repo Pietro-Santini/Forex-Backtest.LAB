@@ -46,6 +46,10 @@ const PREPARA = `
     if (upTo === window.__barra && !st.trades.some(t => t.bar === upTo))
       st.trades.push({dir: 1, bar: upTo, stop: r[upTo].close - 2});
   }, render() {}};
+  // Solo la regola finta: dalla v2.2.123 le regole vere sono in OSSERVAZIONE di serie e il motore
+  // le calcolerebbe tutte (con richieste a MT5 anche a 15 e 30 minuti). Qui si prova l'impianto.
+  FBL_MOTORE_REGOLE.length = 0;
+  localStorage.removeItem('fbl_motore_ombra'); localStorage.removeItem('fbl_motore_registro');
   FBL_MOTORE_REGOLE.push({id: '__finto', key: '__finto', nome: 'Finto', tf: 5, obiettivoR: 3, be: [1.5, 0.5], segnale: 'triangoli', verifica: 'prova'});
   for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
   // Il grafico a 5 minuti come lo costruisce il motore, senza la candela in formazione.
@@ -57,6 +61,10 @@ test('spento non apre; acceso apre sul SUO timeframe (5 minuti) mentre il grafic
   const {browser, pagina, errori} = await apriApp();
   try {
     const r = await pagina.evaluate(`(async () => { ${PREPARA}
+      // Spenta del tutto, anche l'osservazione (v2.2.123): con l'osservazione accesa il segnale
+      // verrebbe registrato come «osservato» e accendere DOPO non lo aprirebbe in ritardo
+      // (voluto: lo prova motore_osservazione_registro.test.mjs).
+      fblMotoreSalvaConfig({'__finto#osserva': false});
       await fblMotoreAutoGiro(true);
       const spento = __ordini.length;
       fblMotoreSalvaConfig({__finto: true});
@@ -156,7 +164,9 @@ test('gli interruttori compaiono nelle impostazioni dell indicatore, spenti, e r
       localStorage.removeItem('fbl_motore_auto');
       const body = document.createElement('div');
       fblMotoreAutoSezione({key: 'complex_hs'}, body);
-      const caselle = Array.from(body.querySelectorAll('input[type=checkbox]'));
+      // Le caselle di APERTURA (demo e reale). Dalla v2.2.123 c'e' anche «osserva», accesa di serie:
+      // la prova motore_osservazione_registro.test.mjs.
+      const caselle = Array.from(body.querySelectorAll('input[type=checkbox][data-motore-regola]'));
       const spente = caselle.every(c => !c.checked);
       const retest = caselle.find(c => c.dataset.motoreRegola === 'hs_retest');
       retest.checked = true; retest.dispatchEvent(new Event('change'));

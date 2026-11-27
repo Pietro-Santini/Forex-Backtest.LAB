@@ -8421,3 +8421,35 @@ trovato che la soglia toccata in una candela non piu' ultima si perdeva).
 
 BANCO: motore_aperture_sottofondo.test.mjs ora tiene il GRAFICO a 30 minuti e controlla che le
 candele si chiedano a MT5 al timeframe della regola (5).
+
+## 27 novembre 2026 — v2.2.123: il motore osserva, registra e si sospende da solo
+
+PROPOSTO da Claude, APPROVATO dal proprietario («Sì, procedi»). Il motivo: la ricerca ha
+validato poco (due regole su sette reggono fuori campione, e solo in un periodo), e l'unico banco
+onesto rimasto e' il futuro vero. Nessuna regola e' stata accesa o spenta: si aggiunge soltanto.
+
+1. OSSERVAZIONE, accesa di serie per ogni regola (casella «osserva» nel pannello): il motore
+   calcola anche le regole che non aprono, e ogni segnale diventa un'operazione «in ombra» seguita
+   sulle candele chiuse del suo timeframe con le regole della ricerca: lo stop vince il pareggio
+   nella stessa candela, break-even dalla candela DOPO, costi 0,20 $ andata e ritorno. Ombra anche
+   per le regole che aprono davvero: misura la regola, non l'esecuzione. Voce `fbl_motore_ombra`.
+2. REGISTRO (`fbl_motore_registro`, pulsante «Registro decisioni»): ogni segnale con l'esito
+   aperto / bloccato (con il motivo della guardia: `fblAutoUltimoMotivo`, `fblMotivoContoNo`) /
+   osservato; in testa al pannello «Ultimo giro del motore»: girato (quante regole, quante possono
+   aprire, quanti segnali) oppure fermo e perche' (non in diretta, MT5 non collegato, non XAUUSD).
+3. SOSPENSIONE: con 10 R di calo dal massimo nelle operazioni osservate la regola smette di
+   APRIRE (continua a osservare) finche' non si preme «Riprendi», che riazzera il calo.
+   Le ombre si aggiornano PRIMA dei segnali nuovi: una regola appena sospesa non apre nello
+   stesso giro.
+
+CAMBIO DI COMPORTAMENTO, voluto: un segnale nato mentre l'apertura era spenta resta «osservato»;
+accendere l'apertura dopo non lo apre in ritardo (sarebbe un'altra operazione, a un altro prezzo).
+Prima, se la regola spenta non veniva calcolata, il primo giro dopo l'accensione apriva il segnale
+dell'ultima candela chiusa.
+
+BANCO: motore_osservazione_registro.test.mjs, 9 prove; ROSSE 9 su 9 sulla v2.2.122, verdi dopo.
+motore_aperture_sottofondo.test.mjs: il PREPARA tiene solo la regola finta (le vere ora si
+calcolano anche in osservazione) e la prova «spento» spegne anche l'osservazione.
+
+NON FATTO: interruttore unico d'emergenza; filtro per ora del giorno; vedere il motore lavorare
+sul terminale vero (il banco non arriva a MT5).
