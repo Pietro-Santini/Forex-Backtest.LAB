@@ -8453,3 +8453,31 @@ calcolano anche in osservazione) e la prova «spento» spegne anche l'osservazio
 
 NON FATTO: interruttore unico d'emergenza; filtro per ora del giorno; vedere il motore lavorare
 sul terminale vero (il banco non arriva a MT5).
+
+## 27 novembre 2026 — v2.2.124: le due regole provate sul periodo C, in sola osservazione
+
+TROVATO da Claude rileggendo la ricerca: le due regole che la squadra di analisti ha congelato e
+provato sul periodo mai visto (ottobre-novembre) NON erano quelle che il motore faceva girare.
+- XAU Sweep v2: provata a 15 minuti (wickMin 0,2, penMax 0,9, sessione si', bias no, 1:3,
+  break-even +1 R -> +0,05 R; ott-nov PF 1,66 su 21). Nel motore: 5 minuti, 1:4, senza break-even.
+- Sweeps & IFVG, segnale sweep: provata con stop 1,25 ATR, 1:4, break-even, SOLO con ombra
+  contraria >= 1,5 volte la media delle 20 candele prima (ott-nov PF 1,15 su 98). Nel motore:
+  stop 1,5 ATR e nessun filtro spike.
+Le regole del motore venivano da una ricerca precedente: i numeri del periodo C non valevano per
+loro. Detto al proprietario, che ha risposto «Sì, aggiungile».
+
+FATTO: `sweep15_c` e `ifvg_spike_c` in FBL_MOTORE_REGOLE, `soloOsserva:true` (nessun interruttore
+di apertura, `fblMotoreApreSulConto` restituisce sempre false), parametri per regola (`reg.params`
+in fblMotoreStato), filtro `fblMotoreFiltroOk` (i segnali scartati vanno nel registro come
+«filtrato»). Le versioni vecchie restano come sono.
+
+PARITA' CON LA RICERCA, misurata sulle stesse 50.000 candele a 5 minuti del broker (13 marzo - 26
+novembre): Sweep 15 minuti 92 segnali su 92 identici (minuto e direzione); IFVG con spike 580 su
+580, piu' UNO solo nell'app (10 novembre 02:00): ombra 2,97 su media 1,98, rapporto ESATTAMENTE
+1,5; la ricerca lo calcola 1,49999999999972 (media per somma cumulativa) e lo scarta per un errore
+di arrotondamento. L'app, con tolleranza 1e-9, ha ragione.
+
+DIFFERENZA DA SAPERE: la ricerca contava UNA posizione per volta per regola, l'osservazione segue
+ogni segnale; i conteggi dal vivo possono essere piu' alti.
+
+BANCO: motore_regole_periodo_c.test.mjs, 4 prove, rosse 4 su 4 sulla v2.2.123.

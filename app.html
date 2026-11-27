@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.123';
+const FBL_VERSIONE='2.2.124';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -24402,7 +24402,36 @@ const FBL_MOTORE_REGOLE = [
   {id:'hs',         key:'complex_hs',          nome:'Complex H&S — alla rottura del collo', tf:5, obiettivoR:4, be:null,      segnale:'hs',        verifica:'negativa'},
   {id:'hs_retest',  key:'complex_hs',          nome:'Complex H&S — sul retest del collo',  tf:5,  obiettivoR:3, be:[1.5,0.5], segnale:'hs_retest', retest:{barre:40, tolAtr:0.1, invalidaAtr:0.25}, verifica:'positiva'},
   {id:'triangoli',  key:'triangles',           nome:'Triangles',                           tf:5,  obiettivoR:3, be:[1.5,0.5], segnale:'triangoli', verifica:'negativa'},
+  // LE DUE REGOLE PROVATE SUL PERIODO C (v2.2.124, 27 novembre 2026), in SOLA osservazione.
+  // Trovato da Claude: quelle che la squadra di analisti ha congelato e provato sul periodo mai
+  // visto (ottobre-novembre) non erano quelle qui sopra, venute da una ricerca precedente.
+  // Definizioni in ricerca_sweep\squadra\sweep_regola.json e ifvg_regola.json. Il proprietario:
+  // «Sì, aggiungile». Entrambe NEGATIVE in agosto-settembre: per questo solo osservazione.
+  {id:'sweep15_c',  key:'xau_sweep_v2',        nome:'XAU Liquidity Sweep v2 — versione provata sul periodo C', tf:15, obiettivoR:3, be:[1,0.05], segnale:'xausweep',
+   params:{wickMin:0.2, penMax:0.9, sessOn:true, bias:'Nessuno'}, soloOsserva:true, verifica:'ott-nov PF 1,66 su 21; ago-set negativa'},
+  {id:'ifvg_spike_c', key:'sweeps_ifvg',       nome:'Sweeps & IFVG — sweep con spike, versione provata sul periodo C', tf:15, obiettivoR:4, be:[1,0.05], segnale:'sweep', stopAtr:1.25,
+   filtro:{spike:1.5, n:20}, soloOsserva:true, verifica:'ott-nov PF 1,15 su 98; ago-set negativa'},
 ];
+// Apre su questo conto? Demo: il suo interruttore demo; reale: il suo interruttore reale. Le regole
+// di sola osservazione mai, qualunque cosa ci sia scritto nella configurazione.
+function fblMotoreApreSulConto(reg, tipo){
+  if(reg.soloOsserva) return false;
+  return tipo==='demo' ? fblMotoreAcceso(reg.id) : (tipo==='reale' ? fblRealePermesso(reg.id) : false);
+}
+// IL FILTRO SPIKE della ricerca (anatomia.spike + ricerca_broker.maschere «spike>1.5x»): la candela
+// del segnale deve avere l'ombra CONTRARIA (sotto per i long, sopra per gli short) lunga almeno
+// `spike` volte la media delle `n` candele PRECEDENTI (lei esclusa). Senza n candele prima: no.
+function fblMotoreFiltroOk(reg, sig, rowsTf, k){
+  const f=reg&&reg.filtro;
+  if(!f||!f.spike) return true;
+  const n=f.n||20;
+  if(k<n||!rowsTf[k]) return false;
+  const ombra=(r)=> sig.dir===1 ? Math.min(r.open,r.close)-r.low : r.high-Math.max(r.open,r.close);
+  let s=0; for(let j=k-n;j<k;j++) s+=ombra(rowsTf[j]);
+  const media=s/n;
+  if(!(media>0)) return false;
+  return ombra(rowsTf[k])/media>=f.spike-1e-9;
+}
 const FBL_MOTORE_CHIAVE='fbl_motore_auto';
 function fblMotoreConfig(){
   try{ const c=JSON.parse(localStorage.getItem(FBL_MOTORE_CHIAVE)||'{}'); return (c&&typeof c==='object')?c:{}; }catch(e){ return {}; }
@@ -24419,6 +24448,7 @@ function fblMotoreStato(reg){
     const def=INDICATOR_DEFS[reg.key];
     const params=def.defaultParams();
     if(reg.key==='sweeps_ifvg'){ params.showIfvg=true; params.maxIfvgDisplay=200; }  // nessun IFVG tagliato via
+    if(reg.params) Object.assign(params, reg.params);       // i parametri della regola (v2.2.124)
     s=fblMotoreStati[reg.id]={ind:{key:reg.key, params, calc:{}, hidden:false}, fatte:-1, firme:new Set(), attese:[], n:0};
   }
   return s;
@@ -24700,7 +24730,7 @@ async function fblMotoreAutoGiro(forza){
     // fblPuoAprireSulConto). Se il tipo di conto non si sa, non si apre niente: ma le regole in
     // OSSERVAZIONE si calcolano lo stesso (v2.2.123), perche' osservare non rischia niente.
     const tipo=fblTipoConto();
-    const apre=(reg)=> tipo==='demo' ? fblMotoreAcceso(reg.id) : (tipo==='reale' ? fblRealePermesso(reg.id) : false);
+    const apre=(reg)=> fblMotoreApreSulConto(reg, tipo);
     const accese=FBL_MOTORE_REGOLE.filter(reg=>apre(reg) || fblMotoreOsserva(reg.id));
     if(!accese.length) return fermo('nessuna regola accesa o in osservazione');
     if(!liveModeActive || liveReplayActive) return fermo(liveReplayActive?'replay in corso':'non sei in diretta');
@@ -24740,7 +24770,15 @@ async function fblMotoreAutoGiro(forza){
         const segnali=fblMotoreSegnale(reg, s, rowsTf, k, atr);
         s.fatte=k;
         if(k!==K) continue;                               // si apre solo sull'ultima candela chiusa
-        for(const sig of segnali){ s.n++; nSegnali++; fblMotoreDecidi(reg, sig, rowsTf, k, apre(reg)); }
+        for(const sig of segnali){
+          s.n++; nSegnali++;
+          if(!fblMotoreFiltroOk(reg, sig, rowsTf, k)){
+            fblMotoreRegistra({regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:sig.dir, entry:Number(rowsTf[k].close), stop:Number(sig.stop),
+              esito:'filtrato', motivo:'nessuna spike: ombra contraria sotto '+reg.filtro.spike+' volte la media di '+(reg.filtro.n||20)+' candele'});
+            continue;
+          }
+          fblMotoreDecidi(reg, sig, rowsTf, k, apre(reg));
+        }
       }
     }
     const nApre=accese.filter(apre).length;
@@ -24854,10 +24892,19 @@ function fblMotoreAutoSezione(ind, body){
       riga.appendChild(b);
       box.appendChild(riga);
     }
-    box.appendChild(casella(reg.id, testo+' (demo)', false));
-    box.appendChild(campoRischio(reg.id, false));
-    box.appendChild(casella(reg.id+'@reale', reg.nome+' — anche sul conto REALE', true));
-    box.appendChild(campoRischio(reg.id, true));
+    if(reg.soloOsserva){
+      // v2.2.124: regola in SOLA osservazione, nessun interruttore di apertura (ne' demo ne' reale).
+      const n=document.createElement('div');
+      n.dataset.motoreSoloOsserva=reg.id;
+      n.style.cssText='color:#93a1b3;font-size:11px;margin-left:22px;max-width:560px';
+      n.textContent='Solo osservazione: '+testo+'. Non apre ordini: serve a confrontarla dal vivo con la versione qui sopra.';
+      box.appendChild(n);
+    }else{
+      box.appendChild(casella(reg.id, testo+' (demo)', false));
+      box.appendChild(campoRischio(reg.id, false));
+      box.appendChild(casella(reg.id+'@reale', reg.nome+' — anche sul conto REALE', true));
+      box.appendChild(campoRischio(reg.id, true));
+    }
     // REGISTRO: le ultime decisioni del motore per questa regola.
     const bReg=document.createElement('button'); bReg.type='button'; bReg.textContent='Registro decisioni'; bReg.style.marginLeft='22px'; bReg.dataset.motoreRegistro=reg.id;
     const elenco=document.createElement('div'); elenco.style.cssText='display:none;margin-left:22px;font-size:11px;color:#93a1b3;max-width:560px';
