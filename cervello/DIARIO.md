@@ -8351,3 +8351,28 @@ dopo. nowick_auto_open_demo.test.mjs aggiornato: conta gli ordini inviati.
 
 LEZIONE: «non apre» aveva tre cause possibili (tolleranze, candela in formazione, conto non demo) e
 nessuna era quella vera. Lo stato dell'app aperta l'ha detto in quattro letture.
+
+## 27 novembre 2026 — v2.2.120: il motore delle aperture in sottofondo, sette regole
+
+CHIESTO: «devi portare tutti gli indicatori»; «le posizioni si devono aprire indifferentemente dal
+time frame che si sta guardando, fanno loro un calcolo interno in background»; e le impostazioni del
+grafico «Rapporto 1:3 - 1:4, un timeframe per indicatore» (ricerca_sweep/gestione_uscite.py --rr34,
+riprodotta identica prima di portarla).
+
+FATTO: FBL_MOTORE_REGOLE (sette regole: Sweep v2 5m 1:4; IFVG sweep 15m 1:4 BE a +1R; IFVG
+inversione 30m idem; Trendline 5m idem; Complex H&S alla rottura 5m 1:4; H&S sul retest del collo
+5m 1:3 BE a +1,5R -> +0,5R; Triangles 5m idem). Quando chiude una candela a 1 minuto il motore
+costruisce il timeframe della regola da baseRows (senza la candela in formazione), fa calcolare
+l'indicatore su una copia sua UNA CANDELA ALLA VOLTA (Trendline e H&S descrivono negli eventi solo
+l'ultima candela calcolata), legge il segnale e apre con fblAutoInviaOrdineDemo: le quattro guardie
+del pull back ora stanno in un posto solo. Il retest del collo, che nell'app non esisteva, lo segue
+il motore con le regole di indicatori/hs_c.py. Break-even sorvegliato dal motore e portato su MT5.
+Interruttori spenti per difetto, nelle impostazioni di ogni indicatore, chiave `fbl_motore_auto`.
+
+VERIFICA CHE CONTA: le sette regole fatte girare nel motore dell'app e nella ricerca Python sulle
+STESSE candele del broker (ponte_M1, ottobre-novembre): segnali identici uno per uno, orario e
+direzione, zero in piu' e zero in meno su tutte e sette.
+
+BANCO: motore_aperture_sottofondo.test.mjs (6 prove con un indicatore finto: interruttore,
+timeframe proprio, solo l'ultima candela chiusa, niente doppioni, break-even su MT5, niente su
+conto reale/replay/altro asset, interruttori nelle impostazioni).

@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.119';
+const FBL_VERSIONE='2.2.120';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -22004,6 +22004,37 @@ function fblStopMinimoAuto(asset){
   let pip=0; try{ pip=pipSizeForAsset(asset); }catch(e){}
   return pip>0 ? 10*pip : 0;
 }
+// L'INVIO DELL'ORDINE VERO, con le guardie 1-4, in un posto solo: lo usano il pull back e il
+// No-Wick (da bosAutoApriOpsSetup) e il motore in sottofondo (fblMotoreAutoApri). Avere due copie
+// delle protezioni e' il modo sicuro di dimenticarne una nella seconda.
+// `o` = {entry, sl, tp, lots, chiave, meta}. Restituisce true se l'ordine e' partito.
+function fblAutoInviaOrdineDemo(p, asset, op, o){
+  try{
+    const dir=op.dir===1?'BUY':'SELL';
+    const {entry, sl, tp, lots, chiave}=o;
+    if(fblAutoApertureCarica().has(chiave)) return false;                 // guardia 4
+    let prezzoOra=NaN; try{ prezzoOra=Number(currentPrice()); }catch(e){}
+    if(!Number.isFinite(prezzoOra)||prezzoOra<=0) prezzoOra=entry;
+    const distOra=Math.abs(prezzoOra-sl), distPrevista=Math.abs(entry-sl);
+    const minimo=fblStopMinimoAuto(asset);
+    const latoGiusto = dir==='BUY' ? (sl<prezzoOra && (!Number.isFinite(tp)||tp>prezzoOra))
+                                   : (sl>prezzoOra && (!Number.isFinite(tp)||tp<prezzoOra));
+    if(!latoGiusto){ try{ $('status').textContent='Apertura automatica saltata: il prezzo ha gia\' superato lo stop o l\'obiettivo.'; }catch(e){} return false; }   // guardia 2
+    if(distOra<minimo){ try{ $('status').textContent='Apertura automatica saltata: stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+').'; }catch(e){} return false; } // guardia 3
+    if(!bosPuoAutoAprireDemo(p)) return false;                            // guardia 1, all'istante dell'invio
+    // Il rischio resta quello previsto: se il prezzo si e' allontanato dallo stop, il lotto scende.
+    const lotti=distOra>distPrevista ? Math.max(0.01, Math.floor(lots*distPrevista/distOra*100)/100) : lots;
+    fblAutoAperturaSegna(chiave);
+    Promise.resolve(placeRealMt5Order(dir,{sym:asset, prezzo:prezzoOra, lots:lotti, sl,
+      tp:Number.isFinite(tp)?tp:null, senzaConferma:true, ritornaTicket:true, meta:o.meta||{}}))
+      .then(ticket=>{
+        if(ticket==null||ticket===false) return;
+        const pos=positions.find(x=>x&&x.mt5Ticket!=null&&String(x.mt5Ticket)===String(ticket));
+        if(pos) op.autoPosId=pos.id;
+      }).catch(e=>{ try{ console.log('[Auto MT5] apertura fallita:',e); }catch(_){} });
+    return true;
+  }catch(e){ return false; }
+}
 function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
     if(!bosPuoAutoAprireDemo(p)) return;
@@ -22039,29 +22070,9 @@ function bosAutoApriOpsSetup(st, p, setupId, i){
       if(dup) continue;
       // --- DIRETTA: ordine VERO su MT5 demo, con le quattro guardie ---
       if(!liveReplayActive){
-        const chiave=fblAutoAperturaChiave(asset, op, i);
-        if(fblAutoApertureCarica().has(chiave)) continue;            // guardia 4
-        let prezzoOra=NaN; try{ prezzoOra=Number(currentPrice()); }catch(e){}
-        if(!Number.isFinite(prezzoOra)||prezzoOra<=0) prezzoOra=entry;
-        const distOra=Math.abs(prezzoOra-sl), distPrevista=Math.abs(entry-sl);
-        const minimo=fblStopMinimoAuto(asset);
-        const latoGiusto = dir==='BUY' ? (sl<prezzoOra && (!Number.isFinite(tp)||tp>prezzoOra))
-                                       : (sl>prezzoOra && (!Number.isFinite(tp)||tp<prezzoOra));
-        if(!latoGiusto){ try{ $('status').textContent='Apertura automatica saltata: il prezzo ha gia\' superato lo stop o l\'obiettivo.'; }catch(e){} continue; }   // guardia 2
-        if(distOra<minimo){ try{ $('status').textContent='Apertura automatica saltata: stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+').'; }catch(e){} continue; } // guardia 3
-        if(!bosPuoAutoAprireDemo(p)) return;                           // guardia 1, all'istante dell'invio
-        // Il rischio resta quello previsto: se il prezzo si e' allontanato dallo stop, il lotto scende.
-        const lotti=distOra>distPrevista ? Math.max(0.01, Math.floor(lots*distPrevista/distOra*100)/100) : lots;
-        fblAutoAperturaSegna(chiave);
-        const meta={bosAuto:true, bosSetupId:op.setupId, bosNome:op.nome, origin:'BOS_AUTO',
-                    autoIndicatore:op.indicatore||'bos', autoTF:currentTF};
-        Promise.resolve(placeRealMt5Order(dir,{sym:asset, prezzo:prezzoOra, lots:lotti, sl,
-          tp:Number.isFinite(tp)?tp:null, senzaConferma:true, ritornaTicket:true, meta}))
-          .then(ticket=>{
-            if(ticket==null||ticket===false) return;
-            const pos=positions.find(x=>x&&x.mt5Ticket!=null&&String(x.mt5Ticket)===String(ticket));
-            if(pos) op.autoPosId=pos.id;
-          }).catch(e=>{ try{ console.log('[Auto MT5] apertura fallita:',e); }catch(_){} });
+        fblAutoInviaOrdineDemo(p, asset, op, {entry, sl, tp, lots, chiave: fblAutoAperturaChiave(asset, op, i),
+          meta: {bosAuto:true, bosSetupId:op.setupId, bosNome:op.nome, origin:'BOS_AUTO',
+                 autoIndicatore:op.indicatore||'bos', autoTF:currentTF}});
         continue;
       }
       const _nowMs = Date.now();
@@ -24292,6 +24303,222 @@ INDICATOR_DEFS.sweeps_ifvg=SWEEPS_IFVG_DEF;
 INDICATOR_DEFS.trendline_liquidity=TRENDLINE_LIQUIDITY_DEF;
 INDICATOR_DEFS.triangles=TRIANGLES_DEF;
 INDICATOR_DEFS.valid_bos_pullback=VALID_BOS_PULLBACK_DEF;
+
+// =====================================================================================
+// IL MOTORE DELLE APERTURE AUTOMATICHE IN SOTTOFONDO (27 novembre 2026).
+//
+// CHIESTO dal proprietario: «devi portare tutti gli indicatori»; «le posizioni si devono aprire
+// indifferentemente dal time frame che si sta guardando, fanno loro un calcolo interno in
+// background che verificano le condizioni»; e le impostazioni del grafico «Rapporto 1:3 - 1:4,
+// un timeframe per indicatore»: «questi dati erano ottimi riproducili e fai in modo di settare
+// gli indicatori per fare questi risultati».
+//
+// COME FUNZIONA. Ogni regola e' un indicatore su UN timeframe, con le impostazioni di partenza e
+// l'uscita trovata dalla ricerca sui dati del broker (ricerca_sweep/gestione_uscite.py --rr34,
+// riprodotta identica il 27 novembre 2026). Quando chiude una candela a 1 minuto, il motore:
+//  1. costruisce dalle candele a 1 minuto (baseRows) quelle del timeframe della regola, SENZA
+//     quella in formazione: il grafico che si sta guardando non conta;
+//  2. fa calcolare l'indicatore su una COPIA SUA, invisibile, UNA CANDELA ALLA VOLTA: alcuni
+//     indicatori (Trendline, Complex H&S) descrivono negli eventi solo l'ultima candela
+//     calcolata, e calcolandone due insieme il segnale della prima si perderebbe;
+//  3. legge il segnale nato sull'ultima candela chiusa e apre con fblAutoInviaOrdineDemo, la
+//     stessa funzione (e le stesse quattro guardie) del pull back e del No-Wick;
+//  4. sorveglia il break-even delle posizioni che ha aperto e lo sposta anche su MT5.
+// Solo in diretta, solo XAUUSD (la ricerca e' tutta sull'oro), solo conto demo. Ogni regola ha
+// il suo interruttore, SPENTO per difetto (impostazioni di ogni indicatore).
+//
+// "verifica" e' l'esito della regola nell'ultimo 35% della storia del broker, mai usato per
+// sceglierla: positiva = guadagnava e batteva gli ingressi a caso gestiti allo stesso modo. Le
+// "negative" ci sono perche' il proprietario le vuole in demo: si accendono a sua scelta.
+// =====================================================================================
+const FBL_MOTORE_REGOLE = [
+  {id:'sweep',      key:'xau_sweep_v2',        nome:'XAU Liquidity Sweep v2',              tf:5,  obiettivoR:4, be:null,      segnale:'xausweep',  verifica:'positiva'},
+  {id:'ifvg_sweep', key:'sweeps_ifvg',         nome:'Sweeps & IFVG — segnale sweep',       tf:15, obiettivoR:4, be:[1,0.05],  segnale:'sweep',     stopAtr:1.5, verifica:'positiva'},
+  {id:'ifvg_inv',   key:'sweeps_ifvg',         nome:'Sweeps & IFVG — inversione del gap',  tf:30, obiettivoR:4, be:[1,0.05],  segnale:'ifvg',      stopAtr:1.5, verifica:'positiva (al pareggio)'},
+  {id:'trendline',  key:'trendline_liquidity', nome:'Trendline Liquidity',                 tf:5,  obiettivoR:4, be:[1,0.05],  segnale:'trendline', stopAtr:1.5, verifica:'negativa'},
+  {id:'hs',         key:'complex_hs',          nome:'Complex H&S — alla rottura del collo', tf:5, obiettivoR:4, be:null,      segnale:'hs',        verifica:'negativa'},
+  {id:'hs_retest',  key:'complex_hs',          nome:'Complex H&S — sul retest del collo',  tf:5,  obiettivoR:3, be:[1.5,0.5], segnale:'hs_retest', retest:{barre:40, tolAtr:0.1, invalidaAtr:0.25}, verifica:'positiva'},
+  {id:'triangoli',  key:'triangles',           nome:'Triangles',                           tf:5,  obiettivoR:3, be:[1.5,0.5], segnale:'triangoli', verifica:'negativa'},
+];
+const FBL_MOTORE_CHIAVE='fbl_motore_auto';
+function fblMotoreConfig(){
+  try{ const c=JSON.parse(localStorage.getItem(FBL_MOTORE_CHIAVE)||'{}'); return (c&&typeof c==='object')?c:{}; }catch(e){ return {}; }
+}
+function fblMotoreSalvaConfig(c){ try{ localStorage.setItem(FBL_MOTORE_CHIAVE, JSON.stringify(c)); }catch(e){} }
+function fblMotoreAcceso(id){ return fblMotoreConfig()[id]===true; }
+function fblMotoreRischio(){ const r=Number(fblMotoreConfig().rischio); return (r>0&&r<=5)?r:0.5; }
+const fblMotoreStati={};      // per regola: copia dell'indicatore, candele gia' calcolate, segnali visti
+let fblMotoreUltimaBase=null;
+
+function fblMotoreStato(reg){
+  let s=fblMotoreStati[reg.id];
+  if(!s){
+    const def=INDICATOR_DEFS[reg.key];
+    const params=def.defaultParams();
+    if(reg.key==='sweeps_ifvg'){ params.showIfvg=true; params.maxIfvgDisplay=200; }  // nessun IFVG tagliato via
+    s=fblMotoreStati[reg.id]={ind:{key:reg.key, params, calc:{}, hidden:false}, fatte:-1, firme:new Set(), attese:[], n:0};
+  }
+  return s;
+}
+
+// Il segnale nato sulla candela k appena calcolata: {dir, stop} oppure null.
+function fblMotoreSegnale(reg, s, rowsTf, k, atr){
+  const st=s.ind.calc, r=rowsTf[k];
+  if(!st||!r) return [];
+  const out=[];
+  const conAtr=(dir)=>{ const a=atr[k]; return (Number.isFinite(a)&&a>0) ? {dir, stop:r.close-dir*reg.stopAtr*a} : null; };
+  if(reg.segnale==='xausweep'){
+    for(const op of (st.operazioni||[])) if(op&&op.da===k&&!s.firme.has('op'+k+op.dir)){ s.firme.add('op'+k+op.dir); out.push({dir:op.dir, stop:op.stopIniziale}); }
+  }else if(reg.segnale==='sweep'){
+    for(const b of (st.boxes||[])){
+      if(!b||!b.marker||b.marker.x!==k) continue;
+      const f='bx'+b.left+'|'+b.top+'|'+b.bottom+'|'+b.dr; if(s.firme.has(f)) continue; s.firme.add(f);
+      const x=conAtr(-b.dr); if(x) out.push(x);                  // dr=1: massimo spazzato = short
+    }
+  }else if(reg.segnale==='ifvg'){
+    for(const o of (st.ifvgs||[])){
+      const f='iv'+o.left+'|'+o.top+'|'+o.bottom+'|'+o.bull; if(s.firme.has(f)) continue; s.firme.add(f);
+      const x=conAtr(o.bull?1:-1); if(x) out.push(x);            // IFVG rialzista = long
+    }
+  }else if(reg.segnale==='trendline'){
+    const ev=st.ev||{};
+    if(ev.shiftBull){ const x=conAtr(1); if(x) out.push(x); }   // linea di minimi spazzata e confermata = long
+    if(ev.shiftBear){ const x=conAtr(-1); if(x) out.push(x); }
+  }else if(reg.segnale==='hs'||reg.segnale==='hs_retest'){
+    const ev=st.evt||{};
+    const rotte=[];
+    if(ev.topBreak&&st.topActive) rotte.push({F:st.topActive, dir:-1});        // testa e spalle di massimo: short
+    if(ev.inverseBreak&&st.inverseActive) rotte.push({F:st.inverseActive, dir:1});
+    for(const x of rotte){
+      if(reg.segnale==='hs'){ if(Number.isFinite(x.F.stop)) out.push({dir:x.dir, stop:x.F.stop}); }
+      else s.attese.push({F:x.F, dir:x.dir, e:-x.F.dir, breakBar:k, atr:atr[k]});
+    }
+    if(reg.segnale==='hs_retest'){
+      // IL RETEST DEL COLLO (idea del proprietario, misurata in ricerca_hs.py): dopo la rottura si
+      // aspetta che il prezzo torni sul collo e venga respinto; se una chiusura riprende il collo
+      // dall'altra parte la figura e' invalidata. Stesse regole di indicatori/hs_c.py.
+      s.attese=s.attese.filter(A=>{
+        if(k<=A.breakBar) return true;
+        const neck=A.F.y1+A.F.slope*(k-A.F.x1);
+        const aa=Number.isFinite(A.atr)?A.atr:0;
+        if(A.e*(r.close-neck)>reg.retest.invalidaAtr*aa) return false;           // invalidata
+        if(k-A.breakBar>reg.retest.barre) return false;                         // il retest non e' arrivato
+        const tornato = A.e===1 ? (r.high>=neck-reg.retest.tolAtr*aa) : (r.low<=neck+reg.retest.tolAtr*aa);
+        if(!tornato || A.e*(r.close-neck)>=0) return true;
+        if(Number.isFinite(A.F.stop)) out.push({dir:A.dir, stop:A.F.stop});
+        return false;
+      });
+    }
+  }else if(reg.segnale==='triangoli'){
+    for(const t of (st.trades||[])) if(t&&t.bar===k&&!s.firme.has('tr'+k+t.dir)){ s.firme.add('tr'+k+t.dir); if(Number.isFinite(t.stop)) out.push({dir:t.dir, stop:t.stop}); }
+  }
+  return out;
+}
+
+function fblMotoreApri(reg, sig, rowsTf, k){
+  const asset=currentAssetKey;
+  const entry=Number(rowsTf[k].close), stop=Number(sig.stop), d=sig.dir;
+  const rischio=Math.abs(entry-stop);
+  if(!(rischio>0) || (d===1 ? !(stop<entry) : !(stop>entry))) return false;
+  const tp=entry+d*rischio*reg.obiettivoR;
+  let lotti=0.01;
+  try{ const l=scalettaLotto(entry, stop, {assoluto:fblMotoreRischio()}); lotti=Math.max(0.01, Number(l&&l.lotti)||0.01); }catch(e){}
+  const op={nome:reg.id, indicatore:reg.id, setupId:reg.id+'-'+rowsTf[k].date, dir:d, entry, sl:stop, tp};
+  const chiave=[asset,'motore',reg.id,rowsTf[k].date,d].join('|');
+  const meta={bosAuto:true, bosSetupId:op.setupId, bosNome:reg.id, origin:'MOTORE_AUTO',
+              autoIndicatore:reg.id, autoTF:reg.tf, autoBe:reg.be, autoRischio:rischio, autoBeFatto:false};
+  return fblAutoInviaOrdineDemo({autoOpenDemo:true}, asset, op, {entry, sl:stop, tp, lots:lotti, chiave, meta});
+}
+
+// IL BREAK-EVEN delle posizioni aperte dal motore: quando il prezzo arriva alla soglia (in R),
+// lo stop va al nuovo livello, anche su MT5. Si guarda l'ultima candela a 1 minuto chiusa.
+function fblMotoreBreakEven(){
+  const r=baseRows&&baseRows.length>1 ? baseRows[baseRows.length-2] : null;
+  if(!r) return;
+  for(const pos of positions){
+    if(!pos||pos.origin!=='MOTORE_AUTO'||!Array.isArray(pos.autoBe)||pos.autoBeFatto) continue;
+    if(pos.asset!==currentAssetKey) continue;
+    const d=pos.side==='BUY'?1:-1, R=Number(pos.autoRischio), e=Number(pos.entry);
+    if(!(R>0)||!Number.isFinite(e)) continue;
+    const soglia=e+d*pos.autoBe[0]*R;
+    if(!(d===1 ? r.high>=soglia : r.low<=soglia)) continue;
+    const nuovo=e+d*pos.autoBe[1]*R;
+    pos.autoBeFatto=true;
+    if(Number.isFinite(pos.sl) && (d===1 ? nuovo<=pos.sl : nuovo>=pos.sl)) continue;   // mai peggiorare
+    pos.sl=nuovo; pos.slAt=Date.now();
+    try{ syncMt5PositionLevels(pos); }catch(e){}
+  }
+}
+
+// Un giro del motore: si chiama quando chiude una candela a 1 minuto. `forza` serve ai test.
+function fblMotoreAutoGiro(forza){
+  try{
+    const accese=FBL_MOTORE_REGOLE.filter(reg=>fblMotoreAcceso(reg.id));
+    if(!accese.length) return;
+    if(!liveModeActive || liveReplayActive) return;
+    if(currentAssetKey!=='XAUUSD') return;
+    if(!mt5Connected || !mt5AccountInfo || mt5AccountInfo.reale!==false) return;
+    if(!baseRows||baseRows.length<50) return;
+    const ultima=baseRows[baseRows.length-1].date;
+    if(!forza && ultima===fblMotoreUltimaBase) return;
+    fblMotoreUltimaBase=ultima;
+    try{ fblMotoreBreakEven(); }catch(e){}
+    const cache={};
+    for(const reg of accese){
+      const def=INDICATOR_DEFS[reg.key]; if(!def) continue;
+      if(!cache[reg.tf]){ const agg=aggregateRows(baseRows, reg.tf); cache[reg.tf]=agg.slice(0, Math.max(0, agg.length-1)); }   // senza la candela in formazione
+      const rowsTf=cache[reg.tf];
+      const K=rowsTf.length-1; if(K<30) continue;
+      const s=fblMotoreStato(reg);
+      const atr=(typeof sweepsAtr==='function') ? sweepsAtr(rowsTf, 14) : [];
+      if(s.fatte<0 || s.fatte>K){
+        // primo giro (o storico cambiato): si calcola tutto fino alla candela prima, senza aprire
+        s.ind.calc={}; s.firme=new Set(); s.attese=[];
+        def.compute(rowsTf, K-1, s.ind);
+        for(let j=0;j<K;j++) fblMotoreSegnale(reg, s, rowsTf, j, atr);   // segna come visti i segnali passati
+        s.attese=[];
+        s.fatte=K-1;
+      }
+      for(let k=s.fatte+1;k<=K;k++){
+        def.compute(rowsTf, k, s.ind);
+        const segnali=fblMotoreSegnale(reg, s, rowsTf, k, atr);
+        s.fatte=k;
+        if(k!==K) continue;                               // si apre solo sull'ultima candela chiusa
+        for(const sig of segnali){ s.n++; fblMotoreApri(reg, sig, rowsTf, k); }
+      }
+    }
+  }catch(e){ try{ console.log('[Motore auto] giro fallito:', e); }catch(_){} }
+}
+setInterval(()=>{ try{ fblMotoreAutoGiro(false); }catch(e){} }, 3000);
+
+// La sezione nelle impostazioni dell'indicatore: un interruttore per ogni regola che lo usa.
+function fblMotoreAutoSezione(ind, body){
+  const regole=FBL_MOTORE_REGOLE.filter(reg=>reg.key===ind.key);
+  if(!regole.length) return;
+  const box=document.createElement('div');
+  box.className='indSettingsRow';
+  box.style.cssText='flex-direction:column;align-items:flex-start;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #2a3442';
+  const tit=document.createElement('div');
+  tit.style.cssText='color:#cfe0f5;font-weight:600;font-size:12px';
+  tit.textContent='Apertura automatica in sottofondo (solo conto demo, solo XAUUSD)';
+  box.appendChild(tit);
+  const nota=document.createElement('div');
+  nota.style.cssText='color:#93a1b3;font-size:11px;max-width:520px';
+  nota.textContent='Calcola da sola sul suo timeframe, qualunque grafico tu stia guardando, e manda l\'ordine vero al conto demo MT5. Rischio per operazione: '+fblMotoreRischio()+'% del saldo.';
+  box.appendChild(nota);
+  for(const reg of regole){
+    const lbl=document.createElement('label');
+    lbl.style.cssText='display:flex;align-items:center;gap:6px;color:#93a1b3';
+    const inp=document.createElement('input'); inp.type='checkbox'; inp.checked=fblMotoreAcceso(reg.id);
+    inp.dataset.motoreRegola=reg.id;
+    inp.addEventListener('change',()=>{ const c=fblMotoreConfig(); c[reg.id]=inp.checked; fblMotoreSalvaConfig(c); });
+    const be=reg.be ? (' · a +'+reg.be[0]+' R lo stop va a +'+reg.be[1]+' R') : ' · senza break-even';
+    lbl.appendChild(inp);
+    lbl.append(' '+reg.nome+' — '+reg.tf+' minuti · obiettivo 1:'+reg.obiettivoR+be+' · verifica: '+reg.verifica);
+    box.appendChild(lbl);
+  }
+  body.appendChild(box);
+}
 const aiIndicatorCompileCache=new WeakMap();
 // BUG RISOLTO (segnalato dall'utente: il prompt pronto "sembra" funzionare — l'assistente AI
 // risponde nel formato richiesto (DEFAULT_PARAMS/COMPUTE/RENDER) — ma l\'app "non lo accetta"):
@@ -25176,6 +25403,8 @@ function openIndicatorSettingsModal(ind){
      }
    }
    body.appendChild(paramsRow);
+   // Gli interruttori del motore in sottofondo per questo indicatore (vedi FBL_MOTORE_REGOLE).
+   try{ fblMotoreAutoSezione(ind, body); }catch(e){}
    // --- Setup salvati (preset) per questo tipo di indicatore -------------------------
    const presetRow=document.createElement('div');
    presetRow.className='indSettingsRow';
