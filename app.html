@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.118';
+const FBL_VERSIONE='2.2.119';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -20089,7 +20089,7 @@ function noWickAutoApri(st, p, t, i) {
     if (!st._autoFatti) st._autoFatti = {};
     st._autoFatti[setupId] = true;
     const op = {
-      nome: 'nowick', setupId, dir: t.dir, entry: t.entry, sl: t.stop, tp: t.target,
+      nome: 'nowick', indicatore: 'nowick', barra: i, setupId, dir: t.dir, entry: t.entry, sl: t.stop, tp: t.target,
       lotto: scalettaLotto(t.entry, t.stop, {assoluto: Math.max(0.01, +p.rischioOperazione || 0.5)})
     };
     bosAutoApriOpsSetup({ops: [op]}, p, setupId, i);
@@ -21939,15 +21939,70 @@ function bosSyncAutoPos(op){
     if(Number.isFinite(op.sl) && op.sl!==pos.sl){ pos.sl=op.sl; if(op.be1Fatto||op.be2Fatto) pos.slAt=Date.now(); changed=true; }
     if(Number.isFinite(op.tp) && op.tp!==pos.tp){ pos.tp=op.tp; changed=true; }
     if(changed){ try{ syncTradeLevels(); }catch(e){} try{ refreshTradeRiskModel(); }catch(e){} try{ refreshTradeLevelUI(); }catch(e){} try{ update(); }catch(e){} try{ draw(); }catch(e){} }
+    // Posizione VERA su MT5 (aperta in automatico sul conto demo): il break-even dell'indicatore
+    // deve arrivare anche sul conto, non solo nell'app.
+    if(changed && pos.mt5Ticket!=null){ try{ syncMt5PositionLevels(pos); }catch(e){} }
   }catch(e){}
 }
 function bosChiudiAutoPos(op, reason, price){
   try{
     const pos=bosPosAuto(op); if(!pos) return;
+    // Su una posizione VERA lo stop e l'obiettivo li fa scattare MT5, che li ha sull'ordine: se
+    // la chiudesse anche l'app sul proprio calcolo, le due chiusure si inseguirebbero.
+    if(pos.mt5Ticket!=null) return;
     const px=Number.isFinite(price)?price:(reason==='SL'?pos.sl:pos.tp);
     if(!Number.isFinite(px)) return;
     try{ closeTrade(reason, px, pos); }catch(e){}
   }catch(e){}
+}
+// ======================================================================================
+// APERTURA AUTOMATICA COME ORDINE VERO SU MT5 DEMO (27 novembre 2026).
+//
+// SEGNALATO dal proprietario: «nel conto demo non riesce ad aprire le posizioni in tempo reale
+// l'indicatore pull back valid». MISURATO sulla sua app aperta: lo short delle 19:28 UTC del 26
+// novembre era stato aperto in diretta, ma con ticket MT5 vuoto. L'apertura automatica creava
+// solo una posizione SIMULATA dentro l'app: sul terminale MetaTrader non arrivava nessun ordine.
+// Decisione del proprietario: «Sì, ordini veri in demo».
+//
+// Da qui, in diretta, l'ordine passa da placeRealMt5Order in modo automatico (senza la finestra
+// di conferma), la stessa strada delle sale segnali: la posizione nasce collegata al suo ticket,
+// e stop, obiettivo e chiusure li gestisce MT5 come per ogni posizione vera. In replay resta
+// tutto simulato, come prima (placeRealMt5Order in replay rifiuta comunque).
+//
+// LE QUATTRO GUARDIE, perche' qui parte denaro (anche se finto):
+//  1. SOLO DEMO, ricontrollato nell'istante dell'invio (bosPuoAutoAprireDemo appena prima);
+//  2. MAI UN ORDINE SENZA STOP: si guarda il prezzo di ADESSO. Se ha gia' superato lo stop o
+//     l'obiettivo, o se lo stop sta piu' vicino di 3 volte lo spread normale, non si apre.
+//     placeRealMt5Order scarterebbe uno stop dal lato sbagliato e aprirebbe la posizione NUDA:
+//     qui quel caso non arriva mai;
+//  3. STOP MINIMO: misurato sulla sua app, il long delle 18:40 aveva entrata 3568,20 e stop
+//     3568,16 - quattro centesimi di rischio, preso dallo spread appena aperto, con un lotto
+//     calcolato su quattro centesimi;
+//  4. MAI DUE VOLTE LO STESSO SEGNALE: a ogni ricalcolo completo lo stato dell'indicatore si
+//     ricostruisce e il segno "gia' tentato" si perde. Le chiavi dei segnali aperti (asset,
+//     indicatore, nome, orario della candela, direzione) si ricordano anche dopo un riavvio.
+// ======================================================================================
+const FBL_AUTO_APERTURE_CHIAVE='fbl_auto_aperture';
+let fblAutoApertureFatte=null;
+function fblAutoApertureCarica(){
+  if(fblAutoApertureFatte) return fblAutoApertureFatte;
+  fblAutoApertureFatte=new Set();
+  try{ const a=JSON.parse(localStorage.getItem(FBL_AUTO_APERTURE_CHIAVE)||'[]'); if(Array.isArray(a)) a.forEach(k=>fblAutoApertureFatte.add(String(k))); }catch(e){}
+  return fblAutoApertureFatte;
+}
+function fblAutoAperturaSegna(chiave){
+  const s=fblAutoApertureCarica(); s.add(chiave);
+  try{ localStorage.setItem(FBL_AUTO_APERTURE_CHIAVE, JSON.stringify(Array.from(s).slice(-300))); }catch(e){}
+}
+function fblAutoAperturaChiave(asset, op, i){
+  const r=rows&&rows[Number.isFinite(op.barra)?op.barra:i];
+  return [asset, op.indicatore||'bos', op.nome, r?r.date:('i'+i), op.dir].join('|');
+}
+function fblStopMinimoAuto(asset){
+  let s=0; try{ s=fblSpreadNormalePrezzo(asset); }catch(e){}
+  if(s>0) return 3*s;
+  let pip=0; try{ pip=pipSizeForAsset(asset); }catch(e){}
+  return pip>0 ? 10*pip : 0;
 }
 function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
@@ -21956,7 +22011,13 @@ function bosAutoApriOpsSetup(st, p, setupId, i){
     if(liveReplayActive){
       const maxI = (replayForm && Number.isFinite(replayForm.idx)) ? replayForm.idx : idx;
       if(i < idx || i > maxI) return;
-    } else if(i < rows.length-1) return; // solo barra live corrente
+    } else {
+      // In diretta vale la candela in formazione (il pull back la calcola) E l'ultima candela
+      // CHIUSA: gli altri indicatori calcolano solo fino a quella (fblIdxPerIndicatori). Prima
+      // si accettava solo `rows.length-1`, e il No-Wick in diretta non apriva mai.
+      const _ultimaCalcolata=Math.min(fblIdxPerIndicatori(), rows.length-1);
+      if(i < _ultimaCalcolata) return;
+    }
     const ops=(st.ops||[]).filter(o=>o && o.setupId===setupId && !o.autoOpenAttempted);
     for(const op of ops){
       op.autoOpenAttempted=true;
@@ -21976,6 +22037,33 @@ function bosAutoApriOpsSetup(st, p, setupId, i){
       if(typeof freeMargin==='function' && requiredMargin>freeMargin()+1e-9) continue;
       const dup=positions.some(pos=>pos && pos.bosAuto && pos.bosSetupId===op.setupId && pos.bosNome===op.nome && pos.asset===asset);
       if(dup) continue;
+      // --- DIRETTA: ordine VERO su MT5 demo, con le quattro guardie ---
+      if(!liveReplayActive){
+        const chiave=fblAutoAperturaChiave(asset, op, i);
+        if(fblAutoApertureCarica().has(chiave)) continue;            // guardia 4
+        let prezzoOra=NaN; try{ prezzoOra=Number(currentPrice()); }catch(e){}
+        if(!Number.isFinite(prezzoOra)||prezzoOra<=0) prezzoOra=entry;
+        const distOra=Math.abs(prezzoOra-sl), distPrevista=Math.abs(entry-sl);
+        const minimo=fblStopMinimoAuto(asset);
+        const latoGiusto = dir==='BUY' ? (sl<prezzoOra && (!Number.isFinite(tp)||tp>prezzoOra))
+                                       : (sl>prezzoOra && (!Number.isFinite(tp)||tp<prezzoOra));
+        if(!latoGiusto){ try{ $('status').textContent='Apertura automatica saltata: il prezzo ha gia\' superato lo stop o l\'obiettivo.'; }catch(e){} continue; }   // guardia 2
+        if(distOra<minimo){ try{ $('status').textContent='Apertura automatica saltata: stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+').'; }catch(e){} continue; } // guardia 3
+        if(!bosPuoAutoAprireDemo(p)) return;                           // guardia 1, all'istante dell'invio
+        // Il rischio resta quello previsto: se il prezzo si e' allontanato dallo stop, il lotto scende.
+        const lotti=distOra>distPrevista ? Math.max(0.01, Math.floor(lots*distPrevista/distOra*100)/100) : lots;
+        fblAutoAperturaSegna(chiave);
+        const meta={bosAuto:true, bosSetupId:op.setupId, bosNome:op.nome, origin:'BOS_AUTO',
+                    autoIndicatore:op.indicatore||'bos', autoTF:currentTF};
+        Promise.resolve(placeRealMt5Order(dir,{sym:asset, prezzo:prezzoOra, lots:lotti, sl,
+          tp:Number.isFinite(tp)?tp:null, senzaConferma:true, ritornaTicket:true, meta}))
+          .then(ticket=>{
+            if(ticket==null||ticket===false) return;
+            const pos=positions.find(x=>x&&x.mt5Ticket!=null&&String(x.mt5Ticket)===String(ticket));
+            if(pos) op.autoPosId=pos.id;
+          }).catch(e=>{ try{ console.log('[Auto MT5] apertura fallita:',e); }catch(_){} });
+        continue;
+      }
       const _nowMs = Date.now();
       const _barTime = parseDateTime((rows[idx]||rows[i]||{}).date);
       const pos={

@@ -8297,3 +8297,57 @@ Collaudo completo: Falliti 0.
 LEZIONE: un elenco che cresce a ogni barra e un render che lo disegna tutto non e' "troppa
 informazione", e' un difetto di memoria che si vede. Il tetto va messo dove nasce il dato, non
 solo dove si disegna.
+
+## 26 novembre 2026 (sera) — ricerca sugli indicatori: due difetti miei, e cosa regge davvero
+
+Ricerca fuori dal repository, in `ricerca_sweep/` sulla cartella del Desktop (motore Python).
+
+DUE DIFETTI DI MISURA, entrambi fughe in avanti, entrambi miei:
+1. il filtro EMA leggeva la barra DOPO l'ingresso per chi entra a chiusura (IFVG sweep 1m sul
+   2024: +21 sigma col difetto, PF 0,53 senza);
+2. le uscite si cercavano dall'INIZIO della candela d'ingresso, quindi contavano movimenti
+   avvenuti prima che la posizione esistesse. Il No-Wick passava da PF 1,78 (falso) a 0,975 sui
+   dati del broker: tutto il suo "vantaggio" stava li'.
+
+CONTESTO E ANATOMIA (order block, sacche di liquidita', S&R, profilo volumetrico del giorno prima;
+corpo contro la media, spike, engulfing, serie di candele decise), una condizione per volta, su
+1/5/15/30 minuti. Regola: vale solo cio' che regge su DUE archivi indipendenti, HistData 2024-25
+fuori campione e il ponte 2026. Reggono: Trendline 30m (PF 1,50 / 1,72; con lo stop oltre
+l'order block 2,09 / 1,65), Sweep v2 5m con spazio fino al livello S&R (1,27 / 1,40), H&S col
+retest del collo 5m (1,15 / 1,12). Crolla sul broker: H&S col retest 15m (1,45 -> 0,57). Il
+grafico a 1 minuto perde per tutti gli indicatori, con qualunque condizione.
+
+LEZIONE: ogni numero troppo bello di oggi era una fuga in avanti. La prova che le scopre e' una
+sola: tagliare la serie al momento dell'ingresso e ricalcolare - se qualcosa cambia, sbirciava.
+Per chi entra al tocco il taglio va al MINUTO del tocco, non alla fine della candela.
+
+## 27 novembre 2026 — v2.2.119: l'apertura automatica manda l'ordine VERO a MT5 demo
+
+SEGNALATO: «nel conto demo non riesce ad aprire le posizioni in tempo reale l'indicatore pull back
+valid».
+
+MISURATO sulla sua app aperta (DevTools 9222, sola lettura), non supposto: diretta, MT5 collegato,
+conto demo, interruttore acceso, bosPuoAutoAprireDemo = vero. Lo short delle 19:28 UTC del 26
+novembre era stato APERTO in diretta, due posizioni "pullback" e "conferma", ma con ticket MT5
+VUOTO: bosAutoApriOpsSetup creava solo una posizione SIMULATA nell'app. Su MetaTrader non arrivava
+niente, per costruzione. La prima ipotesi (il pull back non vede la candela in formazione) era
+SBAGLIATA: il pull back ha un'eccezione apposta e la candela in formazione la ricalcola a ogni tick.
+Quella ipotesi vale invece per il No-Wick, che calcola solo fino alla candela chiusa e quindi in
+diretta non apriva mai.
+
+CURA (decisione del proprietario: «Sì, ordini veri in demo»): in diretta l'ordine passa da
+placeRealMt5Order in modo automatico (senzaConferma), la strada delle sale segnali. Quattro guardie:
+demo ricontrollato all'istante dell'invio; mai un ordine senza stop (prezzo di adesso oltre lo stop
+o l'obiettivo = non si apre, altrimenti placeRealMt5Order scarterebbe lo stop e aprirebbe nudo);
+stop minimo 3 volte lo spread normale (misurato: un long con entrata 3568,20 e stop 3568,16);
+mai due volte lo stesso segnale (chiavi in localStorage `fbl_auto_aperture`). Il break-even
+dell'indicatore va anche su MT5 (syncMt5PositionLevels); la chiusura a stop la decide MT5. Il
+No-Wick apre sulla candela appena chiusa. In replay resta tutto simulato.
+
+BANCO: bos_auto_open_demo.test.mjs riscritto (6 prove: verificava il comportamento sbagliato, una
+posizione simulata in diretta, e chiamava l'apertura con rows.length-1, indice che il No-Wick in
+diretta non produce mai). ROSSO sul codice vecchio (5 su 6; il replay non doveva cambiare), verde
+dopo. nowick_auto_open_demo.test.mjs aggiornato: conta gli ordini inviati.
+
+LEZIONE: «non apre» aveva tre cause possibili (tolleranze, candela in formazione, conto non demo) e
+nessuna era quella vera. Lo stato dell'app aperta l'ha detto in quattro letture.
