@@ -8376,3 +8376,25 @@ direzione, zero in piu' e zero in meno su tutte e sette.
 BANCO: motore_aperture_sottofondo.test.mjs (6 prove con un indicatore finto: interruttore,
 timeframe proprio, solo l'ultima candela chiusa, niente doppioni, break-even su MT5, niente su
 conto reale/replay/altro asset, interruttori nelle impostazioni).
+
+## 27 novembre 2026 — v2.2.121: aperture automatiche anche sul conto REALE, rischio nel pannello
+
+CHIESTO: «rendili attivabili anche per i conti reali», «tutti», «tutti gli indicatore in reale»;
+poi «le impostazioni del rischio devono esserci all'interno di ogni pannello dell'indicatore, con
+la possibilita' di modificarlo a piacimento».
+
+AVVISATO PRIMA, per iscritto: le regole non sono dimostrate redditizie (quattro su sette negative
+in verifica, le due migliori hanno perso ad agosto-settembre) e il motore non e' ancora stato visto
+lavorare sul suo terminale nemmeno in demo. La decisione e' sua; consigliate prima settimane di demo.
+
+FATTO, per tutti gli indicatori (sette regole del motore, pull back, No-Wick): un interruttore REALE
+separato, spento per difetto, che chiede conferma quando lo si accende; nel pannello di ogni
+indicatore il rischio demo e quello reale (per difetto 0,5% e 0,25%, accettati fra 0,01% e 5%).
+Protezioni solo per il reale: al massimo 2 posizioni automatiche aperte insieme; dopo 3 operazioni
+automatiche chiuse in perdita nello stesso giorno, fermo fino a domani; solo in diretta; se il tipo
+di conto non si sa (reale = None dal ponte), non si apre. Tutto passa da fblPuoAprireSulConto dentro
+fblAutoInviaOrdineDemo: le guardie restano in un posto solo.
+
+BANCO: motore_aperture_sottofondo.test.mjs, 4 prove nuove sul reale (interruttore proprio, rischio
+del reale, conto sconosciuto, due aperte, tre perdite oggi, pull back sul reale, conferma e rischio
+fuori misura).

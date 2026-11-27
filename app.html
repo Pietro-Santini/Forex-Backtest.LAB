@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.120';
+const FBL_VERSIONE='2.2.121';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -20083,7 +20083,7 @@ function nowickEma(values, len) {
 // domanda e' gia' costato due giorni di diagnosi (cervello/BUG.md): qui non si ripete.
 function noWickAutoApri(st, p, t, i) {
   try {
-    if (!bosPuoAutoAprireDemo(p)) return;
+    if (!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, 'nowick')) return;
     const setupId = 'nowick-' + i + '-' + (t.dir === 1 ? 'L' : 'S');
     if (st._autoFatti && st._autoFatti[setupId]) return;
     if (!st._autoFatti) st._autoFatti = {};
@@ -20379,7 +20379,7 @@ const NO_WICK_SETTINGS = [
   {type: 'num', key: 'bePips1', label: 'Break-even: pip oltre l\u2019entrata', min: 0, max: 1000, step: 1},
   {type: 'num', key: 'tradeHistory', label: 'Trade conservati', min: 1, max: 100},
   {type: 'num', key: 'rischioOperazione', label: 'Rischio per operazione (%)', min: 0.01, max: 100, step: 0.01},
-  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni (solo demo/simulato, conto MT5 collegato, anche in replay, niente reale)',
+  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni sul conto DEMO (e in replay). Per il conto REALE: sezione in fondo',
    nota: 'ATTENZIONE: questa strategia NON ha ancora un vantaggio dimostrato. Misurata su 1.373.103 barre vere di XAUUSD, con le impostazioni di questo pannello PERDE: profit factor 0,90 fuori campione. L\u2019unica configurazione che regge (15 minuti, ore 08-16, TP 1,5 ATR e SL 1,5 ATR: profit factor 1,27 fuori campione) e\u2019 la migliore di 306 prove e lo Sharpe deflazionato la boccia. Spento = solo visualizzazione dei livelli: nessuna posizione viene aperta.'},
   {type: 'color', key: 'longLevelColor', label: 'Livello long'},
   {type: 'color', key: 'shortLevelColor', label: 'Livello short'},
@@ -22008,10 +22008,51 @@ function fblStopMinimoAuto(asset){
 // No-Wick (da bosAutoApriOpsSetup) e il motore in sottofondo (fblMotoreAutoApri). Avere due copie
 // delle protezioni e' il modo sicuro di dimenticarne una nella seconda.
 // `o` = {entry, sl, tp, lots, chiave, meta}. Restituisce true se l'ordine e' partito.
+// ======================================================================================
+// IL CONTO REALE (27 novembre 2026). Richiesta del proprietario: «rendili attivabili anche per i
+// conti reali», «tutti gli indicatori in reale». Avvisato prima, per iscritto, che le regole non
+// sono dimostrate redditizie e che il motore non e' ancora stato visto lavorare nemmeno in demo:
+// la decisione e' sua. Sul reale valgono protezioni PIU' STRETTE della demo:
+//  - un interruttore per indicatore/regola, separato da quello demo, spento per difetto, che
+//    chiede una conferma esplicita quando lo si accende (chiave `<id>@reale` in fbl_motore_auto);
+//  - rischio 0,25% del saldo per operazione (il lotto non supera mai quello);
+//  - al massimo 2 posizioni automatiche aperte insieme sul reale;
+//  - dopo 3 operazioni automatiche chiuse in perdita nello stesso giorno, stop fino a domani;
+//  - solo in diretta (mai in replay), e se l'app non sa dire se il conto e' reale, non apre.
+// ======================================================================================
+const FBL_REALE_RISCHIO=0.25, FBL_REALE_MAX_APERTE=2, FBL_REALE_MAX_PERDITE_GIORNO=3;
+function fblTipoConto(){
+  if(!mt5AccountInfo) return null;
+  if(mt5AccountInfo.reale===false) return 'demo';
+  if(mt5AccountInfo.reale===true) return 'reale';
+  return null;
+}
+function fblRealePermesso(id){ try{ return fblMotoreConfig()[id+'@reale']===true; }catch(e){ return false; } }
+function fblRealeConsentitoOra(){
+  const oggi=new Date().toDateString();
+  const perse=(trades||[]).filter(t=>t&&t.autoContoReale&&Number(t.pl)<0&&t.closedAt&&new Date(t.closedAt).toDateString()===oggi).length;
+  if(perse>=FBL_REALE_MAX_PERDITE_GIORNO){ try{ $('status').textContent='Aperture automatiche sul conto REALE ferme fino a domani: '+perse+' operazioni chiuse in perdita oggi.'; }catch(e){} return false; }
+  const aperte=(positions||[]).filter(x=>x&&x.autoContoReale&&x.mt5Ticket!=null).length;
+  if(aperte>=FBL_REALE_MAX_APERTE) return false;
+  return true;
+}
+// Si puo' aprire su questo conto, per questo indicatore (`id`: 'pullback', 'nowick' o una regola
+// del motore)? Demo: l'interruttore dell'indicatore, come prima. Reale: il suo interruttore reale.
+function fblPuoAprireSulConto(p, id){
+  try{
+    if(fblTipoConto()==='demo') return bosPuoAutoAprireDemo(p);
+    if(fblTipoConto()!=='reale') return false;
+    if(!liveModeActive || liveReplayActive || !mt5Connected) return false;
+    if(!fblRealePermesso(id)) return false;
+    return fblRealeConsentitoOra();
+  }catch(e){ return false; }
+}
 function fblAutoInviaOrdineDemo(p, asset, op, o){
   try{
     const dir=op.dir===1?'BUY':'SELL';
-    const {entry, sl, tp, lots, chiave}=o;
+    const {entry, sl, tp, chiave}=o;
+    let lots=o.lots;
+    const id=op.indicatore||'pullback';
     if(fblAutoApertureCarica().has(chiave)) return false;                 // guardia 4
     let prezzoOra=NaN; try{ prezzoOra=Number(currentPrice()); }catch(e){}
     if(!Number.isFinite(prezzoOra)||prezzoOra<=0) prezzoOra=entry;
@@ -22021,12 +22062,20 @@ function fblAutoInviaOrdineDemo(p, asset, op, o){
                                    : (sl>prezzoOra && (!Number.isFinite(tp)||tp<prezzoOra));
     if(!latoGiusto){ try{ $('status').textContent='Apertura automatica saltata: il prezzo ha gia\' superato lo stop o l\'obiettivo.'; }catch(e){} return false; }   // guardia 2
     if(distOra<minimo){ try{ $('status').textContent='Apertura automatica saltata: stop troppo vicino ('+fblInPip(asset,distOra)+', minimo '+fblInPip(asset,minimo)+').'; }catch(e){} return false; } // guardia 3
-    if(!bosPuoAutoAprireDemo(p)) return false;                            // guardia 1, all'istante dell'invio
+    if(!fblPuoAprireSulConto(p, id)) return false;                        // guardia 1, all'istante dell'invio
+    const reale=fblTipoConto()==='reale';
+    const meta=Object.assign({}, o.meta||{}, reale?{autoContoReale:true}:{});
+    if(reale){
+      // sul reale il rischio per operazione non supera quello impostato per il reale (0,25% per difetto)
+      try{ const l=scalettaLotto(entry, sl, {assoluto:fblRischio(id, true)}); const lr=Number(l&&l.lotti);
+           if(lr>0) lots=Math.min(lots, lr); }catch(e){}
+      lots=Math.max(0.01, lots);
+    }
     // Il rischio resta quello previsto: se il prezzo si e' allontanato dallo stop, il lotto scende.
     const lotti=distOra>distPrevista ? Math.max(0.01, Math.floor(lots*distPrevista/distOra*100)/100) : lots;
     fblAutoAperturaSegna(chiave);
     Promise.resolve(placeRealMt5Order(dir,{sym:asset, prezzo:prezzoOra, lots:lotti, sl,
-      tp:Number.isFinite(tp)?tp:null, senzaConferma:true, ritornaTicket:true, meta:o.meta||{}}))
+      tp:Number.isFinite(tp)?tp:null, senzaConferma:true, ritornaTicket:true, meta}))
       .then(ticket=>{
         if(ticket==null||ticket===false) return;
         const pos=positions.find(x=>x&&x.mt5Ticket!=null&&String(x.mt5Ticket)===String(ticket));
@@ -22037,9 +22086,11 @@ function fblAutoInviaOrdineDemo(p, asset, op, o){
 }
 function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
-    if(!bosPuoAutoAprireDemo(p)) return;
+    const _idInd=(st&&st.ops&&st.ops[0]&&st.ops[0].indicatore)||'pullback';
+    if(!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, _idInd)) return;
     if(st && st._rebuilding) return;
     if(liveReplayActive){
+      if(!bosPuoAutoAprireDemo(p)) return;     // in replay solo posizioni simulate, col permesso demo
       const maxI = (replayForm && Number.isFinite(replayForm.idx)) ? replayForm.idx : idx;
       if(i < idx || i > maxI) return;
     } else {
@@ -22284,7 +22335,7 @@ const BOS_SETTINGS = [
   {type: 'num', key: 'maxWait', label: 'Età massima setup (formazione pullback)', min: 5, max: 1000},
   {type: 'check', key: 'beTp1', label: 'BE su TP1: quando il pullback prende TP, porta SL seconda a BE (entrata)'},
   {type: 'num', key: 'rischioOperazione', label: 'Rischio per operazione (%)', min: 0.01, max: 100, step: 0.01},
-  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni (solo demo/simulato, conto MT5 collegato, anche in replay, niente reale)'},
+  {type: 'check', key: 'autoOpenDemo', label: 'Apertura automatica posizioni sul conto DEMO (e in replay). Per il conto REALE: sezione in fondo'},
   {type: 'num', key: 'bePerc2', label: 'BE2 seconda: % verso il target (0 = spento)', min: 0, max: 100, step: 1},
   {type: 'select', key: 'bePerc2Da', label: 'BE2 seconda: % calcolata da', options: ['apertura', 'rottura']},
   {type: 'num', key: 'bePips2', label: 'BE2 seconda: pip oltre la rottura confermata', min: 0, max: 1000, step: 1},
@@ -24422,7 +24473,7 @@ function fblMotoreApri(reg, sig, rowsTf, k){
   if(!(rischio>0) || (d===1 ? !(stop<entry) : !(stop>entry))) return false;
   const tp=entry+d*rischio*reg.obiettivoR;
   let lotti=0.01;
-  try{ const l=scalettaLotto(entry, stop, {assoluto:fblMotoreRischio()}); lotti=Math.max(0.01, Number(l&&l.lotti)||0.01); }catch(e){}
+  try{ const l=scalettaLotto(entry, stop, {assoluto:fblRischio(reg.id, fblTipoConto()==='reale')}); lotti=Math.max(0.01, Number(l&&l.lotti)||0.01); }catch(e){}
   const op={nome:reg.id, indicatore:reg.id, setupId:reg.id+'-'+rowsTf[k].date, dir:d, entry, sl:stop, tp};
   const chiave=[asset,'motore',reg.id,rowsTf[k].date,d].join('|');
   const meta={bosAuto:true, bosSetupId:op.setupId, bosNome:reg.id, origin:'MOTORE_AUTO',
@@ -24453,11 +24504,15 @@ function fblMotoreBreakEven(){
 // Un giro del motore: si chiama quando chiude una candela a 1 minuto. `forza` serve ai test.
 function fblMotoreAutoGiro(forza){
   try{
-    const accese=FBL_MOTORE_REGOLE.filter(reg=>fblMotoreAcceso(reg.id));
+    // Demo: l'interruttore demo della regola. Reale: il suo interruttore REALE (vedi
+    // fblPuoAprireSulConto). Se il tipo di conto non si sa, non si apre niente.
+    const tipo=fblTipoConto();
+    if(!tipo) return;
+    const accese=FBL_MOTORE_REGOLE.filter(reg=>tipo==='demo' ? fblMotoreAcceso(reg.id) : fblRealePermesso(reg.id));
     if(!accese.length) return;
     if(!liveModeActive || liveReplayActive) return;
     if(currentAssetKey!=='XAUUSD') return;
-    if(!mt5Connected || !mt5AccountInfo || mt5AccountInfo.reale!==false) return;
+    if(!mt5Connected) return;
     if(!baseRows||baseRows.length<50) return;
     const ultima=baseRows[baseRows.length-1].date;
     if(!forza && ultima===fblMotoreUltimaBase) return;
@@ -24491,31 +24546,80 @@ function fblMotoreAutoGiro(forza){
 }
 setInterval(()=>{ try{ fblMotoreAutoGiro(false); }catch(e){} }, 3000);
 
-// La sezione nelle impostazioni dell'indicatore: un interruttore per ogni regola che lo usa.
+// IL RISCHIO PER OPERAZIONE, per indicatore/regola e per tipo di conto (27 novembre 2026).
+// Richiesta del proprietario: «le impostazioni del rischio devono esserci all'interno di ogni
+// pannello dell'indicatore, con la possibilita' di modificarlo a piacimento». Per difetto 0,5% in
+// demo e 0,25% sul reale; accettato fra 0,01% e 5%: oltre, un errore di battitura (50 invece di
+// 0,5) aprirebbe una posizione cento volte piu' grande.
+const FBL_RISCHIO_MIN=0.01, FBL_RISCHIO_MAX=5;
+function fblRischio(id, reale){
+  const v=Number(fblMotoreConfig()[id+(reale?'#rischioReale':'#rischio')]);
+  if(Number.isFinite(v)&&v>=FBL_RISCHIO_MIN&&v<=FBL_RISCHIO_MAX) return v;
+  return reale ? FBL_REALE_RISCHIO : fblMotoreRischio();
+}
+function fblImpostaRischio(id, reale, valore){
+  const v=Number(String(valore).replace(',','.'));
+  if(!(Number.isFinite(v)&&v>=FBL_RISCHIO_MIN&&v<=FBL_RISCHIO_MAX)) return false;
+  const c=fblMotoreConfig(); c[id+(reale?'#rischioReale':'#rischio')]=v; fblMotoreSalvaConfig(c); return true;
+}
+
+// La sezione nelle impostazioni dell'indicatore: per ogni regola (o per il pull back e il No-Wick)
+// l'interruttore demo, il rischio demo, l'interruttore REALE con conferma e il rischio reale.
 function fblMotoreAutoSezione(ind, body){
   const regole=FBL_MOTORE_REGOLE.filter(reg=>reg.key===ind.key);
-  if(!regole.length) return;
+  // Pull back e No-Wick: l'interruttore demo e il rischio demo stanno gia' nel loro pannello
+  // (autoOpenDemo, rischioOperazione); qui si aggiunge solo il conto reale.
+  const propri={valid_bos_pullback:{id:'pullback', nome:'Valid BOS Pullback'}, no_wick_retest:{id:'nowick', nome:'No-Wick Retest Levels'}}[ind.key];
+  if(!regole.length && !propri) return;
   const box=document.createElement('div');
   box.className='indSettingsRow';
   box.style.cssText='flex-direction:column;align-items:flex-start;gap:6px;margin-top:10px;padding-top:8px;border-top:1px solid #2a3442';
   const tit=document.createElement('div');
   tit.style.cssText='color:#cfe0f5;font-weight:600;font-size:12px';
-  tit.textContent='Apertura automatica in sottofondo (solo conto demo, solo XAUUSD)';
+  tit.textContent=propri ? 'Apertura automatica sul conto REALE' : 'Apertura automatica in sottofondo (solo XAUUSD)';
   box.appendChild(tit);
   const nota=document.createElement('div');
-  nota.style.cssText='color:#93a1b3;font-size:11px;max-width:520px';
-  nota.textContent='Calcola da sola sul suo timeframe, qualunque grafico tu stia guardando, e manda l\'ordine vero al conto demo MT5. Rischio per operazione: '+fblMotoreRischio()+'% del saldo.';
+  nota.style.cssText='color:#93a1b3;font-size:11px;max-width:560px';
+  nota.textContent=(propri?'':'Calcola da sola sul suo timeframe, qualunque grafico tu stia guardando, e manda l\'ordine vero al conto MT5 collegato. ')+
+    'Sul conto REALE: al massimo '+FBL_REALE_MAX_APERTE+' posizioni automatiche aperte insieme, e dopo '+FBL_REALE_MAX_PERDITE_GIORNO+' chiuse in perdita nello stesso giorno si ferma fino a domani.';
   box.appendChild(nota);
-  for(const reg of regole){
+  const casella=(chiave, testo, reale)=>{
     const lbl=document.createElement('label');
-    lbl.style.cssText='display:flex;align-items:center;gap:6px;color:#93a1b3';
-    const inp=document.createElement('input'); inp.type='checkbox'; inp.checked=fblMotoreAcceso(reg.id);
-    inp.dataset.motoreRegola=reg.id;
-    inp.addEventListener('change',()=>{ const c=fblMotoreConfig(); c[reg.id]=inp.checked; fblMotoreSalvaConfig(c); });
-    const be=reg.be ? (' · a +'+reg.be[0]+' R lo stop va a +'+reg.be[1]+' R') : ' · senza break-even';
+    lbl.style.cssText='display:flex;align-items:center;gap:6px;color:'+(reale?'#f0a070':'#93a1b3');
+    const inp=document.createElement('input'); inp.type='checkbox'; inp.checked=fblMotoreConfig()[chiave]===true;
+    inp.dataset.motoreRegola=chiave;
+    inp.addEventListener('change', async ()=>{
+      if(reale && inp.checked){
+        let ok=false;
+        try{ ok=await appConfirm('Accendi l\'apertura automatica sul conto REALE?\n\n'+testo+'\n\nL\'app aprira\' ordini con DENARO VERO senza chiederti conferma. Le regole non sono dimostrate redditizie: le prove fuori campione hanno dato risultati alterni.'); }catch(e){ ok=false; }
+        if(!ok){ inp.checked=false; return; }
+      }
+      const c=fblMotoreConfig(); c[chiave]=inp.checked; fblMotoreSalvaConfig(c);
+    });
+    lbl.appendChild(inp); lbl.append(' '+testo);
+    return lbl;
+  };
+  const campoRischio=(id, reale)=>{
+    const lbl=document.createElement('label');
+    lbl.style.cssText='display:inline-flex;align-items:center;gap:4px;color:#93a1b3;margin-left:22px';
+    lbl.append((reale?'Rischio sul REALE':'Rischio in demo')+' (% del saldo) ');
+    const inp=document.createElement('input'); inp.type='number'; inp.min=FBL_RISCHIO_MIN; inp.max=FBL_RISCHIO_MAX; inp.step='0.05';
+    inp.value=fblRischio(id, reale); inp.style.width='60px'; inp.dataset.rischio=id+(reale?'@reale':'');
+    inp.addEventListener('change',()=>{ if(!fblImpostaRischio(id, reale, inp.value)) inp.value=fblRischio(id, reale); });
     lbl.appendChild(inp);
-    lbl.append(' '+reg.nome+' — '+reg.tf+' minuti · obiettivo 1:'+reg.obiettivoR+be+' · verifica: '+reg.verifica);
-    box.appendChild(lbl);
+    return lbl;
+  };
+  if(propri){
+    box.appendChild(casella(propri.id+'@reale', propri.nome+' — anche sul conto REALE', true));
+    box.appendChild(campoRischio(propri.id, true));
+  }
+  for(const reg of regole){
+    const be=reg.be ? (' · a +'+reg.be[0]+' R lo stop va a +'+reg.be[1]+' R') : ' · senza break-even';
+    const testo=reg.nome+' — '+reg.tf+' minuti · obiettivo 1:'+reg.obiettivoR+be+' · verifica: '+reg.verifica;
+    box.appendChild(casella(reg.id, testo+' (demo)', false));
+    box.appendChild(campoRischio(reg.id, false));
+    box.appendChild(casella(reg.id+'@reale', reg.nome+' — anche sul conto REALE', true));
+    box.appendChild(campoRischio(reg.id, true));
   }
   body.appendChild(box);
 }

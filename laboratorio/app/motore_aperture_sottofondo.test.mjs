@@ -148,14 +148,120 @@ test('gli interruttori compaiono nelle impostazioni dell indicatore, spenti, e r
       fblMotoreAutoSezione({key: 'complex_hs'}, body);
       const caselle = Array.from(body.querySelectorAll('input[type=checkbox]'));
       const spente = caselle.every(c => !c.checked);
-      caselle[1].checked = true; caselle[1].dispatchEvent(new Event('change'));
+      const retest = caselle.find(c => c.dataset.motoreRegola === 'hs_retest');
+      retest.checked = true; retest.dispatchEvent(new Event('change'));
       return {quante: caselle.length, spente, regole: caselle.map(c => c.dataset.motoreRegola),
+              rischi: Array.from(body.querySelectorAll('input[type=number]')).map(c => [c.dataset.rischio, Number(c.value)]),
               salvato: fblMotoreAcceso('hs_retest'), altro: fblMotoreAcceso('hs')};
     })()`);
-    assert.equal(r.quante, 2, 'Complex H&S ha due regole: alla rottura e sul retest');
-    assert.equal(r.spente, true, 'per difetto spente');
-    assert.deepEqual(r.regole, ['hs', 'hs_retest']);
+    assert.equal(r.quante, 4, 'Complex H&S: due regole, ognuna con demo e reale');
+    assert.equal(r.spente, true, 'per difetto tutte spente, reale compreso');
+    assert.deepEqual(r.regole, ['hs', 'hs@reale', 'hs_retest', 'hs_retest@reale']);
+    assert.deepEqual(r.rischi, [['hs', 0.5], ['hs@reale', 0.25], ['hs_retest', 0.5], ['hs_retest@reale', 0.25]],
+      'il rischio sta nel pannello: 0,5% demo e 0,25% reale per difetto');
     assert.equal(r.salvato, true); assert.equal(r.altro, false);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// ------------------------------------------------------------------ IL CONTO REALE
+// Richiesta del proprietario (27 novembre 2026): «rendili attivabili anche per i conti reali»,
+// «tutti gli indicatori in reale», e il rischio «all'interno di ogni pannello dell'indicatore».
+
+test('REALE: senza il suo interruttore non apre (nemmeno se la demo e accesa); con, apre al rischio del reale', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(async () => { ${PREPARA}
+      mt5AccountInfo.reale = true;
+      fblMotoreSalvaConfig({__finto: true});                       // solo la demo
+      fblMotoreAutoGiro(true);
+      const senza = __ordini.length;
+      for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
+      fblMotoreSalvaConfig({'__finto@reale': true, '__finto#rischio': 1, '__finto#rischioReale': 0.25});
+      fblMotoreAutoGiro(true);
+      await new Promise(res => setTimeout(res, 0));
+      const o = __ordini[0] || null;
+      // il lotto atteso per 0,25% del saldo con quello stop
+      const atteso = o ? scalettaLotto(positions[0].entry, o.sl, {assoluto: 0.25}).lotti : null;
+      return {senza, ordini: __ordini.length, reale: o && o.meta.autoContoReale, lotti: o && o.lots, atteso};
+    })()`);
+    assert.equal(r.senza, 0, 'sul reale serve l interruttore reale, quello demo non basta');
+    assert.equal(r.ordini, 1);
+    assert.equal(r.reale, true, 'la posizione e segnata come aperta sul reale');
+    assert.ok(r.lotti <= r.atteso + 1e-9, 'il lotto non supera il rischio impostato per il reale: ' + JSON.stringify(r));
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('REALE: conto di tipo sconosciuto, due posizioni gia aperte, tre perdite oggi: non apre', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(async () => { ${PREPARA}
+      fblMotoreSalvaConfig({'__finto@reale': true});
+      const prova = (fn) => { __ordini.length = 0; positions.length = 0; trades.length = 0;
+        for (const k of Object.keys(fblMotoreStati)) delete fblMotoreStati[k];
+        fblAutoApertureFatte = null; localStorage.removeItem('fbl_auto_aperture');
+        mt5AccountInfo.reale = true; fn(); fblMotoreAutoGiro(true); return __ordini.length; };
+      const oggi = new Date().toISOString();
+      return {
+        sconosciuto: prova(() => { mt5AccountInfo.reale = null; }),
+        dueAperte: prova(() => { positions.push({autoContoReale: true, mt5Ticket: 1}, {autoContoReale: true, mt5Ticket: 2}); }),
+        trePerdite: prova(() => { for (let i = 0; i < 3; i++) trades.push({autoContoReale: true, pl: -10, closedAt: oggi}); }),
+        perditeIeri: prova(() => { for (let i = 0; i < 3; i++) trades.push({autoContoReale: true, pl: -10, closedAt: new Date(Date.now() - 86400000 * 2).toISOString()}); }),
+        normale: prova(() => {})
+      };
+    })()`);
+    assert.equal(r.sconosciuto, 0, 'se non si sa che conto e, non si apre');
+    assert.equal(r.dueAperte, 0, 'al massimo due posizioni automatiche insieme sul reale');
+    assert.equal(r.trePerdite, 0, 'tre perdite oggi: fermo fino a domani');
+    assert.equal(r.perditeIeri, 1, 'le perdite dei giorni prima non contano');
+    assert.equal(r.normale, 1, 'CONTROPROVA');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('REALE: anche il pull back apre sul reale col suo interruttore, anche con la demo spenta', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(async () => { ${PREPARA}
+      mt5AccountInfo.reale = true; rows = baseRows; idx = rows.length - 1;
+      const i = fblIdxPerIndicatori(), prezzo = rows[rows.length - 1].close;
+      const st = () => ({ops: [{nome: 'pullback', setupId: 's1', barra: i, dir: 1, entry: prezzo, sl: prezzo - 3, tp: prezzo + 6, lotto: 0.1}]});
+      bosAutoApriOpsSetup(st(), {autoOpenDemo: false}, 's1', i);
+      const senza = __ordini.length;
+      fblMotoreSalvaConfig({'pullback@reale': true});
+      bosAutoApriOpsSetup(st(), {autoOpenDemo: false}, 's1', i);
+      return {senza, con: __ordini.length};
+    })()`);
+    assert.equal(r.senza, 0);
+    assert.equal(r.con, 1);
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+test('REALE: accendere l interruttore chiede conferma; il rischio fuori misura non si accetta', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(async () => {
+      localStorage.removeItem('fbl_motore_auto');
+      let domande = 0; appConfirm = async () => { domande++; return false; };   // risponde NO
+      const body = document.createElement('div');
+      fblMotoreAutoSezione({key: 'triangles'}, body);
+      const reale = body.querySelector('input[data-motore-regola="triangoli@reale"]');
+      reale.checked = true; reale.dispatchEvent(new Event('change'));
+      await new Promise(res => setTimeout(res, 0));
+      const rischio = body.querySelector('input[data-rischio="triangoli@reale"]');
+      rischio.value = '50'; rischio.dispatchEvent(new Event('change'));
+      const dopoErrore = Number(rischio.value);
+      // (un campo numerico in un browser in inglese svuota "1,5" prima che l'app lo legga; in
+      // italiano la virgola la converte il browser stesso: qui si scrive come lo riceve l'app)
+      rischio.value = '1.5'; rischio.dispatchEvent(new Event('change'));
+      return {domande, acceso: fblRealePermesso('triangoli'), spuntato: reale.checked, dopoErrore, salvato: fblRischio('triangoli', true)};
+    })()`);
+    assert.equal(r.domande, 1, 'accendere il reale chiede conferma');
+    assert.equal(r.acceso, false); assert.equal(r.spuntato, false, 'detto NO, resta spento');
+    assert.equal(r.dopoErrore, 0.25, 'un rischio del 50% non si accetta: torna il valore di prima');
+    assert.equal(r.salvato, 1.5, 'un rischio sensato si salva');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
