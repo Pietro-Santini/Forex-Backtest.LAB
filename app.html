@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.125';
+const FBL_VERSIONE='2.2.126';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -20083,7 +20083,7 @@ function nowickEma(values, len) {
 // domanda e' gia' costato due giorni di diagnosi (cervello/BUG.md): qui non si ripete.
 function noWickAutoApri(st, p, t, i) {
   try {
-    if (!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, 'nowick')) return;
+    if (!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, 'nowick') && !bosPuoAutoAprireStorico(p)) return;
     const setupId = 'nowick-' + i + '-' + (t.dir === 1 ? 'L' : 'S');
     if (st._autoFatti && st._autoFatti[setupId]) return;
     if (!st._autoFatti) st._autoFatti = {};
@@ -21925,6 +21925,18 @@ function bosPuoAutoAprireDemo(p){
     return true;
   }catch(e){ return false; }
 }
+// APERTURA AUTOMATICA NEL CONTO STORICO (backtest CSV). 28 novembre 2026.
+// Nel replay della modalita' storico non c'e' nessun conto MT5 da interrogare e nessun ordine da
+// mandare: l'indicatore apre una posizione SIMULATA nel conto storico, come se il file CSV fosse
+// la storia vera del conto. La chiusura la fa evaluate() a stop/obiettivo, e il Journal la
+// registra con mode 'backtest'. Il permesso e' lo stesso interruttore demo (`autoOpenDemo`).
+function bosPuoAutoAprireStorico(p){
+  try{
+    if(!p || !p.autoOpenDemo) return false;
+    if(liveModeActive || liveReplayActive) return false;
+    return true;
+  }catch(e){ return false; }
+}
 function bosPosAuto(op){
   try{
     if(!op || !op.autoPosId) return null;
@@ -22099,7 +22111,7 @@ function fblAutoInviaOrdineDemo(p, asset, op, o){
 function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
     const _idInd=(st&&st.ops&&st.ops[0]&&st.ops[0].indicatore)||'pullback';
-    if(!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, _idInd)) return;
+    if(!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, _idInd) && !bosPuoAutoAprireStorico(p)) return;
     if(st && st._rebuilding) return;
     if(liveReplayActive){
       if(!bosPuoAutoAprireDemo(p)) return;     // in replay solo posizioni simulate, col permesso demo
@@ -22131,6 +22143,29 @@ function bosAutoApriOpsSetup(st, p, setupId, i){
       if(typeof freeMargin==='function' && requiredMargin>freeMargin()+1e-9) continue;
       const dup=positions.some(pos=>pos && pos.bosAuto && pos.bosSetupId===op.setupId && pos.bosNome===op.nome && pos.asset===asset);
       if(dup) continue;
+      // --- STORICO (CSV): posizione SIMULATA sul conto storico, MAI su MT5 ---
+      // Vale qualunque sia lo stato di MT5: in backtest il conto e' quello dei CSV, e un ordine
+      // vero qui sarebbe denaro mosso da una simulazione. Per questo il ramo viene PRIMA di
+      // fblAutoInviaOrdineDemo/placeRealMt5Order.
+      if(bosPuoAutoAprireStorico(p)){
+        const _barTime=parseDateTime((rows[idx]||rows[i]||{}).date);
+        const pos={
+          id:Date.now()+Math.random(),
+          asset, side:dir, entry, sl, tp:Number.isFinite(tp)?tp:null, origin:'BOS_AUTO',
+          lots, risk:0, dist:0, hasRiskModel:false,
+          start:idx, startTime:_barTime, realOpenAt:null,
+          openTF:currentTF, marginUsed:requiredMargin,
+          historical:false, backtest:true, bosStorico:true,
+          rrSl:sl, slIniziale:sl,
+          bosAuto:true, bosSetupId:op.setupId, bosNome:op.nome
+        };
+        fblAggiungiPosizione(pos);
+        active=pos;
+        try{ refreshTradeRiskModel(); syncTradeLevels(); refreshTradeLevelUI(); }catch(e){}
+        op.autoPosId=pos.id;
+        try{ $('status').textContent='BOS auto (storico): '+dir+' '+asset+' aperta.'; }catch(e){}
+        continue;
+      }
       // --- DIRETTA: ordine VERO su MT5 demo, con le quattro guardie ---
       if(!liveReplayActive){
         fblAutoInviaOrdineDemo(p, asset, op, {entry, sl, tp, lots, chiave: fblAutoAperturaChiave(asset, op, i),
@@ -24794,6 +24829,158 @@ async function fblMotoreAutoGiro(forza){
   finally{ fblMotoreInCorso=false; }
 }
 setInterval(()=>{ try{ fblMotoreAutoGiro(false); }catch(e){} }, 3000);
+
+// =====================================================================================
+// APERTURE AUTOMATICHE NEL REPLAY IN MODALITA' STORICO (backtest CSV) — 28 novembre 2026.
+//
+// RICHIESTA DEL PROPRIETARIO: «vedere nel replay come gli indicatori aprono e chiudono le
+// posizioni; le posizioni devono andare a finire sul conto storico e non sul conto capital.com o
+// mt5 in live ... associa lo stesso identico conto storico che utilizzo per i file CSV».
+//
+// MISURATO PRIMA DELLA CURA: in Storico nessuno apriva. Il giro del motore qui sopra si fermava
+// su «non sei in diretta» e prendeva le candele da MT5 (una fonte che il conto storico non ha).
+//
+// COME FUNZIONA, e perche' cosi':
+//  - si lega al PASSO del replay: `fblMotoreGiroStorico()` viene chiamata da forward(), una volta
+//    per candela. Niente orologio vero: in un backtest il tempo lo decide il grafico;
+//  - candele dai CSV, non da MT5: `baseRows` aggregate al timeframe della regola e TAGLIATE al
+//    punto mostrato (`masterTime`). Una candela conta solo se il suo bucket e' finito entro quel
+//    punto: nessun segnale dal futuro;
+//  - le posizioni nascono SIMULATE, direttamente in `positions` (il conto storico): non passano
+//    MAI da fblAutoInviaOrdineDemo/placeRealMt5Order, nemmeno con MT5 collegato. `backtest:true`
+//    le rende del backtest come quelle aperte a mano su un CSV;
+//  - chiusure: le fa evaluate()/closeTrade() come per ogni posizione simulata, e finiscono nel
+//    Journal con mode 'backtest' (pos.historical resta false: non e' un replay del Live);
+//  - STATO SEPARATO dal Live: `fblMotoreStatiS` e nessuna scrittura di ombre, registro o
+//    sospensioni (quelle chiavi sono del Live e il backtest non deve sporcarle).
+// =====================================================================================
+const FBL_MOTORE_STORICO_CANDELE=3000;
+const fblMotoreStatiS={};        // per regola: stato del calcolo in Storico (mai condiviso col Live)
+function fblMotorePuoiAprireStorico(){ return !liveModeActive && !liveReplayActive; }
+function fblMotoreStatoStorico(reg){
+  let s=fblMotoreStatiS[reg.id];
+  if(!s){
+    const def=INDICATOR_DEFS[reg.key];
+    const params=(def&&typeof def.defaultParams==='function')?def.defaultParams():{};
+    if(reg.key==='sweeps_ifvg'){ params.showIfvg=true; params.maxIfvgDisplay=200; }
+    if(reg.params) Object.assign(params,reg.params);
+    s=fblMotoreStatiS[reg.id]={ind:{key:reg.key, params, calc:{}, hidden:false}, fatte:-1, dataFatte:null, dataInizio:null, firme:new Set(), attese:[], n:0};
+  }
+  return s;
+}
+// Le candele del timeframe di una regola, dai CSV, SOLO fino al punto mostrato.
+function fblMotoreSerieStorico(tf){
+  try{
+    if(!baseRows||!baseRows.length) return [];
+    const minuti=Math.max(1,Number(tf)||1);
+    const agg=getFullAgg(minuti);
+    if(!agg||!agg.length) return [];
+    const limite=Number.isFinite(masterTime)?masterTime:Infinity;
+    const out=[];
+    for(const r of agg){
+      const t=Number.isFinite(r.tClose)?r.tClose:parseDateTime(r.date);
+      if(!Number.isFinite(t)) continue;
+      const fine=fblFineBucket(fblInizioBucket(t,minuti),minuti);
+      if(Number.isFinite(fine) && fine>limite+60000) break;    // il futuro non si tocca
+      out.push(r);
+    }
+    return out;
+  }catch(e){ return []; }
+}
+function fblMotoreApriStorico(reg, sig, rowsTf, k){
+  try{
+    const asset=currentAssetKey||'';
+    const r=rowsTf[k];
+    if(!asset||!r) return false;
+    const entry=Number(r.close), stop=Number(sig.stop), d=sig.dir;
+    const rischio=Math.abs(entry-stop);
+    if(!(rischio>0)) return false;
+    if(d===1 ? !(stop<entry) : !(stop>entry)) return false;
+    const tp=entry+d*rischio*reg.obiettivoR;
+    const setupId=reg.id+'-'+r.date;
+    if(positions.some(p=>p&&p.motoreStorico&&p.bosSetupId===setupId&&p.asset===asset)) return false;
+    let lotti=0.01;
+    try{ const l=scalettaLotto(entry,stop,{assoluto:fblRischio(reg.id,false)}); lotti=Math.max(0.01,Number(l&&l.lotti)||0.01); }catch(e){}
+    const requiredMargin=(typeof marginForLots==='function')?marginForLots(lotti,entry):0;
+    if(typeof freeMargin==='function' && requiredMargin>freeMargin()+1e-9) return false;
+    const t=Number.isFinite(r.tClose)?r.tClose:parseDateTime(r.date);
+    const pos={
+      id:Date.now()+Math.random(),
+      asset, side:d===1?'BUY':'SELL', entry, sl:stop, tp,
+      origin:'MOTORE_AUTO', lots:lotti, risk:0, dist:0, hasRiskModel:false,
+      start:idx, startTime:t, realOpenAt:null, openTF:reg.tf, marginUsed:requiredMargin,
+      historical:false, backtest:true, motoreStorico:true,
+      rrSl:stop, slIniziale:stop,
+      autoTF:reg.tf, autoBe:reg.be||null, autoBeFatto:false,
+      autoRischio:rischio, autoBarra:r.date,
+      bosAuto:true, bosSetupId:setupId, bosNome:reg.id
+    };
+    fblAggiungiPosizione(pos);
+    return true;
+  }catch(e){ return false; }
+}
+// Un giro del motore nel conto storico, sul punto MOSTRATO dal replay.
+function fblMotoreGiroStorico(){
+  if(!fblMotorePuoiAprireStorico()) return;
+  if(!rows||!rows.length||!baseRows||!baseRows.length) return;
+  const regole=FBL_MOTORE_REGOLE.filter(reg=>!reg.soloOsserva && fblMotoreAcceso(reg.id));
+  if(!regole.length) return;
+  let nSegnali=0, nAperte=0;
+  for(const reg of regole){
+    const def=INDICATOR_DEFS[reg.key];
+    if(!def||typeof def.compute!=='function') continue;
+    let rowsTf=fblMotoreSerieStorico(reg.tf);
+    if(rowsTf.length<31) continue;
+    const s=fblMotoreStatoStorico(reg);
+    // Una finestra, non tutto il CSV: su un file da centinaia di migliaia di candele il primo
+    // calcolo bloccherebbe la pagina. Il taglio e' ANCORATO a una data, quindi la finestra non
+    // scorre (s.fatte resterebbe valido) e cresce solo in fondo col replay.
+    if(!s.dataInizio && rowsTf.length>FBL_MOTORE_STORICO_CANDELE){
+      s.dataInizio=rowsTf[rowsTf.length-FBL_MOTORE_STORICO_CANDELE].date;
+    }
+    if(s.dataInizio){
+      const tInizio=Date.parse(s.dataInizio);
+      const tUltima=Date.parse(rowsTf[rowsTf.length-1].date);
+      if(Number.isFinite(tInizio) && Number.isFinite(tUltima) && tUltima<tInizio){
+        // Replay riavvolto PRIMA dell'inizio della finestra: si riparte da capo.
+        s.dataInizio=null; s.fatte=-1; s.ind.calc={}; s.firme=new Set(); s.attese=[];
+      }else{
+        let da=0;
+        while(da<rowsTf.length && Date.parse(rowsTf[da].date)<tInizio) da++;
+        if(da>0) rowsTf=rowsTf.slice(da);
+      }
+    }
+    if(rowsTf.length<31) continue;
+    const K=rowsTf.length-1;
+    // Serie cambiata sotto i piedi (replay riavvolto, altro CSV): si riparte da capo.
+    if(s.fatte>=0 && (!rowsTf[s.fatte] || rowsTf[s.fatte].date!==s.dataFatte)){
+      s.fatte=-1; s.ind.calc={}; s.firme=new Set(); s.attese=[];
+    }
+    const atr=(typeof sweepsAtr==='function')?sweepsAtr(rowsTf,14):[];
+    if(s.fatte<0){
+      // Primo giro su questo punto: si calcola fino alla candela prima e i segnali passati si
+      // segnano come gia' visti, cosi' non si apre su un segnale vecchio.
+      s.ind.calc={}; s.firme=new Set(); s.attese=[];
+      def.compute(rowsTf,K-1,s.ind);
+      for(let j=0;j<K;j++){ try{ fblMotoreSegnale(reg,s,rowsTf,j,atr); }catch(e){} }
+      s.attese=[];
+      s.fatte=K-1;
+      s.dataFatte=rowsTf[K-1]?rowsTf[K-1].date:null;
+    }
+    for(let k=s.fatte+1;k<=K;k++){
+      def.compute(rowsTf,k,s.ind);
+      const segnali=fblMotoreSegnale(reg,s,rowsTf,k,atr);
+      s.fatte=k; s.dataFatte=rowsTf[k].date;
+      if(k!==K) continue;                       // si apre solo sull'ultima candela chiusa
+      for(const sig of segnali){
+        nSegnali++;
+        if(!fblMotoreFiltroOk(reg,sig,rowsTf,k)) continue;
+        if(fblMotoreApriStorico(reg,sig,rowsTf,k)) nAperte++;
+      }
+    }
+  }
+  fblMotoreUltimoGiro={t:Date.now(), testo:'storico: '+regole.length+' regole calcolate, '+nSegnali+' segnali, '+nAperte+' posizioni aperte sul conto storico'};
+}
 
 // IL RISCHIO PER OPERAZIONE, per indicatore/regola e per tipo di conto (27 novembre 2026).
 // Richiesta del proprietario: «le impostazioni del rischio devono esserci all'interno di ogni
@@ -34172,6 +34359,8 @@ function forward(silenzioso){
      }
    }
    evaluate();checkPendingOrders();
+   // In Storico il motore in sottofondo avanza col PASSO del replay, non con l'orologio vero.
+   if(!liveModeActive && !liveReplayActive){ try{ fblMotoreGiroStorico(); }catch(e){} }
  }
  // Se stiamo seguendo l'ultima candela la vista avanza con il replay; se l'utente ha
  // spostato manualmente il grafico altrove (followLatest=false) restiamo dove si trova,

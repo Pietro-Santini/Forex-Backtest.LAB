@@ -1,5 +1,14 @@
 # DIARIO
 
+## 2026-11-28
+- v2.2.126: aperture automatiche nel replay in modalità Storico (file CSV). Il motore gira sul passo
+  del replay (`forward()`) e usa le candele dei CSV tagliate al punto mostrato; le posizioni nascono
+  simulate sul conto storico (`backtest:true`, nessun ticket MT5, zero `placeRealMt5Order`), e le
+  chiusure a stop/obiettivo vanno nel Journal con `mode:'backtest'`. Stesso ramo sicuro per pull back
+  e No-Wick. Stato del motore in Storico separato da quello Live. Banco nuovo
+  `laboratorio/app/storico_aperture_automatiche.test.mjs`: prima 4 rossi su 5, poi 5/5 verdi.
+  Collaudo locale verde (1863 test browser, 0 falliti); revisione indipendente senza problemi.
+
 ## 2026-11-24
 - v2.2.114: BOS auto-open sincronizza TP/SL/BE/chiusura da st.ops alle posizioni reali (autoPosId). Implementato beTp1. Tocco valid pullback rilevato intra-bar in replay/live (BOS rievaluta barra in formazione senza avanzare builtTo, guardie anti-duplicato). Trade replay chiusi salvano realCloseAt e Journal lo mostra.
 
