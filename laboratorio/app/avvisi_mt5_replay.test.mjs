@@ -69,6 +69,11 @@ test('in modalità backtest una posizione MT5 che si apre in background fa comun
     // Seconda fotografia: una posizione nuova sul conto. L'app NON la adotta (modalità backtest),
     // ma il suono deve partire lo stesso.
     await pagina.evaluate(giro([APERTA]));
+    // Corsa misurata (28 novembre 2026): il suono passa da navigator.locks e arriva
+    // con 0,4-1,3 ms di ritardo. Leggere __suoni in una evaluate separata poteva
+    // prendere 0 anche quando il suono era partito (4 banchi rossi su 110): non e'
+    // un difetto dell'app, ma due istanti diversi. Si aspetta prima di leggere.
+    await pagina.waitForFunction(() => window.__suoni === 1, null, {timeout:2000});
     const dopoApertura = await pagina.evaluate('window.__suoni');
     const adottata = await pagina.evaluate('positions.length');
     assert.deepEqual(errori, [], 'la pagina non deve avere errori JS');

@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (terza)
+- v2.2.128: il collaudo GitHub della 2.2.127 era rosso su `avvisi_mt5_replay.test.mjs` (suono
+  atteso 1, letto 0), mentre quello locale era verde. Misurato: il suono arriva in 110/110 prove;
+  4 rossi su 110 erano una corsa del banco, che leggeva `__suoni` in una `evaluate` separata circa
+  1 ms prima che il callback di `navigator.locks` lo incrementasse. Non è un difetto dell'app:
+  coperto il banco con `waitForFunction`, 10/10 esecuzioni verdi. Lezione già pagata: due letture
+  in due chiamate separate non misurano lo stesso istante.
+
 ## 2026-11-28 (seconda)
 - v2.2.127: profili volumetrici con la forma giusta a ogni timeframe. Misurato: 10 profili su 10
   dei giorni 23-27 novembre usavano i minuti del 20 (prezzo 1899 contro 2039 del 27), perché la
