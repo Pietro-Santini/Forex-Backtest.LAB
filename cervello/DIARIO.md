@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (sesta)
+- Strumento di controllo sintassi: `laboratorio/strumenti/sintassi_app.mjs` compilava solo 5 dei 6
+  blocchi `<script>` di app.html (escludeva il modulo ES a riga 1169). Ora li copre tutti: il modulo
+  si valida con `node --check` su un file temporaneo, senza eseguire gli import. Banco
+  `sintassi_app_tutti_blocchi.test.mjs` inietta un `const rotto;` nel modulo su una copia e verifica
+  che lo strumento lo intercetti; prima diceva `5 script`, ora `6 script, 0 errori`. Nessun cambio
+  ad app.html: non serve alzare il CACHE_NAME.
+
 ## 2026-11-28 (quinta)
 - v2.2.130: costo vero di esecuzione del bot. Misurato con ponte finto: segnale 2000/1990, MT5
   esegue a 2000,30 e stop a 1989,60; Journal già corretto (pl −107), ombra intenzionalmente del
