@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.131';
+const FBL_VERSIONE='2.2.132';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -24630,11 +24630,32 @@ function fblMotoreLeggi(chiave){ try{ const a=JSON.parse(localStorage.getItem(ch
 function fblMotoreScrivi(chiave, a, tetto){ try{ localStorage.setItem(chiave, JSON.stringify(a.slice(-tetto))); }catch(e){} }
 function fblMotoreRegistra(voce){
   const a=fblMotoreLeggi(FBL_MOTORE_REGISTRO_CHIAVE);
+  if(voce&&voce.ombraId){
+    const i=a.findIndex(v=>v&&v.ombraId===voce.ombraId);
+    if(i>=0){
+      // Ripartenza della serie: e' lo stesso segnale, non si accoda una voce doppia. Si aggiorna
+      // solo un esito finale gia' chiuso: il placeholder vergine non deve cancellare la chiusura.
+      const ef=voce.esitoFinale;
+      if(ef&&ef.uscita) a[i].esitoFinale=ef;
+      fblMotoreScrivi(FBL_MOTORE_REGISTRO_CHIAVE, a, 500);
+      return;
+    }
+  }
   a.push(Object.assign({t:new Date().toISOString()}, voce));
   fblMotoreScrivi(FBL_MOTORE_REGISTRO_CHIAVE, a, 500);
 }
 function fblMotoreRegistroDi(id){ return fblMotoreLeggi(FBL_MOTORE_REGISTRO_CHIAVE).filter(v=>v&&v.regola===id); }
 function fblMotoreOmbraDi(id){ return fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE).filter(o=>o&&o.regola===id); }
+// Foto del segnale per il trade journal (§3.4.5): contesto di mercato e gestione prevista.
+// Stessi valori per aperture, osservazioni e segnali filtrati: e' il segnale, non l'esecuzione.
+function fblMotoreContestoGestione(reg, sig, rowsTf, k){
+  const r=rowsTf[k]||{}, entry=Number(r.close), stop=Number(sig.stop), rischio=Math.abs(entry-stop);
+  let atrOra=null;
+  try{ if(typeof sweepsAtr==='function'){ const a=sweepsAtr(rowsTf,14)[k]; if(Number.isFinite(a)) atrOra=a; } }catch(e){}
+  return {contesto:{atr:atrOra, open:Number(r.open), high:Number(r.high), low:Number(r.low), close:entry,
+                    rischio, obiettivoR:reg.obiettivoR, be:reg.be||null},
+          gestione:{stopOra:stop, be:reg.be||null, beFatto:false}};
+}
 // Un segnale sull'ultima candela chiusa: ombra sempre, ordine solo se la regola apre su questo conto.
 function fblMotoreDecidi(reg, sig, rowsTf, k, apre){
   // L'interruttore di emergenza vale anche se un chiamante passa `apre=true`: l'osservazione
@@ -24642,14 +24663,17 @@ function fblMotoreDecidi(reg, sig, rowsTf, k, apre){
   const puoAprire=apre && !fblAutoEmergenzaAttiva();
   const entry=Number(rowsTf[k].close), stop=Number(sig.stop), d=sig.dir;
   const rischio=Math.abs(entry-stop);
-  const base={regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:d, entry, stop};
+  const idOmbra=reg.id+'|'+rowsTf[k].date+'|'+d;   // la stessa chiave con cui nasce l'ombra
+  const foto=fblMotoreContestoGestione(reg, sig, rowsTf, k);
+  const base={regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:d, entry, stop, ombraId:idOmbra,
+              contesto:foto.contesto, gestione:foto.gestione,
+              esitoFinale:{uscita:null, R:null, chiusa:null}};   // completato quando chiude l'ombra
   if(!(rischio>0) || (d===1 ? !(stop<entry) : !(stop>entry))){
-    fblMotoreRegistra(Object.assign(base, {esito:'scartato', motivo:'stop dal lato sbagliato o nullo'}));
+    fblMotoreRegistra(Object.assign(base, {esito:'scartato', motivo:'stop dal lato sbagliato o nullo', esitoFinale:{uscita:'scartato', R:0}}));
     return false;
   }
   const tp=entry+d*rischio*reg.obiettivoR;
   const ombra=fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE);
-  const idOmbra=reg.id+'|'+rowsTf[k].date+'|'+d;
   if(!ombra.some(o=>o&&o.id===idOmbra)){
     ombra.push({id:idOmbra, regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:d, entry, stop, stopOra:stop, tp,
                 rischio, obiettivoR:reg.obiettivoR, be:reg.be||null, beFatto:false, stato:'aperta', R:null, chiusa:null});
@@ -24671,10 +24695,19 @@ function fblMotoreDecidi(reg, sig, rowsTf, k, apre){
   fblMotoreRegistra(Object.assign(base, {tp, esito:ok?'aperto':'bloccato', motivo:ok?'ordine inviato a MT5':(fblAutoUltimoMotivo||'invio non riuscito')}));
   return ok;
 }
+// Chiusura dell'ombra -> esito finale nella voce del registro collegata da ombraId.
+// Si tocca solo quella voce: le altre restano identiche, e il tetto di 500 resta in fblMotoreScrivi.
+function fblMotoreRegistraChiusura(registro, o){
+  const esitoFinale={uscita:o.uscita, R:o.R, chiusa:o.chiusa};
+  let trovato=false;
+  for(const v of registro) if(v&&v.ombraId===o.id){ v.esitoFinale=esitoFinale; trovato=true; }
+  return trovato;
+}
 // Segue le operazioni in ombra di una regola sulle candele CHIUSE del suo timeframe.
 function fblMotoreOmbraAggiorna(reg, rowsTf){
   const ombra=fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE);
-  let cambiate=false;
+  const registro=fblMotoreLeggi(FBL_MOTORE_REGISTRO_CHIAVE);
+  let cambiate=false, registroCambiato=false;
   for(const o of ombra){
     if(!o||o.regola!==reg.id||o.stato!=='aperta') continue;
     const dal=Date.parse(o.barra), d=o.dir;
@@ -24684,10 +24717,12 @@ function fblMotoreOmbraAggiorna(reg, rowsTf){
       o.vista=c.date; cambiate=true;
       const costoR=FBL_MOTORE_COSTO/o.rischio;
       if(d===1 ? c.low<=o.stopOra : c.high>=o.stopOra){            // lo stop vince il pareggio
-        o.stato='chiusa'; o.R=d*(o.stopOra-o.entry)/o.rischio-costoR; o.chiusa=c.date; o.uscita='stop'; break;
+        o.stato='chiusa'; o.R=d*(o.stopOra-o.entry)/o.rischio-costoR; o.chiusa=c.date; o.uscita='stop';
+        if(fblMotoreRegistraChiusura(registro, o)) registroCambiato=true; break;
       }
       if(d===1 ? c.high>=o.tp : c.low<=o.tp){
-        o.stato='chiusa'; o.R=o.obiettivoR-costoR; o.chiusa=c.date; o.uscita='obiettivo'; break;
+        o.stato='chiusa'; o.R=o.obiettivoR-costoR; o.chiusa=c.date; o.uscita='obiettivo';
+        if(fblMotoreRegistraChiusura(registro, o)) registroCambiato=true; break;
       }
       if(Array.isArray(o.be)&&!o.beFatto && (d===1 ? c.high>=o.entry+o.be[0]*o.rischio : c.low<=o.entry-o.be[0]*o.rischio)){
         o.beFatto=true; o.stopOra=o.entry+d*o.be[1]*o.rischio;     // vale dalla candela dopo
@@ -24695,6 +24730,7 @@ function fblMotoreOmbraAggiorna(reg, rowsTf){
     }
   }
   if(cambiate) fblMotoreScrivi(FBL_MOTORE_OMBRA_CHIAVE, ombra, 2000);
+  if(registroCambiato) fblMotoreScrivi(FBL_MOTORE_REGISTRO_CHIAVE, registro, 500);
   fblMotoreControllaSospensione(reg);
 }
 // I numeri di una regola, dalle sue operazioni in ombra chiuse (dopo l'ultima ripresa, se c'e').
@@ -24863,7 +24899,9 @@ async function fblMotoreAutoGiro(forza){
         for(const sig of segnali){
           s.n++; nSegnali++;
           if(!fblMotoreFiltroOk(reg, sig, rowsTf, k)){
+            const foto=fblMotoreContestoGestione(reg, sig, rowsTf, k);
             fblMotoreRegistra({regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:sig.dir, entry:Number(rowsTf[k].close), stop:Number(sig.stop),
+              contesto:foto.contesto, gestione:foto.gestione, esitoFinale:{uscita:'filtrato', R:0},
               esito:'filtrato', motivo:'nessuna spike: ombra contraria sotto '+reg.filtro.spike+' volte la media di '+(reg.filtro.n||20)+' candele'});
             continue;
           }

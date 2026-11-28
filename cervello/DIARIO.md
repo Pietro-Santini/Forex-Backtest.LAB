@@ -1,12 +1,21 @@
 # DIARIO
 
+## 2026-11-28 (ottava)
+- v2.2.132: journal completo del bot. Misurato che i quattro esiti (aperto, bloccato, osservato,
+  filtrato) avevano `motivo` 4/4 ma 12 campi mancanti su 12: niente contesto, gestione o esito
+  finale; l'ombra chiudeva senza aggiornare il registro. Ora ogni voce porta `ombraId`, `contesto`,
+  `gestione` ed `esitoFinale`, e la chiusura dell'ombra riscrive l'esito vero (stop/obiettivo + R).
+  I filtrati hanno `esitoFinale={uscita:'filtrato',R:0}` senza ombre finte. Banco
+  `journal_bot_completo.test.mjs`: 1 rossa → 2/2; 26 banchi collegati verdi. Esclusa la parte in
+  replay (voce 8.1.4, serve decisione del proprietario).
+
 ## 2026-11-28 (settima)
 - v2.2.131: interruttore unico d'emergenza per le aperture automatiche. Flag `masterOff` nel
   config del motore, checkbox nel pannello, lettura fail-closed (se lo storage non si legge, blocca).
   Copre pull back, No-Wick, motore in diretta e su CSV e anche le aperture automatiche delle sale
   Telegram (`tgAutoDecidi`, che non passavano dalla porta comune). Non blocca aperture manuali,
-  chiusure SL/TP né le operazioni in ombra. Banco `interruttore_emergenza_aperture.test.mjs`: prima
-  3 rosse su 3, poi 5/5; 23 banchi collegati verdi.
+  chiusure SL/TP né le operazioni in ombra, e restano disponibili le aperture manuali. Banco
+  `interruttore_emergenza_aperture.test.mjs`: prima 3 rosse su 3, poi 6/6; 23 banchi collegati verdi.
 
 ## 2026-11-28 (sesta)
 - Strumento di controllo sintassi: `laboratorio/strumenti/sintassi_app.mjs` compilava solo 5 dei 6
