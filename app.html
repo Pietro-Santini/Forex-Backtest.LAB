@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.129';
+const FBL_VERSIONE='2.2.130';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -24575,9 +24575,12 @@ function fblMotoreApri(reg, sig, rowsTf, k){
   try{ const l=scalettaLotto(entry, stop, {assoluto:fblRischio(reg.id, fblTipoConto()==='reale')}); lotti=Math.max(0.01, Number(l&&l.lotti)||0.01); }catch(e){}
   const op={nome:reg.id, indicatore:reg.id, setupId:reg.id+'-'+rowsTf[k].date, dir:d, entry, sl:stop, tp};
   const chiave=[asset,'motore',reg.id,rowsTf[k].date,d].join('|');
+  // §3.4.2: il segnale viaggia con la posizione (meta -> Object.assign in placeRealMt5Order e
+  // openMarketTrade), cosi' sul trade VERO si puo' misurare quanto e' costato l'esecuzione.
+  // L'ombra resta la foto del segnale: qui non si cambia il lotto ne' una guardia.
   const meta={bosAuto:true, bosSetupId:op.setupId, bosNome:reg.id, origin:'MOTORE_AUTO',
               autoIndicatore:reg.id, autoTF:reg.tf, autoBe:reg.be, autoRischio:rischio, autoBeFatto:false,
-              autoBarra:rowsTf[k].date};
+              autoBarra:rowsTf[k].date, segnaEntrata:entry, segnaStop:stop};
   return fblAutoInviaOrdineDemo({autoOpenDemo:true}, asset, op, {entry, sl:stop, tp, lots:lotti, chiave, meta});
 }
 
@@ -33347,6 +33350,39 @@ function closeTrade(reason,price,pos,realLevels,silent,veri){
      else{ vero.pct=balanceBefore!==0?(veri.pl/balanceBefore*100):0; vero.account=balanceBefore+veri.pl; }
    }
    if(vero.entry!=null)vero.pips=pipsFromPrice(pos.side,vero.entry,price,pos.asset||currentAssetKey);
+ }
+ // §3.4.2 — COSTO VERO DELL'ESECUZIONE (solo trade MT5 nati da un segnale del motore).
+ // L'ombra resta la foto del segnale: qui, sulla riga del trade VERO, si registra quanto e'
+ // costato scostarsi dal segnale. Non si toccano pl, pips, account, testo del Journal, ombra
+ // ne' statistiche R: si aggiunge soltanto il dato che prima mancava.
+ if(pos.mt5Ticket!=null && Number.isFinite(Number(pos.segnaEntrata)) && Number.isFinite(Number(pos.segnaStop))){
+   const se=Number(pos.segnaEntrata), ss=Number(pos.segnaStop);
+   const eseg=Number(vero.entry!=null?vero.entry:pos.entry);
+   const mot=String((veri&&veri.motivo)||reason||'').toUpperCase();
+   // §3.4.2: solo il prezzo del deal VERIFICATO puo' dire dove MT5 ha eseguito lo stop. Il vecchio
+   // ripiego sul prezzo del polling (/positions) poteva fabbricare uno stop eseguito - e un costo -
+   // mai avvenuti: se il deal dice SL ma il prezzo non e' valido, il campo resta ASSENTE.
+   // costoEsecuzioneEUR si calcola SOLO con uno stop eseguito verificato (chiusure SL): su TP e
+   // chiusure manuali resta assente. E' una limitazione documentata, non un numero falso.
+   const stopEseg=(mot==='SL'&&veri&&veri.stopEseguito!=null&&Number(veri.stopEseguito)>0)?Number(veri.stopEseguito):null;
+   const costoEntrata=calculateForexPL(pos.side,se,eseg,lots,pos.asset||currentAssetKey);
+   const costoStop=Number.isFinite(stopEseg)?calculateForexPL(pos.side,ss,stopEseg,lots,pos.asset||currentAssetKey):null;
+   if(Number.isFinite(costoEntrata)){
+     vero.entrySegnale=se;
+     vero.stopSegnale=ss;
+     // prezzo a cui MT5 ha ESEGUITO lo stop: non e' il livello 'sl' della posizione
+     if(Number.isFinite(stopEseg))vero.stopEseguito=stopEseg;
+     // scarto segnale -> eseguito in euro: entrata + uscita, sempre con segno sfavorevole
+     if(Number.isFinite(costoStop))vero.costoEsecuzioneEUR=costoEntrata-costoStop;
+   }
+ }
+ // La commissione vera pagata al broker e' un dato contabile del trade: se il deal non la dice
+ // (/deal_reason non la restituisce), si usa pos.commission, alimentata dalla fotografia REALE
+ // /positions del bridge (vedi fetchMt5Positions).
+ if(pos.mt5Ticket!=null){
+   const comm=(veri&&veri.commission!=null)?Number(veri.commission)
+              :(pos.commission!=null?Number(pos.commission):null);
+   if(Number.isFinite(comm))vero.commission=comm;
  }
   // PORTA UNICA (invariante: un ticket MT5 = una riga sola nel Journal, vedi
   // fblRegistraTradeMt5): se quel ticket e' gia' nel Journal - recuperato dallo storico, o
@@ -52190,6 +52226,20 @@ async function fetchMt5Positions(){
      // qui: una posizione reale rimasta tracciata in un'altra sessione (mode) verrà riconciliata
      // quando si torna su quella sessione.
      const newTickets=new Set(result.data.map(p=>String(p.ticket)));
+     // §3.4.2: la commissione contabile viene dalla fotografia REALE /positions del bridge
+     // (calcolata dai deal di ingresso): /deal_reason NON la restituisce. Aggiorna qui le
+     // posizioni GIA' tracciate con lo stesso ticket, senza toccare nessun altro campo.
+     // Number(null) vale 0: per questo si controlla che il campo ci sia prima di copiarlo.
+     const contoOra=(mt5ContoAttivo&&mt5ContoAttivo.login)||null;
+     for(const rp of result.data){
+       if(rp.commission==null||!Number.isFinite(Number(rp.commission)))continue;
+       const comm=Number(rp.commission);
+       const tracked=positions.find(p=>p&&p.mt5Ticket!=null&&String(p.mt5Ticket)===String(rp.ticket));
+       // Stessa guardia per conto usata dalla riconciliazione poco sotto: i ticket MT5 non sono
+       // univoci fra conti, quindi non scrivere su una posizione che vive su un altro conto.
+       if(contoOra&&tracked&&tracked.mt5Login&&String(tracked.mt5Login)!==contoOra)continue;
+       if(tracked&&tracked.commission!==comm)tracked.commission=comm;
+     }
      // BUG RISOLTO ("trade fantasma nel Journal: chiuso con motivo EA, Uscita=Entrata, P/L
      // 0.00, mentre su MT5 la posizione era ancora regolarmente aperta"): un ticket tracciato
      // che risultava assente da QUESTA SOLA fotografia veniva giornalizzato subito come chiuso
@@ -52202,7 +52252,6 @@ async function fetchMt5Positions(){
      // lato bridge, per lo stesso identico problema).
      const justConfirmedClosed=[];
      let mt5AperturaRiallineata=false;
-     const contoOra=(mt5ContoAttivo&&mt5ContoAttivo.login)||null;
      for(const p of positions){
        if(p.mt5Ticket==null)continue;
        // Di un altro conto: non puo' comparire in questa fotografia, e la sua assenza non dice niente.
@@ -52295,7 +52344,12 @@ async function fetchMt5Positions(){
            openMs:(tApertura>0&&tApertura<=Date.now()+5000)?tApertura:null,
            entry:Number(dr.data.price_open)>0?Number(dr.data.price_open):null,
            pl:Number.isFinite(Number(dr.data.profit_net))&&dr.data.profit_net!=null?Number(dr.data.profit_net):null,
-           balance:Number.isFinite(Number(dr.data.balance))&&dr.data.balance!=null?Number(dr.data.balance):null
+           balance:Number.isFinite(Number(dr.data.balance))&&dr.data.balance!=null?Number(dr.data.balance):null,
+           // §3.4.2: dati contabili del deal, usati SOLO per registrare il costo dell'esecuzione.
+           // Number(null) vale 0: per questo si controlla prima che il campo ci sia.
+           commission:(dr.data.commission!=null&&Number.isFinite(Number(dr.data.commission)))?Number(dr.data.commission):null,
+           motivo:dr.data.reason!=null?String(dr.data.reason):null,
+           stopEseguito:(String(dr.data.reason||'').toUpperCase()==='SL'&&Number.isFinite(prezzoDeal)&&prezzoDeal>0)?prezzoDeal:null
          };
        }
        // Un'uscita a 0 (o negativa) non esiste: meglio non scrivere niente che un P/L inventato.
@@ -52428,6 +52482,8 @@ async function fetchMt5Positions(){
            // calcolato per questo ticket, invece di inseguire ogni nuova candela ad ogni
            // ri-adozione.
            const {realOpenMs,realOpenIdx}=resolveMt5OpenAnchor(rp);
+           // §3.4.2: fonte = /positions del bridge, NON /deal_reason (che non ha commissione).
+           const comm=(rp.commission!=null&&Number.isFinite(Number(rp.commission)))?Number(rp.commission):null;
            const pos={
              id:Date.now()+Math.random(),
              asset:rp.symbol,side:rp.side,entry:fblPrezzoValido(rp.price_open),
@@ -52435,7 +52491,8 @@ async function fetchMt5Positions(){
              origin:'MARKET',
              lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
              start:realOpenIdx!=null?realOpenIdx:0,startTime:realOpenMs,openTF:currentTF,
-             marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...tagFoto
+             marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...tagFoto,
+             ...(comm!=null?{commission:comm}:{})
            };
            mt5AllineaApertura(pos,rp);
            applyLocalSlTpDefaultsIfMissing(pos);
@@ -52459,6 +52516,8 @@ async function fetchMt5Positions(){
        // sospetto — vedi sopra), l'orario/indice di apertura usato resta SEMPRE il primo
        // calcolato per questo ticket, invece di inseguire ogni nuova candela ad ogni ri-adozione.
        const {realOpenMs,realOpenIdx}=resolveMt5OpenAnchor(rp);
+       // §3.4.2: fonte = /positions del bridge, NON /deal_reason (che non ha commissione).
+       const comm=(rp.commission!=null&&Number.isFinite(Number(rp.commission)))?Number(rp.commission):null;
        const pos={
          id:Date.now()+Math.random(),
          asset:rp.symbol,side:rp.side,entry:fblPrezzoValido(rp.price_open),
@@ -52466,7 +52525,8 @@ async function fetchMt5Positions(){
          origin:'MARKET',
          lots:Number(rp.volume)||0,risk:0,dist:0,hasRiskModel:false,
          start:realOpenIdx!=null?realOpenIdx:(rows[idx]?idx:0),startTime:realOpenMs,openTF:currentTF,
-         marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...tagFoto
+         marginUsed:fblMargineReale(rp),mt5Ticket:rp.ticket,mt5AddedAt:Date.now(),...tagFoto,
+         ...(comm!=null?{commission:comm}:{})
        };
        mt5AllineaApertura(pos,rp);
        const hadRealSlTp=pos.sl!=null&&pos.tp!=null;
