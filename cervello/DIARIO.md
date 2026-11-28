@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (quarta)
+- v2.2.129: indicatori calcolati sul minuto a ogni timeframe. Misurato No-Wick: EMA20 «a 1 minuto»
+  2013,814 su M1 contro 2012,374 su M5; EMA50 2013,484 contro 2008,784; trend NESSUNO contro
+  RIALZISTA. Causa diversa dai profili: il gancio `oneMinRows` esiste ma nessuno lo alimenta.
+  Cura: serie M1 vera (magazzino/CSV con passo misurato) passata all'indicatore, identità della
+  serie nella chiave della cache, EMA M1 campionata sulle barre del grafico. Banco
+  `indicatori_proprieta_minuto_tf.test.mjs` da 1 rossa a 3/3; 20/20 banchi circostanti verdi.
+
 ## 2026-11-28 (terza)
 - v2.2.128: il collaudo GitHub della 2.2.127 era rosso su `avvisi_mt5_replay.test.mjs` (suono
   atteso 1, letto 0), mentre quello locale era verde. Misurato: il suono arriva in 110/110 prove;
