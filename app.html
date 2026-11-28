@@ -1407,6 +1407,73 @@ window.fblAvviaSoloBacktest=function(){
     // Quanto si e' consumato oggi, per documento: serve a trovare il prossimo rubinetto senza
     // doverlo dedurre dal codice.
     budgetStato(){ const b=this._budgetOggi(); return {totale:b.totale,tetto:this._budgetTetto(),dettaglio:Object.assign({},b.conta)}; },
+
+    // 8.6.23 — BYTE UTF-8 DEL TRAFFICO CLOUD (non caratteri).
+    // MISURATO: il vecchio conto faceva dato.length / JSON.stringify(...).length, cioe'
+    // unita' UTF-16. «perché» pesava 6 invece di 7 byte e «😀» 2 invece di 4. Su Firestore
+    // si paga la banda, quindi l'unica misura giusta e' TextEncoder.
+    // L'encoder e la funzione che segna si possono iniettare: un contatore rotto non deve
+    // mai cadere addosso a un salvataggio riuscito. Quando NON c'e' una misura si ritorna
+    // null, mai zero: uno zero falso sembra un conteggio vero.
+    fblByteUtf8(testo, encoder){
+      if(testo == null) return 0;
+      try{
+        let enc = encoder;
+        if(!enc){
+          if(typeof TextEncoder !== 'function') return null;
+          enc = new TextEncoder();
+        }
+        if(typeof enc.encode !== 'function') return null;
+        const n = Number(enc.encode(String(testo)).length);
+        return (Number.isFinite(n) && n >= 0) ? n : null;
+      }catch(e){ return null; }
+    },
+    // Testo da pesare: le stringhe tali e quali, il resto serializzato come fa _conta.
+    // JSON.stringify(function(){}) e JSON.stringify(Symbol()) danno undefined SENZA lanciare:
+    // anche quello e' un payload non valido, non un conteggio da zero.
+    fblContaPayloadByte(dato, encoder, stringify){
+      let testo;
+      if(typeof dato === 'string') testo = dato;
+      else{
+        try{
+          const f = (typeof stringify === 'function') ? stringify : JSON.stringify;
+          testo = f(dato == null ? {} : dato);
+        }catch(e){ return null; }
+      }
+      if(typeof testo !== 'string') return null;
+      return this.fblByteUtf8(testo, encoder);
+    },
+    // Caratteri (unita' UTF-16) contro byte: rende visibile il divario.
+    fblConfrontoByte(testo, encoder){
+      const s = testo == null ? '' : String(testo);
+      const caratteri = s.length;
+      const byte = this.fblByteUtf8(s, encoder);
+      return {caratteri, byte, differenza: byte == null ? null : byte - caratteri};
+    },
+    // Passa i BYTE a fblTrafficoSegna, senza toccare la sua firma (tipo, documento, byte,
+    // magazzino, quando). Non segna niente se la serializzazione non produce una stringa
+    // oppure se l'encoder non produce un numero finito non negativo.
+    fblTrafficoSegnaByte(tipo, documento, dato, opzioni){
+      const o = (opzioni && typeof opzioni === 'object') ? opzioni : {};
+      let testo, valido = true;
+      if(typeof dato === 'string') testo = dato;
+      else{
+        try{
+          const f = (typeof o.stringify === 'function') ? o.stringify : JSON.stringify;
+          testo = f(dato == null ? {} : dato);
+        }catch(e){ valido = false; testo = ''; }
+      }
+      if(valido && typeof testo !== 'string') valido = false;
+      const byte = valido ? this.fblByteUtf8(testo, o.encoder) : null;
+      if(byte == null) valido = false;
+      const esito = {tipo, documento, byte: valido ? byte : null,
+        caratteri: valido ? testo.length : 0, segnato: false};
+      if(!valido) return esito;
+      const segna = (typeof o.segna === 'function') ? o.segna : window.fblTrafficoSegna;
+      if(typeof segna !== 'function') return esito;
+      try{ segna(tipo, documento, byte); esito.segnato = true; }catch(e){}
+      return esito;
+    },
     // IL CONTO DEL TRAFFICO: scritture, letture e BYTE, documento per documento. La logica sta
     // nello script principale (fblTrafficoSegna), qui si chiama e basta - e non si lascia mai
     // cadere un'eccezione addosso a un salvataggio per colpa di un contatore.
@@ -1418,10 +1485,10 @@ window.fblAvviaSoloBacktest=function(){
         // tardi - ma si tiene il conto e si avvisa, ed e' quello che mancava per accorgersene
         // prima della bolletta.
         if(tipo==='lettura'){ try{ this._puoLeggere(documento); }catch(e){} }
-        if(typeof fblTrafficoSegna!=='function')return;
-        let byte=0;
-        try{ byte=(typeof dato==='string')?dato.length:JSON.stringify(dato||{}).length; }catch(e){ byte=0; }
-        fblTrafficoSegna(tipo,documento,byte);
+        // 8.6.23: si passano i BYTE UTF-8 a fblTrafficoSegna, non i caratteri. Il payload
+        // non serializzabile non viene segnato: uno zero falso sembrerebbe una misura.
+        if(typeof this.fblTrafficoSegnaByte!=='function')return;
+        this.fblTrafficoSegnaByte(tipo,documento,dato);
       }catch(e){}
     },
 
@@ -1892,6 +1959,14 @@ window.fblAvviaSoloBacktest=function(){
       return ()=>{ chiuso=true; try{ if(ws) ws.close(); }catch(e){} };
     }
   };
+
+  // 8.6.23 — i nomi del modulo non sono globali: li esponiamo per lo script classico
+  // (pannello del traffico) e per i banchi di prova, senza modificare la firma di
+  // fblTrafficoSegna.
+  window.fblByteUtf8 = window.fxbtCloud.fblByteUtf8.bind(window.fxbtCloud);
+  window.fblContaPayloadByte = window.fxbtCloud.fblContaPayloadByte.bind(window.fxbtCloud);
+  window.fblConfrontoByte = window.fxbtCloud.fblConfrontoByte.bind(window.fxbtCloud);
+  window.fblTrafficoSegnaByte = window.fxbtCloud.fblTrafficoSegnaByte.bind(window.fxbtCloud);
 
   function setOverlayContent(html){
     const overlay = document.getElementById("auth-check-overlay");
@@ -14299,7 +14374,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.134';
+const FBL_VERSIONE='2.2.135';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
