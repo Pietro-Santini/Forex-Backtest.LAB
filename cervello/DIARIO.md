@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (nona)
+- v2.2.133: riportata la 8.5.16 (actual delle notizie nel popup, lato app). Il ponte aveva già
+  `/news/actual`, ma `openNewsEventModal` non lo chiamava e scriveva «non disponibile da questa
+  fonte». Ora per High/Medium già usciti senza actual chiama il ponte, mostra valore o motivo, usa
+  cache di 10 minuti, deduplica le richieste in volo e impedisce che una risposta vecchia sovrascriva
+  il popup corrente. Banco `news_actual_modale.test.mjs`: 11 rose → 11/11. Aggiunto anche il banco di
+  controllo `analisi_live_storico_separate.test.mjs` (1/1): Live e Storico non condividono stato.
+
 ## 2026-11-28 (ottava)
 - v2.2.132: journal completo del bot. Misurato che i quattro esiti (aperto, bloccato, osservato,
   filtrato) avevano `motivo` 4/4 ma 12 campi mancanti su 12: niente contesto, gestione o esito
