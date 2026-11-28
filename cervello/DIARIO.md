@@ -1,5 +1,12 @@
 # DIARIO
 
+## 2026-11-28 (undicesima)
+- v2.2.135: riportata la 8.6.23 lato app (byte UTF-8 del traffico cloud). `cloud._conta` contava
+  caratteri UTF-16: misurato «perché» 6 invece di 7 byte, emoji 2 invece di 4. Ora usa `TextEncoder`,
+  non segna zero su payload non serializzabili e non interrompe mai un salvataggio. Banco
+  `conta_byte_utf8.test.mjs`: 10 rose → 10/10; `traffico_cloud` e `cloud_bolletta` verdi. Non toccata
+  la parte CSV di `asset-library.html` (modifica altrui pendente).
+
 ## 2026-11-28 (decima)
 - v2.2.134: riportata la 8.6.20 (pulizia dello storico del book al cambio asset), persa col
   ripristino del 24/11. Verificato che `orderBookHistoryByAsset` non veniva mai ripulito sugli switch:
