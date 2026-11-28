@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.133';
+const FBL_VERSIONE='2.2.134';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -14731,6 +14731,8 @@ async function autoLoadAssetLibrary(asset){
    // blocca ogni scrittura di assetDrawings in quella finestra (il controllo periodico ogni 1,5s
    // compreso), che altrimenti corromperebbe la voce del nuovo asset con i disegni del vecchio.
    if(shouldLoadAssetDrawings){ assetSwitchInProgress=true; assetSwitchStartedAt=Date.now(); }
+   // 8.6.20: vero cambio asset — via lo storico del book dell'asset che si lascia (24/11).
+   if(currentAssetKey && currentAssetKey!==asset)fblPulisciBookStoricoAlCambioAsset(fblBookStoricoChiaviCorrenti(asset));
    currentAssetKey=asset;
    // La posizione "attiva" (quella mostrata/editabile nelle caselle SL/TP) deve sempre
    // appartenere all'asset appena selezionato: se quella precedente era di un altro asset,
@@ -35038,6 +35040,8 @@ $('market')?.addEventListener('change',async()=>{
    return;
  }
  lastValidMarketValue=v||'';
+ // 8.6.20: cambio asset scelto dall'utente — pulizia subito, prima del caricamento (24/11).
+ if(currentAssetKey && currentAssetKey!==v)fblPulisciBookStoricoAlCambioAsset(fblBookStoricoChiaviCorrenti(v));
  updateAssetFavToggleBtn();
  // Cambio asset: via l'evidenziazione dell'operazione chiusa dell'asset precedente
  // (rettangolo, frecce, riquadro durata/lottaggio) — vedi clearClosedTradeHighlight().
@@ -53846,6 +53850,8 @@ async function __loadLiveHistoryFromCapitalImpl(asset,opts){
  // finestra, altrimenti corromperebbe la voce del nuovo asset coi disegni del vecchio.
  if(shouldLoadAssetDrawings){ assetSwitchInProgress=true; assetSwitchStartedAt=Date.now(); }
  const __footprintAssetChanged=(currentAssetKey!==asset);
+ // 8.6.20: cambio asset vero (non un semplice cambio timeframe): pulisce il book vecchio.
+ if(__footprintAssetChanged)fblPulisciBookStoricoAlCambioAsset(fblBookStoricoChiaviCorrenti(asset));
  currentAssetKey=asset;
  // Nuovo asset: ricostruisce i bucket dal SUO log tick (vuoto se non l'abbiamo mai seguito in
  // questa sessione — footprintRebuildBucketsForCurrentAsset() gestisce già quel caso restituendo
@@ -57825,6 +57831,60 @@ function depthLivePush(key,snap,deep){
 }
 let latestOrderBookByAsset={};
 let orderBookHistoryByAsset={}; // { assetKey: [ {time_ms,bids,asks}, ... ] } — capped per TEMPO, vedi HEATMAP_HISTORY_MAX_HOURS/HEATMAP_MIN_SNAPSHOT_GAP_MS
+// 8.6.20 — PULIZIA DELLO STORICO DEL BOOK AL CAMBIO ASSET.
+// MISURATO IL 24/11/2026: cambiando asset, lo storico book 12h dell'asset precedente restava in
+// memoria dentro orderBookHistoryByAsset, perche' nessuno lo toglieva sugli switch. Qui si pulisce
+// IN LOCO: restano TUTTE le chiavi dell'asset corrente (etichetta esatta, chiavi profonde bn:/ext:
+// e simbolo risolto dal broker, per esempio XAUUSDm) e le chiavi reg: (file unico); le altre vanno.
+// SEGNALATO IN REVISIONE: conservare solo l'etichetta cancellava la chiave dell'asset CORRENTE
+// sulle cripto (etichetta BINANCE:BTCUSDT, storico profondo in bn:BTCUSDT) e quando il broker
+// risolveva XAUUSD in XAUUSDm. Un unico punto calcola l'insieme delle chiavi correnti e lo usa
+// sia nella rimozione sia nei punti di cambio, così non esistono due copie divergenti.
+// Gli array conservati NON vengono sostituiti; le chiavi reg: non si toccano.
+function fblBookStoricoEChiaveReg(chiave){ return typeof chiave==='string' && chiave.indexOf('reg:')===0; }
+function fblBookStoricoChiaviCorrenti(asset){
+  if(asset instanceof Set)return asset;
+  const out=new Set();
+  if(asset==null || asset==='')return out;
+  const a=String(asset);
+  out.add(a);
+  try{
+    const sim=binanceSymbolForAsset(a);  // BINANCE:BTCUSDT -> BTCUSDT, BTCUSDT -> BTCUSDT
+    if(sim){ out.add('bn:'+sim); out.add('ext:'+sim); }
+  }catch(e){}
+  try{
+    const ris=mt5FeedSymbolForAsset[a];  // simbolo risolto dal broker in cache (XAUUSD -> XAUUSDm)
+    if(typeof ris==='string' && ris)out.add(ris);
+  }catch(e){}
+  try{
+    if(bnDepth && bnDepth.asset===a && bnDepth.key)out.add(bnDepth.key);
+  }catch(e){}
+  return out;
+}
+function fblBookStoricoChiaviDaRimuovere(storico, assetCorrente){
+  if(!storico || typeof storico!=='object' || Array.isArray(storico))return [];
+  const correnti=fblBookStoricoChiaviCorrenti(assetCorrente);
+  return Object.keys(storico).filter(k => !correnti.has(k) && !fblBookStoricoEChiaveReg(k));
+}
+function fblPulisciBookStoricoAlCambioAsset(assetCorrente){
+  if(!orderBookHistoryByAsset || typeof orderBookHistoryByAsset!=='object' || Array.isArray(orderBookHistoryByAsset))orderBookHistoryByAsset={};
+  const storico=orderBookHistoryByAsset;
+  const correnti=fblBookStoricoChiaviCorrenti(assetCorrente);
+  const rimosse=fblBookStoricoChiaviDaRimuovere(storico, correnti);
+  let snapshotRimossi=0;
+  for(const k of rimosse){
+    const v=storico[k];
+    if(Array.isArray(v))snapshotRimossi+=v.length;
+    delete storico[k];
+  }
+  // Senza questo, la pulizia resterebbe solo in RAM: il prossimo avvio ripristinerebbe
+  // dall'IndexedDB le chiavi vecchie che avevamo appena buttato via.
+  if(rimosse.length){
+    orderBookHistoryDirty=true;
+    if(rimosse.some(k=>isDeepDepthKey(k)))orderBookDeepDirty=true;
+  }
+  return {storico, rimosse, conservate:Object.keys(storico).length, snapshotRimossi};
+}
 let mt5OrderBookUnavailableForAsset=new Set(); // asset per cui il broker ha già risposto "niente DOM" in questa sessione (evita retry infiniti/log spam)
 // PERSISTENZA (RICHIESTO ESPLICITAMENTE: "la heatmap deve comportarsi come il footprint... quello
 // che ha scaricato se lo salva in locale, alla riapertura ricarica quello che aveva scaricato e
@@ -58278,6 +58338,8 @@ async function __loadLiveHistoryFromMt5Body(asset,opts){
  // dello storico REST dal bridge MT5.
  if(shouldLoadAssetDrawings){ assetSwitchInProgress=true; assetSwitchStartedAt=Date.now(); }
  const __footprintAssetChanged=(currentAssetKey!==asset); // vedi commento nel loader Capital.com: stesso motivo
+ // 8.6.20: anche qui l'asset cambia davvero — niente storico book del precedente in memoria.
+ if(__footprintAssetChanged)fblPulisciBookStoricoAlCambioAsset(fblBookStoricoChiaviCorrenti(asset));
  currentAssetKey=asset;
  if(__footprintAssetChanged)footprintRebuildBucketsForCurrentAsset();
  // Vedi fblAssetCambiatoAzzeraSelezione: niente preselezione al cambio asset.
@@ -60289,6 +60351,8 @@ async function __loadLiveHistoryFromBinanceBody(asset,opts){
  if(currentAssetKey&&currentAssetKey!==asset){ captureCurrentAssetChartView(currentMode()); captureCurrentAssetDrawings(currentMode()); }
  if(shouldLoadAssetDrawings){ assetSwitchInProgress=true; assetSwitchStartedAt=Date.now(); }
  const assetCambiato=(currentAssetKey!==asset);
+ // 8.6.20: passaggio a Binance — si pulisce il book dell'asset lasciato (24/11).
+ if(assetCambiato)fblPulisciBookStoricoAlCambioAsset(fblBookStoricoChiaviCorrenti(asset));
  currentAssetKey=asset;
  binanceAssetAttivo=asset;
  if(assetCambiato)footprintRebuildBucketsForCurrentAsset();

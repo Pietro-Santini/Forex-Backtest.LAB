@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (decima)
+- v2.2.134: riportata la 8.6.20 (pulizia dello storico del book al cambio asset), persa col
+  ripristino del 24/11. Verificato che `orderBookHistoryByAsset` non veniva mai ripulito sugli switch:
+  restavano le chiavi dell'asset precedente. Ora `fblPulisciBookStoricoAlCambioAsset` conserva
+  l'asset corrente e le chiavi `reg:`, cancella le altre in loco e viene chiamata su tutti i veri
+  cambi asset (CSV, tendina, Capital.com, MT5, Binance). Banco `book_storico_cambio_asset.test.mjs`:
+  10 rose → 10/10; 10 banchi book collegati verdi.
+
 ## 2026-11-28 (nona)
 - v2.2.133: riportata la 8.5.16 (actual delle notizie nel popup, lato app). Il ponte aveva già
   `/news/actual`, ma `openNewsEventModal` non lo chiamava e scriveva «non disponibile da questa
