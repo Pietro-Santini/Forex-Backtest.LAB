@@ -1,5 +1,12 @@
 # DIARIO
 
+## 2026-11-28 (dodicesima)
+- v2.2.136: riportata la 8.6.19 (campioni di memoria ogni 60 s, massimo 240 righe con orario, MB e
+  nodi). Prima il referto `fblMisuraPrestazioni` aveva solo la fotografia istantanea. Ora il
+  campionatore alimenta il referto con l'ultima riga, senza inventare numeri quando la lettura non
+  è valida. Banco `memoria_crescita_campioni.test.mjs`: 11 rose → 11/11; banchi cronometri/tempi
+  8/8 verdi.
+
 ## 2026-11-28 (undicesima)
 - v2.2.135: riportata la 8.6.23 lato app (byte UTF-8 del traffico cloud). `cloud._conta` contava
   caratteri UTF-16: misurato «perché» 6 invece di 7 byte, emoji 2 invece di 4. Ora usa `TextEncoder`,

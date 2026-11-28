@@ -14374,7 +14374,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.135';
+const FBL_VERSIONE='2.2.136';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -64408,6 +64408,114 @@ async function maybeAutoLaunchDesktopApp(){
 // avendo spazio per farlo, si scrive nella barra di stato PERCHE', una volta. Se la causa e' uno
 // scorrimento disattivato sulla pagina principale (overflow hidden su html/body fuori dalle
 // finestre PIP), lo si riattiva.
+// ===================== 8.6.19 — CAMPIONI DI MEMORIA OGNI 60 SECONDI =====================
+// Il cervello del progetto ricordava questo pezzo ( STATO-SCALETTA-19-NOVEMBRE.md, righe 64 e
+// 139 ): «Campionamento memoria ogni 60s (fblMemoriaCampioni, max 240 righe, t/mb/nodi), esposto
+// in fblMisuraPrestazioni». Il 27 novembre risultava PERSO: funzione e banco spariti. Qui torna.
+//
+// PERCHE' UN CAMPIONATORE E NON UNA LETTURA AL MOMENTO DELLA MISURA: il rallentamento che il
+// proprietario ha segnalato e' qualcosa che si ACCUMULA. Un numero letto una volta sola non
+// dice se la memoria e' cresciuta; due numeri presi a distanza si. Ogni 60 secondi si salva una
+// riga {t, mb, nodi}; dopo 240 righe (4 ore) cadono le piu' vecchie, cosi' lo strumento non
+// diventa lui stesso la causa del rallentamento.
+//
+// IL CUORE E' PURO: ora, MB, conteggio nodi, intervallo e tetto sono INIETTATI. Nessun timer,
+// nessun performance.memory e nessun DOM dentro le funzioni pure: il banco le prova con numeri
+// finti e senza aspettare un minuto vero. Una lettura non valida NON produce una riga: meglio
+// meno dati che uno zero inventato ( Number(null) vale 0, e 0 MB e' un valore lecito ).
+const fblMemoriaIntervalloMs=60*1000;
+const fblMemoriaMaxRighe=240;
+function fblMemoriaNumero(v){
+  if(typeof v==='function'){ try{ v=v(); }catch(e){ return null; } }
+  if(v==null||(typeof v==='string'&&!v.trim()))return null;
+  const n=Number(v);
+  return Number.isFinite(n)?n:null;
+}
+/** Puro: decide se e' passato abbastanza tempo dall'ultimo campione. */
+function fblMemoriaDeveCampionare(stato,ora,intervalloMs){
+  if(!Number.isFinite(ora))return false;
+  const s=(stato&&typeof stato==='object')?stato:{};
+  const ultimo=(s.ultimoT==null||s.ultimoT==='')?NaN:Number(s.ultimoT);
+  if(!Number.isFinite(ultimo))return true;
+  const intervallo=Number.isFinite(intervalloMs)?Math.max(0,intervalloMs):fblMemoriaIntervalloMs;
+  return ora-ultimo>=intervallo;
+}
+/** Crea un campionatore. Ora/MB/nodi possono essere valori fissi o getter. */
+function fblMemoriaCreaCampionatore(opzioni){
+  const o=(opzioni&&typeof opzioni==='object')?opzioni:{};
+  const ora=(typeof o.ora==='function')?o.ora:()=>Date.now();
+  const intervallo=Number.isFinite(o.intervalloMs)?o.intervalloMs:fblMemoriaIntervalloMs;
+  const maxRighe=Number.isFinite(o.maxRighe)&&o.maxRighe>0?Math.floor(o.maxRighe):fblMemoriaMaxRighe;
+  const stato={campioni:[],ultimoT:null};
+  function campiona(){
+    let t;
+    try{ t=Number(ora()); }catch(e){ t=NaN; }
+    if(!fblMemoriaDeveCampionare(stato,t,intervallo)){
+      return {aggiunto:false,motivo:'intervallo non ancora trascorso',righe:stato.campioni.length};
+    }
+    const mb=fblMemoriaNumero(o.memoriaMb);
+    if(mb==null||mb<0){
+      return {aggiunto:false,motivo:'lettura memoria non valida',righe:stato.campioni.length};
+    }
+    const nodi=fblMemoriaNumero(o.nodiPagina);
+    // Un conteggio non valido resta null: uno zero qui sarebbe un numero inventato.
+    const riga={t,mb,nodi:(nodi==null||nodi<0)?null:nodi};
+    stato.campioni.push(riga);
+    while(stato.campioni.length>maxRighe)stato.campioni.shift();
+    stato.ultimoT=t;
+    return {aggiunto:true,motivo:'campione registrato',righe:stato.campioni.length};
+  }
+  return {stato,campiona,intervalloMs:intervallo,maxRighe};
+}
+/** Crescita fra il primo e l'ultimo campione, con massimo e minimo. */
+function fblMemoriaCrescita(campioni){
+  const righe=Array.isArray(campioni)?campioni.filter(r=>r&&typeof r==='object'):[];
+  if(!righe.length){
+    return {righe:0,inizioMb:null,fineMb:null,deltaMb:0,massimoMb:null,minimoMb:null};
+  }
+  // fblMemoriaNumero scarta null, '' e '  ': Number() li trasformerebbe in 0, e uno
+  // zero falso diventerebbe il minimo di tutta la serie.
+  const valori=righe.map(r=>fblMemoriaNumero(r.mb)).filter(v=>v!=null);
+  if(!valori.length)return {righe:righe.length,inizioMb:null,fineMb:null,deltaMb:0,massimoMb:null,minimoMb:null};
+  const inizio=valori[0], fine=valori[valori.length-1];
+  return {
+    righe:righe.length,
+    inizioMb:inizio,
+    fineMb:fine,
+    deltaMb:fine-inizio,
+    massimoMb:valori.length?Math.max(...valori):null,
+    minimoMb:valori.length?Math.min(...valori):null
+  };
+}
+/** Il ponte verso fblMisuraPrestazioni: usa l'ultima riga conosciuta. */
+function fblMemoriaContestoPerMisura(campionatore){
+  const righe=(campionatore&&campionatore.stato&&Array.isArray(campionatore.stato.campioni))
+    ?campionatore.stato.campioni:[];
+  if(!righe.length)return {memoria_MB:null,nodiPagina:0};
+  const ultima=righe[righe.length-1];
+  return {
+    memoria_MB:fblMemoriaNumero(ultima.mb),
+    nodiPagina:fblMemoriaNumero(ultima.nodi)
+  };
+}
+// Le fonti VERE sono le stesse che il referto delle prestazioni legge gia': performance.memory e
+// il conteggio dei nodi del documento. Se mancano, restituiscono null: il campionatore salta la
+// riga invece di scrivere uno zero che non e' mai stato misurato.
+function fblMemoriaLeggiMb(){
+  try{
+    const m=(typeof performance!=='undefined')?performance.memory:null;
+    if(!m||!Number.isFinite(m.usedJSHeapSize))return null;
+    return Math.round(m.usedJSHeapSize/1048576);
+  }catch(e){ return null; }
+}
+function fblMemoriaLeggiNodi(){
+  try{ return document.getElementsByTagName('*').length; }catch(e){ return null; }
+}
+const fblMemoriaCampioni=fblMemoriaCreaCampionatore({
+  ora:()=>Date.now(), memoriaMb:fblMemoriaLeggiMb, nodiPagina:fblMemoriaLeggiNodi,
+  intervalloMs:fblMemoriaIntervalloMs, maxRighe:fblMemoriaMaxRighe
+});
+try{ setInterval(()=>{ try{ fblMemoriaCampioni.campiona(); }catch(e){} },fblMemoriaIntervalloMs); }catch(e){}
 // ===================== MISURA DELLE PRESTAZIONI, SULLA MACCHINA VERA =====================
 //
 // SEGNALATO dal proprietario: «appena installato il pacchetto il programma era fluidissimo, zero
@@ -64428,8 +64536,22 @@ async function maybeAutoLaunchDesktopApp(){
 // causa del 21 ottobre: 66 risvegli su 77 venivano da un solo controllo ogni 30 ms), il costo
 // medio di un disegno e di un aggiornamento, i fotogrammi saltati (gli "scatti" si vedono qui),
 // la memoria, e quanto si e' accumulato nelle memorie che crescono usando l'app.
-function fblMisuraPrestazioni(secondi){
+function fblMisuraPrestazioni(secondi,contesto){
  const durata=Math.max(1000,(Number(secondi)||5)*1000);
+ // 8.6.19: chi misura puo' passare il contesto dell'ultimo campione di memoria. I valori
+ // entrano nelle solite chiavi del referto: il formato non cambia. Senza contesto ( o con un
+ // contesto vuoto ) restano le fonti di sempre, lette adesso.
+ // La stessa guardia del campionatore: scarta null, '' e '  ', che Number()
+ // trasformerebbe in uno zero mai misurato.
+ const mMb=fblMemoriaNumero(contesto&&contesto.memoria_MB);
+ const ctxMemoria=(mMb!=null&&mMb>=0)?mMb:null;
+ const mNodi=fblMemoriaNumero(contesto&&contesto.nodiPagina);
+ // Zero significa «nessuna lettura»: si torna al conteggio vivo del documento.
+ const ctxNodi=(mNodi!=null&&mNodi>0)?mNodi:null;
+ // 8.6.19: la crescita fra primo e ultimo campione arriva nel referto con una
+ // chiave NUOVA; le chiavi di sempre non si toccano.
+ const ctxCrescita=(typeof fblMemoriaCrescita==='function')
+  ?fblMemoriaCrescita((typeof fblMemoriaCampioni!=='undefined'&&fblMemoriaCampioni&&fblMemoriaCampioni.stato)?fblMemoriaCampioni.stato.campioni:[]):null;
  // I CRONOMETRI DI SEZIONE del disegno: si accendono qui e si spengono alla fine della misura.
  // Fuori da qui il disegno non paga niente.
  fblCronoSezioni=true;
@@ -64544,14 +64666,15 @@ function fblMisuraPrestazioni(secondi){
     })(),
     disegni:nD, disegnoMedio_ms:nD?Math.round(msD/nD*100)/100:0,
     aggiornamenti:nU, aggiornamentoMedio_ms:nU?Math.round(msU/nU*100)/100:0,
-    memoria_MB:(performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576):null),
+    memoria_MB:(ctxMemoria!=null?ctxMemoria:(performance.memory?Math.round(performance.memory.usedJSHeapSize/1048576):null)),
+    memoriaCrescita:ctxCrescita,
     // Le memorie che crescono usando l'app: e' qui che si vede cosa si e' accumulato.
     tickFootprint:conta(typeof footprintTickLogByAsset!=='undefined'?footprintTickLogByAsset:null),
     bucketFootprint:(()=>{ try{ return Object.keys(footprintByBucket||{}).length; }catch(e){ return -1; } })(),
     operazioni:(typeof trades!=='undefined'?trades.length:-1),
     posizioniAperte:(typeof positions!=='undefined'?positions.length:-1),
     disegniSalvati:(typeof drawings!=='undefined'?drawings.length:-1),
-    nodiPagina:document.getElementsByTagName('*').length,
+    nodiPagina:(ctxNodi!=null?ctxNodi:document.getElementsByTagName('*').length),
     candele:(typeof rows!=='undefined'?rows.length:-1),
     modo:(typeof liveModeActive!=='undefined'&&liveModeActive)?'Live':'Storico',
     mt5:(typeof mt5Connected!=='undefined'&&mt5Connected)?'collegato':'no',
@@ -64646,7 +64769,12 @@ function fblMisuraPrestazioni(secondi){
  });
 }
 fblDelega('click',ev=>{
- if(ev.target&&ev.target.closest&&ev.target.closest('#fblMisuraPrestBtn')){ fblMisuraPrestazioni(5); return; }
+ if(ev.target&&ev.target.closest&&ev.target.closest('#fblMisuraPrestBtn')){
+  // 8.6.19: il referto mostra l'ultimo campione salvato, non una lettura presa al volo.
+  const contesto=(fblMemoriaCampioni&&fblMemoriaCampioni.stato&&fblMemoriaCampioni.stato.campioni.length)
+   ?fblMemoriaContestoPerMisura(fblMemoriaCampioni):null;
+  fblMisuraPrestazioni(5,contesto); return;
+ }
  const cp=ev.target&&ev.target.closest&&ev.target.closest('#fblCopiaPrestBtn');
  if(cp){
   const t=$('fblPrestOut')?$('fblPrestOut').textContent:'';
