@@ -664,7 +664,7 @@
 // v2.2.112 - BOS auto-open: lotti da op.lotto.lotti; scan non chiude birth bar in replay.
 // v2.2.113 - Live: non congelare il grafico dopo l'orario se MT5 riporta simbolo tradabile.
 // v2.2.114 - BOS: sync TP/SL/BE/chiusura su posizioni auto; beTp1; tocco valid pullback intra-bar; realCloseAt.
-const CACHE_NAME = "forex-backtest-lab-v2.2.128";
+const CACHE_NAME = "forex-backtest-lab-v2.2.129";
 // LE PAGINE CHE SI POSSONO APRIRE COL DITO. Devono stare qui TUTTE: una pagina assente da questo
 // elenco non ha una copia sul dispositivo, e una navigazione che non trova la copia e non trova la
 // rete finisce sulla pagina di errore del sistema. MISURATO il 17 ottobre 2026 dentro l'APK: il

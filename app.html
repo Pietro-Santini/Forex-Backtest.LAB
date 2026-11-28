@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.128';
+const FBL_VERSIONE='2.2.129';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -20131,8 +20131,18 @@ const NO_WICK_RETEST_DEF = {
   // 4) apertura trade  5) nuovo livello senza stoppino.
   compute(rows, upToIdx, ind) {
     const p = ind.params, st = ind.calc;
-    if (st.serie !== rowsSerie() || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
-      st.serie = rowsSerie(); st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
+    // §3.3.2: l'EMA "a 1 minuto" si calcola su una serie M1 VERA, mentre `st.m` resta SEMPRE
+    // la mappa delle barre del grafico: `st.fast`/`st.slow` si leggono con `st.ptr`, quindi devono
+    // restare allineate alle candele a schermo anche quando la serie EMA e' un'altra.
+    // La M1 puo' arrivare in modo asincrono: la sua identita' entra NELLA CHIAVE della cache.
+    // Senza questo, il primo calcolo fatto senza M1 resterebbe in cache per sempre: la targa
+    // sarebbe identica prima e dopo l'arrivo della serie (misurato: 2012.374 invece di 2013.814).
+    if((currentTF||1)<=1&&!ind.oneMinRows)fblRegistraUltimaM1Indicatore(rows);
+    const m = rows;
+    const mEma = ind.oneMinRows || fblSerieM1PerIndicatore() || m;
+    const serieKey = rowsSerie() + '|m1:' + (mEma === m ? '-' : (mEma.length + '@' + (mEma[0] && mEma[0].date)));
+    if (st.serie !== serieKey || st.builtParamsKey !== JSON.stringify(p) || upToIdx < st.builtTo) {
+      st.serie = serieKey; st.builtParamsKey = JSON.stringify(p); st.builtTo = -1;
       st.atr = []; st.tr = [];
       st.levels = [];          // livelli non ancora toccati: {price, dir, origin}
       st.entryLines = [];      // livelli toccati che hanno generato un trade: {price, from, to, dir}
@@ -20141,11 +20151,23 @@ const NO_WICK_RETEST_DEF = {
       st.markers = [];         // marcatori configurazione: {bar, dir}
       st.tradeActive = false; st.trade = null;
       // Trend a 1 minuto: EMA sulle barre a 1 minuto, mappate alle barre del grafico.
-      const m = ind.oneMinRows || rows;
-      st.m = m.map(b => ({t: new Date(b.date).getTime(), c: b.close}));
-      const closes = st.m.map(b => b.c);
-      st.fast = nowickEma(closes, Math.max(1, p.fastEma | 0));
-      st.slow = nowickEma(closes, Math.max(2, p.slowEma | 0));
+      // La mappa usa `date`: e' l'istante che il grafico mostra, e il confronto fra time frame
+      // va fatto sull'apertura della barra, non sul suo ultimo minuto (che slittrebbe di 4 minuti).
+      const orarioB=b=>new Date(b.date).getTime();
+      st.m = m.map(b => ({t: orarioB(b), c: b.close}));
+      const tM1=mEma.map(orarioB);
+      const fastM1=nowickEma(mEma.map(b => b.close), Math.max(1, p.fastEma | 0));
+      const slowM1=nowickEma(mEma.map(b => b.close), Math.max(2, p.slowEma | 0));
+      // `st.fast`/`st.slow` restano allineati a `st.m` (l'indicatore li legge con st.ptr), ma
+      // prendono il valore dell'EMA a 1 minuto dell'ultimo minuto non successivo alla barra.
+      // Se la serie EMA e' quella del grafico, gli indici coincidono e non cambia niente.
+      st.fast=[]; st.slow=[];
+      let q=-1;
+      for(const b of st.m){
+        while(q+1<tM1.length&&tM1[q+1]<=b.t)q++;
+        st.fast.push(q>=0?fastM1[q]:NaN);
+        st.slow.push(q>=0?slowM1[q]:NaN);
+      }
       st.ptr = -1;
     }
     const atrLen = Math.max(1, p.atrLength | 0);
@@ -27899,6 +27921,11 @@ function draw(){
          const _forming=(liveModeActive && !liveReplayActive)?(rows.length-1):(liveReplayActive && replayForm && Number.isFinite(replayForm.idx)?replayForm.idx:-1);
          if(_forming>_upTo) _upTo=Math.min(_forming, rows.length-1);
        }
+       // §3.3.2: l'EMA "a 1 minuto" del No-Wick va calcolata sulle candele M1 vere anche
+       // quando il grafico e' a 5/15 minuti. La serie arriva in modo asincrono, quindi si
+       // ricontrolla a ogni disegno; se non c'e', l'indicatore continua a usare `rows`.
+       // Un `oneMinRows` messo a mano dai banchi di prova non va mai cancellato.
+       fblNoWickM1PerIndicatore(ind);
        def.compute(rows,_upTo,ind);
        _tInd=fblDettaglioFine('ind:'+ind.key+':calcolo',_tInd);
        // pad/h in coda (RICHIESTO per l'indicatore Volume, vedi volume_default più sopra nel
@@ -59362,6 +59389,81 @@ async function fblSerieM1Assicura(){
   }finally{ fblM1InCorso=null; }
  })();
  return fblM1InCorso;
+}
+// SERIE M1 VERA PER L'INDICATORE NO-WICK RETEST (§3.3.2, 28 novembre 2026).
+// Il gancio `ind.oneMinRows` esiste in NO_WICK_RETEST_DEF.compute ma l'app non lo alimentava
+// mai: l'EMA detta "a 1 minuto" veniva calcolata sulle candele del time frame del grafico,
+// quindi cambiava da M1 a M5 e a M15. Si restituisce SOLO una serie M1 REALE, mai candele
+// inventate: se non c'e' una serie M1 che copra l'intervallo, si torna a `rows` come prima.
+// Ultima serie M1 VERAMENTE vista sul grafico (candele lette, non ricostruite): serve quando si
+// passa da M1 a M5/M15 e la serie del magazzino non e' ancora arrivata. Si registra solo se il
+// passo misurato e' davvero di un minuto; l'identita' dell'array evita di rifare il controllo
+// a ogni fotogramma.
+// UNA VOCE PER ASSET, non uno slot solo: con A(M1) -> B(M1) -> A(M5) lo slot unico perdeva la
+// M1 di A e il No-Wick su A ricadeva sulle barre del grafico. La chiave e' l'asset dei DATI
+// (`rowsAssetKey` quando c'e'), che dice davvero a chi appartengono le candele lette.
+const fblUltimaM1Indicatore={};
+// Tetto di memoria: ogni voce trattiene decine di migliaia di candele per tutta la sessione.
+// Sei asset bastano al ripiego del cambio time frame; si elimina la registrazione piu' vecchia.
+// Il contatore conta le registrazioni, cosi' un asset rivisto non viene scartato al primo nuovo.
+const FBL_ULTIMA_M1_ASSET_MAX=6;
+let fblUltimaM1Contatore=0;
+function fblRegistraUltimaM1Indicatore(s){
+  if(!s||!s.length)return;
+  const asset=rowsAssetKey||currentAssetKey;
+  const vecchia=fblUltimaM1Indicatore[asset];
+  if(vecchia&&vecchia.rows===s)return;
+  const ts=fblTimestampsSerie(s);
+  if(ts.length<3||!Number.isFinite(ts[0]))return;
+  let vicini=0;
+  for(let i=1;i<Math.min(6,ts.length);i++)if(Math.abs(ts[i]-ts[i-1]-60000)<1000)vicini++;
+  if(vicini<2)return;                                        // non e' una serie al minuto
+  fblUltimaM1Indicatore[asset]={rows:s,ts,asset,n:++fblUltimaM1Contatore};
+  const chiavi=Object.keys(fblUltimaM1Indicatore);
+  if(chiavi.length>FBL_ULTIMA_M1_ASSET_MAX){
+    let piuVecchio=chiavi[0];
+    for(const k of chiavi)if(fblUltimaM1Indicatore[k].n<fblUltimaM1Indicatore[piuVecchio].n)piuVecchio=k;
+    delete fblUltimaM1Indicatore[piuVecchio];                 // solo questa mappa, non le altre serie
+  }
+}
+function fblSerieM1PerIndicatore(){
+  if((currentTF||1)<=1)return null;                          // il grafico e' gia' al minuto
+  if(!rows||!rows.length)return null;
+  const tsG=getRowsTimestamps();
+  const tPrima=tsG[0], tUltima=tsG[tsG.length-1];
+  if(!Number.isFinite(tPrima)||!Number.isFinite(tUltima))return null;
+  // 1) la serie M1 del magazzino/ponte: deve essere dell'asset giusto e coprire il grafico.
+  const s=fblM1Serie;
+  if(s&&s.rows&&s.rows.length&&s.asset===currentAssetKey){
+    const tsM=(s.ts&&s.ts.length===s.rows.length)?s.ts:fblTimestampsSerie(s.rows);
+    if(tsM.length&&Number.isFinite(tsM[0])&&Number.isFinite(tsM[tsM.length-1])
+       &&tsM[0]<=tPrima+60000&&tsM[tsM.length-1]>=tUltima-60000)return s.rows;
+  }
+  // 2) Fuori dalla diretta le candele di base POSSONO essere gia' al minuto (CSV, libreria,
+  //    backtest): lo si verifica sul passo REALE dei timestamp, non sul nome del time frame.
+  if(!liveModeActive&&baseRows&&baseRows.length){
+    const tsB=getBaseTimes();
+    if(tsB&&tsB.length>=3&&Number.isFinite(tsB[0])&&Number.isFinite(tsB[1])
+       &&Math.abs(tsB[1]-tsB[0]-60000)<1000
+       &&Math.abs(tsB[2]-tsB[1]-60000)<1000
+       &&tsB[0]<=tPrima+60000&&tsB[tsB.length-1]>=tUltima-60000)return baseRows;
+  }
+  // 3) serie M1 gia' vista sul grafico prima del cambio di time frame: riprende le stesse
+  //    candele reali solo se copre tutto l'intervallo attualmente a schermo.
+  const u=fblUltimaM1Indicatore[rowsAssetKey||currentAssetKey];
+  if(u&&u.rows&&u.ts.length
+     &&u.ts[0]<=tPrima+60000&&u.ts[u.ts.length-1]>=tUltima-60000)return u.rows;
+  return null;
+}
+// Aggancia/stacca la M1 al No-Wick, come fa draw() a ogni ridisegno. Staccare e' necessario:
+// senza questa riga un `oneMinRows` automatico resta attivo dopo il cambio asset anche quando
+// non c'e' piu' nessuna M1 valida, e l'indicatore continua a mostrare l'EMA dell'asset vecchio.
+// Il flag `_m1Auto` distingue il gancio messo dall'app da quello messo a mano dai banchi.
+function fblNoWickM1PerIndicatore(ind){
+  if(!ind||ind.key!=='no_wick_retest')return;
+  const m1=fblSerieM1PerIndicatore();
+  if(m1){ind.oneMinRows=m1;ind._m1Auto=true;}
+  else if(ind._m1Auto){delete ind.oneMinRows;delete ind._m1Auto;}
 }
 async function fblFileDaCache(asset){
  const c=await fblCsvCacheLeggi(asset);
