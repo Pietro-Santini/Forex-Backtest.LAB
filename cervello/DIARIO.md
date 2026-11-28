@@ -1,5 +1,16 @@
 # DIARIO
 
+## 2026-11-28 (seconda)
+- v2.2.127: profili volumetrici con la forma giusta a ogni timeframe. Misurato: 10 profili su 10
+  dei giorni 23-27 novembre usavano i minuti del 20 (prezzo 1899 contro 2039 del 27), perché la
+  serie M1 del magazzino era vecchia e il controllo guardava solo l'inizio del profilo. Cura:
+  controllo anche sulla fine + accodo dei minuti da MT5 in diretta ogni 20 s (se c'è un buco si
+  riscarica tutto). Banchi nuovi: `profili_serie_m1_aggiornata.test.mjs` (prima 1 rossa su 3, poi
+  3/3) e `serie_m1_accodo_live.test.mjs` (3/3). Aggiornato `magazzino_serie_minuto.test.mjs`:
+  il vecchio banco vietava qualsiasi richiesta di rete con la serie in magazzino; ora distingue
+  lo scarico da 20.000 candele (vietato) dal delta di pochi minuti (ammesso in diretta, misurato
+  `count=183`). Il collaudo completo era rosso solo su quel banco, sistemato.
+
 ## 2026-11-28
 - v2.2.126: aperture automatiche nel replay in modalità Storico (file CSV). Il motore gira sul passo
   del replay (`forward()`) e usa le candele dei CSV tagliate al punto mostrato; le posizioni nascono

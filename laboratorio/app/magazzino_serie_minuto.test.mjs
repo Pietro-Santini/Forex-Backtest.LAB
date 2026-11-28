@@ -55,32 +55,60 @@ test('con la serie nel magazzino i profili non scaricano 20.000 candele dalla re
   try {
     const r = await pagina.evaluate(async (serie) => {
       const righe = eval(serie)(300);   // sopra le 200 che il profilo considera utilizzabili
+      // La serie generata e' di gennaio: con l'ora corrente il "delta" sarebbe enorme e l'app
+      // riscaricherebbe 20.000 candele. La si ribasa sugli ultimi minuti, come nel banco live,
+      // per misurare la richiesta di coda (pochi minuti) e non la riscarica.
+      const MIN = 60000;
+      const ultimo = Math.floor(Date.now() / MIN) * MIN - 2 * MIN;
+      const scarto = ultimo - righe[righe.length - 1].time * 1000;
+      for (const r of righe) {
+        r.time = Math.floor((r.time * 1000 + scarto) / 1000);
+        r.date = new Date(r.time * 1000).toISOString();
+      }
       await fblCandeleCacheScrivi('XAUUSD', 'M1', righe, 2, 0);
       try {
         // Si riproduce il caso vero: Live, MT5 collegato, grafico a 15 minuti, nessuna serie in
-        // memoria. Se il magazzino risponde, il ramo di rete non deve nemmeno partire.
+        // memoria. Con la serie nel magazzino la rete puo' servire solo il delta di minuti
+        // mancanti: deve restare piccolo, non il solito scarico da 20.000 candele.
         liveModeActive = true; liveReplayActive = false;
         mt5ActiveSymbol = 'XAUUSD';
         currentAssetKey = 'XAUUSD'; rowsAssetKey = 'XAUUSD';
         currentTF = 15;
         fblSerieM1Dimentica();
-        let richieste = 0;
+        // Si registra ogni richiesta con i suoi parametri: il `count` distingue il delta (piccolo)
+        // dallo scarico da 20.000 candele. La rete e' comunque spenta: se il delta fallisce, la
+        // serie del magazzino deve restare valida.
+        const richieste = [];
         const veroFetch = window.fetch;
-        window.fetch = function (...a) { richieste++; return Promise.reject(new Error('rete non deve servire')); };
+        window.fetch = function (...a) {
+          const url = String(a[0] && a[0].url ? a[0].url : a[0]);
+          const m = /[?&]count=(\d+)/.exec(url);
+          richieste.push({url, count: m ? Number(m[1]) : null});
+          return Promise.reject(new Error('rete non deve servire'));
+        };
         try {
           fblSerieM1Assicura();
           if (fblM1InCorso) await fblM1InCorso;
         } finally { window.fetch = veroFetch; }
-        return {richieste, righe: fblM1Serie.rows ? fblM1Serie.rows.length : 0,
-                asset: fblM1Serie.asset};
+        const righeM1 = fblM1Serie.rows || [];
+        const perTime = new Map(righeM1.map(x => [x.time, x]));
+        const primo = perTime.get(righe[0].time);
+        const ultimo = perTime.get(righe[righe.length - 1].time);
+        return {richieste, righe: righeM1.length, asset: fblM1Serie.asset,
+                primo: primo ? primo.close : null, ultimo: ultimo ? ultimo.close : null,
+                attesoPrimo: righe[0].close, attesoUltimo: righe[righe.length - 1].close};
       } finally {
         await idbDel('candleCache:XAUUSD::M1'); await idbDel('candleCache:XAUUSD::1');
         fblSerieM1Dimentica();
       }
     }, SERIE);
     console.log('risultato:', JSON.stringify(r));
-    assert.equal(r.richieste, 0, 'la serie era nel magazzino: nessuna richiesta al servizio dati');
-    assert.equal(r.righe, 300, 'la serie al minuto deve essere quella del magazzino');
+    // (a) Una richiesta per il delta e' ammessa; e' vietata invece ogni richiesta con `count`
+    //     grande (20.000): qui si misura l'intenzione, non il numero di chiamate.
+    const grandi = r.richieste.filter(x => x.count !== null && x.count >= 1000);
+    assert.deepEqual(grandi, [], 'non scarica 20.000 candele: nessuna richiesta con count >= 1000 (richieste: ' + JSON.stringify(r.richieste) + ')');
+    // (b) Qualunque sia l'esito della richiesta delta, la serie resta quella del magazzino.
+    assert.ok(r.righe === 300 && r.primo === r.attesoPrimo && r.ultimo === r.attesoUltimo, 'la serie dopo il giro viene dal magazzino: 300 righe con prezzi coerenti');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });

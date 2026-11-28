@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.126';
+const FBL_VERSIONE='2.2.127';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -59261,40 +59261,100 @@ function fblSerieM1PerProfilo(d,fullTs){
  // peggio di un profilo intero al time frame del grafico.
  if(lo<s.ts[0])return null;
  const tUltima=Number.isFinite(masterTime)?masterTime:((fullTs&&fullTs.length)?fullTs[Math.min(idx,fullTs.length-1)]:NaN);
+ // ...DENTRO anche dalla parte della FINE (27 novembre 2026). MISURATO sulla sua app: grafico a
+ // 5 minuti, serie M1 presa dal magazzino e ferma al 20 novembre 21:49. Ogni profilo dei giorni
+ // dopo cadeva oltre l'ultima candela M1, rowIndexNearTime lo schiacciava sull'ultima e, con
+ // «tieni fermo il numero di candele», l'inizio veniva tirato indietro: i profili del 23, 24, 25,
+ // 26 e 27 erano TUTTI calcolati sui minuti del 20. Stessa forma ogni giorno, senza un errore.
+ // Tolleranza: una candela del grafico (l'ultima M1 puo' essere poco indietro rispetto a lei).
+ const fine=(d.type==='vpanchor'&&Number.isFinite(tUltima))?Math.max(hi,tUltima):hi;
+ if(!(fine<=s.ts[s.ts.length-1]+(currentTF||1)*60000))return null;
  let idxLive=s.ts.length-1;
  if(Number.isFinite(tUltima))idxLive=Math.max(0,Math.min(s.ts.length-1,rowIndexNearTime(tUltima,s.rows)));
  return {rows:s.rows, ts:s.ts, idxLive};
 }
-function fblSerieM1Dimentica(){ fblM1Serie={asset:null,rows:null,ts:null}; fblM1UltimoTentativoAt=0; }
+function fblSerieM1Dimentica(){ fblM1Serie={asset:null,rows:null,ts:null}; fblM1UltimoTentativoAt=0; fblM1UltimoAccodoAt=0; }
+// LA SERIE M1 VA TENUTA AL PASSO (27 novembre 2026). Prima si caricava UNA volta (dal magazzino
+// se c'era, anche vecchio di una settimana) e poi non si toccava piu': in diretta il profilo di
+// oggi non cresceva al minuto e, con il magazzino vecchio, i profili recenti erano sbagliati.
+// Ora: in diretta si accodano i minuti nuovi da MT5 ogni FBL_M1_PASSO_MS; se la coda non si
+// attacca (buco) si riscarica tutto. Fuori dalla diretta non c'e' da dove accodare: i profili che
+// cadono oltre l'ultima M1 tornano alle candele del grafico (vedi fblSerieM1PerProfilo).
+const FBL_M1_PASSO_MS=20000;
+let fblM1UltimoAccodoAt=0;
+function fblSerieM1DaMt5(candles){
+ return (Array.isArray(candles)?candles:[]).map(c=>({
+   time:c.time, date:new Date(c.time*1000).toISOString(),
+   open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
+ })).filter(x=>Number.isFinite(x.time)&&[x.open,x.high,x.low,x.close].every(Number.isFinite));
+}
+// Unisce i minuti nuovi in coda ai vecchi, per orario: quelli nuovi vincono (l'ultimo minuto e'
+// in formazione e cambia a ogni giro). null se la coda NON si attacca: tra l'ultima vecchia e la
+// prima nuova manca piu' di un minuto, e incollarle lascerebbe un buco travestito da continuita'.
+function fblSerieM1Unisci(vecchie,nuove){
+ if(!nuove||!nuove.length)return vecchie;
+ if(!vecchie||!vecchie.length)return nuove;
+ const tsV=fblTimestampsSerie(vecchie), tsN=fblTimestampsSerie(nuove);
+ if(tsN[0]>tsV[tsV.length-1]+60000)return null;
+ let k=tsV.length; while(k>0&&tsV[k-1]>=tsN[0])k--;
+ const out=vecchie.slice(0,k).concat(nuove);
+ const tetto=Math.max(FBL_M1_PROFILI,Math.min(50000,vecchie.length));
+ return out.length>tetto?out.slice(out.length-tetto):out;
+}
+async function fblSerieM1Chiedi(conta){
+ const r=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(mt5ActiveSymbol)
+   +'&timeframe=M1&count='+Math.max(1,Math.min(50000,Math.round(conta)))),{cache:'no-store'});
+ const j=await r.json();
+ return fblSerieM1DaMt5(j&&j.candles);
+}
 async function fblSerieM1Assicura(){
  if((currentTF||1)<=1)return null;
  const asset=currentAssetKey;
  if(!asset)return null;
- if(fblM1Serie.asset===asset&&fblM1Serie.rows&&fblM1Serie.rows.length)return null;
  if(fblM1InCorso)return null;
- if(Date.now()-fblM1UltimoTentativoAt<120000)return null;   // niente martello sul servizio
- fblM1UltimoTentativoAt=Date.now();
+ const puoMt5=!!(liveModeActive&&mt5ActiveSymbol&&!liveReplayActive);
+ const haSerie=fblM1Serie.asset===asset&&fblM1Serie.rows&&fblM1Serie.rows.length;
+ if(haSerie){
+   if(!puoMt5)return null;
+   if(Date.now()-fblM1UltimoAccodoAt<FBL_M1_PASSO_MS)return null;
+   fblM1UltimoAccodoAt=Date.now();
+ }else{
+   if(Date.now()-fblM1UltimoTentativoAt<120000)return null;   // niente martello sul servizio
+   fblM1UltimoTentativoAt=Date.now();
+ }
  fblM1InCorso=(async function(){
   try{
-   let righe=null;
-   try{
-     const letto=await fblCandeleCacheLeggi(asset,1,(mt5ContoAttivo&&mt5ContoAttivo.server)||'');
-     if(letto&&letto.rows&&letto.rows.length)righe=letto.rows;
-   }catch(e){ righe=null; }
-   if((!righe||righe.length<200)&&liveModeActive&&mt5ActiveSymbol&&!liveReplayActive){
+   let righe=haSerie?fblM1Serie.rows:null;
+   if(!righe){
      try{
-       const r=await fetch(fblConChiave(MT5_FEED_URL+'/history?symbol='+encodeURIComponent(mt5ActiveSymbol)
-         +'&timeframe=M1&count='+FBL_M1_PROFILI),{cache:'no-store'});
-       const j=await r.json();
-       const arr=(j&&Array.isArray(j.candles))?j.candles.map(c=>({
-         time:c.time, date:new Date(c.time*1000).toISOString(),
-         open:c.open, high:c.high, low:c.low, close:c.close, volume:c.tick_volume||0
-       })).filter(x=>[x.open,x.high,x.low,x.close].every(Number.isFinite)):null;
-       if(arr&&arr.length)righe=arr;
+       const letto=await fblCandeleCacheLeggi(asset,1,(mt5ContoAttivo&&mt5ContoAttivo.server)||'');
+       if(letto&&letto.rows&&letto.rows.length>=200)righe=letto.rows;
+     }catch(e){ righe=null; }
+   }
+   if(puoMt5){
+     try{
+       if(!righe){
+         const tutte=await fblSerieM1Chiedi(FBL_M1_PROFILI);
+         if(tutte.length)righe=tutte;
+       }else{
+         // Quanti minuti mancano, con margine (l'orario delle candele ha lo scarto del broker,
+         // quindi il conto sull'orologio e' solo una stima: meglio chiederne qualcuno in piu').
+         const tsV=fblTimestampsSerie(righe);
+         const manca=Math.ceil((Date.now()-tsV[tsV.length-1])/60000)+180;
+         const conta=Math.max(10,manca);
+         const coda=conta>=50000?null:await fblSerieM1Chiedi(conta);
+         let unite=coda?fblSerieM1Unisci(righe,coda):null;
+         if(!unite){
+           const tutte=await fblSerieM1Chiedi(FBL_M1_PROFILI);
+           unite=tutte.length?tutte:righe;
+         }
+         righe=unite;
+       }
      }catch(e){}
    }
    if(!righe||!righe.length)return;
    if(currentAssetKey!==asset)return;                        // l'utente ha gia' cambiato asset
+   if(haSerie&&righe===fblM1Serie.rows)return;
    fblM1Serie={asset, rows:righe, ts:null};
    fblM1Serie.ts=fblTimestampsSerie(righe);
    try{ draw(); }catch(e){}
