@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (settima)
+- v2.2.131: interruttore unico d'emergenza per le aperture automatiche. Flag `masterOff` nel
+  config del motore, checkbox nel pannello, lettura fail-closed (se lo storage non si legge, blocca).
+  Copre pull back, No-Wick, motore in diretta e su CSV e anche le aperture automatiche delle sale
+  Telegram (`tgAutoDecidi`, che non passavano dalla porta comune). Non blocca aperture manuali,
+  chiusure SL/TP né le operazioni in ombra. Banco `interruttore_emergenza_aperture.test.mjs`: prima
+  3 rosse su 3, poi 5/5; 23 banchi collegati verdi.
+
 ## 2026-11-28 (sesta)
 - Strumento di controllo sintassi: `laboratorio/strumenti/sintassi_app.mjs` compilava solo 5 dei 6
   blocchi `<script>` di app.html (escludeva il modulo ES a riga 1169). Ora li copre tutti: il modulo
