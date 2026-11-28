@@ -1,5 +1,13 @@
 # DIARIO
 
+## 2026-11-28 (quinta)
+- v2.2.130: costo vero di esecuzione del bot. Misurato con ponte finto: segnale 2000/1990, MT5
+  esegue a 2000,30 e stop a 1989,60; Journal già corretto (pl −107), ombra intenzionalmente del
+  segnale. Mancavano i campi del costo (3 pip + 4 pip = 7 €) e la commissione del deal nei trade,
+  per cui `fblCommissioneImparata` restava a 0 operazioni. Ora il trade porta `entrySegnale`,
+  `stopSegnale`, `stopEseguito`, `costoEsecuzioneEUR` e `commission`; P/L, pip, ombra e statistiche
+  invariati. Banco `costo_esecuzione_ombra.test.mjs` 3/3 (prima 1 verde + 2 rosse).
+
 ## 2026-11-28 (quarta)
 - v2.2.129: indicatori calcolati sul minuto a ogni timeframe. Misurato No-Wick: EMA20 «a 1 minuto»
   2013,814 su M1 contro 2012,374 su M5; EMA50 2013,484 contro 2008,784; trend NESSUNO contro
