@@ -120,11 +120,16 @@ export const PREPARA_BTC = () => {
 // Riprodotto a comando in locale con TZ=UTC: stessi rossi, stesse prove.
 //
 // L'app ragiona SEMPRE sull'ora di Roma (romeOffsetMs), quindi i banchi devono chiedere quella.
-// Restituisce l'istante (in millisecondi) in cui a Roma sono le h:m di oggi.
+// Restituisce l'istante (in millisecondi) in cui a Roma sono le h:m di oggi — o, se oggi e' sabato o
+// domenica, del VENERDI' appena passato (28 novembre 2026). MISURATO: lanciato di sabato, «le 15:00
+// di oggi» cadeva a mercato chiuso, la barra di stato diceva «Mercato chiuso…» e il BE di
+// tosto_be_posizioni.test.mjs usciva rosso. Chi chiede un'ora vuole un'ora di un giorno di mercato.
 export async function oraDiRoma(pagina, h, m = 0) {
   return await pagina.evaluate(([hh, mm]) => {
     const adesso = Date.now();
-    const giorno = Math.floor((adesso + romeOffsetMs(adesso)) / 86400000);
+    let giorno = Math.floor((adesso + romeOffsetMs(adesso)) / 86400000);
+    const sett = ((giorno + 4) % 7 + 7) % 7;      // 0 = domenica … 6 = sabato (come liveSessionPhaseAt)
+    if (sett === 6) giorno -= 1; else if (sett === 0) giorno -= 2;
     const grezzo = giorno * 86400000 + (hh * 60 + mm) * 60000;
     return grezzo - romeOffsetMs(grezzo);
   }, [h, m]);

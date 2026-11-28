@@ -91,7 +91,8 @@ test('nel giro: un segnale senza spike viene FILTRATO e registrato, non osservat
       currentTF = 30; rows = aggregateRows(baseRows, 30); idx = rows.length - 1; currentAssetKey = 'XAUUSD';
       mt5ActiveSymbol = 'XAUUSD'; fblMotoreSerie = {}; fblMotoreUltimaBase = null; fblMotoreInCorso = false;
       fblMotoreCaricaSerie = async (tf) => aggregateRows(baseRows, tf).map(x => ({...x}));
-      liveModeActive = true; liveReplayActive = false; mt5Connected = true; mt5AccountInfo = {reale: false};
+      liveModeActive = true; liveReplayActive = false; mt5Connected = true; liveSessionPhaseNow = () => 'mt5';  // mercato aperto: il banco non dipende dal giorno vero (v2.2.125)
+  mt5AccountInfo = {reale: false};
       for (const k of ['fbl_motore_auto', 'fbl_motore_ombra', 'fbl_motore_registro']) localStorage.removeItem(k);
       INDICATOR_DEFS.__finto = {label: 'finto', defaultParams: () => ({}), compute(r, upTo, ind) {
         const st = ind.calc; if (!st.trades) st.trades = [];

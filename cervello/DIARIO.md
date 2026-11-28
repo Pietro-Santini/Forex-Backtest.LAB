@@ -8481,3 +8481,30 @@ DIFFERENZA DA SAPERE: la ricerca contava UNA posizione per volta per regola, l'o
 ogni segnale; i conteggi dal vivo possono essere piu' alti.
 
 BANCO: motore_regole_periodo_c.test.mjs, 4 prove, rosse 4 su 4 sulla v2.2.123.
+
+
+## 28 novembre 2026 — v2.2.125: a mercato chiuso il motore dice «mercato chiuso», non «MT5 non collegato»
+
+MISURATO sulla sua app (DevTools 9222, sola lettura), sabato 28 novembre 01:25 UTC: v2.2.124, in
+diretta su XAUUSD, conto demo MetaQuotes-Demo, `mt5Connected` vero, servizio dati 8001 che risponde
+(`connected_to_broker: true`), ma «Ultimo giro del motore: fermo: MT5 non collegato». Registro e
+operazioni in ombra vuoti: giusto, il mercato era chiuso da venerdi' sera.
+CAUSA: a mercato chiuso (`liveSessionPhaseNow()==='closed'`) l'app svuota APPOSTA `mt5ActiveSymbol`
+(nessun prezzo deve toccare la candela), e il motore controllava `!mt5Connected || !mt5ActiveSymbol`
+con un messaggio solo. Il funzionamento era giusto, il messaggio no: faceva credere a un guasto.
+Il proprietario: «Sistemalo certo non lasciarlo così».
+CURA: prima la fase di mercato («fermo: mercato chiuso (riprende da solo alla riapertura)»), poi due
+messaggi separati: «MT5 non collegato» e «il grafico non riceve i prezzi da MT5».
+BANCO: motore_osservazione_registro.test.mjs, prova «fermo a mercato chiuso», rossa sulla 2.2.124.
+I tre banchi del motore fissano ora `liveSessionPhaseNow = () => 'mt5'`: prima dipendevano dal
+giorno vero e nel fine settimana sarebbero diventati rossi da soli.
+
+ANCHE NELLA 2.2.125 — il collaudo di sabato notte ha dato 1 rossa non legata alla cura:
+`tosto_be_posizioni.test.mjs` («col ponte che risponde, il tasto BE parte e riesce»), barra di stato
+«Mercato chiuso…» invece di /pareggio/. MISURATO: `oraDiRoma(15,0)` di aiuti.mjs prendeva le 15:00
+del giorno di OGGI; di sabato quell'istante e' a mercato chiuso (`liveSessionPhaseAt` = 'closed').
+Il rosso era intermittente (rilanciato da solo alle 02:46 di sabato passava): dipende da quando il
+messaggio di mercato chiuso scatta rispetto al clic. CURA: `oraDiRoma` sceglie sempre un giorno
+feriale (sabato e domenica -> il venerdi' appena passato); misurato: vecchio = sabato 15:00
+'closed', nuovo = venerdi' 15:00 'mt5'. Banchi che la usano: tosto_be_posizioni (7 prove con
+chiusura_ora_del_server, tutte verdi di sabato).

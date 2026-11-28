@@ -27,7 +27,8 @@ const PREPARA = `
   // minuti di prova, COMPRESA quella in formazione, come fa il servizio dati vero.
   window.__richieste = [];
   fblMotoreCaricaSerie = async (tf, quante) => { __richieste.push(tf); return aggregateRows(baseRows, tf).map(r => ({...r})); };
-  liveModeActive = true; liveReplayActive = false; mt5Connected = true;
+  liveModeActive = true; liveReplayActive = false; mt5Connected = true; liveSessionPhaseNow = () => 'mt5';  // mercato aperto: il banco non dipende dal giorno vero (v2.2.125)
+ 
   mt5AccountInfo = {reale: false, equity: 10000, balance: 10000, margin_free: 10000};
   positions.length = 0; trades.length = 0; equity = [10000]; if ($('capital')) $('capital').value = '10000';
   fblAutoApertureFatte = null; localStorage.removeItem('fbl_auto_aperture'); localStorage.removeItem('fbl_motore_auto');

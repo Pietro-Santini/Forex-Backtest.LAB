@@ -21,7 +21,8 @@ const PREPARA = `
   currentTF = 30; rows = aggregateRows(baseRows, 30); idx = rows.length - 1; viewEnd = idx; currentAssetKey = 'XAUUSD';
   mt5ActiveSymbol = 'XAUUSD'; fblMotoreSerie = {}; fblMotoreUltimaBase = null; fblMotoreInCorso = false;
   fblMotoreCaricaSerie = async (tf, quante) => aggregateRows(baseRows, tf).map(r => ({...r}));
-  liveModeActive = true; liveReplayActive = false; mt5Connected = true;
+  liveModeActive = true; liveReplayActive = false; mt5Connected = true; liveSessionPhaseNow = () => 'mt5';  // mercato aperto: il banco non dipende dal giorno vero (v2.2.125)
+ 
   mt5AccountInfo = {reale: false, equity: 10000, balance: 10000, margin_free: 10000};
   positions.length = 0; trades.length = 0; equity = [10000]; if ($('capital')) $('capital').value = '10000';
   fblAutoApertureFatte = null;
@@ -191,6 +192,27 @@ test('fermo: il motore dice perche (non in diretta, MT5 non collegato)', async (
     })()`);
     assert.equal(r.a, 'fermo: non sei in diretta');
     assert.equal(r.b, 'fermo: MT5 non collegato');
+    assert.deepEqual(errori, []);
+  } finally { await browser.close(); }
+});
+
+// v2.2.125. MISURATO sulla sua app sabato 28 novembre 2026: a mercato chiuso l'app scollega apposta
+// il grafico da MT5 (mt5ActiveSymbol=null) e il motore scriveva «fermo: MT5 non collegato» con MT5
+// collegato. Il proprietario: «Sistemalo certo non lasciarlo così».
+test('fermo a mercato chiuso: dice MERCATO CHIUSO, non «MT5 non collegato»', async () => {
+  const {browser, pagina, errori} = await apriApp();
+  try {
+    const r = await pagina.evaluate(`(async () => { ${PREPARA}
+      // com'era sulla sua app: MT5 collegato, grafico staccato da MT5 perche' il mercato e' chiuso
+      liveSessionPhaseNow = () => 'closed'; mt5ActiveSymbol = null;
+      await fblMotoreAutoGiro(true); const chiuso = fblMotoreUltimoGiro.testo;
+      // mercato aperto ma il grafico non prende i prezzi da MT5: si dice questo, non «non collegato»
+      liveSessionPhaseNow = () => 'mt5';
+      await fblMotoreAutoGiro(true); const senzaPrezzi = fblMotoreUltimoGiro.testo;
+      return {chiuso, senzaPrezzi};
+    })()`);
+    assert.equal(r.chiuso, 'fermo: mercato chiuso (riprende da solo alla riapertura)');
+    assert.equal(r.senzaPrezzi, 'fermo: il grafico non riceve i prezzi da MT5');
     assert.deepEqual(errori, []);
   } finally { await browser.close(); }
 });
