@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.130';
+const FBL_VERSIONE='2.2.131';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -21940,6 +21940,7 @@ function bosStopPullback(s, p, r, i, cuscinetto) {
 
 function bosPuoAutoAprireDemo(p){
   try{
+    if(fblAutoEmergenzaAttiva()) return false;
     if(!p || !p.autoOpenDemo) return false;
     if(!liveModeActive && !liveReplayActive) return false;
     if(!mt5Connected) return false;
@@ -21954,6 +21955,7 @@ function bosPuoAutoAprireDemo(p){
 // registra con mode 'backtest'. Il permesso e' lo stesso interruttore demo (`autoOpenDemo`).
 function bosPuoAutoAprireStorico(p){
   try{
+    if(fblAutoEmergenzaAttiva()) return false;
     if(!p || !p.autoOpenDemo) return false;
     if(liveModeActive || liveReplayActive) return false;
     return true;
@@ -22094,6 +22096,8 @@ function fblMotivoContoNo(id){
 function fblAutoInviaOrdineDemo(p, asset, op, o){
   fblAutoUltimoMotivo='';
   const _no=(m)=>{ fblAutoUltimoMotivo=m; return false; };
+  // PORTA UNICA: qualsiasi apertura automatica passa da qui (pull back, No-Wick e motore).
+  if(fblAutoEmergenzaAttiva()) return _no('interruttore di emergenza: tutte le aperture automatiche bloccate');
   try{
     const dir=op.dir===1?'BUY':'SELL';
     const {entry, sl, tp, chiave}=o;
@@ -22132,6 +22136,7 @@ function fblAutoInviaOrdineDemo(p, asset, op, o){
 }
 function bosAutoApriOpsSetup(st, p, setupId, i){
   try{
+    if(fblAutoEmergenzaAttiva()) return;   // vale anche per il ramo Storico e per il replay live
     const _idInd=(st&&st.ops&&st.ops[0]&&st.ops[0].indicatore)||'pullback';
     if(!bosPuoAutoAprireDemo(p) && !fblPuoAprireSulConto(p, _idInd) && !bosPuoAutoAprireStorico(p)) return;
     if(st && st._rebuilding) return;
@@ -24472,7 +24477,7 @@ const FBL_MOTORE_REGOLE = [
 // Apre su questo conto? Demo: il suo interruttore demo; reale: il suo interruttore reale. Le regole
 // di sola osservazione mai, qualunque cosa ci sia scritto nella configurazione.
 function fblMotoreApreSulConto(reg, tipo){
-  if(reg.soloOsserva) return false;
+  if(reg.soloOsserva || fblAutoEmergenzaAttiva()) return false;
   return tipo==='demo' ? fblMotoreAcceso(reg.id) : (tipo==='reale' ? fblRealePermesso(reg.id) : false);
 }
 // IL FILTRO SPIKE della ricerca (anatomia.spike + ricerca_broker.maschere «spike>1.5x»): la candela
@@ -24494,6 +24499,18 @@ function fblMotoreConfig(){
   try{ const c=JSON.parse(localStorage.getItem(FBL_MOTORE_CHIAVE)||'{}'); return (c&&typeof c==='object')?c:{}; }catch(e){ return {}; }
 }
 function fblMotoreSalvaConfig(c){ try{ localStorage.setItem(FBL_MOTORE_CHIAVE, JSON.stringify(c)); }catch(e){} }
+// INTERRUTTORE UNICO D'EMERGENZA (§3.4.4.a): un solo flag, dentro la stessa configurazione del
+// motore, vale per pull back, No-Wick, regole del motore, diretta, replay live e conto storico CSV,
+// demo e reale. Non tocca le aperture MANUALI ne' le chiusure SL/TP delle posizioni gia' aperte.
+// Lo leggono le guardie comuni, non i singoli indicatori, cosi' nessuna strada puo' aggirarlo.
+// FAIL-CLOSED: se il deposito non si puo' leggere (o il contenuto e' guasto) si blocca tutto:
+// un interruttore d'emergenza che non si puo' verificare non puo' dare il via libera.
+function fblAutoEmergenzaAttiva(){
+  try{
+    const c=JSON.parse(localStorage.getItem(FBL_MOTORE_CHIAVE)||'{}');
+    return !!(c && typeof c==='object' && c.masterOff===true);
+  }catch(e){ return true; }
+}
 function fblMotoreAcceso(id){ return fblMotoreConfig()[id]===true; }
 function fblMotoreRischio(){ const r=Number(fblMotoreConfig().rischio); return (r>0&&r<=5)?r:0.5; }
 const fblMotoreStati={};      // per regola: copia dell'indicatore, candele gia' calcolate, segnali visti
@@ -24620,6 +24637,9 @@ function fblMotoreRegistroDi(id){ return fblMotoreLeggi(FBL_MOTORE_REGISTRO_CHIA
 function fblMotoreOmbraDi(id){ return fblMotoreLeggi(FBL_MOTORE_OMBRA_CHIAVE).filter(o=>o&&o.regola===id); }
 // Un segnale sull'ultima candela chiusa: ombra sempre, ordine solo se la regola apre su questo conto.
 function fblMotoreDecidi(reg, sig, rowsTf, k, apre){
+  // L'interruttore di emergenza vale anche se un chiamante passa `apre=true`: l'osservazione
+  // continua, ma nessun segnale puo' diventare un ordine.
+  const puoAprire=apre && !fblAutoEmergenzaAttiva();
   const entry=Number(rowsTf[k].close), stop=Number(sig.stop), d=sig.dir;
   const rischio=Math.abs(entry-stop);
   const base={regola:reg.id, tf:reg.tf, barra:rowsTf[k].date, dir:d, entry, stop};
@@ -24636,12 +24656,15 @@ function fblMotoreDecidi(reg, sig, rowsTf, k, apre){
     fblMotoreScrivi(FBL_MOTORE_OMBRA_CHIAVE, ombra, 2000);
   }
   const sosp=fblMotoreSospesa(reg.id);
-  if(apre && sosp){
+  if(puoAprire && sosp){
     fblMotoreRegistra(Object.assign(base, {tp, esito:'osservato', motivo:'regola SOSPESA: '+(sosp.motivo||'')}));
     return false;
   }
-  if(!apre){
-    fblMotoreRegistra(Object.assign(base, {tp, esito:'osservato', motivo:'solo osservazione (apertura spenta per questo conto)'}));
+  if(!puoAprire){
+    const motivo=fblAutoEmergenzaAttiva()
+      ? 'interruttore di emergenza: tutte le aperture automatiche bloccate'
+      : 'solo osservazione (apertura spenta per questo conto)';
+    fblMotoreRegistra(Object.assign(base, {tp, esito:'osservato', motivo}));
     return false;
   }
   const ok=fblMotoreApri(reg, sig, rowsTf, k);
@@ -24881,7 +24904,7 @@ setInterval(()=>{ try{ fblMotoreAutoGiro(false); }catch(e){} }, 3000);
 // =====================================================================================
 const FBL_MOTORE_STORICO_CANDELE=3000;
 const fblMotoreStatiS={};        // per regola: stato del calcolo in Storico (mai condiviso col Live)
-function fblMotorePuoiAprireStorico(){ return !liveModeActive && !liveReplayActive; }
+function fblMotorePuoiAprireStorico(){ return !fblAutoEmergenzaAttiva() && !liveModeActive && !liveReplayActive; }
 function fblMotoreStatoStorico(reg){
   let s=fblMotoreStatiS[reg.id];
   if(!s){
@@ -24914,6 +24937,7 @@ function fblMotoreSerieStorico(tf){
 }
 function fblMotoreApriStorico(reg, sig, rowsTf, k){
   try{
+    if(fblAutoEmergenzaAttiva()) return false;   // nessuna posizione sul conto storico CSV
     const asset=currentAssetKey||'';
     const r=rowsTf[k];
     if(!asset||!r) return false;
@@ -25044,6 +25068,20 @@ function fblMotoreAutoSezione(ind, body){
   nota.textContent=(propri?'':'Calcola da sola sul suo timeframe, qualunque grafico tu stia guardando, e manda l\'ordine vero al conto MT5 collegato. ')+
     'Sul conto REALE: al massimo '+FBL_REALE_MAX_APERTE+' posizioni automatiche aperte insieme, e dopo '+FBL_REALE_MAX_PERDITE_GIORNO+' chiuse in perdita nello stesso giorno si ferma fino a domani.';
   box.appendChild(nota);
+  // INTERRUTTORE UNICO D'EMERGENZA: un controllo solo, in cima al pannello, che vale per tutte le
+  // aperture automatiche (demo, reale, diretta, replay live e conto storico). Le posizioni gia'
+  // aperte e le chiusure SL/TP non si toccano.
+  const masterLabel=document.createElement('label');
+  masterLabel.style.cssText='display:flex;align-items:center;gap:6px;color:#ff9b9b;font-weight:600';
+  const masterInput=document.createElement('input');
+  masterInput.type='checkbox'; masterInput.checked=fblAutoEmergenzaAttiva();
+  masterInput.dataset.motoreMasterOff='1';
+  masterInput.addEventListener('change',()=>{
+    const c=fblMotoreConfig(); c.masterOff=masterInput.checked; fblMotoreSalvaConfig(c);
+  });
+  masterLabel.appendChild(masterInput);
+  masterLabel.append(' Interruttore unico: blocca TUTTE le aperture automatiche');
+  box.appendChild(masterLabel);
   const casella=(chiave, testo, reale)=>{
     const lbl=document.createElement('label');
     lbl.style.cssText='display:flex;align-items:center;gap:6px;color:'+(reale?'#f0a070':'#93a1b3');
@@ -44914,6 +44952,9 @@ function tgDirezioneScritta(seg){
 function tgAutoDecidi(voce, contoKey){
  const seg=voce&&voce.segnale;
  const no=(motivo)=>({apri:false,motivo});
+ // INTERRUTTORE UNICO D'EMERGENZA: tutte le aperture automatiche delle sale passano da qui.
+ // L'apertura MANUALE dal pannello segnali non chiama tgAutoDecidi e resta disponibile.
+ if(fblAutoEmergenzaAttiva()) return no('interruttore di emergenza: tutte le aperture automatiche bloccate (sale comprese)');
  // L'INTERRUTTORE E' DI QUESTO CONTO, NON DI QUELLO CHE SI STA GUARDANDO (12 novembre 2026).
  //
  // SEGNALATO dal proprietario, ed e' costato un conto vero: «per colpa di questa cosa questa
