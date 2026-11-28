@@ -14299,7 +14299,7 @@ const FBL_VERSIONE_BUNDLE='__FBL_VERSIONE__';
 // DA QUI IN AVANTI la pagina porta con se' il proprio numero, e il pannello lo dice insieme
 // a quello pubblicato. Se sono diversi, LO DICE - non si puo' piu' credere di avere una cura
 // che in realta' non sta girando.
-const FBL_VERSIONE='2.2.132';
+const FBL_VERSIONE='2.2.133';
 // RICHIESTO (telefono/tablet: "mi chiede sempre i permessi per i file a ogni riapertura, solo
 // quando e' strettamente necessario"): la richiesta del browser parte SOLO se c'e' un tocco
 // dell'utente in corso (es. ha appena scelto un asset). Senza tocco non si chiede niente: chi ha
@@ -48600,7 +48600,113 @@ $('newsCountryFilterContainer')?.addEventListener('change',e=>{
 // ricorda l'elenco eventi del cluster di provenienza (null se aperto direttamente da un pallino
 // singolo), letta dal click handler di #newsEventModalBackBtn più sotto.
 let newsEventModalBackEvents=null;
+// ===================== 8.5.16 — ACTUAL DELLE NOTIZIE DAL PONTE (LATO APP) =====================
+// Il feed del calendario non riporta mai l'actual per gli eventi usciti: lo chiediamo al ponte
+// /news/actual solo per High/Medium gia' usciti e senza valore. La risposta aggiorna SOLO la riga
+// «Actual» del modale, senza toccare forecast, previous, link, glossario o effetto usuale.
+// Cache locale di 10 minuti (fbl_news_actual_v1) e richieste in volo deduplicate: due popup
+// ravvicinati non aprono due richieste. I fallimenti non si memoizzano.
+const FBL_NEWS_ACTUAL_TTL_MS=10*60*1000;
+const FBL_NEWS_ACTUAL_CACHE_PREFIX='fbl_news_actual_v1|';
+const FBL_NEWS_ACTUAL_IMPATTI=['high','medium','alto','medio'];
+const fblNewsActualInVolo=new Map();
+let newsEventModalToken=0;
+function fblNewsActualTesto(v){ return v==null?'':String(v).trim(); }
+function fblNewsActualHa(ev){ return ev!=null&&ev.actual!=null&&fblNewsActualTesto(ev.actual)!==''; }
+/** Vero solo per High/Medium senza actual, gia' usciti. */
+function fblNewsActualDeveChiedere(ev,ora){
+  if(!ev||typeof ev!=='object')return false;
+  const imp=fblNewsActualTesto(ev.impact).toLowerCase();
+  if(FBL_NEWS_ACTUAL_IMPATTI.indexOf(imp)<0)return false;
+  if(fblNewsActualHa(ev))return false;
+  const t=(ev.date instanceof Date)?ev.date.getTime():new Date(ev.date).getTime();
+  const adesso=Number.isFinite(ora)?ora:Date.now();
+  return Number.isFinite(t)&&t<=adesso;
+}
+/** Chiave stabile sui quattro campi della query al ponte. */
+function fblNewsActualChiaveCache(ev){
+  const e=(ev&&typeof ev==='object')?ev:{};
+  return [e.title,e.country,e.date,e.impact].map(v=>fblNewsActualTesto(v).toLowerCase()).join('|');
+}
+/** Testo della sola riga Actual: valore con fonte, oppure motivo onesto. */
+function fblNewsActualRiga(vm){
+  const v=(vm&&typeof vm==='object')?vm:{};
+  const valore=(v.valore==null||fblNewsActualTesto(v.valore)==='')?null:v.valore;
+  const unita=fblNewsActualTesto(v.unita);
+  const motivo=fblNewsActualTesto(v.motivo);
+  const fonte=fblNewsActualTesto(v.fonte);
+  // Il ponte puo' mandare fonte E motivo insieme: il motivo dice perche' il valore non c'e',
+  // quindi va mostrato sempre, con la fonte come complemento (non al suo posto).
+  if(valore!=null){
+    let s=String(valore)+(unita?' '+unita:'');
+    if(fonte)s+=' — fonte: '+fonte;
+    if(motivo)s+=' — '+motivo;
+    return s;
+  }
+  let s='non disponibile da questa fonte';
+  if(motivo)s+=' — '+motivo;
+  if(fonte)s+=' — fonte: '+fonte;
+  return s;
+}
+function fblNewsActualLeggiCache(chiave,ora){
+  try{
+    const g=localStorage.getItem(FBL_NEWS_ACTUAL_CACHE_PREFIX+chiave);
+    if(!g)return null;
+    const v=JSON.parse(g);
+    // Number(null) e' 0: senza questa guardia una voce senza orario sembra appena scritta.
+    if(!v||typeof v!=='object'||v.t==null)return null;
+    const t=Number(v.t);
+    if(!Number.isFinite(t)||t>ora||ora-t>FBL_NEWS_ACTUAL_TTL_MS)return null;
+    return v;
+  }catch(e){ return null; }
+}
+function fblNewsActualScriviCache(chiave,esito,ora){
+  try{
+    localStorage.setItem(FBL_NEWS_ACTUAL_CACHE_PREFIX+chiave,JSON.stringify({
+      t:ora,valore:esito.valore,unita:esito.unita,fonte:esito.fonte,motivo:esito.motivo,
+    }));
+  }catch(e){ /* memoria negata: il modale resta leggibile */ }
+}
+async function fblNewsActualCarica(ev,ora){
+  const chiave=fblNewsActualChiaveCache(ev);
+  const memo=fblNewsActualLeggiCache(chiave,ora);
+  if(memo)return memo;
+  if(fblNewsActualInVolo.has(chiave))return await fblNewsActualInVolo.get(chiave);
+  const richiesta=(async()=>{
+    const url=fblConChiave(MT5_FEED_URL+'/news/actual?titolo='+encodeURIComponent(fblNewsActualTesto(ev.title))
+      +'&valuta='+encodeURIComponent(fblNewsActualTesto(ev.country))
+      +'&quando='+encodeURIComponent(fblNewsActualTesto(ev.date))
+      +'&impatto='+encodeURIComponent(fblNewsActualTesto(ev.impact)));
+    let risposta=null,errore=false;
+    try{
+      const r=await fetch(url,{cache:'no-store'});
+      if(!r||!r.ok)throw new Error('risposta non valida');
+      risposta=await r.json();
+    }catch(e){ errore=true; }
+    const v=(risposta&&typeof risposta==='object')?risposta:{};
+    const esito=errore
+      ? {valore:null,unita:'',fonte:'',motivo:'fonte non raggiungibile'}
+      : {valore:(v.valore==null||fblNewsActualTesto(v.valore)==='')?null:v.valore,
+         unita:fblNewsActualTesto(v.unita),fonte:fblNewsActualTesto(v.fonte),
+         motivo:fblNewsActualTesto(v.motivo)};
+    // Solo i valori veri si memoizzano: un guasto si riprova al prossimo popup.
+    if(esito.valore!=null)fblNewsActualScriviCache(chiave,esito,ora);
+    return esito;
+  })();
+  fblNewsActualInVolo.set(chiave,richiesta);
+  try{ return await richiesta; }finally{ fblNewsActualInVolo.delete(chiave); }
+}
+async function fblNewsActualAggiornaRiga(ev,token){
+  if(!fblNewsActualDeveChiedere(ev))return;
+  const esito=await fblNewsActualCarica(ev,Date.now());
+  if(token!==newsEventModalToken)return; // un popup piu' nuovo ha preso il posto di questo
+  // $() cerca anche in floatingDoc: col grafico staccato il modale e' spostato nell'altro
+  // documento, e document.getElementById qui non lo troverebbe mai.
+  const val=$('newsEventActualValore');
+  if(val)val.textContent=fblNewsActualRiga(esito);
+}
 function openNewsEventModal(ev,backContext){
+  const token=++newsEventModalToken;
  newsPopupApertoAt=Date.now();
  if(!ev)return;
  newsEventModalBackEvents=backContext||null;
@@ -48621,10 +48727,15 @@ function openNewsEventModal(ev,backContext){
    // trattamento di forecast/previous vuoti, dove ha senso) — per "actual" specificamente, per un
    // evento già uscito, è più onesto dirlo esplicitamente invece di far sembrare che manchi per
    // caso: solo per eventi FUTURI restiamo silenziosi (lì null è normale/atteso, non mancante).
-   const isPast=Number.isFinite(dt.getTime())&&dt.getTime()<Date.now();
-   const actualRow=(ev.actual!=null&&ev.actual!=='')
-     ? row('Actual',ev.actual)
-     : (isPast?`<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Actual</span><span style="font-weight:600;opacity:.6">non disponibile da questa fonte</span></div>`:'');
+   const isPast=Number.isFinite(dt.getTime())&&dt.getTime()<=Date.now();
+   // 8.5.16: per High/Medium gia' usciti e senza actual chiediamo il valore al ponte; la risposta
+   // aggiorna SOLO #newsEventActualValore (fblNewsActualAggiornaRiga, definita piu' sopra).
+   const rigaActual=(testo,classe)=>`<div id="newsEventActualRow" style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Actual</span><span id="newsEventActualValore" style="font-weight:600${classe||''}">${testo}</span></div>`;
+   const actualRow=fblNewsActualHa(ev)
+     ? rigaActual(ev.actual,'')
+     : (fblNewsActualDeveChiedere(ev)
+         ? rigaActual('in attesa dalla fonte ufficiale…',';opacity:.6')
+         : (isPast?rigaActual('non disponibile da questa fonte',';opacity:.6'):''));
    // Link diretto (RICHIESTO ESPLICITAMENTE) alla giornata giusta sul calendario vero di Forex
    // Factory — vedi newsForexFactoryDayUrl: non esiste un link al singolo evento espanso, il
    // feed non fornisce nessun id/url per l'evento (verificato), solo la data ci arriva.
@@ -48655,7 +48766,9 @@ function openNewsEventModal(ev,backContext){
      `<div style="display:flex;justify-content:space-between;gap:12px"><span style="opacity:.7">Gravità</span><span style="font-weight:700;color:${impactColor}">${ev.impact||'—'}</span></div>`+
      row('Forecast',ev.forecast)+row('Previous',ev.previous)+actualRow+linkRow+effettoSection+glossarySection;
  }
- const ov=$('newsEventModalOverlay'); moveModalToFloatingIfActive(ov); if(ov)ov.style.display='flex';
+  // 8.5.16: richiesta asincrona; aggiorna SOLO la riga Actual, mai le altre sezioni del modale.
+  fblNewsActualAggiornaRiga(ev,token);
+  const ov=$('newsEventModalOverlay'); moveModalToFloatingIfActive(ov); if(ov)ov.style.display='flex';
 }
 // ===================== MODALE ELENCO CLUSTER NOTIZIE — popolata al click su un pallino-cluster
 // (più eventi nello stesso momento/pochi minuti, vedi clusterNewsForDisplay) =====================
